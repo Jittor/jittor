@@ -1,29 +1,10 @@
-Dockerfile
-**/publish.py
-my
-.git
-.refresh
-__pycache__
-.ipynb_checkpoints/
-.vscode/
-__res/
-perf.data
-perf.data.old
-*.swp
-*.ipynb
-*.pdf
-*.zip
-*.tgz
-test.py
-extern/mkl/mkldnn_lnx*/*
-data/
-build/
-venv/
-*.md
-!*.src.md
+# The image is built from the Python package only.  A default-deny context keeps
+# local experiments, worktrees, caches and raw results out even when they use a
+# name that has not appeared in this repository before.
+**
+!setup.py
 !README.md
-!README.cn.md
-python/jittor.egg-info
-dist/
-!doc/source/*
-__data__
+!MANIFEST.in
+!LICENSE.txt
+!python/
+!python/**

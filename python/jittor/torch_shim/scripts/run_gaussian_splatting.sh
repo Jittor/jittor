@@ -19,7 +19,9 @@ fi
 JT_PY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 JT_PKG_ROOT="$JT_PY_ROOT/jittor"
 REAL_HOME="${REAL_HOME:-$HOME}"
-RUNTIME_ROOT="${JITTOR_GS_RUNTIME_ROOT:-$GS_ROOT/.jittor_gs_runtime}"
+CACHE_ROOT="${JITTOR_TORCH_CACHE_ROOT:-${XDG_CACHE_HOME:-$REAL_HOME/.cache}/jittor/torch-shim}"
+PROJECT_ID="$(basename "$GS_ROOT")-$(printf '%s' "$GS_ROOT" | sha256sum | cut -c1-16)"
+RUNTIME_ROOT="${JITTOR_GS_RUNTIME_ROOT:-$CACHE_ROOT/$PROJECT_ID}"
 mkdir -p "$RUNTIME_ROOT"
 
 if [[ -z "${PYTHON_BIN:-}" ]]; then

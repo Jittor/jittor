@@ -72,6 +72,29 @@ def _project_dir(path: Optional[Union[str, os.PathLike]]) -> pathlib.Path:
     return p.resolve()
 
 
+def _default_runtime_root(project_dir: pathlib.Path) -> pathlib.Path:
+    cache_root = os.environ.get("JITTOR_TORCH_CACHE_ROOT")
+    if cache_root:
+        base = pathlib.Path(cache_root).expanduser()
+    else:
+        xdg_cache = os.environ.get("XDG_CACHE_HOME")
+        if not xdg_cache:
+            home = os.environ.get("REAL_HOME") or os.environ.get("HOME")
+            if home:
+                xdg_cache = os.fspath(pathlib.Path(home).expanduser())
+            else:
+                xdg_cache = os.fspath(pathlib.Path.home())
+            xdg_cache = os.path.join(xdg_cache, ".cache")
+        base = pathlib.Path(xdg_cache).expanduser() / "jittor" / "torch-shim"
+    project_dir = project_dir.resolve()
+    safe_name = "".join(
+        ch if ch.isalnum() or ch in "-_." else "_"
+        for ch in (project_dir.name or "project")
+    )[:64] or "project"
+    digest = hashlib.sha256(os.fsencode(project_dir)).hexdigest()[:16]
+    return (base / f"{safe_name}-{digest}").resolve()
+
+
 def _jittor_python_root() -> pathlib.Path:
     # .../python/jittor/torch_shim/bootstrap.py -> .../python
     return pathlib.Path(__file__).resolve().parents[2]
@@ -882,7 +905,7 @@ def enable(
     real_home = os.environ.get("REAL_HOME") or os.environ.get("HOME")
     runtime = pathlib.Path(
         os.environ.get("JITTOR_TORCH_RUNTIME_ROOT")
-        or os.fspath(runtime_root or (project_dir / ".cache" / "jittor_torch"))
+        or os.fspath(runtime_root or _default_runtime_root(project_dir))
     ).expanduser().resolve()
     _ensure_dir(runtime)
 

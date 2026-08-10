@@ -216,7 +216,7 @@ def sample_clamp(op_info, device, dtype, requires_grad):
 
 def sample_floor_divide(op_info, device, dtype, requires_grad):
     # non-differentiable: forward only. Integer dtypes (any_one picks int64).
-    # FINDING (recorded in design-test-system.md): jittor's floor_divide TRUNCATES
+    # FINDING (recorded in agent/manuals/design/test-system.md): jittor's floor_divide TRUNCATES
     # toward zero (C semantics, e.g. -5//3 == -1) whereas numpy/torch FLOOR toward
     # -inf (-5//3 == -2). To keep this a valid forward test we sample only
     # NON-NEGATIVE dividends (where trunc == floor); the negative divergence is a

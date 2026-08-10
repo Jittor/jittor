@@ -295,7 +295,7 @@ class TestComplex64Native(unittest.TestCase):
 
     def test_view_bridge(self):
         # Phase 6 keystone: native complex64 <-> float32[...,2] bridge, differentiable, both
-        # cards (see design-complex-dtype.md). view_as_real lowers complex64 to its [real,imag]
+        # cards (see agent/manuals/design/complex-dtype.md). view_as_real lowers complex64 to its [real,imag]
         # pair; _real2_to_complex64 rebuilds it; the pair is autograd-transparent.
         rng = np.random.RandomState(5)
         a = (rng.randn(3, 4) + 1j * rng.randn(3, 4)).astype("complex64")

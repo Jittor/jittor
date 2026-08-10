@@ -18,10 +18,11 @@ keeps the operations from the upstream README and adds only:
 Download the official repository from the network and pin the audited commit:
 
 ```bash
-mkdir -p /home/zy/projects/jittor/.work_tmp/torchquantum-validation
+export JITTOR_LAB_ROOT=${JITTOR_LAB_ROOT:-/home/zy/projects/jittor-lab}
+mkdir -p "$JITTOR_LAB_ROOT/torchquantum-validation"
 git clone --depth 1 https://github.com/mit-han-lab/torchquantum.git \
-  /home/zy/projects/jittor/.work_tmp/torchquantum-validation/upstream
-git -C /home/zy/projects/jittor/.work_tmp/torchquantum-validation/upstream \
+  "$JITTOR_LAB_ROOT/torchquantum-validation/upstream"
+git -C "$JITTOR_LAB_ROOT/torchquantum-validation/upstream" \
   checkout 8dc3255c51477dd4c28892049571df032c77e2ff
 ```
 
@@ -39,11 +40,12 @@ Jittor's CUDA toolchain and cache must also be explicit. Example:
 
 ```bash
 export JT_ROOT=/home/zy/projects/jittor
-export TQ_ROOT="$JT_ROOT/.work_tmp/torchquantum-validation/upstream"
-export TQ_DEPS="$JT_ROOT/.work_tmp/torchquantum-validation/deps"
+export JITTOR_LAB_ROOT=${JITTOR_LAB_ROOT:-/home/zy/projects/jittor-lab}
+export TQ_ROOT="$JITTOR_LAB_ROOT/torchquantum-validation/upstream"
+export TQ_DEPS="$JITTOR_LAB_ROOT/torchquantum-validation/deps"
 export JTCUDA=/home/zy/.cache/jittor/jtcuda/cuda12.2_cudnn8_linux
 export PYTHONPATH="$JT_ROOT/python:$TQ_DEPS:$TQ_ROOT"
-export JITTOR_HOME="$JT_ROOT/.jittor_test_cache/torchquantum_20260712"
+export JITTOR_HOME="$JITTOR_LAB_ROOT/_state/torchquantum-readme-validation/torchquantum_20260712"
 export PATH="$JTCUDA/bin:/home/zy/miniconda3/envs/jt311/bin:/usr/local/bin:/usr/bin:/bin"
 export LD_LIBRARY_PATH="$JTCUDA/lib64"
 export CUDA_HOME="$JTCUDA"

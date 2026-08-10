@@ -9,6 +9,18 @@ import unittest
 from unittest import mock
 
 
+_CACHE_ROOT = pathlib.Path(
+    os.environ.get("XDG_CACHE_HOME", pathlib.Path.home() / ".cache")
+).expanduser()
+_TEST_STATE_ROOT = pathlib.Path(
+    os.environ.get(
+        "JITTOR_TEST_STATE_ROOT",
+        _CACHE_ROOT / "jittor" / "tests",
+    )
+).expanduser() / "test_torch_bootstrap"
+_TEST_STATE_ROOT.mkdir(parents=True, exist_ok=True)
+
+
 class TestTorchBootstrap(unittest.TestCase):
     def test_gaussian_runtime_caches_lpips_criterion(self):
         from jittor.torch_shim.gaussian_splatting_runtime import _patch_lpips_module
@@ -38,7 +50,7 @@ class TestTorchBootstrap(unittest.TestCase):
     def test_scan_torch_extension_setup(self):
         from jittor.torch_shim import scan_extension_dirs
 
-        with tempfile.TemporaryDirectory(dir=os.getcwd()) as d:
+        with tempfile.TemporaryDirectory(dir=str(_TEST_STATE_ROOT)) as d:
             root = os.path.join(d, "pkg")
             os.makedirs(root)
             with open(os.path.join(root, "setup.py"), "w") as f:
@@ -61,30 +73,39 @@ class TestTorchBootstrap(unittest.TestCase):
             self.assertEqual(len(exts[0].sources), 2)
             self.assertTrue(exts[0].setup_py.endswith("setup.py"))
 
-    def test_entry_script_runtime_defaults_to_project_dir(self):
+    def test_entry_script_runtime_defaults_to_user_cache(self):
         import jittor as jt
 
-        with tempfile.TemporaryDirectory(dir=os.getcwd()) as d:
+        with tempfile.TemporaryDirectory(dir=str(_TEST_STATE_ROOT)) as d:
             entry = os.path.join(d, "train.py")
+            xdg_cache = os.path.join(d, "xdg-cache")
             old_argv0 = jt._sys.argv[0]
             try:
-                for source in (
-                    "from jittor.torch_shim import enable\n",
-                    "import jittor as torch\n",
+                with mock.patch.dict(
+                    os.environ,
+                    {
+                        "JITTOR_TORCH_CACHE_ROOT": "",
+                        "XDG_CACHE_HOME": xdg_cache,
+                    },
+                    clear=False,
                 ):
-                    with self.subTest(source=source.strip()):
-                        with open(entry, "w") as f:
-                            f.write(source)
-                        jt._sys.argv[0] = entry
-                        self.assertEqual(
-                            jt._jt_torch_entry_runtime_root(),
-                            os.path.join(d, ".cache", "jittor_torch"),
-                        )
+                    for source in (
+                        "from jittor.torch_shim import enable\n",
+                        "import jittor as torch\n",
+                    ):
+                        with self.subTest(source=source.strip()):
+                            with open(entry, "w") as f:
+                                f.write(source)
+                            jt._sys.argv[0] = entry
+                            self.assertEqual(
+                                jt._jt_torch_entry_runtime_root(),
+                                jt._jt_torch_project_runtime_root(d),
+                            )
             finally:
                 jt._sys.argv[0] = old_argv0
 
     def test_jittor_entry_bootstraps_in_subprocess(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(dir=str(_TEST_STATE_ROOT)) as d:
             entry = os.path.join(d, "probe.py")
             os.makedirs(os.path.join(d, "scene"))
             os.makedirs(os.path.join(d, "gaussian_renderer"))
@@ -127,13 +148,24 @@ class TestTorchBootstrap(unittest.TestCase):
             )))
             env["CUDA_VISIBLE_DEVICES"] = ""
             env["JITTOR_TORCH_SKIP_EXT_BUILD"] = "1"
+            env.pop("JITTOR_TORCH_CACHE_ROOT", None)
+            env["XDG_CACHE_HOME"] = os.path.join(d, "xdg-cache")
             output = subprocess.check_output(
                 [sys.executable, entry], cwd=d, env=env, text=True,
             )
             line = next(line for line in output.splitlines() if line.startswith("RESULT="))
             import json
+            import jittor as jt
             result = json.loads(line[len("RESULT="):])
-            runtime = os.path.join(d, ".cache", "jittor_torch")
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "JITTOR_TORCH_CACHE_ROOT": "",
+                    "XDG_CACHE_HOME": env["XDG_CACHE_HOME"],
+                },
+                clear=False,
+            ):
+                runtime = jt._jt_torch_project_runtime_root(d)
             self.assertTrue(result["same_module"])
             self.assertTrue(result["torch_module"])
             self.assertEqual(result["runtime_root"], runtime)
@@ -146,7 +178,7 @@ class TestTorchBootstrap(unittest.TestCase):
     def test_strict_bootstrap_propagates_install_failure(self):
         from jittor.torch_shim import enable
 
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(dir=str(_TEST_STATE_ROOT)) as d:
             old_sys_path = list(sys.path)
             try:
                 with mock.patch.dict(os.environ, {

@@ -11,6 +11,7 @@
 
 __version__ = '1.3.11.0'
 
+import hashlib as _hashlib
 import os as _os
 import sys as _sys
 
@@ -38,12 +39,37 @@ def _jt_torch_add_nvcc_flags(_flags):
     _os.environ["nvcc_flags"] = " ".join(_items)
 
 
+def _jt_torch_project_runtime_root(_project_root):
+    _project_root = _os.path.realpath(
+        _os.path.abspath(_os.path.expanduser(_os.fspath(_project_root)))
+    )
+    _cache_root = _os.environ.get("JITTOR_TORCH_CACHE_ROOT")
+    if not _cache_root:
+        _xdg_cache = _os.environ.get("XDG_CACHE_HOME")
+        if not _xdg_cache:
+            _home = (
+                _os.environ.get("REAL_HOME")
+                or _os.environ.get("HOME")
+                or _os.path.expanduser("~")
+            )
+            _xdg_cache = _os.path.join(_home, ".cache")
+        _cache_root = _os.path.join(_xdg_cache, "jittor", "torch-shim")
+    _project_name = _os.path.basename(_project_root) or "project"
+    _project_name = "".join(
+        _ch if _ch.isalnum() or _ch in "-_." else "_"
+        for _ch in _project_name
+    )[:64] or "project"
+    _digest = _hashlib.sha256(_os.fsencode(_project_root)).hexdigest()[:16]
+    return _os.path.join(
+        _os.path.abspath(_os.path.expanduser(_cache_root)),
+        _project_name + "-" + _digest,
+    )
+
+
 def _jt_torch_entry_runtime_root():
     if _os.environ.get("JITTOR_TORCH_PROJECT_ROOT"):
-        return _os.path.join(
-            _os.path.abspath(_os.path.expanduser(_os.environ["JITTOR_TORCH_PROJECT_ROOT"])),
-            ".cache",
-            "jittor_torch",
+        return _jt_torch_project_runtime_root(
+            _os.environ["JITTOR_TORCH_PROJECT_ROOT"]
         )
     _entry = _sys.argv[0] if _sys.argv else ""
     if not _entry or _entry in ("-c", "-m"):
@@ -61,7 +87,7 @@ def _jt_torch_entry_runtime_root():
         or "torch_shim" in _head
         or "import jittor as torch" in _head
     ):
-        return _os.path.join(_os.path.dirname(_entry), ".cache", "jittor_torch")
+        return _jt_torch_project_runtime_root(_os.path.dirname(_entry))
     return None
 
 
@@ -826,7 +852,7 @@ def _install_torch_shim_runtime(enable=True):
         _os_runtime.environ.setdefault("JITTOR_TORCH_CUDA_EMPTY_CACHE", "gc")
     _runtime_root = _os_runtime.environ.get(
         "JITTOR_TORCH_RUNTIME_ROOT",
-        _os_runtime.path.join(_project_root, ".cache", "jittor_torch"),
+        _jt_torch_project_runtime_root(_project_root),
     )
     _os_runtime.environ.setdefault("JITTOR_TORCH_PROJECT_ROOT", _project_root)
     _os_runtime.environ.setdefault("JITTOR_TORCH_RUNTIME_ROOT", _runtime_root)

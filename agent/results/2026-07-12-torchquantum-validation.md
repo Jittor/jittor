@@ -22,7 +22,7 @@ TorchQuantum 不是使用本机预存副本或 PyPI 包，而是本次从用户�
 
 ```bash
 git clone --depth 1 https://github.com/mit-han-lab/torchquantum.git \
-  .work_tmp/torchquantum-validation/upstream
+  /home/zy/projects/jittor-lab/torchquantum-validation/upstream
 ```
 
 完成审计时的证据为：
@@ -43,9 +43,9 @@ worktree=clean, branch main...origin/main
 - Jittor Python：`/home/zy/miniconda3/envs/jt311/bin/python`，Python 3.11.15
 - CUDA：12.2.140，cuDNN 8.9.7，工具链 `/home/zy/.cache/jittor/jtcuda/cuda12.2_cudnn8_linux`
 - 正式 Jittor 验证：物理 GPU 1；原生 PyTorch 对照：物理 GPU 2
-- 独立缓存：`.jittor_test_cache/torchquantum_20260712`
-- TorchQuantum 源码：`.work_tmp/torchquantum-validation/upstream`
-- 隔离依赖：`.work_tmp/torchquantum-validation/deps`
+- 独立缓存：`${JITTOR_LAB_ROOT}/_state/torchquantum-readme-validation/torchquantum_20260712`
+- TorchQuantum 源码：`${JITTOR_LAB_ROOT}/torchquantum-validation/upstream`
+- 隔离依赖：`${JITTOR_LAB_ROOT}/torchquantum-validation/deps`
 - 关键依赖：NumPy 2.4.6、Qiskit 2.5.0、Qiskit Aer 0.17.2、Qiskit IBM Runtime 0.47.0、TorchPack 0.3.1、torchdiffeq 0.2.5、opt_einsum 3.4.0、matplotlib 3.11.0
 
 TorchQuantum 当前 `requirements.txt` 要求 `numpy>=2.0`，而 Jittor `setup.py` 仍声明 `numpy<2.0`，所以二者的官方安装元数据存在直接冲突。为避免 pip 把 Jittor 的 torch shim 替换成真实 PyTorch，本次没有执行带依赖的 `pip install torchquantum`，而是把非 Torch 依赖安装到项目内隔离目录，并通过 `PYTHONPATH` 加载源码。初始诊断时，Jittor 在隔离 NumPy 2.4.6 下可以完成自身导入，随后失败在 torch compatibility API；这些阻断现已修复。
@@ -71,9 +71,9 @@ JITTOR_FILE=/home/zy/projects/jittor/python/jittor/__init__.py
 
 ```bash
 export PYTHONPATH=/home/zy/projects/jittor/python:\
-/home/zy/projects/jittor/.work_tmp/torchquantum-validation/deps:\
-/home/zy/projects/jittor/.work_tmp/torchquantum-validation/upstream
-export JITTOR_HOME=/home/zy/projects/jittor/.jittor_test_cache/torchquantum_20260712
+/home/zy/projects/jittor-lab/torchquantum-validation/deps:\
+/home/zy/projects/jittor-lab/torchquantum-validation/upstream
+export JITTOR_HOME=/home/zy/projects/jittor-lab/_state/torchquantum-readme-validation/torchquantum_20260712
 export JTCUDA=/home/zy/.cache/jittor/jtcuda/cuda12.2_cudnn8_linux
 export CUDA_HOME="$JTCUDA"
 export nvcc_path="$JTCUDA/bin/nvcc"

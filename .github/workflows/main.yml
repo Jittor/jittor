@@ -12,6 +12,13 @@ on: [ push ]
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
+  repository_layout:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: check repository layout
+      run: agent/scripts/check_repo_layout.sh
+
   test_clang_8_cuda_10:
     # The type of runner that the job will run on
     runs-on: self-hosted

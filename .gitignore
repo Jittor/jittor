@@ -28,20 +28,31 @@ venv/
 !CONTRIBUTING.md
 !CODE_OF_CONDUCT.md
 !GOVERNANCE.md
+!AGENTS.md
 !.github/**/*.md
-!work_docs/*.md
 python/jittor.egg-info
 dist/
 !doc/source/*
-/agent/
-/diffusers_video_jittor/
-/jittor_fsdp2/
-/jittor_lightning_backend/
-/jittor_torchmetrics_work/
-/jittor_transformers_perf/
-/transformers_jittor_cuda/
-/ms_swift_jittor_work/
-/verl_jittor/
-/doc/source/jittor_as_torch.src.md
+/agent/*
+!/agent/README.md
+!/agent/manuals/
+!/agent/manuals/**/
+!/agent/manuals/**/*.md
+!/agent/results/
+/agent/results/**
+!/agent/results/**/
+!/agent/results/**/*.md
+!/agent/scripts/
+/agent/scripts/**
+!/agent/scripts/*.sh
+!/agent/skills/
+!/agent/skills/**
+/agent/skills/**/.cache/
+/agent/skills/**/__pycache__/
+/agent/worklogs/
+
+# Large experiments and runtime state belong in ../jittor-lab.  Do not ignore
+# repository-root copies by name: if one is recreated here, git status should
+# expose the layout violation immediately.
 core
 __data__

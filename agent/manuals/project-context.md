@@ -1,5 +1,12 @@
 # Jittor → Torch-Grade — 进度与交接 (ALL_TODO)
 
+> **工作区迁移（2026-08-10）**：Jittor 主仓库只保留源码、测试、文档和
+> 可复用工具。原先位于仓库顶层的 `jittor_fsdp2`、
+> `diffusers_video_jittor`、`jittor_transformers_perf` 等实验资产已整体迁到
+> `${JITTOR_LAB_ROOT:-/home/zy/projects/jittor-lab}`；缓存和旧运行环境归档到
+> `$JITTOR_LAB_ROOT/_state/legacy`。下文早于该日期的相对路径均按这一映射理解；
+> 迁移清单与验证见[仓库工作区整理报告](../results/2026-08-10-repository-cleanup.md)。
+
 > 逐 commit 看 `git log`；**逐 bug 根因 + 内核陷阱看 §4「bug & 陷阱总账」**；可复用的对拍/调试 skill 在 `agent/skills/`。
 > 组织：**📍整体进展（紧接本节）→ 📜历史日志（公共留档）→ §1 环境 → §3 已完成 → §4 bug&陷阱总账 → §5 待办**。状态均经 git + 源码核对，不虚标。
 > 🐛 **bug 修没修？看 §4 开头「📊 状态总览」**：✅ ~28+ 已根因修复+验证，含刚提交的 3 个核心 bug（numpy2.x `b9ded5a1` / inf-nan GIL `64de9c07` / CUDA-scatter `880cd6ad`）。
@@ -34,6 +41,10 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 > **分支**：所有人/agent 都在 **`2.0`**（= 原 `acl-perf-and-fixes` 推到远程；动手前 `git branch --show-current` 确认）。分叉前的所有进展/日志现在都是**公共知识**。
 
 ### ✅ 已完成并验证（在 `2.0`）
+- **CUDA 12 pip component wheels**：新增 `jittor[cuda12]`，固定 CUDA
+  12.2/cuDNN 8/NCCL 版本；分散 include/lib、versioned SONAME、RPATH、
+  RTLD_GLOBAL 预加载、cache fingerprint 已接入。JTCUDA 回归和隔离 wheel
+  布局冷启动均通过，详见[验证报告](../results/2026-07-16-cuda-pip-wheels.md)。
 - **norm 家族 fp32 反向全修**：LayerNorm/GroupNorm/InstanceNorm/BatchNorm 小方差反向 + BN running_var Bessel（5 commit）——CUDA-vs-真torch + 真 NPU 双卡验证 ~1e-6。
 - **diffusers 在 GPU 全跑通**：核心(UNet/VAE/DDIM/from_pretrained) + **完整 StableDiffusionPipeline 出图**，vs 真 torch ~1e-6；顺带修 shim typed-tensor isinstance（`9b20bb5a`）。
 - **linalg 反向子系统**：svd/solve/qr 等系统化 FD 验证（19 检查）；**distributions**：Normal/Gamma/Beta/Dirichlet rsample 重参数化梯度补齐。
@@ -45,7 +56,7 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 - **已定位根因**：`test_example.py:54` 仍调用旧式 `jt.float32(x)`；顶层导入末尾的 `torch_compat.install()` 会通过 `_make_dtypes(g)` 把 `jt.float32` 覆盖为不可调用的 `jittor.torch_compat.dtype`。最小探针确认 `repr=torch.float32`、`callable=False`，而 `jt.array(data, dtype="float32")` 正常。
 - **未覆盖阶段**：错误发生在第一个 batch，1000 步训练、liveness 稳定性和最终 loss 都未执行；这属于 API 兼容回归，不是 CUDA 编译或训练精度问题。仓库内还有多项旧测试使用 `jt.float32(...)`，后续修复需兼顾 torch dtype 对象语义与 Jittor 旧可调用接口。
 - **环境前置**：非交互 shell 的 `PATH` 没有 `python`；需使用 `jt311`，并显式配置已有 `cuda12.2_cudnn8_linux`，否则空 `JITTOR_HOME` 会选到缺少 `cudnn.h` 的系统 `/usr/local/cuda`。
-- **文档**：工作记录 `agent/workdocs/2026-07-12-test-example-validation.md`；中文交付文档 `/home/zy/projects/doc/2026-07-12-test-example-validation.md`；完整日志 `agent/worklogs/2026-07-12-test-example.log`。本次按约定只验证和诊断，未修改源码。
+- **文档**：[验证报告](../results/2026-07-12-test-example-validation.md)；本地原始日志 `agent/worklogs/2026-07-12-test-example.log` 未版本化。本次按约定只验证和诊断，未修改源码。
 
 ### ✅ 本会话增量（2026-07-12：TorchQuantum README CPU/CUDA 跑通）
 - **验收完成**：固定官方 TorchQuantum `main@8dc3255c`（0.3.0），通过 `import jittor as torch` 运行 README `Basic Usage` 和 `Usage`。严格 CPU（`CUDA_VISIBLE_DEVICES=`、`use_cuda=0`）与 CUDA/GPU1 的四项矩阵全部退出 0，并输出 `TORCH_IS_JITTOR=True` + `BASIC_USAGE_OK`/`USAGE_OK`；未修改 TorchQuantum 上游。
@@ -56,14 +67,14 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 - **附带真 bug**：`linalg.matrix_rank` 在 torch compat 下误把 `max(dim)` 的 `(values,indices)` 整体参与阈值计算，现解包 `.values`；完整 linalg 11/11。
 - **回归**：受影响六模块 126 passed + 2 expected skip；`test_torch_compat_linalg` 11/11；主门禁 `test_torch_compat.py` **172 passed / 0 failed**。长组合进程的 CuPy det NVRTC 临时错误在独立进程通过，未形成稳定代码问题。
 - **环境边界**：无新依赖；TorchQuantum `numpy>=2.0` 与 Jittor 安装元数据 `numpy<2.0` 的冲突仍通过项目内隔离依赖规避。cscg104 无 NPU/CANN，且 ACL dtype 映射尚不支持 native complex64，本次不宣称 NPU 全链可用。
-- **文档**：细节 `agent/workdocs/2026-07-12-torchquantum-validation.md`；中文交付 `/home/zy/projects/doc/2026-07-12-torchquantum-validation.md`；复用验证 skill `agent/skills/torchquantum-readme-validation/`。
+- **文档**：[验证报告](../results/2026-07-12-torchquantum-validation.md)；复用验证 skill `agent/skills/torchquantum-readme-validation/`。
 
 ### ✅ 本会话增量 Round Complex Audit（2026-07-05：复数 CUDA 可用性 / torch 对齐）
 - **native `complex64` CUDA 主路径确认可用**：源码审计 + 官方测试 + 真 PyTorch CUDA 对拍。已验证创建/roundtrip、`real/imag/angle`、`view_as_real/view_as_complex`、`torch.complex/polar`、四则/neg/conj/abs/sum/mean、matmul/bmm、`exp/log/sin/cos/sqrt`、一阶 autograd，数值通常 `1e-7~1e-6` 对齐。`ComplexNumber` 仍只作为 deprecated internal bridge，聚焦 CUDA 值/桥接验证通过。
 - **已跑回归**：`test_complex64_native` 15/15 OK；`test_complex64_linalg` 22 OK + 1 skip（CUDA general eig）；`test_complex64_gradfunctional` 7/7 OK；`test_torch_compat_fft_einsum` 42/42 OK。新增辅助对拍工具 `agent/skills/jittor-torch-diff/complex_cuda_parity.py`（Jittor CUDA vs 真 torch CUDA）。
 - **明确缺口**：`complex128` 未实现；CUDA `complex64.prod()` 编译失败（`atomicCAS(complex64*)`）；CUDA general `linalg.eig(complex64)` 不可用（`cupy.linalg` 无 `eig`）；native complex JVP/二阶 autograd 仍 `NotImplementedError`；本机无 NPU，未做 910B 复验。
 - **🟡 新发现待修风险**：`torch.fft.rfft` CUDA 存在序列相关 bug。隔离运行和既有单测可过，但在先执行一批 complex forward/grad 后，`fft(real)` 仍正确，封装的 `rfft(real)` 可能把半谱虚部压到接近 0，`irfft(rfft(x))` 随之不对齐。聚合探针里 ComplexNumber/linalg 的异常经聚焦复现排除为结论项，rFFT 风险需缩成单测后修复。
-- **文档**：`agent/complex-support-audit-2026-07-05.md` 与 `/home/zy/projects/doc/2026-07-05-complex-cuda-audit.md`。
+- **文档**：[复数 CUDA 审计](../results/2026-07-05-complex-cuda-audit.md)。
 
 ### ✅ 本会话增量 Round GS（2026-07-05：Gaussian Splatting 精度/速度对齐）
 - **精度闭环完成**：补齐原版 PyTorch `tandt/truck` 30k baseline 的 render/metrics；最终 metrics 与 Jittor 基本对齐：Jittor `SSIM=0.8838132024 / PSNR=25.5092182159 / LPIPS=0.1421166658`，PyTorch `0.8847280145 / 25.4591770172 / 0.1422016323`，差值分别为 `+0.00091 SSIM`、`-0.05004 dB PSNR`、`+0.000085 LPIPS`（PyTorch-Jittor）。
@@ -77,12 +88,12 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 - **口径**：材料基于现有已完成文档和 Jittor 2.0 代码整理；对 FSDP2、Triton/flash-attn、NPU 端到端覆盖等仍在增强的方向，按“主路径基本实现 / 持续扩大验证”表述，避免误写成完全收敛。
 
 ### ✅ 本会话增量（2026-07-07：transformers 性能瓶颈定位 + CUDA TF32 opt-in）
-- **瓶颈定位完成 GPU 首轮**：新增 `jittor_transformers_perf/benchmark_transformer_bottlenecks.py` 与 `run_perf_env.sh`，所有 runtime/cache/log/results 固定在 `jittor_transformers_perf/`。corrected benchmark 保留计时段所有输出，避免 Jittor lazy 图只执行最后一次输出导致假快。
+- **瓶颈定位完成 GPU 首轮**：可复用源码位于 `agent/skills/jittor-transformers-perf/scripts/`，所有 runtime/cache/log/results 固定在 `${JITTOR_LAB_ROOT}/jittor_transformers_perf/`。corrected benchmark 保留计时段所有输出，避免 Jittor lazy 图只执行最后一次输出导致假快。
 - **核心结论**：CUDA fp32 GEMM 本身已接近 PyTorch fp32；TF32 opt-in 后 Jittor 大/小 batched matmul 分别为 PyTorch TF32 的 `1.05x/1.05x`。剩余 transformers 主要瓶颈是非 GEMM：`softmax` 约 `1.94x`、`gelu` 约 `2.7x`、`layernorm` 约 `2.3-2.4x`、SDPA math fallback 约 `3.1x`，以及训练 shim 层潜在同步点（`loss.backward()` pre-sync、grad clipping `.item()`、GradScaler per-grad `.item()`、MoE grouped_mm fallback）。
 - **低风险加速补丁**：新增 `jt.flags.cuda_allow_tf32`，仅控制 CUDA float32 matmul/bmm 的 `CUBLAS_COMPUTE_32F_FAST_TF32`；`torch.backends.cuda.matmul.allow_tf32` 与 `torch.set_float32_matmul_precision("high"/"medium")` 接到该 flag。默认仍 `0` 保持严格 fp32；未复用 `use_tensorcore`，避免改变 fp16/bf16 GEMM 语义。ACL 仍通过同一 torch backend 开关设置 `jt.acl_allow_hf32`。
 - **验证数据**：corrected benchmark（RTX 4090, jt311, torch 2.12.1+cu130）：MLP `0.7266ms -> 0.5045ms`（Jittor fp32→TF32），PyTorch `0.5590ms -> 0.3204ms`；独立进程 1024x1024 matmul TF32 on/off 输出 `max_abs=0.04896`，确认 FAST_TF32 生效。新增 `python/jittor/test/test_torch_compat_cuda_tf32.py`，1/1 OK。
 - **未完成**：本机未做 910B/NPU 复验；后续优先 fused SDPA/flash-attn 训练路径、GELU/LayerNorm fused kernel、cublasLt epilogue、训练同步点 device-only 化。
-- **文档**：工作记录 `agent/jittor-transformers-perf-2026-07-07.md`；中文交付文档 `/home/zy/projects/doc/2026-07-07-jittor-transformers-perf.md`。
+- **文档**：[Transformers 初始性能分析](../results/2026-07-07-transformers-performance.md)。
 
 ### ✅ 本会话增量（2026-07-11：Transformers/CLIP 性能深挖与加速）
 - **CLIP/梯度管理根因与修复**：旧 per-gradient device norm 在 512 张量时比 host 版慢 43.5%，根因是数百个小 reduction。改为 flat reduction + device coefficient 后，真实裁剪 128/512 张量快 22.7%/20.6%；GradScaler 从每梯度一次 `.item()` 降为一次 flat finite reduction + 一次 host 决策。no-clip 的逐张量写回仍会慢 9%-14.5%，下一步应融合进 optimizer。
@@ -91,35 +102,35 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 - **SDPA 根因**：fp32 Jittor math vs PyTorch default fused 约 4.9x；同为 math 的 block forward 约 1.5x。现有外部 Flash adapter 仅 no-grad forward；删 clone 没有稳定收益，真正约 47% 的收益来自上游直接提供 BSHD/packed QKV。CUDA 训练仍缺 fused backward/dropout，NPU FlashAttention prototype 仍未接 dispatcher。
 - **同版本 HF 整模**：两端均用 Transformers 4.56.2，Tiny Llama/BERT/ViT forward 比值为 `0.93x/1.40x/1.85x`；Tiny Llama fwd+bwd 为 `0.33x` 且 20 组梯度 finite/nonzero，但不含 optimizer、两端独立初始化，不外推到完整训练。合成 block 13 组梯度对拍最差 rel-L2 `3.66e-4`。
 - **optimizer 深层瓶颈**：固定总元素、张量数 128→512 时，无管理 SGD/AdamW step 变慢 4.25x/3.87x；AdamW 512 张量 update 约 31.5ms，P0 是 multi-tensor/fused optimizer，并融合 unscale/nonfinite/clip coefficient。
-- **验证/文档**：核心组合回归 47 项除既有 packed-split 测试开关写反外均过，修正后独立通过；norm 24/24、attention targeted 2/2、部署版 `import torch` clip 均过。工作记录 `agent/workdocs/2026-07-10-transformers-performance.md`，复用 skill `agent/skills/jittor-transformers-perf/`，中文文档 `/home/zy/projects/doc/2026-07-11-jittor-transformers-performance.md`。本机 cscg104 无 NPU/CANN，910B 未复验。
+- **验证/文档**：核心组合回归 47 项除既有 packed-split 测试开关写反外均过，修正后独立通过；norm 24/24、attention targeted 2/2、部署版 `import torch` clip 均过。[性能深挖总览](../results/2026-07-10-transformers-performance-deep-dive.md)，复用 skill `agent/skills/jittor-transformers-perf/`。本机 cscg104 无 NPU/CANN，910B 未复验。
 
 ### ✅ 本会话增量（2026-07-05：diffusers 视频运行环境草稿）
-- **辅助文件落地**：在 `diffusers_video_jittor/` 下新增 `scripts/run_env.sh`、`scripts/placeholder_video_generate.py` 与 `README.md`。脚本默认配置 `JITTOR_TORCH_PROJECT_ROOT`、项目内 runtime/cache、JTCUDA/nvcc/CUDA_HOME/LD_LIBRARY_PATH、HF_ENDPOINT/HF_HOME，并默认开启 HF/diffusers/transformers offline，避免误下载大模型。
+- **辅助文件落地**：在 `${JITTOR_LAB_ROOT}/diffusers_video_jittor/` 下新增 `scripts/run_env.sh`、`scripts/placeholder_video_generate.py` 与 `README.md`。脚本默认配置 `JITTOR_TORCH_PROJECT_ROOT`、项目内 runtime/cache、JTCUDA/nvcc/CUDA_HOME/LD_LIBRARY_PATH、HF_ENDPOINT/HF_HOME，并默认开启 HF/diffusers/transformers offline，避免误下载大模型。
 - **验证**：完成 `bash -n`、Python `py_compile`、`run_env.sh env`、`run_env.sh dry-run` 与占位入口 `--no-write`；占位入口只探测模块和环境，不调用 `from_pretrained()`。
 - **文档**：新增 `/home/zy/projects/doc/2026-07-05-diffusers-video-jittor-run-env.md`；本次未修改 Jittor 源码或 diffusers site-packages。
 
 ### ✅ 本会话增量（2026-07-05：diffusers 预训练视频生成跑通）
-- **首要目标完成**：不修改 diffusers 原仓库代码，通过 `import jittor as torch` 跑通 diffusers `TextToVideoSDPipeline` 预训练模型 `ali-vilab/text-to-video-ms-1.7b`。输出视频为 `diffusers_video_jittor/outputs/text_to_video_sd_smoke.mp4`，4 帧、256×256、uint8、mp4 文件大小 88074 bytes；元数据见 `diffusers_video_jittor/outputs/text_to_video_sd_smoke.json`。
+- **首要目标完成**：不修改 diffusers 原仓库代码，通过 `import jittor as torch` 跑通 diffusers `TextToVideoSDPipeline` 预训练模型 `ali-vilab/text-to-video-ms-1.7b`。输出视频为 `${JITTOR_LAB_ROOT}/diffusers_video_jittor/outputs/text_to_video_sd_smoke.mp4`，4 帧、256×256、uint8、mp4 文件大小 88074 bytes；元数据见 `${JITTOR_LAB_ROOT}/diffusers_video_jittor/outputs/text_to_video_sd_smoke.json`。
 - **Jittor 主分支修复点**：补齐 `torch.linalg.inv_ex`、`torch.torch` 自引用、`torch.amp/custom_fwd/custom_bwd` 与 `torch.cuda.amp` no-op decorators、顶层 `torch.conv{1,2,3}d` / `torch.conv_transpose{1,2,3}d` 别名；修复 CUDA no_grad LayerNorm fast path 在 `float32 input + float16 affine` 下生成 `float * __half` 的 nvcc 重载歧义。
-- **新增脚本与回归**：新增 `diffusers_video_jittor/scripts/run_tiny_text_to_video_sd.py`、`diffusers_video_jittor/scripts/run_text_to_video_sd.py`、`python/jittor/test/test_torch_compat_diffusers_video.py`。targeted 回归 `test_torch_compat_diffusers_video.py` 2/2 OK；diffusers guiders/kornia 导入 OK；视频文件帧数/尺寸验证 OK。
-- **历史 smoke 补充**：曾生成低步数几秒视频 `diffusers_video_jittor/outputs/text_to_video_sd_final_4s_256.mp4`，用于验证长于 4 帧的链路；用户反馈画面质量和 prompt 对齐不足，已不再作为最终 demo 交付。最终交付改为下方官方默认 example。
-- **已知状态**：GPU 首跑通过；NPU 尚未复验。`test_torch_compat.py` 整体长测尝试被既有 TransformerEncoder/softmax-grad 段阻断，不作为本次视频链路通过标准，日志保留在 `diffusers_video_jittor/logs/test_torch_compat_video_regressions.log`。
-- **文档**：工作记录 `agent/diffusers-video-2026-07-05.md`；中文交付文档 `/home/zy/projects/doc/2026-07-05-diffusers-video-jittor.md`。
+- **新增脚本与回归**：新增 `${JITTOR_LAB_ROOT}/diffusers_video_jittor/scripts/run_tiny_text_to_video_sd.py`、`${JITTOR_LAB_ROOT}/diffusers_video_jittor/scripts/run_text_to_video_sd.py`、`python/jittor/test/test_torch_compat_diffusers_video.py`。targeted 回归 `test_torch_compat_diffusers_video.py` 2/2 OK；diffusers guiders/kornia 导入 OK；视频文件帧数/尺寸验证 OK。
+- **历史 smoke 补充**：曾生成低步数几秒视频 `${JITTOR_LAB_ROOT}/diffusers_video_jittor/outputs/text_to_video_sd_final_4s_256.mp4`，用于验证长于 4 帧的链路；用户反馈画面质量和 prompt 对齐不足，已不再作为最终 demo 交付。最终交付改为下方官方默认 example。
+- **已知状态**：GPU 首跑通过；NPU 尚未复验。`test_torch_compat.py` 整体长测尝试被既有 TransformerEncoder/softmax-grad 段阻断，不作为本次视频链路通过标准，日志保留在 `${JITTOR_LAB_ROOT}/diffusers_video_jittor/logs/test_torch_compat_video_regressions.log`。
+- **文档**：[Diffusers 视频生成报告](../results/2026-07-05-diffusers-video-jittor.md)。
 
 ### ✅ 本会话增量（2026-07-05：diffusers 官方默认 demo 修正）
 - **用户反馈修正**：此前低步数/低 guidance 输出只证明链路可跑通，画面质量和 prompt 对齐不足，不能作为最终 demo。已改用模型官方默认 example。
-- **官方 demo 已跑通**：不修改 diffusers 原仓库代码，通过 `import jittor as torch` 运行 `DiffusionPipeline.from_pretrained("damo-vilab/text-to-video-ms-1.7b", torch_dtype=torch.float16, variant="fp16")`，替换 `DPMSolverMultistepScheduler`，prompt `Spiderman is surfing`，`num_inference_steps=25`，使用 `diffusers.utils.export_to_video` 默认 10 fps 导出。输出 `diffusers_video_jittor/outputs/official_spiderman_surfs_jittor.mp4`，16 帧、256×256、1.6 秒、文件大小 67856 bytes；contact sheet `diffusers_video_jittor/outputs/official_spiderman_surfs_jittor_contact_sheet.jpg`。
+- **官方 demo 已跑通**：不修改 diffusers 原仓库代码，通过 `import jittor as torch` 运行 `DiffusionPipeline.from_pretrained("damo-vilab/text-to-video-ms-1.7b", torch_dtype=torch.float16, variant="fp16")`，替换 `DPMSolverMultistepScheduler`，prompt `Spiderman is surfing`，`num_inference_steps=25`，使用 `diffusers.utils.export_to_video` 默认 10 fps 导出。输出 `${JITTOR_LAB_ROOT}/diffusers_video_jittor/outputs/official_spiderman_surfs_jittor.mp4`，16 帧、256×256、1.6 秒、文件大小 67856 bytes；contact sheet `${JITTOR_LAB_ROOT}/diffusers_video_jittor/outputs/official_spiderman_surfs_jittor_contact_sheet.jpg`。
 - **新增修复点**：官方 DPMSolver 路径触发 `torch.searchsorted(tensor, float)`，已在 `python/jittor/misc.py` 补齐 scalar Number 输入，默认返回 int64，`out_int32=True` 返回 int32；新增 `python/jittor/test/test_search_sorted.py::test_scalar_value` 回归。
 - **验证**：`test_search_sorted.py` 5/5 OK；`test_torch_compat_diffusers_video.py` 2/2 OK；官方 demo contact sheet 肉眼检查为蜘蛛侠冲浪，prompt 对齐。官方示例中的 `enable_model_cpu_offload()` 在 Jittor shim 下不可用，本次保持整条 pipeline 在 CUDA 上运行。
-- **追加 prompt demo**：沿同一官方流程只替换 prompt 为 `A panda is surfing on a wave`，生成 `diffusers_video_jittor/outputs/official_panda_surfs_jittor.mp4`，16 帧、256×256、10 fps、1.6 秒、57509 bytes；contact sheet `diffusers_video_jittor/outputs/official_panda_surfs_jittor_contact_sheet.jpg`，肉眼检查为熊猫冲浪，prompt 对齐。
+- **追加 prompt demo**：沿同一官方流程只替换 prompt 为 `A panda is surfing on a wave`，生成 `${JITTOR_LAB_ROOT}/diffusers_video_jittor/outputs/official_panda_surfs_jittor.mp4`，16 帧、256×256、10 fps、1.6 秒、57509 bytes；contact sheet `${JITTOR_LAB_ROOT}/diffusers_video_jittor/outputs/official_panda_surfs_jittor_contact_sheet.jpg`，肉眼检查为熊猫冲浪，prompt 对齐。
 - **汇报材料补充**：新增 `/home/zy/projects/doc/2026-07-05-diffusers-video-jittor-ppt.md`，按逐页 PPT 讲稿整理目标约束、最终 demo、官方 example 对齐、API 缺口、CUDA kernel 难点、验证数据、PyTorch 基线、水印解释、风险后续和 Q&A 口径；主总结文档 `/home/zy/projects/doc/2026-07-05-diffusers-video-jittor.md` 已加入该索引。
 
 ### ✅ 本会话增量（2026-07-05：原生 PyTorch diffusers TextToVideoSDPipeline 视觉基线）
 - **目标完成**：不修改 Jittor 源码，使用 `/home/zy/miniconda3/envs/jt311/bin/python -S` + 只读加载 `/home/zy/rt_venv/lib/python3.11/site-packages` 的原生 `torch 2.12.1+cu130`，跑通 diffusers 原生 `TextToVideoSDPipeline` 基线。脚本内校验 `torch.__file__=/home/zy/rt_venv/lib/python3.11/site-packages/torch/__init__.py`，避免 jt311 中已部署的 Jittor torch shim。
-- **运行参数**：GPU2，`HF_HOME=diffusers_video_jittor/hf_home`，`HF_ENDPOINT=https://hf-mirror.com`，模型 `ali-vilab/text-to-video-ms-1.7b`，prompt `a red sports car driving on a city street, cinematic, detailed, smooth motion`，16 帧、256×256、25 steps、guidance 9.0、seed 1234、fps 4、fp16。
-- **输出与验证**：视频 `diffusers_video_jittor/outputs/baseline_torch_car_g9_s25_seed1234_fp16.mp4`，contact sheet `..._contact_sheet.jpg`，日志 `diffusers_video_jittor/logs/baseline_torch_car_g9_s25_seed1234_fp16.log`，metadata `...fp16.json`。`ffprobe` 验证 16 帧、256×256、4 fps、4.0 秒；PIL 验证帧为 RGB 256×256。
+- **运行参数**：GPU2，`HF_HOME=${JITTOR_LAB_ROOT}/diffusers_video_jittor/hf_home`，`HF_ENDPOINT=https://hf-mirror.com`，模型 `ali-vilab/text-to-video-ms-1.7b`，prompt `a red sports car driving on a city street, cinematic, detailed, smooth motion`，16 帧、256×256、25 steps、guidance 9.0、seed 1234、fps 4、fp16。
+- **输出与验证**：视频 `${JITTOR_LAB_ROOT}/diffusers_video_jittor/outputs/baseline_torch_car_g9_s25_seed1234_fp16.mp4`，contact sheet `..._contact_sheet.jpg`，日志 `${JITTOR_LAB_ROOT}/diffusers_video_jittor/logs/baseline_torch_car_g9_s25_seed1234_fp16.log`，metadata `...fp16.json`。`ffprobe` 验证 16 帧、256×256、4 fps、4.0 秒；PIL 验证帧为 RGB 256×256。
 - **肉眼结论**：prompt 对齐可用，画面是红色跑车在城市/道路场景中移动；视觉质量符合该模型原生基线预期，但有明显 `shutterstock` 水印伪影。该 baseline 可作为后续 Jittor 视频输出质量判断参照。
-- **文档**：工作记录 `agent/diffusers-video-baseline-torch-2026-07-05.md`；中文交付文档 `/home/zy/projects/doc/2026-07-05-diffusers-video-torch-baseline.md`。
+- **文档**：[PyTorch 视频基线报告](../results/2026-07-05-diffusers-video-torch-baseline.md)。
 
 ### ✅ 3 个核心 bug —— 已验证 + 提交（2026-06-25，原 §4「未根治/绕过」三项全清）
 - **numpy2.x ABI 段错误（`b9ded5a1`）**：3 处 ABI 断裂（CopyInto slot 82→50 / 去伪造 descr / PyArray_Size elsize，**第三处本分支原缺**）。numpy2.4/py3.13 + 2.2/py3.10 各 17/17 + 5000 迭代无崩，numpy1.26 回归逐位一致。
@@ -132,7 +143,7 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 - **triton 兼容 shim（`ae624ac2`）**：`import triton`/`triton.language` 不再崩、guard/fallback 可控、@triton.jit launch 清晰 NotImplementedError（无 kernel 执行，下一步）。
 - **MobileNetV3 large+small + mobilenet_v2/shufflenet_v2 `**kwargs`（`6eee7009`）**：jittor 惯用法、忠实 torchvision（可学习参数量精确匹配 large 5,483,032/small 2,542,856），CPU+CUDA 前向+反向验证。
 - **C++ 报错清晰化（`0b1d8157`）**：binary shape（带 op 名）/broadcast（dim+冲突尺寸）验证可达；arg_reduce/argsort dim 防御性（被 cutt_transpose 遮蔽，follow-up）。
-- **complex dtype 设计（`3063d811`）**：完整方案+分阶段计划（[[design-complex-dtype]]），未实现。
+- **complex dtype 设计（`3063d811`）**：完整方案+分阶段计划（[设计文档](design/complex-dtype.md)），未实现。
 - **🆕 发现真 crash**：parallel 编译器 `VarRelayManager::get_op_relay_info` 堆损坏（编译 MobileNetV3 多独特 kernel 触发，非 GIL bug、2.0 GIL 修复覆盖不到），workaround `use_parallel_op_compiler=0`，已立账待修。
 - **教训**：subagent 的 `isolation:worktree` 从 `origin/master` 分叉（非当前 `2.0`）——worktree 缺 2.0 全部工作、验证基线错；其新文件可移植，但需在 2.0 主树重验。下次代码类 agent 别用 worktree 或改用主树新文件。
 
@@ -143,7 +154,7 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 - **又修 3 个真 bug**（测试/对拍揪出）：argmax/argmin 负 dim 崩 cutt_transpose（`7f26d693`）、index_select dim>0 用 newaxis 错（`3eb7bc78`）、mse_loss(none) 崩 + l1_loss 缺 reduction（`b35a30c9`）。
 - **测试揪出待修**（已 task）：dtype 提升不按 torch result_type lattice（silent 丢精度，#10）、`.long()`→int32 应 int64、torch_compat 路径缺 linalg svd(full_matrices)/svdvals/eigvalsh（#9）。
 - **🆕 cache 隔离**（用户建议、已验证）：jittor 原生 `cache_name` 环境变量，`CUDA_VISIBLE_DEVICES=N cache_name=cardN` 一卡一 agent → 并发编译互不争用（见 §1.1）。
-- **#8 segfault 调研**：假设 = `do_compile` 的进程级文件锁在 worker 线程被 `_has_lock` 跳过 → 无互斥并发 → 堆损坏（[[design-parallel-compiler-segfault]]）。但**根因仍不确定**（relay_groups 是否 per-FusedOp 存疑、glibc 堆损坏需 TSan 定位），mutex 修复**风险高**（可能死锁/废掉并行/坏多进程缓存）→ **未修，保留 `use_parallel_op_compiler=0` workaround，留待专门排查**。
+- **#8 segfault 调研**：假设 = `do_compile` 的进程级文件锁在 worker 线程被 `_has_lock` 跳过 → 无互斥并发 → 堆损坏（[设计文档](design/parallel-compiler-segfault.md)）。但**根因仍不确定**（relay_groups 是否 per-FusedOp 存疑、glibc 堆损坏需 TSan 定位），mutex 修复**风险高**（可能死锁/废掉并行/坏多进程缓存）→ **未修，保留 `use_parallel_op_compiler=0` workaround，留待专门排查**。
 
 ### ✅ 本会话增量 Round 4（2026-06-26 续，cache 隔离并行）
 - **模型库齐**：再补 **MaxViT**（`2e33c9c0`，参数量 30,919,624 == torchvision 精确）→ 6 大现代架构全覆盖（MobileNetV3/EfficientNet/RegNet/ConvNeXt/Swin/MaxViT）。
@@ -153,19 +164,19 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 - **本会话累计**：~26 commit；**~9 个真 torch-parity bug 修复**（cat/argmax/index_select/mse-l1/exp2等/save-load/Uniform）；6 架构；13 测试模块；triton kernel 执行；cache 隔离机制（用户建议）。剩余深核心（#5 complex 实现 / #8 segfault / #9-12 各 parity）均精确立账，属多日/高风险专项。
 
 ### ✅ 本会话增量 Round 5（2026-06-26 续：complex 功能化 + 测试套件成型）
-- **🟢🟢 原生 complex64 算术功能化（`fbc3f2b2`）**：#5 从"Phase 1 注册"推进到 **Phase 2 算术可用**——`jt.array(复数)`+numpy 往返 + add/sub/mul/div/neg + 复数⊕标量，对 numpy **maxdiff=0.0 精确**，CPU+CUDA，171/0 无回归。实现：`type/complex_compute.h`(struct+运算符)+`type/complex_op_type.cc`(OpByType+post_pass)+dtype_infer 规则+numpy 映射+**关键 bug 修**：`py_array_op.cc` 的 dsize8 自动 64→32 窄化误伤 complex64，加 `!is_complex()` 排除。回归锁 `test_complex64_native.py`。**Phase 2b 待续**（reduce/abs/conj/matmul/view_as_real/grad/complex128，编译错=响亮非静默，见 [[design-complex-dtype]]）。
+- **🟢🟢 原生 complex64 算术功能化（`fbc3f2b2`）**：#5 从"Phase 1 注册"推进到 **Phase 2 算术可用**——`jt.array(复数)`+numpy 往返 + add/sub/mul/div/neg + 复数⊕标量，对 numpy **maxdiff=0.0 精确**，CPU+CUDA，171/0 无回归。实现：`type/complex_compute.h`(struct+运算符)+`type/complex_op_type.cc`(OpByType+post_pass)+dtype_infer 规则+numpy 映射+**关键 bug 修**：`py_array_op.cc` 的 dsize8 自动 64→32 窄化误伤 complex64，加 `!is_complex()` 排除。回归锁 `test_complex64_native.py`。**Phase 2b 待续**（reduce/abs/conj/matmul/view_as_real/grad/complex128，编译错=响亮非静默，见[设计文档](design/complex-dtype.md)）。
 - **torch-grade 测试套件成型（17 模块）**：ops/indexing/reduce_shape/linalg/dtype/nn/autograd/sort_create/math/serialize/conv_pool/distributions/fft_einsum/complex64_native/**attention**/**optim**/**rnn**，全 CPU+CUDA vs numpy/解析/torch 规则。attention(SDPA+MHA)/optim(SGD/Adam/StepLR 对解析公式精确)/rnn(LSTM cell 手算对拍) 是 transformer/训练/序列核心面。
 - **本会话累计 ~37 commit**：6 任务全部实质推进（**#5 复数算术可用**/17 测试模块/6 架构/triton 执行/报错高价值点）+ **~12 个真 bug 修复** + 深核心 #8/#9/#10/#11/#12 精确立账。剩余均为多日深核心或本质无界，已精确铺路。
 
 ### ✅ 本会话增量 Round 6（2026-06-26 续：complex conj + 报错清晰化 + loss/norm 测试 + efficientnet 补全）
-- **#5 complex Phase 2b 实现（`1dd1de61`+`18359c81`）**：原生 complex64 从"仅算术"推进到 **sum-reduce（加 CUDA `atomicAdd(complex64*)` 拆 real/imag）+ abs→float32 + conj**（新增**原生 unary op `conj`**：6 处同步——FOR_ALL_NS/两 unary_ops set/三 OpByType[real·fp16=identity 符合 torch、complex=jt_conj]/grad；real conj 路径 grad=ones 已验，complex grad 走 `!is_float` 守卫延后）。现可用：create/+−×÷/neg/标量/**sum/abs/conj**。配方+边界见 [[design-complex-dtype]]。CPU+CUDA 精确，171/0。
+- **#5 complex Phase 2b 实现（`1dd1de61`+`18359c81`）**：原生 complex64 从"仅算术"推进到 **sum-reduce（加 CUDA `atomicAdd(complex64*)` 拆 real/imag）+ abs→float32 + conj**（新增**原生 unary op `conj`**：6 处同步——FOR_ALL_NS/两 unary_ops set/三 OpByType[real·fp16=identity 符合 torch、complex=jt_conj]/grad；real conj 路径 grad=ones 已验，complex grad 走 `!is_float` 守卫延后）。现可用：create/+−×÷/neg/标量/**sum/abs/conj**。配方+边界见[设计文档](design/complex-dtype.md)。CPU+CUDA 精确，171/0。
 - **#2 C++/CUDA 报错清晰化（`74c372e3`+`7244eb22`+reduce-dim）**：审计 10 类常见误用（~70% 本已清晰，诚实不造活），修最毒 3+1 个——(a) **未支持 op×dtype**：`op_compiler.cc` 把内部「No expand op pattern」改成「Op 'exp' is not supported for dtype(s): {complex64}…」（通用，覆盖任何 dtype 缺口）；(b) **Conv2d 通道不符**（原**空** `AssertionError:`）→「expected input with 8 channels…got 3」；(c) **Conv2d 维度错**（原 unpack 报错）→「expected 4-D (N,C,H,W)…」；(d) **bitwise/shift 作用于 float**（原 g++ 模板墙）→ `binary_op.cc` 早查「requires integer or boolean dtypes」；(e) reduce 越界 dim 加合法区间。`test_torch_compat_errors.py`（9）按子串锁定。
 - **#1 loss/norm 测试 + 4 真 bug 修（`018d9863`）**：`test_torch_compat_loss`(27)+`test_torch_compat_norm`(22) CPU+CUDA。修 nll_loss `ignore_index=0` 漏忽略（`>0`→`>=0`+weight.clone()）/ CrossEntropyLoss·BCEWithLogits 丢 `reduction=` / F.cross_entropy 软标签崩。norm 本已 bit 正确。
 - **#3 EfficientNet b4-b7（`1b223f9b`）**：补齐 torchvision b0-b7，参数对 torchvision 常量 **0.0000%**，CPU+CUDA。model-agent 另复验全部 21 个构造器参数精确 + 独立复现 #8 segfault（并发编译下 `VarRelayManager::get_op_relay_info`，非模型 bug）。
 - **本轮 ~7 commit**，全 CPU+CUDA + 171/0；多 agent 并行（test/model/audit/interpolate，各自 `cache_name=cardX CUDA_VISIBLE_DEVICES=N` 隔离，Python-only 不碰 C++ 避免撞编译）。
 
 ### ✅ 本会话增量 Round 7（2026-06-26 续：complex 补全 + triton + #10/#11 torch-parity）
-- **#5 complex 大幅补全**：在 sum/abs/conj 之上又加 **mean**(`reduce_dtype_infer` 复数守卫，否则 mean∈float_ops 推成 float64 编译崩)、**matmul 2D+bmm 双卡全可用**(bmm 分支 `"complex" not in str(a.dtype)` 绕 cublas 走 reindex)、**prod**(CPU)、结构/比较/ternary、**超越函数 exp/log/sin/cos/sqrt 双卡**(`eb242142`，实测全 OK)。`test_complex64_native` 10/10。边界见 [[design-complex-dtype]]。
+- **#5 complex 大幅补全**：在 sum/abs/conj 之上又加 **mean**(`reduce_dtype_infer` 复数守卫，否则 mean∈float_ops 推成 float64 编译崩)、**matmul 2D+bmm 双卡全可用**(bmm 分支 `"complex" not in str(a.dtype)` 绕 cublas 走 reindex)、**prod**(CPU)、结构/比较/ternary、**超越函数 exp/log/sin/cos/sqrt 双卡**(`eb242142`，实测全 OK)。`test_complex64_native` 10/10。边界见[设计文档](design/complex-dtype.md)。
 - **#4 triton fused-kernel**（`045245a5`）：triton shim 加 fused-kernel reductions + `test_triton_shim`(10/OK)。
 - **#2 报错清晰化补**：matmul dtype-mismatch 信息点名两边 dtype（`c7adbdce`）。累计本任务 5 个修复 + `test_torch_compat_errors`(9) 锁定。
 - **#10 dtype 提升 lattice**（`f1c400c6`，agent）：`.long()`=int64（原误别名 int32）+ .int/.short/.byte/.char/.type("torch.LongTensor")；`result_type/promote_types/can_cast` 全 torch `_promoteTypesLookup` 表；混合 dtype `Var op Var` 先把两边升到 result_type 再算（int32+int64→int64 等）；truediv 永远出 float。`test_torch_compat_promotion` 23/OK。
@@ -174,16 +185,16 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 - **附带发现（待查）**：`test_misc_op` 7 个**预存**失败（arctan2/code_softmax/multinorm/ctc_loss/make_grid×3，干净树同样失败，与本次改动无关）。
 
 ### ✅ 本会话增量 Round 8（2026-06-26 续：单测系统重构 = PyTorch-grade test infra）
-- **目标**：用户要求「重构整个单测系统，用一套更先进的体系代替，保持现有功能、更完善」。**关键纠偏**（用户拍板）：别自己造 golden-file 之类的 bespoke 机制，**参照 PyTorch 权威组织方式**。详见 [[design-test-system]]。
+- **目标**：用户要求「重构整个单测系统，用一套更先进的体系代替，保持现有功能、更完善」。**关键纠偏**（用户拍板）：别自己造 golden-file 之类的 bespoke 机制，**参照 PyTorch 权威组织方式**。详见[测试系统设计](design/test-system.md)。
 - **先做审计**：fan-out workflow 审计全部 196 个 `test/*.py` → 病根 = **forward-only 流行病**（~40 文件只测前向，恰好集中在反向最危险处：所有激活/norm/pad/reduce/attention/scatter；marquee 例：`test_torch_compat_norm` 只测前向，但 norm 的 bug 全在反向）+ 复制粘贴脚手架（torch-guard ×35、check_equal ×12、手写数值梯度 ×11、设备扫 ×99）+ 静默通过（try/except-print）。
 - **建成 PyTorch-faithful 基建**（`python/jittor/test/_internal/`，照搬 `torch.testing._internal` 结构）：`common_utils`(JittorTestCase/make_tensor/assertEqual/parametrize) + `common_device_type`(instantiate_device_type_tests + @ops/@dtypes/@onlyCPU…，cpu/cuda/npu 经 has_acl 区分) + `gradcheck`(数值 vs 解析 Jacobian，**反向正确性 oracle**) + `opinfo/`(OpInfo/SampleInput + definitions/ 自动发现) + `test_ops.py`(TestCommon 前向 vs numpy ref / TestGradients gradcheck)。**oracle 取舍**：前向 numpy ref + 反向 gradcheck(float64,CPU) ⇒ 传递性证明 torch-parity，无需 live-torch。
 - **op_db 并行扩充至 163 算子**(从 27,两轮 workflow 14 域)：每个 = 自动 fwd(全设备)+bwd(gradcheck)+多 dtype。基础域 **forward 146/146 + gradcheck 125/127** 全过;第二轮补审计 named gaps：SDPA(+causal)/embedding(+padding_idx §4 311eedf6 专项 check)/interpolate·grid_sample·affine_grid/pad(4 模式)/fft(fft·ifft·rfft·irfft)——全是反向最易藏 bug 处。覆盖报告 `python -m jittor.test._internal.report`。
 - **gap-closer + 回归锁**：`test_norm.py`(LN/GN/IN/BN 小方差**反向稳定性** float32-vs-float64,tol 1e-3——补上 marquee gap,6/6) + `test_regression.py`(§4 silent-wrong 逐 bug 命名锁,11/11) + `test_kernel_traps.py`(§4-B 固有陷阱:0-d/isnan/负dim/dtype lattice/float64 窄化,8/8)。
 - **🆕 本系统当场挖出 3 个真发现**：① **`jt.index_select` 负 dim 静默错**(dim=-1 返回错形状,dim≥0 对——负 dim 归一化缺失,已 expectedFailure 立账);② **`layer_norm`/`group_norm` 无二阶导**(stable backward 是不可微 jt.Function,gradgradcheck 揪出,标 supports_gradgrad=False);③ **`jt.array` 静默窄化 float64→float32 且 int64→int32**(任何双精度参照的坑,harness 已 pin dtype);附带 **`jt.floor_divide` 截断取整**(负数 -5//3=-1 vs torch/numpy floor -2,torch-parity gap)、**`jt.equal` 是整张量相等**(非逐元素)。
-- **剩余**(已立账,见 [[design-test-system]]):gradcheck 全 146 算子三选(运行中→triage 真 bug vs 测试 bug);torch_compat_* 块迁移到 harness(审计 B1,已有 numpy ref 机械可迁);legacy op 测试迁移(B2/B3);保留资产不丢(嵌入 numpy ref/@skip 语义差/gauge-invariant linalg/负测试/后端选择 log/内存生命周期)。
+- **剩余**(已立账,见[测试系统设计](design/test-system.md)):gradcheck 全 146 算子三选(运行中→triage 真 bug vs 测试 bug);torch_compat_* 块迁移到 harness(审计 B1,已有 numpy ref 机械可迁);legacy op 测试迁移(B2/B3);保留资产不丢(嵌入 numpy ref/@skip 语义差/gauge-invariant linalg/负测试/后端选择 log/内存生命周期)。
 
 ### ✅ 本会话增量 Round 9（2026-06-28 续：补广度——底层 integer/special/structure 算子，op_db 190→210）
-- **目标**（用户 `/goal 继续补广度`）：在 PyTorch-faithful 基建上补满**核心算子**缺口，尤其底层。盘点后发现三大类 jittor-core 算子零覆盖，各自直接套进 OpInfo 机制（fwd-vs-numpy + gradcheck + CPU-vs-CUDA device-parity 全白嫖）。详见 [[design-test-system]] Round 9。
+- **目标**（用户 `/goal 继续补广度`）：在 PyTorch-faithful 基建上补满**核心算子**缺口，尤其底层。盘点后发现三大类 jittor-core 算子零覆盖，各自直接套进 OpInfo 机制（fwd-vs-numpy + gradcheck + CPU-vs-CUDA device-parity 全白嫖）。详见[测试系统设计](design/test-system.md) Round 9。
 - **+20 个 core 算子，3 定义文件 + 1 反向专测**：① `definitions/bitwise_ops.py`(8)=`bitwise_and/or/xor/not`·`left_shift`·`right_shift`·`logical_xor`·`logical_not`——纯 C++ 整数核（加速器经典静默错点），整数宽度全扫，**CUDA 与 CPU 逐位精确（0.0）**；② `definitions/special_unary.py`(5)=`erfinv`·`lgamma`·`digamma`(后两为 `jt.Function.apply`，分布所依赖)·`deg2rad`·`rad2deg`，前向 oracle 用 **SciPy**；③ `definitions/structure_ops.py`(7)=`tril`·`triu`·`cross`·`kron`·`tensordot`(双线性，含二阶)·`cummax`·`cummin`(前缀扫描)；④ `test_special_grad.py`(4，CPU+CUDA)=三特殊函数反向 vs SciPy **闭式导数**(`√π/2·exp(erfinv²)`/`digamma`/`polygamma(1)`)+ erfinv 二阶。
 - **发现 & 取舍（不静默）**：`erfinv/lgamma/digamma` 是 ~1e-7 精度近似核 → float64 有限差分 gradcheck 被舍入噪声主导，故 **`digamma` 的 FD gradcheck 显式 `skip`（记原因）**，反向改用 scipy 闭式独立验证（已证 ==polygamma(1)）。
 - **verify-then-fix 全程**：首轮 4 个红信号（uint8 位运算、cross 1-D 形状、tensordot 全收缩 0-d、特殊函数 gradcheck）**全是测试/oracle 假象，非 jittor bug**——只改采样器/ref，不动核。唯一真实内核行为（uint8 二元位运算输出提升为 int8）是已记录的 dtype 量化怪癖。**净结果：+20 算子，CPU+CUDA 全绿，无新 core bug**，新核已锁。
@@ -202,7 +213,7 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 4. **diffusers 扩展**：多步采样 / SDXL / img2img / ControlNet + 整图端到端 vs 真 torch 逐像素对拍。
 5. **G4 性能**：CUDA 小 matmul + 逐元素 kernel 优化（慢 3–5×）；CUDA matmul 加 TF32 开关（类比 `acl_allow_hf32`）。
 6. **持续主回路**：py3.9/`jittor-npu` 跑 `test_torch_compat` 撞 NPU 缺口 → 修 → 验证 → commit（历史最高产出）。
-7. ✅ **ComplexNumber 废弃 / 统一到 native complex64（#5，P1–P6 完成 2026-06-26，主线 + 2 并行 agent）**：**用户面替换完整达成**——native complex64 现覆盖 桥(view_as_real/complex,P1 `8c2f3b71`) / 访问器(real·imag·angle,P2 `65a5b14e`) / `torch.complex`·`view_as_complex`·`polar`(P2) / `torch.fft.*`(P3 `4a742b6f`,DFT-matrix 路吃吐 native) / linalg(inv·svd·svdvals·eig·qr·eigh·pinv,P4 `556eee1f`) / gradfunctional vjp(P5 `de5f9f3b`),**没有任何 public API 再返回 ComplexNumber**;全双卡 + `test_torch_compat` 171/0 不退化(锁:`test_complex64_native`/`_linalg`/`_gradfunctional`/`torch_compat_fft_einsum`)。P6 给 ComplexNumber 加 deprecation docstring(**未加 runtime warning**——它现为 linalg 复数内核的内部桥接 substrate)。**剩余后续专项(非用户面)**：复数 linalg 内核原生重写以**彻底删类** / native 二阶 autograd(解锁 jvp) / `cupy.linalg.eig` CUDA 缺口 / complex128。详见 [[design-complex-dtype]] §Phase 6 总结。
+7. ✅ **ComplexNumber 废弃 / 统一到 native complex64（#5，P1–P6 完成 2026-06-26，主线 + 2 并行 agent）**：**用户面替换完整达成**——native complex64 现覆盖 桥(view_as_real/complex,P1 `8c2f3b71`) / 访问器(real·imag·angle,P2 `65a5b14e`) / `torch.complex`·`view_as_complex`·`polar`(P2) / `torch.fft.*`(P3 `4a742b6f`,DFT-matrix 路吃吐 native) / linalg(inv·svd·svdvals·eig·qr·eigh·pinv,P4 `556eee1f`) / gradfunctional vjp(P5 `de5f9f3b`),**没有任何 public API 再返回 ComplexNumber**;全双卡 + `test_torch_compat` 171/0 不退化(锁:`test_complex64_native`/`_linalg`/`_gradfunctional`/`torch_compat_fft_einsum`)。P6 给 ComplexNumber 加 deprecation docstring(**未加 runtime warning**——它现为 linalg 复数内核的内部桥接 substrate)。**剩余后续专项(非用户面)**：复数 linalg 内核原生重写以**彻底删类** / native 二阶 autograd(解锁 jvp) / `cupy.linalg.eig` CUDA 缺口 / complex128。详见[复数设计](design/complex-dtype.md) §Phase 6 总结。
 8. §2「21 条任务」里未起的：模型库现代化、文档重写、多机 DDP、图优化、pypi 依赖。
 
 ### ⚙️ 开工须知（细节见 §1）

@@ -60,11 +60,11 @@ import jittor as torch
 torch.flags.torch_shim = 1
 ```
 
-That entry sequence selects a project-local runtime before Jittor initializes,
-registers Jittor as `torch` for the remaining original modules, scans the
-checkout for PyTorch-style C++/CUDA extensions, and builds stale or missing
-extensions automatically. Runtime and build artifacts stay under
-`<gaussian-splatting>/.cache/jittor_torch` by default.
+That entry sequence selects a per-project runtime in the user cache before
+Jittor initializes, registers Jittor as `torch` for the remaining original
+modules, scans the checkout for PyTorch-style C++/CUDA extensions, and builds
+stale or missing extensions automatically. Runtime and build artifacts stay under
+`${XDG_CACHE_HOME:-~/.cache}/jittor/torch-shim/<project>-<hash>` by default.
 
 The explicit `jittor.torch_shim.enable()` bootstrap remains available for
 applications that need to customize the project root, runtime root, import
@@ -134,7 +134,8 @@ the same nvcc math policy as `torch.utils.cpp_extension`: the shim passes arch
 and include/link flags, but does not inject Jittor JIT math flags into project
 CUDA files unless the project requested them.
 
-Runtime state defaults to `.cache/jittor_torch` under the project root:
+Runtime state defaults to a path derived from the canonical project path:
+`${XDG_CACHE_HOME:-~/.cache}/jittor/torch-shim/<project>-<hash>`.
 
 - `HOME`, `JITTOR_HOME`, `TORCH_HOME`, `TMPDIR`, `XDG_CACHE_HOME`,
   `CUDA_CACHE_PATH`
@@ -142,8 +143,9 @@ Runtime state defaults to `.cache/jittor_torch` under the project root:
 - `JITTOR_TORCH_EXTENSIONS_DIR`, `TORCH_EXTENSIONS_DIR`
 - Triton and pip caches used by torch-oriented dependencies
 
-Set `JITTOR_TORCH_RUNTIME_ROOT` to choose another project-local runtime
-directory. Extension build directories, extension stamps, Jittor caches and
+Set `JITTOR_TORCH_RUNTIME_ROOT` to choose the complete runtime path, or
+`JITTOR_TORCH_CACHE_ROOT` to choose the parent used for per-project runtimes.
+Extension build directories, extension stamps, Jittor caches and
 temporary files are kept under this runtime root. If Jittor's bundled CUDA is installed at
 `~/.cache/jittor/jtcuda/cuda12.2_cudnn8_linux`, the bootstrap exports `JTCUDA`,
 `CUDA_HOME`, `nvcc_path`, `PATH` and `LD_LIBRARY_PATH` for it automatically.
@@ -188,15 +190,15 @@ JITTOR_GS_SKIP_EXT_BUILD=1 \
 
 By default the script chooses the active conda Python, or
 `~/miniconda3/envs/jt311/bin/python` when no conda env is active. Runtime state
-defaults to `/path/to/gaussian-splatting/.jittor_gs_runtime`:
+uses the same per-project user-cache path described above:
 
 - `HOME`, `JITTOR_HOME`, `TORCH_HOME`, `TMPDIR`, `XDG_CACHE_HOME`,
   `CUDA_CACHE_PATH`
 - the deployed shim `site-packages`
 - `JITTOR_TORCH_EXTENSIONS_DIR`
 
-Set `JITTOR_GS_RUNTIME_ROOT` to choose a different project-local runtime
-directory. If Jittor's bundled CUDA is installed at
+Set `JITTOR_GS_RUNTIME_ROOT` to choose a different runtime directory. If
+Jittor's bundled CUDA is installed at
 `~/.cache/jittor/jtcuda/cuda12.2_cudnn8_linux`, the script exports `JTCUDA`,
 `CUDA_HOME`, `nvcc_path`, `PATH` and `LD_LIBRARY_PATH` for it automatically.
 
