@@ -7,15 +7,17 @@ matching mode) and runs on BOTH CPU and CUDA when the build has it, so it locks 
 
 Covered: ``F.pad`` mode='constant'/'reflect'/'replicate'/'circular' over the LAST 1/2/3
 dims, asymmetric and zero-on-one-side pads, non-zero constant value, the default
-(zero constant). Module forms: ``nn.ZeroPad2d``, ``nn.ConstantPad2d``, ``nn.ReflectionPad2d``,
-``nn.ReplicationPad2d`` -- each with an int AND a 4-tuple (left,right,top,bottom).
+(zero constant), the ``pad=`` keyword alias and bool fill values. Module forms include
+``nn.ConstantPad1d/2d/3d``, ``nn.ZeroPad2d``, ``nn.ReflectionPad2d`` and
+``nn.ReplicationPad2d``; 2D forms cover both int and 4-tuple padding.
 
 torch's pad tuple is REVERSED and trailing-dim-first: ``F.pad(x, (l, r, t, b))`` pads the
 last dim by (l, r) and the 2nd-to-last by (t, b). The np reference encodes exactly that.
 
 REGRESSION: nn.ReflectionPad2d / nn.ReplicationPad2d crashed with a TUPLE padding
 (``if padding < 0`` ran ``tuple < int`` -> TypeError) before reaching the type dispatch;
-the standard torch call ``nn.ReplicationPad2d((l,r,t,b))`` was unusable. Fixed in nn.py.
+the standard torch call ``nn.ReplicationPad2d((l,r,t,b))`` was unusable. The regression
+remains covered after the implementation moved behind the ``jittor.nn`` facade.
 
 Run:  python -m jittor.test.test_torch_compat_pad
       python -m pytest python/jittor/test/test_torch_compat_pad.py
@@ -111,6 +113,23 @@ class TestPadConstant(Base):
                     pad_ref(x, pad, "constant", 2.5), msg=f"pad const 3d {dev}")
         both_devices(body)
 
+    def test_pad_keyword_alias(self):
+        x = self.x; amounts = (1, 2)
+        def body(dev):
+            self.ac(F.pad(torch.array(x), pad=amounts, value=-3.0).numpy(),
+                    pad_ref(x, amounts, "constant", -3.0), msg=f"pad keyword {dev}")
+        both_devices(body)
+
+    def test_bool_constant_fill(self):
+        x = np.array([[True, False], [False, True]], dtype="bool")
+        amounts = (1, 2, 2, 1)
+        def body(dev):
+            got = F.pad(torch.array(x), amounts, value=True).numpy()
+            self.assertEqual(np.asarray(got).dtype, np.dtype("bool"))
+            self.ac(got, pad_ref(x, amounts, "constant", True),
+                    msg=f"pad bool fill {dev}")
+        both_devices(body)
+
 
 # ---------------------------------------------------------------------------
 # F.pad -- replicate / reflect / circular
@@ -188,6 +207,27 @@ class TestPadModulesZeroConstant(Base):
         def body(dev):
             self.ac(nn.ConstantPad2d(pad, 4.0)(torch.array(x)).numpy(),
                     pad_ref(x, pad, "constant", 4.0), msg=f"ConstantPad2d {dev}")
+        both_devices(body)
+
+
+# ---------------------------------------------------------------------------
+# nn.ConstantPad1d / nn.ConstantPad3d
+# ---------------------------------------------------------------------------
+class TestConstantPadModulesExtraDimensions(Base):
+    def test_constantpad1d_tuple(self):
+        x = np.random.RandomState(55).randn(2, 3, 4).astype("float32")
+        pad = (1, 2)
+        def body(dev):
+            self.ac(nn.ConstantPad1d(pad, -2.5)(torch.array(x)).numpy(),
+                    pad_ref(x, pad, "constant", -2.5), msg=f"ConstantPad1d {dev}")
+        both_devices(body)
+
+    def test_constantpad3d_tuple(self):
+        x = np.random.RandomState(56).randn(1, 2, 3, 4, 5).astype("float32")
+        pad = (1, 0, 2, 1, 0, 2)
+        def body(dev):
+            self.ac(nn.ConstantPad3d(pad, 1.25)(torch.array(x)).numpy(),
+                    pad_ref(x, pad, "constant", 1.25), msg=f"ConstantPad3d {dev}")
         both_devices(body)
 
 

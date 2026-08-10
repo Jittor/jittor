@@ -126,9 +126,10 @@ wrapper，避免只修复类的 pickle 路径而让方法反射来源发生漂�
 绑定、optimizer 重导出和后端集成点，先验证 facade 模式，再处理含参数状态和设备
 快路径的区域。
 
-normalization、RNN 与 convolution 的 functional/backend 和主要公开类已按风险
-顺序完成拆分。参数容器协议稳定前不移动根 `Module`；DepthwiseConv、pooling、
-ACL 重绑和别名网络仍必须按领域整体审计，不能只搬 Python 类壳。
+normalization、RNN、convolution 的 functional/backend 和主要公开类，以及
+padding 已按风险顺序完成拆分。参数容器协议稳定前不移动根 `Module`；
+DepthwiseConv、pooling、ACL 重绑和别名网络仍必须按领域整体审计，不能只搬
+Python 类壳。
 
 ### 第三批：normalization
 
@@ -168,12 +169,23 @@ cuDNN helper、`conv2d` 和 `conv_transpose`，保留 ACL 后置 wrapper、公�
 `Linear` 同批迁移；`DepthwiseConv` 继续由 `jittor.depthwise_conv` 拥有并保持原
 pickle 路径；pooling 与 Torch shim 后置创建的 `ConvTranspose1d` 不在本批迁移。
 
-### 第七批：`misc.py` 与 `torch_shim/torch__init__.py`
+### 第七批：padding
+
+已将 `pad`、`ReflectionPad2d`、`ZeroPad2d`、`ConstantPad1d/2d/3d` 与
+`ReplicationPad2d` 整体拆到 `_nn/padding.py`。facade 直接重导出同一对象，并递归
+恢复函数、类和方法的 `jittor.nn` 元数据；`nn.functional.pad` 与
+`jittor.attention.pad` 继续和 `nn.pad` 保持同一身份。
+
+本批保留 `pad=` 关键字别名、四种 functional mode、类/实例 pickle、属性顺序与空
+`state_dict`。ACL 当前不重绑 padding，所有路径仍使用 `Var.reindex`；若未来新增
+后端 wrapper，必须同步审计 attention 的静态导入和 Torch functional 的创建顺序。
+
+### 第八批：`misc.py` 与 `torch_shim/torch__init__.py`
 
 按 shape/indexing、reduction/scatter、序列操作拆 `misc.py`；按 nn、optim、cuda、
 distributed、data 和 stub 注册拆 shim。每批只移动一个可独立回归的领域。
 
-### 第八批：启动与运行时
+### 第九批：启动与运行时
 
 抽出 `_version.py` 和仅标准库的 `_bootstrap/`，再逐步分离 core loader、compiler
 和 backend controller。根 `__init__.py` 最后收敛为严格排序的 composition root。

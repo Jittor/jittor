@@ -6,6 +6,7 @@
 
 ## 兼容性与功能验证
 
+- [2026-08-11 源码架构重构第七批：padding](2026-08-11-source-architecture-padding-refactor.md)
 - [2026-08-11 源码架构重构第六批：convolution 类阶段](2026-08-11-source-architecture-convolution-layers-refactor.md)
 - [2026-08-11 源码架构重构第五批：convolution 第一阶段](2026-08-11-source-architecture-convolution-refactor.md)
 - [2026-08-11 源码架构重构第四批：RNN](2026-08-11-source-architecture-rnn-refactor.md)

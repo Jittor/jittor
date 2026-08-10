@@ -3,6 +3,7 @@
 from abc import abstractmethod as abc_abstractmethod
 import ast
 import importlib
+import inspect
 import pickle
 from pathlib import Path
 import types as python_types
@@ -20,6 +21,7 @@ from jittor._nn import convolution_transpose_layers
 from jittor._nn import layer_norm_cuda
 from jittor._nn import losses
 from jittor._nn import normalization
+from jittor._nn import padding
 from jittor._nn import recurrent_base
 from jittor._nn import recurrent_cells
 from jittor._nn import recurrent_layers
@@ -30,7 +32,7 @@ from jittor._nn import vector
 _IMPLEMENTATION_MODULES = (
     activations, convolution, convolution_3d_layers, convolution_cudnn,
     convolution_layers, convolution_transpose, convolution_transpose_layers,
-    layer_norm_cuda, losses, normalization, recurrent_base,
+    layer_norm_cuda, losses, normalization, padding, recurrent_base,
     recurrent_cells, recurrent_layers, softmax, vector,
 )
 _ACL_PATCHED_SYMBOLS = {"Conv", "conv2d", "relu", "leaky_relu", "softmax"}
@@ -556,6 +558,70 @@ class TestNNStructure(unittest.TestCase):
                 with self.subTest(module=module.__name__, reference=reference):
                     self.assertIn(reference, source)
 
+    def test_padding_public_contracts_remain_stable(self):
+        import jittor.attention as attention
+
+        self.assertIs(nn.functional.pad, nn.pad)
+        self.assertIs(attention.pad, nn.pad)
+        self.assertEqual(
+            str(inspect.signature(nn.pad)),
+            "(x, padding=None, mode='constant', value=0, pad=None)",
+        )
+
+        classes = (
+            padding.ReflectionPad2d,
+            padding.ZeroPad2d,
+            padding.ConstantPad1d,
+            padding.ConstantPad2d,
+            padding.ConstantPad3d,
+            padding.ReplicationPad2d,
+        )
+        for cls in classes:
+            with self.subTest(cls=cls.__name__):
+                self.assertIs(getattr(nn, cls.__name__), cls)
+                self.assertIs(getattr(nn.modules, cls.__name__), cls)
+                self.assertIs(cls.__mro__[1], nn.Module)
+                self.assertEqual(cls.__module__, "jittor.nn")
+                self.assertEqual(cls.__qualname__, cls.__name__)
+                self.assertEqual(cls.__init__.__module__, "jittor.nn")
+                self.assertEqual(cls.execute.__module__, "jittor.nn")
+                self.assertIs(pickle.loads(pickle.dumps(cls)), cls)
+
+        instance_contracts = (
+            (
+                padding.ReflectionPad2d(1),
+                ("padding", "pl", "pr", "pt", "pb"),
+            ),
+            (
+                padding.ZeroPad2d(1),
+                ("padding", "pl", "pr", "pt", "pb"),
+            ),
+            (
+                padding.ConstantPad1d((1, 2), 3.5),
+                ("pl", "pr", "value"),
+            ),
+            (
+                padding.ConstantPad2d((1, 2, 3, 4), 3.5),
+                ("padding", "pl", "pr", "pt", "pb", "value"),
+            ),
+            (
+                padding.ConstantPad3d((1, 2, 3, 4, 5, 6), 3.5),
+                ("pl", "pr", "pt", "pb", "pf", "pba", "value"),
+            ),
+            (
+                padding.ReplicationPad2d(1),
+                ("padding", "pl", "pr", "pt", "pb"),
+            ),
+        )
+        for instance, attribute_names in instance_contracts:
+            restored = pickle.loads(pickle.dumps(instance))
+            with self.subTest(instance=type(instance).__name__):
+                self.assertIs(type(restored), type(instance))
+                self.assertEqual(tuple(instance.__dict__), attribute_names)
+                self.assertEqual(tuple(restored.__dict__), attribute_names)
+                self.assertEqual(tuple(instance.state_dict()), ())
+                self.assertEqual(tuple(restored.state_dict()), ())
+
     def test_recurrent_implementations_dispatch_through_public_facade(self):
         class Marker:
             def __add__(self, other):
@@ -681,7 +747,7 @@ class TestNNStructure(unittest.TestCase):
 
     def test_source_files_stay_within_architecture_budgets(self):
         facade_path = Path(nn.__file__).resolve()
-        self.assertLessEqual(len(facade_path.read_text(encoding="utf-8").splitlines()), 2800)
+        self.assertLessEqual(len(facade_path.read_text(encoding="utf-8").splitlines()), 2600)
         for module in _IMPLEMENTATION_MODULES:
             path = Path(module.__file__).resolve()
             with self.subTest(path=path.name):
