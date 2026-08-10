@@ -125,9 +125,9 @@ wrapper，避免只修复类的 pickle 路径而让方法反射来源发生漂�
 分为 4 个实现模块。`nn.py` 继续保留所有 `Module` 子类、别名、`Var` 绑定、optimizer
 重导出和后端集成点。这样先验证 facade 模式，再处理含参数状态和设备快路径的区域。
 
-normalization 与 RNN 已按风险顺序完成拆分。参数容器协议稳定前不移动根 `Module`；
-convolution 的 backend、depthwise、transpose、ACL 重绑和别名网络必须整体审计，
-不能只搬 Python 类壳。
+normalization、RNN 与 convolution 的 functional/backend 第一阶段已按风险顺序
+完成拆分。参数容器协议稳定前不移动根 `Module`；convolution 的公开类、depthwise、
+pooling、ACL 重绑和别名网络仍必须整体审计，不能只搬 Python 类壳。
 
 ### 第三批：normalization
 
@@ -148,10 +148,16 @@ LayerNorm no-grad kernel 拆到 `_nn/normalization.py` 与
 
 ### 第五批：convolution
 
-convolution 最后处理 backend、depthwise、transpose、pooling 和别名网络。ACL 会在
-`nn` 导入完成后重绑 `Conv/Conv2d/conv2d`，而 `Conv1d`、`conv1d` 和
-`Conv._conv_forward` 当前依赖 facade 动态查找，因此必须先补齐 ACL、Torch shim
-快照身份和动态分派结构契约，再分 functional/backend 与类两阶段迁移。
+已完成 functional/backend 第一阶段：`conv1d/2d/3d`、三种 transpose functional、
+2D cuDNN `Function` 和 3D 半精度保护分别拆到 `_nn/convolution.py`、
+`_nn/convolution_transpose.py` 与 `_nn/convolution_cudnn.py`。facade 直接重导出同一
+函数/类对象并恢复 `jittor.nn` 元数据；私有实现通过 `jt.nn` 动态解析 `_pair/_triple`、
+cuDNN helper、`conv2d` 和 `conv_transpose`，保留 ACL 后置 wrapper、公开 monkeypatch
+及 `conv/conv_transpose2d` 别名语义。
+
+公开 `Conv/Conv1d/Conv3d/ConvTranspose*` 类、DepthwiseConv 和 pooling 暂留 facade。
+第二阶段必须先解决 DepthwiseConv 循环依赖、ACL 对 `Conv/Conv2d` 的类 wrapper、
+Torch shim 类快照和模块实例 pickle/state_dict，再迁移公开类。
 
 ### 第六批：`misc.py` 与 `torch_shim/torch__init__.py`
 

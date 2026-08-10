@@ -11,6 +11,9 @@ import unittest
 import jittor
 import jittor.nn as nn
 from jittor._nn import activations
+from jittor._nn import convolution
+from jittor._nn import convolution_cudnn
+from jittor._nn import convolution_transpose
 from jittor._nn import layer_norm_cuda
 from jittor._nn import losses
 from jittor._nn import normalization
@@ -22,10 +25,11 @@ from jittor._nn import vector
 
 
 _IMPLEMENTATION_MODULES = (
-    activations, layer_norm_cuda, losses, normalization, recurrent_base,
-    recurrent_cells, recurrent_layers, softmax, vector,
+    activations, convolution, convolution_cudnn, convolution_transpose,
+    layer_norm_cuda, losses, normalization, recurrent_base, recurrent_cells,
+    recurrent_layers, softmax, vector,
 )
-_ACL_PATCHED_FUNCTIONS = {"relu", "leaky_relu", "softmax"}
+_ACL_PATCHED_FUNCTIONS = {"conv2d", "relu", "leaky_relu", "softmax"}
 
 
 def _is_acl_wrapper(value):
@@ -215,6 +219,115 @@ class TestNNStructure(unittest.TestCase):
                     tuple(instance.state_dict().keys()),
                 )
 
+    def test_convolution_public_contracts_remain_stable(self):
+        function_names = (
+            "conv1d", "conv2d", "conv3d", "conv_transpose",
+            "conv_transpose1d", "conv_transpose2d", "conv_transpose3d",
+        )
+        for name in function_names:
+            with self.subTest(function=name):
+                self.assertIs(getattr(nn.functional, name), getattr(nn, name))
+
+        self.assertIs(nn._CUDNN_3D_HALF_DTYPES,
+                      convolution_cudnn._CUDNN_3D_HALF_DTYPES)
+        for cls in (nn._CudnnConv2d, nn._CudnnConvT2d):
+            with self.subTest(cls=cls.__name__):
+                self.assertEqual(cls.__module__, "jittor.nn")
+                self.assertEqual(cls.execute.__module__, "jittor.nn")
+                self.assertEqual(cls.grad.__module__, "jittor.nn")
+                self.assertIs(pickle.loads(pickle.dumps(cls)), cls)
+
+        self.assertIs(nn.conv_transpose2d, nn.conv_transpose)
+        if nn.conv is not nn.conv2d:
+            self.assertTrue(_is_acl_wrapper(nn.conv2d))
+        else:
+            self.assertIs(nn.conv, nn.conv2d)
+
+    def test_convolution_implementations_dispatch_through_public_facade(self):
+        class Marker:
+            def __init__(self, name):
+                self.name = name
+                self.calls = []
+
+            def dim(self):
+                return 3
+
+            def unsqueeze(self, dim):
+                self.calls.append(("unsqueeze", dim))
+                return self
+
+            def squeeze(self, dim):
+                self.calls.append(("squeeze", dim))
+                return self
+
+        input_marker = Marker("input")
+        weight_marker = Marker("weight")
+        output_marker = Marker("output")
+
+        original_conv2d = nn.conv2d
+        conv2d_calls = []
+
+        def replacement_conv2d(*args):
+            conv2d_calls.append(args)
+            return output_marker
+
+        nn.conv2d = replacement_conv2d
+        try:
+            result = convolution.conv1d(
+                input_marker, weight_marker, "bias", 2, 3, 4, 5,
+            )
+        finally:
+            nn.conv2d = original_conv2d
+        self.assertIs(result, output_marker)
+        self.assertEqual(
+            conv2d_calls,
+            [(input_marker, weight_marker, "bias", (2, 1), (3, 0),
+              (4, 1), 5)],
+        )
+
+        original_transpose = nn.conv_transpose
+        transpose_calls = []
+
+        def replacement_transpose(*args):
+            transpose_calls.append(args)
+            return output_marker
+
+        nn.conv_transpose = replacement_transpose
+        try:
+            result = convolution_transpose.conv_transpose1d(
+                input_marker, weight_marker, "bias", 2, 3, 4, 5, 6,
+            )
+        finally:
+            nn.conv_transpose = original_transpose
+        self.assertIs(result, output_marker)
+        self.assertEqual(
+            transpose_calls,
+            [(input_marker, weight_marker, "bias", (2, 1), (3, 0),
+              (4, 0), 5, (6, 1))],
+        )
+
+        source_contracts = {
+            convolution: (
+                "jt.nn._pair", "jt.nn._triple",
+                "jt.nn._try_cudnn_conv2d",
+                "jt.nn._cudnn_conv3d_fp16_safe", "jt.nn.conv2d",
+            ),
+            convolution_cudnn: (
+                "jt.nn._CudnnConv2d", "jt.nn._CudnnConvT2d",
+                "jt.nn._CUDNN_3D_HALF_DTYPES",
+            ),
+            convolution_transpose: (
+                "jt.nn._try_cudnn_conv_transpose2d",
+                "jt.nn._cudnn_conv3d_fp16_safe",
+                "jt.nn.conv_transpose",
+            ),
+        }
+        for module, references in source_contracts.items():
+            source = Path(module.__file__).read_text(encoding="utf-8")
+            for reference in references:
+                with self.subTest(module=module.__name__, reference=reference):
+                    self.assertIn(reference, source)
+
     def test_recurrent_implementations_dispatch_through_public_facade(self):
         class Marker:
             def __add__(self, other):
@@ -340,7 +453,7 @@ class TestNNStructure(unittest.TestCase):
 
     def test_source_files_stay_within_architecture_budgets(self):
         facade_path = Path(nn.__file__).resolve()
-        self.assertLessEqual(len(facade_path.read_text(encoding="utf-8").splitlines()), 3800)
+        self.assertLessEqual(len(facade_path.read_text(encoding="utf-8").splitlines()), 3300)
         for module in _IMPLEMENTATION_MODULES:
             path = Path(module.__file__).resolve()
             with self.subTest(path=path.name):
