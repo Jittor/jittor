@@ -41,6 +41,13 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 > **分支**：所有人/agent 都在 **`2.0`**（= 原 `acl-perf-and-fixes` 推到远程；动手前 `git branch --show-current` 确认）。分叉前的所有进展/日志现在都是**公共知识**。
 
 ### ✅ 已完成并验证（在 `2.0`）
+- **源码架构重构第二批**：`nn.py` 从 5,220 行降到 4,675 行，29 个纯函数按
+  activation、loss、softmax、vector 拆入 6 文件的 `_nn` 私有包；公开模块身份、
+  pickle、`Var` 绑定、历史别名和 ACL 动态重绑均由结构契约保护。CPU 新增/兼容/
+  OpInfo 共 158 项（142 通过、16 项按环境或能力跳过）；CUDA 结构兼容 74/74、
+  设备前反向一致性 28/28；隔离 wheel 导入通过。详见
+  [第二批报告](../results/2026-08-11-source-architecture-nn-refactor.md)。后续继续按
+  normalization、RNN、convolution 顺序收敛 `nn.py`。
 - **源码架构重构第一批**：最大 Python 文件 `torch_compat.py` 从 11,008 行降到
   8,683 行，类型/设备、梯度、nested tensor、序列化、纯函数、optimizer 和
   scheduler 拆入 9 个 `_torch_compat` 私有模块；公开 facade 身份、pickle、安装

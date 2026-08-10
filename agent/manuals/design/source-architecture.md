@@ -59,8 +59,10 @@ stdlib
 4. `jittor_utils` 的底层模块不得反向导入 `jittor`。
 5. 不得增加现有强连通导入分量；每批迁移应让环数量保持或下降。
 
-`jittor._torch_compat.runtime` 当前提供最小运行时代理。它只解决拆分期间的初始化
-顺序，不应演化成无边界的 service locator；后续应按实际依赖继续收窄协议。
+`jittor._torch_compat.runtime` 和 `jittor._nn.runtime` 当前分别提供最小运行时代理。
+它们只解决拆分期间的初始化顺序，不应演化成无边界的 service locator；后续应按
+实际依赖继续收窄协议。私有实现若依赖可被后端运行时重绑的公开符号，必须经 facade
+动态解析，不能静态捕获同包实现；`log_softmax -> nn.softmax` 是现有示例。
 
 ## Facade 契约
 
@@ -117,15 +119,25 @@ stdlib
 
 ### 第二批：`nn.py`
 
-先抽取低耦合的 loss、normalization、RNN 和 convolution 实现到 `_nn/`。显式保留
-optimizer 重导出身份；在参数容器协议稳定前不移动根 `Module`。
+已建立 `_nn/`，先抽取 29 个低耦合纯函数，按 activation、loss、softmax 和 vector
+分为 4 个实现模块。`nn.py` 继续保留所有 `Module` 子类、别名、`Var` 绑定、optimizer
+重导出和后端集成点。这样先验证 facade 模式，再处理含参数状态和设备快路径的区域。
 
-### 第三批：`misc.py` 与 `torch_shim/torch__init__.py`
+下一阶段按风险依次拆 normalization、RNN 和 convolution。参数容器协议稳定前不
+移动根 `Module`；CUDA LayerNorm 快路径、cuDNN RNN 和 convolution 后端必须随各自
+领域整体审计，不能只搬 Python 类壳。
+
+### 第三批：继续收敛 `nn.py`
+
+按 normalization、RNN、convolution 顺序继续迁移，仍保持每批可独立回归。纯函数
+拆分已经建立的 `_nn.runtime`、元数据恢复和结构预算应直接复用，不再创建第二套机制。
+
+### 第四批：`misc.py` 与 `torch_shim/torch__init__.py`
 
 按 shape/indexing、reduction/scatter、序列操作拆 `misc.py`；按 nn、optim、cuda、
 distributed、data 和 stub 注册拆 shim。每批只移动一个可独立回归的领域。
 
-### 第四批：启动与运行时
+### 第五批：启动与运行时
 
 抽出 `_version.py` 和仅标准库的 `_bootstrap/`，再逐步分离 core loader、compiler
 和 backend controller。根 `__init__.py` 最后收敛为严格排序的 composition root。

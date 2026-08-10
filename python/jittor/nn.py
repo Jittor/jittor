@@ -33,6 +33,26 @@ from jittor.misc import CTCLoss
 from jittor_utils import LOG
 from functools import partial, lru_cache
 
+from ._nn.runtime import bind_runtime as _bind_nn_runtime
+
+_bind_nn_runtime(jt)
+del _bind_nn_runtime
+
+from ._nn.activations import (
+    elu, gelu, hardsigmoid, hardswish, leaky_relu, prelu, relu, relu6,
+    rrelu, sigmoid, sign, silu,
+)
+from ._nn.losses import (
+    bce_loss, binary_cross_entropy_with_logits, cross_entropy_loss, l1_loss,
+    mse_loss, nll_loss, smooth_l1_loss,
+)
+from ._nn.softmax import (
+    _get_softmax_dim, log_sigmoid, log_softmax, logsumexp, softmax,
+)
+from ._nn.vector import (
+    cosine_similarity, glu, normalize, pairwise_distance, softsign,
+)
+
 
 def _broadcast_batch_dims(a, b):
     ''' Broadcast the leading batch dims of two tensors with equal ndim>=3 to a
@@ -261,255 +281,12 @@ jt.Var.__imatmul__ = lambda a,b: a.assign(matmul(a,b))
 def get_init_var_rand(shape, dtype):
     return jt.array(np.random.normal(0.0, 1.0, shape).astype(np.float32))
 
-def relu(x, inplace=False):
-    r''' Applies the element-wise function:
-
-    .. math::
-        \text{ReLU}(x) = \max(0,x)
-
-    :param x: the input var
-    :type x: jt.Var
-
-    :param inplace: can optionally do the operation in-place (accepted for
-        torch compatibility; Jittor computes a new var). Default: ``False``
-    :type inplace: bool
-
-    Example:
-        >>> a = jt.randn(3)
-        >>> a
-        jt.Var([-0.38380373 1.1338731   6.128115  ], dtype=float32)
-        >>> nn.relu(a)
-        jt.Var([0.        1.1338731 6.128115 ], dtype=float32)
-    '''
-    cond = x>0.0
-    return jt.ternary_out_hint(cond, x, 0.0)
-
-
-def leaky_relu(x, scale=0.01, negative_slope=None, inplace=False):
-    # torch spells the slope `negative_slope` (+ an `inplace` flag); accept both.
-    if negative_slope is not None:
-        scale = negative_slope
-    r''' Applies the element-wise function:
-
-    .. math::
-        \text{LeakyRELU}(x) =
-        \begin{cases}
-        x, & \text{ if } x \geq 0 \\
-        \text{scale} \times x, & \text{ otherwise }
-        \end{cases}
-
-    :param x: the input var
-    :type x: jt.Var
-
-    :param scale: the :math:`\scale` value for the leaky relu formulation. Default: 0.01
-    :param scale: float, optional
-
-    Example:
-        >>> a = jt.randn(3)
-        >>> a
-        jt.Var([-0.38380373 1.1338731   6.128115  ], dtype=float32)
-        >>> nn.leaky_relu(a)
-        jt.Var([-3.8380371e-03  1.1338731e+00  6.1281152e+00], dtype=float32)
-    '''
-    return jt.ternary(x>0, x, x*scale)
-
-def relu6(x): 
-    r''' Applies the element-wise function:
-
-    .. math::
-        \text{ReLU6}(x) = \min(\max(0,x), 6)
-
-    :param x: the input var
-    :type x: jt.Var
-
-    Example:
-        >>> a = jt.randn(3)
-        >>> a
-        jt.Var([-0.38380373 1.1338731   6.128115  ], dtype=float32)
-        >>> nn.relu6(a)
-        jt.Var([0.        1.1338731 6.       ], dtype=float32)
-    '''
-    return jt.minimum(jt.maximum(x, 0.0), 6.0)
-
-def elu(x: jt.Var, alpha: float = 1.0) -> jt.Var:
-    r''' Applies the element-wise function:
-
-    .. math::
-        \text{ELU}(x) = \begin{cases}
-        x, & \text{ if } x > 0\\
-        \alpha * (\exp(x) - 1), & \text{ if } x \leq 0
-        \end{cases}
-
-    :param x: the input var
-    :type x: jt.Var
-
-    :param alpha: the :math:`\alpha` value for the ELU formulation. Default: 1.0
-    :param alpha: float, optional
-
-    Example:
-        >>> a = jt.randn(3)
-        >>> a
-        jt.Var([-0.38380373 -1.1338731   2.128115  ], dtype=float32)
-        >>> nn.elu(a)
-        jt.Var([-0.31873488 -0.6782155   2.128115  ], dtype=float32)
-    '''
-    return jt.ternary(x>0,x,alpha*(x.exp()-1))
-
-def sign(x: jt.Var) -> jt.Var:
-    ''' returns the signs of elements of x
-
-    :param x: the input Var
-    :type x: jt.Var
-
-    Example:
-        >>> a = jt.float32([0.99, 0, -0.99])
-        >>> nn.sign(a)
-        jt.Var([ 1.  0. -1.], dtype=float32)
-    '''
-    one = jt.ones(x.shape)
-    x = jt.ternary(x>0, one, x)
-    return jt.ternary(x<0, -one, x)
-
-def gelu(x, approximate='none'):
-    r''' Applies the element-wise function:
-
-    .. math::
-        \text{GELU}(x) = x * \Phi(x)
-
-    where :math:`\Phi(x)` is the Cumulative Distribution Function for Gaussian Distribution.
-
-    When ``approximate='tanh'``, GELU is estimated with:
-
-    .. math::
-        \text{GELU}(x) = 0.5 * x * (1 + \tanh(\sqrt{2/\pi} * (x + 0.044715 * x^3)))
-
-    :param x: the input var
-    :type x: jt.Var
-    :param approximate: the gelu approximation algorithm to use, either ``'none'``
-        (exact, erf-based) or ``'tanh'``. Default: ``'none'``.
-    :type approximate: str
-
-    Example:
-        >>> a = jt.randn(3)
-        >>> a
-        jt.Var([-0.38380373 -1.1338731   2.128115  ], dtype=float32)
-        >>> nn.gelu(a)
-        jt.Var([-0.134547   0.9882567  6.128115 ], dtype=float32)
-    '''
-    if approximate == 'tanh':
-        _sqrt_2_over_pi = 0.7978845608028654
-        return 0.5*x*(1+jt.tanh(_sqrt_2_over_pi*(x+0.044715*(x*x*x))))
-    elif approximate == 'none':
-        # Keep the exact GELU kernel in the tensor's compute dtype. Dividing a
-        # float32 Var by a Python float intentionally uses a float64 intermediate
-        # in torch_compat (to match scalar division to the last bit), which made
-        # this elementwise hot path execute a double-precision divide per value.
-        # PyTorch's GELU kernel uses a typed 1/sqrt(2) constant instead. Low
-        # precision inputs compute in fp32 and cast back, matching torch's output
-        # dtype while retaining the existing elementwise fusion opportunity.
-        input_dtype = str(x.dtype)
-        low_precision = input_dtype in ('float16', 'bfloat16')
-        compute_x = x.float32() if low_precision else x
-        scalar_type = np.float64 if input_dtype == 'float64' else np.float32
-        inv_sqrt2 = scalar_type(0.7071067811865476)
-        half = scalar_type(0.5)
-        one = scalar_type(1.0)
-        result = half * compute_x * (one + jt.erf(compute_x * inv_sqrt2))
-        return result.cast(input_dtype) if low_precision else result
-    else:
-        raise ValueError(f"approximate argument must be either 'none' or 'tanh', got {approximate}")
-
-def sigmoid(x):
-    ''' Element-wise sigmoid. Exposed as a function (torch.nn.functional.sigmoid /
-    nn.functional.sigmoid) -- jittor only had jt.sigmoid / Var.sigmoid before, so
-    `F.sigmoid(x)` (used by qwen2_moe and others) raised AttributeError.'''
-    return jt.sigmoid(x)
-
-def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignored
-    r''' Applies the element-wise function:
-
-    .. math::
-        \text{SILU}(x) = x * Sigmoid(x)
-    
-    :param x: the input var
-    :type x: jt.Var
-
-    Example:
-        >>> a = jt.randn(3)
-        >>> a
-        jt.Var([-0.38380373 -1.1338731   2.128115  ], dtype=float32)
-        >>> nn.silu(a)
-        jt.Var([-0.15552104 -0.27603802  1.9016962 ], dtype=float32)
-    '''
-    return x * x.sigmoid()
-
-def prelu(x, weight):
-    ''' Applies the element-wise PReLU function (functional form):
-
-    .. math::
-        \\text{PReLU}(x) = \\max(0, x) + weight * \\min(0, x)
-
-    :param x: the input var
-    :type x: jt.Var
-    :param weight: the (learnable) slope, either a scalar or a 1-D var with one
-        value per input channel (broadcast over dim 1).
-    :type weight: jt.Var or float
-    '''
-    if isinstance(weight, jt.Var) and weight.numel() != 1:
-        assert weight.numel() == x.size(1), \
-            "weight (number of parameters) does not match input channels in prelu"
-        dims = [i for i in range(x.ndim) if i != 1]
-        w = weight.broadcast(x, dims)
-    else:
-        w = weight
-    return jt.maximum(0, x) + w * jt.minimum(0, x)
 jt.Var.prelu = prelu
 
-def hardswish(x):
-    ''' Applies the element-wise Hardswish function:
-
-    .. math::
-        \\text{Hardswish}(x) = \\begin{cases}
-        0, & x \\le -3 \\\\
-        x, & x \\ge +3 \\\\
-        x \\cdot (x + 3) / 6, & \\text{otherwise}
-        \\end{cases}
-    '''
-    return x * jt.clamp(x + 3, min_v=0, max_v=6) / 6
 jt.Var.hardswish = hardswish
 
-def hardsigmoid(x):
-    ''' Applies the element-wise Hardsigmoid function:
-
-    .. math::
-        \\text{Hardsigmoid}(x) = \\begin{cases}
-        0, & x \\le -3 \\\\
-        1, & x \\ge +3 \\\\
-        x / 6 + 1/2, & \\text{otherwise}
-        \\end{cases}
-    '''
-    return jt.clamp(x / 6 + 0.5, min_v=0.0, max_v=1.0)
 jt.Var.hardsigmoid = hardsigmoid
 
-def rrelu(x, lower=1./8, upper=1./3, training=False):
-    ''' Applies the randomized leaky rectified linear unit function,
-    element-wise, as described in `Empirical Evaluation of Rectified
-    Activations in Convolutional Network`.
-
-    During training the negative slope ``a`` is sampled uniformly from
-    ``[lower, upper]``; during evaluation the fixed slope
-    ``(lower + upper) / 2`` is used (matching torch).
-
-    :param x: the input var
-    :param lower: lower bound of the uniform slope. Default: 1/8
-    :param upper: upper bound of the uniform slope. Default: 1/3
-    :param training: whether to sample the slope (train) or use its mean (eval).
-    '''
-    if training:
-        a = jt.random(x.shape, x.dtype) * (upper - lower) + lower
-    else:
-        a = (lower + upper) / 2
-    return jt.ternary(x >= 0, x, a * x)
 jt.Var.rrelu = rrelu
 
 class RReLU(Module):
@@ -603,110 +380,6 @@ class PReLU(Module):
             return jt.maximum(0, x) + self.weight * jt.minimum(0, x)
 
 #TODO dims is 4 will cause slowly execution
-def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction='mean'):
-    target_shape = target.shape
-    if len(output.shape) == 4:
-        c_dim = output.shape[1]
-        output = output.transpose((0, 2, 3, 1))
-        output = output.reshape((-1, c_dim))
-
-    target = target.reshape((-1, ))
-    target_weight = ((target >= 0) & (target < output.shape[1])).float32()
-    if weight is not None:
-        target_weight = target_weight * weight[target]
-    if ignore_index is not None:
-        target_weight = jt.ternary(
-            target==ignore_index,
-            jt.array(0).broadcast(target_weight).type_as(target_weight),
-            target_weight
-        )
-    
-    target = target.broadcast(output, [1])
-    target = target.index(1) == target
-    
-    output = output - output.max([1], keepdims=True)
-    logsum = output.exp().sum(1).log()
-    loss = (logsum - (output*target).sum(1)) * target_weight
-    if reduction == 'sum':
-        return loss.sum()
-    elif reduction == 'mean':
-        return loss.sum() / jt.maximum(target_weight.sum(), 1e-8)
-    else:
-        return loss.reshape(target_shape) 
-
-def mse_loss(output, target, reduction="mean"):
-    loss = (output-target).sqr()
-    # reduction='none' returns the per-element loss (torch semantics); Var.reduce only
-    # knows mean/sum, so don't forward 'none' to it (it raised "no such reduce").
-    return loss if reduction == "none" else loss.reduce(reduction)
-
-def bce_loss(output, target, weight=None, size_average=True):
-    loss = - (target * jt.log(jt.maximum(output, 1e-20)) + (1 - target) * jt.log(jt.maximum(1 - output, 1e-20)))
-
-    if weight is not None:
-        loss *= weight
-    
-    if size_average:
-        return loss.mean()
-    else:
-        return loss.sum()
-
-def l1_loss(output, target, reduction="mean"):
-    loss = (output-target).abs()
-    if reduction == "none": return loss
-    if reduction == "sum": return loss.sum()
-    return loss.mean()
-
-
-def smooth_l1_loss(y_true, y_pred,reduction="mean"):
-    """Implements Smooth-L1 loss.
-    y_true and y_pred are typically: [N, 4], but could be any shape.
-
-    Args:
-         y_true - ground truth 
-         y_pred - predictions
-         reduction - the mode of cal loss which must be in ['mean','sum','none']
-    """
-    diff = jt.abs(y_true - y_pred)
-    less_than_one = (diff<1.0).float32()
-    loss = (less_than_one * 0.5 * diff.sqr()) + (1 - less_than_one) * (diff - 0.5)
-    if reduction=="mean":
-        return loss.mean()
-    elif reduction=="sum":
-        return loss.sum()
-    elif reduction=="none":
-        return loss
-    else:
-        raise ValueError(f'not support {reduction}')
-
-def nll_loss(output,target,weight=None,ignore_index=-100,reduction='mean'):
-    assert output.ndim<=2 and output.ndim>0 and target.ndim==1
-    n_classes = output.shape[-1]
-    assert weight is None or weight.numel()==n_classes
-    assert ignore_index<0 or ignore_index<n_classes
-    if weight is None:
-        weight = jt.ones((n_classes,))
-    # torch ignores the class `ignore_index` (any value >=0 is a valid class id, incl.
-    # 0); the default -100 is a sentinel for "ignore nothing". The old `>0` test silently
-    # let ignore_index=0 through, so class 0 was still counted. Clone before zeroing so a
-    # user-supplied weight Var isn't mutated in place.
-    if ignore_index>=0:
-        weight = weight.clone()
-        weight[ignore_index]=0
-    if output.ndim==2:
-        index = jt.index((output.shape[0],),dim=0)
-        loss = -output[index,target]*weight[target]
-    else:
-        loss = -output[target[0]]*weight[target[0]]
-    if reduction=="mean":
-        total_weight  = weight[target].sum() if output.ndim==2 else weight[target[0]].sum()
-        return loss.sum()/total_weight
-    elif reduction=="sum":
-        return loss.sum()
-    elif reduction=="none":
-        return loss
-    else:
-        raise ValueError(f'not support {reduction}')
     
 class CrossEntropyLoss(Module):
     def __init__(self, weight=None, ignore_index=None, reduction='mean'):
@@ -739,38 +412,6 @@ class L1Loss(Module):
     def execute(self, output, target):
         return l1_loss(output, target)
 
-def binary_cross_entropy_with_logits(output, target, weight=None, pos_weight=None, size_average=True, reduction=None):
-    if not (target.shape == output.shape):
-        raise ValueError(f"Target size ({target.shape}) must be the same as output size ({output.shape})")
-
-    # The stable formula below is exact for any FINITE logit, but literal +/-inf
-    # (e.g. Grounding-DINO's ContrastiveEmbed masks padding logits with -inf) makes
-    # (1-target)*(-inf) and inf-inf produce NaN. Clamp to +/-50 — sigmoid is fully
-    # saturated there, so loss/grad for finite logits are unchanged; only inf is removed.
-    output = jt.clamp(output, -50.0, 50.0)
-    max_val = jt.clamp(-output,min_v=0)
-    if pos_weight is not None:
-        log_weight = (pos_weight-1)*target + 1
-        loss = (1-target)*output+(log_weight*(((-max_val).exp()+(-output - max_val).exp()).log()+max_val))
-    else:
-        loss = (1-target)*output+max_val+((-max_val).exp()+(-output -max_val).exp()).log()
-    if weight is not None:
-        loss *=weight
-
-    # torch supports reduction='none'/'sum'/'mean'; the original only had the
-    # size_average bool (no per-element 'none'). When reduction is given it wins.
-    if reduction is not None:
-        if reduction == "none":
-            return loss
-        if reduction == "sum":
-            return loss.sum()
-        if reduction == "mean":
-            return loss.mean()
-        raise ValueError(f'not support {reduction}')
-    if size_average:
-        return loss.mean()
-    else:
-        return loss.sum()
 
 class BCEWithLogitsLoss(Module):
     def __init__(self, weight=None, pos_weight=None, size_average=True, reduction=None):
@@ -782,42 +423,12 @@ class BCEWithLogitsLoss(Module):
     def execute(self, output, target):
         return binary_cross_entropy_with_logits(output,target,self.weight,self.pos_weight,self.size_average,self.reduction)
 
-def _get_softmax_dim(ndim):
-    # Mirrors torch.nn.functional._get_softmax_dim: when ``dim`` is not given,
-    # torch softmaxes over dim 0 for 0/1/3-D inputs and dim 1 otherwise.
-    if ndim == 0 or ndim == 1 or ndim == 3:
-        return 0
-    return 1
-
-def softmax(x, dim=None, log=False):
-    # torch-compatible default: ``dim=None`` selects a single axis via
-    # ``_get_softmax_dim`` (NOT a reduction over all elements). Passing an
-    # explicit ``dim`` keeps the previous behavior unchanged.
-    if dim is None:
-        dim = _get_softmax_dim(x.ndim)
-    import jittor.other.code_softmax as code_softmax
-    if code_softmax.can_softmax_v1(x, dim) and jt.compiler.is_cuda:
-        return code_softmax.softmax_v1(x, log)
-    dtype, x = x.dtype, x._to_float()
-    if log:
-        a = x - jt.max(x, dim, keepdims=True)
-        ret = a - a.exp().sum(dim, keepdims=True).log()
-    else:
-        x = (x - jt.max(x, dim, keepdims=True)).exp()
-        ret = x / x.sum(dim, keepdims=True)
-    return ret.cast(dtype)
 jt.Var.softmax = softmax
 
-def log_softmax(x,dim=None):
-    return softmax(x,dim=dim, log=True)
 jt.Var.log_softmax = log_softmax
 
-def log_sigmoid(x):
-    return jt.log(jt.sigmoid(x))
 jt.Var.log_sigmoid = log_sigmoid
 
-def logsumexp(x, dim, keepdims=False, keepdim=False):
-    return x.exp().sum(dim, keepdim or keepdims).log()
 jt.Var.logsumexp = logsumexp
 
 class Identity(Module):
@@ -2786,162 +2397,6 @@ class AdaptiveAvgPool2d(Module):
         return out.reduce("sum", [4, 5]) / pixel_count[None, None, ...]
 
 
-def glu(input, dim=-1):
-    r''' Applies the gated linear unit function
-
-    .. math::
-        \text{GLU}(a, b) = a \otimes \sigma(b)
-
-    where ``input`` is split in half along ``dim`` to form ``a`` and ``b``,
-    ``a`` is the first half and ``b`` the second half, and :math:`\sigma` is the
-    sigmoid function. Torch-compatible.
-
-    :param input: the input var
-    :type input: jt.Var
-
-    :param dim: the dimension on which to split the input. Default: -1
-    :type dim: int
-
-    Example:
-        >>> x = jt.randn(4, 6)
-        >>> y = nn.glu(x)   # y.shape == [4, 3]
-    '''
-    ndim = input.ndim
-    if ndim == 0:
-        raise RuntimeError("glu does not support scalars because halving size must be even")
-    if dim < 0:
-        dim += ndim
-    size = input.shape[dim]
-    if size % 2 != 0:
-        raise RuntimeError(f"Halving dimension must be even, but dimension {dim} is size {size}")
-    half = size // 2
-    a, b = input.split([half, half], dim=dim)
-    return a * b.sigmoid()
-
-def normalize(input, p=2, dim=1, eps=1e-12):
-    r''' Performs :math:`L_p` normalization of inputs over a specified dimension.
-
-    .. math::
-        v = \frac{v}{\max(\lVert v \rVert_p, \epsilon)}
-
-    Torch-compatible functional interface. Note the torch-compatible default of
-    ``eps=1e-12`` (clamping the denominator), as opposed to the additive ``eps``
-    used by :func:`jittor.normalize`.
-
-    :param input: input var of any shape
-    :type input: jt.Var
-
-    :param p: the exponent value in the norm formulation. Default: 2
-    :type p: float
-
-    :param dim: the dimension to reduce. Default: 1
-    :type dim: int
-
-    :param eps: small value to avoid division by zero. Default: 1e-12
-    :type eps: float
-
-    Example:
-        >>> x = jt.randn(3, 4)
-        >>> y = nn.normalize(x, dim=1)
-    '''
-    if p == 2:
-        norm = (input * input).sum(dim, keepdims=True).sqrt()
-    elif p == 1:
-        norm = input.abs().sum(dim, keepdims=True)
-    elif p == float("inf"):
-        norm = input.abs().max(dim, keepdims=True)
-    else:
-        norm = (input.abs() ** p).sum(dim, keepdims=True) ** (1.0 / p)
-    return input / norm.maximum(eps)
-
-def cosine_similarity(x1, x2, dim=1, eps=1e-8):
-    r''' Returns the cosine similarity between ``x1`` and ``x2`` along ``dim``.
-
-    .. math::
-        \text{similarity} = \frac{x_1 \cdot x_2}
-            {\max(\lVert x_1 \rVert_2, \epsilon) \cdot \max(\lVert x_2 \rVert_2, \epsilon)}
-
-    Torch-compatible.
-
-    :param x1: first input var
-    :type x1: jt.Var
-
-    :param x2: second input var
-    :type x2: jt.Var
-
-    :param dim: dimension along which cosine similarity is computed. Default: 1
-    :type dim: int
-
-    :param eps: small value to avoid division by zero. Default: 1e-8
-    :type eps: float
-
-    Example:
-        >>> a = jt.randn(4, 8)
-        >>> b = jt.randn(4, 8)
-        >>> sim = nn.cosine_similarity(a, b)   # sim.shape == [4]
-    '''
-    w12 = (x1 * x2).sum(dim)
-    w1 = (x1 * x1).sum(dim)
-    w2 = (x2 * x2).sum(dim)
-    n12 = (w1 * w2).maximum(eps * eps).sqrt()
-    return w12 / n12
-
-def pairwise_distance(x1, x2, p=2.0, eps=1e-6, keepdim=False):
-    r''' Computes the batchwise :math:`p`-norm distance between vectors.
-
-    .. math::
-        \lVert x_1 - x_2 + \epsilon \rVert_p
-
-    Torch-compatible.
-
-    :param x1: first input var
-    :type x1: jt.Var
-
-    :param x2: second input var
-    :type x2: jt.Var
-
-    :param p: the norm degree. Default: 2.0
-    :type p: float
-
-    :param eps: small value added to avoid division by zero. Default: 1e-6
-    :type eps: float
-
-    :param keepdim: whether to keep the reduced (vector) dimension. Default: False
-    :type keepdim: bool
-
-    Example:
-        >>> a = jt.randn(4, 8)
-        >>> b = jt.randn(4, 8)
-        >>> d = nn.pairwise_distance(a, b)   # d.shape == [4]
-    '''
-    diff = (x1 - x2) + eps
-    adiff = diff.abs()
-    if p == 2:
-        out = (diff * diff).sum(-1, keepdims=keepdim).sqrt()
-    elif p == 1:
-        out = adiff.sum(-1, keepdims=keepdim)
-    elif p == float("inf"):
-        out = adiff.max(-1, keepdims=keepdim)
-    else:
-        out = (adiff ** p).sum(-1, keepdims=keepdim) ** (1.0 / p)
-    return out
-
-def softsign(x):
-    r''' Applies the element-wise function
-
-    .. math::
-        \text{SoftSign}(x) = \frac{x}{1 + |x|}
-
-    Torch-compatible.
-
-    :param x: the input var
-    :type x: jt.Var
-
-    Example:
-        >>> a = jt.randn(3)
-        >>> nn.softsign(a)
-    '''
-    return x / (1 + x.abs())
 
 class GLU(Module):
     r''' Applies the gated linear unit function. See :func:`glu`.
