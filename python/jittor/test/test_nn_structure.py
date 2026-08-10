@@ -12,8 +12,11 @@ import jittor
 import jittor.nn as nn
 from jittor._nn import activations
 from jittor._nn import convolution
+from jittor._nn import convolution_3d_layers
 from jittor._nn import convolution_cudnn
+from jittor._nn import convolution_layers
 from jittor._nn import convolution_transpose
+from jittor._nn import convolution_transpose_layers
 from jittor._nn import layer_norm_cuda
 from jittor._nn import losses
 from jittor._nn import normalization
@@ -25,11 +28,12 @@ from jittor._nn import vector
 
 
 _IMPLEMENTATION_MODULES = (
-    activations, convolution, convolution_cudnn, convolution_transpose,
-    layer_norm_cuda, losses, normalization, recurrent_base, recurrent_cells,
-    recurrent_layers, softmax, vector,
+    activations, convolution, convolution_3d_layers, convolution_cudnn,
+    convolution_layers, convolution_transpose, convolution_transpose_layers,
+    layer_norm_cuda, losses, normalization, recurrent_base,
+    recurrent_cells, recurrent_layers, softmax, vector,
 )
-_ACL_PATCHED_FUNCTIONS = {"conv2d", "relu", "leaky_relu", "softmax"}
+_ACL_PATCHED_SYMBOLS = {"Conv", "conv2d", "relu", "leaky_relu", "softmax"}
 
 
 def _is_acl_wrapper(value):
@@ -83,7 +87,7 @@ class TestNNStructure(unittest.TestCase):
             name = implementation.__name__
             public = getattr(nn, name)
             with self.subTest(name=name):
-                if name in _ACL_PATCHED_FUNCTIONS and public is not implementation:
+                if name in _ACL_PATCHED_SYMBOLS and public is not implementation:
                     self.assertTrue(_is_acl_wrapper(public))
                 else:
                     self.assertIs(public, implementation)
@@ -94,7 +98,7 @@ class TestNNStructure(unittest.TestCase):
                 self.assertEqual(implementation.__module__, "jittor.nn")
                 public = getattr(nn, implementation.__name__)
                 if (
-                    implementation.__name__ in _ACL_PATCHED_FUNCTIONS
+                    implementation.__name__ in _ACL_PATCHED_SYMBOLS
                     and public is not implementation
                 ):
                     self.assertTrue(_is_acl_wrapper(public))
@@ -237,6 +241,94 @@ class TestNNStructure(unittest.TestCase):
                 self.assertEqual(cls.grad.__module__, "jittor.nn")
                 self.assertIs(pickle.loads(pickle.dumps(cls)), cls)
 
+        implementations = (
+            convolution_layers.Conv,
+            convolution_layers.Conv1d,
+            convolution_3d_layers.Conv3d,
+            convolution_transpose_layers.ConvTranspose,
+            convolution_transpose_layers.ConvTranspose3d,
+        )
+        for cls in implementations:
+            with self.subTest(cls=cls.__name__):
+                self.assertEqual(cls.__module__, "jittor.nn")
+                self.assertEqual(cls.__qualname__, cls.__name__)
+                public = getattr(nn, cls.__name__)
+                if cls is convolution_layers.Conv and public is not cls:
+                    self.assertTrue(_is_acl_wrapper(public))
+                else:
+                    self.assertIs(public, cls)
+                    self.assertIs(pickle.loads(pickle.dumps(cls)), cls)
+                for member in vars(cls).values():
+                    if isinstance(member, (staticmethod, classmethod)):
+                        member = member.__func__
+                    if callable(member) and hasattr(member, "__module__"):
+                        self.assertEqual(member.__module__, "jittor.nn")
+
+        module_names = (
+            "Conv", "Conv2d", "Conv1d", "Conv3d", "Conv1d_sp",
+            "ConvTranspose", "ConvTranspose2d", "ConvTranspose3d",
+        )
+        for name in module_names:
+            with self.subTest(nn_modules=name):
+                self.assertIs(getattr(nn.modules, name), getattr(nn, name))
+        self.assertIs(nn.Conv1d_sp.__mro__[1], nn.Linear)
+
+        for cls in (nn.Conv, nn.Conv1d, nn.Conv3d):
+            with self.subTest(torch_metadata=cls.__name__):
+                self.assertFalse(cls.transposed)
+                self.assertEqual(cls.output_padding, (0, 0))
+        for cls in (nn.ConvTranspose, nn.ConvTranspose2d, nn.ConvTranspose3d):
+            with self.subTest(torch_metadata=cls.__name__):
+                self.assertTrue(cls.transposed)
+
+        instance_contracts = (
+            (
+                convolution_layers.Conv(2, 3, 3),
+                ("padding_mode", "in_channels", "out_channels", "kernel_size",
+                 "stride", "padding", "dilation", "groups",
+                 "is_depthwise_conv", "weight", "bias"),
+                ("weight", "bias"),
+            ),
+            (
+                convolution_layers.Conv1d(2, 3, 3),
+                ("in_channels", "out_channels", "kernel_size", "stride",
+                 "padding", "dilation", "groups", "bias", "_conv", "weight"),
+                ("bias", "weight"),
+            ),
+            (
+                convolution_3d_layers.Conv3d(2, 3, 3),
+                ("in_channels", "out_channels", "kernel_size", "stride",
+                 "padding", "dilation", "groups", "weight", "bias"),
+                ("weight", "bias"),
+            ),
+            (
+                convolution_transpose_layers.ConvTranspose(2, 3, 3),
+                ("in_channels", "out_channels", "dilation", "groups",
+                 "kernel_size", "stride", "padding", "real_padding",
+                 "output_padding", "weight", "bias"),
+                ("weight", "bias"),
+            ),
+            (
+                convolution_transpose_layers.ConvTranspose3d(2, 3, 3),
+                ("in_channels", "out_channels", "dilation", "group",
+                 "kernel_size", "stride", "padding", "real_padding",
+                 "output_padding", "weight", "bias"),
+                ("weight", "bias"),
+            ),
+        )
+        for instance, attribute_names, state_names in instance_contracts:
+            if _is_acl_wrapper(nn.Conv) and isinstance(
+                instance, (convolution_layers.Conv, convolution_layers.Conv1d)
+            ):
+                continue
+            restored = pickle.loads(pickle.dumps(instance))
+            with self.subTest(instance=type(instance).__name__):
+                self.assertIs(type(restored), type(instance))
+                self.assertEqual(tuple(instance.__dict__), attribute_names)
+                self.assertEqual(tuple(restored.__dict__), attribute_names)
+                self.assertEqual(tuple(instance.state_dict()), state_names)
+                self.assertEqual(tuple(restored.state_dict()), state_names)
+
         self.assertIs(nn.conv_transpose2d, nn.conv_transpose)
         if nn.conv is not nn.conv2d:
             self.assertTrue(_is_acl_wrapper(nn.conv2d))
@@ -306,6 +398,132 @@ class TestNNStructure(unittest.TestCase):
               (4, 0), 5, (6, 1))],
         )
 
+        holder = python_types.SimpleNamespace(
+            stride="stride",
+            padding="padding",
+            dilation="dilation",
+            groups="groups",
+        )
+        nn.conv2d = replacement_conv2d
+        try:
+            result = convolution_layers.Conv._conv_forward(
+                holder, input_marker, weight_marker, "bias",
+            )
+        finally:
+            nn.conv2d = original_conv2d
+        self.assertIs(result, output_marker)
+        self.assertEqual(
+            conv2d_calls[-1],
+            (input_marker, weight_marker, "bias", "stride", "padding",
+             "dilation", "groups"),
+        )
+
+        cudnn_calls = []
+        original_cudnn = nn._try_cudnn_conv2d
+
+        def replacement_cudnn(*args):
+            cudnn_calls.append(args)
+            return output_marker
+
+        conv_holder = python_types.SimpleNamespace(
+            in_channels=2,
+            weight=weight_marker,
+            bias="bias",
+            stride="stride",
+            padding="padding",
+            dilation="dilation",
+            groups="groups",
+        )
+        conv_input = python_types.SimpleNamespace(ndim=4, shape=(1, 2, 3, 4))
+        nn._try_cudnn_conv2d = replacement_cudnn
+        try:
+            result = convolution_layers.Conv.execute(conv_holder, conv_input)
+        finally:
+            nn._try_cudnn_conv2d = original_cudnn
+        self.assertIs(result, output_marker)
+        self.assertEqual(
+            cudnn_calls,
+            [(conv_input, weight_marker, "bias", "stride", "padding",
+              "dilation", "groups")],
+        )
+
+        conv1d_calls = []
+        squeeze_calls = []
+        squeezed_weight = object()
+
+        class FakeWeight:
+            def squeeze(self, dim):
+                squeeze_calls.append(dim)
+                return squeezed_weight
+
+        class FakeConv:
+            def __init__(self, *args):
+                conv1d_calls.append(args)
+                self.weight = FakeWeight()
+                self.bias = "inner_bias"
+
+        conv1d_holder = python_types.SimpleNamespace()
+        original_conv_class = nn.Conv
+        nn.Conv = FakeConv
+        try:
+            convolution_layers.Conv1d.__init__(
+                conv1d_holder, 2, 3, 4, stride=2, padding=3,
+                dilation=4, groups=1, bias=True,
+            )
+        finally:
+            nn.Conv = original_conv_class
+        self.assertEqual(
+            conv1d_calls,
+            [(2, 3, (4, 1), (2, 1), (3, 0), (4, 1), 1, True)],
+        )
+        self.assertEqual(squeeze_calls, [-1])
+        self.assertIs(conv1d_holder.weight, squeezed_weight)
+        self.assertEqual(conv1d_holder.bias, "inner_bias")
+
+        original_conv3d = nn.conv3d
+        conv3d_calls = []
+
+        def replacement_conv3d(*args):
+            conv3d_calls.append(args)
+            return output_marker
+
+        holder.weight = weight_marker
+        holder.bias = "bias"
+        nn.conv3d = replacement_conv3d
+        try:
+            result = convolution_3d_layers.Conv3d.execute(holder, input_marker)
+        finally:
+            nn.conv3d = original_conv3d
+        self.assertIs(result, output_marker)
+        self.assertEqual(
+            conv3d_calls,
+            [(input_marker, weight_marker, "bias", "stride", "padding",
+              "dilation", "groups")],
+        )
+
+        original_transpose3d = nn.conv_transpose3d
+        transpose3d_calls = []
+
+        def replacement_transpose3d(*args):
+            transpose3d_calls.append(args)
+            return output_marker
+
+        holder.output_padding = "output_padding"
+        holder.group = "group"
+        nn.conv_transpose3d = replacement_transpose3d
+        try:
+            result = convolution_transpose_layers.ConvTranspose3d.execute(
+                holder, input_marker,
+            )
+        finally:
+            nn.conv_transpose3d = original_transpose3d
+        self.assertIs(result, output_marker)
+        self.assertEqual(
+            transpose3d_calls,
+            [(input_marker, weight_marker, "bias", "stride", "padding",
+              "output_padding", "group", "dilation")],
+        )
+
         source_contracts = {
             convolution: (
                 "jt.nn._pair", "jt.nn._triple",
@@ -320,6 +538,16 @@ class TestNNStructure(unittest.TestCase):
                 "jt.nn._try_cudnn_conv_transpose2d",
                 "jt.nn._cudnn_conv3d_fp16_safe",
                 "jt.nn.conv_transpose",
+            ),
+            convolution_layers: (
+                "jt.nn._pair", "jt.nn.DepthwiseConv", "jt.nn.init",
+                "jt.nn._try_cudnn_conv2d", "jt.nn.conv2d", "jt.nn.Conv",
+            ),
+            convolution_3d_layers: (
+                "jt.nn._triple", "jt.nn.init", "jt.nn.conv3d",
+            ),
+            convolution_transpose_layers: (
+                "jt.nn.init", "jt.nn.conv_transpose3d",
             ),
         }
         for module, references in source_contracts.items():
@@ -453,7 +681,7 @@ class TestNNStructure(unittest.TestCase):
 
     def test_source_files_stay_within_architecture_budgets(self):
         facade_path = Path(nn.__file__).resolve()
-        self.assertLessEqual(len(facade_path.read_text(encoding="utf-8").splitlines()), 3300)
+        self.assertLessEqual(len(facade_path.read_text(encoding="utf-8").splitlines()), 2800)
         for module in _IMPLEMENTATION_MODULES:
             path = Path(module.__file__).resolve()
             with self.subTest(path=path.name):

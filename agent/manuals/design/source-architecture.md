@@ -122,12 +122,13 @@ wrapper，避免只修复类的 pickle 路径而让方法反射来源发生漂�
 ### 第二批：`nn.py`
 
 已建立 `_nn/`，先抽取 29 个低耦合纯函数，按 activation、loss、softmax 和 vector
-分为 4 个实现模块。`nn.py` 继续保留所有 `Module` 子类、别名、`Var` 绑定、optimizer
-重导出和后端集成点。这样先验证 facade 模式，再处理含参数状态和设备快路径的区域。
+分为 4 个实现模块。第二批当时让 `nn.py` 保留所有 `Module` 子类、别名、`Var`
+绑定、optimizer 重导出和后端集成点，先验证 facade 模式，再处理含参数状态和设备
+快路径的区域。
 
-normalization、RNN 与 convolution 的 functional/backend 第一阶段已按风险顺序
-完成拆分。参数容器协议稳定前不移动根 `Module`；convolution 的公开类、depthwise、
-pooling、ACL 重绑和别名网络仍必须整体审计，不能只搬 Python 类壳。
+normalization、RNN 与 convolution 的 functional/backend 和主要公开类已按风险
+顺序完成拆分。参数容器协议稳定前不移动根 `Module`；DepthwiseConv、pooling、
+ACL 重绑和别名网络仍必须按领域整体审计，不能只搬 Python 类壳。
 
 ### 第三批：normalization
 
@@ -155,16 +156,24 @@ LayerNorm no-grad kernel 拆到 `_nn/normalization.py` 与
 cuDNN helper、`conv2d` 和 `conv_transpose`，保留 ACL 后置 wrapper、公开 monkeypatch
 及 `conv/conv_transpose2d` 别名语义。
 
-公开 `Conv/Conv1d/Conv3d/ConvTranspose*` 类、DepthwiseConv 和 pooling 暂留 facade。
-第二阶段必须先解决 DepthwiseConv 循环依赖、ACL 对 `Conv/Conv2d` 的类 wrapper、
-Torch shim 类快照和模块实例 pickle/state_dict，再迁移公开类。
+### 第六批：convolution 类
 
-### 第六批：`misc.py` 与 `torch_shim/torch__init__.py`
+已将 `Conv/Conv1d`、`Conv3d` 与 `ConvTranspose/ConvTranspose3d` 分别拆到
+`_nn/convolution_layers.py`、`_nn/convolution_3d_layers.py` 与
+`_nn/convolution_transpose_layers.py`。facade 直接重导出同一类对象，递归恢复类和
+方法的 `jittor.nn` 元数据；`_pair/_triple`、`init`、`DepthwiseConv`、cuDNN helper
+及 functional 均经 `jt.nn` 动态解析。
+
+`Conv1d` 必须动态构造公开 `jt.nn.Conv`，保留 ACL 类 wrapper。`Conv1d_sp` 留待与
+`Linear` 同批迁移；`DepthwiseConv` 继续由 `jittor.depthwise_conv` 拥有并保持原
+pickle 路径；pooling 与 Torch shim 后置创建的 `ConvTranspose1d` 不在本批迁移。
+
+### 第七批：`misc.py` 与 `torch_shim/torch__init__.py`
 
 按 shape/indexing、reduction/scatter、序列操作拆 `misc.py`；按 nn、optim、cuda、
 distributed、data 和 stub 注册拆 shim。每批只移动一个可独立回归的领域。
 
-### 第七批：启动与运行时
+### 第八批：启动与运行时
 
 抽出 `_version.py` 和仅标准库的 `_bootstrap/`，再逐步分离 core loader、compiler
 和 backend controller。根 `__init__.py` 最后收敛为严格排序的 composition root。

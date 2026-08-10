@@ -41,6 +41,14 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 > **分支**：所有人/agent 都在 **`2.0`**（= 原 `acl-perf-and-fixes` 推到远程；动手前 `git branch --show-current` 确认）。分叉前的所有进展/日志现在都是**公共知识**。
 
 ### ✅ 已完成并验证（在 `2.0`）
+- **源码架构重构第六批（convolution 类阶段）**：`Conv/Conv1d/Conv3d` 与 2D/3D
+  转置卷积类拆入 3 个 `_nn` 模块，公开对象、反射、类/实例 pickle、state_dict、
+  ACL/Torch shim 动态边界和历史别名保持不变。`nn.py` 从 3,255 行降到 2,776 行，
+  五类与基线 AST 5/5 等价；CPU/CUDA 结构各 18/18、主矩阵各 33/33、CPU OpInfo
+  12/12、cuDNN 定向 4/4、类与 Depthwise 前反向烟测 12/12、CUDA Torch 总入口
+  172/172。wheel 1,023 个条目、17 个 `_nn` 模块且无禁止项，隔离安装 51 项中
+  50 通过、1 项源码条件跳过。旧 complex 错误契约失败已在 `b61f08cc` wheel 复现。
+  详见[第六批报告](../results/2026-08-11-source-architecture-convolution-layers-refactor.md)。
 - **源码架构重构第五批（convolution 第一阶段）**：1D/2D/3D 卷积、转置卷积和
   cuDNN helper 按普通卷积、转置卷积、backend 拆入 3 个 `_nn` 模块；公开 `Conv*`
   类仍留在 facade。`nn.py` 从 3,747 行降到 3,255 行，11 个定义与基线 AST 11/11
@@ -71,8 +79,8 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
   OpInfo 共 158 项（142 通过、16 项按环境或能力跳过）；CUDA 结构兼容 74/74、
   设备前反向一致性 28/28；隔离 wheel 导入通过。详见
   [第二批报告](../results/2026-08-11-source-architecture-nn-refactor.md)。normalization、
-  RNN 与 convolution functional/backend 已在后续批次完成；下一阶段处理卷积公开
-  类、DepthwiseConv 边界和 pooling。
+  RNN 与 convolution functional/backend、主要公开类已在后续批次完成；下一阶段
+  优先处理低耦合 padding，再单独审计 pooling、`Linear/Conv1d_sp` 和 DepthwiseConv。
 - **源码架构重构第一批**：最大 Python 文件 `torch_compat.py` 从 11,008 行降到
   8,683 行，类型/设备、梯度、nested tensor、序列化、纯函数、optimizer 和
   scheduler 拆入 9 个 `_torch_compat` 私有模块；公开 facade 身份、pickle、安装
