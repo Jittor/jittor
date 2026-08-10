@@ -41,6 +41,15 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 > **分支**：所有人/agent 都在 **`2.0`**（= 原 `acl-perf-and-fixes` 推到远程；动手前 `git branch --show-current` 确认）。分叉前的所有进展/日志现在都是**公共知识**。
 
 ### ✅ 已完成并验证（在 `2.0`）
+- **源码架构重构第四批**：7 个 RNN 类按 cell、共享递推/cuDNN backend、序列层拆入
+  `_nn/recurrent_cells.py`、`_nn/recurrent_base.py` 和
+  `_nn/recurrent_layers.py`；`nn.py` 从 4,306 行降到 3,747 行。七类及类方法仍显示
+  为 `jittor.nn`，类/实例 pickle、state_dict、Torch shim 快照和 facade 动态分派
+  均有结构契约。CPU 与 CUDA 主矩阵各 32/32，CUDA Torch 兼容总入口 172/172；
+  wheel 1,017 个条目且隔离安装 32 项中 31 通过、1 项源码条件跳过。旧
+  `test_lstm/test_rnn` 的 dtype 失败和 cuDNN optimizer `None` 梯度失败均在未拆分
+  基线同样复现。详见
+  [第四批报告](../results/2026-08-11-source-architecture-rnn-refactor.md)。
 - **源码架构重构第三批**：normalization functional、稳定反向 helper 和完整 CUDA
   LayerNorm no-grad kernel 拆入 `_nn/normalization.py` 与
   `_nn/layer_norm_cuda.py`；四个公开类继续留在 facade，保住 ACL、Torch shim、MPI
@@ -53,8 +62,8 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
   pickle、`Var` 绑定、历史别名和 ACL 动态重绑均由结构契约保护。CPU 新增/兼容/
   OpInfo 共 158 项（142 通过、16 项按环境或能力跳过）；CUDA 结构兼容 74/74、
   设备前反向一致性 28/28；隔离 wheel 导入通过。详见
-  [第二批报告](../results/2026-08-11-source-architecture-nn-refactor.md)。后续继续按
-  normalization、RNN、convolution 顺序收敛 `nn.py`。
+  [第二批报告](../results/2026-08-11-source-architecture-nn-refactor.md)。normalization
+  与 RNN 已在后续批次完成，下一批处理耦合更重的 convolution。
 - **源码架构重构第一批**：最大 Python 文件 `torch_compat.py` 从 11,008 行降到
   8,683 行，类型/设备、梯度、nested tensor、序列化、纯函数、optimizer 和
   scheduler 拆入 9 个 `_torch_compat` 私有模块；公开 facade 身份、pickle、安装

@@ -6,6 +6,7 @@
 
 ## 兼容性与功能验证
 
+- [2026-08-11 源码架构重构第四批：RNN](2026-08-11-source-architecture-rnn-refactor.md)
 - [2026-08-11 源码架构重构第三批：normalization](2026-08-11-source-architecture-normalization-refactor.md)
 - [2026-08-11 源码架构重构第二批：nn.py](2026-08-11-source-architecture-nn-refactor.md)
 - [2026-08-11 源码架构重构第一批](2026-08-11-source-architecture-refactor.md)

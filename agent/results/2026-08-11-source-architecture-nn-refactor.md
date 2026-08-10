@@ -1,7 +1,8 @@
 # 2026-08-11 源码架构重构第二批：`nn.py`
 
 > 后续进展：normalization functional 与 CUDA fast path 已在
-> [第三批报告](2026-08-11-source-architecture-normalization-refactor.md)完成并验证。
+> [第三批 normalization 报告](2026-08-11-source-architecture-normalization-refactor.md)
+> 与[第四批 RNN 报告](2026-08-11-source-architecture-rnn-refactor.md)均已完成并验证。
 
 ## 结论
 

@@ -81,6 +81,7 @@ worktree 已删除。
 
 ## 已知边界与后续
 
-本机没有 Ascend/NPU 环境。ACL 路径完成源码审计和结构契约，但本批不宣称真实 NPU
-执行验证。下一批优先迁移 RNN，再处理耦合更重的 convolution；二者都应保持类、
-设备实现和参数协议整体迁移，不能只移动 Python 类壳。
+本批没有执行 Ascend/NPU。ACL 路径完成源码审计和结构契约，但不宣称真实 NPU
+执行验证。RNN 后续拆分已经完成，见
+[第四批报告](2026-08-11-source-architecture-rnn-refactor.md)；下一批处理耦合更重的
+convolution，并继续保持类、设备实现和参数协议整体审计。

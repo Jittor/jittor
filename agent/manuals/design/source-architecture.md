@@ -63,6 +63,8 @@ stdlib
 它们只解决拆分期间的初始化顺序，不应演化成无边界的 service locator；后续应按
 实际依赖继续收窄协议。私有实现若依赖可被后端运行时重绑的公开符号，必须经 facade
 动态解析，不能静态捕获同包实现；`log_softmax -> nn.softmax` 是现有示例。
+公开类迁入私有模块时，元数据恢复还必须递归覆盖类自身的方法、property 和 decorator
+wrapper，避免只修复类的 pickle 路径而让方法反射来源发生漂移。
 
 ## Facade 契约
 
@@ -123,9 +125,9 @@ stdlib
 分为 4 个实现模块。`nn.py` 继续保留所有 `Module` 子类、别名、`Var` 绑定、optimizer
 重导出和后端集成点。这样先验证 facade 模式，再处理含参数状态和设备快路径的区域。
 
-下一阶段按风险依次拆 normalization、RNN 和 convolution。参数容器协议稳定前不
-移动根 `Module`；CUDA LayerNorm 快路径、cuDNN RNN 和 convolution 后端必须随各自
-领域整体审计，不能只搬 Python 类壳。
+normalization 与 RNN 已按风险顺序完成拆分。参数容器协议稳定前不移动根 `Module`；
+convolution 的 backend、depthwise、transpose、ACL 重绑和别名网络必须整体审计，
+不能只搬 Python 类壳。
 
 ### 第三批：normalization
 
@@ -135,18 +137,28 @@ LayerNorm no-grad kernel 拆到 `_nn/normalization.py` 与
 `layer_norm` 留在 facade，保留 ACL 对 `LayerNorm.execute` 的原位补丁、Torch shim
 类身份、MPI 状态和公开 helper monkeypatch 行为。
 
-### 第四批：RNN 与 convolution
+### 第四批：RNN
 
-RNN 应连同递推、参数布局和 cuDNN 路径整体迁移；convolution 最后处理 backend、
-depthwise、transpose 和别名网络。仍保持每批可独立回归，复用现有 runtime、元数据
-恢复和结构预算机制。
+已将 `LSTMCell/RNNCell/GRUCell`、`RNNBase` 与 `RNN/LSTM/GRU` 分别拆到
+`_nn/recurrent_cells.py`、`_nn/recurrent_base.py` 和
+`_nn/recurrent_layers.py`。参数创建顺序、递推调度、投影、双向/多层状态布局和
+完整 cuDNN 权重 flatten/执行路径随领域整体迁移。facade 直接重导出同一类对象，
+私有方法通过 `jt.nn` 动态解析 `init`、`matmul_transpose`、`relu` 和 `dropout`，
+保留 Torch shim 与后端运行时重绑语义。
 
-### 第五批：`misc.py` 与 `torch_shim/torch__init__.py`
+### 第五批：convolution
+
+convolution 最后处理 backend、depthwise、transpose、pooling 和别名网络。ACL 会在
+`nn` 导入完成后重绑 `Conv/Conv2d/conv2d`，而 `Conv1d`、`conv1d` 和
+`Conv._conv_forward` 当前依赖 facade 动态查找，因此必须先补齐 ACL、Torch shim
+快照身份和动态分派结构契约，再分 functional/backend 与类两阶段迁移。
+
+### 第六批：`misc.py` 与 `torch_shim/torch__init__.py`
 
 按 shape/indexing、reduction/scatter、序列操作拆 `misc.py`；按 nn、optim、cuda、
 distributed、data 和 stub 注册拆 shim。每批只移动一个可独立回归的领域。
 
-### 第六批：启动与运行时
+### 第七批：启动与运行时
 
 抽出 `_version.py` 和仅标准库的 `_bootstrap/`，再逐步分离 core loader、compiler
 和 backend controller。根 `__init__.py` 最后收敛为严格排序的 composition root。

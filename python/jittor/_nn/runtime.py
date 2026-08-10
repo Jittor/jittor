@@ -33,6 +33,17 @@ def preserve_facade_origins(symbols):
         module_name = getattr(symbol, "__module__", None)
         if isinstance(module_name, str) and module_name.startswith("jittor._nn"):
             symbol.__module__ = "jittor.nn"
+        if isinstance(symbol, type):
+            for member in vars(symbol).values():
+                if isinstance(member, (staticmethod, classmethod)):
+                    pending.append(member.__func__)
+                elif isinstance(member, property):
+                    pending.extend(
+                        value for value in (member.fget, member.fset, member.fdel)
+                        if value is not None
+                    )
+                elif callable(member):
+                    pending.append(member)
         wrapped = getattr(symbol, "__wrapped__", None)
         if wrapped is not None:
             pending.append(wrapped)

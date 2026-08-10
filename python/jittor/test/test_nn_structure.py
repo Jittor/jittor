@@ -1,5 +1,6 @@
 """Structural contracts for the modular :mod:`jittor.nn` implementation."""
 
+from abc import abstractmethod as abc_abstractmethod
 import ast
 import importlib
 import pickle
@@ -13,12 +14,16 @@ from jittor._nn import activations
 from jittor._nn import layer_norm_cuda
 from jittor._nn import losses
 from jittor._nn import normalization
+from jittor._nn import recurrent_base
+from jittor._nn import recurrent_cells
+from jittor._nn import recurrent_layers
 from jittor._nn import softmax
 from jittor._nn import vector
 
 
 _IMPLEMENTATION_MODULES = (
-    activations, layer_norm_cuda, losses, normalization, softmax, vector,
+    activations, layer_norm_cuda, losses, normalization, recurrent_base,
+    recurrent_cells, recurrent_layers, softmax, vector,
 )
 _ACL_PATCHED_FUNCTIONS = {"relu", "leaky_relu", "softmax"}
 
@@ -69,7 +74,7 @@ class TestNNStructure(unittest.TestCase):
         self.assertIs(importlib.import_module("jittor.nn"), nn)
         self.assertIs(nn.Module, jittor.Module)
 
-    def test_facade_reexports_private_function_implementations(self):
+    def test_facade_reexports_private_implementations(self):
         for implementation in _moved_symbols():
             name = implementation.__name__
             public = getattr(nn, name)
@@ -79,7 +84,7 @@ class TestNNStructure(unittest.TestCase):
                 else:
                     self.assertIs(public, implementation)
 
-    def test_moved_functions_keep_public_reflection_and_pickle_contracts(self):
+    def test_moved_symbols_keep_public_reflection_and_pickle_contracts(self):
         for implementation in _moved_symbols():
             with self.subTest(name=implementation.__name__):
                 self.assertEqual(implementation.__module__, "jittor.nn")
@@ -179,6 +184,73 @@ class TestNNStructure(unittest.TestCase):
         self.assertEqual(cached_cls.execute.__module__, "jittor.nn")
         self.assertEqual(cached_cls.grad.__module__, "jittor.nn")
 
+    def test_recurrent_public_contracts_remain_stable(self):
+        classes = (
+            nn.LSTMCell, nn.RNNCell, nn.GRUCell, nn.RNNBase,
+            nn.RNN, nn.LSTM, nn.GRU,
+        )
+        for cls in classes:
+            with self.subTest(cls=cls.__name__):
+                self.assertEqual(cls.__module__, "jittor.nn")
+                self.assertEqual(cls.__qualname__, cls.__name__)
+                self.assertIs(pickle.loads(pickle.dumps(cls)), cls)
+                for member in vars(cls).values():
+                    if isinstance(member, (staticmethod, classmethod)):
+                        member = member.__func__
+                    if callable(member) and hasattr(member, "__module__"):
+                        self.assertEqual(member.__module__, "jittor.nn")
+
+        for cls in (nn.RNN, nn.LSTM, nn.GRU):
+            self.assertIs(cls.__mro__[1], nn.RNNBase)
+        for cls in classes:
+            self.assertIs(getattr(nn.modules, cls.__name__), cls)
+
+        for cls in (nn.LSTMCell, nn.RNNCell, nn.GRUCell, nn.RNN, nn.LSTM, nn.GRU):
+            instance = cls(2, 3)
+            restored = pickle.loads(pickle.dumps(instance))
+            with self.subTest(instance=cls.__name__):
+                self.assertIs(type(restored), cls)
+                self.assertEqual(
+                    tuple(restored.state_dict().keys()),
+                    tuple(instance.state_dict().keys()),
+                )
+
+    def test_recurrent_implementations_dispatch_through_public_facade(self):
+        class Marker:
+            def __add__(self, other):
+                return self
+
+            __radd__ = __add__
+
+            def tanh(self):
+                return self
+
+        marker = Marker()
+        holder = python_types.SimpleNamespace(
+            hidden_size=1,
+            bias=False,
+            nonlinearity="tanh",
+            weight_ih=marker,
+            weight_hh=marker,
+        )
+        original_matmul = nn.matmul_transpose
+        calls = []
+
+        def replacement_matmul(left, right):
+            calls.append((left, right))
+            return marker
+
+        nn.matmul_transpose = replacement_matmul
+        try:
+            self.assertIs(nn.RNNCell.execute(holder, marker, marker), marker)
+        finally:
+            nn.matmul_transpose = original_matmul
+        self.assertEqual(len(calls), 2)
+
+        source = Path(recurrent_base.__file__).read_text(encoding="utf-8")
+        self.assertIn("jt.nn.init.uniform", source)
+        self.assertIn("jt.nn.dropout", source)
+
     def test_tensor_method_bindings_remain_on_public_functions(self):
         for name in ("prelu", "hardswish", "hardsigmoid", "rrelu"):
             with self.subTest(name=name):
@@ -192,6 +264,7 @@ class TestNNStructure(unittest.TestCase):
                 self.assertIs(getattr(nn, name), getattr(optim, name))
         self.assertIs(nn.CTCLoss, misc.CTCLoss)
         self.assertIs(nn.DepthwiseConv, depthwise_conv.DepthwiseConv)
+        self.assertIs(nn.abstractmethod, abc_abstractmethod)
         if nn.Pool is not pool.Pool:
             self.assertTrue(_is_acl_wrapper(nn.Pool))
         else:
@@ -255,18 +328,19 @@ class TestNNStructure(unittest.TestCase):
         self.assertEqual(len(implementation_imports), len(_IMPLEMENTATION_MODULES))
         self.assertTrue(all(bind_index < index for index in implementation_imports))
 
-    def test_facade_contains_no_moved_function_definitions(self):
+    def test_facade_contains_no_moved_definitions(self):
         facade_path = Path(nn.__file__).resolve()
         tree = ast.parse(facade_path.read_text(encoding="utf-8"), filename=str(facade_path))
         facade_definitions = {
-            node.name for node in tree.body if isinstance(node, ast.FunctionDef)
+            node.name for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef))
         }
         moved_names = {symbol.__name__ for symbol in _moved_symbols()}
         self.assertFalse(facade_definitions & moved_names)
 
     def test_source_files_stay_within_architecture_budgets(self):
         facade_path = Path(nn.__file__).resolve()
-        self.assertLessEqual(len(facade_path.read_text(encoding="utf-8").splitlines()), 4400)
+        self.assertLessEqual(len(facade_path.read_text(encoding="utf-8").splitlines()), 3800)
         for module in _IMPLEMENTATION_MODULES:
             path = Path(module.__file__).resolve()
             with self.subTest(path=path.name):
