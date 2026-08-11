@@ -1,0 +1,89 @@
+
+# ***************************************************************
+# Copyright (c) 2023 Jittor. All Rights Reserved. 
+# Maintainers: 
+#     Dun Liang <randonlang@gmail.com>. 
+# 
+# This file is subject to the terms and conditions defined in
+# file 'LICENSE.txt', which is part of this source code package.
+# ***************************************************************
+import unittest
+import jittor as jt
+import numpy as np
+import jittor.nn as jnn
+from _helpers.torch_runtime import import_torch_modules, modules_available
+
+skip_this_test = not modules_available("torch")
+torch = None
+tnn = None
+
+
+def setUpModule():
+    global torch, tnn
+    if not skip_this_test:
+        torch, tnn = import_torch_modules("torch", "torch.nn")
+
+# TODO: more test
+@unittest.skipIf(skip_this_test, "No Torch found")
+class TestSearchSorted(unittest.TestCase):
+    def test_origin(self):
+        sorted = jt.array([[1, 3, 5, 7, 9], [2, 4, 6, 8, 10]])
+        values = jt.array([[3, 6, 9], [3, 6, 9]])
+        ret = jt.searchsorted(sorted, values)
+        assert (ret == [[1, 3, 4], [1, 2, 4]]).all(), ret
+
+        ret = jt.searchsorted(sorted, values, right=True)
+        assert (ret == [[2, 3, 5], [1, 3, 4]]).all(), ret
+
+        sorted_1d = jt.array([1, 3, 5, 7, 9])
+        ret = jt.searchsorted(sorted_1d, values)
+        assert (ret == [[1, 3, 4], [1, 3, 4]]).all(), ret
+
+    def test_scalar_value(self):
+        sorted_1d = jt.array([1.0, 2.0, 3.0])
+        ret = jt.searchsorted(sorted_1d, 1.5)
+        assert ret.dtype == "int64", ret.dtype
+        assert ret.item() == 1, ret
+
+        ret = jt.searchsorted(sorted_1d, jt.array(2.0), right=True)
+        assert ret.item() == 2, ret
+
+        ret = jt.searchsorted(sorted_1d, 1.5, out_int32=True)
+        assert ret.dtype == "int32", ret.dtype
+        assert ret.item() == 1, ret
+
+        ret = jt.searchsorted(sorted_1d, 2.0, side="right")
+        assert ret.item() == 2, ret
+
+    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @jt.flag_scope(use_cuda=1)
+    def test_cuda(self):
+        self.test_origin()
+        self.test_scalar_value()
+
+
+    def test_searchsorted_cpu(self):
+        for i in range(1,3):
+            s = np.sort(np.random.rand(*((10,)*i)),-1)
+            v = np.random.rand(*((10,)*i))
+            s_jt = jt.array(s)
+            v_jt = jt.array(v)
+            s_tc = torch.from_numpy(s)
+            v_tc = torch.from_numpy(v)
+
+            y_tc = torch.searchsorted(s_tc, v_tc, right=True)
+            y_jt = jt.searchsorted(s_jt, v_jt, right=True)
+            assert np.allclose(y_jt.numpy(), y_tc.data)
+            y_jt = jt.searchsorted(s_jt, v_jt, right=False)
+            y_tc = torch.searchsorted(s_tc, v_tc, right=False)
+            assert np.allclose(y_jt.numpy(), y_tc.data)
+
+    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @jt.flag_scope(use_cuda=1)
+    def test_searchsorted_gpu(self):
+        self.test_searchsorted_cpu()
+
+        
+
+if __name__ == "__main__":
+    unittest.main()

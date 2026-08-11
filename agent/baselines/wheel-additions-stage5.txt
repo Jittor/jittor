@@ -1,0 +1,3 @@
+# Stage 5 installed-selftest and compiler-test-header additions.
+d720d397b9f69eade4edc549fddac8610efc85a8498ec4bd9b270c90c24b6cb9  jittor/selftest.py
+b4f1eba1b7e6199650fe00edfbaa6adf3a8fb1d608abb20ad761b86e6e321319  jittor/src/utils/test.h

@@ -44,9 +44,9 @@ compiler.has_acl = has_acl
 # source /usr/local/Ascend/ascend-toolkit/set_env.sh
 # export PYTHONPATH=/home/cjld/new_jittor/jittor/python:/home/cjld/new_jittor/jittor/my/jtorch/python:$PYTHONPATH
 # export TASK_QUEUE_ENABLE=0
-# python3 -m jittor.test.test_acl -k array
+# python3 -m pytest tests/backends/npu/test_acl.py -k array
 # jittor: conda activate cann && source /usr/local/Ascend/ascend-toolkit/set_env.sh && PYTHONPATH=/home/cjld/new_jittor/jittor/python:/home/cjld/new_jittor/jittor/my/jtorch/python:$PYTHONPATH && cd /home/cjld/new_jittor/jittor/my/mm_benchmark
-# python3 -m jittor.test.test_acl -k test_sum
+# python3 -m pytest tests/backends/npu/test_acl.py -k test_sum
 # export ASCEND_SLOG_PRINT_TO_STDOUT=0
 # ASCEND_GLOBAL_LOG_LEVEL
 # export DUMP_GE_GRAPH=1

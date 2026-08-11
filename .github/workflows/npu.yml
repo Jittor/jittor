@@ -59,7 +59,7 @@ jobs:
         run: |
           set -euo pipefail
           "${JITTOR_CI_PYTHON}" -m pip install -r requirements/dev-tools.txt
-      - name: Run NPU tests
+      - name: Run NPU pytest gates
         shell: bash
         run: |
           set -euo pipefail

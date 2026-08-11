@@ -32,7 +32,7 @@ jobs:
           python-version: "3.11"
       - name: Install pinned development tools
         run: python -m pip install -r requirements/dev-tools.txt
-      - name: Run CPU tests
+      - name: Run CPU pytest gates
         run: python -m nox -s cpu
 
   benchmark:

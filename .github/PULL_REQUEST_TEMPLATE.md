@@ -39,7 +39,8 @@ Fixes #
 <!-- Describe the tests you ran to verify your changes. -->
 <!-- 描述你运行了哪些测试来验证修改。 -->
 
-- [ ] I have run the existing test suite (`python -m jittor.test -v`) and all tests pass.
+- [ ] I have run the relevant pytest/nox suite (for example, `python -m pytest` or
+      `python -m nox -s cpu`) and all selected tests pass.
       我已运行现有测试套件且所有测试通过。
 - [ ] I have added new tests for my changes.
       我已为修改添加了新测试。
@@ -70,4 +71,3 @@ No / 无
 
 <!-- Any additional context, screenshots, or information. -->
 <!-- 任何额外的上下文、截图或信息。 -->
-

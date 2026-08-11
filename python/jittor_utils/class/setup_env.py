@@ -94,7 +94,7 @@ def start(n, n_gpu):
         assert 0 == run_cmd(f'docker exec -it {u["name"]} python3.7 /etc/ssh/setup.py passwd {u["passwd"]}')
         assert 0 == run_cmd(f'docker exec -it {u["name"]} python3.7 /etc/ssh/setup.py ssh {u["port"]}')
         assert 0 == run_cmd(f'docker exec -it {u["name"]} python3.7 -m pip install jittor -U')
-        assert 0 == run_cmd(f'docker exec -it {u["name"]} python3.7 -m jittor.test.test_example')
+        assert 0 == run_cmd(f'docker exec -it {u["name"]} python3.7 -m jittor.selftest')
 
 def stop():
     assert os.path.exists(student_files_dir+'/user_info.json')

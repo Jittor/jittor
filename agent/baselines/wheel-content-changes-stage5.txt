@@ -1,0 +1,10 @@
+# Stage 5 test-boundary and installed-selftest entry-point changes.
+9b2d4000651b4db7c365eeb2e145c0f077708637cc50321b3f4c6c2c7f8baeb4  jittor-1.3.11.0.dist-info/METADATA
+85516e61e890599e255b3c040af03c1a1c21276f5e166d3187194a199a319237  jittor-1.3.11.0.dist-info/RECORD
+e33771c5d471a997bafcae05d8b29588fef2d6a6fa2a56f41eaba78756fe0884  jittor/extern/acl/acl_compiler.py
+92fe1a4e52760e398d34aa295fcca9cc74eab559a97a9d865a50f8374ff101bb  jittor/misc/tensor_ops.py
+7216d9a41a0c69caec6e1f45ffb0fed0ec77fda36d1327ecdee57e1ee5485afe  jittor/script/converter_server.sh
+9b3f95e1c15651f8b54b4eab1896da1746f40b39b37568a2d7209a91d74a275a  jittor/script/install.sh
+d63dc74d34e12f772b730a3aff1c40bcded153492962683cd632a61bc289d30b  jittor/src/utils/log.cc
+988b45eed0aa7e79a2d0aa729e76ca6fa610948ed315a83f29d767627a40f38e  jittor/utils/polish_centos.py
+e36228dd1a508a3ea40427665e7fdd7d74df2398949bcfa2df76f97f6ad223b0  jittor_utils/class/setup_env.py

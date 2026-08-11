@@ -7,7 +7,7 @@
 
 ## Why (the audit's verdict)
 
-A fan-out audit of all 196 `python/jittor/test/*.py` files found the suite
+A fan-out audit of the then-current 196 test files found the suite
 *under-measures the bug class that matters most here* — **silent-wrong backward**:
 
 - **Forward-only epidemic**: ~40 files test forward only, concentrated exactly on
@@ -29,26 +29,27 @@ User directive: reference how authoritative projects (PyTorch) organize tests; n
 freelancing (an earlier "golden file" idea was scrapped). Real torch 2.12.1 source
 is readable at `~/rt_venv/lib/python3.11/site-packages/torch/testing/_internal/`.
 
-Layout under `python/jittor/test/`:
+Current layout under top-level `tests/`:
 
 ```
-_internal/
-  common_utils.py            JittorTestCase(assertEqual, make_tensor, parametrize),
+_helpers/
+  common.py                  JittorTestCase(assertEqual, make_tensor, parametrize),
                              dtype groups, tolerance policy, device detection
-  common_device_type.py      instantiate_device_type_tests, @ops/@dtypes/@onlyCPU/
+  device_types.py            instantiate_device_type_tests, @ops/@dtypes/@onlyCPU/
                              @onlyCUDA/@onlyNPU/@skipCUDAIf  (cpu/cuda/npu via has_acl)
   gradcheck.py               gradcheck / gradgradcheck / numerical_vjp (FD vs jt.grad)
-  opinfo/core.py             OpInfo, SampleInput, UnaryUfuncInfo, BinaryUfuncInfo,
+opinfo/
+  core.py                    OpInfo, SampleInput, UnaryUfuncInfo, BinaryUfuncInfo,
                              ReductionOpInfo, DecorateInfo/skip/xfail
-  opinfo/definitions/        per-domain OpInfo files (auto-discovered); _refs.py shared
-  common_methods_invocations.py   op_db = aggregate of all definitions/*.py
-test_ops.py                  TestCommon (fwd vs numpy ref) + TestGradients (gradcheck),
+  definitions/               per-domain OpInfo files (auto-discovered); _refs.py shared
+  database.py                op_db = aggregate of all definitions/*.py
+ops/test_ops.py              TestCommon (fwd vs numpy ref) + TestGradients (gradcheck),
                              generated over op_db × device × dtype
-test_norm.py                 float32 small-variance backward STABILITY (the gap gradcheck
+nn/test_norm.py              float32 small-variance backward STABILITY (the gap gradcheck
                              can't see; float32 analytical vs float64 numerical_vjp)
-test_regression.py           one named lock per fixed §4 silent-wrong bug (commit cited)
-test_kernel_traps.py         §4-B inherent-behavior gotchas (0-d, isnan, neg-dim,
-                             dtype lattice, float64 narrowing)
+core/test_regression.py      one named lock per fixed §4 silent-wrong bug (commit cited)
+compiler/test_kernel_traps.py  §4-B inherent-behavior gotchas (0-d, isnan, neg-dim,
+                               dtype lattice, float64 narrowing)
 ```
 
 ### Oracle taxonomy (why a green test means something)
@@ -92,7 +93,7 @@ test_kernel_traps.py         §4-B inherent-behavior gotchas (0-d, isnan, neg-di
 - `test_norm`: 6/6 — the four small-variance backward-stability locks pass at tol 1e-3
   (would fail if the stable jt.Function backward regressed) + running_var Bessel.
 - `test_regression`: 11/11 silent-wrong locks. `test_kernel_traps`: 8/8 (1 documented
-  expectedFailure for the index_select bug). Coverage report: `_internal/report.py`.
+  expectedFailure for the index_select bug). Coverage report: `tests/opinfo/report.py`.
 
 ## Findings surfaced by the new suite (the point of it)
 
@@ -136,13 +137,12 @@ test_kernel_traps.py         §4-B inherent-behavior gotchas (0-d, isnan, neg-di
 ## How to run
 
 ```bash
-JT=/home/zy/miniconda3/envs/jt311/bin/python
-PYTHONPATH=$PWD/python $JT -m jittor.test.test_ops -v          # op battery (cpu+cuda)
-PYTHONPATH=$PWD/python $JT -m jittor.test.test_norm            # norm backward stability
-PYTHONPATH=$PWD/python $JT -m jittor.test.test_regression      # §4 silent-wrong locks
-PYTHONPATH=$PWD/python $JT -m jittor.test.test_kernel_traps    # §4-B traps
-JITTOR_TEST_DEVICES=cpu ...                                    # restrict device matrix
-cache_name=cardN CUDA_VISIBLE_DEVICES=N ...                    # parallel-run isolation
+python -m pytest tests/ops/test_ops.py -v                 # op battery (configured devices)
+python -m pytest tests/nn/test_norm.py -v                 # norm backward stability
+python -m pytest tests/core/test_regression.py -v         # silent-wrong locks
+python -m pytest tests/compiler/test_kernel_traps.py -v   # inherent-behavior traps
+JITTOR_TEST_DEVICES=cpu python -m pytest tests/ops/test_ops.py -v
+cache_name=cardN CUDA_VISIBLE_DEVICES=N python -m pytest <path-or-nodeid> -v
 ```
 
 ## Round 2 — low-level / core coverage (2026-06-27)

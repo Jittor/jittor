@@ -44,7 +44,7 @@ on the device:** `npu-smi`/`nvidia-smi` should show GB-scale memory for the proc
 ## Numerical correctness
 
 Validated against **real PyTorch** with identical weights/inputs
-(`test/ascend_tools/xcheck/`):
+(`tests/backends/npu/manual/xcheck/`):
 - GPT-2 forward+backward matches torch to ~1e-7 (CUDA) / ~1e-5 (Ascend).
 - Real Qwen3-0.6B (via transformers) produces **identical top-5 next-token
   predictions**; logits within ~1e-4.
@@ -132,9 +132,9 @@ Real end-to-end training works: `transformers.Trainer` fine-tunes (loss decrease
 Real end-to-end **inference** works too: `model.generate()` runs **greedy** (KV-cached
 decode is bit-identical to a from-scratch recompute — the cache is correct), **beam
 search**, **sampling** (temperature/top-k/top-p) and **batched** generation.
-A regression suite covers ~30 architectures (`jittor.test.test_torch_hf_models`,
+A regression suite covers ~30 architectures (`tests/compat/torch/test_torch_hf_models.py`,
 incl. a `generate()` greedy/beam/sampling test) and the diffusers generation path
-(`jittor.test.test_diffusers`).
+(`tests/compat/torch/test_diffusers.py`).
 
 `jittor.models` provides the CNN classics plus a modern **Vision Transformer**
 (`vit_b_16`/`vit_b_32`/`vit_l_16`). LLMs/diffusion models come from

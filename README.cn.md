@@ -114,7 +114,7 @@ sudo apt install python3.7-dev libomp-dev
 python3.7 -m pip install jittor
 # or install from github(latest version)
 # python3.7 -m pip install git+https://github.com/Jittor/jittor.git
-python3.7 -m jittor.test.test_example
+python3.7 -m jittor.selftest
 ```
 
 如果测试运行通过,恭喜你已经安装完成.
@@ -135,7 +135,7 @@ brew install libomp
 
 ```bash
 python3.7 -m pip install jittor
-python3.7 -m jittor.test.test_example
+python3.7 -m jittor.selftest
 ```
 
 目前在 macOS 中，jittor 只支持 CPU 计算。
@@ -222,7 +222,7 @@ export cc_path="clang++-8"
 # export cc_path="icc"
 
 # run a simple test
-python3.7 -m jittor.test.test_example
+python3.7 -m jittor.selftest
 ```
 
 如果通过了测试，那么您的Jittor已经准备就绪。
@@ -237,7 +237,7 @@ python3.7 -m jittor.test.test_example
 # replace this var with your nvcc location 
 export nvcc_path="/usr/local/cuda/bin/nvcc" 
 # run a simple cuda test
-python3.7 -m jittor.test.test_cuda 
+use_cuda=1 python3.7 -m jittor.selftest
 ```
 
 如果测试通过，则可以通过设置`use_cuda`标识符在Jittor中启用CUDA。
@@ -254,7 +254,8 @@ jt.flags.use_cuda = 1
 要检查Jittor的完整性，您可以运行Resnet18训练测试。需要注意的是，这个测试需要6G显存。
 
 ```bash
-python3.7 -m jittor.test.test_resnet
+python3.7 -m pip install pytest==7.4.4
+python3.7 -m pytest tests/models/test_resnet.py -v
 ```
 
 如果这些测试失败，请为我们报告错误，我们十分欢迎您为Jittor做出贡献^ _ ^
@@ -422,4 +423,3 @@ Jittor目前由[清华大学计算机图形学组](https://cg.cs.tsinghua.edu.cn
 
 
 如LICENSE.txt文件中所示，Jittor使用Apache 2.0版权协议。
-

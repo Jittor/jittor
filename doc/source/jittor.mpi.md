@@ -26,11 +26,11 @@ sudo apt install openmpi-bin openmpi-common libopenmpi-dev
 
 ```bash
 # 单卡训练代码
-python3.7 -m jittor.test.test_resnet
+python3.7 -m pytest tests/models/test_resnet.py
 # 分布式多卡训练代码
-mpirun -np 4 python3.7 -m jittor.test.test_resnet
+mpirun -np 4 python3.7 -m pytest tests/models/test_resnet.py
 # 指定特定显卡的多卡训练代码
-CUDA_VISIBLE_DEVICES="2,3" mpirun -np 2 python3.7 -m jittor.test.test_resnet
+CUDA_VISIBLE_DEVICES="2,3" mpirun -np 2 python3.7 -m pytest tests/models/test_resnet.py
 ```
 
 这种便捷性的背后是计图的分布式算子的支撑，计图支持的mpi算子后端会使用nccl进行进一步的加速。计图所有分布式算法的开发均在Python前端完成，这让分布式算法的灵活度增强，开发分布式算法的难度也大大降低。

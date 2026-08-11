@@ -1560,9 +1560,9 @@ Example::
 Output::
 
     | 
-    ├─./python/jittor/test/test_memory_profiler.py:100(test_sample)
+    ├─./tests/compiler/test_memory_profiler.py:100(test_sample)
     | [19.03 MB; 29.67%]
-    | ./python/jittor/test/test_memory_profiler.py:100
+    | ./tests/compiler/test_memory_profiler.py:100
     |    | 
     |    └─./python/jittor/__init__.py:730(__call__)
     |      [19.03 MB; 29.67%]

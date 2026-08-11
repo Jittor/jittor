@@ -111,7 +111,7 @@ sudo apt install python3.7-dev libomp-dev
 python3.7 -m pip install jittor
 # or install from github(latest version)
 # python3.7 -m pip install git+https://github.com/Jittor/jittor.git
-python3.7 -m jittor.test.test_example
+python3.7 -m jittor.selftest
 ```
 
 
@@ -122,7 +122,7 @@ cuSPARSE, NVTX, and NCCL from NVIDIA component wheels:
 
 ```bash
 python -m pip install "jittor[cuda12]"
-python -m jittor.test.test_cuda
+use_cuda=1 python -m jittor.selftest
 ```
 
 The `cuda12` extra is a reproducible CUDA 12.2/cuDNN 8 stack. Use a separate
@@ -226,7 +226,7 @@ export cc_path="clang++-8"
 # export cc_path="icc"
 
 # run a simple test
-python3.7 -m jittor.test.test_example
+python3.7 -m jittor.selftest
 ```
 if the test is passed, your Jittor is ready.
 
@@ -241,7 +241,7 @@ Using CUDA in Jittor is very simple, Just setup environment value `nvcc_path`
 # replace this var with your nvcc location 
 export nvcc_path="/usr/local/cuda/bin/nvcc" 
 # run a simple cuda test
-python3.7 -m jittor.test.test_cuda 
+use_cuda=1 python3.7 -m jittor.selftest
 ```
 if the test is passed, your can use Jittor with CUDA by setting `use_cuda` flag.
 
@@ -258,7 +258,8 @@ To check the integrity of Jittor, you can run Resnet18 training test. Note: 6G G
 
 
 ```bash
-python3.7 -m jittor.test.test_resnet
+python3.7 -m pip install pytest==7.4.4
+python3.7 -m pytest tests/models/test_resnet.py -v
 ```
 if those tests are failed, please report bugs for us, and feel free to contribute ^_^
 

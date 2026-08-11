@@ -224,21 +224,22 @@ failure otherwise hides all later compatibility work.
 
 ## Test Boundary
 
-The repository test suite moves from `python/jittor/test` to top-level `tests/`
-and is collected by pytest. Existing `unittest.TestCase` tests need not be
-rewritten merely for the move.
+The repository test suite lives under top-level `tests/` and is collected by
+pytest. It is not an installed `jittor` subpackage. Existing
+`unittest.TestCase` tests remain valid under pytest and were not rewritten merely
+for the move.
 
-The migration inventory starts from 233 top-level test modules. Static analysis
-currently finds 123 cross-test imports across 76 files, so grouping and helper
-extraction must be derived from the actual graph rather than the older 69-file
-estimate. The initial category proposal accounts for only 212 modules and must
-be reconciled before any move is declared complete.
+The migration inventory was reconciled from the original 233-module estimate to
+239 top-level test modules. Its 123 cross-test edges across 76 files were replaced
+with explicit helpers derived from the actual graph; all 239 modules received a
+recorded destination rather than relying on the older partial category estimate.
 
 - Shared test utilities live in `tests/_helpers/`; test modules do not import
   one another as an implicit helper API.
 - Structure, CPU, CUDA, and NPU suites are separate CI layers.
 - Test selection uses names and markers, never `listdir()` positions.
-- The C++ `test.h` resource moves only with its compiler include consumer.
+- The C++ `test.h` resource lives with its compiler include consumers under
+  `python/jittor/src/utils/`.
 - Installed-environment checks use `jittor.selftest`, not a shipped test package.
 
 ## Tooling And Delivery

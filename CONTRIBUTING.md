@@ -94,7 +94,7 @@ conda install pywin32
 pip install -e .
 
 # Verify the installation
-python -m jittor.test.test_example
+python -m jittor.selftest
 ```
 
 > **Note**: Since Jittor uses JIT compilation, you don't need to recompile after modifying Python source files. However, changes to C++/CUDA header files in `python/jittor/src/` will be automatically recompiled by the JIT compiler on next use.
@@ -106,7 +106,7 @@ python -m jittor.test.test_example
 export nvcc_path="/usr/local/cuda/bin/nvcc"
 
 # Test CUDA support
-python -m jittor.test.test_cuda
+use_cuda=1 python -m jittor.selftest
 ```
 
 Or let Jittor install CUDA automatically (Windows):
@@ -121,11 +121,10 @@ jittor/
 ├── python/                    # Python source code
 │   ├── jittor/               # Main Jittor package
 │   │   ├── __init__.py       # Package initialization, version info
-│   │   ├── nn.py             # Neural network modules
+│   │   ├── nn/               # Neural network modules
 │   │   ├── optim.py          # Optimizers
 │   │   ├── dataset/          # Dataset utilities
 │   │   ├── models/           # Pre-built model implementations
-│   │   ├── test/             # Python test suite
 │   │   ├── utils/            # Utility functions
 │   │   ├── notebook/         # Jupyter notebook tutorials
 │   │   └── src/              # C++/CUDA source files (JIT compiled)
@@ -134,6 +133,7 @@ jittor/
 │   │       ├── mem/          # Memory management
 │   │       └── optimizer/    # Graph optimization passes
 │   └── jittor_utils/         # Utility package
+├── tests/                    # Repository pytest suite (not shipped in wheels)
 ├── doc/                      # Documentation (Sphinx)
 ├── .github/                  # GitHub templates and CI
 │   ├── ISSUE_TEMPLATE/       # Issue templates
@@ -198,7 +198,7 @@ Fixes #123
 
 - Follow [PEP 8](https://peps.python.org/pep-0008/) style guide.
 - Use 4 spaces for indentation (no tabs).
-- Maximum line length: 120 characters.
+- Maximum line length: 100 characters.
 - Use descriptive variable and function names.
 - Add docstrings to public functions and classes.
 
@@ -214,22 +214,31 @@ Fixes #123
 ### Running Tests
 
 ```bash
+# Install the pinned development tools with Python 3.11
+python -m pip install -r requirements/dev-tools.txt
+
 # Run the full test suite
-python -m jittor.test -v
+python -m pytest
 
 # Run a specific test file
-python -m jittor.test.test_nn
+python -m pytest tests/nn/test_nn_capabilities.py -v
 
 # Run a specific test case
-python -m pytest python/jittor/test/test_nn.py::TestNN::test_conv2d -v
+python -m pytest \
+  tests/nn/test_nn_capabilities.py::TestAttentionCapabilities::test_layout_lengths_and_cumulative_cache \
+  -v
+
+# Run the maintained CPU gate; CUDA and NPU use the corresponding nox sessions
+python -m nox -s cpu
 ```
 
 ### Writing Tests
 
-- Place test files in `python/jittor/test/`.
+- Place test files under the matching domain in `tests/`.
 - Test file names should follow the pattern `test_*.py`.
 - Test class names should start with `Test`.
 - Test method names should start with `test_`.
+- Register and apply the appropriate backend/lifecycle marker from `pyproject.toml`.
 
 Example:
 ```python
@@ -438,7 +447,7 @@ conda install pywin32
 pip install -e .
 
 # 验证安装
-python -m jittor.test.test_example
+python -m jittor.selftest
 ```
 
 > **提示**：由于 Jittor 使用 JIT 编译，修改 Python 源文件后无需重新编译。但对 `python/jittor/src/` 中 C++/CUDA 头文件的修改会在下次使用时由 JIT 编译器自动重新编译。
@@ -450,7 +459,7 @@ python -m jittor.test.test_example
 export nvcc_path="/usr/local/cuda/bin/nvcc"
 
 # 测试 CUDA 支持
-python -m jittor.test.test_cuda
+use_cuda=1 python -m jittor.selftest
 ```
 
 或让 Jittor 自动安装 CUDA（Windows）：
@@ -465,11 +474,10 @@ jittor/
 ├── python/                    # Python 源代码
 │   ├── jittor/               # Jittor 主包
 │   │   ├── __init__.py       # 包初始化，版本信息
-│   │   ├── nn.py             # 神经网络模块
+│   │   ├── nn/               # 神经网络模块
 │   │   ├── optim.py          # 优化器
 │   │   ├── dataset/          # 数据集工具
 │   │   ├── models/           # 预置模型实现
-│   │   ├── test/             # Python 测试套件
 │   │   ├── utils/            # 工具函数
 │   │   ├── notebook/         # Jupyter notebook 教程
 │   │   └── src/              # C++/CUDA 源文件（JIT 编译）
@@ -478,6 +486,7 @@ jittor/
 │   │       ├── mem/          # 内存管理
 │   │       └── optimizer/    # 图优化
 │   └── jittor_utils/         # 工具包
+├── tests/                    # 仓库 pytest 测试套件（不进入 wheel）
 ├── doc/                      # 文档（Sphinx）
 ├── .github/                  # GitHub 模板和 CI
 │   ├── ISSUE_TEMPLATE/       # Issue 模板
@@ -542,7 +551,7 @@ Fixes #123
 
 - 遵循 [PEP 8](https://peps.python.org/pep-0008/) 风格指南
 - 使用 4 个空格缩进（不使用 Tab）
-- 每行最大长度：120 个字符
+- 每行最大长度：100 个字符
 - 使用描述性的变量和函数命名
 - 为公共函数和类添加文档字符串
 
@@ -558,22 +567,31 @@ Fixes #123
 ### 运行测试
 
 ```bash
+# 使用 Python 3.11 安装锁定的开发工具
+python -m pip install -r requirements/dev-tools.txt
+
 # 运行完整测试套件
-python -m jittor.test -v
+python -m pytest
 
 # 运行特定测试文件
-python -m jittor.test.test_nn
+python -m pytest tests/nn/test_nn_capabilities.py -v
 
 # 运行特定测试用例
-python -m pytest python/jittor/test/test_nn.py::TestNN::test_conv2d -v
+python -m pytest \
+  tests/nn/test_nn_capabilities.py::TestAttentionCapabilities::test_layout_lengths_and_cumulative_cache \
+  -v
+
+# 运行维护的 CPU 门禁；CUDA/NPU 使用对应 nox session
+python -m nox -s cpu
 ```
 
 ### 编写测试
 
-- 将测试文件放在 `python/jittor/test/` 目录下
+- 将测试文件放在 `tests/` 下对应的领域目录
 - 测试文件名应遵循 `test_*.py` 模式
 - 测试类名应以 `Test` 开头
 - 测试方法名应以 `test_` 开头
+- 注册并使用 `pyproject.toml` 中对应的后端/生命周期 marker
 
 示例：
 ```python

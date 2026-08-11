@@ -1,0 +1,74 @@
+# ***************************************************************
+# Copyright (c) 2023 Jittor. All Rights Reserved.
+# Maintainers: Dun Liang <randonlang@gmail.com>. 
+# This file is subject to the terms and conditions defined in
+# file 'LICENSE.txt', which is part of this source code package.
+# ***************************************************************
+import unittest
+import numpy as np
+import os
+import sys
+import jittor as jt
+from _helpers.torch_runtime import import_torch_modules, modules_available
+
+skip_this_test = not modules_available("torch", "torchvision")
+torch = None
+tcmodels = None
+nn = None
+
+
+def setUpModule():
+    global torch, tcmodels, nn
+    if not skip_this_test:
+        torch, tcmodels, nn = import_torch_modules(
+            "torch", "torchvision.models", "torch.nn"
+        )
+
+@unittest.skipIf(skip_this_test, "skip_this_test")
+class TestAutoDiff(unittest.TestCase):
+    def test_pt_hook(self):
+        code = '''
+import numpy as np
+from jittor_utils import auto_diff
+import torch
+import torchvision.models as tcmodels
+net = tcmodels.resnet50()
+net.train()
+hook = auto_diff.Hook("resnet50")
+hook.hook_module(net)
+
+np.random.seed(0)
+data = np.random.random((2,3,224,224)).astype('float32')
+data = torch.Tensor(data)
+net(data)
+# assert auto_diff.has_error == 0, auto_diff.has_error
+'''
+        with open("/tmp/test_pt_hook.py", 'w') as f:
+            f.write(code)
+        print(jt.flags.cache_path)
+        os.system(f"rm -rf {jt.flags.cache_path}/../../auto_diff/resnet50")
+        assert os.system(sys.executable+" /tmp/test_pt_hook.py") == 0
+        assert os.system(sys.executable+" /tmp/test_pt_hook.py") == 0
+        code = '''
+import numpy as np
+import jittor as jt
+from jittor_utils import auto_diff
+from jittor.models import resnet50
+net = resnet50()
+net.train()
+hook = auto_diff.Hook("resnet50")
+hook.hook_module(net)
+
+np.random.seed(0)
+data = np.random.random((2,3,224,224)).astype('float32')
+data = jt.array(data)
+net(data)
+# assert auto_diff.has_error == 0, auto_diff.has_error
+'''
+        with open("/tmp/test_jt_hook.py", 'w') as f:
+            f.write(code)
+        assert os.system(sys.executable+" /tmp/test_jt_hook.py") == 0
+        
+
+if __name__ == "__main__":
+    unittest.main()

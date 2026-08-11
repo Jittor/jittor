@@ -511,7 +511,7 @@ Please install correct version of gcc, for example:
     >>> sudo apt install g++-7
 After your g++ is installed, using enviroment variable `cc_path` to
 tell jittor use the correct version of g++, for example:
-    >>> cc_path='g++-7' python3.7 -m jittor.test.test_core
+    >>> cc_path='g++-7' python3.7 -m jittor.selftest
 If you still have problems, please contact us:
     https://github.com/Jittor/jittor/issues
     )";
@@ -745,6 +745,7 @@ void test_main() {
     LOGvvvv << "test v1";
     expect_error([&]() { CHECKop(1,<,0) << "check error"; });
     test_log_time(&std::cerr);
+    jittor::log_exiting();
 }
 
 #endif

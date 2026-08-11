@@ -37,37 +37,55 @@ RUFF = "ruff==0.15.22"
 MYPY = "mypy==1.8.0"
 ASV = "asv==0.6.6"
 BUILD = "build==1.3.0"
+PYTEST = "pytest==7.4.4"
+PYTEST_TIMEOUT = "pytest-timeout==2.3.1"
 SETUPTOOLS = "setuptools==83.0.0"
 WHEEL = "wheel==0.45.1"
 
 RATCHET_FILES = (
     "noxfile.py",
     "agent/scripts/check_wheel_contents.py",
+    "python/jittor/selftest.py",
     "python/jittor_utils/cuda_wheel.py",
     "python/jittor/torch_shim/deploy.py",
-    "python/jittor/test/_runner.py",
+    "tests/structure/test_pytest_contract.py",
+    "tests/structure/test_selftest_structure.py",
 )
-FORMAT_FILES = ("noxfile.py",)
+FORMAT_FILES = (
+    "noxfile.py",
+    "python/jittor/selftest.py",
+    "tests/structure/test_pytest_contract.py",
+    "tests/structure/test_selftest_structure.py",
+)
 FILESYSTEM_TESTS = (
     "agent/scripts/test_check_wheel_contents.py",
-    "python/jittor/test/test_packaging_structure.py",
-    "python/jittor/test/test_torch_shim_deploy.py",
-    "python/jittor/test/test_cuda_wheel.py",
-    "python/jittor/test/test_test_runner.py",
+    "tests/structure/test_packaging_structure.py",
+    "tests/structure/test_pytest_contract.py",
+    "tests/structure/test_selftest_structure.py",
+    "tests/structure/test_torch_shim_deploy.py",
+    "tests/structure/test_cuda_wheel.py",
 )
 CPU_TESTS = (
-    "jittor.test.test_autograd_engine",
-    "jittor.test.test_regression",
+    "tests/compiler/test_utils.py",
+    "tests/core/test_autograd_engine.py",
+    "tests/core/test_regression.py",
 )
 CUDA_TESTS = (
-    "jittor.test.test_cuda",
-    "jittor.test.test_ops",
+    "tests/backends/cuda/test_cuda.py",
+    "tests/ops/test_ops.py",
 )
 NPU_TESTS = (
-    "jittor.test.test_acl",
-    "jittor.test.test_aclop",
-    "jittor.test.test_acl_indexing",
-    "jittor.test.test_ops",
+    "tests/backends/npu/test_acl.py",
+    "tests/backends/npu/test_aclop.py",
+    "tests/backends/npu/test_acl_indexing.py",
+    "tests/ops/test_ops.py",
+)
+ROCM_TESTS = ("tests/backends/rocm/test_rocm.py",)
+MPI_TESTS = (
+    "tests/distributed/test_mpi.py",
+    "tests/distributed/test_mpi_batchnorm.py",
+    "tests/distributed/test_mpi_op.py",
+    "tests/distributed/test_single_process_scope.py",
 )
 
 NOX_STATE_ROOT.mkdir(parents=True, exist_ok=True)
@@ -126,13 +144,25 @@ def _source_copy(destination):
     shutil.copytree(str(REPO_ROOT), str(destination), symlinks=True, ignore=ignored)
 
 
-def _test_modules(session, defaults, env, runner=None):
-    modules = tuple(session.posargs) or defaults
+def _pytest_invocations(session, defaults):
+    if session.posargs:
+        return (tuple(session.posargs),)
+    return tuple((target,) for target in defaults)
+
+
+def _run_pytest(session, defaults, env, runner=None):
     python = runner or "python"
-    for module in modules:
-        if "." not in module:
-            module = "jittor.test." + module
-        session.run(python, "-m", module, "-v", env=env, external=runner is not None)
+    for args in _pytest_invocations(session, defaults):
+        session.run(
+            python,
+            "-m",
+            "pytest",
+            "-v",
+            "--timeout=600",
+            *args,
+            env=env,
+            external=runner is not None,
+        )
 
 
 def _hardware_python():
@@ -178,12 +208,30 @@ def typing(session):
 
 @nox.session(python="3.11")
 def structure(session):
-    """Run pure filesystem tests, then build and audit a wheel outside the tree."""
+    """Run filesystem tests, then build, audit, and self-test an installed wheel."""
     root, env = _session_env(session, "structure")
-    session.install(BUILD, SETUPTOOLS, WHEEL)
+    session.install(
+        BUILD,
+        PYTEST,
+        PYTEST_TIMEOUT,
+        SETUPTOOLS,
+        WHEEL,
+        "astunparse==1.6.3",
+        "numpy==1.26.4",
+        "pillow==11.0.0",
+        "tqdm==4.67.1",
+    )
     session.run("bash", "agent/scripts/check_repo_layout.sh", external=True, env=env)
     for test_path in FILESYSTEM_TESTS:
-        session.run("python", test_path, "-v", env=env)
+        session.run(
+            "python",
+            "-m",
+            "pytest",
+            "-v",
+            "--timeout=600",
+            test_path,
+            env=env,
+        )
 
     source = root / "source"
     dist = root / "dist"
@@ -206,7 +254,7 @@ def structure(session):
         session.error("expected exactly one wheel, found %d" % len(wheels))
     wheel_args = tuple(session.posargs) or (
         "--removal-allowlist",
-        "agent/baselines/wheel-removals-stage4.txt",
+        "agent/baselines/wheel-removals-stage5.txt",
     )
     session.run(
         "python",
@@ -216,6 +264,26 @@ def structure(session):
         *wheel_args,
         env=env,
     )
+
+    wheel_install = root / "wheel-install"
+    session.run(
+        "python",
+        "-m",
+        "pip",
+        "install",
+        "--no-deps",
+        "--target",
+        str(wheel_install),
+        str(wheels[0]),
+        env=env,
+    )
+    selftest_env = env.copy()
+    selftest_env["PYTHONPATH"] = str(wheel_install)
+    selftest_env["PYTHONNOUSERSITE"] = "1"
+    selftest_env["nvcc_path"] = ""
+    selftest_env["cache_name"] = "nox_wheel_selftest"
+    with session.chdir(root):
+        session.run("python", "-m", "jittor.selftest", env=selftest_env)
 
 
 @nox.session(python="3.11")
@@ -298,6 +366,8 @@ def cpu(session):
         "astunparse==1.6.3",
         "numpy==1.26.4",
         "pillow==11.0.0",
+        PYTEST,
+        PYTEST_TIMEOUT,
         SETUPTOOLS,
         "tqdm==4.67.1",
     )
@@ -309,7 +379,16 @@ def cpu(session):
         "assert float(x.item()) == 6.0"
     )
     session.run("python", "-c", probe, env=env)
-    _test_modules(session, CPU_TESTS, env)
+    session.run(
+        "python",
+        "-m",
+        "pytest",
+        "--collect-only",
+        "-q",
+        "tests",
+        env=env,
+    )
+    _run_pytest(session, CPU_TESTS, env)
 
 
 @nox.session(python=False)
@@ -324,6 +403,7 @@ def cuda(session):
     env["JITTOR_TEST_DEVICES"] = "cuda"
     session.run("nvidia-smi", external=True, env=env)
     session.run(nvcc, "--version", external=True, env=env)
+    session.run(python, "-m", "pytest", "--version", external=True, env=env)
     probe = (
         "import jittor as jt; "
         "assert jt.compiler.has_cuda; "
@@ -333,7 +413,7 @@ def cuda(session):
         "assert float(x.item()) == 6.0"
     )
     session.run(python, "-c", probe, env=env, external=True)
-    _test_modules(session, CUDA_TESTS, env, runner=python)
+    _run_pytest(session, CUDA_TESTS, env, runner=python)
 
 
 @nox.session(python=False)
@@ -348,6 +428,7 @@ def npu(session):
     env["JITTOR_CI_PYTHON"] = python
     env["JITTOR_TEST_DEVICES"] = "npu"
     session.run("npu-smi", "info", external=True, env=env)
+    _run_with_cann(session, python, ("-m", "pytest", "--version"), env)
     probe = (
         "import jittor as jt; "
         "assert getattr(jt.compiler, 'has_acl', 0); "
@@ -356,8 +437,40 @@ def npu(session):
         "assert float(x.item()) == 6.0"
     )
     _run_with_cann(session, python, ("-c", probe), env)
-    modules = tuple(session.posargs) or NPU_TESTS
-    for module in modules:
-        if "." not in module:
-            module = "jittor.test." + module
-        _run_with_cann(session, python, ("-m", module, "-v"), env)
+    for args in _pytest_invocations(session, NPU_TESTS):
+        _run_with_cann(
+            session,
+            python,
+            ("-m", "pytest", "-v", "--timeout=600", *args),
+            env,
+        )
+
+
+@nox.session(python=False)
+def rocm(session):
+    """Run ROCm gates in a pre-provisioned AMD GPU environment."""
+    _root, env = _session_env(session, "rocm")
+    python = _hardware_python()
+    env["JITTOR_TEST_DEVICES"] = "rocm"
+    session.run("rocminfo", external=True, env=env)
+    session.run(python, "-m", "pytest", "--version", external=True, env=env)
+    probe = (
+        "import jittor as jt; "
+        "assert jt.compiler.has_rocm; "
+        "jt.flags.use_rocm = 1; "
+        "x = (jt.array([1.0, 2.0]) * 2).sum(); x.sync(); "
+        "assert float(x.item()) == 6.0"
+    )
+    session.run(python, "-c", probe, env=env, external=True)
+    _run_pytest(session, ROCM_TESTS, env, runner=python)
+
+
+@nox.session(python=False)
+def mpi(session):
+    """Run MPI gates with a pre-provisioned launcher and Python environment."""
+    _root, env = _session_env(session, "mpi")
+    python = _hardware_python()
+    env["JITTOR_TEST_DEVICES"] = "mpi"
+    session.run("mpirun", "--version", external=True, env=env)
+    session.run(python, "-m", "pytest", "--version", external=True, env=env)
+    _run_pytest(session, MPI_TESTS, env, runner=python)

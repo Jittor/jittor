@@ -32,6 +32,6 @@ COPY pyproject.toml setup.py README.md MANIFEST.in LICENSE.txt ./
 COPY python ./python
 
 RUN python -m pip install --no-cache-dir . notebook matplotlib \
-    && nvcc_path= python -m jittor.test.test_example
+    && nvcc_path= python -m jittor.selftest
 
 CMD ["python", "-m", "jittor.notebook", "--allow-root", "--ip=0.0.0.0"]

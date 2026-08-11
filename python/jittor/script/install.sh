@@ -55,11 +55,11 @@ if [ "$with_cuda" = "1" ]; then
 export nvcc_path="/usr/local/cuda/bin/nvcc"
 fi
 
-# run a simple test
-python$py_version -m jittor.test.test_example
+# run the installed smoke test
+python$py_version -m jittor.selftest
 
 if [ "$with_cuda" = "1" ]; then
-python$py_version -m jittor.test.test_cuda
+use_cuda=1 python$py_version -m jittor.selftest
 fi
 
 set +x

@@ -110,9 +110,9 @@ package discovery 覆盖，C++ include 目录不会被当作 namespace package�
 
 ## 测试结构
 
-**推翻的旧决策**：`python/jittor/test` 不再作为长期公开包路径。阶段 5 先新增
-`jittor.selftest` 承接安装脚本、Docker 和环境脚本的最小自检，再把仓库测试迁到
-顶层 `tests/`，由 pytest 收集。迁移必须满足：
+**推翻的旧决策**：`python/jittor/test` 不再作为长期公开包路径。阶段 5 已新增
+`jittor.selftest` 承接安装脚本、Docker 和环境脚本的最小自检，并把仓库测试迁到
+顶层 `tests/`，由 pytest 收集。后续修改必须保持：
 
 - 共享工具收敛到 `tests/_helpers/`，不再跨测试模块隐式导入。
 - 文件过滤发生在导入测试模块之前，marker 对完整测试名生效。
@@ -255,7 +255,7 @@ FSDP rank/world 口径分裂、distributed checkpoint 静默不落盘的风险�
    配对合并为领域包，删除重复 runtime proxy 和 `preserve_facade_origins`。
 4. 按能力、机制、根因、项目粘合四层重构兼容代码。`monkeypatch_ops.py` 不再拆入
    新的 `_third_party_compat/`；通用能力/根因进入 Jittor，粘合进入可选发行包。
-5. 新增 `jittor.selftest`，再把测试迁到根 `tests/` 并切换 pytest。
+5. 已新增 `jittor.selftest`，测试已迁到根 `tests/` 并切换 pytest。
 6. 把脚本、demo、notebook 收敛到 `tools/` 与 `examples/`，删除有证据的死资产。
 7. 在新领域包形态下同批处理 Torch shim/installer、剩余 nn 类和根 composition root。
 8. 完成文档、国际化、教程和治理文档现代化。

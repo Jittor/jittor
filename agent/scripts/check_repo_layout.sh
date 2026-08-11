@@ -5,9 +5,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 status=0
 
+if [[ ! -f "$REPO_ROOT/python/jittor/selftest.py" ]]; then
+  echo 'missing installed smoke test: python/jittor/selftest.py' >&2
+  status=1
+fi
+if [[ ! -d "$REPO_ROOT/tests" ]]; then
+  echo 'missing repository test suite: tests/' >&2
+  status=1
+fi
+if [[ -e "$REPO_ROOT/tests/__init__.py" ]]; then
+  echo 'repository tests must not be an importable distribution package: tests/__init__.py' >&2
+  status=1
+fi
+
 while IFS= read -r name; do
   case "$name" in
-    .git|.github|.agents|.codex|.claude|agent|benchmarks|doc|docs|python|requirements|\
+    .git|.github|.agents|.codex|.claude|agent|benchmarks|doc|docs|python|requirements|tests|\
     .dockerignore|.gitignore|.gitlab-ci.yml|AGENTS.md|\
     AWESOME-JITTOR-LIST.cn.md|AWESOME-JITTOR-LIST.md|\
     asv.conf.json|CODE_OF_CONDUCT.md|CONTRIBUTING.md|Dockerfile|GOVERNANCE.md|\
@@ -32,12 +45,35 @@ for forbidden_path in \
   "$REPO_ROOT/python/jittor/_pool" \
   "$REPO_ROOT/python/jittor/torch_compat.py" \
   "$REPO_ROOT/python/jittor/_torch_compat" \
+  "$REPO_ROOT/python/jittor/test" \
   "$REPO_ROOT/python/jittor/monkeypatch_ops.py" \
   "$REPO_ROOT/python/jittor/torch_shim/trellis_runtime.py" \
   "$REPO_ROOT/python/jittor/torch_shim/gaussian_splatting_runtime.py" \
   "$REPO_ROOT/python/jittor/torch_shim/scripts"; do
   if [[ -e "$forbidden_path" ]]; then
     printf 'forbidden legacy path: %s\n' "${forbidden_path#"$REPO_ROOT"/}" >&2
+    status=1
+  fi
+done
+
+legacy_selftest_module='jittor.test.'
+legacy_selftest_module+='test_example'
+if grep -R -n \
+  --include='*.py' \
+  --include='*.sh' \
+  -- "$legacy_selftest_module" "$REPO_ROOT/python"; then
+  echo 'installed smoke tests must use python -m jittor.selftest.' >&2
+  status=1
+fi
+
+for active_doc in \
+  "$REPO_ROOT/Dockerfile" \
+  "$REPO_ROOT/CONTRIBUTING.md" \
+  "$REPO_ROOT/README.md" \
+  "$REPO_ROOT/README.cn.md" \
+  "$REPO_ROOT/README.src.md"; do
+  if grep -n -- "$legacy_selftest_module" "$active_doc"; then
+    echo 'installation documentation must use python -m jittor.selftest.' >&2
     status=1
   fi
 done

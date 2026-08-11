@@ -49,7 +49,7 @@ version = { attr = "jittor.__version__" }
 required-version = "==0.15.22"
 target-version = "py37"
 line-length = 100
-src = ["python"]
+src = ["python", "tests"]
 
 [tool.ruff.lint]
 # Start with deterministic correctness and Python-compatibility checks. Expand
@@ -70,7 +70,7 @@ files = [
     "agent/scripts/check_wheel_contents.py",
     "python/jittor_utils/cuda_wheel.py",
     "python/jittor/torch_shim/deploy.py",
-    "python/jittor/test/_runner.py",
+    "tests/structure/test_pytest_contract.py",
 ]
 mypy_path = "python"
 follow_imports = "skip"
@@ -94,3 +94,20 @@ disable_error_code = ["attr-defined"]
 [[tool.mypy.overrides]]
 module = ["check_wheel_contents", "agent.scripts.check_wheel_contents"]
 disable_error_code = ["var-annotated"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["python"]
+addopts = "--strict-markers --strict-config"
+xfail_strict = true
+markers = [
+    "structure: repository layout and packaging checks without device execution",
+    "cpu: tests intended for the CPU backend",
+    "cuda: tests requiring an NVIDIA CUDA backend",
+    "rocm: tests requiring an AMD ROCm backend",
+    "npu: tests requiring an Ascend NPU backend",
+    "mpi: tests requiring an MPI launcher or multiple processes",
+    "slow: tests excluded from the fast pull-request gate",
+    "network: tests requiring external network access",
+    "manual: tests or probes that must be selected explicitly",
+]
