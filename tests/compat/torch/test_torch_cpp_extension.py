@@ -22,7 +22,7 @@ import jittor as jt
 
 class TestTorchCppExtensionArchFlags(unittest.TestCase):
     def test_uses_detected_jittor_archs(self):
-        from jittor.torch_shim.cpp_extension import _cuda_arch_flags
+        from jittor.compat.shim.cpp_extension import _cuda_arch_flags
 
         fake_jittor = type("Jittor", (), {
             "flags": type("Flags", (), {"cuda_archs": [89, 80]})(),
@@ -36,7 +36,7 @@ class TestTorchCppExtensionArchFlags(unittest.TestCase):
             )
 
     def test_honors_torch_cuda_arch_list(self):
-        from jittor.torch_shim.cpp_extension import _cuda_arch_flags
+        from jittor.compat.shim.cpp_extension import _cuda_arch_flags
 
         fake_jittor = type("Jittor", (), {
             "flags": type("Flags", (), {"cuda_archs": [89]})(),
@@ -53,7 +53,7 @@ class TestTorchCppExtensionArchFlags(unittest.TestCase):
             )
 
     def test_expands_named_torch_cuda_arches(self):
-        from jittor.torch_shim.cpp_extension import _torch_cuda_arch_flags
+        from jittor.compat.shim.cpp_extension import _torch_cuda_arch_flags
 
         self.assertEqual(
             _torch_cuda_arch_flags("Ampere;Ada;Hopper"),
@@ -69,7 +69,7 @@ class TestTorchCppExtensionArchFlags(unittest.TestCase):
         )
 
     def test_falls_back_to_compiler_arch_flags(self):
-        from jittor.torch_shim.cpp_extension import _cuda_arch_flags
+        from jittor.compat.shim.cpp_extension import _cuda_arch_flags
 
         fake_jittor = type("Jittor", (), {
             "flags": type("Flags", (), {"cuda_archs": []})(),
@@ -87,8 +87,8 @@ class TestTorchCppExtensionArchFlags(unittest.TestCase):
 
 class TestTorchCppExtensionImportIdentity(unittest.TestCase):
     def test_invalid_identity_fails_before_build(self):
-        from jittor.torch_shim import cpp_extension
-        from jittor.torch_shim.cpp_extension import torch_utils
+        from jittor.compat.shim import cpp_extension
+        from jittor.compat.shim.cpp_extension import torch_utils
 
         with mock.patch.object(cpp_extension, "build") as build:
             with self.assertRaisesRegex(ValueError, "must be a dotted"):
@@ -100,9 +100,9 @@ class TestTorchCppExtensionImportIdentity(unittest.TestCase):
         build.assert_not_called()
 
     def test_distinct_identities_load_distinct_modules_with_same_build_name(self):
-        from jittor.torch_shim import flashattn_jittor
-        from jittor.torch_shim import cpp_extension
-        from jittor.torch_shim.cpp_extension import torch_utils
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
+        from jittor.compat.shim import cpp_extension
+        from jittor.compat.shim.cpp_extension import torch_utils
 
         build_name = "flash_attn_2_cuda_jittor"
         capabilities = (

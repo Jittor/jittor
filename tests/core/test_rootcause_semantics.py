@@ -157,13 +157,18 @@ class TestParameterIdentity(unittest.TestCase):
         self.assertIsInstance(parameter, nn.Parameter)
         self.assertTrue(parameter.requires_grad)
 
-    def test_canonical_and_deploy_shim_use_the_same_marker(self):
-        shim_path = (
-            jt.__path__[0] + "/torch_shim/torch__init__.py"
+    def test_canonical_installer_owns_the_parameter_marker(self):
+        jittor_root = Path(jt.__file__).resolve().parent
+        installer = (jittor_root / "compat" / "torch" / "__init__.py").read_text(
+            encoding="utf-8"
         )
-        source = Path(shim_path).read_text(encoding="utf-8")
-        self.assertIn("_is_torch_parameter", source)
-        self.assertNotIn("return isinstance(obj, _jt.Var)\n", source)
+        template = (
+            jittor_root / "compat" / "shim" / "resources" / "torch_init.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("_is_torch_parameter", installer)
+        self.assertIn("_torch_compat.install(_jittor)", template)
+        self.assertNotIn("_is_torch_parameter", template)
+        self.assertFalse((jittor_root / "torch_shim").exists())
 
 
 class TestShapeHashSemantics(unittest.TestCase):

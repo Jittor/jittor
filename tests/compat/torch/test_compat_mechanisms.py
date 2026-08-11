@@ -418,7 +418,7 @@ class TestExternalBackend(unittest.TestCase):
             )
 
     def test_project_hint_extends_the_canonical_flash_resolver(self):
-        from jittor.torch_shim import flashattn_jittor
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
         project_env = "JITTOR_TEST_FLASH_PROJECT_" + uuid.uuid4().hex.upper()
         relative = "optional-" + uuid.uuid4().hex
@@ -445,7 +445,7 @@ class TestExternalBackend(unittest.TestCase):
     def test_runtime_modules_share_the_common_import_hook(self):
         jittor_root = Path(module_patcher.__file__).resolve().parents[1]
         for relative in (
-            "torch_shim/readonly_extensions.py",
+            "compat/shim/extensions/readonly.py",
         ):
             source = Path(jittor_root, relative).read_text(encoding="utf-8")
             with self.subTest(relative=relative):
@@ -456,24 +456,39 @@ class TestExternalBackend(unittest.TestCase):
         jittor_root = Path(module_patcher.__file__).resolve().parents[1]
         for relative in (
             "monkeypatch_ops.py",
-            "torch_shim/trellis_runtime.py",
-            "torch_shim/gaussian_splatting_runtime.py",
-            "torch_shim/scripts",
+            "torch_shim",
         ):
             with self.subTest(relative=relative):
                 self.assertFalse(Path(jittor_root, relative).exists())
 
     def test_bootstrap_has_no_backend_specific_source_scanner(self):
         jittor_root = Path(module_patcher.__file__).resolve().parents[1]
-        bootstrap = Path(jittor_root, "torch_shim", "bootstrap.py").read_text(encoding="utf-8")
-        flash = Path(jittor_root, "torch_shim", "flashattn_jittor.py").read_text(
+        runtime = Path(jittor_root, "compat", "shim", "runtime.py").read_text(
             encoding="utf-8"
         )
-        self.assertNotIn("_is_official_flash_attention_root", bootstrap)
+        flash = Path(
+            jittor_root, "compat", "shim", "backends", "flash_attention.py"
+        ).read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("_is_official_flash_attention_root", runtime)
         self.assertNotIn("TRELLIS_ROOT", flash)
         self.assertNotIn("TRELLIS2_ROOT", flash)
-        self.assertIn("external_backend_for_source_root", bootstrap)
+        self.assertIn("external_backend_for_source_root", runtime)
         self.assertIn("ExternalBackendSpec", flash)
+
+    def test_flash_child_environment_uses_the_canonical_python_root(self):
+        import jittor as jt
+        from jittor.compat.shim.backends import flash_attention
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory, "flash-attention")
+            root.mkdir()
+            with mock.patch.dict(os.environ, {"PYTHONPATH": "sentinel"}, clear=False):
+                child = flash_attention._setup_child_env(root)
+        paths = child["PYTHONPATH"].split(os.pathsep)
+        self.assertIn(os.fspath(Path(jt.__file__).resolve().parents[1]), paths)
+        self.assertNotIn(os.fspath(Path(flash_attention.__file__).resolve().parents[2]), paths)
 
 
 if __name__ == "__main__":

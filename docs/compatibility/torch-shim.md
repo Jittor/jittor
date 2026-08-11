@@ -7,13 +7,14 @@ Project-specific runtime policy is supplied by optional adapter distributions.
 
 ## Components
 
-- `torch__init__.py` is deployed as `torch/__init__.py`.
-- `stubs/` contains bundled compatibility packages such as `flash_attn`,
+- `python/jittor/compat/shim/resources/torch_init.py` is the thin deployed
+  `torch/__init__.py` entry point.
+- `resources/stubs/` contains bundled compatibility packages such as `flash_attn`,
   `torchvision`, `torchaudio`, and `torchdata`.
 - `cpp_extension/` provides the Jittor-backed `torch.utils.cpp_extension`
   surface used to build source extensions.
-- `bootstrap.py` configures an isolated runtime, deploys the shim, discovers
-  native extension roots, and loads registered optional adapters.
+- `runtime.py` implements isolated runtime setup and native extension discovery;
+  `bootstrap.py` is its stable, small public facade.
 - `deploy.py` installs the complete shim tree into a target site-packages
   directory.
 
@@ -21,12 +22,15 @@ The canonical torch-compatible API lives in `jittor.compat.torch`. The shim
 exports that API under the `torch` module name and wires the submodule paths
 expected by third-party libraries.
 
+`jittor.torch_shim` remains an import-compatible alias of
+`jittor.compat.shim`; both names resolve to the same module objects.
+
 ## Bootstrap
 
 Applications that need a project-local runtime can enable it explicitly:
 
 ```python
-from jittor.torch_shim import enable
+from jittor.compat.shim import enable
 
 enable(project_root=__file__)
 import torch
@@ -73,9 +77,9 @@ project-specific import finders.
 Deploy the complete shim with the maintained helper:
 
 ```bash
-python -m jittor.torch_shim.deploy --target /path/to/site-packages
+jittor-torch-shim --target /path/to/site-packages
 ```
 
 The target contains the torch package, bundled stubs, and distribution metadata.
-Do not copy only `torch__init__.py`; the nested stub modules and interfaces are
+Do not copy only `resources/torch_init.py`; the nested stub modules and interfaces are
 part of the runtime contract.

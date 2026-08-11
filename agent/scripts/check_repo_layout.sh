@@ -57,9 +57,7 @@ for forbidden_path in \
   "$REPO_ROOT/python/jittor/_torch_compat" \
   "$REPO_ROOT/python/jittor/test" \
   "$REPO_ROOT/python/jittor/monkeypatch_ops.py" \
-  "$REPO_ROOT/python/jittor/torch_shim/trellis_runtime.py" \
-  "$REPO_ROOT/python/jittor/torch_shim/gaussian_splatting_runtime.py" \
-  "$REPO_ROOT/python/jittor/torch_shim/scripts" \
+  "$REPO_ROOT/python/jittor/torch_shim" \
   "$REPO_ROOT/python/jittor/script" \
   "$REPO_ROOT/python/jittor/demo" \
   "$REPO_ROOT/python/jittor/notebook" \

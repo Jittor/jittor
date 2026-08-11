@@ -76,6 +76,7 @@ Three ways, increasing in transparency:
 
 3. Persistent, no jittor import required first (via the canonical deploy CLI)::
 
+       jittor-triton-shim
        python -m jittor.compat.triton.deploy        # writes triton/ into site-packages
        python -m jittor.compat.triton.deploy --check
 

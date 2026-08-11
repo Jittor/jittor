@@ -11,13 +11,13 @@ import torch.nn as nn
 ```
 
 The torch-style API lives in `jittor/torch_compat.py` (installed onto the jittor
-module at import); `jittor/torch_shim/` re-exports it as the `torch` package so
+module at import); `jittor/compat/shim/` re-exports it as the `torch` package so
 third-party libraries' internal `import torch` works too. Deploy that shim into the
 active environment (so `import torch` / `torchvision` resolve to jittor) with:
 
 ```bash
-python -m jittor.torch_shim.deploy           # install into the active env's site-packages
-python -m jittor.torch_shim.deploy --check   # verify
+jittor-torch-shim           # install into the active env's site-packages
+jittor-torch-shim --check   # verify
 ```
 
 ## Quickstart

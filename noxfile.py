@@ -52,7 +52,7 @@ RATCHET_FILES = (
     "agent/scripts/check_wheel_contents.py",
     "python/jittor/selftest.py",
     "python/jittor_utils/cuda_wheel.py",
-    "python/jittor/torch_shim/deploy.py",
+    "python/jittor/compat/shim/deploy.py",
     "tools/release/pack_offline.py",
     "tests/integration/test_notebooks.py",
     "tests/structure/test_cleanup_structure.py",
@@ -68,6 +68,7 @@ FORMAT_FILES = (
     "tests/integration/test_notebooks.py",
     "tests/structure/test_cleanup_structure.py",
     "tests/structure/test_packaging_structure.py",
+    "tests/structure/test_torch_shim_structure.py",
     "tests/structure/test_pytest_contract.py",
     "tests/structure/test_selftest_structure.py",
 )
@@ -79,6 +80,7 @@ FILESYSTEM_TESTS = (
     "tests/structure/test_pytest_contract.py",
     "tests/structure/test_selftest_structure.py",
     "tests/structure/test_torch_shim_deploy.py",
+    "tests/structure/test_torch_shim_structure.py",
     "tests/structure/test_cuda_wheel.py",
 )
 CPU_TESTS = (

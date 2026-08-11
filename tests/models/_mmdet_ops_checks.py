@@ -1,6 +1,6 @@
 """Regression coverage for the torch operator surface used by mmdetection 3.3.0.
 
-`import torch` IS the jittor torch-shim here (see jittor/torch_shim), so this runs
+`import torch` is the Jittor Torch shim here, so this runs
 exactly the way mmdet's own modules would. It checks two things:
 
   1. EXISTENCE  -- every torch.* / F.* / nn.* / Tensor-method symbol that
@@ -20,7 +20,7 @@ Run:  PYTHONPATH=python python tests/models/_mmdet_ops_checks.py
 import importlib
 import numpy as np
 
-from jittor.torch_shim import enable as enable_torch_shim
+from jittor.compat.shim import enable as enable_torch_shim
 
 
 enable_torch_shim(

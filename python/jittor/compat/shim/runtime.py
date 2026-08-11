@@ -49,7 +49,7 @@ class NativeExtension:
 
 def _log(verbose: bool, message: str) -> None:
     if verbose:
-        print("[jittor.torch_shim] " + message)
+        print("[jittor.compat.shim] " + message)
 
 
 def _is_truthy(value: Optional[str]) -> bool:
@@ -96,8 +96,8 @@ def _default_runtime_root(project_dir: pathlib.Path) -> pathlib.Path:
 
 
 def _jittor_python_root() -> pathlib.Path:
-    # .../python/jittor/torch_shim/bootstrap.py -> .../python
-    return pathlib.Path(__file__).resolve().parents[2]
+    # .../python/jittor/compat/shim/runtime.py -> .../python
+    return pathlib.Path(__file__).resolve().parents[3]
 
 
 def _prepend_sys_path(path: Union[str, os.PathLike], after: Optional[Union[str, os.PathLike]] = None) -> None:
@@ -519,13 +519,9 @@ def _configure_runtime_driver_lib(runtime: pathlib.Path) -> None:
 
 
 def _deploy_torch_shim(target: pathlib.Path) -> None:
-    deploy_py = _jittor_python_root() / "jittor" / "torch_shim" / "deploy.py"
-    spec = importlib.util.spec_from_file_location("_jittor_torch_deploy", os.fspath(deploy_py))
-    if spec is None or spec.loader is None:
-        raise RuntimeError("cannot load torch shim deploy module from %s" % deploy_py)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    module.deploy(os.fspath(target))
+    from jittor.compat.shim import deploy
+
+    deploy.deploy(os.fspath(target))
 
 
 def _write_build_sitecustomize(target: pathlib.Path) -> None:
@@ -772,7 +768,7 @@ def _needs_build(ext: NativeExtension, env: Optional[dict] = None) -> bool:
     ]
     inputs = _extension_inputs(ext)
     try:
-        from jittor.torch_shim import cpp_extension as _cpp_ext
+        from jittor.compat.shim import cpp_extension as _cpp_ext
     except Exception:
         return True
     if _cached_setuptools_outputs_current(ext, inputs, _cpp_ext, env):
@@ -842,7 +838,7 @@ def build_extension_dirs(
                 raise
             _log(verbose, "build_ext timed out after usable outputs were produced: %s" % ext.root)
         try:
-            from jittor.torch_shim import cpp_extension as _cpp_ext
+            from jittor.compat.shim import cpp_extension as _cpp_ext
             for path in _extension_outputs(ext.root):
                 if os.path.sep + "build" + os.path.sep not in path:
                     _cpp_ext.write_toolchain_stamp(path, {"root": ext.root})
@@ -874,7 +870,7 @@ def enable(
 
     Typical use in a torch-oriented project entrypoint::
 
-        from jittor.torch_shim import enable as _enable_torch_shim
+        from jittor.compat.shim import enable as _enable_torch_shim
         _enable_torch_shim(project_root=__file__)
         import torch
 
@@ -959,7 +955,7 @@ def enable(
         pass
     sys.modules["torch"] = jt
     try:
-        from jittor.torch_shim.cpp_extension.torch_utils import install_cpp_extension
+        from jittor.compat.shim.cpp_extension.torch_utils import install_cpp_extension
         install_cpp_extension(getattr(jt, "utils", None))
     except Exception:
         if strict_bootstrap:

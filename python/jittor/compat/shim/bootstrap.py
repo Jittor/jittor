@@ -1,6 +1,6 @@
-"""Torch-compatibility helpers for running PyTorch-oriented code on Jittor."""
+"""Stable public bootstrap surface backed by :mod:`.runtime`."""
 
-from .bootstrap import (
+from .runtime import (
     NativeExtension,
     build_extension_dirs,
     enable,

@@ -75,8 +75,8 @@ changed and independently validated:
   ACL filename dispatch conventions;
 - `python/jittor/utils/{asm_tuner.py,dlink_compiler.py,dumpdef.py,data.gz}`;
 - `python/jittor/math_util/src/*.h`;
-- `python/jittor/torch_shim/cpp_extension/{include,src}/**` until the compat
-  package migration updates every build consumer in one change;
+- `python/jittor/compat/shim/cpp_extension/{include,src}/**` as the canonical
+  installed ABI resource boundary for extension builds;
 - `python/jittor/other/code_softmax.py` while the CUDA fast path loads it by
   filesystem location;
 - `python/jittor_utils` as a sibling of `python/jittor`;

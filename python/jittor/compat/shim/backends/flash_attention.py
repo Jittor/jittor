@@ -1472,7 +1472,7 @@ def _load_official_packed_flash_attention(root: pathlib.Path, low_level: ModuleT
     module_name = "flash_attn_2_cuda_jittor_packed"
     _log("compile official flash-attn packed direct backend from %s" % root)
     try:
-        from jittor.torch_shim.cpp_extension.torch_utils import load
+        from jittor.compat.shim.cpp_extension.torch_utils import load
 
         return load(
             name=module_name,
@@ -1508,7 +1508,7 @@ def _load_official_flash_attention(root: pathlib.Path) -> Optional[ModuleType]:
     module_name = "flash_attn_2_cuda_jittor"
     _log("compile official flash-attn forward backend from %s" % root)
     try:
-        from jittor.torch_shim.cpp_extension.torch_utils import load
+        from jittor.compat.shim.cpp_extension.torch_utils import load
 
         low = load(
             name=module_name,
@@ -1544,7 +1544,9 @@ def _setup_child_env(root: pathlib.Path) -> dict:
     if runtime:
         paths.append(os.path.join(runtime, "site-packages"))
     try:
-        jittor_python = pathlib.Path(__file__).resolve().parents[2]
+        import jittor as jt
+
+        jittor_python = pathlib.Path(jt.__file__).resolve().parents[1]
         paths.append(os.fspath(jittor_python))
     except Exception:
         pass
@@ -1561,7 +1563,7 @@ def _build_setup_backend(root: pathlib.Path) -> bool:
     if not (root / "setup.py").is_file():
         return False
     try:
-        from jittor.torch_shim import bootstrap
+        from jittor.compat.shim import bootstrap
 
         built = bootstrap.build_extension_dirs(
             [os.fspath(root)],

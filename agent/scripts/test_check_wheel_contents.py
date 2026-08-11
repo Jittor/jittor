@@ -26,10 +26,10 @@ class TestWheelContents(unittest.TestCase):
         self.addCleanup(temporary_directory.cleanup)
         self.root = Path(temporary_directory.name)
         self.base_members = {
-            checker.REQUIRED_MEMBERS[0]: b"unpack raw\n",
-            checker.REQUIRED_MEMBERS[1]: b"flash attention\n",
-            "jittor/base.py": b"BASE = 1\n",
+            member: ("required %d\n" % index).encode("ascii")
+            for index, member in enumerate(checker.REQUIRED_MEMBERS)
         }
+        self.base_members["jittor/base.py"] = b"BASE = 1\n"
 
     @staticmethod
     def _digest(content):

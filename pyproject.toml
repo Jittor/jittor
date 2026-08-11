@@ -36,6 +36,7 @@ Homepage = "http://jittor.org"
 
 [project.scripts]
 jittor-triton-shim = "jittor.compat.triton.deploy:main"
+jittor-torch-shim = "jittor.compat.shim.deploy:main"
 
 [tool.setuptools]
 package-dir = { "" = "python" }
@@ -72,7 +73,7 @@ files = [
     "noxfile.py",
     "agent/scripts/check_wheel_contents.py",
     "python/jittor_utils/cuda_wheel.py",
-    "python/jittor/torch_shim/deploy.py",
+    "python/jittor/compat/shim/deploy.py",
     "tools/release/pack_offline.py",
     "tests/structure/test_cleanup_structure.py",
     "tests/structure/test_pytest_contract.py",

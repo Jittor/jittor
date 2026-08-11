@@ -2,8 +2,8 @@
 
 This module is shared by both entry points:
 
-* deployed ``import torch`` via ``jittor/torch_shim/torch__init__.py``
-* bare ``import jittor as torch`` via ``jittor/torch_compat.py``
+* deployed ``import torch`` via ``jittor/compat/shim/resources/torch_init.py``
+* bare ``import jittor as torch`` via ``jittor.compat.torch``
 
 Keeping the facade here avoids two subtly different BuildExtension/load
 implementations for PyTorch-style CUDA extensions such as 3DGS' rasterizer.
@@ -17,7 +17,7 @@ import hashlib
 
 
 def _jt_cpp_build_cfg():
-    from jittor.torch_shim import cpp_extension as _b
+    from jittor.compat.shim import cpp_extension as _b
     return _b.cfg()
 
 
@@ -100,7 +100,7 @@ def _make_build_extension():
             return cls
 
         def build_extension(self, ext):
-            from jittor.torch_shim import cpp_extension as _b
+            from jittor.compat.shim import cpp_extension as _b
             eca = getattr(ext, "extra_compile_args", {}) or {}
             if isinstance(eca, dict):
                 extra_cflags = eca.get("cxx")
@@ -188,7 +188,7 @@ def load(name, sources, extra_include_paths=None, extra_cflags=None,
     alter the build name, output filename, or compiled initialization symbol.
     """
     import_name = _extension_import_name(name, import_identity)
-    from jittor.torch_shim import cpp_extension as _b
+    from jittor.compat.shim import cpp_extension as _b
     if isinstance(sources, str):
         sources = [sources]
     build_directory = build_directory or _default_build_root("load", name)
@@ -259,7 +259,7 @@ def load_inline(name, cpp_sources=None, cuda_sources=None, functions=None,
 
 
 def include_paths(cuda=False):
-    from jittor.torch_shim import cpp_extension as _b
+    from jittor.compat.shim import cpp_extension as _b
     c = _b.cfg()
     inc = [_b.SHIM_INCLUDE, c["src_inc"], c["extern_inc"], c["extern_cuda_inc"],
            c["py_inc"]]
@@ -272,7 +272,7 @@ def include_paths(cuda=False):
 
 
 def library_paths(cuda=False):
-    from jittor.torch_shim import cpp_extension as _b
+    from jittor.compat.shim import cpp_extension as _b
     c = _b.cfg()
     libs = list(c["core_dirs"])
     if cuda:

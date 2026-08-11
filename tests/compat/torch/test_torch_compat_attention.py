@@ -160,7 +160,7 @@ class TestSDPA(Base):
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     def test_required_flash_backend_returning_none_raises(self):
-        from jittor.torch_shim import flashattn_jittor
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
         q = jt.ones((1, 2, 4, 32), dtype="float16")
         backend = ModuleType("required_flash_backend")
@@ -174,7 +174,7 @@ class TestSDPA(Base):
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     def test_native_flash_receives_compact_gqa_kv_heads(self):
-        from jittor.torch_shim import flashattn_jittor
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
         backend = ModuleType("gqa_flash_backend")
         seen = {}
@@ -206,7 +206,7 @@ class TestSDPA(Base):
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     def test_native_flash_rejects_head_mismatch_without_gqa(self):
-        from jittor.torch_shim import flashattn_jittor
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
         backend = ModuleType("unexpected_gqa_backend")
         backend.flash_attn_func = mock.Mock()
@@ -224,7 +224,7 @@ class TestSDPA(Base):
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     def test_static_inference_reuses_capability_checked_backend(self):
-        from jittor.torch_shim import flashattn_jittor
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
         backend = ModuleType("cached_flash_backend")
         replacement = ModuleType("replacement_flash_backend")
@@ -278,7 +278,7 @@ class TestSDPA(Base):
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     def test_static_inference_does_not_cache_backend_across_env_race(self):
-        from jittor.torch_shim import flashattn_jittor
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
         stale = ModuleType("stale_flash_backend")
         current = ModuleType("current_flash_backend")
@@ -317,7 +317,7 @@ class TestSDPA(Base):
             cache.clear()
 
     def test_flash_backend_environment_epoch_tracks_watched_mutations(self):
-        from jittor.torch_shim import flashattn_jittor
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
         epoch = flashattn_jittor.backend_environment_epoch()
         if epoch is None:
@@ -359,7 +359,7 @@ class TestSDPA(Base):
             self.assertGreater(after_bytes, after_delete)
 
     def test_flash_backend_environment_epoch_hook_is_idempotent(self):
-        from jittor.torch_shim import flashattn_jittor
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
         state = flashattn_jittor._BACKEND_ENV_EPOCH_STATE
         if state is None:
@@ -382,7 +382,7 @@ class TestSDPA(Base):
         self.assertEqual(after, before + 1)
 
     def test_flash_backend_environment_epoch_survives_module_reload(self):
-        from jittor.torch_shim import flashattn_jittor
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
         script = r'''
 import os
@@ -414,7 +414,7 @@ assert after == before + 1, (before, after)
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_flash_backend_environment_epoch_detects_silent_hook_rejection(self):
-        from jittor.torch_shim import flashattn_jittor
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
         attr = flashattn_jittor._BACKEND_ENV_EPOCH_STATE_ATTR
         original = getattr(sys, attr)
@@ -432,7 +432,7 @@ assert after == before + 1, (before, after)
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     def test_static_inference_cache_disables_without_environment_epoch(self):
-        from jittor.torch_shim import flashattn_jittor
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
         backend = ModuleType("uncached_flash_backend")
         backend.flash_attn_func = lambda q, k, v, *args, **kwargs: jt.zeros(
@@ -463,7 +463,7 @@ assert after == before + 1, (before, after)
             cache.clear()
 
     def test_flash_backend_reloads_for_expanded_capability(self):
-        from jittor.torch_shim import flashattn_jittor
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
         first = ModuleType("first_flash_backend")
         first._flashattn_jittor_official = True
@@ -490,7 +490,7 @@ assert after == before + 1, (before, after)
         self.assertEqual(loader.call_args_list, [mock.call(), mock.call(force=True)])
 
     def test_flash_success_cache_invalidates_on_build_environment_change(self):
-        from jittor.torch_shim import flashattn_jittor
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
         old = ModuleType("cached_flash_backend")
         replacement = ModuleType("replacement_flash_backend")
@@ -534,7 +534,7 @@ assert after == before + 1, (before, after)
         ])
 
     def test_flash_backend_does_not_publish_across_build_environment_race(self):
-        from jittor.torch_shim import flashattn_jittor
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
         backend = ModuleType("raced_flash_backend")
 
@@ -567,7 +567,7 @@ assert after == before + 1, (before, after)
         self.assertIsNone(config_key)
 
     def test_flash_backend_refreshes_publication_after_same_value_env_write(self):
-        from jittor.torch_shim import flashattn_jittor
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
         backend = ModuleType("stable_flash_backend")
         with mock.patch.dict(os.environ, {"JTCUDA": "/same/cuda"}, clear=False):
@@ -591,7 +591,7 @@ assert after == before + 1, (before, after)
         self.assertEqual(publication, current)
 
     def test_flash_backend_loader_exception_is_not_published(self):
-        from jittor.torch_shim import flashattn_jittor
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
         old_backend = ModuleType("old_flash_backend")
         replacement = ModuleType("replacement_flash_backend")
@@ -619,7 +619,7 @@ assert after == before + 1, (before, after)
                 flashattn_jittor.backend_publication_token(replacement))
 
     def test_flash_backend_disabled_race_does_not_cache_enabled_miss(self):
-        from jittor.torch_shim import flashattn_jittor
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
         backend = ModuleType("reenabled_flash_backend")
         enabled_calls = 0
@@ -655,7 +655,7 @@ assert after == before + 1, (before, after)
         self.assertEqual(loader.call_count, 1)
 
     def test_flash_explicit_python_source_switches_module_root(self):
-        from jittor.torch_shim import flashattn_jittor
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
         module_name = "flashattn_jittor"
         old_modules = {
@@ -712,7 +712,7 @@ assert after == before + 1, (before, after)
             sys.path[:] = old_path
 
     def test_flash_backend_load_is_single_flight(self):
-        from jittor.torch_shim import flashattn_jittor
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
         backend = ModuleType("single_flight_backend")
         backend.flash_attn_func = lambda *args, **kwargs: "ok"
@@ -773,7 +773,7 @@ assert after == before + 1, (before, after)
         self.assertTrue(all(item is backend for item in results))
 
     def test_flash_capability_expansion_is_one_locked_transaction(self):
-        from jittor.torch_shim import flashattn_jittor
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
         entered = threading.Event()
         release = threading.Event()
@@ -851,7 +851,8 @@ assert after == before + 1, (before, after)
 
         expected = (
             pathlib.Path(jt.__file__).resolve().parent
-            / "torch_shim" / "stubs" / "flash_attn" / "__init__.py"
+            / "compat" / "shim" / "resources" / "stubs"
+            / "flash_attn" / "__init__.py"
         )
         self.assertEqual(pathlib.Path(flash_attn.__file__).resolve(), expected)
 
@@ -1039,7 +1040,7 @@ assert after == before + 1, (before, after)
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     def test_flash_attn_packed_split_cuda(self):
-        from jittor.torch_shim import flashattn_jittor
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
         old = os.environ.get("JITTOR_FLASH_ATTN_FUSED_PACKED_SPLIT")
         os.environ["JITTOR_FLASH_ATTN_FUSED_PACKED_SPLIT"] = "1"

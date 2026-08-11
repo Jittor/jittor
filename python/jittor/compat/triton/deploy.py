@@ -7,7 +7,8 @@ package into site-packages whose body simply re-exports
 ``import jittor`` runs (e.g. when a library does ``import triton`` at the very
 top of its module).
 
-    python -m jittor.compat.triton.deploy            # deploy into the active env
+    jittor-triton-shim                                # deploy into the active env
+    python -m jittor.compat.triton.deploy             # equivalent module form
     python -m jittor.compat.triton.deploy --check    # verify what's deployed
     python -m jittor.compat.triton.deploy --target /path/to/site-packages
     python -m jittor.compat.triton.deploy --remove   # uninstall the shim

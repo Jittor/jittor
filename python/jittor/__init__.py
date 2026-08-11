@@ -83,7 +83,8 @@ def _jt_torch_entry_runtime_root():
     except OSError:
         _head = ""
     if (
-        "jittor.torch_shim" in _head
+        "jittor.compat.shim" in _head
+        or "jittor.torch_shim" in _head
         or "torch_shim" in _head
         or "import jittor as torch" in _head
     ):
@@ -914,7 +915,7 @@ def _install_torch_shim_runtime(enable=True):
 
     result = None
     try:
-        from jittor.torch_shim import bootstrap as _jt_torch_bootstrap
+        from jittor.compat.shim import bootstrap as _jt_torch_bootstrap
         result = _jt_torch_bootstrap.enable(
             project_root=_project_root,
             runtime_root=_runtime_root,
@@ -2924,6 +2925,19 @@ if compile_extern.nccl_ops is not None and not hasattr(core.Var, "mpi_all_reduce
         return _nops.nccl_broadcast(self, root)
     core.Var.mpi_all_reduce = _nccl_all_reduce
     core.Var.mpi_broadcast = _nccl_broadcast
+
+
+# Torch shim aliases are installed before the API domain so historical imports
+# resolve to the canonical modules without executing a compatibility file twice.
+try:
+    from .compat import shim as _torch_shim_domain
+    _sys.modules[__name__ + ".torch_shim"] = _torch_shim_domain
+    torch_shim = _torch_shim_domain
+except Exception as _e:
+    if _jt_torch_truthy(_os.environ.get("JITTOR_TORCH_STRICT_BOOTSTRAP")):
+        raise
+    from .compiler import LOG as _LOG
+    _LOG.w(f"torch shim aliases not fully installed: {_e}")
 
 
 # torch-compatibility layer: lets `import jittor as torch` run PyTorch code.

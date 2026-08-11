@@ -17,7 +17,8 @@ _MODULE_PATH = (
     Path(__file__).resolve().parents[2]
     / "python"
     / "jittor"
-    / "torch_shim"
+    / "compat"
+    / "shim"
     / "deploy.py"
 )
 deploy_module = None
@@ -42,7 +43,7 @@ class TestTorchShimDeploy(unittest.TestCase):
 
     def test_deploys_every_stub_python_file_recursively(self):
         target = self._deployed_target()
-        stub_root = Path(deploy_module._HERE) / "stubs"
+        stub_root = Path(deploy_module._RESOURCES) / "stubs"
         expected = sorted(
             path.relative_to(stub_root)
             for path in stub_root.rglob("*.py")
@@ -74,7 +75,7 @@ class TestTorchShimDeploy(unittest.TestCase):
         target = base / "target"
         (source / "stubs" / "example" / "nested").mkdir(parents=True)
         (source / "torch_dist_info").mkdir()
-        (source / "torch__init__.py").write_text("shim = True\n", encoding="utf-8")
+        (source / "torch_init.py").write_text("shim = True\n", encoding="utf-8")
         (source / "torch_dist_info" / "METADATA").write_text(
             "Name: torch\nVersion: 9.9.0\n", encoding="utf-8"
         )
@@ -90,7 +91,7 @@ class TestTorchShimDeploy(unittest.TestCase):
             "not Python\n", encoding="utf-8"
         )
 
-        with mock.patch.object(deploy_module, "_HERE", str(source)):
+        with mock.patch.object(deploy_module, "_RESOURCES", str(source)):
             deploy_module.deploy(target)
             planned = {
                 Path(destination).relative_to(target.resolve())
@@ -126,6 +127,22 @@ class TestTorchShimDeploy(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn("modified: flash_attn/flash_attn_interface.py", output.getvalue())
         self.assertIn("missing: torchaudio/__init__.py", output.getvalue())
+
+    def test_repeated_deploy_is_byte_identical(self):
+        target = self._deployed_target()
+        first = {
+            Path(destination).relative_to(target.resolve()): Path(destination).read_bytes()
+            for _source, destination in deploy_module._plan(target)
+        }
+
+        deploy_module.deploy(target)
+
+        second = {
+            Path(destination).relative_to(target.resolve()): Path(destination).read_bytes()
+            for _source, destination in deploy_module._plan(target)
+        }
+        self.assertEqual(second, first)
+        self.assertEqual(deploy_module.check_details(target)[1], [])
 
     @unittest.skipUnless(hasattr(os, "symlink"), "symlinks are unavailable")
     def test_deploy_rejects_symlinked_managed_package(self):
@@ -166,9 +183,9 @@ class TestTorchShimDeploy(unittest.TestCase):
         self.addCleanup(temporary_directory.cleanup)
         source = Path(temporary_directory.name) / "source"
         source.mkdir()
-        (source / "torch__init__.py").write_text("shim = True\n", encoding="utf-8")
+        (source / "torch_init.py").write_text("shim = True\n", encoding="utf-8")
 
-        with mock.patch.object(deploy_module, "_HERE", str(source)):
+        with mock.patch.object(deploy_module, "_RESOURCES", str(source)):
             with self.assertRaisesRegex(RuntimeError, "stubs directory"):
                 deploy_module._plan(source / "target")
 
@@ -188,12 +205,12 @@ class TestTorchShimDeploy(unittest.TestCase):
         complete.mkdir(parents=True)
         incomplete.mkdir()
         metadata.parent.mkdir()
-        (source / "torch__init__.py").write_text("shim = True\n", encoding="utf-8")
+        (source / "torch_init.py").write_text("shim = True\n", encoding="utf-8")
         (complete / "__init__.py").write_text("stub = True\n", encoding="utf-8")
         (incomplete / "api.py").write_text("stub = False\n", encoding="utf-8")
         metadata.write_text("Name: torch\nVersion: 9.9.0\n", encoding="utf-8")
 
-        with mock.patch.object(deploy_module, "_HERE", str(source)):
+        with mock.patch.object(deploy_module, "_RESOURCES", str(source)):
             with self.assertRaisesRegex(RuntimeError, r"missing __init__\.py"):
                 deploy_module._plan(source / "target")
 
@@ -207,12 +224,12 @@ class TestTorchShimDeploy(unittest.TestCase):
         package.mkdir(parents=True)
         bytecode_cache.mkdir()
         metadata.parent.mkdir()
-        (source / "torch__init__.py").write_text("shim = True\n", encoding="utf-8")
+        (source / "torch_init.py").write_text("shim = True\n", encoding="utf-8")
         (package / "__init__.py").write_text("stub = True\n", encoding="utf-8")
         (bytecode_cache / "__init__.cpython-311.pyc").write_bytes(b"bytecode")
         metadata.write_text("Name: torch\nVersion: 9.9.0\n", encoding="utf-8")
 
-        with mock.patch.object(deploy_module, "_HERE", str(source)):
+        with mock.patch.object(deploy_module, "_RESOURCES", str(source)):
             planned = deploy_module._plan(source / "target")
 
         destinations = [destination for _source, destination in planned]
@@ -227,12 +244,12 @@ class TestTorchShimDeploy(unittest.TestCase):
         metadata = source / "torch_dist_info" / "METADATA"
         package.mkdir(parents=True)
         metadata.parent.mkdir()
-        (source / "torch__init__.py").write_text("shim = True\n", encoding="utf-8")
+        (source / "torch_init.py").write_text("shim = True\n", encoding="utf-8")
         package_init = package / "__init__.py"
         package_init.write_text("stub = True\n", encoding="utf-8")
         metadata.write_text("Name: torch\nVersion: 9.9.0\n", encoding="utf-8")
 
-        with mock.patch.object(deploy_module, "_HERE", str(source)):
+        with mock.patch.object(deploy_module, "_RESOURCES", str(source)):
             _checked_target, problems = deploy_module.check_details(source / "stubs")
             problem_map = {Path(path): kind for kind, path in problems}
             self.assertEqual(problem_map[package_init], "unsafe")

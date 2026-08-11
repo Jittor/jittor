@@ -85,10 +85,8 @@ class TestLinalg(Base):
     def test_svd_values_and_recon(self):
         A = np.random.RandomState(5).randn(5, 3).astype("float32")
         def body(dev):
-            # jittor-native svd is the REDUCED form (== torch full_matrices=False) and
-            # returns (U, S, Vh). NOTE torch_compat gap: the `full_matrices=` kwarg + a
-            # named tuple + linalg.svdvals/eigvalsh exist only in the deployed torch_shim,
-            # not this `import jittor as torch` path (§4#8 shim double-path). follow-up.
+            # Jittor's canonical torch.linalg path returns the reduced (U, S, Vh)
+            # decomposition, equivalent to torch full_matrices=False.
             U, S, Vh = torch.linalg.svd(jt.array(A))
             self.ac(np.sort(S.numpy())[::-1], np.linalg.svd(A, compute_uv=False),
                     rtol=1e-3, msg=f"singular values {dev}")
@@ -97,7 +95,7 @@ class TestLinalg(Base):
         both_devices(body)
 
     def test_singular_values_via_svd(self):
-        # torch_compat path has no linalg.svdvals (torch_shim-only); native svd gives S
+        # Exercise the singular values through the shared canonical SVD path.
         A = np.random.RandomState(6).randn(4, 6).astype("float32")
         def body(dev):
             S = torch.linalg.svd(jt.array(A))[1]
@@ -106,8 +104,7 @@ class TestLinalg(Base):
         both_devices(body)
 
     def test_eigh_values(self):
-        # torch_compat has linalg.eigh (returns eigenvalues, eigenvectors) but not the
-        # eigvalsh alias (torch_shim-only); use eigh[0].
+        # eigh returns eigenvalues and eigenvectors; this test consumes the values.
         A = self.spd(4, 7)
         def body(dev):
             w = torch.linalg.eigh(jt.array(A))[0].numpy()
