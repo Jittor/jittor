@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jittor"
+dynamic = ["version"]
+description = "a Just-in-time(JIT) deep learning framework"
+readme = { file = "README.md", content-type = "text/markdown" }
+requires-python = ">=3.7"
+authors = [
+    { name = "Jittor Group", email = "ran.donglang@gmail.com" },
+]
+dependencies = [
+    "numpy<2.0",
+    "tqdm",
+    "pillow",
+    "astunparse",
+    "importlib-metadata; python_version < '3.8'",
+    "pywin32>=1.0; platform_system == 'Windows'",
+]
+
+[project.optional-dependencies]
+cuda12 = [
+    "cuda-toolkit[cublas,cudart,cufft,curand,cusparse,nvjitlink,nvrtc,nvtx]==12.2.2; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "nvidia-cudnn-cu12==8.9.7.29; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "nvidia-nccl-cu12==2.18.3; sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+
+[project.urls]
+Homepage = "http://jittor.org"
+
+[tool.setuptools]
+package-dir = { "" = "python" }
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["python"]
+namespaces = false
+
+[tool.setuptools.dynamic]
+version = { attr = "jittor.__version__" }

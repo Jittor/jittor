@@ -215,9 +215,10 @@ failure otherwise hides all later compatibility work.
   payload unless a documented installed command requires them.
 - `jittor.selftest` is the small installed smoke test used by install scripts and
   container health checks.
-- Every packaging change is checked by a path-by-path wheel baseline. Until a
-  removal is separately approved, the new wheel may add required files but may
-  not silently lose an old payload.
+- Every packaging change is checked by a member SHA-256 plus exact-path wheel
+  baseline. Additions, content changes, and removals require reviewed hashes or
+  path allowances, and every allowance must be consumed by the candidate so a
+  stale wheel cannot silently pass by reverting an approved transition.
 
 ## Test Boundary
 
@@ -273,9 +274,9 @@ be reconciled before any move is declared complete.
 Every stage must provide all applicable evidence below before it is considered
 complete:
 
-- path-by-path wheel comparison against the accepted baseline; stage 1 is
-  strictly add-only, while later intentional removals require a reviewed
-  allowlist tied to the phase that changes the distribution boundary;
+- member-hash and exact-path wheel comparison against the accepted baseline;
+  additions, content changes, and removals require exact, fully consumed
+  allowlists tied to the phase that changes the distribution boundary;
 - cold import from an isolated wheel installation;
 - no regression in the affected CPU matrix;
 - at least one real accelerator regression, with NPU evidence required before a

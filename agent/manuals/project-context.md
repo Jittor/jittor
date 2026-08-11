@@ -41,6 +41,15 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 > **分支**：所有人/agent 都在 **`2.0`**（= 原 `acl-perf-and-fixes` 推到远程；动手前 `git branch --show-current` 确认）。分叉前的所有进展/日志现在都是**公共知识**。
 
 ### ✅ 已完成并验证（在 `2.0`）
+- **仓库结构现代化阶段 1（打包、部署与 wheel 基线）**：PEP 621 已成为元数据和
+  依赖权威源，`setup.py` 仅保留兼容 shim；regular package 发现 35/35，MANIFEST
+  显式覆盖两棵 runtime tree。1,053 项旧 wheel 已逐成员绑定 SHA-256，最终转换精确为
+  6 项新增、9 项内容变化、0 项删除，direct/sdist 两份 wheel 的 1,059 个成员全等。
+  deploy 递归复制 7 项并包含 `flash_attn_interface.py`，能检测缺失/篡改/unsafe 路径，
+  且不会把 pip 生成的 `__pycache__` 误判为残缺 stub 包。wheel gate 8/8、deploy
+  Python 3.10/3.11 各 12/12、staged archive 结构 75/75、隔离 CPU/部署导入和 RTX
+  4090/JTCUDA CUDA 前反向均通过；本机无真实 Python 3.7 与 NPU 验证，全仓 3.7
+  审计另发现一处既存 einops 缺口待阶段 2 修复。详见[阶段 1 报告](../results/2026-08-11-repository-modernization-packaging.md)。
 - **仓库结构现代化阶段 0（目标架构 RFC）**：第十、十一批已由 `47e7ec75`
   提交；`docs/architecture/repository-layout.md` 已锁定目标树、JIT 资源硬约束、领域包
   形态和兼容层四层分离。旧规范中长期保留 `nn.py + _nn/` 与 `jittor.test` 公开包的

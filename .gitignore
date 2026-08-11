@@ -1,38 +1,42 @@
-my
-.refresh
+# Local editor and operating-system state.
+/.refresh
+/.vscode/
 .DS_Store
-__pycache__
-.ipynb_checkpoints/
-.vscode/
-__res/
-perf.data
-perf.data.old
 *.swp
+.ipynb_checkpoints/
+
+# Python caches, environments, coverage, and package artifacts.
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+htmlcov/
+build/
+dist/
+venv/
+.venv/
+*.whl
+
+# Generated archives, binaries, notebooks, and local profiling output.
 *.ipynb
 *.pdf
 *.zip
 *.tgz
 *.obj
-test.py
+/my
+/__res/
+/perf.data
+/perf.data.old
+/data/
 extern/mkl/mkldnn_lnx*/*
-data/
-build/
-venv/
-*.md
-!*.src.md
-!README.md
-!README.cn.md
-!CHANGELOG.md
-!AWESOME-JITTOR-LIST.md
-!AWESOME-JITTOR-LIST.cn.md
-!CONTRIBUTING.md
-!CODE_OF_CONDUCT.md
-!GOVERNANCE.md
-!AGENTS.md
-!.github/**/*.md
-python/jittor.egg-info
-dist/
-!doc/source/*
+
+# Agent deliverables are Markdown; transient state and other generated files stay
+# outside the repository or under the ignored worklog/cache paths below.
 /agent/*
 !/agent/README.md
 !/agent/manuals/
@@ -45,14 +49,16 @@ dist/
 !/agent/scripts/
 /agent/scripts/**
 !/agent/scripts/*.sh
+!/agent/scripts/*.py
+!/agent/baselines/
+!/agent/baselines/**
 !/agent/skills/
 !/agent/skills/**
 /agent/skills/**/.cache/
 /agent/skills/**/__pycache__/
 /agent/worklogs/
 
-# Large experiments and runtime state belong in ../jittor-lab.  Do not ignore
-# repository-root copies by name: if one is recreated here, git status should
-# expose the layout violation immediately.
-core
-__data__
+# Large experiments and runtime state belong in ../jittor-lab. Do not ignore
+# repository-root copies by project name: layout checks should expose them.
+/core
+/__data__/

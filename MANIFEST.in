@@ -1,5 +1,12 @@
-exclude __data__
-exclude __pycache__
-prune **/__data__/
-prune **/__pycache__
-prune *.pyc
+recursive-include python/jittor *
+recursive-include python/jittor_utils *
+
+global-exclude *.py[cod]
+global-exclude __pycache__
+global-exclude .DS_Store
+prune python/jittor/**/__pycache__
+prune python/jittor_utils/**/__pycache__
+prune python/jittor/**/.pytest_cache
+prune python/jittor_utils/**/.pytest_cache
+prune python/jittor/**/__data__
+prune python/jittor_utils/**/__data__

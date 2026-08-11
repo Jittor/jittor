@@ -356,24 +356,13 @@ class TestTorchFSDP2Structure(unittest.TestCase):
                     }
                     self.assertEqual(relative_imports, {"runtime"})
 
-    def test_setup_declares_both_packages(self):
-        setup_path = Path(fsdp.__file__).resolve().parents[3] / "setup.py"
-        if not setup_path.is_file():
-            self.skipTest("setup.py is only available in a source checkout")
-        tree = ast.parse(setup_path.read_text(encoding="utf-8"), filename=str(setup_path))
-        package_lists = [
-            keyword.value
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call)
-            and (getattr(node.func, "id", None) or getattr(node.func, "attr", None)) == "setup"
-            for keyword in node.keywords
-            if keyword.arg == "packages" and isinstance(keyword.value, ast.List)
-        ]
-        self.assertEqual(len(package_lists), 1)
-        packages = {
-            item.value for item in package_lists[0].elts
-            if isinstance(item, ast.Constant) and isinstance(item.value, str)
-        }
+    def test_package_discovery_includes_both_packages(self):
+        repo_root = Path(fsdp.__file__).resolve().parents[3]
+        if not (repo_root / "pyproject.toml").is_file():
+            self.skipTest("packaging metadata is only available in a source checkout")
+        from setuptools import find_packages
+
+        packages = find_packages(where=str(repo_root / "python"))
         self.assertIn("jittor._torch_fsdp2", packages)
         self.assertIn("jittor.torch_fsdp2_compat", packages)
 

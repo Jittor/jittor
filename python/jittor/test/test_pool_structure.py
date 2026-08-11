@@ -554,22 +554,12 @@ class TestPoolStructure(unittest.TestCase):
                     for node in imports
                 ))
 
-        setup_path = facade_path.parents[2] / "setup.py"
-        if not setup_path.exists():
+        repo_root = facade_path.parents[2]
+        if not (repo_root / "pyproject.toml").is_file():
             self.skipTest("source checkout metadata is unavailable")
-        setup_tree = ast.parse(setup_path.read_text(encoding="utf-8"))
-        package_lists = [
-            keyword.value
-            for node in ast.walk(setup_tree)
-            if isinstance(node, ast.Call)
-            for keyword in node.keywords
-            if keyword.arg == "packages" and isinstance(keyword.value, ast.List)
-        ]
-        self.assertEqual(len(package_lists), 1)
-        packages = {
-            item.value for item in package_lists[0].elts
-            if isinstance(item, ast.Constant) and isinstance(item.value, str)
-        }
+        from setuptools import find_packages
+
+        packages = find_packages(where=str(repo_root / "python"))
         self.assertIn("jittor._pool", packages)
 
 

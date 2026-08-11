@@ -273,24 +273,13 @@ class TestMiscStructure(unittest.TestCase):
                     node.level == 1 and node.module == "runtime" for node in imports
                 ))
 
-    def test_setup_declares_private_package(self):
-        setup_path = Path(misc.__file__).resolve().parents[2] / "setup.py"
-        if not setup_path.is_file():
-            self.skipTest("setup.py is only available in a source checkout")
-        tree = ast.parse(setup_path.read_text(encoding="utf-8"), filename=str(setup_path))
-        package_lists = [
-            keyword.value
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call)
-            and (getattr(node.func, "id", None) or getattr(node.func, "attr", None)) == "setup"
-            for keyword in node.keywords
-            if keyword.arg == "packages" and isinstance(keyword.value, ast.List)
-        ]
-        self.assertEqual(len(package_lists), 1)
-        packages = {
-            item.value for item in package_lists[0].elts
-            if isinstance(item, ast.Constant) and isinstance(item.value, str)
-        }
+    def test_package_discovery_includes_private_package(self):
+        repo_root = Path(misc.__file__).resolve().parents[2]
+        if not (repo_root / "pyproject.toml").is_file():
+            self.skipTest("packaging metadata is only available in a source checkout")
+        from setuptools import find_packages
+
+        packages = find_packages(where=str(repo_root / "python"))
         self.assertIn("jittor._misc", packages)
 
 

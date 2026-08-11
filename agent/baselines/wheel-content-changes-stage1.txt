@@ -1,0 +1,11 @@
+# Approved stage 1 content changes (candidate SHA-256 and exact archive path)
+# The 1.3.11.0 hash baseline supplies the reviewed pre-change content.
+ba40ce5b4271d662f61c95d39b59be76ea300ad5d9d5b1625931326921ab2d12  jittor-1.3.11.0.dist-info/METADATA
+b5c808b794fb0f2cc4dfdd0696aa2dd54a7ab7b4e327289827273642c2b3b17b  jittor-1.3.11.0.dist-info/RECORD
+2b6eb4118ce7cd7b09601406aa623c553c4476265836f0d9c16f5c061f7efcc0  jittor-1.3.11.0.dist-info/WHEEL
+c941ae08ccc3abe9dc4e945e1b47dbf6f6e016426118a899fff1f7d63fd44f7e  jittor/test/test_misc_structure.py
+de001736145125c0bf84e0136bd14b4f72357350f192ce324ecea3b2cdd2183c  jittor/test/test_nn_structure.py
+c9b855997c18b2c7264f86a9bc85eec49ec5b4637a842b1a7bb680f83b1c0d94  jittor/test/test_pool_structure.py
+50822ea892fac061acfe478f869182831caa2346b34053a0b2d3c77d8dc03e81  jittor/test/test_torch_compat_structure.py
+5ebdbfe22f8819514a317608edd28b3d3a537502c7b7f5dbd97e748121aef2ff  jittor/test/test_torch_fsdp2_structure.py
+b4b914f037d5f96be598f6a4569ff75444c040be16813e781cbece2c678b7249  jittor/torch_shim/deploy.py

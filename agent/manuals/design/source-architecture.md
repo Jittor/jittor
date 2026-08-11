@@ -97,9 +97,10 @@ registry/hook。新实现的 `__module__` 使用真实模块路径，旧 pickle 
 实际文件路径递归读取 C++ 源码、头文件和数据资源，因此第一阶段不得移动或改成
 抽象资源接口。
 
-阶段 1 用 `pyproject.toml`、`find_packages`、`MANIFEST.in` 和结构测试替换当前显式
-短清单与深度通配。结构测试必须证明每个含 `__init__.py` 的目录都进入构建清单，且
-不会把 C++ include 目录当作 namespace package。每次打包变更必须：
+阶段 1 已用 `pyproject.toml`、`find_packages`、`MANIFEST.in` 和结构测试替换显式
+短清单与深度通配。四个断裂父包补齐后，35 个含 `__init__.py` 的目录全部由 regular
+package discovery 覆盖，C++ include 目录不会被当作 namespace package。每次后续
+打包变更必须：
 
 1. 通过包发现完整性断言。
 2. 从仓库外构建 wheel。

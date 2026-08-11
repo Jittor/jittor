@@ -1,0 +1,8 @@
+# Approved stage 1 wheel additions (candidate SHA-256 and exact archive path)
+# Any path or candidate-content change requires a fresh review.
+de279a1cc6c47b8fe4c2450891bb6939de5f3527eaecfd444d0388673d8c6a5b  jittor/extern/__init__.py
+8f6158ae44975d3bb0202b31f67fee6cfe8b2954e6664f23406428330914b6fe  jittor/extern/acl/__init__.py
+cd3297180e99887f02473f39667bb2ff0617007e062652b2c2af9e42ed867b40  jittor/test/__init__.py
+053ba4e8120e10a1ef7fecff7f50f4dbba22ff85fcc9b4e444bcbe4722cb9539  jittor/test/test_packaging_structure.py
+3cc3b3f1b37b1c09f3d5d254afd8e6719e2133144d7c479d47a62521087cae16  jittor/test/test_torch_shim_deploy.py
+9d0551dbada3acf443b9478294af4acfcdf4868410f6f5d5d65c29a0a9d1f47a  jittor/torch_shim/stubs/__init__.py

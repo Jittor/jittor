@@ -11,7 +11,8 @@ while IFS= read -r name; do
     .dockerignore|.gitignore|.gitlab-ci.yml|AGENTS.md|\
     AWESOME-JITTOR-LIST.cn.md|AWESOME-JITTOR-LIST.md|\
     CODE_OF_CONDUCT.md|CONTRIBUTING.md|Dockerfile|GOVERNANCE.md|\
-    LICENSE.txt|MANIFEST.in|README.cn.md|README.md|README.src.md|setup.py)
+    LICENSE.txt|MANIFEST.in|README.cn.md|README.md|README.src.md|\
+    pyproject.toml|setup.py)
       ;;
     *)
       printf 'unexpected repository-root entry: %s\n' "$name" >&2

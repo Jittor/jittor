@@ -923,25 +923,14 @@ class TestNNStructure(unittest.TestCase):
                     350,
                 )
 
-    def test_setup_declares_private_implementation_package(self):
+    def test_package_discovery_includes_private_implementation_package(self):
         package_root = Path(activations.__file__).resolve().parent
-        setup_path = package_root.parents[2] / "setup.py"
-        if not setup_path.is_file():
-            self.skipTest("setup.py is only available in a source checkout")
+        repo_root = package_root.parents[2]
+        if not (repo_root / "pyproject.toml").is_file():
+            self.skipTest("packaging metadata is only available in a source checkout")
+        from setuptools import find_packages
 
-        tree = ast.parse(setup_path.read_text(encoding="utf-8"), filename=str(setup_path))
-        packages = None
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            function_name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
-            if function_name != "setup":
-                continue
-            for keyword in node.keywords:
-                if keyword.arg == "packages":
-                    packages = ast.literal_eval(keyword.value)
-                    break
-        self.assertIsNotNone(packages, "setup.py must declare packages explicitly")
+        packages = find_packages(where=str(repo_root / "python"))
         self.assertIn("jittor._nn", packages)
 
 
