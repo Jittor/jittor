@@ -44,9 +44,9 @@ def _patch_flexgemm_triton_autotuner(module) -> bool:
 
     def bridge_benchmark():
         try:
-            from jittor.triton_shim import backend
+            from jittor.compat.triton.backend import make_do_bench
 
-            return backend.make_do_bench()
+            return make_do_bench()
         except Exception:
             return None
 

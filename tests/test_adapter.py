@@ -32,14 +32,18 @@ class TestTrellisAdapter(unittest.TestCase):
         def register_readonly_extension_borrow(**kwargs):
             captured.update(kwargs)
 
-        readonly = ModuleType("jittor.torch_shim.readonly_extensions")
+        readonly = ModuleType("jittor.compat.shim.extensions.readonly")
         readonly.register_readonly_extension_borrow = (
             register_readonly_extension_borrow
         )
         modules = {
             "jittor": _module("jittor"),
-            "jittor.torch_shim": _module("jittor.torch_shim"),
-            "jittor.torch_shim.readonly_extensions": readonly,
+            "jittor.compat": _module("jittor.compat"),
+            "jittor.compat.shim": _module("jittor.compat.shim"),
+            "jittor.compat.shim.extensions": _module(
+                "jittor.compat.shim.extensions"
+            ),
+            "jittor.compat.shim.extensions.readonly": readonly,
         }
         with tempfile.TemporaryDirectory() as root, mock.patch.dict(
             os.environ,
@@ -165,13 +169,15 @@ class TestTrellisAdapter(unittest.TestCase):
         module = SimpleNamespace(Autotuner=Autotuner)
         self.assertTrue(patches._patch_flexgemm_triton_autotuner(module))
         self.assertFalse(patches._patch_flexgemm_triton_autotuner(module))
-        triton_shim = _module("jittor.triton_shim")
-        triton_shim.backend = SimpleNamespace(make_do_bench=lambda: "benchmark")
+        triton_backend = ModuleType("jittor.compat.triton.backend")
+        triton_backend.make_do_bench = lambda: "benchmark"
         with mock.patch.dict(
             sys.modules,
             {
                 "jittor": _module("jittor"),
-                "jittor.triton_shim": triton_shim,
+                "jittor.compat": _module("jittor.compat"),
+                "jittor.compat.triton": _module("jittor.compat.triton"),
+                "jittor.compat.triton.backend": triton_backend,
             },
             clear=False,
         ):
@@ -233,6 +239,17 @@ class TestTrellisAdapter(unittest.TestCase):
             "trl.",
         ):
             self.assertNotIn(marker, source)
+
+    def test_package_imports_only_canonical_jittor_compat_modules(self):
+        source_root = Path(__file__).resolve().parents[1] / "src" / "jittor_trellis"
+        source = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted(source_root.glob("*.py"))
+        )
+        self.assertNotIn("jittor.torch_shim", source)
+        self.assertNotIn("jittor.triton_shim", source)
+        self.assertIn("jittor.compat.shim.extensions.readonly", source)
+        self.assertIn("jittor.compat.triton.backend", source)
 
 
 if __name__ == "__main__":
