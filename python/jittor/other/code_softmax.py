@@ -1,24 +1,25 @@
 import jittor as jt
 from jittor import nn
+import numpy as np
 
 def can_softmax_v1(a, dim):
     if not jt.flags.use_cuda:
         return False
     if dim != -1 and dim != len(a.shape)-1:
         return False
-    if a.shape[len(a.shape)-1] > 10000:
+    if a.shape[-1] > 10000 and np.prod(a.shape[:-1]) < 64:
         return False
     return True
 
 def softmax_v1(a, log=False):
     assert can_softmax_v1(a, -1)
     length = a.shape[-1]
-    # tnum = 1024
-    tnum = 500 if length % 500 == 0 else 512
-    tnum = 125 if length % 125 == 0 else 128
-    # tnum = 125
-    # tnum = 1000 if length % 1000 == 0 else 1024
-    # tnum = 250
+
+    if length < 65536:
+        tnum = 250 if length % 250 == 0 else 256
+    else:
+        tnum = 125 if length % 125 == 0 else 128
+
     per_thread = (length-1) // tnum + 1
     ILP = 1
     for ilp in [8,4,2]:
@@ -38,6 +39,7 @@ def softmax_v1(a, log=False):
             self.save_vars = jt.code(x.shape, x.dtype, [x], cuda_header=f'''
 #include <{jt.compile_extern.cub_home}cub/cub.cuh>
 #include <type/fp16_compute.h>
+#include <helper_cuda.h>
 ''', cuda_src=f'''
 __global__ void kernel(in0_type* x, out0_type* y, int len) {{
     typedef cub::BlockReduce<float, {tnum}> BlockReduce;
@@ -95,7 +97,7 @@ int len = in0->shape[in0->shape.size()-1];
 int bnum = in0->numel() / len;
 cudaGetLastError();
 kernel<<<bnum, {tnum}>>>(in0_p, out0_p, len);
-CHECK(0 == cudaGetLastError());
+getLastCudaError("Failed to run CodeSoftmax forward");
 ''')
             return self.save_vars
 
@@ -104,6 +106,7 @@ CHECK(0 == cudaGetLastError());
             return jt.code(x.shape, x.dtype, [x, grad_x], cuda_header=f'''
 #include <{jt.compile_extern.cub_home}cub/cub.cuh>
 #include <type/fp16_compute.h>
+#include <helper_cuda.h>
 ''', 
                 cuda_src=f"""
 __global__ void kernel(in0_type* x, in1_type* y, out0_type* z, int len) {{
@@ -144,6 +147,6 @@ int len = in0->shape[in0->shape.size()-1];
 int bnum = in0->numel() / len;
 cudaGetLastError();
 kernel<<<bnum, {tnum}>>>(in0_p, in1_p, out0_p, len);
-CHECK(0 == cudaGetLastError());
+getLastCudaError("Failed to run CodeSoftmax backward");
 """)
     return CodeSoftmax()(a)
