@@ -456,7 +456,7 @@ def _install_optimizers(g):
                 pass
             result = _orig_zero(self)
             try:
-                from jittor import torch_fsdp2_compat as _fsdp2_zero
+                from jittor.compat import fsdp2 as _fsdp2_zero
                 if _fsdp2_zero.optimizer_has_fsdp_params(self):
                     _fsdp2_zero.refresh_visible_full_grads(self)
             except Exception:
@@ -529,7 +529,7 @@ def _install_optimizers(g):
         if not _optimizer_maybe_has_fsdp_params(opt):
             return None
         try:
-            from jittor import torch_fsdp2_compat as _fsdp2_step
+            from jittor.compat import fsdp2 as _fsdp2_step
         except Exception:
             return None
         return _fsdp2_step

@@ -2,7 +2,7 @@
 
 import enum
 
-from .runtime import jt, preserve_facade_origins
+import jittor as jt
 
 
 class StateDictType(enum.Enum):
@@ -145,7 +145,7 @@ class UnshardHandle:
         return None
 
 
-FACADE_EXPORTS = (
+_EXPORTS = (
     "StateDictType",
     "ShardingStrategy",
     "BackwardPrefetch",
@@ -169,9 +169,4 @@ FACADE_EXPORTS = (
     "NoOffloadPolicy",
     "DataParallelMeshDims",
     "UnshardHandle",
-)
-
-preserve_facade_origins(
-    (globals()[name] for name in FACADE_EXPORTS),
-    __name__,
 )

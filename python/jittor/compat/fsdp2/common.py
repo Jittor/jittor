@@ -4,7 +4,7 @@ import os
 
 import numpy as np
 
-from .runtime import facade, jt, preserve_facade_origins
+import jittor as jt
 
 
 def _prod(xs):
@@ -32,7 +32,7 @@ def _rank():
 
 
 def _in_true_distributed():
-    return facade._world_size() > 1 and (
+    return _world_size() > 1 and (
         os.environ.get("JT_NCCL_WORLD_SIZE") is not None
         or os.environ.get("OMPI_COMM_WORLD_SIZE") is not None
         or getattr(jt, "in_mpi", False)
@@ -78,7 +78,7 @@ def _slice_flat(flat, start, length):
 
 
 def _all_gather_shards(local_shard):
-    ops = facade._nccl_ops()
+    ops = _nccl_ops()
     if ops is not None and callable(getattr(ops, "nccl_all_gather", None)):
         return ops.nccl_all_gather(local_shard)
     if callable(getattr(local_shard, "mpi_all_gather", None)):
@@ -87,14 +87,14 @@ def _all_gather_shards(local_shard):
 
 
 def _reduce_scatter_padded(full_grad):
-    ops = facade._nccl_ops()
+    ops = _nccl_ops()
     if ops is not None and callable(getattr(ops, "nccl_reduce_scatter", None)):
         return ops.nccl_reduce_scatter(full_grad)
     # Correct fallback for environments with all_reduce but without native
     # reduce_scatter.  It communicates more than needed, but preserves semantics.
     reduced = full_grad.mpi_all_reduce("sum")
-    shard = int(reduced.shape[0]) // max(facade._world_size(), 1)
-    return facade._slice_flat(reduced, facade._rank() * shard, shard)
+    shard = int(reduced.shape[0]) // max(_world_size(), 1)
+    return _slice_flat(reduced, _rank() * shard, shard)
 
 
 def _param_numel(v):
@@ -113,7 +113,7 @@ def _fsdp2_flat_enabled(world_size, total_numel):
     return int(world_size) <= 2 or int(total_numel) <= 1_000_000
 
 
-FACADE_EXPORTS = (
+_EXPORTS = (
     "_prod",
     "_world_size",
     "_rank",
@@ -127,9 +127,4 @@ FACADE_EXPORTS = (
     "_reduce_scatter_padded",
     "_param_numel",
     "_fsdp2_flat_enabled",
-)
-
-preserve_facade_origins(
-    (globals()[name] for name in FACADE_EXPORTS),
-    __name__,
 )

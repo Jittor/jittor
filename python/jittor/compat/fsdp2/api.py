@@ -1,8 +1,12 @@
-"""FSDP module API implementations exposed by the compatibility facade."""
+"""FSDP module API implementations exposed by the canonical package."""
 
 import contextlib
+import types
 
-from .runtime import facade, nn, preserve_facade_origins
+import jittor as jt
+from jittor import nn
+
+from . import config, dtensor, grad_sync, optimizer, shard
 
 
 class _FSDPModuleMeta(type):
@@ -12,98 +16,98 @@ class _FSDPModuleMeta(type):
 
 class FSDPModule(metaclass=_FSDPModuleMeta):
     def unshard(self, async_op=False):
-        facade._unshard_module_params(self)
-        return facade.UnshardHandle(self) if async_op else None
+        shard._unshard_module_params(self)
+        return config.UnshardHandle(self) if async_op else None
 
     def reshard(self):
-        facade._reshard_module_params(self)
+        shard._reshard_module_params(self)
         return None
 
     def reset_iter_state(self):
-        return facade._apply_fsdp_attr(self, "iter_state_reset", True, False)
+        return shard._apply_fsdp_attr(self, "iter_state_reset", True, False)
 
     def set_reshard_after_forward(self, value, recurse=True):
-        return facade._apply_fsdp_attr(self, "reshard_after_forward", value, recurse)
+        return shard._apply_fsdp_attr(self, "reshard_after_forward", value, recurse)
 
     def set_requires_gradient_sync(self, value, recurse=True):
-        return facade._apply_fsdp_attr(self, "requires_gradient_sync", bool(value), recurse)
+        return shard._apply_fsdp_attr(self, "requires_gradient_sync", bool(value), recurse)
 
     def set_requires_all_reduce(self, value, recurse=True):
-        return facade._apply_fsdp_attr(self, "requires_all_reduce", bool(value), recurse)
+        return shard._apply_fsdp_attr(self, "requires_all_reduce", bool(value), recurse)
 
     def set_all_reduce_hook(self, hook, *, stream=None):
-        facade._apply_fsdp_attr(self, "all_reduce_hook", hook, False)
-        return facade._apply_fsdp_attr(self, "all_reduce_hook_stream", stream, False)
+        shard._apply_fsdp_attr(self, "all_reduce_hook", hook, False)
+        return shard._apply_fsdp_attr(self, "all_reduce_hook_stream", stream, False)
 
     def set_allocate_memory_from_process_group_for_comm(self, enable):
-        return facade._apply_fsdp_attr(
+        return shard._apply_fsdp_attr(
             self, "allocate_memory_from_process_group_for_comm", bool(enable), False)
 
     def set_custom_all_gather(self, comm):
-        return facade._apply_fsdp_attr(self, "custom_all_gather", comm, False)
+        return shard._apply_fsdp_attr(self, "custom_all_gather", comm, False)
 
     def set_custom_reduce_scatter(self, comm):
-        return facade._apply_fsdp_attr(self, "custom_reduce_scatter", comm, False)
+        return shard._apply_fsdp_attr(self, "custom_reduce_scatter", comm, False)
 
     def set_reduce_scatter_unused_params(self, value=True):
-        return facade._apply_fsdp_attr(
+        return shard._apply_fsdp_attr(
             self, "reduce_scatter_unused_params", bool(value), False)
 
     def set_reduce_scatter_max_input_buffers(self, value):
-        return facade._apply_fsdp_attr(
+        return shard._apply_fsdp_attr(
             self, "reduce_scatter_max_input_buffers", value, False)
 
     def set_separate_reduce_scatter_group(self, group):
-        return facade._apply_fsdp_attr(
+        return shard._apply_fsdp_attr(
             self, "separate_reduce_scatter_group", group, False)
 
     def set_is_last_backward(self, value, recurse=True):
-        return facade._apply_fsdp_attr(self, "is_last_backward", bool(value), recurse)
+        return shard._apply_fsdp_attr(self, "is_last_backward", bool(value), recurse)
 
     def set_reshard_after_backward(self, value, recurse=True):
-        return facade._apply_fsdp_attr(self, "reshard_after_backward", value, recurse)
+        return shard._apply_fsdp_attr(self, "reshard_after_backward", value, recurse)
 
     def set_unshard_in_backward(self, value, recurse=True):
-        return facade._apply_fsdp_attr(self, "unshard_in_backward", bool(value), recurse)
+        return shard._apply_fsdp_attr(self, "unshard_in_backward", bool(value), recurse)
 
     def set_modules_to_forward_prefetch(self, modules):
-        return facade._apply_fsdp_attr(
+        return shard._apply_fsdp_attr(
             self, "modules_to_forward_prefetch", list(modules or ()), False)
 
     def set_modules_to_backward_prefetch(self, modules):
-        return facade._apply_fsdp_attr(
+        return shard._apply_fsdp_attr(
             self, "modules_to_backward_prefetch", list(modules or ()), False)
 
     def set_gradient_divide_factor(self, factor, recurse=True):
-        return facade._apply_fsdp_attr(self, "gradient_divide_factor", factor, recurse)
+        return shard._apply_fsdp_attr(self, "gradient_divide_factor", factor, recurse)
 
     def set_reduce_scatter_divide_factor(self, factor, recurse=True):
-        return facade._apply_fsdp_attr(
+        return shard._apply_fsdp_attr(
             self, "reduce_scatter_divide_factor", factor, recurse)
 
     def set_force_sum_reduction_for_comms(self, value, recurse=True):
-        return facade._apply_fsdp_attr(
+        return shard._apply_fsdp_attr(
             self, "force_sum_reduction_for_comms", bool(value), recurse)
 
     def set_symm_mem_for_comm(self, backend="NCCL", recurse=True):
-        return facade._apply_fsdp_attr(self, "symm_mem_for_comm", backend, recurse)
+        return shard._apply_fsdp_attr(self, "symm_mem_for_comm", backend, recurse)
 
     def set_post_optim_event(self, event, recurse=True):
-        return facade._apply_fsdp_attr(self, "post_optim_event", event, recurse)
+        return shard._apply_fsdp_attr(self, "post_optim_event", event, recurse)
 
     def _get_fsdp_state(self):
         return getattr(self, "_fsdp_state", None)
 
     def sync_sharded_grads(self, loss, *, divide_by_world_size=True):
-        return facade.sync_sharded_grads(
+        return grad_sync.sync_sharded_grads(
             self, loss, divide_by_world_size=divide_by_world_size)
 
     def sharded_sgd_step(self, loss, lr=1e-4, *, divide_by_world_size=True):
-        return facade.sharded_sgd_step(
+        return optimizer.sharded_sgd_step(
             self, loss, lr=lr, divide_by_world_size=divide_by_world_size)
 
     def local_sharded_state_dict(self):
-        return facade.local_sharded_state_dict(self)
+        return optimizer.local_sharded_state_dict(self)
 
 
 _FSDP_METHODS = (
@@ -123,23 +127,23 @@ _FSDP_METHODS = (
 
 
 def _inject_fsdp_methods(module):
-    for name in facade._FSDP_METHODS:
+    for name in _FSDP_METHODS:
         if not callable(getattr(module, name, None)):
             object.__setattr__(
                 module,
                 name,
-                facade.types.MethodType(getattr(facade.FSDPModule, name), module),
+                types.MethodType(getattr(FSDPModule, name), module),
             )
-    if isinstance(module, facade.FSDPModule):
+    if isinstance(module, FSDPModule):
         return module
-    cache = getattr(facade.FSDPModule, "_jittor_class_cache", None)
+    cache = getattr(FSDPModule, "_jittor_class_cache", None)
     if cache is None:
-        cache = facade.FSDPModule._jittor_class_cache = {}
+        cache = FSDPModule._jittor_class_cache = {}
     cls = type(module)
     fsdp_cls = cache.get(cls)
     if fsdp_cls is None:
         try:
-            fsdp_cls = type(cls.__name__ + "FSDP2Compat", (cls, facade.FSDPModule),
+            fsdp_cls = type(cls.__name__ + "FSDP2Compat", (cls, FSDPModule),
                             {"__module__": cls.__module__})
             cache[cls] = fsdp_cls
         except Exception:
@@ -157,7 +161,7 @@ def fully_shard(module, *, mesh=None, reshard_after_forward=True,
                 ignored_params=None, dp_mesh_dims=None, **kwargs):
     if isinstance(module, (list, tuple)):
         for m in module:
-            facade.fully_shard(
+            fully_shard(
                 m, mesh=mesh, reshard_after_forward=reshard_after_forward,
                 shard_placement_fn=shard_placement_fn, mp_policy=mp_policy,
                 offload_policy=offload_policy, ignored_params=ignored_params,
@@ -167,25 +171,25 @@ def fully_shard(module, *, mesh=None, reshard_after_forward=True,
         raise TypeError("fully_shard() expects a torch.nn.Module-compatible object")
     st = getattr(module, "_fsdp_state", None)
     if st is None:
-        st = facade.types.SimpleNamespace()
+        st = types.SimpleNamespace()
         object.__setattr__(module, "_fsdp_state", st)
-    st.mesh = mesh or getattr(st, "mesh", None) or facade.DeviceMesh(
-        "cuda" if getattr(facade.jt, "has_cuda", 0) else "cpu", (1,))
+    st.mesh = mesh or getattr(st, "mesh", None) or dtensor.DeviceMesh(
+        "cuda" if getattr(jt, "has_cuda", 0) else "cpu", (1,))
     st.reshard_after_forward = reshard_after_forward
     st.shard_placement_fn = shard_placement_fn
     st.mp_policy = (
-        mp_policy if mp_policy is not None else facade.MixedPrecisionPolicy())
+        mp_policy if mp_policy is not None else config.MixedPrecisionPolicy())
     st.offload_policy = (
-        offload_policy if offload_policy is not None else facade.NoOffloadPolicy())
+        offload_policy if offload_policy is not None else config.NoOffloadPolicy())
     st.ignored_params = tuple(ignored_params or ())
     st.dp_mesh_dims = dp_mesh_dims
     st.kwargs = dict(kwargs)
     object.__setattr__(module, "_is_fsdp_module", True)
     object.__setattr__(module, "_is_fsdp_managed_module", True)
     object.__setattr__(module, "_fsdp_use_orig_params", True)
-    facade._inject_fsdp_methods(module)
-    facade._init_true_fsdp_state(module, st)
-    facade._install_true_fsdp_execute(module)
+    _inject_fsdp_methods(module)
+    shard._init_true_fsdp_state(module, st)
+    shard._install_true_fsdp_execute(module)
     return module
 
 
@@ -202,14 +206,14 @@ def register_fsdp_forward_method(module, method_name):
 def share_comm_ctx(modules=None):
     if modules is not None:
         for module in modules:
-            facade._apply_fsdp_attr(module, "share_comm_ctx", True, False)
+            shard._apply_fsdp_attr(module, "share_comm_ctx", True, False)
     yield
 
 
 class FullyShardedDataParallel(nn.Module, FSDPModule):
     def __init__(self, module, *args, **kwargs):
-        facade.nn.Module.__init__(self)
-        self.module = facade.fully_shard(module, **kwargs)
+        nn.Module.__init__(self)
+        self.module = fully_shard(module, **kwargs)
         object.__setattr__(self, "_is_fsdp_module", True)
         object.__setattr__(self, "_fsdp_state", getattr(self.module, "_fsdp_state", None))
 
@@ -267,12 +271,12 @@ class FullyShardedDataParallel(nn.Module, FSDPModule):
         state = getattr(module, "_fsdp_state", None)
         was_unsharded = bool(getattr(state, "true_fsdp_unsharded", False)) if state is not None else False
         if state is not None and getattr(state, "true_fsdp_initialized", False):
-            facade._unshard_module_params(module)
+            shard._unshard_module_params(module)
         try:
             yield module
         finally:
             if state is not None and getattr(state, "true_fsdp_initialized", False) and not was_unsharded:
-                facade._reshard_module_params(module)
+                shard._reshard_module_params(module)
 
     @staticmethod
     def optim_state_dict(module, optim, *args, **kwargs):
@@ -320,11 +324,8 @@ class ShardedGradScaler:
         self._enabled = state_dict.get("enabled", self._enabled)
 
 
-FACADE_EXPORTS = (
+_EXPORTS = (
     "_FSDPModuleMeta", "FSDPModule", "_FSDP_METHODS",
     "_inject_fsdp_methods", "fully_shard", "register_fsdp_forward_method",
     "share_comm_ctx", "FullyShardedDataParallel", "ShardedGradScaler",
-)
-preserve_facade_origins(
-    tuple(globals()[name] for name in FACADE_EXPORTS if callable(globals()[name]))
 )

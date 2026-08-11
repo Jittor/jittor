@@ -4521,7 +4521,7 @@ def _install_torchmetrics_fastpaths(g):
 
 def _install_fsdp2_distributed(dist, torch_module=None):
     """Install the single-process FSDP2/DTensor compatibility surface."""
-    from jittor import torch_fsdp2_compat as _fsdp2
+    from jittor.compat import fsdp2 as _fsdp2
     return _fsdp2.install(dist, torch_module)
 
 def _install_distributed(g):
@@ -5463,7 +5463,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         fsdp_opts = [o for o in opts if _optimizer_maybe_has_fsdp_params(o)]
         if fsdp_opts:
             try:
-                from jittor import torch_fsdp2_compat as _fsdp2_backward
+                from jittor.compat import fsdp2 as _fsdp2_backward
             except Exception:
                 _fsdp2_backward = None
         else:
