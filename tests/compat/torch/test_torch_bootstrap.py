@@ -174,7 +174,7 @@ class TestTorchBootstrap(unittest.TestCase):
                 sys.path[:] = old_sys_path
 
     def test_pythonpath_extension_roots_skip_conda_prefix(self):
-        from jittor.torch_shim.bootstrap import _pythonpath_extension_roots
+        from jittor.compat.shim.runtime import _pythonpath_extension_roots
 
         project = pathlib.Path(os.getcwd()).resolve()
         runtime = project / ".jittor_torch_runtime"

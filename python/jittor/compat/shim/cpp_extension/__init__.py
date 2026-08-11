@@ -1,5 +1,5 @@
 """
-jittor.torch_shim.cpp_extension — compile a PyTorch C++/CUDA extension against the
+jittor.compat.shim.cpp_extension — compile a PyTorch C++/CUDA extension against the
 Jittor-backed libtorch ABI shim, with ZERO dependency on real libtorch.
 
 This is the in-core relocation of the standalone ``jtorch/build.py`` driver: the

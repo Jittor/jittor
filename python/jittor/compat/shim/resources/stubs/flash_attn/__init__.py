@@ -22,7 +22,7 @@ Layouts (matching the real flash_attn API):
     - packed  kv  : [B, L, 2, H, C]
     output        : [B, L, H, Cv]
 
-Deployed by `jittor.torch_shim.deploy` like the torchvision/torchaudio stubs,
+Deployed by `jittor-torch-shim` like the torchvision/torchaudio stubs,
 and also registered into `sys.modules['flash_attn']` by the torch shim package
 body so the `PYTHONPATH=.../python` (no-deploy) dev flow works too.
 """
@@ -33,7 +33,7 @@ import torch
 import torch.nn.functional as F
 
 try:
-    from jittor.torch_shim import flashattn_jittor as _flashattn_jittor
+    from jittor.compat.shim.backends import flash_attention as _flashattn_jittor
 except Exception:  # pragma: no cover - fallback must remain import-safe
     _flashattn_jittor = None
 
@@ -64,7 +64,7 @@ def _native_function(name):
         if _native_required():
             raise RuntimeError(
                 "JITTOR_FLASH_ATTN_JITTOR_REQUIRED is set, but "
-                "jittor.torch_shim.flashattn_jittor could not be imported"
+                "jittor.compat.shim.backends.flash_attention could not be imported"
             )
         _NATIVE_FUNCTION_CACHE[name] = (None, None)
         return None
@@ -137,7 +137,7 @@ def flashattn_jittor_backend():
 
 def flashattn_jittor_last_error():
     if _flashattn_jittor is None:
-        return "jittor.torch_shim.flashattn_jittor could not be imported"
+        return "jittor.compat.shim.backends.flash_attention could not be imported"
     return _flashattn_jittor.last_error()
 
 

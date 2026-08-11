@@ -53,7 +53,7 @@ def main() -> int:
     sys.modules["torch"] = torch
     torch.flags.use_cuda = 1
     import flash_attn
-    from jittor.torch_shim import flashattn_jittor
+    from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
     shape = (4, 12, 128, 64)  # BHLD, the torch F.sdpa input layout.
     batch, heads, length, dim = shape

@@ -418,7 +418,7 @@ class ExternalBackend:
     def _load_extension(self, **kwargs) -> ModuleType:
         if self._extension_loader is not None:
             return self._extension_loader(**kwargs)
-        from jittor.torch_shim.cpp_extension.torch_utils import load
+        from jittor.compat.shim.cpp_extension.torch_utils import load
 
         return load(**kwargs)
 
@@ -510,7 +510,7 @@ class ExternalBackend:
         if self._setup_builder is not None:
             return bool(self._setup_builder(root))
         try:
-            from jittor.torch_shim import bootstrap
+            from jittor.compat.shim import bootstrap
 
             force = bool(
                 self.spec.force_build_env

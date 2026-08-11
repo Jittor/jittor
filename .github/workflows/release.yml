@@ -163,8 +163,9 @@ jobs:
                   % (expected_version, installed.version)
               )
           required = (
-              "jittor/torch_shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh",
-              "jittor/torch_shim/stubs/flash_attn/flash_attn_interface.py",
+              "jittor/compat/shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh",
+              "jittor/compat/shim/resources/stubs/flash_attn/flash_attn_interface.py",
+              "jittor/compat/shim/resources/torch_init.py",
           )
           for relative in required:
               if not installed.locate_file(relative).is_file():

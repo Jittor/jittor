@@ -75,7 +75,7 @@ Three ways, increasing in transparency:
    jittor.triton_shim``.
 
 3. Persistent, no jittor import required first (mirrors
-   ``python -m jittor.torch_shim.deploy``)::
+   ``jittor-torch-shim``)::
 
        python -m jittor.triton_shim.deploy        # writes triton/ into site-packages
        python -m jittor.triton_shim.deploy --check

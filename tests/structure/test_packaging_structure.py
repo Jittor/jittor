@@ -38,6 +38,10 @@ class TestPackagingStructure(unittest.TestCase):
         self.assertEqual(discovery["where"], ["python"])
         self.assertIs(discovery["namespaces"], False)
         self.assertTrue(config["tool"]["setuptools"]["include-package-data"])
+        self.assertEqual(
+            config["project"]["scripts"]["jittor-torch-shim"],
+            "jittor.compat.shim.deploy:main",
+        )
 
     def test_manifest_covers_runtime_trees_without_cache_payloads(self):
         manifest = (self.repo_root / "MANIFEST.in").read_text(encoding="utf-8")
@@ -65,8 +69,9 @@ class TestPackagingStructure(unittest.TestCase):
 
     def test_required_deep_runtime_resources_exist(self):
         required = (
-            "python/jittor/torch_shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh",
-            "python/jittor/torch_shim/stubs/flash_attn/flash_attn_interface.py",
+            "python/jittor/compat/shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh",
+            "python/jittor/compat/shim/resources/stubs/flash_attn/flash_attn_interface.py",
+            "python/jittor/compat/shim/resources/torch_init.py",
             "python/jittor/utils/data.gz",
             "python/jittor/other/code_softmax.py",
         )

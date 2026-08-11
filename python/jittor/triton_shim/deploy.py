@@ -1,6 +1,6 @@
 """Reproducible deployment of the jittor *triton* shim into a python env.
 
-Mirrors ``python -m jittor.torch_shim.deploy``. Installs a tiny ``triton``
+Mirrors ``jittor-torch-shim``. Installs a tiny ``triton``
 package into site-packages whose body simply re-exports
 ``jittor.triton_shim``, so that a **bare** ``import triton`` /
 ``import triton.language as tl`` resolves to the shim even before

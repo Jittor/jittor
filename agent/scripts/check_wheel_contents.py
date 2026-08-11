@@ -36,8 +36,9 @@ DEFAULT_CONTENT_CHANGE_ALLOWLIST = (
 )
 
 REQUIRED_MEMBERS = (
-    "jittor/torch_shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh",
-    "jittor/torch_shim/stubs/flash_attn/flash_attn_interface.py",
+    "jittor/compat/shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh",
+    "jittor/compat/shim/resources/stubs/flash_attn/flash_attn_interface.py",
+    "jittor/compat/shim/resources/torch_init.py",
 )
 
 FORBIDDEN_DIRECTORY_NAMES = frozenset((

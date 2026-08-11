@@ -5,16 +5,16 @@ resolve to jittor, letting torch-targeted libraries (transformers, diffusers,
 LlamaFactory, ...) run unmodified. Replaces the error-prone manual `cp` documented
 in README.md with a single command:
 
-    python -m jittor.torch_shim.deploy            # deploy into the active env
-    python -m jittor.torch_shim.deploy --check    # verify what's deployed
-    python -m jittor.torch_shim.deploy --target /path/to/site-packages
+    jittor-torch-shim                              # deploy into the active env
+    jittor-torch-shim --check                      # verify what's deployed
+    jittor-torch-shim --target /path/to/site-packages
 
 It copies:
-  - torch__init__.py            -> <site-packages>/torch/__init__.py
-  - stubs/<pkg>/**/*.py         -> <site-packages>/<pkg>/**/*.py
-  - torch_dist_info/METADATA    -> <site-packages>/torch-<ver>.dist-info/METADATA
+  - resources/torch_init.py                 -> <site-packages>/torch/__init__.py
+  - resources/stubs/<pkg>/**/*.py           -> <site-packages>/<pkg>/**/*.py
+  - resources/torch_dist_info/METADATA      -> <site-packages>/torch-<ver>.dist-info/METADATA
 
-Idempotent and safe to re-run after editing torch__init__.py.
+Idempotent and safe to re-run after editing the packaged resources.
 """
 import hashlib
 import os
@@ -23,6 +23,7 @@ import shutil
 import sysconfig
 
 _HERE = os.path.dirname(os.path.realpath(__file__))
+_RESOURCES = os.path.join(_HERE, "resources")
 
 
 def _default_site_packages():
@@ -37,7 +38,7 @@ def _default_site_packages():
 
 
 def _version():
-    meta = os.path.join(_HERE, "torch_dist_info", "METADATA")
+    meta = os.path.join(_RESOURCES, "torch_dist_info", "METADATA")
     _required_source_file(meta, "torch metadata")
     with open(meta, encoding="utf-8") as meta_file:
         for line in meta_file:
@@ -135,17 +136,17 @@ def _plan(target):
     """Return list of (src, dst) copy operations."""
     target = _normalise_target(target)
     torch_init = _required_source_file(
-        os.path.join(_HERE, "torch__init__.py"), "torch shim"
+        os.path.join(_RESOURCES, "torch_init.py"), "torch shim"
     )
     ops = [(
         torch_init,
         _destination(target, "torch", "__init__.py"),
     )]
-    stubs = os.path.join(_HERE, "stubs")
+    stubs = os.path.join(_RESOURCES, "stubs")
     for source, parts in _stub_python_files(stubs):
         ops.append((source, _destination(target, *parts)))
     meta = _required_source_file(
-        os.path.join(_HERE, "torch_dist_info", "METADATA"), "torch metadata"
+        os.path.join(_RESOURCES, "torch_dist_info", "METADATA"), "torch metadata"
     )
     version_dir = "torch-%s.dist-info" % _safe_component(_version(), "version")
     ops.append((meta, _destination(target, version_dir, "METADATA")))

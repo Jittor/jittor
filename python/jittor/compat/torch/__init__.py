@@ -1029,7 +1029,7 @@ def install(torch):
             cast_back = True
             _sdpa_flash_cast("float32_to_%s" % cast_target)
         try:
-            from jittor.torch_shim import flashattn_jittor as _fa_jittor
+            from jittor.compat.shim.backends import flash_attention as _fa_jittor
         except Exception:
             _sdpa_flash_miss("no_loader")
             return None
@@ -1245,6 +1245,7 @@ def install(torch):
     _install_lr_scheduler(g)
     _install_autograd_function(g)
     _install_autograd(g)
+    _install_deployed_module_key_parity(g)
     _install_tensordict_compat()
     _install_safetensors_shim()
     try:
@@ -1254,6 +1255,268 @@ def install(torch):
     g._torch_compat_install_complete = True
     _INSTALL_COMPLETE = True
     return g
+
+
+def _install_deployed_module_key_parity(g):
+    """Install the module keys historically created only by deployed torch."""
+    import abc
+    import sys
+    import types
+    import typing
+
+    def module(name):
+        value = sys.modules.get(name)
+        if value is None:
+            value = types.ModuleType(name)
+            sys.modules[name] = value
+        return value
+
+    autograd = g.autograd
+    function = module("torch.autograd.function")
+    function.Function = autograd.Function
+    function.FunctionCtx = getattr(function, "FunctionCtx", type("FunctionCtx", (), {}))
+    function.once_differentiable = getattr(
+        function, "once_differentiable", lambda fn: fn
+    )
+    autograd.function = function
+    autograd.once_differentiable = function.once_differentiable
+
+    graph = module("torch.autograd.graph")
+    if not hasattr(graph, "saved_tensors_hooks"):
+        class saved_tensors_hooks:
+            def __init__(self, pack_hook=None, unpack_hook=None):
+                self.pack_hook = pack_hook
+                self.unpack_hook = unpack_hook
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        class save_on_cpu(saved_tensors_hooks):
+            def __init__(self, pin_memory=False, device_type="cuda"):
+                super().__init__(None, None)
+
+        graph.saved_tensors_hooks = saved_tensors_hooks
+        graph.save_on_cpu = save_on_cpu
+        graph.Node = type("Node", (), {})
+    autograd.graph = graph
+
+    variable = module("torch.autograd.variable")
+    if not hasattr(variable, "Variable"):
+        engine = type(
+            "_Engine", (), {"queue_callback": staticmethod(lambda *args, **kwargs: None)}
+        )()
+        variable.Variable = type("Variable", (), {"_execution_engine": engine})
+    autograd.variable = variable
+
+    distributions = getattr(g, "distributions", None)
+    if distributions is not None and hasattr(distributions, "Geometric"):
+        geometric = module("torch.distributions.geometric")
+        geometric.Geometric = distributions.Geometric
+        distributions.geometric = geometric
+
+    annotations = module("torch.jit.annotations")
+    for name in ("Any", "List", "Dict", "Tuple", "Optional", "Union", "Callable"):
+        setattr(annotations, name, getattr(typing, name, object))
+
+    class _BroadcastingList:
+        def __getitem__(self, unused):
+            return typing.List
+
+    for dimensions in (1, 2, 3):
+        name = "BroadcastingList%d" % dimensions
+        if not hasattr(annotations, name):
+            setattr(annotations, name, _BroadcastingList())
+    annotations.Future = typing.Any
+    g.jit.annotations = annotations
+
+    import jittor.linalg as linalg
+    sys.modules["torch.linalg"] = linalg
+    g.linalg = linalg
+
+    nn = g.nn
+    modules = sys.modules["torch.nn.modules"]
+
+    def abc_base(name, *concrete):
+        base = abc.ABCMeta(name, (object,), {})
+        for item in concrete:
+            if isinstance(item, type):
+                base.register(item)
+        return base
+
+    conv = module("torch.nn.modules.conv")
+    conv._ConvNd = getattr(
+        conv,
+        "_ConvNd",
+        abc_base(
+            "_ConvNd",
+            getattr(nn, "Conv", None),
+            getattr(nn, "Conv1d", None),
+            getattr(nn, "Conv2d", None),
+            getattr(nn, "Conv3d", None),
+        ),
+    )
+    conv._ConvTransposeNd = getattr(
+        conv,
+        "_ConvTransposeNd",
+        abc_base(
+            "_ConvTransposeNd",
+            getattr(nn, "ConvTranspose", None),
+            getattr(nn, "ConvTranspose1d", None),
+            getattr(nn, "ConvTranspose2d", None),
+            getattr(nn, "ConvTranspose3d", None),
+        ),
+    )
+    conv._ConvTransposeMixin = conv._ConvTransposeNd
+    for name in ("Conv1d", "Conv2d", "Conv3d", "ConvTranspose1d", "ConvTranspose2d", "ConvTranspose3d"):
+        value = getattr(nn, name, None)
+        if value is not None:
+            setattr(conv, name, value)
+    modules.conv = conv
+
+    pooling = module("torch.nn.modules.pooling")
+    pooling._MaxPoolNd = getattr(
+        pooling,
+        "_MaxPoolNd",
+        abc_base(
+            "_MaxPoolNd",
+            getattr(nn, "Pool", None),
+            getattr(nn, "MaxPool1d", None),
+            getattr(nn, "MaxPool2d", None),
+            getattr(nn, "MaxPool3d", None),
+        ),
+    )
+    pooling._AvgPoolNd = getattr(
+        pooling,
+        "_AvgPoolNd",
+        abc_base(
+            "_AvgPoolNd",
+            getattr(nn, "AvgPool1d", None),
+            getattr(nn, "AvgPool2d", None),
+            getattr(nn, "AvgPool3d", None),
+        ),
+    )
+    pooling._AdaptiveAvgPoolNd = getattr(
+        pooling,
+        "_AdaptiveAvgPoolNd",
+        abc_base(
+            "_AdaptiveAvgPoolNd",
+            getattr(nn, "AdaptiveAvgPool1d", None),
+            getattr(nn, "AdaptiveAvgPool2d", None),
+            getattr(nn, "AdaptiveAvgPool3d", None),
+        ),
+    )
+    pooling._AdaptiveMaxPoolNd = getattr(
+        pooling,
+        "_AdaptiveMaxPoolNd",
+        abc_base(
+            "_AdaptiveMaxPoolNd",
+            getattr(nn, "AdaptiveMaxPool1d", None),
+            getattr(nn, "AdaptiveMaxPool2d", None),
+            getattr(nn, "AdaptiveMaxPool3d", None),
+        ),
+    )
+    modules.pooling = pooling
+
+    instancenorm = module("torch.nn.modules.instancenorm")
+    instancenorm._InstanceNorm = getattr(
+        instancenorm,
+        "_InstanceNorm",
+        abc_base(
+            "_InstanceNorm",
+            getattr(nn, "InstanceNorm", None),
+            getattr(nn, "InstanceNorm1d", None),
+            getattr(nn, "InstanceNorm2d", None),
+            getattr(nn, "InstanceNorm3d", None),
+        ),
+    )
+    modules.instancenorm = instancenorm
+
+    stateless = module("torch.nn.utils.stateless")
+    stateless.functional_call = getattr(
+        getattr(g, "func", None),
+        "functional_call",
+        lambda target, parameters, args=(), kwargs=None: target(
+            *args, **(kwargs or {})
+        ),
+    )
+    nn.utils.stateless = stateless
+
+    onnx = module("torch.onnx")
+    onnx.is_in_onnx_export = lambda: False
+
+    def onnx_export(*args, **kwargs):
+        raise NotImplementedError("ONNX export is not supported on the jittor torch shim")
+
+    onnx.export = onnx_export
+    onnx.OperatorExportTypes = getattr(
+        onnx,
+        "OperatorExportTypes",
+        type(
+            "OperatorExportTypes",
+            (),
+            {"ONNX": 0, "ONNX_ATEN": 1, "ONNX_ATEN_FALLBACK": 2},
+        ),
+    )
+    g.onnx = onnx
+
+    optim = g.optim
+    for suffix, class_name, fallback in (
+        ("sgd", "SGD", None),
+        ("adam", "Adam", None),
+        ("adamw", "AdamW", "Adam"),
+        ("rmsprop", "RMSprop", None),
+    ):
+        optim_module = module("torch.optim." + suffix)
+        value = getattr(optim, class_name, None)
+        if value is None and fallback is not None:
+            value = getattr(optim, fallback, None)
+        if value is not None:
+            setattr(optim_module, class_name, value)
+        setattr(optim, suffix, optim_module)
+
+    import jittor.sparse as sparse
+    sys.modules["torch.sparse"] = sparse
+    g.sparse = sparse
+
+    special = module("torch.special")
+    for name in ("erf", "erfc", "exp", "expm1", "log1p", "sinc"):
+        value = getattr(g, name, None)
+        if value is not None:
+            setattr(special, name, value)
+    special.expit = getattr(g, "sigmoid")
+    g.special = special
+
+    testing = module("torch.testing")
+    if not hasattr(testing, "assert_close"):
+        def assert_close(actual, expected, rtol=1e-5, atol=1e-8, **kwargs):
+            import numpy as np
+
+            actual = actual.numpy() if hasattr(actual, "numpy") else actual
+            expected = expected.numpy() if hasattr(expected, "numpy") else expected
+            np.testing.assert_allclose(actual, expected, rtol=rtol, atol=atol)
+
+        testing.assert_close = assert_close
+    g.testing = testing
+
+    model_zoo = module("torch.utils.model_zoo")
+    if not hasattr(model_zoo, "load_url"):
+        def load_url(*args, **kwargs):
+            raise NotImplementedError(
+                "torch.utils.model_zoo.load_url is not supported on the Jittor shim"
+            )
+
+        model_zoo.load_url = load_url
+    g.utils.model_zoo = model_zoo
+
+    python_dispatch = module("torch.utils._python_dispatch")
+    python_dispatch.TorchDispatchMode = getattr(
+        python_dispatch, "TorchDispatchMode", type("TorchDispatchMode", (), {})
+    )
+    python_dispatch._get_current_dispatch_mode = lambda *args, **kwargs: None
+    g.utils._python_dispatch = python_dispatch
 
 
 def _install_tensordict_compat():
@@ -4846,11 +5109,10 @@ def _install_flash_attn_shim():
     mod = _sys.modules.get("flash_attn")
     if mod is not None and getattr(mod, "_jittor_flash_attn_stub", False):
         return
-    package_root = _os.path.realpath(_os.path.join(
-        _os.path.dirname(_os.path.abspath(__file__)), "..", ".."
-    ))
+    from jittor.compat.shim import deploy as _shim_deploy
+
     src = _os.path.join(
-        package_root, "torch_shim", "stubs", "flash_attn", "__init__.py"
+        _shim_deploy._RESOURCES, "stubs", "flash_attn", "__init__.py"
     )
     if not _os.path.isfile(src):
         return
@@ -7671,7 +7933,7 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         _sys_utils.modules["torch.utils.flop_counter"] = _flop_counter
     g.utils.flop_counter = _sys_utils.modules["torch.utils.flop_counter"]
     try:
-        from jittor.torch_shim.cpp_extension.torch_utils import install_cpp_extension
+        from jittor.compat.shim.cpp_extension.torch_utils import install_cpp_extension
         install_cpp_extension(g.utils)
     except Exception:
         # Keep `import jittor as torch` usable in minimal/non-setuptools envs; an
