@@ -41,6 +41,21 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 > **分支**：所有人/agent 都在 **`2.0`**（= 原 `acl-perf-and-fixes` 推到远程；动手前 `git branch --show-current` 确认）。分叉前的所有进展/日志现在都是**公共知识**。
 
 ### ✅ 已完成并验证（在 `2.0`）
+- **源码架构重构第十、十一批与顶层全量审计**：对 `python/jittor` 顶层全部
+  Python 文件重新盘点，不再只处理实验目录。`misc.py` 的 8 个 shape transform/
+  composition 函数已拆入 `_misc`，原文件从 3,066 行降到 2,805 行；根包中 2,175 行
+  的 `torch_fsdp2_compat.py` 已删除，改为 56 行公开包 facade 与 11 文件的
+  `_torch_fsdp2` 私有实现。79 个公开名称、70 个 callable 契约、37 个 distributed
+  深层注册、shim 身份和动态 monkeypatch 均保持；136 个 facade helper/type 的运行时
+  裸引用清零，installer 只依赖 runtime。CPU 合并回归 108/108、CUDA
+  FSDP2 20/20、CUDA Torch compat 172/172。真实 2-GPU NCCL API 和 6/6 单步训练
+  对拍通过，参数最大误差 `1.86264514923e-09`。wheel 1,053 项且旧根文件不存在，
+  隔离安装 105 通过、3 项按环境/源码条件跳过。全量审计下一优先级是继续 misc、
+  拆 `torch_compat.py` installer 与根 `monkeypatch_ops.py`，再处理剩余 nn/linalg；
+  根 `__init__.py` 最后处理。能力上应先修 Torch distributed 对外状态与内部 FSDP
+  rank/world 分裂、checkpoint 静默 no-op，再为 HCCL/CPU MPI 补 all-gather 或显式
+  拒绝。通用 DTensor/TP、MixedPrecision、CPUOffload 和 ShardedGradScaler 当前主要
+  是 surface compatibility；本机未验证真实 NPU。详见[第十、十一批报告](../results/2026-08-11-source-architecture-misc-fsdp2-refactor.md)。
 - **源码架构重构第九批（legacy pooling）**：777 行 `pool.py` 已收敛为 38 行
   公开 facade，22 个定义按 2D/3D core、1D、adaptive、wrapper 和 unpool 拆入
   8 文件的 `_pool` 私有包；严格 AST 22/22 等价，27 个公开名称、反射/pickle、

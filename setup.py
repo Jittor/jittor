@@ -59,9 +59,12 @@ setuptools.setup(
 
     packages=[
         "jittor",
+        "jittor._misc",
         "jittor._nn",
         "jittor._pool",
         "jittor._torch_compat",
+        "jittor._torch_fsdp2",
+        "jittor.torch_fsdp2_compat",
         "jittor.test",
         "jittor.models",
         "jittor.utils",
