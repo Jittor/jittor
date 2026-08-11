@@ -32,6 +32,41 @@ class TestCleanupStructure(unittest.TestCase):
             with self.subTest(path=relative):
                 self.assertFalse((self.repo_root / relative).exists())
 
+    def test_documentation_has_one_root_readme_and_semantic_owners(self):
+        retired = (
+            "README.cn.md",
+            "README.src.md",
+            "agent/manuals/design",
+        )
+        required = (
+            "README.md",
+            "agent/manuals/environment.md",
+            "agent/manuals/known-issues.md",
+            "docs/architecture/complex-dtype.md",
+            "docs/architecture/source-architecture.md",
+            "docs/architecture/torch-compatibility-principles.md",
+            "docs/development/known-issues/parallel-compiler-segfault.md",
+            "docs/research/agentic-optimization.md",
+            "docs/testing/test-system.md",
+        )
+        for relative in retired:
+            with self.subTest(retired=relative):
+                self.assertFalse((self.repo_root / relative).exists())
+        for relative in required:
+            with self.subTest(required=relative):
+                self.assertTrue((self.repo_root / relative).is_file())
+
+    def test_documentation_governance_checker(self):
+        checker = self.repo_root / "agent" / "scripts" / "check_docs_governance.py"
+        result = subprocess.run(
+            [sys.executable, str(checker)],
+            cwd=str(self.repo_root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+
     def test_moved_tools_and_example_targets_exist(self):
         required = (
             "examples/gan/simple_cgan.py",

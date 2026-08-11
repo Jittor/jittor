@@ -75,8 +75,7 @@ changed and independently validated:
   ACL filename dispatch conventions;
 - `python/jittor/utils/{asm_tuner.py,dlink_compiler.py,dumpdef.py,data.gz}`;
 - `python/jittor/math_util/src/*.h`;
-- `python/jittor/torch_shim/cpp_extension/{include,src}/**` until the compat
-  package migration updates every build consumer in one change;
+- `python/jittor/compat/shim/cpp_extension/{include,src}/**`;
 - `python/jittor/other/code_softmax.py` while the CUDA fast path loads it by
   filesystem location;
 - `python/jittor_utils` as a sibling of `python/jittor`;
@@ -157,9 +156,8 @@ Stage 3 converged `nn.py + _nn/`, `misc.py + _misc/`, `pool.py + _pool/`, and
 - Backend post-processing and monkeypatch points become explicit registries or
   documented extension hooks, not accidental mutation of facade globals.
 
-The four Stage 3 facade/private-package pairs no longer exist. `_torch_fsdp2`
-is the sole remaining migration scaffold and must converge with the shim and
-installer work; no new domain may adopt this pairing.
+The Stage 3 facade/private-package pairs and the later FSDP2 migration scaffold
+no longer exist. No new domain may adopt that pairing.
 
 ## Canonical And Legacy Imports
 

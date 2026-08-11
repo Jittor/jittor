@@ -67,8 +67,6 @@ class TestSelftestStructure(unittest.TestCase):
         candidates = [
             self.repo_root / "Dockerfile",
             self.repo_root / "README.md",
-            self.repo_root / "README.cn.md",
-            self.repo_root / "README.src.md",
             self.repo_root / "CONTRIBUTING.md",
         ]
         python_root = self.repo_root / "python"
@@ -88,8 +86,6 @@ class TestSelftestStructure(unittest.TestCase):
         expected_callers = [
             self.repo_root / "Dockerfile",
             self.repo_root / "README.md",
-            self.repo_root / "README.cn.md",
-            self.repo_root / "README.src.md",
             self.repo_root / "CONTRIBUTING.md",
             self.repo_root / "tools" / "install" / "legacy" / "install.sh",
             self.repo_root / "tests" / "compiler" / "test_lock.py",
