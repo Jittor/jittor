@@ -2,6 +2,8 @@ name: CUDA
 
 on:
   push:
+  schedule:
+    - cron: "0 3 * * 0"
   workflow_dispatch:
 
 permissions:
@@ -12,13 +14,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  baseline:
+    uses: ./.github/workflows/_ci-baseline.yml
+
   cuda:
+    needs: baseline
     name: nox / cuda
-    runs-on: [self-hosted, linux, x64, jittor-ci, cuda12-2, rtx4090]
+    runs-on: ${{ fromJSON(needs.baseline.outputs.cuda_runner_labels) }}
     timeout-minutes: 180
     steps:
       - name: Verify CUDA runner capability
         shell: bash
+        env:
+          REQUIRED_CUDA_VERSION: ${{ needs.baseline.outputs.cuda_version }}
         run: |
           set -euo pipefail
           test "$(uname -s)" = "Linux"
@@ -37,12 +45,14 @@ jobs:
           fi
 
           nvcc_version="$(nvcc --version)"
-          if ! grep -Eq 'release 12\.2([,[:space:]]|$)' <<<"${nvcc_version}"; then
-            printf 'CUDA 12.2 nvcc required; detected:\n%s\n' "${nvcc_version}" >&2
+          required_pattern="${REQUIRED_CUDA_VERSION//./\\.}"
+          if ! grep -Eq "release ${required_pattern}([,[:space:]]|$)" <<<"${nvcc_version}"; then
+            printf 'CUDA %s nvcc required; detected:\n%s\n' \
+              "${REQUIRED_CUDA_VERSION}" "${nvcc_version}" >&2
             exit 1
           fi
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           persist-credentials: false
       - name: Install pinned development tools
@@ -55,3 +65,60 @@ jobs:
         run: |
           set -euo pipefail
           "${JITTOR_CI_PYTHON}" -m nox -s cuda
+
+  benchmark-cuda:
+    needs: [baseline, cuda]
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    name: nox / benchmark_cuda
+    runs-on: ${{ fromJSON(needs.baseline.outputs.cuda_runner_labels) }}
+    timeout-minutes: 240
+    env:
+      ASV_RESULTS_DIR: ${{ runner.temp }}/jittor-asv-cuda/results
+      ASV_HTML_DIR: ${{ runner.temp }}/jittor-asv-cuda/html
+      ASV_MACHINE: github-rtx4090-cuda12-2
+      ASV_COMPARE_BASE: ${{ github.event.before }}
+    steps:
+      - name: Check out source with benchmark history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install pinned benchmark dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${JITTOR_CI_PYTHON}" -m pip install \
+            -r requirements/dev-tools.txt \
+            astunparse==1.6.3 \
+            numpy==1.26.4 \
+            pillow==11.0.0 \
+            tqdm==4.67.1 \
+            transformers==4.56.2
+      - name: Restore prior CUDA ASV results
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.ASV_RESULTS_DIR }}
+          key: asv-cuda-results-${{ github.sha }}
+          restore-keys: |
+            asv-cuda-results-
+      - name: Record Tiny Llama and optimizer CUDA results
+        shell: bash
+        run: >-
+          "${JITTOR_CI_PYTHON}" -m nox -s benchmark_cuda --
+          --bench '^(tiny_llama|optimizer_step)\.'
+      - name: Save CUDA ASV results for the next commit
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.ASV_RESULTS_DIR }}
+          key: asv-cuda-results-${{ github.sha }}
+      - name: Upload CUDA ASV results and report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: asv-cuda-${{ github.sha }}
+          path: |
+            ${{ env.ASV_RESULTS_DIR }}
+            ${{ env.ASV_HTML_DIR }}
+          if-no-files-found: warn
+          retention-days: 30

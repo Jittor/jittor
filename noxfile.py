@@ -2,9 +2,12 @@
 
 from __future__ import print_function
 
+import json
+import math
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 
 import nox
@@ -65,6 +68,7 @@ RATCHET_FILES = (
     "tests/structure/test_docs_structure.py",
     "tests/structure/test_pytest_contract.py",
     "tests/structure/test_selftest_structure.py",
+    "tests/structure/test_stage2_delivery.py",
 )
 FORMAT_FILES = (
     "noxfile.py",
@@ -84,24 +88,27 @@ FORMAT_FILES = (
     "tests/structure/test_torch_shim_structure.py",
     "tests/structure/test_pytest_contract.py",
     "tests/structure/test_selftest_structure.py",
+    "tests/structure/test_stage2_delivery.py",
 )
-FILESYSTEM_TESTS = (
+STRUCTURE_TESTS = (
     "agent/scripts/test_check_sdist_contents.py",
     "agent/scripts/test_check_wheel_contents.py",
-    "tests/structure/test_cleanup_structure.py",
-    "tests/structure/test_docs_structure.py",
-    "tests/structure/test_packaging_structure.py",
-    "tests/structure/test_pytest_contract.py",
-    "tests/structure/test_selftest_structure.py",
-    "tests/structure/test_torch_shim_deploy.py",
-    "tests/structure/test_torch_shim_structure.py",
-    "tests/structure/test_cuda_wheel.py",
+    "tests/structure",
 )
 CPU_TESTS = (
     "tests/compiler/test_custom_op.py",
     "tests/compiler/test_utils.py",
     "tests/core/test_autograd_engine.py",
+    "tests/core/test_misc_shape.py",
     "tests/core/test_regression.py",
+    "tests/core/test_rootcause_semantics.py",
+    "tests/nn/test_attention.py",
+    "tests/nn/test_depthwise_conv.py",
+    "tests/nn/test_nn_capabilities.py",
+    "tests/ops/test_cumprod_op.py",
+    "tests/ops/test_reduce_op.py",
+    "tests/compat/torch/test_torch_compat_grad_management.py",
+    "tests/compat/torch/test_torch_bootstrap.py::TestTorchBootstrap::test_preflight_nvcc_flags_keep_command_separators",
     "tests/integration/test_notebooks.py",
 )
 CUDA_TESTS = (
@@ -126,7 +133,7 @@ NOX_STATE_ROOT.mkdir(parents=True, exist_ok=True)
 nox.options.envdir = str(NOX_STATE_ROOT / "envs")
 nox.options.error_on_missing_interpreters = True
 nox.options.stop_on_first_error = True
-nox.options.sessions = ["lint", "format", "typing", "structure", "py37"]
+nox.options.sessions = ["lint", "format", "typing", "structure", "packaging", "py37"]
 
 for name, path in {
     "PIP_CACHE_DIR": NOX_STATE_ROOT / "cache" / "pip",
@@ -162,6 +169,11 @@ def _session_env(session, backend):
             "cache_name": "nox_%s" % backend,
         }
     )
+    python_config = os.environ.get("python_config_path") or shutil.which(
+        "python3.%d-config" % sys.version_info[1]
+    )
+    if python_config:
+        env["python_config_path"] = python_config
     return root, env
 
 
@@ -317,6 +329,121 @@ def _run_with_cann(session, python, args, env):
     )
 
 
+def _asv_state_path(variable, fallback):
+    raw_path = os.environ.get(variable)
+    path = Path(raw_path).expanduser() if raw_path else fallback
+    path = path.resolve()
+    if path == REPO_ROOT or REPO_ROOT in path.parents:
+        raise RuntimeError("%s must point outside the source checkout: %s" % (variable, path))
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _write_asv_config(root, results_dir, html_dir):
+    config = json.loads((REPO_ROOT / "asv.conf.json").read_text(encoding="utf-8"))
+    config.update(
+        {
+            "repo": str(REPO_ROOT),
+            "benchmark_dir": str(REPO_ROOT / "benchmarks"),
+            "env_dir": str(root / "asv-env"),
+            "results_dir": str(results_dir),
+            "html_dir": str(html_dir),
+        }
+    )
+    config_path = root / "asv-ci.conf.json"
+    config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return config_path
+
+
+def _asv_result_commits(results_dir):
+    commits = set()
+    for path in results_dir.glob("*/*.json"):
+        if path.name in ("benchmarks.json", "machine.json"):
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        commit = data.get("commit_hash")
+        if isinstance(commit, str) and commit:
+            commits.add(commit)
+    return commits
+
+
+def _asv_has_measurement(results_dir, commit_hash):
+    def has_finite_number(value):
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, (int, float)):
+            return math.isfinite(float(value))
+        if isinstance(value, list):
+            return any(has_finite_number(item) for item in value)
+        return False
+
+    for path in results_dir.glob("*/*.json"):
+        if path.name in ("benchmarks.json", "machine.json"):
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if data.get("commit_hash") != commit_hash:
+            continue
+        for result in data.get("results", {}).values():
+            measurements = result[0] if isinstance(result, list) and result else result
+            if has_finite_number(measurements):
+                return True
+    return False
+
+
+def _git_output(*arguments):
+    result = subprocess.run(
+        ("git",) + arguments,
+        cwd=str(REPO_ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def _asv_compare_base(results_dir, current_commit):
+    commits = _asv_result_commits(results_dir)
+    commits.discard(current_commit)
+    requested = os.environ.get("ASV_COMPARE_BASE", "").strip()
+    if requested:
+        resolved = _git_output("rev-parse", "--verify", "%s^{commit}" % requested)
+        if resolved in commits:
+            is_ancestor = subprocess.run(
+                ("git", "merge-base", "--is-ancestor", resolved, current_commit),
+                cwd=str(REPO_ROOT),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            if is_ancestor.returncode == 0:
+                return resolved
+
+    ancestors = []
+    for commit in commits:
+        is_ancestor = subprocess.run(
+            ("git", "merge-base", "--is-ancestor", commit, current_commit),
+            cwd=str(REPO_ROOT),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if is_ancestor.returncode != 0:
+            continue
+        timestamp = _git_output("show", "-s", "--format=%ct", commit)
+        if timestamp and timestamp.isdigit():
+            ancestors.append((int(timestamp), commit))
+    return max(ancestors)[1] if ancestors else None
+
+
 @nox.session(python="3.11")
 def lint(session):
     """Run the ratcheted, Python 3.7-aware Ruff lint baseline."""
@@ -341,14 +468,12 @@ def typing(session):
 
 @nox.session(python="3.11")
 def structure(session):
-    """Run filesystem tests, then build, audit, and self-test an installed wheel."""
-    root, env = _session_env(session, "structure")
+    """Run the fast layout, checker, and complete structure-test gate."""
+    _root, env = _session_env(session, "structure")
     session.install(
-        BUILD,
         PYTEST,
         PYTEST_TIMEOUT,
         SETUPTOOLS,
-        WHEEL,
         "astunparse==1.6.3",
         JUPYTEXT,
         NBFORMAT,
@@ -357,16 +482,33 @@ def structure(session):
         "tqdm==4.67.1",
     )
     session.run("bash", "agent/scripts/check_repo_layout.sh", external=True, env=env)
-    for test_path in FILESYSTEM_TESTS:
-        session.run(
-            "python",
-            "-m",
-            "pytest",
-            "-v",
-            "--timeout=600",
-            test_path,
-            env=env,
-        )
+    test_paths = tuple(session.posargs) or STRUCTURE_TESTS
+    session.run(
+        "python",
+        "-m",
+        "pytest",
+        "-v",
+        "--timeout=600",
+        *test_paths,
+        env=env,
+    )
+
+
+@nox.session(python="3.11")
+def packaging(session):
+    """Build, audit, install, and self-test direct and sdist-derived artifacts."""
+    root, env = _session_env(session, "packaging")
+    session.install(
+        BUILD,
+        PYTEST,
+        PYTEST_TIMEOUT,
+        SETUPTOOLS,
+        WHEEL,
+        "astunparse==1.6.3",
+        "numpy==1.26.4",
+        "pillow==11.0.0",
+        "tqdm==4.67.1",
+    )
 
     source = root / "source"
     dist = root / "dist"
@@ -547,14 +689,132 @@ def tutorials(session):
     _run_pytest(session, ("tests/integration/test_notebooks.py",), env)
 
 
-@nox.session(python="3.11")
-def benchmark(session):
-    """Validate ASV and execute one mandatory Jittor CPU benchmark case."""
-    root, env = _session_env(session, "asv-cpu")
+def _record_asv(session, root, env, asv_command, default_machine, external=False):
     asv_home = root / "jittor-asv-home"
     asv_home.mkdir(parents=True, exist_ok=True)
     env["JITTOR_HOME"] = str(asv_home)
+    env["JITTOR_ASV_HOME"] = str(asv_home)
     env["ASV_CONF_DIR"] = str(REPO_ROOT)
+    # ASV deliberately removes PYTHONPATH before launching an existing
+    # environment. ASV_PYTHONPATH is its supported source-tree escape hatch.
+    env["ASV_PYTHONPATH"] = str(REPO_ROOT / "python")
+    machine = os.environ.get("ASV_MACHINE", default_machine)
+    factor = os.environ.get("ASV_COMPARE_FACTOR", "1.10")
+    try:
+        if float(factor) <= 1.0:
+            raise ValueError
+    except ValueError:
+        session.error("ASV_COMPARE_FACTOR must be a number greater than 1.0")
+
+    results_dir = _asv_state_path("ASV_RESULTS_DIR", root / "asv-results")
+    html_dir = _asv_state_path("ASV_HTML_DIR", root / "asv-html")
+    config_path = _write_asv_config(root, results_dir, html_dir)
+    current_commit = _git_output("rev-parse", "HEAD")
+    if not current_commit:
+        session.error("cannot resolve the current commit for ASV")
+    dirty = _git_output("status", "--porcelain", "--untracked-files=all")
+    if dirty and os.environ.get("ASV_ALLOW_DIRTY") != "1":
+        session.error(
+            "ASV refuses to label a dirty checkout as %s; commit or stash changes first"
+            % current_commit
+        )
+    compare_base = _asv_compare_base(results_dir, current_commit)
+
+    with session.chdir(REPO_ROOT):
+        session.run(
+            *(tuple(asv_command) + ("check", "--config", str(config_path), "--python=same")),
+            env=env,
+            external=external,
+        )
+        session.run(
+            *(
+                tuple(asv_command)
+                + (
+                    "machine",
+                    "--config",
+                    str(config_path),
+                    "--machine",
+                    machine,
+                    "--yes",
+                )
+            ),
+            env=env,
+            external=external,
+        )
+        session.run(
+            *(
+                tuple(asv_command)
+                + (
+                    "run",
+                    "--config",
+                    str(config_path),
+                    "--python=same",
+                    "--set-commit-hash",
+                    current_commit,
+                    "--machine",
+                    machine,
+                    "--record-samples",
+                    "--show-stderr",
+                    "--no-pull",
+                )
+                + tuple(session.posargs)
+            ),
+            env=env,
+            external=external,
+        )
+        if not _asv_has_measurement(results_dir, current_commit):
+            session.error("ASV produced no finite measurements for %s" % current_commit)
+        if compare_base is None:
+            compare_base = current_commit
+            session.log("no cached ancestor result; bootstrapping ASV comparison")
+        session.run(
+            *(
+                tuple(asv_command)
+                + (
+                    "compare",
+                    "--config",
+                    str(config_path),
+                    "--python=same",
+                    "--machine",
+                    machine,
+                    "--factor",
+                    factor,
+                    "--split",
+                    compare_base,
+                    current_commit,
+                )
+            ),
+            env=env,
+            external=external,
+        )
+        session.run(
+            *(
+                tuple(asv_command)
+                + (
+                    "publish",
+                    "--config",
+                    str(config_path),
+                    "--no-pull",
+                    "--html-dir",
+                    str(html_dir),
+                )
+            ),
+            env=env,
+            external=external,
+        )
+
+    if not any(results_dir.glob("*/*.json")):
+        session.error("ASV produced no result files in %s" % results_dir)
+    if not (html_dir / "index.html").is_file():
+        session.error("ASV publish did not create %s" % (html_dir / "index.html"))
+    session.log("ASV results: %s" % results_dir)
+    session.log("ASV HTML: %s" % html_dir)
+
+
+@nox.session(python="3.11")
+def benchmark(session):
+    """Record selected CPU benchmarks for this commit and publish ASV HTML."""
+    root, env = _session_env(session, "asv-cpu")
     env["cache_name"] = "asv-nox-cpu"
     env["nvcc_path"] = ""
     session.install(
@@ -565,24 +825,35 @@ def benchmark(session):
         SETUPTOOLS,
         "tqdm==4.67.1",
     )
-    with session.chdir(REPO_ROOT):
-        session.run("asv", "check", "--python=same", env=env)
-    smoke = """
-from benchmarks.operators import OperatorBenchmarks
+    _record_asv(session, root, env, ("asv",), "jittor-ci-cpu")
 
-case = OperatorBenchmarks()
-case.setup("jittor", "cpu", "gelu")
-try:
-    case.time_operator("jittor", "cpu", "gelu")
-    used = case.track_working_set_bytes("jittor", "cpu", "gelu")
-    if not isinstance(used, int) or used <= 0:
-        raise RuntimeError("ASV memory benchmark returned %r" % (used,))
-finally:
-    case.teardown("jittor", "cpu", "gelu")
-print("mandatory ASV smoke OK: operators/jittor/cpu/gelu (%d bytes)" % used)
-"""
-    with session.chdir(REPO_ROOT):
-        session.run("python", "-c", smoke, env=env)
+
+@nox.session(python=False)
+def benchmark_cuda(session):
+    """Record scheduled Tiny Llama and optimizer ASV results on real CUDA."""
+    root, env = _session_env(session, "asv-cuda")
+    python = _hardware_python()
+    nvcc = os.environ.get("nvcc_path") or shutil.which("nvcc")
+    if not nvcc:
+        session.error("CUDA benchmark requires nvcc_path or nvcc on PATH")
+    env["nvcc_path"] = nvcc
+    env["cache_name"] = "asv-nox-cuda"
+    session.run("nvidia-smi", external=True, env=env)
+    session.run(nvcc, "--version", external=True, env=env)
+    dependency_probe = (
+        "import asv, numpy, transformers; "
+        "assert transformers.__version__ == '4.56.2'; "
+        "print('CUDA ASV dependencies OK')"
+    )
+    session.run(python, "-c", dependency_probe, external=True, env=env)
+    _record_asv(
+        session,
+        root,
+        env,
+        (python, "-m", "asv"),
+        "jittor-ci-rtx4090-cuda12-2",
+        external=True,
+    )
 
 
 @nox.session(python="3.7", venv_backend="venv")

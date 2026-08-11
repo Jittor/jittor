@@ -20,7 +20,7 @@ The reference is an INDEPENDENT numpy re-implementation of each update; it is ne
 jittor-vs-jittor.
 
 Two facts about jittor's implementation that the references must honor (verified by
-reading ``python/jittor/optim.py``, not assumed):
+reading the modules under ``python/jittor/optim/``, not assumed):
 
   * ``n_step`` is incremented inside ``backward()`` *before* the step body, so on the
     FIRST ``step(loss)`` the bias-correction exponent ``n`` is ``1.0`` (Adam/AdamW).

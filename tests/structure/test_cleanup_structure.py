@@ -24,10 +24,12 @@ class TestCleanupStructure(unittest.TestCase):
             "python/jittor/script",
             "python/jittor/demo",
             "python/jittor/notebook",
+            "python/jittor/optim.py",
             "python/jittor/vcompiler",
             "python/jittor/version",
             "python/jittor/utils/polish.py",
             "python/jittor/utils/polish_centos.py",
+            "python/jittor/extern/llvm",
             "python/jittor_utils/translator.py",
             "python/jittor_utils/pack_offline.py",
             "tools/docs/legacy/make_doc.py",
@@ -35,6 +37,36 @@ class TestCleanupStructure(unittest.TestCase):
         for relative in retired:
             with self.subTest(path=relative):
                 self.assertFalse((self.repo_root / relative).exists())
+
+    def test_runtime_tree_has_no_module_package_path_collisions(self):
+        runtime_root = self.repo_root / "python" / "jittor"
+        collisions = []
+        for module_path in runtime_root.rglob("*.py"):
+            if module_path.name == "__init__.py":
+                continue
+            package_path = module_path.with_suffix("")
+            if package_path.is_dir():
+                collisions.append(
+                    (
+                        module_path.relative_to(self.repo_root).as_posix(),
+                        package_path.relative_to(self.repo_root).as_posix() + "/",
+                    )
+                )
+        self.assertEqual(collisions, [])
+
+    def test_legacy_fsdp2_path_names_are_absent_everywhere(self):
+        forbidden_names = {
+            "jittor_fsdp2",
+            "torch_fsdp2_compat.py",
+            "torch_fsdp2_compat",
+        }
+        found = []
+        for path in self.repo_root.rglob("*"):
+            if ".git" in path.parts:
+                continue
+            if path.name in forbidden_names:
+                found.append(path.relative_to(self.repo_root).as_posix())
+        self.assertEqual(found, [])
 
     def test_active_python_imports_use_canonical_runtime_modules(self):
         retired_modules = (
@@ -285,7 +317,7 @@ for forbidden in ('jittor', 'PIL', 'pywebio'):
         self.assertIn("breaking", source.lower())
         self.assertIn("compile_custom_op", source)
 
-    def test_extern_runtime_contract_and_llvm_defer_are_intact(self):
+    def test_extern_runtime_contract_and_llvm_retirement_are_intact(self):
         required = (
             "python/jittor/extern/__init__.py",
             "python/jittor/extern/acl/aclops",
@@ -307,7 +339,6 @@ for forbidden in ('jittor', 'PIL', 'pywebio'):
             "python/jittor/extern/mpi/ops",
             "python/jittor/extern/mpi/src",
             "python/jittor/extern/rocm",
-            "python/jittor/extern/llvm/jt_alignment_from_assumptions.cc",
         )
         for relative in required:
             with self.subTest(path=relative):
@@ -315,7 +346,7 @@ for forbidden in ('jittor', 'PIL', 'pywebio'):
         compiler = (self.repo_root / "python" / "jittor" / "compiler.py").read_text(
             encoding="utf-8"
         )
-        self.assertIn("def compile_extern():", compiler)
+        self.assertNotIn("def compile_extern():", compiler)
 
 
 if __name__ == "__main__":

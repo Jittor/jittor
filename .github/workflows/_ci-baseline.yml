@@ -1,0 +1,66 @@
+name: CI baseline
+
+on:
+  workflow_call:
+    outputs:
+      host_runner:
+        description: GitHub-hosted Linux runner baseline
+        value: ${{ jobs.read.outputs.host_runner }}
+      python_version:
+        description: Python version used by Stage 2 tooling
+        value: ${{ jobs.read.outputs.python_version }}
+      cpu_ci_image:
+        description: Linux image used by CPU and packaging jobs
+        value: ${{ jobs.read.outputs.cpu_ci_image }}
+      cuda_version:
+        description: CUDA toolkit version required by the hardware runner
+        value: ${{ jobs.read.outputs.cuda_version }}
+      cuda_runner_labels:
+        description: JSON runner-label array for CUDA jobs
+        value: ${{ jobs.read.outputs.cuda_runner_labels }}
+      npu_runner_labels:
+        description: JSON runner-label array for NPU jobs
+        value: ${{ jobs.read.outputs.npu_runner_labels }}
+      container_matrix:
+        description: JSON CPU/CUDA container build matrix
+        value: ${{ jobs.read.outputs.container_matrix }}
+      release_platform_matrix:
+        description: JSON cross-platform universal-wheel validation matrix
+        value: ${{ jobs.read.outputs.release_platform_matrix }}
+
+permissions:
+  contents: read
+
+jobs:
+  read:
+    runs-on: ubuntu-24.04
+    outputs:
+      host_runner: ${{ steps.baseline.outputs.host_runner }}
+      python_version: ${{ steps.baseline.outputs.python_version }}
+      cpu_ci_image: ${{ steps.baseline.outputs.cpu_ci_image }}
+      cuda_version: ${{ steps.baseline.outputs.cuda_version }}
+      cuda_runner_labels: ${{ steps.baseline.outputs.cuda_runner_labels }}
+      npu_runner_labels: ${{ steps.baseline.outputs.npu_runner_labels }}
+      container_matrix: ${{ steps.baseline.outputs.container_matrix }}
+      release_platform_matrix: ${{ steps.baseline.outputs.release_platform_matrix }}
+    steps:
+      - name: Check out baseline definition
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Export baseline
+        id: baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          source .github/ci-baseline.env
+          {
+            echo "host_runner=${CI_HOST_RUNNER}"
+            echo "python_version=${CI_PYTHON_VERSION}"
+            echo "cpu_ci_image=${CI_CPU_CI_IMAGE}"
+            echo "cuda_version=${CI_CUDA_VERSION}"
+            echo "cuda_runner_labels=${CI_CUDA_RUNNER_LABELS}"
+            echo "npu_runner_labels=${CI_NPU_RUNNER_LABELS}"
+            echo "container_matrix=${CI_CONTAINER_MATRIX}"
+            echo "release_platform_matrix=${CI_RELEASE_PLATFORM_MATRIX}"
+          } >> "${GITHUB_OUTPUT}"

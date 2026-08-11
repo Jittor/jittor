@@ -20,9 +20,7 @@ class OptimizerStepBenchmarks:
         self.jt = load_backend("jittor", device)
         size = max(1, self.total_elements // tensor_count)
         self.params_for_step = [
-            self.jt.array(
-                np.full((size,), 0.1 + index * 1e-7, dtype="float32")
-            )
+            self.jt.array(np.full((size,), 0.1 + index * 1e-7, dtype="float32"))
             for index in range(tensor_count)
         ]
         for parameter in self.params_for_step:
@@ -88,9 +86,11 @@ class OptimizerStepBenchmarks:
     track_working_set_bytes.unit = "bytes"
 
     def teardown(self, optimizer_name, tensor_count, device):
-        backend = self.jt
+        backend = getattr(self, "jt", None)
         self.params_for_step = []
         self.gradient_sources = []
         self.gradients = []
-        del self.optimizer
-        cleanup_backend("jittor", backend)
+        if hasattr(self, "optimizer"):
+            del self.optimizer
+        if backend is not None:
+            cleanup_backend("jittor", backend)

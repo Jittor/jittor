@@ -50,8 +50,22 @@ class TestPackagingStructure(unittest.TestCase):
             for line in manifest.splitlines()
             if line.strip() and not line.lstrip().startswith("#")
         }
-        self.assertIn("recursive-include python/jittor *", directives)
-        self.assertIn("recursive-include python/jittor_utils *", directives)
+        runtime_resources = {
+            "include python/jittor/__init__.pyi",
+            "recursive-include python/jittor/compat/shim/cpp_extension/include *",
+            "recursive-include python/jittor/compat/shim/cpp_extension/src *",
+            "recursive-include python/jittor/compat/shim/resources *",
+            "recursive-include python/jittor/extern *",
+            "recursive-include python/jittor/math_util/src *",
+            "recursive-include python/jittor/other *.py",
+            "recursive-include python/jittor/src *",
+            "recursive-include python/jittor/utils *.py",
+            "include python/jittor/utils/data.gz",
+            "recursive-include python/jittor_utils/class *",
+        }
+        self.assertTrue(runtime_resources.issubset(directives))
+        self.assertNotIn("recursive-include python/jittor *", directives)
+        self.assertNotIn("recursive-include python/jittor_utils *", directives)
         self.assertIn("recursive-include examples *", directives)
         self.assertIn("recursive-include tools *", directives)
         self.assertIn("recursive-include docs *", directives)

@@ -13,9 +13,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  baseline:
+    uses: ./.github/workflows/_ci-baseline.yml
+
   canonical:
+    needs: baseline
     name: Build canonical distributions
-    runs-on: ubuntu-24.04
+    runs-on: ${{ needs.baseline.outputs.host_runner }}
     timeout-minutes: 30
     steps:
       - name: Check out source
@@ -25,7 +29,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: ${{ needs.baseline.outputs.python_version }}
       - name: Install pinned release tools
         run: python -m pip install -r requirements/release.txt
       - name: Build canonical sdist and universal wheel
@@ -96,19 +100,12 @@ jobs:
 
   platform-validation:
     name: Validate ${{ matrix.identifier }}
-    needs: canonical
+    needs: [baseline, canonical]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            identifier: cp311-manylinux_x86_64
-          - os: macos-15-intel
-            identifier: cp311-macosx_x86_64
-          - os: windows-2022
-            identifier: cp311-win_amd64
+      matrix: ${{ fromJSON(needs.baseline.outputs.release_platform_matrix) }}
     steps:
       - name: Check out source
         uses: actions/checkout@v6
@@ -117,7 +114,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: ${{ needs.baseline.outputs.python_version }}
       - name: Download canonical artifacts
         uses: actions/download-artifact@v6
         with:
@@ -173,8 +170,8 @@ jobs:
 
   publish-pypi:
     name: Publish to PyPI
-    needs: [canonical, platform-validation]
-    runs-on: ubuntu-24.04
+    needs: [baseline, canonical, platform-validation]
+    runs-on: ${{ needs.baseline.outputs.host_runner }}
     timeout-minutes: 15
     environment:
       name: pypi
@@ -194,8 +191,8 @@ jobs:
 
   publish-github:
     name: Publish GitHub Release
-    needs: [canonical, platform-validation]
-    runs-on: ubuntu-24.04
+    needs: [baseline, canonical, platform-validation]
+    runs-on: ${{ needs.baseline.outputs.host_runner }}
     timeout-minutes: 15
     permissions:
       contents: write

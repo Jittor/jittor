@@ -149,14 +149,24 @@ def _set_env_dir(environ, name, path, override=False):
     _ensure_dir(environ[name])
 
 
-def _add_nvcc_flags(environ):
-    if is_truthy(environ.get("JITTOR_TORCH_KEEP_FAST_MATH")):
-        return
-    tokens = environ.get("nvcc_flags", "").split()
+def _strict_math_nvcc_flags(value, remove_fast_math=False):
+    tokens = str(value or "").split()
+    if remove_fast_math:
+        tokens = [token for token in tokens if token != "--use_fast_math"]
     for token in ("--fmad=false", "--prec-div=true", "--prec-sqrt=true"):
         if token not in tokens:
             tokens.append(token)
-    environ["nvcc_flags"] = " ".join(tokens)
+    # jit_compiler.cc concatenates nvcc_flags directly after quoted source
+    # paths. Keep explicit separators instead of relying on every caller.
+    return " " + " ".join(tokens) + " "
+
+
+def _add_nvcc_flags(environ):
+    if is_truthy(environ.get("JITTOR_TORCH_KEEP_FAST_MATH")):
+        return
+    environ["nvcc_flags"] = _strict_math_nvcc_flags(
+        environ.get("nvcc_flags", "")
+    )
 
 
 def configure_torch_math_flags(jittor_module):
@@ -167,11 +177,9 @@ def configure_torch_math_flags(jittor_module):
         flags = getattr(getattr(jittor_module, "compiler", None), "flags", None)
         current = getattr(flags, "nvcc_flags", None)
         if isinstance(current, str):
-            tokens = current.replace("--use_fast_math", "").split()
-            for token in ("--fmad=false", "--prec-div=true", "--prec-sqrt=true"):
-                if token not in tokens:
-                    tokens.append(token)
-            flags.nvcc_flags = " ".join(tokens)
+            flags.nvcc_flags = _strict_math_nvcc_flags(
+                current, remove_fast_math=True
+            )
     except Exception:
         pass
 

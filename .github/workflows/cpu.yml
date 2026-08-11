@@ -13,9 +13,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  baseline:
+    uses: ./.github/workflows/_ci-baseline.yml
+
   cpu:
+    needs: baseline
     name: nox / cpu
-    runs-on: ubuntu-24.04
+    runs-on: ${{ needs.baseline.outputs.host_runner }}
+    container:
+      image: ${{ needs.baseline.outputs.cpu_ci_image }}
     timeout-minutes: 90
     steps:
       - name: Check out source
@@ -24,35 +30,69 @@ jobs:
           persist-credentials: false
       - name: Install native CPU toolchain
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends build-essential libomp-dev
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential libomp-dev
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: ${{ needs.baseline.outputs.python_version }}
       - name: Install pinned development tools
         run: python -m pip install -r requirements/dev-tools.txt
       - name: Run CPU pytest gates
         run: python -m nox -s cpu
 
   benchmark:
+    needs: baseline
     name: nox / benchmark
-    runs-on: ubuntu-24.04
+    runs-on: ${{ needs.baseline.outputs.host_runner }}
+    container:
+      image: ${{ needs.baseline.outputs.cpu_ci_image }}
     timeout-minutes: 90
+    env:
+      ASV_RESULTS_DIR: ${{ runner.temp }}/jittor-asv/results
+      ASV_HTML_DIR: ${{ runner.temp }}/jittor-asv/html
+      ASV_MACHINE: github-ubuntu-cpu
+      ASV_COMPARE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
     steps:
       - name: Check out source
         uses: actions/checkout@v6
         with:
+          fetch-depth: 0
           persist-credentials: false
       - name: Install native CPU toolchain
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends build-essential libomp-dev
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential libomp-dev
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: ${{ needs.baseline.outputs.python_version }}
       - name: Install pinned development tools
         run: python -m pip install -r requirements/dev-tools.txt
-      - name: Validate and smoke-test ASV
-        run: python -m nox -s benchmark
+      - name: Restore prior ASV results
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.ASV_RESULTS_DIR }}
+          key: asv-results-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: |
+            asv-results-${{ runner.os }}-${{ runner.arch }}-
+      - name: Record, compare, and publish ASV results
+        run: >-
+          python -m nox -s benchmark --
+          --bench '^(operators|optimizer_step)\.'
+      - name: Save ASV results for the next commit
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.ASV_RESULTS_DIR }}
+          key: asv-results-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+      - name: Upload ASV results and report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: asv-${{ github.sha }}
+          path: |
+            ${{ env.ASV_RESULTS_DIR }}
+            ${{ env.ASV_HTML_DIR }}
+          if-no-files-found: warn
+          retention-days: 30

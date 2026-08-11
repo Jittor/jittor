@@ -21,10 +21,10 @@ repos:
     hooks:
       - id: ruff-check
         args: [--no-cache]
-        files: ^(noxfile\.py|agent/scripts/check_(sdist|wheel)_contents\.py|python/jittor_utils/cuda_wheel\.py|python/jittor/compat/shim/deploy\.py|tools/release/pack_offline\.py|tests/integration/test_notebooks\.py|tests/structure/test_(cleanup_structure|pytest_contract|selftest_structure)\.py)$
+        files: ^(noxfile\.py|agent/scripts/check_(sdist|wheel)_contents\.py|python/jittor_utils/cuda_wheel\.py|python/jittor/compat/shim/deploy\.py|tools/release/pack_offline\.py|tests/integration/test_notebooks\.py|tests/structure/test_(cleanup_structure|pytest_contract|selftest_structure|stage2_delivery)\.py)$
       - id: ruff-format
         args: [--no-cache]
-        files: ^(noxfile\.py|agent/scripts/(check_sdist_contents|test_check_sdist_contents)\.py|python/jittor/selftest\.py|tools/release/pack_offline\.py|tests/integration/test_notebooks\.py|tests/structure/test_(cleanup_structure|packaging_structure|pytest_contract|selftest_structure)\.py)$
+        files: ^(noxfile\.py|agent/scripts/(check_sdist_contents|test_check_sdist_contents)\.py|python/jittor/selftest\.py|tools/release/pack_offline\.py|tests/integration/test_notebooks\.py|tests/structure/test_(cleanup_structure|packaging_structure|pytest_contract|selftest_structure|stage2_delivery)\.py)$
 
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.8.0

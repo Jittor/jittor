@@ -82,9 +82,11 @@ FORBIDDEN_MEMBER_PREFIXES = (
 
 FORBIDDEN_EXACT_MEMBERS = frozenset((
     "jittor/depthwise_conv.py",
+    "jittor/extern/llvm/jt_alignment_from_assumptions.cc",
     "jittor/misc.py",
     "jittor/monkeypatch_ops.py",
     "jittor/nn.py",
+    "jittor/optim.py",
     "jittor/pool.py",
     "jittor/torch_compat.py",
     "jittor/torch_fsdp2_compat.py",

@@ -77,6 +77,7 @@ for forbidden_path in \
   "$REPO_ROOT/python/jittor/_misc" \
   "$REPO_ROOT/python/jittor/pool.py" \
   "$REPO_ROOT/python/jittor/_pool" \
+  "$REPO_ROOT/python/jittor/optim.py" \
   "$REPO_ROOT/python/jittor/torch_compat.py" \
   "$REPO_ROOT/python/jittor/_torch_compat" \
   "$REPO_ROOT/python/jittor/triton_shim" \
@@ -91,6 +92,7 @@ for forbidden_path in \
   "$REPO_ROOT/python/jittor/version" \
   "$REPO_ROOT/python/jittor/utils/polish.py" \
   "$REPO_ROOT/python/jittor/utils/polish_centos.py" \
+  "$REPO_ROOT/python/jittor/extern/llvm" \
   "$REPO_ROOT/python/jittor_utils/translator.py" \
   "$REPO_ROOT/tools/docs/legacy" \
   "$REPO_ROOT/python/jittor_utils/pack_offline.py"; do
@@ -99,6 +101,25 @@ for forbidden_path in \
     status=1
   fi
 done
+
+while IFS= read -r legacy_path; do
+  printf 'forbidden legacy path name anywhere in repository: %s\n' \
+    "${legacy_path#"$REPO_ROOT"/}" >&2
+  status=1
+done < <(
+  find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o \
+    \( -name 'jittor_fsdp2' -o -name 'torch_fsdp2_compat.py' -o \
+       -name 'torch_fsdp2_compat' \) -print | sort
+)
+
+while IFS= read -r module_path; do
+  package_path="${module_path%.py}"
+  if [[ -d "$package_path" ]]; then
+    printf 'module/package path collision: %s and %s\n' \
+      "${module_path#"$REPO_ROOT"/}" "${package_path#"$REPO_ROOT"/}/" >&2
+    status=1
+  fi
+done < <(find "$REPO_ROOT/python/jittor" -type f -name '*.py' ! -name '__init__.py' | sort)
 
 for required_path in \
   "$REPO_ROOT/python/jittor/extern/__init__.py" \
@@ -120,16 +141,15 @@ for required_path in \
   "$REPO_ROOT/python/jittor/extern/mpi/inc" \
   "$REPO_ROOT/python/jittor/extern/mpi/ops" \
   "$REPO_ROOT/python/jittor/extern/mpi/src" \
-  "$REPO_ROOT/python/jittor/extern/rocm" \
-  "$REPO_ROOT/python/jittor/extern/llvm/jt_alignment_from_assumptions.cc"; do
+  "$REPO_ROOT/python/jittor/extern/rocm"; do
   if [[ ! -e "$required_path" ]]; then
     printf 'missing required runtime path: %s\n' "${required_path#"$REPO_ROOT"/}" >&2
     status=1
   fi
 done
 
-if ! grep -q '^def compile_extern():' "$REPO_ROOT/python/jittor/compiler.py"; then
-  echo 'LLVM retirement is deferred: compiler.compile_extern must remain with extern/llvm.' >&2
+if grep -q '^def compile_extern():' "$REPO_ROOT/python/jittor/compiler.py"; then
+  echo 'retired compiler.compile_extern LLVM hook must not return.' >&2
   status=1
 fi
 

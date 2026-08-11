@@ -780,69 +780,6 @@ def get_full_path_of_executable(name):
         return full_path
     return get_full_path_of_executable(find_exe(name))
 
-def compile_extern():
-    # compile llvm passes
-    if cc_type != "clang" or platform.system() != 'Linux':
-        return
-    global kernel_opt_flags
-    cache_path_llvm = os.path.join(cache_path, "llvm")
-    jittor_path_llvm = os.path.join(jittor_path, "extern", "llvm")
-    clang_dir = os.path.dirname(get_full_path_of_executable(cc_path))
-    assert clang_dir.endswith("bin") and "llvm" in clang_dir, f"Wrong clang_dir: {clang_dir}"
-    llvm_include = os.path.abspath(os.path.join(clang_dir, "..", "include"))
-    assert os.path.isdir(llvm_include), "LLVM include path not found"
-    make_cache_dir(cache_path_llvm)
-    files = os.listdir(jittor_path_llvm)
-    # test_pass.cc is used for test link problem of llvm pass plugin
-    test_pass_path = os.path.join(cache_path_llvm, "test_pass.cc")
-    with open(test_pass_path, 'w', encoding='utf8') as f:
-        f.write("int main() {return 0;}")
-    
-    # -fno-rtti fix link error
-
-    # -Wl,-znodelete fix segfault
-    # https://github.com/sampsyo/llvm-pass-skeleton/issues/7#issuecomment-401834287
-
-    # -D_GLIBCXX_USE_CXX11_ABI=0 fix undefined symbol: createPrinterPass
-    # https://stackoverflow.com/questions/37366291/undefined-symbol-for-self-built-llvm-opt
-
-    # try different flags
-    try_flags = [
-        " -Wl,-znodelete -D_GLIBCXX_USE_CXX11_ABI=0 ",
-        " -Wl,-znodelete ",
-    ]
-    found_flags_id = -1
-    for fname in files:
-        for i, flag in enumerate(try_flags):
-            if found_flags_id != -1 and found_flags_id != i:
-                continue
-            so_name = os.path.join(cache_path_llvm, os.path.splitext(fname)[0]+f".{i}.so")
-            compile(
-                cc_path,
-                f"{cc_flags} {opt_flags} {flag} -I'{llvm_include}'",
-                [os.path.join(jittor_path_llvm, fname)],
-                so_name
-            )
-            # if not found available flags, we test it.
-            if found_flags_id == -1:
-                try:
-                    s = run_cmd(
-                        f"{cc_path} {cc_flags} -Xclang -load -Xclang '{so_name}' {test_pass_path}",
-                        cache_path_llvm,
-                        print_error=False
-                    )
-                except Exception as e:
-                    LOG.v(f"Try flag {flag} failed: {e}")
-                    continue
-                found_flags_id = i
-            kernel_opt_flags += f" -Xclang -load -Xclang '{so_name}' "
-            break
-        else:
-            LOG.w("Clang is used, but LLVM pass plugin is unable to link.")
-            break
-    LOG.vv(f"Compile extern llvm passes: {str(files)}")
-
-
 cuda_wheel_stack = None
 cuda_include_dirs = []
 cuda_lib_dirs = []
@@ -1464,9 +1401,6 @@ else:
 cc_flags += f" -l\"jit_utils_core{lib_suffix}\" "
 compile(cc_path, cc_flags+opt_flags, files, 'jittor_core'+extension_suffix)
 cc_flags += f" -l\"jittor_core{lib_suffix}\" "
-
-# TODO: move to compile_extern.py
-# compile_extern()
 
 with jit_utils.import_scope(import_flags):
     import jittor_core as core

@@ -71,9 +71,7 @@ class TinyLlamaBenchmarks:
             }
             if phase == "forward_backward":
                 upstream = rng.standard_normal((2, 128, 256)).astype("float32")
-                slot["upstream"] = backend_tensor(
-                    backend_name, self.backend, upstream, "cuda"
-                )
+                slot["upstream"] = backend_tensor(backend_name, self.backend, upstream, "cuda")
             self.slots.append(slot)
 
         self.kept = self._run(phase, self.slots[0])
@@ -118,9 +116,11 @@ class TinyLlamaBenchmarks:
     track_working_set_bytes.unit = "bytes"
 
     def teardown(self, backend_name, phase):
-        backend = self.backend
+        backend = getattr(self, "backend", None)
         self.kept = ()
         self.slots = []
         self.params_for_grad = ()
-        del self.model
-        cleanup_backend(backend_name, backend)
+        if hasattr(self, "model"):
+            del self.model
+        if backend is not None:
+            cleanup_backend(backend_name, backend)

@@ -12,9 +12,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  baseline:
+    uses: ./.github/workflows/_ci-baseline.yml
+
   npu:
+    needs: baseline
     name: nox / npu
-    runs-on: [self-hosted, linux, ARM64, jittor-ci, cann9, ascend910b]
+    runs-on: ${{ fromJSON(needs.baseline.outputs.npu_runner_labels) }}
     timeout-minutes: 180
     steps:
       - name: Verify NPU runner capability
@@ -51,7 +55,7 @@ jobs:
             exit 1
           fi
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           persist-credentials: false
       - name: Install pinned development tools

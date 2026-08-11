@@ -13,6 +13,8 @@ on:
       - "setup.py"
       - "python/**"
       - "requirements/examples.txt"
+      - ".github/ci-baseline.env"
+      - ".github/workflows/_ci-baseline.yml"
       - ".github/workflows/containers.yml"
   push:
     branches:
@@ -30,20 +32,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  baseline:
+    uses: ./.github/workflows/_ci-baseline.yml
+
   build:
+    needs: baseline
     name: ${{ matrix.name }} image
-    runs-on: ubuntu-24.04
+    runs-on: ${{ needs.baseline.outputs.host_runner }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - name: CPU
-            image: jittor
-            base: ubuntu:24.04
-          - name: CUDA 12.2
-            image: jittor-cuda
-            base: nvidia/cuda:12.2.2-cudnn8-devel-ubuntu22.04
+      matrix: ${{ fromJSON(needs.baseline.outputs.container_matrix) }}
     steps:
       - name: Check out source
         uses: actions/checkout@v6
@@ -91,22 +90,15 @@ jobs:
   publish:
     name: Publish ${{ matrix.name }} image
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
-    runs-on: ubuntu-24.04
+    needs: [baseline, build]
+    runs-on: ${{ needs.baseline.outputs.host_runner }}
     timeout-minutes: 90
     permissions:
       contents: read
       packages: write
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - name: CPU
-            image: jittor
-            base: ubuntu:24.04
-          - name: CUDA 12.2
-            image: jittor-cuda
-            base: nvidia/cuda:12.2.2-cudnn8-devel-ubuntu22.04
+      matrix: ${{ fromJSON(needs.baseline.outputs.container_matrix) }}
     steps:
       - name: Check out source
         uses: actions/checkout@v6

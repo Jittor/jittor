@@ -106,8 +106,9 @@ class OperatorBenchmarks:
     track_working_set_bytes.unit = "bytes"
 
     def teardown(self, backend_name, device, operator):
-        backend = self.backend
+        backend = getattr(self, "backend", None)
         for name in ("a", "b", "x", "weight", "bias", "output"):
             if hasattr(self, name):
                 delattr(self, name)
-        cleanup_backend(backend_name, backend)
+        if backend is not None:
+            cleanup_backend(backend_name, backend)

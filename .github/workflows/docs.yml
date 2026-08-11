@@ -13,9 +13,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  baseline:
+    uses: ./.github/workflows/_ci-baseline.yml
+
   links:
+    needs: baseline
     name: nox / docs_links
-    runs-on: ubuntu-24.04
+    runs-on: ${{ needs.baseline.outputs.host_runner }}
     timeout-minutes: 10
     steps:
       - name: Check out source
@@ -25,15 +29,16 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: ${{ needs.baseline.outputs.python_version }}
       - name: Install pinned development tools
         run: python -m pip install -r requirements/dev-tools.txt
       - name: Check internal documentation links
         run: python -m nox -s docs_links
 
   en:
+    needs: baseline
     name: nox / docs (en)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ needs.baseline.outputs.host_runner }}
     timeout-minutes: 45
     steps:
       - name: Check out source
@@ -47,15 +52,16 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: ${{ needs.baseline.outputs.python_version }}
       - name: Install pinned development tools
         run: python -m pip install -r requirements/dev-tools.txt
       - name: Build strict English documentation
         run: python -m nox -s docs
 
   zh-cn:
+    needs: baseline
     name: nox / docs_zh (zh_CN)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ needs.baseline.outputs.host_runner }}
     timeout-minutes: 45
     steps:
       - name: Check out source
@@ -69,15 +75,16 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: ${{ needs.baseline.outputs.python_version }}
       - name: Install pinned development tools
         run: python -m pip install -r requirements/dev-tools.txt
       - name: Build strict Simplified Chinese documentation
         run: python -m nox -s docs_zh
 
   tutorials-fast:
+    needs: baseline
     name: nox / tutorials (offline CPU)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ needs.baseline.outputs.host_runner }}
     timeout-minutes: 45
     steps:
       - name: Check out source
@@ -91,7 +98,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: ${{ needs.baseline.outputs.python_version }}
       - name: Install pinned development tools
         run: python -m pip install -r requirements/dev-tools.txt
       - name: Validate and execute tutorials

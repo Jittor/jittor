@@ -25,6 +25,36 @@ def setUpModule():
 
 
 class TestTorchBootstrap(unittest.TestCase):
+    def test_preflight_nvcc_flags_keep_command_separators(self):
+        from jittor.compat.shim import preflight
+
+        runtime_flags = types.SimpleNamespace(
+            nvcc_flags=" -lineinfo --use_fast_math "
+        )
+        root = types.SimpleNamespace(
+            compiler=types.SimpleNamespace(flags=runtime_flags)
+        )
+        with mock.patch.dict(
+            os.environ,
+            {
+                "nvcc_flags": "-lineinfo",
+                "JITTOR_TORCH_KEEP_FAST_MATH": "",
+            },
+            clear=False,
+        ):
+            preflight.configure_torch_math_flags(root)
+            environment_flags = os.environ["nvcc_flags"]
+
+        for value in (environment_flags, runtime_flags.nvcc_flags):
+            with self.subTest(value=value):
+                self.assertTrue(value.startswith(" "), repr(value))
+                self.assertTrue(value.endswith(" "), repr(value))
+                self.assertIn("--fmad=false", value)
+                self.assertIn("--prec-div=true", value)
+                self.assertIn("--prec-sqrt=true", value)
+                self.assertIn('kernel.cu" ', 'kernel.cu"' + value)
+        self.assertNotIn("--use_fast_math", runtime_flags.nvcc_flags)
+
     def test_preflight_publishes_cuda_driver_library_paths(self):
         from jittor.compat.shim import preflight
 
