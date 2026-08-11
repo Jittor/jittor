@@ -9,16 +9,11 @@ from . import api, common, compat_types, config, dtensor, grad_sync, optimizer, 
 
 
 _INSTALL_MARKER = "_jittor_fsdp2_install_complete"
+_MODULE_GRAPH_ATTR = "_jittor_fsdp2_module_graph"
 
 
-def _ensure_module(name, parent=None, attr=None):
-    mod = sys.modules.get(name)
-    if mod is None:
-        mod = types.ModuleType(name)
-        sys.modules[name] = mod
-    if parent is not None and attr:
-        setattr(parent, attr, mod)
-    return mod
+def _ensure_module(registry, name, parent=None, attr=None):
+    return registry.ensure(name)
 
 
 def _install_wrap_helpers(fsdp_wrap_mod):
@@ -50,84 +45,107 @@ def _install_wrap_helpers(fsdp_wrap_mod):
             for policy in (policies or ()) if callable(policy)))
 
 
-def _bind_torch_distributed(torch_module, dist):
-    if torch_module is None:
-        return
-    try:
-        torch_module["distributed"] = dist
-    except Exception:
-        setattr(torch_module, "distributed", dist)
+def _registry_for(torch_module, registry=None):
+    from jittor.compat.torch.context import registry_for
+
+    root_module = getattr(registry, "root_module", None)
+    if root_module is None:
+        root_module = (
+            torch_module
+            if isinstance(torch_module, types.ModuleType)
+            else sys.modules.get("torch") or sys.modules.get("jittor")
+        )
+    if root_module is None:
+        raise RuntimeError("torch root module is not installed")
+    return registry_for(root_module, registry)
 
 
 def install(dist, torch_module=None):
-    if getattr(dist, _INSTALL_MARKER, False):
-        _bind_torch_distributed(torch_module, dist)
-        return dist
+    return install_with_registry(dist, torch_module, registry=None)
 
-    tensor_mod = _ensure_module("torch.distributed.tensor", dist, "tensor")
-    tensor_legacy_mod = _ensure_module(
+
+def install_with_registry(dist, torch_module=None, registry=None):
+    registry = _registry_for(torch_module, registry)
+    registry.publish("torch.distributed", dist)
+
+    if getattr(dist, _INSTALL_MARKER, False):
+        installed_graph = getattr(dist, _MODULE_GRAPH_ATTR, None)
+        if installed_graph is not None:
+            for name, installed_module in installed_graph:
+                registry.publish(name, installed_module)
+            return dist
+
+    module_graph = []
+
+    def module(name, parent=None, attr=None):
+        installed_module = _ensure_module(registry, name, parent, attr)
+        module_graph.append((name, installed_module))
+        return installed_module
+
+    tensor_mod = module("torch.distributed.tensor", dist, "tensor")
+    tensor_legacy_mod = module(
         "torch.distributed._tensor", dist, "_tensor")
-    tensor_api_mod = _ensure_module("torch.distributed.tensor._api")
-    tensor_placement_mod = _ensure_module(
+    tensor_api_mod = module("torch.distributed.tensor._api")
+    tensor_placement_mod = module(
         "torch.distributed.tensor.placement_types")
-    tensor_spec_mod = _ensure_module(
+    tensor_spec_mod = module(
         "torch.distributed.tensor._dtensor_spec")
-    tensor_utils_mod = _ensure_module("torch.distributed.tensor._utils")
-    tensor_parallel_mod = _ensure_module("torch.distributed.tensor.parallel")
-    tensor_parallel_api_mod = _ensure_module(
+    tensor_utils_mod = module("torch.distributed.tensor._utils")
+    tensor_parallel_mod = module("torch.distributed.tensor.parallel")
+    tensor_parallel_api_mod = module(
         "torch.distributed.tensor.parallel.api")
-    tensor_parallel_style_mod = _ensure_module(
+    tensor_parallel_style_mod = module(
         "torch.distributed.tensor.parallel.style")
-    tensor_parallel_loss_mod = _ensure_module(
+    tensor_parallel_loss_mod = module(
         "torch.distributed.tensor.parallel.loss")
-    device_mesh_mod = _ensure_module(
+    device_mesh_mod = module(
         "torch.distributed.device_mesh", dist, "device_mesh")
-    tensor_legacy_device_mesh_mod = _ensure_module(
+    tensor_legacy_device_mesh_mod = module(
         "torch.distributed._tensor.device_mesh")
-    fsdp_mod = _ensure_module("torch.distributed.fsdp", dist, "fsdp")
-    fsdp_api_mod = _ensure_module("torch.distributed.fsdp.api")
-    fsdp_full_mod = _ensure_module(
+    fsdp_mod = module("torch.distributed.fsdp", dist, "fsdp")
+    fsdp_api_mod = module("torch.distributed.fsdp.api")
+    fsdp_full_mod = module(
         "torch.distributed.fsdp.fully_sharded_data_parallel")
-    fsdp_wrap_mod = _ensure_module("torch.distributed.fsdp.wrap")
-    fsdp_traversal_mod = _ensure_module(
+    fsdp_wrap_mod = module("torch.distributed.fsdp.wrap")
+    fsdp_traversal_mod = module(
         "torch.distributed.fsdp._traversal_utils")
-    fsdp_runtime_mod = _ensure_module(
+    fsdp_runtime_mod = module(
         "torch.distributed.fsdp._runtime_utils")
-    fsdp_top_common_mod = _ensure_module(
+    fsdp_top_common_mod = module(
         "torch.distributed.fsdp._common_utils")
-    fsdp_state_mod = _ensure_module("torch.distributed.fsdp._fsdp_state")
-    fsdp_scaler_mod = _ensure_module(
+    fsdp_state_mod = module("torch.distributed.fsdp._fsdp_state")
+    fsdp_scaler_mod = module(
         "torch.distributed.fsdp.sharded_grad_scaler")
-    fsdp_fully_pkg = _ensure_module("torch.distributed.fsdp._fully_shard")
-    fsdp_fully_mod = _ensure_module(
+    fsdp_fully_pkg = module("torch.distributed.fsdp._fully_shard")
+    fsdp_fully_mod = module(
         "torch.distributed.fsdp._fully_shard._fully_shard")
-    fsdp_fully_api_mod = _ensure_module(
+    fsdp_fully_api_mod = module(
         "torch.distributed.fsdp._fully_shard._fsdp_api")
-    fsdp_common_mod = _ensure_module(
+    fsdp_common_mod = module(
         "torch.distributed.fsdp._fully_shard._fsdp_common")
-    fsdp_init_mod = _ensure_module(
+    fsdp_init_mod = module(
         "torch.distributed.fsdp._fully_shard._fsdp_init")
-    fsdp_fully_state_mod = _ensure_module(
+    fsdp_fully_state_mod = module(
         "torch.distributed.fsdp._fully_shard._fsdp_state")
-    fsdp_param_mod = _ensure_module(
+    fsdp_param_mod = module(
         "torch.distributed.fsdp._fully_shard._fsdp_param")
-    fsdp_collectives_mod = _ensure_module(
+    fsdp_collectives_mod = module(
         "torch.distributed.fsdp._fully_shard._fsdp_collectives")
-    comp_mod = _ensure_module(
+    comp_mod = module(
         "torch.distributed._composable", dist, "_composable")
-    comp_fsdp_mod = _ensure_module(
+    comp_fsdp_mod = module(
         "torch.distributed._composable.fsdp", comp_mod, "fsdp")
-    comp_fsdp_fully_mod = _ensure_module(
+    comp_fsdp_fully_mod = module(
         "torch.distributed._composable.fsdp.fully_shard")
-    comp_fsdp_api_mod = _ensure_module(
+    comp_fsdp_api_mod = module(
         "torch.distributed._composable.fsdp._fsdp_api")
-    functional_collectives_mod = _ensure_module(
+    functional_collectives_mod = module(
         "torch.distributed._functional_collectives")
-    algorithms_mod = _ensure_module(
+    algorithms_mod = module(
         "torch.distributed.algorithms", dist, "algorithms")
-    checkpoint_mod = _ensure_module(
+    checkpoint_mod = module(
         "torch.distributed.algorithms._checkpoint", algorithms_mod, "_checkpoint")
-    checkpoint_wrapper_mod = _ensure_module(
+    checkpoint_wrapper_mod = module(
         "torch.distributed.algorithms._checkpoint.checkpoint_wrapper",
         checkpoint_mod, "checkpoint_wrapper")
 
@@ -294,7 +312,8 @@ def install(dist, torch_module=None):
     fsdp_init_mod._get_mesh_info = compat_types._get_mesh_info
     fsdp_init_mod._get_post_forward_mesh_info = compat_types._get_post_forward_mesh_info
     setattr(dist, _INSTALL_MARKER, True)
-    _bind_torch_distributed(torch_module, dist)
+    setattr(dist, _MODULE_GRAPH_ATTR, tuple(module_graph))
+    registry.publish("torch.distributed", dist)
     return dist
 
 

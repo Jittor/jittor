@@ -7,6 +7,8 @@ selects the public module identity.
 
 import sys as _sys
 
+_sys.modules[__name__]._jittor_torch_shim_placeholder = True
+
 import jittor as _jittor
 from jittor.compat import torch as _torch_compat
 

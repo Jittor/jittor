@@ -11,166 +11,18 @@
 
 __version__ = '1.3.11.0'
 
-import hashlib as _hashlib
 import os as _os
 import sys as _sys
 
-def _jt_torch_truthy(_value):
-    return str(_value or "").strip().lower() in ("1", "true", "yes", "on")
+from .compat.shim.preflight import (
+    is_truthy as _compat_is_truthy,
+    prepare_import_environment as _prepare_compat_import,
+)
 
-
-def _jt_torch_prepend_env_path(_name, _path):
-    if not _path:
-        return
-    _old = [_p for _p in _os.environ.get(_name, "").split(_os.pathsep) if _p]
-    _out = [_path]
-    for _p in _old:
-        if _p not in _out:
-            _out.append(_p)
-    _os.environ[_name] = _os.pathsep.join(_out)
-
-
-def _jt_torch_add_nvcc_flags(_flags):
-    _cur = _os.environ.get("nvcc_flags", "")
-    _items = _cur.split()
-    for _tok in _flags.split():
-        if _tok not in _items:
-            _items.append(_tok)
-    _os.environ["nvcc_flags"] = " ".join(_items)
-
-
-def _jt_torch_project_runtime_root(_project_root):
-    _project_root = _os.path.realpath(
-        _os.path.abspath(_os.path.expanduser(_os.fspath(_project_root)))
-    )
-    _cache_root = _os.environ.get("JITTOR_TORCH_CACHE_ROOT")
-    if not _cache_root:
-        _xdg_cache = _os.environ.get("XDG_CACHE_HOME")
-        if not _xdg_cache:
-            _home = (
-                _os.environ.get("REAL_HOME")
-                or _os.environ.get("HOME")
-                or _os.path.expanduser("~")
-            )
-            _xdg_cache = _os.path.join(_home, ".cache")
-        _cache_root = _os.path.join(_xdg_cache, "jittor", "torch-shim")
-    _project_name = _os.path.basename(_project_root) or "project"
-    _project_name = "".join(
-        _ch if _ch.isalnum() or _ch in "-_." else "_"
-        for _ch in _project_name
-    )[:64] or "project"
-    _digest = _hashlib.sha256(_os.fsencode(_project_root)).hexdigest()[:16]
-    return _os.path.join(
-        _os.path.abspath(_os.path.expanduser(_cache_root)),
-        _project_name + "-" + _digest,
-    )
-
-
-def _jt_torch_entry_runtime_root():
-    if _os.environ.get("JITTOR_TORCH_PROJECT_ROOT"):
-        return _jt_torch_project_runtime_root(
-            _os.environ["JITTOR_TORCH_PROJECT_ROOT"]
-        )
-    _entry = _sys.argv[0] if _sys.argv else ""
-    if not _entry or _entry in ("-c", "-m"):
-        return None
-    _entry = _os.path.abspath(_os.path.expanduser(_entry))
-    if not _os.path.isfile(_entry):
-        return None
-    try:
-        with open(_entry, "r", encoding="utf-8", errors="ignore") as _f:
-            _head = _f.read(65536)
-    except OSError:
-        _head = ""
-    if (
-        "jittor.compat.shim" in _head
-        or "jittor.torch_shim" in _head
-        or "torch_shim" in _head
-        or "import jittor as torch" in _head
-    ):
-        return _jt_torch_project_runtime_root(_os.path.dirname(_entry))
-    return None
-
-
-def _jt_torch_find_jtcuda(_real_home):
-    _candidates = []
-    if _os.environ.get("JTCUDA"):
-        _candidates.append(_os.environ["JTCUDA"])
-    for _home in (_real_home, _os.environ.get("HOME")):
-        if not _home:
-            continue
-        _root = _os.path.join(_home, ".cache", "jittor", "jtcuda")
-        try:
-            _names = _os.listdir(_root)
-        except OSError:
-            continue
-        for _name in _names:
-            if _name.startswith("cuda") and _name.endswith("_linux"):
-                _candidates.append(_os.path.join(_root, _name))
-    _valid = []
-    for _path in dict.fromkeys(_candidates):
-        if _os.path.isfile(_os.path.join(_path, "bin", "nvcc")):
-            _valid.append(_path)
-    if not _valid:
-        return None
-    _valid.sort(key=lambda _path: (
-        not _os.path.isfile(_os.path.join(_path, "include", "cudnn.h")),
-        "cuda12.2" not in _os.path.basename(_path),
-        _path,
-    ))
-    return _valid[0]
-
-
-_jt_torch_real_home = _os.environ.get("REAL_HOME") or _os.environ.get("HOME")
-_jt_torch_runtime_root = _os.environ.get("JITTOR_TORCH_RUNTIME_ROOT") or _jt_torch_entry_runtime_root()
-if _jt_torch_runtime_root:
-    _jt_torch_runtime_root = _os.path.abspath(_os.path.expanduser(_jt_torch_runtime_root))
-    _os.environ.setdefault("JITTOR_TORCH_RUNTIME_ROOT", _jt_torch_runtime_root)
-    for _name, _value in (
-        ("FIX_TORCH_ERROR", "0"),
-        ("DISABLE_MULTIPROCESSING", "1"),
-        ("use_cutt", "0"),
-        ("use_cutlass", "0"),
-        ("use_nccl", "0"),
-        ("use_mkl", "0"),
-    ):
-        _os.environ.setdefault(_name, _value)
-    _os.makedirs(_jt_torch_runtime_root, exist_ok=True)
-    for _name, _subdir in (
-        ("JITTOR_HOME", "jittor_cache"),
-        ("TORCH_HOME", "torch_home"),
-        ("JITTOR_TORCH_EXTENSIONS_DIR", "torch_extensions"),
-        ("TORCH_EXTENSIONS_DIR", "torch_extensions"),
-        ("XDG_CACHE_HOME", "xdg_cache"),
-        ("CUDA_CACHE_PATH", "cuda_cache"),
-        ("TRITON_HOME", "triton_home"),
-        ("TRITON_CACHE_DIR", "triton_home/cache"),
-        ("TRITON_OVERRIDE_DIR", "triton_home/override"),
-        ("TRITON_DUMP_DIR", "triton_home/dump"),
-        ("PIP_CACHE_DIR", "pip_cache"),
-    ):
-        _os.environ.setdefault(_name, _os.path.join(_jt_torch_runtime_root, _subdir))
-        _os.makedirs(_os.environ[_name], exist_ok=True)
-    if _os.environ.get("JITTOR_TORCH_KEEP_HOME", "0").lower() not in ("1", "true", "yes", "on"):
-        _os.environ.setdefault("REAL_HOME", _jt_torch_real_home or "")
-        _os.environ["HOME"] = _os.environ.get(
-            "JITTOR_TORCH_HOME",
-            _os.path.join(_jt_torch_runtime_root, "home"),
-        )
-        _os.makedirs(_os.environ["HOME"], exist_ok=True)
-    if _os.environ.get("JITTOR_TORCH_KEEP_TMPDIR", "0").lower() not in ("1", "true", "yes", "on"):
-        _os.environ["TMPDIR"] = _os.path.join(_jt_torch_runtime_root, "tmp")
-        _os.makedirs(_os.environ["TMPDIR"], exist_ok=True)
-    if _os.environ.get("JITTOR_TORCH_KEEP_FAST_MATH", "0").lower() not in ("1", "true", "yes", "on"):
-        _jt_torch_add_nvcc_flags("--fmad=false --prec-div=true --prec-sqrt=true")
-    if not _jt_torch_truthy(_os.environ.get("JITTOR_TORCH_KEEP_CUDA")):
-        _jt_torch_jtcuda = _jt_torch_find_jtcuda(_jt_torch_real_home)
-        if _jt_torch_jtcuda:
-            _os.environ.setdefault("JTCUDA", _jt_torch_jtcuda)
-            _os.environ.setdefault("nvcc_path", _os.path.join(_jt_torch_jtcuda, "bin", "nvcc"))
-            _os.environ.setdefault("CUDA_HOME", _jt_torch_jtcuda)
-            _jt_torch_prepend_env_path("PATH", _os.path.join(_jt_torch_jtcuda, "bin"))
-            _jt_torch_prepend_env_path("LD_LIBRARY_PATH", _os.path.join(_jt_torch_jtcuda, "lib64"))
+_compat_preflight_result = _prepare_compat_import(
+    argv=_sys.argv,
+    environ=_os.environ,
+)
 
 from jittor_utils import lock
 
@@ -798,175 +650,9 @@ def zeros_like(x, dtype=None) -> Var:
     if dtype is None: dtype = x.dtype
     return zeros(x.shape, dtype)
 
+
 _core_flags = core.Flags()
-
-
-def _apply_external_runtime_patches():
-    """Apply optional runtime integrations independently and report every result."""
-    report = {}
-
-    try:
-        from jittor.compat import triton as _triton_compat  # noqa: F401
-        report["triton_shim"] = {"ok": True}
-    except Exception as error:
-        report["triton_shim"] = {
-            "ok": False,
-            "error": f"{type(error).__name__}: {error}",
-        }
-        LOG.w(f"external runtime patch triton skipped: {error}")
-
-    try:
-        from jittor.compat.module_patcher import install_module_patches
-
-        patch_report = install_module_patches()
-        patch_results = [
-            {
-                "kind": item.kind,
-                "name": item.name,
-                "callback": item.callback,
-                "status": item.status,
-                "detail": item.detail,
-            }
-            for item in patch_report.results
-        ]
-        report["module_patches"] = {
-            "ok": patch_report.ok,
-            "results": patch_results,
-        }
-        for item in patch_report.failures:
-            LOG.w(
-                f"external module patch {item.name} ({item.callback}) failed: "
-                f"{item.detail or 'unknown error'}"
-            )
-    except Exception as error:
-        report["module_patches"] = {
-            "ok": False,
-            "error": f"{type(error).__name__}: {error}",
-        }
-        LOG.w(f"external module patch registry failed: {error}")
-
-    try:
-        from jittor.compat.external_backend import load_external_backend_entry_points
-
-        backend_results = load_external_backend_entry_points()
-        serialized = [
-            {
-                "name": item.name,
-                "value": item.value,
-                "status": item.status,
-                "detail": item.detail,
-            }
-            for item in backend_results
-        ]
-        failures = [item for item in backend_results if item.status == "failed"]
-        report["external_backends"] = {
-            "ok": not failures,
-            "results": serialized,
-        }
-        for item in failures:
-            LOG.w(
-                f"external backend {item.name} ({item.value}) failed: "
-                f"{item.detail or 'unknown error'}"
-            )
-    except Exception as error:
-        report["external_backends"] = {
-            "ok": False,
-            "error": f"{type(error).__name__}: {error}",
-        }
-        LOG.w(f"external backend registry failed: {error}")
-
-    _apply_external_runtime_patches.last_report = report
-    return report
-
-
-def _install_torch_shim_runtime(enable=True):
-    if not enable:
-        return None
-    import os as _os_runtime
-    import sys as _sys_runtime
-    if getattr(_install_torch_shim_runtime, "_installed", False):
-        _install_torch_shim_runtime._external_patch_report = (
-            _apply_external_runtime_patches()
-        )
-        _sys_runtime.modules["torch"] = _sys_runtime.modules[__name__]
-        return getattr(_install_torch_shim_runtime, "_result", None)
-
-    _project_root = _os_runtime.environ.get("JITTOR_TORCH_PROJECT_ROOT")
-    if not _project_root:
-        _entry = _sys_runtime.argv[0] if _sys_runtime.argv else ""
-        if _entry and _entry not in ("-c", "-m") and _os_runtime.path.isfile(_entry):
-            _project_root = _os_runtime.path.dirname(_os_runtime.path.abspath(_entry))
-        else:
-            _project_root = _os_runtime.getcwd()
-    _runtime_root = _os_runtime.environ.get(
-        "JITTOR_TORCH_RUNTIME_ROOT",
-        _jt_torch_project_runtime_root(_project_root),
-    )
-    _os_runtime.environ.setdefault("JITTOR_TORCH_PROJECT_ROOT", _project_root)
-    _os_runtime.environ.setdefault("JITTOR_TORCH_RUNTIME_ROOT", _runtime_root)
-    _os_runtime.environ.setdefault("JITTOR_TORCH_SHIM", "1")
-    _os_runtime.environ.setdefault("FIX_TORCH_ERROR", "0")
-    _inference = str(_os_runtime.environ.get(
-        "JITTOR_TORCH_INFERENCE", "0"
-    )).strip().lower() in ("1", "true", "yes", "on")
-    _strict_bootstrap = str(_os_runtime.environ.get(
-        "JITTOR_TORCH_STRICT_BOOTSTRAP", "0"
-    )).strip().lower() in ("1", "true", "yes", "on")
-
-    result = None
-    try:
-        from jittor.compat.shim import bootstrap as _jt_torch_bootstrap
-        result = _jt_torch_bootstrap.enable(
-            project_root=_project_root,
-            runtime_root=_runtime_root,
-            auto_scan_extensions=True,
-            build_extensions=True,
-            local_home=True,
-            configure_cuda=False,
-            inference=_inference,
-            verbose=False,
-        )
-    except Exception as _e:
-        if _strict_bootstrap:
-            raise RuntimeError("torch shim bootstrap failed") from _e
-        try:
-            from jittor.compiler import LOG as _LOG
-            _LOG.w(f"torch_shim bootstrap skipped: {_e}")
-        except Exception:
-            pass
-
-    _install_torch_shim_runtime._external_patch_report = (
-        _apply_external_runtime_patches()
-    )
-    _sys_runtime.modules["torch"] = _sys_runtime.modules[__name__]
-    _install_torch_shim_runtime._installed = True
-    _install_torch_shim_runtime._result = result
-    return result
-
-
-class _TorchShimFlagsProxy:
-    def __init__(self, inner):
-        object.__setattr__(self, "_inner", inner)
-        object.__setattr__(self, "_torch_shim", 0)
-
-    def __getattr__(self, name):
-        if name == "torch_shim":
-            return object.__getattribute__(self, "_torch_shim")
-        return getattr(object.__getattribute__(self, "_inner"), name)
-
-    def __setattr__(self, name, value):
-        if name == "torch_shim":
-            object.__setattr__(self, "_torch_shim", ori_int(ori_bool(value)))
-            if value:
-                _install_torch_shim_runtime(True)
-            return
-        setattr(object.__getattribute__(self, "_inner"), name, value)
-
-    def __repr__(self):
-        return repr(object.__getattribute__(self, "_inner"))
-
-
-flags = _TorchShimFlagsProxy(_core_flags)
+flags = _core_flags
 
 def var(x, dim=None, dims=None, unbiased=False, keepdims=False):
     """ return the sample variance. If unbiased is True, Bessel's correction will be used.
@@ -2927,32 +2613,14 @@ if compile_extern.nccl_ops is not None and not hasattr(core.Var, "mpi_all_reduce
     core.Var.mpi_broadcast = _nccl_broadcast
 
 
-# Torch shim aliases are installed before the API domain so historical imports
-# resolve to the canonical modules without executing a compatibility file twice.
-try:
-    from .compat import shim as _torch_shim_domain
-    _sys.modules[__name__ + ".torch_shim"] = _torch_shim_domain
-    torch_shim = _torch_shim_domain
-except Exception as _e:
-    if _jt_torch_truthy(_os.environ.get("JITTOR_TORCH_STRICT_BOOTSTRAP")):
-        raise
-    from .compiler import LOG as _LOG
-    _LOG.w(f"torch shim aliases not fully installed: {_e}")
 
+from .compat.runtime import compose as _compose_compat_runtime
 
-# torch-compatibility layer: lets `import jittor as torch` run PyTorch code.
-# Additive only -- fills missing torch names/semantics. Safe to fail soft.
-try:
-    from .compat import torch as _torch_compat_domain
-    _sys.modules[__name__ + ".torch_compat"] = _torch_compat_domain
-    torch_compat = _torch_compat_domain
-    _torch_compat_domain.install(_sys.modules[__name__])
-except Exception as _e:
-    if _jt_torch_truthy(_os.environ.get("JITTOR_TORCH_STRICT_BOOTSTRAP")):
-        raise
-    from .compiler import LOG as _LOG
-    _LOG.w(f"torch_compat not fully installed: {_e}")
-
-# Canonical Triton compatibility domain. Its initializer registers the legacy
-# jittor.triton_shim package and child-module names as same-object aliases.
-from .compat import triton as triton_shim
+_compat_composition_report = _compose_compat_runtime(
+    _sys.modules[__name__],
+    _core_flags,
+    strict=_compat_is_truthy(
+        _os.environ.get("JITTOR_TORCH_STRICT_BOOTSTRAP")
+    ),
+    preflight=_compat_preflight_result,
+)

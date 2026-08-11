@@ -2,24 +2,27 @@
 
 import jittor as jt
 
+from .context import registry_for
 
-def _install_lr_scheduler(g):
+
+def _install_lr_scheduler(g, registry=None):
     """Torch-compatible torch.optim.lr_scheduler over jittor optimizers, on the
     `import jittor as torch` path (the shim reuses this same namespace). jittor reads
     lr from pg.get("lr", self.lr), so every step must update BOTH optimizer.lr and each
     param_group["lr"]. Schedulers follow torch's convention: __init__ applies the
     epoch-0 lr, last_epoch advances on step(). Covers the schedulers transformers /
     LlamaFactory / torch users actually use (the warmup helpers wrap LambdaLR)."""
-    import jittor as _jt, types as _types, math as _math
-    try:
-        from jittor import optim as _optim
-    except Exception:
-        return
+    _modules = registry_for(g, registry).module_map
+    import types as _types, math as _math
+    from jittor import optim as _optim
+    if getattr(_optim, "Optimizer", None) is None:
+        raise RuntimeError("jittor.optim has no Optimizer owner")
     if getattr(_optim, "_torch_lr_installed", False):
-        import sys as _sys
-        _sys.modules.setdefault("torch.optim", _optim)
+        _modules.setdefault("torch.optim", _optim)
         if hasattr(_optim, "lr_scheduler"):
-            _sys.modules.setdefault("torch.optim.lr_scheduler", _optim.lr_scheduler)
+            _modules.setdefault("torch.optim.lr_scheduler", _optim.lr_scheduler)
+        if hasattr(_optim, "swa_utils"):
+            _modules.setdefault("torch.optim.swa_utils", _optim.swa_utils)
         return
 
     def _base_lrs(opt):
@@ -299,11 +302,10 @@ def _install_lr_scheduler(g):
         setattr(ns, _name, _cls)
     _optim.lr_scheduler = ns
     _optim._torch_lr_installed = True
-    import sys as _sys
-    _sys.modules.setdefault("torch.optim", _optim)
+    _modules.setdefault("torch.optim", _optim)
     _optim.__path__ = getattr(_optim, "__path__", [])
-    _sys.modules.setdefault("torch.optim.lr_scheduler", ns)
-    _sys.modules.setdefault("jittor.optim.lr_scheduler", ns)
+    _modules.setdefault("torch.optim.lr_scheduler", ns)
+    _modules.setdefault("jittor.optim.lr_scheduler", ns)
     swa_utils = _types.ModuleType("torch.optim.swa_utils")
     class SWALR(LRScheduler):
         def __init__(self, optimizer, swa_lr, anneal_epochs=10, anneal_strategy="cos",
@@ -383,4 +385,4 @@ def _install_lr_scheduler(g):
     _update_bn = lambda *args, **kwargs: None
     swa_utils.update_bn = _update_bn
     _optim.swa_utils = swa_utils
-    _sys.modules["torch.optim.swa_utils"] = swa_utils
+    _modules["torch.optim.swa_utils"] = swa_utils

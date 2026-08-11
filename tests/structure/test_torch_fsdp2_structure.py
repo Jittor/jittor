@@ -12,7 +12,9 @@ import pickle
 from pathlib import Path
 import subprocess
 import sys
+import types
 import unittest
+from unittest import mock
 
 import jittor as jt
 from jittor.compat import fsdp2 as fsdp
@@ -25,6 +27,7 @@ from jittor.compat.fsdp2 import grad_sync
 from jittor.compat.fsdp2 import installer
 from jittor.compat.fsdp2 import optimizer
 from jittor.compat.fsdp2 import shard
+from jittor.compat.torch.context import ModuleRegistry
 
 
 _PUBLIC_NAMES = {
@@ -164,6 +167,89 @@ _LEGACY_PICKLES = {
 
 
 class TestTorchFSDP2Structure(unittest.TestCase):
+    def _isolated_graph(self, registry_type=ModuleRegistry):
+        root = types.ModuleType("torch")
+        root.__path__ = []
+        dist = types.ModuleType("torch.distributed")
+        modules = {"torch": root, "torch.distributed": dist}
+        return root, dist, registry_type(root, modules), modules
+
+    def test_registry_first_and_repeated_install_preserve_module_graph(self):
+        root, dist, registry, modules = self._isolated_graph()
+        first = installer.install_with_registry(dist, root, registry=registry)
+        identities = {
+            name: id(modules[name]) for name in _REGISTERED_MODULES
+        }
+        second = installer.install_with_registry(dist, root, registry=registry)
+        self.assertIs(first, dist)
+        self.assertIs(second, dist)
+        self.assertIs(root.distributed, dist)
+        self.assertEqual(
+            {name: id(modules[name]) for name in _REGISTERED_MODULES},
+            identities,
+        )
+        self.assertIs(
+            modules["torch.distributed.fsdp"].api,
+            modules["torch.distributed.fsdp.api"],
+        )
+
+    def test_public_install_reuses_root_install_context_registry(self):
+        from jittor.compat.torch.context import InstallContext
+
+        root = types.ModuleType("_stage7_fsdp_context_root")
+        root.__path__ = []
+        dist = types.ModuleType("torch.distributed")
+        with mock.patch.dict(sys.modules, {}, clear=False):
+            for name in tuple(sys.modules):
+                if name == "torch" or name.startswith("torch."):
+                    sys.modules.pop(name, None)
+            context = InstallContext.for_module(root)
+            context.registry.publish("torch", root)
+            context.registry.publish("torch.distributed", dist)
+            installer.install(dist, root)
+            identities = {
+                name: context.registry._published[name]
+                for name in _REGISTERED_MODULES
+            }
+            installer.install(dist, root)
+            self.assertEqual(set(identities), set(_REGISTERED_MODULES))
+            for name, module in identities.items():
+                with self.subTest(name=name):
+                    self.assertIs(context.registry._published[name], module)
+
+    def test_registry_partial_failure_retries_with_existing_identity(self):
+        class FailOnceRegistry(ModuleRegistry):
+            def __init__(self, root_module, modules):
+                super().__init__(root_module, modules)
+                self.failed = False
+
+            def ensure(self, name, factory=None, package=False):
+                if name == "torch.distributed.tensor._api" and not self.failed:
+                    self.failed = True
+                    raise RuntimeError("injected registry failure")
+                return super().ensure(name, factory=factory, package=package)
+
+        root, dist, registry, modules = self._isolated_graph(FailOnceRegistry)
+        with self.assertRaisesRegex(RuntimeError, "injected registry failure"):
+            installer.install_with_registry(dist, root, registry=registry)
+        tensor = modules["torch.distributed.tensor"]
+        self.assertFalse(getattr(dist, installer._INSTALL_MARKER, False))
+
+        installer.install_with_registry(dist, root, registry=registry)
+        self.assertIs(modules["torch.distributed.tensor"], tensor)
+        self.assertIs(dist.tensor, tensor)
+        self.assertTrue(getattr(dist, installer._INSTALL_MARKER, False))
+
+    def test_registry_rejects_conflicting_distributed_root(self):
+        root = types.ModuleType("torch")
+        foreign = types.ModuleType("torch.distributed")
+        dist = types.ModuleType("torch.distributed")
+        modules = {"torch": root, "torch.distributed": foreign}
+        registry = ModuleRegistry(root, modules)
+        with self.assertRaisesRegex(RuntimeError, "already published"):
+            installer.install_with_registry(dist, root, registry=registry)
+        self.assertIs(modules["torch.distributed"], foreign)
+
     def test_canonical_package_and_legacy_alias_are_one_object(self):
         package_path = Path(fsdp.__file__).resolve()
         self.assertEqual(package_path.parent.name, "fsdp2")
@@ -184,6 +270,17 @@ class TestTorchFSDP2Structure(unittest.TestCase):
         namespace = {}
         exec("from jittor.compat.fsdp2 import *", {}, namespace)
         self.assertEqual(set(namespace), _PUBLIC_NAMES)
+
+    def test_explicit_legacy_child_import_binds_parent_lazily(self):
+        self.assertNotIn("api", {
+            name for name in vars(fsdp) if not name.startswith("_")
+        })
+        try:
+            legacy_api = importlib.import_module("jittor.torch_fsdp2_compat.api")
+            self.assertIs(legacy_api, api)
+            self.assertIs(fsdp.api, api)
+        finally:
+            vars(fsdp).pop("api", None)
 
     def test_canonical_and_legacy_first_import_orders(self):
         repo_root = Path(fsdp.__file__).resolve().parents[4]
