@@ -58,6 +58,7 @@ class TestSourceDistributionContents(unittest.TestCase):
             (
                 "python/jittor/runtime_source.py",
                 "python/jittor/__pycache__/runtime_source.cpython-311.pyc",
+                "python/jittor.egg-info/PKG-INFO",
             )
         )
         result = mock.Mock(
@@ -74,6 +75,38 @@ class TestSourceDistributionContents(unittest.TestCase):
         self.assertNotIn(
             "python/jittor/__pycache__/runtime_source.cpython-311.pyc", paths
         )
+        self.assertNotIn("python/jittor.egg-info/PKG-INFO", paths)
+
+    def test_canonical_generated_egg_info_members_pass(self):
+        members = dict(self.members)
+        members.update(
+            {path: b"generated metadata\n" for path in checker.CANONICAL_EGG_INFO_MEMBERS}
+        )
+        status, stdout, stderr = self._run(
+            self._sdist("canonical-egg-info.tar.gz", members)
+        )
+        self.assertEqual(status, 0, stderr)
+        self.assertIn("source distribution OK", stdout)
+
+    def test_unexpected_canonical_egg_info_member_fails(self):
+        members = dict(self.members)
+        members["python/jittor.egg-info/not-zip-safe"] = b"unexpected\n"
+        status, _stdout, stderr = self._run(
+            self._sdist("extra-egg-info.tar.gz", members)
+        )
+        self.assertEqual(status, 1)
+        self.assertIn("unapproved generated .egg-info metadata", stderr)
+        self.assertIn("python/jittor.egg-info/not-zip-safe", stderr)
+
+    def test_other_egg_info_directory_fails(self):
+        members = dict(self.members)
+        members["python/other.egg-info/PKG-INFO"] = b"unexpected\n"
+        status, _stdout, stderr = self._run(
+            self._sdist("other-egg-info.tar.gz", members)
+        )
+        self.assertEqual(status, 1)
+        self.assertIn("unapproved generated .egg-info metadata", stderr)
+        self.assertIn("python/other.egg-info/PKG-INFO", stderr)
 
     def test_missing_tools_build_source_fails(self):
         members = dict(self.members)
