@@ -37,9 +37,13 @@ custom_op is used for implement a complicated op. The capabilities of custom_op 
 custom_op用于实现复杂的算子。 custom_op和内置运算的功能完全相同。
 
 ```{code-cell} ipython3
-:tags: [cuda, skip-execution]
-
 import jittor as jt
+
+assert callable(jt.compile_custom_op)
+```
+
+```{code-cell} ipython3
+:tags: [cuda, skip-execution]
 
 header ="""
 #pragma once

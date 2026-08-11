@@ -1,0 +1,152 @@
+{
+  "pages": [
+    {
+      "docname": "api/core",
+      "objects": [
+        "jittor.array",
+        "jittor.grad",
+        "jittor.Module",
+        "jittor.Var",
+        "jittor.save",
+        "jittor.load"
+      ]
+    },
+    {
+      "docname": "api/nn",
+      "objects": [
+        "jittor.nn.Linear",
+        "jittor.nn.Conv",
+        "jittor.nn.BatchNorm",
+        "jittor.nn.LayerNorm",
+        "jittor.nn.ReLU",
+        "jittor.nn.Sequential",
+        "jittor.nn.CrossEntropyLoss",
+        "jittor.nn.MSELoss"
+      ]
+    },
+    {
+      "docname": "api/nn-attention",
+      "objects": [
+        "jittor.nn.attention.sequence_lengths",
+        "jittor.nn.attention.cumulative_sequence_lengths",
+        "jittor.nn.attention.varlen_scaled_dot_product_attention"
+      ]
+    },
+    {
+      "docname": "api/models",
+      "objects": [
+        "jittor.models.resnet18",
+        "jittor.models.resnet50",
+        "jittor.models.vgg16",
+        "jittor.models.alexnet",
+        "jittor.models.vit_b_16",
+        "jittor.models.vit_b_32"
+      ]
+    },
+    {
+      "docname": "api/optim",
+      "objects": [
+        "jittor.optim.Optimizer",
+        "jittor.optim.SGD",
+        "jittor.optim.RMSprop",
+        "jittor.optim.Adam",
+        "jittor.optim.AdamW",
+        "jittor.lr_scheduler.CosineAnnealingLR",
+        "jittor.lr_scheduler.ExponentialLR",
+        "jittor.lr_scheduler.StepLR",
+        "jittor.lr_scheduler.MultiStepLR",
+        "jittor.lr_scheduler.ReduceLROnPlateau"
+      ]
+    },
+    {
+      "docname": "api/init",
+      "objects": [
+        "jittor.init.constant",
+        "jittor.init.uniform",
+        "jittor.init.gauss",
+        "jittor.init.kaiming_uniform_",
+        "jittor.init.kaiming_normal_",
+        "jittor.init.xavier_uniform_",
+        "jittor.init.xavier_gauss_",
+        "jittor.init.trunc_normal_"
+      ]
+    },
+    {
+      "docname": "api/contrib",
+      "objects": [
+        "jittor.contrib.argmax_pool",
+        "jittor.contrib.concat",
+        "jittor.contrib.getitem",
+        "jittor.contrib.setitem"
+      ]
+    },
+    {
+      "docname": "api/dataset",
+      "objects": [
+        "jittor.dataset.Dataset",
+        "jittor.dataset.DataLoader",
+        "jittor.dataset.TensorDataset",
+        "jittor.dataset.ImageFolder",
+        "jittor.dataset.MNIST",
+        "jittor.dataset.CIFAR10",
+        "jittor.dataset.CIFAR100",
+        "jittor.dataset.VOC"
+      ]
+    },
+    {
+      "docname": "api/transform",
+      "objects": [
+        "jittor.transform.Compose",
+        "jittor.transform.Resize",
+        "jittor.transform.CenterCrop",
+        "jittor.transform.RandomCrop",
+        "jittor.transform.RandomHorizontalFlip",
+        "jittor.transform.ColorJitter",
+        "jittor.transform.ToTensor",
+        "jittor.transform.ImageNormalize"
+      ]
+    },
+    {
+      "docname": "api/linalg",
+      "objects": [
+        "jittor.linalg.inv",
+        "jittor.linalg.pinv",
+        "jittor.linalg.solve",
+        "jittor.linalg.det",
+        "jittor.linalg.slogdet",
+        "jittor.linalg.cholesky",
+        "jittor.linalg.qr",
+        "jittor.linalg.svd",
+        "jittor.linalg.eigh",
+        "jittor.linalg.norm",
+        "jittor.linalg.einsum"
+      ]
+    },
+    {
+      "docname": "api/distributions",
+      "objects": [
+        "jittor.distributions.Distribution",
+        "jittor.distributions.Categorical",
+        "jittor.distributions.Normal",
+        "jittor.distributions.Uniform",
+        "jittor.distributions.Bernoulli",
+        "jittor.distributions.Exponential",
+        "jittor.distributions.Independent",
+        "jittor.distributions.Beta",
+        "jittor.distributions.Gamma",
+        "jittor.distributions.Poisson",
+        "jittor.distributions.Dirichlet",
+        "jittor.distributions.kl_divergence"
+      ]
+    },
+    {
+      "docname": "api/loss3d",
+      "objects": [
+        "jittor.loss3d.chamfer_loss",
+        "jittor.loss3d.ChamferLoss",
+        "jittor.loss3d.earth_mover_distance",
+        "jittor.loss3d.EarthMoverDistance"
+      ]
+    }
+  ]
+}

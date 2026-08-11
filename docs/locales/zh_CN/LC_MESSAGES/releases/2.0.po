@@ -1,0 +1,77 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) 2026, Jittor contributors
+# This file is distributed under the same license as the Jittor package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Jittor 1.3.11.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-08-12 02:07+0800\n"
+"PO-Revision-Date: 2026-08-11 18:11+0000\n"
+"Last-Translator: Jittor contributors\n"
+"Language: zh_CN\n"
+"Language-Team: zh_CN <LL@li.org>\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: 28f2cc15524b450884fe3de57d567f97
+msgid "Jittor 2.0 Migration Notes"
+msgstr "计图 2.0 迁移说明"
+
+#: 0c524126f84542048acc0863f7af4bae
+msgid "Breaking Changes"
+msgstr ""
+
+#: dc44920de0354d4db1423e3ca65a1130
+msgid "`jittor.vcompiler` retired"
+msgstr ""
+
+#: 0f8de33c63c44447baa04915d0b335a5
+msgid ""
+"Jittor 2.0 removes the experimental `jittor.vcompiler` package and its "
+"`build()` decorator. Importing that package compiled a private C++ static-"
+"graph extension as a side effect, and the API had no in-repository consumer "
+"or stable compatibility contract. Source checkouts and installed wheels now "
+"both report no module specification for `jittor.vcompiler`."
+msgstr ""
+
+#: 889166ca8799403a9cc6dcd456f97706
+msgid ""
+"There is no drop-in replacement for its cached static-graph decorator. Use "
+"normal Jittor graph execution for model code. Extension authors who need a "
+"custom operation should use the maintained `jittor.compile_custom_op` or "
+"`jittor.compile_custom_ops` interfaces and explicitly test forward and "
+"backward behavior on each supported backend."
+msgstr ""
+
+#: c9c3d6c79b7f499fafd45efd5c5e8f8e
+msgid "Repository-only payload moved out of the wheel"
+msgstr ""
+
+#: 02dcdb049f3641f1a19a6989f1697f1c
+msgid ""
+"Operational scripts, release utilities, examples, and notebooks now live "
+"under root `tools/` and `examples/`. They remain available in the source "
+"distribution but are no longer importable members of the runtime wheel. "
+"Installed-environment validation uses `python -m jittor.selftest`."
+msgstr ""
+
+#: 70ba3067f7b74b8ca810093a46819f87
+msgid ""
+"MyST Markdown under `examples/notebooks/` is the canonical tutorial source. "
+"Generated `.ipynb` files are no longer versioned or shipped in the source "
+"distribution; `python -m nox -s tutorials` materializes them in external "
+"state and runs the maintained offline CPU smoke set."
+msgstr ""
+
+#: e08f1694ab6e419a838b522e922afe72
+msgid ""
+"The legacy Clang pass under `jittor/extern/llvm` and the callable "
+"`jittor.compiler.compile_extern()` are not removed in this release stage. "
+"Their retirement is deferred until the Linux/Clang cold-compilation gate "
+"passes."
+msgstr ""

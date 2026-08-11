@@ -1,0 +1,98 @@
+name: Documentation
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  links:
+    name: nox / docs_links
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install pinned development tools
+        run: python -m pip install -r requirements/dev-tools.txt
+      - name: Check internal documentation links
+        run: python -m nox -s docs_links
+
+  en:
+    name: nox / docs (en)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install native CPU toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends build-essential libomp-dev
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install pinned development tools
+        run: python -m pip install -r requirements/dev-tools.txt
+      - name: Build strict English documentation
+        run: python -m nox -s docs
+
+  zh-cn:
+    name: nox / docs_zh (zh_CN)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install native CPU toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends build-essential libomp-dev
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install pinned development tools
+        run: python -m pip install -r requirements/dev-tools.txt
+      - name: Build strict Simplified Chinese documentation
+        run: python -m nox -s docs_zh
+
+  tutorials-fast:
+    name: nox / tutorials (offline CPU)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install native CPU toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends build-essential libomp-dev
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install pinned development tools
+        run: python -m pip install -r requirements/dev-tools.txt
+      - name: Validate and execute tutorials
+        run: python -m nox -s tutorials

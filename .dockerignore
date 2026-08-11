@@ -16,3 +16,4 @@
 examples/**/__pycache__/
 examples/**/.pytest_cache/
 examples/**/.ipynb_checkpoints/
+examples/**/*.ipynb

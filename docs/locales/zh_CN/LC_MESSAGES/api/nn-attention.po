@@ -1,0 +1,75 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) 2026, Jittor contributors
+# This file is distributed under the same license as the Jittor package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Jittor 1.3.11.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-08-12 02:07+0800\n"
+"PO-Revision-Date: 2026-08-11 18:11+0000\n"
+"Last-Translator: Jittor contributors\n"
+"Language: zh_CN\n"
+"Language-Team: zh_CN <LL@li.org>\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: 20bd2385dc3c4ef5b67622dd85b023f4
+msgid "Attention API"
+msgstr "注意力 API"
+
+#: 6c922dc0663547d2b56f53197b134608
+msgid ""
+"Variable-length scaled dot-product attention is maintained in the canonical "
+"`jittor.nn.attention` module."
+msgstr ""
+
+#: ee4efd95f15342858e722f94c63ce241
+msgid ""
+":py:obj:`sequence_lengths <jittor.nn.attention.sequence_lengths>`\\ "
+"\\(layout\\)"
+msgstr ""
+
+#: 03ef4a362c6743378202527fb1a1dafa e9515f8d20004da2827c28d8c530d599
+msgid "Convert a sequence of slices or ``(start, stop)`` pairs to lengths."
+msgstr ""
+
+#: 6219bdbcc22249d7b0c461132ca18e40
+msgid ""
+":py:obj:`cumulative_sequence_lengths "
+"<jittor.nn.attention.cumulative_sequence_lengths>`\\ \\(lengths\\[\\, "
+"...\\]\\)"
+msgstr ""
+
+#: 71e779ba594848cb8e38eb0f8392e15d 917c29e3bcae4037bedbdf9ac7d7fac6
+msgid "Return a bounded-cache int32 cumulative-length tensor."
+msgstr ""
+
+#: 99b7af2bc70a453ab69a63a3fc36f699
+msgid ""
+":py:obj:`varlen_scaled_dot_product_attention "
+"<jittor.nn.attention.varlen_scaled_dot_product_attention>`\\ \\(q\\[\\, k\\,"
+" ...\\]\\)"
+msgstr ""
+
+#: 1d0e3e100c484a3dbbcdc80d91153797 2121287a20924bf493853770db5965cc
+msgid "Dispatch packed or dense inputs through FlashAttention varlen callables."
+msgstr ""
+
+#: f9b619dc45d74f0eb17af5e34698461a
+msgid ""
+"``tensor_factory`` can be supplied by a compatibility layer whose tensor "
+"constructor accepts an explicit device. The default creates a native Jittor "
+"tensor under the active device flag."
+msgstr ""
+
+#: a4e79c75629e49e0b8d91b32f9a1f266
+msgid ""
+"One input is QKV-packed, two inputs are Q plus KV-packed, and three inputs "
+"are separate Q/K/V. Packed inputs provide explicit sequence lengths; dense "
+"inputs omit them and are flattened/restored around the backend call."
+msgstr ""

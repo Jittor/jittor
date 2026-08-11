@@ -54,7 +54,9 @@ class TestPackagingStructure(unittest.TestCase):
         self.assertIn("recursive-include python/jittor_utils *", directives)
         self.assertIn("recursive-include examples *", directives)
         self.assertIn("recursive-include tools *", directives)
+        self.assertIn("recursive-include docs *", directives)
         self.assertIn("global-exclude *.py[cod]", directives)
+        self.assertIn("global-exclude *.ipynb", directives)
         self.assertIn("global-exclude __pycache__", directives)
 
     def test_root_development_trees_do_not_become_runtime_packages(self):

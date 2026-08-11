@@ -1,0 +1,90 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) 2026, Jittor contributors
+# This file is distributed under the same license as the Jittor package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Jittor 1.3.11.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-08-12 02:07+0800\n"
+"PO-Revision-Date: 2026-08-11 18:11+0000\n"
+"Last-Translator: Jittor contributors\n"
+"Language: zh_CN\n"
+"Language-Team: zh_CN <LL@li.org>\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: 7a8b45f666ae47ce888afc3ef9aba78b
+msgid "Comparing framework performance"
+msgstr "框架性能对比"
+
+#: 25b2275bd00a4aa2b9a8528764a95eb1
+msgid ""
+"Jittor executes asynchronously and compiles operators on first use. A useful"
+" benchmark therefore separates compilation from steady-state execution and "
+"synchronizes the device around the measured interval."
+msgstr "计图异步执行，并在首次使用时编译算子。因此，有效的基准测试必须把编译阶段与稳态执行分开，并在计时区间前后同步设备。"
+
+#: 18a9ae9ee23642eb91f5ea8ecf73979f
+#, python-brace-format
+msgid ""
+"For repeatable, commit-indexed measurements, prefer the maintained "
+"{doc}`../performance/benchmarking` ASV suite. The following pattern is "
+"useful for a local model comparison:"
+msgstr ""
+"需要可重复且能关联到提交的结果时，请优先使用维护中的 {doc}`../performance/benchmarking` ASV "
+"套件。下面的模式适合本地模型对比："
+
+#: 0bf35c8060494ee1954b087666b54403
+msgid ""
+"Use the same warm-up count, input shape, dtype, evaluation mode, "
+"accelerator, library versions, and synchronization policy for every "
+"framework. Do not compare Jittor's first compile against another framework's"
+" warm cache."
+msgstr "所有框架必须使用相同的预热次数、输入形状、数据类型、评估模式、加速器、库版本和同步策略。不要拿计图的首次编译与另一个框架的热缓存结果比较。"
+
+#: a863c6a5fe8a46bca9c31a19969e24ab
+msgid "Validate numerical parity"
+msgstr "验证数值一致性"
+
+#: fcc623013309485e9e32a530fde1bcbd
+msgid ""
+"A faster result is not useful if it computes a different model. Before "
+"timing:"
+msgstr "如果计算的不是同一个模型，更快的结果没有意义。计时前应完成以下检查："
+
+#: a5292cffff5f41b2966be3f8241ec670
+msgid "Transfer identical parameters and input values."
+msgstr "传入完全相同的参数和输入值。"
+
+#: 77d2a8a358aa44a3a777b3b28faba9bd
+msgid "Compare outputs outside the timed region."
+msgstr "在计时区间之外比较输出。"
+
+#: 3309b02ffd694e83ad463b98a2bc1f6b
+msgid "Choose tolerances appropriate for the dtype and backend."
+msgstr "根据数据类型和后端选择合适的误差容限。"
+
+#: f42c754a32ac4706be65b23336bbcc1b
+msgid "Confirm that both processes use the intended accelerator."
+msgstr "确认两个进程都使用了预期的加速器。"
+
+#: 3218015a7b5d4f328b6f98daf62117ed
+msgid ""
+"Monitor device memory so swapping or allocation pressure does not skew one "
+"side of the comparison."
+msgstr "监控设备内存，避免交换或分配压力只影响对比中的一方。"
+
+#: 14e3cf3448ca4a72902ec5653acf2bcc
+msgid ""
+"For PyTorch, call `torch.cuda.synchronize()` before and after the measured "
+"loop. For Jittor, call `jt.sync_all(True)` at the same boundaries. Report "
+"the hardware, software versions, exact command, sample count, and dispersion"
+" rather than a single unexplained throughput number."
+msgstr ""
+"PyTorch 应在计时循环前后调用 `torch.cuda.synchronize()`；计图应在相同边界调用 "
+"`jt.sync_all(True)`。报告中应给出硬件、软件版本、完整命令、样本数和离散程度，而不是一个没有说明的吞吐量数字。"

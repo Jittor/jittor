@@ -35,6 +35,8 @@ COPY examples ./examples
 
 RUN python -m pip install --no-cache-dir . \
     && python -m pip install --no-cache-dir -r requirements/examples.txt \
+    && find examples/notebooks -type f -name '*.md' ! -name README.md -print0 \
+       | xargs -0 -n1 python -m jupytext --to ipynb \
     && nvcc_path= python -m jittor.selftest
 
 CMD ["python", "-m", "notebook", "--allow-root", "--ip=0.0.0.0", "--no-browser", "--ServerApp.root_dir=/opt/jittor/examples/notebooks"]

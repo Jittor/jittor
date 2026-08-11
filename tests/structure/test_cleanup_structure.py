@@ -26,7 +26,9 @@ class TestCleanupStructure(unittest.TestCase):
             "python/jittor/version",
             "python/jittor/utils/polish.py",
             "python/jittor/utils/polish_centos.py",
+            "python/jittor_utils/translator.py",
             "python/jittor_utils/pack_offline.py",
+            "tools/docs/legacy/make_doc.py",
         )
         for relative in retired:
             with self.subTest(path=relative):
@@ -73,7 +75,6 @@ class TestCleanupStructure(unittest.TestCase):
             "tools/benchmarks/legacy/inference_perf.py",
             "tools/build/build_aarch64_mkl.sh",
             "tools/distributed/tmpi",
-            "tools/docs/legacy/make_doc.py",
             "tools/install/legacy/install.sh",
             "tools/install/legacy/install_llvm.sh",
             "tools/install/legacy/install_mkl.sh",

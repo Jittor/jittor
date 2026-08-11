@@ -45,17 +45,24 @@ JUPYTEXT = "jupytext==1.17.3"
 NBCLIENT = "nbclient==0.10.2"
 NBFORMAT = "nbformat==5.10.4"
 IPYKERNEL = "ipykernel==6.29.5"
+DOCS_REQUIREMENTS = REPO_ROOT / "requirements" / "docs.txt"
 
 RATCHET_FILES = (
     "noxfile.py",
     "agent/scripts/check_sdist_contents.py",
     "agent/scripts/check_wheel_contents.py",
+    "docs/_myst_autodoc.py",
+    "docs/conf.py",
     "python/jittor/selftest.py",
     "python/jittor_utils/cuda_wheel.py",
     "python/jittor/compat/shim/deploy.py",
     "tools/release/pack_offline.py",
+    "tools/docs/check_build.py",
+    "tools/docs/check_catalogs.py",
+    "tools/docs/check_links.py",
     "tests/integration/test_notebooks.py",
     "tests/structure/test_cleanup_structure.py",
+    "tests/structure/test_docs_structure.py",
     "tests/structure/test_pytest_contract.py",
     "tests/structure/test_selftest_structure.py",
 )
@@ -63,10 +70,16 @@ FORMAT_FILES = (
     "noxfile.py",
     "agent/scripts/check_sdist_contents.py",
     "agent/scripts/test_check_sdist_contents.py",
+    "docs/_myst_autodoc.py",
+    "docs/conf.py",
     "python/jittor/selftest.py",
     "tools/release/pack_offline.py",
+    "tools/docs/check_build.py",
+    "tools/docs/check_catalogs.py",
+    "tools/docs/check_links.py",
     "tests/integration/test_notebooks.py",
     "tests/structure/test_cleanup_structure.py",
+    "tests/structure/test_docs_structure.py",
     "tests/structure/test_packaging_structure.py",
     "tests/structure/test_torch_shim_structure.py",
     "tests/structure/test_pytest_contract.py",
@@ -76,6 +89,7 @@ FILESYSTEM_TESTS = (
     "agent/scripts/test_check_sdist_contents.py",
     "agent/scripts/test_check_wheel_contents.py",
     "tests/structure/test_cleanup_structure.py",
+    "tests/structure/test_docs_structure.py",
     "tests/structure/test_packaging_structure.py",
     "tests/structure/test_pytest_contract.py",
     "tests/structure/test_selftest_structure.py",
@@ -194,6 +208,93 @@ def _run_pytest(session, defaults, env, runner=None):
 
 def _hardware_python():
     return os.environ.get("JITTOR_CI_PYTHON", sys.executable)
+
+
+def _install_docs_wheel(session, root, env):
+    """Build and install this checkout's wheel for a full autodoc run."""
+    session.install(
+        "-r",
+        str(DOCS_REQUIREMENTS),
+        BUILD,
+        SETUPTOOLS,
+        WHEEL,
+        "astunparse==1.6.3",
+        "numpy==1.26.4",
+        "pillow==11.0.0",
+        "tqdm==4.67.1",
+    )
+    source = root / "source"
+    dist = root / "dist"
+    _source_copy(source)
+    with session.chdir(source):
+        session.run(
+            "python",
+            "-m",
+            "build",
+            "--no-isolation",
+            "--wheel",
+            "--outdir",
+            str(dist),
+            env=env,
+        )
+    wheels = sorted(dist.glob("*.whl"))
+    if len(wheels) != 1:
+        session.error("expected exactly one documentation wheel, found %d" % len(wheels))
+    session.install("--no-deps", "--force-reinstall", str(wheels[0]))
+
+    docs_env = env.copy()
+    docs_env.pop("PYTHONPATH", None)
+    docs_env["PYTHONNOUSERSITE"] = "1"
+    docs_env["nvcc_path"] = ""
+    docs_env["cache_name"] = "nox_docs_wheel"
+    docs_env["CUDA_VISIBLE_DEVICES"] = ""
+    docs_env["use_cuda"] = "0"
+    docs_env["use_mkl"] = "0"
+    docs_env["use_mpi"] = "0"
+    docs_env["use_nccl"] = "0"
+    docs_env["use_cutt"] = "0"
+    docs_env["use_cutlass"] = "0"
+    python_config = shutil.which("python3.%d-config" % sys.version_info[1])
+    if python_config:
+        docs_env["python_config_path"] = python_config
+    probe = r"""
+from pathlib import Path
+import sys
+import jittor
+
+module_path = Path(jittor.__file__).resolve()
+repo_root = Path(sys.argv[1]).resolve()
+prefix = Path(sys.prefix).resolve()
+if repo_root == module_path or repo_root in module_path.parents:
+    raise SystemExit("autodoc imported the source tree: %s" % module_path)
+if prefix != module_path and prefix not in module_path.parents:
+    raise SystemExit("autodoc did not import from the nox environment: %s" % module_path)
+print("autodoc wheel:", module_path)
+"""
+    with session.chdir(root):
+        session.run("python", "-c", probe, str(REPO_ROOT), env=docs_env)
+    return docs_env
+
+
+def _sphinx_html(session, root, env, language, source_root=None):
+    output = root / "html" / language
+    source_root = source_root or REPO_ROOT / "docs"
+    session.run(
+        "python",
+        "-m",
+        "sphinx",
+        "-W",
+        "--keep-going",
+        "-n",
+        "-b",
+        "html",
+        "-D",
+        "language=%s" % language,
+        str(source_root),
+        str(output),
+        env=env,
+    )
+    return output
 
 
 def _run_with_cann(session, python, args, env):
@@ -341,6 +442,105 @@ def structure(session):
     selftest_env["cache_name"] = "nox_wheel_selftest"
     with session.chdir(root):
         session.run("python", "-m", "jittor.selftest", env=selftest_env)
+
+
+@nox.session(python="3.11", venv_backend="venv")
+def docs(session):
+    """Build strict English HTML from an installed wheel and audit API anchors."""
+    root, env = _session_env(session, "docs-en")
+    docs_env = _install_docs_wheel(session, root, env)
+    html = _sphinx_html(session, root, docs_env, "en")
+    session.run(
+        "python",
+        str(REPO_ROOT / "tools" / "docs" / "check_build.py"),
+        "--en",
+        str(html),
+        env=docs_env,
+    )
+
+
+@nox.session(python="3.11", venv_backend="venv")
+def docs_zh(session):
+    """Check gettext freshness and build strict English and Simplified Chinese HTML."""
+    root, env = _session_env(session, "docs-zh")
+    docs_env = _install_docs_wheel(session, root, env)
+    gettext_root = root / "gettext"
+    session.run(
+        "python",
+        "-m",
+        "sphinx",
+        "-W",
+        "--keep-going",
+        "-n",
+        "-b",
+        "gettext",
+        str(REPO_ROOT / "docs"),
+        str(gettext_root),
+        env=docs_env,
+    )
+    localized_source = root / "docs-source"
+    shutil.copytree(str(REPO_ROOT / "docs"), str(localized_source))
+    catalog_copy = localized_source / "locales"
+    session.run(
+        "sphinx-intl",
+        "update",
+        "-p",
+        str(gettext_root),
+        "-d",
+        str(catalog_copy),
+        "-l",
+        "zh_CN",
+        env=docs_env,
+    )
+    session.run(
+        "python",
+        str(REPO_ROOT / "tools" / "docs" / "check_catalogs.py"),
+        str(REPO_ROOT / "docs" / "locales"),
+        str(catalog_copy),
+        env=docs_env,
+    )
+    english = _sphinx_html(session, root, docs_env, "en", localized_source)
+    chinese = _sphinx_html(session, root, docs_env, "zh_CN", localized_source)
+    session.run(
+        "python",
+        str(REPO_ROOT / "tools" / "docs" / "check_build.py"),
+        "--en",
+        str(english),
+        "--zh-cn",
+        str(chinese),
+        env=docs_env,
+    )
+
+
+@nox.session(python="3.11", venv_backend="venv")
+def docs_links(session):
+    """Check deterministic internal Markdown, image, MyST role, and toctree targets."""
+    _root, env = _session_env(session, "docs-links")
+    session.run(
+        "python",
+        str(REPO_ROOT / "tools" / "docs" / "check_links.py"),
+        env=env,
+    )
+
+
+@nox.session(python="3.11", venv_backend="venv")
+def tutorials(session):
+    """Materialize MyST sources and execute five offline CPU tutorial smokes."""
+    _root, env = _session_env(session, "tutorials")
+    env["nvcc_path"] = ""
+    env["JITTOR_TEST_DEVICES"] = "cpu"
+    session.install(
+        "-r",
+        str(DOCS_REQUIREMENTS),
+        "astunparse==1.6.3",
+        "numpy==1.26.4",
+        "pillow==11.0.0",
+        PYTEST,
+        PYTEST_TIMEOUT,
+        SETUPTOOLS,
+        "tqdm==4.67.1",
+    )
+    _run_pytest(session, ("tests/integration/test_notebooks.py",), env)
 
 
 @nox.session(python="3.11")

@@ -1,0 +1,119 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) 2026, Jittor contributors
+# This file is distributed under the same license as the Jittor package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Jittor 1.3.11.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-08-12 02:07+0800\n"
+"PO-Revision-Date: 2026-08-11 18:11+0000\n"
+"Last-Translator: Jittor contributors\n"
+"Language: zh_CN\n"
+"Language-Team: zh_CN <LL@li.org>\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: 9574ba988e3346d399a8460360ee2fc6
+msgid "Neural network API"
+msgstr "神经网络 API"
+
+#: 9ef322af9b4d46de8b8b2db1a1cf5a67
+msgid ""
+"Import neural-network layers and functional operations with `from jittor "
+"import nn`."
+msgstr ""
+
+#: 28b8ef803a4641049dcc30d870f6cbd6
+msgid ""
+":py:obj:`Linear <jittor.nn.Linear>`\\ \\(in\\_features\\, "
+"out\\_features\\[\\, bias\\]\\)"
+msgstr ""
+
+#: 5c399a05c4a949559ee4c1e52834e03d
+msgid ""
+":py:obj:`Conv <jittor.nn.Conv>`\\ \\(in\\_channels\\, out\\_channels\\, "
+"kernel\\_size\\)"
+msgstr ""
+
+#: c8c9b7558c604fe6bae65e6bae976d34 e0f40311eed64f0baf2991a4b56b475e
+msgid ""
+"Applies a 2D convolution over an input signal composed of several input "
+"planes."
+msgstr ""
+
+#: 4fc8f2ce83a44c85b536b856dfc8b178
+msgid ""
+":py:obj:`BatchNorm <jittor.nn.BatchNorm>`\\ \\(num\\_features\\[\\, eps\\, "
+"momentum\\, ...\\]\\)"
+msgstr ""
+
+#: 8e298362c664444dba3121cb981a452e
+msgid ""
+":py:obj:`LayerNorm <jittor.nn.LayerNorm>`\\ \\(normalized\\_shape\\[\\, "
+"eps\\, ...\\]\\)"
+msgstr ""
+
+#: 12b19cda055e4c7da2c610b60e705f82
+msgid ":py:obj:`ReLU <jittor.nn.ReLU>`\\ \\(\\*args\\, \\*\\*kw\\)"
+msgstr ""
+
+#: c46a8abdf10043fb80707b18a67dd713
+msgid ":py:obj:`Sequential <jittor.nn.Sequential>`\\ \\(\\*args\\)"
+msgstr ""
+
+#: 725b097458b34192867866fab7195cb7
+msgid ""
+":py:obj:`CrossEntropyLoss <jittor.nn.CrossEntropyLoss>`\\ \\(\\[weight\\, "
+"ignore\\_index\\, ...\\]\\)"
+msgstr ""
+
+#: b48086d6527048be8774deea04536e4b
+msgid ":py:obj:`MSELoss <jittor.nn.MSELoss>`\\ \\(\\[reduction\\]\\)"
+msgstr ""
+
+#: 05551c53c8e14d5aa8c573752c7bae8e
+msgid "Parameters"
+msgstr ""
+
+#: fe1e08e69fea4dac9a330c75b88951cb
+msgid "Number of channels in the input feature map"
+msgstr ""
+
+#: c457973b04b742f7895ce3d5a47be2c2
+msgid "Number of channels in the output feature map"
+msgstr ""
+
+#: 615d470177044770be95bb43f2ff6853
+msgid "Size of the convolving kernel"
+msgstr ""
+
+#: 6642321bff6a416a9cefb26bb29db8b2
+msgid "Stride of the convolution. Default: 1"
+msgstr ""
+
+#: 340429fb658b48938c01eb9d85c4a0a9
+msgid "Padding added to all four sides of the input. Default: 0"
+msgstr ""
+
+#: ead33faf7e8a4f089c65b23b7cb7e83f
+msgid "Spacing between kernel elements. Default: 1"
+msgstr ""
+
+#: fe9e7ae2651142e087216eb4f7ab5d55
+msgid ""
+"Number of blocked connections from input channels to output channels. "
+"Default: 1"
+msgstr ""
+
+#: cbfca5093b2441f9a12a53f820174124
+msgid "If True, adds a learnable bias to the output. Default: True"
+msgstr ""
+
+#: de9d62a2edd94afc837340a7c8d78585
+msgid "Example:"
+msgstr ""

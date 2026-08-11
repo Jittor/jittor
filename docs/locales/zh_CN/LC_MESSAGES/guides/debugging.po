@@ -1,0 +1,119 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) 2026, Jittor contributors
+# This file is distributed under the same license as the Jittor package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Jittor 1.3.11.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-08-12 02:07+0800\n"
+"PO-Revision-Date: 2026-08-11 18:11+0000\n"
+"Last-Translator: Jittor contributors\n"
+"Language: zh_CN\n"
+"Language-Team: zh_CN <LL@li.org>\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: 0269afa2b8554264aa16fbafa980e153
+msgid "Debugging Jittor programs"
+msgstr "计图程序调试"
+
+#: 4cfa3770406748c6b745441f9cedb49a
+msgid ""
+"Jittor executes graphs lazily and compiles operators at runtime. The "
+"following diagnostics trade performance for more precise failure "
+"information, so enable them only while reproducing a problem."
+msgstr "计图以延迟方式执行计算图，并在运行时编译算子。下面的诊断选项会用性能换取更准确的故障信息，因此只应在复现问题时启用。"
+
+#: 12f344d2eb6441d08a5691dfe10cb094
+msgid "Find NaN and infinity values"
+msgstr "定位 NaN 和无穷值"
+
+#: 8fea01a4b8fe403fb1fb575145bcd649
+msgid "Enable output checking and Python source tracing before starting the process:"
+msgstr "启动进程前启用输出检查和 Python 源码追踪："
+
+#: 6b24306878f14419978befe03a1908a4
+msgid ""
+"`JT_CHECK_NAN=1` stops when an operator emits an invalid floating-point "
+"value. `trace_py_var=3` records the Python call site associated with "
+"generated operators. Both settings trigger recompilation and add substantial"
+" overhead."
+msgstr ""
+"`JT_CHECK_NAN=1` 会在算子输出异常浮点值时停止程序；`trace_py_var=3` 会记录生成算子对应的 Python "
+"调用位置。这两个设置都会触发重新编译并带来显著开销。"
+
+#: b9b6661c27af4edc96ab098728cd30ce
+msgid "Make asynchronous failures local"
+msgstr "就地定位异步错误"
+
+#: da7b3cac64944248bab08af517a0775b
+msgid ""
+"Lazy execution can report an error after the Python line that created the "
+"failing operator. For a small reproducer, temporarily switch to eager "
+"execution:"
+msgstr "延迟执行可能在创建失败算子的 Python 语句之后才报告错误。对于较小的复现程序，可暂时切换到立即执行："
+
+#: 1833056fc6574bc388f5cbadf2ec749f
+msgid "The equivalent process-local setting is:"
+msgstr "等价的进程内设置是："
+
+#: 5bc76435856c46b9bde73cac950f1b46
+msgid "Diagnose memory exhaustion"
+msgstr "诊断内存耗尽"
+
+#: b87a89b631524f72a12ecf2654a074dc
+msgid ""
+"If one iteration exceeds available memory, first reduce the model or batch "
+"size. Explicit synchronization and collection can help establish whether "
+"temporary graphs are being retained:"
+msgstr "如果一次迭代就超过可用内存，请先缩小模型或批大小。显式同步和回收有助于判断临时计算图是否被意外保留："
+
+#: e089c1f4b86d41e5a569f9cca972e804
+msgid ""
+"For CUDA convolutions, limiting cuDNN workspace can reduce peak allocation "
+"at the cost of performance:"
+msgstr "对于 CUDA 卷积，限制 cuDNN 工作区可以降低峰值分配，但会牺牲性能："
+
+#: 7330dc69e6644a7eab3336a5c9c1ce35
+msgid "If memory grows across iterations, inspect graph and held-variable counts:"
+msgstr "如果内存随迭代持续增长，请检查计算图和被持有变量的数量："
+
+#: 91f3182d2e564af5bb40aec6e11a1a18
+msgid ""
+"An increasing `lived_var` or `lived_op` count usually indicates a retained "
+"graph or a global variable that still participates in differentiation."
+msgstr "`lived_var` 或 `lived_op` 持续增加，通常说明计算图被保留，或某个仍参与求导的全局变量没有释放。"
+
+#: a4620e77cbad4919b6c95da6c9df851d
+msgid "Debug a segmentation fault"
+msgstr "调试段错误"
+
+#: e8881126ec134ca0bfd19dc747028ef9
+msgid "Build with debug information and attach GDB automatically:"
+msgstr "使用调试信息构建，并自动附加 GDB："
+
+#: 17985f9483d247c59399cdb83682c155
+msgid ""
+"Include a minimal reproducer, the complete log, compiler version, and device"
+" information when reporting a native crash."
+msgstr "报告原生崩溃时，请提供最小复现、完整日志、编译器版本和设备信息。"
+
+#: c43dcc53baba46c5bc592e5678b9f6ed
+msgid "Manage the compilation cache"
+msgstr "管理编译缓存"
+
+#: 6d882b814e534a3899bb27860c09e9f7
+msgid ""
+"Jittor stores compiled kernels, downloaded toolchains, datasets, and weights"
+" in its cache directory. After a compiler, driver, or system upgrade, clear "
+"all cached state with:"
+msgstr "计图会在缓存目录中存放已编译内核、下载的工具链、数据集和权重。升级编译器、驱动或系统后，可用以下命令清理全部缓存状态："
+
+#: 374baf7129e2458d8c6872e9446be81c
+msgid "List narrower cleanup targets with:"
+msgstr "可用以下命令查看更细粒度的清理目标："

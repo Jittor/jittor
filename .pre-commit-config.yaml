@@ -36,12 +36,16 @@ repos:
 
   - repo: local
     hooks:
-      - id: notebook-sync
-        name: Jupytext notebook pairs are synchronized
-        entry: jupytext --sync
+      - id: notebook-sources
+        name: MyST notebook sources materialize outside the checkout
+        entry: python -m pytest -q tests/integration/test_notebooks.py -m structure
         language: python
-        additional_dependencies: [jupytext==1.17.3]
+        additional_dependencies:
+          - pytest==7.4.4
+          - jupytext==1.17.3
+          - nbformat==5.10.4
         files: ^examples/notebooks/.*\.(md|ipynb)$
+        pass_filenames: false
       - id: repository-layout
         name: repository layout
         entry: agent/scripts/check_repo_layout.sh

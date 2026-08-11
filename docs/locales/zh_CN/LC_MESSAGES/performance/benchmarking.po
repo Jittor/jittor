@@ -1,0 +1,172 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) 2026, Jittor contributors
+# This file is distributed under the same license as the Jittor package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Jittor 1.3.11.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-08-12 02:07+0800\n"
+"PO-Revision-Date: 2026-08-11 18:11+0000\n"
+"Last-Translator: Jittor contributors\n"
+"Language: zh_CN\n"
+"Language-Team: zh_CN <LL@li.org>\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: 17cbd045afcb46588af7274ef101a08e
+msgid "Performance benchmarking"
+msgstr "性能基准测试"
+
+#: 459d5f045c0a40cea7ac7dae07dd5f0e
+msgid ""
+"Jittor uses ASV 0.6.6 to retain commit-indexed timing and memory results. "
+"The suite deliberately uses the current Python environment "
+"(`--python=same`): a fresh environment per historical commit would mostly "
+"measure Jittor's compile and installation cost rather than steady-state "
+"runtime performance."
+msgstr ""
+
+#: 301f43f82aa64e538eedf97794efee86
+msgid "Cache isolation"
+msgstr ""
+
+#: dde0ab5bcbfd476a886c1e6831b3d10a
+msgid ""
+"ASV and the unit-test suite must never compile into the same Jittor cache. "
+"Every benchmark setup validates both variables before importing Jittor:"
+msgstr ""
+
+#: 87b0379ea7654d55bb8d7698268786a1
+msgid ""
+"`cache_name` must begin with `asv-`, and the resolved `JITTOR_HOME` must "
+"contain an `asv` path component. A missing or reused cache is a hard error, "
+"not an ASV skip. Give parallel CPU, CUDA, and NPU jobs different "
+"`JITTOR_HOME` directories or different `cache_name` values."
+msgstr ""
+
+#: d81e6a71cfd7421e9b16592eaefec1e6
+msgid ""
+"Generated ASV state defaults to `.asv/`. CI and nox should set "
+"`JITTOR_ASV_HOME`/`JITTOR_HOME` to job-local storage outside the checkout; "
+"raw results intended for publication should be uploaded as artifacts."
+msgstr ""
+
+#: 4fc157e0ab884bc1abd60634a2543241
+msgid "Validate and smoke-test"
+msgstr ""
+
+#: 0b8315a39378415182282a38cc960d0f
+msgid ""
+"Install the performance dependencies and check benchmark signatures without "
+"building an ASV environment:"
+msgstr ""
+
+#: eefc5d673714433bb6ba25b4c80abf46
+msgid ""
+"The CPU parameters import and execute without CUDA. CUDA parameters raise an"
+" explicit ASV skip when Jittor or real PyTorch cannot execute on CUDA. Real "
+"PyTorch is an optional oracle and must be installed separately for the "
+"target platform; an absent or shim-resolved `torch` is reported as skipped, "
+"never as a zero-duration result. At least one mandatory Jittor CPU case must"
+" execute in CI, so a run in which every parameter skips is not acceptable."
+msgstr ""
+
+#: 99bd9fd90706401a9e5272a184142e8b
+msgid "Record selected revisions"
+msgstr ""
+
+#: 21b029731c154dff9f6b97e168760ffd
+msgid ""
+"Existing environments cannot ask ASV to build an arbitrary history. Run the "
+"suite only from a checkout that matches the result label, and record that "
+"exact commit:"
+msgstr ""
+
+#: 0ebebf90a6034c38bdf6e989bb278865
+msgid ""
+"For a comparison, create one dedicated benchmark worktree, switch that "
+"worktree only to the two or three reviewed revisions, and run the command "
+"above after each switch. Keep the same compiler, accelerator, dependency "
+"versions, cache warmup policy, and ASV results directory. Do not run `ALL` "
+"or an unbounded revision range. Use `asv compare <base> <candidate>` after "
+"both selected commits have results."
+msgstr ""
+
+#: 78260d11be0f4c749ffbf56979e4db88
+msgid "Initial benchmark set"
+msgstr ""
+
+#: 6a695fcb7e62486881548cb8931a7805
+msgid "ASV module"
+msgstr ""
+
+#: 8fe8a3bebbad48818bd3922d80a6eda4
+msgid "Coverage"
+msgstr ""
+
+#: 230c5fdcbe9441dab28a4f62b7f090eb
+msgid "Parameters"
+msgstr ""
+
+#: 73e71cf594134ee68542ba1b8accbd02
+msgid "`operators`"
+msgstr ""
+
+#: 74f99074cd654383b2b2b69ba7f0f2bb
+msgid "matmul, softmax, LayerNorm, GELU"
+msgstr ""
+
+#: d830d2de19454495ad7b656f0435c50b
+msgid "Jittor/optional torch; CPU/CUDA"
+msgstr ""
+
+#: 1756867b7b194be5902f97d4c11788cc
+msgid "`tiny_llama`"
+msgstr ""
+
+#: b37f095c0e6b43328bbc9d5b43e59cdf
+msgid "LlamaModel forward and forward+backward"
+msgstr ""
+
+#: e84b43b54e36435ab2b3e9e6d687274d
+msgid "Jittor/optional torch; CUDA"
+msgstr ""
+
+#: cbff52f4e21949aeb395010ebaef6878
+msgid "`optimizer_step`"
+msgstr ""
+
+#: e2c0a493e2bf457da9eec868662d03bd
+msgid "gradient-ready SGD and AdamW step scaling"
+msgstr ""
+
+#: cd5c11c08e9f41d9ae73fb1ad689e466
+msgid "32/128/512 tensors; CPU/CUDA"
+msgstr ""
+
+#: 4848ecc3ee0746a2acd11008b2e39c58
+msgid ""
+"Tiny Llama retains the established 2-layer, hidden-size 256, intermediate-"
+"size 768, 8 attention head/4 KV head, batch 2, sequence 128 configuration. "
+"Its setup checks the output and every requested gradient for finite, nonzero"
+" values. Optimizer setup fixes the total element count at 262,144, so the "
+"tensor-count axis exposes per-tensor graph and launch overhead rather than "
+"larger workloads. CUDA comparisons use float32 with TF32 enabled on both "
+"backends. Operator benchmarks use inference/no-grad semantics; Tiny Llama "
+"enables gradients only for its forward+backward parameter."
+msgstr ""
+
+#: 89e3bfe0419443518246954a3a30648c
+msgid ""
+"Every memory result is an ASV `track_*` benchmark with unit `bytes`. On "
+"CUDA, `track_working_set_bytes` is the backend allocator's synchronized live"
+" working set after one operation/model/step. On CPU, it is the process peak "
+"RSS reported by the operating system. These are stable regression signals "
+"within one backend and machine; they are not NVML peaks and should not be "
+"compared across devices."
+msgstr ""

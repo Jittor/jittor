@@ -21,6 +21,10 @@ build/
 # This is a source-owned tool category, not a generated build directory.
 !/tools/build/
 !/tools/build/**
+docs/_build/
+docs/.doctrees/
+docs/**/*.pot
+docs/**/*.mo
 dist/
 venv/
 .venv/
@@ -28,7 +32,6 @@ venv/
 
 # Generated archives, binaries, notebooks, and local profiling output.
 *.ipynb
-!/examples/notebooks/**/*.ipynb
 *.pdf
 *.zip
 *.tgz

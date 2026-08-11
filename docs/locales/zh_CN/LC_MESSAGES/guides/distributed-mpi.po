@@ -1,0 +1,142 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) 2026, Jittor contributors
+# This file is distributed under the same license as the Jittor package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Jittor 1.3.11.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-08-12 02:07+0800\n"
+"PO-Revision-Date: 2026-08-11 18:11+0000\n"
+"Last-Translator: Jittor contributors\n"
+"Language: zh_CN\n"
+"Language-Team: zh_CN <LL@li.org>\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: 68f5537feb2e4015925ccb392342f919
+msgid "Distributed training with MPI"
+msgstr "使用 MPI 进行分布式训练"
+
+#: 7c25295e219943b99166f0430d488dd8
+msgid ""
+"Jittor can use MPI to launch data-parallel workers. Supported collective "
+"operations may use NCCL on NVIDIA devices, while the training algorithm "
+"remains in Python."
+msgstr "计图可以通过 MPI 启动数据并行工作进程。受支持的集合通信在 NVIDIA 设备上可以使用 NCCL，而训练算法仍由 Python 实现。"
+
+#: 9697be076a724e22aa29c144ff7997dc
+msgid "Install and detect Open MPI"
+msgstr "安装并检测 Open MPI"
+
+#: 5bd39b39d47646a0aee9827434c6c247
+msgid "On Debian or Ubuntu, install the launcher and development headers:"
+msgstr "在 Debian 或 Ubuntu 上安装启动器和开发头文件："
+
+#: fe737a10dc284634b02b5feaba8e1f32
+msgid ""
+"Jittor discovers `mpicc` from `PATH`. Set `mpicc_path` only when the "
+"compiler wrapper is installed somewhere non-standard:"
+msgstr "计图会从 `PATH` 中查找 `mpicc`。只有编译器包装器安装在非标准位置时，才需要设置 `mpicc_path`："
+
+#: 1ff55482659f43cc92a8399615ac34e6
+msgid "Start the same training program under `mpirun`:"
+msgstr "使用 `mpirun` 启动同一个训练程序："
+
+#: d90ad363f3db45ee8c015db5f7da84cc
+msgid ""
+"The dataset layer partitions data across workers, supported optimizers "
+"synchronize gradients, and synchronized batch-normalization layers exchange "
+"statistics. Treat a dataset's configured batch size as the global batch size"
+" and verify the behavior of custom samplers."
+msgstr "数据集层会把数据划分给各个工作进程，受支持的优化器会同步梯度，同步批归一化层会交换统计量。数据集配置的批大小应视为全局批大小；使用自定义采样器时请验证其行为。"
+
+#: a46864bbc46e45cfa5bcf1274e479c4c
+msgid "Side effects belong on rank zero"
+msgstr "副作用只应在零号进程执行"
+
+#: a7a2d5f6d54d45ae9e1a70a5c52c05de
+msgid ""
+"Every worker executes the Python program. Restrict filesystem and logging "
+"side effects to rank zero:"
+msgstr "每个工作进程都会执行 Python 程序。文件系统写入和日志等副作用应限制在零号进程："
+
+#: 0d3c0bec4c334ce79c7a51693dd6f380
+msgid ""
+"Do not place Jittor operators in a rank-only branch. Workers must construct "
+"compatible graphs and call collectives in the same order or they can "
+"deadlock."
+msgstr "不要在仅某个 rank 执行的分支中放置计图算子。各进程必须构建兼容的计算图，并以相同顺序调用集合通信，否则可能死锁。"
+
+#: 1f846372e2564655b93732d069e04c28
+msgid "Aggregate validation metrics"
+msgstr "汇总验证指标"
+
+#: 4934e65747d242e1b8acd50467387a77
+msgid "Reduce values before using them as global metrics:"
+msgstr "把局部值当作全局指标之前，应先进行归约："
+
+#: 34dc5353a6bb4bd28c5bb20a3eec084a
+msgid ""
+"For an operation that should run in one process without manually branching, "
+"use `jt.single_process_scope()`:"
+msgstr "需要让某个操作只在一个进程执行而又不想手动分支时，可使用 `jt.single_process_scope()`："
+
+#: 4e5173c0e61742f6b220984c9af64e91
+msgid "Public MPI state and collectives"
+msgstr "公开的 MPI 状态与集合通信接口"
+
+#: 80f7fde6f4344763b85a935ed884fc2f
+msgid "`jt.in_mpi` reports whether the process participates in an MPI world."
+msgstr "`jt.in_mpi` 表示当前进程是否参与 MPI 通信域。"
+
+#: 0693630914d248d6af5f5e1d6ab6b193
+msgid "`jt.world_size` is the number of workers, or `1` outside MPI."
+msgstr "`jt.world_size` 是工作进程数；不在 MPI 环境中时为 `1`。"
+
+#: 1cbf5aaa05bc4160994b913b7b4f14a7
+msgid "`jt.rank` is the current worker index, or `0` outside MPI."
+msgstr "`jt.rank` 是当前工作进程编号；不在 MPI 环境中时为 `0`。"
+
+#: 05e1f45a02a14a2cac4144a7f6b9a239
+msgid "`Module.mpi_param_broadcast(root=0)` broadcasts module parameters."
+msgstr "`Module.mpi_param_broadcast(root=0)` 广播模块参数。"
+
+#: a4bdf661bea5435ba289e2dc973a1085
+msgid "`Var.mpi_reduce(op=\"add\", root=0)` reduces a value to one worker."
+msgstr "`Var.mpi_reduce(op=\"add\", root=0)` 把值归约到一个工作进程。"
+
+#: 099e3819ce214f548a7c46e28cbbb25c
+msgid "`Var.mpi_broadcast(root=0)` broadcasts a value from one worker."
+msgstr "`Var.mpi_broadcast(root=0)` 从一个工作进程向其他进程广播值。"
+
+#: a2ff1d8587674952a14d45506e79360a
+msgid ""
+"`Var.mpi_all_reduce(op=\"add\")` reduces and returns the result to every "
+"worker."
+msgstr "`Var.mpi_all_reduce(op=\"add\")` 归约值，并把结果返回给每个工作进程。"
+
+#: 1291e97514044e03a7cd84451e8887ff
+msgid ""
+"Use `\"mean\"` when each worker contributes equally; otherwise reduce a sum "
+"and a sample count separately."
+msgstr "当每个工作进程的贡献权重相同时可使用 `\"mean\"`；否则应分别归约总和与样本数。"
+
+#: 3fb9d6f2958b4ee688d32641fb24a6cc
+msgid "Synchronized statistics"
+msgstr "同步统计量"
+
+#: 03113ff25b604b83bde0d94215bdab41
+msgid "Custom synchronized normalization can reduce moments across workers:"
+msgstr "自定义同步归一化可以在工作进程之间归约各阶矩："
+
+#: 273d77b605c24bfcb22186975fa64f20
+msgid ""
+"Prefer Jittor's maintained synchronized normalization layer when it covers "
+"the use case; the example illustrates collective ordering rather than a "
+"complete replacement implementation."
+msgstr "当计图维护的同步归一化层能满足需求时应优先使用它；这里的示例用于说明集合通信顺序，并不是完整的替代实现。"

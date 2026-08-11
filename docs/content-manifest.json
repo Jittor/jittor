@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {"legacy": "doc/source/index.rst", "docname": "index", "title": "Jittor documentation", "catalog": "index", "assets": ["_static/logo.png"], "legacy_anchors": [], "status": "verified"},
+    {"legacy": "doc/source/README.cn.md", "docname": "index", "title": "Jittor documentation", "catalog": "index", "assets": [], "legacy_anchors": [], "status": "verified"},
+    {"legacy": "doc/source/jittor.md", "docname": "api/core", "title": "Core API", "catalog": "api/core", "assets": [], "legacy_anchors": ["jittor", "jittor-core", "jittor-ops", "jittor-var"], "status": "verified"},
+    {"legacy": "doc/source/jittor.nn.md", "docname": "api/nn", "title": "Neural network API", "catalog": "api/nn", "assets": [], "legacy_anchors": ["jittor-nn"], "status": "verified"},
+    {"legacy": "doc/source/jittor.attention.md", "docname": "api/nn-attention", "title": "Attention API", "catalog": "api/nn-attention", "assets": [], "legacy_anchors": ["jittor-attention"], "status": "verified"},
+    {"legacy": "doc/source/jittor.models.md", "docname": "api/models", "title": "Model API", "catalog": "api/models", "assets": [], "legacy_anchors": ["jittor-models"], "status": "verified"},
+    {"legacy": "doc/source/jittor.optim.md", "docname": "api/optim", "title": "Optimizer API", "catalog": "api/optim", "assets": [], "legacy_anchors": ["jittor-optim"], "status": "verified"},
+    {"legacy": "doc/source/jittor.init.md", "docname": "api/init", "title": "Initialization API", "catalog": "api/init", "assets": [], "legacy_anchors": ["jittor-init"], "status": "verified"},
+    {"legacy": "doc/source/jittor.contrib.md", "docname": "api/contrib", "title": "Contributed operations API", "catalog": "api/contrib", "assets": [], "legacy_anchors": ["jittor-contrib"], "status": "verified"},
+    {"legacy": "doc/source/jittor.dataset.md", "docname": "api/dataset", "title": "Dataset API", "catalog": "api/dataset", "assets": [], "legacy_anchors": ["jittor-dataset"], "status": "verified"},
+    {"legacy": "doc/source/jittor.transform.md", "docname": "api/transform", "title": "Image transform API", "catalog": "api/transform", "assets": [], "legacy_anchors": ["jittor-transform"], "status": "verified"},
+    {"legacy": "doc/source/jittor.linalg.md", "docname": "api/linalg", "title": "Linear algebra API", "catalog": "api/linalg", "assets": [], "legacy_anchors": ["jittor-linalg"], "status": "verified"},
+    {"legacy": "doc/source/jittor.distributions.md", "docname": "api/distributions", "title": "Probability distributions API", "catalog": "api/distributions", "assets": [], "legacy_anchors": ["jittor-distributions"], "status": "verified"},
+    {"legacy": "doc/source/jittor.loss3d.md", "docname": "api/loss3d", "title": "3D loss API", "catalog": "api/loss3d", "assets": [], "legacy_anchors": ["jittor-loss3d"], "status": "verified"},
+    {"legacy": "doc/source/jittor.console.md", "docname": "guides/cpp-console", "title": "C++ console interface", "catalog": "guides/cpp-console", "assets": [], "legacy_anchors": ["jittor-console"], "status": "verified"},
+    {"legacy": "doc/source/jittor.mpi.md", "docname": "guides/distributed-mpi", "title": "Distributed training with MPI", "catalog": "guides/distributed-mpi", "assets": [], "legacy_anchors": ["jittor-mpi"], "status": "verified"},
+    {"legacy": "doc/source/Jittor调试技巧.md", "docname": "guides/debugging", "title": "Debugging Jittor programs", "catalog": "guides/debugging", "assets": [], "legacy_anchors": [], "status": "verified"},
+    {"legacy": "doc/source/Jittor性能测试与对比方法.md", "docname": "guides/performance-comparison", "title": "Comparing framework performance", "catalog": "guides/performance-comparison", "assets": [], "legacy_anchors": [], "status": "verified"},
+    {"legacy": "doc/source/Jittor显存以及内存优化方法.md", "docname": "guides/memory-optimization", "title": "Memory optimization", "catalog": "guides/memory-optimization", "assets": [], "legacy_anchors": [], "status": "verified"},
+    {"legacy": "doc/source/jittor_as_torch.src.md", "docname": "compatibility/torch", "title": "Using Jittor as PyTorch", "catalog": "compatibility/torch", "assets": [], "legacy_anchors": [], "status": "verified"},
+    {"legacy": "doc/logo.png", "docname": "_static/logo.png", "title": "Jittor logo", "catalog": null, "assets": ["_static/logo.png"], "legacy_anchors": [], "status": "verified"},
+    {"legacy": "doc/source/todo.md", "docname": null, "title": "Retired documentation backlog", "catalog": null, "assets": [], "legacy_anchors": [], "status": "verified"},
+    {"legacy": "doc/Makefile", "docname": null, "title": "Replaced by nox docs sessions", "catalog": null, "assets": [], "legacy_anchors": [], "status": "verified"},
+    {"legacy": "doc/build_doc.sh", "docname": null, "title": "Replaced by nox docs sessions", "catalog": null, "assets": [], "legacy_anchors": [], "status": "verified"}
+  ]
+}

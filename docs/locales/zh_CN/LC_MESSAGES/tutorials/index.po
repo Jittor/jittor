@@ -1,0 +1,70 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) 2026, Jittor contributors
+# This file is distributed under the same license as the Jittor package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Jittor 1.3.11.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-08-12 02:07+0800\n"
+"PO-Revision-Date: 2026-08-11 18:11+0000\n"
+"Last-Translator: Jittor contributors\n"
+"Language: zh_CN\n"
+"Language-Team: zh_CN <LL@li.org>\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: 5af6486811f04f2d8e234d212da3c609
+msgid "Tutorials"
+msgstr "教程"
+
+#: f8b28456bb4c472fb9ff54b4f74c4754
+msgid ""
+"The executable tutorials are maintained only as MyST Markdown under "
+"`examples/notebooks`. The `tutorials` nox session materializes notebooks in "
+"external state with Jupytext and executes five offline CPU smoke tutorials."
+msgstr ""
+
+#: 276521aac2f449089e999cd263dce1c7
+msgid "Quick start"
+msgstr ""
+
+#: 878f4d9031ea4e17be636bc429a089bb
+msgid ""
+"[Model definition and "
+"training](https://github.com/Jittor/jittor/blob/master/examples/notebooks/example.md)"
+msgstr ""
+
+#: a3d3c7a31fef46c0972466af0c312a0f
+msgid ""
+"[Operators and "
+"variables](https://github.com/Jittor/jittor/blob/master/examples/notebooks/basics.md)"
+msgstr ""
+
+#: 8682ab424ce546809f83981d92c80eb7
+msgid ""
+"[Meta-"
+"operators](https://github.com/Jittor/jittor/blob/master/examples/notebooks/meta_op.md)"
+msgstr ""
+
+#: 91d1a9e2c5104f35afad261f1b404b5c
+msgid ""
+"[Custom C++ and CUDA "
+"operators](https://github.com/Jittor/jittor/blob/master/examples/notebooks/custom_op.md)"
+msgstr ""
+
+#: 249b30b28474474e9081311e749dd574
+msgid "[Profiler](https://github.com/Jittor/jittor/blob/master/examples/notebooks/profiler.md)"
+msgstr ""
+
+#: 764e7c5aa6ba4828af6e672acaf6d50c
+msgid "Open the notebooks"
+msgstr ""
+
+#: 6a91b9286d214512b3db72646470ddd6
+msgid "Run the reproducibility and offline CPU checks with:"
+msgstr ""

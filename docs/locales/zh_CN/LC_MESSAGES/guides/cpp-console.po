@@ -1,0 +1,94 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) 2026, Jittor contributors
+# This file is distributed under the same license as the Jittor package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Jittor 1.3.11.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-08-12 02:07+0800\n"
+"PO-Revision-Date: 2026-08-11 18:11+0000\n"
+"Last-Translator: Jittor contributors\n"
+"Language: zh_CN\n"
+"Language-Team: zh_CN <LL@li.org>\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: 3e683a942d114ce1b69fe9917661a013
+msgid "C++ console interface"
+msgstr "C++ 控制台接口"
+
+#: a4c296de0b514e23b88e14f229e844cd
+msgid ""
+"The console interface embeds Jittor's Python runtime in a C++17 program. Its"
+" array bridge avoids an extra Python-level copy when moving typed C++ arrays"
+" into Jittor operations."
+msgstr "控制台接口把计图的 Python 运行时嵌入 C++17 程序。它的数组桥接在把有类型的 C++ 数组送入计图算子时避免了额外的 Python 层拷贝。"
+
+#: 0a3add4237634c83a0e30c23395fca1d
+msgid "Generate and compile the example"
+msgstr "生成并编译示例"
+
+#: 2380d95df83c47a1a40e0dec2d0b6752
+msgid "Use the active Python interpreter for both configuration commands:"
+msgstr "两条配置命令都应使用当前 Python 解释器："
+
+#: 5bba0236026d41cf820c4a470f740189
+msgid ""
+"The generated source includes the console header and initializes one "
+"embedded runtime:"
+msgstr "生成的源文件会包含控制台头文件，并初始化一个嵌入式运行时："
+
+#: 8a11ceb9a57e45f0839eee20597bb813
+msgid "Flush Python output when it is interleaved with C++ streams."
+msgstr "当 Python 输出与 C++ 流交错时，请刷新 Python 输出。"
+
+#: 59aff6c47a854aa4a951dde2bd2f782b
+msgid "Exchange scalar and container values"
+msgstr "交换标量与容器值"
+
+#: fe4e566f6abc46019e6d7d05fe67ee60
+msgid "`set<T>` and `get<T>` exchange named values with the embedded namespace:"
+msgstr "`set<T>` 和 `get<T>` 用于与嵌入式命名空间交换具名值："
+
+#: 85bf976f8eb1474a96fb4a66e4d08b49
+msgid ""
+"Supported families include integer and floating-point scalars, strings, "
+"vectors, maps, and unordered maps."
+msgstr "支持的类型包括整数和浮点标量、字符串、向量、映射以及无序映射。"
+
+#: b5e4d0e33a334dffb6139e68b3065c34
+msgid "Exchange Jittor arrays"
+msgstr "交换计图数组"
+
+#: b4f9eb48e4464be8af2b9f540a1cd3cd
+msgid "`jittor::array<T, N>` records a fixed rank, shape, and owned data buffer:"
+msgstr "`jittor::array<T, N>` 记录固定的秩、形状和自有数据缓冲区："
+
+#: f1cd058312c040eda07474e68d251083
+msgid ""
+"The requested type and rank in `get_array<T, N>` must match the value in the"
+" console namespace. The array interface provides `shape`, `data`, `size()`, "
+"`nbyte()`, `dtype()`, `ndim()`, and indexed element access."
+msgstr ""
+"`get_array<T, N>` 请求的类型和秩必须与控制台命名空间中的值一致。数组接口提供 "
+"`shape`、`data`、`size()`、`nbyte()`、`dtype()`、`ndim()` 和按下标访问元素的能力。"
+
+#: 227a060f84f14e7a872784d06774c9ff
+msgid "Run a model"
+msgstr "运行模型"
+
+#: 621bcfa1a3b541fe932925f77d50a18a
+msgid "Arrays can be inputs to normal Python model code:"
+msgstr "数组可以作为普通 Python 模型代码的输入："
+
+#: ce33138c73884ed29f83f0dbb942248f
+msgid ""
+"Keep one `Console` instance for related calls. Repeatedly creating embedded "
+"interpreters defeats compilation-cache reuse and complicates Python runtime "
+"lifetime management."
+msgstr "相关调用应复用同一个 `Console` 实例。反复创建嵌入式解释器会失去编译缓存复用，并使 Python 运行时的生命周期管理更复杂。"

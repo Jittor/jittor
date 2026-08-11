@@ -1,0 +1,102 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) 2026, Jittor contributors
+# This file is distributed under the same license as the Jittor package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Jittor 1.3.11.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-08-12 02:07+0800\n"
+"PO-Revision-Date: 2026-08-11 18:11+0000\n"
+"Last-Translator: Jittor contributors\n"
+"Language: zh_CN\n"
+"Language-Team: zh_CN <LL@li.org>\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: a364a421e5a443bf8835756ec6e49df4
+msgid "3D loss API"
+msgstr "三维损失 API"
+
+#: ffb44be1047946e3ab72e0671b8f62d1
+msgid ""
+":py:obj:`chamfer_loss <jittor.loss3d.chamfer_loss>`\\ \\(pc1\\, pc2\\[\\, "
+"reduction\\, dims\\, ...\\]\\)"
+msgstr ""
+
+#: 2e3b3c964d304aa0b76655a368b33880 97a29cce26d04da8a7f4682db9dba9dd
+msgid "return the chamfer loss from pc1 to pc2."
+msgstr ""
+
+#: a0c6be132e694a3f96db3bc6387ef8ca
+msgid ""
+":py:obj:`ChamferLoss <jittor.loss3d.ChamferLoss>`\\ \\(\\[reduction\\, "
+"dims\\, bidirectional\\]\\)"
+msgstr ""
+
+#: 8189f34ecf9d4bf59b174cb1cdcece61 b9927cbf708f49e18cf95bd6c72ae91a
+msgid "A loss layer that computes the chamfer loss from pc1 to pc2."
+msgstr ""
+
+#: 4069285274984e3487118e797502e387
+msgid ""
+":py:obj:`earth_mover_distance <jittor.loss3d.earth_mover_distance>`\\ "
+"\\(pc1\\, pc2\\[\\, reduction\\, dims\\]\\)"
+msgstr ""
+
+#: d2bf5082c74647db9a5a288947747e38
+msgid "Earth Mover's distance from pc1 to pc2."
+msgstr ""
+
+#: 4d9c8f47bf8a4c619ae7e5bba16f413e
+msgid ""
+":py:obj:`EarthMoverDistance <jittor.loss3d.EarthMoverDistance>`\\ "
+"\\(\\*args\\, \\*\\*kw\\)"
+msgstr ""
+
+#: e250d23df7424a589d64aa62a933d555
+msgid "A loss layer that computes Earth Mover's distance from pc1 to pc2."
+msgstr ""
+
+#: 1e272586df8d455f97564b2296e15036 44c30ed9453c4adbae076f7d16e0bd6b
+#: 66a3a01cc29c43838da85caf21a6d14b 6894dcb22a184400a38d20959482f304
+msgid "Parameters"
+msgstr ""
+
+#: 178ee055b37a45c79dbd419ae55cc4b7 2fc7b5707b8f4579af0c11c8543519ef
+#: 421cff05dc074756bde65c330a425bc5 74151c48f0c8469bb599fd86557f9b05
+#: 7d7dddba16454692aca8eeadb41be5d3 b9b8c41ca4f246a8b6f74e3dd2b21cf0
+#: c3428ca9129744b69e17f9eda74a048b d3e72d932e8a43029605eaa936ca6dd4
+msgid "input point cloud"
+msgstr ""
+
+#: 7d98f9c2836b4c04a02145db8e451de2 8e444866f95d4e48950ed7464639c674
+#: d1cfcf84490f4016a93a8b904c0d97f8 ef45db93a6964f37b6ee9b2f4d30348f
+msgid "reduction method in batches, can be 'mean', 'sum', or None. Default: 'mean'."
+msgstr ""
+
+#: 5b4f71f301c74d0c8a99b2d1f6d330e7 609affd4c1ae4fabac9749e2ad0ed016
+#: 78b6cd7a4d894757ab55798521f2ff1d d499e099fb45402483c7b50f00354a79
+msgid ""
+"a string that represents each dimension, can be '[BNC]' ([batch, number of "
+"points, xyz]), or '[BCN]' ([batch, xyz, number of points]). Default: 'BNC'."
+msgstr ""
+
+#: 58fb334ddc9242aaaa302df139e8b506 8c09d31e0354497882ccf0326d74df7a
+#: d748e18f22954bb1a86240eecb88ce56 f5043b4d4a3f43b992bc826418de02aa
+msgid "Example:"
+msgstr ""
+
+#: 68c8969014384e568bd0ce79eb16c5db
+msgid "Earth Mover's distance from pc1 to pc2. Only supports GPU."
+msgstr ""
+
+#: 49b0b5aed51a4f008a9a39b9e89d06b9
+msgid ""
+"A loss layer that computes Earth Mover's distance from pc1 to pc2. Only "
+"supports GPU."
+msgstr ""

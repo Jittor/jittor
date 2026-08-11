@@ -1,0 +1,79 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) 2026, Jittor contributors
+# This file is distributed under the same license as the Jittor package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Jittor 1.3.11.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-08-12 02:07+0800\n"
+"PO-Revision-Date: 2026-08-11 18:11+0000\n"
+"Last-Translator: Jittor contributors\n"
+"Language: zh_CN\n"
+"Language-Team: zh_CN <LL@li.org>\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: 278a286a4f924719a97298840099bc39
+msgid "Documentation workflow"
+msgstr "文档工作流"
+
+#: 1aeb0f6cf9764edf912790f898437503
+msgid ""
+"English MyST Markdown under `docs/` is the only Sphinx source. Simplified "
+"Chinese translations live in gettext catalogs under "
+"`docs/locales/zh_CN/LC_MESSAGES`; do not add a parallel Chinese source tree."
+msgstr ""
+
+#: 0a73c746299d4b9a92e38ccf66f9a905
+msgid ""
+"Install the pinned Python 3.11 documentation environment and run the public "
+"gates through nox:"
+msgstr ""
+
+#: 65ebedadb1d249aaaa2ae03ced11e10f
+msgid ""
+"`docs` and `docs_zh` build the current checkout as a wheel, install that "
+"wheel in an isolated nox environment, and reject an autodoc import from the "
+"source tree. HTML, gettext templates, compiled catalogs, doctrees, and "
+"generated notebooks are written below `JITTOR_LAB_ROOT/_state`, never into "
+"the checkout."
+msgstr ""
+
+#: 213d0c04ed2f45e3af1594e40a0554ed
+msgid "Update a translation"
+msgstr ""
+
+#: 365055816a474b93b46cccbb1366730f
+msgid ""
+"After editing English source, extract messages into external state and "
+"update a temporary catalog copy:"
+msgstr ""
+
+#: 260b3c6dbb6048de8628aca86ce9063d
+msgid ""
+"Review the catalog diff, apply the intended `msgstr` updates to tracked "
+"`.po` files, then run `python -m nox -s docs_zh`. The session repeats "
+"extraction on a copy and fails if catalogs are stale, fuzzy, or obsolete. "
+"`.pot`, `.mo`, and HTML files are generated products and must not be "
+"committed."
+msgstr ""
+
+#: 163e5e72681d4c7c973df58d2a9bebb8
+msgid "External inventories"
+msgstr ""
+
+#: f452e275f1874948bf1413662e5e4816
+msgid ""
+"Strict Sphinx builds resolve Python, NumPy, and PyTorch references against "
+"the projects' official intersphinx inventories. Documentation CI is network-"
+"enabled for these three authoritative files, uses a bounded timeout, and "
+"treats an unavailable inventory as a failed strict build. `docs_links` is "
+"the deterministic, offline pull-request check for repository-internal "
+"Markdown, images, MyST roles, and toctrees; arbitrary external URL crawling "
+"is not part of that gate."
+msgstr ""

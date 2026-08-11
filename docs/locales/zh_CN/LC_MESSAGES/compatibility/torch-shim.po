@@ -1,0 +1,171 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) 2026, Jittor contributors
+# This file is distributed under the same license as the Jittor package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Jittor 1.3.11.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-08-12 02:07+0800\n"
+"PO-Revision-Date: 2026-08-11 18:11+0000\n"
+"Last-Translator: Jittor contributors\n"
+"Language: zh_CN\n"
+"Language-Team: zh_CN <LL@li.org>\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: 78be7cb4a19e4c9a8293f997c7a260af
+msgid "Torch shim"
+msgstr "Torch 兼容层"
+
+#: 8bde6f90bd4343d798ec8f86fd50ec16
+msgid ""
+"The torch shim lets a torch-oriented Python application use Jittor as its "
+"runtime. The main Jittor distribution owns only the reusable torch API, "
+"deployment, extension build, import-patch, and external-backend mechanisms. "
+"Project-specific runtime policy is supplied by optional adapter "
+"distributions."
+msgstr ""
+
+#: 8033b2eb882c425d8a3f092000bd3e08
+msgid "Components"
+msgstr ""
+
+#: 4f72dcb17d90451ca62ed10d39a97f5b
+msgid ""
+"`python/jittor/compat/shim/resources/torch_init.py` is the thin deployed "
+"`torch/__init__.py` entry point."
+msgstr ""
+
+#: 6e1874bfd5ea4a0e91c44205fbdc0c70
+msgid ""
+"`resources/stubs/` contains bundled compatibility packages such as "
+"`flash_attn`, `torchvision`, `torchaudio`, and `torchdata`."
+msgstr ""
+
+#: 11602852c3fa4a4e96e5cd4fd71eea69
+msgid ""
+"`cpp_extension/` provides the Jittor-backed `torch.utils.cpp_extension` "
+"surface used to build source extensions."
+msgstr ""
+
+#: 7b914c79c3274679929736fa409554b8
+msgid ""
+"`runtime.py` implements isolated runtime setup and native extension "
+"discovery; `bootstrap.py` is its stable, small public facade."
+msgstr ""
+
+#: 7487f04cbbed4f358ca416ba4e86f30f
+msgid ""
+"`deploy.py` installs the complete shim tree into a target site-packages "
+"directory."
+msgstr ""
+
+#: 9814dbe3786b43b1a5cfa16371e71f04
+msgid ""
+"The canonical torch-compatible API lives in `jittor.compat.torch`. The shim "
+"exports that API under the `torch` module name and wires the submodule paths"
+" expected by third-party libraries."
+msgstr ""
+
+#: 97d76778dea44f52981159e8ff4f36cb
+msgid ""
+"`jittor.torch_shim` remains an import-compatible alias of "
+"`jittor.compat.shim`; both names resolve to the same module objects."
+msgstr ""
+
+#: ccddc491bada42b890c12f728bd37da7
+msgid "Bootstrap"
+msgstr ""
+
+#: 9771c8addffe45aab32f426882c93d8c
+msgid "Applications that need a project-local runtime can enable it explicitly:"
+msgstr ""
+
+#: b6138063d46e4cd3903cc872ca115057
+#, python-brace-format
+msgid ""
+"`enable()` creates a runtime below `${XDG_CACHE_HOME:-~/.cache}/jittor"
+"/torch-shim/` unless `JITTOR_TORCH_RUNTIME_ROOT` is set. It keeps Jittor, "
+"torch extension, CUDA, Triton, pip, and temporary caches below that runtime "
+"and deploys the shim into its local site-packages directory."
+msgstr ""
+
+#: 421a354fb29b41d48ff415f97c010c31
+msgid ""
+"Local source extensions are discovered from `setup.py`, `pyproject.toml`, "
+"and `CMakeLists.txt` signals. Missing or stale setuptools extensions are "
+"rebuilt through the Jittor-backed cpp-extension API. Set "
+"`JITTOR_TORCH_SKIP_EXT_BUILD=1` to skip warm-run build checks or pass "
+"explicit `extension_dirs` when automatic discovery is not suitable."
+msgstr ""
+
+#: fe908d824c4a49d7b104c4cc65775121
+msgid ""
+"For numerical parity, the bootstrap disables CUDA fast-math contraction for "
+"Jittor JIT kernels unless `JITTOR_TORCH_KEEP_FAST_MATH=1` is set. Project "
+"extensions retain the flags requested by their own build definitions."
+msgstr ""
+
+#: c21252c73a3144c7b82f2fc9df15dca2
+msgid "Optional adapters"
+msgstr ""
+
+#: 113e65aa53954419bc7c92ece2394dca
+msgid "Adapters use two public entry-point groups:"
+msgstr ""
+
+#: 4a4d1b137cb14b718e9ce90752764c71
+msgid ""
+"`jittor.module_patches` registers exact module-path callbacks through "
+"`jittor.compat.module_patcher`."
+msgstr ""
+
+#: d806ceb717ee43139196991ca89ae063
+msgid ""
+"`jittor.external_backends` registers extension discovery policy through "
+"`jittor.compat.external_backend`."
+msgstr ""
+
+#: aee2ea7bf8d54b1189f3b4f840163334
+msgid "The maintained adapters are separate distributions:"
+msgstr ""
+
+#: 8194b18a544e46f298a12fc93bfeae27
+msgid "`jittor-trellis` for TRELLIS.2 runtime policy and kernels."
+msgstr ""
+
+#: cdaaf81a9ec148cc81c3beee58376a75
+msgid "`jittor-gs` for graphdeco Gaussian Splatting runtime policy and launch tools."
+msgstr ""
+
+#: de754e9b7d724170bfad3a3b61ac04ec
+msgid "`jittor-hf-compat` for explicitly selected Transformers version adapters."
+msgstr ""
+
+#: f1a59cd338ca40b1a71f1b2e4f95e17f
+msgid ""
+"Installing an adapter makes its entry points discoverable. Applications may "
+"also call the adapter's `install()` function explicitly. Jittor itself does "
+"not import those projects, inspect their directory layouts, or install "
+"permanent project-specific import finders."
+msgstr ""
+
+#: 1ddfc0250614477a8ebd3269049c6176
+msgid "Deploy"
+msgstr ""
+
+#: 65ae50b01b4d4010b7e1ff0cb07d6885
+msgid "Deploy the complete shim with the maintained helper:"
+msgstr ""
+
+#: 40b1f77be6994f89ae357050297a0d4d
+msgid ""
+"The target contains the torch package, bundled stubs, and distribution "
+"metadata. Do not copy only `resources/torch_init.py`; the nested stub "
+"modules and interfaces are part of the runtime contract."
+msgstr ""

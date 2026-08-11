@@ -1,0 +1,694 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) 2026, Jittor contributors
+# This file is distributed under the same license as the Jittor package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Jittor 1.3.11.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-08-12 02:18+0800\n"
+"PO-Revision-Date: 2026-08-11 18:11+0000\n"
+"Last-Translator: Jittor contributors\n"
+"Language: zh_CN\n"
+"Language-Team: zh_CN <LL@li.org>\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: fb365c219ae04fbcb7542b743e6fd930
+msgid "Jittor Repository Layout"
+msgstr "计图仓库布局"
+
+#: 6bd5808380724f0da1b449afa477312b
+msgid "Status: Accepted"
+msgstr ""
+
+#: 0c4f69e39db44561b51decd40b7f5a7f
+msgid "Date: 2026-08-11"
+msgstr ""
+
+#: b82ba16d922a499899a23b6475912aff
+msgid ""
+"Scope: Jittor 2.0 repository structure, packaging, compatibility ownership, "
+"tests, tooling, and documentation"
+msgstr ""
+
+#: a9e24f8734fb4f9b95f160a25629de64
+msgid ""
+"Supersedes: the long-term `facade.py + _private/` target and the decision to"
+" ship `jittor.test` as a public package"
+msgstr ""
+
+#: e05ad0ff31bd48bcb478c08c1920683f
+msgid "Context"
+msgstr ""
+
+#: 46729fad311249ac8bbb2c654fe5a8d4
+msgid ""
+"The repository grew from an upstream source tree by accumulating "
+"compatibility layers, backend adapters, tests, release scripts, and "
+"generated documentation. The resulting layout has three systemic problems:"
+msgstr ""
+
+#: e3412184606c4c13bd982022a256850c
+msgid ""
+"Packaging is not authoritative. A short explicit package list and recursive "
+"`package_data` globs happen to place undeclared Python packages in wheels, "
+"while deeper runtime resources can be omitted."
+msgstr ""
+
+#: fe9f423b94fe4f9bbabdda9c607d06f5
+msgid ""
+"Domain modules use a public file plus a parallel `_domain/` implementation "
+"package. Runtime proxies and rewritten `__module__` metadata are then needed"
+" to work around the artificial boundary."
+msgstr ""
+
+#: c680c76d8a3044ba92c0a74736eaace7
+msgid ""
+"Framework capability, reusable patching mechanisms, Jittor semantic fixes, "
+"and downstream project glue are mixed in the Torch compatibility layer."
+msgstr ""
+
+#: a3e53e99f48d4900adc64f93c6e153d7
+msgid ""
+"This RFC defines the end state. Earlier facade splits remain useful "
+"migration work, but their private-package shape is transitional rather than "
+"the target."
+msgstr ""
+
+#: 8cacc649893d4be78be3be7fb11ddaa1
+msgid "Current Baseline"
+msgstr ""
+
+#: c5fea7f349e4449096b1919eadb0b261
+msgid ""
+"Commit `47e7ec75` contains source-refactor batches 10 and 11. Its accepted "
+"evidence includes exact AST comparisons for the moved miscellaneous "
+"functions, public identity and dynamic dispatch tests, 79 FSDP2 public "
+"names, 70 callable contracts, 37 deep distributed registrations, CPU/CUDA "
+"regression, and a real two-GPU NCCL step. Those results remain the "
+"behavioral baseline while the temporary package shape changes."
+msgstr ""
+
+#: cc24a8dcc17846a6b354da46fb6fe403
+msgid ""
+"The current wheel baseline has 1,053 entries and already contains "
+"`UnpackRaw.cuh`; the packaging task is to make that resource explicit and "
+"tested, not to claim it is presently missing. The deploy helper still omits "
+"`flash_attn_interface.py` when copying stubs into a deployment tree."
+msgstr ""
+
+#: bcc5edf138714fd0bb29aa396b19ef17
+msgid "Goals"
+msgstr ""
+
+#: 20d986f4d2d0470591dcd7cdeb636a61
+msgid ""
+"Make installed artifacts derive from one auditable package and resource "
+"manifest."
+msgstr ""
+
+#: 16866a40566c493d815713df1200a987
+msgid ""
+"Use conventional Python domain packages whose physical module paths express "
+"ownership."
+msgstr ""
+
+#: 192441508aab40cbaf34b61b6d99032e
+msgid "Separate reusable Torch compatibility from project-specific integrations."
+msgstr ""
+
+#: e9ed0769c8cb42b286a1ccce1880fbe8
+msgid ""
+"Move tests, examples, tools, benchmarks, and documentation out of the "
+"runtime package unless they are required after installation."
+msgstr ""
+
+#: 7ac20e24654548019e9fcdcacc44a700
+msgid ""
+"Turn correctness, packaging, lint, and performance requirements into "
+"automated gates."
+msgstr ""
+
+#: 14570e1f6a814705ba59870deedae6c9
+msgid ""
+"Preserve Jittor's JIT runtime resource paths and public import compatibility"
+" throughout the migration."
+msgstr ""
+
+#: f95f0946ada64043aa93db887a8cc2f3
+msgid "Non-goals"
+msgstr ""
+
+#: e60a779e67974b32a9ea8dc932468485
+msgid ""
+"Replacing Jittor's meta-operator or unified graph design with PyTorch "
+"internals."
+msgstr ""
+
+#: 826507e2e5d949c598669954ab284b16
+msgid ""
+"Moving runtime C++/CUDA resources merely to make the source tree look "
+"uniform."
+msgstr ""
+
+#: 59741b4eac0d431abf8533fa89c4bafc
+msgid "Claiming backend capability from import or structure tests alone."
+msgstr ""
+
+#: eac654b64fce47c6a5a06c9e756ba312
+msgid ""
+"Keeping every historical reflection path forever. Where a deliberate public "
+"metadata change is made, old serialized artifacts receive an explicit "
+"compatibility path and a migration test."
+msgstr ""
+
+#: fe33e9b6637b44e4bfcb08f451262aa1
+msgid "Hard Path Invariants"
+msgstr ""
+
+#: 8f2fe02893784a6dbe243b2b4f7219e0
+msgid ""
+"`python/jittor` is the runtime `jittor_path`, not only a Python package. The"
+" following paths remain physically stable unless the compiler contract is "
+"first changed and independently validated:"
+msgstr ""
+
+#: 8006944a151840bf9a5325ec1320ebd2
+msgid ""
+"`python/jittor/src/**`, including extensionless resources and the source "
+"files selected by compiler ordering rules;"
+msgstr ""
+
+#: f6c8812a0ea0412aab34d1bd0897d360
+#, python-brace-format
+msgid ""
+"`python/jittor/extern/**`, including the `<backend>/{inc,ops,src}` layout "
+"and ACL filename dispatch conventions;"
+msgstr ""
+
+#: 9d1678a7bd9b46aa9ca47f5e1164babf
+#, python-brace-format
+msgid "`python/jittor/utils/{asm_tuner.py,dlink_compiler.py,dumpdef.py,data.gz}`;"
+msgstr ""
+
+#: 750895413ef84e368fe07575308f1f74
+msgid "`python/jittor/math_util/src/*.h`;"
+msgstr ""
+
+#: e05fc2e4420848ba9d7c16de2c4392de
+#, python-brace-format
+msgid ""
+"`python/jittor/torch_shim/cpp_extension/{include,src}/**` until the compat "
+"package migration updates every build consumer in one change;"
+msgstr ""
+
+#: a3aa2ffaa28141adb89714eadeb3cbd8
+msgid ""
+"`python/jittor/other/code_softmax.py` while the CUDA fast path loads it by "
+"filesystem location;"
+msgstr ""
+
+#: 13929ddbeb8240c79dc337914234bcfa
+msgid "`python/jittor_utils` as a sibling of `python/jittor`;"
+msgstr ""
+
+#: d97a85428eac45c49a87e03bc32e7711
+msgid ""
+"the literal `__version__ = '...'` assignment in `python/jittor/__init__.py` "
+"while release and cache readers still parse it directly."
+msgstr ""
+
+#: 159b63074caa4ee3a42482579836f1d7
+msgid ""
+"These invariants are checked as runtime contracts. They are not exemptions "
+"from packaging completeness: every installed resource required by those "
+"contracts must be present in the wheel."
+msgstr ""
+
+#: d093aae388b840fea45f06ea96ad5323
+msgid "Target Layout"
+msgstr ""
+
+#: f972ef6fb6bc4361a658693764c7d58a
+msgid ""
+"The tree is a destination, not authorization for a flag-day move. Each "
+"migration must leave the repository buildable and preserve the hard path "
+"invariants."
+msgstr ""
+
+#: 120eff0cd60440b3b68fe7231402ac63
+msgid "Decision 1: Domain Packages"
+msgstr ""
+
+#: 111d99c0aa4d4fd18dcb981f00d8afbd
+msgid ""
+"Stage 3 converged `nn.py + _nn/`, `misc.py + _misc/`, `pool.py + _pool/`, "
+"and `torch_compat.py + _torch_compat/` to the normal `nn/`, `misc/`, "
+"`pool/`, and `compat/torch/` packages. The following rules are the resulting"
+" contract."
+msgstr ""
+
+#: 221e3c086af04660babeb4a644d1683b
+msgid "A domain package's `__init__.py` is its composition and re-export surface."
+msgstr ""
+
+#: 54346c899cc64fcfb28053bcc51ad1a9
+msgid ""
+"Implementations live under meaningful paths such as `nn.modules.conv` and "
+"`nn.functional.padding`."
+msgstr ""
+
+#: 61b14c3af7404bc086e37afccf8bab0d
+msgid ""
+"Implementations may import the initialized domain interfaces they actually "
+"depend on. The end state does not contain duplicated `_JittorRuntimeProxy` "
+"service locators."
+msgstr ""
+
+#: cb15c993d0274976a94ff15ca401f2e5
+msgid ""
+"Callable metadata reports the real implementation module, matching "
+"mainstream Python library practice. New code does not recursively rewrite "
+"`__module__` to hide ownership."
+msgstr ""
+
+#: db68e5e9e2cb46d8a5583369857c7176
+msgid "Historical imports such as `from jittor import nn` remain valid."
+msgstr ""
+
+#: 12c9594b68f7495a850a4e88f203c0e1
+msgid ""
+"Pickle compatibility is verified against fixtures made before the move. "
+"Compatibility aliases or a narrowly scoped unpickling mapping are retained "
+"only where an old artifact cannot otherwise load."
+msgstr ""
+
+#: 3f7a9f9285054aabb74f6d803fdbdaf8
+msgid ""
+"Backend post-processing and monkeypatch points become explicit registries or"
+" documented extension hooks, not accidental mutation of facade globals."
+msgstr ""
+
+#: 0614ae9953704a0d9ad5b81407bda739
+msgid ""
+"The four Stage 3 facade/private-package pairs and the later FSDP2 migration "
+"scaffold no longer exist. The maintained Torch API, including FSDP2 support,"
+" lives in `jittor.compat.torch`; deployment and import patching live in "
+"`jittor.compat.shim`. No new domain may adopt a facade/private-package "
+"pairing."
+msgstr ""
+"阶段 3 的四组 facade/私有包，以及后续的 FSDP2 迁移脚手架均已移除。维护中的 Torch API（包括 FSDP2 支持）位于 "
+"`jittor.compat.torch`；部署和导入修补位于 `jittor.compat.shim`。任何新领域都不得采用 "
+"facade/私有包配对。"
+
+#: 57517f2a97aa4cfabebaca4b791692a1
+msgid "Canonical And Legacy Imports"
+msgstr ""
+
+#: aceefaca707843939ad44bac7e74fd1d
+msgid "The physical target and compatibility entry points are:"
+msgstr ""
+
+#: c6223b5bb18f4837babeb1bf7beb9c61
+msgid "Canonical implementation"
+msgstr ""
+
+#: 95a8c1d5892940b5acbd47a183837c15
+msgid "Compatibility entry point"
+msgstr ""
+
+#: 7d02830484fa4acc86c702705cfc978b
+msgid "`jittor.nn` package"
+msgstr ""
+
+#: dfee0edb52e9482b9a5efbc9d3cc0d4b
+msgid "existing `from jittor import nn`"
+msgstr ""
+
+#: 14759618b3b14afc949343903b086a13
+msgid "`jittor.compat.torch`"
+msgstr ""
+
+#: f511306ec6824ba196541d6949b0f2b7
+msgid "`jittor.torch_compat`"
+msgstr ""
+
+#: 3c937bee44264e6982d50bd5cebb0380
+msgid "`jittor.compat.shim`"
+msgstr ""
+
+#: 7b4af84651104fcbb78207a6f207c18f
+msgid "`jittor.torch_shim` and deployed `torch` aliases"
+msgstr ""
+
+#: e2b33cc6702d498199df56c8b856d1eb
+msgid "`jittor.compat.triton`"
+msgstr ""
+
+#: 454c1e3f8f294b4dbcda6a474a4ffd6d
+msgid "`jittor.triton_shim`"
+msgstr ""
+
+#: f27b680a7963404a8bd00a604bdd1c4e
+msgid ""
+"Compatibility paths must resolve to the canonical objects and must not run a"
+" second installer. Where callers can observe `sys.modules` identity today, "
+"the migration preserves one shared module object rather than parallel "
+"facades with copied state."
+msgstr ""
+
+#: 53616d6c22624f48955919e3ed06928c
+msgid ""
+"`jittor.nn.functional` becomes a physical package and remains the canonical "
+"object registered as `torch.nn.functional` when the Torch shim is active. "
+"The conversion must remove the current dynamic-module constructor without "
+"allowing the shim to overwrite the package or duplicate registrations."
+msgstr ""
+
+#: 436638146b904928952fdab7af8b2bc5
+msgid "Decision 2: Four Compatibility Layers"
+msgstr ""
+
+#: ca6b165ad98a4289aae93d1a7a8ea828
+msgid "Torch compatibility is separated by ownership rather than downstream project:"
+msgstr ""
+
+#: 5f900706c0524216a4815bde0e5559a8
+msgid ""
+"**Framework capability** belongs in Jittor domains. Examples include "
+"parameterized attention, RoPE, normalization, mesh, and production sparse "
+"convolution operations."
+msgstr ""
+
+#: 8b53029ae2f54e90891d1335bf92902b
+msgid ""
+"**Reusable mechanism** belongs in `jittor.compat`. A registry-based module "
+"patcher owns import timing and restoration; a parameterized external-backend"
+" loader owns source discovery, manifests, builds, and cache identity."
+msgstr ""
+
+#: 52dd60e018774121b01137e018bb543c
+msgid ""
+"**Jittor root-cause fixes** belong in core semantics. Tensor gradient state,"
+" `Parameter` identity, and shape hashability must not be papered over in "
+"each downstream library."
+msgstr ""
+
+#: aa62fb4809244a16b3add787141f785f
+msgid ""
+"**Project/version glue** lives in optional integration distributions such as"
+" `jittor-trellis`, `jittor-gs`, and `jittor-hf-compat`, registered through "
+"entry points. Mainline Jittor does not install a permanent TRELLIS or "
+"Gaussian Splatting finder for every process."
+msgstr ""
+
+#: bfad52c35ed24a2eae88f397f667d7d1
+msgid ""
+"Installers must report each attempted patch independently. A broad "
+"`try/except Exception: pass` around a chain of patches is forbidden because "
+"one failure otherwise hides all later compatibility work."
+msgstr ""
+
+#: c0c1ad3318cb43099375c2d7408d556d
+msgid "Packaging Boundary"
+msgstr ""
+
+#: bf18c0f8a64641fc8b5f58e2bbb2a599
+msgid ""
+"`pyproject.toml` is the authoritative project metadata and build-system "
+"entry."
+msgstr ""
+
+#: ce2d60aac95b47bdb199ce286ace21d7
+msgid ""
+"Package discovery includes every directory under `python/` that contains an "
+"`__init__.py`; a structure test compares the filesystem and build metadata."
+msgstr ""
+
+#: cf0373d6bb604e89930833c67fcb7f2f
+msgid ""
+"Runtime non-Python resources are declared explicitly through `MANIFEST.in` "
+"and package-data configuration. Recursive catch-all globs are not used to "
+"smuggle undeclared packages into a wheel."
+msgstr ""
+
+#: 4981a918d94243cd9f59f9674ebcdc5e
+msgid ""
+"Tests, demos, notebooks, release utilities, and benchmarks are not wheel "
+"payload unless a documented installed command requires them."
+msgstr ""
+
+#: 55381a8ab1ac4b2eb58d68757d4ed1dd
+msgid ""
+"`jittor.selftest` is the small installed smoke test used by install scripts "
+"and container health checks."
+msgstr ""
+
+#: 5c3d85d4cfc94a53a1728f40affaf827
+msgid ""
+"Every packaging change is checked by a member SHA-256 plus exact-path wheel "
+"baseline. Additions, content changes, and removals require reviewed hashes "
+"or path allowances, and every allowance must be consumed by the candidate so"
+" a stale wheel cannot silently pass by reverting an approved transition."
+msgstr ""
+
+#: 18e296c9148444e6b5a1b35efd30be31
+msgid "Test Boundary"
+msgstr ""
+
+#: 2a00ee95fe4541cd962c3807e501aaa9
+msgid ""
+"The repository test suite lives under top-level `tests/` and is collected by"
+" pytest. It is not an installed `jittor` subpackage. Existing "
+"`unittest.TestCase` tests remain valid under pytest and were not rewritten "
+"merely for the move."
+msgstr ""
+
+#: 6aea020c99a1402389f4ccac42f13014
+msgid ""
+"The migration inventory was reconciled from the original 233-module estimate"
+" to 239 top-level test modules. Its 123 cross-test edges across 76 files "
+"were replaced with explicit helpers derived from the actual graph; all 239 "
+"modules received a recorded destination rather than relying on the older "
+"partial category estimate."
+msgstr ""
+
+#: 6c4747fd91a64488a0c8efdb5992f5a9
+msgid ""
+"Shared test utilities live in `tests/_helpers/`; test modules do not import "
+"one another as an implicit helper API."
+msgstr ""
+
+#: 79ebe6d685314b5b9ed3a64b556c8dde
+msgid "Structure, CPU, CUDA, and NPU suites are separate CI layers."
+msgstr ""
+
+#: 4ab92d87a07a4ea3b803e2cdd8e77038
+msgid "Test selection uses names and markers, never `listdir()` positions."
+msgstr ""
+
+#: f1ed332116cb4510a2670296a5f95e35
+msgid ""
+"The C++ `test.h` resource lives with its compiler include consumers under "
+"`python/jittor/src/utils/`."
+msgstr ""
+
+#: 88c74b4badba4aa6a2804949e1145c0b
+msgid ""
+"Installed-environment checks use `jittor.selftest`, not a shipped test "
+"package."
+msgstr ""
+
+#: 6bee865532304e96b2c8b5ceed3ad3ba
+msgid "Tool And Example Boundary"
+msgstr ""
+
+#: 76a3d41e64644ceaacb5f70b5694fecb
+msgid ""
+"Repository-operated commands live under top-level `tools/`; teaching and "
+"runnable samples live under `examples/`. Neither tree contains `__init__.py`"
+" or participates in runtime package discovery. They are included in the "
+"source distribution for maintainers, but direct and sdist-derived wheels "
+"exclude them."
+msgstr ""
+
+#: 94439da6b24e4ffca4555b3947a765d4
+msgid ""
+"Stage 6 retires the published `jittor.vcompiler` package as a deliberate "
+"Jittor 2.0 breaking change. It compiled a private C++ extension during "
+"import, had no supported in-repository consumer, and has no direct "
+"replacement; custom operator authors should use the maintained "
+"`compile_custom_op` and `compile_custom_ops` interfaces instead. The "
+"package-local `version` file is also retired because project metadata and "
+"`jittor.__version__` are the version authorities."
+msgstr ""
+
+#: d804174e0ba4432d82010d6af7e18c53
+msgid ""
+"The old LLVM alignment pass is not retired in Stage 6. A real Clang 14 cold-"
+"build gate failed in the existing core before the pass could be evaluated, "
+"so `compiler.compile_extern()` and "
+"`extern/llvm/jt_alignment_from_assumptions.cc` remain together. Removing "
+"either side requires a later successful Clang cold import, forward/backward "
+"graph, and custom JIT regression."
+msgstr ""
+
+#: 9ec2f77d67d647dabf51583b026eba69
+msgid "Tooling And Delivery"
+msgstr ""
+
+#: e8e12761b2a7475b96ebc7670a231773
+msgid ""
+"Ruff supplies formatting and linting; mypy is introduced with an explicit, "
+"ratcheted scope rather than an unmaintainable all-at-once exception list."
+msgstr ""
+
+#: 7b51e7fd76454719a4a52048289ec735
+msgid ""
+"Pre-commit runs fast deterministic checks, while nox is the canonical local "
+"and CI command entry point."
+msgstr ""
+
+#: 9ea197c19b274b6bb867fd0800b167d6
+msgid "CI has structure, CPU, CUDA self-hosted, and NPU layers."
+msgstr ""
+
+#: 37bc2e898b1b4ee9abc5263e4d73932c
+msgid ""
+"Releases use `python -m build` and PyPI trusted publishing. Jittor's "
+"canonical artifact remains `py3-none-any`; cibuildwheel is used on Linux, "
+"macOS, and Windows to assert that no platform wheel is accidentally "
+"produced, followed by installation of the same canonical wheel on all three "
+"platforms."
+msgstr ""
+
+#: 737ffd4e95fe41d390523e0e3b1a16b3
+msgid "Container and CI baselines share a maintained OS/Python/CUDA definition."
+msgstr ""
+
+#: 096a25402bca44ab9029273283ee6b72
+msgid ""
+"ASV tracks speed and memory by commit using `--python=same`, selected "
+"revisions, and a Jittor cache isolated from unit tests."
+msgstr ""
+
+#: bbb1dadf192648ca9640a2ec36b87740
+msgid ""
+"Documentation uses Sphinx, MyST, standard gettext/sphinx-intl localization, "
+"and jupytext-managed tutorials."
+msgstr ""
+
+#: 63d233cc080b403c8175b2f1ecccbe5c
+msgid "Migration Order"
+msgstr ""
+
+#: 1806cf07fa0b490994927fc6f6f4d07a
+msgid "Record this RFC and supersede conflicting architecture rules."
+msgstr ""
+
+#: efc51aec47af41d88e157f8fff8ef8b5
+msgid "Make packaging complete and establish an immutable wheel-content baseline."
+msgstr ""
+
+#: d2dc2f90b2b74e08a5c836970f2e85cc
+msgid "Add tooling, CI, release, container, and performance infrastructure."
+msgstr ""
+
+#: 21e7ca338eec480e8630dfd9bb6815c5
+msgid "Convert domain facade/private pairs into domain packages."
+msgstr ""
+
+#: 91f25d6d253b40a6977987f7a111b99f
+msgid "Separate compatibility capability, mechanism, root-cause fixes, and glue."
+msgstr ""
+
+#: fcacc9bb077e4eb5802da7d8a34ef875
+msgid "Add installed self-test, move the repository tests, and adopt pytest."
+msgstr ""
+
+#: 05f085a79f2f448182bff142764c5831
+msgid ""
+"Move tools/examples and remove proven dead distribution payloads. In "
+"particular, `extern/llvm` is not removable while the Clang/Linux compiler "
+"path scans and builds it; deletion requires a replacement consumer and "
+"regression evidence first."
+msgstr ""
+
+#: 52b8763104f244d7ae2166a5430e7958
+msgid ""
+"Finish remaining module decomposition and reduce root initialization to a "
+"composition root."
+msgstr ""
+
+#: ff3f594ce64d4c6ab1cfea3f498df415
+msgid "Modernize documentation, localization, tutorials, and governance."
+msgstr ""
+
+#: ba514102f3b4453c94d1e98399d08e0f
+msgid "Stage Gates"
+msgstr ""
+
+#: 0ff67d19f69c4fd5b24be41fefbb1a5e
+msgid ""
+"Every stage must provide all applicable evidence below before it is "
+"considered complete:"
+msgstr ""
+
+#: b376158174d84c0baea7f976e42b109c
+msgid ""
+"member-hash and exact-path wheel comparison against the accepted baseline; "
+"additions, content changes, and removals require exact, fully consumed "
+"allowlists tied to the phase that changes the distribution boundary;"
+msgstr ""
+
+#: ccebfa5f40f84b8fac91a16b78f1e59f
+msgid "cold import from an isolated wheel installation;"
+msgstr ""
+
+#: 7fdbb1e5353046168520b2e766fb1ae1
+msgid "no regression in the affected CPU matrix;"
+msgstr ""
+
+#: c30dd43f33f44e57b5ab129e0c4f1d4f
+msgid ""
+"at least one real accelerator regression, with NPU evidence required before "
+"a capability is described as NPU-supported;"
+msgstr ""
+
+#: ef3bcc2f386746bc83362354cb26a305
+msgid "`agent/scripts/check_repo_layout.sh` and repository structure checks;"
+msgstr ""
+
+#: 3445733c69384e6db2d927b225588fc5
+msgid "documentation of commands, results, known skips, and unverified backends;"
+msgstr ""
+
+#: d9ba245dcf9c410082fafffd19030ce7
+msgid "a focused commit that does not stage unrelated user changes."
+msgstr ""
+
+#: de10bc6b2e9d45b99d64601813b8f10b
+msgid ""
+"Compatibility extraction additionally requires the TRELLIS and Gaussian "
+"Splatting end-to-end paths to retain their established numerical and "
+"performance results after installation from optional integration packages."
+msgstr ""
+
+#: 2df4e09e9bd14226a3152bf5ccbe412a
+msgid "Consequences"
+msgstr ""
+
+#: e72ce6d9de8a4cbb93dac9b4bec70fc5
+msgid ""
+"The migration temporarily contains both old and new shapes, and some public "
+"callables will eventually report more specific implementation modules. In "
+"exchange, package contents become auditable, dependency direction is visible"
+" in the filesystem, third-party integration cost becomes opt-in, and "
+"correctness and performance requirements become enforceable rather than "
+"documentary."
+msgstr ""

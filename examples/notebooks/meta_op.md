@@ -31,9 +31,9 @@ The meta-operators are consist of reindex, reindex-reduce and element-wise opera
 > 子的反向传播算子还是元算子。元算子可以组成常用的深度学习算子。而这些深度学习算子又
 > 可以进一步组成深度学习模型。
 
-In the previous [example](example.ipynb), we have demonstrated how to implement matrix multiplication via three meta-operators:
+In the previous [example](example.md), we demonstrated how to implement matrix multiplication via three meta-operators:
 
-在第一个[示例](example.ipynb)中，我们演示了如何通过三个元算子实现矩阵乘法：
+在第一个[示例](example.md)中，我们演示了如何通过三个元算子实现矩阵乘法：
 
 ```{code-block} python
 def matmul(a, b):
