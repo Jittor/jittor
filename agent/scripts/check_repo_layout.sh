@@ -21,6 +21,14 @@ if [[ ! -d "$REPO_ROOT/tools" ]]; then
   echo 'missing repository tools: tools/' >&2
   status=1
 fi
+if [[ ! -f "$REPO_ROOT/docs/conf.py" ]] || [[ ! -f "$REPO_ROOT/docs/index.md" ]]; then
+  echo 'missing canonical Sphinx/MyST documentation tree: docs/' >&2
+  status=1
+fi
+if find "$REPO_ROOT/examples/notebooks" -type f -name '*.ipynb' -print -quit | grep -q .; then
+  echo 'notebook products must be generated from MyST sources outside the checkout.' >&2
+  status=1
+fi
 if [[ -e "$REPO_ROOT/tests/__init__.py" ]]; then
   echo 'repository tests must not be an importable distribution package: tests/__init__.py' >&2
   status=1
@@ -28,11 +36,11 @@ fi
 
 while IFS= read -r name; do
   case "$name" in
-    .git|.github|.agents|.codex|.claude|agent|benchmarks|doc|docs|examples|python|requirements|tests|tools|\
+    .git|.github|.agents|.codex|.claude|agent|benchmarks|docs|examples|python|requirements|tests|tools|\
     .dockerignore|.gitignore|.gitlab-ci.yml|AGENTS.md|\
     AWESOME-JITTOR-LIST.cn.md|AWESOME-JITTOR-LIST.md|\
     asv.conf.json|CODE_OF_CONDUCT.md|CONTRIBUTING.md|Dockerfile|GOVERNANCE.md|\
-    LICENSE.txt|MANIFEST.in|README.cn.md|README.md|README.src.md|\
+    LICENSE.txt|MANIFEST.in|README.cn.md|README.md|\
     .pre-commit-config.yaml|noxfile.py|pyproject.toml|setup.py)
       ;;
     *)
@@ -43,6 +51,8 @@ while IFS= read -r name; do
 done < <(find "$REPO_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
 
 for forbidden_path in \
+  "$REPO_ROOT/doc" \
+  "$REPO_ROOT/README.src.md" \
   "$REPO_ROOT/jittor_fsdp2" \
   "$REPO_ROOT/python/jittor/torch_fsdp2_compat.py" \
   "$REPO_ROOT/python/jittor/nn.py" \
@@ -65,6 +75,8 @@ for forbidden_path in \
   "$REPO_ROOT/python/jittor/version" \
   "$REPO_ROOT/python/jittor/utils/polish.py" \
   "$REPO_ROOT/python/jittor/utils/polish_centos.py" \
+  "$REPO_ROOT/python/jittor_utils/translator.py" \
+  "$REPO_ROOT/tools/docs/legacy" \
   "$REPO_ROOT/python/jittor_utils/pack_offline.py"; do
   if [[ -e "$forbidden_path" ]]; then
     printf 'forbidden legacy path: %s\n' "${forbidden_path#"$REPO_ROOT"/}" >&2
@@ -119,8 +131,7 @@ for active_doc in \
   "$REPO_ROOT/Dockerfile" \
   "$REPO_ROOT/CONTRIBUTING.md" \
   "$REPO_ROOT/README.md" \
-  "$REPO_ROOT/README.cn.md" \
-  "$REPO_ROOT/README.src.md"; do
+  "$REPO_ROOT/README.cn.md"; do
   if grep -n -- "$legacy_selftest_module" "$active_doc"; then
     echo 'installation documentation must use python -m jittor.selftest.' >&2
     status=1
@@ -135,7 +146,6 @@ active_reference_paths=(
   "$REPO_ROOT/docs"
   "$REPO_ROOT/README.md"
   "$REPO_ROOT/README.cn.md"
-  "$REPO_ROOT/README.src.md"
   "$REPO_ROOT/CONTRIBUTING.md"
   "$REPO_ROOT/Dockerfile"
   "$REPO_ROOT/MANIFEST.in"

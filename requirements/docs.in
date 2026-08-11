@@ -1,0 +1,8 @@
+sphinx
+myst-parser
+furo
+sphinx-intl
+jupytext
+nbconvert
+ipykernel
+importlib-metadata; python_version < "3.8"

@@ -157,9 +157,10 @@ Stage 3 converged `nn.py + _nn/`, `misc.py + _misc/`, `pool.py + _pool/`, and
 - Backend post-processing and monkeypatch points become explicit registries or
   documented extension hooks, not accidental mutation of facade globals.
 
-The four Stage 3 facade/private-package pairs no longer exist. `_torch_fsdp2`
-is the sole remaining migration scaffold and must converge with the shim and
-installer work; no new domain may adopt this pairing.
+The four Stage 3 facade/private-package pairs and the later FSDP2 migration
+scaffold no longer exist. The maintained Torch API, including FSDP2 support,
+lives in `jittor.compat.torch`; deployment and import patching live in
+`jittor.compat.shim`. No new domain may adopt a facade/private-package pairing.
 
 ## Canonical And Legacy Imports
 
@@ -170,7 +171,6 @@ The physical target and compatibility entry points are:
 | `jittor.nn` package | existing `from jittor import nn` |
 | `jittor.compat.torch` | `jittor.torch_compat` |
 | `jittor.compat.shim` | `jittor.torch_shim` and deployed `torch` aliases |
-| `jittor.compat.fsdp2` | `jittor.torch_fsdp2_compat` |
 | `jittor.compat.triton` | `jittor.triton_shim` |
 
 Compatibility paths must resolve to the canonical objects and must not run a

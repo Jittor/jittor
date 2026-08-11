@@ -15,7 +15,6 @@ REQUIRED_SOURCE_PATHS = (
     "examples/README.md",
     "examples/gan/simple_cgan.py",
     "examples/notebooks/basics.md",
-    "examples/notebooks/basics.ipynb",
     "requirements/examples.txt",
     "tools/README.md",
     "tools/build/build_aarch64_mkl.sh",

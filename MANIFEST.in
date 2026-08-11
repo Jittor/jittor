@@ -4,9 +4,13 @@ recursive-include python/jittor_utils *
 # Repository examples and tools ship in the sdist, but package discovery remains under python/.
 recursive-include examples *
 recursive-include tools *
+recursive-include docs *
 include requirements/examples.txt
+include requirements/docs.in
+include requirements/docs.txt
 
 global-exclude *.py[cod]
+global-exclude *.ipynb
 global-exclude __pycache__
 global-exclude .DS_Store
 prune python/jittor/**/__pycache__
@@ -20,3 +24,6 @@ prune examples/**/.pytest_cache
 prune examples/**/.ipynb_checkpoints
 prune tools/**/__pycache__
 prune tools/**/.pytest_cache
+prune docs/**/__pycache__
+prune docs/**/.doctrees
+prune docs/**/_build
