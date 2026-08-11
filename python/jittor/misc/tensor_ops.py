@@ -1416,12 +1416,12 @@ def _cummax_min(x, dim, is_max):
 
 def cummax(x, dim=None):
     ''' torch's cummax(input, dim) -> namedtuple(values, indices). '''
-    v, i = jt.misc._cummax_min(x, dim, True)
-    return jt.misc._CumMax(v, i)
+    v, i = _cummax_min(x, dim, True)
+    return _CumMax(v, i)
 def cummin(x, dim=None):
     ''' torch's cummin(input, dim) -> namedtuple(values, indices). '''
-    v, i = jt.misc._cummax_min(x, dim, False)
-    return jt.misc._CumMin(v, i)
+    v, i = _cummax_min(x, dim, False)
+    return _CumMin(v, i)
 jt.Var.cummax = cummax
 jt.Var.cummin = cummin
 

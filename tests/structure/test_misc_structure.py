@@ -126,6 +126,9 @@ class TestMiscStructure(unittest.TestCase):
                 self.assertIs(pickle.loads(legacy_pickle), function)
 
     def test_tensor_operations_use_real_paths_and_legacy_pickle_aliases(self):
+        source = Path(tensor_ops.__file__).read_text(encoding="utf-8")
+        for private_name in ("_cummax_min", "_CumMax", "_CumMin"):
+            self.assertNotIn("jt.misc." + private_name, source)
         for name in ("repeat_interleave", "cumsum", "scatter_reduce", "CTCLoss"):
             implementation = getattr(tensor_ops, name)
             with self.subTest(name=name):
