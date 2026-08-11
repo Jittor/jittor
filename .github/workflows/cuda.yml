@@ -1,0 +1,57 @@
+name: CUDA
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cuda:
+    name: nox / cuda
+    runs-on: [self-hosted, linux, x64, jittor-ci, cuda12-2, rtx4090]
+    timeout-minutes: 180
+    steps:
+      - name: Verify CUDA runner capability
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = "Linux"
+          test "$(uname -m)" = "x86_64"
+          test -e /dev/nvidiactl
+          : "${JITTOR_CI_PYTHON:?JITTOR_CI_PYTHON must name the runner Python}"
+          command -v "${JITTOR_CI_PYTHON}" >/dev/null
+          command -v nvidia-smi >/dev/null
+          command -v nvcc >/dev/null
+          "${JITTOR_CI_PYTHON}" --version
+
+          gpu_names="$(nvidia-smi --query-gpu=name --format=csv,noheader)"
+          if ! grep -Fxq "NVIDIA GeForce RTX 4090" <<<"${gpu_names}"; then
+            printf 'required GPU not found; detected:\n%s\n' "${gpu_names}" >&2
+            exit 1
+          fi
+
+          nvcc_version="$(nvcc --version)"
+          if ! grep -Eq 'release 12\.2([,[:space:]]|$)' <<<"${nvcc_version}"; then
+            printf 'CUDA 12.2 nvcc required; detected:\n%s\n' "${nvcc_version}" >&2
+            exit 1
+          fi
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install pinned development tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${JITTOR_CI_PYTHON}" -m pip install -r requirements/dev-tools.txt
+      - name: Run CUDA tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${JITTOR_CI_PYTHON}" -m nox -s cuda

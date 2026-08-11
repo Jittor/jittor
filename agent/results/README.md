@@ -6,6 +6,7 @@
 
 ## 兼容性与功能验证
 
+- [2026-08-11 仓库结构现代化阶段 2：工具链、交付与性能基建](2026-08-11-repository-modernization-tooling.md)
 - [2026-08-11 仓库结构现代化阶段 1：打包、部署与 wheel 基线](2026-08-11-repository-modernization-packaging.md)
 - [2026-08-11 仓库结构现代化阶段 0：目标架构 RFC](2026-08-11-repository-modernization-rfc.md)
 - [2026-08-11 源码架构重构第十、十一批：misc 形状域与 FSDP2 兼容层](2026-08-11-source-architecture-misc-fsdp2-refactor.md)

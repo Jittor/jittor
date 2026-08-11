@@ -1,0 +1,7 @@
+# Stage 2 approved wheel member content changes.
+a409c1b69b9b3c39f40e28f33a5a44b1043ec90f3b252f2b9c4952927f478afa  jittor-1.3.11.0.dist-info/METADATA
+15c340bb2c557011d81ad40bb5a365d673d80fb562765360ac081276c13d58ef  jittor-1.3.11.0.dist-info/RECORD
+d55e36066b18199670d553f4d6d9cb169871dea49468f04e1e2b797188498498  jittor/einops/experimental/indexing.py
+64b50e0c2723bc75ea1baca33e707af7cacc60352e3f6c66eaef3ec69e9220de  jittor/script/build_aarch64_mkl.sh
+08f551b43dd607acc24c2b73282f47530766e3e3f869d5b5a4e82d9b417141e3  jittor/utils/polish.py
+dbe3ff0553bb75a08ce02e60660e3db5dc7afe5bf8a2fb1f50162022e0817118  jittor_utils/pack_offline.py

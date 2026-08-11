@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "project": "Jittor",
+  "project_url": "https://cg.cs.tsinghua.edu.cn/jittor/",
+  "repo": ".",
+  "branches": ["2.0"],
+  "show_commit_url": "https://github.com/Jittor/jittor/commit/",
+  "environment_type": "existing",
+  "pythons": ["same"],
+  "benchmark_dir": "benchmarks",
+  "env_dir": ".asv/env",
+  "results_dir": ".asv/results",
+  "html_dir": ".asv/html",
+  "build_cache_size": 0,
+  "default_benchmark_timeout": 300,
+  "launch_method": "spawn",
+  "regressions_thresholds": {
+    "operators.*": 0.10,
+    "tiny_llama.*": 0.15,
+    "optimizer_step.*": 0.15
+  }
+}

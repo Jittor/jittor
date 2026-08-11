@@ -41,6 +41,16 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 > **分支**：所有人/agent 都在 **`2.0`**（= 原 `acl-perf-and-fixes` 推到远程；动手前 `git branch --show-current` 确认）。分叉前的所有进展/日志现在都是**公共知识**。
 
 ### ✅ 已完成并验证（在 `2.0`）
+- **仓库结构现代化阶段 2（工具链、CI、发布、容器与 ASV）**：固定版本 Ruff、Mypy、
+  pre-commit 与 Nox 已接入，Nox 统一 structure/CPU/CUDA/NPU/benchmark 入口并把状态隔离
+  到 `jittor-lab`。旧 GitHub job 与 GitLab CI 已替换为分层、精确 runner label、
+  fail-closed 的工作流；release 使用 canonical universal wheel、三平台架构/安装验证、
+  PyPI OIDC 和 GitHub CLI。根 Dockerfile 升为 Ubuntu 24.04 参数化基线，旧 CUDA11
+  Dockerfile 和远程发布副作用已删除。ASV 6 个 benchmark 检查通过，Jittor CPU GELU
+  强制实跑；wheel 相对阶段 1 为 0 新增、6 内容变化、5 删除，direct/sdist 两份 1,054
+  成员逐字节一致，隔离 CPU/部署及 RTX 4090 wheel 数值回归通过。本机无真实 Python
+  3.7、Docker daemon 权限和 NPU，分别由 CI 门禁覆盖或明确保留未验证状态。详见
+  [阶段 2 报告](../results/2026-08-11-repository-modernization-tooling.md)。
 - **仓库结构现代化阶段 1（打包、部署与 wheel 基线）**：PEP 621 已成为元数据和
   依赖权威源，`setup.py` 仅保留兼容 shim；regular package 发现 35/35，MANIFEST
   显式覆盖两棵 runtime tree。1,053 项旧 wheel 已逐成员绑定 SHA-256，最终转换精确为

@@ -10,7 +10,7 @@ urls = [
     ("https://storage.googleapis.com/cvdf-datasets/mnist/t10k-labels-idx1-ubyte.gz", "t10k-labels-idx1-ubyte.gz")
 ]
 
-import urllib
+import urllib.request
 from pathlib import Path
 import os
 import glob
@@ -87,7 +87,5 @@ home_path = cpath
 os.chdir(cpath)
 remove_tmpfile()
 
-run_cmd(f"{sys.executable} ./setup.py sdist")
-run_cmd(f"{sys.executable} -m twine upload dist/*")
-
-remove_tmpfile()
+run_cmd(f"{sys.executable} -m build --sdist")
+print("offline package built at", os.path.join(cpath, "dist"))

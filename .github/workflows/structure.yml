@@ -1,0 +1,62 @@
+name: Structure
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: nox / ${{ matrix.session }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        session:
+          - structure
+          - lint
+          - format
+          - typing
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install pinned development tools
+        run: python -m pip install -r requirements/dev-tools.txt
+      - name: Run ${{ matrix.session }} checks
+        run: python -m nox -s "${{ matrix.session }}"
+
+  python37:
+    name: nox / py37
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install target Python 3.7
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.7"
+      - name: Set up nox host Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install pinned development tools
+        run: python -m pip install -r requirements/dev-tools.txt
+      - name: Compile with real Python 3.7
+        run: python -m nox -s py37

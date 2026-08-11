@@ -1,0 +1,67 @@
+name: NPU
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  npu:
+    name: nox / npu
+    runs-on: [self-hosted, linux, ARM64, jittor-ci, cann9, ascend910b]
+    timeout-minutes: 180
+    steps:
+      - name: Verify NPU runner capability
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = "Linux"
+          case "$(uname -m)" in
+            aarch64|arm64) ;;
+            *)
+              printf 'ARM64 runner required; detected: %s\n' "$(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+          test -e /dev/davinci0
+          : "${JITTOR_CI_PYTHON:?JITTOR_CI_PYTHON must name the runner Python}"
+          : "${CANN_SET_ENV:?CANN_SET_ENV must point to set_env.sh}"
+          command -v "${JITTOR_CI_PYTHON}" >/dev/null
+          test -f "${CANN_SET_ENV}"
+          source "${CANN_SET_ENV}"
+          command -v npu-smi >/dev/null
+          command -v atc >/dev/null
+          "${JITTOR_CI_PYTHON}" --version
+
+          npu_info="$(npu-smi info)"
+          if ! grep -Eiq 'Ascend[[:space:]]*910B|910B' <<<"${npu_info}"; then
+            printf 'Ascend 910B not found; npu-smi output:\n%s\n' "${npu_info}" >&2
+            exit 1
+          fi
+
+          cann_version="$(atc --version 2>&1)"
+          if ! grep -Eiq '(^|[^0-9])9(\.[0-9]+|[^0-9]|$)' <<<"${cann_version}"; then
+            printf 'CANN 9 required; atc output:\n%s\n' "${cann_version}" >&2
+            exit 1
+          fi
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install pinned development tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${JITTOR_CI_PYTHON}" -m pip install -r requirements/dev-tools.txt
+      - name: Run NPU tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          source "${CANN_SET_ENV}"
+          "${JITTOR_CI_PYTHON}" -m nox -s npu

@@ -25,7 +25,5 @@ cp ./include/oneapi/dnnl/* ./$name/include/oneapi/dnnl/
 
 tar -acvf $name.tgz ./$name/
 
-rsync -avPu $name.tgz jittor-web:Documents/jittor-blog/assets/
-ssh jittor-web Documents/jittor-blog.git/hooks/post-update
-echo "https://cg.cs.tsinghua.edu.cn/jittor/assets/$name.tgz"
-md5sum $name.tgz
+echo "local artifact: $(pwd)/$name.tgz"
+sha256sum $name.tgz

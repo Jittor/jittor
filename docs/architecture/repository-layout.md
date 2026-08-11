@@ -246,7 +246,10 @@ be reconciled before any move is declared complete.
 - Pre-commit runs fast deterministic checks, while nox is the canonical local and
   CI command entry point.
 - CI has structure, CPU, CUDA self-hosted, and NPU layers.
-- Releases use `python -m build`, cibuildwheel, and PyPI trusted publishing.
+- Releases use `python -m build` and PyPI trusted publishing. Jittor's canonical
+  artifact remains `py3-none-any`; cibuildwheel is used on Linux, macOS, and
+  Windows to assert that no platform wheel is accidentally produced, followed
+  by installation of the same canonical wheel on all three platforms.
 - Container and CI baselines share a maintained OS/Python/CUDA definition.
 - ASV tracks speed and memory by commit using `--python=same`, selected revisions,
   and a Jittor cache isolated from unit tests.

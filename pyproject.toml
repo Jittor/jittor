@@ -26,6 +26,10 @@ cuda12 = [
     "nvidia-cudnn-cu12==8.9.7.29; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "nvidia-nccl-cu12==2.18.3; sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
+perf = [
+    "asv==0.6.6",
+    "transformers==4.56.2",
+]
 
 [project.urls]
 Homepage = "http://jittor.org"
@@ -40,3 +44,53 @@ namespaces = false
 
 [tool.setuptools.dynamic]
 version = { attr = "jittor.__version__" }
+
+[tool.ruff]
+required-version = "==0.15.22"
+target-version = "py37"
+line-length = 100
+src = ["python"]
+
+[tool.ruff.lint]
+# Start with deterministic correctness and Python-compatibility checks. Expand
+# this list only together with a clean, reviewed baseline.
+select = ["E4", "E7", "E9", "F", "UP006", "UP007"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+skip-magic-trailing-comma = false
+docstring-code-format = false
+
+[tool.mypy]
+python_version = "3.7"
+files = [
+    "noxfile.py",
+    "agent/scripts/check_wheel_contents.py",
+    "python/jittor_utils/cuda_wheel.py",
+    "python/jittor/torch_shim/deploy.py",
+    "python/jittor/test/_runner.py",
+]
+mypy_path = "python"
+follow_imports = "skip"
+follow_imports_for_stubs = true
+ignore_missing_imports = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_configs = true
+warn_unused_ignores = true
+show_error_codes = true
+pretty = true
+exclude = [
+    "(^|/)(build|dist|\\.nox|\\.mypy_cache|\\.ruff_cache)/",
+]
+
+[[tool.mypy.overrides]]
+module = ["cuda_wheel", "jittor_utils.cuda_wheel"]
+disable_error_code = ["attr-defined"]
+
+[[tool.mypy.overrides]]
+module = ["check_wheel_contents", "agent.scripts.check_wheel_contents"]
+disable_error_code = ["var-annotated"]

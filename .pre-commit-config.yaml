@@ -1,0 +1,44 @@
+minimum_pre_commit_version: "4.6.0"
+default_language_version:
+  python: python3.11
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: trailing-whitespace
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.22
+    hooks:
+      - id: ruff-check
+        args: [--no-cache]
+        files: ^(noxfile\.py|agent/scripts/check_wheel_contents\.py|python/jittor_utils/cuda_wheel\.py|python/jittor/torch_shim/deploy\.py|python/jittor/test/_runner\.py)$
+      - id: ruff-format
+        args: [--no-cache]
+        files: ^noxfile\.py$
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.8.0
+    hooks:
+      - id: mypy
+        args: [--cache-dir=/dev/null]
+        pass_filenames: false
+        always_run: true
+
+  - repo: local
+    hooks:
+      - id: repository-layout
+        name: repository layout
+        entry: agent/scripts/check_repo_layout.sh
+        language: system
+        pass_filenames: false
+        always_run: true

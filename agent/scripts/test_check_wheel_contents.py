@@ -162,6 +162,37 @@ class TestWheelContents(unittest.TestCase):
         )
         self.assertEqual(status, 0, stderr)
 
+    def test_explicit_stage_hash_supersedes_the_default_stage_hash(self):
+        old_wheel = self._wheel("old.whl", self.base_members)
+        baseline = self.root / "baseline.txt"
+        self.assertEqual(
+            self._run(["manifest", old_wheel, "--output", baseline])[0], 0
+        )
+
+        stage_one = self._hashed_list(
+            "stage-one.txt", {"jittor/base.py": b"BASE = stage_one\n"}
+        )
+        stage_two_members = dict(self.base_members)
+        stage_two_members["jittor/base.py"] = b"BASE = stage_two\n"
+        stage_two = self._hashed_list(
+            "stage-two.txt", {"jittor/base.py": stage_two_members["jittor/base.py"]}
+        )
+        candidate = self._wheel("candidate.whl", stage_two_members)
+
+        patches = (
+            mock.patch.object(checker, "DEFAULT_BASELINE", baseline),
+            mock.patch.object(checker, "DEFAULT_ADDITION_ALLOWLIST", self._hashed_list(
+                "empty-additions.txt", {}
+            )),
+            mock.patch.object(checker, "DEFAULT_CONTENT_CHANGE_ALLOWLIST", stage_one),
+        )
+        with patches[0], patches[1], patches[2]:
+            status, stdout, stderr = self._run(
+                ["compare", candidate, "--content-change-allowlist", stage_two]
+            )
+        self.assertEqual(status, 0, stderr)
+        self.assertIn("content changed: 1 (approved: 1, unexpected: 0)", stdout)
+
     def test_unreviewed_secret_env_addition_fails(self):
         old_wheel = self._wheel("old.whl", self.base_members)
         members = dict(self.base_members)

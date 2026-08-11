@@ -1,0 +1,205 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  canonical:
+    name: Build canonical distributions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install pinned release tools
+        run: python -m pip install -r requirements/release.txt
+      - name: Build canonical sdist and universal wheel
+        run: python -m build --no-isolation --sdist --wheel --outdir dist
+      - name: Verify canonical artifact shape and tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from email.parser import BytesParser
+          import os
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          artifacts = sorted(path for path in Path("dist").iterdir() if path.is_file())
+          wheels = [path for path in artifacts if path.suffix == ".whl"]
+          sdists = [path for path in artifacts if path.name.endswith(".tar.gz")]
+          if len(artifacts) != 2 or len(wheels) != 1 or len(sdists) != 1:
+              raise SystemExit("expected exactly one wheel and one sdist: %r" % artifacts)
+          wheel = wheels[0]
+          if not wheel.name.endswith("-py3-none-any.whl"):
+              raise SystemExit("canonical wheel must be universal: %s" % wheel.name)
+          with ZipFile(str(wheel)) as archive:
+              metadata_path = next(
+                  name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
+              )
+              metadata = BytesParser().parsebytes(archive.read(metadata_path))
+          expected_version = os.environ["GITHUB_REF_NAME"][1:]
+          if metadata["Version"] != expected_version:
+              raise SystemExit(
+                  "tag/version mismatch: %s != %s"
+                  % (expected_version, metadata["Version"])
+              )
+          print("canonical artifacts:", wheel.name, sdists[0].name)
+          PY
+      - name: Audit canonical wheel contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel="$(find dist -maxdepth 1 -type f -name 'jittor-*-py3-none-any.whl' -print)"
+          test -n "${wheel}"
+          python agent/scripts/check_wheel_contents.py compare "${wheel}" \
+            --content-change-allowlist agent/baselines/wheel-content-changes-stage2.txt \
+            --removal-allowlist agent/baselines/wheel-removals-stage2.txt
+      - name: Upload canonical artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: canonical-distributions
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  platform-validation:
+    name: Validate ${{ matrix.identifier }}
+    needs: canonical
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            identifier: cp311-manylinux_x86_64
+          - os: macos-15-intel
+            identifier: cp311-macosx_x86_64
+          - os: windows-2022
+            identifier: cp311-win_amd64
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Download canonical artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: canonical-distributions
+          path: canonical-dist
+      - name: Install pinned release tools
+        run: python -m pip install -r requirements/release.txt
+      - name: Assert universal-wheel architecture with cibuildwheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Jittor compiles at runtime and must remain py3-none-any. cibuildwheel
+          # 4.1.0 deliberately exits 5 when one of its platform builds produces
+          # a pure-Python wheel; that exact diagnosis is the assertion here.
+          set +e
+          python -m cibuildwheel --only "${{ matrix.identifier }}" \
+            --output-dir cibw-wheelhouse 2>&1 | tee cibuildwheel.log
+          status="${PIPESTATUS[0]}"
+          set -e
+          if [[ "${status}" -ne 5 ]]; then
+            printf 'expected cibuildwheel pure-wheel exit 5, got %s\n' "${status}" >&2
+            exit 1
+          fi
+          grep -Fq "pure Python wheel was generated" cibuildwheel.log
+      - name: Install and verify the canonical wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel="$(find canonical-dist -maxdepth 1 -type f -name 'jittor-*-py3-none-any.whl' -print)"
+          test -n "${wheel}"
+          python -m pip install --no-deps --force-reinstall "${wheel}"
+          python - <<'PY'
+          from importlib.metadata import distribution
+          import os
+
+          installed = distribution("jittor")
+          expected_version = os.environ["GITHUB_REF_NAME"][1:]
+          if installed.version != expected_version:
+              raise SystemExit(
+                  "installed version mismatch: %s != %s"
+                  % (expected_version, installed.version)
+              )
+          required = (
+              "jittor/torch_shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh",
+              "jittor/torch_shim/stubs/flash_attn/flash_attn_interface.py",
+          )
+          for relative in required:
+              if not installed.locate_file(relative).is_file():
+                  raise SystemExit("installed resource is missing: %s" % relative)
+          print("installed canonical wheel", installed.version)
+          PY
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [canonical, platform-validation]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: pypi
+      url: https://pypi.org/p/jittor
+    permissions:
+      id-token: write
+    steps:
+      - name: Download canonical artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: canonical-distributions
+          path: canonical-dist
+      - name: Publish through PyPI trusted publishing
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: canonical-dist/
+
+  publish-github:
+    name: Publish GitHub Release
+    needs: [canonical, platform-validation]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download canonical artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: canonical-distributions
+          path: canonical-dist
+      - name: Publish canonical artifacts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release upload "${tag}" canonical-dist/* --clobber
+          else
+            gh release create "${tag}" canonical-dist/* \
+              --verify-tag \
+              --generate-notes \
+              --title "${tag}"
+          fi

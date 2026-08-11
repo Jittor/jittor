@@ -163,6 +163,18 @@ python -m jittor_utils.install_cuda
 
 We provide a Docker installation method to save you from configuring the environment. The Docker installation method is as follows:
 
+The CPU and CUDA images use the same Dockerfile and package-install path. The
+default image is Ubuntu 24.04; the CUDA image replaces only the maintained base:
+
+```bash
+docker build -t jittor/jittor .
+docker build -t jittor/jittor-cuda \
+  --build-arg FROM_IMAGE=nvidia/cuda:12.2.2-cudnn8-devel-ubuntu22.04 .
+```
+
+Version tags publish the same definitions as `ghcr.io/jittor/jittor` and
+`ghcr.io/jittor/jittor-cuda` through GitHub Actions.
+
 ```
 # CPU only(Linux)
 docker run -it --network host jittor/jittor
@@ -411,4 +423,3 @@ Jittor is currently maintained by the [Tsinghua CSCG Group](https://cg.cs.tsingh
 
 
 Jittor is Apache 2.0 licensed, as found in the LICENSE.txt file.
-

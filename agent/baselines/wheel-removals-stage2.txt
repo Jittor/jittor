@@ -1,0 +1,6 @@
+# Stage 2 approved wheel member removals.
+jittor/script/Dockerfile_cuda11
+jittor/utils/publish.py
+jittor_utils/auto_git_tag.py
+jittor_utils/github_release.sh
+jittor_utils/pip_publish.py

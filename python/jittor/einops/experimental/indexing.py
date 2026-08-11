@@ -55,6 +55,8 @@ because no appropriate indexing available in the standard.
 
 """
 
+from __future__ import annotations
+
 from typing import List, Union, TypeVar, Tuple
 
 from jittor.einops import EinopsError
@@ -270,7 +272,7 @@ class IndexingFormula:
         return result
 
 
-def einindex(pattern: str, arr: T, /, ind: Union[T, List[T]]):
+def einindex(pattern: str, arr: T, ind: Union[T, List[T]]):
     """
     Demonstrates how einindex should work.
     Supports data-api compliant arrays.
@@ -389,5 +391,4 @@ def test_reverse_indexing():
                         result_manual[g, b, c, h, w] = arr_gtbc[g, t, b, c]
 
     assert np.all(result == result_manual)
-
 

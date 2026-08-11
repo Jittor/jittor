@@ -337,27 +337,33 @@ def _inline_hashed_entries(values, label):
 
 
 def _load_hashed_allowlist(args, kind, default_path):
-    allowed = {}
+    defaults = {}
     if _uses_default_policy(args):
         _merge_hashed_entries(
-            allowed,
+            defaults,
             _read_hashed_path_list(default_path, "default {} allowlist".format(kind)),
             "{} allowlist".format(kind),
         )
+    explicit = {}
     for path in getattr(args, "{}_allowlist".format(kind)):
         _merge_hashed_entries(
-            allowed,
+            explicit,
             _read_hashed_path_list(path, "{} allowlist".format(kind)),
             "{} allowlist".format(kind),
         )
     _merge_hashed_entries(
-        allowed,
+        explicit,
         _inline_hashed_entries(
             getattr(args, "allow_{}".format(kind)),
             "inline {} allowance".format(kind),
         ),
         "{} allowlist".format(kind),
     )
+    # A later migration stage may deliberately change a member that an earlier
+    # default stage already changed.  Explicit policy describes the candidate
+    # being audited, while conflicts within explicit policy remain errors.
+    allowed = defaults.copy()
+    allowed.update(explicit)
     return allowed
 
 

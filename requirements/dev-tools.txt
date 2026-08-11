@@ -1,0 +1,10 @@
+# Canonical Stage 2 tool environment. Install with Python 3.11.
+asv==0.6.6
+build==1.3.0
+mypy==1.8.0
+nox==2026.7.11
+pre-commit==4.6.0
+PyYAML==6.0.2
+ruff==0.15.22
+setuptools==83.0.0
+wheel==0.45.1

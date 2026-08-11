@@ -3,6 +3,7 @@
 # name that has not appeared in this repository before.
 **
 !setup.py
+!pyproject.toml
 !README.md
 !MANIFEST.in
 !LICENSE.txt

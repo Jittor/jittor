@@ -12,9 +12,7 @@
 # 3. remove files
 # 4. commit jittor-polish(check modify and break)
 # 5. compile to build/$git_version/$cc_type/$use_cuda/a.obj
-# 6. rsync to build-server
-# 7. push to github
-# 8. push to pip
+# 6. leave the local build artifact for the release workflow
 
 import os
 import jittor as jt
@@ -115,17 +113,4 @@ if len(sys.argv) > 1 and sys.argv[1] == "native":
 # mkdir -p jittor && tar -xvf ./jittor.tgz -C jittor
 assert os.system(f"cd {root_path} && tar --exclude=build --exclude=.git --exclude=.ipynb_checkpoints --exclude=__pycache__ --exclude=__data__  --exclude=my --exclude=dist  --exclude=.vscode --exclude=.github  -cvzf {build_path}/jittor.tgz * ")==0
 
-# rsync to build-server
-jittor_web_base_dir = "Documents/jittor-blog/assets/"
-jittor_web_build_dir = jittor_web_base_dir
-# copy to jittor-web:Documents/jittor-blog/assets/build/
-assert os.system(f"rsync -avPu {build_path} jittor-web:{jittor_web_build_dir}")==0
-assert os.system(f"ssh jittor-web Documents/jittor-blog.git/hooks/post-update")==0
-
-
-# sys.exit(0)
-
-# push to github
-# assert os.system(f"cd {polish_path} && git push -f origin master")==0
-
-# push to pip
+LOG.i("local polish artifacts are ready at", build_path)
