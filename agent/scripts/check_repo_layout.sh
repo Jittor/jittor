@@ -32,6 +32,15 @@ if find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f \
     \( -name '*.ipynb' -o -name '*.src.md' \) -print >&2
   status=1
 fi
+if find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o \
+  \( -type d -name '__pycache__' -o -type f \( -name '*.pyc' -o -name '*.pyo' \) \) \
+  -print -quit | grep -q .; then
+  echo 'Python bytecode caches must stay outside the checkout.' >&2
+  find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o \
+    \( -type d -name '__pycache__' -o -type f \( -name '*.pyc' -o -name '*.pyo' \) \) \
+    -print >&2
+  status=1
+fi
 if [[ -e "$REPO_ROOT/tests/__init__.py" ]]; then
   echo 'repository tests must not be an importable distribution package: tests/__init__.py' >&2
   status=1
@@ -70,6 +79,8 @@ for forbidden_path in \
   "$REPO_ROOT/python/jittor/_pool" \
   "$REPO_ROOT/python/jittor/torch_compat.py" \
   "$REPO_ROOT/python/jittor/_torch_compat" \
+  "$REPO_ROOT/python/jittor/triton_shim" \
+  "$REPO_ROOT/python/jittor/depthwise_conv.py" \
   "$REPO_ROOT/python/jittor/test" \
   "$REPO_ROOT/python/jittor/monkeypatch_ops.py" \
   "$REPO_ROOT/python/jittor/torch_shim" \

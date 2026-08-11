@@ -208,15 +208,32 @@ class TestWheelContents(unittest.TestCase):
     def test_retired_runtime_members_are_always_rejected(self):
         old_wheel = self._wheel("old.whl", self.base_members)
         retired = (
+            "jittor/_nn",
+            "jittor/_misc/legacy.py",
+            "jittor/_nn/legacy.py",
+            "jittor/_pool/legacy.py",
+            "jittor/_torch_compat/legacy.py",
+            "jittor/_torch_fsdp2/legacy.py",
             "jittor/demo/example.py",
             "jittor/notebook/example.ipynb",
             "jittor/script/install.sh",
             "jittor/test/test_core.py",
+            "jittor/torch_fsdp2_compat/__init__.py",
+            "jittor/torch_shim/__init__.py",
+            "jittor/triton_shim/__init__.py",
             "jittor/vcompiler/__init__.py",
+            "jittor/depthwise_conv.py",
+            "jittor/misc.py",
+            "jittor/monkeypatch_ops.py",
+            "jittor/nn.py",
+            "jittor/pool.py",
+            "jittor/torch_compat.py",
+            "jittor/torch_fsdp2_compat.py",
             "jittor/utils/polish.py",
             "jittor/utils/polish_centos.py",
             "jittor/version",
             "jittor_utils/pack_offline.py",
+            "jittor_utils/translator.py",
         )
         for index, member in enumerate(retired):
             with self.subTest(member=member):
@@ -228,6 +245,21 @@ class TestWheelContents(unittest.TestCase):
                 )
                 self.assertEqual(status, 1)
                 self.assertIn("retired runtime-wheel", stderr)
+
+    def test_notebook_products_are_always_rejected(self):
+        old_wheel = self._wheel("old.whl", self.base_members)
+        for index, member in enumerate(
+            ("jittor/tutorial.ipynb", "jittor/tutorial.src.md")
+        ):
+            with self.subTest(member=member):
+                members = dict(self.base_members)
+                members[member] = b"generated\n"
+                candidate = self._wheel("notebook-{}.whl".format(index), members)
+                status, _stdout, stderr = self._run(
+                    ["compare", candidate, "--old-wheel", old_wheel]
+                )
+                self.assertEqual(status, 1)
+                self.assertIn("forbidden generated file suffix", stderr)
 
     def test_unpack_content_tampering_fails(self):
         old_wheel = self._wheel("old.whl", self.base_members)

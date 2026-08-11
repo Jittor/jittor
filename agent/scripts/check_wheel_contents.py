@@ -65,18 +65,34 @@ FORBIDDEN_TOP_LEVEL_NAMES = frozenset((
 ))
 
 FORBIDDEN_MEMBER_PREFIXES = (
+    "jittor/_misc/",
+    "jittor/_nn/",
+    "jittor/_pool/",
+    "jittor/_torch_compat/",
+    "jittor/_torch_fsdp2/",
     "jittor/demo/",
     "jittor/notebook/",
     "jittor/script/",
     "jittor/test/",
+    "jittor/torch_fsdp2_compat/",
+    "jittor/torch_shim/",
+    "jittor/triton_shim/",
     "jittor/vcompiler/",
 )
 
 FORBIDDEN_EXACT_MEMBERS = frozenset((
+    "jittor/depthwise_conv.py",
+    "jittor/misc.py",
+    "jittor/monkeypatch_ops.py",
+    "jittor/nn.py",
+    "jittor/pool.py",
+    "jittor/torch_compat.py",
+    "jittor/torch_fsdp2_compat.py",
     "jittor/utils/polish.py",
     "jittor/utils/polish_centos.py",
     "jittor/version",
     "jittor_utils/pack_offline.py",
+    "jittor_utils/translator.py",
 ))
 
 FORBIDDEN_SUFFIXES = (
@@ -84,6 +100,8 @@ FORBIDDEN_SUFFIXES = (
     ".pyo",
     ".log",
     ".swp",
+    ".ipynb",
+    ".src.md",
 )
 
 
@@ -238,7 +256,10 @@ def _pollution_reason(name):
         return "forbidden top-level experiment path"
     if name in FORBIDDEN_EXACT_MEMBERS:
         return "retired runtime-wheel member"
-    if name.startswith(FORBIDDEN_MEMBER_PREFIXES):
+    if any(
+        name == prefix.rstrip("/") or name.startswith(prefix)
+        for prefix in FORBIDDEN_MEMBER_PREFIXES
+    ):
         return "retired runtime-wheel subtree"
     if len(parts) >= 2 and parts[:2] == ("jittor", "projects"):
         return "repository-local experiment package"

@@ -39,6 +39,36 @@ FORBIDDEN_DIRECTORY_NAMES = frozenset(
     )
 )
 
+FORBIDDEN_TOP_LEVEL_NAMES = frozenset(("doc", "jittor_fsdp2"))
+
+FORBIDDEN_SOURCE_PREFIXES = (
+    "python/jittor/_misc/",
+    "python/jittor/_nn/",
+    "python/jittor/_pool/",
+    "python/jittor/_torch_compat/",
+    "python/jittor/_torch_fsdp2/",
+    "python/jittor/torch_fsdp2_compat/",
+    "python/jittor/torch_shim/",
+    "python/jittor/triton_shim/",
+)
+
+FORBIDDEN_EXACT_SOURCE_PATHS = frozenset(
+    (
+        "README.cn",
+        "README.cn.md",
+        "python/jittor/depthwise_conv.py",
+        "python/jittor/misc.py",
+        "python/jittor/monkeypatch_ops.py",
+        "python/jittor/nn.py",
+        "python/jittor/pool.py",
+        "python/jittor/torch_compat.py",
+        "python/jittor/torch_fsdp2_compat.py",
+        "python/jittor_utils/translator.py",
+    )
+)
+
+FORBIDDEN_SOURCE_SUFFIXES = (".ipynb", ".src.md")
+
 
 class SourceDistributionError(Exception):
     """Raised when a source archive cannot be audited."""
@@ -59,6 +89,7 @@ def _expected_source_paths(repo_root):
         "requirements/docs.in",
         "requirements/docs.txt",
         "requirements/examples.txt",
+        "python",
     )
     try:
         result = subprocess.run(
@@ -73,7 +104,11 @@ def _expected_source_paths(repo_root):
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", "replace").strip()
         raise SourceDistributionError("cannot inventory source checkout: {}".format(detail))
-    paths = frozenset(item for item in result.stdout.decode("utf-8").split("\0") if item)
+    paths = frozenset(
+        item
+        for item in result.stdout.decode("utf-8").split("\0")
+        if item and _generated_cache_reason(item) is None
+    )
     missing_sentinels = sorted(set(REQUIRED_SOURCE_PATHS) - paths)
     if missing_sentinels:
         raise SourceDistributionError(
@@ -98,7 +133,7 @@ def _member_issues(name, source):
     return issues
 
 
-def _pollution_reason(relative):
+def _generated_cache_reason(relative):
     parts = PurePosixPath(relative).parts
     directories = parts if relative.endswith("/") else parts[:-1]
     for part in directories:
@@ -108,6 +143,25 @@ def _pollution_reason(relative):
         return "generated top-level build directory"
     if relative.endswith((".pyc", ".pyo")):
         return "generated Python bytecode"
+    return None
+
+
+def _pollution_reason(relative):
+    parts = PurePosixPath(relative).parts
+    if parts and parts[0] in FORBIDDEN_TOP_LEVEL_NAMES:
+        return "forbidden legacy top-level path"
+    if relative in FORBIDDEN_EXACT_SOURCE_PATHS:
+        return "forbidden legacy source path"
+    if any(
+        relative == prefix.rstrip("/") or relative.startswith(prefix)
+        for prefix in FORBIDDEN_SOURCE_PREFIXES
+    ):
+        return "forbidden legacy source subtree"
+    generated_reason = _generated_cache_reason(relative)
+    if generated_reason is not None:
+        return generated_reason
+    if relative.endswith(FORBIDDEN_SOURCE_SUFFIXES):
+        return "forbidden notebook source/product suffix"
     return None
 
 
@@ -163,6 +217,7 @@ def audit_sdist(path, expected_paths):
         and (
             relative.startswith("examples/")
             or relative.startswith("docs/")
+            or relative.startswith("python/")
             or relative.startswith("tools/")
             or relative
             in (
