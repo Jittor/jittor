@@ -12,6 +12,68 @@ import jittor as jt
 import numpy as np
 import jittor.models as jtmodels
 
+
+class TestDepthwiseConvCPU(unittest.TestCase):
+    @staticmethod
+    def _reference(x, weight, stride, padding, dilation):
+        n, channels, height, width = x.shape
+        kernel_height, kernel_width = weight.shape[2:]
+        output_height = (
+            height + 2 * padding[0] - dilation[0] * (kernel_height - 1) - 1
+        ) // stride[0] + 1
+        output_width = (
+            width + 2 * padding[1] - dilation[1] * (kernel_width - 1) - 1
+        ) // stride[1] + 1
+        output = np.zeros((n, channels, output_height, output_width), dtype=np.float32)
+        for batch in range(n):
+            for channel in range(channels):
+                for row in range(output_height):
+                    for column in range(output_width):
+                        total = 0.0
+                        for kernel_row in range(kernel_height):
+                            input_row = row * stride[0] - padding[0] + kernel_row * dilation[0]
+                            for kernel_column in range(kernel_width):
+                                input_column = (
+                                    column * stride[1]
+                                    - padding[1]
+                                    + kernel_column * dilation[1]
+                                )
+                                if 0 <= input_row < height and 0 <= input_column < width:
+                                    total += (
+                                        x[batch, channel, input_row, input_column]
+                                        * weight[channel, 0, kernel_row, kernel_column]
+                                    )
+                        output[batch, channel, row, column] = total
+        return output
+
+    def test_cpu_fallback_matches_grouped_convolution_baseline(self):
+        x_array = (
+            np.arange(40, dtype=np.float32).reshape(1, 2, 4, 5) - 17.0
+        ) / 8.0
+        weight_array = (
+            np.arange(12, dtype=np.float32).reshape(2, 1, 3, 2) - 4.0
+        ) / 7.0
+        stride = (1, 2)
+        padding = (1, 0)
+        dilation = (1, 1)
+        with jt.flag_scope(use_cuda=0):
+            output = jt.nn.DepthwiseConv(stride, padding, dilation)(
+                jt.array(x_array), jt.array(weight_array)
+            )
+            actual = output.numpy()
+        expected = self._reference(x_array, weight_array, stride, padding, dilation)
+        np.testing.assert_allclose(actual, expected, atol=1e-6, rtol=1e-6)
+        self.assertEqual(actual.shape, (1, 2, 4, 2))
+
+    def test_cpu_backward_keeps_pre_migration_failure_contract(self):
+        with jt.flag_scope(use_cuda=0):
+            x = jt.array(np.arange(18, dtype=np.float32).reshape(1, 2, 3, 3))
+            weight = jt.ones((2, 1, 2, 2))
+            output = jt.nn.DepthwiseConv()(x, weight)
+            with self.assertRaisesRegex(AttributeError, "save_vars"):
+                jt.grad(output.sum(), [x, weight])
+
+
 def load_parameters(m1, m2):
     m1.save('/tmp/temp.pk')
     m2.load('/tmp/temp.pk')

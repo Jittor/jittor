@@ -3,7 +3,8 @@
 from .convolution import Conv, Conv1d
 from .convolution3d import Conv3d
 from .convolution_transpose import ConvTranspose, ConvTranspose3d
-from .linear import Linear
+from .depthwise import DepthwiseConv
+from .linear import Conv1d_sp, Linear
 from .padding import (
     ConstantPad1d, ConstantPad2d, ConstantPad3d, ReflectionPad2d,
     ReplicationPad2d, ZeroPad2d,

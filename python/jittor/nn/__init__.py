@@ -50,7 +50,8 @@ from .backends.cudnn import (
     _try_cudnn_conv_transpose2d,
 )
 from .modules.convolution import Conv, Conv1d
-from .modules.linear import Linear, linear
+from .modules.depthwise import DepthwiseConv
+from .modules.linear import Conv1d_sp, Linear, linear
 from .functional.convolution_transpose import (
     conv_transpose, conv_transpose1d, conv_transpose3d,
 )
@@ -884,24 +885,7 @@ class Flatten(Module):
         return x.flatten(self.start_dim, self.end_dim)
 
 
-from jittor.depthwise_conv import DepthwiseConv
-
 Conv2d = Conv
-
-class Conv1d_sp(Linear):
-    def __init__(self, inchannels, outchannels, kernel_size=1, bias=True):
-        assert inchannels > 0, 'in_channels must be positive'
-        assert outchannels > 0, 'out_channels must be positive'
-        super().__init__(inchannels, outchannels, bias=bias)
-        assert kernel_size == 1
-
-    def execute(self, x):
-        if x.dim() != 3:
-            raise ValueError("Input shape must be `(N, C, L)`!")
-        x = x.transpose(0, 2, 1)
-        x = super().execute(x)
-        x = x.transpose(0, 2, 1)
-        return x
 
 conv = conv2d
 

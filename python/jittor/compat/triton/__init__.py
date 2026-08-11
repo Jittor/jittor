@@ -26,12 +26,12 @@ package switches to **bridge mode** instead of shadowing it: ``import triton``
 keeps resolving to the real package, but its ``JITFunction.run`` is patched so
 that a kernel launched with jittor ``Var`` arguments is **compiled by upstream
 triton and executed by jittor** on its own device pointers
-(:mod:`jittor.triton_shim.backend`). This runs the kernels the naive tracer
+(:mod:`jittor.compat.triton.backend`). This runs the kernels the naive tracer
 cannot — ``tl.dot`` matmul, 2-D softmax, fused layernorm, flash-attention,
 fp16/bf16, ``@triton.autotune`` — verified in ``test_triton_backend.py``::
 
     import jittor as jt; jt.flags.use_cuda = 1
-    import jittor.triton_shim            # auto-bridges a real triton
+    import jittor.compat.triton            # auto-bridges a real triton
     import triton, triton.language as tl
 
     @triton.jit
@@ -59,26 +59,25 @@ Three ways, increasing in transparency:
 
 1. Direct use (no global registration)::
 
-       from jittor.triton_shim import triton
-       import jittor.triton_shim.language as tl
+       from jittor.compat.triton import triton
+       import jittor.compat.triton.language as tl
 
 2. Register into ``sys.modules`` for the current process so a *bare*
    ``import triton`` / ``import triton.language as tl`` resolves to this shim::
 
-       import jittor.triton_shim
-       jittor.triton_shim.install()        # idempotent
+       import jittor.compat.triton
+       jittor.compat.triton.install()        # idempotent
        import triton                        # -> this shim
-       import triton.language as tl         # -> jittor.triton_shim.language
+       import triton.language as tl         # -> jittor.compat.triton.language
 
    ``install()`` is also run automatically the first time this package is
    imported (best-effort), so step 2 usually reduces to ``import
-   jittor.triton_shim``.
+   jittor.compat.triton``.
 
-3. Persistent, no jittor import required first (mirrors
-   ``python -m jittor.torch_shim.deploy``)::
+3. Persistent, no jittor import required first (via the canonical deploy CLI)::
 
-       python -m jittor.triton_shim.deploy        # writes triton/ into site-packages
-       python -m jittor.triton_shim.deploy --check
+       python -m jittor.compat.triton.deploy        # writes triton/ into site-packages
+       python -m jittor.compat.triton.deploy --check
 
    After deploy, a plain ``import triton`` in that environment resolves to a
    tiny redirect module that re-exports this shim — even before ``import
@@ -87,6 +86,9 @@ Three ways, increasing in transparency:
 import os
 import sys
 import types
+import importlib
+import importlib.abc
+import importlib.util
 
 from . import language
 
@@ -469,7 +471,7 @@ def activate_bridge(real=None):
     *Bridge mode*: when upstream triton + a CUDA GPU are present, a real
     ``@triton.jit`` kernel launched with jittor ``Var`` arguments is compiled by
     upstream triton and executed by jittor's CUDA-driver launcher
-    (:mod:`jittor.triton_shim.backend`). Launches with non-jittor args fall
+    (:mod:`jittor.compat.triton.backend`). Launches with non-jittor args fall
     through to triton's own runtime unchanged. Idempotent; returns True if the
     bridge is active. Safe to call when triton is absent (returns False).
     """
@@ -554,7 +556,7 @@ def install(force=False):
       GPU is present), we do *not* shadow it: ``import triton`` keeps resolving
       to the real package, and we patch its ``JITFunction.run`` so kernels
       launched on jittor ``Var`` s are compiled by triton and run by jittor
-      (:mod:`jittor.triton_shim.backend`). This unlocks real ``tl.dot`` / tiled /
+      (:mod:`jittor.compat.triton.backend`). This unlocks real ``tl.dot`` / tiled /
       fused kernels that the naive tracer cannot run.
     * **Shim mode** — if no real triton is installed (or ``force=True``), register
       this shim as ``triton`` / ``triton.language`` in ``sys.modules`` so a bare
@@ -583,20 +585,70 @@ def install(force=False):
 
 # resolve our own module object for self-registration
 _self_module = sys.modules[__name__]
-# advertise triton.language as a real submodule attribute immediately
-language.__name__ = "triton.language"
+
+# Resolve legacy child imports lazily so importing this package retains the
+# original shim's import order. The loader returns the canonical module object
+# and restores its metadata after importlib temporarily prepares it for the
+# legacy name.
+class _LegacyAliasLoader(importlib.abc.Loader):
+    def __init__(self, canonical_name):
+        self.canonical_name = canonical_name
+        self.metadata = None
+
+    def create_module(self, spec):
+        module = importlib.import_module(self.canonical_name)
+        self.metadata = (
+            module.__name__, module.__package__, module.__loader__, module.__spec__
+        )
+        return module
+
+    def exec_module(self, module):
+        module.__name__, module.__package__, module.__loader__, module.__spec__ = self.metadata
+
+
+class _LegacyAliasFinder(importlib.abc.MetaPathFinder):
+    _jittor_triton_legacy_alias_finder = True
+
+    def __init__(self, aliases):
+        self.aliases = dict(aliases)
+
+    def find_spec(self, fullname, path=None, target=None):
+        canonical_name = self.aliases.get(fullname)
+        if canonical_name is None:
+            return None
+        return importlib.util.spec_from_loader(fullname, _LegacyAliasLoader(canonical_name))
+
+
+_legacy_children = {
+    "jittor.triton_shim.backend": "jittor.compat.triton.backend",
+    "jittor.triton_shim.deploy": "jittor.compat.triton.deploy",
+    "jittor.triton_shim.language": "jittor.compat.triton.language",
+    "jittor.triton_shim.launch": "jittor.compat.triton.launch",
+}
+if not any(
+    getattr(finder, "_jittor_triton_legacy_alias_finder", False)
+    for finder in sys.meta_path
+):
+    sys.meta_path.insert(0, _LegacyAliasFinder(_legacy_children))
+
+sys.modules["jittor.triton_shim"] = _self_module
+sys.modules["jittor.triton_shim.language"] = language
+_jittor_module = sys.modules.get("jittor")
+if _jittor_module is not None:
+    setattr(_jittor_module, "triton_shim", _self_module)
+del _jittor_module, _legacy_children
 
 # Convenience alias so the "no global registration" path works:
-#     from jittor.triton_shim import triton
+#     from jittor.compat.triton import triton
 # `triton` here is simply this package module itself.
 triton = _self_module
 
-# Best-effort auto-install on import so ``import jittor.triton_shim`` is enough
+# Best-effort auto-install on import so ``import jittor.compat.triton`` is enough
 # to make ``import triton`` work — bridging a real triton (preferred) or
 # shadowing with the shim when none is installed. install() never clobbers a
 # real triton (it patches it for jittor instead), so this is safe to call here.
 try:
     install()
 except Exception:
-    # never let registration failure break ``import jittor.triton_shim``
+    # never let registration failure break ``import jittor.compat.triton``
     pass

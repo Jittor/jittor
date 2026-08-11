@@ -805,14 +805,14 @@ def _apply_external_runtime_patches():
     report = {}
 
     try:
-        import jittor.triton_shim  # noqa: F401
+        from jittor.compat import triton as _triton_compat  # noqa: F401
         report["triton_shim"] = {"ok": True}
     except Exception as error:
         report["triton_shim"] = {
             "ok": False,
             "error": f"{type(error).__name__}: {error}",
         }
-        LOG.w(f"external runtime patch triton_shim skipped: {error}")
+        LOG.w(f"external runtime patch triton skipped: {error}")
 
     try:
         from jittor.compat.module_patcher import install_module_patches
@@ -2938,3 +2938,7 @@ except Exception as _e:
         raise
     from .compiler import LOG as _LOG
     _LOG.w(f"torch_compat not fully installed: {_e}")
+
+# Canonical Triton compatibility domain. Its initializer registers the legacy
+# jittor.triton_shim package and child-module names as same-object aliases.
+from .compat import triton as triton_shim

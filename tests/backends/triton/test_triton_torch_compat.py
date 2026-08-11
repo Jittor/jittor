@@ -4,7 +4,7 @@ These lock the second half of "triton support": code written against ``torch``
 (jittor's torch shim, i.e. ``import jittor as torch`` / a deployed ``torch``
 redirect) that launches real ``@triton.jit`` kernels must run on jittor. Under
 the shim a "torch tensor" *is* a jittor ``Var``; the bridge
-(:mod:`jittor.triton_shim.backend`) also duck-types any tensor with
+(:mod:`jittor.compat.triton.backend`) also duck-types any tensor with
 ``data_ptr``/``dtype``/``shape`` so a genuine ``torch.Tensor`` works too.
 
 Each kernel is created with the ``torch`` API and checked against an independent
@@ -79,7 +79,7 @@ def setUpModule():
     if not _HAVE:
         return
     try:
-        import jittor.triton_shim as shim_module
+        import jittor.compat.triton as shim_module
         import torch as torch_module
         import triton as triton_module
         import triton.language as language_module
