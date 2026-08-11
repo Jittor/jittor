@@ -43,7 +43,7 @@ python/
 │   │   └── sparse.py
 │   ├── misc/                    # general tensor and shape operations
 │   ├── pool/                    # pooling functions and modules
-│   ├── optim.py                 # optimizer public API
+│   ├── optim/                   # optimizer facade and algorithm modules
 │   ├── compat/
 │   │   ├── torch/               # canonical Torch-style API compatibility
 │   │   ├── fsdp2/               # distributed FSDP2 compatibility

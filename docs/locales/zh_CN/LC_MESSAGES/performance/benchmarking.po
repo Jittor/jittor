@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Jittor 1.3.11.0\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-12 02:07+0800\n"
+"POT-Creation-Date: 2026-08-12 06:57+0800\n"
 "PO-Revision-Date: 2026-08-11 18:11+0000\n"
 "Last-Translator: Jittor contributors\n"
 "Language: zh_CN\n"
@@ -51,20 +51,57 @@ msgstr ""
 
 #: d81e6a71cfd7421e9b16592eaefec1e6
 msgid ""
-"Generated ASV state defaults to `.asv/`. CI and nox should set "
-"`JITTOR_ASV_HOME`/`JITTOR_HOME` to job-local storage outside the checkout; "
-"raw results intended for publication should be uploaded as artifacts."
+"ASV removes ordinary `PYTHONPATH` when it starts an existing environment."
+" `ASV_PYTHONPATH` is therefore the explicit source-tree path passed to "
+"benchmark processes; the nox sessions set it to `python/` automatically. "
+"The sessions also put the Jittor compile cache and generated ASV state "
+"outside the checkout. `ASV_RESULTS_DIR` and `ASV_HTML_DIR` may select "
+"durable external locations for raw JSON and the published report."
 msgstr ""
+"ASV 启动现有环境时会移除普通的 `PYTHONPATH`。因此，`ASV_PYTHONPATH` 是传递给基准进程的显式"
+"源码树路径；nox 会话会自动将其设为 `python/`。这些会话还会把 Jittor 编译缓存和生成的 ASV "
+"状态放在检出目录之外。可以通过 `ASV_RESULTS_DIR` 和 `ASV_HTML_DIR` 为原始 JSON 和发布后的报告"
+"指定可持久保存的外部位置。"
 
 #: 4fc157e0ab884bc1abd60634a2543241
-msgid "Validate and smoke-test"
-msgstr ""
+msgid "Canonical nox runs"
+msgstr "规范的 nox 运行方式"
 
-#: 0b8315a39378415182282a38cc960d0f
+#: 0b8315a393e2bf457da9eec868662d03bd
 msgid ""
-"Install the performance dependencies and check benchmark signatures without "
-"building an ASV environment:"
+"Install the pinned development tools and record the maintained CPU "
+"selection:"
+msgstr "安装固定版本的开发工具，并记录维护中的 CPU 基准集合："
+
+#: fd5c384a92874f73bfb2895e3fbf6fa6
+msgid ""
+"On a labeled CUDA host with the pinned CUDA benchmark dependencies "
+"installed, record the accelerator selection with:"
+msgstr "在已安装固定版本 CUDA 基准依赖的带标签 CUDA 宿主上，使用以下命令记录加速器基准集合："
+
+#: df87f493dec64307b44577dff1ea2f63
+msgid ""
+"Both sessions perform a real ASV pipeline: `check`, register the machine,"
+" `run` the exact current commit with samples, `compare` it with the "
+"nearest cached ancestor (or an explicit `ASV_COMPARE_BASE`), then "
+"`publish` the HTML report. `ASV_COMPARE_FACTOR` controls the regression "
+"factor and must be greater than one. A first run bootstraps comparison "
+"against itself. A run is successful only when result JSON and "
+"`index.html` both exist."
 msgstr ""
+"两个会话都会执行真实的 ASV 流程：先运行 `check`，注册机器，再通过 `run` 记录当前提交及样本，"
+"通过 `compare` 与缓存中最近的祖先提交（或显式指定的 `ASV_COMPARE_BASE`）比较，最后使用 "
+"`publish` 发布 HTML 报告。`ASV_COMPARE_FACTOR` 控制回归判定倍数，且必须大于 1。首次运行会以"
+"当前提交自身初始化比较。只有结果 JSON 和 `index.html` 同时存在时，本次运行才算成功。"
+
+#: 1d6b02228b074a908c733e37b2c53f78
+msgid ""
+"The result label must match the checkout. The nox sessions reject a dirty"
+" tree unless the caller deliberately sets `ASV_ALLOW_DIRTY=1`, which is "
+"intended only for local investigation and not publishable evidence."
+msgstr ""
+"结果标签必须与检出版本一致。除非调用方明确设置 `ASV_ALLOW_DIRTY=1`，否则 nox 会话会拒绝脏工作树；"
+"该选项仅用于本地调查，不能作为可发布的验证证据。"
 
 #: eefc5d673714433bb6ba25b4c80abf46
 msgid ""
@@ -96,6 +133,35 @@ msgid ""
 "or an unbounded revision range. Use `asv compare <base> <candidate>` after "
 "both selected commits have results."
 msgstr ""
+
+#: f3f0ef92c405437c8a9bf463b340adfd
+msgid "CI retention and cadence"
+msgstr "CI 结果留存与执行频率"
+
+#: 33f2af62b1e74bcfa5b367d1bd96b594
+msgid ""
+"The CPU workflow runs `nox -s benchmark` in the baseline CPU container. "
+"It restores prior result JSON when available, records the current commit,"
+" compares and publishes, then saves the updated result cache. Raw JSON "
+"and generated HTML are uploaded together as a retained CI artifact."
+msgstr ""
+"CPU 工作流在基线 CPU 容器中运行 `nox -s benchmark`。如果存在历史结果 JSON，工作流会先恢复它，"
+"再记录当前提交、执行比较和发布，随后保存更新后的结果缓存。原始 JSON 与生成的 HTML 会一起上传为保留的 "
+"CI 产物。"
+
+#: fd57b3b6d7bb45f0822890216bd69ef4
+msgid ""
+"The CUDA benchmark is intentionally not a pull-request gate. The CUDA "
+"workflow runs `nox -s benchmark_cuda` after its real-device test gate on "
+"the weekly schedule and on manual dispatch. It uses the labeled CUDA 12.2"
+" RTX 4090 runner, keeps a separate result cache, and uploads a separate "
+"CUDA JSON/HTML artifact. This cadence makes accelerator regressions "
+"visible without consuming dedicated hardware for every source push."
+msgstr ""
+"CUDA 基准有意不作为拉取请求门禁。CUDA 工作流会在每周定时任务和手动触发时，于真实设备测试门禁通过后"
+"运行 `nox -s benchmark_cuda`。它使用带标签的 CUDA 12.2 RTX 4090 runner，维护独立的结果"
+"缓存，并上传独立的 CUDA JSON/HTML 产物。这样的执行频率既能暴露加速器回归，也无需为每次源码推送"
+"占用专用硬件。"
 
 #: 78260d11be0f4c749ffbf56979e4db88
 msgid "Initial benchmark set"

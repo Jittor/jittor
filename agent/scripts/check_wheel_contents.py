@@ -27,7 +27,7 @@ import zipfile
 
 
 AGENT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_BASELINE = AGENT_ROOT / "baselines" / "wheel-contents-stage7.txt"
+DEFAULT_BASELINE = AGENT_ROOT / "baselines" / "wheel-contents-final.txt"
 DEFAULT_ADDITION_ALLOWLIST = (
     AGENT_ROOT / "baselines" / "wheel-additions-final.txt"
 )

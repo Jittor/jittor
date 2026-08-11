@@ -13,7 +13,7 @@ benchmark setup validates both variables before importing Jittor:
 ```bash
 export JITTOR_HOME="${JITTOR_ASV_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/jittor-asv}"
 export cache_name="asv-local"
-export PYTHONPATH="$PWD/python${PYTHONPATH:+:$PYTHONPATH}"
+export ASV_PYTHONPATH="$PWD/python"
 ```
 
 `cache_name` must begin with `asv-`, and the resolved `JITTOR_HOME` must contain
@@ -21,21 +21,41 @@ an `asv` path component. A missing or reused cache is a hard error, not an ASV
 skip. Give parallel CPU, CUDA, and NPU jobs different `JITTOR_HOME` directories
 or different `cache_name` values.
 
-Generated ASV state defaults to `.asv/`. CI and nox should set
-`JITTOR_ASV_HOME`/`JITTOR_HOME` to job-local storage outside the checkout; raw
-results intended for publication should be uploaded as artifacts.
+ASV removes ordinary `PYTHONPATH` when it starts an existing environment.
+`ASV_PYTHONPATH` is therefore the explicit source-tree path passed to benchmark
+processes; the nox sessions set it to `python/` automatically. The sessions also
+put the Jittor compile cache and generated ASV state outside the checkout.
+`ASV_RESULTS_DIR` and `ASV_HTML_DIR` may select durable external locations for
+raw JSON and the published report.
 
-## Validate and smoke-test
+## Canonical nox runs
 
-Install the performance dependencies and check benchmark signatures without
-building an ASV environment:
+Install the pinned development tools and record the maintained CPU selection:
 
 ```bash
-python -m pip install -e '.[perf]'
-asv check --python=same
-asv run --python=same --quick --dry-run \
-  --bench 'operators.OperatorBenchmarks.time_operator'
+python -m pip install -r requirements/dev-tools.txt
+python -m nox -s benchmark -- \
+  --bench '^(operators|optimizer_step)\.'
 ```
+
+On a labeled CUDA host with the pinned CUDA benchmark dependencies installed,
+record the accelerator selection with:
+
+```bash
+python -m nox -s benchmark_cuda -- \
+  --bench '^(tiny_llama|optimizer_step)\.'
+```
+
+Both sessions perform a real ASV pipeline: `check`, register the machine, `run`
+the exact current commit with samples, `compare` it with the nearest cached
+ancestor (or an explicit `ASV_COMPARE_BASE`), then `publish` the HTML report.
+`ASV_COMPARE_FACTOR` controls the regression factor and must be greater than
+one. A first run bootstraps comparison against itself. A run is successful only
+when result JSON and `index.html` both exist.
+
+The result label must match the checkout. The nox sessions reject a dirty tree
+unless the caller deliberately sets `ASV_ALLOW_DIRTY=1`, which is intended only
+for local investigation and not publishable evidence.
 
 The CPU parameters import and execute without CUDA. CUDA parameters raise an
 explicit ASV skip when Jittor or real PyTorch cannot execute on CUDA. Real
@@ -61,6 +81,20 @@ each switch. Keep the same compiler, accelerator, dependency versions, cache
 warmup policy, and ASV results directory. Do not run `ALL` or an unbounded
 revision range. Use `asv compare <base> <candidate>` after both selected commits
 have results.
+
+## CI retention and cadence
+
+The CPU workflow runs `nox -s benchmark` in the baseline CPU container. It
+restores prior result JSON when available, records the current commit, compares
+and publishes, then saves the updated result cache. Raw JSON and generated HTML
+are uploaded together as a retained CI artifact.
+
+The CUDA benchmark is intentionally not a pull-request gate. The CUDA workflow
+runs `nox -s benchmark_cuda` after its real-device test gate on the weekly
+schedule and on manual dispatch. It uses the labeled CUDA 12.2 RTX 4090 runner,
+keeps a separate result cache, and uploads a separate CUDA JSON/HTML artifact.
+This cadence makes accelerator regressions visible without consuming dedicated
+hardware for every source push.
 
 ## Initial benchmark set
 

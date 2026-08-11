@@ -259,11 +259,12 @@ authors should use the maintained `compile_custom_op` and `compile_custom_ops`
 interfaces instead. The package-local `version` file is also retired because
 project metadata and `jittor.__version__` are the version authorities.
 
-The old LLVM alignment pass is not retired in Stage 6. A real Clang 14 cold-build
-gate failed in the existing core before the pass could be evaluated, so
-`compiler.compile_extern()` and `extern/llvm/jt_alignment_from_assumptions.cc`
-remain together. Removing either side requires a later successful Clang cold
-import, forward/backward graph, and custom JIT regression.
+Stage 6 retires the old LLVM alignment pass and the unused
+`compiler.compile_extern()` build hook together. The active compiler startup did
+not call that hook; keeping a private pass tied to LLVM compiler internals added
+an unsupported distribution payload without affecting the runtime JIT path.
+The normal Clang cold import, forward/backward graph, and custom JIT regressions
+remain the acceptance gate for the supported compiler path.
 
 ## Tooling And Delivery
 
@@ -271,14 +272,26 @@ import, forward/backward graph, and custom JIT regression.
   ratcheted scope rather than an unmaintainable all-at-once exception list.
 - Pre-commit runs fast deterministic checks, while nox is the canonical local and
   CI command entry point.
-- CI has structure, CPU, CUDA self-hosted, and NPU layers.
-- Releases use `python -m build` and PyPI trusted publishing. Jittor's canonical
-  artifact remains `py3-none-any`; cibuildwheel is used on Linux, macOS, and
-  Windows to assert that no platform wheel is accidentally produced, followed
-  by installation of the same canonical wheel on all three platforms.
-- Container and CI baselines share a maintained OS/Python/CUDA definition.
+- `.github/ci-baseline.env` is the single maintained definition for the host
+  runner, Python version, CPU CI image, CUDA requirement, hardware runner
+  labels, container matrix, and release validation matrix. The reusable
+  `_ci-baseline.yml` workflow exports those values; individual workflows consume
+  its outputs instead of restating versions or runner labels.
+- CPU tests and packaging run in the CPU image from that baseline. CUDA and NPU
+  jobs are a formal exception to container parity: they run on labeled
+  self-hosted hosts because the device, driver, toolkit, and vendor runtime are
+  host capabilities. macOS and Windows release checks are the corresponding
+  native-platform exception. These jobs still consume the common Python,
+  toolkit, runner-label, or platform-matrix values that apply to them.
+- Releases use `python -m build` and PyPI trusted publishing. Jittor ships
+  Python plus JIT source resources rather than a prebuilt platform extension, so
+  its one canonical wheel remains `py3-none-any`. The release builds that wheel
+  once and installs the same artifact on Linux, macOS, and Windows. The
+  cibuildwheel checks assert that a platform wheel is *not* produced; they do not
+  replace the canonical wheel with three platform-specific wheels.
 - ASV tracks speed and memory by commit using `--python=same`, selected revisions,
-  and a Jittor cache isolated from unit tests.
+  a Jittor cache isolated from unit tests, and externally stored results and HTML
+  reports.
 - Documentation uses Sphinx, MyST, standard gettext/sphinx-intl localization,
   and jupytext-managed tutorials.
 
@@ -290,10 +303,9 @@ import, forward/backward graph, and custom JIT regression.
 4. Convert domain facade/private pairs into domain packages.
 5. Separate compatibility capability, mechanism, root-cause fixes, and glue.
 6. Add installed self-test, move the repository tests, and adopt pytest.
-7. Move tools/examples and remove proven dead distribution payloads. In
-   particular, `extern/llvm` is not removable while the Clang/Linux compiler path
-   scans and builds it; deletion requires a replacement consumer and regression
-   evidence first.
+7. Move tools/examples and remove proven dead distribution payloads, including
+   the uncalled `compiler.compile_extern()` hook and its private `extern/llvm`
+   plugin source.
 8. Finish remaining module decomposition and reduce root initialization to a
    composition root.
 9. Modernize documentation, localization, tutorials, and governance.
