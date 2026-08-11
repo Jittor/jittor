@@ -138,6 +138,9 @@ os.environ.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
 
 def _session_env(session, backend):
     root = Path(session.create_tmp()).resolve()
+    if root.exists():
+        shutil.rmtree(str(root))
+    root.mkdir(parents=True)
     paths = {
         "HOME": root / "home",
         "JITTOR_HOME": root / "jittor-home",
