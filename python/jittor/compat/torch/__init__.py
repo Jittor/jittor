@@ -1367,7 +1367,7 @@ def _install_autograd_function(g):
         # stop-grad, contributes False -- matching torch.
         try:
             self.needs_input_grad = tuple(
-                bool(isinstance(v, jt.Var) and not v.is_stop_grad()) for v in args)
+                bool(isinstance(v, jt.Var) and v.requires_grad) for v in args)
         except Exception:
             self.needs_input_grad = tuple(isinstance(v, jt.Var) for v in args)
         out = _orig_fn_call(self, *args, **kw)
@@ -2092,7 +2092,10 @@ def _install_nn_extras(nn):
         _native_parameter = getattr(nn, "Parameter", None)
         class _ParameterMeta(type):
             def __instancecheck__(cls, obj):
-                return isinstance(obj, _jt.Var)
+                return (
+                    isinstance(obj, _jt.Var)
+                    and bool(getattr(obj, "_is_torch_parameter", False))
+                )
             def __call__(cls, data=None, requires_grad=True):
                 return _torch_make_parameter(data, requires_grad=requires_grad)
         class Parameter(metaclass=_ParameterMeta):
@@ -2230,10 +2233,10 @@ def _install_nn_extras(nn):
     # masking_utils when torch is reported available. TRELLIS does not execute
     # PyTorch flex attention through this API, but the namespace must exist for
     # lazy model imports such as DINOv3ViTModel.
-    attn_mod = _sys_nn_private.modules.get("torch.nn.attention")
-    if attn_mod is None:
-        attn_mod = _types_nn_private.ModuleType("torch.nn.attention")
-        _sys_nn_private.modules["torch.nn.attention"] = attn_mod
+    # torch.nn is the physical jittor.nn package, so keep its real attention
+    # capability module intact and register the torch path as an alias.
+    from jittor.nn import attention as attn_mod
+    _sys_nn_private.modules["torch.nn.attention"] = attn_mod
     flex_mod = _sys_nn_private.modules.get("torch.nn.attention.flex_attention")
     if flex_mod is None:
         flex_mod = _types_nn_private.ModuleType("torch.nn.attention.flex_attention")
@@ -3194,7 +3197,7 @@ def _install_module_methods(nn):
             # register trainable params as autograd leaves so the no-optimizer
             # loss.backward() path can populate their .grad (see parameters()).
             try:
-                if isinstance(v, jt.Var) and not v.is_stop_grad():
+                if isinstance(v, jt.Var) and v.requires_grad:
                     reg[id(v)] = v
             except Exception:
                 pass
@@ -3284,7 +3287,7 @@ def _install_module_methods(nn):
         trainable = set()
         try:
             for n, p in self.named_parameters():
-                if not p.is_stop_grad():
+                if p.requires_grad:
                     trainable.add(n)
         except Exception:
             pass
@@ -3329,7 +3332,7 @@ def _install_module_methods(nn):
             if reg is None:
                 reg = jt._torch_leaf_params = {}
             for p in params:
-                if isinstance(p, jt.Var) and not p.is_stop_grad():
+                if isinstance(p, jt.Var) and p.requires_grad:
                     reg[id(p)] = p
         except Exception:
             pass
@@ -4843,8 +4846,12 @@ def _install_flash_attn_shim():
     mod = _sys.modules.get("flash_attn")
     if mod is not None and getattr(mod, "_jittor_flash_attn_stub", False):
         return
-    src = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
-                        "torch_shim", "stubs", "flash_attn", "__init__.py")
+    package_root = _os.path.realpath(_os.path.join(
+        _os.path.dirname(_os.path.abspath(__file__)), "..", ".."
+    ))
+    src = _os.path.join(
+        package_root, "torch_shim", "stubs", "flash_attn", "__init__.py"
+    )
     if not _os.path.isfile(src):
         return
     spec = _ilu.spec_from_file_location("flash_attn", src)
@@ -5312,19 +5319,12 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # leaf so the no-optimizer loss.backward() path (below) can find it. This is
     # behavior-preserving for the getter/setter; it only adds leaf bookkeeping.
     if not isinstance(Var.__dict__.get("requires_grad"), property):
+        _native_requires_grad = Var.__dict__["requires_grad"]
         def _rg_get(self):
-            try:
-                return not self.is_stop_grad()
-            except Exception:
-                return False
+            return bool(_native_requires_grad.__get__(self, Var))
         def _rg_set(self, v):
-            # CRITICAL: jittor's start_grad()/stop_grad() RESET the Var's grad node,
-            # which SEVERS any already-built autograd graph that depends on it --
-            # even start_grad() on an already-grad Var wipes prior computations
-            # ([2,2,2]->[0,0,0]). torch's requires_grad_ is idempotent and never
-            # severs existing graphs. So only flip when the flag ACTUALLY changes;
-            # a no-op set (the common case, e.g. peft set_adapter re-asserting
-            # requires_grad=True every disable_adapter exit) must NOT touch the node.
+            # The native descriptor owns the reversible-vs-permanent distinction:
+            # requires_grad_(False) preserves old edges, while stop_grad() does not.
             v = bool(v)
             fsdp_entry = getattr(self, "_jittor_fsdp2_entry", None)
             fsdp_state = getattr(self, "_jittor_fsdp2_state", None)
@@ -5334,30 +5334,20 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                              getattr(fsdp_entry, "full_param", None)):
                     if not isinstance(peer, Var) or peer is self:
                         continue
+                    _native_requires_grad.__set__(peer, v)
                     if v:
-                        if peer.is_stop_grad():
-                            peer.start_grad()
                         _register_leaf(peer)
-                    elif not peer.is_stop_grad():
-                        peer.stop_grad()
                 if getattr(fsdp_state, "true_fsdp_flat", False):
                     flat = getattr(fsdp_state, "true_fsdp_flat_shard", None)
                     any_trainable = any(getattr(entry, "requires_grad", True)
                                         for entry in fsdp_state.true_fsdp_params)
                     if isinstance(flat, Var):
+                        _native_requires_grad.__set__(flat, any_trainable)
                         if any_trainable:
-                            if flat.is_stop_grad():
-                                flat.start_grad()
                             _register_leaf(flat)
-                        elif not flat.is_stop_grad():
-                            flat.stop_grad()
+            _native_requires_grad.__set__(self, v)
             if v:
-                if self.is_stop_grad():
-                    self.start_grad()
                 _register_leaf(self)
-            else:
-                if not self.is_stop_grad():
-                    self.stop_grad()
         Var.requires_grad = property(_rg_get, _rg_set)
 
     def requires_grad_(self, v=True):
@@ -5394,7 +5384,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             if grads_list is None:
                 grads_list = pg["grads"] = [None] * len(pg["params"])
             for i, p in enumerate(pg["params"]):
-                if not isinstance(p, Var) or p.is_stop_grad():
+                if not isinstance(p, Var) or not p.requires_grad:
                     continue
                 g = grad_by_id.get(id(p))
                 if g is None:
@@ -5485,7 +5475,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         for o in opts:
             for pg in getattr(o, "param_groups", []):
                 for p in pg.get("params", []):
-                    if not isinstance(p, Var) or p.is_stop_grad():
+                    if not isinstance(p, Var) or not p.requires_grad:
                         continue
                     if _fsdp2_backward is not None and _fsdp2_backward.is_fsdp_managed_param(p):
                         opt_ids.add(id(p))
@@ -5494,14 +5484,14 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                     opt_ids.add(id(p))
         if _fsdp2_backward is not None and fsdp_opts:
             for p in _fsdp2_backward.collect_fsdp_full_params_for_backward(fsdp_opts):
-                if isinstance(p, Var) and not p.is_stop_grad():
+                if isinstance(p, Var) and p.requires_grad:
                     leaf_map.setdefault(id(p), p)
                     opt_ids.add(id(p))
         retained = getattr(jt, "_torch_retained", None)
         retained_ids = set()
         if retained:
             for v in list(retained.values()):
-                if isinstance(v, Var) and not v.is_stop_grad():
+                if isinstance(v, Var) and v.requires_grad:
                     leaf_map.setdefault(id(v), v)
                     retained_ids.add(id(v))
         if opts:
@@ -5509,7 +5499,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         else:
             _torch_prune_leaf_registry()
             for v in list(jt._torch_leaf_params.values()):
-                if isinstance(v, Var) and not v.is_stop_grad():
+                if isinstance(v, Var) and v.requires_grad:
                     leaf_map.setdefault(id(v), v)
         if not leaf_map:
             return None

@@ -1,0 +1,6 @@
+# Stage 4 deliberately extracts project-specific compatibility glue.
+jittor/monkeypatch_ops.py
+jittor/torch_shim/gaussian_splatting_runtime.py
+jittor/torch_shim/scripts/check_gaussian_splatting.py
+jittor/torch_shim/scripts/run_gaussian_splatting.sh
+jittor/torch_shim/trellis_runtime.py

@@ -600,6 +600,15 @@ def compile_src(src, h, basename):
                 PyObject* args[] = {self};
                 (void)n, (void)args;
             """
+
+        elif name == "__hash__":
+            slot_name = "tp_hash"
+            func_head = "(PyObject* self) -> Py_hash_t"
+            func_fill = """
+                int64 n = 1;
+                PyObject* args[] = {self};
+                (void)n, (void)args;
+            """
         
         elif name == "__richcmp__":
             slot_name = "tp_richcompare"

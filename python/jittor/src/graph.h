@@ -38,6 +38,15 @@ DumpGraphs dump_all_graphs();
 // @pyjt(clean_graph)
 void clean_graph();
 
+bool lookup_requires_grad_disabled_edge(Node* source, Node* target);
+
+inline bool is_requires_grad_disabled_edge(Node* source, Node* target) {
+    if (target->is_var()
+            || !target->flags.get(NodeFlags::_requires_grad_disabled))
+        return false;
+    return lookup_requires_grad_disabled_edge(source, target);
+}
+
 template <typename Func>
 void bfs_backward(vector<Node*>& queue, Func&& func) {
     auto t = ++tflag_count;
@@ -46,7 +55,8 @@ void bfs_backward(vector<Node*>& queue, Func&& func) {
     while (i < queue.size()) {
         Node* node = queue[i++];
         for (auto i : node->_inputs)
-            if (i.node->tflag != t && func(i.node)) {
+            if (!is_requires_grad_disabled_edge(i.node, node)
+                    && i.node->tflag != t && func(i.node)) {
                 i.node->tflag = t;
                 queue.push_back(i.node);
             }
@@ -68,7 +78,8 @@ void bfs_forward(vector<Node*>& queue, Func&& func) {
     while (i < queue.size()) {
         Node* node = queue[i++];
         for (auto o : node->_outputs)
-            if (o.node->tflag != t && func(o.node)) {
+            if (!is_requires_grad_disabled_edge(node, o.node)
+                    && o.node->tflag != t && func(o.node)) {
                 o.node->tflag = t;
                 queue.push_back(o.node);
             }
@@ -132,7 +143,8 @@ void toplogical_sort_backward(vector<Node*>& nodes, vector<Node*>& sorted, Func&
         auto& deps = node->custom_data;
         deps = 0;
         for (auto o : node->_outputs)
-            if (o.node->tflag == t)
+            if (!is_requires_grad_disabled_edge(node, o.node)
+                    && o.node->tflag == t)
                 deps++;
         if (deps == 0) sorted.push_back(node);
     }
@@ -140,7 +152,8 @@ void toplogical_sort_backward(vector<Node*>& nodes, vector<Node*>& sorted, Func&
     while (i < sorted.size()) {
         Node* node = sorted[i++];
         for (auto i : node->_inputs)
-            if (i.node->tflag == t) {
+            if (!is_requires_grad_disabled_edge(i.node, node)
+                    && i.node->tflag == t) {
                 i.node->custom_data--;
                 if (i.node->custom_data == 0)
                     sorted.push_back(i.node);

@@ -16,82 +16,133 @@ from __future__ import annotations
 
 import hashlib
 import importlib
-import importlib.util
-import inspect
-import json
 import os
 import pathlib
 import subprocess
 import sys
 import threading
-import glob
 from types import ModuleType
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Optional, Tuple
+
+from jittor.compat.external_backend import (
+    ExternalBackend,
+    ExternalBackendSpec,
+    register_external_backend,
+)
 
 
 _TRUTHY = {"1", "true", "yes", "on"}
 _FALSEY = {"0", "false", "no", "off"}
 
-_SRC_ENVS = (
-    "JITTOR_FLASH_ATTN_JITTOR_SRC",
-    "FLASHATTN_JITTOR_SRC",
-    "FLASH_ATTN_JITTOR_SRC",
-    "FLASHATTNJITTOR_SRC",
-)
 _MODULE_ENV = "JITTOR_FLASH_ATTN_JITTOR_MODULE"
-_MANIFEST_NAMES = (
-    "flashattn_jittor.json",
-    "flash_attn_jittor.json",
-    "jittor_flashattn.json",
-)
-_DEFAULT_MODULE_NAMES = (
-    "flashattn_jittor",
-    "flash_attn_jittor",
-    "flashattnjittor",
-    "flashattn_jittor_cuda",
-    "flash_attn_jittor_cuda",
-)
-_PUBLIC_FUNCS = (
-    "flash_attn_func",
-    "flash_attn_qkvpacked_func",
-    "flash_attn_kvpacked_func",
-    "flash_attn_varlen_func",
-    "flash_attn_varlen_qkvpacked_func",
-    "flash_attn_varlen_kvpacked_func",
-)
 _READONLY_BORROW_ATTR = "_jittor_torch_ext_readonly_borrow"
 _MISSING_ATTR = object()
-_HOOK_NAMES = (
-    "load_jittor_flash_attn",
-    "build_jittor_flash_attn",
-    "load_flashattn_jittor",
-    "build_flashattn_jittor",
+_BACKEND_SPEC = ExternalBackendSpec(
+    name="flash-attn",
+    source_envs=(
+        "JITTOR_FLASH_ATTN_JITTOR_SRC",
+        "FLASHATTN_JITTOR_SRC",
+        "FLASH_ATTN_JITTOR_SRC",
+        "FLASHATTNJITTOR_SRC",
+    ),
+    module_env=_MODULE_ENV,
+    module_names=(
+        "flashattn_jittor",
+        "flash_attn_jittor",
+        "flashattnjittor",
+        "flashattn_jittor_cuda",
+        "flash_attn_jittor_cuda",
+    ),
+    public_functions=(
+        "flash_attn_func",
+        "flash_attn_qkvpacked_func",
+        "flash_attn_kvpacked_func",
+        "flash_attn_varlen_func",
+        "flash_attn_varlen_qkvpacked_func",
+        "flash_attn_varlen_kvpacked_func",
+    ),
+    hook_names=(
+        "load_jittor_flash_attn",
+        "build_jittor_flash_attn",
+        "load_flashattn_jittor",
+        "build_flashattn_jittor",
+    ),
+    manifest_names=(
+        "flashattn_jittor.json",
+        "flash_attn_jittor.json",
+        "jittor_flashattn.json",
+    ),
+    relative_source_dirs=(
+        "flashattn_jittor",
+        "flash_attn_jittor",
+        "flashattnjittor",
+        "flash-attention-jittor",
+        "flash-attention",
+        "third_party/flashattn_jittor",
+        "third_party/flash_attn_jittor",
+        "third_party/flash-attention-jittor",
+        "third_party/flash-attention",
+        "extern/flashattn_jittor",
+        "extern/flash_attn_jittor",
+        "extern/flash-attention",
+        "extensions/flashattn_jittor",
+        "extensions/flash_attn_jittor",
+        "extensions/flash-attention",
+    ),
+    source_root_names=("flash-attention-jittor", "flash-attention"),
+    project_root_envs=(
+        "JITTOR_FLASH_ATTN_JITTOR_PROJECT_ROOT",
+        "JITTOR_TORCH_PROJECT_ROOT",
+    ),
+    submodule_attrs=("_C", "cuda", "ops", "flashattn_jittor_cuda", "flash_attn_jittor_cuda"),
+    environment_names=(
+        "JITTOR_FLASH_ATTN_JITTOR",
+        "JITTOR_FLASHATTN_JITTOR",
+        "JITTOR_FLASH_ATTN_JITTOR_PROJECT_ROOT",
+        "JITTOR_TORCH_PROJECT_ROOT",
+        "JITTOR_FLASH_ATTN_HEAD_DIMS",
+        "FLASH_ATTN_HEAD_DIMS",
+        "JITTOR_FLASH_ATTN_DTYPES",
+        "FLASH_ATTN_DTYPES",
+        "JITTOR_FLASH_ATTN_FORCE_BUILD",
+        "JITTOR_FLASH_ATTN_JITTOR_FORCE_BUILD",
+        "JITTOR_FLASH_ATTN_DIRECT_ADAPTER",
+        "JITTOR_FLASH_ATTN_DIRECT_PACKED",
+        "JITTOR_FLASH_ATTN_FUSED_PACKED_SPLIT",
+        "JITTOR_HOME",
+        "JTCUDA",
+        "CUDA_HOME",
+        "nvcc_path",
+        "JITTOR_TORCH_RUNTIME_ROOT",
+        "JITTOR_TORCH_EXTENSIONS_DIR",
+        "TORCH_EXTENSIONS_DIR",
+        "TORCH_CUDA_ARCH_LIST",
+        "CC",
+        "CXX",
+    ),
+    default_module_name="flashattn_jittor_cuda",
+    build_namespace="flashattn_jittor",
+    force_build_env="JITTOR_FLASH_ATTN_JITTOR_FORCE_BUILD",
+    source_predicates=(lambda root: _looks_like_official_flash_attention(root),),
 )
-_SUBMODULE_ATTRS = (
-    "_C",
-    "cuda",
-    "ops",
-    "flashattn_jittor_cuda",
-    "flash_attn_jittor_cuda",
+_EXTERNAL_BACKEND = register_external_backend(
+    ExternalBackend(
+        _BACKEND_SPEC,
+        log=lambda message: _remember_error(message),
+        verbose=lambda: _verbose(),
+        build_root=lambda *parts: _default_build_root("flashattn_jittor", *parts),
+        setup_builder=lambda root: _build_setup_backend(root),
+        special_source_loader=lambda root: _load_official_flash_attention(root),
+    )
 )
-_RELATIVE_SOURCE_DIRS = (
-    "flashattn_jittor",
-    "flash_attn_jittor",
-    "flashattnjittor",
-    "flash-attention-jittor",
-    "flash-attention",
-    "third_party/flashattn_jittor",
-    "third_party/flash_attn_jittor",
-    "third_party/flash-attention-jittor",
-    "third_party/flash-attention",
-    "extern/flashattn_jittor",
-    "extern/flash_attn_jittor",
-    "extern/flash-attention",
-    "extensions/flashattn_jittor",
-    "extensions/flash_attn_jittor",
-    "extensions/flash-attention",
-)
-_SOURCE_ROOT_NAMES = set(_DEFAULT_MODULE_NAMES + ("flash-attention-jittor", "flash-attention"))
+_SRC_ENVS = _BACKEND_SPEC.source_envs
+_MANIFEST_NAMES = _BACKEND_SPEC.manifest_names
+_DEFAULT_MODULE_NAMES = _BACKEND_SPEC.module_names
+_PUBLIC_FUNCS = _BACKEND_SPEC.public_functions
+_HOOK_NAMES = _BACKEND_SPEC.hook_names
+_SUBMODULE_ATTRS = _BACKEND_SPEC.submodule_attrs
+_RELATIVE_SOURCE_DIRS = _BACKEND_SPEC.relative_source_dirs
+_SOURCE_ROOT_NAMES = set(_BACKEND_SPEC.source_root_names + _BACKEND_SPEC.module_names)
 
 _UNSET = object()
 _BACKEND = _UNSET
@@ -154,281 +205,43 @@ def _split_env_list(value: Optional[str]) -> List[str]:
 
 
 def _module_names() -> List[str]:
-    names = _split_env_list(os.environ.get(_MODULE_ENV))
-    for name in _DEFAULT_MODULE_NAMES:
-        if name not in names:
-            names.append(name)
-    return names
+    return _EXTERNAL_BACKEND.module_names()
 
 
 def _project_roots() -> List[pathlib.Path]:
-    roots: List[pathlib.Path] = []
-    for name in (
-        "JITTOR_FLASH_ATTN_JITTOR_PROJECT_ROOT",
-        "JITTOR_TORCH_PROJECT_ROOT",
-        "TRELLIS2_ROOT",
-        "TRELLIS_ROOT",
-    ):
-        value = os.environ.get(name)
-        if value:
-            roots.append(pathlib.Path(value).expanduser())
-
-    argv0 = sys.argv[0] if sys.argv else ""
-    if argv0 and argv0 not in ("-c", "-m"):
-        path = pathlib.Path(argv0).expanduser()
-        if path.suffix == ".py":
-            roots.append(path.parent)
-
-    try:
-        roots.append(pathlib.Path.cwd())
-    except OSError:
-        pass
-
-    runtime = os.environ.get("JITTOR_TORCH_RUNTIME_ROOT")
-    if runtime:
-        p = pathlib.Path(runtime).expanduser()
-        if p.name == "jittor_torch" and p.parent.name == ".cache":
-            roots.append(p.parent.parent)
-
-    out: List[pathlib.Path] = []
-    seen = set()
-    for root in roots:
-        try:
-            resolved = root.resolve()
-        except OSError:
-            continue
-        key = os.fspath(resolved)
-        if key not in seen:
-            seen.add(key)
-            out.append(resolved)
-    return out
+    return _EXTERNAL_BACKEND.project_roots()
 
 
 def candidate_source_roots() -> List[str]:
-    roots: List[Tuple[pathlib.Path, bool]] = []
-    for name in _SRC_ENVS:
-        for raw in _split_env_list(os.environ.get(name)):
-            roots.append((pathlib.Path(raw).expanduser(), True))
-
-    for base in _project_roots():
-        roots.append((base, False))
-        for rel in _RELATIVE_SOURCE_DIRS:
-            roots.append((base / rel, False))
-
-    out: List[str] = []
-    seen = set()
-    for root, explicit in roots:
-        try:
-            resolved = root.resolve()
-        except OSError:
-            continue
-        key = os.fspath(resolved)
-        if key in seen or not resolved.is_dir():
-            continue
-        if _looks_like_source_root(resolved, explicit=explicit):
-            seen.add(key)
-            out.append(key)
-    return out
+    return _EXTERNAL_BACKEND.source_roots()
 
 
 def explicit_source_roots() -> List[str]:
-    out: List[str] = []
-    seen = set()
-    for name in _SRC_ENVS:
-        for raw in _split_env_list(os.environ.get(name)):
-            root = pathlib.Path(raw).expanduser()
-            try:
-                resolved = root.resolve()
-            except OSError:
-                continue
-            key = os.fspath(resolved)
-            if key in seen or not resolved.is_dir():
-                continue
-            if _looks_like_source_root(resolved, explicit=True):
-                seen.add(key)
-                out.append(key)
-    return out
+    return _EXTERNAL_BACKEND.source_roots(explicit_only=True)
 
 
 def _looks_like_source_root(root: pathlib.Path, explicit: bool = False) -> bool:
-    if _looks_like_official_flash_attention(root):
-        return True
-    if any((root / name).is_file() for name in _MANIFEST_NAMES):
-        return True
-    if explicit and (root / "setup.py").is_file():
-        return True
-    if (root / "build_jittor.py").is_file():
-        return True
-    if (root / "__init__.py").is_file() and root.name in _SOURCE_ROOT_NAMES:
-        return True
-    for name in _DEFAULT_MODULE_NAMES:
-        if (root / name / "__init__.py").is_file():
-            return True
-    if root.name in _SOURCE_ROOT_NAMES and (root / "setup.py").is_file():
-        return True
-    return False
-
-
-def _prepend_sys_path(path: pathlib.Path) -> None:
-    text = os.fspath(path)
-    if not text:
-        return
-    if text in sys.path:
-        sys.path.remove(text)
-    sys.path.insert(0, text)
-
-
-def _add_source_to_sys_path(root: pathlib.Path) -> None:
-    _prepend_sys_path(root)
-    _prepend_sys_path(root.parent)
+    return _EXTERNAL_BACKEND.looks_like_source_root(root, explicit=explicit)
 
 
 def _has_public_api(mod: object) -> bool:
-    return any(callable(getattr(mod, name, None)) for name in _PUBLIC_FUNCS)
+    return _EXTERNAL_BACKEND.has_public_api(mod)
 
 
 def _select_backend(mod: ModuleType, allow_hooks: bool = True) -> Optional[ModuleType]:
-    if _has_public_api(mod):
-        return mod
-
-    for attr in _SUBMODULE_ATTRS:
-        sub = getattr(mod, attr, None)
-        if isinstance(sub, ModuleType) and _has_public_api(sub):
-            return sub
-
-    if not allow_hooks:
-        return None
-
-    for hook_name in _HOOK_NAMES:
-        hook = getattr(mod, hook_name, None)
-        if not callable(hook):
-            continue
-        result = _call_hook(hook)
-        selected = _coerce_backend(result)
-        if selected is not None:
-            return selected
-
-    return None
-
-
-def _coerce_backend(obj: object) -> Optional[ModuleType]:
-    if isinstance(obj, ModuleType):
-        return _select_backend(obj, allow_hooks=False) or (obj if _has_public_api(obj) else None)
-    return None
-
-
-def _call_hook(hook):
-    build_root = _default_build_root("hooks")
-    kwargs = {
-        "build_root": build_root,
-        "verbose": _verbose(),
-    }
-    try:
-        sig = inspect.signature(hook)
-    except (TypeError, ValueError):
-        sig = None
-    if sig is not None:
-        accepted = {}
-        params = sig.parameters
-        has_var_kw = any(p.kind == p.VAR_KEYWORD for p in params.values())
-        for key, value in kwargs.items():
-            if has_var_kw or key in params:
-                accepted[key] = value
-        return hook(**accepted)
-    try:
-        return hook(**kwargs)
-    except TypeError:
-        return hook()
-
-
-def _try_import_module(name: str) -> Optional[ModuleType]:
-    try:
-        mod = importlib.import_module(name)
-    except Exception as exc:
-        _remember_error("import %s failed: %s" % (name, exc))
-        return None
-    selected = _select_backend(mod)
-    if selected is None:
-        _remember_error("module %s has no flash_attn entry points" % name)
-        return None
-    return selected
+    return _EXTERNAL_BACKEND.select_backend(mod, allow_hooks=allow_hooks)
 
 
 def _import_from_known_modules() -> Optional[ModuleType]:
-    for name in _module_names():
-        mod = _try_import_module(name)
-        if mod is not None:
-            return mod
-    return None
-
-
-def _local_module_names(root: pathlib.Path) -> List[str]:
-    names: List[str] = []
-    for name in _module_names():
-        if root.name == name and (root / "__init__.py").is_file():
-            names.append(name)
-        if (root / name / "__init__.py").is_file():
-            names.append(name)
-    return list(dict.fromkeys(names))
+    return _EXTERNAL_BACKEND.import_installed()
 
 
 def _import_local_modules(root: pathlib.Path) -> Optional[ModuleType]:
-    for name in _local_module_names(root):
-        def _inside_root(mod):
-            raw = getattr(mod, "__file__", None)
-            if not raw:
-                return False
-            try:
-                pathlib.Path(raw).resolve().relative_to(root.resolve())
-                return True
-            except (OSError, ValueError):
-                return False
-
-        existing = sys.modules.get(name)
-        displaced = {}
-        if existing is not None and not _inside_root(existing):
-            for key in list(sys.modules):
-                if key == name or key.startswith(name + "."):
-                    displaced[key] = sys.modules.pop(key)
-            importlib.invalidate_caches()
-        try:
-            imported = importlib.import_module(name)
-            if not _inside_root(imported):
-                raise ImportError(
-                    "module %s resolved outside explicit source root %s: %s"
-                    % (name, root, getattr(imported, "__file__", None))
-                )
-            selected = _select_backend(imported)
-            if selected is None:
-                raise ImportError(
-                    "module %s has no flash_attn entry points" % name)
-            return selected
-        except Exception as exc:
-            _remember_error("import local %s from %s failed: %s" % (name, root, exc))
-            for key in list(sys.modules):
-                if key == name or key.startswith(name + "."):
-                    sys.modules.pop(key, None)
-            sys.modules.update(displaced)
-    return None
+    return _EXTERNAL_BACKEND.import_local(root)
 
 
 def _manifest_paths(root: pathlib.Path) -> List[pathlib.Path]:
-    return [root / name for name in _MANIFEST_NAMES if (root / name).is_file()]
-
-
-def _expand_paths(root: pathlib.Path, items: Sequence[str]) -> List[str]:
-    out: List[str] = []
-    for raw in items:
-        p = pathlib.Path(raw).expanduser()
-        if not p.is_absolute():
-            p = root / p
-        text = os.fspath(p)
-        if any(ch in text for ch in "*?[]"):
-            for hit in sorted(glob.glob(text, recursive=True)):
-                out.append(os.fspath(pathlib.Path(hit).resolve()))
-        else:
-            out.append(os.fspath(p.resolve()))
-    return list(dict.fromkeys(out))
+    return _EXTERNAL_BACKEND.manifest_paths(root)
 
 
 def _default_build_root(*parts: str) -> str:
@@ -541,8 +354,8 @@ def _official_head_dims(root: pathlib.Path) -> List[str]:
         else:
             dims = [item.strip() for item in raw.replace(";", ",").split(",") if item.strip()]
     else:
-        # TRELLIS.2 uses 128-wide attention heads. Other official kernels are
-        # covered by generated runtime stubs unless explicitly requested.
+        # Keep the common 128-wide kernel as the default. Other official kernels
+        # are covered by generated runtime stubs unless explicitly requested.
         dims = ["128"]
     src_dir = root / "csrc" / "flash_attn" / "src"
     out = []
@@ -1716,106 +1529,12 @@ def _load_official_flash_attention(root: pathlib.Path) -> Optional[ModuleType]:
     return _make_official_backend(low, root, packed)
 
 
-def _manifest_build_dir(root: pathlib.Path, manifest: pathlib.Path, module_name: str) -> str:
-    digest_key = os.fspath(root.resolve()) + "|" + os.fspath(manifest.resolve())
-    digest = hashlib.sha256(digest_key.encode("utf-8")).hexdigest()[:16]
-    safe_name = module_name.replace(".", "_")
-    return _default_build_root("flashattn_jittor", safe_name, digest)
-
-
 def _load_manifest(root: pathlib.Path, manifest: pathlib.Path) -> Optional[ModuleType]:
-    try:
-        with manifest.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception as exc:
-        _remember_error("read manifest %s failed: %s" % (manifest, exc))
-        return None
-
-    sources = data.get("sources") or data.get("source_files")
-    if not sources:
-        _remember_error("manifest %s has no sources" % manifest)
-        return None
-    if isinstance(sources, str):
-        sources = [sources]
-    module_name = (
-        data.get("module")
-        or data.get("name")
-        or os.environ.get(_MODULE_ENV)
-        or "flashattn_jittor_cuda"
-    )
-    if not isinstance(module_name, str) or not module_name:
-        _remember_error("manifest %s has invalid module name" % manifest)
-        return None
-
-    include_items = data.get("include_dirs") or data.get("extra_include_paths") or []
-    if isinstance(include_items, str):
-        include_items = [include_items]
-    include_dirs = []
-    for rel in ("include", "csrc", "src"):
-        p = root / rel
-        if p.is_dir():
-            include_dirs.append(os.fspath(p.resolve()))
-    include_dirs.extend(_expand_paths(root, include_items))
-    include_dirs = list(dict.fromkeys(include_dirs))
-
-    build_dir = data.get("build_directory") or data.get("build_dir")
-    if build_dir:
-        build_path = pathlib.Path(build_dir).expanduser()
-        if not build_path.is_absolute():
-            build_path = root / build_path
-        build_dir = os.fspath(build_path.resolve())
-        os.makedirs(build_dir, exist_ok=True)
-    else:
-        build_dir = _manifest_build_dir(root, manifest, module_name)
-
-    extra_cflags = list(data.get("extra_cflags") or data.get("cflags") or [])
-    extra_cuda_cflags = list(data.get("extra_cuda_cflags") or data.get("cuda_cflags") or [])
-    extra_ldflags = list(data.get("extra_ldflags") or data.get("ldflags") or [])
-
-    _log("compile %s from %s" % (module_name, manifest))
-    try:
-        from jittor.torch_shim.cpp_extension.torch_utils import load
-
-        mod = load(
-            name=module_name.split(".")[-1],
-            sources=_expand_paths(root, sources),
-            extra_include_paths=include_dirs,
-            extra_cflags=extra_cflags,
-            extra_cuda_cflags=extra_cuda_cflags,
-            extra_ldflags=extra_ldflags,
-            build_directory=build_dir,
-            verbose=_verbose(),
-        )
-    except Exception as exc:
-        _remember_error("compile manifest %s failed: %s" % (manifest, exc))
-        return None
-
-    selected = _select_backend(mod)
-    if selected is None:
-        _remember_error("compiled module %s has no flash_attn entry points" % module_name)
-        return None
-    return selected
+    return _EXTERNAL_BACKEND.load_manifest(root, manifest)
 
 
 def _load_build_jittor(root: pathlib.Path) -> Optional[ModuleType]:
-    path = root / "build_jittor.py"
-    if not path.is_file():
-        return None
-    name = "_jittor_flashattn_build_" + hashlib.sha256(os.fspath(root).encode("utf-8")).hexdigest()[:16]
-    try:
-        spec = importlib.util.spec_from_file_location(name, os.fspath(path))
-        if spec is None or spec.loader is None:
-            raise RuntimeError("cannot load build_jittor.py")
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules[name] = mod
-        spec.loader.exec_module(mod)
-    except Exception as exc:
-        _remember_error("load %s failed: %s" % (path, exc))
-        return None
-    selected = _select_backend(mod)
-    if selected is None:
-        _remember_error("%s has no flashattn_jittor build hook" % path)
-    return selected
+    return _EXTERNAL_BACKEND.load_build_script(root)
 
 
 def _setup_child_env(root: pathlib.Path) -> dict:
@@ -1838,7 +1557,7 @@ def _setup_child_env(root: pathlib.Path) -> dict:
     return env
 
 
-def _build_setup_py(root: pathlib.Path) -> bool:
+def _build_setup_backend(root: pathlib.Path) -> bool:
     if not (root / "setup.py").is_file():
         return False
     try:
@@ -1857,31 +1576,12 @@ def _build_setup_py(root: pathlib.Path) -> bool:
         return False
 
 
+def _build_setup_py(root: pathlib.Path) -> bool:
+    return _EXTERNAL_BACKEND.build_setup(root)
+
+
 def _load_from_source_root(raw_root: str) -> Optional[ModuleType]:
-    root = pathlib.Path(raw_root).expanduser().resolve()
-    _add_source_to_sys_path(root)
-
-    if _looks_like_official_flash_attention(root):
-        return _load_official_flash_attention(root)
-
-    for manifest in _manifest_paths(root):
-        mod = _load_manifest(root, manifest)
-        if mod is not None:
-            return mod
-
-    mod = _import_local_modules(root)
-    if mod is not None:
-        return mod
-
-    mod = _load_build_jittor(root)
-    if mod is not None:
-        return mod
-
-    if _build_setup_py(root):
-        mod = _import_from_known_modules()
-        if mod is not None:
-            return mod
-    return None
+    return _EXTERNAL_BACKEND.load_source_root(raw_root)
 
 
 def _remember_error(message: str) -> None:
@@ -1890,33 +1590,8 @@ def _remember_error(message: str) -> None:
     _log(message)
 
 
-_BACKEND_ENV_NAMES = _SRC_ENVS + (
-    _MODULE_ENV,
-    "JITTOR_FLASH_ATTN_JITTOR",
-    "JITTOR_FLASHATTN_JITTOR",
-    "JITTOR_FLASH_ATTN_JITTOR_PROJECT_ROOT",
-    "JITTOR_TORCH_PROJECT_ROOT",
-    "TRELLIS2_ROOT",
-    "TRELLIS_ROOT",
-    "JITTOR_FLASH_ATTN_HEAD_DIMS",
-    "FLASH_ATTN_HEAD_DIMS",
-    "JITTOR_FLASH_ATTN_DTYPES",
-    "FLASH_ATTN_DTYPES",
-    "JITTOR_FLASH_ATTN_FORCE_BUILD",
-    "JITTOR_FLASH_ATTN_JITTOR_FORCE_BUILD",
-    "JITTOR_FLASH_ATTN_DIRECT_ADAPTER",
-    "JITTOR_FLASH_ATTN_DIRECT_PACKED",
-    "JITTOR_FLASH_ATTN_FUSED_PACKED_SPLIT",
-    "JITTOR_HOME",
-    "JTCUDA",
-    "CUDA_HOME",
-    "nvcc_path",
-    "JITTOR_TORCH_RUNTIME_ROOT",
-    "JITTOR_TORCH_EXTENSIONS_DIR",
-    "TORCH_EXTENSIONS_DIR",
-    "TORCH_CUDA_ARCH_LIST",
-    "CC",
-    "CXX",
+_BACKEND_ENV_NAMES = tuple(
+    dict.fromkeys(_SRC_ENVS + (_MODULE_ENV,) + _BACKEND_SPEC.environment_names)
 )
 
 
@@ -1927,7 +1602,9 @@ _BACKEND_MODULE_STATE_ATTR = "_jittor_flashattn_backend_module_state_v1"
 
 def _install_backend_environment_epoch_hook():
     """Install one process-wide watcher for backend-related environment writes."""
-    names = frozenset(_BACKEND_ENV_NAMES)
+    names = frozenset(
+        dict.fromkeys(_BACKEND_ENV_NAMES + _EXTERNAL_BACKEND.environment_names())
+    )
     byte_names = frozenset(os.fsencode(name) for name in names)
     state = getattr(sys, _BACKEND_ENV_EPOCH_STATE_ATTR, None)
     if isinstance(state, dict) and state.get("version") == 1:
@@ -1991,10 +1668,10 @@ _BACKEND_MODULE_INCARNATION = _next_backend_module_incarnation()
 
 def backend_environment_epoch() -> Optional[int]:
     """Return a cheap invalidation token, or None when audit hooks are unavailable."""
-    if (_BACKEND_ENV_EPOCH_STATE is None
-            or not _BACKEND_ENV_EPOCH_STATE.get("reliable")):
+    state = _install_backend_environment_epoch_hook()
+    if state is None or not state.get("reliable"):
         return None
-    return int(_BACKEND_ENV_EPOCH_STATE["epoch"])
+    return int(state["epoch"])
 
 
 def invalidate_backend_environment() -> None:
@@ -2019,7 +1696,12 @@ def backend_publication_token(backend: Optional[ModuleType]) -> Optional[Tuple[i
 
 
 def _backend_environment_key() -> Tuple[Tuple[str, Optional[str]], ...]:
-    return tuple((name, os.environ.get(name)) for name in _BACKEND_ENV_NAMES)
+    return tuple(
+        dict.fromkeys(
+            tuple((name, os.environ.get(name)) for name in _BACKEND_ENV_NAMES)
+            + _EXTERNAL_BACKEND.environment_key()
+        )
+    )
 
 
 def _stable_backend_environment_key():

@@ -17,6 +17,7 @@
 #include "executor.h"
 #include "var_holder.h"
 #include "fused_op.h"
+#include "graph.h"
 
 namespace jittor {
 
@@ -32,6 +33,22 @@ string_view_map<string> jit_key_mapper;
 
 int64 Op::number_of_lived_ops = 0;
 
+// Only Ops with disabled inputs have an entry. Node flag bits record whether
+// an Op has already snapshotted and provide the common no-map-lookup fast path.
+static unordered_map<int64, vector<int64>>& requires_grad_disabled_edges() {
+    static auto* edges = new unordered_map<int64, vector<int64>>();
+    return *edges;
+}
+
+bool lookup_requires_grad_disabled_edge(Node* source, Node* target) {
+    auto& edges = requires_grad_disabled_edges();
+    auto found = edges.find(target->id);
+    if (found == edges.end()) return false;
+    for (int64 source_id : found->second)
+        if (source_id == source->id) return true;
+    return false;
+}
+
 Op::Op() {
     flags.set(NodeFlags::_var, 0);
     flags.set(NodeFlags::_cpu, 1);
@@ -41,6 +58,8 @@ Op::Op() {
 }
 
 Op::~Op() {
+    if (flags.get(NodeFlags::_requires_grad_disabled))
+        requires_grad_disabled_edges().erase(id);
     number_of_lived_ops--;
 }
 
@@ -70,6 +89,24 @@ Var* Op::create_output(NanoVector shape, NanoString dtype) {
 }
 
 void Op::init() {
+    bool first_init = !flags.get(NodeFlags::_requires_grad_snapshot);
+    bool has_disabled_input = false;
+    bool all_inputs_stopped = _inputs.size() != 0;
+    if (first_init) {
+        flags.set(NodeFlags::_requires_grad_snapshot);
+        for (Var* v : inputs()) {
+            bool disabled = v->flags.get(NodeFlags::_requires_grad_disabled);
+            has_disabled_input |= disabled;
+            all_inputs_stopped &= disabled || v->is_stop_grad();
+        }
+        if (has_disabled_input) {
+            flags.set(NodeFlags::_requires_grad_disabled);
+            auto& sources = requires_grad_disabled_edges()[id];
+            for (Var* v : inputs())
+                if (v->flags.get(NodeFlags::_requires_grad_disabled))
+                    sources.push_back(v->id);
+        }
+    }
     infer_shape();
     bool manual_set_vnbb = flags.get(NodeFlags::_manual_set_vnbb)
         || _inputs.size()==0
@@ -90,18 +127,15 @@ void Op::init() {
         exe.run_sync(vector<Var*>({need_sync}), false);
         CHECK(need_sync->num >= 0) << need_sync << "'s shape is error";
     }
-    if (th_mode) {
-        bool stop_grad = true;
-        for (Var* v : inputs()) {
-            if (!v->is_stop_grad()) {
-                stop_grad = false;
-                break;
-            }
-        }
-        if (stop_grad)
+    if (first_init && _inputs.size()) {
+        if (all_inputs_stopped && has_disabled_input) {
+            for (Var* v : outputs())
+                v->flags.set(NodeFlags::_requires_grad_disabled);
+        } else if (all_inputs_stopped && th_mode) {
             for (Var* v : outputs()) {
                 v->set_stop_grad();
             }
+        }
     }
 }
 

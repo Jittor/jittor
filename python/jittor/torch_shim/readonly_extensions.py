@@ -3,114 +3,26 @@
 from __future__ import annotations
 
 import functools
-import importlib.abc
-import importlib.machinery
 import os
-import sys
 import contextlib
 from typing import Dict, Iterable, Optional, Set, Tuple
+
+from jittor.compat.module_patcher import install_module_patches, register_module_patch
 
 
 _READONLY_BORROW_ATTR = "_jittor_torch_ext_readonly_borrow"
 _FORCE_CPU_ATTR = "_jittor_torch_force_cpu"
 _MISSING = object()
 _VAR_TYPE = None
+_READONLY_REGISTRY: Dict[str, Tuple[str, ...]] = {}
+_COPY_SCOPE_REGISTRY: Dict[str, Tuple[str, ...]] = {}
+_SCRATCH_BORROW_REGISTRY: Dict[str, Tuple[str, ...]] = {}
+_READONLY_ARG_REGISTRY: Dict[str, Dict[str, Tuple[int, ...]]] = {}
 
-_DEFAULT_READONLY_FUNCTIONS: Dict[str, Tuple[str, ...]] = {
-    "diff_gaussian_rasterization._C": (
-        "rasterize_gaussians",
-        "rasterize_gaussians_backward",
-        "mark_visible",
-        "fusedssim",
-        "fusedssim_backward",
-    ),
-    "fused_ssim_cuda": (
-        "fusedssim",
-        "fusedssim_backward",
-    ),
-    "simple_knn._C": (
-        "distCUDA2",
-    ),
-    "flex_gemm.kernels.cuda": (
-        "hashmap_build_sparse_conv_out_coords",
-        "expand_unique_build_sparse_conv_out_coords",
-        "hashmap_build_sparse_conv_neighbour_map",
-        "hashmap_lookup",
-        "hashmap_lookup_3d",
-        "z_order_decode",
-        "hilbert_decode",
-        "neighbor_map_post_process_for_masked_implicit_gemm_1_no_bwd",
-        "neighbor_map_post_process_for_masked_implicit_gemm_1",
-        "neighbor_map_post_process_for_masked_implicit_gemm_2",
-    ),
-    "o_voxel._C": (
-        "hashmap_lookup_cuda",
-        "hashmap_lookup_3d_cuda",
-        "z_order_decode_cuda",
-        "hilbert_decode_cuda",
-        "rasterize_voxels_cuda",
-    ),
-    "cumesh._C": (
-        "hashmap_lookup_cuda",
-        "hashmap_lookup_3d_cuda",
-        "get_sparse_voxel_grid_active_vertices",
-        "simple_dual_contour",
-    ),
-}
-
-_DEFAULT_READONLY_ARG_FUNCTIONS: Dict[str, Dict[str, Tuple[int, ...]]] = {
-    "flex_gemm.kernels.cuda": {
-        "hashmap_insert": (2, 3),
-        "hashmap_insert_3d": (2, 3),
-        "hashmap_insert_3d_idx_as_val": (2,),
-        "z_order_encode": (0,),
-        "hilbert_encode": (0,),
-    },
-    "o_voxel._C": {
-        "hashmap_insert_cuda": (2, 3),
-        "hashmap_insert_3d_cuda": (2, 3),
-        "hashmap_insert_3d_idx_as_val_cuda": (2,),
-        "z_order_encode_cuda": (0, 1, 2),
-        "hilbert_encode_cuda": (0, 1, 2),
-    },
-    "cumesh._C": {
-        "hashmap_insert_cuda": (2, 3),
-        "hashmap_insert_3d_cuda": (2, 3),
-        "hashmap_insert_3d_idx_as_val_cuda": (2,),
-    },
-}
-
-_DEFAULT_SCRATCH_BORROW_FUNCTIONS: Dict[str, Tuple[str, ...]] = {
-    # FlexGEMM builds the submanifold-conv hashmap in scratch tensors allocated
-    # immediately before this C++ call. The extension writes those scratch
-    # buffers, consumes them inside the same call, and only returns the neighbor
-    # map. Borrowing them without a Python-side commit removes clone/commit
-    # boundary work while preserving the observable result of FlexGEMM's public
-    # sparse-conv path. Disable with JITTOR_TORCH_EXT_SCRATCH_BORROW=0.
-    "flex_gemm.kernels.cuda": (
-        "hashmap_build_submanifold_conv_neighbour_map",
-    ),
-}
-
-_DEFAULT_COPY_SCOPE_FUNCTIONS: Dict[str, Tuple[str, ...]] = {
-    # o_voxel's GLB export keeps native mesh/rasterization objects alive across
-    # several pybind calls. Keep TRELLIS inference on the low-overhead extension
-    # path, but use the conservative tensor boundary for this export phase.
-    "o_voxel.postprocess": (
-        "to_glb",
-    ),
-    # nvdiffrast keeps CUDA raster/texture state around Python wrapper calls and
-    # is commonly used after TRELLIS export for preview rendering. Use a stable
-    # extension boundary for its public torch ops while keeping inference fast.
-    "nvdiffrast.torch.ops": (
-        "rasterize",
-        "interpolate",
-        "texture",
-        "texture_construct_mip",
-        "antialias",
-        "antialias_construct_topology_hash",
-    ),
-}
+_DEFAULT_READONLY_FUNCTIONS: Dict[str, Tuple[str, ...]] = {}
+_DEFAULT_READONLY_ARG_FUNCTIONS: Dict[str, Dict[str, Tuple[int, ...]]] = {}
+_DEFAULT_SCRATCH_BORROW_FUNCTIONS: Dict[str, Tuple[str, ...]] = {}
+_DEFAULT_COPY_SCOPE_FUNCTIONS: Dict[str, Tuple[str, ...]] = {}
 
 
 def _is_falsey(value: Optional[str]) -> bool:
@@ -385,63 +297,23 @@ def _patch_module(module, readonly_functions: Iterable[str],
                 pass
 
 
-class _ExtensionPolicyLoader(importlib.abc.Loader):
-    def __init__(self, loader, readonly_functions: Tuple[str, ...],
-                 copy_scope_functions: Tuple[str, ...],
-                 scratch_borrow_functions: Tuple[str, ...],
-                 readonly_arg_functions: Dict[str, Tuple[int, ...]]):
-        self.loader = loader
-        self.readonly_functions = readonly_functions
-        self.copy_scope_functions = copy_scope_functions
-        self.scratch_borrow_functions = scratch_borrow_functions
-        self.readonly_arg_functions = readonly_arg_functions
-
-    def create_module(self, spec):
-        create = getattr(self.loader, "create_module", None)
-        if create is None:
-            return None
-        return create(spec)
-
-    def exec_module(self, module) -> None:
-        self.loader.exec_module(module)
-        _patch_module(module, self.readonly_functions, self.copy_scope_functions,
-                      self.scratch_borrow_functions, self.readonly_arg_functions)
+def _patch_registered_module(module) -> bool:
+    name = module.__name__
+    _patch_module(
+        module,
+        _READONLY_REGISTRY.get(name, ()),
+        _COPY_SCOPE_REGISTRY.get(name, ()),
+        _SCRATCH_BORROW_REGISTRY.get(name, ()),
+        _READONLY_ARG_REGISTRY.get(name, {}),
+    )
+    return True
 
 
-class _ExtensionPolicyFinder(importlib.abc.MetaPathFinder):
-    def __init__(self, readonly_registry: Dict[str, Tuple[str, ...]],
-                 copy_scope_registry: Dict[str, Tuple[str, ...]],
-                 scratch_borrow_registry: Dict[str, Tuple[str, ...]],
-                 readonly_arg_registry: Dict[str, Dict[str, Tuple[int, ...]]]):
-        self.readonly_registry = readonly_registry
-        self.copy_scope_registry = copy_scope_registry
-        self.scratch_borrow_registry = scratch_borrow_registry
-        self.readonly_arg_registry = readonly_arg_registry
-
-    def find_spec(self, fullname, path=None, target=None):
-        readonly_functions = self.readonly_registry.get(fullname, ())
-        copy_scope_functions = self.copy_scope_registry.get(fullname, ())
-        scratch_borrow_functions = self.scratch_borrow_registry.get(fullname, ())
-        readonly_arg_functions = self.readonly_arg_registry.get(fullname, {})
-        if (not readonly_functions and not copy_scope_functions and
-                not scratch_borrow_functions and not readonly_arg_functions):
-            return None
-        spec = importlib.machinery.PathFinder.find_spec(fullname, path)
-        if spec is None or spec.loader is None:
-            return None
-        if isinstance(spec.loader, _ExtensionPolicyLoader):
-            return spec
-        spec.loader = _ExtensionPolicyLoader(spec.loader, readonly_functions,
-                                             copy_scope_functions,
-                                             scratch_borrow_functions,
-                                             readonly_arg_functions)
-        return spec
-
-
-def install_readonly_extension_borrow(registry=None, copy_scope_registry=None,
-                                      scratch_borrow_registry=None,
-                                      readonly_arg_registry=None) -> None:
-    """Install import-time wrappers for native extension boundary policies."""
+def register_readonly_extension_borrow(registry=None, copy_scope_registry=None,
+                                       scratch_borrow_registry=None,
+                                       readonly_arg_registry=None,
+                                       register_patch=register_module_patch) -> None:
+    """Register explicit boundary policies without installing an import finder."""
 
     readonly_reg = {} if _is_falsey(os.environ.get("JITTOR_TORCH_EXT_READONLY_BORROW")) else dict(
         registry or _DEFAULT_READONLY_FUNCTIONS
@@ -457,18 +329,24 @@ def install_readonly_extension_borrow(registry=None, copy_scope_registry=None,
     )
     if not readonly_reg and not copy_reg and not scratch_reg and not readonly_arg_reg:
         return
-    for finder in sys.meta_path:
-        if isinstance(finder, _ExtensionPolicyFinder):
-            finder.readonly_registry.update(readonly_reg)
-            finder.copy_scope_registry.update(copy_reg)
-            finder.scratch_borrow_registry.update(scratch_reg)
-            finder.readonly_arg_registry.update(readonly_arg_reg)
-            break
-    else:
-        sys.meta_path.insert(0, _ExtensionPolicyFinder(
-            readonly_reg, copy_reg, scratch_reg, readonly_arg_reg))
-    for name in set(readonly_reg) | set(copy_reg) | set(scratch_reg) | set(readonly_arg_reg):
-        module = sys.modules.get(name)
-        if module is not None:
-            _patch_module(module, readonly_reg.get(name, ()), copy_reg.get(name, ()),
-                          scratch_reg.get(name, ()), readonly_arg_reg.get(name, {}))
+    _READONLY_REGISTRY.update(readonly_reg)
+    _COPY_SCOPE_REGISTRY.update(copy_reg)
+    _SCRATCH_BORROW_REGISTRY.update(scratch_reg)
+    _READONLY_ARG_REGISTRY.update(readonly_arg_reg)
+    paths = set(readonly_reg) | set(copy_reg) | set(scratch_reg) | set(readonly_arg_reg)
+    for name in paths:
+        register_patch(name, _patch_registered_module)
+
+
+def install_readonly_extension_borrow(registry=None, copy_scope_registry=None,
+                                      scratch_borrow_registry=None,
+                                      readonly_arg_registry=None) -> None:
+    """Register policies and install the shared import-time patch mechanism."""
+
+    register_readonly_extension_borrow(
+        registry=registry,
+        copy_scope_registry=copy_scope_registry,
+        scratch_borrow_registry=scratch_borrow_registry,
+        readonly_arg_registry=readonly_arg_registry,
+    )
+    install_module_patches()

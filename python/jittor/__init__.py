@@ -91,20 +91,6 @@ def _jt_torch_entry_runtime_root():
     return None
 
 
-def _jt_torch_is_gaussian_splatting_project(_root):
-    if not _root:
-        return False
-    _root = _os.path.abspath(_os.path.expanduser(_root))
-    for _path in (
-        "train.py",
-        "scene/gaussian_model.py",
-        "gaussian_renderer/__init__.py",
-    ):
-        if not _os.path.exists(_os.path.join(_root, _path)):
-            return False
-    return True
-
-
 def _jt_torch_find_jtcuda(_real_home):
     _candidates = []
     if _os.environ.get("JTCUDA"):
@@ -164,9 +150,6 @@ if _jt_torch_runtime_root:
     ):
         _os.environ.setdefault(_name, _os.path.join(_jt_torch_runtime_root, _subdir))
         _os.makedirs(_os.environ[_name], exist_ok=True)
-    _flex_gemm_cache = _os.path.join(_jt_torch_runtime_root, "flex_gemm", "autotune_cache.json")
-    _os.environ.setdefault("FLEX_GEMM_AUTOTUNE_CACHE_PATH", _flex_gemm_cache)
-    _os.makedirs(_os.path.dirname(_os.environ["FLEX_GEMM_AUTOTUNE_CACHE_PATH"]), exist_ok=True)
     if _os.environ.get("JITTOR_TORCH_KEEP_HOME", "0").lower() not in ("1", "true", "yes", "on"):
         _os.environ.setdefault("REAL_HOME", _jt_torch_real_home or "")
         _os.environ["HOME"] = _os.environ.get(
@@ -817,24 +800,93 @@ def zeros_like(x, dtype=None) -> Var:
 _core_flags = core.Flags()
 
 
+def _apply_external_runtime_patches():
+    """Apply optional runtime integrations independently and report every result."""
+    report = {}
+
+    try:
+        import jittor.triton_shim  # noqa: F401
+        report["triton_shim"] = {"ok": True}
+    except Exception as error:
+        report["triton_shim"] = {
+            "ok": False,
+            "error": f"{type(error).__name__}: {error}",
+        }
+        LOG.w(f"external runtime patch triton_shim skipped: {error}")
+
+    try:
+        from jittor.compat.module_patcher import install_module_patches
+
+        patch_report = install_module_patches()
+        patch_results = [
+            {
+                "kind": item.kind,
+                "name": item.name,
+                "callback": item.callback,
+                "status": item.status,
+                "detail": item.detail,
+            }
+            for item in patch_report.results
+        ]
+        report["module_patches"] = {
+            "ok": patch_report.ok,
+            "results": patch_results,
+        }
+        for item in patch_report.failures:
+            LOG.w(
+                f"external module patch {item.name} ({item.callback}) failed: "
+                f"{item.detail or 'unknown error'}"
+            )
+    except Exception as error:
+        report["module_patches"] = {
+            "ok": False,
+            "error": f"{type(error).__name__}: {error}",
+        }
+        LOG.w(f"external module patch registry failed: {error}")
+
+    try:
+        from jittor.compat.external_backend import load_external_backend_entry_points
+
+        backend_results = load_external_backend_entry_points()
+        serialized = [
+            {
+                "name": item.name,
+                "value": item.value,
+                "status": item.status,
+                "detail": item.detail,
+            }
+            for item in backend_results
+        ]
+        failures = [item for item in backend_results if item.status == "failed"]
+        report["external_backends"] = {
+            "ok": not failures,
+            "results": serialized,
+        }
+        for item in failures:
+            LOG.w(
+                f"external backend {item.name} ({item.value}) failed: "
+                f"{item.detail or 'unknown error'}"
+            )
+    except Exception as error:
+        report["external_backends"] = {
+            "ok": False,
+            "error": f"{type(error).__name__}: {error}",
+        }
+        LOG.w(f"external backend registry failed: {error}")
+
+    _apply_external_runtime_patches.last_report = report
+    return report
+
+
 def _install_torch_shim_runtime(enable=True):
     if not enable:
         return None
     import os as _os_runtime
     import sys as _sys_runtime
-    def _apply_external_runtime_patches():
-        try:
-            import jittor.triton_shim  # noqa: F401
-        except Exception:
-            pass
-        try:
-            import jittor.monkeypatch_ops as _mp
-            _mp.apply()
-            _mp.force_flexgemm_bridge_algorithm("IMPLICIT_GEMM")
-        except Exception:
-            pass
     if getattr(_install_torch_shim_runtime, "_installed", False):
-        _apply_external_runtime_patches()
+        _install_torch_shim_runtime._external_patch_report = (
+            _apply_external_runtime_patches()
+        )
         _sys_runtime.modules["torch"] = _sys_runtime.modules[__name__]
         return getattr(_install_torch_shim_runtime, "_result", None)
 
@@ -845,11 +897,6 @@ def _install_torch_shim_runtime(enable=True):
             _project_root = _os_runtime.path.dirname(_os_runtime.path.abspath(_entry))
         else:
             _project_root = _os_runtime.getcwd()
-    if _jt_torch_is_gaussian_splatting_project(_project_root):
-        # The original implementation calls torch.cuda.empty_cache() after
-        # densification. Keep that project-local reclamation point so SFRL's
-        # cached blocks cannot starve CUDA temporary workspaces.
-        _os_runtime.environ.setdefault("JITTOR_TORCH_CUDA_EMPTY_CACHE", "gc")
     _runtime_root = _os_runtime.environ.get(
         "JITTOR_TORCH_RUNTIME_ROOT",
         _jt_torch_project_runtime_root(_project_root),
@@ -887,7 +934,9 @@ def _install_torch_shim_runtime(enable=True):
         except Exception:
             pass
 
-    _apply_external_runtime_patches()
+    _install_torch_shim_runtime._external_patch_report = (
+        _apply_external_runtime_patches()
+    )
     _sys_runtime.modules["torch"] = _sys_runtime.modules[__name__]
     _install_torch_shim_runtime._installed = True
     _install_torch_shim_runtime._result = result
@@ -1773,10 +1822,15 @@ class Module:
             dc = v.__dict__
             if isinstance(v, nn.ParameterList):
                 dc = v.params
+            non_persistent_buffers = v.__dict__.get(
+                "_non_persistent_buffer_names", ()
+            )
             for k2, p in dc.items():
                 if isinstance(k2, str) and k2.startswith("_"): continue
                 if isinstance(p, Var):
                     if id(p) in uniq_set: continue
+                    if k2 in non_persistent_buffers:
+                        continue
                     if not getattr(p, "persistent", True):
                         continue
                     uniq_set.add(id(p))
@@ -2327,6 +2381,18 @@ Arguments of hook are defined as::
             p.update(p.mpi_broadcast(root))
 
     def __setattr__(self, key, value):
+        if isinstance(value, Var):
+            buffer_names = self.__dict__.get("_buffer_names", ())
+            is_parameter = (
+                not key.startswith("_")
+                and key not in buffer_names
+                and not getattr(value, "is_buffer", False)
+                and getattr(value, "persistent", True)
+            )
+            # Parameter identity belongs to the Var, not to its latest alias.
+            # A private/helper alias must not erase an existing Parameter marker.
+            if is_parameter:
+                value._is_torch_parameter = True
         object.__setattr__(self, key, value)
 
     def __getattr__(self, key):
@@ -2344,14 +2410,23 @@ Arguments of hook are defined as::
         # Name-based tracking survives any Var replacement -- the torch invariant.
         try:
             self.__dict__.setdefault("_buffer_names", set()).add(key)
+            non_persistent = self.__dict__.setdefault(
+                "_non_persistent_buffer_names", set()
+            )
+            if persistent:
+                non_persistent.discard(key)
+            else:
+                non_persistent.add(key)
         except Exception:
             pass
         if value is not None:
-            value.persistent = persistent
-            # mark as a registered buffer so parameters()/named_parameters() can
-            # exclude it: a buffer is never a trainable parameter, regardless of
-            # persistence. state_dict()/named_buffers() still use .persistent.
-            value.is_buffer = True
+            is_parameter = bool(getattr(value, "_is_torch_parameter", False))
+            if not is_parameter:
+                value.persistent = persistent
+                # Raw buffers remain non-Parameters even when the same Var is
+                # later exposed through another public attribute.
+                value.is_buffer = True
+                value._is_torch_parameter = False
         object.__setattr__(self, key, value)
         return value
     
@@ -2377,9 +2452,22 @@ Arguments of hook are defined as::
         stack = []
         def callback(parents, k, v, n):
             stack.append(str(k))
+            buffer_names = v.__dict__.get("_buffer_names", ())
+            registered_ids = {
+                id(v.__dict__[name])
+                for name in buffer_names
+                if isinstance(v.__dict__.get(name), jt.Var)
+            }
             for k2, p in v.__dict__.items():
                 if isinstance(k2, str) and k2.startswith("_"): continue
-                if isinstance(p, jt.Var) and getattr(p, "is_buffer", False):
+                if not isinstance(p, jt.Var):
+                    continue
+                is_named_buffer = k2 in buffer_names
+                is_legacy_buffer = (
+                    getattr(p, "is_buffer", False)
+                    and id(p) not in registered_ids
+                )
+                if is_named_buffer or is_legacy_buffer:
                     if id(p) in uniq_set: continue
                     uniq_set.add(id(p))
                     pname = ".".join(stack[1:]+[str(k2)])

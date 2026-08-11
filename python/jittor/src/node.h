@@ -47,6 +47,14 @@ struct NodeFlags {
         _th_require_grad=_n+5,
         _is_scalar=_n+5,
         _is_swapped=_n+6,
+        // Reversible torch-style requires_grad_(False). Unlike _stop_grad,
+        // this flag must not release an already-built backward graph.
+        // Bit 23 is free in both layouts. Vars use it for their mutable policy;
+        // Ops use it as the fast-path marker that they own frozen edge snapshots.
+        // Callers reading it on a generic Node must first distinguish the kind.
+        _requires_grad_disabled=23,
+        // Op-only companion bit: its disabled-input edges were snapshotted.
+        _requires_grad_snapshot=24,
 
         // op related flags
         // bit0: support cpu

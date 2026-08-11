@@ -105,7 +105,9 @@ vector<VarPtr> grad(
     bfs_backward(gnodes, [&](Node* node) {
         if (node->tflag != nt)
             return false;
-        if (node->is_stop_grad())
+        if (node->is_stop_grad()
+            || (node->is_var()
+                && node->flags.get(NodeFlags::_requires_grad_disabled)))
             return false;
         return true;
     });

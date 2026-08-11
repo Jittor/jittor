@@ -250,7 +250,7 @@ def _torch_register_leaf(v):
     their result immediately; Var.requires_grad_ also calls this helper later.
     """
     try:
-        if isinstance(v, jt.Var) and not v.is_stop_grad():
+        if isinstance(v, jt.Var) and v.requires_grad:
             if not hasattr(jt, "_torch_leaf_params"):
                 jt._torch_leaf_params = {}
             jt._torch_leaf_params[id(v)] = v
@@ -268,7 +268,7 @@ def _torch_prune_leaf_registry(keep_ids=None):
             if keep is not None and k not in keep:
                 reg.pop(k, None)
                 continue
-            if not (isinstance(v, jt.Var) and not v.is_stop_grad()):
+            if not (isinstance(v, jt.Var) and v.requires_grad):
                 reg.pop(k, None)
     except Exception:
         pass
@@ -295,4 +295,8 @@ def _torch_make_parameter(data=None, requires_grad=True):
             v.stop_grad()
         except Exception:
             pass
+    # Parameter is a semantic role, not every Var. Keep the marker on the
+    # Python holder so isinstance(..., nn.Parameter) can distinguish raw
+    # tensors produced under no_grad from actual model parameters.
+    v._is_torch_parameter = True
     return v

@@ -257,19 +257,10 @@ def _candidate_roots(root: pathlib.Path, max_depth: int) -> List[pathlib.Path]:
     return roots
 
 
-def _is_official_flash_attention_root(root: pathlib.Path) -> bool:
-    cur = root.resolve()
-    for probe in (cur, *cur.parents):
-        if (
-            (probe / "csrc" / "flash_attn" / "flash_api.cpp").is_file()
-            and (probe / "csrc" / "flash_attn" / "src" / "flash.h").is_file()
-        ):
-            return True
-    return False
-
-
 def _extension_from_root(root: pathlib.Path, max_source_depth: int = 4) -> Optional[NativeExtension]:
-    if _is_official_flash_attention_root(root):
+    from jittor.compat.external_backend import external_backend_for_source_root
+
+    if external_backend_for_source_root(root) is not None:
         return None
     setup_py = root / "setup.py"
     pyproject = root / "pyproject.toml"
@@ -352,6 +343,9 @@ def scan_extension_dirs(
     them explicitly.
     """
 
+    from jittor.compat.external_backend import load_external_backend_entry_points
+
+    load_external_backend_entry_points()
     base_roots = list(roots or [])
     if not base_roots:
         base_roots = [project_root or pathlib.Path.cwd()]
@@ -381,11 +375,10 @@ def _is_relative_to(path: pathlib.Path, parent: pathlib.Path) -> bool:
 def _pythonpath_extension_roots(project_dir: pathlib.Path, runtime: pathlib.Path) -> List[pathlib.Path]:
     """Return explicit PYTHONPATH entries worth scanning for native extensions.
 
-    TRELLIS-style projects keep torch-extension dependencies as sibling source
-    trees on PYTHONPATH.  Scanning those explicit entries lets ``import jittor as
-    torch`` build unmodified external packages in place, without vendoring their
-    sources into Jittor.  Broad locations such as site-packages, the Jittor source
-    tree and runtime/cache directories are intentionally skipped.
+    Some projects keep torch-extension dependencies as sibling source trees on
+    PYTHONPATH. Scanning those explicit entries lets ``import jittor as torch``
+    build unmodified external packages in place. Broad locations such as
+    site-packages, the Jittor source tree, and runtime directories are skipped.
     """
 
     raw_paths: List[str] = []
@@ -874,8 +867,7 @@ def enable(
 ):
     """Enable Jittor-backed ``import torch`` for the current Python process.
 
-    This is a general project bootstrap, not a gaussian-splatting adapter. It
-    sets project-local cache directories, deploys the torch shim into that local
+    It sets project-local cache directories, deploys the torch shim into that
     runtime, registers Jittor as ``torch`` in-process, scans local native
     extension projects, and builds setuptools extensions through Jittor's
     ``torch.utils.cpp_extension`` facade.
@@ -926,10 +918,6 @@ def enable(
     _set_env_dir("TRITON_OVERRIDE_DIR", runtime / "triton_home" / "override")
     _set_env_dir("TRITON_DUMP_DIR", runtime / "triton_home" / "dump")
     _set_env_dir("PIP_CACHE_DIR", runtime / "pip_cache")
-    flex_cache = runtime / "flex_gemm" / "autotune_cache.json"
-    os.environ.setdefault("FLEX_GEMM_AUTOTUNE_CACHE_PATH", os.fspath(flex_cache))
-    _ensure_dir(pathlib.Path(os.environ["FLEX_GEMM_AUTOTUNE_CACHE_PATH"]).parent)
-
     if configure_cuda:
         _configure_cuda(real_home, verbose=verbose)
     _configure_runtime_driver_lib(runtime)
@@ -1020,30 +1008,22 @@ def enable(
     _log(verbose, "runtime: %s" % runtime)
     if scanned:
         _log(verbose, "native extensions: %s" % ", ".join(ext.root for ext in scanned))
+    module_patch_report = None
+    backend_entry_report = ()
     try:
-        from jittor.torch_shim.readonly_extensions import install_readonly_extension_borrow
+        from jittor.compat.module_patcher import install_module_patches
 
-        install_readonly_extension_borrow()
+        module_patch_report = install_module_patches()
     except Exception:
         if strict_bootstrap:
             raise
-        pass
     try:
-        from jittor.torch_shim import trellis_runtime
+        from jittor.compat.external_backend import load_external_backend_entry_points
 
-        trellis_runtime.install()
+        backend_entry_report = load_external_backend_entry_points()
     except Exception:
         if strict_bootstrap:
             raise
-        pass
-    try:
-        from jittor.torch_shim import gaussian_splatting_runtime
-
-        gaussian_splatting_runtime.install()
-    except Exception:
-        if strict_bootstrap:
-            raise
-        pass
 
     return {
         "torch": jt,
@@ -1052,4 +1032,6 @@ def enable(
         "extensions": scanned,
         "built": built,
         "preloaded": preloaded,
+        "module_patches": module_patch_report,
+        "external_backends": backend_entry_report,
     }

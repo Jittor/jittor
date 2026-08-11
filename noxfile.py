@@ -206,7 +206,7 @@ def structure(session):
         session.error("expected exactly one wheel, found %d" % len(wheels))
     wheel_args = tuple(session.posargs) or (
         "--removal-allowlist",
-        "agent/baselines/wheel-removals-stage3.txt",
+        "agent/baselines/wheel-removals-stage4.txt",
     )
     session.run(
         "python",

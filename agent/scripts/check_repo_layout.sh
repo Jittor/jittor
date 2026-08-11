@@ -31,7 +31,11 @@ for forbidden_path in \
   "$REPO_ROOT/python/jittor/pool.py" \
   "$REPO_ROOT/python/jittor/_pool" \
   "$REPO_ROOT/python/jittor/torch_compat.py" \
-  "$REPO_ROOT/python/jittor/_torch_compat"; do
+  "$REPO_ROOT/python/jittor/_torch_compat" \
+  "$REPO_ROOT/python/jittor/monkeypatch_ops.py" \
+  "$REPO_ROOT/python/jittor/torch_shim/trellis_runtime.py" \
+  "$REPO_ROOT/python/jittor/torch_shim/gaussian_splatting_runtime.py" \
+  "$REPO_ROOT/python/jittor/torch_shim/scripts"; do
   if [[ -e "$forbidden_path" ]]; then
     printf 'forbidden legacy path: %s\n' "${forbidden_path#"$REPO_ROOT"/}" >&2
     status=1

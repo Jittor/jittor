@@ -115,6 +115,9 @@ static inline void assign_var(Var* a, Var* b) {
         a->flags.set(NodeFlags::_stop_fuse);
     if (b->flags.get(NodeFlags::_th_require_grad))
         a->flags.set(NodeFlags::_th_require_grad);
+    a->flags.set(
+        NodeFlags::_requires_grad_disabled,
+        b->flags.get(NodeFlags::_requires_grad_disabled));
 }
 
 extern uint8 th_mode;
@@ -135,13 +138,21 @@ void VarHolder::operator=(VarPtr&& v) {
 
 extern bool no_grad;
 void VarHolder::set_requires_grad(bool flag) {
-    if (flag != get_requires_grad()) {
-        if (flag) {
+    if (flag == get_requires_grad()) return;
+    if (flag) {
+        if (var->is_stop_grad()) {
             start_grad();
-        } else
-            stop_grad(); 
+        } else {
+            // Keep the same Var node so graphs built before a temporary freeze
+            // become differentiable again when the flag is restored.
+            var->flags.set(NodeFlags::_requires_grad_disabled, 0);
+        }
+    } else {
+        // stop_grad() releases backward liveness and is intentionally permanent.
+        // requires_grad_(False) is a reversible leaf policy: existing graph edges
+        // stay alive, while newly initialized Ops snapshot disabled input edges.
+        var->flags.set(NodeFlags::_requires_grad_disabled);
     }
-    return;
 }
 
 VarHolder* VarHolder::start_grad() {
@@ -156,6 +167,7 @@ VarHolder* VarHolder::start_grad() {
     no_grad = no_grad_bk;
     th_mode = th_mode_bk;
     var->flags.set(NodeFlags::_th_require_grad);
+    var->flags.set(NodeFlags::_requires_grad_disabled, 0);
     return this;
 }
 

@@ -289,6 +289,27 @@ inline bool ne(const NanoVector& a, const NanoVector& b) {
     return a.data != b.data || a.offset != b.offset;
 }
 
+#ifdef Py_PYTHON_H
+// @pyjt(NanoVector.__hash__)
+inline int64 py_hash(const NanoVector& value) {
+    // Delegate to the running interpreter so NanoVector and an equal tuple have
+    // exactly the same hash on every supported Python version.
+    PyObject* tuple = PyTuple_New(value.size());
+    if (!tuple) return -1;
+    for (int i=0; i<value.size(); ++i) {
+        PyObject* item = PyLong_FromLongLong(value[i]);
+        if (!item) {
+            Py_DECREF(tuple);
+            return -1;
+        }
+        PyTuple_SET_ITEM(tuple, i, item);
+    }
+    Py_hash_t result = PyObject_Hash(tuple);
+    Py_DECREF(tuple);
+    return (int64)result;
+}
+#endif
+
 inline bool operator==(const NanoVector& a, const NanoVector& b) {
     return eq(a, b);
 }

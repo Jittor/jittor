@@ -79,6 +79,18 @@ from .functional.softmax import (
 from .functional.vector import (
     cosine_similarity, glu, normalize, pairwise_distance, softsign,
 )
+from .attention import (
+    cumulative_sequence_lengths as cumulative_sequence_lengths,
+    sequence_lengths as sequence_lengths,
+    varlen_scaled_dot_product_attention as varlen_scaled_dot_product_attention,
+)
+from .dual_grid import finalize_dual_grid_mesh_cuda as finalize_dual_grid_mesh_cuda
+from .rms_norm_cuda import multihead_rms_norm_cuda as multihead_rms_norm_cuda
+from .rope_cuda import partial_rotary_embedding_cuda as partial_rotary_embedding_cuda
+from .sparse import (
+    build_submanifold_conv3d_neighbors as build_submanifold_conv3d_neighbors,
+    submanifold_conv3d as submanifold_conv3d,
+)
 
 
 def _broadcast_batch_dims(a, b):
@@ -1664,9 +1676,11 @@ class ParameterList(Module):
         raise NotImplementedError("Parameters is not executable")
     def append(self, var):
         assert isinstance(var, jt.Var), f"argument <{type(var)}> is not jittor var"
+        var._is_torch_parameter = True
         self.params[len(self.params)] = var
     def add_param(self, name, var):
         assert isinstance(var, jt.Var), f"argument <{type(var)}> is not jittor var"
+        var._is_torch_parameter = True
         self.params[name]=var
     def __setitem__(self, name, var):
         self.add_param(name, var)
@@ -1688,6 +1702,7 @@ def Parameter(data, requires_grad=True):
     if not isinstance(data, jt.Var):
         data = jt.array(data)
     data.requires_grad = requires_grad
+    data._is_torch_parameter = True
     return data
 
 def backward(v, *args, **kw):

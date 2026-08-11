@@ -515,7 +515,7 @@ def _install_optimizers(g):
         for pg in getattr(opt, "param_groups", []):
             steps = _torch_param_steps(pg)
             for i, param in enumerate(pg.get("params", [])):
-                if isinstance(param, jt.Var) and not param.is_stop_grad():
+                if isinstance(param, jt.Var) and param.requires_grad:
                     steps[i] = int(steps[i]) + 1
 
     def _optimizer_maybe_has_fsdp_params(opt):
@@ -660,7 +660,7 @@ def _install_optimizers(g):
                 grads = pg.get("grads") or [None] * len(pg["params"])
                 for i, (p, g, v, m) in enumerate(zip(
                         pg["params"], grads, pg["values"], pg["m"])):
-                    was_trainable = not p.is_stop_grad()
+                    was_trainable = bool(p.requires_grad)
                     if not was_trainable or not isinstance(g, jt.Var) or list(g.shape) != list(p.shape):
                         continue
                     param_steps[i] = int(param_steps[i]) + 1
@@ -746,7 +746,7 @@ def _install_optimizers(g):
             try:
                 for pg in self.param_groups:
                     for p in pg.get("params", []):
-                        if not p.is_stop_grad():
+                        if p.requires_grad:
                             trainable.append(p)
             except Exception:
                 pass

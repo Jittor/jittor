@@ -21,8 +21,8 @@ sys.modules.setdefault("torch.torch", torch)
 
 
 # torch.compiled_with_cxx11_abi(): a generic torch C++/CUDA-extension build probe.
-# A PyTorch extension's setup.py (e.g. flex_gemm) reads it to set
-# -D_GLIBCXX_USE_CXX11_ABI to match the torch it links against. jittor's in-core
+# A PyTorch extension's setup.py may read it to set -D_GLIBCXX_USE_CXX11_ABI to
+# match the torch it links against. jittor's in-core
 # cpp_extension build defaults the ABI to "1" (the modern libstdc++ ABI jittor
 # core is itself compiled with), so report True for parity. Generic shim, not
 # dep-specific.
@@ -126,12 +126,14 @@ except Exception:
 
 # nn.parameter.Parameter -> jittor Var (with requires_grad)
 # Must be usable both as a constructor `Parameter(data)` AND in isinstance()
-# checks. jittor has no distinct Parameter type (params are just trainable
-# Vars), so we use a metaclass whose __instancecheck__ treats any Var as a
-# Parameter, and __call__ returns a (cloned, grad-tracking) Var.
+# checks. Parameters remain Vars, but carry an explicit semantic marker so a
+# raw tensor is not mistaken for a model parameter.
 class _ParameterMeta(type):
     def __instancecheck__(cls, obj):
-        return isinstance(obj, _jt.Var)
+        return (
+            isinstance(obj, _jt.Var)
+            and bool(getattr(obj, "_is_torch_parameter", False))
+        )
     def __call__(cls, data=None, requires_grad=True):
         make_param = getattr(_jt, "_torch_make_parameter", None)
         if callable(make_param):
@@ -143,6 +145,7 @@ class _ParameterMeta(type):
             except Exception: v.start_grad()
         else:
             v.stop_grad()
+        v._is_torch_parameter = True
         return v
 class Parameter(metaclass=_ParameterMeta):
     pass
@@ -786,7 +789,7 @@ def _make_torch_optim(jit_cls, accepted):
             try:
                 for pg in self.param_groups:
                     for p in pg.get("params", []):
-                        if not p.is_stop_grad():
+                        if p.requires_grad:
                             trainable.append(p)
             except Exception:
                 pass

@@ -190,6 +190,7 @@ struct VarHolder {
     // @attrs(return_self)
     inline VarHolder* stop_grad() {
         var->set_stop_grad();
+        var->flags.set(NodeFlags::_requires_grad_disabled, 0);
         return this;
     }
 
@@ -253,7 +254,8 @@ struct VarHolder {
      */
     // @pyjt(__get__requires_grad)
     inline bool get_requires_grad() {
-        return !var->is_stop_grad();
+        return !var->is_stop_grad()
+            && !var->flags.get(NodeFlags::_requires_grad_disabled);
     }
 
     /**
