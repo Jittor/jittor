@@ -176,7 +176,7 @@ class TestIndexSelect(Base):
 
     def test_index_select_dim_gt0(self):
         # regression: index_select for dim>0 used input[(None,)*dim+(indices,)]
-        # (newaxis) instead of slice(None) -> wrong shape/values. Fixed in misc.py.
+        # (newaxis) instead of slice(None) -> wrong shape/values. Fixed in jittor.misc.
         x = np.arange(24).reshape(2, 3, 4).astype("float32")
         idx = np.array([0, 2], dtype="int64")
         def body(dev):

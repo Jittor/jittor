@@ -14,9 +14,9 @@ backward gradchecked on CPU float64). Concatenated into the registry's ``op_db``
 Resolution notes (verified against jittor source, not guessed):
   * ``jt.{floor,ceil,round,erf,asin,acos,atan,sinh,cosh,asinh,acosh,atanh}`` are
     C++ unary ops (src/ops/unary_op.cc).  ``jt.{rsqrt,expm1,log2}`` come from
-    ``misc.py`` via ``from .misc import *``.
+    ``jittor.misc`` via ``from .misc import *``.
   * ``reciprocal, exp2, square, trunc, log1p, sign`` are only patched in lazily by
-    ``torch_compat`` (and only as ``F.*`` / ``Var.*``), so they are NOT reliably
+    ``jittor.compat.torch`` (and only as ``F.*`` / ``Var.*``), so they are NOT reliably
     importable here -- we build them from guaranteed primitives instead.
   * floor/ceil/round/trunc/sign have NO backward (unary_op.cc returns nullptr),
     so they are ``supports_autograd=False``.

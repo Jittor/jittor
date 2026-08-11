@@ -70,7 +70,7 @@ Module Maintainers are responsible for specific modules or components of the Jit
 - Neural Network Modules (`python/jittor/nn/`)
 - Operators (`python/jittor/src/ops/`)
 - Model Library (`python/jittor/models/`)
-- Documentation (`doc/`)
+- Documentation (`docs/`)
 - Testing Infrastructure (`tests/`)
 - Build System and CI (`.github/workflows/`, `setup.py`)
 
@@ -250,7 +250,7 @@ Jittor 采用分层治理结构，包含以下角色：
 - 神经网络模块（`python/jittor/nn/`）
 - 算子（`python/jittor/src/ops/`）
 - 模型库（`python/jittor/models/`）
-- 文档（`doc/`）
+- 文档（`docs/`）
 - 测试基础设施（`tests/`）
 - 构建系统和 CI（`.github/workflows/`、`setup.py`）
 

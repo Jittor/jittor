@@ -333,7 +333,7 @@ class TestIndexSelect(Base):
 # ---------------------------------------------------------------------------
 # index_add / index_add_   (DUP-ACCUMULATE -- the torch contract)
 # REGRESSION: the in-place index_add_ used `x[adv_idx] += t` (read-add-write) which is
-# last-write-wins and DROPS earlier contributions at duplicate indices. Fixed in misc.py
+# last-write-wins and DROPS earlier contributions at duplicate indices. Fixed in jittor.misc
 # to route through the dup-correct scatter_add path.
 # ---------------------------------------------------------------------------
 class TestIndexAdd(Base):

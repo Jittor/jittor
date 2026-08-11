@@ -40,7 +40,7 @@ must stay fixed), while for grid_sample the float ``grid`` is passed POSITIONALL
 it is differentiated alongside ``input`` (grid_sample is genuinely differentiable
 w.r.t. the sampling grid -- the high-value flow-field gradient).
 
-Signature notes (verified against ``jittor/nn.py``, do-not-guess):
+Signature notes (verified against ``jittor.nn``, do-not-guess):
   * ``F.interpolate(X, size=None, scale_factor=None, mode='bilinear',
     align_corners=False, tf_mode=False)``. With ``size=`` (scale_factor None) it
     routes through ``resize``; with ``scale_factor>1`` through ``upsample``. We use

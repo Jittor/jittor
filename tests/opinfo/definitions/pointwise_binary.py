@@ -40,11 +40,11 @@ from ..core import OpInfo, UnaryUfuncInfo, BinaryUfuncInfo, ReductionOpInfo
 # =============================================================================
 # Op callables resolved to native primitives (no torch-compat dependency).
 # jittor exposes logaddexp / fmod / remainder / hypot only via the torch shim
-# (torch_compat.py), so rebuild them here from native ops with identical math.
+# (jittor.compat.torch), so rebuild them here from native ops with identical math.
 # =============================================================================
 
 def _atan2(y, x):
-    # jittor's arctan2(y, x) (misc.py) == arctan(y/x) with a +/-pi quadrant fix
+    # jittor.misc.arctan2(y, x) == arctan(y/x) with a +/-pi quadrant fix
     # that only fires for x < 0. Samples keep x > 0, so this is plain arctan(y/x)
     # and matches np.arctan2(y, x) elementwise. Built from the native atan op
     # (CPU codegen uses std::atan -> accurate for float32/float64; the ~1e-3 gap

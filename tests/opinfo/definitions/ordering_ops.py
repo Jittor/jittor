@@ -31,7 +31,7 @@ well-defined. This is the condition under which gradcheck of a sort is even vali
 
 SIGNATURES (verified against jittor source -- NOT guessed)
 ----------------------------------------------------------
-The torch-compat layer (``torch_compat.py::_install_reductions``, installed onto the
+The ``jittor.compat.torch`` installer, applied to the
 jittor module at import) overrides these:
   * ``jt.sort(x, dim=-1, descending=False)``  -> ``_Sort(values, indices)`` namedtuple.
     test_ops compares ``.values``; ``.values`` is differentiable (argsort-gather).
@@ -40,8 +40,9 @@ jittor module at import) overrides these:
   * ``jt.argsort(x, dim=-1, descending=False)`` -> indices-only int64 Var
     (NB: jittor's *native* argsort returns ``(index, value)``; the torch-compat
     module-level override returns indices only -- the form ``jt.argsort`` resolves to).
-``jt.kthvalue(input, k, dim=None, keepdim=False)`` (misc.py) -> ``(values, indices)``
-plain tuple; ``jt.median(x, dim=None, keepdim=False)`` (misc.py) -> values Var.
+``jt.kthvalue(input, k, dim=None, keepdim=False)`` (``jittor.misc``) ->
+``(values, indices)`` plain tuple; ``jt.median(x, dim=None, keepdim=False)``
+(``jittor.misc``) -> values Var.
 
 WHAT IS MARKED NON-DIFFERENTIABLE / WHY
 ---------------------------------------
@@ -106,8 +107,8 @@ def kthvalue_ref(x, k, dim=None, keepdim=False):
     we wrap the op to return values only, so the ref returns the k-th smallest VALUE.
     dim=None reduces the last axis (jittor's kthvalue maps None -> -1).
 
-    Matches a jittor quirk: misc.py only squeezes the reduced axis when
-    ``indices.ndim > 1`` (line 1070), so for a 1-D INPUT the result stays (1,)-shaped
+    Matches a jittor quirk: ``jittor.misc.tensor_ops.kthvalue`` only squeezes the
+    reduced axis when ``indices.ndim > 1``, so for a 1-D INPUT the result stays (1,)-shaped
     even with keepdim=False. The ref reproduces that (squeeze only when x.ndim > 1)."""
     d = -1 if dim is None else dim
     s = np.sort(x, axis=d)
@@ -122,7 +123,8 @@ def kthvalue_ref(x, k, dim=None, keepdim=False):
 
 
 def median_ref(x, dim=None, keepdim=False):
-    """jittor median (misc.py) takes the LOWER median element at index (n-1)//2 of the
+    """``jittor.misc.tensor_ops.median`` takes the LOWER median element at index
+    (n-1)//2 of the
     sorted axis (it selects an actual element, not the mean of the two middle ones).
     dim=None flattens first. Returns the median VALUE (matches jittor's value output)."""
     if dim is None:
@@ -310,15 +312,15 @@ op_db = [
     # position of the lower-median element -- same select-backward family as kthvalue.
     #
     # SKIPPED (honest, with reason -- NOT hiding a divergence): jittor's
-    # ``misc.py::median`` looks broken under the torch-compat layer, which is the
+    # ``jittor.misc.tensor_ops.median`` looks broken under the torch-compat layer, which is the
     # layer installed on ``import jittor``. Two issues found by reading the source
     # (NOT run -- heavy device runs in progress):
-    #   1. line 321 does ``_, x = jt.argsort(x, dim)`` expecting the NATIVE
+    #   1. It does ``_, x = jt.argsort(x, dim)`` expecting the NATIVE
     #      ``(index, value)`` 2-tuple, but the torch-compat override makes the
     #      module-level ``jt.argsort`` return indices ONLY (a single int64 Var). The
     #      unpack ``_, x = <Var>`` then iterates the Var's rows -> raises "too many
     #      values to unpack" for any axis-0 length != 2 (i.e. nearly always).
-    #   2. line 322 builds ``slices = [slice(None) for i in range(dim-1)]`` -- an
+    #   2. It builds ``slices = [slice(None) for i in range(dim-1)]`` -- an
     #      off-by-one (``dim-1`` should be ``dim``), so even when (1) doesn't fire it
     #      indexes the WRONG axis for ``dim>=1``.
     # The OpInfo + numpy ref are kept so the gap is on record and the test
@@ -327,10 +329,10 @@ op_db = [
     OpInfo("median", op=jt.median, ref=median_ref,
            sample_inputs_func=sample_median, supports_gradgrad=False,
            skips=(
-               skip(reason="jittor median broken under torch-compat: "
-                           "misc.py:321 '_,x=jt.argsort(...)' expects the native "
+               skip(reason="jittor.misc.tensor_ops.median is broken under torch-compat: "
+                           "'_,x=jt.argsort(...)' expects the native "
                            "(idx,val) tuple but the torch-compat argsort override "
-                           "returns indices-only; plus a dim-1 axis off-by-one at "
-                           "misc.py:322. Re-enable when median is fixed."),
+                           "returns indices-only; it also has a dim-1 axis off-by-one. "
+                           "Re-enable when median is fixed."),
            )),
 ]

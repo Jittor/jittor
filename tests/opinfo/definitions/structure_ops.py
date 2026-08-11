@@ -4,7 +4,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 """Structural / linear-algebra-shaped OpInfos that live in jittor core
-(``misc.py`` / ``nn.py``) but had no op_db entry:
+(``jittor.misc`` / ``jittor.nn``) but had no op_db entry:
 
   * ``tril`` / ``triu``  -- triangular masks (a mask-multiply; linear, gradchecked),
   * ``cross``            -- 3-vector cross product (bilinear; both operands gradchecked),

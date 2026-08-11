@@ -37,7 +37,7 @@ bound to the NATIVE reduce primitives ``jt.reduce_add`` / ``jt.reduce_multiply``
 ``jt.reduce_maximum`` / ``jt.reduce_minimum`` and ``jt.all_`` / ``jt.any_`` (the C++
 ``@pybind`` reduce ops). The user-facing ``jt.sum`` / ``Var.sum`` / ``jt.max`` are
 re-wrapped when ``torch_compat`` is active -- ``Var.sum`` even UPCASTS int8/uint8 to
-int32 before summing (torch_compat.py ~L4637), a workaround that would *mask* the
+int32 before summing (through ``jittor.compat.torch``), a workaround that would *mask* the
 very int8 reduce kernel this file is meant to exercise, and ``jt.max(x, dim)`` then
 returns a (values, indices) namedtuple. Binding to the native primitives keeps the
 test on the raw integer reduce kernel regardless of whether torch_compat is loaded.

@@ -16,9 +16,9 @@ These close the reduction *backward* holes the core registry doesn't reach:
     differentiable (``supports_autograd=False``); they only run the forward battery.
 
 Signatures are taken from jittor's torch-compat layer (the variants installed on
-``import jittor``): see ``torch_compat.py`` (amax/amin/argmax/argmin/count_nonzero/
-norm/logsumexp/cumsum/cumprod/var/std/all/any) and ``__init__.py``/``misc.py``/
-``nn.py`` for the natives. The torch-compat reductions spell the keep-dim flag
+``import jittor``): see ``jittor.compat.torch`` (amax/amin/argmax/argmin/
+count_nonzero/norm/logsumexp/cumsum/cumprod/var/std/all/any) and ``jittor``/
+``jittor.misc``/``jittor.nn`` for the natives. The torch-compat reductions spell the keep-dim flag
 ``keepdim`` (no ``s``); each sample func below uses the exact name its op accepts.
 """
 from ._refs import *  # noqa: F401,F403  (make_tensor, SampleInput, refs, np, jt, nn, F)
@@ -180,7 +180,7 @@ def sample_cumsum(op_info, device, dtype, requires_grad):
 
 
 def sample_cumprod(op_info, device, dtype, requires_grad):
-    # Keep entries strictly POSITIVE: jittor's sign-aware cumprod (misc.py) routes
+    # Keep entries strictly POSITIVE: jittor's sign-aware cumprod (jittor.misc) routes
     # through cumsum(log|x|) with a sign-parity term whose derivative wrt sign is 0;
     # a clean positive domain makes the cumprod analytic gradient match numpy.
     out = []

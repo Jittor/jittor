@@ -4,7 +4,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 """Search / histogram OpInfos -- ``searchsorted`` (binary-search kernel) and ``histc``
-(histogram kernel), both jittor-core (``jittor/misc.py``). Integer/count output, no
+(histogram kernel), both jittor-core (``jittor.misc``). Integer/count output, no
 gradient (``supports_autograd=False``).
 
 These are deterministic data-dependent kernels that had no op_db entry. The binary search

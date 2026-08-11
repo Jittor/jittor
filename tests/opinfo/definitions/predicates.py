@@ -4,7 +4,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 """Floating-point predicate OpInfos -- ``isnan`` / ``isinf`` / ``isfinite`` (core,
-``jittor/misc.py``). Bool output, no gradient (``supports_autograd=False``).
+``jittor.misc``). Bool output, no gradient (``supports_autograd=False``).
 
 Their entire purpose is to classify the SPECIAL values (NaN, +/-Inf), so -- unlike every
 other op_db entry -- the samples must deliberately CONTAIN those values; ``make_tensor``

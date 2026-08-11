@@ -51,7 +51,7 @@ for n, m in mags[-4:]:
 
 if none_after and all(m > 0 for _, m in mags[:1]):
     print(">> DIAGNOSIS: gradients COMPUTE but .grad EXPOSURE is broken "
-          "(leaf registry / backward bridge in torch_compat.py).")
+          "(leaf registry / backward bridge in jittor.compat.torch).")
 elif any(np.isnan(m) for _, m in mags):
     print(">> DIAGNOSIS: NaN gradients -> op kernel / autodiff COMPUTATION bug.")
 else:

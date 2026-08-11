@@ -8,15 +8,15 @@
 The audit flagged the CPU FFT path -- and its backward in particular -- as entirely
 untested (``test_fft_op.py`` is ``@skipIf(not has_cuda)``, so nothing exercises the
 CPU DFT, and ``test_torch_compat_fft_einsum.py`` is forward-only). jittor implements
-``torch.fft.fft/ifft/rfft/irfft`` in ``torch_compat.py`` as a *matmul against
+``torch.fft.fft/ifft/rfft/irfft`` in ``jittor.compat.torch`` as a *matmul against
 cos/sin DFT matrices* (``out = x @ W^T``, O(N^2) but autograd-able and dual-backend);
 those functions are installed onto the jittor module itself at import, so the entry
 point used here is ``jt.fft.fft`` / ``jt.fft.ifft`` / ``jt.fft.rfft`` / ``jt.fft.irfft``
-(verified in ``torch_compat.py`` ``_alias("fft", _fft_ns)`` and against the two
+(verified through the public ``jittor.compat.torch`` installer and against the two
 validated FFT test files). Every forward is pinned to the INDEPENDENT numpy oracle
 ``np.fft.*``.
 
-Signatures (verified in ``torch_compat.py``)::
+Signatures (verified in ``jittor.compat.torch``)::
 
     jt.fft.fft  (input, n=None, dim=-1, norm=None)  -> native complex64 Var
     jt.fft.ifft (input, n=None, dim=-1, norm=None)  -> native complex64 Var

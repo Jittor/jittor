@@ -3,7 +3,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-"""More jittor-core nn functional ops (``jittor/nn.py``, ``jittor/misc.py``) that had no
+"""More jittor-core nn functional ops (``jittor.nn``, ``jittor.misc``) that had no
 op_db entry: ``hardtanh``, ``glu``, ``log_sigmoid``, ``normalize``, ``cosine_similarity``.
 
 All are DIFFERENTIABLE and were classic forward-only suspects -- the value here is the

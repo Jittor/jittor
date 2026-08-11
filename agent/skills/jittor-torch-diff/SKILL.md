@@ -59,7 +59,7 @@ Reports, for a fresh tiny model: which params have `.grad is None` after
 `loss.backward()`, the leaf-registry length (`jt._torch_leaf_params`), whether
 `jt.grad(loss, params)` returns correct nonzero grads (isolates *computation* vs
 *exposure* bugs), and top/bottom grad magnitudes. This is how the "param.grad is
-None" exposure bug (fixed in `torch_compat.py`) was isolated: grads computed fine,
+None" exposure bug (fixed in `jittor.compat.torch`) was isolated: grads computed fine,
 only `.grad` exposure was broken.
 
 ## Op-level differential battery (finds *silent-wrong* op semantics)
