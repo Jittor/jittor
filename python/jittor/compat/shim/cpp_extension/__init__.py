@@ -182,7 +182,8 @@ def _find_pybind_include():
 
 def _jittor_config():
     """Harvest the exact toolchain config from jittor.compiler (cached)."""
-    import jittor  # noqa: ensures core is compiled/loaded
+    # Importing the root package ensures its native core is compiled and loaded.
+    import jittor  # noqa: F401
     from jittor import compiler as c
 
     cache_path = c.cache_path

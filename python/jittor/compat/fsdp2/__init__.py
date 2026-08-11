@@ -72,14 +72,6 @@ __all__ = (
 )
 
 
-_current_module = sys.modules[__name__]
-_legacy_name = "jittor.torch_fsdp2_compat"
-_legacy_module = sys.modules.get(_legacy_name)
-if _legacy_module is not None and _legacy_module is not _current_module:
-    raise RuntimeError("legacy FSDP2 module name is already bound to another object")
-sys.modules[_legacy_name] = _current_module
-setattr(sys.modules["jittor"], "torch_fsdp2_compat", _current_module)
-
 _SUBMODULE_NAMES = (
     "api", "common", "compat_types", "config", "dtensor", "grad_sync",
     "installer", "optimizer", "shard",
@@ -94,4 +86,4 @@ def __getattr__(name):
     raise AttributeError("module %r has no attribute %r" % (__name__, name))
 
 
-del _legacy_module, _module, _name, _submodule_name
+del _module, _name, _submodule_name

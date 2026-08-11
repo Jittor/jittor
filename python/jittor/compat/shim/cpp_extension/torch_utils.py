@@ -11,7 +11,6 @@ implementations for PyTorch-style CUDA extensions such as 3DGS' rasterizer.
 import importlib.util
 import os
 import sys
-import tempfile
 import types
 import hashlib
 
@@ -306,11 +305,24 @@ def make_cpp_extension_module():
     return mod
 
 
-def install_cpp_extension(utils_module=None):
-    mod = sys.modules.get("torch.utils.cpp_extension")
-    if mod is None or not getattr(mod, "_jittor_cpp_extension", False):
+def install_cpp_extension(utils_module=None, registry=None):
+    from jittor.compat.torch.context import registry_for
+
+    root_module = getattr(registry, "root_module", None) or (
+        sys.modules.get("torch") or sys.modules.get("jittor")
+    )
+    if root_module is None:
+        raise RuntimeError("torch root module is not installed")
+    registry = registry_for(root_module, registry)
+    mod = registry.get("torch.utils.cpp_extension")
+    if mod is None:
         mod = make_cpp_extension_module()
-        sys.modules["torch.utils.cpp_extension"] = mod
+        registry.publish("torch.utils.cpp_extension", mod)
+    elif not getattr(mod, "_jittor_cpp_extension", False):
+        replacement = make_cpp_extension_module()
+        registry.publish("torch.utils.cpp_extension", replacement)
+    else:
+        registry.publish("torch.utils.cpp_extension", mod)
     if utils_module is not None:
         utils_module.cpp_extension = mod
     return mod

@@ -34,6 +34,15 @@ def setUpModule():
 
 
 class TestTorchShimDeploy(unittest.TestCase):
+    def test_resource_root_is_resolved_per_call(self):
+        source = Path(deploy_module.__file__).resolve().parent / "resources"
+        with tempfile.TemporaryDirectory() as target, mock.patch.object(
+            deploy_module, "resources_root", return_value=source
+        ) as resolver:
+            plan = deploy_module._plan(target)
+        resolver.assert_called()
+        self.assertTrue(plan)
+
     def _deployed_target(self):
         temporary_directory = tempfile.TemporaryDirectory()
         self.addCleanup(temporary_directory.cleanup)
@@ -43,7 +52,15 @@ class TestTorchShimDeploy(unittest.TestCase):
 
     def test_deploys_every_stub_python_file_recursively(self):
         target = self._deployed_target()
-        stub_root = Path(deploy_module._RESOURCES) / "stubs"
+        resource_root = Path(deploy_module.resources_root())
+        stub_root = resource_root / "stubs"
+        self.assertTrue(
+            all(
+                os.path.commonpath((str(resource_root), source))
+                == str(resource_root)
+                for source, _destination in deploy_module._plan(target)
+            )
+        )
         expected = sorted(
             path.relative_to(stub_root)
             for path in stub_root.rglob("*.py")
@@ -91,15 +108,18 @@ class TestTorchShimDeploy(unittest.TestCase):
             "not Python\n", encoding="utf-8"
         )
 
-        with mock.patch.object(deploy_module, "_RESOURCES", str(source)):
-            deploy_module.deploy(target)
-            planned = {
-                Path(destination).relative_to(target.resolve())
-                for _source, destination in deploy_module._plan(target)
-            }
-            self.assertIn(Path("example/nested/api.py"), planned)
-            self.assertNotIn(Path("example/ignored.txt"), planned)
-            self.assertEqual(deploy_module.check(target)[1], [])
+        deploy_module.deploy(target, resource_root=source)
+        planned = {
+            Path(destination).relative_to(target.resolve())
+            for _source, destination in deploy_module._plan(
+                target, resource_root=source
+            )
+        }
+        self.assertIn(Path("example/nested/api.py"), planned)
+        self.assertNotIn(Path("example/ignored.txt"), planned)
+        self.assertEqual(
+            deploy_module.check(target, resource_root=source)[1], []
+        )
 
     def test_check_detects_modified_and_missing_files_but_allows_extras(self):
         target = self._deployed_target()
@@ -185,15 +205,14 @@ class TestTorchShimDeploy(unittest.TestCase):
         source.mkdir()
         (source / "torch_init.py").write_text("shim = True\n", encoding="utf-8")
 
-        with mock.patch.object(deploy_module, "_RESOURCES", str(source)):
-            with self.assertRaisesRegex(RuntimeError, "stubs directory"):
-                deploy_module._plan(source / "target")
+        with self.assertRaisesRegex(RuntimeError, "stubs directory"):
+            deploy_module._plan(source / "target", resource_root=source)
 
-            package = source / "stubs" / "example"
-            package.mkdir(parents=True)
-            (package / "__init__.py").write_text("stub = True\n", encoding="utf-8")
-            with self.assertRaisesRegex(RuntimeError, "torch metadata"):
-                deploy_module._plan(source / "target")
+        package = source / "stubs" / "example"
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text("stub = True\n", encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "torch metadata"):
+            deploy_module._plan(source / "target", resource_root=source)
 
     def test_plan_rejects_any_first_level_stub_directory_without_initializer(self):
         temporary_directory = tempfile.TemporaryDirectory()
@@ -210,9 +229,8 @@ class TestTorchShimDeploy(unittest.TestCase):
         (incomplete / "api.py").write_text("stub = False\n", encoding="utf-8")
         metadata.write_text("Name: torch\nVersion: 9.9.0\n", encoding="utf-8")
 
-        with mock.patch.object(deploy_module, "_RESOURCES", str(source)):
-            with self.assertRaisesRegex(RuntimeError, r"missing __init__\.py"):
-                deploy_module._plan(source / "target")
+        with self.assertRaisesRegex(RuntimeError, r"missing __init__\.py"):
+            deploy_module._plan(source / "target", resource_root=source)
 
     def test_plan_ignores_install_generated_stub_bytecode_cache(self):
         temporary_directory = tempfile.TemporaryDirectory()
@@ -229,8 +247,7 @@ class TestTorchShimDeploy(unittest.TestCase):
         (bytecode_cache / "__init__.cpython-311.pyc").write_bytes(b"bytecode")
         metadata.write_text("Name: torch\nVersion: 9.9.0\n", encoding="utf-8")
 
-        with mock.patch.object(deploy_module, "_RESOURCES", str(source)):
-            planned = deploy_module._plan(source / "target")
+        planned = deploy_module._plan(source / "target", resource_root=source)
 
         destinations = [destination for _source, destination in planned]
         self.assertTrue(any("example" in destination for destination in destinations))
@@ -249,12 +266,13 @@ class TestTorchShimDeploy(unittest.TestCase):
         package_init.write_text("stub = True\n", encoding="utf-8")
         metadata.write_text("Name: torch\nVersion: 9.9.0\n", encoding="utf-8")
 
-        with mock.patch.object(deploy_module, "_RESOURCES", str(source)):
-            _checked_target, problems = deploy_module.check_details(source / "stubs")
-            problem_map = {Path(path): kind for kind, path in problems}
-            self.assertEqual(problem_map[package_init], "unsafe")
-            with self.assertRaisesRegex(RuntimeError, r"unsafe.*\(same-file\)"):
-                deploy_module.deploy(source / "stubs")
+        _checked_target, problems = deploy_module.check_details(
+            source / "stubs", resource_root=source
+        )
+        problem_map = {Path(path): kind for kind, path in problems}
+        self.assertEqual(problem_map[package_init], "unsafe")
+        with self.assertRaisesRegex(RuntimeError, r"unsafe.*\(same-file\)"):
+            deploy_module.deploy(source / "stubs", resource_root=source)
         self.assertEqual(package_init.read_text(encoding="utf-8"), "stub = True\n")
         self.assertFalse((source / "stubs" / "torch" / "__init__.py").exists())
 
@@ -290,6 +308,17 @@ class TestTorchShimDeploy(unittest.TestCase):
         self.assertEqual(at_end, 2)
         self.assertEqual(before_check, 2)
         self.assertIn("--target requires a path", output.getvalue())
+
+    def test_cli_verification_uses_torch_api_version(self):
+        with tempfile.TemporaryDirectory() as target:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                status = deploy_module.main(["--target", target])
+        self.assertEqual(status, 0)
+        text = output.getvalue()
+        self.assertIn("torch.__torch_version__", text)
+        self.assertIn("torch.version.__version__", text)
+        self.assertNotIn("torch.__version__", text)
 
     def test_destination_rejects_parent_traversal(self):
         with tempfile.TemporaryDirectory() as target:

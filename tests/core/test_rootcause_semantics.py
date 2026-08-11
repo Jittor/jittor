@@ -8,7 +8,7 @@ import numpy as np
 
 import jittor as jt
 from jittor import nn
-from jittor.compat import external_backend, module_patcher
+from jittor.compat import external_backend, integrations, module_patcher
 
 
 class TestRequiresGradSemantics(unittest.TestCase):
@@ -159,13 +159,13 @@ class TestParameterIdentity(unittest.TestCase):
 
     def test_canonical_installer_owns_the_parameter_marker(self):
         jittor_root = Path(jt.__file__).resolve().parent
-        installer = (jittor_root / "compat" / "torch" / "__init__.py").read_text(
+        owner = (jittor_root / "compat" / "torch" / "nested.py").read_text(
             encoding="utf-8"
         )
         template = (
             jittor_root / "compat" / "shim" / "resources" / "torch_init.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("_is_torch_parameter", installer)
+        self.assertIn("_is_torch_parameter", owner)
         self.assertIn("_torch_compat.install(_jittor)", template)
         self.assertNotIn("_is_torch_parameter", template)
         self.assertFalse((jittor_root / "torch_shim").exists())
@@ -216,8 +216,8 @@ class TestPatchReporting(unittest.TestCase):
             "load_external_backend_entry_points",
             return_value=backend_report,
         ) as backend_mock:
-            first = jt._apply_external_runtime_patches()
-            second = jt._apply_external_runtime_patches()
+            first = integrations.apply_external_runtime_patches()
+            second = integrations.apply_external_runtime_patches()
 
         self.assertEqual(patch_mock.call_count, 2)
         self.assertEqual(backend_mock.call_count, 2)
@@ -227,7 +227,7 @@ class TestPatchReporting(unittest.TestCase):
         self.assertFalse(first["external_backends"]["ok"])
         self.assertEqual(first["external_backends"]["results"][0]["detail"], "second")
         self.assertEqual(first, second)
-        self.assertIs(jt._apply_external_runtime_patches.last_report, second)
+        self.assertIs(integrations.apply_external_runtime_patches.last_report, second)
 
     def test_obsolete_downstream_patches_are_gone(self):
         self.assertFalse((Path(jt.__file__).resolve().parent / "monkeypatch_ops.py").exists())

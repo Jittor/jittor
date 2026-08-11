@@ -35,6 +35,144 @@ def _class_callables(cls):
 
 
 class TestTorchCompatStructure(unittest.TestCase):
+    def test_sys_modules_publication_has_an_exact_owner_whitelist(self):
+        compat_root = Path(compat.__file__).resolve().parent.parent
+        assignments = []
+        mutation_calls = []
+        import_fallbacks = []
+
+        for path in sorted(compat_root.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            parents = {}
+            for node in ast.walk(tree):
+                for child in ast.iter_child_nodes(node):
+                    parents[child] = node
+
+            def owner(node):
+                while node is not None:
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        return node.name
+                    node = parents.get(node)
+                return "<module>"
+
+            def expression_key(node):
+                if hasattr(ast, "Index") and isinstance(node, ast.Index):
+                    node = node.value
+                if isinstance(node, ast.Name):
+                    return node.id
+                if isinstance(node, (ast.Str, ast.Constant)) and isinstance(
+                    getattr(node, "s", None), str
+                ):
+                    return repr(getattr(node, "s"))
+                if isinstance(node, ast.Constant) and node.value is None:
+                    return "None"
+                if isinstance(node, ast.JoinedStr):
+                    return "<f-string>"
+                return "<dynamic>"
+
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Attribute) and node.attr == "modules":
+                    value = node.value
+                    if (
+                        isinstance(value, ast.Call)
+                        and isinstance(value.func, ast.Name)
+                        and value.func.id == "__import__"
+                        and value.args
+                        and isinstance(value.args[0], (ast.Str, ast.Constant))
+                        and getattr(value.args[0], "s", None) == "sys"
+                    ):
+                        import_fallbacks.append(
+                            (path.relative_to(compat_root).as_posix(), node.lineno)
+                        )
+
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr
+                    in ("clear", "pop", "popitem", "setdefault", "update")
+                    and isinstance(node.func.value, ast.Attribute)
+                    and node.func.value.attr == "modules"
+                    and isinstance(node.func.value.value, ast.Name)
+                    and node.func.value.value.id in ("sys", "_sys")
+                ):
+                    mutation_calls.append(
+                        (
+                            path.relative_to(compat_root).as_posix(),
+                            owner(node),
+                            node.func.attr,
+                            tuple(expression_key(arg) for arg in node.args),
+                        )
+                    )
+
+                if not isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                    continue
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets:
+                    if not isinstance(target, ast.Subscript):
+                        continue
+                    modules = target.value
+                    if not (
+                        isinstance(modules, ast.Attribute)
+                        and modules.attr == "modules"
+                        and isinstance(modules.value, ast.Name)
+                        and modules.value.id in ("sys", "_sys")
+                    ):
+                        continue
+                    assignments.append(
+                        (
+                            path.relative_to(compat_root).as_posix(),
+                            owner(node),
+                            expression_key(target.slice),
+                        )
+                    )
+
+        self.assertEqual(import_fallbacks, [])
+        self.assertEqual(sorted(assignments), sorted([
+            ("_aliases.py", "_publish_alias", "alias"),
+            ("external_backend.py", "_restore_source_import_state", "name"),
+            ("external_backend.py", "load_build_script", "name"),
+            ("runtime.py", "compose", repr("torch")),
+            ("shim/control.py", "enable_runtime", repr("torch")),
+            ("shim/cpp_extension/torch_utils.py", "load", "import_name"),
+            ("shim/resources/stubs/torchaudio/__init__.py", "__getattr__", "<f-string>"),
+            ("shim/resources/stubs/torchdata/__init__.py", "__getattr__", "<f-string>"),
+            ("shim/resources/torch_init.py", "<module>", "__name__"),
+            ("shim/runtime.py", "enable", repr("torch")),
+            ("triton/__init__.py", "install", "name"),
+        ]))
+        self.assertEqual(sorted(mutation_calls), sorted([
+            ("external_backend.py", "_restore_source_import_state", "pop", ("name", "None")),
+            ("external_backend.py", "import_local", "pop", ("key",)),
+            ("external_backend.py", "import_local", "pop", ("key", "None")),
+            ("external_backend.py", "import_local", "update", ("displaced",)),
+            (
+                "shim/resources/stubs/torchvision/__init__.py",
+                "<module>",
+                "setdefault",
+                (repr("torchvision.models"), "_models"),
+            ),
+            (
+                "shim/resources/stubs/torchvision/__init__.py",
+                "<module>",
+                "setdefault",
+                (repr("torchvision.transforms"), "transforms"),
+            ),
+            (
+                "shim/resources/stubs/torchvision/__init__.py",
+                "<module>",
+                "setdefault",
+                (repr("torchvision.transforms.functional"), "<dynamic>"),
+            ),
+            (
+                "shim/resources/stubs/torchvision/__init__.py",
+                "<module>",
+                "setdefault",
+                (repr("torchvision.utils"), "_utils"),
+            ),
+            ("torch/__init__.py", "_restore_namespace", "pop", ("name", "None")),
+            ("torch/__init__.py", "_restore_namespace", "update", ("snapshot",)),
+        ]))
+
     def test_legacy_import_is_the_canonical_module(self):
         self.assertIs(legacy_compat, compat)
         self.assertIs(jittor.torch_compat, compat)
@@ -52,7 +190,7 @@ class TestTorchCompatStructure(unittest.TestCase):
             "assert legacy is canonical is jittor.torch_compat\n"
             "assert sys.modules['jittor.torch_compat'] is canonical\n"
             "assert jittor._torch_compat_install_complete\n"
-            "assert canonical._INSTALL_COMPLETE\n"
+            "assert jittor._torch_compat_install_context.complete\n"
             "assert sys.modules['torch'] is jittor\n"
             "assert sys.modules['torch.nn'] is jittor.nn\n"
             "assert sys.modules['torch.nn.functional'] is jittor.nn.functional\n"
@@ -161,7 +299,7 @@ class TestTorchCompatStructure(unittest.TestCase):
 
     def test_install_is_idempotent(self):
         self.assertTrue(jittor._torch_compat_install_complete)
-        self.assertTrue(compat._INSTALL_COMPLETE)
+        self.assertTrue(jittor._torch_compat_install_context.complete)
         before = {
             "grad": jittor.grad,
             "no_grad": jittor.no_grad,
@@ -213,7 +351,16 @@ class TestTorchCompatStructure(unittest.TestCase):
 
     def test_domain_modules_import_the_root_directly(self):
         package_root = Path(types.__file__).resolve().parent
-        for path in package_root.glob("*.py"):
+        for name in (
+            "functional.py",
+            "grad.py",
+            "lr_scheduler.py",
+            "nested.py",
+            "optimizers.py",
+            "serialization.py",
+            "types.py",
+        ):
+            path = package_root / name
             source = path.read_text(encoding="utf-8")
             with self.subTest(path=path.name):
                 self.assertNotIn(".runtime import", source)
@@ -233,55 +380,45 @@ class TestTorchCompatStructure(unittest.TestCase):
         self.assertNotIn("jittor._torch_compat", packages)
 
     def test_installation_order_remains_stable(self):
-        source_path = Path(compat.__file__).resolve()
-        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
-        install = next(
-            node for node in tree.body
-            if isinstance(node, ast.FunctionDef) and node.name == "install"
-        )
-        calls = []
-
-        class InstallCallVisitor(ast.NodeVisitor):
-            def visit_FunctionDef(self, node):
-                return
-
-            def visit_Call(self, node):
-                if isinstance(node.func, ast.Name) and (
-                    node.func.id.startswith("_install_")
-                    or node.func.id == "_wrap_constructors"
-                ):
-                    calls.append(node.func.id)
-                self.generic_visit(node)
-
-        visitor = InstallCallVisitor()
-        for statement in install.body:
-            visitor.visit(statement)
-        self.assertEqual(calls, [
-            "_wrap_constructors",
-            "_install_random_and_linspace",
-            "_install_reductions",
-            "_install_nn_extras",
-            "_install_cuda",
-            "_install_version",
-            "_install_distributed",
-            "_install_tensor_methods",
-            "_install_misc",
-            "_install_torchdata_stateful_dataloader",
-            "_install_torchmetrics_fastpaths",
-            "_install_optimizers",
-            "_install_lr_scheduler",
-            "_install_autograd_function",
-            "_install_autograd",
-            "_install_tensordict_compat",
-            "_install_safetensors_shim",
-            "_install_flash_attn_shim",
+        self.assertEqual([name for name, _installer in compat._REQUIRED_STEPS], [
+            "core",
+            "tensor.base",
+            "tensor.methods",
+            "nn",
+            "optim",
+            "autograd",
+            "cuda",
+            "distributed",
+            "core.extended",
+            "serialization",
+            "utilities",
+            "data",
+            "distributions",
+            "compiler",
+            "numerical",
+            "autograd.module-keys",
+            "nn.module-keys",
+            "optim.module-keys",
+            "distributions.module-keys",
+            "compiler.module-keys",
+            "numerical.module-keys",
+            "utilities.module-keys",
         ])
+        self.assertEqual(
+            [name for name, _installer in compat._OPTIONAL_STEPS],
+            [
+                "optional.torchmetrics",
+                "optional.tensordict",
+                "optional.safetensors",
+                "optional.flash-attn",
+            ],
+        )
 
     def test_canonical_module_line_budgets(self):
         package_root = Path(types.__file__).resolve().parent
         self.assertLessEqual(
             len(Path(compat.__file__).read_text(encoding="utf-8").splitlines()),
-            8700,
+            300,
         )
         for path in package_root.glob("*.py"):
             if path.name == "__init__.py":
@@ -292,6 +429,22 @@ class TestTorchCompatStructure(unittest.TestCase):
                     800,
                     f"split {path.name} before adding more implementation",
                 )
+        installers = package_root / "installers"
+        expected = {
+            "core.py", "tensor.py", "autograd.py", "nn.py", "cuda.py",
+            "distributed.py", "data.py", "distributions.py", "numerical.py",
+            "compiler.py", "utilities.py",
+        }
+        self.assertEqual(
+            {path.name for path in installers.glob("*.py") if path.name != "__init__.py"},
+            expected,
+        )
+        for path in installers.glob("*.py"):
+            source = path.read_text(encoding="utf-8")
+            with self.subTest(installer=path.name):
+                self.assertLessEqual(len(source.splitlines()), 2600)
+                self.assertNotIn("exec(", source)
+                self.assertNotIn("sys.modules", source)
 
 
 if __name__ == "__main__":

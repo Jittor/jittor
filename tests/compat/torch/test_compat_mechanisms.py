@@ -466,15 +466,19 @@ class TestExternalBackend(unittest.TestCase):
         runtime = Path(jittor_root, "compat", "shim", "runtime.py").read_text(
             encoding="utf-8"
         )
+        discovery = Path(
+            jittor_root, "compat", "shim", "discovery.py"
+        ).read_text(encoding="utf-8")
         flash = Path(
             jittor_root, "compat", "shim", "backends", "flash_attention.py"
         ).read_text(
             encoding="utf-8"
         )
         self.assertNotIn("_is_official_flash_attention_root", runtime)
+        self.assertNotIn("_is_official_flash_attention_root", discovery)
         self.assertNotIn("TRELLIS_ROOT", flash)
         self.assertNotIn("TRELLIS2_ROOT", flash)
-        self.assertIn("external_backend_for_source_root", runtime)
+        self.assertIn("external_backend_for_source_root", discovery)
         self.assertIn("ExternalBackendSpec", flash)
 
     def test_flash_child_environment_uses_the_canonical_python_root(self):

@@ -5,19 +5,30 @@ from collections.abc import Mapping
 import jittor as jt
 import numpy as np
 
+from .context import registry_for
 
-def _install_optimizers(g):
+
+def _install_optimizers(g, registry=None):
     """Register every jittor optimizer instance as g._current_optimizer on
     construction, and mirror lr into each param_group. This makes the
     `loss.backward()` bridge (Var.backward) and torch-style LR schedulers work
     even when using `import jittor as torch` directly (no torch_shim wrapper)."""
+    _modules = registry_for(g, registry).module_map
     import math as _math
-    try:
-        from jittor import optim as _optim
-    except Exception:
-        return
+    from jittor import optim as _optim
     Base = getattr(_optim, "Optimizer", None)
-    if Base is None or getattr(Base, "_torch_compat_wrapped", False):
+    if Base is None:
+        raise RuntimeError("jittor.optim has no Optimizer owner")
+    if getattr(Base, "_torch_compat_wrapped", False):
+        _modules.setdefault("torch.optim", _optim)
+        _optim.__path__ = getattr(_optim, "__path__", [])
+        import types as _types_optim
+        _optim_sub = _modules.get("torch.optim.optimizer")
+        if _optim_sub is None:
+            _optim_sub = _types_optim.ModuleType("torch.optim.optimizer")
+            _modules["torch.optim.optimizer"] = _optim_sub
+        _optim_sub.Optimizer = Base
+        _optim_sub.ParamsT = object
         return
     import weakref as _weakref
     _orig_init = Base.__init__
@@ -718,21 +729,20 @@ def _install_optimizers(g):
 
         _optim.LBFGS = LBFGS
 
-    import sys as _sys_optim
     import types as _types_optim
-    _optim_mod = _sys_optim.modules.get("torch.optim")
+    _optim_mod = _modules.get("torch.optim")
     if _optim_mod is None:
-        _sys_optim.modules["torch.optim"] = _optim
+        _modules["torch.optim"] = _optim
         _optim_mod = _optim
     _optim_mod.__path__ = getattr(_optim_mod, "__path__", [])
     if not hasattr(_optim_mod, "Optimizer"):
         _optim_mod.Optimizer = Base
     if not hasattr(_optim_mod, "LBFGS"):
         _optim_mod.LBFGS = _optim.LBFGS
-    _optim_sub = _sys_optim.modules.get("torch.optim.optimizer")
+    _optim_sub = _modules.get("torch.optim.optimizer")
     if _optim_sub is None:
         _optim_sub = _types_optim.ModuleType("torch.optim.optimizer")
-        _sys_optim.modules["torch.optim.optimizer"] = _optim_sub
+        _modules["torch.optim.optimizer"] = _optim_sub
     _optim_sub.Optimizer = Base
     _optim_sub.ParamsT = object
 
@@ -756,3 +766,24 @@ def _install_optimizers(g):
                 except Exception: pass
             return r
         Base.load_state_dict = _lsd
+
+
+def install_module_keys(ctx):
+    g = ctx.jittor_module
+    registry = ctx.registry
+    def module(name):
+        return registry.ensure(name)
+    optim = g.optim
+    for suffix, class_name, fallback in (
+        ("sgd", "SGD", None),
+        ("adam", "Adam", None),
+        ("adamw", "AdamW", "Adam"),
+        ("rmsprop", "RMSprop", None),
+    ):
+        optim_module = module("torch.optim." + suffix)
+        value = getattr(optim, class_name, None)
+        if value is None and fallback is not None:
+            value = getattr(optim, fallback, None)
+        if value is not None:
+            setattr(optim_module, class_name, value)
+        setattr(optim, suffix, optim_module)

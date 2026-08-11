@@ -9,8 +9,6 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 import jittor as jt
-import sys
-from jittor import init
 from jittor import nn
 from jittor import Function
 
@@ -324,9 +322,3 @@ class DepthwiseConv(Function):
             dilate_height, dilate_width, filter_grad_p);                      
     """
     )
-
-
-_module = sys.modules[__name__]
-sys.modules["jittor.depthwise_conv"] = _module
-setattr(sys.modules["jittor"], "depthwise_conv", _module)
-del _module
