@@ -1,6 +1,6 @@
 """Naive *executor* for a narrow class of ``@triton.jit`` kernels on jittor.
 
-The rest of :mod:`jittor.triton_shim` is a pure API *shim* — it makes
+The rest of :mod:`jittor.compat.triton` is a pure API *shim* — it makes
 ``import triton`` / ``@triton.jit`` work and otherwise raises a clear
 ``NotImplementedError`` on launch. This module adds the next increment: it can
 actually **run** the most common kind of triton kernel — a **1-D elementwise**

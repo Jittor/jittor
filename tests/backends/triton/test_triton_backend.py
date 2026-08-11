@@ -4,7 +4,7 @@ Unlike the naive tracer exercised by ``test_triton_shim.py`` (which lowers a
 narrow 1-D-elementwise subset of ``tl.*`` to whole-Var jittor ops), this suite
 runs **real** ``@triton.jit`` kernels: upstream triton compiles them to
 PTX/cubin and jittor launches the cubin on its own ``Var`` device pointers via
-the CUDA driver API (see :mod:`jittor.triton_shim.backend`). That makes it able
+the CUDA driver API (see :mod:`jittor.compat.triton.backend`). That makes it able
 to run kernels the tracer cannot — ``tl.dot`` matmul, 2-D row softmax, fused
 layernorm — which is the whole point of "real triton support".
 
@@ -179,7 +179,7 @@ def setUpModule():
     if not _HAVE:
         return
     try:
-        import jittor.triton_shim as shim_module
+        import jittor.compat.triton as shim_module
         import triton as triton_module
         import triton.language as language_module
 

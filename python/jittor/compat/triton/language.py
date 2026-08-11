@@ -60,7 +60,7 @@ def _in_kernel_only(name):
 
     Outside a kernel trace it raises the clear "only usable inside @triton.jit"
     error (unchanged behaviour). *Inside* a trace (i.e. while
-    :func:`jittor.triton_shim.launch.run_kernel` is executing the body), the
+    :func:`jittor.compat.triton.launch.run_kernel` is executing the body), the
     structural / memory primitives delegate to the active tracer, and the math
     primitives lower to jittor. Anything the executor doesn't model still raises
     a clear ``NotImplementedError`` — never a silent wrong result.

@@ -34,6 +34,9 @@ perf = [
 [project.urls]
 Homepage = "http://jittor.org"
 
+[project.scripts]
+jittor-triton-shim = "jittor.compat.triton.deploy:main"
+
 [tool.setuptools]
 package-dir = { "" = "python" }
 include-package-data = true

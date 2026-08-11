@@ -1,7 +1,5 @@
 """Regressions for core semantics that replace downstream compatibility patches."""
 
-import sys
-import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -206,15 +204,13 @@ class TestPatchReporting(unittest.TestCase):
                 "working-backend", "provider:working", "loaded"
             ),
         )
-        fake_triton = types.ModuleType("jittor.triton_shim")
-        with mock.patch.dict(sys.modules, {"jittor.triton_shim": fake_triton}), \
-                mock.patch.object(
-                    module_patcher, "install_module_patches", return_value=patch_report
-                ) as patch_mock, mock.patch.object(
-                    external_backend,
-                    "load_external_backend_entry_points",
-                    return_value=backend_report,
-                ) as backend_mock:
+        with mock.patch.object(
+            module_patcher, "install_module_patches", return_value=patch_report
+        ) as patch_mock, mock.patch.object(
+            external_backend,
+            "load_external_backend_entry_points",
+            return_value=backend_report,
+        ) as backend_mock:
             first = jt._apply_external_runtime_patches()
             second = jt._apply_external_runtime_patches()
 

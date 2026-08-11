@@ -32,6 +32,7 @@ _PURE_COLLECTION_QUERIES = {
     "modules_available",
 }
 _PROHIBITED_COLLECTION_IMPORT_PREFIXES = (
+    "jittor.compat.triton",
     "jittor.triton_shim",
     "triton",
 )
@@ -39,6 +40,7 @@ _PROHIBITED_COLLECTION_CALLS = {
     "eval",
     "exec",
     "jittor.dirty_fix_pytorch_runtime_error",
+    "jittor.compat.triton.install",
     "jittor.triton_shim.install",
     "jt.dirty_fix_pytorch_runtime_error",
     "jt.compiler.run_cmd",

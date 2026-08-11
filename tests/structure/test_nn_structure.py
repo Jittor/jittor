@@ -22,6 +22,7 @@ from jittor.nn.functional import vector
 from jittor.nn.modules import convolution as convolution_layers
 from jittor.nn.modules import convolution3d as convolution_3d_layers
 from jittor.nn.modules import convolution_transpose as convolution_transpose_layers
+from jittor.nn.modules import depthwise
 from jittor.nn.modules import linear
 from jittor.nn.modules import padding
 from jittor.nn.modules import pooling
@@ -50,7 +51,8 @@ _IMPLEMENTATION_SYMBOLS = (
     )),
     (convolution_transpose_layers, ("ConvTranspose", "ConvTranspose3d")),
     (layer_norm_cuda, ("_layer_norm_no_grad_cuda",)),
-    (linear, ("Linear", "linear")),
+    (depthwise, ("DepthwiseConv",)),
+    (linear, ("Linear", "linear", "Conv1d_sp")),
     (losses, (
         "cross_entropy_loss", "mse_loss", "bce_loss", "l1_loss",
         "smooth_l1_loss", "nll_loss", "binary_cross_entropy_with_logits",
@@ -139,6 +141,37 @@ class TestNNStructure(unittest.TestCase):
                     b"cjittor.nn\n" + implementation.__name__.encode("ascii") + b"\n."
                 )
                 self.assertIs(pickle.loads(legacy_pickle), public)
+
+        depthwise_protocol2 = (
+            b"\x80\x02cjittor.depthwise_conv\nDepthwiseConv\nq\x00."
+        )
+        self.assertIs(pickle.loads(depthwise_protocol2), depthwise.DepthwiseConv)
+
+    def test_linear_and_depthwise_module_contracts(self):
+        self.assertEqual(
+            str(inspect.signature(linear.Conv1d_sp)),
+            "(inchannels, outchannels, kernel_size=1, bias=True)",
+        )
+        self.assertIs(linear.Conv1d_sp.__mro__[1], linear.Linear)
+        conv1d = linear.Conv1d_sp(3, 2)
+        self.assertEqual(
+            tuple(vars(conv1d)),
+            ("in_features", "out_features", "weight", "bias"),
+        )
+
+        self.assertEqual(
+            str(inspect.signature(depthwise.DepthwiseConv)),
+            "(stride=1, padding=0, dilation=1)",
+        )
+        operation = depthwise.DepthwiseConv(stride=(1, 2), padding=1, dilation=2)
+        self.assertEqual(
+            vars(operation),
+            {
+                "stride": (1, 2),
+                "padding": (1, 1),
+                "dilation": (2, 2),
+            },
+        )
 
     def test_log_softmax_dispatches_through_public_softmax(self):
         original = nn.softmax
@@ -873,7 +906,11 @@ class TestNNStructure(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIs(getattr(nn, name), getattr(optim, name))
         self.assertIs(nn.CTCLoss, misc.CTCLoss)
-        self.assertIs(nn.DepthwiseConv, depthwise_conv.DepthwiseConv)
+        self.assertIs(depthwise_conv, depthwise)
+        self.assertIs(nn.DepthwiseConv, depthwise.DepthwiseConv)
+        self.assertIs(nn.modules.DepthwiseConv, depthwise.DepthwiseConv)
+        self.assertIs(nn.Conv1d_sp, linear.Conv1d_sp)
+        self.assertIs(nn.modules.Conv1d_sp, linear.Conv1d_sp)
         self.assertIs(nn.abstractmethod, abc_abstractmethod)
         if nn.Pool is not pool.Pool:
             self.assertTrue(_is_acl_wrapper(nn.Pool))
@@ -938,6 +975,23 @@ class TestNNStructure(unittest.TestCase):
         moved_names = {symbol.__name__ for symbol in _moved_symbols()}
         self.assertFalse(facade_definitions & moved_names)
 
+    def test_nn_migration_paths_and_python37_syntax(self):
+        repo_root = Path(nn.__file__).resolve().parents[2]
+        self.assertFalse((repo_root / "jittor" / "depthwise_conv.py").exists())
+        paths = (
+            Path(depthwise.__file__).resolve(),
+            Path(linear.__file__).resolve(),
+            Path(nn.__file__).resolve(),
+            Path(nn.modules.__file__).resolve(),
+        )
+        for path in paths:
+            with self.subTest(path=path.name):
+                ast.parse(
+                    path.read_text(encoding="utf-8"),
+                    filename=str(path),
+                    feature_version=(3, 7),
+                )
+
     def test_source_files_stay_within_architecture_budgets(self):
         facade_path = Path(nn.__file__).resolve()
         self.assertLessEqual(len(facade_path.read_text(encoding="utf-8").splitlines()), 2500)
@@ -961,7 +1015,9 @@ class TestNNStructure(unittest.TestCase):
                 self.assertIs(getattr(nn.functional, name), getattr(nn, name))
         self.assertIn("linear", nn.functional.__all__)
         self.assertTrue(callable(nn.functional.linear))
-        for name in ("Linear", "Conv", "RNN", "AvgPool2d", "Module"):
+        for name in (
+            "Linear", "Conv1d_sp", "DepthwiseConv", "Conv", "RNN", "AvgPool2d", "Module",
+        ):
             with self.subTest(module=name):
                 self.assertIn(name, nn.modules.__all__)
                 self.assertIs(getattr(nn.modules, name), getattr(nn, name))

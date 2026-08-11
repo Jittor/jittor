@@ -1,8 +1,8 @@
 """Torch-grade tests for the jittor ``triton`` compatibility shim.
 
-The shim (``jittor.triton_shim``) makes ``import triton`` / ``@triton.jit`` work
+The shim (``jittor.compat.triton``) makes ``import triton`` / ``@triton.jit`` work
 on a jittor environment without the real ``triton`` PyPI package, and its naive
-executor (``triton_shim/launch.py``) can actually *run* a narrow but useful
+executor (``compat/triton/launch.py``) can actually *run* a narrow but useful
 class of fused kernels by tracing the kernel body once and lowering ``tl.*`` to
 jittor ops over whole Vars:
 
@@ -112,8 +112,8 @@ def setUpModule():
     global triton, tl
     global add_kernel, fma_kernel, relu_kernel, gelu_kernel
     global softmax_kernel, softmax_2d_kernel
-    from jittor import triton_shim as shim_module
-    from jittor.triton_shim import language as language_module
+    from jittor.compat import triton as shim_module
+    from jittor.compat.triton import language as language_module
 
     triton = shim_module.triton
     tl = language_module

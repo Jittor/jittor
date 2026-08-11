@@ -1,20 +1,20 @@
 """Reproducible deployment of the jittor *triton* shim into a python env.
 
-Mirrors ``python -m jittor.torch_shim.deploy``. Installs a tiny ``triton``
+Run with ``python -m jittor.compat.triton.deploy`` to install a tiny ``triton``
 package into site-packages whose body simply re-exports
-``jittor.triton_shim``, so that a **bare** ``import triton`` /
+``jittor.compat.triton``, so that a **bare** ``import triton`` /
 ``import triton.language as tl`` resolves to the shim even before
 ``import jittor`` runs (e.g. when a library does ``import triton`` at the very
 top of its module).
 
-    python -m jittor.triton_shim.deploy            # deploy into the active env
-    python -m jittor.triton_shim.deploy --check    # verify what's deployed
-    python -m jittor.triton_shim.deploy --target /path/to/site-packages
-    python -m jittor.triton_shim.deploy --remove   # uninstall the shim
+    python -m jittor.compat.triton.deploy            # deploy into the active env
+    python -m jittor.compat.triton.deploy --check    # verify what's deployed
+    python -m jittor.compat.triton.deploy --target /path/to/site-packages
+    python -m jittor.compat.triton.deploy --remove   # uninstall the shim
 
 It writes:
-  - triton/__init__.py            -> re-exports jittor.triton_shim
-  - triton/language.py            -> re-exports jittor.triton_shim.language
+  - triton/__init__.py            -> re-exports jittor.compat.triton
+  - triton/language.py            -> re-exports jittor.compat.triton.language
   - triton-<ver>.dist-info/METADATA + top_level.txt
         so importlib.metadata.version("triton") resolves.
 
@@ -32,15 +32,15 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _VERSION = "3.1.0"
 
 _INIT_BODY = '''\
-"""Deployed jittor triton-shim redirect: `import triton` -> jittor.triton_shim.
+"""Deployed jittor triton-shim redirect: `import triton` -> jittor.compat.triton.
 
-Written by `python -m jittor.triton_shim.deploy`. Editing the real shim only
-requires editing jittor/triton_shim/ (imported live); this file is just the
+Written by `python -m jittor.compat.triton.deploy`. Editing the real shim only
+requires editing jittor/compat/triton/ (imported live); this file is just the
 redirect that makes a bare `import triton` find it.
 """
 __jittor_triton_shim__ = True
-from jittor.triton_shim import *          # noqa: F401,F403
-from jittor.triton_shim import (          # noqa: F401
+from jittor.compat.triton import *          # noqa: F401,F403
+from jittor.compat.triton import (          # noqa: F401
     __version__, language, install, jit, JITFunction, cdiv, next_power_of_2,
     Config, autotune, heuristics, runtime,
 )
@@ -51,8 +51,8 @@ install()
 _LANG_BODY = '''\
 """Deployed jittor triton-shim redirect: `import triton.language` -> shim."""
 __jittor_triton_shim__ = True
-from jittor.triton_shim.language import *   # noqa: F401,F403
-from jittor.triton_shim import language as _lang
+from jittor.compat.triton.language import *   # noqa: F401,F403
+from jittor.compat.triton import language as _lang
 import sys as _sys
 _sys.modules[__name__] = _lang
 '''
@@ -105,9 +105,9 @@ def deploy(target=None, force=False):
             "refusing to overwrite what looks like a real triton install in "
             "{0}/triton (no __jittor_triton_shim__ marker). You almost certainly "
             "do NOT want to deploy the shim over a real triton: jittor already "
-            "*bridges* a real triton automatically — `import jittor.triton_shim` "
+            "*bridges* a real triton automatically — `import jittor.compat.triton` "
             "patches it so real @triton.jit kernels run on jittor Vars (see the "
-            "jittor.triton_shim docstring / backend.py). Deploy is only for envs "
+            "jittor.compat.triton docstring / backend.py). Deploy is only for envs "
             "WITHOUT triton. Pass --force to override, or `pip uninstall triton` "
             "first.".format(target)
         )

@@ -1,10 +1,10 @@
 """Real Triton backend for jittor — *bridge mode*.
 
 When the upstream ``triton`` package **and** a CUDA GPU are available, jittor's
-:mod:`jittor.triton_shim` activates *bridge mode*: real ``@triton.jit`` kernels
+:mod:`jittor.compat.triton` activates *bridge mode*: real ``@triton.jit`` kernels
 are compiled by upstream triton (Python → PTX/cubin) and **launched by jittor**
 on its own ``Var`` device pointers through the CUDA driver API. This runs the
-kernels the naive tracer (:mod:`jittor.triton_shim.launch`) cannot — ``tl.dot`` /
+kernels the naive tracer (:mod:`jittor.compat.triton.launch`) cannot — ``tl.dot`` /
 matmul, 2-D tiles, fused softmax / layernorm, atomics, block pointers, …
 
 Strategy — "compile-only"
@@ -33,7 +33,7 @@ This serialises at the boundary — correct but not maximally pipelined; phase 3
 moves the launch onto jittor's own stream as a graph node. See the plan.
 
 This module is imported lazily (only when bridge mode is actually used), so
-importing :mod:`jittor.triton_shim` never imports jittor or triton eagerly.
+importing :mod:`jittor.compat.triton` never imports jittor or triton eagerly.
 """
 import ctypes
 import os
