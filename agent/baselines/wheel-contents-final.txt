@@ -1,15 +1,15 @@
 # Jittor wheel contents baseline (SHA-256 and exact archive member paths)
 # source-wheel: jittor-1.3.11.0-py3-none-any.whl
-# source-wheel-sha256: 6e1eea2920a4c2bc7a63081bc071cd45f716a3082bf9127e066c5da1f02923ec
+# source-wheel-sha256: 06fcee8da168abfe334455a3f6f66aec52c8589e2ef92f8a7447e5d2a5c1c2f7
 # entries: 757
 # Regenerate only after reviewing every path and content change.
 3c48fba593545a9bb6b1cfc30a937257e0244754c03be631c938c7320fb6b4d0  jittor-1.3.11.0.dist-info/METADATA
-71781c99016e63e578d2bebf51320b9bc14e474176274157dfce89a31b44b5cc  jittor-1.3.11.0.dist-info/RECORD
+4a3154a5880e91a510203f9cdc1bf88e067814b67305d00a65f401027d63aa40  jittor-1.3.11.0.dist-info/RECORD
 2b6eb4118ce7cd7b09601406aa623c553c4476265836f0d9c16f5c061f7efcc0  jittor-1.3.11.0.dist-info/WHEEL
 57cfa45e1d22d02aa0aa424ae39a2d31f27ae74b06ada5acc8682b579576e75a  jittor-1.3.11.0.dist-info/entry_points.txt
 8b18f18c9c43b17e6e2bcdefc8df9d423c12e6769d5d13cf6a46fed31e7e1666  jittor-1.3.11.0.dist-info/licenses/LICENSE.txt
 7e8724346aff887e703653602699fce80650b3ffe54d00413cb099f582082901  jittor-1.3.11.0.dist-info/top_level.txt
-4be1880b6e608e6711d7df80addc99bb9586157cd7d58ab79295947a7321cdfa  jittor/__init__.py
+1a84e254ee318146fd45ddb7bbd4e008c1f8b1cdd2a30841cc5c5c7f859675fe  jittor/__init__.py
 90b9727aea6a012ae2a15cee2b3372846a39ca3a7e1fcc9d96a9747317dbc6e2  jittor/__init__.pyi
 c94456a538e993d5ac9c2e8c3141feba4e53b714985bc0c91ffbc50bd2f3c07e  jittor/_runtime/__init__.py
 6efcafdbfccae577a9e1aa87ba1e16319685da9e1cd1c3dbdf9b3838bda30b31  jittor/_runtime/core_api.py
