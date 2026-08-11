@@ -1287,7 +1287,7 @@ def _install_module_methods(nn, registry=None):
     # takes none. Wrap to accept it and toggle jittor's real training flag.
     #
     # The flag that controls layers like Dropout/BatchNorm is `is_train` -- an
-    # instance attribute read by Dropout.execute (nn.py). `is_training` is a
+    # instance attribute read by jittor.nn.Dropout.execute. `is_training` is a
     # *method* and `training` a *property*, so they must NEVER be assigned a
     # bool (the old code did `m.is_training = False`, which both shadowed the
     # method and failed to flip the flag the layers actually read). We set

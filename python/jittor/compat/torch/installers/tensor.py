@@ -1567,7 +1567,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
 
     # Jittor Vars do not expose PyTorch-style strided non-contiguous storage;
     # materialized op outputs are already laid out for their logical shape. The
-    # old fake torch hook from misc.py implemented contiguous() as clone(), which
+    # The old jittor.misc.tensor_ops.contiguous hook returned clone(), which
     # adds avoidable graph nodes and copies in PyTorch code that calls
     # transpose(...).contiguous() before export or parameter construction.
     Var.contiguous = lambda self: self
