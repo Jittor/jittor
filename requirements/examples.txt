@@ -1,0 +1,8 @@
+# Optional notebook and interactive-example environment (Python 3.11).
+ipykernel==6.29.5
+jupytext==1.17.3
+matplotlib==3.10.5
+nbclient==0.10.2
+nbformat==5.10.4
+notebook==7.4.5
+pywebio==1.8.4

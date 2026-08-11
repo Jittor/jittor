@@ -49,7 +49,7 @@ version = { attr = "jittor.__version__" }
 required-version = "==0.15.22"
 target-version = "py37"
 line-length = 100
-src = ["python", "tests"]
+src = ["python", "tests", "tools", "examples"]
 
 [tool.ruff.lint]
 # Start with deterministic correctness and Python-compatibility checks. Expand
@@ -70,6 +70,8 @@ files = [
     "agent/scripts/check_wheel_contents.py",
     "python/jittor_utils/cuda_wheel.py",
     "python/jittor/torch_shim/deploy.py",
+    "tools/release/pack_offline.py",
+    "tests/structure/test_cleanup_structure.py",
     "tests/structure/test_pytest_contract.py",
 ]
 mypy_path = "python"
@@ -95,10 +97,15 @@ disable_error_code = ["attr-defined"]
 module = ["check_wheel_contents", "agent.scripts.check_wheel_contents"]
 disable_error_code = ["var-annotated"]
 
+[tool.jupytext]
+formats = "md:myst,ipynb"
+notebook_metadata_filter = "jupytext,kernelspec"
+cell_metadata_filter = "tags"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["python"]
-addopts = "--strict-markers --strict-config"
+addopts = "--strict-markers --strict-config -p no:cacheprovider"
 xfail_strict = true
 markers = [
     "structure: repository layout and packaging checks without device execution",

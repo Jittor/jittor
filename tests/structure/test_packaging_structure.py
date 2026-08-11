@@ -48,15 +48,25 @@ class TestPackagingStructure(unittest.TestCase):
         }
         self.assertIn("recursive-include python/jittor *", directives)
         self.assertIn("recursive-include python/jittor_utils *", directives)
+        self.assertIn("recursive-include examples *", directives)
+        self.assertIn("recursive-include tools *", directives)
         self.assertIn("global-exclude *.py[cod]", directives)
         self.assertIn("global-exclude __pycache__", directives)
 
+    def test_root_development_trees_do_not_become_runtime_packages(self):
+        for relative in ("examples", "tools"):
+            root = self.repo_root / relative
+            self.assertTrue(root.is_dir(), relative)
+            self.assertFalse((root / "__init__.py").exists(), relative)
+
+    def test_built_sdist_has_an_executable_contents_gate(self):
+        checker = self.repo_root / "agent" / "scripts" / "check_sdist_contents.py"
+        self.assertTrue(checker.is_file())
+
     def test_required_deep_runtime_resources_exist(self):
         required = (
-            "python/jittor/torch_shim/cpp_extension/include/ATen/cuda/"
-            "detail/UnpackRaw.cuh",
-            "python/jittor/torch_shim/stubs/flash_attn/"
-            "flash_attn_interface.py",
+            "python/jittor/torch_shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh",
+            "python/jittor/torch_shim/stubs/flash_attn/flash_attn_interface.py",
             "python/jittor/utils/data.gz",
             "python/jittor/other/code_softmax.py",
         )

@@ -1,0 +1,4 @@
+# Stage 6 candidate hashes are populated from the reviewed final wheel build.
+1d7e6849cc43ca0c013faf9cad208b6475703a3f87595677561a8abea2f27c79  jittor/selftest.py
+6a2bb0f949ea5c50bb09735b067ca1e9d63c931d2b4dce0a4c78a126acf1b06b  jittor-1.3.11.0.dist-info/METADATA
+10aff4a2b34862bffc1e3fdc63a5fcf8464c99260d5db4c79f4480ee9ded36d6  jittor-1.3.11.0.dist-info/RECORD

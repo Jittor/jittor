@@ -41,6 +41,32 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 > **分支**：所有人/agent 都在 **`2.0`**（= 原 `acl-perf-and-fixes` 推到远程；动手前 `git branch --show-current` 确认）。分叉前的所有进展/日志现在都是**公共知识**。
 
 ### ✅ 已完成并验证（在 `2.0`）
+- **仓库结构现代化阶段 6（杂物清理与发行边界）**：运行时 `script/`、`demo/`、
+  `notebook/`、`vcompiler/`、`version` 和离线/发布脚本已退休或迁到根
+  `tools/`、`examples/`；11 组教程由 Jupytext 管理并通过离线 CPU 执行。最终
+  direct/sdist wheel 各 728 个成员且逐文件相同，相对阶段 5 精确为 34 删除、3 个
+  内容变化、0 新增；3104 项 collect、132 项结构门禁、25 项 CPU 代表回归、ASV
+  GELU、隔离 wheel CPU 与 RTX 4090 CUDA 均通过。Clang 14 冷验证证明现有
+  `extern/llvm` 仍参与编译链，删除延期并由结构契约保护。本机无 Docker daemon 权限、
+  Python 3.7 实机和 NPU；Torch installer 覆盖 `jittor.__version__` 的所有权冲突留给
+  阶段 7 composition root 统一解决。详见
+  [阶段 6 报告](../results/2026-08-11-repository-modernization-cleanup.md)。
+- **仓库结构现代化阶段 5（测试外移）**：297 项 `jittor.test` 安装负担移到根
+  `tests/`，wheel 新增独立 `jittor.selftest` 与共享 C++ test header；direct/sdist
+  wheel 各 762 个成员且逐文件相同。最终 3094 项 collect 无错误，迁移代表组、
+  compiler utils、CPU/CUDA custom op、隔离 wheel selftest 和结构契约均通过；测试树
+  禁止反向导入其他测试或在 collection 阶段切换 backend/编译。详见
+  [阶段 5 报告](../results/2026-08-11-repository-modernization-test-migration.md)。
+- **仓库结构现代化阶段 4（兼容层四层分离）**：框架能力、通用 patch/backend
+  机制、根因修复与下游粘合分离；TRELLIS、Gaussian Splatting、HF 专属适配移到三个
+  独立可选包并通过 entry point 注册。主仓库移除项目 runtime 与脚本，wheel 精确为
+  10 新增、22 内容变化、5 删除；CPU/CUDA、隔离 wheel、GS 和 TRELLIS 端到端通过，
+  NPU 未执行。详见
+  [阶段 4 报告](../results/2026-08-11-repository-modernization-compatibility-layers.md)。
+- **仓库结构现代化阶段 3（领域包收敛）**：旧 `nn.py + _nn/`、`misc.py + _misc/`、
+  `pool.py + _pool/` 和 `torch_compat.py + _torch_compat/` 已收敛为 regular packages，
+  导入身份、pickle、动态 monkeypatch 和 wheel 资源由结构契约锁定。详见
+  [阶段 3 报告](../results/2026-08-11-repository-modernization-domain-packages.md)。
 - **仓库结构现代化阶段 2（工具链、CI、发布、容器与 ASV）**：固定版本 Ruff、Mypy、
   pre-commit 与 Nox 已接入，Nox 统一 structure/CPU/CUDA/NPU/benchmark 入口并把状态隔离
   到 `jittor-lab`。旧 GitHub job 与 GitLab CI 已替换为分层、精确 runner label、

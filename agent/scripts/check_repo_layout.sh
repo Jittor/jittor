@@ -13,6 +13,14 @@ if [[ ! -d "$REPO_ROOT/tests" ]]; then
   echo 'missing repository test suite: tests/' >&2
   status=1
 fi
+if [[ ! -d "$REPO_ROOT/examples" ]]; then
+  echo 'missing repository examples: examples/' >&2
+  status=1
+fi
+if [[ ! -d "$REPO_ROOT/tools" ]]; then
+  echo 'missing repository tools: tools/' >&2
+  status=1
+fi
 if [[ -e "$REPO_ROOT/tests/__init__.py" ]]; then
   echo 'repository tests must not be an importable distribution package: tests/__init__.py' >&2
   status=1
@@ -20,7 +28,7 @@ fi
 
 while IFS= read -r name; do
   case "$name" in
-    .git|.github|.agents|.codex|.claude|agent|benchmarks|doc|docs|python|requirements|tests|\
+    .git|.github|.agents|.codex|.claude|agent|benchmarks|doc|docs|examples|python|requirements|tests|tools|\
     .dockerignore|.gitignore|.gitlab-ci.yml|AGENTS.md|\
     AWESOME-JITTOR-LIST.cn.md|AWESOME-JITTOR-LIST.md|\
     asv.conf.json|CODE_OF_CONDUCT.md|CONTRIBUTING.md|Dockerfile|GOVERNANCE.md|\
@@ -49,12 +57,53 @@ for forbidden_path in \
   "$REPO_ROOT/python/jittor/monkeypatch_ops.py" \
   "$REPO_ROOT/python/jittor/torch_shim/trellis_runtime.py" \
   "$REPO_ROOT/python/jittor/torch_shim/gaussian_splatting_runtime.py" \
-  "$REPO_ROOT/python/jittor/torch_shim/scripts"; do
+  "$REPO_ROOT/python/jittor/torch_shim/scripts" \
+  "$REPO_ROOT/python/jittor/script" \
+  "$REPO_ROOT/python/jittor/demo" \
+  "$REPO_ROOT/python/jittor/notebook" \
+  "$REPO_ROOT/python/jittor/vcompiler" \
+  "$REPO_ROOT/python/jittor/version" \
+  "$REPO_ROOT/python/jittor/utils/polish.py" \
+  "$REPO_ROOT/python/jittor/utils/polish_centos.py" \
+  "$REPO_ROOT/python/jittor_utils/pack_offline.py"; do
   if [[ -e "$forbidden_path" ]]; then
     printf 'forbidden legacy path: %s\n' "${forbidden_path#"$REPO_ROOT"/}" >&2
     status=1
   fi
 done
+
+for required_path in \
+  "$REPO_ROOT/python/jittor/extern/__init__.py" \
+  "$REPO_ROOT/python/jittor/extern/acl/aclops" \
+  "$REPO_ROOT/python/jittor/extern/acl/aclnn" \
+  "$REPO_ROOT/python/jittor/extern/acl/hccl" \
+  "$REPO_ROOT/python/jittor/extern/corex/corex_compiler.py" \
+  "$REPO_ROOT/python/jittor/extern/cuda/inc" \
+  "$REPO_ROOT/python/jittor/extern/cuda/src" \
+  "$REPO_ROOT/python/jittor/extern/cuda/cub" \
+  "$REPO_ROOT/python/jittor/extern/cuda/cublas" \
+  "$REPO_ROOT/python/jittor/extern/cuda/cudnn" \
+  "$REPO_ROOT/python/jittor/extern/cuda/cufft" \
+  "$REPO_ROOT/python/jittor/extern/cuda/curand" \
+  "$REPO_ROOT/python/jittor/extern/cuda/cusparse" \
+  "$REPO_ROOT/python/jittor/extern/cuda/cutt" \
+  "$REPO_ROOT/python/jittor/extern/cuda/nccl" \
+  "$REPO_ROOT/python/jittor/extern/mkl/ops" \
+  "$REPO_ROOT/python/jittor/extern/mpi/inc" \
+  "$REPO_ROOT/python/jittor/extern/mpi/ops" \
+  "$REPO_ROOT/python/jittor/extern/mpi/src" \
+  "$REPO_ROOT/python/jittor/extern/rocm" \
+  "$REPO_ROOT/python/jittor/extern/llvm/jt_alignment_from_assumptions.cc"; do
+  if [[ ! -e "$required_path" ]]; then
+    printf 'missing required runtime path: %s\n' "${required_path#"$REPO_ROOT"/}" >&2
+    status=1
+  fi
+done
+
+if ! grep -q '^def compile_extern():' "$REPO_ROOT/python/jittor/compiler.py"; then
+  echo 'LLVM retirement is deferred: compiler.compile_extern must remain with extern/llvm.' >&2
+  status=1
+fi
 
 legacy_selftest_module='jittor.test.'
 legacy_selftest_module+='test_example'
@@ -77,6 +126,57 @@ for active_doc in \
     status=1
   fi
 done
+
+active_reference_paths=(
+  "$REPO_ROOT/python"
+  "$REPO_ROOT/tools"
+  "$REPO_ROOT/examples"
+  "$REPO_ROOT/.github"
+  "$REPO_ROOT/docs"
+  "$REPO_ROOT/README.md"
+  "$REPO_ROOT/README.cn.md"
+  "$REPO_ROOT/README.src.md"
+  "$REPO_ROOT/CONTRIBUTING.md"
+  "$REPO_ROOT/Dockerfile"
+  "$REPO_ROOT/MANIFEST.in"
+  "$REPO_ROOT/pyproject.toml"
+  "$REPO_ROOT/noxfile.py"
+  "$REPO_ROOT/.pre-commit-config.yaml"
+)
+old_package_root='python/jittor'
+old_notebook_module='jittor'
+old_notebook_module+='.notebook'
+old_test_prefix='jittor'
+old_test_prefix+='.test.'
+old_polish_module='jittor.utils.'
+old_polish_module+='polish'
+old_offline_module='jittor_utils.'
+old_offline_module+='pack_offline'
+for old_reference in \
+  "$old_package_root/script" \
+  "$old_package_root/demo" \
+  "$old_package_root/notebook" \
+  "$old_package_root/vcompiler" \
+  "$old_notebook_module" \
+  "$old_test_prefix" \
+  "$old_polish_module" \
+  "$old_offline_module"; do
+  if grep -I -R -n -F -- "$old_reference" "${active_reference_paths[@]}"; then
+    printf 'active file still references retired runtime path: %s\n' \
+      "$old_reference" >&2
+    status=1
+  fi
+done
+
+old_vcompiler_module='jittor.'
+old_vcompiler_module+='vcompiler'
+if grep -I -R -n -F -- "$old_vcompiler_module" \
+  "$REPO_ROOT/python" "$REPO_ROOT/tools" "$REPO_ROOT/examples" \
+  "$REPO_ROOT/.github" "$REPO_ROOT/Dockerfile" "$REPO_ROOT/pyproject.toml" \
+  "$REPO_ROOT/noxfile.py"; then
+  echo 'active code still imports retired jittor.vcompiler.' >&2
+  status=1
+fi
 
 if [[ -d "$REPO_ROOT/.claude/worktrees" ]] &&
    [[ -n "$(find "$REPO_ROOT/.claude/worktrees" -mindepth 1 -print -quit)" ]]; then

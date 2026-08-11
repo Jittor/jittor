@@ -27,12 +27,12 @@ import zipfile
 
 
 AGENT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_BASELINE = AGENT_ROOT / "baselines" / "wheel-contents-stage4.txt"
+DEFAULT_BASELINE = AGENT_ROOT / "baselines" / "wheel-contents-stage5.txt"
 DEFAULT_ADDITION_ALLOWLIST = (
-    AGENT_ROOT / "baselines" / "wheel-additions-stage5.txt"
+    AGENT_ROOT / "baselines" / "wheel-additions-stage6.txt"
 )
 DEFAULT_CONTENT_CHANGE_ALLOWLIST = (
-    AGENT_ROOT / "baselines" / "wheel-content-changes-stage5.txt"
+    AGENT_ROOT / "baselines" / "wheel-content-changes-stage6.txt"
 )
 
 REQUIRED_MEMBERS = (
@@ -61,6 +61,21 @@ FORBIDDEN_TOP_LEVEL_NAMES = frozenset((
     "agent",
     "jittor-lab",
     "jittor_fsdp2",
+))
+
+FORBIDDEN_MEMBER_PREFIXES = (
+    "jittor/demo/",
+    "jittor/notebook/",
+    "jittor/script/",
+    "jittor/test/",
+    "jittor/vcompiler/",
+)
+
+FORBIDDEN_EXACT_MEMBERS = frozenset((
+    "jittor/utils/polish.py",
+    "jittor/utils/polish_centos.py",
+    "jittor/version",
+    "jittor_utils/pack_offline.py",
 ))
 
 FORBIDDEN_SUFFIXES = (
@@ -220,6 +235,10 @@ def _pollution_reason(name):
         return "empty path"
     if parts[0] in FORBIDDEN_TOP_LEVEL_NAMES:
         return "forbidden top-level experiment path"
+    if name in FORBIDDEN_EXACT_MEMBERS:
+        return "retired runtime-wheel member"
+    if name.startswith(FORBIDDEN_MEMBER_PREFIXES):
+        return "retired runtime-wheel subtree"
     if len(parts) >= 2 and parts[:2] == ("jittor", "projects"):
         return "repository-local experiment package"
     directory_parts = parts if name.endswith("/") else parts[:-1]

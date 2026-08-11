@@ -43,8 +43,8 @@ class TestSelftestStructure(unittest.TestCase):
             ({}, {}, "cpu"),
             ({"use_cuda": 1}, {}, "cuda"),
             ({"use_cuda": 1}, {"has_acl": 1}, "npu"),
-            ({"use_acl": 1}, {}, "npu"),
-            ({"use_cuda": 1, "use_rocm": 1}, {"has_rocm": 1}, "rocm"),
+            ({"use_cuda": 1}, {"has_rocm": 1}, "rocm"),
+            ({"use_cuda": 0}, {"has_acl": 1, "has_rocm": 1}, "cpu"),
         )
         for flags, compiler, expected in cases:
             namespace = {
@@ -91,9 +91,9 @@ class TestSelftestStructure(unittest.TestCase):
             self.repo_root / "README.cn.md",
             self.repo_root / "README.src.md",
             self.repo_root / "CONTRIBUTING.md",
-            self.repo_root / "python" / "jittor" / "script" / "install.sh",
+            self.repo_root / "tools" / "install" / "legacy" / "install.sh",
             self.repo_root / "tests" / "compiler" / "test_lock.py",
-            self.repo_root / "python" / "jittor" / "utils" / "polish_centos.py",
+            self.repo_root / "tools" / "release" / "legacy" / "polish_centos.py",
             self.repo_root / "python" / "jittor_utils" / "class" / "setup_env.py",
         ]
         expected_callers.extend(

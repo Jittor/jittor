@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Copyright 2013 Benedikt Morbach <moben@exherbo.org>
+# Distributed under the terms of the GNU General Public License v2.
+
+additional_vars=(LD_LIBRARY_PATH LD_PRELOAD)
+export "${additional_vars[@]}"
+
+usage() {
+    cat <<'EOF'
+tmpi: run MPI processes as a synchronized grid in a new tmux window.
+
+Usage:
+  tmpi <process-count> <command> [arguments...]
+
+Optional HOSTS_ARGS and MPI_ARGS environment strings are passed to mpirun.
+LD_LIBRARY_PATH and LD_PRELOAD are exported to the child panes.
+EOF
+}
+
+check_tools() {
+    local missing=0
+    local tool
+    for tool in tmux mpirun; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            printf 'required distributed tool is unavailable: %s\n' "$tool" >&2
+            missing=1
+        fi
+    done
+    if (( missing != 0 )); then
+        return 1
+    fi
+}
+
+quote_command() {
+    local command=""
+    local argument
+    for argument in "$@"; do
+        printf -v command '%s%q ' "$command" "$argument"
+    done
+    printf '%s' "$command"
+}
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    usage
+    exit 0
+fi
+if (( $# < 2 )); then
+    usage >&2
+    exit 2
+fi
+
+check_tools
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+LAB_ROOT="${JITTOR_LAB_ROOT:-$(cd "$REPO_ROOT/.." && pwd)/jittor-lab}"
+STATE_DIR="$LAB_ROOT/_state/tools/tmpi"
+mkdir -p "$STATE_DIR"
+
+if [[ -z "${TMUX:-}" ]]; then
+    socket="$STATE_DIR/tmpi.$$.sock"
+    command="$(quote_command "$0" "$@")"
+    printf 'tmux socket: %s\n' "$socket"
+    exec tmux -S "$socket" new-session "$command"
+fi
+
+if [[ "$1" == "runmpi" ]]; then
+    shift
+    : "${OMPI_COMM_WORLD_RANK:?OpenMPI rank is unavailable}"
+    : "${session:?tmux session is unavailable}"
+    : "${window:?tmux window is unavailable}"
+    : "${dummy:?tmux dummy pane is unavailable}"
+    : "${lock_file:?tmpi lock path is unavailable}"
+
+    while [[ "$(<"$lock_file")" -ne "$OMPI_COMM_WORLD_RANK" ]]; do
+        sleep 0.02
+    done
+
+    mapfile -t mpi_vars < <(
+        env | sed -nE 's/^((MPI|OPAL|PMIX|PYTHON|debug|PATH)[^=]*)=.*/\1/p'
+    )
+    mpi_vars+=("${additional_vars[@]}")
+
+    for variable in "${mpi_vars[@]}"; do
+        tmux set-environment -t "$session" "$variable" "${!variable:-}"
+    done
+
+    pane_command="$(quote_command "$@")"
+    read -r pid pane < <(
+        tmux split-window -P -F '#{pane_pid} #{pane_id}' -t "$window" "$pane_command"
+    )
+
+    for variable in "${mpi_vars[@]}"; do
+        tmux set-environment -t "$session" -u "$variable"
+    done
+
+    if [[ "$OMPI_COMM_WORLD_RANK" -eq 0 ]]; then
+        tmux kill-pane -t "$dummy" >/dev/null 2>&1
+    fi
+    tmux select-layout -t "$pane" tiled >/dev/null 2>&1
+    printf '%s\n' "$((OMPI_COMM_WORLD_RANK + 1))" >"$lock_file"
+
+    while [[ -d "/proc/$pid" ]]; do
+        sleep 1
+    done
+    exit 0
+fi
+
+processes="$1"
+shift
+if [[ ! "$processes" =~ ^[1-9][0-9]*$ ]]; then
+    printf 'process-count must be a positive integer, got %q\n' "$processes" >&2
+    exit 2
+fi
+
+read -r -a hosts_args <<<"${HOSTS_ARGS:-}"
+read -r -a mpi_args <<<"${MPI_ARGS:-}"
+self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
+read -r dummy window session < <(
+    tmux new-window -P -F '#{pane_id} #{window_id} #{session_id}'
+)
+export dummy window session
+lock_file="$STATE_DIR/${session//[^A-Za-z0-9_.-]/_}.lock"
+export lock_file
+trap 'rm -f "$lock_file"' EXIT
+
+tmux set-window-option -t "$window" synchronize-panes on >/dev/null 2>&1
+tmux set-window-option -t "$window" remain-on-exit on >/dev/null 2>&1
+printf '0\n' >"$lock_file"
+
+printf 'starting %s MPI processes in tmux session %s\n' "$processes" "$session"
+mpirun "${hosts_args[@]}" "${mpi_args[@]}" \
+    -np "$processes" "$self" runmpi "$@"

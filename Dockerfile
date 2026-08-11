@@ -29,9 +29,12 @@ RUN python3 -m venv "${VIRTUAL_ENV}" \
 WORKDIR /opt/jittor
 
 COPY pyproject.toml setup.py README.md MANIFEST.in LICENSE.txt ./
+COPY requirements/examples.txt ./requirements/examples.txt
 COPY python ./python
+COPY examples ./examples
 
-RUN python -m pip install --no-cache-dir . notebook matplotlib \
+RUN python -m pip install --no-cache-dir . \
+    && python -m pip install --no-cache-dir -r requirements/examples.txt \
     && nvcc_path= python -m jittor.selftest
 
-CMD ["python", "-m", "jittor.notebook", "--allow-root", "--ip=0.0.0.0"]
+CMD ["python", "-m", "notebook", "--allow-root", "--ip=0.0.0.0", "--no-browser", "--ServerApp.root_dir=/opt/jittor/examples/notebooks"]

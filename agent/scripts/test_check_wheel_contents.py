@@ -205,6 +205,30 @@ class TestWheelContents(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn("added without approval: jittor/secret.env", stderr)
 
+    def test_retired_runtime_members_are_always_rejected(self):
+        old_wheel = self._wheel("old.whl", self.base_members)
+        retired = (
+            "jittor/demo/example.py",
+            "jittor/notebook/example.ipynb",
+            "jittor/script/install.sh",
+            "jittor/test/test_core.py",
+            "jittor/vcompiler/__init__.py",
+            "jittor/utils/polish.py",
+            "jittor/utils/polish_centos.py",
+            "jittor/version",
+            "jittor_utils/pack_offline.py",
+        )
+        for index, member in enumerate(retired):
+            with self.subTest(member=member):
+                members = dict(self.base_members)
+                members[member] = b"retired\n"
+                candidate = self._wheel("retired-{}.whl".format(index), members)
+                status, _stdout, stderr = self._run(
+                    ["compare", candidate, "--old-wheel", old_wheel]
+                )
+                self.assertEqual(status, 1)
+                self.assertIn("retired runtime-wheel", stderr)
+
     def test_unpack_content_tampering_fails(self):
         old_wheel = self._wheel("old.whl", self.base_members)
         members = dict(self.base_members)

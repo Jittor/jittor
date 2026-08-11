@@ -1,6 +1,6 @@
-# The image is built from the Python package only.  A default-deny context keeps
-# local experiments, worktrees, caches and raw results out even when they use a
-# name that has not appeared in this repository before.
+# The image is built from the Python package and versioned examples. A
+# default-deny context keeps local experiments, worktrees, caches and raw results
+# out even when they use a name that has not appeared in this repository before.
 **
 !setup.py
 !pyproject.toml
@@ -9,3 +9,10 @@
 !LICENSE.txt
 !python/
 !python/**
+!requirements/
+!requirements/examples.txt
+!examples/
+!examples/**
+examples/**/__pycache__/
+examples/**/.pytest_cache/
+examples/**/.ipynb_checkpoints/

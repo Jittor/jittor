@@ -41,24 +41,40 @@ PYTEST = "pytest==7.4.4"
 PYTEST_TIMEOUT = "pytest-timeout==2.3.1"
 SETUPTOOLS = "setuptools==83.0.0"
 WHEEL = "wheel==0.45.1"
+JUPYTEXT = "jupytext==1.17.3"
+NBCLIENT = "nbclient==0.10.2"
+NBFORMAT = "nbformat==5.10.4"
+IPYKERNEL = "ipykernel==6.29.5"
 
 RATCHET_FILES = (
     "noxfile.py",
+    "agent/scripts/check_sdist_contents.py",
     "agent/scripts/check_wheel_contents.py",
     "python/jittor/selftest.py",
     "python/jittor_utils/cuda_wheel.py",
     "python/jittor/torch_shim/deploy.py",
+    "tools/release/pack_offline.py",
+    "tests/integration/test_notebooks.py",
+    "tests/structure/test_cleanup_structure.py",
     "tests/structure/test_pytest_contract.py",
     "tests/structure/test_selftest_structure.py",
 )
 FORMAT_FILES = (
     "noxfile.py",
+    "agent/scripts/check_sdist_contents.py",
+    "agent/scripts/test_check_sdist_contents.py",
     "python/jittor/selftest.py",
+    "tools/release/pack_offline.py",
+    "tests/integration/test_notebooks.py",
+    "tests/structure/test_cleanup_structure.py",
+    "tests/structure/test_packaging_structure.py",
     "tests/structure/test_pytest_contract.py",
     "tests/structure/test_selftest_structure.py",
 )
 FILESYSTEM_TESTS = (
+    "agent/scripts/test_check_sdist_contents.py",
     "agent/scripts/test_check_wheel_contents.py",
+    "tests/structure/test_cleanup_structure.py",
     "tests/structure/test_packaging_structure.py",
     "tests/structure/test_pytest_contract.py",
     "tests/structure/test_selftest_structure.py",
@@ -66,9 +82,11 @@ FILESYSTEM_TESTS = (
     "tests/structure/test_cuda_wheel.py",
 )
 CPU_TESTS = (
+    "tests/compiler/test_custom_op.py",
     "tests/compiler/test_utils.py",
     "tests/core/test_autograd_engine.py",
     "tests/core/test_regression.py",
+    "tests/integration/test_notebooks.py",
 )
 CUDA_TESTS = (
     "tests/backends/cuda/test_cuda.py",
@@ -138,10 +156,17 @@ def _source_copy(destination):
         "__pycache__",
         "*.egg-info",
         "*.py[co]",
-        "build",
         "dist",
     )
-    shutil.copytree(str(REPO_ROOT), str(destination), symlinks=True, ignore=ignored)
+
+    def ignore_generated(path, names):
+        excluded = set(ignored(path, names))
+        # tools/build is source-owned; every other build directory is generated.
+        if Path(path).resolve() != REPO_ROOT / "tools" and "build" in names:
+            excluded.add("build")
+        return excluded
+
+    shutil.copytree(str(REPO_ROOT), str(destination), symlinks=True, ignore=ignore_generated)
 
 
 def _pytest_invocations(session, defaults):
@@ -217,6 +242,8 @@ def structure(session):
         SETUPTOOLS,
         WHEEL,
         "astunparse==1.6.3",
+        JUPYTEXT,
+        NBFORMAT,
         "numpy==1.26.4",
         "pillow==11.0.0",
         "tqdm==4.67.1",
@@ -245,25 +272,53 @@ def structure(session):
             "-m",
             "build",
             "--no-isolation",
+            "--sdist",
+            "--wheel",
             "--outdir",
             str(dist),
             env=env,
         )
     wheels = sorted(dist.glob("*.whl"))
+    sdists = sorted(dist.glob("*.tar.gz"))
     if len(wheels) != 1:
         session.error("expected exactly one wheel, found %d" % len(wheels))
-    wheel_args = tuple(session.posargs) or (
-        "--removal-allowlist",
-        "agent/baselines/wheel-removals-stage5.txt",
-    )
+    if len(sdists) != 1:
+        session.error("expected exactly one sdist, found %d" % len(sdists))
     session.run(
         "python",
-        "agent/scripts/check_wheel_contents.py",
-        "compare",
-        str(wheels[0]),
-        *wheel_args,
+        "agent/scripts/check_sdist_contents.py",
+        str(sdists[0]),
         env=env,
     )
+    sdist_wheel_dist = root / "sdist-wheel-dist"
+    session.run(
+        "python",
+        "-m",
+        "pip",
+        "wheel",
+        "--no-deps",
+        "--no-build-isolation",
+        "--wheel-dir",
+        str(sdist_wheel_dist),
+        str(sdists[0]),
+        env=env,
+    )
+    sdist_wheels = sorted(sdist_wheel_dist.glob("*.whl"))
+    if len(sdist_wheels) != 1:
+        session.error("expected exactly one sdist-derived wheel, found %d" % len(sdist_wheels))
+    wheel_args = tuple(session.posargs) or (
+        "--removal-allowlist",
+        "agent/baselines/wheel-removals-stage6.txt",
+    )
+    for wheel in (wheels[0], sdist_wheels[0]):
+        session.run(
+            "python",
+            "agent/scripts/check_wheel_contents.py",
+            "compare",
+            str(wheel),
+            *wheel_args,
+            env=env,
+        )
 
     wheel_install = root / "wheel-install"
     session.run(
@@ -364,6 +419,10 @@ def cpu(session):
     env["JITTOR_TEST_DEVICES"] = "cpu"
     session.install(
         "astunparse==1.6.3",
+        IPYKERNEL,
+        JUPYTEXT,
+        NBCLIENT,
+        NBFORMAT,
         "numpy==1.26.4",
         "pillow==11.0.0",
         PYTEST,

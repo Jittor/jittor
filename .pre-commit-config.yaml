@@ -21,10 +21,10 @@ repos:
     hooks:
       - id: ruff-check
         args: [--no-cache]
-        files: ^(noxfile\.py|agent/scripts/check_wheel_contents\.py|python/jittor_utils/cuda_wheel\.py|python/jittor/torch_shim/deploy\.py|tests/structure/test_(pytest_contract|selftest_structure)\.py)$
+        files: ^(noxfile\.py|agent/scripts/check_(sdist|wheel)_contents\.py|python/jittor_utils/cuda_wheel\.py|python/jittor/torch_shim/deploy\.py|tools/release/pack_offline\.py|tests/integration/test_notebooks\.py|tests/structure/test_(cleanup_structure|pytest_contract|selftest_structure)\.py)$
       - id: ruff-format
         args: [--no-cache]
-        files: ^(noxfile\.py|python/jittor/selftest\.py|tests/structure/test_(pytest_contract|selftest_structure)\.py)$
+        files: ^(noxfile\.py|agent/scripts/(check_sdist_contents|test_check_sdist_contents)\.py|python/jittor/selftest\.py|tools/release/pack_offline\.py|tests/integration/test_notebooks\.py|tests/structure/test_(cleanup_structure|packaging_structure|pytest_contract|selftest_structure)\.py)$
 
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.8.0
@@ -36,6 +36,12 @@ repos:
 
   - repo: local
     hooks:
+      - id: notebook-sync
+        name: Jupytext notebook pairs are synchronized
+        entry: jupytext --sync
+        language: python
+        additional_dependencies: [jupytext==1.17.3]
+        files: ^examples/notebooks/.*\.(md|ipynb)$
       - id: repository-layout
         name: repository layout
         entry: agent/scripts/check_repo_layout.sh

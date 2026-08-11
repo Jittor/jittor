@@ -242,6 +242,26 @@ recorded destination rather than relying on the older partial category estimate.
   `python/jittor/src/utils/`.
 - Installed-environment checks use `jittor.selftest`, not a shipped test package.
 
+## Tool And Example Boundary
+
+Repository-operated commands live under top-level `tools/`; teaching and runnable
+samples live under `examples/`. Neither tree contains `__init__.py` or participates
+in runtime package discovery. They are included in the source distribution for
+maintainers, but direct and sdist-derived wheels exclude them.
+
+Stage 6 retires the published `jittor.vcompiler` package as a deliberate Jittor
+2.0 breaking change. It compiled a private C++ extension during import, had no
+supported in-repository consumer, and has no direct replacement; custom operator
+authors should use the maintained `compile_custom_op` and `compile_custom_ops`
+interfaces instead. The package-local `version` file is also retired because
+project metadata and `jittor.__version__` are the version authorities.
+
+The old LLVM alignment pass is not retired in Stage 6. A real Clang 14 cold-build
+gate failed in the existing core before the pass could be evaluated, so
+`compiler.compile_extern()` and `extern/llvm/jt_alignment_from_assumptions.cc`
+remain together. Removing either side requires a later successful Clang cold
+import, forward/backward graph, and custom JIT regression.
+
 ## Tooling And Delivery
 
 - Ruff supplies formatting and linting; mypy is introduced with an explicit,

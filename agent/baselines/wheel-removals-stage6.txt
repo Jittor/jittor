@@ -1,0 +1,35 @@
+# Stage 6 tools, examples, notebooks, release utilities, and retired API payloads.
+jittor/demo/simple_cgan.py
+jittor/notebook/60分钟快速入门Jittor/README.md
+jittor/notebook/60分钟快速入门Jittor/mnist.png
+jittor/notebook/60分钟快速入门Jittor/计图入门教程 0 --- 介绍与安装.ipynb
+jittor/notebook/60分钟快速入门Jittor/计图入门教程 1 --- 基本概念.ipynb
+jittor/notebook/60分钟快速入门Jittor/计图入门教程 2 --- 如何训练一个简单线性回归.ipynb
+jittor/notebook/60分钟快速入门Jittor/计图入门教程 3 --- 尝试解决一个实际问题.ipynb
+jittor/notebook/ConditionGAN.src.md
+jittor/notebook/LSGAN.src.md
+jittor/notebook/__main__.py
+jittor/notebook/basics.src.md
+jittor/notebook/custom_op.src.md
+jittor/notebook/example.src.md
+jittor/notebook/figs/mop.svg
+jittor/notebook/md_to_ipynb.py
+jittor/notebook/meta_op.src.md
+jittor/notebook/profiler.src.md
+jittor/script/build_aarch64_mkl.sh
+jittor/script/converter_server.sh
+jittor/script/inference_perf.py
+jittor/script/install.sh
+jittor/script/install_llvm.sh
+jittor/script/install_mkl.sh
+jittor/script/make_doc.py
+jittor/script/tmpi
+jittor/script/update.sh
+jittor/utils/polish.py
+jittor/utils/polish_centos.py
+jittor/vcompiler/__init__.py
+jittor/vcompiler/vcompiler.cc
+jittor/vcompiler/vcompiler.h
+jittor/vcompiler/vcompiler.py
+jittor/version
+jittor_utils/pack_offline.py

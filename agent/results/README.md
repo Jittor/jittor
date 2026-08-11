@@ -6,6 +6,8 @@
 
 ## 兼容性与功能验证
 
+- [2026-08-11 仓库结构现代化阶段 6：杂物清理与发行边界](2026-08-11-repository-modernization-cleanup.md)
+- [2026-08-11 仓库结构现代化阶段 5：测试外移与制品验收](2026-08-11-repository-modernization-test-migration.md)
 - [2026-08-11 仓库结构现代化阶段 4：兼容层四层分离](2026-08-11-repository-modernization-compatibility-layers.md)
 - [2026-08-11 仓库结构现代化阶段 3：领域包收敛](2026-08-11-repository-modernization-domain-packages.md)
 - [2026-08-11 仓库结构现代化阶段 2：工具链、交付与性能基建](2026-08-11-repository-modernization-tooling.md)

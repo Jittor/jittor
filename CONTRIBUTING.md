@@ -126,14 +126,15 @@ jittor/
 │   │   ├── dataset/          # Dataset utilities
 │   │   ├── models/           # Pre-built model implementations
 │   │   ├── utils/            # Utility functions
-│   │   ├── notebook/         # Jupyter notebook tutorials
 │   │   └── src/              # C++/CUDA source files (JIT compiled)
 │   │       ├── ops/          # Operator implementations
 │   │       ├── executor/     # Execution engine
 │   │       ├── mem/          # Memory management
 │   │       └── optimizer/    # Graph optimization passes
 │   └── jittor_utils/         # Utility package
+├── examples/                 # Examples and Jupyter notebook tutorials
 ├── tests/                    # Repository pytest suite (not shipped in wheels)
+├── tools/                    # Repository build, release, and maintenance tools
 ├── doc/                      # Documentation (Sphinx)
 ├── .github/                  # GitHub templates and CI
 │   ├── ISSUE_TEMPLATE/       # Issue templates
@@ -479,14 +480,15 @@ jittor/
 │   │   ├── dataset/          # 数据集工具
 │   │   ├── models/           # 预置模型实现
 │   │   ├── utils/            # 工具函数
-│   │   ├── notebook/         # Jupyter notebook 教程
 │   │   └── src/              # C++/CUDA 源文件（JIT 编译）
 │   │       ├── ops/          # 算子实现
 │   │       ├── executor/     # 执行引擎
 │   │       ├── mem/          # 内存管理
 │   │       └── optimizer/    # 图优化
 │   └── jittor_utils/         # 工具包
+├── examples/                 # 示例和 Jupyter notebook 教程
 ├── tests/                    # 仓库 pytest 测试套件（不进入 wheel）
+├── tools/                    # 仓库构建、发布和维护工具
 ├── doc/                      # 文档（Sphinx）
 ├── .github/                  # GitHub 模板和 CI
 │   ├── ISSUE_TEMPLATE/       # Issue 模板

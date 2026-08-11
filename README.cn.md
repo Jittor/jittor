@@ -184,7 +184,8 @@ docker run -it -p 8888:8888 jittor/jittor
 ## 手动安装
 
 
-我们将逐步演示如何在Ubuntu 16.04中安装Jittor，其他Linux发行版可能可以使用类似的命令。
+以下步骤使用仍受支持的 Debian 或 Ubuntu 发行版提供的软件包，其他受维护的
+Linux 发行版可使用对应的软件包。
 
 
 ### 步骤一：选择您的后端编译器
@@ -193,9 +194,8 @@ docker run -it -p 8888:8888 jittor/jittor
 # g++
 sudo apt install g++ build-essential libomp-dev
 
-# OR clang++-8
-wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install_llvm.sh > /tmp/llvm.sh
-bash /tmp/llvm.sh 8
+# 或安装受支持 Debian/Ubuntu 发行版提供的 Clang
+sudo apt install clang libomp-dev
 ```
 
 ### 步骤二：安装Python和python-dev
@@ -204,7 +204,7 @@ bash /tmp/llvm.sh 8
 Jittor需要python的版本>=3.7。
 
 ```bash
-sudo apt install python3.7 python3.7-dev
+sudo apt install python3 python3-dev python3-pip
 ```
 
 
@@ -215,14 +215,15 @@ sudo apt install python3.7 python3.7-dev
 
 ```bash
 git clone https://github.com/Jittor/jittor.git
-sudo pip3.7 install ./jittor
-export cc_path="clang++-8"
+python3 -m pip install ./jittor
+# 可选：选择步骤一安装的 Clang
+export cc_path="$(command -v clang++)"
 # if other compiler is used, change cc_path
 # export cc_path="g++"
 # export cc_path="icc"
 
 # run a simple test
-python3.7 -m jittor.selftest
+python3 -m jittor.selftest
 ```
 
 如果通过了测试，那么您的Jittor已经准备就绪。
@@ -237,7 +238,7 @@ python3.7 -m jittor.selftest
 # replace this var with your nvcc location 
 export nvcc_path="/usr/local/cuda/bin/nvcc" 
 # run a simple cuda test
-use_cuda=1 python3.7 -m jittor.selftest
+use_cuda=1 python3 -m jittor.selftest
 ```
 
 如果测试通过，则可以通过设置`use_cuda`标识符在Jittor中启用CUDA。
@@ -254,8 +255,8 @@ jt.flags.use_cuda = 1
 要检查Jittor的完整性，您可以运行Resnet18训练测试。需要注意的是，这个测试需要6G显存。
 
 ```bash
-python3.7 -m pip install pytest==7.4.4
-python3.7 -m pytest tests/models/test_resnet.py -v
+python3 -m pip install pytest==7.4.4
+python3 -m pytest tests/models/test_resnet.py -v
 ```
 
 如果这些测试失败，请为我们报告错误，我们十分欢迎您为Jittor做出贡献^ _ ^
@@ -350,14 +351,19 @@ help(jt.ops)
 
 
 
-[1]: python/jittor/notebook/example.src.md	"示例"
-[2]: python/jittor/notebook/basics.src.md	"基本概念"
-[3]: python/jittor/notebook/meta_op.src.md	"元算子"
-[4]: python/jittor/notebook/custom_op.src.md	"自定义算子"
-[5]: python/jittor/notebook/profiler.src.md	"性能分析器"
+[1]: examples/notebooks/example.md	"示例"
+[2]: examples/notebooks/basics.md	"基本概念"
+[3]: examples/notebooks/meta_op.md	"元算子"
+[4]: examples/notebooks/custom_op.md	"自定义算子"
+[5]: examples/notebooks/profiler.md	"性能分析器"
 
 
-这些notebooks可以通过python3.7 -m jittor.notebook在您自己的计算机中运行。
+安装示例依赖后，通过标准 Jupyter Notebook 入口打开仓库教程：
+
+```bash
+python -m pip install -r requirements/examples.txt
+python -m notebook --ServerApp.root_dir="$PWD/examples/notebooks"
+```
 
 
 ## 贡献

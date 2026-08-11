@@ -5,10 +5,14 @@ on:
     paths:
       - ".dockerignore"
       - "Dockerfile"
+      - "examples/**"
+      - "LICENSE.txt"
       - "MANIFEST.in"
       - "pyproject.toml"
+      - "README.md"
       - "setup.py"
       - "python/**"
+      - "requirements/examples.txt"
       - ".github/workflows/containers.yml"
   push:
     branches:
@@ -55,10 +59,34 @@ jobs:
           context: .
           build-args: FROM_IMAGE=${{ matrix.base }}
           platforms: linux/amd64
+          load: true
           push: false
           tags: local/jittor:${{ matrix.image }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+      - name: Smoke-test default notebook command
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="local/jittor:${{ matrix.image }}"
+          docker run --rm --entrypoint sh "${image}" -c \
+            'test -n "$(find /opt/jittor/examples/notebooks -type f -name "*.ipynb" -print -quit)"'
+          container="$(docker run --detach "${image}")"
+          trap 'docker rm --force "${container}" >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 60); do
+            if [[ "$(docker inspect --format '{{.State.Running}}' "${container}")" != true ]]; then
+              docker logs "${container}"
+              exit 1
+            fi
+            if docker logs "${container}" 2>&1 | grep -Eq 'Jupyter Server.*is running at|http://'; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs "${container}"
+          echo 'notebook server did not become ready' >&2
+          exit 1
 
   publish:
     name: Publish ${{ matrix.name }} image

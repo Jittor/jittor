@@ -21,15 +21,13 @@ def _check_values(name, actual, expected):
 
 def _backend_name():
     use_cuda = bool(getattr(jt.flags, "use_cuda", 0))
-    if bool(getattr(jt.flags, "use_acl", 0)) or (
-        use_cuda and bool(getattr(jt.compiler, "has_acl", 0))
-    ):
+    if not use_cuda:
+        return "cpu"
+    if bool(getattr(jt.compiler, "has_acl", 0)):
         return "npu"
-    if bool(getattr(jt.flags, "use_rocm", 0)) or (
-        use_cuda and bool(getattr(jt.compiler, "has_rocm", 0))
-    ):
+    if bool(getattr(jt.compiler, "has_rocm", 0)):
         return "rocm"
-    return "cuda" if use_cuda else "cpu"
+    return "cuda"
 
 
 def run():

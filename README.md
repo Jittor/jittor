@@ -187,7 +187,8 @@ docker run -it -p 8888:8888 jittor/jittor
 
 ## manual install
 
-We will show how to install Jittor in Ubuntu 16.04 step by step, Other Linux distributions may have similar commands.
+The following steps use packages from a currently supported Debian or Ubuntu
+release. Other maintained Linux distributions provide equivalent packages.
 
 
 ### Step 1: Choose your back-end compiler
@@ -197,9 +198,8 @@ We will show how to install Jittor in Ubuntu 16.04 step by step, Other Linux dis
 # g++
 sudo apt install g++ build-essential libomp-dev
 
-# OR clang++-8
-wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install_llvm.sh > /tmp/llvm.sh
-bash /tmp/llvm.sh 8
+# OR Clang from a supported Debian/Ubuntu release
+sudo apt install clang libomp-dev
 ```
 ### Step 2: Install Python and python-dev
 
@@ -208,7 +208,7 @@ Jittor need python version >= 3.7.
 
 
 ```bash
-sudo apt install python3.7 python3.7-dev
+sudo apt install python3 python3-dev python3-pip
 ```
 
 ### Step 3: Run Jittor
@@ -219,14 +219,15 @@ The whole framework is compiled Just-in-time. Let's install jittor via pip
 
 ```bash
 git clone https://github.com/Jittor/jittor.git
-sudo pip3.7 install ./jittor
-export cc_path="clang++-8"
+python3 -m pip install ./jittor
+# Optional: select Clang installed in Step 1
+export cc_path="$(command -v clang++)"
 # if other compiler is used, change cc_path
 # export cc_path="g++"
 # export cc_path="icc"
 
 # run a simple test
-python3.7 -m jittor.selftest
+python3 -m jittor.selftest
 ```
 if the test is passed, your Jittor is ready.
 
@@ -241,7 +242,7 @@ Using CUDA in Jittor is very simple, Just setup environment value `nvcc_path`
 # replace this var with your nvcc location 
 export nvcc_path="/usr/local/cuda/bin/nvcc" 
 # run a simple cuda test
-use_cuda=1 python3.7 -m jittor.selftest
+use_cuda=1 python3 -m jittor.selftest
 ```
 if the test is passed, your can use Jittor with CUDA by setting `use_cuda` flag.
 
@@ -258,8 +259,8 @@ To check the integrity of Jittor, you can run Resnet18 training test. Note: 6G G
 
 
 ```bash
-python3.7 -m pip install pytest==7.4.4
-python3.7 -m pytest tests/models/test_resnet.py -v
+python3 -m pip install pytest==7.4.4
+python3 -m pytest tests/models/test_resnet.py -v
 ```
 if those tests are failed, please report bugs for us, and feel free to contribute ^_^
 
@@ -354,13 +355,19 @@ If you want to know more about Jittor, please check out the notebooks below:
 
 
 
-[1]: python/jittor/notebook/example.src.md	"example"
-[2]: python/jittor/notebook/basics.src.md	"basics"
-[3]: python/jittor/notebook/meta_op.src.md	"meta_op"
-[4]: python/jittor/notebook/custom_op.src.md	"custom_op"
-[5]: python/jittor/notebook/profiler.src.md	"profiler"
+[1]: examples/notebooks/example.md	"example"
+[2]: examples/notebooks/basics.md	"basics"
+[3]: examples/notebooks/meta_op.md	"meta_op"
+[4]: examples/notebooks/custom_op.md	"custom_op"
+[5]: examples/notebooks/profiler.md	"profiler"
 
-Those notebooks can be started in your own computer by `python3.7 -m jittor.notebook`
+Install the example dependencies and open the repository notebooks with the
+standard Jupyter Notebook entry point:
+
+```bash
+python -m pip install -r requirements/examples.txt
+python -m notebook --ServerApp.root_dir="$PWD/examples/notebooks"
+```
 
 
 ## Contributing
