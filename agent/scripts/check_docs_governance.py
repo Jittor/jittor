@@ -12,13 +12,10 @@ from urllib.parse import unquote, urlsplit
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# These trees are historical evidence or are owned by a parallel documentation
-# migration. They are not authoritative inputs to the active-document gate.
+# These trees are historical evidence, not authoritative active documentation.
 EXCLUDED_PREFIXES = (
     "agent/baselines/",
     "agent/results/",
-    "doc/",
-    "tools/docs/legacy/",
 )
 
 REQUIRED_DOCUMENTS = (
