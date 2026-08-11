@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Jittor 1.3.11.0\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-12 02:07+0800\n"
+"POT-Creation-Date: 2026-08-12 04:08+0800\n"
 "PO-Revision-Date: 2026-08-11 18:11+0000\n"
 "Last-Translator: Jittor contributors\n"
 "Language: zh_CN\n"
@@ -18,41 +18,66 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.18.0\n"
 
-#: 28f2cc15524b450884fe3de57d567f97
+#: ca3070e98d304f29ba5c4d4f097a5dcb
 msgid "Jittor 2.0 Migration Notes"
 msgstr "计图 2.0 迁移说明"
 
-#: 0c524126f84542048acc0863f7af4bae
+#: 5040fead602e4621850386aa59439842
 msgid "Breaking Changes"
 msgstr ""
 
-#: dc44920de0354d4db1423e3ca65a1130
+#: dabe42f6537b4007b6907b9505dd8aec
+msgid "Torch compatibility no longer replaces the Jittor package version"
+msgstr "Torch 兼容层不再覆盖 Jittor 包版本"
+
+#: b3e9e02930c441d7ad9032a182b4d277
+msgid ""
+"`jittor.__version__` now always reports the installed Jittor distribution"
+" version (`1.3.11.0` for this release line), including when the deployed "
+"Torch entry point is used and `torch is jittor`. Code that needs the "
+"emulated PyTorch API level must use `jittor.__torch_version__` or "
+"`torch.version.__version__`; both currently report `2.11.0`."
+msgstr ""
+
+#: 7e6fdce7aa3340fe81c18f3a023a6be3
+msgid ""
+"Required Torch compatibility installers always fail with a named install "
+"step, even when `JITTOR_TORCH_STRICT_BOOTSTRAP` is disabled. That switch "
+"controls the optional shim runtime bootstrap only; it cannot hide an "
+"incomplete core API. The deployment CLI verification command reports the "
+"Torch API version through `torch.__torch_version__` and "
+"`torch.version.__version__`, not the Jittor backend version exposed as "
+"`torch.__version__` by the same-module entry point."
+msgstr ""
+
+#: 661539633a73440e8e8a512deb4e32b7
 msgid "`jittor.vcompiler` retired"
 msgstr ""
 
-#: 0f8de33c63c44447baa04915d0b335a5
+#: cd223e670fae4bc495c0a6815254f685
 msgid ""
 "Jittor 2.0 removes the experimental `jittor.vcompiler` package and its "
-"`build()` decorator. Importing that package compiled a private C++ static-"
-"graph extension as a side effect, and the API had no in-repository consumer "
-"or stable compatibility contract. Source checkouts and installed wheels now "
-"both report no module specification for `jittor.vcompiler`."
+"`build()` decorator. Importing that package compiled a private C++ "
+"static-graph extension as a side effect, and the API had no in-repository"
+" consumer or stable compatibility contract. Source checkouts and "
+"installed wheels now both report no module specification for "
+"`jittor.vcompiler`."
 msgstr ""
 
-#: 889166ca8799403a9cc6dcd456f97706
+#: 603d3823c4ef41da8d0dec06f88a83f9
 msgid ""
-"There is no drop-in replacement for its cached static-graph decorator. Use "
-"normal Jittor graph execution for model code. Extension authors who need a "
-"custom operation should use the maintained `jittor.compile_custom_op` or "
-"`jittor.compile_custom_ops` interfaces and explicitly test forward and "
-"backward behavior on each supported backend."
+"There is no drop-in replacement for its cached static-graph decorator. "
+"Use normal Jittor graph execution for model code. Extension authors who "
+"need a custom operation should use the maintained "
+"`jittor.compile_custom_op` or `jittor.compile_custom_ops` interfaces and "
+"explicitly test forward and backward behavior on each supported backend."
 msgstr ""
 
-#: c9c3d6c79b7f499fafd45efd5c5e8f8e
+#: 221da21ef75f4f34bdc545bfbe75ef8c
 msgid "Repository-only payload moved out of the wheel"
 msgstr ""
 
-#: 02dcdb049f3641f1a19a6989f1697f1c
+#: 909085343be2443ab8fa5e7363dc9a38
 msgid ""
 "Operational scripts, release utilities, examples, and notebooks now live "
 "under root `tools/` and `examples/`. They remain available in the source "
@@ -60,18 +85,18 @@ msgid ""
 "Installed-environment validation uses `python -m jittor.selftest`."
 msgstr ""
 
-#: 70ba3067f7b74b8ca810093a46819f87
+#: 7754273202ef4e63a33a346a62619caf
 msgid ""
-"MyST Markdown under `examples/notebooks/` is the canonical tutorial source. "
-"Generated `.ipynb` files are no longer versioned or shipped in the source "
-"distribution; `python -m nox -s tutorials` materializes them in external "
-"state and runs the maintained offline CPU smoke set."
+"MyST Markdown under `examples/notebooks/` is the canonical tutorial "
+"source. Generated `.ipynb` files are no longer versioned or shipped in "
+"the source distribution; `python -m nox -s tutorials` materializes them "
+"in external state and runs the maintained offline CPU smoke set."
 msgstr ""
 
-#: e08f1694ab6e419a838b522e922afe72
+#: 267e9a7de6544e72bf91f9f8394e9ea3
 msgid ""
 "The legacy Clang pass under `jittor/extern/llvm` and the callable "
-"`jittor.compiler.compile_extern()` are not removed in this release stage. "
-"Their retirement is deferred until the Linux/Clang cold-compilation gate "
-"passes."
+"`jittor.compiler.compile_extern()` are not removed in this release stage."
+" Their retirement is deferred until the Linux/Clang cold-compilation gate"
+" passes."
 msgstr ""
