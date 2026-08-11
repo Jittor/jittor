@@ -411,10 +411,7 @@ def structure(session):
     sdist_wheels = sorted(sdist_wheel_dist.glob("*.whl"))
     if len(sdist_wheels) != 1:
         session.error("expected exactly one sdist-derived wheel, found %d" % len(sdist_wheels))
-    wheel_args = tuple(session.posargs) or (
-        "--removal-allowlist",
-        "agent/baselines/wheel-removals-stage6.txt",
-    )
+    wheel_args = tuple(session.posargs)
     for wheel in (wheels[0], sdist_wheels[0]):
         session.run(
             "python",

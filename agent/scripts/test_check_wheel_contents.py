@@ -62,6 +62,43 @@ class TestWheelContents(unittest.TestCase):
             status = checker.main([str(argument) for argument in arguments])
         return status, stdout.getvalue(), stderr.getvalue()
 
+    def test_repository_default_policy_is_the_clean_stage7_baseline(self):
+        self.assertEqual(checker.DEFAULT_BASELINE.name, "wheel-contents-stage7.txt")
+        self.assertEqual(
+            checker.DEFAULT_ADDITION_ALLOWLIST.name,
+            "wheel-additions-final.txt",
+        )
+        self.assertEqual(
+            checker.DEFAULT_CONTENT_CHANGE_ALLOWLIST.name,
+            "wheel-content-changes-final.txt",
+        )
+
+        baseline = checker._read_hashed_path_list(
+            checker.DEFAULT_BASELINE, "default baseline"
+        )
+        self.assertEqual(len(baseline), 749)
+        self.assertTrue(set(checker.REQUIRED_MEMBERS).issubset(baseline))
+        pollution = {
+            name: checker._pollution_reason(name)
+            for name in baseline
+            if checker._pollution_reason(name) is not None
+        }
+        self.assertEqual(pollution, {})
+        self.assertEqual(
+            checker._read_hashed_path_list(
+                checker.DEFAULT_ADDITION_ALLOWLIST,
+                "default addition allowlist",
+            ),
+            {},
+        )
+        self.assertEqual(
+            checker._read_hashed_path_list(
+                checker.DEFAULT_CONTENT_CHANGE_ALLOWLIST,
+                "default content-change allowlist",
+            ),
+            {},
+        )
+
     def test_hash_manifest_accepts_an_unchanged_wheel(self):
         old_wheel = self._wheel("old.whl", self.base_members)
         candidate = self._wheel("candidate.whl", self.base_members)

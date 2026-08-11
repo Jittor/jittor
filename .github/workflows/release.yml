@@ -67,8 +67,7 @@ jobs:
           set -euo pipefail
           wheel="$(find dist -maxdepth 1 -type f -name 'jittor-*-py3-none-any.whl' -print)"
           test -n "${wheel}"
-          python agent/scripts/check_wheel_contents.py compare "${wheel}" \
-            --removal-allowlist agent/baselines/wheel-removals-stage6.txt
+          python agent/scripts/check_wheel_contents.py compare "${wheel}"
       - name: Audit canonical source distribution contents
         shell: bash
         run: |
@@ -86,8 +85,7 @@ jobs:
             --wheel-dir sdist-wheel "${sdist}"
           wheel="$(find sdist-wheel -maxdepth 1 -type f -name 'jittor-*-py3-none-any.whl' -print)"
           test -n "${wheel}"
-          python agent/scripts/check_wheel_contents.py compare "${wheel}" \
-            --removal-allowlist agent/baselines/wheel-removals-stage6.txt
+          python agent/scripts/check_wheel_contents.py compare "${wheel}"
       - name: Upload canonical artifacts
         uses: actions/upload-artifact@v6
         with:
