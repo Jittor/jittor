@@ -109,6 +109,7 @@ class TestStage2Delivery(unittest.TestCase):
         ):
             self.assertIn(token, benchmark)
         self.assertIn('env["ASV_PYTHONPATH"]', benchmark)
+        self.assertIn('"tests/optim"', source)
 
         structure_workflow = (self.workflows / "structure.yml").read_text(encoding="utf-8")
         self.assertIn("nox / packaging", structure_workflow)

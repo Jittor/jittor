@@ -107,6 +107,7 @@ CPU_TESTS = (
     "tests/nn/test_nn_capabilities.py",
     "tests/ops/test_cumprod_op.py",
     "tests/ops/test_reduce_op.py",
+    "tests/optim",
     "tests/compat/torch/test_torch_compat_grad_management.py",
     "tests/compat/torch/test_torch_bootstrap.py::TestTorchBootstrap::test_preflight_nvcc_flags_keep_command_separators",
     "tests/integration/test_notebooks.py",
