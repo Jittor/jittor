@@ -5,7 +5,7 @@ import unittest
 
 import numpy as np
 import jittor as jt
-from jittor.torch_compat import _GradScaler, _clip_grad_norm_device
+from jittor.compat.torch import _GradScaler, _clip_grad_norm_device
 
 
 _DEVICES = [("cpu", 0)] + ([ ("cuda", 1) ] if jt.has_cuda else [])

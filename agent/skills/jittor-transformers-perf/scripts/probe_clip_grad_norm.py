@@ -16,7 +16,7 @@ from typing import Callable
 import numpy as np
 
 import jittor as jt
-from jittor.torch_compat import _clip_grad_norm_device
+from jittor.compat.torch import _clip_grad_norm_device
 
 
 from _paths import WORK_ROOT

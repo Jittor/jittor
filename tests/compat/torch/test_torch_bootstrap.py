@@ -413,7 +413,7 @@ class TestTorchBootstrap(unittest.TestCase):
         entry_file.read.assert_called_once_with(65536)
 
     def test_scan_torch_extension_setup(self):
-        from jittor.torch_shim import scan_extension_dirs
+        from jittor.compat.shim import scan_extension_dirs
 
         with tempfile.TemporaryDirectory(dir=str(_TEST_STATE_ROOT)) as d:
             root = os.path.join(d, "pkg")
@@ -543,7 +543,7 @@ class TestTorchBootstrap(unittest.TestCase):
             self.assertFalse(result["project_policy_leaked"])
 
     def test_required_install_failure_propagates_for_both_bootstrap_policies(self):
-        from jittor.torch_shim import enable
+        from jittor.compat.shim import enable
 
         with tempfile.TemporaryDirectory(dir=str(_TEST_STATE_ROOT)) as d:
             old_sys_path = list(sys.path)

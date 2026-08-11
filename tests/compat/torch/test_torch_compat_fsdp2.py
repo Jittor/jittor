@@ -55,7 +55,7 @@ class TestFSDP2Compat(unittest.TestCase):
         return fsdp, state, entries, full_params
 
     def _fake_flat_fsdp_state(self, values):
-        from jittor import torch_fsdp2_compat as fsdp
+        fsdp = canonical_fsdp
 
         owner = types.SimpleNamespace()
         arrays = [np.asarray(value, dtype="float32") for value in values]

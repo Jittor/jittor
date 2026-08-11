@@ -2,6 +2,7 @@
 
 from __future__ import print_function
 
+import ast
 import os
 from pathlib import Path
 import subprocess
@@ -33,6 +34,109 @@ class TestCleanupStructure(unittest.TestCase):
         for relative in retired:
             with self.subTest(path=relative):
                 self.assertFalse((self.repo_root / relative).exists())
+
+    def test_active_python_imports_use_canonical_runtime_modules(self):
+        retired_modules = (
+            "jittor._misc",
+            "jittor._nn",
+            "jittor._pool",
+            "jittor._torch_compat",
+            "jittor._torch_fsdp2",
+            "jittor.depthwise_conv",
+            "jittor.monkeypatch_ops",
+            "jittor.torch_compat",
+            "jittor.torch_fsdp2_compat",
+            "jittor.torch_shim",
+            "jittor.triton_shim",
+            "jittor_fsdp2",
+        )
+        intentional_compatibility_imports = [
+            (
+                "tests/compat/torch/test_torch_shim_aliases.py",
+                "jittor.torch_shim.flashattn_jittor",
+            ),
+            (
+                "tests/compat/torch/test_torch_shim_aliases.py",
+                "jittor.triton_shim",
+            ),
+            (
+                "tests/structure/test_nn_structure.py",
+                "jittor.depthwise_conv",
+            ),
+            (
+                "tests/structure/test_torch_compat_structure.py",
+                "jittor.torch_compat",
+            ),
+            (
+                "tests/structure/test_torch_compat_structure.py",
+                "jittor.torch_compat",
+            ),
+            (
+                "tests/structure/test_torch_fsdp2_structure.py",
+                "jittor.torch_fsdp2_compat",
+            ),
+            (
+                "tests/structure/test_torch_fsdp2_structure.py",
+                "jittor.torch_fsdp2_compat.api",
+            ),
+            (
+                "tests/structure/test_triton_structure.py",
+                "jittor.triton_shim",
+            ),
+            (
+                "tests/structure/test_triton_structure.py",
+                "jittor.triton_shim.*",
+            ),
+        ]
+        roots = (
+            "agent/scripts",
+            "agent/skills",
+            "docs",
+            "examples",
+            "python",
+            "tests",
+            "tools",
+        )
+        paths = [self.repo_root / "noxfile.py", self.repo_root / "setup.py"]
+        for root in roots:
+            paths.extend((self.repo_root / root).rglob("*.py"))
+
+        found = []
+        for path in sorted(paths):
+            relative = path.relative_to(self.repo_root).as_posix()
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=relative)
+            for node in ast.walk(tree):
+                imported = []
+                if isinstance(node, ast.Import):
+                    imported.extend(alias.name for alias in node.names)
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    imported.append(node.module)
+                    imported.extend(node.module + "." + alias.name for alias in node.names)
+                elif isinstance(node, ast.Call) and node.args:
+                    is_import_module = (
+                        isinstance(node.func, ast.Attribute) and node.func.attr == "import_module"
+                    ) or (isinstance(node.func, ast.Name) and node.func.id == "import_module")
+                    is_builtin_import = (
+                        isinstance(node.func, ast.Name) and node.func.id == "__import__"
+                    )
+                    argument = node.args[0]
+                    if (is_import_module or is_builtin_import) and isinstance(argument, ast.Str):
+                        imported.append(argument.s)
+                    elif (
+                        (is_import_module or is_builtin_import)
+                        and isinstance(argument, ast.BinOp)
+                        and isinstance(argument.op, ast.Add)
+                        and isinstance(argument.left, ast.Str)
+                    ):
+                        imported.append(argument.left.s + "*")
+                for module in imported:
+                    if any(
+                        module == retired or module.startswith(retired + ".")
+                        for retired in retired_modules
+                    ):
+                        found.append((relative, module))
+
+        self.assertEqual(sorted(found), intentional_compatibility_imports)
 
     def test_documentation_has_one_root_readme_and_semantic_owners(self):
         retired = (

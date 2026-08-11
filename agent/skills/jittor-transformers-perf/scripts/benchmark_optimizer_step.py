@@ -48,7 +48,7 @@ def main() -> int:
 
     sys.modules["torch"] = torch
     torch.flags.use_cuda = 1
-    from jittor.torch_compat import _GradScaler, _clip_grad_norm_device
+    from jittor.compat.torch import _GradScaler, _clip_grad_norm_device
 
     counts = [int(value) for value in args.counts.split(",")]
     optimizer_names = [value.strip() for value in args.optimizers.split(",")]
