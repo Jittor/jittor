@@ -45,6 +45,8 @@ done < <(find "$REPO_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
 for forbidden_path in \
   "$REPO_ROOT/jittor_fsdp2" \
   "$REPO_ROOT/python/jittor/torch_fsdp2_compat.py" \
+  "$REPO_ROOT/python/jittor/torch_fsdp2_compat" \
+  "$REPO_ROOT/python/jittor/_torch_fsdp2" \
   "$REPO_ROOT/python/jittor/nn.py" \
   "$REPO_ROOT/python/jittor/_nn" \
   "$REPO_ROOT/python/jittor/misc.py" \

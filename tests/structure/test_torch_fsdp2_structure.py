@@ -1,29 +1,30 @@
-"""Architecture contracts for the FSDP2 compatibility package."""
+"""Architecture contracts for the canonical FSDP2 compatibility package."""
 
 import ast
+import base64
 import enum
 import hashlib
 import importlib
 import inspect
 import json
+import os
 import pickle
 from pathlib import Path
+import subprocess
 import sys
-import types
 import unittest
 
 import jittor as jt
-from jittor import torch_fsdp2_compat as fsdp
-from jittor._torch_fsdp2 import compat_types
-from jittor._torch_fsdp2 import config
-from jittor._torch_fsdp2 import dtensor
-from jittor._torch_fsdp2 import fsdp_api
-from jittor._torch_fsdp2 import grad_sync
-from jittor._torch_fsdp2 import installer
-from jittor._torch_fsdp2 import optimizer
-from jittor._torch_fsdp2 import runtime
-from jittor._torch_fsdp2 import shard_common
-from jittor._torch_fsdp2 import shard_runtime
+from jittor.compat import fsdp2 as fsdp
+from jittor.compat.fsdp2 import api
+from jittor.compat.fsdp2 import common
+from jittor.compat.fsdp2 import compat_types
+from jittor.compat.fsdp2 import config
+from jittor.compat.fsdp2 import dtensor
+from jittor.compat.fsdp2 import grad_sync
+from jittor.compat.fsdp2 import installer
+from jittor.compat.fsdp2 import optimizer
+from jittor.compat.fsdp2 import shard
 
 
 _PUBLIC_NAMES = {
@@ -53,7 +54,7 @@ _PUBLIC_NAMES = {
 }
 
 _OWNERSHIP = {
-    shard_common: {
+    common: {
         "_prod", "_world_size", "_rank", "_in_true_distributed", "_nccl_ops",
         "_flatten_var", "_ceil_div", "_pad_flat", "_slice_flat",
         "_all_gather_shards", "_reduce_scatter_padded", "_param_numel",
@@ -76,7 +77,7 @@ _OWNERSHIP = {
         "OffloadPolicy", "CPUOffloadPolicy", "NoOffloadPolicy",
         "DataParallelMeshDims", "UnshardHandle",
     },
-    shard_runtime: {
+    shard: {
         "_flat_local_overlap", "_flat_entry_slices", "_refresh_flat_entry_shards",
         "_mark_fsdp_param_var", "_fsdp_param_entry", "is_fsdp_managed_param",
         "_fsdp_var_to_local", "_fsdp_var_full_tensor", "_fsdp_var_redistribute",
@@ -102,7 +103,7 @@ _OWNERSHIP = {
         "_optimizer_kind", "optimizer_step", "sharded_sgd_step",
         "local_sharded_state_dict",
     },
-    fsdp_api: {
+    api: {
         "_FSDPModuleMeta", "FSDPModule", "_FSDP_METHODS",
         "_inject_fsdp_methods", "fully_shard", "register_fsdp_forward_method",
         "share_comm_ctx", "FullyShardedDataParallel", "ShardedGradScaler",
@@ -151,99 +152,116 @@ _REGISTERED_MODULES = (
     "torch.distributed.algorithms._checkpoint.checkpoint_wrapper",
 )
 
-
-class _ModuleImportVisitor(ast.NodeVisitor):
-    def __init__(self):
-        self.violations = []
-
-    def visit_FunctionDef(self, node):
-        return
-
-    visit_AsyncFunctionDef = visit_FunctionDef
-    visit_Lambda = visit_FunctionDef
-
-    def visit_Import(self, node):
-        for alias in node.names:
-            if alias.name == "jittor" or alias.name.startswith("jittor."):
-                self.violations.append((node.lineno, alias.name))
-
-    def visit_ImportFrom(self, node):
-        if node.level >= 2:
-            self.violations.append((node.lineno, "." * node.level + (node.module or "")))
-        elif node.level == 0 and node.module and (
-            node.module == "jittor" or node.module.startswith("jittor.")
-        ):
-            self.violations.append((node.lineno, node.module))
+_LEGACY_PICKLES = {
+    "DeviceMesh": "gAJjaml0dG9yLnRvcmNoX2ZzZHAyX2NvbXBhdApEZXZpY2VNZXNoCnEALg==",
+    "FSDPModule": "gAJjaml0dG9yLnRvcmNoX2ZzZHAyX2NvbXBhdApGU0RQTW9kdWxlCnEALg==",
+    "FullStateDictConfig": "gAJjaml0dG9yLnRvcmNoX2ZzZHAyX2NvbXBhdApGdWxsU3RhdGVEaWN0Q29uZmlnCnEALg==",
+    "FullyShardedDataParallel": "gAJjaml0dG9yLnRvcmNoX2ZzZHAyX2NvbXBhdApGdWxseVNoYXJkZWREYXRhUGFyYWxsZWwKcQAu",
+    "Shard": "gAJjaml0dG9yLnRvcmNoX2ZzZHAyX2NvbXBhdApTaGFyZApxAC4=",
+    "StateDictType": "gAJjaml0dG9yLnRvcmNoX2ZzZHAyX2NvbXBhdApTdGF0ZURpY3RUeXBlCnEALg==",
+    "StateDictType_FULL_STATE_DICT": "gAJjaml0dG9yLnRvcmNoX2ZzZHAyX2NvbXBhdApTdGF0ZURpY3RUeXBlCnEAWAQAAABmdWxscQGFcQJScQMu",
+}
 
 
 class TestTorchFSDP2Structure(unittest.TestCase):
-    def test_root_file_is_replaced_by_stable_package_facade(self):
-        facade_path = Path(fsdp.__file__).resolve()
-        self.assertEqual(facade_path.name, "__init__.py")
-        self.assertEqual(facade_path.parent.name, "torch_fsdp2_compat")
-        self.assertFalse((facade_path.parent.parent / "torch_fsdp2_compat.py").exists())
+    def test_canonical_package_and_legacy_alias_are_one_object(self):
+        package_path = Path(fsdp.__file__).resolve()
+        self.assertEqual(package_path.parent.name, "fsdp2")
+        self.assertEqual(package_path.parent.parent.name, "compat")
+        jittor_root = package_path.parents[2]
+        self.assertFalse((jittor_root / "_torch_fsdp2").exists())
+        self.assertFalse((jittor_root / "torch_fsdp2_compat").exists())
+        legacy = importlib.import_module("jittor.torch_fsdp2_compat")
+        self.assertIs(legacy, fsdp)
+        self.assertIs(sys.modules["jittor.torch_fsdp2_compat"], fsdp)
         self.assertIs(jt.torch_fsdp2_compat, fsdp)
-        self.assertIsInstance(jt._torch_fsdp2, types.ModuleType)
-        self.assertFalse(hasattr(fsdp, "__all__"))
+        self.assertEqual(set(fsdp.__all__), _PUBLIC_NAMES)
+        self.assertEqual(len(fsdp.__all__), 79)
         self.assertEqual(
             {name for name in vars(fsdp) if not name.startswith("_")},
             _PUBLIC_NAMES,
         )
+        namespace = {}
+        exec("from jittor.compat.fsdp2 import *", {}, namespace)
+        self.assertEqual(set(namespace), _PUBLIC_NAMES)
 
-    def test_private_ownership_and_facade_identity(self):
+    def test_canonical_and_legacy_first_import_orders(self):
+        repo_root = Path(fsdp.__file__).resolve().parents[4]
+        env = os.environ.copy()
+        python_root = str(repo_root / "python")
+        env["PYTHONPATH"] = os.pathsep.join(filter(None, (
+            python_root, env.get("PYTHONPATH", ""))))
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        template = r"""
+import importlib
+import sys
+first = importlib.import_module(%r)
+second = importlib.import_module(%r)
+import jittor
+assert first is second
+assert second is sys.modules['jittor.compat.fsdp2']
+assert second is sys.modules['jittor.torch_fsdp2_compat']
+assert second is jittor.torch_fsdp2_compat
+"""
+        for first, second in (
+            ("jittor.compat.fsdp2", "jittor.torch_fsdp2_compat"),
+            ("jittor.torch_fsdp2_compat", "jittor.compat.fsdp2"),
+        ):
+            result = subprocess.run(
+                [sys.executable, "-c", template % (first, second)],
+                cwd=str(repo_root), env=env, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True, timeout=180,
+            )
+            self.assertEqual(
+                result.returncode, 0,
+                "import order %s -> %s failed:\n%s\n%s"
+                % (first, second, result.stdout, result.stderr),
+            )
+
+    def test_implementation_ownership_and_real_origins(self):
         names = set()
         for module, expected in _OWNERSHIP.items():
             with self.subTest(module=module.__name__):
-                self.assertEqual(set(module.FACADE_EXPORTS), expected)
+                self.assertEqual(set(module._EXPORTS), expected)
                 self.assertTrue(names.isdisjoint(expected))
                 names.update(expected)
                 for name in expected:
-                    self.assertIs(getattr(fsdp, name), getattr(module, name))
+                    value = getattr(module, name)
+                    self.assertIs(getattr(fsdp, name), value)
+                    if callable(value):
+                        self.assertEqual(value.__module__, module.__name__)
         self.assertIs(fsdp._install_fsdp2_distributed, fsdp.install)
-        self.assertIs(runtime.jt._module, jt)
-        self.assertIs(runtime.nn._module, jt.nn)
-        self.assertIs(runtime.fsdp._module, fsdp)
-
-    def test_origin_restoration_handles_bound_methods(self):
-        class DynamicModule:
-            def execute(self):
-                return None
-
-        module = DynamicModule()
-        runtime.preserve_facade_origins((module.execute,), source_module=__name__)
-        self.assertEqual(
-            DynamicModule.execute.__module__,
-            "jittor.torch_fsdp2_compat",
-        )
 
     def test_public_contract_signatures_reflection_and_pickle(self):
         public = sorted(name for name in vars(fsdp) if not name.startswith("_"))
         callables = {}
         for name in public:
             value = getattr(fsdp, name)
-            if callable(value) and getattr(value, "__module__", None) == fsdp.__name__:
-                is_enum = inspect.isclass(value) and issubclass(value, enum.Enum)
-                if is_enum:
-                    kind = "enum"
+            if not callable(value):
+                continue
+            is_enum = inspect.isclass(value) and issubclass(value, enum.Enum)
+            if is_enum:
+                kind = "enum"
+                signature = None
+                members = [(member.name, member.value) for member in value]
+            else:
+                kind = "class" if inspect.isclass(value) else type(value).__name__
+                try:
+                    signature = str(inspect.signature(value))
+                except (TypeError, ValueError):
                     signature = None
-                    members = [(member.name, member.value) for member in value]
-                else:
-                    kind = "class" if inspect.isclass(value) else type(value).__name__
-                    try:
-                        signature = str(inspect.signature(value))
-                    except (TypeError, ValueError):
-                        signature = None
-                    members = None
-                serialized = pickle.dumps(value)
-                self.assertIs(pickle.loads(serialized), value)
-                callables[name] = {
-                    "kind": kind,
-                    "members": members,
-                    "module": value.__module__,
-                    "qualname": value.__qualname__,
-                    "signature": signature,
-                    "pickle": bool(serialized),
-                }
+                members = None
+            serialized = pickle.dumps(value)
+            self.assertIs(pickle.loads(serialized), value)
+            self.assertTrue(value.__module__.startswith("jittor.compat.fsdp2."))
+            callables[name] = {
+                "kind": kind,
+                "members": members,
+                "module": "jittor.torch_fsdp2_compat",
+                "qualname": value.__qualname__,
+                "signature": signature,
+                "pickle": bool(serialized),
+            }
         payload = {"public": public, "callables": callables}
         encoded = json.dumps(
             payload, sort_keys=True, separators=(",", ":")
@@ -255,15 +273,77 @@ class TestTorchFSDP2Structure(unittest.TestCase):
             "ca8aea5689aa5280fcd65aa3157274e7f2cd0d2ee3e0d607ec14880d28e71e73",
         )
 
+    def test_protocol_2_legacy_pickle_fixtures_load_canonical_objects(self):
+        expected = {
+            "DeviceMesh": fsdp.DeviceMesh,
+            "FSDPModule": fsdp.FSDPModule,
+            "FullStateDictConfig": fsdp.FullStateDictConfig,
+            "FullyShardedDataParallel": fsdp.FullyShardedDataParallel,
+            "Shard": fsdp.Shard,
+            "StateDictType": fsdp.StateDictType,
+            "StateDictType_FULL_STATE_DICT": fsdp.StateDictType.FULL_STATE_DICT,
+        }
+        for name, encoded in _LEGACY_PICKLES.items():
+            payload = base64.b64decode(encoded)
+            with self.subTest(name=name):
+                self.assertEqual(payload[:2], b"\x80\x02")
+                self.assertIs(pickle.loads(payload), expected[name])
+
+        repo_root = Path(fsdp.__file__).resolve().parents[4]
+        env = os.environ.copy()
+        env["PYTHONPATH"] = os.pathsep.join(filter(None, (
+            str(repo_root / "python"), env.get("PYTHONPATH", ""))))
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        code = r"""
+import base64
+import pickle
+payload = base64.b64decode(%r)
+value = pickle.loads(payload)
+from jittor.compat import fsdp2
+assert value is fsdp2.DeviceMesh
+""" % _LEGACY_PICKLES["DeviceMesh"]
+        result = subprocess.run(
+            [sys.executable, "-c", code], cwd=str(repo_root), env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=180,
+        )
+        self.assertEqual(
+            result.returncode, 0,
+            "pickle-first legacy import failed:\n%s\n%s"
+            % (result.stdout, result.stderr),
+        )
+
     def test_registered_torch_modules_remain_idempotent(self):
         fsdp.install(jt.distributed, jt.__dict__)
         before = {name: sys.modules[name] for name in _REGISTERED_MODULES}
+        symbol_paths = (
+            ("torch.distributed.fsdp.wrap", "enable_wrap"),
+            ("torch.distributed.fsdp.wrap", "wrap"),
+            ("torch.distributed.tensor.parallel.style", "RowwiseParallel"),
+            ("torch.distributed._functional_collectives", "AsyncCollectiveTensor"),
+            (
+                "torch.distributed.algorithms._checkpoint.checkpoint_wrapper",
+                "CheckpointImpl",
+            ),
+            ("torch.distributed", "is_available"),
+        )
+        symbols_before = {
+            path: getattr(importlib.import_module(path[0]), path[1])
+            for path in symbol_paths
+        }
         fsdp.install(jt.distributed, jt.__dict__)
         after = {name: sys.modules[name] for name in _REGISTERED_MODULES}
+        symbols_after = {
+            path: getattr(importlib.import_module(path[0]), path[1])
+            for path in symbol_paths
+        }
         self.assertEqual(len(before), 37)
         for name in _REGISTERED_MODULES:
             with self.subTest(module=name):
                 self.assertIs(before[name], after[name])
+        for path in symbol_paths:
+            with self.subTest(symbol="%s.%s" % path):
+                self.assertIs(symbols_before[path], symbols_after[path])
 
         fsdp_mod = importlib.import_module("torch.distributed.fsdp")
         self.assertIs(fsdp_mod.FSDP, fsdp.FullyShardedDataParallel)
@@ -286,85 +366,83 @@ class TestTorchFSDP2Structure(unittest.TestCase):
             ).CheckpointImpl,
         )
         self.assertTrue(all(
-            value.__module__ == "jittor.torch_fsdp2_compat"
-            for value in origin_values
+            value.__module__ == installer.__name__ for value in origin_values
         ))
 
-        original_device_mesh = fsdp.DeviceMesh
-        class PatchedDeviceMesh:
-            pass
+        original_device_mesh = dtensor.DeviceMesh
+        created = object()
         try:
-            fsdp.DeviceMesh = PatchedDeviceMesh
-            fsdp.install(jt.distributed, jt.__dict__)
-            self.assertIs(
-                importlib.import_module("torch.distributed.tensor").DeviceMesh,
-                PatchedDeviceMesh,
-            )
-            self.assertIs(jt.distributed.DeviceMesh, PatchedDeviceMesh)
+            dtensor.DeviceMesh = lambda *args, **kwargs: created
+            self.assertIs(dtensor.init_device_mesh("cpu", (1,)), created)
         finally:
-            fsdp.DeviceMesh = original_device_mesh
-            fsdp.install(jt.distributed, jt.__dict__)
+            dtensor.DeviceMesh = original_device_mesh
 
-        original_fully_shard = fsdp.fully_shard
+        original_fully_shard = api.fully_shard
         wrapped = object()
         marker = object()
         try:
-            fsdp.fully_shard = lambda module, **kwargs: wrapped
+            api.fully_shard = lambda module, **kwargs: wrapped
             wrap_mod = importlib.import_module("torch.distributed.fsdp.wrap")
             self.assertIs(wrap_mod.wrap(marker), wrapped)
         finally:
-            fsdp.fully_shard = original_fully_shard
+            api.fully_shard = original_fully_shard
 
-        original_sync = fsdp.sync_sharded_grads
+        original_sync = grad_sync.sync_sharded_grads
         synced = object()
         try:
-            fsdp.sync_sharded_grads = lambda *args, **kwargs: synced
+            grad_sync.sync_sharded_grads = lambda *args, **kwargs: synced
             self.assertIs(fsdp.FSDPModule().sync_sharded_grads(marker), synced)
         finally:
-            fsdp.sync_sharded_grads = original_sync
+            grad_sync.sync_sharded_grads = original_sync
 
-        original_distributed = fsdp._in_true_distributed
-        original_gather = fsdp._all_gather_shards
+        original_distributed = common._in_true_distributed
+        original_gather = common._all_gather_shards
         gathered = object()
         try:
-            fsdp._in_true_distributed = lambda: True
-            fsdp._all_gather_shards = lambda tensor: gathered
+            common._in_true_distributed = lambda: True
+            common._all_gather_shards = lambda tensor: gathered
             collectives = importlib.import_module(
                 "torch.distributed.fsdp._fully_shard._fsdp_collectives"
             )
             self.assertIs(collectives.all_gather(marker), gathered)
         finally:
-            fsdp._in_true_distributed = original_distributed
-            fsdp._all_gather_shards = original_gather
+            common._in_true_distributed = original_distributed
+            common._all_gather_shards = original_gather
 
-    def test_private_import_direction_and_file_budgets(self):
-        facade_lines = Path(fsdp.__file__).read_text(encoding="utf-8").splitlines()
-        self.assertLessEqual(len(facade_lines), 80)
-        for module in (runtime, *_OWNERSHIP):
+    def test_import_direction_file_budgets_and_package_discovery(self):
+        package_path = Path(fsdp.__file__).resolve()
+        self.assertLessEqual(len(package_path.read_text().splitlines()), 120)
+        for module in _OWNERSHIP:
             path = Path(module.__file__).resolve()
             source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=str(path))
             with self.subTest(module=module.__name__):
                 self.assertLessEqual(len(source.splitlines()), 400)
-                visitor = _ModuleImportVisitor()
-                visitor.visit(ast.parse(source, filename=str(path)))
-                self.assertEqual(visitor.violations, [])
+                self.assertNotIn("facade", source)
+                self.assertNotIn("preserve_facade_origins", source)
+                self.assertNotIn("_torch_fsdp2", source)
+                self.assertNotIn("torch_fsdp2_compat", source)
+                relative_imports = {
+                    alias.name
+                    for node in ast.walk(tree)
+                    if isinstance(node, ast.ImportFrom)
+                    and node.level == 1 and node.module is None
+                    for alias in node.names
+                }
                 if module is installer:
-                    relative_imports = {
-                        node.module
-                        for node in ast.walk(ast.parse(source, filename=str(path)))
-                        if isinstance(node, ast.ImportFrom) and node.level == 1
-                    }
-                    self.assertEqual(relative_imports, {"runtime"})
+                    self.assertEqual(relative_imports, {
+                        "api", "common", "compat_types", "config", "dtensor",
+                        "grad_sync", "optimizer", "shard",
+                    })
 
-    def test_package_discovery_includes_both_packages(self):
-        repo_root = Path(fsdp.__file__).resolve().parents[3]
+        repo_root = package_path.parents[4]
         if not (repo_root / "pyproject.toml").is_file():
             self.skipTest("packaging metadata is only available in a source checkout")
         from setuptools import find_packages
-
         packages = find_packages(where=str(repo_root / "python"))
-        self.assertIn("jittor._torch_fsdp2", packages)
-        self.assertIn("jittor.torch_fsdp2_compat", packages)
+        self.assertIn("jittor.compat.fsdp2", packages)
+        self.assertNotIn("jittor._torch_fsdp2", packages)
+        self.assertNotIn("jittor.torch_fsdp2_compat", packages)
 
 
 if __name__ == "__main__":

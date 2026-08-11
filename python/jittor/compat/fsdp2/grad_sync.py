@@ -2,10 +2,12 @@
 
 import numpy as np
 
-from .runtime import facade, jt
+import jittor as jt
+
+from . import common, shard
 
 
-FACADE_EXPORTS = (
+_EXPORTS = (
     "sync_sharded_grads",
     "_sync_sharded_grads_from_full_grads",
     "_globally_used_grads",
@@ -38,34 +40,34 @@ def sync_sharded_grads(module, loss=None, *, divide_by_world_size=True):
     has_forward_params = all(getattr(entry, "full_param", None) is not None
                              for entry in state.true_fsdp_params)
     if not getattr(state, "true_fsdp_unsharded", False) and not has_forward_params:
-        facade._unshard_module_params(module)
+        shard._unshard_module_params(module)
     full_params = [entry.full_param for entry in state.true_fsdp_params]
     full_grads = jt.grad(loss, full_params)
-    return facade._sync_sharded_grads_from_full_grads(
+    return _sync_sharded_grads_from_full_grads(
         state, full_grads, divide_by_world_size=divide_by_world_size)
 
 
 def _sync_sharded_grads_from_full_grads(state, full_grads, *, divide_by_world_size=True):
     if getattr(state, "true_fsdp_flat", False):
-        flat_grad = facade._pad_flat(
-            jt.concat([facade._flatten_var(grad) for grad in full_grads], dim=0),
+        flat_grad = common._pad_flat(
+            jt.concat([common._flatten_var(grad) for grad in full_grads], dim=0),
             state.true_fsdp_flat_padded_numel,
         )
-        flat_shard_grad = facade._reduce_scatter_padded(flat_grad)
+        flat_shard_grad = common._reduce_scatter_padded(flat_grad)
         if divide_by_world_size:
             flat_shard_grad = flat_shard_grad / max(int(state.true_fsdp_world_size), 1)
         flat_shard_grad = flat_shard_grad.stop_grad()
         state.true_fsdp_last_flat_grad = flat_shard_grad
         sharded = [
             grad.stop_grad()
-            for grad in facade._flat_entry_slices(state, flat_shard_grad)
+            for grad in shard._flat_entry_slices(state, flat_shard_grad)
         ]
         state.true_fsdp_last_grads = sharded
         return sharded
     sharded = []
     for entry, grad in zip(state.true_fsdp_params, full_grads):
-        flat = facade._pad_flat(facade._flatten_var(grad), entry.padded_numel)
-        shard = facade._reduce_scatter_padded(flat)
+        flat = common._pad_flat(common._flatten_var(grad), entry.padded_numel)
+        shard = common._reduce_scatter_padded(flat)
         if divide_by_world_size:
             shard = shard / max(int(state.true_fsdp_world_size), 1)
         shard = shard.stop_grad()
@@ -75,7 +77,7 @@ def _sync_sharded_grads_from_full_grads(state, full_grads, *, divide_by_world_si
 
 
 def _globally_used_grads(local_used):
-    if facade._world_size() <= 1:
+    if common._world_size() <= 1:
         return list(local_used)
     flags = jt.array(np.asarray(local_used, dtype=np.int32))
     if not callable(getattr(flags, "mpi_all_reduce", None)):
@@ -100,18 +102,18 @@ def _visible_full_grads_from_shards(state):
         for entry, used in zip(state.true_fsdp_params, visible):
             grad = getattr(entry.shard, "_torch_grad", None)
             part = grad if used else jt.zeros_like(entry.shard)
-            part_numel = facade._param_numel(part)
+            part_numel = common._param_numel(part)
             if part_numel:
-                parts.append(facade._flatten_var(part))
+                parts.append(common._flatten_var(part))
                 real_numel += part_numel
         if real_numel < int(state.true_fsdp_flat_shard_numel):
             parts.append(jt.zeros(
                 (int(state.true_fsdp_flat_shard_numel) - real_numel,),
                 dtype=state.true_fsdp_flat_shard.dtype))
         local_flat = parts[0] if len(parts) == 1 else jt.concat(parts, dim=0)
-        full_flat = local_flat if facade._world_size() <= 1 else facade._all_gather_shards(local_flat)
+        full_flat = local_flat if common._world_size() <= 1 else common._all_gather_shards(local_flat)
         return [
-            facade._slice_flat(full_flat, entry.flat_offset, entry.numel).reshape(entry.shape)
+            common._slice_flat(full_flat, entry.flat_offset, entry.numel).reshape(entry.shape)
             if used else None
             for entry, used in zip(state.true_fsdp_params, visible)
         ]
@@ -121,14 +123,14 @@ def _visible_full_grads_from_shards(state):
             out.append(None)
             continue
         local = getattr(entry.shard, "_torch_grad")
-        gathered = local if facade._world_size() <= 1 else facade._all_gather_shards(local)
-        gathered = facade._slice_flat(facade._flatten_var(gathered), 0, entry.numel)
+        gathered = local if common._world_size() <= 1 else common._all_gather_shards(local)
+        gathered = common._slice_flat(common._flatten_var(gathered), 0, entry.numel)
         out.append(gathered.reshape(entry.shape))
     return out
 
 
 def _local_grad_from_visible_full(state, entry, full_grad):
-    flat = facade._flatten_var(full_grad)
+    flat = common._flatten_var(full_grad)
     if getattr(state, "true_fsdp_flat", False):
         rank_start = int(state.true_fsdp_rank) * int(state.true_fsdp_flat_shard_numel)
         param_start = int(entry.flat_offset)
@@ -137,9 +139,9 @@ def _local_grad_from_visible_full(state, entry, full_grad):
         overlap_end = min(
             rank_start + int(state.true_fsdp_flat_shard_numel), param_end)
         start_in_param = max(overlap_start - param_start, 0)
-        return facade._slice_flat(flat, start_in_param, max(overlap_end - overlap_start, 0))
-    padded = facade._pad_flat(flat, entry.padded_numel)
-    return facade._slice_flat(
+        return common._slice_flat(flat, start_in_param, max(overlap_end - overlap_start, 0))
+    padded = common._pad_flat(flat, entry.padded_numel)
+    return common._slice_flat(
         padded, int(state.true_fsdp_rank) * int(entry.shard_numel),
         int(entry.shard_numel))
 
@@ -149,7 +151,7 @@ def _sync_visible_full_grads_to_optimizer(opt):
         params = list(pg.get("params", []))
         grads = pg.get("grads")
         for i, param in enumerate(params):
-            state, entry = facade._fsdp_param_entry(param)
+            state, entry = shard._fsdp_param_entry(param)
             if state is None:
                 continue
             full = getattr(entry, "full_param", None)
@@ -162,7 +164,7 @@ def _sync_visible_full_grads_to_optimizer(opt):
                 grads = pg["grads"] = [None] * len(params)
             while len(grads) < len(params):
                 grads.append(None)
-            local = facade._local_grad_from_visible_full(
+            local = _local_grad_from_visible_full(
                 state, entry, full_grad).stop_grad()
             existing = grads[i]
             if isinstance(existing, jt.Var) and list(existing.shape) == list(local.shape):
@@ -180,10 +182,10 @@ def _sync_visible_full_grads_to_optimizer(opt):
 
 
 def refresh_visible_full_grads(opt):
-    for state in facade._fsdp_states_from_optimizers([opt]):
+    for state in _fsdp_states_from_optimizers([opt]):
         for entry, full_grad in zip(
                 state.true_fsdp_params,
-                facade._visible_full_grads_from_shards(state)):
+                _visible_full_grads_from_shards(state)):
             full = getattr(entry, "full_param", None)
             if full is not None and isinstance(full_grad, jt.Var):
                 full_grad = full_grad.stop_grad()
@@ -204,7 +206,7 @@ def _fsdp_states_from_optimizers(optimizers):
     for opt in optimizers or ():
         for pg in getattr(opt, "param_groups", []):
             for param in pg.get("params", []):
-                state, _ = facade._fsdp_param_entry(param)
+                state, _ = shard._fsdp_param_entry(param)
                 if state is None:
                     continue
                 sid = id(state)
@@ -216,26 +218,26 @@ def _fsdp_states_from_optimizers(optimizers):
 
 
 def optimizer_has_fsdp_params(opt):
-    return bool(facade._fsdp_states_from_optimizers([opt]))
+    return bool(_fsdp_states_from_optimizers([opt]))
 
 
 def optimizer_has_non_fsdp_params(opt):
     for pg in getattr(opt, "param_groups", []):
         for param in pg.get("params", []):
-            if not facade.is_fsdp_managed_param(param):
+            if not shard.is_fsdp_managed_param(param):
                 return True
     return False
 
 
 def collect_fsdp_full_params_for_backward(optimizers):
     targets = []
-    for state in facade._fsdp_states_from_optimizers(optimizers):
+    for state in _fsdp_states_from_optimizers(optimizers):
         has_forward_params = all(getattr(entry, "full_param", None) is not None
                                  for entry in state.true_fsdp_params)
         if not has_forward_params:
             module = getattr(state, "true_fsdp_module", None)
             if module is not None:
-                facade._unshard_module_params(module)
+                shard._unshard_module_params(module)
         for entry in state.true_fsdp_params:
             full = getattr(entry, "full_param", None)
             if full is not None:
@@ -245,7 +247,7 @@ def collect_fsdp_full_params_for_backward(optimizers):
 
 def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
                                             divide_by_world_size=True):
-    states = facade._fsdp_states_from_optimizers(optimizers)
+    states = _fsdp_states_from_optimizers(optimizers)
     if not states:
         return False
     entry_grad = {}
@@ -259,8 +261,8 @@ def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
             if grad is None:
                 grad = jt.zeros(entry.shape, dtype=entry.dtype)
             full_grads.append(grad)
-        globally_used = facade._globally_used_grads(local_used)
-        sharded = facade._sync_sharded_grads_from_full_grads(
+        globally_used = _globally_used_grads(local_used)
+        sharded = _sync_sharded_grads_from_full_grads(
             state, full_grads, divide_by_world_size=divide_by_world_size)
         for entry, grad, used in zip(state.true_fsdp_params, sharded, globally_used):
             entry.last_grad = grad if used else None
@@ -277,7 +279,7 @@ def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
             while len(grads_list) < len(pg.get("params", [])):
                 grads_list.append(None)
             for i, param in enumerate(pg.get("params", [])):
-                state, entry = facade._fsdp_param_entry(param)
+                state, entry = shard._fsdp_param_entry(param)
                 if state is None:
                     continue
                 entry_key = (id(state), id(entry))
@@ -310,5 +312,5 @@ def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
         except Exception:
             pass
     for opt in optimizers or ():
-        facade.refresh_visible_full_grads(opt)
+        refresh_visible_full_grads(opt)
     return True

@@ -5,7 +5,9 @@ import types
 
 import numpy as np
 
-from .runtime import facade, jt, preserve_facade_origins
+import jittor as jt
+
+from . import common
 
 
 class DeviceMesh:
@@ -38,7 +40,7 @@ class DeviceMesh:
         if mesh_dim is not None:
             dim = mesh_dim
         if dim is None:
-            return facade._prod(self.shape)
+            return common._prod(self.shape)
         if isinstance(dim, str) and self.mesh_dim_names and dim in self.mesh_dim_names:
             dim = self.mesh_dim_names.index(dim)
         try:
@@ -53,7 +55,7 @@ class DeviceMesh:
         return False
 
     def get_rank(self, *args, **kwargs):
-        return facade._rank() if self.size() > 1 else 0
+        return common._rank() if self.size() > 1 else 0
 
     def get_local_rank(self, *args, **kwargs):
         try:
@@ -82,7 +84,7 @@ class DeviceMesh:
     @staticmethod
     def _concatenate(meshes, mesh_dim_name=None):
         meshes = list(meshes)
-        return meshes[0] if meshes else facade.DeviceMesh("cpu", (1,))
+        return meshes[0] if meshes else DeviceMesh("cpu", (1,))
 
     @classmethod
     def from_group(cls, group, device_type=None, mesh=None, mesh_dim_names=None, **kwargs):
@@ -90,20 +92,20 @@ class DeviceMesh:
 
 
 def init_device_mesh(device_type=None, mesh_shape=None, *, mesh_dim_names=None, **kwargs):
-    return facade.DeviceMesh(
+    return DeviceMesh(
         device_type=device_type, mesh=mesh_shape or (1,),
         mesh_dim_names=mesh_dim_names, **kwargs)
 
 
 class Placement:
     def is_shard(self):
-        return isinstance(self, facade.Shard)
+        return isinstance(self, Shard)
 
     def is_replicate(self):
-        return isinstance(self, facade.Replicate)
+        return isinstance(self, Replicate)
 
     def is_partial(self):
-        return isinstance(self, facade.Partial)
+        return isinstance(self, Partial)
 
     def __eq__(self, other):
         return type(self) is type(other) and self.__dict__ == getattr(other, "__dict__", {})
@@ -134,9 +136,9 @@ class Partial(Placement):
 
 
 def _mark_dtensor(tensor, device_mesh=None, placements=None):
-    mesh = device_mesh or facade.DeviceMesh(
+    mesh = device_mesh or DeviceMesh(
         "cuda" if getattr(jt, "has_cuda", 0) else "cpu", (1,))
-    pls = tuple(placements or (facade.Replicate(),))
+    pls = tuple(placements or (Replicate(),))
     try:
         object.__setattr__(tensor, "_dtensor_device_mesh", mesh)
         object.__setattr__(tensor, "_dtensor_placements", pls)
@@ -150,17 +152,12 @@ def _mark_dtensor(tensor, device_mesh=None, placements=None):
             object.__setattr__(tensor, "full_tensor", types.MethodType(lambda self, *a, **k: self, tensor))
         if not callable(getattr(tensor, "redistribute", None)):
             def _redistribute(self, device_mesh=None, placements=None, **kwargs):
-                return facade._mark_dtensor(
+                return _mark_dtensor(
                     self,
                     device_mesh or getattr(self, "_dtensor_device_mesh", None),
                     placements or getattr(self, "_dtensor_placements", None),
                 )
             object.__setattr__(tensor, "redistribute", types.MethodType(_redistribute, tensor))
-        preserve_facade_origins((
-            getattr(tensor, "to_local", None),
-            getattr(tensor, "full_tensor", None),
-            getattr(tensor, "redistribute", None),
-        ))
     except Exception:
         pass
     return tensor
@@ -174,15 +171,15 @@ class _DTensorMeta(type):
 class DTensor(metaclass=_DTensorMeta):
     def __init__(self, local_tensor, device_mesh=None, placements=None, **kwargs):
         self._local_tensor = local_tensor
-        self.device_mesh = device_mesh or facade.DeviceMesh(
+        self.device_mesh = device_mesh or DeviceMesh(
             "cuda" if getattr(jt, "has_cuda", 0) else "cpu", (1,))
-        self.placements = tuple(placements or (facade.Replicate(),))
+        self.placements = tuple(placements or (Replicate(),))
         self._spec = types.SimpleNamespace(mesh=self.device_mesh, placements=self.placements)
 
     @staticmethod
     def from_local(local_tensor, device_mesh=None, placements=None, run_check=False,
                    shape=None, stride=None, grad_placements=None, **kwargs):
-        return facade._mark_dtensor(local_tensor, device_mesh, placements)
+        return _mark_dtensor(local_tensor, device_mesh, placements)
 
     def to_local(self, *args, **kwargs):
         return self._local_tensor
@@ -205,7 +202,7 @@ class DTensor(metaclass=_DTensorMeta):
 
 
 def distribute_tensor(tensor, device_mesh=None, placements=None, src_data_rank=0, **kwargs):
-    return facade._mark_dtensor(tensor, device_mesh, placements)
+    return _mark_dtensor(tensor, device_mesh, placements)
 
 
 def distribute_module(module, device_mesh=None, partition_fn=None, input_fn=None,
@@ -222,7 +219,7 @@ def distribute_module(module, device_mesh=None, partition_fn=None, input_fn=None
 
 
 def is_dtensor(obj):
-    return isinstance(obj, facade.DTensor) or hasattr(obj, "_dtensor_placements")
+    return isinstance(obj, DTensor) or hasattr(obj, "_dtensor_placements")
 
 
 def _shape_from_args(args):
@@ -262,63 +259,63 @@ def _dtensor_from_array(array, device_mesh=None, placements=None, dtype=None):
                 tensor = tensor.astype(str(dtype).split(".")[-1])
             except Exception:
                 pass
-    return facade._mark_dtensor(tensor, device_mesh, placements)
+    return _mark_dtensor(tensor, device_mesh, placements)
 
 
 def empty(*size, device_mesh=None, placements=None, dtype=None, **kwargs):
-    return facade._dtensor_from_array(
-        np.empty(facade._shape_from_args(size), dtype=facade._np_dtype(dtype)),
+    return _dtensor_from_array(
+        np.empty(_shape_from_args(size), dtype=_np_dtype(dtype)),
         device_mesh, placements, dtype)
 
 
 def ones(*size, device_mesh=None, placements=None, dtype=None, **kwargs):
-    return facade._dtensor_from_array(
-        np.ones(facade._shape_from_args(size), dtype=facade._np_dtype(dtype)),
+    return _dtensor_from_array(
+        np.ones(_shape_from_args(size), dtype=_np_dtype(dtype)),
         device_mesh, placements, dtype)
 
 
 def zeros(*size, device_mesh=None, placements=None, dtype=None, **kwargs):
-    return facade._dtensor_from_array(
-        np.zeros(facade._shape_from_args(size), dtype=facade._np_dtype(dtype)),
+    return _dtensor_from_array(
+        np.zeros(_shape_from_args(size), dtype=_np_dtype(dtype)),
         device_mesh, placements, dtype)
 
 
 def full(size, fill_value, *, device_mesh=None, placements=None, dtype=None, **kwargs):
-    return facade._dtensor_from_array(
-        np.full(facade._shape_from_args((size,)), fill_value,
-                dtype=facade._np_dtype(dtype)),
+    return _dtensor_from_array(
+        np.full(_shape_from_args((size,)), fill_value,
+                dtype=_np_dtype(dtype)),
         device_mesh, placements, dtype)
 
 
 def rand(*size, device_mesh=None, placements=None, dtype=None, **kwargs):
-    return facade._dtensor_from_array(
-        np.random.rand(*facade._shape_from_args(size)).astype(
-            facade._np_dtype(dtype)),
+    return _dtensor_from_array(
+        np.random.rand(*_shape_from_args(size)).astype(
+            _np_dtype(dtype)),
         device_mesh, placements, dtype)
 
 
 def randn(*size, device_mesh=None, placements=None, dtype=None, **kwargs):
-    return facade._dtensor_from_array(
-        np.random.randn(*facade._shape_from_args(size)).astype(
-            facade._np_dtype(dtype)),
+    return _dtensor_from_array(
+        np.random.randn(*_shape_from_args(size)).astype(
+            _np_dtype(dtype)),
         device_mesh, placements, dtype)
 
 
 def linspace(start, end, steps, *, device_mesh=None, placements=None, dtype=None, **kwargs):
-    return facade._dtensor_from_array(
-        np.linspace(start, end, int(steps), dtype=facade._np_dtype(dtype)),
+    return _dtensor_from_array(
+        np.linspace(start, end, int(steps), dtype=_np_dtype(dtype)),
         device_mesh, placements, dtype)
 
 
 def logspace(start, end, steps, *, base=10.0, device_mesh=None, placements=None,
              dtype=None, **kwargs):
-    return facade._dtensor_from_array(
+    return _dtensor_from_array(
         np.logspace(start, end, int(steps), base=base,
-                    dtype=facade._np_dtype(dtype)),
+                    dtype=_np_dtype(dtype)),
         device_mesh, placements, dtype)
 
 
-FACADE_EXPORTS = (
+_EXPORTS = (
     "DeviceMesh",
     "init_device_mesh",
     "Placement",
@@ -342,9 +339,4 @@ FACADE_EXPORTS = (
     "randn",
     "linspace",
     "logspace",
-)
-
-preserve_facade_origins(
-    (globals()[name] for name in FACADE_EXPORTS),
-    __name__,
 )

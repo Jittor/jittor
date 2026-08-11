@@ -1,25 +1,33 @@
 """Install the FSDP2/DTensor compatibility modules into the torch shim."""
 
-from .runtime import facade, preserve_facade_origins
+import contextlib
+import enum
+import sys
+import types
+
+from . import api, common, compat_types, config, dtensor, grad_sync, optimizer, shard
+
+
+_INSTALL_MARKER = "_jittor_fsdp2_install_complete"
 
 
 def _ensure_module(name, parent=None, attr=None):
-    mod = facade.sys.modules.get(name)
+    mod = sys.modules.get(name)
     if mod is None:
-        mod = facade.types.ModuleType(name)
-        facade.sys.modules[name] = mod
+        mod = types.ModuleType(name)
+        sys.modules[name] = mod
     if parent is not None and attr:
         setattr(parent, attr, mod)
     return mod
 
 
 def _install_wrap_helpers(fsdp_wrap_mod):
-    @facade.contextlib.contextmanager
+    @contextlib.contextmanager
     def enable_wrap(*args, **kwargs):
         yield
 
     def wrap(module, *args, **kwargs):
-        return facade.fully_shard(module, **{
+        return api.fully_shard(module, **{
             k: v for k, v in kwargs.items()
             if k in ("mesh", "reshard_after_forward", "mp_policy", "offload_policy")
         })
@@ -34,88 +42,92 @@ def _install_wrap_helpers(fsdp_wrap_mod):
     fsdp_wrap_mod.lambda_auto_wrap_policy = (
         lambda module, recurse, nonwrapped_numel, lambda_fn=None, *a, **k:
         bool(lambda_fn(module) if callable(lambda_fn) else False))
-    fsdp_wrap_mod.ModuleWrapPolicy = facade.ModuleWrapPolicy
-    fsdp_wrap_mod.CustomPolicy = facade.CustomPolicy
+    fsdp_wrap_mod.ModuleWrapPolicy = compat_types.ModuleWrapPolicy
+    fsdp_wrap_mod.CustomPolicy = compat_types.CustomPolicy
     fsdp_wrap_mod._or_policy = (
         lambda module, recurse, nonwrapped_numel, policies=None, *a, **k:
         any(policy(module=module, recurse=recurse, nonwrapped_numel=nonwrapped_numel)
             for policy in (policies or ()) if callable(policy)))
-    preserve_facade_origins((
-        fsdp_wrap_mod.enable_wrap,
-        fsdp_wrap_mod.wrap,
-        fsdp_wrap_mod.always_wrap_policy,
-        fsdp_wrap_mod.size_based_auto_wrap_policy,
-        fsdp_wrap_mod.transformer_auto_wrap_policy,
-        fsdp_wrap_mod.lambda_auto_wrap_policy,
-        fsdp_wrap_mod._or_policy,
-    ))
+
+
+def _bind_torch_distributed(torch_module, dist):
+    if torch_module is None:
+        return
+    try:
+        torch_module["distributed"] = dist
+    except Exception:
+        setattr(torch_module, "distributed", dist)
 
 
 def install(dist, torch_module=None):
-    tensor_mod = facade._ensure_module("torch.distributed.tensor", dist, "tensor")
-    tensor_legacy_mod = facade._ensure_module(
+    if getattr(dist, _INSTALL_MARKER, False):
+        _bind_torch_distributed(torch_module, dist)
+        return dist
+
+    tensor_mod = _ensure_module("torch.distributed.tensor", dist, "tensor")
+    tensor_legacy_mod = _ensure_module(
         "torch.distributed._tensor", dist, "_tensor")
-    tensor_api_mod = facade._ensure_module("torch.distributed.tensor._api")
-    tensor_placement_mod = facade._ensure_module(
+    tensor_api_mod = _ensure_module("torch.distributed.tensor._api")
+    tensor_placement_mod = _ensure_module(
         "torch.distributed.tensor.placement_types")
-    tensor_spec_mod = facade._ensure_module(
+    tensor_spec_mod = _ensure_module(
         "torch.distributed.tensor._dtensor_spec")
-    tensor_utils_mod = facade._ensure_module("torch.distributed.tensor._utils")
-    tensor_parallel_mod = facade._ensure_module("torch.distributed.tensor.parallel")
-    tensor_parallel_api_mod = facade._ensure_module(
+    tensor_utils_mod = _ensure_module("torch.distributed.tensor._utils")
+    tensor_parallel_mod = _ensure_module("torch.distributed.tensor.parallel")
+    tensor_parallel_api_mod = _ensure_module(
         "torch.distributed.tensor.parallel.api")
-    tensor_parallel_style_mod = facade._ensure_module(
+    tensor_parallel_style_mod = _ensure_module(
         "torch.distributed.tensor.parallel.style")
-    tensor_parallel_loss_mod = facade._ensure_module(
+    tensor_parallel_loss_mod = _ensure_module(
         "torch.distributed.tensor.parallel.loss")
-    device_mesh_mod = facade._ensure_module(
+    device_mesh_mod = _ensure_module(
         "torch.distributed.device_mesh", dist, "device_mesh")
-    tensor_legacy_device_mesh_mod = facade._ensure_module(
+    tensor_legacy_device_mesh_mod = _ensure_module(
         "torch.distributed._tensor.device_mesh")
-    fsdp_mod = facade._ensure_module("torch.distributed.fsdp", dist, "fsdp")
-    fsdp_api_mod = facade._ensure_module("torch.distributed.fsdp.api")
-    fsdp_full_mod = facade._ensure_module(
+    fsdp_mod = _ensure_module("torch.distributed.fsdp", dist, "fsdp")
+    fsdp_api_mod = _ensure_module("torch.distributed.fsdp.api")
+    fsdp_full_mod = _ensure_module(
         "torch.distributed.fsdp.fully_sharded_data_parallel")
-    fsdp_wrap_mod = facade._ensure_module("torch.distributed.fsdp.wrap")
-    fsdp_traversal_mod = facade._ensure_module(
+    fsdp_wrap_mod = _ensure_module("torch.distributed.fsdp.wrap")
+    fsdp_traversal_mod = _ensure_module(
         "torch.distributed.fsdp._traversal_utils")
-    fsdp_runtime_mod = facade._ensure_module(
+    fsdp_runtime_mod = _ensure_module(
         "torch.distributed.fsdp._runtime_utils")
-    fsdp_top_common_mod = facade._ensure_module(
+    fsdp_top_common_mod = _ensure_module(
         "torch.distributed.fsdp._common_utils")
-    fsdp_state_mod = facade._ensure_module("torch.distributed.fsdp._fsdp_state")
-    fsdp_scaler_mod = facade._ensure_module(
+    fsdp_state_mod = _ensure_module("torch.distributed.fsdp._fsdp_state")
+    fsdp_scaler_mod = _ensure_module(
         "torch.distributed.fsdp.sharded_grad_scaler")
-    fsdp_fully_pkg = facade._ensure_module("torch.distributed.fsdp._fully_shard")
-    fsdp_fully_mod = facade._ensure_module(
+    fsdp_fully_pkg = _ensure_module("torch.distributed.fsdp._fully_shard")
+    fsdp_fully_mod = _ensure_module(
         "torch.distributed.fsdp._fully_shard._fully_shard")
-    fsdp_fully_api_mod = facade._ensure_module(
+    fsdp_fully_api_mod = _ensure_module(
         "torch.distributed.fsdp._fully_shard._fsdp_api")
-    fsdp_common_mod = facade._ensure_module(
+    fsdp_common_mod = _ensure_module(
         "torch.distributed.fsdp._fully_shard._fsdp_common")
-    fsdp_init_mod = facade._ensure_module(
+    fsdp_init_mod = _ensure_module(
         "torch.distributed.fsdp._fully_shard._fsdp_init")
-    fsdp_fully_state_mod = facade._ensure_module(
+    fsdp_fully_state_mod = _ensure_module(
         "torch.distributed.fsdp._fully_shard._fsdp_state")
-    fsdp_param_mod = facade._ensure_module(
+    fsdp_param_mod = _ensure_module(
         "torch.distributed.fsdp._fully_shard._fsdp_param")
-    fsdp_collectives_mod = facade._ensure_module(
+    fsdp_collectives_mod = _ensure_module(
         "torch.distributed.fsdp._fully_shard._fsdp_collectives")
-    comp_mod = facade._ensure_module(
+    comp_mod = _ensure_module(
         "torch.distributed._composable", dist, "_composable")
-    comp_fsdp_mod = facade._ensure_module(
+    comp_fsdp_mod = _ensure_module(
         "torch.distributed._composable.fsdp", comp_mod, "fsdp")
-    comp_fsdp_fully_mod = facade._ensure_module(
+    comp_fsdp_fully_mod = _ensure_module(
         "torch.distributed._composable.fsdp.fully_shard")
-    comp_fsdp_api_mod = facade._ensure_module(
+    comp_fsdp_api_mod = _ensure_module(
         "torch.distributed._composable.fsdp._fsdp_api")
-    functional_collectives_mod = facade._ensure_module(
+    functional_collectives_mod = _ensure_module(
         "torch.distributed._functional_collectives")
-    algorithms_mod = facade._ensure_module(
+    algorithms_mod = _ensure_module(
         "torch.distributed.algorithms", dist, "algorithms")
-    checkpoint_mod = facade._ensure_module(
+    checkpoint_mod = _ensure_module(
         "torch.distributed.algorithms._checkpoint", algorithms_mod, "_checkpoint")
-    checkpoint_wrapper_mod = facade._ensure_module(
+    checkpoint_wrapper_mod = _ensure_module(
         "torch.distributed.algorithms._checkpoint.checkpoint_wrapper",
         checkpoint_mod, "checkpoint_wrapper")
 
@@ -145,22 +157,32 @@ def install(dist, torch_module=None):
     comp_fsdp_mod._fsdp_api = comp_fsdp_api_mod
     dist._functional_collectives = functional_collectives_mod
 
-    export_names = (
-        "DeviceMesh", "init_device_mesh", "DTensor", "Placement", "Replicate",
-        "Shard", "Partial", "distribute_tensor", "distribute_module",
-        "is_dtensor", "StateDictType", "ShardingStrategy", "BackwardPrefetch",
-        "CPUOffload", "StateDictConfig", "OptimStateDictConfig",
-        "MixedPrecision", "MixedPrecisionPolicy", "OffloadPolicy",
-        "CPUOffloadPolicy", "NoOffloadPolicy", "DataParallelMeshDims",
-        "FullStateDictConfig", "LocalStateDictConfig", "ShardedStateDictConfig",
-        "FullOptimStateDictConfig", "LocalOptimStateDictConfig",
-        "ShardedOptimStateDictConfig", "StateDictSettings", "OptimStateKeyType",
-        "FlatParameter", "UnshardHandle", "FSDPModule",
-        "FullyShardedDataParallel", "ShardedGradScaler", "fully_shard",
-        "register_fsdp_forward_method", "share_comm_ctx", "sync_sharded_grads",
-        "sharded_sgd_step", "local_sharded_state_dict",
-    )
-    exports = {name: getattr(facade, name) for name in export_names}
+    exports = {}
+    for owner, names in (
+        (dtensor, (
+            "DeviceMesh", "init_device_mesh", "DTensor", "Placement",
+            "Replicate", "Shard", "Partial", "distribute_tensor",
+            "distribute_module", "is_dtensor",
+        )),
+        (config, (
+            "StateDictType", "ShardingStrategy", "BackwardPrefetch",
+            "CPUOffload", "StateDictConfig", "OptimStateDictConfig",
+            "MixedPrecision", "MixedPrecisionPolicy", "OffloadPolicy",
+            "CPUOffloadPolicy", "NoOffloadPolicy", "DataParallelMeshDims",
+            "FullStateDictConfig", "LocalStateDictConfig",
+            "ShardedStateDictConfig", "FullOptimStateDictConfig",
+            "LocalOptimStateDictConfig", "ShardedOptimStateDictConfig",
+            "StateDictSettings", "OptimStateKeyType", "FlatParameter",
+            "UnshardHandle",
+        )),
+        (api, (
+            "FSDPModule", "FullyShardedDataParallel", "ShardedGradScaler",
+            "fully_shard", "register_fsdp_forward_method", "share_comm_ctx",
+        )),
+        (grad_sync, ("sync_sharded_grads",)),
+        (optimizer, ("sharded_sgd_step", "local_sharded_state_dict")),
+    ):
+        exports.update((name, getattr(owner, name)) for name in names)
     for mod in (fsdp_mod, fsdp_api_mod, fsdp_full_mod, fsdp_fully_pkg,
                 fsdp_fully_mod, fsdp_fully_api_mod, comp_fsdp_mod,
                 comp_fsdp_fully_mod, comp_fsdp_api_mod):
@@ -172,32 +194,32 @@ def install(dist, torch_module=None):
     fsdp_traversal_mod._get_fsdp_states = (
         lambda module: [
             getattr(m, "_fsdp_state")
-            for m in facade._iter_fsdp_modules(module, True)
+            for m in shard._iter_fsdp_modules(module, True)
             if hasattr(m, "_fsdp_state")
         ])
     fsdp_traversal_mod._get_fsdp_handles = lambda module: []
     for mod in (fsdp_runtime_mod, fsdp_top_common_mod, fsdp_state_mod,
                 fsdp_common_mod, fsdp_fully_state_mod):
-        mod.FSDPState = facade.FSDPState
-        mod.TrainingState = facade.TrainingState
-        mod.FSDP_WRAPPED_MODULE = facade.FSDP_WRAPPED_MODULE
-        mod._lazy_init = facade._lazy_init
-        mod._get_module_fsdp_state = facade._get_module_fsdp_state
-        mod._get_fsdp_state = facade._get_module_fsdp_state
+        mod.FSDPState = compat_types.FSDPState
+        mod.TrainingState = compat_types.TrainingState
+        mod.FSDP_WRAPPED_MODULE = compat_types.FSDP_WRAPPED_MODULE
+        mod._lazy_init = compat_types._lazy_init
+        mod._get_module_fsdp_state = compat_types._get_module_fsdp_state
+        mod._get_fsdp_state = compat_types._get_module_fsdp_state
         mod._get_module_fsdp_state_if_fully_sharded_module = (
-            facade._get_module_fsdp_state_if_fully_sharded_module)
-        mod._is_fsdp_managed_module = facade._is_fsdp_managed_module
+            compat_types._get_module_fsdp_state_if_fully_sharded_module)
+        mod._is_fsdp_managed_module = compat_types._is_fsdp_managed_module
     fsdp_param_mod.FlatParameter = exports["FlatParameter"]
     fsdp_collectives_mod.all_gather = lambda tensor, *a, **k: (
-        facade._all_gather_shards(tensor)
-        if facade._in_true_distributed() else tensor)
+        common._all_gather_shards(tensor)
+        if common._in_true_distributed() else tensor)
     fsdp_collectives_mod.reduce_scatter = lambda tensor, *a, **k: (
-        facade._reduce_scatter_padded(tensor)
-        if facade._in_true_distributed() else tensor)
-    facade._install_wrap_helpers(fsdp_wrap_mod)
+        common._reduce_scatter_padded(tensor)
+        if common._in_true_distributed() else tensor)
+    _install_wrap_helpers(fsdp_wrap_mod)
 
     tensor_factories = {
-        name: getattr(facade, name)
+        name: getattr(dtensor, name)
         for name in (
             "empty", "ones", "zeros", "full", "rand", "randn", "linspace",
             "logspace",
@@ -211,9 +233,9 @@ def install(dist, torch_module=None):
             setattr(mod, k, exports[k])
         for k, v in tensor_factories.items():
             setattr(mod, k, v)
-    tensor_spec_mod.DTensorSpec = facade.DTensorSpec
+    tensor_spec_mod.DTensorSpec = compat_types.DTensorSpec
     tensor_utils_mod.compute_local_shape_and_global_offset = (
-        facade.compute_local_shape_and_global_offset)
+        compat_types.compute_local_shape_and_global_offset)
     tensor_mod.placement_types = tensor_placement_mod
     tensor_mod._api = tensor_api_mod
     tensor_mod._dtensor_spec = tensor_spec_mod
@@ -228,15 +250,16 @@ def install(dist, torch_module=None):
     for name in ("ColwiseParallel", "RowwiseParallel", "SequenceParallel",
                  "PrepareModuleInput", "PrepareModuleOutput",
                  "PrepareModuleInputOutput"):
-        parallel_classes[name] = type(name, (facade.ParallelStyle,), {})
+        parallel_classes[name] = type(
+            name, (compat_types.ParallelStyle,), {"__module__": __name__})
     for mod in (tensor_parallel_mod, tensor_parallel_style_mod):
-        mod.ParallelStyle = facade.ParallelStyle
+        mod.ParallelStyle = compat_types.ParallelStyle
         for name, cls in parallel_classes.items():
             setattr(mod, name, cls)
     for mod in (tensor_parallel_mod, tensor_parallel_api_mod):
-        mod.parallelize_module = facade.parallelize_module
+        mod.parallelize_module = compat_types.parallelize_module
     for mod in (tensor_parallel_mod, tensor_parallel_loss_mod):
-        mod.loss_parallel = facade.loss_parallel
+        mod.loss_parallel = compat_types.loss_parallel
     tensor_parallel_mod.api = tensor_parallel_api_mod
     tensor_parallel_mod.style = tensor_parallel_style_mod
     tensor_parallel_mod.loss = tensor_parallel_loss_mod
@@ -255,51 +278,30 @@ def install(dist, torch_module=None):
             return getattr(self.tensor, name)
     functional_collectives_mod.AsyncCollectiveTensor = AsyncCollectiveTensor
 
-    checkpoint_wrapper_mod.checkpoint_wrapper = facade._checkpoint_wrapper
+    checkpoint_wrapper_mod.checkpoint_wrapper = compat_types._checkpoint_wrapper
     checkpoint_wrapper_mod.apply_activation_checkpointing = (
-        facade._apply_activation_checkpointing)
+        compat_types._apply_activation_checkpointing)
     checkpoint_wrapper_mod.offload_wrapper = lambda module, *a, **k: module
     checkpoint_wrapper_mod._CHECKPOINT_PREFIX = "_checkpoint_wrapped_module."
-    checkpoint_wrapper_mod.CheckpointImpl = facade.enum.Enum(
-        "CheckpointImpl", {"NO_REENTRANT": "no_reentrant", "REENTRANT": "reentrant"})
-    checkpoint_wrapper_mod.checkpoint = facade._checkpoint
-    preserve_facade_origins((
-        *parallel_classes.values(),
-        fsdp_traversal_mod._get_fsdp_states,
-        fsdp_traversal_mod._get_fsdp_handles,
-        fsdp_collectives_mod.all_gather,
-        fsdp_collectives_mod.reduce_scatter,
-        fsdp_wrap_mod.enable_wrap,
-        fsdp_wrap_mod.wrap,
-        fsdp_wrap_mod.always_wrap_policy,
-        fsdp_wrap_mod.size_based_auto_wrap_policy,
-        fsdp_wrap_mod.transformer_auto_wrap_policy,
-        fsdp_wrap_mod.lambda_auto_wrap_policy,
-        fsdp_wrap_mod._or_policy,
-        dist.is_available,
-        AsyncCollectiveTensor,
-        checkpoint_wrapper_mod.offload_wrapper,
-        checkpoint_wrapper_mod.CheckpointImpl,
-    ))
-    fsdp_common_mod.FSDPMeshInfo = facade.FSDPMeshInfo
-    fsdp_common_mod.ShardPlacementResult = facade.ShardPlacementResult
-    fsdp_init_mod._get_mesh_info = facade._get_mesh_info
-    fsdp_init_mod._get_post_forward_mesh_info = facade._get_post_forward_mesh_info
-    if torch_module is not None:
-        try:
-            torch_module["distributed"] = dist
-        except Exception:
-            setattr(torch_module, "distributed", dist)
+    checkpoint_wrapper_mod.CheckpointImpl = enum.Enum(
+        "CheckpointImpl",
+        {"NO_REENTRANT": "no_reentrant", "REENTRANT": "reentrant"},
+        module=__name__,
+    )
+    checkpoint_wrapper_mod.checkpoint = compat_types._checkpoint
+    fsdp_common_mod.FSDPMeshInfo = compat_types.FSDPMeshInfo
+    fsdp_common_mod.ShardPlacementResult = compat_types.ShardPlacementResult
+    fsdp_init_mod._get_mesh_info = compat_types._get_mesh_info
+    fsdp_init_mod._get_post_forward_mesh_info = compat_types._get_post_forward_mesh_info
+    setattr(dist, _INSTALL_MARKER, True)
+    _bind_torch_distributed(torch_module, dist)
     return dist
 
 
 _install_fsdp2_distributed = install
 
 
-FACADE_EXPORTS = (
+_EXPORTS = (
     "_ensure_module", "_install_wrap_helpers", "install",
     "_install_fsdp2_distributed",
-)
-preserve_facade_origins(
-    tuple(globals()[name] for name in FACADE_EXPORTS if callable(globals()[name]))
 )

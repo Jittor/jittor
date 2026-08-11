@@ -3,8 +3,6 @@
 import contextlib
 import enum
 
-from .runtime import facade, preserve_facade_origins
-
 
 class FSDPMeshInfo:
     def __init__(self, mesh=None, shard_mesh_dim=None, replicate_mesh_dim=None,
@@ -27,7 +25,7 @@ class ShardPlacementResult:
 
 
 def _get_mesh_info(mesh=None, dp_mesh_dims=None, **kwargs):
-    return facade.FSDPMeshInfo(
+    return FSDPMeshInfo(
         mesh=mesh,
         shard_mesh_dim=getattr(dp_mesh_dims, "shard", None),
         replicate_mesh_dim=getattr(dp_mesh_dims, "replicate", None),
@@ -69,7 +67,7 @@ def _lazy_init(state, module=None):
 
 
 def _get_post_forward_mesh_info(*args, **kwargs):
-    return facade._get_mesh_info(*args, **kwargs)
+    return _get_mesh_info(*args, **kwargs)
 
 
 def compute_local_shape_and_global_offset(global_shape, mesh, placements):
@@ -125,7 +123,7 @@ class CustomPolicy:
         return bool(self.lambda_fn(module, recurse, nonwrapped_numel))
 
 
-FACADE_EXPORTS = (
+_EXPORTS = (
     "FSDPMeshInfo",
     "ShardPlacementResult",
     "_get_mesh_info",
@@ -147,9 +145,4 @@ FACADE_EXPORTS = (
     "_checkpoint",
     "ModuleWrapPolicy",
     "CustomPolicy",
-)
-
-preserve_facade_origins(
-    (globals()[name] for name in FACADE_EXPORTS),
-    __name__,
 )

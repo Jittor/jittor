@@ -2,10 +2,12 @@
 
 import numpy as np
 
-from .runtime import facade, jt
+import jittor as jt
+
+from . import common, grad_sync, shard
 
 
-FACADE_EXPORTS = (
+_EXPORTS = (
     "clear_fsdp_optimizer_grads",
     "_optimizer_param_steps",
     "_assign_preserve_trainability",
@@ -28,7 +30,7 @@ def clear_fsdp_optimizer_grads(opt):
         if grads is None:
             continue
         for i, param in enumerate(pg.get("params", [])):
-            if i < len(grads) and facade.is_fsdp_managed_param(param):
+            if i < len(grads) and shard.is_fsdp_managed_param(param):
                 grads[i] = None
 
 
@@ -59,7 +61,7 @@ def refresh_optimizer_fsdp_params(opt, state_ids=None):
     for pg in getattr(opt, "param_groups", []):
         params = pg.get("params", [])
         for i, param in enumerate(list(params)):
-            state, entry = facade._fsdp_param_entry(param)
+            state, entry = shard._fsdp_param_entry(param)
             if state is None or state_ids is not None and id(state) not in state_ids:
                 continue
             params[i] = entry.shard
@@ -73,9 +75,9 @@ def _refresh_all_optimizer_fsdp_params(states, current=None):
         if opt is None or id(opt) in seen:
             continue
         seen.add(id(opt))
-        facade.refresh_optimizer_fsdp_params(opt, state_ids)
+        refresh_optimizer_fsdp_params(opt, state_ids)
     if current is not None and id(current) not in seen:
-        facade.refresh_optimizer_fsdp_params(current, state_ids)
+        refresh_optimizer_fsdp_params(current, state_ids)
 
 
 def _sgd_hparams(opt, pg):
@@ -89,7 +91,7 @@ def _sgd_hparams(opt, pg):
 
 
 def _sgd_update_for_param(opt, pg, state, entry, param, grad, value):
-    lr, momentum, weight_decay, dampening, nesterov = facade._sgd_hparams(opt, pg)
+    lr, momentum, weight_decay, dampening, nesterov = _sgd_hparams(opt, pg)
     dp = grad
     if weight_decay != 0:
         dp = dp + param * weight_decay
@@ -112,7 +114,7 @@ def _adam_hparams(opt, pg):
 
 def _adam_update_for_param(opt, pg, param, grad, value, momentum, *,
                            decoupled_weight_decay, n_step):
-    lr, eps, weight_decay, betas = facade._adam_hparams(opt, pg)
+    lr, eps, weight_decay, betas = _adam_hparams(opt, pg)
     b0, b1 = betas
     if not isinstance(value, jt.Var) or list(value.shape) != list(param.shape):
         value = jt.zeros(param.shape, param.dtype).stop_grad()
@@ -151,28 +153,28 @@ def optimizer_step(opt, loss=None, retain_graph=False):
     Non-FSDP parameters are intentionally left untouched so the caller can run the
     original optimizer step for them.
     """
-    states = facade._fsdp_states_from_optimizers([opt])
+    states = grad_sync._fsdp_states_from_optimizers([opt])
     if not states:
         return False
     if loss is not None:
         grad_by_id = {}
-        targets = facade.collect_fsdp_full_params_for_backward([opt])
+        targets = grad_sync.collect_fsdp_full_params_for_backward([opt])
         if targets:
             grads = jt.core.grad_optional(loss, targets, retain_graph)
             grad_by_id.update({id(p): g for p, g in zip(targets, grads)
                                if g is not None})
-        facade.fill_fsdp_optimizer_grads_from_grad_map([opt], grad_by_id)
+        grad_sync.fill_fsdp_optimizer_grads_from_grad_map([opt], grad_by_id)
 
-    facade._sync_visible_full_grads_to_optimizer(opt)
+    grad_sync._sync_visible_full_grads_to_optimizer(opt)
 
-    kind = facade._optimizer_kind(opt)
+    kind = _optimizer_kind(opt)
     if kind not in ("sgd", "adam", "adamw"):
         return False
     has_fsdp_grad = False
     for pg in getattr(opt, "param_groups", []):
         grads = pg.get("grads") or []
         for i, param in enumerate(pg.get("params", [])):
-            if not facade.is_fsdp_managed_param(param):
+            if not shard.is_fsdp_managed_param(param):
                 continue
             grad = grads[i] if i < len(grads) else None
             if not isinstance(grad, jt.Var):
@@ -200,7 +202,7 @@ def optimizer_step(opt, loss=None, retain_graph=False):
     }
     for pg in getattr(opt, "param_groups", []):
         grads = pg.get("grads") or []
-        param_steps = facade._optimizer_param_steps(pg)
+        param_steps = _optimizer_param_steps(pg)
         values = pg.get("values")
         if values is None:
             values = pg["values"] = [None] * len(pg.get("params", []))
@@ -213,7 +215,7 @@ def optimizer_step(opt, loss=None, retain_graph=False):
             while len(momentums) < len(pg.get("params", [])):
                 momentums.append(None)
         for i, param in enumerate(pg.get("params", [])):
-            state, entry = facade._fsdp_param_entry(param)
+            state, entry = shard._fsdp_param_entry(param)
             if state is None:
                 continue
             grad = grads[i] if i < len(grads) else None
@@ -223,11 +225,11 @@ def optimizer_step(opt, loss=None, retain_graph=False):
                 continue
             param_steps[i] = int(param_steps[i]) + 1
             if kind == "sgd":
-                new_param, new_value = facade._sgd_update_for_param(
+                new_param, new_value = _sgd_update_for_param(
                     opt, pg, state, entry, entry.shard, grad, values[i])
                 values[i] = new_value
             else:
-                new_param, new_value, new_momentum = facade._adam_update_for_param(
+                new_param, new_value, new_momentum = _adam_update_for_param(
                     opt, pg, entry.shard, grad, values[i], momentums[i],
                     decoupled_weight_decay=(kind == "adamw"),
                     n_step=param_steps[i])
@@ -238,7 +240,7 @@ def optimizer_step(opt, loss=None, retain_graph=False):
                 flat_updates[key] = new_param
                 flat_public_grads[key] = grad
             else:
-                facade._assign_preserve_trainability(
+                _assign_preserve_trainability(
                     entry.shard, new_param,
                     entry_trainable[(id(state), id(entry))])
                 object.__setattr__(entry.shard, "_torch_grad", grad)
@@ -253,18 +255,18 @@ def optimizer_step(opt, loss=None, retain_graph=False):
         for entry in state.true_fsdp_params:
             key = (id(state), id(entry))
             part = flat_updates.get(key, entry.shard)
-            part_numel = facade._param_numel(part)
+            part_numel = common._param_numel(part)
             if part_numel:
-                parts.append(facade._flatten_var(part))
+                parts.append(common._flatten_var(part))
                 real_numel += part_numel
         if real_numel < int(state.true_fsdp_flat_shard_numel):
             parts.append(state.true_fsdp_flat_shard[real_numel:])
         if parts and flat_updates:
             new_flat = parts[0] if len(parts) == 1 else jt.concat(parts, dim=0)
-            facade._assign_preserve_trainability(
+            _assign_preserve_trainability(
                 state.true_fsdp_flat_shard, new_flat.stop_grad(),
                 flat_trainable[id(state)])
-            facade._refresh_flat_entry_shards(state)
+            shard._refresh_flat_entry_shards(state)
         for entry in state.true_fsdp_params:
             key = (id(state), id(entry))
             was_trainable = entry_trainable[key]
@@ -281,7 +283,7 @@ def optimizer_step(opt, loss=None, retain_graph=False):
 
     for state in states:
         state.true_fsdp_unsharded = False
-    facade._refresh_all_optimizer_fsdp_params(states, opt)
+    _refresh_all_optimizer_fsdp_params(states, opt)
     try:
         opt._build_grad_map()
     except Exception:
@@ -297,7 +299,7 @@ def sharded_sgd_step(module, loss, lr=1e-4, *, divide_by_world_size=True):
         for p, g in zip(params, grads):
             p.assign(p - g * lr)
         return grads
-    grads = facade.sync_sharded_grads(
+    grads = grad_sync.sync_sharded_grads(
         module, loss, divide_by_world_size=divide_by_world_size)
     if getattr(state, "true_fsdp_flat", False):
         flat_grad = getattr(state, "true_fsdp_last_flat_grad", None)
@@ -306,11 +308,11 @@ def sharded_sgd_step(module, loss, lr=1e-4, *, divide_by_world_size=True):
         flat_was_trainable = not state.true_fsdp_flat_shard.is_stop_grad()
         entry_trainable = [not entry.shard.is_stop_grad()
                            for entry in state.true_fsdp_params]
-        facade._assign_preserve_trainability(
+        _assign_preserve_trainability(
             state.true_fsdp_flat_shard,
             (state.true_fsdp_flat_shard - flat_grad * lr).stop_grad(),
             flat_was_trainable)
-        facade._refresh_flat_entry_shards(state)
+        shard._refresh_flat_entry_shards(state)
         for entry, was_trainable in zip(state.true_fsdp_params, entry_trainable):
             if was_trainable and entry.shard.is_stop_grad():
                 entry.shard.start_grad()
@@ -319,7 +321,7 @@ def sharded_sgd_step(module, loss, lr=1e-4, *, divide_by_world_size=True):
         state.true_fsdp_unsharded = False
         return grads
     for entry, grad in zip(state.true_fsdp_params, grads):
-        facade._assign_preserve_trainability(
+        _assign_preserve_trainability(
             entry.shard, (entry.shard - grad * lr).stop_grad())
         object.__setattr__(entry.owner, entry.attr, entry.shard)
         entry.full_param = None

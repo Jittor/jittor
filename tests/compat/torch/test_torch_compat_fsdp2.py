@@ -9,11 +9,13 @@ from unittest import mock
 import numpy as np
 import jittor as torch
 import jittor as jt
+from jittor.compat import fsdp2 as canonical_fsdp
+from jittor.compat.fsdp2 import grad_sync as fsdp_grad_sync
 
 
 class TestFSDP2Compat(unittest.TestCase):
     def _fake_fsdp_state(self, values):
-        from jittor import torch_fsdp2_compat as fsdp
+        fsdp = canonical_fsdp
 
         owner = types.SimpleNamespace()
         entries = []
@@ -112,7 +114,7 @@ class TestFSDP2Compat(unittest.TestCase):
             return [grad.stop_grad() for grad in grads]
 
         with mock.patch.object(
-                fsdp, "_sync_sharded_grads_from_full_grads",
+                fsdp_grad_sync, "_sync_sharded_grads_from_full_grads",
                 side_effect=local_sync):
             fsdp.fill_fsdp_optimizer_grads_from_grad_map(
                 [optimizer], {id(full[0]): jt.ones_like(full[0])})
@@ -142,7 +144,7 @@ class TestFSDP2Compat(unittest.TestCase):
             return [grad.stop_grad() for grad in grads]
 
         with mock.patch.object(
-                fsdp, "_sync_sharded_grads_from_full_grads",
+                fsdp_grad_sync, "_sync_sharded_grads_from_full_grads",
                 side_effect=local_sync):
             grad = jt.ones_like(full[0])
             fsdp.fill_fsdp_optimizer_grads_from_grad_map(
@@ -172,7 +174,7 @@ class TestFSDP2Compat(unittest.TestCase):
                         for entry, grad in zip(current_state.true_fsdp_params, grads)]
 
             with mock.patch.object(
-                    fsdp, "_sync_sharded_grads_from_full_grads",
+                    fsdp_grad_sync, "_sync_sharded_grads_from_full_grads",
                     side_effect=local_sync):
                 sum((param * param).sum() for param in full).backward()
                 optimizer.step()
@@ -186,7 +188,7 @@ class TestFSDP2Compat(unittest.TestCase):
             for entry in entries:
                 entry.full_param = entry.shard.reshape(entry.shape) * 1.0
             with mock.patch.object(
-                    fsdp, "_sync_sharded_grads_from_full_grads",
+                    fsdp_grad_sync, "_sync_sharded_grads_from_full_grads",
                     side_effect=local_sync):
                 sum((entry.full_param * entry.full_param).sum()
                     for entry in entries).backward()
@@ -214,7 +216,7 @@ class TestFSDP2Compat(unittest.TestCase):
             for _ in range(2):
                 before = [entry.shard.numpy().copy() for entry in entries]
                 with mock.patch.object(
-                        fsdp, "sync_sharded_grads", side_effect=fake_sync):
+                        fsdp_grad_sync, "sync_sharded_grads", side_effect=fake_sync):
                     fsdp.sharded_sgd_step(module, jt.array(0.0), lr=0.1)
                 self.assertTrue(all(not entry.shard.is_stop_grad()
                                     for entry in entries))
@@ -232,7 +234,7 @@ class TestFSDP2Compat(unittest.TestCase):
             return [grad.stop_grad() for grad in grads]
 
         with mock.patch.object(
-                fsdp, "_sync_sharded_grads_from_full_grads",
+                fsdp_grad_sync, "_sync_sharded_grads_from_full_grads",
                 side_effect=local_sync):
             fsdp.fill_fsdp_optimizer_grads_from_grad_map(
                 [optimizer], {id(full[0]): jt.ones_like(full[0])})
@@ -261,7 +263,7 @@ class TestFSDP2Compat(unittest.TestCase):
                     for entry, grad in zip(current_state.true_fsdp_params, grads)]
 
         with mock.patch.object(
-                fsdp, "_sync_sharded_grads_from_full_grads",
+                fsdp_grad_sync, "_sync_sharded_grads_from_full_grads",
                 side_effect=local_sync):
             fsdp.fill_fsdp_optimizer_grads_from_grad_map(
                 [optimizer], {id(full[0]): jt.ones_like(full[0])})
@@ -283,7 +285,7 @@ class TestFSDP2Compat(unittest.TestCase):
             return [grad.stop_grad() for grad in grads]
 
         with mock.patch.object(
-                fsdp, "_sync_sharded_grads_from_full_grads",
+                fsdp_grad_sync, "_sync_sharded_grads_from_full_grads",
                 side_effect=local_sync):
             fsdp.fill_fsdp_optimizer_grads_from_grad_map(
                 [optimizer], {id(full[0]): jt.ones_like(full[0])})
@@ -294,7 +296,7 @@ class TestFSDP2Compat(unittest.TestCase):
         np.testing.assert_array_equal(
             public_grad.numpy(), np.zeros(2, dtype="float32"))
         with mock.patch.object(
-                fsdp, "_sync_sharded_grads_from_full_grads",
+                fsdp_grad_sync, "_sync_sharded_grads_from_full_grads",
                 side_effect=local_sync):
             fsdp.fill_fsdp_optimizer_grads_from_grad_map(
                 [optimizer], {id(full[0]): jt.ones_like(full[0])})
@@ -334,7 +336,7 @@ class TestFSDP2Compat(unittest.TestCase):
 
         full[0].requires_grad_(False)
         self.assertFalse(entries[0].requires_grad)
-        self.assertTrue(entries[0].shard.is_stop_grad())
+        self.assertFalse(entries[0].shard.requires_grad)
         self.assertFalse(state.true_fsdp_flat_shard.is_stop_grad())
         fsdp._refresh_flat_entry_shards(state)
         self.assertTrue(entries[0].shard.is_stop_grad())
@@ -357,7 +359,7 @@ class TestFSDP2Compat(unittest.TestCase):
                     for entry, grad in zip(current_state.true_fsdp_params, grads)]
 
         with mock.patch.object(
-                fsdp, "_sync_sharded_grads_from_full_grads",
+                fsdp_grad_sync, "_sync_sharded_grads_from_full_grads",
                 side_effect=local_sync):
             fsdp.fill_fsdp_optimizer_grads_from_grad_map(
                 [first, second], {id(full[0]): jt.ones_like(full[0])})
@@ -366,7 +368,7 @@ class TestFSDP2Compat(unittest.TestCase):
 
         entries[0].full_param = full[0]
         with mock.patch.object(
-                fsdp, "_sync_sharded_grads_from_full_grads",
+                fsdp_grad_sync, "_sync_sharded_grads_from_full_grads",
                 side_effect=local_sync):
             fsdp.fill_fsdp_optimizer_grads_from_grad_map(
                 [first, second], {id(full[0]): jt.ones_like(full[0])})
@@ -392,7 +394,7 @@ class TestFSDP2Compat(unittest.TestCase):
             return [grad.stop_grad() for grad in grads]
 
         with mock.patch.object(
-                fsdp, "_sync_sharded_grads_from_full_grads",
+                fsdp_grad_sync, "_sync_sharded_grads_from_full_grads",
                 side_effect=local_sync):
             ((full[0] * full[0]).sum() + (plain * plain).sum()).backward()
             optimizer.step()
@@ -415,7 +417,7 @@ class TestFSDP2Compat(unittest.TestCase):
             [entries[0].shard, plain], lr=0.01, weight_decay=0.1)
         native_loss = (full[0] * full[0]).sum() + (plain * plain).sum()
         with mock.patch.object(
-                fsdp, "_sync_sharded_grads_from_full_grads",
+                fsdp_grad_sync, "_sync_sharded_grads_from_full_grads",
                 side_effect=local_sync):
             returned = native_optimizer.step(native_loss)
         self.assertIs(returned, native_loss)
