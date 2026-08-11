@@ -16,6 +16,7 @@
 #include "cufft_fft_op.h"
 #include "cufft_wrapper.h"
 
+#include <array>
 #include <complex>
 #include <iostream>
 #include <random>
