@@ -35,6 +35,8 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
         self.assertLess(len(source.splitlines()), 220)
         self.assertNotIn("jittor.torch_shim", source)
         self.assertIn("prepare_import_environment as _prepare_compat_import", source)
+        self.assertIn("if _compat_preflight_result.active:", source)
+        self.assertIn("_configure_compat_math_flags(_sys.modules[__name__])", source)
         self.assertIn("from ._runtime.core_api import *", source)
         self.assertIn("compose as _compose_compat_runtime", source)
         self.assertIn("JITTOR_TORCH_STRICT_BOOTSTRAP", source)
@@ -42,6 +44,10 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
         self.assertLess(
             source.index("_prepare_compat_import("),
             source.index("from jittor_utils import lock"),
+        )
+        self.assertLess(
+            source.index("_configure_compat_math_flags(_sys.modules[__name__])"),
+            source.index("from ._runtime.core_api import *"),
         )
         self.assertLess(
             source.index("from ._runtime.core_api import *"),

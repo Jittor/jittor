@@ -15,6 +15,7 @@ import os as _os
 import sys as _sys
 
 from .compat.shim.preflight import (
+    configure_torch_math_flags as _configure_compat_math_flags,
     is_truthy as _compat_is_truthy,
     prepare_import_environment as _prepare_compat_import,
 )
@@ -73,6 +74,10 @@ with lock.lock_scope():
             core.flags.use_cuda_host_allocator = 0
         except Exception:
             pass
+
+
+if _compat_preflight_result.active:
+    _configure_compat_math_flags(_sys.modules[__name__])
 
 
 from ._runtime import core_api as _core_api
