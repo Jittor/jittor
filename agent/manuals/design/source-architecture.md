@@ -1,92 +1,95 @@
-# Jittor 源码架构与渐进式拆分规范
+# Jittor 源码架构迁移记录与领域包规范
+
+> **决策更新（2026-08-11）**：长期目标已经由
+> [`docs/architecture/repository-layout.md`](../../../docs/architecture/repository-layout.md)
+> 锁定。本文早期采用的“公开文件 facade + `_xxx/` 私有实现包”是已完成批次的迁移
+> 记录，不再是目标架构；`jittor.test` 也不再作为长期公开包保留。新工作必须按领域
+> 包与四层兼容架构推进。
 
 ## 目标
 
 Jittor 的公开 API、JIT 资源路径和 Torch 兼容行为已经被大量项目依赖，源码整理
-不能采用一次性搬目录的方式。本规范要求用“稳定 facade + 私有实现包”逐步拆分
-巨型模块，同时持续降低导入环、控制模块体积，并保持已有对象身份、pickle 路径和
-`sys.modules` 注册不变。
+不能采用一次性搬目录的方式。前十一批先用“稳定 facade + 私有实现包”降低巨型
+模块风险；后续把这层脚手架收敛为常规领域包，同时保持公开 import、旧 checkpoint
+可加载、Torch shim 注册顺序和 JIT 实体资源路径。
 
 当前非测试 Python 源码约 181 个文件、67,620 行，前 12 个文件占约 45.9%。首要
 问题不是文件数量，而是根入口、领域实现、运行时安装器和第三方兼容逻辑混在同一
 模块中。重构必须让职责边界和依赖方向逐批变清晰，不能只把一个大文件机械切成
 若干互相循环的小文件。
 
-## 目标结构
+## 目标结构（2026-08-11 决策）
 
 ```text
 python/
   jittor/
-    __init__.py             # 稳定公开 facade 和 composition root
-    nn.py                    # 稳定公开 facade
-    pool.py                  # 稳定 legacy pooling facade
-    optim.py                 # 稳定公开 facade
-    compiler.py              # 稳定公开 facade
-    torch_compat.py          # 稳定 Torch 兼容 facade
-    misc.py                  # 稳定杂项公开 facade
-    torch_fsdp2_compat/      # 稳定 FSDP2 兼容入口
-    _bootstrap/              # 仅标准库：环境、路径、MPI 前置处理
-    _runtime/                # core loader、编译器和后端控制
-    _api/                    # Var、Module、Function 和基础 API 实现
-    _nn/                     # 神经网络私有实现
-    _pool/                   # legacy pooling 私有实现
-    _misc/                   # 杂项算子的领域实现
-    _optim/                  # 优化器私有实现
-    _torch_compat/           # Torch 兼容私有实现
-    _torch_fsdp2/            # FSDP2/DTensor 兼容实现
-    torch_shim/              # 保持现有公开导入路径
-    src/                     # 运行时 JIT C++ 源码，保持实体路径
-    extern/                  # 运行时头文件和第三方资源，保持实体路径
-  jittor_utils/              # 独立底层包，不反向依赖 jittor facade
+    __init__.py             # composition root
+    nn/                     # __init__.py 为公开组合入口
+      modules/              # 有状态模块实现
+      functional/           # functional 实现
+      attention.py
+    misc/                   # 杂项领域包
+    pool/                   # pooling 领域包
+    optim/                  # optimizer 领域包
+    compat/
+      torch/                # Torch API 兼容
+      shim/                 # 部署 shim
+      fsdp2/                # FSDP2 / DTensor
+      triton/               # Triton bridge
+      module_patcher.py     # 通用补丁注册机制
+      external_backend.py   # 通用外部后端发现机制
+    selftest.py             # 安装后最小自检
+    src/ extern/ utils/     # JIT 运行时资源，实体路径保持
+    math_util/ other/
+  jittor_utils/             # 独立底层包，保持 jittor 的同级兄弟
 ```
 
-私有目录使用前导下划线，避免与已有 `nn.py`、`optim.py` 等公开模块发生
-“同名文件与包”冲突。公开 facade 可以长期存在；迁移完成不以删除 facade 为目标。
+**推翻的旧决策**：不再用前导下划线包规避 `nn.py` 与 `nn/` 的同名冲突。迁移时
+直接把公开文件转换为同名包，由 `__init__.py` 承接公开入口。`_nn/_misc/_pool/
+_torch_compat/_torch_fsdp2` 是前十一批形成的临时脚手架，阶段 3 和阶段 4 必须消化，
+不得继续复制 runtime proxy 或元数据伪装模式。
 
 ## 依赖方向
 
 允许的主依赖方向为：
 
 ```text
-stdlib
-  -> _bootstrap / jittor_utils 底层
-  -> _runtime
-  -> _api
-  -> _nn / _optim 等领域实现
-  -> _torch_compat
-  -> 公开 facade 负责最终组合与重导出
+stdlib / jittor_utils 底层
+  -> core runtime 与领域实现
+  -> nn / misc / pool / optim 领域包
+  -> compat 能力与通用机制
+  -> 领域 __init__.py 和根 composition root
 ```
 
 具体约束：
 
-1. 新私有模块不得在模块作用域 `import jittor` 或 `from jittor ...`。
-2. 私有包内部只允许一级相对导入；`from ..` 会重新依赖部分初始化的根包。
-3. 必须访问运行时根模块时，通过 composition root 显式绑定的窄接口完成。
-4. `jittor_utils` 的底层模块不得反向导入 `jittor`。
+1. 领域实现依赖具体领域接口，不通过无边界的根模块 service locator。
+2. `jittor_utils` 的底层模块不得反向导入 `jittor`。
+3. `compat` 可以依赖稳定领域能力；核心领域不得依赖下游项目补丁。
+4. TRELLIS、Gaussian Splatting 和 Transformers 版本粘合放在可选发行包，主仓库
+   只保留注册机制和通用能力。
 5. 不得增加现有强连通导入分量；每批迁移应让环数量保持或下降。
 
-`jittor._torch_compat.runtime`、`jittor._nn.runtime` 和 `jittor._pool.runtime` 当前
-分别提供最小运行时代理。
-它们只解决拆分期间的初始化顺序，不应演化成无边界的 service locator；后续应按
-实际依赖继续收窄协议。私有实现若依赖可被后端运行时重绑的公开符号，必须经 facade
-动态解析，不能静态捕获同包实现；`log_softmax -> nn.softmax` 是现有示例。
-公开类迁入私有模块时，元数据恢复还必须递归覆盖类自身的方法、property 和 decorator
-wrapper，避免只修复类的 pickle 路径而让方法反射来源发生漂移。
+`jittor._torch_compat.runtime`、`jittor._nn.runtime`、`jittor._misc.runtime`、
+`jittor._pool.runtime` 和 `jittor._torch_fsdp2.runtime` 是旧形态迁移期间的最小
+代理。阶段 3/4 合并领域包时删除这五份重复实现；可被后端重绑的行为改为显式
+registry/hook。新实现的 `__module__` 使用真实模块路径，旧 pickle 通过兼容别名或窄
+映射加载，不再递归改写所有 callable 元数据。
 
-## Facade 契约
+## 迁移兼容契约
 
 移动实现时必须同时保护以下可观察行为：
 
 - 公开导入路径和符号名称不变。
-- facade 与实现对象保持同一身份，不创建无意义的包装对象。
-- 类和函数的 `__module__`、`__qualname__` 及 pickle 路径保持兼容。
+- 领域 `__init__.py` 与实现对象保持同一身份，不创建无意义的包装对象。
+- 新反射元数据使用真实实现路径；迁移前 pickle 必须有 fixture 验证和兼容加载路径。
 - `Var.__module__ == "jittor"` 等既有序列化约定不变。
 - `jt.nn.SGD is jt.optim.SGD` 等历史重导出身份不变。
 - Torch shim 注册的 `torch.*` 模块对象和安装顺序不变。
 - 初始化期间的副作用保持幂等，不提前导入可选依赖。
 
-新的业务实现不得继续直接追加到 facade。facade 只允许组合、适配、显式重导出和
-必要的兼容元数据处理；超过模块行数预算时必须先拆分再增加功能。
+新的业务实现不得继续直接追加到组合入口。`__init__.py` 只允许组合、适配和显式
+重导出；实现进入有语义的 modules/functional 子模块。
 
 ## 资源与打包边界
 
@@ -94,11 +97,11 @@ wrapper，避免只修复类的 pickle 路径而让方法反射来源发生漂�
 实际文件路径递归读取 C++ 源码、头文件和数据资源，因此第一阶段不得移动或改成
 抽象资源接口。
 
-当前 `setup.py` 使用显式 package 列表。`find_packages()` 会遗漏或改变部分现有
-边界，namespace discovery 又会把 C++ include 目录误识别为 Python 包，因此在
-完成打包清单审计前不得直接切换自动发现。每新增私有包必须：
+阶段 1 用 `pyproject.toml`、`find_packages`、`MANIFEST.in` 和结构测试替换当前显式
+短清单与深度通配。结构测试必须证明每个含 `__init__.py` 的目录都进入构建清单，且
+不会把 C++ include 目录当作 namespace package。每次打包变更必须：
 
-1. 显式加入 package 列表。
+1. 通过包发现完整性断言。
 2. 从仓库外构建 wheel。
 3. 检查所需 Python/C++ 资源存在。
 4. 拒绝 `.pyc`、`__pycache__`、日志、实验目录和未知运行产物。
@@ -106,15 +109,15 @@ wrapper，避免只修复类的 pickle 路径而让方法反射来源发生漂�
 
 ## 测试结构
 
-`python/jittor/test` 暂时保留公开包路径，避免破坏 README、Docker 和外部脚本中
-的 `python -m jittor.test.*`。总入口只负责选择、调度和汇总；可测试逻辑放入
-`test/_runner.py`，必须满足：
+**推翻的旧决策**：`python/jittor/test` 不再作为长期公开包路径。阶段 5 先新增
+`jittor.selftest` 承接安装脚本、Docker 和环境脚本的最小自检，再把仓库测试迁到
+顶层 `tests/`，由 pytest 收集。迁移必须满足：
 
-- 文件过滤发生在导入测试模块之前。
-- skip marker 对整个测试名生效。
-- 子进程失败、超时、启动异常和 unexpected success 使总入口返回非零。
-- 子进程使用参数数组，禁止 `shell=True` 拼命令。
-- 历史环境变量 `seperate_test` 的拼写继续兼容。
+- 共享工具收敛到 `tests/_helpers/`，不再跨测试模块隐式导入。
+- 文件过滤发生在导入测试模块之前，marker 对完整测试名生效。
+- 测试选择不依赖 `listdir()` 索引或目录枚举顺序。
+- 子进程失败、超时、启动异常和 unexpected success 使入口返回非零。
+- C++ `test.h` 只随编译 include 消费者一起移动。
 
 结构测试与数值测试分开。结构测试负责导入方向、facade 身份、pickle、模块体积和
 打包声明；数值/设备测试继续负责 CPU、CUDA、NPU 行为。
@@ -241,57 +244,41 @@ ShardedGradScaler 也主要是 surface compatibility。Torch distributed 对外�
 FSDP rank/world 口径分裂、distributed checkpoint 静默不落盘的风险，必须先实现真实
 语义或 loud reject，不能从结构测试通过推导为完整能力。
 
-### 第十二批：`torch_shim/torch__init__.py`
+## 后续迁移阶段
 
-按 nn、optim、cuda、distributed、data 和 stub 注册拆 shim；保持模块对象身份、
-注册顺序和只读 extension 安装时机。该文件必须和 `torch_compat.py` 中的安装器共同
-设计，不能分别切分后再补对象身份。
+前十一批的事实和验证证据继续有效，但后续顺序改由仓库布局 RFC 统一管理：
 
-### 第十三批：剩余 `nn` 类
+1. 先修正打包清单、资源声明、部署复制和 wheel 基线。
+2. 建立 ruff、mypy、pre-commit、nox、分层 CI、现代发布链、容器与 ASV。
+3. 把 `nn.py + _nn/`、`misc.py + _misc/`、`pool.py + _pool/` 和 Torch compat
+   配对合并为领域包，删除重复 runtime proxy 和 `preserve_facade_origins`。
+4. 按能力、机制、根因、项目粘合四层重构兼容代码。`monkeypatch_ops.py` 不再拆入
+   新的 `_third_party_compat/`；通用能力/根因进入 Jittor，粘合进入可选发行包。
+5. 新增 `jittor.selftest`，再把测试迁到根 `tests/` 并切换 pytest。
+6. 把脚本、demo、notebook 收敛到 `tools/` 与 `examples/`，删除有证据的死资产。
+7. 在新领域包形态下同批处理 Torch shim/installer、剩余 nn 类和根 composition root。
+8. 完成文档、国际化、教程和治理文档现代化。
 
-整体审计并迁移 `Linear/Conv1d_sp/DepthwiseConv` 及相关别名、ACL wrapper 和 Torch
-shim 类快照。不得只移动类壳而静态捕获可被后端替换的公开构造器。
-
-### 第十四批：启动与运行时
-
-抽出 `_version.py` 和仅标准库的 `_bootstrap/`，再逐步分离 core loader、compiler
-和 backend controller。根 `__init__.py` 最后收敛为严格排序的 composition root。
-
-## 顶层审计与后续优先级
-
-2026-08-11 对 `python/jittor` 顶层全部 Python 文件重新盘点后，后续工作按以下顺序
-推进。公开 facade 留在根包是兼容设计；应移走的是大段实现、第三方补丁和运行时控制。
-能力正确性高于目录施工：先修 Torch distributed 状态、checkpoint 静默 no-op，并为
-HCCL/CPU MPI 补通信或显式拒绝，再执行下面的源码拆分顺序。
-
-| 优先级 | 当前文件 | 主要职责债务 | 下一步 |
-| --- | --- | --- | --- |
-| P0 | `torch_compat.py`（8,683 行） | installer、tensor methods、misc 注册和大量 `torch.*` 模块构造 | 继续拆 `_torch_compat`，与 shim 同步设计 |
-| P0 | `misc.py`（2,805 行） | 103 个函数、3 个类、71 个模块级绑定 | reduction/scatter，再 sequence/indexing |
-| P0 | `nn.py`（2,442 行） | 62 个函数、43 个类及后端静态引用 | 剩余 nn/attention/DepthwiseConv |
-| P0 | `monkeypatch_ops.py`（1,024 行） | 多个第三方项目补丁混在根包 | 保留根 facade，实现迁入 `_third_party_compat/` |
-| P0 | `__init__.py`（2,851 行） | bootstrap、core loader、API 和安装副作用混合 | 最后拆 `_version/_bootstrap/_runtime/_api` |
-| P1 | `linalg.py`、`distributions.py` | 多数学领域与 Torch 注册混合 | 按领域拆分，保留 facade |
-| P1 | `compiler.py`、`compile_extern.py` | JIT、缓存、外部后端控制高度耦合 | 启动边界稳定后迁入 `_runtime` |
-| P2 | `init.py`、`optim.py`、`contrib.py` 等 | 领域实现和全局安装副作用尚未分离 | 在 P0/P1 边界明确后处理 |
-
-完整盘点、指标和已知 FSDP2 后端缺口见
+能力正确性仍高于目录施工：Torch distributed 状态、checkpoint 静默 no-op、HCCL/
+CPU MPI 通信以及通用 DTensor/TP 的能力债务必须真实实现或 loud reject，不能由结构
+测试代替。完整旧盘点见
 `agent/results/2026-08-11-source-architecture-misc-fsdp2-refactor.md`。
 
-### 暂缓项
+### 保持原位的运行时边界
 
-- 不移动 `src/`、`extern/`。
-- 不一次性迁移全部测试到仓库根 `tests/`。
-- 不直接改用 namespace package 自动发现。
-- 不在结构重构提交中顺带改变算子语义或设备实现。
+- `src/`、`extern/`、`utils` 中被 C++ exec 的文件、`math_util/src` 和
+  `other/code_softmax.py` 在消费者协议修改前保持实体路径。
+- `python/jittor_utils` 保持为 `jittor` 的同级兄弟。
+- 不使用 namespace package 自动发现；包发现只识别含 `__init__.py` 的目录。
+- 结构迁移与算子语义变更分别验证；阶段 4 的根因/能力变更必须追加数值和设备证据。
 
 ## 每批验收
 
-每个拆分提交至少完成：
+每个迁移提交至少完成：
 
 1. 旧实现与新实现的 AST 或人工逐块等价审查。
-2. facade 对象身份、模块元数据和 pickle 契约测试。
-3. 私有模块导入方向与行数预算检查。
+2. 公开导入、对象身份、真实模块元数据和旧 pickle 兼容测试。
+3. 领域模块导入方向、职责和体积检查。
 4. 受影响 CPU 测试和至少一个真实加速设备回归。
 5. 仓库外 wheel 构建、内容检查和隔离安装导入。
 6. `git diff --check` 与 `agent/scripts/check_repo_layout.sh`。

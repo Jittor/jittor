@@ -6,6 +6,7 @@
 
 ## 兼容性与功能验证
 
+- [2026-08-11 仓库结构现代化阶段 0：目标架构 RFC](2026-08-11-repository-modernization-rfc.md)
 - [2026-08-11 源码架构重构第十、十一批：misc 形状域与 FSDP2 兼容层](2026-08-11-source-architecture-misc-fsdp2-refactor.md)
 - [2026-08-11 源码架构重构第九批：legacy pooling](2026-08-11-source-architecture-legacy-pool-refactor.md)
 - [2026-08-11 源码架构重构第八批：pooling 覆盖层](2026-08-11-source-architecture-pooling-refactor.md)

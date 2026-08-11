@@ -7,7 +7,7 @@ status=0
 
 while IFS= read -r name; do
   case "$name" in
-    .git|.github|.agents|.codex|.claude|agent|doc|python|\
+    .git|.github|.agents|.codex|.claude|agent|doc|docs|python|\
     .dockerignore|.gitignore|.gitlab-ci.yml|AGENTS.md|\
     AWESOME-JITTOR-LIST.cn.md|AWESOME-JITTOR-LIST.md|\
     CODE_OF_CONDUCT.md|CONTRIBUTING.md|Dockerfile|GOVERNANCE.md|\

@@ -41,6 +41,12 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 > **分支**：所有人/agent 都在 **`2.0`**（= 原 `acl-perf-and-fixes` 推到远程；动手前 `git branch --show-current` 确认）。分叉前的所有进展/日志现在都是**公共知识**。
 
 ### ✅ 已完成并验证（在 `2.0`）
+- **仓库结构现代化阶段 0（目标架构 RFC）**：第十、十一批已由 `47e7ec75`
+  提交；`docs/architecture/repository-layout.md` 已锁定目标树、JIT 资源硬约束、领域包
+  形态和兼容层四层分离。旧规范中长期保留 `nn.py + _nn/` 与 `jittor.test` 公开包的
+  决策已明确被取代；已有 `_xxx` 只作为迁移脚手架，后续不再创建
+  `_third_party_compat`。下一步是阶段 1 的 PEP 621 打包、完整包/资源发现、部署复制
+  修复和 wheel 内容基线。详见[阶段 0 报告](../results/2026-08-11-repository-modernization-rfc.md)。
 - **源码架构重构第十、十一批与顶层全量审计**：对 `python/jittor` 顶层全部
   Python 文件重新盘点，不再只处理实验目录。`misc.py` 的 8 个 shape transform/
   composition 函数已拆入 `_misc`，原文件从 3,066 行降到 2,805 行；根包中 2,175 行
