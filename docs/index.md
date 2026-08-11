@@ -25,6 +25,9 @@ compatibility/index
 :caption: Project
 
 architecture/index
+testing/index
+development/index
+research/index
 performance/index
 releases/index
 contributing

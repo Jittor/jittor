@@ -143,16 +143,17 @@ incl. a `generate()` greedy/beam/sampling test) and the diffusers generation pat
 ## Complex numbers & FFT
 
 ```python
-c = torch.complex(re, im)                 # -> a ComplexNumber (real/imag pair)
+c = torch.complex(re, im)                 # -> a native complex64 Var
 torch.view_as_complex(x); torch.view_as_real(c)
 torch.polar(abs, angle); torch.real(c); torch.imag(c); torch.conj(c)
 torch.fft.fft(x); torch.fft.ifft(x); torch.fft.rfft(x); torch.fft.irfft(r, n=N)
 torch.fft.fft2(x2); torch.fft.fftn(x, dim=(-2,-1))   # norm='backward'|'forward'|'ortho'
 ```
-Complex is represented by `jittor.nn.ComplexNumber` (real/imag pair) with full
-arithmetic; the `torch.fft.*` transforms are DFT-matrix based (so they run and
-backprop on **both** Ascend and CUDA) and match `numpy.fft` to ~1e-4. A true native
-complex `Var` dtype is still emulated, not a first-class dtype.
+`complex64` is a first-class `jittor_core` dtype, and these public APIs consume
+and return native complex `Var` objects. Some linear-algebra and FFT algorithms
+still use the older `jittor.nn.ComplexNumber` real/imaginary pair internally,
+then convert results back to native tensors. That bridge is an implementation
+detail with tracked limitations; see [Native Complex Dtype](../architecture/complex-dtype.md).
 
 ## Lightning-style training
 
@@ -257,7 +258,8 @@ A known limitation — **numpy 2.x**: the data-marshalling ABI fix landed (op
 load remains (needs memory-debugging tooling to pin); **use numpy < 2** for now. Python
 3.13 ships numpy 2.x, so the same guidance applies there.
 
-In progress (deeper/core): a native complex `Var` dtype, PP/TP,
+In progress (deeper/core): `complex128` and native kernels that remove the
+remaining internal complex bridge, PP/TP,
 memory-manager tuning, cuDNN9 and CUDA 11/13 wheel families (the aligned CUDA
 12.2/cuDNN 8 stack is available through `jittor[cuda12]`), the
 remaining Lightning surface (DDP/precision/loggers), the numpy-2.x stability fix, and

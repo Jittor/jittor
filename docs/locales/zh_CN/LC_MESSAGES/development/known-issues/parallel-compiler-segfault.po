@@ -1,0 +1,189 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) 2026, Jittor contributors
+# This file is distributed under the same license as the Jittor package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Jittor 1.3.11.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-08-12 03:30+0800\n"
+"PO-Revision-Date: 2026-08-11 19:33+0000\n"
+"Last-Translator: Jittor contributors\n"
+"Language: zh_CN\n"
+"Language-Team: zh_CN <LL@li.org>\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: 44dd8c0c72a34d389cbecbfde8c5978a
+msgid "Parallel Operator Compiler Segmentation Fault"
+msgstr "并行算子编译器段错误"
+
+#: 6bc56bebea834ed7a248f1e90e55c0c0
+msgid "Status: Open; root cause not proven"
+msgstr ""
+
+#: cb4c50a36e194408b74339a110052119
+msgid "Last reviewed: 2026-08-12"
+msgstr ""
+
+#: 447edeb80a564258a56329cf776c37a1
+msgid "Baseline: `582fc51d`"
+msgstr ""
+
+#: 0f05b7e152c84e67a5eed459cb917ed2
+msgid "Owner: compiler/executor maintainers"
+msgstr ""
+
+#: c69e2e658a384a6c851f176eb88245db
+msgid "Workaround: `jt.flags.use_parallel_op_compiler = 0`"
+msgstr ""
+
+#: 78ad6624fbc740efab4a8515c7ac0779
+msgid ""
+"Exit condition: a minimized stress test passes repeatedly with parallel "
+"compilation enabled and no deadlock, cache corruption, or material "
+"regression"
+msgstr ""
+
+#: 64e4c75a13f84b519b0ce78f5e112e54
+msgid "Symptom"
+msgstr ""
+
+#: 168bbf3be30146bd91c12cfdaacfa870
+msgid ""
+"Some large model and device-parity workloads can terminate with allocator"
+" or segmentation faults while multiple fused operations compile "
+"concurrently. The failure is timing-sensitive and may surface after the "
+"compilation that damaged state, so the last printed operator is not "
+"reliable attribution."
+msgstr ""
+
+#: 0b2cd605db544409acf6cabea68374f2
+msgid ""
+"Serial compilation has been used successfully by dataset, ACL, and parity"
+" test paths. This is a containment measure, not evidence that runtime "
+"operator execution is defective."
+msgstr ""
+
+#: 3a5077f26efb4b45af239c178054c86d
+msgid "Current hypothesis"
+msgstr ""
+
+#: 872ea0bf7f9e4e3f98eca8eac4277b6d
+msgid ""
+"The leading hypothesis is a missing synchronization boundary between "
+"parallel compiler workers and process-level compilation/cache locking. A "
+"worker may observe lock state established by the owning process and "
+"incorrectly treat shared compiler or relay state as protected. Concurrent"
+" mutation could then surface as heap corruption."
+msgstr ""
+
+#: fb669e8f0e36488a976c287fc17c93ba
+msgid ""
+"This remains a hypothesis. The ownership of relay groups, the exact "
+"shared mutable object, and the first invalid access have not been "
+"demonstrated with a sanitizer trace. Adding one broad mutex is therefore "
+"not an accepted fix: it may deadlock nested compilation, eliminate "
+"intended parallelism, or fail to protect multi-process cache access."
+msgstr ""
+
+#: c5105433025b46489fa7ee21ac99be85
+msgid "Reproduction protocol"
+msgstr ""
+
+#: ce9be3e62dc14075aca023399cf7d91c
+msgid ""
+"Use a dedicated state directory and preserve the exact commit, compiler, "
+"device, and environment:"
+msgstr ""
+
+#: f634214109414879bdd1bdbfcb8c9137
+msgid "Run once with the default parallel compiler setting and once with:"
+msgstr ""
+
+#: c5a1be3fec8748c4bd99555b82f41ed1
+msgid ""
+"Do not run the two variants concurrently or against the same cache. A "
+"useful reproduction records whether the cache was cold, worker count, the"
+" last completed compile, signal/backtrace, and whether repeated serial "
+"runs are clean."
+msgstr ""
+
+#: 4b5174342de14b5f97fdfe2c40bdd7b4
+msgid "Investigation plan"
+msgstr ""
+
+#: fba3906acadc47f3ab8dd5e1c9d12dbc
+msgid "Minimize the workload while retaining a cold-cache failure."
+msgstr ""
+
+#: 5bf7d72de67d424697233c418f57ff9b
+msgid ""
+"Instrument compiler task creation, relay-group ownership, cache lock "
+"acquisition, and worker completion with stable identifiers."
+msgstr ""
+
+#: 604a26fc51674028abeed685a30c61ac
+msgid ""
+"Run the minimized native compiler path under AddressSanitizer or "
+"ThreadSanitizer."
+msgstr ""
+
+#: 8f89e2fce2bf4e7c96e7e7b3098be0b2
+msgid "Identify the first invalid access or race before changing synchronization."
+msgstr ""
+
+#: ddc758c6ce7e43aca3900ed700b57cdb
+msgid ""
+"Apply the narrowest ownership or locking fix and add a deterministic "
+"stress regression."
+msgstr ""
+
+#: 2cf57030cadf42fe99190a5c991176e0
+msgid "Acceptance gate"
+msgstr ""
+
+#: 6fb327f1e7be4e19bbac4ccda47a4b47
+msgid "A fix must demonstrate all of the following:"
+msgstr ""
+
+#: ee97be8d0f0742c497f1192a212af15a
+msgid "repeated cold- and warm-cache stress runs no longer crash;"
+msgstr ""
+
+#: bed0fff7a48142ac911be134703b867c
+msgid "a timeout-backed test shows no deadlock;"
+msgstr ""
+
+#: 2b9552232c884a81a69d687d2c157ba2
+msgid ""
+"two processes using separate and shared cache configurations do not "
+"corrupt artifacts;"
+msgstr ""
+
+#: b5b16079cd744c218d650930b97cdd79
+msgid ""
+"parallel compile time does not regress materially against the recorded "
+"baseline;"
+msgstr ""
+
+#: d95b069a8b28479db276cb630e7f2da6
+msgid ""
+"compiler, device-parity, and representative model tests pass with "
+"parallel compilation restored;"
+msgstr ""
+
+#: 51e0975a935b409e916f19489c0e9b55
+msgid "the serial workaround and ledger entry are removed in the same change."
+msgstr ""
+
+#: 6ad2c75bd32c4923964e7e009e824880
+msgid ""
+"Until that evidence exists, callers that prioritize deterministic "
+"validation may disable the parallel compiler explicitly and should report"
+" that choice with their results."
+msgstr ""

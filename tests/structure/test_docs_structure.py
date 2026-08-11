@@ -3,10 +3,12 @@
 from __future__ import print_function
 
 import ast
+from importlib.util import module_from_spec, spec_from_file_location
 import json
 from pathlib import Path
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 import unittest
 
 
@@ -59,6 +61,8 @@ class TestDocsStructure(unittest.TestCase):
             check=True,
         )
         self.assertEqual(tracked.stdout, "")
+        self.assertFalse(list(self.repo_root.rglob("*.src.md")))
+        self.assertFalse(list(self.repo_root.rglob("*.ipynb")))
 
     def test_sphinx_configuration_is_myst_only_and_import_safe(self):
         path = self.docs_root / "conf.py"
@@ -95,6 +99,8 @@ class TestDocsStructure(unittest.TestCase):
         adapter = (self.docs_root / "_myst_autodoc.py").read_text(encoding="utf-8")
         ast.parse(adapter, filename="docs/_myst_autodoc.py", feature_version=(3, 7))
         self.assertIn("MockRSTParser", adapter)
+        self.assertIn("nodes.literal_block", adapter)
+        self.assertIn('"inventory.json"', adapter)
         self.assertNotIn("eval-rst", adapter)
 
     def test_content_manifest_accounts_for_every_legacy_page(self):
@@ -118,22 +124,63 @@ class TestDocsStructure(unittest.TestCase):
                 for asset in entry["assets"]:
                     self.assertTrue((self.docs_root / asset).is_file(), asset)
 
-    def test_api_inventory_is_explicit_myst_and_unique(self):
+    def test_api_pages_auto_discover_members_and_inventory_is_unique(self):
         inventory = json.loads(
             (self.docs_root / "api" / "inventory.json").read_text(encoding="utf-8")
         )
         objects = []
+        docnames = []
         for page in inventory["pages"]:
+            docnames.append(page["docname"])
             path = self.docs_root / (page["docname"] + ".md")
             source = path.read_text(encoding="utf-8")
-            self.assertIn(":::{autosummary}", source)
-            self.assertNotIn(":toctree:", source)
+            self.assertIn(":::{autopublicmodule}", source)
+            self.assertNotIn(":members:", source)
+            self.assertNotIn(":imported-members:", source)
             self.assertNotIn("eval_rst", source)
             self.assertNotIn("undoc-members", source)
+            modules = {
+                line.split(None, 1)[1]
+                for line in source.splitlines()
+                if line.startswith(":::{autopublicmodule} ")
+            }
             for name in page["objects"]:
-                self.assertIn(name.rsplit(".", 1)[-1], source)
                 objects.append(name)
+                self.assertIn(name.rsplit(".", 1)[0], modules)
+        self.assertEqual(len(docnames), len(set(docnames)))
         self.assertEqual(len(objects), len(set(objects)))
+        index = (self.docs_root / "api" / "index.md").read_text(encoding="utf-8")
+        self.assertIn(":::{autosummary}", index)
+
+    def test_api_build_checker_rejects_duplicate_html_ids(self):
+        checker_path = self.repo_root / "tools" / "docs" / "check_build.py"
+        spec = spec_from_file_location("_jittor_docs_check_build", str(checker_path))
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        checker = module_from_spec(spec)
+        spec.loader.exec_module(checker)
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            html = root / "api" / "sample.html"
+            html.parent.mkdir(parents=True)
+            html.write_text(
+                '<div id="jittor.sample"></div><div id="jittor.sample"></div>',
+                encoding="utf-8",
+            )
+            inventory = root / "inventory.json"
+            inventory.write_text(
+                json.dumps(
+                    {
+                        "pages": [
+                            {"docname": "api/sample", "objects": ["jittor.sample"]}
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            issues, checked = checker._check_api(root, inventory)
+        self.assertEqual(checked, 1)
+        self.assertTrue(any("duplicate HTML anchors" in issue for issue in issues))
 
     def test_docs_dependencies_are_locked_without_legacy_plugins(self):
         direct = {
@@ -150,7 +197,7 @@ class TestDocsStructure(unittest.TestCase):
                 "myst-parser",
                 "furo",
                 "sphinx-intl",
-                "jupytext",
+                "jupytext==1.17.3",
                 "nbconvert",
                 "ipykernel",
                 'importlib-metadata; python_version < "3.8"',
@@ -174,7 +221,7 @@ class TestDocsStructure(unittest.TestCase):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
         self.assertEqual({"docs", "docs_zh", "docs_links", "tutorials"} - functions, set())
-        for option in ('"-W"', '"--keep-going"', '"-n"'):
+        for option in ('"-E"', '"-a"', '"-W"', '"--keep-going"', '"-n"'):
             self.assertIn(option, nox_source)
         self.assertIn("autodoc imported the source tree", nox_source)
         workflow = (self.repo_root / ".github" / "workflows" / "docs.yml").read_text(

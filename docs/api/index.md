@@ -1,8 +1,25 @@
 # API reference
 
-The API pages use explicit MyST autodoc and autosummary directives. Their
-inventory is deliberately curated: adding a public symbol requires adding it
-to both the relevant page and `inventory.json`.
+The API pages discover public exports from the installed Jittor wheel.
+`inventory.json` is the single machine-readable stability contract for the
+objects that receive structured autodoc and stable Python-domain anchors; pages
+do not repeat symbol lists.
+
+:::{autosummary}
+jittor
+jittor.nn
+jittor.nn.attention
+jittor.models
+jittor.optim
+jittor.lr_scheduler
+jittor.init
+jittor.contrib
+jittor.dataset
+jittor.transform
+jittor.linalg
+jittor.distributions
+jittor.loss3d
+:::
 
 :::{toctree}
 :maxdepth: 2

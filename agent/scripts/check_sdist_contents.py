@@ -12,10 +12,15 @@ import tarfile
 
 
 REQUIRED_SOURCE_PATHS = (
+    "docs/conf.py",
+    "docs/index.md",
+    "docs/locales/zh_CN/LC_MESSAGES/index.po",
     "examples/README.md",
     "examples/gan/simple_cgan.py",
     "examples/notebooks/basics.md",
     "requirements/examples.txt",
+    "requirements/docs.in",
+    "requirements/docs.txt",
     "tools/README.md",
     "tools/build/build_aarch64_mkl.sh",
     "tools/release/pack_offline.py",
@@ -48,8 +53,11 @@ def _expected_source_paths(repo_root):
         "--others",
         "--exclude-standard",
         "--",
+        "docs",
         "examples",
         "tools",
+        "requirements/docs.in",
+        "requirements/docs.txt",
         "requirements/examples.txt",
     )
     try:
@@ -154,8 +162,14 @@ def audit_sdist(path, expected_paths):
         if not member.isdir()
         and (
             relative.startswith("examples/")
+            or relative.startswith("docs/")
             or relative.startswith("tools/")
-            or relative == "requirements/examples.txt"
+            or relative
+            in (
+                "requirements/docs.in",
+                "requirements/docs.txt",
+                "requirements/examples.txt",
+            )
         )
     }
     unexpected = sorted(governed_members - set(expected_paths))

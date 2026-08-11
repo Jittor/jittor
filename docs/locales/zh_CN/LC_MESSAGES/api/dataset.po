@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Jittor 1.3.11.0\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-12 02:07+0800\n"
+"POT-Creation-Date: 2026-08-12 03:30+0800\n"
 "PO-Revision-Date: 2026-08-11 18:11+0000\n"
 "Last-Translator: Jittor contributors\n"
 "Language: zh_CN\n"
@@ -18,266 +18,90 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.18.0\n"
 
-#: 6fc30052d0e545608c41f15047ac0924
+#: 5803fa6a85604815ad872e6c4921587f
 msgid "Dataset API"
 msgstr "数据集 API"
 
-#: 02a8ef64871341708efb928d7337dc0b
-msgid ""
-":py:obj:`Dataset <jittor.dataset.Dataset>`\\ \\(\\[batch\\_size\\, "
-"shuffle\\, drop\\_last\\, ...\\]\\)"
-msgstr ""
-
-#: 4ac8baaba3024411b5216bbc9f8403b6 c8ba076b39554874aec2b62bd01ebe63
-msgid "Base class for reading data."
-msgstr ""
-
-#: 847bcfea99714c87bf048ec7c2656862
-msgid ""
-":py:obj:`DataLoader <jittor.dataset.DataLoader>`\\ \\(dataset\\, \\*args\\, "
-"\\*\\*kargs\\)"
-msgstr ""
-
-#: 0491112bd642427890570b52729bdf00 ff9ce5a59d754fd388c6a3ca28f09a2c
-msgid "Simple dataloader."
-msgstr ""
-
-#: 5ff547307a104086b8c9ea2861e05c55
-msgid ":py:obj:`TensorDataset <jittor.dataset.TensorDataset>`"
-msgstr ""
-
-#: 54bf5bb538234debaf086419a7a1b12b
-msgid ""
-":py:obj:`ImageFolder <jittor.dataset.ImageFolder>`\\ \\(root\\[\\, "
-"transform\\]\\)"
-msgstr ""
-
-#: b57ac1b87b9d4171bfd2a4ac6e681732
-msgid "A image classify dataset, load image and label from directory."
-msgstr ""
-
-#: 89bab691148a48bdb7d53c0d86b33a43
-msgid ""
-":py:obj:`MNIST <jittor.dataset.MNIST>`\\ \\(\\[data\\_root\\, train\\, "
-"download\\, ...\\]\\)"
-msgstr ""
-
-#: 9521cdf4bb3a45df9e7f1f6b2d5d33cf d3d4850934b64aedb7726a918f5b01c1
-msgid "Jittor's own class for loading MNIST dataset."
-msgstr ""
-
-#: c3fb96fa3214414db9201d3cff53f62e
-msgid ""
-":py:obj:`CIFAR10 <jittor.dataset.CIFAR10>`\\ \\(\\[root\\, train\\, "
-"transform\\, ...\\]\\)"
-msgstr ""
-
-#: 285948ba06494004b209e96683afb364 c045a2c1198343589ac8b6ae14a4f0b7
+#: 7e21b82b9c834021a640c05976130c0d
 msgid "`CIFAR10 <https://www.cs.toronto.edu/~kriz/cifar.html>`_ Dataset."
 msgstr ""
 
-#: 91196efe4b264cfc8f90cd8e0bea904b
-msgid ""
-":py:obj:`CIFAR100 <jittor.dataset.CIFAR100>`\\ \\(\\[root\\, train\\, "
-"transform\\, ...\\]\\)"
-msgstr ""
-
-#: 3abdbac4adb5477baa77e6501935b31d 83e18139d0684630b4f517ae1596887f
-msgid "`CIFAR100 <https://www.cs.toronto.edu/~kriz/cifar.html>`_ Dataset."
-msgstr ""
-
-#: 689774fda21b49dd84c7ab468b618264
-msgid ":py:obj:`VOC <jittor.dataset.VOC>`\\ \\(\\[data\\_root\\, split\\]\\)"
-msgstr ""
-
-#: 51d888c784ec4774af7e97704f1d5ab6 8d4262204b9a451896c34f28b5b1f159
-msgid "Jittor's own class for loading VOC dataset."
-msgstr ""
-
-#: 0bfe20dbb9744f92a3231f9ad5eb394f 69586be4af1241d6b4a36c0bc9723e2b
-#: a4b71470ecd34380b52f4c9cf951020d a911b1ef9ecf42dca1b4be82d328f2f5
-#: b53460d7cd6b480fad4bec9f72c587d1
-msgid "Args::"
-msgstr ""
-
-#: 1dc987e0a899470b87bd4c5c20c98724 2539b06d8a5f4dc994d127f12d162ece
-#: 4227f1088e8a4e969a48821c486596bf 44779601e9614b5bb22590385e8faa11
-#: 665060d9e70c4fdeb1a1482ee92ba7ac 7c393f9179de4e0db6d1f6e32b31fcca
-#: 909d71abccf94a8daf26299081addb0e cd09d042b1874663b4336292ec567c1f
-#: dc6a0bac360244f7821519e1407dc8f2
-msgid "Example::"
-msgstr ""
-
-#: f056a6f6953f4d0fa83a55a2185490ff
-msgid ""
-"You can set attributes of dataset by using set_attrs function, including "
-"total_len, batch_size, shuffle, drop_last, num_workers, buffer_size."
-msgstr ""
-
-#: 050d21bf65a64160900246e75a2980d9
-msgid "Attrs:"
-msgstr ""
-
-#: 488c1ce5e82041619ad7ff2850d1e62d
-msgid "batch_size(int): batch size, default 16."
-msgstr ""
-
-#: 663fc47ef79c42febedf73ea3d508752
-msgid "total_len(int): total lenght."
-msgstr ""
-
-#: 597a804e1a304a9ea6e5696a75629a6f
-msgid "shuffle(bool): shuffle at each epoch, default False."
-msgstr ""
-
-#: 6bbb41f01fbf4cfa81f806ff510fc125
-msgid ""
-"drop_last(bool): if true, the last batch of dataset might smaller than "
-"batch_size, default True."
-msgstr ""
-
-#: 8afd619a49514b539188e89d54882c28
-msgid "num_workers: number of workers for loading data"
-msgstr ""
-
-#: d0c470efd464477092f5d9753a9abadc
-msgid "buffer_size: buffer size for each worker in bytes, default(512MB)."
-msgstr ""
-
-#: 217d6ada560849fc9e3a2e9f866086a2
-msgid "stop_grad: stop grad for data, default(True)."
-msgstr ""
-
-#: 282f7a8f87ed46dc836212a6836a6fc4
-msgid "Change batch data to jittor array, such as np.ndarray, int, and float."
-msgstr ""
-
-#: e04255353232428cabdaedd0ebb72ee2
-msgid "Puts each data field into a tensor with outer dimension batch size."
-msgstr ""
-
-#: 88289217fcf446c8809e0ab12feb632a
-msgid ""
-"Note: if a ``collate_fn`` was provided (torch-compatible), it is used "
-"instead of the default collate logic."
-msgstr ""
-
-#: 17909c6225cf43f9999907bcd0fdcdbc
-msgid "Terminate is used to terminate multi-process worker reading data."
-msgstr ""
-
-#: 6e611ade09154c2f8c9e038d48d8604d
-msgid ""
-"Display dataset worker status, when dataset.num_workers > 0, it will display"
-" infomation blow:"
-msgstr ""
-
-#: d81ddd67e65e470cb7ccfc8312f0d422
-msgid "Meaning of the outputs:"
-msgstr ""
-
-#: 2ef562d6cc5047fc97b742e1b193a522
-msgid "progress: dataset loading progress (current/total)"
-msgstr ""
-
-#: 47bf63c0cbe44823900c8ca37e314d1b
-msgid "batch: batch time, exclude data loading time"
-msgstr ""
-
-#: e2c4330bf44640ee89fa2a1fa346f7ed
-msgid "wait: time of main proc wait worker proc"
-msgstr ""
-
-#: c0b6d3482fbf449ead99ae6e5aea2323
-msgid "recv: time of recv batch data"
-msgstr ""
-
-#: 44b63d9cbc3348b8bdfe5605b90aa8ef
-msgid "to_jittor: time of batch data to jittor variable"
-msgstr ""
-
-#: 43ef4e96de144b63b01d92e89ed62a9b
-msgid "recv_raw_call: total number of underlying recv_raw called"
-msgstr ""
-
-#: 70100b4005784cdabc3095829b87e36b
-msgid "last 10 workers: id of last 10 workers which main proc load from."
-msgstr ""
-
-#: ddd5f2b6a4f14cef9c6f9b41b4eb6ed4
-msgid "table meaning"
-msgstr ""
-
-#: 59ea39fbecac4d7185e3e0778cb0784a
-msgid "ID: worker id"
-msgstr ""
-
-#: efbc87a129a74909bc241ac50da60d08
-msgid "wait: worker wait time"
-msgstr ""
-
-#: 6f8d450985294846bb311ddbb2a386c5
-msgid "open: worker image open time"
-msgstr ""
-
-#: b531c31c6fad4bc296e7c99529c64274
-msgid "load: worker load time"
-msgstr ""
-
-#: 04fd0b7ac7754da885ee5e78c508f13e
-msgid ""
-"buffer: ring buffer status, such as how many free space, left index, right "
-"index, total size(bytes)."
-msgstr ""
-
-#: 469162f6163847a0ad390a4060bb4117
-msgid "A image classify dataset, load image and label from directory::"
-msgstr ""
-
-#: 209cdcd18aae4e4fb59c07ef337fb64b
-msgid "Attributes::"
-msgstr ""
-
-#: 9875dbacd72a4a468f6f37aaf62dabfd
-msgid ""
-"Download mnist data set function, this function will be called when download"
-" is True."
-msgstr ""
-
-#: 8d09d433e3e34030bd7c8859d0f084d5
+#: f6a03522235545efabbf297ece8f8ea0
 msgid "Parameters"
 msgstr ""
 
-#: bfa2385582374991a469ee97a7e123b4
+#: 780d4948efd24e058a362243cdbb39b5
 msgid ""
-"Root directory of dataset where directory ``cifar-10-batches-py`` exists or "
-"will be saved to if download is set to True."
+"Root directory of dataset where directory ``cifar-10-batches-py`` exists "
+"or will be saved to if download is set to True."
 msgstr ""
 
-#: 448bedb2c17442bcb5ffd6489285311b
-msgid "If True, creates dataset from training set, otherwise creates from test set."
-msgstr ""
-
-#: 7b1f79a1035f44488109d19a168fb0f0
+#: 473b74c7a23e4dc48bfbe07335d22607
 msgid ""
-"A function/transform that takes in an PIL image and returns a transformed "
-"version. E.g, ``transforms.RandomCrop``"
+"If True, creates dataset from training set, otherwise creates from test "
+"set."
 msgstr ""
 
-#: 7775291738d64b698a5a217274435282
+#: 7ff6f27fe9214fa29dd953b254b6d40c
+msgid ""
+"A function/transform that takes in an PIL image and returns a transformed"
+" version. E.g, ``transforms.RandomCrop``"
+msgstr ""
+
+#: 53b95101f17a4dda8afa89a7d65dfc49
 msgid "A function/transform that takes in the target and transforms it."
 msgstr ""
 
-#: 33120bbc25524b4487484664062dc447
+#: 79c51bd0d1df442cb24a73a3645f6f86
 msgid ""
 "If true, downloads the dataset from the internet and puts it in root "
 "directory. If dataset is already downloaded, it is not downloaded again."
 msgstr ""
 
-#: d0140033e271484d8a029b77abcb301f
+#: 0c7fe16ed88941aaac243cc6ba09d136 0cb1582a9ce64621b73f12dd98dab924
+#: 37156b153653410d99d5caca2e0e405f bf11eb0c45574a23bb2afe7232c1f21e
+#: eeea8920797d4dfba0ad98074f672c22 f1df32aec4c84fdda1f452a98672936f
+#: f1e083b21eea4941a80bd357528757bc
+msgid "Example::"
+msgstr ""
+
+#: 9b63fd5fa29b42d9836d4260ffdcd155
+msgid "`CIFAR100 <https://www.cs.toronto.edu/~kriz/cifar.html>`_ Dataset."
+msgstr ""
+
+#: 3483a1bec5134766914ddc09fb7fd6b5
 msgid "This is a subclass of the `CIFAR10` Dataset."
 msgstr ""
 
-#: e2b64dfde20d4e9db19866800cb22483
+#: a996b5b80ce84c6295316cbd36c94e6e
+msgid "Simple dataloader."
+msgstr ""
+
+#: ba253a1e90144d32ae8ab750ca026588
+msgid "Base class for reading data."
+msgstr ""
+
+#: 6a284d4b46a14e858f7280293423cc54 d67b5bfe587b41368a66fa9589790356
+#: f3a7c68c46e441568bf8e5a259a354e5 fb1fd3705dd7418cb77d007f461462dc
+msgid "Args::"
+msgstr ""
+
+#: d0461ab3b95343518729fdccc2524654
+msgid "A image classify dataset, load image and label from directory::"
+msgstr ""
+
+#: 667e09b8ea384f288b8307b34e44882d
+msgid "Attributes::"
+msgstr ""
+
+#: 5f276fffd2234c6983c9c483920318a4
+msgid "Jittor's own class for loading MNIST dataset."
+msgstr ""
+
+#: 221aeed143c74eb69867f00b613804ba
+msgid "Jittor's own class for loading VOC dataset."
+msgstr ""
+
+#: 76d51c67bf8a440b9afc5348545e79fa
 msgid "Attribute::"
 msgstr ""

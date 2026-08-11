@@ -4,6 +4,7 @@
 from __future__ import print_function
 
 import argparse
+from collections import Counter
 import json
 from pathlib import Path
 import re
@@ -24,7 +25,17 @@ def _check_api(html_root, inventory_path):
             issues.append("missing API page: {}".format(html_path))
             continue
         source = html_path.read_text(encoding="utf-8")
-        identifiers = set(re.findall(r'\bid=["\']([^"\']+)["\']', source))
+        identifier_list = re.findall(r'\bid=["\']([^"\']+)["\']', source)
+        duplicates = sorted(
+            identifier for identifier, count in Counter(identifier_list).items() if count > 1
+        )
+        if duplicates:
+            issues.append(
+                "{} has duplicate HTML anchors: {}".format(
+                    page["docname"], ", ".join(duplicates)
+                )
+            )
+        identifiers = set(identifier_list)
         for name in page["objects"]:
             checked += 1
             if name not in identifiers:

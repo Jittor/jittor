@@ -24,6 +24,10 @@
     {"legacy": "doc/logo.png", "docname": "_static/logo.png", "title": "Jittor logo", "catalog": null, "assets": ["_static/logo.png"], "legacy_anchors": [], "status": "verified"},
     {"legacy": "doc/source/todo.md", "docname": null, "title": "Retired documentation backlog", "catalog": null, "assets": [], "legacy_anchors": [], "status": "verified"},
     {"legacy": "doc/Makefile", "docname": null, "title": "Replaced by nox docs sessions", "catalog": null, "assets": [], "legacy_anchors": [], "status": "verified"},
-    {"legacy": "doc/build_doc.sh", "docname": null, "title": "Replaced by nox docs sessions", "catalog": null, "assets": [], "legacy_anchors": [], "status": "verified"}
+    {"legacy": "doc/build_doc.sh", "docname": null, "title": "Replaced by nox docs sessions", "catalog": null, "assets": [], "legacy_anchors": [], "status": "verified"},
+    {"legacy": "agent/manuals/design/complex-dtype.md", "docname": "architecture/complex-dtype", "title": "Native Complex Dtype", "catalog": "architecture/complex-dtype", "assets": [], "legacy_anchors": [], "status": "verified"},
+    {"legacy": "agent/manuals/design/parallel-compiler-segfault.md", "docname": "development/known-issues/parallel-compiler-segfault", "title": "Parallel Operator Compiler Segmentation Fault", "catalog": "development/known-issues/parallel-compiler-segfault", "assets": [], "legacy_anchors": [], "status": "verified"},
+    {"legacy": "agent/manuals/design/test-system.md", "docname": "testing/test-system", "title": "Test System", "catalog": "testing/test-system", "assets": [], "legacy_anchors": [], "status": "verified"},
+    {"legacy": "agent/manuals/design/source-architecture.md", "docname": "architecture/source-architecture", "title": "Source Architecture and Module Boundaries", "catalog": "architecture/source-architecture", "assets": [], "legacy_anchors": [], "status": "verified"}
   ]
 }

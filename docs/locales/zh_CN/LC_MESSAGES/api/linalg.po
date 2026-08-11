@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Jittor 1.3.11.0\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-12 02:07+0800\n"
+"POT-Creation-Date: 2026-08-12 03:30+0800\n"
 "PO-Revision-Date: 2026-08-11 18:11+0000\n"
 "Last-Translator: Jittor contributors\n"
 "Language: zh_CN\n"
@@ -18,287 +18,202 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.18.0\n"
 
-#: 38440b0fb4a34704bd4d984f4287968b
+#: 7d91b7619ff8416e89f399a3ce4e35e1
 msgid "Linear algebra API"
 msgstr "线性代数 API"
 
-#: 46d4fa4248c2417a807879292d2b5431
+#: 23ded40a738040979846dd8ab99d3b24
 msgid ""
 "The `jittor.linalg` module covers matrix decompositions, linear solves, "
 "eigenvalue routines, norms, and Einstein summation."
 msgstr ""
 
-#: 353d51bf753a42acbd291620244a6375
-msgid ":py:obj:`inv <jittor.linalg.inv>`\\ \\(x\\)"
-msgstr ""
-
-#: 01895fe7639d4c80866e776ff1531545
-msgid "calculate the inverse of x."
-msgstr ""
-
-#: e20d78c9b4de4ecd9793b9a6c58260fb
-msgid ":py:obj:`pinv <jittor.linalg.pinv>`\\ \\(x\\)"
-msgstr ""
-
-#: 00be67d6b90c450d9767e15578b42874
-msgid "calculate the pseudo-inverse of a x."
-msgstr ""
-
-#: 444ca6fc9c1045a98a0afe8c0d8d2567
-msgid ":py:obj:`solve <jittor.linalg.solve>`\\ \\(a\\, b\\)"
-msgstr ""
-
-#: fb96500ad8bf407f93db6808a0324cfb
+#: 0abacedb61684738856a9a0b0a54382a
 msgid ""
-"Solve a linear matrix equation Ax = B.This is done by calculating x = "
-"A^-1B.So A must not be singular."
+"do Cholesky decomposition of x in the form of below formula: x = LL^T x "
+"must be a Hermite and positive-definite matrix. L is a lower-triangular "
+"matrix. :param x (...,M,M): :return: L (...,M,M)."
 msgstr ""
 
-#: ccddceea7882441c9bb0cd0bad635c30
-msgid ":py:obj:`det <jittor.linalg.det>`\\ \\(x\\)"
-msgstr ""
-
-#: 38bf7c3287f845da956f921e1477a898
-msgid "calculate the determinant of x."
-msgstr ""
-
-#: 11ca87e9eb0142f6ad5937517b2290b1
-msgid ":py:obj:`slogdet <jittor.linalg.slogdet>`\\ \\(x\\)"
-msgstr ""
-
-#: 046c353a2d5f482dbe3c68d439c7370e
-msgid "calculate the sign and log of the determinant of x."
-msgstr ""
-
-#: 55338571c8f24afebabf59c23b60cdb5
-msgid ":py:obj:`cholesky <jittor.linalg.cholesky>`\\ \\(x\\)"
-msgstr ""
-
-#: 2967e551665e45af85b6e8a517a90e2b
+#: ddbaf347f7734e36909c618755179330
 msgid ""
-"do Cholesky decomposition of x in the form of below formula: x = LL^T x must"
-" be a Hermite and positive-definite matrix."
+"calculate the determinant of x. :param x (...,M,M): :return:\\|x\\| "
+"(...,1)"
 msgstr ""
 
-#: 65b02dae40a54c7fa47dcdf291e66227
-msgid ":py:obj:`qr <jittor.linalg.qr>`\\ \\(x\\)"
-msgstr ""
-
-#: 3d0044eb3c914f2da440ba845036a100
-msgid ""
-"do the qr factorization of x in the below formula: x = QR where Q is "
-"orthogonal matrix and R is upper-triangle matrix."
-msgstr ""
-
-#: 8757a753ef7b44abb9bb8e3c357e323d
-msgid ""
-":py:obj:`svd <jittor.linalg.svd>`\\ \\(x\\[\\, full\\_matrices\\, "
-"compute\\_uv\\, driver\\]\\)"
-msgstr ""
-
-#: e36555c72a6349b99679600741d4323e
-msgid "Singular Value Decomposition: ``A = U @ diag(S) @ Vh``."
-msgstr ""
-
-#: a7d90f07ecc743fea56205943440c1b2
-msgid ":py:obj:`eigh <jittor.linalg.eigh>`\\ \\(x\\)"
-msgstr ""
-
-#: d591ec667f4942e281a83a54c7213eaf
-msgid "calculate the eigenvalues and eigenvectors of x."
-msgstr ""
-
-#: 60809f148264480e86454b8a8b71a513
-msgid ":py:obj:`norm <jittor.linalg.norm>`\\ \\(x\\[\\, ord\\, dim\\, keepdim\\]\\)"
-msgstr ""
-
-#: 2ce0a24e2836407c97cbcb37f8245aa1 2ea7494f607d4e2298b76df110cf258e
-msgid "General ``torch.linalg.norm`` / ``numpy.linalg.norm`` dispatcher."
-msgstr ""
-
-#: f4057c3edbef4575bc391c111d485545
-msgid ":py:obj:`einsum <jittor.linalg.einsum>`\\ \\(equation\\, \\*operands\\)"
-msgstr ""
-
-#: 42a8a92f3f2949ecb8a55c4e01ab3111 61d463aa4b554123bd3484d122119f0a
-msgid "Evaluate the Einstein summation convention on the operands."
-msgstr ""
-
-#: c8982531ffa14d32a2a3fba3aa6d3c5b
-msgid ""
-"Singular Value Decomposition: ``A = U @ diag(S) @ Vh``. Returns the same "
-"named ``(U, S, Vh)`` result as ``torch.linalg.svd`` (and it also unpacks as "
-"a plain 3-tuple ``u, s, v``, preserving every existing jittor caller)."
-msgstr ""
-
-#: f81f70dea6f244f388fade27720c9624
-msgid "For ``A`` of shape ``(...,M,N)`` with ``K = min(M, N)``:"
-msgstr ""
-
-#: 520f72c51d534e6cb4b84714f9c4767b
-msgid ""
-"``full_matrices=False`` (default, reduced / \"thin\"): ``U`` is "
-"``(...,M,K)``, ``Vh`` is ``(...,K,N)``, ``S`` is ``(...,K)``."
-msgstr ""
-
-#: 0d56cd12c61047ad860e0234c3a270bd
-msgid ""
-"``full_matrices=True``: ``U`` is ``(...,M,M)``, ``Vh`` is ``(...,N,N)``, "
-"``S`` is ``(...,K)``."
-msgstr ""
-
-#: 9a11165b2244437dbf862496cb085785
-msgid ""
-"``torch.linalg.svd`` defaults to ``full_matrices=True``; this jittor- native"
-" entry point keeps the historical reduced default so that the differentiable"
-" path and all jittor callers (``matrix_rank``/``cond``/ ``matrix_norm``/the "
-"native ``test_linalg`` suite) are unchanged. Pass ``full_matrices=True`` "
-"explicitly for torch's full shapes. (The torch- facing ``torch.linalg.svd`` "
-"default is meant to be supplied at the torch-compat boundary.)"
-msgstr ""
-
-#: 1bb5ffb9a9a34e908674b9788d84dbbc
-msgid ""
-"``S`` is sorted in descending order. The reduced form (and the square case, "
-"where reduced == full) is differentiable; the full form on a *non-square* "
-"matrix is computed via numpy without a gradient on ``U``/``Vh`` (the extra "
-"orthogonal-complement columns/rows have no unique gradient) — use "
-"``full_matrices=False`` or :func:`svdvals` when gradients are needed."
-msgstr ""
-
-#: 411a833c62114e84aef1b4946153b03c bdb24f374cf64b56bae4dfd46671a97d
-msgid "Parameters"
-msgstr ""
-
-#: 7aac1cca276b47019fc4022fcf676aa4
-msgid "``(...,M,N)`` real matrix (or ``nn.ComplexNumber``)."
-msgstr ""
-
-#: 3a02c6a777804ff3a61b9b2742e14a27
-msgid "see above. Default ``False`` (reduced)."
-msgstr ""
-
-#: f59c1813a2b24db9af2e57e96f842c44
-msgid ""
-"if ``False``, only ``S`` is meaningful (``U`` and ``Vh`` are still returned "
-"for shape compatibility but may be skipped)."
-msgstr ""
-
-#: 84267f31d2d54ba39a4937c97a4f06e6
-msgid "accepted for torch signature compatibility (ignored)."
-msgstr ""
-
-#: 00405edc71c4494aafb731b496cde7a5 0f36a844d4c74df9bb28b9d5f8dd1eb3
-msgid "Returns"
-msgstr ""
-
-#: 785ce76f02284e919603a2ebbbc674ac
-msgid "named tuple ``SVD(U, S, Vh)``."
-msgstr ""
-
-#: 2dc7a7066df241b08407f7f08af3e981
+#: 9005a3635ab440da986dcd5da45a66c6
 msgid ""
 "calculate the eigenvalues and eigenvectors of x. :param x (...,M,M): "
 ":return:w, v. w (...,M) : the eigenvalues. v (...,M,M) : normalized "
 "eigenvectors."
 msgstr ""
 
-#: b25cd854b7b740f39887b25001034300
+#: ad73a1e820944405bd0b906fe07dfc69
+msgid "Evaluate the Einstein summation convention on the operands."
+msgstr ""
+
+#: 23371aff9bb94818a5cb81e8eae44b3f
+msgid ""
+"Native jittor implementation: GEMM-shaped contractions dispatch to "
+"``jt.matmul`` (cublas on GPU). Other cases are expressed with the "
+"existing jittor tensor ops used by this implementation, including "
+"``reindex`` for diagonal handling, element-wise operations, reductions "
+"such as ``sum``, and reshapes/transposes as needed. No numpy round-trip, "
+"so ``float16`` and ``bfloat16`` operands stay on-device throughout and "
+"autograd is provided by the underlying jittor ops."
+msgstr ""
+
+#: bc2dd7ccf921461a83f16f6199c4c844
 msgid "calculate the inverse of x. :param x (...,M,M): :return:x^-1 (...,M,M)."
 msgstr ""
 
-#: b671a7bdae39449f9c3b90402fddd081
-msgid ""
-"calculate the pseudo-inverse of a x. :param x (...,M,N) :return: x's pinv "
-"(...N,M)"
+#: 3bb6766693df4b59bcfe5cb89c17460c
+msgid "General ``torch.linalg.norm`` / ``numpy.linalg.norm`` dispatcher."
 msgstr ""
 
-#: 4832a6fd48044625bf98db69f8657761
+#: 014bb55fc6e848b4b74e362d008f60b5
 msgid "Behaviour (matching torch/numpy):"
 msgstr ""
 
-#: c30f962d7102440f85b4dbe024724612
+#: 03271485d4a541c4bc0478138c7ddad7
 msgid ""
 "``dim`` is a 2-tuple, or ``dim is None`` and ``x`` is 2-D: matrix norm "
 "(default ``ord`` is the Frobenius norm), see :func:`matrix_norm`."
 msgstr ""
 
-#: 6116ae9271f84176bc480e87cd57f3a5
+#: c9d148f0df344750a85c552566de90e0
 msgid ""
-"``dim`` is an int, or ``dim is None`` and ``x`` is 1-D, or ``ord`` is set "
-"with ``dim is None``: vector norm (default ``ord`` is 2), see "
+"``dim`` is an int, or ``dim is None`` and ``x`` is 1-D, or ``ord`` is set"
+" with ``dim is None``: vector norm (default ``ord`` is 2), see "
 ":func:`vector_norm`."
 msgstr ""
 
-#: 43fbbdab6ed64dcdafa70de6d8c78632
+#: 7fb0d24e88954197b2ca0c07f1674d01
 msgid ""
 "``dim is None`` and ``ord is None``: the 2-norm of the flattened tensor "
 "(Frobenius), built from native jittor ops."
 msgstr ""
 
-#: 8148b95412084338958d7bf787965845
+#: 35735489fd1443079b642e30d3e6acda a3a9c37e9bf04191a8e6c4130d7e70b4
+msgid "Parameters"
+msgstr ""
+
+#: d0a59d0fbf9743afb1506a3105702f08
 msgid "input tensor."
 msgstr ""
 
-#: b34409e9611d4e5a8b44e39a1d0e4922
+#: f03b170aa9a94d868b970f58cf33261a
 msgid ""
-"order of the norm; meaning depends on whether a matrix or a vector norm is "
-"selected (see :func:`matrix_norm` / :func:`vector_norm`)."
+"order of the norm; meaning depends on whether a matrix or a vector norm "
+"is selected (see :func:`matrix_norm` / :func:`vector_norm`)."
 msgstr ""
 
-#: 4faf9c0f54e44a0799a5ad9f801a1fe8
+#: 8a2d16fbd60e4bb3b51755ab6d787885
 msgid "axis/axes defining the norm."
 msgstr ""
 
-#: 5c02f81fc4e243ac91c82a2087718a44
+#: fdaf8845f669456b8abc29916948a7bd
 msgid "keep reduced dims as size-1."
 msgstr ""
 
-#: d1665e2b941848febaefa499bba4dc13
+#: 1d7f3a1312be488ca41b3ace9d7337ca 78f8ebd530e34812bf0346d97e651e7a
+msgid "Returns"
+msgstr ""
+
+#: 70ff5e1976c94cffb85b4a06cf1ef50c
 msgid "the requested norm."
 msgstr ""
 
-#: c3b6e5fb959446ab89f2a708554bade1
-msgid "calculate the determinant of x. :param x (...,M,M): :return:\\|x\\| (...,1)"
+#: 348760b20432406ca8c0615c134d1a08
+msgid ""
+"calculate the pseudo-inverse of a x. :param x (...,M,N) :return: x's pinv"
+" (...N,M)"
 msgstr ""
 
-#: 1b00de398fdf4873839338da3f7176c1
+#: c8d039aaefd04a61b53c52578393b0dc
+msgid ""
+"do the qr factorization of x in the below formula: x = QR where Q is "
+"orthogonal matrix and R is upper-triangle matrix. :param x (...,M,M): "
+":return:q,r as the result of qr factorization.They are both in the shape "
+"of (...,M,M)."
+msgstr ""
+
+#: ae0cd86179e74dbca934bd3d3852c6c4
 msgid ""
 "calculate the sign and log of the determinant of x. :param x (...,M,M): "
 ":return sign, x's logdet. sign array decides the sign of determinant and "
-"their values can be -1,0,1.Only Real number now.0 means det is 0 and logdet "
-"is -inf. logdet in shape (...,1)."
+"their values can be -1,0,1.Only Real number now.0 means det is 0 and "
+"logdet is -inf. logdet in shape (...,1)."
 msgstr ""
 
-#: 3081d936ef954da4ad3ae298369ac2b8
-msgid ""
-"do Cholesky decomposition of x in the form of below formula: x = LL^T x must"
-" be a Hermite and positive-definite matrix. L is a lower-triangular matrix. "
-":param x (...,M,M): :return: L (...,M,M)."
-msgstr ""
-
-#: 15e1de4bf1f14c989a7db49816a52305
+#: 426687c6501041b28a9098dda3a5a2ed
 msgid ""
 "Solve a linear matrix equation Ax = B.This is done by calculating x = "
 "A^-1B.So A must not be singular. :param a:(...,M,M) :param b:(...,M) "
 ":return:solution of Ax = b formula.x in the shape of (...M)"
 msgstr ""
 
-#: 1bcf6b9e1ac246d08e067079f45659b2
+#: c3c79bcbb0a5412f85a0f49573a77601
 msgid ""
-"do the qr factorization of x in the below formula: x = QR where Q is "
-"orthogonal matrix and R is upper-triangle matrix. :param x (...,M,M): "
-":return:q,r as the result of qr factorization.They are both in the shape of "
-"(...,M,M)."
+"Singular Value Decomposition: ``A = U @ diag(S) @ Vh``. Returns the same "
+"named ``(U, S, Vh)`` result as ``torch.linalg.svd`` (and it also unpacks "
+"as a plain 3-tuple ``u, s, v``, preserving every existing jittor caller)."
 msgstr ""
 
-#: e5c7891784604ea68434208329939e28
+#: 12a89d06ebd64cbfba58885174412040
+msgid "For ``A`` of shape ``(...,M,N)`` with ``K = min(M, N)``:"
+msgstr ""
+
+#: fd0a9d6a0e7c46fe9c0e0fe4f4661dbb
 msgid ""
-"Native jittor implementation: GEMM-shaped contractions dispatch to "
-"``jt.matmul`` (cublas on GPU). Other cases are expressed with the existing "
-"jittor tensor ops used by this implementation, including ``reindex`` for "
-"diagonal handling, element-wise operations, reductions such as ``sum``, and "
-"reshapes/transposes as needed. No numpy round-trip, so ``float16`` and "
-"``bfloat16`` operands stay on-device throughout and autograd is provided by "
-"the underlying jittor ops."
+"``full_matrices=False`` (default, reduced / \"thin\"): ``U`` is "
+"``(...,M,K)``, ``Vh`` is ``(...,K,N)``, ``S`` is ``(...,K)``."
+msgstr ""
+
+#: 668c4e8571c244c0a056944167bcb49a
+msgid ""
+"``full_matrices=True``: ``U`` is ``(...,M,M)``, ``Vh`` is ``(...,N,N)``, "
+"``S`` is ``(...,K)``."
+msgstr ""
+
+#: 466d25186e4b43c0b5402a8b82b0836f
+msgid ""
+"``torch.linalg.svd`` defaults to ``full_matrices=True``; this jittor- "
+"native entry point keeps the historical reduced default so that the "
+"differentiable path and all jittor callers (``matrix_rank``/``cond``/ "
+"``matrix_norm``/the native ``test_linalg`` suite) are unchanged. Pass "
+"``full_matrices=True`` explicitly for torch's full shapes. (The torch- "
+"facing ``torch.linalg.svd`` default is meant to be supplied at the torch-"
+"compat boundary.)"
+msgstr ""
+
+#: 99da9000ddea476694fe4e23601a16ee
+msgid ""
+"``S`` is sorted in descending order. The reduced form (and the square "
+"case, where reduced == full) is differentiable; the full form on a *non-"
+"square* matrix is computed via numpy without a gradient on ``U``/``Vh`` "
+"(the extra orthogonal-complement columns/rows have no unique gradient) — "
+"use ``full_matrices=False`` or :func:`svdvals` when gradients are needed."
+msgstr ""
+
+#: 710512a11e65431eb728f4e6c70cf888
+msgid "``(...,M,N)`` real matrix (or ``nn.ComplexNumber``)."
+msgstr ""
+
+#: 654ba7e6e0bf4762aeda6c850226363c
+msgid "see above. Default ``False`` (reduced)."
+msgstr ""
+
+#: b415ed0e2ce347759daacf38530110c1
+msgid ""
+"if ``False``, only ``S`` is meaningful (``U`` and ``Vh`` are still "
+"returned for shape compatibility but may be skipped)."
+msgstr ""
+
+#: ea4f75ab8c424a6eb1b7d1ed11a9c539
+msgid "accepted for torch signature compatibility (ignored)."
+msgstr ""
+
+#: 40d67addc6b240c2adf8ae099ebedd79
+msgid "named tuple ``SVD(U, S, Vh)``."
 msgstr ""

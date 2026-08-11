@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Jittor 1.3.11.0\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-12 02:07+0800\n"
+"POT-Creation-Date: 2026-08-12 03:30+0800\n"
 "PO-Revision-Date: 2026-08-11 18:11+0000\n"
 "Last-Translator: Jittor contributors\n"
 "Language: zh_CN\n"
@@ -18,88 +18,50 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.18.0\n"
 
-#: 3918d9141d7e4f0c9d793b0df115e49d
+#: 1a30da0d753e4ca3a82853017a5c81c6
 msgid "Image transform API"
 msgstr "图像变换 API"
 
-#: f146004efe1148d2ba03d7704f235009
-msgid ":py:obj:`Compose <jittor.transform.Compose>`\\ \\(transforms\\)"
-msgstr ""
-
-#: 2a18ff3e81824332a46459799d2b7419 9a9fe8edadd049248e3f1fabd6a4434d
-msgid "Base class for combining various transformations."
-msgstr ""
-
-#: 671456d3da594581b53b9c1f5b74c64a
-msgid ":py:obj:`Resize <jittor.transform.Resize>`\\ \\(size\\[\\, mode\\]\\)"
-msgstr ""
-
-#: 2983bb9c71a0492f867f16b2e287c183 65e4f5b1e7a94de28dfc5778d1d913b4
-msgid "Class for resizing image."
-msgstr ""
-
-#: 93cee5f64ae04a13aec76bcaee4523b9
-msgid ":py:obj:`CenterCrop <jittor.transform.CenterCrop>`\\ \\(size\\)"
-msgstr ""
-
-#: 0d68084e4c7c4bc1aca23ae0db11e575 d836cd6e406a45eb82079f98167513c1
+#: 172b9153418c4d1cadee1555842da76f
 msgid "Class for cropping image centrally."
 msgstr ""
 
-#: addf6a71030a4d2592617f7f5a94231e
-msgid ":py:obj:`RandomCrop <jittor.transform.RandomCrop>`\\ \\(size\\)"
-msgstr ""
-
-#: 23dcd0f337ec4772a6b5908203eb73a2 bae63e6e12664d928bc47d54e4e2eb39
-msgid "Class for randomly cropping the input image."
-msgstr ""
-
-#: ba994c7c3578400699964aa455d3dd79
-msgid ""
-":py:obj:`RandomHorizontalFlip <jittor.transform.RandomHorizontalFlip>`\\ "
-"\\(\\[p\\]\\)"
-msgstr ""
-
-#: 676e60fe826e40d5af7cb3e924ed5ccf c55c1a54072140948d7ca95dac8da6bd
-msgid "Random flip the image horizontally."
-msgstr ""
-
-#: aee8ccb522a944d9938833a56e3e68f6
-msgid ""
-":py:obj:`ColorJitter <jittor.transform.ColorJitter>`\\ \\(\\[brightness\\, "
-"contrast\\, ...\\]\\)"
-msgstr ""
-
-#: a3a80f60f28c49babd567a3261de0a5c f176f93568c14a62928a956a5acbfdf0
-msgid "Randomly change the brightness, contrast, saturation, and hue of an image."
-msgstr ""
-
-#: e160cfbb9dca4f5595ea4da39fefdeaf
-msgid ":py:obj:`ToTensor <jittor.transform.ToTensor>`\\ \\(\\)"
-msgstr ""
-
-#: 22931ab14f8e45fa9c673bc8e85ac32b
-msgid ""
-":py:obj:`ImageNormalize <jittor.transform.ImageNormalize>`\\ \\(mean\\, "
-"std\\)"
-msgstr ""
-
-#: 45b344d66b304097b352686293902e57 9bf5f38dd74543e7b7690c39f840ef32
-msgid "Class for normalizing the input image."
-msgstr ""
-
-#: 25c8c8302a754868be9ffbff0707df97 a705cec341b749b0ad04691f9b9a3b3f
-#: aa555ceec1324540a716b0864cb8f9f1 ab8cdc3a46ac4757851b5522738a8c7f
-#: b742ac67712a4e37b7f14287e6adabc7 cd4280ef0f20428db633b701c907eb53
+#: 4fa8ade8805a4d478cf52a49a0e21354 5f3af9d96c4041aa80a0d8c3710c90cc
+#: 7b4bc7d21f7740f1ad240de6db8396cd be151d15d0a8460289fc50b18abdb8e4
+#: c310706865224b7891c8e3533a636ed2 f5a04673ab3149b4a93a27a6ce883694
 msgid "Args::"
 msgstr ""
 
-#: 28de93142a59410882e0e58d6bec1d38 5a444678d7a240c483248e550032e622
-#: 80e2f374ed1849fa931b2b618e029529 b41d08764a51488787667557d20a091d
-#: d0b6912b1a5f46a1b0e97c98cfd994e5 ef5237f4ec1048048fddf1d9fb308a0f
+#: 0265dc5ae616451eb23e3d4a61b57fcd 162f6b5989ec40e4a1cb81622344ac02
+#: 2e094069d9254e55b18e9c14743ef5e0 3ad4e71e1fb744d8bc3c4a5400645f5e
+#: 64dc6f3a75c247078449f5040b248261 6ced7f7f996b4d0c9118198a1148fa4a
 msgid "Example::"
 msgstr ""
 
-#: ef6a252c61db4fc6ae0bb2684b11879e
+#: b00308eecbee4f419938a9b2badde726
+msgid "Randomly change the brightness, contrast, saturation, and hue of an image."
+msgstr ""
+
+#: 0327b49fc1304a84b9cdcf8f9e116dcd
 msgid "Each parameter accepts either a non-negative scalar or a two-value range."
+msgstr ""
+
+#: ceeff2c399c34f7a9ca82776cf6753c6
+msgid "Base class for combining various transformations."
+msgstr ""
+
+#: 3a266aa3326f49d4a99c7760d50c0de0
+msgid "Class for normalizing the input image."
+msgstr ""
+
+#: 9e928830b1e44f5799ce0c7177090257
+msgid "Class for randomly cropping the input image."
+msgstr ""
+
+#: 36c0e78d2a1345518295abf6919e45c0
+msgid "Random flip the image horizontally."
+msgstr ""
+
+#: d5cf38d9d3ba4e1395c3916f3f372abc
+msgid "Class for resizing image."
 msgstr ""

@@ -1,0 +1,294 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) 2026, Jittor contributors
+# This file is distributed under the same license as the Jittor package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Jittor 1.3.11.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-08-12 03:30+0800\n"
+"PO-Revision-Date: 2026-08-11 19:33+0000\n"
+"Last-Translator: Jittor contributors\n"
+"Language: zh_CN\n"
+"Language-Team: zh_CN <LL@li.org>\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: fe611751300145f6a41be846cc7bfc1f
+msgid "Native Complex Dtype"
+msgstr "原生复数数据类型"
+
+#: 286018789fe7406cbc3c7a52db9f24af
+msgid "Status: Accepted with tracked limitations"
+msgstr ""
+
+#: e0bf3ab2cb6046c8b937f4cd5cbf435e
+msgid "Last reviewed: 2026-08-12"
+msgstr ""
+
+#: 7469dd4030a84280a0768192dd43e42c
+msgid "Baseline: `582fc51d`"
+msgstr ""
+
+#: 64785fbb42cf42fc8409a7e85c6926c8
+msgid "Owner: core dtype and linear-algebra maintainers"
+msgstr ""
+
+#: 3e2854ef7b4e4e5ba22e08163777c5d7
+msgid ""
+"Review when: complex128, second-order complex autograd, or native complex"
+" linear-algebra kernels land"
+msgstr ""
+
+#: f51e7bcc5ec4448ba55d214a575f0c9e
+msgid ""
+"This document records the durable contract for Jittor's native complex "
+"dtype. Implementation history and individual experiment transcripts "
+"belong in Git and `agent/results/`; they are intentionally not duplicated"
+" here."
+msgstr ""
+
+#: 2ebef366b4fb440780b9e024b001b547
+msgid "Decision"
+msgstr ""
+
+#: cbb07461ac2c45669b4004e2005f6492
+msgid ""
+"`complex64` is a first-class `jittor_core` dtype. Public tensor APIs "
+"should consume and return native complex `Var` objects. The older "
+"`jt.nn.ComplexNumber` real/imaginary pair remains only as an internal "
+"bridge for linear-algebra algorithms that have not yet been rewritten. "
+"New public APIs must not introduce another simulated complex "
+"representation."
+msgstr ""
+
+#: bbb3964a3c7c4471946f14bf392bd5bd
+msgid ""
+"`complex128` is not registered. Adding it requires expanding and auditing"
+" the core dtype-size representation before exposing any constructor or "
+"promotion rule."
+msgstr ""
+
+#: 684edd1ff7864a689415cae678b6473d
+msgid "Supported contract"
+msgstr ""
+
+#: 638dd1c9717a42059016bbdf7d80c475
+msgid "The maintained CPU and CUDA tests cover:"
+msgstr ""
+
+#: 496ce3eb3a68467fb86a66cb2484df24
+msgid ""
+"construction from NumPy complex64, zero initialization, scalar "
+"assignment, NumPy round trips, and real/complex casts;"
+msgstr ""
+
+#: 07ebb6eefcc34a798e47efecdb23ec67
+msgid ""
+"add, subtract, multiply, divide, negate, scalar mixing, equality, "
+"inequality, and ternary selection;"
+msgstr ""
+
+#: c850f7ce58f7468a90be819cc6a7c6a2
+msgid ""
+"reshape, transpose, indexing, slicing, broadcasting, concatenation, and "
+"stack;"
+msgstr ""
+
+#: fa9072cee9184f3d8133849ae68a4f18
+msgid "`sum`, `mean`, `abs`, `conj`, 2-D and batched matrix multiplication;"
+msgstr ""
+
+#: 6631e088c6a34138a881203a651f4a0b
+msgid "`exp`, `log`, `sin`, `cos`, and `sqrt`;"
+msgstr ""
+
+#: 9d699b14275d41a88687e1d13b2a5274
+msgid ""
+"`.real`, `.imag`, `.angle()`, `view_as_real`, `view_as_complex`, and "
+"`polar`;"
+msgstr ""
+
+#: 610ed8f4f60b47e48f40336ed9146c52
+msgid ""
+"Wirtinger-style first-order gradients for supported arithmetic, "
+"magnitude, matrix multiplication, bridge operations, and transcendental "
+"functions;"
+msgstr ""
+
+#: 79e5130845d744e18a01912c74fd4e17
+msgid ""
+"native-complex inputs and outputs for FFT, VJP, and the maintained "
+"linear-algebra surface."
+msgstr ""
+
+#: ed834f9014a343878d7116a5575bda98
+msgid "The primary regression files are:"
+msgstr ""
+
+#: 6f66eade7bdd41efa5042aa399f215e5
+msgid "[`tests/core/test_complex64_native.py`](https://github.com/Jittor/jittor/blob/master/tests/core/test_complex64_native.py)"
+msgstr ""
+
+#: e0eb2d3e050a482a84eaec0052b08b2d
+msgid "[`tests/core/test_complex64_linalg.py`](https://github.com/Jittor/jittor/blob/master/tests/core/test_complex64_linalg.py)"
+msgstr ""
+
+#: defb8ce336ce4294ae1cb17c7b43f478
+msgid "[`tests/core/test_complex64_gradfunctional.py`](https://github.com/Jittor/jittor/blob/master/tests/core/test_complex64_gradfunctional.py)"
+msgstr ""
+
+#: c577accfacf24d40b253012b2ba0f280
+msgid ""
+"[`tests/core/test_complex.py`](https://github.com/Jittor/jittor/blob/master/tests/core/test_complex.py),"
+" for the remaining internal bridge"
+msgstr ""
+
+#: 84f937f8ce394ac585520fb0d0d169be
+msgid "Dtype and gradient invariants"
+msgstr ""
+
+#: 47e436a556e943b2829ef0441f3039c6
+msgid ""
+"`complex64` has an eight-byte element size and is classified as complex, "
+"not floating-point or integer."
+msgstr ""
+
+#: dc7d4905c036486a80cfbc17f64e5de3
+msgid ""
+"Complex-to-real casts select the real component. Complex-to-bool is true "
+"when either component is nonzero."
+msgstr ""
+
+#: e100febcd315463da7475678a72e774b
+msgid ""
+"`abs(complex64)` returns `float32`; arithmetic and complex reductions "
+"retain `complex64` unless an explicit contract says otherwise."
+msgstr ""
+
+#: be35cf6a19814431ae24a3262e226223
+msgid ""
+"A differentiable complex value is allowed to carry gradients, but a "
+"scalar loss supplied to reverse-mode differentiation remains real."
+msgstr ""
+
+#: 15ab92898c4d464ba2d52e881abf1193
+msgid ""
+"Complex binary gradients conjugate the opposite operand according to the "
+"real-loss convention used by Torch. Holomorphic unary gradients conjugate"
+" the local derivative."
+msgstr ""
+
+#: 70ff7efb52f84f9295c1bdb1e3003879
+msgid "Unsupported gradients fail explicitly; they do not silently return zeros."
+msgstr ""
+
+#: 35dd75a312e9462b8dea3e2db8481020
+msgid "Bridge boundary"
+msgstr ""
+
+#: e0577da977d544989377eeb2c8ca6a49
+msgid ""
+"`view_as_real` and its inverse convert between `complex64[...]` and "
+"`float32[..., 2]` on device and preserve first-order gradients. The "
+"conversion is an implementation bridge, not a promise of zero-copy "
+"aliasing."
+msgstr ""
+
+#: 41c29ed8e04b411d8d662b2ca3dba125
+msgid ""
+"Some functions in `jittor.linalg` currently convert native values to the "
+"internal `ComplexNumber` substrate, execute an existing real/imaginary "
+"algorithm, and convert outputs back to native complex tensors. That "
+"substrate is deprecated for user-facing results but cannot be deleted "
+"until all such kernels have native implementations and equivalent tests."
+msgstr ""
+
+#: 7a78c70569fb434e898d5f923a3f7152
+msgid "Known limitations"
+msgstr ""
+
+#: 8de421c40f714392a8de4fb1855c9c3d
+msgid ""
+"CUDA complex `prod` lacks the required atomic multiply implementation. "
+"CPU is covered; CUDA must fail rather than return a partial result."
+msgstr ""
+
+#: a8d6f718980547ffae805f4d6e8f9290
+msgid ""
+"Native complex JVP relies on second-order autograd that is not "
+"implemented. `jvp` raises `NotImplementedError`; native complex VJP is "
+"supported."
+msgstr ""
+
+#: e3d0814b5ecc4478a4021bc7a0ab6c1b
+msgid ""
+"General complex eigendecomposition on CUDA depends on an available CuPy "
+"linear-algebra path and may be unavailable in otherwise valid CUDA "
+"setups."
+msgstr ""
+
+#: 8154f60fec8748dd8a400a6984e3716a
+msgid "`complex128` and several transcendental operations are unsupported."
+msgstr ""
+
+#: b3d594735dab4a19ad570178d3d32d48
+msgid ""
+"Native complex linear algebra still uses the internal bridge described "
+"above."
+msgstr ""
+
+#: 9d1f080464074829a641d2d7f1c021b1
+msgid ""
+"These limitations are indexed in the [known-issues "
+"ledger](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-"
+"issues.md). A limitation is removed only together with a focused "
+"regression that exercises the previously unsupported backend or "
+"derivative order."
+msgstr ""
+
+#: 7d01aaec31c04e42b8309ca3b8361885
+msgid "Extension checklist"
+msgstr ""
+
+#: 55305785fb4b423ab7b5abc0e3cfaa01
+msgid "When adding a complex operation:"
+msgstr ""
+
+#: 06cf9211a43949748fc01e55cbd1484b
+msgid "Specify input promotion and output dtype independently from kernel code."
+msgstr ""
+
+#: 4876817423ef4b758ec356be101a6fcf
+msgid "Add CPU forward comparison against NumPy or a precise mathematical oracle."
+msgstr ""
+
+#: 22864f5122b243bd980d74bdc63e595b
+msgid ""
+"Add CUDA/NPU execution and device-parity coverage where support is "
+"claimed."
+msgstr ""
+
+#: baec90998f49449184e380c7d63c25bb
+msgid "Derive and test first-order gradients under the real-loss convention."
+msgstr ""
+
+#: b42388539da146998522ca935ef0c226
+msgid ""
+"Test zero, branch-cut, empty, batched, and non-contiguous cases as "
+"applicable."
+msgstr ""
+
+#: 77c7e475e0d64ac2822281960fd9a068
+msgid "Raise an explicit error for unsupported derivative orders or backends."
+msgstr ""
+
+#: 4741282de0cc4a2694e82c20b93aae3c
+msgid ""
+"Update this contract and the known-issues ledger without copying "
+"experiment history into either document."
+msgstr ""

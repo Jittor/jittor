@@ -2,7 +2,7 @@ sphinx
 myst-parser
 furo
 sphinx-intl
-jupytext
+jupytext==1.17.3
 nbconvert
 ipykernel
 importlib-metadata; python_version < "3.8"

@@ -1,0 +1,345 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) 2026, Jittor contributors
+# This file is distributed under the same license as the Jittor package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Jittor 1.3.11.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-08-12 03:30+0800\n"
+"PO-Revision-Date: 2026-08-11 19:33+0000\n"
+"Last-Translator: Jittor contributors\n"
+"Language: zh_CN\n"
+"Language-Team: zh_CN <LL@li.org>\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: 9c57afaf660e4037be40853a3ef771a3
+msgid "Torch Compatibility Principles"
+msgstr "Torch 兼容性原则"
+
+#: ad1186fd5e6446f2a6df21508de10513
+msgid "Status: Accepted"
+msgstr ""
+
+#: 61a74b22e3014bd08a25be07acf560f2
+msgid "Last reviewed: 2026-08-12"
+msgstr ""
+
+#: 359f75e48d4641bdabe570bc2c35014e
+msgid "Baseline: `582fc51d`"
+msgstr ""
+
+#: 2b1b821fe2774de69321bf11c7dc0dc8
+msgid "Owner: compatibility and core maintainers"
+msgstr ""
+
+#: aab9ec2f824043edb414854cafc59980
+msgid ""
+"Review when: a new compatibility layer, fallback policy, or downstream "
+"patch mechanism is proposed"
+msgstr ""
+
+#: 3f376d2518ca4f30b5421d723c073929
+msgid ""
+"Torch compatibility is a means to run useful workloads with Jittor "
+"semantics and Jittor devices. It is not permission to copy every Torch "
+"namespace into one module or to report success while computation has "
+"escaped to another runtime."
+msgstr ""
+
+#: b0591da45e884c939913dbb738504470
+msgid "Goals"
+msgstr ""
+
+#: 1d71926c3fcf44aebde97814489c27e1
+msgid "Compatibility work must satisfy five gates:"
+msgstr ""
+
+#: b055d45f04e24eb9b2d708082803c296
+msgid ""
+"**G1, semantic correctness:** outputs, dtypes, shapes, errors, gradients,"
+" and state transitions match the documented contract for supported "
+"inputs."
+msgstr ""
+
+#: 6c81ee5a55064c5cb95acbd2c2850620
+msgid ""
+"**G2, device execution:** advertised CUDA, ROCm, or NPU operations "
+"execute on that backend; host conversion is not an accelerator "
+"implementation."
+msgstr ""
+
+#: 67e329f68ef64ae18cac8ab17314c57b
+msgid ""
+"**G3, composition:** the API works through the public import path used by"
+" real applications, including registration and serialization boundaries."
+msgstr ""
+
+#: 75616864995b4faa85e5d350f582a648
+msgid ""
+"**G4, maintainability:** capability has one owner, failures are "
+"observable, and version-specific behavior is isolated."
+msgstr ""
+
+#: d8d59f514730473a97f9c59494e8f50e
+msgid ""
+"**G5, evidence:** regression tests and, where performance is material, "
+"reproducible benchmarks support the claim."
+msgstr ""
+
+#: f3fc3c7c9ddd4efaac9664fcce8cb69a
+msgid "Ownership decision"
+msgstr ""
+
+#: ad360f31eab644e696647e0369221fe3
+msgid "Use the lowest reusable layer that correctly owns the behavior:"
+msgstr ""
+
+#: 376460f426c345e3bccaacb6fb6d92d5
+msgid "Behavior"
+msgstr ""
+
+#: 5ec0068312ea4e39baca9f612a501d4d
+msgid "Owner"
+msgstr ""
+
+#: fca0df21be7f4967b53aafe48a3c8c70
+msgid "Tensor semantics, gradients, dtype/device rules"
+msgstr ""
+
+#: d5ab315162214726823b7fa874e8b15a
+msgid "Jittor core or native domain"
+msgstr ""
+
+#: a507bd9a6627457b8602c508428d12a4
+msgid "General neural-network operation"
+msgstr ""
+
+#: e1685c341b6e48fda3637af1acbab683
+msgid "`jittor.nn`"
+msgstr ""
+
+#: f3d8f72c798947909f398fac4c612a17
+msgid "Torch spelling or argument adaptation"
+msgstr ""
+
+#: e16639fd26ff4393bd5bbae4f979d6bc
+msgid "`jittor.compat.torch`"
+msgstr ""
+
+#: d46a3ca49686435fa3d5715d39ed4492
+msgid "Reusable import/build/patch mechanism"
+msgstr ""
+
+#: 8fe4491f268e4413913f084281a7eea8
+msgid "`jittor.compat`"
+msgstr ""
+
+#: 0dfb26bf44ef47c1a789a98f0f9f604f
+msgid "Torch shim runtime/deploy and top-level `torch` surface"
+msgstr ""
+
+#: 8f36a231ef714bc49164dd76087eb1d3
+msgid "`jittor.compat.shim`"
+msgstr ""
+
+#: 2ee463ae21064348aebddda6ceea4126
+msgid "Triton API bridge"
+msgstr ""
+
+#: bf55787003db4502a4008ce5ee772a8c
+msgid "`jittor.compat.triton`"
+msgstr ""
+
+#: 1c0cacdff6fa4b4cbef1ebf45af18a10
+msgid "One project's model/version glue"
+msgstr ""
+
+#: 170ebca39af9424882e895c2797a11ea
+msgid "an optional integration package"
+msgstr ""
+
+#: b0c4c12aa0b14c53be11cceecd586047
+msgid ""
+"If several downstream projects need the same operation, promote the "
+"operation to the native domain. If they only need the same patching "
+"mechanism, promote the mechanism while leaving each patch outside core."
+msgstr ""
+
+#: 17e3156e8aa6425a9ab57e273c3781ac
+msgid "Correctness rules"
+msgstr ""
+
+#: 270ed4d1a8684b1bba96de91a42015fa
+msgid ""
+"Compare against an independent oracle or written contract, not another "
+"alias of the implementation under test."
+msgstr ""
+
+#: dde8e6acb89e48a0b48cda536886f628
+msgid ""
+"Cover positional and keyword forms, dtype promotion, broadcasting, empty "
+"and non-contiguous inputs, device selection, gradients, and stateful "
+"behavior when relevant."
+msgstr ""
+
+#: c30479596064478baab85831fd26dc67
+msgid ""
+"An unsupported contract raises a focused error. Returning a plausible but"
+" wrong value is never an acceptable fallback."
+msgstr ""
+
+#: f28aecb16d254a2e846efcec4c1349e7
+msgid ""
+"A compatibility wrapper must not globally change unrelated native Jittor "
+"semantics unless the native behavior is itself corrected and tested."
+msgstr ""
+
+#: 33a219922de242238cf90bd2d908fb66
+msgid ""
+"Import and installer steps are idempotent and report each failed "
+"component independently."
+msgstr ""
+
+#: f956df3bd21b432284c264b8a7e2f97b
+msgid "Device and fallback rules"
+msgstr ""
+
+#: 2328f2d36ea64c0cbc2374adbd11539f
+msgid ""
+"Host-side NumPy may be used as a test oracle or an explicitly documented "
+"CPU-only implementation. It must not sit behind an API advertised as "
+"CUDA, ROCm, or NPU capable. A backend fallback is acceptable only when "
+"all of these hold:"
+msgstr ""
+
+#: 1927e23509b441699f19194ae0a5f639
+msgid "the public contract permits the fallback;"
+msgstr ""
+
+#: 8a05404459324d1ca3319f5902a3d820
+msgid "device transfer is explicit and observable;"
+msgstr ""
+
+#: 9b4626f22ec344bd9978e649009921fa
+msgid "gradients and dtype behavior remain correct;"
+msgstr ""
+
+#: 9a7d593476fb4fbca1bce6bbe1047a35
+msgid "the performance impact is documented;"
+msgstr ""
+
+#: 146ec929f32b4f4db0aa4a1ee57dd5b7
+msgid "a test distinguishes fallback from native execution."
+msgstr ""
+
+#: 0bf4e3038adb469cafe9c5978209f116
+msgid ""
+"Backend availability is probed by a small real operation. Environment "
+"failures and framework defects are recorded separately; neither becomes a"
+" blanket skip."
+msgstr ""
+
+#: 3b75efedb1514508b1c1036eebf06427
+msgid "Performance rules"
+msgstr ""
+
+#: 1b7a20f4ec68433c99fc8e378337269e
+msgid ""
+"Correctness is required before optimization. Performance claims use "
+"warmup, synchronization, fixed shapes/dtypes, isolated caches, and an "
+"exact revision. Compare equivalent execution modes and report both "
+"latency and memory when the change affects either. See [performance "
+"benchmarking](../performance/benchmarking.md)."
+msgstr ""
+
+#: cb0f2a8af19543b4a359ea2c38f8d2ef
+msgid ""
+"An optimization must retain a reliable fallback and a way to prove which "
+"path executed. It may not weaken error reporting or test coverage to "
+"improve a headline number."
+msgstr ""
+
+#: de83d39f811a478eba96e9bedfe9331f
+msgid "Compatibility aliases"
+msgstr ""
+
+#: fba48a8262be41c28a4a73944bad1af8
+msgid ""
+"Aliases preserve imports; they do not preserve duplicate source trees. A "
+"legacy name must resolve to the canonical module or callable object "
+"whenever observable identity matters. Every new alias documents:"
+msgstr ""
+
+#: 5e0587ada8b545f691cbe7084282b1bf
+msgid "the canonical path;"
+msgstr ""
+
+#: 0d31fb7279134f75b64fe6fae67af59d
+msgid "the compatibility promise it serves;"
+msgstr ""
+
+#: 53683f7c8c524041b011aff9fbd11a70
+msgid "tests for identity and import order;"
+msgstr ""
+
+#: 1ed6de9b32aa4b05a2cdfe3686f3e3ec
+msgid "the condition under which it can be retired."
+msgstr ""
+
+#: 82cdd2f8320948808800e32ff98bde33
+msgid ""
+"In particular, `jittor.torch_shim` is a same-object legacy alias of the "
+"canonical `jittor.compat.shim` package. The deployed top-level `torch` "
+"surface delegates to that canonical runtime rather than owning a second "
+"implementation."
+msgstr ""
+
+#: c461c8d5d3da40d28644c93d873d8eaf
+msgid "Minimum evidence"
+msgstr ""
+
+#: 3ec7311ef82e4ae7b0f1f7e137dffb41
+msgid "A compatibility change should include the smallest applicable set:"
+msgstr ""
+
+#: e4c5df677981470588e437c48484c33c
+msgid "focused unit and error-contract tests;"
+msgstr ""
+
+#: 0f9ee2b38dba427282be271aa9b6634d
+msgid "CPU reference comparison;"
+msgstr ""
+
+#: 4aa7fbb9f9464c4da57ae772a2c37e44
+msgid "gradient and second-order gradient checks when supported;"
+msgstr ""
+
+#: 77f8df2beac74720b7977dc77a8196d5
+msgid "CPU-to-accelerator parity on each advertised backend;"
+msgstr ""
+
+#: a1460112036b4b99b3b8737d707dabba
+msgid "import-order, identity, and repeated-install tests;"
+msgstr ""
+
+#: d19f0e90c77d4edc9f5a0720cff266a3
+msgid "a real downstream smoke test for integration-facing work;"
+msgstr ""
+
+#: 14d881529dbc41c5a6e3b7ffb50bbf4a
+msgid "benchmark evidence for a claimed fast path."
+msgstr ""
+
+#: 8318ff7ae5d347389006d436a2714a49
+msgid ""
+"Record persistent limitations in the [known-issues "
+"ledger](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-"
+"issues.md), with an owner and a test or reproduction that signals when "
+"the limitation is gone."
+msgstr ""

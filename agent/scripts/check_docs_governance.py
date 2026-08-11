@@ -21,11 +21,6 @@ EXCLUDED_PREFIXES = (
     "tools/docs/legacy/",
 )
 
-# This maintainer-curated landing page has a user-owned edit in the integration
-# worktree. Its five design links are updated as part of the landing change; all
-# canonical targets are still required below.
-EXCLUDED_DOCUMENTS = {"agent/manuals/README.md"}
-
 REQUIRED_DOCUMENTS = (
     "README.md",
     "CONTRIBUTING.md",
@@ -56,8 +51,6 @@ def _relative(path):
 
 
 def _is_excluded(relative):
-    if relative in EXCLUDED_DOCUMENTS:
-        return True
     return any(relative.startswith(prefix) for prefix in EXCLUDED_PREFIXES)
 
 

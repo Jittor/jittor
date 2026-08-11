@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Jittor 1.3.11.0\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-12 02:07+0800\n"
+"POT-Creation-Date: 2026-08-12 03:30+0800\n"
 "PO-Revision-Date: 2026-08-11 18:11+0000\n"
 "Last-Translator: Jittor contributors\n"
 "Language: zh_CN\n"
@@ -18,238 +18,242 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.18.0\n"
 
-#: 28b3b302226e415e82f04009ee9fe46b
+#: a4be4356869241c5950537edad0923b0
 msgid "Using Jittor as PyTorch (`import jittor as torch`)"
 msgstr "将计图作为 PyTorch 使用（`import jittor as torch`）"
 
-#: 3acf935e6eda46a695650fddabb6b573
+#: 6f158f62933641f59eddd04307ac6c54
 msgid ""
 "Jittor ships a torch-compatibility layer so PyTorch code — including "
 "**transformers**, **PEFT**, **accelerate**, and **LlamaFactory** — runs "
-"**unmodified** on Jittor, on both **NVIDIA GPUs (CUDA/NCCL)** and **Huawei "
-"Ascend NPUs (ACL/HCCL)**. You only change the import:"
+"**unmodified** on Jittor, on both **NVIDIA GPUs (CUDA/NCCL)** and "
+"**Huawei Ascend NPUs (ACL/HCCL)**. You only change the import:"
 msgstr ""
 
-#: 759139d21b514affa7f3b8223d623ed7
+#: 8a7acd45775f4c498d7923b3e6e039b3
 msgid ""
-"The torch-style API lives in the canonical `jittor.compat.torch` package and"
-" is installed onto the Jittor module at import. `jittor.compat.shim` re-"
-"exports it as the `torch` package so third-party libraries' internal `import"
-" torch` works too. Deploy that shim into the active environment with:"
+"The torch-style API lives in the canonical `jittor.compat.torch` package "
+"and is installed onto the Jittor module at import. `jittor.compat.shim` "
+"re-exports it as the `torch` package so third-party libraries' internal "
+"`import torch` works too. Deploy that shim into the active environment "
+"with:"
 msgstr ""
 
-#: f71ae8f8dcf340bc97b86d0a239fe809
+#: 4a2f2c2ff77741b19787325d0a3e5c06
 msgid "Quickstart"
 msgstr ""
 
-#: a9c67ec78ffc43c1990484e21556f336
+#: f199f93068e44515a0fcf4825032bec0
 msgid ""
 "The device is auto-enabled: on import, jittor sets `flags.use_cuda=1` "
-"whenever an accelerator is present (Ascend `has_acl` or NVIDIA `has_cuda`). "
-"**Sanity-check it's on the device:** `npu-smi`/`nvidia-smi` should show GB-"
-"scale memory for the proc; ~100 MB means ops are running on CPU (~1000× "
-"slower)."
+"whenever an accelerator is present (Ascend `has_acl` or NVIDIA "
+"`has_cuda`). **Sanity-check it's on the device:** `npu-smi`/`nvidia-smi` "
+"should show GB-scale memory for the proc; ~100 MB means ops are running "
+"on CPU (~1000× slower)."
 msgstr ""
 
-#: ed0dad621b734450a4202afbb9a817e2
+#: 0255447988b2410ba340e7b2ae00a2ed
 msgid "Numerical correctness"
 msgstr ""
 
-#: 1d039c22b670483e8ba8624ff82302e2
+#: b8637f78ad43486491fb8e9a4d701419
 msgid ""
 "Validated against **real PyTorch** with identical weights/inputs "
 "(`tests/backends/npu/manual/xcheck/`):"
 msgstr ""
 
-#: 7c98568cc9934dcc9b8b7c366ceca06d
+#: 2a690adbba274923af1c63179c0eed9f
 msgid "GPT-2 forward+backward matches torch to ~1e-7 (CUDA) / ~1e-5 (Ascend)."
 msgstr ""
 
-#: c79d8c75a90f4062818df15cb975e804
+#: cbdf602bf9114a21a0de8dd6dcda552e
 msgid ""
 "Real Qwen3-0.6B (via transformers) produces **identical top-5 next-token "
 "predictions**; logits within ~1e-4."
 msgstr ""
 
-#: 10fd88a0e81a4f90b77fdfefba906a09
+#: 9bd844105d174f088b27b6041a03427c
 msgid "jittor-ACL and jittor-CUDA are bit-identical."
 msgstr ""
 
-#: 1ef6988211e14a4fa0ab06ba2be047b7
+#: 2527048977294c73ba0972552ba2d7f4
 msgid "Mixed precision (bf16 / fp16)"
 msgstr ""
 
-#: c1884246c45146759c10ff204387e6b1
+#: 91486e3dde2943038d06e9396ba6f7e1
 msgid ""
 "**bf16 is the preferred precision on Ascend** (cube-unit native: a 2048³ "
 "matmul is ~0.9 ms bf16 vs ~11 ms fp32). It matches the fp32 loss curve."
 msgstr ""
 
-#: 98c23e516b584bd4812906861a8c03e0
+#: a73f1982428d4a4698a01f1767e7f11b
 msgid "fp16 works with the GradScaler (loss scaling + inf/nan skip)."
 msgstr ""
 
-#: f379b6154d744c4cb136bc42b301f406
+#: 26d84ff8cdc94758975fc6b73a457663
 msgid "Multi-card DDP — no mpirun"
 msgstr ""
 
-#: 4bd8af23d39f4155889c635cd1f57f16
+#: 785d357abde641bd99ed2272219f8838
 msgid ""
 "A single torchrun-style launcher works on both backends (NCCL on NVIDIA, "
 "HCCL on Ascend) via an env/file rendezvous — no MPI required:"
 msgstr ""
 
-#: b15bb81b841f4e47ab13c024c08d8654
+#: ae460cabb448412b8e6ba4e136e88143
 msgid ""
 "In the training script use the normal data-parallel API (`jt.rank`, "
 "`jt.world_size`, `var.mpi_all_reduce(\"mean\")`, "
-"`module.mpi_param_broadcast`). Verified: 2-card == 1-card gradient on both "
-"backends."
+"`module.mpi_param_broadcast`). Verified: 2-card == 1-card gradient on "
+"both backends."
 msgstr ""
 
-#: fb3ca9919e36428a9953aee89c77b4e0
+#: 3033ee39400e4a2f878eb3c6ecf771ad
 msgid "Migrating torch checkpoints & safetensors"
 msgstr ""
 
-#: d2d99c554adf4a04aaeb5a774fdc1ab6
+#: 502a3a98677a4f3aa8e5df9942b6664d
 msgid ""
-"Both load real torch-saved files directly (all dtypes incl. bf16), no real "
-"torch needed."
+"Both load real torch-saved files directly (all dtypes incl. bf16), no "
+"real torch needed."
 msgstr ""
 
-#: 1dc0eba28d2e40a7bccc216a240093c6
+#: 5cb4b11afdb24c6c9e35cc23d9bbf931
 msgid "Running transformers / LlamaFactory"
 msgstr ""
 
-#: 6b12f79f9fc6471482a9c305e4220846
+#: df02e75441e24194bff94e71c3efac40
 msgid "Required environment:"
 msgstr ""
 
-#: c062eb3e1fc5471cbced4ed3e25e5566
+#: 505a43c4e3f74fe4b0b595e1b0c267e5
 msgid "Python 3.10+ (transformers needs `types.UnionType`)."
 msgstr ""
 
-#: 3a341555fcdc4a269ad144775be58202
+#: 08bb8988ee7c4eb5b316b730b5d3abd1
 msgid ""
-"`HF_DEACTIVATE_ASYNC_LOAD=1` — single-thread weight materialization (worker "
-"threads have no device context)."
+"`HF_DEACTIVATE_ASYNC_LOAD=1` — single-thread weight materialization "
+"(worker threads have no device context)."
 msgstr ""
 
-#: 7b4a8322e6f84d2488bd672e9761734d
+#: 420ba5e65706469088852597cb80be92
 msgid "`HF_HUB_OFFLINE=1`, `DISABLE_VERSION_CHECK=1` for offline runs."
 msgstr ""
 
-#: 77cb3a20cd4f480cb33b1afc8ce263bb
+#: 586e1968f8cf49d7a95cb81ac369d52e
 msgid ""
-"Install `trl` with `--no-deps` (else it pulls real torch and clobbers the "
-"shim)."
+"Install `trl` with `--no-deps` (else it pulls real torch and clobbers the"
+" shim)."
 msgstr ""
 
-#: d4de4fcf92ec441396e1229165f277e6
+#: ed7b0fc86d0c4506a9459bef53d7dc20
 msgid ""
 "Do **not** let pip install the real `torch` into the shim env — it "
-"overwrites `torch/__init__.py`. Use a separate env for real torch (e.g. as a"
-" reference)."
+"overwrites `torch/__init__.py`. Use a separate env for real torch (e.g. "
+"as a reference)."
 msgstr ""
 
-#: 1a99a3f8f3de4dbc9b65594abe74fb3a
+#: eac933752a564bd2b19ec81e5402fa5c
 msgid "Validated model coverage"
 msgstr ""
 
-#: bcd54016b37e4711a3df5d660d04f5ec
+#: bc66de748e424cbc9d0b5c0247240823
 msgid ""
-"Run through the `import torch` → jittor stack and checked **layer-by-layer "
-"against real PyTorch 2.12** (same weights/inputs; forward "
-"`last_hidden_state` and per- parameter `jt.grad` vs torch `.grad`, network-"
-"scaled). Forward **and backward** match to ~1e-6 across ~30 `transformers` "
-"architectures and the CNN/diffusers stacks:"
+"Run through the `import torch` → jittor stack and checked **layer-by-"
+"layer against real PyTorch 2.12** (same weights/inputs; forward "
+"`last_hidden_state` and per- parameter `jt.grad` vs torch `.grad`, "
+"network-scaled). Forward **and backward** match to ~1e-6 across ~30 "
+"`transformers` architectures and the CNN/diffusers stacks:"
 msgstr ""
 
-#: c886d7dcc40345fcaef05ca23c27a701
+#: 4725da053dc647bd91e3d0716e8102b1
 msgid ""
-"**Decoder LLMs:** gpt2, llama, qwen2/qwen3, mistral, gemma/gemma2, phi/phi3,"
-" opt, bloom, gpt_neox, gptj, gpt_neo, stablelm, starcoder2, mpt, **falcon** "
-"(multi-query), **mixtral** (MoE). Plus (forward-clean, many also backward-"
-"checked): cohere, gemma3, granite, olmo/olmo2, persimmon, qwen2_moe, "
-"qwen3_moe, glm/glm4, gpt_bigcode, biogpt, ctrl, mpt, xglm, codegen, "
-"**longformer** (sliding-window), **roformer** (rotary), **phimoe**, "
-"**dbrx**, **nemotron** (MoE / modern-LLM variants)."
+"**Decoder LLMs:** gpt2, llama, qwen2/qwen3, mistral, gemma/gemma2, "
+"phi/phi3, opt, bloom, gpt_neox, gptj, gpt_neo, stablelm, starcoder2, mpt,"
+" **falcon** (multi-query), **mixtral** (MoE). Plus (forward-clean, many "
+"also backward-checked): cohere, gemma3, granite, olmo/olmo2, persimmon, "
+"qwen2_moe, qwen3_moe, glm/glm4, gpt_bigcode, biogpt, ctrl, mpt, xglm, "
+"codegen, **longformer** (sliding-window), **roformer** (rotary), "
+"**phimoe**, **dbrx**, **nemotron** (MoE / modern-LLM variants)."
 msgstr ""
 
-#: 76f1853be4564febb6f295545c38504b
+#: dd7667aa8d264c0d9f2e22f8af337aba
 msgid ""
 "**Encoders:** bert, roberta, electra, distilbert, albert, "
 "**deberta/deberta-v2**, mpnet, xlm, flaubert, camembert, ernie, fnet, "
-"layoutlm, mobilebert, nystromformer, mra, yoso, **convbert** (span-conv), "
-"megatron-bert, rembert, luke, markuplm, **canine**."
+"layoutlm, mobilebert, nystromformer, mra, yoso, **convbert** (span-conv),"
+" megatron-bert, rembert, luke, markuplm, **canine**."
 msgstr ""
 
-#: 583ddb894aaf4323b8813d0993fe2947
+#: d19024630d2c4a2db8bb6f356a7f9342
 msgid ""
-"**Encoder-decoder:** t5, bart, mbart, pegasus, **pegasus_x** (block-local), "
-"m2m_100, marian, blenderbot/-small, mvp, plbart, umt5, nllb-moe, fsmt, led, "
-"big_bird."
+"**Encoder-decoder:** t5, bart, mbart, pegasus, **pegasus_x** (block-"
+"local), m2m_100, marian, blenderbot/-small, mvp, plbart, umt5, nllb-moe, "
+"fsmt, led, big_bird."
 msgstr ""
 
-#: 065f4365b61644fe8c340a7ef71dd39b
+#: 91f8f7c31023486b9c7e024fa80011bf
 msgid ""
 "**Audio:** wav2vec2, **hubert**, **wavlm** (via "
 "`F.multi_head_attention_forward`), sew, unispeech/-sat, data2vec-audio."
 msgstr ""
 
-#: 7152a5b7adbe49709084903be145034f
+#: 8c7fc93309cb43a5bd6faeff6ec70a3c
 msgid ""
 "**Vision:** vit, deit, swin, convnext, **beit**, data2vec-vision, dpt, "
-"segformer, **levit** (hardswish) (plus `jittor.models` resnet/vgg/... and "
-"the native ViT)."
+"segformer, **levit** (hardswish) (plus `jittor.models` resnet/vgg/... and"
+" the native ViT)."
 msgstr ""
 
-#: 510eeff18ceb4234bb3ec8cbad569091
+#: 446c53e65b954d8b83158f642bd0e8bb
 msgid ""
-"**diffusers generation:** `UNet2DModel` forward 1.1e-6 / backward 1.5e-6, a "
-"DDIM denoising loop 3e-5, `AutoencoderKL` encode+decode 1.4e-6 — i.e. jittor"
-" *generates* and the numbers match torch. Build via constructors / "
+"**diffusers generation:** `UNet2DModel` forward 1.1e-6 / backward 1.5e-6,"
+" a DDIM denoising loop 3e-5, `AutoencoderKL` encode+decode 1.4e-6 — i.e. "
+"jittor *generates* and the numbers match torch. Build via constructors / "
 "`from_config`; see limitations for loading *pretrained* checkpoints."
 msgstr ""
 
-#: a0edb8f5b4a34557acf7a15a2b268438
+#: 159e0891fa1b471d92890d5bec03e390
 msgid ""
 "Real end-to-end training works: `transformers.Trainer` fine-tunes (loss "
-"decreases, `grad_norm`/`clip_grad_norm_` apply), and CNNs train (every conv "
-"weight updates). Real end-to-end **inference** works too: `model.generate()`"
-" runs **greedy** (KV-cached decode is bit-identical to a from-scratch "
-"recompute — the cache is correct), **beam search**, **sampling** "
-"(temperature/top-k/top-p) and **batched** generation. A regression suite "
-"covers ~30 architectures (`tests/compat/torch/test_torch_hf_models.py`, "
-"incl. a `generate()` greedy/beam/sampling test) and the diffusers generation"
-" path (`tests/compat/torch/test_diffusers.py`)."
+"decreases, `grad_norm`/`clip_grad_norm_` apply), and CNNs train (every "
+"conv weight updates). Real end-to-end **inference** works too: "
+"`model.generate()` runs **greedy** (KV-cached decode is bit-identical to "
+"a from-scratch recompute — the cache is correct), **beam search**, "
+"**sampling** (temperature/top-k/top-p) and **batched** generation. A "
+"regression suite covers ~30 architectures "
+"(`tests/compat/torch/test_torch_hf_models.py`, incl. a `generate()` "
+"greedy/beam/sampling test) and the diffusers generation path "
+"(`tests/compat/torch/test_diffusers.py`)."
 msgstr ""
 
-#: 0a9f2b1f7dac462caf4bc7d6231ec264
+#: 669492d010284f03918f2f2327ed2ab9
 msgid ""
 "`jittor.models` provides the CNN classics plus a modern **Vision "
-"Transformer** (`vit_b_16`/`vit_b_32`/`vit_l_16`). LLMs/diffusion models come"
-" from `transformers`/`diffusers` directly."
+"Transformer** (`vit_b_16`/`vit_b_32`/`vit_l_16`). LLMs/diffusion models "
+"come from `transformers`/`diffusers` directly."
 msgstr ""
 
-#: 1a9a1cf529554b2393ce7a1bf5a09090
+#: d7d3f06811654e139537dcd3b6f7f4ec
 msgid "Complex numbers & FFT"
 msgstr ""
 
-#: b90ec82fe0a744a58f4ba3eaa9eddc30
+#: 00956b9fbca345bbb163877c7b62c30f
 msgid ""
-"Complex is represented by `jittor.nn.ComplexNumber` (real/imag pair) with "
-"full arithmetic; the `torch.fft.*` transforms are DFT-matrix based (so they "
-"run and backprop on **both** Ascend and CUDA) and match `numpy.fft` to "
-"~1e-4. A true native complex `Var` dtype is still emulated, not a first-"
-"class dtype."
+"`complex64` is a first-class `jittor_core` dtype, and these public APIs "
+"consume and return native complex `Var` objects. Some linear-algebra and "
+"FFT algorithms still use the older `jittor.nn.ComplexNumber` "
+"real/imaginary pair internally, then convert results back to native "
+"tensors. That bridge is an implementation detail with tracked "
+"limitations; see [Native Complex Dtype](../architecture/complex-"
+"dtype.md)."
 msgstr ""
 
-#: 0c99d361f8db4c8a8a02aec1fac8c370
+#: 5eb3b71e415a4ca1971b4f4a8d5e992a
 msgid "Lightning-style training"
 msgstr ""
 
-#: 619f7074cb604b9abb2c69ca1cb9ed4a
+#: fb92f54a26f145f78da64a16428b3cdc
 msgid ""
 "The core training/validation loop is implemented (epochs, gradient "
 "accumulation, clipping, lr schedulers, `self.log`, "
@@ -257,23 +261,24 @@ msgid ""
 "plugins / the full logger ecosystem are not yet covered."
 msgstr ""
 
-#: 77225f17f68345f9b00b78ea2c45bd8b
+#: 8348d92a08d14b248419afcdb390e551
 msgid "Error reporting"
 msgstr ""
 
-#: 4921051eda354156b4651fcd149c845b
+#: dc907bfd7aae4b0ba7600f481e268b3d
 msgid ""
 "Op failures now surface the real cause (op type, input shapes/dtypes, "
-"`[Reason]`) instead of the old \"Wrong inputs arguments / help(jt.sync)\" "
-"noise. Unsupported dtypes (e.g. float64 on Ascend) raise a clean Python "
-"error instead of aborting; set `JT_SYNC=1` to pinpoint an async op failure."
+"`[Reason]`) instead of the old \"Wrong inputs arguments / help(jt.sync)\""
+" noise. Unsupported dtypes (e.g. float64 on Ascend) raise a clean Python "
+"error instead of aborting; set `JT_SYNC=1` to pinpoint an async op "
+"failure."
 msgstr ""
 
-#: 7f993d3cfcd04e92a48667148e7cb540
+#: 7f5226f366354600a689ab9f146b5b00
 msgid "torch API coverage (verified vs real PyTorch 2.12)"
 msgstr ""
 
-#: c91c2f10cfb6408caa9fb743aca1da26
+#: eaa49d36b3ca4f8fb26d8d13b73d6b33
 msgid ""
 "Every entry below is checked **bit-for-bit (or to ~1e-6) against real "
 "PyTorch with identical inputs/weights, on both CPU/CUDA**, and locked in "
@@ -285,24 +290,24 @@ msgid ""
 "`tests/compat/torch/test_diffusers.py`)."
 msgstr ""
 
-#: 1e6fd939487342898249e7e2b4932f16
+#: f38a4138d0644149ae8c50c5076bc6c6
 msgid ""
-"**Attention / transformers:** `F.scaled_dot_product_attention` (plain/causal"
-"/bool-mask/ scale/GQA, fwd+bwd), `F.multi_head_attention_forward`, "
-"`nn.MultiheadAttention`, "
+"**Attention / transformers:** `F.scaled_dot_product_attention` "
+"(plain/causal/bool-mask/ scale/GQA, fwd+bwd), "
+"`F.multi_head_attention_forward`, `nn.MultiheadAttention`, "
 "`nn.TransformerEncoderLayer`/`TransformerEncoder`/`TransformerDecoderLayer`/"
 " `TransformerDecoder`/`Transformer` (pre/post-norm, "
 "`generate_square_subsequent_mask`)."
 msgstr ""
 
-#: 74af4200a19a47e29af33c0939bd6d67
+#: d080deb0ffbb48a3870bb1750574a249
 msgid ""
-"**Recurrent:** `nn.LSTM`/`GRU`/`RNN` (+ Cells) — forward bit-matches torch "
-"(gate order i/f/g/o), `batch_first` output correctly `(batch,seq,hidden)`, "
-"bidirectional, `h_n`/`c_n`."
+"**Recurrent:** `nn.LSTM`/`GRU`/`RNN` (+ Cells) — forward bit-matches "
+"torch (gate order i/f/g/o), `batch_first` output correctly "
+"`(batch,seq,hidden)`, bidirectional, `h_n`/`c_n`."
 msgstr ""
 
-#: 360cff47f43a4a8fb5baed5f1aa332e1
+#: f5ded81be19942898e220892fcc18219
 msgid ""
 "**Norms / activations:** `F.rms_norm` (Llama/Qwen), "
 "`group_norm`/`batch_norm`/ `instance_norm`/`layer_norm`, "
@@ -310,48 +315,49 @@ msgid ""
 "`selu`/`celu`/`softplus`/`tanhshrink`/`softmin`/`threshold`."
 msgstr ""
 
-#: 2b92ea6be3c24326a089530c353e9b00
+#: af4c127081d34859a649e5d8f0ea68ce
 msgid ""
-"**Losses:** `cross_entropy` (+ `label_smoothing`/`weight`/`ignore_index`), "
-"`kl_div` (distillation, `batchmean`), `ctc_loss` (speech ASR, the CTC "
-"forward DP), `F.logsigmoid` (DPO/RLHF), "
-"`binary_cross_entropy`(_with_logits), `huber_loss`, `cosine_embedding_loss`,"
-" `margin_ranking_loss`, `triplet_margin_loss`, `gaussian_nll_loss`, "
-"`poisson_nll_loss`, mse/l1/smooth_l1, + `nn.*Loss` class forms."
+"**Losses:** `cross_entropy` (+ "
+"`label_smoothing`/`weight`/`ignore_index`), `kl_div` (distillation, "
+"`batchmean`), `ctc_loss` (speech ASR, the CTC forward DP), `F.logsigmoid`"
+" (DPO/RLHF), `binary_cross_entropy`(_with_logits), `huber_loss`, "
+"`cosine_embedding_loss`, `margin_ranking_loss`, `triplet_margin_loss`, "
+"`gaussian_nll_loss`, `poisson_nll_loss`, mse/l1/smooth_l1, + `nn.*Loss` "
+"class forms."
 msgstr ""
 
-#: f1a26f017c7d442bba5d77cb5556ce76
+#: ce00c123ddb6442a9d5803a45c6e8fb1
 msgid ""
-"**`torch.distributions`:** `Categorical` (logits=softmax, differentiable — "
-"fixes a silent sigmoid bug that broke PPO), `Normal`, `Bernoulli`, "
-"`Exponential`, `Uniform`, `Geometric`, `Independent`, `OneHotCategorical`, "
-"`kl_divergence`, `Distribution` base."
+"**`torch.distributions`:** `Categorical` (logits=softmax, differentiable "
+"— fixes a silent sigmoid bug that broke PPO), `Normal`, `Bernoulli`, "
+"`Exponential`, `Uniform`, `Geometric`, `Independent`, "
+"`OneHotCategorical`, `kl_divergence`, `Distribution` base."
 msgstr ""
 
-#: 391e62e011a64fd18c4ffc8f456e65ae
+#: 7f50dff7681a4c51b87a6d8b13f3ce87
 msgid ""
-"**`torch.linalg`:** `svd` (`full_matrices`, named `(U,S,Vh)`), `svdvals`, "
-"`inv`, `solve`, `cholesky`, `det`/`slogdet`, `eigh`/`eigvalsh`/`eigvals`, "
-"`qr`, `pinv`, `matrix_rank`, `multi_dot`, `lstsq`, `norm`/`matrix_norm` "
-"(CUDA svd/eigh need `cupy`)."
+"**`torch.linalg`:** `svd` (`full_matrices`, named `(U,S,Vh)`), `svdvals`,"
+" `inv`, `solve`, `cholesky`, `det`/`slogdet`, "
+"`eigh`/`eigvalsh`/`eigvals`, `qr`, `pinv`, `matrix_rank`, `multi_dot`, "
+"`lstsq`, `norm`/`matrix_norm` (CUDA svd/eigh need `cupy`)."
 msgstr ""
 
-#: d2d3d6774bb94b339e2ae6d8b76fbce2
+#: 60550391e9de418f958233d7357908d5
 msgid ""
 "**`torch.func`:** `functional_call`, `grad`/`grad_and_value`, `vmap`, "
 "`jacrev`, `stack_module_state` (LoRA / meta-learning / ensembling)."
 msgstr ""
 
-#: 543df4df6ae44ca7bef5d3eb360483f6
+#: 405200b77c5a4025baa8e5cd56dc7c52
 msgid ""
-"**Ops / methods:** `einsum`, `take_along_dim` (broadcasting), `roll` (incl. "
-"negative dims / flatten), `cumprod` (sign-aware), `index_fill_`, "
+"**Ops / methods:** `einsum`, `take_along_dim` (broadcasting), `roll` "
+"(incl. negative dims / flatten), `cumprod` (sign-aware), `index_fill_`, "
 "`index_put_` (dup-accumulate), `movedim`/`tensor_split`/`take`, `cdist`, "
 "`bucketize`, `searchsorted`, `pixel_shuffle`/ `pixel_unshuffle`, "
 "`gumbel_softmax`, `interpolate`, `grid_sample`, `all`/`any`(`axis=`)."
 msgstr ""
 
-#: ce49f5cf7be14a7eacb64f560f1483fd
+#: e71ff86493c54be8ba43d7bb35e46090
 msgid ""
 "**`nn.utils`:** `weight_norm`/`spectral_norm` (real reparametrizations), "
 "`clip_grad_*`, `rnn.pad_sequence`; `torch.optim.lr_scheduler` "
@@ -359,67 +365,71 @@ msgid ""
 "Exponential/Polynomial/Constant/Sequential/ReduceLROnPlateau)."
 msgstr ""
 
-#: a8f38186e4334d789137b39ff6416dfa
+#: 1c73affddc0747ad973ad503354a2d3d
 msgid "Status / limitations"
 msgstr ""
 
-#: f3e3aa017c3e4918b38ddd8544f6d426
+#: a7555cc9422b415896e414380daac992
 msgid ""
-"Done + verified on both backends: forward/backward/training accuracy parity "
-"across ~75 transformers (decoder/encoder/enc-dec/audio/vision/MoE) + CNN + "
-"diffusers-generation models, device dispatch, bf16/mixed precision, DDP-"
-"without-mpirun, gradient checkpointing, checkpoint/safetensors migration, "
-"`model.save()`/`load()`, real `torch.cuda` memory reporting, complex numbers"
-" + `torch.fft.*`, `F.multi_head_attention_forward`, `torch.func` (functorch:"
-" `functional_call`/`grad`/`grad_and_value`/`vmap`/`jacrev`/ "
+"Done + verified on both backends: forward/backward/training accuracy "
+"parity across ~75 transformers (decoder/encoder/enc-dec/audio/vision/MoE)"
+" + CNN + diffusers-generation models, device dispatch, bf16/mixed "
+"precision, DDP-without-mpirun, gradient checkpointing, "
+"checkpoint/safetensors migration, `model.save()`/`load()`, real "
+"`torch.cuda` memory reporting, complex numbers + `torch.fft.*`, "
+"`F.multi_head_attention_forward`, `torch.func` (functorch: "
+"`functional_call`/`grad`/`grad_and_value`/`vmap`/`jacrev`/ "
 "`stack_module_state` — used by LoRA / meta-learning / model ensembling, "
 "verified bit-identical to real torch), "
 "`nn.utils.weight_norm`/`spectral_norm` (real reparametrizations — "
-"`weight`→`weight_g`/`weight_v` recomputed before forward, and `weight`/σ via"
-" power iteration; verified vs real torch + `np.linalg.svd`) and "
-"`nn.utils.rnn.pad_sequence`, a torch-compatible `torch.optim.lr_scheduler` "
+"`weight`→`weight_g`/`weight_v` recomputed before forward, and `weight`/σ "
+"via power iteration; verified vs real torch + `np.linalg.svd`) and "
+"`nn.utils.rnn.pad_sequence`, a torch-compatible "
+"`torch.optim.lr_scheduler` "
 "(LambdaLR/LinearLR/CosineAnnealingLR/StepLR/MultiStepLR/ExponentialLR/PolynomialLR/"
 " ConstantLR/SequentialLR/ReduceLROnPlateau — single source on BOTH the "
 "`import jittor as torch` and deployed-shim paths; the HF "
 "`get_*_schedule_with_warmup` helpers wrap LambdaLR and produce the exact "
-"torch curve), a Lightning-style training core, and clear errors. The torch "
-"op surface is broad — verified by an op-level differential battery "
-"(`op_parity.py`: ~84 ops vs real torch, plus a backward battery) on **both**"
-" Ascend and CUDA."
+"torch curve), a Lightning-style training core, and clear errors. The "
+"torch op surface is broad — verified by an op-level differential battery "
+"(`op_parity.py`: ~84 ops vs real torch, plus a backward battery) on "
+"**both** Ascend and CUDA."
 msgstr ""
 
-#: 5817264a83d249babb223d552979fec0
+#: 31914d74b0e24bcfa7b8e685f6473fc9
 msgid ""
-"**Loading *pretrained* checkpoints via `from_pretrained`** — including the "
-"accelerate fast path (diffusers, and transformers with "
+"**Loading *pretrained* checkpoints via `from_pretrained`** — including "
+"the accelerate fast path (diffusers, and transformers with "
 "`low_cpu_mem_usage=True`, which is the default) — now works and reloads "
 "**exact** weights. accelerate constructs the model under "
-"`init_empty_weights()` + `no_init_weights()` then fills each parameter via "
-"`set_module_tensor_to_device`; jittor doesn't use a `meta` device but two "
-"fixes make this path correct: (1) `torch.nn.init` is guarded so "
+"`init_empty_weights()` + `no_init_weights()` then fills each parameter "
+"via `set_module_tensor_to_device`; jittor doesn't use a `meta` device but"
+" two fixes make this path correct: (1) `torch.nn.init` is guarded so "
 "`no_init_weights()` can't null jittor's own construction init, and (2) "
 "`Module._parameters`/`_buffers` are write-through so accelerate's "
-"`module._parameters[name] = value` assignment actually persists (and keeps "
-"the param/buffer classification). Verified: a diffusers `UNet2DModel` "
-"save→`from_pretrained`→forward roundtrip matches to 0.0 on both the meta and"
-" plain paths (`test_diffusers.test_unet_from_pretrained_roundtrip`), and a "
+"`module._parameters[name] = value` assignment actually persists (and "
+"keeps the param/buffer classification). Verified: a diffusers "
+"`UNet2DModel` save→`from_pretrained`→forward roundtrip matches to 0.0 on "
+"both the meta and plain paths "
+"(`test_diffusers.test_unet_from_pretrained_roundtrip`), and a "
 "transformers `BertModel` roundtrip matches to 0.0."
 msgstr ""
 
-#: df00aa3c22dd47e8ba27405b6d2f9a03
+#: 45439e1a29a4461796b85f9310add9f0
 msgid ""
-"A known limitation — **numpy 2.x**: the data-marshalling ABI fix landed (op "
-"*values* are correct under numpy 2.x), but a separate flaky heap-corruption "
-"crash under load remains (needs memory-debugging tooling to pin); **use "
-"numpy < 2** for now. Python 3.13 ships numpy 2.x, so the same guidance "
-"applies there."
+"A known limitation — **numpy 2.x**: the data-marshalling ABI fix landed "
+"(op *values* are correct under numpy 2.x), but a separate flaky heap-"
+"corruption crash under load remains (needs memory-debugging tooling to "
+"pin); **use numpy < 2** for now. Python 3.13 ships numpy 2.x, so the same"
+" guidance applies there."
 msgstr ""
 
-#: 5e7cb0ed52ba4faea8bae8b3816827f8
+#: 7fd6ae67ddc441c68851d754d835a046
 msgid ""
-"In progress (deeper/core): a native complex `Var` dtype, PP/TP, memory-"
-"manager tuning, cuDNN9 and CUDA 11/13 wheel families (the aligned CUDA "
-"12.2/cuDNN 8 stack is available through `jittor[cuda12]`), the remaining "
-"Lightning surface (DDP/precision/loggers), the numpy-2.x stability fix, and "
-"triton/tilelang custom-op support."
+"In progress (deeper/core): `complex128` and native kernels that remove "
+"the remaining internal complex bridge, PP/TP, memory-manager tuning, "
+"cuDNN9 and CUDA 11/13 wheel families (the aligned CUDA 12.2/cuDNN 8 stack"
+" is available through `jittor[cuda12]`), the remaining Lightning surface "
+"(DDP/precision/loggers), the numpy-2.x stability fix, and triton/tilelang"
+" custom-op support."
 msgstr ""

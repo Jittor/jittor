@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Jittor 1.3.11.0\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-12 02:07+0800\n"
+"POT-Creation-Date: 2026-08-12 03:30+0800\n"
 "PO-Revision-Date: 2026-08-11 18:11+0000\n"
 "Last-Translator: Jittor contributors\n"
 "Language: zh_CN\n"
@@ -18,130 +18,50 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.18.0\n"
 
-#: 1242dac4d2674ba082f667e861914eb1
+#: 780cecafae804832a7fd77c0e6f63441
 msgid "Probability distributions API"
 msgstr "概率分布 API"
 
-#: bca36afe703d4bc2929983a5658beac3
+#: 0cf3a34d405f4de8b22455f0c0576d7c
 msgid ""
-":py:obj:`Distribution <jittor.distributions.Distribution>`\\ "
-"\\(\\[batch\\_shape\\, event\\_shape\\, ...\\]\\)"
-msgstr ""
-
-#: 0af3902833f445b49f04931ac7ae38d4 a277081ccf344e52b5a7223a74530857
-msgid ""
-"Minimal base class for torch.distributions.Distribution (used for isinstance"
-" checks and as a common interface)."
-msgstr ""
-
-#: b23f681aca4e4ed3b8e9fb0aac789f4e
-msgid ""
-":py:obj:`Categorical <jittor.distributions.Categorical>`\\ \\(\\[probs\\, "
-"logits\\]\\)"
-msgstr ""
-
-#: f7774065fbd14c888dd078feb0c73c20
-msgid ":py:obj:`Normal <jittor.distributions.Normal>`\\ \\(mu\\, sigma\\)"
-msgstr ""
-
-#: 8c6041c3e4e74d5582896ab3474db41c
-msgid ":py:obj:`Uniform <jittor.distributions.Uniform>`\\ \\(low\\, high\\)"
-msgstr ""
-
-#: e17c90ed36be4935b8745ea24783361c
-msgid ""
-":py:obj:`Bernoulli <jittor.distributions.Bernoulli>`\\ \\(\\[probs\\, "
-"logits\\]\\)"
-msgstr ""
-
-#: f1d4927f87da4e338478f1ece37f5a44
-msgid "torch.distributions.Bernoulli."
-msgstr ""
-
-#: 030dadbf4ff14314982b6c8e6d89d071
-msgid ":py:obj:`Exponential <jittor.distributions.Exponential>`\\ \\(rate\\)"
-msgstr ""
-
-#: 30e3b125130c46e08ea14266b61865fa
-msgid ""
-":py:obj:`Independent <jittor.distributions.Independent>`\\ "
-"\\(base\\_distribution\\, ...\\)"
-msgstr ""
-
-#: 865adaaf2e86435b92439b767bfddb7f
-msgid ""
-"torch.distributions.Independent: reinterpret the last "
-"`reinterpreted_batch_ndims` batch dims of `base_distribution` as event dims,"
-" i.e. sum log_prob/entropy over them."
-msgstr ""
-
-#: 6bd3437e5d2a472483a4e02077ae5184
-msgid ""
-":py:obj:`Beta <jittor.distributions.Beta>`\\ \\(concentration1\\, "
-"concentration0\\)"
-msgstr ""
-
-#: 4608b755014b46e18e8c03b329cf46a1 9cba2893c600481abf4d568c7cdc74f1
-msgid "torch.distributions.Beta(concentration1, concentration0)."
-msgstr ""
-
-#: 6731ce3f1d59477e8c86d75345260ea2
-msgid ":py:obj:`Gamma <jittor.distributions.Gamma>`\\ \\(concentration\\, rate\\)"
-msgstr ""
-
-#: 87ec5aa429fd4ba0a7545e32ce5a253f
-msgid ""
-"torch.distributions.Gamma(concentration, rate) -- shape/rate "
-"parameterization."
-msgstr ""
-
-#: 61a66ba1f6d14d44962f7c830aca8ac7
-msgid ":py:obj:`Poisson <jittor.distributions.Poisson>`\\ \\(rate\\)"
-msgstr ""
-
-#: 825af6acfabf4d11ad90fc61faba2c20
-msgid "torch.distributions.Poisson(rate)."
-msgstr ""
-
-#: 397da0ecbb68406d83fdc3bbca369f3a
-msgid ":py:obj:`Dirichlet <jittor.distributions.Dirichlet>`\\ \\(concentration\\)"
-msgstr ""
-
-#: 2464c7dbb28d45fbb5bc38c243968ce0 387f8dc0b9a34549b052c6f0e854d6a4
-msgid "torch.distributions.Dirichlet(concentration) -- last-dim parameter vector."
-msgstr ""
-
-#: 58f72d8982204d729687be6f47a55b97
-msgid ""
-":py:obj:`kl_divergence <jittor.distributions.kl_divergence>`\\ "
-"\\(cur\\_dist\\, old\\_dist\\)"
-msgstr ""
-
-#: 7ea31de3fcc14b0da29a9b82f0cc8228
-msgid ""
-"torch.distributions.Bernoulli. NB: for Bernoulli the logits->probs map IS "
-"sigmoid (unlike Categorical, where it is softmax -- see the Categorical "
+"torch.distributions.Bernoulli. NB: for Bernoulli the logits->probs map IS"
+" sigmoid (unlike Categorical, where it is softmax -- see the Categorical "
 "fix)."
 msgstr ""
 
-#: fa37502661364106a7b4773d8b12a8ad
-msgid ""
-"torch.distributions.Independent: reinterpret the last "
-"`reinterpreted_batch_ndims` batch dims of `base_distribution` as event dims,"
-" i.e. sum log_prob/entropy over them. Common in RL continuous control: "
-"Independent(Normal(mu, sigma), 1)."
+#: c6467b887e3844f090a38b5e7cf97d58
+msgid "torch.distributions.Beta(concentration1, concentration0)."
 msgstr ""
 
-#: 47f505475c1f41adb3146675ad4767b8
+#: a0aeda7dc6f845408b107e4e6700394d
+msgid "torch.distributions.Dirichlet(concentration) -- last-dim parameter vector."
+msgstr ""
+
+#: 469bfa7cd53e4148b0009f3c90c93962
+msgid ""
+"Minimal base class for torch.distributions.Distribution (used for "
+"isinstance checks and as a common interface)."
+msgstr ""
+
+#: 96f0d551532b4ee38c9ca55160dfcf7d
 msgid ""
 "torch.distributions.Gamma(concentration, rate) -- shape/rate "
-"parameterization. (The pre-existing GammaDistribution is kept for backward-"
-"compat; this adds entropy, torch-flexible Var args, and stays "
+"parameterization. (The pre-existing GammaDistribution is kept for "
+"backward-compat; this adds entropy, torch-flexible Var args, and stays "
 "differentiable.)"
 msgstr ""
 
-#: 8db3caf1d847404580b0c9bc25f5c10f
+#: 5c6e50a1648842cebf5c97414be267eb
 msgid ""
-"torch.distributions.Poisson(rate). NB: torch defines no closed-form entropy "
-"(neither do we); sampling is non-reparameterizable (numpy poisson)."
+"torch.distributions.Independent: reinterpret the last "
+"`reinterpreted_batch_ndims` batch dims of `base_distribution` as event "
+"dims, i.e. sum log_prob/entropy over them. Common in RL continuous "
+"control: Independent(Normal(mu, sigma), 1)."
+msgstr ""
+
+#: e5e1b51a2ef141fba141c7f2d3d1dda6
+msgid ""
+"torch.distributions.Poisson(rate). NB: torch defines no closed-form "
+"entropy (neither do we); sampling is non-reparameterizable (numpy "
+"poisson)."
 msgstr ""

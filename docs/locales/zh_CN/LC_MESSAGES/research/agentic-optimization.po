@@ -1,0 +1,354 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) 2026, Jittor contributors
+# This file is distributed under the same license as the Jittor package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Jittor 1.3.11.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-08-12 03:30+0800\n"
+"PO-Revision-Date: 2026-08-11 19:33+0000\n"
+"Last-Translator: Jittor contributors\n"
+"Language: zh_CN\n"
+"Language-Team: zh_CN <LL@li.org>\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: 8419d70c59294b26ba0354c4fc92d543
+msgid "Agent-Operable Framework Optimization"
+msgstr "面向智能体操作的框架优化"
+
+#: 8f54bfc4c28f49a18a2ca7fd8fa977a1
+msgid "Status: Research proposal; not implemented"
+msgstr ""
+
+#: b2672f9425c741b59a2c6a22ead12625
+msgid "Last reviewed: 2026-08-12"
+msgstr ""
+
+#: d523a4b774234da69e1f62ee50b3b7bd
+msgid "Baseline: `582fc51d`"
+msgstr ""
+
+#: b5c50f768af142d59554a2fe8f330761
+msgid "Owner: compiler and performance maintainers"
+msgstr ""
+
+#: 33058911644944618ada265fe85b73aa
+msgid ""
+"Review after: the first read-only prototype or any proposal to enable "
+"automatic source/configuration changes"
+msgstr ""
+
+#: e6e09ce1caf147e99c3bdc45b838a233
+msgid "Problem"
+msgstr ""
+
+#: 3ccd46a8164f4953845408201007850a
+msgid ""
+"Jittor already compiles and tunes operations at runtime, but optimization"
+" work is difficult for an automated agent to perform safely. Relevant "
+"decisions are spread across logs, generated source, tuner state, cache "
+"directories, profiler output, and backend-specific flags. The information"
+" is mostly human-readable, not stable enough to compare across revisions,"
+" and often mixed with mutable runtime state."
+msgstr ""
+
+#: ce173d6affd84b5391ace4ee7db1ba8e
+msgid ""
+"The goal is to expose a narrow, versioned control and observation surface"
+" so an agent can form a hypothesis, run a bounded experiment, compare "
+"evidence, and produce a reviewable patch or tuning recommendation. The "
+"agent must not become an unrestricted runtime autotuner or silently "
+"change user execution."
+msgstr ""
+
+#: bbdbe8cf5ace4449accae2b8fc8b158f
+msgid "Scope"
+msgstr ""
+
+#: 3c3ebde2a9e04cf5a11f50254ed8d0e7
+msgid ""
+"The proposal covers framework-internal optimization of operator fusion, "
+"generated kernel choices, launch configuration, memory planning, and "
+"reusable backend paths. It does not cover model architecture search, "
+"training-data decisions, unreviewed package installation, or production "
+"changes made without tests and a human-reviewed diff."
+msgstr ""
+
+#: d10f4df4272049318f43f1db1042b6d6
+msgid "Design principles"
+msgstr ""
+
+#: 7705cddd2ea349a49dfa45c13240f322
+msgid "**Read-only first.** Observation and replay land before any mutation API."
+msgstr ""
+
+#: f3f24a5e18bc4221909a4e32b6df6575
+msgid ""
+"**Every claim is replayable.** An experiment identifies the source "
+"commit, environment fingerprint, workload, cache state, commands, and "
+"metrics."
+msgstr ""
+
+#: a4abb609f7234a3fadeda4c0d074fe77
+msgid ""
+"**Bounded control.** A mutation declares the exact parameters or source "
+"region it may change, with a timeout and resource budget."
+msgstr ""
+
+#: 472f78ac78204e8cb3ca7d3a30fcd4ae
+msgid ""
+"**Correctness dominates speed.** Candidate output, gradients, errors, and"
+" backend placement pass before performance is compared."
+msgstr ""
+
+#: 8f08c7b11594461987caf44be902c222
+msgid ""
+"**No hidden fallback.** Reports state which implementation and device "
+"actually executed."
+msgstr ""
+
+#: 486b79546556458ba5b44db7861c859c
+msgid ""
+"**Reviewable artifacts.** Source patches remain ordinary diffs; tuning "
+"data is structured, small, and tied to a schema version."
+msgstr ""
+
+#: 8c29f910bb8e41318119494e60477692
+msgid ""
+"**Isolation by construction.** Baseline and candidate runs use separate "
+"state and JIT caches."
+msgstr ""
+
+#: 247b234a12cd474088f1d42e53039535
+msgid "Observation surface"
+msgstr ""
+
+#: ae3005f78d1a40c8baad463df1f87081
+msgid ""
+"A read-only command should emit one JSON document per workload. The first"
+" schema should include:"
+msgstr ""
+
+#: c6630dca2caf4316aab85c508cb3b25b
+msgid ""
+"Paths stored in the document are repository-relative or artifact-"
+"relative. Secrets, user home directories, host addresses, and raw "
+"environment dumps are excluded. Generated source may be stored as a "
+"content-addressed external artifact; the repository records only its hash"
+" and a small reviewed excerpt when needed."
+msgstr ""
+
+#: 18c68e6d98fd4bdb8197af109dc7726f
+msgid "Control surface"
+msgstr ""
+
+#: 22554d954ba74065a15284eb4b2de976
+msgid ""
+"After the observation schema is stable, a local experiment manifest may "
+"permit a small allowlisted set of controls:"
+msgstr ""
+
+#: 37d955e5fa3a460cb3025e4b651da6a0
+msgid "compiler/tuner flags with declared type and valid range;"
+msgstr ""
+
+#: aca3b405b394485c8a2535fa3da5d29e
+msgid "fusion on/off or one named fusion-policy candidate;"
+msgstr ""
+
+#: c4aa997b549d400eac92606c8bddfd2e
+msgid "launch dimensions and tile sizes within backend limits;"
+msgstr ""
+
+#: 5da322bad2cd4dcd80ae6fff59fb0a94
+msgid "selection among registered implementation variants;"
+msgstr ""
+
+#: 1d0de6edeeb0423bab2c7f305335e22f
+msgid "one repository patch supplied as a normal diff."
+msgstr ""
+
+#: 754144b92c3c42ceb6232d758fa576e1
+msgid ""
+"The runner rejects unknown keys, absolute output paths, commands outside "
+"an allowlist, shared baseline/candidate caches, network access, and "
+"workloads with no correctness oracle. It records the resolved controls "
+"rather than only the requested values."
+msgstr ""
+
+#: 6d5c4f9388f74470ab777c92e5df5fa5
+msgid ""
+"The control API must not expose arbitrary Python evaluation, shell "
+"fragments, or unrestricted compiler flags. Source-editing agents already "
+"produce reviewable Git patches; embedding another code execution channel "
+"in the optimizer would add risk without useful capability."
+msgstr ""
+
+#: 059433ae63bc4a02901131144cb86ffd
+msgid "Experiment loop"
+msgstr ""
+
+#: b9bc9db0190e4cb18638f4c6c31f9a6b
+msgid ""
+"Each experiment changes one coherent factor. Baseline and candidate use "
+"the same inputs, precision policy, synchronization, compiler toolchain, "
+"device, and measurement method. Results include dispersion and sample "
+"count, not only the best run. A candidate is rejected when correctness "
+"fails, the requested path did not execute, compilation cost grows outside"
+" budget, or the improvement is below the predeclared noise threshold."
+msgstr ""
+
+#: 2785bfcbc567441f88415ce52bde0e37
+msgid "Guardrails"
+msgstr ""
+
+#: 1b3f05d5bb9c40a79c63e1f762e7f7c4
+msgid ""
+"Run in a disposable worktree and isolated `$JITTOR_LAB_ROOT/_state/` "
+"subtree."
+msgstr ""
+
+#: d029741cea174197b004bf79c1f7ea64
+msgid ""
+"Require explicit CPU/accelerator parity and gradient checks for affected "
+"differentiable operations."
+msgstr ""
+
+#: d5cde0998efc478eb53361f8d120c863
+msgid "Cap wall time, compilation count, disk use, and generated-source size."
+msgstr ""
+
+#: 8c902fc107d64697ac1b2c59ec0ca7d4
+msgid "Never reuse benchmark caches for unit tests."
+msgstr ""
+
+#: 26cfb7a40f1d4bcf94cd1da038148084
+msgid ""
+"Treat crashes, timeouts, NaNs, and missing metrics as failures, not zero "
+"values."
+msgstr ""
+
+#: 86479d2592fa4419a7fbdc576a56fc8a
+msgid ""
+"Require a human-reviewed patch before any source or default policy "
+"reaches the main branch."
+msgstr ""
+
+#: e2062931390846e686254fce88d05667
+msgid ""
+"Retain a reliable fallback and a runtime identifier for the selected fast"
+" path."
+msgstr ""
+
+#: a6ef08b74266473999511856197a1fe7
+msgid "Staged implementation"
+msgstr ""
+
+#: 45c1e2693bd2441a9bed0c2a33389609
+msgid "Phase 0: schema and capture"
+msgstr ""
+
+#: b6f3a3d60c3344358362fb8485d9fac3
+msgid ""
+"Define the JSON schema, stable workload identifiers, environment "
+"redaction, and a read-only capture command. Validate it on one CPU "
+"elementwise operation and one CUDA matrix operation without changing "
+"compilation decisions."
+msgstr ""
+
+#: 21b351a38ed2494d866c11e394a994a7
+msgid "Phase 1: deterministic replay"
+msgstr ""
+
+#: 2099139be2cc469ab6dacce95d1959e5
+msgid ""
+"Replay a captured workload in isolated cold and warm caches. Prove that "
+"operator signatures, implementation identifiers, and correctness results "
+"are stable enough to compare across two worktrees."
+msgstr ""
+
+#: 4545edaed27643b5871195d628dd122f
+msgid "Phase 2: allowlisted parameter search"
+msgstr ""
+
+#: 26af466fa97b40efa8c3ea96d3b3ac90
+msgid ""
+"Expose one existing tuner parameter family through a typed manifest. "
+"Compare a small fixed candidate set and produce a report without editing "
+"source or changing global defaults."
+msgstr ""
+
+#: 2d3a373acbf74c93b4d1c1e63c62b717
+msgid "Phase 3: patch evaluation"
+msgstr ""
+
+#: 1ca3d911c1994e489700a3ecd75e8f5c
+msgid ""
+"Accept an ordinary Git diff generated outside the runner, build it in a "
+"fresh worktree, and apply the same correctness/performance gate. The "
+"output is a review bundle, never an automatic merge."
+msgstr ""
+
+#: 8f302b5ef87a4578b6a0577ced906314
+msgid "Phase 4: policy integration"
+msgstr ""
+
+#: c55a76ba4c0d4ba3875d85b4b21003af
+msgid ""
+"Only after multiple reviewed studies may a winning choice enter a "
+"registered runtime policy. The policy includes device guards, a fallback,"
+" telemetry for path selection, and regression benchmarks."
+msgstr ""
+
+#: cd50bb77f6a741a78e834c4f5903c3ef
+msgid "Initial acceptance criteria"
+msgstr ""
+
+#: 8ab750a460384e948552d49475d3627a
+msgid ""
+"The first prototype is successful when it can, without modifying the "
+"source checkout:"
+msgstr ""
+
+#: 545f27d3686d4eb3be527400e7e97215
+msgid "capture a redacted, schema-valid CPU and CUDA workload;"
+msgstr ""
+
+#: cbf2c540b3c64e52ba0e65c837887ab5
+msgid "replay each workload in isolated caches;"
+msgstr ""
+
+#: 2a6b40811e2d4056a72034a6c1ec6eee
+msgid "prove which implementation ran;"
+msgstr ""
+
+#: 7893704a55bc47a0827c77ba3328d515
+msgid ""
+"fail a deliberately wrong candidate through independent output or "
+"gradient checks;"
+msgstr ""
+
+#: 937b56fe6bb549ac8f500efaeeeca5ce
+msgid ""
+"compare repeated latency and memory samples with a declared noise "
+"threshold;"
+msgstr ""
+
+#: 4e5dd2c254374d3cbfc90432a8796bb6
+msgid ""
+"emit a compact report that another maintainer can reproduce from the "
+"recorded commit and manifest."
+msgstr ""
+
+#: 7faabad704674c5b96680e6ee163e0a7
+msgid ""
+"No autonomous mutation or merge capability is in scope until these "
+"criteria are met and the control surface receives a separate architecture"
+" review."
+msgstr ""

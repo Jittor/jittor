@@ -25,8 +25,11 @@ if [[ ! -f "$REPO_ROOT/docs/conf.py" ]] || [[ ! -f "$REPO_ROOT/docs/index.md" ]]
   echo 'missing canonical Sphinx/MyST documentation tree: docs/' >&2
   status=1
 fi
-if find "$REPO_ROOT/examples/notebooks" -type f -name '*.ipynb' -print -quit | grep -q .; then
-  echo 'notebook products must be generated from MyST sources outside the checkout.' >&2
+if find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f \
+  \( -name '*.ipynb' -o -name '*.src.md' \) -print -quit | grep -q .; then
+  echo 'notebook products and legacy .src.md files must stay outside the checkout.' >&2
+  find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f \
+    \( -name '*.ipynb' -o -name '*.src.md' \) -print >&2
   status=1
 fi
 if [[ -e "$REPO_ROOT/tests/__init__.py" ]]; then

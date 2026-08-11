@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Jittor 1.3.11.0\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-12 02:07+0800\n"
+"POT-Creation-Date: 2026-08-12 03:38+0800\n"
 "PO-Revision-Date: 2026-08-11 18:11+0000\n"
 "Last-Translator: Jittor contributors\n"
 "Language: zh_CN\n"
@@ -18,13 +18,70 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.18.0\n"
 
-#: 41db18a758c049ffb5337a11f9eec72d
+#: 75effd9104514e789d8a47f4a7e751f4
 msgid "API reference"
 msgstr "API 参考"
 
-#: 543b173588734cc8bdea48e711a49b8a
+#: f5db630981c74f6b87604e51ba434ae9
 msgid ""
-"The API pages use explicit MyST autodoc and autosummary directives. Their "
-"inventory is deliberately curated: adding a public symbol requires adding it"
-" to both the relevant page and `inventory.json`."
+"The API pages discover public exports from the installed Jittor wheel. "
+"`inventory.json` is the single machine-readable stability contract for "
+"the objects that receive structured autodoc and stable Python-domain "
+"anchors; pages do not repeat symbol lists."
+msgstr ""
+
+#: 403984c584ef4a4aa297916d504efb8d
+msgid ":py:obj:`jittor <jittor>`"
+msgstr ""
+
+#: 912ab04028df41c4ad35e5595237e08f
+msgid ":py:obj:`jittor.nn <jittor.nn>`"
+msgstr ""
+
+#: 1b54f91236994a51b40b2ccbb66c2bf9
+msgid ":py:obj:`jittor.nn.attention <jittor.nn.attention>`"
+msgstr ""
+
+#: 37cb456b56784bf393263f7ea198a45d
+msgid "Packed variable-length attention utilities."
+msgstr ""
+
+#: a2612b64ccaf4ce9bfd238f7c50abe24
+msgid ":py:obj:`jittor.models <jittor.models>`"
+msgstr ""
+
+#: aa7e17385111404fba51eb330d76f9c8
+msgid ":py:obj:`jittor.optim <jittor.optim>`"
+msgstr ""
+
+#: 1a71847008a646ea9d803ed611933cb2
+msgid ":py:obj:`jittor.lr_scheduler <jittor.lr_scheduler>`"
+msgstr ""
+
+#: b64c7a6b16394e929549499622a9d136
+msgid ":py:obj:`jittor.init <jittor.init>`"
+msgstr ""
+
+#: 1cb63fe0c3824c8091859bcab1251970
+msgid ":py:obj:`jittor.contrib <jittor.contrib>`"
+msgstr ""
+
+#: d2f770b539e04a44a643c4d4359f3e67
+msgid ":py:obj:`jittor.dataset <jittor.dataset>`"
+msgstr ""
+
+#: 76d089c6a8db45c59a93298f335360e9
+msgid ":py:obj:`jittor.transform <jittor.transform>`"
+msgstr ""
+
+#: 22022fb87f194cc99f259685b3e257f2
+msgid ":py:obj:`jittor.linalg <jittor.linalg>`"
+msgstr ""
+
+#: 5d1b6fd6a68f4c7195540eb8a6602c78
+msgid ":py:obj:`jittor.distributions <jittor.distributions>`"
+msgstr ""
+
+#: f07ba81962ac48f79a957587a412662e
+msgid ":py:obj:`jittor.loss3d <jittor.loss3d>`"
 msgstr ""

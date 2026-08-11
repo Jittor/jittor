@@ -58,6 +58,16 @@ class TestSourceDistributionContents(unittest.TestCase):
         self.assertIn("missing required source-distribution member", stderr)
         self.assertIn("tools/build/build_aarch64_mkl.sh", stderr)
 
+    def test_missing_documentation_source_fails(self):
+        members = dict(self.members)
+        del members["docs/index.md"]
+        status, _stdout, stderr = self._run(
+            self._sdist("missing-docs.tar.gz", members)
+        )
+        self.assertEqual(status, 1)
+        self.assertIn("missing required source-distribution member", stderr)
+        self.assertIn("docs/index.md", stderr)
+
     def test_missing_non_sentinel_source_file_fails(self):
         self.members["tools/build/README.md"] = b"build documentation\n"
         archive_members = dict(self.members)

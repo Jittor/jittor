@@ -25,18 +25,19 @@ The resulting layout has three systemic problems:
 This RFC defines the end state. Earlier facade splits remain useful migration
 work, but their private-package shape is transitional rather than the target.
 
-## Current Baseline
+## Decision Baseline
 
-Commit `47e7ec75` contains source-refactor batches 10 and 11. Its accepted
+At the time of this decision, commit `47e7ec75` contained source-refactor
+batches 10 and 11. Its accepted
 evidence includes exact AST comparisons for the moved miscellaneous functions,
 public identity and dynamic dispatch tests, 79 FSDP2 public names, 70 callable
 contracts, 37 deep distributed registrations, CPU/CUDA regression, and a real
 two-GPU NCCL step. Those results remain the behavioral baseline while the
 temporary package shape changes.
 
-The current wheel baseline has 1,053 entries and already contains
-`UnpackRaw.cuh`; the packaging task is to make that resource explicit and tested,
-not to claim it is presently missing. The deploy helper still omits
+That wheel baseline had 1,053 entries and already contained `UnpackRaw.cuh`;
+the packaging task was to make that resource explicit and tested, not to claim
+it was missing. At that point, the deploy helper still omitted
 `flash_attn_interface.py` when copying stubs into a deployment tree.
 
 ## Goals

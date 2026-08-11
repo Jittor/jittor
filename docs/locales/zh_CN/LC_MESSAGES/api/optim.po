@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Jittor 1.3.11.0\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-12 02:07+0800\n"
+"POT-Creation-Date: 2026-08-12 03:30+0800\n"
 "PO-Revision-Date: 2026-08-11 18:11+0000\n"
 "Last-Translator: Jittor contributors\n"
 "Language: zh_CN\n"
@@ -18,113 +18,57 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.18.0\n"
 
-#: 0e410fcaf7694927b596cc53fcb235f7
+#: 4ce5802fa65649969b67d0ca45f669aa
 msgid "Optimizer API"
 msgstr "优化器 API"
 
-#: 7c4afa4593994cfc9c06cec13e080725
+#: 352861122d334beeb71dffa5d341339b
 msgid ""
 "Use `jittor.optim` for optimizers and `jittor.lr_scheduler` for learning-"
 "rate schedules."
 msgstr ""
 
-#: 7ebd145bd430412b8ed69dfa868b1c02
-msgid ":py:obj:`Optimizer <jittor.optim.Optimizer>`\\ \\(\\*a\\, \\*\\*k\\)"
-msgstr ""
-
-#: c0372dae227343eeb675bf0625bf9093 d9ee26591995412e8925e1d8217313a1
-msgid "Basic class of Optimizer."
-msgstr ""
-
-#: a8ae9d5533d5488fae8ff09bc2d1619d
-msgid ""
-":py:obj:`SGD <jittor.optim.SGD>`\\ \\(params\\, lr\\[\\, momentum\\, "
-"weight\\_decay\\, ...\\]\\)"
-msgstr ""
-
-#: af11f3ff559c4c05841e262e142147cc b1c4771af1344025b80b825a4dcac95c
-msgid "SGD Optimizer."
-msgstr ""
-
-#: 696724367a244b76a7e9679fe8866830
-msgid ":py:obj:`RMSprop <jittor.optim.RMSprop>`\\ \\(params\\[\\, lr\\]\\)"
-msgstr ""
-
-#: ffa9d24318674ff198a86dfd4861c07d
-msgid "RMSprop Optimizer."
-msgstr ""
-
-#: 3beecb4958354a5e9b23056a5993b1d4
-msgid ":py:obj:`Adam <jittor.optim.Adam>`\\ \\(params\\[\\, lr\\]\\)"
-msgstr ""
-
-#: 14be2aaa8d6f40be8333c99cb8f2d0e4 5d8c0380889249f496fea0981764325c
+#: 2b26c6cb387b48e894fdd1dee8232c9b
 msgid "Adam Optimizer."
 msgstr ""
 
-#: 2617256de7434130a81e52aeda38f4d1
-msgid ":py:obj:`AdamW <jittor.optim.AdamW>`\\ \\(params\\[\\, lr\\]\\)"
-msgstr ""
-
-#: 520bc82327ae4f3ead083ddaae1868f6 7926fd8e119f427396cc8a6a8c795384
-msgid "AdamW Optimizer."
-msgstr ""
-
-#: 9adadaafebeb4a6381bcec3a4506092f c79411d239ac434b813e601f5f9ef6b4
-#: ee6c6012c1d0480f8de6ad67d00f067f f016c0cab89848aa86988c11ffc11a62
+#: 14012ce08a864841bbdccd24a18cc5cc 337526ff7aea4e78ba5ae718b080e826
+#: b8ecbb7ba540480ebd18b362ea26289a bdb7468c2664444db35a23bce04b0311
 msgid "Example::"
 msgstr ""
 
-#: 2c6b9dee88ce4496a0a330d8e1ec68a4
-msgid ""
-"RMSprop Optimizer. :param params: parameters of model. :type params: list "
-":param lr: learning rate. :type lr: float :param eps: term added to the "
-"denominator to avoid division by zero, default 1e-8. :type eps: float :param"
-" alpha: smoothing constant, default 0.99. :type alpha: float"
+#: ead26292f2c247e9877fb8fe43515247
+msgid "AdamW Optimizer."
 msgstr ""
 
-#: f47b72bbcf1e475d98a94cfd090822ae
+#: e1fbf522470e464397bf29144f30d788
+msgid "Basic class of Optimizer."
+msgstr ""
+
+#: 8e826cc3f923403da9c6af316476faed
+msgid ""
+"RMSprop Optimizer. :param params: parameters of model. :type params: list"
+" :param lr: learning rate. :type lr: float :param eps: term added to the "
+"denominator to avoid division by zero, default 1e-8. :type eps: float "
+":param alpha: smoothing constant, default 0.99. :type alpha: float"
+msgstr ""
+
+#: a276b09041a345f18d1160589d9af6e5
 msgid "Example"
 msgstr ""
 
-#: dac79c66e1a9431694937bbbb8d85440
+#: 455285299d7e47369dd4e40a804c3f8f
 msgid "optimizer = nn.RMSprop(model.parameters(), lr) optimizer.step(loss)"
 msgstr ""
 
-#: 1ce9b9c018b64053b852d46913320fdc
+#: a8dfae5b55bc4b25b22681d008e76e57
+msgid "SGD Optimizer."
+msgstr ""
+
+#: 1f4472c3f970471182b22f6928e5680b
 msgid "Learning-rate schedules"
 msgstr ""
 
-#: 7a6a1435b5e64c16861d49e8f9994399
-msgid ""
-":py:obj:`CosineAnnealingLR <jittor.lr_scheduler.CosineAnnealingLR>`\\ "
-"\\(optimizer\\, T\\_max\\[\\, ...\\]\\)"
-msgstr ""
-
-#: 460a23e44c404ef9bcdfdd393a5ece9e
-msgid ""
-":py:obj:`ExponentialLR <jittor.lr_scheduler.ExponentialLR>`\\ "
-"\\(optimizer\\, gamma\\[\\, last\\_epoch\\]\\)"
-msgstr ""
-
-#: 087ffd9723d94a85b588bd14e29772b6 10b6fd1135d24eaba521660335403e1b
+#: 2981b21db56845ca82afef8f4920e8a7
 msgid "learning rate is multiplied by gamma in each step."
-msgstr ""
-
-#: b51a5d90c6de4e8a9866928bc98c51de
-msgid ""
-":py:obj:`StepLR <jittor.lr_scheduler.StepLR>`\\ \\(optimizer\\, "
-"step\\_size\\[\\, gamma\\, last\\_epoch\\]\\)"
-msgstr ""
-
-#: bd5323f375e4494189ad8e894fc2c202
-msgid ""
-":py:obj:`MultiStepLR <jittor.lr_scheduler.MultiStepLR>`\\ \\(optimizer\\[\\,"
-" milestones\\, gamma\\, ...\\]\\)"
-msgstr ""
-
-#: 690eb02d44f14b1789c9cbd9e44bb678
-msgid ""
-":py:obj:`ReduceLROnPlateau <jittor.lr_scheduler.ReduceLROnPlateau>`\\ "
-"\\(optimizer\\[\\, mode\\, factor\\, ...\\]\\)"
 msgstr ""

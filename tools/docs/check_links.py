@@ -134,7 +134,7 @@ def _resolve(repo_root, source, raw_target, kind):
     except ValueError:
         return "target escapes repository: {}".format(raw_target)
     if candidate.is_dir():
-        candidate = candidate / "README.md"
+        return None
     if not candidate.exists():
         return "missing target: {}".format(candidate.relative_to(repo_root))
     return None

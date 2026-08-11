@@ -3,38 +3,7 @@
 Import the core API with `import jittor as jt`. Dynamic operators are exposed
 through `jt.ops` and, where applicable, directly on `jt` and `jt.Var`.
 
-:::{currentmodule} jittor
-:::
-
-:::{autosummary}
-array
-grad
-Module
-Var
-save
-load
-:::
-
-## Tensors and differentiation
-
-:::{autofunction} jittor.array
-:::
-
-:::{autofunction} jittor.grad
-:::
-
-:::{autoclass} jittor.Var
-:::
-
-## Modules and persistence
-
-:::{autoclass} jittor.Module
-:::
-
-:::{autofunction} jittor.save
-:::
-
-:::{autofunction} jittor.load
+:::{autopublicmodule} jittor
 :::
 
 The complete dynamically generated operator list is available at runtime with

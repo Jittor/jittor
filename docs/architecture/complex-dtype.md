@@ -42,10 +42,10 @@ The maintained CPU and CUDA tests cover:
 
 The primary regression files are:
 
-- [`tests/core/test_complex64_native.py`](../../tests/core/test_complex64_native.py)
-- [`tests/core/test_complex64_linalg.py`](../../tests/core/test_complex64_linalg.py)
-- [`tests/core/test_complex64_gradfunctional.py`](../../tests/core/test_complex64_gradfunctional.py)
-- [`tests/core/test_complex.py`](../../tests/core/test_complex.py), for the
+- [`tests/core/test_complex64_native.py`](https://github.com/Jittor/jittor/blob/master/tests/core/test_complex64_native.py)
+- [`tests/core/test_complex64_linalg.py`](https://github.com/Jittor/jittor/blob/master/tests/core/test_complex64_linalg.py)
+- [`tests/core/test_complex64_gradfunctional.py`](https://github.com/Jittor/jittor/blob/master/tests/core/test_complex64_gradfunctional.py)
+- [`tests/core/test_complex.py`](https://github.com/Jittor/jittor/blob/master/tests/core/test_complex.py), for the
   remaining internal bridge
 
 ## Dtype and gradient invariants
@@ -87,7 +87,8 @@ have native implementations and equivalent tests.
 - Native complex linear algebra still uses the internal bridge described above.
 
 These limitations are indexed in the
-[known-issues ledger](../../agent/manuals/known-issues.md). A limitation is
+[known-issues ledger](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md).
+A limitation is
 removed only together with a focused regression that exercises the previously
 unsupported backend or derivative order.
 

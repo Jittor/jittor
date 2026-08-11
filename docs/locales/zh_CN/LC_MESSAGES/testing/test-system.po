@@ -1,0 +1,361 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) 2026, Jittor contributors
+# This file is distributed under the same license as the Jittor package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Jittor 1.3.11.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-08-12 03:30+0800\n"
+"PO-Revision-Date: 2026-08-11 19:33+0000\n"
+"Last-Translator: Jittor contributors\n"
+"Language: zh_CN\n"
+"Language-Team: zh_CN <LL@li.org>\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: ee7a18ede67b43ee8d41e4fc90782686
+msgid "Test System"
+msgstr "测试系统"
+
+#: 3036c26a58524676a4245afa928e2adc
+msgid "Status: Accepted"
+msgstr ""
+
+#: 0f2c4141dda64350ad989a3f0a8a72f6
+msgid "Last reviewed: 2026-08-12"
+msgstr ""
+
+#: 600ef13bf1d34f67aa6a16372f65a196
+msgid "Baseline: `582fc51d`"
+msgstr ""
+
+#: 0bc7f960032541b19abd51093b43313e
+msgid "Owner: test infrastructure maintainers"
+msgstr ""
+
+#: e8ecc16d3f8b4f2fa48080c28de6cf3a
+msgid ""
+"Review when: collection roots, markers, OpInfo contracts, or backend "
+"gates change"
+msgstr ""
+
+#: ffc14f2746e745d9a118b66f82c2129a
+msgid ""
+"Jittor uses pytest as the repository test runner while retaining "
+"compatible `unittest.TestCase` tests. The suite lives under root `tests/`"
+" and is not part of the installed package. "
+"[`pyproject.toml`](https://github.com/Jittor/jittor/blob/master/pyproject.toml)"
+" is the authoritative collection and marker configuration; "
+"[`noxfile.py`](https://github.com/Jittor/jittor/blob/master/noxfile.py) "
+"is the reproducible command surface."
+msgstr ""
+
+#: 217564e627df480f8d39bfe15236bf8b
+msgid "Goals"
+msgstr ""
+
+#: 40f8842d0c934cab9d776112fa212ddd
+msgid "Compare forward behavior with an independent reference."
+msgstr ""
+
+#: c1e41f9445d44ec0bd9c0a4d6696d48d
+msgid "Verify analytical gradients numerically and across devices."
+msgstr ""
+
+#: 7d646285317e400db4f5d47d6a8c4c28
+msgid "Keep structure, CPU, and hardware requirements explicit."
+msgstr ""
+
+#: 2739c331e9ae46fe81cc827fde0299e2
+msgid ""
+"Preserve useful legacy edge cases while replacing cross-test imports and "
+"ad-hoc discovery with shared helpers and registries."
+msgstr ""
+
+#: b933f282674d4799882800bd4309f77d
+msgid ""
+"Make unsupported behavior visible through specific skips or strict "
+"expected failures."
+msgstr ""
+
+#: de36ccc042484457a78d233f400c09e4
+msgid "Keep collection free of compilation, downloads, and hardware side effects."
+msgstr ""
+
+#: ba04b0be284b431187981dd8027a9bce
+msgid "Layout"
+msgstr ""
+
+#: 69958cc7b4d1469693baad720eed01ab
+msgid ""
+"Test modules may import `tests/_helpers` and `tests/opinfo` through the "
+"pytest Python path configured for the suite. They must not import another"
+" test module as an implicit helper API. Shared utilities need their own "
+"focused tests when they contain nontrivial comparison or device logic."
+msgstr ""
+
+#: 2727a2c05e474f0fb1d3449c54bb36f2
+msgid "Three layers of operator evidence"
+msgstr ""
+
+#: c5587e92691d460fa2430dca2333f9a0
+msgid "1. Independent forward reference"
+msgstr ""
+
+#: 04c66b1ed22941f8bec89dbada8dd5d3
+msgid ""
+"Each `OpInfo` describes the callable, sample builder, dtypes, autograd "
+"support, tolerances, and targeted skip/xfail policy. "
+"`tests/ops/test_ops.py` expands the database across requested devices and"
+" compares outputs with independent NumPy or mathematical references."
+msgstr ""
+
+#: fdfc62f5ab604306a7f2bc66e9d7274d
+msgid ""
+"The reference must not call the Jittor operation under test. Sample "
+"builders cover meaningful shapes, axes, broadcasting, optional arguments,"
+" and error-prone dtypes rather than generating volume without semantic "
+"variety."
+msgstr ""
+
+#: 7820cf05cc564192a6d6af295ffcf57d
+msgid "2. Numerical gradients"
+msgstr ""
+
+#: 00cdc4ae7eec47419f1adff621e6a61f
+msgid ""
+"Differentiable OpInfo entries run float64 CPU `gradcheck`; operations "
+"that support second-order differentiation also run `gradgradcheck`. "
+"Marking `supports_autograd=False` or `supports_gradgrad=False` is a "
+"contract decision, not a way to make a failing test green, and requires a"
+" reason in the definition or known-issues ledger."
+msgstr ""
+
+#: 05812065de19467cbcf7ef73af1a03f5
+msgid ""
+"Numerical checks prove derivative formulas on CPU. They do not prove that"
+" an accelerator executes the same backward kernel correctly."
+msgstr ""
+
+#: 7a9ff21baa3c4e95bee5a36d5c33d465
+msgid "3. Device parity"
+msgstr ""
+
+#: 2680ca51fa5c47b28d7fb0479cd5be97
+msgid ""
+"[`tests/backends/parity/test_device_parity.py`](https://github.com/Jittor/jittor/blob/master/tests/backends/parity/test_device_parity.py)"
+" runs identical inputs and cotangents on CPU and the available "
+"accelerator, comparing forward outputs and gradients with both global and"
+" per-element error metrics. This layer catches device-specific compile "
+"failures, dropped gradient contributions, and silent kernel divergence."
+msgstr ""
+
+#: d56391d9d41e42e0a29d65fa53bfcdfd
+msgid ""
+"CPU is a practical parity oracle only after its behavior is independently"
+" pinned by the forward and numerical-gradient layers. Backend environment"
+" failures are reported separately from framework defects."
+msgstr ""
+
+#: ab1ca150bb60423d91ec1f5eb918f11d
+msgid "Test categories and markers"
+msgstr ""
+
+#: e03fccd8e06444d9b9c65a37feb8d104
+msgid ""
+"Markers are registered in "
+"[`pyproject.toml`](https://github.com/Jittor/jittor/blob/master/pyproject.toml):"
+msgstr ""
+
+#: cc64857bc5fe4dad80f6d7e345a565ac
+msgid "Marker"
+msgstr ""
+
+#: db6c1ccfcced42bca395aa7ea49486a3
+msgid "Contract"
+msgstr ""
+
+#: 454229836f1944d48f1242224c62e4ae
+msgid "`structure`"
+msgstr ""
+
+#: b23b5b2d0e1b405b961f09b9f4df8da0
+msgid "no device execution; layout, packaging, and static checks"
+msgstr ""
+
+#: e6487abd6a464501a3ae743ffda1b9f9
+msgid "`cpu`"
+msgstr ""
+
+#: cfa3bbc321384314b5c2013523e9fa49
+msgid "maintained CPU behavior"
+msgstr ""
+
+#: ee3de24b1a664d71b172bccc712b3fb9
+msgid "`cuda`"
+msgstr ""
+
+#: 6b7a51d806bf425a9367785018caad6d
+msgid "requires an NVIDIA CUDA environment"
+msgstr ""
+
+#: 60626ad81ca44d90afc26688fc150e6b
+msgid "`rocm`"
+msgstr ""
+
+#: 359eadd82b084246a90785355074b155
+msgid "requires an AMD ROCm environment"
+msgstr ""
+
+#: f95947accdaa44029d1fea181603ecb3
+msgid "`npu`"
+msgstr ""
+
+#: ec25c2b6fc944b0ca8c01fc68ac92297
+msgid "requires an Ascend CANN environment"
+msgstr ""
+
+#: a0a1dbfe78004308a921919c4edab70f
+msgid "`mpi`"
+msgstr ""
+
+#: b1090112e6754e39bf424647a6b81051
+msgid "requires an MPI launcher or multiple processes"
+msgstr ""
+
+#: 3b55cfa0ee404d4d8eb0f49d1e4597c2
+msgid "`slow`"
+msgstr ""
+
+#: d8cede27adc44cdeac9a04d9e502f3d1
+msgid "excluded from the fast pull-request gate"
+msgstr ""
+
+#: 443aceda8f0242b68d0cfc434c1c055c
+msgid "`network`"
+msgstr ""
+
+#: 3d4ddaf9c2184cda89dbab2060ce7cf0
+msgid "requires external network access"
+msgstr ""
+
+#: 6b03aa2dcd914048a8fb75c1c46ce42e
+msgid "`manual`"
+msgstr ""
+
+#: 0961f59e40e64f579f8db5cef9d93a97
+msgid "selected explicitly; never part of automatic default runs"
+msgstr ""
+
+#: 424daffad02842968802a29b86e665b0
+msgid ""
+"Apply the narrowest applicable marker. Hardware tests probe a real "
+"operation and must not silently pass on CPU. Network and manual tests "
+"explain their external requirements in the module docstring."
+msgstr ""
+
+#: 61d9b8e5e1244a1ab82a1eb9d1dd79b0
+msgid "Skips and known failures"
+msgstr ""
+
+#: ec92e637b8ef4311a4fde22a9973f148
+msgid ""
+"A skip represents an unavailable prerequisite or an intentionally "
+"unsupported contract. Its reason identifies the exact prerequisite or "
+"limitation."
+msgstr ""
+
+#: e0b6e83c7ab84472aa111c15ff171fff
+msgid ""
+"An expected failure represents a reproduced framework defect. Pytest uses"
+" strict xfail behavior, so a fix produces an XPASS and forces ledger "
+"cleanup."
+msgstr ""
+
+#: 60fe3b30f1a7450399c6d8755f8c5c88
+msgid ""
+"Do not catch arbitrary exceptions around a test body and convert them to "
+"a skip. Probe optional environments narrowly before execution."
+msgstr ""
+
+#: bb94ddffc1f84175a8789eb183afe8ef
+msgid ""
+"Every persistent expected failure is listed in the [known-issues "
+"ledger](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-"
+"issues.md) with an owner and an exit condition."
+msgstr ""
+
+#: f9b300382a354df88e2ad0c3d74cac67
+msgid "Commands"
+msgstr ""
+
+#: 17ab215efad041a7865446c6a006472d
+msgid ""
+"The nox sessions create isolated state and caches. Direct concurrent runs"
+" must also use distinct `JITTOR_HOME` or `cache_name` values. The first "
+"build of a new JIT operation or extension should run serially."
+msgstr ""
+
+#: 4a8a74c891c94304bc68aa155b3c3241
+msgid "Adding coverage"
+msgstr ""
+
+#: 55094a071db648f5a1c8cc7af3701875
+msgid ""
+"Use an OpInfo definition when one operation can share the standard "
+"sample, reference, dtype, gradient, and device-parity machinery. Use a "
+"focused test when the contract concerns state, mutation, serialization, "
+"error behavior, module lifecycle, import order, distributed coordination,"
+" or a specific regression not expressible through OpInfo."
+msgstr ""
+
+#: 798702ca7b6e40f48d9ea47a7845a3d7
+msgid "A new operation normally needs:"
+msgstr ""
+
+#: e582ff9dd495478f8fed4cdf59a7a888
+msgid "independent forward samples and reference;"
+msgstr ""
+
+#: 6a1aa38326764386ba00de2bf6bef329
+msgid ""
+"dtype, shape, axis, empty, broadcast, and non-contiguous cases as "
+"applicable;"
+msgstr ""
+
+#: d3c97aa39fb54bbd931c948728e0e521
+msgid "gradient and grad-gradient declarations backed by tests;"
+msgstr ""
+
+#: ce44a7c863174e30b60c5f73856ce204
+msgid "device parity for every advertised accelerator;"
+msgstr ""
+
+#: 43aa58636ce7468b9c106675a1871953
+msgid "explicit error-contract tests;"
+msgstr ""
+
+#: 9adca3cc86974a0588a9dd49c85e0c9b
+msgid ""
+"an OpInfo report entry or focused test name that makes missing coverage "
+"discoverable."
+msgstr ""
+
+#: 3c63a0d1add54f61b993e96990b020af
+msgid "Acceptance"
+msgstr ""
+
+#: 667923d7e20d4b9fb0345e79767b2282
+msgid ""
+"A test-system change is complete when collection succeeds without device "
+"side effects, focused self-tests cover new harness logic, the structure "
+"gate passes, at least one mandatory CPU case executes, and each hardware "
+"result distinguishes pass, framework failure, and unavailable "
+"environment. Counts alone are not an acceptance criterion; the evidence "
+"must exercise the claimed semantics."
+msgstr ""

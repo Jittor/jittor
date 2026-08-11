@@ -112,5 +112,6 @@ A compatibility change should include the smallest applicable set:
 - benchmark evidence for a claimed fast path.
 
 Record persistent limitations in the
-[known-issues ledger](../../agent/manuals/known-issues.md), with an owner and a
+[known-issues ledger](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md),
+with an owner and a
 test or reproduction that signals when the limitation is gone.

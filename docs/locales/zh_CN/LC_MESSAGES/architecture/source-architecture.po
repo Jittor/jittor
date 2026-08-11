@@ -1,0 +1,340 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) 2026, Jittor contributors
+# This file is distributed under the same license as the Jittor package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Jittor 1.3.11.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-08-12 03:30+0800\n"
+"PO-Revision-Date: 2026-08-11 19:33+0000\n"
+"Last-Translator: Jittor contributors\n"
+"Language: zh_CN\n"
+"Language-Team: zh_CN <LL@li.org>\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: 46190139a5e646daa0727a9aaa80fcb5
+msgid "Source Architecture and Module Boundaries"
+msgstr "源码架构与模块边界"
+
+#: 348780707bb84a409ae6068252547217
+msgid "Status: Accepted"
+msgstr ""
+
+#: f77cfd3bb6344e10bd64481048c09a40
+msgid "Last reviewed: 2026-08-12"
+msgstr ""
+
+#: 6098210f57414806bf66782e5a81c544
+msgid "Baseline: `582fc51d`"
+msgstr ""
+
+#: 1cf890580aea44588598676c8282e328
+msgid "Owner: Jittor core maintainers"
+msgstr ""
+
+#: 1e7148941b6c40d98bb8cace06d9ddcd
+msgid ""
+"Review when: a public module moves, an implementation domain is added, or"
+" a runtime resource path changes"
+msgstr ""
+
+#: 31d342f74e184ce1b9d49f995f5856d0
+msgid ""
+"This document defines how Python source is decomposed inside Jittor. "
+"Repository, packaging, and runtime-resource ownership is defined by the "
+"broader [repository layout decision](repository-layout.md)."
+msgstr ""
+
+#: 7117f3d088e04465ad847040d0ac7462
+msgid "Principles"
+msgstr ""
+
+#: f4fa8c5468f24baca9b272ed6208efce
+msgid ""
+"**One physical owner.** A public domain is a normal package; it does not "
+"have a second private tree containing the real implementation."
+msgstr ""
+
+#: 42877add3b1244e7a57f71f3d77f6390
+msgid ""
+"**Imports follow ownership.** Implementation metadata and tracebacks "
+"report the module that owns the code. Re-export modules do not rewrite "
+"`__module__` recursively."
+msgstr ""
+
+#: d597cad7fdf44e71b86fe4525a4d24b2
+msgid ""
+"**Composition stays shallow.** A package `__init__.py` composes and "
+"exports public names. Large implementations live in meaningful child "
+"modules."
+msgstr ""
+
+#: 05a88e8810984baeb4857f1a2be39ea3
+msgid ""
+"**Runtime paths are contracts.** Compiler-loaded C++/CUDA resources move "
+"only with an explicit compiler and packaging migration."
+msgstr ""
+
+#: 6133cbca33c140cb8bda8330b788c180
+msgid ""
+"**Compatibility is layered.** Native framework capability, reusable "
+"compatibility mechanisms, import shims, and downstream integrations have "
+"distinct owners."
+msgstr ""
+
+#: d756b0d34adf4ff3a619a96cd33eec1c
+msgid ""
+"**Every move preserves behavior.** Refactors retain public names, "
+"callable identity where promised, pickling behavior where supported, "
+"backend dispatch, and focused regression coverage."
+msgstr ""
+
+#: c560c2c46de644e99289998e7d364889
+msgid "Current domains"
+msgstr ""
+
+#: b1128b390b9c42d3a2cb9610bd45eebe
+msgid "Package composition contracts"
+msgstr ""
+
+#: dc9694dd71b14818ac8f2f7080c85e84
+msgid "Neural network API"
+msgstr ""
+
+#: 9b5314e42b4f40b68f5688db182c3608
+msgid ""
+"`jittor.nn` is the public package. Stateful layers live under "
+"`nn.modules`, stateless operations under `nn.functional`, and optional "
+"accelerated paths under `nn.backends`. A public re-export must point at "
+"the canonical implementation object; wrappers are justified only when "
+"they enforce a real API contract."
+msgstr ""
+
+#: 4601ed6aedba402fa6573475b6c49b87
+msgid "Dependency direction is:"
+msgstr ""
+
+#: 3070c0ea04e843e9baa60312e7a49d94
+msgid ""
+"Functional modules must not import stateful layer implementations. "
+"Backend adapters must remain optional and fail with an actionable "
+"capability error when their toolchain is unavailable."
+msgstr ""
+
+#: 88f5ab8a730a4f96b1277b8dca22e0a8
+msgid "Miscellaneous and pooling APIs"
+msgstr ""
+
+#: 8badac134bec4380a78b5bb62eeaf40d
+msgid ""
+"`jittor.misc` groups tensor, shape, and composition operations. "
+"`jittor.pool` owns pooling functions and modules. New code is placed by "
+"semantic ownership, not by the size of the destination file. Circular "
+"imports are resolved by narrowing dependencies or moving shared "
+"primitives to the lower-level owner, not through mutable proxy objects."
+msgstr ""
+
+#: e7d594a99fce4e6e8f6c8ecc0a54a8fb
+msgid "Compatibility APIs"
+msgstr ""
+
+#: 29cc4d4eb315444c9ed952c8dbe9af3a
+msgid ""
+"The canonical Torch-style implementation is `jittor.compat.torch`. The "
+"legacy attribute/module spelling `jittor.torch_compat` is an alias "
+"created during Jittor initialization; it is not a second source file. "
+"Likewise, the canonical Triton implementation is `jittor.compat.triton`, "
+"with `jittor.triton_shim` retained as an object-identity alias."
+msgstr ""
+
+#: 19773e31b1344586bc153f3efc3646eb
+msgid ""
+"`jittor.compat.shim` owns the runtime and deployment code for the "
+"optional top-level `torch` surface used by applications that import Torch"
+" directly. The name `jittor.torch_shim` is retained only as a same-object"
+" legacy alias. The shim delegates Torch-style semantics to "
+"`jittor.compat.torch`; neither the alias nor the deployed package owns a "
+"second implementation."
+msgstr ""
+
+#: b055ed0808bc4e25944fed98916bcf98
+msgid "The ownership order is:"
+msgstr ""
+
+#: b70d01a2f71e4a1299b74076e98f7c75
+msgid "native Jittor semantics and broadly useful operations;"
+msgstr ""
+
+#: c8a09e41f1234e9294805a0c86da9eed
+msgid "reusable mechanisms in `jittor.compat`;"
+msgstr ""
+
+#: 6d3dbfb6328c4813915a1cf6160e1f6b
+msgid "optional import/deployment shims;"
+msgstr ""
+
+#: 59bf78de5d824bb2af925c7ef855e9ee
+msgid "project-specific integrations outside the core distribution."
+msgstr ""
+
+#: 869553258f2b4537b4cc850606284408
+msgid ""
+"See [Torch compatibility principles](torch-compatibility-principles.md) "
+"for the behavioral decision rules."
+msgstr ""
+
+#: 1d938132147d4bcca25c31890450c2ee
+msgid "Import and initialization rules"
+msgstr ""
+
+#: 1ae02c6351ed4f5aa1791bb1056d4b23
+msgid ""
+"Module imports must not compile kernels, download assets, mutate the "
+"source checkout, or silently install external packages."
+msgstr ""
+
+#: a15250a2404348dea854a6572a3f6f71
+msgid ""
+"Registration is idempotent. Re-importing a compatibility module must not "
+"wrap the same callable twice or create a second module object."
+msgstr ""
+
+#: 13edf30829ae4723a21d5b59791ed372
+msgid ""
+"Optional dependency checks happen at the operation boundary unless "
+"import-time discovery is itself the API."
+msgstr ""
+
+#: 4bd60e153feb4aaca309ef1fe07eea31
+msgid ""
+"Broad exception handlers may annotate and re-raise a failure; they must "
+"not convert a partially installed compatibility surface into apparent "
+"success."
+msgstr ""
+
+#: 8dd788af62ee44c4867856392ab590b3
+msgid "Expensive imports stay out of collection-only structure tests."
+msgstr ""
+
+#: ba104d355f0d4b1aa335fba7558ed272
+msgid "Runtime resources"
+msgstr ""
+
+#: dfb23d3c330945e7b293a2ff352f2fb7
+msgid ""
+"The following trees are consumed by compiler or packaging code using "
+"physical paths and therefore require special review:"
+msgstr ""
+
+#: 0b39c74c712041c5b47c58566d7c2180
+msgid "`python/jittor/src/`"
+msgstr ""
+
+#: 97991dded45d42258047be3de85e0831
+msgid "`python/jittor/extern/`"
+msgstr ""
+
+#: 1ad37f604f7b4dc89e592b1b0772aee3
+msgid "`python/jittor/math_util/src/`"
+msgstr ""
+
+#: 937dc7356eb14efe81c8d62c61f15e23
+msgid "`python/jittor/utils/data.gz`"
+msgstr ""
+
+#: 4f9cd3e0884e4a65917ddcdd2da2d9ac
+msgid "`python/jittor/compat/shim/cpp_extension/`"
+msgstr ""
+
+#: af401d0e7a6d4c8ca5532945b5bf9c72
+msgid ""
+"A move is complete only when source checkouts, sdists, wheels, cold JIT "
+"builds, and installed smoke tests all agree. Directory aesthetics alone "
+"are not a reason to relocate these resources."
+msgstr ""
+
+#: 4f33f2a26c5c487bb552769ae642d7a9
+msgid "Refactor protocol"
+msgstr ""
+
+#: f7e7cb597aad4ca99afcc78d214aa797
+msgid "For each module move:"
+msgstr ""
+
+#: 8bc8a247e0e24e4aacd583f74d0f5cde
+msgid "Inventory definitions, assignments, imports, registrations, and consumers."
+msgstr ""
+
+#: 33feb46010c14cd2948773b9b63eab30
+msgid "Define the canonical destination and any compatibility alias explicitly."
+msgstr ""
+
+#: 46ea882f3b374043a6a3756cf85e3b27
+msgid "Move a coherent domain slice without unrelated behavior changes."
+msgstr ""
+
+#: 77264cfb0f044179aaecff55e4021c9f
+msgid ""
+"Compare the moved definition set and public exports mechanically where "
+"possible."
+msgstr ""
+
+#: 330a624cadf74c66ad8d0ffa5ef1708f
+msgid ""
+"Test import identity, public calls, dynamic dispatch, serialization where"
+" applicable, and the relevant CPU/accelerator behavior."
+msgstr ""
+
+#: f7fb71244b1443c59ab61566fcd48c81
+msgid "Delete the transitional source path and add it to the structure gate."
+msgstr ""
+
+#: 8430107a398949cca02da5303d1fdcc2
+msgid "Update durable documentation and active links in the same change."
+msgstr ""
+
+#: 5d8701634161464a88a3e9dcaa6ab748
+msgid ""
+"Do not preserve two editable implementations after a move. Compatibility "
+"must delegate to the canonical object and have an exit condition."
+msgstr ""
+
+#: efac2ee05a9640b38581924626af8d19
+msgid "Acceptance"
+msgstr ""
+
+#: d45c27fe660e49a3b106c33b3faf06b8
+msgid "A source-layout change is acceptable when:"
+msgstr ""
+
+#: 935ae2a4835d41aca62f411a7d51959c
+msgid "imports and public names retain their documented behavior;"
+msgstr ""
+
+#: ba0ce8781e7a4f2584735e969bfc7dd2
+msgid "no legacy implementation tree or root-level compatibility file remains;"
+msgstr ""
+
+#: 88fb1cdac89646858bc86153135483a2
+msgid ""
+"the wheel contains every required runtime resource and excludes "
+"repository-only tests/tools;"
+msgstr ""
+
+#: cbddb7af7e664aa49f16dc55f985220c
+msgid "`bash agent/scripts/check_repo_layout.sh` passes;"
+msgstr ""
+
+#: ef336585bd5b418fa0277935c3124142
+msgid "focused tests, structure tests, and every affected backend gate pass;"
+msgstr ""
+
+#: 5fb9d2f3638f4cddbe5011692fd1923f
+msgid "any deliberate incompatibility is documented in release notes."
+msgstr ""

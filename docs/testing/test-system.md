@@ -8,8 +8,9 @@
 
 Jittor uses pytest as the repository test runner while retaining compatible
 `unittest.TestCase` tests. The suite lives under root `tests/` and is not part of
-the installed package. [`pyproject.toml`](../../pyproject.toml) is the
-authoritative collection and marker configuration; [`noxfile.py`](../../noxfile.py)
+the installed package. [`pyproject.toml`](https://github.com/Jittor/jittor/blob/master/pyproject.toml)
+is the authoritative collection and marker configuration;
+[`noxfile.py`](https://github.com/Jittor/jittor/blob/master/noxfile.py)
 is the reproducible command surface.
 
 ## Goals
@@ -75,7 +76,7 @@ accelerator executes the same backward kernel correctly.
 
 ### 3. Device parity
 
-[`tests/backends/parity/test_device_parity.py`](../../tests/backends/parity/test_device_parity.py)
+[`tests/backends/parity/test_device_parity.py`](https://github.com/Jittor/jittor/blob/master/tests/backends/parity/test_device_parity.py)
 runs identical inputs and cotangents on CPU and the available accelerator,
 comparing forward outputs and gradients with both global and per-element error
 metrics. This layer catches device-specific compile failures, dropped gradient
@@ -87,7 +88,8 @@ reported separately from framework defects.
 
 ## Test categories and markers
 
-Markers are registered in [`pyproject.toml`](../../pyproject.toml):
+Markers are registered in
+[`pyproject.toml`](https://github.com/Jittor/jittor/blob/master/pyproject.toml):
 
 | Marker | Contract |
 | --- | --- |
@@ -114,7 +116,8 @@ requirements in the module docstring.
 - Do not catch arbitrary exceptions around a test body and convert them to a
   skip. Probe optional environments narrowly before execution.
 - Every persistent expected failure is listed in the
-  [known-issues ledger](../../agent/manuals/known-issues.md) with an owner and an
+  [known-issues ledger](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)
+  with an owner and an
   exit condition.
 
 ## Commands

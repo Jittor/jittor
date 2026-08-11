@@ -30,7 +30,7 @@ jsonschema-specifications==2025.9.1
 jupyter_client==8.9.1
 jupyter_core==5.9.1
 jupyterlab_pygments==0.3.0
-jupytext==1.19.5
+jupytext==1.17.3
 markdown-it-py==4.2.0
 MarkupSafe==3.0.3
 matplotlib-inline==0.2.2
