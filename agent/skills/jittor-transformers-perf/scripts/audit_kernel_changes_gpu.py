@@ -278,10 +278,10 @@ def run_profile(op: str, length: int, rows: int, warmup: int,
         old = lambda z: old_ln_normalize(z, (-1,), 1e-5) * w + b
         def current_pair(z, go):
             value = current(z)
-            return value, *jt.grad((value * go).sum(), [z, w, b])
+            return (value,) + tuple(jt.grad((value * go).sum(), [z, w, b]))
         def old_pair(z, go):
             value = old(z)
-            return value, *jt.grad((value * go).sum(), [z, w, b])
+            return (value,) + tuple(jt.grad((value * go).sum(), [z, w, b]))
         profile("layernorm_current_forward", current, (x,), warmup, rerun)
         profile("layernorm_old_forward", old, (x,), warmup, rerun)
         profile("layernorm_current_pair", current_pair, (x, g), warmup, rerun)
