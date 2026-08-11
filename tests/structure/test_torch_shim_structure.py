@@ -22,9 +22,7 @@ class TestTorchShimStructure(unittest.TestCase):
     def setUpClass(cls):
         cls.repo_root = Path(__file__).resolve().parents[2]
         cls.shim_root = cls.repo_root / "python" / "jittor" / "compat" / "shim"
-        cls.manifest = (
-            cls.repo_root / "agent" / "baselines" / "torch-shim-resources-stage7.txt"
-        )
+        cls.manifest = cls.repo_root / "agent" / "baselines" / "torch-shim-resources-stage7.txt"
 
     def test_legacy_physical_package_is_absent(self):
         self.assertFalse((self.repo_root / "python" / "jittor" / "torch_shim").exists())
@@ -46,9 +44,7 @@ class TestTorchShimStructure(unittest.TestCase):
                 path = self.repo_root / relative
                 self.assertTrue(path.is_file())
                 if relative not in self.RUNTIME_OWNER_PATHS:
-                    self.assertEqual(
-                        hashlib.sha256(path.read_bytes()).hexdigest(), expected
-                    )
+                    self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), expected)
 
     def test_manifest_covers_deep_and_generated_resources(self):
         paths = {
@@ -71,7 +67,9 @@ class TestTorchShimStructure(unittest.TestCase):
         source = template.read_text(encoding="utf-8")
         tree = ast.parse(source)
         self.assertLessEqual(len(source.splitlines()), 20)
-        self.assertFalse(any(isinstance(node, (ast.FunctionDef, ast.ClassDef)) for node in tree.body))
+        self.assertFalse(
+            any(isinstance(node, (ast.FunctionDef, ast.ClassDef)) for node in tree.body)
+        )
         self.assertIn("_sys.modules[__name__] = _jittor", source)
         self.assertIn("_torch_compat.install(_jittor)", source)
 

@@ -31,9 +31,7 @@ def _check_api(html_root, inventory_path):
         )
         if duplicates:
             issues.append(
-                "{} has duplicate HTML anchors: {}".format(
-                    page["docname"], ", ".join(duplicates)
-                )
+                "{} has duplicate HTML anchors: {}".format(page["docname"], ", ".join(duplicates))
             )
         identifiers = set(identifier_list)
         for name in page["objects"]:

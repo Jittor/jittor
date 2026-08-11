@@ -93,6 +93,7 @@ def _sanitize_autodoc_docstring(app, what, name, obj, options, lines):
             "Each parameter accepts either a non-negative scalar or a two-value range.",
         ]
 
+
 def setup(app):
     adapter_path = Path(__file__).with_name("_myst_autodoc.py")
     spec = spec_from_file_location("_jittor_myst_autodoc", str(adapter_path))

@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from typing import List
 import unittest
 
 
@@ -106,7 +107,7 @@ class TestCleanupStructure(unittest.TestCase):
             relative = path.relative_to(self.repo_root).as_posix()
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=relative)
             for node in ast.walk(tree):
-                imported = []
+                imported: List[str] = []
                 if isinstance(node, ast.Import):
                     imported.extend(alias.name for alias in node.names)
                 elif isinstance(node, ast.ImportFrom) and node.module:

@@ -169,13 +169,7 @@ class TestDocsStructure(unittest.TestCase):
             )
             inventory = root / "inventory.json"
             inventory.write_text(
-                json.dumps(
-                    {
-                        "pages": [
-                            {"docname": "api/sample", "objects": ["jittor.sample"]}
-                        ]
-                    }
-                ),
+                json.dumps({"pages": [{"docname": "api/sample", "objects": ["jittor.sample"]}]}),
                 encoding="utf-8",
             )
             issues, checked = checker._check_api(root, inventory)

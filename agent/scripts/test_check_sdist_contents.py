@@ -72,9 +72,7 @@ class TestSourceDistributionContents(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertIn("python", command)
         self.assertIn("python/jittor/runtime_source.py", paths)
-        self.assertNotIn(
-            "python/jittor/__pycache__/runtime_source.cpython-311.pyc", paths
-        )
+        self.assertNotIn("python/jittor/__pycache__/runtime_source.cpython-311.pyc", paths)
         self.assertNotIn("python/jittor.egg-info/PKG-INFO", paths)
 
     def test_canonical_generated_egg_info_members_pass(self):
@@ -82,18 +80,14 @@ class TestSourceDistributionContents(unittest.TestCase):
         members.update(
             {path: b"generated metadata\n" for path in checker.CANONICAL_EGG_INFO_MEMBERS}
         )
-        status, stdout, stderr = self._run(
-            self._sdist("canonical-egg-info.tar.gz", members)
-        )
+        status, stdout, stderr = self._run(self._sdist("canonical-egg-info.tar.gz", members))
         self.assertEqual(status, 0, stderr)
         self.assertIn("source distribution OK", stdout)
 
     def test_unexpected_canonical_egg_info_member_fails(self):
         members = dict(self.members)
         members["python/jittor.egg-info/not-zip-safe"] = b"unexpected\n"
-        status, _stdout, stderr = self._run(
-            self._sdist("extra-egg-info.tar.gz", members)
-        )
+        status, _stdout, stderr = self._run(self._sdist("extra-egg-info.tar.gz", members))
         self.assertEqual(status, 1)
         self.assertIn("unapproved generated .egg-info metadata", stderr)
         self.assertIn("python/jittor.egg-info/not-zip-safe", stderr)
@@ -101,9 +95,7 @@ class TestSourceDistributionContents(unittest.TestCase):
     def test_other_egg_info_directory_fails(self):
         members = dict(self.members)
         members["python/other.egg-info/PKG-INFO"] = b"unexpected\n"
-        status, _stdout, stderr = self._run(
-            self._sdist("other-egg-info.tar.gz", members)
-        )
+        status, _stdout, stderr = self._run(self._sdist("other-egg-info.tar.gz", members))
         self.assertEqual(status, 1)
         self.assertIn("unapproved generated .egg-info metadata", stderr)
         self.assertIn("python/other.egg-info/PKG-INFO", stderr)
@@ -119,9 +111,7 @@ class TestSourceDistributionContents(unittest.TestCase):
     def test_missing_documentation_source_fails(self):
         members = dict(self.members)
         del members["docs/index.md"]
-        status, _stdout, stderr = self._run(
-            self._sdist("missing-docs.tar.gz", members)
-        )
+        status, _stdout, stderr = self._run(self._sdist("missing-docs.tar.gz", members))
         self.assertEqual(status, 1)
         self.assertIn("missing required source-distribution member", stderr)
         self.assertIn("docs/index.md", stderr)
@@ -139,9 +129,7 @@ class TestSourceDistributionContents(unittest.TestCase):
         self.members["python/jittor/runtime_source.py"] = b"RUNTIME = True\n"
         archive_members = dict(self.members)
         del archive_members["python/jittor/runtime_source.py"]
-        status, _stdout, stderr = self._run(
-            self._sdist("missing-python.tar.gz", archive_members)
-        )
+        status, _stdout, stderr = self._run(self._sdist("missing-python.tar.gz", archive_members))
         self.assertEqual(status, 1)
         self.assertIn("missing required source-distribution member", stderr)
         self.assertIn("python/jittor/runtime_source.py", stderr)
@@ -190,9 +178,7 @@ class TestSourceDistributionContents(unittest.TestCase):
                 self.assertIn(relative, stderr)
 
     def test_notebook_source_and_products_are_rejected(self):
-        for index, relative in enumerate(
-            ("docs/tutorial.ipynb", "docs/tutorial.src.md")
-        ):
+        for index, relative in enumerate(("docs/tutorial.ipynb", "docs/tutorial.src.md")):
             with self.subTest(path=relative):
                 members = dict(self.members)
                 members[relative] = b"generated\n"

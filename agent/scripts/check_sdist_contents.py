@@ -80,9 +80,9 @@ CANONICAL_EGG_INFO_MEMBERS = frozenset(
         "python/jittor.egg-info/top_level.txt",
     )
 )
-ALLOWED_GENERATED_SDIST_PATHS = frozenset(
-    (CANONICAL_EGG_INFO_DIRECTORY,)
-) | CANONICAL_EGG_INFO_MEMBERS
+ALLOWED_GENERATED_SDIST_PATHS = (
+    frozenset((CANONICAL_EGG_INFO_DIRECTORY,)) | CANONICAL_EGG_INFO_MEMBERS
+)
 
 
 class SourceDistributionError(Exception):
@@ -122,9 +122,7 @@ def _expected_source_paths(repo_root):
     paths = frozenset(
         item
         for item in result.stdout.decode("utf-8").split("\0")
-        if item
-        and _generated_cache_reason(item) is None
-        and not _is_egg_info_path(item)
+        if item and _generated_cache_reason(item) is None and not _is_egg_info_path(item)
     )
     missing_sentinels = sorted(set(REQUIRED_SOURCE_PATHS) - paths)
     if missing_sentinels:
@@ -164,9 +162,7 @@ def _generated_cache_reason(relative):
 
 
 def _is_egg_info_path(relative):
-    return any(
-        part.endswith(".egg-info") for part in PurePosixPath(relative).parts
-    )
+    return any(part.endswith(".egg-info") for part in PurePosixPath(relative).parts)
 
 
 def _pollution_reason(relative):
@@ -254,9 +250,7 @@ def audit_sdist(path, expected_paths):
             )
         )
     }
-    unexpected = sorted(
-        governed_members - set(expected_paths) - CANONICAL_EGG_INFO_MEMBERS
-    )
+    unexpected = sorted(governed_members - set(expected_paths) - CANONICAL_EGG_INFO_MEMBERS)
     for relative in unexpected:
         issues.append("unexpected source-distribution member: {}".format(relative))
 
@@ -275,11 +269,7 @@ def audit_sdist(path, expected_paths):
     for relative in CANONICAL_EGG_INFO_MEMBERS:
         member = member_by_relative.get(relative)
         if member is not None and not member.isfile():
-            issues.append(
-                "canonical generated .egg-info member is not a file: {}".format(
-                    relative
-                )
-            )
+            issues.append("canonical generated .egg-info member is not a file: {}".format(relative))
 
     return issues, frozenset(relative_names)
 
