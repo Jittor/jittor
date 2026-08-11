@@ -756,14 +756,23 @@ def instance_norm(x,
     bias = 0,
     momentum = 0.1,
     eps = 1e-5):
-    dims = list(range(2,x.ndim))
+    orig_dtype = x.dtype if isinstance(x, jt.Var) else None
+    need_cast = orig_dtype in ("float16", "bfloat16")
+    if need_cast:
+        x = x.float32()
+    dims = list(range(2, x.ndim))
     xmean = jt.mean(x, dims=dims)
-    x2mean = jt.mean(x*x, dims=dims)
+    diff = x - xmean.broadcast(x, dims)
+    xvar = jt.mean(diff * diff, dims=dims)
 
-    xvar = (x2mean-xmean*xmean).maximum(0.0)
-    w = weight / jt.sqrt(xvar+eps)
-    b = bias - xmean * w
-    return x * w.broadcast(x, dims) + b.broadcast(x, dims)
+    w_in = weight.float32() if isinstance(weight, jt.Var) else weight
+    b_in = bias.float32() if isinstance(bias, jt.Var) else bias
+    w = w_in / jt.sqrt(xvar + eps)
+    b = b_in - xmean * w
+    out = x * w.broadcast(x, dims) + b.broadcast(x, dims)
+    if need_cast:
+        out = out.cast(orig_dtype)
+    return out
 
 class LayerNorm(Module):
     def __init__(self, normalized_shape, eps: float = 1e-5, elementwise_affine: bool = True) -> None:
@@ -775,35 +784,57 @@ class LayerNorm(Module):
         self.weight = init.constant(normalized_shape, "float32", 1.0) if elementwise_affine else 1.0
         self.bias = init.constant(normalized_shape, "float32", 0.0) if elementwise_affine else 0.0
 
-    @fp32_guard
     def execute(self, x):
-        dims = [-i for i in range(len(self.normalized_shape), 0, -1)]
-        xmean = jt.mean(x, dims=dims, keepdims=1)
-        x2mean = jt.mean(x*x, dims=dims, keepdims=1)
+       
+        orig_dtype = x.dtype
+        need_cast = orig_dtype in ("float16", "bfloat16")
+        x_fp32 = x.float32() if need_cast else x
 
-        xvar = (x2mean-xmean*xmean).maximum(0.0)
-        w = self.weight / jt.sqrt(xvar+self.eps)
-        b = self.bias - xmean * w
-        return x * w + b
+        dims = [-i for i in range(len(self.normalized_shape), 0, -1)]
+        xmean = jt.mean(x_fp32, dims=dims, keepdims=True)
+        diff = x_fp32 - xmean
+        xvar = jt.mean(diff * diff, dims=dims, keepdims=True)
+        x_norm = diff / jt.sqrt(xvar + self.eps)
+
+        if self.elementwise_affine:
+            w = self.weight.float32() if isinstance(self.weight, jt.Var) else self.weight
+            b = self.bias.float32() if isinstance(self.bias, jt.Var) else self.bias
+            out = x_norm * w + b
+        else:
+            out = x_norm
+
+        if need_cast:
+            out = out.cast(orig_dtype)
+        return out
 
 
 LayerNorm3d = LayerNorm2d = LayerNorm1d = LayerNorm
 
-@fp32_guard
 def layer_norm(x, 
     normalized_shape, 
     weight = 1,
     bias = 0,
     eps: float = 1e-5, 
     elementwise_affine: bool = True):
-    dims = [-i for i in range(len(normalized_shape), 0, -1)]
-    xmean = jt.mean(x, dims=dims, keepdims=1)
-    x2mean = jt.mean(x*x, dims=dims, keepdims=1)
+    orig_dtype = x.dtype
+    need_cast = orig_dtype in ("float16", "bfloat16")
+    x_fp32 = x.float32() if need_cast else x
 
-    xvar = (x2mean-xmean*xmean).maximum(0.0)
-    w = weight / jt.sqrt(xvar+eps)
-    b = bias - xmean * w
-    return x * w + b
+    dims = [-i for i in range(len(normalized_shape), 0, -1)]
+    xmean = jt.mean(x_fp32, dims=dims, keepdims=True)
+    diff = x_fp32 - xmean
+    xvar = jt.mean(diff * diff, dims=dims, keepdims=True)
+    x_norm = diff / jt.sqrt(xvar + eps)
+
+    if isinstance(weight, jt.Var):
+        weight = weight.float32()
+    if isinstance(bias, jt.Var):
+        bias = bias.float32()
+    out = x_norm * weight + bias
+
+    if need_cast:
+        out = out.cast(orig_dtype)
+    return out
 
 class GroupNorm(Module):
     def __init__(self, num_groups, num_channels, eps=1e-05, affine=True, is_train=True):

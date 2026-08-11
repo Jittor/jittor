@@ -12,6 +12,16 @@
 
 namespace jittor {
 
+// Flag to indicate whether we are running with NumPy 2.x
+// In NumPy 2.x, PyArray_Descr layout changed:
+//   - after type_num, a new npy_uint64 flags field was inserted
+//   - elsize changed from int to npy_intp
+//   - alignment changed from int to npy_intp
+EXTERN_LIB int numpy_is_v2;
+
+// Compatible struct that only includes fields with stable offsets across
+// NumPy 1.x and 2.x (up to type_num). elsize must be accessed via
+// the helper function get_descr_elsize() below.
 struct PyArrayDescr_Proxy {
     PyObject_HEAD
     PyObject* typeobj;
@@ -20,12 +30,31 @@ struct PyArrayDescr_Proxy {
     char byteorder;
     char flags;
     int type_num;
-    int elsize;
+    // WARNING: fields after type_num have DIFFERENT offsets in NumPy 1.x vs 2.x!
+    // NumPy 1.x: int elsize (offset = offsetof(type_num) + 4)
+    // NumPy 2.x: npy_uint64 flags_new (8 bytes), then npy_intp elsize (8 bytes)
+    // Do NOT access elsize directly! Use get_descr_elsize() instead.
+    int elsize;  // Only valid for NumPy 1.x
     int alignment;
     char* subarray;
     PyObject *fields;
     PyObject *names;
 };
+
+// Get the element size from a PyArrayDescr_Proxy, compatible with both
+// NumPy 1.x and NumPy 2.x
+inline int64 get_descr_elsize(PyArrayDescr_Proxy* descr) {
+    if (numpy_is_v2) {
+        // NumPy 2.x layout after type_num(offset 28 from PyObject_HEAD start):
+        //   npy_uint64 flags (8 bytes) at offset +4 from type_num
+        //   npy_intp elsize (8 bytes) at offset +12 from type_num
+        char* base = (char*)&descr->type_num;
+        // Skip type_num(4) + flags(8) = 12 bytes to reach elsize
+        return (int64)(*(Py_ssize_t*)(base + 4 + 8));
+    } else {
+        return (int64)descr->elsize;
+    }
+}
 
 struct PyArray_Proxy {
     PyObject_HEAD
@@ -113,7 +142,7 @@ inline int64 PyArray_Size(PyArray_Proxy* arr) {
     int64 size = 1;
     for (int i=0; i<arr->nd; i++)
         size *= arr->dimensions[i];
-    size *= arr->descr->elsize;
+    size *= get_descr_elsize(arr->descr);
     return size;
 }
 
