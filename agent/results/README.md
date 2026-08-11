@@ -6,6 +6,7 @@
 
 ## 兼容性与功能验证
 
+- [2026-08-11 源码架构重构第九批：legacy pooling](2026-08-11-source-architecture-legacy-pool-refactor.md)
 - [2026-08-11 源码架构重构第八批：pooling 覆盖层](2026-08-11-source-architecture-pooling-refactor.md)
 - [2026-08-11 源码架构重构第七批：padding](2026-08-11-source-architecture-padding-refactor.md)
 - [2026-08-11 源码架构重构第六批：convolution 类阶段](2026-08-11-source-architecture-convolution-layers-refactor.md)

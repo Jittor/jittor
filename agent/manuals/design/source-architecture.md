@@ -7,7 +7,7 @@ Jittor 的公开 API、JIT 资源路径和 Torch 兼容行为已经被大量项�
 巨型模块，同时持续降低导入环、控制模块体积，并保持已有对象身份、pickle 路径和
 `sys.modules` 注册不变。
 
-当前非测试 Python 源码约 166 个文件、70,620 行，前 12 个文件占约 51%。首要
+当前非测试 Python 源码约 181 个文件、67,620 行，前 12 个文件占约 45.9%。首要
 问题不是文件数量，而是根入口、领域实现、运行时安装器和第三方兼容逻辑混在同一
 模块中。重构必须让职责边界和依赖方向逐批变清晰，不能只把一个大文件机械切成
 若干互相循环的小文件。
@@ -19,6 +19,7 @@ python/
   jittor/
     __init__.py             # 稳定公开 facade 和 composition root
     nn.py                    # 稳定公开 facade
+    pool.py                  # 稳定 legacy pooling facade
     optim.py                 # 稳定公开 facade
     compiler.py              # 稳定公开 facade
     torch_compat.py          # 稳定 Torch 兼容 facade
@@ -26,6 +27,7 @@ python/
     _runtime/                # core loader、编译器和后端控制
     _api/                    # Var、Module、Function 和基础 API 实现
     _nn/                     # 神经网络私有实现
+    _pool/                   # legacy pooling 私有实现
     _optim/                  # 优化器私有实现
     _torch_compat/           # Torch 兼容私有实现
     torch_shim/              # 保持现有公开导入路径
@@ -59,7 +61,8 @@ stdlib
 4. `jittor_utils` 的底层模块不得反向导入 `jittor`。
 5. 不得增加现有强连通导入分量；每批迁移应让环数量保持或下降。
 
-`jittor._torch_compat.runtime` 和 `jittor._nn.runtime` 当前分别提供最小运行时代理。
+`jittor._torch_compat.runtime`、`jittor._nn.runtime` 和 `jittor._pool.runtime` 当前
+分别提供最小运行时代理。
 它们只解决拆分期间的初始化顺序，不应演化成无边界的 service locator；后续应按
 实际依赖继续收窄协议。私有实现若依赖可被后端运行时重绑的公开符号，必须经 facade
 动态解析，不能静态捕获同包实现；`log_softmax -> nn.softmax` 是现有示例。
@@ -126,9 +129,9 @@ wrapper，避免只修复类的 pickle 路径而让方法反射来源发生漂�
 绑定、optimizer 重导出和后端集成点，先验证 facade 模式，再处理含参数状态和设备
 快路径的区域。
 
-normalization、RNN、convolution 的 functional/backend 和主要公开类、padding，
-以及 `nn.py` 的 corrected average pooling 覆盖层已按风险顺序完成拆分。参数容器
-协议稳定前不移动根 `Module`；DepthwiseConv、legacy `pool.py`、ACL 重绑和别名
+normalization、RNN、convolution 的 functional/backend 和主要公开类、padding、
+`nn.py` 的 corrected average pooling 覆盖层，以及 legacy `pool.py` 已按风险顺序
+完成拆分。参数容器协议稳定前不移动根 `Module`；DepthwiseConv、ACL 重绑和别名
 网络仍必须按领域整体审计，不能只搬 Python 类壳。
 
 ### 第三批：normalization
@@ -194,16 +197,31 @@ average pooling，以及 `Pool/Pool3d/MaxPool*/1D/3D/Unpool` 仍是独立对象�
 
 ### 第九批：legacy pooling
 
-把 777 行 `pool.py` 按 2D core、3D core、adaptive、wrapper/unpool 拆成私有实现，
-同时保留 `pool_use_code_op` 的动态后端开关、ACL post-process 和 `nn` facade 的
-对象身份。拆分前先锁定 indices、ceil mode、unpool、3D 与后端 wrapper 契约。
+已把 777 行 `pool.py` 按 2D core、3D core、1D、adaptive、wrapper 和 unpool
+拆入 `_pool/`，公开 facade 降到 38 行。22 个迁移定义严格 AST 22/22 等价，
+27 个历史公开名称、反射/pickle、实例状态、`nn.functional/modules` 身份和
+`pool_use_code_op` 的执行时动态读取均由结构契约锁定。
 
-### 第十批：`misc.py` 与 `torch_shim/torch__init__.py`
+私有实现只依赖 `_pool.runtime`，跨定义调用经 `jt.pool` 动态解析，不反向依赖
+`jt.nn`。ACL post-process 仍修改公开开关并只包装直接的 `nn.Pool`；真实 NPU
+尚未执行，因此当前只声明源码和动态边界等价，不声明 ACL 数值验证。
 
-按 shape/indexing、reduction/scatter、序列操作拆 `misc.py`；按 nn、optim、cuda、
-distributed、data 和 stub 注册拆 shim。每批只移动一个可独立回归的领域。
+### 第十批：`misc.py`
 
-### 第十一批：启动与运行时
+按 shape/indexing、reduction/scatter、序列操作逐个领域拆 `misc.py`。第一步只移动
+一个可独立回归的 shape/indexing 领域，避免机械切文件形成新的循环依赖。
+
+### 第十一批：`torch_shim/torch__init__.py`
+
+按 nn、optim、cuda、distributed、data 和 stub 注册拆 shim；保持模块对象身份、
+注册顺序和只读 extension 安装时机。
+
+### 第十二批：剩余 `nn` 类
+
+整体审计并迁移 `Linear/Conv1d_sp/DepthwiseConv` 及相关别名、ACL wrapper 和 Torch
+shim 类快照。不得只移动类壳而静态捕获可被后端替换的公开构造器。
+
+### 第十三批：启动与运行时
 
 抽出 `_version.py` 和仅标准库的 `_bootstrap/`，再逐步分离 core loader、compiler
 和 backend controller。根 `__init__.py` 最后收敛为严格排序的 composition root。

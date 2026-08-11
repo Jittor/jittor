@@ -41,6 +41,15 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 > **分支**：所有人/agent 都在 **`2.0`**（= 原 `acl-perf-and-fixes` 推到远程；动手前 `git branch --show-current` 确认）。分叉前的所有进展/日志现在都是**公共知识**。
 
 ### ✅ 已完成并验证（在 `2.0`）
+- **源码架构重构第九批（legacy pooling）**：777 行 `pool.py` 已收敛为 38 行
+  公开 facade，22 个定义按 2D/3D core、1D、adaptive、wrapper 和 unpool 拆入
+  8 文件的 `_pool` 私有包；严格 AST 22/22 等价，27 个公开名称、反射/pickle、
+  实例状态、动态 monkeypatch、`nn.functional/modules` 身份和 ACL 开关读取均由
+  结构契约锁定。CPU/CUDA 主矩阵各 102 项，分别 97/101 通过；其余按环境跳过。
+  CPU/CUDA OpInfo 分别 18/25 通过、各 3 项能力跳过；CUDA Torch 总入口 172/172。
+  wheel 1,035 个条目、8 个 `_pool` 文件且无禁止项；隔离安装 102 项中 95 通过、
+  7 项按环境或源码元数据条件跳过。真实 ACL/NPU 未执行，既有 pooling 语义风险已
+  单独立账。详见[第九批报告](../results/2026-08-11-source-architecture-legacy-pool-refactor.md)。
 - **源码架构重构第八批（pooling 覆盖层）**：`nn.py` 的 corrected
   `adaptive_avg_pool2d/avg_pool2d` 与两个公开类拆入 `_nn/pooling.py`，并用
   19 个显式重导出替代 `jittor.pool` wildcard import。`nn.py` 从 2,581 行降到
@@ -99,8 +108,8 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
   设备前反向一致性 28/28；隔离 wheel 导入通过。详见
   [第二批报告](../results/2026-08-11-source-architecture-nn-refactor.md)。normalization、
   RNN、convolution functional/backend、主要公开类、padding 与 `nn.py` pooling
-  覆盖层已在后续批次完成；下一阶段先拆 legacy `pool.py`，再处理
-  `Linear/Conv1d_sp` 和 DepthwiseConv。
+  覆盖层与 legacy `pool.py` 已在后续批次完成；下一阶段从 `misc.py` 的一个
+  shape/indexing 领域开始，再处理 shim、`Linear/Conv1d_sp` 和 DepthwiseConv。
 - **源码架构重构第一批**：最大 Python 文件 `torch_compat.py` 从 11,008 行降到
   8,683 行，类型/设备、梯度、nested tensor、序列化、纯函数、optimizer 和
   scheduler 拆入 9 个 `_torch_compat` 私有模块；公开 facade 身份、pickle、安装

@@ -60,6 +60,7 @@ setuptools.setup(
     packages=[
         "jittor",
         "jittor._nn",
+        "jittor._pool",
         "jittor._torch_compat",
         "jittor.test",
         "jittor.models",

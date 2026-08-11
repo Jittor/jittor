@@ -690,8 +690,6 @@ class TestNNStructure(unittest.TestCase):
         if not jittor.compiler.has_acl:
             self.assertIs(nn.pool_use_code_op, pool.pool_use_code_op)
         self.assertIs(nn.pool2d, nn.pool)
-        self.assertIs(nn.pool.__globals__["Pool"], pool.Pool)
-        self.assertIs(nn.max_pool2d.__globals__["MaxPool2d"], pool.MaxPool2d)
 
         instance_contracts = (
             (
