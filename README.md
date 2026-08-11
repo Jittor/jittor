@@ -1,421 +1,224 @@
-# Jittor: a Just-in-time(JIT) deep learning framework
+# Jittor: a Just-in-time Deep Learning Framework / 计图
 
 ![Jittor Logo](https://cg.cs.tsinghua.edu.cn/jittor/favicon_package_v0/JittorLogo_Final1220.svg)
 
-[Quickstart](#quickstart) | [Install](#install) | [Tutorial](#tutorial) | [简体中文](./README.cn.md)
+[Quickstart / 快速开始](#quickstart) | [Install / 安装](#install) |
+[Tutorials / 教程](#tutorials) | [Contributing / 贡献](#contributing)
 
+Jittor is a high-performance deep learning framework based on just-in-time
+compilation and meta-operators. Its Python frontend uses dynamic graph execution,
+while its C++ and CUDA backend compiles and tunes operators for each workload.
 
-Jittor is a high-performance deep learning framework based on JIT compiling and meta-operators. The whole framework and meta-operators are compiled just-in-time. A powerful op compiler and tuner are integrated into Jittor. It allowed us to generate high-performance code with specialized for your model. Jittor also contains a wealth of high-performance model libraries, including: image recognition, detection, segmentation, generation, differentiable rendering, geometric learning, reinforcement learning, etc. .
+计图（Jittor）是一个基于即时编译和元算子的高性能深度学习框架。前端使用 Python
+动态图接口，后端通过 C++ 和 CUDA 为实际工作负载编译、调优算子。
 
+- [Website / 官网](https://cg.cs.tsinghua.edu.cn/jittor/)
+- [Tutorials / 教程](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/)
+- [Models / 模型库](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
+- [API documentation / API 文档](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
+- [Forum / 论坛](https://discuss.jittor.org/)
+- [Awesome Jittor (English)](AWESOME-JITTOR-LIST.md) |
+  [Awesome Jittor (中文)](AWESOME-JITTOR-LIST.cn.md)
 
-The front-end language is Python. Module Design and Dynamic Graph Execution is used in the front-end, which is the most popular design for deeplearning framework interface. The back-end is implemented by high performance language, such as CUDA,C++.
+<a id="quickstart"></a>
+## Quickstart / 快速开始
 
+The following example defines and trains a small two-layer network. It also
+shows the canonical tensor-construction API used by current Jittor releases.
 
-Related Links:
-*  [Jittor Website](https://cg.cs.tsinghua.edu.cn/jittor/)
-*  [Jittor Tutorials](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/)
-*  [Jittor Models](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
-*  [Jittor Documents](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
-*  [Github](https://github.com/jittor/jittor), [GitLink](https://www.gitlink.org.cn/jittor/jittor), [Gitee](https://gitee.com/jittor/jittor)
-*  [Jittor Forum](https://discuss.jittor.org/)
-*  [Awesome Jittor List (EN)](https://github.com/Jittor/jittor/blob/master/AWESOME-JITTOR-LIST.md)
-*  [Awesome Jittor List (CN)](https://github.com/Jittor/jittor/blob/master/AWESOME-JITTOR-LIST.cn.md)
-*  IM: QQ Group(761222083)
-
-
-
-The following example shows how to model a two-layer neural network step by step and train from scratch In a few lines of Python code.
-
+下面的示例定义并训练一个两层网络，同时展示当前版本推荐的张量构造方式。
 
 ```python
-import jittor as jt
-from jittor import Module
-from jittor import nn
 import numpy as np
+
+import jittor as jt
+from jittor import Module, nn
+
 
 class Model(Module):
     def __init__(self):
         self.layer1 = nn.Linear(1, 10)
-        self.relu = nn.Relu() 
+        self.relu = nn.Relu()
         self.layer2 = nn.Linear(10, 1)
-    def execute (self,x) :
-        x = self.layer1(x)
-        x = self.relu(x)
-        x = self.layer2(x)
-        return x
 
-def get_data(n): # generate random data for training test.
-    for i in range(n):
-        x = np.random.rand(batch_size, 1)
-        y = x*x
-        yield jt.float32(x), jt.float32(y)
+    def execute(self, x):
+        return self.layer2(self.relu(self.layer1(x)))
 
 
-learning_rate = 0.1
-batch_size = 50
-n = 1000
+def get_data(steps, batch_size):
+    for _ in range(steps):
+        x = np.random.rand(batch_size, 1).astype("float32")
+        yield jt.array(x), jt.array(x * x)
+
 
 model = Model()
-optim = nn.SGD(model.parameters(), learning_rate)
+optimizer = nn.SGD(model.parameters(), lr=0.1)
 
-for i,(x,y) in enumerate(get_data(n)):
-    pred_y = model(x)
-    dy = pred_y - y
-    loss = dy * dy
-    loss_mean = loss.mean()
-    optim.step(loss_mean)
-    print(f"step {i}, loss = {loss_mean.data.sum()}")
+for step, (x, y) in enumerate(get_data(1000, 50)):
+    prediction = model(x)
+    loss = ((prediction - y) ** 2).mean()
+    optimizer.step(loss)
+    print("step {}, loss = {}".format(step, loss.item()))
 ```
 
-## Contents
+Jittor operations are available as both functions and `Var` methods. Accessing
+`.data`, `.numpy()`, or `.item()` synchronizes pending computation.
 
-* [Quickstart](#quickstart)
-* [Install](#install)
-* [Tutorial](#tutorial)
-* [Contributing](#contributing)
-* [The Team](#theteam)
-* [License](#license)
+Jittor 算子通常同时提供函数和 `Var` 方法；读取 `.data`、`.numpy()` 或 `.item()`
+会同步尚未完成的计算。
 
+```python
+import jittor as jt
 
+a = jt.array([1, 2, 3], dtype="float32")
+b = jt.array([4, 5, 6], dtype="float32")
+c = a * b
+print(c.numpy())
+print(c.max(), jt.max(c))
+```
 
-## Quickstart
+<a id="install"></a>
+## Install / 安装
 
+The package metadata in [`pyproject.toml`](pyproject.toml) is authoritative.
+Jittor supports Python 3.7 or newer. A C++ compiler and OpenMP runtime are
+required for local JIT compilation; accelerator support additionally requires
+the corresponding driver and toolchain.
 
-We provide some jupyter notebooks to help you quick start with Jittor.
+安装要求以 [`pyproject.toml`](pyproject.toml) 为准。Jittor 支持 Python 3.7
+及以上版本；本地即时编译需要 C++ 编译器和 OpenMP，使用加速设备时还需要对应驱动与工具链。
 
+| Platform / 平台 | Minimum development requirements / 最低开发要求 |
+| --- | --- |
+| Linux | Python >= 3.7, g++ >= 5.4, OpenMP |
+| Windows 10/11 | Python >= 3.8; CUDA >= 10.2 for NVIDIA GPU |
+| macOS >= 10.14 | Python >= 3.7, clang >= 8.0, `libomp` |
 
-- [Example: Model definition and training][1]
-- [Basics: Op, Var][2]
-- [Meta-operator: Implement your own convolution with Meta-operator][3]
-
-## Install
-
-
-
-Jittor environment requirements:
-
-| OS                                                     | CPU                                 | Python | Compiler     | (Optional) GPU platform                                |
-|--------------------------------------------------------|-------------------------------------|--------|--------------|---------------------------------------------|
-| Linux<br>(Ubuntu, CentOS, Arch, <br>UOS, KylinOS, ...) | x86 <br>x86_64 <br>ARM <br>loongson | >= 3.7 | g++ >=5.4    | Nvidia CUDA >= 10.0, [cuDNN](https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar) <br> or [AMD ROCm](https://docs.amd.com/) >= 4.0 <br> or [Hygon DCU DTK](https://tycloud.hpccube.com/doc/1.0.6/11277/general-handbook/software-tutorial/jittor.html) >= 22.04 |
-| Windows 10 & 11                                        | x86_64                              | [>= 3.8](https://www.python.org/downloads/windows/) | -            | Nvidia CUDA >= 10.2 [cuDNN](https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#install-windows)                               |
-
-
-Jittor offers three ways to install: pip, docker, or manual.
-
-
-## Pip install
-
+### Install from PyPI / 从 PyPI 安装
 
 ```bash
-sudo apt install python3.7-dev libomp-dev
-python3.7 -m pip install jittor
-# or install from github(latest version)
-# python3.7 -m pip install git+https://github.com/Jittor/jittor.git
-python3.7 -m jittor.selftest
+python -m pip install jittor
+python -m jittor.selftest
 ```
 
+On Debian or Ubuntu, install the compiler dependencies first:
 
-### CUDA 12 dependencies from pip (Linux x86_64)
+Debian 或 Ubuntu 需要先安装编译依赖：
 
-Jittor can install and use the CUDA runtime, cuBLAS, cuDNN, cuFFT, cuRAND,
-cuSPARSE, NVTX, and NCCL from NVIDIA component wheels:
+```bash
+sudo apt install python3-dev libomp-dev g++ build-essential
+```
+
+On macOS, install OpenMP with Homebrew before installing Jittor:
+
+macOS 请先通过 Homebrew 安装 OpenMP：
+
+```bash
+brew install libomp
+python -m pip install jittor
+python -m jittor.selftest
+```
+
+On Windows, a conda environment may additionally need `pywin32`:
+
+Windows 的 conda 环境可能还需要 `pywin32`：
+
+```bash
+conda install pywin32
+python -m pip install jittor
+python -m jittor.selftest
+```
+
+### CUDA 12 component wheels / CUDA 12 组件包
+
+On Linux x86_64, the `cuda12` extra installs a pinned CUDA 12.2 and cuDNN 8
+runtime stack. Jittor still needs an `nvcc` compiler, supplied by the system or
+its automatic JTCUDA fallback.
+
+Linux x86_64 可使用 `cuda12` extra 安装固定版本的 CUDA 12.2 与 cuDNN 8
+运行时；JIT 编译仍需要系统 `nvcc`，或使用 Jittor 的自动 JTCUDA 回退。
 
 ```bash
 python -m pip install "jittor[cuda12]"
 use_cuda=1 python -m jittor.selftest
 ```
 
-The `cuda12` extra is a reproducible CUDA 12.2/cuDNN 8 stack. Use a separate
-environment if another framework pins a different CUDA component version.
-NVIDIA's CUDA 12 pip packages do not contain the `nvcc` compiler driver, which
-Jittor needs for JIT compilation. Install CUDA 12.2 `nvcc` on the system, or let
-Jittor use its automatic JTCUDA fallback. Set `JITTOR_CUDA_WHEEL_STRICT=1` to
-turn an incomplete or mismatched component stack into an immediate error, or
-`JITTOR_CUDA_WHEEL_DISABLE=1` to use the original system/JTCUDA libraries.
+Set `JITTOR_CUDA_WHEEL_STRICT=1` to reject an incomplete or mismatched component
+stack. Set `JITTOR_CUDA_WHEEL_DISABLE=1` to use only the system/JTCUDA libraries.
 
-
-
-
-
-### Windows install
-
-
+### Install from source / 从源码安装
 
 ```bash
-# check your python version(>=3.8)
-python --version
-python -m pip install jittor
-# if conda is used
-conda install pywin32
+git clone https://github.com/Jittor/jittor.git
+cd jittor
+python -m pip install -e .
+python -m jittor.selftest
 ```
 
+C++ and CUDA source changes under `python/jittor/src/` are rebuilt on their next
+use. To select CUDA explicitly:
 
-In Windows, jittor will automatically detect and install CUDA, please make sure your NVIDIA driver support CUDA 10.2  or above, or you can manually let jittor install CUDA for you:
+`python/jittor/src/` 下的 C++、CUDA 源码会在下次使用时自动重编译。显式选择 CUDA：
 
 ```bash
-python -m jittor_utils.install_cuda
+export nvcc_path=/usr/local/cuda/bin/nvcc
+use_cuda=1 python -m jittor.selftest
 ```
 
+Inside Python, enable CUDA with `jt.flags.use_cuda = 1` after importing Jittor.
 
-## Docker Install
+### Docker / 容器
 
+The maintained CPU and CUDA images share one [`Dockerfile`](Dockerfile):
 
-
-We provide a Docker installation method to save you from configuring the environment. The Docker installation method is as follows:
-
-The CPU and CUDA images use the same Dockerfile and package-install path. The
-default image is Ubuntu 24.04; the CUDA image replaces only the maintained base:
+维护的 CPU 与 CUDA 镜像共用同一份 [`Dockerfile`](Dockerfile)：
 
 ```bash
 docker build -t jittor/jittor .
 docker build -t jittor/jittor-cuda \
   --build-arg FROM_IMAGE=nvidia/cuda:12.2.2-cudnn8-devel-ubuntu22.04 .
-```
 
-Version tags publish the same definitions as `ghcr.io/jittor/jittor` and
-`ghcr.io/jittor/jittor-cuda` through GitHub Actions.
-
-```
-# CPU only(Linux)
 docker run -it --network host jittor/jittor
-# CPU and CUDA(Linux)
 docker run -it --network host --gpus all jittor/jittor-cuda
-# CPU only(Mac and Windows)
-docker run -it -p 8888:8888 jittor/jittor
 ```
 
-
-## manual install
-
-The following steps use packages from a currently supported Debian or Ubuntu
-release. Other maintained Linux distributions provide equivalent packages.
-
-
-### Step 1: Choose your back-end compiler
-
-
-```bash
-# g++
-sudo apt install g++ build-essential libomp-dev
-
-# OR Clang from a supported Debian/Ubuntu release
-sudo apt install clang libomp-dev
-```
-### Step 2: Install Python and python-dev
-
-
-Jittor need python version >= 3.7.
-
-
-```bash
-sudo apt install python3 python3-dev python3-pip
-```
-
-### Step 3: Run Jittor
-
-
-The whole framework is compiled Just-in-time. Let's install jittor via pip
-
-
-```bash
-git clone https://github.com/Jittor/jittor.git
-python3 -m pip install ./jittor
-# Optional: select Clang installed in Step 1
-export cc_path="$(command -v clang++)"
-# if other compiler is used, change cc_path
-# export cc_path="g++"
-# export cc_path="icc"
-
-# run a simple test
-python3 -m jittor.selftest
-```
-if the test is passed, your Jittor is ready.
-
-
-### Optional Step 4: Enable CUDA
-
-
-Using CUDA in Jittor is very simple, Just setup environment value `nvcc_path`
-
-
-```bash
-# replace this var with your nvcc location 
-export nvcc_path="/usr/local/cuda/bin/nvcc" 
-# run a simple cuda test
-use_cuda=1 python3 -m jittor.selftest
-```
-if the test is passed, your can use Jittor with CUDA by setting `use_cuda` flag.
-
-
-```python
-import jittor as jt
-jt.flags.use_cuda = 1
-```
-
-### Optional Step 5: Test Resnet18 training
-
-
-To check the integrity of Jittor, you can run Resnet18 training test. Note: 6G GPU RAM is requires in this test.
-
-
-```bash
-python3 -m pip install pytest==7.4.4
-python3 -m pytest tests/models/test_resnet.py -v
-```
-if those tests are failed, please report bugs for us, and feel free to contribute ^_^
-
-
-## Tutorial
-
-
-In the tutorial section, we will briefly explain the basic concept of Jittor.
-
-
-To train your model with Jittor, there are only three main concepts you need to know:
-
-
-* Var: basic data type of jittor
-* Operations: Jittor'op is simular with numpy
-
-### Var
-
-
-First, let's get started with Var. Var is the basic data type of jittor. Computation process in Jittor is asynchronous for optimization. If you want to access the data, `Var.data` can be used for synchronous data accessing.
-
-
-```python
-import jittor as jt
-a = jt.float32([1,2,3])
-print (a)
-print (a.data)
-# Output: float32[3,]
-# Output: [ 1. 2. 3.]
-```
-
-And we can give the variable a name.
-
-
-```python
-a.name('a')
-print(a.name())
-# Output: a
-```
-
-### Operations
-
-
-Jittor'op is simular with numpy. Let's try some operations. We create Var `a` and `b` via operation `jt.float32`, and add them. Printing those variables shows they have the same shape and dtype.
-
-
-```python
-import jittor as jt
-a = jt.float32([1,2,3])
-b = jt.float32([4,5,6])
-c = a*b
-print(a,b,c)
-print(type(a), type(b), type(c))
-# Output: float32[3,] float32[3,] float32[3,]
-# Output: <class 'jittor_core.Var'> <class 'jittor_core.Var'> <class 'jittor_core.Var'>
-```
-Beside that, All the operators we used `jt.xxx(Var, ...)` have alias `Var.xxx(...)`. For example:
-
-
-```python
-c.max() # alias of jt.max(c)
-c.add(a) # alias of jt.add(c, a)
-c.min(keepdims=True) # alias of jt.min(c, keepdims=True)
-```
-
-if you want to know all the operation which Jittor supports. try `help(jt.ops)`. All the operation you found in `jt.ops.xxx`, can be used via alias `jt.xxx`.
-
-
-```python
-help(jt.ops)
-# Output:
-#   abs(x: core.Var) -> core.Var
-#   add(x: core.Var, y: core.Var) -> core.Var
-#   array(data: array) -> core.Var
-#   binary(x: core.Var, y: core.Var, op: str) -> core.Var
-#   ......
-```
-### More
-
-
-If you want to know more about Jittor, please check out the notebooks below:
-
-
-* Quickstart
-    - [Example: Model definition and training][1]
-    - [Basics: Op, Var][2]
-    - [Meta-operator: Implement your own convolution with Meta-operator][3]
-* Advanced
-    - [Custom Op: write your operator with C++ and CUDA and JIT compile it][4]
-    - [Profiler: Profiling your model][5]
-    - Jtune: Tool for performance tuning
-
-
-
-[1]: examples/notebooks/example.md	"example"
-[2]: examples/notebooks/basics.md	"basics"
-[3]: examples/notebooks/meta_op.md	"meta_op"
-[4]: examples/notebooks/custom_op.md	"custom_op"
-[5]: examples/notebooks/profiler.md	"profiler"
-
-Install the example dependencies and open the repository notebooks with the
-standard Jupyter Notebook entry point:
+<a id="tutorials"></a>
+## Tutorials / 教程
+
+The maintained notebook sources are versioned as MyST Markdown. Jupytext creates
+temporary `.ipynb` files for execution and validation; generated notebooks are
+not repository sources.
+
+维护的教程以 MyST Markdown 作为版本化源文件；执行和验证时由 Jupytext 临时生成
+`.ipynb`，生成的 notebook 不进入仓库。
+
+- [Model definition and training / 模型定义与训练](examples/notebooks/example.md)
+- [Ops and Vars / 算子与 Var](examples/notebooks/basics.md)
+- [Meta-operators / 元算子](examples/notebooks/meta_op.md)
+- [Custom C++ and CUDA operators / 自定义 C++ 与 CUDA 算子](examples/notebooks/custom_op.md)
+- [Profiler / 性能分析](examples/notebooks/profiler.md)
+- [60-minute Chinese introduction / 60 分钟中文入门](examples/notebooks/60分钟快速入门Jittor/README.md)
 
 ```bash
 python -m pip install -r requirements/examples.txt
 python -m notebook --ServerApp.root_dir="$PWD/examples/notebooks"
 ```
 
+<a id="contributing"></a>
+## Contributing / 贡献
 
-## Contributing
+Bug reports, tests, documentation, operators, performance improvements, and
+model contributions are welcome. Read the [contributing guide](CONTRIBUTING.md),
+[code of conduct](CODE_OF_CONDUCT.md), and [governance document](GOVERNANCE.md)
+before opening a pull request.
 
+欢迎提交缺陷报告、测试、文档、算子、性能改进和模型。发起合并请求前，请阅读
+[贡献指南](CONTRIBUTING.md)、[行为准则](CODE_OF_CONDUCT.md)和
+[治理文档](GOVERNANCE.md)。
 
-Jittor is still young. It may contain bugs and issues. Please report them in our bug track system. Contributions are welcome. Besides, if you have any ideas about Jittor, please let us know.
+## Citation / 引用
 
-**Before contributing, please read our [Contributing Guide](CONTRIBUTING.md).** We also ask that all participants follow our [Code of Conduct](CODE_OF_CONDUCT.md). For information about the project's governance structure and how contributors can grow within the community, see our [Governance Document](GOVERNANCE.md).
-
-You can help Jittor in the following ways:
-
-* Citing Jittor in your paper
-* recommend Jittor to your friends
-* Contributing code (see [Contributing Guide](CONTRIBUTING.md))
-* Contributed tutorials and documentation
-* File an issue
-* Answer jittor related questions
-* Light up the stars
-* Keep an eye on jittor
-* ......
-
-## Contact Us
-
-
-
-
-
-Website: http://cg.cs.tsinghua.edu.cn/jittor/
-
-Email: jittor@qq.com
-
-File an issue: https://github.com/Jittor/jittor/issues
-
-QQ Group: 836860279
-
-
-<img src="https://github.com/Jittor/jittor/assets/62846124/8dd830bd-b31c-4e4f-9a78-5fd7a3409145" width="200"/>
-
-## The Team
-
-
-Jittor is currently maintained by the [Tsinghua CSCG Group](https://cg.cs.tsinghua.edu.cn/). If you are also interested in Jittor and want to improve it, Please join us!
-
-
-## Citation
-
-
-```
+```bibtex
 @article{hu2020jittor,
   title={Jittor: a novel deep learning framework with meta-operators and unified graph execution},
   author={Hu, Shi-Min and Liang, Dun and Yang, Guo-Ye and Yang, Guo-Wei and Zhou, Wen-Yang},
@@ -427,7 +230,8 @@ Jittor is currently maintained by the [Tsinghua CSCG Group](https://cg.cs.tsingh
 }
 ```
 
-## License
+## License / 许可证
 
+Jittor is licensed under Apache License 2.0. See [`LICENSE.txt`](LICENSE.txt).
 
-Jittor is Apache 2.0 licensed, as found in the LICENSE.txt file.
+Jittor 使用 Apache License 2.0，详见 [`LICENSE.txt`](LICENSE.txt)。

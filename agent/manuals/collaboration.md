@@ -4,22 +4,26 @@
 
 ## 开工流程
 
-1. **先读上下文**：阅读 `../skills/jittor-dev-context/SKILL.md`，再按入口阅读
-   `project-context.md`，了解目标、进度、环境和已知问题。
-2. **确认结果文档**：已有主题继续更新 `../results/` 中的报告；新主题使用
+1. **先读上下文**：阅读 [`../skills/jittor-dev-context/SKILL.md`](../skills/jittor-dev-context/SKILL.md)，
+   再通过 [`project-context.md`](project-context.md) 定位相关架构契约。
+2. **确认环境与问题**：按需阅读 [`environment.md`](environment.md) 和
+   [`known-issues.md`](known-issues.md)，不要依赖个人机器路径或过期会话记录。
+3. **确认结果文档**：已有主题继续更新 `../results/` 中的报告；新主题使用
    `YYYY-MM-DD-topic.md`。
-3. **开始工作**，遵循下面的协作规范。
+4. **开始工作**，遵循下面的协作规范。
 
 ## 协作规范
 
 ### 文档更新（核心纪律）
 
-- **`project-context.md`** 是全局进度文档。完成有意义的进展后，更新其中
-  对应的状态或索引，不要把完整实验流水重复粘贴进去。
+- **`project-context.md`** 是当前状态索引，只在目标、状态或文档入口变化时更新。
+- **`known-issues.md`** 是活跃问题总账。新增问题要有 owner、可执行证据、workaround
+  和退出条件；问题修复后删除条目，历史由 Git 和结果报告保留。
+- **`docs/`** 保存长期架构决策、测试契约、开发指南和研究提案。
 - **结果报告**记录验证口径、命令、结果、结论和已知边界。原始日志、缓存、
-  二进制和大体积结果放在 `${JITTOR_LAB_ROOT:-/home/zy/projects/jittor-lab}`，
+  二进制和大体积结果放在 `$JITTOR_LAB_ROOT`，
   报告中标明“未版本化”，不要放进 Jittor 主仓库。
-- 更新文档时注明状态（✅ 已完成 / 🟡 进行中 / 🔴 有问题），便于他人接手。
+- 稳定文档注明状态、复查日期、对应基线、owner 和复查触发条件。
 
 ### Skill 沉淀
 
@@ -30,7 +34,7 @@
 
 ### 效率原则
 
-- **GPU 先行**：先在 GPU 上跑通全流程，再做 NPU 验证。
+- **按目标后端验证**：先在最容易定位问题的后端跑通，再验证所有声明支持的设备。
 - **计算在 device 上**：torch_compat 里新加的计算必须能跑在 GPU/NPU 上，不能只支持 CPU。
 - **多用 subagent**：互不依赖的验证任务并行展开（分卡并行、多模型并行、三后端并行）。
 - **verify-then-fix**：~75% 的审计是误报，先复现再修。
@@ -60,7 +64,9 @@ Jittor 使用文件锁串行化 JIT 编译。多个进程共享缓存并首次�
 ```
 agent/
 ├── README.md                 # 总索引
-├── manuals/                  # 协作、上下文和设计手册
+├── manuals/                  # 协作、环境、问题总账和上下文索引
 ├── results/                  # 人工整理的验证与性能报告
 └── skills/                   # SKILL.md 与可复用工具
 ```
+
+长期设计资料不放在 `agent/manuals/` 的主题子目录，按语义写入根目录 `docs/`。

@@ -32,7 +32,7 @@ while IFS= read -r name; do
     .dockerignore|.gitignore|.gitlab-ci.yml|AGENTS.md|\
     AWESOME-JITTOR-LIST.cn.md|AWESOME-JITTOR-LIST.md|\
     asv.conf.json|CODE_OF_CONDUCT.md|CONTRIBUTING.md|Dockerfile|GOVERNANCE.md|\
-    LICENSE.txt|MANIFEST.in|README.cn.md|README.md|README.src.md|\
+    LICENSE.txt|MANIFEST.in|README.md|\
     .pre-commit-config.yaml|noxfile.py|pyproject.toml|setup.py)
       ;;
     *)
@@ -44,6 +44,9 @@ done < <(find "$REPO_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
 
 for forbidden_path in \
   "$REPO_ROOT/jittor_fsdp2" \
+  "$REPO_ROOT/README.cn.md" \
+  "$REPO_ROOT/README.src.md" \
+  "$REPO_ROOT/agent/manuals/design" \
   "$REPO_ROOT/python/jittor/torch_fsdp2_compat.py" \
   "$REPO_ROOT/python/jittor/torch_fsdp2_compat" \
   "$REPO_ROOT/python/jittor/_torch_fsdp2" \
@@ -118,9 +121,7 @@ fi
 for active_doc in \
   "$REPO_ROOT/Dockerfile" \
   "$REPO_ROOT/CONTRIBUTING.md" \
-  "$REPO_ROOT/README.md" \
-  "$REPO_ROOT/README.cn.md" \
-  "$REPO_ROOT/README.src.md"; do
+  "$REPO_ROOT/README.md"; do
   if grep -n -- "$legacy_selftest_module" "$active_doc"; then
     echo 'installation documentation must use python -m jittor.selftest.' >&2
     status=1
@@ -134,8 +135,6 @@ active_reference_paths=(
   "$REPO_ROOT/.github"
   "$REPO_ROOT/docs"
   "$REPO_ROOT/README.md"
-  "$REPO_ROOT/README.cn.md"
-  "$REPO_ROOT/README.src.md"
   "$REPO_ROOT/CONTRIBUTING.md"
   "$REPO_ROOT/Dockerfile"
   "$REPO_ROOT/MANIFEST.in"
@@ -181,6 +180,10 @@ fi
 if [[ -d "$REPO_ROOT/.claude/worktrees" ]] &&
    [[ -n "$(find "$REPO_ROOT/.claude/worktrees" -mindepth 1 -print -quit)" ]]; then
   echo 'Git worktrees must live under ${JITTOR_LAB_ROOT}/worktrees, not .claude/worktrees.' >&2
+  status=1
+fi
+
+if ! python3 "$REPO_ROOT/agent/scripts/check_docs_governance.py"; then
   status=1
 fi
 

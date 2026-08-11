@@ -1,709 +1,209 @@
 # Contributing to Jittor / 为 Jittor 做贡献
 
-[English](#contributing-to-jittor) | [中文](#为-jittor-做贡献)
+Jittor accepts bug fixes, features, operators, tests, documentation, and
+performance work. By participating, you agree to follow the
+[Code of Conduct](CODE_OF_CONDUCT.md) and the project's
+[governance rules](GOVERNANCE.md).
 
-Thank you for your interest in contributing to Jittor! Jittor is an open-source deep learning framework maintained by the [Tsinghua CSCG Group](https://cg.cs.tsinghua.edu.cn/). We welcome contributions from the community, whether it's fixing bugs, adding new features, improving documentation, or suggesting ideas.
+Jittor 欢迎缺陷修复、新功能、算子、测试、文档和性能优化。参与项目即表示同意遵守
+[行为准则](CODE_OF_CONDUCT.md)与[治理规则](GOVERNANCE.md)。
 
-## Table of Contents
+## Before you start / 开始之前
 
-- [Code of Conduct](#code-of-conduct)
-- [Ways to Contribute](#ways-to-contribute)
-- [Getting Started](#getting-started)
-- [Development Environment Setup](#development-environment-setup)
-- [Codebase Structure](#codebase-structure)
-- [Making Changes](#making-changes)
-- [Code Style Guidelines](#code-style-guidelines)
-- [Testing](#testing)
-- [Submitting a Pull Request](#submitting-a-pull-request)
-- [Review Process](#review-process)
-- [Writing Documentation](#writing-documentation)
-- [Issue Guidelines](#issue-guidelines)
+- Search [existing issues](https://github.com/Jittor/jittor/issues) before filing
+  a new report. For behavior changes, describe the intended contract before
+  implementation.
+- Keep one pull request focused on one coherent change. Avoid generated files,
+  runtime caches, model weights, and unrelated formatting churn.
+- Reproduce a bug before changing code. Record the smallest command, device,
+  input, expected result, and actual result.
+- Do not claim accelerator support from import success. Exercise the operation
+  on every backend the change advertises.
 
-## Code of Conduct
+- 提交新 issue 前先搜索[已有问题](https://github.com/Jittor/jittor/issues)；行为变更应先说明预期契约。
+- 一个合并请求只处理一组相关改动，不提交生成文件、运行缓存、模型权重或无关格式化。
+- 修复前先复现，并记录最小命令、设备、输入、期望结果和实际结果。
+- 仅能导入不代表支持加速设备；必须在所声明的每个后端执行目标操作。
 
-By participating in this project, you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md). Please read it before contributing.
+## Development setup / 开发环境
 
-## Ways to Contribute
+Runtime compatibility is declared in [`pyproject.toml`](pyproject.toml). The
+package supports Python 3.7 or newer; repository tooling uses pinned Python 3.11
+environments and also compiles the tree with a real Python 3.7 interpreter.
 
-There are many ways to contribute to Jittor:
-
-- **Reporting Bugs**: File bug reports using our [issue templates](https://github.com/Jittor/jittor/issues/new/choose).
-- **Fixing Bugs**: Look for issues labeled with [`bug`](https://github.com/Jittor/jittor/labels/bug) or [`good first issue`](https://github.com/Jittor/jittor/labels/good%20first%20issue).
-- **Implementing New Features**: Propose new features via [Feature Request](https://github.com/Jittor/jittor/issues/new/choose) issues.
-- **Improving Documentation**: Fix typos, add examples, or improve existing documentation.
-- **Adding Test Cases**: Help improve test coverage.
-- **Implementing New Operators**: Contribute new operators or optimize existing ones.
-- **Contributing Model Libraries**: Add new model implementations to the Jittor ecosystem.
-- **Citing Jittor**: Cite Jittor in your academic papers.
-- **Answering Questions**: Help other users in [Issues](https://github.com/Jittor/jittor/issues) or the [Jittor Forum](https://discuss.jittor.org/).
-
-## Getting Started
-
-### Finding an Issue to Work On
-
-- **New contributors**: Look for issues labeled [`good first issue`](https://github.com/Jittor/jittor/labels/good%20first%20issue). These are tasks suitable for newcomers, such as documentation fixes, simple operator implementations, or test case additions.
-- **Experienced contributors**: Check issues labeled [`enhancement`](https://github.com/Jittor/jittor/labels/enhancement) or [`bug`](https://github.com/Jittor/jittor/labels/bug) for more challenging tasks.
-
-Before starting work, please comment on the issue to let others know you're working on it, to avoid duplicated effort.
-
-## Development Environment Setup
-
-Jittor is a JIT-compiled deep learning framework with a Python frontend and C++/CUDA backend. Setting up the development environment requires a few additional steps compared to a regular installation.
-
-### Prerequisites
-
-| OS | CPU | Python | Compiler | (Optional) GPU |
-|---|---|---|---|---|
-| Linux (Ubuntu, CentOS, Arch, etc.) | x86 / x86_64 / ARM / loongson | >= 3.7 | g++ >= 5.4 | NVIDIA CUDA >= 10.0, cuDNN / AMD ROCm >= 4.0 / Hygon DCU DTK >= 22.04 |
-| Windows 10 & 11 | x86_64 | >= 3.8 | - | NVIDIA CUDA >= 10.2, cuDNN |
-| macOS (>= 10.14) | Intel / Apple Silicon | >= 3.7 | clang >= 8.0 | - |
-
-### Step 1: Fork and Clone
+运行时兼容范围以 [`pyproject.toml`](pyproject.toml) 为准。包支持 Python 3.7
+及以上版本；仓库工具使用固定的 Python 3.11 环境，并用真实 Python 3.7 解释器编译检查全树。
 
 ```bash
-# Fork the repo on GitHub, then:
-git clone https://github.com/<your-username>/jittor.git
+git clone https://github.com/<your-account>/jittor.git
 cd jittor
-
-# Add upstream remote
-git remote add upstream https://github.com/Jittor/jittor.git
-```
-
-### Step 2: Install Dependencies
-
-**Linux (Ubuntu):**
-```bash
-sudo apt install python3-dev libomp-dev g++ build-essential
-```
-
-**macOS:**
-```bash
-brew install libomp
-```
-
-**Windows:**
-Ensure Python >= 3.8 is installed. If using conda:
-```bash
-conda install pywin32
-```
-
-### Step 3: Install Jittor in Development Mode
-
-```bash
-# Install from local source
-pip install -e .
-
-# Verify the installation
+python -m pip install -e .
+python -m pip install -r requirements/dev-tools.txt
 python -m jittor.selftest
 ```
 
-> **Note**: Since Jittor uses JIT compilation, you don't need to recompile after modifying Python source files. However, changes to C++/CUDA header files in `python/jittor/src/` will be automatically recompiled by the JIT compiler on next use.
+Jittor compiles C++ and CUDA code on demand. Use an isolated cache for each
+checkout or concurrent job:
 
-### Step 4: Enable CUDA (Optional)
-
-```bash
-# Set the nvcc path
-export nvcc_path="/usr/local/cuda/bin/nvcc"
-
-# Test CUDA support
-use_cuda=1 python -m jittor.selftest
-```
-
-Or let Jittor install CUDA automatically (Windows):
-```bash
-python -m jittor_utils.install_cuda
-```
-
-## Codebase Structure
-
-```
-jittor/
-├── python/                    # Python source code
-│   ├── jittor/               # Main Jittor package
-│   │   ├── __init__.py       # Package initialization, version info
-│   │   ├── nn/               # Neural network modules
-│   │   ├── optim.py          # Optimizers
-│   │   ├── dataset/          # Dataset utilities
-│   │   ├── models/           # Pre-built model implementations
-│   │   ├── utils/            # Utility functions
-│   │   └── src/              # C++/CUDA source files (JIT compiled)
-│   │       ├── ops/          # Operator implementations
-│   │       ├── executor/     # Execution engine
-│   │       ├── mem/          # Memory management
-│   │       └── optimizer/    # Graph optimization passes
-│   └── jittor_utils/         # Utility package
-├── examples/                 # Examples and Jupyter notebook tutorials
-├── tests/                    # Repository pytest suite (not shipped in wheels)
-├── tools/                    # Repository build, release, and maintenance tools
-├── doc/                      # Documentation (Sphinx)
-├── .github/                  # GitHub templates and CI
-│   ├── ISSUE_TEMPLATE/       # Issue templates
-│   └── workflows/            # CI workflows
-├── setup.py                  # Package setup
-├── Dockerfile                # Docker configuration
-└── README.md                 # Project README
-```
-
-### Key Concepts
-
-- **JIT Compilation**: Jittor compiles C++/CUDA code at runtime. Source files in `python/jittor/src/` are compiled on-the-fly.
-- **Meta-operators**: Jittor uses meta-operators to generate specialized code for different hardware.
-- **Var**: The basic data type in Jittor for representing tensors.
-- **Module**: Base class for neural network modules, using `execute()` as the forward computation method.
-
-## Making Changes
-
-### Branch Naming Convention
-
-Create a new branch from `master` for your changes:
+Jittor 会按需编译 C++ 与 CUDA。每个工作树或并行任务应使用独立缓存：
 
 ```bash
-git checkout master
-git pull upstream master
-git checkout -b <branch-type>/<short-description>
+export JITTOR_HOME="${JITTOR_HOME:-$HOME/.cache/jittor-dev}"
+export cache_name="${cache_name:-local-dev}"
 ```
 
-Branch type prefixes:
-- `fix/` - Bug fixes (e.g., `fix/conv-padding-error`)
-- `feature/` - New features (e.g., `feature/add-groupnorm`)
-- `docs/` - Documentation changes (e.g., `docs/update-install-guide`)
-- `test/` - Test additions/improvements (e.g., `test/add-batchnorm-tests`)
+For CUDA, set `nvcc_path` when `nvcc` is not already on `PATH`. Backend-specific
+CI requirements are documented in [`agent/manuals/environment.md`](agent/manuals/environment.md).
 
-### Commit Message Convention
+## Repository map / 仓库结构
 
-Write clear, descriptive commit messages:
-
-```
-<type>: <short summary>
-
-<optional body>
-
-<optional footer>
-```
-
-**Types**: `fix`, `feat`, `docs`, `test`, `refactor`, `perf`, `chore`
-
-**Examples:**
-```
-fix: correct padding calculation in conv2d operator
-
-The padding was incorrectly computed when using 'same' mode with
-stride > 1, causing output shape mismatch.
-
-Fixes #123
+```text
+.
+├── python/jittor/       # runtime package and JIT C++/CUDA sources
+├── python/jittor_utils/ # installation and compiler utilities
+├── tests/               # repository pytest suite; not shipped in wheels
+├── examples/            # runnable examples and MyST notebook sources
+├── benchmarks/          # ASV performance suite
+├── tools/               # build, release, install, and maintenance commands
+├── docs/                # durable architecture, development, and release docs
+├── agent/               # maintainer/agent workflow and verification reports
+├── pyproject.toml       # authoritative package, tool, and pytest configuration
+└── noxfile.py           # reproducible local and CI sessions
 ```
 
-## Code Style Guidelines
+Runtime files loaded by path, especially `python/jittor/src/` and
+`python/jittor/extern/`, have packaging and compiler contracts. Read the
+[repository layout decision](docs/architecture/repository-layout.md) before
+moving them.
 
-### Python Code
+## Making a change / 修改代码
 
-- Follow [PEP 8](https://peps.python.org/pep-0008/) style guide.
-- Use 4 spaces for indentation (no tabs).
-- Maximum line length: 100 characters.
-- Use descriptive variable and function names.
-- Add docstrings to public functions and classes.
+Follow the style already used by the subsystem you edit. New Python code must
+remain Python 3.7 compatible unless project metadata changes in the same
+reviewed change.
 
-### C++/CUDA Code
+修改代码时遵循对应子系统已有风格。除非同一变更明确调整项目元数据，否则新增 Python
+代码必须兼容 Python 3.7。
 
-- Use 4 spaces for indentation.
-- Follow the existing code style in `python/jittor/src/`.
-- Use descriptive variable names.
-- Add comments for complex logic.
+### Python
 
-## Testing
+- Use four spaces and descriptive names.
+- Keep public APIs documented and typed where the surrounding module is typed.
+- Do not hide import or installation failures with broad exception handlers.
+- Add a focused regression test for every corrected behavior.
 
-### Running Tests
+### C++ and CUDA
+
+- Follow nearby naming, formatting, and generated-code conventions.
+- Preserve CPU behavior when changing a CUDA path and vice versa.
+- Treat dtype inference, broadcasting, empty tensors, non-contiguous layouts,
+  gradients, and device dispatch as part of an operator's contract.
+- First-time extension/JIT builds sharing a cache must run serially.
+
+## Tests / 测试
+
+The repository suite lives at root [`tests/`](tests/) and is collected by
+pytest. Existing `unittest.TestCase` tests are valid pytest tests. Test
+configuration and registered markers are in [`pyproject.toml`](pyproject.toml).
+
+仓库测试统一位于根目录 [`tests/`](tests/)，由 pytest 收集；已有
+`unittest.TestCase` 无需改写。测试配置和合法 marker 均在
+[`pyproject.toml`](pyproject.toml) 中定义。
+
+Put tests in the matching domain and name modules `test_*.py`. Apply the narrowest
+backend or lifecycle marker (`structure`, `cpu`, `cuda`, `rocm`, `npu`, `mpi`,
+`slow`, `network`, or `manual`). Skips and expected failures must state the exact
+unsupported contract; do not turn failures into unconditional skips.
 
 ```bash
-# Install the pinned development tools with Python 3.11
-python -m pip install -r requirements/dev-tools.txt
-
-# Run the full test suite
-python -m pytest
-
-# Run a specific test file
+# Focused test
 python -m pytest tests/nn/test_nn_capabilities.py -v
 
-# Run a specific test case
+# One test case
 python -m pytest \
   tests/nn/test_nn_capabilities.py::TestAttentionCapabilities::test_layout_lengths_and_cumulative_cache \
   -v
 
-# Run the maintained CPU gate; CUDA and NPU use the corresponding nox sessions
+# Collection contract
+python -m pytest --collect-only -q tests
+```
+
+### Nox gates / Nox 门禁
+
+[`noxfile.py`](noxfile.py) is the canonical command surface. The default gate is
+`lint`, `format`, `typing`, `structure`, and `py37`.
+
+[`noxfile.py`](noxfile.py) 是统一命令入口；默认门禁包括 `lint`、`format`、
+`typing`、`structure` 与 `py37`。
+
+```bash
+python -m nox
+python -m nox -s structure
 python -m nox -s cpu
+python -m nox -s cuda
+python -m nox -s npu
+python -m nox -s rocm
+python -m nox -s mpi
+python -m nox -s benchmark
+python -m nox -s docs
+python -m nox -s docs_zh
+python -m nox -s docs_links
+python -m nox -s tutorials
 ```
 
-### Writing Tests
+The `structure` session checks repository layout, source and wheel contents, a
+wheel built from the sdist, and the installed `jittor.selftest`. Hardware
+sessions require a provisioned backend and accept pytest targets after `--`.
+`docs` and `docs_zh` build the English and Chinese documentation with warnings
+treated as errors, `docs_links` validates documentation links, and `tutorials`
+materializes MyST sources in temporary storage and executes the maintained
+notebook smoke tests.
 
-- Place test files under the matching domain in `tests/`.
-- Test file names should follow the pattern `test_*.py`.
-- Test class names should start with `Test`.
-- Test method names should start with `test_`.
-- Register and apply the appropriate backend/lifecycle marker from `pyproject.toml`.
-
-Example:
-```python
-import jittor as jt
-import unittest
-import numpy as np
-
-class TestMyFeature(unittest.TestCase):
-    def test_basic_functionality(self):
-        """Test basic functionality of my feature."""
-        x = jt.array([1.0, 2.0, 3.0])
-        result = my_feature(x)
-        expected = np.array([...])
-        np.testing.assert_allclose(result.data, expected, rtol=1e-5)
-
-    def test_cuda(self):
-        """Test CUDA support if available."""
-        if not jt.has_cuda:
-            return
-        jt.flags.use_cuda = 1
-        # ... test with CUDA
-        jt.flags.use_cuda = 0
-
-if __name__ == '__main__':
-    unittest.main()
-```
-
-### Test Requirements for Pull Requests
-
-- All new features **must** include unit tests.
-- Bug fixes **should** include regression tests.
-- All existing tests must pass before submitting a PR.
-- If your PR includes CUDA code, include both CPU and CUDA tests.
-
-## Submitting a Pull Request
-
-### Before Submitting
-
-1. **Sync with upstream**: Ensure your branch is up to date.
-   ```bash
-   git fetch upstream
-   git rebase upstream/master
-   ```
-2. **Run tests**: Ensure all tests pass locally.
-3. **Check code style**: Follow the code style guidelines.
-4. **Write/update documentation**: If your changes affect user-facing functionality.
-
-### PR Submission Checklist
-
-When submitting a PR, please use the PR template and ensure:
-
-- [ ] The PR description clearly explains the changes and motivation.
-- [ ] Related issue(s) are linked (use `Fixes #<issue-number>`).
-- [ ] New tests are added for new features or bug fixes.
-- [ ] All existing tests pass.
-- [ ] Documentation is updated if needed.
-- [ ] Code follows the project's style guidelines.
-
-## Review Process
-
-1. **Automated CI**: After submitting a PR, automated tests will run. Please ensure they pass.
-2. **Code Review**: A maintainer will review your PR. They may request changes or suggest improvements.
-3. **Iteration**: Address review comments by pushing additional commits to your branch.
-4. **Merge**: Once approved, a maintainer will merge your PR.
-
-**Review Timeline:**
-- We aim to provide initial feedback within **1 week**.
-- If you haven't received a response after 1 week, feel free to leave a polite comment on your PR.
-
-## Writing Documentation
-
-Jittor uses [Sphinx](https://www.sphinx-doc.org/) for documentation generation.
-
-- API documentation is written in Markdown format in the `doc/source/` directory.
-- Include docstrings in your Python code for automatic API documentation generation.
-- When adding new features, update the relevant documentation.
-
-### Building Documentation
+`structure` 会检查仓库布局、源码包和 wheel 内容、从源码包生成的 wheel，以及安装后的
+`jittor.selftest`。硬件 session 需要预先配置对应后端，并可在 `--` 后传入 pytest 目标；
+`docs` 与 `docs_zh` 分别严格构建英文和中文文档，`docs_links` 验证文档链接，
+`tutorials` 在临时目录生成 notebook 并执行维护的教程冒烟测试。
 
 ```bash
-cd doc
-bash build_doc.sh
+python -m nox -s cuda -- tests/nn/test_nn_capabilities.py
 ```
 
-## Issue Guidelines
-
-### Reporting Bugs
-
-Please use the [Bug Report template](https://github.com/Jittor/jittor/issues/new?template=bug_report.yml) and provide:
-
-- A clear description of the bug.
-- Minimal reproduction steps/code.
-- Full error logs.
-- Environment information (OS, Python version, Jittor version, GPU info).
-
-### Feature Requests
-
-Please use the [Feature Request template](https://github.com/Jittor/jittor/issues/new?template=feature_request.yml) and describe:
-
-- The feature you'd like to see.
-- The use case / motivation.
-- Any alternatives you've considered.
-
-## Contact
-
-- **Email**: jittor@qq.com
-- **QQ Group**: 761222083
-- **Jittor Forum**: https://discuss.jittor.org/
-- **GitHub Issues**: https://github.com/Jittor/jittor/issues
-
----
-
----
-
-# 为 Jittor 做贡献
-
-感谢你对 Jittor 项目的关注！Jittor 是由[清华大学计算机图形学组](https://cg.cs.tsinghua.edu.cn/)维护的开源深度学习框架。我们欢迎社区的贡献，无论是修复 Bug、增加新功能、改进文档，还是提出建议。
-
-## 目录
-
-- [行为准则](#行为准则)
-- [贡献方式](#贡献方式)
-- [快速入门](#快速入门)
-- [开发环境搭建](#开发环境搭建)
-- [代码结构](#代码结构)
-- [进行修改](#进行修改)
-- [代码风格指南](#代码风格指南)
-- [测试](#测试)
-- [提交 Pull Request](#提交-pull-request)
-- [审查流程](#审查流程)
-- [编写文档](#编写文档)
-- [Issue 指南](#issue-指南)
-
-## 行为准则
-
-参与本项目即表示你同意遵守我们的[行为准则](CODE_OF_CONDUCT.md)。请在贡献前阅读。
-
-## 贡献方式
-
-你可以通过多种方式为 Jittor 做贡献：
-
-- **报告 Bug**：使用我们的 [Issue 模板](https://github.com/Jittor/jittor/issues/new/choose)提交 Bug 报告。
-- **修复 Bug**：查找标记为 [`bug`](https://github.com/Jittor/jittor/labels/bug) 或 [`good first issue`](https://github.com/Jittor/jittor/labels/good%20first%20issue) 的 Issue。
-- **实现新功能**：通过[功能建议](https://github.com/Jittor/jittor/issues/new/choose)提交你的想法。
-- **改进文档**：修复文档错误、添加示例或改进现有文档。
-- **添加测试用例**：帮助提高测试覆盖率。
-- **实现新算子**：贡献新的算子实现或优化现有算子。
-- **贡献模型库**：为 Jittor 生态添加新的模型实现。
-- **引用 Jittor**：在你的学术论文中引用 Jittor。
-- **回答问题**：在 [Issues](https://github.com/Jittor/jittor/issues) 或 [Jittor 论坛](https://discuss.jittor.org/)中帮助其他用户。
-
-## 快速入门
-
-### 寻找可参与的 Issue
-
-- **新手贡献者**：请查找标记为 [`good first issue`](https://github.com/Jittor/jittor/labels/good%20first%20issue) 的 Issue。这些任务适合新手，例如文档修复、简单算子实现或测试用例补充。
-- **有经验的贡献者**：查看标记为 [`enhancement`](https://github.com/Jittor/jittor/labels/enhancement) 或 [`bug`](https://github.com/Jittor/jittor/labels/bug) 的 Issue。
-
-在开始工作之前，请在 Issue 下评论告知你正在处理该问题，以避免重复工作。
-
-## 开发环境搭建
-
-Jittor 是一个基于 JIT 编译的深度学习框架，前端为 Python，后端为 C++/CUDA。相比普通安装，搭建开发环境需要一些额外步骤。
-
-### 系统要求
-
-| 操作系统 | CPU | Python | 编译器 | GPU（可选） |
-|---|---|---|---|---|
-| Linux (Ubuntu, CentOS, Arch 等) | x86 / x86_64 / ARM / loongson | >= 3.7 | g++ >= 5.4 | NVIDIA CUDA >= 10.0 / AMD ROCm >= 4.0 / Hygon DCU DTK >= 22.04 |
-| Windows 10 & 11 | x86_64 | >= 3.8 | - | NVIDIA CUDA >= 10.2 |
-| macOS (>= 10.14) | Intel / Apple Silicon | >= 3.7 | clang >= 8.0 | - |
-
-### 第一步：Fork 并克隆仓库
-
-```bash
-# 在 GitHub 上 Fork 仓库，然后：
-git clone https://github.com/<你的用户名>/jittor.git
-cd jittor
-
-# 添加上游远程仓库
-git remote add upstream https://github.com/Jittor/jittor.git
-```
-
-### 第二步：安装依赖
-
-**Linux (Ubuntu)：**
-```bash
-sudo apt install python3-dev libomp-dev g++ build-essential
-```
-
-**macOS：**
-```bash
-brew install libomp
-```
-
-**Windows：**
-确保已安装 Python >= 3.8。如果使用 conda：
-```bash
-conda install pywin32
-```
-
-### 第三步：以开发模式安装 Jittor
-
-```bash
-# 从本地源码安装
-pip install -e .
-
-# 验证安装
-python -m jittor.selftest
-```
-
-> **提示**：由于 Jittor 使用 JIT 编译，修改 Python 源文件后无需重新编译。但对 `python/jittor/src/` 中 C++/CUDA 头文件的修改会在下次使用时由 JIT 编译器自动重新编译。
-
-### 第四步：启用 CUDA（可选）
-
-```bash
-# 设置 nvcc 路径
-export nvcc_path="/usr/local/cuda/bin/nvcc"
-
-# 测试 CUDA 支持
-use_cuda=1 python -m jittor.selftest
-```
-
-或让 Jittor 自动安装 CUDA（Windows）：
-```bash
-python -m jittor_utils.install_cuda
-```
-
-## 代码结构
-
-```
-jittor/
-├── python/                    # Python 源代码
-│   ├── jittor/               # Jittor 主包
-│   │   ├── __init__.py       # 包初始化，版本信息
-│   │   ├── nn/               # 神经网络模块
-│   │   ├── optim.py          # 优化器
-│   │   ├── dataset/          # 数据集工具
-│   │   ├── models/           # 预置模型实现
-│   │   ├── utils/            # 工具函数
-│   │   └── src/              # C++/CUDA 源文件（JIT 编译）
-│   │       ├── ops/          # 算子实现
-│   │       ├── executor/     # 执行引擎
-│   │       ├── mem/          # 内存管理
-│   │       └── optimizer/    # 图优化
-│   └── jittor_utils/         # 工具包
-├── examples/                 # 示例和 Jupyter notebook 教程
-├── tests/                    # 仓库 pytest 测试套件（不进入 wheel）
-├── tools/                    # 仓库构建、发布和维护工具
-├── doc/                      # 文档（Sphinx）
-├── .github/                  # GitHub 模板和 CI
-│   ├── ISSUE_TEMPLATE/       # Issue 模板
-│   └── workflows/            # CI 工作流
-├── setup.py                  # 包安装配置
-├── Dockerfile                # Docker 配置
-└── README.md                 # 项目 README
-```
-
-### 核心概念
-
-- **JIT 编译**：Jittor 在运行时编译 C++/CUDA 代码，`python/jittor/src/` 中的源文件会即时编译。
-- **元算子**：Jittor 使用元算子为不同硬件生成专门的代码。
-- **Var**：Jittor 的基本数据类型，用于表示张量。
-- **Module**：神经网络模块的基类，使用 `execute()` 作为前向计算方法。
-
-## 进行修改
-
-### 分支命名规范
-
-从 `master` 分支创建新分支：
-
-```bash
-git checkout master
-git pull upstream master
-git checkout -b <分支类型>/<简短描述>
-```
-
-分支类型前缀：
-- `fix/` - Bug 修复（如 `fix/conv-padding-error`）
-- `feature/` - 新功能（如 `feature/add-groupnorm`）
-- `docs/` - 文档修改（如 `docs/update-install-guide`）
-- `test/` - 测试添加/改进（如 `test/add-batchnorm-tests`）
-
-### 提交信息规范
-
-请编写清晰的提交信息：
-
-```
-<类型>: <简短摘要>
-
-<可选的详细描述>
-
-<可选的关联信息>
-```
-
-**类型**：`fix`、`feat`、`docs`、`test`、`refactor`、`perf`、`chore`
-
-**示例：**
-```
-fix: 修复 conv2d 算子的 padding 计算错误
-
-当使用 'same' 模式且 stride > 1 时，padding 计算不正确，
-导致输出形状不匹配。
-
-Fixes #123
-```
-
-## 代码风格指南
-
-### Python 代码
-
-- 遵循 [PEP 8](https://peps.python.org/pep-0008/) 风格指南
-- 使用 4 个空格缩进（不使用 Tab）
-- 每行最大长度：100 个字符
-- 使用描述性的变量和函数命名
-- 为公共函数和类添加文档字符串
-
-### C++/CUDA 代码
-
-- 使用 4 个空格缩进
-- 遵循 `python/jittor/src/` 中现有的代码风格
-- 使用描述性的变量命名
-- 为复杂逻辑添加注释
-
-## 测试
-
-### 运行测试
-
-```bash
-# 使用 Python 3.11 安装锁定的开发工具
-python -m pip install -r requirements/dev-tools.txt
-
-# 运行完整测试套件
-python -m pytest
-
-# 运行特定测试文件
-python -m pytest tests/nn/test_nn_capabilities.py -v
-
-# 运行特定测试用例
-python -m pytest \
-  tests/nn/test_nn_capabilities.py::TestAttentionCapabilities::test_layout_lengths_and_cumulative_cache \
-  -v
-
-# 运行维护的 CPU 门禁；CUDA/NPU 使用对应 nox session
-python -m nox -s cpu
-```
-
-### 编写测试
-
-- 将测试文件放在 `tests/` 下对应的领域目录
-- 测试文件名应遵循 `test_*.py` 模式
-- 测试类名应以 `Test` 开头
-- 测试方法名应以 `test_` 开头
-- 注册并使用 `pyproject.toml` 中对应的后端/生命周期 marker
-
-示例：
-```python
-import jittor as jt
-import unittest
-import numpy as np
-
-class TestMyFeature(unittest.TestCase):
-    def test_basic_functionality(self):
-        """Test basic functionality of my feature."""
-        x = jt.array([1.0, 2.0, 3.0])
-        result = my_feature(x)
-        expected = np.array([...])
-        np.testing.assert_allclose(result.data, expected, rtol=1e-5)
-
-    def test_cuda(self):
-        """Test CUDA support if available."""
-        if not jt.has_cuda:
-            return
-        jt.flags.use_cuda = 1
-        # ... test with CUDA
-        jt.flags.use_cuda = 0
-
-if __name__ == '__main__':
-    unittest.main()
-```
-
-### PR 的测试要求
-
-- 所有新功能**必须**包含单元测试
-- Bug 修复**应该**包含回归测试
-- 提交 PR 前所有现有测试必须通过
-- 如果 PR 包含 CUDA 代码，需要同时包含 CPU 和 CUDA 测试
-
-## 提交 Pull Request
-
-### 提交前检查
-
-1. **同步上游代码**：确保你的分支是最新的
-   ```bash
-   git fetch upstream
-   git rebase upstream/master
-   ```
-2. **运行测试**：确保所有测试在本地通过
-3. **检查代码风格**：遵循代码风格指南
-4. **编写/更新文档**：如果修改影响用户可见的功能
-
-### PR 提交检查清单
-
-提交 PR 时，请使用 PR 模板并确保：
-
-- [ ] PR 描述清晰说明了修改内容和动机
-- [ ] 关联了相关 Issue（使用 `Fixes #<issue编号>`）
-- [ ] 为新功能或 Bug 修复添加了测试
-- [ ] 所有现有测试通过
-- [ ] 按需更新了文档
-- [ ] 代码遵循项目的风格指南
-
-## 审查流程
-
-1. **自动化 CI**：提交 PR 后，自动化测试将运行，请确保测试通过。
-2. **代码审查**：维护者将审查你的 PR，可能会要求修改或提出改进建议。
-3. **迭代修改**：通过向分支推送额外提交来回应审查意见。
-4. **合并**：审查通过后，维护者将合并你的 PR。
-
-**审查时间线：**
-- 我们会在 **1 周内**提供初始反馈。
-- 如果 1 周后未收到回复，请在 PR 中留下礼貌的评论作为提醒。
-
-## 编写文档
-
-Jittor 使用 [Sphinx](https://www.sphinx-doc.org/) 生成文档。
-
-- API 文档以 Markdown 格式编写，位于 `doc/source/` 目录
-- 在 Python 代码中添加文档字符串以自动生成 API 文档
-- 添加新功能时，请更新相关文档
-
-### 构建文档
-
-```bash
-cd doc
-bash build_doc.sh
-```
-
-## Issue 指南
-
-### 报告 Bug
-
-请使用 [Bug 报告模板](https://github.com/Jittor/jittor/issues/new?template=bug_report.yml)并提供：
-
-- 清晰的 Bug 描述
-- 最小复现步骤/代码
-- 完整的错误日志
-- 环境信息（操作系统、Python 版本、Jittor 版本、GPU 信息）
-
-### 功能建议
-
-请使用[功能建议模板](https://github.com/Jittor/jittor/issues/new?template=feature_request.yml)并描述：
-
-- 你希望看到的功能
-- 使用场景/动机
-- 你考虑过的替代方案
-
-## 联系方式
-
-- **邮箱**：jittor@qq.com
-- **QQ 群**：761222083
-- **Jittor 论坛**：https://discuss.jittor.org/
-- **GitHub Issues**：https://github.com/Jittor/jittor/issues
-
----
-
-Thank you for contributing to Jittor! / 感谢你为 Jittor 做贡献！
+For changes spanning shared semantics, run the focused test first, then the
+relevant CPU and accelerator gates. Use separate `JITTOR_HOME` or `cache_name`
+values for concurrent jobs; do not run benchmarks and tests against one cache.
+
+## Documentation / 文档
+
+- Update [`README.md`](README.md) for installation or first-use changes. It is
+  the single authoritative root README and keeps English and Chinese together.
+- Put durable decisions under `docs/architecture/`, testing contracts under
+  `docs/testing/`, development guidance under `docs/development/`, and research
+  proposals under `docs/research/`.
+- Put reproducible maintainer evidence under `agent/results/`; keep raw logs and
+  generated artifacts outside the source checkout.
+- Use relative links for repository files and run the structure gate after moves.
+
+- 安装和首次使用发生变化时更新 [`README.md`](README.md)；它是唯一权威的根 README，
+  中英文共同维护。
+- 长期决策、测试契约、开发指南和研究提案分别放入 `docs/architecture/`、
+  `docs/testing/`、`docs/development/` 与 `docs/research/`。
+- 可复现的维护者结论放入 `agent/results/`；原始日志与生成产物不进入源码仓库。
+- 仓库内文件使用相对链接，移动后执行结构门禁。
+
+## Pull requests / 合并请求
+
+A pull request should include:
+
+- the problem and intended behavior;
+- the implementation boundary and compatibility impact;
+- exact tests run and their backend/environment;
+- known limitations, skips, or deferred follow-up;
+- documentation and release-note changes when users are affected.
+
+Before requesting review, inspect the staged diff, avoid `git add -A`, and ensure
+that only files belonging to the change are staged. Reviewers prioritize
+correctness, public compatibility, backend behavior, packaging, and regression
+coverage over cosmetic consistency.
+
+提交评审前检查暂存区，只加入本次改动涉及的文件。评审会优先关注正确性、公开兼容性、
+后端行为、打包边界和回归覆盖。

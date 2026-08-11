@@ -157,9 +157,8 @@ Stage 3 converged `nn.py + _nn/`, `misc.py + _misc/`, `pool.py + _pool/`, and
 - Backend post-processing and monkeypatch points become explicit registries or
   documented extension hooks, not accidental mutation of facade globals.
 
-The four Stage 3 facade/private-package pairs no longer exist. `_torch_fsdp2`
-is the sole remaining migration scaffold and must converge with the shim and
-installer work; no new domain may adopt this pairing.
+The Stage 3 facade/private-package pairs and the later FSDP2 migration scaffold
+no longer exist. No new domain may adopt that pairing.
 
 ## Canonical And Legacy Imports
 
