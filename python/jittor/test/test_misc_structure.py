@@ -4,15 +4,14 @@ import ast
 import inspect
 import pickle
 from pathlib import Path
-import types
 import unittest
 from unittest import mock
 
 import jittor as jt
 import jittor.misc as misc
-from jittor._misc import runtime
-from jittor._misc import shape_composition
-from jittor._misc import shape_transforms
+from jittor.misc import shape_composition
+from jittor.misc import shape_transforms
+from jittor.misc import tensor_ops
 
 
 _PUBLIC_NAMES = {
@@ -32,8 +31,9 @@ _PUBLIC_NAMES = {
     "repeat", "repeat_interleave", "roll", "rsqrt", "safe_log", "save_image",
     "scatter", "scatter_", "scatter_add", "scatter_add_", "scatter_reduce",
     "searchsorted", "set_global_seed", "sort", "split", "stack", "t", "time",
-    "to", "tolist", "topk", "tril", "triu", "unbind", "unique",
+    "tensor_ops", "to", "tolist", "topk", "tril", "triu", "unbind", "unique",
     "unique_consecutive", "view_as",
+    "shape_composition", "shape_transforms",
 }
 
 _MOVED = {
@@ -48,30 +48,6 @@ _MOVED = {
 }
 
 
-class _ModuleImportVisitor(ast.NodeVisitor):
-    def __init__(self):
-        self.violations = []
-
-    def visit_FunctionDef(self, node):
-        return
-
-    visit_AsyncFunctionDef = visit_FunctionDef
-    visit_Lambda = visit_FunctionDef
-
-    def visit_Import(self, node):
-        for alias in node.names:
-            if alias.name == "jittor" or alias.name.startswith("jittor."):
-                self.violations.append((node.lineno, alias.name))
-
-    def visit_ImportFrom(self, node):
-        if node.level >= 2:
-            self.violations.append((node.lineno, "." * node.level + (node.module or "")))
-        elif node.level == 0 and node.module and (
-            node.module == "jittor" or node.module.startswith("jittor.")
-        ):
-            self.violations.append((node.lineno, node.module))
-
-
 class TestMiscStructure(unittest.TestCase):
     def test_public_surface_and_private_ownership(self):
         self.assertFalse(hasattr(misc, "__all__"))
@@ -83,15 +59,13 @@ class TestMiscStructure(unittest.TestCase):
             [name for name in sorted(_PUBLIC_NAMES) if not hasattr(jt, name)],
             [],
         )
-        self.assertIsInstance(jt._misc, types.ModuleType)
-        self.assertEqual(jt._misc.__name__, "jittor._misc")
+        self.assertFalse(hasattr(jt, "_misc"))
 
         facade_tree = ast.parse(Path(misc.__file__).read_text(encoding="utf-8"))
-        facade_definitions = {
-            node.name for node in facade_tree.body if isinstance(node, ast.FunctionDef)
-        }
-        self.assertTrue(_MOVED.keys().isdisjoint(facade_definitions))
-        self.assertIn("repeat_interleave", facade_definitions)
+        self.assertFalse(any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            for node in facade_tree.body
+        ))
 
         private_definitions = {}
         for module in (shape_transforms, shape_composition):
@@ -134,9 +108,57 @@ class TestMiscStructure(unittest.TestCase):
             function = _MOVED[name]
             with self.subTest(name=name):
                 self.assertEqual(str(inspect.signature(function)), signature)
-                self.assertEqual(function.__module__, "jittor.misc")
+                expected_module = (
+                    "jittor.misc.shape_transforms"
+                    if name in {"repeat", "chunk", "expand"}
+                    else "jittor.misc.shape_composition"
+                )
+                self.assertEqual(function.__module__, expected_module)
                 self.assertEqual(function.__qualname__, name)
                 self.assertIs(pickle.loads(pickle.dumps(function)), function)
+
+                current_pickle = pickle.dumps(function, protocol=0)
+                legacy_pickle = current_pickle.replace(
+                    ("c" + expected_module + "\n").encode(),
+                    b"cjittor.misc\n",
+                    1,
+                )
+                self.assertIs(pickle.loads(legacy_pickle), function)
+
+    def test_tensor_operations_use_real_paths_and_legacy_pickle_aliases(self):
+        for name in ("repeat_interleave", "cumsum", "scatter_reduce", "CTCLoss"):
+            implementation = getattr(tensor_ops, name)
+            with self.subTest(name=name):
+                self.assertIs(getattr(misc, name), implementation)
+                if name != "cumsum":
+                    self.assertIs(getattr(jt, name), implementation)
+                self.assertEqual(implementation.__module__, tensor_ops.__name__)
+                self.assertIs(
+                    pickle.loads(pickle.dumps(implementation)), implementation,
+                )
+
+                current_pickle = pickle.dumps(implementation, protocol=0)
+                legacy_pickle = current_pickle.replace(
+                    ("c" + tensor_ops.__name__ + "\n").encode(),
+                    b"cjittor.misc\n",
+                    1,
+                )
+                self.assertIs(pickle.loads(legacy_pickle), implementation)
+
+    def test_tensor_operation_dependencies_remain_dynamic(self):
+        marker = object()
+        value = jt.array([1.0, 2.0])
+        with mock.patch.object(misc, "numpy_cumsum", return_value=marker) as patched:
+            with jt.flag_scope(use_cuda=0):
+                self.assertIs(misc.cumsum(value, 0), marker)
+        patched.assert_called_once_with(value, 0)
+
+        loss = misc.CTCLoss(blank=3, reduction="sum", zero_infinity=True)
+        with mock.patch.object(misc, "ctc_loss", return_value=marker) as patched:
+            self.assertIs(loss("log", "targets", "inputs", "targets_len"), marker)
+        patched.assert_called_once_with(
+            "log", "targets", "inputs", "targets_len", 3, "sum", True,
+        )
 
     def test_var_bindings_and_root_scan_remain_stable(self):
         for name in ("repeat", "chunk", "expand"):
@@ -229,58 +251,41 @@ class TestMiscStructure(unittest.TestCase):
         self.assertEqual(sequence_lookups, [(2,)])
         self.assertEqual(len(numpy_lookups), 2)
 
-    def test_runtime_import_direction_and_file_budgets(self):
-        self.assertIs(runtime.jt._module, jt)
+    def test_package_import_direction_and_file_budgets(self):
         facade_path = Path(misc.__file__).resolve()
         facade_tree = ast.parse(facade_path.read_text(encoding="utf-8"))
-        statements = list(facade_tree.body)
-        bind_index = next(
-            index for index, node in enumerate(statements)
-            if isinstance(node, ast.Expr)
-            and isinstance(node.value, ast.Call)
-            and isinstance(node.value.func, ast.Name)
-            and node.value.func.id == "_bind_misc_runtime"
+        self.assertLessEqual(
+            len(facade_path.read_text(encoding="utf-8").splitlines()), 40,
         )
-        transform_index = next(
-            index for index, node in enumerate(statements)
-            if isinstance(node, ast.ImportFrom)
-            and node.module == "_misc.shape_transforms"
-        )
-        composition_index = next(
-            index for index, node in enumerate(statements)
-            if isinstance(node, ast.ImportFrom)
-            and node.module == "_misc.shape_composition"
-        )
-        self.assertLess(bind_index, transform_index)
-        self.assertLess(bind_index, composition_index)
-        self.assertLessEqual(len(facade_path.read_text(encoding="utf-8").splitlines()), 2850)
 
-        for module in (runtime, shape_transforms, shape_composition):
+        budgets = {
+            tensor_ops: 2850,
+            shape_transforms: 200,
+            shape_composition: 200,
+        }
+        for module, budget in budgets.items():
             path = Path(module.__file__).resolve()
             source = path.read_text(encoding="utf-8")
-            self.assertLessEqual(len(source.splitlines()), 200)
+            self.assertLessEqual(len(source.splitlines()), budget)
+            self.assertNotIn("preserve_facade_origins", source)
+            self.assertNotIn("_JittorRuntimeProxy", source)
             tree = ast.parse(source, filename=str(path))
-            visitor = _ModuleImportVisitor()
-            visitor.visit(tree)
-            self.assertEqual(visitor.violations, [])
-            if module is not runtime:
-                imports = [
-                    node for node in tree.body
-                    if isinstance(node, ast.ImportFrom) and node.level > 0
-                ]
-                self.assertEqual(len(imports), 1)
-                self.assertTrue(all(
-                    node.level == 1 and node.module == "runtime" for node in imports
-                ))
+            imports_jittor = [
+                node for node in tree.body
+                if isinstance(node, ast.Import)
+                and any(alias.name == "jittor" for alias in node.names)
+            ]
+            self.assertEqual(len(imports_jittor), 1)
 
     def test_package_discovery_includes_private_package(self):
-        repo_root = Path(misc.__file__).resolve().parents[2]
+        repo_root = Path(misc.__file__).resolve().parents[3]
         if not (repo_root / "pyproject.toml").is_file():
             self.skipTest("packaging metadata is only available in a source checkout")
         from setuptools import find_packages
 
         packages = find_packages(where=str(repo_root / "python"))
-        self.assertIn("jittor._misc", packages)
+        self.assertIn("jittor.misc", packages)
+        self.assertNotIn("jittor._misc", packages)
 
 
 if __name__ == "__main__":

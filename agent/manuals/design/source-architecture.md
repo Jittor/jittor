@@ -70,11 +70,11 @@ stdlib / jittor_utils 底层
    只保留注册机制和通用能力。
 5. 不得增加现有强连通导入分量；每批迁移应让环数量保持或下降。
 
-`jittor._torch_compat.runtime`、`jittor._nn.runtime`、`jittor._misc.runtime`、
-`jittor._pool.runtime` 和 `jittor._torch_fsdp2.runtime` 是旧形态迁移期间的最小
-代理。阶段 3/4 合并领域包时删除这五份重复实现；可被后端重绑的行为改为显式
-registry/hook。新实现的 `__module__` 使用真实模块路径，旧 pickle 通过兼容别名或窄
-映射加载，不再递归改写所有 callable 元数据。
+阶段 3 已删除 `jittor._torch_compat.runtime`、`jittor._nn.runtime`、
+`jittor._misc.runtime` 和 `jittor._pool.runtime`，对应实现已收敛到真实领域包。
+`jittor._torch_fsdp2.runtime` 是唯一剩余的旧形态代理，随 shim/installer 收尾迁移。
+新实现的 `__module__` 使用真实模块路径，旧 pickle 通过同对象兼容别名加载，不再递归
+改写所有 callable 元数据。
 
 ## 迁移兼容契约
 

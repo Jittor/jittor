@@ -1,47 +1,25 @@
-"""Structural contracts for the modular torch compatibility implementation."""
+"""Structural contracts for the canonical torch compatibility domain."""
 
 import ast
+import importlib
+import inspect
+import os
 import pickle
 from pathlib import Path
-import types as python_types
+import subprocess
+import sys
 import unittest
 
 import jittor
-import jittor.torch_compat as compat
-from jittor._torch_compat import functional
-from jittor._torch_compat import grad
-from jittor._torch_compat import lr_scheduler
-from jittor._torch_compat import nested
-from jittor._torch_compat import optimizers
-from jittor._torch_compat import serialization
-from jittor._torch_compat import types
-
-
-class _ModuleImportVisitor(ast.NodeVisitor):
-    """Inspect imports executed at module load while ignoring function bodies."""
-
-    def __init__(self):
-        self.violations = []
-
-    def visit_FunctionDef(self, node):
-        return
-
-    visit_AsyncFunctionDef = visit_FunctionDef
-    visit_Lambda = visit_FunctionDef
-
-    def visit_Import(self, node):
-        for alias in node.names:
-            if alias.name == "jittor" or alias.name.startswith("jittor."):
-                self.violations.append((node.lineno, alias.name))
-
-    def visit_ImportFrom(self, node):
-        if node.level >= 2:
-            target = "." * node.level + (node.module or "")
-            self.violations.append((node.lineno, target))
-        elif node.level == 0 and node.module and (
-            node.module == "jittor" or node.module.startswith("jittor.")
-        ):
-            self.violations.append((node.lineno, node.module))
+import jittor.torch_compat as legacy_compat
+from jittor.compat import torch as compat
+from jittor.compat.torch import functional
+from jittor.compat.torch import grad
+from jittor.compat.torch import lr_scheduler
+from jittor.compat.torch import nested
+from jittor.compat.torch import optimizers
+from jittor.compat.torch import serialization
+from jittor.compat.torch import types
 
 
 def _class_callables(cls):
@@ -57,11 +35,48 @@ def _class_callables(cls):
 
 
 class TestTorchCompatStructure(unittest.TestCase):
-    def test_private_implementation_package_is_not_shadowed(self):
-        self.assertIsInstance(jittor._torch_compat, python_types.ModuleType)
-        self.assertEqual(jittor._torch_compat.__name__, "jittor._torch_compat")
+    def test_legacy_import_is_the_canonical_module(self):
+        self.assertIs(legacy_compat, compat)
+        self.assertIs(jittor.torch_compat, compat)
+        self.assertIs(sys.modules["jittor.torch_compat"], compat)
+        self.assertIs(importlib.import_module("jittor.torch_compat"), compat)
+        self.assertIs(importlib.import_module("jittor.compat.torch"), compat)
+        self.assertEqual(compat.__name__, "jittor.compat.torch")
 
-    def test_facade_reexports_implementation_symbols(self):
+    def test_fresh_legacy_import_installs_without_warning(self):
+        code = (
+            "import sys\n"
+            "import jittor.torch_compat as legacy\n"
+            "from jittor.compat import torch as canonical\n"
+            "import jittor\n"
+            "assert legacy is canonical is jittor.torch_compat\n"
+            "assert sys.modules['jittor.torch_compat'] is canonical\n"
+            "assert jittor._torch_compat_install_complete\n"
+            "assert canonical._INSTALL_COMPLETE\n"
+            "assert sys.modules['torch'] is jittor\n"
+            "assert sys.modules['torch.nn'] is jittor.nn\n"
+            "assert sys.modules['torch.nn.functional'] is jittor.nn.functional\n"
+        )
+        env = os.environ.copy()
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertNotIn("torch_compat not fully installed", result.stdout)
+
+    def test_legacy_physical_scaffolding_is_absent(self):
+        package_root = Path(types.__file__).resolve().parent
+        jittor_root = package_root.parents[1]
+        self.assertFalse((jittor_root / "torch_compat.py").exists())
+        self.assertFalse((jittor_root / "_torch_compat").exists())
+        self.assertTrue((jittor_root / "compat" / "__init__.py").is_file())
+
+    def test_canonical_package_reexports_domain_symbols(self):
         expected = {
             "_clip_grad_norm_device": grad._clip_grad_norm_device,
             "_GradScaler": grad._GradScaler,
@@ -77,140 +92,149 @@ class TestTorchCompatStructure(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIs(getattr(compat, name), implementation)
 
-    def test_public_class_module_names_remain_stable(self):
-        for cls in (
-            compat.dtype,
-            compat.device,
-            compat._GradScaler,
-            compat._NestedTensor,
-            compat._TorchSize,
-        ):
-            with self.subTest(cls=cls.__name__):
-                self.assertEqual(cls.__module__, "jittor.torch_compat")
-                for member in _class_callables(cls):
-                    self.assertEqual(member.__module__, "jittor.torch_compat")
-
-    def test_facade_callable_module_names_remain_stable(self):
-        for name, value in vars(compat).items():
-            module_name = getattr(value, "__module__", "")
-            if module_name.startswith("jittor._torch_compat"):
-                self.fail(f"{name} exposes private implementation module {module_name}")
-
-    def test_moved_facade_symbols_remain_pickleable_by_identity(self):
-        for value in compat._COMPAT_FACADE_SYMBOLS:
+    def test_new_definitions_report_canonical_origins(self):
+        expected = {
+            compat.dtype: "jittor.compat.torch.types",
+            compat.device: "jittor.compat.torch.types",
+            compat._GradScaler: "jittor.compat.torch.grad",
+            compat._NestedTensor: "jittor.compat.torch.nested",
+            compat._TorchSize: "jittor.compat.torch.nested",
+            compat._torch_norm_impl: "jittor.compat.torch.functional",
+        }
+        for value, module_name in expected.items():
             with self.subTest(name=value.__name__):
-                self.assertIs(pickle.loads(pickle.dumps(value)), value)
+                self.assertEqual(value.__module__, module_name)
+                if isinstance(value, type):
+                    for member in _class_callables(value):
+                        self.assertEqual(member.__module__, module_name)
 
-    def test_installed_optimizer_module_names_remain_stable(self):
+    def test_installed_definitions_report_canonical_origins(self):
         scheduler_names = (
             "LRScheduler", "LambdaLR", "MultiplicativeLR", "ConstantLR",
             "LinearLR", "StepLR", "MultiStepLR", "ExponentialLR",
             "CosineAnnealingLR", "PolynomialLR", "OneCycleLR",
             "SequentialLR", "ChainedScheduler", "ReduceLROnPlateau",
         )
-        scheduler_classes = []
         for name in scheduler_names:
+            value = getattr(jittor.optim.lr_scheduler, name)
             with self.subTest(name=name):
-                cls = getattr(jittor.optim.lr_scheduler, name)
-                scheduler_classes.append(cls)
-                self.assertEqual(cls.__module__, "jittor.torch_compat")
-        scheduler_classes.extend((
-            jittor.optim.swa_utils.SWALR,
-            jittor.optim.swa_utils.AveragedModel,
-        ))
-        for cls in scheduler_classes:
-            for member in _class_callables(cls):
-                with self.subTest(cls=cls.__name__, member=member.__name__):
-                    self.assertEqual(member.__module__, "jittor.torch_compat")
-        for value in (
-            jittor.optim.LBFGS,
-            jittor.optim.swa_utils.SWALR,
-            jittor.optim.swa_utils.AveragedModel,
-            jittor.optim.swa_utils.get_swa_avg_fn,
-            jittor.optim.swa_utils.get_ema_avg_fn,
-            jittor.optim.swa_utils.update_bn,
-            jittor.optim.swa_utils.get_swa_avg_fn(),
-            jittor.optim.swa_utils.get_ema_avg_fn(),
-            jittor.optim.Optimizer.state.fget,
-            jittor.optim.Adam.__init__,
-            jittor.optim.Adam.step,
-            jittor.optim.AdamW.step,
-            jittor.optim.SGD.step,
-        ):
+                self.assertEqual(value.__module__, "jittor.compat.torch.lr_scheduler")
+        expected = (
+            (jittor.optim.LBFGS, "jittor.compat.torch.optimizers"),
+            (jittor.optim.swa_utils.SWALR, "jittor.compat.torch.lr_scheduler"),
+            (jittor.optim.swa_utils.AveragedModel, "jittor.compat.torch.lr_scheduler"),
+            (jittor.optim.swa_utils.get_swa_avg_fn, "jittor.compat.torch.lr_scheduler"),
+            (jittor.optim.swa_utils.get_ema_avg_fn, "jittor.compat.torch.lr_scheduler"),
+            (jittor.optim.swa_utils.update_bn, "jittor.compat.torch.lr_scheduler"),
+            (jittor.optim.Optimizer.state.fget, "jittor.compat.torch.optimizers"),
+            (jittor.optim.Adam.__init__, "jittor.compat.torch.optimizers"),
+            (jittor.optim.Adam.step, "jittor.compat.torch.optimizers"),
+            (jittor.optim.AdamW.step, "jittor.compat.torch.optimizers"),
+            (jittor.optim.SGD.step, "jittor.compat.torch.optimizers"),
+        )
+        for value, module_name in expected:
             with self.subTest(name=value.__name__):
-                self.assertEqual(value.__module__, "jittor.torch_compat")
-        for cls_name in ("Optimizer", "Adam", "AdamW", "SGD", "RMSprop", "Adan", "LBFGS"):
-            cls = getattr(jittor.optim, cls_name)
-            for member in _class_callables(cls):
-                with self.subTest(cls=cls_name, member=member.__name__):
-                    self.assertFalse(
-                        member.__module__.startswith("jittor._torch_compat"),
-                        f"{cls_name}.{member.__name__} exposes {member.__module__}",
-                    )
+                self.assertEqual(value.__module__, module_name)
 
-    def test_safetensors_public_callables_keep_facade_origin(self):
-        try:
-            import safetensors.torch as safetensors_torch
-        except ImportError:
-            self.skipTest("safetensors is optional")
-        for value in (
-            safetensors_torch.safe_open,
-            safetensors_torch.load,
-            safetensors_torch.load_file,
-            safetensors_torch.save,
-            safetensors_torch.save_file,
-        ):
+    def test_no_public_symbol_exposes_a_legacy_origin(self):
+        for value in compat._COMPAT_PUBLIC_SYMBOLS:
+            module_name = getattr(value, "__module__", "")
             with self.subTest(name=value.__name__):
-                self.assertEqual(value.__module__, "jittor.torch_compat")
+                self.assertTrue(module_name.startswith("jittor.compat.torch"))
+                self.assertNotEqual(module_name, "jittor.torch_compat")
 
-    def test_torch_size_pickle_contract_remains_stable(self):
-        original = compat._TorchSize((2, 3, 4))
-        restored = pickle.loads(pickle.dumps(original))
-        self.assertIs(type(restored), compat._TorchSize)
-        self.assertEqual(restored, original)
-        self.assertEqual(restored.numel(), 24)
+    def test_public_symbols_are_pickleable_from_canonical_origins(self):
+        for value in compat._COMPAT_PUBLIC_SYMBOLS:
+            with self.subTest(name=value.__name__):
+                self.assertIs(pickle.loads(pickle.dumps(value)), value)
 
-    def test_private_modules_do_not_import_root_at_module_scope(self):
+    def test_legacy_pickle_global_paths_still_resolve(self):
+        for name, value in (
+            ("_TorchSize", compat._TorchSize),
+            ("_GradScaler", compat._GradScaler),
+            ("dtype", compat.dtype),
+            ("device", compat.device),
+        ):
+            payload = ("cjittor.torch_compat\n" + name + "\n.").encode("ascii")
+            with self.subTest(name=name):
+                self.assertIs(pickle.loads(payload), value)
+
+    def test_install_is_idempotent(self):
+        self.assertTrue(jittor._torch_compat_install_complete)
+        self.assertTrue(compat._INSTALL_COMPLETE)
+        before = {
+            "grad": jittor.grad,
+            "no_grad": jittor.no_grad,
+            "interpolate": jittor.nn.functional.interpolate,
+        }
+        self.assertIs(compat.install(jittor), jittor)
+        self.assertIs(compat.install(jittor), jittor)
+        self.assertIs(jittor.grad, before["grad"])
+        self.assertIs(jittor.no_grad, before["no_grad"])
+        self.assertIs(jittor.nn.functional.interpolate, before["interpolate"])
+
+    def test_dtype_objects_preserve_jittor_constructors(self):
+        self.assertTrue(callable(jittor.float32))
+        self.assertTrue(callable(jittor.int32))
+        fp = jittor.float32([1, 2])
+        integer = jittor.int32([1, 2])
+        self.assertIsInstance(fp, jittor.Var)
+        self.assertIsInstance(integer, jittor.Var)
+        self.assertEqual(str(fp.dtype), "float32")
+        self.assertEqual(str(integer.dtype), "int32")
+
+    def test_real_nn_functional_receives_torch_semantics(self):
+        jittor_functional = importlib.import_module("jittor.nn.functional")
+        self.assertIs(jittor.nn.functional, jittor_functional)
+        self.assertIs(sys.modules["torch.nn.functional"], jittor_functional)
+        signature = inspect.signature(jittor_functional.interpolate)
+        self.assertEqual(signature.parameters["mode"].default, "nearest")
+        x = jittor.array([[[[1.0, 2.0], [3.0, 4.0]]]])
+        actual = jittor_functional.interpolate(x, scale_factor=2).numpy()
+        expected = [
+            [
+                [1.0, 1.0, 2.0, 2.0],
+                [1.0, 1.0, 2.0, 2.0],
+                [3.0, 3.0, 4.0, 4.0],
+                [3.0, 3.0, 4.0, 4.0],
+            ]
+        ]
+        self.assertEqual(actual[0].tolist(), expected)
+
+    def test_real_nn_modules_package_is_not_replaced(self):
+        jittor_modules = importlib.import_module("jittor.nn.modules")
+        self.assertIs(jittor.nn.modules, jittor_modules)
+        self.assertIs(sys.modules["torch.nn.modules"], jittor_modules)
+        self.assertEqual(jittor_modules.__name__, "jittor.nn.modules")
+        self.assertIs(
+            sys.modules["torch.nn.modules.module"].Module,
+            jittor.Module,
+        )
+
+    def test_domain_modules_import_the_root_directly(self):
         package_root = Path(types.__file__).resolve().parent
         for path in package_root.glob("*.py"):
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            visitor = _ModuleImportVisitor()
-            visitor.visit(tree)
+            source = path.read_text(encoding="utf-8")
             with self.subTest(path=path.name):
-                self.assertFalse(
-                    visitor.violations,
-                    f"{path.name} adds root import(s) at module load: "
-                    f"{visitor.violations}",
-                )
+                self.assertNotIn(".runtime import", source)
+                self.assertNotIn("preserve_facade_origins", source)
+                self.assertIn("import jittor as jt", source)
 
-    def test_import_guard_covers_nested_module_scope_and_parent_imports(self):
-        tree = ast.parse(
-            "try:\n"
-            "    import jittor\n"
-            "except ImportError:\n"
-            "    from .. import nn\n"
-        )
-        visitor = _ModuleImportVisitor()
-        visitor.visit(tree)
-        self.assertEqual(
-            visitor.violations,
-            [(2, "jittor"), (4, "..")],
-        )
-
-    def test_package_discovery_includes_private_implementation_package(self):
+    def test_package_discovery_includes_only_canonical_compat_packages(self):
         package_root = Path(types.__file__).resolve().parent
-        repo_root = package_root.parents[2]
+        repo_root = package_root.parents[3]
         if not (repo_root / "pyproject.toml").is_file():
             self.skipTest("packaging metadata is only available in a source checkout")
         from setuptools import find_packages
 
         packages = find_packages(where=str(repo_root / "python"))
-        self.assertIn("jittor._torch_compat", packages)
+        self.assertIn("jittor.compat", packages)
+        self.assertIn("jittor.compat.torch", packages)
+        self.assertNotIn("jittor._torch_compat", packages)
 
-    def test_facade_installation_order_remains_stable(self):
-        package_root = Path(types.__file__).resolve().parent
-        facade = package_root.parent / "torch_compat.py"
-        tree = ast.parse(facade.read_text(encoding="utf-8"), filename=str(facade))
+    def test_installation_order_remains_stable(self):
+        source_path = Path(compat.__file__).resolve()
+        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
         install = next(
             node for node in tree.body
             if isinstance(node, ast.FunctionDef) and node.name == "install"
@@ -253,11 +277,15 @@ class TestTorchCompatStructure(unittest.TestCase):
             "_install_flash_attn_shim",
         ])
 
-    def test_facade_and_implementation_line_budgets(self):
+    def test_canonical_module_line_budgets(self):
         package_root = Path(types.__file__).resolve().parent
-        facade = package_root.parent / "torch_compat.py"
-        self.assertLessEqual(len(facade.read_text(encoding="utf-8").splitlines()), 8700)
+        self.assertLessEqual(
+            len(Path(compat.__file__).read_text(encoding="utf-8").splitlines()),
+            8700,
+        )
         for path in package_root.glob("*.py"):
+            if path.name == "__init__.py":
+                continue
             with self.subTest(path=path.name):
                 self.assertLessEqual(
                     len(path.read_text(encoding="utf-8").splitlines()),

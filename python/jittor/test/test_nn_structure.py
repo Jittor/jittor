@@ -11,31 +11,73 @@ import unittest
 
 import jittor
 import jittor.nn as nn
-from jittor._nn import activations
-from jittor._nn import convolution
-from jittor._nn import convolution_3d_layers
-from jittor._nn import convolution_cudnn
-from jittor._nn import convolution_layers
-from jittor._nn import convolution_transpose
-from jittor._nn import convolution_transpose_layers
-from jittor._nn import layer_norm_cuda
-from jittor._nn import losses
-from jittor._nn import normalization
-from jittor._nn import padding
-from jittor._nn import pooling
-from jittor._nn import recurrent_base
-from jittor._nn import recurrent_cells
-from jittor._nn import recurrent_layers
-from jittor._nn import softmax
-from jittor._nn import vector
+from jittor.nn.backends import cudnn as convolution_cudnn
+from jittor.nn.backends import layer_norm_cuda
+from jittor.nn.functional import activation as activations
+from jittor.nn.functional import convolution
+from jittor.nn.functional import convolution_transpose
+from jittor.nn.functional import loss as losses
+from jittor.nn.functional import normalization
+from jittor.nn.functional import vector
+from jittor.nn.modules import convolution as convolution_layers
+from jittor.nn.modules import convolution3d as convolution_3d_layers
+from jittor.nn.modules import convolution_transpose as convolution_transpose_layers
+from jittor.nn.modules import linear
+from jittor.nn.modules import padding
+from jittor.nn.modules import pooling
+from jittor.nn.modules import recurrent as recurrent_layers
+from jittor.nn.modules import recurrent_base
+from jittor.nn.modules import recurrent_cells
 
 
-_IMPLEMENTATION_MODULES = (
-    activations, convolution, convolution_3d_layers, convolution_cudnn,
-    convolution_layers, convolution_transpose, convolution_transpose_layers,
-    layer_norm_cuda, losses, normalization, padding, pooling, recurrent_base,
-    recurrent_cells, recurrent_layers, softmax, vector,
+softmax_module = importlib.import_module("jittor.nn.functional.softmax")
+
+
+_IMPLEMENTATION_SYMBOLS = (
+    (activations, (
+        "relu", "leaky_relu", "relu6", "elu", "sign", "gelu", "sigmoid",
+        "silu", "prelu", "hardswish", "hardsigmoid", "rrelu",
+    )),
+    (convolution, ("conv2d", "conv3d", "conv1d")),
+    (convolution_3d_layers, ("Conv3d",)),
+    (convolution_cudnn, (
+        "_CudnnConv2d", "_try_cudnn_conv2d", "_CudnnConvT2d",
+        "_try_cudnn_conv_transpose2d", "_cudnn_conv3d_fp16_safe",
+    )),
+    (convolution_layers, ("Conv", "Conv1d")),
+    (convolution_transpose, (
+        "conv_transpose", "conv_transpose3d", "conv_transpose1d",
+    )),
+    (convolution_transpose_layers, ("ConvTranspose", "ConvTranspose3d")),
+    (layer_norm_cuda, ("_layer_norm_no_grad_cuda",)),
+    (linear, ("Linear", "linear")),
+    (losses, (
+        "cross_entropy_loss", "mse_loss", "bce_loss", "l1_loss",
+        "smooth_l1_loss", "nll_loss", "binary_cross_entropy_with_logits",
+    )),
+    (normalization, (
+        "batch_norm", "instance_norm", "_ln_function_cls", "_ln_normalize",
+        "group_norm",
+    )),
+    (padding, (
+        "pad", "ReflectionPad2d", "ZeroPad2d", "ConstantPad2d",
+        "ConstantPad1d", "ConstantPad3d", "ReplicationPad2d",
+    )),
+    (pooling, (
+        "adaptive_avg_pool2d", "AvgPool2d", "avg_pool2d", "AdaptiveAvgPool2d",
+    )),
+    (recurrent_base, ("RNNBase",)),
+    (recurrent_cells, ("LSTMCell", "RNNCell", "GRUCell")),
+    (recurrent_layers, ("RNN", "LSTM", "GRU")),
+    (softmax_module, (
+        "_get_softmax_dim", "softmax", "log_softmax", "log_sigmoid",
+        "logsumexp",
+    )),
+    (vector, (
+        "glu", "normalize", "cosine_similarity", "pairwise_distance", "softsign",
+    )),
 )
+_IMPLEMENTATION_MODULES = tuple(module for module, _ in _IMPLEMENTATION_SYMBOLS)
 _ACL_PATCHED_SYMBOLS = {"Conv", "conv2d", "relu", "leaky_relu", "softmax"}
 
 
@@ -43,49 +85,34 @@ def _is_acl_wrapper(value):
     return getattr(value, "__module__", "").startswith("jittor.extern.acl")
 
 
-class _ModuleImportVisitor(ast.NodeVisitor):
-    """Inspect imports executed at module load while ignoring function bodies."""
-
-    def __init__(self):
-        self.violations = []
-
-    def visit_FunctionDef(self, node):
-        return
-
-    visit_AsyncFunctionDef = visit_FunctionDef
-    visit_Lambda = visit_FunctionDef
-
-    def visit_Import(self, node):
-        for alias in node.names:
-            if alias.name == "jittor" or alias.name.startswith("jittor."):
-                self.violations.append((node.lineno, alias.name))
-
-    def visit_ImportFrom(self, node):
-        if node.level >= 2:
-            target = "." * node.level + (node.module or "")
-            self.violations.append((node.lineno, target))
-        elif node.level == 0 and node.module and (
-            node.module == "jittor" or node.module.startswith("jittor.")
-        ):
-            self.violations.append((node.lineno, node.module))
-
-
 def _moved_symbols():
-    for module in _IMPLEMENTATION_MODULES:
-        yield from module._FACADE_SYMBOLS
+    for module, names in _IMPLEMENTATION_SYMBOLS:
+        for name in names:
+            yield getattr(module, name)
+
+
+def _implementation_module(symbol):
+    for module, names in _IMPLEMENTATION_SYMBOLS:
+        if symbol.__name__ in names and getattr(module, symbol.__name__) is symbol:
+            return module
+    raise AssertionError(f"implementation module not found for {symbol!r}")
 
 
 class TestNNStructure(unittest.TestCase):
-    def test_private_implementation_package_is_not_shadowed(self):
-        self.assertIsInstance(jittor._nn, python_types.ModuleType)
-        self.assertEqual(jittor._nn.__name__, "jittor._nn")
+    def test_public_implementation_packages_are_canonical(self):
+        self.assertIsInstance(nn.functional, python_types.ModuleType)
+        self.assertIsInstance(nn.modules, python_types.ModuleType)
+        self.assertIs(importlib.import_module("jittor.nn.functional"), nn.functional)
+        self.assertIs(importlib.import_module("jittor.nn.modules"), nn.modules)
+        self.assertTrue(hasattr(nn.functional, "__path__"))
+        self.assertTrue(hasattr(nn.modules, "__path__"))
 
     def test_public_nn_module_identity_remains_stable(self):
         self.assertIs(jittor.nn, nn)
         self.assertIs(importlib.import_module("jittor.nn"), nn)
         self.assertIs(nn.Module, jittor.Module)
 
-    def test_facade_reexports_private_implementations(self):
+    def test_facade_reexports_physical_implementations(self):
         for implementation in _moved_symbols():
             name = implementation.__name__
             public = getattr(nn, name)
@@ -95,10 +122,11 @@ class TestNNStructure(unittest.TestCase):
                 else:
                     self.assertIs(public, implementation)
 
-    def test_moved_symbols_keep_public_reflection_and_pickle_contracts(self):
+    def test_moved_symbols_use_physical_paths_and_keep_legacy_pickle_contracts(self):
         for implementation in _moved_symbols():
             with self.subTest(name=implementation.__name__):
-                self.assertEqual(implementation.__module__, "jittor.nn")
+                implementation_module = _implementation_module(implementation)
+                self.assertEqual(implementation.__module__, implementation_module.__name__)
                 public = getattr(nn, implementation.__name__)
                 if (
                     implementation.__name__ in _ACL_PATCHED_SYMBOLS
@@ -107,6 +135,10 @@ class TestNNStructure(unittest.TestCase):
                     self.assertTrue(_is_acl_wrapper(public))
                 else:
                     self.assertIs(pickle.loads(pickle.dumps(implementation)), public)
+                legacy_pickle = (
+                    b"cjittor.nn\n" + implementation.__name__.encode("ascii") + b"\n."
+                )
+                self.assertIs(pickle.loads(legacy_pickle), public)
 
     def test_log_softmax_dispatches_through_public_softmax(self):
         original = nn.softmax
@@ -190,10 +222,12 @@ class TestNNStructure(unittest.TestCase):
                 self.assertIs(pickle.loads(pickle.dumps(cls)), cls)
 
         cached_cls = nn._ln_function_cls((-1,), 1e-5)
-        self.assertEqual(nn._ln_function_cls.__wrapped__.__module__, "jittor.nn")
-        self.assertEqual(cached_cls.__module__, "jittor.nn")
-        self.assertEqual(cached_cls.execute.__module__, "jittor.nn")
-        self.assertEqual(cached_cls.grad.__module__, "jittor.nn")
+        self.assertEqual(
+            nn._ln_function_cls.__wrapped__.__module__, normalization.__name__
+        )
+        self.assertEqual(cached_cls.__module__, normalization.__name__)
+        self.assertEqual(cached_cls.execute.__module__, normalization.__name__)
+        self.assertEqual(cached_cls.grad.__module__, normalization.__name__)
 
     def test_recurrent_public_contracts_remain_stable(self):
         classes = (
@@ -202,14 +236,15 @@ class TestNNStructure(unittest.TestCase):
         )
         for cls in classes:
             with self.subTest(cls=cls.__name__):
-                self.assertEqual(cls.__module__, "jittor.nn")
+                expected_module = _implementation_module(cls).__name__
+                self.assertEqual(cls.__module__, expected_module)
                 self.assertEqual(cls.__qualname__, cls.__name__)
                 self.assertIs(pickle.loads(pickle.dumps(cls)), cls)
                 for member in vars(cls).values():
                     if isinstance(member, (staticmethod, classmethod)):
                         member = member.__func__
                     if callable(member) and hasattr(member, "__module__"):
-                        self.assertEqual(member.__module__, "jittor.nn")
+                        self.assertEqual(member.__module__, expected_module)
 
         for cls in (nn.RNN, nn.LSTM, nn.GRU):
             self.assertIs(cls.__mro__[1], nn.RNNBase)
@@ -239,9 +274,9 @@ class TestNNStructure(unittest.TestCase):
                       convolution_cudnn._CUDNN_3D_HALF_DTYPES)
         for cls in (nn._CudnnConv2d, nn._CudnnConvT2d):
             with self.subTest(cls=cls.__name__):
-                self.assertEqual(cls.__module__, "jittor.nn")
-                self.assertEqual(cls.execute.__module__, "jittor.nn")
-                self.assertEqual(cls.grad.__module__, "jittor.nn")
+                self.assertEqual(cls.__module__, convolution_cudnn.__name__)
+                self.assertEqual(cls.execute.__module__, convolution_cudnn.__name__)
+                self.assertEqual(cls.grad.__module__, convolution_cudnn.__name__)
                 self.assertIs(pickle.loads(pickle.dumps(cls)), cls)
 
         implementations = (
@@ -253,7 +288,8 @@ class TestNNStructure(unittest.TestCase):
         )
         for cls in implementations:
             with self.subTest(cls=cls.__name__):
-                self.assertEqual(cls.__module__, "jittor.nn")
+                expected_module = _implementation_module(cls).__name__
+                self.assertEqual(cls.__module__, expected_module)
                 self.assertEqual(cls.__qualname__, cls.__name__)
                 public = getattr(nn, cls.__name__)
                 if cls is convolution_layers.Conv and public is not cls:
@@ -265,7 +301,7 @@ class TestNNStructure(unittest.TestCase):
                     if isinstance(member, (staticmethod, classmethod)):
                         member = member.__func__
                     if callable(member) and hasattr(member, "__module__"):
-                        self.assertEqual(member.__module__, "jittor.nn")
+                        self.assertEqual(member.__module__, expected_module)
 
         module_names = (
             "Conv", "Conv2d", "Conv1d", "Conv3d", "Conv1d_sp",
@@ -582,10 +618,10 @@ class TestNNStructure(unittest.TestCase):
                 self.assertIs(getattr(nn, cls.__name__), cls)
                 self.assertIs(getattr(nn.modules, cls.__name__), cls)
                 self.assertIs(cls.__mro__[1], nn.Module)
-                self.assertEqual(cls.__module__, "jittor.nn")
+                self.assertEqual(cls.__module__, padding.__name__)
                 self.assertEqual(cls.__qualname__, cls.__name__)
-                self.assertEqual(cls.__init__.__module__, "jittor.nn")
-                self.assertEqual(cls.execute.__module__, "jittor.nn")
+                self.assertEqual(cls.__init__.__module__, padding.__name__)
+                self.assertEqual(cls.execute.__module__, padding.__name__)
                 self.assertIs(pickle.loads(pickle.dumps(cls)), cls)
 
         instance_contracts = (
@@ -643,7 +679,7 @@ class TestNNStructure(unittest.TestCase):
                 self.assertIs(getattr(nn, name), implementation)
                 self.assertIs(getattr(nn.functional, name), implementation)
                 self.assertEqual(str(inspect.signature(implementation)), signature)
-                self.assertEqual(implementation.__module__, "jittor.nn")
+                self.assertEqual(implementation.__module__, pooling.__name__)
                 self.assertEqual(implementation.__qualname__, name)
                 self.assertIs(pickle.loads(pickle.dumps(implementation)), implementation)
 
@@ -661,10 +697,10 @@ class TestNNStructure(unittest.TestCase):
                 self.assertIs(getattr(nn.modules, cls.__name__), cls)
                 self.assertIs(cls.__mro__[1], nn.Module)
                 self.assertEqual(str(inspect.signature(cls)), signature)
-                self.assertEqual(cls.__module__, "jittor.nn")
+                self.assertEqual(cls.__module__, pooling.__name__)
                 self.assertEqual(cls.__qualname__, cls.__name__)
-                self.assertEqual(cls.__init__.__module__, "jittor.nn")
-                self.assertEqual(cls.execute.__module__, "jittor.nn")
+                self.assertEqual(cls.__init__.__module__, pooling.__name__)
+                self.assertEqual(cls.execute.__module__, pooling.__name__)
                 self.assertIs(pickle.loads(pickle.dumps(cls)), cls)
 
         self.assertIsNot(nn.AvgPool2d, pool.AvgPool2d)
@@ -868,39 +904,29 @@ class TestNNStructure(unittest.TestCase):
         else:
             self.assertIs(nn.ReLU, nn.Relu)
 
-    def test_private_modules_do_not_import_root_at_module_scope(self):
-        package_root = Path(activations.__file__).resolve().parent
-        for path in package_root.glob("*.py"):
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            visitor = _ModuleImportVisitor()
-            visitor.visit(tree)
-            with self.subTest(path=path.name):
-                self.assertFalse(
-                    visitor.violations,
-                    f"{path.name} adds root import(s) at module load: "
-                    f"{visitor.violations}",
-                )
+    def test_implementation_modules_import_runtime_directly(self):
+        for module in _IMPLEMENTATION_MODULES:
+            source = Path(module.__file__).read_text(encoding="utf-8")
+            with self.subTest(module=module.__name__):
+                self.assertIn("import jittor as jt", source)
+                self.assertNotIn("preserve_facade_origins", source)
+                self.assertNotIn("_JittorRuntimeProxy", source)
+                self.assertNotIn(".runtime import", source)
 
-    def test_runtime_is_bound_before_private_modules_are_imported(self):
+    def test_facade_imports_only_physical_subpackages(self):
         facade_path = Path(nn.__file__).resolve()
         tree = ast.parse(facade_path.read_text(encoding="utf-8"), filename=str(facade_path))
-        bind_index = next(
-            index for index, node in enumerate(tree.body)
-            if isinstance(node, ast.Expr)
-            and isinstance(node.value, ast.Call)
-            and isinstance(node.value.func, ast.Name)
-            and node.value.func.id == "_bind_nn_runtime"
-        )
-        implementation_imports = [
-            index for index, node in enumerate(tree.body)
+        implementation_imports = {
+            node.module for node in tree.body
             if isinstance(node, ast.ImportFrom)
             and node.level == 1
             and node.module is not None
-            and node.module.startswith("_nn.")
-            and node.module != "_nn.runtime"
-        ]
-        self.assertEqual(len(implementation_imports), len(_IMPLEMENTATION_MODULES))
-        self.assertTrue(all(bind_index < index for index in implementation_imports))
+            and node.module.startswith(("functional.", "modules.", "backends."))
+        }
+        self.assertTrue(implementation_imports)
+        source = facade_path.read_text(encoding="utf-8")
+        self.assertNotIn("._nn", source)
+        self.assertNotIn("bind_runtime", source)
 
     def test_facade_contains_no_moved_definitions(self):
         facade_path = Path(nn.__file__).resolve()
@@ -923,15 +949,37 @@ class TestNNStructure(unittest.TestCase):
                     350,
                 )
 
-    def test_package_discovery_includes_private_implementation_package(self):
+    def test_canonical_exports_have_deterministic_star_import_contracts(self):
+        self.assertEqual(nn.functional.__all__, sorted(nn.functional.__all__))
+        self.assertEqual(nn.modules.__all__, sorted(nn.modules.__all__))
+        for name in (
+            "pool", "pool2d", "pool3d", "max_pool2d", "max_pool3d",
+            "avg_pool2d", "adaptive_avg_pool2d", "relu",
+        ):
+            with self.subTest(function=name):
+                self.assertIn(name, nn.functional.__all__)
+                self.assertIs(getattr(nn.functional, name), getattr(nn, name))
+        self.assertIn("linear", nn.functional.__all__)
+        self.assertTrue(callable(nn.functional.linear))
+        for name in ("Linear", "Conv", "RNN", "AvgPool2d", "Module"):
+            with self.subTest(module=name):
+                self.assertIn(name, nn.modules.__all__)
+                self.assertIs(getattr(nn.modules, name), getattr(nn, name))
+
+    def test_package_discovery_includes_public_implementation_packages(self):
         package_root = Path(activations.__file__).resolve().parent
-        repo_root = package_root.parents[2]
+        repo_root = package_root.parents[3]
         if not (repo_root / "pyproject.toml").is_file():
             self.skipTest("packaging metadata is only available in a source checkout")
         from setuptools import find_packages
 
         packages = find_packages(where=str(repo_root / "python"))
-        self.assertIn("jittor._nn", packages)
+        self.assertIn("jittor.nn", packages)
+        self.assertIn("jittor.nn.functional", packages)
+        self.assertIn("jittor.nn.modules", packages)
+        self.assertIn("jittor.nn.backends", packages)
+        self.assertNotIn("jittor._nn", packages)
+        self.assertFalse((repo_root / "python" / "jittor" / "_nn").exists())
 
 
 if __name__ == "__main__":

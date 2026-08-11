@@ -10,13 +10,12 @@ from unittest import mock
 import jittor as jt
 from jittor import nn
 from jittor import pool as pool_facade
-from jittor._pool import adaptive
-from jittor._pool import core_2d
-from jittor._pool import core_3d
-from jittor._pool import layers
-from jittor._pool import pooling_1d
-from jittor._pool import runtime
-from jittor._pool import unpool
+from jittor.pool import adaptive
+from jittor.pool import core_2d
+from jittor.pool import core_3d
+from jittor.pool import layers
+from jittor.pool import pooling_1d
+from jittor.pool import unpool
 
 
 _IMPLEMENTATION_MODULES = (
@@ -43,6 +42,8 @@ class TestPoolStructure(unittest.TestCase):
             "Pool3d", "avg_pool2d", "init", "jt", "math", "max_pool2d",
             "max_pool3d", "np", "pool", "pool2d", "pool3d",
             "pool_use_code_op",
+            "adaptive", "core_2d", "core_3d", "layers", "pooling_1d",
+            "unpool",
         }
         self.assertFalse(hasattr(pool_facade, "__all__"))
         self.assertEqual(
@@ -61,7 +62,7 @@ class TestPoolStructure(unittest.TestCase):
         implementations = tuple(
             symbol
             for module in _IMPLEMENTATION_MODULES
-            for symbol in module._FACADE_SYMBOLS
+            for symbol in module._PUBLIC_SYMBOLS
         )
         self.assertEqual(len(implementations), 22)
         self.assertEqual(len({id(symbol) for symbol in implementations}), 22)
@@ -89,13 +90,30 @@ class TestPoolStructure(unittest.TestCase):
                 "return_indices=None, ceil_mode=False)"
             ),
         }
+        expected_modules = {
+            "_triple": core_3d.__name__,
+            "pool": layers.__name__,
+            "pool3d": layers.__name__,
+            "avg_pool2d": layers.__name__,
+            "_no_dilation": layers.__name__,
+            "max_pool2d": layers.__name__,
+            "max_pool3d": layers.__name__,
+        }
         for name, signature in signatures.items():
             function = getattr(pool_facade, name)
             with self.subTest(function=name):
                 self.assertEqual(str(inspect.signature(function)), signature)
-                self.assertEqual(function.__module__, "jittor.pool")
+                self.assertEqual(function.__module__, expected_modules[name])
                 self.assertEqual(function.__qualname__, name)
                 self.assertIs(pickle.loads(pickle.dumps(function)), function)
+
+                current_pickle = pickle.dumps(function, protocol=0)
+                legacy_pickle = current_pickle.replace(
+                    ("c" + expected_modules[name] + "\n").encode(),
+                    b"cjittor.pool\n",
+                    1,
+                )
+                self.assertIs(pickle.loads(legacy_pickle), function)
 
     def test_class_signatures_reflection_and_pickle(self):
         signatures = {
@@ -141,16 +159,41 @@ class TestPoolStructure(unittest.TestCase):
             "MaxUnpool2d": "(kernel_size, stride=None)",
             "MaxUnpool3d": "(kernel_size, stride=None)",
         }
+        expected_modules = {
+            "Pool": core_2d.__name__,
+            "Pool3d": core_3d.__name__,
+            "AdaptiveAvgPool2d": adaptive.__name__,
+            "AdaptiveMaxPool2d": adaptive.__name__,
+            "AdaptiveAvgPool3d": adaptive.__name__,
+            "AdaptiveMaxPool3d": adaptive.__name__,
+            "AdaptiveAvgPool1d": pooling_1d.__name__,
+            "MaxPool1d": pooling_1d.__name__,
+            "AvgPool1d": pooling_1d.__name__,
+            "AvgPool2d": layers.__name__,
+            "AvgPool3d": layers.__name__,
+            "MaxPool2d": layers.__name__,
+            "MaxPool3d": layers.__name__,
+            "MaxUnpool2d": unpool.__name__,
+            "MaxUnpool3d": unpool.__name__,
+        }
         for name, signature in signatures.items():
             cls = getattr(pool_facade, name)
             with self.subTest(cls=name):
                 self.assertEqual(str(inspect.signature(cls)), signature)
                 self.assertIs(cls.__mro__[1], jt.Module)
-                self.assertEqual(cls.__module__, "jittor.pool")
+                self.assertEqual(cls.__module__, expected_modules[name])
                 self.assertEqual(cls.__qualname__, name)
-                self.assertEqual(cls.__init__.__module__, "jittor.pool")
-                self.assertEqual(cls.execute.__module__, "jittor.pool")
+                self.assertEqual(cls.__init__.__module__, expected_modules[name])
+                self.assertEqual(cls.execute.__module__, expected_modules[name])
                 self.assertIs(pickle.loads(pickle.dumps(cls)), cls)
+
+                current_pickle = pickle.dumps(cls, protocol=0)
+                legacy_pickle = current_pickle.replace(
+                    ("c" + expected_modules[name] + "\n").encode(),
+                    b"cjittor.pool\n",
+                    1,
+                )
+                self.assertIs(pickle.loads(legacy_pickle), cls)
 
     def test_default_instance_fields_state_and_pickle(self):
         cases = (
@@ -265,6 +308,18 @@ class TestPoolStructure(unittest.TestCase):
                 self.assertEqual(_summarize(restored)[1], expected)
                 self.assertEqual(tuple(instance.state_dict()), ())
                 self.assertEqual(tuple(restored.state_dict()), ())
+
+    def test_legacy_public_instance_pickle_path_remains_loadable(self):
+        instance = pool_facade.Pool(2)
+        current_pickle = pickle.dumps(instance, protocol=0)
+        legacy_pickle = current_pickle.replace(
+            ("c" + core_2d.__name__ + "\n").encode(),
+            b"cjittor.pool\n",
+            1,
+        )
+        restored = pickle.loads(legacy_pickle)
+        self.assertIs(type(restored), pool_facade.Pool)
+        self.assertEqual(restored.__dict__, instance.__dict__)
 
     def _assert_factory_dispatch(
         self, attribute, invoke, expected_args, expected_kwargs,
@@ -523,8 +578,7 @@ class TestPoolStructure(unittest.TestCase):
         self.assertIs(nn.functional.avg_pool2d, nn.avg_pool2d)
         self.assertIs(nn.functional.adaptive_avg_pool2d, nn.adaptive_avg_pool2d)
 
-    def test_private_import_direction_and_file_budgets(self):
-        self.assertIs(runtime.jt._module, jt)
+    def test_package_import_direction_and_file_budgets(self):
         facade_path = Path(pool_facade.__file__).resolve()
         facade_tree = ast.parse(facade_path.read_text(encoding="utf-8"))
         self.assertFalse(any(
@@ -548,19 +602,21 @@ class TestPoolStructure(unittest.TestCase):
                 ]
                 self.assertTrue(imports)
                 self.assertTrue(all(
-                    isinstance(node, ast.ImportFrom)
-                    and node.level == 1
-                    and node.module == "runtime"
+                    isinstance(node, ast.Import)
+                    and any(alias.name == "jittor" for alias in node.names)
                     for node in imports
                 ))
+                self.assertNotIn("preserve_facade_origins", path.read_text())
+                self.assertNotIn("_JittorRuntimeProxy", path.read_text())
 
-        repo_root = facade_path.parents[2]
+        repo_root = facade_path.parents[3]
         if not (repo_root / "pyproject.toml").is_file():
             self.skipTest("source checkout metadata is unavailable")
         from setuptools import find_packages
 
         packages = find_packages(where=str(repo_root / "python"))
-        self.assertIn("jittor._pool", packages)
+        self.assertIn("jittor.pool", packages)
+        self.assertNotIn("jittor._pool", packages)
 
 
 if __name__ == "__main__":

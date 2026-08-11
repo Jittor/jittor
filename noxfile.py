@@ -205,10 +205,8 @@ def structure(session):
     if len(wheels) != 1:
         session.error("expected exactly one wheel, found %d" % len(wheels))
     wheel_args = tuple(session.posargs) or (
-        "--content-change-allowlist",
-        "agent/baselines/wheel-content-changes-stage2.txt",
         "--removal-allowlist",
-        "agent/baselines/wheel-removals-stage2.txt",
+        "agent/baselines/wheel-removals-stage3.txt",
     )
     session.run(
         "python",

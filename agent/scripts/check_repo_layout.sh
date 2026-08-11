@@ -23,7 +23,15 @@ done < <(find "$REPO_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
 
 for forbidden_path in \
   "$REPO_ROOT/jittor_fsdp2" \
-  "$REPO_ROOT/python/jittor/torch_fsdp2_compat.py"; do
+  "$REPO_ROOT/python/jittor/torch_fsdp2_compat.py" \
+  "$REPO_ROOT/python/jittor/nn.py" \
+  "$REPO_ROOT/python/jittor/_nn" \
+  "$REPO_ROOT/python/jittor/misc.py" \
+  "$REPO_ROOT/python/jittor/_misc" \
+  "$REPO_ROOT/python/jittor/pool.py" \
+  "$REPO_ROOT/python/jittor/_pool" \
+  "$REPO_ROOT/python/jittor/torch_compat.py" \
+  "$REPO_ROOT/python/jittor/_torch_compat"; do
   if [[ -e "$forbidden_path" ]]; then
     printf 'forbidden legacy path: %s\n' "${forbidden_path#"$REPO_ROOT"/}" >&2
     status=1

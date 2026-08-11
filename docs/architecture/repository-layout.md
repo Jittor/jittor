@@ -137,8 +137,9 @@ must leave the repository buildable and preserve the hard path invariants.
 
 ## Decision 1: Domain Packages
 
-`nn.py + _nn/`, `misc.py + _misc/`, `pool.py + _pool/`, and equivalent pairs
-will converge to normal packages such as `nn/`, `misc/`, and `pool/`.
+Stage 3 converged `nn.py + _nn/`, `misc.py + _misc/`, `pool.py + _pool/`, and
+`torch_compat.py + _torch_compat/` to the normal `nn/`, `misc/`, `pool/`, and
+`compat/torch/` packages. The following rules are the resulting contract.
 
 - A domain package's `__init__.py` is its composition and re-export surface.
 - Implementations live under meaningful paths such as `nn.modules.conv` and
@@ -156,8 +157,9 @@ will converge to normal packages such as `nn/`, `misc/`, and `pool/`.
 - Backend post-processing and monkeypatch points become explicit registries or
   documented extension hooks, not accidental mutation of facade globals.
 
-The existing `_nn`, `_misc`, `_pool`, `_torch_compat`, and `_torch_fsdp2`
-packages are migration scaffolding. No new domain should adopt this pairing.
+The four Stage 3 facade/private-package pairs no longer exist. `_torch_fsdp2`
+is the sole remaining migration scaffold and must converge with the shim and
+installer work; no new domain may adopt this pairing.
 
 ## Canonical And Legacy Imports
 

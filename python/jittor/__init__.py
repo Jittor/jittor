@@ -2841,9 +2841,10 @@ if compile_extern.nccl_ops is not None and not hasattr(core.Var, "mpi_all_reduce
 # torch-compatibility layer: lets `import jittor as torch` run PyTorch code.
 # Additive only -- fills missing torch names/semantics. Safe to fail soft.
 try:
-    from . import torch_compat as _torch_compat_facade
-    import sys as _sys
-    _torch_compat_facade.install(_sys.modules[__name__])
+    from .compat import torch as _torch_compat_domain
+    _sys.modules[__name__ + ".torch_compat"] = _torch_compat_domain
+    torch_compat = _torch_compat_domain
+    _torch_compat_domain.install(_sys.modules[__name__])
 except Exception as _e:
     if _jt_torch_truthy(_os.environ.get("JITTOR_TORCH_STRICT_BOOTSTRAP")):
         raise
