@@ -130,7 +130,7 @@ class TestStage2Delivery(unittest.TestCase):
             "tests/core/test_array.py::TestArray::test_array_dtype",
         ):
             self.assertIn(target, source)
-        self.assertIn('env.pop("REAL_TORCH_SITE", None)', cpu)
+        self.assertIn('env["REAL_TORCH_SITE"] = ""', cpu)
         self.assertIn("SCIPY", cpu)
         self.assertIn('SCIPY = "scipy==', source)
         development_requirements = (self.repo_root / "requirements" / "dev-tools.txt").read_text(

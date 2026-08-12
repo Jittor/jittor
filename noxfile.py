@@ -952,7 +952,9 @@ def cpu(session):
     """Run the maintained CPU smoke gate on a clean Jittor cache."""
     _root, env = _session_env(session, "cpu")
     real_torch_site = os.environ.get("REAL_TORCH_SITE", "").strip()
-    env.pop("REAL_TORCH_SITE", None)
+    # Nox overlays this mapping on the parent environment, so removing the key
+    # would still leak a caller-provided real Torch into ordinary Jittor tests.
+    env["REAL_TORCH_SITE"] = ""
     env["nvcc_path"] = ""
     env["JITTOR_TEST_DEVICES"] = "cpu"
     session.install(
