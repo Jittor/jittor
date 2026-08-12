@@ -133,6 +133,10 @@ class TestStage2Delivery(unittest.TestCase):
         self.assertIn('env.pop("REAL_TORCH_SITE", None)', cpu)
         self.assertIn("SCIPY", cpu)
         self.assertIn('SCIPY = "scipy==', source)
+        development_requirements = (self.repo_root / "requirements" / "dev-tools.txt").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("scipy==1.13.1", development_requirements.splitlines())
 
         structure_workflow = (self.workflows / "structure.yml").read_text(encoding="utf-8")
         self.assertIn("nox / packaging", structure_workflow)

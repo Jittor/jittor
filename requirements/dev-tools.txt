@@ -11,5 +11,6 @@ pytest==7.4.4
 pytest-timeout==2.3.1
 PyYAML==6.0.2
 ruff==0.15.22
+scipy==1.13.1
 setuptools==83.0.0
 wheel==0.45.1
