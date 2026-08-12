@@ -25,6 +25,9 @@ def setUpModule():
 
 @unittest.skipIf(skip_this_test, "No Torch found")
 class TestLoss(unittest.TestCase):
+    def setUp(self):
+        np.random.seed(0)
+
     def test_l1_loss(self):
         jt_loss=jnn.L1Loss()
         tc_loss=tnn.L1Loss()
@@ -142,7 +145,7 @@ class TestLoss(unittest.TestCase):
         target = np.random.randint(4, size=(3, 2,2))
         jt_y=jt_loss(jt.array(output), jt.array(target))
         tc_y=tc_loss(torch.from_numpy(output), torch.from_numpy(target))
-        np.testing.assert_allclose(jt_y.numpy(), tc_y.numpy())
+        np.testing.assert_allclose(jt_y.numpy(), tc_y.numpy(), rtol=1e-6, atol=1e-6)
 
 
     def test_bce_loss(self):

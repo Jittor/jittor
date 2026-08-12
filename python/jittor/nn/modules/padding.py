@@ -1,37 +1,8 @@
-"""Functional and module padding implementations."""
+"""Stateful padding modules."""
 
 import jittor as jt
 
-
-def pad(x,padding=None, mode='constant', value=0, pad=None):
-    # torch spells the amounts arg `pad` (F.pad(x, pad=...)); jittor uses `padding`.
-    if padding is None:
-        padding = pad
-    assert mode in ['constant','replicate','reflect','circular'],'only support constant,replicate,reflect,circular pad'
-    assert len(padding)%2==0 and len(padding)//2<=x.ndim
-
-    padding = list(padding)
-    left = [0]*(x.ndim-len(padding)//2)+padding[::2][::-1]
-    right = [0]*(x.ndim-len(padding)//2)+padding[1::2][::-1]
-
-    out_dims = []
-    out_shape = []
-    for i,n,l,r in zip(range(x.ndim),x.shape,left,right):
-        # int(): shape/pad amounts may arrive as numpy ints (e.g. via the
-        # torch-compat nested path); reindex's shape arg must be python int64.
-        out_shape.append(int(n)+int(l)+int(r))
-        if mode == 'constant':
-            out_dims.append(f'i{i}-{l}')
-        elif mode == 'replicate':
-            out_dims.append(f"i{i}<{l} ? 0 : i{i} > {n+l-1} ? {n-1} : i{i}-{l}")
-        elif mode == 'reflect':
-            out_dims.append(f"i{i}<{l} ? {l}-i{i} : i{i} > {n+l-1} ? {2*(n-1)+l}-i{i} : i{i}-{l}")
-        elif mode == 'circular':
-            out_dims.append(f"i{i}<{l} ? {n-l}+i{i} : i{i} > {n+l-1} ? i{i}-{n+l} : i{i}-{l}")
-
-    # reindex's overflow_value must be float64-typed; torch allows a bool/int
-    # fill value (e.g. F.pad(bool_mask, value=True)), so coerce to float.
-    return x.reindex(out_shape,out_dims,overflow_value=float(value))
+from ..functional.padding import pad as pad
 
 
 class ReflectionPad2d(jt.Module):

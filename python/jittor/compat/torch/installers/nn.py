@@ -733,46 +733,8 @@ def _install_nn_extras(nn, registry=None):
                 x = x * _jt2.rsqrt(v + self.eps)
                 return x * self.weight if self.weight is not None else x
         nn.RMSNorm = RMSNorm
-    # nn.MultiheadAttention was an empty stub (no params, no execute -> raised
-    # NotImplementedError). Implement it over the existing functional
-    # multi_head_attention_forward. Plus nn.TransformerEncoderLayer/Encoder/
-    # DecoderLayer/Decoder/Transformer which build on it (used by some models and by
-    # users building transformers directly).
+    # Transformer modules build on the canonical jittor.nn.MultiheadAttention.
     import jittor as _jtm
-    if (not hasattr(nn, "MultiheadAttention")) or not hasattr(nn.MultiheadAttention, "execute") \
-            or getattr(nn.MultiheadAttention.execute, "__qualname__", "").endswith("Module.execute"):
-        class MultiheadAttention(nn.Module):
-            def __init__(self, embed_dim, num_heads, dropout=0.0, bias=True,
-                         add_bias_kv=False, add_zero_attn=False, kdim=None, vdim=None,
-                         batch_first=False, device=None, dtype=None):
-                super().__init__()
-                self.embed_dim = embed_dim
-                self.num_heads = num_heads
-                self.dropout = dropout
-                self.batch_first = batch_first
-                self.head_dim = embed_dim // num_heads
-                self.add_zero_attn = add_zero_attn
-                self.in_proj_weight = _jtm.init.invariant_uniform((3 * embed_dim, embed_dim), "float32")
-                self.in_proj_bias = _jtm.zeros((3 * embed_dim,)) if bias else None
-                self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
-                self.bias_k = _jtm.init.invariant_uniform((1, 1, embed_dim), "float32") if add_bias_kv else None
-                self.bias_v = _jtm.init.invariant_uniform((1, 1, embed_dim), "float32") if add_bias_kv else None
-
-            def execute(self, query, key, value, key_padding_mask=None, need_weights=True,
-                        attn_mask=None, average_attn_weights=True, is_causal=False):
-                if self.batch_first:
-                    query, key, value = query.transpose(0, 1), key.transpose(0, 1), value.transpose(0, 1)
-                out, w = nn.multi_head_attention_forward(
-                    query, key, value, self.embed_dim, self.num_heads,
-                    self.in_proj_weight, self.in_proj_bias, self.bias_k, self.bias_v,
-                    self.add_zero_attn, self.dropout if self.is_training() else 0.0,
-                    self.out_proj.weight, self.out_proj.bias, training=self.is_training(),
-                    key_padding_mask=key_padding_mask, need_weights=need_weights,
-                    attn_mask=attn_mask, average_attn_weights=average_attn_weights, is_causal=is_causal)
-                if self.batch_first:
-                    out = out.transpose(0, 1)
-                return out, w
-        nn.MultiheadAttention = MultiheadAttention
 
     def _act_fn(activation):
         if callable(activation):
@@ -2305,110 +2267,51 @@ def install(ctx):
             out = out.to(original_dtype)
         return out
 
-    # scaled_dot_product_attention (torch F.sdpa) -- native flash-attn
-    # inference fast path when available, otherwise standard math impl with
-    # causal masking + attn_mask + GQA support (jittor has no native sdpa).
-    if not hasattr(nn.functional, "scaled_dot_product_attention"):
-        import math as _math
-        def scaled_dot_product_attention(query, key, value, attn_mask=None,
-                                         dropout_p=0.0, is_causal=False,
-                                         scale=None, enable_gqa=False, **kw):
-            # query: (..., Lq, E), key/value: (..., Lk, E)
-            d = query.shape[-1]
-            sf = (1.0 / _math.sqrt(d)) if scale is None else scale
-            flash = _try_flash_scaled_dot_product_attention(
-                query, key, value, attn_mask, dropout_p, is_causal, sf,
-                enable_gqa=enable_gqa)
-            if flash is not None:
-                return flash
-            # The native FlashAttention backend accepts grouped-query attention
-            # directly. Expand K/V only for the math fallback, where matmul
-            # requires the head counts to match.
-            if enable_gqa:
-                query_heads = int(query.shape[-3])
-                key_heads = int(key.shape[-3])
-                value_heads = int(value.shape[-3])
-                if key_heads != query_heads:
-                    if key_heads <= 0 or query_heads % key_heads != 0:
-                        raise RuntimeError(
-                            "key heads must divide query heads for GQA")
-                    key = key.repeat_interleave(
-                        query_heads // key_heads, dim=-3)
-                if value_heads != query_heads:
-                    if value_heads <= 0 or query_heads % value_heads != 0:
-                        raise RuntimeError(
-                            "value heads must divide query heads for GQA")
-                    value = value.repeat_interleave(
-                        query_heads // value_heads, dim=-3)
-            q_dtype, k_dtype = str(query.dtype), str(key.dtype)
-            if (jt.flags.use_cuda and jt.compile_extern.cublas_ops
-                    and len(query.shape) >= 3 and len(query.shape) == len(key.shape)
-                    and query.shape[:-2] == key.shape[:-2]
-                    and q_dtype == k_dtype and "float" in q_dtype
-                    and "complex" not in q_dtype and "complex" not in k_dtype):
-                scores = jt.compile_extern.cublas_ops.cublas_batched_matmul(query, key, 0, 1) * sf
-            else:
-                scores = jt.matmul(query, key.transpose(-1, -2)) * sf
-            mask_row_valid = None
-            mask_softmax = None
-            if is_causal:
-                Lq, Lk = query.shape[-2], key.shape[-2]
-                mask = jt.triu(jt.ones((Lq, Lk)), 1) * (-1e30)
-                scores = scores + mask
-            if attn_mask is not None:
-                try:
-                    import jittor.other.code_softmax as _code_softmax
-                    if _code_softmax.can_softmax_v1(scores, -1):
-                        mask_softmax = _code_softmax
-                except Exception:
-                    mask_softmax = None
-                if str(attn_mask.dtype) == "bool":
-                    if mask_softmax is not None:
-                        zero_bias = jt.zeros_like(attn_mask, dtype=scores.dtype)
-                        mask_bias = jt.ternary(
-                            attn_mask, zero_bias,
-                            zero_bias + float("-inf"))
-                        scores = scores + mask_bias
-                    else:
-                        mask_row_valid = attn_mask.sum(-1, keepdims=True) > 0
-                        scores = scores + (1 - attn_mask.float32()) * (-1e30)
-                else:
-                    scores = scores + attn_mask
-                    if mask_softmax is None:
-                        neg_inf = jt.isinf(attn_mask) & (attn_mask < 0)
-                        mask_row_valid = neg_inf.sum(-1, keepdims=True) < attn_mask.shape[-1]
-            if mask_row_valid is not None:
-                # Keep the softmax graph finite as well as its final output.
-                # Masking only after softmax would leave NaNs in its backward
-                # for an additive row containing only -inf values.
-                scores = jt.ternary(
-                    mask_row_valid, scores, jt.zeros_like(scores))
-            if mask_softmax is not None:
-                attn = mask_softmax.softmax_v1(
-                    scores, zero_all_neg_inf=True)
-            else:
-                attn = nn.softmax(scores, dim=-1)
-            if mask_row_valid is not None:
-                # PyTorch defines a fully masked query row as all zeros. A
-                # finite sentinel would otherwise produce a uniform row, while
-                # an additive -inf mask produces NaNs in ordinary softmax.
-                attn = jt.ternary(mask_row_valid, attn, jt.zeros_like(attn))
-            if float(dropout_p or 0.0) > 0.0:
-                # torch SDPA always applies the supplied probability. Callers
-                # pass dropout_p=0 in evaluation, so this path is training-only.
-                attn = nn.dropout(attn, p=float(dropout_p), is_train=True)
-            # Masks and causal bias are intentionally accumulated in fp32 for
-            # low-precision inputs. Cast the probabilities back before the
-            # value matmul, matching torch SDPA's output dtype and avoiding a
-            # cublas fp32-by-fp16 dtype mismatch in training fallbacks.
-            value_attn = attn
-            if str(value_attn.dtype) != str(value.dtype):
-                value_attn = value_attn.cast(str(value.dtype))
-            out = jt.matmul(value_attn, value)
-            if str(out.dtype) != str(query.dtype):
-                out = out.cast(str(query.dtype))
-            return out
-        nn.functional.scaled_dot_product_attention = scaled_dot_product_attention
+    # The Torch wrapper owns backend selection and GQA expansion. The math
+    # fallback remains the canonical native functional implementation.
+    import math as _math
+    from jittor.nn.functional.attention import (
+        scaled_dot_product_attention as _native_scaled_dot_product_attention,
+    )
+
+    def scaled_dot_product_attention(query, key, value, attn_mask=None,
+                                     dropout_p=0.0, is_causal=False,
+                                     scale=None, enable_gqa=False, **kw):
+        del kw
+        dimension = int(query.shape[-1])
+        scale_factor = (
+            1.0 / _math.sqrt(dimension) if scale is None else scale
+        )
+        flash = _try_flash_scaled_dot_product_attention(
+            query, key, value, attn_mask, dropout_p, is_causal,
+            scale_factor, enable_gqa=enable_gqa)
+        if flash is not None:
+            return flash
+        if enable_gqa:
+            query_heads = int(query.shape[-3])
+            key_heads = int(key.shape[-3])
+            value_heads = int(value.shape[-3])
+            if key_heads != query_heads:
+                if key_heads <= 0 or query_heads % key_heads != 0:
+                    raise RuntimeError("key heads must divide query heads for GQA")
+                key = key.repeat_interleave(query_heads // key_heads, dim=-3)
+            if value_heads != query_heads:
+                if value_heads <= 0 or query_heads % value_heads != 0:
+                    raise RuntimeError("value heads must divide query heads for GQA")
+                value = value.repeat_interleave(
+                    query_heads // value_heads, dim=-3
+                )
+        return _native_scaled_dot_product_attention(
+            query,
+            key,
+            value,
+            attn_mask=attn_mask,
+            dropout_p=dropout_p,
+            is_causal=is_causal,
+            scale=scale,
+        )
+
+    nn.functional.scaled_dot_product_attention = scaled_dot_product_attention
     g.scaled_dot_product_attention = nn.functional.scaled_dot_product_attention
     g._torch_sdpa_flash_backend_cache = _sdpa_flash_backend_cache
 

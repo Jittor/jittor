@@ -62,9 +62,7 @@ class TestStage2Delivery(unittest.TestCase):
 
     def test_retired_gitlab_ci_does_not_return(self):
         self.assertFalse((self.repo_root / ".gitlab-ci.yml").exists())
-        layout_gate = (
-            self.repo_root / "agent" / "scripts" / "check_repo_layout.sh"
-        ).read_text(
+        layout_gate = (self.repo_root / "agent" / "scripts" / "check_repo_layout.sh").read_text(
             encoding="utf-8",
         )
         self.assertNotIn(".gitlab-ci.yml", layout_gate)
@@ -98,6 +96,7 @@ class TestStage2Delivery(unittest.TestCase):
         structure = functions["structure"]
         packaging = functions["packaging"]
         benchmark = functions["benchmark"] + functions["_record_asv"]
+        cpu = functions["cpu"]
 
         self.assertIn("STRUCTURE_TESTS", structure)
         self.assertNotIn('"build"', structure)
@@ -118,7 +117,22 @@ class TestStage2Delivery(unittest.TestCase):
         ):
             self.assertIn(token, benchmark)
         self.assertIn('env["ASV_PYTHONPATH"]', benchmark)
-        self.assertIn('"tests/optim"', source)
+        self.assertIn("CPU_TORCH_ORACLE_TESTS", cpu)
+        self.assertNotIn('"tests/optim"', source)
+        for target in (
+            "tests/optim/test_optimizer.py",
+            "tests/optim/test_adamw.py",
+            "tests/nn/test_affine_grid.py",
+            "tests/nn/test_attention_oracle.py",
+            "tests/nn/test_batchnorm.py",
+            "tests/nn/test_loss.py",
+            "tests/nn/test_relu.py",
+            "tests/core/test_array.py::TestArray::test_array_dtype",
+        ):
+            self.assertIn(target, source)
+        self.assertIn('env.pop("REAL_TORCH_SITE", None)', cpu)
+        self.assertIn("SCIPY", cpu)
+        self.assertIn('SCIPY = "scipy==', source)
 
         structure_workflow = (self.workflows / "structure.yml").read_text(encoding="utf-8")
         self.assertIn("nox / packaging", structure_workflow)

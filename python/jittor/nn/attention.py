@@ -177,8 +177,6 @@ def varlen_scaled_dot_product_attention(
         cu_kv = cu_q
     out = varlen_func(q_flat, k_flat, v_flat, cu_q, cu_kv, max_q, max_kv)
     return _restore_dense(out, restore)
-
-
 __all__ = [
     "cumulative_sequence_lengths",
     "sequence_lengths",

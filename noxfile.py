@@ -42,6 +42,7 @@ ASV = "asv==0.6.6"
 BUILD = "build==1.3.0"
 PYTEST = "pytest==7.4.4"
 PYTEST_TIMEOUT = "pytest-timeout==2.3.1"
+SCIPY = "scipy==1.13.1"
 SETUPTOOLS = "setuptools==83.0.0"
 WHEEL = "wheel==0.45.1"
 JUPYTEXT = "jupytext==1.17.3"
@@ -50,7 +51,47 @@ NBFORMAT = "nbformat==5.10.4"
 IPYKERNEL = "ipykernel==6.29.5"
 DOCS_REQUIREMENTS = REPO_ROOT / "requirements" / "docs.txt"
 
+NN_MIGRATION_FILES = (
+    "python/jittor/attention.py",
+    "python/jittor/nn/__init__.py",
+    "python/jittor/nn/_bindings.py",
+    "python/jittor/nn/functional/__init__.py",
+    "python/jittor/nn/functional/attention.py",
+    "python/jittor/nn/functional/autograd.py",
+    "python/jittor/nn/functional/complex.py",
+    "python/jittor/nn/functional/dropout.py",
+    "python/jittor/nn/functional/embedding.py",
+    "python/jittor/nn/functional/fold.py",
+    "python/jittor/nn/functional/grid.py",
+    "python/jittor/nn/functional/interpolation.py",
+    "python/jittor/nn/functional/linear.py",
+    "python/jittor/nn/functional/matrix.py",
+    "python/jittor/nn/functional/multihead_attention.py",
+    "python/jittor/nn/functional/padding.py",
+    "python/jittor/nn/functional/pooling.py",
+    "python/jittor/nn/functional/shape.py",
+    "python/jittor/nn/functional/tensor.py",
+    "python/jittor/nn/legacy_complex.py",
+    "python/jittor/nn/modules/__init__.py",
+    "python/jittor/nn/modules/activation.py",
+    "python/jittor/nn/modules/attention.py",
+    "python/jittor/nn/modules/bilinear.py",
+    "python/jittor/nn/modules/container.py",
+    "python/jittor/nn/modules/dropout.py",
+    "python/jittor/nn/modules/embedding.py",
+    "python/jittor/nn/modules/fold.py",
+    "python/jittor/nn/modules/loss.py",
+    "python/jittor/nn/modules/normalization.py",
+    "python/jittor/nn/modules/parameter.py",
+    "python/jittor/nn/modules/shape.py",
+    "python/jittor/nn/modules/upsampling.py",
+    "python/jittor/nn/utils.py",
+    "tests/nn/test_attention_oracle.py",
+    "tests/nn/test_nn_capabilities.py",
+)
+
 RATCHET_FILES = (
+    *NN_MIGRATION_FILES,
     "noxfile.py",
     "agent/scripts/check_sdist_contents.py",
     "agent/scripts/check_wheel_contents.py",
@@ -71,6 +112,7 @@ RATCHET_FILES = (
     "tests/structure/test_stage2_delivery.py",
 )
 FORMAT_FILES = (
+    *NN_MIGRATION_FILES,
     "noxfile.py",
     "agent/scripts/check_sdist_contents.py",
     "agent/scripts/test_check_sdist_contents.py",
@@ -105,12 +147,25 @@ CPU_TESTS = (
     "tests/nn/test_attention.py",
     "tests/nn/test_depthwise_conv.py",
     "tests/nn/test_nn_capabilities.py",
-    "tests/ops/test_cumprod_op.py",
     "tests/ops/test_reduce_op.py",
-    "tests/optim",
+    "tests/core/test_array.py::TestArray::test_array_dtype",
+    "tests/optim/test_opt_state_dict.py",
+    "tests/optim/test_optim_core.py",
+    "tests/optim/test_optimizer.py",
+    "tests/optim/test_optimizer_save_load.py",
     "tests/compat/torch/test_torch_compat_grad_management.py",
     "tests/compat/torch/test_torch_bootstrap.py::TestTorchBootstrap::test_preflight_nvcc_flags_keep_command_separators",
     "tests/integration/test_notebooks.py",
+)
+CPU_TORCH_ORACLE_TESTS = (
+    "tests/ops/test_cumprod_op.py",
+    "tests/optim/test_adamw.py",
+    "tests/optim/test_lr_scheduler.py",
+    "tests/nn/test_affine_grid.py",
+    "tests/nn/test_attention_oracle.py",
+    "tests/nn/test_batchnorm.py",
+    "tests/nn/test_loss.py",
+    "tests/nn/test_relu.py",
 )
 CUDA_TESTS = (
     "tests/backends/cuda/test_cuda.py",
@@ -471,6 +526,9 @@ def typing(session):
 def structure(session):
     """Run the fast layout, checker, and complete structure-test gate."""
     _root, env = _session_env(session, "structure")
+    env["nvcc_path"] = ""
+    env["CUDA_VISIBLE_DEVICES"] = ""
+    env["use_cuda"] = "0"
     session.install(
         PYTEST,
         PYTEST_TIMEOUT,
@@ -893,6 +951,8 @@ print("Python 3.7 compile OK: %d files" % checked)
 def cpu(session):
     """Run the maintained CPU smoke gate on a clean Jittor cache."""
     _root, env = _session_env(session, "cpu")
+    real_torch_site = os.environ.get("REAL_TORCH_SITE", "").strip()
+    env.pop("REAL_TORCH_SITE", None)
     env["nvcc_path"] = ""
     env["JITTOR_TEST_DEVICES"] = "cpu"
     session.install(
@@ -905,6 +965,7 @@ def cpu(session):
         "pillow==11.0.0",
         PYTEST,
         PYTEST_TIMEOUT,
+        SCIPY,
         SETUPTOOLS,
         "tqdm==4.67.1",
     )
@@ -926,6 +987,10 @@ def cpu(session):
         env=env,
     )
     _run_pytest(session, CPU_TESTS, env)
+    oracle_env = env.copy()
+    if real_torch_site:
+        oracle_env["REAL_TORCH_SITE"] = real_torch_site
+    _run_pytest(session, CPU_TORCH_ORACLE_TESTS, oracle_env)
 
 
 @nox.session(python=False)

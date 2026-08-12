@@ -3,6 +3,7 @@
 import ast
 import inspect
 import math
+import pickle
 import unittest
 
 import numpy as np
@@ -13,6 +14,333 @@ from jittor.nn import attention, dual_grid, rms_norm_cuda, rope_cuda, sparse
 
 
 class TestAttentionCapabilities(unittest.TestCase):
+    def test_scaled_attention_combines_causal_and_explicit_masks(self):
+        with jt.flag_scope(use_cuda=0):
+            query = jt.zeros((1, 1, 3, 2), dtype="float32")
+            value = jt.array([[[[2.0, 4.0], [6.0, 8.0], [10.0, 12.0]]]])
+            keep = jt.array(
+                [
+                    [True, True, True],
+                    [False, True, True],
+                    [True, False, True],
+                ]
+            )
+            actual = nn.scaled_dot_product_attention(
+                query,
+                query,
+                value,
+                attn_mask=keep,
+                is_causal=True,
+            ).numpy()
+        expected = np.array(
+            [[[[2.0, 4.0], [6.0, 8.0], [6.0, 8.0]]]],
+            dtype="float32",
+        )
+        np.testing.assert_allclose(actual, expected, atol=1e-6, rtol=1e-6)
+
+    def test_scaled_attention_float16_causal_rows_stay_finite(self):
+        with jt.flag_scope(use_cuda=0):
+            query = jt.array(np.arange(24, dtype="float32").reshape(1, 2, 3, 4) / 10).float16()
+            output = nn.scaled_dot_product_attention(query, query, query, is_causal=True)
+            actual = output.float32().numpy()
+        self.assertTrue(np.isfinite(actual).all())
+
+    def test_attention_masks_reject_integer_dtypes(self):
+        with jt.flag_scope(use_cuda=0):
+            query = jt.zeros((2, 1, 4), dtype="float32")
+            module = nn.MultiheadAttention(4, 2)
+            with self.assertRaisesRegex(AssertionError, "bool and floating"):
+                module(query, query, query, attn_mask=jt.ones((2, 2), dtype="int32"))
+            with self.assertRaisesRegex(AssertionError, "bool and floating"):
+                module(
+                    query,
+                    query,
+                    query,
+                    key_padding_mask=jt.ones((1, 2), dtype="int32"),
+                )
+            with self.assertRaisesRegex(AssertionError, "bool and floating"):
+                nn.scaled_dot_product_attention(
+                    query.transpose(0, 1),
+                    query.transpose(0, 1),
+                    query.transpose(0, 1),
+                    attn_mask=jt.ones((2, 2), dtype="int32"),
+                )
+
+    def test_scaled_attention_validates_dtypes_and_dropout_probability(self):
+        with jt.flag_scope(use_cuda=0):
+            query = jt.zeros((1, 1, 2, 4), dtype="float32")
+            with self.assertRaisesRegex(RuntimeError, "same dtype"):
+                nn.scaled_dot_product_attention(query, query.float16(), query)
+            with self.assertRaisesRegex(RuntimeError, "mask dtype"):
+                nn.scaled_dot_product_attention(
+                    query,
+                    query,
+                    query,
+                    attn_mask=jt.zeros((2, 2), dtype="float64"),
+                )
+            for probability in (-0.1, 1.1):
+                with self.subTest(probability=probability):
+                    with self.assertRaisesRegex(ValueError, "between 0 and 1"):
+                        nn.scaled_dot_product_attention(
+                            query,
+                            query,
+                            query,
+                            dropout_p=probability,
+                        )
+            module = nn.MultiheadAttention(4, 2, dropout=-0.1)
+            sequence = query.reshape(2, 1, 4)
+            with self.assertRaisesRegex(ValueError, "between 0 and 1"):
+                module(sequence, sequence, sequence)
+
+    def test_no_weight_attention_matches_weighted_path_for_masks(self):
+        rng = np.random.RandomState(317)
+        with jt.flag_scope(use_cuda=0):
+            module = nn.MultiheadAttention(8, 2)
+            query = jt.array(rng.randn(4, 2, 8).astype("float32"))
+            key = jt.array(rng.randn(5, 2, 8).astype("float32"))
+            value = jt.array(rng.randn(5, 2, 8).astype("float32"))
+            boolean_mask = jt.array(np.triu(np.ones((4, 5), dtype=bool), 1))
+            float_padding = jt.array([[0.0, 0.0, 0.0, -0.5, -1.0], [0.0, -0.25, 0.0, 0.0, -2.0]])
+            weighted, _ = module(
+                query,
+                key,
+                value,
+                attn_mask=boolean_mask,
+                key_padding_mask=float_padding,
+                need_weights=True,
+            )
+            unweighted, returned_weights = module(
+                query,
+                key,
+                value,
+                attn_mask=boolean_mask,
+                key_padding_mask=float_padding,
+                need_weights=False,
+            )
+            per_head_mask = boolean_mask.broadcast((4, 4, 5))
+            per_head, per_head_weights = module(
+                query,
+                key,
+                value,
+                attn_mask=per_head_mask,
+                need_weights=False,
+            )
+            causal_mask = jt.triu(jt.ones((4, 5), dtype="bool"), diagonal=1)
+            causal, causal_weights = module(
+                query,
+                key,
+                value,
+                attn_mask=causal_mask,
+                need_weights=False,
+                is_causal=True,
+            )
+            causal_reference, _ = module(
+                query,
+                key,
+                value,
+                attn_mask=causal_mask,
+                need_weights=True,
+            )
+            per_head_reference, _ = module(
+                query,
+                key,
+                value,
+                attn_mask=boolean_mask,
+                need_weights=True,
+            )
+            actual = jt.fetch_sync(
+                [
+                    weighted,
+                    unweighted,
+                    per_head,
+                    per_head_reference,
+                    causal,
+                    causal_reference,
+                ]
+            )
+        self.assertIsNone(returned_weights)
+        self.assertIsNone(per_head_weights)
+        self.assertIsNone(causal_weights)
+        np.testing.assert_allclose(actual[0], actual[1], atol=2e-5, rtol=2e-5)
+        np.testing.assert_allclose(actual[2], actual[3], atol=2e-5, rtol=2e-5)
+        np.testing.assert_allclose(actual[4], actual[5], atol=2e-5, rtol=2e-5)
+
+    def test_fully_masked_rows_preserve_torch_branch_behavior(self):
+        with jt.flag_scope(use_cuda=0):
+            module = nn.MultiheadAttention(4, 2)
+            sequence = jt.ones((2, 1, 4), dtype="float32")
+            mask = jt.ones((2, 2), dtype="bool")
+            weighted, weights = module(sequence, sequence, sequence, attn_mask=mask)
+            unweighted, no_weights = module(
+                sequence,
+                sequence,
+                sequence,
+                attn_mask=mask,
+                need_weights=False,
+            )
+            weighted_array, weights_array, unweighted_array = jt.fetch_sync(
+                [weighted, weights, unweighted]
+            )
+        self.assertTrue(np.isnan(weighted_array).all())
+        self.assertTrue(np.isnan(weights_array).all())
+        np.testing.assert_array_equal(unweighted_array, np.zeros_like(unweighted_array))
+        self.assertIsNone(no_weights)
+
+    def test_multihead_attention_dtype_and_static_source_validation(self):
+        with jt.flag_scope(use_cuda=0):
+            module = nn.MultiheadAttention(4, 2, add_bias_kv=True, dtype=jt.float16)
+            parameter_dtypes = {str(parameter.dtype) for parameter in module.parameters()}
+            self.assertEqual(parameter_dtypes, {"float16"})
+            legacy_positional = nn.MultiheadAttention(
+                4, 2, 0.0, True, False, False, None, None, False, jt.float16
+            )
+            self.assertEqual(
+                {str(parameter.dtype) for parameter in legacy_positional.parameters()},
+                {"float16"},
+            )
+
+            query = jt.zeros((2, 1, 4), dtype="float32")
+            weight = jt.concat([jt.eye(4), jt.eye(4), jt.eye(4)], dim=0)
+            with self.assertRaisesRegex(AssertionError, "source lengths must match"):
+                nn.multi_head_attention_forward(
+                    query,
+                    query,
+                    query,
+                    4,
+                    2,
+                    weight,
+                    None,
+                    None,
+                    None,
+                    False,
+                    0.0,
+                    jt.eye(4),
+                    None,
+                    static_k=jt.zeros((2, 3, 2)),
+                    static_v=jt.zeros((2, 4, 2)),
+                )
+
+            with self.assertRaisesRegex(AssertionError, "batch sizes must match"):
+                module(
+                    jt.zeros((3, 2, 4)),
+                    jt.zeros((4, 1, 4)),
+                    jt.zeros((4, 1, 4)),
+                )
+
+            with self.assertRaisesRegex(AssertionError, "3-D tensor"):
+                nn.multi_head_attention_forward(
+                    query,
+                    query,
+                    query,
+                    4,
+                    2,
+                    weight,
+                    None,
+                    None,
+                    None,
+                    False,
+                    0.0,
+                    jt.eye(4),
+                    None,
+                    static_k=jt.zeros((2, 2)),
+                )
+
+            with self.assertRaisesRegex(AssertionError, "key projection weight"):
+                nn.multi_head_attention_forward(
+                    query,
+                    query,
+                    query,
+                    4,
+                    2,
+                    None,
+                    None,
+                    None,
+                    None,
+                    False,
+                    0.0,
+                    jt.eye(4),
+                    None,
+                    use_separate_proj_weight=True,
+                    q_proj_weight=jt.eye(4),
+                    k_proj_weight=jt.zeros((5, 4)),
+                    v_proj_weight=jt.eye(4),
+                )
+
+    def test_multihead_attention_additive_padding_mask_and_pickle(self):
+        with jt.flag_scope(use_cuda=0):
+            module = nn.MultiheadAttention(2, 1, bias=False)
+            identity = np.eye(2, dtype="float32")
+            module.in_proj_weight.assign(
+                jt.array(np.concatenate([identity, identity, identity], axis=0))
+            )
+            module.out_proj.weight.assign(jt.array(identity))
+            query = jt.zeros((1, 1, 2), dtype="float32")
+            value = jt.array([[[2.0, 4.0]], [[10.0, 20.0]]])
+            padding = jt.array([[0.0, -1.0]])
+            output, weights = module(
+                query,
+                query.broadcast((2, 1, 2)),
+                value,
+                key_padding_mask=padding,
+            )
+            restored = pickle.loads(pickle.dumps(module))
+            restored_output, restored_weights = restored(
+                query,
+                query.broadcast((2, 1, 2)),
+                value,
+                key_padding_mask=padding,
+            )
+            actual, actual_weights, roundtrip_output, roundtrip_weights = jt.fetch_sync(
+                [output, weights, restored_output, restored_weights]
+            )
+
+        expected_weights = np.array(
+            [[[1.0 / (1.0 + math.exp(-1.0)), 1.0 / (1.0 + math.exp(1.0))]]],
+            dtype="float32",
+        )
+        expected = np.matmul(expected_weights, np.swapaxes(value.numpy(), 0, 1))
+        np.testing.assert_allclose(actual_weights, expected_weights, atol=1e-6)
+        np.testing.assert_allclose(actual, expected, atol=1e-6)
+        np.testing.assert_allclose(roundtrip_output, actual, atol=1e-6)
+        np.testing.assert_allclose(roundtrip_weights, actual_weights, atol=1e-6)
+
+    def test_multihead_attention_causal_values_and_dimension_validation(self):
+        with jt.flag_scope(use_cuda=0):
+            module = nn.MultiheadAttention(4, 2, bias=False)
+            identity = np.eye(4, dtype="float32")
+            module.in_proj_weight.assign(
+                jt.array(np.concatenate([identity, identity, identity], axis=0))
+            )
+            module.out_proj.weight.assign(jt.array(identity))
+
+            query = jt.zeros((3, 1, 4), dtype="float32")
+            value_np = np.array(
+                [
+                    [[1.0, 2.0, 3.0, 4.0]],
+                    [[5.0, 6.0, 7.0, 8.0]],
+                    [[9.0, 10.0, 11.0, 12.0]],
+                ],
+                dtype="float32",
+            )
+            output, weights = module(
+                query,
+                query,
+                jt.array(value_np),
+                attn_mask=jt.triu(jt.ones((3, 3), dtype="bool"), diagonal=1),
+                is_causal=True,
+            )
+            expected = np.stack([value_np[: index + 1].mean(axis=0) for index in range(3)])
+            actual, actual_weights = jt.fetch_sync([output, weights])
+
+        np.testing.assert_allclose(actual, expected, atol=1e-6, rtol=1e-6)
+        np.testing.assert_array_equal(np.triu(actual_weights, k=1), np.zeros_like(actual_weights))
+        with self.assertRaisesRegex(AssertionError, "embedding dimension"):
+            module(
+                jt.zeros((2, 1, 3)),
+                jt.zeros((2, 1, 3)),
+                jt.zeros((2, 1, 3)),
+            )
+
     def test_layout_lengths_and_cumulative_cache(self):
         lengths = attention.sequence_lengths([slice(0, 2), (2, 5), slice(5, 5)])
         self.assertEqual(lengths, (2, 3, 0))
@@ -112,6 +440,49 @@ class TestAttentionCapabilities(unittest.TestCase):
                     varlen_func=backend,
                 )
         self.assertEqual(backend_calls, [])
+
+
+class TestEmbeddingCapabilities(unittest.TestCase):
+    def test_module_honors_functional_max_norm_in_place_without_norm_gradient(self):
+        weight = np.array([[3.0, 4.0], [0.0, 2.0], [5.0, 12.0]], dtype="float32")
+        with jt.flag_scope(use_cuda=0):
+            module = nn.Embedding(3, 2, max_norm=1.0, _weight=jt.array(weight))
+            output = module(jt.array([0, 2], dtype="int32"))
+            gradient = jt.grad(output.sum(), module.weight)
+            actual, actual_weight, actual_gradient = jt.fetch_sync(
+                [output, module.weight, gradient]
+            )
+        expected = np.array([[0.6, 0.8], [5.0 / 13.0, 12.0 / 13.0]])
+        np.testing.assert_allclose(actual, expected, atol=1e-6, rtol=1e-6)
+        np.testing.assert_allclose(
+            actual_weight,
+            np.array([[0.6, 0.8], [0.0, 2.0], [5.0 / 13.0, 12.0 / 13.0]]),
+            atol=1e-6,
+            rtol=1e-6,
+        )
+        np.testing.assert_array_equal(
+            actual_gradient,
+            np.array([[1.0, 1.0], [0.0, 0.0], [1.0, 1.0]]),
+        )
+
+    def test_max_norm_does_not_modify_rows_at_the_boundary(self):
+        weight = np.array([[0.6, 0.8], [0.0, 2.0]], dtype="float32")
+        with jt.flag_scope(use_cuda=0):
+            module = nn.Embedding(2, 2, max_norm=1.0, _weight=jt.array(weight))
+            output = module(jt.array([0], dtype="int32"))
+            actual, actual_weight = jt.fetch_sync([output, module.weight])
+        np.testing.assert_array_equal(actual, weight[:1])
+        np.testing.assert_array_equal(actual_weight[0], weight[0])
+
+    def test_module_normalizes_negative_padding_index(self):
+        with jt.flag_scope(use_cuda=0):
+            module = nn.Embedding(3, 2, padding_idx=-1)
+            self.assertEqual(module.padding_idx, 2)
+            np.testing.assert_array_equal(module.weight[2].numpy(), [0.0, 0.0])
+        for padding_idx in (3, -4):
+            with self.subTest(padding_idx=padding_idx):
+                with self.assertRaisesRegex(AssertionError, "within num_embeddings"):
+                    nn.Embedding(3, 2, padding_idx=padding_idx)
 
 
 class TestDualGridCapabilities(unittest.TestCase):

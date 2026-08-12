@@ -1,10 +1,49 @@
 """Shared pytest policy for the repository-only test suite."""
 
+import importlib
 import os
 from pathlib import Path
 import sys
 
 import pytest
+
+
+def _preload_real_torch():
+    """Claim the Torch namespace before Jittor composition in oracle sessions."""
+    raw_site = os.environ.get("REAL_TORCH_SITE", "").strip()
+    if not raw_site:
+        return
+    site = Path(raw_site).expanduser().resolve()
+    if not site.is_dir():
+        raise pytest.UsageError("REAL_TORCH_SITE is not a directory: {}".format(site))
+    if "jittor" in sys.modules:
+        raise pytest.UsageError(
+            "REAL_TORCH_SITE must be configured before Jittor is imported"
+        )
+    site_text = str(site)
+    sys.path[:] = [path for path in sys.path if path != site_text]
+    sys.path.insert(0, site_text)
+    try:
+        torch = importlib.import_module("torch")
+    except Exception as error:
+        raise pytest.UsageError(
+            "failed to preload real Torch from {}: {}".format(site, error)
+        )
+    finally:
+        sys.path[:] = [path for path in sys.path if path != site_text]
+        sys.path.append(site_text)
+    origin = Path(getattr(torch, "__file__", "")).resolve()
+    if (
+        getattr(torch, "__name__", None) != "torch"
+        or site not in origin.parents
+        or hasattr(torch, "_torch_compat_install_context")
+    ):
+        raise pytest.UsageError(
+            "REAL_TORCH_SITE did not provide independent Torch: {}".format(origin)
+        )
+
+
+_preload_real_torch()
 
 
 TEST_ROOT = Path(__file__).resolve().parent

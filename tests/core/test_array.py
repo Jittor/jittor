@@ -131,7 +131,9 @@ class TestArray(unittest.TestCase):
 
     def test_array_dtype(self):
         a = jt.array([1,2,3], dtype=jt.NanoString("float32"))
+        assert a.dtype == "float32"
         a = jt.array([1,2,3], dtype=jt.float32)
+        assert a.dtype == "float32"
 
     def test_var(self):
         a = jt.Var([1,2,3])

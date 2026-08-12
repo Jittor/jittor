@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -190,20 +191,49 @@ def test_network_access_is_explicitly_marked():
     assert "pytest.mark.network" in functions["test_resnet_infer_with_feature"]
 
 
-def test_optional_dependency_probe_only_checks_top_level_packages():
+def test_optional_dependency_probe_only_checks_top_level_packages(monkeypatch):
     from _helpers import torch_runtime
 
+    monkeypatch.delenv("REAL_TORCH_SITE", raising=False)
     checked = []
+    independent = SimpleNamespace(__name__="torch")
 
     def fake_find_spec(module_name):
         checked.append(module_name)
         return object()
 
-    with mock.patch.object(torch_runtime.importlib.util, "find_spec", fake_find_spec):
-        assert torch_runtime.modules_available(
-            "torch.nn.functional", "torchvision.models", "torch.autograd"
-        )
-    assert set(checked) == {"torch", "torchvision"}
+    with mock.patch.dict(torch_runtime.sys.modules, {"torch": independent}):
+        with mock.patch.object(torch_runtime.importlib.util, "find_spec", fake_find_spec):
+            assert torch_runtime.modules_available(
+                "torch.nn.functional", "torchvision.models", "torch.autograd"
+            )
+    assert checked == ["torchvision"]
+
+
+def test_optional_dependency_probe_accepts_preloaded_independent_torch(monkeypatch):
+    from _helpers import torch_runtime
+
+    monkeypatch.delenv("REAL_TORCH_SITE", raising=False)
+    independent = SimpleNamespace(__name__="torch")
+    with mock.patch.dict(torch_runtime.sys.modules, {"torch": independent}):
+        assert torch_runtime.modules_available("torch.nn")
+
+
+def test_optional_dependency_probe_rejects_loaded_jittor_torch_alias(monkeypatch):
+    from _helpers import torch_runtime
+
+    monkeypatch.delenv("REAL_TORCH_SITE", raising=False)
+    alias = SimpleNamespace(__name__="jittor")
+    with mock.patch.dict(torch_runtime.sys.modules, {"torch": alias}):
+        assert not torch_runtime.modules_available("torch.nn")
+
+
+def test_optimizer_roundtrip_helper_is_not_collected_as_a_test():
+    path = TEST_ROOT / "optim" / "test_optimizer_save_load.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    module_tests = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+    assert "test_optim" not in module_tests
+    assert "_run_optimizer_roundtrip" in module_tests
 
 
 def test_legacy_packaged_runner_is_absent():

@@ -1,6 +1,6 @@
 """Functional normalization implementations exposed through :mod:`jittor.nn`."""
 
-from functools import lru_cache
+from functools import lru_cache, wraps
 
 import jittor as jt
 
@@ -100,4 +100,49 @@ def group_norm(x,
         weight = weight.reshape([1, C] + [1]*(len(output_shape)-2))
     if isinstance(bias, jt.Var):
         bias = bias.reshape([1, C] + [1]*(len(output_shape)-2))
+    return xhat * weight + bias
+
+
+def fp32_guard(func):
+    @wraps(func)
+    def wrapper(*args, **kw):
+        if jt.flags.amp_level == 0:
+            return func(*args, **kw)
+        new_args = []
+        need_cast = False
+        dtype = None
+        for arg in args:
+            if isinstance(arg, jt.Var) and arg.dtype in ("float16", "bfloat16"):
+                dtype = arg.dtype
+                new_args.append(arg.float32())
+                need_cast = True
+            else:
+                new_args.append(arg)
+        with jt.flag_scope(amp_level=0):
+            result = func(*new_args, **kw)
+            if need_cast and isinstance(result, jt.Var) and result.dtype == "float32":
+                result = result.cast(dtype)
+        return result
+
+    return wrapper
+
+
+@fp32_guard
+def layer_norm(
+    x,
+    normalized_shape,
+    weight=1,
+    bias=0,
+    eps: float = 1e-5,
+    elementwise_affine: bool = True,
+):
+    dims = [-i for i in range(len(normalized_shape), 0, -1)]
+    weight = 1.0 if weight is None else weight
+    bias = 0.0 if bias is None else bias
+    fast = jt.nn._layer_norm_no_grad_cuda(
+        x, tuple(normalized_shape), weight, bias, eps
+    )
+    if fast is not None:
+        return fast
+    xhat = jt.nn._ln_normalize(x, dims, eps)
     return xhat * weight + bias

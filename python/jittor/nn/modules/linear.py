@@ -5,6 +5,8 @@ import math
 import jittor as jt
 from jittor import Module, init
 
+from ..functional.linear import linear as linear
+
 
 class Linear(Module):
     def __init__(self, in_features, out_features, bias=True):
@@ -40,11 +42,3 @@ class Conv1d_sp(Linear):
         x = super().execute(x)
         x = x.transpose(0, 2, 1)
         return x
-
-
-def linear(x, weight, bias=None):
-    """Return ``x * weight.T`` with an optional bias."""
-    x = jt.nn.matmul_transpose(x, weight)
-    if bias is not None:
-        return x + bias
-    return x

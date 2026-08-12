@@ -30,7 +30,10 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
     if reduction == 'sum':
         return loss.sum()
     elif reduction == 'mean':
-        return loss.sum() / jt.maximum(target_weight.sum(), 1e-8)
+        # Torch divides by the sum of selected class weights. That denominator
+        # may legitimately be negative; clamping it to a positive epsilon
+        # changes both the sign and scale of the result.
+        return loss.sum() / target_weight.sum()
     else:
         return loss.reshape(target_shape)
 

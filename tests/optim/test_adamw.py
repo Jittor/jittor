@@ -3,12 +3,21 @@ import jittor as jt
 import random
 import numpy as np
 import unittest
+from _helpers.torch_runtime import import_torch_modules, modules_available
+
+skip_this_test = not modules_available("torch")
+torch = None
 
 
+def setUpModule():
+    global torch
+    if not skip_this_test:
+        (torch,) = import_torch_modules("torch")
+
+
+@unittest.skipIf(skip_this_test, "No independent Torch found")
 class TestAdamw(unittest.TestCase):
     def test(self):
-        import torch
-
         LR = 0.01
         BATCH_SIZE = 32
         EPOCH = 12
@@ -86,4 +95,3 @@ class TestAdamw(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-    

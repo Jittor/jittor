@@ -18,10 +18,10 @@ and K, V as positional float Vars, so all three are differentiated (the loss is
 genuinely differentiable w.r.t. each). ``is_causal`` / ``scale`` are non-tensor and
 passed as kwargs, so they are held fixed.
 
-Op resolution surprise: ``jittor.nn.functional.scaled_dot_product_attention`` is the
-fallback installed by ``torch_compat`` (jittor has no native functional SDPA; the
-``jittor.attention`` module-level function is *not* re-exported onto ``nn.functional``).
-That fallback masks with a large finite ``-1e30`` rather than ``-inf``; in float64 the
+Op resolution: ``jittor.nn.functional.scaled_dot_product_attention`` is the canonical
+native SDPA. The Torch compatibility installer wraps that function only to select an
+optional flash backend and expand grouped-query heads before delegating to it. The
+native implementation masks with a large finite ``-1e30`` rather than ``-inf``; in float64 the
 masked softmax entries underflow to exactly 0.0, so the ``-inf`` numpy reference here
 matches it to tolerance. The mask is a constant additive bias (independent of Q/K/V),
 so it is held fixed under finite differencing -- backward is smooth and twice
@@ -111,8 +111,8 @@ def sample_sdpa_causal(op_info, device, dtype, requires_grad):
 
 # --------------------------------------------------------------------- op_db
 
-# Resolve the op through nn.functional (the torch_compat-installed fallback) the same
-# way core_ops binds F.layer_norm; a thin lambda keeps the binding eager and explicit.
+# Resolve the canonical op through nn.functional the same way core_ops binds
+# F.layer_norm; a thin lambda keeps the binding eager and explicit.
 def _sdpa_op(query, key, value, attn_mask=None, dropout_p=0.0,
              is_causal=False, scale=None):
     return F.scaled_dot_product_attention(

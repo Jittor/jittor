@@ -4,8 +4,11 @@ from abc import abstractmethod as abc_abstractmethod
 import ast
 import importlib
 import inspect
+import os
 import pickle
 from pathlib import Path
+import subprocess
+import sys
 import types as python_types
 import unittest
 
@@ -23,7 +26,7 @@ from jittor.nn.modules import convolution as convolution_layers
 from jittor.nn.modules import convolution3d as convolution_3d_layers
 from jittor.nn.modules import convolution_transpose as convolution_transpose_layers
 from jittor.nn.modules import depthwise
-from jittor.nn.modules import linear
+from jittor.nn.modules import linear as linear_layers
 from jittor.nn.modules import padding
 from jittor.nn.modules import pooling
 from jittor.nn.modules import recurrent as recurrent_layers
@@ -32,13 +35,64 @@ from jittor.nn.modules import recurrent_cells
 
 
 softmax_module = importlib.import_module("jittor.nn.functional.softmax")
+complex_ops = importlib.import_module("jittor.nn.functional.complex")
+attention = importlib.import_module("jittor.nn.attention")
+attention_function = importlib.import_module("jittor.nn.functional.attention")
+multihead_attention = importlib.import_module(
+    "jittor.nn.functional.multihead_attention"
+)
+dual_grid = importlib.import_module("jittor.nn.dual_grid")
+legacy_complex = importlib.import_module("jittor.nn.legacy_complex")
+rms_norm_cuda = importlib.import_module("jittor.nn.rms_norm_cuda")
+rope_cuda = importlib.import_module("jittor.nn.rope_cuda")
+sparse = importlib.import_module("jittor.nn.sparse")
+autograd_ops = importlib.import_module("jittor.nn.functional.autograd")
+dropout_ops = importlib.import_module("jittor.nn.functional.dropout")
+embedding_ops = importlib.import_module("jittor.nn.functional.embedding")
+fold_ops = importlib.import_module("jittor.nn.functional.fold")
+grid_ops = importlib.import_module("jittor.nn.functional.grid")
+interpolation = importlib.import_module("jittor.nn.functional.interpolation")
+linear_function = importlib.import_module("jittor.nn.functional.linear")
+matrix = importlib.import_module("jittor.nn.functional.matrix")
+padding_function = importlib.import_module("jittor.nn.functional.padding")
+pooling_function = importlib.import_module("jittor.nn.functional.pooling")
+shape_ops = importlib.import_module("jittor.nn.functional.shape")
+tensor_ops = importlib.import_module("jittor.nn.functional.tensor")
+activation_layers = importlib.import_module("jittor.nn.modules.activation")
+attention_layers = importlib.import_module("jittor.nn.modules.attention")
+bilinear_layers = importlib.import_module("jittor.nn.modules.bilinear")
+container_layers = importlib.import_module("jittor.nn.modules.container")
+dropout_layers = importlib.import_module("jittor.nn.modules.dropout")
+embedding_layers = importlib.import_module("jittor.nn.modules.embedding")
+fold_layers = importlib.import_module("jittor.nn.modules.fold")
+loss_layers = importlib.import_module("jittor.nn.modules.loss")
+normalization_layers = importlib.import_module("jittor.nn.modules.normalization")
+parameter_layers = importlib.import_module("jittor.nn.modules.parameter")
+shape_layers = importlib.import_module("jittor.nn.modules.shape")
+upsampling = importlib.import_module("jittor.nn.modules.upsampling")
 
 
 _IMPLEMENTATION_SYMBOLS = (
     (activations, (
         "relu", "leaky_relu", "relu6", "elu", "sign", "gelu", "sigmoid",
         "silu", "prelu", "hardswish", "hardsigmoid", "rrelu",
+        "get_init_var_rand", "softplus", "hardtanh", "mish",
     )),
+    (activation_layers, (
+        "RReLU", "Hardswish", "Hardsigmoid", "ELU", "PReLU", "GLU",
+        "Softsign", "Tanh", "Sigmoid", "Softplus", "Mish", "ReLU",
+        "LeakyReLU", "ReLU6", "Softmax", "GELU", "SiLU",
+    )),
+    (attention, (
+        "cumulative_sequence_lengths", "sequence_lengths",
+        "varlen_scaled_dot_product_attention",
+    )),
+    (attention_function, ("scaled_dot_product_attention",)),
+    (attention_layers, ("MultiheadAttention",)),
+    (autograd_ops, ("backward",)),
+    (bilinear_layers, ("Bilinear",)),
+    (complex_ops, ("polar", "view_as_complex", "view_as_real")),
+    (container_layers, ("Sequential",)),
     (convolution, ("conv2d", "conv3d", "conv1d")),
     (convolution_3d_layers, ("Conv3d",)),
     (convolution_cudnn, (
@@ -52,25 +106,57 @@ _IMPLEMENTATION_SYMBOLS = (
     (convolution_transpose_layers, ("ConvTranspose", "ConvTranspose3d")),
     (layer_norm_cuda, ("_layer_norm_no_grad_cuda",)),
     (depthwise, ("DepthwiseConv",)),
-    (linear, ("Linear", "linear", "Conv1d_sp")),
+    (dropout_ops, ("dropout", "dropout2d", "droppath")),
+    (dropout_layers, ("Dropout", "Dropout2d", "DropPath")),
+    (dual_grid, ("finalize_dual_grid_mesh_cuda",)),
+    (embedding_ops, ("embedding", "embedding_bag")),
+    (embedding_layers, ("Embedding", "EmbeddingBag")),
+    (fold_ops, ("fold", "unfold")),
+    (fold_layers, ("Fold", "Unfold")),
+    (grid_ops, (
+        "affine_grid", "affine_grid_generator_4D", "affine_grid_generator_5D",
+        "clip_coordinates", "grid_sample", "grid_sample_v0", "grid_sampler",
+        "grid_sampler_2d", "grid_sampler_3d", "grid_sampler_compute_source_index",
+        "grid_sampler_unnormalize", "linspace_from_neg_one", "make_base_grid_4D",
+        "make_base_grid_5D", "reflect_coordinates",
+    )),
+    (interpolation, ("interpolate", "resize")),
+    (legacy_complex, ("ComplexNumber",)),
+    (linear_function, ("linear",)),
+    (linear_layers, ("Linear", "Conv1d_sp")),
     (losses, (
         "cross_entropy_loss", "mse_loss", "bce_loss", "l1_loss",
         "smooth_l1_loss", "nll_loss", "binary_cross_entropy_with_logits",
     )),
+    (loss_layers, (
+        "BCELoss", "BCEWithLogitsLoss", "CrossEntropyLoss", "KLDivLoss",
+        "L1Loss", "MSELoss",
+    )),
+    (matrix, (
+        "baddbmm", "bilinear", "bmm", "bmm_transpose", "matmul",
+        "matmul_transpose",
+    )),
+    (multihead_attention, ("multi_head_attention_forward",)),
     (normalization, (
         "batch_norm", "instance_norm", "_ln_function_cls", "_ln_normalize",
-        "group_norm",
+        "group_norm", "fp32_guard", "layer_norm",
     )),
+    (normalization_layers, ("BatchNorm", "InstanceNorm", "LayerNorm", "GroupNorm")),
+    (padding_function, ("pad",)),
     (padding, (
-        "pad", "ReflectionPad2d", "ZeroPad2d", "ConstantPad2d",
+        "ReflectionPad2d", "ZeroPad2d", "ConstantPad2d",
         "ConstantPad1d", "ConstantPad3d", "ReplicationPad2d",
     )),
-    (pooling, (
-        "adaptive_avg_pool2d", "AvgPool2d", "avg_pool2d", "AdaptiveAvgPool2d",
-    )),
+    (parameter_layers, ("Parameter", "ParameterList")),
+    (pooling_function, ("adaptive_avg_pool2d", "avg_pool2d")),
+    (pooling, ("AvgPool2d", "AdaptiveAvgPool2d")),
     (recurrent_base, ("RNNBase",)),
     (recurrent_cells, ("LSTMCell", "RNNCell", "GRUCell")),
     (recurrent_layers, ("RNN", "LSTM", "GRU")),
+    (rms_norm_cuda, ("multihead_rms_norm_cuda",)),
+    (rope_cuda, ("partial_rotary_embedding_cuda",)),
+    (shape_ops, ("identity",)),
+    (shape_layers, ("Flatten", "Identity", "PixelShuffle")),
     (softmax_module, (
         "_get_softmax_dim", "softmax", "log_softmax", "log_sigmoid",
         "logsumexp",
@@ -78,13 +164,83 @@ _IMPLEMENTATION_SYMBOLS = (
     (vector, (
         "glu", "normalize", "cosine_similarity", "pairwise_distance", "softsign",
     )),
+    (sparse, ("build_submanifold_conv3d_neighbors", "submanifold_conv3d")),
+    (tensor_ops, ("kron", "one_hot", "tensordot")),
+    (upsampling, ("Resize", "Upsample", "UpsamplingBilinear2d", "UpsamplingNearest2d")),
 )
-_IMPLEMENTATION_MODULES = tuple(module for module, _ in _IMPLEMENTATION_SYMBOLS)
+_IMPLEMENTATION_MODULES = tuple(dict.fromkeys(
+    module for module, _ in _IMPLEMENTATION_SYMBOLS
+))
 _ACL_PATCHED_SYMBOLS = {"Conv", "conv2d", "relu", "leaky_relu", "softmax"}
+_COMPAT_PATCHED_SYMBOLS = {
+    "Parameter", "interpolate", "linear", "scaled_dot_product_attention",
+    "softmax",
+}
+_RUNTIME_PATCHED_SYMBOLS = _ACL_PATCHED_SYMBOLS | _COMPAT_PATCHED_SYMBOLS
+_FUNCTIONAL_API = (
+    "adaptive_avg_pool2d", "affine_grid", "affine_grid_generator_4D",
+    "affine_grid_generator_5D", "avg_pool2d", "backward", "baddbmm",
+    "batch_norm", "bce_loss", "bilinear", "binary_cross_entropy_with_logits",
+    "bmm", "bmm_transpose", "build_submanifold_conv3d_neighbors",
+    "clip_coordinates", "conv", "conv1d", "conv2d", "conv3d",
+    "conv_transpose", "conv_transpose1d", "conv_transpose2d",
+    "conv_transpose3d", "cosine_similarity", "cross_entropy_loss",
+    "cumulative_sequence_lengths", "dropout", "dropout2d", "droppath", "elu",
+    "embedding", "embedding_bag", "finalize_dual_grid_mesh_cuda", "flatten",
+    "fold", "fp32_guard", "gelu", "get_init_var_rand", "glu", "grid_sample",
+    "grid_sample_v0", "grid_sampler", "grid_sampler_2d", "grid_sampler_3d",
+    "grid_sampler_compute_source_index", "grid_sampler_unnormalize", "group_norm",
+    "hardsigmoid", "hardswish", "hardtanh", "identity", "instance_norm",
+    "interpolate", "kron", "l1_loss", "layer_norm", "leaky_relu", "linear",
+    "linspace_from_neg_one", "log_sigmoid", "log_softmax", "logsumexp",
+    "make_base_grid_4D", "make_base_grid_5D", "matmul", "matmul_transpose",
+    "max_pool2d", "max_pool3d", "mish", "mse_loss",
+    "multi_head_attention_forward", "multihead_rms_norm_cuda", "nll_loss",
+    "normalize", "one_hot", "pad", "pairwise_distance",
+    "partial_rotary_embedding_cuda", "polar", "pool", "pool2d", "pool3d",
+    "prelu", "reflect_coordinates", "relu", "relu6", "resize", "rrelu",
+    "scaled_dot_product_attention", "sequence_lengths", "sigmoid", "sign",
+    "silu", "skip_init",
+    "smooth_l1_loss", "softmax", "softplus", "softsign",
+    "submanifold_conv3d", "tensordot", "unfold", "upsample",
+    "varlen_scaled_dot_product_attention", "view_as_complex", "view_as_real",
+)
+_MODULE_API = (
+    "AdaptiveAvgPool1d", "AdaptiveAvgPool2d", "AdaptiveAvgPool3d",
+    "AdaptiveMaxPool2d", "AdaptiveMaxPool3d", "AvgPool1d", "AvgPool2d",
+    "AvgPool3d", "BCELoss", "BCEWithLogitsLoss", "BatchNorm", "BatchNorm1d",
+    "BatchNorm2d", "BatchNorm3d", "Bilinear", "CTCLoss", "ComplexNumber",
+    "ConstantPad1d", "ConstantPad2d", "ConstantPad3d", "Conv", "Conv1d",
+    "Conv1d_sp", "Conv2d", "Conv3d", "ConvTranspose", "ConvTranspose2d",
+    "ConvTranspose3d", "CrossEntropyLoss", "DepthwiseConv", "DropPath",
+    "Dropout", "Dropout2d", "ELU", "Embedding", "EmbeddingBag", "Flatten",
+    "Fold", "GELU", "GLU", "GRU", "GRUCell", "GroupNorm", "Hardsigmoid",
+    "Hardswish", "Identity", "InstanceNorm", "InstanceNorm1d", "InstanceNorm2d",
+    "InstanceNorm3d", "KLDivLoss", "L1Loss", "LSTM", "LSTMCell", "LayerNorm",
+    "LayerNorm1d", "LayerNorm2d", "LayerNorm3d", "LeakyReLU", "Leaky_relu",
+    "Linear", "MSELoss", "MaxPool1d", "MaxPool2d", "MaxPool3d", "MaxUnpool2d",
+    "MaxUnpool3d", "Mish", "Module", "ModuleList", "MultiheadAttention",
+    "PReLU", "Parameter",
+    "ParameterDict", "ParameterList", "PixelShuffle", "Pool", "Pool3d", "RNN",
+    "RNNBase", "RNNCell", "RReLU", "ReLU", "ReLU6", "ReflectionPad2d", "Relu",
+    "ReplicationPad2d", "Resize", "Sequential", "SiLU", "Sigmoid", "Softmax",
+    "Softplus", "Softsign", "Tanh", "Unfold", "Upsample",
+    "UpsamplingBilinear2d", "UpsamplingNearest2d", "ZeroPad2d",
+)
+_ACCIDENTAL_EXPORTS = {
+    "abstractmethod", "deepcopy", "opt_grad", "OrderedDict", "partial",
+    "Optimizer", "SGD", "RMSprop", "Adam", "AdamW", "Adan", "LRScheduler",
+    "LambdaLR",
+}
 
 
 def _is_acl_wrapper(value):
     return getattr(value, "__module__", "").startswith("jittor.extern.acl")
+
+
+def _is_runtime_wrapper(value):
+    module = getattr(value, "__module__", "")
+    return _is_acl_wrapper(value) or module.startswith("jittor.compat.torch")
 
 
 def _moved_symbols():
@@ -113,14 +269,20 @@ class TestNNStructure(unittest.TestCase):
         self.assertIs(jittor.nn, nn)
         self.assertIs(importlib.import_module("jittor.nn"), nn)
         self.assertIs(nn.Module, jittor.Module)
+        self.assertIs(nn.flatten, jittor.flatten)
+        self.assertIs(nn.functional.flatten, jittor.flatten)
+        self.assertEqual(str(inspect.signature(nn.skip_init)), "(module_cls, *args, **kw)")
+        imag_unit = complex_ops._complex64_imag_unit()
+        self.assertIs(nn._complex64_imag_unit_cache, imag_unit)
+        self.assertIs(complex_ops._complex64_imag_unit_cache, imag_unit)
 
     def test_facade_reexports_physical_implementations(self):
         for implementation in _moved_symbols():
             name = implementation.__name__
             public = getattr(nn, name)
             with self.subTest(name=name):
-                if name in _ACL_PATCHED_SYMBOLS and public is not implementation:
-                    self.assertTrue(_is_acl_wrapper(public))
+                if name in _RUNTIME_PATCHED_SYMBOLS and public is not implementation:
+                    self.assertTrue(_is_runtime_wrapper(public))
                 else:
                     self.assertIs(public, implementation)
 
@@ -131,10 +293,10 @@ class TestNNStructure(unittest.TestCase):
                 self.assertEqual(implementation.__module__, implementation_module.__name__)
                 public = getattr(nn, implementation.__name__)
                 if (
-                    implementation.__name__ in _ACL_PATCHED_SYMBOLS
+                    implementation.__name__ in _RUNTIME_PATCHED_SYMBOLS
                     and public is not implementation
                 ):
-                    self.assertTrue(_is_acl_wrapper(public))
+                    self.assertTrue(_is_runtime_wrapper(public))
                 else:
                     self.assertIs(pickle.loads(pickle.dumps(implementation)), public)
                 legacy_pickle = (
@@ -148,12 +310,33 @@ class TestNNStructure(unittest.TestCase):
         self.assertIs(pickle.loads(depthwise_protocol2), depthwise.DepthwiseConv)
 
     def test_linear_and_depthwise_module_contracts(self):
+        self.assertIs(linear_layers.linear, linear_function.linear)
+        self.assertIs(padding.pad, padding_function.pad)
+        self.assertIs(pooling.avg_pool2d, pooling_function.avg_pool2d)
+        self.assertIs(
+            pooling.adaptive_avg_pool2d,
+            pooling_function.adaptive_avg_pool2d,
+        )
+        for module_name, function_name in (
+            ("jittor.nn.modules.linear", "linear"),
+            ("jittor.nn.modules.padding", "pad"),
+            ("jittor.nn.modules.pooling", "avg_pool2d"),
+            ("jittor.nn.modules.pooling", "adaptive_avg_pool2d"),
+        ):
+            legacy_pickle = (
+                "c{}\n{}\n.".format(module_name, function_name).encode("ascii")
+            )
+            self.assertIs(
+                pickle.loads(legacy_pickle),
+                getattr(importlib.import_module(module_name), function_name),
+            )
+
         self.assertEqual(
-            str(inspect.signature(linear.Conv1d_sp)),
+            str(inspect.signature(linear_layers.Conv1d_sp)),
             "(inchannels, outchannels, kernel_size=1, bias=True)",
         )
-        self.assertIs(linear.Conv1d_sp.__mro__[1], linear.Linear)
-        conv1d = linear.Conv1d_sp(3, 2)
+        self.assertIs(linear_layers.Conv1d_sp.__mro__[1], linear_layers.Linear)
+        conv1d = linear_layers.Conv1d_sp(3, 2)
         self.assertEqual(
             tuple(vars(conv1d)),
             ("in_features", "out_features", "weight", "bias"),
@@ -239,6 +422,191 @@ class TestNNStructure(unittest.TestCase):
         finally:
             nn._ln_function_cls = original_factory
 
+    def test_matrix_and_complex_bridges_dispatch_through_public_facade(self):
+        class Marker:
+            def reshape(self, shape):
+                self.shape = shape
+                return self
+
+        marker = Marker()
+        original_matmul = nn.matmul
+        nn.matmul = lambda left, right: marker
+        try:
+            left = python_types.SimpleNamespace(
+                shape=[2, 3, 4],
+                ndim=3,
+                reshape=lambda shape: "flattened",
+            )
+            right = python_types.SimpleNamespace(shape=[4, 5], ndim=2)
+            self.assertIs(matrix.matmul(left, right), marker)
+        finally:
+            nn.matmul = original_matmul
+
+        original_raw = nn._real2_to_complex64_raw
+        nn._real2_to_complex64_raw = lambda value: marker
+        try:
+            self.assertIs(complex_ops._Real2ToComplex64.execute(None, "pair"), marker)
+        finally:
+            nn._real2_to_complex64_raw = original_raw
+
+        original_type = nn.ComplexNumber
+        original_stack = jittor.stack
+        fake_type = type("FacadeComplex", (), {})
+        nn.ComplexNumber = fake_type
+        jittor.stack = lambda values, dim=-1: (values, dim)
+        try:
+            class Value:
+                def __getitem__(self, key):
+                    return key
+
+            legacy = fake_type()
+            legacy.value = Value()
+            self.assertEqual(complex_ops.view_as_real(legacy)[1], -1)
+        finally:
+            jittor.stack = original_stack
+            nn.ComplexNumber = original_type
+
+    def test_attention_has_one_canonical_implementation_and_legacy_facade(self):
+        legacy = importlib.import_module("jittor.attention")
+        self.assertEqual(
+            tuple(legacy.__all__),
+            (
+                "MultiheadAttention",
+                "baddbmm",
+                "multi_head_attention_forward",
+                "pad",
+                "scaled_dot_product_attention",
+            ),
+        )
+        for name in legacy.__all__:
+            with self.subTest(name=name):
+                self.assertIs(getattr(legacy, name), getattr(nn, name))
+
+        self.assertIs(nn.MultiheadAttention, attention_layers.MultiheadAttention)
+        self.assertIs(
+            nn.multi_head_attention_forward,
+            multihead_attention.multi_head_attention_forward,
+        )
+        self.assertIs(
+            nn.scaled_dot_product_attention,
+            attention_function.scaled_dot_product_attention,
+        )
+        self.assertIs(
+            pickle.loads(b"cjittor.attention\nMultiheadAttention\n."),
+            nn.MultiheadAttention,
+        )
+
+        repo_root = Path(nn.__file__).resolve().parents[2]
+        expected_definitions = {
+            "MultiheadAttention": {
+                repo_root / "jittor" / "nn" / "modules" / "attention.py"
+            },
+            "multi_head_attention_forward": {
+                repo_root
+                / "jittor"
+                / "nn"
+                / "functional"
+                / "multihead_attention.py"
+            },
+            "scaled_dot_product_attention": {
+                repo_root / "jittor" / "nn" / "functional" / "attention.py",
+                repo_root / "jittor" / "compat" / "torch" / "installers" / "nn.py",
+            },
+        }
+        actual_definitions = {name: set() for name in expected_definitions}
+        for path in (repo_root / "jittor").rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                    if node.name in actual_definitions:
+                        actual_definitions[node.name].add(path)
+        self.assertEqual(actual_definitions, expected_definitions)
+
+        legacy_path = Path(legacy.__file__).resolve()
+        legacy_tree = ast.parse(
+            legacy_path.read_text(encoding="utf-8"), filename=str(legacy_path)
+        )
+        self.assertFalse(
+            any(
+                isinstance(node, (ast.FunctionDef, ast.ClassDef))
+                for node in ast.walk(legacy_tree)
+            )
+        )
+        installer_source = (
+            repo_root / "jittor" / "compat" / "torch" / "installers" / "nn.py"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("class MultiheadAttention", installer_source)
+        self.assertIn(
+            "return _native_scaled_dot_product_attention(", installer_source
+        )
+
+    def test_stateful_leaf_modules_dispatch_through_public_functions(self):
+        marker = object()
+        prelu_calls = []
+        original_prelu = nn.prelu
+        nn.prelu = lambda *args: prelu_calls.append(args) or marker
+        try:
+            result = activation_layers.PReLU.execute(
+                python_types.SimpleNamespace(weight="slope"), "input"
+            )
+        finally:
+            nn.prelu = original_prelu
+        self.assertIs(result, marker)
+        self.assertEqual(prelu_calls, [("input", "slope")])
+
+        embedding_calls = []
+        original_embedding = nn.embedding
+        nn.embedding = lambda *args: embedding_calls.append(args) or marker
+        try:
+            result = embedding_layers.Embedding.execute(
+                python_types.SimpleNamespace(
+                    weight="table",
+                    padding_idx=3,
+                    max_norm=2.5,
+                    norm_type=1.5,
+                    scale_grad_by_freq=False,
+                    sparse=False,
+                ),
+                "indices",
+            )
+        finally:
+            nn.embedding = original_embedding
+        self.assertIs(result, marker)
+        self.assertEqual(
+            embedding_calls,
+            [("indices", "table", 3, 2.5, 1.5, False, False)],
+        )
+
+    def test_activation_modules_are_physical_leaf_classes(self):
+        for name in (
+            "ReLU",
+            "LeakyReLU",
+            "ReLU6",
+            "Softmax",
+            "GELU",
+            "SiLU",
+        ):
+            cls = getattr(activation_layers, name)
+            with self.subTest(name=name):
+                self.assertIs(getattr(nn, name), cls)
+                self.assertEqual(cls.__module__, activation_layers.__name__)
+                for member_name in ("__init__", "execute", "__str__", "extra_repr"):
+                    self.assertEqual(
+                        getattr(cls, member_name).__module__,
+                        activation_layers.__name__,
+                    )
+                self.assertEqual(
+                    Path(inspect.getsourcefile(cls)).resolve(),
+                    Path(activation_layers.__file__).resolve(),
+                )
+                self.assertIs(pickle.loads(pickle.dumps(cls)), cls)
+        self.assertIs(activation_layers.Relu, activation_layers.ReLU)
+        self.assertIs(activation_layers.Leaky_relu, activation_layers.LeakyReLU)
+        self.assertEqual(str(activation_layers.ReLU(1)), "relu(1)")
+        self.assertEqual(str(activation_layers.Softmax(dim=1)), "softmax()")
+        source = Path(activation_layers.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("make_module", source)
+
     def test_normalization_public_contracts_remain_stable(self):
         for name in ("batch_norm", "instance_norm", "layer_norm", "group_norm"):
             with self.subTest(function=name):
@@ -246,12 +614,12 @@ class TestNNStructure(unittest.TestCase):
 
         for cls in (nn.BatchNorm, nn.InstanceNorm, nn.LayerNorm, nn.GroupNorm):
             with self.subTest(cls=cls.__name__):
-                self.assertEqual(cls.__module__, "jittor.nn")
-                self.assertEqual(cls.__init__.__module__, "jittor.nn")
+                self.assertEqual(cls.__module__, normalization_layers.__name__)
+                self.assertEqual(cls.__init__.__module__, normalization_layers.__name__)
                 if cls is nn.LayerNorm and _is_acl_wrapper(cls.execute):
                     pass
                 else:
-                    self.assertEqual(cls.execute.__module__, "jittor.nn")
+                    self.assertEqual(cls.execute.__module__, normalization_layers.__name__)
                 self.assertIs(pickle.loads(pickle.dumps(cls)), cls)
 
         cached_cls = nn._ln_function_cls((-1,), 1e-5)
@@ -707,12 +1075,12 @@ class TestNNStructure(unittest.TestCase):
             ),
         )
         for name, signature in function_signatures:
-            implementation = getattr(pooling, name)
+            implementation = getattr(pooling_function, name)
             with self.subTest(function=name):
                 self.assertIs(getattr(nn, name), implementation)
                 self.assertIs(getattr(nn.functional, name), implementation)
                 self.assertEqual(str(inspect.signature(implementation)), signature)
-                self.assertEqual(implementation.__module__, pooling.__name__)
+                self.assertEqual(implementation.__module__, pooling_function.__name__)
                 self.assertEqual(implementation.__qualname__, name)
                 self.assertIs(pickle.loads(pickle.dumps(implementation)), implementation)
 
@@ -786,43 +1154,49 @@ class TestNNStructure(unittest.TestCase):
         marker = object()
 
         average_calls = []
-        original_average = nn.AvgPool2d
+        original_average = nn.avg_pool2d
 
-        class FakeAverage:
-            def __init__(self, *args):
-                average_calls.append(args)
+        def fake_average(*args):
+            average_calls.append(args)
+            return marker
 
-            def __call__(self, value):
-                average_calls.append(value)
-                return marker
-
-        nn.AvgPool2d = FakeAverage
+        nn.avg_pool2d = fake_average
         try:
             self.assertIs(
-                pooling.avg_pool2d("input", 3, 2, 1, True, False),
+                pooling.AvgPool2d.execute(
+                    python_types.SimpleNamespace(
+                        kernel_size=3,
+                        stride=2,
+                        padding=1,
+                        ceil_mode=True,
+                        count_include_pad=False,
+                    ),
+                    "input",
+                ),
                 marker,
             )
         finally:
-            nn.AvgPool2d = original_average
-        self.assertEqual(average_calls, [(3, 2, 1, True, False), "input"])
+            nn.avg_pool2d = original_average
+        self.assertEqual(average_calls, [("input", 3, 2, 1, True, False)])
 
         adaptive_calls = []
-        original_adaptive = nn.AdaptiveAvgPool2d
+        original_adaptive = nn.adaptive_avg_pool2d
 
-        class FakeAdaptive:
-            def __init__(self, output_size):
-                adaptive_calls.append(output_size)
+        def fake_adaptive(*args):
+            adaptive_calls.append(args)
+            return marker
 
-            def __call__(self, value):
-                adaptive_calls.append(value)
-                return marker
-
-        nn.AdaptiveAvgPool2d = FakeAdaptive
+        nn.adaptive_avg_pool2d = fake_adaptive
         try:
-            self.assertIs(pooling.adaptive_avg_pool2d("input", (2, 3)), marker)
+            self.assertIs(
+                pooling.AdaptiveAvgPool2d.execute(
+                    python_types.SimpleNamespace(output_size=(2, 3)), "input"
+                ),
+                marker,
+            )
         finally:
-            nn.AdaptiveAvgPool2d = original_adaptive
-        self.assertEqual(adaptive_calls, [(2, 3), "input"])
+            nn.adaptive_avg_pool2d = original_adaptive
+        self.assertEqual(adaptive_calls, [("input", (2, 3))])
 
         pair_calls = []
         original_pair = nn._pair
@@ -843,17 +1217,12 @@ class TestNNStructure(unittest.TestCase):
             def __truediv__(self, value):
                 return self
 
-        holder = python_types.SimpleNamespace(
-            kernel_size=2,
-            stride=3,
-            padding=0,
-            ceil_mode=False,
-            count_include_pad=True,
-        )
         fake_tensor = FakeTensor()
         nn._pair = replacement_pair
         try:
-            self.assertIs(pooling.AvgPool2d.execute(holder, fake_tensor), fake_tensor)
+            self.assertIs(
+                pooling_function.avg_pool2d(fake_tensor, 2, 3, 0), fake_tensor
+            )
         finally:
             nn._pair = original_pair
         self.assertEqual(pair_calls, [2, 3, 0])
@@ -895,9 +1264,24 @@ class TestNNStructure(unittest.TestCase):
         self.assertIn("jt.nn.dropout", source)
 
     def test_tensor_method_bindings_remain_on_public_functions(self):
-        for name in ("prelu", "hardswish", "hardsigmoid", "rrelu"):
+        for name in (
+            "matmul", "prelu", "hardswish", "hardsigmoid", "rrelu",
+            "log_sigmoid",
+        ):
             with self.subTest(name=name):
                 self.assertIs(getattr(jittor.Var, name), getattr(nn, name))
+        for name in ("softmax", "log_softmax", "logsumexp", "backward"):
+            with self.subTest(compatibility_override=name):
+                self.assertTrue(callable(getattr(jittor.Var, name)))
+        bindings_source = (
+            Path(nn.__file__).resolve().parent / "_bindings.py"
+        ).read_text(encoding="utf-8")
+        for name in ("softmax", "log_softmax", "logsumexp", "backward"):
+            self.assertIn("jt.Var.%s =" % name, bindings_source)
+        self.assertIs(jittor.Var.__matmul__, nn.matmul)
+        self.assertIs(jittor.Var.real.fget, complex_ops._var_real)
+        self.assertIs(jittor.Var.imag.fget, complex_ops._var_imag)
+        self.assertIs(jittor.Var.angle, complex_ops._var_angle)
 
     def test_key_reexports_and_aliases_remain_stable(self):
         from jittor import depthwise_conv, misc, optim, pool
@@ -909,8 +1293,8 @@ class TestNNStructure(unittest.TestCase):
         self.assertIs(depthwise_conv, depthwise)
         self.assertIs(nn.DepthwiseConv, depthwise.DepthwiseConv)
         self.assertIs(nn.modules.DepthwiseConv, depthwise.DepthwiseConv)
-        self.assertIs(nn.Conv1d_sp, linear.Conv1d_sp)
-        self.assertIs(nn.modules.Conv1d_sp, linear.Conv1d_sp)
+        self.assertIs(nn.Conv1d_sp, linear_layers.Conv1d_sp)
+        self.assertIs(nn.modules.Conv1d_sp, linear_layers.Conv1d_sp)
         self.assertIs(nn.abstractmethod, abc_abstractmethod)
         if nn.Pool is not pool.Pool:
             self.assertTrue(_is_acl_wrapper(nn.Pool))
@@ -926,6 +1310,11 @@ class TestNNStructure(unittest.TestCase):
         self.assertIs(nn.LayerNorm1d, nn.LayerNorm)
         self.assertIs(nn.LayerNorm2d, nn.LayerNorm)
         self.assertIs(nn.LayerNorm3d, nn.LayerNorm)
+        self.assertIs(nn.ModuleList, nn.Sequential)
+        self.assertIs(nn.ParameterDict, nn.ParameterList)
+        self.assertIs(nn.Relu, nn.ReLU)
+        self.assertIs(nn.Leaky_relu, nn.LeakyReLU)
+        self.assertIs(nn.upsample, nn.resize)
         if nn.Conv2d is not nn.Conv:
             self.assertTrue(_is_acl_wrapper(nn.Conv2d))
             self.assertTrue(_is_acl_wrapper(nn.Conv))
@@ -945,10 +1334,30 @@ class TestNNStructure(unittest.TestCase):
         for module in _IMPLEMENTATION_MODULES:
             source = Path(module.__file__).read_text(encoding="utf-8")
             with self.subTest(module=module.__name__):
-                self.assertIn("import jittor as jt", source)
+                if "jt." in source:
+                    self.assertIn("import jittor as jt", source)
                 self.assertNotIn("preserve_facade_origins", source)
                 self.assertNotIn("_JittorRuntimeProxy", source)
                 self.assertNotIn(".runtime import", source)
+
+    def test_functional_tree_never_imports_stateful_modules(self):
+        root = Path(nn.functional.__file__).resolve().parent
+        for path in sorted(root.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    names = [alias.name for alias in node.names]
+                    self.assertFalse(
+                        any(name.startswith("jittor.nn.modules") for name in names),
+                        path,
+                    )
+                elif isinstance(node, ast.ImportFrom):
+                    module = node.module or ""
+                    self.assertFalse(
+                        module.startswith("jittor.nn.modules")
+                        or (node.level and module.startswith("modules")),
+                        path,
+                    )
 
     def test_facade_imports_only_physical_subpackages(self):
         facade_path = Path(nn.__file__).resolve()
@@ -965,22 +1374,25 @@ class TestNNStructure(unittest.TestCase):
         self.assertNotIn("._nn", source)
         self.assertNotIn("bind_runtime", source)
 
-    def test_facade_contains_no_moved_definitions(self):
+    def test_facade_contains_no_definitions_or_dynamic_export_injection(self):
         facade_path = Path(nn.__file__).resolve()
-        tree = ast.parse(facade_path.read_text(encoding="utf-8"), filename=str(facade_path))
+        source = facade_path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(facade_path))
         facade_definitions = {
             node.name for node in tree.body
             if isinstance(node, (ast.FunctionDef, ast.ClassDef))
         }
-        moved_names = {symbol.__name__ for symbol in _moved_symbols()}
-        self.assertFalse(facade_definitions & moved_names)
+        self.assertEqual(facade_definitions, set())
+        self.assertNotIn("_register_public_subpackages", source)
+        self.assertNotIn("setattr(functional", source)
+        self.assertNotIn("setattr(modules", source)
 
     def test_nn_migration_paths_and_python37_syntax(self):
         repo_root = Path(nn.__file__).resolve().parents[2]
         self.assertFalse((repo_root / "jittor" / "depthwise_conv.py").exists())
         paths = (
             Path(depthwise.__file__).resolve(),
-            Path(linear.__file__).resolve(),
+            Path(linear_layers.__file__).resolve(),
             Path(nn.__file__).resolve(),
             Path(nn.modules.__file__).resolve(),
         )
@@ -994,7 +1406,7 @@ class TestNNStructure(unittest.TestCase):
 
     def test_source_files_stay_within_architecture_budgets(self):
         facade_path = Path(nn.__file__).resolve()
-        self.assertLessEqual(len(facade_path.read_text(encoding="utf-8").splitlines()), 2500)
+        self.assertLessEqual(len(facade_path.read_text(encoding="utf-8").splitlines()), 300)
         for module in _IMPLEMENTATION_MODULES:
             path = Path(module.__file__).resolve()
             with self.subTest(path=path.name):
@@ -1004,23 +1416,71 @@ class TestNNStructure(unittest.TestCase):
                 )
 
     def test_canonical_exports_have_deterministic_star_import_contracts(self):
-        self.assertEqual(nn.functional.__all__, sorted(nn.functional.__all__))
-        self.assertEqual(nn.modules.__all__, sorted(nn.modules.__all__))
-        for name in (
-            "pool", "pool2d", "pool3d", "max_pool2d", "max_pool3d",
-            "avg_pool2d", "adaptive_avg_pool2d", "relu",
+        self.assertEqual(tuple(nn.functional.__all__), tuple(sorted(_FUNCTIONAL_API)))
+        self.assertEqual(tuple(nn.modules.__all__), tuple(sorted(_MODULE_API)))
+        self.assertEqual(set(nn.functional.__all__) & _ACCIDENTAL_EXPORTS, set())
+        self.assertEqual(set(nn.modules.__all__) & _ACCIDENTAL_EXPORTS, set())
+        for package, names in (
+            (nn.functional, _FUNCTIONAL_API),
+            (nn.modules, _MODULE_API),
         ):
-            with self.subTest(function=name):
-                self.assertIn(name, nn.functional.__all__)
-                self.assertIs(getattr(nn.functional, name), getattr(nn, name))
-        self.assertIn("linear", nn.functional.__all__)
-        self.assertTrue(callable(nn.functional.linear))
-        for name in (
-            "Linear", "Conv1d_sp", "DepthwiseConv", "Conv", "RNN", "AvgPool2d", "Module",
-        ):
-            with self.subTest(module=name):
-                self.assertIn(name, nn.modules.__all__)
-                self.assertIs(getattr(nn.modules, name), getattr(nn, name))
+            namespace = {}
+            exec("from {} import *".format(package.__name__), {}, namespace)
+            self.assertEqual(set(namespace) - {"__builtins__"}, set(names))
+            for name in names:
+                with self.subTest(package=package.__name__, name=name):
+                    self.assertTrue(hasattr(nn, name))
+                    public = getattr(nn, name)
+                    implementation = getattr(package, name)
+                    if name in _RUNTIME_PATCHED_SYMBOLS and public is not implementation:
+                        self.assertTrue(
+                            _is_runtime_wrapper(public)
+                            or _is_runtime_wrapper(implementation)
+                        )
+                    else:
+                        self.assertIs(implementation, public)
+
+    def test_first_import_paths_are_cycle_free_in_fresh_processes(self):
+        entries = (
+            "import jittor",
+            "import jittor.nn",
+            "import jittor.nn.functional",
+            "import jittor.nn.modules",
+            "import jittor.nn.functional.activation",
+            "import jittor.nn.modules.linear",
+            "from jittor import nn",
+            "from jittor.nn import functional, modules",
+        )
+        repo_root = Path(nn.__file__).resolve().parents[3]
+        env = dict(os.environ)
+        env.update(
+            {
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONPATH": str(repo_root / "python"),
+                "nvcc_path": "",
+                "use_cuda": "0",
+            }
+        )
+        env.pop("REAL_TORCH_SITE", None)
+        for entry in entries:
+            script = (
+                "import sys, types\n"
+                "sys.modules['torch'] = types.ModuleType('torch')\n"
+                + entry
+                + "\nimport jittor.nn as nn\n"
+                "assert tuple(nn.functional.__all__) == %r\n"
+                "assert tuple(nn.modules.__all__) == %r\n"
+            ) % (tuple(sorted(_FUNCTIONAL_API)), tuple(sorted(_MODULE_API)))
+            result = subprocess.run(
+                [sys.executable, "-c", script],
+                cwd=str(repo_root),
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            with self.subTest(entry=entry):
+                self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_package_discovery_includes_public_implementation_packages(self):
         package_root = Path(activations.__file__).resolve().parent

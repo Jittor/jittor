@@ -261,3 +261,20 @@ def rrelu(x, lower=1./8, upper=1./3, training=False):
     else:
         a = (lower + upper) / 2
     return jt.ternary(x >= 0, x, a * x)
+
+
+def get_init_var_rand(shape, dtype):
+    return jt.array(np.random.normal(0.0, 1.0, shape).astype(np.float32))
+
+
+def softplus(x, beta=1.0, threshold=20.0):
+    return 1 / beta * jt.log(1 + (beta * x).minimum(threshold).exp()) + \
+        (x - threshold / beta).maximum(0.0)
+
+
+def hardtanh(x, min_val=-1, max_val=1):
+    return jt.clamp(x, min_v=min_val, max_v=max_val)
+
+
+def mish(x, inplace=False):
+    return x * jt.tanh(jt.nn.softplus(x))

@@ -1,6 +1,5 @@
 import unittest
 import jittor as jt
-import numpy as np
 from jittor import nn
 import os
 
@@ -9,7 +8,7 @@ def compare(x, y, shape=4):
     assert((x == y).sum() == shape)
 
 
-def test_optim(optimzer_type, **kwargs):
+def _run_optimizer_roundtrip(optimzer_type, **kwargs):
     # input
 
     x = jt.rand(20, 2, 2)
@@ -56,7 +55,7 @@ class TestOptimizerSaveLoad(unittest.TestCase):
             {'opt': jt.nn.AdamW, 'kwargs': {'lr': 0.1, 'weight_decay': 1e-2}},
         ]
         for optim in optims:
-            test_optim(optim['opt'], **optim['kwargs'])
+            _run_optimizer_roundtrip(optim['opt'], **optim['kwargs'])
 
     def tearDown(self):
         os.remove("./optim_test.tar")

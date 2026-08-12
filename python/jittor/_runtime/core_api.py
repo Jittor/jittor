@@ -374,7 +374,9 @@ def array(data, dtype=None):
     elif dtype is not None:
         if isinstance(dtype, NanoString):
             dtype = str(dtype)
-        elif callable(dtype):
+        # Torch-compatible dtype objects are callable str subclasses.  They are
+        # dtype names here, not Jittor's historical cast functions.
+        elif not isinstance(dtype, str) and callable(dtype):
             dtype = dtype.__name__
         with jt.flag_scope(auto_convert_64_to_32=0):
             ret = ops.array(np.array(data, dtype))

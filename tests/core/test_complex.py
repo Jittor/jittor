@@ -1,14 +1,20 @@
+from __future__ import annotations
+
 import jittor as jt
 from jittor.nn import ComplexNumber
 import unittest
 import numpy as np
 from functools import partial
+from _helpers.torch_runtime import import_torch_modules, modules_available
 
-__skip_torch_test = False
-try:
-    import torch
-except:
-    __skip_torch_test = True
+_skip_torch_test = not modules_available("torch")
+torch = None
+
+
+def setUpModule():
+    global torch
+    if not _skip_torch_test:
+        (torch,) = import_torch_modules("torch")
 
 class TestResultAndGrad:
     def flatten_list(self, list_like):
@@ -71,7 +77,7 @@ class TestResultAndGrad:
             assert False
         ninput_list = [_np_to_jittor(x) for x in input_list]
 
-        if key_names != None:
+        if key_names is not None:
             assert len(ninput_list) == len(key_names)
             nkwargs = kwargs.copy()
             for k, v in zip(key_names, ninput_list):
@@ -113,7 +119,7 @@ class TestResultAndGrad:
         def _torch_to_np(x:torch.Tensor) -> np.ndarray:
             return x.detach().cpu().numpy()
         ninput_list = [_np_to_torch(x) for x in input_list]
-        if key_names != None:
+        if key_names is not None:
             assert len(ninput_list) == len(key_names)
             nkwargs = kwargs.copy()
             for k, v in zip(key_names, ninput_list):
@@ -160,13 +166,13 @@ class TestResultAndGrad:
 
         self.check_results(jittor_output, numpy_output)
 
-@unittest.skipIf(__skip_torch_test, "No Torch found")
 class TestComplexLinalg(unittest.TestCase, TestResultAndGrad):
     def random_complex_matrix(self, shape):
         r = np.random.randn(*shape)
         i = np.random.randn(*shape)
         return r + 1j * i
 
+    @unittest.skipIf(_skip_torch_test, "No independent Torch found")
     def test_complex_matmul(self):
         s1 = (50, 200)
         s2 = (200, 50)
@@ -176,6 +182,7 @@ class TestComplexLinalg(unittest.TestCase, TestResultAndGrad):
         inputs = [m1, m2]
         self.check_op_with_torch(jt.matmul, torch.matmul, inputs)
 
+    @unittest.skipIf(_skip_torch_test, "No independent Torch found")
     def test_complex_matmul_batch(self):
         s1 = (10, 50, 30)
         s2 = (10, 30, 40)
@@ -185,12 +192,14 @@ class TestComplexLinalg(unittest.TestCase, TestResultAndGrad):
         inputs = [m1, m2]
         self.check_op_with_torch(jt.matmul, torch.matmul, inputs)
 
+    @unittest.skipIf(_skip_torch_test, "No independent Torch found")
     def test_complex_inv(self):
         s1 = (200, 200)
         m1 = self.random_complex_matrix(s1)
         inputs = [m1]
         self.check_op_with_torch(jt.linalg.inv, torch.linalg.inv, inputs)
 
+    @unittest.skipIf(_skip_torch_test, "No independent Torch found")
     def test_complex_inv_batch(self):
         s1 = (10, 50, 50)
         m1 = self.random_complex_matrix(s1)
@@ -211,12 +220,14 @@ class TestComplexLinalg(unittest.TestCase, TestResultAndGrad):
         inputs = [m1]
         self.check_op_with_numpy(jt.linalg.eig, np.linalg.eig, inputs)
 
+    @unittest.skipIf(_skip_torch_test, "No independent Torch found")
     def test_complex_qr(self):
         s1 = (50, 50)
         m1 = self.random_complex_matrix(s1)
         inputs = [m1]
         self.check_op_with_torch(jt.linalg.qr, torch.linalg.qr, inputs)
 
+    @unittest.skipIf(_skip_torch_test, "No independent Torch found")
     def test_complex_qr_batch(self):
         s1 = (10, 20, 20)
         m1 = self.random_complex_matrix(s1)
@@ -237,6 +248,7 @@ class TestComplexLinalg(unittest.TestCase, TestResultAndGrad):
         inputs = [m1]
         self.check_op_with_numpy(jt.linalg.svd, np.linalg.svd, inputs)
 
+@unittest.skipIf(_skip_torch_test, "No independent Torch found")
 class TestTensordot(unittest.TestCase, TestResultAndGrad):
     def random_complex_matrix(self, shape):
         r = np.random.randn(*shape)
@@ -282,6 +294,7 @@ class TestTensordot(unittest.TestCase, TestResultAndGrad):
         inputs = [m1, m2]
         self.check_op_with_torch(jt.nn.tensordot, torch.tensordot, inputs, dims = dims)
 
+@unittest.skipIf(_skip_torch_test, "No independent Torch found")
 class TestKron(unittest.TestCase, TestResultAndGrad):
     def random_complex_matrix(self, shape):
         r = np.random.randn(*shape)
@@ -323,7 +336,7 @@ class TestKron(unittest.TestCase, TestResultAndGrad):
         inputs = [m1, m2]
         self.check_op_with_torch(jt.nn.kron, torch.kron, inputs)
 
-@unittest.skipIf(__skip_torch_test, "No Torch found")
+@unittest.skipIf(_skip_torch_test, "No Torch found")
 class TestGradFunctional(unittest.TestCase, TestResultAndGrad):
     def random_complex_matrix(self, shape):
         r = np.random.randn(*shape)

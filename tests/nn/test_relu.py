@@ -48,6 +48,8 @@ class TestRelu(unittest.TestCase):
         check_equal(arr, jnn.PReLU(10, 99.9), tnn.PReLU(10, 99.9))
         check_equal(arr, jnn.PReLU(10, 2), tnn.PReLU(10, 2))
         check_equal(arr, jnn.PReLU(10, -0.2), tnn.PReLU(10, -0.2))
+        arr = np.random.randn(2, 3, 4).astype(np.float32)
+        check_equal(arr, jnn.PReLU(3, 0.3), tnn.PReLU(3, 0.3))
         
         # ***************************************************************
         # Test ReLU6 Layer
