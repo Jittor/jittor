@@ -337,7 +337,7 @@ def adjust_hue(img, hue_factor):
 
 
 def adjust_gamma(img, gamma, gain=1):
-    """
+    r"""
     Function for performing gamma correction on an image.
     Also known as Power Law Transform. Intensities in RGB mode are adjusted
     based on the following equation:
@@ -524,7 +524,7 @@ def to_pil_image(pic, mode=None):
         PIL Image: Image converted to PIL Image.
     """
     if isinstance(pic, jt.Var):
-        pic = pic.data
+        pic = pic.numpy()
     if not isinstance(pic, np.ndarray):
         raise TypeError('pic should be Tensor or ndarray. Got {}.'.format(type(pic)))
 
@@ -615,7 +615,7 @@ def image_normalize(img, mean, std):
         if isinstance(img, jt.Var):
             mean = jt.array(mean)
             std = jt.array(std)
-            if (std.data == 0).any():
+            if (std.numpy() == 0).any():
                 raise ValueError('std cannot be zero.')
         else:
             mean = np.asarray(mean)

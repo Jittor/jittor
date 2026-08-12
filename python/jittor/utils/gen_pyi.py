@@ -233,7 +233,7 @@ def gen_flags_stub(jittor_path):
             continue
         docstring = attr.__doc__
         docstring = attr.__doc__[:attr.__doc__.find("Declaration:")]
-        docbody = re.findall("\(type.+default.+\):(.+)", docstring)[0].strip()
+        docbody = re.findall(r"\(type.+default.+\):(.+)", docstring)[0].strip()
         docbody += "." if not docbody.endswith('.') else ""
         attr_type, attr_val = re.findall(r"\(type:(.+), default:(.+)\)", docstring)[0]
         attr_type = ctype_to_python(attr_type)

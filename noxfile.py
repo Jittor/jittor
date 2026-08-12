@@ -194,7 +194,15 @@ NOX_STATE_ROOT.mkdir(parents=True, exist_ok=True)
 nox.options.envdir = str(NOX_STATE_ROOT / "envs")
 nox.options.error_on_missing_interpreters = True
 nox.options.stop_on_first_error = True
-nox.options.sessions = ["lint", "format", "typing", "structure", "packaging", "py37"]
+nox.options.sessions = [
+    "lint",
+    "format",
+    "typing",
+    "structure",
+    "packaging",
+    "py37",
+    "py312",
+]
 
 for name, path in {
     "PIP_CACHE_DIR": NOX_STATE_ROOT / "cache" / "pip",
@@ -531,9 +539,19 @@ def typing(session):
 def structure(session):
     """Run the fast layout, checker, and complete structure-test gate."""
     _root, env = _session_env(session, "structure")
-    env["nvcc_path"] = ""
-    env["CUDA_VISIBLE_DEVICES"] = ""
-    env["use_cuda"] = "0"
+    env.update(
+        {
+            "CUDA_VISIBLE_DEVICES": "",
+            "nvcc_path": "",
+            "use_cuda": "0",
+            "use_cutt": "0",
+            "use_cutlass": "0",
+            "use_mkl": "0",
+            "use_mpi": "0",
+            "use_nccl": "0",
+            "use_parallel_op_compiler": "0",
+        }
+    )
     session.install(
         PYTEST,
         PYTEST_TIMEOUT,
@@ -950,6 +968,124 @@ if failed:
 print("Python 3.7 compile OK: %d files" % checked)
 """
     session.run("python", "-c", script, str(REPO_ROOT), env=env)
+
+
+@nox.session(python="3.12", venv_backend="venv")
+def py312(session):
+    """Build, install, and execute Jittor with a real Python 3.12 interpreter."""
+    root, env = _session_env(session, "py312")
+    python_config = session.run(
+        "python",
+        "-c",
+        ("import os, sys; print(os.path.join(sys.base_prefix, 'bin', 'python3.12-config'))"),
+        silent=True,
+    ).strip()
+    if os.name != "nt" and not Path(python_config).is_file():
+        session.error("Python 3.12 config helper not found: %s" % python_config)
+    env.update(
+        {
+            "CUDA_VISIBLE_DEVICES": "",
+            "JITTOR_TEST_DEVICES": "cpu",
+            "nvcc_path": "",
+            "python_config_path": python_config,
+            "use_cuda": "0",
+            "use_cutt": "0",
+            "use_cutlass": "0",
+            "use_mkl": "0",
+            "use_mpi": "0",
+            "use_nccl": "0",
+            "use_parallel_op_compiler": "0",
+        }
+    )
+    session.install(
+        BUILD,
+        SETUPTOOLS,
+        WHEEL,
+        "astunparse==1.6.3",
+        "numpy==1.26.4",
+        "pillow==11.0.0",
+        "tqdm==4.67.1",
+    )
+    compile_script = r"""
+import pathlib
+import sys
+import warnings
+
+if sys.version_info[:2] != (3, 12):
+    raise SystemExit("py312 requires Python 3.12, found %s" % (sys.version.split()[0],))
+
+warnings.simplefilter("error", SyntaxWarning)
+root = pathlib.Path(sys.argv[1]).resolve()
+excluded = {".git", ".mypy_cache", ".nox", ".pytest_cache", ".ruff_cache", "__pycache__"}
+failed = []
+checked = 0
+for path in sorted(root.rglob("*.py")):
+    if any(part in excluded for part in path.parts):
+        continue
+    checked += 1
+    try:
+        compile(path.read_bytes(), str(path), "exec", dont_inherit=True)
+    except (SyntaxError, UnicodeError) as error:
+        failed.append("%s: %s" % (path.relative_to(root), error))
+if failed:
+    print("Python 3.12 compile failures:")
+    print("\n".join(failed))
+    raise SystemExit(1)
+print("Python 3.12 compile OK without SyntaxWarning: %d files" % checked)
+"""
+    session.run(
+        "python",
+        "-W",
+        "error::SyntaxWarning",
+        "-c",
+        compile_script,
+        str(REPO_ROOT),
+        env=env,
+    )
+
+    source = root / "source"
+    dist = root / "dist"
+    _source_copy(source)
+    with session.chdir(source):
+        session.run(
+            "python",
+            "-m",
+            "build",
+            "--no-isolation",
+            "--wheel",
+            "--outdir",
+            str(dist),
+            env=env,
+        )
+    wheels = sorted(dist.glob("*.whl"))
+    if len(wheels) != 1:
+        session.error("expected exactly one Python 3.12 wheel, found %d" % len(wheels))
+
+    wheel_install = root / "wheel-install"
+    session.run(
+        "python",
+        "-m",
+        "pip",
+        "install",
+        "--no-deps",
+        "--target",
+        str(wheel_install),
+        str(wheels[0]),
+        env=env,
+    )
+    selftest_env = env.copy()
+    selftest_env["PYTHONPATH"] = str(wheel_install)
+    selftest_env["PYTHONNOUSERSITE"] = "1"
+    selftest_env["cache_name"] = "nox_py312_wheel_selftest"
+    with session.chdir(root):
+        session.run(
+            "python",
+            "-W",
+            "error::SyntaxWarning",
+            "-m",
+            "jittor.selftest",
+            env=selftest_env,
+        )
 
 
 @nox.session(python="3.11", venv_backend="venv")

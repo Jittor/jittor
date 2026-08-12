@@ -508,7 +508,7 @@ Var.kaiming_normal_ = kaiming_normal_
 
 
 def xavier_uniform(shape, dtype="float32", gain=1.0):
-    ''' Inplace initialize Jittor Var by xavier_uniform.
+    r''' Inplace initialize Jittor Var by xavier_uniform.
     The resulting var will have values sampled from
     :math:`uniform(-a, a)` where
 
@@ -540,7 +540,7 @@ def xavier_uniform(shape, dtype="float32", gain=1.0):
     return uniform(shape, dtype, -bound, bound)
 
 def xavier_uniform_(var, gain=1.0):
-    ''' Inplace initialize Jittor Var by xavier_uniform.
+    r''' Inplace initialize Jittor Var by xavier_uniform.
     The resulting var will have values sampled from
     :math:`uniform(-a, a)` where
 
@@ -567,7 +567,7 @@ def xavier_uniform_(var, gain=1.0):
 Var.xavier_uniform_ = xavier_uniform_
 
 def xavier_gauss(shape, dtype="float32", gain=1.0):
-    ''' Return Jittor Var initialized by xavier_gauss, a.k.a xavier_normal.
+    r''' Return Jittor Var initialized by xavier_gauss, a.k.a xavier_normal.
     The resulting var will have values sampled from
     :math:`gauss(-a, a)` where
 
@@ -602,7 +602,7 @@ def xavier_gauss(shape, dtype="float32", gain=1.0):
     return gauss(shape, dtype, 0, std)
 
 def xavier_gauss_(var, gain=1.0):
-    ''' Inplace initialize Jittor Var by xavier_gauss, a.k.a xavier_normal.
+    r''' Inplace initialize Jittor Var by xavier_gauss, a.k.a xavier_normal.
     The resulting var will have values sampled from
     :math:`gauss(-a, a)` where
 

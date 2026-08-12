@@ -2,7 +2,7 @@
 
 - Status: Maintained
 - Last reviewed: 2026-08-12
-- Baseline: `582fc51d`
+- Baseline: `dccca5b2`
 - Owner: repository and CI maintainers
 - Review when: supported Python, nox sessions, backend prerequisites, or cache
   behavior changes
@@ -57,18 +57,23 @@ Benchmarks and tests never share a cache.
 
 ## Python and tools
 
-- Package runtime: Python >= 3.7, as declared by
-  [`pyproject.toml`](../../pyproject.toml).
+- Package runtime: Python 3.7 through Python 3.12, as declared by
+  [`pyproject.toml`](../../pyproject.toml). Python 3.7 remains the lower syntax
+  boundary; Python 3.12 is the maintained upper compatibility gate.
 - Maintainer tooling: Python 3.11 with pinned versions from
   [`requirements/dev-tools.txt`](../../requirements/dev-tools.txt).
 - Syntax compatibility: the `py37` nox session requires a real Python 3.7
   interpreter and compiles every repository Python file.
+- Python 3.12 compatibility: the `py312` nox session requires a real Python
+  3.12 interpreter, treats `SyntaxWarning` as an error, builds a wheel, installs
+  that wheel outside the source tree, and runs `jittor.selftest` on CPU.
 
 ```bash
 python -m pip install -e .
 python -m pip install -r requirements/dev-tools.txt
 python -m jittor.selftest
 python -m nox -s structure
+python -m nox -s py312
 ```
 
 ## Backend gates

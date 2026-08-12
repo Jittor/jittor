@@ -26,12 +26,37 @@ def both_devices(fn):
 
 class Base(unittest.TestCase):
     def ac(self, got, ref, atol=1e-5, rtol=1e-5, msg=""):
-        g = np.asarray(got); r = np.asarray(ref)
+        g = np.asarray(got)
+        r = np.asarray(ref)
         self.assertEqual(tuple(g.shape), tuple(r.shape), f"shape {g.shape}!={r.shape}; {msg}")
         np.testing.assert_allclose(g, r, atol=atol, rtol=rtol, err_msg=msg)
 
     def ae(self, got, ref, msg=""):
         np.testing.assert_array_equal(np.asarray(got), np.asarray(ref), err_msg=msg)
+
+
+class TestRandomCompatibility(Base):
+    def test_seed_supports_native_jittor_and_torch_forms(self):
+        jt.seed(731)
+        first = jt.random((8,)).numpy()
+        jt.seed(731)
+        second = jt.random((8,)).numpy()
+        self.ae(first, second, msg="legacy jt.seed(value) reproducibility")
+
+        generated = torch.seed()
+        self.assertIsInstance(generated, int)
+        self.assertGreaterEqual(generated, 0)
+        self.assertEqual(torch.initial_seed(), generated)
+
+        random_generated = torch.random.seed()
+        self.assertIsInstance(random_generated, int)
+        self.assertEqual(torch.random.initial_seed(), random_generated)
+
+        torch.manual_seed(911)
+        first = torch.rand((8,)).numpy()
+        torch.manual_seed(911)
+        second = torch.rand((8,)).numpy()
+        self.ae(first, second, msg="torch.manual_seed reproducibility")
 
 
 class TestReductions(Base):

@@ -6,6 +6,7 @@
 
 ## 兼容性与功能验证
 
+- [2026-08-12 Python 3.12 与旧接口兼容验证](2026-08-12-python312-native-compatibility.md)
 - [2026-08-12 仓库结构现代化最终验收](2026-08-12-repository-modernization-final.md)
 - [2026-08-11 仓库结构现代化阶段 6：杂物清理与发行边界](2026-08-11-repository-modernization-cleanup.md)
 - [2026-08-11 仓库结构现代化阶段 5：测试外移与制品验收](2026-08-11-repository-modernization-test-migration.md)

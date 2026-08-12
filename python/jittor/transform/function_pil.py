@@ -212,7 +212,7 @@ def adjust_hue(img, hue_factor):
 
 
 def adjust_gamma(img, gamma, gain=1):
-    """
+    r"""
     Function for performing gamma correction on an image.
 
     Also known as Power Law Transform. Intensities in RGB mode are adjusted
@@ -646,4 +646,3 @@ def affine(img, angle, translate, scale, shear, resample=0, fillcolor=None):
     matrix = _get_inverse_affine_matrix(center, angle, translate, scale, shear)
     kwargs = {"fillcolor": fillcolor} if PILLOW_VERSION[0] >= '5' else {}
     return img.transform(output_size, Image.AFFINE, matrix, resample, **kwargs)
-

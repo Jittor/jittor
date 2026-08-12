@@ -105,7 +105,8 @@ class TestWheelContents(unittest.TestCase):
             baselines / "wheel-contents-stage7.txt", "Stage 7 baseline"
         )
         after = checker._read_hashed_path_list(
-            baselines / "wheel-contents-final.txt", "final baseline"
+            baselines / "wheel-contents-final-modernization.txt",
+            "final modernization baseline",
         )
         additions = checker._read_hashed_path_list(
             baselines / "wheel-additions-final-modernization.txt",

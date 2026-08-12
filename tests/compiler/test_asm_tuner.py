@@ -43,7 +43,7 @@ class TestAsmTuner(unittest.TestCase):
 using namespace jittor;
 #define INLINE_FUNC '''+inline+''' void 
 INLINE_FUNC func0(op0_Tx* __restrict__ op0_xp, op1_Tx* __restrict__ op1_xp, op2_Tz* __restrict__ op2_zp) {
-    //@begin  replace "vmova(.*,.*\(.*\))" "vmovnt\g<1>"
+    //@begin  replace "vmova(.*,.*\\(.*\\))" "vmovnt\\g<1>"
     (void)(__builtin_assume_aligned(op0_xp, alignment));
     (void)(__builtin_assume_aligned(op1_xp, alignment));
     (void)(__builtin_assume_aligned(op2_zp, alignment));

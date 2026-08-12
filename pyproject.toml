@@ -8,6 +8,14 @@ dynamic = ["version"]
 description = "a Just-in-time(JIT) deep learning framework"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
 authors = [
     { name = "Jittor Group", email = "ran.donglang@gmail.com" },
 ]

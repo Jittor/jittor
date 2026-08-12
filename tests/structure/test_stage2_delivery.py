@@ -97,6 +97,7 @@ class TestStage2Delivery(unittest.TestCase):
         packaging = functions["packaging"]
         benchmark = functions["benchmark"] + functions["_record_asv"]
         cpu = functions["cpu"]
+        py312 = functions["py312"]
 
         self.assertIn("STRUCTURE_TESTS", structure)
         self.assertNotIn('"build"', structure)
@@ -155,6 +156,23 @@ class TestStage2Delivery(unittest.TestCase):
 
         self.assertIn("JITTOR_REQUIRE_REAL_TORCH", cpu)
         self.assertIn("requires REAL_TORCH_SITE", cpu)
+        for token in (
+            "Python 3.12 compile OK without SyntaxWarning",
+            '"numpy==1.26.4"',
+            '"build"',
+            '"jittor.selftest"',
+        ):
+            self.assertIn(token, py312)
+
+        self.assertIn('@nox.session(python="3.12", venv_backend="venv")', source)
+        self.assertIn('"py312"', source)
+        self.assertIn(
+            '"Programming Language :: Python :: 3.12"',
+            (self.repo_root / "pyproject.toml").read_text(encoding="utf-8"),
+        )
+        self.assertIn("nox / py312", structure_workflow)
+        self.assertIn('python-version: "3.12"', structure_workflow)
+        self.assertIn("python -m nox -s py312", structure_workflow)
 
     def test_asv_teardown_tolerates_skipped_parameter_setup(self):
         from benchmarks.operators import OperatorBenchmarks

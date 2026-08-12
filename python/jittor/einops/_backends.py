@@ -225,9 +225,9 @@ class JittorBackend(AbstractBackend):
             return x.prod(reduced_axes)
         for axis in sorted(reduced_axes, reverse=True):
             if operation == 'min':
-                x = x.min(dim=axis)
+                x = x.min(axis, keepdims=False)
             elif operation == 'max':
-                x = x.max(dim=axis)
+                x = x.max(axis, keepdims=False)
             elif operation in ['sum', 'mean']:
                 x = getattr(x, operation)(dim=axis)
             else:

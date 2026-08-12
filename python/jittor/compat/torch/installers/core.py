@@ -36,6 +36,8 @@ def install(ctx):
         g._vj_native_where = getattr(g, "where", None)
     if not hasattr(g, "_vj_native_nonzero"):
         g._vj_native_nonzero = getattr(g, "nonzero", None)
+    if not hasattr(g, "_vj_native_seed"):
+        g._vj_native_seed = getattr(g, "seed", None)
 
     # Pillow 11 rejects int8 RGB arrays. Some legacy torch projects, including
     # graphdeco gaussian-splatting, use np.byte as a uint8 alias before
@@ -153,6 +155,8 @@ def install_misc(ctx):
             raise TypeError("torch.random is not callable")
     _random_mod = _RandomModule("torch.random")
     _random_mod._seed = int(getattr(g, "_torch_initial_seed", 0))
+    _seed_sentinel = object()
+
     def _manual_seed(s):
         s = int(s)
         _random_mod._seed = s
@@ -160,6 +164,26 @@ def install_misc(ctx):
         if hasattr(jt, "set_global_seed"):
             jt.set_global_seed(s)
         return g
+
+    def _torch_seed():
+        import secrets
+
+        value = secrets.randbits(31)
+        _manual_seed(value)
+        return value
+
+    def _seed(value=_seed_sentinel):
+        if value is _seed_sentinel:
+            return _torch_seed()
+
+        value = int(value)
+        _random_mod._seed = value
+        g._torch_initial_seed = value
+        native_seed = getattr(g, "_vj_native_seed", None)
+        if callable(native_seed):
+            return native_seed(value)
+        return jt.set_seed(value)
+
     def _get_rng_state():
         return jt.array([int(getattr(_random_mod, "_seed", 0))], dtype="int64")
     def _set_rng_state(state):
@@ -175,12 +199,12 @@ def install_misc(ctx):
         _manual_seed(state)
     g.manual_seed = _manual_seed
     g.initial_seed = lambda: int(getattr(_random_mod, "_seed", 0))
-    g.seed = lambda: int(getattr(_random_mod, "_seed", 0))
+    g.seed = _seed
     g.get_rng_state = _get_rng_state
     g.set_rng_state = _set_rng_state
     _random_mod.manual_seed = _manual_seed
     _random_mod.initial_seed = g.initial_seed
-    _random_mod.seed = g.seed
+    _random_mod.seed = _torch_seed
     _random_mod.get_rng_state = _get_rng_state
     _random_mod.set_rng_state = _set_rng_state
     g.random = _random_mod

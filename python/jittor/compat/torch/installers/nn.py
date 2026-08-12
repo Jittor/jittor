@@ -1570,7 +1570,15 @@ def _install_init_aliases(registry=None):
     def normal_(tensor, mean=0.0, std=1.0, generator=None):
         if _not_var(tensor): return tensor
         return _assign(tensor, _jt2.normal(float(mean), float(std), tensor.shape).cast(str(tensor.dtype)))
-    def uniform_(tensor, a=0.0, b=1.0, generator=None):
+    def uniform_(tensor, a=0.0, b=1.0, generator=None, *, low=None, high=None):
+        if low is not None:
+            if a != 0.0 and a != low:
+                raise TypeError("uniform_ received conflicting values for a and low")
+            a = low
+        if high is not None:
+            if b != 1.0 and b != high:
+                raise TypeError("uniform_ received conflicting values for b and high")
+            b = high
         if _not_var(tensor): return tensor
         return _assign(tensor, (_jt2.rand(tensor.shape) * (b - a) + a).cast(str(tensor.dtype)))
     def zeros_(tensor):
@@ -1579,7 +1587,11 @@ def _install_init_aliases(registry=None):
     def ones_(tensor):
         if _not_var(tensor): return tensor
         return _assign(tensor, _jt2.ones(tensor.shape, tensor.dtype))
-    def constant_(tensor, val):
+    def constant_(tensor, val=0.0, *, value=None):
+        if value is not None:
+            if val != 0.0 and val != value:
+                raise TypeError("constant_ received conflicting values for val and value")
+            val = value
         if _not_var(tensor): return tensor
         return _assign(tensor, _jt2.ones(tensor.shape, tensor.dtype) * val)
     def trunc_normal_(tensor, mean=0.0, std=1.0, a=-2.0, b=2.0, generator=None):
