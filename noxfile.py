@@ -52,7 +52,6 @@ IPYKERNEL = "ipykernel==6.29.5"
 DOCS_REQUIREMENTS = REPO_ROOT / "requirements" / "docs.txt"
 
 NN_MIGRATION_FILES = (
-    "python/jittor/attention.py",
     "python/jittor/nn/__init__.py",
     "python/jittor/nn/_bindings.py",
     "python/jittor/nn/functional/__init__.py",
@@ -100,6 +99,8 @@ RATCHET_FILES = (
     "python/jittor/selftest.py",
     "python/jittor_utils/cuda_wheel.py",
     "python/jittor/compat/shim/deploy.py",
+    "tests/_helpers/torch_runtime.py",
+    "tests/conftest.py",
     "tools/release/pack_offline.py",
     "tools/docs/check_build.py",
     "tools/docs/check_catalogs.py",
@@ -119,6 +120,8 @@ FORMAT_FILES = (
     "docs/_myst_autodoc.py",
     "docs/conf.py",
     "python/jittor/selftest.py",
+    "tests/_helpers/torch_runtime.py",
+    "tests/conftest.py",
     "tools/release/pack_offline.py",
     "tools/docs/check_build.py",
     "tools/docs/check_catalogs.py",
@@ -954,6 +957,9 @@ def cpu(session):
     """Run the maintained CPU smoke gate on a clean Jittor cache."""
     _root, env = _session_env(session, "cpu")
     real_torch_site = os.environ.get("REAL_TORCH_SITE", "").strip()
+    require_real_torch = os.environ.get("JITTOR_REQUIRE_REAL_TORCH", "").strip() == "1"
+    if require_real_torch and not real_torch_site:
+        session.error("JITTOR_REQUIRE_REAL_TORCH=1 requires REAL_TORCH_SITE")
     # Nox overlays this mapping on the parent environment, so removing the key
     # would still leak a caller-provided real Torch into ordinary Jittor tests.
     env["REAL_TORCH_SITE"] = ""
@@ -994,6 +1000,8 @@ def cpu(session):
     oracle_env = env.copy()
     if real_torch_site:
         oracle_env["REAL_TORCH_SITE"] = real_torch_site
+    elif require_real_torch:
+        session.error("independent PyTorch oracle is required but unavailable")
     _run_pytest(session, CPU_TORCH_ORACLE_TESTS, oracle_env)
 
 

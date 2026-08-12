@@ -38,6 +38,18 @@ def _loaded_module_is_from_site(module_name, site):
         return False
 
 
+def _loaded_torch_has_binary_core(site):
+    torch = sys.modules.get("torch")
+    binary = getattr(torch, "_C", None)
+    origin = getattr(binary, "__file__", None)
+    if not origin:
+        return False
+    try:
+        return site in Path(origin).resolve().parents
+    except OSError:
+        return False
+
+
 def _site_spec(module_name, site):
     return importlib.machinery.PathFinder.find_spec(module_name, [str(site)])
 
@@ -54,6 +66,12 @@ def modules_available(*module_names):
                 if module is not None:
                     if getattr(module, "__name__", None) != "torch":
                         return False
+                    site = _real_torch_site()
+                    if site is not None and not (
+                        _loaded_module_is_from_site("torch", site)
+                        and _loaded_torch_has_binary_core(site)
+                    ):
+                        return False
                     continue
             site = _real_torch_site()
             if module_name in ("torch", "torchvision") and site is not None:
@@ -63,9 +81,7 @@ def modules_available(*module_names):
                     return False
             elif module_name == "torchvision":
                 module = sys.modules.get(module_name)
-                if module is not None and "jittor" in str(
-                    getattr(module, "__file__", "")
-                ):
+                if module is not None and "jittor" in str(getattr(module, "__file__", "")):
                     return False
                 spec = importlib.util.find_spec(module_name)
                 origin = str(getattr(spec, "origin", "")) if spec else ""
@@ -100,6 +116,10 @@ def import_torch_modules(*module_names):
     if sys.modules.get("torch") is not owner:
         raise RuntimeError("Torch namespace owner changed during oracle import")
     if site is not None:
+        if not _loaded_torch_has_binary_core(site):
+            raise RuntimeError(
+                "REAL_TORCH_SITE did not provide a binary PyTorch core: {}".format(site)
+            )
         for name, module in zip(module_names, modules):
             if name.partition(".")[0] in ("torch", "torchvision"):
                 origin = Path(getattr(module, "__file__", "")).resolve()

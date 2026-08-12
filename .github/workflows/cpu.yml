@@ -38,7 +38,13 @@ jobs:
           python-version: ${{ needs.baseline.outputs.python_version }}
       - name: Install pinned development tools
         run: python -m pip install -r requirements/dev-tools.txt
+      - name: Install independent CPU PyTorch oracle
+        run: |
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.7.1
+          echo "REAL_TORCH_SITE=$(python -c 'import site; print(site.getsitepackages()[0])')" >> "$GITHUB_ENV"
       - name: Run CPU pytest gates
+        env:
+          JITTOR_REQUIRE_REAL_TORCH: "1"
         run: python -m nox -s cpu
 
   benchmark:

@@ -17,29 +17,29 @@ def _preload_real_torch():
     if not site.is_dir():
         raise pytest.UsageError("REAL_TORCH_SITE is not a directory: {}".format(site))
     if "jittor" in sys.modules:
-        raise pytest.UsageError(
-            "REAL_TORCH_SITE must be configured before Jittor is imported"
-        )
+        raise pytest.UsageError("REAL_TORCH_SITE must be configured before Jittor is imported")
     site_text = str(site)
     sys.path[:] = [path for path in sys.path if path != site_text]
     sys.path.insert(0, site_text)
     try:
         torch = importlib.import_module("torch")
     except Exception as error:
-        raise pytest.UsageError(
-            "failed to preload real Torch from {}: {}".format(site, error)
-        )
+        raise pytest.UsageError("failed to preload real Torch from {}: {}".format(site, error))
     finally:
         sys.path[:] = [path for path in sys.path if path != site_text]
         sys.path.append(site_text)
     origin = Path(getattr(torch, "__file__", "")).resolve()
+    binary_origin = Path(getattr(getattr(torch, "_C", None), "__file__", "")).resolve()
     if (
         getattr(torch, "__name__", None) != "torch"
         or site not in origin.parents
+        or site not in binary_origin.parents
         or hasattr(torch, "_torch_compat_install_context")
     ):
         raise pytest.UsageError(
-            "REAL_TORCH_SITE did not provide independent Torch: {}".format(origin)
+            "REAL_TORCH_SITE did not provide independent binary PyTorch: {}, {}".format(
+                origin, binary_origin
+            )
         )
 
 

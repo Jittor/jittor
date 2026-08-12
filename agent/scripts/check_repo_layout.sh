@@ -68,6 +68,7 @@ for forbidden_path in \
   "$REPO_ROOT/README.cn.md" \
   "$REPO_ROOT/README.src.md" \
   "$REPO_ROOT/agent/manuals/design" \
+  "$REPO_ROOT/python/jittor/attention.py" \
   "$REPO_ROOT/python/jittor/torch_fsdp2_compat.py" \
   "$REPO_ROOT/python/jittor/torch_fsdp2_compat" \
   "$REPO_ROOT/python/jittor/_torch_fsdp2" \

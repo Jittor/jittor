@@ -149,6 +149,12 @@ class TestStage2Delivery(unittest.TestCase):
         self.assertIn("actions/cache/restore@v4", cpu_workflow)
         self.assertIn("actions/upload-artifact@v6", cpu_workflow)
         self.assertIn("ASV_RESULTS_DIR", cpu_workflow)
+        self.assertIn("torch==2.7.1", cpu_workflow)
+        self.assertIn('JITTOR_REQUIRE_REAL_TORCH: "1"', cpu_workflow)
+        self.assertIn('echo "REAL_TORCH_SITE=$(python -c', cpu_workflow)
+
+        self.assertIn("JITTOR_REQUIRE_REAL_TORCH", cpu)
+        self.assertIn("requires REAL_TORCH_SITE", cpu)
 
     def test_asv_teardown_tolerates_skipped_parameter_setup(self):
         from benchmarks.operators import OperatorBenchmarks
@@ -158,6 +164,25 @@ class TestStage2Delivery(unittest.TestCase):
         OperatorBenchmarks().teardown("torch", "cpu", "matmul")
         OptimizerStepBenchmarks().teardown("sgd", 32, "cuda")
         TinyLlamaBenchmarks().teardown("torch", "forward")
+
+    def test_cudnn_math_policy_is_guarded_for_rocm_and_old_cudnn(self):
+        operations = self.repo_root / "python" / "jittor" / "extern" / "cuda" / "cudnn" / "ops"
+        names = (
+            "cudnn_conv_op.cc",
+            "cudnn_conv_backward_x_op.cc",
+            "cudnn_conv_backward_w_op.cc",
+            "cudnn_conv3d_op.cc",
+            "cudnn_conv3d_backward_x_op.cc",
+            "cudnn_conv3d_backward_w_op.cc",
+        )
+        for name in names:
+            source = (operations / name).read_text(encoding="utf-8")
+            with self.subTest(operation=name):
+                self.assertIn("int conv_math_key = 0;", source)
+                self.assertIn("#ifndef IS_ROCM", source)
+                self.assertIn("#if CUDNN_VERSION >= 8000", source)
+                self.assertIn("CUDNN_FMA_MATH", source)
+                self.assertIn('jk << "math=" << conv_math_key', source)
 
 
 if __name__ == "__main__":

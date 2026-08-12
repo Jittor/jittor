@@ -1,3 +1,4 @@
 # Retired only after the final runtime-structure audit.
 jittor/extern/llvm/jt_alignment_from_assumptions.cc
+jittor/attention.py
 jittor/optim.py

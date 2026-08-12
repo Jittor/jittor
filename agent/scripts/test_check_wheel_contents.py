@@ -76,7 +76,7 @@ class TestWheelContents(unittest.TestCase):
         baseline = checker._read_hashed_path_list(
             checker.DEFAULT_BASELINE, "default baseline"
         )
-        self.assertEqual(len(baseline), 787)
+        self.assertEqual(len(baseline), 786)
         self.assertTrue(set(checker.REQUIRED_MEMBERS).issubset(baseline))
         pollution = {
             name: checker._pollution_reason(name)
@@ -126,8 +126,8 @@ class TestWheelContents(unittest.TestCase):
             name for name in set(before) & set(after) if before[name] != after[name]
         }
         self.assertEqual(len(added_names), 40)
-        self.assertEqual(len(removed_names), 2)
-        self.assertEqual(len(changed_names), 16)
+        self.assertEqual(len(removed_names), 3)
+        self.assertEqual(len(changed_names), 27)
         self.assertEqual(additions, {name: after[name] for name in added_names})
         self.assertEqual(content_changes, {name: after[name] for name in changed_names})
         self.assertEqual(removals, frozenset(removed_names))

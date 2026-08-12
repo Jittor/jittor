@@ -21,6 +21,7 @@ class TestCleanupStructure(unittest.TestCase):
 
     def test_retired_runtime_payloads_are_absent(self):
         retired = (
+            "python/jittor/attention.py",
             "python/jittor/script",
             "python/jittor/demo",
             "python/jittor/notebook",
@@ -53,6 +54,46 @@ class TestCleanupStructure(unittest.TestCase):
                     )
                 )
         self.assertEqual(collisions, [])
+
+    def test_runtime_root_has_an_exact_reviewed_entry_set(self):
+        runtime_root = self.repo_root / "python" / "jittor"
+        expected = {
+            "__init__.py",
+            "__init__.pyi",
+            "_runtime",
+            "ccl",
+            "compile_extern.py",
+            "compiler.py",
+            "compat",
+            "contrib.py",
+            "dataset",
+            "distributions.py",
+            "distributed",
+            "einops",
+            "extern",
+            "gradfunctional",
+            "init.py",
+            "init_cupy.py",
+            "linalg.py",
+            "loss3d",
+            "lr_scheduler.py",
+            "math_util",
+            "misc",
+            "models",
+            "nn",
+            "optim",
+            "other",
+            "pool",
+            "pyjt_compiler.py",
+            "selftest.py",
+            "sparse.py",
+            "src",
+            "transform",
+            "utils",
+            "weightnorm.py",
+        }
+        actual = {path.name for path in runtime_root.iterdir()}
+        self.assertEqual(actual, expected)
 
     def test_legacy_fsdp2_path_names_are_absent_everywhere(self):
         forbidden_names = {

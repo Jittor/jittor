@@ -177,15 +177,21 @@ void CudnnConvBackwardWOp::jit_run() {
     // MIOpen requires groups to be set after descriptor initialization
     checkCudaErrors(cudnnSetConvolutionGroupCount( cudnnConvDesc, groups ));
 
+    int conv_math_key = 0;
+#ifndef IS_ROCM
     bool fp32_conv = x->dtype() == ns_float32
         && y->dtype() == ns_float32 && w->dtype() == ns_float32;
     cudnnMathType_t conv_math_type = CUDNN_DEFAULT_MATH;
     if (use_tensorcore || (fp32_conv && cuda_allow_cudnn_tf32)) {
         conv_math_type = CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION;
+#if CUDNN_VERSION >= 8000
     } else if (fp32_conv) {
         conv_math_type = CUDNN_FMA_MATH;
+#endif
     }
     checkCudaErrors(cudnnSetConvolutionMathType(cudnnConvDesc, conv_math_type));
+    conv_math_key = static_cast<int>(conv_math_type);
+#endif
 
     int dimY[] = {
         (int)y->shape[findc("@YFORMAT", 'a')], // n
@@ -225,7 +231,7 @@ void CudnnConvBackwardWOp::jit_run() {
     jk << dimX[0] << "," << dimX[1] << "," << dimX[2] << "," << dimX[3] << ",";
     jk << dimW[0] << "," << dimW[1] << "," << dimW[2] << "," << dimW[3] << ",";
     jk << paddingh << paddingw << "," <<strideh <<stridew << "," << dilationh << dilationw << "," << groups << ".";
-    jk << "math=" << static_cast<int>(conv_math_type) << ".";
+    jk << "math=" << conv_math_key << ".";
     auto iter = bwdw_algo_cache.find(jk.to_string());
     
     if (iter!=bwdw_algo_cache.end()) algo = iter->second;

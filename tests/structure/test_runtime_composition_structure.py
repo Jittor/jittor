@@ -20,9 +20,7 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(path))
         definitions = {
-            node.name
-            for node in tree.body
-            if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+            node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))
         }
         forbidden = {
             "_TorchShimFlagsProxy",
@@ -63,7 +61,11 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
         from jittor._runtime import core_api
 
         for name in (
-            "Module", "Function", "flag_scope", "array", "make_module",
+            "Module",
+            "Function",
+            "flag_scope",
+            "array",
+            "make_module",
         ):
             with self.subTest(name=name):
                 self.assertIs(getattr(jittor, name), getattr(core_api, name))
@@ -72,7 +74,9 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
             implementation = getattr(jittor, name)
             current = pickle.dumps(implementation, protocol=0)
             legacy = current.replace(
-                b"cjittor._runtime.core_api\n", b"cjittor\n", 1,
+                b"cjittor._runtime.core_api\n",
+                b"cjittor\n",
+                1,
             )
             self.assertIs(pickle.loads(legacy), implementation)
 
@@ -82,14 +86,13 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
 
         self.assertIsNot(jittor.grad, core_api.grad)
         self.assertEqual(
-            jittor.grad.__module__, "jittor.compat.torch.installers.tensor",
+            jittor.grad.__module__,
+            "jittor.compat.torch.installers.tensor",
         )
         self.assertIsNot(jittor.save, core_api.save)
         self.assertIsNot(jittor.load, core_api.load)
         required = [
-            report
-            for report in jittor._compat_composition_report.torch_reports
-            if report.required
+            report for report in jittor._compat_composition_report.torch_reports if report.required
         ]
         self.assertTrue(required)
         self.assertTrue(all(report.status == "complete" for report in required))
@@ -151,9 +154,7 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(path))
         definitions = {
-            node.name
-            for node in tree.body
-            if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+            node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))
         }
         self.assertIn("Module", definitions)
         self.assertIn("Function", definitions)
@@ -163,8 +164,14 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
 
     def test_preflight_and_lazy_shim_are_stdlib_only(self):
         allowed = {
-            "__future__", "dataclasses", "glob", "hashlib", "importlib",
-            "os", "pathlib", "sys",
+            "__future__",
+            "dataclasses",
+            "glob",
+            "hashlib",
+            "importlib",
+            "os",
+            "pathlib",
+            "sys",
         }
         for relative in ("shim/preflight.py", "shim/__init__.py"):
             path = self.compat / relative
@@ -182,9 +189,7 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
         runtime = self.compat / "shim" / "runtime.py"
         tree = ast.parse(runtime.read_text(encoding="utf-8"), filename=str(runtime))
         definitions = [
-            node.name
-            for node in tree.body
-            if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+            node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))
         ]
         self.assertEqual(definitions, ["enable"])
         composition = (self.compat / "runtime.py").read_text(encoding="utf-8")
@@ -195,6 +200,7 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
     def test_alias_ownership_is_central(self):
         aliases = (self.compat / "_aliases.py").read_text(encoding="utf-8")
         for name in (
+            "jittor.attention",
             "jittor.torch_compat",
             "jittor.torch_fsdp2_compat",
             "jittor.torch_shim",

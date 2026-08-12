@@ -9,6 +9,21 @@ import jittor as jt
 _CU_SEQLENS_CACHE = OrderedDict()
 _CU_SEQLENS_CACHE_LOCK = RLock()
 _CU_SEQLENS_CACHE_LIMIT = 128
+_LEGACY_PUBLIC_NAMES = frozenset(
+    (
+        "MultiheadAttention",
+        "baddbmm",
+        "multi_head_attention_forward",
+        "pad",
+        "scaled_dot_product_attention",
+    )
+)
+
+
+def __getattr__(name):
+    if name in _LEGACY_PUBLIC_NAMES:
+        return getattr(jt.nn, name)
+    raise AttributeError("module {!r} has no attribute {!r}".format(__name__, name))
 
 
 class _FactoryIdentity:
@@ -177,8 +192,15 @@ def varlen_scaled_dot_product_attention(
         cu_kv = cu_q
     out = varlen_func(q_flat, k_flat, v_flat, cu_q, cu_kv, max_q, max_kv)
     return _restore_dense(out, restore)
+
+
 __all__ = [
+    "MultiheadAttention",
+    "baddbmm",
     "cumulative_sequence_lengths",
+    "multi_head_attention_forward",
+    "pad",
+    "scaled_dot_product_attention",
     "sequence_lengths",
     "varlen_scaled_dot_product_attention",
 ]

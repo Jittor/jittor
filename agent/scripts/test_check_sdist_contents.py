@@ -56,11 +56,16 @@ class TestSourceDistributionContents(unittest.TestCase):
         tracked = set(checker.REQUIRED_SOURCE_PATHS)
         tracked.update(
             (
+                "python/jittor/deleted_from_worktree.py",
                 "python/jittor/runtime_source.py",
                 "python/jittor/__pycache__/runtime_source.cpython-311.pyc",
                 "python/jittor.egg-info/PKG-INFO",
             )
         )
+        for relative in tracked - {"python/jittor/deleted_from_worktree.py"}:
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"tracked\n")
         result = mock.Mock(
             returncode=0,
             stdout=("\0".join(sorted(tracked)) + "\0").encode("utf-8"),
@@ -72,6 +77,7 @@ class TestSourceDistributionContents(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertIn("python", command)
         self.assertIn("python/jittor/runtime_source.py", paths)
+        self.assertNotIn("python/jittor/deleted_from_worktree.py", paths)
         self.assertNotIn("python/jittor/__pycache__/runtime_source.cpython-311.pyc", paths)
         self.assertNotIn("python/jittor.egg-info/PKG-INFO", paths)
 
@@ -157,6 +163,7 @@ class TestSourceDistributionContents(unittest.TestCase):
             "python/jittor/torch_fsdp2_compat/__init__.py",
             "python/jittor/torch_shim/__init__.py",
             "python/jittor/triton_shim/__init__.py",
+            "python/jittor/attention.py",
             "python/jittor/depthwise_conv.py",
             "python/jittor/extern/llvm/jt_alignment_from_assumptions.cc",
             "python/jittor/misc.py",

@@ -38,9 +38,7 @@ softmax_module = importlib.import_module("jittor.nn.functional.softmax")
 complex_ops = importlib.import_module("jittor.nn.functional.complex")
 attention = importlib.import_module("jittor.nn.attention")
 attention_function = importlib.import_module("jittor.nn.functional.attention")
-multihead_attention = importlib.import_module(
-    "jittor.nn.functional.multihead_attention"
-)
+multihead_attention = importlib.import_module("jittor.nn.functional.multihead_attention")
 dual_grid = importlib.import_module("jittor.nn.dual_grid")
 legacy_complex = importlib.import_module("jittor.nn.legacy_complex")
 rms_norm_cuda = importlib.import_module("jittor.nn.rms_norm_cuda")
@@ -73,20 +71,57 @@ upsampling = importlib.import_module("jittor.nn.modules.upsampling")
 
 
 _IMPLEMENTATION_SYMBOLS = (
-    (activations, (
-        "relu", "leaky_relu", "relu6", "elu", "sign", "gelu", "sigmoid",
-        "silu", "prelu", "hardswish", "hardsigmoid", "rrelu",
-        "get_init_var_rand", "softplus", "hardtanh", "mish",
-    )),
-    (activation_layers, (
-        "RReLU", "Hardswish", "Hardsigmoid", "ELU", "PReLU", "GLU",
-        "Softsign", "Tanh", "Sigmoid", "Softplus", "Mish", "ReLU",
-        "LeakyReLU", "ReLU6", "Softmax", "GELU", "SiLU",
-    )),
-    (attention, (
-        "cumulative_sequence_lengths", "sequence_lengths",
-        "varlen_scaled_dot_product_attention",
-    )),
+    (
+        activations,
+        (
+            "relu",
+            "leaky_relu",
+            "relu6",
+            "elu",
+            "sign",
+            "gelu",
+            "sigmoid",
+            "silu",
+            "prelu",
+            "hardswish",
+            "hardsigmoid",
+            "rrelu",
+            "get_init_var_rand",
+            "softplus",
+            "hardtanh",
+            "mish",
+        ),
+    ),
+    (
+        activation_layers,
+        (
+            "RReLU",
+            "Hardswish",
+            "Hardsigmoid",
+            "ELU",
+            "PReLU",
+            "GLU",
+            "Softsign",
+            "Tanh",
+            "Sigmoid",
+            "Softplus",
+            "Mish",
+            "ReLU",
+            "LeakyReLU",
+            "ReLU6",
+            "Softmax",
+            "GELU",
+            "SiLU",
+        ),
+    ),
+    (
+        attention,
+        (
+            "cumulative_sequence_lengths",
+            "sequence_lengths",
+            "varlen_scaled_dot_product_attention",
+        ),
+    ),
     (attention_function, ("scaled_dot_product_attention",)),
     (attention_layers, ("MultiheadAttention",)),
     (autograd_ops, ("backward",)),
@@ -95,14 +130,25 @@ _IMPLEMENTATION_SYMBOLS = (
     (container_layers, ("Sequential",)),
     (convolution, ("conv2d", "conv3d", "conv1d")),
     (convolution_3d_layers, ("Conv3d",)),
-    (convolution_cudnn, (
-        "_CudnnConv2d", "_try_cudnn_conv2d", "_CudnnConvT2d",
-        "_try_cudnn_conv_transpose2d", "_cudnn_conv3d_fp16_safe",
-    )),
+    (
+        convolution_cudnn,
+        (
+            "_CudnnConv2d",
+            "_try_cudnn_conv2d",
+            "_CudnnConvT2d",
+            "_try_cudnn_conv_transpose2d",
+            "_cudnn_conv3d_fp16_safe",
+        ),
+    ),
     (convolution_layers, ("Conv", "Conv1d")),
-    (convolution_transpose, (
-        "conv_transpose", "conv_transpose3d", "conv_transpose1d",
-    )),
+    (
+        convolution_transpose,
+        (
+            "conv_transpose",
+            "conv_transpose3d",
+            "conv_transpose1d",
+        ),
+    ),
     (convolution_transpose_layers, ("ConvTranspose", "ConvTranspose3d")),
     (layer_norm_cuda, ("_layer_norm_no_grad_cuda",)),
     (depthwise, ("DepthwiseConv",)),
@@ -113,40 +159,90 @@ _IMPLEMENTATION_SYMBOLS = (
     (embedding_layers, ("Embedding", "EmbeddingBag")),
     (fold_ops, ("fold", "unfold")),
     (fold_layers, ("Fold", "Unfold")),
-    (grid_ops, (
-        "affine_grid", "affine_grid_generator_4D", "affine_grid_generator_5D",
-        "clip_coordinates", "grid_sample", "grid_sample_v0", "grid_sampler",
-        "grid_sampler_2d", "grid_sampler_3d", "grid_sampler_compute_source_index",
-        "grid_sampler_unnormalize", "linspace_from_neg_one", "make_base_grid_4D",
-        "make_base_grid_5D", "reflect_coordinates",
-    )),
+    (
+        grid_ops,
+        (
+            "affine_grid",
+            "affine_grid_generator_4D",
+            "affine_grid_generator_5D",
+            "clip_coordinates",
+            "grid_sample",
+            "grid_sample_v0",
+            "grid_sampler",
+            "grid_sampler_2d",
+            "grid_sampler_3d",
+            "grid_sampler_compute_source_index",
+            "grid_sampler_unnormalize",
+            "linspace_from_neg_one",
+            "make_base_grid_4D",
+            "make_base_grid_5D",
+            "reflect_coordinates",
+        ),
+    ),
     (interpolation, ("interpolate", "resize")),
     (legacy_complex, ("ComplexNumber",)),
     (linear_function, ("linear",)),
     (linear_layers, ("Linear", "Conv1d_sp")),
-    (losses, (
-        "cross_entropy_loss", "mse_loss", "bce_loss", "l1_loss",
-        "smooth_l1_loss", "nll_loss", "binary_cross_entropy_with_logits",
-    )),
-    (loss_layers, (
-        "BCELoss", "BCEWithLogitsLoss", "CrossEntropyLoss", "KLDivLoss",
-        "L1Loss", "MSELoss",
-    )),
-    (matrix, (
-        "baddbmm", "bilinear", "bmm", "bmm_transpose", "matmul",
-        "matmul_transpose",
-    )),
+    (
+        losses,
+        (
+            "cross_entropy_loss",
+            "mse_loss",
+            "bce_loss",
+            "l1_loss",
+            "smooth_l1_loss",
+            "nll_loss",
+            "binary_cross_entropy_with_logits",
+        ),
+    ),
+    (
+        loss_layers,
+        (
+            "BCELoss",
+            "BCEWithLogitsLoss",
+            "CrossEntropyLoss",
+            "KLDivLoss",
+            "L1Loss",
+            "MSELoss",
+        ),
+    ),
+    (
+        matrix,
+        (
+            "baddbmm",
+            "bilinear",
+            "bmm",
+            "bmm_transpose",
+            "matmul",
+            "matmul_transpose",
+        ),
+    ),
     (multihead_attention, ("multi_head_attention_forward",)),
-    (normalization, (
-        "batch_norm", "instance_norm", "_ln_function_cls", "_ln_normalize",
-        "group_norm", "fp32_guard", "layer_norm",
-    )),
+    (
+        normalization,
+        (
+            "batch_norm",
+            "instance_norm",
+            "_ln_function_cls",
+            "_ln_normalize",
+            "group_norm",
+            "fp32_guard",
+            "layer_norm",
+        ),
+    ),
     (normalization_layers, ("BatchNorm", "InstanceNorm", "LayerNorm", "GroupNorm")),
     (padding_function, ("pad",)),
-    (padding, (
-        "ReflectionPad2d", "ZeroPad2d", "ConstantPad2d",
-        "ConstantPad1d", "ConstantPad3d", "ReplicationPad2d",
-    )),
+    (
+        padding,
+        (
+            "ReflectionPad2d",
+            "ZeroPad2d",
+            "ConstantPad2d",
+            "ConstantPad1d",
+            "ConstantPad3d",
+            "ReplicationPad2d",
+        ),
+    ),
     (parameter_layers, ("Parameter", "ParameterList")),
     (pooling_function, ("adaptive_avg_pool2d", "avg_pool2d")),
     (pooling, ("AvgPool2d", "AdaptiveAvgPool2d")),
@@ -157,79 +253,262 @@ _IMPLEMENTATION_SYMBOLS = (
     (rope_cuda, ("partial_rotary_embedding_cuda",)),
     (shape_ops, ("identity",)),
     (shape_layers, ("Flatten", "Identity", "PixelShuffle")),
-    (softmax_module, (
-        "_get_softmax_dim", "softmax", "log_softmax", "log_sigmoid",
-        "logsumexp",
-    )),
-    (vector, (
-        "glu", "normalize", "cosine_similarity", "pairwise_distance", "softsign",
-    )),
+    (
+        softmax_module,
+        (
+            "_get_softmax_dim",
+            "softmax",
+            "log_softmax",
+            "log_sigmoid",
+            "logsumexp",
+        ),
+    ),
+    (
+        vector,
+        (
+            "glu",
+            "normalize",
+            "cosine_similarity",
+            "pairwise_distance",
+            "softsign",
+        ),
+    ),
     (sparse, ("build_submanifold_conv3d_neighbors", "submanifold_conv3d")),
     (tensor_ops, ("kron", "one_hot", "tensordot")),
     (upsampling, ("Resize", "Upsample", "UpsamplingBilinear2d", "UpsamplingNearest2d")),
 )
-_IMPLEMENTATION_MODULES = tuple(dict.fromkeys(
-    module for module, _ in _IMPLEMENTATION_SYMBOLS
-))
+_IMPLEMENTATION_MODULES = tuple(dict.fromkeys(module for module, _ in _IMPLEMENTATION_SYMBOLS))
 _ACL_PATCHED_SYMBOLS = {"Conv", "conv2d", "relu", "leaky_relu", "softmax"}
 _COMPAT_PATCHED_SYMBOLS = {
-    "Parameter", "interpolate", "linear", "scaled_dot_product_attention",
+    "Parameter",
+    "interpolate",
+    "linear",
+    "scaled_dot_product_attention",
     "softmax",
 }
 _RUNTIME_PATCHED_SYMBOLS = _ACL_PATCHED_SYMBOLS | _COMPAT_PATCHED_SYMBOLS
 _FUNCTIONAL_API = (
-    "adaptive_avg_pool2d", "affine_grid", "affine_grid_generator_4D",
-    "affine_grid_generator_5D", "avg_pool2d", "backward", "baddbmm",
-    "batch_norm", "bce_loss", "bilinear", "binary_cross_entropy_with_logits",
-    "bmm", "bmm_transpose", "build_submanifold_conv3d_neighbors",
-    "clip_coordinates", "conv", "conv1d", "conv2d", "conv3d",
-    "conv_transpose", "conv_transpose1d", "conv_transpose2d",
-    "conv_transpose3d", "cosine_similarity", "cross_entropy_loss",
-    "cumulative_sequence_lengths", "dropout", "dropout2d", "droppath", "elu",
-    "embedding", "embedding_bag", "finalize_dual_grid_mesh_cuda", "flatten",
-    "fold", "fp32_guard", "gelu", "get_init_var_rand", "glu", "grid_sample",
-    "grid_sample_v0", "grid_sampler", "grid_sampler_2d", "grid_sampler_3d",
-    "grid_sampler_compute_source_index", "grid_sampler_unnormalize", "group_norm",
-    "hardsigmoid", "hardswish", "hardtanh", "identity", "instance_norm",
-    "interpolate", "kron", "l1_loss", "layer_norm", "leaky_relu", "linear",
-    "linspace_from_neg_one", "log_sigmoid", "log_softmax", "logsumexp",
-    "make_base_grid_4D", "make_base_grid_5D", "matmul", "matmul_transpose",
-    "max_pool2d", "max_pool3d", "mish", "mse_loss",
-    "multi_head_attention_forward", "multihead_rms_norm_cuda", "nll_loss",
-    "normalize", "one_hot", "pad", "pairwise_distance",
-    "partial_rotary_embedding_cuda", "polar", "pool", "pool2d", "pool3d",
-    "prelu", "reflect_coordinates", "relu", "relu6", "resize", "rrelu",
-    "scaled_dot_product_attention", "sequence_lengths", "sigmoid", "sign",
-    "silu", "skip_init",
-    "smooth_l1_loss", "softmax", "softplus", "softsign",
-    "submanifold_conv3d", "tensordot", "unfold", "upsample",
-    "varlen_scaled_dot_product_attention", "view_as_complex", "view_as_real",
+    "adaptive_avg_pool2d",
+    "affine_grid",
+    "affine_grid_generator_4D",
+    "affine_grid_generator_5D",
+    "avg_pool2d",
+    "backward",
+    "baddbmm",
+    "batch_norm",
+    "bce_loss",
+    "bilinear",
+    "binary_cross_entropy_with_logits",
+    "bmm",
+    "bmm_transpose",
+    "build_submanifold_conv3d_neighbors",
+    "clip_coordinates",
+    "conv",
+    "conv1d",
+    "conv2d",
+    "conv3d",
+    "conv_transpose",
+    "conv_transpose1d",
+    "conv_transpose2d",
+    "conv_transpose3d",
+    "cosine_similarity",
+    "cross_entropy_loss",
+    "cumulative_sequence_lengths",
+    "dropout",
+    "dropout2d",
+    "droppath",
+    "elu",
+    "embedding",
+    "embedding_bag",
+    "finalize_dual_grid_mesh_cuda",
+    "flatten",
+    "fold",
+    "fp32_guard",
+    "gelu",
+    "get_init_var_rand",
+    "glu",
+    "grid_sample",
+    "grid_sample_v0",
+    "grid_sampler",
+    "grid_sampler_2d",
+    "grid_sampler_3d",
+    "grid_sampler_compute_source_index",
+    "grid_sampler_unnormalize",
+    "group_norm",
+    "hardsigmoid",
+    "hardswish",
+    "hardtanh",
+    "identity",
+    "instance_norm",
+    "interpolate",
+    "kron",
+    "l1_loss",
+    "layer_norm",
+    "leaky_relu",
+    "linear",
+    "linspace_from_neg_one",
+    "log_sigmoid",
+    "log_softmax",
+    "logsumexp",
+    "make_base_grid_4D",
+    "make_base_grid_5D",
+    "matmul",
+    "matmul_transpose",
+    "max_pool2d",
+    "max_pool3d",
+    "mish",
+    "mse_loss",
+    "multi_head_attention_forward",
+    "multihead_rms_norm_cuda",
+    "nll_loss",
+    "normalize",
+    "one_hot",
+    "pad",
+    "pairwise_distance",
+    "partial_rotary_embedding_cuda",
+    "polar",
+    "pool",
+    "pool2d",
+    "pool3d",
+    "prelu",
+    "reflect_coordinates",
+    "relu",
+    "relu6",
+    "resize",
+    "rrelu",
+    "scaled_dot_product_attention",
+    "sequence_lengths",
+    "sigmoid",
+    "sign",
+    "silu",
+    "skip_init",
+    "smooth_l1_loss",
+    "softmax",
+    "softplus",
+    "softsign",
+    "submanifold_conv3d",
+    "tensordot",
+    "unfold",
+    "upsample",
+    "varlen_scaled_dot_product_attention",
+    "view_as_complex",
+    "view_as_real",
 )
 _MODULE_API = (
-    "AdaptiveAvgPool1d", "AdaptiveAvgPool2d", "AdaptiveAvgPool3d",
-    "AdaptiveMaxPool2d", "AdaptiveMaxPool3d", "AvgPool1d", "AvgPool2d",
-    "AvgPool3d", "BCELoss", "BCEWithLogitsLoss", "BatchNorm", "BatchNorm1d",
-    "BatchNorm2d", "BatchNorm3d", "Bilinear", "CTCLoss", "ComplexNumber",
-    "ConstantPad1d", "ConstantPad2d", "ConstantPad3d", "Conv", "Conv1d",
-    "Conv1d_sp", "Conv2d", "Conv3d", "ConvTranspose", "ConvTranspose2d",
-    "ConvTranspose3d", "CrossEntropyLoss", "DepthwiseConv", "DropPath",
-    "Dropout", "Dropout2d", "ELU", "Embedding", "EmbeddingBag", "Flatten",
-    "Fold", "GELU", "GLU", "GRU", "GRUCell", "GroupNorm", "Hardsigmoid",
-    "Hardswish", "Identity", "InstanceNorm", "InstanceNorm1d", "InstanceNorm2d",
-    "InstanceNorm3d", "KLDivLoss", "L1Loss", "LSTM", "LSTMCell", "LayerNorm",
-    "LayerNorm1d", "LayerNorm2d", "LayerNorm3d", "LeakyReLU", "Leaky_relu",
-    "Linear", "MSELoss", "MaxPool1d", "MaxPool2d", "MaxPool3d", "MaxUnpool2d",
-    "MaxUnpool3d", "Mish", "Module", "ModuleList", "MultiheadAttention",
-    "PReLU", "Parameter",
-    "ParameterDict", "ParameterList", "PixelShuffle", "Pool", "Pool3d", "RNN",
-    "RNNBase", "RNNCell", "RReLU", "ReLU", "ReLU6", "ReflectionPad2d", "Relu",
-    "ReplicationPad2d", "Resize", "Sequential", "SiLU", "Sigmoid", "Softmax",
-    "Softplus", "Softsign", "Tanh", "Unfold", "Upsample",
-    "UpsamplingBilinear2d", "UpsamplingNearest2d", "ZeroPad2d",
+    "AdaptiveAvgPool1d",
+    "AdaptiveAvgPool2d",
+    "AdaptiveAvgPool3d",
+    "AdaptiveMaxPool2d",
+    "AdaptiveMaxPool3d",
+    "AvgPool1d",
+    "AvgPool2d",
+    "AvgPool3d",
+    "BCELoss",
+    "BCEWithLogitsLoss",
+    "BatchNorm",
+    "BatchNorm1d",
+    "BatchNorm2d",
+    "BatchNorm3d",
+    "Bilinear",
+    "CTCLoss",
+    "ComplexNumber",
+    "ConstantPad1d",
+    "ConstantPad2d",
+    "ConstantPad3d",
+    "Conv",
+    "Conv1d",
+    "Conv1d_sp",
+    "Conv2d",
+    "Conv3d",
+    "ConvTranspose",
+    "ConvTranspose2d",
+    "ConvTranspose3d",
+    "CrossEntropyLoss",
+    "DepthwiseConv",
+    "DropPath",
+    "Dropout",
+    "Dropout2d",
+    "ELU",
+    "Embedding",
+    "EmbeddingBag",
+    "Flatten",
+    "Fold",
+    "GELU",
+    "GLU",
+    "GRU",
+    "GRUCell",
+    "GroupNorm",
+    "Hardsigmoid",
+    "Hardswish",
+    "Identity",
+    "InstanceNorm",
+    "InstanceNorm1d",
+    "InstanceNorm2d",
+    "InstanceNorm3d",
+    "KLDivLoss",
+    "L1Loss",
+    "LSTM",
+    "LSTMCell",
+    "LayerNorm",
+    "LayerNorm1d",
+    "LayerNorm2d",
+    "LayerNorm3d",
+    "LeakyReLU",
+    "Leaky_relu",
+    "Linear",
+    "MSELoss",
+    "MaxPool1d",
+    "MaxPool2d",
+    "MaxPool3d",
+    "MaxUnpool2d",
+    "MaxUnpool3d",
+    "Mish",
+    "Module",
+    "ModuleList",
+    "MultiheadAttention",
+    "PReLU",
+    "Parameter",
+    "ParameterDict",
+    "ParameterList",
+    "PixelShuffle",
+    "Pool",
+    "Pool3d",
+    "RNN",
+    "RNNBase",
+    "RNNCell",
+    "RReLU",
+    "ReLU",
+    "ReLU6",
+    "ReflectionPad2d",
+    "Relu",
+    "ReplicationPad2d",
+    "Resize",
+    "Sequential",
+    "SiLU",
+    "Sigmoid",
+    "Softmax",
+    "Softplus",
+    "Softsign",
+    "Tanh",
+    "Unfold",
+    "Upsample",
+    "UpsamplingBilinear2d",
+    "UpsamplingNearest2d",
+    "ZeroPad2d",
 )
 _ACCIDENTAL_EXPORTS = {
-    "abstractmethod", "deepcopy", "opt_grad", "OrderedDict", "partial",
-    "Optimizer", "SGD", "RMSprop", "Adam", "AdamW", "Adan", "LRScheduler",
+    "abstractmethod",
+    "deepcopy",
+    "opt_grad",
+    "OrderedDict",
+    "partial",
+    "Optimizer",
+    "SGD",
+    "RMSprop",
+    "Adam",
+    "AdamW",
+    "Adan",
+    "LRScheduler",
     "LambdaLR",
 }
 
@@ -299,14 +578,10 @@ class TestNNStructure(unittest.TestCase):
                     self.assertTrue(_is_runtime_wrapper(public))
                 else:
                     self.assertIs(pickle.loads(pickle.dumps(implementation)), public)
-                legacy_pickle = (
-                    b"cjittor.nn\n" + implementation.__name__.encode("ascii") + b"\n."
-                )
+                legacy_pickle = b"cjittor.nn\n" + implementation.__name__.encode("ascii") + b"\n."
                 self.assertIs(pickle.loads(legacy_pickle), public)
 
-        depthwise_protocol2 = (
-            b"\x80\x02cjittor.depthwise_conv\nDepthwiseConv\nq\x00."
-        )
+        depthwise_protocol2 = b"\x80\x02cjittor.depthwise_conv\nDepthwiseConv\nq\x00."
         self.assertIs(pickle.loads(depthwise_protocol2), depthwise.DepthwiseConv)
 
     def test_linear_and_depthwise_module_contracts(self):
@@ -323,9 +598,7 @@ class TestNNStructure(unittest.TestCase):
             ("jittor.nn.modules.pooling", "avg_pool2d"),
             ("jittor.nn.modules.pooling", "adaptive_avg_pool2d"),
         ):
-            legacy_pickle = (
-                "c{}\n{}\n.".format(module_name, function_name).encode("ascii")
-            )
+            legacy_pickle = "c{}\n{}\n.".format(module_name, function_name).encode("ascii")
             self.assertIs(
                 pickle.loads(legacy_pickle),
                 getattr(importlib.import_module(module_name), function_name),
@@ -370,7 +643,7 @@ class TestNNStructure(unittest.TestCase):
             self.assertIs(nn.log_softmax("input", dim=3), marker)
         finally:
             nn.softmax = original
-        self.assertEqual(calls, [(('input',), {'dim': 3, 'log': True})])
+        self.assertEqual(calls, [(("input",), {"dim": 3, "log": True})])
 
     def test_normalization_helpers_dispatch_through_public_facade(self):
         class Marker:
@@ -455,6 +728,7 @@ class TestNNStructure(unittest.TestCase):
         nn.ComplexNumber = fake_type
         jittor.stack = lambda values, dim=-1: (values, dim)
         try:
+
             class Value:
                 def __getitem__(self, key):
                     return key
@@ -466,19 +740,20 @@ class TestNNStructure(unittest.TestCase):
             jittor.stack = original_stack
             nn.ComplexNumber = original_type
 
-    def test_attention_has_one_canonical_implementation_and_legacy_facade(self):
+    def test_attention_has_one_canonical_implementation_and_same_object_alias(self):
         legacy = importlib.import_module("jittor.attention")
-        self.assertEqual(
-            tuple(legacy.__all__),
-            (
-                "MultiheadAttention",
-                "baddbmm",
-                "multi_head_attention_forward",
-                "pad",
-                "scaled_dot_product_attention",
-            ),
+        self.assertIs(legacy, attention)
+        self.assertIs(jittor.attention, attention)
+        self.assertIs(sys.modules["jittor.attention"], attention)
+        legacy_names = (
+            "MultiheadAttention",
+            "baddbmm",
+            "multi_head_attention_forward",
+            "pad",
+            "scaled_dot_product_attention",
         )
-        for name in legacy.__all__:
+        self.assertTrue(set(legacy_names).issubset(legacy.__all__))
+        for name in legacy_names:
             with self.subTest(name=name):
                 self.assertIs(getattr(legacy, name), getattr(nn, name))
 
@@ -497,16 +772,11 @@ class TestNNStructure(unittest.TestCase):
         )
 
         repo_root = Path(nn.__file__).resolve().parents[2]
+        self.assertFalse((repo_root / "jittor" / "attention.py").exists())
         expected_definitions = {
-            "MultiheadAttention": {
-                repo_root / "jittor" / "nn" / "modules" / "attention.py"
-            },
+            "MultiheadAttention": {repo_root / "jittor" / "nn" / "modules" / "attention.py"},
             "multi_head_attention_forward": {
-                repo_root
-                / "jittor"
-                / "nn"
-                / "functional"
-                / "multihead_attention.py"
+                repo_root / "jittor" / "nn" / "functional" / "multihead_attention.py"
             },
             "scaled_dot_product_attention": {
                 repo_root / "jittor" / "nn" / "functional" / "attention.py",
@@ -522,23 +792,11 @@ class TestNNStructure(unittest.TestCase):
                         actual_definitions[node.name].add(path)
         self.assertEqual(actual_definitions, expected_definitions)
 
-        legacy_path = Path(legacy.__file__).resolve()
-        legacy_tree = ast.parse(
-            legacy_path.read_text(encoding="utf-8"), filename=str(legacy_path)
-        )
-        self.assertFalse(
-            any(
-                isinstance(node, (ast.FunctionDef, ast.ClassDef))
-                for node in ast.walk(legacy_tree)
-            )
-        )
         installer_source = (
             repo_root / "jittor" / "compat" / "torch" / "installers" / "nn.py"
         ).read_text(encoding="utf-8")
         self.assertNotIn("class MultiheadAttention", installer_source)
-        self.assertIn(
-            "return _native_scaled_dot_product_attention(", installer_source
-        )
+        self.assertIn("return _native_scaled_dot_product_attention(", installer_source)
 
     def test_stateful_leaf_modules_dispatch_through_public_functions(self):
         marker = object()
@@ -623,17 +881,20 @@ class TestNNStructure(unittest.TestCase):
                 self.assertIs(pickle.loads(pickle.dumps(cls)), cls)
 
         cached_cls = nn._ln_function_cls((-1,), 1e-5)
-        self.assertEqual(
-            nn._ln_function_cls.__wrapped__.__module__, normalization.__name__
-        )
+        self.assertEqual(nn._ln_function_cls.__wrapped__.__module__, normalization.__name__)
         self.assertEqual(cached_cls.__module__, normalization.__name__)
         self.assertEqual(cached_cls.execute.__module__, normalization.__name__)
         self.assertEqual(cached_cls.grad.__module__, normalization.__name__)
 
     def test_recurrent_public_contracts_remain_stable(self):
         classes = (
-            nn.LSTMCell, nn.RNNCell, nn.GRUCell, nn.RNNBase,
-            nn.RNN, nn.LSTM, nn.GRU,
+            nn.LSTMCell,
+            nn.RNNCell,
+            nn.GRUCell,
+            nn.RNNBase,
+            nn.RNN,
+            nn.LSTM,
+            nn.GRU,
         )
         for cls in classes:
             with self.subTest(cls=cls.__name__):
@@ -664,15 +925,19 @@ class TestNNStructure(unittest.TestCase):
 
     def test_convolution_public_contracts_remain_stable(self):
         function_names = (
-            "conv1d", "conv2d", "conv3d", "conv_transpose",
-            "conv_transpose1d", "conv_transpose2d", "conv_transpose3d",
+            "conv1d",
+            "conv2d",
+            "conv3d",
+            "conv_transpose",
+            "conv_transpose1d",
+            "conv_transpose2d",
+            "conv_transpose3d",
         )
         for name in function_names:
             with self.subTest(function=name):
                 self.assertIs(getattr(nn.functional, name), getattr(nn, name))
 
-        self.assertIs(nn._CUDNN_3D_HALF_DTYPES,
-                      convolution_cudnn._CUDNN_3D_HALF_DTYPES)
+        self.assertIs(nn._CUDNN_3D_HALF_DTYPES, convolution_cudnn._CUDNN_3D_HALF_DTYPES)
         for cls in (nn._CudnnConv2d, nn._CudnnConvT2d):
             with self.subTest(cls=cls.__name__):
                 self.assertEqual(cls.__module__, convolution_cudnn.__name__)
@@ -705,8 +970,14 @@ class TestNNStructure(unittest.TestCase):
                         self.assertEqual(member.__module__, expected_module)
 
         module_names = (
-            "Conv", "Conv2d", "Conv1d", "Conv3d", "Conv1d_sp",
-            "ConvTranspose", "ConvTranspose2d", "ConvTranspose3d",
+            "Conv",
+            "Conv2d",
+            "Conv1d",
+            "Conv3d",
+            "Conv1d_sp",
+            "ConvTranspose",
+            "ConvTranspose2d",
+            "ConvTranspose3d",
         )
         for name in module_names:
             with self.subTest(nn_modules=name):
@@ -724,35 +995,84 @@ class TestNNStructure(unittest.TestCase):
         instance_contracts = (
             (
                 convolution_layers.Conv(2, 3, 3),
-                ("padding_mode", "in_channels", "out_channels", "kernel_size",
-                 "stride", "padding", "dilation", "groups",
-                 "is_depthwise_conv", "weight", "bias"),
+                (
+                    "padding_mode",
+                    "in_channels",
+                    "out_channels",
+                    "kernel_size",
+                    "stride",
+                    "padding",
+                    "dilation",
+                    "groups",
+                    "is_depthwise_conv",
+                    "weight",
+                    "bias",
+                ),
                 ("weight", "bias"),
             ),
             (
                 convolution_layers.Conv1d(2, 3, 3),
-                ("in_channels", "out_channels", "kernel_size", "stride",
-                 "padding", "dilation", "groups", "bias", "_conv", "weight"),
+                (
+                    "in_channels",
+                    "out_channels",
+                    "kernel_size",
+                    "stride",
+                    "padding",
+                    "dilation",
+                    "groups",
+                    "bias",
+                    "_conv",
+                    "weight",
+                ),
                 ("bias", "weight"),
             ),
             (
                 convolution_3d_layers.Conv3d(2, 3, 3),
-                ("in_channels", "out_channels", "kernel_size", "stride",
-                 "padding", "dilation", "groups", "weight", "bias"),
+                (
+                    "in_channels",
+                    "out_channels",
+                    "kernel_size",
+                    "stride",
+                    "padding",
+                    "dilation",
+                    "groups",
+                    "weight",
+                    "bias",
+                ),
                 ("weight", "bias"),
             ),
             (
                 convolution_transpose_layers.ConvTranspose(2, 3, 3),
-                ("in_channels", "out_channels", "dilation", "groups",
-                 "kernel_size", "stride", "padding", "real_padding",
-                 "output_padding", "weight", "bias"),
+                (
+                    "in_channels",
+                    "out_channels",
+                    "dilation",
+                    "groups",
+                    "kernel_size",
+                    "stride",
+                    "padding",
+                    "real_padding",
+                    "output_padding",
+                    "weight",
+                    "bias",
+                ),
                 ("weight", "bias"),
             ),
             (
                 convolution_transpose_layers.ConvTranspose3d(2, 3, 3),
-                ("in_channels", "out_channels", "dilation", "group",
-                 "kernel_size", "stride", "padding", "real_padding",
-                 "output_padding", "weight", "bias"),
+                (
+                    "in_channels",
+                    "out_channels",
+                    "dilation",
+                    "group",
+                    "kernel_size",
+                    "stride",
+                    "padding",
+                    "real_padding",
+                    "output_padding",
+                    "weight",
+                    "bias",
+                ),
                 ("weight", "bias"),
             ),
         )
@@ -806,15 +1126,20 @@ class TestNNStructure(unittest.TestCase):
         nn.conv2d = replacement_conv2d
         try:
             result = convolution.conv1d(
-                input_marker, weight_marker, "bias", 2, 3, 4, 5,
+                input_marker,
+                weight_marker,
+                "bias",
+                2,
+                3,
+                4,
+                5,
             )
         finally:
             nn.conv2d = original_conv2d
         self.assertIs(result, output_marker)
         self.assertEqual(
             conv2d_calls,
-            [(input_marker, weight_marker, "bias", (2, 1), (3, 0),
-              (4, 1), 5)],
+            [(input_marker, weight_marker, "bias", (2, 1), (3, 0), (4, 1), 5)],
         )
 
         original_transpose = nn.conv_transpose
@@ -827,15 +1152,21 @@ class TestNNStructure(unittest.TestCase):
         nn.conv_transpose = replacement_transpose
         try:
             result = convolution_transpose.conv_transpose1d(
-                input_marker, weight_marker, "bias", 2, 3, 4, 5, 6,
+                input_marker,
+                weight_marker,
+                "bias",
+                2,
+                3,
+                4,
+                5,
+                6,
             )
         finally:
             nn.conv_transpose = original_transpose
         self.assertIs(result, output_marker)
         self.assertEqual(
             transpose_calls,
-            [(input_marker, weight_marker, "bias", (2, 1), (3, 0),
-              (4, 0), 5, (6, 1))],
+            [(input_marker, weight_marker, "bias", (2, 1), (3, 0), (4, 0), 5, (6, 1))],
         )
 
         holder = python_types.SimpleNamespace(
@@ -847,15 +1178,17 @@ class TestNNStructure(unittest.TestCase):
         nn.conv2d = replacement_conv2d
         try:
             result = convolution_layers.Conv._conv_forward(
-                holder, input_marker, weight_marker, "bias",
+                holder,
+                input_marker,
+                weight_marker,
+                "bias",
             )
         finally:
             nn.conv2d = original_conv2d
         self.assertIs(result, output_marker)
         self.assertEqual(
             conv2d_calls[-1],
-            (input_marker, weight_marker, "bias", "stride", "padding",
-             "dilation", "groups"),
+            (input_marker, weight_marker, "bias", "stride", "padding", "dilation", "groups"),
         )
 
         cudnn_calls = []
@@ -883,8 +1216,7 @@ class TestNNStructure(unittest.TestCase):
         self.assertIs(result, output_marker)
         self.assertEqual(
             cudnn_calls,
-            [(conv_input, weight_marker, "bias", "stride", "padding",
-              "dilation", "groups")],
+            [(conv_input, weight_marker, "bias", "stride", "padding", "dilation", "groups")],
         )
 
         conv1d_calls = []
@@ -907,8 +1239,15 @@ class TestNNStructure(unittest.TestCase):
         nn.Conv = FakeConv
         try:
             convolution_layers.Conv1d.__init__(
-                conv1d_holder, 2, 3, 4, stride=2, padding=3,
-                dilation=4, groups=1, bias=True,
+                conv1d_holder,
+                2,
+                3,
+                4,
+                stride=2,
+                padding=3,
+                dilation=4,
+                groups=1,
+                bias=True,
             )
         finally:
             nn.Conv = original_conv_class
@@ -937,8 +1276,7 @@ class TestNNStructure(unittest.TestCase):
         self.assertIs(result, output_marker)
         self.assertEqual(
             conv3d_calls,
-            [(input_marker, weight_marker, "bias", "stride", "padding",
-              "dilation", "groups")],
+            [(input_marker, weight_marker, "bias", "stride", "padding", "dilation", "groups")],
         )
 
         original_transpose3d = nn.conv_transpose3d
@@ -953,25 +1291,39 @@ class TestNNStructure(unittest.TestCase):
         nn.conv_transpose3d = replacement_transpose3d
         try:
             result = convolution_transpose_layers.ConvTranspose3d.execute(
-                holder, input_marker,
+                holder,
+                input_marker,
             )
         finally:
             nn.conv_transpose3d = original_transpose3d
         self.assertIs(result, output_marker)
         self.assertEqual(
             transpose3d_calls,
-            [(input_marker, weight_marker, "bias", "stride", "padding",
-              "output_padding", "group", "dilation")],
+            [
+                (
+                    input_marker,
+                    weight_marker,
+                    "bias",
+                    "stride",
+                    "padding",
+                    "output_padding",
+                    "group",
+                    "dilation",
+                )
+            ],
         )
 
         source_contracts = {
             convolution: (
-                "jt.nn._pair", "jt.nn._triple",
+                "jt.nn._pair",
+                "jt.nn._triple",
                 "jt.nn._try_cudnn_conv2d",
-                "jt.nn._cudnn_conv3d_fp16_safe", "jt.nn.conv2d",
+                "jt.nn._cudnn_conv3d_fp16_safe",
+                "jt.nn.conv2d",
             ),
             convolution_cudnn: (
-                "jt.nn._CudnnConv2d", "jt.nn._CudnnConvT2d",
+                "jt.nn._CudnnConv2d",
+                "jt.nn._CudnnConvT2d",
                 "jt.nn._CUDNN_3D_HALF_DTYPES",
             ),
             convolution_transpose: (
@@ -980,14 +1332,21 @@ class TestNNStructure(unittest.TestCase):
                 "jt.nn.conv_transpose",
             ),
             convolution_layers: (
-                "jt.nn._pair", "jt.nn.DepthwiseConv", "jt.nn.init",
-                "jt.nn._try_cudnn_conv2d", "jt.nn.conv2d", "jt.nn.Conv",
+                "jt.nn._pair",
+                "jt.nn.DepthwiseConv",
+                "jt.nn.init",
+                "jt.nn._try_cudnn_conv2d",
+                "jt.nn.conv2d",
+                "jt.nn.Conv",
             ),
             convolution_3d_layers: (
-                "jt.nn._triple", "jt.nn.init", "jt.nn.conv3d",
+                "jt.nn._triple",
+                "jt.nn.init",
+                "jt.nn.conv3d",
             ),
             convolution_transpose_layers: (
-                "jt.nn.init", "jt.nn.conv_transpose3d",
+                "jt.nn.init",
+                "jt.nn.conv_transpose3d",
             ),
         }
         for module, references in source_contracts.items():
@@ -1070,8 +1429,7 @@ class TestNNStructure(unittest.TestCase):
             ),
             (
                 "avg_pool2d",
-                "(x, kernel_size, stride=None, padding=0, ceil_mode=False, "
-                "count_include_pad=True)",
+                "(x, kernel_size, stride=None, padding=0, ceil_mode=False, count_include_pad=True)",
             ),
         )
         for name, signature in function_signatures:
@@ -1087,8 +1445,7 @@ class TestNNStructure(unittest.TestCase):
         class_signatures = (
             (
                 pooling.AvgPool2d,
-                "(kernel_size, stride=None, padding=0, ceil_mode=False, "
-                "count_include_pad=True)",
+                "(kernel_size, stride=None, padding=0, ceil_mode=False, count_include_pad=True)",
             ),
             (pooling.AdaptiveAvgPool2d, "(output_size)"),
         )
@@ -1109,11 +1466,24 @@ class TestNNStructure(unittest.TestCase):
         self.assertIsNot(nn.avg_pool2d, pool.avg_pool2d)
 
         pool_reexports = (
-            "AdaptiveAvgPool1d", "AdaptiveAvgPool3d", "AdaptiveMaxPool2d",
-            "AdaptiveMaxPool3d", "AvgPool1d", "AvgPool3d", "MaxPool1d",
-            "MaxPool2d", "MaxPool3d", "MaxUnpool2d", "MaxUnpool3d",
-            "Pool", "Pool3d", "max_pool2d", "max_pool3d", "pool",
-            "pool2d", "pool3d",
+            "AdaptiveAvgPool1d",
+            "AdaptiveAvgPool3d",
+            "AdaptiveMaxPool2d",
+            "AdaptiveMaxPool3d",
+            "AvgPool1d",
+            "AvgPool3d",
+            "MaxPool1d",
+            "MaxPool2d",
+            "MaxPool3d",
+            "MaxUnpool2d",
+            "MaxUnpool3d",
+            "Pool",
+            "Pool3d",
+            "max_pool2d",
+            "max_pool3d",
+            "pool",
+            "pool2d",
+            "pool3d",
         )
         for name in pool_reexports:
             with self.subTest(pool_reexport=name):
@@ -1132,8 +1502,11 @@ class TestNNStructure(unittest.TestCase):
             (
                 pooling.AvgPool2d(2),
                 (
-                    ("kernel_size", 2), ("stride", 2), ("padding", 0),
-                    ("ceil_mode", False), ("count_include_pad", True),
+                    ("kernel_size", 2),
+                    ("stride", 2),
+                    ("padding", 0),
+                    ("ceil_mode", False),
+                    ("count_include_pad", True),
                 ),
             ),
             (
@@ -1220,9 +1593,7 @@ class TestNNStructure(unittest.TestCase):
         fake_tensor = FakeTensor()
         nn._pair = replacement_pair
         try:
-            self.assertIs(
-                pooling_function.avg_pool2d(fake_tensor, 2, 3, 0), fake_tensor
-            )
+            self.assertIs(pooling_function.avg_pool2d(fake_tensor, 2, 3, 0), fake_tensor)
         finally:
             nn._pair = original_pair
         self.assertEqual(pair_calls, [2, 3, 0])
@@ -1265,7 +1636,11 @@ class TestNNStructure(unittest.TestCase):
 
     def test_tensor_method_bindings_remain_on_public_functions(self):
         for name in (
-            "matmul", "prelu", "hardswish", "hardsigmoid", "rrelu",
+            "matmul",
+            "prelu",
+            "hardswish",
+            "hardsigmoid",
+            "rrelu",
             "log_sigmoid",
         ):
             with self.subTest(name=name):
@@ -1273,9 +1648,9 @@ class TestNNStructure(unittest.TestCase):
         for name in ("softmax", "log_softmax", "logsumexp", "backward"):
             with self.subTest(compatibility_override=name):
                 self.assertTrue(callable(getattr(jittor.Var, name)))
-        bindings_source = (
-            Path(nn.__file__).resolve().parent / "_bindings.py"
-        ).read_text(encoding="utf-8")
+        bindings_source = (Path(nn.__file__).resolve().parent / "_bindings.py").read_text(
+            encoding="utf-8"
+        )
         for name in ("softmax", "log_softmax", "logsumexp", "backward"):
             self.assertIn("jt.Var.%s =" % name, bindings_source)
         self.assertIs(jittor.Var.__matmul__, nn.matmul)
@@ -1363,7 +1738,8 @@ class TestNNStructure(unittest.TestCase):
         facade_path = Path(nn.__file__).resolve()
         tree = ast.parse(facade_path.read_text(encoding="utf-8"), filename=str(facade_path))
         implementation_imports = {
-            node.module for node in tree.body
+            node.module
+            for node in tree.body
             if isinstance(node, ast.ImportFrom)
             and node.level == 1
             and node.module is not None
@@ -1379,8 +1755,7 @@ class TestNNStructure(unittest.TestCase):
         source = facade_path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(facade_path))
         facade_definitions = {
-            node.name for node in tree.body
-            if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+            node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))
         }
         self.assertEqual(facade_definitions, set())
         self.assertNotIn("_register_public_subpackages", source)
@@ -1434,8 +1809,7 @@ class TestNNStructure(unittest.TestCase):
                     implementation = getattr(package, name)
                     if name in _RUNTIME_PATCHED_SYMBOLS and public is not implementation:
                         self.assertTrue(
-                            _is_runtime_wrapper(public)
-                            or _is_runtime_wrapper(implementation)
+                            _is_runtime_wrapper(public) or _is_runtime_wrapper(implementation)
                         )
                     else:
                         self.assertIs(implementation, public)

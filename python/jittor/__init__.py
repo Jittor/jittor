@@ -85,7 +85,6 @@ from ._runtime.core_api import *
 from ._runtime.core_api import _core_flags
 
 from . import nn
-from . import attention
 from . import lr_scheduler
 from . import linalg
 from .linalg import einsum

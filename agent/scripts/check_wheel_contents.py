@@ -28,12 +28,8 @@ import zipfile
 
 AGENT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BASELINE = AGENT_ROOT / "baselines" / "wheel-contents-final.txt"
-DEFAULT_ADDITION_ALLOWLIST = (
-    AGENT_ROOT / "baselines" / "wheel-additions-final.txt"
-)
-DEFAULT_CONTENT_CHANGE_ALLOWLIST = (
-    AGENT_ROOT / "baselines" / "wheel-content-changes-final.txt"
-)
+DEFAULT_ADDITION_ALLOWLIST = AGENT_ROOT / "baselines" / "wheel-additions-final.txt"
+DEFAULT_CONTENT_CHANGE_ALLOWLIST = AGENT_ROOT / "baselines" / "wheel-content-changes-final.txt"
 
 REQUIRED_MEMBERS = (
     "jittor/compat/shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh",
@@ -41,28 +37,32 @@ REQUIRED_MEMBERS = (
     "jittor/compat/shim/resources/torch_init.py",
 )
 
-FORBIDDEN_DIRECTORY_NAMES = frozenset((
-    "__pycache__",
-    ".pytest_cache",
-    ".mypy_cache",
-    ".ruff_cache",
-    ".cache",
-    ".git",
-    ".claude",
-    ".codex",
-    ".agents",
-    "build",
-    "dist",
-    "__data__",
-    "worktrees",
-    "_state",
-))
+FORBIDDEN_DIRECTORY_NAMES = frozenset(
+    (
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".cache",
+        ".git",
+        ".claude",
+        ".codex",
+        ".agents",
+        "build",
+        "dist",
+        "__data__",
+        "worktrees",
+        "_state",
+    )
+)
 
-FORBIDDEN_TOP_LEVEL_NAMES = frozenset((
-    "agent",
-    "jittor-lab",
-    "jittor_fsdp2",
-))
+FORBIDDEN_TOP_LEVEL_NAMES = frozenset(
+    (
+        "agent",
+        "jittor-lab",
+        "jittor_fsdp2",
+    )
+)
 
 FORBIDDEN_MEMBER_PREFIXES = (
     "jittor/_misc/",
@@ -80,22 +80,25 @@ FORBIDDEN_MEMBER_PREFIXES = (
     "jittor/vcompiler/",
 )
 
-FORBIDDEN_EXACT_MEMBERS = frozenset((
-    "jittor/depthwise_conv.py",
-    "jittor/extern/llvm/jt_alignment_from_assumptions.cc",
-    "jittor/misc.py",
-    "jittor/monkeypatch_ops.py",
-    "jittor/nn.py",
-    "jittor/optim.py",
-    "jittor/pool.py",
-    "jittor/torch_compat.py",
-    "jittor/torch_fsdp2_compat.py",
-    "jittor/utils/polish.py",
-    "jittor/utils/polish_centos.py",
-    "jittor/version",
-    "jittor_utils/pack_offline.py",
-    "jittor_utils/translator.py",
-))
+FORBIDDEN_EXACT_MEMBERS = frozenset(
+    (
+        "jittor/attention.py",
+        "jittor/depthwise_conv.py",
+        "jittor/extern/llvm/jt_alignment_from_assumptions.cc",
+        "jittor/misc.py",
+        "jittor/monkeypatch_ops.py",
+        "jittor/nn.py",
+        "jittor/optim.py",
+        "jittor/pool.py",
+        "jittor/torch_compat.py",
+        "jittor/torch_fsdp2_compat.py",
+        "jittor/utils/polish.py",
+        "jittor/utils/polish_centos.py",
+        "jittor/version",
+        "jittor_utils/pack_offline.py",
+        "jittor_utils/translator.py",
+    )
+)
 
 FORBIDDEN_SUFFIXES = (
     ".pyc",
@@ -135,11 +138,9 @@ def _validate_member_name(name, source):
     if "\\" in name:
         issues.append("{} contains a non-POSIX member: {!r}".format(source, name))
     if any(ord(character) < 32 for character in name):
-        issues.append("{} contains a control character in member: {!r}".format(
-            source, name))
+        issues.append("{} contains a control character in member: {!r}".format(source, name))
     if ".." in PurePosixPath(name).parts:
-        issues.append("{} contains a parent traversal member: {!r}".format(
-            source, name))
+        issues.append("{} contains a parent traversal member: {!r}".format(source, name))
     return issues
 
 
@@ -162,8 +163,7 @@ def _read_wheel(path):
     issues = []
     if bad_member is not None:
         issues.append("{} has a corrupt member: {}".format(path, bad_member))
-    duplicates = sorted(
-        name for name, count in Counter(names).items() if count > 1)
+    duplicates = sorted(name for name, count in Counter(names).items() if count > 1)
     for name in duplicates:
         issues.append("{} contains duplicate member: {}".format(path, name))
     for name in names:
@@ -172,9 +172,7 @@ def _read_wheel(path):
 
 
 def _parse_sha256(value, label):
-    if len(value) != 64 or any(
-        character not in "0123456789abcdef" for character in value
-    ):
+    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
         raise WheelContentsError(
             "{} has an invalid lowercase SHA-256 digest: {!r}".format(label, value)
         )
@@ -196,24 +194,18 @@ def _read_hashed_path_list(path, label):
             continue
         if line != raw_line:
             raise WheelContentsError(
-                "{} {}:{} has leading or trailing whitespace".format(
-                    label, path, line_number
-                )
+                "{} {}:{} has leading or trailing whitespace".format(label, path, line_number)
             )
         digest, separator, name = line.partition("  ")
         location = "{} {}:{}".format(label, path, line_number)
         if not separator or not name:
-            raise WheelContentsError(
-                "{} must use '<sha256>  <wheel-path>'".format(location)
-            )
+            raise WheelContentsError("{} must use '<sha256>  <wheel-path>'".format(location))
         _parse_sha256(digest, location)
         issues = _validate_member_name(name, path)
         if issues:
             raise WheelContentsError(issues[0])
         if name in entries:
-            raise WheelContentsError(
-                "{} {} contains duplicate path: {}".format(label, path, name)
-            )
+            raise WheelContentsError("{} {} contains duplicate path: {}".format(label, path, name))
         entries[name] = digest
     return entries
 
@@ -233,16 +225,15 @@ def _read_path_list(path, label):
             continue
         if line != raw_line:
             raise WheelContentsError(
-                "{} {}:{} has leading or trailing whitespace".format(
-                    label, path, line_number))
+                "{} {}:{} has leading or trailing whitespace".format(label, path, line_number)
+            )
         entries.append(line)
 
-    duplicates = sorted(
-        name for name, count in Counter(entries).items() if count > 1)
+    duplicates = sorted(name for name, count in Counter(entries).items() if count > 1)
     if duplicates:
         raise WheelContentsError(
-            "{} {} contains duplicate entries: {}".format(
-                label, path, ", ".join(duplicates)))
+            "{} {} contains duplicate entries: {}".format(label, path, ", ".join(duplicates))
+        )
     for name in entries:
         issues = _validate_member_name(name, path)
         if issues:
@@ -298,9 +289,7 @@ def _manifest_text(wheel_path, members):
         "# entries: {}".format(len(members)),
         "# Regenerate only after reviewing every path and content change.",
     ]
-    entries = [
-        "{}  {}".format(members[name], name) for name in sorted(members)
-    ]
+    entries = ["{}  {}".format(members[name], name) for name in sorted(members)]
     return "\n".join(header + entries) + "\n"
 
 
@@ -338,13 +327,14 @@ def _load_reference(args):
 def _load_removal_allowlist(args, reference):
     allowed = set(args.allow_removal)
     if args.removal_allowlist is not None:
-        allowed.update(_read_path_list(
-            args.removal_allowlist, "removal allowlist"))
+        allowed.update(_read_path_list(args.removal_allowlist, "removal allowlist"))
     unknown = sorted(allowed - set(reference))
     if unknown:
         raise WheelContentsError(
             "removal allowlist contains path(s) absent from the reference: {}".format(
-                ", ".join(unknown)))
+                ", ".join(unknown)
+            )
+        )
     return allowed
 
 
@@ -411,18 +401,14 @@ def _load_hashed_allowlist(args, kind, default_path):
 
 
 def _load_change_allowlists(args, reference):
-    additions = _load_hashed_allowlist(
-        args, "addition", DEFAULT_ADDITION_ALLOWLIST
-    )
+    additions = _load_hashed_allowlist(args, "addition", DEFAULT_ADDITION_ALLOWLIST)
     content_changes = _load_hashed_allowlist(
         args, "content_change", DEFAULT_CONTENT_CHANGE_ALLOWLIST
     )
     invalid_additions = sorted(set(additions) & set(reference))
     if invalid_additions:
         raise WheelContentsError(
-            "addition allowlist contains reference path(s): {}".format(
-                ", ".join(invalid_additions)
-            )
+            "addition allowlist contains reference path(s): {}".format(", ".join(invalid_additions))
         )
     invalid_content_changes = sorted(set(content_changes) - set(reference))
     if invalid_content_changes:
@@ -432,9 +418,7 @@ def _load_change_allowlists(args, reference):
             )
         )
     no_op_content_changes = sorted(
-        name
-        for name, digest in content_changes.items()
-        if reference[name] == digest
+        name for name, digest in content_changes.items() if reference[name] == digest
     )
     if no_op_content_changes:
         raise WheelContentsError(
@@ -450,33 +434,23 @@ def _compare(args):
     candidate, candidate_archive_issues = _read_wheel(candidate_path)
     reference, reference_label = _load_reference(args)
     allowed_removals = _load_removal_allowlist(args, reference)
-    allowed_additions, allowed_content_changes = _load_change_allowlists(
-        args, reference
-    )
+    allowed_additions, allowed_content_changes = _load_change_allowlists(args, reference)
 
     reference_names = set(reference)
     candidate_names = set(candidate)
     removed = reference_names - candidate_names
     added = candidate_names - reference_names
     changed = {
-        name
-        for name in reference_names & candidate_names
-        if reference[name] != candidate[name]
+        name for name in reference_names & candidate_names if reference[name] != candidate[name]
     }
 
     approved_removals = removed & allowed_removals
     unexpected_removals = removed - allowed_removals
     unconsumed_removal_allowances = allowed_removals - removed
-    approved_additions = {
-        name
-        for name in added
-        if allowed_additions.get(name) == candidate[name]
-    }
+    approved_additions = {name for name in added if allowed_additions.get(name) == candidate[name]}
     unexpected_additions = added - approved_additions
     approved_content_changes = {
-        name
-        for name in changed
-        if allowed_content_changes.get(name) == candidate[name]
+        name for name in changed if allowed_content_changes.get(name) == candidate[name]
     }
     unexpected_content_changes = changed - approved_content_changes
     unconsumed_addition_allowances = set(allowed_additions) - added
@@ -487,33 +461,28 @@ def _compare(args):
     for name in sorted(unexpected_removals):
         issues.append("wheel member removed without approval: {}".format(name))
     for name in sorted(unconsumed_removal_allowances):
-        issues.append(
-            "approved wheel removal is not present: {}".format(name)
-        )
+        issues.append("approved wheel removal is not present: {}".format(name))
     for name in sorted(unexpected_additions):
         expected = allowed_additions.get(name)
         if expected is None:
             issues.append("wheel member added without approval: {}".format(name))
         else:
             issues.append(
-                "wheel addition hash does not match approval: {} "
-                "(expected {}, found {})".format(name, expected, candidate[name])
+                "wheel addition hash does not match approval: {} (expected {}, found {})".format(
+                    name, expected, candidate[name]
+                )
             )
     for name in sorted(unexpected_content_changes):
         expected = allowed_content_changes.get(name)
         if expected is None:
-            issues.append(
-                "wheel member content changed without approval: {}".format(name)
-            )
+            issues.append("wheel member content changed without approval: {}".format(name))
         else:
             issues.append(
                 "wheel content-change hash does not match approval: {} "
                 "(expected {}, found {})".format(name, expected, candidate[name])
             )
     for name in sorted(unconsumed_addition_allowances):
-        issues.append(
-            "approved wheel addition is absent from the candidate: {}".format(name)
-        )
+        issues.append("approved wheel addition is absent from the candidate: {}".format(name))
     for name in sorted(unconsumed_content_change_allowances):
         found = candidate.get(name)
         if found is None:
@@ -521,8 +490,7 @@ def _compare(args):
         else:
             detail = "found {}".format(found)
         issues.append(
-            "approved wheel content change is not present: {} "
-            "(expected {}, {})".format(
+            "approved wheel content change is not present: {} (expected {}, {})".format(
                 name, allowed_content_changes[name], detail
             )
         )
@@ -565,58 +533,80 @@ def _build_parser():
     subparsers.required = True
 
     manifest = subparsers.add_parser(
-        "manifest", help="emit a sorted, auditable path manifest for a wheel")
+        "manifest", help="emit a sorted, auditable path manifest for a wheel"
+    )
     manifest.add_argument("wheel", help="wheel used as the approved source")
     manifest.add_argument(
-        "--output", "-o", default="-",
-        help="manifest output path; default: stdout")
+        "--output", "-o", default="-", help="manifest output path; default: stdout"
+    )
     manifest.add_argument(
-        "--require", action="append", default=[], metavar="WHEEL_PATH",
-        help="require an additional exact member path")
+        "--require",
+        action="append",
+        default=[],
+        metavar="WHEEL_PATH",
+        help="require an additional exact member path",
+    )
     manifest.set_defaults(run=_write_manifest)
 
     compare = subparsers.add_parser(
-        "compare", help="compare a candidate wheel with an approved reference")
+        "compare", help="compare a candidate wheel with an approved reference"
+    )
     compare.add_argument("wheel", help="candidate wheel to audit")
     reference = compare.add_mutually_exclusive_group()
     reference.add_argument(
-        "--baseline", help="approved one-path-per-line manifest; default: {}".format(
-            DEFAULT_BASELINE))
-    reference.add_argument(
-        "--old-wheel", help="approved older wheel used as the path reference")
+        "--baseline",
+        help="approved one-path-per-line manifest; default: {}".format(DEFAULT_BASELINE),
+    )
+    reference.add_argument("--old-wheel", help="approved older wheel used as the path reference")
     compare.add_argument(
-        "--removal-allowlist", metavar="FILE",
-        help="one exact approved removal path per line; comments start with #")
-    compare.add_argument(
-        "--allow-removal", action="append", default=[], metavar="WHEEL_PATH",
-        help="approve one exact removal; may be repeated")
-    compare.add_argument(
-        "--addition-allowlist", action="append", default=[], metavar="FILE",
-        help=(
-            "approved '<candidate-sha256>  <wheel-path>' additions; may be "
-            "repeated"
-        ),
+        "--removal-allowlist",
+        metavar="FILE",
+        help="one exact approved removal path per line; comments start with #",
     )
     compare.add_argument(
-        "--allow-addition", action="append", nargs=2, default=[],
+        "--allow-removal",
+        action="append",
+        default=[],
+        metavar="WHEEL_PATH",
+        help="approve one exact removal; may be repeated",
+    )
+    compare.add_argument(
+        "--addition-allowlist",
+        action="append",
+        default=[],
+        metavar="FILE",
+        help=("approved '<candidate-sha256>  <wheel-path>' additions; may be repeated"),
+    )
+    compare.add_argument(
+        "--allow-addition",
+        action="append",
+        nargs=2,
+        default=[],
         metavar=("SHA256", "WHEEL_PATH"),
         help="approve one exact addition and candidate hash; may be repeated",
     )
     compare.add_argument(
-        "--content-change-allowlist", action="append", default=[], metavar="FILE",
-        help=(
-            "approved '<candidate-sha256>  <wheel-path>' content changes; "
-            "may be repeated"
-        ),
+        "--content-change-allowlist",
+        action="append",
+        default=[],
+        metavar="FILE",
+        help=("approved '<candidate-sha256>  <wheel-path>' content changes; may be repeated"),
     )
     compare.add_argument(
-        "--allow-content-change", action="append", nargs=2, default=[],
+        "--allow-content-change",
+        action="append",
+        nargs=2,
+        default=[],
         metavar=("SHA256", "WHEEL_PATH"),
         help="approve one exact changed member and candidate hash; may be repeated",
     )
     compare.add_argument(
-        "--require", action="append", default=[], metavar="WHEEL_PATH",
-        help="require an additional exact member path")
+        "--require",
+        action="append",
+        default=[],
+        metavar="WHEEL_PATH",
+        help="require an additional exact member path",
+    )
     compare.set_defaults(run=_compare)
     return parser
 

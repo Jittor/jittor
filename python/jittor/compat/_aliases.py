@@ -10,6 +10,7 @@ import sys
 
 
 ALIASES = {
+    "jittor.attention": "jittor.nn.attention",
     "jittor.torch_compat": "jittor.compat.torch",
     "jittor.torch_compat.context": "jittor.compat.torch.context",
     "jittor.torch_compat.functional": "jittor.compat.torch.functional",
@@ -63,13 +64,9 @@ _PACKAGE_TARGETS = frozenset(
     )
 )
 _LAZY_PARENT_BINDINGS = frozenset(
-    alias
-    for alias in ALIASES
-    if alias.startswith("jittor.torch_fsdp2_compat.")
+    alias for alias in ALIASES if alias.startswith("jittor.torch_fsdp2_compat.")
 )
-_TORCH_PARENT_BINDING_EXCEPTIONS = frozenset(
-    ("torch.distributed._composable.fsdp.fully_shard",)
-)
+_TORCH_PARENT_BINDING_EXCEPTIONS = frozenset(("torch.distributed._composable.fsdp.fully_shard",))
 
 
 class _AliasLoader(importlib.abc.Loader):
@@ -134,9 +131,7 @@ def _torch_namespace():
 def torch_namespace_owned(root_module):
     """Return whether the complete Torch graph is still owned by ``root_module``."""
 
-    namespace = {
-        name: module for name, module in _torch_namespace().items()
-    }
+    namespace = {name: module for name, module in _torch_namespace().items()}
     if namespace.get("torch") is not root_module:
         return False
     context = getattr(root_module, "_torch_compat_install_context", None)
@@ -191,9 +186,7 @@ def _bind_parent(alias, module):
 def _publish_alias(alias, module, bind_parent=True):
     current = sys.modules.get(alias)
     if current is not None and current is not module:
-        raise RuntimeError(
-            "module alias %r already published with a different object" % alias
-        )
+        raise RuntimeError("module alias %r already published with a different object" % alias)
     sys.modules[alias] = module
     if bind_parent:
         _bind_parent(alias, module)
@@ -210,6 +203,7 @@ def publish_loaded_aliases(root_module=None):
         _publish_alias(alias, module)
     if root_module is not None:
         for attr, canonical in (
+            ("attention", "jittor.nn.attention"),
             ("torch_compat", "jittor.compat.torch"),
             ("torch_fsdp2_compat", "jittor.compat.fsdp2"),
             ("torch_shim", "jittor.compat.shim"),
@@ -222,10 +216,7 @@ def publish_loaded_aliases(root_module=None):
 
 
 def install_aliases(root_module=None):
-    if not any(
-        getattr(finder, "_jittor_compat_alias_finder", False)
-        for finder in sys.meta_path
-    ):
+    if not any(getattr(finder, "_jittor_compat_alias_finder", False) for finder in sys.meta_path):
         sys.meta_path.insert(0, _FINDER)
     publish_loaded_aliases(root_module)
     return dict(ALIASES)

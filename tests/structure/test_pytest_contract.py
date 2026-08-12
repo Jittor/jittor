@@ -228,6 +228,22 @@ def test_optional_dependency_probe_rejects_loaded_jittor_torch_alias(monkeypatch
         assert not torch_runtime.modules_available("torch.nn")
 
 
+def test_optional_dependency_probe_rejects_a_deployed_shim_as_real_torch(monkeypatch, tmp_path):
+    from _helpers import torch_runtime
+
+    torch_init = tmp_path / "torch" / "__init__.py"
+    torch_init.parent.mkdir()
+    torch_init.write_text("", encoding="utf-8")
+    monkeypatch.setenv("REAL_TORCH_SITE", str(tmp_path))
+    shim = SimpleNamespace(
+        __name__="torch",
+        __file__=str(torch_init),
+        _C=SimpleNamespace(),
+    )
+    with mock.patch.dict(torch_runtime.sys.modules, {"torch": shim}):
+        assert not torch_runtime.modules_available("torch.autograd")
+
+
 def test_optimizer_roundtrip_helper_is_not_collected_as_a_test():
     path = TEST_ROOT / "optim" / "test_optimizer_save_load.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
