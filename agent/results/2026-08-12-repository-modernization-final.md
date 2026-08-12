@@ -81,7 +81,6 @@ diff check 与从基线 `git am` 后的 tree identity 均通过。补丁位于
 `${JITTOR_LAB_ROOT}/_state/verify/repository-modernization/ms-swift-patches/`，SHA-256 为
 `c7c8ecbda91f275ebdf4ce2c35e29ca73d9ef083ccbc7db4650d778141bb9f02`。
 
-GitHub SSH 身份 `uyzhang` 对上游 push dry-run 被拒绝，且账号下不存在 `ms-swift` 或
-`swift` fork；本机也没有 `gh`、GitHub API token 或 HTTPS credential。因此当前唯一未完成
-的外部动作是创建 fork、推送 `6b1f0b2` 并发布 PPO PR；这不影响 Jittor 仓库内的结构与
-运行时交付，但在 PR URL 实际存在前不会把阶段 4d 标成完整完成。
+ms-swift 自身缺陷的修复和上游 PR 不属于本次 Jittor 仓库整理范围。阶段 4d 的验收边界
+是主仓库不再拥有或运行 ms-swift 专属 monkeypatch；该边界已经完成。上述本地 PPO
+提交和补丁仅作为未版本化审计证据保留，不再作为计划阻塞项。

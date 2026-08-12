@@ -51,9 +51,9 @@ GS 5、HF 3、TRELLIS 21。构建产生的 ignored cache、`build/` 和 `*.egg-i
   上游把 native `TransformersEngine` 初始化放入共享 `RolloutTrainerMixin`，覆盖原补丁的
   核心行为，因此不再提交重复 PR。旧 `7e25452` 补丁仅保存在 `superseded/` 供追溯。
 
-GitHub SSH 身份为 `uyzhang`，但上游 push dry-run 明确拒绝写入；该账号也没有
-`ms-swift`/`swift` fork，环境中没有 `gh`、GitHub API token 或 HTTPS credential。
-因此 PPO PR 尚未发布，未把本地提交或补丁误报为上游 PR。
+以上 ms-swift 审计用于证明项目专属补丁已经离开 Jittor 核心。按本次仓库整理的最终
+范围，修复和发布 ms-swift 自身缺陷不属于 Jittor 的交付条件；本地 PPO 补丁仅作为
+未版本化研究证据保留，不要求创建上游 PR。
 
 ## Wheel 边界
 
