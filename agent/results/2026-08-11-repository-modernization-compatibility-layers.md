@@ -27,24 +27,33 @@
 
 | 包 | 提交 | 单元/CUDA | wheel SHA-256 |
 | --- | --- | --- | --- |
-| `jittor-trellis` | `aa17d11` | 7 pass，4 个显式 CUDA skip；CUDA 能力 4/4 | `01eddc62de7d71eea700e72f59ef75954edc5ff6dfd52fcd5a86414c7d222d21` |
-| `jittor-gs` | `c90e51d` | 3/3 | `f175385ab0b56fd74a40d4f218269b8a6b72b62a9d326837cfb375f4856f0d9d` |
-| `jittor-hf-compat` | `f8cdedb` | 5/5 | `b6d864724243f1a54c2385395909dc2f11c9974be9dfe3b9b864fb951e1ea3e5` |
+| `jittor-trellis` | `d10ed75` | 8 pass，4 个显式 CUDA skip；既有 CUDA 能力 4/4 | `fcd5a9fbf2489864476918a4c973b309bb63306dfc7c688d3a86492334b3585d` |
+| `jittor-gs` | `88e3a53` | 4/4 | `5cbbee86b0902392db8670e9d8940a278fd6d39ed5391f98751917faa90eef52` |
+| `jittor-hf-compat` | `f8cdedb` | 5/5 | `9a70443209fdafbeb25f4a702f2213c3087354b0e43c0f4f455842a14e278339` |
 
-三个 wheel 在不安装 Jittor 的隔离环境中均能被
+2026-08-12 在上述当前提交重新执行单元测试和 wheel 构建。三个 wheel 在不安装 Jittor 的隔离环境中均能被
 `jittor.module_patches` / `jittor.external_backends` 发现并调用；总注册量分别为
-GS 5、HF 3、TRELLIS 21。三个独立仓库均保持 clean。
+GS 5、HF 3、TRELLIS 21。构建产生的 ignored cache、`build/` 和 `*.egg-info` 已删除，
+三个独立仓库均保持 clean。
 
 ## ms-swift 修复
 
-- PPO reward/value task type：分支 `codex/fix-ppo-regression-heads`，提交
-  `cc127f4`，4 条目标逻辑断言通过。
-- GKD native rollout engine：分支 `codex/fix-gkd-native-rollout`，提交
-  `7e25452`，7 条目标逻辑断言通过。
+- PPO reward/value task type：在 2026-08-12 的上游 `main` `d17f031` 上重放为分支
+  `codex/fix-ppo-regression-heads-main`、提交 `6b1f0b2`。真实 PyTorch 2.12.1、
+  Transformers 5.12.1、PEFT 0.19.1、TRL 0.29.1 组合环境完成模块导入，新增测试
+  `2 passed`（7 条分支断言）；YAPF 0.30、Flake8 和 diff check 通过。
+- PPO `git format-patch` 保存在
+  `${JITTOR_LAB_ROOT}/_state/verify/repository-modernization/ms-swift-patches/`，SHA-256 为
+  `c7c8ecbda91f275ebdf4ce2c35e29ca73d9ef083ccbc7db4650d778141bb9f02`；已从
+  `d17f031` 实际 `git am`，应用后的 tree 与 `6b1f0b2` 完全一致。
+- GKD native rollout gap 已由 ms-swift 上游
+  [#9818](https://github.com/modelscope/ms-swift/pull/9818) 在提交 `4805d7f` 合并解决；
+  上游把 native `TransformersEngine` 初始化放入共享 `RolloutTrainerMixin`，覆盖原补丁的
+  核心行为，因此不再提交重复 PR。旧 `7e25452` 补丁仅保存在 `superseded/` 供追溯。
 
-两份 `git format-patch` 保存在
-`${JITTOR_LAB_ROOT}/_state/verify/repository-modernization/ms-swift-patches/`。
-已用禁用交互提示的方式尝试 push，但当前环境没有远端写凭据，因此没有声称 PR 已提交。
+GitHub SSH 身份为 `uyzhang`，但上游 push dry-run 明确拒绝写入；该账号也没有
+`ms-swift`/`swift` fork，环境中没有 `gh`、GitHub API token 或 HTTPS credential。
+因此 PPO PR 尚未发布，未把本地提交或补丁误报为上游 PR。
 
 ## Wheel 边界
 

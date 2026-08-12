@@ -72,7 +72,16 @@ module object，旧 pickle 路径仍可解析。以下名称在 checkout、sdist
 本机没有 CANN/Ascend 设备，当前用户也不能访问 Docker daemon，因此 NPU 与两种容器
 镜像只完成了 fail-closed CI、配置和静态契约，没有伪报本机运行成功。
 
-ms-swift 两处 gap 已分别整理为干净提交 `cc127f467f70` 和 `7e254520bfd0`，补丁位于
-`${JITTOR_LAB_ROOT}/_state/verify/repository-modernization/ms-swift-patches/`。当前环境没有
-`gh`、GitHub token 或上游写权限，无法代替维护者发布外部 PR；这是计划中唯一仍需外部
-凭据完成的动作，不影响 Jittor 仓库内的结构与运行时交付。
+ms-swift 的 GKD native rollout gap 已由上游
+[#9818](https://github.com/modelscope/ms-swift/pull/9818) 在提交 `4805d7f` 合并解决，旧本地
+补丁已标记为 superseded，不再重复提交。PPO reward/value task type 修复已在 2026-08-12
+上游 `main` `d17f031` 上重放为干净提交 `6b1f0b2`；真实 PyTorch 2.12.1、Transformers
+5.12.1、PEFT 0.19.1、TRL 0.29.1 环境的新增测试为 `2 passed`，YAPF 0.30、Flake8、
+diff check 与从基线 `git am` 后的 tree identity 均通过。补丁位于
+`${JITTOR_LAB_ROOT}/_state/verify/repository-modernization/ms-swift-patches/`，SHA-256 为
+`c7c8ecbda91f275ebdf4ce2c35e29ca73d9ef083ccbc7db4650d778141bb9f02`。
+
+GitHub SSH 身份 `uyzhang` 对上游 push dry-run 被拒绝，且账号下不存在 `ms-swift` 或
+`swift` fork；本机也没有 `gh`、GitHub API token 或 HTTPS credential。因此当前唯一未完成
+的外部动作是创建 fork、推送 `6b1f0b2` 并发布 PPO PR；这不影响 Jittor 仓库内的结构与
+运行时交付，但在 PR URL 实际存在前不会把阶段 4d 标成完整完成。
