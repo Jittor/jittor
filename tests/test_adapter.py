@@ -15,6 +15,32 @@ from jittor_gs.runtime import _patch_lpips_module
 
 
 class TestGaussianSplattingAdapter(unittest.TestCase):
+    def test_runner_and_adapter_use_current_canonical_shim_modules(self):
+        package_root = Path(__file__).resolve().parents[1]
+        runner = (package_root / "scripts" / "run_gaussian_splatting.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            '"$PYTHON_BIN" -c \'from jittor.compat.shim.deploy import main; '
+            'raise SystemExit(main())\' --target "$SHIM_SITE"',
+            runner,
+        )
+        self.assertNotIn("$JT_PKG_ROOT/torch_shim/deploy.py", runner)
+        self.assertNotIn("-m jittor.compat.shim.deploy", runner)
+
+        adapter = (package_root / "src" / "jittor_gs" / "__init__.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("from jittor.compat.shim.extensions.readonly import", adapter)
+        self.assertNotIn("jittor.torch_shim.readonly_extensions", adapter)
+
+        current_main = Path(
+            os.environ.get("JITTOR_SOURCE_ROOT", package_root.parent / "jittor")
+        )
+        canonical = current_main / "python" / "jittor" / "compat" / "shim" / "deploy.py"
+        if current_main.is_dir():
+            self.assertTrue(canonical.is_file(), canonical)
+
     def test_lpips_criterion_is_reused(self):
         constructed = []
 
@@ -52,9 +78,13 @@ class TestGaussianSplattingAdapter(unittest.TestCase):
 
         jittor = ModuleType("jittor")
         jittor.__path__ = []
-        torch_shim = ModuleType("jittor.torch_shim")
-        torch_shim.__path__ = []
-        readonly = ModuleType("jittor.torch_shim.readonly_extensions")
+        compat = ModuleType("jittor.compat")
+        compat.__path__ = []
+        shim = ModuleType("jittor.compat.shim")
+        shim.__path__ = []
+        extensions = ModuleType("jittor.compat.shim.extensions")
+        extensions.__path__ = []
+        readonly = ModuleType("jittor.compat.shim.extensions.readonly")
         readonly.register_readonly_extension_borrow = (
             register_readonly_extension_borrow
         )
@@ -62,8 +92,10 @@ class TestGaussianSplattingAdapter(unittest.TestCase):
             sys.modules,
             {
                 "jittor": jittor,
-                "jittor.torch_shim": torch_shim,
-                "jittor.torch_shim.readonly_extensions": readonly,
+                "jittor.compat": compat,
+                "jittor.compat.shim": shim,
+                "jittor.compat.shim.extensions": extensions,
+                "jittor.compat.shim.extensions.readonly": readonly,
             },
             clear=False,
         ):

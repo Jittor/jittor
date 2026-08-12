@@ -16,7 +16,7 @@ _READONLY_FUNCTIONS = {
 
 
 def register_patches(register) -> None:
-    from jittor.torch_shim.readonly_extensions import (
+    from jittor.compat.shim.extensions.readonly import (
         register_readonly_extension_borrow,
     )
 

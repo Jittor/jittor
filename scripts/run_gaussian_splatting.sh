@@ -80,7 +80,7 @@ export PYTHONPATH="$ADAPTER_SRC:$JT_PY_ROOT:${PYTHONPATH:-}"
 echo "[jittor-gs] python: $PYTHON_BIN"
 echo "[jittor-gs] runtime: $RUNTIME_ROOT"
 echo "[jittor-gs] deploy torch shim: $SHIM_SITE"
-"$PYTHON_BIN" "$JT_PKG_ROOT/torch_shim/deploy.py" --target "$SHIM_SITE" >/dev/null
+"$PYTHON_BIN" -c 'from jittor.compat.shim.deploy import main; raise SystemExit(main())' --target "$SHIM_SITE" >/dev/null
 
 export PYTHONPATH="$SHIM_SITE:$JT_PY_ROOT:$GS_ROOT:$GS_ROOT/submodules/simple-knn:$GS_ROOT/submodules/diff-gaussian-rasterization:$GS_ROOT/submodules/fused-ssim:${PYTHONPATH:-}"
 export JITTOR_TORCH_PROJECT_ROOT="${JITTOR_TORCH_PROJECT_ROOT:-$GS_ROOT}"
