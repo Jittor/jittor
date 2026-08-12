@@ -60,6 +60,15 @@ class TestStage2Delivery(unittest.TestCase):
         self.assertIn("source .github/ci-baseline.env", reusable)
         self.assertIn("runs-on: " + self.baseline["CI_HOST_RUNNER"], reusable)
 
+    def test_retired_gitlab_ci_does_not_return(self):
+        self.assertFalse((self.repo_root / ".gitlab-ci.yml").exists())
+        layout_gate = (
+            self.repo_root / "agent" / "scripts" / "check_repo_layout.sh"
+        ).read_text(
+            encoding="utf-8",
+        )
+        self.assertNotIn(".gitlab-ci.yml", layout_gate)
+
     def test_container_and_release_architectures_match_the_baseline(self):
         matrix = json.loads(self.baseline["CI_CONTAINER_MATRIX"])["include"]
         cpu_base = next(item["base"] for item in matrix if item["name"] == "CPU")

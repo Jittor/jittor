@@ -49,7 +49,7 @@ fi
 while IFS= read -r name; do
   case "$name" in
     .git|.github|.agents|.codex|.claude|agent|benchmarks|docs|examples|python|requirements|tests|tools|\
-    .dockerignore|.gitignore|.gitlab-ci.yml|AGENTS.md|\
+    .dockerignore|.gitignore|AGENTS.md|\
     AWESOME-JITTOR-LIST.cn.md|AWESOME-JITTOR-LIST.md|\
     asv.conf.json|CODE_OF_CONDUCT.md|CONTRIBUTING.md|Dockerfile|GOVERNANCE.md|\
     LICENSE.txt|MANIFEST.in|README.md|\
