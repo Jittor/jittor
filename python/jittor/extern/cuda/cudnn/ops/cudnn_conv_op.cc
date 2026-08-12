@@ -17,6 +17,7 @@ using namespace std;
 namespace jittor {
 
 extern int use_tensorcore;
+extern int cuda_allow_cudnn_tf32;
 
 static inline int findc(const char* format, const char& c) {
     if (c==format[0]) return 0;
@@ -177,10 +178,16 @@ void CudnnConvOp::jit_run() {
     // MIOpen requires groups to be set after descriptor initialization
     checkCudaErrors(cudnnSetConvolutionGroupCount( cudnnConvDesc, groups ));
 
-    // using tensor core
-    if(use_tensorcore || has_fp16_or_bf16){
-        checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) );
+    bool fp32_conv = x->dtype() == ns_float32
+        && y->dtype() == ns_float32 && w->dtype() == ns_float32;
+    cudnnMathType_t conv_math_type = CUDNN_DEFAULT_MATH;
+    if (use_tensorcore || has_fp16_or_bf16
+            || (fp32_conv && cuda_allow_cudnn_tf32)) {
+        conv_math_type = CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION;
+    } else if (fp32_conv) {
+        conv_math_type = CUDNN_FMA_MATH;
     }
+    checkCudaErrors(cudnnSetConvolutionMathType(cudnnConvDesc, conv_math_type));
 
     int dimY[] = {
         (int)y->shape[findc("@YFORMAT", 'a')], // n
@@ -245,7 +252,7 @@ void CudnnConvOp::jit_run() {
     jk << strideh << "," << stridew << ":";
     jk << dilationh << "," << dilationw << ":" << groups << ";";
     jk << "compute=" << static_cast<int>(conv_compute_type) << ":";
-    jk << static_cast<int>(use_tensorcore || has_fp16_or_bf16) << ":";
+    jk << "math=" << static_cast<int>(conv_math_type) << ":";
     // A cached algorithm must still honor a workspace limit changed at runtime.
     jk << "workspace_ratio=" << max_workspace_ratio << ".";
     auto iter = fwd_algo_cache.find(jk.to_string());

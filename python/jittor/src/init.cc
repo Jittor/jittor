@@ -22,6 +22,7 @@ namespace jittor {
 DEFINE_FLAG(vector<int>, cuda_archs, {}, "Cuda arch");
 DEFINE_FLAG(int, use_tensorcore, 0, "use tensor core");
 DEFINE_FLAG(int, cuda_allow_tf32, 0, "Allow TF32 compute for CUDA float32 matmul");
+DEFINE_FLAG(int, cuda_allow_cudnn_tf32, 0, "Allow TF32 compute for CUDA float32 cuDNN convolution");
 
 unique_ptr<std::default_random_engine> eng;
 

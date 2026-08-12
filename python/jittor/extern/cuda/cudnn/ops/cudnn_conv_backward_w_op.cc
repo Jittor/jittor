@@ -20,6 +20,7 @@ using namespace std;
 namespace jittor {
 
 extern int use_tensorcore;
+extern int cuda_allow_cudnn_tf32;
 
 static inline int findc(const string& format, const char& c) {
     if (c==format[0]) return 0;
@@ -176,15 +177,15 @@ void CudnnConvBackwardWOp::jit_run() {
     // MIOpen requires groups to be set after descriptor initialization
     checkCudaErrors(cudnnSetConvolutionGroupCount( cudnnConvDesc, groups ));
 
-    // using tensor core
-    if(use_tensorcore){
-        // CUDNN_TENSOR_OP_MATH
-        // The use of Tensor Core operations is permitted but will not actively perform datatype down conversion on tensors in order to utilize Tensor Cores.
-        // CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION
-        // The use of Tensor Core operations is permitted and will actively perform datatype down conversion on tensors in order to utilize Tensor Cores.
-        
-        checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) );
+    bool fp32_conv = x->dtype() == ns_float32
+        && y->dtype() == ns_float32 && w->dtype() == ns_float32;
+    cudnnMathType_t conv_math_type = CUDNN_DEFAULT_MATH;
+    if (use_tensorcore || (fp32_conv && cuda_allow_cudnn_tf32)) {
+        conv_math_type = CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION;
+    } else if (fp32_conv) {
+        conv_math_type = CUDNN_FMA_MATH;
     }
+    checkCudaErrors(cudnnSetConvolutionMathType(cudnnConvDesc, conv_math_type));
 
     int dimY[] = {
         (int)y->shape[findc("@YFORMAT", 'a')], // n
@@ -224,6 +225,7 @@ void CudnnConvBackwardWOp::jit_run() {
     jk << dimX[0] << "," << dimX[1] << "," << dimX[2] << "," << dimX[3] << ",";
     jk << dimW[0] << "," << dimW[1] << "," << dimW[2] << "," << dimW[3] << ",";
     jk << paddingh << paddingw << "," <<strideh <<stridew << "," << dilationh << dilationw << "," << groups << ".";
+    jk << "math=" << static_cast<int>(conv_math_type) << ".";
     auto iter = bwdw_algo_cache.find(jk.to_string());
     
     if (iter!=bwdw_algo_cache.end()) algo = iter->second;

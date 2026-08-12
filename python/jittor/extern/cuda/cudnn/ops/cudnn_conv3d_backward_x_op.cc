@@ -20,6 +20,7 @@ using namespace std;
 namespace jittor {
 
 extern int use_tensorcore;
+extern int cuda_allow_cudnn_tf32;
 
 #pragma GCC diagnostic ignored "-Wunused-variable"
 
@@ -158,10 +159,16 @@ void CudnnConv3dBackwardXOp::jit_run() {
     // MIOpen requires groups to be set after descriptor initialization
     checkCudaErrors(cudnnSetConvolutionGroupCount( cudnnConvDesc, groups ));
 
-    // using tensor core
-    if(use_tensorcore || has_fp16_or_bf16){
-        checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) );
+    bool fp32_conv = x->dtype() == ns_float32
+        && y->dtype() == ns_float32 && w->dtype() == ns_float32;
+    cudnnMathType_t conv_math_type = CUDNN_DEFAULT_MATH;
+    if (use_tensorcore || has_fp16_or_bf16
+            || (fp32_conv && cuda_allow_cudnn_tf32)) {
+        conv_math_type = CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION;
+    } else if (fp32_conv) {
+        conv_math_type = CUDNN_FMA_MATH;
     }
+    checkCudaErrors(cudnnSetConvolutionMathType(cudnnConvDesc, conv_math_type));
 
 
     int sy[] = {0,0,0,0,1};
@@ -202,6 +209,7 @@ void CudnnConv3dBackwardXOp::jit_run() {
     jk << dimX[0] << "," << dimX[1] << "," << dimX[2] << "," << dimX[3] << "," << dimX[4] << ",";
     jk << dimW[0] << "," << dimW[1] << "," << dimW[2] << "," << dimW[3] << "," << dimW[4] << ",";
     jk << paddingd << paddingh << paddingw << "," << strided << strideh <<stridew << "," << dilationd << dilationh << dilationw << "," << groups << ".";
+    jk << "math=" << static_cast<int>(conv_math_type) << ".";
     auto iter = bwdx_algo_cache.find(jk.to_string());
     
     if (iter!=bwdx_algo_cache.end()) algo = iter->second;

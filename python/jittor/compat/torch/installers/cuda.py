@@ -461,6 +461,13 @@ def _install_cuda(g, registry=None):
         _modules["torch.backends.cudnn"] = cudnn
     if type(cudnn).__name__ != "_CudnnBackendModule":
         class _CudnnBackendModule(_types.ModuleType):
+            def __getattribute__(self, name):
+                if name == "allow_tf32":
+                    return bool(getattr(
+                        jt.flags, "cuda_allow_cudnn_tf32", 0
+                    ))
+                return super().__getattribute__(name)
+
             def __setattr__(self, name, value):
                 if name == "benchmark" and not getattr(self, "_jittor_cudnn_init", False):
                     try:
@@ -468,13 +475,17 @@ def _install_cuda(g, registry=None):
                             jt.cudnn.set_benchmark(int(bool(value)))
                     except Exception:
                         pass
+                if name == "allow_tf32" and not getattr(
+                        self, "_jittor_cudnn_init", False):
+                    if hasattr(jt.flags, "cuda_allow_cudnn_tf32"):
+                        jt.flags.cuda_allow_cudnn_tf32 = int(bool(value))
                 return super().__setattr__(name, value)
         cudnn.__class__ = _CudnnBackendModule
     cudnn._jittor_cudnn_init = True
     cudnn.enabled = getattr(cudnn, "enabled", True)
     cudnn.benchmark = getattr(cudnn, "benchmark", False)
     cudnn.deterministic = getattr(cudnn, "deterministic", False)
-    cudnn.allow_tf32 = getattr(cudnn, "allow_tf32", True)
+    cudnn.allow_tf32 = getattr(cudnn, "allow_tf32", False)
     cudnn.version = getattr(cudnn, "version", lambda: None)
     cudnn._jittor_cudnn_init = False
     cuda_backend = _modules.get("torch.backends.cuda")

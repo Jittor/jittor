@@ -31,6 +31,26 @@ class TestTorchCompatCudaTF32(unittest.TestCase):
             if old_acl is not None:
                 jt.acl_allow_hf32 = old_acl
 
+    def test_cudnn_allow_tf32_controls_independent_flag(self):
+        self.assertTrue(hasattr(jt.flags, "cuda_allow_cudnn_tf32"))
+        old_cudnn = int(jt.flags.cuda_allow_cudnn_tf32)
+        old_matmul = int(jt.flags.cuda_allow_tf32)
+        try:
+            jt.flags.cuda_allow_cudnn_tf32 = 0
+            jt.flags.cuda_allow_tf32 = 0
+            self.assertFalse(torch.backends.cudnn.allow_tf32)
+
+            torch.backends.cudnn.allow_tf32 = True
+            self.assertEqual(int(jt.flags.cuda_allow_cudnn_tf32), 1)
+            self.assertEqual(int(jt.flags.cuda_allow_tf32), 0)
+            self.assertTrue(torch.backends.cudnn.allow_tf32)
+
+            jt.flags.cuda_allow_cudnn_tf32 = 0
+            self.assertFalse(torch.backends.cudnn.allow_tf32)
+        finally:
+            jt.flags.cuda_allow_cudnn_tf32 = old_cudnn
+            jt.flags.cuda_allow_tf32 = old_matmul
+
 
 if __name__ == "__main__":
     unittest.main()

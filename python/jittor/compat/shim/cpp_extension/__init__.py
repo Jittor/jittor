@@ -36,6 +36,7 @@ import shlex
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 SHIM_INCLUDE = os.path.join(_THIS_DIR, "include")
 SHIM_SOURCES = [os.path.join(_THIS_DIR, "src", "jtorch_aten.cu")]
+CXX11_ABI = True
 
 _TORCH_NAMED_CUDA_ARCHES = {
     "kepler+tesla": "3.7",
@@ -476,7 +477,7 @@ def build(name, sources, build_dir, output_path=None,
           include_dirs=None, define_macros=None,
           extra_cflags=None, extra_cuda_cflags=None,
           extra_ldflags=None,
-          std="c++17", abi="1", verbose=True, force=False):
+          std="c++17", abi=None, verbose=True, force=False):
     """Compile `sources` into a python extension `.so`.
 
     name          : final module name passed as -DTORCH_EXTENSION_NAME (e.g. "_C").
@@ -485,6 +486,8 @@ def build(name, sources, build_dir, output_path=None,
     output_path   : final .so path (default: build_dir/<name><ext_suffix>).
     """
     c = cfg()
+    if abi is None:
+        abi = "1" if CXX11_ABI else "0"
     os.makedirs(build_dir, exist_ok=True)
     if output_path is None:
         output_path = os.path.join(build_dir, name + c["ext_suffix"])

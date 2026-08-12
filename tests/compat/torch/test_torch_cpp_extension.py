@@ -21,6 +21,14 @@ import jittor as jt
 
 
 class TestTorchCppExtensionArchFlags(unittest.TestCase):
+    def test_reports_the_builder_cxx11_abi(self):
+        import jittor as torch
+        from jittor.compat.shim import cpp_extension
+
+        expected = bool(cpp_extension.CXX11_ABI)
+        self.assertEqual(torch.compiled_with_cxx11_abi(), expected)
+        self.assertEqual(torch._C._GLIBCXX_USE_CXX11_ABI, expected)
+
     def test_uses_detected_jittor_archs(self):
         from jittor.compat.shim.cpp_extension import _cuda_arch_flags
 

@@ -592,7 +592,11 @@ def install(ctx):
         _flop_counter.FlopCounterMode = FlopCounterMode
         _modules["torch.utils.flop_counter"] = _flop_counter
     g.utils.flop_counter = _modules["torch.utils.flop_counter"]
+    from jittor.compat.shim import cpp_extension as _cpp_extension
     from jittor.compat.shim.cpp_extension.torch_utils import install_cpp_extension
+
+    g.compiled_with_cxx11_abi = lambda: bool(_cpp_extension.CXX11_ABI)
+    g._C._GLIBCXX_USE_CXX11_ABI = bool(_cpp_extension.CXX11_ABI)
     install_cpp_extension(g.utils, registry=ctx.registry)
 
 

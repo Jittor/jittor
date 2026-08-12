@@ -155,6 +155,7 @@ CPU_TESTS = (
     "tests/optim/test_optimizer_save_load.py",
     "tests/compat/torch/test_torch_compat_grad_management.py",
     "tests/compat/torch/test_torch_bootstrap.py::TestTorchBootstrap::test_preflight_nvcc_flags_keep_command_separators",
+    "tests/compat/torch/test_torch_cpp_extension.py::TestTorchCppExtensionArchFlags::test_reports_the_builder_cxx11_abi",
     "tests/integration/test_notebooks.py",
 )
 CPU_TORCH_ORACLE_TESTS = (
@@ -169,6 +170,7 @@ CPU_TORCH_ORACLE_TESTS = (
 )
 CUDA_TESTS = (
     "tests/backends/cuda/test_cuda.py",
+    "tests/compat/torch/test_torch_compat_cuda_tf32.py",
     "tests/ops/test_ops.py",
 )
 NPU_TESTS = (
