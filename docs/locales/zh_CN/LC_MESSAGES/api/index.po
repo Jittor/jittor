@@ -38,6 +38,12 @@ msgstr ""
 msgid ":py:obj:`jittor.nn <jittor.nn>`"
 msgstr ""
 
+#: f80786c0bfcb456aba766f834758e5c0
+msgid ""
+"Neural-network facade composed from stable physical implementation "
+"modules."
+msgstr "由稳定的实体实现模块组成的神经网络门面。"
+
 #: 1b54f91236994a51b40b2ccbb66c2bf9
 msgid ":py:obj:`jittor.nn.attention <jittor.nn.attention>`"
 msgstr ""
@@ -53,6 +59,10 @@ msgstr ""
 #: aa7e17385111404fba51eb330d76f9c8
 msgid ":py:obj:`jittor.optim <jittor.optim>`"
 msgstr ""
+
+#: e0c7f0ed8e3b44aba26f068f5e19ab29
+msgid "Optimization algorithms and learning-rate schedulers."
+msgstr "优化算法与学习率调度器。"
 
 #: 1a71847008a646ea9d803ed611933cb2
 msgid ":py:obj:`jittor.lr_scheduler <jittor.lr_scheduler>`"
