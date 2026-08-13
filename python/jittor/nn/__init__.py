@@ -82,7 +82,10 @@ from .legacy_complex import ComplexNumber, _fft2
 from .modules import *
 from .rms_norm_cuda import multihead_rms_norm_cuda
 from .rope_cuda import partial_rotary_embedding_cuda
-from .sparse import build_submanifold_conv3d_neighbors, submanifold_conv3d
+from jittor.sparse.convolution import (
+    build_submanifold_conv3d_neighbors,
+    submanifold_conv3d,
+)
 from .utils import skip_init
 from ._bindings import install_var_bindings as _install_var_bindings
 

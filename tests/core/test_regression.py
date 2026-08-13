@@ -87,6 +87,25 @@ class TestSilentWrongRegressions(JittorTestCase):
             self.assertEqual(out, x[:, idx], msg=f"index_select dim=1 [{dev}]")
         self._devices(body)
 
+    def test_index_select_function_and_method_match_numpy(self):
+        x = np.random.RandomState(31).randn(3, 4).astype("float32")
+        idx = np.array([2, 1], dtype="int64")
+
+        def body(dev):
+            value = jt.array(x)
+            indices = jt.array(idx)
+            self.assertEqual(
+                jt.index_select(value, 0, indices).numpy(),
+                np.take(x, idx, axis=0),
+                msg=f"index_select function dim=0 [{dev}]",
+            )
+            self.assertEqual(
+                value.index_select(1, indices).numpy(),
+                np.take(x, idx, axis=1),
+                msg=f"index_select method dim=1 [{dev}]",
+            )
+        self._devices(body)
+
     # -- 85cdfe75 / 9be5444f: index_add accumulates duplicate indices ------------
     def test_index_add_accumulates_duplicates(self):
         x = np.zeros((4,), dtype="float32")

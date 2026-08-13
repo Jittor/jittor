@@ -3,8 +3,12 @@
 from __future__ import print_function
 
 import ast
+import json
+import os
 import pickle
 from pathlib import Path
+import subprocess
+import sys
 import unittest
 
 
@@ -56,6 +60,10 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
             source.index("_compose_compat_runtime("),
         )
 
+        runtime_source = (self.compat / "runtime.py").read_text(encoding="utf-8")
+        self.assertIn("torch_compat_requested(root_module, preflight)", runtime_source)
+        self.assertIn("if torch_mode:", runtime_source)
+
     def test_core_api_identity_and_legacy_pickle_paths_are_stable(self):
         import jittor
         from jittor._runtime import core_api
@@ -96,6 +104,93 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
         ]
         self.assertTrue(required)
         self.assertTrue(all(report.status == "complete" for report in required))
+
+    def _run_mode_probe(self, source, torch_mode=False):
+        env = os.environ.copy()
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["CUDA_VISIBLE_DEVICES"] = ""
+        env["nvcc_path"] = ""
+        if torch_mode:
+            env["JITTOR_TORCH_SHIM"] = "1"
+        else:
+            env.pop("JITTOR_TORCH_SHIM", None)
+            env.pop("JITTOR_TORCH_PROJECT_ROOT", None)
+            env.pop("JITTOR_TORCH_RUNTIME_ROOT", None)
+        result = subprocess.run(
+            [sys.executable, "-c", source],
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        line = next(
+            line for line in result.stdout.splitlines() if line.startswith("RESULT=")
+        )
+        return json.loads(line[len("RESULT="):])
+
+    def test_plain_jittor_preserves_native_data_and_namespace(self):
+        result = self._run_mode_probe(r'''
+import json
+import sys
+import numpy as np
+import jittor as jt
+
+x = jt.array([1, 2, 3])
+x.data[1] = 7
+c = jt.ones(10)
+jt.sync_all()
+with jt.profile_scope() as report:
+    b = c - 1
+    assert b.data[1] == 0
+print("RESULT=" + json.dumps({
+    "data_is_numpy": isinstance(x.data, np.ndarray),
+    "profile_entries": len(report),
+    "shared_write": x.numpy().tolist(),
+    "torch_registered": "torch" in sys.modules,
+    "torch_installed": bool(getattr(jt, "_torch_compat_install_complete", False)),
+}))
+''')
+        self.assertEqual(
+            result,
+            {
+                "data_is_numpy": True,
+                "profile_entries": 2,
+                "shared_write": [1, 7, 3],
+                "torch_registered": False,
+                "torch_installed": False,
+            },
+        )
+
+    def test_explicit_torch_mode_uses_detached_data_alias(self):
+        result = self._run_mode_probe(r'''
+import json
+import sys
+import jittor as jt
+
+x = jt.array([1.0, 2.0])
+data = x.data
+data.fill_(3.0)
+print("RESULT=" + json.dumps({
+    "data_is_var": isinstance(data, jt.Var),
+    "data_is_distinct": data is not x,
+    "data_is_detached": data.is_stop_grad(),
+    "shared_write": x.numpy().tolist(),
+    "torch_is_jittor": sys.modules.get("torch") is jt,
+    "torch_installed": jt._torch_compat_install_complete,
+}))
+''', torch_mode=True)
+        self.assertEqual(
+            result,
+            {
+                "data_is_var": True,
+                "data_is_distinct": True,
+                "data_is_detached": True,
+                "shared_write": [3.0, 3.0],
+                "torch_is_jittor": True,
+                "torch_installed": True,
+            },
+        )
 
     def test_moved_scope_state_stays_synchronized_with_the_root(self):
         import jittor

@@ -186,7 +186,14 @@ _IMPLEMENTATION_SYMBOLS = (
     (
         losses,
         (
+            "binary_cross_entropy",
             "cross_entropy_loss",
+            "cross_entropy",
+            "cosine_embedding_loss",
+            "gaussian_nll_loss",
+            "huber_loss",
+            "kl_div",
+            "margin_ranking_loss",
             "mse_loss",
             "bce_loss",
             "l1_loss",
@@ -285,6 +292,7 @@ _COMPAT_PATCHED_SYMBOLS = {
     "linear",
     "scaled_dot_product_attention",
     "softmax",
+    "cross_entropy",
 }
 _RUNTIME_PATCHED_SYMBOLS = _ACL_PATCHED_SYMBOLS | _COMPAT_PATCHED_SYMBOLS
 _FUNCTIONAL_API = (
@@ -297,6 +305,7 @@ _FUNCTIONAL_API = (
     "baddbmm",
     "batch_norm",
     "bce_loss",
+    "binary_cross_entropy",
     "bilinear",
     "binary_cross_entropy_with_logits",
     "bmm",
@@ -312,6 +321,8 @@ _FUNCTIONAL_API = (
     "conv_transpose2d",
     "conv_transpose3d",
     "cosine_similarity",
+    "cosine_embedding_loss",
+    "cross_entropy",
     "cross_entropy_loss",
     "cumulative_sequence_lengths",
     "dropout",
@@ -323,6 +334,7 @@ _FUNCTIONAL_API = (
     "finalize_dual_grid_mesh_cuda",
     "flatten",
     "fold",
+    "gaussian_nll_loss",
     "fp32_guard",
     "gelu",
     "get_init_var_rand",
@@ -338,10 +350,12 @@ _FUNCTIONAL_API = (
     "hardsigmoid",
     "hardswish",
     "hardtanh",
+    "huber_loss",
     "identity",
     "instance_norm",
     "interpolate",
     "kron",
+    "kl_div",
     "l1_loss",
     "layer_norm",
     "leaky_relu",
@@ -356,6 +370,7 @@ _FUNCTIONAL_API = (
     "matmul_transpose",
     "max_pool2d",
     "max_pool3d",
+    "margin_ranking_loss",
     "mish",
     "mse_loss",
     "multi_head_attention_forward",
@@ -1835,7 +1850,13 @@ class TestNNStructure(unittest.TestCase):
                 "use_cuda": "0",
             }
         )
-        env.pop("REAL_TORCH_SITE", None)
+        for name in (
+            "REAL_TORCH_SITE",
+            "JITTOR_TORCH_SHIM",
+            "JITTOR_TORCH_PROJECT_ROOT",
+            "JITTOR_TORCH_RUNTIME_ROOT",
+        ):
+            env.pop(name, None)
         for entry in entries:
             script = (
                 "import sys, types\n"

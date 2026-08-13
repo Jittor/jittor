@@ -1,5 +1,7 @@
 """Miscellaneous tensor operations and compatibility helpers."""
 
+from .concatenation import cat, concat
+from .reductions import amax, amin, count_nonzero
 from .tensor_ops import *
 from .tensor_ops import (
     _CTCLossFunction,

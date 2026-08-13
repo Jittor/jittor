@@ -2,7 +2,8 @@ import jittor as jt
 from jittor import nn
 from jittor import Module
 from jittor import init
-from jittor.contrib import concat, argmax_pool
+from jittor.misc import concat
+from jittor.pool import argmax_pool
 import math
 
 
@@ -228,4 +229,3 @@ def res2net50_14w_8s(pretrained=False, **kwargs):
     if pretrained:
         model.load(model_urls['res2net50_14w_8s'])
     return model
-

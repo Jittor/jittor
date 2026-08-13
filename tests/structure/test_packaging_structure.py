@@ -57,7 +57,6 @@ class TestPackagingStructure(unittest.TestCase):
             "recursive-include python/jittor/compat/shim/resources *",
             "recursive-include python/jittor/extern *",
             "recursive-include python/jittor/math_util/src *",
-            "recursive-include python/jittor/other *.py",
             "recursive-include python/jittor/src *",
             "recursive-include python/jittor/utils *.py",
             "include python/jittor/utils/data.gz",
@@ -89,7 +88,7 @@ class TestPackagingStructure(unittest.TestCase):
             "python/jittor/compat/shim/resources/stubs/flash_attn/flash_attn_interface.py",
             "python/jittor/compat/shim/resources/torch_init.py",
             "python/jittor/utils/data.gz",
-            "python/jittor/other/code_softmax.py",
+            "python/jittor/nn/backends/softmax_cuda.py",
         )
         for relative in required:
             with self.subTest(path=relative):

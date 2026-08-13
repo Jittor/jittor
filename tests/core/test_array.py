@@ -200,7 +200,7 @@ class TestArray(unittest.TestCase):
         jt.sync_all()
         with jt.profile_scope() as rep:
             b = c-1
-            assert b.data[1] == 0
+            assert b.numpy()[1] == 0
         assert len(rep) == 2
         
     @unittest.skipIf(not jt.has_cuda, "Cuda not found")

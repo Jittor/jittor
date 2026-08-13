@@ -315,11 +315,11 @@ def resize(img, size, interpolation=Image.BILINEAR):
             return img
         if w < h:
             ow = size
-            oh = int(size * h / w)
+            oh = int(round(size * h / w))
             return img.resize((ow, oh), interpolation)
         else:
             oh = size
-            ow = int(size * w / h)
+            ow = int(round(size * w / h))
             return img.resize((ow, oh), interpolation)
     else:
         return img.resize(size[::-1], interpolation)
@@ -430,9 +430,15 @@ def center_crop(img, output_size):
         Returns:
             PIL Image: Cropped image.
         """
+    if not _is_pil_image(img):
+        raise TypeError(f'img should be PIL Image. Got {type(img)}')
     if isinstance(output_size, numbers.Number):
         output_size = (int(output_size), int(output_size))
-    image_width, image_height = img.size
+    elif isinstance(output_size, Sequence) and len(output_size) == 1:
+        output_size = (output_size[0], output_size[0])
+    elif not isinstance(output_size, Sequence) or len(output_size) != 2:
+        raise ValueError("If size is a sequence, it should have 2 values")
+    image_width, image_height = _get_image_size(img)
     crop_height, crop_width = output_size
     crop_top = int(round((image_height - crop_height) / 2.))
     crop_left = int(round((image_width - crop_width) / 2.))

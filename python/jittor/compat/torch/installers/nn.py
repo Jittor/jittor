@@ -238,56 +238,18 @@ def _install_nn_extras(nn, registry=None):
         # single-slot pre-forward hook, so route every reparametrization through one
         # dispatcher that calls each registered recompute fn (supports weight_norm +
         # spectral_norm on the same module, and preserves any pre-existing hook).
-        def _ensure_reparam_hook(module):
-            fns = getattr(module, "_reparam_fns", None)
-            if fns is None:
-                fns = []
-                module._reparam_fns = fns
-                prev = getattr(module, "__fhook2__", None)
-                def _dispatch(mod, *a):
-                    if prev is not None:
-                        prev(mod, *a)
-                    for fn in mod._reparam_fns:
-                        fn(mod)
-                module.register_pre_forward_hook(_dispatch)
-            return fns
-
-        def _norm_except_dim(v, dim):
-            # L2 norm over all dims except `dim`, keepdim (torch._norm_except_dim, pow=2).
-            if dim is None or dim == -1:
-                return _jt.sqrt((v * v).sum())
-            dims = [d for d in range(v.ndim) if d != dim]
-            if not dims:
-                return v.abs()
-            return _jt.sqrt((v * v).sum(dims, keepdims=True))
+        from jittor.nn.utils.weight_norm import (
+            _ensure_reparam_hook,
+            _norm_except_dim,
+            remove_weight_norm as _native_remove_weight_norm,
+            weight_norm as _native_weight_norm,
+        )
 
         def weight_norm(module, name="weight", dim=0):
-            w = getattr(module, name)
-            try: delattr(module, name)
-            except Exception: pass
-            setattr(module, name + "_g", _norm_except_dim(w, dim).clone())
-            setattr(module, name + "_v", w.clone())
-            def _recompute(mod):
-                gg = getattr(mod, name + "_g"); vv = getattr(mod, name + "_v")
-                neww = vv * (gg / _norm_except_dim(vv, dim))
-                neww.persistent = False          # exclude from parameters()/state_dict()
-                setattr(mod, name, neww)
-            _ensure_reparam_hook(module).append(_recompute)
-            _recompute(module)                   # materialize weight before first forward
-            return module
+            return _native_weight_norm(module, name, dim)
 
         def remove_weight_norm(module, name="weight"):
-            gg = getattr(module, name + "_g"); vv = getattr(module, name + "_v")
-            # final weight = v * g/||v||; restore it as a plain trainable param
-            dimspec = 0
-            final = vv * (gg / _norm_except_dim(vv, dimspec))
-            for k in (name + "_g", name + "_v"):
-                try: delattr(module, k)
-                except Exception: pass
-            final.persistent = True
-            setattr(module, name, final.clone())
-            module._reparam_fns = []             # drop recompute fns (torch removes the hook)
-            return module
+            return _native_remove_weight_norm(module, name)
 
         def _l2_normalize(x, eps):
             return x / (_jt.sqrt((x * x).sum()) + eps)
@@ -1823,69 +1785,26 @@ def install(ctx):
                 return loss.reshape(target.shape) if input.ndim > 2 else loss
             return loss.sum() / norm
         F.cross_entropy = _cross_entropy
-    # Loss functions jittor's functional lacks but real workloads use: kl_div
-    # (knowledge distillation), binary_cross_entropy (non-logits), huber_loss,
-    # cosine_embedding_loss, margin_ranking_loss, gaussian_nll_loss. Verified
-    # bit-equal to real torch 2.12. Use maximum/minimum/ternary (not clamp) to avoid
-    # the torch_compat clamp kwarg overloading.
-    import math as _math_loss
-    def _reduce(loss, reduction):
-        if reduction == "none":
-            return loss
-        if reduction == "sum":
-            return loss.sum()
-        return loss.mean()
-    if not hasattr(F, "kl_div"):
-        def _kl_div(input, target, size_average=None, reduce=None,
-                    reduction="mean", log_target=False):
-            if log_target:
-                loss = jt.exp(target) * (target - input)
-            else:
-                # target*(log target - input); target==0 contributes 0 (avoid 0*-inf)
-                safe = jt.maximum(target, 1e-12)
-                loss = target * (jt.log(safe) - input)
-            if reduction == "batchmean":
-                return loss.sum() / input.shape[0]
-            return _reduce(loss, reduction)
-        F.kl_div = _kl_div
-    if not hasattr(F, "binary_cross_entropy"):
-        def _bce(input, target, weight=None, size_average=None, reduce=None,
-                 reduction="mean"):
-            # input are probabilities in [0,1]; torch clamps the logs to >= -100.
-            li = jt.maximum(jt.log(jt.maximum(input, 1e-44)), -100.0)
-            l1 = jt.maximum(jt.log(jt.maximum(1.0 - input, 1e-44)), -100.0)
-            loss = -(target * li + (1.0 - target) * l1)
-            if weight is not None:
-                loss = loss * weight
-            return _reduce(loss, reduction)
-        F.binary_cross_entropy = _bce
-    if not hasattr(F, "huber_loss"):
-        def _huber(input, target, reduction="mean", delta=1.0):
-            d = (input - target).abs()
-            loss = jt.ternary(d < delta, 0.5 * d * d, delta * (d - 0.5 * delta))
-            return _reduce(loss, reduction)
-        F.huber_loss = _huber
-    if not hasattr(F, "margin_ranking_loss"):
-        def _margin_ranking(input1, input2, target, margin=0.0,
-                            size_average=None, reduce=None, reduction="mean"):
-            loss = jt.maximum(-target * (input1 - input2) + margin, 0.0)
-            return _reduce(loss, reduction)
-        F.margin_ranking_loss = _margin_ranking
-    if not hasattr(F, "cosine_embedding_loss"):
-        def _cosine_embedding(input1, input2, target, margin=0.0,
-                              size_average=None, reduce=None, reduction="mean"):
-            cos = F.cosine_similarity(input1, input2)
-            loss = jt.ternary(target == 1, 1.0 - cos, jt.maximum(cos - margin, 0.0))
-            return _reduce(loss, reduction)
-        F.cosine_embedding_loss = _cosine_embedding
-    if not hasattr(F, "gaussian_nll_loss"):
-        def _gaussian_nll(input, target, var, full=False, eps=1e-6, reduction="mean"):
-            v = jt.maximum(var, eps)
-            loss = 0.5 * (jt.log(v) + (input - target) ** 2 / v)
-            if full:
-                loss = loss + 0.5 * _math_loss.log(2 * _math_loss.pi)
-            return _reduce(loss, reduction)
-        F.gaussian_nll_loss = _gaussian_nll
+    # These losses are native functional implementations.  Torch mode only
+    # publishes the canonical objects; keeping a second fallback body here
+    # would make signatures and fixes diverge between the two entry points.
+    from jittor.nn.functional.loss import (
+        binary_cross_entropy as _native_bce,
+        cosine_embedding_loss as _native_cosine_embedding,
+        gaussian_nll_loss as _native_gaussian_nll,
+        huber_loss as _native_huber,
+        kl_div as _native_kl_div,
+        margin_ranking_loss as _native_margin_ranking,
+    )
+    for _name, _fn in (
+        ("binary_cross_entropy", _native_bce),
+        ("cosine_embedding_loss", _native_cosine_embedding),
+        ("gaussian_nll_loss", _native_gaussian_nll),
+        ("huber_loss", _native_huber),
+        ("kl_div", _native_kl_div),
+        ("margin_ranking_loss", _native_margin_ranking),
+    ):
+        setattr(F, _name, _fn)
     # nn.*Loss class versions (criterion = nn.HuberLoss()): thin wrappers over the
     # functional. KLDivLoss/BCELoss/BCEWithLogitsLoss/CrossEntropyLoss/MSELoss/L1Loss
     # already exist on jittor.nn (verified correct); add the rest.

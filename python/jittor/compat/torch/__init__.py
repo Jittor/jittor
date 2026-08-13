@@ -10,6 +10,7 @@ from __future__ import absolute_import
 
 import sys
 
+from .._aliases import _torch_namespace as _torch_namespace_snapshot
 from .context import InstallContext, InstallReport, InstallStepError, ModuleRegistry
 from .functional import (
     _diff,
@@ -151,14 +152,6 @@ _OPTIONAL_STEPS = (
 )
 
 _NAMESPACE_TRANSACTION = "_torch_namespace_transaction"
-
-
-def _torch_namespace_snapshot():
-    return {
-        name: module
-        for name, module in sys.modules.items()
-        if name == "torch" or name.startswith("torch.")
-    }
 
 
 def _same_namespace(left, right):

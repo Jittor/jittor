@@ -40,7 +40,7 @@ class TestPoolStructure(unittest.TestCase):
             "AvgPool2d", "AvgPool3d", "MaxPool1d", "MaxPool2d",
             "MaxPool3d", "MaxUnpool2d", "MaxUnpool3d", "Module", "Pool",
             "Pool3d", "avg_pool2d", "init", "jt", "math", "max_pool2d",
-            "max_pool3d", "np", "pool", "pool2d", "pool3d",
+            "max_pool3d", "np", "pool", "pool2d", "pool3d", "argmax_pool",
             "pool_use_code_op",
             "adaptive", "core_2d", "core_3d", "layers", "pooling_1d",
             "unpool",
@@ -64,8 +64,8 @@ class TestPoolStructure(unittest.TestCase):
             for module in _IMPLEMENTATION_MODULES
             for symbol in module._PUBLIC_SYMBOLS
         )
-        self.assertEqual(len(implementations), 22)
-        self.assertEqual(len({id(symbol) for symbol in implementations}), 22)
+        self.assertEqual(len(implementations), 23)
+        self.assertEqual(len({id(symbol) for symbol in implementations}), 23)
         for symbol in implementations:
             with self.subTest(symbol=symbol.__name__):
                 self.assertIs(getattr(pool_facade, symbol.__name__), symbol)

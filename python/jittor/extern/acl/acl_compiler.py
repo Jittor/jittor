@@ -706,7 +706,7 @@ def change_function():
     jt.floor_int = warp(jt.floor_int, floor_int_acl)
     jt.Var.floor_int = lambda x: jt.floor_int(x)
 
-    jt.getitem = warp(jt.contrib.getitem, getitem_acl)
+    jt.getitem = warp(jt.misc.indexing.getitem, getitem_acl)
     fake_getitem = jt.Var.getitem
 
     def _normalize_bool_slice(slices):
@@ -729,7 +729,7 @@ def change_function():
     jt.Var.__getitem__ = lambda x, slices, return_x=None: warp(
         fake_getitem, getitem_acl)(x, _normalize_bool_slice(slices))
 
-    jt.setitem = warp(jt.contrib.setitem, setitem_acl)
+    jt.setitem = warp(jt.misc.indexing.setitem, setitem_acl)
     fake_setitem = jt.Var.setitem
 
     # NOTE: jt.misc.scatter calls x.setitem(slices, value, reduce) with a

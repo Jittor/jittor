@@ -29,98 +29,25 @@ import jittor as jt
 
 from . import function_pil as F_pil
 
-def _get_image_size(img):
-    """
-    Return image size as (w, h)
-    """
-    return F_pil._get_image_size(img)
-
-def _get_image_num_channels(img):
-    return F_pil._get_image_num_channels(img)
+_get_image_size = F_pil._get_image_size
+_get_image_num_channels = F_pil._get_image_num_channels
+crop = F_pil.crop
+resize = F_pil.resize
+gray = F_pil.gray
+center_crop = F_pil.center_crop
+hflip = F_pil.hflip
+vflip = F_pil.vflip
+adjust_brightness = F_pil.adjust_brightness
+adjust_contrast = F_pil.adjust_contrast
+adjust_saturation = F_pil.adjust_saturation
+adjust_hue = F_pil.adjust_hue
+adjust_gamma = F_pil.adjust_gamma
 
 def _is_numpy(img):
     return isinstance(img, np.ndarray)
 
 def _is_numpy_image(img):
     return img.ndim in {2, 3}
-
-def crop(img, top, left, height, width):
-    '''
-    Function for cropping image.
-
-    Args::
-
-        [in] img(Image.Image): Input image.
-        [in] top(int): the top boundary of the cropping box.
-        [in] left(int): the left boundary of the cropping box.
-        [in] height(int): height of the cropping box.
-        [in] width(int): width of the cropping box.
-
-    Example::
-        
-        img = Image.open(...)
-        img_ = transform.crop(img, 10, 10, 100, 100)
-    '''
-    return img.crop((left, top, left + width, top + height))
-
-def resize(img, size, interpolation=Image.BILINEAR):
-    '''
-    Function for resizing image.
-
-    Args::
-
-        [in] img(Image.Image): Input image.
-        [in] size: resize size. [h, w]
-        [in] interpolation(int): type of resize. default: PIL.Image.BILINEAR
-
-    Example::
-        
-        img = Image.open(...)
-        img_ = transform.resize(img, (100, 100))
-    '''
-    if isinstance(size, Sequence):
-        return img.resize(size[::-1], interpolation)
-    else:
-        w, h = img.size
-        if (h > w):
-            return img.resize((size, int(round(size * h / w))), interpolation)
-        else:
-            return img.resize((int(round(size * w / h)), size), interpolation)
-
-
-def gray(img, num_output_channels):
-    """
-    Function for converting PIL image of any mode (RGB, HSV, LAB, etc) to grayscale version of image.
-    Args::
-        [in] img(PIL Image.Image): Input image.
-        [in] num_output_channels (int): number of channels of the output image. Value can be 1 or 3. Default, 1.
-    Returns::
-        [out] PIL Image: Grayscale version of the image.
-              if num_output_channels = 1 : returned image is single channel
-              if num_output_channels = 3 : returned image is 3 channel with r = g = b
-    """
-    return F_pil.gray(img, num_output_channels)
-
-
-def center_crop(img, output_size):
-    """
-    Function for cropping the given image at the center.
-    Args::
-        [in] img(PIL Image.Image): Input image.
-        [in] output_size (sequence or int): (height, width) of the crop box.
-             If int or sequence with single int, it is used for both directions.
-    Returns::
-        PIL Image.Image: Cropped image.
-    """
-
-    output_size = _setup_size(output_size, error_msg="If size is a sequence, it should have 2 values")
-
-    image_width, image_height = _get_image_size(img)
-    crop_height, crop_width = output_size
-
-    crop_top = int(round((image_height - crop_height) / 2.))
-    crop_left = int(round((image_width - crop_width) / 2.))
-    return crop(img, crop_top, crop_left, crop_height, crop_width)
 
 def crop_and_resize(img, top, left, height, width, size, interpolation=Image.BILINEAR):
     '''
@@ -228,136 +155,6 @@ class RandomCropAndResize:
 
 
 
-def hflip(img):
-    """
-    Function for horizontally flipping the given image.
-    Args::
-        [in] img(PIL Image.Image): Input image.
-    Example::
-        
-        img = Image.open(...)
-        img_ = transform.hflip(img)
-    """
-    return F_pil.hflip(img)
-
-
-def vflip(img):
-    """
-    Function for vertically flipping the given image.
-    Args::
-        [in] img(PIL Image.Image): Input image.
-    Example::
-        
-        img = Image.open(...)
-        img_ = transform.vflip(img)
-    """
-    return F_pil.vflip(img)
-
-
-
-def adjust_brightness(img, brightness_factor):
-    """
-    Function for adjusting brightness of an RGB image.
-    Args::
-        [in] img (PIL Image.Image): Image to be adjusted.
-        [in] brightness_factor (float):  How much to adjust the brightness.
-             Can be any non negative number. 0 gives a black image, 1 gives the
-             original image while 2 increases the brightness by a factor of 2.
-    Returns::
-        [out] PIL Image.Image: Brightness adjusted image.
-    Example::
-        
-        img = Image.open(...)
-        img_ = transform.adjust_brightness(img, 0.5)
-    """
-    return F_pil.adjust_brightness(img, brightness_factor)
-
-
-def adjust_contrast(img, contrast_factor):
-    """
-    Function for adjusting contrast of an image.
-    Args::
-        [in] img (PIL Image.Image): Image to be adjusted.
-        [in] contrast_factor (float): How much to adjust the contrast.
-             Can be any non negative number. 0 gives a solid gray image,
-             1 gives the original image while 2 increases the contrast by a factor of 2.
-    Returns::
-        [out] PIL Image.Image: Contrast adjusted image.
-    Example::
-        
-        img = Image.open(...)
-        img_ = transform.adjust_contrast(img, 0.5)
-    """
-    return F_pil.adjust_contrast(img, contrast_factor)
-
-
-def adjust_saturation(img, saturation_factor):
-    """
-    Function for adjusting saturation of an image.
-    Args::
-        [in] img (PIL Image.Image): Image to be adjusted.
-        [in] saturation_factor (float):  How much to adjust the saturation.
-             0 will give a black and white image, 1 will give the original image
-             while 2 will enhance the saturation by a factor of 2.
-    Returns::
-        [out] PIL Image.Image: Saturation adjusted image.
-    Example::
-        
-        img = Image.open(...)
-        img_ = transform.adjust_saturation(img, 0.5)
-    """
-    return F_pil.adjust_saturation(img, saturation_factor)
-
-
-def adjust_hue(img, hue_factor):
-    """
-    Function for adjusting hue of an image.
-    The image hue is adjusted by converting the image to HSV and
-    cyclically shifting the intensities in the hue channel (H).
-    The image is then converted back to original image mode.
-    `hue_factor` is the amount of shift in H channel and must be in the
-    interval `[-0.5, 0.5]`.
-    See `Hue`_ for more details.
-    .. _Hue: https://en.wikipedia.org/wiki/Hue
-    Args::
-        [in] img (PIL Image.Image): Image to be adjusted.
-        [in] hue_factor (float):  How much to shift the hue channel.
-             Should be in [-0.5, 0.5]. 0.5 and -0.5 give complete reversal of
-             hue channel in HSV space in positive and negative direction respectively.
-             0 means no shift. Therefore, both -0.5 and 0.5 will give an image
-             with complementary colors while 0 gives the original image.
-    Returns::
-        [out] PIL Image.Image: Saturation adjusted image.
-    Example::
-        
-        img = Image.open(...)
-        img_ = transform.adjust_hue(img, 0.1)
-    """
-    return F_pil.adjust_hue(img, hue_factor)
-
-
-def adjust_gamma(img, gamma, gain=1):
-    r"""
-    Function for performing gamma correction on an image.
-    Also known as Power Law Transform. Intensities in RGB mode are adjusted
-    based on the following equation:
-    .. math::
-        I_{\text{out}} = 255 \times \text{gain} \times \left(\frac{I_{\text{in}}}{255}\right)^{\gamma}
-    See `Gamma Correction`_ for more details.
-    .. _Gamma Correction: https://en.wikipedia.org/wiki/Gamma_correction
-    Args::
-        [in] img (PIL Image.Image): Image to be adjusted.
-        [in] gamma (float): Non negative real number, same as :math:`\gamma` in the equation.
-             gamma larger than 1 make the shadows darker,
-             while gamma smaller than 1 make dark regions lighter.
-        [in] gain (float): The constant multiplier.
-    Returns::
-        [out] PIL Image.Image: Gamma adjusted image.
-    """
-    return F_pil.adjust_gamma(img, gamma, gain)
-
-
-    
 class RandomHorizontalFlip:
     """
     Random flip the image horizontally.

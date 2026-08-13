@@ -1,3 +1,5 @@
+"""Historical Jittor learning-rate scheduler contracts."""
+
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers:

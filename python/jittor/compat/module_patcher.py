@@ -16,10 +16,7 @@ from dataclasses import dataclass
 from types import ModuleType
 from typing import Callable, Dict, List, Mapping, Optional, Tuple
 
-try:
-    from importlib import metadata as importlib_metadata
-except ImportError:  # pragma: no cover - exercised on Python 3.7 CI
-    import importlib_metadata  # type: ignore[no-redef]
+from ._entry_points import entry_points as _entry_points
 
 
 MODULE_PATCH_ENTRY_POINT = "jittor.module_patches"
@@ -140,14 +137,6 @@ def restore_method(patch: MethodPatch) -> bool:
     else:
         delattr(patch.owner, patch.name)
     return True
-
-
-def _entry_points(group: str):
-    discovered = importlib_metadata.entry_points()
-    select = getattr(discovered, "select", None)
-    if callable(select):
-        return list(select(group=group))
-    return list(discovered.get(group, ()))
 
 
 def _register_entry_point_value(value: object) -> None:

@@ -17,9 +17,10 @@ def softmax(x, dim=None, log=False):
     # explicit ``dim`` keeps the previous behavior unchanged.
     if dim is None:
         dim = jt.nn._get_softmax_dim(x.ndim)
-    import jittor.other.code_softmax as code_softmax
-    if code_softmax.can_softmax_v1(x, dim) and jt.compiler.is_cuda:
-        return code_softmax.softmax_v1(x, log)
+    from jittor.nn.backends import softmax_cuda
+
+    if softmax_cuda.can_softmax_v1(x, dim) and jt.compiler.is_cuda:
+        return softmax_cuda.softmax_v1(x, log)
     dtype, x = x.dtype, x._to_float()
     if log:
         a = x - jt.max(x, dim, keepdims=True)
@@ -42,4 +43,7 @@ def log_sigmoid(x):
 
 
 def logsumexp(x, dim, keepdims=False, keepdim=False):
-    return x.exp().sum(dim, keepdim or keepdims).log()
+    keep = keepdim or keepdims
+    maximum = jt.max(x, dim, keepdims=True)
+    result = (x - maximum).exp().sum(dim, keepdims=True).log() + maximum
+    return result if keep else result.squeeze(dim)

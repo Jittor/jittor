@@ -559,6 +559,106 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         except Exception:
             pass
 
+    if not hasattr(Var, "_vj_native_data_descriptor"):
+        native_data_descriptor = Var.__dict__.get("data")
+        if native_data_descriptor is not None:
+            Var._vj_native_data_descriptor = native_data_descriptor
+    _native_data_descriptor = getattr(Var, "_vj_native_data_descriptor", None)
+
+    def _numpy_data_value(value):
+        if isinstance(value, Var):
+            return value.numpy()
+        if isinstance(value, tuple):
+            return tuple(_numpy_data_value(item) for item in value)
+        if isinstance(value, list):
+            return [_numpy_data_value(item) for item in value]
+        return value
+
+    def _write_data_owner_numpy(view, value, slices):
+        owner = getattr(view, "_torch_data_owner", None)
+        if not isinstance(owner, Var) or _native_data_descriptor is None:
+            return False
+        target = _native_data_descriptor.__get__(owner, Var)
+        for index in getattr(view, "_torch_data_path", ()):
+            target = target[_numpy_data_value(index)]
+        target[_numpy_data_value(slices)] = _numpy_data_value(value)
+        return True
+
+    def _is_basic_data_index(index):
+        if isinstance(index, tuple):
+            return all(_is_basic_data_index(item) for item in index)
+        if index is None or index is Ellipsis or isinstance(index, slice):
+            return True
+        return isinstance(index, numbers.Integral) and not isinstance(
+            index, (bool, np.bool_)
+        )
+
+    def _data_owner_uses_device(owner):
+        try:
+            location = owner.location()
+        except Exception:
+            location = None
+        if location == "device":
+            return True
+        if location == "cpu":
+            return False
+        return bool(
+            jt.flags.use_cuda or getattr(getattr(jt, "compiler", None), "has_acl", 0)
+        )
+
+    def _restore_trainable_state(value, was_trainable):
+        if was_trainable and value.is_stop_grad():
+            value.start_grad()
+        elif not was_trainable and not value.is_stop_grad():
+            value.stop_grad()
+
+    def _assign_data_owner(view, value, extra_path=()):
+        """Write a detached ``.data`` alias back without leaving the device."""
+
+        owner = getattr(view, "_torch_data_owner", None)
+        if not isinstance(owner, Var):
+            return False
+
+        view_path = getattr(view, "_torch_data_path", ())
+        path = view_path + tuple(extra_path)
+        bases = []
+        target = owner
+        for index in path:
+            bases.append((target, index))
+            target = _orig_getitem(target, index)
+
+        updated = value if isinstance(value, Var) else jt.array(value)
+        if updated.numel() == 1 and target.numel() != 1:
+            updated = updated.broadcast(target.shape)
+        for base, index in reversed(bases):
+            updated = base.setitem(index, updated)
+
+        owner_was_trainable = not owner.is_stop_grad()
+        owner.assign(updated)
+        _restore_trainable_state(owner, owner_was_trainable)
+
+        # A retained ``data = parameter.data`` alias observes its own mutation,
+        # just like a Torch tensor sharing the parameter storage.
+        view_updated = updated
+        for index in view_path:
+            view_updated = _orig_getitem(view_updated, index)
+        view_was_trainable = not view.is_stop_grad()
+        view.assign(view_updated)
+        _restore_trainable_state(view, view_was_trainable)
+        _write_index_parent(view, view_updated)
+        return True
+
+    def _set_data_owner(view, slices, value):
+        owner = getattr(view, "_torch_data_owner", None)
+        if not isinstance(owner, Var):
+            return False
+        if _data_owner_uses_device(owner) and _is_basic_data_index(slices):
+            return _assign_data_owner(view, value, (slices,))
+        # Native Jittor exposes ``Var.data`` as a shared NumPy DataView. Keep
+        # that exact CPU behavior so writes made after a sync remain visible to
+        # already-materialized outputs which share the same storage.
+        return _write_data_owner_numpy(view, value, slices)
+
     # torch parity for `x[bool_mask] = value` when the mask has lower rank than
     # `x` and `value` carries redundant leading size-1 batch axes. Torch assigns
     # a RHS shaped like (1, N, C) into the selected region shaped (N, C); jittor's
@@ -567,6 +667,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     _orig_setitem = Var.__setitem__
     if not getattr(_orig_setitem, "_torch_mask_bcast", False):
         def _torch_setitem(self, slices, value):
+            if _set_data_owner(self, slices, value):
+                return self
             try:
                 mask = slices
                 if isinstance(mask, Var) and mask.dtype in ("bool", "uint8") \
@@ -616,13 +718,16 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         # silently zeroed grads through x.div_()/etc (GRPO temperature scaling).
         # So only start_grad if assign actually left x stopped (a constant value like
         # fill_/zero_ on a previously-trainable leaf) -- never on an already-connected x.
-        was_trainable = not self.is_stop_grad()
-        _write_index_parent(self, value)
-        self.assign(value)
-        if was_trainable and self.is_stop_grad():
-            self.start_grad()
-        elif not was_trainable and not self.is_stop_grad():
-            self.stop_grad()
+        if _assign_data_owner(self, value):
+            return self
+        target = self
+        was_trainable = not target.is_stop_grad()
+        _write_index_parent(target, value)
+        target.assign(value)
+        if was_trainable and target.is_stop_grad():
+            target.start_grad()
+        elif not was_trainable and not target.is_stop_grad():
+            target.stop_grad()
         return self
     def _copy_(self, other, non_blocking=False):
         src = other if isinstance(other, Var) else jt.array(other)
@@ -924,6 +1029,12 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 try:
                     out._torch_index_parent = self
                     out._torch_index_slices = slices
+                    data_owner = getattr(self, "_torch_data_owner", None)
+                    if isinstance(data_owner, Var):
+                        out._torch_data_owner = data_owner
+                        out._torch_data_path = getattr(
+                            self, "_torch_data_path", ()
+                        ) + (slices,)
                 except Exception:
                     pass
             return out
@@ -948,13 +1059,10 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # ndarray, breaking `param.data.to(...)`. Override to torch semantics.
     if not getattr(Var, "_data_wrapped", False):
         def _data_get(self):
-            # torch's .data SHARES storage with the param: in-place writes
-            # (`p.data[:] = x`, `p.data.copy_(x)`, `p.data.normal_()`) write
-            # through. Returning self preserves that (a detached copy would
-            # silently drop the write — e.g. e2cnn inits weights via
-            # `self.weights.data[:] = ...`). Forward *values* are identical to
-            # detach(); only grad-tracking-on-reads differs (rare in practice).
-            return self
+            view = self.detach().stop_grad()
+            view._torch_data_owner = self
+            view._torch_data_path = ()
+            return view
         def _data_set(self, value):
             src = value if isinstance(value, Var) else jt.array(value)
             was_trainable = not self.is_stop_grad()

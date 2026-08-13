@@ -164,7 +164,14 @@ def build_inputs(model):
 
 
 def run_jt(arch, outdir):
-    import torch, jittor as jt
+    # In a source checkout the explicit shim is activated by importing Jittor
+    # first (a deployed ``torch/__init__.py`` performs the same sequence).
+    # Importing ``torch`` first would accidentally select a real Torch install
+    # whenever it happens to be on ``sys.path``.
+    import jittor as jt
+    import torch
+    if torch is not jt or not getattr(jt, "_torch_compat_install_complete", False):
+        raise RuntimeError("JT parity side did not activate the Jittor Torch shim")
     from transformers import AutoModel
     os.makedirs(outdir, exist_ok=True)
     model = AutoModel.from_config(make_config(arch)); model.eval()

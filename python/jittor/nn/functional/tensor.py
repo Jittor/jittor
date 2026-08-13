@@ -111,7 +111,10 @@ def tensordot(a, b, dims=2):
         t1 = t1.permute(p1).reshape((size1, csize))
         t2 = t2.permute(p2).reshape((csize, size2))
         # multiply and reshape to target size
-        return jt.nn.matmul(t1, t2).reshape(rsizes)
+        # Jittor represents a scalar result as a one-element Var rather than a
+        # zero-rank tensor; reshape accepts no empty shape, so preserve that
+        # established native convention when every dimension is contracted.
+        return jt.nn.matmul(t1, t2).reshape(rsizes if rsizes else (1,))
 
     return __tensordot_native(a, b, dims_a, dims_b)
 

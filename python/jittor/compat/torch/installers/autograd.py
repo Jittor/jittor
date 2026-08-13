@@ -275,14 +275,9 @@ def _install_autograd(g, registry=None):
     g.autograd = autograd
     _modules["torch.autograd"] = autograd
     autograd.__path__ = getattr(autograd, "__path__", [])
-    functional = _modules.get("torch.autograd.functional")
-    if functional is None:
-        functional = _types.ModuleType("torch.autograd.functional")
-        from jittor.gradfunctional import jvp as _jvp, vjp as _vjp
-        functional.jvp = _jvp
-        functional.vjp = _vjp
-        functional.__all__ = ["jvp", "vjp"]
-        _modules["torch.autograd.functional"] = functional
+    from jittor.autograd import functional
+
+    _modules["torch.autograd.functional"] = functional
     autograd.functional = functional
     if "torch.autograd.profiler" not in _modules:
         _prof = _types.ModuleType("torch.autograd.profiler")

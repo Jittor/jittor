@@ -1,3 +1,5 @@
+"""CUDA softmax kernels owned by the neural-network backend domain."""
+
 import jittor as jt
 from jittor import nn
 from functools import lru_cache

@@ -3,6 +3,12 @@
 import jittor as jt
 
 
+def argmax_pool(x, size, stride, padding=0):
+    if stride <= 0:
+        raise RuntimeError("stride must be > 0, but got {}".format(stride))
+    return jt.pool.pool(x, size, "maximum", padding, stride)
+
+
 def pool(x, kernel_size, op, padding=0, stride=None):
     return jt.pool.Pool(kernel_size, stride, padding, op=op)(x)
 
@@ -67,6 +73,6 @@ def max_pool3d(x, kernel_size, stride=None, padding=0, dilation=None, return_ind
 
 
 _PUBLIC_SYMBOLS = (
-    pool, pool3d, AvgPool2d, AvgPool3d, avg_pool2d, _no_dilation,
+    argmax_pool, pool, pool3d, AvgPool2d, AvgPool3d, avg_pool2d, _no_dilation,
     MaxPool2d, MaxPool3d, max_pool2d, max_pool3d,
 )

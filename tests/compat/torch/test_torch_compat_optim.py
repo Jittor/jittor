@@ -215,6 +215,12 @@ class TestAdam(Base):
 
     def test_bound_initializers_inside_no_grad_keep_parameter_trainable(self):
         def body(dev):
+            def assert_stays_on_device(value, label):
+                if dev == "cuda":
+                    value.sync()
+                    self.assertEqual(value.location(), "device",
+                                     f"{label} stays on CUDA")
+
             operations = (
                 ("normal_", lambda value: value.data.normal_(mean=0.0, std=0.1)),
                 ("uniform_", lambda value: value.data.uniform_(-0.2, 0.2)),
@@ -226,6 +232,7 @@ class TestAdam(Base):
                 self.assertFalse(value.is_stop_grad(), f"{name} starts trainable {dev}")
                 with torch.no_grad():
                     operation(value)
+                assert_stays_on_device(value, name)
                 self.assertFalse(value.is_stop_grad(), f"{name} stays trainable {dev}")
                 grad = jt.grad((value * 3.0).sum(), [value])[0]
                 self.assertGreater(float(np.abs(grad.numpy()).max()), 0.0,
@@ -234,10 +241,27 @@ class TestAdam(Base):
             parent = jt.ones((2, 3))
             with torch.no_grad():
                 parent.data[0].zero_()
+            assert_stays_on_device(parent, "data view zero_")
             self.ac(parent.numpy()[0], np.zeros(3, dtype=np.float32),
                     atol=0.0, rtol=0.0, msg=f"view zero_ writes parent {dev}")
             self.assertFalse(parent.is_stop_grad(),
                              f"view zero_ keeps parent trainable {dev}")
+
+            setitem_parent = jt.ones((2, 3))
+            retained_data = setitem_parent.data
+            self.assertIsNot(retained_data, setitem_parent,
+                             f"data returns a detached alias {dev}")
+            self.assertTrue(retained_data.is_stop_grad(),
+                            f"data alias is detached {dev}")
+            retained_data[1] = 4.0
+            assert_stays_on_device(setitem_parent, "data setitem")
+            self.assertEqual(tuple(retained_data.shape), (2, 3),
+                             f"data setitem keeps alias shape {dev}")
+            self.ac(setitem_parent.numpy()[1], np.full(3, 4.0, dtype=np.float32),
+                    atol=0.0, rtol=0.0,
+                    msg=f"data setitem writes parent {dev}")
+            self.ac(retained_data.numpy(), setitem_parent.numpy(), atol=0.0, rtol=0.0,
+                    msg=f"retained data alias observes mutation {dev}")
 
             parent[1].add_(2.0)
             self.ac(parent.numpy()[1], np.full(3, 3.0, dtype=np.float32),

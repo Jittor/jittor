@@ -6,3 +6,8 @@ from .cudnn import (
     _try_cudnn_conv_transpose2d,
 )
 from .layer_norm_cuda import _layer_norm_no_grad_cuda
+from . import softmax_cuda as softmax_cuda
+
+# Compatibility attribute for ``from jittor.other import code_softmax``. The
+# physical implementation lives at ``jittor.nn.backends.softmax_cuda``.
+code_softmax = softmax_cuda

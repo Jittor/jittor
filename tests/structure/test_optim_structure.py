@@ -1,6 +1,7 @@
 """Architecture and compatibility contracts for ``jittor.optim``."""
 
 import ast
+import importlib
 import inspect
 import pickle
 from pathlib import Path
@@ -33,7 +34,7 @@ class TestOptimStructure(unittest.TestCase):
     def test_physical_package_replaces_the_legacy_module(self):
         self.assertFalse((self.package.parent / "optim.py").exists())
         expected = {
-            "__init__.py", "base.py", "schedulers.py",
+            "__init__.py", "base.py", "legacy_schedulers.py", "schedulers.py",
         }
         self.assertEqual(
             {path.name for path in self.package.glob("*.py")}, expected,
@@ -61,6 +62,11 @@ class TestOptimStructure(unittest.TestCase):
                 self.assertIs(getattr(nn, name), implementation)
         self.assertIs(jt.Var.opt_grad, base.opt_grad)
         self.assertIs(optim.opt_grad, base.opt_grad)
+        self.assertIs(
+            jt.lr_scheduler,
+            importlib.import_module("jittor.optim.legacy_schedulers"),
+        )
+        self.assertIs(importlib.import_module("jittor.lr_scheduler"), jt.lr_scheduler)
 
     def test_implementations_have_real_module_paths_and_legacy_pickles_load(self):
         expected_modules = {

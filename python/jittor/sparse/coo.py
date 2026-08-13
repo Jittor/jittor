@@ -1,3 +1,5 @@
+"""Coordinate-format sparse tensors and sparse-dense multiplication."""
+
 # ***************************************************************
 # Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers:
@@ -10,8 +12,6 @@
 # ***************************************************************
 
 import jittor as jt
-import numpy as np
-
 class SparseVar:
     def __init__(self,indices,values,shape):
         assert isinstance(indices,jt.Var) and isinstance(values,jt.Var) and isinstance(shape,jt.NanoVector)
@@ -38,7 +38,9 @@ class SparseVar:
     def to_dense(self):
         ret = jt.zeros(self.shape,self.values.dtype)
         indices  = tuple(self.indices.split(1,dim=0))
-        ret[indices]=self.values
+        # split() retains the leading singleton axis, so match the indexed
+        # region's shape while keeping the public values tensor shaped [nnz].
+        ret[indices] = self.values.reshape(indices[0].shape)
         return ret
 
 def sparse_array(indices,values,shape):
@@ -51,4 +53,7 @@ def spmm(spase_x,y):
     # TODO
     x = spase_x.to_dense()
     return jt.matmul(x,y)
+
+
+__all__ = ["SparseVar", "sparse_array", "spmm"]
     

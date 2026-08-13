@@ -76,7 +76,9 @@ class TestWheelContents(unittest.TestCase):
         baseline = checker._read_hashed_path_list(
             checker.DEFAULT_BASELINE, "default baseline"
         )
-        self.assertEqual(len(baseline), 786)
+        # The current native numerical surface adds the reviewed FFT and
+        # reduction modules to the steady-state wheel.
+        self.assertEqual(len(baseline), 793)
         self.assertTrue(set(checker.REQUIRED_MEMBERS).issubset(baseline))
         pollution = {
             name: checker._pollution_reason(name)

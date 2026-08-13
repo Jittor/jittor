@@ -10,9 +10,18 @@ import jittor as torch          # or deploy the shim so `import torch` resolves 
 import torch.nn as nn
 ```
 
-The torch-style API lives in the canonical `jittor.compat.torch` package and is
-installed onto the Jittor module at import. `jittor.compat.shim` re-exports it as
-the `torch` package so third-party libraries' internal `import torch` works too.
+The torch-style API lives in the canonical `jittor.compat.torch` package. It is
+installed only when a Torch entry point is selected: an entry script containing
+`import jittor as torch`, an explicit `JITTOR_TORCH_SHIM=1`, the deployed
+`import torch` package, or the historical `import jittor.torch_compat` path.
+Plain `import jittor as jt` keeps native Jittor behavior and does not claim the
+`torch` namespace. `jittor.compat.shim` re-exports the compatibility API as the
+`torch` package so third-party libraries' internal imports work too.
+
+This separation is observable for APIs whose native and Torch contracts differ.
+In particular, native `Var.data` remains a shared NumPy view, while Torch mode
+returns a detached Tensor alias whose in-place writes update the owner without
+moving CUDA/NPU data through the host.
 Deploy that shim into the active environment with:
 
 ```bash

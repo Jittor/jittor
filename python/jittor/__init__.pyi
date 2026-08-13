@@ -1,11 +1,16 @@
 from jittor_core import *
 from jittor_core.ops import *
 from .misc import *
-from . import contrib as contrib, dataset as dataset, init as init, linalg as linalg, lr_scheduler as lr_scheduler, numpy2cupy as numpy2cupy, optim as optim, sparse as sparse, gradfunctional as gradfunctional
+from . import autograd as autograd, dataset as dataset, fft as fft, init as init, linalg as linalg, numpy2cupy as numpy2cupy, optim as optim, sparse as sparse
+from . import autograd as gradfunctional
+from .optim import legacy_schedulers as lr_scheduler
+from .compat import contrib as contrib
 from .nn import attention as attention
+from .nn.functional.softmax import logsumexp as logsumexp
+from .nn.functional.tensor import kron as kron, tensordot as tensordot
 from .compile_extern import cublas as cublas, cudnn as cudnn, cufft as cufft, curand as curand, cusparse as cusparse ,mkl_ops as mkl_ops, mpi_ops as mpi_ops, world_size as world_size
 from .compiler import compile_custom_op as compile_custom_op, compile_custom_ops as compile_custom_ops
-from .contrib import concat as concat
+from .misc.concatenation import concat as concat
 from .nn import bmm as bmm, bmm_transpose as bmm_transpose, matmul as matmul
 from collections import OrderedDict as OrderedDict
 from collections.abc import Mapping as Mapping

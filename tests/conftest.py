@@ -8,6 +8,54 @@ import sys
 import pytest
 
 
+def _select_torch_mode_for_test_process():
+    """Keep native and Torch compatibility semantics in separate processes."""
+
+    # Oracle tests preload an independent binary PyTorch and intentionally
+    # keep Jittor native.  Installing the Jittor Torch shim in that same
+    # process would try to replace an already-owned ``torch`` module graph.
+    if os.environ.get("REAL_TORCH_SITE", "").strip():
+        return
+
+    repo_root = Path(__file__).resolve().parents[1]
+    selected = []
+    for arg in sys.argv[1:]:
+        if not arg or arg.startswith("-"):
+            continue
+        raw_path = arg.split("::", 1)[0]
+        path = Path(raw_path)
+        if not path.exists():
+            continue
+        try:
+            normalized = path.resolve().relative_to(repo_root).as_posix()
+        except ValueError:
+            normalized = path.resolve().as_posix()
+        selected.append(normalized.rstrip("/"))
+    torch_roots = (
+        "tests/compat/torch",
+        # OpInfo definitions exercise the Torch-facing signatures for the
+        # shared numerical surface (see their explicit compatibility notes).
+        # Keep that process separate from native Jittor tests, just like the
+        # dedicated compatibility tree.
+        "tests/ops",
+        # These regression locks intentionally encode Torch-facing defaults
+        # (unbiased var/std and NaN-aware reductions).  Keep them in the same
+        # process mode as the compatibility tests; native Jittor retains its
+        # historical NumPy-aligned defaults.
+        "tests/core/test_regression.py",
+        "tests/structure",
+        "tests/backends/triton/test_triton_torch_compat.py",
+    )
+    broad_roots = (".", "tests")
+    if not selected or any(
+        path in broad_roots or path.startswith(torch_roots) for path in selected
+    ):
+        os.environ.setdefault("JITTOR_TORCH_SHIM", "1")
+
+
+_select_torch_mode_for_test_process()
+
+
 def _preload_real_torch():
     """Claim the Torch namespace before Jittor composition in oracle sessions."""
     raw_site = os.environ.get("REAL_TORCH_SITE", "").strip()

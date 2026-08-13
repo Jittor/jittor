@@ -84,7 +84,8 @@ NN_MIGRATION_FILES = (
     "python/jittor/nn/modules/parameter.py",
     "python/jittor/nn/modules/shape.py",
     "python/jittor/nn/modules/upsampling.py",
-    "python/jittor/nn/utils.py",
+    "python/jittor/nn/utils/__init__.py",
+    "python/jittor/nn/utils/weight_norm.py",
     "tests/nn/test_attention_oracle.py",
     "tests/nn/test_nn_capabilities.py",
 )

@@ -44,6 +44,20 @@ If several downstream projects need the same operation, promote the operation to
 the native domain. If they only need the same patching mechanism, promote the
 mechanism while leaving each patch outside core.
 
+## Activation boundary
+
+Plain `import jittor as jt` retains native Jittor contracts and does not publish
+Jittor as the top-level `torch` module. Torch compatibility is activated by an
+explicit shim/deployed entry point, an entry script that selects
+`import jittor as torch`, or the historical `jittor.torch_compat` import. The
+installer is idempotent, but activation is process-wide because the two modes
+necessarily differ on class-level APIs such as `Var.data`.
+
+Native and compatibility tests therefore run in separate processes. A native
+test must not rely on a Torch wrapper installed by another collected test, and a
+Torch compatibility test must prove that its explicit entry point completed the
+required installer graph.
+
 ## Correctness rules
 
 - Compare against an independent oracle or written contract, not another alias

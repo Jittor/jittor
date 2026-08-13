@@ -7,7 +7,6 @@ recursive-include python/jittor/compat/shim/cpp_extension/src *
 recursive-include python/jittor/compat/shim/resources *
 recursive-include python/jittor/extern *
 recursive-include python/jittor/math_util/src *
-recursive-include python/jittor/other *.py
 recursive-include python/jittor/src *
 recursive-include python/jittor/utils *.py
 include python/jittor/utils/data.gz

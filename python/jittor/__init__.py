@@ -85,21 +85,34 @@ from ._runtime.core_api import *
 from ._runtime.core_api import _core_flags
 
 from . import nn
-from . import lr_scheduler
+from . import fft
+from .optim import legacy_schedulers as lr_scheduler
 from . import linalg
 from .linalg import einsum
 from .nn import matmul, \
     bmm, bmm_transpose, \
     baddbmm
-from . import contrib
+from .nn.functional.softmax import logsumexp
+from .nn.functional.tensor import kron, tensordot
 from . import numpy2cupy
-from .contrib import concat, cat
+from .misc.concatenation import concat, cat
+from .misc.indexing import install_var_indexing as _install_var_indexing
+
+_install_var_indexing()
+del _install_var_indexing
+
+from .compat import contrib as contrib
 from .misc import *
 from . import sparse
 from . import optim
 from . import dataset
 from . import init
-from . import gradfunctional
+from . import autograd
+
+# The legacy ``jittor.gradfunctional`` spelling is published as a same-object
+# alias after compatibility composition. Keep the root attribute available
+# during composition as well.
+gradfunctional = autograd
 
 dtype = NanoString
 

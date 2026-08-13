@@ -34,7 +34,9 @@ __all__ = list(_NATIVE_EXPORTS)
 
 def _refresh_public_exports():
     """Preserve star-import behavior after Torch compatibility adds modules."""
-    implementation_modules = {"base", "algorithms", "schedulers"}
+    implementation_modules = {
+        "base", "algorithms", "legacy_schedulers", "schedulers"
+    }
     __all__[:] = sorted(
         name
         for name in globals()

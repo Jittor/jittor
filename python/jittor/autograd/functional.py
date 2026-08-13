@@ -1,7 +1,9 @@
-# reference: https://github.com/pytorch/pytorch/blob/8ea5b572a63b1acc538a9fc8d3862c73739116e8/torch/autograd/functional.py
+"""Functional automatic-differentiation operations."""
+
+# Reference: PyTorch torch/autograd/functional.py at commit 8ea5b572.
 import jittor as jt
 
-__all__ = ["vjp", "jvp", "jacobian", "hessian", "hvp", "vhp"]
+__all__ = ["jvp", "vjp"]
 
 # Utility functions
 def _is_native_complex(x):

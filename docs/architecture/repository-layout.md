@@ -78,8 +78,6 @@ changed and independently validated:
 - `python/jittor/math_util/src/*.h`;
 - `python/jittor/compat/shim/cpp_extension/{include,src}/**` as the canonical
   installed ABI resource boundary for extension builds;
-- `python/jittor/other/code_softmax.py` while the CUDA fast path loads it by
-  filesystem location;
 - `python/jittor_utils` as a sibling of `python/jittor`;
 - the literal `__version__ = '...'` assignment in `python/jittor/__init__.py`
   while release and cache readers still parse it directly.
@@ -111,12 +109,17 @@ must be present in the wheel.
     │   ├── __init__.py
     │   ├── nn/
     │   │   ├── __init__.py
+    │   │   ├── backends/
     │   │   ├── modules/
     │   │   ├── functional/
+    │   │   ├── utils/
     │   │   └── attention.py
+    │   ├── autograd/
+    │   ├── fft/                  # differentiable native FFT namespace
     │   ├── misc/
     │   ├── pool/
     │   ├── optim/
+    │   ├── sparse/
     │   ├── compat/
     │   │   ├── torch/
     │   │   ├── shim/
@@ -128,8 +131,7 @@ must be present in the wheel.
     │   ├── src/
     │   ├── extern/
     │   ├── utils/
-    │   ├── math_util/
-    │   └── other/
+    │   └── math_util/
     └── jittor_utils/
 ```
 
@@ -164,6 +166,13 @@ scaffold no longer exist. The maintained Torch API lives in
 deployment and import patching live in `jittor.compat.shim`. No new domain may
 adopt a facade/private-package pairing.
 
+The runtime root is also closed by an exact structure contract. Its remaining
+Python files are limited to runtime composition, compiler/device bootstrap,
+the native `distributions`, `init`, and `linalg` domains, and the installed
+self-test. Compatibility files such as `contrib.py`, `weightnorm.py`,
+`lr_scheduler.py`, `sparse.py`, or `torch_fsdp2_compat.py` are not valid root
+owners.
+
 ## Canonical And Legacy Imports
 
 The physical target and compatibility entry points are:
@@ -171,15 +180,31 @@ The physical target and compatibility entry points are:
 | Canonical implementation | Compatibility entry point |
 | --- | --- |
 | `jittor.nn` package | existing `from jittor import nn` |
+| `jittor.autograd` | `jittor.gradfunctional` |
+| `jittor.fft` | `torch.fft` in Torch mode |
+| `jittor.misc.concatenation` and `jittor.misc.indexing` | `jittor.contrib` |
+| `jittor.nn.backends.softmax_cuda` | `jittor.other.code_softmax` |
+| `jittor.nn.utils.weight_norm` | `jittor.weightnorm` |
+| `jittor.optim.legacy_schedulers` | `jittor.lr_scheduler` |
+| `jittor.sparse.convolution` | `jittor.nn.sparse` |
 | `jittor.compat.torch` | `jittor.torch_compat` |
 | `jittor.compat.shim` | `jittor.torch_shim` and deployed `torch` aliases |
 | `jittor.compat.fsdp2` | `jittor.torch_fsdp2_compat` |
 | `jittor.compat.triton` | `jittor.triton_shim` |
 
-Compatibility paths must resolve to the canonical objects and must not run a
-second installer. Where callers can observe `sys.modules` identity today, the
-migration preserves one shared module object rather than parallel facades with
-copied state.
+Compatibility paths must resolve to the canonical objects and must not own a
+second implementation or installer. The historical `jittor.torch_compat` entry
+may idempotently activate the canonical installer because plain Jittor startup
+now deliberately preserves native semantics. Where callers can observe
+`sys.modules` identity today, the migration preserves one shared module object
+rather than parallel facades with copied state.
+
+The structure gate scans same-file shadowed definitions and exact cross-file
+implementation bodies. A small reviewed set remains where independence is a
+real contract: filesystem-only deployment commands, ACL code-generation
+templates, architecture-local model helpers, and the old/new PyTorch checkpoint
+readers. A new duplicate group fails until it is consolidated or explicitly
+justified in that gate.
 
 `jittor.nn.functional` becomes a physical package and remains the canonical
 object registered as `torch.nn.functional` when the Torch shim is active. The

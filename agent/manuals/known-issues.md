@@ -33,18 +33,6 @@ framework defects.
 - Review/expiry condition: remove only after sanitizer-backed root cause and
   repeated cold/warm stress, deadlock, multiprocess-cache, and performance gates
 
-## KI-OPS-001: `index_select` does not normalize negative dimensions
-
-- Severity: Critical
-- Status: Strict expected failure
-- Owner: indexing operator maintainers
-- Evidence: [`test_index_select_negative_dim_KNOWN_BUG`](../../tests/compiler/test_kernel_traps.py)
-- Symptom: selecting `dim=-1` can return the wrong shape and slice rather than
-  selecting the last axis
-- Workaround: normalize `dim` to a non-negative value before calling
-- Review/expiry condition: the expected failure becomes XPASS and is replaced by
-  a normal regression covering all valid negative dimensions
-
 ## KI-COMPILER-002: fractional constant padding can break CPU asm tuning
 
 - Severity: High

@@ -39,11 +39,14 @@ python/
 │   │   ├── modules/             # stateful Module implementations
 │   │   ├── functional/          # stateless tensor functions
 │   │   ├── backends/            # explicit optimized backend adapters
-│   │   ├── attention.py
-│   │   └── sparse.py
+│   │   ├── utils/               # construction helpers such as weight norm
+│   │   └── attention.py
+│   ├── autograd/                # functional automatic differentiation
+│   ├── fft/                     # differentiable native FFT namespace
 │   ├── misc/                    # general tensor and shape operations
 │   ├── pool/                    # pooling functions and modules
 │   ├── optim/                   # optimizer facade and algorithm modules
+│   ├── sparse/                  # COO tensors and sparse convolution
 │   ├── compat/
 │   │   ├── torch/               # canonical Torch-style API compatibility
 │   │   ├── fsdp2/               # distributed FSDP2 compatibility
@@ -85,6 +88,28 @@ not by the size of the destination file. Circular imports are resolved by
 narrowing dependencies or moving shared primitives to the lower-level owner,
 not through mutable proxy objects.
 
+`jittor.sparse` owns both coordinate-format sparse tensors and sparse neural
+network kernels in separate child modules. The historical `jittor.nn.sparse`
+name is a same-object alias of `jittor.sparse.convolution`; `jittor.nn` and
+`jittor.nn.functional` re-export those canonical callables.
+
+`jittor.autograd` owns functional automatic differentiation. `jittor.fft` owns
+the differentiable FFT/shift/frequency namespace shared by native Jittor and
+Torch mode. Concatenation and
+indexing live in `jittor.misc`, pooling in `jittor.pool`, optimized softmax in
+`jittor.nn.backends`, and weight normalization in `jittor.nn.utils`. Historical
+root spellings are import aliases only; they do not retain physical source
+files or wrapper implementations.
+
+### Root module ownership
+
+The Python files directly under `python/jittor/` are an exact reviewed set.
+`__init__.py` composes the runtime; `compiler.py`, `compile_extern.py`,
+`pyjt_compiler.py`, and `init_cupy.py` are compiler or device bootstrap
+boundaries; `distributions.py`, `init.py`, and `linalg.py` are public native
+domains; `selftest.py` is the installed smoke-test entry point. New root files
+require an ownership review and a corresponding structure-gate update.
+
 ### Compatibility APIs
 
 The canonical Torch-style implementation is `jittor.compat.torch`. The legacy
@@ -98,6 +123,12 @@ top-level `torch` surface used by applications that import Torch directly. The
 name `jittor.torch_shim` is retained only as a same-object legacy alias. The shim
 delegates Torch-style semantics to `jittor.compat.torch`; neither the alias nor
 the deployed package owns a second implementation.
+
+Plain Jittor startup installs only alias resolution and native domains. The
+Torch installer runs after an explicit Torch-mode preflight, through a deployed
+`torch` entry point, or when the historical `jittor.torch_compat` alias is
+imported. This prevents class-level Torch adaptations from changing native
+Jittor APIs in unrelated processes.
 
 The ownership order is:
 
@@ -120,6 +151,11 @@ behavioral decision rules.
 - Broad exception handlers may annotate and re-raise a failure; they must not
   convert a partially installed compatibility surface into apparent success.
 - Expensive imports stay out of collection-only structure tests.
+- A top-level definition may not be silently replaced by a later definition in
+  the same file. Cross-file identical implementations are scanned as well;
+  retained duplicates require a narrow reviewed category such as standalone
+  deployment entry points, backend code-generation templates, model-local
+  architecture blocks, or legacy serialization readers.
 
 ## Runtime resources
 

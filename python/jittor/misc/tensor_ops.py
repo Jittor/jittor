@@ -2649,14 +2649,14 @@ def _to_float(x: jt.Var) -> jt.Var:
     return x
 jt.Var._to_float = _to_float
 
-def index_select(x: jt.Var, dim:int, index: jt.Var) -> jt.Var:
+def index_select(input: jt.Var, dim: int, indices: jt.Var) -> jt.Var:
     '''Returns a new var which indexes the x var along dimension dim using the entries in index.
 
 The returned var has the same number of dimensions as the original var (x). The dimth dimension has the same size as the length of index; other dimensions have the same size as in the original tensor.
 
-    :param x: the input tensor.
+    :param input: the input tensor.
     :param dim:  the dimension to index.
-    :param index:  the 1-D tensor containing the indices to index.
+    :param indices:  the 1-D tensor containing the indices to index.
 
     Example::
 
@@ -2669,8 +2669,18 @@ The returned var has the same number of dimensions as the original var (x). The 
 
 
     '''
-    return x.getitem(((slice(None),)*dim)+(index,))
+    ndim = input.ndim
+    original_dim = dim
+    if dim < 0:
+        dim += ndim
+    if dim < 0 or dim >= ndim:
+        raise IndexError(
+            f"Dimension out of range (expected to be in range of "
+            f"[{-ndim}, {ndim - 1}], but got {original_dim})"
+        )
+    return input[(slice(None),) * dim + (indices,)]
 jt.index_select = index_select
+jt.Var.index_select = index_select
 
 def multinomial(weights: jt.Var, num_samples: int, replacement: bool=False) -> jt.Var:
     ''' Returns a var where each row contains num_samples indices sampled from the multinomial probability distribution located in the corresponding row of input weights.
@@ -2706,9 +2716,15 @@ def multinomial(weights: jt.Var, num_samples: int, replacement: bool=False) -> j
         # A-Res algorithm
         # Pavlos S. Efraimidis and Paul G. Spirakis, 2006, Weighted random sampling with a reservoir
         assert num_samples <= weights.shape[-1], "num_samples larger than the input"
-        # prevent rand generate 1, 1^inf = 1, with override other result
-        a = jt.rand(weights.shape).minimum(0.999999)
-        rand = a ** (1/weights)
+        # Use a strictly positive denominator and mask zero-probability entries
+        # after the exponentiation.  The old ``1 / weights`` expression made
+        # zero weights produce ``0 ** inf``/NaN keys, allowing an impossible
+        # category to win ``topk``.  Positive keys are in (0, 1), so -1 is a
+        # stable sentinel for masked entries.
+        safe_weights = weights.maximum(1e-20)
+        a = jt.rand(weights.shape).minimum(0.999999).maximum(1e-7)
+        rand = a ** (1 / safe_weights)
+        rand = jt.ternary(weights > 0, rand, jt.full_like(rand, -1.0))
         _, indices = jt.topk(rand, num_samples)
         return indices
 
@@ -2785,14 +2801,6 @@ def iinfo(dtype):
         dtype = str(dtype).split('.')[-1]
     return np.iinfo(dtype)
 
-
-def index_select(input,dim,indices):
-    # slice(None) (":") for the leading dims, NOT None (newaxis) — None inserts new
-    # axes so x.index_select(1, idx) gave (1,...) with wrong values instead of indexing
-    # dim 1. Matches the correct jt.index_select function above.
-    return input[(slice(None),)*dim+(indices,)]
-
-jt.Var.index_select = index_select
 
 def cuda(x):
     jt.flags.use_cuda = 1

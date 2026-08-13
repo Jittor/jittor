@@ -16,10 +16,7 @@ from dataclasses import dataclass, field
 from types import ModuleType
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
-try:
-    from importlib import metadata as importlib_metadata
-except ImportError:  # pragma: no cover - exercised on Python 3.7 CI
-    import importlib_metadata  # type: ignore[no-redef]
+from ._entry_points import entry_points as _entry_points
 
 
 EXTERNAL_BACKEND_ENTRY_POINT = "jittor.external_backends"
@@ -711,14 +708,6 @@ def external_backend_for_source_root(root) -> Optional[ExternalBackend]:
             if backend.looks_like_source_root(candidate):
                 return backend
     return None
-
-
-def _entry_points(group: str):
-    discovered = importlib_metadata.entry_points()
-    select = getattr(discovered, "select", None)
-    if callable(select):
-        return list(select(group=group))
-    return list(discovered.get(group, ()))
 
 
 def load_external_backend_entry_points() -> Tuple[BackendEntryPointResult, ...]:

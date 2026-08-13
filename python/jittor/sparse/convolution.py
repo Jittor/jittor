@@ -1,4 +1,4 @@
-"""Sparse neural-network primitives."""
+"""Sparse neural-network convolution primitives."""
 
 import jittor as jt
 

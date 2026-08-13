@@ -12,17 +12,21 @@ import jittor.misc as misc
 from jittor.misc import shape_composition
 from jittor.misc import shape_transforms
 from jittor.misc import tensor_ops
+from jittor.misc import concatenation
+from jittor.misc import indexing
 
 
 _PUBLIC_NAMES = {
     "CTCLoss", "Finfo", "Iterable", "Sequence", "all", "all_equal", "any",
     "arange", "arctan2", "atan2", "atleast_1d", "atleast_2d", "atleast_3d",
+    "amax", "amin",
     "auto_parallel", "bernoulli", "bfloat16_finfo", "block_diag",
-    "cartesian_prod", "chunk", "contiguous", "cpu", "cross", "ctc_loss",
+    "cartesian_prod", "cat", "chunk", "concat", "concatenation", "contiguous",
+    "cpu", "count_nonzero", "cross", "ctc_loss",
     "cub_cumsum", "cuda", "cummax", "cummin", "cumprod", "cumsum",
     "deg2rad", "diag", "diagonal", "expand", "expm1", "finfo", "flip",
     "from_torch", "gather", "get_max_memory_treemap", "histc", "hypot",
-    "iinfo", "index_add", "index_add_", "index_fill", "index_fill_",
+    "iinfo", "index_add", "index_add_", "index_fill", "index_fill_", "indexing",
     "index_select", "isfinite", "isin", "isinf", "isnan", "isneginf",
     "isposinf", "jt", "knn", "kthvalue", "linspace", "log2", "make_grid",
     "math", "median", "meshgrid", "multinomial", "ne", "new", "nms",
@@ -33,7 +37,7 @@ _PUBLIC_NAMES = {
     "searchsorted", "set_global_seed", "sort", "split", "stack", "t", "time",
     "tensor_ops", "to", "tolist", "topk", "tril", "triu", "unbind", "unique",
     "unique_consecutive", "view_as",
-    "shape_composition", "shape_transforms",
+    "reductions", "shape_composition", "shape_transforms",
 }
 
 _MOVED = {
@@ -262,6 +266,8 @@ class TestMiscStructure(unittest.TestCase):
         )
 
         budgets = {
+            concatenation: 100,
+            indexing: 180,
             tensor_ops: 2850,
             shape_transforms: 200,
             shape_composition: 200,

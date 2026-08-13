@@ -12,7 +12,10 @@ from ..attention import (
 from ..dual_grid import finalize_dual_grid_mesh_cuda
 from ..rms_norm_cuda import multihead_rms_norm_cuda
 from ..rope_cuda import partial_rotary_embedding_cuda
-from ..sparse import build_submanifold_conv3d_neighbors, submanifold_conv3d
+from jittor.sparse.convolution import (
+    build_submanifold_conv3d_neighbors,
+    submanifold_conv3d,
+)
 from ..utils import skip_init
 from .attention import scaled_dot_product_attention
 from .activation import (
@@ -61,9 +64,16 @@ from .interpolation import interpolate, resize
 from .linear import linear
 from .loss import (
     bce_loss,
+    binary_cross_entropy,
     binary_cross_entropy_with_logits,
+    cosine_embedding_loss,
+    cross_entropy,
     cross_entropy_loss,
+    gaussian_nll_loss,
+    huber_loss,
+    kl_div,
     l1_loss,
+    margin_ranking_loss,
     mse_loss,
     nll_loss,
     smooth_l1_loss,
@@ -104,6 +114,7 @@ __all__ = sorted(
         "baddbmm",
         "batch_norm",
         "bce_loss",
+        "binary_cross_entropy",
         "bilinear",
         "binary_cross_entropy_with_logits",
         "bmm",
@@ -119,6 +130,8 @@ __all__ = sorted(
         "conv_transpose2d",
         "conv_transpose3d",
         "cosine_similarity",
+        "cosine_embedding_loss",
+        "cross_entropy",
         "cross_entropy_loss",
         "cumulative_sequence_lengths",
         "dropout",
@@ -130,6 +143,7 @@ __all__ = sorted(
         "finalize_dual_grid_mesh_cuda",
         "flatten",
         "fold",
+        "gaussian_nll_loss",
         "fp32_guard",
         "gelu",
         "get_init_var_rand",
@@ -145,10 +159,12 @@ __all__ = sorted(
         "hardsigmoid",
         "hardswish",
         "hardtanh",
+        "huber_loss",
         "identity",
         "instance_norm",
         "interpolate",
         "kron",
+        "kl_div",
         "l1_loss",
         "layer_norm",
         "leaky_relu",
@@ -157,6 +173,7 @@ __all__ = sorted(
         "log_sigmoid",
         "log_softmax",
         "logsumexp",
+        "margin_ranking_loss",
         "make_base_grid_4D",
         "make_base_grid_5D",
         "matmul",

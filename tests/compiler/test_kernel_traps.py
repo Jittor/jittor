@@ -76,20 +76,22 @@ class TestKernelTraps(JittorTestCase):
                              atol=1e-5, rtol=1e-5, msg=f"cumsum dim=-1 [{dev}]")
         self._devices(body)
 
-    @unittest.expectedFailure
-    def test_index_select_negative_dim_KNOWN_BUG(self):
-        # FOUND BY THIS SUITE (2026-06-26): jt.index_select does NOT normalize a
-        # negative dim -- it silently returns the wrong slice/shape (a silent-wrong,
-        # the worst kind per the project's "loud crash > silent wrong" rule).
-        #   index_select(x[2,3,4], dim=-1, [0,2]) -> shape (2,3,4) instead of (2,3,2).
-        # dim>=0 is correct (only -1/-2 are wrong), so it is the negative-dim
-        # normalization that is missing (cf. the dim>0 newaxis fix 3eb7bc78).
-        # Marked expectedFailure so the suite stays green while keeping the bug
-        # VISIBLE; flip to a hard assertion once the normalization is added.
+    def test_index_select_negative_dim(self):
         x = np.random.RandomState(0).randn(2, 3, 4).astype("float32")
-        got = jt.index_select(jt.array(x), -1, jt.array(np.array([0, 2], "int64"))).numpy()
-        self.assertEqual(got, np.take(x, [0, 2], axis=-1),
-                         msg="index_select dim=-1 should select along last axis")
+        indices = jt.array(np.array([0, 2], "int64"))
+        for dim in (-1, -2, 2):
+            with self.subTest(dim=dim):
+                got = jt.index_select(jt.array(x), dim, indices).numpy()
+                self.assertEqual(
+                    got,
+                    np.take(x, [0, 2], axis=dim),
+                    msg=f"index_select dim={dim}",
+                )
+
+        for dim in (-4, 3):
+            with self.subTest(dim=dim):
+                with self.assertRaises(IndexError):
+                    jt.index_select(jt.array(x), dim, indices)
 
     # -- §4-B#1: jittor has no 0-d scalar -- a full reduce is shape (1,) not () ----
     def test_no_zero_d_scalar(self):

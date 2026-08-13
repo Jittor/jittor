@@ -14,6 +14,7 @@ os.environ["log_silent"] = "1"
 import re
 import jittor_utils as jit_utils
 from jittor_utils import LOG
+from jittor_utils.compiler_flags import remove_flags
 jit_utils.try_import_jit_utils_core(silent=True)
 
 def my_split(str):
@@ -130,33 +131,6 @@ so_pos=cmd.find("_op.so")
 
 # remove -Xclang ...
 remove_clang_flag = lambda s: re.sub("-Xclang (('[^']*')|([^ ]*))", "", s)
-
-def shsplit(s):
-    s1 = s.split(' ')
-    s2 = []
-    count = 0
-    for s in s1:
-        nc = s.count('"') + s.count('\'')
-        if count&1:
-            count += nc
-            s2[-1] += " "
-            s2[-1] += s
-        else:
-            count = nc
-            s2.append(s)
-    return s2
-
-def remove_flags(flags, rm_flags):
-    flags = shsplit(flags)
-    output = []
-    for s in flags:
-        ss = s.replace("\"", "")
-        for rm in rm_flags:
-            if ss.startswith(rm) or ss.endswith(rm):
-                break
-        else:
-            output.append(s)
-    return " ".join(output)
 
 if cc_pos==-1:  #s_to_so
     run_cmd(remove_clang_flag(cmd))

@@ -258,7 +258,7 @@ pjmap = {
             'args': "tensors, dim=0, out=None", 
         },
         'jittor': {
-            'module': 'jt.contrib',
+            'module': 'jt.misc',
             'name': 'concat',
             'args': 'vars, dim=0'
         },

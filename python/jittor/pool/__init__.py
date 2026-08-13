@@ -25,8 +25,8 @@ from .adaptive import (
 )
 from .pooling_1d import AdaptiveAvgPool1d, AvgPool1d, MaxPool1d
 from .layers import (
-    AvgPool2d, AvgPool3d, MaxPool2d, MaxPool3d, _no_dilation, avg_pool2d,
-    max_pool2d, max_pool3d, pool, pool3d,
+    AvgPool2d, AvgPool3d, MaxPool2d, MaxPool3d, _no_dilation, argmax_pool,
+    avg_pool2d, max_pool2d, max_pool3d, pool, pool3d,
 )
 
 pool2d = pool

@@ -122,6 +122,11 @@ def _scalar(x):
     return np.asarray([x], dtype="float32")
 
 
+def _native_complex(jt, real, imag):
+    """Construct native complex64 without requiring Torch-mode root aliases."""
+    return jt.nn.view_as_complex(jt.stack([real, imag], dim=-1))
+
+
 def _record(results, errors, name, fn):
     try:
         results[name] = _to_numpy(fn())
@@ -209,7 +214,12 @@ def run_jittor(outdir):
     _record(results, errors, "roundtrip", a)
     _record(results, errors, "view_as_real", lambda: jt.nn.view_as_real(a()))
     _record(results, errors, "view_as_complex", lambda: jt.nn.view_as_complex(jt.array(data["stack"])))
-    _record(results, errors, "torch_complex", lambda: jt.complex(jt.array(data["a"].real), jt.array(data["a"].imag)))
+    _record(
+        results,
+        errors,
+        "torch_complex",
+        lambda: _native_complex(jt, jt.array(data["a"].real), jt.array(data["a"].imag)),
+    )
     _record(results, errors, "real", lambda: a().real)
     _record(results, errors, "imag", lambda: a().imag)
     _record(results, errors, "angle", lambda: a().angle())

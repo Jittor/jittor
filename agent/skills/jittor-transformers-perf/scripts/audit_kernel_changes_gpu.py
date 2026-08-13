@@ -87,7 +87,7 @@ def run_softmax_case(length: int, dtype: str, rows: int, seed: int) -> None:
     got = jt.fetch_sync([soft.float32(), log_soft.float32(),
                          dsoft.float32(), dlog.float32()])
     elapsed_ms = (time.perf_counter() - started) * 1000.0
-    from jittor.other import code_softmax
+    from jittor.nn.backends import softmax_cuda as code_softmax
     schedule = code_softmax._softmax_schedule(length)
     emit(
         kind="softmax_correctness",
@@ -232,7 +232,7 @@ def run_profile(op: str, length: int, rows: int, warmup: int,
                 rerun: int, slots: int) -> None:
     rng = np.random.default_rng(2026071103 + length)
     if op == "softmax":
-        from jittor.other import code_softmax
+        from jittor.nn.backends import softmax_cuda as code_softmax
         x = jt.array(rng.standard_normal((rows, length)).astype("float32"))
         g = jt.array(rng.standard_normal((rows, length)).astype("float32"))
         current = lambda z: jt.nn.softmax(z, -1)
@@ -295,7 +295,7 @@ def run_profile(op: str, length: int, rows: int, warmup: int,
 def run_softmax_forced_schedule(length: int, threads: int, rows: int,
                                 warmup: int, rerun: int, slots: int) -> None:
     """Profile a register schedule without changing the production selector."""
-    from jittor.other import code_softmax
+    from jittor.nn.backends import softmax_cuda as code_softmax
 
     original_schedule = code_softmax._softmax_schedule
     code_softmax._softmax_v1_cls.cache_clear()
@@ -375,7 +375,7 @@ def run_layernorm_correctness(scale: float, eps: float,
 
 def run_cache_probe(calls: int) -> None:
     from jittor import nn
-    from jittor.other import code_softmax
+    from jittor.nn.backends import softmax_cuda as code_softmax
     nn._ln_function_cls.cache_clear()
     code_softmax._softmax_v1_cls.cache_clear()
     x = jt.ones((2, 768), dtype="float32")

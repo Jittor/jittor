@@ -18,7 +18,16 @@ from ctypes import cdll
 from ctypes.util import find_library
 
 import jittor_utils as jit_utils
-from jittor_utils import LOG, run_cmd, find_exe, cc_path, cc_type, cache_path
+from jittor_utils import (
+    LOG,
+    run_cmd,
+    find_exe,
+    try_find_exe,
+    cc_path,
+    cc_type,
+    cache_path,
+)
+from jittor_utils.compiler_flags import remove_flags, shsplit
 from . import pyjt_compiler
 from jittor_utils import lock
 from jittor_utils import install_cuda
@@ -32,34 +41,6 @@ def make_cache_dir(cache_path):
     if not os.path.isdir(cache_path):
         LOG.i(f"Create cache dir: {cache_path}")
         os.mkdir(cache_path)
-
-def shsplit(s):
-    s1 = s.split(' ')
-    s2 = []
-    count = 0
-    for s in s1:
-        nc = s.count('"') + s.count('\'')
-        if count&1:
-            count += nc
-            s2[-1] += " "
-            s2[-1] += s
-        else:
-            count = nc
-            s2.append(s)
-    return s2
-
-
-def remove_flags(flags, rm_flags):
-    flags = shsplit(flags)
-    output = []
-    for s in flags:
-        ss = s.replace("\"", "")
-        for rm in rm_flags:
-            if ss.startswith(rm) or ss.endswith(rm):
-                break
-        else:
-            output.append(s)
-    return " ".join(output)
 
 def moveback_flags(flags, rm_flags):
     flags = shsplit(flags)
@@ -924,13 +905,6 @@ def env_or_try_find(name, bname):
             LOG.i(f"Found {bname}{version} at {path}")
         return path
     return try_find_exe(bname)
-
-def try_find_exe(*args):
-    try:
-        return find_exe(*args)
-    except:
-        LOG.v(f"{args[0]} not found.")
-        return ""
 
 def check_pybt(gdb_path, python_path):
     if gdb_path=='' or python_path=='':

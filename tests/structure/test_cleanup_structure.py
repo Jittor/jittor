@@ -3,12 +3,13 @@
 from __future__ import print_function
 
 import ast
+import copy
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
-from typing import List
+from typing import Dict, List, Tuple
 import unittest
 
 
@@ -22,10 +23,17 @@ class TestCleanupStructure(unittest.TestCase):
     def test_retired_runtime_payloads_are_absent(self):
         retired = (
             "python/jittor/attention.py",
+            "python/jittor/contrib.py",
+            "python/jittor/gradfunctional",
+            "python/jittor/lr_scheduler.py",
+            "python/jittor/nn/sparse.py",
+            "python/jittor/other",
             "python/jittor/script",
             "python/jittor/demo",
             "python/jittor/notebook",
             "python/jittor/optim.py",
+            "python/jittor/weightnorm.py",
+            "python/jittor/sparse.py",
             "python/jittor/vcompiler",
             "python/jittor/version",
             "python/jittor/utils/polish.py",
@@ -55,45 +63,244 @@ class TestCleanupStructure(unittest.TestCase):
                 )
         self.assertEqual(collisions, [])
 
+    def test_runtime_files_have_no_shadowed_top_level_definitions(self):
+        runtime_root = self.repo_root / "python" / "jittor"
+        duplicates = []
+        for path in sorted(runtime_root.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            definitions: Dict[str, List[int]] = {}
+            for node in tree.body:
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    continue
+                is_overload = any(
+                    (isinstance(decorator, ast.Name) and decorator.id == "overload")
+                    or (isinstance(decorator, ast.Attribute) and decorator.attr == "overload")
+                    for decorator in node.decorator_list
+                )
+                if is_overload:
+                    continue
+                definitions.setdefault(node.name, []).append(node.lineno)
+            for name, lines in definitions.items():
+                if len(lines) > 1:
+                    duplicates.append(
+                        (
+                            path.relative_to(self.repo_root).as_posix(),
+                            name,
+                            lines,
+                        )
+                    )
+        self.assertEqual(duplicates, [])
+
+    def test_cross_file_duplicate_implementations_are_reviewed(self):
+        source_root = self.repo_root / "python"
+        implementations: Dict[str, List[Tuple[str, str]]] = {}
+        for path in sorted(source_root.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in tree.body:
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    continue
+                if any(
+                    (isinstance(decorator, ast.Name) and decorator.id == "overload")
+                    or (isinstance(decorator, ast.Attribute) and decorator.attr == "overload")
+                    for decorator in node.decorator_list
+                ):
+                    continue
+                if getattr(node, "end_lineno", node.lineno) - node.lineno < 3:
+                    continue
+                normalized = copy.deepcopy(node)
+                normalized.name = "_"
+                normalized.decorator_list = []
+                fingerprint = ast.dump(normalized, include_attributes=False)
+                implementations.setdefault(fingerprint, []).append(
+                    (
+                        path.relative_to(self.repo_root).as_posix(),
+                        node.name,
+                    )
+                )
+
+        duplicate_groups = [
+            frozenset(group)
+            for group in implementations.values()
+            if len({path for path, _name in group}) > 1
+        ]
+        deploy_helpers = frozenset(
+            {
+                ("python/jittor/compat/shim/deploy.py", "_default_site_packages"),
+                ("python/jittor/compat/triton/deploy.py", "_default_site_packages"),
+            }
+        )
+        stub_fallbacks = frozenset(
+            {
+                (
+                    "python/jittor/compat/shim/resources/stubs/torchaudio/__init__.py",
+                    "_AnyModule",
+                ),
+                (
+                    "python/jittor/compat/shim/resources/stubs/torchdata/__init__.py",
+                    "_AnyModule",
+                ),
+            }
+        )
+        tuple_helpers = frozenset(
+            {
+                ("python/jittor/extern/acl/acl_compiler.py", "_ntuple"),
+                ("python/jittor/extern/acl/aclops/conv_op.py", "_ntuple"),
+                ("python/jittor/misc/tensor_ops.py", "_ntuple"),
+            }
+        )
+        model_local_groups = {
+            frozenset(
+                {
+                    ("python/jittor/models/convnext.py", "StochasticDepth"),
+                    ("python/jittor/models/maxvit.py", "StochasticDepth"),
+                }
+            ),
+            frozenset(
+                {
+                    ("python/jittor/models/efficientnet.py", "_make_divisible"),
+                    ("python/jittor/models/mobilenet_v3.py", "_make_divisible"),
+                    ("python/jittor/models/regnet.py", "_make_divisible"),
+                }
+            ),
+            frozenset(
+                {
+                    ("python/jittor/models/googlenet.py", "BasicConv2d"),
+                    ("python/jittor/models/inception.py", "BasicConv2d"),
+                }
+            ),
+        }
+        acl_shared_helpers = {
+            frozenset(
+                {
+                    ("python/jittor/extern/acl/aclops/getitem_op.py", name),
+                    ("python/jittor/extern/acl/aclops/setitem_op.py", name),
+                }
+            )
+            for name in ("caculate_shape", "can_broadcast_and_shape")
+        }
+        acl_forward_helpers = frozenset(
+            {
+                ("python/jittor/extern/acl/aclops/getitem_op.py", "getitem_forward"),
+                ("python/jittor/extern/acl/aclops/index_op.py", "range_forward"),
+                ("python/jittor/extern/acl/aclops/setitem_op.py", "setitem_forward"),
+            }
+        )
+        legacy_loader_names = {
+            "_maybe_decode_ascii",
+            "persistent_load",
+            "_storage_type_to_dtype_map",
+            "_get_dtype_from_pickle_storage_type",
+            "StorageType",
+            "jittor_rebuild_var",
+            "ArrayWrapper",
+            "jittor_rebuild_direct",
+            "_check_seekable",
+            "_is_compressed_file",
+            "_should_read_directly",
+            "persistent_load_direct",
+        }
+
+        def reviewed(group):
+            if group in (
+                deploy_helpers,
+                stub_fallbacks,
+                tuple_helpers,
+                acl_forward_helpers,
+            ):
+                return True
+            if group in model_local_groups or group in acl_shared_helpers:
+                return True
+            paths = {path for path, _name in group}
+            names = {name for _path, name in group}
+            if (
+                paths
+                == {
+                    "python/jittor_utils/load_pytorch.py",
+                    "python/jittor_utils/load_pytorch_old.py",
+                }
+                and names <= legacy_loader_names
+            ):
+                return True
+            if all(path.startswith("python/jittor/extern/acl/aclops/") for path in paths):
+                return len(group) > 10 and all(name.endswith("_cmd") for _path, name in group)
+            return False
+
+        unreviewed = sorted(
+            (sorted(group) for group in duplicate_groups if not reviewed(group)),
+            key=repr,
+        )
+        self.assertEqual(unreviewed, [])
+
     def test_runtime_root_has_an_exact_reviewed_entry_set(self):
         runtime_root = self.repo_root / "python" / "jittor"
         expected = {
             "__init__.py",
             "__init__.pyi",
             "_runtime",
+            "autograd",
             "ccl",
             "compile_extern.py",
             "compiler.py",
             "compat",
-            "contrib.py",
             "dataset",
             "distributions.py",
             "distributed",
             "einops",
             "extern",
-            "gradfunctional",
+            "fft",
             "init.py",
             "init_cupy.py",
             "linalg.py",
             "loss3d",
-            "lr_scheduler.py",
             "math_util",
             "misc",
             "models",
             "nn",
             "optim",
-            "other",
             "pool",
             "pyjt_compiler.py",
             "selftest.py",
-            "sparse.py",
+            "sparse",
             "src",
             "transform",
             "utils",
-            "weightnorm.py",
         }
         actual = {path.name for path in runtime_root.iterdir()}
         self.assertEqual(actual, expected)
+
+    def test_remaining_root_python_files_have_reviewed_owners(self):
+        runtime_root = self.repo_root / "python" / "jittor"
+        reviewed = {
+            "__init__.py": "runtime composition",
+            "compile_extern.py": "compiler bootstrap and external libraries",
+            "compiler.py": "JIT compiler bootstrap",
+            "distributions.py": "native public distributions domain",
+            "init.py": "native public initialization domain",
+            "init_cupy.py": "CUDA bootstrap boundary",
+            "linalg.py": "native public linear algebra domain",
+            "pyjt_compiler.py": "Python binding compiler boundary",
+            "selftest.py": "installed smoke-test entry point",
+        }
+        actual = {path.name for path in runtime_root.glob("*.py")}
+        self.assertEqual(actual, set(reviewed))
+
+        public_domains = {"distributions.py", "init.py", "linalg.py"}
+        definitions = {}
+        for name in public_domains:
+            path = runtime_root / name
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            definitions[name] = {
+                node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+            }
+            self.assertTrue(definitions[name], reviewed[name])
+
+        # These public domains intentionally share no top-level implementation
+        # names; a future overlap requires a package ownership review.
+        for left in sorted(public_domains):
+            for right in sorted(public_domains):
+                if left >= right:
+                    continue
+                self.assertEqual(definitions[left] & definitions[right], set())
 
     def test_legacy_fsdp2_path_names_are_absent_everywhere(self):
         forbidden_names = {

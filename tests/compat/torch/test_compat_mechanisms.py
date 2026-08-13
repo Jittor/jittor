@@ -14,6 +14,9 @@ from unittest import mock
 
 from jittor.compat import external_backend
 from jittor.compat import module_patcher
+from jittor.compat import _aliases
+from jittor.compat._entry_points import entry_points
+from jittor.compat import torch as torch_compat
 
 
 class _EntryPoint:
@@ -121,6 +124,13 @@ class TestModulePatcher(unittest.TestCase):
         self.assertIn((bad.name, "failed"), statuses)
         self.assertIn((good.name, "loaded"), statuses)
         self.assertIn("already_loaded", [item.status for item in second.results])
+
+    def test_compatibility_hooks_share_entry_point_discovery(self):
+        self.assertIs(external_backend._entry_points, entry_points)
+        self.assertIs(module_patcher._entry_points, entry_points)
+
+    def test_torch_installer_shares_namespace_snapshot(self):
+        self.assertIs(torch_compat._torch_namespace_snapshot, _aliases._torch_namespace)
 
     def test_install_uses_one_process_wide_finder(self):
         module_patcher.install_module_patches(load_entry_points=False)

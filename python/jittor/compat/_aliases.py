@@ -11,6 +11,14 @@ import sys
 
 ALIASES = {
     "jittor.attention": "jittor.nn.attention",
+    "jittor.contrib": "jittor.compat.contrib",
+    "jittor.gradfunctional": "jittor.autograd",
+    "jittor.gradfunctional.functional": "jittor.autograd.functional",
+    "jittor.other": "jittor.nn.backends",
+    "jittor.other.code_softmax": "jittor.nn.backends.softmax_cuda",
+    "jittor.lr_scheduler": "jittor.optim.legacy_schedulers",
+    "jittor.nn.sparse": "jittor.sparse.convolution",
+    "jittor.weightnorm": "jittor.nn.utils.weight_norm",
     "jittor.torch_compat": "jittor.compat.torch",
     "jittor.torch_compat.context": "jittor.compat.torch.context",
     "jittor.torch_compat.functional": "jittor.compat.torch.functional",
@@ -61,6 +69,9 @@ _PACKAGE_TARGETS = frozenset(
         "jittor.compat.shim",
         "jittor.compat.shim.cpp_extension",
         "jittor.compat.triton",
+        "jittor.autograd",
+        "jittor.nn.backends",
+        "jittor.sparse",
     )
 )
 _LAZY_PARENT_BINDINGS = frozenset(
@@ -88,6 +99,10 @@ class _AliasLoader(importlib.abc.Loader):
     def exec_module(self, module):
         module.__name__, module.__package__, module.__loader__, module.__spec__ = self.metadata
         _publish_alias(self.alias, module)
+        if self.alias == "jittor.torch_compat":
+            root_module = sys.modules.get("jittor")
+            if root_module is not None:
+                module.install(root_module)
 
 
 class _AliasFinder(importlib.abc.MetaPathFinder):
@@ -174,6 +189,15 @@ def torch_namespace_claimable(root_module):
     return _is_deployed_torch_placeholder(current) and not children
 
 
+def torch_compat_requested(root_module, preflight=None):
+    """Return whether this process explicitly selected the Torch API mode."""
+
+    if bool(getattr(preflight, "active", False)):
+        return True
+    current = _torch_namespace().get("torch")
+    return _is_deployed_torch_placeholder(current) or torch_namespace_owned(root_module)
+
+
 def _bind_parent(alias, module):
     if "." not in alias:
         return
@@ -204,6 +228,7 @@ def publish_loaded_aliases(root_module=None):
     if root_module is not None:
         for attr, canonical in (
             ("attention", "jittor.nn.attention"),
+            ("lr_scheduler", "jittor.optim.legacy_schedulers"),
             ("torch_compat", "jittor.compat.torch"),
             ("torch_fsdp2_compat", "jittor.compat.fsdp2"),
             ("torch_shim", "jittor.compat.shim"),

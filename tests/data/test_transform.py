@@ -25,6 +25,12 @@ except ImportError:
     stats = None
 
 
+def _binom_test(k, n, p):
+    if hasattr(stats, "binomtest"):
+        return stats.binomtest(k, n, p=p).pvalue
+    return stats.binom_test(k, n, p=p)
+
+
 class Tester(unittest.TestCase):
 
     def test_crop(self):
@@ -177,7 +183,7 @@ class Tester(unittest.TestCase):
             if out != img:
                 num_applies += 1
 
-        p_value = stats.binom_test(num_applies, num_samples, p=0.3)
+        p_value = _binom_test(num_applies, num_samples, p=0.3)
         random.setstate(random_state)
         self.assertGreater(p_value, 0.0001)
 
@@ -206,11 +212,11 @@ class Tester(unittest.TestCase):
             elif out.size == (10, 10):
                 num_crop_10 += 1
 
-        p_value = stats.binom_test(num_resize_15, num_samples, p=0.33333)
+        p_value = _binom_test(num_resize_15, num_samples, p=0.33333)
         self.assertGreater(p_value, 0.0001)
-        p_value = stats.binom_test(num_resize_20, num_samples, p=0.33333)
+        p_value = _binom_test(num_resize_20, num_samples, p=0.33333)
         self.assertGreater(p_value, 0.0001)
-        p_value = stats.binom_test(num_crop_10, num_samples, p=0.33333)
+        p_value = _binom_test(num_crop_10, num_samples, p=0.33333)
         self.assertGreater(p_value, 0.0001)
 
         random.setstate(random_state)
@@ -234,7 +240,7 @@ class Tester(unittest.TestCase):
             if out == resize_crop_out:
                 num_normal_order += 1
 
-        p_value = stats.binom_test(num_normal_order, num_samples, p=0.5)
+        p_value = _binom_test(num_normal_order, num_samples, p=0.5)
         random.setstate(random_state)
         self.assertGreater(p_value, 0.0001)
 
@@ -515,7 +521,7 @@ class Tester(unittest.TestCase):
             if out == vimg:
                 num_vertical += 1
 
-        p_value = stats.binom_test(num_vertical, num_samples, p=0.5)
+        p_value = _binom_test(num_vertical, num_samples, p=0.5)
         random.setstate(random_state)
         self.assertGreater(p_value, 0.0001)
 
@@ -526,7 +532,7 @@ class Tester(unittest.TestCase):
             if out == vimg:
                 num_vertical += 1
 
-        p_value = stats.binom_test(num_vertical, num_samples, p=0.7)
+        p_value = _binom_test(num_vertical, num_samples, p=0.7)
         random.setstate(random_state)
         self.assertGreater(p_value, 0.0001)
 
@@ -544,7 +550,7 @@ class Tester(unittest.TestCase):
             if out == himg:
                 num_horizontal += 1
 
-        p_value = stats.binom_test(num_horizontal, num_samples, p=0.5)
+        p_value = _binom_test(num_horizontal, num_samples, p=0.5)
         random.setstate(random_state)
         self.assertGreater(p_value, 0.0001)
 
@@ -555,7 +561,7 @@ class Tester(unittest.TestCase):
             if out == himg:
                 num_horizontal += 1
 
-        p_value = stats.binom_test(num_horizontal, num_samples, p=0.7)
+        p_value = _binom_test(num_horizontal, num_samples, p=0.7)
         random.setstate(random_state)
         self.assertGreater(p_value, 0.0001)
 
@@ -834,7 +840,7 @@ class Tester(unittest.TestCase):
                     np.array_equal(gray_np, gray_np_2[:, :, 0]):
                 num_gray = num_gray + 1
 
-        p_value = stats.binom_test(num_gray, num_samples, p=0.5)
+        p_value = _binom_test(num_gray, num_samples, p=0.5)
         random.setstate(random_state)
         self.assertGreater(p_value, 0.0001)
 
@@ -855,7 +861,7 @@ class Tester(unittest.TestCase):
             if np.array_equal(gray_np, gray_np_3):
                 num_gray = num_gray + 1
 
-        p_value = stats.binom_test(num_gray, num_samples, p=1.0)  # Note: grayscale is always unchanged
+        p_value = _binom_test(num_gray, num_samples, p=1.0)  # Note: grayscale is always unchanged
         random.setstate(random_state)
         self.assertGreater(p_value, 0.0001)
 
