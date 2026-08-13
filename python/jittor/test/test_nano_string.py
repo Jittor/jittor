@@ -41,7 +41,6 @@ class TestNanoString(unittest.TestCase):
     def test_type(self):
         import numpy as np
         assert str(jt.NanoString(float)) == "float32"
-        assert str(jt.NanoString(np.float)) == "float32"
         assert str(jt.NanoString(np.float32)) == "float32"
         assert str(jt.NanoString(np.float64)) == "float64"
         assert str(jt.NanoString(np.int8)) == "int8"

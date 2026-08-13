@@ -201,10 +201,12 @@ def adjust_hue(img, hue_factor):
 
     h, s, v = img.convert('HSV').split()
 
-    np_h = np.array(h, dtype=np.uint8)
-    # uint8 addition take cares of rotation across boundaries
+    np_h = np.asarray(h, dtype=np.uint8).copy()
+    # Preserve uint8 wraparound without relying on out-of-bound scalar casts,
+    # which NumPy 2 rejects for negative hue offsets.
+    hue_offset = int(hue_factor * 255) % 256
     with np.errstate(over='ignore'):
-        np_h += np.uint8(hue_factor * 255)
+        np_h += np.uint8(hue_offset)
     h = Image.fromarray(np_h, 'L')
 
     img = Image.merge('HSV', (h, s, v)).convert(input_mode)
@@ -347,7 +349,7 @@ def gray(img, num_output_channels):
         img = img.convert('L')
     elif num_output_channels == 3:
         img = img.convert('L')
-        np_img = np.array(img, dtype=np.uint8)
+        np_img = np.asarray(img, dtype=np.uint8)
         np_img = np.dstack([np_img, np_img, np_img])
         img = Image.fromarray(np_img, 'RGB')
     else:
@@ -646,4 +648,3 @@ def affine(img, angle, translate, scale, shear, resample=0, fillcolor=None):
     matrix = _get_inverse_affine_matrix(center, angle, translate, scale, shear)
     kwargs = {"fillcolor": fillcolor} if PILLOW_VERSION[0] >= '5' else {}
     return img.transform(output_size, Image.AFFINE, matrix, resample, **kwargs)
-

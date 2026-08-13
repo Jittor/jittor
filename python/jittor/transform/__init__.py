@@ -340,14 +340,11 @@ def adjust_gamma(img, gamma, gain=1):
     """
     Function for performing gamma correction on an image.
     Also known as Power Law Transform. Intensities in RGB mode are adjusted
-    based on the following equation:
-    .. math::
-        I_{\text{out}} = 255 \times \text{gain} \times \left(\frac{I_{\text{in}}}{255}\right)^{\gamma}
     See `Gamma Correction`_ for more details.
     .. _Gamma Correction: https://en.wikipedia.org/wiki/Gamma_correction
     Args::
         [in] img (PIL Image.Image): Image to be adjusted.
-        [in] gamma (float): Non negative real number, same as :math:`\gamma` in the equation.
+        [in] gamma (float): Non negative real number.
              gamma larger than 1 make the shadows darker,
              while gamma smaller than 1 make dark regions lighter.
         [in] gain (float): The constant multiplier.
@@ -443,15 +440,15 @@ def to_tensor(pic):
 
     # handle PIL Image
     if pic.mode == 'I':
-        img = np.array(pic, np.int32, copy=False)
+        img = np.asarray(pic, dtype=np.int32)
     elif pic.mode == 'I;16':
-        img = np.array(pic, np.int16, copy=False)
+        img = np.asarray(pic, dtype=np.int16)
     elif pic.mode == 'F':
-        img = np.array(pic, np.float32, copy=False)
+        img = np.asarray(pic, dtype=np.float32)
     elif pic.mode == '1':
-        img = np.array(pic, np.uint8, copy=False) * 255
+        img = np.asarray(pic, dtype=np.uint8) * 255
     else:
-        img = np.array(pic, np.uint8, copy=False)
+        img = np.asarray(pic, dtype=np.uint8)
 
     # put it from HWC to CHW format
     img = img.reshape(pic.size[1], pic.size[0], len(pic.getbands()))
@@ -496,15 +493,15 @@ def _to_jittor_array(pic):
 
     # handle PIL Image
     if pic.mode == 'I':
-        img = jt.array(np.array(pic, np.int32, copy=False))
+        img = jt.array(np.asarray(pic, dtype=np.int32))
     elif pic.mode == 'I;16':
-        img = jt.array(np.array(pic, np.int16, copy=False))
+        img = jt.array(np.asarray(pic, dtype=np.int16))
     elif pic.mode == 'F':
-        img = jt.array(np.array(pic, np.float32, copy=False))
+        img = jt.array(np.asarray(pic, dtype=np.float32))
     elif pic.mode == '1':
-        img = jt.array(np.array(pic, np.uint8, copy=False) * 255, dtype='uint8')
+        img = jt.array(np.asarray(pic, dtype=np.uint8) * 255, dtype='uint8')
     else:
-        img = jt.array(np.array(pic, np.uint8, copy=False))
+        img = jt.array(np.asarray(pic, dtype=np.uint8))
 
     # put it from HWC to CHW format
     img = img.reshape(pic.size[1], pic.size[0], len(pic.getbands()))
@@ -606,7 +603,7 @@ def image_normalize(img, mean, std):
         raise TypeError(f'Input type should be in (PIL Image, jt.Var, np.ndarray). Got {type(img)}.')
     elif isinstance(img, Image.Image):
         assert img.mode == 'RGB', f"input image mode should be 'RGB'. Got {img.mode}."
-        img = (np.array(img).transpose((2, 0, 1)) \
+        img = (np.asarray(img).transpose((2, 0, 1)) \
                - mean * np.float32(255.)) \
                / (std * np.float32(255.))
     else:
@@ -652,7 +649,7 @@ class ImageNormalize:
         
     def __call__(self, img):
         if isinstance(img, Image.Image):
-            img = (np.array(img).transpose((2,0,1)) \
+            img = (np.asarray(img).transpose((2,0,1)) \
                 - self.mean*np.float32(255.)) \
                 * (np.float32(1./255.)/self.std)
         else:
