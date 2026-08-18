@@ -70,6 +70,23 @@ Torch 模式。`tools/run_test_suite.py` 分两个会话跑完整套件并汇总
 | 结构门禁与布局脚本按文件系统扫描 | 跑过 lint 或 import 过包的工作区被判失败 | 布局脚本 4 种情况验证：干净 0、根目录多余文件 1、notebook 产物 1、`__pycache__` 0 |
 | 下载外部数据集的用例无标记 | 主机不可达时阻塞到 900 秒超时而非快速跳过 | `network` 标记 + `--network` 开关 |
 | `manual` 标记无人消费 | notebook 冒烟测试在整轮第 1100+ 条时把进程打死 | 整树运行跳过、显式路径仍运行 |
+| 冷启动把 `jit_utils_core` 加载成两份 | 该库里定义的每个 flag 和整个日志捕获缓冲区各有两份，`log_capture_scope` 冷缓存下恒返回空 | `tests/compiler/test_cold_start_runtime.py` |
+
+### 冷启动重复加载运行时库
+
+冷启动必须先编出 `jit_utils_core` 才能 import 它，而 `cache_compile` 只有在这个模块
+可 import 之后才能写缓存键，于是原来的顺序是：编译 → import → 再编译一次生成键。
+第二次编译重新链接了一个已经被本进程映射的库；链接器写输出前会先 unlink，所以进程
+持有的 inode 与磁盘上的不再相同，随后 `jittor_core` 解析依赖时把同名文件又加载了
+一遍。`/proc/self/maps` 里能直接看到两个 inode，其中一个标着 `(deleted)`。
+
+后果不是崩溃而是静默失效：`log_capture_start()` 打开的是 A 份的开关，算子却往 B 份
+里写。冷缓存下 `log_capture_scope(log_v=1000)` 一条都拿不到，热缓存下同样的写法有
+195 条，这解释了此前记为 KI-COMPILER-003 的全部现象。
+
+改为在一个短命子进程里生成缓存键，父进程随后只 import 一次已经定稿的文件。修复后
+冷启动只有一个映射，`log_capture_scope` 拿到 195 条覆盖 18 个文件，tuner 输出 5 条，
+缓存键正常写出因此后续运行不会重复编译。
 
 ## Python 3.12
 
@@ -96,12 +113,11 @@ CUDA 下游库单步（小模型，启动开销主导）：peft LoRA 0.62x、lla
 
 ## 未解决
 
-- 编译器 tuner 类测试（`test_parallel_pass`、`test_fused_op`、`test_reorder_tuner`、
-  `test_conv_tuner`、`test_group_conv_tuner`、`test_broadcast_tuner`、
-  `test_matmul_tuner`、`test_reduce_tuner`、`test_log`）依赖 JIT 缓存状态：同一组用例
-  冷缓存 3 失败、热缓存 1 失败。这批断言的是 `log_capture_scope` 捕获到的 tuner 日志
-  条数，需要先确定冷启动路径上 tuner 日志的去向再改。
 - Torch 模式剩余 5 条整轮失败在单独运行时全部通过，属于顺序依赖；其中两条是
-  installer 幂等性断言，需要查清是哪个前置用例改动了 `torch.*` 模块图。
-- 下游库速度：CUDA 上 bert/gpt2/diffusers 仍慢于 PyTorch。当前用例都是极小模型，
-  需要补一组真实规模的测量再判断是内核问题还是调度开销。
+  installer 幂等性断言，需要查清是哪个前置用例改动了 `torch.*` 模块图。已确认把
+  嫌疑最大的 bootstrap、install context、compat mechanisms 与这两条放在一起跑
+  （88 passed）并不能复现，需要更大范围的二分。
+- 下游库速度：此前 CUDA 上 bert 1.94x、gpt2 1.53x、diffusers 1.46x 的结论建立在
+  batch 2、hidden 64 的模型上，那个尺寸下一步几乎全是 Python 分发和 kernel launch。
+  已新增 `tests/compat/torch/test_ecosystem_speed.py` 与六组真实尺寸配置，用
+  `JITTOR_ECOSYSTEM_LARGE=1` 开启；需要在空载机器上取一轮数据替换上面的结论。

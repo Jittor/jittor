@@ -37,37 +37,6 @@ framework defects.
 - Review/expiry condition: remove only after sanitizer-backed root cause and
   repeated cold/warm stress, deadlock, multiprocess-cache, and performance gates
 
-## KI-COMPILER-003: tuner logs escape log capture on a cold JIT cache
-
-- Severity: Medium
-- Status: Reproduced; root cause unproven
-- Owner: compiler/tuner and logging maintainers
-- Evidence: with a fresh `JITTOR_HOME`,
-
-  ```python
-  import jittor as jt
-  a = jt.ones((8, 8, 8)); a.data
-  for gid in (1, 2, 3):
-      with jt.log_capture_scope(log_v=0, log_vprefix="tuner_manager=100",
-                                compile_options={"probe": gid}) as logs:
-          (a + a).data
-      print(gid, len(logs))
-  ```
-
-  prints `0` three times on a cold cache and `5` once the same cache is warm,
-  even though every iteration forces a fresh compile. The environment-variable
-  route (`log_vprefix=tuner_manager=100`) shows the tuner lines in both cases,
-  so the tuner does run; only the in-process capture misses them.
-- Symptom: every test that asserts on captured tuner output fails on a cold
-  cache and passes on a warm one -- `test_reorder_tuner`, `test_conv_tuner`,
-  `test_group_conv_tuner`, `test_broadcast_tuner`, `test_matmul_tuner`,
-  `test_reduce_tuner`, `test_fused_op`, `test_parallel_pass` and `test_log`
-- Workaround: warm the cache before the assertion, or read the tuner output
-  through `log_vprefix` in the environment instead of `log_capture_scope`
-- Review/expiry condition: the reproduction above prints the same count on a
-  cold and a warm cache, and the affected tests pass from a fresh
-  `JITTOR_HOME`
-
 ## KI-COMPILER-002: fractional constant padding can break CPU asm tuning
 
 - Severity: High
