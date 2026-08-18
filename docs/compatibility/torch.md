@@ -149,6 +149,38 @@ incl. a `generate()` greedy/beam/sampling test) and the diffusers generation pat
 (`vit_b_16`/`vit_b_32`/`vit_l_16`). LLMs/diffusion models come from
 `transformers`/`diffusers` directly.
 
+## Downstream library status
+
+`tests/compat/torch/test_ecosystem_parity.py` runs each case twice -- once in an
+interpreter whose `torch` is real PyTorch, once in this one -- from identical
+weights, and compares the forward output together with every parameter and input
+gradient on both CPU and CUDA. Point it at a real-PyTorch interpreter with
+`REAL_TORCH_PYTHON` and, optionally, bound the wall-clock ratio with
+`JITTOR_ECOSYSTEM_SPEED_RATIO`.
+
+| Library | Covered by the parity gate | Notes |
+| --- | --- | --- |
+| `transformers` | gpt2, llama, bert, vit, t5, whisper | encoder, decoder, encoder-decoder and audio paths |
+| `diffusers` | `UNet2DModel`, `DiTTransformer2DModel` | convolutional and latent-transformer backbones |
+| `peft` | LoRA on llama | |
+| `ms-swift` | its own LoRA tuner on llama | needs `peft < 0.20`; ms-swift 4.5.2 with peft 0.19 raises the same `TypeError` under real PyTorch |
+| `mmcv` / `mmengine` | `mmcv.cnn.ConvModule`, `mmengine.model.BaseModule` | pure-Python layers only, see below |
+
+Two boundaries are architectural rather than missing work:
+
+- **Compiled PyTorch extensions.** `mmcv.ops`, and any package shipping its own
+  `torch`-linked `.so`, are built against PyTorch's C++ ABI. A Python-level
+  compatibility layer cannot load them; those operations need a Jittor
+  implementation, which is what `jittor.models` and the native operator surface
+  provide for the cases that matter.
+- **Runtimes that own the device.** vLLM and, through it, verl embed custom CUDA
+  kernels and their own memory and scheduling layer rather than calling
+  `torch.*`. They are out of scope for the shim for the same reason.
+
+TRELLIS-style project glue lives in optional integration distributions
+(`jittor-trellis` and friends) registered through entry points, not in mainline
+Jittor. See [Decision 2](../architecture/repository-layout.md) for why.
+
 ## Complex numbers & FFT
 
 ```python

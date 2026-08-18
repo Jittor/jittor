@@ -5,6 +5,26 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 status=0
 
+# Build output that .gitignore already declares is not a layout problem: running
+# the linter creates .ruff_cache, and importing the package creates
+# __pycache__. Failing on those reports a clean checkout as broken, so every
+# filesystem scan below is filtered through git's own ignore rules.
+tracked_or_new() {
+  git -C "$REPO_ROOT" check-ignore -q -- "$1" 2>/dev/null && return 1
+  return 0
+}
+
+report_unignored() {
+  local found=0 path
+  while IFS= read -r path; do
+    if tracked_or_new "$path"; then
+      printf '%s\n' "$path" >&2
+      found=1
+    fi
+  done
+  return $((1 - found))
+}
+
 if [[ ! -f "$REPO_ROOT/python/jittor/selftest.py" ]]; then
   echo 'missing installed smoke test: python/jittor/selftest.py' >&2
   status=1
@@ -25,6 +45,9 @@ if [[ ! -f "$REPO_ROOT/docs/conf.py" ]] || [[ ! -f "$REPO_ROOT/docs/index.md" ]]
   echo 'missing canonical Sphinx/MyST documentation tree: docs/' >&2
   status=1
 fi
+# Notebook products stay strict even though .gitignore lists *.ipynb: the
+# contract is that Jupytext materializes them outside the checkout, so an
+# ignored-but-present notebook is exactly the situation to report.
 if find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f \
   \( -name '*.ipynb' -o -name '*.src.md' \) -print -quit | grep -q .; then
   echo 'notebook products and legacy .src.md files must stay outside the checkout.' >&2
@@ -32,14 +55,14 @@ if find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f \
     \( -name '*.ipynb' -o -name '*.src.md' \) -print >&2
   status=1
 fi
-if find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o \
+bytecode="$(find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o \
   \( -type d -name '__pycache__' -o -type f \( -name '*.pyc' -o -name '*.pyo' \) \) \
-  -print -quit | grep -q .; then
-  echo 'Python bytecode caches must stay outside the checkout.' >&2
-  find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o \
-    \( -type d -name '__pycache__' -o -type f \( -name '*.pyc' -o -name '*.pyo' \) \) \
-    -print >&2
-  status=1
+  -print)"
+if [[ -n "$bytecode" ]]; then
+  if printf '%s\n' "$bytecode" | report_unignored; then
+    echo 'Python bytecode caches must stay outside the checkout.' >&2
+    status=1
+  fi
 fi
 if [[ -e "$REPO_ROOT/tests/__init__.py" ]]; then
   echo 'repository tests must not be an importable distribution package: tests/__init__.py' >&2
@@ -56,8 +79,10 @@ while IFS= read -r name; do
     .pre-commit-config.yaml|noxfile.py|pyproject.toml|setup.py)
       ;;
     *)
-      printf 'unexpected repository-root entry: %s\n' "$name" >&2
-      status=1
+      if tracked_or_new "$REPO_ROOT/$name"; then
+        printf 'unexpected repository-root entry: %s\n' "$name" >&2
+        status=1
+      fi
       ;;
   esac
 done < <(find "$REPO_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
