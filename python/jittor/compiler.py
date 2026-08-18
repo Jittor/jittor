@@ -106,6 +106,10 @@ def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="",
         if return_cmd:
             return fix_cl_flags(cmd)
         return do_compile(fix_cl_flags(cmd))
+    if return_cmd:
+        # The split compile/link path runs several commands; there is no single
+        # one to hand back, and silently compiling instead would be worse.
+        raise ValueError("return_cmd requires a single-command build")
     # split compile object file and link
     # remove -l -L flags when compile object files
     oflags = remove_flags(flags, ['-l', '-L', '-Wl,', '.lib', '-shared'])
