@@ -4,7 +4,7 @@ The Markdown files in this directory are the only canonical, reviewable
 notebook sources. Jupytext materializes `.ipynb` files in a temporary or
 distribution-specific output directory; generated notebooks are not committed.
 
-Validate every source and execute the five offline CPU smoke tutorials with:
+Validate every source and execute the offline CPU smoke tutorials with:
 
 ```bash
 python -m nox -s tutorials

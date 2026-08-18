@@ -2,7 +2,7 @@
 
 The executable tutorials are maintained only as MyST Markdown under
 `examples/notebooks`. The `tutorials` nox session materializes notebooks in
-external state with Jupytext and executes five offline CPU smoke tutorials.
+external state with Jupytext and executes the offline CPU smoke tutorials.
 
 ## Quick start
 
@@ -11,6 +11,12 @@ external state with Jupytext and executes five offline CPU smoke tutorials.
 - [Meta-operators](https://github.com/Jittor/jittor/blob/master/examples/notebooks/meta_op.md)
 - [Custom C++ and CUDA operators](https://github.com/Jittor/jittor/blob/master/examples/notebooks/custom_op.md)
 - [Profiler](https://github.com/Jittor/jittor/blob/master/examples/notebooks/profiler.md)
+
+## Models and techniques
+
+- [Transformer from scratch](https://github.com/Jittor/jittor/blob/master/examples/notebooks/transformer.md)
+- [Denoising diffusion from scratch](https://github.com/Jittor/jittor/blob/master/examples/notebooks/diffusion.md)
+- [LoRA parameter-efficient fine-tuning](https://github.com/Jittor/jittor/blob/master/examples/notebooks/lora.md)
 
 ## Open the notebooks
 

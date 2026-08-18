@@ -18,16 +18,22 @@ _TOPICS = (
     "LSGAN",
     "basics",
     "custom_op",
+    "diffusion",
     "example",
+    "lora",
     "meta_op",
     "profiler",
+    "transformer",
     "60分钟快速入门Jittor/计图入门教程 0 --- 介绍与安装",
     "60分钟快速入门Jittor/计图入门教程 1 --- 基本概念",
     "60分钟快速入门Jittor/计图入门教程 2 --- 如何训练一个简单线性回归",
     "60分钟快速入门Jittor/计图入门教程 3 --- 尝试解决一个实际问题",
 )
 
-_SMOKE_TOPICS = ("basics", "example", "meta_op", "custom_op", "profiler")
+_SMOKE_TOPICS = (
+    "basics", "example", "meta_op", "custom_op", "profiler",
+    "transformer", "diffusion", "lora",
+)
 
 _MACHINE_PATHS = (
     "/home/",
@@ -221,7 +227,7 @@ jt.flags.use_cuda = 0
 
 
 @pytest.mark.cpu
-def test_five_notebook_smokes_execute_offline_on_cpu(tmp_path, monkeypatch):
+def test_notebook_smokes_execute_offline_on_cpu(tmp_path, monkeypatch):
     for relative in ("home", "jittor-cache", "xdg-cache"):
         (tmp_path / relative).mkdir()
     python_path = str(_repo_root() / "python")
@@ -236,6 +242,9 @@ def test_five_notebook_smokes_execute_offline_on_cpu(tmp_path, monkeypatch):
     monkeypatch.setenv("use_mkl", "0")
     monkeypatch.setenv("use_cutt", "0")
     monkeypatch.setenv("use_cutlass", "0")
+    # A Jupyter kernel is a threaded process, and Jittor's parallel operator
+    # compiler forks from it during the first cell. See KI-COMPILER-001.
+    monkeypatch.setenv("use_parallel_op_compiler", "0")
     python_config = shutil.which("python3.{}-config".format(sys.version_info[1]))
     if python_config:
         monkeypatch.setenv("python_config_path", python_config)
