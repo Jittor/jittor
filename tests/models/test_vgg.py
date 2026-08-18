@@ -19,6 +19,7 @@ from _helpers.logs import find_log_with_re
 from _helpers.tuner_parser import simple_parser
 from jittor.dataset.mnist import MNIST
 import jittor.transform as trans
+import pytest
 
 model_test = os.environ.get("model_test", "") == "1"
 skip_model_test = not model_test
@@ -32,6 +33,10 @@ class MnistNet(Module):
         x = self.layer(x)
         return x
 
+# These download the MNIST/CIFAR archives from an external host. Without the
+# marker an offline or flaky-network run does not skip them: it blocks on the
+# transfer until the suite timeout fires.
+@pytest.mark.network
 @unittest.skipIf(skip_model_test, "skip_this_test, model_test != 1")
 class TestVGGClass(unittest.TestCase):
     @classmethod

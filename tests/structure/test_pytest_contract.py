@@ -132,12 +132,24 @@ def _automatic_markers(relative, device=None, selected=None):
         def add_marker(self, marker):
             self.markers.append(marker.name)
 
+        @staticmethod
+        def get_closest_marker(_name):
+            return None
+
+    class Config:
+        """Minimal stand-in for the pytest config the hook now reads."""
+
+        @staticmethod
+        def getoption(name):
+            assert name == "--network", name
+            return False
+
     previous = os.environ.pop("JITTOR_TEST_DEVICES", None)
     if selected is not None:
         os.environ["JITTOR_TEST_DEVICES"] = selected
     try:
         item = Item()
-        module.pytest_collection_modifyitems([item])
+        module.pytest_collection_modifyitems(Config(), [item])
         return set(item.markers)
     finally:
         os.environ.pop("JITTOR_TEST_DEVICES", None)

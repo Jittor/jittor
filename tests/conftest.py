@@ -158,6 +158,27 @@ def _backend_markers(item, relative):
     return ("cpu",)
 
 
+def _network_is_enabled():
+    """Whether tests that fetch external assets may run.
+
+    They are opt-in because the failure mode without a reachable host is not a
+    quick error: the download blocks until the suite-level timeout fires, so a
+    single unreachable asset can cost fifteen minutes and report as a framework
+    failure. Set ``JITTOR_TEST_NETWORK=1`` (or pass ``--network``) to enable.
+    """
+    value = os.environ.get("JITTOR_TEST_NETWORK", "").strip().lower()
+    return value not in ("", "0", "false", "no", "off")
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--network",
+        action="store_true",
+        default=False,
+        help="run tests that download external assets",
+    )
+
+
 def pytest_sessionstart(session):
     found = [name for name in _LEGACY_SELECTION if name in os.environ]
     if found:
@@ -167,7 +188,8 @@ def pytest_sessionstart(session):
         )
 
 
-def pytest_collection_modifyitems(items):
+def pytest_collection_modifyitems(config, items):
+    network_enabled = _network_is_enabled() or config.getoption("--network")
     torch_mode = _torch_mode_is_active()
     torch_only = tuple(path[len("tests/"):] for path in TORCH_MODE_PATHS)
     for item in items:
@@ -187,6 +209,13 @@ def pytest_collection_modifyitems(items):
             item.add_marker(getattr(pytest.mark, marker))
         if "manual" in parts or "system" in parts:
             item.add_marker(pytest.mark.manual)
+        if item.get_closest_marker("network") is not None and not network_enabled:
+            item.add_marker(
+                pytest.mark.skip(
+                    reason="downloads external assets; enable with --network or "
+                    "JITTOR_TEST_NETWORK=1"
+                )
+            )
         if relative[-1] == "test_notebooks.py":
             item.add_marker(pytest.mark.slow)
             item.add_marker(pytest.mark.manual)

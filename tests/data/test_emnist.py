@@ -10,7 +10,12 @@ import unittest
 import jittor as jt
 from jittor.dataset.mnist import EMNIST, MNIST
 import jittor.transform as transform
+import pytest
 
+# EMNIST downloads its archive from an external host. Without the marker an
+# offline or flaky-network run does not skip it: the download blocks until the
+# suite timeout fires.
+@pytest.mark.network
 @unittest.skipIf(True, f"skip emnist test")
 class TestEMNIST(unittest.TestCase):
     def test_emnist(self):

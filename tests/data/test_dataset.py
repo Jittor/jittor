@@ -16,6 +16,7 @@ import unittest
 import os
 import numpy as np
 import random
+import pytest
 
 pass_this_test = False
 msg = ""
@@ -193,6 +194,9 @@ class TestDatasetSeed(unittest.TestCase):
                 assert isinstance(d['a'], jt.Var)
                 np.testing.assert_allclose(d['a'].numpy(), [[1,2,3]])
 
+    # Downloads an external dataset archive; see the note in
+    # tests/models/test_resnet.py.
+    @pytest.mark.network
     def test_cifar(self):
         from jittor.dataset.cifar import CIFAR10
         a = CIFAR10()

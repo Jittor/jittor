@@ -14,6 +14,7 @@ from _helpers.assertions import expect_error
 from jittor.dataset.mnist import MNIST
 import jittor.transform as trans
 from tqdm import tqdm
+import pytest
 
 class BBox:
     def __init__(self, x):
@@ -84,6 +85,9 @@ class TestRingBuffer(unittest.TestCase):
     def test_ring_buffer(self):
         test_ring_buffer()
 
+    # Downloads an external dataset archive; see the note in
+    # tests/models/test_resnet.py.
+    @pytest.mark.network
     def test_dataset(self):
         return
         self.train_loader = MNIST(train=True, transform=trans.Resize(224)) \
