@@ -885,14 +885,22 @@ def _write_jit_utils_cache_key(files, output):
     with a single, settled file to import.
     """
     cmd = compile(cc_path, cc_flags+f" {opt_flags} ", files, output, True, return_cmd=True)
+    # Import from the directory that actually holds the freshly built library,
+    # which is not necessarily this module's ``cache_path`` once a CUDA suffix
+    # has been appended to it.
     script = (
         "import sys\n"
-        "sys.path.insert(0, {cache!r})\n"
+        "sys.path.insert(0, {module_dir!r})\n"
         "import jit_utils_core\n"
         "jit_utils_core.cache_compile({cmd!r}, {cache!r}, {jittor!r})\n"
-    ).format(cache=cache_path, cmd=cmd, jittor=jittor_path)
-    result = sp.run([sys.executable, "-c", script],
-                    stdout=sp.PIPE, stderr=sp.STDOUT)
+    ).format(module_dir=os.path.dirname(os.path.abspath(output)),
+             cache=cache_path, cmd=cmd, jittor=jittor_path)
+    try:
+        result = sp.run([sys.executable, "-c", script],
+                        stdout=sp.PIPE, stderr=sp.STDOUT)
+    except OSError as error:
+        LOG.v("cache key child could not start: %s" % error)
+        return
     if result.returncode != 0:
         LOG.v("cache key child failed: " + result.stdout.decode("utf8", "replace"))
 
