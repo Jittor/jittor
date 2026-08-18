@@ -11,7 +11,7 @@ import unittest
 import jittor as jt
 import gc
 
-def test(h, w, total_alloc_call, total_alloc_byte, total_free_call = 0, total_free_byte = 0):
+def check_allocation(h, w, total_alloc_call, total_alloc_byte, total_free_call = 0, total_free_byte = 0):
         jt.clean()
         jt.gc()
         with jt.flag_scope(use_stat_allocator=1):
@@ -34,13 +34,13 @@ def test(h, w, total_alloc_call, total_alloc_byte, total_free_call = 0, total_fr
 class TestAllocator2(unittest.TestCase):
     def test_stat(self):
         #small_block
-        test(10, 10, 1, 1048576) #800
+        check_allocation(10, 10, 1, 1048576) #800
         #small_block
-        test(100, 100, 1, 1048576) #80000
+        check_allocation(100, 100, 1, 1048576) #80000
         #large_block
-        test(1000, 1000, 1, 20971520) #8000000
+        check_allocation(1000, 1000, 1, 20971520) #8000000
         #large_block2
-        test(8000, 1000, 2, 67108864) #64000000
+        check_allocation(8000, 1000, 2, 67108864) #64000000
 
 if __name__ == "__main__":
     unittest.main()

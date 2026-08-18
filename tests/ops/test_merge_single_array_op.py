@@ -37,7 +37,7 @@ def get_random_op():
     else:
         return division
     
-def test(shape, op1, op2):
+def check_merge(shape, op1, op2):
     n = 753.1
     a = jt.random(shape)
     b = jt.random(shape)
@@ -124,25 +124,25 @@ class TestSingleArray(unittest.TestCase):
 
     def test_main(self):
         test_n = 10
-        test([50, 50, 50, 50], multiplication, subtraction)
+        check_merge([50, 50, 50, 50], multiplication, subtraction)
         for i in range(test_n):
             n = random.randint(1,4)
             shape = []
             for j in range(n):
                 shape.append(random.randint(1,50))
-            test(shape, get_random_op(), get_random_op())
+            check_merge(shape, get_random_op(), get_random_op())
 
     @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
     def test_main_cuda(self):
         with jt.flag_scope(use_cuda=1):
             test_n = 10
-            test([50, 50, 50, 50], multiplication, subtraction)
+            check_merge([50, 50, 50, 50], multiplication, subtraction)
             for i in range(test_n):
                 n = random.randint(1,4)
                 shape = []
                 for j in range(n):
                     shape.append(random.randint(1,50))
-                test(shape, get_random_op(), get_random_op())
+                check_merge(shape, get_random_op(), get_random_op())
 
 if __name__ == "__main__":
     unittest.main()

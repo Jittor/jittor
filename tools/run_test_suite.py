@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""Run the complete repository test suite and report one combined result.
+
+Jittor's Torch compatibility mode is process-global: it changes lazy execution,
+reduction defaults and gradient semantics for everything in the interpreter.
+Native tests and Torch-compatibility tests therefore cannot share a process, and
+a single ``pytest tests`` run cannot cover both. This script runs each mode in
+its own pytest session, with its own JIT cache, and prints a combined summary.
+
+Usage::
+
+    python tools/run_test_suite.py                  # both sessions, CPU
+    python tools/run_test_suite.py --session native
+    python tools/run_test_suite.py -- -x -k conv    # extra pytest arguments
+
+Runtime state (JIT caches, temporary files) is written under
+``$JITTOR_LAB_ROOT/_state/test-suite`` so it never lands in the checkout.
+"""
+
+from __future__ import print_function
+
+import argparse
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+sys.path.insert(0, str(REPO_ROOT / "tests"))
+from conftest import TORCH_MODE_PATHS  # noqa: E402
+
+SESSIONS = ("native", "torch")
+
+_SUMMARY = re.compile(
+    r"^=+ .*?(?:(\d+) failed)?.*?(?:(\d+) passed)?.*?(?:(\d+) skipped)?.*?(?:(\d+) errors?)?.*=+$"
+)
+_COUNT = re.compile(r"(\d+) (passed|failed|skipped|error|errors|xfailed|xpassed)")
+
+
+def _lab_root():
+    configured = os.environ.get("JITTOR_LAB_ROOT")
+    root = Path(configured) if configured else REPO_ROOT.parent / "jittor-lab"
+    return root.expanduser().resolve()
+
+
+def _session_environment(session):
+    state = _lab_root() / "_state" / "test-suite" / session
+    (state / "home").mkdir(parents=True, exist_ok=True)
+    (state / "tmp").mkdir(parents=True, exist_ok=True)
+    environment = dict(os.environ)
+    environment["JITTOR_HOME"] = str(state / "home")
+    environment["TMPDIR"] = str(state / "tmp")
+    environment["JITTOR_TORCH_SHIM"] = "1" if session == "torch" else "0"
+    return environment
+
+
+def _session_arguments(session):
+    if session == "torch":
+        return list(TORCH_MODE_PATHS)
+    arguments = ["tests"]
+    for path in TORCH_MODE_PATHS:
+        arguments.append("--ignore=" + path)
+    return arguments
+
+
+def _parse_counts(output):
+    counts = {}
+    for line in reversed(output.splitlines()):
+        if not line.startswith("=") or ("passed" not in line and "failed" not in line
+                                        and "error" not in line and "skipped" not in line):
+            continue
+        for number, kind in _COUNT.findall(line):
+            counts[kind.rstrip("s")] = int(number)
+        break
+    return counts
+
+
+def _run(session, extra, quiet):
+    command = [sys.executable, "-m", "pytest"]
+    command += _session_arguments(session)
+    command += ["-p", "no:cacheprovider", "--timeout=900"]
+    command += ["-q"] if quiet else []
+    command += extra
+    print("=== {} session ===".format(session), flush=True)
+    print(" ".join(command), flush=True)
+    completed = subprocess.run(
+        command,
+        cwd=str(REPO_ROOT),
+        env=_session_environment(session),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        universal_newlines=True,
+    )
+    print(completed.stdout, flush=True)
+    return completed.returncode, _parse_counts(completed.stdout), completed.stdout
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--session", choices=SESSIONS, action="append", default=None)
+    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("extra", nargs="*", help="extra pytest arguments")
+    options = parser.parse_args()
+
+    sessions = options.session or list(SESSIONS)
+    results = {}
+    failures = []
+    for session in sessions:
+        code, counts, output = _run(session, options.extra, not options.verbose)
+        results[session] = (code, counts)
+        for line in output.splitlines():
+            if line.startswith("FAILED ") or line.startswith("ERROR "):
+                failures.append("[{}] {}".format(session, line))
+
+    print("=" * 72)
+    total = {}
+    for session in sessions:
+        code, counts = results[session]
+        print("{:8s} exit={}  {}".format(
+            session,
+            code,
+            "  ".join("%s=%d" % (kind, value) for kind, value in sorted(counts.items())),
+        ))
+        for kind, value in counts.items():
+            total[kind] = total.get(kind, 0) + value
+    print("combined  {}".format(
+        "  ".join("%s=%d" % (kind, value) for kind, value in sorted(total.items()))
+    ))
+    if failures:
+        print("-" * 72)
+        for failure in failures:
+            print(failure)
+    return 0 if all(code == 0 for code, _counts in results.values()) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

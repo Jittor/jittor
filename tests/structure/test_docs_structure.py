@@ -224,12 +224,31 @@ class TestDocsStructure(unittest.TestCase):
         for session in ("docs", "docs_zh", "docs_links", "tutorials"):
             self.assertIn(session, workflow)
 
+    def _tracked(self, pattern):
+        """Repository-tracked documentation paths matching ``pattern``."""
+        completed = subprocess.run(
+            ("git", "ls-files", "--", "docs/" + pattern),
+            cwd=str(self.repo_root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            check=True,
+        )
+        return [line for line in completed.stdout.splitlines() if line]
+
     def test_sources_and_catalogs_contain_no_generated_output(self):
-        self.assertFalse(list(self.docs_root.rglob("*.rst")))
-        self.assertFalse(list(self.docs_root.rglob("*.pot")))
-        self.assertFalse(list(self.docs_root.rglob("*.mo")))
-        self.assertFalse(list(self.docs_root.rglob("*.html")))
-        self.assertFalse((self.docs_root / "_build").exists())
+        """No generated documentation output is committed.
+
+        The check is against tracked content, not the working tree: building the
+        translated documentation writes ``.mo`` catalogs next to their ``.po``
+        sources, and ``.gitignore`` already declares them as output. Failing
+        merely because someone built the docs would report a clean repository as
+        broken.
+        """
+        for pattern in ("*.rst", "*.pot", "*.mo", "*.html"):
+            self.assertEqual(self._tracked(pattern), [], pattern)
+        self.assertEqual(self._tracked("_build/**"), [])
+        self.assertFalse(any(path.is_dir() for path in self.docs_root.glob("_build/*")))
         for path in self.docs_root.rglob("*.po"):
             source = path.read_text(encoding="utf-8")
             self.assertNotIn("#, fuzzy", source)

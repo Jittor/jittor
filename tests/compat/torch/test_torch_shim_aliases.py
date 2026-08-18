@@ -50,6 +50,13 @@ class TestTorchShimAliases(unittest.TestCase):
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         env["CUDA_VISIBLE_DEVICES"] = ""
         env["nvcc_path"] = ""
+        # These subprocesses check what plain Jittor does with the ``torch``
+        # namespace. The parent session runs in Torch mode, and its preflight
+        # exports JITTOR_TORCH_SHIM plus the project/runtime roots; inheriting
+        # any of them would ask the child to install the compatibility layer,
+        # which is the opposite of the contract under test.
+        for name in [key for key in env if key.startswith("JITTOR_TORCH_")]:
+            del env[name]
         env["JITTOR_TORCH_KEEP_CUDA"] = "1"
         return env
 

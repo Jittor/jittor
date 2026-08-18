@@ -25,7 +25,7 @@ def setUpModule():
     if not skip_this_test:
         (torch,) = import_torch_modules("torch")
 
-def test_unique_with_torch(input, dim=None):
+def check_unique_against_torch(input, dim=None):
     jt0, jt1, jt2 = jt.unique(jt.array(input), True, True, dim)
     torch0, torch1, torch2 = torch.unique(torch.tensor(input), True, True, True, dim)
     assert np.allclose(jt0, torch0) and np.allclose(jt1, torch1) and np.allclose(jt2, torch2)
@@ -35,12 +35,12 @@ def test_unique_with_torch(input, dim=None):
 class TestSparse(unittest.TestCase):
 
     def test_unique(self):
-        test_unique_with_torch(np.array([1, 3, 2, 3, 3, 3], dtype=np.int32))
-        test_unique_with_torch(np.array([[1, 3], [2, 3], [1, 2]], dtype=np.int64))
+        check_unique_against_torch(np.array([1, 3, 2, 3, 3, 3], dtype=np.int32))
+        check_unique_against_torch(np.array([[1, 3], [2, 3], [1, 2]], dtype=np.int64))
 
     def test_unique_dim(self):
-        test_unique_with_torch(np.array([[1, 3], [2, 3], [1, 3], [2, 3]]), 0)
-        test_unique_with_torch(np.array([[1, 3], [2, 3], [1, 3], [2, 3]]), 1)
+        check_unique_against_torch(np.array([[1, 3], [2, 3], [1, 3], [2, 3]]), 0)
+        check_unique_against_torch(np.array([[1, 3], [2, 3], [1, 3], [2, 3]]), 1)
 
 
     @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")

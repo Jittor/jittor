@@ -70,19 +70,19 @@ def conv_nhwc(x, in_planes, out_planes, kernel_size, padding, stride = 1, dilati
     y = yy.sum([2,5,6]) # C, Kh, Kw
     return y
 
-def test_nhwc(x, w, stride, padding, dilation):
+def check_nhwc(x, w, stride, padding, dilation):
     out_planes, in_planes, kernel_size, _ = w.shape
     return conv_nhwc(x, in_planes, out_planes, kernel_size, padding, stride=stride, dilation=dilation, w_=w)
 
-def test_nchw(x, w, stride, padding, dilation):
+def check_nchw(x, w, stride, padding, dilation):
     out_planes, in_planes, kernel_size, _ = w.shape
     return conv_nchw(x, in_planes, out_planes, kernel_size, padding, stride=stride, dilation=dilation, w_=w)
 
 def check_forward(xshape, wshape, stride, padding, dilation, use_cuda, nhwc):
     if nhwc:
-        test_func = test_nhwc
+        test_func = check_nhwc
     else:
-        test_func = test_nchw
+        test_func = check_nchw
     if use_cuda == 1:
         op_name = "cudnn_conv"
     else:
@@ -104,9 +104,9 @@ def check_forward(xshape, wshape, stride, padding, dilation, use_cuda, nhwc):
 
 def check_backward(xshape, wshape, stride, padding, dilation, use_cuda, nhwc):
     if nhwc:
-        test_func = test_nhwc
+        test_func = check_nhwc
     else:
-        test_func = test_nchw
+        test_func = check_nchw
     if use_cuda == 1:
         op_name = "cudnn_conv"
     else:

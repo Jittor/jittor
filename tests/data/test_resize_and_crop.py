@@ -69,7 +69,7 @@ def resize_and_crop(x, bbox, interpolation="nearest", out_size=[224,224]):
         return o
     raise(f"Not support {interpolation}")
 
-def test_case(box_num, out_size, time_limit):
+def check_case(box_num, out_size, time_limit):
     boxes = []
     for i in range(box_num):
         t = [random.random() * 0.9, random.random() * 0.9, random.random() * 0.9, random.random() * 0.9]
@@ -98,10 +98,10 @@ def check_equal(arr, j_layer, p_layer):
 
 class TestResizeAndCrop(unittest.TestCase):
     def test(self):
-        test_case(100, [224, 224], 0.45)
-        test_case(100, [180, 224], 0.3)
-        test_case(20, [1024, 1024], [1.2, 1.8][mid])
-        test_case(20, [1024, 666], [0.8,1.0][mid])
+        check_case(100, [224, 224], 0.45)
+        check_case(100, [180, 224], 0.3)
+        check_case(20, [1024, 1024], [1.2, 1.8][mid])
+        check_case(20, [1024, 666], [0.8,1.0][mid])
 
     @unittest.skipIf(skip_this_test, "no torch found")
     def test_resize(self):

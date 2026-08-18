@@ -63,7 +63,7 @@ def conv_nchw(x, in_planes, out_planes, kernel_size, padding, stride=1, dilation
     return y
 
 
-def test_nchw(x, w, stride, padding, dilation, groups):
+def check_nchw(x, w, stride, padding, dilation, groups):
     _, in_planes, _, _ = x.shape
     out_planes, _, kernel_size, _ = w.shape
     return conv_nchw(x, in_planes, out_planes, kernel_size, padding, stride=stride, dilation=dilation, groups=groups, w_=w)
@@ -71,7 +71,7 @@ def test_nchw(x, w, stride, padding, dilation, groups):
 
 def check_forward(xshape, wshape, stride, padding, dilation, groups, use_cuda, nhwc):
     assert nhwc == 0
-    test_func = test_nchw
+    test_func = check_nchw
 
     # only check cudnn
     with jt.log_capture_scope(use_cuda=use_cuda, enable_tuner=1,
@@ -92,7 +92,7 @@ def check_forward(xshape, wshape, stride, padding, dilation, groups, use_cuda, n
 
 def check_backward(xshape, wshape, stride, padding, dilation, groups, use_cuda, nhwc):
     assert nhwc == 0
-    test_func = test_nchw
+    test_func = check_nchw
 
     # only check cudnn
     with jt.log_capture_scope(use_cuda=use_cuda, enable_tuner=1,

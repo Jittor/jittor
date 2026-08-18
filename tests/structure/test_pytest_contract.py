@@ -252,6 +252,45 @@ def test_optimizer_roundtrip_helper_is_not_collected_as_a_test():
     assert "_run_optimizer_roundtrip" in module_tests
 
 
+#: Module-level ``test_*`` functions whose parameters are genuine pytest
+#: fixtures rather than caller-supplied arguments.
+_PYTEST_FIXTURE_PARAMETERS = frozenset(
+    ("tmp_path", "tmp_path_factory", "monkeypatch", "capsys", "capfd", "caplog", "request")
+)
+
+
+def test_module_level_helpers_are_not_named_like_tests():
+    """A ``test_*`` helper that takes arguments is collected and then errors.
+
+    pytest collects every module-level ``test_*`` function. When such a function
+    is really a helper called from a TestCase method, pytest still collects it,
+    fails to find fixtures for its parameters, and reports an error that looks
+    like a broken test. Helpers belong under a ``check_*`` name.
+    """
+    offenders = []
+    for path in sorted(TEST_ROOT.rglob("test_*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not node.name.startswith("test"):
+                continue
+            arguments = node.args
+            required = arguments.args[: len(arguments.args) - len(arguments.defaults)]
+            unsatisfied = [
+                argument.arg
+                for argument in required
+                if argument.arg not in _PYTEST_FIXTURE_PARAMETERS
+            ]
+            if unsatisfied:
+                offenders.append(
+                    "{}::{} requires {}".format(
+                        path.relative_to(REPO_ROOT).as_posix(), node.name, unsatisfied
+                    )
+                )
+    assert offenders == []
+
+
 def test_legacy_packaged_runner_is_absent():
     legacy = REPO_ROOT / "python" / "jittor" / "test"
     assert not (legacy / "__main__.py").exists()

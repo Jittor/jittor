@@ -265,7 +265,14 @@ class TestCleanupStructure(unittest.TestCase):
             "transform",
             "utils",
         }
-        actual = {path.name for path in runtime_root.iterdir()}
+        # ``__pycache__`` appears as soon as anything imports Jittor, and
+        # ``.gitignore`` already declares it as build output. The contract here
+        # is about source entries, so a built working tree must not fail it.
+        actual = {
+            path.name
+            for path in runtime_root.iterdir()
+            if path.name != "__pycache__"
+        }
         self.assertEqual(actual, expected)
 
     def test_remaining_root_python_files_have_reviewed_owners(self):

@@ -33,7 +33,7 @@ class Model2(Module):
         x = self.linear1(x)
         return x
 
-def test_matmul(s1, s2):
+def check_matmul(s1, s2):
     a = jt.random(s1)
     b = jt.random(s2)
     c = jt.nn.matmul(a, b)
@@ -69,7 +69,7 @@ def matmul2(a, b, tp):
     b = b.broadcast(shape, [sb])
     return (a*b).sum(d)
 
-def test_matmul2(s1, s2, t1, t2, dtype = 'float32'):
+def check_matmul2(s1, s2, t1, t2, dtype = 'float32'):
     if (not t1) and (not t2):
         tp = 0
     if (t1) and (not t2):
@@ -106,25 +106,25 @@ def test_matmul2(s1, s2, t1, t2, dtype = 'float32'):
 
 class TestMatmul(unittest.TestCase):
     def test_matmul_type(self):
-        test_matmul2([2,5],[5,8], False, False, 'float32')
-        test_matmul2([5,2],[5,8], True, False, 'float32')
-        test_matmul2([2,5],[8,5], False, True, 'float32')
+        check_matmul2([2,5],[5,8], False, False, 'float32')
+        check_matmul2([5,2],[5,8], True, False, 'float32')
+        check_matmul2([2,5],[8,5], False, True, 'float32')
 
-        test_matmul2([2,5],[5,8], False, False, 'float64')
-        test_matmul2([5,2],[5,8], True, False, 'float64')
-        test_matmul2([2,5],[8,5], False, True, 'float64')
+        check_matmul2([2,5],[5,8], False, False, 'float64')
+        check_matmul2([5,2],[5,8], True, False, 'float64')
+        check_matmul2([2,5],[8,5], False, True, 'float64')
 
-        test_matmul2([2,5],[5,8], False, False, 'int32')
-        test_matmul2([5,2],[5,8], True, False, 'int32')
-        test_matmul2([2,5],[8,5], False, True, 'int32')
+        check_matmul2([2,5],[5,8], False, False, 'int32')
+        check_matmul2([5,2],[5,8], True, False, 'int32')
+        check_matmul2([2,5],[8,5], False, True, 'int32')
 
     def test_matmul(self):
-        test_matmul([2,5],[5,8])
-        test_matmul([200,500],[500,800])
-        test_matmul([500,500],[500,50])
-        test_matmul2([2,5],[5,8], False, False)
-        test_matmul2([5,2],[5,8], True, False)
-        test_matmul2([2,5],[8,5], False, True)
+        check_matmul([2,5],[5,8])
+        check_matmul([200,500],[500,800])
+        check_matmul([500,500],[500,50])
+        check_matmul2([2,5],[5,8], False, False)
+        check_matmul2([5,2],[5,8], True, False)
+        check_matmul2([2,5],[8,5], False, True)
 
     def test_backward(self):
         np.random.seed(0)
@@ -195,31 +195,31 @@ class TestMatmul(unittest.TestCase):
     @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
     def test_matmul_type_cuda(self):
         with jt.flag_scope(use_cuda=1):
-            test_matmul2([2,5],[5,8], False, False, 'float32')
-            test_matmul2([5,2],[5,8], True, False, 'float32')
-            test_matmul2([2,5],[8,5], False, True, 'float32')
+            check_matmul2([2,5],[5,8], False, False, 'float32')
+            check_matmul2([5,2],[5,8], True, False, 'float32')
+            check_matmul2([2,5],[8,5], False, True, 'float32')
 
-            test_matmul2([2,5],[5,8], False, False, 'float64')
-            test_matmul2([5,2],[5,8], True, False, 'float64')
-            test_matmul2([2,5],[8,5], False, True, 'float64')
+            check_matmul2([2,5],[5,8], False, False, 'float64')
+            check_matmul2([5,2],[5,8], True, False, 'float64')
+            check_matmul2([2,5],[8,5], False, True, 'float64')
 
-            test_matmul2([2,5],[5,8], False, False, 'int32')
-            test_matmul2([5,2],[5,8], True, False, 'int32')
-            test_matmul2([2,5],[8,5], False, True, 'int32')
+            check_matmul2([2,5],[5,8], False, False, 'int32')
+            check_matmul2([5,2],[5,8], True, False, 'int32')
+            check_matmul2([2,5],[8,5], False, True, 'int32')
 
     @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
     def test_matmul_cuda(self):
         with jt.flag_scope(use_cuda=1):
-            test_matmul([2,5],[5,8])
-            test_matmul([200,500],[500,800])
-            test_matmul([500,500],[500,50])
-            test_matmul2([2,5],[5,8], False, False)
-            test_matmul2([5,2],[5,8], True, False)
-            test_matmul2([500,200],[500,800], True, False)
-            test_matmul2([500,500],[500,50], True, False)
-            test_matmul2([2,5],[8,5], False, True)
-            test_matmul2([200,500],[800,500], False, True)
-            test_matmul2([500,500],[50,500], False, True)
+            check_matmul([2,5],[5,8])
+            check_matmul([200,500],[500,800])
+            check_matmul([500,500],[500,50])
+            check_matmul2([2,5],[5,8], False, False)
+            check_matmul2([5,2],[5,8], True, False)
+            check_matmul2([500,200],[500,800], True, False)
+            check_matmul2([500,500],[500,50], True, False)
+            check_matmul2([2,5],[8,5], False, True)
+            check_matmul2([200,500],[800,500], False, True)
+            check_matmul2([500,500],[50,500], False, True)
 
     @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
     def test_matmul_transpose_cuda_float(self):

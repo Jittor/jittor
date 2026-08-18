@@ -31,29 +31,45 @@ def _select_torch_mode_for_test_process():
         except ValueError:
             normalized = path.resolve().as_posix()
         selected.append(normalized.rstrip("/"))
-    torch_roots = (
-        "tests/compat/torch",
-        # OpInfo definitions exercise the Torch-facing signatures for the
-        # shared numerical surface (see their explicit compatibility notes).
-        # Keep that process separate from native Jittor tests, just like the
-        # dedicated compatibility tree.
-        "tests/ops",
-        # These regression locks intentionally encode Torch-facing defaults
-        # (unbiased var/std and NaN-aware reductions).  Keep them in the same
-        # process mode as the compatibility tests; native Jittor retains its
-        # historical NumPy-aligned defaults.
-        "tests/core/test_regression.py",
-        "tests/structure",
-        "tests/backends/triton/test_triton_torch_compat.py",
-    )
     broad_roots = (".", "tests")
-    if not selected or any(
-        path in broad_roots or path.startswith(torch_roots) for path in selected
-    ):
+    if not selected or any(path in broad_roots for path in selected):
+        # A broad selection runs the native suite. Torch mode is process-global
+        # and changes lazy execution, reduction defaults and gradient
+        # semantics, so switching the whole tree into it made ordinary native
+        # tests fail. The Torch-mode paths are skipped here and covered by
+        # their own session; ``tools/run_test_suite.py`` runs both and reports
+        # a combined result.
+        return
+    if any(path.startswith(TORCH_MODE_PATHS) for path in selected):
         os.environ.setdefault("JITTOR_TORCH_SHIM", "1")
 
 
+#: Paths whose tests require the process-global Torch compatibility mode.
+TORCH_MODE_PATHS = (
+    "tests/compat/torch",
+    # The OpInfo runner exercises the Torch-facing signatures for the shared
+    # numerical surface (see its explicit compatibility notes). The rest of
+    # ``tests/ops`` asserts native Jittor behaviour, including lazy execution,
+    # and must not run in Torch mode.
+    "tests/ops/test_ops.py",
+    # These regression locks intentionally encode Torch-facing defaults
+    # (unbiased var/std and NaN-aware reductions). Native Jittor retains its
+    # historical NumPy-aligned defaults.
+    "tests/core/test_regression.py",
+    "tests/structure",
+    "tests/backends/triton/test_triton_torch_compat.py",
+)
+
+
 _select_torch_mode_for_test_process()
+
+
+def _torch_mode_is_active():
+    module = sys.modules.get("torch")
+    if module is not None and hasattr(module, "_torch_compat_install_context"):
+        return True
+    value = os.environ.get("JITTOR_TORCH_SHIM", "").strip().lower()
+    return value not in ("", "0", "false", "no", "off")
 
 
 def _preload_real_torch():
@@ -152,11 +168,20 @@ def pytest_sessionstart(session):
 
 
 def pytest_collection_modifyitems(items):
+    torch_mode = _torch_mode_is_active()
+    torch_only = tuple(path[len("tests/"):] for path in TORCH_MODE_PATHS)
     for item in items:
         try:
             relative = Path(str(item.fspath)).resolve().relative_to(TEST_ROOT).parts
         except ValueError:
             continue
+        if not torch_mode and "/".join(relative).startswith(torch_only):
+            item.add_marker(
+                pytest.mark.skip(
+                    reason="needs the Torch compatibility mode; run this path in "
+                    "its own session or use tools/run_test_suite.py"
+                )
+            )
         parts = set(relative)
         for marker in _backend_markers(item, relative):
             item.add_marker(getattr(pytest.mark, marker))
