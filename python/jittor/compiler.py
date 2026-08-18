@@ -63,7 +63,7 @@ def map_flags(flags, func):
         output.append(func(s))
     return " ".join(output)
 
-def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="", obj_dirname="obj_files"):
+def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="", obj_dirname="obj_files", return_cmd=False):
     def do_compile(cmd):
         if jit_utils.cc:
             return jit_utils.cc.cache_compile(cmd, cache_path, jittor_path)
@@ -103,6 +103,8 @@ def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="",
 
     if len(inputs) == 1 or combind_build:
         cmd = f"\"{compiler}\" {' '.join(cms(inputs))} {flags} -o {cm(output)}"
+        if return_cmd:
+            return fix_cl_flags(cmd)
         return do_compile(fix_cl_flags(cmd))
     # split compile object file and link
     # remove -l -L flags when compile object files
@@ -874,6 +876,27 @@ def check_cuda():
         preload_cuda_library("cudart", required=True)
     is_cuda = has_cuda = 1
 
+def _write_jit_utils_cache_key(files, output):
+    """Write ``<output>.key`` from a child process.
+
+    ``cache_compile`` records the key as a side effect of building, so the only
+    way to get one is to run a build. Running it here would replace a library
+    this process already has mapped; running it in a child leaves this process
+    with a single, settled file to import.
+    """
+    cmd = compile(cc_path, cc_flags+f" {opt_flags} ", files, output, True, return_cmd=True)
+    script = (
+        "import sys\n"
+        "sys.path.insert(0, {cache!r})\n"
+        "import jit_utils_core\n"
+        "jit_utils_core.cache_compile({cmd!r}, {cache!r}, {jittor!r})\n"
+    ).format(cache=cache_path, cmd=cmd, jittor=jittor_path)
+    result = sp.run([sys.executable, "-c", script],
+                    stdout=sp.PIPE, stderr=sp.STDOUT)
+    if result.returncode != 0:
+        LOG.v("cache key child failed: " + result.stdout.decode("utf8", "replace"))
+
+
 def check_cache_compile():
     files = [
         "src/utils/cache_compile.cc",
@@ -886,16 +909,30 @@ def check_cache_compile():
         files = [ x.replace('/', '\\') for x in files ]
     global jit_utils_core_files
     jit_utils_core_files = files
-    recompile = compile(cc_path, cc_flags+f" {opt_flags} ", files, jit_utils.cache_path+'/jit_utils_core'+extension_suffix, True)
+    output = jit_utils.cache_path+'/jit_utils_core'+extension_suffix
+    recompile = compile(cc_path, cc_flags+f" {opt_flags} ", files, output, True)
     if recompile and jit_utils.cc:
         LOG.e("jit_utils updated, please rerun your command.")
         sys.exit(0)
     if not jit_utils.cc:
+        # The cache key is written by cache_compile, which needs this very
+        # library to be importable first. Doing that after importing it would
+        # relink the file while this process has it mapped: the linker unlinks
+        # the output before writing, so the inode this process holds no longer
+        # matches the one on disk, and the loader later resolves jittor_core's
+        # dependency to a *second* copy of the same library. Two copies mean two
+        # sets of the flags and log-capture state defined in these files, which
+        # is why log_capture_scope silently returned nothing after a cold build.
+        # Generate the key in a short-lived child, then import the settled file.
+        _write_jit_utils_cache_key(files, output)
         with jit_utils.import_scope(import_flags):
             jit_utils.try_import_jit_utils_core()
         assert jit_utils.cc
-        # recompile, generate cache key
-        compile(cc_path, cc_flags+f" {opt_flags} ", files, jit_utils.cache_path+'/jit_utils_core'+extension_suffix, True)
+        if not os.path.isfile(output + ".key"):
+            # The child could not run; fall back to the original behaviour so a
+            # missing key never blocks startup. The duplicate mapping above is
+            # the cost, and the next run starts from a cached key.
+            compile(cc_path, cc_flags+f" {opt_flags} ", files, output, True)
 
 def env_or_try_find(name, bname):
     if name in os.environ:
