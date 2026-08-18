@@ -27,14 +27,32 @@ class TestTorchCompatErrors(unittest.TestCase):
     def setUp(self):
         jt.flags.use_cuda = 0
 
+    # ---- supported op x complex dtype ----
+    def test_supported_complex_transcendentals_match_numpy(self):
+        """These used to be rejected; native complex64 now implements them.
+
+        A clear "unsupported" error is only the right contract while an
+        operation really is unsupported. Once it works, the contract becomes
+        the numerical one, so this asserts agreement with an independent NumPy
+        reference rather than the old error text.
+        """
+        a = np.array([1 + 2j, 3 - 4j], dtype="complex64")
+        for op in ("exp", "log", "sin", "cos", "sqrt"):
+            with self.subTest(op=op):
+                got = getattr(jt, op)(jt.array(a)).numpy()
+                expected = getattr(np, op)(a)
+                np.testing.assert_allclose(got, expected, rtol=1e-4, atol=1e-4)
+
     # ---- unsupported op x dtype (op_compiler expand_op_search) ----
     def test_unsupported_op_on_complex(self):
         a = np.array([1 + 2j, 3 - 4j], dtype="complex64")
-        for op in ("exp", "log", "sin"):
+        # ``tanh`` has no complex64 kernel; the message must say so, and name
+        # the dtype, rather than surfacing a codegen failure.
+        for op in ("tanh",):
             name, m = _msg(lambda op=op: getattr(jt, op)(jt.array(a)).numpy())
             self.assertIsNotNone(name, f"{op}(complex) should raise")
-            self.assertIn("not supported for dtype", m, f"{op}: {m[:120]}")
-            self.assertIn("complex64", m, f"{op}: {m[:120]}")
+            self.assertIn("not supported for dtype", m, f"{op}: {m[:200]}")
+            self.assertIn("complex64", m, f"{op}: {m[:200]}")
 
     # ---- Conv2d: channel mismatch (was an empty AssertionError) ----
     def test_conv2d_channel_mismatch(self):

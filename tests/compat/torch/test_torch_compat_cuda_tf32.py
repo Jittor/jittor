@@ -4,6 +4,10 @@ import jittor as jt
 import jittor as torch
 
 
+# ``cuda_allow_tf32`` and ``cuda_allow_cudnn_tf32`` are registered by the CUDA
+# backend, so a CPU-only build has nothing to control here. Skipping keeps the
+# absence of a GPU from reading as a compatibility regression.
+@unittest.skipUnless(jt.has_cuda, "TF32 control needs a CUDA build")
 class TestTorchCompatCudaTF32(unittest.TestCase):
     def test_backend_allow_tf32_controls_cuda_flag(self):
         self.assertTrue(hasattr(jt.flags, "cuda_allow_tf32"))
