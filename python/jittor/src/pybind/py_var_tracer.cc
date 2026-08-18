@@ -34,49 +34,99 @@ static PyObject* my_import(const char* module_name, const char* attr) {
     return b.obj;
 }
 
-static PyObject* find_obj_name(PyFrameObject* f, PyObject* obj, const char* default_name="_model") {
-    #if PY_MINOR_VERSION>=11
-    #pragma message( "PY_MAJOR_VERSION333 " PY_VERSION )
-    LOGf << "python3.11 not supported yet";
-    return nullptr;
-    #else
-    auto co = f->f_code;
-    auto map = co->co_varnames;
+// CPython 3.11 made PyFrameObject and PyCodeObject opaque: f_code, f_back and
+// f_localsplus are no longer struct fields, and co_varnames / co_cellvars /
+// co_freevars moved behind accessors that only exist from 3.11 on. The helpers
+// below read the same information through the attribute protocol, which has
+// behaved identically on every supported version, so this tracer works on 3.7
+// through 3.12 from one code path.
 
-    auto fast = f->f_localsplus;
-    auto j = PyTuple_GET_SIZE(map);
-    if (j > co->co_nlocals)
-        j = co->co_nlocals;
-    if (co->co_nlocals) {
-        for (int i=0; i<j; i++) {
-            if (fast[i] == obj) {
-                auto s = PyTuple_GET_ITEM(map, i);
-                Py_INCREF(s);
-                return s;
-            }
-        }
+// A reference holder that tolerates nullptr. PyObjHolder treats a null pointer
+// as a fatal Python error, but walking a stack legitimately reaches the bottom,
+// and a frame legitimately may not expose a locals mapping.
+struct PyRef {
+    PyObject* obj;
+    PyRef() : obj(nullptr) {}
+    explicit PyRef(PyObject* o) : obj(o) {}
+    PyRef(const PyRef&) = delete;
+    PyRef& operator=(const PyRef&) = delete;
+    inline void reset(PyObject* o = nullptr) {
+        PyObject* old = obj;
+        obj = o;
+        Py_XDECREF(old);
     }
-    auto ncells = PyTuple_GET_SIZE(co->co_cellvars);
-    auto nfreevars = PyTuple_GET_SIZE(co->co_freevars);
-    if (ncells || nfreevars) {
-        for (int i=0; i<ncells; i++) {
-            if (fast[i+co->co_nlocals] == obj) {
-                auto s = PyTuple_GET_ITEM(co->co_cellvars, i);
-                Py_INCREF(s);
-                return s;
-            }
-        }
-        for (int i=0; i<nfreevars; i++) {
-            if (fast[i+co->co_nlocals+ncells] == obj) {
-                auto s = PyTuple_GET_ITEM(co->co_freevars, i);
-                Py_INCREF(s);
-                return s;
-            }
-        }
-    }
-    // LOGw << "not found name" << map << co->co_cellvars << co->co_freevars << (PyObject*)f;
-    return PyUnicode_FromString(default_name);
+    inline ~PyRef() { Py_XDECREF(obj); }
+};
+
+// New reference to the frame's code object, or nullptr.
+static PyObject* frame_code(PyFrameObject* f) {
+    if (!f) return nullptr;
+    #if PY_VERSION_HEX >= 0x03090000
+    return (PyObject*)PyFrame_GetCode(f);
+    #else
+    PyObject* co = (PyObject*)f->f_code;
+    Py_XINCREF(co);
+    return co;
     #endif
+}
+
+// New reference to the calling frame, or nullptr at the bottom of the stack.
+static PyFrameObject* frame_back(PyFrameObject* f) {
+    if (!f) return nullptr;
+    #if PY_VERSION_HEX >= 0x03090000
+    return PyFrame_GetBack(f);
+    #else
+    PyFrameObject* back = f->f_back;
+    Py_XINCREF(back);
+    return back;
+    #endif
+}
+
+// New reference to an attribute of the frame's code object, or nullptr.
+static PyObject* code_attr(PyFrameObject* f, const char* name) {
+    PyRef co(frame_code(f));
+    if (!co.obj) return nullptr;
+    PyObject* value = PyObject_GetAttrString(co.obj, name);
+    if (!value) PyErr_Clear();
+    return value;
+}
+
+// New reference to the frame's local variables as a mapping. Reading the
+// ``f_locals`` attribute performs the fast-locals snapshot on every version,
+// including the ones where PyFrame_FastToLocalsWithError has been removed.
+static PyObject* frame_locals(PyFrameObject* f) {
+    if (!f) return nullptr;
+    PyObject* locals = PyObject_GetAttrString((PyObject*)f, "f_locals");
+    if (!locals) PyErr_Clear();
+    return locals;
+}
+
+// The value bound to the frame's first parameter -- ``self`` for a method --
+// as a borrowed reference into ``locals``, or nullptr.
+static PyObject* frame_first_argument(PyFrameObject* f, PyObject* locals) {
+    if (!locals || !PyDict_Check(locals)) return nullptr;
+    PyRef names(code_attr(f, "co_varnames"));
+    if (!names.obj || !PyTuple_Check(names.obj) || PyTuple_GET_SIZE(names.obj) == 0)
+        return nullptr;
+    PyObject* first = PyTuple_GET_ITEM(names.obj, 0);
+    PyObject* value = PyDict_GetItem(locals, first);   // borrowed
+    if (!value) PyErr_Clear();
+    return value;
+}
+
+static PyObject* find_obj_name(PyFrameObject* f, PyObject* obj, const char* default_name="_model") {
+    PyRef locals(frame_locals(f));
+    if (locals.obj && PyDict_Check(locals.obj)) {
+        PyObject *key, *value;
+        Py_ssize_t pos = 0;
+        while (PyDict_Next(locals.obj, &pos, &key, &value)) {
+            if (value == obj) {
+                Py_INCREF(key);
+                return key;
+            }
+        }
+    }
+    return PyUnicode_FromString(default_name);
 }
 
 static string to_string(PyObject* obj) {
@@ -85,11 +135,13 @@ static string to_string(PyObject* obj) {
     return string(s, size);
 }
 
+static string code_string(PyFrameObject* f, const char* name) {
+    PyRef value(code_attr(f, name));
+    if (!value.obj || !PyUnicode_Check(value.obj)) return string();
+    return to_string(value.obj);
+}
+
 static vector<Stack> get_stack_info() {
-    #if PY_MINOR_VERSION>=11
-    LOGf << "python3.11 not supported yet";
-    return {};
-    #else
     // cnt ++;
     // if (cnt % 100 != 0) return {};
     vector<Stack> stacks;
@@ -101,13 +153,23 @@ static vector<Stack> get_stack_info() {
 
     PyObjHolder ret(PyObject_CallFunctionObjArgs(getframe, nullptr));
 
-    auto frame = (PyFrameObject*)ret.obj;
-    int n=0;
-    while (frame) n++, frame = frame->f_back;
+    // ``PyFrame_GetBack`` hands out a new reference on every version that has
+    // it, so the walk owns each frame and releases them together at the end.
+    vector<PyFrameObject*> owned;
+    for (PyFrameObject* frame = frame_back((PyFrameObject*)ret.obj);
+         frame != nullptr;
+         frame = frame_back(frame))
+        owned.push_back(frame);
+    int n = (int)owned.size() + 1;
     STACK_ALLOC(PyFrameObject*, frames, n);
-    frame = (PyFrameObject*)ret.obj;
-    int i=n;
-    while (i) frames[--i] = frame, frame = frame->f_back;
+    frames[n-1] = (PyFrameObject*)ret.obj;
+    for (int k = 0; k < (int)owned.size(); k++)
+        frames[n-2-k] = owned[k];
+    struct FrameRelease {
+        vector<PyFrameObject*>& owned;
+        ~FrameRelease() { for (auto* f : owned) Py_XDECREF(f); }
+    } release{owned};
+    PyRef prev_obj_ref;
     PyObject* prev_obj = nullptr;
     if (trace_py_var >= 3) {
         // trace raw stack
@@ -115,11 +177,11 @@ static vector<Stack> get_stack_info() {
         auto start = 0;
         for (int i=start; i<n; i++) {
             auto f = frames[i];
-            auto filename = to_string(f->f_code->co_filename);
+            auto filename = code_string(f, "co_filename");
             auto lineno = (int)PyFrame_GetLineNumber(f);
             stacks.emplace_back(Stack{
                 filename+":"+S(lineno), 
-                to_string(f->f_code->co_name),
+                code_string(f, "co_name"),
                 filename,
                 lineno});
         }
@@ -127,24 +189,35 @@ static vector<Stack> get_stack_info() {
     }
     for (int i=0; i<n; i++) {
         auto f = frames[i];
-        if (Py_SIZE(f->f_code->co_varnames)) {
-            auto fast = f->f_localsplus;
-            auto obj = fast[0];
-            if (obj == prev_obj) continue;
-            prev_obj = obj;
-            if (obj == nullptr)
-                // normal function first argument is null
+        {
+            PyRef locals(frame_locals(f));
+            auto borrowed = frame_first_argument(f, locals.obj);
+            if (borrowed == prev_obj) continue;
+            if (borrowed == nullptr) {
+                // a plain function has no bound first argument
+                prev_obj_ref.reset();
+                prev_obj = nullptr;
                 continue;
+            }
+            // ``borrowed`` points into ``locals``; own it so it stays valid
+            // here and so the next iteration's identity check cannot compare
+            // against a freed address.
+            Py_INCREF(borrowed);
+            prev_obj_ref.reset(borrowed);
+            auto obj = borrowed;
+            prev_obj = obj;
             auto tp_mro = obj->ob_type->tp_mro;
             auto base_type = PyTuple_GET_ITEM(tp_mro, Py_SIZE(tp_mro)-2);
             auto prev_f = i? frames[i-1] : f;
             if (base_type == jt_optimizer) {
                 string init_name = string(obj->ob_type->tp_name) + "_init";
-                PyObjHolder ret(find_obj_name(f->f_back, obj, init_name.c_str()));
+                PyRef caller((PyObject*)frame_back(f));
+                PyObjHolder ret(find_obj_name((PyFrameObject*)caller.obj, obj,
+                                              init_name.c_str()));
                 stacks.emplace_back(Stack{
                     to_string(ret.obj), 
                     string(obj->ob_type->tp_name),
-                    to_string(prev_f->f_code->co_filename),
+                    code_string(prev_f, "co_filename"),
                     (int)PyFrame_GetLineNumber(prev_f)});
                 break;
             }
@@ -155,13 +228,14 @@ static vector<Stack> get_stack_info() {
             string scope_name;
             if (!ret.obj) {
                 // find base name
-                auto co_name = to_string(f->f_code->co_name);
+                auto co_name = code_string(f, "co_name");
                 if (co_name == "__init__") {
                     scope_name = string(obj->ob_type->tp_name) + "_init";
                 } else
                 if (co_name == "__call__") {
                     if (i) {
-                        ret.assign(find_obj_name(f->f_back, obj));
+                        PyRef caller((PyObject*)frame_back(f));
+                        ret.assign(find_obj_name((PyFrameObject*)caller.obj, obj));
                         scope_name = to_string(ret.obj);
                     } else {
                         ret.assign(PyUnicode_FromString("_model"));
@@ -176,7 +250,7 @@ static vector<Stack> get_stack_info() {
             stacks.emplace_back(Stack{
                 move(scope_name), 
                 string(obj->ob_type->tp_name),
-                to_string(prev_f->f_code->co_filename),
+                code_string(prev_f, "co_filename"),
                 (int)PyFrame_GetLineNumber(prev_f)});
         }
     }
@@ -184,7 +258,7 @@ static vector<Stack> get_stack_info() {
         auto m = std::min(3,n);
         for (int i=0; i<m; i++) {
             auto f = frames[n-m+i];
-            auto s = to_string(f->f_code->co_filename);
+            auto s = code_string(f, "co_filename");
             auto num = (int)PyFrame_GetLineNumber(f);
             stacks.emplace_back(Stack{
                 s+":"+S(num), 
@@ -194,7 +268,6 @@ static vector<Stack> get_stack_info() {
         }
     }
     return stacks;
-    #endif
 }
 
 template<class T>
