@@ -28,34 +28,76 @@ from pathlib import Path
 import json
 
 
+def _user_config_file():
+    src_path = os.path.join(str(Path.home()), ".cache", "jittor")
+    os.makedirs(src_path, exist_ok=True)
+    return os.path.join(src_path, "config.json")
+
+
+def _read_user_config():
+    """Read the persistent user configuration, tolerating a damaged file.
+
+    Several Jittor processes can start at once, so this file may be observed
+    while it is being replaced. A configuration that cannot be parsed is not a
+    reason to refuse to start: the defaults below are always usable.
+    """
+    path = _user_config_file()
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+    except (ValueError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_user_config(data):
+    """Replace the configuration atomically so readers never see a partial file."""
+    path = _user_config_file()
+    temporary = "%s.%d.tmp" % (path, os.getpid())
+    try:
+        with open(temporary, "w") as f:
+            json.dump(data, f)
+        os.replace(temporary, path)
+    except OSError:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+
+
+def set_home(path):
+    """Persist ``path`` as this user's default Jittor home directory."""
+    global _jittor_home
+    resolved = os.path.abspath(os.path.expanduser(path))
+    os.makedirs(resolved, exist_ok=True)
+    data = _read_user_config()
+    data["JITTOR_HOME"] = resolved
+    _write_user_config(data)
+    _jittor_home = resolved
+    return resolved
+
+
 _jittor_home = None
 def home():
     global _jittor_home
     if _jittor_home is not None:
         return _jittor_home
 
-    src_path = os.path.join(str(Path.home()),".cache","jittor")
-    os.makedirs(src_path,exist_ok=True)
-    src_path_file = os.path.join(src_path,"config.json")
-    data = {}
-    if os.path.exists(src_path_file):
-        with open(src_path_file,"r") as f:
-            data = json.load(f)
+    default_path = _read_user_config().get("JITTOR_HOME", str(Path.home()))
 
-    default_path = data.get("JITTOR_HOME", str(Path.home()))
-
+    # A ``JITTOR_HOME`` in the environment is a per-process override -- test
+    # runs, CI jobs and multi-device jobs rely on it to keep caches apart. It is
+    # deliberately not written back to the shared configuration: doing so made
+    # one isolated run silently become every later run's default. Use
+    # ``set_home`` to change the persistent default on purpose.
     _home_path = os.environ.get("JITTOR_HOME", default_path)
-    
+
     if not os.path.exists(_home_path):
         os.makedirs(_home_path, exist_ok=True)
     _home_path = os.path.abspath(_home_path)
-    
-    # LOG.i(f"Use {_home_path} as Jittor Home")
-    if default_path != _home_path:
-        with open(src_path_file,"w") as f:
-            data['JITTOR_HOME'] = _home_path
-            json.dump(data,f)
-    
+
     _jittor_home = _home_path
     return _home_path
 
