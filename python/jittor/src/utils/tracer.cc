@@ -7,6 +7,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <iostream>
+#ifndef _WIN32
+#include <signal.h>
+#endif
 #include "utils/cross_platform.h"
 #include "utils/tracer.h"
 
@@ -17,6 +20,9 @@ DEFINE_FLAG(string, addr2line_path, "", "Path of addr2line.");
 DEFINE_FLAG(string, extra_gdb_cmd, "", "Extra command pass to GDB, seperate by(;) .");
 DEFINE_FLAG(int, has_pybt, 0, "GDB has pybt or not.");
 DEFINE_FLAG(int, trace_depth, 10, "trace depth for GDB.");
+DEFINE_FLAG(int, gdb_trace_timeout, 30,
+    "Seconds to wait for the GDB backtrace child before giving up. "
+    "Zero or a negative value waits forever.");
 DEFINE_FLAG_WITH_SETTER(int, gdb_attach, 0, "gdb attach self process.");
 
 string _extra_gdb_cmd;
@@ -180,7 +186,32 @@ void print_trace() {
 #if defined(__linux__) && defined(PR_SET_PTRACER)
     		prctl(PR_SET_PTRACER, child_pid, 0, 0, 0);
 #endif
-            waitpid(child_pid,NULL,0);
+            // A GDB that hangs, or that is itself intercepted by a crash
+            // reporter, used to block this process forever and take a whole
+            // test or training run with it.  Wait for a bounded time, then
+            // stop the debugger and continue with the diagnosis we have.
+            if (gdb_trace_timeout <= 0) {
+                waitpid(child_pid, NULL, 0);
+            } else {
+                int waited_ms = 0;
+                const int limit_ms = gdb_trace_timeout * 1000;
+                const int step_ms = 50;
+                bool reaped = false;
+                while (waited_ms < limit_ms) {
+                    int status = 0;
+                    int done = waitpid(child_pid, &status, WNOHANG);
+                    if (done == child_pid || done < 0) { reaped = true; break; }
+                    usleep(step_ms * 1000);
+                    waited_ms += step_ms;
+                }
+                if (!reaped) {
+                    std::cerr << "[bt] gdb backtrace timed out after "
+                        << gdb_trace_timeout << "s, terminating pid "
+                        << child_pid << std::endl;
+                    kill(child_pid, SIGKILL);
+                    waitpid(child_pid, NULL, 0);
+                }
+            }
         }
         #else
         auto cmds = get_cmds(argv);

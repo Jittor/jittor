@@ -208,8 +208,23 @@ class EcosystemParity(unittest.TestCase):
     def test_diffusers_unet2d(self):
         self._compare("diffusers_unet2d")
 
+    def test_transformers_t5(self):
+        self._compare("transformers_t5")
+
+    def test_transformers_whisper(self):
+        self._compare("transformers_whisper")
+
+    def test_diffusers_dit(self):
+        self._compare("diffusers_dit")
+
     def test_peft_lora_llama(self):
         self._compare("peft_lora_llama")
+
+    def test_mmcv_conv_module(self):
+        self._compare("mmcv_conv_module")
+
+    def test_mmengine_base_module(self):
+        self._compare("mmengine_base_module")
 
 
 def _cuda_is_available():

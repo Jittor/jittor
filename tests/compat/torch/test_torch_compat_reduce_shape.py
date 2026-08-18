@@ -496,5 +496,44 @@ class TestBroadcastExpand(Base):
         both_devices(body)
 
 
+class TestReshapeKeywordShape(Base):
+    """``reshape``/``view`` accept the target shape as a keyword in torch.
+
+    diffusers' DiT unpatchify writes ``hidden_states.reshape(shape=(...))``.
+    The compatibility layer only read ``dtype`` out of the keywords, so the
+    shape was dropped and the core raised "target shape of reshape can't be
+    empty" instead of reshaping.
+    """
+
+    def setUp(self):
+        self.x = np.arange(24).reshape(2, 3, 4).astype("float32")
+
+    def test_reshape_shape_keyword(self):
+        x = self.x
+        def body(dev):
+            self.ac(t(x).reshape(shape=(6, 4)).numpy(), x.reshape(6, 4),
+                    msg=f"reshape(shape=tuple) {dev}")
+            self.ac(t(x).reshape(shape=[4, 6]).numpy(), x.reshape(4, 6),
+                    msg=f"reshape(shape=list) {dev}")
+            self.ac(t(x).reshape(shape=(-1, 4, 3, 2)).numpy(), x.reshape(-1, 4, 3, 2),
+                    msg=f"reshape(shape=with -1) {dev}")
+        both_devices(body)
+
+    def test_view_size_keyword(self):
+        x = self.x
+        def body(dev):
+            self.ac(t(x).view(size=(6, 4)).numpy(), x.reshape(6, 4),
+                    msg=f"view(size=tuple) {dev}")
+        both_devices(body)
+
+    def test_positional_forms_still_work(self):
+        x = self.x
+        def body(dev):
+            self.ac(t(x).reshape(6, 4).numpy(), x.reshape(6, 4), msg=f"reshape(*ints) {dev}")
+            self.ac(t(x).reshape((6, 4)).numpy(), x.reshape(6, 4), msg=f"reshape(tuple) {dev}")
+            self.ac(t(x).view(-1).numpy(), x.reshape(-1), msg=f"view(-1) {dev}")
+        both_devices(body)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

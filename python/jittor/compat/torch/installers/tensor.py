@@ -2349,6 +2349,14 @@ def install_methods(ctx):
         _dt = _kw.get("dtype", None)
         if _dt is not None:
             return _bitcast(self, _dt)
+        if not shape:
+            # torch spells the target shape as a keyword too: `reshape(shape=...)`
+            # (diffusers' DiT unpatchify) and `view(size=...)`. Dropping it left
+            # an empty positional tuple and a "shape can't be empty" core error.
+            _named = _kw.get("shape", _kw.get("size", None))
+            if _named is not None:
+                shape = _named if isinstance(_named, (tuple, list)) else (_named,)
+                shape = (tuple(int(s) for s in shape),)
         if len(shape) == 1 and isinstance(shape[0], dtype):
             return _bitcast(self, shape[0])
         if len(shape) == 1 and isinstance(shape[0], tuple) and type(shape[0]) is not tuple:
