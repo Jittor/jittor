@@ -138,6 +138,36 @@ must be present in the wheel.
 The tree is a destination, not authorization for a flag-day move. Each migration
 must leave the repository buildable and preserve the hard path invariants.
 
+It also abbreviates: it names the packages the migration reshaped, not every
+entry that legitimately exists. The authoritative list is the exact set asserted
+by `test_runtime_root_has_an_exact_reviewed_entry_set` in
+[`tests/structure/test_cleanup_structure.py`](../../tests/structure/test_cleanup_structure.py),
+which additionally covers `ccl/`, `dataset/`, `distributed/`, `einops/`,
+`loss3d/`, `models/`, `transform/`, and the `distributions.py`, `init.py` and
+`linalg.py` domains.
+
+Those stay where they are, deliberately:
+
+- **They are public imports.** `jittor.ccl.ccl_2d`, `jittor.dataset.MNIST` and
+  `jittor.models.resnet50` are what user code already writes, and 2.0 keeps the
+  1.x import surface working.
+- **They are not duplicates.** The concern that prompted this review was
+  overlapping functionality, and the duplicate scanner described below covers
+  exactly that. `ccl` is three separate labelling algorithms with three separate
+  kernels; `dataset` is the `torch.utils.data` equivalent and shares no
+  implementation with it; `models` is the model zoo. Nothing here is a second
+  copy of something else.
+- **The set is closed.** The structure test asserts the *exact* entry set, so a
+  new top-level file or package fails the gate until it is reviewed. The
+  problem the original complaint described -- accumulation -- is what that gate
+  prevents.
+
+What did move were the entries that were genuinely misplaced: `gradfunctional`
+became [`jittor.autograd`](#canonical-and-legacy-imports), `contrib.py` became
+`jittor.compat.contrib`, and the compatibility files listed at the end of
+Decision 1 left the runtime root. Each keeps a compatibility entry point that
+resolves to the same object.
+
 ## Decision 1: Domain Packages
 
 Stage 3 converged `nn.py + _nn/`, `misc.py + _misc/`, `pool.py + _pool/`, and
