@@ -291,6 +291,10 @@ def _ms_swift_lora_llama(torch):
 
 
 #: name -> (builder, required top-level distributions)
+#:
+#: The realistic-size configurations used for wall-clock work live in
+#: ``_ecosystem_speed`` and are merged in below, so one runner serves both the
+#: parity gate and the speed measurement.
 CASES = {
     "transformers_gpt2": (_tiny_gpt2, ("transformers",)),
     "transformers_llama": (_tiny_llama, ("transformers",)),
@@ -305,3 +309,12 @@ CASES = {
     "mmengine_base_module": (_mmengine_base_model, ("mmengine",)),
     "ms_swift_lora_llama": (_ms_swift_lora_llama, ("transformers", "peft", "swift")),
 }
+
+
+def _merge_speed_cases():
+    from _ecosystem_speed import CASES as SPEED_CASES
+
+    CASES.update(SPEED_CASES)
+
+
+_merge_speed_cases()

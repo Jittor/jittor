@@ -109,10 +109,12 @@ def _comparison_floor(reference, keys):
     return 1e-3 * max(magnitudes + [0.0])
 
 
-@unittest.skipUnless(REAL_TORCH_PYTHON, "REAL_TORCH_PYTHON is not configured")
-@unittest.skipUnless(_torch_shim_is_active(), "this interpreter does not run torch as Jittor")
-class EcosystemParity(unittest.TestCase):
-    """Compare a downstream library's numbers between PyTorch and Jittor."""
+class EcosystemComparison(unittest.TestCase):
+    """The two-interpreter comparison itself, without any case selection.
+
+    Kept separate from the classes below so another module can reuse the
+    harness for a different set of cases without inheriting these test methods.
+    """
 
     forward_tolerance = 2e-3
     backward_tolerance = 1e-2
@@ -192,6 +194,12 @@ class EcosystemParity(unittest.TestCase):
                     float(SPEED_RATIO),
                     "{} is {:.2f}x slower than PyTorch".format(case, ratio),
                 )
+
+
+@unittest.skipUnless(REAL_TORCH_PYTHON, "REAL_TORCH_PYTHON is not configured")
+@unittest.skipUnless(_torch_shim_is_active(), "this interpreter does not run torch as Jittor")
+class EcosystemParity(EcosystemComparison):
+    """Compare a downstream library's numbers between PyTorch and Jittor."""
 
     def test_transformers_gpt2(self):
         self._compare("transformers_gpt2")
