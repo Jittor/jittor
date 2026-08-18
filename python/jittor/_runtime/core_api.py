@@ -1404,12 +1404,21 @@ class Module:
         self.dfs([], None, callback, callback_leave, recurse)
         return _uniq(ps)
 
-    def state_dict(self, to=None, recurse=True):
+    def state_dict(self, to=None, recurse=True, destination=None, prefix="",
+                   keep_vars=None):
         ''' Returns a dictionary containing
         Jittor Var of the module and its descendants.
 
         Args:
             to: target type of var, canbe None or 'numpy' or 'torch'
+            destination: optional mapping to write the entries into and return,
+                matching ``torch.nn.Module.state_dict``. Wrapper modules such as
+                ms-swift's tuners forward this through to the wrapped model.
+            prefix: string prepended to every key, also matching Torch.
+            keep_vars: Torch detaches its tensors when this is ``False``. Jittor
+                has always returned live ``Var`` objects, so the default stays
+                ``None`` (historical behaviour) and only an explicit ``False``
+                detaches.
 
         Return:
             dictionary of module's states.
@@ -1460,6 +1469,10 @@ class Module:
         def callback_leave(parents, k, v, n):
             stack.pop()
         self.dfs([], None, callback, callback_leave, recurse)
+        if keep_vars is False:
+            for k, v in ps.items():
+                if isinstance(v, Var):
+                    ps[k] = v.detach()
         if to == "numpy":
             for k,v in ps.items():
                 if isinstance(v, Var):
@@ -1469,6 +1482,11 @@ class Module:
             for k,v in ps.items():
                 if isinstance(v, Var):
                     ps[k] = torch.Tensor(v.numpy())
+        if prefix:
+            ps = {prefix + k: v for k, v in ps.items()}
+        if destination is not None:
+            destination.update(ps)
+            return destination
         return ps
 
     def named_parameters(self, recurse=True) -> List[Tuple[str, Var]]:

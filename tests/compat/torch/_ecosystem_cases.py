@@ -264,6 +264,32 @@ def _diffusers_transformer(torch):
     return model, inputs
 
 
+def _ms_swift_lora_llama(torch):
+    """ms-swift's own LoRA tuner, which is not PEFT's despite the shared name."""
+    from swift import Swift
+    from swift.tuners import LoRAConfig
+    from transformers import AutoConfig, AutoModelForCausalLM
+
+    config = AutoConfig.for_model(
+        "llama",
+        hidden_size=64,
+        intermediate_size=128,
+        num_hidden_layers=2,
+        num_attention_heads=2,
+        num_key_value_heads=2,
+        vocab_size=128,
+        max_position_embeddings=64,
+        attention_dropout=0.0,
+    )
+    base = AutoModelForCausalLM.from_config(config)
+    tuner = LoRAConfig(
+        r=4, lora_alpha=8, lora_dropout=0.0, target_modules=["q_proj", "v_proj"]
+    )
+    model = Swift.prepare_model(base, tuner)
+    inputs = {"input_ids": ("int64", (2, 8), 128)}
+    return model, inputs
+
+
 #: name -> (builder, required top-level distributions)
 CASES = {
     "transformers_gpt2": (_tiny_gpt2, ("transformers",)),
@@ -277,4 +303,5 @@ CASES = {
     "peft_lora_llama": (_peft_lora_llama, ("transformers", "peft")),
     "mmcv_conv_module": (_mmcv_conv_module, ("mmcv", "mmengine")),
     "mmengine_base_module": (_mmengine_base_model, ("mmengine",)),
+    "ms_swift_lora_llama": (_ms_swift_lora_llama, ("transformers", "peft", "swift")),
 }

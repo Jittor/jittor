@@ -378,5 +378,51 @@ class TestFromNumpy(Base):
         both_devices(body)
 
 
+class TestStateDictTorchKeywords(unittest.TestCase):
+    """``Module.state_dict`` accepts Torch's keyword arguments.
+
+    Wrapper modules forward them straight through -- ms-swift's tuner base
+    calls ``self.base_model.state_dict(destination=..., prefix=...,
+    keep_vars=...)`` -- so rejecting them broke saving an adapted model even
+    though the forward and backward passes were fine.
+    """
+
+    def _module(self):
+        return jt.nn.Sequential(jt.nn.Linear(4, 4), jt.nn.ReLU(), jt.nn.Linear(4, 2))
+
+    def test_prefix_is_applied_to_every_key(self):
+        module = self._module()
+        plain = set(module.state_dict().keys())
+        self.assertTrue(plain)
+        prefixed = set(module.state_dict(prefix="base_model.").keys())
+        self.assertEqual(prefixed, {"base_model." + key for key in plain})
+
+    def test_destination_is_updated_and_returned(self):
+        module = self._module()
+        destination = {"already": 1}
+        returned = module.state_dict(destination=destination)
+        self.assertIs(returned, destination)
+        self.assertIn("already", returned)
+        for key in module.state_dict():
+            self.assertIn(key, returned)
+
+    def test_keep_vars_false_detaches_without_changing_values(self):
+        module = jt.nn.Linear(4, 4)
+        live = module.state_dict()["weight"]
+        detached = module.state_dict(keep_vars=False)["weight"]
+        self.assertIs(live, module.weight)
+        self.assertIsNot(detached, module.weight)
+        np.testing.assert_array_equal(detached.numpy(), live.numpy())
+        # No gradient reaches the parameter through a detached entry.
+        through_detached = jt.grad((detached * 2).sum(), module.weight, retain_graph=True)
+        self.assertEqual(float(np.abs(through_detached.numpy()).max()), 0.0)
+        through_live = jt.grad((live * 2).sum(), module.weight)
+        self.assertEqual(float(np.abs(through_live.numpy()).max()), 2.0)
+
+    def test_default_still_returns_live_vars(self):
+        module = jt.nn.Linear(4, 4)
+        self.assertIs(module.state_dict()["weight"], module.weight)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

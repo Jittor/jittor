@@ -226,6 +226,9 @@ class EcosystemParity(unittest.TestCase):
     def test_mmengine_base_module(self):
         self._compare("mmengine_base_module")
 
+    def test_ms_swift_lora_llama(self):
+        self._compare("ms_swift_lora_llama")
+
 
 def _cuda_is_available():
     """Whether this Jittor build can actually execute on a GPU."""

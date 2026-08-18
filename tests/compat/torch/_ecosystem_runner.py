@@ -138,19 +138,41 @@ def main():
     if options.device == "cuda" and options.runtime == "torch":
         model.cuda()
 
+    # ``state_dict`` is not always complete: ms-swift's tuner deliberately
+    # reports only its adapter, so transferring it would leave the two runtimes
+    # with independently initialized backbones and a meaningless comparison.
+    # Enumerating parameters and buffers is complete by construction.
+    def transferable():
+        entries = list(model.named_parameters())
+        named_buffers = getattr(model, "named_buffers", None)
+        if callable(named_buffers):
+            entries += list(named_buffers())
+        return entries
+
     if options.weights:
         loaded = np.load(options.weights)
-        state = {key: torch.from_numpy(loaded[key]) for key in loaded.files}
-        # ``strict=False`` would hide a renamed parameter, which is exactly the
-        # kind of divergence this comparison exists to catch.
-        model.load_state_dict(state, strict=True)
+        available = dict(transferable())
+        missing = sorted(key for key in loaded.files if key not in available)
+        if missing:
+            raise SystemExit("no counterpart for saved weights: %s" % missing[:5])
+        unset = sorted(key for key in available if key not in loaded.files)
+        if unset:
+            raise SystemExit("no saved weight for: %s" % unset[:5])
+        for name, value in available.items():
+            source = to_device(torch.from_numpy(loaded[name]))
+            with_no_grad = getattr(torch, "no_grad", None)
+            if with_no_grad is not None:
+                with with_no_grad():
+                    value.copy_(source)
+            else:
+                value.copy_(source)
     else:
         weights_path = os.path.splitext(options.output)[0] + ".weights.npz"
         np.savez(
             weights_path,
             **{
-                key: value.detach().cpu().numpy()
-                for key, value in model.state_dict().items()
+                name: value.detach().cpu().numpy()
+                for name, value in transferable()
             },
         )
 
