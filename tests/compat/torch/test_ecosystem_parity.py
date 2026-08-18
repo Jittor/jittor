@@ -64,8 +64,11 @@ def _distributions_available(names):
     return True
 
 
-def _run(python, runtime, case, output, weights=None):
-    command = [python, str(RUNNER), case, str(output), "--runtime", runtime]
+def _run(python, runtime, case, output, weights=None, device="cpu"):
+    command = [
+        python, str(RUNNER), case, str(output),
+        "--runtime", runtime, "--device", device,
+    ]
     if weights is not None:
         command += ["--weights", str(weights)]
     completed = subprocess.run(
@@ -114,6 +117,8 @@ class EcosystemParity(unittest.TestCase):
     forward_tolerance = 2e-3
     backward_tolerance = 1e-2
 
+    device = "cpu"
+
     def _compare(self, case):
         _builder, requirements = _ecosystem_cases.CASES[case]
         if not _distributions_available(requirements):
@@ -124,11 +129,18 @@ class EcosystemParity(unittest.TestCase):
             torch_output = root / "torch.npz"
             jittor_output = root / "jittor.npz"
 
-            torch_report, torch_log = _run(REAL_TORCH_PYTHON, "torch", case, torch_output)
+            torch_report, torch_log = _run(
+                REAL_TORCH_PYTHON, "torch", case, torch_output, device=self.device
+            )
             weights = root / "torch.weights.npz"
             self.assertTrue(weights.exists(), torch_log[-2000:])
             jittor_report, _jittor_log = _run(
-                sys.executable, "jittor", case, jittor_output, weights=weights
+                sys.executable,
+                "jittor",
+                case,
+                jittor_output,
+                weights=weights,
+                device=self.device,
             )
 
             reference = np.load(torch_output)
@@ -164,8 +176,9 @@ class EcosystemParity(unittest.TestCase):
 
             ratio = jittor_report["seconds"] / max(torch_report["seconds"], 1e-9)
             print(
-                "[speed] {}: torch {:.4f}s jittor {:.4f}s ratio {:.2f}x "
+                "[speed/{}] {}: torch {:.4f}s jittor {:.4f}s ratio {:.2f}x "
                 "({} gradients compared)".format(
+                    self.device,
                     case,
                     torch_report["seconds"],
                     jittor_report["seconds"],
@@ -197,6 +210,28 @@ class EcosystemParity(unittest.TestCase):
 
     def test_peft_lora_llama(self):
         self._compare("peft_lora_llama")
+
+
+def _cuda_is_available():
+    """Whether this Jittor build can actually execute on a GPU."""
+    try:
+        import jittor as jt
+    except Exception:
+        return False
+    return bool(jt.has_cuda)
+
+
+@unittest.skipUnless(REAL_TORCH_PYTHON, "REAL_TORCH_PYTHON is not configured")
+@unittest.skipUnless(_torch_shim_is_active(), "this interpreter does not run torch as Jittor")
+@unittest.skipUnless(_cuda_is_available(), "CUDA is unavailable")
+class EcosystemParityCUDA(EcosystemParity):
+    """The same comparison with both runtimes executing on the GPU."""
+
+    device = "cuda"
+    # Accelerator kernels pick different accumulation orders than the CPU
+    # reference implementations these libraries were written against.
+    forward_tolerance = 5e-3
+    backward_tolerance = 2e-2
 
 
 if __name__ == "__main__":

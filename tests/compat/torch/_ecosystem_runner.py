@@ -57,16 +57,48 @@ def _import_torch(runtime):
     return torch
 
 
-def _make_inputs(torch, spec, seed):
+def _select_device(torch, runtime, device):
+    """Put both runtimes on the requested device using each one's own idiom.
+
+    Jittor has no per-tensor device; a single global flag moves the whole graph,
+    so the two runtimes need different code here even though everything else in
+    this file is spelled once.
+    """
+    if device != "cuda":
+        return lambda tensor: tensor
+    if runtime == "jittor":
+        import jittor as jt
+
+        if not jt.has_cuda:
+            raise SystemExit("CUDA is unavailable in this Jittor build")
+        jt.flags.use_cuda = 1
+        return lambda tensor: tensor
+    if not torch.cuda.is_available():
+        raise SystemExit("CUDA is unavailable in this PyTorch build")
+    return lambda tensor: tensor.cuda()
+
+
+def _synchronize(torch, runtime, device):
+    if device != "cuda":
+        return
+    if runtime == "jittor":
+        import jittor as jt
+
+        jt.sync_all(True)
+    else:
+        torch.cuda.synchronize()
+
+
+def _make_inputs(torch, spec, seed, to_device):
     generator = np.random.RandomState(seed)
     tensors = {}
     for name, (dtype, shape, high) in spec.items():
         if dtype == "int64":
             array = generator.randint(0, high, size=shape).astype("int64")
-            tensors[name] = torch.from_numpy(array)
+            tensors[name] = to_device(torch.from_numpy(array))
         else:
             array = generator.randn(*shape).astype("float32")
-            tensor = torch.from_numpy(array)
+            tensor = to_device(torch.from_numpy(array))
             tensor.requires_grad_(True)
             tensors[name] = tensor
     return tensors
@@ -93,14 +125,18 @@ def main():
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--runtime", choices=("torch", "jittor"), default="torch")
+    parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     options = parser.parse_args()
 
     torch = _import_torch(options.runtime)
+    to_device = _select_device(torch, options.runtime, options.device)
 
     torch.manual_seed(options.seed)
     builder, _requirements = _ecosystem_cases.CASES[options.case]
     model, input_spec = builder(torch)
     model.eval()
+    if options.device == "cuda" and options.runtime == "torch":
+        model.cuda()
 
     if options.weights:
         loaded = np.load(options.weights)
@@ -127,14 +163,15 @@ def main():
         else:
             parameter.requires_grad_(True)
 
-    inputs = _make_inputs(torch, input_spec, options.seed + 1)
+    inputs = _make_inputs(torch, input_spec, options.seed + 1, to_device)
     output = _primary_output(model(**inputs))
 
     weights = np.random.RandomState(options.seed + 2)
     loss_weights = weights.randn(*tuple(output.shape)).astype("float32")
-    loss = (output * torch.from_numpy(loss_weights)).sum()
+    loss = (output * to_device(torch.from_numpy(loss_weights))).sum()
     loss.backward()
 
+    _synchronize(torch, options.runtime, options.device)
     arrays = {"__output__": np.asarray(output.detach().cpu().numpy(), dtype="float32")}
     for name, parameter in model.named_parameters():
         grad = getattr(parameter, "grad", None)
@@ -151,18 +188,20 @@ def main():
     # Timing runs after the correctness capture so a lazily built graph is
     # already compiled and the number reflects steady-state execution.
     def one_step():
-        step_inputs = _make_inputs(torch, input_spec, options.seed + 1)
+        step_inputs = _make_inputs(torch, input_spec, options.seed + 1, to_device)
         step_output = _primary_output(model(**step_inputs))
-        step_loss = (step_output * torch.from_numpy(loss_weights)).sum()
+        step_loss = (step_output * to_device(torch.from_numpy(loss_weights))).sum()
         model.zero_grad(set_to_none=False)
         step_loss.backward()
         return float(step_loss.detach().cpu().numpy().reshape(-1)[0])
 
     one_step()
+    _synchronize(torch, options.runtime, options.device)
     durations = []
     for _ in range(max(1, options.repeats)):
         started = time.perf_counter()
         one_step()
+        _synchronize(torch, options.runtime, options.device)
         durations.append(time.perf_counter() - started)
 
     np.savez(options.output, **arrays)
