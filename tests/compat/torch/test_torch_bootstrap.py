@@ -55,6 +55,36 @@ class TestTorchBootstrap(unittest.TestCase):
                 self.assertIn('kernel.cu" ', 'kernel.cu"' + value)
         self.assertNotIn("--use_fast_math", runtime_flags.nvcc_flags)
 
+    def test_preflight_leaves_onednn_enabled(self):
+        """The shim must not switch off Jittor's CPU BLAS/convolution backend.
+
+        ``use_mkl=0`` removes the ``mkl_conv`` and ``mkl_matmul`` relays, so every
+        CPU convolution and matmul falls back to the generic reindex kernel. On
+        this repository's measurements that cost roughly 100x on convolution and
+        20x on matmul, which makes CPU inference under ``import torch`` unusable.
+        """
+        from jittor.compat.shim import preflight
+
+        with tempfile.TemporaryDirectory(dir=_TEST_STATE_ROOT) as directory:
+            environment = {
+                "HOME": directory,
+                "JITTOR_TORCH_SHIM": "1",
+                "JITTOR_TORCH_PROJECT_ROOT": directory,
+                "JITTOR_TORCH_RUNTIME_ROOT": os.path.join(directory, "runtime"),
+            }
+            result = preflight.prepare_import_environment(
+                argv=[sys.argv[0]],
+                environ=environment,
+                force=True,
+                configure_cuda=False,
+            )
+            self.assertTrue(result.active)
+            self.assertNotIn(
+                "use_mkl",
+                environment,
+                "the shim preflight must leave oneDNN selection to Jittor",
+            )
+
     def test_preflight_publishes_cuda_driver_library_paths(self):
         from jittor.compat.shim import preflight
 

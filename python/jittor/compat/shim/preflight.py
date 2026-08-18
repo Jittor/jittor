@@ -300,6 +300,15 @@ def prepare_import_environment(
     env.setdefault("REAL_HOME", real_home)
     env["JITTOR_TORCH_PROJECT_ROOT"] = os.fspath(project)
     env["JITTOR_TORCH_RUNTIME_ROOT"] = os.fspath(runtime)
+    # The optional accelerator externs below stay off: measurements on cuDNN and
+    # cuBLAS show no benefit from cuTT or CUTLASS for the shim's workloads, and
+    # NCCL belongs to an explicitly configured distributed run.
+    #
+    # oneDNN is deliberately NOT in that list. Turning it off removes the
+    # `mkl_conv` and `mkl_matmul` relays, so every CPU convolution falls back to
+    # the generic reindex kernel: a 4x64x32x32 conv went from 1.4ms to 156ms and
+    # a 512x512 matmul from 0.6ms to 11ms. That made ordinary CPU inference under
+    # `import torch` unusable, which is the opposite of what the shim is for.
     for name, value in (
         ("JITTOR_TORCH_SHIM", "1"),
         ("FIX_TORCH_ERROR", "0"),
@@ -307,7 +316,6 @@ def prepare_import_environment(
         ("use_cutt", "0"),
         ("use_cutlass", "0"),
         ("use_nccl", "0"),
-        ("use_mkl", "0"),
     ):
         env.setdefault(name, value)
     for name, subdir in (
