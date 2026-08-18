@@ -8,8 +8,14 @@ import sys
 import pytest
 
 
+#: Whether this session selected whole directories rather than named files.
+SELECTION_IS_BROAD = False
+
+
 def _select_torch_mode_for_test_process():
     """Keep native and Torch compatibility semantics in separate processes."""
+
+    global SELECTION_IS_BROAD
 
     # Oracle tests preload an independent binary PyTorch and intentionally
     # keep Jittor native.  Installing the Jittor Torch shim in that same
@@ -32,7 +38,8 @@ def _select_torch_mode_for_test_process():
             normalized = path.resolve().as_posix()
         selected.append(normalized.rstrip("/"))
     broad_roots = (".", "tests")
-    if not selected or any(path in broad_roots for path in selected):
+    SELECTION_IS_BROAD = not selected or any(path in broad_roots for path in selected)
+    if SELECTION_IS_BROAD:
         # A broad selection runs the native suite. Torch mode is process-global
         # and changes lazy execution, reduction defaults and gradient
         # semantics, so switching the whole tree into it made ordinary native
@@ -179,6 +186,28 @@ def pytest_addoption(parser):
     )
 
 
+def pytest_ignore_collect(collection_path, path, config):
+    """Keep Torch-mode paths out of a native session entirely.
+
+    Marking their tests as skipped is not enough: several of these modules
+    import ``jittor.torch_compat`` at module scope, so a native session fails
+    during collection before any marker is applied. ``tools/run_test_suite.py``
+    runs them in their own session.
+    """
+    if _torch_mode_is_active():
+        return None
+    target = collection_path if collection_path is not None else path
+    if target is None:
+        return None
+    try:
+        relative = Path(str(target)).resolve().relative_to(TEST_ROOT.parent).as_posix()
+    except ValueError:
+        return None
+    if relative.startswith(TORCH_MODE_PATHS):
+        return True
+    return None
+
+
 def pytest_sessionstart(session):
     found = [name for name in _LEGACY_SELECTION if name in os.environ]
     if found:
@@ -190,25 +219,27 @@ def pytest_sessionstart(session):
 
 def pytest_collection_modifyitems(config, items):
     network_enabled = _network_is_enabled() or config.getoption("--network")
-    torch_mode = _torch_mode_is_active()
-    torch_only = tuple(path[len("tests/"):] for path in TORCH_MODE_PATHS)
     for item in items:
         try:
             relative = Path(str(item.fspath)).resolve().relative_to(TEST_ROOT).parts
         except ValueError:
             continue
-        if not torch_mode and "/".join(relative).startswith(torch_only):
-            item.add_marker(
-                pytest.mark.skip(
-                    reason="needs the Torch compatibility mode; run this path in "
-                    "its own session or use tools/run_test_suite.py"
-                )
-            )
         parts = set(relative)
         for marker in _backend_markers(item, relative):
             item.add_marker(getattr(pytest.mark, marker))
         if "manual" in parts or "system" in parts:
             item.add_marker(pytest.mark.manual)
+        if SELECTION_IS_BROAD and item.get_closest_marker("manual") is not None:
+            # The marker is documented as "must be selected explicitly". Some of
+            # these probes drive Jupyter kernels or spawn their own processes and
+            # do not survive being run after a thousand other tests have already
+            # used the runtime, so a whole-tree run deselects them and a named
+            # path still runs them.
+            item.add_marker(
+                pytest.mark.skip(
+                    reason="manual probe; select its path explicitly to run it"
+                )
+            )
         if item.get_closest_marker("network") is not None and not network_enabled:
             item.add_marker(
                 pytest.mark.skip(
