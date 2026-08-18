@@ -1,0 +1,183 @@
+"""Execute one downstream-library case in whichever runtime owns ``torch``.
+
+Invoked as a subprocess by ``test_ecosystem_parity.py``::
+
+    python _ecosystem_runner.py <case> <output.npz> [--weights weights.npz]
+
+Without ``--weights`` the runner builds the model, saves its state dict next to
+the result and reports the reference numbers.  With ``--weights`` it loads that
+exact state before running, so the two runtimes differ only in operator
+semantics.  The measured wall time is reported too, because the 2.0 goal asks
+for parity *and* for no speed regression.
+"""
+
+import argparse
+import json
+import os
+import sys
+import time
+
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("HF_DEACTIVATE_ASYNC_LOAD", "1")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import numpy as np  # noqa: E402
+
+import _ecosystem_cases  # noqa: E402
+
+
+def _import_torch(runtime):
+    """Return the ``torch`` module for the requested runtime.
+
+    Jittor claims the ``torch`` namespace from inside its own import, and it
+    refuses to install over a Torch module graph that already exists.  So the
+    shim runtime has to import Jittor *first*; importing the deployed ``torch``
+    package first would leave a half-initialized module for Jittor to reject.
+    """
+    if runtime == "jittor":
+        os.environ["JITTOR_TORCH_SHIM"] = "1"
+        import jittor  # noqa: F401
+
+        import torch
+
+        if getattr(torch, "__name__", None) != "jittor" and not hasattr(
+            torch, "_torch_compat_install_context"
+        ):
+            raise SystemExit("torch did not resolve to the Jittor shim")
+        return torch
+
+    os.environ.pop("JITTOR_TORCH_SHIM", None)
+    import torch
+
+    if not hasattr(torch, "_C") or hasattr(torch, "_torch_compat_install_context"):
+        raise SystemExit("torch did not resolve to an independent PyTorch")
+    return torch
+
+
+def _make_inputs(torch, spec, seed):
+    generator = np.random.RandomState(seed)
+    tensors = {}
+    for name, (dtype, shape, high) in spec.items():
+        if dtype == "int64":
+            array = generator.randint(0, high, size=shape).astype("int64")
+            tensors[name] = torch.from_numpy(array)
+        else:
+            array = generator.randn(*shape).astype("float32")
+            tensor = torch.from_numpy(array)
+            tensor.requires_grad_(True)
+            tensors[name] = tensor
+    return tensors
+
+
+def _primary_output(result):
+    """Reduce a library-specific output object to one differentiable tensor."""
+    for attribute in ("logits", "sample", "last_hidden_state", "prediction_logits"):
+        value = getattr(result, attribute, None)
+        if value is not None:
+            return value
+    if isinstance(result, (tuple, list)):
+        return result[0]
+    if isinstance(result, dict):
+        return next(iter(result.values()))
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("case")
+    parser.add_argument("output")
+    parser.add_argument("--weights", default=None)
+    parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--runtime", choices=("torch", "jittor"), default="torch")
+    options = parser.parse_args()
+
+    torch = _import_torch(options.runtime)
+
+    torch.manual_seed(options.seed)
+    builder, _requirements = _ecosystem_cases.CASES[options.case]
+    model, input_spec = builder(torch)
+    model.eval()
+
+    if options.weights:
+        loaded = np.load(options.weights)
+        state = {key: torch.from_numpy(loaded[key]) for key in loaded.files}
+        # ``strict=False`` would hide a renamed parameter, which is exactly the
+        # kind of divergence this comparison exists to catch.
+        model.load_state_dict(state, strict=True)
+    else:
+        weights_path = os.path.splitext(options.output)[0] + ".weights.npz"
+        np.savez(
+            weights_path,
+            **{
+                key: value.detach().cpu().numpy()
+                for key, value in model.state_dict().items()
+            },
+        )
+
+    # ``eval()`` in Jittor also stops gradients on every parameter; PyTorch's
+    # does not.  Re-enable them so both runtimes differentiate the same graph.
+    for parameter in model.parameters():
+        start_grad = getattr(parameter, "start_grad", None)
+        if callable(start_grad):
+            start_grad()
+        else:
+            parameter.requires_grad_(True)
+
+    inputs = _make_inputs(torch, input_spec, options.seed + 1)
+    output = _primary_output(model(**inputs))
+
+    weights = np.random.RandomState(options.seed + 2)
+    loss_weights = weights.randn(*tuple(output.shape)).astype("float32")
+    loss = (output * torch.from_numpy(loss_weights)).sum()
+    loss.backward()
+
+    arrays = {"__output__": np.asarray(output.detach().cpu().numpy(), dtype="float32")}
+    for name, parameter in model.named_parameters():
+        grad = getattr(parameter, "grad", None)
+        if grad is None:
+            continue
+        arrays["grad::" + name] = np.asarray(grad.detach().cpu().numpy(), dtype="float32")
+    for name, tensor in inputs.items():
+        grad = getattr(tensor, "grad", None)
+        if grad is not None:
+            arrays["ingrad::" + name] = np.asarray(
+                grad.detach().cpu().numpy(), dtype="float32"
+            )
+
+    # Timing runs after the correctness capture so a lazily built graph is
+    # already compiled and the number reflects steady-state execution.
+    def one_step():
+        step_inputs = _make_inputs(torch, input_spec, options.seed + 1)
+        step_output = _primary_output(model(**step_inputs))
+        step_loss = (step_output * torch.from_numpy(loss_weights)).sum()
+        model.zero_grad(set_to_none=False)
+        step_loss.backward()
+        return float(step_loss.detach().cpu().numpy().reshape(-1)[0])
+
+    one_step()
+    durations = []
+    for _ in range(max(1, options.repeats)):
+        started = time.perf_counter()
+        one_step()
+        durations.append(time.perf_counter() - started)
+
+    np.savez(options.output, **arrays)
+    print(
+        "ECOSYSTEM_RESULT "
+        + json.dumps(
+            {
+                "case": options.case,
+                "tensors": len(arrays),
+                "seconds": min(durations),
+                "loss": float(loss.detach().cpu().numpy().reshape(-1)[0]),
+            }
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()
