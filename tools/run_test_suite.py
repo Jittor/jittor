@@ -54,6 +54,13 @@ def _session_environment(session):
     environment["JITTOR_HOME"] = str(state / "home")
     environment["TMPDIR"] = str(state / "tmp")
     environment["JITTOR_TORCH_SHIM"] = "1" if session == "torch" else "0"
+    # Jittor's segfault handler shells out to gdb for a backtrace. That is
+    # useful interactively and ruinous in a suite: gdb ptrace-stops the process
+    # first, and if gdb itself dies -- on this distribution it crashes into the
+    # apport hook -- the process is left stopped forever, so one crashing test
+    # hangs the whole session instead of failing it. A crash here should be a
+    # reported failure; run the test on its own to get a backtrace.
+    environment.setdefault("gdb_path", "")
     return environment
 
 
