@@ -80,6 +80,10 @@ Torch 模式。`tools/run_test_suite.py` 分两个会话跑完整套件并汇总
 | 下载外部数据集的用例无标记 | 主机不可达时阻塞到 900 秒超时而非快速跳过 | `network` 标记 + `--network` 开关 |
 | `manual` 标记无人消费 | notebook 冒烟测试在整轮第 1100+ 条时把进程打死 | 整树运行跳过、显式路径仍运行 |
 | 冷启动把 `jit_utils_core` 加载成两份 | 该库里定义的每个 flag 和整个日志捕获缓冲区各有两份，`log_capture_scope` 冷缓存下恒返回空 | `tests/compiler/test_cold_start_runtime.py` |
+| `cutt_test` 从主机端给显存指针赋值 | cuda_managed_allocator 默认关闭，必然段错误，整轮原生会话在第 50 条左右被打死 | `tests/backends/cuda/test_cutt.py` 1 passed |
+| relay 单测用 `get_allocator()` 却按主机指针读写 | 同上，有显卡时写进显存；崩溃后 gdb 崩进 apport，进程停在 ptrace_stop 永不返回 | `jt.tests.fused_op_relay_matmul()` 通过 |
+| conv tuner 把 cuDNN 不支持的 filter 布局 relay 过去 | 生成引用未定义标识符的 kernel，运行期表现为通过空函数指针调用 | `tests/backends/cpu/test_mkl_conv_op.py` 不再崩溃 |
+| 套件运行时 gdb 回溯无上限 | 一条崩溃用例把整轮会话挂死而不是记为失败 | `tools/run_test_suite.py` 关闭 gdb_path |
 | OpenMP 按逻辑 CPU 起线程 | SMT 机器上每核超额订阅一倍，产生与规模无关的固定开销：同一次批量调用 64 线程 437us、128 线程 5955us | `tests/compiler/test_openmp_threads.py` |
 | CPU 批量矩阵乘没有 oneDNN 通路 | Transformer 每层两次注意力乘法走通用内核，37 GFLOPS 对 oneDNN 的 1800 GFLOPS；BERT CPU 单步 11.4s | `tests/ops/test_mkl_batched_matmul.py` |
 | 对拍框架的 CPU 分支不关 `use_cuda` | Jittor 跑显卡对 PyTorch 跑 CPU，CPU 那一半从未真正测到，且把 1.8x 慢报成 20x 快 | `tests/compat/torch/test_ecosystem_device_selection.py` |
