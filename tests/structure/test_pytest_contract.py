@@ -264,6 +264,42 @@ def test_optimizer_roundtrip_helper_is_not_collected_as_a_test():
     assert "_run_optimizer_roundtrip" in module_tests
 
 
+def test_private_test_method_holders_are_plain_mixins():
+    """A ``_Base`` with test methods must not inherit from a ``TestCase``.
+
+    pytest collects every ``unittest.TestCase`` subclass regardless of a
+    leading underscore, so an "abstract" ``_Base(SomeTestCase)`` runs its test
+    methods once more, without whatever gates or ``device`` attributes the
+    concrete subclasses add. The safe shape is a plain mixin: the private class
+    holds only the methods, and each concrete class inherits from both the
+    mixin and the ``TestCase``.
+    """
+    offenders = []
+    for path in _test_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef) or not node.name.startswith("_"):
+                continue
+            has_tests = any(
+                isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and member.name.startswith("test")
+                for member in node.body
+            )
+            public_bases = [
+                name
+                for name in (_dotted_name(base) for base in node.bases)
+                if name.split(".")[-1] not in ("object",)
+                and not name.split(".")[-1].startswith("_")
+            ]
+            if has_tests and public_bases:
+                offenders.append(
+                    "{}::{} inherits {}".format(
+                        path.relative_to(REPO_ROOT).as_posix(), node.name, public_bases
+                    )
+                )
+    assert offenders == []
+
+
 #: Module-level ``test_*`` functions whose parameters are genuine pytest
 #: fixtures rather than caller-supplied arguments.
 _PYTEST_FIXTURE_PARAMETERS = frozenset(

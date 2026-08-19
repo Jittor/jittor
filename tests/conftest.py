@@ -186,17 +186,22 @@ def pytest_addoption(parser):
     )
 
 
-def pytest_ignore_collect(collection_path, path, config):
+def pytest_ignore_collect(collection_path, config):
     """Keep Torch-mode paths out of a native session entirely.
 
     Marking their tests as skipped is not enough: several of these modules
     import ``jittor.torch_compat`` at module scope, so a native session fails
     during collection before any marker is applied. ``tools/run_test_suite.py``
     runs them in their own session.
+
+    pluggy matches these parameter names against the hookspec and rejects any
+    it does not recognise, so the signature has to name only arguments every
+    supported pytest offers: ``collection_path`` arrived in 7.0 and the legacy
+    ``path`` was removed in 9.0.
     """
     if _torch_mode_is_active():
         return None
-    target = collection_path if collection_path is not None else path
+    target = collection_path
     if target is None:
         return None
     try:
