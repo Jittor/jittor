@@ -37,8 +37,14 @@ SPEED_CASES = (
 )
 
 
-class _Speed(EcosystemComparison):
-    """Reuse the parity harness; only the model size and tolerances differ."""
+class _Speed:
+    """Test methods shared by the CPU and CUDA measurement classes.
+
+    A plain mixin, not a ``TestCase``: pytest collects every ``TestCase``
+    subclass regardless of a leading underscore, and an abstract base with
+    real test methods would run all six large models ungated in the middle
+    of the ordinary suite.
+    """
 
     # A 12-layer model accumulates over many more operations than the two-layer
     # parity cases, so the acceptable band is wider. Correctness is still owned
@@ -71,7 +77,7 @@ class _Speed(EcosystemComparison):
     os.environ.get("JITTOR_ECOSYSTEM_LARGE", "").strip() not in ("", "0"),
     "set JITTOR_ECOSYSTEM_LARGE=1 to run the realistic-size measurement",
 )
-class EcosystemSpeedCPU(_Speed):
+class EcosystemSpeedCPU(_Speed, EcosystemComparison):
     device = "cpu"
 
 
@@ -82,7 +88,7 @@ class EcosystemSpeedCPU(_Speed):
     os.environ.get("JITTOR_ECOSYSTEM_LARGE", "").strip() not in ("", "0"),
     "set JITTOR_ECOSYSTEM_LARGE=1 to run the realistic-size measurement",
 )
-class EcosystemSpeedCUDA(_Speed):
+class EcosystemSpeedCUDA(_Speed, EcosystemComparison):
     device = "cuda"
 
 
