@@ -9,6 +9,7 @@
 
 #ifdef JIT
 #include "cutt.h"
+#include "helper_cuda.h"
 #endif
 
 namespace jittor {
@@ -33,8 +34,11 @@ void CuttTestOp::jit_run() {
     vector<char*> v(args.size());
     for (uint i=0; i<args.size(); i++)
         v[i] = &args[i][0];
-    output->ptr<T>()[0] = 123;
-
+    // The output lives in device memory: cuda_managed_allocator is off by
+    // default, so assigning through the pointer from host code faults.
+    T value = 123;
+    checkCudaErrors(cudaMemcpy(output->ptr<T>(), &value, sizeof(T),
+                               cudaMemcpyHostToDevice));
 }
 #endif
 #endif // JIT
