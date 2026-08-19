@@ -24,6 +24,10 @@ PyTorch 2.12.1+cu126 与 torchvision 0.27.1+cu126），4x RTX 4090，CUDA 12.2/c
 
 容差：CPU 前向 2e-4 / 反向 2e-3，CUDA 前向 1e-3 / 反向 6e-3。
 
+CPU 那一列同样修正过：`TestNetworkParityCPU` 原先不设 `use_cuda`，在有显卡的机器上
+跑的是 GPU。现在设备由基类的 `use_cuda` 属性显式给出，两个子类各占一个值。上表是
+修正后在 `jt312b`（真实 PyTorch 与本仓库 Jittor 同进程）上重跑的结果，8 条全过。
+
 ### 下游库数值对拍
 
 新增 `tests/compat/torch/test_ecosystem_parity.py`。真实 PyTorch 与 Jittor 都要占用
@@ -35,6 +39,11 @@ PyTorch 侧生成权重与参考值，Jittor 侧加载同一份权重复算。�
 CPU 与 CUDA 各 12 个用例全部通过：transformers 的 gpt2/llama/bert/vit/t5/whisper、
 diffusers 的 UNet2DModel 与 DiTTransformer2DModel、peft LoRA、ms-swift LoRA、
 mmcv `ConvModule`、mmengine `BaseModule`。
+
+两侧运行完后都把自己实际使用的设备回报给对拍框架断言。Jittor 在有 GPU 的机器上
+默认 `use_cuda=1`，对拍框架的 CPU 分支原先只是没去动这个标志，于是"CPU 用例"实际
+上是 Jittor 跑显卡对 PyTorch 跑 CPU——**CPU 这一半此前从未真正测到**。修正后重跑，
+24 条仍然全部通过，CPU 正确性这才算有依据。
 
 误差度量按整次比较的梯度量级设下限。注意力 key bias 的梯度在数学上恒为零，两侧都只
 有 1e-8 量级的浮点噪声，按该张量自身最大值归一化会把它放大成 1.96e-2 的假失败。
@@ -71,6 +80,10 @@ Torch 模式。`tools/run_test_suite.py` 分两个会话跑完整套件并汇总
 | 下载外部数据集的用例无标记 | 主机不可达时阻塞到 900 秒超时而非快速跳过 | `network` 标记 + `--network` 开关 |
 | `manual` 标记无人消费 | notebook 冒烟测试在整轮第 1100+ 条时把进程打死 | 整树运行跳过、显式路径仍运行 |
 | 冷启动把 `jit_utils_core` 加载成两份 | 该库里定义的每个 flag 和整个日志捕获缓冲区各有两份，`log_capture_scope` 冷缓存下恒返回空 | `tests/compiler/test_cold_start_runtime.py` |
+| CPU 批量矩阵乘没有 oneDNN 通路 | Transformer 每层两次注意力乘法走通用内核，37 GFLOPS 对 oneDNN 的 1800 GFLOPS；BERT CPU 单步 11.4s | `tests/ops/test_mkl_batched_matmul.py` |
+| 对拍框架的 CPU 分支不关 `use_cuda` | Jittor 跑显卡对 PyTorch 跑 CPU，CPU 那一半从未真正测到，且把 1.8x 慢报成 20x 快 | `tests/compat/torch/test_ecosystem_device_selection.py` |
+| 计时步只同步不取值 | 惰性图里没人索要的梯度不求值，切片与求和还会被融合裁剪，BERT 报 0.049s 而非 0.141s | 同上，运行侧回报设备并完整读回梯度 |
+| `pytest_ignore_collect` 声明了 pytest 9 已移除的 `path` | pluggy 拒绝整个 conftest，3.12 侧 oracle 会话收集阶段即失败 | `tests/models/test_network_parity.py` 在 jt312b 上 8 passed |
 
 ### 冷启动重复加载运行时库
 
@@ -102,11 +115,63 @@ Torch 模式。`tools/run_test_suite.py` 分两个会话跑完整套件并汇总
 
 ## 速度
 
-CPU（`use_mkl` 修正后，空载测量）：4x64x32x32 卷积 Jittor 1.54ms 对 PyTorch 1.06ms
-（1.45x），512x512 矩阵乘 0.70ms 对 0.54ms（1.29x）。
+### 测量方法本身的两个错误
 
-CUDA 下游库单步（小模型，启动开销主导）：peft LoRA 0.62x、llama 0.63x、ViT 0.78x
-快于 PyTorch；gpt2 1.53x、diffusers UNet2D 1.46x、bert 1.94x 慢于 PyTorch。
+先前这一节的所有 CPU 数字都不成立，原因有两个，两个都会把 Jittor 报得更快：
+
+1. **CPU 用例跑在 GPU 上。** Jittor 在有显卡的机器上默认 `use_cuda=1`，两个对拍
+   框架的 CPU 分支都只是没去动这个标志。BERT-base 单步因此报成 0.06s，真实 CPU
+   数字是 11.4s。
+2. **计时步没有真正算完。** Jittor 是惰性的，GPU 同步之后仍有没人索要的梯度未求
+   值；而切片或求和会被融合进生产它的 kernel，只算被读到的那部分——`grad[0]` 与
+   `grad.sum()` 都测不出真实代价。计时步现在完整读回每个梯度，PyTorch 在
+   `backward` 返回时本来就已经算完，两侧拷贝的字节数相同。
+
+现在运行侧会把实际使用的设备回报给对拍框架断言。
+
+### 真实尺寸单步（空载，CPU 与 CUDA 各测一轮）
+
+| 用例 | CPU: PyTorch | CPU: Jittor | CUDA: PyTorch | CUDA: Jittor |
+| --- | ---: | ---: | ---: | ---: |
+| large_convnet | 0.587s | 1.066s (1.82x) | 0.030s | 0.043s (1.43x) |
+| large_transformers_bert | 0.824s | 11.43s (13.9x) | 0.150s | 0.145s (0.97x) |
+| large_transformers_gpt2 | 1.609s | 21.94s (13.6x) | 0.197s | 0.297s (1.51x) |
+| large_transformers_llama | 1.329s | 19.32s (14.5x) | 0.274s | 0.307s (1.12x) |
+| large_transformers_vit | 0.678s | 7.016s (10.3x) | 0.090s | 0.145s (1.61x) |
+| large_diffusers_unet2d | 0.483s | 4.264s (8.8x) | 0.062s | 0.137s (2.21x) |
+
+CUDA 上 0.97x–2.21x。CPU 上差距一度是 8.8x–14.5x，原因见下。
+
+### CPU 批量矩阵乘此前没有 oneDNN 通路
+
+`MatmulTuner` 只识别二维的 broadcast+multiply+reduce 形式（源码里写死
+`bcop1->shape.size() != 3` 且两个操作数都必须是二维），`nn.matmul` 的批量分支又只在
+`jt.flags.use_cuda` 为真时才走 cuBLAS。于是 CPU 上每一次批量矩阵乘都落到通用
+reindex 内核，而 Transformer 每层的两次注意力乘法都在这条路上。
+
+按算子剖分 BERT 单步：DIM=5 的 broadcast 融合内核合计约 7.5s，占 10.6s 的七成；
+`mkl_matmul`（即各个 Linear）只有约 1.2s。
+
+单看注意力那一步的形状（8x12x256x64 @ 8x12x64x256）：
+
+| 实现 | 吞吐 |
+| --- | ---: |
+| 通用 reindex 内核 | 37 GFLOPS |
+| 新增 `mkl_batched_matmul` | 1800 GFLOPS |
+| PyTorch | 2490 GFLOPS |
+
+新增算子含反向，前向与两个梯度都与通用路径逐元素比对过（含转置组合与批维广播），
+见 `tests/ops/test_mkl_batched_matmul.py`。修复后的 CPU 单步：
+
+| 用例 | 修复前 | 修复后 | 对 PyTorch |
+| --- | ---: | ---: | ---: |
+| large_transformers_bert | 11.43s | 4.18s | 5.1x |
+| large_transformers_llama | 19.32s | 5.73s | 4.3x |
+| large_transformers_vit | 7.02s | 2.63s | 3.9x |
+
+再剖分一次，DIM=5 的热点已经消失（`mkl_batched_matmul` 只剩 80ms），剩下的时间分散
+在 softmax、layernorm、gelu 这些访存受限的逐元素融合内核上，没有单一热点，需要的是
+融合质量与带宽层面的工作，不是再补一个 relay。
 
 `JITTOR_ECOSYSTEM_SPEED_RATIO` 可以把比值变成断言；默认只打印，避免共享机器上的
 测量抖动造成假失败。
@@ -117,7 +182,8 @@ CUDA 下游库单步（小模型，启动开销主导）：peft LoRA 0.62x、lla
   installer 幂等性断言，需要查清是哪个前置用例改动了 `torch.*` 模块图。已确认把
   嫌疑最大的 bootstrap、install context、compat mechanisms 与这两条放在一起跑
   （88 passed）并不能复现，需要更大范围的二分。
-- 下游库速度：此前 CUDA 上 bert 1.94x、gpt2 1.53x、diffusers 1.46x 的结论建立在
-  batch 2、hidden 64 的模型上，那个尺寸下一步几乎全是 Python 分发和 kernel launch。
-  已新增 `tests/compat/torch/test_ecosystem_speed.py` 与六组真实尺寸配置，用
-  `JITTOR_ECOSYSTEM_LARGE=1` 开启；需要在空载机器上取一轮数据替换上面的结论。
+- CPU 上仍比 PyTorch 慢 3.9x–5.1x（Transformer 类）。批量矩阵乘修好之后不再有单一
+  热点，时间分散在逐元素融合内核上，属于融合质量与访存带宽的问题。
+- `tests/ops/test_matmul.py` 在 CUDA 构建下 6 条失败、在 CPU-only 构建下全过，起因
+  是 CUDA 构建几乎捕获不到算子日志，见 KI-LOG-001。与本轮改动无关（把改动全部撤回
+  后失败集合完全相同）。
