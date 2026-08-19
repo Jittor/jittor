@@ -79,13 +79,14 @@ def _select_device(torch, runtime, device):
 
 
 def _synchronize(torch, runtime, device):
-    if device != "cuda":
-        return
+    # Jittor is lazy on every device: without a sync the timed step only pays
+    # for the values it fetches, and the pending backward graph is discarded by
+    # the next ``zero_grad``. PyTorch only needs the CUDA queue drained.
     if runtime == "jittor":
         import jittor as jt
 
-        jt.sync_all(True)
-    else:
+        jt.sync_all(device == "cuda")
+    elif device == "cuda":
         torch.cuda.synchronize()
 
 
