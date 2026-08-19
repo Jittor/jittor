@@ -91,7 +91,11 @@ JIT_TEST(fused_op_relay_matmul) {
     loop_options["relay0"] = 1;
     OpCompiler oc(&fop);
 
-    auto allocator = get_allocator();
+    // This test fills the inputs and checks the outputs through host pointers,
+    // so the storage has to be host memory. get_allocator() follows use_cuda,
+    // which is on by default whenever a GPU is present, and the assignments
+    // below would then write into device memory and fault.
+    auto allocator = cpu_allocator;
     for (auto& v : fop.vars)
         if (v.type!=1) v.var->alloc(allocator);
     auto entry = oc.compile("«OP:_fused_op_relay_matmul", oc.src);
