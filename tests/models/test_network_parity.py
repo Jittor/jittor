@@ -77,7 +77,16 @@ class NetworkParity(unittest.TestCase):
     forward_tolerance = 2e-4
     backward_tolerance = 2e-3
 
+    #: Jittor enables CUDA by default whenever a GPU is present, so the CPU
+    #: subclass has to turn it off rather than leave the flag alone -- otherwise
+    #: it compares Jittor on the accelerator against PyTorch on the CPU.
+    use_cuda = 0
+
     def _run(self, name):
+        with jt.flag_scope(use_cuda=self.use_cuda):
+            self._compare(name)
+
+    def _compare(self, name):
         jittor_model, torch_model, inputs = _parity_networks.build(name)
         torch_model.eval()
         _load_torch_weights(jittor_model, torch_model)
@@ -199,9 +208,7 @@ class TestNetworkParityCUDA(NetworkParity):
     forward_tolerance = 1e-3
     backward_tolerance = 6e-3
 
-    def _run(self, name):
-        with jt.flag_scope(use_cuda=1):
-            super()._run(name)
+    use_cuda = 1
 
     def test_resnet18(self):
         self._run("resnet18")

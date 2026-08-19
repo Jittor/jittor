@@ -64,18 +64,40 @@ def _select_device(torch, runtime, device):
     so the two runtimes need different code here even though everything else in
     this file is spelled once.
     """
-    if device != "cuda":
-        return lambda tensor: tensor
     if runtime == "jittor":
         import jittor as jt
 
-        if not jt.has_cuda:
-            raise SystemExit("CUDA is unavailable in this Jittor build")
-        jt.flags.use_cuda = 1
+        if device == "cuda":
+            if not jt.has_cuda:
+                raise SystemExit("CUDA is unavailable in this Jittor build")
+            jt.flags.use_cuda = 1
+        else:
+            # Jittor turns CUDA on by default whenever a GPU is present, so the
+            # CPU run has to turn it off explicitly. Leaving it alone measures
+            # Jittor on the accelerator against PyTorch on the CPU, which looks
+            # like a large speedup and proves nothing about either.
+            jt.flags.use_cuda = 0
         return lambda tensor: tensor
-    if not torch.cuda.is_available():
-        raise SystemExit("CUDA is unavailable in this PyTorch build")
-    return lambda tensor: tensor.cuda()
+    if device == "cuda":
+        if not torch.cuda.is_available():
+            raise SystemExit("CUDA is unavailable in this PyTorch build")
+        return lambda tensor: tensor.cuda()
+    return lambda tensor: tensor
+
+
+def _device_in_use(torch, runtime, device):
+    """Where the work actually ran, read back from the runtime itself.
+
+    Reported alongside the timings so the caller can assert it instead of
+    trusting that requesting a device was enough.
+    """
+    if runtime == "jittor":
+        import jittor as jt
+
+        return "cuda" if jt.flags.use_cuda else "cpu"
+    if device == "cuda":
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    return "cpu"
 
 
 def _synchronize(torch, runtime, device):
@@ -216,6 +238,19 @@ def main():
         step_loss = (step_output * to_device(torch.from_numpy(loss_weights))).sum()
         model.zero_grad(set_to_none=False)
         step_loss.backward()
+        # Read every gradient back. Jittor is lazy and a GPU sync alone does not
+        # evaluate gradients nobody asked for -- on BERT-base that is 0.049s of
+        # bookkeeping against 0.141s of real work -- so the timed step would
+        # otherwise skip what PyTorch has necessarily finished by this line.
+        # It has to be the whole tensor: Jittor fuses a reduction or a slice
+        # into the producing kernel and then computes only the part that is
+        # read, so ``grad[0]`` or ``grad.sum()`` still measures almost nothing.
+        # PyTorch materialises its gradients during ``backward`` regardless, and
+        # both runtimes copy the same bytes here, so the comparison stays fair.
+        for parameter in model.parameters():
+            grad = getattr(parameter, "grad", None)
+            if grad is not None:
+                grad.detach().cpu().numpy()
         return float(step_loss.detach().cpu().numpy().reshape(-1)[0])
 
     one_step()
@@ -236,6 +271,7 @@ def main():
                 "tensors": len(arrays),
                 "seconds": min(durations),
                 "loss": float(loss.detach().cpu().numpy().reshape(-1)[0]),
+                "device": _device_in_use(torch, options.runtime, options.device),
             }
         )
     )

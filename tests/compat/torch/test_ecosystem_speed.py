@@ -19,7 +19,7 @@ into a gate.
 import os
 import unittest
 
-from test_ecosystem_parity import (
+from _ecosystem_harness import (
     REAL_TORCH_PYTHON,
     EcosystemComparison,
     _cuda_is_available,
