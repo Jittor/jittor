@@ -80,6 +80,7 @@ Torch 模式。`tools/run_test_suite.py` 分两个会话跑完整套件并汇总
 | 下载外部数据集的用例无标记 | 主机不可达时阻塞到 900 秒超时而非快速跳过 | `network` 标记 + `--network` 开关 |
 | `manual` 标记无人消费 | notebook 冒烟测试在整轮第 1100+ 条时把进程打死 | 整树运行跳过、显式路径仍运行 |
 | 冷启动把 `jit_utils_core` 加载成两份 | 该库里定义的每个 flag 和整个日志捕获缓冲区各有两份，`log_capture_scope` 冷缓存下恒返回空 | `tests/compiler/test_cold_start_runtime.py` |
+| OpenMP 按逻辑 CPU 起线程 | SMT 机器上每核超额订阅一倍，产生与规模无关的固定开销：同一次批量调用 64 线程 437us、128 线程 5955us | `tests/compiler/test_openmp_threads.py` |
 | CPU 批量矩阵乘没有 oneDNN 通路 | Transformer 每层两次注意力乘法走通用内核，37 GFLOPS 对 oneDNN 的 1800 GFLOPS；BERT CPU 单步 11.4s | `tests/ops/test_mkl_batched_matmul.py` |
 | 对拍框架的 CPU 分支不关 `use_cuda` | Jittor 跑显卡对 PyTorch 跑 CPU，CPU 那一半从未真正测到，且把 1.8x 慢报成 20x 快 | `tests/compat/torch/test_ecosystem_device_selection.py` |
 | 计时步只同步不取值 | 惰性图里没人索要的梯度不求值，切片与求和还会被融合裁剪，BERT 报 0.049s 而非 0.141s | 同上，运行侧回报设备并完整读回梯度 |
@@ -129,49 +130,48 @@ Torch 模式。`tools/run_test_suite.py` 分两个会话跑完整套件并汇总
 
 现在运行侧会把实际使用的设备回报给对拍框架断言。
 
-### 真实尺寸单步（空载，CPU 与 CUDA 各测一轮）
+### CPU 上的两个性能缺陷
 
-| 用例 | CPU: PyTorch | CPU: Jittor | CUDA: PyTorch | CUDA: Jittor |
-| --- | ---: | ---: | ---: | ---: |
-| large_convnet | 0.587s | 1.066s (1.82x) | 0.030s | 0.043s (1.43x) |
-| large_transformers_bert | 0.824s | 11.43s (13.9x) | 0.150s | 0.145s (0.97x) |
-| large_transformers_gpt2 | 1.609s | 21.94s (13.6x) | 0.197s | 0.297s (1.51x) |
-| large_transformers_llama | 1.329s | 19.32s (14.5x) | 0.274s | 0.307s (1.12x) |
-| large_transformers_vit | 0.678s | 7.016s (10.3x) | 0.090s | 0.145s (1.61x) |
-| large_diffusers_unet2d | 0.483s | 4.264s (8.8x) | 0.062s | 0.137s (2.21x) |
+**批量矩阵乘没有 oneDNN 通路。** `MatmulTuner` 只识别二维的
+broadcast+multiply+reduce 形式（源码里写死 `bcop1->shape.size() != 3` 且两个操作数
+都必须是二维），`nn.matmul` 的批量分支又只在 `jt.flags.use_cuda` 为真时才走 cuBLAS。
+于是 CPU 上每一次批量矩阵乘都落到通用 reindex 内核，而 Transformer 每层的两次注意力
+乘法都在这条路上。按算子剖分 BERT 单步：DIM=5 的 broadcast 融合内核合计约 7.5s，占
+10.6s 的七成；`mkl_matmul`（各个 Linear）只有约 1.2s。新增 `mkl_batched_matmul`
+（含反向）后接上该分支。
 
-CUDA 上 0.97x–2.21x。CPU 上差距一度是 8.8x–14.5x，原因见下。
+**OpenMP 按逻辑 CPU 起线程。** OpenMP 自己的默认是每个逻辑 CPU 一个线程，SMT 机器上
+等于把每个核心超额订阅一倍。代价不是缓慢下降而是断崖——同一次批量调用 64 线程
+437us、128 线程 5955us，与问题规模无关的固定开销。PyTorch 默认取物理核心数，Jittor
+此前不设置。改为默认物理核心数后（显式 `OMP_NUM_THREADS` 一律优先）：
 
-### CPU 批量矩阵乘此前没有 oneDNN 通路
+| 形状 | 修复前 | 修复后 |
+| --- | ---: | ---: |
+| 2048x768 @ 768x768 | 406 GFLOPS | 1841 GFLOPS |
+| 96x256x64 @ 96x64x256 批量 | 5955us | 380us |
 
-`MatmulTuner` 只识别二维的 broadcast+multiply+reduce 形式（源码里写死
-`bcop1->shape.size() != 3` 且两个操作数都必须是二维），`nn.matmul` 的批量分支又只在
-`jt.flags.use_cuda` 为真时才走 cuBLAS。于是 CPU 上每一次批量矩阵乘都落到通用
-reindex 内核，而 Transformer 每层的两次注意力乘法都在这条路上。
+注意力形状（8x12x256x64 @ 8x12x64x256）上三种实现的吞吐：通用 reindex 内核
+37 GFLOPS、`mkl_batched_matmul` 1800 GFLOPS、PyTorch 2490 GFLOPS。
 
-按算子剖分 BERT 单步：DIM=5 的 broadcast 融合内核合计约 7.5s，占 10.6s 的七成；
-`mkl_matmul`（即各个 Linear）只有约 1.2s。
+新算子的前向与两个梯度都与通用路径逐元素比对过（含四种转置组合与批维广播），见
+`tests/ops/test_mkl_batched_matmul.py`；线程默认值见
+`tests/compiler/test_openmp_threads.py`。两项修复之后 24 条下游库对拍仍然全过。
 
-单看注意力那一步的形状（8x12x256x64 @ 8x12x64x256）：
+### 真实尺寸单步（空载，两项修复之后）
 
-| 实现 | 吞吐 |
-| --- | ---: |
-| 通用 reindex 内核 | 37 GFLOPS |
-| 新增 `mkl_batched_matmul` | 1800 GFLOPS |
-| PyTorch | 2490 GFLOPS |
+| 用例 | CPU: PyTorch | CPU: Jittor | 修复前 | CUDA: PyTorch | CUDA: Jittor |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| large_convnet | 0.750s | 1.001s (1.33x) | 1.82x | 0.030s | 0.037s (1.21x) |
+| large_transformers_vit | 0.669s | 2.123s (3.17x) | 10.3x | 0.113s | 0.144s (1.27x) |
+| large_transformers_llama | 1.314s | 5.082s (3.87x) | 14.5x | 0.267s | 0.297s (1.11x) |
+| large_transformers_bert | 0.825s | 3.799s (4.61x) | 13.9x | 0.148s | 0.162s (1.09x) |
+| large_transformers_gpt2 | 1.577s | 7.293s (4.63x) | 13.6x | 0.183s | 0.299s (1.63x) |
+| large_diffusers_unet2d | 0.599s | 2.962s (4.94x) | 8.8x | 0.061s | 0.141s (2.31x) |
 
-新增算子含反向，前向与两个梯度都与通用路径逐元素比对过（含转置组合与批维广播），
-见 `tests/ops/test_mkl_batched_matmul.py`。修复后的 CPU 单步：
-
-| 用例 | 修复前 | 修复后 | 对 PyTorch |
-| --- | ---: | ---: | ---: |
-| large_transformers_bert | 11.43s | 4.18s | 5.1x |
-| large_transformers_llama | 19.32s | 5.73s | 4.3x |
-| large_transformers_vit | 7.02s | 2.63s | 3.9x |
-
-再剖分一次，DIM=5 的热点已经消失（`mkl_batched_matmul` 只剩 80ms），剩下的时间分散
-在 softmax、layernorm、gelu 这些访存受限的逐元素融合内核上，没有单一热点，需要的是
-融合质量与带宽层面的工作，不是再补一个 relay。
+CUDA 1.09x–2.31x，CPU 1.33x–4.94x。再剖分一次 BERT，DIM=5 的热点已经消失
+（`mkl_batched_matmul` 只剩 80ms），剩下的差距分散在 softmax、layernorm、gelu 这些
+访存受限的逐元素融合内核上，没有单一热点，需要的是融合质量与带宽层面的工作，不是
+再补一个 relay。
 
 `JITTOR_ECOSYSTEM_SPEED_RATIO` 可以把比值变成断言；默认只打印，避免共享机器上的
 测量抖动造成假失败。
@@ -182,8 +182,8 @@ reindex 内核，而 Transformer 每层的两次注意力乘法都在这条路�
   installer 幂等性断言，需要查清是哪个前置用例改动了 `torch.*` 模块图。已确认把
   嫌疑最大的 bootstrap、install context、compat mechanisms 与这两条放在一起跑
   （88 passed）并不能复现，需要更大范围的二分。
-- CPU 上仍比 PyTorch 慢 3.9x–5.1x（Transformer 类）。批量矩阵乘修好之后不再有单一
-  热点，时间分散在逐元素融合内核上，属于融合质量与访存带宽的问题。
+- CPU 上仍比 PyTorch 慢 1.33x–4.94x。批量矩阵乘与线程数修好之后不再有单一热点，
+  时间分散在逐元素融合内核上，属于融合质量与访存带宽的问题。
 - `tests/ops/test_matmul.py` 在 CUDA 构建下 6 条失败、在 CPU-only 构建下全过，起因
   是 CUDA 构建几乎捕获不到算子日志，见 KI-LOG-001。与本轮改动无关（把改动全部撤回
   后失败集合完全相同）。
