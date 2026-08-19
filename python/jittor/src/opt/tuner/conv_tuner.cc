@@ -306,8 +306,15 @@ void ConvTuner::forwardTune(FusedOp* fop) {
 
             // mkl doesn't support "cdab" format
             if (yformat == "cdab") continue;
-            // cuda doesn't support "iohw" format
-            if (fop->flags.get(NodeFlags::_cuda) && wformat == "iohw") continue;
+            // cudnnSetFilterNdDescriptor accepts only NCHW ("oihw") and NHWC
+            // ("ohwi") filter layouts, and the relayed kernel names the layout
+            // directly as filterFormat_@WFORMAT. Relaying any other
+            // permutation -- "hwio", which an NHWC/HWIO convolution produces --
+            // emits a kernel that references an undefined identifier. The
+            // compile failure then surfaces at run time as a call through a
+            // null relay pointer, i.e. a segfault rather than a diagnosis.
+            if (fop->flags.get(NodeFlags::_cuda) && wformat != "oihw" && wformat != "ohwi")
+                continue;
             if (xoi.failed) continue;
             std::stringstream ss;
             // i@zh*stride+i@zwh+padding

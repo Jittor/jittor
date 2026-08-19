@@ -52,6 +52,19 @@ def conv_nhwc_hwio(x, w, stride=1, padding=0):
 
 @unittest.skipIf(not jt.compile_extern.use_mkl, "Not use mkl, Skip")
 class TestMklConvOp(unittest.TestCase):
+    """oneDNN is the CPU convolution backend, so these all pin CUDA off.
+
+    Jittor enables CUDA by default whenever a GPU is present. Left alone,
+    every case here would relay to cuDNN instead of the oneDNN path it is
+    written to cover, and assert on tuner output that never appears.
+    """
+
+    def setUp(self):
+        self._use_cuda = jt.flags.use_cuda
+        jt.flags.use_cuda = 0
+
+    def tearDown(self):
+        jt.flags.use_cuda = self._use_cuda
 
     def test_forward(self):
         a = np.random.rand(1,3,224,224).astype(np.float32)
