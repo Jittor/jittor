@@ -131,6 +131,21 @@ def _transpose_base_last2(x):
     return None
 
 
+def _mkl_batched_matmul_is_available(a, b):
+    """Whether the oneDNN batched relay can take this pair.
+
+    The op is float32-only, so anything else -- float64, float16, and the
+    complex dtypes the native reindex kernels do support -- keeps the generic
+    path.
+    """
+    if jt.flags.use_cuda:
+        return False
+    ops = getattr(jt.compile_extern, "mkl_ops", None)
+    if ops is None or not hasattr(ops, "mkl_batched_matmul"):
+        return False
+    return str(a.dtype) == "float32" and str(b.dtype) == "float32"
+
+
 def matmul(a, b):
     """matrix multiply,
 
@@ -219,6 +234,23 @@ def matmul(a, b):
                         else r
                     )
                 return jt.compile_extern.cublas_ops.cublas_batched_matmul(
+                    a, b, 1 if a_base is not None else 0, 1 if b_base is not None else 0
+                )
+            # The reindex path below expresses a batched matmul as
+            # broadcast * multiply + sum-reduce over one index space with an
+            # extra dimension. The matmul tuner only relays the two-dimensional
+            # form, so on CPU every batched matmul -- both attention products in
+            # every transformer -- ran as that generic kernel at roughly a
+            # fortieth of oneDNN's throughput.
+            if _mkl_batched_matmul_is_available(a, b):
+                a_base = jt.nn._transpose_base_last2(a)
+                b_base = jt.nn._transpose_base_last2(b)
+                if a_base is not None:
+                    a = a_base
+                if b_base is not None:
+                    b = b_base
+                a, b = jt.nn._broadcast_batch_dims(a, b)
+                return jt.compile_extern.mkl_ops.mkl_batched_matmul(
                     a, b, 1 if a_base is not None else 0, 1 if b_base is not None else 0
                 )
         shape = []
