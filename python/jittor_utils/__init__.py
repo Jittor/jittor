@@ -101,6 +101,64 @@ def home():
     _jittor_home = _home_path
     return _home_path
 
+
+def physical_core_count():
+    """Cores that can retire instructions in parallel, not SMT siblings.
+
+    Returns ``None`` when the topology is not readable, which is the signal to
+    leave the OpenMP default alone rather than guess.
+    """
+    try:
+        with open("/proc/cpuinfo") as handle:
+            text = handle.read()
+    except OSError:
+        return None
+    cores = set()
+    package = core = None
+    for line in text.splitlines():
+        if ":" not in line:
+            # A blank line separates one logical CPU's block from the next.
+            if package is not None and core is not None:
+                cores.add((package, core))
+            package = core = None
+            continue
+        key, _, value = line.partition(":")
+        key = key.strip()
+        if key == "physical id":
+            package = value.strip()
+        elif key == "core id":
+            core = value.strip()
+    if package is not None and core is not None:
+        cores.add((package, core))
+    return len(cores) or None
+
+
+def limit_openmp_to_physical_cores(environ):
+    """Default OpenMP to one thread per physical core.
+
+    OpenMP's own default is one thread per *logical* CPU. On an SMT machine
+    that oversubscribes every core, and the cost is not a gentle slowdown: on a
+    dual 32-core host, one batched oneDNN call took 437us with 64 threads and
+    5955us with 128, because the barrier across twice as many threads dominates
+    everything else. PyTorch defaults to the physical count for the same
+    reason.
+
+    Returns the value set, or ``None`` when the environment already chose one
+    or the topology could not be read. An explicit ``OMP_NUM_THREADS`` always
+    wins -- this only fills in a default.
+    """
+    if environ.get("OMP_NUM_THREADS", "").strip():
+        return None
+    physical = physical_core_count()
+    if not physical:
+        return None
+    logical = os.cpu_count() or physical
+    if physical >= logical:
+        return None
+    environ["OMP_NUM_THREADS"] = str(physical)
+    return physical
+
+
 class Logwrapper:
     def __init__(self):
         self.log_silent = int(os.environ.get("log_silent", "0"))
