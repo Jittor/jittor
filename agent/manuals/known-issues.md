@@ -228,3 +228,26 @@ framework defects.
   native complex linear-algebra kernels, and some CUDA eig environments
 - Review/expiry condition: remove each sub-item only with focused CPU and
   accelerator tests for its operation and derivative order
+
+## KI-LOG-001: a CUDA-enabled core emits almost no capturable operator logging
+
+- Severity: Medium (test infrastructure; no effect on computed results)
+- Status: Trigger isolated, cause not yet found
+- Owner: compiler and logging maintainers
+- Evidence: `tests/ops/test_matmul.py` -- 7 passed / 6 skipped in a CPU-only
+  build of the same revision, 6 failed in a CUDA-enabled build
+- Symptom: with `use_cuda=0` set explicitly and the same expression evaluated in
+  both, `log_capture_scope(log_v=1000)` returns lines from 18 source files in a
+  CPU-only build and from only `broadcast_to_op.cc` and `data.cc` in a
+  CUDA-enabled one. `log_vprefix="op.cc=100"` returns nothing there at all, so
+  the tests that assert a relay fired by matching `Jit op key .* found` fail.
+  It is not the duplicate-runtime problem behind
+  [cold-start runtime](../../tests/compiler/test_cold_start_runtime.py):
+  `/proc/self/maps` shows one mapping each of `jit_utils_core` and
+  `jittor_core`. The two builds differ only by `-DHAS_CUDA -DIS_CUDA`, and
+  neither macro guards anything in `utils/log.h` or `utils/log.cc`.
+- Workaround: run log-asserting tests in a CPU-only build (unset `nvcc_path`,
+  `use_cuda=0`), which is also how they pass today
+- Review/expiry condition: close once a test asserts that the same expression
+  yields the same set of logging source files in both builds
+
