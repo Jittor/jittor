@@ -62,6 +62,25 @@ Torch 兼容模式是进程级的，会改变惰性执行、归约默认值与�
 | Torch 模式 | 36 failed，4 errors | 6 failed，0 errors，1447 passed |
 | 原生模式 | 收集阶段即报错，运行到 70% 无汇总退出 | 收集干净 1624 条 |
 
+### 整轮结果（本轮，4x RTX 4090 机器，CUDA 构建）
+
+| 会话 | passed | failed | skipped | 其他 |
+| --- | ---: | ---: | ---: | --- |
+| Torch 模式 | 1712 | 26 | 184 | 4 xfailed，3h02m |
+| 原生模式 | 1083 | 137 | 357 | 8 xfailed，2 errors |
+
+原生这一列是分目录跑出来的：`backends`/`compiler`/`core`/`ops` 四个目录里存在顺序
+相关的硬崩溃，整目录一次跑会在中途 abort 掉，因此这四个目录改为按文件各起一次
+pytest；其余目录整目录跑。`distributed`/`opinfo`/`system` 没有收集到用例。按文件跑
+时只有两个文件仍然 abort：`compiler/test_tracer.py` 与 `core/test_setitem.py`
+（后者是工作区里未提交的改动，未纳入本轮）。
+
+原生这 137 条失败绝大多数是 CUDA 构建特有的。把失败最多的三个文件
+（`test_parallel_pass`、`test_transpose_op`、`test_where_op`，CUDA 构建下合计 25 条
+失败）放到 CPU-only 构建上重跑，只剩 3 条失败、20 条通过、20 条跳过，主因就是
+KI-LOG-001：CUDA 构建下几乎捕获不到算子日志，而这些用例正是靠匹配日志来断言
+relay 或 pass 是否生效。
+
 `tests/ops` 下只有 `test_ops.py` 使用 OpInfo，其余断言的是原生惰性执行行为，已移出
 Torch 模式。`tools/run_test_suite.py` 分两个会话跑完整套件并汇总。
 
