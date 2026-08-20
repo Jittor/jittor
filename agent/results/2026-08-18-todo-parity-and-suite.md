@@ -168,38 +168,35 @@ broadcast+multiply+reduce 形式（源码里写死 `bcop1->shape.size() != 3` �
 10.6s 的七成；`mkl_matmul`（各个 Linear）只有约 1.2s。新增 `mkl_batched_matmul`
 （含反向）后接上该分支。
 
-**OpenMP 按逻辑 CPU 起线程。** OpenMP 自己的默认是每个逻辑 CPU 一个线程，SMT 机器上
-等于把每个核心超额订阅一倍。代价不是缓慢下降而是断崖——同一次批量调用 64 线程
-437us、128 线程 5955us，与问题规模无关的固定开销。PyTorch 默认取物理核心数，Jittor
-此前不设置。改为默认物理核心数后（显式 `OMP_NUM_THREADS` 一律优先）：
+**OpenMP 按逻辑 CPU 起线程（已回退）。** OpenMP 的默认是每个逻辑 CPU 一个线程，SMT
+机器上等于把每个核心超额订阅一倍。改成按物理核心数之后 2048x768 乘 768x768 的矩阵乘
+从 406 GFLOPS 提到 1841，批量调用从 5955us 降到 380us——但这个改动**已经回退**：
+parallel pass 生成的 kernel 按运行时线程数切分工作，
 
-| 形状 | 修复前 | 修复后 |
-| --- | ---: | ---: |
-| 2048x768 @ 768x768 | 406 GFLOPS | 1841 GFLOPS |
-| 96x256x64 @ 96x64x256 批量 | 5955us | 380us |
+    int tn1 = get_thread_range_log(thread_num_left, range1);
+    int tn0 = get_thread_range_log(thread_num_left, range0);
+    int tnum0 = 1<<(tn0-tn1);
 
-注意力形状（8x12x256x64 @ 8x12x64x256）上三种实现的吞吐：通用 reindex 内核
-37 GFLOPS、`mkl_batched_matmul` 1800 GFLOPS、PyTorch 2490 GFLOPS。
+两次调用依次从线程预算里取位，64 线程配两个 16 的维度会得到 `tn0=2, tn1=3`，移位量
+为负是未定义行为，实测 4096 个元素里 3072 个没被写。本机上 128 线程会挂死过 600 秒
+超时，64 与 32 都算错。缓存里 4958 个 JIT kernel 有 2182 个带这套 `tnum` 划分，也就
+是说这是 CPU 上的常规并行路径，不是某个可选项。该 pass 以 `data.gz` 打包的预编译目标
+文件形式随包分发，仓库里没有源码，改不了。宁可慢也不能算错，见 KI-COMPILER-005。
 
-新算子的前向与两个梯度都与通用路径逐元素比对过（含四种转置组合与批维广播），见
-`tests/ops/test_mkl_batched_matmul.py`；线程默认值见
-`tests/compiler/test_openmp_threads.py`。两项修复之后 24 条下游库对拍仍然全过。
-
-### 真实尺寸单步（空载，两项修复之后）
+### 真实尺寸单步（空载，批量矩阵乘修复之后、线程数改动回退之后）
 
 | 用例 | CPU: PyTorch | CPU: Jittor | 修复前 | CUDA: PyTorch | CUDA: Jittor |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| large_convnet | 0.750s | 1.001s (1.33x) | 1.82x | 0.030s | 0.037s (1.21x) |
-| large_transformers_vit | 0.669s | 2.123s (3.17x) | 10.3x | 0.113s | 0.144s (1.27x) |
-| large_transformers_llama | 1.314s | 5.082s (3.87x) | 14.5x | 0.267s | 0.297s (1.11x) |
-| large_transformers_bert | 0.825s | 3.799s (4.61x) | 13.9x | 0.148s | 0.162s (1.09x) |
-| large_transformers_gpt2 | 1.577s | 7.293s (4.63x) | 13.6x | 0.183s | 0.299s (1.63x) |
-| large_diffusers_unet2d | 0.599s | 2.962s (4.94x) | 8.8x | 0.061s | 0.141s (2.31x) |
+| large_convnet | 0.783s | 1.045s (1.33x) | 1.82x | 0.030s | 0.036s (1.20x) |
+| large_transformers_vit | 0.691s | 2.645s (3.83x) | 10.3x | 0.098s | 0.142s (1.45x) |
+| large_transformers_llama | 1.306s | 6.541s (5.01x) | 14.5x | 0.271s | 0.302s (1.11x) |
+| large_transformers_bert | 0.834s | 4.428s (5.31x) | 13.9x | 0.148s | 0.145s (0.98x) |
+| large_transformers_gpt2 | 1.577s | 8.926s (5.66x) | 13.6x | 0.195s | 0.299s (1.53x) |
+| large_diffusers_unet2d | 0.625s | 4.289s (6.87x) | 8.8x | 0.062s | 0.127s (2.04x) |
 
-CUDA 1.09x–2.31x，CPU 1.33x–4.94x。再剖分一次 BERT，DIM=5 的热点已经消失
-（`mkl_batched_matmul` 只剩 80ms），剩下的差距分散在 softmax、layernorm、gelu 这些
-访存受限的逐元素融合内核上，没有单一热点，需要的是融合质量与带宽层面的工作，不是
-再补一个 relay。
+CUDA 0.98x–2.04x，CPU 1.33x–6.87x。线程数改动还在时 CPU 一列是 1.33x–4.94x，回退之后
+退回到这里；剩下的差距分散在 softmax、layernorm、gelu 这些访存受限的逐元素融合内核上，
+没有单一热点。
 
 `JITTOR_ECOSYSTEM_SPEED_RATIO` 可以把比值变成断言；默认只打印，避免共享机器上的
 测量抖动造成假失败。
