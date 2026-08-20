@@ -229,44 +229,28 @@ framework defects.
 - Review/expiry condition: remove each sub-item only with focused CPU and
   accelerator tests for its operation and derivative order
 
-## KI-LOG-001: a CUDA-enabled core emits almost no capturable operator logging
+## KI-LOG-001: withdrawn -- log capture is not broken in CUDA builds
 
-- Severity: Medium (test infrastructure; no effect on computed results)
-- Status: Trigger isolated, cause not yet found
-- Owner: compiler and logging maintainers
-- Evidence: `tests/ops/test_matmul.py` -- 7 passed / 6 skipped in a CPU-only
-  build of the same revision, 6 failed in a CUDA-enabled build
-- Symptom: `log_capture_scope` misses essentially all core logging. Controlled
-  comparison -- same revision, `use_cuda=0` in both, same expression, and a
-  `compile_options` value that forces the same fresh JIT key so both actually
-  compile: the CPU-only build captures 328 lines including `op.cc` and
-  `fused_op.cc`, the CUDA-enabled build captures 12, all from `data.cc`.
-  `log_vprefix="op.cc=100"` returns nothing there, so tests that assert a relay
-  fired by matching `Jit op key .* found` fail.
-- Ruled out: it is not the duplicate-runtime problem behind
-  [cold-start runtime](../../tests/compiler/test_cold_start_runtime.py) --
-  `/proc/self/maps` shows one mapping each of `jit_utils_core` and
-  `jittor_core`. Not a duplicated flag or logging function either: in both
-  builds `jittor_core` lists `log_v`, `log_vprefix`, `send_log` and
-  `check_vlog` as undefined and resolves them to the single definition in
-  `jit_utils_core`. Not the parallel op compiler (same result with
-  `use_parallel_op_compiler=0`), and not warm-versus-cold cache (the forced
-  fresh key above). `data.cc` lives in `jittor_core` and does log, so the
-  library as a whole is not silent -- only most of its files are. The two
-  builds differ only by `-DHAS_CUDA -DIS_CUDA`, and neither macro guards
-  anything in `utils/log.h` or `utils/log.cc`. Scanning every non-JIT library
-  in the cache finds exactly one definition of `jittor::log_v`, in
-  `jit_utils_core`, so there is no second copy for the core to bind to. The
-  lines that do survive in the CUDA build are graph-construction messages
-  ("Set inputs of Var/Op"), which are the most verbose level there is -- so
-  the level is reaching the core. What goes missing is specifically the
-  compile-and-execute messages from `op.cc`, `fused_op.cc` and `executor.cc`,
-  and forcing a fresh JIT key with `use_parallel_op_compiler=0` does not bring
-  them back.
-- Workaround: run log-asserting tests in a CPU-only build (unset `nvcc_path`,
-  `use_cuda=0`), which is also how they pass today
-- Review/expiry condition: close once a test asserts that the same expression
-  yields the same set of logging source files in both builds
+- Severity: n/a
+- Status: Withdrawn 2026-08-20; the original diagnosis was an artefact of the
+  probe, not of the build
+- What it claimed: that a CUDA-enabled core captured almost no operator logging
+  compared with a CPU-only one (12 lines against 328 for the same expression)
+- Why that was wrong: the probe evaluated the graph with `.data`, and
+  `VarHolder::data()` only syncs when the Var does not already hold host
+  memory, so in one build the work happened before the capture window opened
+  and in the other inside it. Measuring the same expression with an explicit
+  `jt.sync_all()` inside the window gives 259 captured lines in the CUDA build
+  against 260 in the CPU-only one, with `fused_op.cc` at 4 in both and
+  `executor.cc` at 16 against 15. An unconditional `LOGi` compiled into
+  `Executor::run_sync` is captured in both.
+- What the affected tests really show: `tests/compiler/test_parallel_pass.py`
+  fails 3 cases in a CPU-only build and 8 in a CUDA one, and the CUDA set is
+  the same cases plus their CUDA class variants. The shared failures are
+  numerical -- `assert np.allclose(a.data*2, b)` on a reduce under the parallel
+  pass -- so they are a real defect to chase, unrelated to logging.
+- Lesson for the next probe: never use `.data` to force evaluation inside a
+  `log_capture_scope`; call `jt.sync_all()` and keep a reference to the Var.
 
 ## KI-TEST-001: `tests/ops` leaks device state between files in one process
 
