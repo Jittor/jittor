@@ -69,11 +69,12 @@ Torch 兼容模式是进程级的，会改变惰性执行、归约默认值与�
 | Torch 模式 | 1712 | 26 | 184 | 4 xfailed，3h02m |
 | 原生模式 | 1083 | 137 | 357 | 8 xfailed，2 errors |
 
-原生这一列是分目录跑出来的：`backends`/`compiler`/`core`/`ops` 四个目录里存在顺序
-相关的硬崩溃，整目录一次跑会在中途 abort 掉，因此这四个目录改为按文件各起一次
-pytest；其余目录整目录跑。`distributed`/`opinfo`/`system` 没有收集到用例。按文件跑
-时只有两个文件仍然 abort：`compiler/test_tracer.py` 与 `core/test_setitem.py`
-（后者是工作区里未提交的改动，未纳入本轮）。
+原生这一列按目录跑，其中 `backends`/`compiler`/`core`/`ops` 四个目录再按文件各起一次
+pytest。修掉 addr2line 缓冲区溢出之后，`compiler` 整目录已经能跑完（29 failed，128
+passed），不再中途 abort。整目录仍然有问题的只剩两处：`core` 停在
+`core/test_setitem.py`（工作区里未提交的改动，未纳入本轮），`ops` 单进程跑会因为
+设备状态泄漏产生 127 条失败而按文件跑正常，见 KI-TEST-001。
+`distributed`/`opinfo`/`system` 没有收集到用例。
 
 原生这 137 条失败绝大多数是 CUDA 构建特有的。把失败最多的三个文件
 （`test_parallel_pass`、`test_transpose_op`、`test_where_op`，CUDA 构建下合计 25 条
