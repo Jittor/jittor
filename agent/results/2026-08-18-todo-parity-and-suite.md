@@ -108,7 +108,6 @@ Torch 模式。`tools/run_test_suite.py` 分两个会话跑完整套件并汇总
 | relay 单测用 `get_allocator()` 却按主机指针读写 | 同上，有显卡时写进显存；崩溃后 gdb 崩进 apport，进程停在 ptrace_stop 永不返回 | `jt.tests.fused_op_relay_matmul()` 通过 |
 | conv tuner 把 cuDNN 不支持的 filter 布局 relay 过去 | 生成引用未定义标识符的 kernel，运行期表现为通过空函数指针调用 | `tests/backends/cpu/test_mkl_conv_op.py` 不再崩溃 |
 | 套件运行时 gdb 回溯无上限 | 一条崩溃用例把整轮会话挂死而不是记为失败 | `tools/run_test_suite.py` 关闭 gdb_path |
-| OpenMP 按逻辑 CPU 起线程 | SMT 机器上每核超额订阅一倍，产生与规模无关的固定开销：同一次批量调用 64 线程 437us、128 线程 5955us | `tests/compiler/test_openmp_threads.py` |
 | CPU 批量矩阵乘没有 oneDNN 通路 | Transformer 每层两次注意力乘法走通用内核，37 GFLOPS 对 oneDNN 的 1800 GFLOPS；BERT CPU 单步 11.4s | `tests/ops/test_mkl_batched_matmul.py` |
 | 对拍框架的 CPU 分支不关 `use_cuda` | Jittor 跑显卡对 PyTorch 跑 CPU，CPU 那一半从未真正测到，且把 1.8x 慢报成 20x 快 | `tests/compat/torch/test_ecosystem_device_selection.py` |
 | 计时步只同步不取值 | 惰性图里没人索要的梯度不求值，切片与求和还会被融合裁剪，BERT 报 0.049s 而非 0.141s | 同上，运行侧回报设备并完整读回梯度 |
@@ -207,8 +206,10 @@ CUDA 0.98x–2.04x，CPU 1.33x–6.87x。线程数改动还在时 CPU 一列是 
   installer 幂等性断言，需要查清是哪个前置用例改动了 `torch.*` 模块图。已确认把
   嫌疑最大的 bootstrap、install context、compat mechanisms 与这两条放在一起跑
   （88 passed）并不能复现，需要更大范围的二分。
-- CPU 上仍比 PyTorch 慢 1.33x–4.94x。批量矩阵乘与线程数修好之后不再有单一热点，
-  时间分散在逐元素融合内核上，属于融合质量与访存带宽的问题。
+- CPU 上仍比 PyTorch 慢 1.33x–6.87x。批量矩阵乘修好之后不再有单一热点，时间分散在
+  逐元素融合内核上，属于融合质量与访存带宽的问题。把线程数降到物理核心数还能再快
+  一截（矩阵乘 406→1841 GFLOPS），但被 KI-COMPILER-005 挡住：parallel pass 的工作
+  划分依赖线程数足够大，降下来会静默算错。
 - `tests/ops/test_matmul.py` 在 CUDA 构建下 6 条失败、在 CPU-only 构建下全过，起因
   是 CUDA 构建几乎捕获不到算子日志，见 KI-LOG-001。与本轮改动无关（把改动全部撤回
   后失败集合完全相同）。
