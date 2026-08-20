@@ -19,10 +19,12 @@ class TestReduceOpCuda(ReduceOpCases, unittest.TestCase):
     __test__ = True
 
     def setUp(self):
+        self._previous_use_cuda = jt.flags.use_cuda
         jt.flags.use_cuda = 2
 
     def tearDown(self):
-        jt.flags.use_cuda = 0
+        jt.sync_all()
+        jt.flags.use_cuda = self._previous_use_cuda
 
 
 @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
@@ -31,10 +33,12 @@ class TestReduceOpCuda2(ReduceOpCases, unittest.TestCase):
     keepdims = True
 
     def setUp(self):
+        self._previous_use_cuda = jt.flags.use_cuda
         jt.flags.use_cuda = 2
 
     def tearDown(self):
-        jt.flags.use_cuda = 0
+        jt.sync_all()
+        jt.flags.use_cuda = self._previous_use_cuda
 
 
 class TestReduceOpMisc(unittest.TestCase):

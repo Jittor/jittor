@@ -100,9 +100,11 @@ class TestReindexReduceOp(unittest.TestCase):
 class TestReindexReduceOpCuda(TestReindexReduceOp):
     def setUp(self):
         # TODO: replace to 2
+        self._previous_use_cuda = jt.flags.use_cuda
         jt.flags.use_cuda = 1
     def tearDown(self):
-        jt.flags.use_cuda = 0
+        jt.sync_all()
+        jt.flags.use_cuda = self._previous_use_cuda
 
 if __name__ == "__main__":
     unittest.main()

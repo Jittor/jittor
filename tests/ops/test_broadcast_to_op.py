@@ -107,18 +107,22 @@ class TestBroadcastToOp2(TestBroadcastToOp):
 @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
 class TestBroadcastToOpCuda(TestBroadcastToOp):
     def setUp(self):
+        self._previous_use_cuda = jt.flags.use_cuda
         jt.flags.use_cuda = 2
         self.use_shape = False
     def tearDown(self):
-        jt.flags.use_cuda = 0
+        jt.sync_all()
+        jt.flags.use_cuda = self._previous_use_cuda
 
 @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
 class TestBroadcastToOp2Cuda(TestBroadcastToOp):
     def setUp(self):
+        self._previous_use_cuda = jt.flags.use_cuda
         jt.flags.use_cuda = 2
         self.use_shape = True
     def tearDown(self):
-        jt.flags.use_cuda = 0
+        jt.sync_all()
+        jt.flags.use_cuda = self._previous_use_cuda
 
 
 class TestBroadcastToOpMisc(unittest.TestCase):

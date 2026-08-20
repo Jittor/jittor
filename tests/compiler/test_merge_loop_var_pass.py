@@ -66,9 +66,11 @@ class TestMergeLoopVarPass(unittest.TestCase):
 @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
 class TestMergeLoopVarPassCuda(TestMergeLoopVarPass):
     def setUp(self):
+        self._previous_use_cuda = jt.flags.use_cuda
         jt.flags.use_cuda = 1
     def tearDown(self):
-        jt.flags.use_cuda = 0
+        jt.sync_all()
+        jt.flags.use_cuda = self._previous_use_cuda
 
 if __name__ == "__main__":
     unittest.main()

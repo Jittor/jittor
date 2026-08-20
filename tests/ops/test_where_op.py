@@ -15,11 +15,13 @@ class TestWhereOpCuda(WhereOpCases, unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        cls._previous_use_cuda = jt.flags.use_cuda
         jt.flags.use_cuda = 1
 
     @classmethod
     def tearDownClass(cls):
-        jt.flags.use_cuda = 0
+        jt.sync_all()
+        jt.flags.use_cuda = cls._previous_use_cuda
 
 
 @unittest.skipIf(not jt.has_cuda, "No CUDA found")

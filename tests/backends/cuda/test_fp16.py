@@ -304,9 +304,11 @@ class TestFP16(unittest.TestCase):
 @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
 class TestFP16CUDA(TestFP16):
     def setUp(self):
+        self._previous_use_cuda = jt.flags.use_cuda
         jt.flags.use_cuda = 1
     def tearDown(self):
-        jt.flags.use_cuda = 0
+        jt.sync_all()
+        jt.flags.use_cuda = self._previous_use_cuda
 
     def test_softmax(self):
         a = jt.rand((120, 2000, 2000)).float16()
