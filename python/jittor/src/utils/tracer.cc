@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <iostream>
+#include <vector>
 #ifndef _WIN32
 #include <signal.h>
 #endif
@@ -240,11 +241,20 @@ void print_trace() {
 
             if (!trace[i]) continue;
             if (!addr2line_path.size()) continue;
-            char syscom[256];
-            sprintf(syscom,"%s %p -f -p -i -e %.*s", addr2line_path.c_str(), trace[i], p, messages[i]);
+            // Size the command from the arguments. The module name here is a
+            // path into the JIT cache and routinely passes 200 characters, so
+            // formatting into a fixed 256-byte buffer overflowed it and glibc's
+            // fortify check aborted the process -- inside the backtrace helper,
+            // which is the worst possible place to die.
+            const char* format = "%s %p -f -p -i -e %.*s";
+            int needed = snprintf(nullptr, 0, format,
+                addr2line_path.c_str(), trace[i], p, messages[i]);
+            if (needed < 0) continue;
+            vector<char> syscom(needed + 1);
+            snprintf(syscom.data(), syscom.size(), format,
+                addr2line_path.c_str(), trace[i], p, messages[i]);
             //last parameter is the file name of the symbol
-            // printf("run '%s'\n", syscom);
-            int ret = system(syscom);
+            int ret = system(syscom.data());
             (void)ret;
         }
     }
