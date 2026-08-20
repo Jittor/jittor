@@ -252,34 +252,25 @@ framework defects.
 - Lesson for the next probe: never use `.data` to force evaluation inside a
   `log_capture_scope`; call `jt.sync_all()` and keep a reference to the Var.
 
-## KI-TEST-001: `tests/ops` leaks device state between files in one process
+## KI-TEST-001: fixed -- device tests now restore `use_cuda` instead of zeroing it
 
-- Severity: Medium (test isolation; no evidence of a product defect)
-- Status: Reproduced and bounded, leaking test not yet identified
-- Owner: test-infrastructure maintainers
-- Evidence: the same files, one pytest process per *file*, report 915 passed /
-  122 failed across `backends`+`compiler`+`core`+`ops`; running `tests/ops` as a
-  single process reports 127 failed / 105 passed / 26 errors
-- Symptom: 90 tests fail only in the aggregate run. Minimal reproduction:
-  `pytest tests/ops/test_binary_op.py tests/ops/test_broadcast_to_op.py` --
-  the second file passes 12/12 on its own and loses 5 to failures plus 3 to
-  teardown errors once the first has run. Both report
-  `Op array doesn't have cuda version`, the signature of a Var built for one
-  device being executed on the other. `test_broadcast_to_op` runs its CUDA
-  classes with `use_cuda = 2` (force), which makes any op without a CUDA
-  version fatal rather than a fallback, and its `tearDown` then fails on the
-  bare assignment `jt.flags.use_cuda = 0` -- changing the flag flushes the
-  pending graph, so the teardown inherits the failure too.
-- Not a device flag left set: `test_binary_op` restores both `use_cuda` and
-  `amp_reg` in `tearDown`, and adding a `jt.sync_all()` there does not change
-  the outcome. What crosses the file boundary is unevaluated graph state, not
-  the flag.
-- Ruled out: not caused by `tests/ops/test_mkl_batched_matmul.py` -- ignoring
-  that file leaves 127 of the failures in place
-- Workaround: run the directory one file per process, which is what the
-  reported per-file numbers use
-- Review/expiry condition: close once the leaking test is found and the whole
-  directory in one process matches the per-file result
+- Severity: was Medium (test isolation)
+- Status: Fixed 2026-08-20
+- Symptom it had: `tests/ops` reported 127 failed / 105 passed / 26 errors as a
+  single process against 51 failed / 200 passed one file at a time. Later files
+  failed with `Op array doesn't have cuda version`, the signature of a Var built
+  for one device being evaluated on the other.
+- Cause: every CUDA test class ended with `jt.flags.use_cuda = 0` rather than
+  restoring the previous value. On a machine with a GPU the default is 1, so the
+  first such class switched the accelerator off for the rest of the process --
+  across files, the flag being process-global. The most-used copy was in
+  `tests/_helpers/devices.py::cuda_test_case`, shared by many classes.
+- Fix: remember `use_cuda` in setUp and put it back in tearDown, after a
+  `jt.sync_all()` so the pending graph drains under the device it was built for.
+- Effect: `tests/ops` as one process went to 49 failed / 202 passed, matching
+  the per-file result; `tests/backends` from 28 failed to 25. Runs take longer
+  now because tests that had been silently running on CPU do use the GPU and
+  compile its kernels once.
 
 ## KI-COMPILER-004: fixed -- a CPU-only core no longer shadows the CUDA build
 
