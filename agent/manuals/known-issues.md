@@ -268,13 +268,20 @@ framework defects.
 - Evidence: the same files, one pytest process per *file*, report 915 passed /
   122 failed across `backends`+`compiler`+`core`+`ops`; running `tests/ops` as a
   single process reports 127 failed / 105 passed / 26 errors
-- Symptom: after some earlier file in the directory runs, later ones fail with
-  `Op array doesn't have cuda version` on a fused
-  `array, array, broadcast_to, broadcast_to, binary.multiply, binary.add`.
-  That is the signature of Vars built while `use_cuda` was 0 being executed
-  once it is 1, i.e. a device flag that outlived the test that set it. The
-  CUDA test classes here do restore the flag in `tearDownClass`, so the leak is
-  elsewhere.
+- Symptom: 90 tests fail only in the aggregate run. Minimal reproduction:
+  `pytest tests/ops/test_binary_op.py tests/ops/test_broadcast_to_op.py` --
+  the second file passes 12/12 on its own and loses 5 to failures plus 3 to
+  teardown errors once the first has run. Both report
+  `Op array doesn't have cuda version`, the signature of a Var built for one
+  device being executed on the other. `test_broadcast_to_op` runs its CUDA
+  classes with `use_cuda = 2` (force), which makes any op without a CUDA
+  version fatal rather than a fallback, and its `tearDown` then fails on the
+  bare assignment `jt.flags.use_cuda = 0` -- changing the flag flushes the
+  pending graph, so the teardown inherits the failure too.
+- Not a device flag left set: `test_binary_op` restores both `use_cuda` and
+  `amp_reg` in `tearDown`, and adding a `jt.sync_all()` there does not change
+  the outcome. What crosses the file boundary is unevaluated graph state, not
+  the flag.
 - Ruled out: not caused by `tests/ops/test_mkl_batched_matmul.py` -- ignoring
   that file leaves 127 of the failures in place
 - Workaround: run the directory one file per process, which is what the
