@@ -178,6 +178,19 @@ void print_trace() {
         }
         argv.insert(argv.end(), {"-p", pid_buf, NULL});
         #ifndef _WIN32
+        // This child is ours and is reaped below. Left alone, killing a wedged
+        // debugger delivers SIGCHLD to Jittor's own handler, which reads any
+        // non-clean child death as an out-of-memory worker and exits the whole
+        // process -- turning the bounded wait into a hard stop. Blocking the
+        // signal is not enough: sigprocmask only covers the calling thread, and
+        // the signal would land on any other thread. Restore the default
+        // disposition, which discards SIGCHLD while still leaving the child
+        // reapable, and put the handler back afterwards.
+        struct sigaction default_child = {}, previous_child;
+        default_child.sa_handler = SIG_DFL;
+        sigemptyset(&default_child.sa_mask);
+        sigaction(SIGCHLD, &default_child, &previous_child);
+
         int child_pid = fork();
         if (!child_pid) {
             execvp(gdb_path.c_str(), (char* const*)&argv[0]);
@@ -213,6 +226,7 @@ void print_trace() {
                     waitpid(child_pid, NULL, 0);
                 }
             }
+            sigaction(SIGCHLD, &previous_child, nullptr);
         }
         #else
         auto cmds = get_cmds(argv);

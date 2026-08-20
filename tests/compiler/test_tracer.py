@@ -43,7 +43,11 @@ with jt.flag_scope(extra_gdb_cmd="c;q"):
         """
         fake_gdb = os.path.join(jt.flags.cache_path, "hanging_gdb.sh")
         with open(fake_gdb, "w") as f:
-            f.write("#!/bin/sh\nsleep 600\n")
+            # exec, so the stand-in debugger *is* the forked child. A plain
+            # "sleep 600" would leave a grandchild holding the inherited stdout
+            # after print_trace kills the child, and the reader below would then
+            # block for the full 600s waiting for that pipe to close.
+            f.write("#!/bin/sh\nexec sleep 600\n")
         os.chmod(fake_gdb, 0o755)
 
         fname = os.path.join(jt.flags.cache_path, "test_gdb_timeout.py")
@@ -56,7 +60,11 @@ with jt.flag_scope(gdb_path=%r, gdb_trace_timeout=2):
     jt.print_trace()
     print("ELAPSED", time.time() - start)
 """ % fake_gdb)
-        out = sp.getoutput(sys.executable + ' ' + fname)
+        completed = sp.run(
+            (sys.executable, fname),
+            stdout=sp.PIPE, stderr=sp.STDOUT, universal_newlines=True, timeout=300,
+        )
+        out = completed.stdout
         assert "ELAPSED" in out, out
         elapsed = float(out.split("ELAPSED")[1].split()[0])
         assert elapsed < 30, "print_trace waited {}s for a hung debugger".format(elapsed)
