@@ -281,25 +281,22 @@ framework defects.
 - Review/expiry condition: close once the leaking test is found and the whole
   directory in one process matches the per-file result
 
-## KI-COMPILER-004: a CPU-only core shadows the CUDA build in a shared cache
+## KI-COMPILER-004: fixed -- a CPU-only core no longer shadows the CUDA build
 
-- Severity: High (silently disables the accelerator for a whole run)
-- Status: Diagnosed and reported at import; no automatic recovery yet
-- Owner: compiler maintainers
-- Evidence: `python/jittor/compiler.py` raises when the imported core lacks
-  `cuda_archs` while nvcc was found; reproduced on the 2.0 Torch-mode suite run
-- Symptom: the cache holds two cores, `<cache>/2.0/jittor_core...so` built
-  without CUDA and `<cache>/2.0/<cuda key>/jittor_core...so` built with it, and
-  the import picks the first. Any process that imports Jittor without nvcc --
-  a test that scrubs the environment before spawning a subprocess, for
-  instance -- creates that first file, and from then on every run sharing the
-  cache silently runs on CPU. A whole three-hour Torch-mode suite ran that way;
-  its CUDA-specific cases failed for want of a device rather than for any
-  defect in them.
-- Workaround: delete `<cache>/2.0/jittor_core*.so*`, which the raised message
-  now names explicitly, then rerun
-- Review/expiry condition: close when the CUDA-enabled import either rebuilds
-  or refuses to load a shadowing CPU-only core without needing a human
+- Severity: was High (silently disabled the accelerator for a whole run)
+- Status: Fixed 2026-08-20 in `python/jittor/compiler.py`
+- Symptom it had: the cache holds `<cache>/2.0/jittor_core...so` built without
+  CUDA and `<cache>/2.0/<cuda key>/jittor_core...so` built with it. Both were
+  added to `sys.path` with `append`, and the parent went on first, so the
+  CPU-only build won every import. Any run without nvcc creates that file, and
+  from then on every process sharing the cache ran on CPU, with each CUDA
+  operator failing "Op ... doesn't have cuda version". A three-hour Torch-mode
+  suite ran that way before this was found.
+- Fix: insert the CUDA cache directory ahead of the plain one instead of
+  appending after it. Verified by planting a CPU-only core and confirming the
+  CUDA build is still the one imported.
+- Effect: `tests/structure` went from 3 failed / 209 passed to 212 passed.
+- Guard: [cache path precedence](../../tests/compiler/test_cache_path_precedence.py)
 
 ## KI-COMPILER-005: the parallel pass mis-partitions work at some thread counts
 
