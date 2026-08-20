@@ -254,7 +254,15 @@ framework defects.
   fresh key above). `data.cc` lives in `jittor_core` and does log, so the
   library as a whole is not silent -- only most of its files are. The two
   builds differ only by `-DHAS_CUDA -DIS_CUDA`, and neither macro guards
-  anything in `utils/log.h` or `utils/log.cc`.
+  anything in `utils/log.h` or `utils/log.cc`. Scanning every non-JIT library
+  in the cache finds exactly one definition of `jittor::log_v`, in
+  `jit_utils_core`, so there is no second copy for the core to bind to. The
+  lines that do survive in the CUDA build are graph-construction messages
+  ("Set inputs of Var/Op"), which are the most verbose level there is -- so
+  the level is reaching the core. What goes missing is specifically the
+  compile-and-execute messages from `op.cc`, `fused_op.cc` and `executor.cc`,
+  and forcing a fresh JIT key with `use_parallel_op_compiler=0` does not bring
+  them back.
 - Workaround: run log-asserting tests in a CPU-only build (unset `nvcc_path`,
   `use_cuda=0`), which is also how they pass today
 - Review/expiry condition: close once a test asserts that the same expression
