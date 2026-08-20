@@ -66,15 +66,18 @@ Torch 兼容模式是进程级的，会改变惰性执行、归约默认值与�
 
 | 会话 | passed | failed | skipped | 其他 |
 | --- | ---: | ---: | ---: | --- |
-| Torch 模式 | 1712 | 26 | 184 | 4 xfailed，3h02m |
-| 原生模式 | 1083 | 137 | 357 | 8 xfailed，2 errors |
+| Torch 模式 | 1712 | 26 | 184 | 4 xfailed，3h08m |
+| 原生模式 | 1082 | 142 | 357 | 8 xfailed，2 errors |
 
-原生这一列按目录跑，其中 `backends`/`compiler`/`core`/`ops` 四个目录再按文件各起一次
-pytest。修掉 addr2line 缓冲区溢出之后，`compiler` 整目录已经能跑完（29 failed，128
-passed），不再中途 abort。整目录仍然有问题的只剩两处：`core` 停在
-`core/test_setitem.py`（工作区里未提交的改动，未纳入本轮），`ops` 单进程跑会因为
-设备状态泄漏产生 127 条失败而按文件跑正常，见 KI-TEST-001。
+原生按目录跑；`core` 与 `ops` 两个目录改为按文件各起一次 pytest。修掉 addr2line 缓冲
+区溢出之后 `compiler` 整目录已经能跑完，不再中途 abort；`core` 整目录仍停在
+`core/test_setitem.py`（工作区里未提交的改动，未纳入本轮），`ops` 单进程跑会因为设备
+状态泄漏多出 84 条失败而按文件跑正常，见 KI-TEST-001。
 `distributed`/`opinfo`/`system` 没有收集到用例。
+
+Torch 那一轮的注意事项：缓存上一层残留的 CPU-only `jittor_core` 会遮蔽 CUDA 构建，
+那一轮实际是在没有 CUDA 的核心上跑完的，其中的 CUDA 用例因此失败，见 KI-COMPILER-004。
+清掉遮蔽文件后已重跑。
 
 原生这 137 条失败绝大多数是 CUDA 构建特有的。把失败最多的三个文件
 （`test_parallel_pass`、`test_transpose_op`、`test_where_op`，CUDA 构建下合计 25 条
