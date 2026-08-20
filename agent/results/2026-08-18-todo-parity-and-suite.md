@@ -67,13 +67,17 @@ Torch 兼容模式是进程级的，会改变惰性执行、归约默认值与�
 | 会话 | passed | failed | skipped | 其他 |
 | --- | ---: | ---: | ---: | --- |
 | Torch 模式 | 1716 | 22 | 184 | 4 xfailed |
-| 原生模式 | 1082 | 142 | 357 | 8 xfailed，2 errors |
+| 原生模式 | 1084 | 137 | 357 | 8 xfailed |
 
-原生按目录跑；`core` 与 `ops` 两个目录改为按文件各起一次 pytest。修掉 addr2line 缓冲
-区溢出之后 `compiler` 整目录已经能跑完，不再中途 abort；`core` 整目录仍停在
-`core/test_setitem.py`（工作区里未提交的改动，未纳入本轮），`ops` 单进程跑会因为设备
-状态泄漏多出 84 条失败而按文件跑正常，见 KI-TEST-001。
-`distributed`/`opinfo`/`system` 没有收集到用例。
+原生按目录跑，只有 `core` 需要按文件——它整目录跑会停在 `core/test_setitem.py`
+（工作区里未提交的改动，未纳入本轮）。`distributed`/`opinfo`/`system` 没有收集到用例。
+
+设备用例还原 `use_cuda` 之后，整目录跑与按文件跑终于对得上：`tests/ops` 从
+135 failed / 105 passed / 26 errors 变成 **49 failed / 202 passed**（按文件是 51/200），
+`tests/backends` 从 28 failed 变成 25 failed。整轮原生的失败数因此从约 207 降到约 118。
+代价是耗时变长——标志被正确还原之后，此前静默跑在 CPU 上的那些用例现在真的用显卡，
+要把对应的 CUDA kernel 编出来，`tests/backends` 一轮从 3 分钟变成 1 小时 32 分（一次性
+编译，缓存热了就回落）。
 
 Torch 这一轮之前先踩了一个坑：缓存上一层残留的 CPU-only `jittor_core` 会遮蔽 CUDA
 构建，第一次跑（26 failed / 1712 passed，3h08m）实际是在没有 CUDA 的核心上跑完的。
