@@ -1431,16 +1431,20 @@ with jit_utils.import_scope(import_flags):
 flags = core.Flags()
 
 if has_cuda and is_cuda and not hasattr(flags, "cuda_archs"):
-    # The core that was just imported has no CUDA support, but this process
-    # found nvcc and is about to configure CUDA. That happens when the cache
-    # was first populated by a run where nvcc was absent: the stale core is
-    # reused and every CUDA op later fails with "Op ... doesn't have cuda
-    # version", or this very line raises a bare AttributeError. Say which
-    # directory to remove instead.
+    # The core just imported has no CUDA support while this process found nvcc
+    # and is about to configure CUDA. The usual cause is a stale CPU-only
+    # jittor_core one directory above the CUDA one -- any run that imports
+    # Jittor without nvcc builds it there, and it then shadows the CUDA build
+    # for every later run that shares the cache. Left unreported, the process
+    # keeps going on CPU and every CUDA op fails with "Op ... doesn't have cuda
+    # version"; this line would otherwise raise a bare AttributeError. Name the
+    # file that actually got imported, which is the one to remove.
     raise RuntimeError(
-        "the cached jittor_core in {} was built without CUDA support, but "
-        "this process found nvcc at {}. Remove that directory to rebuild, or "
-        "unset nvcc_path to keep running on CPU.".format(cache_path, nvcc_path)
+        "jittor_core was imported from {}, which is built without CUDA "
+        "support, but this process found nvcc at {} and expected the CUDA "
+        "build in {}. Remove the file named first to stop it shadowing the "
+        "CUDA build, or unset nvcc_path to keep running on CPU.".format(
+            getattr(core, "__file__", "<unknown>"), nvcc_path, cache_path)
     )
 
 if has_cuda and is_cuda:
