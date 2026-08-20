@@ -1061,7 +1061,19 @@ if nvcc_path:
         pass
     LOG.i("cuda key:", cu)
     cache_path = os.path.join(cache_path, cu)
-    sys.path.append(cache_path)
+    # Ahead of the plain cache directory, which is already on the path. Any run
+    # that imports Jittor without nvcc builds a CPU-only jittor_core into that
+    # parent directory, and appending here would leave it earlier on the path --
+    # so it wins the import and every CUDA op afterwards fails with
+    # "Op ... doesn't have cuda version", for this run and every later one
+    # sharing the cache.
+    parent_cache = os.path.dirname(cache_path)
+    if cache_path in sys.path:
+        sys.path.remove(cache_path)
+    sys.path.insert(
+        sys.path.index(parent_cache) if parent_cache in sys.path else len(sys.path),
+        cache_path,
+    )
 
 
 def check_clang_latest_supported_cpu():
