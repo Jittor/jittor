@@ -260,3 +260,25 @@ framework defects.
 - Review/expiry condition: close once a test asserts that the same expression
   yields the same set of logging source files in both builds
 
+## KI-TEST-001: `tests/ops` leaks device state between files in one process
+
+- Severity: Medium (test isolation; no evidence of a product defect)
+- Status: Reproduced and bounded, leaking test not yet identified
+- Owner: test-infrastructure maintainers
+- Evidence: the same files, one pytest process per *file*, report 915 passed /
+  122 failed across `backends`+`compiler`+`core`+`ops`; running `tests/ops` as a
+  single process reports 127 failed / 105 passed / 26 errors
+- Symptom: after some earlier file in the directory runs, later ones fail with
+  `Op array doesn't have cuda version` on a fused
+  `array, array, broadcast_to, broadcast_to, binary.multiply, binary.add`.
+  That is the signature of Vars built while `use_cuda` was 0 being executed
+  once it is 1, i.e. a device flag that outlived the test that set it. The
+  CUDA test classes here do restore the flag in `tearDownClass`, so the leak is
+  elsewhere.
+- Ruled out: not caused by `tests/ops/test_mkl_batched_matmul.py` -- ignoring
+  that file leaves 127 of the failures in place
+- Workaround: run the directory one file per process, which is what the
+  reported per-file numbers use
+- Review/expiry condition: close once the leaking test is found and the whole
+  directory in one process matches the per-file result
+
