@@ -66,7 +66,7 @@ Torch 兼容模式是进程级的，会改变惰性执行、归约默认值与�
 
 | 会话 | passed | failed | skipped | 其他 |
 | --- | ---: | ---: | ---: | --- |
-| Torch 模式 | 1717 | 21 | 184 | 4 xfailed |
+| Torch 模式 | 1716 | 22 | 184 | 4 xfailed |
 | 原生模式 | 1082 | 142 | 357 | 8 xfailed，2 errors |
 
 原生按目录跑；`core` 与 `ops` 两个目录改为按文件各起一次 pytest。修掉 addr2line 缓冲
@@ -77,8 +77,12 @@ Torch 兼容模式是进程级的，会改变惰性执行、归约默认值与�
 
 Torch 这一轮之前先踩了一个坑：缓存上一层残留的 CPU-only `jittor_core` 会遮蔽 CUDA
 构建，第一次跑（26 failed / 1712 passed，3h08m）实际是在没有 CUDA 的核心上跑完的。
-清掉遮蔽文件后重跑，21 failed / 1717 passed——差的那 5 条正是缺设备而失败的 CUDA 用例。
-见 KI-COMPILER-004。
+根因是两个构建目录都用 `sys.path.append`，父目录先进去先被搜到；改成把 CUDA 目录插到
+父目录之前后，`tests/structure` 从 3 failed / 209 passed 变成 **212 passed**。
+
+剩下这 22 条里有相当一部分是顺序相关的：`tests/compat/torch/test_torch_compat_norm.py`
+单独跑 27 条全过，整轮跑却有 3 条失败；`tests/structure` 单独跑全过。与 KI-TEST-001
+是同一类问题——上一个用例留下的未求值计算图或设备状态被下一个用例撞上。
 
 原生这 137 条失败绝大多数是 CUDA 构建特有的。把失败最多的三个文件
 （`test_parallel_pass`、`test_transpose_op`、`test_where_op`，CUDA 构建下合计 25 条
