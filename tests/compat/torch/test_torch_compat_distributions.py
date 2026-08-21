@@ -20,11 +20,7 @@ API quirks pinned here (verified against jittor/distributions.py):
   * Bernoulli: logits -> probs via SIGMOID (contrast with Categorical); sample is float 0/1.
   * jittor has no 0-d scalar Var; scalar results are compared via .item().
 
-Known-broken behaviour is @unittest.skip-ped with a ``BUG:``/``DIVERGENCE:`` reason
-rather than asserted around (see the suspected-bug list returned with this rewrite).
-
 Run:  python -m pytest tests/compat/torch/test_torch_compat_distributions.py
-      python -m pytest tests/compat/torch/test_torch_compat_distributions.py
 """
 import math
 import unittest
@@ -98,11 +94,6 @@ class TestNormal(Base):
                              f"Normal.sample((10,4)) shape {dev}")
         both_devices(body)
 
-    @unittest.skip("DIVERGENCE: with BATCHED params (shape (3,)), Normal.sample((n,)) "
-                   "raises a broadcast error instead of returning torch's (n,)+batch=(n,3)"
-                   ". jittor passes sample_shape as the literal output shape (jt.normal "
-                   "size=sample_shape) rather than prepending it to batch_shape; you must "
-                   "pass the full (n,3). distributions.py:100.")
     def test_sample_prepends_to_batch_shape(self):
         def body(dev):
             self.assertEqual(tuple(self._dist().sample((100,)).shape), (100, 3),

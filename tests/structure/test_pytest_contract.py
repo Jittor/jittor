@@ -249,6 +249,21 @@ def test_optional_dependency_probe_rejects_loaded_jittor_torch_alias(monkeypatch
         assert not torch_runtime.modules_available("torch.nn")
 
 
+def test_optional_dependency_probe_rejects_discoverable_jittor_torch_stub(monkeypatch):
+    from _helpers import torch_runtime
+
+    monkeypatch.delenv("REAL_TORCH_SITE", raising=False)
+    monkeypatch.delitem(torch_runtime.sys.modules, "torch", raising=False)
+    source = """
+import sys as _sys
+_sys.modules[__name__]._jittor_torch_shim_placeholder = True
+"""
+    loader = SimpleNamespace(get_source=lambda _name: source)
+    spec = SimpleNamespace(loader=loader)
+    with mock.patch.object(torch_runtime.importlib.util, "find_spec", return_value=spec):
+        assert not torch_runtime.modules_available("torch.autograd")
+
+
 def test_optional_dependency_probe_rejects_a_deployed_shim_as_real_torch(monkeypatch, tmp_path):
     from _helpers import torch_runtime
 

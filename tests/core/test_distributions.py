@@ -125,7 +125,8 @@ class TestOneHot(unittest.TestCase):
                 x1 = jc.sample(sample_shape)
                 x2 = tc.sample(sample_shape)
                 assert tuple(x1.shape) == tuple(x2.shape)
-                x = np.random.randint(0,prob_shape[-1], tuple(x1.shape))
+                indexes = np.random.randint(0, prob_shape[-1], tuple(x1.shape[:-1]))
+                x = np.eye(prob_shape[-1], dtype="float32")[indexes]
                 np.testing.assert_allclose(jc.log_prob(x), tc.log_prob(torch.tensor(x)), atol=1e-5)
                 np.testing.assert_allclose(jd.kl_divergence(jc,jc2), torch.distributions.kl_divergence(tc,tc2), atol=1e-5)
         check((10,), (4,))
@@ -188,15 +189,13 @@ class TestOneHot(unittest.TestCase):
     
     @unittest.skipIf(skip_this_test, "No Torch Found")
     def test_geometric(self):
-        for _ in range(4):
-            prob, prob2 = np.random.uniform(0,1), np.random.uniform(0,1)
+        cases = ((0.1, 0.7, 0), (0.25, 0.6, 2), (0.6, 0.2, 5), (0.9, 0.4, 8))
+        for prob, prob2, x in cases:
             jg, jg2 = jd.Geometric(prob),jd.Geometric(prob2)
             tg, tg2 = torch.distributions.Geometric(prob),torch.distributions.Geometric(prob2)
-            np.testing.assert_allclose(jg.entropy().data,tg.entropy().numpy(), atol=1e-4)
-            x = np.random.randint(1,10)
-            np.testing.assert_allclose(jg.log_prob(x),tg.log_prob(torch.tensor(x)), atol=1e-4)
-            # print(jd.kl_divergence(jg,jg2),torch.distributions.kl_divergence(tg,tg2))
-            np.testing.assert_allclose(jd.kl_divergence(jg,jg2),torch.distributions.kl_divergence(tg,tg2), atol=1e-4)
+            np.testing.assert_allclose(jg.entropy().data,tg.entropy().numpy(), atol=1e-5)
+            np.testing.assert_allclose(jg.log_prob(x),tg.log_prob(torch.tensor(x)), atol=1e-5)
+            np.testing.assert_allclose(jd.kl_divergence(jg,jg2),torch.distributions.kl_divergence(tg,tg2), atol=1e-5)
 
 # Reference values captured from REAL PyTorch (torch.distributions) in a clean env.
 # Hardcoded on purpose: in a jittor-as-torch deployment the in-process `torch` is the

@@ -1,5 +1,6 @@
 """Delay independent PyTorch imports until pytest executes a test module."""
 
+import ast
 import importlib
 import importlib.machinery
 import importlib.util
@@ -54,6 +55,34 @@ def _site_spec(module_name, site):
     return importlib.machinery.PathFinder.find_spec(module_name, [str(site)])
 
 
+def _spec_is_deployed_torch_shim(spec):
+    """Recognize Jittor's source stub without importing and activating it."""
+    loader = getattr(spec, "loader", None)
+    get_source = getattr(loader, "get_source", None)
+    if not callable(get_source):
+        return False
+    try:
+        source = get_source("torch")
+        if not source:
+            return False
+        tree = ast.parse(source)
+    except (ImportError, OSError, SyntaxError, TypeError):
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        if getattr(getattr(node, "value", None), "value", None) is not True:
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else (node.target,)
+        if any(
+            isinstance(target, ast.Attribute)
+            and target.attr == "_jittor_torch_shim_placeholder"
+            for target in targets
+        ):
+            return True
+    return False
+
+
 def modules_available(*module_names):
     """Return whether top-level optional dependencies are discoverable without importing."""
     top_level_names = {module_name.partition(".")[0] for module_name in module_names}
@@ -78,6 +107,10 @@ def modules_available(*module_names):
                 if _loaded_module_is_from_site(module_name, site):
                     continue
                 if _site_spec(module_name, site) is None:
+                    return False
+            elif module_name == "torch":
+                spec = importlib.util.find_spec(module_name)
+                if spec is None or _spec_is_deployed_torch_shim(spec):
                     return False
             elif module_name == "torchvision":
                 module = sys.modules.get(module_name)
