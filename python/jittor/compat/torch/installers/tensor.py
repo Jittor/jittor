@@ -1059,6 +1059,19 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # ndarray, breaking `param.data.to(...)`. Override to torch semantics.
     if not getattr(Var, "_data_wrapped", False):
         def _data_get(self):
+            # Only when this interpreter is actually serving the torch
+            # namespace. Composition runs either way, and a plain
+            # ``import jittor`` must keep Jittor's own contract, where ``.data``
+            # is a numpy view -- code like ``a.data[mask]`` with a numpy mask
+            # depends on it, and 2.0 is meant to leave the native interface
+            # as it was.
+            preflight = getattr(jt, "_compat_preflight_result", None)
+            if (
+                _native_data_descriptor is not None
+                and preflight is not None
+                and not getattr(preflight, "active", False)
+            ):
+                return _native_data_descriptor.__get__(self, Var)
             view = self.detach().stop_grad()
             view._torch_data_owner = self
             view._torch_data_path = ()
