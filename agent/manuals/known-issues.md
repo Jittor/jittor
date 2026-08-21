@@ -2,7 +2,7 @@
 
 - Status: Maintained
 - Last reviewed: 2026-08-21
-- Baseline: `7cc35238` plus the floor-division change under review
+- Baseline: `85aad9f3`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 

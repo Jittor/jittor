@@ -2,8 +2,7 @@
 
 - Status: CPU/CUDA verified; NPU/ROCm real-device verification pending
 - Date: 2026-08-21
-- Baseline: `7cc35238` plus the floor-division changes in the same commit as
-  this report
+- Baseline: `85aad9f3`
 - Owner: binary operator maintainers
 - Review when: the common operator code generator, integer dtype inference, or
   an unverified accelerator backend becomes available

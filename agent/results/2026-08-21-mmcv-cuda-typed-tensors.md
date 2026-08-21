@@ -2,8 +2,7 @@
 
 - Status: Verified
 - Date: 2026-08-21
-- Baseline: `f87f938c` plus the `cuda.py` and regression-test changes in the
-  same commit as this report
+- Baseline: `7cc35238`
 - Owner: Torch compatibility maintainers
 - Review when: the typed-tensor implementation, tensor residency reporting, or
   maintained MMCV/MMEngine versions change
