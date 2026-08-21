@@ -2,7 +2,7 @@
 
 - Status: Maintained
 - Last reviewed: 2026-08-21
-- Baseline: `3fc3f6fd`
+- Baseline: `8b34f33a`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -38,19 +38,6 @@ framework defects.
   [SIGCHLD verification](../results/2026-08-21-jupyter-sigchld.md).
 - Review/expiry condition: remove only after sanitizer-backed root cause and
   repeated cold/warm stress, deadlock, multiprocess-cache, and performance gates
-
-## KI-COMPILER-002: fractional constant padding can break CPU asm tuning
-
-- Severity: High
-- Status: Strict expected failure
-- Owner: CPU compiler/asm-tuner maintainers
-- Evidence: [`test_constant_pad_fractional_fill_cpu_asmtuner`](../../tests/compiler/test_kernel_traps.py)
-- Symptom: a fractional constant pad value can be rewritten into malformed C++;
-  integer fill values and CUDA are unaffected
-- Workaround: use an integral fill when semantically acceptable or disable the
-  affected asm-tuner path for the reproduction
-- Review/expiry condition: the strict expected failure XPASSes with fractional,
-  negative, and representative hexadecimal constants covered
 
 ## KI-BACKEND-001: narrow integer reductions lack accelerator atomics
 
