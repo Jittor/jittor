@@ -192,6 +192,15 @@ def test_automatic_backend_markers_follow_device_sessions():
     assert _automatic_markers(external) == set()
 
 
+def test_torch_semantic_core_suites_run_in_the_torch_process():
+    module = _load_test_conftest()
+    required = {
+        "tests/core/test_regression.py",
+        "tests/core/test_type_system.py",
+    }
+    assert required <= set(module.TORCH_MODE_PATHS)
+
+
 def test_network_access_is_explicitly_marked():
     path = TEST_ROOT / "compiler" / "test_trace_var.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

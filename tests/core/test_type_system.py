@@ -3,14 +3,12 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-"""Core TYPE-SYSTEM parity: the dtype-promotion lattice, the cast methods, and
-NanoString.
+"""Torch-facing type-system parity plus low-level NanoString contracts.
 
-This is a LOW-LEVEL / CORE module -- the promotion lattice and the cast methods
-are consulted by *every* mixed-dtype arithmetic expression and every ``.long()`` /
-``.float()`` call in user code, so a wrong entry here is a silent
-precision/range loss that no higher-level test would localise. Correctness here
-is non-negotiable ("不能有bug").
+The file remains beside the low-level type tests because it also checks
+``NanoString`` round trips, but pytest schedules it in the repository's dedicated
+Torch-mode process. The promotion APIs and cast aliases asserted here are owned by
+the compatibility installer, not by a plain native ``import jittor`` process.
 
 Why a dedicated module and not just a slice of ``test_ops.py``: op_db gradcheck
 runs each op at a single declared dtype and never *mixes* dtypes, so it cannot see
@@ -38,16 +36,8 @@ so every fixed-width tensor is built with ``jt.array(a, dtype=...)`` (which jitt
 honours via ``auto_convert_64_to_32=0``). Values are read via ``.numpy()`` because
 jittor has no 0-d scalar (a reduced value is shape ``(1,)``).
 
-PRESERVED semantic-diffs (carried, NOT silently "fixed"): the two ``@unittest.skip``
-locks from ``test_torch_compat_dtype.py`` -- (a) the pre-shim native binary-op
-promotion kept the narrower/left operand, and (b) native ``Var.long`` was aliased to
-``Var.int32``. The torch_compat layer that ``import jittor`` installs unconditionally
-now OVERRIDES both (the live behavior is the torch lattice / int64, asserted
-positively above), but the historical reasons are carried verbatim per the audit's
-must-keep rule.
-
 Run::  python -m pytest tests/core/test_type_system.py
-       python -m pytest tests/core/test_type_system.py
+       python tools/run_test_suite.py --session torch -- -k type_system
 """
 import unittest
 
@@ -498,39 +488,6 @@ class TestNanoString(_CPUOnly):
         # narrowing-pinned int64 round-trips through its own dtype string too.
         w = _pin("int64", (1, 2, 3))
         self.assertEqual(_dts(w.cast(str(w.dtype))), "int64")
-
-
-# ============================ PRESERVED semantic-diffs (carried, NOT re-asserted) ========
-# These two locks come from test_torch_compat_dtype.py. They describe the PRE-SHIM
-# NATIVE jittor behavior. `import jittor` unconditionally runs torch_compat.install(),
-# which OVERRIDES both: the live binary-op promotion now follows torch's lattice
-# (TestBinaryOpPromotion, above) and Var.long() now returns int64
-# (TestCastMethods.test_cast_methods_exact_dtype_from_int, above). The skips are
-# carried verbatim per the audit's must-keep rule so the historical divergence and
-# its verify-then-fix note are never lost in a refactor -- and are NOT asserted to a
-# wrong value.
-
-class TestPreservedSemanticDiffs(_CPUOnly):
-    @unittest.skip("SEMANTIC-DIFF (carried from test_torch_compat_dtype.py): the "
-                   "PRE-SHIM native jittor binary-op promotion did NOT follow torch's "
-                   "result_type lattice for MIXED dtypes -- it kept the narrower/left "
-                   "operand's type (int32+int64 -> int32, float32+float64 -> float32, "
-                   "float16+int64 -> float16-by-other-path, int8+int32 -> int8, "
-                   "bool+int32 -> int8), silently losing precision/range. The "
-                   "torch_compat layer installed at import now promotes to result_type "
-                   "first (asserted positively in TestBinaryOpPromotion). "
-                   "verify-then-fix kept for history; do not re-assert the old value.")
-    def test_native_promotion_kept_narrower_operand_DIVERGENCE(self):
-        pass
-
-    @unittest.skip("SEMANTIC-DIFF (carried from test_torch_compat_dtype.py): native "
-                   "jittor aliased Var.long = Var.int32, so .long() returned int32 "
-                   "whereas torch's .long() is int64. The dtype OBJECT torch.long was "
-                   "always int64 (correct); only the cast METHOD diverged. The "
-                   "torch_compat install re-points Var.long to cast->int64 (asserted "
-                   "positively in TestCastMethods). Carried for history; not re-asserted.")
-    def test_native_long_was_int32_DIVERGENCE(self):
-        pass
 
 
 if __name__ == "__main__":

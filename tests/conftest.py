@@ -63,6 +63,10 @@ TORCH_MODE_PATHS = (
     # (unbiased var/std and NaN-aware reductions). Native Jittor retains its
     # historical NumPy-aligned defaults.
     "tests/core/test_regression.py",
+    # This cross-product suite asserts Torch result_type, promotion, cast, and
+    # typed-tensor-name contracts. Keep it in the Torch process even though the
+    # file lives beside the low-level NanoString checks it also carries.
+    "tests/core/test_type_system.py",
     "tests/structure",
     "tests/backends/triton/test_triton_torch_compat.py",
 )

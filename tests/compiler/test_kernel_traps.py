@@ -132,8 +132,8 @@ class TestKernelTraps(JittorTestCase):
         self.assertEqual(str(jt.array(a, dtype="float64").dtype), "float64",
                          msg="jt.array(a, dtype='float64') preserves double (workaround)")
 
-    # -- #10 / f1c400c6: torch dtype-promotion lattice -----------------------------
-    def test_dtype_promotion_lattice(self):
+    # -- native 2.0 dtype inference (Torch promotion is tested in compat/torch) -----
+    def test_native_dtype_promotion_contract(self):
         # NB: jt.array narrows int64->int32 (and float64->float32), so dtypes MUST be
         # pinned explicitly to actually exercise the int64 lattice.
         i32 = jt.array(np.array([1, 2, 3], dtype="int32"), dtype="int32")
@@ -141,18 +141,15 @@ class TestKernelTraps(JittorTestCase):
         f32 = jt.array(np.array([1.0, 2.0, 3.0], dtype="float32"), dtype="float32")
         # int32 + int64 -> int64 (wider int wins)
         self.assertEqual(str((i32 + i64).dtype), "int64", msg="int32+int64 -> int64")
-        # float32 + int64 -> float32 (float beats int regardless of width)
-        self.assertEqual(str((f32 + i64).dtype), "float32", msg="float32+int64 -> float32")
+        # Native inference uses the widest storage width across float and int.
+        self.assertEqual(str((f32 + i64).dtype), "float64", msg="float32+int64 -> float64")
         # true division of ints -> float (never integer division)
         self.assertEqual(str((i32 / i32).dtype)[:5], "float", msg="int/int -> float")
 
-    # -- #10: .long() must be int64 (was mis-aliased to int32) ---------------------
-    def test_long_is_int64(self):
+    # -- native 2.0 alias; Torch mode deliberately overrides this to int64 ----------
+    def test_native_long_alias_is_int32(self):
         x = jt.array(np.array([1, 2, 3], dtype="int32"))
-        if hasattr(x, "long"):
-            self.assertEqual(str(x.long().dtype), "int64", msg=".long() -> int64")
-        else:
-            self.skipTest(".long() not exposed")
+        self.assertEqual(str(x.long().dtype), "int32", msg="native .long() -> int32")
 
     def test_constant_pad_fractional_fill_cpu_codegen(self):
         """JIT-key doubles must become valid C++14 literals in generated kernels."""
