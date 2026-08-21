@@ -31,6 +31,7 @@ import collections as _collections
 _MinMax = _collections.namedtuple("torch_return_types", ["values", "indices"])
 _TopK = _collections.namedtuple("topk", ["values", "indices"])
 _Sort = _collections.namedtuple("sort", ["values", "indices"])
+_Median = _collections.namedtuple("median", ["values", "indices"])
 
 
 def _install_reductions(g):
@@ -50,6 +51,7 @@ def _install_reductions(g):
     _jt_var_min = _jt.Var.min
     _topk = getattr(_jt, "topk", None)
     _gather = _jt.gather
+    _median = _jt.median
 
     def _reduce_index(result):
         if isinstance(result, (tuple, list)):
@@ -134,6 +136,24 @@ def _install_reductions(g):
     g.sort = sort
     g.argsort = lambda x, dim=-1, descending=False, **kw: _argsort(x, dim=dim, descending=descending)[0].int64()
 
+    def median(x, dim=None, keepdim=False):
+        if dim is None:
+            return _median(x, keepdim=keepdim)
+        d = dim if dim >= 0 else dim + x.ndim
+        if d < 0 or d >= x.ndim:
+            raise IndexError(
+                f"Dimension out of range (expected to be in range of "
+                f"[-{x.ndim}, {x.ndim - 1}], but got {dim})"
+            )
+        idx, values = _argsort(x, dim=d)
+        k = (x.shape[d] - 1) // 2
+        slices = [slice(None)] * x.ndim
+        slices[d] = slice(k, k + 1) if keepdim else k
+        slices = tuple(slices)
+        return _Median(values[slices], idx[slices].int64())
+
+    g.median = median
+
     # --- Tensor METHOD forms. jittor-core uses none of these as Var methods (only
     # the python list.sort builtin), so installing torch semantics here is safe;
     # it was verified that .max/.min methods ARE used internally, so those stay
@@ -142,6 +162,9 @@ def _install_reductions(g):
     Var.sort = lambda self, dim=-1, descending=False, **kw: sort(self, dim=dim, descending=descending)
     Var.argsort = lambda self, dim=-1, descending=False, **kw: g.argsort(self, dim=dim, descending=descending)
     Var.topk = lambda self, k, dim=-1, largest=True, sorted=True: topk(self, k, dim=dim, largest=largest, sorted=sorted)
+    Var.median = lambda self, dim=None, keepdim=False: median(
+        self, dim=dim, keepdim=keepdim
+    )
     # Tensor.softmax/log_softmax accept a `dtype=` (cast before the op) which
     # jittor's native method rejects (vLLM's sampler: logits.softmax(dim=-1,
     # dtype=torch.float32)).

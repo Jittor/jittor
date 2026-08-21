@@ -59,6 +59,89 @@ class TestSortSelect(Base):
                     msg=f"topk smallest {dev}")
         both_devices(body)
 
+    def test_median_values_indices_and_gradient(self):
+        x = np.array([
+            [[9., 1., 5., 3.], [8., 4., 2., 6.], [7., 0., 10., 11.]],
+            [[-1., -9., -5., -3.], [-8., -4., -2., -6.], [-7., .5, -10., -11.]],
+        ], dtype="float32")
+
+        def body(dev):
+            global_input = torch.tensor(x, requires_grad=True)
+            global_result = torch.median(global_input)
+            if dev == "cuda":
+                self.assertTrue(global_input.is_cuda)
+                self.assertTrue(global_result.is_cuda)
+            global_index = np.argsort(x.reshape(-1))[(x.size - 1) // 2]
+            global_expected = x.reshape(-1)[global_index]
+            self.ac(global_result.numpy().reshape(-1), np.array([global_expected]),
+                    msg=f"median global {dev}")
+            global_grad = jt.grad(global_result.sum(), global_input).numpy()
+            expected_global_grad = np.zeros_like(x)
+            expected_global_grad.reshape(-1)[global_index] = 1
+            self.ae(global_grad, expected_global_grad,
+                    msg=f"median global gradient {dev}")
+
+            for dim in (0, 1, 2, -1, -2):
+                for keepdim in (False, True):
+                    axis = dim % x.ndim
+                    k = (x.shape[axis] - 1) // 2
+                    order = np.argsort(x, axis=axis)
+                    expected_indices = np.take(order, k, axis=axis)
+                    expected_values = np.take_along_axis(
+                        x, np.expand_dims(expected_indices, axis), axis=axis
+                    )
+                    if not keepdim:
+                        expected_values = np.squeeze(expected_values, axis=axis)
+                    else:
+                        expected_indices = np.expand_dims(expected_indices, axis)
+
+                    value = torch.tensor(x, requires_grad=True)
+                    if dev == "cuda":
+                        self.assertTrue(value.is_cuda)
+                    result = torch.median(value, dim=dim, keepdim=keepdim)
+                    if dev == "cuda":
+                        self.assertTrue(result.values.is_cuda)
+                        self.assertTrue(result.indices.is_cuda)
+                    self.assertEqual(type(result).__name__, "median")
+                    self.ac(result.values.numpy(), expected_values,
+                            msg=f"median values dim={dim} keep={keepdim} {dev}")
+                    self.ae(result.indices.numpy(), expected_indices,
+                            msg=f"median indices dim={dim} keep={keepdim} {dev}")
+                    self.assertEqual(str(result.indices.dtype), "torch.int64")
+
+                    weights = np.arange(
+                        1, result.values.numel() + 1, dtype=np.float32
+                    ).reshape(result.values.shape)
+                    grad = jt.grad(
+                        (result.values * torch.tensor(weights)).sum(), value
+                    ).numpy()
+                    expected_grad = np.zeros_like(x)
+                    grad_indices = expected_indices
+                    grad_weights = weights
+                    if keepdim:
+                        grad_indices = np.squeeze(grad_indices, axis=axis)
+                    else:
+                        grad_weights = np.expand_dims(grad_weights, axis=axis)
+                    np.put_along_axis(
+                        expected_grad,
+                        np.expand_dims(grad_indices, axis=axis),
+                        grad_weights,
+                        axis=axis,
+                    )
+                    self.ae(grad, expected_grad,
+                            msg=f"median gradient dim={dim} keep={keepdim} {dev}")
+
+                    method_result = value.median(dim=dim, keepdim=keepdim)
+                    self.ac(method_result.values.numpy(), expected_values,
+                            msg=f"Tensor.median dim={dim} keep={keepdim} {dev}")
+
+            with self.assertRaises(IndexError):
+                torch.median(torch.tensor(x), dim=x.ndim)
+            with self.assertRaises(IndexError):
+                torch.tensor(x).median(dim=-x.ndim - 1)
+
+        both_devices(body)
+
     def test_max_min_with_dim(self):
         x = np.random.RandomState(3).randn(3, 4).astype("float32")
         def body(dev):

@@ -308,19 +308,35 @@ def t(x):
     return x.transpose(*pose)
 jt.Var.t = t 
 
-def median(x,dim=None,keepdim=False, keepdims=False):
+def median(x, dim=None, keepdim=False, keepdims=False):
     keepdim = keepdim or keepdims
     if dim is None:
         x = x.reshape(-1)
-        dim=0
-    _,x = jt.argsort(x, dim)
-    slices = [slice(None) for i in range(dim-1)]
-    k = (x.shape[dim]-1)//2
-    if keepdim:
-        slices.append(slice(k,k+1))
+        dim = 0
+        requested_dim = dim
     else:
-        slices.append(k)
-    return x[tuple(slices)]
+        requested_dim = dim
+        if dim < 0:
+            dim += x.ndim
+    if dim < 0 or dim >= x.ndim:
+        raise IndexError(
+            f"median(): dimension out of range (expected to be in range of "
+            f"[-{x.ndim}, {x.ndim - 1}], but got {requested_dim})"
+        )
+
+    sorted_result = jt.argsort(x, dim)
+    if isinstance(sorted_result, (tuple, list)):
+        _, values = sorted_result
+    else:
+        values = jt.gather(x, dim, sorted_result)
+
+    slices = [slice(None)] * x.ndim
+    k = (x.shape[dim] - 1) // 2
+    if keepdim:
+        slices[dim] = slice(k, k + 1)
+    else:
+        slices[dim] = k
+    return values[tuple(slices)]
 
 jt.Var.median = median
 

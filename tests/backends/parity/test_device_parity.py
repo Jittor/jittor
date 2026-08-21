@@ -79,13 +79,6 @@ def _cuda_linalg_works():
 
 
 _KNOWN_DEVICE_ISSUES = {
-    # KNOWN-BROKEN op (finding #7, also skipped in test_ops):
-    # jittor.misc.tensor_ops.median is broken under the torch-compat layer because
-    # ``_, x = jt.argsort(x, dim)``
-    # expects the native (idx,val) 2-tuple but torch-compat's argsort returns indices only,
-    # so it raises "too many values to unpack". Not a device-parity divergence; skip until
-    # median itself is fixed (then re-enable here AND in ordering_ops.py).
-    "median":  ("skip", "jittor.misc.tensor_ops.median has incompatible argsort unpack under torch-compat; see test_ops skip"),
     # FINDING: sub-32-bit integer reduce has no CUDA atomic overload (atomicAdd/Max/Min
     # for uint8/int8) -> fails to COMPILE on CUDA. int8/16 max/min were fixed (eb3c8bee)
     # but reduce-add and 8-bit are still broken.
