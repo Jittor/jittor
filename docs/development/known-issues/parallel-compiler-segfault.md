@@ -1,8 +1,8 @@
 # Parallel Operator Compiler Segmentation Fault
 
-- Status: Open; root cause not proven
-- Last reviewed: 2026-08-12
-- Baseline: `582fc51d`
+- Status: Open for non-Jupyter workloads; Jupyter SIGCHLD path fixed
+- Last reviewed: 2026-08-21
+- Baseline: `3fc3f6fd`
 - Owner: compiler/executor maintainers
 - Workaround: `jt.flags.use_parallel_op_compiler = 0`
 - Exit condition: a minimized stress test passes repeatedly with parallel
@@ -19,6 +19,24 @@ Serial compilation has been used successfully by dataset, ACL, and parity test
 paths. This is a containment measure, not evidence that runtime operator
 execution is defective.
 
+## Resolved Jupyter subcase
+
+The former Jupyter reproduction had a separate, proven cause. The parallel
+operator compiler uses `std::thread`; it does not fork compiler workers. Jittor
+nevertheless installed a process-wide `SIGCHLD` handler inside an ipykernel and
+quick-exited the host whenever any child was killed by a signal. A minimal
+process containing only `import jittor` and an unrelated `SIGKILL`ed subprocess
+reproduced the exit with `si_code=CLD_KILLED` and `si_status=SIGKILL`.
+
+Jupyter kernels now keep their existing SIGCHLD disposition, just as they
+already kept SIGINT, while Jittor retains SIGILL and SIGBUS fault diagnostics.
+The offline notebook gate explicitly uses eight operator compile workers. A
+real nbclient kernel, the deterministic host-ownership regression, and CPU/CUDA
+cold-operator probes pass. See the
+[2026-08-21 verification report](../../../agent/results/2026-08-21-jupyter-sigchld.md).
+This removes the notebook workaround but does not prove or close the broader
+large-workload compiler hypothesis below.
+
 ## Current hypothesis
 
 The leading hypothesis is a missing synchronization boundary between parallel
@@ -27,11 +45,11 @@ observe lock state established by the owning process and incorrectly treat
 shared compiler or relay state as protected. Concurrent mutation could then
 surface as heap corruption.
 
-This remains a hypothesis. The ownership of relay groups, the exact shared
-mutable object, and the first invalid access have not been demonstrated with a
-sanitizer trace. Adding one broad mutex is therefore not an accepted fix: it may
-deadlock nested compilation, eliminate intended parallelism, or fail to protect
-multi-process cache access.
+For non-Jupyter workloads this remains a hypothesis. The ownership of relay
+groups, the exact shared mutable object, and the first invalid access have not
+been demonstrated with a sanitizer trace. Adding one broad mutex is therefore
+not an accepted fix: it may deadlock nested compilation, eliminate intended
+parallelism, or fail to protect multi-process cache access.
 
 ## Reproduction protocol
 

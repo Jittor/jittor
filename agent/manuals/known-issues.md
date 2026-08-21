@@ -2,7 +2,7 @@
 
 - Status: Maintained
 - Last reviewed: 2026-08-21
-- Baseline: `8929db65`
+- Baseline: `3fc3f6fd`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -25,15 +25,17 @@ framework defects.
 ## KI-COMPILER-001: parallel compiler can corrupt process state
 
 - Severity: High
-- Status: Open; root cause unproven
+- Status: Open for non-Jupyter workloads; Jupyter SIGCHLD path fixed
 - Owner: compiler/executor maintainers
 - Evidence: [investigation and reproduction](../../docs/development/known-issues/parallel-compiler-segfault.md)
 - Workaround: set `jt.flags.use_parallel_op_compiler = 0` for deterministic
   validation workloads
-- Additional reproduction: forking the parallel compiler from a Jupyter kernel
-  kills the kernel during the first cold compile. `use_parallel_op_compiler=0`
-  in [`test_notebooks.py`](../../tests/integration/test_notebooks.py) is the
-  current mitigation for the offline CPU tutorial gate.
+- Resolved subcase: the Jupyter kernel death was not compiler heap corruption.
+  Jittor's process-wide `SIGCHLD` handler quick-exited the kernel when any child
+  was killed. Jupyter now retains SIGCHLD ownership, and
+  [`test_notebooks.py`](../../tests/integration/test_notebooks.py) runs its cold
+  operator workload with eight compile workers. See the
+  [SIGCHLD verification](../results/2026-08-21-jupyter-sigchld.md).
 - Review/expiry condition: remove only after sanitizer-backed root cause and
   repeated cold/warm stress, deadlock, multiprocess-cache, and performance gates
 
