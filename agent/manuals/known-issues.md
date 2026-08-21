@@ -2,7 +2,7 @@
 
 - Status: Maintained
 - Last reviewed: 2026-08-21
-- Baseline: `85aad9f3`
+- Baseline: `c3750d82`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -75,19 +75,6 @@ framework defects.
   supported representation/path explicitly
 - Review/expiry condition: remove skips only after real-device forward and parity
   tests pass
-
-## KI-COMPAT-001: median conflicts with Torch-style `argsort`
-
-- Severity: Critical
-- Status: OpInfo and parity skip
-- Owner: misc and Torch-compat maintainers
-- Evidence: [`ordering_ops.py`](../../tests/opinfo/definitions/ordering_ops.py)
-- Symptom: median assumes a native `(index, value)` return while the installed
-  Torch-style `argsort` contract returns indices; higher-axis indexing also needs
-  correction
-- Workaround: use an independently validated sort/select implementation
-- Review/expiry condition: enable OpInfo forward, gradient, and device-parity
-  coverage for scalar and nonzero dimensions
 
 ## KI-NN-001: CPU `DepthwiseConv` backward raises `save_vars`
 
@@ -170,6 +157,25 @@ framework defects.
 - Workaround: construct the complete output shape explicitly where possible
 - Review/expiry condition: enable the skipped test for multiple sample and batch
   ranks, including gradients where applicable
+
+## KI-COMPAT-003: native CUDA startup can activate a deployed Torch shim
+
+- Severity: Critical
+- Status: Reproduced environment-dependent semantic switch
+- Owner: compatibility composition and Triton bridge maintainers
+- Evidence: [median verification environment probe](../results/2026-08-21-median.md)
+- Symptom: in an environment whose top-level `torch` package is the deployed
+  Jittor shim, plain `import jittor` with CUDA enabled imports
+  `jittor.compat.triton`; that dependency chain imports `torch`, whose placeholder
+  runs the process-wide Torch installer even when `JITTOR_TORCH_SHIM=0`. Native
+  APIs then expose Torch return types and defaults without an explicit mode
+  selection.
+- Workaround: run native CUDA validation in an environment with independent real
+  PyTorch or no deployed Torch shim, and assert both the compatibility context and
+  API owner before treating a result as native
+- Review/expiry condition: a subprocess with the deployed placeholder available,
+  CUDA enabled, and `JITTOR_TORCH_SHIM=0` keeps the compatibility context absent
+  and native API owners unchanged, while explicit Torch-mode startup still passes
 
 ## KI-SEMANTICS-003: same-Var equality mishandles NaN
 

@@ -2,7 +2,7 @@
 
 - Status: Current index, not a history log
 - Last reviewed: 2026-08-21
-- Baseline reviewed: `85aad9f3`
+- Baseline reviewed: `c3750d82`
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -109,10 +109,10 @@ Use [`noxfile.py`](../../noxfile.py) for the maintained `lint`, `format`,
 The canonical list is [known-issues.md](known-issues.md). Highest-risk active
 items include pending NPU/ROCm verification of the corrected negative integer
 floor division, the parallel compiler crash hypothesis, accelerator reduction
-atomic gaps, median's Torch-compat conflict, and CPU DepthwiseConv backward
-failure. Same-Var equality with NaN is a known silent-wrong optimizer behavior;
-CUDA rFFT also has a sequence-sensitive risk that still needs a minimized
-regression.
+atomic gaps, environment-dependent native/Torch mode activation, and CPU
+DepthwiseConv backward failure. Same-Var equality with NaN is a known silent-wrong
+optimizer behavior; CUDA rFFT also has a sequence-sensitive risk that still needs
+a minimized regression.
 
 Do not add a second bug narrative here. Add or update the ledger entry with an
 owner, executable evidence, workaround, and exit condition.
