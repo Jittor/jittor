@@ -1,8 +1,8 @@
 # Active Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-08-12
-- Baseline: `582fc51d`
+- Last reviewed: 2026-08-21
+- Baseline: `7cc35238` plus the floor-division change under review
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -140,17 +140,24 @@ framework defects.
 - Review/expiry condition: adopt and document one precision contract, then make
   the test a normal assertion for it
 
-## KI-OPS-002: integer floor division truncates negatives
+## KI-OPS-002: integer floor-division backend verification incomplete
 
 - Severity: Critical
-- Status: Coverage constrained to non-negative dividends
+- Status: Core fix verified on CPU/CUDA; NPU/ROCm real-device verification pending
 - Owner: binary operator maintainers
-- Evidence: [`sample_floor_divide`](../../tests/opinfo/definitions/pointwise_binary.py)
-- Symptom: negative integer division truncates toward zero rather than flooring
-  toward negative infinity
-- Workaround: apply an explicit mathematical floor correction for negative values
-- Review/expiry condition: add negative OpInfo samples and pass independent
-  NumPy/Torch reference comparison on all supported devices
+- Evidence: [`test_floor_divide.py`](../../tests/core/test_floor_divide.py),
+  [`sample_floor_divide`](../../tests/opinfo/definitions/pointwise_binary.py), and
+  [2026-08-21 verification](../results/2026-08-21-floor-divide.md)
+- Previous symptom: C++ integer division made negative quotients truncate toward
+  zero instead of flooring toward negative infinity
+- Current implementation: shared CPU/CUDA codegen subtracts one exactly when a
+  nonzero remainder has the opposite sign from the divisor; fixed vectors pass
+  for uint8/int8/int16/int32/int64, and the selected int64 OpInfo samples cover
+  negative operands on CPU and CUDA
+- Workaround on unverified backends: compare representative negative operands
+  against `numpy.floor_divide` before relying on the backend
+- Review/expiry condition: pass the same fixed-vector and OpInfo coverage on real
+  NPU and ROCm devices, then remove this entry
 
 ## KI-COMPAT-002: batched Normal sampling shape divergence
 
@@ -325,4 +332,3 @@ framework defects.
   batched oneDNN call. That change was reverted for this reason.
 - Review/expiry condition: close when the tiling no longer depends on the
   thread count being large enough, which needs the pass's source
-

@@ -124,7 +124,7 @@ struct CommonOpType : OpByType {
             {"subtract", "(($2)-($4))"},
             {"multiply", "(($2)*($4))"},
             {"divide", "($1(($1($2))/($1($4))))"},
-            {"floor_divide", "($1(($1($2))/($1($4))))"},
+            {"floor_divide", "jittor::_floor_divide($1($2), $1($4))"},
             {"less", "(($2)<($4))"},
             {"less_equal", "(($2)<=($4))"},
             {"greater", "(($2)>($4))"},
@@ -164,17 +164,19 @@ struct CommonOpType : OpByType {
     }
 
     void post_pass(OpCompiler* oc) {
-        // inject the sign-aware CUDA pow helper when our pow codegen is used
         string& src = oc->src;
-        if (src.find("_signed_pow") == string::npos)
-            return;
-        if (src.find("type/pow_compute.h") != string::npos)
-            return;
+        string includes;
+        if (src.find("_floor_divide") != string::npos &&
+            src.find("type/floor_divide_compute.h") == string::npos)
+            includes += "#include \"type/floor_divide_compute.h\"\n";
+        if (src.find("_signed_pow") != string::npos &&
+            src.find("type/pow_compute.h") == string::npos)
+            includes += "#include \"type/pow_compute.h\"\n";
+        if (includes.empty()) return;
         int i = src.rfind("#include");
         if (i<0) i=0;
         i = src.find('\n', i) + 1;
-        src = src.substr(0, i) + "#include \"type/pow_compute.h\"\n" +
-            src.substr(i);
+        src = src.substr(0, i) + includes + src.substr(i);
         return;
     }
 };

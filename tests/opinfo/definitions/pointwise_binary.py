@@ -106,8 +106,7 @@ def logaddexp_ref(a, b):
 
 
 def floor_divide_ref(x, y):
-    # jittor floor_divide == elementwise floor(x / y) (the // binary op).
-    return np.floor(x / y)
+    return np.floor_divide(x, y)
 
 
 def clamp_ref(x, min_v=None, max_v=None):
@@ -216,17 +215,15 @@ def sample_clamp(op_info, device, dtype, requires_grad):
 
 def sample_floor_divide(op_info, device, dtype, requires_grad):
     # non-differentiable: forward only. Integer dtypes (any_one picks int64).
-    # FINDING (recorded in agent/manuals/known-issues.md): jittor's floor_divide TRUNCATES
-    # toward zero (C semantics, e.g. -5//3 == -1) whereas numpy/torch FLOOR toward
-    # -inf (-5//3 == -2). To keep this a valid forward test we sample only
-    # NON-NEGATIVE dividends (where trunc == floor); the negative divergence is a
-    # real torch-parity gap to fix in the op, not in the test.
     pairs = [((3, 4), (3, 4)), ((4,), (4,)), ((2, 1, 4), (3, 4))]
     out = []
     for i, (sx, sy) in enumerate(pairs):
-        x = make_tensor(*sx, dtype=dtype, low=0, high=9, seed=910 + i)
+        x = make_tensor(*sx, dtype=dtype, seed=910 + i)
         y = make_tensor(*sy, dtype=dtype, low=1, high=5, seed=920 + i)
         out.append(SampleInput(x, y))
+        if dtype != cu.uint8:
+            negative_y = make_tensor(*sy, dtype=dtype, low=-5, high=-1, seed=930 + i)
+            out.append(SampleInput(x, negative_y))
     return out
 
 
