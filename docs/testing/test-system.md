@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Last reviewed: 2026-08-21
-- Baseline: `2e34fee4`
+- Baseline: `a40b775b`
 - Owner: test infrastructure maintainers
 - Review when: collection roots, process-mode ownership, markers, OpInfo
   contracts, or backend gates change
@@ -66,6 +66,13 @@ the native session and must not be reported as full-suite coverage. A test that
 asserts `result_type`, Torch cast aliases, typed-tensor names, or Torch-specific
 defaults belongs to the Torch session even if the file also carries a low-level
 contract and remains under `tests/core/`.
+
+An in-process independent PyTorch oracle requires `REAL_TORCH_SITE` to point to
+a site-packages directory containing PyTorch's binary `_C` extension. Pytest
+preloads that implementation before Jittor. Without this explicit oracle, tests
+skip optional PyTorch comparisons even when a deployed Jittor-backed `torch`
+stub is discoverable; the stub must never be accepted as an independent
+reference.
 
 ## Three layers of operator evidence
 

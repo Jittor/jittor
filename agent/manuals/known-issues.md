@@ -2,7 +2,7 @@
 
 - Status: Maintained
 - Last reviewed: 2026-08-21
-- Baseline: `8b34f33a`
+- Baseline: `a40b775b`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -134,18 +134,6 @@ framework defects.
   against `numpy.floor_divide` before relying on the backend
 - Review/expiry condition: pass the same fixed-vector and OpInfo coverage on real
   NPU and ROCm devices, then remove this entry
-
-## KI-COMPAT-002: batched Normal sampling shape divergence
-
-- Severity: Medium
-- Status: Explicit skipped regression
-- Owner: distribution maintainers
-- Evidence: [`test_torch_compat_distributions.py`](../../tests/compat/torch/test_torch_compat_distributions.py)
-- Symptom: `Normal.sample(sample_shape)` with batched parameters uses the sample
-  shape as the full output shape instead of prepending it to the batch shape
-- Workaround: construct the complete output shape explicitly where possible
-- Review/expiry condition: enable the skipped test for multiple sample and batch
-  ranks, including gradients where applicable
 
 ## KI-SEMANTICS-003: floating-comparison backend verification incomplete
 

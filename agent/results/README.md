@@ -6,6 +6,7 @@
 
 ## 兼容性与功能验证
 
+- [2026-08-21 分布采样与独立 PyTorch oracle 测试收口](2026-08-21-distribution-oracle-tests.md)
 - [2026-08-21 原生与 Torch 类型系统测试隔离](2026-08-21-test-mode-type-system.md)
 - [2026-08-21 JIT 浮点常量与小数 padding 修复](2026-08-21-jit-float-constants.md)
 - [2026-08-21 Jupyter SIGCHLD 与并行编译复核](2026-08-21-jupyter-sigchld.md)
