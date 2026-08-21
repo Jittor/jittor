@@ -2,7 +2,7 @@
 
 - Status: Current index, not a history log
 - Last reviewed: 2026-08-21
-- Baseline reviewed: `8929db65`
+- Baseline reviewed: `a755309b`
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -110,8 +110,7 @@ The canonical list is [known-issues.md](known-issues.md). Highest-risk active
 items include pending NPU/ROCm verification of the corrected negative integer
 floor division, the parallel compiler crash hypothesis, accelerator reduction
 atomic gaps, CPU DepthwiseConv backward failure, and NPU/ROCm verification of the
-corrected floating NaN comparisons. CUDA rFFT also has a sequence-sensitive risk
-that still needs a minimized regression.
+corrected floating NaN comparisons.
 
 Do not add a second bug narrative here. Add or update the ledger entry with an
 owner, executable evidence, workaround, and exit condition.

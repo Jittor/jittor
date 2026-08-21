@@ -203,20 +203,25 @@ framework defects.
 - Review/expiry condition: retain both default and explicit-dtype assertions until
   a public dtype-default decision changes them together
 
-## KI-FFT-001: CUDA rFFT has a sequence-sensitive correctness risk
+## KI-FFT-001: withdrawn -- current CUDA sequence regression is clean
 
-- Severity: Critical
-- Status: Under investigation; reproduced in an aggregate probe but not minimized
+- Severity: n/a
+- Status: Withdrawn 2026-08-21; the old aggregate outcome is not reproducible on
+  the current implementation
 - Owner: FFT and Torch-compat maintainers
-- Evidence: [2026-07-05 CUDA complex audit](../results/2026-07-05-complex-cuda-audit.md)
-- Symptom: after earlier complex forward/gradient work in the same process,
-  `rfft` may lose half-spectrum imaginary components and break `irfft(rfft(x))`,
-  while an isolated test passes
-- Workaround: validate the round trip in the actual process sequence; use process
-  isolation for correctness-critical runs until the trigger is minimized
-- Review/expiry condition: first land a deterministic sequence regression; close
-  only after the current revision passes repeated clean and aggregate-process
-  CUDA runs, or after a result report disproves the old reproduction
+- Evidence: [CUDA rFFT sequence review](../results/2026-08-21-rfft-sequence-review.md)
+  and
+  [`test_rfft_after_complex_forward_backward_sequence`](../../tests/compat/torch/test_torch_compat_fft_einsum.py)
+- What it claimed: complex forward/gradient work earlier in one CUDA process could
+  remove the `rfft` imaginary half-spectrum and break `irfft(rfft(x))`
+- Current finding: four fresh-process repetitions of the old aggregate sequence,
+  the new deterministic CPU/CUDA regression, the full FFT compatibility module,
+  and an aggregate comparison against independent binary PyTorch all produce the
+  correct half-spectrum and round trip. `rfft` and `irfft_rfft` are hard failures
+  again in the aggregate comparator rather than sequence-sensitive exemptions.
+- Reopen condition: retain the deterministic regression and reopen only with a
+  reproducible failing sequence, exact revision, device, cache isolation, and
+  copied host results from both the spectrum and round trip
 
 ## KI-COMPLEX-001: native complex capability gaps
 
