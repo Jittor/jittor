@@ -170,6 +170,12 @@ def _restore_namespace(snapshot):
 def install(torch, strict=True):
     """Install the Torch surface once and return the canonical Jittor module."""
 
+    if getattr(torch, "_compat_native_composition_in_progress", False):
+        raise RuntimeError(
+            "cannot activate Torch compatibility while native Jittor "
+            "composition is in progress"
+        )
+
     context = InstallContext.for_module(torch, strict=strict)
     if context.complete:
         from .._aliases import torch_namespace_owned

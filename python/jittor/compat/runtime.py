@@ -14,6 +14,9 @@ from ._aliases import (
 )
 
 
+_NATIVE_COMPOSITION_ATTR = "_compat_native_composition_in_progress"
+
+
 @dataclass(frozen=True)
 class CompositionReport:
     torch_reports: tuple
@@ -48,10 +51,20 @@ def compose(root_module, core_flags, strict=True, preflight=None):
         context = getattr(root_module, "_torch_compat_install_context")
         torch_reports = tuple(context.reports)
 
-    # The canonical Triton domain has always been part of plain Jittor startup:
-    # its own idempotent installer owns bare ``import triton`` registration.
-    # External backend entry points remain exclusive to explicit shim enable.
-    from . import triton as triton_compat  # noqa: F401
+    # Real Triton may import ``torch`` while we probe it. If that name is a
+    # deployed Jittor placeholder, it must not re-enter the process-wide Torch
+    # installer after this composition has already selected native mode.
+    if not torch_mode:
+        setattr(root_module, _NATIVE_COMPOSITION_ATTR, True)
+    try:
+        # The canonical Triton domain has always been part of plain Jittor
+        # startup: its idempotent installer owns bare ``import triton``
+        # registration. External backend entry points remain exclusive to
+        # explicit shim enable.
+        from . import triton as triton_compat  # noqa: F401
+    finally:
+        if not torch_mode:
+            delattr(root_module, _NATIVE_COMPOSITION_ATTR)
 
     from .shim.control import wrap_flags
 

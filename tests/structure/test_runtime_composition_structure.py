@@ -9,6 +9,7 @@ import pickle
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
 
 
@@ -191,6 +192,85 @@ print("RESULT=" + json.dumps({
                 "torch_installed": True,
             },
         )
+
+    def test_indirect_deployed_torch_import_does_not_switch_native_mode(self):
+        torch_source = (
+            self.compat / "shim" / "resources" / "torch_init.py"
+        ).read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            torch_dir = root / "torch"
+            triton_dir = root / "triton"
+            torch_dir.mkdir()
+            triton_dir.mkdir()
+            (torch_dir / "__init__.py").write_text(torch_source, encoding="utf-8")
+            (triton_dir / "__init__.py").write_text(
+                "import torch\n__version__ = 'test-real-triton'\n",
+                encoding="utf-8",
+            )
+
+            env = os.environ.copy()
+            env["PYTHONDONTWRITEBYTECODE"] = "1"
+            env["CUDA_VISIBLE_DEVICES"] = ""
+            env["nvcc_path"] = ""
+            env.pop("JITTOR_TORCH_SHIM", None)
+            env.pop("JITTOR_TORCH_PROJECT_ROOT", None)
+            env.pop("JITTOR_TORCH_RUNTIME_ROOT", None)
+            env["PYTHONPATH"] = os.pathsep.join(
+                [str(root), str(self.repo / "python"), env.get("PYTHONPATH", "")]
+            ).rstrip(os.pathsep)
+
+            native = subprocess.run(
+                [sys.executable, "-c", r'''
+import json, sys
+import jittor as jt
+print("RESULT=" + json.dumps({
+    "torch_installed": "_torch_compat_install_context" in jt.__dict__,
+    "median_owner": jt.median.__module__,
+    "triton_is_shim": bool(getattr(sys.modules.get("triton"), "__triton_shim__", False)),
+}))
+'''],
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+            self.assertEqual(native.returncode, 0, native.stdout)
+            native_line = next(
+                line for line in native.stdout.splitlines() if line.startswith("RESULT=")
+            )
+            self.assertEqual(
+                json.loads(native_line[len("RESULT="):]),
+                {
+                    "torch_installed": False,
+                    "median_owner": "jittor.misc.tensor_ops",
+                    "triton_is_shim": True,
+                },
+            )
+
+            explicit = subprocess.run(
+                [sys.executable, "-c", r'''
+import json, sys
+import torch
+import jittor as jt
+print("RESULT=" + json.dumps({
+    "torch_is_jittor": torch is jt and sys.modules.get("torch") is jt,
+    "torch_installed": jt._torch_compat_install_complete,
+}))
+'''],
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+            self.assertEqual(explicit.returncode, 0, explicit.stdout)
+            explicit_line = next(
+                line for line in explicit.stdout.splitlines() if line.startswith("RESULT=")
+            )
+            self.assertEqual(
+                json.loads(explicit_line[len("RESULT="):]),
+                {"torch_is_jittor": True, "torch_installed": True},
+            )
 
     def test_moved_scope_state_stays_synchronized_with_the_root(self):
         import jittor
