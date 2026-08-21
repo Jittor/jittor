@@ -8,17 +8,33 @@ import unittest
 import jittor as jt
 import os
 import numpy as np
+import subprocess
 import sys
 
+from _helpers.torch_runtime import import_torch_modules, modules_available
+
+
+torch = None
+has_torch = modules_available("torch")
+
+
+def setUpModule():
+    global torch
+    if has_torch:
+        (torch,) = import_torch_modules("torch")
+
+
+_REAL_TORCH_PREAMBLE = """import os
+import sys
+sys.path.insert(0, os.environ[\"REAL_TORCH_SITE\"])
+"""
+
+
 class TestMiscIssue(unittest.TestCase):
+    @unittest.skipIf(not has_torch, "No independent Torch found")
     def test_issue4(self):
-        try:
-            jt.dirty_fix_pytorch_runtime_error()
-            import torch
-        except:
-            return
         # import with pytorch cause segfault
-        src = """N = 100
+        src = _REAL_TORCH_PREAMBLE + """N = 100
 import jittor as jt
 a = jt.random([N, N])
 b = a.broadcast([N,N,N], dims=[0]) * a.broadcast([N,N,N], dims=[2])
@@ -29,8 +45,8 @@ import torch
 A = torch.rand(N, N)
 torch.matmul(A, A)
 """
-        assert os.system(f"{sys.executable} -c '{src}'")==0
-        src = """N = 100
+        subprocess.run([sys.executable, "-c", src], check=True)
+        src = _REAL_TORCH_PREAMBLE + """N = 100
 import torch
 A = torch.rand(N, N)
 torch.matmul(A, A)
@@ -41,18 +57,14 @@ b = a.broadcast([N,N,N], dims=[0]) * a.broadcast([N,N,N], dims=[2])
 b = b.sum(1)
 b.sync()
 """
-        assert os.system(f"{sys.executable} -c '{src}'")==0
+        subprocess.run([sys.executable, "-c", src], check=True)
 
+    @unittest.skipIf(not has_torch, "No independent Torch found")
     def test_mkl_conflict1(self):
-        try:
-            jt.dirty_fix_pytorch_runtime_error()
-            import torch
-        except:
-            return
         if jt.mkl_ops is None:
             return
         # import with pytorch cause segfault
-        src = """
+        src = _REAL_TORCH_PREAMBLE + """
 nchw = [2, 3, 100, 100]
 oihw = [4, 3, 5, 5]
 import jittor as jt
@@ -67,18 +79,14 @@ m = torch.nn.Conv2d(3, 4, 5, 1, 2)
 m(torch.rand(*nchw))
 
 """
-        assert os.system(f"{sys.executable} -c '{src}'")==0
+        subprocess.run([sys.executable, "-c", src], check=True)
 
+    @unittest.skipIf(not has_torch, "No independent Torch found")
     def test_mkl_conflict2(self):
-        try:
-            jt.dirty_fix_pytorch_runtime_error()
-            import torch
-        except:
-            return
         if jt.mkl_ops is None:
             return
         # import with pytorch cause segfault
-        src = """
+        src = _REAL_TORCH_PREAMBLE + """
 nchw = [2, 3, 100, 100]
 oihw = [4, 3, 5, 5]
 
@@ -93,7 +101,7 @@ jt.mkl_ops.mkl_conv(x, w, 1, 1, 2, 2).sync()
 
 
 """
-        assert os.system(f"{sys.executable} -c '{src}'")==0
+        subprocess.run([sys.executable, "-c", src], check=True)
 
     def test_cuda_lowsm(self):
         if not jt.has_cuda: return
@@ -181,7 +189,7 @@ print(matmul_transpose(a, b))
         for a in x:
             n += 1
         assert n == 2
-        assert list(x.keys()) == [0,1]
+        assert list(x.keys()) == ["0", "1"]
         p = x.parameters()
         assert len(p)==0
 

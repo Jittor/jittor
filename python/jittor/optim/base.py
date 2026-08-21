@@ -120,28 +120,27 @@ class Optimizer(object):
 
         def dfs(x):
             if isinstance(x, list):
-                for i in range(len(x)):
-                    x[i] = dfs(x[i])
-            elif isinstance(x, dict):
-                for k in x:
-                    x[k] = dfs(x[k])
-            elif isinstance(x, np.ndarray):
+                return [dfs(value) for value in x]
+            if isinstance(x, tuple):
+                return tuple(dfs(value) for value in x)
+            if isinstance(x, dict):
+                return {key: dfs(value) for key, value in x.items()}
+            if isinstance(x, np.ndarray):
                 return jt.array(x).stop_grad()
-            elif isinstance(x, jt.Var):
-                return x.stop_grad()
+            if isinstance(x, jt.Var):
+                return x.clone().stop_grad()
             return x
 
         exclude = set(("param_groups", "params"))
         for k, v in state["defaults"].items():
             if k not in exclude:
                 setattr(self, k, dfs(v))
-        param_groups = dfs(state["defaults"].get('param_groups', None))
+        param_groups = state["defaults"].get('param_groups', None)
         if param_groups is not None:
-            exclude = set(("params",))
             for i in range(len(param_groups)):
                 for k, v in param_groups[i].items():
-                    if k not in exclude:
-                        self.param_groups[i][k] = v
+                    if k != "params":
+                        self.param_groups[i][k] = dfs(v)
 
 
 

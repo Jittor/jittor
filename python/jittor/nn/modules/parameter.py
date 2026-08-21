@@ -55,7 +55,7 @@ class ParameterList(jt.Module):
         return len(self.params)
 
 
-def Parameter(data, requires_grad=True):
+def _make_parameter(data, requires_grad=True):
     """Torch-compatible Parameter wrapper.
 
     Jittor treats a Var assigned to a Module as a parameter, so wrapping an
@@ -69,6 +69,21 @@ def Parameter(data, requires_grad=True):
     data.requires_grad = requires_grad
     data._is_torch_parameter = True
     return data
+
+
+class _ParameterMeta(type):
+    def __instancecheck__(cls, obj):
+        return (
+            isinstance(obj, jt.Var)
+            and bool(getattr(obj, "_is_torch_parameter", False))
+        )
+
+    def __call__(cls, data=None, requires_grad=True):
+        return _make_parameter(data, requires_grad=requires_grad)
+
+
+class Parameter(metaclass=_ParameterMeta):
+    """Semantic parameter role backed by a marked :class:`jittor.Var`."""
 
 
 __all__ = ["Parameter", "ParameterList"]

@@ -200,7 +200,7 @@ class TestAttentionCapabilities(unittest.TestCase):
             )
 
             query = jt.zeros((2, 1, 4), dtype="float32")
-            weight = jt.concat([jt.eye(4), jt.eye(4), jt.eye(4)], dim=0)
+            weight = jt.concat([jt.init.eye(4), jt.init.eye(4), jt.init.eye(4)], dim=0)
             with self.assertRaisesRegex(AssertionError, "source lengths must match"):
                 nn.multi_head_attention_forward(
                     query,
@@ -214,7 +214,7 @@ class TestAttentionCapabilities(unittest.TestCase):
                     None,
                     False,
                     0.0,
-                    jt.eye(4),
+                    jt.init.eye(4),
                     None,
                     static_k=jt.zeros((2, 3, 2)),
                     static_v=jt.zeros((2, 4, 2)),
@@ -240,7 +240,7 @@ class TestAttentionCapabilities(unittest.TestCase):
                     None,
                     False,
                     0.0,
-                    jt.eye(4),
+                    jt.init.eye(4),
                     None,
                     static_k=jt.zeros((2, 2)),
                 )
@@ -258,12 +258,12 @@ class TestAttentionCapabilities(unittest.TestCase):
                     None,
                     False,
                     0.0,
-                    jt.eye(4),
+                    jt.init.eye(4),
                     None,
                     use_separate_proj_weight=True,
-                    q_proj_weight=jt.eye(4),
+                    q_proj_weight=jt.init.eye(4),
                     k_proj_weight=jt.zeros((5, 4)),
-                    v_proj_weight=jt.eye(4),
+                    v_proj_weight=jt.init.eye(4),
                 )
 
     def test_multihead_attention_additive_padding_mask_and_pickle(self):

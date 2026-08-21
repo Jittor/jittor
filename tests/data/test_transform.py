@@ -966,6 +966,7 @@ class Tester(unittest.TestCase):
             transform.RandomAffine(20),
             transform.ToTensor(),
         ])(img)
+        self.assertEqual(tuple(result.shape), (3, 30, 40))
 
         img = jt.random((30,40,3))
         result = transform.Compose([
@@ -974,6 +975,8 @@ class Tester(unittest.TestCase):
             transform.Resize(20),
             transform.ToTensor(),
         ])(img)
+        self.assertEqual(result.shape[0], 1)
+        self.assertEqual(min(result.shape[1:]), 20)
 
 
 

@@ -43,6 +43,8 @@ _PROHIBITED_COLLECTION_CALLS = {
     "jittor.dirty_fix_pytorch_runtime_error",
     "jittor.compat.triton.install",
     "jittor.triton_shim.install",
+    "jittor.array",
+    "jt.array",
     "jt.dirty_fix_pytorch_runtime_error",
     "jt.compiler.run_cmd",
     "jittor.compiler.run_cmd",
@@ -114,6 +116,14 @@ def _pytest_config():
 def _load_test_conftest():
     path = TEST_ROOT / "conftest.py"
     spec = importlib.util.spec_from_file_location("jittor_test_conftest_contract", str(path))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_test_suite_runner():
+    path = REPO_ROOT / "tools" / "run_test_suite.py"
+    spec = importlib.util.spec_from_file_location("jittor_test_suite_runner_contract", str(path))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -199,6 +209,63 @@ def test_torch_semantic_core_suites_run_in_the_torch_process():
         "tests/core/test_type_system.py",
     }
     assert required <= set(module.TORCH_MODE_PATHS)
+
+
+def test_native_tests_do_not_claim_torch_namespace_during_collection():
+    torch_mode_paths = _load_test_conftest().TORCH_MODE_PATHS
+    offenders = []
+    for path in _test_files():
+        relative = path.relative_to(REPO_ROOT).as_posix()
+        if relative.startswith(torch_mode_paths):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in _runtime_nodes(tree):
+            imported = []
+            if isinstance(node, ast.Import):
+                imported = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported = [node.module]
+            if any(name == "torch" or name.startswith("torch.") for name in imported):
+                offenders.append("{}:{}".format(relative, node.lineno))
+    assert not offenders, (
+        "native tests must use _helpers.torch_runtime so collection cannot "
+        "activate Jittor's process-global Torch shim: " + ", ".join(offenders)
+    )
+
+
+def test_complete_suite_runner_owns_cpu_and_process_mode_environment(monkeypatch, tmp_path):
+    module = _load_test_suite_runner()
+    monkeypatch.setattr(module, "_lab_root", lambda: tmp_path)
+    monkeypatch.setenv("nvcc_path", "/inherited/nvcc")
+    monkeypatch.setenv("JITTOR_TEST_DEVICES", "cuda")
+    monkeypatch.setenv("REAL_TORCH_SITE", "/inherited/torch")
+    monkeypatch.setenv("use_parallel_op_compiler", "1")
+
+    native = module._session_environment("native")
+    torch = module._session_environment("torch")
+
+    for environment in (native, torch):
+        assert environment["nvcc_path"] == ""
+        assert environment["JITTOR_TEST_DEVICES"] == "cpu"
+        assert environment["REAL_TORCH_SITE"] == ""
+        assert environment["use_parallel_op_compiler"] == "0"
+    assert native["JITTOR_TORCH_SHIM"] == "0"
+    assert torch["JITTOR_TORCH_SHIM"] == "1"
+    assert native["JITTOR_HOME"] != torch["JITTOR_HOME"]
+    assert native["TMPDIR"] != torch["TMPDIR"]
+
+
+def test_complete_suite_runner_retries_a_zero_exit_cold_cache_refresh():
+    module = _load_test_suite_runner()
+    refreshed = SimpleNamespace(returncode=0, stdout="jit_utils updated, rerun\n")
+    ready = SimpleNamespace(returncode=0, stdout=module._WARMUP_MARKER + "\n")
+
+    with mock.patch.object(module.subprocess, "run", side_effect=(refreshed, ready)) as run:
+        code, output = module._warmup({})
+
+    assert code == 0
+    assert module._WARMUP_MARKER in output
+    assert run.call_count == 2
 
 
 def test_network_access_is_explicitly_marked():

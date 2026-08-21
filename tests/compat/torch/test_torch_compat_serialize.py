@@ -368,10 +368,14 @@ class TestFromNumpy(Base):
         raw = np.asarray([1.0, 2.0, 3.0], dtype=np.float32).tobytes()
 
         def body(dev):
+            # An unrelated live optimizer must not hide standalone input leaves.
+            parameter = torch.nn.Parameter(torch.tensor([0.0]))
+            optimizer = torch.optim.SGD([parameter], lr=0.1)
             v = torch.frombuffer(raw, dtype=torch.float32, requires_grad=True)
             self.assertFalse(v.is_stop_grad(), f"requires_grad leaf {dev}")
             loss = (v * v).sum()
             loss.backward()
+            self.assertIsNotNone(optimizer)
             self.assertIsNotNone(v.grad, f"frombuffer grad populated {dev}")
             self.ac(v.grad.numpy(), np.asarray([2.0, 4.0, 6.0], dtype=np.float32),
                     msg=f"frombuffer grad {dev}")

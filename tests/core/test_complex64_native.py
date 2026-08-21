@@ -47,7 +47,7 @@ class TestComplex64Native(unittest.TestCase):
         def body(dev):
             z = jt.zeros((2, 2), "complex64")
             z[0, 1] = 1 + 2j
-            z[1][0] = np.complex64(-3 + 4j)
+            z[1, 0] = np.complex64(-3 + 4j)
             expected = np.array([[0, 1 + 2j], [-3 + 4j, 0]], dtype="complex64")
             np.testing.assert_array_equal(np.asarray(z.numpy()), expected,
                                           err_msg=f"complex scalar setitem {dev}")

@@ -12,18 +12,27 @@ import jittor as jt
 import numpy as np
 import unittest
 
-try:
-    import torch
-    from torch.autograd import Variable
-    import autograd.numpy as anp
-    from autograd import jacobian
-
-    has_autograd = True
-except:
-    has_autograd = False
+from _helpers.torch_runtime import import_torch_modules, modules_available
 
 
-@unittest.skipIf(not has_autograd, "No autograd found.")
+torch = None
+Variable = None
+anp = None
+jacobian = None
+has_autograd = modules_available("torch", "autograd")
+
+
+def setUpModule():
+    global torch, Variable, anp, jacobian
+    if has_autograd:
+        torch, anp, autograd = import_torch_modules(
+            "torch", "autograd.numpy", "autograd"
+        )
+        Variable = torch.autograd.Variable
+        jacobian = autograd.jacobian
+
+
+@unittest.skipIf(not has_autograd, "No independent Torch or autograd found.")
 class TestLinalgOp(unittest.TestCase):
     def test_svd(self):
         def check_svd(a):

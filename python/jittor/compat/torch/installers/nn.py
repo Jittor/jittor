@@ -26,7 +26,7 @@ def _install_nn_extras(nn, registry=None):
     _install_init_aliases(registry)
     import types as _types_nn_private
 
-    if not isinstance(getattr(nn, "Parameter", None), type):
+    if not getattr(getattr(nn, "Parameter", None), "_torch_compat_type", False):
         _native_parameter = getattr(nn, "Parameter", None)
         class _ParameterMeta(type):
             def __instancecheck__(cls, obj):
@@ -38,6 +38,7 @@ def _install_nn_extras(nn, registry=None):
                 return _torch_make_parameter(data, requires_grad=requires_grad)
         class Parameter(metaclass=_ParameterMeta):
             pass
+        Parameter._torch_compat_type = True
         class UninitializedTensorMixin:
             pass
         class UninitializedParameter:

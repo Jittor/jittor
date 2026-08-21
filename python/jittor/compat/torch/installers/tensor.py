@@ -1312,7 +1312,16 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                     leaf_map.setdefault(id(v), v)
                     retained_ids.add(id(v))
         if opts:
-            _torch_prune_leaf_registry(opt_ids | retained_ids)
+            # Optimizer parameter groups supersede stale Parameter objects after
+            # parameter replacement, but unrelated input leaves must still receive
+            # gradients just as they do in Torch.
+            _torch_prune_leaf_registry(
+                opt_ids | retained_ids,
+                keep_non_parameters=True,
+            )
+            for v in list(jt._torch_leaf_params.values()):
+                if isinstance(v, Var) and v.requires_grad:
+                    leaf_map.setdefault(id(v), v)
         else:
             _torch_prune_leaf_registry()
             for v in list(jt._torch_leaf_params.values()):
@@ -1328,6 +1337,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         grad_by_id = {}
         for p, gr in zip(leaves, grads):
             if gr is None:
+                if id(p) not in opt_ids and id(p) not in retained_ids:
+                    jt._torch_leaf_params.pop(id(p), None)
                 continue
             grad_by_id[id(p)] = gr
             if id(p) not in opt_ids:

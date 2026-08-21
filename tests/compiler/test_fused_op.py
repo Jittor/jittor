@@ -159,6 +159,7 @@ class TestFusedOp(unittest.TestCase):
         v = a.data[0]
         assert np.allclose(v*10,b.data) and v==c.data and v==d.data, (v, b.data, c.data, d.data)
         
+    @unittest.skipIf(skip_slow_test, "set performance_test=1 to run profile benchmark")
     def test_profile_fused_op(self):
         size = 1000
         r1 = []
@@ -180,7 +181,7 @@ class TestFusedOp(unittest.TestCase):
             nc = np.matmul(na,nb)
             assert (np.abs(nc-c.data)<1e-2).all(), np.abs(nc-c.data).max()
     
-    # @unittest.skipIf(skip_slow_test, "Skip slow test")
+    @unittest.skipIf(skip_slow_test, "set performance_test=1 to run profile benchmark")
     def test_profile_fused_op_transpose(self):
         for size in range(1024, 1025, 1):
             with performance_test_scope(2, 10):
@@ -189,7 +190,7 @@ class TestFusedOp(unittest.TestCase):
                 c = (a*b).sum(2)
                 c.data
         
-    # @unittest.skipIf(skip_slow_test, "Skip slow test")
+    @unittest.skipIf(skip_slow_test, "set performance_test=1 to run profile benchmark")
     def test_profile_fused_op_split(self):
         # match v4
         @retry(10)

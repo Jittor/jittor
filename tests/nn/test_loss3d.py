@@ -11,15 +11,22 @@
 import unittest
 import numpy as np
 
-try:
-    import torch
-    from emd import earth_mover_distance as TEMD
-except:
-    skip_this_test = True
-
 import jittor as jt
 from jittor.loss3d import chamfer_loss
 from jittor.loss3d import earth_mover_distance
+from _helpers.torch_runtime import import_torch_modules, modules_available
+
+
+torch = None
+TEMD = None
+skip_emd_test = not jt.has_cuda or not modules_available("torch", "emd")
+
+
+def setUpModule():
+    global torch, TEMD
+    if not skip_emd_test:
+        torch, emd = import_torch_modules("torch", "emd")
+        TEMD = emd.earth_mover_distance
 
 
 class TestLoss3d(unittest.TestCase):
@@ -67,7 +74,7 @@ class TestLoss3d(unittest.TestCase):
             with jt.flag_scope(use_cuda=1):
                 test()
 
-    @unittest.skipIf(skip_this_test, "No Pyorch_EMD found")
+    @unittest.skipIf(skip_emd_test, "No independent Torch, PyTorch EMD, or CUDA found")
     def test_emd_torch(self):
         if jt.has_cuda:
             jt.flags.use_cuda = True

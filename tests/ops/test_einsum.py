@@ -12,15 +12,19 @@ import jittor as jt
 import numpy as np
 import unittest
 
-try:
-    import torch
-    from torch.autograd import Variable
-    import autograd.numpy as anp
-    from autograd import jacobian
+from _helpers.torch_runtime import import_torch_modules, modules_available
 
-    has_autograd = True
-except:
-    has_autograd = False
+
+torch = None
+Variable = None
+has_torch = modules_available("torch")
+
+
+def setUpModule():
+    global torch, Variable
+    if has_torch:
+        (torch,) = import_torch_modules("torch")
+        Variable = torch.autograd.Variable
 
 cupy = None
 try:
@@ -28,7 +32,7 @@ try:
 except:
     pass
 
-@unittest.skipIf(not has_autograd, "No autograd found.")
+@unittest.skipIf(not has_torch, "No independent Torch found.")
 class TestEinsum(unittest.TestCase):
     def test_einsum_ijjk(self):
         for i in range(30):

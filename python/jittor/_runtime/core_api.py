@@ -415,13 +415,16 @@ def random(shape, dtype="float32", type="uniform"):
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
-    ret = ops.random(shape, "float32", type)
-   ## TODO: move those code to core
-   #if dtype in ["float16", "bfloat16"]:
-   #    # TODO: make curand support fp16
-   #    ret = ops.random(shape, "float32", type).cast(dtype)
-   #else:
-   #    ret = ops.random(shape, dtype, type)
+    if isinstance(dtype, NanoString):
+        dtype = str(dtype)
+    elif not isinstance(dtype, str) and callable(dtype):
+        dtype = dtype.__name__
+    if dtype in ("float16", "bfloat16"):
+        # The CPU and accelerator random engines generate standard floating
+        # types; low-precision outputs use their regular cast kernels.
+        ret = ops.random(shape, "float32", type).cast(dtype)
+    else:
+        ret = ops.random(shape, dtype, type)
     amp_reg = jt.flags.amp_reg
     if amp_reg:
         if amp_reg & 16:

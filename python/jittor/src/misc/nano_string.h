@@ -226,14 +226,20 @@ inline NanoString float_dtype(int dsize_, bool has_scalar=false, bool has_bf16=f
         has_bf16 ? ns_bfloat16 : ns_float16;
 }
 
-inline NanoString int_dtype(int dsize_) {
-    return (dsize_ == 3) ? ns_int64 : 
+inline NanoString int_dtype(int dsize_, bool is_unsigned=false) {
+    if (is_unsigned) {
+        return (dsize_ == 3) ? ns_uint64 :
+            (dsize_ == 2) ? ns_uint32 :
+            (dsize_ == 1) ? ns_uint16 : ns_uint8;
+    }
+    return (dsize_ == 3) ? ns_int64 :
         (dsize_ == 2) ? ns_int32 :
         (dsize_ == 1) ? ns_int16 : ns_int8;
 }
 
 inline  NanoString dtype_infer(NanoString x, NanoString y, bool xscalar=false, bool yscalar=false) {
     if (x.is_complex() || y.is_complex()) return ns_complex64;  // complex propagates
+    if (x.is_bool() && y.is_bool()) return ns_bool;
     int dsize_ = std::max(x.dsize_(), y.dsize_());
     if (xscalar) dsize_ = y.dsize_();
     if (yscalar) dsize_ = x.dsize_();
@@ -242,7 +248,10 @@ inline  NanoString dtype_infer(NanoString x, NanoString y, bool xscalar=false, b
     if (is_float)
         return float_dtype(dsize_, xscalar||yscalar, has_bf16);
     else {
-        return int_dtype(dsize_);
+        bool is_unsigned = x.is_unsigned() && y.is_unsigned();
+        if (xscalar) is_unsigned = y.is_unsigned();
+        if (yscalar) is_unsigned = x.is_unsigned();
+        return int_dtype(dsize_, is_unsigned);
     }
 }
 
@@ -262,7 +271,10 @@ inline NanoString binary_dtype_infer(NanoString op, NanoString x, NanoString y, 
         return float_dtype(dsize_, xscalar||yscalar, has_bf16);
     } else {
         if (x.is_bool() && y.is_bool()) return ns_bool;
-        return int_dtype(dsize_);
+        bool is_unsigned = x.is_unsigned() && y.is_unsigned();
+        if (xscalar) is_unsigned = y.is_unsigned();
+        if (yscalar) is_unsigned = x.is_unsigned();
+        return int_dtype(dsize_, is_unsigned);
     }
 }
 
@@ -275,7 +287,7 @@ inline NanoString unary_dtype_infer(NanoString op, NanoString x) {
             return (dsize_ == 3) ? ns_float64 : ns_float32;
         return float_dtype(dsize_, false, x==ns_bfloat16);
     }
-    if (op.is_int()) return int_dtype(dsize_);
+    if (op.is_int()) return int_dtype(dsize_, x.is_unsigned());
     return x;
 }
 

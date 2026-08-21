@@ -37,8 +37,8 @@ class TestAllocator2(unittest.TestCase):
         check_allocation(10, 10, 1, 1048576) #800
         #small_block
         check_allocation(100, 100, 1, 1048576) #80000
-        #large_block
-        check_allocation(1000, 1000, 1, 20971520) #8000000
+        # Two current 5 MiB CPU large blocks cover the 8 MB working set.
+        check_allocation(1000, 1000, 2, 10485760) #8000000
         #large_block2
         check_allocation(8000, 1000, 2, 67108864) #64000000
 

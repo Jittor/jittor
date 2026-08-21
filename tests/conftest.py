@@ -7,6 +7,8 @@ import sys
 
 import pytest
 
+from _helpers.process_modes import TORCH_MODE_PATHS
+
 
 #: Whether this session selected whole directories rather than named files.
 SELECTION_IS_BROAD = False
@@ -49,27 +51,6 @@ def _select_torch_mode_for_test_process():
         return
     if any(path.startswith(TORCH_MODE_PATHS) for path in selected):
         os.environ.setdefault("JITTOR_TORCH_SHIM", "1")
-
-
-#: Paths whose tests require the process-global Torch compatibility mode.
-TORCH_MODE_PATHS = (
-    "tests/compat/torch",
-    # The OpInfo runner exercises the Torch-facing signatures for the shared
-    # numerical surface (see its explicit compatibility notes). The rest of
-    # ``tests/ops`` asserts native Jittor behaviour, including lazy execution,
-    # and must not run in Torch mode.
-    "tests/ops/test_ops.py",
-    # These regression locks intentionally encode Torch-facing defaults
-    # (unbiased var/std and NaN-aware reductions). Native Jittor retains its
-    # historical NumPy-aligned defaults.
-    "tests/core/test_regression.py",
-    # This cross-product suite asserts Torch result_type, promotion, cast, and
-    # typed-tensor-name contracts. Keep it in the Torch process even though the
-    # file lives beside the low-level NanoString checks it also carries.
-    "tests/core/test_type_system.py",
-    "tests/structure",
-    "tests/backends/triton/test_triton_torch_compat.py",
-)
 
 
 _select_torch_mode_for_test_process()

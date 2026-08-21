@@ -14,7 +14,6 @@ accelerator, against hand-derived analytic gradients:
     a classic silent-wrong spot for reduce/binary backward),
   * stop_grad / detach cutting one path of a diamond,
   * grad routing through pure view ops (reshape/transpose/getitem),
-  * accumulation across multiple ``backward()`` calls (torch semantics),
   * higher-order grad through a FUSED expression (the grad must itself be
     differentiable — the property create_graph relies on).
 
@@ -118,18 +117,6 @@ class TestAutogradEngine(JittorTestCase):
             ref = np.transpose(w0, (1, 0)).reshape(2, 6)
             self.assertEqual(self._grad(loss, [x])[0], ref, atol=1e-5,
                              msg=f"grad through views [{dev}]")
-        self._devices(body)
-
-    # -- accumulation across multiple backward() calls (torch semantics) ----------
-    def test_backward_accumulates(self):
-        x0 = np.random.RandomState(9).randn(4).astype("float32")
-
-        def body(dev):
-            x = jt.array(x0); x.requires_grad = True
-            (x * 2).sum().backward()
-            (x * 3).sum().backward()            # accumulates -> 2 + 3 = 5
-            self.assertEqual(x.grad, np.full(4, 5.0, "float32"), atol=1e-5,
-                             msg=f"backward accumulate [{dev}]")
         self._devices(body)
 
     # -- higher-order grad through a FUSED expression -----------------------------

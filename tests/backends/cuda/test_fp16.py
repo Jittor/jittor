@@ -231,21 +231,23 @@ class TestFP16(unittest.TestCase):
         c.sync()
 
     def test_reduce_dtype_infer(self):
+        # FP16 sum/mean accumulate through FP32 unless amp_reg bit 5 is set,
+        # then cast the public result back to the input dtype like PyTorch.
         with jt.flag_scope(amp_reg=1):
             a = jt.random((3,4,5,5)).float16()
             b = a.sum()
             b.sync()
-            assert b.dtype == "float32"
+            assert b.dtype == "float16"
         with jt.flag_scope(amp_reg=2):
             a = jt.random((3,4,5,5)).float16()
             b = a.sum()
             b.sync()
-            assert b.dtype == "float32"
+            assert b.dtype == "float16"
         with jt.flag_scope(amp_reg=0):
             a = jt.random((3,4,5,5)).float16()
             b = a.sum()
             b.sync()
-            assert b.dtype == "float32"
+            assert b.dtype == "float16"
         with jt.flag_scope(amp_reg=2+4):
             a = jt.random((3,4,5,5)).float16()
             b = a.sum()

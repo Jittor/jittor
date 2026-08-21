@@ -30,7 +30,7 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 sys.path.insert(0, str(REPO_ROOT / "tests"))
-from conftest import TORCH_MODE_PATHS  # noqa: E402
+from _helpers.process_modes import TORCH_MODE_PATHS  # noqa: E402
 
 SESSIONS = ("native", "torch")
 
@@ -38,6 +38,8 @@ _SUMMARY = re.compile(
     r"^=+ .*?(?:(\d+) failed)?.*?(?:(\d+) passed)?.*?(?:(\d+) skipped)?.*?(?:(\d+) errors?)?.*=+$"
 )
 _COUNT = re.compile(r"(\d+) (passed|failed|skipped|error|errors|xfailed|xpassed)")
+_WARMUP_MARKER = "JITTOR_TEST_SUITE_CPU_READY"
+_WARMUP_ATTEMPTS = 3
 
 
 def _lab_root():
@@ -53,7 +55,11 @@ def _session_environment(session):
     environment = dict(os.environ)
     environment["JITTOR_HOME"] = str(state / "home")
     environment["TMPDIR"] = str(state / "tmp")
+    environment["nvcc_path"] = ""
+    environment["JITTOR_TEST_DEVICES"] = "cpu"
+    environment["REAL_TORCH_SITE"] = ""
     environment["JITTOR_TORCH_SHIM"] = "1" if session == "torch" else "0"
+    environment["use_parallel_op_compiler"] = "0"
     # Jittor's segfault handler shells out to gdb for a backtrace. That is
     # useful interactively and ruinous in a suite: gdb ptrace-stops the process
     # first, and if gdb itself dies -- on this distribution it crashes into the
@@ -85,24 +91,60 @@ def _parse_counts(output):
     return counts
 
 
+def _warmup(environment):
+    probe = (
+        "import jittor as jt; "
+        "assert not jt.compiler.has_cuda; "
+        "assert not getattr(jt.compiler, 'has_acl', 0); "
+        "jt.flags.use_parallel_op_compiler = 0; "
+        "x = (jt.array([1.0, 2.0]) * 2).sum(); x.sync(); "
+        "assert float(x.item()) == 6.0; "
+        "print(%r)" % _WARMUP_MARKER
+    )
+    outputs = []
+    command = [sys.executable, "-c", probe]
+    for _attempt in range(_WARMUP_ATTEMPTS):
+        completed = subprocess.run(
+            command,
+            cwd=str(REPO_ROOT),
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+        )
+        outputs.append(completed.stdout)
+        if completed.returncode != 0:
+            return completed.returncode, "\n".join(outputs)
+        if _WARMUP_MARKER in completed.stdout:
+            return 0, "\n".join(outputs)
+    outputs.append("warmup did not execute the CPU probe after %d attempts" % _WARMUP_ATTEMPTS)
+    return 1, "\n".join(outputs)
+
+
 def _run(session, extra, quiet):
+    environment = _session_environment(session)
     command = [sys.executable, "-m", "pytest"]
     command += _session_arguments(session)
     command += ["-p", "no:cacheprovider", "--timeout=900"]
     command += ["-q"] if quiet else []
     command += extra
     print("=== {} session ===".format(session), flush=True)
+    warmup_code, warmup_output = _warmup(environment)
+    print(warmup_output, flush=True)
+    if warmup_code != 0:
+        return warmup_code, {}, warmup_output
     print(" ".join(command), flush=True)
     completed = subprocess.run(
         command,
         cwd=str(REPO_ROOT),
-        env=_session_environment(session),
+        env=environment,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         universal_newlines=True,
     )
     print(completed.stdout, flush=True)
-    return completed.returncode, _parse_counts(completed.stdout), completed.stdout
+    output = warmup_output + "\n" + completed.stdout
+    return completed.returncode, _parse_counts(completed.stdout), output
 
 
 def main():

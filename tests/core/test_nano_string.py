@@ -41,7 +41,6 @@ class TestNanoString(unittest.TestCase):
     def test_type(self):
         import numpy as np
         assert str(jt.NanoString(float)) == "float32"
-        assert str(jt.NanoString(np.float)) == "float32"
         assert str(jt.NanoString(np.float32)) == "float32"
         assert str(jt.NanoString(np.float64)) == "float64"
         assert str(jt.NanoString(np.int8)) == "int8"
@@ -53,6 +52,8 @@ class TestNanoString(unittest.TestCase):
         assert str(jt.NanoString(jt.int8)) == "int8"
         assert str(jt.NanoString(jt.array([1,2,3]).dtype)) == "int32"
         assert str(jt.NanoString(jt.sum)) == "add"
+        assert str(jt.binary_dtype_infer("add", "int8", "int8")) == "int8"
+        assert str(jt.binary_dtype_infer("add", "uint8", "uint8")) == "uint8"
 
         def get_error_str(call):
             es = ""

@@ -1,5 +1,6 @@
 import os
 import platform
+import shlex
 import sys
 import jittor_utils
 from jittor_utils import LOG
@@ -38,12 +39,13 @@ if __name__ == "__main__":
             for libbase in libpaths:
                 libpath = os.path.join(libbase, f"lib{base}.{libext}")
                 if os.path.isfile(libpath):
-                    s += f" -L{libbase} -l{base} -ldl "
+                    link_flags = [f"-L{libbase}", f"-l{base}"]
+                    if os.name != 'nt':
+                        link_flags.extend((f"-Wl,-rpath,{libbase}", "-ldl"))
+                    s += " " + " ".join(shlex.quote(flag) for flag in link_flags) + " "
                     break
             else:
                 raise RuntimeError("Python dynamic library not found")
-            if os.name == 'nt':
-                s = s.replace('-ldl', '')
         elif arg == "--cxx-flags":
             s += " --std=c++17 -fPIC "
         elif arg == "--cxx-example":

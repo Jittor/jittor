@@ -13,13 +13,20 @@ from jittor import nn
 import numpy as np
 import unittest
 
-try:
-    import torch
-    has_torch = True
-except:
-    has_torch = False
+from _helpers.torch_runtime import import_torch_modules, modules_available
 
-@unittest.skipIf(not has_torch, "No pytorch installation found.")
+
+torch = None
+has_torch = modules_available("torch")
+
+
+def setUpModule():
+    global torch
+    if has_torch:
+        (torch,) = import_torch_modules("torch")
+
+
+@unittest.skipIf(not has_torch, "No independent Torch found.")
 class TestInterpolation(unittest.TestCase):
     def test_interpolation_area(self):
         img = np.random.uniform(0, 1, (1, 3, 24, 10))

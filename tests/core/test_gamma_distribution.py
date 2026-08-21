@@ -11,14 +11,23 @@ import jittor as jt
 import numpy as np
 import unittest
 
-try:
-    import torch
-    from torch.autograd import Variable
-    has_autograd = True
-except:
-    has_autograd = False
+from _helpers.torch_runtime import import_torch_modules, modules_available
 
-@unittest.skipIf(not has_autograd or not jt.compiler.has_cuda, "No autograd or cuda found.")
+
+torch = None
+has_autograd = modules_available("torch")
+
+
+def setUpModule():
+    global torch
+    if has_autograd:
+        (torch,) = import_torch_modules("torch")
+
+
+@unittest.skipIf(
+    not has_autograd or not jt.compiler.has_cuda,
+    "No independent Torch or CUDA found.",
+)
 class TestDigamma(unittest.TestCase):
     def setUp(self):
         jt.flags.use_cuda = 1

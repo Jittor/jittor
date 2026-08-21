@@ -76,11 +76,17 @@ class TestIntegerWidthSweep(JittorTestCase):
             a, b = self._operands(dt)
             for name, jop, nop in self._BINARY:
                 with self.subTest(dtype=dt, op=name):
-                    cpu = _run(lambda: jop(jt.array(a), jt.array(b)), 0)
-                    self.assertEqual(cpu, nop(a, b),
+                    cpu = _run(
+                        lambda: jop(jt.array(a).cast(dt), jt.array(b).cast(dt)),
+                        0,
+                    )
+                    self.assertEqual(cpu, nop(a, b), exact_dtype=True,
                                      msg=f"{name}/{dt} cpu vs numpy")
                     if _ACCEL:
-                        acc = _run(lambda: jop(jt.array(a), jt.array(b)), 1)
+                        acc = _run(
+                            lambda: jop(jt.array(a).cast(dt), jt.array(b).cast(dt)),
+                            1,
+                        )
                         self.assertEqual(cpu, acc,
                                          msg=f"{name}/{dt} cpu vs accelerator")
 
@@ -89,12 +95,15 @@ class TestIntegerWidthSweep(JittorTestCase):
             a, _ = self._operands(dt)
             for name, jop, nop in self._UNARY:
                 with self.subTest(dtype=dt, op=name):
-                    cpu = _run(lambda: jop(jt.array(a)), 0)
+                    cpu = _run(lambda: jop(jt.array(a).cast(dt)), 0)
                     # numpy negative/abs on uint8 wrap; compare the SAME numpy op so the
                     # reference matches the width's two's-complement semantics.
-                    self.assertEqual(cpu, nop(a), msg=f"{name}/{dt} cpu vs numpy")
+                    self.assertEqual(
+                        cpu, nop(a), exact_dtype=True,
+                        msg=f"{name}/{dt} cpu vs numpy",
+                    )
                     if _ACCEL:
-                        acc = _run(lambda: jop(jt.array(a)), 1)
+                        acc = _run(lambda: jop(jt.array(a).cast(dt)), 1)
                         self.assertEqual(cpu, acc, msg=f"{name}/{dt} cpu vs accelerator")
 
 

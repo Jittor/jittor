@@ -30,7 +30,9 @@ def test_ring_buffer():
         buffer.push(data)
         recv = buffer.pop()
         if isinstance(data, (np.ndarray, jt.Var)):
-            assert (recv == data).all()
+            actual = recv.data if isinstance(recv, jt.Var) else recv
+            expected = data.data if isinstance(data, jt.Var) else data
+            np.testing.assert_array_equal(actual, expected)
         else:
             assert data == recv
 
@@ -70,6 +72,10 @@ def test_ring_buffer():
     n_byte += 1 + 16 + 4 + 10*10*8
     assert n_byte == buffer.total_pop() and n_byte == buffer.total_push(), \
         (n_byte, buffer.total_pop(), n_byte, buffer.total_push())
+    view = np.arange(100, dtype=np.float64).reshape(10, 10)[:, ::2]
+    view_buffer = jt.RingBuffer(2000)
+    view_buffer.push(view)
+    np.testing.assert_array_equal(view_buffer.pop().data, view)
     test_send_recv(test_ring_buffer)
 
     test_send_recv(jt.array(np.random.rand(10,10)))

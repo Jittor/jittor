@@ -257,7 +257,7 @@ def _torch_register_leaf(v):
     except Exception:
         pass
 
-def _torch_prune_leaf_registry(keep_ids=None):
+def _torch_prune_leaf_registry(keep_ids=None, keep_non_parameters=False):
     """Drop stale torch-facing leaves from the global backward registry."""
     try:
         reg = getattr(jt, "_torch_leaf_params", None)
@@ -265,7 +265,14 @@ def _torch_prune_leaf_registry(keep_ids=None):
             return
         keep = None if keep_ids is None else set(keep_ids)
         for k, v in list(reg.items()):
-            if keep is not None and k not in keep:
+            if (
+                keep is not None
+                and k not in keep
+                and not (
+                    keep_non_parameters
+                    and not bool(getattr(v, "_is_torch_parameter", False))
+                )
+            ):
                 reg.pop(k, None)
                 continue
             if not (isinstance(v, jt.Var) and v.requires_grad):

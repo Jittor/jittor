@@ -8,19 +8,23 @@
 # ***************************************************************
 import unittest
 from unittest.case import skipIf
-try:
-    import torch
-    import torch.nn as tnn
-except:
-    torch = None
-    tnn = None
-    skip_this_test = True
 
 import jittor as jt
 import jittor.nn as nn
 import numpy as np
+from _helpers.torch_runtime import import_torch_modules, modules_available
 
-skip_this_test = False
+
+torch = None
+tnn = None
+skip_this_test = not modules_available("torch")
+
+
+def setUpModule():
+    global torch, tnn
+    if not skip_this_test:
+        torch, tnn = import_torch_modules("torch", "torch.nn")
+
 
 def check_equal_1(t_rnn, j_rnn, input, h0, dev=None):
     j_rnn.load_state_dict(t_rnn.state_dict())

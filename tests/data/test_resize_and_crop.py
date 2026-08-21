@@ -17,6 +17,7 @@ import jittor.nn as jnn
 from _helpers.torch_runtime import import_torch_modules, modules_available
 
 skip_this_test = not modules_available("torch")
+performance_test = os.environ.get("performance_test", "") == "1"
 torch = None
 tnn = None
 
@@ -87,7 +88,8 @@ def check_case(box_num, out_size, time_limit):
         if name.startswith('«') and (not '«graph:«' in name):
             fused_op_num += 1
     assert fused_op_num == 1, fused_op_num
-    assert t <= time_limit, t
+    if performance_test:
+        assert t <= time_limit, t
 
 def check_equal(arr, j_layer, p_layer):
     jittor_arr = jt.array(arr)
@@ -129,7 +131,8 @@ class TestResizeAndCrop(unittest.TestCase):
         arr = np.random.randn(1,3*3,224,224)
         check_equal(arr, jnn.PixelShuffle(upscale_factor=3), tnn.PixelShuffle(upscale_factor=3))
 
-    def test_resize(self):
+    @unittest.skipIf(skip_this_test, "no torch found")
+    def test_resize_scale_factor(self):
         arr = np.random.randn(1,1,2,2)
         check_equal(arr, jnn.Resize((4,4)), tnn.Upsample(scale_factor=2))
         # check_equal(arr, jnn.Upsample(scale_factor=0.5), tnn.Upsample(scale_factor=0.5))

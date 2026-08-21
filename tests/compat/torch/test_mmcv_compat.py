@@ -62,6 +62,11 @@ class TestMmcvCompat(unittest.TestCase):
         # These are real downstream imports, rather than a hand-written module
         # stub.  Importing mmcv.ops is intentionally outside this contract (see
         # the module docstring above).
+        self.assertIs(torch.utils, sys.modules["torch.utils"])
+        self.assertIs(
+            torch.utils.checkpoint,
+            sys.modules["torch.utils.checkpoint"],
+        )
         import mmcv.cnn
         import mmengine.model
 

@@ -7,18 +7,20 @@
 import unittest
 import jittor as jt
 import numpy as np
-from jittor.utils.pytorch_converter import convert
 import os
 from _helpers.torch_runtime import import_torch_modules, modules_available
 
 torch = None
+convert = None
 skip_this_test = not modules_available("torch")
 
 
 def setUpModule():
-    global torch
+    global torch, convert
     if not skip_this_test:
         (torch,) = import_torch_modules("torch")
+        from jittor.utils.pytorch_converter import convert as converter
+        convert = converter
 
 code="""
 import torch.nn as nn

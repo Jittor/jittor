@@ -332,6 +332,10 @@ def to_pil_image(pic, mode=None):
         elif pic.ndim == 2:
             # if 2D image, add channel dimension (HWC)
             pic = np.expand_dims(pic, 2)
+        elif pic.shape[2] not in {1, 2, 3, 4} and pic.shape[0] in {1, 2, 3, 4}:
+            # Tensor-producing transforms use CHW while NumPy image inputs use
+            # HWC. Convert only when the channel axis is unambiguous.
+            pic = pic.transpose((1, 2, 0))
 
     npimg = pic
     if 'float' in str(pic.dtype) and mode != 'F' and npimg.shape[2] != 1:

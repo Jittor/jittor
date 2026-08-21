@@ -19,6 +19,7 @@ class TestTracer(unittest.TestCase):
             with jt.flag_scope(gdb_path=""):
                 jt.print_trace()
 
+    @unittest.skipUnless(jt.flags.gdb_path, "GDB is disabled in this test environment")
     def test_breakpoint(self):
         fname = os.path.join(jt.flags.cache_path, "test_breakpoint.py")
         with open(fname, 'w') as f:

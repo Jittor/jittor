@@ -12,17 +12,20 @@ import jittor as jt
 import numpy as np
 import unittest
 
-try:
-    import torch
-    from torch.autograd import Variable
-    import autograd.numpy as anp
-    from autograd import jacobian
+from _helpers.torch_runtime import import_torch_modules, modules_available
 
-    has_autograd = True
-except:
-    has_autograd = False
 
-@unittest.skipIf(not has_autograd, "No autograd found.")
+torch = None
+has_torch = modules_available("torch")
+
+
+def setUpModule():
+    global torch
+    if has_torch:
+        (torch,) = import_torch_modules("torch")
+
+
+@unittest.skipIf(not has_torch, "No independent Torch found.")
 class TestHistc(unittest.TestCase):
     def test_histc(self):
         for i in range(30):

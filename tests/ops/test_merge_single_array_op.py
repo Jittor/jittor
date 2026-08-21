@@ -67,10 +67,15 @@ class TestSingleArray(unittest.TestCase):
 
     def test6(self):
         jt.clean()
+        baseline = (
+            jt.number_of_hold_vars(),
+            jt.number_of_lived_vars(),
+            jt.number_of_lived_ops(),
+        )
         def check(hv, lv, lo):
-            self.assertEqual(jt.number_of_hold_vars(), hv)
-            self.assertEqual(jt.number_of_lived_vars(), lv)
-            self.assertEqual(jt.number_of_lived_ops(), lo)
+            self.assertEqual(jt.number_of_hold_vars() - baseline[0], hv)
+            self.assertEqual(jt.number_of_lived_vars() - baseline[1], lv)
+            self.assertEqual(jt.number_of_lived_ops() - baseline[2], lo)
         check(0,0,0)
         a = jt.array(1.0).name('a').stop_fuse()
         b = (a+jt.array(1.0).name('t1').stop_fuse()).name('b')

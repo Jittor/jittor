@@ -62,10 +62,9 @@ from ..core import OpInfo, UnaryUfuncInfo, BinaryUfuncInfo, ReductionOpInfo
 #
 # Each op bakes a fixed index into a lambda so the SampleInput carries only the float
 # `input` Var. For the fancy/mask kinds the addressing operand is captured as a
-# module-level int64/bool array (NOT closed over a per-call Var) so the SAME constant
-# index is used by both the jittor op and the numpy ref, and is identical across all of
-# gradcheck's perturbed forward passes (a per-call random index would make the
-# finite-difference forward inconsistent and the Jacobian meaningless).
+# module-level NumPy array. The Jittor index Var is created when the op runs so importing
+# OpInfo definitions cannot hold process-global graph state, and so each real-device scope
+# owns its index. The constant values remain identical across gradcheck perturbations.
 
 # fancy-index row orders (include a repeat to exercise the accumulating scatter-back).
 _ROWS_REORDER = [0, 2, 1]            # permutation (no collision)
@@ -74,10 +73,8 @@ _ROWS_NEG     = [-1, -2]             # negative var/list index (the 58e95b73 pat
 
 # paired advanced index x[rows, cols] -> picks points (rows[k], cols[k]); the repeated
 # (1,1) cell forces the duplicate-destination accumulate in the backward scatter.
-_PAIR_ROWS = jt.array(np.array([0, 1, 2, 1], dtype="int64"), dtype="int64")
-_PAIR_COLS = jt.array(np.array([3, 0, 2, 0], dtype="int64"), dtype="int64")
-_PAIR_ROWS_NP = np.array([0, 1, 2, 1])
-_PAIR_COLS_NP = np.array([3, 0, 2, 0])
+_PAIR_ROWS_NP = np.array([0, 1, 2, 1], dtype="int64")
+_PAIR_COLS_NP = np.array([3, 0, 2, 0], dtype="int64")
 
 
 def _fixed_bool_mask(*shape, seed):
@@ -93,7 +90,6 @@ def _fixed_bool_mask(*shape, seed):
 
 # A single mask instance reused by op + ref + every gradcheck forward.
 _MASK_3x4 = _fixed_bool_mask(3, 4, seed=701)
-_MASK_3x4_JT = jt.array(_MASK_3x4, dtype="bool")
 
 
 # ------------------------------------------------------------------- numpy refs
@@ -111,13 +107,16 @@ def ref_step(x):         return x[::2]
 def op_step(x):          return x[::2]
 
 def ref_mask(x):         return x[_MASK_3x4]    # C-order 1-D gather, like jittor
-def op_mask(x):          return x[_MASK_3x4_JT]
+def op_mask(x):          return x[jt.array(_MASK_3x4, dtype="bool")]
 
 def ref_fancy_1d(x):     return x[_ROWS_REPEAT]
 def op_fancy_1d(x):      return x[_ROWS_REPEAT]
 
 def ref_fancy_2d(x):     return x[_PAIR_ROWS_NP, _PAIR_COLS_NP]
-def op_fancy_2d(x):      return x[_PAIR_ROWS, _PAIR_COLS]
+def op_fancy_2d(x):
+    rows = jt.array(_PAIR_ROWS_NP, dtype="int64")
+    cols = jt.array(_PAIR_COLS_NP, dtype="int64")
+    return x[rows, cols]
 
 def ref_ellipsis(x):     return x[..., 0]       # last-axis int index via ellipsis
 def op_ellipsis(x):      return x[..., 0]

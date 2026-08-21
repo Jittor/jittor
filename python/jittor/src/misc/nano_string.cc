@@ -197,7 +197,7 @@ static void init_ns() {
             ns.set(NanoString::_type, NanoString::_dtype, NanoString::_type_nbits);
             ns.set(NanoString::_bool, is_bool.count(name));
             ns.set(NanoString::_int, !is_float_map.at(name) && !is_cplx);
-            ns.set(NanoString::_unsigned, is_unsigned.count(name));
+            ns.set(NanoString::_unsigned, is_unsigned.at(name));
             ns.set(NanoString::_float, is_float_map.at(name));
             ns.set(NanoString::_complex, is_cplx);
             ns.set(NanoString::_dsize, dsize_map.at(name), NanoString::_dsize_nbits);

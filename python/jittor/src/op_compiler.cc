@@ -27,6 +27,47 @@ using namespace jit_compiler;
 
 static bool isvar(char x) { return isalnum(x) || x == '_' || x == ':'; }
 
+static string fix_parallel_thread_ranges(const string& src) {
+    static const std::regex assignment(
+        R"(^([[:space:]]*)int (tn[0-9]+) = (get_thread_range_log\(thread_num_left, [^;]+\));[[:space:]]*$)"
+    );
+    string output;
+    output.reserve(src.size());
+    string previous_tn;
+    bool in_thread_setup = false;
+    for (size_t begin=0; begin<src.size();) {
+        auto end = src.find('\n', begin);
+        bool has_newline = end != string::npos;
+        if (!has_newline) end = src.size();
+        string line = src.substr(begin, end-begin);
+        if (line.find("int thread_num_left = thread_num;") != string::npos) {
+            in_thread_setup = true;
+            previous_tn.clear();
+        } else if (in_thread_setup) {
+            std::smatch match;
+            if (std::regex_match(line, match, assignment)) {
+                auto current_tn = match[2].str();
+                if (previous_tn.size()) {
+                    line = match[1].str() + "int " + current_tn + " = " +
+                        previous_tn + " + " + match[3].str() + ";";
+                }
+                previous_tn = current_tn;
+            } else if (line.find("#pragma omp parallel") != string::npos) {
+                if (previous_tn.size()) {
+                    auto first = line.find_first_not_of(" \t");
+                    output += line.substr(0, first) +
+                        "thread_num /= thread_num_left;\n";
+                }
+                in_thread_setup = false;
+            }
+        }
+        output += line;
+        if (has_newline) output += '\n';
+        begin = end + has_newline;
+    }
+    return output;
+}
+
 void OpCompiler::get_op_var_by_name(const string& name, uint& op_id, uint& opvar_id, Op*& op, Var*& var) {
     // name: op{id}_{varname}
     ASSERT(name.size()>3 && name[0]=='o' && name[1]=='p');
@@ -1108,7 +1149,10 @@ jit_op_entry_t do_compile_inner(Op* op) {
     // if is fused op
     if (oc.op) {
         TunerManager tm(&oc);
-        src_after_passes = tm.tune();
+        // ParallelPass is supplied by data.o and emits per-dimension bit counts,
+        // while its loop body consumes cumulative bit boundaries. Correct the
+        // stable generated template before compiling to avoid negative shifts.
+        src_after_passes = fix_parallel_thread_ranges(tm.tune());
         src = &src_after_passes;
     }
     op->compile_optimize(*src);
