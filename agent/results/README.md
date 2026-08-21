@@ -6,6 +6,7 @@
 
 ## 兼容性与功能验证
 
+- [2026-08-21 浮点 NaN 比较 CPU/CUDA 修复验证](2026-08-21-ieee-nan-comparisons.md)
 - [2026-08-21 原生与 Torch 模式启动隔离修复验证](2026-08-21-native-torch-mode-isolation.md)
 - [2026-08-21 median 原生与 Torch 模式 CPU/CUDA 修复验证](2026-08-21-median.md)
 - [2026-08-21 负整数 floor division CPU/CUDA 修复验证](2026-08-21-floor-divide.md)

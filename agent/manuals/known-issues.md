@@ -2,7 +2,7 @@
 
 - Status: Maintained
 - Last reviewed: 2026-08-21
-- Baseline: `20af7de3`
+- Baseline: `8929db65`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -158,18 +158,24 @@ framework defects.
 - Review/expiry condition: enable the skipped test for multiple sample and batch
   ranks, including gradients where applicable
 
-## KI-SEMANTICS-003: same-Var equality mishandles NaN
+## KI-SEMANTICS-003: floating-comparison backend verification incomplete
 
 - Severity: Critical
-- Status: Reproduced compiler/fusion behavior
-- Owner: graph optimizer and comparison-operator maintainers
-- Evidence: [`test_nan_not_equal_to_itself_via_isnan`](../../tests/compiler/test_kernel_traps.py)
-- Symptom: comparing a `Var` with itself can be folded to all true, violating the
-  IEEE rule that NaN is not equal to itself
-- Workaround: use `jt.isnan`/`jt.isfinite` for masks; do not derive a non-NaN mask
-  from `x == x`
-- Review/expiry condition: add a direct same-object NaN equality regression and
-  pass it through fused and unfused CPU/accelerator paths
+- Status: Core fix verified on CPU/CUDA; NPU/ROCm real-device verification pending
+- Owner: compiler and comparison-operator maintainers
+- Evidence: [`test_nan_self_comparisons_across_dtypes`](../../tests/compiler/test_kernel_traps.py),
+  [`test_float_comparisons_with_nan`](../../tests/ops/test_fusion_correctness.py),
+  and [2026-08-21 verification](../results/2026-08-21-ieee-nan-comparisons.md)
+- Previous symptom: CPU JIT kernels inherited `-Ofast`, allowing both same-object
+  and distinct floating comparisons to violate IEEE NaN behavior; low-precision
+  `!=`, `<=`, and `>=` could also fail to compile on CPU
+- Current implementation: floating and complex comparisons retain optimized
+  `-O3` kernels without finite-math assumptions, and fused compile options are
+  taken from the complete aggregated graph choices
+- Workaround on unverified backends: compare representative NaN values against
+  NumPy before relying on direct comparison masks
+- Review/expiry condition: pass the same dtype and fused/unfused matrices on real
+  NPU and ROCm devices, then remove this entry
 
 ## KI-SHAPE-001: reductions do not produce 0-D scalar tensors
 
