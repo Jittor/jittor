@@ -262,6 +262,30 @@ def _install_cuda(g, registry=None):
         custom_fwd = staticmethod(_amp_passthrough_decorator)
         custom_bwd = staticmethod(_amp_passthrough_decorator)
     cuda.amp = _amp
+    # OpenMMLab imports these legacy CUDA tensor classes in type annotations.
+    # Keep them distinct from the top-level CPU classes: a direct alias would
+    # make a host tensor pass ``isinstance(x, torch.cuda.LongTensor)``.
+    class _CudaTypedTensorMeta(type):
+        def __instancecheck__(cls, obj):
+            return isinstance(obj, cls._base_type) and bool(getattr(obj, "is_cuda", False))
+
+        def __call__(cls, *args, **kwargs):
+            if not cuda.is_available():
+                raise RuntimeError("CUDA is not available")
+            return cls._base_type(*args, **kwargs).cuda()
+
+    for _tensor_name in (
+        "FloatTensor", "DoubleTensor", "HalfTensor", "BFloat16Tensor",
+        "LongTensor", "IntTensor", "ShortTensor", "CharTensor",
+        "ByteTensor", "BoolTensor",
+    ):
+        _tensor_type = getattr(g, _tensor_name, None)
+        if _tensor_type is not None:
+            setattr(cuda, _tensor_name, _CudaTypedTensorMeta(
+                _tensor_name,
+                (),
+                {"_base_type": _tensor_type, "__module__": "torch.cuda"},
+            ))
     # stub classes referenced in annotations / guarded paths
     cuda.CUDAGraph = type("CUDAGraph", (), {})
     class _Stream:
