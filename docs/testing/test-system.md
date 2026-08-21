@@ -1,10 +1,11 @@
 # Test System
 
 - Status: Accepted
-- Last reviewed: 2026-08-12
-- Baseline: `582fc51d`
+- Last reviewed: 2026-08-21
+- Baseline: `2e34fee4`
 - Owner: test infrastructure maintainers
-- Review when: collection roots, markers, OpInfo contracts, or backend gates change
+- Review when: collection roots, process-mode ownership, markers, OpInfo
+  contracts, or backend gates change
 
 Jittor uses pytest as the repository test runner while retaining compatible
 `unittest.TestCase` tests. The suite lives under root `tests/` and is not part of
@@ -49,6 +50,22 @@ Test modules may import `tests/_helpers` and `tests/opinfo` through the pytest
 Python path configured for the suite. They must not import another test module as
 an implicit helper API. Shared utilities need their own focused tests when they
 contain nontrivial comparison or device logic.
+
+## Process-mode isolation
+
+Torch compatibility installation is process-global and changes public methods,
+dtype promotion, reduction defaults, and lazy execution. Native and Torch-facing
+tests therefore run in separate pytest processes. `tests/conftest.py` owns the
+`TORCH_MODE_PATHS` list, ignores those paths during a broad native collection,
+and activates Torch mode when one of them is selected explicitly.
+
+`tools/run_test_suite.py` is the complete-suite entry point. It runs native and
+Torch sessions with separate state, caches, and mode variables, then reports a
+combined result. A direct `python -m pytest tests` command is intentionally only
+the native session and must not be reported as full-suite coverage. A test that
+asserts `result_type`, Torch cast aliases, typed-tensor names, or Torch-specific
+defaults belongs to the Torch session even if the file also carries a low-level
+contract and remains under `tests/core/`.
 
 ## Three layers of operator evidence
 
@@ -123,7 +140,8 @@ requirements in the module docstring.
 ## Commands
 
 ```bash
-# Full collection or a focused module
+# Complete two-process suite, native-only collection, or a focused module
+python tools/run_test_suite.py
 python -m pytest --collect-only -q tests
 python -m pytest -v tests/ops/test_ops.py
 
