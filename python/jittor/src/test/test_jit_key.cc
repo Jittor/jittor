@@ -28,9 +28,9 @@ JIT_TEST(jit_key) {
     jk << JK::key << "key" << JK::val << JK::Oxhex2(0x123123);
     string key = "«key:value«key:123123«key:3«key:23«key:0x123123«key:0x3«key:0x23";
     ASSERTop(jk.to_string(),==,key);
-    auto keys = parse_jit_keys("«a:11«b:22«a[3]:b::[x]«x=11«f=itof(0x0)");
+    auto keys = parse_jit_keys("«a:11«b:22«a[3]:b::[x]«x=11«f:itof(0x0)");
     vector<pair<string,string>> k2 = 
-        {{"a","11"},{"b","22"},{"a[3]","b::[x]"},{"x","17"},{"f","0"}};
+        {{"a","11"},{"b","22"},{"a[3]","b::[x]"},{"x","17"},{"f","0.0"}};
     ASSERTop(keys,==,k2);
     jk.clear();jk << 0x0;
     ASSERT(jk.to_string()=="0");
@@ -46,14 +46,20 @@ JIT_TEST(jit_key) {
     jk.clear();
     add_jit_define(jk, "f", 0.01);
     add_jit_define(jk, "f", 0.5);
+    add_jit_define(jk, "f", 0.7);
+    add_jit_define(jk, "f", -0.7);
+    add_jit_define(jk, "f", itof(0x8000000000000000ull));
     #ifndef _MSC_VER
     add_jit_define(jk, "f", 1.0/0);
     add_jit_define(jk, "f", -1.0/0);
     add_jit_define(jk, "f", 0.0/0);
     #endif
     keys = parse_jit_keys(jk.to_string());
-    k2 = {{"f","0x1.47ae147ae147bp-7"}, 
-        {"f","0x1p-1"},
+    k2 = {{"f","0.01"},
+        {"f","0.5"},
+        {"f","0.69999999999999996"},
+        {"f","-0.69999999999999996"},
+        {"f","-0.0"},
         {"f","(1.0/0)"},
         {"f","(-1.0/0)"},
         {"f","(0.0/0)"},

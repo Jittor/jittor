@@ -154,23 +154,18 @@ class TestKernelTraps(JittorTestCase):
         else:
             self.skipTest(".long() not exposed")
 
-    @unittest.expectedFailure
-    def test_constant_pad_fractional_fill_cpu_asmtuner(self):
-        """KNOWN-BUG (expected failure): a constant-pad with a FRACTIONAL fill value
-        fails to COMPILE on CPU.
-
-        Found by the full op battery: ``nn.pad(..., mode='constant', value=0.7)`` on the
-        CPU backend emits a ``reindex`` kernel whose overflow value is the hex-float
-        ``itof(0x3fe6666666666666)``; jittor's CPU ``asm_tuner`` (the ``-march=native``
-        assembly optimizer) rewrites that constant into a malformed literal and g++ aborts
-        with ``error: exponent has no digits``. INTEGER fills (0.0, 2.0, -3.0) and the CUDA
-        backend are unaffected -- so op_db's pad_constant samples use integer fills to keep
-        the pad semantics covered, and this test pins the fractional-fill regression loudly.
-        When the asm_tuner is fixed this turns XPASS and we drop the xfail."""
+    def test_constant_pad_fractional_fill_cpu_codegen(self):
+        """JIT-key doubles must become valid C++14 literals in generated kernels."""
         with jt.flag_scope(use_cuda=0):
             x = jt.array(np.random.RandomState(0).randn(1, 1, 4, 4).astype("float32"))
-            out = jt.nn.pad(x, [1, 1, 1, 1], mode="constant", value=0.7)
-            out.sync()        # force compile+exec; raises on the asm_tuner failure
+            for value in (0.7, -0.7, float.fromhex("0x1.921fb54442d18p+1")):
+                with self.subTest(value=value):
+                    out = jt.nn.pad(x, [1, 1, 1, 1], mode="constant", value=value)
+                    expected = np.pad(
+                        x.numpy(), ((0, 0), (0, 0), (1, 1), (1, 1)),
+                        mode="constant", constant_values=value,
+                    )
+                    self.assertEqual(out.numpy(), expected)
 
 
 if __name__ == "__main__":

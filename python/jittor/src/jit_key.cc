@@ -8,6 +8,9 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #endif
+#include <iomanip>
+#include <limits>
+#include <locale>
 #include <sstream>
 #include "jit_key.h"
 #include "utils/str_utils.h"
@@ -68,14 +71,18 @@ static void convert_itof(string& s) {
     ss << std::hex << s.substr(7, s.size()-7-1);
     ASSERT(ss >> x);
     ss.str(""); ss.clear();
-    ss << std::hexfloat << itof(x);
+    ss.imbue(std::locale::classic());
+    ss << std::setprecision(std::numeric_limits<float64>::max_digits10)
+       << itof(x);
     s = ss.str();
-    // 0x0p+0 ---> 0x0p0
-    if (s.find("p+") != string::npos)
-        s.erase(s.find("p+")+1, 1); 
     if (s=="inf") s = "(1.0/0)";
     if (s=="-inf") s = "(-1.0/0)";
     if (s=="nan" || s=="-nan") s = "(0.0/0)";
+    // Keep integral values and signed zero as floating-point literals.  JIT
+    // kernels are compiled as C++14, where hexadecimal floating literals are
+    // not portable, so use a max_digits10 decimal representation instead.
+    if (s.find_first_of(".eE/") == string::npos)
+        s += ".0";
 }
 
 vector<pair<string,string>> parse_jit_keys(const string& s) {

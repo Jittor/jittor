@@ -76,24 +76,17 @@ def _make(shape, seed, dtype, requires_grad):
 
 def sample_constant(op_info, device, dtype, requires_grad):
     """constant pad: linear, every boundary is a fresh `value` cell (no fold).
-
-    NB: the fill values are kept INTEGER-valued on purpose. A *fractional* fill (e.g.
-    0.7) triggers a real jittor CPU-codegen bug -- the asm_tuner mangles the
-    ``itof(0x...)`` hex-float constant of the reindex overflow value into a malformed
-    assembly literal ("exponent has no digits") so the kernel fails to compile on CPU
-    (CUDA is fine). That bug is pinned explicitly (and loudly) by the xfail test
-    ``test_kernel_traps.TestKernelTraps.test_constant_pad_fractional_fill_cpu_asmtuner``;
-    here we keep integer fills so the pad SEMANTICS stay covered on CPU + CUDA."""
+    Fractional positive and negative fills exercise JIT constant serialization."""
     out = []
     # canonical (1,1,4,4) symmetric, non-zero value.
     out.append(SampleInput(_make((1, 1, 4, 4), 900, dtype, requires_grad),
-                           (1, 1, 1, 1), mode="constant", value=2.0))
+                           (1, 1, 1, 1), mode="constant", value=0.7))
     # last-dim-only asymmetric, default value (0).
     out.append(SampleInput(_make((1, 1, 4, 4), 901, dtype, requires_grad),
                            (2, 1), mode="constant", value=0.0))
     # asymmetric over the last two dims incl. zero-on-one-side.
     out.append(SampleInput(_make((1, 1, 4, 4), 902, dtype, requires_grad),
-                           (0, 2, 1, 0), mode="constant", value=-3.0))
+                           (0, 2, 1, 0), mode="constant", value=-0.7))
     return out
 
 
