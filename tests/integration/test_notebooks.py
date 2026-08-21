@@ -223,6 +223,7 @@ socket.socket.connect = _offline_connect
 socket.create_connection = _offline_create_connection
 import jittor as jt
 jt.flags.use_cuda = 0
+assert jt.flags.use_parallel_op_compiler == 8
 """
 
 
@@ -242,9 +243,8 @@ def test_notebook_smokes_execute_offline_on_cpu(tmp_path, monkeypatch):
     monkeypatch.setenv("use_mkl", "0")
     monkeypatch.setenv("use_cutt", "0")
     monkeypatch.setenv("use_cutlass", "0")
-    # A Jupyter kernel is a threaded process, and Jittor's parallel operator
-    # compiler forks from it during the first cell. See KI-COMPILER-001.
-    monkeypatch.setenv("use_parallel_op_compiler", "0")
+    # Exercise threaded cold operator compilation inside the Jupyter host.
+    monkeypatch.setenv("use_parallel_op_compiler", "8")
     python_config = shutil.which("python3.{}-config".format(sys.version_info[1]))
     if python_config:
         monkeypatch.setenv("python_config_path", python_config)

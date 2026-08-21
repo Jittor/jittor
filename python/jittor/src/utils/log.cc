@@ -374,7 +374,13 @@ int register_sigaction() {
     if (getenv("OMPI_COMM_WORLD_SIZE") == nullptr &&
         getenv("PMI_SIZE") == nullptr &&
         getenv("DISABLE_MULTIPROCESSING") == nullptr) {
-        sigaction(SIGCHLD, &sa, NULL);
+        // A Jupyter kernel also owns unrelated child processes. Jittor's
+        // SIGCHLD action quick-exits on any child killed by a signal, so
+        // installing it there can kill the kernel during otherwise successful
+        // parallel compilation. Jupyter already has the same exception above
+        // for SIGINT; preserve its SIGCHLD ownership as well.
+        if (getenv("JPY_PARENT_PID") == nullptr)
+            sigaction(SIGCHLD, &sa, NULL);
         sigaction(SIGILL, &sa, NULL);
         sigaction(SIGBUS, &sa, NULL);
     }
