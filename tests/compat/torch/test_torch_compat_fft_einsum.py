@@ -7,9 +7,8 @@ CUDA when the build has it, locking the torch-facing *semantics* rather than jit
 self-consistency.
 
 Notes on jittor's representation (verified against the source):
-  * ``torch.fft.fft/ifft/fft2/ifft2/fftn/ifftn/rfft`` return a ``jt.nn.ComplexNumber``
-    (a real/imag pair, NOT a native-complex Var and NOT a 2-tuple); read parts via
-    ``.real`` / ``.imag``. ``torch.fft.irfft`` is the exception -> it returns a real Var.
+  * ``torch.fft.fft/ifft/fft2/ifft2/fftn/ifftn/rfft`` return a native-complex Var;
+    read parts via ``.real`` / ``.imag``. ``torch.fft.irfft`` returns a real Var.
   * The DFT is computed via matmul with cos/sin matrices (O(N^2), autograd-able,
     dual-backend), so results are float32-accurate but not bit-exact to numpy's FFTW;
     tolerances are set accordingly.
@@ -140,6 +139,64 @@ class TestRFFT(Base):
             got = torch.fft.irfft(cn, n=8).numpy()
             self.ac(got, np.fft.irfft(ref_spec, n=8), atol=1e-4,
                     msg=f"irfft vs numpy {dev}")
+        both_devices(body)
+
+    def test_rfft_after_complex_forward_backward_sequence(self):
+        x = self.x
+        rng = np.random.RandomState(20260705)
+        a_np = (rng.randn(4, 5) + 1j * rng.randn(4, 5)).astype("complex64")
+        b_np = (rng.randn(4, 5) + 1j * rng.randn(4, 5)).astype("complex64")
+        m1_np = (rng.randn(3, 4) + 1j * rng.randn(3, 4)).astype("complex64")
+        m2_np = (rng.randn(4, 2) + 1j * rng.randn(4, 2)).astype("complex64")
+
+        def materialize(value):
+            np.array(value.numpy(), copy=True)
+
+        def body(dev):
+            def a():
+                return torch.array(a_np)
+
+            def b():
+                return torch.array(b_np)
+
+            # Preserve the forward/backward prelude which once made CUDA rFFT lose
+            # the imaginary half-spectrum in the aggregate complex parity probe.
+            forward = [
+                torch.nn.view_as_real(a()),
+                torch.nn.view_as_complex(torch.nn.view_as_real(a())),
+                a() + b(),
+                a() * b(),
+                a() / b(),
+                a().conj(),
+                a().abs(),
+                a().sum(),
+                a().mean(),
+                torch.matmul(torch.array(m1_np), torch.array(m2_np)),
+                torch.exp(a()),
+                torch.log(a()),
+                torch.sin(a()),
+                torch.cos(a()),
+                torch.sqrt(a()),
+            ]
+            for value in forward:
+                materialize(value)
+
+            gx, gy = a(), b()
+            materialize(torch.grad(((gx * gy).abs()).sum(), gx))
+            gx = a()
+            materialize(torch.grad(torch.exp(gx).abs().sum(), gx))
+            gx, gy = torch.array(m1_np), torch.array(m2_np)
+            materialize(torch.grad(torch.matmul(gx, gy).abs().sum(), gx))
+            gx = a()
+            bridge = torch.nn.view_as_complex(torch.nn.view_as_real(gx))
+            materialize(torch.grad(bridge.abs().sum(), gx))
+
+            got = torch.fft.rfft(torch.array(x))
+            ref = np.fft.rfft(x)
+            self.acplx(got, ref, msg=f"rfft after complex sequence {dev}")
+            self.ac(torch.fft.irfft(got, n=x.size).numpy(), x, atol=1e-4,
+                    msg=f"rfft->irfft after complex sequence {dev}")
+
         both_devices(body)
 
 

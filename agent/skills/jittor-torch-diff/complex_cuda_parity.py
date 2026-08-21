@@ -28,13 +28,10 @@ EXPECTED_JT_GAPS = {
 
 # These items are still useful to save while auditing, but they are validated by
 # focused tests instead of this aggregate compare. The aggregate probe intentionally
-# runs many lazy graphs in one process; Jittor currently has a sequence-sensitive
-# torch.fft.rfft issue after that prelude, and some bridge/linalg values can be
-# pulled into the same artifact. Keep them visible without treating them as the
+# runs many lazy graphs in one process, and some bridge/linalg values can be pulled
+# into sequence-sensitive artifacts. Keep them visible without treating them as the
 # pass/fail signal for this helper.
 SEQUENCE_SENSITIVE_ITEMS = {
-    "rfft",
-    "irfft_rfft",
     "complexnumber_mul",
     "complexnumber_matmul",
     "complexnumber_grad_mul_abs",
@@ -542,8 +539,7 @@ def compare(outdir):
             item = dict(item)
             item["status"] = "sequence_sensitive"
             item["note"] = (
-                "aggregate-probe artifact/risk; validate with focused tests. "
-                "rfft is a confirmed sequence-sensitive CUDA gap."
+                "aggregate-probe artifact/risk; validate with focused tests."
             )
             report.append(item)
             print(f"SEQUENCE-SENSITIVE {name}: {item}")
