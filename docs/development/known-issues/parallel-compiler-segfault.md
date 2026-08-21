@@ -1,8 +1,8 @@
 # Parallel Operator Compiler Segmentation Fault
 
 - Status: Open for non-Jupyter workloads; Jupyter SIGCHLD path fixed
-- Last reviewed: 2026-08-21
-- Baseline: `3fc3f6fd`
+- Last reviewed: 2026-08-22
+- Baseline: `137f9dd1`
 - Owner: compiler/executor maintainers
 - Workaround: `jt.flags.use_parallel_op_compiler = 0`
 - Exit condition: a minimized stress test passes repeatedly with parallel
@@ -30,12 +30,12 @@ reproduced the exit with `si_code=CLD_KILLED` and `si_status=SIGKILL`.
 
 Jupyter kernels now keep their existing SIGCHLD disposition, just as they
 already kept SIGINT, while Jittor retains SIGILL and SIGBUS fault diagnostics.
-The offline notebook gate explicitly uses eight operator compile workers. A
-real nbclient kernel, the deterministic host-ownership regression, and CPU/CUDA
-cold-operator probes pass. See the
-[2026-08-21 verification report](../../../agent/results/2026-08-21-jupyter-sigchld.md).
-This removes the notebook workaround but does not prove or close the broader
-large-workload compiler hypothesis below.
+The deterministic host-ownership regression and focused CPU/CUDA cold-operator
+probes pass. A later complete nbclient smoke nevertheless died twice during a
+transformer attention workload with eight compile workers, including once with
+`JT_NO_SIGNAL_HANDLER=1`; the same smoke passed with serial compilation. The
+offline notebook gate therefore remains serial while this broader issue is
+open. See the [2026-08-21 verification report and 2026-08-22 addendum](../../../agent/results/2026-08-21-jupyter-sigchld.md).
 
 ## Current hypothesis
 

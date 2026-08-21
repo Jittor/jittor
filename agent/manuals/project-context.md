@@ -1,8 +1,8 @@
 # Jittor Project Context
 
 - Status: Current index, not a history log
-- Last reviewed: 2026-08-21
-- Baseline reviewed: `a40b775b`
+- Last reviewed: 2026-08-22
+- Baseline reviewed: `137f9dd1`
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -70,6 +70,12 @@ limitations. See [native complex dtype](../../docs/architecture/complex-dtype.md
 
 The test architecture uses independent forward references, numerical gradients,
 and CPU-to-accelerator parity. See [test system](../../docs/testing/test-system.md).
+The complete CPU repository gate is
+[`tools/run_test_suite.py`](../../tools/run_test_suite.py), which owns separate
+native and Torch-mode processes, JIT caches, temporary directories, and process
+mode variables. Its 2026-08-22 baseline passes both sessions; accelerator and
+external-oracle validation remain separate real-device gates. See the
+[complete CPU suite report](../results/2026-08-22-complete-cpu-test-suite.md).
 Performance work uses ASV, isolated caches, synchronized measurements, and exact
 commit labels. See [benchmarking](../../docs/performance/benchmarking.md).
 

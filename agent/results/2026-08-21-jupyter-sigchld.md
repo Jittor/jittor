@@ -79,6 +79,20 @@ python -m pytest -q tests/data/test_dataset.py -k children_died
 python -m pytest -q tests/ops/test_fusion_correctness.py
 ```
 
+## 2026-08-22 addendum
+
+The focused SIGCHLD conclusion remains valid, but the complete maintained
+notebook smoke exposed a separate limitation. With eight operator compile
+workers, a real nbclient run died twice while executing transformer attention.
+The failure also reproduced with `JT_NO_SIGNAL_HANDLER=1`, so it cannot be
+attributed to the fixed Jittor SIGCHLD ownership path. The same complete smoke
+passed with `use_parallel_op_compiler=0` and then passed inside the full native
+CPU repository session.
+
+The maintained notebook gate was therefore restored to serial compilation.
+This is a containment for KI-COMPILER-001, not a reversal of the SIGCHLD fix and
+not evidence that notebook parsing alone is sufficient validation.
+
 ## Limits
 
 This closes only the Jupyter reproduction. KI-COMPILER-001 remains open for the

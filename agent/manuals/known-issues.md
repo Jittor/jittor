@@ -1,8 +1,8 @@
 # Active Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-08-21
-- Baseline: `a40b775b`
+- Last reviewed: 2026-08-22
+- Baseline: `137f9dd1`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -30,12 +30,12 @@ framework defects.
 - Evidence: [investigation and reproduction](../../docs/development/known-issues/parallel-compiler-segfault.md)
 - Workaround: set `jt.flags.use_parallel_op_compiler = 0` for deterministic
   validation workloads
-- Resolved subcase: the Jupyter kernel death was not compiler heap corruption.
-  Jittor's process-wide `SIGCHLD` handler quick-exited the kernel when any child
-  was killed. Jupyter now retains SIGCHLD ownership, and
-  [`test_notebooks.py`](../../tests/integration/test_notebooks.py) runs its cold
-  operator workload with eight compile workers. See the
-  [SIGCHLD verification](../results/2026-08-21-jupyter-sigchld.md).
+- Resolved subcase: Jittor's process-wide `SIGCHLD` handler quick-exited a
+  Jupyter kernel when any child was killed. Jupyter now retains SIGCHLD
+  ownership. A later complete notebook smoke still reproduced a separate death
+  with eight compile workers, including with Jittor's signal handler disabled,
+  so the maintained notebook gate remains serial. See the
+  [SIGCHLD verification and addendum](../results/2026-08-21-jupyter-sigchld.md).
 - Review/expiry condition: remove only after sanitizer-backed root cause and
   repeated cold/warm stress, deadlock, multiprocess-cache, and performance gates
 
@@ -270,40 +270,3 @@ framework defects.
   CUDA build is still the one imported.
 - Effect: `tests/structure` went from 3 failed / 209 passed to 212 passed.
 - Guard: [cache path precedence](../../tests/compiler/test_cache_path_precedence.py)
-
-## KI-COMPILER-005: the parallel pass mis-partitions work at some thread counts
-
-- Severity: High (silently wrong results, or a hang, depending on thread count)
-- Status: Reproduced and bounded; not fixable from this repository
-- Owner: compiler maintainers
-- Evidence: `tests/compiler/test_parallel_pass.py` -- `TestParallelPass3::test`
-  fails on `assert np.allclose(a.data*2, b)`
-- Symptom: with `compile_options={'parallel':1, 'merge_loop_var':0}` and a
-  16-per-dimension tensor, `a+a` for `ndim>=3` leaves most of the output
-  untouched -- 3072 of 4096 elements stay 0. The generated kernel derives its
-  tiling from the runtime thread count:
-
-      int tn1 = get_thread_range_log(thread_num_left, range1);
-      int tn0 = get_thread_range_log(thread_num_left, range0);
-      int tnum0 = 1<<(tn0-tn1);
-
-  Each call consumes bits from the remaining thread budget, so with 64 threads
-  and two dimensions of 16 it yields `tn1=3, tn0=2` and shifts by -1, which is
-  undefined behaviour. Measured on this host: 128 threads hangs past a
-  600s timeout, 64 and 32 both compute wrong values.
-- Reach: not confined to the opt-in `parallel` compile option. 2182 of the 4958
-  JIT kernels in a populated cache contain this `tnum` partitioning, so it is
-  the ordinary CPU parallelisation path.
-- Why it cannot be fixed here: `ParallelPass::run` has no source in the
-  repository. `python/jittor/src/opt/pass/parallel_pass.h` declares it and
-  `opt/pass_manager.cc` calls `run_pass<ParallelPass>()`, but the definition
-  ships as `python/jittor/utils/data.gz`, a gzipped blob that `compiler.py`
-  expands, compiles to `<cache>/data.o` with `-include src/utils/vdp`, and then
-  deletes. `vdp` is `#define _P(...)`, which erases the decoy lines the blob is
-  padded with. That object supplies 31 functions, including this pass.
-- Consequence for this branch: the OpenMP thread-count default cannot be
-  lowered to the physical core count, even though doing so measured 1841 GFLOPS
-  against 406 on a 2048x768 by 768x768 matmul and 380us against 5955us on a
-  batched oneDNN call. That change was reverted for this reason.
-- Review/expiry condition: close when the tiling no longer depends on the
-  thread count being large enough, which needs the pass's source
