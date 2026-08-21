@@ -69,7 +69,7 @@ class TestSilentWrongRegressions(JittorTestCase):
         self.assertEqual(_scalar(jt.array(x).std()), float(np.std(x, ddof=1)),
                          atol=1e-5, rtol=1e-4, msg="std default unbiased (not biased)")
 
-    # -- 0b3e7e5f: nanmean must not count NaN (x==x folds to all-True) -----------
+    # -- 0b3e7e5f: nanmean must not count NaN -----------------------------------
     def test_nanmean_excludes_nan(self):
         x = np.array([1.0, np.nan, 3.0, np.nan, 5.0], dtype="float32")
         ref = float(np.nanmean(x))

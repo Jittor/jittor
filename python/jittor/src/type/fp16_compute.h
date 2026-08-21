@@ -235,8 +235,11 @@ struct float16 {
 };
 
 bool operator<(float16 x, float16 y) { return float32(x)<float32(y); }
+bool operator<=(float16 x, float16 y) { return float32(x)<=float32(y); }
 bool operator>(float16 x, float16 y) { return float32(x)>float32(y); }
+bool operator>=(float16 x, float16 y) { return float32(x)>=float32(y); }
 bool operator==(float16 x, float16 y) { return float32(x)==float32(y); }
+bool operator!=(float16 x, float16 y) { return float32(x)!=float32(y); }
 
 
 struct bfloat16 {
@@ -255,8 +258,11 @@ struct bfloat16 {
 };
 
 bool operator<(bfloat16 x, bfloat16 y) { return float32(x)<float32(y); }
+bool operator<=(bfloat16 x, bfloat16 y) { return float32(x)<=float32(y); }
 bool operator>(bfloat16 x, bfloat16 y) { return float32(x)>float32(y); }
+bool operator>=(bfloat16 x, bfloat16 y) { return float32(x)>=float32(y); }
 bool operator==(bfloat16 x, bfloat16 y) { return float32(x)==float32(y); }
+bool operator!=(bfloat16 x, bfloat16 y) { return float32(x)!=float32(y); }
 
 
 }

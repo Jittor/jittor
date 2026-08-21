@@ -13,9 +13,9 @@ This module closes that: for each expression it computes the result with fusion 
 AND match an independent numpy reference — forward AND backward, on every device.
 
 A fused-vs-unfused divergence isolates a fusion miscompile directly (both are jittor,
-only the kernel-merging differs). It also pins the specific fusion traps this project
-has hit: the same-pointer ``x == x`` fold (must equal numpy, NaN included via isnan),
-and the inf/nan ternary chain that once segfaulted.
+only the kernel-merging differs). It also pins specific fusion traps this project
+has hit: floating self-comparisons must retain IEEE NaN behavior, and the inf/nan
+ternary chain that once segfaulted must remain executable.
 
 Run::  python -m pytest tests/ops/test_fusion_correctness.py
 """
@@ -112,16 +112,32 @@ class TestFusionCorrectness(JittorTestCase):
                 [a0, b0], ref, atol=1e-5, rtol=1e-5, label=f"where-fuse [{dev}]")
         self._devices(body)
 
-    # -- §4-B trap: same-pointer x==x must still equal numpy (NaN handled) ---------
-    def test_self_compare_and_isnan(self):
+    # -- §4-B trap: comparisons must retain IEEE NaN semantics -----------------
+    def test_float_comparisons_with_nan(self):
         x0 = np.array([1.0, np.nan, 3.0, np.inf, -2.0], dtype="float32")
+        y0 = np.array([2.0, np.nan, 3.0, np.inf, -3.0], dtype="float32")
+        comparisons = (
+            ("equal", lambda x, y: x == y, np.equal),
+            ("not_equal", lambda x, y: x != y, np.not_equal),
+            ("less", lambda x, y: x < y, np.less),
+            ("less_equal", lambda x, y: x <= y, np.less_equal),
+            ("greater", lambda x, y: x > y, np.greater),
+            ("greater_equal", lambda x, y: x >= y, np.greater_equal),
+        )
 
         def body(dev):
-            x = jt.array(x0)
-            # the SAFE non-nan mask is isnan, never (x==x) (which fuses to all-True);
-            # lock that isnan matches numpy exactly through the fused graph.
-            self.assertEqual((~jt.isnan(x)).numpy().astype(bool), ~np.isnan(x0),
-                             msg=f"isnan through fusion [{dev}]")
+            for name, compare, np_compare in comparisons:
+                with self.subTest(device=dev, comparison=name, inputs="same"):
+                    self._fused_unfused(
+                        lambda x, compare=compare: compare(x, x),
+                        [x0], np_compare(x0, x0), check_grad=False,
+                        label=f"{name} same-Var [{dev}]",
+                    )
+                with self.subTest(device=dev, comparison=name, inputs="distinct"):
+                    self._fused_unfused(
+                        compare, [x0, y0], np_compare(x0, y0), check_grad=False,
+                        label=f"{name} distinct-Var [{dev}]",
+                    )
         self._devices(body)
 
     # -- the inf/nan ternary chain that once segfaulted (must compute, not crash) --

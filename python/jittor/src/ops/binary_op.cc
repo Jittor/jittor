@@ -470,6 +470,19 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
             "(bitwise/shift ops are not defined for floating-point or complex types).";
     }
     z = create_output(x->shape, binary_dtype_infer(op, x->ns, y->ns, x->flags.get(NodeFlags::_is_scalar), y->flags.get(NodeFlags::_is_scalar)));
+    bool is_comparison = ns==ns_less || ns==ns_less_equal ||
+        ns==ns_greater || ns==ns_greater_equal ||
+        ns==ns_equal || ns==ns_not_equal;
+    if (is_comparison &&
+        (x->dtype().is_float() || x->dtype().is_complex() ||
+         y->dtype().is_float() || y->dtype().is_complex())) {
+        // Kernel flags end in -Ofast on CPU, which permits folding x==x even when
+        // x is NaN. A later ordinary optimization level restores IEEE comparisons
+        // while retaining the optimizations expected by comparison-heavy kernels.
+        loop_options_t options = z->loop_options;
+        options["FLAGS: -O3 "] = 1;
+        z->loop_options = move(options);
+    }
     bool bin = ns.get(NanoString::_no_need_back_in);
     bool bout = ns.get(NanoString::_no_need_back_out);
     if (bin || bout) {

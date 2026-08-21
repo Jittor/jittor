@@ -11,7 +11,7 @@ other op_db entry -- the samples must deliberately CONTAIN those values; ``make_
 never produces them. The forward is compared exactly against ``np.isnan`` / ``np.isinf`` /
 ``np.isfinite``, and (via ``test_device_parity``) the CUDA classification is pinned against
 the CPU one -- NaN/Inf handling is a notorious accelerator/fusion divergence point (the
-fusion suite separately checks ``isnan`` survives the same-pointer ``x==x`` fold).
+fusion suite separately checks direct comparisons against NumPy's IEEE behavior).
 """
 from ._refs import *  # noqa: F401,F403  (make_tensor, SampleInput, np, jt, nn, F, cu)
 from ..core import OpInfo

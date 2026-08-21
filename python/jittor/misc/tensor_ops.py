@@ -2536,8 +2536,7 @@ def _simple_for(x, func):
 # comparisons instead (these run as aclnn ops). IEEE rules make this exact:
 #   isfinite(x) = |x| < inf      (nan<inf and inf<inf are both False)
 #   isinf(x)    = |x| == inf
-#   isnan(x)    = NOT((x>=0) or (x<=0))   (nan fails every comparison; avoids the
-#                jittor "x==x optimized to all-True" trap, see self-compare gotcha)
+#   isnan(x)    = NOT((x>=0) or (x<=0))   (nan fails every comparison)
 # Integer dtypes have no nan/inf, so return the trivial constant.
 def _isnan_acl(x):
     x = x if isinstance(x, jt.Var) else jt.array(x)

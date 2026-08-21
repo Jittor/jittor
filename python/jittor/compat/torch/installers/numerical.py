@@ -387,8 +387,7 @@ def install(ctx):
     _alias("float_power", _float_power); Var.float_power = _float_power
     _alias("signbit", lambda input: input < 0); Var.signbit = lambda self: self < 0
     # reductions: logsumexp (attention/MoE/loss/beam), nansum/nanmean, std_mean/var_mean,
-    # aminmax, quantile. NaN handling uses nan_to_num + (x==x) mask to avoid jittor's
-    # isnan+ternary JIT segfault (see jittor-jit-inf-nan-segfault).
+    # aminmax, quantile. NaN handling uses nan_to_num plus an explicit isnan mask.
     def _logsumexp(input, dim, keepdim=False):
         m = input.max(dim, keepdims=True)
         out = m + jt.log(jt.exp(input - m).sum(dim, keepdims=True))
@@ -409,8 +408,7 @@ def install(ctx):
         return z.sum() if dim is None else z.sum(dim, keepdims=keepdim)
     _alias("nansum", _nansum); Var.nansum = _nansum
     def _nanmean(input, dim=None, keepdim=False, **k):
-        # count of non-NaN. NB: `input == input` (a var vs ITSELF) gets optimized to
-        # all-True by jittor, so it does NOT detect NaN -- use isnan instead.
+        # Keep the non-NaN count explicit rather than coupling it to comparison codegen.
         cnt = 1.0 - jt.isnan(input).float32()
         z = jt.nan_to_num(input, nan=0.0)
         if dim is None:

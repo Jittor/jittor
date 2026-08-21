@@ -1081,12 +1081,19 @@ jit_op_entry_t OpCompiler::compile(const string& jit_key, const string& src) {
     bool is_cuda = _op->flags.get(NodeFlags::_cuda);
     auto op_info = get_op_info(_op->name());
     string extra_flags = op_info.extra_flags;
-    for (auto v : _op->outputs())
-        if (v->loop_options)
-            for (auto& kv : v->loop_options.data()) {
-                if (kv.second && startswith(kv.first, "FLAGS:"))
-                    extra_flags += " " + kv.first.substr(6) + " ";
-            }
+    auto add_compile_flags = [&](const loop_options_t& options) {
+        for (auto& kv : options) {
+            if (kv.second && startswith(kv.first, "FLAGS:"))
+                extra_flags += " " + kv.first.substr(6) + " ";
+        }
+    };
+    if (op) {
+        add_compile_flags(*op->loop_options);
+    } else {
+        for (auto v : _op->outputs())
+            if (v->loop_options)
+                add_compile_flags(v->loop_options.data());
+    }
     return jit_compiler::compile(jit_key, src, is_cuda, extra_flags);
 }
 

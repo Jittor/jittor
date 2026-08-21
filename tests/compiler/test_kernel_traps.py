@@ -32,10 +32,9 @@ class TestKernelTraps(JittorTestCase):
                 with jt.flag_scope(use_cuda=use_cuda_for(d)):
                     body(d)
 
-    # -- §4-B#2: x==x (same Var) folds to all-True; NaN masking must use isnan ----
+    # -- §4-B#2: floating comparisons must preserve IEEE NaN semantics ---------
     def test_nan_handling_isfinite_isnan_isinf(self):
-        # f769e288: isnan/isinf/isfinite must be IEEE-correct (they are composed to
-        # avoid the x==x fusion fold that would mis-classify NaN as finite).
+        # f769e288: isnan/isinf/isfinite must be IEEE-correct.
         x = np.array([1.0, np.inf, -np.inf, np.nan, 0.0, -3.5], dtype="float32")
 
         def body(dev):
@@ -48,16 +47,36 @@ class TestKernelTraps(JittorTestCase):
                              msg=f"isfinite [{dev}]")
         self._devices(body)
 
-    def test_nan_not_equal_to_itself_via_isnan(self):
-        # The safe NaN mask is jt.isnan(x), NOT (x == x): the latter is fused to
-        # all-True for a self-compare (CONTEXT §4-B#2). Lock that isnan disagrees
-        # with the naive self-compare exactly on the NaN element.
-        x = np.array([1.0, np.nan, 3.0], dtype="float32")
+    def test_nan_self_comparisons_across_dtypes(self):
+        cases = (
+            ("float16", np.array([1.0, np.nan, 3.0], dtype="float16")),
+            ("bfloat16", np.array([1.0, np.nan, 3.0], dtype="float32")),
+            ("float32", np.array([1.0, np.nan, 3.0], dtype="float32")),
+            ("float64", np.array([1.0, np.nan, 3.0], dtype="float64")),
+            ("complex64", np.array(
+                [1.0 + 2.0j, complex(np.nan, 2.0), complex(3.0, np.nan)],
+                dtype="complex64",
+            )),
+        )
+        comparisons = (
+            ("equal", lambda v: v == v, np.equal),
+            ("not_equal", lambda v: v != v, np.not_equal),
+            ("less_equal", lambda v: v <= v, np.less_equal),
+            ("greater_equal", lambda v: v >= v, np.greater_equal),
+        )
 
         def body(dev):
-            v = jt.array(x)
-            non_nan_mask = (~jt.isnan(v)).numpy().astype(bool)
-            self.assertEqual(non_nan_mask, ~np.isnan(x), msg=f"isnan mask [{dev}]")
+            for dtype, x in cases:
+                for name, compare, np_compare in comparisons:
+                    if dtype == "complex64" and name not in ("equal", "not_equal"):
+                        continue
+                    with self.subTest(device=dev, dtype=dtype, comparison=name):
+                        v = (jt.array(x).cast(dtype) if dtype == "bfloat16"
+                             else jt.array(x, dtype=dtype))
+                        self.assertEqual(
+                            compare(v).numpy().astype(bool), np_compare(x, x),
+                            msg=f"self {name} {dtype} [{dev}]",
+                        )
         self._devices(body)
 
     # -- §4-B#3 / 3eb7bc78 / eaec3b9c: negative dims must normalize, not crash -----
