@@ -2,7 +2,7 @@
 
 - Status: Current index, not a history log
 - Last reviewed: 2026-08-23
-- Baseline reviewed: `49ff7c7a`
+- Baseline reviewed: `7e7c23cf`
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -87,9 +87,13 @@ separate gates. See the
 Performance work uses ASV, isolated caches, synchronized measurements, and exact
 commit labels. The same-version ecosystem harness now verifies twelve
 Transformers/Diffusers/PEFT/ms-swift/MMCV/MMEngine CPU and CUDA cases, while
-real-scale training performance remains incomplete. See
+real-scale training performance remains incomplete. Current verl core
+algorithm/FSDP2 gates also pass on CPU/CUDA; Qwen3-vLLM and TRELLIS.2 complete
+real-CUDA inference, but their measured hot paths remain about 4.00x and 1.20x
+slower than their respective real-PyTorch references. See
 [benchmarking](../../docs/performance/benchmarking.md) and the
-[ecosystem parity/performance report](../results/2026-08-23-ecosystem-parity-performance.md).
+[ecosystem parity/performance report](../results/2026-08-23-ecosystem-parity-performance.md),
+plus the [verl/vLLM/TRELLIS current-baseline report](../results/2026-08-23-verl-vllm-trellis-current-baseline.md).
 
 ### Agent-operable optimization
 
