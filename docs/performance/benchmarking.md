@@ -53,6 +53,22 @@ ancestor (or an explicit `ASV_COMPARE_BASE`), then `publish` the HTML report.
 one. A first run bootstraps comparison against itself. A run is successful only
 when result JSON and `index.html` both exist.
 
+## Ecosystem comparisons
+
+`tests/compat/torch/test_ecosystem_parity.py` and
+`test_ecosystem_speed.py` compare separate Jittor and binary-PyTorch processes.
+Both processes must claim their own `torch` namespace before loading one shared
+downstream package site; dependency versions and origins are part of the result
+contract. CUDA runs explicitly align matmul/cuDNN TF32, and optional cuDNN
+autotuning is applied to both runtimes.
+
+Correctness tensors are copied immediately so later optimizer/gradient writes
+cannot mutate a NumPy view. Timed training preallocates multiple resident input
+slots and one loss-weight tensor. Jittor retains every requested gradient and
+explicitly synchronizes those Vars; neither runtime performs per-gradient D2H
+inside the timing window. See the
+[2026-08-23 ecosystem report](../../agent/results/2026-08-23-ecosystem-parity-performance.md).
+
 The result label must match the checkout. The nox sessions reject a dirty tree
 unless the caller deliberately sets `ASV_ALLOW_DIRTY=1`, which is intended only
 for local investigation and not publishable evidence.

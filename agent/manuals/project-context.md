@@ -1,8 +1,8 @@
 # Jittor Project Context
 
 - Status: Current index, not a history log
-- Last reviewed: 2026-08-22
-- Baseline reviewed: `0a3458b3`
+- Last reviewed: 2026-08-23
+- Baseline reviewed: `49ff7c7a`
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -85,7 +85,11 @@ separate gates. See the
 [complete CUDA suite report](../results/2026-08-22-cuda-test-suite.md), plus the
 [parallel-range and network-oracle follow-up](../results/2026-08-22-cuda-parallel-range-network-oracle.md).
 Performance work uses ASV, isolated caches, synchronized measurements, and exact
-commit labels. See [benchmarking](../../docs/performance/benchmarking.md).
+commit labels. The same-version ecosystem harness now verifies twelve
+Transformers/Diffusers/PEFT/ms-swift/MMCV/MMEngine CPU and CUDA cases, while
+real-scale training performance remains incomplete. See
+[benchmarking](../../docs/performance/benchmarking.md) and the
+[ecosystem parity/performance report](../results/2026-08-23-ecosystem-parity-performance.md).
 
 ### Agent-operable optimization
 
