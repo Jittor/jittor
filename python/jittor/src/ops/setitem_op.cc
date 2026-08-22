@@ -68,13 +68,12 @@ void SetitemOp::infer_shape() {
     // shape return to use
     StackVector<> out_shape;
     ((GetitemOp*)this)->infer_slices(i_to_vs, i_to_o, out_shape);
-    if (!out_shape.size()) out_shape.push_back(1);
-
     // get broadcast mask of set value
     auto data_shape = data->shape;
     auto data_dim = data_shape.size();
     int bmask = 0;
     int bmask2 = 0;
+    if (!out_shape.size()) out_shape.push_back(1);
 
     CHECKop(data_dim,<=,out_shape.size()) << "Data dimension not match";
     for (int i=0; i<data_dim; i++) {
@@ -120,6 +119,7 @@ void SetitemOp::infer_shape() {
     }
     first_oid_of_var = fov;
     this->bmask = bmask2;
+    if (!o_shape.size()) o_shape.push_back(1);
 
     out->set_shape(in_shape);
 
@@ -210,7 +210,7 @@ void SetitemOp::jit_prepare(JK& jk) {
     int idim = i_to_vs.size();
     jk << "«Ti:" << in->dtype();
     jk << "«IDIM=" << JK::hex1(i_to_vs.size());
-    jk << "«ODIM=" << JK::hex1(o_shape.size());
+    jk << "«ODIM=" << JK::hex1(std::max((int)o_shape.size(), 1));
     if (first_oid_of_var>=0) {
         jk << "«FOV=" << JK::hex1(first_oid_of_var);
         jk << "«VD=" << JK::hex1(var_dim);
@@ -287,9 +287,10 @@ void SetitemOp::jit_run() {
     Ti* op = out->ptr<Ti>();
 
     Ti* ip = in->ptr<Ti>();
+    @for(i, 0, IDIM, index_t inshape@i = in->kshape(@i);)
     @for(i, 0, IDIM, index_t ishape@i = 
         @if(IV@i==-1,oshape@{IO@i},
-        @if(IV@i==-2,1,in->shape[@i]));
+        @if(IV@i==-2,1,inshape@i));
     )
     index_t istride@{IDIM-1} = 1;
     @for(i, IDIM-2, -1, -1, index_t istride@i = istride@{i+1} * ishape@{i+1};)

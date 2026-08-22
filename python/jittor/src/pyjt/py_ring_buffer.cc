@@ -102,7 +102,7 @@ static void push_py_object(RingBuffer* rb, PyObject* obj, uint64& __restrict__ o
             if (arr->nd)
                 args.shape = NanoVector::make(arr->dimensions, arr->nd);
             else
-                args.shape.push_back(1);
+                args.shape.clear();
             args.dtype = get_type_str(arr);
             size = PyArray_Size(arr);
             if (!is_c_style(arr)) {

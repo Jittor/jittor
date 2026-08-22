@@ -362,15 +362,15 @@ DEF_IS(ArrayArgs, PyObject*) to_py_object(const T& a) {
 DEF_IS(ArrayArgs, T) from_py_object(PyObject* obj) {
     if (PyFloat_CheckExact(obj)) {
         tmp_data.f32 = PyFloat_AS_DOUBLE(obj);
-        return {&tmp_data, 1, ns_float32};
+        return {&tmp_data, NanoVector(), ns_float32};
     }
     if (PyLong_CheckExact(obj)) {
         tmp_data.i32 = PyLong_AsLong(obj);
-        return {&tmp_data, 1, ns_int32};
+        return {&tmp_data, NanoVector(), ns_int32};
     }
     if (PyBool_Check(obj)) {
         tmp_data.i8 = obj == Py_True;
-        return {&tmp_data, 1, ns_bool};
+        return {&tmp_data, NanoVector(), ns_bool};
     }
     if (Py_TYPE(obj) == &PyjtVarHolder.ht_type) {
         auto ptr = GET_RAW_PTR(VarHolder, obj);
@@ -389,7 +389,7 @@ DEF_IS(ArrayArgs, T) from_py_object(PyObject* obj) {
         if (arr->nd)
             args.shape = NanoVector::make(arr->dimensions, arr->nd);
         else
-            args.shape.push_back(1);
+            args.shape.clear();
         args.dtype = get_type_str(arr);
         args.buffer.reset(new char[size]);
         args.ptr = (void*)args.buffer.get();

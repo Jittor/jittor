@@ -27,11 +27,11 @@ VarPtr make_number(float number, Var* x) {
     if (x->dtype() == ns_float64) v.f64 = number; else
     if (x->dtype() == ns_int32) v.i32 = number; else
     if (x->dtype() == ns_int64) v.i64 = number; else {
-        VarPtr nums = make_array(&number, 1, ns_float32);
+        VarPtr nums = make_array(&number, NanoVector(), ns_float32);
         nums = make_broadcast_to(nums, x, {});
         return make_unary(nums, x->dtype());
     }
-    VarPtr nums = make_array(&v, 1, x->dtype());
+    VarPtr nums = make_array(&v, NanoVector(), x->dtype());
     return make_broadcast_to(nums, x, {});
 }
 

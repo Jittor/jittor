@@ -328,13 +328,8 @@ void ReduceOp::infer_shape() {
         } else
             yshape.push_back(x->shape[i]);
     }
-    if (!yshape.size()) {
-        yshape.push_back(1);
-        // change last bit to 1, last dim should keep dim
-        keepdims_mask |= 1;
-    }
     y->set_shape(yshape);
-    if (yshape.size() == 1 && y->num == 1)
+    if (y->num == 1)
         y->flags.set(NodeFlags::_is_scalar);
 }
 
@@ -368,7 +363,7 @@ void ReduceOp::jit_prepare(JK& jk) {
         << "«Ty:" << y->dtype()
         << "«Tz:" << y->dtype()
         << "«OP:" << ns
-        << "«DIM=" << JK::hex1(x->shape.size())
+        << "«DIM=" << JK::hex1(x->kdim())
         << "«REDUCE=" << JK::hex(reduce_mask);
 }
 
@@ -377,7 +372,7 @@ void ReduceOp::jit_run() {
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Ty>();
     
-    @for(i, 0, DIM, index_t xshape@i = x->shape[@i];)
+    @for(i, 0, DIM, index_t xshape@i = x->kshape(@i);)
     @for(i, 0, DIM, index_t yshape@i = @if(REDUCE>>i&1,1,xshape@i);)
     index_t ystride@{DIM-1} = 1;
     @for(i, DIM-2, -1, -1, auto ystride@i = ystride@{i+1} * yshape@{i+1};)

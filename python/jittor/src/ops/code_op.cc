@@ -134,14 +134,14 @@ void CodeOp::jit_prepare(JK& jk) {
     for (uint i=0; i<_inputs.size(); i++) {
         //LOGir<<JK::dec3(i);
         jk << "«in" << JK::dec3(i) << "_dim:"
-            << JK::hex1(_inputs[i]->shape.size());
+            << JK::hex1(_inputs[i]->kdim());
         jk << "«in" << JK::dec3(i) << "_type:"
             << _inputs[i]->dtype();
     }
     jk << "«OUT_SIZE:" << JK::dec3(_outputs.size());
     for (uint i=0; i<_outputs.size(); i++) {
         jk << "«out" << JK::dec3(i) << "_dim:"
-            << JK::hex1(_outputs[i]->shape.size());
+            << JK::hex1(_outputs[i]->kdim());
         jk << "«out" << JK::dec3(i) << "_type:"
             << _outputs[i]->dtype();
     }
@@ -237,13 +237,13 @@ void CodeOp::jit_run() {
     @for(i, 0, IN_SIZE,
         auto in@i = _inputs[@i];
         auto* __restrict__ in@i@@_p = _inputs[@i]->ptr<in@i@@_type>();
-        @for(j, 0, in@i@@_dim, index_t in@i@@_shape@j = _inputs[@i]->shape[@j];)
+        @for(j, 0, in@i@@_dim, index_t in@i@@_shape@j = _inputs[@i]->kshape(@j);)
     )
     // define outputs
     @for(i, 0, OUT_SIZE,
         auto out@i = _outputs[@i];
         auto* __restrict__ out@i@@_p = _outputs[@i]->ptr<out@i@@_type>();
-        @for(j, 0, out@i@@_dim, index_t out@i@@_shape@j = _outputs[@i]->shape[@j];)
+        @for(j, 0, out@i@@_dim, index_t out@i@@_shape@j = _outputs[@i]->kshape(@j);)
     )
 
     @PRECALC

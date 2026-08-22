@@ -24,6 +24,10 @@ static inline NanoVector get_reverse(NanoVector axes) {
 }
 
 FuseTransposeOp::FuseTransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
+    if (x->shape.size() == 0 && axes.size() == 0) {
+        forward(x);
+        return;
+    }
     OpType tp = OpType::broadcast;
     if (!x->is_finished()) {
         auto type = x->input()->type();
@@ -51,7 +55,11 @@ FuseTransposeOp::FuseTransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
 
 void FuseTransposeOp::infer_shape() {
     auto xdim = x->shape.size();
-    CHECK(xdim);
+    if (!xdim) {
+        CHECK(!axes.size() || axes.size() == 0) << "Invalid axes for 0-D transpose";
+        y->set_shape(NanoVector());
+        return;
+    }
     if (!axes.size()) {
         for (int i=0; i<(int)xdim; i++)
             axes.push_back(xdim-1-i);
@@ -86,7 +94,7 @@ void FuseTransposeOp::jit_run() {
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
     
-    @for(i, 0, DIM, index_t yshape@i = y->shape[@i];)
+    @for(i, 0, DIM, index_t yshape@i = y->kshape(@i);)
     @for(i, 0, DIM, index_t xshape@i = yshape@{AXES@i};)
     index_t xstride@{DIM-1} = 1;
     @for(i, DIM-2, -1, -1, auto xstride@i = xstride@{i+1} * xshape@{i+1};)

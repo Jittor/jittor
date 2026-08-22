@@ -54,7 +54,7 @@ DECLARE_FLAG(int, use_cuda_host_allocator);
 ArrayOp::ArrayOp(ArrayArgs&& args) {
     output = create_output(args.shape, args.dtype);
     NanoVector shape = output->shape;
-    if (shape.size() == 1 && shape[0] == 1) {
+    if (output->num == 1 && shape.size() <= 1) {
         output->flags.set(NodeFlags::_force_fuse);
         output->flags.set(NodeFlags::_is_scalar);
         set_type(OpType::element);

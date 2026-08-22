@@ -22,7 +22,7 @@ WhereOp::WhereOp(Var* cond, NanoString dtype) : cond(cond) {
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     flags.set(NodeFlags::_manual_set_vnbb);
-    auto ndim = cond->shape.size();
+    auto ndim = std::max(cond->shape.size(), 1);
     #ifdef HAS_CUDA
     if (use_cuda) {
         static auto cub_where = has_op("cub_where") ? get_op_info("cub_where")
@@ -47,7 +47,7 @@ WhereOp::WhereOp(Var* cond, Var* x, Var* y) {
 }
 
 void WhereOp::infer_shape() {
-    auto ndim = cond->shape.size();
+    auto ndim = std::max(cond->shape.size(), 1);
     auto num = -cond->num;
     for (uint i=0; i<ndim; i++)
         outs[i]->set_shape({num});
@@ -56,7 +56,7 @@ void WhereOp::infer_shape() {
 void WhereOp::jit_prepare(JK& jk) {
     jk << "«Ti:" << cond->dtype();
     jk << "«To:" << outs[0]->dtype();
-    jk << "«NDIM=" << JK::hex1(cond->shape.size());
+    jk << "«NDIM=" << JK::hex1(cond->kdim());
 }
 
 #else // JIT
@@ -194,7 +194,7 @@ __global__ static void where_kernel_one_block(
 void WhereOp::jit_run() {
     auto* __restrict__ condp = cond->ptr<Ti>();
     // define cond shape
-    @for(i, 0, NDIM, index_t condshape@i = cond->shape[@i];)
+    @for(i, 0, NDIM, index_t condshape@i = cond->kshape(@i);)
     
     // define outs
     @for(i, 0, NDIM,  auto* __restrict__ outs@i@@p = outs[@i]->ptr<To>();)
@@ -243,7 +243,7 @@ void WhereOp::jit_run() {
 void WhereOp::jit_run() {
     auto* __restrict__ condp = cond->ptr<Ti>();
     // define cond shape
-    @for(i, 0, NDIM, index_t condshape@i = cond->shape[@i];)
+    @for(i, 0, NDIM, index_t condshape@i = cond->kshape(@i);)
     // define cond stride
     index_t condstride@{NDIM-1} = 1;
     @for(i, NDIM-2, -1, -1, auto condstride@i = condstride@{i+1} * condshape@{i+1};)

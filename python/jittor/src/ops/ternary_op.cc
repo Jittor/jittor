@@ -62,9 +62,9 @@ void TernaryOp::infer_shape() {
     CHECK(xdim==ydim && cdim==ydim) << "Number of dims should be the same.";
     NanoVector zshape;
     for (size_t i=0; i<xdim; i++) {
-        auto xshape = x->shape[i];
-        auto yshape = y->shape[i];
-        auto cshape = cond->shape[i];
+        auto xshape = x->kshape(i);
+        auto yshape = y->kshape(i);
+        auto cshape = cond->kshape(i);
         auto shape = std::min(xshape, std::min(yshape, cshape));
         auto shape2 = std::max(xshape, std::max(yshape, cshape));
         zshape.push_back(shape2);

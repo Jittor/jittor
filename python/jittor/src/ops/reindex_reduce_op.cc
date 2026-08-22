@@ -75,8 +75,8 @@ void ReindexReduceOp::infer_shape() {
 void ReindexReduceOp::jit_prepare(JK& jk) {
     jk << "«Tx:" << x->dtype()
         << "«OP:" << ns
-        << "«YDIM=" << JK::hex1(y->shape.size())
-        << "«XDIM=" << JK::hex1(x->shape.size());
+        << "«YDIM=" << JK::hex1(y->kdim())
+        << "«XDIM=" << JK::hex1(x->kdim());
     for (uint i=0; i<indexes.size(); i++)
         jk << "«INDEX" << JK::hex1(i) << ':' << indexes[i];
     jk << "«OSIZE=" << JK::hex1(overflow_conditions.size());
@@ -84,7 +84,7 @@ void ReindexReduceOp::jit_prepare(JK& jk) {
         jk << "«OFD" << JK::hex1(i) << ':' << overflow_conditions[i];
     jk << "«ESIZE=" << JK::hex1(extras.size());
     for (uint i=0; i<extras.size(); i++) {
-        jk << "«EDIM" << JK::hex1(i) << '=' << JK::hex1(extras[i]->shape.size());
+        jk << "«EDIM" << JK::hex1(i) << '=' << JK::hex1(extras[i]->kdim());
         jk << "«Te" << JK::hex1(i) << ':' << extras[i]->dtype();
     }
 }
@@ -95,18 +95,18 @@ void ReindexReduceOp::jit_run() {
     // define extra
     @for(i, 0, ESIZE,
         auto* __restrict__ extras@i@@p = extras[@i]->ptr<Te@i>();
-        @for(j, 0, EDIM@i, index_t extras@i@@shape@j = extras[@i]->shape[@j];)
+        @for(j, 0, EDIM@i, index_t extras@i@@shape@j = extras[@i]->kshape(@j);)
         index_t extras@i@@stride@{EDIM@i-1} = 1;
         @for(j, EDIM@i-2, -1, -1, auto extras@i@@stride@j = extras@i@@stride@{j+1} * extras@i@@shape@{j+1};)
     )
     auto* __restrict__ xp = x->ptr<Tx>();
     // define x shape
-    @for(i, 0, XDIM, index_t xshape@i = x->shape[@i];)
+    @for(i, 0, XDIM, index_t xshape@i = x->kshape(@i);)
     // define x stride
     index_t xstride@{XDIM-1} = 1;
     @for(i, XDIM-2, -1, -1, auto xstride@i = xstride@{i+1} * xshape@{i+1};)
     // define y shape
-    @for(i, 0, YDIM, index_t yshape@i = y->shape[@i];)
+    @for(i, 0, YDIM, index_t yshape@i = y->kshape(@i);)
     // define y stride
     index_t ystride@{YDIM-1} = 1;
     @for(i, YDIM-2, -1, -1, auto ystride@i = ystride@{i+1} * yshape@{i+1};)

@@ -56,7 +56,7 @@ void IndexOp::infer_shape() {
 void IndexOp::jit_prepare(JK& jk) {
     add_jit_define(jk, "T", x[0]->dtype());
     add_jit_define(jk, "DIM", JK::hex1(dim));
-    add_jit_define(jk, "XDIM", JK::hex1(x[0]->shape.size()));
+    add_jit_define(jk, "XDIM", JK::hex1(x[0]->kdim()));
 }
 
 #else // JIT
@@ -67,7 +67,7 @@ void IndexOp::jit_run() {
         auto* __restrict__ x0p = x[0]->ptr<T>();
     )
     // define x shape
-    @for(i, 0, XDIM, index_t x0shape@i = x[0]->shape[@i];)
+    @for(i, 0, XDIM, index_t x0shape@i = x[0]->kshape(@i);)
     // define x stride
     index_t x0stride@{XDIM-1} = 1;
     @for(i, XDIM-2, -1, -1, auto x0stride@i = x0stride@{i+1} * x0shape@{i+1};)

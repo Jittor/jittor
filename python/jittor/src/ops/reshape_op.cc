@@ -22,7 +22,6 @@ ReshapeOp::ReshapeOp(Var* x, NanoVector shape) : x(x), shape(shape) {
     flags.set(NodeFlags::_cuda);
     flags.set(NodeFlags::_manual_set_vnbb);
     y = create_output(nullptr, x->dtype());
-    ASSERT(shape.size() > 0) << "input target shape of reshape can't be empty.";
 }
 
 VarPtr ReshapeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
@@ -40,6 +39,12 @@ void ReshapeOp::infer_shape() {
     }
     CHECK(uncertain_dim <= 1) << "max number of -1 is 1, but get" << uncertain_dim << ".";
     int64_t x_items = x->num;
+    if (shape.size() == 0) {
+        CHECKop(x_items,==,1) << "reshape shape is invalid for input of size";
+        y->set_shape(shape);
+        y->share_with(x);
+        return;
+    }
     auto yshape = shape;
     if (uncertain_dim == 0) {
         CHECKop(x_items,==,y_items) << "reshape shape is invalid for input of size";

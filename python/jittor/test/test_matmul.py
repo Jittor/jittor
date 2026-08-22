@@ -307,7 +307,7 @@ class TestMatmul(unittest.TestCase):
         a = jt.random([3])
         b = jt.random([3])
         c = jt.matmul(a, b)
-        assert c.shape == [1]
+        assert c.shape == [], c.shape  # 1D-dot 0-d scalar (torch/numpy parity)
 
         a = jt.random([3, 4])
         b = jt.random([4])

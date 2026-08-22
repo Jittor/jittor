@@ -59,7 +59,7 @@ VarHolder* reuse_np_array(PyObject* obj) {
     if (arr->nd)
         shape = NanoVector::make(arr->dimensions, arr->nd);
     else
-        shape.push_back(1);
+        shape.clear();
     dtype = get_type_str(arr);
     CHECK(is_c_style(arr));
 
@@ -91,15 +91,15 @@ ArrayOp::ArrayOp(PyObject* obj) {
     void* ori_ptr = nullptr;
     if (PyFloat_CheckExact(obj)) {
         tmp_data.f32 = PyFloat_AS_DOUBLE(obj);
-        args = {&tmp_data, 1, ns_float32};
+        args = {&tmp_data, NanoVector(), ns_float32};
     } else
     if (PyLong_CheckExact(obj)) {
         tmp_data.i32 = PyLong_AsLong(obj);
-        args = {&tmp_data, 1, ns_int32};
+        args = {&tmp_data, NanoVector(), ns_int32};
     } else
     if (PyBool_Check(obj)) {
         tmp_data.i8 = obj == Py_True;
-        args = {&tmp_data, 1, ns_bool};
+        args = {&tmp_data, NanoVector(), ns_bool};
     } else
     if (Py_TYPE(obj) == &PyjtVarHolder.ht_type) {
         auto ptr = GET_RAW_PTR(VarHolder, obj);
@@ -117,7 +117,7 @@ ArrayOp::ArrayOp(PyObject* obj) {
         if (arr->nd)
             args.shape = NanoVector::make(arr->dimensions, arr->nd);
         else
-            args.shape.push_back(1);
+            args.shape.clear();
         args.dtype = get_type_str(arr);
         if (is_c_style(arr)) {
             args.ptr = arr->data;
@@ -153,7 +153,7 @@ ArrayOp::ArrayOp(PyObject* obj) {
     NanoVector shape = args.shape;
     output = create_output(shape, args.dtype);
     int64 size = output->size;
-    if (shape.size() == 1 && shape[0] == 1) {
+    if (output->num == 1 && shape.size() <= 1) {
         output->flags.set(NodeFlags::_force_fuse);
         output->flags.set(NodeFlags::_is_scalar);
         set_type(OpType::element);

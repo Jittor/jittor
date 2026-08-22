@@ -38,7 +38,7 @@ static auto make_reindex_reduce = get_op_info("reindex_reduce")
 ArgReduceOp::ArgReduceOp(Var* x, NanoString op, int dim, bool keepdims)
     : x(x), op(op), dim(dim), keepdims(keepdims) {
     if  (this->dim == -1)
-        this->dim = x->shape.size() - 1;
+        this->dim = x->shape.size() ? x->shape.size() - 1 : 0;
     dim = this->dim;
     #ifdef HAS_CUDA
     if (use_cuda) {
@@ -140,6 +140,7 @@ VarPtr ArgReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void ArgReduceOp::infer_shape() {
+    CHECK(x->shape.size()) << "arg_reduce does not support a 0-D input without a dimension";
     CHECKop(dim,>=,0) << "Invalid dim for arg_reduce op '" >> op.to_cstring()
         >> "': dim out of range, expected dim in [" >> -(int)x->shape.size()
         >> ", " >> (int)x->shape.size()-1 >> "] for input with shape" << x->shape >> ".";
@@ -155,8 +156,6 @@ void ArgReduceOp::infer_shape() {
             shape.push_back(x->shape[i]);
         }
     }
-    if (shape.size() == 0)
-        shape.push_back(1);
     y->set_shape(shape);
     y_key->set_shape(shape);
 }
@@ -164,8 +163,8 @@ void ArgReduceOp::infer_shape() {
 void ArgReduceOp::jit_prepare(JK& jk) {
     jk << "«Tx:" << x->dtype();
     jk << "«Ty:" << y->dtype();
-    jk << "«XDIM=" << JK::hex1(x->shape.size());
-    jk << "«YDIM=" << JK::hex1(y->shape.size());
+    jk << "«XDIM=" << JK::hex1(x->kdim());
+    jk << "«YDIM=" << JK::hex1(y->kdim());
     jk << "«KEEPDIMS:" << (keepdims ? '1' : '0');
     jk << "«DIM=" << JK::hex1(dim);
     jk << "«CMP:" << (op==ns_minimum ? "<" : ">");
@@ -177,13 +176,13 @@ void ArgReduceOp::jit_prepare(JK& jk) {
 void ArgReduceOp::jit_run() {
     auto* __restrict__ xp = x->ptr<Tx>();
     // define x shape
-    @for(i, 0, XDIM, index_t xshape@i = x->shape[@i];)
+    @for(i, 0, XDIM, index_t xshape@i = x->kshape(@i);)
     // define x stride
     index_t xstride@{XDIM-1} = 1;
     @for(i, XDIM-2, -1, -1, auto xstride@i = xstride@{i+1} * xshape@{i+1};)
 
     // define y shape
-    @for(i, 0, YDIM, index_t yshape@i = y->shape[@i];)
+    @for(i, 0, YDIM, index_t yshape@i = y->kshape(@i);)
     // define y stride
     index_t ystride@{YDIM-1} = 1;
     @for(i, YDIM-2, -1, -1, auto ystride@i = ystride@{i+1} * yshape@{i+1};)

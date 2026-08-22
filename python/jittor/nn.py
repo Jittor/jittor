@@ -154,7 +154,7 @@ Example::
     a = jt.random([3])
     b = jt.random([3])
     c = jt.matmul(a, b)
-    assert c.shape == [1]
+    assert c.shape == []
 
     a = jt.random([3, 4])
     b = jt.random([4])
@@ -184,6 +184,10 @@ Example::
     with jt.flag_scope(amp_reg = jt.flags.amp_reg | 36):
         len_a = len(a.shape)
         len_b = len(b.shape)
+        if len_a == 0 or len_b == 0:
+            raise RuntimeError(
+                "both arguments to matmul need to be at least 1D, but they are "
+                f"{len_a}D and {len_b}D")
         if len_b == 1:
             # a: [n, m], b:[m], c:[n]
             return (a*b).sum(-1)

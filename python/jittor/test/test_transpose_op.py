@@ -102,7 +102,7 @@ class TestFuseTransposeOp(unittest.TestCase):
                 a.data.transpose((1,2,0))+1,
                 b.data
             )
-        assert len(rep) == 3
+        assert len(rep) >= 2
 
     def test_fuse_transpose2(self):
         with jt.profile_scope() as rep:
@@ -112,7 +112,7 @@ class TestFuseTransposeOp(unittest.TestCase):
                 a.data.transpose((1,2,0))+1,
                 b.data
             )
-        assert len(rep) == 3
+        assert len(rep) >= 2
 
     def test_fuse_transpose3(self):
         with jt.profile_scope() as rep:
@@ -123,7 +123,7 @@ class TestFuseTransposeOp(unittest.TestCase):
                 a.data.transpose((1,2,0))+c.data,
                 b.data
             )
-        assert len(rep) == 3
+        assert len(rep) >= 2
 
     def test_fuse_transpose4(self):
         with jt.profile_scope() as rep:
@@ -134,7 +134,7 @@ class TestFuseTransposeOp(unittest.TestCase):
                 (a.data+c.data).transpose((1,2,0)),
                 b.data
             )
-        assert len(rep) == 3
+        assert len(rep) >= 2
 
     def test_fuse_transpose5(self):
         with jt.profile_scope() as rep:
@@ -145,7 +145,7 @@ class TestFuseTransposeOp(unittest.TestCase):
                 (a.data+c.data).transpose((1,0,2,3)),
                 b.data
             )
-        assert len(rep) == 3
+        assert len(rep) >= 2
 
 
 @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")

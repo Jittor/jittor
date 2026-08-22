@@ -46,12 +46,12 @@ void ReplaceForNumPass::run() {
         pm->oc->get_op_var_by_name(def, op_id, opvar_id, op, var);
         auto new_code = OpCompiler::precompile(
             {
-                {"DIM", S(var->shape.size())},
+                {"DIM", S(var->kdim())},
                 {"op_id", S(op_id)},
                 {"def", def},
                 {"loop_index", loop_index},
             } ,
-                "@for(di,0,DIM, op@op_id@@_index_t @def@@shape@di = @def->shape[@di];)\n"
+                "@for(di,0,DIM, op@op_id@@_index_t @def@@shape@di = @def->kshape(@di);)\n"
                 "op@op_id@@_index_t @def@@stride@{DIM-1} = 1;\n"
                 "@for(di,DIM-2,-1,-1, auto @def@@stride@di = @def@@stride@{di+1} * @def@@shape@{di+1};)\n"
                 "@for(di,0,DIM, for (op@op_id@@_index_t @loop_index@di=0; @loop_index@di<@def@@shape@di; @loop_index@di++))\n"
@@ -63,7 +63,7 @@ void ReplaceForNumPass::run() {
             new_ir.children.front()->type == "define");
         auto& new_for = new_ir.children.back();
         auto* inner_for = new_for.get();
-        for (uint di=0; di+1<var->shape.size(); di++) {
+        for (uint di=0; di+1<var->kdim(); di++) {
             ASSERT(inner_for->children.size()==1);
             inner_for = inner_for->children[0].get();
         }

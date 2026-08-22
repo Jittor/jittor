@@ -28,7 +28,7 @@ void CandidateOp::jit_prepare(JK& jk) {
     jk << "«Tx:" << x->dtype();
     jk << "«Ty:" << y->dtype();
     jk << "«FUNC:" << fail_cond;
-    jk << "«XDIM=" << JK::hex1(x->shape.size());
+    jk << "«XDIM=" << JK::hex1(x->kdim());
 }
 
 #else // JIT
@@ -71,7 +71,7 @@ __global__ static void candidate_kernel(
 void CandidateOp::jit_run() {
     auto* __restrict__ xp = x->ptr<Tx>();
     // define cond shape
-    @for(i, 0, XDIM, index_t xshape@i = x->shape[@i];)
+    @for(i, 0, XDIM, index_t xshape@i = x->kshape(@i);)
     
     // define ys
     auto* __restrict__ yp = y->ptr<Ty>();
@@ -101,7 +101,7 @@ void CandidateOp::jit_run() {
     using namespace std;
     auto* __restrict__ xp = x->ptr<Tx>();
     // define cond shape
-    @for(i, 0, XDIM, index_t xshape@i = x->shape[@i];)
+    @for(i, 0, XDIM, index_t xshape@i = x->kshape(@i);)
     // define cond stride
     index_t xstride@{XDIM-1} = 1;
     @for(i, XDIM-2, -1, -1, auto xstride@i = xstride@{i+1} * xshape@{i+1};)

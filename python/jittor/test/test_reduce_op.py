@@ -30,7 +30,7 @@ class TestReduceOp(unittest.TestCase):
                 np_dims = tuple(range(len(a.shape)))
             x = eval(f"np.{op}.reduce(a, {np_dims}, keepdims={self.keepdims})")
             y = eval(f"jt.reduce_{op}(a, {jt_dims}, keepdims={self.keepdims}).data")
-            if len(x.shape) == 0: x = np.array([x]).astype(a.dtype)
+            if len(x.shape) == 0: x = np.asarray(x).astype(a.dtype)
             x = x.astype(a.dtype)
             y = y.astype(a.dtype)
             assert x.dtype == y.dtype and x.shape == y.shape and (x==y).all(), \
@@ -50,9 +50,9 @@ class TestReduceOp(unittest.TestCase):
         expect_error(lambda: jt.reduce_add([1,2,3], 2))
 
     def test_bool_reduce(self):
-        x = (jt.bool([1,0,1]) | jt.bool([0,1,0])).all().item()
+        x = (jt.array([1,0,1]).bool() | jt.array([0,1,0]).bool()).all().item()
         assert x
-        x = (jt.bool([1,0,1]) & jt.bool([0,1,0])).any().item()
+        x = (jt.array([1,0,1]).bool() & jt.array([0,1,0]).bool()).any().item()
         assert not x
 
     def test_bool_reduce2(self):
@@ -71,7 +71,7 @@ class TestReduceOp(unittest.TestCase):
                 np_dims = tuple(range(len(a.shape)))
             x = eval(f"np.{op}.reduce(a, {np_dims}, keepdims={self.keepdims})")
             y = eval(f"jt.reduce_{op}(a, {jt_dims}, keepdims={self.keepdims}).data")
-            if len(x.shape) == 0: x = np.array([x]).astype(a.dtype)
+            if len(x.shape) == 0: x = np.asarray(x).astype(a.dtype)
             x = x.astype(a.dtype)
             y = y.astype(a.dtype)
             assert x.dtype == y.dtype and x.shape == y.shape and (x==y).all(), \

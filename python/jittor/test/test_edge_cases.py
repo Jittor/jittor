@@ -24,9 +24,8 @@ overflow path stays silent. Training code, by contrast, routinely produces:
     reduce/broadcast machinery the common case uses.
 
 Every expectation here is an INDEPENDENT numpy reference, never jittor-vs-jittor.
-Where jittor legitimately differs from numpy by design -- it has no 0-d scalar, so a
-full reduction is ``(1,)`` not ``()`` -- the reference is ``np.atleast_1d``'d and the
-divergence is spelled out in a comment, not hidden. Differentiable cases also check
+Full reductions now follow numpy/PyTorch 0-D shape semantics and therefore retain
+the reference scalar shape ``()``. Differentiable cases also check
 the BACKWARD (analytical ``jt.grad`` vs a numpy/analytic gradient); non-differentiable
 or index-only cases say so. Anything that genuinely crashes or silently diverges is
 marked ``expectedFailure`` with a KNOWN-BUG note rather than deleted.
@@ -80,15 +79,14 @@ class TestEmptyTensors(_EdgeBase):
         self._for_devices(body)
 
     def test_sum_all_empty_is_zero_scalar(self):
-        # Full reduction of a wholly-empty tensor. numpy gives a 0-d 0.0; jittor has
-        # NO 0-d scalar -> it returns shape (1,). Encode the jittor convention by
-        # atleast_1d-ing the numpy reference (documented divergence, not a bug).
+        # Full reduction of a wholly-empty tensor follows numpy/PyTorch 0-D scalar
+        # semantics.
         x_np = np.zeros((0,), dtype="float32")
 
         def body(dev):
             x = jt.array(x_np)
-            got = x.sum()                        # jittor: shape (1,), value [0.0]
-            ref = np.atleast_1d(x_np.sum())      # numpy 0-d 0.0 -> (1,) for shape parity
+            got = x.sum()                        # shape (), value 0.0
+            ref = x_np.sum()                     # numpy 0-d 0.0
             self.assertEqual(got, ref, msg=f"sum-all of empty [{dev}]")
         self._for_devices(body)
 
@@ -347,14 +345,13 @@ class TestDegenerateRanks(_EdgeBase):
     """
 
     def test_single_element_reduce(self):
-        # A 1-element tensor reduced to a scalar. jittor keeps it (1,) (no 0-d), so
-        # atleast_1d the numpy (1,)->() reduction for shape parity. Value is identity.
+        # A 1-element tensor reduced to a scalar follows PyTorch's 0-D semantics.
         x_np = np.array([3.5], dtype="float32")
 
         def body(dev):
             x = jt.array(x_np)
             got = x.sum()
-            ref = np.atleast_1d(x_np.sum())    # numpy () 3.5 -> (1,) [3.5]
+            ref = x_np.sum()                   # numpy scalar shape ()
             self.assertEqual(got, ref, msg=f"single-element reduce [{dev}]")
         self._for_devices(body)
 

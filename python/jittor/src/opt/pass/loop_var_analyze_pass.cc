@@ -99,8 +99,8 @@ void LoopVarAnalyzePass::run() {
                 has_reduce = true;
             if (op->type() == OpType::element) {
                 has_element = true;
-                max_elm_dim = std::max(max_elm_dim, op->outputs().front()->shape.size());
-                if (max_elm_dim == op->outputs().front()->shape.size())
+                max_elm_dim = std::max(max_elm_dim, op->outputs().front()->kdim());
+                if (max_elm_dim == op->outputs().front()->kdim())
                     max_elm_size = std::max(max_elm_size, std::abs(op->outputs().front()->num));
             }
         }
@@ -120,7 +120,7 @@ void LoopVarAnalyzePass::run() {
             if (has_element && !has_reduce && op->type() != OpType::element)
                 continue;
             if (op->type() == OpType::element 
-                && (op->outputs().front()->shape.size() != max_elm_dim || 
+                && (op->outputs().front()->kdim() != max_elm_dim ||
                     std::abs(op->outputs().front()->num) != max_elm_size))
                 continue;
             if (op->name_ex() == "array")
@@ -132,11 +132,11 @@ void LoopVarAnalyzePass::run() {
             } else {
                 loop_var = op->inputs().front();
             }
-            loop_vars.reserve(loop_var->shape.size());
+            loop_vars.reserve(loop_var->kdim());
             string vname = pm->oc->get_name_by_op_var(op, loop_var);
             ASSERT(vname!="__fill__");
-            for (uint j=0; j<loop_var->shape.size(); j++)
-                loop_vars.emplace_back(vname+"->shape["+S(j)+"]");
+            for (uint j=0; j<loop_var->kdim(); j++)
+                loop_vars.emplace_back(vname+"->kshape("+S(j)+")");
             break;
         }
     }
@@ -176,16 +176,16 @@ void LoopVarAnalyzePass::run() {
         if (opi->name()==string("array"))
             continue;
         if (opi->type() == OpType::reduce) {
-            ndim = ((ReduceOp*)opi)->inputs().front()->shape.size();
+            ndim = ((ReduceOp*)opi)->inputs().front()->kdim();
             for (uint i=0; i<opi->inputs().size(); i++)
                 vnames.push_back(pm->oc->get_name_by_op_input(opi, i));
         } else 
         if (opi->type() == OpType::broadcast) {
-            ndim = ((BroadcastToOp*)opi)->outputs().front()->shape.size();
+            ndim = ((BroadcastToOp*)opi)->outputs().front()->kdim();
             for (uint o=0; o<opi->outputs().size(); o++)
                 vnames.push_back(pm->oc->get_name_by_op_output(opi, o));
         } else {
-            ndim = opi->outputs().front()->shape.size();
+            ndim = opi->outputs().front()->kdim();
             for (uint o=0; o<opi->outputs().size(); o++)
                 vnames.push_back(pm->oc->get_name_by_op_output(opi, o));
         }

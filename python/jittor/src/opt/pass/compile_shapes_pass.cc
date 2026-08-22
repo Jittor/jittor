@@ -17,23 +17,23 @@ void CompileShapesPass::run() {
     for (auto& c : ir->children) {
         if (c->type != "define") continue;
         auto& rvalue = c->get_attr("rvalue");
-        // T range = op{i}_{vnamr}->shape[j];
+        // T range = op{i}_{vnamr}->kshape(j);
         //                        j      i
-        if (!startswith(rvalue, "op") || rvalue.back() != ']')
+        if (!startswith(rvalue, "op") || rvalue.back() != ')')
             continue;
         uint i=rvalue.size()-2;
         while (i && isdigit(rvalue[i])) i--;
-        ASSERT(rvalue[i] == '[' && i>7);
-        uint j = i-7;
-        ASSERT(startswith(rvalue, "->shape[", j));
+        ASSERT(rvalue[i] == '(' && i>8);
+        uint j = i-8;
+        ASSERT(startswith(rvalue, "->kshape(", j));
         string name = rvalue.substr(0, j);
         uint op_id, opvar_id;
         Op* op;
         Var* var;
         pm->oc->get_op_var_by_name(name, op_id, opvar_id, op, var);
         int shapeid = std::stoi(rvalue.substr(i+1, rvalue.size()-i-2));
-        ASSERT(shapeid < (int)var->shape.size());
-        rvalue = S(var->shape[shapeid]);
+        ASSERT(shapeid < var->kdim());
+        rvalue = S(var->kshape(shapeid));
     }
 }
 

@@ -35,7 +35,7 @@ static auto make_transpose = get_op_info("transpose")
 ArgsortOp::ArgsortOp(Var* x, int dim, bool descending, NanoString dtype)
     : x(x), dim(dim), descending(descending) {
     if  (this->dim == -1)
-        this->dim = x->shape.size() - 1;
+        this->dim = x->shape.size() ? x->shape.size() - 1 : 0;
     dim = this->dim;
     #ifdef HAS_CUDA
     if (use_cuda) {
@@ -123,6 +123,7 @@ VarPtr ArgsortOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void ArgsortOp::infer_shape() {
+    CHECK(x->shape.size()) << "argsort does not support a 0-D input without a dimension";
     CHECKop(dim,>=,0) << "Invalid dim for argsort op: dim out of range, expected dim in ["
         >> -(int)x->shape.size() >> ", " >> (int)x->shape.size()-1
         >> "] for input with shape" << x->shape >> ".";
@@ -136,7 +137,7 @@ void ArgsortOp::infer_shape() {
 void ArgsortOp::jit_prepare(JK& jk) {
     jk << "«Tx:" << x->dtype();
     jk << "«Ty:" << y->dtype();
-    jk << "«XDIM=" << JK::hex1(x->shape.size());
+    jk << "«XDIM=" << JK::hex1(x->kdim());
     jk << "«DIM=" << JK::hex1(dim);
     jk << "«CMP:" << (descending ? '>' : '<');
 }
@@ -147,7 +148,7 @@ void ArgsortOp::jit_prepare(JK& jk) {
 void ArgsortOp::jit_run() {
     auto* __restrict__ xp = x->ptr<Tx>();
     // define x shape
-    @for(i, 0, XDIM, index_t xshape@i = x->shape[@i];)
+    @for(i, 0, XDIM, index_t xshape@i = x->kshape(@i);)
     // define x stride
     index_t xstride@{XDIM-1} = 1;
     @for(i, XDIM-2, -1, -1, auto xstride@i = xstride@{i+1} * xshape@{i+1};)

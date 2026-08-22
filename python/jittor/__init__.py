@@ -13,6 +13,7 @@ __version__ = '1.3.11.1a1'
 
 import os as _os
 import sys as _sys
+import warnings as _warnings
 
 def _jt_torch_truthy(_value):
     return str(_value or "").strip().lower() in ("1", "true", "yes", "on")
@@ -1000,10 +1001,25 @@ def transpose(x, *dim):
     if len(dim) == 1 and isinstance(dim[0], (Sequence, NanoVector)):
         dim = dim[0]
     elif len(dim) == 2:
-        axes = list(range(x.ndim))
         a, b = dim
-        axes[a], axes[b] = axes[b], axes[a]
-        dim = axes
+        if x.ndim == 0:
+            # torch parity: a 0-d tensor has no real axes, but dim 0/-1 are still
+            # accepted (they both denote the single, absent axis) and transpose is
+            # a no-op; any other dim is out of range.
+            # NB: `int` is shadowed (module-level `int = int32`) -- use the builtin.
+            _int = (0).__class__
+            ai = a.item() if isinstance(a, Var) else _int(a)
+            bi = b.item() if isinstance(b, Var) else _int(b)
+            for name, di in (("dim0", ai), ("dim1", bi)):
+                if di not in (0, -1):
+                    raise IndexError(
+                        f"Dimension out of range (expected to be in range of [-1, 0], "
+                        f"but got {di})")
+            dim = ()
+        else:
+            axes = list(range(x.ndim))
+            axes[a], axes[b] = axes[b], axes[a]
+            dim = axes
     # NumPy helpers such as np.argsort return numpy.integer axis values.  The
     # C++ transpose binding requires exact Python ints, while torch accepts any
     # integral sequence in Tensor.permute().
@@ -1040,6 +1056,10 @@ Var.transpose = Var.permute = permute = transpose
 def flatten(input, start_dim=0, end_dim=-1):
     '''flatten dimentions by reshape'''
     in_shape = input.shape
+    if len(in_shape) == 0:
+        if start_dim not in (0, -1) or end_dim not in (-1, 0):
+            raise IndexError(f"Dimension out of range for a 0-D input: start_dim={start_dim}, end_dim={end_dim}")
+        return input.reshape([1])
     start_dim = len(in_shape) + start_dim if start_dim < 0 else start_dim
     end_dim = len(in_shape) + end_dim if end_dim < 0 else end_dim
     assert end_dim >= start_dim, "end_dim should be larger than or equal to start_dim for flatten function"
@@ -1070,10 +1090,9 @@ def squeeze(x, dim=None):
     shape = list(x.shape)
     if dim is None:
         # squeeze removes ONLY size-1 dims (size-0 dims must be kept, else an empty
-        # tensor like [0,1] reshapes to the wrong size). jittor has no 0-dim tensors,
-        # so an all-ones shape collapses to [1] (mmdet: nonzero(...).squeeze()).
+        # tensor like [0,1] reshapes to the wrong size).
         new_shape = [s for s in shape if s != 1]
-        return x.reshape(new_shape if new_shape else [1])
+        return x.reshape(new_shape)
     else:
         if dim < 0: dim += len(shape)
         assert dim < len(shape) and dim >= 0
@@ -1082,11 +1101,11 @@ def squeeze(x, dim=None):
         if shape[dim] != 1:
             return x
         new_shape = shape[:dim] + shape[dim+1:]
-        return x.reshape(new_shape if new_shape else [1])
+        return x.reshape(new_shape)
 Var.squeeze = squeeze
 
 def clamp(x, min_v=None, max_v=None):
-    if x.shape[0]==0:
+    if x.ndim > 0 and x.shape[0]==0:
         return x
     # torch allows tensor min/max bounds (and doesn't assert ordering); only do the
     # scalar ordering sanity-check when both bounds are plain scalars -- a Var bound
@@ -2186,7 +2205,17 @@ Arguments of hook are defined as::
                 else:
                     # assume is pytorch tensor
                     param = array(params[key].cpu().detach().numpy())
-                if param.shape == v.shape:
+                shape_match = param.shape == v.shape
+                if not shape_match and param.numel() == 1 and v.numel() == 1 \
+                        and {tuple(param.shape), tuple(v.shape)} <= {(), (1,)}:
+                    _warnings.warn(
+                        f"Loading scalar parameter {key} with legacy shape {param.shape} "
+                        f"into shape {v.shape}; scalar shape compatibility is deprecated.",
+                        DeprecationWarning,
+                        stacklevel=2,
+                    )
+                    shape_match = True
+                if shape_match:
                     LOG.v(f'load parameter {key} success ...')
                     v.update(param)
                     v.sync(False, False)
@@ -2693,6 +2722,8 @@ def format(v, spec):
 Var.__format__ = format
 
 def get_len(var):
+    if var.ndim == 0:
+        raise TypeError("len() of a 0-d tensor")
     return var.shape[0]
 
 Var.__len__ = get_len

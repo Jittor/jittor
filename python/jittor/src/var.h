@@ -31,6 +31,12 @@ struct Var : Node {
     inline int dsize() const { CHECK_EXIST; return ns.dsize(); }
     inline NanoString dtype() const { CHECK_EXIST; return ns; }
     inline NanoString& dtype() { CHECK_EXIST; return ns; }
+    // Logical shape may be empty for a 0-D Var. Kernel code uses this
+    // normalized at-least-one-dimensional view.
+    inline int kdim() const { return std::max((int)shape.size(), 1); }
+    inline int64 kshape(int i) const {
+        return i < (int)shape.size() ? shape[i] : (int64)1;
+    }
     template <typename T>
     inline T* ptr() { CHECK_EXIST; return (T*)mem_ptr; }
     inline Op* input() { CHECK_EXIST; return _inputs.size() ? (Op*)_inputs.front() : (Op*)nullptr; }

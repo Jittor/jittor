@@ -123,10 +123,14 @@ def __deepcopy__(x,memo):
 jt.Var.__deepcopy__ = __deepcopy__
 
 def __len__(x):
+    if x.ndim == 0:
+        raise TypeError("len() of a 0-d tensor")
     return x.shape[0]
 jt.Var.__len__ = __len__
 
 def __iter__(x):
+    if x.ndim == 0:
+        raise TypeError("iteration over a 0-d tensor")
     result = []
     for i in range(x.shape[0]):
         result.append(x[i])

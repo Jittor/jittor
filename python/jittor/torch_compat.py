@@ -1515,18 +1515,21 @@ def install(torch):
                     if out is not None: _kw["out"] = out
                     return _tf(g.cat, (type(_t),), (_seq,), _kw)
         tensors = [t for t in tensors if t is not None]
+        for _pos, _t in enumerate(tensors):
+            if _t.ndim == 0:
+                raise RuntimeError(
+                    f"zero-dimensional tensor (at position {_pos}) cannot be concatenated")
         nonempty = [t for t in tensors if t.numel() > 0]
         if len(nonempty) == 0:
             return tensors[0]
         if len(nonempty) == 1:
             return nonempty[0]
-        # torch requires all tensors to share ndim. jittor has no 0-d scalars, so
-        # a torch-scalar `s` (0-d) becomes a [1] Var and `s.unsqueeze(0)` yields
-        # [1,1] instead of torch's [1] -- mixing 2-D and 1-D entries that torch
-        # would see as uniformly 1-D (e.g. SOLO's per-image dice losses). Strip
-        # the spurious LEADING size-1 dims off any over-ranked entry so the ndims
-        # line up the way torch sees them. Only size-1 leading dims are removed;
-        # a genuine ndim/shape mismatch is left for jittor's concat to reject.
+        # torch requires all tensors to share ndim. A [1,1]-shaped entry can arise
+        # from `s.unsqueeze(0)` on a former torch-scalar, mixing 2-D and 1-D entries
+        # that torch would see as uniformly 1-D (e.g. SOLO's per-image dice losses).
+        # Strip the spurious LEADING size-1 dims off any over-ranked entry so the
+        # ndims line up the way torch sees them. Only size-1 leading dims are
+        # removed; a genuine ndim/shape mismatch is left for jittor's concat to reject.
         min_nd = min(t.ndim for t in nonempty)
         fixed = []
         for t in nonempty:

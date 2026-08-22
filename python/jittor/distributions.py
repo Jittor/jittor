@@ -277,7 +277,13 @@ class Categorical:
         rand = jt.rand(shape)
         one_hot = jt.logical_and(self.cum_probs_l < rand, rand <= self.cum_probs_r)
         index = one_hot.index(one_hot.ndim - 1)
-        return (one_hot * index).sum(-1)
+        result = (one_hot * index).sum(-1)
+        # the final sum(-1) can collapse an all-scalar case (empty sample_shape,
+        # scalar/1-D probs) to a 0-d Var; follow _full_shape's convention (jittor
+        # has no 0-d Var) so this matches every other Distribution.sample().
+        if result.ndim == 0:
+            result = result.reshape(1)
+        return result
 
     def log_prob(self, x):
         a = self.probs.ndim

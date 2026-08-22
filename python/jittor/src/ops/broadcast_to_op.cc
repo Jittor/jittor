@@ -81,6 +81,10 @@ BroadcastToOp::BroadcastToOp(Var* x, NanoVector shape, NanoVector dims) : x(x), 
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     set_type(OpType::broadcast);
+    if (!shape.size() && x->shape.size() == 0 && !dims.size()) {
+        forward(x);
+        return;
+    }
     CHECKop(shape.size(),>,0u) << "Number of shape should greater than 0.";
     for (auto v : shape)
         CHECKop(v,>=,0u) << "Shape should greater than 0.";
@@ -96,6 +100,7 @@ BroadcastToOp::BroadcastToOp(Var* x, NanoVector shape, NanoVector dims) : x(x), 
 }
 
 bool BroadcastToOp::need_broadcast(const Var* x, const NanoVector& shape) {
+    if (x->shape.size() == 0) return shape.size() != 0;
     if (x->shape.size() < shape.size()) return true;
     for (uint i=shape.size()-1, j=x->shape.size()-1; i<shape.size(); i--,j--)
         if ((x->shape[j] != shape[i] && shape[i] != 1)) return true;
@@ -172,7 +177,7 @@ void BroadcastToOp::infer_shape() {
 
 void BroadcastToOp::jit_prepare(JK& jk) {
     jk << "«Tx:" << x->dtype()
-        << "«DIM=" << JK::hex1(z->shape.size())
+        << "«DIM=" << JK::hex1(z->kdim())
         << "«BCAST=" << JK::hex(bcast_mask);
 }
 
@@ -181,7 +186,7 @@ void BroadcastToOp::jit_run() {
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ zp = z->ptr<Tx>();
     // define z shape
-    @for(i, 0, DIM, index_t zshape@i = z->shape[@i];)
+    @for(i, 0, DIM, index_t zshape@i = z->kshape(@i);)
     // define z stride
     index_t zstride@{DIM-1} = 1;
     @for(i, DIM-2, -1, -1, auto zstride@i = zstride@{i+1} * zshape@{i+1};)
