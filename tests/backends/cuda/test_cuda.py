@@ -6,6 +6,7 @@
 # ***************************************************************
 import unittest
 import jittor as jt
+import numpy as np
 from _helpers.assertions import expect_error
 
 @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
@@ -97,6 +98,19 @@ class TestCuda(unittest.TestCase):
         a.sync()
         with jt.flag_scope(use_cuda=1):
             ((a+a)*2).data
+
+    @jt.flag_scope(use_cuda=1)
+    def test_large_nchw_channel_bias_broadcast(self):
+        rng = np.random.RandomState(20260822)
+        for shape in ((2, 32, 16, 16), (2, 64, 32, 32)):
+            value = rng.randn(*shape).astype("float32")
+            bias = rng.randn(shape[1]).astype("float32")
+            actual = (
+                jt.array(value)
+                + jt.array(bias).broadcast(shape, [0, 2, 3])
+            ).numpy()
+            expected = value + bias.reshape(1, -1, 1, 1)
+            np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
 
 
 @unittest.skipIf(jt.compiler.has_cuda, "Only test without CUDA")

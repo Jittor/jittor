@@ -1149,10 +1149,12 @@ jit_op_entry_t do_compile_inner(Op* op) {
     // if is fused op
     if (oc.op) {
         TunerManager tm(&oc);
-        // ParallelPass is supplied by data.o and emits per-dimension bit counts,
-        // while its loop body consumes cumulative bit boundaries. Correct the
-        // stable generated template before compiling to avoid negative shifts.
-        src_after_passes = fix_parallel_thread_ranges(tm.tune());
+        src_after_passes = tm.tune();
+        // The CPU template consumes cumulative bit boundaries but data.o emits
+        // per-dimension counts. CUDA already accumulates those boundaries in
+        // its launch setup, so rewriting CUDA here would apply the offset twice.
+        if (src_after_passes.find("#define JIT_cpu 1") != string::npos)
+            src_after_passes = fix_parallel_thread_ranges(src_after_passes);
         src = &src_after_passes;
     }
     op->compile_optimize(*src);

@@ -111,12 +111,19 @@ class TestParallelPass3(unittest.TestCase):
                 for i in range(tdim):
                     assert f"tnum{i}" in src
                 assert f"tnum{tdim}" not in src
-                for i in range(tdim-1):
-                    assert (
-                        f"int tn{i} = tn{i+1} + get_thread_range_log" in src
-                    ), src
-                if tdim:
-                    assert "thread_num /= thread_num_left;" in src
+                if jt.flags.use_cuda:
+                    for i in range(tdim):
+                        assert f"int tn{i} = get_thread_range_log" in src, src
+                    for i in range(tdim-1):
+                        assert f"tn{i}=tn{i}+tn{i+1};" in src, src
+                    assert "thread_num /= thread_num_left;" not in src
+                else:
+                    for i in range(tdim-1):
+                        assert (
+                            f"int tn{i} = tn{i+1} + get_thread_range_log" in src
+                        ), src
+                    if tdim:
+                        assert "thread_num /= thread_num_left;" in src
         self.merge_loop_var = 0
         check(1, None, 0)
         check(2, None, 1)
@@ -167,7 +174,10 @@ class TestParallelPass3(unittest.TestCase):
             for i in range(tdim):
                 assert f"tnum{i}" in src
             assert f"tnum{tdim}" not in src, f"tnum{tdim}"
-            assert "thread_num /= thread_num_left;" in src
+            if jt.flags.use_cuda:
+                assert "thread_num /= thread_num_left;" not in src
+            else:
+                assert "thread_num /= thread_num_left;" in src
             src_has_atomic = "atomic_add" in src or "atomicAdd" in src
             assert has_atomic == src_has_atomic
         assert np.allclose(a.data.sum(rdim), b), (b.sum(), a.data.sum())
