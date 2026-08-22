@@ -47,6 +47,20 @@ class TestSilentWrongRegressions(JittorTestCase):
                 with jt.flag_scope(use_cuda=use_cuda_for(d)):
                     body(d)
 
+    def test_scalar_cube_matches_analytic_forward_and_backward(self):
+        x_np = np.array([-3.0, -0.5, -0.0, 0.25, 2.0], dtype="float32")
+        cot_np = np.array([0.5, -2.0, 3.0, -0.25, 1.5], dtype="float32")
+
+        def body(dev):
+            x = jt.array(x_np)
+            output = jt.pow(x, 3.0)
+            grad = jt.grad((output * jt.array(cot_np)).sum(), [x])[0]
+            self.assertEqual(output.numpy(), x_np * x_np * x_np,
+                             msg=f"scalar cube forward [{dev}]")
+            self.assertEqual(grad.numpy(), 3.0 * x_np * x_np * cot_np,
+                             msg=f"scalar cube backward [{dev}]")
+        self._devices(body)
+
     # -- 40875685: Var.where(cond, other) treated self as the CONDITION ----------
     def test_var_where_is_select_not_condition(self):
         a = np.random.RandomState(0).randn(4, 5).astype("float32")

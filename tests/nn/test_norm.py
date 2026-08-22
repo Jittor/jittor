@@ -95,6 +95,44 @@ class TestLayerNorm(_NormBase):
 
 
 class TestGroupNorm(_NormBase):
+    @unittest.skipUnless(jt.has_cuda, "CUDA GroupNorm fast path needs CUDA")
+    def test_cuda_fast_path_forward_and_all_gradients(self):
+        rng = np.random.RandomState(20260823)
+        shape = (2, 32, 16, 16)
+        groups = 8
+        x_np = rng.randn(*shape).astype("float32")
+        weight_np = rng.randn(shape[1]).astype("float32")
+        bias_np = rng.randn(shape[1]).astype("float32")
+        cot_np = rng.randn(*shape).astype("float32")
+
+        def run(use_cuda):
+            with jt.flag_scope(use_cuda=use_cuda):
+                x = jt.array(x_np)
+                weight = jt.array(weight_np)
+                bias = jt.array(bias_np)
+                if use_cuda:
+                    self.assertIsNotNone(
+                        jt.nn._group_norm_cuda(x, groups, weight, bias, 1e-5)
+                    )
+                output = F.group_norm(x, groups, weight, bias, 1e-5)
+                grads = jt.grad((output * jt.array(cot_np)).sum(), [x, weight, bias])
+                return jt.fetch_sync([output] + grads)
+
+        reference = run(0)
+        actual = run(1)
+        for label, got, expected in zip(
+            ("output", "input grad", "weight grad", "bias grad"),
+            actual,
+            reference,
+        ):
+            np.testing.assert_allclose(
+                got,
+                expected,
+                rtol=2e-3,
+                atol=2e-3,
+                err_msg="CUDA GroupNorm {}".format(label),
+            )
+
     def test_backward_small_variance(self):
         N, C, H, W, G = 2, 8, 4, 4, 4
         x = (np.random.RandomState(4).randn(N, C, H, W) * 1e-3).astype("float32")

@@ -89,6 +89,7 @@ class TestPackagingStructure(unittest.TestCase):
             "python/jittor/compat/shim/resources/torch_init.py",
             "python/jittor/utils/data.gz",
             "python/jittor/nn/backends/softmax_cuda.py",
+            "python/jittor/nn/backends/group_norm_cuda.py",
         )
         for relative in required:
             with self.subTest(path=relative):

@@ -55,6 +55,7 @@ from .backends.cudnn import (
     _try_cudnn_conv_transpose2d,
 )
 from .backends.layer_norm_cuda import _layer_norm_no_grad_cuda
+from .backends.group_norm_cuda import _group_norm_cuda
 from .dual_grid import finalize_dual_grid_mesh_cuda
 from .functional import *
 from .functional.complex import (

@@ -12,11 +12,15 @@ These tests exercise the selection helper directly so the contract is checked
 without an oracle interpreter or a downstream library.
 """
 
+import os
 import sys
 from pathlib import Path
+import tempfile
 import unittest
+from unittest import mock
 
 import jittor as jt
+import numpy as np
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -26,6 +30,20 @@ import _ecosystem_runner  # noqa: E402
 
 class _StubTorch(object):
     """Stands in for the ``torch`` argument on the Jittor paths."""
+
+
+class _SharedNumpyTensor(object):
+    def __init__(self, array):
+        self.array = array
+
+    def detach(self):
+        return self
+
+    def cpu(self):
+        return self
+
+    def numpy(self):
+        return self.array
 
 
 class TestEcosystemDeviceSelection(unittest.TestCase):
@@ -62,6 +80,30 @@ class TestEcosystemDeviceSelection(unittest.TestCase):
         move = _ecosystem_runner._select_device(_StubTorch(), "jittor", "cpu")
         sentinel = object()
         self.assertIs(move(sentinel), sentinel)
+
+    def test_shared_package_site_is_inserted_without_duplicates(self):
+        original = list(sys.path)
+
+        def restore_path():
+            sys.path[:] = original
+
+        self.addCleanup(restore_path)
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.dict(
+                os.environ,
+                {"JITTOR_ECOSYSTEM_PACKAGE_SITE": directory},
+            ):
+                sys.path.extend([directory, directory])
+                actual = _ecosystem_runner._activate_package_site()
+                self.assertEqual(actual, str(Path(directory).resolve()))
+                self.assertEqual(sys.path[0], actual)
+                self.assertEqual(sys.path.count(actual), 1)
+
+    def test_correctness_snapshot_does_not_alias_runtime_storage(self):
+        storage = np.array([1.0, 2.0], dtype="float32")
+        snapshot = _ecosystem_runner._numpy_snapshot(_SharedNumpyTensor(storage))
+        storage[:] = -1.0
+        np.testing.assert_array_equal(snapshot, np.array([1.0, 2.0], dtype="float32"))
 
 
 if __name__ == "__main__":

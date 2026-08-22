@@ -12,8 +12,10 @@ for parity *and* for no speed regression.
 """
 
 import argparse
+import importlib
 import json
 import os
+from pathlib import Path
 import sys
 import time
 
@@ -27,6 +29,32 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np  # noqa: E402
 
 import _ecosystem_cases  # noqa: E402
+
+
+def _activate_package_site():
+    raw_site = os.environ.get("JITTOR_ECOSYSTEM_PACKAGE_SITE", "").strip()
+    if not raw_site:
+        return ""
+    site = Path(raw_site).expanduser().resolve()
+    if not site.is_dir():
+        raise SystemExit(
+            "JITTOR_ECOSYSTEM_PACKAGE_SITE is not a directory: {}".format(site)
+        )
+    site_text = str(site)
+    sys.path[:] = [entry for entry in sys.path if entry != site_text]
+    sys.path.insert(0, site_text)
+    return site_text
+
+
+def _dependency_report(requirements):
+    report = {}
+    for name in requirements:
+        module = importlib.import_module(name)
+        report[name] = {
+            "version": str(getattr(module, "__version__", "unknown")),
+            "origin": str(Path(getattr(module, "__file__", "")).resolve()),
+        }
+    return report
 
 
 def _import_torch(runtime):
@@ -47,6 +75,7 @@ def _import_torch(runtime):
             torch, "_torch_compat_install_context"
         ):
             raise SystemExit("torch did not resolve to the Jittor shim")
+        _activate_package_site()
         return torch
 
     os.environ.pop("JITTOR_TORCH_SHIM", None)
@@ -54,6 +83,13 @@ def _import_torch(runtime):
 
     if not hasattr(torch, "_C") or hasattr(torch, "_torch_compat_install_context"):
         raise SystemExit("torch did not resolve to an independent PyTorch")
+    # Claim torchvision from the real-Torch environment before the shared
+    # Python package site can expose Jittor's deployed torchvision facade.
+    try:
+        import torchvision  # noqa: F401
+    except ImportError:
+        pass
+    _activate_package_site()
     return torch
 
 
@@ -100,6 +136,25 @@ def _device_in_use(torch, runtime, device):
     return "cpu"
 
 
+def _configure_tf32(torch, device):
+    enabled = os.environ.get("JITTOR_ECOSYSTEM_TF32", "1").strip().lower()
+    enabled = enabled not in ("", "0", "false", "no", "off")
+    benchmark = os.environ.get("JITTOR_ECOSYSTEM_CUDNN_BENCHMARK", "0").strip().lower()
+    benchmark = benchmark not in ("", "0", "false", "no", "off")
+    if device == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = enabled
+        torch.backends.cudnn.allow_tf32 = enabled
+        torch.backends.cudnn.benchmark = benchmark
+        set_precision = getattr(torch, "set_float32_matmul_precision", None)
+        if callable(set_precision):
+            set_precision("high" if enabled else "highest")
+    return {
+        "matmul": bool(torch.backends.cuda.matmul.allow_tf32) if device == "cuda" else False,
+        "cudnn": bool(torch.backends.cudnn.allow_tf32) if device == "cuda" else False,
+        "cudnn_benchmark": bool(torch.backends.cudnn.benchmark) if device == "cuda" else False,
+    }
+
+
 def _synchronize(torch, runtime, device):
     # Jittor is lazy on every device: without a sync the timed step only pays
     # for the values it fetches, and the pending backward graph is discarded by
@@ -140,6 +195,10 @@ def _primary_output(result):
     return result
 
 
+def _numpy_snapshot(value):
+    return np.array(value.detach().cpu().numpy(), dtype="float32", copy=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("case")
@@ -153,10 +212,12 @@ def main():
 
     torch = _import_torch(options.runtime)
     to_device = _select_device(torch, options.runtime, options.device)
+    tf32 = _configure_tf32(torch, options.device)
 
     torch.manual_seed(options.seed)
-    builder, _requirements = _ecosystem_cases.CASES[options.case]
+    builder, requirements = _ecosystem_cases.CASES[options.case]
     model, input_spec = builder(torch)
+    dependencies = _dependency_report(requirements)
     model.eval()
     if options.device == "cuda" and options.runtime == "torch":
         model.cuda()
@@ -217,50 +278,63 @@ def main():
     loss.backward()
 
     _synchronize(torch, options.runtime, options.device)
-    arrays = {"__output__": np.asarray(output.detach().cpu().numpy(), dtype="float32")}
+    arrays = {"__output__": _numpy_snapshot(output)}
     for name, parameter in model.named_parameters():
         grad = getattr(parameter, "grad", None)
         if grad is None:
             continue
-        arrays["grad::" + name] = np.asarray(grad.detach().cpu().numpy(), dtype="float32")
+        arrays["grad::" + name] = _numpy_snapshot(grad)
     for name, tensor in inputs.items():
         grad = getattr(tensor, "grad", None)
         if grad is not None:
-            arrays["ingrad::" + name] = np.asarray(
-                grad.detach().cpu().numpy(), dtype="float32"
-            )
+            arrays["ingrad::" + name] = _numpy_snapshot(grad)
 
-    # Timing runs after the correctness capture so a lazily built graph is
-    # already compiled and the number reflects steady-state execution.
-    def one_step():
-        step_inputs = _make_inputs(torch, input_spec, options.seed + 1, to_device)
+    # Timing runs after correctness capture. Inputs and loss weights are already
+    # resident on the requested device, so the number excludes allocation/H2D.
+    timing_slots = [
+        _make_inputs(torch, input_spec, options.seed + 10 + index, to_device)
+        for index in range(4)
+    ]
+    timing_loss_weights = to_device(torch.from_numpy(loss_weights))
+
+    def one_step(step_inputs):
         step_output = _primary_output(model(**step_inputs))
-        step_loss = (step_output * to_device(torch.from_numpy(loss_weights))).sum()
+        step_loss = (step_output * timing_loss_weights).sum()
         model.zero_grad(set_to_none=False)
         step_loss.backward()
-        # Read every gradient back. Jittor is lazy and a GPU sync alone does not
-        # evaluate gradients nobody asked for -- on BERT-base that is 0.049s of
-        # bookkeeping against 0.141s of real work -- so the timed step would
-        # otherwise skip what PyTorch has necessarily finished by this line.
-        # It has to be the whole tensor: Jittor fuses a reduction or a slice
-        # into the producing kernel and then computes only the part that is
-        # read, so ``grad[0]`` or ``grad.sum()`` still measures almost nothing.
-        # PyTorch materialises its gradients during ``backward`` regardless, and
-        # both runtimes copy the same bytes here, so the comparison stays fair.
+        gradients = []
         for parameter in model.parameters():
             grad = getattr(parameter, "grad", None)
             if grad is not None:
-                grad.detach().cpu().numpy()
-        return float(step_loss.detach().cpu().numpy().reshape(-1)[0])
+                gradients.append(grad)
+        for tensor in step_inputs.values():
+            grad = getattr(tensor, "grad", None)
+            if grad is not None:
+                gradients.append(grad)
+        if options.runtime == "jittor":
+            import jittor as jt
 
-    one_step()
+            # Explicit targets force every lazy gradient without introducing
+            # hundreds of per-tensor D2H copies into the training measurement.
+            jt.sync([step_loss] + gradients)
+        return step_loss, gradients
+
+    resident_values = [timing_loss_weights]
+    for slot in timing_slots:
+        resident_values.extend(slot.values())
+    if options.runtime == "jittor":
+        import jittor as jt
+
+        jt.sync(resident_values)
+    warm_values = [one_step(slot) for slot in timing_slots]
     _synchronize(torch, options.runtime, options.device)
     durations = []
-    for _ in range(max(1, options.repeats)):
+    for index in range(max(1, options.repeats)):
         started = time.perf_counter()
-        one_step()
+        values = one_step(timing_slots[index % len(timing_slots)])
         _synchronize(torch, options.runtime, options.device)
         durations.append(time.perf_counter() - started)
+    del warm_values, values
 
     np.savez(options.output, **arrays)
     print(
@@ -272,6 +346,9 @@ def main():
                 "seconds": min(durations),
                 "loss": float(loss.detach().cpu().numpy().reshape(-1)[0]),
                 "device": _device_in_use(torch, options.runtime, options.device),
+                "package_site": os.environ.get("JITTOR_ECOSYSTEM_PACKAGE_SITE", ""),
+                "dependencies": dependencies,
+                "tf32": tf32,
             }
         )
     )

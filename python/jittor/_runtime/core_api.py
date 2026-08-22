@@ -905,8 +905,11 @@ def pow(x, y):
     :param y: the second input.
     :type y: a python number or jt.Var.
     '''
-    if isinstance(x,Var) and isinstance(y, (ori_int, ori_float)) and y == 2:
-        return x.sqr()
+    if isinstance(x,Var) and isinstance(y, (ori_int, ori_float)):
+        if y == 2:
+            return x.sqr()
+        if y == 3 and str(x.dtype) == "float32":
+            return x*x*x
     return core.ops.pow(x, y)
 Var.pow = Var.__pow__ = pow
 

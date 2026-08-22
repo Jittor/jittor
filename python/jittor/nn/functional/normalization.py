@@ -94,6 +94,9 @@ def group_norm(x,
     else:
         output_shape = (N, C)
     assert C % num_groups == 0
+    fast = jt.nn._group_norm_cuda(x, num_groups, weight, bias, eps)
+    if fast is not None:
+        return fast
     xg = x.reshape((N, num_groups, C//num_groups, -1))
     xhat = jt.nn._ln_normalize(xg, [2,3], eps).reshape(output_shape)  # stable custom backward
     if isinstance(weight, jt.Var):

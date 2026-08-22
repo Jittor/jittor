@@ -15,12 +15,27 @@ Configuration
     tests skip when it is unset, because a comparison against Jittor's own
     ``torch`` shim would be self-referential and would prove nothing.
 
+``JITTOR_ECOSYSTEM_PACKAGE_SITE``
+    Optional site-packages directory for downstream libraries. When omitted,
+    the harness derives it from this interpreter's installed Transformers.
+    Both runtimes claim their independent ``torch`` namespace first, then use
+    this same directory for the libraries under comparison.
+
 ``JITTOR_ECOSYSTEM_SPEED_RATIO``
     Optional upper bound on ``jittor_seconds / torch_seconds``.  The wall-clock
     numbers are always reported; they are only asserted when this is set, since
     a shared machine makes an unconditional timing gate flaky.
+
+``JITTOR_ECOSYSTEM_TF32``
+    CUDA precision policy for both runtimes. It defaults to enabled and controls
+    matmul and cuDNN convolution together; the reports must agree on the state.
+
+``JITTOR_ECOSYSTEM_CUDNN_BENCHMARK``
+    Optional CUDA convolution autotuning switch. It defaults to disabled and is
+    applied to both runtimes for controlled algorithm-selection experiments.
 """
 
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -39,6 +54,25 @@ RUNNER = Path(__file__).resolve().parent / "_ecosystem_runner.py"
 REAL_TORCH_PYTHON = os.environ.get("REAL_TORCH_PYTHON", "").strip()
 
 SPEED_RATIO = os.environ.get("JITTOR_ECOSYSTEM_SPEED_RATIO", "").strip()
+
+
+def _package_site():
+    configured = os.environ.get("JITTOR_ECOSYSTEM_PACKAGE_SITE", "").strip()
+    if configured:
+        site = Path(configured).expanduser().resolve()
+        if not site.is_dir():
+            raise RuntimeError(
+                "JITTOR_ECOSYSTEM_PACKAGE_SITE is not a directory: {}".format(site)
+            )
+        return str(site)
+    spec = importlib.util.find_spec("transformers")
+    origin = getattr(spec, "origin", None)
+    if not origin:
+        return ""
+    return str(Path(origin).resolve().parents[1])
+
+
+PACKAGE_SITE = _package_site()
 
 
 def _torch_shim_is_active():
@@ -81,8 +115,12 @@ def _run(python, runtime, case, output, weights=None, device="cpu"):
     ]
     if weights is not None:
         command += ["--weights", str(weights)]
+    environment = os.environ.copy()
+    if PACKAGE_SITE:
+        environment["JITTOR_ECOSYSTEM_PACKAGE_SITE"] = PACKAGE_SITE
     completed = subprocess.run(
         command,
+        env=environment,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -167,6 +205,24 @@ class EcosystemComparison(unittest.TestCase):
                         case, label, report.get("device"), self.device
                     ),
                 )
+                if PACKAGE_SITE:
+                    self.assertEqual(
+                        report.get("package_site"),
+                        PACKAGE_SITE,
+                        "{}: {} used a different downstream package site".format(
+                            case, label
+                        ),
+                    )
+            self.assertEqual(
+                torch_report.get("dependencies"),
+                jittor_report.get("dependencies"),
+                "{} used different downstream dependency versions or origins".format(case),
+            )
+            self.assertEqual(
+                torch_report.get("tf32"),
+                jittor_report.get("tf32"),
+                "{} used different CUDA TF32 policies".format(case),
+            )
 
             reference = np.load(torch_output)
             candidate = np.load(jittor_output)

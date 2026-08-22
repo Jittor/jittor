@@ -6,6 +6,7 @@ from .cudnn import (
     _try_cudnn_conv_transpose2d,
 )
 from .layer_norm_cuda import _layer_norm_no_grad_cuda
+from .group_norm_cuda import _group_norm_cuda as _group_norm_cuda
 from . import softmax_cuda as softmax_cuda
 
 # Compatibility attribute for ``from jittor.other import code_softmax``. The

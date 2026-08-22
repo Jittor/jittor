@@ -16,6 +16,7 @@ import jittor
 import jittor.nn as nn
 from jittor.nn.backends import cudnn as convolution_cudnn
 from jittor.nn.backends import layer_norm_cuda
+from jittor.nn.backends import group_norm_cuda
 from jittor.nn.functional import activation as activations
 from jittor.nn.functional import convolution
 from jittor.nn.functional import convolution_transpose
@@ -151,6 +152,7 @@ _IMPLEMENTATION_SYMBOLS = (
     ),
     (convolution_transpose_layers, ("ConvTranspose", "ConvTranspose3d")),
     (layer_norm_cuda, ("_layer_norm_no_grad_cuda",)),
+    (group_norm_cuda, ("_group_norm_cuda",)),
     (depthwise, ("DepthwiseConv",)),
     (dropout_ops, ("dropout", "dropout2d", "droppath")),
     (dropout_layers, ("Dropout", "Dropout2d", "DropPath")),

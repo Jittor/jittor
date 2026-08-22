@@ -172,6 +172,9 @@ class GroupNorm(Module):
             "GroupNorm: num_channels (%s) must be divisible by num_groups (%s)"
             % (channels, self.num_groups)
         )
+        fast = jt.nn._group_norm_cuda(x, self.num_groups, self.weight, self.bias, self.eps)
+        if fast is not None:
+            return fast
         grouped = x.reshape((batch, self.num_groups, channels // self.num_groups, -1))
         xhat = jt.nn._ln_normalize(grouped, [2, 3], self.eps).reshape(x.shape)
         if not self.affine:
