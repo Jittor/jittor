@@ -2,7 +2,7 @@
 
 - Status: Current index, not a history log
 - Last reviewed: 2026-08-22
-- Baseline reviewed: `137f9dd1`
+- Baseline reviewed: `866914d4`
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -73,9 +73,13 @@ and CPU-to-accelerator parity. See [test system](../../docs/testing/test-system.
 The complete CPU repository gate is
 [`tools/run_test_suite.py`](../../tools/run_test_suite.py), which owns separate
 native and Torch-mode processes, JIT caches, temporary directories, and process
-mode variables. Its 2026-08-22 baseline passes both sessions; accelerator and
-external-oracle validation remain separate real-device gates. See the
-[complete CPU suite report](../results/2026-08-22-complete-cpu-test-suite.md).
+mode variables. Its 2026-08-22 baseline passes both sessions. The maintained
+CUDA gate also passes on a real RTX 4090 and covers the complete CUDA backend
+directory, dtype coverage, CPU/CUDA device parity, TF32 controls, and strict
+OpInfo CUDA references. NPU, ROCm, optional dependencies, and the independent
+external oracle remain separate gates. See the
+[complete CPU suite report](../results/2026-08-22-complete-cpu-test-suite.md) and
+[complete CUDA suite report](../results/2026-08-22-cuda-test-suite.md).
 Performance work uses ASV, isolated caches, synchronized measurements, and exact
 commit labels. See [benchmarking](../../docs/performance/benchmarking.md).
 

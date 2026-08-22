@@ -1,8 +1,8 @@
 # Test System
 
 - Status: Accepted
-- Last reviewed: 2026-08-21
-- Baseline: `a40b775b`
+- Last reviewed: 2026-08-22
+- Baseline: `866914d4`
 - Owner: test infrastructure maintainers
 - Review when: collection roots, process-mode ownership, markers, OpInfo
   contracts, or backend gates change
@@ -55,9 +55,12 @@ contain nontrivial comparison or device logic.
 
 Torch compatibility installation is process-global and changes public methods,
 dtype promotion, reduction defaults, and lazy execution. Native and Torch-facing
-tests therefore run in separate pytest processes. `tests/conftest.py` owns the
-`TORCH_MODE_PATHS` list, ignores those paths during a broad native collection,
-and activates Torch mode when one of them is selected explicitly.
+tests therefore run in separate pytest processes.
+`tests/_helpers/process_modes.py` owns the `TORCH_MODE_PATHS` list;
+`tests/conftest.py` applies it by ignoring those paths during a broad native
+collection and activating Torch mode when one of them is selected explicitly.
+The shared OpInfo and device-parity suites use Torch-facing signatures and
+therefore belong to the Torch process.
 
 `tools/run_test_suite.py` is the complete-suite entry point. It runs native and
 Torch sessions with separate state, caches, and mode variables, then reports a
@@ -168,6 +171,11 @@ python -m nox -s mpi
 The nox sessions create isolated state and caches. Direct concurrent runs must
 also use distinct `JITTOR_HOME` or `cache_name` values. The first build of a new
 JIT operation or extension should run serially.
+
+The maintained CUDA session runs the complete CUDA backend directory, dtype
+coverage, CPU/CUDA device parity, Torch TF32 controls, and the strict CUDA
+OpInfo suite. Its accepted real-device baseline is recorded in the
+[complete CUDA suite report](../../agent/results/2026-08-22-cuda-test-suite.md).
 
 ## Adding coverage
 

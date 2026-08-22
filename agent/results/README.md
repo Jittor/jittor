@@ -6,6 +6,7 @@
 
 ## 兼容性与功能验证
 
+- [2026-08-22 完整 CUDA 后端、dtype、设备对拍与 OpInfo 门禁](2026-08-22-cuda-test-suite.md)
 - [2026-08-22 完整 CPU native/Torch 双会话验证](2026-08-22-complete-cpu-test-suite.md)
 - [2026-08-21 分布采样与独立 PyTorch oracle 测试收口](2026-08-21-distribution-oracle-tests.md)
 - [2026-08-21 原生与 Torch 类型系统测试隔离](2026-08-21-test-mode-type-system.md)
