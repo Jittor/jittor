@@ -10355,7 +10355,7 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         bf = int(_np_td.prod([int(b.shape[i]) for i in b_free])) if b_free else 1
         out = jt.matmul(a.permute(a_free + adims).reshape((af, cs)), b.permute(bdims + b_free).reshape((cs, bf)))
         fin = [int(a.shape[i]) for i in a_free] + [int(b.shape[i]) for i in b_free]
-        return out.reshape(fin) if fin else out.reshape((1,))   # full contraction -> scalar (jittor (1,))
+        return out.reshape(fin)
     _alias("tensordot", _tensordot)
     def _pdist(input, p=2.0):
         N = int(input.shape[0])

@@ -37,7 +37,9 @@ class SparseVar:
         
     def to_dense(self):
         ret = jt.zeros(self.shape,self.values.dtype)
-        indices  = tuple(self.indices.split(1,dim=0))
+        indices = tuple(
+            index.reshape((-1,)) for index in self.indices.split(1, dim=0)
+        )
         ret[indices]=self.values
         return ret
 
@@ -51,4 +53,3 @@ def spmm(spase_x,y):
     # TODO
     x = spase_x.to_dense()
     return jt.matmul(x,y)
-    

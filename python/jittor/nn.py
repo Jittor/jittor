@@ -4786,13 +4786,13 @@ def _real2_to_complex64_raw(x):
     assert x.shape[-1] == 2, f"view_as_complex expects last dim 2, got shape {x.shape}"
     reinterpret_view = getattr(jt, "reinterpret_view", None)
     if reinterpret_view is not None:
-        return reinterpret_view(x, list(x.shape[:-1]) or [1], "complex64")
+        return reinterpret_view(x, list(x.shape[:-1]), "complex64")
     # real[..., 2] -> native complex64. Use one code kernel instead of two getitem ops
     # plus mixed complex arithmetic; this is the hot path for RoPE view_as_complex.
     n = 1
     for s in x.shape[:-1]:
         n *= s
-    out_shape = list(x.shape[:-1]) or [1]
+    out_shape = list(x.shape[:-1])
     flat = jt.code([n], "complex64", [x.reshape([n, 2])],
         cpu_src="""
         for (int i=0; i<in0_shape0; i++) {

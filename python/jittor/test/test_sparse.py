@@ -24,6 +24,20 @@ except:
     tnn = None
     skip_this_test = True
 
+
+class TestSparseCore(unittest.TestCase):
+    def test_sparse_values_gradient_shape(self):
+        indices = jt.array([[0, 1, 2], [0, 1, 0]], dtype="int32")
+        values = jt.array([1.0, 2.0, 3.0], dtype="float32")
+        sparse = jt.sparse.sparse_array(indices, values, jt.NanoVector([3, 2]))
+        rhs = jt.array([[2.0], [5.0]], dtype="float32")
+
+        loss = (sparse.to_dense() @ rhs).sum()
+        gradient = jt.grad(loss, values)
+
+        self.assertEqual(gradient.shape, values.shape)
+        np.testing.assert_allclose(gradient.numpy(), [2.0, 5.0, 2.0])
+
 @unittest.skipIf(skip_this_test, "No Torch found")
 class TestSparse(unittest.TestCase):
     def test_sparse_var(self):

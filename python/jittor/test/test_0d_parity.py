@@ -22,6 +22,7 @@ class Test0DParity(unittest.TestCase):
         x = jt.array([1.0, 2.0, 3.0])
         self.assertEqual(x.sum().shape, [])
         self.assertEqual(x[0].shape, [])
+        self.assertEqual(jt.tensordot(x, x, dims=1).shape, [])
         self.assertEqual(jt.array(1.0).reshape([]).shape, [])
         self.assertEqual(jt.array(1.0).transpose().shape, [])
 
@@ -31,6 +32,23 @@ class Test0DParity(unittest.TestCase):
             len(x)
         with self.assertRaises(TypeError):
             iter(x)
+
+    def test_complex_scalar_backward(self):
+        x = jt.array(np.array([1.0 + 2.0j, 3.0 + 4.0j], dtype=np.complex64))
+        loss = jt.real(x.sum())
+        gradient = jt.grad(loss, x)
+        self.assertEqual(loss.shape, [])
+        np.testing.assert_allclose(
+            gradient.numpy(), np.ones(2, dtype=np.complex64)
+        )
+
+    def test_scalar_power_backward(self):
+        x = jt.array(np.float32(2.0))
+        loss = x**3
+        gradient = jt.grad(loss, x)
+        self.assertEqual(loss.shape, [])
+        self.assertEqual(gradient.shape, [])
+        self.assertEqual(gradient.item(), 12.0)
 
     def test_pickle_roundtrip(self):
         x = jt.array(np.float32(3.0))
