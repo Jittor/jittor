@@ -2,7 +2,7 @@
 
 - Status: Current index, not a history log
 - Last reviewed: 2026-08-22
-- Baseline reviewed: `866914d4`
+- Baseline reviewed: `0a3458b3`
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -76,10 +76,14 @@ native and Torch-mode processes, JIT caches, temporary directories, and process
 mode variables. Its 2026-08-22 baseline passes both sessions. The maintained
 CUDA gate also passes on a real RTX 4090 and covers the complete CUDA backend
 directory, dtype coverage, CPU/CUDA device parity, TF32 controls, and strict
-OpInfo CUDA references. NPU, ROCm, optional dependencies, and the independent
-external oracle remain separate gates. See the
+OpInfo CUDA references. The maintained CPU gate also passes with a fail-closed
+independent binary PyTorch oracle, and compact ResNet18, ViT, GPT-2, and
+diffusion UNet forward/backward parity passes on CPU and CUDA. NPU, ROCm,
+optional downstream dependencies, full training, and performance remain
+separate gates. See the
 [complete CPU suite report](../results/2026-08-22-complete-cpu-test-suite.md) and
-[complete CUDA suite report](../results/2026-08-22-cuda-test-suite.md).
+[complete CUDA suite report](../results/2026-08-22-cuda-test-suite.md), plus the
+[parallel-range and network-oracle follow-up](../results/2026-08-22-cuda-parallel-range-network-oracle.md).
 Performance work uses ASV, isolated caches, synchronized measurements, and exact
 commit labels. See [benchmarking](../../docs/performance/benchmarking.md).
 

@@ -116,6 +116,8 @@ gate 前通过 `221 passed, 6 skipped, 12 warnings in 2617.53s`。
 
 - CUDA 仅对上述维护门禁范围 accepted，不代表每个可选依赖或下游项目均已安装。
 - NPU 和 ROCm 保持未验证环境结果，而非框架通过。
-- 可选外部依赖和独立二进制 PyTorch oracle 仍是单独 todo 项。
+- 独立二进制 PyTorch oracle 已在后续
+  [parallel-range 与网络验证](2026-08-22-cuda-parallel-range-network-oracle.md)
+  中通过；可选下游依赖仍是单独 todo 项。
 - JIT 缓存和临时编译诊断位于 `$JITTOR_LAB_ROOT/_state/`，未向仓库添加 binary
   或 raw log。

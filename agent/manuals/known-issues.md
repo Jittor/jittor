@@ -2,7 +2,7 @@
 
 - Status: Maintained
 - Last reviewed: 2026-08-22
-- Baseline: `866914d4`
+- Baseline: `0a3458b3`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -226,11 +226,12 @@ framework defects.
   against 260 in the CPU-only one, with `fused_op.cc` at 4 in both and
   `executor.cc` at 16 against 15. An unconditional `LOGi` compiled into
   `Executor::run_sync` is captured in both.
-- What the affected tests really show: `tests/compiler/test_parallel_pass.py`
-  fails 3 cases in a CPU-only build and 8 in a CUDA one, and the CUDA set is
-  the same cases plus their CUDA class variants. The shared failures are
-  numerical -- `assert np.allclose(a.data*2, b)` on a reduce under the parallel
-  pass -- so they are a real defect to chase, unrelated to logging.
+- What the affected tests really showed: the numerical parallel-pass defect was
+  fixed for CPU in `137f9dd1`. A follow-up found that applying that CPU source
+  rewrite to CUDA double-accumulated launch bit boundaries and left large fused
+  outputs partially unwritten. `0a3458b3` limits the rewrite to `JIT_cpu`; the
+  complete CPU and CUDA gates and compact network parity now pass. See the
+  [parallel-range follow-up](../results/2026-08-22-cuda-parallel-range-network-oracle.md).
 - Lesson for the next probe: never use `.data` to force evaluation inside a
   `log_capture_scope`; call `jt.sync_all()` and keep a reference to the Var.
 
