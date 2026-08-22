@@ -36,7 +36,10 @@ void CubTestOp::jit_run() {
     for (uint i=0; i<args.size(); i++)
         v[i] = &args[i][0];
     ASSERT(cub_test_entry(v.size(), &v[0])==0);
-    output->ptr<T>()[0] = 123;
+    T result = 123;
+    auto status = cudaMemcpy(
+        output->ptr<T>(), &result, sizeof(result), cudaMemcpyHostToDevice);
+    ASSERT(status == cudaSuccess) << cudaGetErrorString(status);
 }
 #endif
 #endif // JIT

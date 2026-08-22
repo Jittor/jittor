@@ -205,6 +205,7 @@ def test_automatic_backend_markers_follow_device_sessions():
 def test_torch_semantic_core_suites_run_in_the_torch_process():
     module = _load_test_conftest()
     required = {
+        "tests/backends/parity/test_device_parity.py",
         "tests/core/test_regression.py",
         "tests/core/test_type_system.py",
     }

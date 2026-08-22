@@ -52,11 +52,10 @@ def _normalize_outputs(out):
     return [out]
 
 
-# Ops whose ACCELERATOR path has a known issue. Two kinds, handled honestly:
-#  * "skip"  -- an environment limitation, not a jittor kernel bug (cupy can't compile
-#               its CUDA linalg in this venv); skipped with the reason.
-#  * "xfail" -- a REAL jittor finding surfaced by this very test; expectedFailure keeps
-#               the suite green while staying visible and alerting if it gets fixed.
+# Ops whose accelerator path has a known issue. Compile failures cannot be run as
+# expected failures in this aggregate process: Jittor's asynchronous executor keeps
+# the failed op and rethrows it in the next test. Their strict xfail coverage lives in
+# tests/ops/test_ops.py; parity skips the same unsupported path with an explicit reason.
 _LINALG_OPS = ("det", "slogdet", "inv", "solve", "cholesky", "qr", "svd")
 
 
@@ -66,15 +65,26 @@ def _cuda_linalg_works():
     on a CUDA-toolkit/cupy mismatch that nvrtc compile can genuinely fail. A blanket
     ``cupy unavailable`` skip is dishonest when cupy DOES work (it hides ops that pass
     AND would mask a real future CPU/CUDA linalg divergence) -- so probe once and skip
-    only on a genuine failure, surfacing the real error as the reason."""
+    only on a genuine failure, surfacing the real error as the reason. Probe CuPy
+    directly: a failed Jittor async op would remain queued and poison the next test.
+    Materializing the result is required because ``jt.numpy_code`` is not executed by
+    a plain Var ``sync()`` on this path."""
     if _ACCEL != "cuda":
         return False, f"no CUDA accelerator (_ACCEL={_ACCEL})"
     try:
-        with jt.flag_scope(use_cuda=1):
-            a = np.eye(3, dtype="float32")[None] + 0.0
-            jt.linalg.det(jt.array(a, dtype="float32")).sync()
+        import cupy
+        from cupy.cuda.compiler import CompileException
+    except ImportError as e:  # pragma: no cover - depends on the hardware environment
+        return False, f"cupy CUDA linalg unavailable: ImportError: {str(e)[:120]}"
+    try:
+        # Match the maintained determinant samples. Smaller inputs stay on CuPy's
+        # C++11 reduction path and miss the CUB C++17 compile used by batched linalg.
+        eye = cupy.eye(3, dtype=cupy.float32)
+        for shape in ((2, 3, 3), (2, 2, 3, 3)):
+            a = cupy.broadcast_to(eye, shape).copy()
+            cupy.asnumpy(cupy.linalg.det(a))
         return True, ""
-    except Exception as e:  # pragma: no cover - only on a broken-cupy env
+    except (CompileException, RuntimeError) as e:  # pragma: no cover - environment-specific
         return False, f"cupy CUDA linalg unavailable: {type(e).__name__}: {str(e)[:120]}"
 
 
@@ -82,10 +92,12 @@ _KNOWN_DEVICE_ISSUES = {
     # FINDING: sub-32-bit integer reduce has no CUDA atomic overload (atomicAdd/Max/Min
     # for uint8/int8) -> fails to COMPILE on CUDA. int8/16 max/min were fixed (eb3c8bee)
     # but reduce-add and 8-bit are still broken.
-    "sum_int_reduce":  ("xfail", "FINDING: uint8/int8 reduce-add fails to compile on CUDA (no atomicAdd(uint8*))"),
-    "prod_int_reduce": ("xfail", "FINDING: uint8/int8 reduce-prod fails to compile on CUDA (no atomic overload)"),
-    "max_int_reduce":  ("xfail", "FINDING: uint8/int8 reduce-max missing CUDA atomic overload"),
-    "min_int_reduce":  ("xfail", "FINDING: uint8/int8 reduce-min missing CUDA atomic overload"),
+    "sum_int_reduce":  ("skip", "strict CUDA xfail in test_ops: uint8/int8 reduce-add has no atomicAdd overload"),
+    "prod_int_reduce": ("skip", "strict CUDA xfail in test_ops: uint8/int8 reduce-prod has no atomic overload"),
+    "max_int_reduce":  ("skip", "strict CUDA xfail in test_ops: uint8/int8 reduce-max has no atomic overload"),
+    "min_int_reduce":  ("skip", "strict CUDA xfail in test_ops: uint8/int8 reduce-min has no atomic overload"),
+    "all_bool_reduce": ("skip", "logical reduce has no CUDA/NPU atomic-bool path"),
+    "any_bool_reduce": ("skip", "logical reduce has no CUDA/NPU atomic-bool path"),
 }
 
 def _run(op, sample, use_cuda):

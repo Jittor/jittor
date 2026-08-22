@@ -9,245 +9,125 @@
  *     * Redistributions in binary form must reproduce the above copyright
  *       notice, this list of conditions and the following disclaimer in the
  *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of the NVIDIA CORPORATION nor the
- *       names of its contributors may be used to endorse or promote products
- *       derived from this software without specific prior written permission.
+ *     * Neither the name of the NVIDIA CORPORATION nor the names of its
+ *       contributors may be used to endorse or promote products derived from
+ *       this software without specific prior written permission.
  *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL NVIDIA CORPORATION BE LIABLE FOR ANY
- * DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
  ******************************************************************************/
 
-/******************************************************************************
- * Simple example of DeviceRadixSort::SortPairs().
- *
- * Sorts an array of float keys paired with a corresponding array of int values.
- *
- * To compile using the command line:
- *   nvcc -arch=sm_XX example_device_radix_sort.cu -I../.. -lcudart -O3
- *
- ******************************************************************************/
-
-// Ensure printing of CUDA runtime errors to console
-#define CUB_STDERR
-
-#include <stdio.h>
 #include <algorithm>
-#include <memory>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <vector>
 
-#include <cub/util_allocator.cuh>
 #include <cub/device/device_radix_sort.cuh>
 
-#include <test/test_util.h>
+struct CubTestPair {
+    float key;
+    int value;
 
-using namespace cub;
-
-
-//---------------------------------------------------------------------
-// Globals, constants and typedefs
-//---------------------------------------------------------------------
-
-bool                    g_verbose = false;  // Whether to display input/output to console
-
-
-//---------------------------------------------------------------------
-// Test generation
-//---------------------------------------------------------------------
-
-/**
- * Simple key-value pairing for floating point types.  Distinguishes
- * between positive and negative zero.
- */
-struct Pair
-{
-    float   key;
-    int     value;
-
-    bool operator<(const Pair &b) const
-    {
-        if (key < b.key)
-            return true;
-
-        if (key > b.key)
-            return false;
-
-        // Return true if key is negative zero and b.key is positive zero
-        unsigned int key_bits   = *reinterpret_cast<unsigned*>(const_cast<float*>(&key));
-        unsigned int b_key_bits = *reinterpret_cast<unsigned*>(const_cast<float*>(&b.key));
-        unsigned int HIGH_BIT   = 1u << 31;
-
-        return ((key_bits & HIGH_BIT) != 0) && ((b_key_bits & HIGH_BIT) == 0);
+    bool operator<(const CubTestPair& other) const {
+        return key < other.key;
     }
 };
 
-
-/**
- * Initialize key-value sorting problem.
- */
-void Initialize(
-    float           *h_keys,
-    int             *h_values,
-    float           *h_reference_keys,
-    int             *h_reference_values,
-    int             num_items)
-{
-    Pair *h_pairs = new Pair[num_items];
-
-    for (int i = 0; i < num_items; ++i)
-    {
-        RandomBits(h_keys[i]);
-        h_values[i] = i;
-        h_pairs[i].key    = h_keys[i];
-        h_pairs[i].value  = h_values[i];
-    }
-
-    if (g_verbose)
-    {
-        printf("Input keys:\n");
-        DisplayResults(h_keys, num_items);
-        printf("\n\n");
-
-        printf("Input values:\n");
-        DisplayResults(h_values, num_items);
-        printf("\n\n");
-    }
-
-    std::stable_sort(h_pairs, h_pairs + num_items);
-
-    for (int i = 0; i < num_items; ++i)
-    {
-        h_reference_keys[i]     = h_pairs[i].key;
-        h_reference_values[i]   = h_pairs[i].value;
-    }
-
-    if (g_verbose)
-    {
-        printf("std Output keys:\n");
-        DisplayResults(h_reference_keys, num_items);
-        printf("\n\n");
-
-        printf("std Output values:\n");
-        DisplayResults(h_reference_values, num_items);
-        printf("\n\n");
-    }
-    delete[] h_pairs;
-}
-
-
-//---------------------------------------------------------------------
-// Main
-//---------------------------------------------------------------------
-
-/**
- * Main
- */
-int cub_test_entry(int argc, char** argv)
-{
-    CachingDeviceAllocator  g_allocator(true);  // Caching allocator for device memory
-
+static int cub_test_entry(int argc, char** argv) {
     int num_items = 150;
-
-    // Initialize command line
-    CommandLineArgs args(argc, argv);
-    g_verbose = args.CheckCmdLineFlag("v");
-    args.GetCmdLineArgument("n", num_items);
-
-    // Print usage
-    if (args.CheckCmdLineFlag("help"))
-    {
-        printf("%s "
-            "[--n=<input items> "
-            "[--device=<device-id>] "
-            "[--v] "
-            "\n", argv[0]);
-        exit(0);
+    for (int i = 0; i < argc; ++i) {
+        if (std::strncmp(argv[i], "--n=", 4) == 0)
+            num_items = std::atoi(argv[i] + 4);
+    }
+    if (num_items <= 0) {
+        std::fprintf(stderr, "cub_test requires a positive item count\n");
+        return 1;
     }
 
-    // Initialize device
-    CubDebugExit(args.DeviceInit());
-
-    printf("cub::DeviceRadixSort::SortPairs() %d items (%d-byte keys %d-byte values)\n",
-        num_items, int(sizeof(float)), int(sizeof(int)));
-    fflush(stdout);
-
-    // Allocate host arrays
-    float   *h_keys             = new float[num_items];
-    float   *h_reference_keys   = new float[num_items];
-    int     *h_values           = new int[num_items];
-    int     *h_reference_values = new int[num_items];
-
-    // Initialize problem and solution on host
-    Initialize(h_keys, h_values, h_reference_keys, h_reference_values, num_items);
-
-    // Allocate device arrays
-    DoubleBuffer<float> d_keys;
-    DoubleBuffer<int>   d_values;
-    CubDebugExit(g_allocator.DeviceAllocate((void**)&d_keys.d_buffers[0], sizeof(float) * num_items));
-    CubDebugExit(g_allocator.DeviceAllocate((void**)&d_keys.d_buffers[1], sizeof(float) * num_items));
-    CubDebugExit(g_allocator.DeviceAllocate((void**)&d_values.d_buffers[0], sizeof(int) * num_items));
-    CubDebugExit(g_allocator.DeviceAllocate((void**)&d_values.d_buffers[1], sizeof(int) * num_items));
-
-    // Allocate temporary storage
-    size_t  temp_storage_bytes  = 0;
-    void    *d_temp_storage     = NULL;
-
-    CubDebugExit(DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, d_keys, d_values, num_items));
-    CubDebugExit(g_allocator.DeviceAllocate(&d_temp_storage, temp_storage_bytes));
-
-    // Initialize device arrays
-    CubDebugExit(cudaMemcpy(d_keys.d_buffers[d_keys.selector], h_keys, sizeof(float) * num_items, cudaMemcpyHostToDevice));
-    CubDebugExit(cudaMemcpy(d_values.d_buffers[d_values.selector], h_values, sizeof(int) * num_items, cudaMemcpyHostToDevice));
-
-    // Run
-    CubDebugExit(DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, d_keys, d_values, num_items));
-
-    // Check for correctness (and display results, if specified)
-    std::unique_ptr<float[]> d_keys_ptr(new float[num_items]);
-    std::unique_ptr<int[]> d_values_ptr(new int[num_items]);
-    std::unique_ptr<float[]> origin(new float[num_items]);
-    cudaMemcpy(d_keys_ptr.get(), d_keys.Current(), sizeof(float) * num_items, cudaMemcpyDeviceToHost);
-    cudaMemcpy(d_values_ptr.get(), d_values.Current(), sizeof(int) * num_items, cudaMemcpyDeviceToHost);
-    bool ok = true;
-    for (int i=0; i<num_items; i++) {
-        origin[h_reference_values[i]] = h_reference_keys[i];
+    std::vector<float> keys(num_items);
+    std::vector<int> values(num_items);
+    std::vector<CubTestPair> reference(num_items);
+    std::vector<float> actual_keys(num_items);
+    std::vector<int> actual_values(num_items);
+    for (int i = 0; i < num_items; ++i) {
+        // 37 is coprime with both maintained test sizes, so every key is unique.
+        keys[i] = static_cast<float>((static_cast<long long>(i) * 37) % num_items)
+            - static_cast<float>(num_items) / 2.0f;
+        values[i] = i;
+        reference[i] = {keys[i], values[i]};
     }
-    for (int i=0; i<num_items; i++) {
-        AssertEquals(h_reference_keys[i], d_keys_ptr[i]);
-        auto h = origin[h_reference_values[i]];
-        auto d = origin[d_values_ptr[i]];
-        if (h != d) {
-            printf("aa %d\n", h_reference_values[i]);
-            printf("aa %d\n", d_values_ptr[i]);
-            printf("bb %f %f %f\n", h, d, d_keys_ptr[i]);
-            ok = false;
+    std::stable_sort(reference.begin(), reference.end());
+
+    float* device_keys_in = nullptr;
+    float* device_keys_out = nullptr;
+    int* device_values_in = nullptr;
+    int* device_values_out = nullptr;
+    void* temp_storage = nullptr;
+    size_t temp_storage_bytes = 0;
+    int result = 0;
+
+#define CUB_TEST_CHECK(expression) do { \
+    cudaError_t status = (expression); \
+    if (status != cudaSuccess) { \
+        std::fprintf(stderr, "CUB test CUDA error at %s: %s\n", \
+            #expression, cudaGetErrorString(status)); \
+        result = 1; \
+        goto cleanup; \
+    } \
+} while (0)
+
+    CUB_TEST_CHECK(cudaMalloc(&device_keys_in, sizeof(float) * num_items));
+    CUB_TEST_CHECK(cudaMalloc(&device_keys_out, sizeof(float) * num_items));
+    CUB_TEST_CHECK(cudaMalloc(&device_values_in, sizeof(int) * num_items));
+    CUB_TEST_CHECK(cudaMalloc(&device_values_out, sizeof(int) * num_items));
+    CUB_TEST_CHECK(cudaMemcpy(
+        device_keys_in, keys.data(), sizeof(float) * num_items,
+        cudaMemcpyHostToDevice));
+    CUB_TEST_CHECK(cudaMemcpy(
+        device_values_in, values.data(), sizeof(int) * num_items,
+        cudaMemcpyHostToDevice));
+    CUB_TEST_CHECK(cub::DeviceRadixSort::SortPairs(
+        nullptr, temp_storage_bytes, device_keys_in, device_keys_out,
+        device_values_in, device_values_out, num_items));
+    CUB_TEST_CHECK(cudaMalloc(&temp_storage, temp_storage_bytes));
+    CUB_TEST_CHECK(cub::DeviceRadixSort::SortPairs(
+        temp_storage, temp_storage_bytes, device_keys_in, device_keys_out,
+        device_values_in, device_values_out, num_items));
+    CUB_TEST_CHECK(cudaMemcpy(
+        actual_keys.data(), device_keys_out, sizeof(float) * num_items,
+        cudaMemcpyDeviceToHost));
+    CUB_TEST_CHECK(cudaMemcpy(
+        actual_values.data(), device_values_out, sizeof(int) * num_items,
+        cudaMemcpyDeviceToHost));
+
+    for (int i = 0; i < num_items; ++i) {
+        if (actual_keys[i] != reference[i].key ||
+            actual_values[i] != reference[i].value) {
+            std::fprintf(stderr,
+                "CUB radix sort mismatch at %d: (%g, %d) != (%g, %d)\n",
+                i, actual_keys[i], actual_values[i],
+                reference[i].key, reference[i].value);
+            result = 1;
+            break;
         }
     }
-    if (!ok) exit(1);
 
-    // Cleanup
-    if (h_keys) delete[] h_keys;
-    if (h_reference_keys) delete[] h_reference_keys;
-    if (h_values) delete[] h_values;
-    if (h_reference_values) delete[] h_reference_values;
-
-    if (d_keys.d_buffers[0]) CubDebugExit(g_allocator.DeviceFree(d_keys.d_buffers[0]));
-    if (d_keys.d_buffers[1]) CubDebugExit(g_allocator.DeviceFree(d_keys.d_buffers[1]));
-    if (d_values.d_buffers[0]) CubDebugExit(g_allocator.DeviceFree(d_values.d_buffers[0]));
-    if (d_values.d_buffers[1]) CubDebugExit(g_allocator.DeviceFree(d_values.d_buffers[1]));
-    if (d_temp_storage) CubDebugExit(g_allocator.DeviceFree(d_temp_storage));
-
-    printf("\n\n");
-
-    return 0;
+cleanup:
+    if (temp_storage) cudaFree(temp_storage);
+    if (device_values_out) cudaFree(device_values_out);
+    if (device_values_in) cudaFree(device_values_in);
+    if (device_keys_out) cudaFree(device_keys_out);
+    if (device_keys_in) cudaFree(device_keys_in);
+#undef CUB_TEST_CHECK
+    return result;
 }
-
-
-

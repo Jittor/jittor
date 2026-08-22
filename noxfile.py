@@ -173,7 +173,9 @@ CPU_TORCH_ORACLE_TESTS = (
     "tests/nn/test_relu.py",
 )
 CUDA_TESTS = (
-    "tests/backends/cuda/test_cuda.py",
+    "tests/backends/cuda",
+    "tests/backends/parity/test_dtype_coverage.py",
+    "tests/backends/parity/test_device_parity.py",
     "tests/compat/torch/test_torch_compat_cuda_tf32.py",
     "tests/ops/test_ops.py",
 )

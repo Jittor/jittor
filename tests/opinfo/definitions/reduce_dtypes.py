@@ -213,13 +213,16 @@ def sample_bool_any(op_info, device, dtype, requires_grad):
 # gradcheck. dtypes=cu.integral_types() makes the test_ops dtype sweep cover every
 # integer width, and the sample builders additionally pin all of them for parity.
 
-# FINDING #10 (the same gap test_device_parity pins as xfail): sub-32-bit integer
+# FINDING #10 (the same gap test_device_parity skips in its aggregate process):
+# sub-32-bit integer
 # reduce has no CUDA atomic overload (no atomicAdd/Max/Min/multiply for uint8 in
 # cuda_atomic.h), so the uint8 variant the sample builders pin FAILS TO COMPILE on
 # CUDA. Marked expectedFailure on cuda/npu so test_ops stays green-and-honest on an
-# accelerator build (CPU runs all widths for real) while the finding stays LOUD --
-# it XPASS-alerts the moment the missing atomic overloads are added. (CPU is correct;
-# this is a real pre-existing jittor kernel gap, not a test defect.)
+# accelerator build (CPU runs all widths for real) while the focused OpInfo finding
+# stays LOUD -- it XPASS-alerts the moment the missing atomic overloads are added.
+# The aggregate parity process cannot execute this expected compile failure because
+# Jittor's asynchronous executor would rethrow it in the following test. (CPU is
+# correct; this is a real pre-existing jittor kernel gap, not a test defect.)
 _CUDA_INT_REDUCE_XFAIL = (
     xfail("test_reference", device_type="cuda",
           reason="FINDING #10: uint8/int8 reduce has no CUDA atomic overload "
