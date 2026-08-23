@@ -16,13 +16,17 @@ import os
 os.environ.setdefault('HF_HUB_OFFLINE', '1'); os.environ.setdefault('TRANSFORMERS_OFFLINE', '1')
 import unittest, tempfile, numpy as np
 
+_REQUIRE_OPTIONAL_DEPS = os.environ.get("JITTOR_REQUIRE_OPTIONAL_DEPS") == "1"
+
 try:
     import torch  # torch_shim -> jittor
     import jittor as jt
     import jittor.nn as nn
     from peft import LoraConfig, get_peft_model, PeftModel
-    _HAS = (getattr(torch, '__name__', '') == 'torch') and hasattr(torch, 'tensor')
+    _HAS = torch is jt and hasattr(torch, 'tensor')
 except Exception:
+    if _REQUIRE_OPTIONAL_DEPS:
+        raise
     _HAS = False
 
 
