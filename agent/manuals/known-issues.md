@@ -52,19 +52,6 @@ framework defects.
 - Review/expiry condition: every affected dtype executes and matches the CPU
   reference on a real NPU, turning the strict expected failures into passes
 
-## KI-DTYPE-001: low-precision elementwise gradients upcast
-
-- Severity: Medium
-- Status: Strict CUDA expected failure
-- Owner: dtype/autograd maintainers
-- Evidence: [`test_elementwise_grad_dtype_KNOWN_DIVERGENCE`](../../tests/backends/cuda/test_low_precision.py)
-- Symptom: float16/bfloat16 elementwise backward can return float32 gradients,
-  unlike the input-dtype gradient contract
-- Workaround: consumers must not assume low-precision gradient dtype until the
-  path is corrected
-- Review/expiry condition: strict expected failure XPASSes for supported low
-  precision dtypes without weakening numerical checks
-
 ## KI-OPS-002: integer floor-division backend verification incomplete
 
 - Severity: Critical

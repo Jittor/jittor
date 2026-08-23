@@ -535,8 +535,13 @@ VarPtr BinaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     }
     if (ns == ns_multiply) {
         Var* other = (v_index == 0) ? y : x;
-        if (!z->dtype().is_complex())
-            return make_binary(dirty_clone_broadcast(other), dirty_clone_broadcast(dout), ns_multiply);
+        if (!z->dtype().is_complex()) {
+            auto grad = make_binary(
+                dirty_clone_broadcast(other), dirty_clone_broadcast(dout), ns_multiply);
+            if (grad->dtype() != v->dtype())
+                grad = make_unary(grad, v->dtype());
+            return grad;
+        }
         // complex (verified vs real torch 2.12): grad_a = dout*conj(b), grad_b = dout*conj(a)
         auto co = make_unary(dirty_clone_broadcast(other), ns_conj);
         return make_binary(co, dirty_clone_broadcast(dout), ns_multiply);

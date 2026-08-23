@@ -15,6 +15,8 @@ static auto make_ternary = get_op_info("ternary")
     .get_constructor<VarPtr, Var*, Var*, Var*>();
 static auto make_broadcast = get_op_info("broadcast_to")
     .get_constructor<VarPtr, Var*, Var*, NanoVector>();
+static auto make_unary = get_op_info("unary")
+    .get_constructor<VarPtr, Var*, NanoString>();
 static auto make_number = get_op_info("number")
     .get_constructor<VarPtr, float, Var*>();
 
@@ -48,11 +50,14 @@ TernaryOp::TernaryOp(Var* cond, Var* x, Var* y) : cond(cond), x(x), y(y) {
 
 VarPtr TernaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     if (v_index==0) return nullptr;
-    auto zeros = make_number(0, dout);
+    VarPtr grad = dout;
+    if (grad->dtype() != v->dtype())
+        grad = make_unary(grad, v->dtype());
+    auto zeros = make_number(0, v);
     if (v_index==1)
-        return make_ternary(cond, dout, zeros);
+        return make_ternary(cond, grad, zeros);
     else
-        return make_ternary(cond, zeros, dout);
+        return make_ternary(cond, zeros, grad);
 }
 
 void TernaryOp::infer_shape() {

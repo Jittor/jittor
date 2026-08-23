@@ -60,20 +60,19 @@ class TestLowPrecisionGradDtype(JittorTestCase):
             self.assertEqual(gd, dtype,
                              msg=f"{dtype} matmul grad dtype must match input (got {gd})")
 
-    @unittest.expectedFailure
-    def test_elementwise_grad_dtype_KNOWN_DIVERGENCE(self):
-        # FOUND BY THIS SUITE (2026-06-26): jittor's ELEMENTWISE backward upcasts the
-        # gradient to float32 for fp16/bf16 inputs (forward dtype is correct). torch
-        # keeps the low-precision gradient. This breaks `param.grad.dtype ==
-        # param.dtype` assumptions in mixed-precision training. Marked expectedFailure
-        # to keep the suite green while the divergence stays VISIBLE; flip to a hard
-        # assertion once jittor's elementwise backward preserves the dtype.
+    def test_elementwise_grad_dtype(self):
+        # Elementwise backward preserves the input dtype, including scalar multiply
+        # where the upstream reduction gradient is commonly float32.
         for dtype in ("float16", "bfloat16"):
             if not _supports(dtype):
                 self.skipTest(f"{dtype} unsupported")
-            od, gd = self._grad_dtype(dtype, lambda x: jt.nn.relu(x) * 2)
-            self.assertEqual(gd, dtype,
-                             msg=f"{dtype} elementwise grad dtype should match input (got {gd})")
+            for name, build in (("relu", lambda x: jt.nn.relu(x)),
+                                ("relu_mul", lambda x: jt.nn.relu(x) * 2),
+                                ("mul", lambda x: x * 2)):
+                od, gd = self._grad_dtype(dtype, build)
+                self.assertEqual(od, dtype, msg=f"{dtype} {name} output dtype")
+                self.assertEqual(gd, dtype,
+                                 msg=f"{dtype} {name} grad dtype should match input (got {gd})")
 
 
 if __name__ == "__main__":
