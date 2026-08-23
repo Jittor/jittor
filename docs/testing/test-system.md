@@ -182,7 +182,10 @@ The `optional` session is a fail-closed, offline CUDA gate for pre-provisioned
 TorchMetrics, mmcv-lite/MMEngine, PEFT, Safetensors, TensorDict, and the deployed
 FlashAttention adapter. It probes every package before pytest, enables the
 Jittor Torch shim explicitly, and treats PEFT import failures as errors instead
-of optional skips.
+of optional skips. When `JITTOR_FLASH_ATTN_JITTOR_SRC` names an official
+FlashAttention checkout, the session also sets the native backend to required
+and runs fp16, GQA, and float32 opt-in fused CUDA tests; fallback cannot satisfy
+those tests.
 
 ## Adding coverage
 

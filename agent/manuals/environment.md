@@ -112,6 +112,15 @@ export JITTOR_CI_PYTHON="${JITTOR_CI_PYTHON:-$(command -v python)}"
 python -m nox -s optional
 ```
 
+To extend the same gate to the native fused FlashAttention backend, point the
+session at an official source checkout. This mode sets the backend to required,
+so a build or load failure cannot fall back to math attention.
+
+```bash
+export JITTOR_FLASH_ATTN_JITTOR_SRC=/path/to/flash-attention
+python -m nox -s optional
+```
+
 ### Ascend NPU
 
 The NPU session requires `CANN_SET_ENV` to name the vendor `set_env.sh`, plus a

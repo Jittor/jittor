@@ -196,6 +196,11 @@ OPTIONAL_COMPAT_TESTS = (
     "tests/compat/torch/test_tensordict_compat.py",
     "tests/compat/torch/test_flash_attn_compat.py",
 )
+OPTIONAL_NATIVE_FLASH_TESTS = (
+    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_fp16_cuda",
+    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_gqa_fp16_cuda",
+    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_float32_opt_in_cast_cuda",
+)
 NPU_TESTS = (
     "tests/backends/npu/test_acl.py",
     "tests/backends/npu/test_aclop.py",
@@ -1169,12 +1174,23 @@ def optional(session):
     nvcc = os.environ.get("nvcc_path") or shutil.which("nvcc")
     if not nvcc:
         session.error("optional session requires nvcc_path or nvcc on PATH")
+    flash_source = os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC", "").strip()
+    if flash_source:
+        flash_root = Path(flash_source).expanduser().resolve()
+        flash_api = flash_root / "csrc" / "flash_attn" / "flash_api.cpp"
+        if not flash_api.is_file():
+            session.error(
+                "JITTOR_FLASH_ATTN_JITTOR_SRC is not an official flash-attn checkout"
+            )
+        flash_source = os.fspath(flash_root)
     env.update(
         {
             "HF_HUB_OFFLINE": "1",
             "JITTOR_REQUIRE_OPTIONAL_DEPS": "1",
             "JITTOR_TEST_DEVICES": "cuda",
             "JITTOR_TORCH_SHIM": "1",
+            "JITTOR_FLASH_ATTN_JITTOR_REQUIRED": "1" if flash_source else "0",
+            "JITTOR_FLASH_ATTN_JITTOR_SRC": flash_source,
             "TRANSFORMERS_OFFLINE": "1",
             "nvcc_path": nvcc,
             "use_cuda": "1",
@@ -1191,7 +1207,10 @@ def optional(session):
     session.run("nvidia-smi", external=True, env=env)
     session.run(nvcc, "--version", external=True, env=env)
     session.run(python, "-c", dependency_probe, external=True, env=env)
-    _run_pytest(session, OPTIONAL_COMPAT_TESTS, env, runner=python)
+    tests = OPTIONAL_COMPAT_TESTS
+    if flash_source:
+        tests += OPTIONAL_NATIVE_FLASH_TESTS
+    _run_pytest(session, tests, env, runner=python)
 
 
 @nox.session(python=False)
