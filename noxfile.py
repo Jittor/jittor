@@ -180,6 +180,18 @@ CUDA_TESTS = (
     "tests/compat/torch/test_torch_compat_cuda_tf32.py",
     "tests/ops/test_ops.py",
 )
+OPTIONAL_COMPAT_PACKAGES = (
+    "torchmetrics",
+    "mmcv",
+    "mmengine",
+    "peft",
+    "safetensors",
+)
+OPTIONAL_COMPAT_TESTS = (
+    "tests/compat/torch/test_torchmetrics_compat.py",
+    "tests/compat/torch/test_mmcv_compat.py",
+    "tests/compat/torch/test_peft.py",
+)
 NPU_TESTS = (
     "tests/backends/npu/test_acl.py",
     "tests/backends/npu/test_aclop.py",
@@ -1143,6 +1155,39 @@ def cpu(session):
     elif require_real_torch:
         session.error("independent PyTorch oracle is required but unavailable")
     _run_pytest(session, CPU_TORCH_ORACLE_TESTS, oracle_env)
+
+
+@nox.session(python=False)
+def optional(session):
+    """Run fail-closed optional compatibility gates on real CUDA."""
+    _root, env = _session_env(session, "optional")
+    python = _hardware_python()
+    nvcc = os.environ.get("nvcc_path") or shutil.which("nvcc")
+    if not nvcc:
+        session.error("optional session requires nvcc_path or nvcc on PATH")
+    env.update(
+        {
+            "HF_HUB_OFFLINE": "1",
+            "JITTOR_REQUIRE_OPTIONAL_DEPS": "1",
+            "JITTOR_TEST_DEVICES": "cuda",
+            "JITTOR_TORCH_SHIM": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+            "nvcc_path": nvcc,
+            "use_cuda": "1",
+        }
+    )
+    packages = repr(OPTIONAL_COMPAT_PACKAGES)
+    dependency_probe = (
+        "import importlib.util; "
+        "required=" + packages + "; "
+        "missing=[name for name in required if importlib.util.find_spec(name) is None]; "
+        "assert not missing, 'missing optional dependencies: ' + ', '.join(missing); "
+        "print('optional compatibility dependencies OK')"
+    )
+    session.run("nvidia-smi", external=True, env=env)
+    session.run(nvcc, "--version", external=True, env=env)
+    session.run(python, "-c", dependency_probe, external=True, env=env)
+    _run_pytest(session, OPTIONAL_COMPAT_TESTS, env, runner=python)
 
 
 @nox.session(python=False)

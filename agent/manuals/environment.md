@@ -99,6 +99,19 @@ export JITTOR_CI_PYTHON="${JITTOR_CI_PYTHON:-$(command -v python)}"
 python -m nox -s cuda
 ```
 
+### Optional compatibility packages
+
+The optional compatibility session uses the same pre-provisioned CUDA Python
+environment and requires TorchMetrics, mmcv-lite, MMEngine, PEFT, and
+Safetensors. It runs offline and fails before pytest when a required package is
+not discoverable.
+
+```bash
+export nvcc_path="$(command -v nvcc)"
+export JITTOR_CI_PYTHON="${JITTOR_CI_PYTHON:-$(command -v python)}"
+python -m nox -s optional
+```
+
 ### Ascend NPU
 
 The NPU session requires `CANN_SET_ENV` to name the vendor `set_env.sh`, plus a

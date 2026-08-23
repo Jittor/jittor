@@ -162,6 +162,7 @@ python -m pytest -m structure tests/structure
 # Reproducible gates
 python -m nox -s structure
 python -m nox -s cpu
+python -m nox -s optional
 python -m nox -s cuda
 python -m nox -s npu
 python -m nox -s rocm
@@ -176,6 +177,11 @@ The maintained CUDA session runs the complete CUDA backend directory, dtype
 coverage, CPU/CUDA device parity, Torch TF32 controls, and the strict CUDA
 OpInfo suite. Its accepted real-device baseline is recorded in the
 [complete CUDA suite report](../../agent/results/2026-08-22-cuda-test-suite.md).
+
+The `optional` session is a fail-closed, offline CUDA gate for pre-provisioned
+TorchMetrics, mmcv-lite/MMEngine, PEFT, and Safetensors environments. It probes
+every package before pytest, enables the Jittor Torch shim explicitly, and treats
+PEFT import failures as errors instead of optional skips.
 
 ## Adding coverage
 
