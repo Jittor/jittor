@@ -25,9 +25,11 @@ def check_reduce(shape, op, dim, keepdims, is_cuda = False):
     ) as raw_log:
         x = jt.random(shape)
         key, v = jt.arg_reduce(x, op, dim, keepdims)
-        x_ = x.data
-        key_ = key.data
-        v_ = v.data
+        # ``Var.data`` may share runtime storage; later output synchronization can
+        # overwrite that view. Capture independent oracle snapshots immediately.
+        x_ = np.array(x.data, copy=True)
+        key_ = np.array(key.data, copy=True)
+        v_ = np.array(v.data, copy=True)
     if (is_cuda):
         logs = find_log_with_re(raw_log, "(Jit op key (not )?found: " + "cub_arg_reduce" + ".*)")
         assert len(logs)==1
