@@ -160,6 +160,9 @@ ArrayOp::ArrayOp(PyObject* obj) {
     }
     void* host_ptr = nullptr;
     #ifdef HAS_CUDA
+    // Fused scalar values are emitted inside generated kernels on both backends.
+    if (use_cuda && output->flags.get(NodeFlags::_force_fuse))
+        flags.set(NodeFlags::_cuda, 1);
     if (use_cuda && !save_mem && !use_cuda_host_allocator) {
         flags.set(NodeFlags::_cpu, 0);
         flags.set(NodeFlags::_cuda, 1);

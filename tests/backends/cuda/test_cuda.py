@@ -93,6 +93,15 @@ class TestCuda(unittest.TestCase):
         assert a.shape == [3,4,5] and str(a.dtype) == "float32"
         assert (-na.flatten() == range(3*4*5)).all(), na
 
+    @jt.flag_scope(use_cuda=2)
+    def test_forced_cuda_fused_scalar_array(self):
+        value = np.array([0.25, 0.5, 0.75], dtype="float32")
+        a = jt.array(value)
+        out = (a.exp() + 1).numpy()
+        grad = jt.grad(jt.abs(a), a).numpy()
+        np.testing.assert_allclose(out, np.exp(value) + 1, rtol=1e-6, atol=1e-6)
+        np.testing.assert_array_equal(grad, np.ones_like(value))
+
     def test_cuda_fused_op(self):
         a = jt.array([1,2,3])
         a.sync()
