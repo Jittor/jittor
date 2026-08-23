@@ -34,7 +34,18 @@ def scaled_dot_product_attention(
     source_length = int(key.shape[-2])
     scale_factor = 1.0 / math.sqrt(int(query.shape[-1])) if scale is None else scale
     scores = jt.nn.matmul(query, key.transpose(-2, -1)) * scale_factor
-    negative = jt.array(-1e30).cast(scores.dtype)
+    from jittor.nn.backends import softmax_cuda
+
+    cuda_mask_softmax = (
+        softmax_cuda.can_softmax_v1(scores, -1) and jt.compiler.is_cuda
+    )
+    zero_fully_masked = cuda_mask_softmax and attn_mask is not None
+    skip_row_valid = cuda_mask_softmax and (
+        is_causal or attn_mask is not None
+    )
+    negative = jt.array(float("-inf") if zero_fully_masked else -1e30).cast(
+        scores.dtype
+    )
     valid_positions = None
 
     if is_causal:
@@ -47,28 +58,45 @@ def scaled_dot_product_attention(
             negative.broadcast(scores.shape),
             scores,
         )
-        valid_positions = jt.logical_not(causal)
+        if not skip_row_valid:
+            valid_positions = jt.logical_not(causal)
 
     if attn_mask is not None:
         if str(attn_mask.dtype) == "bool":
-            valid_positions = attn_mask if valid_positions is None else valid_positions & attn_mask
+            if not skip_row_valid:
+                valid_positions = (
+                    attn_mask
+                    if valid_positions is None
+                    else valid_positions & attn_mask
+                )
             scores = jt.ternary(
                 attn_mask,
                 scores,
                 negative.broadcast(scores.shape),
             )
         else:
-            negative_infinity = jt.isinf(attn_mask) & (attn_mask < 0)
-            finite_positions = jt.logical_not(negative_infinity)
-            valid_positions = (
-                finite_positions if valid_positions is None else valid_positions & finite_positions
-            )
+            if not skip_row_valid:
+                negative_infinity = jt.isinf(attn_mask) & (attn_mask < 0)
+                finite_positions = jt.logical_not(negative_infinity)
+                valid_positions = (
+                    finite_positions
+                    if valid_positions is None
+                    else valid_positions & finite_positions
+                )
             scores = scores + attn_mask
 
-    row_valid = valid_positions.sum(-1, keepdims=True) > 0 if valid_positions is not None else None
+    row_valid = (
+        valid_positions.sum(-1, keepdims=True) > 0
+        if valid_positions is not None
+        else None
+    )
     if row_valid is not None:
         scores = jt.ternary(row_valid, scores, jt.zeros_like(scores))
-    weights = jt.nn.softmax(scores, dim=-1)
+    weights = (
+        softmax_cuda.softmax_v1(scores, zero_all_neg_inf=True)
+        if zero_fully_masked
+        else jt.nn.softmax(scores, dim=-1)
+    )
     if row_valid is not None:
         weights = jt.ternary(row_valid, weights, jt.zeros_like(weights))
     if probability > 0.0:

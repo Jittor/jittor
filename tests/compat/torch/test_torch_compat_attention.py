@@ -968,6 +968,36 @@ assert after == before + 1, (before, after)
         both_devices(body)
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_sdpa_cuda_routes_masked_rows_through_safe_softmax(self):
+        from jittor.nn.backends import softmax_cuda
+
+        calls = []
+        original = softmax_cuda.softmax_v1
+
+        def traced(value, log=False, zero_all_neg_inf=False):
+            calls.append(bool(zero_all_neg_inf))
+            return original(value, log, zero_all_neg_inf)
+
+        q = jt.ones((1, 2, 4, 8), dtype="float32")
+        keep = jt.ones((4, 4), dtype="bool")
+        keep[2, :] = False
+        with jt.flag_scope(use_cuda=1), mock.patch.object(
+                softmax_cuda, "softmax_v1", side_effect=traced):
+            masked = torch.nn.functional.scaled_dot_product_attention(
+                q, q, q, attn_mask=keep)
+            masked.sync()
+            self.assertEqual(calls, [True])
+
+            calls.clear()
+            causal = torch.nn.functional.scaled_dot_product_attention(
+                q, q, q, is_causal=True)
+            causal.sync()
+            self.assertEqual(calls, [False])
+
+        self.assertTrue(np.isfinite(masked.numpy()).all())
+        self.assertTrue(np.isfinite(causal.numpy()).all())
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
     def test_sdpa_native_flash_attn_fp16_cuda(self):
