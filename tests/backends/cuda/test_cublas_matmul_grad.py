@@ -74,6 +74,27 @@ class TestCublasMatmulGrad(unittest.TestCase):
         np.testing.assert_allclose(got_db, flat_go.sum(axis=0),
                                    atol=2e-5, rtol=2e-5)
 
+    def test_float64_2d_and_batched_precision(self):
+        expected = np.array([[100000001.0]], dtype=np.float64)
+        with jt.flag_scope(use_cuda=1):
+            a = jt.array([[1e8, 1.0]]).float64()
+            b = jt.array([[1.0], [1.0]]).float64()
+            out_2d = nn.matmul(a, b)
+            out_batched = nn.matmul(a.reshape((1, 1, 2)), b.reshape((1, 2, 1)))
+            out_acc = jt.compile_extern.cublas_ops.cublas_acc_matmul(
+                a, b, 0, 0, -1, -1, 0, 0
+            )
+            got_2d, got_batched, got_acc = jt.fetch_sync(
+                [out_2d, out_batched, out_acc]
+            )
+
+        self.assertEqual(got_2d.dtype, np.float64)
+        self.assertEqual(got_batched.dtype, np.float64)
+        self.assertEqual(got_acc.dtype, np.float64)
+        np.testing.assert_array_equal(got_2d, expected)
+        np.testing.assert_array_equal(got_batched, expected.reshape((1, 1, 1)))
+        np.testing.assert_array_equal(got_acc, expected)
+
 
 if __name__ == "__main__":
     unittest.main()

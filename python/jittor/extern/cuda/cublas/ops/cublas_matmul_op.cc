@@ -104,15 +104,17 @@ void CublasMatmulOp::jit_run() {
         || b->dtype() == ns_float16 || c->dtype() == ns_float16;
     bool has_bf16 = a->dtype() == ns_bfloat16
         || b->dtype() == ns_bfloat16 || c->dtype() == ns_bfloat16;
+    bool has_fp64 = a->dtype() == ns_float64
+        || b->dtype() == ns_float64 || c->dtype() == ns_float64;
     // a: [n,m], b: [m,k], c: [n,k]
     #if CUDART_VERSION >= 11000
     cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT;
-    cublasComputeType_t computeType = CUBLAS_COMPUTE_32F;
-    if (use_tensorcore>=3) {
+    cublasComputeType_t computeType = has_fp64 ? CUBLAS_COMPUTE_64F : CUBLAS_COMPUTE_32F;
+    if (!has_fp64 && use_tensorcore>=3) {
         computeType = CUBLAS_COMPUTE_32F_FAST_16F;
-    } else if (use_tensorcore==2) {
+    } else if (!has_fp64 && use_tensorcore==2) {
         computeType = CUBLAS_COMPUTE_32F_FAST_16BF;
-    } else if (use_tensorcore==1 || cuda_allow_tf32) {
+    } else if (!has_fp64 && (use_tensorcore==1 || cuda_allow_tf32)) {
         computeType = CUBLAS_COMPUTE_32F_FAST_TF32;
     }
     if (has_fp16) {
@@ -122,7 +124,7 @@ void CublasMatmulOp::jit_run() {
         computeType = use_tensorcore ? CUBLAS_COMPUTE_32F_FAST_16BF : CUBLAS_COMPUTE_32F;
         algo = use_tensorcore ? CUBLAS_GEMM_DEFAULT : CUBLAS_GEMM_DEFAULT_TENSOR_OP;
     }
-    if (computeType == CUBLAS_COMPUTE_16F) {
+    if (computeType == CUBLAS_COMPUTE_16F || computeType == CUBLAS_COMPUTE_64F) {
         alpha_p = (void*)&alpha;
         beta_p = (void*)&beta;
     }
@@ -138,6 +140,10 @@ void CublasMatmulOp::jit_run() {
     } else if (has_bf16) {
         computeType = CUDA_R_32F;
         algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+    }
+    if (computeType == CUDA_R_16F || computeType == CUDA_R_64F) {
+        alpha_p = (void*)&alpha;
+        beta_p = (void*)&beta;
     }
     #endif
     checkCudaErrors(cublasGemmEx(handle_, 

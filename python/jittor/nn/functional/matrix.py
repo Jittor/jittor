@@ -48,9 +48,6 @@ def matmul_transpose(a, b):
         and "complex" not in a_dtype
         and "complex" not in b_dtype
     ):
-        if a_dtype == "float64":
-            r = jt.compile_extern.cublas_ops.cublas_matmul(a.float32(), b.float32(), 0, 1)
-            return r.cast("float64")
         return jt.compile_extern.cublas_ops.cublas_matmul(a, b, 0, 1)
 
     shape = list(a.shape)[:-1] + list(b.shape)
@@ -112,11 +109,6 @@ def _matmul_2d_cublas(a, b, trans_a=0, trans_b=0):
         and "complex" not in a_dtype
         and "complex" not in b_dtype
     ):
-        if a_dtype == "float64":
-            r = jt.compile_extern.cublas_ops.cublas_matmul(
-                a.float32(), b.float32(), trans_a, trans_b
-            )
-            return r.cast("float64")
         return jt.compile_extern.cublas_ops.cublas_matmul(a, b, trans_a, trans_b)
     return None
 
@@ -210,7 +202,13 @@ def matmul(a, b):
             # cublas_batched_matmul only supports float dtypes; complex64 falls through to
             # the reindex path below (broadcast * multiply + sum-reduce), which the native
             # complex kernels support on both CPU and CUDA.
-            if jt.flags.use_cuda and jt.compile_extern.cublas_ops and "complex" not in str(a.dtype):
+            if (
+                jt.flags.use_cuda
+                and jt.compile_extern.cublas_ops
+                and str(a.dtype) == str(b.dtype)
+                and "float" in str(a.dtype)
+                and "complex" not in str(a.dtype)
+            ):
                 a_base = jt.nn._transpose_base_last2(a)
                 b_base = jt.nn._transpose_base_last2(b)
                 if a_base is not None:
@@ -218,21 +216,6 @@ def matmul(a, b):
                 if b_base is not None:
                     b = b_base
                 a, b = jt.nn._broadcast_batch_dims(a, b)
-                # cuBLAS strided-batched gemm rejects float64 (CUBLAS_STATUS_NOT_SUPPORTED)
-                # on many GPUs; compute in float32 and cast back (rare path, e.g. a float64
-                # attention mask contaminating a transformer's batched matmul).
-                if str(a.dtype) == "float64" or str(b.dtype) == "float64":
-                    r = jt.compile_extern.cublas_ops.cublas_batched_matmul(
-                        a.float32(),
-                        b.float32(),
-                        1 if a_base is not None else 0,
-                        1 if b_base is not None else 0,
-                    )
-                    return (
-                        r.cast("float64")
-                        if (str(a.dtype) == "float64" and str(b.dtype) == "float64")
-                        else r
-                    )
                 return jt.compile_extern.cublas_ops.cublas_batched_matmul(
                     a, b, 1 if a_base is not None else 0, 1 if b_base is not None else 0
                 )
