@@ -76,7 +76,9 @@ class TestTransposeOp(unittest.TestCase):
     def test_cutt(self):
         a = jt.rand((10,2)) > 0.5
         b = a.transpose()
-        assert (a.data.transpose() == b.data).all()
+        a_data = np.array(a.data, copy=True)
+        b_data = np.array(b.data, copy=True)
+        np.testing.assert_array_equal(a_data.transpose(), b_data)
 
         a = jt.zeros((1,1))
         b = a.transpose((1,0))
