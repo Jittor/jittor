@@ -39,31 +39,18 @@ framework defects.
 - Review/expiry condition: remove only after sanitizer-backed root cause and
   repeated cold/warm stress, deadlock, multiprocess-cache, and performance gates
 
-## KI-BACKEND-001: narrow integer reductions lack accelerator atomics
+## KI-BACKEND-001: narrow integer reductions lack NPU atomics
 
 - Severity: High
-- Status: CUDA/NPU expected failures
+- Status: NPU expected failures
 - Owner: reduce and backend maintainers
 - Evidence: [`reduce_dtypes.py`](../../tests/opinfo/definitions/reduce_dtypes.py)
   and [device parity](../../tests/backends/parity/test_device_parity.py)
-- Symptom: `sum`, `prod`, `max`, and `min` for sub-32-bit integer samples may fail
-  to compile because required atomic overloads are absent
-- Workaround: promote inputs to a supported width before reduction
+- Symptom: `sum`, `prod`, `max`, and `min` for sub-32-bit integer samples remain
+  unverified on NPU because its required atomic overloads are not implemented
+- Workaround: promote inputs to a supported width before reduction on NPU
 - Review/expiry condition: every affected dtype executes and matches the CPU
-  reference on each backend, turning all strict expected failures into passes
-
-## KI-BACKEND-002: logical reductions lack CUDA/NPU atomic-bool paths
-
-- Severity: Medium
-- Status: Explicit skips
-- Owner: reduce and backend maintainers
-- Evidence: [`reduce_dtypes.py`](../../tests/opinfo/definitions/reduce_dtypes.py)
-- Symptom: native `all`/`any` cannot execute their logical reduction path on the
-  listed accelerators
-- Workaround: no implicit device fallback is accepted; callers must choose a
-  supported representation/path explicitly
-- Review/expiry condition: remove skips only after real-device forward and parity
-  tests pass
+  reference on a real NPU, turning the strict expected failures into passes
 
 ## KI-NN-001: CPU `DepthwiseConv` backward raises `save_vars`
 

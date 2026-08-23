@@ -88,17 +88,16 @@ def _cuda_linalg_works():
         return False, f"cupy CUDA linalg unavailable: {type(e).__name__}: {str(e)[:120]}"
 
 
-_KNOWN_DEVICE_ISSUES = {
-    # FINDING: sub-32-bit integer reduce has no CUDA atomic overload (atomicAdd/Max/Min
-    # for uint8/int8) -> fails to COMPILE on CUDA. int8/16 max/min were fixed (eb3c8bee)
-    # but reduce-add and 8-bit are still broken.
-    "sum_int_reduce":  ("skip", "strict CUDA xfail in test_ops: uint8/int8 reduce-add has no atomicAdd overload"),
-    "prod_int_reduce": ("skip", "strict CUDA xfail in test_ops: uint8/int8 reduce-prod has no atomic overload"),
-    "max_int_reduce":  ("skip", "strict CUDA xfail in test_ops: uint8/int8 reduce-max has no atomic overload"),
-    "min_int_reduce":  ("skip", "strict CUDA xfail in test_ops: uint8/int8 reduce-min has no atomic overload"),
-    "all_bool_reduce": ("skip", "logical reduce has no CUDA/NPU atomic-bool path"),
-    "any_bool_reduce": ("skip", "logical reduce has no CUDA/NPU atomic-bool path"),
-}
+_KNOWN_DEVICE_ISSUES = {}
+if _ACCEL == "npu":
+    _KNOWN_DEVICE_ISSUES.update({
+        name: ("skip", "sub-32-bit integer reduction atomics are not verified on NPU")
+        for name in ("sum_int_reduce", "prod_int_reduce", "max_int_reduce", "min_int_reduce")
+    })
+    _KNOWN_DEVICE_ISSUES.update({
+        name: ("skip", "logical reduction atomics are not verified on NPU")
+        for name in ("all_bool_reduce", "any_bool_reduce")
+    })
 
 def _run(op, sample, use_cuda):
     """Run op forward+backward on one device from the sample's materialized numpy.

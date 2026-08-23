@@ -22,6 +22,41 @@
 __device__ inline long long atomicAdd(long long* a, long long b) {
     return (long long)atomicAdd((unsigned long long int*)a, (unsigned long long int)b);
 }
+
+// CUDA only exposes integer atomics for 32/64-bit words. Update one packed
+// byte/halfword with a 32-bit CAS so native narrow reductions can keep their
+// input dtype instead of relying on a caller-side promotion.
+template<class T, int op>
+__device__ inline T cuda_atomic_narrow_rmw(T* address, T val) {
+    unsigned int* base = (unsigned int*)((size_t)address & ~(size_t)0x3);
+    unsigned int shift = (((size_t)address) & 0x3) * 8;
+    unsigned int value_mask = (1u << (sizeof(T) * 8)) - 1u;
+    unsigned int mask = value_mask << shift;
+    unsigned int old = atomicCAS(base, 0u, 0u);
+    unsigned int assumed;
+    do {
+        assumed = old;
+        T current = (T)((assumed & mask) >> shift);
+        T next = op == 0 ? (T)(current + val) :
+                 op == 1 ? (T)(current * val) :
+                 op == 2 ? (val > current ? val : current) :
+                           (val < current ? val : current);
+        unsigned int merged = (assumed & ~mask)
+            | ((((unsigned int)next) & value_mask) << shift);
+        old = atomicCAS(base, assumed, merged);
+    } while (old != assumed);
+    return (T)((assumed & mask) >> shift);
+}
+
+__device__ inline unsigned char atomicAdd(unsigned char* a, unsigned char b) {
+    return cuda_atomic_narrow_rmw<unsigned char, 0>(a, b);
+}
+__device__ inline signed char atomicAdd(signed char* a, signed char b) {
+    return cuda_atomic_narrow_rmw<signed char, 0>(a, b);
+}
+__device__ inline short atomicAdd(short* a, short b) {
+    return cuda_atomic_narrow_rmw<short, 0>(a, b);
+}
 #endif
 
 namespace jittor {
@@ -93,6 +128,15 @@ inline float cuda_atomic_min(float* a, float b) {
 template<> __device__
 inline double cuda_atomic_min(double* a, double b) {
     return orderedIntToFloat(atomicMin((long long *)a, floatToOrderedInt(b)));
+}
+#endif
+
+#ifndef IS_ROCM
+template<> __device__ inline uint8 cuda_atomic_max(uint8* address, uint8 val) {
+    return ::cuda_atomic_narrow_rmw<uint8, 2>(address, val);
+}
+template<> __device__ inline uint8 cuda_atomic_min(uint8* address, uint8 val) {
+    return ::cuda_atomic_narrow_rmw<uint8, 3>(address, val);
 }
 #endif
 
@@ -203,6 +247,18 @@ T cuda_atomic_mul(T* a, T b) {
     }
     return old_f;
 }
+
+#ifndef IS_ROCM
+template<> __device__ inline uint8 cuda_atomic_mul(uint8* a, uint8 b) {
+    return ::cuda_atomic_narrow_rmw<uint8, 1>(a, b);
+}
+template<> __device__ inline int8 cuda_atomic_mul(int8* a, int8 b) {
+    return ::cuda_atomic_narrow_rmw<int8, 1>(a, b);
+}
+template<> __device__ inline int16 cuda_atomic_mul(int16* a, int16 b) {
+    return ::cuda_atomic_narrow_rmw<int16, 1>(a, b);
+}
+#endif
 
 #ifndef IS_ROCM
 // Self-contained bf16 multiply atomic. The generic cuda_atomic_mul template

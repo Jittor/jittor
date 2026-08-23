@@ -213,22 +213,12 @@ def sample_bool_any(op_info, device, dtype, requires_grad):
 # gradcheck. dtypes=cu.integral_types() makes the test_ops dtype sweep cover every
 # integer width, and the sample builders additionally pin all of them for parity.
 
-# FINDING #10 (the same gap test_device_parity skips in its aggregate process):
-# sub-32-bit integer
-# reduce has no CUDA atomic overload (no atomicAdd/Max/Min/multiply for uint8 in
-# cuda_atomic.h), so the uint8 variant the sample builders pin FAILS TO COMPILE on
-# CUDA. Marked expectedFailure on cuda/npu so test_ops stays green-and-honest on an
-# accelerator build (CPU runs all widths for real) while the focused OpInfo finding
-# stays LOUD -- it XPASS-alerts the moment the missing atomic overloads are added.
-# The aggregate parity process cannot execute this expected compile failure because
-# Jittor's asynchronous executor would rethrow it in the following test. (CPU is
-# correct; this is a real pre-existing jittor kernel gap, not a test defect.)
-_CUDA_INT_REDUCE_XFAIL = (
-    xfail("test_reference", device_type="cuda",
-          reason="FINDING #10: uint8/int8 reduce has no CUDA atomic overload "
-                 "(cuda_atomic.h) -> kernel fails to compile; see test_device_parity xfail"),
+# CUDA uses packed 32-bit CAS overloads for uint8/int8/int16 add, multiply,
+# maximum, and minimum. NPU remains an explicit expected failure until the same
+# real-device matrix passes there.
+_NPU_INT_REDUCE_XFAIL = (
     xfail("test_reference", device_type="npu",
-          reason="FINDING #10: sub-32-bit reduce atomic gap (mirrors the CUDA limitation)"),
+          reason="FINDING #10: sub-32-bit reduce atomics are not verified on NPU"),
 )
 
 op_db = [
@@ -236,58 +226,39 @@ op_db = [
     OpInfo("sum", op=jt.reduce_add, ref=sum_ref,
            sample_inputs_func=sample_int_sum,
            dtypes=cu.integral_types(), supports_autograd=False,
-           variant_test_name="int_reduce", skips=_CUDA_INT_REDUCE_XFAIL),
+           variant_test_name="int_reduce", skips=_NPU_INT_REDUCE_XFAIL),
     OpInfo("prod", op=jt.reduce_multiply, ref=prod_ref,
            sample_inputs_func=sample_int_prod,
            dtypes=cu.integral_types(), supports_autograd=False,
-           variant_test_name="int_reduce", skips=_CUDA_INT_REDUCE_XFAIL),
+           variant_test_name="int_reduce", skips=_NPU_INT_REDUCE_XFAIL),
     OpInfo("max", op=jt.reduce_maximum, ref=max_ref,
            sample_inputs_func=sample_int_max,
            dtypes=cu.integral_types(), supports_autograd=False,
-           variant_test_name="int_reduce", skips=_CUDA_INT_REDUCE_XFAIL),
+           variant_test_name="int_reduce", skips=_NPU_INT_REDUCE_XFAIL),
     OpInfo("min", op=jt.reduce_minimum, ref=min_ref,
            sample_inputs_func=sample_int_min,
            dtypes=cu.integral_types(), supports_autograd=False,
-           variant_test_name="int_reduce", skips=_CUDA_INT_REDUCE_XFAIL),
+           variant_test_name="int_reduce", skips=_NPU_INT_REDUCE_XFAIL),
 
     # ---- bool all / any --------------------------------------------------------
     # Bound to the native C++ reduces ``all_``/``any_`` (torch_compat re-wraps the
     # ``Var.all``/``Var.any`` METHODS, not these top-level funcs). A bool input forces
     # an int32 reduce output (reduce_op.cc L289), which the refs above mirror.
     #
-    # MUST-PRESERVE divergence (test_reduce_op.py L24-27 / L65-68): the logical
-    # reduce has no CUDA atomic-bool path -- "atomic bool operation for cuda not
-    # supported yet" -- so those tests RETURN early on CUDA. We encode the same lock
-    # on the forward reference test for cuda/npu rather than silently letting it run
-    # (and rather than "fixing" the documented gap). NOTE: the separate
-    # test_device_parity driver builds its own methods and does not consult these
-    # skips; on a CUDA/NPU build all/any parity should be excluded there until the
-    # CUDA logical-reduce path lands (flagged in the authoring notes, not edited here
-    # since this task touches only this file).
+    # CUDA logical reductions write an int32 output, so the generated kernels use
+    # CUDA's native atomicAnd/atomicOr on that output rather than bool atomics. NPU
+    # remains unverified and keeps an explicit skip until the same device matrix is
+    # available there.
     OpInfo("all", op=jt.all_, ref=all_ref,
            sample_inputs_func=sample_bool_all,
            dtypes=(cu.bool_,), supports_autograd=False,
            variant_test_name="bool_reduce",
-           skips=(
-               skip("test_reference", device_type="cuda",
-                    reason="logical reduce has no CUDA atomic-bool path "
-                           "(test_reduce_op.py: 'atomic bool operation for cuda "
-                           "not supported yet')"),
-               skip("test_reference", device_type="npu",
-                    reason="logical reduce has no NPU atomic-bool path "
-                           "(mirrors the CUDA logical-reduce limitation)"),
-           )),
+           skips=(skip("test_reference", device_type="npu",
+                       reason="logical reduce is not verified on NPU"),)),
     OpInfo("any", op=jt.any_, ref=any_ref,
            sample_inputs_func=sample_bool_any,
            dtypes=(cu.bool_,), supports_autograd=False,
            variant_test_name="bool_reduce",
-           skips=(
-               skip("test_reference", device_type="cuda",
-                    reason="logical reduce has no CUDA atomic-bool path "
-                           "(test_reduce_op.py: 'atomic bool operation for cuda "
-                           "not supported yet')"),
-               skip("test_reference", device_type="npu",
-                    reason="logical reduce has no NPU atomic-bool path "
-                           "(mirrors the CUDA logical-reduce limitation)"),
-           )),
+           skips=(skip("test_reference", device_type="npu",
+                       reason="logical reduce is not verified on NPU"),)),
 ]

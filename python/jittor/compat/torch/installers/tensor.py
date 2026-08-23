@@ -2412,9 +2412,10 @@ def install_methods(ctx):
     Var.reshape = _torch_reshape
     Var.view = _torch_reshape
 
-    # jittor's CUDA codegen can't emit atomicAdd for uint8/int8 reductions
-    # (yolox/rtmdet SimOTA assigners do mask.sum() on a uint8 match matrix);
-    # torch promotes integer sums to int64 anyway. Cast narrow ints to int32.
+    # Keep the existing Torch-facing promotion for narrow integer sums
+    # (yolox/rtmdet SimOTA assigners do mask.sum() on a uint8 match matrix).
+    # Native CUDA reductions now support these dtypes directly, but exposing the
+    # narrow native output here would change the compatibility-layer dtype policy.
     # torch reductions accept a *tuple* of dims (e.g. loss.mean(dim=(1, 2)) in
     # yolact_head, x.sum(dim=(2, 3))). jittor splits these into a scalar overload
     # (kwarg `dim`, single int) and a tuple overload (kwarg `dims`); passing a tuple
