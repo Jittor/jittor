@@ -65,13 +65,37 @@ class TestDepthwiseConvCPU(unittest.TestCase):
         np.testing.assert_allclose(actual, expected, atol=1e-6, rtol=1e-6)
         self.assertEqual(actual.shape, (1, 2, 4, 2))
 
-    def test_cpu_backward_keeps_pre_migration_failure_contract(self):
+    def test_cpu_backward_matches_independent_reference(self):
+        x_array = np.arange(18, dtype=np.float32).reshape(1, 2, 3, 3) / 5.0
+        weight_array = np.array(
+            [[[[1.0, -2.0], [0.5, 3.0]]],
+             [[[2.0, 1.0], [-1.0, 0.25]]]], dtype=np.float32
+        )
+        upstream = np.arange(8, dtype=np.float32).reshape(1, 2, 2, 2) / 7.0
+        expected_x = np.zeros_like(x_array)
+        expected_weight = np.zeros_like(weight_array)
+        for channel in range(2):
+            for row in range(2):
+                for column in range(2):
+                    cotangent = upstream[0, channel, row, column]
+                    for kernel_row in range(2):
+                        for kernel_column in range(2):
+                            input_row = row + kernel_row
+                            input_column = column + kernel_column
+                            expected_x[0, channel, input_row, input_column] += (
+                                cotangent * weight_array[channel, 0, kernel_row, kernel_column]
+                            )
+                            expected_weight[channel, 0, kernel_row, kernel_column] += (
+                                cotangent * x_array[0, channel, input_row, input_column]
+                            )
         with jt.flag_scope(use_cuda=0):
-            x = jt.array(np.arange(18, dtype=np.float32).reshape(1, 2, 3, 3))
-            weight = jt.ones((2, 1, 2, 2))
+            x = jt.array(x_array)
+            weight = jt.array(weight_array)
             output = jt.nn.DepthwiseConv()(x, weight)
-            with self.assertRaisesRegex(AttributeError, "save_vars"):
-                jt.grad(output.sum(), [x, weight])
+            grads = jt.grad((output * jt.array(upstream)).sum(), [x, weight])
+            actual_x, actual_weight = jt.fetch_sync(grads)
+        np.testing.assert_allclose(actual_x, expected_x, atol=1e-6, rtol=1e-6)
+        np.testing.assert_allclose(actual_weight, expected_weight, atol=1e-6, rtol=1e-6)
 
 
 def load_parameters(m1, m2):

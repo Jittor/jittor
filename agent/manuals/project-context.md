@@ -134,9 +134,8 @@ Use [`noxfile.py`](../../noxfile.py) for the maintained `lint`, `format`,
 
 The canonical list is [known-issues.md](known-issues.md). Highest-risk active
 items include pending NPU/ROCm verification of the corrected negative integer
-floor division, the parallel compiler crash hypothesis, accelerator reduction
-atomic gaps, CPU DepthwiseConv backward failure, and NPU/ROCm verification of the
-corrected floating NaN comparisons.
+floor division, the parallel compiler crash hypothesis, NPU reduction atomic gaps,
+and NPU/ROCm verification of the corrected floating NaN comparisons.
 
 Do not add a second bug narrative here. Add or update the ledger entry with an
 owner, executable evidence, workaround, and exit condition.

@@ -18,6 +18,16 @@ class DepthwiseConv(Function):
         self.padding = padding if isinstance(padding, tuple) else (padding, padding)
         self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
 
+    def __call__(self, x, weight):
+        # The custom Function tape is CUDA-only. On CPU the forward already uses
+        # grouped conv2d, so bypassing the tape preserves that operation's native
+        # backward instead of dispatching into the CUDA grad implementation.
+        if not jt.flags.use_cuda or not jt.compiler.is_cuda:
+            return nn.conv2d(
+                x, weight, None, self.stride, self.padding, self.dilation, x.shape[1]
+            )
+        return super().__call__(x, weight)
+
     def execute(self, x, weight):
         if not jt.flags.use_cuda or not jt.compiler.is_cuda:
             return nn.conv2d(x, weight, None, self.stride, self.padding, self.dilation, x.shape[1])

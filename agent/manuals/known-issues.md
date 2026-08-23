@@ -52,19 +52,6 @@ framework defects.
 - Review/expiry condition: every affected dtype executes and matches the CPU
   reference on a real NPU, turning the strict expected failures into passes
 
-## KI-NN-001: CPU `DepthwiseConv` backward raises `save_vars`
-
-- Severity: High
-- Status: Reproduced failure contract
-- Owner: neural-network/autograd maintainers
-- Evidence: [`test_cpu_backward_keeps_pre_migration_failure_contract`](../../tests/nn/test_depthwise_conv.py)
-- Symptom: CPU forward matches grouped-convolution reference, but differentiating
-  through the dedicated operation raises `AttributeError`
-- Workaround: use the maintained grouped-convolution path when CPU backward is
-  required
-- Review/expiry condition: replace the failure assertion with independent input
-  and weight gradient checks on CPU, plus CPU/CUDA parity
-
 ## KI-DTYPE-001: low-precision elementwise gradients upcast
 
 - Severity: Medium
