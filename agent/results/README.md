@@ -12,6 +12,7 @@
 - [2026-08-23 空轴 mean NaN 语义修复](2026-08-23-empty-mean-semantics.md)
 - [2026-08-24 融合标量 float32 精度语义修复](2026-08-24-fused-scalar-float32-precision.md)
 - [2026-08-24 低精度 elementwise backward dtype 修复](2026-08-24-low-precision-grad-dtype.md)
+- [2026-08-24 arg_reduce 测试快照 alias 修复](2026-08-24-arg-reduce-test-snapshot.md)
 - [2026-08-23 verl、vLLM 与 TRELLIS 当前基线复验](2026-08-23-verl-vllm-trellis-current-baseline.md)
 - [2026-08-23 下游生态同版本对拍与 CUDA 训练热点优化](2026-08-23-ecosystem-parity-performance.md)
 - [2026-08-22 CUDA parallel-range 与常见网络独立 oracle 验证](2026-08-22-cuda-parallel-range-network-oracle.md)
