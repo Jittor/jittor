@@ -30,6 +30,10 @@ rollout 并读取 logprob。稳定复跑中 token 均为 `12095`；未更新模�
 权重后 token 与 logprob 回到基线容差内。因此 transport 变化确实进入推理计算，
 不是只更新了一个未被使用的参数表。
 
+最后，sender/receiver 被放入两个真实 Ray `num_gpus=1` actor，分别绑定物理 GPU 2
+和 GPU 3，并使用两个独立、串行预热的 Jittor cache。同一组 fp32/fp16/bf16 权重
+跨 Ray 进程完成 ZMQ 往返，driver 收到的名称、dtype、shape 和逐元素值全部一致。
+
 ## 验证
 
 - 独立 cache 首次完成 Jittor core、CUDA extern 与 MKL 初始化。
@@ -46,6 +50,13 @@ rollout 并读取 logprob。稳定复跑中 token 均为 `12095`；未更新模�
   `verl vLLM weight apply smoke OK ... loaded=1 delta=0.125000`。
 - 首次新增 rollout 图包含冷 JIT，耗时不作为性能结果；补齐 cache 后重复 harness
   输出 `score_delta=-0.365747 baseline_jitter=0.001110`。
+- Ray 跨进程 harness：
+  `$JITTOR_LAB_ROOT/verl_jittor/scripts/ray_weight_transfer_smoke.py`，最终输出
+  `verl Ray weight transfer smoke OK sender=2 receiver=3 weights=3`。
+- Ray actor 设置 `DISABLE_MULTIPROCESSING=1`，使用核心已有的 host signal-ownership
+  契约，避免 Ray 回收子进程触发 Jittor SIGCHLD quick-exit；operator compiler 保持串行。
+- 1-step PPO 离线输入已生成 8 条 train/4 条 validation parquet；真实 Qwen tokenizer
+  和 `RLHFDataset` 过滤后保留全部 8 条，并返回正确 raw chat/reward metadata。
 
 ## 隔离方法
 
@@ -58,5 +69,6 @@ package 的真实 `__path__`，但不执行其 `__init__`，随后按 canonical 
 ## 边界
 
 该门禁证明 transport payload、handshake 和 UniProc EngineCore 模型应用正确，但
-没有覆盖 Ray 跨进程、FSDP actor 导出或完整 PPO step。下一阶段仍需完成真实 actor
-权重导出、Ray rollout、reward、actor/critic update 闭环。
+没有覆盖 FSDP actor 权重导出或完整 PPO step。下一阶段仍需完成真实 actor 权重导出、
+Ray rollout、reward、actor/critic update 闭环。主机现有长期满核 compiler 进程使
+多 actor 训练启动与超时不具备稳定条件；本报告不把 transport 门禁外推成 PPO 通过。
