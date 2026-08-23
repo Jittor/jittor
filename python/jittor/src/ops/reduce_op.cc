@@ -369,7 +369,8 @@ void ReduceOp::jit_prepare(JK& jk) {
         << "«Tz:" << y->dtype()
         << "«OP:" << ns
         << "«DIM=" << JK::hex1(x->shape.size())
-        << "«REDUCE=" << JK::hex(reduce_mask);
+        << "«REDUCE=" << JK::hex(reduce_mask)
+        << "«EMPTY_MEAN=" << JK::hex1(x->num == 0 && ns == ns_mean);
 }
 
 #else // JIT
@@ -388,6 +389,10 @@ void ReduceOp::jit_run() {
     @for(d, 0, DIM,@if(REDUCE>>d&1,, for (index_t xi@d=0; xi@d < xshape@d; xi@d++))) {
         auto yid = 0 @for(d, 0, DIM,@if(REDUCE>>d&1,, + xi@d * ystride@d));
         yp[yid] = @expand_op(init_@OP, @Ty);
+        @if(@EMPTY_MEAN,
+            yp[yid] = (Ty)::nanf("");
+            ,
+        )
     }
     
     @for(d, 0, DIM,@if(REDUCE>>d&1,, for (index_t xi@d=0; xi@d < xshape@d; xi@d++))) {

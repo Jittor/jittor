@@ -92,21 +92,24 @@ class TestEmptyTensors(_EdgeBase):
             self.assertEqual(got, ref, msg=f"sum-all of empty [{dev}]")
         self._for_devices(body)
 
-    @unittest.expectedFailure
-    def test_mean_over_empty_axis_is_nan_KNOWN_DIVERGENCE(self):
-        # FOUND BY THIS SUITE: jittor's mean over an EMPTY axis returns 0, whereas
-        # numpy/torch return nan (0/0). jittor avoids the divide-by-zero and yields 0.
-        # A minor torch-parity divergence (arguably jittor-favorable); marked
-        # expectedFailure so it stays visible. Flip to a hard assert if jittor adopts
-        # the nan convention.
-        x_np = np.zeros((2, 0), dtype="float32")
-
+    def test_mean_over_empty_axis_is_nan(self):
+        # NumPy/Torch define mean over an empty reduction as 0/0 -> NaN.
         def body(dev):
-            x = jt.array(x_np)
-            got = x.mean(1)                      # (2,)
-            with np.errstate(invalid="ignore", divide="ignore"):
-                ref = x_np.mean(1)               # [nan, nan]
-            self.assertEqual(got, ref, msg=f"mean over empty axis [{dev}]")
+            for dtype in ("float32", "float64"):
+                for x_np, dim in (
+                    (np.zeros((2, 0), dtype=dtype), 1),
+                    (np.zeros((0, 3), dtype=dtype), 0),
+                ):
+                    got = jt.array(x_np).mean(dim).numpy()
+                    with np.errstate(invalid="ignore", divide="ignore"):
+                        ref = x_np.mean(dim)
+                    self.assertTrue(np.isnan(got).all(),
+                                    f"mean over empty axis [{dev}/{dtype}]")
+                    self.assertTrue(np.isnan(ref).all(),
+                                    f"numpy reference [{dev}/{dtype}]")
+                full = jt.array(np.zeros((0,), dtype=dtype)).mean().numpy()
+                self.assertEqual(full.shape, (1,))
+                self.assertTrue(np.isnan(full).all(), f"mean-all empty [{dev}/{dtype}]")
         self._for_devices(body)
 
     def test_reshape_empty_preserves_size(self):

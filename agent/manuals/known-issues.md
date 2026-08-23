@@ -65,18 +65,6 @@ framework defects.
 - Review/expiry condition: strict expected failure XPASSes for supported low
   precision dtypes without weakening numerical checks
 
-## KI-SEMANTICS-001: empty-axis mean returns zero
-
-- Severity: Medium
-- Status: Strict expected failure
-- Owner: reduction semantics maintainers
-- Evidence: [`test_mean_over_empty_axis_is_nan_KNOWN_DIVERGENCE`](../../tests/core/test_edge_cases.py)
-- Symptom: mean over an empty axis returns zero instead of the NumPy/Torch NaN
-  convention
-- Workaround: check the reduced extent before calling when NaN semantics matter
-- Review/expiry condition: decide and document the public convention; if parity is
-  chosen, convert the expected failure to a passing NaN regression
-
 ## KI-SEMANTICS-002: fused scalar arithmetic differs from strict float32
 
 - Severity: Medium
