@@ -8,6 +8,7 @@
 
 - [2026-08-23 CUDA masked SDPA 防护图优化](2026-08-23-cuda-masked-sdpa.md)
 - [2026-08-23 CUDA 窄整数与逻辑 reduction 收口](2026-08-23-cuda-narrow-reductions.md)
+- [2026-08-23 CPU DepthwiseConv backward 修复](2026-08-23-depthwise-cpu-backward.md)
 - [2026-08-23 verl、vLLM 与 TRELLIS 当前基线复验](2026-08-23-verl-vllm-trellis-current-baseline.md)
 - [2026-08-23 下游生态同版本对拍与 CUDA 训练热点优化](2026-08-23-ecosystem-parity-performance.md)
 - [2026-08-22 CUDA parallel-range 与常见网络独立 oracle 验证](2026-08-22-cuda-parallel-range-network-oracle.md)
