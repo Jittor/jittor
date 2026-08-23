@@ -65,19 +65,6 @@ framework defects.
 - Review/expiry condition: strict expected failure XPASSes for supported low
   precision dtypes without weakening numerical checks
 
-## KI-SEMANTICS-002: fused scalar arithmetic differs from strict float32
-
-- Severity: Medium
-- Status: Strict expected failure
-- Owner: compiler numerical-semantics maintainers
-- Evidence: [`test_large_magnitude_add_precision_KNOWN_DIVERGENCE`](../../tests/core/test_edge_cases.py)
-- Symptom: fused/scalar evaluation may preserve a small value that strict float32
-  evaluation loses, creating a Torch-parity divergence
-- Workaround: materialize or cast at the required precision boundary when exact
-  float32 step semantics matter
-- Review/expiry condition: adopt and document one precision contract, then make
-  the test a normal assertion for it
-
 ## KI-OPS-002: integer floor-division backend verification incomplete
 
 - Severity: Critical

@@ -305,14 +305,8 @@ class TestExtremeValues(_EdgeBase):
             self.assertEqual(got, ref, msg=f"clamp extremes [{dev}]")
         self._for_devices(body)
 
-    @unittest.expectedFailure
-    def test_large_magnitude_add_precision_KNOWN_DIVERGENCE(self):
-        # FOUND BY THIS SUITE: jittor does NOT do strict IEEE float32 evaluation of
-        # (x + big) - big with a scalar `big`: it preserves the small value
-        # ((1 + 1e8) - 1e8 == 1.0 in jittor) where strict float32 (numpy/torch) loses
-        # it (== 0.0). i.e. jittor's scalar/fused arithmetic carries MORE precision
-        # than IEEE single. Arguably better numerically, but a torch-parity divergence.
-        # Marked expectedFailure so the behavior stays visible.
+    def test_large_magnitude_add_precision(self):
+        # Each scalar float32 add/subtract step follows strict IEEE float32 semantics.
         big = np.float32(1e8)
         x_np = np.array([big, 1.0, -big], dtype="float32")
 

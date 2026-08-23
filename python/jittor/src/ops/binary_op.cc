@@ -473,12 +473,23 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
     bool is_comparison = ns==ns_less || ns==ns_less_equal ||
         ns==ns_greater || ns==ns_greater_equal ||
         ns==ns_equal || ns==ns_not_equal;
+    bool is_scalar_float32_add =
+        (ns==ns_add || ns==ns_subtract) &&
+        x->dtype() == ns_float32 && y->dtype() == ns_float32 &&
+        (x->flags.get(NodeFlags::_is_scalar) || y->flags.get(NodeFlags::_is_scalar));
     if (is_comparison &&
         (x->dtype().is_float() || x->dtype().is_complex() ||
          y->dtype().is_float() || y->dtype().is_complex())) {
         // Kernel flags end in -Ofast on CPU, which permits folding x==x even when
         // x is NaN. A later ordinary optimization level restores IEEE comparisons
         // while retaining the optimizations expected by comparison-heavy kernels.
+        loop_options_t options = z->loop_options;
+        options["FLAGS: -O3 "] = 1;
+        z->loop_options = move(options);
+    }
+    if (is_scalar_float32_add) {
+        // Scalar float32 arithmetic must not be reassociated or contracted across
+        // an add/subtract chain: Torch and NumPy observe each float32 step.
         loop_options_t options = z->loop_options;
         options["FLAGS: -O3 "] = 1;
         z->loop_options = move(options);
