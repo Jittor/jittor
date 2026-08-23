@@ -186,11 +186,15 @@ OPTIONAL_COMPAT_PACKAGES = (
     "mmengine",
     "peft",
     "safetensors",
+    "tensordict",
+    "flash_attn",
 )
 OPTIONAL_COMPAT_TESTS = (
     "tests/compat/torch/test_torchmetrics_compat.py",
     "tests/compat/torch/test_mmcv_compat.py",
     "tests/compat/torch/test_peft.py",
+    "tests/compat/torch/test_tensordict_compat.py",
+    "tests/compat/torch/test_flash_attn_compat.py",
 )
 NPU_TESTS = (
     "tests/backends/npu/test_acl.py",

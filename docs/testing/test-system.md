@@ -179,9 +179,10 @@ OpInfo suite. Its accepted real-device baseline is recorded in the
 [complete CUDA suite report](../../agent/results/2026-08-22-cuda-test-suite.md).
 
 The `optional` session is a fail-closed, offline CUDA gate for pre-provisioned
-TorchMetrics, mmcv-lite/MMEngine, PEFT, and Safetensors environments. It probes
-every package before pytest, enables the Jittor Torch shim explicitly, and treats
-PEFT import failures as errors instead of optional skips.
+TorchMetrics, mmcv-lite/MMEngine, PEFT, Safetensors, TensorDict, and the deployed
+FlashAttention adapter. It probes every package before pytest, enables the
+Jittor Torch shim explicitly, and treats PEFT import failures as errors instead
+of optional skips.
 
 ## Adding coverage
 

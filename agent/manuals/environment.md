@@ -102,9 +102,9 @@ python -m nox -s cuda
 ### Optional compatibility packages
 
 The optional compatibility session uses the same pre-provisioned CUDA Python
-environment and requires TorchMetrics, mmcv-lite, MMEngine, PEFT, and
-Safetensors. It runs offline and fails before pytest when a required package is
-not discoverable.
+environment and requires TorchMetrics, mmcv-lite, MMEngine, PEFT, Safetensors,
+TensorDict, and the deployed FlashAttention adapter. It runs offline and fails
+before pytest when a required package is not discoverable.
 
 ```bash
 export nvcc_path="$(command -v nvcc)"
