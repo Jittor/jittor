@@ -2,7 +2,7 @@
 
 - Status: Selected optional packages accepted on real CUDA
 - Last reviewed: 2026-08-24
-- Commits: `566eae8e`, `2cf096d5`, `c2e340f8`, `90e00edd`
+- Commits: `566eae8e`, `2cf096d5`, `c2e340f8`, `90e00edd`, `9e69fa23`
 - Owner: Torch compatibility and test-infrastructure maintainers
 - Review when: optional package versions, Torch shim identity, or nox hardware
   environment contracts change
@@ -23,12 +23,18 @@ FlashAttention math fallback 原先接收 `dropout_p` 却没有传给 canonical 
 会静默返回未 dropout 的结果。dense、packed 和 varlen fallback 现在都传递该参数，
 并由真实部署 adapter 的 `dropout_p=1` 零输出回归锁定。
 
+`optional` session 还支持显式 `JITTOR_FLASH_ATTN_JITTOR_SRC`：它先验证官方源码
+布局，再设置 native backend required，并追加 fp16、GQA 和 float32 opt-in 三项
+fused CUDA 测试。该模式中 backend 构建或加载失败不能用 math fallback 满足门禁。
+
 ## 环境
 
 - Python 3.11.15，Jittor 1.3.11.0，真实 RTX 4090，CUDA toolkit 12.2.140。
 - TorchMetrics 1.7.4、MMEngine 0.10.7、PEFT 0.17.1、Safetensors 0.8.0；
   TensorDict 0.10.0、FlashAttention adapter 2.7.4.post1；mmcv-lite 可从当前
   预配置环境导入。
+- Native FlashAttention 源码提交 `a8aa52b1ab3e9ca574c8a33b3f35afc017ffa2e2`，
+  从仓库边界外的官方 checkout 加载。
 - `HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`、
   `JITTOR_TORCH_SHIM=1`、`use_cuda=1`、`use_parallel_op_compiler=0`。
 
@@ -43,6 +49,8 @@ FlashAttention math fallback 原先接收 `dropout_p` 却没有传给 canonical 
 - TensorDict 与 FlashAttention 新增真实行为模块：`5 passed in 11.31s`，覆盖 CUDA
   构造/更新/index/lazy stack，以及 dense/packed/varlen attention、梯度和 dropout。
 - 五模块加既有 loader/stub 契约同一 shim 会话：`16 passed, 1 warning in 28.37s`。
+- Native fused required 模式：hdim32 fp16 冷构建后 `3 passed in 530.02s`；同 cache
+  热重跑 `3 passed in 4.33s`。三项均检查 native hit/backend，fallback 被禁止。
 - `nox -s optional -- tests/compat/torch/test_mmcv_compat.py`：依赖预检通过，
   `3 passed in 550.05s`，session 成功完成冷 cache 编排。
 - 布局检查通过；`tests/structure`：`218 passed`；`noxfile.py` Ruff 检查通过。
@@ -55,7 +63,7 @@ traceback；相同隔离 cache 补齐编译后，上述模块和组合门禁全�
 
 ## 边界
 
-FlashAttention 结果声明的是部署 adapter 的 CUDA math fallback；本机没有配置
-`JITTOR_FLASH_ATTN_JITTOR_SRC`，因此不声明 native fused backend 已验证。完整
-ecosystem forward/backward 与性能仍由独立 same-version harness 维护。NPU/ROCm
-也未因本次 CUDA 结果获得任何通过结论。
+Native fused 结果只覆盖无 mask、dropout=0 的 forward/inference；官方构建仍显式
+禁用 backward 和 dropout，因此不构成 Transformer 训练支持。完整 ecosystem
+forward/backward 与性能仍由独立 same-version harness 维护。NPU/ROCm 也未因本次
+CUDA 结果获得任何通过结论。
