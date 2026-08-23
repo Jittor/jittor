@@ -75,7 +75,10 @@ class UnaryOpCases:
     def test_safe_clip(self):
         a = jt.array([-1.0,0,0.4,1,2,3])
         b = a.safe_clip(0.1, 0.5)
-        assert np.allclose(b.data, [0.1,0.1,0.4,0.5,0.5,0.5])
+        tol = 1e-3 if jt.flags.amp_reg & 2 else 1e-6
+        np.testing.assert_allclose(
+            b.data, [0.1,0.1,0.4,0.5,0.5,0.5], atol=tol, rtol=tol
+        )
         da = jt.grad(b, a)
         assert (da.data == 1).all()
 
@@ -85,15 +88,14 @@ class UnaryOpCases:
         x = special.erfinv(y)
         y2 = jt.array(y)
         x2 = jt.erfinv(y2)
-        np.testing.assert_allclose(y.data, y2.data)
-        
-        
+        tol = 1e-3 if jt.flags.amp_reg & 2 else 1e-6
+        np.testing.assert_allclose(x2.data, x, atol=tol, rtol=tol)
+
         y = np.linspace(-0.9, 0.9, num=10)
         x = special.erfinv(y)
         y2 = jt.array(y)
         x2 = jt.erfinv(y2)
-        np.testing.assert_allclose(y.data, y2.data)
+        np.testing.assert_allclose(x2.data, x, atol=tol, rtol=tol)
         d = jt.grad(x2, y2)
         _, (dn,) = ngrad(lambda y: special.erfinv(y).sum(), [y], 1e-8)
-        tol = 1e-3 if jt.flags.amp_reg & 2 else 1e-6
         np.testing.assert_allclose(d.data, dn, atol=tol, rtol=tol)

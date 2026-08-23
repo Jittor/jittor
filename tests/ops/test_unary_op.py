@@ -18,10 +18,14 @@ class TestUnaryOpCpuFp16(UnaryOpCases, cuda_test_case(0)):
     __test__ = True
 
     def setUp(self):
+        super().setUp()
+        self._previous_amp_reg = jt.flags.amp_reg
         jt.flags.amp_reg = 2 | 4 | 8 | 16
 
     def tearDown(self):
-        jt.flags.amp_reg = 0
+        jt.sync_all()
+        jt.flags.amp_reg = self._previous_amp_reg
+        super().tearDown()
 
 
 class TestUnaryOpCudaFp16(UnaryOpCases, cuda_test_case(2)):
@@ -29,10 +33,12 @@ class TestUnaryOpCudaFp16(UnaryOpCases, cuda_test_case(2)):
 
     def setUp(self):
         super().setUp()
+        self._previous_amp_reg = jt.flags.amp_reg
         jt.flags.amp_reg = 2 | 4 | 8 | 16
 
     def tearDown(self):
-        jt.flags.amp_reg = 0
+        jt.sync_all()
+        jt.flags.amp_reg = self._previous_amp_reg
         super().tearDown()
 
 
