@@ -154,7 +154,7 @@ def _to_int_list(cu_seqlens):
     return [vals[i + 1] - vals[i] for i in range(len(vals) - 1)]
 
 
-def _sdpa_segment(q, k, v, causal, softmax_scale):
+def _sdpa_segment(q, k, v, causal, softmax_scale, dropout_p):
     """q [Lq,H,Cq], k [Lk,H,C], v [Lk,H,Cv] -> [Lq,H,Cv] via one SDPA call.
 
     Treats the single segment as a batch of 1; SDPA wants [B,H,L,E]."""
@@ -164,11 +164,13 @@ def _sdpa_segment(q, k, v, causal, softmax_scale):
     kh = k.permute(1, 0, 2).unsqueeze(0)   # [1,H,Lk,C]
     vh = v.permute(1, 0, 2).unsqueeze(0)   # [1,H,Lk,Cv]
     oh = F.scaled_dot_product_attention(
-        qh, kh, vh, is_causal=bool(causal), scale=softmax_scale)
+        qh, kh, vh, dropout_p=dropout_p,
+        is_causal=bool(causal), scale=softmax_scale)
     return oh.squeeze(0).permute(1, 0, 2)  # [Lq,H,Cv]
 
 
-def _varlen_core(q, k, v, cu_seqlens_q, cu_seqlens_k, causal, softmax_scale):
+def _varlen_core(q, k, v, cu_seqlens_q, cu_seqlens_k, causal, softmax_scale,
+                 dropout_p):
     """Per-segment SDPA over packed [total,H,C] var-len tensors -> [total,H,Cv]."""
     q_seqlen = _to_int_list(cu_seqlens_q)
     kv_seqlen = _to_int_list(cu_seqlens_k)
@@ -178,7 +180,8 @@ def _varlen_core(q, k, v, cu_seqlens_q, cu_seqlens_k, causal, softmax_scale):
     qs = ks = 0
     for ql, kl in zip(q_seqlen, kv_seqlen):
         outs.append(_sdpa_segment(
-            q[qs:qs + ql], k[ks:ks + kl], v[ks:ks + kl], causal, softmax_scale))
+            q[qs:qs + ql], k[ks:ks + kl], v[ks:ks + kl], causal,
+            softmax_scale, dropout_p))
         qs += ql
         ks += kl
     if not outs:
@@ -199,7 +202,8 @@ def flash_attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_k,
         *args, **kwargs)
     if out is not None:
         return out
-    return _varlen_core(q, k, v, cu_seqlens_q, cu_seqlens_k, causal, softmax_scale)
+    return _varlen_core(
+        q, k, v, cu_seqlens_q, cu_seqlens_k, causal, softmax_scale, dropout_p)
 
 
 def flash_attn_varlen_qkvpacked_func(qkv, cu_seqlens, max_seqlen,
@@ -214,7 +218,8 @@ def flash_attn_varlen_qkvpacked_func(qkv, cu_seqlens, max_seqlen,
     q = qkv[:, 0]
     k = qkv[:, 1]
     v = qkv[:, 2]
-    return _varlen_core(q, k, v, cu_seqlens, cu_seqlens, causal, softmax_scale)
+    return _varlen_core(
+        q, k, v, cu_seqlens, cu_seqlens, causal, softmax_scale, dropout_p)
 
 
 def flash_attn_varlen_kvpacked_func(q, kv, cu_seqlens_q, cu_seqlens_k,
@@ -230,18 +235,20 @@ def flash_attn_varlen_kvpacked_func(q, kv, cu_seqlens_q, cu_seqlens_k,
         return out
     k = kv[:, 0]
     v = kv[:, 1]
-    return _varlen_core(q, k, v, cu_seqlens_q, cu_seqlens_k, causal, softmax_scale)
+    return _varlen_core(
+        q, k, v, cu_seqlens_q, cu_seqlens_k, causal, softmax_scale, dropout_p)
 
 
 # ------------------------------------------------------------------ dense API
 
-def _dense_core(q, k, v, causal, softmax_scale):
+def _dense_core(q, k, v, causal, softmax_scale, dropout_p):
     """q,k,v: [B, L*, H, C] -> [B, Lq, H, Cv] via batched SDPA."""
     qh = q.permute(0, 2, 1, 3)             # [B,H,Lq,Cq]
     kh = k.permute(0, 2, 1, 3)             # [B,H,Lk,C]
     vh = v.permute(0, 2, 1, 3)             # [B,H,Lk,Cv]
     oh = F.scaled_dot_product_attention(
-        qh, kh, vh, is_causal=bool(causal), scale=softmax_scale)
+        qh, kh, vh, dropout_p=dropout_p,
+        is_causal=bool(causal), scale=softmax_scale)
     return oh.permute(0, 2, 1, 3)          # [B,Lq,H,Cv]
 
 
@@ -253,7 +260,7 @@ def flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False,
         *args, **kwargs)
     if out is not None:
         return out
-    return _dense_core(q, k, v, causal, softmax_scale)
+    return _dense_core(q, k, v, causal, softmax_scale, dropout_p)
 
 
 def flash_attn_qkvpacked_func(qkv, dropout_p=0.0, softmax_scale=None,
@@ -267,7 +274,7 @@ def flash_attn_qkvpacked_func(qkv, dropout_p=0.0, softmax_scale=None,
     q = qkv[:, :, 0]
     k = qkv[:, :, 1]
     v = qkv[:, :, 2]
-    return _dense_core(q, k, v, causal, softmax_scale)
+    return _dense_core(q, k, v, causal, softmax_scale, dropout_p)
 
 
 def flash_attn_kvpacked_func(q, kv, dropout_p=0.0, softmax_scale=None,
@@ -280,4 +287,4 @@ def flash_attn_kvpacked_func(q, kv, dropout_p=0.0, softmax_scale=None,
         return out
     k = kv[:, :, 0]
     v = kv[:, :, 1]
-    return _dense_core(q, k, v, causal, softmax_scale)
+    return _dense_core(q, k, v, causal, softmax_scale, dropout_p)
