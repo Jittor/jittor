@@ -35,6 +35,14 @@ class Base(unittest.TestCase):
         np.testing.assert_array_equal(np.asarray(got), np.asarray(ref), err_msg=msg)
 
 
+class TestJitCompatibility(Base):
+    def test_final_supports_class_annotations(self):
+        class Attention:
+            fused_attn: torch.jit.Final[bool]
+
+        self.assertIn("fused_attn", Attention.__annotations__)
+
+
 class TestRandomCompatibility(Base):
     def test_seed_supports_native_jittor_and_torch_forms(self):
         jt.seed(731)

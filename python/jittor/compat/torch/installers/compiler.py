@@ -57,6 +57,11 @@ def install(ctx):
     _jit.is_tracing = lambda: False
     _jit.ScriptModule = jt.nn.Module
     _jit.interface = lambda c: c
+    try:
+        from typing import Final as _Final
+    except ImportError:  # Python 3.7
+        from typing_extensions import Final as _Final
+    _jit.Final = _Final
     _alias("jit", _jit)
     _alias("ScriptModule", _jit.ScriptModule)
     _modules.setdefault("torch.jit", _jit)
