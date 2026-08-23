@@ -2,7 +2,7 @@
 
 - Status: Adapter transport gate accepted on real CUDA
 - Last reviewed: 2026-08-24
-- Jittor baseline: `867664a5`
+- Jittor baseline: `2776ab2d`
 - verl source: `3d66a3d7ca1cf783df949816ec6862d5a7af9406` plus existing adapter edits
 - Owner: verl/vLLM external-adapter maintainers
 - Review when: verl bucket protocol, adapter transport, or rollout weight loader changes
@@ -24,6 +24,12 @@ receiver callback 调用模型原生 `load_weights`，将
 `model.layers.0.input_layernorm.weight` 增加 `0.125`；EngineCore 模型参数读回
 `delta=0.125000`，随后通过同一 loader 恢复原值并逐元素验证。
 
+关闭 prefix cache 后，harness 还在更新前、更新后和恢复后分别执行真实 1-token
+rollout 并读取 logprob。稳定复跑中 token 均为 `12095`；未更新模型的两次基线抖动
+为 `0.001110`，权重更新令 logprob 改变 `-0.365747`，约为自然抖动的 329 倍；恢复
+权重后 token 与 logprob 回到基线容差内。因此 transport 变化确实进入推理计算，
+不是只更新了一个未被使用的参数表。
+
 ## 验证
 
 - 独立 cache 首次完成 Jittor core、CUDA extern 与 MKL 初始化。
@@ -38,6 +44,8 @@ receiver callback 调用模型原生 `load_weights`，将
   `VERL_VLLM_MODEL` 时由 `run_all.sh` 追加执行。
 - Qwen3-0.6B V1/UniProc：模型加载约 7 秒、engine warmup 约 2 秒，输出
   `verl vLLM weight apply smoke OK ... loaded=1 delta=0.125000`。
+- 首次新增 rollout 图包含冷 JIT，耗时不作为性能结果；补齐 cache 后重复 harness
+  输出 `score_delta=-0.365747 baseline_jitter=0.001110`。
 
 ## 隔离方法
 
@@ -50,5 +58,5 @@ package 的真实 `__path__`，但不执行其 `__init__`，随后按 canonical 
 ## 边界
 
 该门禁证明 transport payload、handshake 和 UniProc EngineCore 模型应用正确，但
-没有覆盖 Ray 跨进程、FSDP actor 导出或完整 PPO step。下一阶段仍需比较权重更新前后
-生成/logprob 变化，并完成训练、rollout、reward、actor/critic update 闭环。
+没有覆盖 Ray 跨进程、FSDP actor 导出或完整 PPO step。下一阶段仍需完成真实 actor
+权重导出、Ray rollout、reward、actor/critic update 闭环。
