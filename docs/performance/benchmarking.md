@@ -69,6 +69,14 @@ explicitly synchronizes those Vars; neither runtime performs per-gradient D2H
 inside the timing window. See the
 [2026-08-23 ecosystem report](../../agent/results/2026-08-23-ecosystem-parity-performance.md).
 
+Masked SDPA performance must preserve fully-masked-row semantics. On CUDA, the
+maintained attention path delegates explicit masks to the softmax kernel's
+`zero_all_neg_inf` mode instead of building a separate row-valid reduction and
+two ternary graphs. Pure causal attention does not need that mode because every
+row contains its diagonal element. Profile comparisons must check graph rows as
+well as wall time; see the
+[CUDA masked SDPA report](../../agent/results/2026-08-23-cuda-masked-sdpa.md).
+
 The result label must match the checkout. The nox sessions reject a dirty tree
 unless the caller deliberately sets `ASV_ALLOW_DIRTY=1`, which is intended only
 for local investigation and not publishable evidence.

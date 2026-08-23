@@ -90,10 +90,14 @@ Transformers/Diffusers/PEFT/ms-swift/MMCV/MMEngine CPU and CUDA cases, while
 real-scale training performance remains incomplete. Current verl core
 algorithm/FSDP2 gates also pass on CPU/CUDA; Qwen3-vLLM and TRELLIS.2 complete
 real-CUDA inference, but their measured hot paths remain about 4.00x and 1.20x
-slower than their respective real-PyTorch references. See
+slower than their respective real-PyTorch references. CUDA masked SDPA now
+reuses the safe softmax kernel instead of building redundant row-valid graphs;
+real-scale GPT-2 improved by about 6%, while the remaining Transformer training
+gap is still 1.19-1.29x. See
 [benchmarking](../../docs/performance/benchmarking.md) and the
 [ecosystem parity/performance report](../results/2026-08-23-ecosystem-parity-performance.md),
-plus the [verl/vLLM/TRELLIS current-baseline report](../results/2026-08-23-verl-vllm-trellis-current-baseline.md).
+the [verl/vLLM/TRELLIS current-baseline report](../results/2026-08-23-verl-vllm-trellis-current-baseline.md),
+and the [CUDA masked SDPA report](../results/2026-08-23-cuda-masked-sdpa.md).
 
 ### Agent-operable optimization
 
