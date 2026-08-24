@@ -2,7 +2,7 @@
 
 - Status: Selected optional packages and native FlashAttention training accepted on real CUDA
 - Last reviewed: 2026-08-25
-- Commits: `566eae8e`, `2cf096d5`, `c2e340f8`, `90e00edd`, `9e69fa23`, `19820174`, `50fc95d5`, `a13cb06e`, `c8c43cf6`, `d500dc77`, `76b8a5a0`, `24cf00eb`, `95cd6f6c`, `c3e65b1d`, `fe97085a`, `1cd76dd9`, `f3df3274`, `797a6a97`
+- Commits: `566eae8e`, `2cf096d5`, `c2e340f8`, `90e00edd`, `9e69fa23`, `19820174`, `50fc95d5`, `a13cb06e`, `c8c43cf6`, `d500dc77`, `76b8a5a0`, `24cf00eb`, `95cd6f6c`, `c3e65b1d`, `fe97085a`, `1cd76dd9`, `f3df3274`, `797a6a97`, `5b838f0f`
 - Owner: Torch compatibility and test-infrastructure maintainers
 - Review when: optional package versions, Torch shim identity, or nox hardware
   environment contracts change
@@ -128,6 +128,9 @@ backward，确保同一 dropout mask 被重放。
   `3 passed in 4.32s`。bf16 环境同时收集六项时结果为 `3 passed, 3 skipped`，证明
   fp16 入口按 dtype fail closed。bf16 基础 nox 选择 11 项，`all/all` 现精确选择
   21 项且无重复。
+- 三条训练变体检查进一步参数化 head dim。hdim64/fp16 为 `3 passed in 8.24s`，
+  hdim64/bf16 为 `3 passed in 9.38s`，默认 hdim32/fp16 回归 `3 passed in 3.22s`。
+  请求 `64/bf16` 时 nox 精确选择 19 项，`all/all` 现为 27 项且无重复。
 - optional 两阶段的 retained nox cache：基础 TorchMetrics/MMCV/MMEngine/PEFT/
   TensorDict/FlashAttention 共 `14 passed, 1 warning in 18.44s`，native 阶段
   `7 passed in 96.18s`。fresh cache 首次 TorchMetrics 仍因主机满核在固定 600 秒内
@@ -147,8 +150,8 @@ backward，确保同一 dropout mask 被重放。
 ## 边界
 
 Native fused 训练结论限定为 RTX 4090、无显式 attention mask。官方 fp16/bf16 的
-head dim 32/64/96/128/192/256 均覆盖 dense forward/backward；其中只有 hdim32/fp16
-和 hdim32/bf16 还覆盖 varlen/qkv-packed 一阶 backward 与 `p=0.25` dropout。
-hdim64/96/128/192/256 dropout/varlen/packed、alibi、softcap、显式 mask、
+head dim 32/64/96/128/192/256 均覆盖 dense forward/backward；hdim32/64 的两种
+dtype 还覆盖 varlen/qkv-packed 一阶 backward 与 `p=0.25` dropout。
+hdim96/128/192/256 dropout/varlen/packed、alibi、softcap、显式 mask、
 二阶梯度、稳定热态性能和完整 Transformer 性能尚未由本报告宣称通过。NPU/ROCm
 也未因本次 CUDA 结果获得任何通过结论。
