@@ -214,6 +214,9 @@ OPTIONAL_NATIVE_FLASH_HDIM64_TESTS = (
 OPTIONAL_NATIVE_FLASH_HDIM96_TESTS = (
     "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim96_fp16_cuda",
 )
+OPTIONAL_NATIVE_FLASH_HDIM128_TESTS = (
+    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim128_fp16_cuda",
+)
 NPU_TESTS = (
     "tests/backends/npu/test_acl.py",
     "tests/backends/npu/test_aclop.py",
@@ -1276,6 +1279,8 @@ def optional(session):
             native_tests += OPTIONAL_NATIVE_FLASH_HDIM64_TESTS
         if configured_head_dims & {"96", "all", "full", "*"}:
             native_tests += OPTIONAL_NATIVE_FLASH_HDIM96_TESTS
+        if configured_head_dims & {"128", "all", "full", "*"}:
+            native_tests += OPTIONAL_NATIVE_FLASH_HDIM128_TESTS
         _run_pytest(session, native_tests, native_env, runner=python)
 
 

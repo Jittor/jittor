@@ -1183,6 +1183,41 @@ assert after == before + 1, (before, after)
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
+    @unittest.skipUnless(_native_flash_dtype_enabled("float16"),
+                         "native fp16 flash-attn capability not configured")
+    @unittest.skipUnless(_native_flash_head_dim_enabled(128),
+                         "native hdim128 flash-attn capability not configured")
+    def test_sdpa_native_flash_attn_backward_hdim128_fp16_cuda(self):
+        rng = np.random.RandomState(137)
+        q = rng.randn(1, 2, 8, 128).astype("float32")
+        k = rng.randn(1, 2, 8, 128).astype("float32")
+        v = rng.randn(1, 2, 8, 128).astype("float32")
+        grad_out = rng.randn(1, 2, 8, 128).astype("float32")
+        with jt.flag_scope(use_cuda=1):
+            if hasattr(jt, "_torch_sdpa_flash_stats"):
+                delattr(jt, "_torch_sdpa_flash_stats")
+            qv, kv, vv = (
+                jt.array(value).float16() for value in (q, k, v))
+            out = torch.nn.functional.scaled_dot_product_attention(qv, kv, vv)
+            grads = jt.grad(
+                (out.float32() * jt.array(grad_out)).sum(), [qv, kv, vv])
+            fetched = jt.fetch_sync(
+                [out.float32()] + [grad.float32() for grad in grads])
+            stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+
+        self.assertGreaterEqual(stats.get("hits", 0), 1)
+        self.assertEqual(stats.get("misses", {}), {})
+        self.ac(fetched[0], _sdpa_ref(q, k, v), atol=3e-3, rtol=3e-3,
+                msg="sdpa native hdim128 flash backward output")
+        for name, got, expected in zip(
+                ("q", "k", "v"), fetched[1:],
+                _sdpa_backward_ref(q, k, v, grad_out)):
+            self.ac(got, expected, atol=3e-3, rtol=3e-3,
+                    msg="sdpa native hdim128 flash %s gradient" % name)
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
+                     "native flash-attn source not configured")
     def test_native_flash_attn_dropout_replays_seed_and_backward(self):
         import flash_attn
         from jittor.compat.shim.backends import flash_attention as flashattn_jittor
