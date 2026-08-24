@@ -1678,6 +1678,30 @@ assert after == before + 1, (before, after)
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
+    @unittest.skipUnless(_native_flash_dtype_enabled("float16"),
+                         "native fp16 flash-attn capability not configured")
+    @unittest.skipUnless(_native_flash_head_dim_enabled(96),
+                         "native hdim96 flash-attn capability not configured")
+    def test_native_flash_attn_training_variants_hdim96_fp16(self):
+        self._check_native_flash_attn_dropout("float16", 96)
+        self._check_native_flash_attn_varlen_backward("float16", 3e-3, 6e-3, 96)
+        self._check_native_flash_attn_qkvpacked_backward("float16", 96)
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
+                     "native flash-attn source not configured")
+    @unittest.skipUnless(_native_flash_dtype_enabled("bfloat16"),
+                         "native bf16 flash-attn capability not configured")
+    @unittest.skipUnless(_native_flash_head_dim_enabled(96),
+                         "native hdim96 flash-attn capability not configured")
+    def test_native_flash_attn_training_variants_hdim96_bf16(self):
+        self._check_native_flash_attn_dropout("bfloat16", 96)
+        self._check_native_flash_attn_varlen_backward("bfloat16", 3e-2, 3e-2, 96)
+        self._check_native_flash_attn_qkvpacked_backward("bfloat16", 96)
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
+                     "native flash-attn source not configured")
     def test_sdpa_native_flash_attn_gqa_fp16_cuda(self):
         rng = np.random.RandomState(73)
         q = rng.randn(1, 4, 3, 32).astype("float32")
