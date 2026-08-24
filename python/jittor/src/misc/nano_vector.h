@@ -70,6 +70,14 @@ struct NanoVector {
         return offset & ((1<<size_nbits)-1);
     }
 
+    // @pyjt(numel)
+    inline int64 numel() const {
+        int64 value = 1;
+        for (int i=0; i<size(); i++)
+            value *= at(i);
+        return value;
+    }
+
     static inline int get_nbits(int64 v) {
         // return 1bit if v in [-1,0]
         // return 2bit if v in [-2,1,0,1]

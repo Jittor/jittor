@@ -14,6 +14,23 @@ _HAS_TENSORDICT = importlib.util.find_spec("tensordict") is not None
 @unittest.skipUnless(_HAS_TENSORDICT, "tensordict is not installed")
 @unittest.skipUnless(torch.compiler.has_cuda, "CUDA is required")
 class TestTensorDictCompat(unittest.TestCase):
+    def test_cpu_conversion_uses_device_objects(self):
+        from tensordict import TensorDict
+
+        parsed_device = torch._C._nn._parse_to("cpu")[0]
+        self.assertIsInstance(parsed_device, torch.device)
+        self.assertEqual(parsed_device.type, "cpu")
+        self.assertIsNone(parsed_device.index)
+
+        with torch.flag_scope(use_cuda=1):
+            tensordict = TensorDict(
+                {"value": torch.ones((2,), device="cuda")}, batch_size=[2]
+            )
+            cpu_tensordict = tensordict.cpu()
+
+        self.assertEqual(cpu_tensordict.device.type, "cpu")
+        self.assertFalse(cpu_tensordict["value"].is_cuda)
+
     def test_cuda_construct_update_and_lazy_stack(self):
         from tensordict import TensorDict, lazy_stack
 

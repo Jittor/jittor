@@ -44,6 +44,12 @@ class TestNanoVector(unittest.TestCase):
         assert a[:] == [2,3,4,5]
         assert a[1:] == [3,4,5]
 
+    def test_numel(self):
+        self.assertEqual(jt.NanoVector().numel(), 1)
+        self.assertEqual(jt.NanoVector([2, 3, 4, 5]).numel(), 120)
+        self.assertEqual(jt.NanoVector([2, 0, 4]).numel(), 0)
+        self.assertEqual(jt.NanoVector([2, 3, 4])[1:].numel(), 12)
+
 
 if __name__ == "__main__":
     unittest.main()

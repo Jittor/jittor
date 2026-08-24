@@ -1,11 +1,11 @@
-# verl Jittor 权重传输真实 CUDA 门禁
+# verl Jittor 权重传输与 1-step PPO 真实 CUDA 门禁
 
-- Status: Adapter transport gate accepted on real CUDA
+- Status: Adapter transport and tiny-model 1-step PPO gates accepted on real CUDA
 - Last reviewed: 2026-08-24
-- Jittor baseline: `2776ab2d`
+- Jittor baseline: `272ad4ff` plus the fixes described below
 - verl source: `3d66a3d7ca1cf783df949816ec6862d5a7af9406` plus existing adapter edits
 - Owner: verl/vLLM external-adapter maintainers
-- Review when: verl bucket protocol, adapter transport, or rollout weight loader changes
+- Review when: verl bucket protocol, actor/critic engines, adapter transport, or rollout weight loader changes
 
 ## 结论
 
@@ -34,6 +34,18 @@ rollout 并读取 logprob。稳定复跑中 token 均为 `12095`；未更新模�
 和 GPU 3，并使用两个独立、串行预热的 Jittor cache。同一组 fp32/fp16/bf16 权重
 跨 Ray 进程完成 ZMQ 往返，driver 收到的名称、dtype、shape 和逐元素值全部一致。
 
+同一外置 adapter 随后完成 tiny Qwen3 的真实单卡 1-step PPO。模型保留 Qwen3
+tokenizer 和完整词表，使用 2 层、hidden size 64、约 9.80M 参数的本地 checkpoint；
+训练 batch 为 4，prompt/response 上限为 32/16，actor 与 critic 均为 FSDP，rollout
+为 async vLLM V1/UniProc，优势估计为 GAE。完整 dense 路径依次执行 rollout、训练前
+权重同步、old log-prob、reward、critic value、GAE、critic backward/optimizer、actor
+backward/optimizer，以及训练后权重同步，最终 `training/global_step=1` 并正常退出。
+
+最终一步的 actor/critic grad norm 分别为 `1.878197` 和 `0.368663`，不是空图或
+CPU fallback。rollout 与训练侧概率差最大 `2.416e-8`、均值 `1.083e-8`，Pearson
+相关系数 `0.9999851`；训练前后 vLLM 权重同步分别约 `0.55s` 和 `0.51s`。该运行
+仍包含少量首次 JIT，因此 `395.99s/step` 只作为功能门禁耗时，不作为性能结果。
+
 ## 验证
 
 - 独立 cache 首次完成 Jittor core、CUDA extern 与 MKL 初始化。
@@ -57,6 +69,12 @@ rollout 并读取 logprob。稳定复跑中 token 均为 `12095`；未更新模�
   契约，避免 Ray 回收子进程触发 Jittor SIGCHLD quick-exit；operator compiler 保持串行。
 - 1-step PPO 离线输入已生成 8 条 train/4 条 validation parquet；真实 Qwen tokenizer
   和 `RLHFDataset` 过滤后保留全部 8 条，并返回正确 raw chat/reward metadata。
+- tiny Qwen3 单卡 dense PPO：`Training Progress: 100% 1/1`，actor/critic update、
+  optimizer step 与更新后权重同步全部执行；最终 `response_length/mean=16`、
+  `response/aborted_ratio=0`、`training/global_step=1`。
+- `NanoVector.numel()` 定向测试 `3 passed`；真实 GPU cache 探针返回 `24`。
+- `torch._C._nn._parse_to("cpu")` 现在返回 `device(type='cpu')`；真实 CUDA
+  TensorDict construct/index/`.cpu()` 回归文件 `3 passed`。
 
 ## 隔离方法
 
@@ -66,9 +84,20 @@ package 的真实 `__path__`，但不执行其 `__init__`，随后按 canonical 
 导入真实 `bucketed_weight_transfer.py`。因此 adapter 的 meta-path lazy hook 仍被
 验证，同时没有用假的 sender/receiver 实现替代被测代码。
 
+PPO 运行状态和编译 cache 均未版本化。最终 Hydra 配置与持久化 Ray worker 日志
+保存在 `$JITTOR_LAB_ROOT/_state/verl-ppo/20260824/run-dense-final/`；其中配置、
+TaskRunner stdout 和 stderr 的 SHA-256 分别为
+`4fbe018a4cf8b46cb52edeb4768515f1810ab07eec3c32b849c02365be6caf26`、
+`7129498ac277b2fe942047f6380118473bf0f2891c938d08a846eef7a0d58d1c` 和
+`745c1370f56e03ea7488965c6eefa530dda6fa33f2d54b20c454c8542ffd4a35`。
+tiny checkpoint 的 `model.safetensors` SHA-256 为
+`12cef412ee8181c27fb13143022c1b29b42663a66121047e5782d9b4afb7aae5`；模型和数据
+均为本地离线产物。
+
 ## 边界
 
-该门禁证明 transport payload、handshake 和 UniProc EngineCore 模型应用正确，但
-没有覆盖 FSDP actor 权重导出或完整 PPO step。下一阶段仍需完成真实 actor 权重导出、
-Ray rollout、reward、actor/critic update 闭环。主机现有长期满核 compiler 进程使
-多 actor 训练启动与超时不具备稳定条件；本报告不把 transport 门禁外推成 PPO 通过。
+完整 PPO 结论限定为 tiny Qwen3、单卡、dense actor/critic 路径和固定 reward。优化态
+`use_remove_padding=True` 已真实完成 rollout 并进入 old log-prob，且暴露的
+`NanoVector.numel()` 与 TensorDict device 契约均已修复和定向验证，但在主机现有
+长期满核 compiler 进程下未重新跑完整 step。Qwen3-0.6B、多卡/多 actor、真实 reward
+model、长序列、稳定热态性能，以及 NPU/ROCm 均不由本报告宣称通过。

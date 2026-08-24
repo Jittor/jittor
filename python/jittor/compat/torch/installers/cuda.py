@@ -13,7 +13,7 @@ from ..grad import (
     _GradScaler,
 )
 from ..types import (
-    dtype,
+    device, dtype,
 )
 
 _cuda_props_cache = {}
@@ -461,6 +461,10 @@ def _install_cuda(g, registry=None):
                 if arg in getattr(dtype, "_registry", {}).values():
                     if dtype_arg is None:
                         dtype_arg = arg
+            if isinstance(dev, str):
+                dev = device(dev)
+            elif dev is not None and not isinstance(dev, device):
+                dev = device(getattr(dev, "type", dev), getattr(dev, "index", None))
             return dev, dtype_arg, non_blocking, kwargs.get("memory_format", None)
         nn_c._parse_to = _parse_to
         c_mod._nn = nn_c
