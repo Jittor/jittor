@@ -186,9 +186,9 @@ of optional skips. When `JITTOR_FLASH_ATTN_JITTOR_SRC` names an official
 FlashAttention checkout, the session uses two phases: the normal optional tests
 run with the deployed math adapter, then a native-required phase runs fused
 fp16 forward, dense/varlen/packed backward, dropout RNG replay, GQA, and
-float32 opt-in tests. The native phase defaults to head dimension 32 and fp16,
-can be expanded through the FlashAttention capability environment variables,
-and cannot be satisfied by fallback.
+float32 opt-in tests. The native phase defaults to head dimension 32 and fp16;
+the FlashAttention capability environment variables extend that base set rather
+than replacing it. The native phase cannot be satisfied by fallback.
 
 ## Adding coverage
 

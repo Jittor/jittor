@@ -117,7 +117,8 @@ session at an official source checkout. The session first runs the deployed
 adapter tests with math fallback enabled, then runs a separate native-required
 phase so the two contracts cannot mask or contradict each other. The native
 phase defaults to head dimension 32 and fp16; set
-`JITTOR_FLASH_ATTN_HEAD_DIMS` or `JITTOR_FLASH_ATTN_DTYPES` to expand it.
+`JITTOR_FLASH_ATTN_HEAD_DIMS` or `JITTOR_FLASH_ATTN_DTYPES` to expand it. These
+values are unioned with the base `32/fp16` capability rather than replacing it.
 It covers fused forward, dense/varlen/packed backward, dropout RNG replay, GQA,
 and float32 opt-in cast. A native build or load failure cannot fall back to math
 attention in that phase.
