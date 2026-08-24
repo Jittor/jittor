@@ -113,8 +113,14 @@ python -m nox -s optional
 ```
 
 To extend the same gate to the native fused FlashAttention backend, point the
-session at an official source checkout. This mode sets the backend to required,
-so a build or load failure cannot fall back to math attention.
+session at an official source checkout. The session first runs the deployed
+adapter tests with math fallback enabled, then runs a separate native-required
+phase so the two contracts cannot mask or contradict each other. The native
+phase defaults to head dimension 32 and fp16; set
+`JITTOR_FLASH_ATTN_HEAD_DIMS` or `JITTOR_FLASH_ATTN_DTYPES` to expand it.
+It covers fused forward, dense/varlen/packed backward, dropout RNG replay, GQA,
+and float32 opt-in cast. A native build or load failure cannot fall back to math
+attention in that phase.
 
 ```bash
 export JITTOR_FLASH_ATTN_JITTOR_SRC=/path/to/flash-attention

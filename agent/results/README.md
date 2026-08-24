@@ -13,6 +13,7 @@
 - [2026-08-24 融合标量 float32 精度语义修复](2026-08-24-fused-scalar-float32-precision.md)
 - [2026-08-24 低精度 elementwise backward dtype 修复](2026-08-24-low-precision-grad-dtype.md)
 - [2026-08-24 arg_reduce 测试快照 alias 修复](2026-08-24-arg-reduce-test-snapshot.md)
+- [2026-08-24 可选依赖与原生 FlashAttention CUDA 门禁](2026-08-24-optional-compat-cuda-gate.md)
 - [2026-08-24 verl 权重传输与 1-step PPO 真实 CUDA 门禁](2026-08-24-verl-weight-transfer.md)
 - [2026-08-23 verl、vLLM 与 TRELLIS 当前基线复验](2026-08-23-verl-vllm-trellis-current-baseline.md)
 - [2026-08-23 下游生态同版本对拍与 CUDA 训练热点优化](2026-08-23-ecosystem-parity-performance.md)

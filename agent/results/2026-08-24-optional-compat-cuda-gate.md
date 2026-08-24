@@ -1,8 +1,8 @@
 # 可选依赖 fail-closed CUDA 门禁
 
-- Status: Selected optional packages accepted on real CUDA
+- Status: Selected optional packages and native FlashAttention training accepted on real CUDA
 - Last reviewed: 2026-08-24
-- Commits: `566eae8e`, `2cf096d5`, `c2e340f8`, `90e00edd`, `9e69fa23`
+- Commits: `566eae8e`, `2cf096d5`, `c2e340f8`, `90e00edd`, `9e69fa23`, `19820174`
 - Owner: Torch compatibility and test-infrastructure maintainers
 - Review when: optional package versions, Torch shim identity, or nox hardware
   environment contracts change
@@ -23,9 +23,22 @@ FlashAttention math fallback 原先接收 `dropout_p` 却没有传给 canonical 
 会静默返回未 dropout 的结果。dense、packed 和 varlen fallback 现在都传递该参数，
 并由真实部署 adapter 的 `dropout_p=1` 零输出回归锁定。
 
-`optional` session 还支持显式 `JITTOR_FLASH_ATTN_JITTOR_SRC`：它先验证官方源码
-布局，再设置 native backend required，并追加 fp16、GQA 和 float32 opt-in 三项
-fused CUDA 测试。该模式中 backend 构建或加载失败不能用 math fallback 满足门禁。
+`optional` session 还支持显式 `JITTOR_FLASH_ATTN_JITTOR_SRC`。基础 optional 阶段
+固定使用 deployed math adapter；随后独立的 native-required 阶段默认构建
+hdim32/fp16 official kernel。这样 float32 math fallback 与 fp16 native-required 契约
+不再共享互相矛盾的环境，native 构建或加载失败也不能用 fallback 满足门禁。
+
+official backend 现在同时编译 forward、split-forward 与 backward kernel，不再定义
+`FLASHATTENTION_DISABLE_BACKWARD/DROPOUT`。dense 和 varlen API 通过 `jt.Function`
+保存 output、softmax LSE 与 RNG state，并在一阶反向中调用官方 `bwd/varlen_bwd`；
+qkv-packed 训练绕过 inference-only direct packed fast path，经可微 split 复用同一
+native backward。Torch SDPA 也允许无 mask 的 CUDA 训练与 `0 <= dropout_p < 1`
+进入该 backend，未声明训练能力的第三方 backend 仍 fail closed 或回退 math。
+
+C++ generator shim 原先每次返回固定 seed/offset，dropout 会重复同一 mask。现在
+Philox state 读取 Jittor 全局 seed，并从共享 offset 分配 counter；重复
+`manual_seed` 会把 offset 复位，连续调用则前进。forward 保存的 RNG state 直接传给
+backward，确保同一 dropout mask 被重放。
 
 ## 环境
 
@@ -37,6 +50,8 @@ fused CUDA 测试。该模式中 backend 构建或加载失败不能用 math fal
   从仓库边界外的官方 checkout 加载。
 - `HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`、
   `JITTOR_TORCH_SHIM=1`、`use_cuda=1`、`use_parallel_op_compiler=0`。
+- Native training gate 使用 `JITTOR_FLASH_ATTN_HEAD_DIMS=32`、
+  `JITTOR_FLASH_ATTN_DTYPES=fp16`；nox 允许外部显式扩大这两个能力集合。
 
 ## 验证
 
@@ -49,21 +64,37 @@ fused CUDA 测试。该模式中 backend 构建或加载失败不能用 math fal
 - TensorDict 与 FlashAttention 新增真实行为模块：`5 passed in 11.31s`，覆盖 CUDA
   构造/更新/index/lazy stack，以及 dense/packed/varlen attention、梯度和 dropout。
 - 五模块加既有 loader/stub 契约同一 shim 会话：`16 passed, 1 warning in 28.37s`。
-- Native fused required 模式：hdim32 fp16 冷构建后 `3 passed in 530.02s`；同 cache
-  热重跑 `3 passed in 4.33s`。三项均检查 native hit/backend，fallback 被禁止。
+- 修复前真实 native 探针：forward 命中 official backend；`jt.grad` 警告输出不在图中
+  并返回三个全零梯度，`dropout_p=0.2` 被明确拒绝。
+- Native fused training 模式首次串行构建后，forward、数值 backward、dropout、GQA
+  与 float32 cast 五项 `5 passed in 822.69s`；补齐 varlen 与 qkv-packed 后，热 cache
+  七项同进程 `7 passed in 4.36s`。
+- 独立 nox cache 的 native-required 七项 `7 passed in 96.18s`；完整 attention 模块
+  在同一 source-required 环境 `41 passed in 499.76s`。dense SDPA 输出及 q/k/v 梯度
+  对独立 NumPy softmax 导数，varlen 使用长度 3/4 两段对拍；qkv-packed 输出和 packed
+  梯度与 dense native 完全一致。
+- Dropout 门禁使用 `p=0.25`：同 seed 的输出和三组梯度逐元素一致，不重置 seed 的
+  下一调用输出变化；所有梯度有限且非零。`return_attn_probs` 只检查 shape，因为官方
+  128 对齐工作区的有效序列外区域不保证初始化。
+- optional 两阶段的 retained nox cache：基础 TorchMetrics/MMCV/MMEngine/PEFT/
+  TensorDict/FlashAttention 共 `14 passed, 1 warning in 18.44s`，native 阶段
+  `7 passed in 96.18s`。fresh cache 首次 TorchMetrics 仍因主机满核在固定 600 秒内
+  未完成 JIT；同 cache 以 1200 秒保护复跑为 `2 passed in 762.48s`。
 - `nox -s optional -- tests/compat/torch/test_mmcv_compat.py`：依赖预检通过，
   `3 passed in 550.05s`，session 成功完成冷 cache 编排。
 - 布局检查通过；`tests/structure`：`218 passed`；`noxfile.py` Ruff 检查通过。
-- 相对 `HEAD` 构建前后两个 797-member wheel，差分只有已批准的 FlashAttention
-  stub 和派生 `RECORD` 两项内容变化；无成员新增或删除，wheel 内容审计通过。
+- 从干净 `HEAD` 与叠加本任务三个运行文件分别构建 797-member wheel；精确比较为
+  0 新增、0 删除，只变化 backend、generator header、SDPA installer 与派生 RECORD，
+  四项 SHA-256 allowlist 后 wheel 内容门禁通过。默认 wheel 基线另有此前累积漂移，
+  未在本任务中混入更新。
 
-首次 cold-cache 组合运行在 20 分钟保护下因主机另一个长期满核进程而超时，没有失败
-traceback；相同隔离 cache 补齐编译后，上述模块和组合门禁全部通过。原始 cache 与运行
-状态均在 `$JITTOR_LAB_ROOT/_state/`，未进入仓库。
+前一轮 cold-cache 组合运行在 20 分钟保护下因主机另一个长期满核进程而超时，没有
+失败 traceback；相同隔离 cache 补齐编译后，上述模块和组合门禁全部通过。原始 cache
+与运行状态均在 `$JITTOR_LAB_ROOT/_state/`，未进入仓库。
 
 ## 边界
 
-Native fused 结果只覆盖无 mask、dropout=0 的 forward/inference；官方构建仍显式
-禁用 backward 和 dropout，因此不构成 Transformer 训练支持。完整 ecosystem
-forward/backward 与性能仍由独立 same-version harness 维护。NPU/ROCm 也未因本次
-CUDA 结果获得任何通过结论。
+Native fused 训练结论限定为 RTX 4090、hdim32/fp16、无显式 attention mask，覆盖
+dense/varlen/qkv-packed 一阶 backward 与 `p=0.25` dropout。bf16、其他 head dim、
+alibi、softcap、显式 mask、二阶梯度、稳定热态性能和完整 Transformer 性能尚未由本
+报告宣称通过。NPU/ROCm 也未因本次 CUDA 结果获得任何通过结论。

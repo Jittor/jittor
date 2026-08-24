@@ -183,9 +183,12 @@ TorchMetrics, mmcv-lite/MMEngine, PEFT, Safetensors, TensorDict, and the deploye
 FlashAttention adapter. It probes every package before pytest, enables the
 Jittor Torch shim explicitly, and treats PEFT import failures as errors instead
 of optional skips. When `JITTOR_FLASH_ATTN_JITTOR_SRC` names an official
-FlashAttention checkout, the session also sets the native backend to required
-and runs fp16, GQA, and float32 opt-in fused CUDA tests; fallback cannot satisfy
-those tests.
+FlashAttention checkout, the session uses two phases: the normal optional tests
+run with the deployed math adapter, then a native-required phase runs fused
+fp16 forward, dense/varlen/packed backward, dropout RNG replay, GQA, and
+float32 opt-in tests. The native phase defaults to head dimension 32 and fp16,
+can be expanded through the FlashAttention capability environment variables,
+and cannot be satisfied by fallback.
 
 ## Adding coverage
 
