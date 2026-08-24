@@ -208,6 +208,9 @@ OPTIONAL_NATIVE_FLASH_TESTS = (
 OPTIONAL_NATIVE_FLASH_BF16_TESTS = (
     "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_bf16_cuda",
 )
+OPTIONAL_NATIVE_FLASH_HDIM64_TESTS = (
+    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim64_fp16_cuda",
+)
 NPU_TESTS = (
     "tests/backends/npu/test_acl.py",
     "tests/backends/npu/test_aclop.py",
@@ -1207,16 +1210,35 @@ def optional(session):
     if flash_source:
         native_env["JITTOR_FLASH_ATTN_JITTOR_REQUIRED"] = "1"
         native_env["JITTOR_FLASH_ATTN_JITTOR_SRC"] = flash_source
-        native_env["JITTOR_FLASH_ATTN_HEAD_DIMS"] = (
+        requested_head_dims = (
             os.environ.get("JITTOR_FLASH_ATTN_HEAD_DIMS")
             or os.environ.get("FLASH_ATTN_HEAD_DIMS")
-            or "32"
+            or ""
         )
-        native_env["JITTOR_FLASH_ATTN_DTYPES"] = (
+        requested_dtypes = (
             os.environ.get("JITTOR_FLASH_ATTN_DTYPES")
             or os.environ.get("FLASH_ATTN_DTYPES")
-            or "fp16"
+            or ""
         )
+        if requested_head_dims.strip().lower() in {"all", "full", "*"}:
+            native_env["JITTOR_FLASH_ATTN_HEAD_DIMS"] = "all"
+        else:
+            head_dims = ["32"] + [
+                item.strip() for item in requested_head_dims.replace(";", ",").split(",")
+                if item.strip()
+            ]
+            native_env["JITTOR_FLASH_ATTN_HEAD_DIMS"] = ",".join(
+                dict.fromkeys(head_dims))
+        if requested_dtypes.strip().lower() in {"all", "full", "*"}:
+            native_env["JITTOR_FLASH_ATTN_DTYPES"] = "all"
+        else:
+            dtypes = ["fp16"] + [
+                item.strip().lower()
+                for item in requested_dtypes.replace(";", ",").split(",")
+                if item.strip()
+            ]
+            native_env["JITTOR_FLASH_ATTN_DTYPES"] = ",".join(
+                dict.fromkeys(dtypes))
     packages = repr(OPTIONAL_COMPAT_PACKAGES)
     dependency_probe = (
         "import importlib.util; "
@@ -1238,11 +1260,17 @@ def optional(session):
     if flash_source:
         native_tests = OPTIONAL_NATIVE_FLASH_TESTS
         dtype_spec = native_env["JITTOR_FLASH_ATTN_DTYPES"].lower()
+        head_dim_spec = native_env["JITTOR_FLASH_ATTN_HEAD_DIMS"].lower()
         configured_dtypes = {
             item.strip() for item in dtype_spec.replace(";", ",").split(",")
         }
+        configured_head_dims = {
+            item.strip() for item in head_dim_spec.replace(";", ",").split(",")
+        }
         if configured_dtypes & {"bf16", "bfloat16", "all", "full", "*"}:
             native_tests += OPTIONAL_NATIVE_FLASH_BF16_TESTS
+        if configured_head_dims & {"64", "all", "full", "*"}:
+            native_tests += OPTIONAL_NATIVE_FLASH_HDIM64_TESTS
         _run_pytest(session, native_tests, native_env, runner=python)
 
 
