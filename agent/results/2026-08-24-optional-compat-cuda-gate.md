@@ -1,8 +1,8 @@
 # 可选依赖 fail-closed CUDA 门禁
 
 - Status: Selected optional packages and native FlashAttention training accepted on real CUDA
-- Last reviewed: 2026-08-24
-- Commits: `566eae8e`, `2cf096d5`, `c2e340f8`, `90e00edd`, `9e69fa23`, `19820174`
+- Last reviewed: 2026-08-25
+- Commits: `566eae8e`, `2cf096d5`, `c2e340f8`, `90e00edd`, `9e69fa23`, `19820174`, `50fc95d5`
 - Owner: Torch compatibility and test-infrastructure maintainers
 - Review when: optional package versions, Torch shim identity, or nox hardware
   environment contracts change
@@ -52,6 +52,8 @@ backward，确保同一 dropout mask 被重放。
   `JITTOR_TORCH_SHIM=1`、`use_cuda=1`、`use_parallel_op_compiler=0`。
 - Native training gate 使用 `JITTOR_FLASH_ATTN_HEAD_DIMS=32`、
   `JITTOR_FLASH_ATTN_DTYPES=fp16`；nox 允许外部显式扩大这两个能力集合。
+  当 dtype 集合包含 `bf16` 时，额外追加 bf16 dense backward 数值门禁；默认 fp16
+  配置不会隐式扩大编译范围。
 
 ## 验证
 
@@ -73,6 +75,9 @@ backward，确保同一 dropout mask 被重放。
   在同一 source-required 环境 `41 passed in 499.76s`。dense SDPA 输出及 q/k/v 梯度
   对独立 NumPy softmax 导数，varlen 使用长度 3/4 两段对拍；qkv-packed 输出和 packed
   梯度与 dense native 完全一致。
+- hdim32/bf16 dense forward/backward 独立构建与 NumPy 对拍通过；output/dq/dk/dv
+  最大绝对误差分别为 `0.011045/0.008340/0.011811/0.009316`，维护测试热 cache
+  `1 passed in 21.16s`。默认 fp16 配置对该测试为显式 skip，`1 passed, 1 skipped`。
 - Dropout 门禁使用 `p=0.25`：同 seed 的输出和三组梯度逐元素一致，不重置 seed 的
   下一调用输出变化；所有梯度有限且非零。`return_attn_probs` 只检查 shape，因为官方
   128 对齐工作区的有效序列外区域不保证初始化。
@@ -94,7 +99,8 @@ backward，确保同一 dropout mask 被重放。
 
 ## 边界
 
-Native fused 训练结论限定为 RTX 4090、hdim32/fp16、无显式 attention mask，覆盖
-dense/varlen/qkv-packed 一阶 backward 与 `p=0.25` dropout。bf16、其他 head dim、
-alibi、softcap、显式 mask、二阶梯度、稳定热态性能和完整 Transformer 性能尚未由本
-报告宣称通过。NPU/ROCm 也未因本次 CUDA 结果获得任何通过结论。
+Native fused 训练结论限定为 RTX 4090、hdim32、无显式 attention mask。fp16 覆盖
+dense/varlen/qkv-packed 一阶 backward 与 `p=0.25` dropout；bf16 只覆盖 dense
+forward/backward。其他 head dim、bf16 dropout/varlen/packed、alibi、softcap、显式
+mask、二阶梯度、稳定热态性能和完整 Transformer 性能尚未由本报告宣称通过。
+NPU/ROCm 也未因本次 CUDA 结果获得任何通过结论。
