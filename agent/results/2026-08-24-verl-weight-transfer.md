@@ -2,7 +2,7 @@
 
 - Status: Adapter transport and tiny-model 1-step PPO gates accepted on real CUDA
 - Last reviewed: 2026-08-24
-- Jittor baseline: `272ad4ff` plus the fixes described below
+- Jittor baseline: `8cf17481`
 - verl source: `3d66a3d7ca1cf783df949816ec6862d5a7af9406` plus existing adapter edits
 - Owner: verl/vLLM external-adapter maintainers
 - Review when: verl bucket protocol, actor/critic engines, adapter transport, or rollout weight loader changes
@@ -46,6 +46,12 @@ CPU fallback。rollout 与训练侧概率差最大 `2.416e-8`、均值 `1.083e-8
 相关系数 `0.9999851`；训练前后 vLLM 权重同步分别约 `0.55s` 和 `0.51s`。该运行
 仍包含少量首次 JIT，因此 `395.99s/step` 只作为功能门禁耗时，不作为性能结果。
 
+相同模型和训练配置随后以 `use_remove_padding=True` 完成优化态 1-step PPO。
+`NanoVector.numel()` 和 TensorDict device 修复在实际 old log-prob、critic 与 actor
+路径中均生效；最终 actor/critic grad norm 为 `1.918660/0.908953`，rollout 与训练侧
+概率最大差 `2.379e-8`、均值 `1.067e-8`，Pearson 相关系数 `0.9999831`。训练前后
+权重同步分别约 `1.29s/0.69s`，`training/global_step=1` 并正常退出。
+
 ## 验证
 
 - 独立 cache 首次完成 Jittor core、CUDA extern 与 MKL 初始化。
@@ -72,6 +78,9 @@ CPU fallback。rollout 与训练侧概率差最大 `2.416e-8`、均值 `1.083e-8
 - tiny Qwen3 单卡 dense PPO：`Training Progress: 100% 1/1`，actor/critic update、
   optimizer step 与更新后权重同步全部执行；最终 `response_length/mean=16`、
   `response/aborted_ratio=0`、`training/global_step=1`。
+- tiny Qwen3 单卡 remove-padding PPO：`Training Progress: 100% 1/1`，同样完成
+  rollout、old log-prob、GAE、critic/actor update 和更新后权重同步；最终
+  `response_length/mean=16`、`response/aborted_ratio=0`、`training/global_step=1`。
 - `NanoVector.numel()` 定向测试 `3 passed`；真实 GPU cache 探针返回 `24`。
 - `torch._C._nn._parse_to("cpu")` 现在返回 `device(type='cpu')`；真实 CUDA
   TensorDict construct/index/`.cpu()` 回归文件 `3 passed`。
@@ -90,14 +99,17 @@ TaskRunner stdout 和 stderr 的 SHA-256 分别为
 `4fbe018a4cf8b46cb52edeb4768515f1810ab07eec3c32b849c02365be6caf26`、
 `7129498ac277b2fe942047f6380118473bf0f2891c938d08a846eef7a0d58d1c` 和
 `745c1370f56e03ea7488965c6eefa530dda6fa33f2d54b20c454c8542ffd4a35`。
+remove-padding 运行的对应配置、stdout 和 stderr 保存在同级
+`run-remove-padding-final/`，SHA-256 分别为
+`c43733ab9da51afafb8021228a756033d635e9d6f24aacfe6a3fe49ee1561a84`、
+`13fc4d2df67f82999f32c40c17aac7e7245e4bc0df94c0a113e758ae55dd2563` 和
+`b7a4b36a7114d3122e7163faa381d2785e09a2d263682355cd8d5bc946f41410`。
 tiny checkpoint 的 `model.safetensors` SHA-256 为
 `12cef412ee8181c27fb13143022c1b29b42663a66121047e5782d9b4afb7aae5`；模型和数据
 均为本地离线产物。
 
 ## 边界
 
-完整 PPO 结论限定为 tiny Qwen3、单卡、dense actor/critic 路径和固定 reward。优化态
-`use_remove_padding=True` 已真实完成 rollout 并进入 old log-prob，且暴露的
-`NanoVector.numel()` 与 TensorDict device 契约均已修复和定向验证，但在主机现有
-长期满核 compiler 进程下未重新跑完整 step。Qwen3-0.6B、多卡/多 actor、真实 reward
-model、长序列、稳定热态性能，以及 NPU/ROCm 均不由本报告宣称通过。
+完整 PPO 结论限定为 tiny Qwen3、单卡、dense/remove-padding actor/critic 路径和
+固定 reward。Qwen3-0.6B、多卡/多 actor、真实 reward model、长序列、稳定热态性能，
+以及 NPU/ROCm 均不由本报告宣称通过。
