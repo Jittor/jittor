@@ -2,7 +2,7 @@
 
 - Status: Selected optional packages and native FlashAttention training accepted on real CUDA
 - Last reviewed: 2026-08-25
-- Commits: `566eae8e`, `2cf096d5`, `c2e340f8`, `90e00edd`, `9e69fa23`, `19820174`, `50fc95d5`, `a13cb06e`, `c8c43cf6`, `d500dc77`, `76b8a5a0`, `24cf00eb`, `95cd6f6c`
+- Commits: `566eae8e`, `2cf096d5`, `c2e340f8`, `90e00edd`, `9e69fa23`, `19820174`, `50fc95d5`, `a13cb06e`, `c8c43cf6`, `d500dc77`, `76b8a5a0`, `24cf00eb`, `95cd6f6c`, `c3e65b1d`
 - Owner: Torch compatibility and test-infrastructure maintainers
 - Review when: optional package versions, Torch shim identity, or nox hardware
   environment contracts change
@@ -84,6 +84,10 @@ backward，确保同一 dropout mask 被重放。
   最大绝对误差分别为 `0.006614/0.009683/0.015307/0.008268`，维护测试热 cache
   `1 passed in 4.16s`。head dim 32 的 bf16 环境和 hdim64 的 fp16 环境均为
   `1 passed, 1 skipped`，证明 dtype/head dim 双条件 fail closed。
+- hdim96/bf16 dense forward/backward 独立构建与 NumPy 对拍通过；output/dq/dk/dv
+  最大绝对误差分别为 `0.012326/0.012543/0.007809/0.009566`，维护测试热 cache
+  `1 passed in 3.79s`。不匹配 head dim 时为 `1 passed, 1 skipped`；请求 `96/bf16`
+  时 nox 选择 10 项，`head_dims=all,dtypes=all` 现精确选择 15 项且无重复。
 - hdim64/fp16 dense forward/backward 独立构建与 NumPy 对拍通过；output/dq/dk/dv
   最大绝对误差分别为 `0.000621/0.000998/0.001164/0.001183`，维护测试热 cache
   `1 passed in 3.08s`。默认 head dim 32 配置对该测试显式 skip；fake nox session
@@ -104,7 +108,7 @@ backward，确保同一 dropout mask 被重放。
   最大绝对误差分别为 `0.001176/0.001113/0.001430/0.001366`，维护测试热 cache
   `1 passed in 3.69s`。默认 head dim 32 配置为 `1 passed, 5 skipped`；fake nox
   session 确认请求 256 后 capability 为 `32,256`。`head_dims=all,dtypes=all` 精确选择
-  默认 7 项、bf16-32、bf16-64 与五个扩展 fp16 head dim，共 14 项 native 门禁。
+  默认 7 项、bf16-32/64/96 与五个扩展 fp16 head dim，共 15 项 native 门禁。
 - Dropout 门禁使用 `p=0.25`：同 seed 的输出和三组梯度逐元素一致，不重置 seed 的
   下一调用输出变化；所有梯度有限且非零。`return_attn_probs` 只检查 shape，因为官方
   128 对齐工作区的有效序列外区域不保证初始化。
@@ -128,8 +132,8 @@ backward，确保同一 dropout mask 被重放。
 
 Native fused 训练结论限定为 RTX 4090、无显式 attention mask。官方 fp16 head dim
 32/64/96/128/192/256 均覆盖 dense forward/backward；其中只有 hdim32 还覆盖
-varlen/qkv-packed 一阶 backward 与 `p=0.25` dropout。hdim32/64 bf16 只覆盖 dense
-forward/backward。bf16 其余 head dim、bf16 dropout/varlen/packed、hdim64/96/128/
+varlen/qkv-packed 一阶 backward 与 `p=0.25` dropout。hdim32/64/96 bf16 只覆盖
+dense forward/backward。bf16 其余 head dim、bf16 dropout/varlen/packed、hdim64/96/128/
 192/256 dropout/varlen/packed、alibi、softcap、显式 mask、二阶梯度、稳定热态性能和
 完整 Transformer 性能尚未由本报告宣称通过。NPU/ROCm 也未因本次 CUDA 结果获得
 任何通过结论。
