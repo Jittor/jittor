@@ -1,8 +1,8 @@
 # verl Jittor 权重传输与 1-step PPO 真实 CUDA 门禁
 
-- Status: Adapter transport and tiny-model 1-step PPO gates accepted on real CUDA
+- Status: Adapter transport and single-GPU 1-step PPO gates accepted on real CUDA
 - Last reviewed: 2026-08-24
-- Jittor baseline: `8cf17481`
+- Jittor baseline: `5267eba3`
 - verl source: `3d66a3d7ca1cf783df949816ec6862d5a7af9406` plus existing adapter edits
 - Owner: verl/vLLM external-adapter maintainers
 - Review when: verl bucket protocol, actor/critic engines, adapter transport, or rollout weight loader changes
@@ -52,6 +52,21 @@ CPU fallback。rollout 与训练侧概率差最大 `2.416e-8`、均值 `1.083e-8
 概率最大差 `2.379e-8`、均值 `1.067e-8`，Pearson 相关系数 `0.9999831`。训练前后
 权重同步分别约 `1.29s/0.69s`，`training/global_step=1` 并正常退出。
 
+最后，相同 batch 4/remove-padding/FSDP/GAE 链路在真实 Qwen3-0.6B 上完成 1-step
+PPO。actor 与 critic 各为 `596.05M` 参数，rollout 仍使用 vLLM V1/UniProc；为适配
+单张 24GB GPU，将 vLLM memory utilization 设为 `0.10`，并启用 Jittor 原生
+save-mem，device limit 为 14 GiB。训练前/后权重同步约 `42.70s/19.37s`，最终
+actor/critic grad norm 为 `22.363432/180.209122`，`training/global_step=1`。
+rollout/训练概率差门禁有效，最大值 `0.035094`、均值 `0.003824`，Pearson 相关系数
+`0.9993625`。
+
+该规模首先暴露两个明确的峰值内存问题：vLLM `0.20` 时 old log-prob 的 tied
+embedding transpose OOM；降至 `0.10` 后，Torch shim 的 Adam bias-correction 除法
+又把 float32 二阶矩整体提升为 float64。后者在 `5267eba3` 修为 state-dtype 标量，
+计算图回归确认 float32 AdamW 不再产生 float64 Var；完整 optimizer 与 FSDP2 回归
+分别为 `22 passed` 和 `13 passed`。save-mem 负责余下的真实 float32 optimizer
+峰值，未改变模型、batch、序列长度或训练 dtype。
+
 ## 验证
 
 - 独立 cache 首次完成 Jittor core、CUDA extern 与 MKL 初始化。
@@ -81,6 +96,9 @@ CPU fallback。rollout 与训练侧概率差最大 `2.416e-8`、均值 `1.083e-8
 - tiny Qwen3 单卡 remove-padding PPO：`Training Progress: 100% 1/1`，同样完成
   rollout、old log-prob、GAE、critic/actor update 和更新后权重同步；最终
   `response_length/mean=16`、`response/aborted_ratio=0`、`training/global_step=1`。
+- Qwen3-0.6B 单卡 remove-padding PPO：`Training Progress: 100% 1/1`，完成相同
+  rollout、critic/actor optimizer 与更新后权重同步闭环；最终
+  `response_length/mean=16`、`response/aborted_ratio=0`、`training/global_step=1`。
 - `NanoVector.numel()` 定向测试 `3 passed`；真实 GPU cache 探针返回 `24`。
 - `torch._C._nn._parse_to("cpu")` 现在返回 `device(type='cpu')`；真实 CUDA
   TensorDict construct/index/`.cpu()` 回归文件 `3 passed`。
@@ -104,12 +122,21 @@ remove-padding 运行的对应配置、stdout 和 stderr 保存在同级
 `c43733ab9da51afafb8021228a756033d635e9d6f24aacfe6a3fe49ee1561a84`、
 `13fc4d2df67f82999f32c40c17aac7e7245e4bc0df94c0a113e758ae55dd2563` 和
 `b7a4b36a7114d3122e7163faa381d2785e09a2d263682355cd8d5bc946f41410`。
+Qwen3-0.6B 运行的对应配置、stdout 和 stderr 保存在同级
+`run-qwen3-0.6b-swap/`，SHA-256 分别为
+`2c39c9d95924a70ea49352862af209999b4ec46655b2bbf4ea228806ae884cfe`、
+`e133540f31bea30d674b6ddae0070c1568e915e2572123459bccb4bddb1c8bfa` 和
+`b182ad85a8073a5ece0320288734b2c7b93fca7ddd6ff85ba410e7218b900315`。
 tiny checkpoint 的 `model.safetensors` SHA-256 为
 `12cef412ee8181c27fb13143022c1b29b42663a66121047e5782d9b4afb7aae5`；模型和数据
-均为本地离线产物。
+均为本地离线产物。Qwen3-0.6B 权重 SHA-256 为
+`f47f71177f32bcd101b7573ec9171e6a57f4f4d31148d38e382306f42996874b`。
+未版本化 adapter bootstrap 与 PPO harness SHA-256 分别为
+`311174f9819237dd1685b93d8a6990387260cb81c96adbb3b51001fe204da7b2` 和
+`8714d4e50a3868824ba7d30e7d936a6fdfd400b4b06777f876bb6cd7bf7616ba`。
 
 ## 边界
 
-完整 PPO 结论限定为 tiny Qwen3、单卡、dense/remove-padding actor/critic 路径和
-固定 reward。Qwen3-0.6B、多卡/多 actor、真实 reward model、长序列、稳定热态性能，
-以及 NPU/ROCm 均不由本报告宣称通过。
+完整 PPO 结论限定为 tiny Qwen3 与 Qwen3-0.6B、单卡、固定 reward；tiny 覆盖
+dense/remove-padding，0.6B 覆盖 remove-padding。多卡/多 actor、真实 reward model、
+长序列、稳定热态性能，以及 NPU/ROCm 均不由本报告宣称通过。
