@@ -1,8 +1,8 @@
 # verl Jittor 权重传输与 1-step PPO 真实 CUDA 门禁
 
-- Status: Adapter transport and single-GPU 1-step PPO gates accepted on real CUDA
+- Status: Adapter transport, single-GPU and replicated two-GPU 1-step PPO gates accepted on real CUDA
 - Last reviewed: 2026-08-24
-- Jittor baseline: `5267eba3`
+- Jittor baseline: `9a0a6026`
 - verl source: `3d66a3d7ca1cf783df949816ec6862d5a7af9406` plus existing adapter edits
 - Owner: verl/vLLM external-adapter maintainers
 - Review when: verl bucket protocol, actor/critic engines, adapter transport, or rollout weight loader changes
@@ -67,6 +67,28 @@ embedding transpose OOM；降至 `0.10` 后，Torch shim 的 Adam bias-correctio
 分别为 `22 passed` 和 `13 passed`。save-mem 负责余下的真实 float32 optimizer
 峰值，未改变模型、batch、序列长度或训练 dtype。
 
+同一 Qwen3-0.6B 配置随后在两张 RTX 4090 上完成 replicated compatibility 模式的
+1-step PPO。两个 Ray worker 分别绑定一张真实 GPU、使用独立 Jittor cache，并各自
+执行完整 batch 的模型路径；adapter 只让 rank 0 向 controller 回传结果，避免 verl
+把两个相同的全量输出再次拼接。最终 packed token 三方计数均为 `141`，两个 worker
+的四个 actor micro-batch 均为 `29/37/38/37`，`training/global_step=1`，actor/critic
+grad norm 为 `21.367786/190.710083`。rollout 概率门禁有效，最大差 `0.023153`、
+均值 `0.002405`，Pearson 相关系数 `0.9996167`。
+
+这次双卡门禁修复了三个 adapter 进程边界问题。首先，Python spawn 会恢复父进程的
+`sys.path`，令 EngineCore 同时加载 `device-2_3` 与子进程 device cache 中的两份
+`jittor_core.so`，最终报 `Op fused not found`；EngineCore loader 现在先移除 cache
+root 下的继承路径再导入 Jittor。其次，Ray worker 原先都使用可见卡列表
+`device-2_3`，现在按 local rank 映射为 `device-2`/`device-3` 独立 cache。最后，
+adapter 的 distributed shim 明确保持进程内 world size 为 1，而 verl controller 的
+outer world size 为 2；旧 collect 会把两个完整输出从 `142` 拼成 `284`，但序列
+offset 仍为 `142`。replicated 模式现在仅收集 rank 0，仍保留 rank 1 的实际执行。
+
+该运行包含 GPU 3 的大量首次 shape-specialized JIT，trainer 记录
+`1352.93s/step`，其中 actor update 为 `1047.46s`，因此只作为功能门禁耗时。actor
+和 critic 峰值显存分别为 `20.81/21.14 GiB`；训练前 rank 0 权重同步日志为
+`197.73s`，训练后为 `123.32s`。
+
 ## 验证
 
 - 独立 cache 首次完成 Jittor core、CUDA extern 与 MKL 初始化。
@@ -99,6 +121,13 @@ embedding transpose OOM；降至 `0.10` 后，Torch shim 的 Adam bias-correctio
 - Qwen3-0.6B 单卡 remove-padding PPO：`Training Progress: 100% 1/1`，完成相同
   rollout、critic/actor optimizer 与更新后权重同步闭环；最终
   `response_length/mean=16`、`response/aborted_ratio=0`、`training/global_step=1`。
+- Qwen3-0.6B 双卡 replicated compatibility PPO：两个 worker 分别使用物理 GPU 2/3
+  和 `device-2`/`device-3` cache，均执行 141-token 全量路径及
+  `29/37/38/37` actor micro-batch；controller 只收集 rank 0，最终
+  `Training Progress: 100% 1/1`、`response/aborted_ratio=0`、
+  `training/global_step=1`。
+- EngineCore 污染 spawn 探针从 parent `device-2_3` cache 启动，在子进程切换单卡并
+  导入 verl/vLLM target，确认只加载子进程 cache 的 Jittor core 后正常退出。
 - `NanoVector.numel()` 定向测试 `3 passed`；真实 GPU cache 探针返回 `24`。
 - `torch._C._nn._parse_to("cpu")` 现在返回 `device(type='cpu')`；真实 CUDA
   TensorDict construct/index/`.cpu()` 回归文件 `3 passed`。
@@ -127,16 +156,29 @@ Qwen3-0.6B 运行的对应配置、stdout 和 stderr 保存在同级
 `2c39c9d95924a70ea49352862af209999b4ec46655b2bbf4ea228806ae884cfe`、
 `e133540f31bea30d674b6ddae0070c1568e915e2572123459bccb4bddb1c8bfa` 和
 `b182ad85a8073a5ece0320288734b2c7b93fca7ddd6ff85ba410e7218b900315`。
+双卡 replicated 运行保存在同级 `run-qwen3-0.6b-2gpu-attempt9/`；Hydra 配置、
+TaskRunner stdout/stderr 的 SHA-256 分别为
+`8b46bbb659aa6cd58f71ae7f352741d5f078c3a99fa9b3065300da0a6de322e7`、
+`992ed77f911efaf687606fc61f93b7a1f2640806be2f54dabd794c16d049238a` 和
+`63ff796cb51337aba5fde28598c87a2bf1e6535c3bdc4105a251c5c21a480b49`。
+rank 0/1 stderr 的 SHA-256 分别为
+`d19929a86fc232b822dc5893c20209c57e34939eb3675fd882edb8917b34d7af` 和
+`2123f9626b67f8c82bae2badb0c942bd930df75e7c0ac5df41596018dfe343bd`。
 tiny checkpoint 的 `model.safetensors` SHA-256 为
 `12cef412ee8181c27fb13143022c1b29b42663a66121047e5782d9b4afb7aae5`；模型和数据
 均为本地离线产物。Qwen3-0.6B 权重 SHA-256 为
 `f47f71177f32bcd101b7573ec9171e6a57f4f4d31148d38e382306f42996874b`。
-未版本化 adapter bootstrap 与 PPO harness SHA-256 分别为
-`311174f9819237dd1685b93d8a6990387260cb81c96adbb3b51001fe204da7b2` 和
+未版本化 adapter `sitecustomize.py`、bootstrap、nested shim 与 PPO harness
+SHA-256 分别为
+`e596deefe6ee776de5e2248e93649df8ea7140aebcbc9edce34e393467742f78`、
+`b34f37e27821f384ec2a0b6f4a0553b587c831bcc5d61ef76e85d3de94b099b9`、
+`36fe3af2de9ae980a8f929718ea5eda0bb54cea5d326cc3a76806ebbc6690175` 和
 `8714d4e50a3868824ba7d30e7d936a6fdfd400b4b06777f876bb6cd7bf7616ba`。
 
 ## 边界
 
-完整 PPO 结论限定为 tiny Qwen3 与 Qwen3-0.6B、单卡、固定 reward；tiny 覆盖
-dense/remove-padding，0.6B 覆盖 remove-padding。多卡/多 actor、真实 reward model、
-长序列、稳定热态性能，以及 NPU/ROCm 均不由本报告宣称通过。
+完整 PPO 结论限定为 tiny Qwen3 与 Qwen3-0.6B、固定 reward；tiny 覆盖单卡
+dense/remove-padding，0.6B 覆盖单卡 remove-padding 和双卡 replicated compatibility。
+双卡结果不是多 rank collective、数据并行或 FSDP 参数分片，也不宣称性能扩展。
+原生分布式、多 actor、真实 reward model、长序列、稳定热态性能，以及 NPU/ROCm
+均不由本报告宣称通过。
