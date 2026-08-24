@@ -208,6 +208,9 @@ OPTIONAL_NATIVE_FLASH_TESTS = (
 OPTIONAL_NATIVE_FLASH_BF16_TESTS = (
     "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_bf16_cuda",
 )
+OPTIONAL_NATIVE_FLASH_BF16_HDIM64_TESTS = (
+    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim64_bf16_cuda",
+)
 OPTIONAL_NATIVE_FLASH_HDIM64_TESTS = (
     "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim64_fp16_cuda",
 )
@@ -1279,8 +1282,12 @@ def optional(session):
         configured_head_dims = {
             item.strip() for item in head_dim_spec.replace(";", ",").split(",")
         }
-        if configured_dtypes & {"bf16", "bfloat16", "all", "full", "*"}:
+        bf16_enabled = bool(
+            configured_dtypes & {"bf16", "bfloat16", "all", "full", "*"})
+        if bf16_enabled:
             native_tests += OPTIONAL_NATIVE_FLASH_BF16_TESTS
+        if bf16_enabled and configured_head_dims & {"64", "all", "full", "*"}:
+            native_tests += OPTIONAL_NATIVE_FLASH_BF16_HDIM64_TESTS
         if configured_head_dims & {"64", "all", "full", "*"}:
             native_tests += OPTIONAL_NATIVE_FLASH_HDIM64_TESTS
         if configured_head_dims & {"96", "all", "full", "*"}:
