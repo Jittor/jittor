@@ -2044,12 +2044,14 @@ def install(ctx):
         if attn_mask is not None:
             _sdpa_flash_miss("mask")
             return None
-        if float(dropout_p or 0.0) != 0.0:
-            _sdpa_flash_miss("dropout")
+        dropout = float(dropout_p or 0.0)
+        if dropout < 0.0 or dropout >= 1.0:
+            _sdpa_flash_miss("dropout_range")
             return None
-        if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
-            _sdpa_flash_miss("not_cuda_no_grad")
+        if not jt.flags.use_cuda:
+            _sdpa_flash_miss("not_cuda")
             return None
+        training_requested = not getattr(jt.flags, "no_grad", 0) or dropout != 0.0
         q_shape, k_shape, v_shape = tuple(query.shape), tuple(key.shape), tuple(value.shape)
         if len(q_shape) < 3 or len(q_shape) != len(k_shape) or len(q_shape) != len(v_shape):
             _sdpa_flash_miss("rank")
@@ -2152,6 +2154,13 @@ def install(ctx):
                 )
             _sdpa_flash_miss(capability_miss)
             return None
+        if (training_requested
+                and not getattr(backend, "_flashattn_jittor_training", False)):
+            if _fa_jittor.required():
+                raise RuntimeError(
+                    "native flash-attn backend does not advertise backward/dropout support")
+            _sdpa_flash_miss("no_training_backend")
+            return None
         # load_backend_for() already returned the capability-checked backend.
         # Calling through the public flash_attn stub would invoke the loader a
         # second time for every layer and rescan all backend environment keys.
@@ -2177,7 +2186,8 @@ def install(ctx):
         k_dense = key.permute(*q_axes).reshape((batch, lk, key_heads, head_dim)).clone()
         v_dense = value.permute(*q_axes).reshape((batch, lk, value_heads, head_dim)).clone()
         try:
-            out = fn(q_dense, k_dense, v_dense, 0.0, float(sf), bool(is_causal))
+            out = fn(
+                q_dense, k_dense, v_dense, dropout, float(sf), bool(is_causal))
         except Exception:
             if _fa_jittor.required():
                 raise

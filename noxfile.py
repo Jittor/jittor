@@ -198,6 +198,10 @@ OPTIONAL_COMPAT_TESTS = (
 )
 OPTIONAL_NATIVE_FLASH_TESTS = (
     "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_fp16_cuda",
+    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_fp16_cuda",
+    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_dropout_replays_seed_and_backward",
+    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_varlen_backward_fp16_cuda",
+    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_qkvpacked_backward_matches_dense",
     "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_gqa_fp16_cuda",
     "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_float32_opt_in_cast_cuda",
 )
@@ -1189,13 +1193,27 @@ def optional(session):
             "JITTOR_REQUIRE_OPTIONAL_DEPS": "1",
             "JITTOR_TEST_DEVICES": "cuda",
             "JITTOR_TORCH_SHIM": "1",
-            "JITTOR_FLASH_ATTN_JITTOR_REQUIRED": "1" if flash_source else "0",
-            "JITTOR_FLASH_ATTN_JITTOR_SRC": flash_source,
+            "JITTOR_FLASH_ATTN_JITTOR_REQUIRED": "0",
+            "JITTOR_FLASH_ATTN_JITTOR_SRC": "",
             "TRANSFORMERS_OFFLINE": "1",
             "nvcc_path": nvcc,
             "use_cuda": "1",
         }
     )
+    native_env = env.copy()
+    if flash_source:
+        native_env["JITTOR_FLASH_ATTN_JITTOR_REQUIRED"] = "1"
+        native_env["JITTOR_FLASH_ATTN_JITTOR_SRC"] = flash_source
+        native_env["JITTOR_FLASH_ATTN_HEAD_DIMS"] = (
+            os.environ.get("JITTOR_FLASH_ATTN_HEAD_DIMS")
+            or os.environ.get("FLASH_ATTN_HEAD_DIMS")
+            or "32"
+        )
+        native_env["JITTOR_FLASH_ATTN_DTYPES"] = (
+            os.environ.get("JITTOR_FLASH_ATTN_DTYPES")
+            or os.environ.get("FLASH_ATTN_DTYPES")
+            or "fp16"
+        )
     packages = repr(OPTIONAL_COMPAT_PACKAGES)
     dependency_probe = (
         "import importlib.util; "
@@ -1207,10 +1225,15 @@ def optional(session):
     session.run("nvidia-smi", external=True, env=env)
     session.run(nvcc, "--version", external=True, env=env)
     session.run(python, "-c", dependency_probe, external=True, env=env)
-    tests = OPTIONAL_COMPAT_TESTS
+    if session.posargs:
+        native_requested = flash_source and any(
+            "native_flash_attn" in arg for arg in session.posargs)
+        _run_pytest(
+            session, (), native_env if native_requested else env, runner=python)
+        return
+    _run_pytest(session, OPTIONAL_COMPAT_TESTS, env, runner=python)
     if flash_source:
-        tests += OPTIONAL_NATIVE_FLASH_TESTS
-    _run_pytest(session, tests, env, runner=python)
+        _run_pytest(session, OPTIONAL_NATIVE_FLASH_TESTS, native_env, runner=python)
 
 
 @nox.session(python=False)

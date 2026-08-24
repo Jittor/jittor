@@ -5,6 +5,11 @@
 #include <tuple>
 #include <ATen/cuda/CUDAContext.h>
 
+namespace jittor {
+int get_seed();
+extern int64_t current_offset;
+}
+
 namespace at {
 
 struct PhiloxCudaState {
@@ -18,8 +23,12 @@ struct Generator {};
 
 struct CUDAGeneratorImpl : public Generator {
     std::mutex mutex_;
-    PhiloxCudaState philox_cuda_state(uint64_t offset) {
-        return PhiloxCudaState(0, offset);
+    PhiloxCudaState philox_cuda_state(uint64_t increment) {
+        auto state = PhiloxCudaState(
+            static_cast<uint64_t>(jittor::get_seed()),
+            static_cast<uint64_t>(jittor::current_offset));
+        jittor::current_offset += static_cast<int64_t>(increment);
+        return state;
     }
 };
 

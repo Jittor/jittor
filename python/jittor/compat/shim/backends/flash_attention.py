@@ -282,7 +282,7 @@ def _official_build_dir(root: pathlib.Path) -> str:
         pass
     digest_key += "|head_dims=" + ",".join(_official_head_dims(root))
     digest_key += "|dtypes=" + ",".join(_official_dtypes())
-    digest_key += "|missing_forward_stubs=1"
+    digest_key += "|native_forward_backward_dropout=1"
     digest = hashlib.sha256(digest_key.encode("utf-8")).hexdigest()[:16]
     return _default_build_root("flashattn_jittor", "official_flash_attn", digest)
 
@@ -380,7 +380,7 @@ def _official_dtypes() -> List[str]:
     return out or ["fp16", "bf16"]
 
 
-def _official_forward_sources(root: pathlib.Path) -> List[str]:
+def _official_sources(root: pathlib.Path) -> List[str]:
     src_dir = root / "csrc" / "flash_attn" / "src"
     sources: List[pathlib.Path] = [root / "csrc" / "flash_attn" / "flash_api.cpp"]
     for prefix in ("flash_fwd", "flash_fwd_split"):
@@ -392,10 +392,19 @@ def _official_forward_sources(root: pathlib.Path) -> List[str]:
                         sources.append(path)
                     else:
                         _remember_error("official flash-attn source missing: %s" % path)
+    for dim in _official_head_dims(root):
+        for dtype in _official_dtypes():
+            for causal in ("", "_causal"):
+                path = src_dir / ("flash_bwd_hdim%s_%s%s_sm80.cu" % (
+                    dim, dtype, causal))
+                if path.is_file():
+                    sources.append(path)
+                else:
+                    _remember_error("official flash-attn source missing: %s" % path)
     return [os.fspath(p.resolve()) for p in sources]
 
 
-def _official_compiled_forward_specs(root: pathlib.Path) -> set:
+def _official_compiled_specs(root: pathlib.Path) -> set:
     src_dir = root / "csrc" / "flash_attn" / "src"
     specs = set()
     for dim in _official_head_dims(root):
@@ -407,12 +416,16 @@ def _official_compiled_forward_specs(root: pathlib.Path) -> set:
                     specs.add(("fwd", dtype, dim, causal))
                 if split.is_file():
                     specs.add(("split", dtype, dim, causal))
+                bwd = src_dir / ("flash_bwd_hdim%s_%s%s_sm80.cu" % (
+                    dim, dtype, causal_suffix))
+                if bwd.is_file():
+                    specs.add(("bwd", dtype, dim, causal))
     return specs
 
 
 def _official_stub_source(build_dir: str, root: pathlib.Path) -> str:
     path = pathlib.Path(build_dir) / "flashattn_jittor_bwd_stubs.cu"
-    compiled = _official_compiled_forward_specs(root)
+    compiled = _official_compiled_specs(root)
     fwd_lines = []
     split_lines = []
     bwd_lines = []
@@ -425,7 +438,9 @@ def _official_stub_source(build_dir: str, root: pathlib.Path) -> str:
                     fwd_lines.append("JT_FLASHATTN_FWD_STUB(%s, %s, %s)" % (ctype, dim, cbool))
                 if ("split", dtype, dim, causal) not in compiled:
                     split_lines.append("JT_FLASHATTN_SPLIT_FWD_STUB(%s, %s, %s)" % (ctype, dim, cbool))
-                bwd_lines.append("JT_FLASHATTN_BWD_STUB(%s, %s, %s)" % (ctype, dim, cbool))
+                if ("bwd", dtype, dim, causal) not in compiled:
+                    bwd_lines.append("JT_FLASHATTN_BWD_STUB(%s, %s, %s)" % (
+                        ctype, dim, cbool))
 
     body = r'''
 #include <stdexcept>
@@ -447,7 +462,7 @@ void run_mha_fwd_splitkv_dispatch(Flash_fwd_params&, cudaStream_t) {
 
 template<typename T, int Headdim, bool Is_causal>
 void run_mha_bwd_(Flash_bwd_params&, cudaStream_t) {
-    throw std::runtime_error("flashattn_jittor official backend supports forward inference only; backward is not implemented");
+    throw std::runtime_error("flashattn_jittor official backend was built without this backward kernel; set JITTOR_FLASH_ATTN_HEAD_DIMS=all or include the requested head dimension");
 }
 
 #define JT_FLASHATTN_FWD_STUB(DTYPE, HDIM, CAUSAL) \
@@ -956,8 +971,6 @@ def _official_flags() -> Tuple[List[str], List[str]]:
     common = [
         "-O3",
         "-std=c++17",
-        "-DFLASHATTENTION_DISABLE_BACKWARD",
-        "-DFLASHATTENTION_DISABLE_DROPOUT",
         "-DFLASHATTENTION_DISABLE_ALIBI",
         "-DFLASHATTENTION_DISABLE_SOFTCAP",
     ]
@@ -971,8 +984,6 @@ def _official_flags() -> Tuple[List[str], List[str]]:
         "--expt-relaxed-constexpr",
         "--expt-extended-lambda",
         "--use_fast_math",
-        "-DFLASHATTENTION_DISABLE_BACKWARD",
-        "-DFLASHATTENTION_DISABLE_DROPOUT",
         "-DFLASHATTENTION_DISABLE_ALIBI",
         "-DFLASHATTENTION_DISABLE_SOFTCAP",
     ]
@@ -1247,6 +1258,8 @@ def _direct_packed_enabled() -> bool:
 
 def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
                            packed_low_level: Optional[ModuleType] = None) -> ModuleType:
+    import jittor as jt
+
     mod = ModuleType("flashattn_jittor_official")
     mod.__file__ = os.fspath(root)
     mod._flashattn_jittor_official = True
@@ -1254,20 +1267,119 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
     mod._flashattn_jittor_packed_low_level = packed_low_level
     mod._flashattn_jittor_head_dims = tuple(_official_head_dims(root))
     mod._flashattn_jittor_dtypes = tuple(_official_dtypes())
+    mod._flashattn_jittor_training = True
     mod._flashattn_jittor_packed_split_stats = _PACKED_SPLIT_STATS
     low_fwd = low_level.fwd
     low_varlen_fwd = low_level.varlen_fwd
+    low_bwd = low_level.bwd
+    low_varlen_bwd = low_level.varlen_bwd
     packed_split_enabled = _packed_split_enabled()
 
     def _check_args(dropout_p, softcap, alibi_slopes, return_attn_probs):
-        if dropout_p not in (0, 0.0, None) and float(dropout_p) != 0.0:
-            raise RuntimeError("flashattn_jittor official backend supports dropout_p=0 only")
+        dropout = float(dropout_p or 0.0)
+        if dropout < 0.0 or dropout >= 1.0:
+            raise RuntimeError(
+                "flashattn_jittor official backend requires 0 <= dropout_p < 1")
         if softcap not in (0, 0.0, None) and float(softcap) > 0.0:
             raise RuntimeError("flashattn_jittor official backend does not support softcap")
         if alibi_slopes is not None:
             raise RuntimeError("flashattn_jittor official backend does not support alibi_slopes")
-        if return_attn_probs:
-            raise RuntimeError("flashattn_jittor official backend does not support return_attn_probs with dropout disabled")
+        if return_attn_probs and dropout == 0.0:
+            raise RuntimeError(
+                "flashattn_jittor official backend requires dropout_p > 0 "
+                "when return_attn_probs is enabled")
+
+    def _grad_enabled(*tensors):
+        return not getattr(jt.flags, "no_grad", 0) and any(
+            bool(getattr(tensor, "requires_grad", False)) for tensor in tensors)
+
+    def _cast_result(result, dtype, return_attn_probs):
+        if not return_attn_probs:
+            return result.to(dtype)
+        return result[0].to(dtype), result[1], result[2]
+
+    class _DenseNativeAttention(jt.Function):
+        def __init__(self, dropout, scale, causal, wl, wr, deterministic,
+                     return_attn_probs):
+            self.config = (
+                float(dropout), float(scale), bool(causal), int(wl), int(wr),
+                bool(deterministic), bool(return_attn_probs),
+            )
+
+        def execute(self, q, k, v):
+            dropout, scale, causal, wl, wr, _, return_attn_probs = self.config
+            saved = _mark_readonly_borrow(q, k, v)
+            try:
+                result = low_fwd(
+                    q, k, v, None, None, dropout, scale, causal, wl, wr,
+                    0.0, return_attn_probs, None)
+            finally:
+                _restore_readonly_borrow(saved)
+            out, softmax_lse, probability, rng_state = result
+            self.saved = (q, k, v, out, softmax_lse, rng_state)
+            if return_attn_probs:
+                return out, softmax_lse, probability
+            return out
+
+        def grad(self, grad_out, *unused):
+            q, k, v, out, softmax_lse, rng_state = self.saved
+            dropout, scale, causal, wl, wr, deterministic, _ = self.config
+            grad_out = grad_out.contiguous()
+            saved = _mark_readonly_borrow(
+                grad_out, q, k, v, out, softmax_lse, rng_state)
+            try:
+                result = low_bwd(
+                    grad_out, q, k, v, out, softmax_lse,
+                    None, None, None, None, dropout, scale, causal, wl, wr,
+                    0.0, deterministic, None, rng_state)
+            finally:
+                _restore_readonly_borrow(saved)
+            return result[0], result[1], result[2]
+
+    class _VarlenNativeAttention(jt.Function):
+        def __init__(self, cu_seqlens_q, cu_seqlens_k, max_seqlen_q,
+                     max_seqlen_k, dropout, scale, causal, wl, wr,
+                     deterministic, return_attn_probs):
+            self.cu_seqlens = (cu_seqlens_q, cu_seqlens_k)
+            self.config = (
+                int(max_seqlen_q), int(max_seqlen_k), float(dropout),
+                float(scale), bool(causal), int(wl), int(wr),
+                bool(deterministic), bool(return_attn_probs),
+            )
+
+        def execute(self, q, k, v):
+            cu_q, cu_k = self.cu_seqlens
+            max_q, max_k, dropout, scale, causal, wl, wr, _, return_probs = self.config
+            saved = _mark_readonly_borrow(q, k, v, cu_q, cu_k)
+            try:
+                result = low_varlen_fwd(
+                    q, k, v, None, cu_q, cu_k, None, None, None, None,
+                    max_q, max_k, dropout, scale, False, causal, wl, wr,
+                    0.0, return_probs, None)
+            finally:
+                _restore_readonly_borrow(saved)
+            out, softmax_lse, probability, rng_state = result
+            self.saved = (q, k, v, out, softmax_lse, rng_state)
+            if return_probs:
+                return out, softmax_lse, probability
+            return out
+
+        def grad(self, grad_out, *unused):
+            q, k, v, out, softmax_lse, rng_state = self.saved
+            cu_q, cu_k = self.cu_seqlens
+            max_q, max_k, dropout, scale, causal, wl, wr, deterministic, _ = self.config
+            grad_out = grad_out.contiguous()
+            saved = _mark_readonly_borrow(
+                grad_out, q, k, v, out, softmax_lse, rng_state, cu_q, cu_k)
+            try:
+                result = low_varlen_bwd(
+                    grad_out, q, k, v, out, softmax_lse,
+                    None, None, None, cu_q, cu_k, None, max_q, max_k,
+                    dropout, scale, False, causal, wl, wr, 0.0,
+                    deterministic, None, rng_state)
+            finally:
+                _restore_readonly_borrow(saved)
+            return result[0], result[1], result[2]
 
     def flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False,
                         window_size=(-1, -1), softcap=0.0, alibi_slopes=None,
@@ -1280,19 +1392,27 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
                 q = _maybe_cast_float32_tensor(q, target)
                 k = _maybe_cast_float32_tensor(k, target)
                 v = _maybe_cast_float32_tensor(v, target)
-                return flash_attn_func(q, k, v, dropout_p, softmax_scale, causal,
-                                       window_size, softcap, alibi_slopes,
-                                       deterministic, return_attn_probs,
-                                       *args, **kwargs).to(q0.dtype)
+                result = flash_attn_func(
+                    q, k, v, dropout_p, softmax_scale, causal, window_size,
+                    softcap, alibi_slopes, deterministic, return_attn_probs,
+                    *args, **kwargs)
+                return _cast_result(result, q0.dtype, return_attn_probs)
             return None
         wl, wr = _window_size_pair(kwargs.get("window_size", window_size))
         if softmax_scale is None:
             softmax_scale = q.shape[-1] ** -0.5
-        if packed_low_level is not None:
+        needs_grad = _grad_enabled(q, k, v)
+        dropout = float(dropout_p or 0.0)
+        if (packed_low_level is not None and not needs_grad and dropout == 0.0
+                and not return_attn_probs):
             return packed_low_level.fwd(q, k, v, float(softmax_scale), bool(causal), wl, wr)
+        if needs_grad:
+            return _DenseNativeAttention(
+                dropout, softmax_scale, causal, wl, wr, deterministic,
+                return_attn_probs)(q, k, v)
         saved = _mark_readonly_borrow(q, k, v, alibi_slopes)
         try:
-            result = low_fwd(q, k, v, None, alibi_slopes, 0.0,
+            result = low_fwd(q, k, v, None, alibi_slopes, dropout,
                              float(softmax_scale), bool(causal), wl, wr,
                              0.0, bool(return_attn_probs), None)
         finally:
@@ -1303,7 +1423,9 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
                                   causal=False, window_size=(-1, -1), softcap=0.0,
                                   alibi_slopes=None, deterministic=False,
                                   return_attn_probs=False, *args, **kwargs):
-        if packed_low_level is not None and _native_supported_dtype(qkv):
+        if (packed_low_level is not None and _native_supported_dtype(qkv)
+                and not _grad_enabled(qkv) and float(dropout_p or 0.0) == 0.0
+                and not return_attn_probs):
             _check_args(dropout_p, softcap, alibi_slopes, return_attn_probs)
             wl, wr = _window_size_pair(kwargs.get("window_size", window_size))
             scale = qkv.shape[-1] ** -0.5 if softmax_scale is None else float(softmax_scale)
@@ -1324,7 +1446,9 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
                                  causal=False, window_size=(-1, -1), softcap=0.0,
                                  alibi_slopes=None, deterministic=False,
                                  return_attn_probs=False, *args, **kwargs):
-        if packed_low_level is not None and _native_supported_dtype(q) and _native_supported_dtype(kv):
+        if (packed_low_level is not None and _native_supported_dtype(q)
+                and _native_supported_dtype(kv) and not _grad_enabled(q, kv)
+                and float(dropout_p or 0.0) == 0.0 and not return_attn_probs):
             _check_args(dropout_p, softcap, alibi_slopes, return_attn_probs)
             wl, wr = _window_size_pair(kwargs.get("window_size", window_size))
             scale = q.shape[-1] ** -0.5 if softmax_scale is None else float(softmax_scale)
@@ -1357,23 +1481,37 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
                 q = _maybe_cast_float32_tensor(q, target)
                 k = _maybe_cast_float32_tensor(k, target)
                 v = _maybe_cast_float32_tensor(v, target)
-                return flash_attn_varlen_func(
+                result = flash_attn_varlen_func(
                     q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k,
                     dropout_p, softmax_scale, causal, window_size, softcap,
                     alibi_slopes, deterministic, return_attn_probs, block_table,
-                    *args, **kwargs).to(q0.dtype)
+                    *args, **kwargs)
+                return _cast_result(result, q0.dtype, return_attn_probs)
             return None
         wl, wr = _window_size_pair(kwargs.get("window_size", window_size))
         if softmax_scale is None:
             softmax_scale = q.shape[-1] ** -0.5
         seqused_k = kwargs.get("seqused_k", None)
         leftpad_k = kwargs.get("leftpad_k", None)
-        if (packed_low_level is not None and seqused_k is None and leftpad_k is None
-                and block_table is None and alibi_slopes is None):
+        needs_grad = _grad_enabled(q, k, v)
+        dropout = float(dropout_p or 0.0)
+        simple_varlen = (seqused_k is None and leftpad_k is None
+                         and block_table is None and alibi_slopes is None)
+        if (packed_low_level is not None and simple_varlen and not needs_grad
+                and dropout == 0.0 and not return_attn_probs):
             return packed_low_level.varlen_fwd(
                 q, k, v, cu_seqlens_q, cu_seqlens_k,
                 int(max_seqlen_q), int(max_seqlen_k),
                 float(softmax_scale), bool(causal), wl, wr)
+        if needs_grad:
+            if not simple_varlen:
+                raise RuntimeError(
+                    "flashattn_jittor native varlen backward does not support "
+                    "seqused_k, leftpad_k, block_table, or alibi_slopes")
+            return _VarlenNativeAttention(
+                cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k,
+                dropout, softmax_scale, causal, wl, wr, deterministic,
+                return_attn_probs)(q, k, v)
         saved = _mark_readonly_borrow(
             q, k, v, cu_seqlens_q, cu_seqlens_k,
             seqused_k, leftpad_k, block_table, alibi_slopes,
@@ -1383,7 +1521,7 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
                 q, k, v, None, cu_seqlens_q, cu_seqlens_k,
                 seqused_k, leftpad_k,
                 block_table, alibi_slopes, int(max_seqlen_q), int(max_seqlen_k),
-                0.0, float(softmax_scale), False, bool(causal),
+                dropout, float(softmax_scale), False, bool(causal),
                 wl, wr, 0.0, bool(return_attn_probs), None)
         finally:
             _restore_readonly_borrow(saved)
@@ -1395,7 +1533,9 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
                                          softcap=0.0, alibi_slopes=None,
                                          deterministic=False,
                                          return_attn_probs=False, *args, **kwargs):
-        if packed_low_level is not None and _native_supported_dtype(qkv):
+        if (packed_low_level is not None and _native_supported_dtype(qkv)
+                and not _grad_enabled(qkv) and float(dropout_p or 0.0) == 0.0
+                and not return_attn_probs):
             _check_args(dropout_p, softcap, alibi_slopes, return_attn_probs)
             wl, wr = _window_size_pair(kwargs.get("window_size", window_size))
             scale = qkv.shape[-1] ** -0.5 if softmax_scale is None else float(softmax_scale)
@@ -1422,7 +1562,9 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
                                         softcap=0.0, alibi_slopes=None,
                                         deterministic=False,
                                         return_attn_probs=False, *args, **kwargs):
-        if packed_low_level is not None and _native_supported_dtype(q) and _native_supported_dtype(kv):
+        if (packed_low_level is not None and _native_supported_dtype(q)
+                and _native_supported_dtype(kv) and not _grad_enabled(q, kv)
+                and float(dropout_p or 0.0) == 0.0 and not return_attn_probs):
             _check_args(dropout_p, softcap, alibi_slopes, return_attn_probs)
             wl, wr = _window_size_pair(kwargs.get("window_size", window_size))
             scale = q.shape[-1] ** -0.5 if softmax_scale is None else float(softmax_scale)
@@ -1497,7 +1639,7 @@ def _load_official_flash_attention(root: pathlib.Path) -> Optional[ModuleType]:
     if not _ensure_official_cutlass(root):
         return None
     build_dir = _official_build_dir(root)
-    sources = _official_forward_sources(root)
+    sources = _official_sources(root)
     sources.append(_official_stub_source(build_dir, root))
     include_dirs = [
         os.fspath((root / "csrc" / "flash_attn").resolve()),
@@ -1506,7 +1648,7 @@ def _load_official_flash_attention(root: pathlib.Path) -> Optional[ModuleType]:
     ]
     cflags, cuda_cflags = _official_flags()
     module_name = "flash_attn_2_cuda_jittor"
-    _log("compile official flash-attn forward backend from %s" % root)
+    _log("compile official flash-attn training backend from %s" % root)
     try:
         from jittor.compat.shim.cpp_extension.torch_utils import load
 
@@ -1518,7 +1660,7 @@ def _load_official_flash_attention(root: pathlib.Path) -> Optional[ModuleType]:
             extra_cuda_cflags=cuda_cflags,
             build_directory=build_dir,
             import_identity=_official_import_identity(
-                "official-forward", build_dir, module_name),
+                "official-training", build_dir, module_name),
             verbose=_verbose(),
             force=_truthy(os.environ.get("JITTOR_FLASH_ATTN_FORCE_BUILD")),
         )

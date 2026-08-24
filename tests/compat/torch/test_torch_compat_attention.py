@@ -43,6 +43,19 @@ def _sdpa_ref(q, k, v, mask=None):
     return _softmax(s, -1) @ v
 
 
+def _sdpa_backward_ref(q, k, v, grad_out):
+    scale = q.shape[-1] ** -0.5
+    probability = _softmax((q @ np.swapaxes(k, -1, -2)) * scale, -1)
+    grad_v = np.swapaxes(probability, -1, -2) @ grad_out
+    grad_probability = grad_out @ np.swapaxes(v, -1, -2)
+    grad_score = probability * (
+        grad_probability
+        - (grad_probability * probability).sum(axis=-1, keepdims=True))
+    grad_q = (grad_score @ k) * scale
+    grad_k = (np.swapaxes(grad_score, -1, -2) @ q) * scale
+    return grad_q, grad_k, grad_v
+
+
 class Base(unittest.TestCase):
     def ac(self, got, ref, atol=2e-4, rtol=2e-4, msg=""):
         np.testing.assert_allclose(np.asarray(got), np.asarray(ref), atol=atol, rtol=rtol,
@@ -1015,6 +1028,152 @@ assert after == before + 1, (before, after)
         self.assertGreaterEqual(stats.get("hits", 0), 1, "native flash-attn SDPA was not used")
         self.assertIn("flashattn_jittor", str(stats.get("backend", "")))
         self.ac(got, _sdpa_ref(q, k, v), atol=2e-3, rtol=2e-3, msg="sdpa native flash fp16 cuda")
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
+                     "native flash-attn source not configured")
+    def test_sdpa_native_flash_attn_backward_fp16_cuda(self):
+        rng = np.random.RandomState(101)
+        q = rng.randn(1, 2, 8, 32).astype("float32")
+        k = rng.randn(1, 2, 8, 32).astype("float32")
+        v = rng.randn(1, 2, 8, 32).astype("float32")
+        grad_out = rng.randn(1, 2, 8, 32).astype("float32")
+        with jt.flag_scope(use_cuda=1):
+            if hasattr(jt, "_torch_sdpa_flash_stats"):
+                delattr(jt, "_torch_sdpa_flash_stats")
+            qv, kv, vv = (
+                jt.array(value).float16() for value in (q, k, v))
+            out = torch.nn.functional.scaled_dot_product_attention(qv, kv, vv)
+            grads = jt.grad(
+                (out.float32() * jt.array(grad_out)).sum(), [qv, kv, vv])
+            fetched = jt.fetch_sync(
+                [out.float32()] + [grad.float32() for grad in grads])
+            stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+
+        self.assertGreaterEqual(stats.get("hits", 0), 1)
+        self.assertEqual(stats.get("misses", {}), {})
+        self.ac(fetched[0], _sdpa_ref(q, k, v), atol=3e-3, rtol=3e-3,
+                msg="sdpa native flash backward output")
+        for name, got, expected in zip(
+                ("q", "k", "v"), fetched[1:],
+                _sdpa_backward_ref(q, k, v, grad_out)):
+            self.ac(got, expected, atol=6e-3, rtol=6e-3,
+                    msg="sdpa native flash %s gradient" % name)
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
+                     "native flash-attn source not configured")
+    def test_native_flash_attn_dropout_replays_seed_and_backward(self):
+        import flash_attn
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
+
+        rng = np.random.RandomState(103)
+        q = rng.randn(2, 64, 4, 32).astype("float32")
+        k = rng.randn(2, 64, 4, 32).astype("float32")
+        v = rng.randn(2, 64, 4, 32).astype("float32")
+        grad_out = rng.randn(2, 64, 4, 32).astype("float32")
+
+        def run(seed=None):
+            if seed is not None:
+                torch.manual_seed(seed)
+            qv, kv, vv = (
+                jt.array(value).float16() for value in (q, k, v))
+            out, _, probability = flash_attn.flash_attn_func(
+                qv, kv, vv, dropout_p=0.25, deterministic=True,
+                return_attn_probs=True)
+            self.assertEqual(tuple(probability.shape), (2, 4, 128, 128))
+            grads = jt.grad(
+                (out.float32() * jt.array(grad_out)).sum(), [qv, kv, vv])
+            return jt.fetch_sync(
+                [out.float32()] + [grad.float32() for grad in grads])
+
+        with jt.flag_scope(use_cuda=1):
+            first = run(20260824)
+            replay = run(20260824)
+            advanced = run()
+            backend = flashattn_jittor.load_backend()
+
+        self.assertTrue(getattr(backend, "_flashattn_jittor_training", False))
+        np.testing.assert_array_equal(first[0], replay[0])
+        for first_grad, replay_grad in zip(first[1:], replay[1:]):
+            np.testing.assert_array_equal(first_grad, replay_grad)
+            self.assertTrue(np.isfinite(first_grad).all())
+            self.assertGreater(float(np.abs(first_grad).sum()), 0.0)
+        self.assertGreater(float(np.max(np.abs(replay[0] - advanced[0]))), 1e-3)
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
+                     "native flash-attn source not configured")
+    def test_native_flash_attn_varlen_backward_fp16_cuda(self):
+        import flash_attn
+
+        rng = np.random.RandomState(107)
+        q = rng.randn(7, 2, 32).astype("float32")
+        k = rng.randn(7, 2, 32).astype("float32")
+        v = rng.randn(7, 2, 32).astype("float32")
+        grad_out = rng.randn(7, 2, 32).astype("float32")
+        cu_seqlens = np.array([0, 3, 7], dtype="int32")
+
+        expected_out = []
+        expected_grads = [[], [], []]
+        for start, stop in zip(cu_seqlens[:-1], cu_seqlens[1:]):
+            segment = [
+                np.transpose(value[start:stop], (1, 0, 2))[None]
+                for value in (q, k, v, grad_out)]
+            expected_out.append(np.transpose(
+                _sdpa_ref(*segment[:3])[0], (1, 0, 2)))
+            for bucket, gradient in zip(
+                    expected_grads,
+                    _sdpa_backward_ref(*segment)):
+                bucket.append(np.transpose(gradient[0], (1, 0, 2)))
+
+        with jt.flag_scope(use_cuda=1):
+            qv, kv, vv = (
+                jt.array(value).float16() for value in (q, k, v))
+            cu = jt.array(cu_seqlens)
+            out = flash_attn.flash_attn_varlen_func(
+                qv, kv, vv, cu, cu, 4, 4)
+            grads = jt.grad(
+                (out.float32() * jt.array(grad_out)).sum(), [qv, kv, vv])
+            fetched = jt.fetch_sync(
+                [out.float32()] + [grad.float32() for grad in grads])
+
+        self.ac(fetched[0], np.concatenate(expected_out), atol=3e-3, rtol=3e-3,
+                msg="native flash varlen output")
+        for name, got, expected in zip(("q", "k", "v"), fetched[1:], expected_grads):
+            self.ac(got, np.concatenate(expected), atol=6e-3, rtol=6e-3,
+                    msg="native flash varlen %s gradient" % name)
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
+                     "native flash-attn source not configured")
+    def test_native_flash_attn_qkvpacked_backward_matches_dense(self):
+        import flash_attn
+
+        rng = np.random.RandomState(109)
+        qkv = rng.randn(1, 8, 3, 2, 32).astype("float32")
+        grad_out = rng.randn(1, 8, 2, 32).astype("float32")
+        with jt.flag_scope(use_cuda=1):
+            packed = jt.array(qkv).float16()
+            packed_out = flash_attn.flash_attn_qkvpacked_func(packed)
+            packed_grad = jt.grad(
+                (packed_out.float32() * jt.array(grad_out)).sum(), packed)
+
+            qv, kv, vv = (
+                jt.array(qkv[:, :, index]).float16() for index in range(3))
+            dense_out = flash_attn.flash_attn_func(qv, kv, vv)
+            dense_grads = jt.grad(
+                (dense_out.float32() * jt.array(grad_out)).sum(), [qv, kv, vv])
+            fetched = jt.fetch_sync([
+                packed_out.float32(), packed_grad.float32(), dense_out.float32(),
+                *[gradient.float32() for gradient in dense_grads],
+            ])
+
+        self.ac(fetched[0], fetched[2], atol=0.0, rtol=0.0,
+                msg="native qkvpacked output")
+        expected_grad = np.stack(fetched[3:], axis=2)
+        self.ac(fetched[1], expected_grad, atol=0.0, rtol=0.0,
+                msg="native qkvpacked gradient")
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),

@@ -1,11 +1,11 @@
 # SHA-256 and canonical path for the 31-file pre-convergence Torch shim inventory.
 d6299726f316eecf066ce96858fc1447693a40cb5bc36813c6f4cbf4d8d5abe8  docs/compatibility/torch-shim.md
 8bff58e28a812e851509c91c859e6230d0bda0d3d44d6a22fa153fe21f491cb5  python/jittor/compat/shim/__init__.py
-1e995e0704a083383556449c790e9346deee53d6fdc2793b7a9225dabab36318  python/jittor/compat/shim/backends/flash_attention.py
+25c0a96306f33b1ee2341f223e607248dc8783d9d403115d6c7ff3d3785b1ecd  python/jittor/compat/shim/backends/flash_attention.py
 6cfa0a3c398e169030a91b0c5a42c228604b3ebe8ad25f30bc1da9cf26dae559  python/jittor/compat/shim/cpp_extension/__init__.py
 dde7fd22077b424af188e05542cc0ae1c0538cb0ec8685ce84245aed485247f8  python/jittor/compat/shim/cpp_extension/include/ATen/ATen.h
 563db649e679c45865c0685d4d8048e477077d234d4fe855e7e736f66ee9208e  python/jittor/compat/shim/cpp_extension/include/ATen/cuda/CUDAContext.h
-946edacea8af90d08b4e97a25277bdbd6c9f5174cc59797bf4b831a1524e2cbf  python/jittor/compat/shim/cpp_extension/include/ATen/cuda/CUDAGeneratorImpl.h
+17f89298660b7c7f3ca96e5625bc6133d16e81b1b7089848b65eb3bc603cfc3b  python/jittor/compat/shim/cpp_extension/include/ATen/cuda/CUDAGeneratorImpl.h
 7a774d0c41aa6f9ca114a246e64381a94bf38e790b0ecc99d1a66a2afba48c96  python/jittor/compat/shim/cpp_extension/include/ATen/cuda/CUDAUtils.h
 131e153d6983ae0ff6c44b3b70399e1ddd223f17109a84d2daf9ae1e1793011f  python/jittor/compat/shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh
 3c87a7a5ee2a424ae736ef4186a03d37572bde79daef6091a18eb604d31dec2e  python/jittor/compat/shim/cpp_extension/include/c10/cuda/CUDAException.h
