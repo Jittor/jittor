@@ -56,6 +56,16 @@ def _sdpa_backward_ref(q, k, v, grad_out):
     return grad_q, grad_k, grad_v
 
 
+def _native_flash_dtype_enabled(dtype):
+    raw = (os.environ.get("JITTOR_FLASH_ATTN_DTYPES")
+           or os.environ.get("FLASH_ATTN_DTYPES") or "")
+    values = {item.strip().lower() for item in raw.replace(";", ",").split(",")}
+    if values & {"all", "full", "*"}:
+        return True
+    aliases = {"bf16", "bfloat16"} if dtype == "bfloat16" else {"fp16", "float16"}
+    return bool(values & aliases)
+
+
 class Base(unittest.TestCase):
     def ac(self, got, ref, atol=2e-4, rtol=2e-4, msg=""):
         np.testing.assert_allclose(np.asarray(got), np.asarray(ref), atol=atol, rtol=rtol,
@@ -1059,6 +1069,39 @@ assert after == before + 1, (before, after)
                 _sdpa_backward_ref(q, k, v, grad_out)):
             self.ac(got, expected, atol=6e-3, rtol=6e-3,
                     msg="sdpa native flash %s gradient" % name)
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
+                     "native flash-attn source not configured")
+    @unittest.skipUnless(_native_flash_dtype_enabled("bfloat16"),
+                         "native bf16 flash-attn capability not configured")
+    def test_sdpa_native_flash_attn_backward_bf16_cuda(self):
+        rng = np.random.RandomState(113)
+        q = rng.randn(1, 2, 8, 32).astype("float32")
+        k = rng.randn(1, 2, 8, 32).astype("float32")
+        v = rng.randn(1, 2, 8, 32).astype("float32")
+        grad_out = rng.randn(1, 2, 8, 32).astype("float32")
+        with jt.flag_scope(use_cuda=1):
+            if hasattr(jt, "_torch_sdpa_flash_stats"):
+                delattr(jt, "_torch_sdpa_flash_stats")
+            qv, kv, vv = (
+                jt.array(value).bfloat16() for value in (q, k, v))
+            out = torch.nn.functional.scaled_dot_product_attention(qv, kv, vv)
+            grads = jt.grad(
+                (out.float32() * jt.array(grad_out)).sum(), [qv, kv, vv])
+            fetched = jt.fetch_sync(
+                [out.float32()] + [grad.float32() for grad in grads])
+            stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+
+        self.assertGreaterEqual(stats.get("hits", 0), 1)
+        self.assertEqual(stats.get("misses", {}), {})
+        self.ac(fetched[0], _sdpa_ref(q, k, v), atol=3e-2, rtol=3e-2,
+                msg="sdpa native bf16 flash backward output")
+        for name, got, expected in zip(
+                ("q", "k", "v"), fetched[1:],
+                _sdpa_backward_ref(q, k, v, grad_out)):
+            self.ac(got, expected, atol=3e-2, rtol=3e-2,
+                    msg="sdpa native bf16 flash %s gradient" % name)
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),

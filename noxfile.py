@@ -205,6 +205,9 @@ OPTIONAL_NATIVE_FLASH_TESTS = (
     "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_gqa_fp16_cuda",
     "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_float32_opt_in_cast_cuda",
 )
+OPTIONAL_NATIVE_FLASH_BF16_TESTS = (
+    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_bf16_cuda",
+)
 NPU_TESTS = (
     "tests/backends/npu/test_acl.py",
     "tests/backends/npu/test_aclop.py",
@@ -1233,7 +1236,14 @@ def optional(session):
         return
     _run_pytest(session, OPTIONAL_COMPAT_TESTS, env, runner=python)
     if flash_source:
-        _run_pytest(session, OPTIONAL_NATIVE_FLASH_TESTS, native_env, runner=python)
+        native_tests = OPTIONAL_NATIVE_FLASH_TESTS
+        dtype_spec = native_env["JITTOR_FLASH_ATTN_DTYPES"].lower()
+        configured_dtypes = {
+            item.strip() for item in dtype_spec.replace(";", ",").split(",")
+        }
+        if configured_dtypes & {"bf16", "bfloat16", "all", "full", "*"}:
+            native_tests += OPTIONAL_NATIVE_FLASH_BF16_TESTS
+        _run_pytest(session, native_tests, native_env, runner=python)
 
 
 @nox.session(python=False)
