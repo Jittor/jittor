@@ -223,6 +223,7 @@ OPTIONAL_NATIVE_FLASH_BF16_HDIM96_TESTS = (
 )
 OPTIONAL_NATIVE_FLASH_BF16_HDIM128_TESTS = (
     "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim128_bf16_cuda",
+    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_training_variants_hdim128_bf16",
 )
 OPTIONAL_NATIVE_FLASH_BF16_HDIM192_TESTS = (
     "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim192_bf16_cuda",
@@ -242,6 +243,7 @@ OPTIONAL_NATIVE_FLASH_HDIM96_TESTS = (
 )
 OPTIONAL_NATIVE_FLASH_HDIM128_TESTS = (
     "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim128_fp16_cuda",
+    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_training_variants_hdim128_fp16",
 )
 OPTIONAL_NATIVE_FLASH_HDIM192_TESTS = (
     "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_backward_hdim192_fp16_cuda",
