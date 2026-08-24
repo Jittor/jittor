@@ -679,7 +679,11 @@ def _install_optimizers(g, registry=None):
                     bias_correction1 = 1 - b0 ** param_step
                     bias_correction2 = 1 - b1 ** param_step
                     step_size = lr / bias_correction1
-                    bias_correction2_sqrt = _math.sqrt(bias_correction2)
+                    # The Torch division wrapper widens Python floats for 1-ulp
+                    # parity; Adam scalars instead run in the state tensor dtype.
+                    bias_correction2_sqrt = jt.array(
+                        _math.sqrt(bias_correction2), dtype=v.dtype
+                    ).stop_grad()
                     if weight_decay != 0 and decoupled_weight_decay:
                         p.update(p * (1 - lr * weight_decay))
                     elif weight_decay != 0:

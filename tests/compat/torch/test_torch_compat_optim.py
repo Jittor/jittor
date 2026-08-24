@@ -197,6 +197,23 @@ class TestAdam(Base):
                     msg=f"adam tiny-grad eps {dev}")
         both_devices(body)
 
+    def test_adamw_float32_step_does_not_build_float64_temporaries(self):
+        def body(dev):
+            jt.clean()
+            value = jt.array(np.array([1.0, 2.0], dtype=np.float32))
+            optimizer = torch.optim.AdamW([value], lr=0.01)
+            optimizer.step((value * value).sum())
+            float64_nodes = [
+                node for node in jt.dump_all_graphs().nodes_info
+                if "float64" in node
+            ]
+            self.assertEqual(
+                float64_nodes, [],
+                f"AdamW float32 graph stays float32 on {dev}",
+            )
+
+        both_devices(body)
+
     def test_adam_step_inside_no_grad_keeps_param_trainable(self):
         def body(dev):
             w = jt.array(np.array([1.0, 2.0], "float32"))
