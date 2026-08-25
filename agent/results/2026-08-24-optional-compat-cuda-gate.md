@@ -2,7 +2,7 @@
 
 - Status: Selected optional packages and native FlashAttention training accepted on real CUDA
 - Last reviewed: 2026-08-25
-- Commits: `566eae8e`, `2cf096d5`, `c2e340f8`, `90e00edd`, `9e69fa23`, `19820174`, `50fc95d5`, `a13cb06e`, `c8c43cf6`, `d500dc77`, `76b8a5a0`, `24cf00eb`, `95cd6f6c`, `c3e65b1d`, `fe97085a`, `1cd76dd9`, `f3df3274`, `797a6a97`, `5b838f0f`, `0f93f117`, `d77f04a2`, `1b47cbab`, `62251be1`, `1161a552`, `e0224e64`, `be036e7f`, `15bb9b74`
+- Commits: `566eae8e`, `2cf096d5`, `c2e340f8`, `90e00edd`, `9e69fa23`, `19820174`, `50fc95d5`, `a13cb06e`, `c8c43cf6`, `d500dc77`, `76b8a5a0`, `24cf00eb`, `95cd6f6c`, `c3e65b1d`, `fe97085a`, `1cd76dd9`, `f3df3274`, `797a6a97`, `5b838f0f`, `0f93f117`, `d77f04a2`, `1b47cbab`, `62251be1`, `1161a552`, `e0224e64`, `be036e7f`, `15bb9b74`, `f0b26e91`
 - Owner: Torch compatibility and test-infrastructure maintainers
 - Review when: optional package versions, Torch shim identity, or nox hardware
   environment contracts change
@@ -189,9 +189,13 @@ backward，确保同一 dropout mask 被重放。
   缓存前 `45 passed, 29 skipped in 483.97s` 降至缓存后
   `46 passed, 29 skipped in 9.87s`。optional nox 现为默认 11 项、bf16 16 项、
   `all/all` 40 项且无重复。
-- 性能原始 28 行 JSONL 未版本化，位于
+- L1024 同轮 per-call 分解显示 Jittor wrapper 的 graph/build 与 sync 中位数分别为
+  `0.461/0.249 ms`，PyTorch flash 为 `0.404/0.180 ms`；预物化 BSHD direct 为
+  `0.452/0.220 ms`。因此剩余约 `1.19-1.21x` 非 causal 差距同时来自 grad 构图与
+  bridge/kernel 执行，不能用机械删除 clone 单点收口。
+- 性能原始 31 行 JSONL 未版本化，位于
   `$JITTOR_LAB_ROOT/jittor_transformers_perf/results/flash_training_20260825.jsonl`，
-  SHA-256 为 `d3e001a15b6de460ac89ed527319a4d87da7ecfbd95523fcc60c0df949605c08`。
+  SHA-256 为 `b3f96180411b69ef8fb090866f70c95d7399dfa8e9c96a81c2c2000608d5cea4`。
 - optional 两阶段的 retained nox cache：基础 TorchMetrics/MMCV/MMEngine/PEFT/
   TensorDict/FlashAttention 共 `14 passed, 1 warning in 18.44s`，native 阶段
   `7 passed in 96.18s`。fresh cache 首次 TorchMetrics 仍因主机满核在固定 600 秒内
