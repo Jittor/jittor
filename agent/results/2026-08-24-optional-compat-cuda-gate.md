@@ -2,7 +2,7 @@
 
 - Status: Selected optional packages and native FlashAttention training accepted on real CUDA
 - Last reviewed: 2026-08-25
-- Commits: `566eae8e`, `2cf096d5`, `c2e340f8`, `90e00edd`, `9e69fa23`, `19820174`, `50fc95d5`, `a13cb06e`, `c8c43cf6`, `d500dc77`, `76b8a5a0`, `24cf00eb`, `95cd6f6c`, `c3e65b1d`, `fe97085a`, `1cd76dd9`, `f3df3274`, `797a6a97`, `5b838f0f`, `0f93f117`, `d77f04a2`
+- Commits: `566eae8e`, `2cf096d5`, `c2e340f8`, `90e00edd`, `9e69fa23`, `19820174`, `50fc95d5`, `a13cb06e`, `c8c43cf6`, `d500dc77`, `76b8a5a0`, `24cf00eb`, `95cd6f6c`, `c3e65b1d`, `fe97085a`, `1cd76dd9`, `f3df3274`, `797a6a97`, `5b838f0f`, `0f93f117`, `d77f04a2`, `1b47cbab`
 - Owner: Torch compatibility and test-infrastructure maintainers
 - Review when: optional package versions, Torch shim identity, or nox hardware
   environment contracts change
@@ -139,6 +139,14 @@ backward，确保同一 dropout mask 被重放。
   `2 passed in 3447.28s`；耗时包含 `32,128 × fp16,bf16` capability 组合的官方
   扩展冷构建。请求 `128/bf16` 时 nox native 阶段精确选择 15 项，`all/all` 现为
   31 项且无重复。
+- hdim192 的 dropout、varlen backward 与 qkv-packed backward 在修复后热回归中
+  fp16 为 `1 passed in 4.32s`，bf16 为 `1 passed in 3.11s`。hdim256 的 varlen 与
+  qkv-packed backward 在两种 dtype 均通过；SM89 上带 dropout 的 backward 原先会
+  返回全零或 NaN 梯度，现按官方能力边界在 dense、varlen、qkv-packed 三个入口
+  forward 前 fail closed，同时保留 no-grad dropout forward。最终 fp16 为
+  `1 passed in 3.16s`，bf16 为 `1 passed in 4.13s`。
+- 请求 `192/bf16` 或 `256/bf16` 时 nox native 阶段均精确选择 15 项，`all/all`
+  现为 35 项且无重复；默认 hdim32/fp16 dropout 回归 `1 passed in 4.04s`。
 - optional 两阶段的 retained nox cache：基础 TorchMetrics/MMCV/MMEngine/PEFT/
   TensorDict/FlashAttention 共 `14 passed, 1 warning in 18.44s`，native 阶段
   `7 passed in 96.18s`。fresh cache 首次 TorchMetrics 仍因主机满核在固定 600 秒内
@@ -159,9 +167,9 @@ backward，确保同一 dropout mask 被重放。
 
 Native fused 训练结论限定为 RTX 4090、无显式 attention mask。官方 fp16/bf16 的
 head dim 32/64/96/128/192/256 均覆盖 dense forward/backward；hdim32/64 的两种
-dtype 还覆盖 varlen/qkv-packed 一阶 backward 与 `p=0.25` dropout，hdim96/128 的
-两种 dtype 由组合门禁覆盖相同三条训练路径。
-hdim192/256 dropout/varlen/packed、
-alibi、softcap、显式 mask、
+dtype 还覆盖 varlen/qkv-packed 一阶 backward 与 `p=0.25` dropout，hdim96/128/192
+的两种 dtype 由组合门禁覆盖相同三条训练路径。hdim256 的两种 dtype 覆盖无 dropout
+的 varlen/qkv-packed backward；官方仅在 SM80/SM90 支持大于 192 维的 dropout
+backward，SM89 现在显式拒绝该组合而不再产生错误梯度。alibi、softcap、显式 mask、
 二阶梯度、稳定热态性能和完整 Transformer 性能尚未由本报告宣称通过。NPU/ROCm
 也未因本次 CUDA 结果获得任何通过结论。
