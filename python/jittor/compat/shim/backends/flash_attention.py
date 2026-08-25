@@ -346,6 +346,17 @@ _OFFICIAL_FLASH_ATTN_HEAD_DIMS = ["32", "64", "96", "128", "192", "256"]
 _OFFICIAL_FLASH_ATTN_DTYPES = ["fp16", "bf16"]
 
 
+def _official_dropout_backward_supported(head_dim: int, cuda_archs) -> bool:
+    if int(head_dim) <= 192:
+        return True
+    try:
+        archs = {int(arch) for arch in cuda_archs}
+    except (TypeError, ValueError):
+        return False
+    # Upstream only supports >192 dropout backward on A100/A800 and H100/H800.
+    return bool(archs) and archs.issubset({80, 90})
+
+
 def _official_head_dims(root: pathlib.Path) -> List[str]:
     raw = os.environ.get("JITTOR_FLASH_ATTN_HEAD_DIMS") or os.environ.get("FLASH_ATTN_HEAD_DIMS")
     if raw:
@@ -1293,6 +1304,18 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
         return not getattr(jt.flags, "no_grad", 0) and any(
             bool(getattr(tensor, "requires_grad", False)) for tensor in tensors)
 
+    def _check_dropout_backward(q, dropout, needs_grad):
+        head_dim = int(q.shape[-1])
+        cuda_archs = tuple(getattr(jt.flags, "cuda_archs", ()))
+        if (needs_grad and dropout > 0.0
+                and not _official_dropout_backward_supported(head_dim, cuda_archs)):
+            arch_label = ",".join("sm%s" % arch for arch in cuda_archs) or "unknown"
+            raise RuntimeError(
+                "flashattn_jittor official backend does not support dropout "
+                "backward for head dimension %s on CUDA architecture %s; "
+                "upstream supports head dimensions above 192 with dropout "
+                "only on sm80 or sm90" % (head_dim, arch_label))
+
     def _cast_result(result, dtype, return_attn_probs):
         if not return_attn_probs:
             return result.to(dtype)
@@ -1403,6 +1426,7 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
             softmax_scale = q.shape[-1] ** -0.5
         needs_grad = _grad_enabled(q, k, v)
         dropout = float(dropout_p or 0.0)
+        _check_dropout_backward(q, dropout, needs_grad)
         if (packed_low_level is not None and not needs_grad and dropout == 0.0
                 and not return_attn_probs):
             return packed_low_level.fwd(q, k, v, float(softmax_scale), bool(causal), wl, wr)
@@ -1495,6 +1519,7 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
         leftpad_k = kwargs.get("leftpad_k", None)
         needs_grad = _grad_enabled(q, k, v)
         dropout = float(dropout_p or 0.0)
+        _check_dropout_backward(q, dropout, needs_grad)
         simple_varlen = (seqused_k is None and leftpad_k is None
                          and block_table is None and alibi_slopes is None)
         if (packed_low_level is not None and simple_varlen and not needs_grad

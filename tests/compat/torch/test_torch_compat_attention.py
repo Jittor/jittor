@@ -519,6 +519,19 @@ assert after == before + 1, (before, after)
         self.assertIsNone(miss)
         self.assertEqual(loader.call_args_list, [mock.call(), mock.call(force=True)])
 
+    def test_flash_official_dropout_backward_capability(self):
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
+
+        supported = flashattn_jittor._official_dropout_backward_supported
+        self.assertTrue(supported(192, ()))
+        self.assertTrue(supported(256, (80,)))
+        self.assertTrue(supported(256, (90,)))
+        self.assertTrue(supported(256, (80, 90)))
+        self.assertFalse(supported(256, (86,)))
+        self.assertFalse(supported(256, (89,)))
+        self.assertFalse(supported(256, ()))
+        self.assertFalse(supported(256, ("unknown",)))
+
     def test_flash_success_cache_invalidates_on_build_environment_change(self):
         from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 
@@ -1498,6 +1511,36 @@ assert after == before + 1, (before, after)
             self.assertGreater(float(np.abs(first_grad).sum()), 0.0)
         self.assertGreater(float(np.max(np.abs(replay[0] - advanced[0]))), 1e-3)
 
+    def _check_native_flash_attn_dropout_backward_rejected(self, dtype,
+                                                            head_dim):
+        import flash_attn
+
+        rng = np.random.RandomState(103)
+        values = [
+            rng.randn(1, 8, 2, head_dim).astype("float32") for _ in range(3)
+        ]
+        error = "dropout backward for head dimension %s.*sm" % head_dim
+        with jt.flag_scope(use_cuda=1):
+            qv, kv, vv = (jt.array(value).to(dtype) for value in values)
+            with jt.no_grad():
+                forward = flash_attn.flash_attn_func(
+                    qv, kv, vv, dropout_p=0.25, deterministic=True)
+                forward_value = forward.float32().numpy()
+            with self.assertRaisesRegex(RuntimeError, error):
+                flash_attn.flash_attn_func(
+                    qv, kv, vv, dropout_p=0.25, deterministic=True)
+            cu_seqlens = jt.array([0, 8], dtype="int32")
+            with self.assertRaisesRegex(RuntimeError, error):
+                flash_attn.flash_attn_varlen_func(
+                    qv[0], kv[0], vv[0], cu_seqlens, cu_seqlens, 8, 8,
+                    dropout_p=0.25, deterministic=True)
+            packed = jt.array(np.stack(values, axis=2)).to(dtype)
+            with self.assertRaisesRegex(RuntimeError, error):
+                flash_attn.flash_attn_qkvpacked_func(
+                    packed, dropout_p=0.25, deterministic=True)
+        self.assertTrue(np.isfinite(forward_value).all())
+        self.assertGreater(float(np.abs(forward_value).sum()), 0.0)
+
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
@@ -1722,6 +1765,66 @@ assert after == before + 1, (before, after)
         self._check_native_flash_attn_dropout("bfloat16", 128)
         self._check_native_flash_attn_varlen_backward("bfloat16", 3e-2, 3e-2, 128)
         self._check_native_flash_attn_qkvpacked_backward("bfloat16", 128)
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
+                     "native flash-attn source not configured")
+    @unittest.skipUnless(_native_flash_dtype_enabled("float16"),
+                         "native fp16 flash-attn capability not configured")
+    @unittest.skipUnless(_native_flash_head_dim_enabled(192),
+                         "native hdim192 flash-attn capability not configured")
+    def test_native_flash_attn_training_variants_hdim192_fp16(self):
+        self._check_native_flash_attn_dropout("float16", 192)
+        self._check_native_flash_attn_varlen_backward("float16", 3e-3, 6e-3, 192)
+        self._check_native_flash_attn_qkvpacked_backward("float16", 192)
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
+                     "native flash-attn source not configured")
+    @unittest.skipUnless(_native_flash_dtype_enabled("bfloat16"),
+                         "native bf16 flash-attn capability not configured")
+    @unittest.skipUnless(_native_flash_head_dim_enabled(192),
+                         "native hdim192 flash-attn capability not configured")
+    def test_native_flash_attn_training_variants_hdim192_bf16(self):
+        self._check_native_flash_attn_dropout("bfloat16", 192)
+        self._check_native_flash_attn_varlen_backward("bfloat16", 3e-2, 3e-2, 192)
+        self._check_native_flash_attn_qkvpacked_backward("bfloat16", 192)
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
+                     "native flash-attn source not configured")
+    @unittest.skipUnless(_native_flash_dtype_enabled("float16"),
+                         "native fp16 flash-attn capability not configured")
+    @unittest.skipUnless(_native_flash_head_dim_enabled(256),
+                         "native hdim256 flash-attn capability not configured")
+    def test_native_flash_attn_training_variants_hdim256_fp16(self):
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
+
+        if flashattn_jittor._official_dropout_backward_supported(
+                256, jt.flags.cuda_archs):
+            self._check_native_flash_attn_dropout("float16", 256)
+        else:
+            self._check_native_flash_attn_dropout_backward_rejected("float16", 256)
+        self._check_native_flash_attn_varlen_backward("float16", 3e-3, 6e-3, 256)
+        self._check_native_flash_attn_qkvpacked_backward("float16", 256)
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
+                     "native flash-attn source not configured")
+    @unittest.skipUnless(_native_flash_dtype_enabled("bfloat16"),
+                         "native bf16 flash-attn capability not configured")
+    @unittest.skipUnless(_native_flash_head_dim_enabled(256),
+                         "native hdim256 flash-attn capability not configured")
+    def test_native_flash_attn_training_variants_hdim256_bf16(self):
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
+
+        if flashattn_jittor._official_dropout_backward_supported(
+                256, jt.flags.cuda_archs):
+            self._check_native_flash_attn_dropout("bfloat16", 256)
+        else:
+            self._check_native_flash_attn_dropout_backward_rejected("bfloat16", 256)
+        self._check_native_flash_attn_varlen_backward("bfloat16", 3e-2, 3e-2, 256)
+        self._check_native_flash_attn_qkvpacked_backward("bfloat16", 256)
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
