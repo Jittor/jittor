@@ -2,7 +2,7 @@
 
 - Status: Selected optional packages and native FlashAttention training accepted on real CUDA
 - Last reviewed: 2026-08-25
-- Commits: `566eae8e`, `2cf096d5`, `c2e340f8`, `90e00edd`, `9e69fa23`, `19820174`, `50fc95d5`, `a13cb06e`, `c8c43cf6`, `d500dc77`, `76b8a5a0`, `24cf00eb`, `95cd6f6c`, `c3e65b1d`, `fe97085a`, `1cd76dd9`, `f3df3274`, `797a6a97`, `5b838f0f`, `0f93f117`, `d77f04a2`, `1b47cbab`, `62251be1`, `1161a552`, `e0224e64`, `be036e7f`
+- Commits: `566eae8e`, `2cf096d5`, `c2e340f8`, `90e00edd`, `9e69fa23`, `19820174`, `50fc95d5`, `a13cb06e`, `c8c43cf6`, `d500dc77`, `76b8a5a0`, `24cf00eb`, `95cd6f6c`, `c3e65b1d`, `fe97085a`, `1cd76dd9`, `f3df3274`, `797a6a97`, `5b838f0f`, `0f93f117`, `d77f04a2`, `1b47cbab`, `62251be1`, `1161a552`, `e0224e64`, `be036e7f`, `15bb9b74`
 - Owner: Torch compatibility and test-infrastructure maintainers
 - Review when: optional package versions, Torch shim identity, or nox hardware
   environment contracts change
@@ -172,19 +172,26 @@ backward，确保同一 dropout mask 被重放。
   | ---: | ---: | ---: | --- |
   | 128 | math `0.397` / flash `0.634` | `0.444` | short math 更快 |
   | 512 | default math `0.575` / flash `0.670` | `0.464` | 阈值避免更慢 native |
-  | 1024 | default flash `0.834` / math `2.014` | `0.613` | native 比 math 快 `2.41x` |
+  | 1024 | default flash `0.730` / math `2.014` | `0.613` | native 比 math 快 `2.76x` |
 
   非 required、无 dropout 的训练现在默认在 `B*H*Lq*Lk < 2^24` 时选择 math；
   `JITTOR_FLASH_ATTN_TRAINING_MIN_SCORES=0` 可禁用，required 门禁不受影响。L512
-  默认相对强制 flash 中位数改善约 `14%`；L1024 仍 24/24 native hit。预物化 BSHD
-  direct 的 L1024 为 `0.675 ms`，量化出通用 layout/wrapper 约 `0.16 ms` 成本。
-- causal L1024 的 Jittor flash/math/PyTorch flash 中位数为
-  `0.772/2.082/0.561 ms`。queued L1024 中 Jittor wrapper 为 `0.725 ms`，PyTorch
-  flash 为 `1.624 ms`；逐调用延迟仍分别约慢 `1.24x`（L512）与 `1.36x`（L1024），
+  默认相对强制 flash 中位数改善约 `14%`；L1024 仍 24/24 native hit。训练路径现在
+  也按 publication token 缓存 capability-checked backend，环境 epoch/generation 变化
+  仍会失效；L1024 由 `0.834` 降到 `0.730 ms`，约改善 `12.5%`。预物化 BSHD direct
+  为 `0.675 ms`，剩余通用 layout/wrapper 成本约 `0.055 ms`。
+- causal L1024 的 Jittor default flash/math/PyTorch flash 中位数为
+  `0.711/2.082/0.561 ms`。queued L1024 中 Jittor wrapper 为 `0.725 ms`，PyTorch
+  flash 为 `1.624 ms`；逐调用延迟仍分别约慢 `1.24x`（L512）与 `1.19x`（L1024），
+  causal L1024 约慢 `1.27x`，
   因此性能只接受 workload dispatch 改善，不宣称总体追平。
-- 性能原始 26 行 JSONL 未版本化，位于
+- backend cache 的 4 项复用/失效回归通过；完整 official-source attention 模块从
+  缓存前 `45 passed, 29 skipped in 483.97s` 降至缓存后
+  `46 passed, 29 skipped in 9.87s`。optional nox 现为默认 11 项、bf16 16 项、
+  `all/all` 40 项且无重复。
+- 性能原始 28 行 JSONL 未版本化，位于
   `$JITTOR_LAB_ROOT/jittor_transformers_perf/results/flash_training_20260825.jsonl`，
-  SHA-256 为 `6b164e16f6ab7b537ee6e3e73feed7a177c6ea05ffe86a0042e190a11864b98a`。
+  SHA-256 为 `d3e001a15b6de460ac89ed527319a4d87da7ecfbd95523fcc60c0df949605c08`。
 - optional 两阶段的 retained nox cache：基础 TorchMetrics/MMCV/MMEngine/PEFT/
   TensorDict/FlashAttention 共 `14 passed, 1 warning in 18.44s`，native 阶段
   `7 passed in 96.18s`。fresh cache 首次 TorchMetrics 仍因主机满核在固定 600 秒内
