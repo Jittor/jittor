@@ -1254,7 +1254,7 @@ def _trellis_sparse_packed_self_attention_fast_path(mod, attention, x):
     phases = _trellis_sparse_rope_phases(attention, qkv)
     if phases is None:
         return None
-    from jittor.nn.rope_cuda import packed_qkv_rms_rope_cuda
+    from jittor.nn.packed_qkv_cuda import packed_qkv_rms_rope_cuda
 
     packed = packed_qkv_rms_rope_cuda(
         qkv.feats,
@@ -1353,7 +1353,7 @@ def _trellis_modulated_layer_norm(layer, x, scale, shift):
         and float(bias) == 0.0
     ):
         return None
-    from jittor.nn.backends.layer_norm_cuda import (
+    from jittor.nn.backends.modulated_layer_norm_cuda import (
         _modulated_layer_norm_no_grad_cuda,
     )
 
