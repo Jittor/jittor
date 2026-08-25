@@ -55,6 +55,9 @@ struct NodeFlags {
         _requires_grad_disabled=23,
         // Op-only companion bit: its disabled-input edges were snapshotted.
         _requires_grad_snapshot=24,
+        // Var-only marker propagated through forward ops. A loss carrying this
+        // bit depends on a gradient whose producer supports first order only.
+        _first_order_only=25,
 
         // op related flags
         // bit0: support cpu

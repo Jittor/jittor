@@ -1188,6 +1188,64 @@ assert after == before + 1, (before, after)
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
                      "native flash-attn source not configured")
+    @unittest.skipUnless(_native_flash_dtype_enabled("float16"),
+                         "native fp16 flash-attn capability not configured")
+    def test_native_flash_attn_higher_order_rejected_fp16_cuda(self):
+        import flash_attn
+
+        rng = np.random.RandomState(163)
+        q = rng.randn(1, 8, 2, 32).astype("float32")
+        k = rng.randn(1, 8, 2, 32).astype("float32")
+        v = rng.randn(1, 8, 2, 32).astype("float32")
+
+        def check(first, target, label):
+            value = first.float32().numpy()
+            self.assertTrue(np.isfinite(value).all(), label)
+            self.assertGreater(float(np.abs(value).sum()), 0.0, label)
+            with self.assertRaisesRegex(
+                    RuntimeError, "Higher-order gradients.*first-order-only"):
+                jt.grad(first.float32().sum(), target)
+
+        with jt.flag_scope(use_cuda=1):
+            qv, kv, vv = (
+                jt.array(value).float16() for value in (q, k, v))
+            dense = flash_attn.flash_attn_func(qv, kv, vv)
+            dense_first = jt.grad(
+                (dense.float32() * dense.float32()).sum(), qv)
+            check(dense_first, qv, "dense")
+
+            cu_seqlens = jt.array([0, 8], dtype="int32")
+            q_varlen, k_varlen, v_varlen = (
+                jt.array(value[0]).float16() for value in (q, k, v))
+            varlen = flash_attn.flash_attn_varlen_func(
+                q_varlen, k_varlen, v_varlen,
+                cu_seqlens, cu_seqlens, 8, 8)
+            varlen_first = jt.grad(
+                (varlen.float32() * varlen.float32()).sum(), q_varlen)
+            check(varlen_first, q_varlen, "varlen")
+
+            packed = jt.array(np.stack((q, k, v), axis=2)).float16()
+            packed_out = flash_attn.flash_attn_qkvpacked_func(packed)
+            packed_first = jt.grad(
+                (packed_out.float32() * packed_out.float32()).sum(), packed)
+            check(packed_first, packed, "qkvpacked")
+
+            trainable = jt.array(q).float16()
+            fixed_k = jt.array(k).float16().stop_grad()
+            fixed_v = jt.array(v).float16().stop_grad()
+            optimizer = jt.optim.SGD([trainable], lr=1e-3)
+            for _ in range(2):
+                train_out = flash_attn.flash_attn_func(
+                    trainable, fixed_k, fixed_v)
+                optimizer.step(
+                    (train_out.float32() * train_out.float32()).mean())
+            trained = trainable.float32().numpy()
+            self.assertTrue(np.isfinite(trained).all())
+            self.assertGreater(float(np.max(np.abs(trained - q))), 0.0)
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
+                     "native flash-attn source not configured")
     @unittest.skipUnless(_native_flash_dtype_enabled("bfloat16"),
                          "native bf16 flash-attn capability not configured")
     @unittest.skipUnless(_native_flash_head_dim_enabled(64),

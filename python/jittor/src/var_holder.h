@@ -191,6 +191,7 @@ struct VarHolder {
     inline VarHolder* stop_grad() {
         var->set_stop_grad();
         var->flags.set(NodeFlags::_requires_grad_disabled, 0);
+        var->flags.set(NodeFlags::_first_order_only, 0);
         return this;
     }
 
@@ -200,6 +201,13 @@ struct VarHolder {
     // @pyjt(is_stop_grad)
     inline bool is_stop_grad() {
         return var->is_stop_grad();
+    }
+
+    // @pyjt(_set_first_order_only)
+    // @attrs(return_self)
+    inline VarHolder* set_first_order_only() {
+        var->flags.set(NodeFlags::_first_order_only);
+        return this;
     }
 
     /* detach the grad */

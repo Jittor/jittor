@@ -1,7 +1,7 @@
 # SHA-256 and canonical path for the 31-file pre-convergence Torch shim inventory.
 d6299726f316eecf066ce96858fc1447693a40cb5bc36813c6f4cbf4d8d5abe8  docs/compatibility/torch-shim.md
 8bff58e28a812e851509c91c859e6230d0bda0d3d44d6a22fa153fe21f491cb5  python/jittor/compat/shim/__init__.py
-93f40bc007e94001c2e533de0b1605a5c7ba97252e20024e4691e71bcd483cf8  python/jittor/compat/shim/backends/flash_attention.py
+15a50fa4a451e172e9248cfd52d2351e1eb31241b7204d8e1c4a35039dc73872  python/jittor/compat/shim/backends/flash_attention.py
 6cfa0a3c398e169030a91b0c5a42c228604b3ebe8ad25f30bc1da9cf26dae559  python/jittor/compat/shim/cpp_extension/__init__.py
 dde7fd22077b424af188e05542cc0ae1c0538cb0ec8685ce84245aed485247f8  python/jittor/compat/shim/cpp_extension/include/ATen/ATen.h
 563db649e679c45865c0685d4d8048e477077d234d4fe855e7e736f66ee9208e  python/jittor/compat/shim/cpp_extension/include/ATen/cuda/CUDAContext.h

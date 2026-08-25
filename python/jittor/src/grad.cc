@@ -89,6 +89,9 @@ vector<VarPtr> grad(
 ) {
     LOGvv << "loss:" >> loss << "targets:" >> targets;
     CHECK(loss->is_float()) << "Loss should be float";
+    CHECK(!loss->flags.get(NodeFlags::_first_order_only))
+        << "Higher-order gradients are not supported because this loss "
+        << "depends on a first-order-only gradient result.";
     for (Var* var : targets)
         CHECK(var->is_float() || var->dtype().is_complex())
             << "Targets of grad should be float or complex";

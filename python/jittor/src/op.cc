@@ -91,12 +91,15 @@ Var* Op::create_output(NanoVector shape, NanoString dtype) {
 void Op::init() {
     bool first_init = !flags.get(NodeFlags::_requires_grad_snapshot);
     bool has_disabled_input = false;
+    bool has_first_order_only_input = false;
     bool all_inputs_stopped = _inputs.size() != 0;
     if (first_init) {
         flags.set(NodeFlags::_requires_grad_snapshot);
         for (Var* v : inputs()) {
             bool disabled = v->flags.get(NodeFlags::_requires_grad_disabled);
             has_disabled_input |= disabled;
+            has_first_order_only_input |=
+                v->flags.get(NodeFlags::_first_order_only);
             all_inputs_stopped &= disabled || v->is_stop_grad();
         }
         if (has_disabled_input) {
@@ -108,6 +111,9 @@ void Op::init() {
         }
     }
     infer_shape();
+    if (first_init && has_first_order_only_input)
+        for (Var* v : outputs())
+            v->flags.set(NodeFlags::_first_order_only);
     bool manual_set_vnbb = flags.get(NodeFlags::_manual_set_vnbb)
         || _inputs.size()==0
         || (_outputs.size()==1 && _outputs.front().node->is_stop_grad());

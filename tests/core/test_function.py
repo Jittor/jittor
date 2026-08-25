@@ -14,6 +14,33 @@ from _helpers.assertions import expect_error
 from jittor import Function
 
 class TestFunction(unittest.TestCase):
+    def test_first_order_only_gradient_rejects_higher_order(self):
+        class FirstOrderOnlySquare(Function):
+            def execute(self, value):
+                self.value = value
+                return value * value
+
+            def grad(self, grad):
+                result = 2 * self.value * grad
+                result._set_first_order_only()
+                return result
+
+        value = jt.array([2.0, 3.0])
+        first = jt.grad(FirstOrderOnlySquare()(value).sum(), value)
+        np.testing.assert_allclose(first.numpy(), [4.0, 6.0])
+        with self.assertRaisesRegex(
+                RuntimeError, "Higher-order gradients.*first-order-only"):
+            jt.grad(first.sum(), value)
+
+        next_value = jt.array([2.0, 3.0])
+        next_first = jt.grad(
+            FirstOrderOnlySquare()(next_value).sum(), next_value)
+        next_first.stop_grad()
+        updated = next_value - 0.1 * next_first
+        next_gradient = jt.grad((updated * updated).sum(), updated)
+        np.testing.assert_allclose(
+            next_gradient.numpy(), 2 * updated.numpy(), rtol=1e-6, atol=1e-6)
+
     def test1(self):
         class MyFunc(Function):
             def execute(self, x):

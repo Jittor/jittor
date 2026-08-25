@@ -1357,6 +1357,8 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
                     0.0, deterministic, None, rng_state)
             finally:
                 _restore_readonly_borrow(saved)
+            for gradient in result[:3]:
+                gradient._set_first_order_only()
             return result[0], result[1], result[2]
 
     class _VarlenNativeAttention(jt.Function):
@@ -1402,6 +1404,8 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
                     deterministic, None, rng_state)
             finally:
                 _restore_readonly_borrow(saved)
+            for gradient in result[:3]:
+                gradient._set_first_order_only()
             return result[0], result[1], result[2]
 
     def flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False,
