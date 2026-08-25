@@ -1,9 +1,10 @@
 # verl Jittor 权重传输与 1-step PPO 真实 CUDA 门禁
 
-- Status: Adapter/PPO gates and the framework two-rank NCCL/FSDP2 core gate accepted on real CUDA
+- Status: Adapter/PPO gates and native two-rank verl NCCL/FSDP2 PPO accepted on real CUDA
 - Last reviewed: 2026-08-25
-- Jittor baseline: `6003beb9`
+- Jittor baseline: `a1ef6bdd`
 - verl source: `3d66a3d7ca1cf783df949816ec6862d5a7af9406` plus existing adapter edits
+- vLLM source: `51a99565c398c8320de8131e07731c75c52eb87c`
 - Owner: verl/vLLM external-adapter maintainers
 - Review when: verl bucket protocol, actor/critic engines, adapter transport, or rollout weight loader changes
 
@@ -101,6 +102,26 @@ offset 仍为 `142`。replicated 模式现在仅收集 rank 0，仍保留 rank 1
 `nox -s nccl` 门禁。门禁逐 rank 串行预热独立 cache，关闭无关 MPI/CUTT/CUTLASS/MKL
 探测，再并发执行两 rank pytest；从空 cache 完整运行正常以 `rc=0` 结束。
 
+`a1ef6bdd` 进一步把该原生 world-size 2 路径接入 verl worker/controller，而不是继续
+使用 replicated compatibility 模式。Ray worker 在启动时通过显式 opt-in 的
+`JITTOR_TORCH_DISTRIBUTED_AUTO_INIT=1` 建立 Jittor NCCL communicator；canonical
+`torch.distributed` 保持 rank `0/1`、world size `2`，actor 与 critic 均使用 verl
+原生 `strategy=fsdp2`。父 FSDP module 不再重复管理已由子 module 分片的参数，完整
+state dict 可从 rank 0 broadcast 后恢复每个 rank 的本地 flat/non-flat shard。
+
+真实 tiny Qwen3 两卡 1-step PPO 随后在物理 GPU 2/3 上完整退出，最终
+`training/global_step=1`。链路覆盖双 rank actor/critic FSDP2 初始化、初始权重同步、
+async vLLM rollout、old log-prob、critic value、GAE、critic backward/optimizer、actor
+backward/optimizer 和更新后权重同步。critic/actor grad norm 分别为
+`0.265052/1.988398`，不是空图或单 rank fallback；rollout 与训练概率最大差
+`2.7566e-8`、Pearson 相关系数 `0.9999843`，更新后权重同步约 `1.88s`。
+
+接入过程还补齐了 verl 实际依赖的 Torch distributed 表面：Ray 动态 NCCL bootstrap、
+WORLD/singleton process group、tensor/object gather、broadcast/barrier、SUM/AVG/MAX/MIN/
+PRODUCT reduction、Store/c10d/rendezvous import，以及 FSDP2 的 ABC metaclass、
+`Module.to_empty()`、真实 forward unshard hook 和 `torch.nn.utils.clip_grad` 私有梯度裁剪
+入口。未实现的 Gloo、P2P 与 symmetric memory 保持 fail closed，不再报告假可用。
+
 ## 验证
 
 - 独立 cache 首次完成 Jittor core、CUDA extern 与 MKL 初始化。
@@ -146,9 +167,15 @@ offset 仍为 `142`。replicated 模式现在仅收集 rank 0，仍保留 rank 1
 - 直接双 rank FSDP2 smoke：rank 0/1 均报告 `world_size=2`、
   `flat_total_numel=15`、`flat_shard_numel=8` 和 `nccl_ops=true`；完整参数更新最大误差
   均为 `1.4901161193847656e-08`。
-- 维护门禁 `CUDA_VISIBLE_DEVICES=2,3 python -m nox -s nccl` 从空 cache 通过；两个
-  rank 各为 `1 passed`，launcher 报告 `all ranks done, rc=0`。
-- 完整 FSDP2 compatibility 回归 `14 passed`；`check_repo_layout.sh` 通过，完整
+- Ray 两 GPU 动态 bootstrap 探针确认 actor 启动前无 `JT_NCCL_*`，初始化后 rank
+  `0/1`、world size `2`；SUM 为 `3`，对象 gather 为 rank `0/1`，每 rank flat shard
+  为 8 个元素，并可在同一 actor 导入、patch vLLM。
+- tiny Qwen3 原生双 rank FSDP2 PPO：`Training Progress: 100% 1/1`，最终
+  `training/global_step=1`、`response/aborted_ratio=0`，critic/actor update 和训练后
+  vLLM 权重同步全部执行。
+- 维护门禁 `CUDA_VISIBLE_DEVICES=2,3 python -m nox -s nccl` 从空 cache 通过；最终
+  代码热态复验两个 rank 各为 `3 passed`，launcher 报告 `all ranks done, rc=0`。
+- 完整 FSDP2/gradient compatibility 回归 `24 passed`；`check_repo_layout.sh` 通过，完整
   `tests/structure` 为 `218 passed`。
 
 ## 隔离方法
@@ -203,11 +230,25 @@ SHA-256 分别为
 `020f8aec55945e0543965caaecb4508528fece8a7b4eb0e5e0fc4b9c16058ad2` 和
 `110fbe30df1e51228622979eb92464451cc0450c5c56073b104f0a8f16213b83`。
 
+原生 verl 两 rank 运行保存在
+`$JITTOR_LAB_ROOT/_state/verl-fsdp2/20260825-native-verl-ppo/attempt13/`。Hydra 配置、
+TaskRunner stdout/stderr 的 SHA-256 分别为
+`78e7db9dc853e8dabd80e139257fe76a48827e2eb005a26878833e5a4002b0a5`、
+`d59ba2aff95c9ffab6d2ac1ff6f4dfd2c35e283ba939db28442cc6470f3e51bb` 和
+`e3e014fdb4ddab461d5ef8d61e1393c916df81e4d0dd059c20505dda094a2783`。
+最终代码的双 rank 日志位于同级 `nox-final3/`，rank 0/1 SHA-256 分别为
+`dd4c52bb5488e95a7ade1cfe9a4af9b51f197f17df1c270ed52c4f1b011d5fe4` 和
+`cb5e8a7ce5933cc15e3d96960f025394f967227f216616661aaebca9363ddbca`。
+未版本化 `verl_jittor/distributed_shim.py` 与 `vllm_jittor_ops/bootstrap.py` SHA-256
+分别为 `e6fe5d7753eef110ed16bc701edd560c4c72f1eb67e31f9de278aa551158beb5` 和
+`d4b6d124b8df969f65e4ae265a5b5fd1c7c9a09b4a7d0413973e0d1a68c17216`；PPO harness
+仍为 `8714d4e50a3868824ba7d30e7d936a6fdfd400b4b06777f876bb6cd7bf7616ba`。
+
 ## 边界
 
 完整 PPO 结论限定为 tiny Qwen3 与 Qwen3-0.6B、固定 reward；tiny 覆盖单卡
-dense/remove-padding，0.6B 覆盖单卡 remove-padding 和双卡 replicated compatibility。
-双卡 PPO 结果不是多 rank collective、数据并行或 FSDP 参数分片，也不宣称性能扩展。
-新增框架 smoke 只证明 Jittor FSDP2 的参数分片、collective 与一步更新，不证明 verl
-worker/controller 已接入该原生多 rank 路径。完整 verl 原生分布式 PPO、多 actor、
-真实 reward model、长序列、稳定热态性能，以及 NPU/ROCm 均不由本报告宣称通过。
+dense/remove-padding 和双卡原生 FSDP2，0.6B 覆盖单卡 remove-padding 与历史双卡
+replicated compatibility。原生双卡结果证明单机 world-size 2 的 NCCL collective、
+FSDP 参数分片和完整一步 verl PPO，不宣称性能扩展，也不把历史 replicated 结果改写为
+原生分布式。多节点、超过两 rank、0.6B 原生 FSDP2、多 actor、真实 reward model、
+长序列、稳定热态性能，以及 NPU/ROCm 均不由本报告宣称通过。
