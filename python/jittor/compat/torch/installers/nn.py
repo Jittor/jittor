@@ -2126,7 +2126,7 @@ def install(ctx):
                 _sdpa_flash_miss("short_training_math")
                 return None
         cache_key = (template_dim, q_dtype)
-        static_cache = _sdpa_static_backend_cache_enabled()
+        static_cache = _sdpa_static_backend_cache_enabled() or training_requested
         token_fn = getattr(_fa_jittor, "backend_cache_token", None)
         backend_token = (token_fn() if static_cache and callable(token_fn)
                          else None)

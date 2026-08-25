@@ -350,6 +350,41 @@ class TestSDPA(Base):
             cache.clear()
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_training_reuses_capability_checked_backend(self):
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
+
+        backend = ModuleType("cached_training_flash_backend")
+        backend._flashattn_jittor_training = True
+        backend.flash_attn_func = lambda q, k, v, *args, **kwargs: jt.zeros(
+            q.shape, dtype=q.dtype)
+        token = (7, 11, 13)
+        cache = torch._torch_sdpa_flash_backend_cache
+        cache.clear()
+        try:
+            with jt.flag_scope(use_cuda=1), \
+                    mock.patch.dict(os.environ, {
+                        "JITTOR_FLASH_ATTN_TRAINING_MIN_SCORES": "0",
+                    }, clear=False), \
+                    mock.patch.object(flashattn_jittor,
+                                      "backend_cache_token",
+                                      return_value=token), \
+                    mock.patch.object(flashattn_jittor,
+                                      "backend_publication_token",
+                                      return_value=token), \
+                    mock.patch.object(flashattn_jittor, "load_backend_for",
+                                      return_value=(backend, None)) as loader, \
+                    mock.patch.object(flashattn_jittor, "backend_name",
+                                      return_value="cached_training_flash_backend"):
+                q = jt.ones((1, 2, 16, 32), dtype="float16")
+                torch.nn.functional.scaled_dot_product_attention(q, q, q)
+                torch.nn.functional.scaled_dot_product_attention(q, q, q)
+
+            self.assertEqual(loader.call_count, 1)
+            self.assertIs(cache[(32, "float16")][1], backend)
+        finally:
+            cache.clear()
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     def test_static_inference_does_not_cache_backend_across_env_race(self):
         from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 

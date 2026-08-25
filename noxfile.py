@@ -204,6 +204,7 @@ OPTIONAL_NATIVE_FLASH_TESTS = (
     "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_qkvpacked_backward_matches_dense",
     "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_mask_fallback_fp16_cuda",
     "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_short_training_prefers_math",
+    "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_training_reuses_capability_checked_backend",
     "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_native_flash_attn_higher_order_rejected_fp16_cuda",
     "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_gqa_fp16_cuda",
     "tests/compat/torch/test_torch_compat_attention.py::TestSDPA::test_sdpa_native_flash_attn_float32_opt_in_cast_cuda",
