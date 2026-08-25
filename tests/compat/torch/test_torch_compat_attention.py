@@ -43,9 +43,12 @@ def _sdpa_ref(q, k, v, mask=None):
     return _softmax(s, -1) @ v
 
 
-def _sdpa_backward_ref(q, k, v, grad_out):
+def _sdpa_backward_ref(q, k, v, grad_out, mask=None):
     scale = q.shape[-1] ** -0.5
-    probability = _softmax((q @ np.swapaxes(k, -1, -2)) * scale, -1)
+    scores = (q @ np.swapaxes(k, -1, -2)) * scale
+    if mask is not None:
+        scores = scores + mask
+    probability = _softmax(scores, -1)
     grad_v = np.swapaxes(probability, -1, -2) @ grad_out
     grad_probability = grad_out @ np.swapaxes(v, -1, -2)
     grad_score = probability * (
@@ -1122,6 +1125,65 @@ assert after == before + 1, (before, after)
                 _sdpa_backward_ref(q, k, v, grad_out)):
             self.ac(got, expected, atol=3e-2, rtol=3e-2,
                     msg="sdpa native bf16 flash %s gradient" % name)
+
+    def _check_sdpa_native_flash_mask_fallback(self, dtype, out_tol,
+                                                grad_tol):
+        rng = np.random.RandomState(157)
+        q = rng.randn(1, 2, 8, 32).astype("float32")
+        k = rng.randn(1, 2, 8, 32).astype("float32")
+        v = rng.randn(1, 2, 8, 32).astype("float32")
+        grad_out = rng.randn(1, 2, 8, 32).astype("float32")
+        keep = np.tril(np.ones((8, 8), dtype=bool))
+        bool_bias = np.where(keep, 0.0, -np.inf).astype("float32")
+        additive = (rng.randn(8, 8) * 0.125).astype("float32")
+
+        with jt.flag_scope(use_cuda=1):
+            for name, mask, reference_mask in (
+                    ("bool", jt.array(keep), bool_bias),
+                    ("additive", jt.array(additive), additive)):
+                if hasattr(jt, "_torch_sdpa_flash_stats"):
+                    delattr(jt, "_torch_sdpa_flash_stats")
+                qv, kv, vv = (
+                    jt.array(value).to(dtype) for value in (q, k, v))
+                out = torch.nn.functional.scaled_dot_product_attention(
+                    qv, kv, vv, attn_mask=mask)
+                grads = jt.grad(
+                    (out.float32() * jt.array(grad_out)).sum(), [qv, kv, vv])
+                fetched = jt.fetch_sync(
+                    [out.float32()] + [grad.float32() for grad in grads])
+                stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+
+                self.assertEqual(stats.get("hits", 0), 0, name)
+                self.assertEqual(stats.get("misses", {}), {"mask": 1}, name)
+                self.assertIsNone(stats.get("backend"), name)
+                self.ac(
+                    fetched[0], _sdpa_ref(q, k, v, reference_mask),
+                    atol=out_tol, rtol=out_tol,
+                    msg="sdpa native flash mask fallback %s output" % name)
+                for tensor_name, got, expected in zip(
+                        ("q", "k", "v"), fetched[1:],
+                        _sdpa_backward_ref(
+                            q, k, v, grad_out, reference_mask)):
+                    self.ac(
+                        got, expected, atol=grad_tol, rtol=grad_tol,
+                        msg="sdpa native flash mask fallback %s %s gradient"
+                        % (name, tensor_name))
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
+                     "native flash-attn source not configured")
+    @unittest.skipUnless(_native_flash_dtype_enabled("float16"),
+                         "native fp16 flash-attn capability not configured")
+    def test_sdpa_native_flash_attn_mask_fallback_fp16_cuda(self):
+        self._check_sdpa_native_flash_mask_fallback("float16", 3e-3, 6e-3)
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
+                     "native flash-attn source not configured")
+    @unittest.skipUnless(_native_flash_dtype_enabled("bfloat16"),
+                         "native bf16 flash-attn capability not configured")
+    def test_sdpa_native_flash_attn_mask_fallback_bf16_cuda(self):
+        self._check_sdpa_native_flash_mask_fallback("bfloat16", 3e-2, 3e-2)
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
