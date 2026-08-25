@@ -2,7 +2,7 @@
 
 - Status: Selected optional packages and native FlashAttention training accepted on real CUDA
 - Last reviewed: 2026-08-25
-- Commits: `566eae8e`, `2cf096d5`, `c2e340f8`, `90e00edd`, `9e69fa23`, `19820174`, `50fc95d5`, `a13cb06e`, `c8c43cf6`, `d500dc77`, `76b8a5a0`, `24cf00eb`, `95cd6f6c`, `c3e65b1d`, `fe97085a`, `1cd76dd9`, `f3df3274`, `797a6a97`, `5b838f0f`, `0f93f117`, `d77f04a2`, `1b47cbab`, `62251be1`
+- Commits: `566eae8e`, `2cf096d5`, `c2e340f8`, `90e00edd`, `9e69fa23`, `19820174`, `50fc95d5`, `a13cb06e`, `c8c43cf6`, `d500dc77`, `76b8a5a0`, `24cf00eb`, `95cd6f6c`, `c3e65b1d`, `fe97085a`, `1cd76dd9`, `f3df3274`, `797a6a97`, `5b838f0f`, `0f93f117`, `d77f04a2`, `1b47cbab`, `62251be1`, `1161a552`, `e0224e64`
 - Owner: Torch compatibility and test-infrastructure maintainers
 - Review when: optional package versions, Torch shim identity, or nox hardware
   environment contracts change
@@ -152,6 +152,18 @@ backward，确保同一 dropout mask 被重放。
   output、dq/dk/dv 均对独立 NumPy 参考；fp16 为 `1 passed in 17.49s`，bf16 为
   `1 passed in 69.62s`，两种 dtype 的统计均为 `hits=0, misses={"mask": 1}`。
   默认 native 阶段现为 8 项，bf16 基础为 13 项，`all/all` 为 37 项且无重复。
+- 修复前 official dense backward 的一阶 dq 非零（绝对值和 `246.6115`），但再次
+  `jt.grad` 只警告无梯度并返回全零。Jittor core 现在提供可沿普通算子传播的
+  first-order-only Var 标记；FlashAttention dense/varlen backward 输出打标，二阶
+  在构图时明确报错，`stop_grad()` 同时清除标记以允许优化器切图。通用核心回归
+  `1 passed in 82.84s`，完整 Function 与普通高阶回归 `35 passed, 2 skipped`。
+- 真实 CUDA 高阶门禁覆盖 dense、varlen、qkv-packed 的非零一阶梯度与二阶拒绝，
+  并执行两步 SGD 证明标记不泄漏到下一训练步，`1 passed in 79.76s`。默认 native
+  九项同进程 `9 passed in 114.16s`；nox 默认为 9 项、bf16 基础为 14 项、
+  `all/all` 为 38 项且无重复。
+- 两步 smoke 同时复现高级优化器会把 fp16 参数/state 提升到 float32。base、SGD、
+  Adam、AdamW、RMSprop、Adan 现在统一在 update 前 cast 回目标 dtype；fp16/bf16
+  六优化器两步矩阵 `1 passed in 236.28s`，完整独立更新规则 `17 passed in 170.32s`。
 - optional 两阶段的 retained nox cache：基础 TorchMetrics/MMCV/MMEngine/PEFT/
   TensorDict/FlashAttention 共 `14 passed, 1 warning in 18.44s`，native 阶段
   `7 passed in 96.18s`。fresh cache 首次 TorchMetrics 仍因主机满核在固定 600 秒内
@@ -176,6 +188,6 @@ dtype 还覆盖 varlen/qkv-packed 一阶 backward 与 `p=0.25` dropout，hdim96/
 的两种 dtype 由组合门禁覆盖相同三条训练路径。hdim256 的两种 dtype 覆盖无 dropout
 的 varlen/qkv-packed backward；官方仅在 SM80/SM90 支持大于 192 维的 dropout
 backward，SM89 现在显式拒绝该组合而不再产生错误梯度。显式 mask 已验证正确回退
-math 路径；alibi、softcap、二阶梯度、稳定热态性能和完整 Transformer 性能尚未由
-本报告宣称通过。NPU/ROCm
+math 路径；二阶梯度已明确 fail closed，并不代表支持数值二阶。alibi、softcap、
+稳定热态性能和完整 Transformer 性能尚未由本报告宣称通过。NPU/ROCm
 也未因本次 CUDA 结果获得任何通过结论。
