@@ -221,6 +221,58 @@ def multihead_rms_norm_cuda(x, gamma, scale=None, min_norm=1e-12):
     if not math.isfinite(scale_value) or not math.isfinite(min_norm_value) or min_norm_value <= 0:
         return None
 
+    if head_dim <= 256:
+        rows_per_block = 8
+        cuda_src = r"""
+        __device__ __forceinline__ float warp_sum(float value) {
+            for (int offset = 16; offset > 0; offset >>= 1)
+                value += __shfl_down_sync(0xffffffff, value, offset);
+            return value;
+        }
+        __global__ static void multihead_rms_norm(
+                const in0_type* x, const in1_type* gamma, out0_type* y,
+                int rows) {
+            int warp = threadIdx.x >> 5;
+            int lane = threadIdx.x & 31;
+            int row = blockIdx.x * %(rows_per_block)d + warp;
+            if (row >= rows) return;
+
+            float sum = 0.0f;
+            for (int dim = lane; dim < %(head_dim)d; dim += 32) {
+                float value = static_cast<float>(
+                    x[row * %(head_dim)d + dim]);
+                sum += value * value;
+            }
+            sum = warp_sum(sum);
+            float denominator = sqrtf(
+                __shfl_sync(0xffffffff, sum, 0));
+            if (denominator < %(min_norm).9g)
+                denominator = %(min_norm).9g;
+            float factor = %(scale).9g / denominator;
+
+            int head = row %% %(num_heads)d;
+            for (int dim = lane; dim < %(head_dim)d; dim += 32) {
+                int index = row * %(head_dim)d + dim;
+                float value = static_cast<float>(x[index]);
+                float weight = static_cast<float>(
+                    gamma[head * %(head_dim)d + dim]);
+                y[index] = out0_type(value * weight * factor);
+            }
+        }
+        int rows = in0->num / %(head_dim)d;
+        multihead_rms_norm<<<
+            (rows + %(rows_per_block)d - 1) / %(rows_per_block)d, 256>>>(
+                in0_p, in1_p, out0_p, rows);
+        CHECK(0 == cudaGetLastError());
+        """ % {
+            "head_dim": head_dim,
+            "min_norm": min_norm_value,
+            "num_heads": num_heads,
+            "rows_per_block": rows_per_block,
+            "scale": scale_value,
+        }
+        return jt.code(x.shape, x.dtype, [x, gamma], cuda_src=cuda_src)
+
     threads = 32
     while threads < min(head_dim, 1024):
         threads *= 2

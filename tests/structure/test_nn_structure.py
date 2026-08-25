@@ -16,6 +16,7 @@ import jittor
 import jittor.nn as nn
 from jittor.nn.backends import cudnn as convolution_cudnn
 from jittor.nn.backends import layer_norm_cuda
+from jittor.nn.backends import modulated_layer_norm_cuda
 from jittor.nn.backends import group_norm_cuda
 from jittor.nn.functional import activation as activations
 from jittor.nn.functional import convolution
@@ -42,6 +43,7 @@ attention_function = importlib.import_module("jittor.nn.functional.attention")
 multihead_attention = importlib.import_module("jittor.nn.functional.multihead_attention")
 dual_grid = importlib.import_module("jittor.nn.dual_grid")
 legacy_complex = importlib.import_module("jittor.nn.legacy_complex")
+packed_qkv_cuda = importlib.import_module("jittor.nn.packed_qkv_cuda")
 rms_norm_cuda = importlib.import_module("jittor.nn.rms_norm_cuda")
 rope_cuda = importlib.import_module("jittor.nn.rope_cuda")
 sparse = importlib.import_module("jittor.nn.sparse")
@@ -152,6 +154,7 @@ _IMPLEMENTATION_SYMBOLS = (
     ),
     (convolution_transpose_layers, ("ConvTranspose", "ConvTranspose3d")),
     (layer_norm_cuda, ("_layer_norm_no_grad_cuda",)),
+    (modulated_layer_norm_cuda, ("_modulated_layer_norm_no_grad_cuda",)),
     (group_norm_cuda, ("_group_norm_cuda",)),
     (depthwise, ("DepthwiseConv",)),
     (dropout_ops, ("dropout", "dropout2d", "droppath")),
@@ -259,6 +262,7 @@ _IMPLEMENTATION_SYMBOLS = (
     (recurrent_cells, ("LSTMCell", "RNNCell", "GRUCell")),
     (recurrent_layers, ("RNN", "LSTM", "GRU")),
     (rms_norm_cuda, ("multihead_rms_norm_cuda",)),
+    (packed_qkv_cuda, ("packed_qkv_rms_rope_cuda",)),
     (rope_cuda, ("partial_rotary_embedding_cuda",)),
     (shape_ops, ("identity",)),
     (shape_layers, ("Flatten", "Identity", "PixelShuffle")),
@@ -382,6 +386,7 @@ _FUNCTIONAL_API = (
     "one_hot",
     "pad",
     "pairwise_distance",
+    "packed_qkv_rms_rope_cuda",
     "partial_rotary_embedding_cuda",
     "polar",
     "pool",

@@ -10,6 +10,7 @@ from ..attention import (
     varlen_scaled_dot_product_attention,
 )
 from ..dual_grid import finalize_dual_grid_mesh_cuda
+from ..packed_qkv_cuda import packed_qkv_rms_rope_cuda
 from ..rms_norm_cuda import multihead_rms_norm_cuda
 from ..rope_cuda import partial_rotary_embedding_cuda
 from jittor.sparse.convolution import (
@@ -189,6 +190,7 @@ __all__ = sorted(
         "one_hot",
         "pad",
         "pairwise_distance",
+        "packed_qkv_rms_rope_cuda",
         "partial_rotary_embedding_cuda",
         "polar",
         "pool",

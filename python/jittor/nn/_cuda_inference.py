@@ -6,7 +6,12 @@ import jittor as jt
 def device_index(value):
     get_device = getattr(value, "get_device", None)
     if callable(get_device):
-        return int(get_device())
+        try:
+            device = int(get_device())
+        except (TypeError, ValueError):
+            device = -1
+        if device >= 0:
+            return device
     location = value.location()
     if location == "device":
         return 0

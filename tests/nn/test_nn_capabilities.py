@@ -10,7 +10,14 @@ import numpy as np
 
 import jittor as jt
 import jittor.nn as nn
-from jittor.nn import attention, dual_grid, rms_norm_cuda, rope_cuda, sparse
+from jittor.nn import (
+    attention,
+    dual_grid,
+    packed_qkv_cuda,
+    rms_norm_cuda,
+    rope_cuda,
+    sparse,
+)
 
 
 class TestAttentionCapabilities(unittest.TestCase):
@@ -640,17 +647,32 @@ class TestCudaCapabilities(unittest.TestCase):
 
     def test_parameterized_multihead_rms_norm(self):
         rng = np.random.RandomState(223)
-        x_np = rng.randn(2, 5, 3, 96).astype("float32")
-        gamma_np = (1 + 0.1 * rng.randn(3, 96)).astype("float32")
-        with jt.flag_scope(use_cuda=1), jt.no_grad():
-            x = jt.array(x_np).bfloat16()
-            gamma = jt.array(gamma_np)
-            actual = rms_norm_cuda.multihead_rms_norm_cuda(x, gamma)
-            self.assertIsNotNone(actual)
-            actual_np = actual.float32().numpy()
-        norm = np.sqrt((x_np * x_np).sum(-1, keepdims=True))
-        expected = x_np / np.maximum(norm, 1e-12) * gamma_np * math.sqrt(96)
-        np.testing.assert_allclose(actual_np, expected, atol=0.02, rtol=0.01)
+        for num_heads, head_dim in ((3, 96), (12, 128), (4, 256)):
+            with self.subTest(num_heads=num_heads, head_dim=head_dim):
+                x_np = rng.randn(2, 5, num_heads, head_dim).astype("float32")
+                gamma_np = (
+                    1 + 0.1 * rng.randn(num_heads, head_dim)
+                ).astype("float32")
+                with jt.flag_scope(use_cuda=1), jt.no_grad():
+                    x = jt.array(x_np).bfloat16()
+                    gamma = jt.array(gamma_np)
+                    actual = rms_norm_cuda.multihead_rms_norm_cuda(x, gamma)
+                    self.assertIsNotNone(actual)
+                    quantized_x, actual_np = jt.fetch_sync(
+                        [x.float32(), actual.float32()]
+                    )
+                norm = np.sqrt(
+                    (quantized_x * quantized_x).sum(-1, keepdims=True)
+                )
+                expected = (
+                    quantized_x
+                    / np.maximum(norm, 1e-12)
+                    * gamma_np
+                    * math.sqrt(head_dim)
+                )
+                np.testing.assert_allclose(
+                    actual_np, expected, atol=0.02, rtol=0.01
+                )
 
     def test_inference_rms_norm_cuda(self):
         rng = np.random.RandomState(224)
@@ -692,6 +714,35 @@ class TestCudaCapabilities(unittest.TestCase):
                 np.testing.assert_allclose(
                     fused_residual_np, summed, atol=atol, rtol=rtol)
 
+    def test_modulated_layer_norm_preserves_bfloat_rounding(self):
+        from jittor.nn.backends.modulated_layer_norm_cuda import (
+            _modulated_layer_norm_no_grad_cuda,
+        )
+
+        rng = np.random.RandomState(231)
+        x_np = rng.randn(7, 96).astype("float32")
+        scale_np = (0.1 * rng.randn(1, 96)).astype("float32")
+        shift_np = (0.1 * rng.randn(1, 96)).astype("float32")
+        eps = 1e-6
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            x = jt.array(x_np).bfloat16()
+            scale = jt.array(scale_np).bfloat16()
+            shift = jt.array(shift_np).bfloat16()
+            actual = _modulated_layer_norm_no_grad_cuda(
+                x, scale, shift, eps
+            )
+            self.assertIsNotNone(actual)
+            reference = nn._layer_norm_no_grad_cuda(
+                x, (96,), 1.0, 0.0, eps, allow_bfloat16=True
+            )
+            reference = reference * (1 + scale) + shift
+            actual_np, reference_np = jt.fetch_sync(
+                [actual.float32(), reference.float32()]
+            )
+        np.testing.assert_allclose(
+            actual_np, reference_np, atol=0.016, rtol=0.008
+        )
+
     def test_partial_rope_uses_explicit_prefix_and_rotary_dim(self):
         rng = np.random.RandomState(227)
         q_np = rng.randn(2, 5, 7, 40).astype("float32")
@@ -719,6 +770,65 @@ class TestCudaCapabilities(unittest.TestCase):
 
         np.testing.assert_allclose(actual_q, reference(q_np), atol=2e-6, rtol=2e-6)
         np.testing.assert_allclose(actual_k, reference(k_np), atol=2e-6, rtol=2e-6)
+
+    def test_packed_qkv_rms_rope_preserves_bfloat_rounding(self):
+        rng = np.random.RandomState(230)
+        token_count, num_heads, head_dim = 7, 3, 128
+        qkv_np = rng.randn(token_count, 3, num_heads, head_dim).astype("float32")
+        q_gamma_np = (
+            1 + 0.1 * rng.randn(num_heads, head_dim)
+        ).astype("float32")
+        k_gamma_np = (
+            1 + 0.1 * rng.randn(num_heads, head_dim)
+        ).astype("float32")
+        angles = rng.randn(token_count, head_dim // 2).astype("float32")
+        phases_np = np.stack((np.cos(angles), np.sin(angles)), axis=-1)
+
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            qkv = jt.array(qkv_np).bfloat16()
+            result = packed_qkv_cuda.packed_qkv_rms_rope_cuda(
+                qkv,
+                jt.array(q_gamma_np),
+                jt.array(k_gamma_np),
+                jt.array(phases_np),
+            )
+            self.assertIsNotNone(result)
+            quantized_qkv, actual = jt.fetch_sync(
+                [qkv.float32(), result.float32()]
+            )
+
+            def quantize(value):
+                return jt.array(value).bfloat16().float32().numpy()
+
+            scale = math.sqrt(head_dim)
+            q = quantized_qkv[:, 0]
+            k = quantized_qkv[:, 1]
+            q_norm = np.sqrt((q * q).sum(-1, keepdims=True))
+            k_norm = np.sqrt((k * k).sum(-1, keepdims=True))
+            q = quantize(
+                q / np.maximum(q_norm, 1e-12) * q_gamma_np * scale
+            )
+            k = quantize(
+                k / np.maximum(k_norm, 1e-12) * k_gamma_np * scale
+            )
+
+        def rotate(value):
+            pairs = value.reshape(token_count, num_heads, head_dim // 2, 2)
+            real = pairs[..., 0]
+            imag = pairs[..., 1]
+            phase_real = phases_np[:, None, :, 0]
+            phase_imag = phases_np[:, None, :, 1]
+            return np.stack(
+                (
+                    real * phase_real - imag * phase_imag,
+                    real * phase_imag + imag * phase_real,
+                ),
+                axis=-1,
+            ).reshape(value.shape)
+
+        np.testing.assert_allclose(actual[:, 0], rotate(q), atol=0.03, rtol=0.02)
+        np.testing.assert_allclose(actual[:, 1], rotate(k), atol=0.03, rtol=0.02)
+        np.testing.assert_array_equal(actual[:, 2], quantized_qkv[:, 2])
 
     def test_inference_gqa_rotary_embedding_cuda(self):
         rng = np.random.RandomState(228)
@@ -919,6 +1029,18 @@ class TestCudaCapabilities(unittest.TestCase):
 
 
 class TestCapabilityStructure(unittest.TestCase):
+    def test_lazy_cuda_device_index_uses_location_fallback(self):
+        from jittor.nn._cuda_inference import device_index
+
+        class LazyCudaValue:
+            def get_device(self):
+                return -1
+
+            def location(self):
+                return "device"
+
+        self.assertEqual(device_index(LazyCudaValue()), 0)
+
     def test_facade_exports_physical_capabilities(self):
         expected = {
             "cumulative_sequence_lengths": attention,

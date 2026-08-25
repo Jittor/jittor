@@ -1,4 +1,4 @@
-"""CUDA inference kernels for partial rotary position embeddings."""
+"""CUDA inference kernels for rotary position embeddings."""
 
 import jittor as jt
 

@@ -80,7 +80,9 @@ from .functional.matrix import (
 from .functional.normalization import _ln_function_cls, _ln_normalize
 from .functional.softmax import _get_softmax_dim
 from .legacy_complex import ComplexNumber, _fft2
+from .backends.modulated_layer_norm_cuda import _modulated_layer_norm_no_grad_cuda
 from .modules import *
+from .packed_qkv_cuda import packed_qkv_rms_rope_cuda
 from .rms_norm_cuda import multihead_rms_norm_cuda
 from .rope_cuda import partial_rotary_embedding_cuda
 from jittor.sparse.convolution import (
