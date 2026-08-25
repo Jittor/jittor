@@ -2,7 +2,7 @@
 
 - Status: Current index, not a history log
 - Last reviewed: 2026-08-26
-- Baseline reviewed: `566d8087`
+- Baseline reviewed: `295c3227`
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -91,14 +91,17 @@ real-scale training performance remains incomplete. Current verl core
 algorithm/FSDP2 gates also pass on CPU/CUDA. Qwen3-0.6B vLLM real-CUDA inference
 now runs about 20.5% faster than its real-PyTorch reference on the maintained
 4-token protocol; TRELLIS.2 improved from about 1.20x to 1.093x slower, so its
-performance gate remains open. CUDA masked SDPA now
-reuses the safe softmax kernel instead of building redundant row-valid graphs;
-real-scale GPT-2 improved by about 6%, while the remaining Transformer training
-gap is still 1.19-1.29x. See
+performance gate remains open. CUDA masked SDPA now reuses the safe softmax
+kernel instead of building redundant row-valid graphs. CUDA training LayerNorm
+and standard RMSNorm now use fused forward/backward capabilities. The default
+math-attention path remains `1.13x/1.22x` slower for GPT-2/Llama; with explicitly
+configured native FlashAttention and float32-to-fp16 cast, GPT-2 reaches
+`0.90-0.94x`, while Llama retains a conservative `3-4%` gap. See
 [benchmarking](../../docs/performance/benchmarking.md) and the
 [ecosystem parity/performance report](../results/2026-08-23-ecosystem-parity-performance.md),
 the [verl/vLLM/TRELLIS current-baseline report](../results/2026-08-23-verl-vllm-trellis-current-baseline.md),
-and the [CUDA masked SDPA report](../results/2026-08-23-cuda-masked-sdpa.md).
+the [CUDA masked SDPA report](../results/2026-08-23-cuda-masked-sdpa.md), and the
+[Transformer normalization follow-up](../results/2026-08-26-transformers-training-normalization.md).
 
 ### Agent-operable optimization
 
