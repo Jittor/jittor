@@ -2,7 +2,7 @@
 
 - Status: Selected optional packages and native FlashAttention training accepted on real CUDA
 - Last reviewed: 2026-08-25
-- Commits: `566eae8e`, `2cf096d5`, `c2e340f8`, `90e00edd`, `9e69fa23`, `19820174`, `50fc95d5`, `a13cb06e`, `c8c43cf6`, `d500dc77`, `76b8a5a0`, `24cf00eb`, `95cd6f6c`, `c3e65b1d`, `fe97085a`, `1cd76dd9`, `f3df3274`, `797a6a97`, `5b838f0f`, `0f93f117`, `d77f04a2`, `1b47cbab`, `62251be1`, `1161a552`, `e0224e64`
+- Commits: `566eae8e`, `2cf096d5`, `c2e340f8`, `90e00edd`, `9e69fa23`, `19820174`, `50fc95d5`, `a13cb06e`, `c8c43cf6`, `d500dc77`, `76b8a5a0`, `24cf00eb`, `95cd6f6c`, `c3e65b1d`, `fe97085a`, `1cd76dd9`, `f3df3274`, `797a6a97`, `5b838f0f`, `0f93f117`, `d77f04a2`, `1b47cbab`, `62251be1`, `1161a552`, `e0224e64`, `be036e7f`
 - Owner: Torch compatibility and test-infrastructure maintainers
 - Review when: optional package versions, Torch shim identity, or nox hardware
   environment contracts change
@@ -164,6 +164,27 @@ backward，确保同一 dropout mask 被重放。
 - 两步 smoke 同时复现高级优化器会把 fp16 参数/state 提升到 float32。base、SGD、
   Adam、AdamW、RMSprop、Adan 现在统一在 update 前 cast 回目标 dtype；fp16/bf16
   六优化器两步矩阵 `1 passed in 236.28s`，完整独立更新规则 `17 passed in 170.32s`。
+- 训练 SDPA benchmark 现在区分 per-call latency 与 queued throughput，并支持可配置
+  shape、causal、forced math/flash、生产 default 与预物化 BSHD direct。RTX 4090、
+  fp16、`B=4,H=12,D=64` 的 per-call 中位数（毫秒）如下：
+
+  | L | Jittor default / alternate forced | PyTorch flash | 结论 |
+  | ---: | ---: | ---: | --- |
+  | 128 | math `0.397` / flash `0.634` | `0.444` | short math 更快 |
+  | 512 | default math `0.575` / flash `0.670` | `0.464` | 阈值避免更慢 native |
+  | 1024 | default flash `0.834` / math `2.014` | `0.613` | native 比 math 快 `2.41x` |
+
+  非 required、无 dropout 的训练现在默认在 `B*H*Lq*Lk < 2^24` 时选择 math；
+  `JITTOR_FLASH_ATTN_TRAINING_MIN_SCORES=0` 可禁用，required 门禁不受影响。L512
+  默认相对强制 flash 中位数改善约 `14%`；L1024 仍 24/24 native hit。预物化 BSHD
+  direct 的 L1024 为 `0.675 ms`，量化出通用 layout/wrapper 约 `0.16 ms` 成本。
+- causal L1024 的 Jittor flash/math/PyTorch flash 中位数为
+  `0.772/2.082/0.561 ms`。queued L1024 中 Jittor wrapper 为 `0.725 ms`，PyTorch
+  flash 为 `1.624 ms`；逐调用延迟仍分别约慢 `1.24x`（L512）与 `1.36x`（L1024），
+  因此性能只接受 workload dispatch 改善，不宣称总体追平。
+- 性能原始 26 行 JSONL 未版本化，位于
+  `$JITTOR_LAB_ROOT/jittor_transformers_perf/results/flash_training_20260825.jsonl`，
+  SHA-256 为 `6b164e16f6ab7b537ee6e3e73feed7a177c6ea05ffe86a0042e190a11864b98a`。
 - optional 两阶段的 retained nox cache：基础 TorchMetrics/MMCV/MMEngine/PEFT/
   TensorDict/FlashAttention 共 `14 passed, 1 warning in 18.44s`，native 阶段
   `7 passed in 96.18s`。fresh cache 首次 TorchMetrics 仍因主机满核在固定 600 秒内
@@ -189,5 +210,5 @@ dtype 还覆盖 varlen/qkv-packed 一阶 backward 与 `p=0.25` dropout，hdim96/
 的 varlen/qkv-packed backward；官方仅在 SM80/SM90 支持大于 192 维的 dropout
 backward，SM89 现在显式拒绝该组合而不再产生错误梯度。显式 mask 已验证正确回退
 math 路径；二阶梯度已明确 fail closed，并不代表支持数值二阶。alibi、softcap、
-稳定热态性能和完整 Transformer 性能尚未由本报告宣称通过。NPU/ROCm
+逐调用热态性能和完整 Transformer 性能尚未由本报告宣称通过。NPU/ROCm
 也未因本次 CUDA 结果获得任何通过结论。
