@@ -402,6 +402,57 @@ class TestLayerNorm(Base):
                 os.environ["JITTOR_LAYERNORM_SCALAR_FAST"] = old
 
 
+# --------------------------------------------------------------------------- RMSNorm
+
+class TestRMSNormDispatch(Base):
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_standard_contract_routes_and_offset_variant_falls_back(self):
+        class FixtureRMSNorm(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = jt.ones(8)
+                self.variance_epsilon = 1e-6
+
+            def forward(self, hidden_states):
+                raise AssertionError("standard RMSNorm missed CUDA dispatch")
+
+        class OffsetRMSNorm(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = jt.zeros(8)
+                self.eps = 1e-6
+
+            def forward(self, hidden_states):
+                return hidden_states * (1.0 + self.weight)
+
+        calls = []
+        original = jt.nn._rms_norm_training_cuda
+
+        def fake_fast(value, weight, epsilon):
+            calls.append((tuple(value.shape), tuple(weight.shape), epsilon))
+            return value * 3.0
+
+        try:
+            jt.nn._rms_norm_training_cuda = fake_fast
+            with jt.flag_scope(use_cuda=1):
+                value = jt.ones((2, 4, 8))
+                standard = FixtureRMSNorm()(value)
+                offset = OffsetRMSNorm()(value)
+                overridden_module = FixtureRMSNorm()
+                overridden_module.forward = lambda hidden_states: hidden_states * 5.0
+                overridden = overridden_module(value)
+                standard_np, offset_np, overridden_np = jt.fetch_sync(
+                    [standard, offset, overridden]
+                )
+        finally:
+            jt.nn._rms_norm_training_cuda = original
+
+        self.assertEqual(calls, [((2, 4, 8), (8,), 1e-6)])
+        np.testing.assert_array_equal(standard_np, np.full((2, 4, 8), 3.0))
+        np.testing.assert_array_equal(offset_np, np.ones((2, 4, 8)))
+        np.testing.assert_array_equal(overridden_np, np.full((2, 4, 8), 5.0))
+
+
 # --------------------------------------------------------------------------- GroupNorm
 
 class TestGroupNorm(Base):

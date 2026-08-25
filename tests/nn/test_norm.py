@@ -93,6 +93,87 @@ class TestLayerNorm(_NormBase):
                                    jt.array(b.astype(str(v.dtype))), 1e-5),
             x, "LayerNorm grad @ var~1e-6")
 
+    @unittest.skipUnless(jt.has_cuda, "CUDA LayerNorm fast path needs CUDA")
+    def test_cuda_fast_path_forward_and_all_gradients(self):
+        rng = np.random.RandomState(20260826)
+        shape = (3, 5, 1024)
+        weight_np = rng.randn(shape[-1]).astype("float32")
+        bias_np = rng.randn(shape[-1]).astype("float32")
+        cot_np = rng.randn(*shape).astype("float32")
+
+        for low_variance in (False, True):
+            x_np = rng.randn(*shape).astype("float32")
+            if low_variance:
+                x_np = 1.0 + x_np * 1e-3
+
+            def run(use_cuda):
+                with jt.flag_scope(use_cuda=use_cuda):
+                    x = jt.array(x_np)
+                    weight = jt.array(weight_np)
+                    bias = jt.array(bias_np)
+                    if use_cuda:
+                        self.assertIsNotNone(jt.nn._layer_norm_cuda(
+                            x, (shape[-1],), weight, bias, 1e-5
+                        ))
+                    output = F.layer_norm(
+                        x, (shape[-1],), weight, bias, 1e-5
+                    )
+                    grads = jt.grad(
+                        (output * jt.array(cot_np)).sum(),
+                        [x, weight, bias],
+                    )
+                    return jt.fetch_sync([output] + grads)
+
+            expected = run(0)
+            actual = run(1)
+            for name, got, ref in zip(
+                    ("output", "grad_x", "grad_weight", "grad_bias"),
+                    actual, expected):
+                atol = 2e-3 if low_variance else 4e-4
+                rtol = 5e-4 if low_variance else 4e-4
+                np.testing.assert_allclose(
+                    got, ref, atol=atol, rtol=rtol,
+                    err_msg="CUDA LayerNorm %s low_variance=%s"
+                    % (name, low_variance),
+                )
+
+
+class TestRMSNorm(_NormBase):
+    @unittest.skipUnless(jt.has_cuda, "CUDA RMSNorm fast path needs CUDA")
+    def test_cuda_training_forward_and_all_gradients(self):
+        rng = np.random.RandomState(20260827)
+        shape = (3, 5, 1024)
+        x_np = rng.randn(*shape).astype("float32")
+        gamma_np = rng.randn(shape[-1]).astype("float32")
+        cot_np = rng.randn(*shape).astype("float32")
+        epsilon = 1e-6
+
+        def run(use_cuda):
+            with jt.flag_scope(use_cuda=use_cuda):
+                x = jt.array(x_np)
+                gamma = jt.array(gamma_np)
+                if use_cuda:
+                    output = jt.nn._rms_norm_training_cuda(
+                        x, gamma, epsilon
+                    )
+                    self.assertIsNotNone(output)
+                else:
+                    variance = (x * x).mean(-1, keepdims=True)
+                    output = x * jt.rsqrt(variance + epsilon) * gamma
+                grads = jt.grad(
+                    (output * jt.array(cot_np)).sum(), [x, gamma]
+                )
+                return jt.fetch_sync([output] + grads)
+
+        expected = run(0)
+        actual = run(1)
+        for name, got, ref in zip(
+                ("output", "grad_x", "grad_gamma"), actual, expected):
+            np.testing.assert_allclose(
+                got, ref, atol=4e-4, rtol=4e-4,
+                err_msg="CUDA RMSNorm %s" % name,
+            )
+
 
 class TestGroupNorm(_NormBase):
     @unittest.skipUnless(jt.has_cuda, "CUDA GroupNorm fast path needs CUDA")

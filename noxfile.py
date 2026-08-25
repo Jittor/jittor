@@ -55,6 +55,8 @@ NN_MIGRATION_FILES = (
     "python/jittor/nn/__init__.py",
     "python/jittor/nn/_bindings.py",
     "python/jittor/nn/backends/group_norm_cuda.py",
+    "python/jittor/nn/backends/layer_norm_training_cuda.py",
+    "python/jittor/nn/backends/rms_norm_training_cuda.py",
     "python/jittor/nn/functional/__init__.py",
     "python/jittor/nn/functional/attention.py",
     "python/jittor/nn/functional/autograd.py",

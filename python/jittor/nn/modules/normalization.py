@@ -144,6 +144,11 @@ class LayerNorm(Module):
         dims = [-i for i in range(len(self.normalized_shape), 0, -1)]
         weight = 1.0 if self.weight is None else self.weight
         bias = 0.0 if self.bias is None else self.bias
+        fast = jt.nn._layer_norm_cuda(
+            x, self.normalized_shape, weight, bias, self.eps
+        )
+        if fast is not None:
+            return fast
         fast = jt.nn._layer_norm_no_grad_cuda(x, self.normalized_shape, weight, bias, self.eps)
         if fast is not None:
             return fast

@@ -1069,6 +1069,26 @@ def _install_module_methods(nn, registry=None):
         return result
 
     _orig_call = M.__call__
+    def _standard_rms_norm(self, args, kwargs):
+        cls_name = type(self).__name__
+        if (
+            not cls_name.endswith("RMSNorm")
+            or cls_name.endswith("RMSNormGated")
+            or len(args) != 1
+            or kwargs
+            or "variance_epsilon" not in self.__dict__
+        ):
+            return None
+        value = args[0]
+        weight = getattr(self, "weight", None)
+        if not isinstance(value, jt.Var) or not isinstance(weight, jt.Var):
+            return None
+        epsilon = self.__dict__["variance_epsilon"]
+        fast = jt.nn._rms_norm_training_cuda(value, weight, epsilon)
+        if fast is None:
+            fast = jt.nn._rms_norm_cuda(value, weight, epsilon)
+        return fast
+
     def _call(self, *args, **kwargs):
         def dispatch(*call_args, **call_kwargs):
             # torch lets a module override forward per-INSTANCE (`self.forward =
@@ -1077,6 +1097,9 @@ def _install_module_methods(nn, registry=None):
             inst_fwd = self.__dict__.get("forward", None)
             if inst_fwd is not None and callable(inst_fwd):
                 return inst_fwd(*call_args, **call_kwargs)
+            rms_norm = _standard_rms_norm(self, call_args, call_kwargs)
+            if rms_norm is not None:
+                return rms_norm
             if _prefer_forward(type(self)):
                 return type(self).forward(self, *call_args, **call_kwargs)
             return _orig_call(self, *call_args, **call_kwargs)

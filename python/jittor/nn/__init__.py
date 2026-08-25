@@ -55,7 +55,9 @@ from .backends.cudnn import (
     _try_cudnn_conv_transpose2d,
 )
 from .backends.layer_norm_cuda import _layer_norm_no_grad_cuda
+from .backends.layer_norm_training_cuda import _layer_norm_cuda
 from .backends.group_norm_cuda import _group_norm_cuda
+from .backends.rms_norm_training_cuda import _rms_norm_training_cuda
 from .dual_grid import finalize_dual_grid_mesh_cuda
 from .functional import *
 from .functional.complex import (
@@ -83,7 +85,7 @@ from .legacy_complex import ComplexNumber, _fft2
 from .backends.modulated_layer_norm_cuda import _modulated_layer_norm_no_grad_cuda
 from .modules import *
 from .packed_qkv_cuda import packed_qkv_rms_rope_cuda
-from .rms_norm_cuda import multihead_rms_norm_cuda
+from .rms_norm_cuda import _rms_norm_cuda, multihead_rms_norm_cuda
 from .rope_cuda import partial_rotary_embedding_cuda
 from jittor.sparse.convolution import (
     build_submanifold_conv3d_neighbors,
