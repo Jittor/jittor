@@ -33,7 +33,8 @@ Jittor vs 真 PyTorch 数据，而不是把 JIT、H2D 或 lazy graph 漏执行�
    PyTorch/torchvision 固定在 `rt_venv`，再加载 jt311 的 Transformers 4.56.2。
 7. allocator 指标只能作为 harness 工作集方向性数据；严格峰值需另用 NVML/进程级采样。
 8. SDPA 同时报告 `--sync-mode per_call` 延迟与 `queued` 吞吐。前者每步同步，后者保留
-   全部输出/梯度后统一同步；二者不可互相替代。
+   全部输出/梯度后统一同步；二者不可互相替代。per-call 结果还分别记录 graph/build
+   与 sync 中位数，用于区分 Python/grad 构图和设备执行开销。
 
 ## 工具路由
 

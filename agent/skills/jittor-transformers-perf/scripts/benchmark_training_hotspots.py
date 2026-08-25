@@ -355,14 +355,20 @@ def main(argv=None) -> int:
         before_mem = _memory(torch)
         kept = []
         per_call_ms = []
+        per_call_build_ms = []
+        per_call_sync_ms = []
         start = time.perf_counter()
         for s in slots:
             call_start = time.perf_counter()
             kept.append(_run_one(torch, args.backend, args.sdpa_backend, args.case,
                                  s, backward))
             if args.sync_mode == "per_call":
+                built = time.perf_counter()
                 _sync(torch)
-                per_call_ms.append((time.perf_counter() - call_start) * 1000.0)
+                finished = time.perf_counter()
+                per_call_build_ms.append((built - call_start) * 1000.0)
+                per_call_sync_ms.append((finished - built) * 1000.0)
+                per_call_ms.append((finished - call_start) * 1000.0)
         if args.sync_mode == "queued":
             _sync(torch)
         latency_ms = (time.perf_counter() - start) * 1000.0 / args.repeats
@@ -412,6 +418,8 @@ def main(argv=None) -> int:
             "latency_min_ms": min(per_call_ms),
             "latency_median_ms": float(np.median(per_call_ms)),
             "latency_max_ms": max(per_call_ms),
+            "build_median_ms": float(np.median(per_call_build_ms)),
+            "sync_median_ms": float(np.median(per_call_sync_ms)),
         })
     if flash_stats:
         row["jittor_flash_stats"] = flash_stats
