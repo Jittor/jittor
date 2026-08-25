@@ -2,7 +2,7 @@
 
 - Status: vLLM CUDA functionality/performance accepted; TRELLIS performance not accepted
 - Last reviewed: 2026-08-26
-- Baseline: `f6980c42`
+- Baseline: `566d8087`
 - Owner: Torch compatibility and downstream integration maintainers
 - Review when: Jittor Torch version identity, FSDP2, verl algorithms,
   vLLM adapter/engine, TRELLIS adapter, FlashAttention, FlexGEMM, or CUDA
@@ -17,24 +17,26 @@ token 与真实 PyTorch/Transformers 完全一致。`f6980c42` 又将 Qwen3-0.6B
 热态从历史 `0.6410s` 降至 3 进程中位数 `0.10924s`；同机真实
 PyTorch/Transformers 为 `0.13745s`，Jittor-vLLM 快约 `20.5%`，性能门禁已接受。
 TRELLIS.2 4B 也在当前 Jittor、外置 adapter 和四个真实 CUDA 扩展上完成 aligned
-端到端 pipeline，但其性能仍未接受。
+端到端 pipeline；本轮将默认热态从 `8.2843s` 降到三进程中位数
+`7.5149s`，但仍比真实 PyTorch 慢约 `9.3%`，性能未接受。
 
 总 todo 仍不能勾选：
 
-- TRELLIS Jittor 三次 pipeline 中位数 `8.1712s`，同轮 PyTorch 中位数
-  `6.8007s`，约 `1.201x`；
+- TRELLIS Jittor 三个独立进程的 pipeline 中位数为
+  `7.6291 / 7.5149 / 7.4246s`，median-of-medians `7.5149s`；真实 PyTorch
+  中位数 `6.8778s`，约 `1.093x`；
 - vLLM/TRELLIS 是 inference runtime，没有本轮反向对拍结论。
 
 ## 身份与环境
 
-- Jittor: `f6980c42`; Python 3.11.15; JIT operator compiler serial
+- Jittor: `566d8087`; Python 3.11.15; JIT operator compiler serial
 - GPU: NVIDIA GeForce RTX 4090, compute capability 8.9
 - CUDA: 12.2.140 for Jittor/TRELLIS; real references used their recorded binary
   CUDA runtimes
 - verl: `3d66a3d7ca1cf783df949816ec6862d5a7af9406`
 - vLLM checkout: `51a99565c398c8320de8131e07731c75c52eb87c`
 - TRELLIS.2: `75fbf0183001ed9876c8dbb35de6b68552ee08bd`
-- jittor-trellis: `d10ed75e8183f456dc2107d7cf6ca5cb26f7686a`
+- jittor-trellis: `f2c23acdf2402abcf04222a4866fc87451efe959`
 - Real PyTorch: 2.12.1; Transformers references: 5.12.1 for Qwen3 and 4.56.2
   for TRELLIS
 
@@ -174,40 +176,56 @@ apply (`delta=0.125`) and restore/logprob smoke all pass.
 
 ## TRELLIS.2
 
-The current run compiled and loaded CuMesh, FlexGEMM, nvdiffrast, o-voxel,
-official FlashAttention and its packed forward adapter from external state. The
+The current run loaded CuMesh, FlexGEMM, nvdiffrast, o-voxel, official
+FlashAttention and its packed forward adapter from isolated external state. The
 runtime selected `flash_attn`, `flex_gemm`, sm_89 CUDA, no managed allocator,
 no low-vram mode, and tensorcore level 2. The shared aligned tape contained 3,540
-coordinates and three random tensors.
+coordinates and three random tensors. Cold builds and each process's first
+warmup were excluded.
 
-One cold warmup took `2377.24s` because it built all external and JIT kernels.
-This value is excluded from steady-state timing.
+The same-machine starting point was Jittor `8.2843s` versus PyTorch `6.8778s`.
+The retained optimizations are:
 
-| Runtime | Pipeline runs | Mean |
+- one warp per row for BF16 multi-head RMSNorm at head dimensions up to 256;
+- one packed self-attention kernel that preserves the BF16 rounding point while
+  combining Q/K RMSNorm, pairwise-complex RoPE and V passthrough;
+- fused non-affine LayerNorm plus scale/shift for exact sparse modulated blocks;
+- lazy-CUDA device fallback and stable `Var.id` cache identity in the maintained
+  `jittor-trellis` adapter.
+
+Rejected A/B paths were removed: mixed-length Q/KV RMS, residual-plus-LayerNorm,
+default cross-KV cache and C2S topology cache all regressed or remained within
+noise. Historical cublasLt/GELU/RoPE experiments were not repeated after their
+recorded negative end-to-end results.
+
+| Runtime | Independent process medians | Median of medians |
 | --- | --- | ---: |
-| Jittor | `8.2401 / 8.1327 / 8.1712s` | `8.1813s` |
-| PyTorch | `6.7481 / 6.8007 / 6.8336s` | `6.7941s` |
+| Jittor | `7.6291 / 7.5149 / 7.4246s` | `7.5149s` |
+| PyTorch | `6.7972 / 6.8778 / 6.8979s` measured runs | `6.8778s` |
 
-The mean ratio is `1.204x`; the median ratio is `1.201x`. Performance is not
-accepted.
+Each Jittor process performed one warmup and three measured runs. The final
+ratio is `1.0926x`; Jittor improved `9.3%` from the same-round starting point,
+but performance remains unaccepted because it is not yet at most the reference.
 
 Both runs emitted valid PLY meshes. The comparison used 20,000 sampled vertices
 per direction:
 
-- vertex count difference: `+3,687` (`0.247969%`);
-- face count difference: `+20,154` (`0.626227%`);
-- bounding-box extent L2: `1.7997e-4` (`1.2781e-4` of bbox diagonal);
-- centroid L2: `1.2446e-3` (`8.8386e-4` of bbox diagonal);
-- nearest Jittor-to-Torch mean: `0.0058584` (`0.0041605` of bbox diagonal);
-- nearest p95: `0.0104673`.
+- vertex count difference: `+3,368` (`0.226515%`);
+- face count difference: `+14,700` (`0.456760%`);
+- bounding-box extent L2: `9.9765e-5` (`7.0852e-5` of bbox diagonal);
+- centroid L2: `6.3595e-4` (`4.5164e-4` of bbox diagonal);
+- nearest Jittor-to-Torch mean: `0.0058707` (`0.0041693` of bbox diagonal);
+- nearest p95: `0.0104870`.
 
 Artifact hashes:
 
 | Artifact | SHA-256 |
 | --- | --- |
-| Jittor result JSON | `0100e44095fe0876f1d4fabd53c766c2c52bbe03d0ea19c511115d44c14e8ae5` |
-| PyTorch result JSON | `d729c72d936c1bb72563d5cb99d022897322431ca60e46e020be3579ef4ae188` |
-| Mesh comparison | `d6677c59c0e8aa719637db5c2b166db6e4df143be6089cfaa9106b7fea14d209` |
+| Jittor process 1 JSON | `2f4e3360f4898a7272ceb7377b7ebfde76722a4fb06d12f7f80cbce812db3147` |
+| Jittor process 2 JSON | `984bac6cc21f6dd2033bb55c9958c2591ab64dc4ed65578b5fb8f5501e34d712` |
+| Jittor process 3 JSON | `845bfc9ee26ca623670aa3b096b26752053057e4731040f033c5c5802aa86a88` |
+| PyTorch result JSON | `a9e9a5d8d8f575d3e0c36e21e9d98957ed5011a4994dc83ec7d6f02adecd6154` |
+| Mesh comparison | `847502a0ed0da81c3851c3979fca872a1794d4e272debf70dc19741059d78e91` |
 
 ## Reproduction
 
@@ -234,7 +252,12 @@ The Jittor and PyTorch benchmark script SHA-256 values are
 `5b17cdced5e0d3b356bdcca63cb8f7b73caff3c53063973219772ca1097660f5` and
 `45055408854618eaf395279d8758771b2541a72ceb91417f2ad5e51b44d37178`.
 
-Regression scope: CUDA capability `30 passed`, structure `218 passed`, Torch
+The updated TRELLIS benchmark and launcher hashes are
+`0dbbdf0f206ee80ff946f7d804f294521a93411ead16c58efcd03bcc2de3a77c` and
+`2ac0260f502961d26b36aaba764741b2af303df9f1913c16bf2839d572366d76`.
+
+Regression scope: TRELLIS CUDA capability `33 passed`, retained capability subset
+`4 passed`, `jittor-trellis` adapter `14 passed`, structure `218 passed`, Torch
 optimizer/data alias `22 passed`, native array semantics `17 passed`, and real
 vLLM weight apply/restore smoke passed. The unrelated legacy
 `test_memcopy_overlap` 10ms timing assertion remained noisy (`33-75ms` delta)
@@ -242,8 +265,10 @@ when run alone and is not counted as a functional regression result.
 
 ## Remaining work
 
-- Bring TRELLIS steady pipeline time back to at most the real PyTorch baseline;
-  profile the current `3.65 it/s` shape and `6.5 it/s` texture stages first.
+- Bring TRELLIS steady pipeline time from current `1.093x` to at most the real
+  PyTorch baseline; the remaining gap is concentrated in BF16 linear
+  epilogues/fused elementwise around the `4.2 it/s` shape and `7.4 it/s`
+  texture stages, not FlashAttention or the GEMM kernels themselves.
 - Re-run the accepted vLLM performance protocol for larger dense, MoE and TP
   configurations before generalizing the 0.6B single-GPU conclusion.
 - Turn the unversioned vLLM adapter into a maintained external distribution with

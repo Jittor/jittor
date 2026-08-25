@@ -1,8 +1,8 @@
 # Jittor Project Context
 
 - Status: Current index, not a history log
-- Last reviewed: 2026-08-23
-- Baseline reviewed: `7e7c23cf`
+- Last reviewed: 2026-08-26
+- Baseline reviewed: `566d8087`
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -90,7 +90,8 @@ Transformers/Diffusers/PEFT/ms-swift/MMCV/MMEngine CPU and CUDA cases, while
 real-scale training performance remains incomplete. Current verl core
 algorithm/FSDP2 gates also pass on CPU/CUDA. Qwen3-0.6B vLLM real-CUDA inference
 now runs about 20.5% faster than its real-PyTorch reference on the maintained
-4-token protocol; TRELLIS.2 remains about 1.20x slower. CUDA masked SDPA now
+4-token protocol; TRELLIS.2 improved from about 1.20x to 1.093x slower, so its
+performance gate remains open. CUDA masked SDPA now
 reuses the safe softmax kernel instead of building redundant row-valid graphs;
 real-scale GPT-2 improved by about 6%, while the remaining Transformer training
 gap is still 1.19-1.29x. See
