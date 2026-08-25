@@ -272,6 +272,38 @@ print("RESULT=" + json.dumps({
                 {"torch_is_jittor": True, "torch_installed": True},
             )
 
+            late = subprocess.run(
+                [sys.executable, "-c", r'''
+import json, sys
+import numpy as np
+import jittor as jt
+native_data = jt.ones(2).data
+import torch
+torch_data = jt.ones(2).data
+print("RESULT=" + json.dumps({
+    "native_data_is_numpy": isinstance(native_data, np.ndarray),
+    "torch_data_is_var": isinstance(torch_data, jt.Var),
+    "torch_is_jittor": torch is jt and sys.modules.get("torch") is jt,
+}))
+'''],
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+            self.assertEqual(late.returncode, 0, late.stdout)
+            late_line = next(
+                line for line in late.stdout.splitlines() if line.startswith("RESULT=")
+            )
+            self.assertEqual(
+                json.loads(late_line[len("RESULT="):]),
+                {
+                    "native_data_is_numpy": True,
+                    "torch_data_is_var": True,
+                    "torch_is_jittor": True,
+                },
+            )
+
     def test_moved_scope_state_stays_synchronized_with_the_root(self):
         import jittor
         from jittor._runtime import core_api

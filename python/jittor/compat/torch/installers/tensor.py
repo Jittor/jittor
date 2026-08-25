@@ -1089,10 +1089,13 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             # depends on it, and 2.0 is meant to leave the native interface
             # as it was.
             preflight = getattr(jt, "_compat_preflight_result", None)
+            torch_mode = (
+                getattr(preflight, "active", False)
+                or bool(getattr(jt, "_torch_compat_install_complete", False))
+            )
             if (
                 _native_data_descriptor is not None
-                and preflight is not None
-                and not getattr(preflight, "active", False)
+                and not torch_mode
             ):
                 return _native_data_descriptor.__get__(self, Var)
             view = self.detach().stop_grad()

@@ -2,6 +2,8 @@
 
 import jittor as jt
 
+from ._cuda_inference import device_index
+
 
 def finalize_dual_grid_mesh_cuda(
     coords, dual_vertices, quad_indices, valid_rows, split_weight, voxel_size, aabb_min
@@ -32,7 +34,7 @@ def finalize_dual_grid_mesh_cuda(
     if getattr(jt.compiler, "has_acl", 0):
         return None
     try:
-        devices = tuple(int(value.get_device()) for value in tensors)
+        devices = tuple(device_index(value) for value in tensors)
         vertex_count = int(coords.shape[0])
         valid_count = int(valid_rows.shape[0])
         shapes = tuple(tuple(int(size) for size in value.shape) for value in tensors)
