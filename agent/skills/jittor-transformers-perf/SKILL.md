@@ -32,6 +32,8 @@ Jittor vs 真 PyTorch 数据，而不是把 JIT、H2D 或 lazy graph 漏执行�
 6. HF 对比必须使用同一 Transformers 版本。`benchmark_hf_tiny_models.py` 会把真
    PyTorch/torchvision 固定在 `rt_venv`，再加载 jt311 的 Transformers 4.56.2。
 7. allocator 指标只能作为 harness 工作集方向性数据；严格峰值需另用 NVML/进程级采样。
+8. SDPA 同时报告 `--sync-mode per_call` 延迟与 `queued` 吞吐。前者每步同步，后者保留
+   全部输出/梯度后统一同步；二者不可互相替代。
 
 ## 工具路由
 
@@ -44,6 +46,12 @@ Jittor vs 真 PyTorch 数据，而不是把 JIT、H2D 或 lazy graph 漏执行�
 - 完整 SGD/AdamW step：`benchmark_optimizer_step.py`
 - SDPA layout/Flash 物化：`probe_sdpa_layout_materialization.py`
 
+`benchmark_training_hotspots.py` 的 SDPA 模式支持可配置 batch/head/sequence/head-dim、
+causal 与同步口径。Jittor `math` 显式绕过 native loader，`flash` 要求且校验 official
+backend，`direct` 使用预物化 BSHD 输入，`default` 验证生产 dispatch。非 required、
+无 dropout 的训练默认在 `B*H*Lq*Lk < 2^24` 时选择 math；可用
+`JITTOR_FLASH_ATTN_TRAINING_MIN_SCORES` 调整，设为 0 则禁用该阈值。
+
 ## 常用命令
 
 ```bash
@@ -54,6 +62,19 @@ CUDA_VISIBLE_DEVICES=2 cache_name=hf_tiny_gpu2 \
   /home/zy/miniconda3/envs/jt311/bin/python \
   "$SCRIPT_ROOT/benchmark_hf_tiny_models.py" \
   --backend jittor --model bert --phase forward --repeats 20
+```
+
+```bash
+SCRIPT_ROOT=agent/skills/jittor-transformers-perf/scripts
+JITTOR_FLASH_ATTN_JITTOR_SRC=/path/to/flash-attention \
+JITTOR_FLASH_ATTN_HEAD_DIMS=64 JITTOR_FLASH_ATTN_DTYPES=fp16 \
+CUDA_VISIBLE_DEVICES=2 cache_name=sdpa_train_gpu2 \
+  "$SCRIPT_ROOT/run_perf_env.sh" \
+  /home/zy/miniconda3/envs/jt311/bin/python \
+  "$SCRIPT_ROOT/benchmark_training_hotspots.py" \
+  --backend jittor --case sdpa --phase fwd_bwd --dtype float16 \
+  --sdpa-backend default --sync-mode per_call \
+  --batch 4 --heads 12 --length 1024 --head-dim 64 --repeats 12
 ```
 
 ```bash

@@ -76,7 +76,8 @@ def _tensor(torch, rng: np.random.Generator, shape, dtype, requires_grad=False):
     return out
 
 
-def _slot(torch, case: str, dtype, seed: int, backward: bool):
+def _slot(torch, case: str, dtype, seed: int, backward: bool,
+          sdpa_shape=(4, 12, 128, 64), causal=False, direct_sdpa=False):
     rng = np.random.default_rng(seed)
     req = bool(backward)
     if case in ("relu", "gelu", "softmax"):
@@ -96,12 +97,20 @@ def _slot(torch, case: str, dtype, seed: int, backward: bool):
             out["go"] = _tensor(torch, rng, shape, dtype)
         return out
     if case == "sdpa":
-        qshape = (4, 12, 128, 64)
+        qshape = sdpa_shape
         out = {
             "q": _tensor(torch, rng, qshape, dtype, req),
             "k": _tensor(torch, rng, qshape, dtype, req),
             "v": _tensor(torch, rng, qshape, dtype, req),
+            "causal": bool(causal),
+            "direct": bool(direct_sdpa),
         }
+        if direct_sdpa:
+            for name in ("q", "k", "v"):
+                value = out[name].permute(0, 2, 1, 3).clone()
+                if req:
+                    value.requires_grad_(True)
+                out[name] = value
         if backward:
             out["go"] = _tensor(torch, rng, qshape, dtype)
         return out
@@ -142,16 +151,24 @@ def _slot(torch, case: str, dtype, seed: int, backward: bool):
     raise ValueError(case)
 
 
-def _sdpa(torch, backend: str, mode: str, q, k, v):
-    if mode == "default" or backend == "jittor":
-        if mode == "flash" and backend == "jittor":
-            raise RuntimeError("Jittor native flash SDPA is not available for this training benchmark")
-        return torch.nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=0.0)
+def _sdpa(torch, backend: str, mode: str, q, k, v, causal=False):
+    if backend == "jittor":
+        if mode == "math":
+            from jittor.nn.functional.attention import scaled_dot_product_attention
+
+            return scaled_dot_product_attention(
+                q, k, v, dropout_p=0.0, is_causal=causal)
+        return torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, dropout_p=0.0, is_causal=causal)
+    if mode == "default":
+        return torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, dropout_p=0.0, is_causal=causal)
     from torch.nn.attention import SDPBackend, sdpa_kernel
 
     selected = SDPBackend.MATH if mode == "math" else SDPBackend.FLASH_ATTENTION
     with sdpa_kernel(selected):
-        return torch.nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=0.0)
+        return torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, dropout_p=0.0, is_causal=causal)
 
 
 def _forward(torch, backend: str, sdpa_backend: str, case: str, s: dict[str, Any]):
@@ -165,7 +182,16 @@ def _forward(torch, backend: str, sdpa_backend: str, case: str, s: dict[str, Any
     if case == "layernorm":
         return F.layer_norm(s["x"], (768,), s["weight"], s["bias"], 1e-5)
     if case == "sdpa":
-        return _sdpa(torch, backend, sdpa_backend, s["q"], s["k"], s["v"])
+        if s["direct"]:
+            import flash_attn
+
+            out = flash_attn.flash_attn_func(
+                s["q"], s["k"], s["v"], dropout_p=0.0,
+                causal=s["causal"])
+            return out.permute(0, 2, 1, 3)
+        return _sdpa(
+            torch, backend, sdpa_backend, s["q"], s["k"], s["v"],
+            s["causal"])
     if case == "mlp":
         return F.linear(F.gelu(F.linear(s["x"], s["w1"], s["b1"])), s["w2"], s["b2"])
     if case == "transformer_block":
@@ -267,8 +293,16 @@ def main(argv=None) -> int:
     parser.add_argument("--dtype", choices=("float64", "float32", "float16", "bfloat16"),
                         default="float32")
     parser.add_argument("--tf32", choices=("on", "off"), default="off")
-    parser.add_argument("--sdpa-backend", choices=("default", "math", "flash"),
+    parser.add_argument(
+        "--sdpa-backend", choices=("default", "math", "flash", "direct"),
                         default="default")
+    parser.add_argument("--sync-mode", choices=("queued", "per_call"),
+                        default="queued")
+    parser.add_argument("--batch", type=int, default=4)
+    parser.add_argument("--heads", type=int, default=12)
+    parser.add_argument("--length", type=int, default=128)
+    parser.add_argument("--head-dim", type=int, default=64)
+    parser.add_argument("--causal", choices=("on", "off"), default="off")
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--jsonl", default="results/training_hotspots.jsonl")
@@ -280,14 +314,27 @@ def main(argv=None) -> int:
     if not torch.cuda.is_available():
         raise RuntimeError(f"{args.backend} CUDA is unavailable")
     _set_tf32(torch, args.backend, args.tf32 == "on")
+    if (args.backend == "jittor" and args.sdpa_backend in ("flash", "direct")
+            and not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC")):
+        raise RuntimeError(
+            "Jittor flash benchmark requires JITTOR_FLASH_ATTN_JITTOR_SRC")
     dtype = _dtype(torch, args.dtype)
     backward = args.phase == "fwd_bwd"
-    slots = [_slot(torch, args.case, dtype, 20260710 + i, backward)
+    sdpa_shape = (args.batch, args.heads, args.length, args.head_dim)
+    direct_sdpa = args.backend == "jittor" and args.sdpa_backend == "direct"
+    if args.sdpa_backend == "direct" and args.backend != "jittor":
+        raise RuntimeError("direct SDPA mode is only available for Jittor")
+    slots = [_slot(
+        torch, args.case, dtype, 20260710 + i, backward,
+        sdpa_shape=sdpa_shape, causal=args.causal == "on",
+        direct_sdpa=direct_sdpa)
              for i in range(args.repeats)]
     _sync(torch)
 
     no_grad = torch.no_grad if not backward else contextlib.nullcontext
     with no_grad():
+        if args.backend == "jittor" and hasattr(torch, "_torch_sdpa_flash_stats"):
+            delattr(torch, "_torch_sdpa_flash_stats")
         # Touch every timed slot before measurement. Jittor's dual allocator can
         # otherwise charge host-to-device page migration to the first use of each
         # distinct input, which measures cold residency rather than the operator.
@@ -307,13 +354,29 @@ def main(argv=None) -> int:
                 pass
         before_mem = _memory(torch)
         kept = []
+        per_call_ms = []
         start = time.perf_counter()
         for s in slots:
+            call_start = time.perf_counter()
             kept.append(_run_one(torch, args.backend, args.sdpa_backend, args.case,
                                  s, backward))
-        _sync(torch)
+            if args.sync_mode == "per_call":
+                _sync(torch)
+                per_call_ms.append((time.perf_counter() - call_start) * 1000.0)
+        if args.sync_mode == "queued":
+            _sync(torch)
         latency_ms = (time.perf_counter() - start) * 1000.0 / args.repeats
         after_mem = _memory(torch)
+
+    flash_stats = (
+        getattr(torch, "_torch_sdpa_flash_stats", {})
+        if args.backend == "jittor" else {}
+    )
+    if args.backend == "jittor" and args.sdpa_backend == "flash":
+        if flash_stats.get("hits", 0) < 1 or flash_stats.get("misses", {}):
+            raise RuntimeError(
+                "Jittor flash benchmark did not stay on the native backend: %r"
+                % (flash_stats,))
 
     components = _component_stats(kept[-1])
     if backward:
@@ -332,6 +395,8 @@ def main(argv=None) -> int:
         "dtype": args.dtype,
         "tf32": args.tf32 == "on",
         "sdpa_backend": args.sdpa_backend,
+        "sync_mode": args.sync_mode,
+        "causal": args.causal == "on",
         "warmup": args.warmup,
         "repeats": args.repeats,
         "latency_ms": latency_ms,
@@ -340,6 +405,16 @@ def main(argv=None) -> int:
         "memory_before": before_mem,
         "memory_after": after_mem,
     }
+    if args.case == "sdpa":
+        row["shape"] = list(sdpa_shape)
+    if per_call_ms:
+        row.update({
+            "latency_min_ms": min(per_call_ms),
+            "latency_median_ms": float(np.median(per_call_ms)),
+            "latency_max_ms": max(per_call_ms),
+        })
+    if flash_stats:
+        row["jittor_flash_stats"] = flash_stats
     print(json.dumps(row, sort_keys=True), flush=True)
     out = _project_file(args.jsonl)
     with out.open("a", encoding="utf-8") as f:

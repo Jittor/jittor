@@ -164,6 +164,46 @@ class TestSDPA(Base):
                                     name + " " + tensor_name + " grad")
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_sdpa_short_training_prefers_math(self):
+        from jittor.compat.shim.backends import flash_attention as flashattn_jittor
+
+        rng = np.random.RandomState(167)
+        q = rng.randn(2, 4, 32, 64).astype("float32")
+        k = rng.randn(2, 4, 32, 64).astype("float32")
+        v = rng.randn(2, 4, 32, 64).astype("float32")
+        grad_out = rng.randn(2, 4, 32, 64).astype("float32")
+        env = {
+            "JITTOR_FLASH_ATTN_JITTOR_REQUIRED": "0",
+            "JITTOR_FLASH_ATTN_TRAINING_MIN_SCORES": str(1 << 24),
+        }
+        with jt.flag_scope(use_cuda=1), \
+                mock.patch.dict(os.environ, env, clear=False), \
+                mock.patch.object(
+                    flashattn_jittor, "load_backend_for") as loader:
+            if hasattr(jt, "_torch_sdpa_flash_stats"):
+                delattr(jt, "_torch_sdpa_flash_stats")
+            qv, kv, vv = (
+                jt.array(value).float16() for value in (q, k, v))
+            out = torch.nn.functional.scaled_dot_product_attention(qv, kv, vv)
+            grads = jt.grad(
+                (out.float32() * jt.array(grad_out)).sum(), [qv, kv, vv])
+            fetched = jt.fetch_sync(
+                [out.float32()] + [grad.float32() for grad in grads])
+            stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+
+        loader.assert_not_called()
+        self.assertEqual(stats.get("hits", 0), 0)
+        self.assertEqual(
+            stats.get("misses", {}).get("short_training_math"), 1)
+        self.ac(fetched[0], _sdpa_ref(q, k, v), atol=3e-3, rtol=3e-3,
+                msg="short training math output")
+        for name, got, expected in zip(
+                ("q", "k", "v"), fetched[1:],
+                _sdpa_backward_ref(q, k, v, grad_out)):
+            self.ac(got, expected, atol=6e-3, rtol=6e-3,
+                    msg="short training math %s gradient" % name)
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     def test_sdpa_short_square_inference_prefers_math(self):
         rng = np.random.RandomState(97)
         q = rng.randn(1, 12, 50, 64).astype("float32")

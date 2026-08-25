@@ -2112,6 +2112,19 @@ def install(ctx):
         except Exception:
             _sdpa_flash_miss("no_loader")
             return None
+        if training_requested and dropout == 0.0 and not _fa_jittor.required():
+            raw_min_scores = _os.environ.get(
+                "JITTOR_FLASH_ATTN_TRAINING_MIN_SCORES", str(1 << 24))
+            try:
+                min_scores = max(0, int(raw_min_scores))
+            except ValueError:
+                min_scores = 1 << 24
+            score_elements = query_heads * int(q_shape[-2]) * int(k_shape[-2])
+            for size in q_shape[:-3]:
+                score_elements *= int(size)
+            if min_scores and score_elements < min_scores:
+                _sdpa_flash_miss("short_training_math")
+                return None
         cache_key = (template_dim, q_dtype)
         static_cache = _sdpa_static_backend_cache_enabled()
         token_fn = getattr(_fa_jittor, "backend_cache_token", None)
