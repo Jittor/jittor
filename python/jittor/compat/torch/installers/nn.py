@@ -9,7 +9,9 @@ from jittor import nn
 
 from ..context import registry_for
 from ..grad import (
+    _clip_grads_with_norm_device,
     _clip_grad_norm_device,
+    _get_total_norm_device,
 )
 from ..nested import (
     _torch_make_parameter, _torch_register_leaf,
@@ -320,6 +322,43 @@ def _install_nn_extras(nn, registry=None):
     _u.__path__ = getattr(_u, "__path__", [])
     _modules.setdefault("torch.nn.utils", _u)
     nn.utils = _u
+    _clip_grad = _types_nn_utils.ModuleType("torch.nn.utils.clip_grad")
+
+    def _get_total_norm(tensors, norm_type=2.0, error_if_nonfinite=False,
+                        foreach=None):
+        del foreach
+        if isinstance(tensors, _jt.Var):
+            tensors = [tensors]
+        return _get_total_norm_device(
+            list(tensors), norm_type, error_if_nonfinite)
+
+    def _clip_grads_with_norm_(parameters, max_norm, total_norm,
+                               foreach=None):
+        del foreach
+        if isinstance(parameters, _jt.Var):
+            parameters = [parameters]
+        params = list(parameters)
+        opt = getattr(_jt, "_current_optimizer", None)
+        grads = []
+        for parameter in params:
+            grad = None
+            if opt is not None:
+                try:
+                    grad = opt.find_grad(parameter)
+                except Exception:
+                    grad = None
+            if grad is None:
+                grad = getattr(parameter, "grad", None)
+            if grad is not None:
+                grads.append(grad)
+        _clip_grads_with_norm_device(grads, max_norm, total_norm)
+
+    _clip_grad._get_total_norm = _get_total_norm
+    _clip_grad._clip_grads_with_norm_ = _clip_grads_with_norm_
+    _clip_grad.clip_grad_norm_ = getattr(_u, "clip_grad_norm_", None)
+    _clip_grad.clip_grad_value_ = getattr(_u, "clip_grad_value_", None)
+    _modules["torch.nn.utils.clip_grad"] = _clip_grad
+    _u.clip_grad = _clip_grad
     if not hasattr(_u, "parametrize"):
         _parametrize = _types_nn_utils.ModuleType("torch.nn.utils.parametrize")
         _parametrize.register_parametrization = lambda module, *a, **k: module
@@ -1031,15 +1070,23 @@ def _install_module_methods(nn, registry=None):
 
     _orig_call = M.__call__
     def _call(self, *args, **kwargs):
-        # torch lets a module override forward per-INSTANCE (`self.forward = fn`,
-        # used by vLLM's samplers / CustomOp dispatch). Honor an instance-level
-        # forward before the class-level dispatch.
-        inst_fwd = self.__dict__.get("forward", None)
-        if inst_fwd is not None and callable(inst_fwd):
-            return inst_fwd(*args, **kwargs)
-        if _prefer_forward(type(self)):
-            return type(self).forward(self, *args, **kwargs)
-        return _orig_call(self, *args, **kwargs)
+        def dispatch(*call_args, **call_kwargs):
+            # torch lets a module override forward per-INSTANCE (`self.forward =
+            # fn`, used by vLLM's samplers / CustomOp dispatch). Honor it before
+            # class-level dispatch.
+            inst_fwd = self.__dict__.get("forward", None)
+            if inst_fwd is not None and callable(inst_fwd):
+                return inst_fwd(*call_args, **call_kwargs)
+            if _prefer_forward(type(self)):
+                return type(self).forward(self, *call_args, **call_kwargs)
+            return _orig_call(self, *call_args, **call_kwargs)
+
+        state = getattr(self, "_fsdp_state", None)
+        if state is not None and getattr(state, "true_fsdp_initialized", False):
+            from jittor.compat.fsdp2 import shard as _fsdp2_shard
+            return _fsdp2_shard._execute_with_true_fsdp(
+                self, dispatch, *args, **kwargs)
+        return dispatch(*args, **kwargs)
     M.__call__ = _call
 
     # torch's named_parameters/named_buffers/named_modules accept extra kwargs
@@ -1389,6 +1436,12 @@ def _install_module_methods(nn, registry=None):
             return _module_replace_vars(self, convert)
         return self
     M.to = _module_to
+
+    def _module_to_empty(self, *, device, recurse=True):
+        # Jittor does not expose meta storage. Models are already materialized,
+        # so preserve their values while honoring the requested residency.
+        return _module_to(self, device=device)
+    M.to_empty = _module_to_empty
 
     def _module_cuda(self, dev=None):
         return _module_to(self, device("cuda", dev) if isinstance(dev, int) else "cuda")

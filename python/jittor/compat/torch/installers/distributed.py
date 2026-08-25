@@ -4,25 +4,244 @@ This module contains source moved from the former monolithic installer without
 changing the compatibility semantics.
 """
 
+import os
+import pickle
+
+import numpy as np
+
 import jittor as jt
 
 from ..context import registry_for
 
 
+class _JittorWork:
+    def __init__(self, value=None):
+        self._value = value
+
+    def wait(self, *args, **kwargs):
+        return self._value
+
+    def is_completed(self):
+        return True
+
+
+class _JittorProcessGroup:
+    def __init__(self, ranks=None, name="default"):
+        self.ranks = None if ranks is None else tuple(int(rank) for rank in ranks)
+        self._name = name
+        self.group_name = name
+        self.bound_device_id = 0
+
+    def rank(self):
+        rank = _distributed_rank()
+        if self.ranks is None:
+            return rank
+        try:
+            return self.ranks.index(rank)
+        except ValueError:
+            return -1
+
+    def size(self):
+        return _distributed_world_size() if self.ranks is None else len(self.ranks)
+
+    def name(self):
+        return self._name
+
+    def _get_backend_name(self):
+        return "nccl" if os.environ.get("JT_NCCL_WORLD_SIZE") is not None else "mpi"
+
+    def _get_backend(self, device=None):
+        return self
+
+
+def _native_distributed_active():
+    try:
+        world_size = int(getattr(jt, "world_size", 1))
+    except Exception:
+        world_size = 1
+    return world_size > 1 and (
+        os.environ.get("JT_NCCL_WORLD_SIZE") is not None
+        or os.environ.get("OMPI_COMM_WORLD_SIZE") is not None
+        or bool(getattr(jt, "in_mpi", False))
+    )
+
+
+def _is_truthy(value):
+    return str(value or "").strip().lower() not in ("", "0", "false", "no", "off")
+
+
+def _bootstrap_native_distributed(rank, world_size, backend=None):
+    if not _is_truthy(os.environ.get("JITTOR_TORCH_DISTRIBUTED_AUTO_INIT")):
+        return False
+    backend_name = str(backend or "nccl").lower()
+    if "nccl" not in backend_name:
+        raise NotImplementedError(
+            "Jittor dynamic torch.distributed bootstrap currently supports NCCL only"
+        )
+    if not getattr(jt, "has_cuda", False):
+        raise RuntimeError("Jittor dynamic NCCL bootstrap requires CUDA")
+
+    rank = int(rank)
+    world_size = int(world_size)
+    local_world_size = int(os.environ.get(
+        "LOCAL_WORLD_SIZE", os.environ.get("RAY_LOCAL_WORLD_SIZE", world_size)))
+    rootinfo = os.environ.get("JT_NCCL_ROOTINFO_FILE", "").strip()
+    if not rootinfo:
+        explicit_rendezvous_dir = os.environ.get(
+            "JITTOR_DIST_RENDEZVOUS_DIR", "").strip()
+        if local_world_size != world_size and not explicit_rendezvous_dir:
+            raise RuntimeError(
+                "multi-node Jittor NCCL requires JT_NCCL_ROOTINFO_FILE or "
+                "JITTOR_DIST_RENDEZVOUS_DIR on shared storage"
+            )
+        rendezvous_dir = explicit_rendezvous_dir or "/tmp"
+        os.makedirs(rendezvous_dir, exist_ok=True)
+        address = os.environ.get("MASTER_ADDR", "localhost")
+        port = os.environ.get("MASTER_PORT", "default")
+        key = "{}-{}".format(address, port)
+        key = "".join(char if char.isalnum() or char in "_.-" else "_"
+                      for char in key)
+        rootinfo = os.path.join(
+            rendezvous_dir, "jittor-nccl-{}.bin".format(key))
+
+    visible = [item for item in os.environ.get(
+        "CUDA_VISIBLE_DEVICES", "").split(",") if item.strip()]
+    local_rank = 0 if len(visible) == 1 else int(os.environ.get("LOCAL_RANK", rank))
+    os.environ["JT_NCCL_WORLD_SIZE"] = str(world_size)
+    os.environ["JT_NCCL_RANK"] = str(rank)
+    os.environ["JT_NCCL_LOCAL_RANK"] = str(local_rank)
+    os.environ["JT_NCCL_ROOTINFO_FILE"] = rootinfo
+    os.environ["use_nccl"] = "1"
+    os.environ["use_mpi"] = "0"
+
+    jt.flags.use_cuda = 1
+    jt.compile_extern.setup_nccl()
+    ops = getattr(jt.compile_extern, "nccl_ops", None)
+    if ops is None:
+        raise RuntimeError("Jittor NCCL setup did not publish collective ops")
+
+    jt.compile_extern.rank = rank
+    jt.compile_extern.world_size = world_size
+    jt.compile_extern.in_mpi = True
+    jt.rank = rank
+    jt.world_size = world_size
+    jt.in_mpi = True
+
+    def _all_reduce(self, op="mean"):
+        if op not in ("sum", "mean"):
+            raise NotImplementedError(
+                "Jittor NCCL Var.mpi_all_reduce supports sum and mean only")
+        result = ops.nccl_all_reduce(self)
+        return result / world_size if op == "mean" else result
+
+    def _broadcast(self, root=0):
+        return ops.nccl_broadcast(self, int(root))
+
+    jt.core.Var.mpi_all_reduce = _all_reduce
+    jt.core.Var.mpi_broadcast = _broadcast
+    return True
+
+
+def _distributed_rank():
+    return int(getattr(jt, "rank", 0)) if _native_distributed_active() else 0
+
+
+def _distributed_world_size():
+    return int(getattr(jt, "world_size", 1)) if _native_distributed_active() else 1
+
+
+def _group_size(group):
+    if group is None:
+        return _distributed_world_size()
+    size = getattr(group, "size", None)
+    return int(size() if callable(size) else size or 1)
+
+
+def _require_supported_group(group):
+    size = _group_size(group)
+    if size not in (1, _distributed_world_size()):
+        raise NotImplementedError(
+            "Jittor torch.distributed currently supports only WORLD and singleton groups"
+        )
+    return size
+
+
+def _copy_tensor(dst, src):
+    if hasattr(dst, "update"):
+        dst.update(src)
+    elif hasattr(dst, "assign"):
+        dst.assign(src)
+    else:
+        dst[:] = src
+
+
+def _collective_result(value, async_op):
+    return _JittorWork(value) if async_op else None
+
+
+def _reduce_name(op, reduce_op):
+    if op is None or op == reduce_op.SUM:
+        return "sum"
+    if op in (reduce_op.MEAN, reduce_op.AVG):
+        return "mean"
+    if op == reduce_op.MAX:
+        return "max"
+    if op == reduce_op.MIN:
+        return "min"
+    if op == reduce_op.PRODUCT:
+        return "product"
+    raise NotImplementedError(
+        "unsupported Jittor torch.distributed all_reduce operation"
+    )
+
+
+def _native_all_gather_flat(tensor):
+    from jittor.compat.fsdp2 import common
+
+    return common._all_gather_shards(tensor.reshape((-1,)))
+
+
+def _native_all_gather_object(object_list, obj, group=None):
+    size = _require_supported_group(group)
+    if len(object_list) < size:
+        raise ValueError(
+            "all_gather_object output list is shorter than group size")
+    if size == 1:
+        object_list[0] = obj
+        return None
+
+    payload = pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
+    local_length = jt.array(np.asarray([len(payload)], dtype=np.int32))
+    lengths = np.asarray(
+        _native_all_gather_flat(local_length).numpy(), dtype=np.int32
+    ).reshape(-1)
+    max_length = int(lengths.max()) if lengths.size else 0
+    encoded = np.zeros((max_length,), dtype=np.int32)
+    if payload:
+        encoded[:len(payload)] = np.frombuffer(payload, dtype=np.uint8).astype(np.int32)
+    gathered = np.asarray(
+        _native_all_gather_flat(jt.array(encoded)).numpy(), dtype=np.int32
+    ).reshape(size, max_length)
+    for rank, length in enumerate(lengths):
+        raw = gathered[rank, :int(length)].astype(np.uint8).tobytes()
+        object_list[rank] = pickle.loads(raw)
+    return None
+
+
 def _install_fsdp2_distributed(dist, torch_module=None, registry=None):
-    """Install the single-process FSDP2/DTensor compatibility surface."""
+    """Install the FSDP2/DTensor compatibility surface."""
     from jittor.compat.fsdp2 import installer as _fsdp2_installer
     return _fsdp2_installer.install_with_registry(
         dist, torch_module, registry=registry
     )
 
 def _install_distributed(g, registry=None):
-    """Install single-process torch.distributed stubs.
+    """Install Torch distributed compatibility over Jittor collectives.
 
     Transformers 5 imports torch.distributed at module import time for tensor
     parallel helpers even when no distributed execution is requested. The jittor
-    torch shim runs TRELLIS.2 as a single process, so report distributed support
-    as unavailable while keeping the imported symbols present.
+    torch shim keeps identity semantics by default. When Jittor was started by
+    its distributed launcher, WORLD maps to the active NCCL/MPI communicator.
     """
     _modules = registry_for(g, registry).module_map
     import types as _types
@@ -31,39 +250,51 @@ def _install_distributed(g, registry=None):
     if dist is None:
         dist = _types.ModuleType("torch.distributed")
         _modules["torch.distributed"] = dist
-    dist.is_available = lambda *a, **k: True
-    dist.is_initialized = lambda *a, **k: False
-    dist.get_rank = lambda *a, **k: 0
-    dist.get_world_size = lambda *a, **k: 1
-    dist.init_process_group = lambda *a, **k: None
-    dist.destroy_process_group = lambda *a, **k: None
-    dist.barrier = lambda *a, **k: None
-    dist.all_reduce = lambda *a, **k: None
-    dist.all_gather = lambda *a, **k: None
-    dist.broadcast = lambda *a, **k: None
-    def _all_gather_object(object_list, obj, *a, **k):
-        if object_list:
-            object_list[0] = obj
+    state = {"initialized": _native_distributed_active()}
+    world_group = _JittorProcessGroup(name="world")
+    pg_map = {world_group: (world_group._get_backend_name(),)}
+
+    def _init_process_group(*args, **kwargs):
+        requested_world_size = int(
+            kwargs.get("world_size", os.environ.get("WORLD_SIZE", 1)))
+        requested_rank = int(kwargs.get("rank", os.environ.get("RANK", 0)))
+        backend = kwargs.get("backend", args[0] if args else None)
+        backend_name = str(backend).lower() if backend is not None else None
+        if requested_world_size > 1 and not _native_distributed_active():
+            _bootstrap_native_distributed(
+                requested_rank, requested_world_size, backend=backend)
+        if requested_world_size > 1 and not _native_distributed_active():
+            raise RuntimeError(
+                "multi-rank torch.distributed requires launching Jittor with "
+                "jittor.distributed.launch or explicit dynamic bootstrap"
+            )
+        if _native_distributed_active():
+            active_backend = world_group._get_backend_name()
+            if backend_name is not None and backend_name != active_backend:
+                raise RuntimeError(
+                    "requested torch.distributed backend {} does not match "
+                    "active Jittor backend {}".format(
+                        backend_name, active_backend))
+            if requested_world_size not in (1, _distributed_world_size()):
+                raise RuntimeError("torch/Jittor distributed world-size mismatch")
+            if "rank" in kwargs and requested_rank != _distributed_rank():
+                raise RuntimeError("torch/Jittor distributed rank mismatch")
+        state["initialized"] = True
         return None
-    def _broadcast_object_list(object_list, src=0, *a, **k):
-        return object_list
-    def _all_gather_into_tensor(output_tensor, input_tensor, *a, **k):
-        try:
-            output_tensor.assign(input_tensor.reshape(output_tensor.shape))
-        except Exception:
-            try:
-                output_tensor.assign(input_tensor)
-            except Exception:
-                pass
+
+    def _destroy_process_group(*args, **kwargs):
+        state["initialized"] = False
         return None
-    dist.all_gather_object = _all_gather_object
-    dist.broadcast_object_list = _broadcast_object_list
-    dist.all_gather_into_tensor = _all_gather_into_tensor
-    dist.gather_object = lambda obj, object_gather_list=None, dst=0, *a, **k: _all_gather_object(object_gather_list or [], obj)
-    dist.new_group = lambda *a, **k: dist.group.WORLD
-    dist.new_subgroups_by_enumeration = lambda *a, **k: ([dist.group.WORLD], dist.group.WORLD)
-    dist.get_global_rank = lambda group=None, group_rank=0: int(group_rank)
-    dist.is_torchelastic_launched = lambda *a, **k: False
+
+    def _get_rank(group=None):
+        if group is None:
+            return _distributed_rank()
+        rank = getattr(group, "rank", None)
+        return int(rank() if callable(rank) else rank or 0)
+
+    def _get_world_size(group=None):
+        return _group_size(group)
+
     class _ReduceOp:
         SUM = 0
         MEAN = 1
@@ -71,12 +302,199 @@ def _install_distributed(g, registry=None):
         MAX = 2
         MIN = 3
         PRODUCT = 4
+
     _ReduceOp.RedOpType = _ReduceOp
+
+    def _all_reduce(tensor, op=None, group=None, async_op=False):
+        size = _require_supported_group(group)
+        if size > 1:
+            reduce_name = _reduce_name(op, _ReduceOp)
+            if reduce_name in ("sum", "mean"):
+                result = tensor.mpi_all_reduce(reduce_name)
+            else:
+                gathered = _native_all_gather_flat(tensor).reshape(
+                    (size,) + tuple(tensor.shape))
+                result = gathered[0]
+                for rank in range(1, size):
+                    if reduce_name == "max":
+                        result = jt.maximum(result, gathered[rank])
+                    elif reduce_name == "min":
+                        result = jt.minimum(result, gathered[rank])
+                    else:
+                        result = result * gathered[rank]
+            _copy_tensor(tensor, result)
+        return _collective_result(tensor, async_op)
+
+    def _all_gather(tensor_list, tensor, group=None, async_op=False):
+        size = _require_supported_group(group)
+        if len(tensor_list) < size:
+            raise ValueError("all_gather output list is shorter than group size")
+        if size == 1:
+            _copy_tensor(tensor_list[0], tensor)
+        else:
+            gathered = _native_all_gather_flat(tensor)
+            numel = int(np.prod(tuple(int(dim) for dim in tensor.shape)))
+            for rank in range(size):
+                part = gathered[rank * numel:(rank + 1) * numel].reshape(
+                    tensor.shape)
+                _copy_tensor(tensor_list[rank], part)
+        return _collective_result(tensor_list, async_op)
+
+    def _all_gather_into_tensor(output_tensor, input_tensor, group=None,
+                                async_op=False):
+        size = _require_supported_group(group)
+        gathered = (
+            input_tensor.reshape((-1,)) if size == 1
+            else _native_all_gather_flat(input_tensor)
+        )
+        _copy_tensor(output_tensor, gathered.reshape(output_tensor.shape))
+        return _collective_result(output_tensor, async_op)
+
+    def _broadcast(tensor, src=0, group=None, async_op=False, group_src=None):
+        size = _require_supported_group(group)
+        root = int(src if group_src is None else group_src)
+        if size > 1:
+            _copy_tensor(tensor, tensor.mpi_broadcast(root))
+        return _collective_result(tensor, async_op)
+
+    def _barrier(group=None, async_op=False, device_ids=None):
+        size = _require_supported_group(group)
+        marker = None
+        if size > 1:
+            marker = jt.array(np.asarray([_distributed_rank()], dtype=np.int32))
+            marker = marker.mpi_all_reduce("sum")
+            marker.sync()
+        return _collective_result(marker, async_op)
+
+    def _broadcast_object_list(object_list, src=0, group=None, device=None):
+        gathered = [None] * _group_size(group)
+        local = object_list if _get_rank(group) == int(src) else None
+        _native_all_gather_object(gathered, local, group)
+        object_list[:] = gathered[int(src)]
+        return None
+
+    def _gather_object(obj, object_gather_list=None, dst=0, group=None,
+                       group_dst=None):
+        size = _require_supported_group(group)
+        if group_dst is not None:
+            destination = int(group_dst)
+        elif group is not None and getattr(group, "ranks", None) is not None:
+            try:
+                destination = group.ranks.index(int(dst))
+            except ValueError as error:
+                raise ValueError(
+                    "gather_object destination rank is outside the group"
+                ) from error
+        else:
+            destination = int(dst)
+        if not 0 <= destination < size:
+            raise ValueError("gather_object destination rank is outside the group")
+        is_destination = _get_rank(group) == destination
+        if is_destination:
+            if object_gather_list is None:
+                raise ValueError(
+                    "gather_object requires an output list on the destination rank")
+            if len(object_gather_list) < size:
+                raise ValueError(
+                    "gather_object output list is shorter than group size")
+        elif object_gather_list is not None:
+            raise ValueError(
+                "gather_object output list must be None on non-destination ranks")
+
+        gathered = [None] * size
+        _native_all_gather_object(gathered, obj, group)
+        if is_destination:
+            object_gather_list[:size] = gathered
+        return None
+
+    def _new_group(ranks=None, *args, **kwargs):
+        ranks = (
+            tuple(range(_distributed_world_size()))
+            if ranks is None else tuple(ranks)
+        )
+        if len(ranks) not in (1, _distributed_world_size()):
+            raise NotImplementedError(
+                "Jittor torch.distributed supports only WORLD and singleton groups"
+            )
+        group = _JittorProcessGroup(ranks, "subgroup")
+        pg_map[group] = (group._get_backend_name(),)
+        return group
+
+    class Backend(str):
+        GLOO = "gloo"
+        NCCL = "nccl"
+        MPI = "mpi"
+        UCC = "ucc"
+        UNDEFINED = "undefined"
+
+    class P2POp:
+        def __init__(self, op, tensor, peer, group=None, tag=0):
+            self.op = op
+            self.tensor = tensor
+            self.peer = int(peer)
+            self.group = group
+            self.tag = int(tag)
+
+    def _unsupported_p2p(*args, **kwargs):
+        raise NotImplementedError(
+            "Jittor torch.distributed point-to-point communication is unavailable"
+        )
+
+    def _batch_isend_irecv(p2p_ops):
+        if p2p_ops:
+            _unsupported_p2p()
+        return []
+
+    dist.is_available = lambda *a, **k: True
+    dist.is_backend_available = lambda backend: (
+        bool(getattr(jt, "has_cuda", False))
+        if str(backend).lower() == "nccl"
+        else bool(getattr(jt.compile_extern, "has_mpi", False))
+        if str(backend).lower() == "mpi"
+        else False
+    )
+    dist.is_initialized = lambda *a, **k: bool(
+        state["initialized"] or _native_distributed_active())
+    dist.get_rank = _get_rank
+    dist.get_world_size = _get_world_size
+    dist.init_process_group = _init_process_group
+    dist.destroy_process_group = _destroy_process_group
+    dist.Backend = Backend
+    dist.P2POp = P2POp
+    dist.isend = _unsupported_p2p
+    dist.irecv = _unsupported_p2p
+    dist.send = _unsupported_p2p
+    dist.recv = _unsupported_p2p
+    dist.batch_isend_irecv = _batch_isend_irecv
+    dist.get_backend = lambda group=None: (
+        group._get_backend_name()
+        if group is not None and hasattr(group, "_get_backend_name")
+        else world_group._get_backend_name())
+    dist.barrier = _barrier
+    dist.all_reduce = _all_reduce
+    dist.all_gather = _all_gather
+    dist.all_gather_into_tensor = _all_gather_into_tensor
+    dist.broadcast = _broadcast
+    dist.all_gather_object = _native_all_gather_object
+    dist.broadcast_object_list = _broadcast_object_list
+    dist.gather_object = _gather_object
+    dist.new_group = _new_group
+    dist.new_subgroups_by_enumeration = lambda *a, **k: ([dist.group.WORLD], dist.group.WORLD)
+    dist.get_global_rank = lambda group=None, group_rank=0: (
+        int(group_rank)
+        if group is None or getattr(group, "ranks", None) is None
+        else int(group.ranks[int(group_rank)]))
+    dist.get_process_group_ranks = lambda group=None: (
+        list(range(_distributed_world_size()))
+        if group is None or getattr(group, "ranks", None) is None
+        else list(group.ranks))
+    dist.is_torchelastic_launched = lambda *a, **k: False
     dist.ReduceOp = getattr(dist, "ReduceOp", _ReduceOp)
     if not hasattr(dist.ReduceOp, "RedOpType"):
         dist.ReduceOp.RedOpType = dist.ReduceOp
-    dist.GroupMember = getattr(dist, "GroupMember", type("GroupMember", (), {"WORLD": None}))
-    dist.group = getattr(dist, "group", type("group", (), {"WORLD": None}))
+    dist.GroupMember = type(
+        "GroupMember", (), {"WORLD": world_group, "NON_GROUP_MEMBER": -100})
+    dist.group = type("group", (), {"WORLD": world_group})
 
     for sub in ("tensor", "fsdp", "device_mesh", "algorithms", "_composable",
                 "checkpoint", "_shard", "nn"):
@@ -158,11 +576,7 @@ def _install_distributed(g, registry=None):
     dist.device_mesh.init_device_mesh = getattr(dist.device_mesh, "init_device_mesh", _init_device_mesh)
     dist.DeviceMesh = getattr(dist, "DeviceMesh", _DeviceMesh)
     dist.init_device_mesh = getattr(dist, "init_device_mesh", _init_device_mesh)
-    dist.ProcessGroup = getattr(dist, "ProcessGroup", type("ProcessGroup", (), {
-        "__init__": lambda self, *a, **k: None,
-        "size": lambda self, *a, **k: 1,
-        "rank": lambda self, *a, **k: 0,
-    }))
+    dist.ProcessGroup = _JittorProcessGroup
 
     c10d = _modules.get("torch.distributed.distributed_c10d")
     if c10d is None:
@@ -171,14 +585,31 @@ def _install_distributed(g, registry=None):
     for name in dir(dist):
         if not name.startswith("__"):
             setattr(c10d, name, getattr(dist, name))
-    for name in ("is_xccl_available", "is_nccl_available", "is_gloo_available",
-                 "is_mpi_available", "is_ucc_available"):
-        setattr(c10d, name, lambda *a, **k: False)
+    c10d.is_xccl_available = lambda *a, **k: False
+    c10d.is_nccl_available = lambda *a, **k: bool(getattr(jt, "has_cuda", False))
+    c10d.is_gloo_available = lambda *a, **k: False
+    c10d.is_mpi_available = lambda *a, **k: bool(
+        getattr(jt.compile_extern, "has_mpi", False))
+    c10d.is_ucc_available = lambda *a, **k: False
     c10d.ProcessGroup = dist.ProcessGroup
-    c10d._get_default_group = lambda *a, **k: None
+    c10d._get_default_group = lambda *a, **k: world_group
     c10d._get_default_store = lambda *a, **k: None
     c10d.Work = getattr(c10d, "Work", type("Work", (), {}))
     c10d.default_pg_timeout = getattr(c10d, "default_pg_timeout", None)
+    import datetime as _datetime_c10d
+    c10d._get_default_timeout = lambda *a, **k: _datetime_c10d.timedelta(
+        minutes=10)
+    c10d._unregister_process_group = lambda *a, **k: None
+    c10d._register_process_group = lambda *a, **k: None
+    c10d._resolve_process_group = lambda name="world", *a, **k: world_group
+    c10d.ProcessGroupGloo = _JittorProcessGroup
+    c10d.ProcessGroupNCCL = _JittorProcessGroup
+    c10d._world = _types.SimpleNamespace(
+        default_pg=world_group,
+        pg_map=pg_map,
+        pg_names={},
+        pg_group_ranks={},
+    )
     dist.distributed_c10d = c10d
 
     rpc = _modules.get("torch.distributed.rpc")
@@ -198,6 +629,20 @@ def _install_distributed(g, registry=None):
 
     dist.nn.all_reduce = lambda input, *a, **k: input
     _modules["torch.distributed.nn"] = dist.nn
+
+    symmetric_memory = _modules.get("torch.distributed._symmetric_memory")
+    if symmetric_memory is None:
+        symmetric_memory = _types.ModuleType(
+            "torch.distributed._symmetric_memory")
+        _modules[symmetric_memory.__name__] = symmetric_memory
+    def _symmetric_memory_unavailable(*args, **kwargs):
+        raise RuntimeError("Jittor symmetric memory is unavailable")
+
+    symmetric_memory.enable_symm_mem_for_group = _symmetric_memory_unavailable
+    symmetric_memory.is_symm_mem_enabled_for_group = lambda *a, **k: False
+    symmetric_memory.rendezvous = _symmetric_memory_unavailable
+    symmetric_memory.empty = _symmetric_memory_unavailable
+    dist._symmetric_memory = symmetric_memory
 
     futures = _modules.get("torch.futures")
     if futures is None:
@@ -247,6 +692,11 @@ def _install_distributed(g, registry=None):
     def _get_model_state_dict(model, *a, options=None, **k):
         return model.state_dict(*a, **k) if hasattr(model, "state_dict") else {}
     def _set_model_state_dict(model, state_dict, *a, options=None, **k):
+        from jittor.compat.fsdp2 import _state_dict as _fsdp2_state_dict
+
+        if getattr(model, "_is_fsdp_module", False):
+            _fsdp2_state_dict._load_full_state_dict(model, state_dict)
+            return None
         if hasattr(model, "load_state_dict"):
             return model.load_state_dict(state_dict, strict=getattr(options, "strict", True))
         return None
@@ -290,10 +740,9 @@ def _install_distributed(g, registry=None):
         _m.ShardedTensor = ShardedTensor
         _modules[_m.__name__] = _m
 
-    class TCPStore:
-        _data = {}
+    class Store:
         def __init__(self, *a, **k):
-            pass
+            self._data = {}
         def set(self, key, value):
             self._data[str(key)] = value
         def get(self, key):
@@ -307,7 +756,64 @@ def _install_distributed(g, registry=None):
         def delete_key(self, key):
             self._data.pop(str(key), None)
             return True
+
+    class TCPStore(Store):
+        pass
+
+    class FileStore(Store):
+        pass
+
+    class PrefixStore(Store):
+        def __init__(self, prefix, store):
+            self.prefix = str(prefix)
+            self.store = store
+
+        def _key(self, key):
+            return self.prefix + str(key)
+
+        def set(self, key, value):
+            return self.store.set(self._key(key), value)
+
+        def get(self, key):
+            return self.store.get(self._key(key))
+
+        def add(self, key, num):
+            return self.store.add(self._key(key), num)
+
+        def wait(self, keys, *a, **k):
+            return self.store.wait([self._key(key) for key in keys], *a, **k)
+
+        def delete_key(self, key):
+            return self.store.delete_key(self._key(key))
+
+    dist.Store = Store
     dist.TCPStore = TCPStore
+    dist.FileStore = FileStore
+    dist.PrefixStore = PrefixStore
+    for name in ("Store", "TCPStore", "FileStore", "PrefixStore"):
+        setattr(c10d, name, getattr(dist, name))
+
+    class _RendezvousModule(_types.ModuleType):
+        def __call__(self, *args, **kwargs):
+            return self.rendezvous(*args, **kwargs)
+
+    rendezvous_mod = _modules.get("torch.distributed.rendezvous")
+    if rendezvous_mod is None:
+        rendezvous_mod = _RendezvousModule("torch.distributed.rendezvous")
+        _modules[rendezvous_mod.__name__] = rendezvous_mod
+    elif not isinstance(rendezvous_mod, _RendezvousModule):
+        rendezvous_mod.__class__ = _RendezvousModule
+
+    def _rendezvous(url, rank=-1, world_size=-1, **kwargs):
+        resolved_rank = _distributed_rank() if int(rank) < 0 else int(rank)
+        resolved_world = (
+            _distributed_world_size()
+            if int(world_size) < 0 else int(world_size)
+        )
+        yield TCPStore(), resolved_rank, resolved_world
+
+    rendezvous_mod.rendezvous = _rendezvous
+    dist.rendezvous = rendezvous_mod
 
     if not hasattr(g, "_C"):
         class _Accel:

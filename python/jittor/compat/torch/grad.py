@@ -79,16 +79,8 @@ def _amp_passthrough_decorator(fn=None, **kwargs):
     return lambda f: f
 
 
-def _clip_grad_norm_device(grads, max_norm, norm_type=2.0,
-                           error_if_nonfinite=False):
-    """Clip a list of gradient Vars without a host-side coefficient branch.
-
-    A per-gradient reduction is mathematically equivalent for finite p-norms,
-    but it creates one small CUDA reduction per parameter tensor. Transformers
-    commonly have hundreds of tensors, making those launches much more costly
-    than the single flat reduction used here. The device coefficient removes
-    the per-step D2H sync previously caused by ``total.item()``.
-    """
+def _get_total_norm_device(grads, norm_type=2.0, error_if_nonfinite=False):
+    """Compute the total norm for a list of gradient Vars on device."""
     import math as _math
 
     grads = [g for g in grads if isinstance(g, jt.Var)]
@@ -131,17 +123,42 @@ def _clip_grad_norm_device(grads, max_norm, norm_type=2.0,
                 "cannot be clipped. To disable this error set "
                 "error_if_nonfinite=False." % norm_type
             )
+    return total
 
+
+def _clip_grads_with_norm_device(grads, max_norm, total_norm):
+    """Scale gradient Vars using an already-computed total norm."""
+    grads = [g for g in grads if isinstance(g, jt.Var)]
+    if not grads:
+        return
+
+    acc_dtype = "float64" if str(total_norm.dtype) == "float64" else "float32"
     limit = float(max_norm)
-    if limit != float("inf"):
-        scalar_type = np.float64 if acc_dtype == "float64" else np.float32
-        raw_coef = scalar_type(limit) / (total + scalar_type(1e-6))
-        coef = jt.minimum(raw_coef, scalar_type(1.0))
-        # CUDA fmin-style minimum may select the finite operand for NaN. Torch
-        # propagates a NaN total norm into every gradient when errors are disabled.
-        coef = jt.ternary(jt.isnan(raw_coef), raw_coef, coef)
-        for g in grads:
-            g.update(g * coef.cast(str(g.dtype)))
+    if limit == float("inf"):
+        return
+    scalar_type = np.float64 if acc_dtype == "float64" else np.float32
+    raw_coef = scalar_type(limit) / (total_norm + scalar_type(1e-6))
+    coef = jt.minimum(raw_coef, scalar_type(1.0))
+    # CUDA fmin-style minimum may select the finite operand for NaN. Torch
+    # propagates a NaN total norm into every gradient when errors are disabled.
+    coef = jt.ternary(jt.isnan(raw_coef), raw_coef, coef)
+    for g in grads:
+        g.update(g * coef.cast(str(g.dtype)))
+
+
+def _clip_grad_norm_device(grads, max_norm, norm_type=2.0,
+                           error_if_nonfinite=False):
+    """Clip a list of gradient Vars without a host-side coefficient branch.
+
+    A per-gradient reduction is mathematically equivalent for finite p-norms,
+    but it creates one small CUDA reduction per parameter tensor. Transformers
+    commonly have hundreds of tensors, making those launches much more costly
+    than the single flat reduction used here. The device coefficient removes
+    the per-step D2H sync previously caused by ``total.item()``.
+    """
+    grads = [g for g in grads if isinstance(g, jt.Var)]
+    total = _get_total_norm_device(grads, norm_type, error_if_nonfinite)
+    _clip_grads_with_norm_device(grads, max_norm, total)
     return total
 
 

@@ -1483,6 +1483,7 @@ def nccl(session):
 
     launch_env = env.copy()
     launch_env["CUDA_VISIBLE_DEVICES"] = ",".join(selected_devices)
+    launch_env["JITTOR_TORCH_SHIM"] = "1"
     targets = tuple(session.posargs) if session.posargs else NCCL_TESTS
     session.run(
         python,

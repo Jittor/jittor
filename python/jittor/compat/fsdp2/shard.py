@@ -229,7 +229,10 @@ def _init_true_fsdp_state(module, state):
     ws = common._world_size()
     rank = common._rank()
     entries = []
-    params = _named_parameters_with_owner(module, recurse=True)
+    params = [
+        item for item in _named_parameters_with_owner(module, recurse=True)
+        if not is_fsdp_managed_param(item[3])
+    ]
     total_numel = sum(common._param_numel(param) for _, _, _, param in params)
     if common._fsdp2_flat_enabled(ws, total_numel) and params and len({str(param.dtype) for _, _, _, param in params}) == 1:
         flat_shard_numel = common._ceil_div(total_numel, ws)

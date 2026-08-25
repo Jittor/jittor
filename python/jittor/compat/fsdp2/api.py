@@ -1,5 +1,6 @@
 """FSDP module API implementations exposed by the canonical package."""
 
+import abc
 import contextlib
 import types
 
@@ -9,9 +10,12 @@ from jittor import nn
 from . import config, dtensor, grad_sync, optimizer, shard
 
 
-class _FSDPModuleMeta(type):
+class _FSDPModuleMeta(abc.ABCMeta):
     def __instancecheck__(cls, obj):
-        return bool(getattr(obj, "_is_fsdp_module", False)) or type.__instancecheck__(cls, obj)
+        marker = globals().get("FSDPModule")
+        if cls is marker and bool(getattr(obj, "_is_fsdp_module", False)):
+            return True
+        return super().__instancecheck__(obj)
 
 
 class FSDPModule(metaclass=_FSDPModuleMeta):

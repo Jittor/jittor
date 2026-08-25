@@ -3,6 +3,7 @@
 Run:
     python -m pytest tests/compat/torch/test_torch_compat_fsdp2.py
 """
+import abc
 import unittest
 import types
 from unittest import mock
@@ -492,6 +493,7 @@ class TestFSDP2Compat(unittest.TestCase):
 
         self.assertIs(returned, module)
         self.assertIsInstance(module, FSDPModule)
+        self.assertNotIsInstance(module, FullyShardedDataParallel)
         self.assertEqual([id(p) for p in module.parameters()], param_ids)
         np.testing.assert_allclose(module(x).numpy(), ref, atol=1e-6)
         self.assertEqual(sorted(module.state_dict().keys()), ["bias", "weight"])
@@ -559,6 +561,88 @@ class TestFSDP2Compat(unittest.TestCase):
         self.assertEqual(scaler.state_dict(), {"enabled": True})
         self.assertIs(checkpoint_wrapper(module), module)
         self.assertEqual(tuple(checkpoint(module, jt.ones((1, 3))).shape), (1, 2))
+
+    def test_fsdp_module_metaclass_composes_with_abc(self):
+        from torch.distributed.fsdp import FSDPModule
+
+        class AbstractFSDPModule(abc.ABC, FSDPModule):
+            @abc.abstractmethod
+            def execute(self):
+                pass
+
+        self.assertTrue(issubclass(AbstractFSDPModule, FSDPModule))
+
+    def test_module_to_empty_preserves_materialized_parameters(self):
+        module = torch.nn.Linear(3, 2)
+        before = [parameter.numpy().copy() for parameter in module.parameters()]
+        returned = module.to_empty(device="cpu")
+        self.assertIs(returned, module)
+        for parameter, expected in zip(module.parameters(), before):
+            np.testing.assert_array_equal(parameter.numpy(), expected)
+
+    def test_private_clip_grad_helpers(self):
+        from torch.nn.utils.clip_grad import (
+            _clip_grads_with_norm_,
+            _get_total_norm,
+        )
+
+        grads = [
+            jt.array(np.array([3.0, 4.0], dtype="float32")),
+            jt.array(np.array([0.0, -3.0], dtype="float32")),
+        ]
+        parameters = [types.SimpleNamespace(grad=grad) for grad in grads]
+        total = _get_total_norm(grads, norm_type=2.0)
+        self.assertAlmostEqual(float(total.item()), np.sqrt(34.0), places=5)
+        _clip_grads_with_norm_(parameters, 1.0, total)
+        clipped = np.concatenate([grad.numpy() for grad in grads])
+        self.assertLessEqual(float(np.linalg.norm(clipped)), 1.00001)
+
+    def test_distributed_store_types_are_importable(self):
+        from torch.distributed import (
+            Backend,
+            FileStore,
+            P2POp,
+            PrefixStore,
+            Store,
+            TCPStore,
+            batch_isend_irecv,
+            is_backend_available,
+            rendezvous as distributed_rendezvous,
+        )
+        import torch.distributed._symmetric_memory as symmetric_memory
+        from torch.distributed.distributed_c10d import (
+            _get_default_group,
+            _get_default_timeout,
+            _unregister_process_group,
+        )
+        from torch.distributed.rendezvous import rendezvous
+
+        store = TCPStore()
+        prefixed = PrefixStore("model/", store)
+        prefixed.set("step", b"1")
+        self.assertEqual(prefixed.get("step"), b"1")
+        self.assertTrue(issubclass(TCPStore, Store))
+        self.assertTrue(issubclass(FileStore, Store))
+        self.assertEqual(Backend.NCCL, "nccl")
+        self.assertTrue(is_backend_available("nccl"))
+        self.assertFalse(is_backend_available("gloo"))
+        self.assertEqual(
+            is_backend_available("mpi"),
+            bool(getattr(jt.compile_extern, "has_mpi", False)),
+        )
+        self.assertFalse(is_backend_available("unknown"))
+        self.assertEqual(batch_isend_irecv([]), [])
+        self.assertEqual(P2POp(lambda: None, jt.ones(1), 0).peer, 0)
+        self.assertFalse(symmetric_memory.is_symm_mem_enabled_for_group("world"))
+        with self.assertRaisesRegex(RuntimeError, "unavailable"):
+            symmetric_memory.enable_symm_mem_for_group("world")
+        self.assertIsNotNone(_get_default_group())
+        self.assertGreater(_get_default_timeout().total_seconds(), 0)
+        self.assertIsNone(_unregister_process_group("unused"))
+        rendezvous_store, rank, world_size = next(rendezvous("env://"))
+        self.assertIsInstance(rendezvous_store, TCPStore)
+        self.assertEqual((rank, world_size), (0, 1))
+        self.assertTrue(callable(distributed_rendezvous))
 
     def test_dtensor_and_private_import_paths(self):
         from torch.distributed.device_mesh import init_device_mesh

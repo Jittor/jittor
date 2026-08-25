@@ -5,6 +5,7 @@ Run through the maintained gate rather than invoking pytest directly::
     python -m nox -s nccl
 """
 
+import importlib
 import unittest
 
 import numpy as np
@@ -35,6 +36,90 @@ def _linear_grads(weight, bias, inputs, target):
     "requires the two-rank NCCL nox gate",
 )
 class TestFSDP2Nccl(unittest.TestCase):
+    @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0)
+    def test_nested_sharding_and_full_state_reload(self):
+        class NestedModel(nn.Module):
+            def __init__(self):
+                self.inner = nn.Linear(4, 3)
+                self.output_bias = jt.ones((3,))
+
+            def forward(self, value):
+                return self.inner(value) + self.output_bias
+
+        model = NestedModel()
+        full_state = {
+            name: value.clone() for name, value in model.state_dict().items()
+        }
+        original_numel = sum(int(value.numel()) for value in full_state.values())
+        fsdp2.fully_shard(model.inner)
+        fsdp2.fully_shard(model)
+        child_state = model.inner._fsdp_state
+        root_state = model._fsdp_state
+        managed_numel = sum(
+            entry.numel
+            for state in (child_state, root_state)
+            for entry in state.true_fsdp_params
+        )
+        self.assertEqual(managed_numel, original_numel)
+        self.assertEqual(
+            [entry.name for entry in root_state.true_fsdp_params],
+            ["output_bias"],
+        )
+
+        if int(jt.rank) == 0:
+            full_state["output_bias"] = jt.ones((3,)) * 7
+        state_dict_api = importlib.import_module(
+            "torch.distributed.checkpoint.state_dict")
+        state_dict_api.set_model_state_dict(model, full_state)
+        np.testing.assert_array_equal(
+            model.output_bias.full_tensor().numpy(),
+            np.full((3,), 7, dtype="float32"),
+        )
+        output = model(jt.ones((2, 4)))
+        self.assertEqual(tuple(output.shape), (2, 3))
+        self.assertTrue(np.isfinite(output.numpy()).all())
+
+    @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0)
+    def test_torch_distributed_world_collectives(self):
+        dist = importlib.import_module("torch.distributed")
+        dist.init_process_group(
+            backend="nccl", rank=int(jt.rank), world_size=int(jt.world_size))
+        self.assertTrue(dist.is_initialized())
+        self.assertEqual(dist.get_rank(), int(jt.rank))
+        self.assertEqual(dist.get_world_size(), 2)
+        self.assertEqual(dist.group.WORLD.rank(), int(jt.rank))
+        self.assertEqual(dist.group.WORLD.size(), 2)
+
+        reduced = jt.array(np.asarray([int(jt.rank) + 1], dtype="float32"))
+        dist.all_reduce(reduced, op=dist.ReduceOp.SUM)
+        np.testing.assert_array_equal(reduced.numpy(), np.asarray([3.0]))
+
+        for op, expected in (
+            (dist.ReduceOp.MAX, 2.0),
+            (dist.ReduceOp.MIN, 1.0),
+            (dist.ReduceOp.PRODUCT, 2.0),
+        ):
+            value = jt.array(np.asarray([int(jt.rank) + 1], dtype="float32"))
+            dist.all_reduce(value, op=op)
+            np.testing.assert_array_equal(value.numpy(), np.asarray([expected]))
+
+        gathered = [jt.zeros_like(reduced) for _ in range(2)]
+        dist.all_gather(gathered, reduced)
+        for value in gathered:
+            np.testing.assert_array_equal(value.numpy(), np.asarray([3.0]))
+
+        objects = [None, None]
+        dist.all_gather_object(objects, {"rank": int(jt.rank)})
+        self.assertEqual(objects, [{"rank": 0}, {"rank": 1}])
+
+        gathered_objects = [None, None] if int(jt.rank) == 0 else None
+        dist.gather_object(
+            {"rank": int(jt.rank)}, gathered_objects, dst=0)
+        if int(jt.rank) == 0:
+            self.assertEqual(
+                gathered_objects, [{"rank": 0}, {"rank": 1}])
+        dist.barrier()
+
     @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0)
     def test_flat_shard_collectives_and_sgd_update(self):
         rank = int(jt.rank)
