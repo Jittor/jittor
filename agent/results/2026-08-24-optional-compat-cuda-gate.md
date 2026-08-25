@@ -2,7 +2,7 @@
 
 - Status: Selected optional packages and native FlashAttention training accepted on real CUDA
 - Last reviewed: 2026-08-25
-- Commits: `566eae8e`, `2cf096d5`, `c2e340f8`, `90e00edd`, `9e69fa23`, `19820174`, `50fc95d5`, `a13cb06e`, `c8c43cf6`, `d500dc77`, `76b8a5a0`, `24cf00eb`, `95cd6f6c`, `c3e65b1d`, `fe97085a`, `1cd76dd9`, `f3df3274`, `797a6a97`, `5b838f0f`, `0f93f117`, `d77f04a2`, `1b47cbab`
+- Commits: `566eae8e`, `2cf096d5`, `c2e340f8`, `90e00edd`, `9e69fa23`, `19820174`, `50fc95d5`, `a13cb06e`, `c8c43cf6`, `d500dc77`, `76b8a5a0`, `24cf00eb`, `95cd6f6c`, `c3e65b1d`, `fe97085a`, `1cd76dd9`, `f3df3274`, `797a6a97`, `5b838f0f`, `0f93f117`, `d77f04a2`, `1b47cbab`, `62251be1`
 - Owner: Torch compatibility and test-infrastructure maintainers
 - Review when: optional package versions, Torch shim identity, or nox hardware
   environment contracts change
@@ -147,6 +147,11 @@ backward，确保同一 dropout mask 被重放。
   `1 passed in 3.16s`，bf16 为 `1 passed in 4.13s`。
 - 请求 `192/bf16` 或 `256/bf16` 时 nox native 阶段均精确选择 15 项，`all/all`
   现为 35 项且无重复；默认 hdim32/fp16 dropout 回归 `1 passed in 4.04s`。
+- 显式 mask 在 official fused API 不受支持，因此 Torch SDPA 的 native-required 门禁
+  要求其精确回退 canonical math 路径。bool 下三角 mask 与 float32 additive bias 的
+  output、dq/dk/dv 均对独立 NumPy 参考；fp16 为 `1 passed in 17.49s`，bf16 为
+  `1 passed in 69.62s`，两种 dtype 的统计均为 `hits=0, misses={"mask": 1}`。
+  默认 native 阶段现为 8 项，bf16 基础为 13 项，`all/all` 为 37 项且无重复。
 - optional 两阶段的 retained nox cache：基础 TorchMetrics/MMCV/MMEngine/PEFT/
   TensorDict/FlashAttention 共 `14 passed, 1 warning in 18.44s`，native 阶段
   `7 passed in 96.18s`。fresh cache 首次 TorchMetrics 仍因主机满核在固定 600 秒内
@@ -170,6 +175,7 @@ head dim 32/64/96/128/192/256 均覆盖 dense forward/backward；hdim32/64 的�
 dtype 还覆盖 varlen/qkv-packed 一阶 backward 与 `p=0.25` dropout，hdim96/128/192
 的两种 dtype 由组合门禁覆盖相同三条训练路径。hdim256 的两种 dtype 覆盖无 dropout
 的 varlen/qkv-packed backward；官方仅在 SM80/SM90 支持大于 192 维的 dropout
-backward，SM89 现在显式拒绝该组合而不再产生错误梯度。alibi、softcap、显式 mask、
-二阶梯度、稳定热态性能和完整 Transformer 性能尚未由本报告宣称通过。NPU/ROCm
+backward，SM89 现在显式拒绝该组合而不再产生错误梯度。显式 mask 已验证正确回退
+math 路径；alibi、softcap、二阶梯度、稳定热态性能和完整 Transformer 性能尚未由
+本报告宣称通过。NPU/ROCm
 也未因本次 CUDA 结果获得任何通过结论。
