@@ -1,8 +1,8 @@
 # verl、vLLM 与 TRELLIS 当前基线复验
 
-- Status: CUDA functionality accepted; performance not accepted
-- Last reviewed: 2026-08-23
-- Baseline: `7e7c23cf`
+- Status: vLLM CUDA functionality/performance accepted; TRELLIS performance not accepted
+- Last reviewed: 2026-08-26
+- Baseline: `f6980c42`
 - Owner: Torch compatibility and downstream integration maintainers
 - Review when: Jittor Torch version identity, FSDP2, verl algorithms,
   vLLM adapter/engine, TRELLIS adapter, FlashAttention, FlexGEMM, or CUDA
@@ -13,22 +13,21 @@
 当前 Jittor 基线没有暴露新的 FSDP2/DTensor 核心注册缺陷。verl 的 import、protocol、
 FSDP2、PPO 核心算法和真实 CPU/CUDA PyTorch 对拍门禁全部通过。vLLM V1 可在外置
 adapter 下实际加载 Qwen3-0.6B、建立 KV cache 并完成真实 CUDA greedy decode；四个
-token 与真实 PyTorch/Transformers 完全一致。TRELLIS.2 4B 也在当前 Jittor、外置
-adapter 和四个真实 CUDA 扩展上完成 aligned 端到端 pipeline。
+token 与真实 PyTorch/Transformers 完全一致。`f6980c42` 又将 Qwen3-0.6B 的 4-token
+热态从历史 `0.6410s` 降至 3 进程中位数 `0.10924s`；同机真实
+PyTorch/Transformers 为 `0.13745s`，Jittor-vLLM 快约 `20.5%`，性能门禁已接受。
+TRELLIS.2 4B 也在当前 Jittor、外置 adapter 和四个真实 CUDA 扩展上完成 aligned
+端到端 pipeline，但其性能仍未接受。
 
 总 todo 仍不能勾选：
 
-- vLLM 热态四 token decode 为 `0.6410s`，真实 PyTorch eager 为 `0.1604s`，约
-  `4.00x`；
 - TRELLIS Jittor 三次 pipeline 中位数 `8.1712s`，同轮 PyTorch 中位数
   `6.8007s`，约 `1.201x`；
-- verl 只验证了核心算法与 FSDP2/protocol 门禁，没有在本轮重新执行完整 PPO actor、
-  rollout、weight transfer 和 optimizer 训练闭环；
 - vLLM/TRELLIS 是 inference runtime，没有本轮反向对拍结论。
 
 ## 身份与环境
 
-- Jittor: `7e7c23cf`; Python 3.11.15; JIT compiler serial
+- Jittor: `f6980c42`; Python 3.11.15; JIT operator compiler serial
 - GPU: NVIDIA GeForce RTX 4090, compute capability 8.9
 - CUDA: 12.2.140 for Jittor/TRELLIS; real references used their recorded binary
   CUDA runtimes
@@ -109,7 +108,8 @@ The resulting adapter files are unversioned external state. Their hashes are:
 
 | File | SHA-256 |
 | --- | --- |
-| `vllm_jittor_ops/bootstrap.py` | `79f680798fd8debb6e5ed86fb44696b91faef01ea9af9ca0a277ff448b8da76d` |
+| `vllm_jittor_ops/bootstrap.py` | `c6dd413bba75d8ea923ab703ad0b61484017845edd79a8857da99869bdbb7f3b` |
+| `vllm_jittor_ops/ops.py` | `60029f8f2d73cdc5005d1fd9ebd8036860016138914f7144521b2c317c445612` |
 | `vllm_jittor_ops/tvfunc.py` | `366952a34208e8c98e834372daaa8aed35d86feaef0b6f93b17620b08576744a` |
 
 After the fixes, vLLM, `model_executor.custom_op`, distributed Store and fake
@@ -133,16 +133,44 @@ token ids: [12095, 13, 576, 6722]
 text:       Paris. The capital
 ```
 
-The isolated real PyTorch/Transformers run produced the same IDs and text.
+The isolated real PyTorch/Transformers run produced the same IDs and text. A
+16-token extension also matched exactly:
 
-| Runtime | Load/init | 4-token generate |
-| --- | ---: | ---: |
-| Jittor-vLLM cold | `630.58s` | `325.23s` |
-| Jittor-vLLM warm cache | `15.77s` | `0.6410s` |
-| PyTorch/Transformers warm | not compared | `0.1604s` |
+```text
+[12095, 13, 576, 6722, 315, 15344, 374, 21718,
+ 13, 576, 6722, 315, 17689, 374, 24081, 13]
+```
 
-Cold values include serial JIT and are not performance results. The hot generate
-ratio is about `4.00x`, so performance is explicitly rejected.
+| Runtime | Three process medians for 4-token generate | Median |
+| --- | --- | ---: |
+| Jittor-vLLM warm | `0.10924 / 0.10888 / 0.10995s` | `0.10924s` |
+| PyTorch/Transformers warm | `0.14824 / 0.13586 / 0.13745s` | `0.13745s` |
+
+Each process performed 3 warmups followed by 21 measured generations, with prefix
+cache disabled. The ratio is `0.7947x`, so Jittor-vLLM is about `20.5%` faster and
+the Qwen3-0.6B gate is accepted. Cold values include serial JIT and remain excluded.
+
+The improvement comes from generic, inference-only CUDA capabilities in Jittor:
+
+- fp16/bf16 RMSNorm and fused residual-add RMSNorm;
+- GQA RoPE with different query/key head counts;
+- SwiGLU `silu_and_mul`;
+- in-place V1 paged KV scatter;
+- a guarded one-token causal paged-attention path with online softmax.
+
+All kernels return `None` outside their CUDA/no-grad/dtype/shape contract, so the
+adapter retains its existing fallback. Decode attention additionally requires no
+sliding window, ALiBi, logits soft-cap, or sinks. Profiler GPU-op time fell from
+`85.2ms` to `31.5ms` per 4-token generation and reported memory access from
+`246GB` to `86.4GB`; the default graph break interval moved from 1 to 16 layers,
+with `VJ_SYNC_EVERY=1` retained as a conservative override.
+
+The run also found a late-activation compatibility bug: importing Jittor before
+the deployed Torch placeholder left `Parameter.data` as a NumPy view, breaking
+vLLM's default safetensors loader at `param.data.copy_`. Torch mode now also checks
+the completed install state, while plain Jittor continues to expose its shared
+NumPy data view. The default 1.40 GiB checkpoint loader, tiny-model ZMQ weight
+apply (`delta=0.125`) and restore/logprob smoke all pass.
 
 ## TRELLIS.2
 
@@ -196,14 +224,28 @@ Transformers 5 dependency site. The TRELLIS commands use the current source
 checkout, adapter `src/`, local checkpoints, offline model assets, isolated
 extension/JIT caches, and one visible GPU.
 
+The machine-readable vLLM result is
+`$JITTOR_LAB_ROOT/_state/vllm-current/20260826-performance-summary.json`
+(SHA-256
+`0d2f8c4e4fae614bd1d029d670dbee532c29d06d2c4df8ca1cffdd91ed1d4731`).
+The final profiler SHA-256 is
+`f94eee3762be84ef4302ae49e10ea45666c9e8ec0d930fb65b0d21fd3fd315da`.
+The Jittor and PyTorch benchmark script SHA-256 values are
+`5b17cdced5e0d3b356bdcca63cb8f7b73caff3c53063973219772ca1097660f5` and
+`45055408854618eaf395279d8758771b2541a72ceb91417f2ad5e51b44d37178`.
+
+Regression scope: CUDA capability `30 passed`, structure `218 passed`, Torch
+optimizer/data alias `22 passed`, native array semantics `17 passed`, and real
+vLLM weight apply/restore smoke passed. The unrelated legacy
+`test_memcopy_overlap` 10ms timing assertion remained noisy (`33-75ms` delta)
+when run alone and is not counted as a functional regression result.
+
 ## Remaining work
 
 - Bring TRELLIS steady pipeline time back to at most the real PyTorch baseline;
   profile the current `3.65 it/s` shape and `6.5 it/s` texture stages first.
-- Close vLLM eager decode overhead; the external plan identifies graph capture
-  and Python lazy-graph construction as the main remaining tier.
-- Run a current full verl PPO training/rollout/weight-transfer step after the
-  vLLM adapter is packaged and versioned.
+- Re-run the accepted vLLM performance protocol for larger dense, MoE and TP
+  configurations before generalizing the 0.6B single-GPU conclusion.
 - Turn the unversioned vLLM adapter into a maintained external distribution with
   import, MoE oracle and Qwen engine gates.
 - Do not claim vLLM/TRELLIS backward parity or NPU/ROCm support from these CUDA
