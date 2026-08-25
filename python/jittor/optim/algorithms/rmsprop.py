@@ -2,7 +2,10 @@
 
 import jittor as jt
 
-from ..base import Optimizer, _grad_matches_param, _param_requires_grad
+from ..base import (
+    Optimizer, _grad_matches_param, _param_requires_grad,
+    _update_preserve_dtype,
+)
 
 class RMSprop(Optimizer):
     """ RMSprop Optimizer.
@@ -42,6 +45,7 @@ class RMSprop(Optimizer):
             alpha = pg.get("alpha", self.alpha)
             for p, g, v in zip(pg["params"], pg["grads"], pg["values"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
-                v.update(alpha * v + (1-alpha) * g * g)
-                p.update(p - lr * g / (jt.sqrt(v) + eps))
+                _update_preserve_dtype(v, alpha * v + (1-alpha) * g * g)
+                _update_preserve_dtype(
+                    p, p - lr * g / (jt.sqrt(v) + eps))
         self.post_step()

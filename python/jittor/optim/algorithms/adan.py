@@ -2,7 +2,10 @@
 
 import jittor as jt
 
-from ..base import Optimizer, _grad_matches_param, _param_requires_grad
+from ..base import (
+    Optimizer, _grad_matches_param, _param_requires_grad,
+    _update_preserve_dtype,
+)
 
 class Adan(Optimizer):
     """ Adan Optimizer.
@@ -90,18 +93,27 @@ class Adan(Optimizer):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
 
                 if self.n_step>0:
-                    pre_g.update(g - pre_g)  # Update pre_g as grad_diff
+                    _update_preserve_dtype(
+                        pre_g, g - pre_g)  # Update pre_g as grad_diff
 
 
-                m.update(beta1 * m + (1 - beta1) * g)
-                d.update(beta2 * d + (1 - beta2) * pre_g)  # Use pre_g as grad_diff
+                _update_preserve_dtype(m, beta1 * m + (1 - beta1) * g)
+                _update_preserve_dtype(
+                    d, beta2 * d + (1 - beta2) * pre_g)
 
-                pre_g.update(jt.multiply(pre_g, beta2) + g)  # Update pre_g as update (g + beta2 * grad_diff)
+                _update_preserve_dtype(
+                    pre_g, jt.multiply(pre_g, beta2) + g)
 
-                v.update(beta3 * v + (1 - beta3) * pre_g * pre_g)  # Use pre_g as update
+                _update_preserve_dtype(
+                    v, beta3 * v + (1 - beta3) * pre_g * pre_g)
 
-                p.update(p - (step_size * m + step_size_diff * d) / (jt.sqrt(v) + eps_bias_sqrt))
-                p.update(p / (1 + lr * weight_decay))
+                _update_preserve_dtype(
+                    p,
+                    p - (step_size * m + step_size_diff * d)
+                    / (jt.sqrt(v) + eps_bias_sqrt),
+                )
+                _update_preserve_dtype(p, p / (1 + lr * weight_decay))
 
-                pre_g.update(g)  # Update pre_g for the next iteration
+                _update_preserve_dtype(
+                    pre_g, g)  # Update pre_g for the next iteration
         self.post_step()

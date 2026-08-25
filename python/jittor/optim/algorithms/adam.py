@@ -2,7 +2,10 @@
 
 import jittor as jt
 
-from ..base import Optimizer, _grad_matches_param, _param_requires_grad
+from ..base import (
+    Optimizer, _grad_matches_param, _param_requires_grad,
+    _update_preserve_dtype,
+)
 
 class Adam(Optimizer):
     """ Adam Optimizer.
@@ -48,10 +51,11 @@ class Adam(Optimizer):
             for p, g, v, m in zip(pg["params"], pg["grads"], pg["values"], pg["m"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
                 g = p * weight_decay + g
-                m.update(b0 * m + (1-b0) * g)
-                v.update(b1 * v + (1-b1) * g * g)
+                _update_preserve_dtype(m, b0 * m + (1-b0) * g)
+                _update_preserve_dtype(v, b1 * v + (1-b1) * g * g)
                 step_size = lr * jt.sqrt(1-b1**n) / (1-b0 ** n)
-                p.update(p - m * step_size / (jt.sqrt(v) + eps))
+                _update_preserve_dtype(
+                    p, p - m * step_size / (jt.sqrt(v) + eps))
         self.post_step()
 
 
@@ -97,12 +101,12 @@ class AdamW(Optimizer):
             b0, b1 = pg.get("betas", self.betas)
             for p, g, v, m in zip(pg["params"], pg["grads"], pg["values"], pg["m"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
-                p.update(p * (1 - lr * weight_decay))
+                _update_preserve_dtype(p, p * (1 - lr * weight_decay))
                 bias_correction1 = 1 - b0 ** n
                 bias_correction2 = 1 - b1 ** n
-                m.update(b0 * m + (1-b0) * g) #exp_avg
-                v.update(b1 * v + (1-b1) * g * g) #exp_avg_sq
+                _update_preserve_dtype(m, b0 * m + (1-b0) * g) #exp_avg
+                _update_preserve_dtype(v, b1 * v + (1-b1) * g * g) #exp_avg_sq
                 denom = jt.sqrt(v) / jt.sqrt(bias_correction2) + eps
                 step_size = lr / bias_correction1
-                p.update(p - step_size * m / denom)
+                _update_preserve_dtype(p, p - step_size * m / denom)
         self.post_step()

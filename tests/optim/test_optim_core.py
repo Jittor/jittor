@@ -447,6 +447,41 @@ class TestRMSpropUpdate(_OptimCoreBase):
 # ===========================================================================
 class TestOptimizerPlumbing(_OptimCoreBase):
 
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_low_precision_parameter_and_state_dtypes_are_preserved(self):
+        factories = (
+            ("base", lambda p: jt.optim.Optimizer([p], lr=1e-3)),
+            ("sgd", lambda p: jt.optim.SGD([p], lr=1e-3, momentum=0.9)),
+            ("adam", lambda p: jt.optim.Adam([p], lr=1e-3, eps=1e-3)),
+            ("adamw", lambda p: jt.optim.AdamW([p], lr=1e-3, eps=1e-3)),
+            ("rmsprop", lambda p: jt.optim.RMSprop([p], lr=1e-3, eps=1e-3)),
+            ("adan", lambda p: jt.optim.Adan([p], lr=1e-3, eps=1e-3)),
+        )
+        with jt.flag_scope(use_cuda=1):
+            for dtype in ("float16", "bfloat16"):
+                for name, factory in factories:
+                    with self.subTest(dtype=dtype, optimizer=name):
+                        parameter = jt.array([1.0, -2.0]).cast(dtype)
+                        optimizer = factory(parameter)
+                        for step in range(2):
+                            loss = (parameter.float32()
+                                    * jt.array([0.125, -0.25])).sum()
+                            optimizer.step(loss)
+                            self.assertEqual(
+                                str(parameter.dtype), dtype,
+                                msg="%s %s step %s" % (name, dtype, step),
+                            )
+                        state = []
+                        for group in optimizer.param_groups:
+                            for key in ("values", "m", "v", "d", "pre_grad"):
+                                state.extend(group.get(key, ()))
+                        self.assertTrue(
+                            all(str(value.dtype) == dtype for value in state),
+                            [str(value.dtype) for value in state],
+                        )
+                        self.assertTrue(
+                            np.isfinite(parameter.float32().numpy()).all())
+
     def test_backward_then_step_matches_step_loss(self):
         # opt.backward(loss); opt.step()  must equal  opt.step(loss).
         # Both are documented entry points; they must produce the same update.

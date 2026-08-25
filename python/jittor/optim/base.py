@@ -21,6 +21,11 @@ def _grad_matches_param(p, g):
 def _param_requires_grad(p):
     return bool(p.requires_grad)
 
+def _update_preserve_dtype(target, value):
+    if str(value.dtype) != str(target.dtype):
+        value = value.to(target.dtype)
+    target.update(value)
+
 class Optimizer(object):
     """ Basic class of Optimizer.
 
@@ -267,7 +272,7 @@ class Optimizer(object):
             lr = pg.get("lr", self.lr)
             for p, g in zip(pg["params"], pg["grads"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
-                p.update(p - g * lr)
+                _update_preserve_dtype(p, p - g * lr)
         self.post_step()
 
     def _build_grad_map(self):

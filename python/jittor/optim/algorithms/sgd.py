@@ -2,7 +2,10 @@
 
 import jittor as jt
 
-from ..base import Optimizer, _grad_matches_param, _param_requires_grad
+from ..base import (
+    Optimizer, _grad_matches_param, _param_requires_grad,
+    _update_preserve_dtype,
+)
 
 class SGD(Optimizer):
     """ SGD Optimizer.
@@ -46,9 +49,11 @@ class SGD(Optimizer):
             for p, g, v in zip(pg["params"], pg["grads"], pg["values"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
                 dp = p * weight_decay + g
-                v.update(momentum * v + dp * (1 - dampening))
+                _update_preserve_dtype(
+                    v, momentum * v + dp * (1 - dampening))
                 if nesterov:
-                    p.update(p - (dp + momentum * v) * lr)
+                    _update_preserve_dtype(
+                        p, p - (dp + momentum * v) * lr)
                 else:
-                    p.update(p - v * lr)
+                    _update_preserve_dtype(p, p - v * lr)
         self.post_step()
