@@ -18,6 +18,10 @@ disabled with ``JITTOR_TRELLIS_FUSED_MESH=0``.
 The inference RMSNorm kernels are enabled by default. Set
 ``JITTOR_TRELLIS_FUSED_RMS_NORM=0`` to disable both dense and sparse kernels,
 or ``JITTOR_TRELLIS_FUSED_SPARSE_RMS_NORM=0`` to disable only the sparse path.
+``JITTOR_TRELLIS_FUSED_QKV_RMS_ROPE=0`` disables packed sparse self-attention
+preprocessing while retaining the individual RMSNorm kernels.
+``JITTOR_TRELLIS_FUSED_MODULATED_LAYERNORM=0`` disables fusion of the two
+non-affine LayerNorm-plus-modulation sites in sparse cross-transformer blocks.
 The LayerNorm32 kernel keeps its historical total opt-out
 ``JITTOR_TRELLIS_FP16_LAYERNORM=0``; use
 ``JITTOR_TRELLIS_BF16_LAYERNORM=0`` to disable only its BF16 path.
@@ -36,6 +40,7 @@ _DENSE_ATTENTION_MODULE = "trellis2.modules.attention.full_attn"
 _ATTENTION_MODULE = "trellis2.modules.attention.modules"
 _SPARSE_ATTENTION_MODULE = "trellis2.modules.sparse.attention.full_attn"
 _SPARSE_ATTENTION_API_MODULE = "trellis2.modules.sparse.attention.modules"
+_SPARSE_MODULATED_MODULE = "trellis2.modules.sparse.transformer.modulated"
 _FLOW_EULER_MODULE = "trellis2.pipelines.samplers.flow_euler"
 _C2S_MODULE = "trellis2.modules.sparse.spatial.spatial2channel"
 _C2S_BLOCK_MODULE = "trellis2.models.sc_vaes.sparse_unet_vae"
@@ -65,12 +70,17 @@ class _CrossKVCacheState:
     def __init__(self, model, contexts, allowed, attention_allowed=None):
         self.model = model
         self.contexts = tuple(contexts)
+        self.context_keys = frozenset(
+            _tensor_identity(value) for value in self.contexts
+        )
         self.allowed = dict(allowed)
         self.attention_allowed = dict(attention_allowed or {})
         self.kv_cache = {}
         self.processed_kv_cache = {}
 
     def clear(self):
+        self.contexts = ()
+        self.context_keys = frozenset()
         self.allowed.clear()
         self.attention_allowed.clear()
         self.kv_cache.clear()
@@ -114,13 +124,25 @@ def _module_is_eval(module) -> bool:
 
 def _tensor_signature(value):
     try:
+        from jittor.nn._cuda_inference import device_index
+
         return (
             tuple(int(size) for size in value.shape),
             str(value.dtype),
-            int(value.get_device()),
+            device_index(value),
         )
     except Exception:
         return None
+
+
+def _tensor_identity(value):
+    token = getattr(value, "id", None)
+    if callable(token):
+        token = token()
+    try:
+        return "var", int(token)
+    except (TypeError, ValueError):
+        return "python", id(value)
 
 
 def _is_inference_source(jt, value) -> bool:
@@ -385,7 +407,7 @@ def _trellis_c2s_pair_fast_path(mod, layer, x, subdivision):
                 new_coords[:, index + 1] += (
                     subidx // factor ** index % factor)
             idx = torch.repeat_interleave(
-                torch.arange(x.coords.shape[0], device=x.device),
+                torch.arange(x.coords.shape[0]),
                 n_leaf, dim=0, output_size=subidx.shape[0])
             state.entry = (signature, (new_coords, idx, subidx))
 
@@ -715,8 +737,9 @@ def _cross_kv_record_is_active(state, record, context) -> bool:
     if (state.allowed.get(id(projection)) is not record
             or record["weight"] is not weight
             or record["bias"] is not bias):
-        state.kv_cache.pop((id(projection), id(context)), None)
-        state.processed_kv_cache.pop((id(attention), id(context)), None)
+        context_key = _tensor_identity(context)
+        state.kv_cache.pop((id(projection), context_key), None)
+        state.processed_kv_cache.pop((id(attention), context_key), None)
         return False
     if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
         state.clear()
@@ -729,7 +752,7 @@ def _cross_kv_record_is_active(state, record, context) -> bool:
             and _module_is_eval(projection)):
         state.clear()
         return False
-    return any(value is context for value in state.contexts)
+    return _tensor_identity(context) in state.context_keys
 
 
 def _trellis_cached_cross_kv_projection(
@@ -742,7 +765,7 @@ def _trellis_cached_cross_kv_projection(
             or not _cross_kv_record_is_active(state, record, context)):
         return original(context)
 
-    key = (id(projection), id(context))
+    key = (id(projection), _tensor_identity(context))
     cached = state.kv_cache.get(key)
     if cached is not None:
         return cached
@@ -836,7 +859,11 @@ def _cross_attention_projection_record(attention, device):
             return None
     except Exception:
         return None
-    original = getattr(projection, "forward", None)
+    method_name = "forward"
+    original = getattr(projection, method_name, None)
+    if original is None:
+        method_name = "execute"
+        original = getattr(projection, method_name, None)
     if original is None:
         return None
     call_original = (
@@ -847,6 +874,7 @@ def _cross_attention_projection_record(attention, device):
     return {
         "attention": attention,
         "projection": projection,
+        "projection_method": method_name,
         "weight": weight,
         "bias": bias,
         "projection_original": call_original,
@@ -870,7 +898,7 @@ def _install_cross_attention_projection(record):
 
     forward._jittor_torch_trellis_cross_kv_cache = True
     forward._jittor_torch_original = original
-    return patch_method(projection, "forward", forward)
+    return patch_method(projection, record["projection_method"], forward)
 
 
 def _restore_cross_attention_projection(installed) -> None:
@@ -890,7 +918,7 @@ def _trellis_cached_cross_attention(record, x, context):
             or getattr(fast["k_norm"], "gamma", None) is not fast["gamma"]
             or getattr(attention, "qk_rms_norm", None) is not True):
         state.processed_kv_cache.pop(
-            (id(attention), id(context)), None)
+            (id(attention), _tensor_identity(context)), None)
         return None
     try:
         if abs(float(fast["k_norm"].scale) - math.sqrt(128.0)) > 1e-6:
@@ -928,7 +956,8 @@ def _trellis_cached_cross_attention(record, x, context):
             q = attention._linear(attention.to_q, x)
             q = attention._reshape_chs(q, (12, -1))
 
-        key = (id(attention), id(context))
+        context_key = _tensor_identity(context)
+        key = (id(attention), context_key)
         cached = state.processed_kv_cache.get(key)
         if cached is None:
             if fast["kind"] == "dense":
@@ -943,7 +972,7 @@ def _trellis_cached_cross_attention(record, x, context):
             if (_tensor_signature(k) != expected
                     or _tensor_signature(v) != expected):
                 return None
-            state.kv_cache.pop((id(projection), id(context)), None)
+            state.kv_cache.pop((id(projection), context_key), None)
             cached = (k, v)
             state.processed_kv_cache[key] = cached
         k, v = cached
@@ -956,8 +985,9 @@ def _trellis_cached_cross_attention(record, x, context):
         h = attention._reshape_chs(h, (-1,))
         return attention._linear(attention.to_out, h)
     except Exception:
-        state.kv_cache.pop((id(projection), id(context)), None)
-        state.processed_kv_cache.pop((id(attention), id(context)), None)
+        context_key = _tensor_identity(context)
+        state.kv_cache.pop((id(projection), context_key), None)
+        state.processed_kv_cache.pop((id(attention), context_key), None)
         return None
 
 
@@ -1126,38 +1156,290 @@ def _patch_attention_module(mod) -> bool:
     return True
 
 
+def _trellis_sparse_rope_phases(attention, value):
+    rope = getattr(attention, "rope", None)
+    if rope is None or not _module_is_eval(rope):
+        return None
+    try:
+        dim = int(rope.dim)
+        head_dim = int(rope.head_dim)
+        rope_freq = tuple(float(item) for item in rope.rope_freq)
+        coords = value.coords[..., 1:]
+        token_count = int(coords.shape[0])
+        value_signature = _tensor_signature(value.feats)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if (
+        dim != 3
+        or head_dim != 128
+        or rope_freq != (1.0, 10000.0)
+        or value_signature is None
+    ):
+        return None
+
+    cache_name = (
+        f"rope_phase_{dim}d_freq{rope_freq[0]}-{rope_freq[1]}_hd{head_dim}"
+    )
+    phases = value.get_spatial_cache(cache_name)
+    if phases is None:
+        phases = rope._get_phases(coords.reshape(-1)).reshape(token_count, -1)
+        if int(phases.shape[-1]) < head_dim // 2:
+            module = sys.modules.get(type(rope).__module__)
+            torch = getattr(module, "torch", None)
+            if torch is None:
+                return None
+            padding = head_dim // 2 - int(phases.shape[-1])
+            phases = torch.cat(
+                [
+                    phases,
+                    torch.polar(
+                        torch.ones(token_count, padding, device=phases.device),
+                        torch.zeros(token_count, padding, device=phases.device),
+                    ),
+                ],
+                dim=-1,
+            )
+        value.register_spatial_cache(cache_name, phases)
+    signature = _tensor_signature(phases)
+    if signature != (
+        (token_count, head_dim // 2), "complex64", value_signature[2]
+    ):
+        return None
+    return phases
+
+
+def _trellis_sparse_packed_self_attention_fast_path(mod, attention, x):
+    if _is_falsey(os.environ.get("JITTOR_TRELLIS_FUSED_QKV_RMS_ROPE")):
+        return None
+    try:
+        import jittor as jt
+
+        sparse_tensor = mod.SparseTensor
+        q_norm = attention.q_rms_norm
+        k_norm = attention.k_rms_norm
+        q_scale = float(q_norm.scale)
+        k_scale = float(k_norm.scale)
+        q_gamma = q_norm.gamma
+        k_gamma = k_norm.gamma
+        x_signature = _tensor_signature(x.feats)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if not (
+        isinstance(x, sparse_tensor)
+        and getattr(attention, "_type", None) == "self"
+        and getattr(attention, "attn_mode", None) == "full"
+        and getattr(attention, "channels", None) == 1536
+        and getattr(attention, "num_heads", None) == 12
+        and getattr(attention, "head_dim", None) == 128
+        and getattr(attention, "qk_rms_norm", None) is True
+        and getattr(attention, "use_rope", None) is True
+        and _module_is_eval(attention)
+        and _module_is_eval(q_norm)
+        and _module_is_eval(k_norm)
+        and jt.flags.use_cuda
+        and getattr(jt.flags, "no_grad", 0)
+        and not getattr(jt.compiler, "has_acl", 0)
+        and abs(q_scale - math.sqrt(128.0)) <= 1e-6
+        and abs(k_scale - q_scale) <= 1e-6
+        and x_signature is not None
+        and _tensor_signature(q_gamma) == (
+            (12, 128), "float32", x_signature[2])
+        and _tensor_signature(k_gamma) == (
+            (12, 128), "float32", x_signature[2])
+    ):
+        return None
+
+    qkv = attention._linear(attention.to_qkv, x)
+    qkv = attention._fused_pre(qkv, num_fused=3)
+    phases = _trellis_sparse_rope_phases(attention, qkv)
+    if phases is None:
+        return None
+    from jittor.nn.rope_cuda import packed_qkv_rms_rope_cuda
+
+    packed = packed_qkv_rms_rope_cuda(
+        qkv.feats,
+        q_gamma,
+        k_gamma,
+        jt.nn.view_as_real(phases),
+        scale=q_scale,
+    )
+    if packed is None:
+        return None
+    qkv = qkv.replace(packed)
+    output = mod.sparse_scaled_dot_product_attention(qkv)
+    output = attention._reshape_chs(output, (-1,))
+    return attention._linear(attention.to_out, output)
+
+
 def _patch_sparse_attention_api_module(mod) -> bool:
     cls = getattr(mod, "SparseMultiHeadRMSNorm", None)
     varlen_cls = getattr(mod, "VarLenTensor", None)
     original = getattr(cls, "forward", None) if cls is not None else None
-    if original is None or not isinstance(varlen_cls, type):
-        return False
-    if getattr(original, "_jittor_torch_fast_sparse_trellis_rms_norm", False):
+    patched = False
+    if original is not None and isinstance(varlen_cls, type):
+        if getattr(
+                original, "_jittor_torch_fast_sparse_trellis_rms_norm", False):
+            patched = True
+        else:
+            def forward(self, x, *args, **kwargs):
+                if (not args and not kwargs and _module_is_eval(self)
+                        and not _is_falsey(os.environ.get(
+                            "JITTOR_TRELLIS_FUSED_SPARSE_RMS_NORM"))):
+                    wrapped = isinstance(x, varlen_cls)
+                    value = getattr(x, "feats", None) if wrapped else x
+                    fast = _trellis_multihead_rms_norm_fast_path(
+                        value, getattr(self, "gamma", None),
+                        getattr(self, "scale", None))
+                    if fast is not None:
+                        if not wrapped:
+                            return fast
+                        try:
+                            return x.replace(fast)
+                        except Exception:
+                            pass
+                return original(self, x, *args, **kwargs)
+
+            forward._jittor_torch_fast_sparse_trellis_rms_norm = True
+            forward._jittor_torch_original = original
+            cls.forward = forward
+            patched = True
         mod._jittor_torch_fast_sparse_trellis_rms_norm = True
+
+    attention_cls = getattr(mod, "SparseMultiHeadAttention", None)
+    attention_original = (
+        getattr(attention_cls, "forward", None)
+        if attention_cls is not None else None
+    )
+    if attention_original is not None:
+        if getattr(
+                attention_original,
+                "_jittor_torch_fast_sparse_packed_qkv", False):
+            patched = True
+        else:
+            def attention_forward(self, x, context=None, *args, **kwargs):
+                if context is None and not args and not kwargs:
+                    fast = _trellis_sparse_packed_self_attention_fast_path(
+                        mod, self, x)
+                    if fast is not None:
+                        return fast
+                return attention_original(
+                    self, x, context, *args, **kwargs)
+
+            attention_forward._jittor_torch_fast_sparse_packed_qkv = True
+            attention_forward._jittor_torch_original = attention_original
+            attention_cls.forward = attention_forward
+            patched = True
+        mod._jittor_torch_fast_sparse_packed_qkv = True
+    return patched
+
+
+def _trellis_modulated_layer_norm(layer, x, scale, shift):
+    if _is_falsey(os.environ.get(
+            "JITTOR_TRELLIS_FUSED_MODULATED_LAYERNORM")):
+        return None
+    try:
+        import jittor as jt
+
+        eps = float(layer.eps)
+        weight = layer.weight
+        bias = layer.bias
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if not (
+        _module_is_eval(layer)
+        and not isinstance(weight, jt.Var)
+        and not isinstance(bias, jt.Var)
+        and float(weight) == 1.0
+        and float(bias) == 0.0
+    ):
+        return None
+    from jittor.nn.backends.layer_norm_cuda import (
+        _modulated_layer_norm_no_grad_cuda,
+    )
+
+    return _modulated_layer_norm_no_grad_cuda(
+        x, scale, shift, eps
+    )
+
+
+def _trellis_sparse_modulated_cross_block_fast_path(
+        mod, block, x, modulation, context):
+    try:
+        import jittor as jt
+
+        sparse_tensor = mod.SparseTensor
+        modulation_shape = tuple(int(size) for size in modulation.shape)
+        block_modulation_shape = tuple(
+            int(size) for size in block.modulation.shape)
+        x_signature = _tensor_signature(x.feats)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if not (
+        isinstance(x, sparse_tensor)
+        and block.share_mod is True
+        and _module_is_eval(block)
+        and jt.flags.use_cuda
+        and getattr(jt.flags, "no_grad", 0)
+        and not getattr(jt.compiler, "has_acl", 0)
+        and modulation_shape == (1, 9216)
+        and block_modulation_shape == (9216,)
+        and str(modulation.dtype) == "bfloat16"
+        and str(block.modulation.dtype) == "bfloat16"
+        and x_signature is not None
+        and x_signature[0][-1] == 1536
+        and x_signature[1] == "bfloat16"
+    ):
+        return None
+
+    values = (block.modulation + modulation).type(modulation.dtype).chunk(
+        6, dim=1
+    )
+    shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = values
+    normalized = _trellis_modulated_layer_norm(
+        block.norm1, x.feats, scale_msa, shift_msa
+    )
+    if normalized is None:
+        return None
+    h = x.replace(normalized)
+    h = block.self_attn(h)
+    h = h * gate_msa
+    x = x + h
+    h = x.replace(block.norm2(x.feats))
+    h = block.cross_attn(h, context)
+    x = x + h
+    normalized = _trellis_modulated_layer_norm(
+        block.norm3, x.feats, scale_mlp, shift_mlp
+    )
+    if normalized is None:
+        return None
+    h = x.replace(normalized)
+    h = block.mlp(h)
+    h = h * gate_mlp
+    return x + h
+
+
+def _patch_sparse_modulated_module(mod) -> bool:
+    cls = getattr(mod, "ModulatedSparseTransformerCrossBlock", None)
+    original = getattr(cls, "_forward", None) if cls is not None else None
+    if original is None or not hasattr(mod, "SparseTensor"):
+        return False
+    if getattr(original, "_jittor_torch_fast_modulated_layer_norm", False):
+        mod._jittor_torch_fast_modulated_layer_norm = True
         return True
 
-    def forward(self, x, *args, **kwargs):
-        if (not args and not kwargs and _module_is_eval(self)
-                and not _is_falsey(os.environ.get(
-                    "JITTOR_TRELLIS_FUSED_SPARSE_RMS_NORM"))):
-            wrapped = isinstance(x, varlen_cls)
-            value = getattr(x, "feats", None) if wrapped else x
-            fast = _trellis_multihead_rms_norm_fast_path(
-                value, getattr(self, "gamma", None),
-                getattr(self, "scale", None))
-            if fast is not None:
-                if not wrapped:
-                    return fast
-                try:
-                    return x.replace(fast)
-                except Exception:
-                    pass
-        return original(self, x, *args, **kwargs)
+    def _forward(self, x, modulation, context, *args, **kwargs):
+        if not args and not kwargs:
+            output = _trellis_sparse_modulated_cross_block_fast_path(
+                mod, self, x, modulation, context
+            )
+            if output is not None:
+                return output
+        return original(self, x, modulation, context, *args, **kwargs)
 
-    forward._jittor_torch_fast_sparse_trellis_rms_norm = True
-    forward._jittor_torch_original = original
-    cls.forward = forward
-    mod._jittor_torch_fast_sparse_trellis_rms_norm = True
+    _forward._jittor_torch_fast_modulated_layer_norm = True
+    _forward._jittor_torch_original = original
+    cls._forward = _forward
+    mod._jittor_torch_fast_modulated_layer_norm = True
     return True
 
 
@@ -1207,6 +1489,7 @@ def register_patches(register) -> None:
         (_ATTENTION_MODULE, _patch_attention_module),
         (_SPARSE_ATTENTION_MODULE, _patch_sparse_attention_module),
         (_SPARSE_ATTENTION_API_MODULE, _patch_sparse_attention_api_module),
+        (_SPARSE_MODULATED_MODULE, _patch_sparse_modulated_module),
         (_FLOW_EULER_MODULE, _patch_flow_euler_module),
         (_C2S_MODULE, _patch_c2s_module),
         (_C2S_BLOCK_MODULE, _patch_c2s_block_module),

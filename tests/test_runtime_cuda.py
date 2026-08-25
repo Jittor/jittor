@@ -85,6 +85,103 @@ class TestTrellisRuntimeCuda(unittest.TestCase):
             patched(instance, x)
         self.assertEqual(len(calls), call_count + 1)
 
+    def test_sparse_packed_self_attention_patch_is_guarded(self):
+        calls = []
+
+        class VarLenTensor:
+            pass
+
+        class SparseMultiHeadRMSNorm:
+            def forward(self, value):
+                return value
+
+        class SparseMultiHeadAttention:
+            def forward(self, value, context=None, *args, **kwargs):
+                calls.append((value, context, args, kwargs))
+                return "original"
+
+        module = ModuleType(runtime._SPARSE_ATTENTION_API_MODULE)
+        module.VarLenTensor = VarLenTensor
+        module.SparseMultiHeadRMSNorm = SparseMultiHeadRMSNorm
+        module.SparseMultiHeadAttention = SparseMultiHeadAttention
+        self.assertTrue(runtime._patch_sparse_attention_api_module(module))
+        patched = SparseMultiHeadAttention.forward
+        self.assertTrue(runtime._patch_sparse_attention_api_module(module))
+        self.assertIs(patched, SparseMultiHeadAttention.forward)
+
+        attention = SparseMultiHeadAttention()
+        sentinel = object()
+        with mock.patch.object(
+            runtime,
+            "_trellis_sparse_packed_self_attention_fast_path",
+            return_value=sentinel,
+        ) as fast_path:
+            self.assertIs(attention.forward("self"), sentinel)
+            fast_path.assert_called_once_with(module, attention, "self")
+        self.assertEqual(calls, [])
+
+        with mock.patch.object(
+            runtime,
+            "_trellis_sparse_packed_self_attention_fast_path",
+            return_value=None,
+        ):
+            self.assertEqual(attention.forward("fallback"), "original")
+        self.assertEqual(attention.forward("cross", "context"), "original")
+        self.assertEqual(
+            calls,
+            [
+                ("fallback", None, (), {}),
+                ("cross", "context", (), {}),
+            ],
+        )
+
+    def test_sparse_modulated_layer_norm_patch_is_guarded(self):
+        calls = []
+
+        class SparseTensor:
+            pass
+
+        class ModulatedSparseTransformerCrossBlock:
+            def _forward(self, value, modulation, context, *args, **kwargs):
+                calls.append((value, modulation, context, args, kwargs))
+                return "original"
+
+        module = ModuleType(runtime._SPARSE_MODULATED_MODULE)
+        module.SparseTensor = SparseTensor
+        module.ModulatedSparseTransformerCrossBlock = (
+            ModulatedSparseTransformerCrossBlock
+        )
+        self.assertTrue(runtime._patch_sparse_modulated_module(module))
+        patched = ModulatedSparseTransformerCrossBlock._forward
+        self.assertTrue(runtime._patch_sparse_modulated_module(module))
+        self.assertIs(patched, ModulatedSparseTransformerCrossBlock._forward)
+
+        block = ModulatedSparseTransformerCrossBlock()
+        sentinel = object()
+        with mock.patch.object(
+            runtime,
+            "_trellis_sparse_modulated_cross_block_fast_path",
+            return_value=sentinel,
+        ) as fast_path:
+            self.assertIs(block._forward("x", "mod", "context"), sentinel)
+            fast_path.assert_called_once_with(
+                module, block, "x", "mod", "context"
+            )
+        self.assertEqual(calls, [])
+
+        with mock.patch.object(
+            runtime,
+            "_trellis_sparse_modulated_cross_block_fast_path",
+            return_value=None,
+        ):
+            self.assertEqual(
+                block._forward("x", "mod", "context"), "original"
+            )
+        self.assertEqual(
+            calls,
+            [("x", "mod", "context", (), {})],
+        )
+
     def test_cross_kv_cache_is_opt_in_and_sampler_scoped(self):
         import jittor as jt
         from jittor import nn

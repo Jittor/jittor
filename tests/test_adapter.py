@@ -61,6 +61,7 @@ class TestTrellisAdapter(unittest.TestCase):
             "trellis2.modules.attention.modules",
             "trellis2.modules.sparse.attention.full_attn",
             "trellis2.modules.sparse.attention.modules",
+            "trellis2.modules.sparse.transformer.modulated",
             "trellis2.pipelines.samplers.flow_euler",
             "trellis2.modules.sparse.spatial.spatial2channel",
             "trellis2.models.sc_vaes.sparse_unet_vae",
