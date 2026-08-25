@@ -1,8 +1,8 @@
 # verl Jittor 权重传输与 1-step PPO 真实 CUDA 门禁
 
-- Status: Adapter transport, single-GPU and replicated two-GPU 1-step PPO gates accepted on real CUDA
-- Last reviewed: 2026-08-24
-- Jittor baseline: `9a0a6026`
+- Status: Adapter/PPO gates and the framework two-rank NCCL/FSDP2 core gate accepted on real CUDA
+- Last reviewed: 2026-08-25
+- Jittor baseline: `6003beb9`
 - verl source: `3d66a3d7ca1cf783df949816ec6862d5a7af9406` plus existing adapter edits
 - Owner: verl/vLLM external-adapter maintainers
 - Review when: verl bucket protocol, actor/critic engines, adapter transport, or rollout weight loader changes
@@ -89,6 +89,18 @@ offset 仍为 `142`。replicated 模式现在仅收集 rank 0，仍保留 rank 1
 和 critic 峰值显存分别为 `20.81/21.14 GiB`；训练前 rank 0 权重同步日志为
 `197.73s`，训练后为 `123.32s`。
 
+框架级原生 FSDP2 随后通过 `jittor.distributed.launch` 在物理 GPU 2/3 上完成真实
+双 rank NCCL smoke。`nn.Linear(4, 3)` 的 15 个参数被补齐为 16 个元素，每个 rank
+只持有 8 个元素的 flat shard；all-gather 可逐元素还原完整初始参数，两个 rank 的
+独立 loss 梯度经 reduce-scatter 求平均后执行 sharded SGD，一步更新与独立 NumPy
+计算的最大误差为 `1.4901161e-8`，两个本地 shard 均发生有限非零更新。
+
+该真实运行发现 flat gradient-sync 分支会被非 flat 分支的局部变量 `shard` 遮蔽同名
+导入模块，因而抛出 `UnboundLocalError`。`6003beb9` 将局部梯度改名为
+`shard_grad`，并新增 flat/non-flat slicing 单测、真实双 rank 测试和维护的
+`nox -s nccl` 门禁。门禁逐 rank 串行预热独立 cache，关闭无关 MPI/CUTT/CUTLASS/MKL
+探测，再并发执行两 rank pytest；从空 cache 完整运行正常以 `rc=0` 结束。
+
 ## 验证
 
 - 独立 cache 首次完成 Jittor core、CUDA extern 与 MKL 初始化。
@@ -131,6 +143,13 @@ offset 仍为 `142`。replicated 模式现在仅收集 rank 0，仍保留 rank 1
 - `NanoVector.numel()` 定向测试 `3 passed`；真实 GPU cache 探针返回 `24`。
 - `torch._C._nn._parse_to("cpu")` 现在返回 `device(type='cpu')`；真实 CUDA
   TensorDict construct/index/`.cpu()` 回归文件 `3 passed`。
+- 直接双 rank FSDP2 smoke：rank 0/1 均报告 `world_size=2`、
+  `flat_total_numel=15`、`flat_shard_numel=8` 和 `nccl_ops=true`；完整参数更新最大误差
+  均为 `1.4901161193847656e-08`。
+- 维护门禁 `CUDA_VISIBLE_DEVICES=2,3 python -m nox -s nccl` 从空 cache 通过；两个
+  rank 各为 `1 passed`，launcher 报告 `all ranks done, rc=0`。
+- 完整 FSDP2 compatibility 回归 `14 passed`；`check_repo_layout.sh` 通过，完整
+  `tests/structure` 为 `218 passed`。
 
 ## 隔离方法
 
@@ -175,10 +194,20 @@ SHA-256 分别为
 `36fe3af2de9ae980a8f929718ea5eda0bb54cea5d326cc3a76806ebbc6690175` 和
 `8714d4e50a3868824ba7d30e7d936a6fdfd400b4b06777f876bb6cd7bf7616ba`。
 
+原生 FSDP2 日志保存在
+`$JITTOR_LAB_ROOT/_state/verl-fsdp2/20260825-native-nccl/`。直接 smoke 的 rank 0/1
+日志 SHA-256 分别为
+`e28cae6f6620d6127a376ad7941083882f4e518c8b41435d1e704056a1398633` 和
+`b88660d4c5e020dc3830b43f341a58f1e041c0736d109eb01571b79d3b00f412`；维护 nox 门禁
+的 rank 0/1 pytest 日志 SHA-256 分别为
+`020f8aec55945e0543965caaecb4508528fece8a7b4eb0e5e0fc4b9c16058ad2` 和
+`110fbe30df1e51228622979eb92464451cc0450c5c56073b104f0a8f16213b83`。
+
 ## 边界
 
 完整 PPO 结论限定为 tiny Qwen3 与 Qwen3-0.6B、固定 reward；tiny 覆盖单卡
 dense/remove-padding，0.6B 覆盖单卡 remove-padding 和双卡 replicated compatibility。
-双卡结果不是多 rank collective、数据并行或 FSDP 参数分片，也不宣称性能扩展。
-原生分布式、多 actor、真实 reward model、长序列、稳定热态性能，以及 NPU/ROCm
-均不由本报告宣称通过。
+双卡 PPO 结果不是多 rank collective、数据并行或 FSDP 参数分片，也不宣称性能扩展。
+新增框架 smoke 只证明 Jittor FSDP2 的参数分片、collective 与一步更新，不证明 verl
+worker/controller 已接入该原生多 rank 路径。完整 verl 原生分布式 PPO、多 actor、
+真实 reward model、长序列、稳定热态性能，以及 NPU/ROCm 均不由本报告宣称通过。
