@@ -67,11 +67,11 @@ def _sync_sharded_grads_from_full_grads(state, full_grads, *, divide_by_world_si
     sharded = []
     for entry, grad in zip(state.true_fsdp_params, full_grads):
         flat = common._pad_flat(common._flatten_var(grad), entry.padded_numel)
-        shard = common._reduce_scatter_padded(flat)
+        shard_grad = common._reduce_scatter_padded(flat)
         if divide_by_world_size:
-            shard = shard / max(int(state.true_fsdp_world_size), 1)
-        shard = shard.stop_grad()
-        sharded.append(shard)
+            shard_grad = shard_grad / max(int(state.true_fsdp_world_size), 1)
+        shard_grad = shard_grad.stop_grad()
+        sharded.append(shard_grad)
     state.true_fsdp_last_grads = sharded
     return sharded
 

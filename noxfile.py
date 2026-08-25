@@ -273,6 +273,7 @@ MPI_TESTS = (
     "tests/distributed/test_mpi_op.py",
     "tests/distributed/test_single_process_scope.py",
 )
+NCCL_TESTS = ("tests/distributed/test_fsdp2_nccl.py",)
 
 NOX_STATE_ROOT.mkdir(parents=True, exist_ok=True)
 nox.options.envdir = str(NOX_STATE_ROOT / "envs")
@@ -1426,3 +1427,79 @@ def mpi(session):
     session.run("mpirun", "--version", external=True, env=env)
     session.run(python, "-m", "pytest", "--version", external=True, env=env)
     _run_pytest(session, MPI_TESTS, env, runner=python)
+
+
+@nox.session(python=False)
+def nccl(session):
+    """Run two-rank NCCL/FSDP2 gates with one isolated cache per rank."""
+    root, env = _session_env(session, "nccl")
+    python = _hardware_python()
+    nvcc = os.environ.get("nvcc_path") or shutil.which("nvcc")
+    if not nvcc:
+        session.error("NCCL session requires nvcc_path or nvcc on PATH")
+    env["nvcc_path"] = nvcc
+    env["JITTOR_TEST_DEVICES"] = "cuda"
+    env["use_cuda"] = "1"
+    env["use_nccl"] = "1"
+    env["use_mpi"] = "0"
+    env["use_mkl"] = "0"
+    env["use_cutt"] = "0"
+    env["use_cutlass"] = "0"
+    env["use_parallel_op_compiler"] = "0"
+
+    raw_devices = env.get("CUDA_VISIBLE_DEVICES", "").strip()
+    devices = [item.strip() for item in raw_devices.split(",") if item.strip()]
+    if raw_devices and len(devices) < 2:
+        session.error("NCCL session requires at least two CUDA_VISIBLE_DEVICES")
+    if not devices:
+        devices = ["0", "1"]
+    selected_devices = devices[:2]
+
+    session.run("nvidia-smi", external=True, env=env)
+    session.run(nvcc, "--version", external=True, env=env)
+    session.run(python, "-m", "pytest", "--version", external=True, env=env)
+    probe = (
+        "import jittor as jt; "
+        "assert jt.compiler.has_cuda; "
+        "assert jt.compile_extern.nccl_ops is not None; "
+        "jt.flags.use_cuda = 1; "
+        "x = (jt.array([1.0, 2.0]) * 2).sum(); x.sync(); "
+        "assert float(x.item()) == 6.0"
+    )
+    for rank, device in enumerate(selected_devices):
+        warm_env = env.copy()
+        warm_env["CUDA_VISIBLE_DEVICES"] = device
+        warm_env["cache_name"] = "nccl%d" % rank
+        warm_rootinfo = root / ("warm-rank%d-rootinfo.bin" % rank)
+        warm_env["JT_NCCL_WORLD_SIZE"] = "1"
+        warm_env["JT_NCCL_RANK"] = "0"
+        warm_env["JT_NCCL_LOCAL_RANK"] = "0"
+        warm_env["JT_NCCL_ROOTINFO_FILE"] = str(warm_rootinfo)
+        session.run(python, "-c", probe, env=warm_env, external=True)
+        try:
+            warm_rootinfo.unlink()
+        except FileNotFoundError:
+            pass
+
+    launch_env = env.copy()
+    launch_env["CUDA_VISIBLE_DEVICES"] = ",".join(selected_devices)
+    targets = tuple(session.posargs) if session.posargs else NCCL_TESTS
+    session.run(
+        python,
+        str(REPO_ROOT / "python" / "jittor" / "distributed" / "launch.py"),
+        "-n",
+        "2",
+        "--backend",
+        "nccl",
+        "--logdir",
+        str(root / "logs"),
+        "--",
+        python,
+        "-m",
+        "pytest",
+        "-v",
+        "--timeout=600",
+        *targets,
+        env=launch_env,
+        external=True,
+    )

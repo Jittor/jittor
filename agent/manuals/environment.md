@@ -139,7 +139,7 @@ export JITTOR_CI_PYTHON="${JITTOR_CI_PYTHON:-$(command -v python)}"
 python -m nox -s npu
 ```
 
-### ROCm and MPI
+### ROCm, MPI, and NCCL
 
 ROCm requires a working `rocminfo`; MPI requires `mpirun`. Both sessions use
 `JITTOR_CI_PYTHON` when set.
@@ -147,6 +147,14 @@ ROCm requires a working `rocminfo`; MPI requires `mpirun`. Both sessions use
 ```bash
 python -m nox -s rocm
 python -m nox -s mpi
+```
+
+The NCCL gate requires two NVIDIA GPUs. Select them with
+`CUDA_VISIBLE_DEVICES`, and provide `nvcc_path` or an `nvcc` on `PATH`. It
+prewarms the two rank-local caches serially before launching pytest workers.
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 python -m nox -s nccl
 ```
 
 An unavailable backend is an environment result. A reproduced kernel, dtype, or

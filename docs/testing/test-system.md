@@ -167,6 +167,7 @@ python -m nox -s cuda
 python -m nox -s npu
 python -m nox -s rocm
 python -m nox -s mpi
+python -m nox -s nccl
 ```
 
 The nox sessions create isolated state and caches. Direct concurrent runs must
@@ -177,6 +178,11 @@ The maintained CUDA session runs the complete CUDA backend directory, dtype
 coverage, CPU/CUDA device parity, Torch TF32 controls, and the strict CUDA
 OpInfo suite. Its accepted real-device baseline is recorded in the
 [complete CUDA suite report](../../agent/results/2026-08-22-cuda-test-suite.md).
+
+The `nccl` session requires two visible NVIDIA GPUs. It serially prewarms one
+isolated JIT cache per rank, then uses `jittor.distributed.launch` to verify real
+flat FSDP2 parameter sharding, NCCL all-gather and reduce-scatter, and a sharded
+optimizer update against an independent NumPy result.
 
 The `optional` session is a fail-closed, offline CUDA gate for pre-provisioned
 TorchMetrics, mmcv-lite/MMEngine, PEFT, Safetensors, TensorDict, and the deployed

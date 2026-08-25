@@ -103,6 +103,22 @@ class TestFSDP2Compat(unittest.TestCase):
             setattr(owner, entry.attr, entry.shard)
         return fsdp, state, entries, full_params
 
+    def test_flat_and_nonflat_grad_sync_execute_real_slicing(self):
+        values = ([1.0, 2.0], [3.0, 4.0])
+        for factory in (self._fake_flat_fsdp_state, self._fake_fsdp_state):
+            _, state, entries, full = factory(values)
+            full_grads = [jt.ones_like(value) for value in full]
+            with mock.patch.object(
+                    canonical_fsdp._common, "_reduce_scatter_padded",
+                    side_effect=lambda value: value):
+                sharded = fsdp_grad_sync._sync_sharded_grads_from_full_grads(
+                    state, full_grads)
+            self.assertEqual(len(sharded), len(entries))
+            for entry, grad in zip(entries, sharded):
+                self.assertEqual(tuple(grad.shape), tuple(entry.shard.shape))
+                np.testing.assert_array_equal(
+                    grad.numpy(), np.ones(entry.shard.shape, dtype="float32"))
+
     def test_fsdp_optimizer_skips_unused_and_zero_clears_pending_grad(self):
         fsdp, _, entries, full = self._fake_fsdp_state(
             ([1.0, 2.0], [3.0, 4.0]))
