@@ -101,7 +101,11 @@ Performance work uses ASV, isolated caches, synchronized measurements, and exact
 commit labels. The same-version ecosystem harness now verifies twelve
 Transformers/Diffusers/PEFT/ms-swift/MMCV/MMEngine CPU and CUDA cases, while
 real-scale training performance remains incomplete. Current verl core
-algorithm/FSDP2 gates also pass on CPU/CUDA. Qwen3-0.6B vLLM real-CUDA inference
+algorithm/FSDP2 gates also pass on CPU/CUDA. The maintained framework FSDP2
+gate additionally passes single-node four-rank NCCL sharding, collectives, and
+sharded SGD on real CUDA; the end-to-end verl PPO result remains two-rank.
+See the [verl weight-transfer and PPO report](../results/2026-08-24-verl-weight-transfer.md).
+Qwen3-0.6B vLLM real-CUDA inference
 now runs about 20.5% faster than its real-PyTorch reference on the maintained
 4-token protocol; TRELLIS.2 improved from about 1.20x to 1.093x slower, so its
 performance gate remains open. CUDA masked SDPA now reuses the safe softmax

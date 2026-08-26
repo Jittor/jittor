@@ -1,8 +1,8 @@
 # verl Jittor 权重传输与 1-step PPO 真实 CUDA 门禁
 
-- Status: Adapter/PPO gates and native two-rank verl NCCL/FSDP2 PPO accepted on real CUDA
-- Last reviewed: 2026-08-25
-- Jittor baseline: `a1ef6bdd`
+- Status: Adapter/PPO two-rank verl and framework four-rank NCCL/FSDP2 gates accepted on real CUDA
+- Last reviewed: 2026-08-26
+- Jittor baseline: `cbac62c9`
 - verl source: `3d66a3d7ca1cf783df949816ec6862d5a7af9406` plus existing adapter edits
 - vLLM source: `51a99565c398c8320de8131e07731c75c52eb87c`
 - Owner: verl/vLLM external-adapter maintainers
@@ -102,6 +102,14 @@ offset 仍为 `142`。replicated 模式现在仅收集 rank 0，仍保留 rank 1
 `nox -s nccl` 门禁。门禁逐 rank 串行预热独立 cache，关闭无关 MPI/CUTT/CUTLASS/MKL
 探测，再并发执行两 rank pytest；从空 cache 完整运行正常以 `rc=0` 结束。
 
+`cbac62c9` 将维护门禁和三个真实 NCCL/FSDP2 用例从固定 world-size 2 泛化为任意
+`world_size >= 2`。在物理 GPU 4--7 上的单机 world-size 4 运行中，15 个参数补齐为
+16 个元素，每 rank 仅持有 4 个 flat-shard 元素；四份不同输入的梯度经
+reduce-scatter 求平均后完成 sharded SGD，all-gather 重组结果通过独立 NumPy 参考的
+`rtol=2e-5, atol=2e-5` 门禁。SUM/MAX/MIN/PRODUCT、tensor/object gather、barrier、
+嵌套分片和 full-state reload 也在四个 rank 全部通过。保留缓存的默认 world-size 2
+复验仍为每 rank `3 passed`，说明原有入口未回归。
+
 `a1ef6bdd` 进一步把该原生 world-size 2 路径接入 verl worker/controller，而不是继续
 使用 replicated compatibility 模式。Ray worker 在启动时通过显式 opt-in 的
 `JITTOR_TORCH_DISTRIBUTED_AUTO_INIT=1` 建立 Jittor NCCL communicator；canonical
@@ -175,6 +183,13 @@ PRODUCT reduction、Store/c10d/rendezvous import，以及 FSDP2 的 ABC metaclas
   vLLM 权重同步全部执行。
 - 维护门禁 `CUDA_VISIBLE_DEVICES=2,3 python -m nox -s nccl` 从空 cache 通过；最终
   代码热态复验两个 rank 各为 `3 passed`，launcher 报告 `all ranks done, rc=0`。
+- 泛化后的维护门禁以 `JITTOR_NCCL_WORLD_SIZE=4` 在四张真实 RTX 4090 上从独立
+  rank cache 运行，rank 0/1/2/3 各 `3 passed`，launcher 为 `rc=0`，完整 nox
+  会话约 21 分钟；随后保留缓存的默认 world-size 2 复验两个 rank 各 `3 passed`
+  （约 22 秒）。
+- 四 rank 命令设置 `CUDA_VISIBLE_DEVICES=4,5,6,7`、
+  `JITTOR_NCCL_WORLD_SIZE=4` 与 `nvcc_path=<nvcc>` 后执行 `python -m nox -s nccl`；
+  环境为 Python 3.11.15、CUDA 12.2、NVIDIA driver 595.84 和四张 RTX 4090。
 - 完整 FSDP2/gradient compatibility 回归 `24 passed`；`check_repo_layout.sh` 通过，完整
   `tests/structure` 为 `218 passed`。
 
@@ -239,6 +254,16 @@ TaskRunner stdout/stderr 的 SHA-256 分别为
 最终代码的双 rank 日志位于同级 `nox-final3/`，rank 0/1 SHA-256 分别为
 `dd4c52bb5488e95a7ade1cfe9a4af9b51f197f17df1c270ed52c4f1b011d5fe4` 和
 `cb5e8a7ce5933cc15e3d96960f025394f967227f216616661aaebca9363ddbca`。
+本次四 rank nox 日志持久化于
+`$JITTOR_LAB_ROOT/_state/verl-fsdp2/20260826-native-nccl4/world4/`，rank 0--3
+SHA-256 分别为
+`779893710cd429294ff5541e42867d0c383abb3a985b6007e1fbfd579658bf82`、
+`43c43d4714f444131596de6eda98ed3e9da5dd6c7fdd65c0b6d43754a4c0b430`、
+`2528a6e22af522299bf43fd9caff9dbb3d685110c3c982e822a9c206efd37254` 和
+`32af49e6908f995fa861dde238921a19b63f21b34e54da0af877e2c4290d8171`。
+默认双 rank 保留缓存复验日志位于同级 `world2-retained/`，rank 0/1 SHA-256 分别为
+`5008f015ea5b281d3f357050ac7a3f08cec35b7c8151759fceab819ac7e8b1ec` 和
+`4ce79cc8575997480c27f80097da03f86235417f1d8961c11180e14b73cf68ae`。
 未版本化 `verl_jittor/distributed_shim.py` 与 `vllm_jittor_ops/bootstrap.py` SHA-256
 分别为 `e6fe5d7753eef110ed16bc701edd560c4c72f1eb67e31f9de278aa551158beb5` 和
 `d4b6d124b8df969f65e4ae265a5b5fd1c7c9a09b4a7d0413973e0d1a68c17216`；PPO harness
@@ -248,7 +273,8 @@ TaskRunner stdout/stderr 的 SHA-256 分别为
 
 完整 PPO 结论限定为 tiny Qwen3 与 Qwen3-0.6B、固定 reward；tiny 覆盖单卡
 dense/remove-padding 和双卡原生 FSDP2，0.6B 覆盖单卡 remove-padding 与历史双卡
-replicated compatibility。原生双卡结果证明单机 world-size 2 的 NCCL collective、
-FSDP 参数分片和完整一步 verl PPO，不宣称性能扩展，也不把历史 replicated 结果改写为
-原生分布式。多节点、超过两 rank、0.6B 原生 FSDP2、多 actor、真实 reward model、
-长序列、稳定热态性能，以及 NPU/ROCm 均不由本报告宣称通过。
+replicated compatibility。框架门禁证明单机 world-size 4 的 NCCL collective、FSDP
+参数分片和一步线性层更新；原生 verl PPO 结论仍只到单机 world-size 2，不宣称性能
+扩展，也不把历史 replicated 结果改写为原生分布式。多节点 verl、超过两 rank 的
+verl、0.6B 原生 FSDP2、多 actor、真实 reward model、长序列、稳定热态性能，以及
+NPU/ROCm 均不由本报告宣称通过。
