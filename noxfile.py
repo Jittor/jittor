@@ -106,6 +106,7 @@ RATCHET_FILES = (
     "python/jittor_utils/cuda_wheel.py",
     "python/jittor/compat/shim/deploy.py",
     "tests/_helpers/torch_runtime.py",
+    "tests/compat/torch/test_torchmetrics_compat.py",
     "tests/conftest.py",
     "tools/release/pack_offline.py",
     "tools/docs/check_build.py",
