@@ -1440,7 +1440,7 @@ def mpi(session):
 
 @nox.session(python=False)
 def nccl(session):
-    """Run two-rank NCCL/FSDP2 gates with one isolated cache per rank."""
+    """Run multi-rank NCCL/FSDP2 gates with one isolated cache per rank."""
     root, env = _session_env(session, "nccl")
     python = _hardware_python()
     nvcc = os.environ.get("nvcc_path") or shutil.which("nvcc")
@@ -1458,11 +1458,20 @@ def nccl(session):
 
     raw_devices = env.get("CUDA_VISIBLE_DEVICES", "").strip()
     devices = [item.strip() for item in raw_devices.split(",") if item.strip()]
-    if raw_devices and len(devices) < 2:
-        session.error("NCCL session requires at least two CUDA_VISIBLE_DEVICES")
+    raw_world_size = os.environ.get("JITTOR_NCCL_WORLD_SIZE", "2").strip()
+    try:
+        world_size = int(raw_world_size)
+    except ValueError:
+        session.error("JITTOR_NCCL_WORLD_SIZE must be an integer")
+    if world_size < 2:
+        session.error("NCCL session requires JITTOR_NCCL_WORLD_SIZE >= 2")
+    if raw_devices and len(devices) < world_size:
+        session.error(
+            "NCCL session requires at least %d CUDA_VISIBLE_DEVICES" % world_size
+        )
     if not devices:
-        devices = ["0", "1"]
-    selected_devices = devices[:2]
+        devices = [str(index) for index in range(world_size)]
+    selected_devices = devices[:world_size]
 
     session.run("nvidia-smi", external=True, env=env)
     session.run(nvcc, "--version", external=True, env=env)
@@ -1498,7 +1507,7 @@ def nccl(session):
         python,
         str(REPO_ROOT / "python" / "jittor" / "distributed" / "launch.py"),
         "-n",
-        "2",
+        str(world_size),
         "--backend",
         "nccl",
         "--logdir",

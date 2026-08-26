@@ -179,10 +179,12 @@ coverage, CPU/CUDA device parity, Torch TF32 controls, and the strict CUDA
 OpInfo suite. Its accepted real-device baseline is recorded in the
 [complete CUDA suite report](../../agent/results/2026-08-22-cuda-test-suite.md).
 
-The `nccl` session requires two visible NVIDIA GPUs. It serially prewarms one
+The `nccl` session defaults to two visible NVIDIA GPUs. It serially prewarms one
 isolated JIT cache per rank, then uses `jittor.distributed.launch` to verify real
 flat FSDP2 parameter sharding, NCCL all-gather and reduce-scatter, and a sharded
-optimizer update against an independent NumPy result.
+optimizer update against an independent NumPy result. Set
+`JITTOR_NCCL_WORLD_SIZE` and expose at least that many devices to exercise more
+than two ranks.
 
 The `optional` session is a fail-closed, offline CUDA gate for pre-provisioned
 TorchMetrics, mmcv-lite/MMEngine, PEFT, Safetensors, TensorDict, and the deployed

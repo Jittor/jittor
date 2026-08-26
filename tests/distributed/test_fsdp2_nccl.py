@@ -1,11 +1,15 @@
-"""Two-rank NCCL regression for true flat FSDP2 sharding and updates.
+"""Multi-rank NCCL regression for true flat FSDP2 sharding and updates.
 
 Run through the maintained gate rather than invoking pytest directly::
 
     python -m nox -s nccl
+
+Set ``JITTOR_NCCL_WORLD_SIZE`` and expose at least that many devices to run
+more than the default two ranks.
 """
 
 import importlib
+import math
 import unittest
 
 import numpy as np
@@ -15,14 +19,23 @@ from jittor import nn
 from jittor.compat import fsdp2
 
 
-_INPUTS = (
-    np.array([[1.0, 2.0, -1.0, 0.5], [-2.0, 0.25, 1.5, 3.0]], dtype="float32"),
-    np.array([[0.5, -1.5, 2.0, 1.0], [3.0, -0.5, -2.0, 0.75]], dtype="float32"),
-)
-_TARGETS = (
-    np.array([[0.25, -0.5, 1.0], [1.5, 0.0, -1.0]], dtype="float32"),
-    np.array([[-0.5, 1.0, 0.25], [0.75, -1.25, 0.5]], dtype="float32"),
-)
+def _rank_data(rank):
+    value = float(rank)
+    inputs = np.array(
+        [
+            [1.0 + 0.25 * value, 2.0 - 0.5 * value, -1.0 + value, 0.5],
+            [-2.0 + 0.5 * value, 0.25 + value, 1.5, 3.0 - 0.25 * value],
+        ],
+        dtype="float32",
+    )
+    targets = np.array(
+        [
+            [0.25 - 0.25 * value, -0.5 + value, 1.0 - 0.25 * value],
+            [1.5 - 0.25 * value, -0.5 * value, -1.0 + 0.5 * value],
+        ],
+        dtype="float32",
+    )
+    return inputs, targets
 
 
 def _linear_grads(weight, bias, inputs, target):
@@ -32,8 +45,8 @@ def _linear_grads(weight, bias, inputs, target):
 
 
 @unittest.skipUnless(
-    jt.has_cuda and int(jt.world_size) == 2 and fsdp2._common._in_true_distributed(),
-    "requires the two-rank NCCL nox gate",
+    jt.has_cuda and int(jt.world_size) >= 2 and fsdp2._common._in_true_distributed(),
+    "requires the multi-rank NCCL nox gate",
 )
 class TestFSDP2Nccl(unittest.TestCase):
     @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0)
@@ -86,38 +99,41 @@ class TestFSDP2Nccl(unittest.TestCase):
             backend="nccl", rank=int(jt.rank), world_size=int(jt.world_size))
         self.assertTrue(dist.is_initialized())
         self.assertEqual(dist.get_rank(), int(jt.rank))
-        self.assertEqual(dist.get_world_size(), 2)
+        world_size = int(jt.world_size)
+        self.assertEqual(dist.get_world_size(), world_size)
         self.assertEqual(dist.group.WORLD.rank(), int(jt.rank))
-        self.assertEqual(dist.group.WORLD.size(), 2)
+        self.assertEqual(dist.group.WORLD.size(), world_size)
 
         reduced = jt.array(np.asarray([int(jt.rank) + 1], dtype="float32"))
         dist.all_reduce(reduced, op=dist.ReduceOp.SUM)
-        np.testing.assert_array_equal(reduced.numpy(), np.asarray([3.0]))
+        total = world_size * (world_size + 1) / 2
+        np.testing.assert_array_equal(reduced.numpy(), np.asarray([total]))
 
         for op, expected in (
-            (dist.ReduceOp.MAX, 2.0),
+            (dist.ReduceOp.MAX, float(world_size)),
             (dist.ReduceOp.MIN, 1.0),
-            (dist.ReduceOp.PRODUCT, 2.0),
+            (dist.ReduceOp.PRODUCT, float(math.factorial(world_size))),
         ):
             value = jt.array(np.asarray([int(jt.rank) + 1], dtype="float32"))
             dist.all_reduce(value, op=op)
             np.testing.assert_array_equal(value.numpy(), np.asarray([expected]))
 
-        gathered = [jt.zeros_like(reduced) for _ in range(2)]
+        gathered = [jt.zeros_like(reduced) for _ in range(world_size)]
         dist.all_gather(gathered, reduced)
         for value in gathered:
-            np.testing.assert_array_equal(value.numpy(), np.asarray([3.0]))
+            np.testing.assert_array_equal(value.numpy(), np.asarray([total]))
 
-        objects = [None, None]
+        objects = [None] * world_size
         dist.all_gather_object(objects, {"rank": int(jt.rank)})
-        self.assertEqual(objects, [{"rank": 0}, {"rank": 1}])
+        expected_objects = [{"rank": rank} for rank in range(world_size)]
+        self.assertEqual(objects, expected_objects)
 
-        gathered_objects = [None, None] if int(jt.rank) == 0 else None
+        gathered_objects = [None] * world_size if int(jt.rank) == 0 else None
         dist.gather_object(
             {"rank": int(jt.rank)}, gathered_objects, dst=0)
         if int(jt.rank) == 0:
             self.assertEqual(
-                gathered_objects, [{"rank": 0}, {"rank": 1}])
+                gathered_objects, expected_objects)
         dist.barrier()
 
     @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0)
@@ -134,10 +150,14 @@ class TestFSDP2Nccl(unittest.TestCase):
         state = model._fsdp_state
         self.assertTrue(state.true_fsdp_initialized)
         self.assertTrue(state.true_fsdp_flat)
-        self.assertEqual(state.true_fsdp_world_size, 2)
+        world_size = int(jt.world_size)
+        self.assertEqual(state.true_fsdp_world_size, world_size)
         self.assertEqual(state.true_fsdp_rank, rank)
         self.assertEqual(state.true_fsdp_flat_total_numel, 15)
-        self.assertEqual(state.true_fsdp_flat_shard_numel, 8)
+        self.assertEqual(
+            state.true_fsdp_flat_shard_numel,
+            (state.true_fsdp_flat_total_numel + world_size - 1) // world_size,
+        )
 
         local_before = np.asarray(state.true_fsdp_flat_shard.float32().numpy()).copy()
         gathered_before = (
@@ -151,8 +171,9 @@ class TestFSDP2Nccl(unittest.TestCase):
         )
         np.testing.assert_allclose(gathered_before, expected_before, rtol=0, atol=0)
 
-        inputs = jt.array(_INPUTS[rank])
-        target = jt.array(_TARGETS[rank])
+        host_inputs, host_target = _rank_data(rank)
+        inputs = jt.array(host_inputs)
+        target = jt.array(host_target)
         output = model(inputs)
         loss = ((output - target) * (output - target)).mean()
         learning_rate = 0.05
@@ -164,7 +185,8 @@ class TestFSDP2Nccl(unittest.TestCase):
         gathered_after = np.asarray(gathered_after).reshape(-1)[: state.true_fsdp_flat_total_numel]
         weight_grads = []
         bias_grads = []
-        for host_inputs, host_target in zip(_INPUTS, _TARGETS):
+        for data_rank in range(world_size):
+            host_inputs, host_target = _rank_data(data_rank)
             weight_grad, bias_grad = _linear_grads(
                 initial["weight"], initial["bias"], host_inputs, host_target
             )

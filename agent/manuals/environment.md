@@ -149,12 +149,15 @@ python -m nox -s rocm
 python -m nox -s mpi
 ```
 
-The NCCL gate requires two NVIDIA GPUs. Select them with
+The NCCL gate defaults to two NVIDIA GPUs. Select them with
 `CUDA_VISIBLE_DEVICES`, and provide `nvcc_path` or an `nvcc` on `PATH`. It
-prewarms the two rank-local caches serially before launching pytest workers.
+prewarms one rank-local cache per selected device serially before launching
+pytest workers. Set `JITTOR_NCCL_WORLD_SIZE` to exercise more ranks and expose
+at least that many devices.
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1 python -m nox -s nccl
+JITTOR_NCCL_WORLD_SIZE=4 CUDA_VISIBLE_DEVICES=0,1,2,3 python -m nox -s nccl
 ```
 
 An unavailable backend is an environment result. A reproduced kernel, dtype, or
