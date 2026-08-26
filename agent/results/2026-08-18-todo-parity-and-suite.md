@@ -175,22 +175,17 @@ broadcast+multiply+reduce 形式（源码里写死 `bcop1->shape.size() != 3` �
 10.6s 的七成；`mkl_matmul`（各个 Linear）只有约 1.2s。新增 `mkl_batched_matmul`
 （含反向）后接上该分支。
 
-**OpenMP 按逻辑 CPU 起线程（已回退）。** OpenMP 的默认是每个逻辑 CPU 一个线程，SMT
+**OpenMP 按逻辑 CPU 起线程（已恢复）。** OpenMP 的默认是每个逻辑 CPU 一个线程，SMT
 机器上等于把每个核心超额订阅一倍。改成按物理核心数之后 2048x768 乘 768x768 的矩阵乘
-从 406 GFLOPS 提到 1841，批量调用从 5955us 降到 380us——但这个改动**已经回退**：
-parallel pass 生成的 kernel 按运行时线程数切分工作，
+从 406 GFLOPS 提到 2139。
 
-    int tn1 = get_thread_range_log(thread_num_left, range1);
-    int tn0 = get_thread_range_log(thread_num_left, range0);
-    int tnum0 = 1<<(tn0-tn1);
+这个改动一度被回退：parallel pass 生成的 kernel 按线程数切分工作，
+`tnum0 = 1<<(tn0-tn1)` 在 64 线程配两个 16 的维度时移位量为负（未定义行为），4096 个
+元素里 3072 个不被写。`0a3458b3` 在编译前把生成源码的逐维位数改写成累积边界之后前提
+消失：`tests/compiler/test_parallel_pass.py` 8 passed，16³ 的 `a+a` 在 default/64/32
+三种线程数下都正确，因此已恢复。
 
-两次调用依次从线程预算里取位，64 线程配两个 16 的维度会得到 `tn0=2, tn1=3`，移位量
-为负是未定义行为，实测 4096 个元素里 3072 个没被写。本机上 128 线程会挂死过 600 秒
-超时，64 与 32 都算错。缓存里 4958 个 JIT kernel 有 2182 个带这套 `tnum` 划分，也就
-是说这是 CPU 上的常规并行路径，不是某个可选项。该 pass 以 `data.gz` 打包的预编译目标
-文件形式随包分发，仓库里没有源码，改不了。宁可慢也不能算错，见 KI-COMPILER-005。
-
-### 真实尺寸单步（空载，批量矩阵乘修复之后、线程数改动回退之后）
+### 真实尺寸单步（空载，批量矩阵乘修复之后；线程数一栏见下方说明）
 
 | 用例 | CPU: PyTorch | CPU: Jittor | 修复前 | CUDA: PyTorch | CUDA: Jittor |
 | --- | ---: | ---: | ---: | ---: | ---: |
