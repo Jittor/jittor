@@ -2,7 +2,7 @@
 
 - Status: Current index, not a history log
 - Last reviewed: 2026-08-26
-- Baseline reviewed: `4dbda832`
+- Baseline reviewed: `b37098f7`
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -84,6 +84,11 @@ separate gates. See the
 [complete CPU suite report](../results/2026-08-22-complete-cpu-test-suite.md) and
 [complete CUDA suite report](../results/2026-08-22-cuda-test-suite.md), plus the
 [parallel-range and network-oracle follow-up](../results/2026-08-22-cuda-parallel-range-network-oracle.md).
+The current fail-closed optional CUDA base gate passes 16 TorchMetrics,
+MMCV/MMEngine, PEFT, TensorDict, and FlashAttention-adapter tests from one
+retained cache; TorchMetrics is split by domain so cold compilation does not
+consume one monolithic test timeout. See the
+[optional CUDA report](../results/2026-08-24-optional-compat-cuda-gate.md).
 Compact ResNet18, ViT, GPT-2, and diffusion UNet now also pass three-step SGD
 loss, complete trainable-parameter, and shared-buffer trajectories on CPU and
 real CUDA. A bilingual native-Jittor ResNet tutorial executes the same three-step

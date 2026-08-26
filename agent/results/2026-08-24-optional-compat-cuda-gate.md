@@ -1,8 +1,8 @@
 # 可选依赖 fail-closed CUDA 门禁
 
 - Status: Selected optional packages and native FlashAttention training accepted on real CUDA
-- Last reviewed: 2026-08-25
-- Commits: `566eae8e`, `2cf096d5`, `c2e340f8`, `90e00edd`, `9e69fa23`, `19820174`, `50fc95d5`, `a13cb06e`, `c8c43cf6`, `d500dc77`, `76b8a5a0`, `24cf00eb`, `95cd6f6c`, `c3e65b1d`, `fe97085a`, `1cd76dd9`, `f3df3274`, `797a6a97`, `5b838f0f`, `0f93f117`, `d77f04a2`, `1b47cbab`, `62251be1`, `1161a552`, `e0224e64`, `be036e7f`, `15bb9b74`, `f0b26e91`
+- Last reviewed: 2026-08-26
+- Commits: `566eae8e`, `2cf096d5`, `c2e340f8`, `90e00edd`, `9e69fa23`, `19820174`, `50fc95d5`, `a13cb06e`, `c8c43cf6`, `d500dc77`, `76b8a5a0`, `24cf00eb`, `95cd6f6c`, `c3e65b1d`, `fe97085a`, `1cd76dd9`, `f3df3274`, `797a6a97`, `5b838f0f`, `0f93f117`, `d77f04a2`, `1b47cbab`, `62251be1`, `1161a552`, `e0224e64`, `be036e7f`, `15bb9b74`, `f0b26e91`, `b37098f7`
 - Owner: Torch compatibility and test-infrastructure maintainers
 - Review when: optional package versions, Torch shim identity, or nox hardware
   environment contracts change
@@ -200,6 +200,12 @@ backward，确保同一 dropout mask 被重放。
   TensorDict/FlashAttention 共 `14 passed, 1 warning in 18.44s`，native 阶段
   `7 passed in 96.18s`。fresh cache 首次 TorchMetrics 仍因主机满核在固定 600 秒内
   未完成 JIT；同 cache 以 1200 秒保护复跑为 `2 passed in 762.48s`。
+- 2026-08-26 当前源码把 TorchMetrics 的 classification、regression、aggregation
+  与 required-ops 拆成四个独立 test timeout，保留全部原断言。同一保留 cache
+  TorchMetrics 为 `4 passed in 46.41s`；TorchMetrics、MMCV/MMEngine、PEFT、
+  TensorDict、FlashAttention adapter 五模块合并为 `16 passed in 259.54s`。
+  fresh nox cache 在主机另一个约 126 核长期进程下仍会冷编 timeout；失败点随 cache
+  推进而后移，热 cache 完整通过，因此归类为环境吞吐限制而非数值回归。
 - `nox -s optional -- tests/compat/torch/test_mmcv_compat.py`：依赖预检通过，
   `3 passed in 550.05s`，session 成功完成冷 cache 编排。
 - 布局检查通过；`tests/structure`：`218 passed`；`noxfile.py` Ruff 检查通过。
