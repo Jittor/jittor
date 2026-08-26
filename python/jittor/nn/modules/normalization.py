@@ -42,6 +42,10 @@ class BatchNorm(Module):
     def execute(self, x):
         dims = [0] + list(range(2, x.ndim))
         if self.is_train:
+            if self.track_running_stats:
+                self.num_batches_tracked.update(
+                    self.num_batches_tracked + 1
+                )
             xmean = jt.mean(x, dims=dims)
             x2mean = jt.mean(x * x, dims=dims)
             sync = self.sync and jt.in_mpi

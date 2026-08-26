@@ -271,6 +271,7 @@ class TestBatchNorm(_NormBase):
             biased = x.var(0)                      # ddof=0
             unbiased = x.var(0, ddof=1)            # ddof=1 (Bessel)
             got = bn.running_var.numpy()
+            tracked = int(bn.num_batches_tracked.item())
             # running_var = (1-m)*1 + m*var_used ; torch uses the UNBIASED var
             expect_unbiased = 0.9 * 1.0 + 0.1 * unbiased
             expect_biased = 0.9 * 1.0 + 0.1 * biased
@@ -280,6 +281,7 @@ class TestBatchNorm(_NormBase):
                             f"[{dev}] running_var should use the Bessel-corrected "
                             f"(unbiased) batch variance; got err vs unbiased {err_u:.2e}, "
                             f"vs biased {err_b:.2e}")
+            self.assertEqual(tracked, 1, f"[{dev}] num_batches_tracked")
         self._for_devices(body)
 
 

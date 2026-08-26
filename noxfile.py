@@ -110,6 +110,7 @@ RATCHET_FILES = (
     "tools/docs/check_catalogs.py",
     "tools/docs/check_links.py",
     "tests/integration/test_notebooks.py",
+    "tests/models/test_network_training_parity.py",
     "tests/structure/test_cleanup_structure.py",
     "tests/structure/test_docs_structure.py",
     "tests/structure/test_pytest_contract.py",
@@ -131,6 +132,7 @@ FORMAT_FILES = (
     "tools/docs/check_catalogs.py",
     "tools/docs/check_links.py",
     "tests/integration/test_notebooks.py",
+    "tests/models/test_network_training_parity.py",
     "tests/structure/test_cleanup_structure.py",
     "tests/structure/test_docs_structure.py",
     "tests/structure/test_packaging_structure.py",
@@ -174,6 +176,7 @@ CPU_TORCH_ORACLE_TESTS = (
     "tests/nn/test_batchnorm.py",
     "tests/nn/test_loss.py",
     "tests/nn/test_relu.py",
+    "tests/models/test_network_training_parity.py",
 )
 CUDA_TESTS = (
     "tests/backends/cuda",
@@ -181,6 +184,7 @@ CUDA_TESTS = (
     "tests/backends/parity/test_device_parity.py",
     "tests/compat/torch/test_torch_compat_cuda_tf32.py",
     "tests/ops/test_ops.py",
+    "tests/models/test_network_training_parity.py",
 )
 OPTIONAL_COMPAT_PACKAGES = (
     "torchmetrics",

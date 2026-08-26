@@ -25,6 +25,7 @@ import jittor as jt
 from _helpers.torch_runtime import import_torch_modules, modules_available
 
 import _parity_networks
+from _parity_networks import _load_torch_weights, _relative_error
 
 
 skip_this_test = not modules_available("torch", "torchvision")
@@ -36,26 +37,6 @@ def setUpModule():
     global torch
     if not skip_this_test:
         (torch,) = import_torch_modules("torch")
-
-
-def _relative_error(actual, expected):
-    """Scale-aware error that stays meaningful for near-zero references."""
-    actual = np.asarray(actual, dtype=np.float64)
-    expected = np.asarray(expected, dtype=np.float64)
-    scale = max(float(np.abs(expected).max()), 1e-6)
-    return float(np.abs(actual - expected).max() / scale)
-
-
-def _load_torch_weights(jittor_model, torch_model):
-    """Copy PyTorch parameters and buffers into the matched Jittor module."""
-    state = {
-        key: value.detach().cpu().numpy()
-        for key, value in torch_model.state_dict().items()
-    }
-    jittor_model.load_parameters(state)
-    loaded = {name for name, _ in jittor_model.named_parameters()}
-    missing = sorted(key for key in state if key not in loaded)
-    return missing
 
 
 def _eval_like_torch(jittor_model):

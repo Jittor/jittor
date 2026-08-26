@@ -28,6 +28,27 @@ def _torch_modules():
     return import_torch_modules("torch", "torch.nn", "torch.nn.functional")
 
 
+def _relative_error(actual, expected):
+    """Scale-aware error that stays meaningful for near-zero references."""
+    import numpy as np
+
+    actual = np.asarray(actual, dtype=np.float64)
+    expected = np.asarray(expected, dtype=np.float64)
+    scale = max(float(np.abs(expected).max()), 1e-6)
+    return float(np.abs(actual - expected).max() / scale)
+
+
+def _load_torch_weights(jittor_model, torch_model):
+    """Copy PyTorch parameters and buffers into the matched Jittor module."""
+    state = {
+        key: value.detach().cpu().numpy()
+        for key, value in torch_model.state_dict().items()
+    }
+    jittor_model.load_parameters(state)
+    loaded = {name for name, _ in jittor_model.named_parameters()}
+    return sorted(key for key in state if key not in loaded)
+
+
 # ------------------------------------------------------------------------ ViT
 
 def _jittor_vit(dim, depth, heads, patch, image, classes):
@@ -298,7 +319,11 @@ def _jittor_unet(base, groups):
 def _torch_unet(torch, nn, base, groups):
     def timestep_embedding(t, dim):
         half = dim // 2
-        freqs = torch.exp(-math.log(10000.0) * torch.arange(half, dtype=torch.float32) / half)
+        freqs = torch.exp(
+            -math.log(10000.0)
+            * torch.arange(half, dtype=torch.float32, device=t.device)
+            / half
+        )
         args = t.float().reshape(-1, 1) * freqs.reshape(1, -1)
         return torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
 
