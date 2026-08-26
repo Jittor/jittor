@@ -23,6 +23,7 @@ _TOPICS = (
     "lora",
     "meta_op",
     "profiler",
+    "resnet_training",
     "transformer",
     "60分钟快速入门Jittor/计图入门教程 0 --- 介绍与安装",
     "60分钟快速入门Jittor/计图入门教程 1 --- 基本概念",
@@ -32,7 +33,7 @@ _TOPICS = (
 
 _SMOKE_TOPICS = (
     "basics", "example", "meta_op", "custom_op", "profiler",
-    "transformer", "diffusion", "lora",
+    "resnet_training", "transformer", "diffusion", "lora",
 )
 
 _MACHINE_PATHS = (

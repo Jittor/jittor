@@ -197,6 +197,7 @@ not repository sources.
 - [Meta-operators / 元算子](examples/notebooks/meta_op.md)
 - [Custom C++ and CUDA operators / 自定义 C++ 与 CUDA 算子](examples/notebooks/custom_op.md)
 - [Profiler / 性能分析](examples/notebooks/profiler.md)
+- [Residual network training / 残差网络训练](examples/notebooks/resnet_training.md)
 - [60-minute Chinese introduction / 60 分钟中文入门](examples/notebooks/60分钟快速入门Jittor/README.md)
 
 ```bash

@@ -14,6 +14,7 @@ external state with Jupytext and executes the offline CPU smoke tutorials.
 
 ## Models and techniques
 
+- [Residual network training](https://github.com/Jittor/jittor/blob/master/examples/notebooks/resnet_training.md)
 - [Transformer from scratch](https://github.com/Jittor/jittor/blob/master/examples/notebooks/transformer.md)
 - [Denoising diffusion from scratch](https://github.com/Jittor/jittor/blob/master/examples/notebooks/diffusion.md)
 - [LoRA parameter-efficient fine-tuning](https://github.com/Jittor/jittor/blob/master/examples/notebooks/lora.md)
