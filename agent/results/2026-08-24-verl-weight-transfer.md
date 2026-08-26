@@ -1,8 +1,8 @@
 # verl Jittor 权重传输与 1-step PPO 真实 CUDA 门禁
 
-- Status: Adapter/PPO two-rank verl and framework four-rank NCCL/FSDP2 gates accepted on real CUDA
+- Status: Adapter/PPO and framework four-rank NCCL/FSDP2 gates accepted on real CUDA
 - Last reviewed: 2026-08-26
-- Jittor baseline: `cbac62c9`
+- Jittor baseline: `40e7df7d`
 - verl source: `3d66a3d7ca1cf783df949816ec6862d5a7af9406` plus existing adapter edits
 - vLLM source: `51a99565c398c8320de8131e07731c75c52eb87c`
 - Owner: verl/vLLM external-adapter maintainers
@@ -124,6 +124,20 @@ backward/optimizer 和更新后权重同步。critic/actor grad norm 分别为
 `0.265052/1.988398`，不是空图或单 rank fallback；rollout 与训练概率最大差
 `2.7566e-8`、Pearson 相关系数 `0.9999843`，更新后权重同步约 `1.88s`。
 
+相同 tiny Qwen3 原生 FSDP2 链路又在物理 GPU 4--7 上完成单机四 rank 1-step PPO。
+四个训练 worker 建立 rank `0/1/2/3`、world size `4` 的 NCCL communicator，四个
+vLLM server 分别绑定对应 GPU。完整链路再次执行初始化、两次权重同步、rollout、
+old log-prob、critic value、GAE、critic/actor backward 与 optimizer，最终
+`Training Progress: 100% 1/1`、`training/global_step=1` 并正常退出。critic/actor
+grad norm 为 `0.476197/4.809172`，rollout 与训练概率最大差 `2.461e-8`、Pearson
+相关系数 `0.9999888`；训练前后权重同步分别约 `17.02s/8.88s`。
+
+四卡闭环首先确认 verl 请求的复合 backend `cpu:gloo,cuda:nccl` 应按当前设备匹配
+已激活的 NCCL，而不是与字符串 `nccl` 做整体比较；随后在 critic backward 暴露
+NCCL all-gather 缺少反向。`40e7df7d` 将 all-gather 的数学对偶实现为求和型
+reduce-scatter，并加入 rank-dependent gradient 参考。四卡运行包含大量首次 JIT，
+critic/actor update 分别约 `1086.65s/529.15s`，只作为功能证据，不形成性能结论。
+
 接入过程还补齐了 verl 实际依赖的 Torch distributed 表面：Ray 动态 NCCL bootstrap、
 WORLD/singleton process group、tensor/object gather、broadcast/barrier、SUM/AVG/MAX/MIN/
 PRODUCT reduction、Store/c10d/rendezvous import，以及 FSDP2 的 ABC metaclass、
@@ -181,6 +195,10 @@ PRODUCT reduction、Store/c10d/rendezvous import，以及 FSDP2 的 ABC metaclas
 - tiny Qwen3 原生双 rank FSDP2 PPO：`Training Progress: 100% 1/1`，最终
   `training/global_step=1`、`response/aborted_ratio=0`，critic/actor update 和训练后
   vLLM 权重同步全部执行。
+- tiny Qwen3 原生四 rank FSDP2 PPO：四个训练 worker 和四个 vLLM server 分别绑定
+  物理 GPU 4--7；`Training Progress: 100% 1/1`、`response_length/mean=16`、
+  `response/aborted_ratio=0`、`training/global_step=1`，两次权重同步和 critic/actor
+  update 全部执行。
 - 维护门禁 `CUDA_VISIBLE_DEVICES=2,3 python -m nox -s nccl` 从空 cache 通过；最终
   代码热态复验两个 rank 各为 `3 passed`，launcher 报告 `all ranks done, rc=0`。
 - 泛化后的维护门禁以 `JITTOR_NCCL_WORLD_SIZE=4` 在四张真实 RTX 4090 上从独立
@@ -190,6 +208,11 @@ PRODUCT reduction、Store/c10d/rendezvous import，以及 FSDP2 的 ABC metaclas
 - 四 rank 命令设置 `CUDA_VISIBLE_DEVICES=4,5,6,7`、
   `JITTOR_NCCL_WORLD_SIZE=4` 与 `nvcc_path=<nvcc>` 后执行 `python -m nox -s nccl`；
   环境为 Python 3.11.15、CUDA 12.2、NVIDIA driver 595.84 和四张 RTX 4090。
+- all-gather 反向定向门禁在真实四 rank 上逐 rank 各 `1 passed`；加入该用例后的
+  完整 `JITTOR_NCCL_WORLD_SIZE=4` 门禁逐 rank 各 `4 passed`，launcher 为 `rc=0`。
+- Torch compatibility 完整模块 `19 passed`；`python -m nox -s lint`、
+  `check_repo_layout.sh` 和 relative-link check 通过，完整 `tests/structure` 为
+  `218 passed`。
 - 完整 FSDP2/gradient compatibility 回归 `24 passed`；`check_repo_layout.sh` 通过，完整
   `tests/structure` 为 `218 passed`。
 
@@ -269,12 +292,25 @@ SHA-256 分别为
 `d4b6d124b8df969f65e4ae265a5b5fd1c7c9a09b4a7d0413973e0d1a68c17216`；PPO harness
 仍为 `8714d4e50a3868824ba7d30e7d936a6fdfd400b4b06777f876bb6cd7bf7616ba`。
 
+原生 verl 四 rank 成功运行保存在
+`$JITTOR_LAB_ROOT/_state/verl-fsdp2/20260826-native-verl4/run14/`。Hydra 配置、
+overrides、TaskRunner stdout/stderr 的 SHA-256 分别为
+`809e2e1e982f56fc4711afb2601ed2468c66ea1a25a770db0d1dc0206258cfc8`、
+`3fd35428b127d74ad65f39e7b982331253e1ae25651f2067cbbc2a4c0ddfb1ff`、
+`8eb71b1d39ab0569b60dcbd8e2c5979e1dbc4ddccc053b53c88c14d17874a60f` 和
+`acc8bbef91e9f475c256cc97674e392b3e0608a3838cfcab4d8af93f279d1032`。
+最终代码的四 rank nox 日志位于同级 `nox-world4/`，rank 0--3 SHA-256 分别为
+`3c20a846656721ceec3ab044573fed3c26ee1c0019d8c7fa703982d8bda1797b`、
+`45ecc41b1cd11ed31d55c0c0b93d83dbfcf3dd8ac620cce2fa5b9fcc17e2ac27`、
+`63006b65376d6ffd6d1c5fbc09cf37fc4b55ced5aa81e79fb6ad9cc0f58ef56c` 和
+`c59ea8da99897693cbed2ae59f00e7952e456f6ad91c561bf50d2d720e9aaeb5`。
+
 ## 边界
 
 完整 PPO 结论限定为 tiny Qwen3 与 Qwen3-0.6B、固定 reward；tiny 覆盖单卡
-dense/remove-padding 和双卡原生 FSDP2，0.6B 覆盖单卡 remove-padding 与历史双卡
-replicated compatibility。框架门禁证明单机 world-size 4 的 NCCL collective、FSDP
-参数分片和一步线性层更新；原生 verl PPO 结论仍只到单机 world-size 2，不宣称性能
-扩展，也不把历史 replicated 结果改写为原生分布式。多节点 verl、超过两 rank 的
-verl、0.6B 原生 FSDP2、多 actor、真实 reward model、长序列、稳定热态性能，以及
-NPU/ROCm 均不由本报告宣称通过。
+dense/remove-padding，以及单机双卡和四卡原生 FSDP2，0.6B 覆盖单卡
+remove-padding 与历史双卡 replicated compatibility。框架门禁证明单机 world-size 4
+的 NCCL collective、FSDP 参数分片和一步线性层更新；原生 verl PPO 结论也已到
+单机 world-size 4，但不宣称性能扩展，也不把历史 replicated 结果改写为原生分布式。
+多节点 verl、0.6B 原生 FSDP2、多 actor、真实 reward model、长序列、稳定热态性能，
+以及 NPU/ROCm 均不由本报告宣称通过。

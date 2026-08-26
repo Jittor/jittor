@@ -2,7 +2,7 @@
 
 - Status: Current index, not a history log
 - Last reviewed: 2026-08-26
-- Baseline reviewed: `b37098f7`
+- Baseline reviewed: `40e7df7d`
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -103,7 +103,8 @@ Transformers/Diffusers/PEFT/ms-swift/MMCV/MMEngine CPU and CUDA cases, while
 real-scale training performance remains incomplete. Current verl core
 algorithm/FSDP2 gates also pass on CPU/CUDA. The maintained framework FSDP2
 gate additionally passes single-node four-rank NCCL sharding, collectives, and
-sharded SGD on real CUDA; the end-to-end verl PPO result remains two-rank.
+sharded SGD on real CUDA; tiny Qwen3 end-to-end verl PPO also passes native
+single-node four-rank FSDP2, while multi-node and native 0.6B remain open.
 See the [verl weight-transfer and PPO report](../results/2026-08-24-verl-weight-transfer.md).
 Qwen3-0.6B vLLM real-CUDA inference
 now runs about 20.5% faster than its real-PyTorch reference on the maintained
