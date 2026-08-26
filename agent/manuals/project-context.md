@@ -2,7 +2,7 @@
 
 - Status: Current index, not a history log
 - Last reviewed: 2026-08-26
-- Baseline reviewed: `6d34610d`
+- Baseline reviewed: `4dbda832`
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -89,6 +89,9 @@ loss, complete trainable-parameter, and shared-buffer trajectories on CPU and
 real CUDA. A bilingual native-Jittor ResNet tutorial executes the same three-step
 training/state-restore workflow in the maintained offline CPU notebook gate. See the
 [common-network trajectory report](../results/2026-08-26-common-network-training-trajectories.md).
+The same report records the real-scale follow-up: UNet is accepted at `0.79x`,
+ConvNet improved to `1.08x`, and ViT remains open at about `1.33x` because its
+dominant CUDA GEMMs lag the PyTorch reference.
 Performance work uses ASV, isolated caches, synchronized measurements, and exact
 commit labels. The same-version ecosystem harness now verifies twelve
 Transformers/Diffusers/PEFT/ms-swift/MMCV/MMEngine CPU and CUDA cases, while
