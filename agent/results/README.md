@@ -6,6 +6,7 @@
 
 ## 兼容性与功能验证
 
+- [2026-08-26 常见网络三步训练轨迹对拍](2026-08-26-common-network-training-trajectories.md)
 - [2026-08-23 CUDA masked SDPA 防护图优化](2026-08-23-cuda-masked-sdpa.md)
 - [2026-08-23 CUDA 窄整数与逻辑 reduction 收口](2026-08-23-cuda-narrow-reductions.md)
 - [2026-08-23 CPU DepthwiseConv backward 修复](2026-08-23-depthwise-cpu-backward.md)

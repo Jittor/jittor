@@ -2,7 +2,7 @@
 
 - Status: Current index, not a history log
 - Last reviewed: 2026-08-26
-- Baseline reviewed: `295c3227`
+- Baseline reviewed: `76737aa1`
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -84,6 +84,10 @@ separate gates. See the
 [complete CPU suite report](../results/2026-08-22-complete-cpu-test-suite.md) and
 [complete CUDA suite report](../results/2026-08-22-cuda-test-suite.md), plus the
 [parallel-range and network-oracle follow-up](../results/2026-08-22-cuda-parallel-range-network-oracle.md).
+Compact ResNet18, ViT, GPT-2, and diffusion UNet now also pass three-step SGD
+loss, complete trainable-parameter, and shared-buffer trajectories on CPU and
+real CUDA. See the
+[common-network trajectory report](../results/2026-08-26-common-network-training-trajectories.md).
 Performance work uses ASV, isolated caches, synchronized measurements, and exact
 commit labels. The same-version ecosystem harness now verifies twelve
 Transformers/Diffusers/PEFT/ms-swift/MMCV/MMEngine CPU and CUDA cases, while
