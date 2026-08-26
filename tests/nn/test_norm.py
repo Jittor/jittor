@@ -238,6 +238,95 @@ class TestInstanceNorm(_NormBase):
 
 
 class TestBatchNorm(_NormBase):
+    @unittest.skipUnless(jt.has_cuda, "CUDA BatchNorm eval fast path needs CUDA")
+    def test_cuda_eval_fast_path_forward_and_all_gradients(self):
+        rng = np.random.RandomState(20260829)
+        shape = (2, 16, 8, 8)
+        x_np = rng.randn(*shape).astype("float32")
+        weight_np = rng.randn(shape[1]).astype("float32")
+        bias_np = rng.randn(shape[1]).astype("float32")
+        mean_np = rng.randn(shape[1]).astype("float32")
+        variance_np = (np.abs(rng.randn(shape[1])) + 0.5).astype("float32")
+        cot_np = rng.randn(*shape).astype("float32")
+
+        def run(use_cuda):
+            with jt.flag_scope(use_cuda=use_cuda):
+                x = jt.array(x_np)
+                weight = jt.array(weight_np)
+                bias = jt.array(bias_np)
+                mean = jt.array(mean_np).stop_grad()
+                variance = jt.array(variance_np).stop_grad()
+                if use_cuda:
+                    output = jt.nn._batch_norm_eval_cuda(
+                        x, weight, bias, mean, variance, 1e-5
+                    )
+                    self.assertIsNotNone(output)
+                else:
+                    scale = weight / jt.sqrt(variance + 1e-5)
+                    shift = bias - mean * scale
+                    output = (
+                        x * scale.reshape((1, -1, 1, 1))
+                        + shift.reshape((1, -1, 1, 1))
+                    )
+                grads = jt.grad(
+                    (output * jt.array(cot_np)).sum(), [x, weight, bias]
+                )
+                return jt.fetch_sync([output] + grads)
+
+        expected = run(0)
+        actual = run(1)
+        for name, got, ref in zip(
+                ("output", "grad_x", "grad_weight", "grad_bias"),
+                actual, expected):
+            np.testing.assert_allclose(
+                got, ref, atol=2e-3, rtol=2e-3,
+                err_msg="CUDA eval BatchNorm %s" % name,
+            )
+
+    @unittest.skipUnless(jt.has_cuda, "CUDA BatchNorm fast path needs CUDA")
+    def test_cuda_fast_path_forward_and_all_gradients(self):
+        rng = np.random.RandomState(20260828)
+        shape = (2, 32, 8, 8)
+        x_np = rng.randn(*shape).astype("float32")
+        weight_np = rng.randn(shape[1]).astype("float32")
+        bias_np = rng.randn(shape[1]).astype("float32")
+        cot_np = rng.randn(*shape).astype("float32")
+
+        def run(use_cuda):
+            with jt.flag_scope(use_cuda=use_cuda):
+                x = jt.array(x_np)
+                weight = jt.array(weight_np)
+                bias = jt.array(bias_np)
+                if use_cuda:
+                    output = jt.nn._batch_norm_cuda(
+                        x, weight, bias, 1e-5
+                    )
+                    self.assertIsNotNone(output)
+                else:
+                    mean = x.mean((0, 2, 3), keepdims=True)
+                    variance = ((x - mean) * (x - mean)).mean(
+                        (0, 2, 3), keepdims=True
+                    )
+                    output = (
+                        (x - mean) * jt.rsqrt(variance + 1e-5)
+                        * weight.reshape((1, -1, 1, 1))
+                        + bias.reshape((1, -1, 1, 1))
+                    )
+                grads = jt.grad(
+                    (output * jt.array(cot_np)).sum(), [x, weight, bias]
+                )
+                return jt.fetch_sync([output] + grads)
+
+        expected = run(0)
+        actual = run(1)
+        for name, got, ref in zip(
+                ("output", "grad_x", "grad_weight", "grad_bias"),
+                actual, expected):
+            np.testing.assert_allclose(
+                got, ref, atol=2e-3, rtol=2e-3,
+                err_msg="CUDA BatchNorm %s" % name,
+            )
+
     def test_backward_small_variance_train(self):
         # BatchNorm train-mode backward was the worst (~10% at small variance).
         N, C = 16, 6
@@ -283,6 +372,39 @@ class TestBatchNorm(_NormBase):
                             f"vs biased {err_b:.2e}")
             self.assertEqual(tracked, 1, f"[{dev}] num_batches_tracked")
         self._for_devices(body)
+
+
+class TestChannelBias(_NormBase):
+    @unittest.skipUnless(jt.has_cuda, "CUDA channel bias fast path needs CUDA")
+    def test_cuda_forward_and_bias_gradient(self):
+        rng = np.random.RandomState(20260830)
+        shape = (2, 24, 8, 8)
+        x_np = rng.randn(*shape).astype("float32")
+        bias_np = rng.randn(shape[1]).astype("float32")
+        cot_np = rng.randn(*shape).astype("float32")
+
+        def run(use_cuda):
+            with jt.flag_scope(use_cuda=use_cuda):
+                x = jt.array(x_np)
+                bias = jt.array(bias_np)
+                if use_cuda:
+                    output = jt.nn._channel_bias_add_cuda(x, bias)
+                    self.assertIsNotNone(output)
+                else:
+                    output = x + bias.reshape((1, -1, 1, 1))
+                grads = jt.grad(
+                    (output * jt.array(cot_np)).sum(), [x, bias]
+                )
+                return jt.fetch_sync([output] + grads)
+
+        expected = run(0)
+        actual = run(1)
+        for name, got, ref in zip(
+                ("output", "grad_x", "grad_bias"), actual, expected):
+            np.testing.assert_allclose(
+                got, ref, atol=2e-3, rtol=2e-3,
+                err_msg="CUDA channel bias %s" % name,
+            )
 
 
 if __name__ == "__main__":

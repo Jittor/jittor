@@ -47,7 +47,8 @@ def _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups):
     dh, dw = dilation if isinstance(dilation, tuple) else (dilation, dilation)
     y = jt.nn._CudnnConv2d()(x, weight, sh, sw, ph, pw, dh, dw, groups)
     if bias is not None:
-        y = y + bias.broadcast(y.shape, [0, 2, 3])
+        fast = jt.nn._channel_bias_add_cuda(y, bias)
+        y = fast if fast is not None else y + bias.broadcast(y.shape, [0, 2, 3])
     return y
 
 class _CudnnConvT2d(jt.Function):

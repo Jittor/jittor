@@ -59,12 +59,18 @@ class BatchNorm(Module):
                 bias = self.bias - xmean * weight
                 norm_x = x * weight.broadcast(x, dims) + bias.broadcast(x, dims)
             else:
-                xhat = jt.nn._ln_normalize(x, dims, self.eps)
-                if self.affine:
-                    shape = [1, self.num_features] + [1] * (x.ndim - 2)
-                    norm_x = xhat * self.weight.reshape(shape) + self.bias.reshape(shape)
+                fast = jt.nn._batch_norm_cuda(
+                    x, self.weight, self.bias, self.eps
+                )
+                if fast is not None:
+                    norm_x = fast
                 else:
-                    norm_x = xhat
+                    xhat = jt.nn._ln_normalize(x, dims, self.eps)
+                    if self.affine:
+                        shape = [1, self.num_features] + [1] * (x.ndim - 2)
+                        norm_x = xhat * self.weight.reshape(shape) + self.bias.reshape(shape)
+                    else:
+                        norm_x = xhat
 
             self.running_mean.update(
                 self.running_mean + (xmean.reshape((-1,)) - self.running_mean) * self.momentum
@@ -80,6 +86,12 @@ class BatchNorm(Module):
             )
             return norm_x
 
+        fast = jt.nn._batch_norm_eval_cuda(
+            x, self.weight, self.bias,
+            self.running_mean, self.running_var, self.eps,
+        )
+        if fast is not None:
+            return fast
         weight = self.weight / jt.sqrt(self.running_var + self.eps)
         bias = self.bias - self.running_mean * weight
         return x * weight.broadcast(x, dims) + bias.broadcast(x, dims)

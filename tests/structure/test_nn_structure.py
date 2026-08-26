@@ -15,6 +15,8 @@ import unittest
 import jittor
 import jittor.nn as nn
 from jittor.nn.backends import cudnn as convolution_cudnn
+from jittor.nn.backends import batch_norm_training_cuda
+from jittor.nn.backends import channel_bias_cuda
 from jittor.nn.backends import layer_norm_cuda
 from jittor.nn.backends import layer_norm_training_cuda
 from jittor.nn.backends import modulated_layer_norm_cuda
@@ -155,6 +157,8 @@ _IMPLEMENTATION_SYMBOLS = (
         ),
     ),
     (convolution_transpose_layers, ("ConvTranspose", "ConvTranspose3d")),
+    (batch_norm_training_cuda, ("_batch_norm_cuda", "_batch_norm_eval_cuda")),
+    (channel_bias_cuda, ("_channel_bias_add_cuda",)),
     (layer_norm_cuda, ("_layer_norm_no_grad_cuda",)),
     (layer_norm_training_cuda, ("_layer_norm_cuda",)),
     (modulated_layer_norm_cuda, ("_modulated_layer_norm_no_grad_cuda",)),

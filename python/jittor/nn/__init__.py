@@ -54,6 +54,8 @@ from .backends.cudnn import (
     _try_cudnn_conv2d,
     _try_cudnn_conv_transpose2d,
 )
+from .backends.batch_norm_training_cuda import _batch_norm_cuda, _batch_norm_eval_cuda
+from .backends.channel_bias_cuda import _channel_bias_add_cuda
 from .backends.layer_norm_cuda import _layer_norm_no_grad_cuda
 from .backends.layer_norm_training_cuda import _layer_norm_cuda
 from .backends.group_norm_cuda import _group_norm_cuda
