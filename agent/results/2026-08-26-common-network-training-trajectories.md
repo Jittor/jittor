@@ -2,7 +2,7 @@
 
 - Status: CPU/CUDA correctness accepted
 - Last reviewed: 2026-08-26
-- Baseline: `76737aa1`
+- Baseline: `6d34610d`
 - Owner: model, optimizer, normalization, and test maintainers
 - Review when: common parity builders, SGD, BatchNorm state, CUDA accumulation,
   or the maintained network set changes
@@ -21,8 +21,9 @@ parameter 集合与数值、shared buffers，并确认参数确实更新。
 2. PyTorch diffusion fixture 的 timestep frequency 固定创建在 CPU，导致真实 CUDA
    input device mismatch；现在跟随 `t.device`。
 
-最终八项 CPU/CUDA 三步轨迹全部通过。常见网络 todo 中“完整训练轨迹”已完成；真实
-规模性能门禁和 notebook/示例扩充仍保持开放。
+最终八项 CPU/CUDA 三步轨迹全部通过。后续新增的双语 ResNet tutorial 也在离线 CPU
+notebook gate 中真实执行三步训练、BatchNorm counter 和 state restore。常见网络 todo
+中的完整训练轨迹与本轮 notebook/示例扩充已完成；真实规模性能门禁仍保持开放。
 
 ## 轨迹合同
 
@@ -65,11 +66,24 @@ PyTorch 3。修复 counter 后，八项轨迹通过。
 - original one-step forward/backward plus trajectory matrix: `16 passed`;
 - Ruff lint ratchet: passed;
 - repository layout/document governance: passed;
-- complete structure gate: `218 passed in 86.32s`.
+- complete structure gate: `218 passed in 92.63s`.
+
+## Notebook follow-up
+
+`examples/notebooks/resnet_training.md` 使用 MyST/Jupytext 作为唯一源文件，包含：
+
+- 两卷积 residual block、channel projection 和 compact ResNet；
+- fixed synthetic batch 上的三步 native SGD；
+- stem 参数真实更新与 `num_batches_tracked == 3` 断言；
+- `state_dict` 到 fresh model 的 evaluation-logit restore。
+
+不需要网络、CUDA 或外部数据。notebook source/fence/tag checks `3 passed`，Jupytext
+无输出物化 `1 passed`，包含全部九个 smoke topics 的离线 CPU 执行
+`1 passed in 468.92s`。
 
 ## Boundaries
 
-- 当前门禁证明紧凑网络三步更新语义，不代表 ImageNet、长序列 GPT-2 或大规模
+- 当前门禁和教程证明紧凑网络三步更新语义，不代表 ImageNet、长序列 GPT-2 或大规模
   diffusion 的收敛/吞吐已经与 PyTorch 相同。
 - 使用 float32 plain SGD；mixed precision、AdamW、scheduler 和 checkpoint resume
   由各自维护门禁负责，不由本报告外推。
