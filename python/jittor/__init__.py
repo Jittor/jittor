@@ -26,6 +26,11 @@ _compat_preflight_result = _prepare_compat_import(
 )
 
 from jittor_utils import lock
+from jittor_utils import limit_openmp_to_physical_cores as _limit_openmp
+
+# Must run before anything links OpenMP: the runtime reads OMP_NUM_THREADS when
+# it starts, and the default is one thread per *logical* CPU.
+_limit_openmp(_os.environ)
 
 # On Ascend (NPU), bringing MPI up via mpi4py BEFORE the CANN libraries are
 # loaded avoids a fatal ABI/symbol clash (CANN's globally-loaded libs interpose
