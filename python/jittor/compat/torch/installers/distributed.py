@@ -70,6 +70,28 @@ def _is_truthy(value):
     return str(value or "").strip().lower() not in ("", "0", "false", "no", "off")
 
 
+def _backend_matches_active(requested_backend, active_backend):
+    requested = str(requested_backend).strip().lower()
+    active = str(active_backend).strip().lower()
+    if requested == active:
+        return True
+
+    device_backends = {}
+    for item in requested.split(","):
+        device, separator, backend = item.strip().partition(":")
+        if not separator or not device.strip() or not backend.strip():
+            return False
+        device_backends[device.strip()] = backend.strip()
+
+    active_device = {
+        "nccl": "cuda",
+        "hccl": "npu",
+        "gloo": "cpu",
+        "mpi": "cpu",
+    }.get(active)
+    return active_device is not None and device_backends.get(active_device) == active
+
+
 def _bootstrap_native_distributed(rank, world_size, backend=None):
     if not _is_truthy(os.environ.get("JITTOR_TORCH_DISTRIBUTED_AUTO_INIT")):
         return False
@@ -270,7 +292,9 @@ def _install_distributed(g, registry=None):
             )
         if _native_distributed_active():
             active_backend = world_group._get_backend_name()
-            if backend_name is not None and backend_name != active_backend:
+            if backend_name is not None and not _backend_matches_active(
+                backend_name, active_backend
+            ):
                 raise RuntimeError(
                     "requested torch.distributed backend {} does not match "
                     "active Jittor backend {}".format(

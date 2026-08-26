@@ -96,7 +96,10 @@ class TestFSDP2Nccl(unittest.TestCase):
     def test_torch_distributed_world_collectives(self):
         dist = importlib.import_module("torch.distributed")
         dist.init_process_group(
-            backend="nccl", rank=int(jt.rank), world_size=int(jt.world_size))
+            backend="cpu:gloo,cuda:nccl",
+            rank=int(jt.rank),
+            world_size=int(jt.world_size),
+        )
         self.assertTrue(dist.is_initialized())
         self.assertEqual(dist.get_rank(), int(jt.rank))
         world_size = int(jt.world_size)
@@ -135,6 +138,25 @@ class TestFSDP2Nccl(unittest.TestCase):
             self.assertEqual(
                 gathered_objects, expected_objects)
         dist.barrier()
+
+    @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0)
+    def test_nccl_all_gather_autograd(self):
+        world_size = int(jt.world_size)
+        rank = int(jt.rank)
+        local = jt.array(
+            np.asarray([rank + 0.25, rank + 0.75], dtype="float32")
+        )
+        gathered = fsdp2._common._all_gather_shards(local)
+        indices = jt.arange(int(gathered.numel()), dtype="float32")
+        weights = indices + float((rank + 1) * 100)
+        local_grad = jt.grad((gathered * weights).sum(), local)
+
+        local_indices = np.arange(rank * 2, rank * 2 + 2, dtype="float32")
+        consumer_sum = world_size * (world_size + 1) / 2
+        expected = world_size * local_indices + 100.0 * consumer_sum
+        np.testing.assert_allclose(
+            local_grad.float32().numpy(), expected, rtol=0, atol=0
+        )
 
     @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0)
     def test_flat_shard_collectives_and_sgd_update(self):

@@ -19,8 +19,8 @@ namespace jittor {
 
 #ifndef JIT
 
-static auto nccl_all_gather = 
-    get_op_info("nccl_all_gather").get_constructor<VarPtr, Var*>();
+static auto nccl_reduce_scatter =
+    get_op_info("nccl_reduce_scatter").get_constructor<VarPtr, Var*>();
 
 NcclAllGatherOp::NcclAllGatherOp(Var* x) : x(x) {
     flags.set(NodeFlags::_cpu, 0);
@@ -37,8 +37,7 @@ void NcclAllGatherOp::infer_shape() {
 }
 
 VarPtr NcclAllGatherOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-    LOGf << "not implemented";
-    return nullptr;
+    return nccl_reduce_scatter(dout);
 }
 
 void NcclAllGatherOp::jit_prepare(JK& jk) {

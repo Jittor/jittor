@@ -12,6 +12,7 @@ import jittor as torch
 import jittor as jt
 from jittor.compat import fsdp2 as canonical_fsdp
 from jittor.compat.fsdp2 import grad_sync as fsdp_grad_sync
+from jittor.compat.torch.installers.distributed import _backend_matches_active
 
 
 class TestFSDP2Compat(unittest.TestCase):
@@ -643,6 +644,17 @@ class TestFSDP2Compat(unittest.TestCase):
         self.assertIsInstance(rendezvous_store, TCPStore)
         self.assertEqual((rank, world_size), (0, 1))
         self.assertTrue(callable(distributed_rendezvous))
+
+    def test_distributed_composite_backend_matching(self):
+        self.assertTrue(_backend_matches_active("nccl", "nccl"))
+        self.assertTrue(
+            _backend_matches_active("cpu:gloo,cuda:nccl", "nccl")
+        )
+        self.assertTrue(_backend_matches_active("cpu:mpi,cuda:nccl", "mpi"))
+        self.assertFalse(
+            _backend_matches_active("cpu:gloo,cuda:gloo", "nccl")
+        )
+        self.assertFalse(_backend_matches_active("gloo,nccl", "nccl"))
 
     def test_dtensor_and_private_import_paths(self):
         from torch.distributed.device_mesh import init_device_mesh
