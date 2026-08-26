@@ -266,6 +266,10 @@ def optimizer_step(opt, loss=None, retain_graph=False):
             _assign_preserve_trainability(
                 state.true_fsdp_flat_shard, new_flat.stop_grad(),
                 flat_trainable[id(state)])
+            # Public parameters are refreshed as views of the flat shard below.
+            # Materialize the update first so a following model.cpu() does not
+            # execute the whole optimizer graph while migrating the first view.
+            state.true_fsdp_flat_shard.sync()
             shard._refresh_flat_entry_shards(state)
         for entry in state.true_fsdp_params:
             key = (id(state), id(entry))

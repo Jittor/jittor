@@ -12,6 +12,7 @@ import jittor as torch
 import jittor as jt
 from jittor.compat import fsdp2 as canonical_fsdp
 from jittor.compat.fsdp2 import grad_sync as fsdp_grad_sync
+from jittor.compat.fsdp2 import shard as fsdp_shard
 from jittor.compat.torch.installers.distributed import _backend_matches_active
 
 
@@ -218,6 +219,40 @@ class TestFSDP2Compat(unittest.TestCase):
                 self.assertGreater(
                     float(np.abs(entry.shard.numpy() - before).max()), 0.0)
             jt.sync_all(True)
+
+    def test_flat_fsdp_optimizer_materializes_before_refresh(self):
+        _, state, entries, full = self._fake_flat_fsdp_state(
+            ([1.0, 2.0], [3.0, 4.0]))
+        optimizer = torch.optim.AdamW(
+            [entry.shard for entry in entries], lr=0.01)
+
+        def local_sync(current_state, grads, **kwargs):
+            return [grad.reshape(entry.shard.shape).stop_grad()
+                    for entry, grad in zip(current_state.true_fsdp_params, grads)]
+
+        with mock.patch.object(
+                fsdp_grad_sync, "_sync_sharded_grads_from_full_grads",
+                side_effect=local_sync):
+            canonical_fsdp.fill_fsdp_optimizer_grads_from_grad_map(
+                [optimizer], {
+                    id(param): jt.ones_like(param) for param in full
+                })
+
+        locations = []
+        original_refresh = fsdp_shard._refresh_flat_entry_shards
+
+        def checked_refresh(current_state):
+            locations.append(current_state.true_fsdp_flat_shard.location())
+            return original_refresh(current_state)
+
+        with mock.patch.object(
+                fsdp_shard, "_refresh_flat_entry_shards",
+                side_effect=checked_refresh):
+            canonical_fsdp.optimizer_step(optimizer)
+
+        self.assertEqual(len(locations), 1)
+        self.assertNotEqual(locations[0], "none")
+        jt.sync_all(True)
 
     def test_sharded_sgd_helper_keeps_parameters_trainable(self):
         for factory in (self._fake_fsdp_state, self._fake_flat_fsdp_state):
