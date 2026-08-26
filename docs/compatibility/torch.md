@@ -173,9 +173,20 @@ Two boundaries are architectural rather than missing work:
   compatibility layer cannot load them; those operations need a Jittor
   implementation, which is what `jittor.models` and the native operator surface
   provide for the cases that matter.
-- **Runtimes that own the device.** vLLM and, through it, verl embed custom CUDA
-  kernels and their own memory and scheduling layer rather than calling
-  `torch.*`. They are out of scope for the shim for the same reason.
+- **Runtimes that own the device.** vLLM embeds custom CUDA kernels and its own
+  memory and scheduling layer rather than calling `torch.*`, so the shim alone
+  cannot carry it. It runs through an external adapter (`vllm_jittor_ops`) that
+  supplies those kernels against Jittor: vLLM V1 loads Qwen3-0.6B, builds the KV
+  cache and completes a real CUDA greedy decode whose tokens match real
+  PyTorch/Transformers exactly, at `0.109s` against `0.137s` for the four-token
+  warm generate. verl rides on the same path -- its import, protocol, FSDP2 and
+  PPO gates pass, including four-card FSDP2. See the
+  [current baseline](../../agent/results/2026-08-23-verl-vllm-trellis-current-baseline.md).
+
+TRELLIS.2 4B completes an aligned end-to-end pipeline on the same external
+adapter with four real CUDA extensions, but its warm pipeline median is
+`7.515s` against real PyTorch's `6.878s` -- about `1.09x`, so its performance is
+not accepted yet.
 
 TRELLIS-style project glue lives in optional integration distributions
 (`jittor-trellis` and friends) registered through entry points, not in mainline
