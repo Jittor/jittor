@@ -9,7 +9,7 @@ import jittor as jt
 import os
 from _helpers.logs import find_log_with_re
 from _helpers.retry import retry
-from _helpers.tuner_parser import simple_parser
+from _helpers.tuner_parser import simple_parser, tuner_choices
 
 gid = 0
 
@@ -77,7 +77,7 @@ class TestReorderTuner(unittest.TestCase):
         assert len(ls) == 6, (ls, logs)
         ls = find_log_with_re(logs, "Best choices\\(.*\\): (.*)$")
         assert len(ls) == 1
-        best = simple_parser(ls[0])
+        best = tuner_choices(ls[0])
         assert best == {
             "compile_shape": 1, "order0": 0, "order1": 0, "order2": 0,
             "test_reorder_tuner":gid
