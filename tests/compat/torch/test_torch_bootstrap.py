@@ -1,3 +1,4 @@
+import importlib.machinery
 import os
 import pathlib
 import subprocess
@@ -387,21 +388,53 @@ class TestTorchBootstrap(unittest.TestCase):
     def test_preload_publishes_core_library_directory(self):
         from jittor.compat.shim import build
 
+        # Name the stand-ins with this interpreter's own extension suffix: the
+        # preloader refuses any other ABI, because loading a core built for a
+        # different Python gives the process two copies of the runtime and a
+        # double free at exit.
+        suffix = importlib.machinery.EXTENSION_SUFFIXES[0]
         with tempfile.TemporaryDirectory(dir=str(_TEST_STATE_ROOT)) as directory:
-            shared_object = os.path.join(directory, "jittor_core.test.so")
-            pathlib.Path(shared_object).touch()
+            cores = {}
+            for name in ("jit_utils_core", "jittor_core"):
+                shared_object = os.path.join(directory, name + suffix)
+                pathlib.Path(shared_object).touch()
+                cores[name] = shared_object
+
+            def fake_glob(pattern, recursive=False):
+                for name, path in cores.items():
+                    if name in pattern:
+                        return [path]
+                return []
+
             with mock.patch.object(
-                build.glob, "glob", return_value=[shared_object]
+                build.glob, "glob", side_effect=fake_glob
             ), mock.patch.object(
                 build.ctypes, "CDLL", return_value=object()
             ), mock.patch.dict(
                 os.environ, {"LD_LIBRARY_PATH": ""}, clear=False
             ):
                 loaded = build._preload_jittor_cores(verbose=False)
-                self.assertEqual(loaded, [shared_object, shared_object])
+                self.assertEqual(
+                    loaded, [cores["jit_utils_core"], cores["jittor_core"]]
+                )
                 self.assertIn(
                     directory, os.environ["LD_LIBRARY_PATH"].split(os.pathsep)
                 )
+
+    def test_preload_refuses_a_core_built_for_another_python(self):
+        """A foreign-ABI core must not be loaded next to this one."""
+        from jittor.compat.shim import build
+
+        with tempfile.TemporaryDirectory(dir=str(_TEST_STATE_ROOT)) as directory:
+            foreign = os.path.join(
+                directory, "jit_utils_core.cpython-999-x86_64-linux-gnu.so")
+            pathlib.Path(foreign).touch()
+            with mock.patch.object(
+                build.glob, "glob", return_value=[foreign]
+            ), mock.patch.object(
+                build.ctypes, "CDLL", return_value=object()
+            ):
+                self.assertEqual(build._preload_jittor_cores(verbose=False), [])
 
     def test_plain_preflight_is_side_effect_free(self):
         from jittor.compat.shim.preflight import prepare_import_environment
