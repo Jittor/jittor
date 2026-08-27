@@ -25,6 +25,7 @@ _TOPICS = (
     "profiler",
     "resnet_training",
     "transformer",
+    "vit_training",
     "60分钟快速入门Jittor/计图入门教程 0 --- 介绍与安装",
     "60分钟快速入门Jittor/计图入门教程 1 --- 基本概念",
     "60分钟快速入门Jittor/计图入门教程 2 --- 如何训练一个简单线性回归",
@@ -34,6 +35,7 @@ _TOPICS = (
 _SMOKE_TOPICS = (
     "basics", "example", "meta_op", "custom_op", "profiler",
     "resnet_training", "transformer", "diffusion", "lora",
+    "vit_training",
 )
 
 _MACHINE_PATHS = (
