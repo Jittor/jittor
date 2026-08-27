@@ -211,6 +211,26 @@ CUDA 扩展编译（16 个并发编译进程）、notebook 门禁和 GPU 基准�
 阶段级 profile 仍然可用：它每轮只同步 6 次，代价可以忽略。后续定位应当使用不引入
 同步的手段（Jittor 自己的算子 profile 只统计 kernel 时间），而不是继续细分包裹。
 
+### 派发开销也不是原因
+
+上一节把矛头指向"每算子的构图与派发开销"。直接测量否定了这个假设。在同一张 4090
+上跑一个纯 launch-bound 的深 MLP（每层 linear 加 relu，深度 32，50 次测量）：
+
+| 形状 | Jittor | PyTorch | 比值 |
+| --- | ---: | ---: | ---: |
+| depth 32, width 32, batch 1 | `15.6us/op` | `11.1us/op` | `1.41x` |
+| depth 32, width 32, batch 64 | `13.5us/op` | `13.0us/op` | `1.04x` |
+| depth 32, width 512, batch 64 | `14.2us/op` | `13.6us/op` | `1.04x` |
+| depth 8, width 4096, batch 512 | `223.6us/op` | `220.3us/op` | `1.01x` |
+
+只有最极端的 batch 1、width 32 才拉开到 `1.41x`，且绝对差仅 `4.5us`；其余形状在
+`1.01-1.04x`。TRELLIS 的算子远大于此，因此不存在一笔均摊到每个算子的固定税。
+
+于是三个候选依次被排除：GEMM 打平、per-op 派发打平、gather 只慢约 `15%`（在
+TRELLIS 中 `getitem` 全部 kernel 时间仅 `28.7ms`，`15%` 不足 `4ms`）。剩下的
+`0.2945s` 目前无法用现有工具进一步归因，需要不引入同步的细粒度手段。TRELLIS 性能
+因此仍未接受，但排除掉的这三条可以省去后来者的重复工作。
+
 ## NCCL 引导诊断
 
 本机的 P2P 矩阵全为 `CNS`，NCCL 的 p2p transport 报
