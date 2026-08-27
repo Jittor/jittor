@@ -129,11 +129,7 @@ def check():
     import jittor.compiler as compiler
     global has_acl, cc_flags
     if tikcc_path:
-        try:
-            install()
-        except Exception as e:
-            jittor_utils.LOG.w(f"load ACL failed, exception: {e}")
-            has_acl = 0
+        install()
     compiler.has_acl = has_acl
     compiler.tikcc_path = tikcc_path
     if not has_acl: return False
@@ -368,7 +364,9 @@ def change_function():
     def getitem_acl(x, slices, return_x=None):
         if isinstance(slices, jt.Var):
             return GetItemACL()(x, slices, return_x)
-        
+        if isinstance(slices, list):
+            return GetItemACL()(x, jt.array(slices), return_x)
+
         # Transform numpy int to int
         if isinstance(slices, (np.int8, np.int16, np.int32, np.int64)):
             slices = int(slices)
@@ -380,11 +378,7 @@ def change_function():
         ## If not related to `None`, directly use `GetItemACL`
         if slices is not None and (not isinstance(slices, Iterable)
                                    or isinstance(slices, str)):
-            try:
-                result = GetItemACL()(x, slices, return_x)
-                return result
-            except Exception as e:
-                return x[slices]
+            return GetItemACL()(x, slices, return_x)
         
         if isinstance(slices, int) or isinstance(slices, slice):
             slices = (slices, )
@@ -443,6 +437,15 @@ def change_function():
     from .aclops.matmul_op import MatmulACL
 
     def matmul_acl(x1, x2):
+        if x1.ndim == 1 and x2.ndim == 1:
+            return MatmulACL()(x1.reshape((1, -1)),
+                               x2.reshape((-1, 1))).reshape((1,))
+        if x1.ndim == 1:
+            output_shape = x2.shape[:-2] + x2.shape[-1:]
+            return MatmulACL()(x1.reshape((1, -1)), x2).reshape(output_shape)
+        if x2.ndim == 1:
+            output_shape = x1.shape[:-1]
+            return MatmulACL()(x1, x2.reshape((-1, 1))).reshape(output_shape)
         return MatmulACL()(x1, x2)
 
     def matmul_transpose_acl(x1, x2):
@@ -601,17 +604,11 @@ def change_function():
             return x[0].unsqueeze(dim)
         return jt.concat([t.unsqueeze(dim) for t in x], dim=dim)
 
-    from .aclops.nantonum_op import NanToNumACL
-    
     def isnan_acl(x):
-        tonum = NanToNumACL()(x, -1.0)
-        return jt.not_equal(x, tonum).logical_and(
-            jt.not_equal(tonum, jt.ones_like(x)))
+        return jt.misc._isnan_acl(x)
 
     def isinf_acl(x):
-        tonum = NanToNumACL()(x, 1.0)
-        return jt.not_equal(x, tonum).logical_and(
-            jt.not_equal(tonum, jt.ones_like(x)))
+        return jt.misc._isinf_acl(x)
 
     def warp(origin_func, new_func, name=None):
 
@@ -656,6 +653,7 @@ def change_function():
     jt.nn.Conv = warp(jt.nn.Conv, Conv2D)
 
     jt.nn.Pool = warp(jt.nn.Pool, PoolACL)
+    jt.pool.Pool = jt.nn.Pool
 
     # Route nn.LayerNorm through the native aclnnLayerNorm/LayerNormBackward
     # ops instead of the elementwise decomposition (mean/var/rsqrt/... = ~8+
@@ -683,6 +681,7 @@ def change_function():
         jt.acl_allow_hf32 = False
 
     jt.gather = warp(jt.gather, gather_acl)
+    jt.Var.gather = lambda x, dim, index: jt.gather(x, dim, index)
     jt.any = warp(jt.any, any_acl)
     jt.Var.any = jt.any
 
@@ -770,7 +769,8 @@ def change_function():
     fake_transpose = jt.transpose
     jt.Var.transpose = lambda x, *dim: warp(fake_transpose, transpose_acl)(x, *
                                                                            dim)
-    # jt.Var.permute = lambda x: warp(fake_transpose, transpose_acl)(x)
+    jt.permute = jt.transpose
+    jt.Var.permute = lambda x, *dim: jt.transpose(x, *dim)
     # jt.Var.t = lambda x: warp(fake_transpose, transpose_acl)(x)
 
     jt.nn.relu = warp(jt.nn.relu, relu)

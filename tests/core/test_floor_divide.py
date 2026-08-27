@@ -52,8 +52,16 @@ class TestFloorDivideCPU(_FloorDivideMixin, unittest.TestCase):
     pass
 
 
-@unittest.skipUnless(jt.compiler.has_cuda, "CUDA is unavailable")
+@unittest.skipUnless(
+    jt.compiler.has_cuda and not getattr(jt.compiler, "has_acl", 0),
+    "CUDA is unavailable",
+)
 class TestFloorDivideCUDA(_FloorDivideMixin, unittest.TestCase):
+    use_cuda = 1
+
+
+@unittest.skipUnless(getattr(jt.compiler, "has_acl", 0), "ACL is unavailable")
+class TestFloorDivideNPU(_FloorDivideMixin, unittest.TestCase):
     use_cuda = 1
 
 

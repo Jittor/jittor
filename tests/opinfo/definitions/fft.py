@@ -48,7 +48,7 @@ numpy refs are adapted from the validated ``test_torch_compat_fft_einsum.py`` (w
 compares jittor's fft/ifft/rfft/irfft against ``np.fft.*``) and ``test_fft_op.py``.
 """
 from ._refs import *  # noqa: F401,F403  (make_tensor, SampleInput, refs, np, jt, nn, F)
-from ..core import OpInfo, UnaryUfuncInfo, BinaryUfuncInfo, ReductionOpInfo
+from ..core import OpInfo, UnaryUfuncInfo, BinaryUfuncInfo, ReductionOpInfo, skip
 
 
 # ------------------------------------------------------------------- numpy refs
@@ -175,6 +175,18 @@ op_db = [
     # real/imag inputs to float64, from which the op builds a complex128 spectrum --
     # and jittor does not fully support complex128 (a known gap), so the backward
     # raises a NanoString dtype error. Forward is still pinned to np.fft.irfft.
-    OpInfo("irfft", op=_irfft_from_real, ref=irfft_ref,
-           sample_inputs_func=sample_irfft, supports_autograd=False),
+    OpInfo(
+        "irfft",
+        op=_irfft_from_real,
+        ref=irfft_ref,
+        sample_inputs_func=sample_irfft,
+        supports_autograd=False,
+        skips=(
+            skip(
+                "test_reference",
+                device_type="npu",
+                reason="KI-BACKEND-003: complex irfft stalls on ACL",
+            ),
+        ),
+    ),
 ]

@@ -11,38 +11,32 @@ namespace jittor
 {
     aclDataType get_dtype(NanoString s)
     {
-        // bfloat16's NanoString.data is assigned at runtime (not a compile-time
-        // constant), so it cannot be a switch case. 910B3 supports bf16 natively
-        // (ACL_BF16) -- without this, MatMul/etc. on bf16 hit the default and
-        // abort with "Not supported dtype: bfloat16".
         if (s == ns_bfloat16)
             return ACL_BF16;
-        switch (s.data)
-        {
-        case 22667:
+        if (s == ns_float32)
             return ACL_FLOAT;
-        case 14474:
+        if (s == ns_float16)
             return ACL_FLOAT16;
-        case 27781:
+        if (s == ns_int64)
             return ACL_INT64;
-        case 19588:
+        if (s == ns_int32)
             return ACL_INT32;
-        case 3202:
+        if (s == ns_int8)
             return ACL_INT8;
-        case 11395:
+        if (s == ns_int16)
             return ACL_INT16;
-        case 3206:
+        if (s == ns_uint8)
             return ACL_UINT8;
-        case 11399:
+        if (s == ns_uint16)
             return ACL_UINT16;
-        case 19592:
+        if (s == ns_uint32)
             return ACL_UINT32;
-        case 3713:
+        if (s == ns_bool)
             return ACL_BOOL;
-        default:
-            LOGf << "Not supported dtype: " << s;
-            return ACL_FLOAT; // 默认返回 ACL_FLOAT
-        }
+        if (s == ns_complex64)
+            return ACL_COMPLEX64;
+        LOGf << "Not supported dtype: " << s;
+        return ACL_FLOAT;
     }
 
     std::unordered_map<string, int> op_idx_map =

@@ -14,6 +14,14 @@ std::string acl_error_to_string(aclError error);
 namespace jittor
 {
 
+    inline aclError acl_jittor_get_device_count(int *count)
+    {
+        uint32_t acl_count = 0;
+        aclError status = aclrtGetDeviceCount(&acl_count);
+        *count = static_cast<int>(acl_count);
+        return status;
+    }
+
     EXTERN_LIB uint64_t acl_jittor_tid;
     EXTERN_LIB aclrtStream aclstream;
     EXTERN_LIB void *workspaceAddr;

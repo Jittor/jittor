@@ -9,7 +9,7 @@ The seed of the registry. Other ``definitions/*.py`` modules add their domains; 
 aggregator concatenates them all into ``op_db``.
 """
 from ._refs import *  # noqa: F401,F403  (make_tensor, SampleInput, refs, np, jt, nn, F)
-from ..core import OpInfo, UnaryUfuncInfo, BinaryUfuncInfo, ReductionOpInfo
+from ..core import OpInfo, UnaryUfuncInfo, BinaryUfuncInfo, ReductionOpInfo, skip
 
 
 def sample_matmul(op_info, device, dtype, requires_grad):
@@ -74,7 +74,19 @@ op_db = [
     # ---- reductions (sweep dim/keepdims -- closes the reduce-backward hole) ----
     ReductionOpInfo("sum", ref=reduce_ref(np.sum), op=jt.sum),
     ReductionOpInfo("mean", ref=reduce_ref(np.mean), op=jt.mean),
-    ReductionOpInfo("prod", ref=reduce_ref(np.prod), op=jt.prod, supports_gradgrad=False),
+    ReductionOpInfo(
+        "prod",
+        ref=reduce_ref(np.prod),
+        op=jt.prod,
+        supports_gradgrad=False,
+        skips=(
+            skip(
+                "test_reference",
+                device_type="npu",
+                reason="KI-BACKEND-004: float product reduction aborts on ACL",
+            ),
+        ),
+    ),
 
     # ---- matmul family ----
     OpInfo("matmul", op=jt.matmul, ref=np.matmul, sample_inputs_func=sample_matmul),

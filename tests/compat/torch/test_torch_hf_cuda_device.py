@@ -114,6 +114,18 @@ class TestTorchHFCudaDevice(unittest.TestCase):
         self.assertEqual(back.device.type, "cuda")
         self.assertTrue(np.allclose(back.clone().cpu().numpy(), x.clone().cpu().numpy()))
 
+    def test_explicit_cuda_empty_tensor(self):
+        device = torch.device("cuda")
+        empty = torch.tensor([], dtype=torch.float32, device=device)
+
+        self.assertEqual(empty.numel(), 0)
+        self.assertTrue(empty.is_cuda)
+        self.assertEqual(empty.device.type, "cuda")
+
+        value = torch.tensor([1.0], dtype=torch.float32, device=device)
+        joined = torch.cat((empty, value))
+        self.assertTrue(np.array_equal(joined.cpu().numpy(), np.array([1.0], dtype=np.float32)))
+
     def test_small_transformers_cuda_device_forward(self):
         device = torch.device("cuda")
         for arch, (cls, kwargs) in _CASES.items():

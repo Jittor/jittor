@@ -1276,6 +1276,9 @@ def topk(input, k, dim=None, largest=True, sorted=True):
 
 jt.Var.topk = topk
 
+_kthvalue_native_argsort = jt.argsort
+
+
 def kthvalue(input, k, dim=None, keepdim=False, keepdims=False):
     keepdim = keepdim or keepdims
     if dim is None:
@@ -1284,7 +1287,8 @@ def kthvalue(input, k, dim=None, keepdim=False, keepdims=False):
         dim+=input.ndim
     # native jt.argsort returns (index, values); the torch_compat layer overrides
     # the module-level argsort to torch's indices-only. Handle both.
-    _srt = jt.argsort(input, dim=dim)
+    sorter = _kthvalue_native_argsort if jt.flags.use_acl else jt.argsort
+    _srt = sorter(input, dim=dim)
     if isinstance(_srt, tuple):
         index, values = _srt
     else:
@@ -1908,6 +1912,24 @@ Example::
     if scalar_value or values.ndim == 0:
         values = values.reshape((1,))
     out_dtype = "int32" if out_int32 else "int64"
+    if jt.flags.use_acl:
+        if sorted.ndim == 1:
+            sorted_view = sorted.reshape(
+                (1,) * values.ndim + (sorted.shape[-1],)
+            )
+        else:
+            if sorted.ndim != values.ndim:
+                raise ValueError(
+                    "batched sorted and values must have the same rank"
+                )
+            sorted_view = sorted.unsqueeze(-2)
+        values_view = values.unsqueeze(-1)
+        before = sorted_view <= values_view if right else sorted_view < values_view
+        ret = before.int32().sum(dim=-1).cast(out_dtype)
+        if out is not None:
+            out.assign(ret)
+            return out
+        return ret
     out_ctype = "int32" if out_int32 else "int64"
     _searchsorted_header = f"""
 namespace jittor {{
@@ -2693,6 +2715,13 @@ The returned var has the same number of dimensions as the original var (x). The 
             f"Dimension out of range (expected to be in range of "
             f"[{-ndim}, {ndim - 1}], but got {original_dim})"
         )
+    if jt.flags.use_acl:
+        output_shape = list(input.shape)
+        output_shape[dim] = indices.shape[0]
+        index_shape = [1] * ndim
+        index_shape[dim] = indices.shape[0]
+        index = indices.reshape(index_shape).broadcast(output_shape)
+        return jt.gather(input, dim, index)
     return input[(slice(None),) * dim + (indices,)]
 jt.index_select = index_select
 jt.Var.index_select = index_select

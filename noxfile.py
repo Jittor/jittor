@@ -274,6 +274,9 @@ NPU_TESTS = (
     "tests/backends/npu/test_aclop.py",
     "tests/backends/npu/test_acl_indexing.py",
     "tests/ops/test_ops.py",
+    "tests/core/test_floor_divide.py::TestFloorDivideNPU",
+    "tests/compiler/test_kernel_traps.py::TestKernelTraps::test_nan_handling_isfinite_isnan_isinf",
+    "tests/ops/test_fusion_correctness.py::TestFusionCorrectness::test_float_comparisons_with_nan",
 )
 ROCM_TESTS = ("tests/backends/rocm/test_rocm.py",)
 MPI_TESTS = (
@@ -388,6 +391,31 @@ def _hardware_python():
     return os.environ.get("JITTOR_CI_PYTHON", sys.executable)
 
 
+def _set_hardware_python_config(session, python, env):
+    """Use the config helper belonging to an external hardware interpreter."""
+    script = (
+        "import os, sys; "
+        "root = os.path.dirname(sys.executable); "
+        "names = ['python3.%d-config' % sys.version_info[1], "
+        "sys.executable + '-config', 'python3-config']; "
+        "paths = [name if os.path.isabs(name) else os.path.join(root, name) "
+        "for name in names]; "
+        "print(next((path for path in paths if os.path.isfile(path)), ''))"
+    )
+    python_config = session.run(
+        python,
+        "-c",
+        script,
+        env=env,
+        external=True,
+        silent=True,
+    ).strip()
+    if os.name != "nt" and not python_config:
+        session.error("hardware Python config helper not found for %s" % python)
+    if python_config:
+        env["python_config_path"] = python_config
+
+
 def _install_docs_wheel(session, root, env):
     """Build and install this checkout's wheel for a full autodoc run."""
     session.install(
@@ -484,6 +512,7 @@ def _run_with_cann(session, python, args, env):
         "-o",
         "pipefail",
         "-c",
+        ': "${LD_LIBRARY_PATH:=}"; : "${CMAKE_PREFIX_PATH:=}"; '
         'source "$CANN_SET_ENV"; exec "$JITTOR_CI_PYTHON" "$@"',
         "jittor-npu",
         *args,
@@ -1383,6 +1412,7 @@ def npu(session):
     """Run ACL gates in a pre-provisioned Ascend CANN environment."""
     _root, env = _session_env(session, "npu")
     python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
     cann_set_env = os.environ.get("CANN_SET_ENV")
     if not cann_set_env or not os.path.isfile(cann_set_env):
         session.error("NPU session requires CANN_SET_ENV pointing to set_env.sh")
@@ -1395,8 +1425,11 @@ def npu(session):
         "import jittor as jt; "
         "assert getattr(jt.compiler, 'has_acl', 0); "
         "jt.flags.use_acl = 1; "
-        "x = (jt.array([1.0, 2.0]) * 2).sum(); x.sync(); "
-        "assert float(x.item()) == 6.0"
+        "jt.flags.use_cuda = 1; "
+        "a = jt.float32([[1, 2], [3, 4]]); "
+        "b = jt.float32([[5, 6], [7, 8]]); "
+        "x = jt.matmul(a, b); x.sync(); "
+        "assert x.numpy().tolist() == [[19.0, 22.0], [43.0, 50.0]]"
     )
     _run_with_cann(session, python, ("-c", probe), env)
     for args in _pytest_invocations(session, NPU_TESTS):

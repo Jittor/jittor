@@ -250,8 +250,8 @@ def install_misc(ctx):
                 idx = native_nonzero(condition)
             else:
                 idx = condition.nonzero()
-            if isinstance(idx, tuple):
-                return idx
+            if isinstance(idx, (tuple, list)):
+                return tuple(idx)
             if getattr(idx, "ndim", 0) == 2:
                 return tuple(idx[:, d] for d in range(idx.shape[1]))
             return (idx.reshape(-1),)
@@ -478,6 +478,6 @@ def install_misc(ctx):
         _state["dtype"] = d
     g.set_default_dtype = set_default_dtype
     def get_default_device():
-        return g.device("cuda", 0) if (jt.flags.use_cuda or getattr(jt.compiler, "has_acl", 0)) else g.device("cpu")
+        return g.device("cuda", 0) if jt.flags.use_cuda else g.device("cpu")
     g.get_default_device = get_default_device
     g.set_default_device = lambda *a, **k: None

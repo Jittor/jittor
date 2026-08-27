@@ -56,6 +56,59 @@ class TestTorchBootstrap(unittest.TestCase):
                 self.assertIn('kernel.cu" ', 'kernel.cu"' + value)
         self.assertNotIn("--use_fast_math", runtime_flags.nvcc_flags)
 
+    def test_preflight_does_not_pass_cuda_math_flags_to_acl(self):
+        from jittor.compat.shim import preflight
+
+        runtime_flags = types.SimpleNamespace(
+            nvcc_flags=" -lineinfo --fmad=false --prec-div=true --prec-sqrt=true "
+        )
+        root = types.SimpleNamespace(
+            compiler=types.SimpleNamespace(has_acl=True, flags=runtime_flags)
+        )
+        with mock.patch.dict(
+            os.environ,
+            {
+                "nvcc_flags": (
+                    "-lineinfo --fmad=false --prec-div=true --prec-sqrt=true"
+                ),
+                "JITTOR_TORCH_KEEP_FAST_MATH": "",
+            },
+            clear=False,
+        ):
+            preflight.configure_torch_math_flags(root)
+            environment_flags = os.environ["nvcc_flags"]
+
+        for value in (environment_flags, runtime_flags.nvcc_flags):
+            self.assertIn("-lineinfo", value)
+            self.assertNotIn("--fmad=false", value)
+            self.assertNotIn("--prec-div=true", value)
+            self.assertNotIn("--prec-sqrt=true", value)
+
+    def test_preflight_detects_acl_before_jittor_import(self):
+        from jittor.compat.shim import preflight
+
+        with tempfile.TemporaryDirectory(dir=_TEST_STATE_ROOT) as directory:
+            environment = {
+                "HOME": directory,
+                "ASCEND_TOOLKIT_HOME": "/opt/ascend/toolkit",
+                "nvcc_flags": (
+                    "-lineinfo --fmad=false --prec-div=true --prec-sqrt=true"
+                ),
+            }
+            preflight.prepare_import_environment(
+                argv=[sys.argv[0]],
+                environ=environment,
+                project_root=directory,
+                runtime_root=os.path.join(directory, "runtime"),
+                force=True,
+                configure_cuda=False,
+            )
+
+        self.assertIn("-lineinfo", environment["nvcc_flags"])
+        self.assertNotIn("--fmad=false", environment["nvcc_flags"])
+        self.assertNotIn("--prec-div=true", environment["nvcc_flags"])
+        self.assertNotIn("--prec-sqrt=true", environment["nvcc_flags"])
+
     def test_preflight_leaves_onednn_enabled(self):
         """The shim must not switch off Jittor's CPU BLAS/convolution backend.
 

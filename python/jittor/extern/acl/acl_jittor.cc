@@ -15,6 +15,117 @@
 namespace jittor
 {
 
+    static vector<char> acl_non_code_tokens(const string &src, const vector<string> &tokens)
+    {
+        vector<char> non_code_chars(src.size(), 0);
+        enum class LexState
+        {
+            code,
+            line_comment,
+            block_comment,
+            string_literal,
+            char_literal,
+            raw_string_literal,
+        };
+        LexState state = LexState::code;
+        bool escaped = false;
+        bool mark_string_literal = false;
+        string raw_string_end;
+        for (size_t i = 0; i < src.size(); ++i)
+        {
+            char c = src[i];
+            char next = i + 1 < src.size() ? src[i + 1] : '\0';
+            if (state == LexState::line_comment)
+            {
+                if (c == '\n')
+                    state = LexState::code;
+                else
+                    non_code_chars[i] = 1;
+                continue;
+            }
+            if (state == LexState::block_comment)
+            {
+                non_code_chars[i] = 1;
+                if (c == '*' && next == '/')
+                {
+                    non_code_chars[++i] = 1;
+                    state = LexState::code;
+                }
+                continue;
+            }
+            if (state == LexState::raw_string_literal)
+            {
+                if (src.compare(i, raw_string_end.size(), raw_string_end) == 0)
+                {
+                    for (size_t j = 0; j < raw_string_end.size(); ++j)
+                        non_code_chars[i + j] = 1;
+                    i += raw_string_end.size() - 1;
+                    state = LexState::code;
+                }
+                else
+                    non_code_chars[i] = 1;
+                continue;
+            }
+            if (state == LexState::string_literal || state == LexState::char_literal)
+            {
+                if (state == LexState::char_literal || mark_string_literal)
+                    non_code_chars[i] = 1;
+                if (escaped)
+                    escaped = false;
+                else if (c == '\\')
+                    escaped = true;
+                else if ((state == LexState::string_literal && c == '"') ||
+                         (state == LexState::char_literal && c == '\''))
+                    state = LexState::code;
+                continue;
+            }
+            if (c == '/' && next == '/')
+            {
+                non_code_chars[i] = non_code_chars[++i] = 1;
+                state = LexState::line_comment;
+            }
+            else if (c == '/' && next == '*')
+            {
+                non_code_chars[i] = non_code_chars[++i] = 1;
+                state = LexState::block_comment;
+            }
+            else if (c == 'R' && next == '"')
+            {
+                size_t open = src.find('(', i + 2);
+                if (open != string::npos && open - (i + 2) <= 16)
+                {
+                    raw_string_end = ")" + src.substr(i + 2, open - (i + 2)) + "\"";
+                    non_code_chars[i] = 1;
+                    state = LexState::raw_string_literal;
+                }
+            }
+            else if (c == '"')
+            {
+                size_t line_start = src.rfind('\n', i);
+                line_start = line_start == string::npos ? 0 : line_start + 1;
+                string line_prefix = strip(src.substr(line_start, i - line_start));
+                mark_string_literal = !startswith(line_prefix, "#include");
+                if (mark_string_literal)
+                    non_code_chars[i] = 1;
+                state = LexState::string_literal;
+            }
+            else if (c == '\'')
+            {
+                non_code_chars[i] = 1;
+                state = LexState::char_literal;
+            }
+        }
+
+        vector<char> result(tokens.size(), 0);
+        size_t offset = 0;
+        for (size_t i = 0; i < tokens.size(); ++i)
+        {
+            result[i] = offset < non_code_chars.size() && non_code_chars[offset];
+            offset += tokens[i].size();
+        }
+        return result;
+    }
+
     uint64_t acl_jittor_tid;
     int acl_jittor_thread_running = 0;
     aclrtStream aclstream;
@@ -125,10 +236,13 @@ namespace jittor
         try
         {
             auto tokens = token_split(src);
+            auto non_code_tokens = acl_non_code_tokens(src, tokens);
             int edit = 0;
             for (int i = 0; i < tokens.size(); i++)
             {
                 auto &token = tokens[i];
+                if (non_code_tokens[i])
+                    continue;
                 if (cuda_headers.count(token))
                     token = "acl_jittor", edit++;
                 else if (fake_class.count(token))
@@ -139,10 +253,12 @@ namespace jittor
                 {
                     if (token.size() >= 5 && token[4] >= 'A' && token[4] <= 'Z')
                     {
-                        if (token == "cudaGetDeviceCount")
-                        {
-                            token_replace(tokens, i, "($1);", "((uint*)$1);");
-                        }
+                        if (token == "cudaError_t")
+                            token = "aclError";
+                        else if (token == "cudaSuccess")
+                            token = "ACL_SUCCESS";
+                        else if (token == "cudaGetDeviceCount")
+                            token = "acl_jittor_get_device_count";
                         else if (token == "cudaLaunchHostFunc")
                         {
                             // ACL_CALLBACK_BLOCK for 310

@@ -139,6 +139,9 @@ export JITTOR_CI_PYTHON="${JITTOR_CI_PYTHON:-$(command -v python)}"
 python -m nox -s npu
 ```
 
+For the validated 910B version matrix, real-device probe, and current backend
+limitations, see the [Ascend 910B guide](../../docs/guides/ascend-910b.md).
+
 ### ROCm, MPI, and NCCL
 
 ROCm requires a working `rocminfo`; MPI requires `mpirun`. Both sessions use

@@ -1,8 +1,8 @@
 # Jittor Project Context
 
 - Status: Current index, not a history log
-- Last reviewed: 2026-08-26
-- Baseline reviewed: `40e7df7d`
+- Last reviewed: 2026-08-28
+- Baseline reviewed: `6da453a1`
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -78,12 +78,15 @@ CUDA gate also passes on a real RTX 4090 and covers the complete CUDA backend
 directory, dtype coverage, CPU/CUDA device parity, TF32 controls, and strict
 OpInfo CUDA references. The maintained CPU gate also passes with a fail-closed
 independent binary PyTorch oracle, and compact ResNet18, ViT, GPT-2, and
-diffusion UNet forward/backward parity passes on CPU and CUDA. NPU, ROCm,
+diffusion UNet forward/backward parity passes on CPU and CUDA. ROCm, most
 optional downstream dependencies, full training, and performance remain
-separate gates. See the
-[complete CPU suite report](../results/2026-08-22-complete-cpu-test-suite.md) and
-[complete CUDA suite report](../results/2026-08-22-cuda-test-suite.md), plus the
-[parallel-range and network-oracle follow-up](../results/2026-08-22-cuda-parallel-range-network-oracle.md).
+separate gates. On a real 910B3, the maintained Ascend NPU gate passes its ACL
+backend and OpInfo scope. Transformers 4.56.2 Qwen3-8B float32 loads the full
+8,190,735,360-parameter checkpoint; its model forward runs on ACL without an ACL
+fallback diagnostic, while final greedy `arg_reduce` remains CPU-compiled and
+bfloat16 remains open. See the [Ascend guide](../../docs/guides/ascend-910b.md), [validation report](../results/2026-08-28-ascend-910b-validation.md), and
+the complete [CPU](../results/2026-08-22-complete-cpu-test-suite.md) and [CUDA](../results/2026-08-22-cuda-test-suite.md) reports, plus the
+[parallel follow-up](../results/2026-08-22-cuda-parallel-range-network-oracle.md).
 The current fail-closed optional CUDA base gate passes 16 TorchMetrics,
 MMCV/MMEngine, PEFT, TensorDict, and FlashAttention-adapter tests from one
 retained cache; TorchMetrics is split by domain so cold compilation does not
@@ -155,9 +158,9 @@ Use [`noxfile.py`](../../noxfile.py) for the maintained `lint`, `format`,
 ## Open issues
 
 The canonical list is [known-issues.md](known-issues.md). Highest-risk active
-items include pending NPU/ROCm verification of the corrected negative integer
-floor division, the parallel compiler crash hypothesis, NPU reduction atomic gaps,
-and NPU/ROCm verification of the corrected floating NaN comparisons.
+items include pending ROCm verification of corrected negative integer floor
+division, the parallel compiler crash hypothesis, NPU reduction and FFT gaps,
+and remaining NPU dtype/ROCm verification of corrected floating NaN comparisons.
 
 Do not add a second bug narrative here. Add or update the ledger entry with an
 owner, executable evidence, workaround, and exit condition.

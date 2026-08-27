@@ -107,7 +107,10 @@ def _install_reductions(g):
             return _jt_var_max(x) if which == "max" else _jt_var_min(x)
         af = argmax if which == "max" else argmin
         idx = af(x, dim=dim, keepdim=keepdim)
-        if keepdim:
+        if getattr(_jt.compiler, "has_acl", 0):
+            native = _jt_max if which == "max" else _jt_min
+            val = native(x, dim, keepdims=keepdim)
+        elif keepdim:
             val = _jt.gather(x, dim, idx)
         elif x.ndim == 1:
             val = x[idx]

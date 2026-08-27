@@ -76,6 +76,17 @@ def smask(name, np_x, np_mask, val):
     x.sync()
     ref = np_x.copy(); ref[np_mask] = val
     check("set/"+name, x.numpy(), ref)
+
+
+def smask_values(name, np_x, np_mask):
+    values = np.arange(np.count_nonzero(np_mask), dtype=np_x.dtype)
+    x = jt.array(np_x); m = jt.array(np_mask)
+    x[m] = jt.array(values)
+    x.sync()
+    ref = np_x.copy(); ref[np_mask] = values
+    check("set/"+name, x.numpy(), ref)
+
+
 def test_acl_indexing():
     global PASS, FAIL
     if not getattr(jt.compiler, "has_acl", 0):
@@ -144,6 +155,8 @@ def test_acl_indexing():
         )
         s("int_array_val", X2.copy(), set_arr_jt, set_arr_np)
         smask("mask_scalar", X2.copy(), X2 > 10, 0.0)
+        smask("mask_scalar_empty", X2.copy(), np.zeros_like(X2, dtype=bool), 0.0)
+        smask_values("mask_values", X2.copy(), X2 > 10)
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     assert FAIL == 0, f"{FAIL} ACL indexing checks failed"
 

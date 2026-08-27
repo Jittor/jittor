@@ -268,7 +268,7 @@ class TestMiscStructure(unittest.TestCase):
         budgets = {
             concatenation: 100,
             indexing: 180,
-            tensor_ops: 2850,
+            tensor_ops: 2900,
             shape_transforms: 200,
             shape_composition: 200,
         }

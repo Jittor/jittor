@@ -14,6 +14,90 @@ import numpy as np
 @unittest.skipIf(not jt.compiler.has_acl, "No ACL found")
 class TestACL(unittest.TestCase):
 
+    def test_source_converter_ignores_cuda_names_in_comments(self):
+        from jittor.extern.acl import acl_compiler
+
+        source = (
+            "// cudaMemcpyAsync copy of the input\n"
+            "/* cudaMalloc(ptr, size) is mentioned here */\n"
+            "const char* message = \"cudaMalloc failed\";\n"
+            "const char* url = R\"tag(https://example.test/cudaGetLastError)tag\";\n"
+            "int value = 1;\n"
+        )
+        converted = acl_compiler.mod.process(source, "comment_probe.cc", {})
+        self.assertEqual(converted, source)
+
+    def test_source_converter_maps_every_device_count_call(self):
+        from jittor.extern.acl import acl_compiler
+
+        source = (
+            "if (cudaGetDeviceCount(&count) != cudaSuccess) count = 0;\n"
+            "cudaGetDeviceCount(&count);\n"
+            "cudaGetDeviceCount(&count);\n"
+        )
+        converted = acl_compiler.mod.process(source, "device_count_probe.cc", {})
+        self.assertEqual(converted.count("acl_jittor_get_device_count"), 3)
+        self.assertIn("ACL_SUCCESS", converted)
+        self.assertNotIn("cudaGetDeviceCount", converted)
+
+    def test_source_converter_maps_cuda_error_type(self):
+        from jittor.extern.acl import acl_compiler
+
+        source = (
+            "cudaError_t err = cudaMalloc(&ptr, size);\n"
+            "if (err == cudaSuccess) return ptr;\n"
+            "#define CALLBACK_ARGS cudaStream_t stream, cudaError_t status, void*\n"
+        )
+        converted = acl_compiler.mod.process(source, "error_type_probe.cc", {})
+        self.assertEqual(converted.count("aclError"), 2)
+        self.assertNotIn("aclrtError", converted)
+        self.assertIn("ACL_SUCCESS", converted)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_float32_matmul_runs_on_acl(self):
+        a_np = np.arange(12, dtype=np.float32).reshape(3, 4)
+        b_np = np.arange(20, dtype=np.float32).reshape(4, 5)
+
+        with jt.log_capture_scope(
+            log_v=0, log_vprefix="acl_op_exec.cc=100"
+        ) as logs:
+            actual = jt.matmul(jt.array(a_np), jt.array(b_np)).numpy()
+
+        np.testing.assert_allclose(actual, a_np @ b_np, rtol=1e-5, atol=1e-5)
+        messages = [log["msg"].lower() for log in logs]
+        self.assertTrue(any("compile acl op" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_torch_compat_empty_cuda_tensor(self):
+        import jittor as torch
+
+        device = torch.device("cuda")
+        empty = torch.tensor([], dtype=torch.float32, device=device)
+        self.assertEqual(empty.numel(), 0)
+        self.assertTrue(empty.is_cuda)
+
+        value = torch.tensor([1.0], dtype=torch.float32, device=device)
+        joined = torch.cat((empty, value))
+        np.testing.assert_array_equal(joined.cpu().numpy(), [1.0])
+
+    def test_torch_compat_default_device_follows_execution_flag(self):
+        import jittor as torch
+
+        with jt.flag_scope(use_acl=0, use_cuda=0):
+            self.assertEqual(torch.get_default_device().type, "cpu")
+        with jt.flag_scope(use_acl=1, use_cuda=1):
+            self.assertEqual(torch.get_default_device().type, "cuda")
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_var_gather_uses_acl(self):
+        source = jt.float32([[1, 2, 3], [4, 5, 6]])
+        index = jt.int32([[2], [0]])
+
+        actual = source.gather(1, index).numpy()
+
+        np.testing.assert_array_equal(actual, [[3], [4]])
+
     @jt.flag_scope(use_acl=1)
     def test_array(self):
         a = jt.array([1, 2, 3])

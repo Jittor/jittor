@@ -168,15 +168,19 @@ class SetItemACL(jt.Function):
             self.value_var = False
         if isinstance(slices, jt.Var):
             if slices.dtype == "bool":
-                slices_len = slices.sum().item()
-                if slices_len == 0:
-                    return x
                 if isinstance(value, int) or isinstance(value, float):
-                    value = jt.full((slices_len, ), value, dtype=x.dtype)
+                    # ACL masked-scatter consumes only as many source elements
+                    # as the mask selects. Avoid reducing the bool mask here:
+                    # bool reductions are not reliable on ACL, and a wrong zero
+                    # count would silently turn a real assignment into a no-op.
+                    value = jt.full((x.numel(), ), value, dtype=x.dtype)
                 assert slices.shape == x.shape, "setitem shape not match"
                 assert len(value.shape) == 1, "value shape must be 1D"
-                assert value.shape[
-                    0] == slices_len, "value shape length must be equal to slices sum"
+                if self.value_var:
+                    slices_len = slices.int32().sum().item()
+                    assert value.shape[0] == slices_len, (
+                        "value shape length must be equal to slices sum"
+                    )
                 self.type_ = 'mask'
                 self.value_shape = value.shape
                 # base x is an explicit input so its data is materialized before

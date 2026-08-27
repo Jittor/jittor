@@ -1,8 +1,8 @@
 # Active Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-08-22
-- Baseline: `0a3458b3`
+- Last reviewed: 2026-08-28
+- Baseline: `6da453a1`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -42,20 +42,93 @@ framework defects.
 ## KI-BACKEND-001: narrow integer reductions lack NPU atomics
 
 - Severity: High
-- Status: NPU expected failures
+- Status: NPU skips
 - Owner: reduce and backend maintainers
 - Evidence: [`reduce_dtypes.py`](../../tests/opinfo/definitions/reduce_dtypes.py)
   and [device parity](../../tests/backends/parity/test_device_parity.py)
-- Symptom: `sum`, `prod`, `max`, and `min` for sub-32-bit integer samples remain
-  unverified on NPU because its required atomic overloads are not implemented
+- Symptom: `sum`, `prod`, `max`, and `min` for sub-32-bit integer samples abort
+  because their required ACL atomic overloads are not implemented. Boolean
+  `all` and `any` also lack a maintained ACL reduction path.
 - Workaround: promote inputs to a supported width before reduction on NPU
 - Review/expiry condition: every affected dtype executes and matches the CPU
-  reference on a real NPU, turning the strict expected failures into passes
+  reference on a real NPU, turning the skips into passes
+
+## KI-BACKEND-002: composed atan2 can crash on NPU
+
+- Severity: High
+- Status: NPU skip
+- Owner: binary operator and ACL backend maintainers
+- Evidence: [`pointwise_binary.py`](../../tests/opinfo/definitions/pointwise_binary.py)
+  and [Ascend 910B validation](../results/2026-08-28-ascend-910b-validation.md)
+- Symptom: the maintained float32 `atan2` composition can terminate the process
+  with an ACL vector-core exception on a real 910B3
+- Workaround: run this operation on a backend with a maintained `atan2` kernel;
+  do not mask the process failure with a broad CPU fallback
+- Review/expiry condition: the float32 OpInfo reference and focused crash
+  reproducer pass repeatedly on a real NPU without an expected skip
+
+## KI-BACKEND-003: complex irfft can stall on NPU
+
+- Severity: High
+- Status: NPU skip
+- Owner: FFT and ACL backend maintainers
+- Evidence: [`fft.py`](../../tests/opinfo/definitions/fft.py) and
+  [Ascend 910B validation](../results/2026-08-28-ascend-910b-validation.md)
+- Symptom: the complex-to-real inverse FFT does not complete within 600 seconds
+  on a real 910B3, and the stalled native call is not interrupted reliably by
+  pytest's signal timeout
+- Workaround: execute `irfft` on a backend with a maintained complex FFT path
+- Review/expiry condition: forward values match NumPy and the operation exits
+  within the maintained timeout on repeated real-NPU runs
+
+## KI-BACKEND-004: float product reduction aborts on NPU
+
+- Severity: High
+- Status: NPU skip
+- Owner: reduce and ACL backend maintainers
+- Evidence: [`core_ops.py`](../../tests/opinfo/definitions/core_ops.py) and
+  [Ascend 910B validation](../results/2026-08-28-ascend-910b-validation.md)
+- Symptom: the maintained float32 `prod` reference reaches a native ACL failure
+  that aborts the test process instead of returning a Python exception
+- Workaround: execute product reduction on a supported backend; a host fallback
+  is not accepted as NPU support evidence
+- Review/expiry condition: full and dimension reductions match NumPy and leave
+  the process healthy on repeated real-NPU runs
+
+## KI-BACKEND-005: Transformers Qwen3 bfloat16 falls back on NPU
+
+- Severity: High
+- Status: Open; float32 inference verified
+- Owner: binary operator, Torch-compatibility, and ACL backend maintainers
+- Evidence: [`run_qwen3_transformers.py`](../../tests/backends/npu/manual/run_qwen3_transformers.py)
+  and [Ascend 910B validation](../results/2026-08-28-ascend-910b-validation.md)
+- Symptom: Qwen3 generation with bfloat16 weights reaches an unsupported
+  `binary_op_acl.cc` dtype path and logs `fallback cpu`; that run is not accepted
+  as NPU support
+- Workaround: load the checkpoint on CPU, explicitly migrate it, and use the
+  validated float32 inference path on NPU
+- Review/expiry condition: the Qwen3-8B bfloat16 manual probe generates on a real
+  NPU with `is_cuda=true` and zero CPU fallback
+
+## KI-BACKEND-006: Qwen3 greedy token selection compiles on CPU
+
+- Severity: Medium
+- Status: Open; float32 model forward verified on ACL
+- Owner: reduction, Torch-compatibility, and ACL backend maintainers
+- Evidence: [`run_qwen3_transformers.py`](../../tests/backends/npu/manual/run_qwen3_transformers.py)
+  and [Ascend 910B validation](../results/2026-08-28-ascend-910b-validation.md)
+- Symptom: the full Qwen3-8B float32 forward executes through ACL without an ACL
+  fallback diagnostic, but greedy generation compiles the final `arg_reduce`
+  token selection for CPU
+- Workaround: accept the host-side selection for inference correctness probes;
+  do not describe the current path as fully device-resident generation
+- Review/expiry condition: greedy generation completes on a real NPU without a
+  CPU-compiled `arg_reduce`
 
 ## KI-OPS-002: integer floor-division backend verification incomplete
 
 - Severity: Critical
-- Status: Core fix verified on CPU/CUDA; NPU/ROCm real-device verification pending
+- Status: Core fix verified on CPU/CUDA/NPU; ROCm verification pending
 - Owner: binary operator maintainers
 - Evidence: [`test_floor_divide.py`](../../tests/core/test_floor_divide.py),
   [`sample_floor_divide`](../../tests/opinfo/definitions/pointwise_binary.py), and
@@ -65,30 +138,34 @@ framework defects.
 - Current implementation: shared CPU/CUDA codegen subtracts one exactly when a
   nonzero remainder has the opposite sign from the divisor; fixed vectors pass
   for uint8/int8/int16/int32/int64, and the selected int64 OpInfo samples cover
-  negative operands on CPU and CUDA
-- Workaround on unverified backends: compare representative negative operands
+  negative operands on CPU, CUDA, and a real Ascend 910B3
+- Workaround on the unverified backend: compare representative negative operands
   against `numpy.floor_divide` before relying on the backend
-- Review/expiry condition: pass the same fixed-vector and OpInfo coverage on real
-  NPU and ROCm devices, then remove this entry
+- Review/expiry condition: pass the same fixed-vector and OpInfo coverage on a
+  real ROCm device, then remove this entry
 
 ## KI-SEMANTICS-003: floating-comparison backend verification incomplete
 
 - Severity: Critical
-- Status: Core fix verified on CPU/CUDA; NPU/ROCm real-device verification pending
+- Status: CPU/CUDA verified; NPU float32 verified; full NPU dtype/ROCm pending
 - Owner: compiler and comparison-operator maintainers
 - Evidence: [`test_nan_self_comparisons_across_dtypes`](../../tests/compiler/test_kernel_traps.py),
   [`test_float_comparisons_with_nan`](../../tests/ops/test_fusion_correctness.py),
-  and [2026-08-21 verification](../results/2026-08-21-ieee-nan-comparisons.md)
+  [2026-08-21 verification](../results/2026-08-21-ieee-nan-comparisons.md), and
+  [Ascend 910B validation](../results/2026-08-28-ascend-910b-validation.md)
 - Previous symptom: CPU JIT kernels inherited `-Ofast`, allowing both same-object
   and distinct floating comparisons to violate IEEE NaN behavior; low-precision
   `!=`, `<=`, and `>=` could also fail to compile on CPU
 - Current implementation: floating and complex comparisons retain optimized
   `-O3` kernels without finite-math assumptions, and fused compile options are
   taken from the complete aggregated graph choices
-- Workaround on unverified backends: compare representative NaN values against
-  NumPy before relying on direct comparison masks
-- Review/expiry condition: pass the same dtype and fused/unfused matrices on real
-  NPU and ROCm devices, then remove this entry
+- Current NPU result: float32 `isnan`/`isinf`/`isfinite` and all six
+  same/distinct fused/unfused comparison forms pass on a real 910B3 without CPU
+  fallback; general ACL float64 operation support is unavailable
+- Workaround for unverified dtype/backend combinations: compare representative
+  NaN values against NumPy before relying on direct comparison masks
+- Review/expiry condition: pass the remaining dtype matrix on real NPU and the
+  complete matrix on real ROCm, then remove this entry
 
 ## KI-SHAPE-001: reductions do not produce 0-D scalar tensors
 

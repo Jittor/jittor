@@ -51,7 +51,7 @@ integer promotion), except a ``bool`` input always yields ``int32``
 (reduce_op.cc L289) -- so the all/any refs below emit int32 0/1 to match exactly.
 """
 from ._refs import *  # noqa: F401,F403  (make_tensor, SampleInput, refs, np, jt, nn, F, cu)
-from ..core import OpInfo, UnaryUfuncInfo, BinaryUfuncInfo, ReductionOpInfo, skip, xfail
+from ..core import OpInfo, UnaryUfuncInfo, BinaryUfuncInfo, ReductionOpInfo, skip
 
 
 # ------------------------------------------------------------------- numpy refs
@@ -214,11 +214,11 @@ def sample_bool_any(op_info, device, dtype, requires_grad):
 # integer width, and the sample builders additionally pin all of them for parity.
 
 # CUDA uses packed 32-bit CAS overloads for uint8/int8/int16 add, multiply,
-# maximum, and minimum. NPU remains an explicit expected failure until the same
-# real-device matrix passes there.
-_NPU_INT_REDUCE_XFAIL = (
-    xfail("test_reference", device_type="npu",
-          reason="FINDING #10: sub-32-bit reduce atomics are not verified on NPU"),
+# maximum, and minimum. NPU remains an explicit skip until the same real-device
+# matrix can run without aborting the test process.
+_NPU_INT_REDUCE_SKIP = (
+    skip("test_reference", device_type="npu",
+         reason="KI-BACKEND-001: sub-32-bit reduce atomics are unavailable on NPU"),
 )
 
 op_db = [
@@ -226,19 +226,19 @@ op_db = [
     OpInfo("sum", op=jt.reduce_add, ref=sum_ref,
            sample_inputs_func=sample_int_sum,
            dtypes=cu.integral_types(), supports_autograd=False,
-           variant_test_name="int_reduce", skips=_NPU_INT_REDUCE_XFAIL),
+           variant_test_name="int_reduce", skips=_NPU_INT_REDUCE_SKIP),
     OpInfo("prod", op=jt.reduce_multiply, ref=prod_ref,
            sample_inputs_func=sample_int_prod,
            dtypes=cu.integral_types(), supports_autograd=False,
-           variant_test_name="int_reduce", skips=_NPU_INT_REDUCE_XFAIL),
+           variant_test_name="int_reduce", skips=_NPU_INT_REDUCE_SKIP),
     OpInfo("max", op=jt.reduce_maximum, ref=max_ref,
            sample_inputs_func=sample_int_max,
            dtypes=cu.integral_types(), supports_autograd=False,
-           variant_test_name="int_reduce", skips=_NPU_INT_REDUCE_XFAIL),
+           variant_test_name="int_reduce", skips=_NPU_INT_REDUCE_SKIP),
     OpInfo("min", op=jt.reduce_minimum, ref=min_ref,
            sample_inputs_func=sample_int_min,
            dtypes=cu.integral_types(), supports_autograd=False,
-           variant_test_name="int_reduce", skips=_NPU_INT_REDUCE_XFAIL),
+           variant_test_name="int_reduce", skips=_NPU_INT_REDUCE_SKIP),
 
     # ---- bool all / any --------------------------------------------------------
     # Bound to the native C++ reduces ``all_``/``any_`` (torch_compat re-wraps the

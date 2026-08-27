@@ -34,7 +34,7 @@ resolution discipline in ``shape.py``). All sample tensors stay small (<= 24 ele
 per differentiated operand) because gradcheck is O(numel) forward passes.
 """
 from ._refs import *  # noqa: F401,F403  (make_tensor, SampleInput, np, jt, nn, F, cu)
-from ..core import OpInfo, UnaryUfuncInfo, BinaryUfuncInfo, ReductionOpInfo
+from ..core import OpInfo, UnaryUfuncInfo, BinaryUfuncInfo, ReductionOpInfo, skip
 
 
 # =============================================================================
@@ -243,7 +243,19 @@ def sample_compare(op_info, device, dtype, requires_grad):
 op_db = [
     # ---- differentiable binary math (forward pinned to numpy; backward gradchecked) ----
     OpInfo("pow", op=jt.pow, ref=pow_ref, sample_inputs_func=sample_pow),
-    OpInfo("atan2", op=_atan2, ref=atan2_ref, sample_inputs_func=sample_atan2),
+    OpInfo(
+        "atan2",
+        op=_atan2,
+        ref=atan2_ref,
+        sample_inputs_func=sample_atan2,
+        skips=(
+            skip(
+                "test_reference",
+                device_type="npu",
+                reason="KI-BACKEND-002: composed atan2 can segfault on ACL",
+            ),
+        ),
+    ),
     # fmod/remainder: gradient w.r.t. both operands is locally constant (the
     # floor/trunc quotient term has zero derivative a.e.), so the *second*
     # derivative is identically 0 -- gradgradcheck against numerical 0 is fine,

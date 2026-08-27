@@ -107,10 +107,22 @@ class PoolACL(jt.Function):
         input_height, input_width = input.shape[-2:]
         kernel_height, kernel_width = self.kernel_size[-2:]
 
-        output_height = (input_height + 2 * self.padding[0] -
-                         (kernel_height - 1) - 1) // self.stride[0] + 1
-        output_width = (input_width + 2 * self.padding[1] -
-                        (kernel_width - 1) - 1) // self.stride[1] + 1
+        if self.ceil_mode:
+            output_height = (input_height + 2 * self.padding[0] -
+                             kernel_height + self.stride[0] - 1
+                             ) // self.stride[0] + 1
+            output_width = (input_width + 2 * self.padding[1] -
+                            kernel_width + self.stride[1] - 1
+                            ) // self.stride[1] + 1
+            if (output_height - 1) * self.stride[0] >= input_height + self.padding[0]:
+                output_height -= 1
+            if (output_width - 1) * self.stride[1] >= input_width + self.padding[1]:
+                output_width -= 1
+        else:
+            output_height = (input_height + 2 * self.padding[0] -
+                             kernel_height) // self.stride[0] + 1
+            output_width = (input_width + 2 * self.padding[1] -
+                            kernel_width) // self.stride[1] + 1
 
         output_shape = (input.shape[0], input.shape[1], output_height,
                         output_width)

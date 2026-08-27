@@ -161,7 +161,27 @@ def _strict_math_nvcc_flags(value, remove_fast_math=False):
     return " " + " ".join(tokens) + " "
 
 
+def _remove_strict_math_nvcc_flags(value):
+    strict_tokens = {"--fmad=false", "--prec-div=true", "--prec-sqrt=true"}
+    tokens = [token for token in str(value or "").split()
+              if token not in strict_tokens]
+    return " " + " ".join(tokens) + " " if tokens else ""
+
+
+def _acl_environment(environ):
+    return bool(
+        environ.get("ASCEND_TOOLKIT_HOME")
+        or environ.get("ASCEND_HOME_PATH")
+        or environ.get("tikcc_path")
+    )
+
+
 def _add_nvcc_flags(environ):
+    if _acl_environment(environ):
+        environ["nvcc_flags"] = _remove_strict_math_nvcc_flags(
+            environ.get("nvcc_flags", "")
+        )
+        return
     if is_truthy(environ.get("JITTOR_TORCH_KEEP_FAST_MATH")):
         return
     environ["nvcc_flags"] = _strict_math_nvcc_flags(
@@ -170,11 +190,20 @@ def _add_nvcc_flags(environ):
 
 
 def configure_torch_math_flags(jittor_module):
+    compiler = getattr(jittor_module, "compiler", None)
+    flags = getattr(compiler, "flags", None)
+    if getattr(compiler, "has_acl", False):
+        os.environ["nvcc_flags"] = _remove_strict_math_nvcc_flags(
+            os.environ.get("nvcc_flags", "")
+        )
+        current = getattr(flags, "nvcc_flags", None)
+        if isinstance(current, str):
+            flags.nvcc_flags = _remove_strict_math_nvcc_flags(current)
+        return
     _add_nvcc_flags(os.environ)
     if is_truthy(os.environ.get("JITTOR_TORCH_KEEP_FAST_MATH")):
         return
     try:
-        flags = getattr(getattr(jittor_module, "compiler", None), "flags", None)
         current = getattr(flags, "nvcc_flags", None)
         if isinstance(current, str):
             flags.nvcc_flags = _strict_math_nvcc_flags(

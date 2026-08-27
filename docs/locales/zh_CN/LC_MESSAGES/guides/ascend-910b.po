@@ -1,0 +1,426 @@
+# Copyright (C) 2026, Jittor contributors
+# This file is distributed under the same license as the Jittor package.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Jittor 1.3.11.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-08-28 01:07+0800\n"
+"PO-Revision-Date: 2026-08-28 01:15+0800\n"
+"Last-Translator: Jittor contributors\n"
+"Language: zh_CN\n"
+"Language-Team: zh_CN <LL@li.org>\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: 2557f45f4bbb4ea38ab12c82b83df253
+msgid "Ascend 910B setup and validation"
+msgstr "昇腾 910B 配置与验证"
+
+#: 48370c6285904eb1ad6585b421c28442
+msgid ""
+"This guide configures a Jittor 2.0 source checkout for Ascend 910B-series"
+" devices and verifies that an operation really executes through ACL. "
+"Installing the Ascend driver, firmware, and CANN itself is outside "
+"Jittor's scope; start from a host where the vendor runtime and compiler "
+"are already installed."
+msgstr ""
+"本指南介绍如何为昇腾 910B 系列设备配置 Jittor 2.0 源码检出，并验证算子"
+"确实通过 ACL 执行。昇腾驱动、固件和 CANN 本身的安装不属于 Jittor 的范围；"
+"请从已经安装厂商运行时和编译器的主机开始。"
+
+#: d7fbb973d83e4a55a1f5c3986599be70
+msgid "Validated baseline"
+msgstr "已验证基线"
+
+#: 1b3cbeaeb25e42e98b84235683ed5a9c
+msgid "The maintained gate was validated on this combination:"
+msgstr "维护中的门禁已在以下组合上完成验证："
+
+#: c1df145541754a4fb719ef47d99fde34
+msgid "Component"
+msgstr "组件"
+
+#: 8205abd83b814708ac61ef50154d9d4d
+msgid "Validated version"
+msgstr "已验证版本"
+
+#: 8d38ebd871324f6bb85ef352b7cec77b
+msgid "Device"
+msgstr "设备"
+
+#: 87145834fed54bbaadfc9be19dae0d84
+msgid "Ascend 910B3"
+msgstr "昇腾 910B3"
+
+#: 690b13cbd2dd4dce859a1b5bfcc4009e
+msgid "Architecture"
+msgstr "架构"
+
+#: 838f128563744bbc9acf18b5ad71ddb4
+msgid "Linux aarch64"
+msgstr "Linux aarch64"
+
+#: fb11455ee4fb4e919c0011cb5eb35a34
+msgid "Driver reported by `npu-smi`"
+msgstr "`npu-smi` 报告的驱动版本"
+
+#: f1626864821648b0a318b98c93e41c06
+msgid "25.5.1"
+msgstr "25.5.1"
+
+#: b92ff674c13d4d20852145cc1f9ee4c0
+msgid "CANN toolkit and `ccec`"
+msgstr "CANN 工具包和 `ccec`"
+
+#: ba5c4d9093a64264a878c7dcf49e030a
+msgid "9.0.0"
+msgstr "9.0.0"
+
+#: eb6a29e807634a6aa97b4844029abc14
+msgid "Python"
+msgstr "Python"
+
+#: c8686debe9b345f29d55650aaa15c4d6
+msgid "3.9.25"
+msgstr "3.9.25"
+
+#: 84f83242a8e149cd924cb4e6e83c28b4
+msgid "NumPy"
+msgstr "NumPy"
+
+#: 07865db613e445e087c98d93ae9773c2
+msgid "1.26.4"
+msgstr "1.26.4"
+
+#: af7778b00cc8436d9da64c0289bbc691
+msgid "pytest / pytest-timeout"
+msgstr "pytest / pytest-timeout"
+
+#: 58d509e7e77d46069226faf9dc291d71
+msgid "7.4.4 / 2.3.1"
+msgstr "7.4.4 / 2.3.1"
+
+#: 7a9996889b0842b3af81e2ad34eadde2
+msgid ""
+"These versions are a reproduced baseline, not a claim that every other "
+"CANN release is incompatible. Jittor declares Python 3.7 through 3.12 "
+"support; Python 3.9 through 3.11 is the practical range for an Ascend "
+"environment whose vendor packages may have narrower Python constraints."
+msgstr ""
+"这些版本是一组可复现基线，并不表示其他 CANN 版本都不兼容。Jittor 声明支持 "
+"Python 3.7 至 3.12；考虑到昇腾厂商包可能采用更窄的 Python 版本约束，"
+"Python 3.9 至 3.11 是更实用的范围。"
+
+#: a417a9218d32455a82074b619671ff7f
+msgid "Check the device and toolkit"
+msgstr "检查设备与工具包"
+
+#: 1803adb4f78940f1be3dcc19b981cce2
+msgid "Confirm that the driver sees a healthy device before importing Jittor:"
+msgstr "导入 Jittor 前，确认驱动能够识别健康的设备："
+
+#: 7d5fae0a62844f308cdcec4f8207fab6
+msgid ""
+"Find the CANN environment script and load it in the current shell. Keep "
+"its location configurable instead of embedding a host-specific "
+"installation path:"
+msgstr ""
+"找到 CANN 环境脚本并在当前 shell 中加载。应让脚本位置可配置，不要嵌入"
+"特定主机的安装路径："
+
+#: 978afbc6453346dc956a8a6ecf93fd1b
+msgid ""
+"`npu-smi info` must succeed in the same execution environment as Python. "
+"In a container, pass the required Ascend devices and driver libraries "
+"through using the vendor container runtime instructions."
+msgstr ""
+"`npu-smi info` 必须在与 Python 相同的执行环境中成功。在容器中，请按照"
+"厂商容器运行时说明传入所需的昇腾设备和驱动库。"
+
+#: a850bc6543b442988efda641d57c34b5
+msgid "Install the source checkout"
+msgstr "安装源码检出"
+
+#: 7c7a84bb586b44d78ebd9fafc9929d4f
+msgid ""
+"Create a dedicated Python environment and install the checkout in "
+"editable mode. The NPU validation gate also needs SciPy and the pinned "
+"pytest tools:"
+msgstr ""
+"创建专用 Python 环境，并以可编辑模式安装当前检出。NPU 验证门禁还需要 "
+"SciPy 和固定版本的 pytest 工具："
+
+#: 9b4c38346f0c4bf6963ab8897ccd23f0
+msgid ""
+"Run from the repository root. For development without an editable "
+"install, place the checkout's Python package first:"
+msgstr ""
+"请在仓库根目录运行。如果开发时不采用可编辑安装，请将当前检出的 Python 包"
+"放在搜索路径首位："
+
+#: 6938c3bb496e40a586ea0db96b8a7564
+msgid "Isolate JIT state"
+msgstr "隔离 JIT 状态"
+
+#: 9fcad47795284bda8de11fc76ed3762d
+msgid ""
+"Jittor compiles its core and operators on first use. Put mutable state "
+"outside the checkout and give every concurrent run a distinct "
+"`JITTOR_HOME` or `cache_name`:"
+msgstr ""
+"Jittor 会在首次使用时编译核心和算子。请把可变状态放在源码检出之外，并为"
+"每个并发任务分配不同的 `JITTOR_HOME` 或 `cache_name`："
+
+#: baa73f9d132c43f7b3069250ddca43e8
+msgid ""
+"Run the first JIT or extension compile serially. Tests and benchmarks "
+"must not share a compilation cache. After changing CANN, the driver, the "
+"host compiler, or ACL source, use a new cache name; do not diagnose the "
+"new stack with stale binaries."
+msgstr ""
+"首次 JIT 或扩展编译应串行运行。测试和基准不得共享编译缓存。更换 CANN、"
+"驱动、主机编译器或 ACL 源码后，请使用新的缓存名称；不要用旧二进制诊断"
+"新的软件栈。"
+
+#: 52cb98d06d564e61972c2fef1d387152
+msgid "Select a device"
+msgstr "选择设备"
+
+#: e52ef5fc3fdc473c9a3aa9296894ed54
+msgid "Restrict the process to allocated devices before importing Jittor:"
+msgstr "导入 Jittor 前，将进程限制到已分配的设备："
+
+#: 7a6344a426ef46e2a9cfc4e47b23a31f
+msgid ""
+"The visible device is renumbered inside the process. Do not select a "
+"device that is already occupied by another workload."
+msgstr ""
+"可见设备会在进程内重新编号。不要选择已经被其他工作负载占用的设备。"
+
+#: f806550651e9499abdbc526b4206c53b
+msgid "Run a real ACL probe"
+msgstr "运行真实 ACL 探针"
+
+#: 727ad64820b9430ab02d1f467c7271aa
+msgid ""
+"An import-only check cannot prove NPU support. The following probe "
+"requires ACL, enables the accelerator flags, performs float32 matrix "
+"multiplication, and checks both its independent result and the ACL "
+"compilation log:"
+msgstr ""
+"仅检查导入成功不能证明 NPU 支持。下面的探针要求 ACL 可用，启用加速器标志，"
+"执行 float32 矩阵乘法，并同时检查独立计算结果和 ACL 编译日志："
+
+#: 1aafad5cade54f0d82ecb2202a22bd01
+msgid ""
+"Save the probe as `probe_acl.py` outside the checkout and run it only "
+"after sourcing CANN:"
+msgstr ""
+"将探针保存为源码检出之外的 `probe_acl.py`，并只在加载 CANN 环境后运行："
+
+#: 83eb4bac6674440181654bcb3feafbda
+msgid ""
+"Jittor uses `use_cuda` as the common accelerator execution flag even when"
+" the selected backend is ACL. `has_acl` is therefore the required "
+"discriminator between Ascend and CUDA."
+msgstr ""
+"即使选择的后端是 ACL，Jittor 也使用 `use_cuda` 作为通用加速器执行标志。"
+"因此必须用 `has_acl` 区分昇腾与 CUDA。"
+
+#: 3b20d89eb36c4cd6935cf3f2a354ca1e
+msgid "Run the maintained NPU gate"
+msgstr "运行维护中的 NPU 门禁"
+
+#: 0751c94c0b244203993a7bbbe90dae9b
+msgid ""
+"The NPU nox session creates isolated state, checks `npu-smi`, runs a real"
+" ACL matmul probe, and then executes the maintained backend and OpInfo "
+"tests. Nox itself uses Python 3.11, while `JITTOR_CI_PYTHON` points to "
+"the pre-provisioned Ascend Python environment:"
+msgstr ""
+"NPU nox 会话会创建隔离状态、检查 `npu-smi`、运行真实 ACL 矩阵乘法探针，"
+"随后执行维护中的后端和 OpInfo 测试。Nox 本身使用 Python 3.11，而 "
+"`JITTOR_CI_PYTHON` 指向预先配置好的昇腾 Python 环境："
+
+#: bc93d6619a56402eb9b6adfac16a586a
+msgid ""
+"The session resolves `python_config_path` from `JITTOR_CI_PYTHON` rather "
+"than from Nox's own interpreter. If a direct launch sets "
+"`python_config_path`, it must point to the config helper for that same "
+"Python version; a mismatched helper produces an extension suffix that the "
+"hardware Python cannot import."
+msgstr ""
+"该会话会从 `JITTOR_CI_PYTHON` 而不是 Nox 自身的解释器解析 "
+"`python_config_path`。如果直接启动时设置了 `python_config_path`，它必须指向"
+"同一 Python 版本的配置辅助程序；不匹配的辅助程序会生成硬件 Python 无法导入的"
+"扩展后缀。"
+
+#: 8fb91b4654f6410787b2328bcb80a7f8
+msgid "To run the same core tests directly:"
+msgstr "如需直接运行同一组核心测试："
+
+#: 09db9639bc2a4b4aa6976ba1d2c57a06
+msgid ""
+"Do not treat a passing CPU fallback as NPU coverage. For a new or "
+"repaired operation, add a focused assertion that captures ACL execution "
+"or otherwise proves the declared device performed the calculation."
+msgstr ""
+"不要把通过的 CPU fallback 当作 NPU 覆盖。对于新增或修复的算子，应添加"
+"捕获 ACL 执行的定向断言，或用其他方式证明计算确实由所声明的设备完成。"
+
+#: 6ae22936a9b14210820e33b33e96bcfd
+msgid "Run Qwen3-8B with Transformers"
+msgstr "使用 Transformers 运行 Qwen3-8B"
+
+#: 5e0938aa0de6490abb0b3be2a43ec3a6
+msgid ""
+"The maintained manual probe runs a local Qwen3 checkpoint through the "
+"Jittor Torch shim and Transformers 4.56.2. Install the optional model "
+"dependencies and keep the checkpoint outside the source tree:"
+msgstr ""
+"维护中的手动探针通过 Jittor Torch shim 和 Transformers 4.56.2 运行本地 "
+"Qwen3 检查点。请安装可选模型依赖，并将检查点保存在源码树之外："
+
+#: 3ead312662594c47bc07b02b71815098
+msgid ""
+"Run this command only after the CANN, device-selection, and isolated-cache "
+"setup above. The probe loads weights on CPU, explicitly migrates the model "
+"to the visible NPU, prints `npu-smi` while the model is resident, performs "
+"greedy eager attention generation with KV cache, and fails if generation "
+"logs an ACL backend fallback or an unexpected CPU-compiled operation. CPU "
+"checkpoint deserialization is expected and is not used as evidence for the "
+"model forward."
+msgstr ""
+"仅在完成上述 CANN、设备选择和隔离缓存配置后运行此命令。探针在 CPU 加载"
+"权重，再将模型显式迁移到可见 NPU；模型驻留期间会打印 `npu-smi`，随后使用 "
+"KV cache 执行贪心 eager attention 生成。如果生成日志出现 ACL 后端 fallback "
+"或非预期的 CPU 编译算子，探针会失败。CPU 检查点反序列化是预期行为，不作为"
+"模型前向计算的验证证据。"
+
+#: 7c392f76ed6547cc92d5577503e62546
+msgid ""
+"The validated Qwen3-8B checkpoint has 8,190,735,360 parameters. With "
+"float32 weights on one 64 GB 910B3, the process used 32,376 MB of device "
+"memory and generated token `4` for the probe prompt. The accepted result "
+"reported `is_cuda=true`, `has_acl=use_acl=use_cuda=1`, and "
+"`fallback_count=0`. The model forward used ACL, while the final greedy token "
+"selection compiled one `arg_reduce` operation for CPU. This one-token "
+"correctness probe is not a throughput benchmark."
+msgstr ""
+"已验证的 Qwen3-8B 检查点包含 8,190,735,360 个参数。在一张 64 GB 910B3 上"
+"使用 float32 权重时，进程占用 32,376 MB 设备内存，并为探针提示词生成 token "
+"`4`。通过的结果报告 `is_cuda=true`、`has_acl=use_acl=use_cuda=1` 和 "
+"`fallback_count=0`。模型前向使用 ACL，而最后的贪心 token 选择有一个 "
+"`arg_reduce` 算子在 CPU 编译。这个单 token 正确性探针不是吞吐量基准。"
+
+#: 5afbbdbfdb7942ab82a6d9674525a5e2
+msgid "Current limitations"
+msgstr "当前限制"
+
+#: 4e8ca41223a0495fb936777190498b92
+msgid ""
+"The maintained 910B gate deliberately skips these reproduced gaps instead"
+" of allowing them to abort or stall the process:"
+msgstr ""
+"维护中的 910B 门禁会明确跳过以下已复现缺口，避免它们导致进程中止或停滞："
+
+#: a2464eba7b79444390cc92469ff57f53
+msgid ""
+"sub-32-bit integer `sum`, `prod`, `max`, and `min`, plus boolean `all` "
+"and `any`, lack a complete ACL reduction path; promote inputs to a "
+"supported width when possible;"
+msgstr ""
+"低于 32 位的整数 `sum`、`prod`、`max` 和 `min`，以及布尔 `all` 和 "
+"`any`，尚无完整 ACL 归约路径；条件允许时请将输入提升到受支持的位宽；"
+
+#: cfd09dce6e7f4e318df6859dfd45302b
+msgid "composed float32 `atan2` can raise a vector-core exception;"
+msgstr "组合实现的 float32 `atan2` 可能触发 vector core 异常；"
+
+#: 5b86b6a1e28f4c8ab310a43e99384e2b
+msgid "complex `irfft` can stall;"
+msgstr "复数 `irfft` 可能停滞；"
+
+#: 91d952743b7c4cd087cd432fd231b658
+msgid "float32 `prod` can abort in the ACL reduction path;"
+msgstr "float32 `prod` 可能在 ACL 归约路径中中止进程；"
+
+#: c5ff095ca0f748da91ac3ea49a6a78a8
+msgid ""
+"native FlashAttention tests require an optional `jt.nn.FlashAttention` "
+"implementation and are skipped when it is absent;"
+msgstr ""
+"原生 FlashAttention 测试需要可选的 `jt.nn.FlashAttention` 实现；缺少该"
+"实现时会跳过；"
+
+#: 7c0d70c87b6f4633860a3ddd4de5de45
+msgid ""
+"the validated Transformers Qwen3-8B path uses float32; bfloat16 generation "
+"currently reaches an unsupported ACL binary operation and is rejected "
+"because it falls back to CPU;"
+msgstr ""
+"已验证的 Transformers Qwen3-8B 路径使用 float32；bfloat16 生成当前会进入"
+"不受支持的 ACL 二元操作，并因回退到 CPU 而被拒绝；"
+
+#: 9be147f0d21844019b005f7dc091ad89
+msgid ""
+"Qwen3 greedy token selection currently compiles the final `arg_reduce` on "
+"CPU; the model forward remains on ACL, but fully device-resident generation "
+"is not yet claimed;"
+msgstr ""
+"Qwen3 贪心 token 选择目前会在 CPU 编译最后的 `arg_reduce`；模型前向仍在 ACL "
+"执行，但尚不宣称生成过程完全驻留在设备上；"
+
+#: e4258c475ba343c2a67dd6950f0976f8
+msgid ""
+"ACL does not provide general float64 operator coverage, so float64 "
+"fallback is not accepted as evidence for an NPU operation."
+msgstr ""
+"ACL 不提供通用的 float64 算子覆盖，因此不能把 float64 fallback 视为 NPU "
+"算子的验证证据。"
+
+#: 678bc6e660684656bcdbe3a15b510a23
+msgid ""
+"See the [active known-issues "
+"ledger](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-"
+"issues.md) for executable evidence and exit conditions."
+msgstr ""
+"有关可执行证据和退出条件，请参阅[当前已知问题总账]"
+"(https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)。"
+
+#: de8533f82b334a17bd36a539ac7d9ec6
+msgid "Troubleshooting"
+msgstr "故障排查"
+
+#: 85d1c5a0a2fe4a76b38ff0be063e3924
+msgid ""
+"If ACL is not detected, verify `CANN_SET_ENV`, `ccec --version`, the "
+"Python architecture, and the CANN library paths in the same shell. Do not"
+" catch and ignore CANN registration or compilation errors; an incomplete "
+"backend setup must fail visibly."
+msgstr ""
+"如果未检测到 ACL，请在同一个 shell 中检查 `CANN_SET_ENV`、"
+"`ccec --version`、Python 架构和 CANN 库路径。不要捕获并忽略 CANN 注册或"
+"编译错误；后端配置不完整时必须明确失败。"
+
+#: 1047e43f1c52423e81fac91f2ad3ea94
+msgid ""
+"If an asynchronous device error is reported after the Python operation "
+"that caused it, rerun only the smallest reproducer with:"
+msgstr ""
+"如果异步设备错误在引发问题的 Python 操作之后才被报告，请仅使用以下设置"
+"重新运行最小复现："
+
+#: 5fb9a698f8cb4b6f8cf716b4828465a3
+#, python-brace-format
+msgid ""
+"These flags are diagnostic and slow execution. Remove them after locating"
+" the failing operation. For general JIT and memory diagnostics, see "
+"{doc}`debugging`."
+msgstr ""
+"这些标志用于诊断，会降低执行速度。定位失败操作后应将其移除。通用 JIT 和"
+"内存诊断请参阅 {doc}`debugging`。"

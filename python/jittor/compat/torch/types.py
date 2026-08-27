@@ -259,6 +259,8 @@ def _var_is_cpu_resident(v):
     try:
         if getattr(v, "_jittor_torch_force_cpu", False):
             return True
+        if getattr(v, "_jittor_torch_force_cuda", False):
+            return False
     except Exception:
         pass
     try:
@@ -291,6 +293,11 @@ def _make_cpu_resident(v, inplace=False):
         return v
     if _var_is_cpu_resident(v):
         return v
+    if v.numel() == 0:
+        out = v if inplace else v.clone()
+        out._jittor_torch_force_cpu = True
+        out._jittor_torch_force_cuda = False
+        return out
     if hasattr(v, "migrate_to_cpu"):
         try:
             out = v if inplace else v.clone()
@@ -333,6 +340,11 @@ def _make_cuda_resident(v, force=False, inplace=False):
         loc = None
     if loc == "device":
         return v
+    if v.numel() == 0:
+        out = v if inplace or loc != "cpu" else v.clone()
+        out._jittor_torch_force_cpu = False
+        out._jittor_torch_force_cuda = True
+        return out
     try:
         if not getattr(v, "_jittor_torch_force_cpu", False) and loc not in ("cpu", "disk"):
             with jt.flag_scope(use_cuda=1):

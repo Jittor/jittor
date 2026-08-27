@@ -204,8 +204,13 @@ op_db = [
     UnaryUfuncInfo("erf", ref=erf_ref, op=jt.erf),
 
     # trig / hyperbolic (1st & 2nd derivatives are composed of differentiable ops)
-    UnaryUfuncInfo("asin", ref=np.arcsin, domain=(-0.9, 0.9), op=jt.asin),
-    UnaryUfuncInfo("acos", ref=np.arccos, domain=(-0.9, 0.9), op=jt.acos),
+    # Ascend's float32 transcendental kernels are accurate to about 6e-5 over
+    # this domain; use a tolerance that covers that backend without hiding
+    # lower-precision dtype promotion or gross approximation errors.
+    UnaryUfuncInfo("asin", ref=np.arcsin, domain=(-0.9, 0.9), op=jt.asin,
+                   reference_tol=(1e-4, 1e-4)),
+    UnaryUfuncInfo("acos", ref=np.arccos, domain=(-0.9, 0.9), op=jt.acos,
+                   reference_tol=(1e-4, 1e-4)),
     UnaryUfuncInfo("atan", ref=np.arctan, op=jt.atan),
     UnaryUfuncInfo("sinh", ref=np.sinh, domain=(-3.0, 3.0), op=jt.sinh),
     UnaryUfuncInfo("cosh", ref=np.cosh, domain=(-3.0, 3.0), op=jt.cosh),

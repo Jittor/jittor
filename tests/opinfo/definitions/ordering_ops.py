@@ -170,9 +170,11 @@ def _perm_tensor(shape, dtype, requires_grad, seed):
     rng = np.random.RandomState(seed & 0x7FFFFFFF)
     vals = (np.arange(n, dtype="float64") - (n - 1) / 2.0) * _SCALE
     rng.shuffle(vals)
-    a = np.ascontiguousarray(vals.reshape(shape).astype(np.float64))
+    a = np.ascontiguousarray(vals.reshape(shape).astype(cu.np_dtype(dtype)))
     v = jt.array(a, dtype=str(a.dtype))
-    if str(v.dtype) != dtype:
+    if dtype == cu.bfloat16:
+        v = v.float16()
+    elif str(v.dtype) != dtype:
         v = v.cast(dtype)
     if requires_grad:
         try:
@@ -240,7 +242,6 @@ def sample_argsort(op_info, device, dtype, requires_grad):
 
 
 def sample_kthvalue(op_info, device, dtype, requires_grad):
-    out = []
     seed = 920
     for shape in _ORD_SHAPES:
         # a required dim avoids the dim=None flatten path's ambiguity; sweep k over the
@@ -251,11 +252,10 @@ def sample_kthvalue(op_info, device, dtype, requires_grad):
             axis_len = shape[d]
             for k in sorted({1, (axis_len + 1) // 2, axis_len}):
                 for keepdim in (False, True):
-                    out.append(SampleInput(
+                    yield SampleInput(
                         _perm_tensor(shape, dtype, requires_grad, seed),
-                        k, dim=dim, keepdim=keepdim))
+                        k, dim=dim, keepdim=keepdim)
                     seed += 1
-    return out
 
 
 def sample_median(op_info, device, dtype, requires_grad):

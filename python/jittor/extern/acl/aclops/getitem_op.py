@@ -225,8 +225,10 @@ class GetItemACL(jt.Function):
             output_shape += x.shape[slices_len:]
             if output_shape == []:
                 output_shape = [1]
-            for ii in slices:
-                indices.append(jt.Var(ii).int32())
+            for dim, ii in enumerate(slices):
+                index = ii if isinstance(ii, jt.Var) else jt.Var(ii)
+                index = jt.ternary(index < 0, index + x.shape[dim], index)
+                indices.append(index.int32())
             if isinstance(slices[0],
                           jt.Var) or isinstance(slices[0], int) or isinstance(
                               slices[0], list) or isinstance(slices[0], tuple):

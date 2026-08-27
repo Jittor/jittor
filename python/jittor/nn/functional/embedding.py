@@ -13,7 +13,9 @@ def embedding(
     sparse=False,
 ):
     if max_norm is not None:
-        indices = input.reshape((-1,)).unique()
+        indices = input.reshape((-1,))
+        if not jt.flags.use_acl:
+            indices = indices.unique()
         rows = weight[indices]
         norm = (rows.abs() ** norm_type).sum(dim=-1, keepdims=True) ** (1.0 / norm_type)
         scale = jt.ternary(
