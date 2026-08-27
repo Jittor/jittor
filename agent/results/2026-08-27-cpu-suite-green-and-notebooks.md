@@ -64,10 +64,15 @@ CPU 上正是如此——不应因此失败。同文件的 `_globally_used_grads
 
 在 `99537948` 上，两个会话均零失败：
 
-| 会话 | 结果 | 用时 |
+| 门禁 | 结果 | 用时 |
 | --- | --- | ---: |
-| native（`JITTOR_TORCH_SHIM=0`） | `726 passed, 699 skipped`，退出码 0 | `18m12s` |
-| torch（`JITTOR_TORCH_SHIM=1`） | `1491 passed, 278 skipped`，退出码 0 | `2m27s`（热 cache） |
+| native CPU（`JITTOR_TORCH_SHIM=0`） | `726 passed, 699 skipped`，退出码 0 | `18m12s` |
+| torch CPU（`JITTOR_TORCH_SHIM=1`） | `1491 passed, 278 skipped`，退出码 0 | `2m27s`（热 cache） |
+| `nox -s cuda`（空 cache 冷构建） | 五组合计 `559 passed, 1 skipped`，退出码 0 | `2h` |
+| `test_fsdp2_nccl.py`（真实双 GPU） | 两 rank 各 `4 passed` | `3m26s` |
+
+CUDA 组的分解为 `97 passed, 1 skipped` / `6 passed` / `227 passed` / `2 passed` /
+`227 passed`；该会话从空 cache 起，包含全部 CUDA 扩展的冷编译。
 
 一处容易误判的现象记录在此：`tests/data/test_dataset.py` 的 worker 测试在本机与
 CUDA 扩展编译（16 个并发编译进程）、notebook 门禁和 GPU 基准同时运行时会挂死，
