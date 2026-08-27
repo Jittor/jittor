@@ -23,6 +23,7 @@ _TOPICS = (
     "gpt2_training",
     "lora",
     "meta_op",
+    "mixed_precision",
     "profiler",
     "resnet_training",
     "transformer",
@@ -36,7 +37,7 @@ _TOPICS = (
 _SMOKE_TOPICS = (
     "basics", "example", "meta_op", "custom_op", "profiler",
     "resnet_training", "transformer", "diffusion", "lora",
-    "vit_training", "gpt2_training",
+    "vit_training", "gpt2_training", "mixed_precision",
 )
 
 _MACHINE_PATHS = (
