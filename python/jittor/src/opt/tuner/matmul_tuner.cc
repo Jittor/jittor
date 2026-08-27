@@ -85,17 +85,18 @@ void MatmulTuner::run(PassManager* pm, TunerManager* tm) {
         if (!(xx->dtype().is_float() && yy->dtype().is_float())) continue;
         if (fop->flags.get(NodeFlags::_cpu))
             if (xx->dtype().dsize() != 4) continue;
-        // The relay op derives its output dtype from its inputs, so it can only
-        // stand in for a reduce whose output has that dtype too. Auto mixed
-        // precision breaks exactly this: at level 4 it retypes the reduce output
-        // to float16 while the operands stay float32, and the relay would then
-        // allocate twice the bytes of the var it replaces --
+        // Both relay ops create their output with the first operand's dtype, so
+        // they can only stand in for a reduce whose output already has it. Auto
+        // mixed precision breaks exactly this: at level 4 it retypes the reduce
+        // output to float16 while the operands stay float32, and the relay would
+        // then allocate twice the bytes of the var it replaces --
         // ``VarRelayManager::add_relay_group`` asserts the two sizes match, so
         // the mismatch aborts the whole fused operator rather than declining the
         // relay. Leave the fused kernel in place there; it already writes the
-        // requested output dtype.
-        if (!(xx->dtype() == yy->dtype() && rop->y->dtype() == xx->dtype()))
-            continue;
+        // requested output dtype. Operands of differing width are rejected by
+        // the relay ops themselves, equally fatally, so decline those here too.
+        if (xx->dtype().dsize() != yy->dtype().dsize()) continue;
+        if (rop->y->dtype() != xx->dtype()) continue;
 
         string relay_matmul_name = fop->flags.get(NodeFlags::_cpu) ?
             "mkl_matmul" : "cublas_matmul";
