@@ -143,21 +143,34 @@ CUDA 扩展编译（16 个并发编译进程）、notebook 门禁和 GPU 基准�
 稀疏结构采样上 Jittor 已经**更快**。差距集中在两处 SLat 采样（各约 `1.08-1.10x`）
 与 decode（`1.361x`，比值最差）。
 
-### decode 内部
+### decode 内部：调用级 profile 在这里不可用
 
-调用级 profile（同样剔除预热）显示 decode 的差距并不弥散，而是几个模块：
+调用级 profile（`--profile-decode-calls`）给出的比值分别是
+`SparseUnetVaeDecoder.forward` `1.460x`、`SparseConvNeXtBlock3d.forward` `1.221x`、
+`SparseResBlockC2S3d.forward` `1.535x`、`SparseChannel2Spatial.forward` `1.743x`、
+`SparseLinear.forward` `2.308x`。**这些数字不能用来定位差距。**
 
-| 调用 | Jittor | PyTorch | 比值 | 每轮调用数 | 每轮差 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| `SparseUnetVaeDecoder.forward` | `287.7ms` | `197.0ms` | `1.460x` | 2 | `+0.1813s` |
-| `SparseConvNeXtBlock3d.forward` | `7.355ms` | `6.025ms` | `1.221x` | 64 | `+0.0851s` |
-| `SparseResBlockC2S3d.forward` | `21.94ms` | `14.29ms` | `1.535x` | 8 | `+0.0612s` |
-| `SparseChannel2Spatial.forward` | `1.787ms` | `1.026ms` | `1.743x` | 16 | `+0.0122s` |
-| `SparseLinear.forward` | `0.830ms` | `0.360ms` | `2.308x` | 8 | `+0.0038s` |
+原因在 profiler 自身：`CallProfiler.record` 在每个被包裹的调用前后都调用 `sync`。
+对 PyTorch 这只是插一个 stream 同步，对 Jittor 却是强制刷图——正好废掉跨模块算子
+融合，而那是 Jittor 的主要优化手段。包裹的粒度越细，惩罚越重，于是最小的模块得到
+最难看的比值。`SparseLinear` 排在最差不是因为它慢，而是因为它最小。
 
-（这些调用互相嵌套，不能相加。）`SparseChannel2Spatial` 的热点是缓存命中路径上的
-一次 gather——`x_feats[idx * factor ** DIM + subidx]`；`SparseLinear` 是稀疏特征上的
-一次 linear，`2.308x` 是全部条目中比值最差的一项，最值得单独追查。
+同一张 GPU 上单独测这些原语可以确认：
+
+| 原语 | Jittor | PyTorch |
+| --- | ---: | ---: |
+| linear `[1485494, 64] -> 64` | `1.668ms` | `2.974ms` |
+| linear `[1485494, 64] -> 4` | `0.503ms` | `0.966ms` |
+| linear `[3540, 1024] -> 1024` | `0.118ms` | `0.204ms` |
+| gather `[28320, 512]` | `0.147ms` | `0.126ms` |
+| gather `[132632, 256]` | `0.342ms` | `0.300ms` |
+
+底层 kernel 上 Jittor 在大 linear 上明显更快，gather 慢约 `15%`。因此 decode 的
+`1.361x` 不是 kernel 吞吐问题，而是每个算子的构图与派发开销——与 BF16 GEMM 那节的
+结论一致。
+
+阶段级 profile 仍然可用：它每轮只同步 6 次，代价可以忽略。后续定位应当使用不引入
+同步的手段（Jittor 自己的算子 profile 只统计 kernel 时间），而不是继续细分包裹。
 
 ## NCCL 引导诊断
 
