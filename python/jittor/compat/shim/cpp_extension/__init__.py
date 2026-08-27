@@ -25,6 +25,7 @@ The public entry point ``build(name, sources, build_dir, ...)`` is what the real
 import os
 import sys
 import glob
+import importlib.machinery
 import subprocess
 import sysconfig
 import hashlib
@@ -196,6 +197,10 @@ def _jittor_config():
     cores = {}
     for base in ("jittor_core", "jit_utils_core"):
         hits = glob.glob(os.path.join(search_root, "**", base + ".*.so"), recursive=True)
+        # Only this interpreter's ABI. A core built for another Python links
+        # and loads, then runs a second copy of the runtime's static state.
+        suffixes = tuple(importlib.machinery.EXTENSION_SUFFIXES)
+        hits = [h for h in hits if os.path.basename(h)[len(base):] in suffixes]
         if not hits:
             raise RuntimeError(f"cannot find {base}.*.so under {search_root}")
         # prefer the shallowest path

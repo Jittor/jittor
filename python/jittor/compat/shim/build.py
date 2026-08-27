@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import glob
+import importlib.machinery
 import hashlib
 import os
 import pathlib
@@ -102,6 +103,7 @@ def _preload_jittor_cores(verbose: bool) -> List[str]:
         return loaded
     for name in ("jit_utils_core", "jittor_core"):
         hits = glob.glob(os.path.join(os.fspath(search_root), "**", name + ".*.so"), recursive=True)
+        hits = _matching_abi(name, hits)
         hits.sort(key=lambda p: len(p))
         for so in hits[:1]:
             try:
@@ -113,6 +115,23 @@ def _preload_jittor_cores(verbose: bool) -> List[str]:
             except Exception as e:
                 _log(verbose, "could not preload %s: %s" % (so, e))
     return loaded
+
+
+def _matching_abi(name: str, hits: Sequence[str]) -> List[str]:
+    """Keep only builds this interpreter can load.
+
+    The cache can hold a core built for another Python -- anything that shells
+    out to the wrong ``python3`` leaves one behind. ``ctypes.CDLL`` loads it
+    without complaint, and the process then carries two copies of the runtime's
+    static state; at shutdown they free the same exit-handler block twice and
+    the process aborts with "double free or corruption" after every test has
+    already passed.
+    """
+    suffixes = tuple(importlib.machinery.EXTENSION_SUFFIXES)
+    return [
+        hit for hit in hits
+        if os.path.basename(hit)[len(name):] in suffixes
+    ]
 
 
 def _extension_from_user_item(item: Union[NativeExtension, str, os.PathLike]) -> Optional[NativeExtension]:
