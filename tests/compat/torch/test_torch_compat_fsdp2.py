@@ -660,7 +660,11 @@ class TestFSDP2Compat(unittest.TestCase):
         self.assertTrue(issubclass(TCPStore, Store))
         self.assertTrue(issubclass(FileStore, Store))
         self.assertEqual(Backend.NCCL, "nccl")
-        self.assertTrue(is_backend_available("nccl"))
+        # NCCL rides on CUDA, so its availability follows the build -- the CPU
+        # session deliberately runs without a device, and asserting it
+        # unconditionally only says which machine the suite last ran on.
+        self.assertEqual(
+            is_backend_available("nccl"), bool(getattr(jt, "has_cuda", False)))
         self.assertFalse(is_backend_available("gloo"))
         self.assertEqual(
             is_backend_available("mpi"),
