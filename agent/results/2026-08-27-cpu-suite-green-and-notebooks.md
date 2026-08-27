@@ -277,6 +277,49 @@ Count 由 `144` 变为 `288`。它的绝对时间与调用计数都不能直接�
 两侧 profiler 的数字更不可直接相减——PyTorch 侧脚本 profile 的是 `slots` 四步，
 Jittor 侧只有一步。
 
+## 剩余性能差距的共同成因：构图不与 GPU 执行重叠
+
+用 nsys 对两侧同等地测量 ViT（同一张空闲 4090，各 10 次预热加 30 次计时）：
+
+| | Jittor | PyTorch |
+| --- | ---: | ---: |
+| GPU kernel 总时间 | `961.7ms` | `953.7ms` |
+| 其中 GEMM | `707.2ms` | `661.3ms` |
+| 其中 fmha（PyTorch 的 memory-efficient attention） | — | `147.4ms` |
+| 其他 kernel | `254.5ms` | `144.9ms` |
+| kernel 数 | `32511` | `38026` |
+
+**两侧的 GPU 计算量几乎相同（差 `0.8%`）。** 顺带一提，Jittor 用显式 batched GEMM
+实现的注意力（`63.1ms`）比 PyTorch 在 fp32 下选中的 fmha（`147.4ms`）更省。
+
+差距因此不在 kernel，而在时间线。把一步拆成两段：
+
+| 阶段 | Jittor | PyTorch |
+| --- | ---: | ---: |
+| Python 侧（Jittor 构图 / PyTorch 发射） | `9.6ms`（GPU 全程空闲） | `17.7ms`（GPU 已在跑） |
+| 执行与等待 | `19.7ms` | `5.9ms` |
+| 合计 | `29.4ms` | `23.6ms` |
+
+结论与直觉相反：**Jittor 的 Python 开销比 PyTorch 低 `45%`，执行阶段 `19.7ms` 也比
+PyTorch 的整步 `23.6ms` 快。** 全部 `5.7ms` 的劣势来自那 `9.6ms` 构图期间 GPU 无事
+可做——lazy 图在 sync 之前不向设备发射任何东西，而 PyTorch 每个算子即时入队，
+Python 时间与 GPU 执行天然重叠。
+
+佐证：把同步频率降低，差距按预期缩小——每步同步 `0.0295s`，每两步 `0.0272s`，
+每四步 `0.0254s`，逼近 `24.0ms` 的 kernel 下限。
+
+若构图能与执行重叠，一步应接近 `max(9.6, 19.7)`，即约 `19.7ms`，反而比 PyTorch
+快约 `17%`。这同一成因也适用于 TRELLIS 与 transformer 训练的剩余差距，此前对这些
+差距的 kernel 级归因（「需要更强的 GEMM backend」）方向有误。
+
+### 一次失败的尝试及其原因
+
+试过在 `add_hold_vars` 中按待执行算子数触发一次 `device_sync=false` 的异步发射，
+让已就绪的图先上 GPU。它以堆损坏告终（`free(): double free detected in tcache 2`），
+关掉 `weak_sync`（避免重入改写 `hold_vars`）也一样。执行器无法在 VarHolder 尚未构造
+完成时被重入，这不是一处小补丁能解决的，需要正经的流水线设计。改动已回退，未留在
+仓库中。
+
 ## NCCL 引导诊断
 
 本机的 P2P 矩阵全为 `CNS`，NCCL 的 p2p transport 报
