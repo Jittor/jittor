@@ -37,6 +37,23 @@ bool use_device_mpi = false;
 #endif
 
 
+// A machine can advertise peer access and then refuse it; some driver and
+// chipset combinations do. NCCL's p2p transport treats that as fatal rather
+// than falling back to shared memory, and the error it raises --
+// "unhandled cuda error" -- names neither the cause nor the cure. Name both
+// before it escapes: NCCL's own explanation goes to stderr, which a test runner
+// capturing output turns into a bare SIGABRT with nothing to go on.
+static void init_nccl_comm(int world_size, int world_rank) {
+    auto result = ncclCommInitRank(&comm, world_size, id, world_rank);
+    if (result == ncclSuccess) return;
+    LOGe << "ncclCommInitRank failed:" << ncclGetErrorString(result)
+         << "\n  If NCCL reports that peer access is unsupported, this machine"
+            " cannot do direct GPU-to-GPU transfers. Set NCCL_P2P_DISABLE=1 to"
+            " route the collectives through shared memory instead."
+         << "\n  Set NCCL_DEBUG=INFO for NCCL's own account of the failure.";
+    checkCudaErrors(result);
+}
+
 struct nccl_initer {
 
 nccl_initer() {
@@ -86,7 +103,7 @@ nccl_initer() {
             }
         }
         use_device_mpi = true;
-        checkCudaErrors(ncclCommInitRank(&comm, world_size, id, world_rank));
+        init_nccl_comm(world_size, world_rank);
         LOGi << "NCCL(env) init success dev" << nccl_device_id
              << "rank" << world_rank << "/" << world_size;
         return;
@@ -114,7 +131,7 @@ nccl_initer() {
     if (mpi_world_rank == 0)
         checkCudaErrors(ncclGetUniqueId(&id));
     MPI_CHECK(MPI_Bcast((void *)&id, sizeof(id), MPI_BYTE, 0, MPI_COMM_WORLD));
-    checkCudaErrors(ncclCommInitRank(&comm, mpi_world_size, id, mpi_world_rank));
+    init_nccl_comm(mpi_world_size, mpi_world_rank);
 #endif
 }
 
