@@ -48,6 +48,19 @@ if __name__ == "__main__":
                 raise RuntimeError("Python dynamic library not found")
         elif arg == "--cxx-flags":
             s += " --std=c++17 -fPIC "
+            # An embedding program is not named "python", so CPython cannot
+            # derive its own prefix from argv[0] and never finds lib-dynload --
+            # the first C extension it needs fails with
+            # "No module named '_struct'". Hand it the prefix of the
+            # interpreter these flags were generated from. These flags are
+            # consumed through an unquoted ``$(...)``, so the value carries no
+            # quotes of its own and the header stringifies it instead.
+            # The executable goes with it: an embedded runtime has no
+            # ``sys.executable``, so Jittor's compiler would shell out to
+            # whatever ``python3`` is on PATH and then link that version's core
+            # libraries against this one's cache.
+            s += " -DJITTOR_PYTHON_PREFIX=" + sys.base_prefix + " "
+            s += " -DJITTOR_PYTHON_EXECUTABLE=" + sys.executable + " "
         elif arg == "--cxx-example":
             cc_src = '''
 // please compile with: g++ a.cc $(python3 -m jittor_utils.config --include-flags --libs-flags --cxx-flags) -o a.out && ./a.out

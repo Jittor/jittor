@@ -398,6 +398,45 @@ T& operator()(Targs... Fargs) {
 
 };
 
+/**
+ * Start the interpreter, telling it where its own standard library is.
+ *
+ * A bare ``Py_Initialize`` makes CPython derive its prefix from argv[0]. That
+ * works for the ``python`` binary and fails for anything embedding it: the
+ * program is called ``a.out``, the search misses ``lib-dynload``, and the first
+ * C extension needed -- ``_struct``, on the way into ``multiprocessing`` --
+ * raises ``ModuleNotFoundError``. ``jittor_utils.config --cxx-flags`` bakes in
+ * the prefix of the interpreter it was generated from, so use it when present.
+ * It arrives unquoted -- the flags are consumed through an unquoted ``$(...)``
+ * -- hence the stringification below.
+ */
+#define JITTOR_STRINGIFY_INNER(value) #value
+#define JITTOR_STRINGIFY(value) JITTOR_STRINGIFY_INNER(value)
+
+inline void init_python() {
+    #if defined(JITTOR_PYTHON_PREFIX) && PY_VERSION_HEX >= 0x03080000
+    if (!Py_IsInitialized()) {
+        PyConfig config;
+        PyConfig_InitPythonConfig(&config);
+        PyStatus status = PyConfig_SetBytesString(
+            &config, &config.home, JITTOR_STRINGIFY(JITTOR_PYTHON_PREFIX));
+        #ifdef JITTOR_PYTHON_EXECUTABLE
+        if (!PyStatus_Exception(status))
+            status = PyConfig_SetBytesString(
+                &config, &config.executable,
+                JITTOR_STRINGIFY(JITTOR_PYTHON_EXECUTABLE));
+        #endif
+        if (!PyStatus_Exception(status))
+            status = Py_InitializeFromConfig(&config);
+        PyConfig_Clear(&config);
+        if (!PyStatus_Exception(status))
+            return;
+        // Fall through: a wrong prefix should not stop a working default.
+    }
+    #endif
+    Py_Initialize();
+}
+
 struct Console {
 
 PyObjHolder globals, locals;
@@ -405,7 +444,7 @@ PyObject* (*make_pyjt_array)(const vector<int64>& shape, const string& dtype, co
 void (*get_pyjt_array)(PyObject* obj, vector<int64>& shape, string& dtype, void*& data);
 
 inline Console() {
-    Py_Initialize();
+    init_python();
     globals.assign(PyDict_New());
     locals.assign(PyDict_New());
 
