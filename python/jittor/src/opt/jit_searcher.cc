@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <chrono>
+#include <limits>
 #include <algorithm>
 #include <functional>
 #include "opt/jit_searcher.h"
@@ -35,13 +36,23 @@ int64_t Searcher::get_time_of_current_choices() {
     // compile
     auto jit_entry = oc->compile(jit_key, src);
     for (int i=0; i<jit_search_warmup; i++) jit_entry((Op*)op);
-    auto start = std::chrono::high_resolution_clock::now();
-    for (int i=0; i<jit_search_rerun; i++) jit_entry((Op*)op);
-    auto finish = std::chrono::high_resolution_clock::now();
-    auto total_ns =  (int64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(finish-start).count();
-    // 25ns function call overhead
-    total_ns -= jit_search_rerun * 25ll;
-    return std::max((int64_t)1, total_ns);
+    // Time each repetition and keep the fastest rather than summing them. The
+    // sum lets a single interrupted run -- a page fault, another process taking
+    // the core -- decide which candidate wins, and on a busy machine the search
+    // then picks an order that is not actually faster. The minimum is the usual
+    // robust statistic here. Callers divide by jit_search_rerun to report a
+    // per-run figure, so scale back up and leave that arithmetic alone.
+    int64_t best_ns = std::numeric_limits<int64_t>::max();
+    for (int i=0; i<jit_search_rerun; i++) {
+        auto start = std::chrono::high_resolution_clock::now();
+        jit_entry((Op*)op);
+        auto finish = std::chrono::high_resolution_clock::now();
+        auto ns = (int64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+            finish-start).count();
+        // 25ns function call overhead
+        best_ns = std::min(best_ns, (int64_t)(ns - 25));
+    }
+    return std::max((int64_t)1, best_ns * jit_search_rerun);
 }
 
 void Searcher::reset() {
