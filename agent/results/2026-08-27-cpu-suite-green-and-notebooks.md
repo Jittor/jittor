@@ -60,6 +60,21 @@ CPU 上正是如此——不应因此失败。同文件的 `_globally_used_grads
 - 真实双 GPU `tests/distributed/test_fsdp2_nccl.py` 两 rank 各 `4 passed`，
   确认多卡路径未受影响。
 
+## 两个 CPU 会话的当前结果
+
+在 `99537948` 上，两个会话均零失败：
+
+| 会话 | 结果 | 用时 |
+| --- | --- | ---: |
+| native（`JITTOR_TORCH_SHIM=0`） | `726 passed, 699 skipped`，退出码 0 | `18m12s` |
+| torch（`JITTOR_TORCH_SHIM=1`） | `1491 passed, 278 skipped`，退出码 0 | `2m27s`（热 cache） |
+
+一处容易误判的现象记录在此：`tests/data/test_dataset.py` 的 worker 测试在本机与
+CUDA 扩展编译（16 个并发编译进程）、notebook 门禁和 GPU 基准同时运行时会挂死，
+且 `--timeout` 的 signal 方式打不断它。同一文件单独执行为 `8 passed, 5 skipped`，
+用时 `17.69s`；空载重跑完整会话也全过。这是负载争抢下的 fork/handshake 饥饿，
+不是代码回归——判定套件结果时不要与真实失败混为一谈。
+
 ## 过期的断言常量
 
 `test_install_context.py` 把 torch 命名空间的模块数钉在 186，实际为 189。同一处的
