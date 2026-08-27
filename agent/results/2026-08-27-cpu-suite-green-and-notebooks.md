@@ -231,6 +231,52 @@ TRELLIS 中 `getitem` 全部 kernel 时间仅 `28.7ms`，`15%` 不足 `4ms`）�
 `0.2945s` 目前无法用现有工具进一步归因，需要不引入同步的细粒度手段。TRELLIS 性能
 因此仍未接受，但排除掉的这三条可以省去后来者的重复工作。
 
+## ViT 的缺口不在 CUDA GEMM
+
+`2026-08-26-common-network-training-trajectories.md` 记 ViT 为 `1.33x`，并断定
+「ViT 剩余缺口需要更强的 CUDA GEMM backend/algorithm」，依据是 profile 中 Jittor
+每 step 的普通 GEMM 约 `27.97ms`、PyTorch 约 `16.11ms`。这个结论不成立。
+
+### GEMM 本身在 fp32 与 TF32 下都打平
+
+同一张空闲 4090，ViT-base 的四个主力形状（`M=1576`，即 batch 8 的 197 token）：
+
+| M | K | N | Jittor TF32 off | PyTorch TF32 off | Jittor TF32 on | PyTorch TF32 on |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1576 | 768 | 2304 | `141.7us` | `142.3us` | `90.4us` | `90.0us` |
+| 1576 | 768 | 3072 | `186.5us` | `194.6us` | `133.2us` | `132.5us` |
+| 1576 | 3072 | 768 | `210.8us` | `211.8us` | `163.1us` | `162.6us` |
+| 1576 | 768 | 768 | `57.8us` | `57.8us` | `45.0us` | `44.7us` |
+
+三种转置布局同样打平（`133.7 / 133.0 / 133.5us` 对 `132.3 / 132.4 / 132.5us`），
+而完整的 linear 前向加反向 Jittor 反而更快（`482.4us` 对 `533.5us`）。两侧脚本都
+已开启 TF32，不存在配置不对称。
+
+### Jittor 也没有多做 GEMM
+
+反证：设 PyTorch 每 step 的 GEMM 为 `G`。若 Jittor 的 GEMM 工作量是两倍，则由
+PyTorch 步长 `23.7ms = G + 非 GEMM` 可得 `G` 约 `19.7ms`，Jittor 步长至少
+`39.4ms`；实测只有 `29.4ms`。按 FLOP 计算也一致：ViT-base 一步约 `803 GFLOP`
+（12 层，每层前向 `22.3 GFLOP`，反向两倍），在实测的 `41-56 TFLOPS` 下 GEMM 下限
+为 `14-19.5ms`，两侧都被它主导。
+
+### 因此缺口在 GEMM 之外
+
+空闲 GPU 上重测：Jittor `0.0294s`，PyTorch `0.0237s`，`1.24x`，差 `5.7ms`。单个
+GEMM 打平、GEMM 工作量相同，这 `5.7ms` 只能落在 attention 的 batched matmul、
+transpose、LayerNorm、逐元素算子与 host 间隙上。文档中「需要更强的 GEMM backend」
+因此是误判——同一节记录的 cuBLASLt 实验反而退化（`132us` 到 `381us`），正是缺口
+不在 GEMM 时应有的结果。
+
+### 关于 jt.profile_scope 的绝对值
+
+原结论所依据的 `27.97ms` 来自 `jt.profile_scope(2, 5)`。该 profiler 逐算子同步并
+重跑，既加开销又阻止 kernel 重叠：同一个 ViT step，`profile_scope(0, 1)` 报出
+`56.17ms` 的算子时间，而实测步长只有 `29.4ms`；把 rerun 由 1 改为 5，每种转置的
+Count 由 `144` 变为 `288`。它的绝对时间与调用计数都不能直接当作 step 的真实值，
+两侧 profiler 的数字更不可直接相减——PyTorch 侧脚本 profile 的是 `slots` 四步，
+Jittor 侧只有一步。
+
 ## NCCL 引导诊断
 
 本机的 P2P 矩阵全为 `CNS`，NCCL 的 p2p transport 报
