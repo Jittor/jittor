@@ -261,6 +261,13 @@ def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
             if grad is None:
                 grad = jt.zeros(entry.shape, dtype=entry.dtype)
             full_grads.append(grad)
+        if not any(local_used) and common._world_size() <= 1:
+            # This backward pass never reached the state's parameters -- a second
+            # optimizer's loss, say, while a sharded model sits idle in the same
+            # process. On one rank there is no peer waiting on a collective, so
+            # skip it rather than reduce zeros over the shards and overwrite the
+            # gradients a previous pass left in the state.
+            continue
         globally_used = _globally_used_grads(local_used)
         sharded = _sync_sharded_grads_from_full_grads(
             state, full_grads, divide_by_world_size=divide_by_world_size)
