@@ -109,6 +109,56 @@ CUDA 扩展编译（16 个并发编译进程）、notebook 门禁和 GPU 基准�
 非 GEMM kernel（`1.81s`）与图构建/派发开销（约 `1.6s`），后续应从这两处入手，
 而不是继续调 cuBLAS 计算类型或算法选择。
 
+## TRELLIS 基线在空闲 GPU 上重测：`1.045x`，且差距已定位
+
+`benchmark_jittor.sh` 与 `benchmark_torch.sh` 的 `CUDA_VISIBLE_DEVICES` 默认值都是
+`1`，而本机 GPU 1 上有一个无关的常驻进程（`serve_g1_real_policy.py`，已运行 6.5
+天，占用 `12262 MiB`）。此前记录的 `7.5149s` 对 `6.8778s` 即在该被争抢的卡上测得。
+
+改到空闲的 GPU 4，同一条对齐 tape、同样的 1 次预热加 3 次测量、同样的
+`--profile-pipeline --skip-glb`：
+
+| 后端 | 三次测量 | 中位数 |
+| --- | --- | ---: |
+| Jittor | `6.8678 / 6.8390 / 6.8470s` | `6.8470s` |
+| PyTorch | `6.5525 / 6.5499 / 6.5687s` | `6.5525s` |
+
+比值 `1.045x`，差 `0.2945s`。此前的 `1.093x` 中有一部分是共享 GPU 带来的噪声，但
+真实差距仍然存在。**今后 TRELLIS 基准必须显式指定空闲 GPU。**
+
+### 差距按阶段分解
+
+顶层阶段互不重叠，可以相加（数值为剔除预热后 3 次测量的均值）：
+
+| 阶段 | Jittor | PyTorch | 差 | 比值 |
+| --- | ---: | ---: | ---: | ---: |
+| `preprocess_image` | `0.0365` | `0.0270` | `+0.0095` | `1.352x` |
+| `get_cond` | `0.0490` | `0.0488` | `+0.0002` | `1.004x` |
+| `sample_sparse_structure` | `2.3770` | `2.4813` | `-0.1043` | `0.958x` |
+| `sample_shape_slat` | `2.5080` | `2.3239` | `+0.1841` | `1.079x` |
+| `sample_tex_slat` | `1.4440` | `1.3137` | `+0.1303` | `1.099x` |
+| `decode_latent` | `0.4360` | `0.3203` | `+0.1157` | `1.361x` |
+| 合计 | `6.8505` | `6.5150` | `+0.3355` | |
+
+稀疏结构采样上 Jittor 已经**更快**。差距集中在两处 SLat 采样（各约 `1.08-1.10x`）
+与 decode（`1.361x`，比值最差）。
+
+### decode 内部
+
+调用级 profile（同样剔除预热）显示 decode 的差距并不弥散，而是几个模块：
+
+| 调用 | Jittor | PyTorch | 比值 | 每轮调用数 | 每轮差 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `SparseUnetVaeDecoder.forward` | `287.7ms` | `197.0ms` | `1.460x` | 2 | `+0.1813s` |
+| `SparseConvNeXtBlock3d.forward` | `7.355ms` | `6.025ms` | `1.221x` | 64 | `+0.0851s` |
+| `SparseResBlockC2S3d.forward` | `21.94ms` | `14.29ms` | `1.535x` | 8 | `+0.0612s` |
+| `SparseChannel2Spatial.forward` | `1.787ms` | `1.026ms` | `1.743x` | 16 | `+0.0122s` |
+| `SparseLinear.forward` | `0.830ms` | `0.360ms` | `2.308x` | 8 | `+0.0038s` |
+
+（这些调用互相嵌套，不能相加。）`SparseChannel2Spatial` 的热点是缓存命中路径上的
+一次 gather——`x_feats[idx * factor ** DIM + subidx]`；`SparseLinear` 是稀疏特征上的
+一次 linear，`2.308x` 是全部条目中比值最差的一项，最值得单独追查。
+
 ## NCCL 引导诊断
 
 本机的 P2P 矩阵全为 `CNS`，NCCL 的 p2p transport 报
