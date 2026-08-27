@@ -333,7 +333,10 @@ assert compat._NAMESPACE_TRANSACTION in jt._torch_compat_install_context.state
 assert compat.install(jt) is jt
 after = compat._torch_namespace_snapshot()
 assert set(after) == set(baseline), (set(baseline) - set(after), set(after) - set(baseline))
-assert len(after) == 186, len(after)
+# A tripwire against the namespace growing by accident. Raise it only
+# alongside modules a change deliberately publishes -- the last move,
+# 186 to 189, came with the composable-FSDP2 entries.
+assert len(after) == 189, len(after)
 assert after["torch"] is jt
 assert after["torch.nn"] is jt.nn
 assert after["torch.nn.functional"] is jt.nn.functional
