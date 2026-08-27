@@ -60,13 +60,52 @@ CPU 上正是如此——不应因此失败。同文件的 `_globally_used_grads
 - 真实双 GPU `tests/distributed/test_fsdp2_nccl.py` 两 rank 各 `4 passed`，
   确认多卡路径未受影响。
 
+## AMP level 4 下任何带 Linear 的模型都会中止
+
+`jt.flags.auto_mixed_precision_level` 是文档化的用户可见开关（`0` 不用 fp16，
+`1-3` 保留级别，`4` 偏向 fp16 但 `sum`/`exp` 等仍用 fp32，`5` 追加 array 转换，
+`6` 全部偏向 fp16）。在 CPU 上把它设为 `4`，一次普通的 `nn.Linear` 前向即中止：
+
+```text
+Execute fused operator failed. fused_op:(broadcast_to, broadcast_to,
+binary.multiply, reduce.add)
+[Input]: float32[16,8]  [Output]: float16[16,16]
+var_relay.cc:48 Check failed p.first->size(1024) == p.second->size(512)
+```
+
+`mkl_matmul` 与 `cublas_matmul` 都以第一个操作数的 dtype 创建输出。AMP level 4 把
+reduce 的输出改成 float16 而操作数仍是 float32，于是 relay 要分配两倍字节；
+`VarRelayManager::add_relay_group` 断言两者尺寸相同，不匹配的后果是整个融合算子
+中止，而不是放弃这次 relay。`MatmulTuner` 此前只检查操作数是浮点、CPU 上宽度为 4，
+从未检查输出。
+
+现在按两个 relay 算子自身的契约设卡：操作数宽度须相同（cublas 断言 dsize 相等，
+mkl 断言均为 4），输出 dtype 须等于第一个操作数。不满足就不提出 relay，交给融合
+kernel 写出所需 dtype。
+
+| 场景 | 修复前 | 修复后 |
+| --- | --- | --- |
+| `nn.Linear` 前向 | 断言失败 | `float16` |
+| `nn.Sequential` 前向 | 断言失败 | `float16` |
+| 前向加 loss | 断言失败 | 正常 |
+| 三步 SGD | 断言失败 | `0.86572 / 0.86328 / 0.86133` |
+
+fp32 路径不受影响：参考轨迹 `0.8967 / 0.89419 / 0.89171`，`64x64` fp32 matmul 对
+NumPy 最大误差 `7.629e-06`，原有 `relay0` 候选断言仍通过。
+
+conv tuner 看似有同一处缺口，但 CPU 上 AMP level 4 的 Conv2d 前向、反向、
+conv+BatchNorm 与 conv+Pool 均实测通过，没有可复现的问题，因此未改动。
+
+新增两条回归：一条直接构造 AMP 下的元算子 matmul 并对拍 NumPy，一条覆盖真实
+`nn.Linear` 训练。
+
 ## 两个 CPU 会话的当前结果
 
-在 `99537948` 上，两个会话均零失败：
+在 `f162d01c` 上，四类门禁均零失败（CUDA 与 NCCL 于 `99537948` 复验）：
 
 | 门禁 | 结果 | 用时 |
 | --- | --- | ---: |
-| native CPU（`JITTOR_TORCH_SHIM=0`） | `726 passed, 699 skipped`，退出码 0 | `18m12s` |
+| native CPU（`JITTOR_TORCH_SHIM=0`） | `728 passed, 699 skipped`，退出码 0 | `21m22s` |
 | torch CPU（`JITTOR_TORCH_SHIM=1`） | `1491 passed, 278 skipped`，退出码 0 | `2m27s`（热 cache） |
 | `nox -s cuda`（空 cache 冷构建） | 五组合计 `559 passed, 1 skipped`，退出码 0 | `2h` |
 | `test_fsdp2_nccl.py`（真实双 GPU） | 两 rank 各 `4 passed` | `3m26s` |
