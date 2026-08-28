@@ -634,10 +634,18 @@ reorder_loop_pass.cc:50  Check failed: loop->children.size()==1
 
 结论修正为：CPU 真实规模性能落后有两个可分离、且都已验证到编译器诊断层面的成因：
 
+0. Jittor 自己的 `VectorizePass` 在 g++ 下不起作用：它开头就是
+   `if (!op->get_loop_option("vectorize")) return;`（默认关闭），而且它发出的是
+   `#pragma vector`——Intel 编译器的语法，g++ 会忽略（编译命令里正带着
+   `-Wno-unknown-pragmas`）。因此 CPU 向量化实际完全依赖 g++ 的自动向量化。
 1. JIT kernel 基本不做多线程——需要改 `ParallelPass`（`data.o` 中无源码）；
 2. 归约经内存累加，挡住整个循环体的向量化，含超越函数时退回标量调用——修法明确
-   （局部累加器），位置也明确（循环 pass 之后的源码后处理），但需要一次能覆盖所有
-   归约形状与算子的实现，不是本轮能安全交付的。
+   （局部累加器），位置也明确：应当是 `ReorderLoopPass` 之后的一个 pass，直接操作
+   `KernelIR`——它的每个节点都有 `before`/`inner`/`children`/`after` 四个列表，把
+   累加器声明放进内层循环的 `before`、把回写放进 `after`，外层的 `children` 仍只有
+   一个元素，不触碰完美嵌套的前提。这比在生成的 C++ 上做正则改写安全得多。但它需要
+   一次覆盖所有归约算子（add/max/min/prod）与任意 `DIM`/`REDUCE` 组合，并配套完整
+   验证，不是本轮能安全交付的。
 
 ### 空隙的分布，以及为什么调度改不动它
 
