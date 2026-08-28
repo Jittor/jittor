@@ -206,9 +206,9 @@ deserialization is expected and is not used as evidence for the model forward.
 The validated Qwen3-8B checkpoint has 8,190,735,360 parameters. With float32
 weights on one 64 GB 910B3, the process used 32,376 MB of device memory and
 generated token `4` for the probe prompt. The accepted result reported
-`is_cuda=true`, `has_acl=use_acl=use_cuda=1`, and `fallback_count=0`.
-The model forward used ACL, while the final greedy token selection compiled one
-`arg_reduce` operation for CPU. This one-token correctness probe is not a
+`is_cuda=true`, `has_acl=use_acl=use_cuda=1`, `fallback_count=0`, and
+`cpu_compile_count=0`. Both the model forward and final greedy `arg_reduce`
+selection execute through ACL. This one-token correctness probe is not a
 throughput benchmark.
 
 ## Current limitations
@@ -227,9 +227,8 @@ allowing them to abort or stall the process:
 - the validated Transformers Qwen3-8B path uses float32; bfloat16 generation
   currently reaches an unsupported ACL binary operation and is rejected because
   it falls back to CPU;
-- Qwen3 greedy token selection currently compiles the final `arg_reduce` on CPU;
-  the model forward remains on ACL, but fully device-resident generation is not
-  yet claimed;
+- float16/float32 `arg_reduce` forward runs through ACL, but its generic backward
+  graph still reaches an unsupported index operation and falls back to CPU;
 - ACL does not provide general float64 operator coverage, so float64 fallback
   is not accepted as evidence for an NPU operation.
 

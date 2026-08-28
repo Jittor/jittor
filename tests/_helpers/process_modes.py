@@ -9,6 +9,7 @@ TORCH_MODE_PATHS = (
     # Device parity consumes the same OpInfo registry and therefore the same
     # Torch-facing signatures while still executing both CPU and accelerator.
     "tests/backends/parity/test_device_parity.py",
+    "tests/backends/npu/test_acl_torch_compat.py",
     # These suites intentionally lock Torch defaults and dtype semantics.
     "tests/core/test_regression.py",
     "tests/core/test_type_system.py",

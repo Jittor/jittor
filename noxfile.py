@@ -271,6 +271,7 @@ OPTIONAL_NATIVE_FLASH_HDIM256_TESTS = (
 )
 NPU_TESTS = (
     "tests/backends/npu/test_acl.py",
+    "tests/backends/npu/test_acl_torch_compat.py",
     "tests/backends/npu/test_aclop.py",
     "tests/backends/npu/test_acl_indexing.py",
     "tests/ops/test_ops.py",

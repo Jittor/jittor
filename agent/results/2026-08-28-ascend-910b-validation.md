@@ -1,8 +1,8 @@
 # Ascend 910B 环境、ACL 冷启动与 NPU 门禁验证
 
 - Status: Accepted within the maintained NPU gate; explicit skips remain
-- Last reviewed: 2026-08-28
-- Source baseline: `6da453a1` plus the changes documented here
+- Last reviewed: 2026-08-29
+- Source baseline: `e3e82d98` plus the changes documented here
 - Owner: Jittor core and ACL backend maintainers
 - Review when: CANN/driver versions, ACL source transformation, NPU gate scope,
   or any listed skip changes
@@ -15,7 +15,7 @@ ACL 后端、扩展算子、索引、227 项 OpInfo、负整数 floor-divide 及
 
 设备证据不依赖导入成功或 CPU fallback：ACL matmul 回归捕获到
 `compile acl op`，同时断言日志中没有 `fallback cpu`。维护范围内最终共
-`352 passed, 11 skipped`；skip 均对应本报告和 known-issues ledger 中的明确能力边界。
+`357 passed, 11 skipped`；skip 均对应本报告和 known-issues ledger 中的明确能力边界。
 
 ## 环境与隔离
 
@@ -34,7 +34,8 @@ ACL 后端、扩展算子、索引、227 项 OpInfo、负整数 floor-divide 及
 - Isolation: `$JITTOR_LAB_ROOT/_state/nox/envs/npu/tmp/`,
   `cache_name=nox_npu`
 - Raw logs: `$JITTOR_LAB_ROOT/_state/ascend-910b-guide/final/logs/`
-- JIT policy: the cold compile and test session ran serially
+- JIT policy: the first current-source core, ACL extension, and model operation
+  compiles ran serially; the full maintained Nox gate ran afterward
 
 The validated versions are a reproduced baseline, not universal minimum or
 maximum requirements. Host-specific paths, device numbers, caches, and raw logs
@@ -97,6 +98,13 @@ or ReduceMin for values and retains argmax/argmin only for indices. The complete
 default asynchronous suite then passed; `JT_SYNC=1` is not required by the final
 gate.
 
+Float16/float32 `arg_reduce` itself now dispatches to CANN MaxDim/MinDim and
+returns both Jittor outputs in their native order. Focused max/min cases cover
+multiple axes, keepdims, scalar output descriptors, and first-index tie behavior;
+the test fails if the operation compiles for CPU or falls back. Its generic
+backward still reaches an unsupported ACL index operation and remains explicitly
+outside the forward support claim.
+
 ### Boolean-mask assignment
 
 The cold sequence reproduced a run-order-dependent no-op for `x[mask] = scalar`.
@@ -117,19 +125,23 @@ export ASCEND_RT_VISIBLE_DEVICES=<allocated-device>
 python -m nox -s npu
 ```
 
-Cold-cache results:
+Full Nox results after the serial prewarm:
 
 | Stage | Result |
 | --- | ---: |
 | ACL device and float32 matmul probe | passed |
-| `tests/backends/npu/test_acl.py` | 19 passed |
+| `tests/backends/npu/test_acl.py` | 21 passed |
+| `tests/backends/npu/test_acl_torch_compat.py` | 2 passed |
 | `tests/backends/npu/test_aclop.py` | 110 passed, 2 skipped |
-| `tests/backends/npu/test_acl_indexing.py` | 1 passed |
+| `tests/backends/npu/test_acl_indexing.py` | 2 passed |
 | `tests/ops/test_ops.py` | 218 passed, 9 skipped |
 | NPU floor-divide fixed vectors and broadcast | 2 passed |
 | NPU float32 NaN/Inf predicates | 1 passed |
 | NPU float32 fused/unfused NaN comparisons | 1 passed |
-| Total | 352 passed, 11 skipped |
+| Total | 357 passed, 11 skipped |
+
+The complete maintained session finished successfully in 43 minutes, including
+the Nox-managed core rebuild and all real-device tests.
 
 The floor-divide regression covers uint8, int8, int16, int32, and int64 fixed
 vectors plus int64 broadcasting against NumPy. The NaN comparison gate covers
@@ -140,7 +152,7 @@ execution.
 
 - Focused CPU semantic matrix: `49 passed, 16 skipped, 618 deselected`.
 - Torch preflight and bootstrap regressions: `8 passed, 16 deselected`.
-- Repository structure suite: `216 passed, 2 skipped`.
+- Repository structure suite: `219 passed, 2 skipped`.
 - Repository layout and documentation-governance gate: passed.
 - Documentation link audit and built-API audit: passed; the fresh Ascend catalog
   contains 56 translated messages with no fuzzy or untranslated entries.
@@ -169,19 +181,19 @@ benchmark.
 | Jittor backend flags | `has_acl=1`, `use_acl=1`, `use_cuda=1` |
 | Process device memory after load | 32,376 MB |
 | Total HBM use on the selected card | 35,735 / 65,536 MB |
-| Load and explicit migration | 110.53 s |
-| One-token generation | 2.97 s |
+| Load and explicit migration | 107.39 s |
+| One-token generation | 2.46 s |
 | Generated token | ID 19, text `4` |
 | ACL `fallback cpu` diagnostics | 0 |
-| CPU-compiled operation | one `arg_reduce` for greedy token selection |
+| CPU-compiled operations during generation | 0 |
 
-The preceding Qwen3-0.6B preflight used the same protocol and produced one token
-in 2.85 seconds with 3,174 MB process device memory and no ACL fallback
-diagnostic. The 8B run then exercised all 36 decoder layers and the
-language-model head with the full checkpoint resident on one 910B3. The model
-forward compiled through ACL; the final greedy token selection compiled one
-`arg_reduce` operation for CPU, so fully device-resident generation is not
-claimed.
+The preceding Qwen3-0.6B probe used the same fail-closed protocol for eight
+tokens, used 3,174 MB process device memory, and generated `2 + 2 = 4.`. All
+eight greedy selections executed through ACL with zero fallback and zero CPU
+compile. The 8B run then exercised all 36 decoder layers and the language-model
+head with the full checkpoint resident on one 910B3. Its model forward and final
+greedy selection likewise completed through ACL, so float32 inference is now
+fully device-resident within this protocol.
 
 Verify-then-fix exposed two Torch-compatibility defects before the accepted run.
 Explicit construction of the zero-length CUDA tensor used by the Transformers KV
@@ -215,9 +227,9 @@ reductions can abort the process. They therefore fail closed as precise skips
 linked to `KI-BACKEND-001` through `KI-BACKEND-004`.
 
 General ACL float64 support remains unavailable. A CPU fallback for float64 is
-not counted as NPU evidence. Qwen3-8B bfloat16, full training, distributed NPU
-behavior, other optional downstream projects, and performance are separate gates
-and are not claimed by this report.
+not counted as NPU evidence. `arg_reduce` backward, Qwen3-8B bfloat16, full
+training, distributed NPU behavior, other optional downstream projects, and
+performance are separate gates and are not claimed by this report.
 
 ## User documentation
 

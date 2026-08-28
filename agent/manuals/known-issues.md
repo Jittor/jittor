@@ -110,20 +110,23 @@ framework defects.
 - Review/expiry condition: the Qwen3-8B bfloat16 manual probe generates on a real
   NPU with `is_cuda=true` and zero CPU fallback
 
-## KI-BACKEND-006: Qwen3 greedy token selection compiles on CPU
+## KI-BACKEND-006: `arg_reduce` backward falls back on NPU
 
 - Severity: Medium
-- Status: Open; float32 model forward verified on ACL
+- Status: Open; float16/float32 forward and Qwen3 greedy generation verified on
+  ACL
 - Owner: reduction, Torch-compatibility, and ACL backend maintainers
-- Evidence: [`run_qwen3_transformers.py`](../../tests/backends/npu/manual/run_qwen3_transformers.py)
+- Evidence: [`test_acl.py`](../../tests/backends/npu/test_acl.py),
+  [`run_qwen3_transformers.py`](../../tests/backends/npu/manual/run_qwen3_transformers.py),
   and [Ascend 910B validation](../results/2026-08-28-ascend-910b-validation.md)
-- Symptom: the full Qwen3-8B float32 forward executes through ACL without an ACL
-  fallback diagnostic, but greedy generation compiles the final `arg_reduce`
-  token selection for CPU
-- Workaround: accept the host-side selection for inference correctness probes;
-  do not describe the current path as fully device-resident generation
-- Review/expiry condition: greedy generation completes on a real NPU without a
-  CPU-compiled `arg_reduce`
+- Symptom: float16/float32 max/min `arg_reduce` forward executes through
+  `aclnnMaxDim`/`aclnnMinDim`, but its generic gradient builds an index plus
+  `reindex_reduce` graph whose index operation is unsupported by the ACL runner
+  and falls back to CPU
+- Workaround: use the verified forward path for inference; do not claim NPU
+  training support for `arg_reduce`
+- Review/expiry condition: value-output backward matches a reference on a real
+  NPU with no CPU-compiled operation or fallback
 
 ## KI-OPS-002: integer floor-division backend verification incomplete
 

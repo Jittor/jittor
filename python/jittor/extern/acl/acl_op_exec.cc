@@ -16,6 +16,7 @@
 #include "acl_jittor.h"
 #include "ops/random_op.h"
 #include "ops/reduce_op.h"
+#include "ops/arg_reduce_op.h"
 #include "ops/binary_op.h"
 #include "ops/broadcast_to_op.h"
 #include "ops/transpose_op.h"
@@ -392,6 +393,17 @@ namespace jittor
     extern int64 current_offset;
 
     static unordered_map<string, std::function<void(Op *)>> acl_ops = {
+        {"arg_reduce", [](Op *op)
+         {
+             auto _op = (ArgReduceOp *)op;
+             ArgReduceOpRunner runner(
+                 _op->op == ns_maximum, _op->dim, _op->keepdims);
+             runner.jt_name = "arg_reduce";
+             runner.add(_op->x, true);
+             runner.add(_op->y, false);
+             runner.add(_op->y_key, false);
+             runner.run();
+         }},
         {"curand_random", [&current_seed, &current_offset](Op *op)
          {
              auto _op = (RandomOp *)op;

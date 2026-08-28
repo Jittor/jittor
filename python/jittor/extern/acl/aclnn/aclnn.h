@@ -58,6 +58,8 @@
 #include "aclnnop/aclnn_reduce_sum.h"
 #include "aclnnop/aclnn_amax.h"
 #include "aclnnop/aclnn_amin.h"
+#include "aclnnop/aclnn_max_dim.h"
+#include "aclnnop/aclnn_min_dim.h"
 #include "aclnnop/aclnn_mean.h"
 #include "aclnnop/aclnn_prod.h"
 #include "aclnnop/aclnn_triu.h"

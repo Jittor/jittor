@@ -22,7 +22,7 @@ def main():
     # being mistaken for an accelerator computation by Transformers.
     jt.flags.use_cuda = 0
     jt.flags.use_acl = 0
-    jt.flags.use_parallel_op_compiler = 1
+    jt.flags.use_parallel_op_compiler = 0
 
     import torch
     import transformers
@@ -83,15 +83,9 @@ def main():
     if fallbacks:
         raise RuntimeError("CPU fallback detected during generation: " + fallbacks[0])
 
-    cpu_compile_ops = []
-    for index, message in enumerate(messages):
-        if "compile cpu" not in message:
-            continue
-        context = messages[max(0, index - 2) : index]
-        if any("arg_reduce" in entry for entry in context):
-            cpu_compile_ops.append("arg_reduce")
-            continue
-        raise RuntimeError("unexpected CPU-compiled operation during generation: " + message)
+    cpu_compile_ops = [message for message in messages if "compile cpu" in message]
+    if cpu_compile_ops:
+        raise RuntimeError("CPU-compiled operation during generation: " + cpu_compile_ops[0])
 
     generated_ids = generated.numpy()[0].tolist()
     new_ids = generated_ids[input_ids.shape[1] :]

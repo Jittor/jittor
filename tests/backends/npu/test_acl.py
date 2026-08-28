@@ -69,25 +69,34 @@ class TestACL(unittest.TestCase):
         self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
-    def test_torch_compat_empty_cuda_tensor(self):
-        import jittor as torch
+    def test_float_arg_reduce_runs_on_acl(self):
+        cases = [
+            (jt.float32([[1, 5, 3, 5], [-2, -4, 7, 0]]), "max", 1, False,
+             [1, 2], [5, 7]),
+            (jt.float32([[1, 5, 3, 5], [-2, -4, 7, 0]]), "min", 0, True,
+             [[1, 1, 0, 1]], [[-2, -4, 3, 0]]),
+            (jt.float16([3, -1, -1, 4]), "min", 0, False, [1], [-1]),
+        ]
 
-        device = torch.device("cuda")
-        empty = torch.tensor([], dtype=torch.float32, device=device)
-        self.assertEqual(empty.numel(), 0)
-        self.assertTrue(empty.is_cuda)
+        actual = []
+        with jt.log_capture_scope(
+            log_v=0, log_vprefix="acl_op_exec.cc=100"
+        ) as logs:
+            for x, op, dim, keepdims, _indices, _values in cases:
+                indices, values = jt.arg_reduce(x, op, dim, keepdims)
+                actual.append((indices.numpy(), values.numpy()))
 
-        value = torch.tensor([1.0], dtype=torch.float32, device=device)
-        joined = torch.cat((empty, value))
-        np.testing.assert_array_equal(joined.cpu().numpy(), [1.0])
+        for (indices, values), case in zip(actual, cases):
+            np.testing.assert_array_equal(indices, case[4])
+            np.testing.assert_allclose(values, case[5], rtol=0, atol=0)
 
-    def test_torch_compat_default_device_follows_execution_flag(self):
-        import jittor as torch
-
-        with jt.flag_scope(use_acl=0, use_cuda=0):
-            self.assertEqual(torch.get_default_device().type, "cpu")
-        with jt.flag_scope(use_acl=1, use_cuda=1):
-            self.assertEqual(torch.get_default_device().type, "cuda")
+        messages = [log["msg"].lower() for log in logs]
+        self.assertTrue(any(
+            "exec acl op" in message and "arg_reduce" in message
+            for message in messages
+        ))
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_var_gather_uses_acl(self):

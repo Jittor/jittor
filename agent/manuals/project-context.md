@@ -83,8 +83,8 @@ optional downstream dependencies, full training, and performance remain
 separate gates. On a real 910B3, the maintained Ascend NPU gate passes its ACL
 backend and OpInfo scope. Transformers 4.56.2 Qwen3-8B float32 loads the full
 8,190,735,360-parameter checkpoint; its model forward runs on ACL without an ACL
-fallback diagnostic, while final greedy `arg_reduce` remains CPU-compiled and
-bfloat16 remains open. Qwen3-0.6B prefill is down from 0.8191 s to 0.1226 s; mixed indexing no longer blocks multi-token decode, which reaches 7.52 token/s.
+fallback diagnostic, and final greedy `arg_reduce` now also runs through ACL
+without a CPU compile; bfloat16 and `arg_reduce` backward remain open. Qwen3-0.6B prefill is down from 0.8191 s to 0.1235 s; mixed indexing no longer blocks multi-token decode, which reaches 7.38 token/s.
 See the [Ascend guide](../../docs/guides/ascend-910b.md), [validation report](../results/2026-08-28-ascend-910b-validation.md), [Qwen3 performance report](../results/transformers/2026-08-28-qwen3-ascend-performance.md), the complete [CPU](../results/2026-08-22-complete-cpu-test-suite.md) and [CUDA](../results/2026-08-22-cuda-test-suite.md) reports, plus the
 [parallel follow-up](../results/2026-08-22-cuda-parallel-range-network-oracle.md).
 The current fail-closed optional CUDA base gate passes 16 TorchMetrics,

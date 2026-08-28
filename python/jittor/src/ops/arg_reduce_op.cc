@@ -87,6 +87,10 @@ ArgReduceOp::ArgReduceOp(Var* x, NanoString op, int dim, bool keepdims)
     #endif
     y = create_output(nullptr, ns_int32);
     y_key = create_output(nullptr, x->dtype());
+    #ifdef IS_ACL
+    if (x->dtype() == ns_float32 || x->dtype() == ns_float16)
+        flags.set(NodeFlags::_cuda);
+    #endif
     flags.set(NodeFlags::_manual_set_vnbb);
     y->flags.set(NodeFlags::_needed_by_backward);
 }
