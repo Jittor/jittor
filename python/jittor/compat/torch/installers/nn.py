@@ -4,6 +4,8 @@ This module contains source moved from the former monolithic installer without
 changing the compatibility semantics.
 """
 
+import os
+
 import jittor as jt
 from jittor import nn
 
@@ -20,6 +22,21 @@ from ..types import (
     _device_is_cpu, _device_is_cuda, _dtype_to_str,
     _make_cpu_resident, _make_cuda_resident, device, dtype,
 )
+
+
+def _pipelining_from_environment():
+    """Initial execution-pipelining threshold, read from the environment.
+
+    An env var is the only way a program that never imports this module directly
+    -- a benchmark harness, a downstream package's entry point -- can opt in.
+    Anything unparseable leaves pipelining off rather than failing an import over
+    a tuning knob.
+    """
+    try:
+        return max(0, int(os.environ.get("JITTOR_EXECUTION_PIPELINING", "0")))
+    except (TypeError, ValueError):
+        return 0
+
 
 def _install_nn_extras(nn, registry=None):
     # Activation modules torch has that jittor.nn may lack.
@@ -1089,7 +1106,7 @@ def _install_module_methods(nn, registry=None):
             fast = jt.nn._rms_norm_cuda(value, weight, epsilon)
         return fast
 
-    _pipeline_state = {"threshold": 0, "mark": 0}
+    _pipeline_state = {"threshold": _pipelining_from_environment(), "mark": 0}
 
     def set_execution_pipelining(pending_ops):
         ''' Launch the pending graph at module boundaries once it holds this many

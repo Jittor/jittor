@@ -109,5 +109,40 @@ class TestExecutionPipelining(unittest.TestCase):
         np.testing.assert_allclose(doubled.numpy(), [2.0, 4.0])
 
 
+class TestEnvironmentOptIn(unittest.TestCase):
+    """The env var is read once when the installer runs, so this checks the
+    parser rather than re-importing jittor."""
+
+    def _parse(self, raw):
+        import os
+        from jittor.compat.torch.installers import nn as installer
+        previous = os.environ.get("JITTOR_EXECUTION_PIPELINING")
+        if raw is None:
+            os.environ.pop("JITTOR_EXECUTION_PIPELINING", None)
+        else:
+            os.environ["JITTOR_EXECUTION_PIPELINING"] = raw
+        try:
+            return installer._pipelining_from_environment()
+        finally:
+            if previous is None:
+                os.environ.pop("JITTOR_EXECUTION_PIPELINING", None)
+            else:
+                os.environ["JITTOR_EXECUTION_PIPELINING"] = previous
+
+    def test_unset_is_off(self):
+        self.assertEqual(self._parse(None), 0)
+
+    def test_value_is_read(self):
+        self.assertEqual(self._parse("200"), 200)
+
+    def test_negative_is_off(self):
+        self.assertEqual(self._parse("-3"), 0)
+
+    def test_garbage_is_off_rather_than_fatal(self):
+        # A tuning knob must never break an import.
+        self.assertEqual(self._parse("fast"), 0)
+        self.assertEqual(self._parse(""), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
