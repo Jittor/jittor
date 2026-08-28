@@ -1387,12 +1387,18 @@ class Module:
         '''
         ps = []
         stack = []
+        parameter_list = jt.nn.ParameterList
         def callback(parents, k, v, n):
             stack.append(str(k))
             dc = v.__dict__
-            if isinstance(v, jt.nn.ParameterList):
+            if isinstance(v, parameter_list):
                 dc = v.params
             bufnames = v.__dict__.get("_buffer_names", ())
+            # The prefix is the same for every parameter of this module, so it is
+            # joined once here rather than once per parameter: a training step
+            # walks the tree more than once, and this is its inner loop.
+            prefix = ".".join(stack[1:])
+            base = len(prefix) + 1 if prefix else 0
             for k2, p in dc.items():
                 if isinstance(k2, str) and k2.startswith("_"): continue
                 if isinstance(p, Var):
@@ -1406,9 +1412,11 @@ class Module:
                     if k2 in bufnames:
                         continue
                     ps.append(p)
-                    pname = ".".join(stack[1:]+[str(k2)])
-                    if len(pname) > len(p.name()):
-                        p.name(pname)
+                    leaf = k2 if type(k2) is str else str(k2)
+                    # Only build the name when it would actually replace a
+                    # shorter one; its length is known without joining.
+                    if base + len(leaf) > len(p.name()):
+                        p.name(prefix + "." + leaf if prefix else leaf)
         def callback_leave(parents, k, v, n):
             stack.pop()
         self.dfs([], None, callback, callback_leave, recurse)
