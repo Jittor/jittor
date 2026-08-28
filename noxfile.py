@@ -309,6 +309,38 @@ for name, path in {
 os.environ.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
 
 
+_PYTHON_CONFIG_PROBE = (
+    "import os, sys; "
+    "roots = [os.path.dirname(sys.executable), os.path.join(sys.base_prefix, 'bin')]; "
+    "names = ['python3.%d-config' % sys.version_info[1], "
+    "sys.executable + '-config', 'python3-config']; "
+    "paths = [name if os.path.isabs(name) else os.path.join(root, name) "
+    "for root in roots for name in names]; "
+    "print(next((path for path in paths if os.path.isfile(path)), ''))"
+)
+
+
+def _set_python_config(session, python, env, external=False, required=False):
+    """Select the config helper belonging to the interpreter that will run Jittor."""
+    if os.name == "nt":
+        env.pop("python_config_path", None)
+        return
+    python_config = session.run(
+        python,
+        "-c",
+        _PYTHON_CONFIG_PROBE,
+        env=env,
+        external=external,
+        silent=True,
+    ).strip()
+    if not python_config and required:
+        session.error("Python config helper not found for %s" % python)
+    if python_config:
+        env["python_config_path"] = python_config
+    else:
+        env.pop("python_config_path", None)
+
+
 def _session_env(session, backend):
     root = Path(session.create_tmp()).resolve()
     if root.exists():
@@ -335,11 +367,10 @@ def _session_env(session, backend):
             "cache_name": "nox_%s" % backend,
         }
     )
-    python_config = os.environ.get("python_config_path") or shutil.which(
-        "python3.%d-config" % sys.version_info[1]
-    )
-    if python_config:
-        env["python_config_path"] = python_config
+    if session.python is False:
+        env.pop("python_config_path", None)
+    else:
+        _set_python_config(session, "python", env)
     return root, env
 
 
@@ -393,27 +424,7 @@ def _hardware_python():
 
 def _set_hardware_python_config(session, python, env):
     """Use the config helper belonging to an external hardware interpreter."""
-    script = (
-        "import os, sys; "
-        "root = os.path.dirname(sys.executable); "
-        "names = ['python3.%d-config' % sys.version_info[1], "
-        "sys.executable + '-config', 'python3-config']; "
-        "paths = [name if os.path.isabs(name) else os.path.join(root, name) "
-        "for name in names]; "
-        "print(next((path for path in paths if os.path.isfile(path)), ''))"
-    )
-    python_config = session.run(
-        python,
-        "-c",
-        script,
-        env=env,
-        external=True,
-        silent=True,
-    ).strip()
-    if os.name != "nt" and not python_config:
-        session.error("hardware Python config helper not found for %s" % python)
-    if python_config:
-        env["python_config_path"] = python_config
+    _set_python_config(session, python, env, external=True, required=True)
 
 
 def _install_docs_wheel(session, root, env):
@@ -460,9 +471,6 @@ def _install_docs_wheel(session, root, env):
     docs_env["use_nccl"] = "0"
     docs_env["use_cutt"] = "0"
     docs_env["use_cutlass"] = "0"
-    python_config = shutil.which("python3.%d-config" % sys.version_info[1])
-    if python_config:
-        docs_env["python_config_path"] = python_config
     probe = r"""
 from pathlib import Path
 import sys
@@ -1038,6 +1046,7 @@ def benchmark_cuda(session):
     """Record scheduled Tiny Llama and optimizer ASV results on real CUDA."""
     root, env = _session_env(session, "asv-cuda")
     python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
     nvcc = os.environ.get("nvcc_path") or shutil.which("nvcc")
     if not nvcc:
         session.error("CUDA benchmark requires nvcc_path or nvcc on PATH")
@@ -1269,6 +1278,7 @@ def optional(session):
     """Run fail-closed optional compatibility gates on real CUDA."""
     _root, env = _session_env(session, "optional")
     python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
     nvcc = os.environ.get("nvcc_path") or shutil.which("nvcc")
     if not nvcc:
         session.error("optional session requires nvcc_path or nvcc on PATH")
@@ -1387,6 +1397,7 @@ def cuda(session):
     """Run CUDA gates in a pre-provisioned CUDA 12.2 environment."""
     _root, env = _session_env(session, "cuda")
     python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
     nvcc = os.environ.get("nvcc_path") or shutil.which("nvcc")
     if not nvcc:
         session.error("CUDA session requires nvcc_path or nvcc on PATH")
@@ -1446,6 +1457,7 @@ def rocm(session):
     """Run ROCm gates in a pre-provisioned AMD GPU environment."""
     _root, env = _session_env(session, "rocm")
     python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
     env["JITTOR_TEST_DEVICES"] = "rocm"
     session.run("rocminfo", external=True, env=env)
     session.run(python, "-m", "pytest", "--version", external=True, env=env)
@@ -1465,6 +1477,7 @@ def mpi(session):
     """Run MPI gates with a pre-provisioned launcher and Python environment."""
     _root, env = _session_env(session, "mpi")
     python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
     env["JITTOR_TEST_DEVICES"] = "mpi"
     session.run("mpirun", "--version", external=True, env=env)
     session.run(python, "-m", "pytest", "--version", external=True, env=env)
@@ -1476,6 +1489,7 @@ def nccl(session):
     """Run multi-rank NCCL/FSDP2 gates with one isolated cache per rank."""
     root, env = _session_env(session, "nccl")
     python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
     nvcc = os.environ.get("nvcc_path") or shutil.which("nvcc")
     if not nvcc:
         session.error("NCCL session requires nvcc_path or nvcc on PATH")
