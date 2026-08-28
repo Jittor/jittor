@@ -590,12 +590,54 @@ UNet 那个 13 算子的 kernel 只引用标量 `expf@GLIBC_2.27`；而拆分实
 旁证：`64M` 元素的 `a+b`，Jittor 为 `33.3 GB/s`，单线程 numpy 为 `23.0 GB/s`——只有
 约 1.5 倍，远低于这台机器的内存带宽，与「基本没有多核并行」一致。
 
-结论修正为：CPU 真实规模性能落后有两个可分离、且都已验证的成因——JIT kernel 基本
-不做多线程；以及长融合的循环体复杂到无法自动向量化，含超越函数时退回标量调用。
-前者要改 `ParallelPass`（`data.o` 中无源码），后者要么在代码生成时给循环加
-`#pragma omp simd` 之类的提示，要么限制参与融合的算子数——但后者需要一条判据来
-区分「融合有收益」与「融合毁掉向量化」，而从上表可见算子数只是相关而非充分（同为
-3 算子，有的向量化有的不向量化）。本轮不改，两者都已有可复现的度量。
+### 向量化被什么挡住：编译器直接给了答案
+
+对那个 13 算子的 kernel 用 `-fopt-info-vec-all` 重新编译，g++ 指出两处：
+
+```text
+:197: missed: not vectorized: control flow in loop      （外层）
+:220: missed: not vectorized: complicated access pattern（内层）
+:138: note: vectorized 0 loops in function
+```
+
+第 220 行是归约本身：
+
+```c
+op12_yp[op12_yid] = ((op12_yp[op12_yid])+(op11_yd));
+```
+
+**归约直接读改写输出内存**，而不是先累到局部变量。把这一行改成局部累加、循环结束
+后写一次，同一个文件重新编译即得：
+
+```text
+:200: optimized: loop vectorized using 32 byte vectors
+:138: note: vectorized 1 loops in function
+```
+
+单这一处改动就够了——同在循环内的「写入 `op10_zp` 再立刻读回」并不需要一起处理
+（单独去掉它并不能让循环向量化，加了累加器则不必去掉它）。对照之下 CUDA 的同一个
+归约模板本来就是先累到 `tmp0` 寄存器再写一次，只有 CPU 这条路径少了这一步。
+
+### 为什么不能直接改模板
+
+`ReduceOp::jit_run` 的模板在 `ops/reduce_op.cc` 里是有源码的，但把累加器加进去会
+让编译中止：
+
+```text
+reorder_loop_pass.cc:50  Check failed: loop->children.size()==1
+```
+
+`ReorderLoopPass` 要求完美嵌套循环，而累加器必须插在内外层之间。也就是说这一步不能
+在算子模板里做，得放到循环相关的 pass 跑完之后——正是 `op_compiler.cc` 中
+`fix_parallel_thread_ranges` 所处的位置（它已经是对生成源码的一次后处理）。改动已
+回退，未留在仓库中。
+
+结论修正为：CPU 真实规模性能落后有两个可分离、且都已验证到编译器诊断层面的成因：
+
+1. JIT kernel 基本不做多线程——需要改 `ParallelPass`（`data.o` 中无源码）；
+2. 归约经内存累加，挡住整个循环体的向量化，含超越函数时退回标量调用——修法明确
+   （局部累加器），位置也明确（循环 pass 之后的源码后处理），但需要一次能覆盖所有
+   归约形状与算子的实现，不是本轮能安全交付的。
 
 ### 空隙的分布，以及为什么调度改不动它
 
