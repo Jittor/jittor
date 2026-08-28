@@ -82,9 +82,11 @@ void ReduceAccumulatorPass::run() {
         string index = node->get_attr("lvalue");
         if (index.size() == 0) continue;
 
-        // Exactly one accumulating statement, and nothing else that writes.
-        KernelIR* store = nullptr;
-        string target, rest;
+        // Collect the accumulating statements. There can be several -- a
+        // GroupNorm's mean and mean-of-squares are two reductions fused into
+        // one loop -- and each gets its own accumulator.
+        vector<KernelIR*> stores;
+        vector<string> targets, rests;
         bool usable = true;
         for (auto& c : node->children) {
             if (c->type == "define") continue;
@@ -98,40 +100,70 @@ void ReduceAccumulatorPass::run() {
             }
             if (t.find('[') == string::npos) continue;
             if (!mentions(r, t.substr(0, t.find('[')))) continue;
-            if (store) { usable = false; break; }
-            store = c.get(); target = t; rest = r;
+            stores.push_back(c.get()); targets.push_back(t); rests.push_back(r);
         }
-        if (!usable || !store) continue;
-        // The whole target, brackets included, has to reappear in the value.
-        if (rest.find(target) == string::npos) continue;
-        // The address must be fixed for the duration of the loop.
-        if (mentions(target, index)) continue;
-        auto open = target.find('[');
-        string index_name = target.substr(open + 1,
-                                          target.rfind(']') - open - 1);
-        KernelIR* index_define = nullptr;
-        for (auto& c : node->children)
-            if (c->type == "define" && c->get_attr("lvalue") == index_name)
-                index_define = c.get();
-        if (index_define && mentions(index_define->get_attr("rvalue"), index))
-            continue;
+        if (!usable || stores.size() == 0) continue;
 
-        string acc = "jt_reduce_acc_" + index_name;
-        // The index is computed inside the loop, so its definition has to come
-        // along; it is loop invariant, which is what was just checked.
-        if (index_define) {
-            node->push_back(index_define->get_attr("dtype") + " " + index_name
-                            + " = " + index_define->get_attr("rvalue") + ";",
-                            &node->before);
+        bool ok = true;
+        for (uint s=0; s<stores.size() && ok; s++) {
+            const string& target = targets[s];
+            // The whole target, brackets included, has to reappear in the value.
+            if (rests[s].find(target) == string::npos) { ok = false; break; }
+            // The address must be fixed for the duration of the loop.
+            if (mentions(target, index)) { ok = false; break; }
+            string pointer = target.substr(0, target.find('['));
+            // Nothing else in the loop may touch that array, or hoisting the
+            // location into a local would hide the other access.
+            for (auto& c : node->children) {
+                if (c.get() == stores[s]) continue;
+                const string& code = c->type == "define"
+                    ? c->get_attr("rvalue") : c->get_attr("code");
+                if (mentions(code, pointer)) { ok = false; break; }
+            }
+            // Two accumulators for the same location would each miss the
+            // other's updates.
+            for (uint o=0; o<s; o++)
+                if (targets[o] == target) ok = false;
         }
-        node->push_back("auto " + acc + " = " + target + ";", &node->before);
-        string value = rest;
-        for (size_t at = value.find(target); at != string::npos;
-             at = value.find(target, at + acc.size()))
-            value = value.substr(0, at) + acc
-                  + value.substr(at + target.size());
-        store->get_attr("code") = acc + " =" + value;
-        node->push_back(target + " = " + acc + ";", &node->after);
+        if (!ok) continue;
+
+        vector<string> index_names(stores.size());
+        vector<KernelIR*> index_defines(stores.size(), nullptr);
+        for (uint s=0; s<stores.size() && ok; s++) {
+            auto open = targets[s].find('[');
+            index_names[s] = targets[s].substr(
+                open + 1, targets[s].rfind(']') - open - 1);
+            for (auto& c : node->children)
+                if (c->type == "define"
+                        && c->get_attr("lvalue") == index_names[s])
+                    index_defines[s] = c.get();
+            if (index_defines[s]
+                    && mentions(index_defines[s]->get_attr("rvalue"), index))
+                ok = false;
+        }
+        if (!ok) continue;
+
+        for (uint s=0; s<stores.size(); s++) {
+            const string& target = targets[s];
+            string acc = "jt_reduce_acc_" + index_names[s];
+            // The index is computed inside the loop, so its definition has to
+            // come along; it is loop invariant, which is what was just checked.
+            if (index_defines[s]) {
+                node->push_back(index_defines[s]->get_attr("dtype") + " "
+                                + index_names[s] + " = "
+                                + index_defines[s]->get_attr("rvalue") + ";",
+                                &node->before);
+            }
+            node->push_back("auto " + acc + " = " + target + ";",
+                            &node->before);
+            string value = rests[s];
+            for (size_t at = value.find(target); at != string::npos;
+                 at = value.find(target, at + acc.size()))
+                value = value.substr(0, at) + acc
+                      + value.substr(at + target.size());
+            stores[s]->get_attr("code") = acc + " =" + value;
+            node->push_back(target + " = " + acc + ";", &node->after);
+        }
     }
 }
 
