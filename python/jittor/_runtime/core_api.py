@@ -1329,21 +1329,25 @@ class Module:
 
     def dfs(self, parents, k, callback, callback_leave=None, recurse=True):
         ''' An utility function to traverse the module. '''
-        n_children = 0
-        for v in self.__dict__.values():
-            if isinstance(v, Module):
-                n_children += 1
-        ret = callback(parents, k, self, n_children)
+        # One pass over ``__dict__`` rather than two. The count handed to the
+        # callback and the set the recursion walks are the same children, and
+        # this runs once per module on every parameters(), state_dict() and
+        # named_modules() call -- the hottest Python in a training step, where a
+        # module tree is walked more than once per iteration. ``ModuleList``
+        # already overrides dfs in exactly this shape.
+        children = [(key, value) for key, value in self.__dict__.items()
+                    if isinstance(value, Module)]
+        ret = callback(parents, k, self, len(children))
         if ret == False: return
         if recurse:
-            for k,v in self.__dict__.items():
-                if not isinstance(v, Module):
-                    continue
-                parents.append(self)
-                v.dfs(parents, k, callback, callback_leave)
-                parents.pop()
+            parents.append(self)
+            for key, value in children:
+                value.dfs(parents, key, callback, callback_leave)
+            parents.pop()
         if callback_leave:
-            callback_leave(parents, k, self, n_children)
+            # ``k`` names this module. The previous loop bound its own key to the
+            # same name, leaving the last entry of ``__dict__`` here instead.
+            callback_leave(parents, k, self, len(children))
 
     def __str__(self):
         ss = []
