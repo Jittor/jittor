@@ -9,7 +9,12 @@ import math
 import numpy as np
 
 from typing import Union
+from collections import OrderedDict
 from collections.abc import Sequence, Iterable
+
+
+_causal_mask_cache = OrderedDict()
+_causal_mask_cache_limit = 16
 
 
 def flashattention_cmd(name: str,
@@ -95,12 +100,12 @@ class FlashAttentionACL(jt.Function):
             B, SQ, H = q.shape
             SKV = k.shape[1]
             N = self.headnum
-            D = H / N
+            D = H // N
         elif self.layout == 'SBH':
             SQ, B, H = q.shape
             SKV = k.shape[0]
             N = self.headnum
-            D = H / N
+            D = H // N
         elif self.layout == 'BSND':
             B, SQ, N, D = q.shape
             SKV = k.shape[1]
@@ -116,21 +121,23 @@ class FlashAttentionACL(jt.Function):
         self.k = k
         self.v = v
 
-        self.prefix = self.prefix if self.prefix else [0 for _ in range(B)]
-        self.qstart = self.qstart if self.qstart else [0 for _ in range(B)]
-        self.kvstart = self.kvstart if self.kvstart else [0 for _ in range(B)]
+        self.prefix = (self.prefix if self.prefix is not None
+                       else [0 for _ in range(B)])
+        self.qstart = (self.qstart if self.qstart is not None
+                       else [0 for _ in range(B)])
+        self.kvstart = (self.kvstart if self.kvstart is not None
+                        else [0 for _ in range(B)])
 
-        self.hasRealshift = (not realshift == None)
-        self.hasDropmask = (not dropMask == None)
-        self.hasPaddingmask = (not paddingMask == None)
-        self.hasAttenmask = (not attenMask == None)
+        self.hasRealshift = realshift is not None
+        self.hasDropmask = dropMask is not None
+        self.hasPaddingmask = paddingMask is not None
+        self.hasAttenmask = attenMask is not None
 
-        # 待定，目前设为nullptr
-        self.realshift = realshift if realshift else jt.zeros(B, N, SQ, SKV)
-        self.dropMask = dropMask if dropMask else jt.ones(B, N, SQ, SKV)
-        self.paddingMask = paddingMask if paddingMask else jt.zeros(
-            B, N, SQ, SKV)
-        self.attenMask = attenMask if attenMask else jt.zeros(SQ, SKV)
+        dummy = jt.empty((1,), q.dtype)
+        self.realshift = realshift if realshift is not None else dummy
+        self.dropMask = dropMask if dropMask is not None else dummy
+        self.paddingMask = paddingMask if paddingMask is not None else dummy
+        self.attenMask = attenMask if attenMask is not None else dummy
 
         attr_code = f"""
         op.jt_name = "flashattention";
@@ -207,3 +214,98 @@ class FlashAttentionACL(jt.Function):
             output_shapes=[self.q.shape, self.k.shape, self.v.shape],
             attr_code=attr_code)
         return result
+
+
+def _causal_mask(query_length, source_length):
+    key = (int(query_length), int(source_length))
+    cached = _causal_mask_cache.get(key)
+    if cached is not None:
+        _causal_mask_cache.move_to_end(key)
+        return cached
+    mask = jt.array(np.triu(np.ones(key, dtype=np.bool_), 1))
+    _causal_mask_cache[key] = mask
+    if len(_causal_mask_cache) > _causal_mask_cache_limit:
+        _causal_mask_cache.popitem(last=False)
+    return mask
+
+
+def scaled_dot_product_attention_acl(
+        query, key, value, attn_mask=None, dropout_p=0.0,
+        is_causal=False, scale=None, enable_gqa=False):
+    """Return fused ACL SDPA for the verified inference subset, else ``None``."""
+    if not (compiler.has_acl and jt.flags.use_cuda and jt.flags.use_acl
+            and getattr(jt.flags, "no_grad", 0)):
+        return None
+    if float(dropout_p or 0.0) != 0.0:
+        return None
+    if not all(isinstance(tensor, jt.Var) for tensor in (query, key, value)):
+        return None
+
+    q_shape = tuple(query.shape)
+    k_shape = tuple(key.shape)
+    v_shape = tuple(value.shape)
+    if not (len(q_shape) == len(k_shape) == len(v_shape) == 4):
+        return None
+    if q_shape[0] != k_shape[0] or q_shape[0] != v_shape[0]:
+        return None
+    if k_shape[-2] != v_shape[-2]:
+        return None
+    if q_shape[-1] != k_shape[-1] or q_shape[-1] != v_shape[-1]:
+        return None
+    if str(query.dtype) != str(key.dtype) or str(query.dtype) != str(value.dtype):
+        return None
+    if str(query.dtype) != "float32":
+        return None
+
+    query_heads = int(q_shape[-3])
+    key_heads = int(k_shape[-3])
+    value_heads = int(v_shape[-3])
+    if key_heads <= 0 or key_heads != value_heads:
+        return None
+    if query_heads != key_heads:
+        if not enable_gqa or query_heads % key_heads != 0:
+            return None
+    head_dim = int(q_shape[-1])
+    if head_dim <= 0 or head_dim > 256 or head_dim % 8 != 0:
+        return None
+
+    query_length = int(q_shape[-2])
+    source_length = int(k_shape[-2])
+    if query_length <= 0 or source_length <= 0:
+        return None
+
+    real_shift = None
+    if attn_mask is not None:
+        if is_causal or not isinstance(attn_mask, jt.Var):
+            return None
+        mask_dtype = str(attn_mask.dtype)
+        if mask_dtype != "float32":
+            return None
+        mask_shape = tuple(attn_mask.shape)
+        if len(mask_shape) == 2:
+            mask_shape = (1, 1) + mask_shape
+            real_shift = attn_mask.reshape(mask_shape)
+        elif len(mask_shape) == 4:
+            real_shift = attn_mask
+        else:
+            return None
+        target_shape = (
+            int(q_shape[0]), query_heads, query_length, source_length)
+        if any(actual not in (1, expected)
+               for actual, expected in zip(mask_shape, target_shape)):
+            return None
+        if mask_shape != target_shape:
+            real_shift = real_shift.broadcast(target_shape)
+
+    causal_mask = None
+    if is_causal:
+        if query_length != source_length:
+            return None
+        if query_length > 1:
+            causal_mask = _causal_mask(query_length, source_length)
+    scale_factor = (1.0 / math.sqrt(head_dim) if scale is None
+                    else float(scale))
+    return FlashAttentionACL(
+        query_heads, "BNSD", scale=scale_factor,
+        psetype=0 if real_shift is not None else 1,
+    )(query, key, value, real_shift, None, None, causal_mask)

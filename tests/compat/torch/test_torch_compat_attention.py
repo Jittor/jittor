@@ -124,6 +124,53 @@ class TestSDPA(Base):
 
         both_devices(body)
 
+    def test_sdpa_prefers_acl_fast_path_before_gqa_expansion(self):
+        calls = []
+        marker = jt.zeros((1, 4, 3, 8))
+        q = jt.ones((1, 4, 3, 8))
+        k = jt.ones((1, 2, 3, 8))
+        v = jt.ones((1, 2, 3, 8))
+
+        def fake_acl(query, key, value, **kwargs):
+            calls.append((query.shape, key.shape, value.shape, kwargs))
+            return marker
+
+        with jt.no_grad(), mock.patch.object(
+                jt.nn, "_acl_scaled_dot_product_attention",
+                side_effect=fake_acl, create=True):
+            actual = torch.nn.functional.scaled_dot_product_attention(
+                q, k, v, is_causal=True, enable_gqa=True)
+
+        self.assertIs(actual, marker)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(tuple(calls[0][0]), (1, 4, 3, 8))
+        self.assertEqual(tuple(calls[0][1]), (1, 2, 3, 8))
+        self.assertEqual(tuple(calls[0][2]), (1, 2, 3, 8))
+        self.assertTrue(calls[0][3]["is_causal"])
+        self.assertTrue(calls[0][3]["enable_gqa"])
+
+    def test_sdpa_passes_float_mask_to_acl_fast_path(self):
+        calls = []
+        marker = jt.zeros((1, 4, 3, 8))
+        q = jt.ones((1, 4, 3, 8))
+        k = jt.ones((1, 4, 3, 8))
+        v = jt.ones((1, 4, 3, 8))
+        mask = jt.zeros((1, 1, 3, 3))
+
+        def fake_acl(query, key, value, **kwargs):
+            calls.append(kwargs)
+            return marker
+
+        with jt.no_grad(), mock.patch.object(
+                jt.nn, "_acl_scaled_dot_product_attention",
+                side_effect=fake_acl, create=True):
+            actual = torch.nn.functional.scaled_dot_product_attention(
+                q, k, v, attn_mask=mask)
+
+        self.assertIs(actual, marker)
+        self.assertEqual(len(calls), 1)
+        self.assertIs(calls[0]["attn_mask"], mask)
+
     def test_sdpa_dropout_one(self):
         q, k, v = self.q, self.k, self.v
 

@@ -80,11 +80,11 @@ OpInfo CUDA references. The maintained CPU gate also passes with a fail-closed
 independent binary PyTorch oracle, and compact ResNet18, ViT, GPT-2, and
 diffusion UNet forward/backward parity passes on CPU and CUDA. ROCm, most
 optional downstream dependencies, full training, and performance remain
-separate gates. On a real 910B3, the maintained Ascend NPU gate passes its ACL
-backend and OpInfo scope. Transformers 4.56.2 Qwen3-8B float32 loads the full
-8,190,735,360-parameter checkpoint; its model forward runs on ACL without an ACL
-fallback diagnostic, and final greedy `arg_reduce` now also runs through ACL
-without a CPU compile; bfloat16 and `arg_reduce` backward remain open. External Qwen3 ACLNN RoPE integration cuts 0.6B prefill to 0.0934 s and reaches 9.76 token/s; the fused 8B probe remains fallback-free.
+separate gates. On a real 910B3, the maintained Ascend gate passes `361 passed, 11 skipped`.
+Transformers 4.56.2 Qwen3-8B float32 loads all 8,190,735,360 parameters; SDPA,
+greedy `arg_reduce`, and mask `all` run on ACL without CPU compile or fallback.
+ACLNN RoPE plus CANN FlashAttentionScoreV2 cuts 0.6B prefill to 0.0658 s and reaches
+13.81 token/s; the 8B probe has 216 fused-attention hits and outputs `4`. SDPA is FP32 no-grad only; whole-model bfloat16 and `arg_reduce` backward remain open.
 See the [Ascend guide](../../docs/guides/ascend-910b.md), [validation report](../results/2026-08-28-ascend-910b-validation.md), [Qwen3 performance report](../results/transformers/2026-08-28-qwen3-ascend-performance.md), the complete [CPU](../results/2026-08-22-complete-cpu-test-suite.md) and [CUDA](../results/2026-08-22-cuda-test-suite.md) reports, plus the
 [parallel follow-up](../results/2026-08-22-cuda-parallel-range-network-oracle.md).
 The current fail-closed optional CUDA base gate passes 16 TorchMetrics,

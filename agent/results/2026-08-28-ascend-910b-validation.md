@@ -2,7 +2,7 @@
 
 - Status: Accepted within the maintained NPU gate; explicit skips remain
 - Last reviewed: 2026-08-29
-- Source baseline: `7caec188` plus the changes documented here
+- Source baseline: `7986100b` plus the changes documented here
 - Owner: Jittor core and ACL backend maintainers
 - Review when: CANN/driver versions, ACL source transformation, NPU gate scope,
   or any listed skip changes
@@ -15,7 +15,7 @@ ACL 后端、扩展算子、索引、227 项 OpInfo、负整数 floor-divide 及
 
 设备证据不依赖导入成功或 CPU fallback：ACL matmul 回归捕获到
 `compile acl op`，同时断言日志中没有 `fallback cpu`。维护范围内最终共
-`359 passed, 11 skipped`；skip 均对应本报告和 known-issues ledger 中的明确能力边界。
+`361 passed, 11 skipped`；skip 均对应本报告和 known-issues ledger 中的明确能力边界。
 
 ## 环境与隔离
 
@@ -115,6 +115,22 @@ count without reducing the mask. Tensor sources retain exact length validation
 through a supported int32 reduction. The indexing gate covers non-empty scalar,
 empty scalar, and tensor-source masks; all 27 internal indexing checks passed.
 
+### Transformers SDPA and public `all`
+
+Qwen3's Torch SDPA path now dispatches the verified FP32 no-grad subset to CANN
+`aclnnFlashAttentionScoreV2` before compatibility GQA expansion. Focused real-NPU
+references cover square causal prefill, rectangular decode, GQA, and arbitrary
+float additive masks; all execute without CPU compilation or fallback. The
+runner also releases its per-call CANN integer-array descriptors, which matters
+for multi-layer and multi-token generation.
+
+Transformers checks whether an attention mask can be ignored through
+`padding_mask.all()`. The public ACL path now lowers this truth reduction to
+nonzero comparison, int32 min, and bool cast, preserving the public result while
+avoiding unsupported `reduce.logical_and`. Full and dimension reductions pass on
+the real NPU. The native bool `all_`/`any_` OpInfo matrix remains a separate
+explicit skip and is not claimed by this composed public path.
+
 ## Maintained gate
 
 ```bash
@@ -130,7 +146,7 @@ Full Nox results after the serial prewarm:
 | Stage | Result |
 | --- | ---: |
 | ACL device and float32 matmul probe | passed |
-| `tests/backends/npu/test_acl.py` | 23 passed |
+| `tests/backends/npu/test_acl.py` | 25 passed |
 | `tests/backends/npu/test_acl_torch_compat.py` | 2 passed |
 | `tests/backends/npu/test_aclop.py` | 110 passed, 2 skipped |
 | `tests/backends/npu/test_acl_indexing.py` | 2 passed |
@@ -138,9 +154,9 @@ Full Nox results after the serial prewarm:
 | NPU floor-divide fixed vectors and broadcast | 2 passed |
 | NPU float32 NaN/Inf predicates | 1 passed |
 | NPU float32 fused/unfused NaN comparisons | 1 passed |
-| Total | 359 passed, 11 skipped |
+| Total | 361 passed, 11 skipped |
 
-The complete maintained session finished successfully in 44 minutes, including
+The complete maintained session finished successfully in 43 minutes, including
 the Nox-managed core rebuild and all real-device tests.
 
 The floor-divide regression covers uint8, int8, int16, int32, and int64 fixed
@@ -170,7 +186,7 @@ The intentional ACL additions increased `misc/tensor_ops.py` from 2,845 to
 A separate real-device probe validated the local Qwen3-8B checkpoint through
 Transformers 4.56.2 and the Jittor Torch shim. The accepted path used CPU
 checkpoint deserialization followed by an explicit migration to the visible NPU,
-float32 weights, eager attention, KV cache, batch size 1, a 22-token prompt, and
+float32 weights, SDPA attention, KV cache, batch size 1, a 22-token prompt, and
 one greedy output token. This is an inference correctness probe, not a throughput
 benchmark.
 
@@ -181,19 +197,21 @@ benchmark.
 | Jittor backend flags | `has_acl=1`, `use_acl=1`, `use_cuda=1` |
 | Process device memory after load | 32,376 MB |
 | Total HBM use on the selected card | 35,735 / 65,536 MB |
-| Load and explicit migration | 107.39 s |
-| One-token generation | 2.46 s |
+| Load and explicit migration | 107.10 s |
+| First SDPA prefill including JIT | 8.49 s |
+| Steady prefill / one-token generation | 0.1144 s / 0.1282 s |
 | Generated token | ID 19, text `4` |
+| ACL fused-attention hits / misses | 216 / 0 |
 | ACL `fallback cpu` diagnostics | 0 |
 | CPU-compiled operations during generation | 0 |
 
-The preceding Qwen3-0.6B probe used the same fail-closed protocol for eight
-tokens, used 3,174 MB process device memory, and generated `2 + 2 = 4.`. All
-eight greedy selections executed through ACL with zero fallback and zero CPU
-compile. The 8B run then exercised all 36 decoder layers and the language-model
-head with the full checkpoint resident on one 910B3. Its model forward and final
-greedy selection likewise completed through ACL, so float32 inference is now
-fully device-resident within this protocol.
+The preceding Qwen3-0.6B SDPA probe used the same fail-closed protocol for eight
+tokens and generated `2 + 2 = 4.` in 0.5791 s median. It recorded 2,268 fused
+attention hits, zero misses, zero fallback, and zero CPU compile. The 8B run then
+exercised all 36 decoder layers and the language-model head with the full
+checkpoint resident on one 910B3. Its model forward and final greedy selection
+likewise completed through ACL, so float32 inference is fully device-resident
+within this protocol.
 
 A 2026-08-29 follow-up connected Qwen3's version-specific RoPE helper to the
 generic Jittor ACLNN RoPE capability through an external module patch. The full
@@ -201,6 +219,13 @@ generic Jittor ACLNN RoPE capability through an external module patch. The full
 19 (`4`), with `fallback_count=0` and `cpu_compile_count=0`. This confirms the
 RoPE optimization on the real NPU without changing the float32-only support
 boundary of this model probe.
+
+The same follow-up then connected Torch SDPA to CANN FlashAttentionScoreV2 and
+removed the public `padding_mask.all()` fallback. Qwen3-0.6B complete logits
+against native `torch_npu` SDPA have maximum absolute error `3.8035214e-05`,
+identical argmax, and identical top-10/top-20 token sets. Qwen3-8B retained token
+19 while exercising the fused attention path in all layers. FP16/BF16 fused
+SDPA remains fail-closed; the accepted whole-model claim remains FP32.
 
 Verify-then-fix exposed two Torch-compatibility defects before the accepted run.
 Explicit construction of the zero-length CUDA tensor used by the Transformers KV
@@ -219,7 +244,8 @@ real-NPU bfloat16 run completes with zero fallback.
 
 The nine OpInfo skips are:
 
-- boolean `all` and `any` reductions;
+- native boolean `all_` and `any_` reductions; the public composed `all` path
+  used by Transformers is separately verified;
 - composed float32 `atan2`;
 - complex `irfft`;
 - float32 `prod`;
@@ -234,9 +260,10 @@ reductions can abort the process. They therefore fail closed as precise skips
 linked to `KI-BACKEND-001` through `KI-BACKEND-004`.
 
 General ACL float64 support remains unavailable. A CPU fallback for float64 is
-not counted as NPU evidence. `arg_reduce` backward, Qwen3-8B bfloat16, full
-training, distributed NPU behavior, other optional downstream projects, and
-performance are separate gates and are not claimed by this report.
+not counted as NPU evidence. Fused SDPA is restricted to the verified FP32
+no-grad subset. `arg_reduce` backward, Qwen3-8B bfloat16, full training,
+distributed NPU behavior, and other optional downstream projects are separate
+gates and are not claimed by this report.
 
 ## User documentation
 

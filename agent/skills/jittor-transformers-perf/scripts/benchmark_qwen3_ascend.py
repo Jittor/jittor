@@ -26,6 +26,8 @@ def main():
     parser.add_argument("--samples", type=int, default=10)
     parser.add_argument("--logits-output")
     parser.add_argument("--pipeline-ops", type=int, default=0)
+    parser.add_argument(
+        "--attn-implementation", choices=("eager", "sdpa"), default="eager")
     args = parser.parse_args()
 
     if args.warmups < 0 or args.samples < 1 or args.new_tokens < 1:
@@ -74,7 +76,7 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
         dtype=model_dtype,
-        attn_implementation="eager",
+        attn_implementation=args.attn_implementation,
         local_files_only=True,
     )
     if args.backend == "jittor":
@@ -172,6 +174,7 @@ def main():
         generate_samples.append(time.perf_counter() - started)
 
     fallback_count = 0
+    sdpa_flash_stats = {}
     if args.backend == "jittor":
         with jt.log_capture_scope(
             log_v=0, log_vprefix="acl_op_exec.cc=100"
@@ -184,10 +187,12 @@ def main():
             if "fallback cpu" in entry["msg"].lower()
         ]
         fallback_count = len(fallback_messages)
+        sdpa_flash_stats = getattr(jt, "_torch_sdpa_flash_stats", {})
         if fallback_messages:
             raise RuntimeError(
                 "CPU fallback detected during inference: " +
-                fallback_messages[0])
+                fallback_messages[0] +
+                "; SDPA flash stats: " + repr(sdpa_flash_stats))
 
     generated_ids = generated.detach().cpu().numpy()[0].tolist()
     prompt_tokens = int(input_ids.shape[1])
@@ -195,6 +200,7 @@ def main():
     result = {
         "backend": args.backend,
         "backend_version": backend_version,
+        "attn_implementation": args.attn_implementation,
         "dtype": str(first_parameter.dtype),
         "fallback_count": fallback_count,
         "first_generate_seconds": first_generate_seconds,
@@ -218,6 +224,9 @@ def main():
         "prefill_sync_median_seconds": statistics.median(prefill_sync_samples),
         "prefill_sync_samples": prefill_sync_samples,
         "prompt_tokens": prompt_tokens,
+        "sdpa_flash_backend": sdpa_flash_stats.get("backend"),
+        "sdpa_flash_hits": sdpa_flash_stats.get("hits", 0),
+        "sdpa_flash_misses": sdpa_flash_stats.get("misses", {}),
         "text": tokenizer.decode(new_ids, skip_special_tokens=True),
         "tokens_per_second": args.new_tokens / statistics.median(generate_samples),
         "transformers": transformers.__version__,

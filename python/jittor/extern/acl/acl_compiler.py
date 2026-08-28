@@ -153,7 +153,10 @@ def post_process():
 def change_function():
     import jittor as jt
     from jittor import Function
-    from .aclops.flashattention_op import FlashAttentionACL
+    from .aclops.flashattention_op import (
+        FlashAttentionACL,
+        scaled_dot_product_attention_acl,
+    )
     from .aclops.conv_op import ConvACL
     from .aclops.pool_op import PoolACL
     from .aclops.nantonum_op import NanToNumACL
@@ -318,6 +321,14 @@ def change_function():
                 return jt.array([False])
         else:
             return jt.sum(input != 0, dim=dim) > 0
+
+    native_min = jt.min
+
+    def all_acl(input, dim=()):
+        # CANN ReduceAll requires a bool output, while Jittor's internal
+        # logical reduction preserves numeric dtypes. This exact lowering
+        # keeps the public bool result without changing that shared contract.
+        return native_min((input != 0).int32(), dim).bool()
 
     from .aclops.cumsum_op import CumsumACL
 
@@ -759,6 +770,8 @@ def change_function():
 
     jt.gather = warp(jt.gather, gather_acl)
     jt.Var.gather = lambda x, dim, index: jt.gather(x, dim, index)
+    jt.all = warp(jt.all, all_acl)
+    jt.Var.all = lambda input, dim=(): jt.all(input, dim)
     jt.any = warp(jt.any, any_acl)
     jt.Var.any = jt.any
 
@@ -878,6 +891,7 @@ def change_function():
     # jt.nn.LayerNorm = warp(jt.nn.LayerNorm, LayerNormACL)
 
     # jt.nn.FlashAttention = warp(jt.nn.FlashAttention, FlashAttentionACL)
+    jt.nn._acl_scaled_dot_product_attention = scaled_dot_product_attention_acl
     jt.isnan = warp(jt.isnan, isnan_acl)
     jt.isinf = warp(jt.isinf, isinf_acl)
     jt.Var.isnan = jt.isnan

@@ -2183,6 +2183,22 @@ def install(ctx):
     def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
                                                 dropout_p, is_causal, sf,
                                                 enable_gqa=False):
+        acl_attention = getattr(
+            jt.nn, "_acl_scaled_dot_product_attention", None)
+        if callable(acl_attention):
+            acl_output = acl_attention(
+                query,
+                key,
+                value,
+                attn_mask=attn_mask,
+                dropout_p=dropout_p,
+                is_causal=is_causal,
+                scale=sf,
+                enable_gqa=enable_gqa,
+            )
+            if acl_output is not None:
+                _sdpa_flash_hit("acl_flash_attention_score_v2")
+                return acl_output
         if attn_mask is not None:
             _sdpa_flash_miss("mask")
             return None

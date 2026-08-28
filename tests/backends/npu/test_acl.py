@@ -308,6 +308,62 @@ class TestACL(unittest.TestCase):
         self.assertFalse(any("compile cpu" in message for message in messages))
         self.assertFalse(any("fallback cpu" in message for message in messages))
 
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_inference_scaled_dot_product_attention(self):
+        rng = np.random.RandomState(20260831)
+        q_np = rng.randn(1, 4, 7, 64).astype("float32") * 0.1
+        k_np = rng.randn(1, 2, 7, 64).astype("float32") * 0.1
+        v_np = rng.randn(1, 2, 7, 64).astype("float32") * 0.1
+        additive_np = rng.randn(1, 1, 7, 7).astype("float32") * 0.03
+
+        def expected(query, key, value, causal, additive_mask=None):
+            key = np.repeat(key, 2, axis=1)
+            value = np.repeat(value, 2, axis=1)
+            scores = np.matmul(query, np.swapaxes(key, -1, -2)) / 8.0
+            if causal:
+                blocked = np.triu(np.ones(scores.shape[-2:], dtype=bool), 1)
+                scores = np.where(blocked, -1e30, scores)
+            if additive_mask is not None:
+                scores = scores + additive_mask
+            weights = np.exp(scores - scores.max(axis=-1, keepdims=True))
+            weights /= weights.sum(axis=-1, keepdims=True)
+            return np.matmul(weights, value)
+
+        q, k, v = jt.array(q_np), jt.array(k_np), jt.array(v_np)
+        with jt.no_grad(), jt.log_capture_scope(
+                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+            prefill = jt.nn._acl_scaled_dot_product_attention(
+                q, k, v, is_causal=True, enable_gqa=True)
+            decode = jt.nn._acl_scaled_dot_product_attention(
+                q[:, :, :1, :], k, v, enable_gqa=True)
+            additive = jt.nn._acl_scaled_dot_product_attention(
+                q, k, v, attn_mask=jt.array(additive_np), enable_gqa=True)
+            self.assertIsNotNone(prefill)
+            self.assertIsNotNone(decode)
+            self.assertIsNotNone(additive)
+            prefill, decode, additive = jt.fetch_sync(
+                [prefill, decode, additive])
+
+        np.testing.assert_allclose(
+            prefill, expected(q_np, k_np, v_np, True), atol=3e-5, rtol=3e-5)
+        np.testing.assert_allclose(
+            decode, expected(q_np[:, :, :1, :], k_np, v_np, False),
+            atol=3e-5, rtol=3e-5)
+        np.testing.assert_allclose(
+            additive, expected(q_np, k_np, v_np, False, additive_np),
+            atol=3e-5, rtol=3e-5)
+
+        self.assertIsNone(jt.nn._acl_scaled_dot_product_attention(
+            q, k, v, is_causal=True, enable_gqa=True))
+        with jt.no_grad():
+            for dtype in ("float16", "bfloat16"):
+                self.assertIsNone(jt.nn._acl_scaled_dot_product_attention(
+                    getattr(q, dtype)(), getattr(k, dtype)(),
+                    getattr(v, dtype)(), is_causal=True, enable_gqa=True))
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
     @jt.flag_scope(use_acl=1)
     def test_max(self):
         x = jt.rand(3, 3)
@@ -315,6 +371,22 @@ class TestACL(unittest.TestCase):
         ny = x.data.max(1)
         np.testing.assert_allclose(y, ny)
         print('test_max pass')
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_all_reduction(self):
+        values = np.array([[1, -2, 3], [4, 0, -6]], dtype=np.int32)
+        x = jt.array(values)
+        with jt.log_capture_scope(
+                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+            full = x.all()
+            by_row = jt.all(x, dim=1)
+            full, by_row = jt.fetch_sync([full, by_row])
+
+        np.testing.assert_array_equal(full, values.all())
+        np.testing.assert_array_equal(by_row, values.all(axis=1))
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1)
     def test_sum(self):
