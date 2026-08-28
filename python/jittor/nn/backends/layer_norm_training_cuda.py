@@ -11,6 +11,11 @@ def _layer_norm_cuda_cls(hidden, eps):
     threads = 32
     while threads < min(hidden, 256):
         threads *= 2
+    # A warp's worth of channels across, so each read is one coalesced
+    # transaction; the rest of the block splits the rows. Capped so the tile
+    # stays within one block and the shared buffers stay small.
+    tile_x = 32
+    tile_y = 32 if hidden >= 32 else 8
     header = f"#include <{jt.compile_extern.cub_home}cub/cub.cuh>"
 
     class LayerNormCUDA(jt.Function):
@@ -140,38 +145,58 @@ def _layer_norm_cuda_cls(hidden, eps):
                         const in2_type* mean, const in3_type* rstd,
                         out1_type* grad_weight, out2_type* grad_bias,
                         int rows) {{
-                    typedef cub::BlockReduce<float, {threads}> BlockReduce;
-                    __shared__ typename BlockReduce::TempStorage storage;
-                    int channel = blockIdx.x;
+                    // The parameter gradients reduce down the rows, one result
+                    // per channel. Giving each block a channel and walking its
+                    // threads along rows makes every lane of a warp touch a
+                    // different cache line -- consecutive lanes would be
+                    // {hidden} floats apart. Lanes run along channels instead
+                    // and the rows are split across threadIdx.y, so a warp's
+                    // read is one contiguous transaction. Both gradients come
+                    // out of a single pass over grad_y rather than two.
+                    __shared__ float shared_weight[{tile_y}][{tile_x}];
+                    __shared__ float shared_bias[{tile_y}][{tile_x}];
+                    int channel = blockIdx.x * {tile_x} + threadIdx.x;
                     float local_weight = 0.0f;
-                    for (int row = threadIdx.x; row < rows; row += blockDim.x) {{
-                        int index = row * {hidden} + channel;
-                        float normalized =
-                            (static_cast<float>(x[index])
-                             - static_cast<float>(mean[row]))
-                            * static_cast<float>(rstd[row]);
-                        local_weight += static_cast<float>(grad_y[index])
-                            * normalized;
-                    }}
-                    float reduced = BlockReduce(storage).Sum(local_weight);
-                    if (threadIdx.x == 0)
-                        grad_weight[channel] = out1_type(reduced);
-                    __syncthreads();
-
                     float local_bias = 0.0f;
-                    for (int row = threadIdx.x; row < rows; row += blockDim.x)
-                        local_bias += static_cast<float>(
-                            grad_y[row * {hidden} + channel]);
+                    if (channel < {hidden}) {{
+                        for (int row = threadIdx.y; row < rows;
+                             row += {tile_y}) {{
+                            int index = row * {hidden} + channel;
+                            float g = static_cast<float>(grad_y[index]);
+                            float normalized =
+                                (static_cast<float>(x[index])
+                                 - static_cast<float>(mean[row]))
+                                * static_cast<float>(rstd[row]);
+                            local_weight += g * normalized;
+                            local_bias += g;
+                        }}
+                    }}
+                    shared_weight[threadIdx.y][threadIdx.x] = local_weight;
+                    shared_bias[threadIdx.y][threadIdx.x] = local_bias;
                     __syncthreads();
-                    reduced = BlockReduce(storage).Sum(local_bias);
-                    if (threadIdx.x == 0)
-                        grad_bias[channel] = out2_type(reduced);
+                    for (int stride = {tile_y} / 2; stride > 0; stride >>= 1) {{
+                        if (threadIdx.y < stride) {{
+                            shared_weight[threadIdx.y][threadIdx.x] +=
+                                shared_weight[threadIdx.y + stride][threadIdx.x];
+                            shared_bias[threadIdx.y][threadIdx.x] +=
+                                shared_bias[threadIdx.y + stride][threadIdx.x];
+                        }}
+                        __syncthreads();
+                    }}
+                    if (threadIdx.y == 0 && channel < {hidden}) {{
+                        grad_weight[channel] =
+                            out1_type(shared_weight[0][threadIdx.x]);
+                        grad_bias[channel] =
+                            out2_type(shared_bias[0][threadIdx.x]);
+                    }}
                 }}
 
                 int rows = in0->num / {hidden};
                 layer_norm_backward_x<<<rows, {threads}>>>(
                     in0_p, in1_p, in2_p, in3_p, in4_p, out0_p, rows);
-                layer_norm_backward_affine<<<{hidden}, {threads}>>>(
+                layer_norm_backward_affine
+                    <<<({hidden} + {tile_x} - 1) / {tile_x},
+                       dim3({tile_x}, {tile_y})>>>(
                     in0_p, in1_p, in2_p, in3_p, out1_p, out2_p, rows);
                 CHECK(0 == cudaGetLastError());
                 """,
