@@ -1089,6 +1089,53 @@ def _install_module_methods(nn, registry=None):
             fast = jt.nn._rms_norm_cuda(value, weight, epsilon)
         return fast
 
+    _pipeline_state = {"threshold": 0, "mark": 0}
+
+    def set_execution_pipelining(pending_ops):
+        ''' Launch the pending graph at module boundaries once it holds this many
+        ops, instead of waiting for the next sync. 0 (the default) disables it.
+
+        Returns the previous setting. See ``_maybe_pipeline`` for the trade.
+        '''
+        previous = _pipeline_state["threshold"]
+        _pipeline_state["threshold"] = max(0, int(pending_ops))
+        _pipeline_state["mark"] = jt.core.number_of_lived_ops()
+        return previous
+
+    def get_execution_pipelining():
+        ''' The current pending-op threshold; 0 when pipelining is off. '''
+        return _pipeline_state["threshold"]
+
+    def _maybe_pipeline(result):
+        # A lazy graph reaches the device only at the next sync, so the GPU sits
+        # idle for the whole of the Python-side construction: measured on
+        # ViT-base, one contiguous ~6ms stall per step, immediately before the
+        # first kernel of the forward. Launching the graph built so far at a
+        # module boundary -- ``jt.sync`` does not wait for the device -- lets the
+        # GPU start while Python keeps building.
+        #
+        # The cost is fusion: ops either side of a flush cannot fuse, which also
+        # regroups floating-point accumulation, so results move by a rounding
+        # step. Off unless asked for, and the threshold counts pending ops rather
+        # than module calls, so leaf modules do not each trigger one.
+        threshold = _pipeline_state["threshold"]
+        if threshold <= 0:
+            return result
+        # Count ops added since the last flush, not ops alive: the live count
+        # includes everything the graph still holds, so once it crossed the
+        # threshold every later module call would flush and no two ops would ever
+        # fuse.
+        lived = jt.core.number_of_lived_ops()
+        if lived - _pipeline_state["mark"] < threshold:
+            if lived < _pipeline_state["mark"]:
+                _pipeline_state["mark"] = lived
+            return result
+        target = result[0] if isinstance(result, (tuple, list)) and result else result
+        if isinstance(target, jt.Var):
+            jt.sync([target])
+            _pipeline_state["mark"] = jt.core.number_of_lived_ops()
+        return result
+
     def _call(self, *args, **kwargs):
         def dispatch(*call_args, **call_kwargs):
             # torch lets a module override forward per-INSTANCE (`self.forward =
@@ -1107,10 +1154,12 @@ def _install_module_methods(nn, registry=None):
         state = getattr(self, "_fsdp_state", None)
         if state is not None and getattr(state, "true_fsdp_initialized", False):
             from jittor.compat.fsdp2 import shard as _fsdp2_shard
-            return _fsdp2_shard._execute_with_true_fsdp(
-                self, dispatch, *args, **kwargs)
-        return dispatch(*args, **kwargs)
+            return _maybe_pipeline(_fsdp2_shard._execute_with_true_fsdp(
+                self, dispatch, *args, **kwargs))
+        return _maybe_pipeline(dispatch(*args, **kwargs))
     M.__call__ = _call
+    M.set_execution_pipelining = staticmethod(set_execution_pipelining)
+    M.get_execution_pipelining = staticmethod(get_execution_pipelining)
 
     # torch's named_parameters/named_buffers/named_modules accept extra kwargs
     # (remove_duplicate, prefix, recurse) and return iterators; jittor's take
