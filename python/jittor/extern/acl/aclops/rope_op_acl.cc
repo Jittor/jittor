@@ -31,27 +31,29 @@
 
 namespace jittor
 {
-    RotaryPosEmbOpRunner::RotaryPosEmbOpRunner() : BaseOpRunner("RotaryPosEmb")
+    RotaryPositionEmbeddingOpRunner::RotaryPositionEmbeddingOpRunner()
+        : BaseOpRunner("RotaryPositionEmbedding")
     {
     }
 
-    void RotaryPosEmbOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void RotaryPositionEmbeddingOpRunner::executeOp(
+        std::unordered_map<string, AclOpFunctions>::iterator &it)
     {
-        ret = aclnnApplyRotaryPosEmbGetWorkspaceSize(inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3], (int64_t)1, &workspaceSize, &executor);
-
-        checkRet(ret);
+        ret = aclnnRotaryPositionEmbeddingGetWorkspaceSize(
+            inputTensors[0], inputTensors[1], inputTensors[2], 0,
+            outputTensors[0], &workspaceSize, &executor);
+        CHECK_RET(ret == ACL_SUCCESS,
+                  LOG_PRINT("%s: aclnnRotaryPositionEmbeddingGetWorkspaceSize failed. ERROR: %d\n", name.c_str(), ret); return);
 
         if (workspaceSize > 0)
-        {
             mallocWorkSpace(workspaceSize);
-        }
 
-        ret = aclnnApplyRotaryPosEmb(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnApplyRotaryPosEmb failed. ERROR: %d\n", name.c_str(), ret); return);
+        ret = aclnnRotaryPositionEmbedding(
+            workspaceAddr, workspaceSize, executor, aclstream);
+        CHECK_RET(ret == ACL_SUCCESS,
+                  LOG_PRINT("%s: aclnnRotaryPositionEmbedding failed. ERROR: %d\n", name.c_str(), ret); return);
 
         syncRun();
-
-        return;
     }
 
 }

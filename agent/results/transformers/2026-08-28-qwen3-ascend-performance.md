@@ -2,10 +2,10 @@
 
 - Status: Accepted for float32 eager greedy inference on one Ascend 910B3
 - Last reviewed: 2026-08-29
-- Source baseline: `e3e82d98` plus the changes in this report's commit
+- Source baseline: `7caec188` plus the changes in this report's commit
 - Owner: Torch compatibility and ACL backend maintainers
-- Review when: Transformers masking, vmap compatibility, ACL RMSNorm, CANN,
-  checkpoint, or timing protocol changes
+- Review when: Transformers masking, vmap compatibility, ACL RMSNorm/RoPE,
+  CANN, checkpoint, or timing protocol changes
 
 ## 结论
 
@@ -30,6 +30,13 @@ lowering 到已有 Index/IndexPut 路径后，8-token greedy generation 可稳�
 `fallback_count=0`。单 token generation 中位数从 0.1409 s 降至 0.1358 s，改善
 3.7%；prefill 未触发该算子，0.1226 s 到 0.1235 s 的 0.7% 变化视为测量波动。
 
+剩余 profile 中，Qwen3 每层的 RoPE 仍由 Slice、Neg、Concat、Mul 和 Add 组合，
+28 层共涉及 392 次算子提交。新的无梯度快路径使用
+`aclnnRotaryPositionEmbedding`，每层 q/k 各提交一次，净减少 336 次提交；训练和
+未验证形状仍走可微组合实现。同一张 NPU 上的严格成对 A/B 中，prefill 从
+0.1248 s 降至 0.0934 s，单 token generation 从 0.1389 s 降至 0.1084 s，分别
+改善 25.1% 和 21.9%；8-token generation 从 1.0591 s 降至 0.8195 s，改善 22.6%。
+
 ## 环境与口径
 
 - Device: one allocated Ascend 910B3
@@ -45,8 +52,8 @@ lowering 到已有 Index/IndexPut 路径后，8-token greedy generation 可稳�
   temporary directories; raw logs remain under `$JITTOR_LAB_ROOT/_state/`
 
 Checkpoint loading and first JIT are not mixed into steady-state timing. In the
-current isolated benchmark cache, the first prefill took 121.72 s and first
-generation took 40.63 s; these include cold operation compilation and are not
+current isolated benchmark cache, the first prefill took 120.09 s and first
+generation took 40.02 s; these include cold operation compilation and are not
 the per-request steady-state latency below.
 
 ## 性能结果
@@ -56,22 +63,28 @@ the per-request steady-state latency below.
 | Jittor before | 0.8191 s / 0.8228 s | 0.8139 s / 0.8162 s | 11.60x / 10.78x |
 | Jittor optimized before ACL arg-reduce | 0.1226 s / 0.1243 s | 0.1409 s / 0.1414 s | 1.74x / 1.87x |
 | Jittor with ACL arg-reduce | 0.1235 s / 0.1266 s | 0.1358 s / 0.1367 s | 1.77x / 1.84x |
+| Paired Jittor before ACL RoPE | 0.1248 s / 0.1282 s | 0.1389 s / 0.1420 s | 1.78x / 1.88x |
+| Jittor with ACL RoPE | 0.0934 s / 0.0963 s | 0.1084 s / 0.1098 s | 1.34x / 1.47x |
 | Native PyTorch NPU, current rerun | 0.0699 s / 0.0713 s | 0.0737 s / 0.0738 s | 1.00x |
 
 The historical rows retain their original paired PyTorch ratios. The current
 Jittor and PyTorch rows were rerun back-to-back on the same selected 910B3.
 
-当前 prefill 可分为约 0.0820 s Python/graph/operator submission 和 0.0414 s
-final synchronization。原生 PyTorch 总 prefill 为 0.0699 s，说明剩余差距仍主要与
-Jittor 的 1,493 个细粒度调用及主机提交路径有关，不能归因成单个 GEMM 太慢。
+启用 ACL RoPE 后，prefill 可分为约 0.0648 s Python/graph/operator submission 和
+0.0285 s final synchronization；融合前的成对结果是 0.0858 s 和 0.0390 s。
+原生 PyTorch 总 prefill 为 0.0699 s，说明剩余差距仍主要与 Jittor 的细粒度调用及
+主机提交路径有关，不能归因成单个 GEMM 太慢。
 
 | Backend | 8-token median / p90 | Throughput | Output |
 | --- | ---: | ---: | --- |
 | Jittor with ACL arg-reduce | 1.0845 s / 1.0874 s | 7.38 token/s | `2 + 2 = 4.` |
+| Paired Jittor before ACL RoPE | 1.0591 s / 1.0753 s | 7.55 token/s | `2 + 2 = 4.` |
+| Jittor with ACL RoPE | 0.8195 s / 0.8325 s | 9.76 token/s | `2 + 2 = 4.` |
 | Native PyTorch NPU, current rerun | 0.5843 s / 0.5899 s | 13.69 token/s | `2 + 2 = 4.` |
 
-8-token 默认 Transformers 路径已不再卡死；Jittor 当前总延迟仍为原生 PyTorch 的
-1.86 倍。这里报告整次 `generate` 延迟，不用总时间简单除以 8 伪装逐 token 首包延迟。
+8-token 默认 Transformers 路径已不再卡死；启用外置 RoPE 适配后的总延迟为原生
+PyTorch 的 1.40 倍。这里报告整次 `generate` 延迟，不用总时间简单除以 8 伪装逐
+token 首包延迟。
 
 ## 根因证据
 
@@ -86,6 +99,12 @@ Qwen3-0.6B 的 28 层还触发 113 次 RMSNorm。原生 `aclnnRmsNorm` 替换无
 
 已有 `aclnnSilu` 也做了独立 A/B。它把每层 Sigmoid 和 Mul 合成一个调用，但 prefill
 从 0.1206 s 变慢到 0.1237 s，generation 为 0.1354 s，因此该实验未纳入生产改动。
+
+原始 RoPE 在 28 层中产生 112 次 Slice、56 次 Neg、56 次 Concat、112 次 Mul 和
+56 次 Add。直接使用旧的 `aclnnApplyRotaryPosEmb` 不成立：该接口是原地更新接口，
+既有 runner 还把 BNSD 的 Qwen 张量硬编码成 BSND，并返回未真实写入的输出。本次改用
+CANN 9.0 的非原地 `aclnnRotaryPositionEmbedding`，mode 0 对应 Qwen 的 half rotation，
+输出由独立张量承载。
 
 第二步 decode 使用 `input_ids[:, cache_position]`。原 ACL wrapper 在
 `GetItemACL` 拒绝该混合索引后执行 `x[slices]`，这会重新进入自身，造成 Python
@@ -111,6 +130,12 @@ NPU 前向和反向均与 NumPy 完全一致。
 `[17, 488, 220, 17, 284, 220, 19, 13]`，文本均为 `2 + 2 = 4.`。这证明性能变化
 没有依赖错误 mask 或 CPU fallback 产生相同表面文本。
 
+ACL RoPE 候选与融合前 Jittor 的完整末 token logits 逐元素完全一致，最大绝对误差和
+平均绝对误差均为 0；相对原生 PyTorch 的最大绝对误差仍为
+`3.8146973e-05`，argmax 和 top-10 token ids 全部一致。融合后的 Qwen3-8B 严格
+1-token 复验继续输出 token 19、文本 `4`，8,190,735,360 个参数驻留 NPU，且
+`cpu_compile_count=0`、`fallback_count=0`。
+
 ## 实现边界
 
 - vmap 快路径只在 `TransformGetItemToIndex` 活跃时生效；普通 `torch.vmap` 保持原有
@@ -120,6 +145,11 @@ NPU 前向和反向均与 NumPy 完全一致。
   advanced indexing 不在本改动中猜测轴重排语义。
 - RMSNorm 只接受 ACL、CUDA flag、no-grad、合法末维 weight 和受支持 dtype；训练及
   其他形状继续走原有可微分实现。
+- RoPE 融合只接受 ACL、CUDA flag、no-grad、4-D 广播兼容张量、相同受支持 dtype，
+  以及已验证的 64 对齐 head dim；其他情况走可微组合实现。FP32、FP16、BF16 算子
+  数值和非融合 FP32 梯度已在真实 NPU 验证。
+- Transformers 4.56.2 的 Qwen3 版本胶水通过外置 `jittor.module_patches` 适配接入
+  `jt.nn.rotary_emb`，不把项目/版本特定 monkeypatch 放进 Jittor 核心。
 - float16/float32 `arg_reduce` forward 通过 ACL MaxDim/MinDim 执行；generic backward
   仍因 index operation 不受支持而 fallback，不在本次 NPU 训练支持声明内。
 - float32 Qwen3-0.6B 已验证。bfloat16 整模仍受 `KI-BACKEND-005` 限制，不在本报告
@@ -131,12 +161,15 @@ NPU 前向和反向均与 NumPy 完全一致。
 - Real-NPU indexing, mixed slice/tensor-index forward/backward, and asynchronous
   dependency regression: `2 passed`
 - Real-NPU float32/bfloat16 RMSNorm inference and training fallback: `1 passed`
+- Real-NPU float32/float16/bfloat16 RoPE inference and composite gradient:
+  `2 passed`
+- Full real-NPU ACL backend file after RoPE integration: `23 passed`
 - Full Qwen3-0.6B logits parity: passed
 - Fail-closed Qwen3-0.6B 8-token and Qwen3-8B 1-token generation:
   `cpu_compile_count=0`, `fallback_count=0`
 - Jittor and native PyTorch current single-token 10-sample and 8-token 5-sample
   synchronized benchmarks: passed
-- Full maintained NPU gate: `357 passed, 11 skipped`
+- Full maintained NPU gate: `359 passed, 11 skipped`
 
 可复现入口是
 [`benchmark_qwen3_ascend.py`](../../skills/jittor-transformers-perf/scripts/benchmark_qwen3_ascend.py)。

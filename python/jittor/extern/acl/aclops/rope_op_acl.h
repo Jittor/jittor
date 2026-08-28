@@ -4,14 +4,13 @@
 
 namespace jittor
 {
-    class RotaryPosEmbOpRunner : public BaseOpRunner
+    class RotaryPositionEmbeddingOpRunner : public BaseOpRunner
     {
-
     protected:
         void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
 
     public:
-        RotaryPosEmbOpRunner();
+        RotaryPositionEmbeddingOpRunner();
     };
 
 }

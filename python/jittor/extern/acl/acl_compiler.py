@@ -158,7 +158,7 @@ def change_function():
     from .aclops.pool_op import PoolACL
     from .aclops.nantonum_op import NanToNumACL
     from .aclops.stack_op import StackACL
-    from .aclops.rope_op import RopeACL
+    from .aclops.rope_op import RotaryPositionEmbeddingACL
     from .aclops.softmax_op import SoftmaxACL
     from .aclops.sigmoid_op import SigmoidACL
     from .aclops.silu_op import SiLUACL
@@ -581,9 +581,54 @@ def change_function():
             return shifted - jt.log(jt.exp(shifted).sum(dim, keepdims=True))
         return SoftmaxACL()(x, dim)
 
-    from .aclops.rope_op import RopeACL
     def rope_acl(xq, xk, freqs_cis=None, freq_sin=None, freq_cos=None):
-        return RopeACL()(xq, xk, freqs_cis, freq_sin, freq_cos)
+        if freqs_cis is not None:
+            freq_cos = freqs_cis[..., 0]
+            freq_sin = freqs_cis[..., 1]
+        if freq_cos is None or freq_sin is None:
+            raise ValueError("rotary_emb requires freqs_cis or both freq_cos and freq_sin")
+
+        def rotate_half(x):
+            half = x.shape[-1] // 2
+            return jt.concat([-x[..., half:], x[..., :half]], dim=-1)
+
+        def supported(x):
+            try:
+                x_shape = tuple(int(size) for size in x.shape)
+                cos_shape = tuple(int(size) for size in freq_cos.shape)
+                sin_shape = tuple(int(size) for size in freq_sin.shape)
+            except (TypeError, ValueError):
+                return False
+            # Keep the fused path within the Qwen-style layouts validated on
+            # Ascend. Other layouts retain the differentiable composite below.
+            if len(x_shape) != 4 or len(cos_shape) != 4 or cos_shape != sin_shape:
+                return False
+            if any(size <= 0 for size in x_shape + cos_shape):
+                return False
+            if x_shape[-1] % 64 or x_shape[-1] > 1024:
+                return False
+            if any(scale not in (1, size) for scale, size in zip(cos_shape, x_shape)):
+                return False
+            return (
+                str(x.dtype) == str(freq_cos.dtype) == str(freq_sin.dtype)
+                and str(x.dtype) in ("float16", "float32", "bfloat16")
+            )
+
+        if (
+            jt.flags.use_acl
+            and jt.flags.use_cuda
+            and getattr(jt.flags, "no_grad", 0)
+            and supported(xq)
+            and supported(xk)
+        ):
+            return (
+                RotaryPositionEmbeddingACL()(xq, freq_cos, freq_sin),
+                RotaryPositionEmbeddingACL()(xk, freq_cos, freq_sin),
+            )
+        return (
+            xq * freq_cos + rotate_half(xq) * freq_sin,
+            xk * freq_cos + rotate_half(xk) * freq_sin,
+        )
 
     def stack_acl(x, dim=0):
         # Implement stack as the autodiff-correct composite unsqueeze+concat (matches

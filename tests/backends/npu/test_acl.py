@@ -221,6 +221,93 @@ class TestACL(unittest.TestCase):
         with jt.no_grad():
             self.assertIsNone(jt.nn._rms_norm_cuda(x, gamma, object()))
 
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_inference_rotary_embedding(self):
+        rng = np.random.RandomState(20260829)
+        q_np = rng.randn(1, 16, 7, 128).astype("float32")
+        k_np = rng.randn(1, 8, 7, 128).astype("float32")
+        angles = rng.randn(1, 1, 7, 128).astype("float32")
+        cos_np = np.cos(angles)
+        sin_np = np.sin(angles)
+        dtype_cases = (
+            ("float32", 2e-5, 2e-5),
+            ("float16", 3e-3, 3e-3),
+            ("bfloat16", 3e-2, 3e-2),
+        )
+
+        def expected(x, cos, sin):
+            half = x.shape[-1] // 2
+            rotated = np.concatenate((-x[..., half:], x[..., :half]), axis=-1)
+            return x * cos + rotated * sin
+
+        with jt.no_grad(), jt.log_capture_scope(
+                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+            results = []
+            for dtype, atol, rtol in dtype_cases:
+                q = getattr(jt.array(q_np), dtype)()
+                k = getattr(jt.array(k_np), dtype)()
+                cos = getattr(jt.array(cos_np), dtype)()
+                sin = getattr(jt.array(sin_np), dtype)()
+                actual_q, actual_k = jt.nn.rotary_emb(
+                    q, k, freq_cos=cos, freq_sin=sin)
+                self.assertEqual(str(actual_q.dtype), dtype)
+                self.assertEqual(str(actual_k.dtype), dtype)
+                results.append((
+                    dtype, atol, rtol,
+                    actual_q.float32(), actual_k.float32(),
+                    q.float32(), k.float32(), cos.float32(), sin.float32()))
+
+            results = [jt.fetch_sync(list(result[3:])) for result in results]
+
+        for result, (dtype, atol, rtol) in zip(results, dtype_cases):
+            actual_q, actual_k, q, k, cos, sin = result
+            np.testing.assert_allclose(
+                actual_q, expected(q, cos, sin), atol=atol, rtol=rtol,
+                err_msg=dtype)
+            np.testing.assert_allclose(
+                actual_k, expected(k, cos, sin), atol=atol, rtol=rtol,
+                err_msg=dtype)
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertTrue(any("compile acl op" in message for message in messages))
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_rotary_embedding_composite_gradient(self):
+        rng = np.random.RandomState(20260830)
+        q_np = rng.randn(1, 3, 4, 32).astype("float32")
+        k_np = rng.randn(1, 2, 4, 32).astype("float32")
+        cos_np = rng.randn(1, 1, 4, 32).astype("float32")
+        sin_np = rng.randn(1, 1, 4, 32).astype("float32")
+        q_weight = rng.randn(*q_np.shape).astype("float32")
+        k_weight = rng.randn(*k_np.shape).astype("float32")
+
+        def expected_grad(weight):
+            half = weight.shape[-1] // 2
+            first = (weight[..., :half] * cos_np[..., :half]
+                     + weight[..., half:] * sin_np[..., half:])
+            second = (weight[..., half:] * cos_np[..., half:]
+                      - weight[..., :half] * sin_np[..., :half])
+            return np.concatenate((first, second), axis=-1)
+
+        q, k = jt.array(q_np), jt.array(k_np)
+        with jt.log_capture_scope(
+                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+            actual_q, actual_k = jt.nn.rotary_emb(
+                q, k, freq_cos=jt.array(cos_np), freq_sin=jt.array(sin_np))
+            loss = ((actual_q * jt.array(q_weight)).sum()
+                    + (actual_k * jt.array(k_weight)).sum())
+            grad_q, grad_k = jt.grad(loss, [q, k])
+            grad_q, grad_k = jt.fetch_sync([grad_q, grad_k])
+
+        np.testing.assert_allclose(
+            grad_q, expected_grad(q_weight), atol=2e-5, rtol=2e-5)
+        np.testing.assert_allclose(
+            grad_k, expected_grad(k_weight), atol=2e-5, rtol=2e-5)
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
     @jt.flag_scope(use_acl=1)
     def test_max(self):
         x = jt.rand(3, 3)

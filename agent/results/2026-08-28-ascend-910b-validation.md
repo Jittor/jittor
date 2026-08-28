@@ -2,7 +2,7 @@
 
 - Status: Accepted within the maintained NPU gate; explicit skips remain
 - Last reviewed: 2026-08-29
-- Source baseline: `e3e82d98` plus the changes documented here
+- Source baseline: `7caec188` plus the changes documented here
 - Owner: Jittor core and ACL backend maintainers
 - Review when: CANN/driver versions, ACL source transformation, NPU gate scope,
   or any listed skip changes
@@ -15,7 +15,7 @@ ACL 后端、扩展算子、索引、227 项 OpInfo、负整数 floor-divide 及
 
 设备证据不依赖导入成功或 CPU fallback：ACL matmul 回归捕获到
 `compile acl op`，同时断言日志中没有 `fallback cpu`。维护范围内最终共
-`357 passed, 11 skipped`；skip 均对应本报告和 known-issues ledger 中的明确能力边界。
+`359 passed, 11 skipped`；skip 均对应本报告和 known-issues ledger 中的明确能力边界。
 
 ## 环境与隔离
 
@@ -130,7 +130,7 @@ Full Nox results after the serial prewarm:
 | Stage | Result |
 | --- | ---: |
 | ACL device and float32 matmul probe | passed |
-| `tests/backends/npu/test_acl.py` | 21 passed |
+| `tests/backends/npu/test_acl.py` | 23 passed |
 | `tests/backends/npu/test_acl_torch_compat.py` | 2 passed |
 | `tests/backends/npu/test_aclop.py` | 110 passed, 2 skipped |
 | `tests/backends/npu/test_acl_indexing.py` | 2 passed |
@@ -138,9 +138,9 @@ Full Nox results after the serial prewarm:
 | NPU floor-divide fixed vectors and broadcast | 2 passed |
 | NPU float32 NaN/Inf predicates | 1 passed |
 | NPU float32 fused/unfused NaN comparisons | 1 passed |
-| Total | 357 passed, 11 skipped |
+| Total | 359 passed, 11 skipped |
 
-The complete maintained session finished successfully in 43 minutes, including
+The complete maintained session finished successfully in 44 minutes, including
 the Nox-managed core rebuild and all real-device tests.
 
 The floor-divide regression covers uint8, int8, int16, int32, and int64 fixed
@@ -194,6 +194,13 @@ compile. The 8B run then exercised all 36 decoder layers and the language-model
 head with the full checkpoint resident on one 910B3. Its model forward and final
 greedy selection likewise completed through ACL, so float32 inference is now
 fully device-resident within this protocol.
+
+A 2026-08-29 follow-up connected Qwen3's version-specific RoPE helper to the
+generic Jittor ACLNN RoPE capability through an external module patch. The full
+8B checkpoint again used 32,376 MB of process device memory and generated token
+19 (`4`), with `fallback_count=0` and `cpu_compile_count=0`. This confirms the
+RoPE optimization on the real NPU without changing the float32-only support
+boundary of this model probe.
 
 Verify-then-fix exposed two Torch-compatibility defects before the accepted run.
 Explicit construction of the zero-length CUDA tensor used by the Transformers KV

@@ -1,15 +1,4 @@
-import os
-from jittor_utils import env_or_try_find
-import jittor_utils
-import ctypes
-import glob
-import jittor.compiler as compiler
 import jittor as jt
-import math
-import numpy as np
-
-from typing import Union
-from collections.abc import Sequence, Iterable
 
 
 def rope_cmd(name: str,
@@ -53,32 +42,10 @@ def rope_cmd(name: str,
     op.run();""")
 
 
-class RopeACL(jt.Function):
+class RotaryPositionEmbeddingACL(jt.Function):
 
-    def __init__(self):
-        super(RopeACL, self).__init__()
-
-    def execute(self, xq, xk, freqs_cis, freq_cos, freq_sin):
-        attr_code = f"""
-        op.jt_name = "RotaryPosEmb";
-        """
-        if freqs_cis is not None:
-            freq_cos = freqs_cis[..., 0]
-            freq_sin = freqs_cis[..., 1]
-        else:
-            assert freq_cos is not None and freq_sin is not None
-        inputs = [xq, xk, freq_cos, freq_sin]
-        results = rope_cmd("RotaryPosEmb",
-                           inputs,
-                           output_dtypes=[
-                               xq.dtype,
-                           ],
-                           output_shapes=[
-                               xq.shape,
-                           ],
-                           attr_code=attr_code)
-        results[0].sync()
-        return inputs[0], inputs[1]
-
-    def grad(self, grad_output):
-        return grad_output
+    def execute(self, x, cos, sin):
+        output = jt.empty(x.shape, x.dtype)
+        return rope_cmd(
+            "RotaryPositionEmbedding", [x, cos, sin], outputs=[output],
+            attr_code='op.jt_name = "rotary_position_embedding";')[0]
