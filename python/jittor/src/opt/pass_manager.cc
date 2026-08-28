@@ -30,6 +30,7 @@
 #include "opt/pass/shared_reduce_pass.h"
 #include "opt/pass/float_atomic_fix_pass.h"
 #include "opt/pass/reduce_accumulator_pass.h"
+#include "opt/pass/cpu_parallel_pass.h"
 #include "opt/pass/insert_profile_loop_pass.h"
 #include "opt/pass/fake_main_pass.h"
 #include "opt/pass/check_cache_pass.h"
@@ -117,6 +118,9 @@ void PassManager::run_passes() {
     run_pass<FloatAtomicFixPass>();
     // After every pass that restructures loops, so it only sees the final nest.
     run_pass<ReduceAccumulatorPass>();
+    // Needs the accumulators above to already be in place: they are what makes
+    // a reduction's iterations independent of one another.
+    run_pass<CpuParallelPass>();
     
     run_pass<InsertProfileLoopPass>();
     
