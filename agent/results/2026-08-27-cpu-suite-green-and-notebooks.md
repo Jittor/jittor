@@ -632,20 +632,45 @@ reorder_loop_pass.cc:50  Check failed: loop->children.size()==1
 `fix_parallel_thread_ranges` 所处的位置（它已经是对生成源码的一次后处理）。改动已
 回退，未留在仓库中。
 
-结论修正为：CPU 真实规模性能落后有两个可分离、且都已验证到编译器诊断层面的成因：
+CPU 真实规模性能落后有两个可分离、且都已验证到编译器诊断层面的成因：
 
-0. Jittor 自己的 `VectorizePass` 在 g++ 下不起作用：它开头就是
-   `if (!op->get_loop_option("vectorize")) return;`（默认关闭），而且它发出的是
-   `#pragma vector`——Intel 编译器的语法，g++ 会忽略（编译命令里正带着
-   `-Wno-unknown-pragmas`）。因此 CPU 向量化实际完全依赖 g++ 的自动向量化。
-1. JIT kernel 基本不做多线程——需要改 `ParallelPass`（`data.o` 中无源码）；
-2. 归约经内存累加，挡住整个循环体的向量化，含超越函数时退回标量调用——修法明确
-   （局部累加器），位置也明确：应当是 `ReorderLoopPass` 之后的一个 pass，直接操作
-   `KernelIR`——它的每个节点都有 `before`/`inner`/`children`/`after` 四个列表，把
-   累加器声明放进内层循环的 `before`、把回写放进 `after`，外层的 `children` 仍只有
-   一个元素，不触碰完美嵌套的前提。这比在生成的 C++ 上做正则改写安全得多。但它需要
-   一次覆盖所有归约算子（add/max/min/prod）与任意 `DIM`/`REDUCE` 组合，并配套完整
-   验证，不是本轮能安全交付的。
+1. Jittor 自己的 `VectorizePass` 在 g++ 下不起作用。`pass_manager.cc` 里它被包在
+   `if (cc_type == "icc")` 中（注释写明「only icc supports pragma」），而且它发出的
+   是 `#pragma vector`——Intel 编译器语法，g++ 会忽略。因此 CPU 向量化完全依赖 g++
+   的自动向量化。
+2. 归约经内存累加，挡住整个循环体的向量化，含超越函数时退回标量调用。
+
+### 第二个成因已修复：ReduceAccumulatorPass
+
+累加器不能加进 `ops/reduce_op.cc` 的模板——它要插在内外层循环之间，会触发
+`reorder_loop_pass.cc` 的 `loop->children.size()==1`，而那个断言是交换循环层级所
+必需的。改为新增一个 pass，放在所有循环重排以及 `ParallelPass`/`AtomicTunerPass`/
+`SharedReducePass` 之后，因此只会看到最终的循环形态，那几个无源码的 pass 也不会
+看到它的改动。
+
+保守性：仅 CPU；只在内层循环恰有一条形如 `A = f(A, ...)` 的语句、`A` 的下标在该
+循环内不变、且循环体没有其它无法辨认的结构时才改写，任一条件不满足即原样返回。
+`check_cache` 模式下直接跳过——`CheckCachePass` 已为每处访问配好 `memory_checker`，
+此时新增未插桩的访问会静默污染该模式要产出的缓存统计（`test_cache.py::test_reduce`
+正是这样把问题暴露出来的）。
+
+| 指标 | 前 | 后 |
+| --- | ---: | ---: |
+| 融合 softmax 反向链（`2x1x1024x256`） | `2.07ms` | `0.32ms` |
+| CPU diffusers UNet 一步 | `3.4038s` | `1.8051s` |
+| 相对同机 PyTorch `0.6751s` | `4.83x` | `2.67x` |
+| 该 kernel 的向量化 | `vectorized 0 loops` | `32 byte vectors` |
+
+数值在确认被改写（生成源码中出现累加器标记）的用例上对拍 float64：softmax 反向 4D
+`1.825e-07`、2D `7.815e-07`、奇数列 3D `1.656e-07`（覆盖向量化尾部）、融合 `max`
+`2.246e-08`、融合 `min` `2.985e-08`。需要说明的是独立（非融合）归约并不会被这个
+pass 改写，所以最初那轮只测 `a.sum(dim)` 的「正确性验证」其实没有走到被改写的路径，
+上面这组才是有效的。
+
+native 会话 `729 passed, 717 skipped`，Torch 会话 `1504 passed, 279 skipped`。
+
+CPU 仍未达标（`2.67x`），剩下的是第一个成因——JIT kernel 不做多线程，需要改
+`ParallelPass`。
 
 ### 空隙的分布，以及为什么调度改不动它
 
