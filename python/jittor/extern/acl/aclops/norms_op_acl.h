@@ -40,4 +40,13 @@ namespace jittor
         LayerNormBackwardOpRunner();
     };
 
+    class RmsNormOpRunner : public BaseOpRunner
+    {
+
+    protected:
+        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+    public:
+        RmsNormOpRunner();
+    };
+
 }

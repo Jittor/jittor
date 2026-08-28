@@ -1,6 +1,6 @@
 ---
 name: jittor-transformers-perf
-description: Reproducible CUDA performance analysis for Transformers on import-jittor-as-torch versus real PyTorch. Use for operator, Transformer-block, HF-model, SDPA, gradient-management, or optimizer-step benchmarks where Jittor lazy execution and backend/version isolation must be handled correctly.
+description: Reproducible CUDA and Ascend performance analysis for Transformers on import-jittor-as-torch versus real PyTorch. Use for operator, Transformer-block, HF-model, SDPA, gradient-management, or optimizer-step benchmarks where Jittor lazy execution and backend/version isolation must be handled correctly.
 ---
 
 # Jittor Transformers 性能基准
@@ -46,6 +46,16 @@ Jittor vs 真 PyTorch 数据，而不是把 JIT、H2D 或 lazy graph 漏执行�
 - clip/scaler 消融：`probe_clip_grad_norm.py`、`benchmark_grad_management.py`
 - 完整 SGD/AdamW step：`benchmark_optimizer_step.py`
 - SDPA layout/Flash 物化：`probe_sdpa_layout_materialization.py`
+- Ascend Qwen3 整模推理：`benchmark_qwen3_ascend.py`
+
+Ascend 整模对拍必须为 Jittor 和原生 `torch_npu` 使用独立 Python 进程、相同
+Transformers 版本和相同本地 checkpoint。运行 Jittor 一侧前设置
+`JITTOR_TORCH_SHIM=1`，并在加载权重后显式迁移到 NPU；两侧都通过
+`ASCEND_RT_VISIBLE_DEVICES` 选择已分配设备。首次 JIT 单列，稳态 prefill 和
+generation 在每次样本后同步；单 token 与多 token decode 都要测，不能用一次
+generation 成功推断 KV-cache 后续步可用。Jittor 计时结束后还会在日志捕获范围内
+各执行一次 prefill 和 generation，发现 CPU fallback 时直接失败。可用
+`--logits-output` 保存末 token logits，再在进程外比较 argmax、Top-K 和全量误差。
 
 `benchmark_training_hotspots.py` 的 SDPA 模式支持可配置 batch/head/sequence/head-dim、
 causal 与同步口径。Jittor `math` 显式绕过 native loader，`flash` 要求且校验 official

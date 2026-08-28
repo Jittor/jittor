@@ -98,8 +98,12 @@ def install(ctx):
     _twh = _types2.ModuleType("torch._dynamo._trace_wrapped_higher_order_op")
     class TransformGetItemToIndex:
         def __enter__(self):
+            self._previous_depth = getattr(
+                g, "_transform_getitem_to_index_depth", 0)
+            g._transform_getitem_to_index_depth = self._previous_depth + 1
             return self
         def __exit__(self, *exc):
+            g._transform_getitem_to_index_depth = self._previous_depth
             return False
     _twh.TransformGetItemToIndex = TransformGetItemToIndex
     _modules["torch._dynamo._trace_wrapped_higher_order_op"] = _twh

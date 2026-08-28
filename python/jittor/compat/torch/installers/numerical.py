@@ -250,8 +250,69 @@ def install(ctx):
     # Map over in_dims and stack along out_dims. jittor has no 0-d tensors, so a
     # scalar leaf is (1,) where torch has (); collapse that spurious trailing
     # singleton so the stacked rank matches torch.vmap.
+    def _vectorized_getitem_vmap(func, specs, args):
+        # Transformers builds attention masks under TransformGetItemToIndex
+        # using nested pointwise vmaps. Materialize their Cartesian batch axes
+        # through broadcasting instead of creating one graph per scalar pair.
+        if len(specs) < 2 or any(out_dims != 0 for _, out_dims in specs):
+            return None
+        mapped_by_arg = [[] for _ in args]
+        level_sizes = []
+        for level, (level_dims, _) in enumerate(specs):
+            dims = ((level_dims,) * len(args)
+                    if isinstance(level_dims, int) or level_dims is None
+                    else tuple(level_dims))
+            if len(dims) != len(args):
+                return None
+            mapped_sizes = []
+            for arg_index, dim in enumerate(dims):
+                if dim is not None:
+                    if dim != 0 or not isinstance(args[arg_index], jt.Var):
+                        return None
+                    mapped_by_arg[arg_index].append(level)
+                    mapped_sizes.append(int(args[arg_index].shape[dim]))
+            if not mapped_sizes or any(size != mapped_sizes[0]
+                                       for size in mapped_sizes[1:]):
+                return None
+            level_sizes.append(mapped_sizes[0])
+        if any(len(levels) > 1 for levels in mapped_by_arg):
+            return None
+
+        level_count = len(specs)
+        expanded = []
+        for arg, mapped_levels in zip(args, mapped_by_arg):
+            if not mapped_levels:
+                expanded.append(arg)
+                continue
+            output_axis = level_count - 1 - mapped_levels[0]
+            shape = ([1] * output_axis + [int(arg.shape[0])] +
+                     [1] * (level_count - output_axis - 1) +
+                     [int(size) for size in arg.shape[1:]])
+            expanded.append(arg.reshape(shape))
+        result = func(*expanded)
+        if (
+            not isinstance(result, jt.Var)
+            or str(result.dtype) != "bool"
+            or result.ndim > level_count
+        ):
+            return None
+        if result.ndim < level_count:
+            result = result.reshape([1] * (level_count - result.ndim) +
+                                    [int(size) for size in result.shape])
+        target_shape = list(reversed(level_sizes)) + [
+            int(size) for size in result.shape[level_count:]
+        ]
+        return result.broadcast(target_shape)
+
     def _vmap(func, in_dims=0, out_dims=0, *_a, **_k):
+        base_func = getattr(func, "_jittor_vmap_base", func)
+        specs = getattr(func, "_jittor_vmap_specs", ()) + ((in_dims, out_dims),)
+
         def wrapped(*args):
+            if getattr(g, "_transform_getitem_to_index_depth", 0):
+                vectorized = _vectorized_getitem_vmap(base_func, specs, args)
+                if vectorized is not None:
+                    return vectorized
             ids = (in_dims,) * len(args) if (isinstance(in_dims, int) or in_dims is None) else tuple(in_dims)
             size = None
             for a, d in zip(args, ids):
@@ -276,6 +337,8 @@ def install(ctx):
                 outs = [o.reshape(o.shape[:-1]) if o.ndim > 1 else o for o in outs]
             od = out_dims if isinstance(out_dims, int) else (out_dims[0] if out_dims else 0)
             return jt.stack(outs, dim=od)
+        wrapped._jittor_vmap_base = base_func
+        wrapped._jittor_vmap_specs = specs
         return wrapped
     _alias("vmap", _vmap)
     _alias("outer", lambda a, b: jt.matmul(a.reshape(-1, 1), b.reshape(1, -1)))

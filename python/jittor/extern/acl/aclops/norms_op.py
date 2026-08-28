@@ -193,3 +193,23 @@ class LayerNormACL(jt.Function):
                            attr_code=attr_code)
         # grads for (x, weight, bias) to match execute()'s inputs
         return result[0], result[1], result[2]
+
+
+class RmsNormACL(jt.Function):
+
+    def execute(self, x, weight, eps):
+        reduced_shape = list(x.shape[:-1]) + [1]
+        outputs = [
+            jt.empty(x.shape, x.dtype),
+            jt.empty(reduced_shape, "float32"),
+        ]
+        attr_code = f"""
+        op.jt_name = "rmsnorm";
+        RmsNormAttr *attr = new RmsNormAttr();
+        attr->eps = {eps};
+        op.op_attr.reset(attr);
+        """
+        result = norms_cmd(
+            "RmsNorm", inputs=[x, weight], outputs=outputs,
+            attr_code=attr_code)
+        return result[0]

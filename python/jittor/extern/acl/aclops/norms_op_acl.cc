@@ -144,4 +144,31 @@ namespace jittor
         return;
     }
 
+    RmsNormOpRunner::RmsNormOpRunner() : BaseOpRunner("RmsNorm")
+    {
+    }
+
+    void RmsNormOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    {
+        auto attr = dynamic_cast<RmsNormAttr *>(op_attr.get());
+        ret = aclnnRmsNormGetWorkspaceSize(
+            inputTensors[0], inputTensors[1], attr->eps,
+            outputTensors[0], outputTensors[1], &workspaceSize, &executor);
+
+        checkRet(ret);
+
+        if (workspaceSize > 0)
+        {
+            mallocWorkSpace(workspaceSize);
+        }
+
+        ret = aclnnRmsNorm(
+            workspaceAddr, workspaceSize, executor, aclstream);
+        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnRmsNorm failed. ERROR: %d\n", name.c_str(), ret); return);
+
+        syncRun();
+
+        return;
+    }
+
 }

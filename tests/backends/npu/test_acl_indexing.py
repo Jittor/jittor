@@ -117,6 +117,12 @@ def test_acl_indexing():
             lambda x: x[jt.array([0, 2]), jt.array([1, 3])],
             lambda a: a[np.array([0, 2]), np.array([1, 3])],
         )
+        g(
+            "slice_then_int_array",
+            X2,
+            lambda x: x[:, jt.array([1, 4]).int64()],
+            lambda a: a[:, np.array([1, 4])],
+        )
         gmask("mask_full", X2, X2 > 10)
         gmask("mask_row", X2, np.array([True, False, True, False]))
         gback(
@@ -139,6 +145,16 @@ def test_acl_indexing():
             lambda x: x[:, 1:4],
             lambda ref, value: ref.__setitem__(np.s_[:, 1:4], value[:, 1:4]),
         )
+        gback(
+            "slice_then_int_array",
+            X2,
+            lambda x: x[:, jt.array([1, 4])],
+            lambda ref, value: np.add.at(
+                ref,
+                (slice(None), np.array([1, 4])),
+                value[:, np.array([1, 4])],
+            ),
+        )
         gback("int_index", X2, lambda x: x[2], lambda ref, value: ref.__setitem__(2, value[2]))
         s(
             "slice_scalar",
@@ -159,6 +175,21 @@ def test_acl_indexing():
         smask_values("mask_values", X2.copy(), X2 > 10)
     print(f"\n==== {PASS} passed, {FAIL} failed ====")
     assert FAIL == 0, f"{FAIL} ACL indexing checks failed"
+
+
+def test_acl_getitem_preserves_async_dependencies():
+    if not getattr(jt.compiler, "has_acl", 0):
+        pytest.skip("ACL backend is unavailable")
+    source = np.arange(24, dtype=np.float32).reshape(4, 6)
+    with jt.flag_scope(use_acl=1):
+        x = jt.array(source)
+        sliced = x[:, 1:5]
+        gathered = sliced[jt.array([3, 1])]
+        actual = (gathered[:, 1:] * 2.0 + gathered[:, :-1]).numpy()
+    expected_slice = source[:, 1:5]
+    expected_gather = expected_slice[np.array([3, 1])]
+    expected = expected_gather[:, 1:] * 2.0 + expected_gather[:, :-1]
+    np.testing.assert_array_equal(actual, expected)
 
 
 if __name__ == "__main__":

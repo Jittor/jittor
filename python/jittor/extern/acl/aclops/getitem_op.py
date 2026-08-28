@@ -160,6 +160,68 @@ class GetItemACL(jt.Function):
             stride *= x.shape[i]
         return stride
 
+    def expand_single_tensor_index(self, x, slices):
+        """Lower x[..., index, ...] with otherwise-full slices to Index."""
+        tensor_dims = [
+            dim for dim, item in enumerate(slices)
+            if isinstance(item, jt.Var)
+        ]
+        if len(tensor_dims) != 1:
+            return None
+        tensor_dim = tensor_dims[0]
+        tensor_index = slices[tensor_dim]
+        if (
+            tensor_index.ndim != 1
+            or str(tensor_index.dtype) not in ("int32", "int64")
+        ):
+            return None
+
+        expanded_slices = list(slices)
+        ellipsis_dims = [
+            dim for dim, item in enumerate(expanded_slices)
+            if item is Ellipsis
+        ]
+        if len(ellipsis_dims) > 1:
+            return None
+        if ellipsis_dims:
+            dim = ellipsis_dims[0]
+            fill = x.ndim - len(expanded_slices) + 1
+            expanded_slices[dim:dim + 1] = [slice(None)] * fill
+        if len(expanded_slices) < x.ndim:
+            expanded_slices.extend(
+                [slice(None)] * (x.ndim - len(expanded_slices)))
+        if len(expanded_slices) != x.ndim:
+            return None
+
+        tensor_dims = [
+            dim for dim, item in enumerate(expanded_slices)
+            if isinstance(item, jt.Var)
+        ]
+        if len(tensor_dims) != 1:
+            return None
+        tensor_dim = tensor_dims[0]
+        for dim, item in enumerate(expanded_slices):
+            if dim == tensor_dim:
+                continue
+            if not (
+                isinstance(item, slice)
+                and item.start is None
+                and item.stop is None
+                and item.step is None
+            ):
+                return None
+
+        output_shape = list(x.shape)
+        output_shape[tensor_dim] = int(tensor_index.shape[0])
+        indices = []
+        for dim, size in enumerate(output_shape):
+            index = (tensor_index if dim == tensor_dim
+                     else jt.arange(int(x.shape[dim])))
+            view_shape = [1] * x.ndim
+            view_shape[dim] = int(size)
+            indices.append(index.reshape(view_shape).broadcast(output_shape))
+        return tuple(indices)
+
     def execute(self, x, slices, return_x=None):
         if isinstance(slices, jt.Var) and slices.dtype == 'bool':
             # A boolean mask whose shape only covers the leading dims of x
@@ -203,6 +265,9 @@ class GetItemACL(jt.Function):
             if isinstance(s, int) and s < 0:
                 slices[i] = s + x.shape[i]
         slices = tuple(slices)
+        expanded_indices = self.expand_single_tensor_index(x, slices)
+        if expanded_indices is not None:
+            slices = expanded_indices
         slices_list = list(slices)
         # if not isinstance(slices[0], slice):
         #check slices contains slice type
@@ -243,7 +308,6 @@ class GetItemACL(jt.Function):
                                      output_dtypes=[x.dtype],
                                      output_shapes=[output_shape],
                                      attr_code=attr_code)[0]
-                result.sync()
                 return result
         assert contains_slice, "slice type error"
         x_dim = len(x.shape)
@@ -337,7 +401,6 @@ class GetItemACL(jt.Function):
         self.squeeze_dims = squeeze_dims
         for dim in squeeze_dims[::-1]:
             result = jt.squeeze(result, dim)
-        result.sync()
         return result
 
     def grad(self, grad_output):

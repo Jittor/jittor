@@ -16,6 +16,7 @@ import numpy as np
 
 from typing import Union
 from collections.abc import Sequence, Iterable
+from numbers import Real
 
 
 def _ntuple(n):
@@ -161,7 +162,7 @@ def change_function():
     from .aclops.softmax_op import SoftmaxACL
     from .aclops.sigmoid_op import SigmoidACL
     from .aclops.silu_op import SiLUACL
-    from .aclops.norms_op import LayerNormACL
+    from .aclops.norms_op import LayerNormACL, RmsNormACL
     from .aclops.dropout_op import DropoutACL
     from .aclops.relu_op import LeakyReLUACL
     from .aclops.flip_op import FlipACL
@@ -406,11 +407,7 @@ def change_function():
 
         insert_positions = get_insert_positions(slices)
         slices_without_none = tuple(s for s in slices if s is not None)
-        
-        try:
-            result = GetItemACL()(x, slices_without_none, return_x)
-        except Exception as e:
-            result = x[slices_without_none]
+        result = GetItemACL()(x, slices_without_none, return_x)
 
         for i in insert_positions:
             result = result.unsqueeze(i)
@@ -668,6 +665,41 @@ def change_function():
             return fn(x, self.weight, self.bias)
         return _orig_layernorm_execute(self, x)
     jt.nn.LayerNorm.execute = _layernorm_execute_acl
+
+    # Hugging Face RMSNorm modules already route through this inference hook.
+    # Keep training and unsupported dtype/shape combinations on the existing
+    # differentiable decomposition; use aclnnRmsNorm only for no-grad ACL runs.
+    _orig_rms_norm_cuda = jt.nn._rms_norm_cuda
+    def _rms_norm_cuda_acl(x, gamma, epsilon=1e-6):
+        if (
+            jt.flags.use_acl
+            and jt.flags.use_cuda
+            and getattr(jt.flags, "no_grad", 0)
+            and isinstance(x, jt.Var)
+            and isinstance(gamma, jt.Var)
+            and isinstance(epsilon, Real)
+        ):
+            x_shape = tuple(int(size) for size in x.shape)
+            gamma_shape = tuple(int(size) for size in gamma.shape)
+            x_dtype = str(x.dtype)
+            gamma_dtype = str(gamma.dtype)
+            epsilon_value = float(epsilon)
+            supported_gamma_dtypes = {
+                "float32": ("float32",),
+                "float16": ("float16", "float32"),
+                "bfloat16": ("bfloat16", "float32"),
+            }
+            if (
+                x_shape
+                and all(size > 0 for size in x_shape)
+                and gamma_shape == (x_shape[-1],)
+                and gamma_dtype in supported_gamma_dtypes.get(x_dtype, ())
+                and math.isfinite(epsilon_value)
+                and epsilon_value > 0
+            ):
+                return RmsNormACL()(x, gamma, epsilon_value)
+        return _orig_rms_norm_cuda(x, gamma, epsilon)
+    jt.nn._rms_norm_cuda = _rms_norm_cuda_acl
 
     jt.flip = warp(jt.flip, flip_acl)
     jt.Var.flip = lambda x, dim_vector=0: jt.flip(x, dim_vector)

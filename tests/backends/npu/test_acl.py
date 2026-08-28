@@ -183,6 +183,36 @@ class TestACL(unittest.TestCase):
         print('test_matmul pass')
 
     @jt.flag_scope(use_acl=1)
+    def test_inference_rms_norm(self):
+        rng = np.random.RandomState(2026)
+        x_np = rng.randn(2, 3, 1024).astype("float32")
+        gamma_np = rng.uniform(
+            0.5, 1.5, size=(1024,)).astype("float32")
+        expected = x_np / np.sqrt(
+            np.mean(x_np * x_np, axis=-1, keepdims=True) + 1e-6)
+        expected *= gamma_np
+
+        for dtype, atol, rtol in (
+            ("float32", 2e-5, 2e-5),
+            ("bfloat16", 2e-2, 2e-2),
+        ):
+            x = getattr(jt.array(x_np), dtype)()
+            gamma = jt.array(gamma_np)
+            with jt.no_grad():
+                actual = jt.nn._rms_norm_cuda(x, gamma, 1e-6)
+                self.assertIsNotNone(actual, dtype)
+                self.assertEqual(str(actual.dtype), dtype)
+                actual = actual.float32().numpy()
+            np.testing.assert_allclose(
+                actual, expected, atol=atol, rtol=rtol)
+
+        x = jt.array(x_np)
+        gamma = jt.array(gamma_np)
+        self.assertIsNone(jt.nn._rms_norm_cuda(x, gamma, 1e-6))
+        with jt.no_grad():
+            self.assertIsNone(jt.nn._rms_norm_cuda(x, gamma, object()))
+
+    @jt.flag_scope(use_acl=1)
     def test_max(self):
         x = jt.rand(3, 3)
         y = x.max(1).data

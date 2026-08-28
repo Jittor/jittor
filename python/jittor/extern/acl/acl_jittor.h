@@ -669,6 +669,14 @@ namespace jittor
         }
     };
 
+    struct RmsNormAttr : AclOpAttr
+    {
+        float eps;
+        ~RmsNormAttr()
+        {
+        }
+    };
+
     struct FlashAttentionAttr : AclOpAttr
     {
         vector<int64_t> prefix;
