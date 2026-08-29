@@ -61,6 +61,50 @@ static bool scales_with(const string& expr, const string& index) {
     return false;
 }
 
+// A split loop's variable reaches the store as "(id1 + id2) * stride" rather
+// than "id1 * stride": the outer steps by the tile size and the inner runs up
+// to it, so the pair enumerates the original dimension between them and
+// distinct tiles still address distinct elements. Only accepted for a loop that
+// really is split (it carries the stride in `rvalue2`), so this does not loosen
+// the test for anything else.
+static bool scales_with_tile(const string& expr, const string& index) {
+    for (size_t i = expr.find(index); i != string::npos;
+         i = expr.find(index, i + 1)) {
+        bool left = i > 0 && (isalnum(expr[i-1]) || expr[i-1] == '_');
+        size_t end = i + index.size();
+        bool right = end < expr.size() && (isalnum(expr[end]) || expr[end] == '_');
+        if (left || right) continue;
+        // Walk to the closing parenthesis of the sum this index sits in, then
+        // require that parenthesised group to be multiplied by something.
+        if (i == 0 || expr[i-1] != '(') {
+            // "(other + index)" -- step back over the other term instead.
+            size_t open = expr.rfind('(', i);
+            if (open == string::npos) continue;
+            bool only_sum = true;
+            for (size_t k = open + 1; k < i; k++)
+                if (!(isalnum(expr[k]) || expr[k] == '_' || expr[k] == ' '
+                      || expr[k] == '+')) { only_sum = false; break; }
+            if (!only_sum) continue;
+        }
+        size_t j = end, depth = 1;
+        while (j < expr.size() && depth) {
+            if (expr[j] == '(') depth++;
+            if (expr[j] == ')') depth--;
+            if (depth == 0) break;
+            // Anything but a sum of plain names inside the group means this is
+            // not the split pattern.
+            if (!(isalnum(expr[j]) || expr[j] == '_' || expr[j] == ' '
+                  || expr[j] == '+')) return false;
+            j++;
+        }
+        if (j >= expr.size()) continue;
+        j++;
+        while (j < expr.size() && (expr[j] == ' ' || expr[j] == '\t')) j++;
+        if (j < expr.size() && expr[j] == '*') return true;
+    }
+    return false;
+}
+
 // A plain identifier can be multiplied into the work estimate; anything else
 // (a call, an expression) is left out rather than pasted into the guard.
 static bool is_identifier(const string& s) {
@@ -89,6 +133,11 @@ static void scan(KernelIR* node, LoopScan& out,
         if (c->type == "loop") {
             if (c->has_attr("rvalue"))
                 out.inner_bounds.push_back(c->get_attr("rvalue"));
+            // A split loop keeps its tile-size define in `inner`, not among the
+            // children, and that name is only in scope inside the loop.
+            for (auto& s : c->inner)
+                if (s->type == "define")
+                    defines[s->get_attr("lvalue")] = s->get_attr("rvalue");
             scan(c.get(), out, defines);
             // Anything the accumulator pass parked around the loop counts too.
             for (auto* ls : {&c->before, &c->after})
@@ -107,6 +156,12 @@ static void scan(KernelIR* node, LoopScan& out,
                 }
             continue;
         }
+        // A comment emits nothing. The asm tuner's `//@begin replace` markers
+        // ride along in the parallel copy too; the substitution they drive
+        // (ordinary stores to non-temporal ones) is a performance choice, so
+        // the worst case if outlining moves the code out of their reach is
+        // that it does not happen.
+        if (c->type == "comment") continue;
         if (c->type.size()) { out.usable = false; return; }
         const string& code = c->get_attr("code");
         // A jump would make the loop non-canonical for OpenMP.
@@ -146,6 +201,11 @@ void CpuParallelPass::run() {
             string index = loop->get_attr("lvalue");
             string bound = loop->get_attr("rvalue");
             if (index.size() == 0 || !is_identifier(bound)) continue;
+            // A split loop steps by a tile instead of by one, so its trip count
+            // is bound/stride and its index reaches the store inside a sum.
+            bool split = loop->has_attr("rvalue2")
+                         && is_identifier(loop->get_attr("rvalue2"));
+            string stride = split ? loop->get_attr("rvalue2") : string();
             bool already = false;
             for (auto& b : loop->before)
                 if (mentions(b->get_attr("code"), "pragma")) already = true;
@@ -160,7 +220,7 @@ void CpuParallelPass::run() {
             // definition, makes the nest imperfect and OpenMP reject it.
             vector<string> indices({index}), bounds({bound});
             KernelIR* level = loop.get();
-            while (indices.size() < 3
+            while (!split && indices.size() < 3
                     && level->children.size() == 1
                     && level->children[0]->type == "loop"
                     && level->children[0]->has_attr("lvalue")
@@ -175,6 +235,9 @@ void CpuParallelPass::run() {
 
             LoopScan info;
             unordered_map<string,string> defines;
+            for (auto& s : loop->inner)
+                if (s->type == "define")
+                    defines[s->get_attr("lvalue")] = s->get_attr("rvalue");
             scan(loop.get(), info, defines);
             if (!info.usable || info.store_indices.size() == 0) continue;
 
@@ -191,7 +254,10 @@ void CpuParallelPass::run() {
                     expr = it->second;
                 }
                 for (auto& v : indices)
-                    if (!scales_with(expr, v)) { disjoint = false; break; }
+                    if (!(split ? scales_with_tile(expr, v)
+                                : scales_with(expr, v))) {
+                        disjoint = false; break;
+                    }
                 if (!disjoint) break;
             }
             // Drop the deepest levels until every one of them passes, rather
@@ -208,7 +274,10 @@ void CpuParallelPass::run() {
                         expr = it->second;
                     }
                     for (auto& v : indices)
-                        if (!scales_with(expr, v)) { disjoint = false; break; }
+                        if (!(split ? scales_with_tile(expr, v)
+                                    : scales_with(expr, v))) {
+                            disjoint = false; break;
+                        }
                     if (!disjoint) break;
                 }
             }
@@ -226,7 +295,11 @@ void CpuParallelPass::run() {
                 bool collapsed = false;
                 for (auto& used : bounds)
                     if (used == b) collapsed = true;
-                if (!collapsed && is_identifier(b)) work += " * " + b;
+                // A bound declared inside the loop is not in scope where the
+                // guard sits, and a split loop's inner bound is the tile size,
+                // which would double-count the dimension the outer already has.
+                if (collapsed || !is_identifier(b) || defines.count(b)) continue;
+                work += " * " + b;
             }
             bound = bound_product;
             depths.push_back((int)indices.size());
@@ -234,8 +307,14 @@ void CpuParallelPass::run() {
             // iterations together to give every core something to do.
             // The cast is (long long) because the index type in scope varies
             // between kernels and the product can overflow a 32-bit one.
-            guards.push_back("(" + bound + ") >= 64 && (long long)(" + work
-                             + ") >= 65536");
+            string parallelism = split
+                ? "(" + bound + ") / (" + stride + ")"
+                : "(" + bound + ")";
+            // Fewer tiles than that and the threads are not worth their setup;
+            // a tile is already thousands of elements, so this is not small.
+            string least = split ? "32" : "64";
+            guards.push_back(parallelism + " >= " + least
+                             + " && (long long)(" + work + ") >= 65536");
             targets.push_back(loop.get());
         }
     }
