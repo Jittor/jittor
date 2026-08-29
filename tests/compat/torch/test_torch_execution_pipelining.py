@@ -69,8 +69,16 @@ class TestExecutionPipelining(unittest.TestCase):
 
     def test_training_trajectory_matches(self):
         def body(dev):
+            # Two calls to _model() do NOT produce the same weights -- this
+            # initialisation does not draw from the generator set_global_seed
+            # seeds -- so the runs are given one set of starting weights to
+            # restore, rather than being trusted to build the same model twice.
+            model = _model()
+            start = [p.numpy().copy() for p in model.parameters()]
+
             def run(threshold):
-                model = _model()
+                for parameter, weight in zip(model.parameters(), start):
+                    parameter.assign(jt.array(weight))
                 x = jt.array(np.random.RandomState(6).randn(8, 16).astype("float32"))
                 y = jt.array(np.random.RandomState(7).randn(8, 8).astype("float32"))
                 optimizer = torch.nn.SGD(model.parameters(), lr=1e-2)
