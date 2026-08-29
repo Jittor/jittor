@@ -2,7 +2,7 @@
 
 - Status: Accepted within the maintained NPU gate; explicit skips remain
 - Last reviewed: 2026-08-29
-- Source baseline: `7986100b` plus the changes documented here
+- Source baseline: `f8e39607` plus the changes documented here
 - Owner: Jittor core and ACL backend maintainers
 - Review when: CANN/driver versions, ACL source transformation, NPU gate scope,
   or any listed skip changes
@@ -15,7 +15,7 @@ ACL 后端、扩展算子、索引、227 项 OpInfo、负整数 floor-divide 及
 
 设备证据不依赖导入成功或 CPU fallback：ACL matmul 回归捕获到
 `compile acl op`，同时断言日志中没有 `fallback cpu`。维护范围内最终共
-`361 passed, 11 skipped`；skip 均对应本报告和 known-issues ledger 中的明确能力边界。
+`362 passed, 11 skipped`；skip 均对应本报告和 known-issues ledger 中的明确能力边界。
 
 ## 环境与隔离
 
@@ -125,11 +125,13 @@ runner also releases its per-call CANN integer-array descriptors, which matters
 for multi-layer and multi-token generation.
 
 Transformers checks whether an attention mask can be ignored through
-`padding_mask.all()`. The public ACL path now lowers this truth reduction to
-nonzero comparison, int32 min, and bool cast, preserving the public result while
-avoiding unsupported `reduce.logical_and`. Full and dimension reductions pass on
-the real NPU. The native bool `all_`/`any_` OpInfo matrix remains a separate
-explicit skip and is not claimed by this composed public path.
+`padding_mask.all()`. The public ACL path now sends bool truth reductions to
+CANN 9 `aclnnAll`/`aclnnAny`; numeric inputs first receive the required nonzero
+comparison. This preserves the public bool result while avoiding unsupported
+`reduce.logical_and` and the earlier multi-op composition. Full, dimension, and
+negative-dimension reductions pass on the real NPU. The Jittor core bool
+`all_`/`any_` OpInfo matrix remains a separate explicit skip and is not claimed
+by this ACL wrapper path.
 
 ## Maintained gate
 
@@ -146,7 +148,7 @@ Full Nox results after the serial prewarm:
 | Stage | Result |
 | --- | ---: |
 | ACL device and float32 matmul probe | passed |
-| `tests/backends/npu/test_acl.py` | 25 passed |
+| `tests/backends/npu/test_acl.py` | 26 passed |
 | `tests/backends/npu/test_acl_torch_compat.py` | 2 passed |
 | `tests/backends/npu/test_aclop.py` | 110 passed, 2 skipped |
 | `tests/backends/npu/test_acl_indexing.py` | 2 passed |
@@ -154,7 +156,7 @@ Full Nox results after the serial prewarm:
 | NPU floor-divide fixed vectors and broadcast | 2 passed |
 | NPU float32 NaN/Inf predicates | 1 passed |
 | NPU float32 fused/unfused NaN comparisons | 1 passed |
-| Total | 361 passed, 11 skipped |
+| Total | 362 passed, 11 skipped |
 
 The complete maintained session finished successfully in 43 minutes, including
 the Nox-managed core rebuild and all real-device tests.
@@ -244,8 +246,8 @@ real-NPU bfloat16 run completes with zero fallback.
 
 The nine OpInfo skips are:
 
-- native boolean `all_` and `any_` reductions; the public composed `all` path
-  used by Transformers is separately verified;
+- native Jittor core boolean `all_` and `any_` reductions; the public CANN 9
+  `all`/`any` wrapper path used by Transformers is separately verified;
 - composed float32 `atan2`;
 - complex `irfft`;
 - float32 `prod`;

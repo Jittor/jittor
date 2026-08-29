@@ -56,6 +56,8 @@
 #include "aclnnop/aclnn_convolution.h"
 #include "aclnnop/aclnn_convolution_backward.h"
 #include "aclnnop/aclnn_reduce_sum.h"
+#include "aclnnop/aclnn_all.h"
+#include "aclnnop/aclnn_any.h"
 #include "aclnnop/aclnn_amax.h"
 #include "aclnnop/aclnn_amin.h"
 #include "aclnnop/aclnn_max_dim.h"

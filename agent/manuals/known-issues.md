@@ -47,14 +47,13 @@ framework defects.
 - Evidence: [`reduce_dtypes.py`](../../tests/opinfo/definitions/reduce_dtypes.py)
   and [device parity](../../tests/backends/parity/test_device_parity.py)
 - Symptom: `sum`, `prod`, `max`, and `min` for sub-32-bit integer samples abort
-  because their required ACL atomic overloads are not implemented. Native bool
-  `all_` and `any_` also lack a maintained ACL reduction kernel. The public
-  `jt.all`/`Tensor.all` path needed by Transformers is now an exact composition
-  of nonzero comparison, supported int32 min, and bool cast; public `any` uses
-  its supported int32 sum composition. These do not establish native bool
-  reduction support.
+  because their required ACL atomic overloads are not implemented. Jittor core
+  bool `all_` and `any_` also lack a maintained generic ACL reduction kernel.
+  The public `jt.all`/`Tensor.all` and `jt.any` paths needed by Transformers now
+  route bool inputs to CANN 9 `aclnnAll`/`aclnnAny`; numeric inputs first compare
+  nonzero. This does not establish support for the skipped core reduction ops.
 - Workaround: promote inputs to a supported width before reduction on NPU; use
-  the verified public composed truth reductions where their semantics apply
+  the verified public CANN 9 truth reductions where their semantics apply
 - Review/expiry condition: every affected dtype executes and matches the CPU
   reference on a real NPU, turning the skips into passes
 

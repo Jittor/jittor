@@ -56,6 +56,10 @@ generation 在每次样本后同步；单 token 与多 token decode 都要测，
 generation 成功推断 KV-cache 后续步可用。Jittor 计时结束后还会在日志捕获范围内
 各执行一次 prefill 和 generation，发现 CPU fallback 时直接失败。可用
 `--logits-output` 保存末 token logits，再在进程外比较 argmax、Top-K 和全量误差。
+Jittor 侧可用 `--profile-output /path/to/report.json` 在所有计时结束后额外执行一次
+generation，并保存聚合 profiler row；该次运行不进入稳态样本。profile 不能在
+原生 PyTorch backend 使用。`--pipeline-ops` 必须通过成对 A/B 决定，旧图上的最佳
+阈值不能直接作为新算子组合的默认值。
 
 `benchmark_training_hotspots.py` 的 SDPA 模式支持可配置 batch/head/sequence/head-dim、
 causal 与同步口径。Jittor `math` 显式绕过 native loader，`flash` 要求且校验 official

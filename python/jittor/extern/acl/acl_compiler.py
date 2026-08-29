@@ -313,22 +313,13 @@ def change_function():
     def gather_acl(input, dim, index):
         return GatherACL()(input, dim, index)
 
-    def any_acl(input, dim=None):
-        if dim is None:
-            if jt.sum(input != 0).item() > 0:
-                return jt.array([True])
-            else:
-                return jt.array([False])
-        else:
-            return jt.sum(input != 0, dim=dim) > 0
+    from .aclops.truth_reduce_op import truth_reduce
 
-    native_min = jt.min
+    def any_acl(input, dim=None):
+        return truth_reduce(input, dim, reduce_all=False)
 
     def all_acl(input, dim=()):
-        # CANN ReduceAll requires a bool output, while Jittor's internal
-        # logical reduction preserves numeric dtypes. This exact lowering
-        # keeps the public bool result without changing that shared contract.
-        return native_min((input != 0).int32(), dim).bool()
+        return truth_reduce(input, dim, reduce_all=True)
 
     from .aclops.cumsum_op import CumsumACL
 

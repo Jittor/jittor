@@ -25,6 +25,7 @@ def main():
     parser.add_argument("--warmups", type=int, default=3)
     parser.add_argument("--samples", type=int, default=10)
     parser.add_argument("--logits-output")
+    parser.add_argument("--profile-output")
     parser.add_argument("--pipeline-ops", type=int, default=0)
     parser.add_argument(
         "--attn-implementation", choices=("eager", "sdpa"), default="eager")
@@ -33,6 +34,8 @@ def main():
     if args.warmups < 0 or args.samples < 1 or args.new_tokens < 1:
         parser.error(
             "warmups must be nonnegative; samples and new-tokens must be positive")
+    if args.profile_output and args.backend != "jittor":
+        parser.error("--profile-output is only available for the Jittor backend")
 
     if args.backend == "jittor":
         if os.environ.get("JITTOR_TORCH_SHIM") != "1":
@@ -187,7 +190,7 @@ def main():
             if "fallback cpu" in entry["msg"].lower()
         ]
         fallback_count = len(fallback_messages)
-        sdpa_flash_stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+        sdpa_flash_stats = dict(getattr(jt, "_torch_sdpa_flash_stats", {}))
         if fallback_messages:
             raise RuntimeError(
                 "CPU fallback detected during inference: " +
@@ -232,6 +235,27 @@ def main():
         "transformers": transformers.__version__,
     }
     print("BENCHMARK_RESULT " + json.dumps(result, sort_keys=True), flush=True)
+
+    if args.profile_output:
+        with jt.profile_scope(
+            warmup=0,
+            rerun=0,
+            profiler_hide_relay=1,
+            profiler_record_shape=1,
+        ) as profile_report:
+            profiled_generated = run_generate()
+        profile_parent = os.path.dirname(os.path.abspath(args.profile_output))
+        os.makedirs(profile_parent, exist_ok=True)
+        with open(args.profile_output, "w", encoding="utf-8") as output_file:
+            json.dump(profile_report, output_file, indent=2)
+        print(
+            "BENCHMARK_PROFILE " + json.dumps({
+                "output": os.path.abspath(args.profile_output),
+                "rows": max(0, len(profile_report) - 1),
+            }, sort_keys=True),
+            flush=True,
+        )
+        del profiled_generated
 
     del model, generated, input_ids, attention_mask
     gc.collect()

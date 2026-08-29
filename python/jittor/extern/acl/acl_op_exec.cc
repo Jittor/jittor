@@ -147,7 +147,6 @@ namespace jittor
 
     void try_exec_and_fallback_cpu(Op *op)
     {
-        aclrtSynchronizeStream(aclstream);
         auto fop = (FusedOp *)op;
 
         std::set<Var *> new_alloced;
@@ -376,6 +375,11 @@ namespace jittor
         }
         catch (std::exception &e)
         {
+            // Successful ACL launches are ordered on aclstream and must stay
+            // asynchronous. Drain only before abandoning a partially queued
+            // fused graph, so its temporary buffers are no longer in use when
+            // fallback_cpu migrates or releases them.
+            aclrtSynchronizeStream(aclstream);
             fallback = 1;
             LOGir << "fallback cpu" << e.what();
         }

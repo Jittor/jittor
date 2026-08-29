@@ -2,7 +2,7 @@
 
 - Status: Accepted for float32 eager and SDPA greedy inference on one Ascend 910B3
 - Last reviewed: 2026-08-29
-- Source baseline: `7986100b` plus the changes in this report's commit
+- Source baseline: `f8e39607` plus the changes in this report's commit
 - Owner: Torch compatibility and ACL backend maintainers
 - Review when: Transformers masking, vmap compatibility, ACL RMSNorm/RoPE/SDPA,
   CANN, checkpoint, dtype boundary, or timing protocol changes
@@ -41,10 +41,17 @@ RoPE 融合后，attention 仍由 QK matmul、scale、mask、softmax 和 value m
 组合提交。本次把 Torch SDPA 的已验证无梯度 FP32 子集接到 CANN
 `aclnnFlashAttentionScoreV2`，保留 BNSD、GQA、方形 causal prefill、矩形 decode
 和 float additive mask 语义。Transformers 的 SDPA mask 判断还会调用
-`padding_mask.all()`；公开 ACL `all` 现在通过 nonzero、int32 min 和 bool cast 精确
-lowering，避免底层 `reduce.logical_and` 回退。0.6B prefill 进一步降至 0.0658 s，
+`padding_mask.all()`；最初通过 nonzero、int32 min 和 bool cast 的精确 lowering
+避免底层 `reduce.logical_and` 回退。0.6B prefill 进一步降至 0.0658 s，
 单 token generation 降至 0.0792 s，8-token generation 降至 0.5791 s，较 ACL
 RoPE 分别改善 29.6%、26.9% 和 29.3%。
+
+当前源码复验又发现两个较小但稳定的提交开销。ACL fused executor 原先在每个成功
+图的入口无条件同步整条 stream；成功路径改为保持同 stream 异步，只在准备 CPU
+fallback 前 drain。CANN 9 已提供 `aclnnAll` 和 `aclnnAny`，因此公开 truth
+reduction 也由多算子组合改为单个原生归约，numeric 输入只保留必要的 nonzero
+比较。10-sample 8-token generation 最终为 0.5459 s，较当前源码修改前的
+0.5690 s 改善 4.1%，输出和完整 logits 不变且仍为零 fallback。
 
 ## 环境与口径
 
@@ -56,7 +63,8 @@ RoPE 分别改善 29.6%、26.9% 和 29.3%。
 - Model: local Qwen3-0.6B, 596,049,920 parameters
 - Input: batch 1, 22-token chat prompt, eager or SDPA attention, KV cache, float32
 - Timing: current SDPA single-token rerun uses 2 warmups and 7 synchronized samples;
-  8-token uses 2 warmups and 5 synchronized samples; median and p90 reported
+  historical 8-token rows use 2 warmups and 5 synchronized samples; the latest
+  paired rerun uses 3 warmups and 10 synchronized samples; median and p90 reported
 - Isolation: separate processes, Python environments, JIT caches, homes, and
   temporary directories; raw logs remain under `$JITTOR_LAB_ROOT/_state/`
 
@@ -101,10 +109,19 @@ synchronization 构成。剩余 decode 差距因此主要落在框架 generate �
 | Native PyTorch NPU, eager rerun | 0.5843 s / 0.5899 s | 13.69 token/s | `2 + 2 = 4.` |
 | Jittor with ACL SDPA | 0.5791 s / 0.5842 s | 13.81 token/s | `2 + 2 = 4.` |
 | Native PyTorch NPU, SDPA rerun | 0.4708 s / 0.4728 s | 16.99 token/s | `2 + 2 = 4.` |
+| Current Jittor before async/truth-reduce follow-up | 0.5690 s / not retained | 14.06 token/s | `2 + 2 = 4.` |
+| Current Jittor with async ACL and native truth reduction | 0.5459 s / 0.5482 s | 14.65 token/s | `2 + 2 = 4.` |
+| Current native PyTorch NPU | 0.4940 s / 0.4966 s | 16.19 token/s | `2 + 2 = 4.` |
+| Rejected Jittor `pipeline_ops=1600` | 0.5718 s / 0.5737 s | 13.99 token/s | `2 + 2 = 4.` |
 
 8-token 默认 Transformers 路径已不再卡死；启用 ACL SDPA 后的总延迟为同口径
 原生 PyTorch 的 1.23 倍。这里报告整次 `generate` 延迟，不用总时间简单除以 8
 伪装逐 token 首包延迟。
+
+最新 10-sample 同时段复验中，Jittor prefill 为 0.06325 s，原生 PyTorch 为
+0.05867 s；8-token generation 分别为 0.54590 s 和 0.49400 s，Jittor 当前仍慢
+10.5%，所以“不慢于 PyTorch”尚未达成。曾在旧组合路径改善约 2% 的
+`pipeline_ops=1600` 与原生 truth reduction 叠加后反而变慢 3.9%，因此保持默认关闭。
 
 ## 根因证据
 
@@ -133,10 +150,18 @@ SDPA 直连探针确认 CANN 的 bool causal mask 与 NumPy 参考最大误差�
 `acl_flash_attention_score_v2` 700 次，8-token 运行命中 2,268 次，miss 均为空。
 
 Transformers `_ignore_causal_mask_sdpa` 会检查 `padding_mask.all()`。原路径生成
-`reduce.logical_and` 并触发一次 CPU fallback；现在公开 `all` 先比较 nonzero，转
-int32 后使用已有 ACL min 归约，再转回 bool。真实 NPU 的 full reduction、按维归约
-和 Qwen 整模均为零 CPU compile/fallback。底层原生 bool `all_`/`any_` OpInfo 仍是
-独立能力边界，不由该公开组合路径推导为完整支持。
+`reduce.logical_and` 并触发一次 CPU fallback；第一版修复使用 nonzero、int32 min
+和 bool cast 的公开组合。最新 profiler 显示该链在每个 decode step 重复提交，随后
+改为 CANN 9 的 `aclnnAll`/`aclnnAny` runner。bool 输入直接归约，numeric 输入先做
+一次 nonzero 比较；真实 NPU 的 full reduction、按维归约、负维度和 Qwen 整模均为
+零 CPU compile/fallback。底层 Jittor core bool `all_`/`any_` OpInfo 仍是独立能力
+边界，不由公开 ACL wrapper 推导为完整支持。
+
+新增的 benchmark profile 在计时结束后单独执行一次 generation，共报告 69 个聚合
+row。8-token 中算子时间合计约 223 ms，而整次墙钟约 550 ms；其中 matmul 1,576
+次、transpose 896 次、FlashAttention 224 次、RMSNorm 904 次、RoPE 448 次。
+因此剩余差距主要是每 token 约 4,100 个 Jittor IR op 的 Python/lazy graph 构建和
+细粒度提交，不能仅靠继续减少 stream synchronize 消除。
 
 第二步 decode 使用 `input_ids[:, cache_position]`。原 ACL wrapper 在
 `GetItemACL` 拒绝该混合索引后执行 `x[slices]`，这会重新进入自身，造成 Python
@@ -162,6 +187,10 @@ NPU 前向和反向均与 NumPy 完全一致。
 `[17, 488, 220, 17, 284, 220, 19, 13]`，文本均为 `2 + 2 = 4.`。这证明性能变化
 没有依赖错误 mask 或 CPU fallback 产生相同表面文本。
 
+当前 10-sample 复验保留相同误差：最大绝对误差 `3.8035214e-05`、平均绝对误差
+`5.1964222e-06`，argmax 与 Top-5/10/50 token 集合全部一致。新的 Jittor logits
+还与优化前 Jittor 结果逐元素完全一致。
+
 ACL RoPE 候选与融合前 Jittor 的完整末 token logits 逐元素完全一致，最大绝对误差和
 平均绝对误差均为 0。启用 ACL SDPA 后，相对原生 PyTorch SDPA 的完整 logits 指标
 如上，argmax、top-10 和 top-20 token ids 全部一致。Qwen3-8B 严格 1-token SDPA
@@ -186,8 +215,9 @@ attention 216 次，且 `cpu_compile_count=0`、`fallback_count=0`。
   CANN abort 当作半精度支持证据。
 - float additive mask 只接受 FP32 rank-2/rank-4 可广播形状，并在调用前扩成 CANN
   要求的完整 query-head 形状。该路径保留语义，但长序列 mask 会承担物化成本。
-- 公开 ACL `all` 组合路径覆盖 Transformers 使用的真值归约；底层原生 bool
-  `all_`/`any_` reduction 仍按 maintained OpInfo 精确 skip。
+- 公开 ACL `all`/`any` 在 CANN 9 上使用原生 truth-reduction runner；numeric 输入
+  先比较 nonzero。底层 Jittor core bool `all_`/`any_` reduction 仍按 maintained
+  OpInfo 精确 skip。
 - Transformers 4.56.2 的 Qwen3 版本胶水通过外置 `jittor.module_patches` 适配接入
   `jt.nn.rotary_emb`，不把项目/版本特定 monkeypatch 放进 Jittor 核心。
 - float16/float32 `arg_reduce` forward 通过 ACL MaxDim/MinDim 执行；generic backward
@@ -203,7 +233,7 @@ attention 216 次，且 `cpu_compile_count=0`、`fallback_count=0`。
 - Real-NPU float32/bfloat16 RMSNorm inference and training fallback: `1 passed`
 - Real-NPU float32/float16/bfloat16 RoPE inference and composite gradient:
   `2 passed`
-- Full real-NPU ACL backend file after SDPA integration: `25 passed`
+- Full current real-NPU ACL backend file: `26 passed`
 - Real-NPU FP32 fused SDPA causal/decode/GQA/additive-mask reference and
   FP16/BF16 fail-closed boundary: `1 passed`
 - Full Qwen3-0.6B SDPA logits parity: passed
@@ -211,7 +241,11 @@ attention 216 次，且 `cpu_compile_count=0`、`fallback_count=0`。
   `cpu_compile_count=0`, `fallback_count=0`, fused SDPA hit
 - Jittor and native PyTorch current single-token 7-sample and 8-token 5-sample
   synchronized benchmarks: passed
-- Full maintained NPU gate: `361 passed, 11 skipped`
+- Current real-NPU native `all`/`any`, SDPA, and asynchronous indexing focused
+  regression: `13 passed, 103 deselected`
+- Current Jittor/native `torch_npu` 8-token, 3-warmup, 10-sample synchronized
+  comparison: `0.54590 s` / `0.49400 s`; logits parity passed
+- Full maintained NPU gate: `362 passed, 11 skipped`
 
 可复现入口是
 [`benchmark_qwen3_ascend.py`](../../skills/jittor-transformers-perf/scripts/benchmark_qwen3_ascend.py)。

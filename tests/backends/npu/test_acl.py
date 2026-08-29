@@ -375,16 +375,43 @@ class TestACL(unittest.TestCase):
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_all_reduction(self):
         values = np.array([[1, -2, 3], [4, 0, -6]], dtype=np.int32)
+        bool_values = values != 0
         x = jt.array(values)
+        bool_x = jt.array(bool_values)
         with jt.log_capture_scope(
                 log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
             full = x.all()
+            full_from_list = jt.all(x, dim=[])
             by_row = jt.all(x, dim=1)
-            full, by_row = jt.fetch_sync([full, by_row])
+            bool_by_column = jt.all(bool_x, dim=-2)
+            full, full_from_list, by_row, bool_by_column = jt.fetch_sync(
+                [full, full_from_list, by_row, bool_by_column])
 
         np.testing.assert_array_equal(full, values.all())
+        np.testing.assert_array_equal(full_from_list, values.all())
         np.testing.assert_array_equal(by_row, values.all(axis=1))
+        np.testing.assert_array_equal(
+            bool_by_column, bool_values.all(axis=-2))
         messages = [entry["msg"].lower() for entry in logs]
+        self.assertTrue(any("compile acl op" in message for message in messages))
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_any_reduction(self):
+        values = np.array([[0.0, 0.0, 2.0], [0.0, 0.0, 0.0]],
+                          dtype=np.float32)
+        bool_values = values != 0
+        with jt.log_capture_scope(
+                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+            full = jt.any(jt.array(values))
+            by_row = jt.array(bool_values).any(dim=-1)
+            full, by_row = jt.fetch_sync([full, by_row])
+
+        np.testing.assert_array_equal(full, values.any())
+        np.testing.assert_array_equal(by_row, bool_values.any(axis=-1))
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertTrue(any("compile acl op" in message for message in messages))
         self.assertFalse(any("compile cpu" in message for message in messages))
         self.assertFalse(any("fallback cpu" in message for message in messages))
 
