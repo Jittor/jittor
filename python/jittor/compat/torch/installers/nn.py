@@ -1033,6 +1033,39 @@ def _install_nn_extras(nn, registry=None):
 
     _install_module_methods(nn, registry)
 
+    linear_cls = getattr(nn, "Linear", None)
+    if linear_cls is not None and not getattr(linear_cls, "_torch_dtype_patched", False):
+        native_linear_init = linear_cls.__init__
+
+        def linear_init(self, in_features, out_features, bias=True,
+                        device=None, dtype=None):
+            native_linear_init(self, in_features, out_features, bias)
+            target_dtype = dtype if dtype is not None else _jt.get_default_dtype()
+            self.to(device=device, dtype=target_dtype)
+
+        linear_cls.__init__ = linear_init
+        linear_cls._torch_dtype_patched = True
+
+    embedding_cls = getattr(nn, "Embedding", None)
+    if (embedding_cls is not None and
+            not getattr(embedding_cls, "_torch_dtype_patched", False)):
+        native_embedding_init = embedding_cls.__init__
+
+        def embedding_init(self, num_embeddings, embedding_dim, padding_idx=None,
+                           max_norm=None, norm_type=2.0,
+                           scale_grad_by_freq=False, sparse=False,
+                           _weight=None, _freeze=False, device=None, dtype=None):
+            target_dtype = dtype if dtype is not None else _jt.get_default_dtype()
+            native_embedding_init(
+                self, num_embeddings, embedding_dim, padding_idx,
+                _dtype_to_str(target_dtype), max_norm, norm_type,
+                scale_grad_by_freq, sparse, _weight, _freeze, device,
+            )
+            self.to(device=device, dtype=target_dtype)
+
+        embedding_cls.__init__ = embedding_init
+        embedding_cls._torch_dtype_patched = True
+
 
 def _install_module_methods(nn, registry=None):
     """Add torch-compatible methods to jittor's nn.Module."""

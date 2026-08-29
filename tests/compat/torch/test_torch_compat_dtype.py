@@ -174,6 +174,20 @@ class TestConstructorDtype(Base):
 
         both_devices(body)
 
+    def test_default_dtype_applies_to_float_factories(self):
+        previous = torch.get_default_dtype()
+        try:
+            torch.set_default_dtype(torch.bfloat16)
+
+            def body(dev):
+                for factory in (torch.zeros, torch.ones, torch.empty):
+                    value = factory((2, 3))
+                    self.assertEqual(dts(value), "bfloat16", dev)
+
+            both_devices(body)
+        finally:
+            torch.set_default_dtype(previous)
+
     def test_arange_dtype(self):
         def body(dev):
             self.assertEqual(dts(torch.arange(5)), "int32", dev)          # int range -> int32

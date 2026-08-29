@@ -111,6 +111,11 @@ def main():
         encoded["input_ids"].astype(np.int64)).to(device)
     attention_mask = torch.from_numpy(
         encoded["attention_mask"].astype(np.int64)).to(device)
+    prompt_tokens = int(input_ids.shape[1])
+
+    def generated_new_ids(output):
+        generated_ids = output.detach().cpu().numpy()[0].tolist()
+        return generated_ids[prompt_tokens:]
 
     def run_prefill():
         build_started = time.perf_counter()
@@ -161,7 +166,7 @@ def main():
 
     if args.logits_output:
         output, _, _ = run_prefill()
-        last_logits = output.logits[:, -1, :].detach().cpu().numpy()
+        last_logits = output.logits[:, -1, :].detach().float().cpu().numpy()
         np.save(args.logits_output, last_logits)
         del output, last_logits
 
@@ -169,14 +174,19 @@ def main():
     started = time.perf_counter()
     generated = run_generate()
     first_generate_seconds = time.perf_counter() - started
+    generation_token_samples = [generated_new_ids(generated)]
     print("BENCHMARK_PHASE steady_generate", flush=True)
     for _ in range(args.warmups):
+        del generated
         generated = run_generate()
+        generation_token_samples.append(generated_new_ids(generated))
     generate_samples = []
     for _ in range(args.samples):
+        del generated
         started = time.perf_counter()
         generated = run_generate()
         generate_samples.append(time.perf_counter() - started)
+        generation_token_samples.append(generated_new_ids(generated))
 
     fallback_count = 0
     sdpa_flash_stats = {}
@@ -186,6 +196,8 @@ def main():
         ) as logs:
             output, _, _ = run_prefill()
             validation_generated = run_generate()
+        generation_token_samples.append(
+            generated_new_ids(validation_generated))
         del output, validation_generated
         fallback_messages = [
             entry["msg"] for entry in logs
@@ -199,9 +211,11 @@ def main():
                 fallback_messages[0] +
                 "; SDPA flash stats: " + repr(sdpa_flash_stats))
 
-    generated_ids = generated.detach().cpu().numpy()[0].tolist()
-    prompt_tokens = int(input_ids.shape[1])
-    new_ids = generated_ids[prompt_tokens:]
+    new_ids = generated_new_ids(generated)
+    if any(ids != new_ids for ids in generation_token_samples):
+        raise RuntimeError(
+            "non-deterministic greedy generation: " +
+            repr(generation_token_samples))
     result = {
         "backend": args.backend,
         "backend_version": backend_version,
@@ -213,6 +227,8 @@ def main():
         "generate_median_seconds": statistics.median(generate_samples),
         "generate_p90_seconds": percentile(generate_samples, 0.9),
         "generate_samples": generate_samples,
+        "generation_token_samples": generation_token_samples,
+        "generated_tokens": len(new_ids),
         "load_seconds": load_seconds,
         "logits_output": args.logits_output,
         "model": args.model,
@@ -233,7 +249,7 @@ def main():
         "sdpa_flash_hits": sdpa_flash_stats.get("hits", 0),
         "sdpa_flash_misses": sdpa_flash_stats.get("misses", {}),
         "text": tokenizer.decode(new_ids, skip_special_tokens=True),
-        "tokens_per_second": args.new_tokens / statistics.median(generate_samples),
+        "tokens_per_second": len(new_ids) / statistics.median(generate_samples),
         "transformers": transformers.__version__,
     }
     print("BENCHMARK_RESULT " + json.dumps(result, sort_keys=True), flush=True)

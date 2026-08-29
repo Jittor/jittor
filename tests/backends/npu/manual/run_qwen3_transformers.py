@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import statistics
 import subprocess
 import time
 
@@ -12,8 +13,13 @@ import jittor as jt
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True, help="Local Qwen3 checkpoint directory")
+    parser.add_argument(
+        "--dtype", choices=("float32", "bfloat16"), default="float32")
     parser.add_argument("--max-new-tokens", type=int, default=1)
+    parser.add_argument("--runs", type=int, default=1)
     args = parser.parse_args()
+    if args.max_new_tokens < 1 or args.runs < 1:
+        parser.error("max-new-tokens and runs must be positive")
 
     if not getattr(jt.compiler, "has_acl", 0):
         raise RuntimeError("ACL was not detected; source the CANN environment first")
@@ -35,7 +41,7 @@ def main():
     started = time.monotonic()
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
-        dtype=torch.float32,
+        dtype=getattr(torch, args.dtype),
         attn_implementation="eager",
         local_files_only=True,
     )
@@ -65,18 +71,25 @@ def main():
     input_ids = torch.from_numpy(encoded["input_ids"].astype(np.int64))
     attention_mask = torch.from_numpy(encoded["attention_mask"].astype(np.int64))
 
-    started = time.monotonic()
+    generated_token_samples = []
+    generate_samples = []
     with jt.log_capture_scope(log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
-        with torch.no_grad():
-            generated = model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=args.max_new_tokens,
-                do_sample=False,
-                use_cache=True,
-            )
-        jt.sync_all(True)
-    generate_seconds = time.monotonic() - started
+        for _ in range(args.runs):
+            started = time.monotonic()
+            with torch.no_grad():
+                generated = model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    max_new_tokens=args.max_new_tokens,
+                    do_sample=False,
+                    use_cache=True,
+                )
+            jt.sync_all(True)
+            generate_samples.append(time.monotonic() - started)
+            generated_ids = generated.detach().cpu().numpy()[0].tolist()
+            generated_token_samples.append(
+                generated_ids[int(input_ids.shape[1]):])
+            del generated
 
     messages = [entry["msg"].lower() for entry in logs]
     fallbacks = [message for message in messages if "fallback cpu" in message]
@@ -87,14 +100,20 @@ def main():
     if cpu_compile_ops:
         raise RuntimeError("CPU-compiled operation during generation: " + cpu_compile_ops[0])
 
-    generated_ids = generated.numpy()[0].tolist()
-    new_ids = generated_ids[input_ids.shape[1] :]
+    new_ids = generated_token_samples[-1]
+    if any(ids != new_ids for ids in generated_token_samples):
+        raise RuntimeError(
+            "non-deterministic greedy generation: " +
+            repr(generated_token_samples))
     result = {
         "cpu_compile_count": len(cpu_compile_ops),
         "cpu_compile_ops": cpu_compile_ops,
         "dtype": str(first_parameter.dtype),
         "fallback_count": len(fallbacks),
-        "generate_seconds": generate_seconds,
+        "generate_seconds": statistics.median(generate_samples),
+        "generate_median_seconds": statistics.median(generate_samples),
+        "generate_samples": generate_samples,
+        "generated_token_samples": generated_token_samples,
         "has_acl": int(jt.compiler.has_acl),
         "is_cuda": bool(first_parameter.is_cuda),
         "jittor": jt.__version__,

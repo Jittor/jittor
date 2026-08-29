@@ -396,6 +396,24 @@ class TestModules(Base):
             self.ac(out.numpy(), x @ w.T + b, atol=1e-4, msg=f"Linear fwd {dev}")
         both_devices(body)
 
+    def test_default_dtype_applies_to_module_parameters(self):
+        previous = torch.get_default_dtype()
+        try:
+            torch.set_default_dtype(torch.bfloat16)
+
+            def body(dev):
+                linear = nn.Linear(5, 3)
+                embedding = nn.Embedding(8, 3)
+                self.assertEqual(str(linear.weight.dtype), "bfloat16", dev)
+                self.assertEqual(str(linear.bias.dtype), "bfloat16", dev)
+                self.assertEqual(str(embedding.weight.dtype), "bfloat16", dev)
+                explicit = nn.Linear(5, 3, dtype=torch.float32)
+                self.assertEqual(str(explicit.weight.dtype), "float32", dev)
+
+            both_devices(body)
+        finally:
+            torch.set_default_dtype(previous)
+
     def test_relu_module(self):
         rng = np.random.RandomState(12)
         x = rng.randn(4, 5).astype("float32")

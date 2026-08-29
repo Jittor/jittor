@@ -1,6 +1,6 @@
 # Qwen3-0.6B Ascend 推理性能诊断与优化
 
-- Status: Accepted for float32 eager and SDPA greedy inference on one Ascend 910B3
+- Status: Accepted for float32 eager/SDPA and bfloat16 eager greedy inference on one Ascend 910B3
 - Last reviewed: 2026-08-29
 - Source baseline: `f8e39607` plus the changes in this report's commit
 - Owner: Torch compatibility and ACL backend maintainers
@@ -62,6 +62,30 @@ Size、NumPy/Var 维度和所有显式 Torch 关键字仍保留完整适配。�
 592,450；10-sample prefill 从 0.06325 s 降至 0.05796 s，8-token generation 从
 0.54590 s 降至 0.50309 s，分别改善 8.4% 和 7.8%。
 
+### Bfloat16 整模收口
+
+2026-08-29 的 bfloat16 复验先暴露了三层独立问题。Transformers 在模型构造期间依赖
+Torch default dtype，但兼容工厂以及 `Linear`/`Embedding` 忽略该状态，使请求的
+bfloat16 权重静默保留为 float32；修复后显式 dtype 仍优先，省略 dtype 才跟随
+`torch.get_default_dtype()`。随后 bfloat16 Add/Sub 补齐 CANN `alpha` 类型，整模达到
+真实 bfloat16 参数和零 fallback。
+
+移除逐算子同步后，8B 重复 generation 又出现确定性的错误 token。最小压力测试把
+问题定位到 ACL 自定义 stream：`item()` 的主机读取未等待 `aclstream`，融合图还会在
+旧 kernel 消费前复用标量 device buffer；把融合常量 H2D 放到同一 stream 后，8B
+冷启动仍会因 ArrayOp 节点提前释放异步 H2D 源而出错。最终实现让 host scalar read
+drain device、让普通 ArrayOp 的 copy event 被 `aclstream` 等待，并用 1 MiB 有界
+pinned-host slab 保持融合标量源；slab 满时先同步再回收，不引入无界缓存。
+
+最终 Qwen3-0.6B 共 6 次 greedy generation 都输出
+`[17, 488, 220, 17, 284, 220, 19, 13]`（`2 + 2 = 4.`）；Qwen3-8B 的冷启动、
+warmup、两次计时和日志验证共 5 次都输出 `[19, 13, 151645]`（`4.`）。两者参数
+dtype 均为 bfloat16，所有验证轮 `fallback_count=0`。0.6B 的 8-token 中位数为
+0.8197 s（9.76 token/s），对应 `torch_npu` 0.6707 s（11.93 token/s）；8B 实际
+生成 3 token 的中位数为 0.4026 s（7.45 token/s），对应原生 0.3165 s（按实际
+token 数重算为 9.48 token/s）。bfloat16 正确性已收口，约 22% 至 27% 的性能差距
+仍是后续优化项。
+
 ## 环境与口径
 
 - Device: one allocated Ascend 910B3
@@ -70,7 +94,8 @@ Size、NumPy/Var 维度和所有显式 Torch 关键字仍保留完整适配。�
 - PyTorch / torch_npu: 2.10.0 / 2.10.0
 - Transformers: 4.56.2 on both sides
 - Model: local Qwen3-0.6B, 596,049,920 parameters
-- Input: batch 1, 22-token chat prompt, eager or SDPA attention, KV cache, float32
+- Input: batch 1, 22-token chat prompt, eager or SDPA attention, KV cache;
+  float32 and eager bfloat16 are reported separately
 - Timing: current SDPA single-token rerun uses 2 warmups and 7 synchronized samples;
   historical 8-token rows use 2 warmups and 5 synchronized samples; the latest
   paired rerun uses 3 warmups and 10 synchronized samples; median and p90 reported
@@ -123,6 +148,11 @@ synchronization 构成。剩余 decode 差距因此主要落在框架 generate �
 | Current Jittor with native `empty` fast path | 0.5031 s / 0.5037 s | 15.90 token/s | `2 + 2 = 4.` |
 | Current native PyTorch NPU | 0.4940 s / 0.4966 s | 16.19 token/s | `2 + 2 = 4.` |
 | Rejected Jittor `pipeline_ops=1600` | 0.5718 s / 0.5737 s | 13.99 token/s | `2 + 2 = 4.` |
+
+| Bfloat16 model | Jittor median | Native median | Actual-token throughput |
+| --- | ---: | ---: | ---: |
+| Qwen3-0.6B, 8 tokens | 0.8197 s | 0.6707 s | 9.76 / 11.93 token/s |
+| Qwen3-8B, EOS after 3 tokens | 0.4026 s | 0.3165 s | 7.45 / 9.48 token/s |
 
 8-token 默认 Transformers 路径已不再卡死；启用 ACL SDPA 后的总延迟为同口径
 原生 PyTorch 的 1.23 倍。这里报告整次 `generate` 延迟，不用总时间简单除以 8
@@ -221,6 +251,11 @@ ACL RoPE 候选与融合前 Jittor 的完整末 token logits 逐元素完全一�
 复验继续输出 token 19、文本 `4`，8,190,735,360 个参数驻留 NPU，命中 fused
 attention 216 次，且 `cpu_compile_count=0`、`fallback_count=0`。
 
+Bfloat16 0.6B 的完整末 token logits 相对 `torch_npu` 最大绝对误差为 `0.59375`、
+平均绝对误差为 `0.1006`、RMSE 为 `0.1264`、余弦相似度为 `0.999165`；argmax、
+top-5 和 top-10 均一致。8B 的最终验收不只比较首 token：五轮完整 greedy 序列都为
+`[19, 13, 151645]`，避免把异步竞态误判成稳定支持。
+
 ## 实现边界
 
 - vmap 快路径只在 `TransformGetItemToIndex` 活跃时生效；普通 `torch.vmap` 保持原有
@@ -249,8 +284,8 @@ attention 216 次，且 `cpu_compile_count=0`、`fallback_count=0`。
   `jt.nn.rotary_emb`，不把项目/版本特定 monkeypatch 放进 Jittor 核心。
 - float16/float32 `arg_reduce` forward 通过 ACL MaxDim/MinDim 执行；generic backward
   仍因 index operation 不受支持而 fallback，不在本次 NPU 训练支持声明内。
-- float32 Qwen3-0.6B 已验证。bfloat16 整模仍受 `KI-BACKEND-005` 限制，不在本报告
-  的支持声明内。
+- Qwen3-0.6B/8B bfloat16 已验证 eager、no-grad、greedy generation；fused BF16
+  SDPA、训练、采样和量化不由该结论覆盖。
 
 ## 验证
 
@@ -273,6 +308,10 @@ attention 216 次，且 `cpu_compile_count=0`、`fallback_count=0`。
 - Current Jittor/native `torch_npu` 8-token, 3-warmup, 10-sample synchronized
   comparison after the native `empty` fast path: `0.50309 s` / `0.49400 s`;
   logits parity passed
+- Real-NPU bfloat16 Add/Sub, arg-reduce, and immediate scalar-read regressions:
+  `3 passed`; 1,000 immediate scalar reads: zero failures
+- Qwen3-0.6B bfloat16 six-run deterministic generation and Qwen3-8B bfloat16
+  five-run cold/warm deterministic generation: passed with zero fallback
 - Focused Torch constructor CPU regression: `23 passed, 2 skipped`
 - Real-NPU native-shape `empty` residency regression: `3 passed`
 - Full maintained NPU gate: `362 passed, 11 skipped`

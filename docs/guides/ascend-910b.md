@@ -193,7 +193,9 @@ export JITTOR_TORCH_SHIM=1
 
 python tests/backends/npu/manual/run_qwen3_transformers.py \
   --model "$QWEN3_MODEL" \
-  --max-new-tokens 1
+  --dtype bfloat16 \
+  --max-new-tokens 8 \
+  --runs 3
 ```
 
 Run this command only after the CANN, device-selection, and isolated-cache setup
@@ -203,13 +205,13 @@ attention generation with KV cache, and fails if generation logs an ACL backend
 fallback or an unexpected CPU-compiled operation. CPU checkpoint
 deserialization is expected and is not used as evidence for the model forward.
 
-The validated Qwen3-8B checkpoint has 8,190,735,360 parameters. With float32
-weights on one 64 GB 910B3, the process used 32,376 MB of device memory and
-generated token `4` for the probe prompt. The accepted result reported
-`is_cuda=true`, `has_acl=use_acl=use_cuda=1`, `fallback_count=0`, and
-`cpu_compile_count=0`. Both the model forward and final greedy `arg_reduce`
-selection execute through ACL. This one-token correctness probe is not a
-throughput benchmark.
+The validated Qwen3-8B checkpoint has 8,190,735,360 parameters. Float32 uses
+32,376 MB of device memory on one 64 GB 910B3. Both float32 and bfloat16 report
+accelerator-resident parameters, `has_acl=use_acl=use_cuda=1`, zero fallback,
+and zero CPU-compiled operations. The maintained bfloat16 eight-token request
+stops after `[19, 13, 151645]` and decodes to `4.` in every repeated run. Use
+`--dtype float32` for the original one-token probe. These are correctness probes,
+not throughput benchmarks.
 
 ## Current limitations
 
@@ -224,9 +226,9 @@ allowing them to abort or stall the process:
 - float32 `prod` can abort in the ACL reduction path;
 - native FlashAttention tests require an optional `jt.nn.FlashAttention`
   implementation and are skipped when it is absent;
-- the validated Transformers Qwen3-8B path uses float32; bfloat16 generation
-  currently reaches an unsupported ACL binary operation and is rejected because
-  it falls back to CPU;
+- Qwen3 bfloat16 is verified for eager, no-grad greedy inference; fused ACL SDPA,
+  training, sampling, quantization, and other model families remain separate
+  capability gates;
 - float16/float32 `arg_reduce` forward runs through ACL, but its generic backward
   graph still reaches an unsupported index operation and falls back to CPU;
 - ACL does not provide general float64 operator coverage, so float64 fallback

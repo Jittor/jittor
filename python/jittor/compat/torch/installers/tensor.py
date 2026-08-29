@@ -367,15 +367,15 @@ def _wrap_constructors(g):
     import functools, inspect
     _DROP = ("device", "requires_grad", "layout", "pin_memory", "memory_format",
              "out", "non_blocking")
+    _DEFAULT_FLOAT_FACTORIES = {
+        "zeros", "ones", "empty", "rand", "randn", "eye", "linspace",
+    }
 
     def wrap(name):
         orig = getattr(g, name, None)
         if orig is None:
             return
-        # A few jittor factories (ones_like, tril, triu) have no `dtype` param at
-        # all, unlike torch where every one of these accepts dtype=. For those we
-        # can't forward dtype= (jittor raises "unexpected keyword argument
-        # 'dtype'"); instead pop it and cast the result. Detect support once here.
+        # Some jittor factories have no dtype param; cast their result instead.
         try:
             _sig = inspect.signature(orig)
             _accepts_dtype = ("dtype" in _sig.parameters or
@@ -403,8 +403,9 @@ def _wrap_constructors(g):
             return _shape_dim(v)
         @functools.wraps(orig)
         def wrapped(*args, **kwargs):
-            # ACL adapters call jt.empty thousands of times; skip native shapes.
+            # ACL adapters call jt.empty thousands of times; keep the FP32 fast path.
             if (name == "empty" and not kwargs and args and
+                    g.get_default_dtype() == g.float32 and
                     (len(args) == 1 or all(type(dim) is int for dim in args))):
                 shape = args[0]
                 native_shape = isinstance(shape, jt.NanoVector) or type(shape) is int
@@ -426,26 +427,15 @@ def _wrap_constructors(g):
             _requires_grad = bool(kwargs.get("requires_grad", False))
             for k in _DROP:
                 kwargs.pop(k, None)
-            # torch accepts numpy integer scalars as shape dims, e.g.
-            # torch.zeros(1, np.int64(49), 512) (mmdet PVT builds pos_shape via
-            # `pretrain_img_size // patch_size`, which yields numpy ints). jittor's
-            # C++ shape converter strictly wants Python int (is_type<int64>), so a
-            # numpy scalar raises. Coerce numpy integer/float scalars (and 0-dim
-            # numpy arrays) in the positional args to plain Python scalars. Only
-            # numpy scalars are touched, so normal int/tuple shape args are untouched.
+            # Jittor shape conversion rejects numpy scalars; normalize them.
             _is_like_factory = name.endswith("_like")
             if args and not _is_like_factory:
                 args = tuple(_shape_arg(a) for a in args)
-            # normalize a Size/NanoVector shape arg (e.g. torch.zeros(x.size()))
-            # to a plain tuple — jittor's factories reject tuple subclasses /
-            # NanoVector. transformers BertEmbeddings does torch.zeros(position_ids.size()).
+            # Jittor factories reject Size/NanoVector tuple subclasses.
             if (not _is_like_factory) and args and (isinstance(args[0], jt.NanoVector) or
                          (isinstance(args[0], tuple) and type(args[0]) is not tuple)):
                 args = (tuple(int(x) for x in args[0]),) + tuple(args[1:])
-            # torch allows the shape via the size= keyword: torch.ones(size=(2,3))
-            # (canine's _create_3d_attention_mask_from_input_mask). Only the shape
-            # factories get a size= kwarg, and only with no positional shape, so
-            # this is safe across all wrapped constructors.
+            # Torch also allows shape via size=.
             if "size" in kwargs and not args:
                 sz = kwargs.pop("size")
                 args = (tuple(sz),) if hasattr(sz, "__len__") else (sz,)
@@ -456,6 +446,13 @@ def _wrap_constructors(g):
             if "fill_value" in kwargs:
                 args = tuple(args) + (kwargs.pop("fill_value"),)
             _cast_to = None  # cast after construction when needed for torch dtype semantics
+            if "dtype" not in kwargs and name in _DEFAULT_FLOAT_FACTORIES:
+                default_dtype = _dtype_to_str(g.get_default_dtype())
+                if default_dtype != "float32":
+                    if _accepts_dtype:
+                        kwargs["dtype"] = default_dtype
+                    else:
+                        _cast_to = default_dtype
             if "dtype" in kwargs:
                 if kwargs["dtype"] is None:
                     # torch.empty/zeros(..., dtype=None) -> the default dtype.

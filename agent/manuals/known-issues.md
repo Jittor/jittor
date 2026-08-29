@@ -1,7 +1,7 @@
 # Active Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-08-28
+- Last reviewed: 2026-08-29
 - Baseline: `6da453a1`
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
@@ -98,21 +98,6 @@ framework defects.
   is not accepted as NPU support evidence
 - Review/expiry condition: full and dimension reductions match NumPy and leave
   the process healthy on repeated real-NPU runs
-
-## KI-BACKEND-005: Transformers Qwen3 bfloat16 falls back on NPU
-
-- Severity: High
-- Status: Open; float32 inference verified
-- Owner: binary operator, Torch-compatibility, and ACL backend maintainers
-- Evidence: [`run_qwen3_transformers.py`](../../tests/backends/npu/manual/run_qwen3_transformers.py)
-  and [Ascend 910B validation](../results/2026-08-28-ascend-910b-validation.md)
-- Symptom: Qwen3 generation with bfloat16 weights reaches an unsupported
-  `binary_op_acl.cc` dtype path and logs `fallback cpu`; that run is not accepted
-  as NPU support
-- Workaround: load the checkpoint on CPU, explicitly migrate it, and use the
-  validated float32 inference path on NPU
-- Review/expiry condition: the Qwen3-8B bfloat16 manual probe generates on a real
-  NPU with `is_cuda=true` and zero CPU fallback
 
 ## KI-BACKEND-006: `arg_reduce` backward falls back on NPU
 

@@ -219,8 +219,7 @@ A 2026-08-29 follow-up connected Qwen3's version-specific RoPE helper to the
 generic Jittor ACLNN RoPE capability through an external module patch. The full
 8B checkpoint again used 32,376 MB of process device memory and generated token
 19 (`4`), with `fallback_count=0` and `cpu_compile_count=0`. This confirms the
-RoPE optimization on the real NPU without changing the float32-only support
-boundary of this model probe.
+RoPE optimization on the real NPU.
 
 The same follow-up then connected Torch SDPA to CANN FlashAttentionScoreV2 and
 removed the public `padding_mask.all()` fallback. Qwen3-0.6B complete logits
@@ -237,10 +236,13 @@ tensors now retain logical device residency without a storage copy, and the
 default-device query follows the execution flag. Both focused regressions pass on
 the real NPU.
 
-A bfloat16 attempt was rejected: Transformers generation reached
-`binary_op_acl.cc` with an unsupported bfloat16 operation and logged
-`fallback cpu`. The maintained Qwen3-8B claim is therefore float32 only until a
-real-NPU bfloat16 run completes with zero fallback.
+A later bfloat16 follow-up resolved that rejected attempt. Torch-compatible
+factories and Linear/Embedding now honor the default dtype used during
+Transformers construction, ACL Add/Sub accepts bfloat16, scalar host reads wait
+for `aclstream`, and fused scalar H2D copies retain their pinned host source.
+Qwen3-0.6B repeated six identical 8-token generations; Qwen3-8B repeated five
+identical generations, each `[19, 13, 151645]` (`4.`). Parameters remained
+bfloat16 and accelerator-resident, with zero CPU compilation and fallback.
 
 ## Explicit limitations
 
@@ -263,9 +265,9 @@ linked to `KI-BACKEND-001` through `KI-BACKEND-004`.
 
 General ACL float64 support remains unavailable. A CPU fallback for float64 is
 not counted as NPU evidence. Fused SDPA is restricted to the verified FP32
-no-grad subset. `arg_reduce` backward, Qwen3-8B bfloat16, full training,
-distributed NPU behavior, and other optional downstream projects are separate
-gates and are not claimed by this report.
+no-grad subset. `arg_reduce` backward, bfloat16 training/fused SDPA, full
+training, distributed NPU behavior, and other optional downstream projects are
+separate gates and are not claimed by this report.
 
 ## User documentation
 

@@ -99,6 +99,24 @@ class TestACL(unittest.TestCase):
         self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_item_waits_for_acl_stream(self):
+        actual = []
+        with jt.log_capture_scope(
+                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+            for value in range(32):
+                source = jt.array([value], dtype="int64")
+                actual.append(int((source * 3 + 7).item()))
+
+        self.assertEqual(actual, [value * 3 + 7 for value in range(32)])
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertTrue(any(
+            "compile acl op" in message or "compile op(" in message
+            for message in messages
+        ))
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_var_gather_uses_acl(self):
         source = jt.float32([[1, 2, 3], [4, 5, 6]])
         index = jt.int32([[2], [0]])
@@ -126,6 +144,33 @@ class TestACL(unittest.TestCase):
         b = a + a
         np.testing.assert_allclose(b.numpy(), [2, 4, 6])
         print('test_add_float pass')
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_bfloat16_add_sub_run_on_acl(self):
+        left_np = np.array([1.5, -2.0], dtype=np.float32)
+        right_np = np.array([0.5, 4.0], dtype=np.float32)
+        left = jt.array(left_np).bfloat16()
+        right = jt.array(right_np).bfloat16()
+
+        with jt.log_capture_scope(
+                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+            added = left + right
+            subtracted = left - right
+            self.assertEqual(str(added.dtype), "bfloat16")
+            self.assertEqual(str(subtracted.dtype), "bfloat16")
+            added, subtracted = jt.fetch_sync(
+                [added.float32(), subtracted.float32()])
+
+        np.testing.assert_allclose(added, left_np + right_np, atol=0, rtol=0)
+        np.testing.assert_allclose(
+            subtracted, left_np - right_np, atol=0, rtol=0)
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertTrue(any(
+            "compile acl op" in message or "compile op(" in message
+            for message in messages
+        ))
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1)
     def test_array_cast(self):

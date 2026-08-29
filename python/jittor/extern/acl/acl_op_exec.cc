@@ -9,6 +9,8 @@
 #include <Python.h>
 #include <pystate.h>
 #include <algorithm>
+#include <cstring>
+#include <mutex>
 #include <queue>
 #include <set>
 #include "common.h"
@@ -37,6 +39,78 @@
 namespace jittor
 {
     void free_var_mem(Var *v);
+
+    class AclScalarHostCache
+    {
+        static constexpr size_t capacity() { return 1 << 20; }
+        std::mutex mutex;
+        std::unordered_map<std::string, const void *> values;
+        void *storage = nullptr;
+        size_t storage_size = 0;
+        size_t offset = 0;
+
+        void reset()
+        {
+            if (storage == nullptr)
+                return;
+            auto ret = aclrtSynchronizeStream(aclstream);
+            if (ret != ACL_SUCCESS)
+                throw std::runtime_error(
+                    "aclrtSynchronizeStream failed: " +
+                    acl_error_to_string(ret));
+            ret = aclrtFreeHost(storage);
+            if (ret != ACL_SUCCESS)
+                throw std::runtime_error(
+                    "aclrtFreeHost failed: " + acl_error_to_string(ret));
+            storage = nullptr;
+            storage_size = 0;
+            offset = 0;
+            values.clear();
+        }
+
+    public:
+        ~AclScalarHostCache()
+        {
+            if (storage != nullptr)
+            {
+                aclrtSynchronizeStream(aclstream);
+                aclrtFreeHost(storage);
+            }
+        }
+
+        const void *get(const void *data, size_t size)
+        {
+            std::string key(static_cast<const char *>(data), size);
+            std::lock_guard<std::mutex> lock(mutex);
+            auto iter = values.find(key);
+            if (iter != values.end())
+                return iter->second;
+
+            size_t aligned_size = (size + 63) / 64 * 64;
+            if (storage == nullptr || offset + aligned_size > storage_size)
+            {
+                reset();
+                storage_size = std::max(capacity(), aligned_size);
+                auto ret = aclrtMallocHost(&storage, storage_size);
+                if (ret != ACL_SUCCESS)
+                    throw std::runtime_error(
+                        "aclrtMallocHost failed: " +
+                        acl_error_to_string(ret));
+            }
+            void *copy = static_cast<char *>(storage) + offset;
+            std::memcpy(copy, data, size);
+            offset += aligned_size;
+            values.emplace(std::move(key), copy);
+            return copy;
+        }
+    };
+
+    static const void *persistent_acl_scalar_data(const void *data, size_t size)
+    {
+        // Async H2D copies may outlive temporary scalar buffers owned by an op.
+        static AclScalarHostCache cache;
+        return cache.get(data, size);
+    }
 
     unordered_map<uint32, string> opname_map = {
         // unary op
@@ -270,7 +344,21 @@ namespace jittor
                 else if (op->name() == string("array"))
                 {
                     auto aop = (ArrayOp *)op;
-                    aclrtMemcpy(aop->output->mem_ptr, aop->output->size, aop->ptr<void>(), aop->output->size, ACL_MEMCPY_HOST_TO_DEVICE);
+                    // The fused allocator can reuse a consumed constant's
+                    // buffer before earlier ACL kernels finish. Queue the H2D
+                    // copy on aclstream so reuse stays ordered with consumers.
+                    const void *source = aop->ptr<void>();
+                    if (aop->output->flags.get(NodeFlags::_is_scalar))
+                        source = persistent_acl_scalar_data(
+                            source, aop->output->size);
+                    auto ret = aclrtMemcpyAsync(
+                        aop->output->mem_ptr, aop->output->size,
+                        source, aop->output->size,
+                        ACL_MEMCPY_HOST_TO_DEVICE, aclstream);
+                    if (ret != ACL_SUCCESS)
+                        throw std::runtime_error(
+                            "aclrtMemcpyAsync failed: " +
+                            acl_error_to_string(ret));
                 }
                 else if (op->name() == string("reduce"))
                 {

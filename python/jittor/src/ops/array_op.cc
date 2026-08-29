@@ -106,7 +106,12 @@ void ArrayOp::run() {
         checkCudaErrors(cudaMemcpyAsync(
             allocation.ptr, host_ptr, allocation.size, cudaMemcpyHostToDevice, stream));
         checkCudaErrors(cudaEventRecord(event, stream));
+        #ifdef IS_ACL
+        // ACL kernels run on aclstream rather than CUDA's default stream.
+        checkCudaErrors(cudaStreamWaitEvent(aclstream, event, 0));
+        #else
         checkCudaErrors(cudaStreamWaitEvent(0, event, 0));
+        #endif
         // delay free this allocation
         allocation.allocator = &delay_free;
     }

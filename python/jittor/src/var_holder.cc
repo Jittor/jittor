@@ -244,7 +244,14 @@ ItemData VarHolder::item() {
     data.dtype = var->dtype();
     auto dsize = data.dtype.dsize();
     if (!(var->mem_ptr && !var->allocator->is_cuda())) {
+        #ifdef IS_ACL
+        // ACL kernels run on aclstream, while the synchronous host copy below
+        // is not ordered after that custom stream. A scalar host read is a
+        // synchronization boundary, so drain the device before migrating it.
+        sync(true);
+        #else
         sync();
+        #endif
         if (save_mem || _HAS_CUDA)
             migrate_to_cpu(var, exe.allocator);
     }

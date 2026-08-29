@@ -30,6 +30,28 @@
 
 namespace jittor
 {
+    template <typename T, aclDataType DType>
+    struct UnitScalarHolder
+    {
+        T value = static_cast<T>(1);
+        aclScalar *scalar = aclCreateScalar(&value, DType);
+
+        ~UnitScalarHolder()
+        {
+            aclDestroyScalar(scalar);
+        }
+    };
+
+    template <typename T, aclDataType DType>
+    static aclScalar *getUnitScalar()
+    {
+        // aclnn launches asynchronously and may still read the scalar after
+        // executeFunc returns. Cache one immutable scalar per dtype so its
+        // lifetime covers every queued Add/Sub invocation.
+        static UnitScalarHolder<T, DType> holder;
+        return holder.scalar;
+    }
+
     BinaryOpRunner::BinaryOpRunner() : BaseOpRunner("binary")
     {
         use_nchw = false;
@@ -44,53 +66,47 @@ namespace jittor
         {
             if (get_dtype(in_[0]->dtype()) == ACL_FLOAT)
             {
-                float alphaValue = 1.0;
-                alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                alpha = getUnitScalar<float, ACL_FLOAT>();
             }
             else if (get_dtype(in_[0]->dtype()) == ACL_FLOAT16)
             {
-                __fp16 alphaValue = 1.0;
-                alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                alpha = getUnitScalar<__fp16, ACL_FLOAT16>();
+            }
+            else if (get_dtype(in_[0]->dtype()) == ACL_BF16)
+            {
+                alpha = getUnitScalar<float, ACL_FLOAT>();
             }
             else if (get_dtype(in_[0]->dtype()) == ACL_INT64)
             {
-                int64_t alphaValue = 1;
-                alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                alpha = getUnitScalar<int64_t, ACL_INT64>();
             }
             else if (get_dtype(in_[0]->dtype()) == ACL_INT32)
             {
-                int alphaValue = 1;
-                alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                alpha = getUnitScalar<int, ACL_INT32>();
             }
             else if (get_dtype(in_[0]->dtype()) == ACL_INT8)
             {
-                int8_t alphaValue = 1;
-                alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                alpha = getUnitScalar<int8_t, ACL_INT8>();
             }
             else if (get_dtype(in_[0]->dtype()) == ACL_INT16)
             {
-                int16_t alphaValue = 1;
-                alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                alpha = getUnitScalar<int16_t, ACL_INT16>();
             }
             else if (get_dtype(in_[0]->dtype()) == ACL_UINT8)
             {
-                uint8_t alphaValue = 1;
-                alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                alpha = getUnitScalar<uint8_t, ACL_UINT8>();
             }
             else if (get_dtype(in_[0]->dtype()) == ACL_UINT16)
             {
-                uint16_t alphaValue = 1;
-                alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                alpha = getUnitScalar<uint16_t, ACL_UINT16>();
             }
             else if (get_dtype(in_[0]->dtype()) == ACL_UINT32)
             {
-                uint32_t alphaValue = 1;
-                alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                alpha = getUnitScalar<uint32_t, ACL_UINT32>();
             }
             else if (get_dtype(in_[0]->dtype()) == ACL_BOOL)
             {
-                bool alphaValue = true;
-                alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                alpha = getUnitScalar<bool, ACL_BOOL>();
             }
             else
             {
@@ -118,7 +134,6 @@ namespace jittor
 
         syncRun();
 
-        aclDestroyScalar(alpha);
         return;
     }
 }
