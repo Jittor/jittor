@@ -25,7 +25,13 @@ def _msg(fn):
 
 class TestTorchCompatErrors(unittest.TestCase):
     def setUp(self):
+        # These assert CPU error messages, but the flag is process-global: left
+        # at 0 it silently moves every later test in the session onto the CPU.
+        self._use_cuda = jt.flags.use_cuda
         jt.flags.use_cuda = 0
+
+    def tearDown(self):
+        jt.flags.use_cuda = self._use_cuda
 
     # ---- supported op x complex dtype ----
     def test_supported_complex_transcendentals_match_numpy(self):

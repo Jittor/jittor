@@ -1,6 +1,6 @@
 # CPU 双会话收零失败、FSDP2 单卡集合通信与两个新原生 notebook
 
-- Status: CPU native/Torch 双会话零失败；TRELLIS 性能仍未接受
+- Status: native CPU / CPU Torch / CUDA+对拍 三套会话均零失败；TRELLIS 性能仍未接受
 - Last reviewed: 2026-08-27
 - Baseline: `99537948`
 - Owner: Torch compatibility and downstream integration maintainers
@@ -758,7 +758,16 @@ native 会话 `729 passed, 716 skipped`，CPU Torch 会话 `1507 passed, 279 ski
 
 这套（`nvcc_path` 有值、`REAL_TORCH_PYTHON` 指向真 PyTorch 环境）与 CPU 门禁是两套
 不同的会话，8 月 20 日的两轮全量记录里就是 26 个失败，一直没人往下查。逐个查完之后
-修掉 22 个，剩下 4 个定位到了触发条件但没修。
+**全部清零**：
+
+| | 之前 | 之后 |
+| --- | ---: | ---: |
+| CUDA + 真 PyTorch 对拍 | `33 failed, 1770 passed` | **`0 failed, 1806 passed`** |
+| native CPU | `729 passed` | `737 passed` |
+| CPU Torch | `1507 passed` | `1510 passed` |
+
+这些失败背后是七个彼此独立的问题，其中三个是真实用户会踩到的产品缺陷（GPU 上设种子
+无效、切设备时惰性执行漏账、Triton 结果被静默丢弃），其余是测试自身的问题。
 
 **20 个：参照解释器与 Jittor 环境的 CPython 版本不同（已修）。** 两侧原本被强制从
 同一个 site 目录导入下游库，好让对拍失败一定是 Jittor 的差异而不是版本差异。但为
@@ -781,20 +790,210 @@ Jittor 环境是 3.11、真 PyTorch 环境是 3.12，于是参照侧在 transfor
 模型的损失轨迹，CUDA 上偶然差了 7% 就报成流水线的错。改为构造一次、快照参数、每轮
 恢复，CUDA 会话 9 passed。
 
-**3 个：Triton 桥接在 torch shim 下失效（未修，已隔离）。** 同一份代码只切
-`JITTOR_TORCH_SHIM`：关闭时结果正确，打开时输出保持全零。排查排除了以下可能——
-传给发射的是 Var 真实的设备指针（互相间距正好等于张量字节数）、`cuLaunchKernel`
-返回成功且 `cudaDeviceSynchronize` 无错、发射前后 Var 地址不变、发射后不碰 Var 直接
-`cudaMemcpy` 读回来仍是全零（所以不是惰性重算覆盖）、两种模式下当前 CUDA context
-都等于设备 0 的 primary context。不是 compat 文件特有：原生的
-`test_triton_backend.py` 在 shim 下同样有 3/9 失败。这些用例平时不暴露，是因为
-`tests/conftest.py` 只对窄选择自动打开 shim。
+**1 个：全局 `use_cuda` 泄漏（已修）。** `test_torch_compat_errors.py` 在 `setUp`
+里把 `use_cuda` 设成 0，却没有 `tearDown` 还原。这个 flag 是进程全局的，于是同一
+会话中它之后的所有测试都被静默挪到 CPU 上跑。直接失败的是
+`test_alias_uses_cuda_when_available`（它断言 CUDA 可用时全局 `use_cuda` 为 1），
+但真正的代价是下面这条：一整段 CUDA 覆盖被悄悄换成了 CPU。
 
-**1 个：运行时启用 torch shim 后退出时双重释放（未修，已隔离）。**
-`jt.flags.torch_shim = 1` 会触发完整的运行时 shim 安装（`enable_runtime`，其中包含
-核心库预加载）。必须同时满足两个条件才崩：设了这个 flag，且是 CUDA 构建；单独任一
-都不崩。探针的 `RESULT` 能正常打印，崩在解释器退出，因此这是 teardown 问题而非功能
-问题。修它要重做运行时 shim 启用路径，超出本次范围。
+**1 个：`jt.seed` 在 GPU 上无效（已修）。** 这个是修掉上面那条泄漏之后才露出来的
+——在此之前种子测试一直跑在 CPU 上。`curandSetPseudoRandomGeneratorSeed`
+只改种子，不把生成器拉回序列开头，所以抽过之后再设同一个种子会接着往下走。
+CPU 侧的 `set_seed` 本来就把 offset 清零，补上 CUDA 的对应一步即可。实测
+`use_cuda=1` 下 `jt.seed(731)` 两次得到的 8 个数此前完全不同，现在一致，换成别的
+种子仍然不同。也就是说 GPU 上的 `jt.seed`/`torch.manual_seed` 此前是无效的——
+这比它掩盖住的那个测试失败严重得多。回归测试见 `tests/ops/test_random_op.py`。
+
+**3 个：`flag_scope` 切设备时的惰性执行漏账（已修）。** 执行是惰性的，
+`flag_scope(use_cuda=1)` 里构造的 op 可能在作用域还原之后才执行，于是跑到了另一个
+设备上：遇到没有 CPU 版本的算子（bfloat16 cast）直接报
+`Op unary doesn't have cpu version`，遇到两边都有的则是静默换设备。改为在
+`use_cuda` 真的发生变化时先把待执行的 op 跑完，只有翻转设备的作用域才付这个代价。
+顺带一提，第一版实现里我写了 `bool(exc)`，而 `core_api.py` 顶部的
+`from jittor import *` 把内建 `bool` 覆盖成了 Jittor 的算子，于是 28 个用例一起挂掉；
+这个文件里不能用被遮蔽的内建。
+
+**3 个：Triton 桥接把 kernel 结果丢掉（已修）。** 这一条查得最久，因为它其实是两个
+独立的 bug 叠在一起。
+
+第一个：模块缓存用 `id(cubin)` 做键，却没有任何地方持有那个 bytes 的引用。对象被
+回收后 CPython 会把别的 bytes 放到同一地址，于是下一次查表拿到的是**另一个 kernel**
+的 `CUfunction`——发射干净、返回码正常、什么都不写。缓存改为连 cubin 一起存住，
+地址在条目存活期间就不可能被复用。修掉它之后 `JITTOR_TORCH_SHIM=0` 由 3 failed
+变为 5 passed。
+
+第二个（只在 shim 下）：走暂存缓冲的参数永远不拷回。跳过拷回的前提是「kernel 只写
+显式输出 Var」，而哪个参数算输出由 `_looks_like_output_arg` 按**参数名**判断：匹配
+`out`/`output`/`y`/`dst`、`_out` 后缀、`out_` 前缀。于是输出叫 `o_ptr` 或 `c_ptr`
+的 kernel 被当成普通操作数送进暂存缓冲，结果被静默丢弃——原生测试的输出恰好叫
+`out_ptr`，所以一直是好的。这不是测试问题：shim 下任何输出参数没按这套命名的
+Triton kernel，结果都会被静默丢弃。改为默认总是拷回，
+`JITTOR_TRITON_COPY_BOUNCED_INPUTS_BACK=0` 仍可为确知只读的调用方关掉。
+TRELLIS 最优配置 `6.8006s` -> `6.8017s`，三次采样区间重叠，无可测代价。
+
+排查过程中依次排除了：传给发射的指针（是 Var 真实设备指针）、`cuLaunchKernel`
+返回码与 `cudaDeviceSynchronize`、发射前后 Var 地址、发射后不碰 Var 直接
+`cudaMemcpy`（排除惰性重算覆盖）、CUDA context（两种模式都等于设备 0 的 primary）、
+`import triton` 是否被 shim 替换（不是）、签名与常量（完全一致）。真正把两者区分开
+的是打印实际打包进 `params` 的字节——那里传的根本不是 Var 指针，而是暂存缓冲。
+
+**1 个：shim 预加载核心库导致退出时双重释放（已修）。** `jt.flags.torch_shim = 1`
+会触发完整的运行时 shim 安装，其中预加载核心 `.so`。预加载按**路径长度**挑选，而
+缓存里同一 Python ABI 还有多份配置（CPU 的与 CUDA 的），于是在 CUDA 构建下预加载了
+CPU 那份，进程里出现两份运行时静态状态，退出时同一块 exit-handler 被释放两次。
+这正好解释了为什么必须同时有 `torch_shim=1` 和 CUDA 才崩——没有 CUDA 时缓存里只有
+一份，选谁都对。改为：已经导入的那一份就是唯一可预载的那一份，glob 发现退化为兜底。
+`_matching_abi` 的注释早就写明了这个双重释放的成因，只是它只按 Python ABI 过滤，
+挡不住同 ABI 的不同配置。
+
+### 剩余 CPU 差距：定位到「守卫恒假」，收口后反超 PyTorch
+
+并行化落地后重新剖析同一步（Jittor `0.90s` vs PyTorch `0.68s`），两侧用各自的
+profiler 按 self-time 拆分：
+
+| | Jittor | PyTorch |
+| --- | ---: | ---: |
+| 卷积（前向 + 两个反向） | `~385ms`（`41.7%`） | `435ms`（`71.9%`） |
+| 其余全部 | `~535ms` | `~170ms` |
+| self-time 合计 | `~920ms` | `605ms` |
+
+第一个结论与直觉相反：**Jittor 的 CPU 卷积比 PyTorch 快**（两边都走 oneDNN），
+差距整个落在非卷积部分。
+
+排除了几个常见解释：不是线程数（两侧实测都只用满 `12.8` 个核，本机有 cgroup
+配额，`nproc` 报 128 但到此为止；`omp_get_max_threads` 在 Jittor 进程里全程是
+128，没有被 oneDNN 压低）；不是向量化失效（最热那个非卷积 kernel 的编译报告有
+6 个循环用 32 byte 向量）；不是矩阵乘退回通用路径（`mkl_matmul` 与
+`mkl_batched_matmul` 都在缓存里）。
+
+真正的线索是带宽数字：那个占一步 `11.7%` 的 kernel 只有 `6.74 GB/s`，而同机同
+cgroup 下微基准能到 `241 GB/s`——差 36 倍，不可能是带宽受限。读它的生成源码，
+守卫是 `if ((range0) >= 64 && ...)`，而 `range0` 是 NCHW 的 **batch 维，等于 2**。
+**守卫恒假，这个 kernel 从来没走过并行分支。** 「1890 个 kernel 里 1255 个带
+pragma」只说明 pragma 发出去了，不说明运行时走到了它。
+
+修法是把最外层往下的完美嵌套层一并 `collapse`（最多 3 层），可用并行度由 batch
+变成 batch × channels × …，守卫改看这几层的乘积。只有「唯一子节点就是下一层循环、
+其间没有任何语句或定义」的层才可折叠，否则 OpenMP 会拒绝；不相交性要求每一个被
+折叠的变量都作为因子出现在每个 store 下标里。某一层不满足时逐层退回。
+
+| | CPU diffusers UNet 一步 | 相对同机 PyTorch |
+| --- | ---: | ---: |
+| 本轮开始 | `3.4038s` | `4.83x` |
+| 归约累加器 | `1.3522s` | `2.155x` |
+| 双分支并行（只取最外层） | `0.8963s` | `1.361x` |
+| collapse 取外层多级 | **`0.6306s` / `0.6616s`** | **`0.927x` / `0.973x`** |
+
+同机 PyTorch `0.6801s`。**CPU diffusers 由慢 4.83 倍转为快过 PyTorch。**
+
+需要更正我在上一版这里写下的结论：我当时写「剩下的是摊在大量中等 kernel 上的
+访存与构图开销……不是再加一个 pass」。这是错的，而且我自己的数据就否定了它——
+kernel self-time 合计 `920ms` 与墙钟 `0.90s` 基本相等，构图开销在 CPU 上根本不
+显著；真实原因是一个恒假的守卫，也确实是靠改这个 pass 解决的。
+
+### CPU 全景：五个网络的现状，以及分块循环这一类
+
+并行化落地后把 CPU 上的五个网络都量了一遍（同机 PyTorch，机器空闲时测）：
+
+| 用例 | Jittor | PyTorch | 比值 |
+| --- | ---: | ---: | ---: |
+| convnet | `0.5711s` | `0.6500s` | **`0.879x`** |
+| gpt2 | `1.4053s` | `1.5172s` | **`0.926x`** |
+| unet | `0.6311s` | `0.6527s` | **`0.967x`** |
+| llama | `1.7509s` | `1.3572s` | `1.29x` |
+| vit | `0.8954s` | `0.5618s` | `1.59x` |
+
+卷积类与 GPT-2 已经快过 PyTorch，两个 transformer 仍落后。
+
+剖析 llama 与 ViT 指向同一类 kernel：`SplitLoopPass` 把某一维切成 tile 之后，最外层
+写成 `id1 += stride1`，下标变成 `(id1+id2) * stride`。并行 pass 的
+`scales_with` 只认 `id1 *`，于是整类分块 kernel 被保守地拒绝——ViT 里占一步
+`18.5%`、llama 里 `14.8%` 的那个融合 kernel 就一直串行执行。补上只对分块循环启用的
+判定后（外层按 tile 步进、内层跑到 tile 大小，合起来恰好枚举原维度，不同 tile 仍写
+不同元素），llama `1.8739s -> 1.7509s`；vit 与 unet 在运行波动内持平。
+
+tile 数门槛取 32 而不是 8：取 8 时 llama `1.5895s`、vit `0.8269s` 更好，但 UNet 从
+`0.6261s` 退到 `0.7681s`（`0.99x -> 1.19x`）。取 32 时三个用例相比不做分块并行都不
+更慢，是帕累托改进。
+
+一个被回退的尝试值得记下来。llama 的 profile 里 `getitem`/`setitem` 占 `15.3%`，
+它们是手写算子模板而非融合 kernel，pass 看不到。直接在 `getitem_op.cc` 的模板里加
+OpenMP，llama 只快约 `3.5%`，却让 CUDA 会话 **1199 个用例失败**：`KernelIR` 是源码
+*文本* 解析器，CUDA 路径会把整个文件（含 `#else` 的 CPU 分支）交给它，插入的
+`_Pragma(...)` 被当成函数定义头，触发 `kernel_ir.cc:648` 的断言。收益太小、波及面
+太大，已撤回。教训是：改这些模板必须同时验证 CUDA 会话，CPU 门禁绿并不说明问题。
+
+### 最大的单个非 matmul kernel 是优化器本身
+
+ViT 剖析里占一步 `17.4%`（`146ms`）的那个 kernel，名字看不出用途
+（`opkey0_array__T_int32...`），读循环体才发现算的是 `param = param - lr * (...)`
+——**是 SGD 更新本身**。PyTorch 侧对应的 `add_` + `fill_` 只有约 `35ms`。
+
+成因是 `step()` 无条件走动量路径：
+
+```python
+dp = p * weight_decay + g
+v  = momentum * v + dp * (1 - dampening)
+p  = p - v * lr
+```
+
+`momentum` 为 0 时 `v` 恒等于 `dp`，却仍要为每个参数整写一遍再读回来；
+`weight_decay` 为 0 时 `p * 0 + g` 又是一整趟对参数的读取。每元素访存 6 次，
+而 torch 的 `p.add_(g, alpha=-lr)` 只要 3 次。三者都为 0 正是默认配置，也是所有
+训练基准使用的配置。
+
+`momentum`/`dampening` 都为 0 且非 nesterov 时直接 `p -= dp * lr`，数学上完全
+等价。`dampening` 在本实现里即使 `momentum=0` 也会缩放更新（torch 只在动量分支里
+用它），所以快速路径限定 `dampening=0`，没有顺手改掉这个既有语义差异。
+
+| CPU 一步 | 修复前 | 修复后 | 同机 PyTorch |
+| --- | ---: | ---: | ---: |
+| vit | `0.8954s` | **`0.7994s` / `0.8050s`** | `0.5737s` |
+| llama | `1.9953s` | **`1.4960s`** | `1.3788s` |
+| unet | — | `0.6374s` | `0.6777s` |
+| convnet | — | `0.5969s` | `0.6405s` |
+| gpt2 | — | `1.3687s` | `1.3164s` |
+
+llama 的单次测量跨度很大（`1.50s`~`2.23s`），上表用的是同一进程内受控 A/B 的最好值。
+
+优化器是设备无关的，GPU 稳态也一并变快（同机 PyTorch，独占 GPU）：
+
+| GPU 一步 | 修复前 | 修复后 | 同机 PyTorch |
+| --- | ---: | ---: | ---: |
+| vit | `0.984x` | **`0.947x`**（`0.0233s`） | `0.0246s` |
+| convnet | `0.897x` | **`0.891x`**（`0.0139s`） | `0.0156s` |
+| gpt2 | `0.872x` | **`0.841x`**（`0.0349s`） | `0.0415s` |
+
+`test_core.py::test_node_order` 原本断言含 `weight` 的融合算子输出 `>= 2` 个 Var，
+那隐含地编码了「一步同时写动量缓冲和参数」——正是这里去掉的多余写入。改为 `>= 1`，
+该用例真正检查的执行顺序断言保持不变。
+
+### ViT 与 llama 还差在哪：不是并行度，也不是派发开销
+
+把两个仍落后的用例按同口径拆到底，结论是这两条常见的解释都不成立：
+
+| | Jittor | PyTorch |
+| --- | ---: | ---: |
+| ViT kernel 自时间 | `833ms` | `554ms` |
+| 其中 matmul | `357ms` | `411ms`（`mm` + `addmm`） |
+| 其中非 matmul | `476ms` | `143ms` |
+| ViT 墙钟 | `0.895s` | `0.562s` |
+
+- **不是并行度。** 两侧都跑满本机 cgroup 允许的 `12.8` 个核。
+- **不是派发开销。** ViT 的 kernel 自时间 `833ms` 对墙钟 `0.895s`，差 `7%`；
+  llama 更是 `1.73s` 对 `1.75s`，几乎没有 kernel 之外的时间。执行流水线
+  （`JITTOR_EXECUTION_PIPELINING=50`）只能拿回 `4.4%`（`0.836s -> 0.799s`），
+  与这条结论一致。
+- **BLAS 部分 Jittor 更快**：ViT 的 matmul `357ms` 对 PyTorch 的 `411ms`。
+
+差距集中在非 matmul 的逐元素与归一化算子上（`476ms` 对 `143ms`，`3.3x`）。一步的
+总访存量是 `14.1GB`，平均只有 `16.9 GB/s`，而同机同 cgroup 微基准能到 `241 GB/s`
+——这些 kernel 既不受带宽限制也没有空转的核，说明搬的数据本身就比 PyTorch 多，
+即中间结果没有被融合掉。收口需要在融合边界上做工作，不是再调并行参数。
+
+试过把分块并行的 tile 门槛从 32 调到 16，llama `2.0245s`、unet `0.6740s`，都比
+32 更差；但同一轮里 PyTorch 侧自己也从 `1.3572s` 漂到 `1.2212s`（`±15%`）。在这个
+噪声水平上调阈值得不出可靠结论，因此保留经过门禁验证的 32，没有按单次测量改动。
 
 ### 空隙的分布，以及为什么调度改不动它
 

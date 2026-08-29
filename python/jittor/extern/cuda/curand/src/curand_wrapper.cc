@@ -22,6 +22,12 @@ inline curand_initer() {
     checkCudaErrors( curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT) );
     add_set_seed_callback([](int seed) {
         checkCudaErrors( curandSetPseudoRandomGeneratorSeed(gen, seed) );
+        // The seed alone does not rewind the generator: it keeps its position
+        // in the sequence, so re-seeding with the same value after drawing
+        // continues from where it left off and jt.set_seed() does not
+        // reproduce. set_seed() resets the CPU side's offset for the same
+        // reason; this is the CUDA half of it.
+        checkCudaErrors( curandSetGeneratorOffset(gen, 0) );
     });
     LOGv << "curandCreate finished";
 }

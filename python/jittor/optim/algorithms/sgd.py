@@ -46,9 +46,25 @@ class SGD(Optimizer):
             nesterov = pg.get("nesterov", self.nesterov)
 
             # optimize main body
+            # Without momentum the velocity buffer holds nothing the step needs:
+            # `v` comes out equal to `dp` and is read back only to be scaled by
+            # lr. Keeping it costs a full write and read of every parameter, and
+            # this is the default configuration -- on a ViT training step the
+            # fused update kernel was 17% of the whole step, against 6% for the
+            # same update in PyTorch. `dampening` still scales the update here
+            # even at momentum 0 (unlike torch, where it only applies inside the
+            # momentum branch), so the shortcut is limited to dampening 0 rather
+            # than quietly changing that. `v` is then left at whatever it held;
+            # turning momentum on later resumes from zeros, which is what this
+            # optimizer has always started from.
+            plain = momentum == 0 and dampening == 0 and not nesterov
             for p, g, v in zip(pg["params"], pg["grads"], pg["values"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
-                dp = p * weight_decay + g
+                # `p * 0 + g` is a whole extra pass over the parameter.
+                dp = g if weight_decay == 0 else p * weight_decay + g
+                if plain:
+                    _update_preserve_dtype(p, p - dp * lr)
+                    continue
                 _update_preserve_dtype(
                     v, momentum * v + dp * (1 - dampening))
                 if nesterov:

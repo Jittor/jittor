@@ -114,9 +114,30 @@ class flag_scope(_call_no_record_scope):
     def __init__(self, **jt_flags):
         self.jt_flags = jt_flags
 
+    def _flush_if_device_changes(self, wanted):
+        """Run everything still pending before the device flag moves.
+
+        Execution is lazy, so an op built inside ``flag_scope(use_cuda=1)`` can
+        still be pending when the scope restores the old value, and it then runs
+        on the other device -- with an op that has no CPU version (a bfloat16
+        cast, say) that is a hard failure, and with one that has both it is a
+        silent device switch. Only a scope that actually moves ``use_cuda`` pays
+        for this, and such a scope is a device boundary anyway.
+        """
+        # NB: `from jittor import *` above shadows the builtins `bool` and
+        # `int` with jittor ops, so this compares without calling either.
+        if "use_cuda" not in self.jt_flags:
+            return
+        current = getattr(flags, "use_cuda")
+        if (current != 0) == (wanted != 0):
+            return
+        sync_all()
+
     def __enter__(self):
         flags_bk = self.flags_bk = {}
         try:
+            if "use_cuda" in self.jt_flags:
+                self._flush_if_device_changes(self.jt_flags["use_cuda"])
             for k,v in self.jt_flags.items():
                 origin = getattr(flags, k)
                 flags_bk[k] = origin
@@ -131,8 +152,17 @@ class flag_scope(_call_no_record_scope):
             raise
 
     def __exit__(self, *exc):
-        for k,v in self.flags_bk.items():
-            setattr(flags, k, v)
+        # Not while an exception is unwinding: the pending work is likely what
+        # raised, and a second error here would bury the first one.
+        unwinding = len(exc) > 0 and exc[0] is not None
+        try:
+            if "use_cuda" in self.flags_bk and not unwinding:
+                self._flush_if_device_changes(self.flags_bk["use_cuda"])
+        finally:
+            # Restoring the flags is not optional: leaving the scope's values in
+            # place because the flush raised would corrupt everything after it.
+            for k,v in self.flags_bk.items():
+                setattr(flags, k, v)
 
 class no_grad(flag_scope):
     ''' no_grad scope, all variable created inside this

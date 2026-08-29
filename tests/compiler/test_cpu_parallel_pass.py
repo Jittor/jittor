@@ -4,6 +4,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
+import re
 import unittest
 import numpy as np
 import jittor as jt
@@ -48,14 +49,33 @@ class TestCpuParallelPass(unittest.TestCase):
         assert src.count(PRAGMA) == src.count("#pragma omp")
         assert "if (!(" in src
 
-    def test_outermost_reduction_is_left_alone(self):
-        # Summing over dimension 0 makes every iteration of the outer loop write
-        # the same output element, so the disjointness test must reject it.
+    def test_full_reduction_is_left_alone(self):
+        # Every iteration accumulates into the one output element, so no loop
+        # variable scales the store index and the disjointness test must reject
+        # all of them. Threading this would be a race, not a slow kernel.
         a = jt.random((512, 1024))
         a.sync()
-        src, out = kernel_source(lambda: a.sum(0))
-        assert PRAGMA not in src
-        np.testing.assert_allclose(out.numpy(), a.numpy().sum(0),
+        src, out = kernel_source(lambda: a.sum())
+        accumulate = re.compile(r"(\w+)\[(\w+)\]\s*=\s*\(*\(\1\[\2\]\)")
+        at = src.find(PRAGMA)
+        while at >= 0:
+            assert not accumulate.search(src[at:at + 2000]), \
+                "a full reduction's read-modify-write was parallelised"
+            at = src.find(PRAGMA, at + 1)
+        np.testing.assert_allclose(out.numpy(),
+                                   a.numpy().astype("float64").sum(),
+                                   rtol=1e-4, atol=1e-4)
+
+    def test_reduction_over_a_split_output_dimension(self):
+        # Summing over dimension 0 leaves the output dimension outermost, and
+        # the loop over it is split into tiles. Distinct tiles accumulate into
+        # distinct output elements, so this one is legitimately threaded -- the
+        # check that matters is that the numbers survive it.
+        a = jt.random((512, 1024))
+        a.sync()
+        _, out = kernel_source(lambda: a.sum(0))
+        np.testing.assert_allclose(out.numpy(),
+                                   a.numpy().astype("float64").sum(0),
                                    rtol=1e-5, atol=1e-5)
 
     def test_row_reduction_matches_numpy(self):

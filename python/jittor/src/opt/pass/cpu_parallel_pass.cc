@@ -61,6 +61,50 @@ static bool scales_with(const string& expr, const string& index) {
     return false;
 }
 
+// A split loop's variable reaches the store as "(id1 + id2) * stride" rather
+// than "id1 * stride": the outer steps by the tile size and the inner runs up
+// to it, so the pair enumerates the original dimension between them and
+// distinct tiles still address distinct elements. Only accepted for a loop that
+// really is split (it carries the stride in `rvalue2`), so this does not loosen
+// the test for anything else.
+static bool scales_with_tile(const string& expr, const string& index) {
+    for (size_t i = expr.find(index); i != string::npos;
+         i = expr.find(index, i + 1)) {
+        bool left = i > 0 && (isalnum(expr[i-1]) || expr[i-1] == '_');
+        size_t end = i + index.size();
+        bool right = end < expr.size() && (isalnum(expr[end]) || expr[end] == '_');
+        if (left || right) continue;
+        // Walk to the closing parenthesis of the sum this index sits in, then
+        // require that parenthesised group to be multiplied by something.
+        if (i == 0 || expr[i-1] != '(') {
+            // "(other + index)" -- step back over the other term instead.
+            size_t open = expr.rfind('(', i);
+            if (open == string::npos) continue;
+            bool only_sum = true;
+            for (size_t k = open + 1; k < i; k++)
+                if (!(isalnum(expr[k]) || expr[k] == '_' || expr[k] == ' '
+                      || expr[k] == '+')) { only_sum = false; break; }
+            if (!only_sum) continue;
+        }
+        size_t j = end, depth = 1;
+        while (j < expr.size() && depth) {
+            if (expr[j] == '(') depth++;
+            if (expr[j] == ')') depth--;
+            if (depth == 0) break;
+            // Anything but a sum of plain names inside the group means this is
+            // not the split pattern.
+            if (!(isalnum(expr[j]) || expr[j] == '_' || expr[j] == ' '
+                  || expr[j] == '+')) return false;
+            j++;
+        }
+        if (j >= expr.size()) continue;
+        j++;
+        while (j < expr.size() && (expr[j] == ' ' || expr[j] == '\t')) j++;
+        if (j < expr.size() && expr[j] == '*') return true;
+    }
+    return false;
+}
+
 // A plain identifier can be multiplied into the work estimate; anything else
 // (a call, an expression) is left out rather than pasted into the guard.
 static bool is_identifier(const string& s) {
@@ -89,6 +133,11 @@ static void scan(KernelIR* node, LoopScan& out,
         if (c->type == "loop") {
             if (c->has_attr("rvalue"))
                 out.inner_bounds.push_back(c->get_attr("rvalue"));
+            // A split loop keeps its tile-size define in `inner`, not among the
+            // children, and that name is only in scope inside the loop.
+            for (auto& s : c->inner)
+                if (s->type == "define")
+                    defines[s->get_attr("lvalue")] = s->get_attr("rvalue");
             scan(c.get(), out, defines);
             // Anything the accumulator pass parked around the loop counts too.
             for (auto* ls : {&c->before, &c->after})
@@ -107,6 +156,12 @@ static void scan(KernelIR* node, LoopScan& out,
                 }
             continue;
         }
+        // A comment emits nothing. The asm tuner's `//@begin replace` markers
+        // ride along in the parallel copy too; the substitution they drive
+        // (ordinary stores to non-temporal ones) is a performance choice, so
+        // the worst case if outlining moves the code out of their reach is
+        // that it does not happen.
+        if (c->type == "comment") continue;
         if (c->type.size()) { out.usable = false; return; }
         const string& code = c->get_attr("code");
         // A jump would make the loop non-canonical for OpenMP.
@@ -138,6 +193,7 @@ void CpuParallelPass::run() {
     // Collect first: the transform replaces nodes in the list being walked.
     vector<KernelIR*> targets;
     vector<string> guards;
+    vector<int> depths;
     for (auto* body : bodies) {
         for (auto& loop : body->children) {
             if (loop->type != "loop") continue;
@@ -145,18 +201,50 @@ void CpuParallelPass::run() {
             string index = loop->get_attr("lvalue");
             string bound = loop->get_attr("rvalue");
             if (index.size() == 0 || !is_identifier(bound)) continue;
+            // A split loop steps by a tile instead of by one, so its trip count
+            // is bound/stride and its index reaches the store inside a sum.
+            bool split = loop->has_attr("rvalue2")
+                         && is_identifier(loop->get_attr("rvalue2"));
+            string stride = split ? loop->get_attr("rvalue2") : string();
             bool already = false;
             for (auto& b : loop->before)
                 if (mentions(b->get_attr("code"), "pragma")) already = true;
             if (already) continue;
 
+            // The outermost loop alone is often not worth threading: on an
+            // NCHW tensor it runs over the batch, which is 2. Take the
+            // perfectly-nested levels below it as well and collapse them, so
+            // the parallelism is the product (batch * channels * ...) rather
+            // than the batch. Only a level whose sole child is the next loop
+            // may be collapsed -- anything between them, even an index
+            // definition, makes the nest imperfect and OpenMP reject it.
+            vector<string> indices({index}), bounds({bound});
+            KernelIR* level = loop.get();
+            while (!split && indices.size() < 3
+                    && level->children.size() == 1
+                    && level->children[0]->type == "loop"
+                    && level->children[0]->has_attr("lvalue")
+                    && level->children[0]->has_attr("rvalue")
+                    && is_identifier(level->children[0]->get_attr("rvalue"))
+                    && level->children[0]->before.size() == 0
+                    && level->children[0]->after.size() == 0) {
+                level = level->children[0].get();
+                indices.push_back(level->get_attr("lvalue"));
+                bounds.push_back(level->get_attr("rvalue"));
+            }
+
             LoopScan info;
             unordered_map<string,string> defines;
+            for (auto& s : loop->inner)
+                if (s->type == "define")
+                    defines[s->get_attr("lvalue")] = s->get_attr("rvalue");
             scan(loop.get(), info, defines);
             if (!info.usable || info.store_indices.size() == 0) continue;
 
             // Resolve each store index through the definitions in scope, then
-            // require the outermost variable to scale it.
+            // require every collapsed variable to scale it: each contributes
+            // its own stride to the affine sum, so distinct tuples then address
+            // distinct elements.
             bool disjoint = true;
             for (auto& idx : info.store_indices) {
                 string expr = idx;
@@ -165,22 +253,68 @@ void CpuParallelPass::run() {
                     if (it == defines.end()) break;
                     expr = it->second;
                 }
-                if (!scales_with(expr, index)) { disjoint = false; break; }
+                for (auto& v : indices)
+                    if (!(split ? scales_with_tile(expr, v)
+                                : scales_with(expr, v))) {
+                        disjoint = false; break;
+                    }
+                if (!disjoint) break;
+            }
+            // Drop the deepest levels until every one of them passes, rather
+            // than giving up on the loop: the outermost alone may well be fine.
+            while (!disjoint && indices.size() > 1) {
+                indices.pop_back();
+                bounds.pop_back();
+                disjoint = true;
+                for (auto& idx : info.store_indices) {
+                    string expr = idx;
+                    for (int depth=0; depth<4; depth++) {
+                        auto it = defines.find(expr);
+                        if (it == defines.end()) break;
+                        expr = it->second;
+                    }
+                    for (auto& v : indices)
+                        if (!(split ? scales_with_tile(expr, v)
+                                    : scales_with(expr, v))) {
+                            disjoint = false; break;
+                        }
+                    if (!disjoint) break;
+                }
             }
             if (!disjoint) continue;
 
-            // Total work, not just the outer trip count: a loop of 64 rows over
-            // 4096 columns is worth threading and a loop of 4096 scalars is not.
-            // Unknown inner bounds are dropped, which only makes this stricter.
-            string work = bound;
-            for (auto& b : info.inner_bounds)
-                if (is_identifier(b)) work += " * " + b;
-            // ... but the outer loop still has to hold enough iterations to give
-            // every core something to do.
+            // Total work, not just the trip count of the collapsed levels: a
+            // loop of 64 rows over 4096 columns is worth threading and a loop
+            // of 4096 scalars is not. Unknown inner bounds are dropped, which
+            // only makes this stricter.
+            string bound_product = bounds[0];
+            for (uint b=1; b<bounds.size(); b++)
+                bound_product += " * " + bounds[b];
+            string work = bound_product;
+            for (auto& b : info.inner_bounds) {
+                bool collapsed = false;
+                for (auto& used : bounds)
+                    if (used == b) collapsed = true;
+                // A bound declared inside the loop is not in scope where the
+                // guard sits, and a split loop's inner bound is the tile size,
+                // which would double-count the dimension the outer already has.
+                if (collapsed || !is_identifier(b) || defines.count(b)) continue;
+                work += " * " + b;
+            }
+            bound = bound_product;
+            depths.push_back((int)indices.size());
+            // ... but the collapsed levels still have to hold enough
+            // iterations together to give every core something to do.
             // The cast is (long long) because the index type in scope varies
             // between kernels and the product can overflow a 32-bit one.
-            guards.push_back("(" + bound + ") >= 64 && (long long)(" + work
-                             + ") >= 65536");
+            string parallelism = split
+                ? "(" + bound + ") / (" + stride + ")"
+                : "(" + bound + ")";
+            // Fewer tiles than that and the threads are not worth their setup;
+            // a tile is already thousands of elements, so this is not small.
+            string least = split ? "32" : "64";
+            guards.push_back(parallelism + " >= " + least
+                             + " && (long long)(" + work + ") >= 65536");
             targets.push_back(loop.get());
         }
     }
@@ -194,7 +328,9 @@ void CpuParallelPass::run() {
         if (pos == father->children.size()) continue;
 
         auto par = loop->clone(true);
-        par->push_back("#pragma omp parallel for", &par->before);
+        string pragma = "#pragma omp parallel for";
+        if (depths[i] > 1) pragma += " collapse(" + std::to_string(depths[i]) + ")";
+        par->push_back(pragma, &par->before);
         auto if_par = std::make_unique<KernelIR>("if (" + guards[i] + ") {}");
         if_par->push_back(move(par), &if_par->children);
 

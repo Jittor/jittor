@@ -102,9 +102,24 @@ def _preload_jittor_cores(verbose: bool) -> List[str]:
     except Exception:
         return loaded
     for name in ("jit_utils_core", "jittor_core"):
-        hits = glob.glob(os.path.join(os.fspath(search_root), "**", name + ".*.so"), recursive=True)
-        hits = _matching_abi(name, hits)
-        hits.sort(key=lambda p: len(p))
+        # If the interpreter already imported this core, that exact file is the
+        # only one that may be preloaded. The cache holds one build per
+        # configuration -- a CPU one and a CUDA one, both for this Python -- and
+        # picking by shortest path lands on the CPU build while the CUDA one is
+        # already loaded. Two copies of the runtime's static state then free the
+        # same exit-handler block twice and the process aborts with "double free
+        # or corruption" once every test has already passed. Re-loading the file
+        # that is in use is a no-op, which is the point.
+        imported = sys.modules.get(name)
+        origin = getattr(imported, "__file__", None) if imported is not None else None
+        if origin:
+            hits = [origin]
+        else:
+            hits = glob.glob(
+                os.path.join(os.fspath(search_root), "**", name + ".*.so"),
+                recursive=True)
+            hits = _matching_abi(name, hits)
+            hits.sort(key=lambda p: len(p))
         for so in hits[:1]:
             try:
                 ctypes.CDLL(so, mode=ctypes.RTLD_GLOBAL)
