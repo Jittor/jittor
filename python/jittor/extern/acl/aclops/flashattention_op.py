@@ -216,6 +216,34 @@ class FlashAttentionACL(jt.Function):
         return result
 
 
+class IncreFlashAttentionACL(jt.Function):
+
+    def __init__(self, headnum, key_value_headnum, scale,
+                 layout="BNSD", innerprecise=0):
+        self.headnum = headnum
+        self.key_value_headnum = key_value_headnum
+        self.scale = scale
+        self.layout = layout
+        self.innerprecise = innerprecise
+
+    def execute(self, q, k, v):
+        attr_code = f"""
+        op.jt_name = "increflashattention";
+        IncreFlashAttentionAttr *attr = new IncreFlashAttentionAttr();
+        attr->scale = {self.scale};
+        attr->headNum = {self.headnum};
+        attr->keyValueHeadNum = {self.key_value_headnum};
+        attr->inputLayout = "{self.layout}";
+        attr->innerPrecise = {self.innerprecise};
+        op.op_attr.reset(attr);
+        """
+        result = flashattention_cmd(
+            "IncreFlashAttention", [q, k, v],
+            output_dtypes=[q.dtype], output_shapes=[q.shape],
+            attr_code=attr_code)
+        return result[0]
+
+
 def _causal_mask(query_length, source_length):
     key = (int(query_length), int(source_length))
     cached = _causal_mask_cache.get(key)
@@ -254,7 +282,7 @@ def scaled_dot_product_attention_acl(
         return None
     if str(query.dtype) != str(key.dtype) or str(query.dtype) != str(value.dtype):
         return None
-    if str(query.dtype) != "float32":
+    if str(query.dtype) not in ("float32", "bfloat16"):
         return None
 
     query_heads = int(q_shape[-3])
@@ -305,7 +333,19 @@ def scaled_dot_product_attention_acl(
             causal_mask = _causal_mask(query_length, source_length)
     scale_factor = (1.0 / math.sqrt(head_dim) if scale is None
                     else float(scale))
+    if (str(query.dtype) == "bfloat16" and query_length == 1
+            and attn_mask is None and not is_causal):
+        scaled_dot_product_attention_acl.backend_name = \
+            "acl_incre_flash_attention_v4"
+        return IncreFlashAttentionACL(
+            query_heads, key_heads, scale_factor)(query, key, value)
+
+    scaled_dot_product_attention_acl.backend_name = \
+        "acl_flash_attention_score_v2"
     return FlashAttentionACL(
         query_heads, "BNSD", scale=scale_factor,
         psetype=0 if real_shift is not None else 1,
     )(query, key, value, real_shift, None, None, causal_mask)
+
+
+scaled_dot_product_attention_acl.backend_name = "acl_flash_attention_score_v2"

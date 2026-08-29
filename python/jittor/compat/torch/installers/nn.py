@@ -2230,7 +2230,9 @@ def install(ctx):
                 enable_gqa=enable_gqa,
             )
             if acl_output is not None:
-                _sdpa_flash_hit("acl_flash_attention_score_v2")
+                _sdpa_flash_hit(getattr(
+                    acl_attention, "backend_name",
+                    "acl_flash_attention_score_v2"))
                 return acl_output
         if attn_mask is not None:
             _sdpa_flash_miss("mask")

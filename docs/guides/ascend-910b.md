@@ -226,9 +226,10 @@ allowing them to abort or stall the process:
 - float32 `prod` can abort in the ACL reduction path;
 - native FlashAttention tests require an optional `jt.nn.FlashAttention`
   implementation and are skipped when it is absent;
-- Qwen3 bfloat16 is verified for eager, no-grad greedy inference; fused ACL SDPA,
-  training, sampling, quantization, and other model families remain separate
-  capability gates;
+- Qwen3 bfloat16 is verified for eager, no-grad greedy inference. Fused ACL SDPA
+  is additionally verified for Qwen3-0.6B with FlashAttentionScoreV2 prefill and
+  IncreFlashAttentionV4 decode; Qwen3-8B BF16 SDPA, training, sampling,
+  quantization, and other model families remain separate capability gates;
 - float16/float32 `arg_reduce` forward runs through ACL, but its generic backward
   graph still reaches an unsupported index operation and falls back to CPU;
 - ACL does not provide general float64 operator coverage, so float64 fallback

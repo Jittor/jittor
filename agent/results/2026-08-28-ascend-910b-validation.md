@@ -117,10 +117,12 @@ empty scalar, and tensor-source masks; all 27 internal indexing checks passed.
 
 ### Transformers SDPA and public `all`
 
-Qwen3's Torch SDPA path now dispatches the verified FP32 no-grad subset to CANN
-`aclnnFlashAttentionScoreV2` before compatibility GQA expansion. Focused real-NPU
-references cover square causal prefill, rectangular decode, GQA, and arbitrary
-float additive masks; all execute without CPU compilation or fallback. The
+Qwen3's Torch SDPA path now dispatches the verified FP32/BF16 no-grad subset to
+CANN before compatibility GQA expansion. FlashAttentionScoreV2 handles prefill
+and the general accepted subset; BF16 single-token unmasked decode uses
+IncreFlashAttentionV4. Focused real-NPU references cover square causal prefill,
+rectangular decode, GQA, and FP32 arbitrary float additive masks; all execute
+without CPU compilation or fallback. The
 runner also releases its per-call CANN integer-array descriptors, which matters
 for multi-layer and multi-token generation.
 
@@ -225,8 +227,9 @@ The same follow-up then connected Torch SDPA to CANN FlashAttentionScoreV2 and
 removed the public `padding_mask.all()` fallback. Qwen3-0.6B complete logits
 against native `torch_npu` SDPA have maximum absolute error `3.8035214e-05`,
 identical argmax, and identical top-10/top-20 token sets. Qwen3-8B retained token
-19 while exercising the fused attention path in all layers. FP16/BF16 fused
-SDPA remains fail-closed; the accepted whole-model claim remains FP32.
+19 while exercising the fused attention path in all layers. FP16 fused SDPA
+remains fail-closed. A later accepted whole-model BF16 SDPA claim is limited to
+Qwen3-0.6B.
 
 Verify-then-fix exposed two Torch-compatibility defects before the accepted run.
 Explicit construction of the zero-length CUDA tensor used by the Transformers KV
@@ -243,6 +246,13 @@ for `aclstream`, and fused scalar H2D copies retain their pinned host source.
 Qwen3-0.6B repeated six identical 8-token generations; Qwen3-8B repeated five
 identical generations, each `[19, 13, 151645]` (`4.`). Parameters remained
 bfloat16 and accelerator-resident, with zero CPU compilation and fallback.
+
+The final Qwen3-0.6B BF16 SDPA follow-up uses FlashAttentionScoreV2 for prefill
+and IncreFlashAttentionV4 for single-token decode. Fifteen Jittor generations
+all produced `[17, 488, 220, 17, 284, 220, 19, 13]` (`2 + 2 = 4.`), with zero
+fallback and no fused-attention misses. A 3-warmup, 10-sample comparison measured
+0.53622 s for Jittor and 0.52247 s for native `torch_npu`; complete logits kept
+the same argmax and exact top-5/top-10 order.
 
 ## Explicit limitations
 

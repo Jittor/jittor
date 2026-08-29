@@ -101,6 +101,7 @@
 #include "aclnnop/aclnn_split_with_size.h"
 #include "aclnnop/aclnn_flash_attention_score.h"
 #include "aclnnop/aclnn_flash_attention_score_grad.h"
+#include "aclnnop/aclnn_incre_flash_attention_v4.h"
 #include "aclnnop/aclnn_softmax.h"
 #include "aclnnop/aclnn_softmax_backward.h"
 #include "aclnnop/aclnn_batch_norm.h"

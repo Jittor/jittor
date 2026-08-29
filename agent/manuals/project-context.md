@@ -84,7 +84,7 @@ separate gates. On a real 910B3, the maintained Ascend gate passes `362 passed, 
 Transformers 4.56.2 Qwen3-8B float32 loads all 8,190,735,360 parameters; SDPA,
 greedy `arg_reduce`, and mask `all` run on ACL without CPU fallback. A native-shape `empty`
 fast path brings 0.6B decode to 15.90 token/s versus native `torch_npu` 16.19 token/s.
-Eager bfloat16 passes repeated zero-fallback generation; its decode gap is 22% to 27%, versus 1.8% for float32.
+Qwen3-0.6B BF16 SDPA passes zero-fallback generation at 14.92 token/s versus native 15.31 token/s.
 See the [Ascend guide](../../docs/guides/ascend-910b.md), [validation report](../results/2026-08-28-ascend-910b-validation.md), [Qwen3 performance report](../results/transformers/2026-08-28-qwen3-ascend-performance.md), the complete [CPU](../results/2026-08-22-complete-cpu-test-suite.md) and [CUDA](../results/2026-08-22-cuda-test-suite.md) reports, plus the
 [parallel follow-up](../results/2026-08-22-cuda-parallel-range-network-oracle.md).
 The current fail-closed optional CUDA base gate passes 16 TorchMetrics,

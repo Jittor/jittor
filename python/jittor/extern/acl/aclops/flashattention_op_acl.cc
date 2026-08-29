@@ -97,4 +97,36 @@ namespace jittor
         return;
     }
 
+    IncreFlashAttentionOpRunner::IncreFlashAttentionOpRunner() : BaseOpRunner("IncreFlashAttention")
+    {
+    }
+
+    void IncreFlashAttentionOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    {
+        auto attr = dynamic_cast<IncreFlashAttentionAttr *>(op_attr.get());
+        // The executor retains these lists through the execute call.
+        auto key = aclCreateTensorList(&inputTensors[1], 1);
+        auto value = aclCreateTensorList(&inputTensors[2], 1);
+        char *layout = const_cast<char *>(attr->inputLayout.data());
+        ret = aclnnIncreFlashAttentionV4GetWorkspaceSize(
+            inputTensors[0], key, value, nullptr, nullptr, nullptr,
+            nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+            nullptr, nullptr, attr->headNum, attr->scale, layout,
+            attr->keyValueHeadNum, 0, attr->innerPrecise, outputTensors[0],
+            &workspaceSize, &executor);
+        checkRet(ret);
+
+        if (workspaceSize > 0)
+        {
+            mallocWorkSpace(workspaceSize);
+        }
+
+        ret = aclnnIncreFlashAttentionV4(
+            workspaceAddr, workspaceSize, executor, aclstream);
+        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnIncreFlashAttentionV4 failed. ERROR: %d\n", name.c_str(), ret); return);
+
+        syncRun();
+        return;
+    }
+
 }

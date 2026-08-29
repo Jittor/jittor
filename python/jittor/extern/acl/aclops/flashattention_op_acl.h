@@ -24,4 +24,13 @@ namespace jittor
         FlashAttentionBackwardOpRunner();
     };
 
+    class IncreFlashAttentionOpRunner : public BaseOpRunner
+    {
+    protected:
+        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+
+    public:
+        IncreFlashAttentionOpRunner();
+    };
+
 }

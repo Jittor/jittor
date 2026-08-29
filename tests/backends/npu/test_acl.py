@@ -389,6 +389,25 @@ class TestACL(unittest.TestCase):
             prefill, decode, additive = jt.fetch_sync(
                 [prefill, decode, additive])
 
+            q_bf16 = q.bfloat16()
+            k_bf16 = k.bfloat16()
+            v_bf16 = v.bfloat16()
+            prefill_bf16 = jt.nn._acl_scaled_dot_product_attention(
+                q_bf16, k_bf16, v_bf16,
+                is_causal=True, enable_gqa=True)
+            decode_bf16 = jt.nn._acl_scaled_dot_product_attention(
+                q_bf16[:, :, :1, :], k_bf16, v_bf16,
+                enable_gqa=True)
+            self.assertIsNotNone(prefill_bf16)
+            self.assertIsNotNone(decode_bf16)
+            self.assertEqual(str(prefill_bf16.dtype), "bfloat16")
+            self.assertEqual(str(decode_bf16.dtype), "bfloat16")
+            self.assertEqual(
+                jt.nn._acl_scaled_dot_product_attention.backend_name,
+                "acl_incre_flash_attention_v4")
+            prefill_bf16, decode_bf16 = jt.fetch_sync([
+                prefill_bf16.float32(), decode_bf16.float32()])
+
         np.testing.assert_allclose(
             prefill, expected(q_np, k_np, v_np, True), atol=3e-5, rtol=3e-5)
         np.testing.assert_allclose(
@@ -397,14 +416,20 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(
             additive, expected(q_np, k_np, v_np, False, additive_np),
             atol=3e-5, rtol=3e-5)
+        np.testing.assert_allclose(
+            prefill_bf16, expected(q_np, k_np, v_np, True),
+            atol=2e-3, rtol=2e-2)
+        np.testing.assert_allclose(
+            decode_bf16,
+            expected(q_np[:, :, :1, :], k_np, v_np, False),
+            atol=2e-3, rtol=2e-2)
 
         self.assertIsNone(jt.nn._acl_scaled_dot_product_attention(
             q, k, v, is_causal=True, enable_gqa=True))
         with jt.no_grad():
-            for dtype in ("float16", "bfloat16"):
-                self.assertIsNone(jt.nn._acl_scaled_dot_product_attention(
-                    getattr(q, dtype)(), getattr(k, dtype)(),
-                    getattr(v, dtype)(), is_causal=True, enable_gqa=True))
+            self.assertIsNone(jt.nn._acl_scaled_dot_product_attention(
+                q.float16(), k.float16(), v.float16(),
+                is_causal=True, enable_gqa=True))
         messages = [entry["msg"].lower() for entry in logs]
         self.assertFalse(any("compile cpu" in message for message in messages))
         self.assertFalse(any("fallback cpu" in message for message in messages))

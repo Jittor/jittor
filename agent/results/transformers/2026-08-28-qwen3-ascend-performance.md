@@ -1,8 +1,8 @@
 # Qwen3-0.6B Ascend 推理性能诊断与优化
 
-- Status: Accepted for float32 eager/SDPA and bfloat16 eager greedy inference on one Ascend 910B3
+- Status: Accepted for float32 eager/SDPA and Qwen3-0.6B bfloat16 SDPA greedy inference on one Ascend 910B3
 - Last reviewed: 2026-08-29
-- Source baseline: `f8e39607` plus the changes in this report's commit
+- Source baseline: `500615cb` plus the changes in this report's commit
 - Owner: Torch compatibility and ACL backend maintainers
 - Review when: Transformers masking, vmap compatibility, ACL RMSNorm/RoPE/SDPA,
   Torch constructor wrapping, CANN, checkpoint, dtype boundary, or timing
@@ -77,14 +77,25 @@ bfloat16 权重静默保留为 float32；修复后显式 dtype 仍优先，省�
 drain device、让普通 ArrayOp 的 copy event 被 `aclstream` 等待，并用 1 MiB 有界
 pinned-host slab 保持融合标量源；slab 满时先同步再回收，不引入无界缓存。
 
-最终 Qwen3-0.6B 共 6 次 greedy generation 都输出
+最初 Qwen3-0.6B 共 6 次 eager greedy generation 都输出
 `[17, 488, 220, 17, 284, 220, 19, 13]`（`2 + 2 = 4.`）；Qwen3-8B 的冷启动、
 warmup、两次计时和日志验证共 5 次都输出 `[19, 13, 151645]`（`4.`）。两者参数
 dtype 均为 bfloat16，所有验证轮 `fallback_count=0`。0.6B 的 8-token 中位数为
 0.8197 s（9.76 token/s），对应 `torch_npu` 0.6707 s（11.93 token/s）；8B 实际
 生成 3 token 的中位数为 0.4026 s（7.45 token/s），对应原生 0.3165 s（按实际
-token 数重算为 9.48 token/s）。bfloat16 正确性已收口，约 22% 至 27% 的性能差距
-仍是后续优化项。
+token 数重算为 9.48 token/s）。这先收口了 eager bfloat16 正确性，性能差距仍作为
+后续优化项。
+
+随后将已经验证的 `aclnnFlashAttentionScoreV2` 扩展到 bfloat16 prefill，并在
+单 token、无 mask decode 使用 CANN 9 `aclnnIncreFlashAttentionV4`。长度 23 至 29
+的 Qwen3 decode 直连 A/B 中，V4 从约 65 至 69 us 降至 50 至 53 us，输出与 V2
+逐元素一致。Qwen3-0.6B 8-token SDPA 最终 10-sample 中位数为 0.5362 s，对应同机
+`torch_npu` 0.5225 s，差距缩小到 2.6%；15 次 Jittor generation 序列全部为
+`2 + 2 = 4.`，命中 `acl_incre_flash_attention_v4`、miss 为空且零 fallback。
+
+另一个 `Add + RMSNorm` 候选在单算子 A/B 中从 70.27 us 降至 32.76 us，但只融合
+decoder 半条残差路径后整模为 0.5473 s，未优于 0.5450 s 基线，logits RMSE 还从
+0.1108 增至 0.1986。因此该候选被拒绝，不进入本次源码或性能结论。
 
 ## 环境与口径
 
@@ -95,7 +106,7 @@ token 数重算为 9.48 token/s）。bfloat16 正确性已收口，约 22% 至 2
 - Transformers: 4.56.2 on both sides
 - Model: local Qwen3-0.6B, 596,049,920 parameters
 - Input: batch 1, 22-token chat prompt, eager or SDPA attention, KV cache;
-  float32 and eager bfloat16 are reported separately
+  float32, historical eager bfloat16, and current bfloat16 SDPA are reported separately
 - Timing: current SDPA single-token rerun uses 2 warmups and 7 synchronized samples;
   historical 8-token rows use 2 warmups and 5 synchronized samples; the latest
   paired rerun uses 3 warmups and 10 synchronized samples; median and p90 reported
@@ -151,7 +162,8 @@ synchronization 构成。剩余 decode 差距因此主要落在框架 generate �
 
 | Bfloat16 model | Jittor median | Native median | Actual-token throughput |
 | --- | ---: | ---: | ---: |
-| Qwen3-0.6B, 8 tokens | 0.8197 s | 0.6707 s | 9.76 / 11.93 token/s |
+| Qwen3-0.6B eager, 8 tokens | 0.8197 s | 0.6707 s | 9.76 / 11.93 token/s |
+| Qwen3-0.6B SDPA V4 decode, 8 tokens | 0.5362 s | 0.5225 s | 14.92 / 15.31 token/s |
 | Qwen3-8B, EOS after 3 tokens | 0.4026 s | 0.3165 s | 7.45 / 9.48 token/s |
 
 8-token 默认 Transformers 路径已不再卡死；启用 ACL SDPA 后的总延迟为同口径
@@ -162,6 +174,10 @@ synchronization 构成。剩余 decode 差距因此主要落在框架 generate �
 0.05867 s；8-token generation 分别为 0.50309 s 和 0.49400 s，Jittor 当前仍慢
 约 1.8%，所以“不慢于 PyTorch”尚未达成。曾在旧组合路径改善约 2% 的
 `pipeline_ops=1600` 与原生 truth reduction 叠加后反而变慢 3.9%，因此保持默认关闭。
+
+Bfloat16 SDPA 的当前 10-sample 同时段复验中，Jittor/native prefill 分别为
+0.06547 s / 0.06497 s，8-token generation 为 0.53622 s / 0.52247 s。Jittor
+仍慢约 2.6%，所以 bfloat16 的“不慢于 PyTorch”也尚未达成。
 
 ## 根因证据
 
@@ -251,9 +267,9 @@ ACL RoPE 候选与融合前 Jittor 的完整末 token logits 逐元素完全一�
 复验继续输出 token 19、文本 `4`，8,190,735,360 个参数驻留 NPU，命中 fused
 attention 216 次，且 `cpu_compile_count=0`、`fallback_count=0`。
 
-Bfloat16 0.6B 的完整末 token logits 相对 `torch_npu` 最大绝对误差为 `0.59375`、
-平均绝对误差为 `0.1006`、RMSE 为 `0.1264`、余弦相似度为 `0.999165`；argmax、
-top-5 和 top-10 均一致。8B 的最终验收不只比较首 token：五轮完整 greedy 序列都为
+Bfloat16 0.6B SDPA 的完整末 token logits 相对 `torch_npu` 最大绝对误差为
+`0.484375`、平均绝对误差为 `0.09120`、RMSE 为 `0.11083`、余弦相似度为
+`0.999326`；argmax 以及 top-5/top-10 顺序均一致。8B 的最终验收不只比较首 token：五轮完整 greedy 序列都为
 `[19, 13, 151645]`，避免把异步竞态误判成稳定支持。
 
 ## 实现边界
@@ -268,10 +284,11 @@ top-5 和 top-10 均一致。8B 的最终验收不只比较首 token：五轮完
 - RoPE 融合只接受 ACL、CUDA flag、no-grad、4-D 广播兼容张量、相同受支持 dtype，
   以及已验证的 64 对齐 head dim；其他情况走可微组合实现。FP32、FP16、BF16 算子
   数值和非融合 FP32 梯度已在真实 NPU 验证。
-- ACL SDPA 快路径只接受 ACL、CUDA flag、no-grad、dropout 0、4-D BNSD、FP32、
-  8 对齐且不超过 256 的 head dim，以及已验证的 GQA、mask 和 causal 组合。FP16、
-  BF16、训练、bool public mask 和矩形 causal 请求 fail closed 到原数学路径；不把
-  CANN abort 当作半精度支持证据。
+- ACL SDPA 快路径只接受 ACL、CUDA flag、no-grad、dropout 0、4-D BNSD、FP32/BF16、
+  8 对齐且不超过 256 的 head dim，以及已验证的 GQA、mask 和 causal 组合。BF16
+  单 token、无 mask、非 causal decode 使用 IncreFlashAttentionV4；其他已接受组合
+  使用 FlashAttentionScoreV2。FP16、训练、bool public mask 和矩形 causal 请求
+  fail closed 到原数学路径。
 - float additive mask 只接受 FP32 rank-2/rank-4 可广播形状，并在调用前扩成 CANN
   要求的完整 query-head 形状。该路径保留语义，但长序列 mask 会承担物化成本。
 - 公开 ACL `all`/`any` 在 CANN 9 上使用原生 truth-reduction runner；numeric 输入
@@ -284,8 +301,8 @@ top-5 和 top-10 均一致。8B 的最终验收不只比较首 token：五轮完
   `jt.nn.rotary_emb`，不把项目/版本特定 monkeypatch 放进 Jittor 核心。
 - float16/float32 `arg_reduce` forward 通过 ACL MaxDim/MinDim 执行；generic backward
   仍因 index operation 不受支持而 fallback，不在本次 NPU 训练支持声明内。
-- Qwen3-0.6B/8B bfloat16 已验证 eager、no-grad、greedy generation；fused BF16
-  SDPA、训练、采样和量化不由该结论覆盖。
+- Qwen3-0.6B/8B bfloat16 已验证 eager、no-grad、greedy generation；BF16 fused
+  SDPA 整模结论仅覆盖 Qwen3-0.6B，8B SDPA、训练、采样和量化仍不由该结论覆盖。
 
 ## 验证
 
@@ -296,8 +313,8 @@ top-5 和 top-10 均一致。8B 的最终验收不只比较首 token：五轮完
 - Real-NPU float32/float16/bfloat16 RoPE inference and composite gradient:
   `2 passed`
 - Full current real-NPU ACL backend file: `26 passed`
-- Real-NPU FP32 fused SDPA causal/decode/GQA/additive-mask reference and
-  FP16/BF16 fail-closed boundary: `1 passed`
+- Real-NPU FP32/BF16 fused SDPA prefill/decode/GQA reference, FP32 additive
+  mask, and FP16 fail-closed boundary: `1 passed, 27 deselected`
 - Full Qwen3-0.6B SDPA logits parity: passed
 - Fail-closed Qwen3-0.6B 8-token and Qwen3-8B 1-token generation:
   `cpu_compile_count=0`, `fallback_count=0`, fused SDPA hit
@@ -312,6 +329,9 @@ top-5 和 top-10 均一致。8B 的最终验收不只比较首 token：五轮完
   `3 passed`; 1,000 immediate scalar reads: zero failures
 - Qwen3-0.6B bfloat16 six-run deterministic generation and Qwen3-8B bfloat16
   five-run cold/warm deterministic generation: passed with zero fallback
+- Qwen3-0.6B bfloat16 SDPA, 8-token, 3-warmup, 10-sample comparison:
+  `0.53622 s` / `0.52247 s`; 15 identical Jittor sequences, zero fallback,
+  V4 decode hit with no misses, and logits parity passed
 - Focused Torch constructor CPU regression: `23 passed, 2 skipped`
 - Real-NPU native-shape `empty` residency regression: `3 passed`
 - Full maintained NPU gate: `362 passed, 11 skipped`

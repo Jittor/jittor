@@ -704,6 +704,15 @@ namespace jittor
         }
     };
 
+    struct IncreFlashAttentionAttr : AclOpAttr
+    {
+        double scale;
+        int64_t headNum;
+        int64_t keyValueHeadNum;
+        string inputLayout;
+        int64_t innerPrecise;
+    };
+
     struct NanToNumAttr : AclOpAttr
     {
         float nan;
