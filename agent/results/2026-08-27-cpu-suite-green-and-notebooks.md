@@ -743,11 +743,58 @@ if (!(...)) {
 输出下标里没有最外层变量。`tests/compiler/test_cpu_parallel_pass.py` 把这些固定下来，
 包括「两个分支都发出来」「最外层归约不并行」「`check_cache` 模式不改写」。
 
-native 会话 `729 passed, 716 skipped`。Torch 会话这轮有 33 个失败，但**不是这个
-pass 造成的**：把这 33 个用例单独跑一遍，带 pass 与不带 pass 的失败集合逐条一致
-（各 26 failed / 7 passed，另外 7 个是全量跑时的顺序污染，单独跑就通过）。撤掉
-pass 的那一轮确认核心确实重编过——重新生成的 6 个 kernel 里 0 个带 pragma。这 26 个
-失败见下一节。
+native 会话 `729 passed, 716 skipped`，CPU Torch 会话 `1507 passed, 279 skipped`，
+两者都与改动前的基线逐数字一致。
+
+中间走了个弯路值得记下来：验证时我跑的是 CUDA + 真 PyTorch 对拍那一套，而不是一直
+用作 CPU 门禁的纯 CPU Torch 会话，结果看到 33 个失败。那套本来就带着 26 个既有失败
+（最早可追到 8 月 20 日的两轮全量记录，同样是 26 个），与本次改动无关：把这 33 个
+用例单独拎出来，带 pass 与不带 pass 各跑一遍，失败集合逐条一致（都是 26 failed /
+7 passed，那 7 个是全量跑时的顺序污染，单独跑就通过）。撤掉 pass 的那一轮确认核心
+确实重编过——重新生成的 6 个 kernel 里 0 个带 pragma，A/B 才成立。这 26 个失败见
+下一节。
+
+### CUDA + 真 PyTorch 对拍套件的 26 个既有失败
+
+这套（`nvcc_path` 有值、`REAL_TORCH_PYTHON` 指向真 PyTorch 环境）与 CPU 门禁是两套
+不同的会话，8 月 20 日的两轮全量记录里就是 26 个失败，一直没人往下查。逐个查完之后
+修掉 22 个，剩下 4 个定位到了触发条件但没修。
+
+**20 个：参照解释器与 Jittor 环境的 CPython 版本不同（已修）。** 两侧原本被强制从
+同一个 site 目录导入下游库，好让对拍失败一定是 Jittor 的差异而不是版本差异。但为
+某个 CPython 版本构建的 site 无法被另一个版本导入——扩展模块带 ABI 标记。本机
+Jittor 环境是 3.11、真 PyTorch 环境是 3.12，于是参照侧在 transformers 首个编译依赖
+`regex` 上就炸，报错说的是「scipy 装坏了」，与真正的问题毫无关系。改为版本相同才
+共享 site，不同则各自导入自己的副本，断言从「版本与来源都相同」放宽为「版本相同」
+——来源本就应当不同。本机两个环境的 transformers/diffusers/peft/swift/numpy 版本
+本来就一致，所以这 20 个用例现在真正跑起来了：`test_ecosystem_parity` **24 passed**。
+这不是把失败藏成跳过，是把一直没跑到的对拍覆盖恢复了。
+
+**1 个：按环境 locale 解码 Jittor 输出（已修）。** `subprocess.run(text=True)` 用的
+是 `locale.getpreferredencoding()`，而 Jittor 的 op key 日志用 U+00AB 分隔，在 ASCII
+环境下直接抛 `UnicodeDecodeError`。改为显式 UTF-8。这个只在后台无 LANG 的会话里出现，
+单独跑复现不了，但失败堆栈里的 `encodings.ascii.IncrementalDecoder` 已经把成因写死了。
+
+**1 个：我自己上一轮加的测试前提不成立（已修）。**
+`test_training_trajectory_matches` 假设 `_model()` 里的 `set_global_seed` 能让两次
+构造得到同样的权重。直接量：CPU 上第一层权重就差 `4.8e-01`。它其实在比较两个不同
+模型的损失轨迹，CUDA 上偶然差了 7% 就报成流水线的错。改为构造一次、快照参数、每轮
+恢复，CUDA 会话 9 passed。
+
+**3 个：Triton 桥接在 torch shim 下失效（未修，已隔离）。** 同一份代码只切
+`JITTOR_TORCH_SHIM`：关闭时结果正确，打开时输出保持全零。排查排除了以下可能——
+传给发射的是 Var 真实的设备指针（互相间距正好等于张量字节数）、`cuLaunchKernel`
+返回成功且 `cudaDeviceSynchronize` 无错、发射前后 Var 地址不变、发射后不碰 Var 直接
+`cudaMemcpy` 读回来仍是全零（所以不是惰性重算覆盖）、两种模式下当前 CUDA context
+都等于设备 0 的 primary context。不是 compat 文件特有：原生的
+`test_triton_backend.py` 在 shim 下同样有 3/9 失败。这些用例平时不暴露，是因为
+`tests/conftest.py` 只对窄选择自动打开 shim。
+
+**1 个：运行时启用 torch shim 后退出时双重释放（未修，已隔离）。**
+`jt.flags.torch_shim = 1` 会触发完整的运行时 shim 安装（`enable_runtime`，其中包含
+核心库预加载）。必须同时满足两个条件才崩：设了这个 flag，且是 CUDA 构建；单独任一
+都不崩。探针的 `RESULT` 能正常打印，崩在解释器退出，因此这是 teardown 问题而非功能
+问题。修它要重做运行时 shim 启用路径，超出本次范围。
 
 ### 空隙的分布，以及为什么调度改不动它
 
