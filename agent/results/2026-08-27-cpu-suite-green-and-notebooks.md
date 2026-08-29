@@ -1,6 +1,6 @@
 # CPU 双会话收零失败、FSDP2 单卡集合通信与两个新原生 notebook
 
-- Status: native CPU / CPU Torch / CUDA+对拍 三套会话均零失败；TRELLIS 性能仍未接受
+- Status: 三套会话均零失败；CPU 五网络中四个快过 PyTorch、UNet 约 1.04x；TRELLIS 仍未接受
 - Last reviewed: 2026-08-27
 - Baseline: `99537948`
 - Owner: Torch compatibility and downstream integration maintainers
@@ -1048,6 +1048,30 @@ oneDNN 3.x 正是加入 AMD Zen 专用 kernel 的版本、本机又是 EPYC—�
 卷积只快了 `2%`，端到端 `1.5%`，都在噪声内。**假设被否定**：UNet 的差距不在
 oneDNN 版本，而是压倒性地在非卷积部分（`261ms` 对 PyTorch `159ms`）。加上 2.7
 没有预编译二进制、Jittor 的安装流程无法从源码构建，这个改动没有落地价值，已还原。
+
+### CPU 收口后的状态，以及 UNet 剩下的三条路各自被什么挡住
+
+三轮尝试之后的最终测量（两侧均绑核 `OMP_PROC_BIND=close OMP_PLACES=cores`）：
+
+| CPU 一步 | Jittor | PyTorch | 比值 |
+| --- | ---: | ---: | ---: |
+| gpt2 | `0.8308` | `1.2513` | **`0.66x`** |
+| convnet | `0.4844` | `0.6476` | **`0.75x`** |
+| vit | `0.4833` | `0.5452` | **`0.89x`** |
+| llama | `0.9524` | `0.9931` | **`0.96x`** |
+| unet | `0.5128` | `0.4928` | `1.04x` |
+
+UNet 的 kernel 自时间由 `620ms` 降到 `488ms`（PyTorch `444ms`）。拆开来看，非卷积
+部分已经基本追平（`177ms` 对 `159ms`），剩下的主要是卷积本身（`311ms` 对 `285ms`），
+而 oneDNN 升级已实测排除。UNet 里还剩的三个非卷积条目各自被硬约束挡住：
+
+- `reindex_reduce` `21.2ms`：目标下标从索引数组里读出（`op0_extras*p`），完全
+  数据相关，静态无法证明不相交，被正确拒绝。上原子操作会改变浮点求和顺序、
+  使结果不确定，不能默认开启。
+- `setitem` `24.5ms`（两个变体）：`OP_void` 的语义是「后写者胜」，而 UNet 用到的
+  这两个 key 里都带 `VS>=0`（高级/变量索引），并行会把确定性的「最后一个写入」
+  变成任意一个写入，是语义改变而非仅性能问题。
+- 其余摊在许多 `10ms` 以下的 kernel 上。
 
 ### 否定结果：把「退到内层」推广到所有循环是灾难性的
 
