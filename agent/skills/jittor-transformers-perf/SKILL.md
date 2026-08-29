@@ -59,7 +59,10 @@ generation 成功推断 KV-cache 后续步可用。Jittor 计时结束后还会�
 Jittor 侧可用 `--profile-output /path/to/report.json` 在所有计时结束后额外执行一次
 generation，并保存聚合 profiler row；该次运行不进入稳态样本。profile 不能在
 原生 PyTorch backend 使用。`--pipeline-ops` 必须通过成对 A/B 决定，旧图上的最佳
-阈值不能直接作为新算子组合的默认值。
+阈值不能直接作为新算子组合的默认值。两侧都可用
+`--python-profile-output /path/to/profile.prof` 在计时后额外执行一次 generation，
+保存可由 `python -m pstats` 读取的 cProfile 数据；profiler 会放大墙钟时间，只用它
+比较调用结构和热点，不把该次执行写入性能样本。
 
 `benchmark_training_hotspots.py` 的 SDPA 模式支持可配置 batch/head/sequence/head-dim、
 causal 与同步口径。Jittor `math` 显式绕过 native loader，`flash` 要求且校验 official

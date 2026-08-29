@@ -5,7 +5,8 @@
 - Source baseline: `f8e39607` plus the changes in this report's commit
 - Owner: Torch compatibility and ACL backend maintainers
 - Review when: Transformers masking, vmap compatibility, ACL RMSNorm/RoPE/SDPA,
-  CANN, checkpoint, dtype boundary, or timing protocol changes
+  Torch constructor wrapping, CANN, checkpoint, dtype boundary, or timing
+  protocol changes
 
 ## 结论
 
@@ -52,6 +53,14 @@ fallback 前 drain。CANN 9 已提供 `aclnnAll` 和 `aclnnAny`，因此公开 t
 reduction 也由多算子组合改为单个原生归约，numeric 输入只保留必要的 nonzero
 比较。10-sample 8-token generation 最终为 0.5459 s，较当前源码修改前的
 0.5690 s 改善 4.1%，输出和完整 logits 不变且仍为零 fallback。
+
+同版本 Python profile 随后确认 Torch 兼容构造器还拦截了 ACL adapter 内部的
+`jt.empty`：单次 8-token generation 有 7,564 次 native `empty` 调用进入完整的
+device、shape 和 dtype 兼容流程。仅对无关键字参数且 shape 已是 native int、
+tuple、list、NanoVector 或一组 Python int 的 `empty` 调用走原始构造器，Torch
+Size、NumPy/Var 维度和所有显式 Torch 关键字仍保留完整适配。调用数从 835,904 降至
+592,450；10-sample prefill 从 0.06325 s 降至 0.05796 s，8-token generation 从
+0.54590 s 降至 0.50309 s，分别改善 8.4% 和 7.8%。
 
 ## 环境与口径
 
@@ -111,6 +120,7 @@ synchronization 构成。剩余 decode 差距因此主要落在框架 generate �
 | Native PyTorch NPU, SDPA rerun | 0.4708 s / 0.4728 s | 16.99 token/s | `2 + 2 = 4.` |
 | Current Jittor before async/truth-reduce follow-up | 0.5690 s / not retained | 14.06 token/s | `2 + 2 = 4.` |
 | Current Jittor with async ACL and native truth reduction | 0.5459 s / 0.5482 s | 14.65 token/s | `2 + 2 = 4.` |
+| Current Jittor with native `empty` fast path | 0.5031 s / 0.5037 s | 15.90 token/s | `2 + 2 = 4.` |
 | Current native PyTorch NPU | 0.4940 s / 0.4966 s | 16.19 token/s | `2 + 2 = 4.` |
 | Rejected Jittor `pipeline_ops=1600` | 0.5718 s / 0.5737 s | 13.99 token/s | `2 + 2 = 4.` |
 
@@ -118,9 +128,9 @@ synchronization 构成。剩余 decode 差距因此主要落在框架 generate �
 原生 PyTorch 的 1.23 倍。这里报告整次 `generate` 延迟，不用总时间简单除以 8
 伪装逐 token 首包延迟。
 
-最新 10-sample 同时段复验中，Jittor prefill 为 0.06325 s，原生 PyTorch 为
-0.05867 s；8-token generation 分别为 0.54590 s 和 0.49400 s，Jittor 当前仍慢
-10.5%，所以“不慢于 PyTorch”尚未达成。曾在旧组合路径改善约 2% 的
+最新 10-sample 同时段复验中，Jittor prefill 为 0.05796 s，原生 PyTorch 为
+0.05867 s；8-token generation 分别为 0.50309 s 和 0.49400 s，Jittor 当前仍慢
+约 1.8%，所以“不慢于 PyTorch”尚未达成。曾在旧组合路径改善约 2% 的
 `pipeline_ops=1600` 与原生 truth reduction 叠加后反而变慢 3.9%，因此保持默认关闭。
 
 ## 根因证据
@@ -163,6 +173,13 @@ row。8-token 中算子时间合计约 223 ms，而整次墙钟约 550 ms；其�
 因此剩余差距主要是每 token 约 4,100 个 Jittor IR op 的 Python/lazy graph 构建和
 细粒度提交，不能仅靠继续减少 stream synchronize 消除。
 
+cProfile 进一步记录到 7,604 次 Torch factory wrapper，其中 7,564 次来自 ACL
+adapter 的 `jt.empty`。原完整 wrapper 累计 0.203 s，native-shape 快路径后降至
+0.080 s，Python 调用数减少 29.1%。profile 中的 45 次 `Var.sync` 一度看似占用
+0.151 s，但延迟所有 lazy CUDA residency 后生成了非法 token；只延迟无 copy 的
+同设备转换也从约 0.55 s 变慢到 0.585 s。这些同步包含真实执行和跨 decode step
+正确性边界，因此没有把删除同步的实验纳入实现。
+
 第二步 decode 使用 `input_ids[:, cache_position]`。原 ACL wrapper 在
 `GetItemACL` 拒绝该混合索引后执行 `x[slices]`，这会重新进入自身，造成 Python
 单核 100%、NPU AICore 0% 的无限递归。新的受限 lowering 只接受单个 1-D integer
@@ -189,7 +206,14 @@ NPU 前向和反向均与 NumPy 完全一致。
 
 当前 10-sample 复验保留相同误差：最大绝对误差 `3.8035214e-05`、平均绝对误差
 `5.1964222e-06`，argmax 与 Top-5/10/50 token 集合全部一致。新的 Jittor logits
-还与优化前 Jittor 结果逐元素完全一致。
+还与优化前 Jittor 结果逐元素完全一致；native `empty` 快路径前后的 `.npy` 文件
+SHA256 均为 `84ade73520acdc79db62415b89c296e633bbf75c6bbba5925e801cdd990de43c`。
+
+最终源码稳定性复验中，首轮曾在第二次 generation 的 device sync 收到一次 CANN
+`507018`；进程退出后以相同设备、缓存和参数连续执行两轮完整 3-warmup、10-sample
+复验，均正常完成，中位延迟分别为 0.50007 s 和 0.50480 s。两轮 token、文本和
+logits SHA256 均与上段一致且 `fallback_count=0`；异常未复现，继续作为环境稳定性
+观察项，不据此改动同步语义。
 
 ACL RoPE 候选与融合前 Jittor 的完整末 token logits 逐元素完全一致，最大绝对误差和
 平均绝对误差均为 0。启用 ACL SDPA 后，相对原生 PyTorch SDPA 的完整 logits 指标
@@ -218,6 +242,9 @@ attention 216 次，且 `cpu_compile_count=0`、`fallback_count=0`。
 - 公开 ACL `all`/`any` 在 CANN 9 上使用原生 truth-reduction runner；numeric 输入
   先比较 nonzero。底层 Jittor core bool `all_`/`any_` reduction 仍按 maintained
   OpInfo 精确 skip。
+- `empty` 快路径只接受无关键字参数和 native 可直接消费的 int、tuple、list、
+  NanoVector shape 或一组 Python int，并继续标记 extension mutable；Torch Size、
+  NumPy/Var 维度、device、dtype 和 requires_grad 仍走完整兼容路径。
 - Transformers 4.56.2 的 Qwen3 版本胶水通过外置 `jittor.module_patches` 适配接入
   `jt.nn.rotary_emb`，不把项目/版本特定 monkeypatch 放进 Jittor 核心。
 - float16/float32 `arg_reduce` forward 通过 ACL MaxDim/MinDim 执行；generic backward
@@ -244,7 +271,10 @@ attention 216 次，且 `cpu_compile_count=0`、`fallback_count=0`。
 - Current real-NPU native `all`/`any`, SDPA, and asynchronous indexing focused
   regression: `13 passed, 103 deselected`
 - Current Jittor/native `torch_npu` 8-token, 3-warmup, 10-sample synchronized
-  comparison: `0.54590 s` / `0.49400 s`; logits parity passed
+  comparison after the native `empty` fast path: `0.50309 s` / `0.49400 s`;
+  logits parity passed
+- Focused Torch constructor CPU regression: `23 passed, 2 skipped`
+- Real-NPU native-shape `empty` residency regression: `3 passed`
 - Full maintained NPU gate: `362 passed, 11 skipped`
 
 可复现入口是

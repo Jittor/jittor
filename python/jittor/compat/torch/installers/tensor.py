@@ -403,6 +403,17 @@ def _wrap_constructors(g):
             return _shape_dim(v)
         @functools.wraps(orig)
         def wrapped(*args, **kwargs):
+            # ACL adapters call jt.empty thousands of times; skip native shapes.
+            if (name == "empty" and not kwargs and args and
+                    (len(args) == 1 or all(type(dim) is int for dim in args))):
+                shape = args[0]
+                native_shape = isinstance(shape, jt.NanoVector) or type(shape) is int
+                if type(shape) in (tuple, list):
+                    native_shape = all(type(dim) is int for dim in shape)
+                if native_shape:
+                    out = orig(*args)
+                    out._jittor_torch_ext_mutable = True
+                    return out
             # torch device='cpu' must produce a host-resident Var (native exts
             # check tensor.is_cpu()). Capture the device before dropping it and,
             # when CPU is requested, build the Var under use_cuda=0 so its

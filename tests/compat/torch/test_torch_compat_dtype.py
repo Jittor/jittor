@@ -153,6 +153,27 @@ class TestConstructorDtype(Base):
             self.assertEqual(tuple(e.shape), (2, 3), dev)
         both_devices(body)
 
+    def test_empty_native_shape_fast_path_preserves_compatibility(self):
+        def body(dev):
+            native_shape = torch.ones((2, 3)).shape
+            for shape in ((2, 3), [2, 3], native_shape):
+                value = torch.empty(shape)
+                self.assertEqual(tuple(value.shape), (2, 3), dev)
+                self.assertTrue(
+                    getattr(value, "_jittor_torch_ext_mutable", False), dev)
+
+            self.assertEqual(tuple(torch.empty(2, 3).shape), (2, 3), dev)
+
+            self.assertEqual(
+                tuple(torch.empty(torch.Size((2, 3))).shape), (2, 3), dev)
+            self.assertEqual(
+                tuple(torch.empty((np.int64(2), np.int64(3))).shape),
+                (2, 3),
+                dev,
+            )
+
+        both_devices(body)
+
     def test_arange_dtype(self):
         def body(dev):
             self.assertEqual(dts(torch.arange(5)), "int32", dev)          # int range -> int32

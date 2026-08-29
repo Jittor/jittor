@@ -1,6 +1,7 @@
 """Benchmark a local Qwen3 checkpoint with Jittor ACL or native torch_npu."""
 
 import argparse
+import cProfile
 import gc
 import json
 import os
@@ -26,6 +27,7 @@ def main():
     parser.add_argument("--samples", type=int, default=10)
     parser.add_argument("--logits-output")
     parser.add_argument("--profile-output")
+    parser.add_argument("--python-profile-output")
     parser.add_argument("--pipeline-ops", type=int, default=0)
     parser.add_argument(
         "--attn-implementation", choices=("eager", "sdpa"), default="eager")
@@ -235,6 +237,21 @@ def main():
         "transformers": transformers.__version__,
     }
     print("BENCHMARK_RESULT " + json.dumps(result, sort_keys=True), flush=True)
+
+    if args.python_profile_output:
+        python_profile_parent = os.path.dirname(
+            os.path.abspath(args.python_profile_output))
+        os.makedirs(python_profile_parent, exist_ok=True)
+        python_profiler = cProfile.Profile()
+        profiled_generated = python_profiler.runcall(run_generate)
+        python_profiler.dump_stats(args.python_profile_output)
+        print(
+            "BENCHMARK_PYTHON_PROFILE " + json.dumps({
+                "output": os.path.abspath(args.python_profile_output),
+            }, sort_keys=True),
+            flush=True,
+        )
+        del profiled_generated
 
     if args.profile_output:
         with jt.profile_scope(

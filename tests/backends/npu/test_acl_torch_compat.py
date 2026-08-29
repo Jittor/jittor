@@ -9,6 +9,16 @@ import jittor as jt
 @unittest.skipIf(not jt.compiler.has_acl, "No ACL found")
 class TestACLTorchCompat(unittest.TestCase):
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_empty_native_shapes_stay_on_device(self):
+        native_shape = torch.ones((2, 3)).shape
+        for shape in ((2, 3), [2, 3], native_shape):
+            value = torch.empty(shape)
+            value.sync()
+            self.assertEqual(tuple(value.shape), (2, 3))
+            self.assertTrue(value.is_cuda)
+            self.assertEqual(value.location(), "device")
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_empty_cuda_tensor(self):
         device = torch.device("cuda")
         empty = torch.tensor([], dtype=torch.float32, device=device)
