@@ -108,11 +108,11 @@ void TransposeOp::jit_run() {
     // KernelIR -- which parses this file as text for the CUDA path -- read it
     // as a function definition. A transpose is a gather that does not vectorise
     // either way, so the `if` clause costs nothing here.
-    index_t num = y->num;
-    @if(DIM==1, #pragma omp parallel for if(num >= 65536))
-    @if(DIM==2, #pragma omp parallel for collapse(2) if(num >= 65536))
-    @if(DIM==3, #pragma omp parallel for collapse(3) if(num >= 65536))
-    @if(DIM>=4, #pragma omp parallel for collapse(4) if(num >= 65536))
+    @if(@is_def(JIT_cpu), index_t num = y->num;)
+    @if(@is_def(JIT_cpu) && DIM==1, #pragma omp parallel for if(num >= 65536))
+    @if(@is_def(JIT_cpu) && DIM==2, #pragma omp parallel for collapse(2) if(num >= 65536))
+    @if(@is_def(JIT_cpu) && DIM==3, #pragma omp parallel for collapse(3) if(num >= 65536))
+    @if(@is_def(JIT_cpu) && DIM>=4, #pragma omp parallel for collapse(4) if(num >= 65536))
     @for(d, 0, DIM, for (index_t yi@d=0; yi@d < yshape@d; yi@d++)) {
         auto yid = @for(d, 0, DIM, + yi@d * ystride@d);
         @for(d, 0, DIM, auto xi@d = yi@{AXES@d};)
