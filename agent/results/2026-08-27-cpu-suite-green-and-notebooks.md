@@ -758,7 +758,15 @@ native 会话 `729 passed, 716 skipped`，CPU Torch 会话 `1507 passed, 279 ski
 
 这套（`nvcc_path` 有值、`REAL_TORCH_PYTHON` 指向真 PyTorch 环境）与 CPU 门禁是两套
 不同的会话，8 月 20 日的两轮全量记录里就是 26 个失败，一直没人往下查。逐个查完之后
-修掉 22 个，剩下 4 个定位到了触发条件但没修。
+**由 26 降到 4**：
+
+| | 之前 | 之后 |
+| --- | ---: | ---: |
+| CUDA + 真 PyTorch 对拍 | `33 failed, 1770 passed` | **`4 failed, 1801 passed`** |
+| native CPU | `729 passed` | `737 passed` |
+| CPU Torch | `1507 passed` | `1509 passed` |
+
+剩下的 4 个是下面「未修」的两类。
 
 **20 个：参照解释器与 Jittor 环境的 CPython 版本不同（已修）。** 两侧原本被强制从
 同一个 site 目录导入下游库，好让对拍失败一定是 Jittor 的差异而不是版本差异。但为
@@ -780,6 +788,29 @@ Jittor 环境是 3.11、真 PyTorch 环境是 3.12，于是参照侧在 transfor
 构造得到同样的权重。直接量：CPU 上第一层权重就差 `4.8e-01`。它其实在比较两个不同
 模型的损失轨迹，CUDA 上偶然差了 7% 就报成流水线的错。改为构造一次、快照参数、每轮
 恢复，CUDA 会话 9 passed。
+
+**1 个：全局 `use_cuda` 泄漏（已修）。** `test_torch_compat_errors.py` 在 `setUp`
+里把 `use_cuda` 设成 0，却没有 `tearDown` 还原。这个 flag 是进程全局的，于是同一
+会话中它之后的所有测试都被静默挪到 CPU 上跑。直接失败的是
+`test_alias_uses_cuda_when_available`（它断言 CUDA 可用时全局 `use_cuda` 为 1），
+但真正的代价是下面这条：一整段 CUDA 覆盖被悄悄换成了 CPU。
+
+**1 个：`jt.seed` 在 GPU 上无效（已修）。** 这个是修掉上面那条泄漏之后才露出来的
+——在此之前种子测试一直跑在 CPU 上。`curandSetPseudoRandomGeneratorSeed`
+只改种子，不把生成器拉回序列开头，所以抽过之后再设同一个种子会接着往下走。
+CPU 侧的 `set_seed` 本来就把 offset 清零，补上 CUDA 的对应一步即可。实测
+`use_cuda=1` 下 `jt.seed(731)` 两次得到的 8 个数此前完全不同，现在一致，换成别的
+种子仍然不同。也就是说 GPU 上的 `jt.seed`/`torch.manual_seed` 此前是无效的——
+这比它掩盖住的那个测试失败严重得多。回归测试见 `tests/ops/test_random_op.py`。
+
+**3 个：`flag_scope` 切设备时的惰性执行漏账（已修）。** 执行是惰性的，
+`flag_scope(use_cuda=1)` 里构造的 op 可能在作用域还原之后才执行，于是跑到了另一个
+设备上：遇到没有 CPU 版本的算子（bfloat16 cast）直接报
+`Op unary doesn't have cpu version`，遇到两边都有的则是静默换设备。改为在
+`use_cuda` 真的发生变化时先把待执行的 op 跑完，只有翻转设备的作用域才付这个代价。
+顺带一提，第一版实现里我写了 `bool(exc)`，而 `core_api.py` 顶部的
+`from jittor import *` 把内建 `bool` 覆盖成了 Jittor 的算子，于是 28 个用例一起挂掉；
+这个文件里不能用被遮蔽的内建。
 
 **3 个：Triton 桥接在 torch shim 下失效（未修，已隔离）。** 同一份代码只切
 `JITTOR_TORCH_SHIM`：关闭时结果正确，打开时输出保持全零。排查排除了以下可能——
