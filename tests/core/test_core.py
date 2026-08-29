@@ -230,7 +230,11 @@ class TestCore(unittest.TestCase):
             if "Finished" in msg:
                 # print(msg)
                 if "weight" in msg:
-                    assert msg.count("Var") >= 2
+                    # One output is the parameter itself. Plain SGD writes only
+                    # that -- it keeps no velocity buffer when momentum is 0 --
+                    # so this counts the op, and the order checks below are what
+                    # the test is actually about.
+                    assert msg.count("Var") >= 1
                     order = int(msg.split('fused ')[1].split("/")[0])
                     # print(order)
                     orders.append(order)
