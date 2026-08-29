@@ -459,13 +459,19 @@ class TestTorchBootstrap(unittest.TestCase):
                         return [path]
                 return []
 
-            with mock.patch.object(
+            # Discovery only runs when the core is not already imported: the
+            # loaded one wins, because a second build of the same core gives the
+            # process two copies of the runtime's static state.
+            with mock.patch.dict(
+                sys.modules, {"jit_utils_core": None, "jittor_core": None}
+            ), mock.patch.object(
                 build.glob, "glob", side_effect=fake_glob
             ), mock.patch.object(
                 build.ctypes, "CDLL", return_value=object()
             ), mock.patch.dict(
                 os.environ, {"LD_LIBRARY_PATH": ""}, clear=False
             ):
+                del sys.modules["jit_utils_core"], sys.modules["jittor_core"]
                 loaded = build._preload_jittor_cores(verbose=False)
                 self.assertEqual(
                     loaded, [cores["jit_utils_core"], cores["jittor_core"]]
@@ -482,12 +488,39 @@ class TestTorchBootstrap(unittest.TestCase):
             foreign = os.path.join(
                 directory, "jit_utils_core.cpython-999-x86_64-linux-gnu.so")
             pathlib.Path(foreign).touch()
-            with mock.patch.object(
+            with mock.patch.dict(
+                sys.modules, {"jit_utils_core": None, "jittor_core": None}
+            ), mock.patch.object(
                 build.glob, "glob", return_value=[foreign]
             ), mock.patch.object(
                 build.ctypes, "CDLL", return_value=object()
             ):
+                del sys.modules["jit_utils_core"], sys.modules["jittor_core"]
                 self.assertEqual(build._preload_jittor_cores(verbose=False), [])
+
+    def test_preload_prefers_the_core_this_process_already_imported(self):
+        """Never a second build of a core that is already loaded.
+
+        The cache holds one build per configuration -- a CPU one and a CUDA one,
+        both for this Python -- so picking by path would load the CPU core
+        beside the CUDA core already in use. The process then carries two copies
+        of the runtime's static state and aborts at exit with a double free,
+        after every test has passed.
+        """
+        from jittor.compat.shim import build
+
+        imported = sys.modules.get("jittor_core")
+        origin = getattr(imported, "__file__", None)
+        if not origin:
+            self.skipTest("jittor_core is not an imported extension here")
+
+        def refuse(pattern, recursive=False):
+            raise AssertionError("discovery ran for an already-imported core")
+
+        with mock.patch.object(build.glob, "glob", side_effect=refuse), \
+                mock.patch.object(build.ctypes, "CDLL", return_value=object()):
+            loaded = build._preload_jittor_cores(verbose=False)
+        self.assertIn(origin, loaded)
 
     def test_plain_preflight_is_side_effect_free(self):
         from jittor.compat.shim.preflight import prepare_import_environment

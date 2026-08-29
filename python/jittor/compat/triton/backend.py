@@ -223,7 +223,8 @@ class _Driver:
         self.check(lib.cuDeviceComputeCapability(
             ctypes.byref(maj), ctypes.byref(mino), dev), "cuDeviceComputeCapability")
         self.arch = maj.value * 10 + mino.value
-        self._modules = {}   # id(cubin_bytes) -> CUmodule handle
+        # id(cubin_bytes) -> (CUmodule handle, the cubin itself: see get_function)
+        self._modules = {}
         self._funcs = {}     # (id(cubin_bytes), name) -> CUfunction handle
 
     @staticmethod
@@ -250,16 +251,26 @@ class _Driver:
         return cls._inst
 
     def get_function(self, cubin, name):
-        """Load (and cache) the cubin module + return the named CUfunction."""
+        """Load (and cache) the cubin module + return the named CUfunction.
+
+        The cache is keyed by ``id(cubin)``, which is only meaningful while that
+        object is alive: once the caller drops its cubin, CPython is free to put
+        a different bytes object at the same address, and the next lookup would
+        hand back the CUfunction of an unrelated kernel -- it launches cleanly
+        and writes nothing where this kernel's output was expected. So the cache
+        keeps the cubin alive alongside the module, which pins the address for
+        as long as the entry can be found.
+        """
         mkey = id(cubin)
-        mod = self._modules.get(mkey)
+        entry = self._modules.get(mkey)
+        mod = None if entry is None else entry[0]
         if mod is None:
             image = ctypes.create_string_buffer(cubin, len(cubin))
             mod = ctypes.c_void_p()
             self.check(self.lib.cuModuleLoadData(
                 ctypes.byref(mod), ctypes.cast(image, ctypes.c_void_p)),
                 "cuModuleLoadData")
-            self._modules[mkey] = mod
+            self._modules[mkey] = (mod, cubin)
         fkey = (mkey, name)
         fn = self._funcs.get(fkey)
         if fn is None:
@@ -627,11 +638,23 @@ def _fast_sync_enabled():
 
 
 def _copy_bounced_inputs_back():
-    if _truthy_env("JITTOR_TRITON_COPY_BOUNCED_INPUTS_BACK"):
-        return True
+    """Whether a bounced argument's buffer is copied back into its Var.
+
+    This used to be skipped whenever the fast path was on, on the grounds that
+    the kernels it was tuned for only write to explicit output Vars. Which
+    argument is an output is decided by :func:`_looks_like_output_arg`, a match
+    on the parameter's *name* -- so a kernel whose output happens to be called
+    ``o_ptr`` or ``c_ptr`` is bounced like any other operand and then, with the
+    copy-back skipped, its results are dropped on the floor. The kernel launches
+    cleanly and the output Var still holds whatever it held before.
+
+    A silent wrong answer is not worth the memcpy, so the copy-back is now
+    unconditional by default; ``JITTOR_TRITON_COPY_BOUNCED_INPUTS_BACK=0`` still
+    opts out for a caller who knows every bounced operand is read-only.
+    """
     if _falsey_env("JITTOR_TRITON_COPY_BOUNCED_INPUTS_BACK"):
         return False
-    return not _fast_sync_enabled()
+    return True
 
 
 def _sync_after_launch_enabled():
