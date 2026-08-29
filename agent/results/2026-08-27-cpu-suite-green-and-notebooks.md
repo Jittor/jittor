@@ -1,6 +1,6 @@
 # CPU 双会话收零失败、FSDP2 单卡集合通信与两个新原生 notebook
 
-- Status: CPU native/Torch 双会话零失败；TRELLIS 性能仍未接受
+- Status: native CPU / CPU Torch / CUDA+对拍 三套会话均零失败；TRELLIS 性能仍未接受
 - Last reviewed: 2026-08-27
 - Baseline: `99537948`
 - Owner: Torch compatibility and downstream integration maintainers
@@ -758,15 +758,16 @@ native 会话 `729 passed, 716 skipped`，CPU Torch 会话 `1507 passed, 279 ski
 
 这套（`nvcc_path` 有值、`REAL_TORCH_PYTHON` 指向真 PyTorch 环境）与 CPU 门禁是两套
 不同的会话，8 月 20 日的两轮全量记录里就是 26 个失败，一直没人往下查。逐个查完之后
-**由 26 降到 4**：
+**全部清零**：
 
 | | 之前 | 之后 |
 | --- | ---: | ---: |
-| CUDA + 真 PyTorch 对拍 | `33 failed, 1770 passed` | **`4 failed, 1801 passed`** |
+| CUDA + 真 PyTorch 对拍 | `33 failed, 1770 passed` | **`0 failed, 1806 passed`** |
 | native CPU | `729 passed` | `737 passed` |
-| CPU Torch | `1507 passed` | `1509 passed` |
+| CPU Torch | `1507 passed` | `1510 passed` |
 
-剩下的 4 个是下面「未修」的两类。
+这些失败背后是七个彼此独立的问题，其中三个是真实用户会踩到的产品缺陷（GPU 上设种子
+无效、切设备时惰性执行漏账、Triton 结果被静默丢弃），其余是测试自身的问题。
 
 **20 个：参照解释器与 Jittor 环境的 CPython 版本不同（已修）。** 两侧原本被强制从
 同一个 site 目录导入下游库，好让对拍失败一定是 Jittor 的差异而不是版本差异。但为
@@ -812,20 +813,38 @@ CPU 侧的 `set_seed` 本来就把 offset 清零，补上 CUDA 的对应一步�
 `from jittor import *` 把内建 `bool` 覆盖成了 Jittor 的算子，于是 28 个用例一起挂掉；
 这个文件里不能用被遮蔽的内建。
 
-**3 个：Triton 桥接在 torch shim 下失效（未修，已隔离）。** 同一份代码只切
-`JITTOR_TORCH_SHIM`：关闭时结果正确，打开时输出保持全零。排查排除了以下可能——
-传给发射的是 Var 真实的设备指针（互相间距正好等于张量字节数）、`cuLaunchKernel`
-返回成功且 `cudaDeviceSynchronize` 无错、发射前后 Var 地址不变、发射后不碰 Var 直接
-`cudaMemcpy` 读回来仍是全零（所以不是惰性重算覆盖）、两种模式下当前 CUDA context
-都等于设备 0 的 primary context。不是 compat 文件特有：原生的
-`test_triton_backend.py` 在 shim 下同样有 3/9 失败。这些用例平时不暴露，是因为
-`tests/conftest.py` 只对窄选择自动打开 shim。
+**3 个：Triton 桥接把 kernel 结果丢掉（已修）。** 这一条查得最久，因为它其实是两个
+独立的 bug 叠在一起。
 
-**1 个：运行时启用 torch shim 后退出时双重释放（未修，已隔离）。**
-`jt.flags.torch_shim = 1` 会触发完整的运行时 shim 安装（`enable_runtime`，其中包含
-核心库预加载）。必须同时满足两个条件才崩：设了这个 flag，且是 CUDA 构建；单独任一
-都不崩。探针的 `RESULT` 能正常打印，崩在解释器退出，因此这是 teardown 问题而非功能
-问题。修它要重做运行时 shim 启用路径，超出本次范围。
+第一个：模块缓存用 `id(cubin)` 做键，却没有任何地方持有那个 bytes 的引用。对象被
+回收后 CPython 会把别的 bytes 放到同一地址，于是下一次查表拿到的是**另一个 kernel**
+的 `CUfunction`——发射干净、返回码正常、什么都不写。缓存改为连 cubin 一起存住，
+地址在条目存活期间就不可能被复用。修掉它之后 `JITTOR_TORCH_SHIM=0` 由 3 failed
+变为 5 passed。
+
+第二个（只在 shim 下）：走暂存缓冲的参数永远不拷回。跳过拷回的前提是「kernel 只写
+显式输出 Var」，而哪个参数算输出由 `_looks_like_output_arg` 按**参数名**判断：匹配
+`out`/`output`/`y`/`dst`、`_out` 后缀、`out_` 前缀。于是输出叫 `o_ptr` 或 `c_ptr`
+的 kernel 被当成普通操作数送进暂存缓冲，结果被静默丢弃——原生测试的输出恰好叫
+`out_ptr`，所以一直是好的。这不是测试问题：shim 下任何输出参数没按这套命名的
+Triton kernel，结果都会被静默丢弃。改为默认总是拷回，
+`JITTOR_TRITON_COPY_BOUNCED_INPUTS_BACK=0` 仍可为确知只读的调用方关掉。
+TRELLIS 最优配置 `6.8006s` -> `6.8017s`，三次采样区间重叠，无可测代价。
+
+排查过程中依次排除了：传给发射的指针（是 Var 真实设备指针）、`cuLaunchKernel`
+返回码与 `cudaDeviceSynchronize`、发射前后 Var 地址、发射后不碰 Var 直接
+`cudaMemcpy`（排除惰性重算覆盖）、CUDA context（两种模式都等于设备 0 的 primary）、
+`import triton` 是否被 shim 替换（不是）、签名与常量（完全一致）。真正把两者区分开
+的是打印实际打包进 `params` 的字节——那里传的根本不是 Var 指针，而是暂存缓冲。
+
+**1 个：shim 预加载核心库导致退出时双重释放（已修）。** `jt.flags.torch_shim = 1`
+会触发完整的运行时 shim 安装，其中预加载核心 `.so`。预加载按**路径长度**挑选，而
+缓存里同一 Python ABI 还有多份配置（CPU 的与 CUDA 的），于是在 CUDA 构建下预加载了
+CPU 那份，进程里出现两份运行时静态状态，退出时同一块 exit-handler 被释放两次。
+这正好解释了为什么必须同时有 `torch_shim=1` 和 CUDA 才崩——没有 CUDA 时缓存里只有
+一份，选谁都对。改为：已经导入的那一份就是唯一可预载的那一份，glob 发现退化为兜底。
+`_matching_abi` 的注释早就写明了这个双重释放的成因，只是它只按 Python ABI 过滤，
+挡不住同 ABI 的不同配置。
 
 ### 空隙的分布，以及为什么调度改不动它
 
