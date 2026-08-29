@@ -1023,12 +1023,31 @@ collapse 深度必须写成**字面量**。`#pragma` 行不经过模板替换（
 
 **五个网络里四个快过 PyTorch，只剩 UNet。** UNet 剩余差距：卷积 `308ms` 对
 PyTorch `285ms`（`+23ms`），非卷积 `246ms` 对 `159ms`（`+87ms`，摊在许多中等
-kernel 上）。卷积那部分与 oneDNN 版本有关——Jittor 绑的是
-`dnnl_lnx_2.2.0_cpu_gomp`（**oneDNN 2.2.0，2021 年**），而 PyTorch 2.12 用的是
-**MKL-DNN v3.11.2 + MKL 2024.2**，差两个大版本、五年；oneDNN 3.x 正是加入 AMD Zen
-专用 kernel 的版本，而本机是 EPYC。直接换版本不可行：3.0 大幅改动了 v2 API，
-Jittor 的整个 mkl 算子层需要移植；2.7.x 保留 v2 API 且已含 Zen3 优化，是可行的
-中间方案，但本机 GitHub 不可达（只有 PyPI 通），拿不到二进制。
+kernel 上）。
+
+#### 否定结果：oneDNN 版本不是 UNet 的成因
+
+Jittor 绑的是 `dnnl_lnx_2.2.0_cpu_gomp`（**oneDNN 2.2.0，2021 年**），而
+PyTorch 2.12 用 **MKL-DNN v3.11.2 + MKL 2024.2**，差两个大版本、五年，且
+oneDNN 3.x 正是加入 AMD Zen 专用 kernel 的版本、本机又是 EPYC——看起来是很有力的
+解释。实测否定了它。
+
+（先更正一处：我一度写「本机 GitHub 不可达」。那是我用 `curl -sIL` 跟随重定向后
+没有输出、误判的；`curl -s -w %{http_code}` 显示 `200`。GitHub 是通的，预编译
+二进制在 2.7 之后不再发布（`404`），但源码包可以下载。）
+
+从源码编了 oneDNN 2.7.3（`DNNL_CPU_RUNTIME=OMP`，保留 v2 API 因此 Jittor 的 mkl
+算子层不用改），装进测试用的 `JITTOR_HOME` 并让 Jittor 链接它：
+
+| | oneDNN 2.2.0 | oneDNN 2.7.3 |
+| --- | ---: | ---: |
+| UNet 一步 | `0.5646s` | `0.5564s` |
+| 其中卷积 | `308ms` | `301.7ms` |
+| vit / llama / convnet / gpt2 | — | 均无变化 |
+
+卷积只快了 `2%`，端到端 `1.5%`，都在噪声内。**假设被否定**：UNet 的差距不在
+oneDNN 版本，而是压倒性地在非卷积部分（`261ms` 对 PyTorch `159ms`）。加上 2.7
+没有预编译二进制、Jittor 的安装流程无法从源码构建，这个改动没有落地价值，已还原。
 
 ### 分块循环的并行要放在内层
 
