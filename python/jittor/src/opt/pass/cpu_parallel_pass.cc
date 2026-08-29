@@ -138,6 +138,7 @@ void CpuParallelPass::run() {
     // Collect first: the transform replaces nodes in the list being walked.
     vector<KernelIR*> targets;
     vector<string> guards;
+    vector<int> depths;
     for (auto* body : bodies) {
         for (auto& loop : body->children) {
             if (loop->type != "loop") continue;
@@ -150,13 +151,37 @@ void CpuParallelPass::run() {
                 if (mentions(b->get_attr("code"), "pragma")) already = true;
             if (already) continue;
 
+            // The outermost loop alone is often not worth threading: on an
+            // NCHW tensor it runs over the batch, which is 2. Take the
+            // perfectly-nested levels below it as well and collapse them, so
+            // the parallelism is the product (batch * channels * ...) rather
+            // than the batch. Only a level whose sole child is the next loop
+            // may be collapsed -- anything between them, even an index
+            // definition, makes the nest imperfect and OpenMP reject it.
+            vector<string> indices({index}), bounds({bound});
+            KernelIR* level = loop.get();
+            while (indices.size() < 3
+                    && level->children.size() == 1
+                    && level->children[0]->type == "loop"
+                    && level->children[0]->has_attr("lvalue")
+                    && level->children[0]->has_attr("rvalue")
+                    && is_identifier(level->children[0]->get_attr("rvalue"))
+                    && level->children[0]->before.size() == 0
+                    && level->children[0]->after.size() == 0) {
+                level = level->children[0].get();
+                indices.push_back(level->get_attr("lvalue"));
+                bounds.push_back(level->get_attr("rvalue"));
+            }
+
             LoopScan info;
             unordered_map<string,string> defines;
             scan(loop.get(), info, defines);
             if (!info.usable || info.store_indices.size() == 0) continue;
 
             // Resolve each store index through the definitions in scope, then
-            // require the outermost variable to scale it.
+            // require every collapsed variable to scale it: each contributes
+            // its own stride to the affine sum, so distinct tuples then address
+            // distinct elements.
             bool disjoint = true;
             for (auto& idx : info.store_indices) {
                 string expr = idx;
@@ -165,18 +190,48 @@ void CpuParallelPass::run() {
                     if (it == defines.end()) break;
                     expr = it->second;
                 }
-                if (!scales_with(expr, index)) { disjoint = false; break; }
+                for (auto& v : indices)
+                    if (!scales_with(expr, v)) { disjoint = false; break; }
+                if (!disjoint) break;
+            }
+            // Drop the deepest levels until every one of them passes, rather
+            // than giving up on the loop: the outermost alone may well be fine.
+            while (!disjoint && indices.size() > 1) {
+                indices.pop_back();
+                bounds.pop_back();
+                disjoint = true;
+                for (auto& idx : info.store_indices) {
+                    string expr = idx;
+                    for (int depth=0; depth<4; depth++) {
+                        auto it = defines.find(expr);
+                        if (it == defines.end()) break;
+                        expr = it->second;
+                    }
+                    for (auto& v : indices)
+                        if (!scales_with(expr, v)) { disjoint = false; break; }
+                    if (!disjoint) break;
+                }
             }
             if (!disjoint) continue;
 
-            // Total work, not just the outer trip count: a loop of 64 rows over
-            // 4096 columns is worth threading and a loop of 4096 scalars is not.
-            // Unknown inner bounds are dropped, which only makes this stricter.
-            string work = bound;
-            for (auto& b : info.inner_bounds)
-                if (is_identifier(b)) work += " * " + b;
-            // ... but the outer loop still has to hold enough iterations to give
-            // every core something to do.
+            // Total work, not just the trip count of the collapsed levels: a
+            // loop of 64 rows over 4096 columns is worth threading and a loop
+            // of 4096 scalars is not. Unknown inner bounds are dropped, which
+            // only makes this stricter.
+            string bound_product = bounds[0];
+            for (uint b=1; b<bounds.size(); b++)
+                bound_product += " * " + bounds[b];
+            string work = bound_product;
+            for (auto& b : info.inner_bounds) {
+                bool collapsed = false;
+                for (auto& used : bounds)
+                    if (used == b) collapsed = true;
+                if (!collapsed && is_identifier(b)) work += " * " + b;
+            }
+            bound = bound_product;
+            depths.push_back((int)indices.size());
+            // ... but the collapsed levels still have to hold enough
+            // iterations together to give every core something to do.
             // The cast is (long long) because the index type in scope varies
             // between kernels and the product can overflow a 32-bit one.
             guards.push_back("(" + bound + ") >= 64 && (long long)(" + work
@@ -194,7 +249,9 @@ void CpuParallelPass::run() {
         if (pos == father->children.size()) continue;
 
         auto par = loop->clone(true);
-        par->push_back("#pragma omp parallel for", &par->before);
+        string pragma = "#pragma omp parallel for";
+        if (depths[i] > 1) pragma += " collapse(" + std::to_string(depths[i]) + ")";
+        par->push_back(pragma, &par->before);
         auto if_par = std::make_unique<KernelIR>("if (" + guards[i] + ") {}");
         if_par->push_back(move(par), &if_par->children);
 
