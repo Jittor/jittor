@@ -1084,9 +1084,19 @@ UNet 需要更准的数字：上表那两轮里 `1.03x` 是偏好的一轮。四
 合计 `488ms` 对 `444ms`。非卷积里最大的一项是 `reindex_reduce` `21.6ms`，其余都在
 `16ms` 以下——没有可以单独修掉的热点了。
 
-卷积那 `18ms` 还查了一条线索并排除：Jittor 的 `mkl_conv_op.cc` 已经用
-`memory::format_tag::any` 让 oneDNN 自选最优布局（而不是钉死 NCHW），reorder 也带
-条件判断，oneDNN 2.x 又自带 primitive 缓存，所以不是「布局没让 oneDNN 挑」的问题。
+卷积那 `18ms` 还查了两条线索，都排除了：
+
+1. **布局不是问题。** `mkl_conv_op.cc` 已经用 `memory::format_tag::any` 让 oneDNN
+   自选最优布局（而不是钉死 NCHW），reorder 带条件判断，oneDNN 2.x 又自带
+   primitive 缓存。
+2. **reorder 次数与 PyTorch 完全相同。** 用 `DNNL_VERBOSE=1` 数实际执行的
+   primitive：同样的 `2x128x64x64` 卷积跑两次，Jittor 是「2 convolution +
+   6 reorder」，PyTorch 也是「2 convolution + 6 reorder」——都是每次卷积 3 次重排
+   （src NCHW→blocked、weights→blocked、dst blocked→NCHW）。所以不是 Jittor 多搬
+   了数据。
+
+两条排除之后，卷积这 `6%` 只剩 oneDNN 版本这一个解释（`2.2.0` 对 `3.11.2`），而
+实测 `2.7.3` 只快 `2%`，再往上要移植整个 mkl 算子层到 3.x 的新 API。
 
 ### TRELLIS 的算子分布：三分之二是已经打平的 GEMM
 
