@@ -75,6 +75,46 @@ def _package_site():
 PACKAGE_SITE = _package_site()
 
 
+def _reference_shares_this_abi():
+    """Whether ``REAL_TORCH_PYTHON`` can import this interpreter's packages.
+
+    Both sides are made to import the downstream libraries from one site
+    directory, so that a parity failure is a Jittor difference and not a version
+    difference -- the comparison asserts the two runs report identical
+    dependency versions and origins. A site built for one CPython version cannot
+    be imported by another, though: its extension modules carry an ABI tag, so
+    the reference interpreter fails on the first compiled import (``regex`` is
+    the one transformers reaches first) with an error that says nothing about
+    the real problem. When the versions differ, each side imports its own copy
+    instead and only the dependency *versions* are required to agree.
+    """
+    if not REAL_TORCH_PYTHON or not PACKAGE_SITE:
+        return True
+    try:
+        completed = subprocess.run(
+            [REAL_TORCH_PYTHON, "-c",
+             "import sys; print('%d.%d' % sys.version_info[:2])"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if completed.returncode != 0:
+        return False
+    theirs = completed.stdout.decode("utf-8", "replace").strip()
+    return theirs == "%d.%d" % sys.version_info[:2]
+
+
+REFERENCE_ABI_MATCHES = _reference_shares_this_abi()
+
+
+def _versions(report):
+    """Just the version of each downstream dependency, without its origin."""
+    return {
+        name: entry.get("version")
+        for name, entry in (report.get("dependencies") or {}).items()
+    }
+
+
 def _torch_shim_is_active():
     """Whether this interpreter's ``torch`` is Jittor rather than PyTorch."""
     try:
@@ -116,14 +156,19 @@ def _run(python, runtime, case, output, weights=None, device="cpu"):
     if weights is not None:
         command += ["--weights", str(weights)]
     environment = os.environ.copy()
-    if PACKAGE_SITE:
+    if PACKAGE_SITE and (python == sys.executable or REFERENCE_ABI_MATCHES):
         environment["JITTOR_ECOSYSTEM_PACKAGE_SITE"] = PACKAGE_SITE
+    else:
+        environment.pop("JITTOR_ECOSYSTEM_PACKAGE_SITE", None)
     completed = subprocess.run(
         command,
         env=environment,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        # The runner prints Jittor's own logging, which is not ASCII.
+        encoding="utf-8",
+        errors="replace",
         timeout=1800,
     )
     marker = "ECOSYSTEM_RESULT "
@@ -205,7 +250,7 @@ class EcosystemComparison(unittest.TestCase):
                         case, label, report.get("device"), self.device
                     ),
                 )
-                if PACKAGE_SITE:
+                if PACKAGE_SITE and REFERENCE_ABI_MATCHES:
                     self.assertEqual(
                         report.get("package_site"),
                         PACKAGE_SITE,
@@ -213,11 +258,22 @@ class EcosystemComparison(unittest.TestCase):
                             case, label
                         ),
                     )
-            self.assertEqual(
-                torch_report.get("dependencies"),
-                jittor_report.get("dependencies"),
-                "{} used different downstream dependency versions or origins".format(case),
-            )
+            if REFERENCE_ABI_MATCHES:
+                self.assertEqual(
+                    torch_report.get("dependencies"),
+                    jittor_report.get("dependencies"),
+                    "{} used different downstream dependency versions or origins"
+                    .format(case),
+                )
+            else:
+                # The two interpreters are different CPython versions, so they
+                # cannot share one site directory -- its extension modules carry
+                # an ABI tag. Each imports its own copy, and what has to match is
+                # the version: the origins are expected to differ.
+                self.assertEqual(
+                    _versions(torch_report), _versions(jittor_report),
+                    "{} used different downstream dependency versions".format(case),
+                )
             self.assertEqual(
                 torch_report.get("tf32"),
                 jittor_report.get("tf32"),

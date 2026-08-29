@@ -121,6 +121,11 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
             [sys.executable, "-c", source],
             env=env,
             text=True,
+            # Jittor's own logging is not ASCII -- op keys are separated by
+            # U+00AB -- so decoding by the ambient locale fails outright under
+            # LANG=C. Only the RESULT= line is read, and it is plain ASCII.
+            encoding="utf-8",
+            errors="replace",
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
