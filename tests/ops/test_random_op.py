@@ -105,6 +105,29 @@ class TestRandomOp(unittest.TestCase):
         assert jt.randint(10, shape=(2000,)).max() == 9
         assert jt.randint_like(a, 10).shape == a.shape
 
+    def _check_seed_is_reproducible(self):
+        jt.set_seed(731)
+        first = jt.random((8,)).numpy()
+        jt.set_seed(731)
+        second = jt.random((8,)).numpy()
+        np.testing.assert_array_equal(
+            first, second, err_msg="set_seed did not reproduce the sequence")
+        jt.set_seed(99)
+        other = jt.random((8,)).numpy()
+        assert not np.array_equal(first, other), \
+            "a different seed produced the same sequence"
+
+    def test_seed_is_reproducible(self):
+        self._check_seed_is_reproducible()
+
+    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @jt.flag_scope(use_cuda=1)
+    def test_seed_is_reproducible_cuda(self):
+        # curand keeps its position in the sequence across a re-seed, so
+        # setting the same seed again used to continue from wherever the
+        # previous draw left off instead of starting over.
+        self._check_seed_is_reproducible()
+
 
 if __name__ == "__main__":
     unittest.main()
