@@ -193,6 +193,7 @@ void CpuParallelPass::run() {
     // Collect first: the transform replaces nodes in the list being walked.
     vector<KernelIR*> targets;
     vector<string> guards;
+    vector<string> inner_guards;
     vector<int> depths;
     for (auto* body : bodies) {
         for (auto& loop : body->children) {
@@ -316,6 +317,40 @@ void CpuParallelPass::run() {
             guards.push_back(parallelism + " >= " + least
                              + " && (long long)(" + work + ") >= 65536");
             targets.push_back(loop.get());
+
+            // A split loop's tile count is small by construction -- the tile is
+            // sized to fit a cache, not to give every core a share -- so the
+            // guard above is often false for the whole life of the kernel. The
+            // parallelism is in the loop *inside* it, over the other dimension.
+            // Offer that as a second branch rather than falling straight back
+            // to running the nest on one core: on a ViT step the SGD update
+            // was split with stride 4096 over a dimension of at most 3072, so
+            // it never once took the parallel branch.
+            string inner_guard;
+            if (split) {
+                for (auto& c : loop->children) {
+                    if (c->type != "loop") continue;
+                    if (!c->has_attr("lvalue") || !c->has_attr("rvalue")) break;
+                    string iv = c->get_attr("lvalue");
+                    string ib = c->get_attr("rvalue");
+                    if (!is_identifier(ib) || defines.count(ib)) break;
+                    bool ok = true;
+                    for (auto& idx : info.store_indices) {
+                        string expr = idx;
+                        for (int d=0; d<4; d++) {
+                            auto it = defines.find(expr);
+                            if (it == defines.end()) break;
+                            expr = it->second;
+                        }
+                        if (!scales_with(expr, iv)) { ok = false; break; }
+                    }
+                    if (ok)
+                        inner_guard = "(" + ib + ") >= 64 && (long long)("
+                                      + work + ") >= 65536";
+                    break;
+                }
+            }
+            inner_guards.push_back(inner_guard);
         }
     }
 
@@ -334,12 +369,30 @@ void CpuParallelPass::run() {
         auto if_par = std::make_unique<KernelIR>("if (" + guards[i] + ") {}");
         if_par->push_back(move(par), &if_par->children);
 
+        // Second branch: the tile count was too small, so thread the loop one
+        // level down instead of giving up on the nest entirely.
+        unique_ptr<KernelIR> if_inner;
+        string serial_cond = "!(" + guards[i] + ")";
+        if (inner_guards[i].size()) {
+            auto inner_par = loop->clone(true);
+            for (auto& c : inner_par->children)
+                if (c->type == "loop") {
+                    c->push_back("#pragma omp parallel for", &c->before);
+                    break;
+                }
+            if_inner = std::make_unique<KernelIR>(
+                "if (" + serial_cond + " && (" + inner_guards[i] + ")) {}");
+            if_inner->push_back(move(inner_par), &if_inner->children);
+            serial_cond += " && !(" + inner_guards[i] + ")";
+        }
+
         auto ser = loop->clone(true);
-        auto if_ser = std::make_unique<KernelIR>("if (!(" + guards[i] + ")) {}");
+        auto if_ser = std::make_unique<KernelIR>("if (" + serial_cond + ") {}");
         if_ser->push_back(move(ser), &if_ser->children);
 
         vector<unique_ptr<KernelIR>> both;
         both.push_back(move(if_par));
+        if (if_inner) both.push_back(move(if_inner));
         both.push_back(move(if_ser));
         father->insert(pos, both);
         loop->erase();
