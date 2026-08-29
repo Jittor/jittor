@@ -107,12 +107,12 @@ msgstr "7.4.4 / 2.3.1"
 #: 7a9996889b0842b3af81e2ad34eadde2
 msgid ""
 "These versions are a reproduced baseline, not a claim that every other "
-"CANN release is incompatible. Jittor declares Python 3.7 through 3.12 "
+"CANN release is incompatible. Jittor declares Python 3.7 through 3.13 "
 "support; Python 3.9 through 3.11 is the practical range for an Ascend "
 "environment whose vendor packages may have narrower Python constraints."
 msgstr ""
 "这些版本是一组可复现基线，并不表示其他 CANN 版本都不兼容。Jittor 声明支持 "
-"Python 3.7 至 3.12；考虑到昇腾厂商包可能采用更窄的 Python 版本约束，"
+"Python 3.7 至 3.13；考虑到昇腾厂商包可能采用更窄的 Python 版本约束，"
 "Python 3.9 至 3.11 是更实用的范围。"
 
 #: a417a9218d32455a82074b619671ff7f

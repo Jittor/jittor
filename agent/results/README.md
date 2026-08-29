@@ -6,6 +6,7 @@
 
 ## 兼容性与功能验证
 
+- [2026-08-29 Python 3.13 与 NumPy 2 wheel 兼容验证](2026-08-29-python313-compatibility.md)
 - [2026-08-28 Python 3.12 wheel 与 Nox 解释器隔离验证](2026-08-28-python312-nox-isolation.md)
 - [2026-08-28 Ascend 910B 环境、ACL 冷启动与 NPU 门禁验证](2026-08-28-ascend-910b-validation.md)
 - [2026-08-27 CPU 双会话收零失败、FSDP2 单卡集合通信与新原生 notebook](2026-08-27-cpu-suite-green-and-notebooks.md)

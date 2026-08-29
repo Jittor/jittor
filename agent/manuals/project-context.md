@@ -2,7 +2,7 @@
 
 - Status: Current index, not a history log
 - Last reviewed: 2026-08-29
-- Baseline reviewed: `7caec188` plus the current RoPE follow-up
+- Baseline reviewed: `f62d8470` plus the current Python 3.13 follow-up
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -41,12 +41,12 @@ current tree has:
 - `pyproject.toml` as package/tool configuration and `noxfile.py` as the
   maintained gate surface;
 - one installed smoke test at `python -m jittor.selftest`;
-- durable design documents under semantic `docs/` directories.
+- durable design documents under semantic `docs/` directories;
+- Python 3.7-3.13 packaging, with real 3.12/3.13 wheel gates and NumPy 2.x on 3.13.
 
 Source ownership and future moves must follow
-[source architecture](../../docs/architecture/source-architecture.md). Runtime
-compiler resources under `python/jittor/src/` and `python/jittor/extern/` remain
-physical-path contracts.
+[source architecture](../../docs/architecture/source-architecture.md). Runtime compiler
+resources under `python/jittor/src/` and `python/jittor/extern/` remain physical-path contracts.
 
 ## Active work areas
 

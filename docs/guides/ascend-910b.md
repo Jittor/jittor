@@ -20,7 +20,7 @@ The maintained gate was validated on this combination:
 | pytest / pytest-timeout | 7.4.4 / 2.3.1 |
 
 These versions are a reproduced baseline, not a claim that every other CANN
-release is incompatible. Jittor declares Python 3.7 through 3.12 support;
+release is incompatible. Jittor declares Python 3.7 through 3.13 support;
 Python 3.9 through 3.11 is the practical range for an Ascend environment whose
 vendor packages may have narrower Python constraints.
 

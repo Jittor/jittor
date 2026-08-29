@@ -39,7 +39,7 @@ static PyObject* my_import(const char* module_name, const char* attr) {
 // co_freevars moved behind accessors that only exist from 3.11 on. The helpers
 // below read the same information through the attribute protocol, which has
 // behaved identically on every supported version, so this tracer works on 3.7
-// through 3.12 from one code path.
+// and newer releases from one code path.
 
 // A reference holder that tolerates nullptr. PyObjHolder treats a null pointer
 // as a fatal Python error, but walking a stack legitimately reaches the bottom,
@@ -99,6 +99,16 @@ static PyObject* frame_locals(PyFrameObject* f) {
     PyObject* locals = PyObject_GetAttrString((PyObject*)f, "f_locals");
     if (!locals) PyErr_Clear();
     return locals;
+}
+
+// Python 3.13 promoted optional attribute lookup to the public C API and no
+// longer declares the private spelling used by older releases.
+static int object_lookup_optional_attr(PyObject* obj, PyObject* name, PyObject** result) {
+    #if PY_VERSION_HEX >= 0x030d0000
+    return PyObject_GetOptionalAttr(obj, name, result);
+    #else
+    return _PyObject_LookupAttr(obj, name, result);
+    #endif
 }
 
 // The value bound to the frame's first parameter -- ``self`` for a method --
@@ -224,7 +234,9 @@ static vector<Stack> get_stack_info() {
             if (base_type != jt_module)
                 continue;
             PyObjHolder ret;
-            _PyObject_LookupAttr(obj, _trace_name, &ret.obj);
+            auto lookup_result = object_lookup_optional_attr(obj, _trace_name, &ret.obj);
+            if (lookup_result < 0)
+                LOGf << "Failed to look up Module._trace_name";
             string scope_name;
             if (!ret.obj) {
                 // find base name

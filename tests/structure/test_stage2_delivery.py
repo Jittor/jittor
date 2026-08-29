@@ -97,7 +97,9 @@ class TestStage2Delivery(unittest.TestCase):
         packaging = functions["packaging"]
         benchmark = functions["benchmark"] + functions["_record_asv"]
         cpu = functions["cpu"]
+        upper_python = functions["_upper_python_compatibility"]
         py312 = functions["py312"]
+        py313 = functions["py313"]
 
         self.assertIn("STRUCTURE_TESTS", structure)
         self.assertNotIn('"build"', structure)
@@ -157,22 +159,34 @@ class TestStage2Delivery(unittest.TestCase):
         self.assertIn("JITTOR_REQUIRE_REAL_TORCH", cpu)
         self.assertIn("requires REAL_TORCH_SITE", cpu)
         for token in (
-            "Python 3.12 compile OK without SyntaxWarning",
-            '"numpy==1.26.4"',
+            "compile OK without SyntaxWarning",
+            '"ls-files"',
+            '"--exclude-standard"',
             '"build"',
             '"jittor.selftest"',
+            "trace_py_var=2",
         ):
-            self.assertIn(token, py312)
+            self.assertIn(token, upper_python)
 
         self.assertIn('@nox.session(python="3.12", venv_backend="venv")', source)
+        self.assertIn('@nox.session(python="3.13", venv_backend="venv")', source)
+        self.assertIn('"numpy==1.26.4"', py312)
+        self.assertIn('"numpy>=2.1,<3.0"', py313)
         self.assertIn('"py312"', source)
+        self.assertIn('"py313"', source)
+        project_metadata = (self.repo_root / "pyproject.toml").read_text(encoding="utf-8")
+        self.assertIn('"Programming Language :: Python :: 3.12"', project_metadata)
         self.assertIn(
-            '"Programming Language :: Python :: 3.12"',
-            (self.repo_root / "pyproject.toml").read_text(encoding="utf-8"),
+            '"Programming Language :: Python :: 3.13"',
+            project_metadata,
         )
+        self.assertIn('"numpy<3.0"', project_metadata)
         self.assertIn("nox / py312", structure_workflow)
+        self.assertIn("nox / py313", structure_workflow)
         self.assertIn('python-version: "3.12"', structure_workflow)
+        self.assertIn('python-version: "3.13"', structure_workflow)
         self.assertIn("python -m nox -s py312", structure_workflow)
+        self.assertIn("python -m nox -s py313", structure_workflow)
 
     def test_asv_teardown_tolerates_skipped_parameter_setup(self):
         from benchmarks.operators import OperatorBenchmarks

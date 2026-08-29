@@ -300,6 +300,7 @@ nox.options.sessions = [
     "packaging",
     "py37",
     "py312",
+    "py313",
 ]
 
 for name, path in {
@@ -378,6 +379,8 @@ def _session_env(session, backend):
 def _source_copy(destination):
     ignored = shutil.ignore_patterns(
         ".git",
+        ".claude",
+        ".codex",
         ".mypy_cache",
         ".nox",
         ".pytest_cache",
@@ -1077,18 +1080,21 @@ def py37(session):
     _root, env = _session_env(session, "py37")
     script = r"""
 import pathlib
+import subprocess
 import sys
 
 if sys.version_info[:2] != (3, 7):
     raise SystemExit("py37 requires Python 3.7, found %s" % (sys.version.split()[0],))
 
 root = pathlib.Path(sys.argv[1]).resolve()
-excluded = {".git", ".mypy_cache", ".nox", ".pytest_cache", ".ruff_cache", "__pycache__"}
+listed = subprocess.check_output([
+    "git", "-C", str(root), "ls-files", "-z", "--cached", "--others",
+    "--exclude-standard", "--", "*.py",
+]).decode("utf-8").split("\0")
 failed = []
 checked = 0
-for path in sorted(root.rglob("*.py")):
-    if any(part in excluded for part in path.parts):
-        continue
+for relative in sorted(item for item in listed if item):
+    path = root / relative
     checked += 1
     try:
         compile(path.read_bytes(), str(path), "exec", dont_inherit=True)
@@ -1103,24 +1109,16 @@ print("Python 3.7 compile OK: %d files" % checked)
     session.run("python", "-c", script, str(REPO_ROOT), env=env)
 
 
-@nox.session(python="3.12", venv_backend="venv")
-def py312(session):
-    """Build, install, and execute Jittor with a real Python 3.12 interpreter."""
-    root, env = _session_env(session, "py312")
-    python_config = session.run(
-        "python",
-        "-c",
-        ("import os, sys; print(os.path.join(sys.base_prefix, 'bin', 'python3.12-config'))"),
-        silent=True,
-    ).strip()
-    if os.name != "nt" and not Path(python_config).is_file():
-        session.error("Python 3.12 config helper not found: %s" % python_config)
+def _upper_python_compatibility(session, version, session_name, numpy_requirement):
+    """Build and exercise an installed wheel on a maintained upper Python version."""
+    root, env = _session_env(session, session_name)
+    _set_python_config(session, "python", env, required=True)
     env.update(
         {
             "CUDA_VISIBLE_DEVICES": "",
+            "DISABLE_MULTIPROCESSING": "1",
             "JITTOR_TEST_DEVICES": "cpu",
             "nvcc_path": "",
-            "python_config_path": python_config,
             "use_cuda": "0",
             "use_cutt": "0",
             "use_cutlass": "0",
@@ -1135,36 +1133,42 @@ def py312(session):
         SETUPTOOLS,
         WHEEL,
         "astunparse==1.6.3",
-        "numpy==1.26.4",
+        numpy_requirement,
         "pillow==11.0.0",
         "tqdm==4.67.1",
     )
     compile_script = r"""
 import pathlib
+import subprocess
 import sys
 import warnings
 
-if sys.version_info[:2] != (3, 12):
-    raise SystemExit("py312 requires Python 3.12, found %s" % (sys.version.split()[0],))
+version = tuple(int(part) for part in sys.argv[2].split("."))
+session_name = sys.argv[3]
+if sys.version_info[:2] != version:
+    raise SystemExit("%s requires Python %s, found %s" % (
+        session_name, sys.argv[2], sys.version.split()[0]))
 
 warnings.simplefilter("error", SyntaxWarning)
 root = pathlib.Path(sys.argv[1]).resolve()
-excluded = {".git", ".mypy_cache", ".nox", ".pytest_cache", ".ruff_cache", "__pycache__"}
+listed = subprocess.check_output([
+    "git", "-C", str(root), "ls-files", "-z", "--cached", "--others",
+    "--exclude-standard", "--", "*.py",
+]).decode("utf-8").split("\0")
 failed = []
 checked = 0
-for path in sorted(root.rglob("*.py")):
-    if any(part in excluded for part in path.parts):
-        continue
+for relative in sorted(item for item in listed if item):
+    path = root / relative
     checked += 1
     try:
         compile(path.read_bytes(), str(path), "exec", dont_inherit=True)
     except (SyntaxError, UnicodeError) as error:
         failed.append("%s: %s" % (path.relative_to(root), error))
 if failed:
-    print("Python 3.12 compile failures:")
+    print("Python %s compile failures:" % sys.argv[2])
     print("\n".join(failed))
     raise SystemExit(1)
-print("Python 3.12 compile OK without SyntaxWarning: %d files" % checked)
+print("Python %s compile OK without SyntaxWarning: %d files" % (sys.argv[2], checked))
 """
     session.run(
         "python",
@@ -1173,6 +1177,8 @@ print("Python 3.12 compile OK without SyntaxWarning: %d files" % checked)
         "-c",
         compile_script,
         str(REPO_ROOT),
+        version,
+        session_name,
         env=env,
     )
 
@@ -1192,7 +1198,7 @@ print("Python 3.12 compile OK without SyntaxWarning: %d files" % checked)
         )
     wheels = sorted(dist.glob("*.whl"))
     if len(wheels) != 1:
-        session.error("expected exactly one Python 3.12 wheel, found %d" % len(wheels))
+        session.error("expected exactly one Python %s wheel, found %d" % (version, len(wheels)))
 
     wheel_install = root / "wheel-install"
     session.run(
@@ -1209,7 +1215,7 @@ print("Python 3.12 compile OK without SyntaxWarning: %d files" % checked)
     selftest_env = env.copy()
     selftest_env["PYTHONPATH"] = str(wheel_install)
     selftest_env["PYTHONNOUSERSITE"] = "1"
-    selftest_env["cache_name"] = "nox_py312_wheel_selftest"
+    selftest_env["cache_name"] = "nox_%s_wheel_selftest" % session_name
     with session.chdir(root):
         session.run(
             "python",
@@ -1219,6 +1225,43 @@ print("Python 3.12 compile OK without SyntaxWarning: %d files" % checked)
             "jittor.selftest",
             env=selftest_env,
         )
+        compatibility_probe = r"""
+import numpy as np
+import jittor as jt
+
+expected_numpy_major = int(__import__("sys").argv[1])
+if int(np.__version__.split(".")[0]) != expected_numpy_major:
+    raise SystemExit("expected NumPy major %d, found %s" % (
+        expected_numpy_major, np.__version__))
+
+class Scale(jt.Module):
+    def execute(self, value):
+        return value * 2
+
+source = np.asfortranarray(np.arange(12, dtype=np.float32).reshape(3, 4))
+with jt.flag_scope(trace_py_var=2):
+    result = Scale()(jt.array(source))
+    np.testing.assert_array_equal(result.numpy(), source * 2)
+    trace = jt.dump_trace_data()
+    jt.clear_trace_data()
+if not trace["node_data"]:
+    raise SystemExit("trace_py_var produced no node data")
+print("Python compatibility probe passed with NumPy", np.__version__)
+"""
+        expected_numpy_major = "2" if version == "3.13" else "1"
+        session.run("python", "-c", compatibility_probe, expected_numpy_major, env=selftest_env)
+
+
+@nox.session(python="3.12", venv_backend="venv")
+def py312(session):
+    """Build, install, and execute Jittor with a real Python 3.12 interpreter."""
+    _upper_python_compatibility(session, "3.12", "py312", "numpy==1.26.4")
+
+
+@nox.session(python="3.13", venv_backend="venv")
+def py313(session):
+    """Build, install, and execute Jittor with a real Python 3.13 interpreter."""
+    _upper_python_compatibility(session, "3.13", "py313", "numpy>=2.1,<3.0")
 
 
 @nox.session(python="3.11", venv_backend="venv")

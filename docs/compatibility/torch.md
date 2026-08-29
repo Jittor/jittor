@@ -305,14 +305,15 @@ persists (and keeps the param/buffer classification). Verified: a diffusers
 meta and plain paths (`test_diffusers.test_unet_from_pretrained_roundtrip`), and a
 transformers `BertModel` roundtrip matches to 0.0.
 
-A known limitation — **numpy 2.x**: the data-marshalling ABI fix landed (op
-*values* are correct under numpy 2.x), but a separate flaky heap-corruption crash under
-load remains (needs memory-debugging tooling to pin); **use numpy < 2** for now. Python
-3.13 ships numpy 2.x, so the same guidance applies there.
+**NumPy 2.x and Python 3.13** are maintained compatibility paths. Jittor selects the
+versioned NumPy C-API entry for array copies, avoids constructing legacy dtype
+descriptors, and derives transfer sizes from Jittor dtypes. The Python 3.13 wheel gate
+runs with NumPy 2.x and covers CPU self-test, non-C-contiguous array transfer, and
+Python variable tracing. The package accepts NumPy versions below 3.
 
 In progress (deeper/core): `complex128` and native kernels that remove the
 remaining internal complex bridge, PP/TP,
 memory-manager tuning, cuDNN9 and CUDA 11/13 wheel families (the aligned CUDA
 12.2/cuDNN 8 stack is available through `jittor[cuda12]`), the
-remaining Lightning surface (DDP/precision/loggers), the numpy-2.x stability fix, and
-triton/tilelang custom-op support.
+remaining Lightning surface (DDP/precision/loggers), and triton/tilelang custom-op
+support.

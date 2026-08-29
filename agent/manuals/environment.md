@@ -1,8 +1,8 @@
 # Jittor Development Environment
 
 - Status: Maintained
-- Last reviewed: 2026-08-12
-- Baseline: `dccca5b2`
+- Last reviewed: 2026-08-29
+- Baseline: `f62d8470` plus the Python 3.13 compatibility changes
 - Owner: repository and CI maintainers
 - Review when: supported Python, nox sessions, backend prerequisites, or cache
   behavior changes
@@ -57,16 +57,17 @@ Benchmarks and tests never share a cache.
 
 ## Python and tools
 
-- Package runtime: Python 3.7 through Python 3.12, as declared by
+- Package runtime: Python 3.7 through Python 3.13, as declared by
   [`pyproject.toml`](../../pyproject.toml). Python 3.7 remains the lower syntax
-  boundary; Python 3.12 is the maintained upper compatibility gate.
+  boundary; Python 3.12 and 3.13 are maintained wheel/runtime compatibility gates.
 - Maintainer tooling: Python 3.11 with pinned versions from
   [`requirements/dev-tools.txt`](../../requirements/dev-tools.txt).
 - Syntax compatibility: the `py37` nox session requires a real Python 3.7
   interpreter and compiles every repository Python file.
-- Python 3.12 compatibility: the `py312` nox session requires a real Python
-  3.12 interpreter, treats `SyntaxWarning` as an error, builds a wheel, installs
-  that wheel outside the source tree, and runs `jittor.selftest` on CPU.
+- Upper-version compatibility: the `py312` and `py313` nox sessions require the
+  matching real interpreter, treat `SyntaxWarning` as an error, build a wheel,
+  install that wheel outside the source tree, and run CPU self-test, NumPy array
+  interop, and Python variable tracing probes. Python 3.13 is tested with NumPy 2.x.
 
 ```bash
 python -m pip install -e .
@@ -74,6 +75,7 @@ python -m pip install -r requirements/dev-tools.txt
 python -m jittor.selftest
 python -m nox -s structure
 python -m nox -s py312
+python -m nox -s py313
 ```
 
 ## Backend gates
