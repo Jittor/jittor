@@ -805,6 +805,16 @@ def compile_src(src, h, basename):
         """)
     code.append("{0,0,0,0}")
     class_defs_code.append("{0,0,0,0}")
+    if has_attr_dict:
+        # A type that carries an instance dict still needs the `__dict__`
+        # descriptor spelled out: PyType_Ready does not synthesise one, only
+        # Python-level class creation does. Without it `tp_dictoffset` is set,
+        # attribute assignment works, and yet `vars(obj)` and `obj.__dict__`
+        # both fail -- which breaks any library that copies attributes between
+        # tensors (vLLM's meta-tensor path does exactly that).
+        class_getsets_code.append(
+            '{"__dict__", PyObject_GenericGetDict, PyObject_GenericSetDict, '
+            'R""(instance attribute dictionary)""}')
     class_getsets_code.append("{0,0,0,0}")
     submodule_defs_code.append("{0,0,0,0}")
     core_name = "jittor_core"
