@@ -171,6 +171,7 @@ def change_function():
     from .aclops.flip_op import FlipACL
     from .aclops.concat_op import ConcatACL
     from .aclops.gather_scatter_op import GatherACL
+    from .aclops.arg_reduce_op import ArgReduceACL
     from .aclops.cumsum_op import CumsumACL
     from .aclops.index_op import IndexACL
     from .aclops.gather_scatter_op import ScatterACL
@@ -346,6 +347,13 @@ def change_function():
         if not isinstance(src, jt.Var):
             src = jt.full(index.shape, src, input.dtype)
         return ScatterACL()(input, dim, index, src, reduce)
+
+    original_arg_reduce = jt.arg_reduce
+
+    def arg_reduce_acl(input, op, dim, keepdims=False):
+        if str(input.dtype) not in ("float16", "float32"):
+            return original_arg_reduce(input, op, dim, keepdims)
+        return ArgReduceACL(original_arg_reduce)(input, op, dim, keepdims)
 
     from .aclops.where_op import WhereACL
 
@@ -778,6 +786,7 @@ def change_function():
     jt.scatter = warp(jt.scatter, scatter_acl)
     jt.Var.scatter = lambda x, dim, index, src, reduce="void": jt.scatter(
         x, dim, index, src, reduce)
+    jt.arg_reduce = warp(jt.arg_reduce, arg_reduce_acl)
 
     jt.where = warp(jt.where, where_acl)
     jt.nonzero = warp(jt.nonzero, nonzero_acl)

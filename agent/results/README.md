@@ -6,6 +6,7 @@
 
 ## 兼容性与功能验证
 
+- [2026-08-30 Ascend arg_reduce backward 原生执行修复](2026-08-30-npu-arg-reduce-backward.md)
 - [2026-08-30 ARM CPU 全量门禁与并发稳定性修复](2026-08-30-arm-cpu-suite-stability.md)
 - [2026-08-29 Python 3.13 与 NumPy 2 wheel 兼容验证](2026-08-29-python313-compatibility.md)
 - [2026-08-28 Python 3.12 wheel 与 Nox 解释器隔离验证](2026-08-28-python312-nox-isolation.md)

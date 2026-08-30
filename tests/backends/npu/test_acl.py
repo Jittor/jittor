@@ -99,6 +99,48 @@ class TestACL(unittest.TestCase):
         self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_float_arg_reduce_backward_runs_on_acl(self):
+        cases = [
+            (
+                jt.float32([[1, 5, 3, 5], [-2, -4, 7, 0]]),
+                "max", 1, False, jt.float32([2, 3]),
+                [[0, 2, 0, 0], [0, 0, 3, 0]],
+            ),
+            (
+                jt.float32([[1, -4, 3], [1, 8, -2]]),
+                "min", 0, True, jt.float32([[4, 5, 6]]),
+                [[4, 5, 0], [0, 0, 6]],
+            ),
+            (
+                jt.float16([3, -1, -1, 4]),
+                "min", -1, False, jt.float16([7]),
+                [0, 7, 0, 0],
+            ),
+        ]
+
+        actual = []
+        with jt.log_capture_scope(
+            log_v=0, log_vprefix="acl_op_exec.cc=100"
+        ) as logs:
+            for x, op, dim, keepdims, weight, _expected in cases:
+                x.start_grad()
+                _indices, values = jt.arg_reduce(x, op, dim, keepdims)
+                grad = jt.grad((values * weight).sum(), x)
+                actual.append(grad.numpy())
+
+        for grad, case in zip(actual, cases):
+            np.testing.assert_allclose(grad, case[5], rtol=0, atol=0)
+
+        messages = [log["msg"].lower() for log in logs]
+        self.assertTrue(any(
+            "exec acl op" in message and "arg_reduce" in message
+            for message in messages
+        ))
+        self.assertTrue(any("compile acl op" in message for message in messages))
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_item_waits_for_acl_stream(self):
         actual = []
         with jt.log_capture_scope(

@@ -1,8 +1,8 @@
 # Jittor Project Context
 
 - Status: Current index, not a history log
-- Last reviewed: 2026-08-29
-- Baseline reviewed: `f62d8470` plus the current Python 3.13 follow-up
+- Last reviewed: 2026-08-30
+- Baseline reviewed: `139aac05` plus the current ACL arg-reduce follow-up
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -80,12 +80,12 @@ OpInfo CUDA references. The maintained CPU gate also passes with a fail-closed
 independent binary PyTorch oracle, and compact ResNet18, ViT, GPT-2, and
 diffusion UNet forward/backward parity passes on CPU and CUDA. ROCm, most
 optional downstream dependencies, full training, and performance remain
-separate gates. On a real 910B3, the maintained Ascend gate passes `362 passed, 11 skipped`.
+separate gates. On a real 910B3, the maintained Ascend gate passes `366 passed, 11 skipped`; float16/float32 `arg_reduce` forward and value-output backward execute without CPU fallback.
 Transformers 4.56.2 Qwen3-8B float32 loads all 8,190,735,360 parameters; SDPA,
 greedy `arg_reduce`, and mask `all` run on ACL without CPU fallback. A native-shape `empty`
 fast path brings 0.6B decode to 15.90 token/s versus native `torch_npu` 16.19 token/s.
 Qwen3-0.6B BF16 SDPA passes zero-fallback generation at 14.92 token/s versus native 15.31 token/s.
-See the [Ascend guide](../../docs/guides/ascend-910b.md), [validation report](../results/2026-08-28-ascend-910b-validation.md), [Qwen3 performance report](../results/transformers/2026-08-28-qwen3-ascend-performance.md), the complete [CPU](../results/2026-08-22-complete-cpu-test-suite.md) and [CUDA](../results/2026-08-22-cuda-test-suite.md) reports, plus the
+See the [Ascend guide](../../docs/guides/ascend-910b.md), [validation report](../results/2026-08-28-ascend-910b-validation.md), [arg-reduce backward follow-up](../results/2026-08-30-npu-arg-reduce-backward.md), [Qwen3 performance report](../results/transformers/2026-08-28-qwen3-ascend-performance.md), the complete [CPU](../results/2026-08-22-complete-cpu-test-suite.md) and [CUDA](../results/2026-08-22-cuda-test-suite.md) reports, plus the
 [parallel follow-up](../results/2026-08-22-cuda-parallel-range-network-oracle.md).
 The current fail-closed optional CUDA base gate passes 16 TorchMetrics,
 MMCV/MMEngine, PEFT, TensorDict, and FlashAttention-adapter tests from one

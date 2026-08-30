@@ -230,10 +230,14 @@ allowing them to abort or stall the process:
   is additionally verified for Qwen3-0.6B with FlashAttentionScoreV2 prefill and
   IncreFlashAttentionV4 decode; Qwen3-8B BF16 SDPA, training, sampling,
   quantization, and other model families remain separate capability gates;
-- float16/float32 `arg_reduce` forward runs through ACL, but its generic backward
-  graph still reaches an unsupported index operation and falls back to CPU;
 - ACL does not provide general float64 operator coverage, so float64 fallback
   is not accepted as evidence for an NPU operation.
+
+Float16/float32 `arg_reduce` forward and value-output backward are maintained
+ACL capabilities. Forward uses CANN MaxDim/MinDim and backward scatters the
+upstream gradient to the selected first index; the real-device regression rejects
+CPU compilation and fallback. See the
+[focused verification report](../../agent/results/2026-08-30-npu-arg-reduce-backward.md).
 
 See the [active known-issues ledger](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)
 for executable evidence and exit conditions.

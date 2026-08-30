@@ -1,8 +1,8 @@
 # Active Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-08-29
-- Baseline: `6da453a1`
+- Last reviewed: 2026-08-30
+- Baseline: `139aac05` plus the current ACL arg-reduce follow-up
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -98,24 +98,6 @@ framework defects.
   is not accepted as NPU support evidence
 - Review/expiry condition: full and dimension reductions match NumPy and leave
   the process healthy on repeated real-NPU runs
-
-## KI-BACKEND-006: `arg_reduce` backward falls back on NPU
-
-- Severity: Medium
-- Status: Open; float16/float32 forward and Qwen3 greedy generation verified on
-  ACL
-- Owner: reduction, Torch-compatibility, and ACL backend maintainers
-- Evidence: [`test_acl.py`](../../tests/backends/npu/test_acl.py),
-  [`run_qwen3_transformers.py`](../../tests/backends/npu/manual/run_qwen3_transformers.py),
-  and [Ascend 910B validation](../results/2026-08-28-ascend-910b-validation.md)
-- Symptom: float16/float32 max/min `arg_reduce` forward executes through
-  `aclnnMaxDim`/`aclnnMinDim`, but its generic gradient builds an index plus
-  `reindex_reduce` graph whose index operation is unsupported by the ACL runner
-  and falls back to CPU
-- Workaround: use the verified forward path for inference; do not claim NPU
-  training support for `arg_reduce`
-- Review/expiry condition: value-output backward matches a reference on a real
-  NPU with no CPU-compiled operation or fallback
 
 ## KI-OPS-002: integer floor-division backend verification incomplete
 
