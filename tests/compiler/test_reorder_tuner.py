@@ -6,9 +6,7 @@
 # ***************************************************************
 import unittest
 import jittor as jt
-import os
 from _helpers.logs import find_log_with_re
-from _helpers.retry import retry
 from _helpers.tuner_parser import simple_parser, tuner_choices
 
 gid = 0
@@ -57,7 +55,6 @@ class TestReorderTuner(unittest.TestCase):
             "order3":[0,1,2,], "order4":[0,1,2,], "order5":[0,1,2,], 
         }, candidates
 
-    @retry(10)
     def test_searcher(self):
         a = jt.ones((80,80,80))
         a.data
@@ -73,15 +70,39 @@ class TestReorderTuner(unittest.TestCase):
         ) as logs:
             b = a + a
             b.data
-        ls = find_log_with_re(logs, "Choices")
-        assert len(ls) == 6, (ls, logs)
-        ls = find_log_with_re(logs, "Best choices\\(.*\\): (.*)$")
-        assert len(ls) == 1
-        best = tuner_choices(ls[0])
-        assert best == {
-            "compile_shape": 1, "order0": 0, "order1": 0, "order2": 0,
-            "test_reorder_tuner":gid
+        choices = find_log_with_re(
+            logs,
+            r"Choices\(([0-9.eE+-]+)ms, best [0-9.eE+-]+\) (.*)$",
+        )
+        assert len(choices) == 6, (choices, logs)
+        measured = [(float(elapsed), tuner_choices(raw))
+                    for elapsed, raw in choices]
+        observed_orders = set()
+        for _, choice in measured:
+            assert choice["compile_shape"] == 1
+            assert choice["test_reorder_tuner"] == gid
+            observed_orders.add(
+                (choice["order0"], choice["order1"], choice["order2"])
+            )
+        assert observed_orders == {
+            (0, order1, order2)
+            for order1 in range(2)
+            for order2 in range(3)
         }
+
+        best_logs = find_log_with_re(
+            logs,
+            r"Best choices\(([0-9.eE+-]+)ms\): (.*)$",
+        )
+        assert len(best_logs) == 1
+        best_time = float(best_logs[0][0])
+        best = tuner_choices(best_logs[0][1])
+        chosen_times = [elapsed for elapsed, choice in measured if choice == best]
+        assert len(chosen_times) == 1, (best, measured)
+        min_time = min(elapsed for elapsed, _ in measured)
+        tolerance = max(1e-4, min_time * 1e-5)
+        assert abs(chosen_times[0] - min_time) <= tolerance
+        assert abs(best_time - chosen_times[0]) <= tolerance
 
 
 

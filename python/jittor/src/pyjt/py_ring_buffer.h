@@ -31,17 +31,18 @@ struct PyMultiprocessRingBuffer {
     // @pyjt(stop)
     inline void stop() { rb->stop(); }
     // @pyjt(is_stop)
-    inline bool is_stop() { return rb->is_stop; }
+    inline bool is_stop() { return rb->is_stop.load(std::memory_order_acquire); }
 
     // @pyjt(total_pop)
-    inline uint64 total_pop() { return rb->l; }
+    inline uint64 total_pop() { return rb->l.load(std::memory_order_acquire); }
     // @pyjt(total_push)
-    inline uint64 total_push() { return rb->r; }
+    inline uint64 total_push() { return rb->r.load(std::memory_order_acquire); }
     // @pyjt(__repr__)
     inline string to_string() {
         string s="Buffer(free=";
         auto size = rb->size;
-        auto used = rb->r - rb->l;
+        auto used = rb->r.load(std::memory_order_acquire)
+            - rb->l.load(std::memory_order_acquire);
         s += S(100 - used*100.0/size);
         s += "% size=";
         s += S(size);

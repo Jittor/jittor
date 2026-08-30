@@ -233,6 +233,7 @@ assert jt.flags.use_parallel_op_compiler == 0
 
 
 @pytest.mark.cpu
+@pytest.mark.timeout(1800)
 def test_notebook_smokes_execute_offline_on_cpu(tmp_path, monkeypatch):
     for relative in ("home", "jittor-cache", "xdg-cache"):
         (tmp_path / relative).mkdir()

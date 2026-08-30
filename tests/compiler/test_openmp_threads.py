@@ -13,9 +13,14 @@ The default is only a default: an explicit ``OMP_NUM_THREADS`` always wins.
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 
-from jittor_utils import limit_openmp_to_physical_cores, physical_core_count
+from jittor_utils import (
+    _physical_core_count_from_sysfs,
+    limit_openmp_to_physical_cores,
+    physical_core_count,
+)
 
 
 class TestPhysicalCoreCount(unittest.TestCase):
@@ -25,6 +30,20 @@ class TestPhysicalCoreCount(unittest.TestCase):
         self.assertIsNotNone(physical)
         self.assertGreaterEqual(physical, 1)
         self.assertLessEqual(physical, os.cpu_count())
+
+    def test_sysfs_counts_smt_sibling_groups(self):
+        with tempfile.TemporaryDirectory() as root:
+            for cpu_id, siblings in enumerate(("0-1", "0-1", "2-3", "2-3")):
+                topology = os.path.join(root, "cpu%d" % cpu_id, "topology")
+                os.makedirs(topology)
+                with open(os.path.join(topology, "thread_siblings_list"), "w") as handle:
+                    handle.write(siblings)
+            self.assertEqual(
+                _physical_core_count_from_sysfs(range(4), root), 2)
+            # An affinity mask containing one thread from each core still has
+            # two independently runnable physical cores.
+            self.assertEqual(
+                _physical_core_count_from_sysfs((1, 2), root), 2)
 
 
 class TestOpenmpDefault(unittest.TestCase):

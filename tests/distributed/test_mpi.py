@@ -7,14 +7,25 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
+import os
 import unittest
+
 import jittor as jt
 import numpy as np
 from _helpers.distributed import run_mpi_test
+
 mpi = jt.compile_extern.mpi
+
 
 @unittest.skipIf(not jt.in_mpi, "no inside mpirun")
 class TestMpi(unittest.TestCase):
+    def test_mpi_rank_metadata(self):
+        assert 0 <= mpi.world_rank() < mpi.world_size()
+        local_rank = mpi.local_rank()
+        assert 0 <= local_rank < mpi.world_size()
+        if "OMPI_COMM_WORLD_LOCAL_RANK" in os.environ:
+            assert local_rank == int(os.environ["OMPI_COMM_WORLD_LOCAL_RANK"])
+
     def test_mpi_test_op(self):
         assert jt.compile_extern.mpi_ops.mpi_test("").data == 123
 

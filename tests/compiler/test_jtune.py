@@ -5,9 +5,11 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 import unittest
+import importlib.util
 import jittor as jt
 import os
 import re
+import shlex
 import sys
 
 class TestJtune(unittest.TestCase):
@@ -32,9 +34,9 @@ class TestJtune(unittest.TestCase):
 
     def test_run_so(self):
         res = self.run_cmd("run_so").splitlines()
-        assert res[0]=="Enter fake_main entry.", res
-        assert res[1]=="     Count TotalTime   AvgTime   MinTime   MaxTime     Input    Output   Compute", res
-        nums = res[2].split()
+        entry = res.index("Enter fake_main entry.")
+        assert res[entry+1]=="     Count TotalTime   AvgTime   MinTime   MaxTime     Input    Output   Compute", res
+        nums = res[entry+2].split()
         assert nums[0]=="1", nums
 
     def test_cc_to_so(self):
@@ -48,6 +50,22 @@ class TestJtune(unittest.TestCase):
         fma_ins = re.findall("fma.*", src)
         assert len(fma_ins)>=4, f"fma instructions should be used for matmul. {fma_ins}"
         self.run_cmd("s_to_so")
+
+    def test_compile_rewrite_preserves_paths_containing_dash_g(self):
+        spec = importlib.util.spec_from_file_location("jittor_jtune_test", self.jtune_path)
+        jtune = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(jtune)
+        command = (
+            'g++ "/tmp/merge-gate/op.cc" -g -L"/tmp/linux-gnu" '
+            '-lstdc++ -ldl -shared -o "/tmp/merge-gate/kernel_op.so"'
+        )
+        arguments = shlex.split(jtune.rewrite_compile_command(command, "cc_to_s"))
+        self.assertIn("/tmp/merge-gate/op.cc", arguments)
+        self.assertIn("-L/tmp/linux-gnu", arguments)
+        self.assertIn("/tmp/merge-gate/kernel_op.s", arguments)
+        self.assertIn("-S", arguments)
+        for removed in ("-g", "-lstdc++", "-ldl", "-shared"):
+            self.assertNotIn(removed, arguments)
         
 
 if __name__ == "__main__":

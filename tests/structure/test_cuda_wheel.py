@@ -108,7 +108,7 @@ class _WheelStackFixture:
             component_root = site_packages / relative_path
             (component_root / "include").mkdir(parents=True)
             (component_root / "lib").mkdir()
-            self.components[component] = component_root.resolve()
+            self.components[component] = Path(os.path.abspath(component_root))
             self.distributions[dist_name] = _FakeDistribution(version, site_packages)
 
         for component, header in _REQUIRED_HEADERS.items():
@@ -118,7 +118,7 @@ class _WheelStackFixture:
             component = cuda_wheel.LIBRARY_COMPONENTS[name]
             path = self.components[component] / "lib" / ("lib%s.so.%s" % (name, abi))
             path.touch()
-            self.library_paths[name] = path.resolve()
+            self.library_paths[name] = Path(os.path.abspath(path))
 
         self.registry = _DistributionRegistry(self.distributions)
 

@@ -7,25 +7,25 @@
 import unittest
 import jittor as jt
 import time
-from _helpers.assertions import expect_error
-import os
-
-mid = 0
-if hasattr(os, "uname") and "jittor" in os.uname()[1]:
-    mid = 1
 
 class TestNanoString(unittest.TestCase):
     def test(self):
         dtype = jt.NanoString
-        t = time.time()
-        n = 1000000
-        for i in range(n):
-            dtype("float")
-        t = (time.time() - t)/n
-        # t is about 0.01 for 100w loop
-        # 92ns one loop
-        print("nanostring time", t)
-        assert t < [1.5e-7, 1.9e-7][mid], t
+
+        def best_call_time(call, argument):
+            n = 250000
+            timings = []
+            for _ in range(5):
+                start = time.perf_counter()
+                for _ in range(n):
+                    call(argument)
+                timings.append((time.perf_counter() - start) / n)
+            return min(timings)
+
+        nano_time = best_call_time(dtype, "float")
+        builtin_time = best_call_time(int, "1")
+        print("nanostring time", nano_time, "builtin int time", builtin_time)
+        assert nano_time < builtin_time * 1.25, (nano_time, builtin_time)
 
         assert (jt.hash("asdasd") == 4152566416)
         assert str(jt.NanoString("float"))=="float32"

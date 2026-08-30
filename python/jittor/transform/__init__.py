@@ -240,15 +240,15 @@ def to_tensor(pic):
 
     # handle PIL Image
     if pic.mode == 'I':
-        img = np.array(pic, np.int32, copy=False)
+        img = np.asarray(pic, dtype=np.int32)
     elif pic.mode == 'I;16':
-        img = np.array(pic, np.int16, copy=False)
+        img = np.asarray(pic, dtype=np.int16)
     elif pic.mode == 'F':
-        img = np.array(pic, np.float32, copy=False)
+        img = np.asarray(pic, dtype=np.float32)
     elif pic.mode == '1':
-        img = np.array(pic, np.uint8, copy=False) * 255
+        img = np.asarray(pic, dtype=np.uint8) * 255
     else:
-        img = np.array(pic, np.uint8, copy=False)
+        img = np.asarray(pic, dtype=np.uint8)
 
     # put it from HWC to CHW format
     img = img.reshape(pic.size[1], pic.size[0], len(pic.getbands()))
@@ -293,15 +293,15 @@ def _to_jittor_array(pic):
 
     # handle PIL Image
     if pic.mode == 'I':
-        img = jt.array(np.array(pic, np.int32, copy=False))
+        img = jt.array(np.asarray(pic, dtype=np.int32))
     elif pic.mode == 'I;16':
-        img = jt.array(np.array(pic, np.int16, copy=False))
+        img = jt.array(np.asarray(pic, dtype=np.int16))
     elif pic.mode == 'F':
-        img = jt.array(np.array(pic, np.float32, copy=False))
+        img = jt.array(np.asarray(pic, dtype=np.float32))
     elif pic.mode == '1':
-        img = jt.array(np.array(pic, np.uint8, copy=False) * 255, dtype='uint8')
+        img = jt.array(np.asarray(pic, dtype=np.uint8) * 255, dtype='uint8')
     else:
-        img = jt.array(np.array(pic, np.uint8, copy=False))
+        img = jt.array(np.asarray(pic, dtype=np.uint8))
 
     # put it from HWC to CHW format
     img = img.reshape(pic.size[1], pic.size[0], len(pic.getbands()))

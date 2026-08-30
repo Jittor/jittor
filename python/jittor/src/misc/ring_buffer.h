@@ -10,6 +10,7 @@
 #else
 #include <pthread.h>
 #endif
+#include <atomic>
 #include <cstring>
 #include "common.h"
 
@@ -109,13 +110,17 @@ struct RingBuffer {
     uint64 size;
     uint64 size_mask;
     uint64 size_bit;
-    volatile uint64 l;
-    volatile uint64 r;
-    volatile bool is_wait;
-    volatile bool is_stop;
+    alignas(64) std::atomic<uint64> l;
+    std::atomic<bool> is_push_wait;
+    uint64 r_cache;
+    alignas(64) std::atomic<uint64> r;
+    std::atomic<bool> is_pop_wait;
+    uint64 l_cache;
+    std::atomic<bool> is_stop;
     bool is_multiprocess;
     Mutex m;
-    Cond cv;
+    Cond push_cv;
+    Cond pop_cv;
     char _ptr;
 
     RingBuffer(uint64 size, bool multiprocess=false);
@@ -124,27 +129,60 @@ struct RingBuffer {
     static RingBuffer* make_ring_buffer(uint64 size, bool multiprocess, uint64 buffer=0, bool init=true);
     static void free_ring_buffer(RingBuffer* rb, uint64 buffer=0, bool init=true);
 
-    inline void clear() { l = r = is_stop = 0; }
-
-    inline void wait() {
-        if (is_stop) {
-            throw std::runtime_error("stop");
-        }
-        {
-            MutexScope _(m);
-            if (is_wait) {
-                cv.notify();
-                is_wait = 0;
-            }
-            is_wait = 1;
-            cv.wait(_);
-        }
+    inline void clear() {
+        l.store(0, std::memory_order_release);
+        r.store(0, std::memory_order_release);
+        l_cache = 0;
+        r_cache = 0;
+        is_push_wait.store(false, std::memory_order_release);
+        is_pop_wait.store(false, std::memory_order_release);
+        is_stop.store(false, std::memory_order_release);
     }
 
-    inline void notify() {
+    inline void wait_push(uint64 offset) {
         MutexScope _(m);
-        cv.notify();
-        is_wait = 0;
+        while (true) {
+            is_push_wait.store(true, std::memory_order_seq_cst);
+            auto current_l = l.load(std::memory_order_seq_cst);
+            l_cache = current_l;
+            if (offset <= current_l + size)
+                break;
+            if (is_stop.load(std::memory_order_acquire)) {
+                is_push_wait.store(false, std::memory_order_seq_cst);
+                throw std::runtime_error("stop");
+            }
+            push_cv.wait(_);
+        }
+        is_push_wait.store(false, std::memory_order_seq_cst);
+    }
+
+    inline void wait_pop(uint64 offset) {
+        MutexScope _(m);
+        while (true) {
+            is_pop_wait.store(true, std::memory_order_seq_cst);
+            auto current_r = r.load(std::memory_order_seq_cst);
+            r_cache = current_r;
+            if (offset <= current_r)
+                break;
+            if (is_stop.load(std::memory_order_acquire)) {
+                is_pop_wait.store(false, std::memory_order_seq_cst);
+                throw std::runtime_error("stop");
+            }
+            pop_cv.wait(_);
+        }
+        is_pop_wait.store(false, std::memory_order_seq_cst);
+    }
+
+    inline void notify_push() {
+        MutexScope _(m);
+        is_push_wait.store(false, std::memory_order_seq_cst);
+        push_cv.notify();
+    }
+
+    inline void notify_pop() {
+        MutexScope _(m);
+        is_pop_wait.store(false, std::memory_order_seq_cst);
+        pop_cv.notify();
     }
 
     inline void push(uint64 size, uint64& __restrict__ offset) {
@@ -157,18 +195,21 @@ struct RingBuffer {
             rr = c2 << size_bit;
             rr_next = rr + size;
         }
-        CHECK(rr_next <= r+this->size) << "Buffer size too small, please increase buffer size. Current size:"
-            << this->size << "Required size:" << rr_next - r;
-        while (rr_next > l + this->size) {
-            wait();
+        auto current_r = r.load(std::memory_order_relaxed);
+        CHECK(rr_next <= current_r+this->size) << "Buffer size too small, please increase buffer size. Current size:"
+            << this->size << "Required size:" << rr_next - current_r;
+        if (rr_next > l_cache + this->size) {
+            l_cache = l.load(std::memory_order_acquire);
+            if (rr_next > l_cache + this->size)
+                wait_push(rr_next);
         }
         offset = rr_next;
     }
 
     inline void commit_push(uint64 offset) {
-        r = offset;
-        if (is_wait)
-            notify();
+        r.store(offset, std::memory_order_seq_cst);
+        if (is_pop_wait.load(std::memory_order_seq_cst))
+            notify_pop();
     }
 
     inline void pop(uint64 size, uint64& __restrict__ offset) {
@@ -181,26 +222,28 @@ struct RingBuffer {
             ll = c2 << size_bit;
             ll_next = ll + size;
         }
-        while (ll_next > r) {
-            ASSERT(size<=this->size);
-            wait();
+        ASSERT(size<=this->size);
+        if (ll_next > r_cache) {
+            r_cache = r.load(std::memory_order_acquire);
+            if (ll_next > r_cache)
+                wait_pop(ll_next);
         }
         offset = ll_next;
     }
 
     inline void commit_pop(uint64 offset) {
-        l = offset;
-        if (is_wait)
-            notify();
+        l.store(offset, std::memory_order_seq_cst);
+        if (is_push_wait.load(std::memory_order_seq_cst))
+            notify_push();
     }
 
     inline uint64 push(uint64 size) { 
-        auto offset = r;
+        auto offset = r.load(std::memory_order_relaxed);
         push(size, offset);
         return offset;
     }
     inline uint64 pop(uint64 size) {
-        auto offset = l;
+        auto offset = l.load(std::memory_order_relaxed);
         pop(size, offset); 
         return offset;
     }

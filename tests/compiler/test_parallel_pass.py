@@ -8,11 +8,14 @@ import unittest
 import jittor as jt
 import os
 import numpy as np
+import re
 
 class SimpleAsmParser:
     def __init__(self, src):
         funcs = []
-        for s in src.split(".globl"):
+        # GCC emits ``.global`` on AArch64 and ``.globl`` on x86.
+        for s in re.split(r"^\s*\.(?:global|globl)\s+", src,
+                          flags=re.MULTILINE):
             funcs.append(s.splitlines())
         self.funcs = funcs
 

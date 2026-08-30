@@ -10,6 +10,7 @@
 #include <cmath>
 #include <limits>
 #include <cstring>
+#include <vector>
 
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
@@ -228,19 +229,20 @@ mpi_initer() {
     MPI_CHECK(MPI_Comm_rank(MPI_COMM_WORLD, &mpi_world_rank));
 
     //calculating localRank based on hostname which is used in selecting a GPU
-    uint64_t hostHashs[mpi_world_rank];
+    std::vector<uint64_t> host_hashes(mpi_world_size);
     char hostname[1024];
     getHostName(hostname, 1024);
-    hostHashs[mpi_world_rank] = getHostHash(hostname);
-    MPI_CHECK(MPI_Allgather(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, hostHashs, sizeof(uint64_t), MPI_BYTE, MPI_COMM_WORLD));
+    host_hashes[mpi_world_rank] = getHostHash(hostname);
+    MPI_CHECK(MPI_Allgather(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL,
+        host_hashes.data(), sizeof(uint64_t), MPI_BYTE, MPI_COMM_WORLD));
     mpi_local_rank = 0;
     for (int p=0; p<mpi_world_size; p++) {
         if (p == mpi_world_rank) break;
-        if (hostHashs[p] == hostHashs[mpi_world_rank]) mpi_local_rank++;
+        if (host_hashes[p] == host_hashes[mpi_world_rank]) mpi_local_rank++;
     }
     mpi_local_size = 0;
     for (int p=0; p<mpi_world_size; p++) {
-        if (hostHashs[p] == hostHashs[mpi_world_rank]) mpi_local_size++;
+        if (host_hashes[p] == host_hashes[mpi_world_rank]) mpi_local_size++;
     }
     LOGv << "MPI init finished: local" << mpi_local_rank
         << "size" << mpi_local_size

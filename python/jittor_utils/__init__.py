@@ -102,35 +102,71 @@ def home():
     return _home_path
 
 
+def _available_cpu_ids():
+    get_affinity = getattr(os, "sched_getaffinity", None)
+    if get_affinity is not None:
+        try:
+            return sorted(get_affinity(0))
+        except OSError:
+            pass
+    logical = os.cpu_count()
+    return list(range(logical)) if logical else []
+
+
+def _physical_core_count_from_sysfs(cpu_ids,
+                                    root="/sys/devices/system/cpu"):
+    """Count the distinct SMT sibling groups visible to this process."""
+    sibling_groups = set()
+    for cpu_id in cpu_ids:
+        path = os.path.join(root, "cpu%d" % cpu_id, "topology",
+                            "thread_siblings_list")
+        try:
+            with open(path) as handle:
+                siblings = handle.read().strip()
+        except OSError:
+            return None
+        if not siblings:
+            return None
+        sibling_groups.add(siblings)
+    return len(sibling_groups) or None
+
+
+def _physical_core_count_from_cpuinfo(cpu_ids, path="/proc/cpuinfo"):
+    try:
+        with open(path) as handle:
+            text = handle.read()
+    except OSError:
+        return None
+    allowed = set(cpu_ids) if cpu_ids else None
+    cores = set()
+    for block in text.split("\n\n"):
+        fields = {}
+        for line in block.splitlines():
+            if ":" in line:
+                key, _, value = line.partition(":")
+                fields[key.strip()] = value.strip()
+        try:
+            cpu_id = int(fields["processor"])
+            package = fields["physical id"]
+            core = fields["core id"]
+        except (KeyError, ValueError):
+            continue
+        if allowed is None or cpu_id in allowed:
+            cores.add((package, core))
+    return len(cores) or None
+
+
 def physical_core_count():
     """Cores that can retire instructions in parallel, not SMT siblings.
 
     Returns ``None`` when the topology is not readable, which is the signal to
     leave the OpenMP default alone rather than guess.
     """
-    try:
-        with open("/proc/cpuinfo") as handle:
-            text = handle.read()
-    except OSError:
-        return None
-    cores = set()
-    package = core = None
-    for line in text.splitlines():
-        if ":" not in line:
-            # A blank line separates one logical CPU's block from the next.
-            if package is not None and core is not None:
-                cores.add((package, core))
-            package = core = None
-            continue
-        key, _, value = line.partition(":")
-        key = key.strip()
-        if key == "physical id":
-            package = value.strip()
-        elif key == "core id":
-            core = value.strip()
-    if package is not None and core is not None:
-        cores.add((package, core))
-    return len(cores) or None
+    cpu_ids = _available_cpu_ids()
+    physical = _physical_core_count_from_sysfs(cpu_ids)
+    if physical is not None:
+        return physical
+    return _physical_core_count_from_cpuinfo(cpu_ids)
 
 
 def limit_openmp_to_physical_cores(environ):
@@ -869,4 +905,3 @@ class time_scope:
                 ret = func(*args, **kw)
             return ret
         return inner
-

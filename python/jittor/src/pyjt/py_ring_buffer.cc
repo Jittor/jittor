@@ -208,7 +208,7 @@ static PyObject* pop_py_object(RingBuffer* rb, uint64& __restrict__ offset, bool
 }
 
 void PyMultiprocessRingBuffer::push(PyObject* obj) {
-    auto offset = rb->r;
+    auto offset = rb->r.load(std::memory_order_relaxed);
     auto offset_bk = offset;
     try {
         push_py_object(rb, obj, offset);
@@ -221,7 +221,7 @@ void PyMultiprocessRingBuffer::push(PyObject* obj) {
 }
 
 PyObject* PyMultiprocessRingBuffer::pop() {
-    auto offset = rb->l;
+    auto offset = rb->l.load(std::memory_order_relaxed);
     auto obj = pop_py_object(rb, offset, _keep_numpy_array);
     rb->commit_pop(offset);
     return obj;

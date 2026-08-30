@@ -5,7 +5,10 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
+#include <atomic>
 #include <list>
+#include <memory>
+#include <mutex>
 #include <vector>
 #include <functional>
 #include <condition_variable>
@@ -18,20 +21,32 @@ namespace mwsr_list_ ## name { \
     using std::function; \
      \
     typedef T mylist_t; \
-    list<list<mylist_t>> glist; \
-    list<list<mylist_t>::iterator> glist_iter; \
+    struct ThreadList { \
+        list<mylist_t> values; \
+        std::mutex mutex; \
+    }; \
+    list<std::unique_ptr<ThreadList>> glist; \
     std::mutex glist_mutex; \
     std::condition_variable cv; \
     std::mutex mm; \
+    std::atomic<size_t> pending(0); \
     bool _stop; \
     bool _flush; \
      \
     void clear() { \
-        std::lock_guard<std::mutex> lk(glist_mutex); \
-        glist.clear(); \
-        glist_iter.clear(); \
-        _stop = false; \
-        _flush = false; \
+        { \
+            std::lock_guard<std::mutex> lk(glist_mutex); \
+            for (auto& state : glist) { \
+                std::lock_guard<std::mutex> state_lk(state->mutex); \
+                state->values.clear(); \
+            } \
+            pending.store(0, std::memory_order_release); \
+        } \
+        { \
+            std::lock_guard<std::mutex> lk(mm); \
+            _stop = false; \
+            _flush = false; \
+        } \
     } \
      \
     void flush() { \
@@ -51,96 +66,73 @@ namespace mwsr_list_ ## name { \
     } \
      \
     void init() { \
-        std::lock_guard<std::mutex> lk(glist_mutex); \
-        _stop = false; \
-        _flush = false; \
-        auto titer = glist_iter.begin(); \
-        for (auto& tlist : glist) { \
-            tlist.clear(); \
-            *titer = tlist.end(); \
-            titer ++; \
-        } \
+        clear(); \
     } \
      \
-    list<mylist_t>* create_tlist() { \
+    ThreadList* create_tlist() { \
         std::lock_guard<std::mutex> lk(glist_mutex); \
-        glist.emplace_back(); \
-        auto tlist = &glist.back(); \
-        glist_iter.push_back(tlist->end()); \
-        return tlist; \
+        glist.emplace_back(new ThreadList); \
+        return glist.back().get(); \
     } \
      \
-    thread_local list<mylist_t>* tlist = create_tlist(); \
+    thread_local ThreadList* tlist = create_tlist(); \
      \
     void push(mylist_t &&s) { \
-        tlist->emplace_back(move(s)); \
+        { \
+            std::lock_guard<std::mutex> lk(tlist->mutex); \
+            tlist->values.emplace_back(std::move(s)); \
+            pending.fetch_add(1, std::memory_order_release); \
+        } \
         cv.notify_one(); \
     } \
      \
     void reduce(function<void(const mylist_t&)> func, function<void()> flush_func) { \
-        thread_local vector<list<mylist_t>*> gvlist; \
-        thread_local vector<list<mylist_t>::iterator*> gvlist_iter; \
-        gvlist.clear(); \
-        gvlist_iter.clear(); \
-        int stop2=0; \
-        int flush2=0; \
+        vector<ThreadList*> states; \
         while (1) { \
-            int found = 0; \
-            if (gvlist.size() != glist.size()) { \
+            { \
                 std::lock_guard<std::mutex> lk(glist_mutex); \
-                gvlist.clear(); \
-                gvlist_iter.clear(); \
-                for (auto &tlist : glist) \
-                    gvlist.push_back(&tlist); \
-                for (auto &tlist_iter : glist_iter) \
-                    gvlist_iter.push_back(&tlist_iter); \
+                if (states.size() != glist.size()) { \
+                    states.clear(); \
+                    for (auto& state : glist) \
+                        states.push_back(state.get()); \
+                } \
             } \
-             \
-            auto list_iter = gvlist_iter.begin(); \
-            for (auto tlist : gvlist) { \
-                auto& last = **list_iter; \
-                if (last == tlist->end()) { \
-                    last = tlist->begin(); \
-                    if (last != tlist->end()) { \
-                        func(*last); \
-                        found++; \
-                    } \
+            bool found = false; \
+            for (auto state : states) { \
+                list<mylist_t> batch; \
+                { \
+                    std::lock_guard<std::mutex> lk(state->mutex); \
+                    batch.splice(batch.end(), state->values); \
                 } \
-                while (last != tlist->end()) { \
-                    auto nlast = next(last); \
-                    if (nlast != tlist->end()) { \
-                        func(*nlast); \
-                        last = nlast; \
-                        tlist->pop_front(); \
-                        found++; \
-                    } else break; \
+                if (!batch.empty()) { \
+                    pending.fetch_sub(batch.size(), std::memory_order_acq_rel); \
+                    for (auto& value : batch) \
+                        func(value); \
+                    found = true; \
                 } \
-                list_iter ++; \
             } \
             if (!found) { \
+                bool should_flush = false; \
+                bool should_stop = false; \
                 std::unique_lock<std::mutex> lk(mm); \
-                if (_flush) { \
+                if (pending.load(std::memory_order_acquire) == 0 && _flush) { \
                     _flush = false; \
-                    flush2 = 1; \
-                    lk.unlock(); \
-                    continue; \
+                    should_flush = true; \
                 } \
-                if (flush2) { \
-                    flush2 = 0; \
-                    flush_func(); \
+                if (pending.load(std::memory_order_acquire) == 0 && _stop) { \
+                    should_stop = true; \
                 } \
-                if (_stop) { \
-                    if (stop2>0) { \
-                        lk.unlock(); \
-                        break; \
-                    } else { \
-                        stop2 ++; \
-                        lk.unlock(); \
-                        continue; \
-                    } \
+                if (!should_flush && !should_stop) { \
+                    cv.wait(lk, [] { \
+                        return _stop || _flush || \
+                            pending.load(std::memory_order_acquire) != 0; \
+                    }); \
                 } \
-                cv.wait(lk); \
                 lk.unlock(); \
+                if (should_flush) \
+                    flush_func(); \
+                if (should_stop) \
+                    break; \
             } \
         } \
         init(); \
