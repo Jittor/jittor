@@ -616,6 +616,50 @@ def install_nccl(root_folder):
         run_cmd(f"CC=\"{cc_path}\" CXX=\"{cc_path}\" make -j8 src.build CUDA_HOME='{cuda_home}' NVCC_GENCODE='{arch_flag} --cudart=shared ' ", cwd=dirname)
     return dirname
 
+def _skip_nccl_p2p_without_peer_access():
+    """Turn off NCCL's p2p transport on boards that have no peer access at all.
+
+    Consumer GeForce over PCIe cannot do direct GPU-to-GPU transfers --
+    `nvidia-smi topo -p2p r` reports CNS for every pair -- and NCCL treats that as
+    fatal at ncclCommInitRank ("unhandled cuda error") instead of falling back to
+    shared memory. The decision has to be made here, before libnccl is loaded:
+    setting it from the ops module's static initialiser is already too late.
+
+    Only when NO pair on the machine can reach each other, so a box with working
+    P2P keeps it, and never over an explicit setting from the operator.
+    """
+    if os.environ.get("NCCL_P2P_DISABLE") is not None:
+        return
+    try:
+        runtime = None
+        for name in ("libcudart.so", "libcudart.so.12", "libcudart.so.11.0"):
+            try:
+                runtime = ctypes.CDLL(name)
+                break
+            except OSError:
+                runtime = None
+        if runtime is None:
+            return
+        count = ctypes.c_int(0)
+        if runtime.cudaGetDeviceCount(ctypes.byref(count)) != 0 or count.value < 2:
+            return
+        for a in range(count.value):
+            for b in range(count.value):
+                if a == b:
+                    continue
+                reachable = ctypes.c_int(0)
+                if (runtime.cudaDeviceCanAccessPeer(
+                        ctypes.byref(reachable), a, b) == 0
+                        and reachable.value):
+                    return
+        os.environ["NCCL_P2P_DISABLE"] = "1"
+        LOG.v("no GPU pair supports peer access; setting NCCL_P2P_DISABLE=1")
+    except Exception:
+        # A probe that cannot run must not stop NCCL from being set up: the
+        # init-time diagnostic in nccl_wrapper.cc still names the cure.
+        pass
+
+
 def setup_nccl():
     global nccl, nccl_ops, use_nccl
     use_nccl = os.environ.get("use_nccl", "1")=="1"
@@ -654,6 +698,8 @@ def setup_nccl():
     _nccl_envfile = os.environ.get("JT_NCCL_WORLD_SIZE") is not None
     if not inside_mpi() and not _nccl_envfile:
         return
+
+    _skip_nccl_p2p_without_peer_access()
 
     if nccl_lib_name is None:
         nccl_lib_name = search_file([nccl_lib_path], "libnccl.so")

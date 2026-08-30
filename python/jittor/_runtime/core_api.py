@@ -1339,33 +1339,29 @@ class _WriteThroughDict(dict):
             object.__delattr__(self._owner, k)
 
 # Jittor registers a parameter on assignment; torch registers one only for an
-# nn.Parameter, and leaves a plain tensor attribute unregistered. Both rules have
-# to hold at once under the torch shim, because a model tree there mixes code
-# written to each convention: jittor's own nn.Linear declares its weight by plain
-# assignment, while torch-authored code relies on `layer.foo = torch.tensor(...)`
-# staying out of parameters()/state_dict() (vLLM's attention layer does exactly
-# this with its q/k/v_range scales, and its weight loader then reports them as
-# checkpoint weights that were never initialised).
+# nn.Parameter and leaves a plain tensor attribute unregistered. Under the shim a
+# model tree mixes code written to each convention, so the two have to coexist:
+# jittor's own nn.Linear declares its weight by plain assignment, while
+# torch-authored code relies on `layer.foo = torch.tensor(...)` staying out of
+# parameters()/state_dict() -- vLLM's attention layer does exactly that with its
+# q/k/v_range scales, and its weight loader then reports them as checkpoint
+# weights that were never initialised.
 #
-# The convention follows the code doing the ASSIGNING, not the class of the object
-# assigned to. Keying it on the class is wrong for a torch-authored SUBCLASS of a
-# jittor layer -- transformers' WhisperPositionalEmbedding extends nn.Embedding,
-# whose jittor __init__ declares `self.weight` by plain assignment, and reading
-# that as torch-authored dropped the position embedding out of the checkpoint.
-# Only applies once the shim is installed; native jittor keeps assignment-is-
-# parameter everywhere.
+# Only a value carrying POSITIVE evidence of being a plain torch tensor is
+# demoted, i.e. one the shim's own torch.tensor produced. Deciding it the other
+# way round -- treat anything unmarked as plain -- reads far more assignments as
+# non-parameters than intended, and the failure mode is a silently dropped weight:
+# it demoted vLLM's `self.bias = Parameter(torch.empty(...))` (whose marker an
+# adapter's replaced constructor had lost) until uninitialised memory reached a
+# matmul, and it demoted `self.output_bias = jt.ones(...)` in jittor-style code
+# that merely happened to run with the shim loaded. torch.ones/zeros cannot be
+# used as the signal either: they ARE jittor's own, so marking them would demote
+# the weights jittor's layers declare by assignment.
 _torch_registration_semantics = False
-import sys as _sys_module
 
-def _torch_style_registration():
-    if not _torch_registration_semantics:
-        return False
-    try:                      # 0: here, 1: __setattr__, 2: whoever assigned
-        frame = _sys_module._getframe(2)
-    except ValueError:
-        return False
-    mod = frame.f_globals.get("__name__") or ""
-    return mod != "jittor" and not mod.startswith("jittor.")
+def _torch_style_registration(value):
+    return (_torch_registration_semantics
+            and bool(getattr(value, "_jt_plain_tensor", False)))
 
 class Module:
     def __init__(self, *args, **kw):
@@ -2113,7 +2109,7 @@ Arguments of hook are defined as::
                 and not getattr(value, "is_buffer", False)
                 and getattr(value, "persistent", True)
             )
-            if is_parameter and _torch_style_registration():
+            if is_parameter and _torch_style_registration(value):
                 non_params = self.__dict__.get("_non_parameter_names")
                 if getattr(value, "_is_torch_parameter", False):
                     # nn.Parameter marks the Var itself, so re-registering a name

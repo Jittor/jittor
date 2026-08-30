@@ -71,21 +71,29 @@ no counterpart for saved weights: ['decoder.embed_positions.weight']
 **Jittor 自己的 `nn.Embedding.__init__`** 用普通赋值声明的。类的归属和赋值代码的
 归属是两回事。
 
-### 最终规则
+### 第二版规则也错了：判据不能是"谁在赋值"
 
-判据取**赋值方所在模块**（`sys._getframe(2)` 的 `__name__`）：
+第二版改按**赋值方所在模块**分流（`sys._getframe(2)`）。它修好了 Whisper，但仍然
+是"默认降级、除非有理由保留"，于是又咬了两次，两次都是**静默丢参数**：
 
-- Jittor 自己的代码赋值 → 参数（Jittor 约定），无论实例是谁的子类；
-- 第三方代码赋普通 Var → 记入模块的 `_non_parameter_names`，不进
-  `parameters()` / `named_parameters()` / `state_dict()`；
-- 值带 `_is_torch_parameter`（`nn.Parameter` 或 `register_parameter`）→ 参数，
-  并把该名字从非参数集合里移除；
-- **只有首次赋值决定归属**。已经是参数的名字保持是参数，这样 `from_pretrained`
-  的 dtype 转换用普通 Var 替换权重时，不会把真权重悄悄踢出优化器；
-- 整条规则只在 shim 安装后生效，原生 Jittor 的"赋值即参数"不受影响。
+- vLLM 的 `self.bias = Parameter(torch.empty(...))`——适配器替换过的构造函数丢了
+  标记，bias 被降级、加载器从不填充，未初始化内存进了矩阵乘（见第五节）；
+- `tests/distributed/test_fsdp2_nccl.py` 里 `self.output_bias = jt.ones((3,))`——
+  纯 Jittor 写法，只因进程里装了 shim 就被降级，`state_dict` 的 numel 由 18 变 15。
 
-`register_parameter` 也补上了标记：torch 里它就是"显式声明为参数"的调用，而
-vLLM 用自己的元类 `__call__` 构造 `ModelWeightParameter`，不会经过 `nn.Parameter`。
+### 最终规则：只在有正面证据时降级
+
+只有 shim 自己的 `torch.tensor` 产出的 Var 会被标记 `_jt_plain_tensor`，
+`Module.__setattr__` 只降级带此标记且不带 `_is_torch_parameter` 的值：
+
+- `layer.v_range = torch.tensor(...)` → 不是参数（正是要修的那条）；
+- 其它一切照旧是参数，**权重不可能被静默丢掉**；
+- `torch.ones` / `torch.zeros` 不能用作信号——它们**就是** Jittor 自己的函数，
+  标记它们会把 Jittor 各层用赋值声明的权重一并降级；
+- 代价是 `layer.x = torch.zeros(3)` 仍会被当成参数。这是已知的不完整，
+  但方向是安全的一侧。
+
+`register_parameter` 也补上了标记：torch 里它就是"显式声明为参数"的调用。
 
 验证：
 
@@ -93,6 +101,7 @@ vLLM 用自己的元类 `__call__` 构造 `ModelWeightParameter`，不会经过 
 |---|---|
 | torch 作者的类 + `nn.Parameter` / 普通张量 | 与 PyTorch 逐项一致 |
 | torch 作者的类**继承** Jittor 层（Whisper） | `weight` 保留 |
+| 测试里用 `jt.ones` 声明的属性（FSDP2） | 保留，numel 18 |
 | Jittor 自己的 `nn.Linear` | `weight`, `bias` 均在 |
 | 原生 Jittor（不开 shim） | 赋值即参数，不变 |
 | ViT 真实模型 | 两侧同为 200 / 200 |
@@ -204,6 +213,26 @@ Qwen2.5-7B-Instruct 现在给出 `' Paris. Which of'`（token `[12095, 13, 15920
 
 另：`nox -s optional` 一度报 `4 failed`（torchmetrics），是并发高负载下的超时——
 单轮 torchmetrics 就要 18 分钟，而每测超时是 600s。空载重跑 `EXIT=0`。
+
+## 七、分布式两道门：三个真实缺陷
+
+`nox -s mpi` 与 `nox -s nccl` 此前都是红的，与本轮改动无关：
+
+1. **`nccl_test` 编译不过**。`helper_cuda.h` 把 `_cudaGetErrorEnum(ncclResult_t)`
+   守在 `#ifdef NCCL_H_` 后面，只有 `nccl.h` 先于它包含时才存在；而它自己的
+   include guard 会让"后来的包含"变成空操作，于是任何更早拉进 `helper_cuda.h` 的
+   翻译单元里，`checkCudaErrors(ncclResult_t)` 都落到 `cudaError_t` 的重载上。在
+   `nccl_wrapper.h` 的 `nccl.h` 之后补一条与顺序无关的声明（`check` 里的调用是
+   依赖名，ADL 在实例化点能找到）。
+2. **`nccl_test` 运行时段错误**。`jit_run` 第一行 `output->ptr<T>()[0] = 123;`
+   在**主机端写设备指针**，信号码正是 "Invalid permissions"。改用 `cudaMemcpy`。
+3. **NCCL 初始化失败**：`peer access is not supported between these two devices`。
+   这台机器的 8 张 RTX 4090 之间**完全没有 P2P**（`nvidia-smi topo -p2p r` 全是
+   CNS），而 NCCL 在这种板子上硬失败而非回退。判据放在 `launch.py`：每个 rank 只
+   看得到一张卡，唯有分发之前才有完整设备列表；探测到没有任何一对可互访就设
+   `NCCL_P2P_DISABLE=1`（`overwrite=0`，操作者显式设置优先）。
+
+修后 `nox -s mpi` `EXIT=0`，`nox -s nccl` `EXIT=0`（`4 passed`）。
 
 ## 复现
 

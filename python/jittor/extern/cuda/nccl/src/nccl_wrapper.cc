@@ -37,12 +37,10 @@ bool use_device_mpi = false;
 #endif
 
 
-// A machine can advertise peer access and then refuse it; some driver and
-// chipset combinations do. NCCL's p2p transport treats that as fatal rather
-// than falling back to shared memory, and the error it raises --
-// "unhandled cuda error" -- names neither the cause nor the cure. Name both
-// before it escapes: NCCL's own explanation goes to stderr, which a test runner
-// capturing output turns into a bare SIGABRT with nothing to go on.
+// NCCL's p2p transport treats a refused peer access as fatal, and the error it
+// raises -- "unhandled cuda error" -- names neither the cause nor the cure. Name
+// both before it escapes: NCCL's own explanation goes to stderr, which a test
+// runner capturing output turns into a bare SIGABRT with nothing to go on.
 static void init_nccl_comm(int world_size, int world_rank) {
     auto result = ncclCommInitRank(&comm, world_size, id, world_rank);
     if (result == ncclSuccess) return;

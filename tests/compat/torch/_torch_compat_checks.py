@@ -268,12 +268,15 @@ ok("rm" not in _wtp and "weight" in _wtp, "write-through preserves buffer/param 
 # jittor's own rule is assignment-is-parameter, so a torch-authored class had every
 # scratch tensor turned into a trainable parameter -- vLLM's attention layer sets
 # `layer.v_range = torch.tensor(...)` and its loader then rejected the model for
-# carrying checkpoint weights it never initialised.
+# carrying checkpoint weights it never initialised. Only what torch.tensor produced
+# is read as plain: anything else stays a parameter, so a weight can never go
+# missing (jt.ones/torch.ones are the SAME function, and jittor's layers declare
+# their weights with it).
 class _RegM(torch.nn.Module):
     def __init__(self):
         super().__init__()
         self.w = torch.nn.Parameter(jt.ones(2))
-        self.plain = jt.ones(4)
+        self.plain = torch.tensor([1.0, 2.0, 3.0, 4.0])
         self.register_buffer("buf", jt.zeros(3))
 _reg = _RegM()
 ok([n for n, _ in _reg.named_parameters()] == ["w"],
@@ -284,10 +287,10 @@ ok(tuple(_reg.plain.shape) == (4,), "plain tensor attribute stays readable")
 # Promotion and demotion both follow the assigned value, and a name that already
 # holds a parameter keeps it -- from_pretrained's dtype cast replaces a weight Var
 # with a plain one, and must not drop that weight out of the optimizer.
-_reg.plain = torch.nn.Parameter(jt.ones(4))
+_reg.plain = torch.nn.Parameter(torch.tensor([1.0, 2.0, 3.0, 4.0]))
 ok(sorted(n for n, _ in _reg.named_parameters()) == ["plain", "w"],
    "nn.Parameter assignment promotes a plain attribute")
-_reg.w = jt.zeros(2)
+_reg.w = torch.tensor([0.0, 0.0])
 ok(sorted(n for n, _ in _reg.named_parameters()) == ["plain", "w"],
    "re-assigning a plain tensor over a parameter keeps it registered")
 # jittor's own module classes keep assignment-is-parameter even under the shim:
