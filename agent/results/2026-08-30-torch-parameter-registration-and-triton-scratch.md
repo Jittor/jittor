@@ -1,7 +1,7 @@
 # torch 的参数注册语义、Triton 尾部 scratch 参数与向量化归约的浮点顺序
 
 - Status: 四道门全绿（native 739 / CPU Torch 1513 / CUDA+oracle 1809 / nox cuda
-  `EXIT=0`，五个子会话 105+6+227+2+227 全过）；vLLM 7B 仍差最后一处 NaN
+  `EXIT=0`，五个子会话 105+6+227+2+227 全过）；vLLM 7B 输出正确
 - Last reviewed: 2026-08-30
 - Baseline: `f10e9480`
 - Owner: Torch compatibility and downstream integration maintainers
@@ -144,36 +144,49 @@ free 之后不降、`jt.gc()` 之后才降。）
 实现——朴素顺序恰好更近，8 路恰好更远。测试改为浮点求和的教科书误差界
 `|err| <= log2(n) * eps * sum|x|`，实测 0.0063 远在界内。
 
-## 五、vLLM 7B 的进展与剩余的一处
+## 五、vLLM 7B：十个阻碍全部跨过，输出正确
 
-Qwen2.5-7B-Instruct 在隔离环境里已能加载全部权重并跑完 4 token 生成，但**输出仍是
-乱码**（token 全 0）。今天跨过的坎：
+Qwen2.5-7B-Instruct 现在给出 `' Paris. Which of'`（token `[12095, 13, 15920, 315]`）。
 
 | # | 阻碍 | 归属 |
 |---|---|---|
-| 5 | `v_range` 被当成参数 | Jittor（已修） |
-| 6 | `gate_up_proj.weight` KeyError | Jittor（第 5 条的回归，已修） |
+| 5 | `v_range` 被当成参数 | Jittor（已修，见第一节） |
+| 6 | `gate_up_proj.weight` KeyError | 第 5 条的回归，已修 |
 | 7 | Triton `PassManager::run failed` | 环境（Triton 3.2 太旧） |
-| 8 | scratch 参数个数不符 | Jittor（已修） |
+| 8 | scratch 参数个数不符 | Jittor（已修，见第二节） |
 | 9 | KV cache 预算为负 | 配置（收小 profiling 批量） |
-| 10 | 前向输出全 NaN | **未定位** |
+| 10 | 前向输出全 NaN | **第 5 条的第二次回归**，已修 |
 
-第 10 条已排除的假设：
+### 第 10 条：未初始化的 bias 进了矩阵乘
 
-- **不是权重问题**。profiling 前向的 logits 有限且正常。
-- **不是 Triton 版本**。3.2.0 与 3.7.1 下 NaN 完全相同。
-- **不是 `flash_attn_varlen_paged` 本身**。用合成输入与 numpy 对拍，fp32 误差
-  3e-8、bf16 误差 9e-4，均无 NaN。
-- **不是 KV 写读顺序**。`VJ_KV_SYNC=1`、`VJ_SYNC_EVERY=1` 都无效。
-- **不是 dtype**。bf16 单元测试正常。
+定位过程是逐层缩小的：
 
-现象很窄：同一函数、同样形状 `q(5,28,128)` / `kv(4458,2,16,4,128)` / `cq=[0,5]` /
-`sk=[5]`，**第一层输出干净，第二层输入干净却输出全 NaN**。
+1. 按层量 NaN：第 0 层 attention 输出干净，第 1 层输入干净却输出全 NaN。
+2. 把那次调用的输入落盘、在 vLLM 之外原样回放——**离线复现**，说明是数据不是图上下文。
+3. 看数据：Q/K/V 的量级是 **1e34**。bf16 装得下，但 `q·k` = 1e68 在 fp32 溢出成
+   `inf`，softmax 于是给出 NaN。所以真正的问题在上游。
+4. 改量 absmax 而不是 NaN，逐子模块回溯：`L1.input_ln` 输出 24.75（正常），
+   `L1.qkv_proj` 输出 **1.038e34**——而它的 weight absmax 是 0.668。
+5. 查 bias：`in_params=['weight']`，**bias 根本不在 `named_parameters()` 里**，
+   加载器从不填充它，`torch.empty` 的未初始化内存（1e34 / 2.6e36 / 4.3e37）直接
+   参与计算。第 0 层碰巧是 0，所以只有第 1 层起才爆。全模型只剩 114 个参数。
 
-过程中还发现基准脚本自己漏了 `bs.patch_vllm()`（适配器的 attention/MoE 补丁因此
-全是空转，走的是 vLLM 原版 FlashAttention）。补上后 `_fwd` 确认生效，NaN 依旧。
+根因是第 5 条改动的第二次回归。vLLM 的 linear 写的是
+`self.bias = Parameter(torch.empty(...))`，而适配器把 shim 的 `Parameter` 元类
+`__call__` **整个替换**成自己的实现，从不设 `_is_torch_parameter`。第 6 条我只补了
+`register_parameter` 那条路径，这条直接赋值的路径还漏着。
 
-下一步是把第二层那次调用的输入落盘，在 vLLM 之外原样回放，取得最小复现。
+修在适配器：它既然替换了 shim 的 Parameter 构造函数，就得守住那个契约。
+修后参数数 `114 -> 199`，28 个 qkv bias 全部就位，量级 27~171，输出正确。
+
+### 教训
+
+这条规则的失败模式是**静默丢参数**——只有下游数值爆炸才暴露。契约本身是对的
+（torch 里普通 Tensor 属性同样不是参数），但任何绕开 `nn.Parameter` 构造参数的
+第三方代码都会踩中。凡是替换 shim 构造函数的适配器，都必须保留标记。
+
+过程中还发现基准脚本自己漏了 `bs.patch_vllm()`，适配器的 attention/MoE 补丁因此
+全是空转，走的是 vLLM 原版 FlashAttention。
 
 ## 复现
 
