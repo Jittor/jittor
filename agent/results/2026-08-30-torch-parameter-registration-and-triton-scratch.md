@@ -2,7 +2,7 @@
 
 - Status: 十一道门全绿（native 739 / CPU Torch 1513 / CUDA+oracle 1809 / `nox`
   的 `cuda` `structure`(245) `cpu` `tutorials` `optional` `packaging` `mpi`
-  `nccl` 均 `EXIT=0`）；vLLM 7B 输出正确
+  `nccl` 均 `EXIT=0`）；vLLM 7B 与 PyTorch 输出逐 token 一致，速度 1.22-1.24x
 - Last reviewed: 2026-08-30
 - Baseline: `f10e9480`
 - Owner: Torch compatibility and downstream integration maintainers
@@ -235,6 +235,46 @@ Qwen2.5-7B-Instruct 现在给出 `' Paris. Which of'`（token `[12095, 13, 15920
    `NCCL_P2P_DISABLE=1`（`overwrite=0`，操作者显式设置优先）。
 
 修后 `nox -s mpi` `EXIT=0`，`nox -s nccl` `EXIT=0`（`4 passed`）。
+
+## 八、vLLM 7B 与 PyTorch 的速度对拍
+
+参照物是同版本 vLLM 0.11.0 跑在真 PyTorch 2.8.0+cu128 上（`--target` 隔离安装，
+transformers 固定在 4.56.2）。两侧设置完全一致：Qwen2.5-7B-Instruct、bfloat16、
+`enforce_eager=True`、`gpu_memory_utilization=0.80`、`max_num_batched_tokens=512`、
+关闭 prefix cache，3 次预热 + 21 次计时取中位。
+
+**输出逐 token 一致**：两侧都是 `' Paris. Which of'` / `[12095, 13, 15920, 315]`。
+
+### 批量扩展的缺陷及修复
+
+| batch | 修前 | 修后 | PyTorch | 修前比值 | 修后比值 |
+|---|---:|---:|---:|---:|---:|
+| 1 | 0.0833 | 0.0833 | 0.0673 | 1.24x | 1.24x |
+| 8 | 0.1525 | **0.0904** | 0.0727 | 2.10x | **1.24x** |
+| 32 | 0.3841 | **0.1057** | 0.0864 | 4.44x | **1.22x** |
+
+修前 Jittor 几乎随批量线性变慢，PyTorch 却几乎不变。拆开量：batch 32 时
+`max_tokens=1` 用 0.307s、`max_tokens=4` 用 0.372s，即 decode 约 21.5ms/步且**不随
+批量增长**（融合 decode kernel 生效：一次 8 序列生成里 `hit=84 / miss=28`，28 次
+miss 正是 prefill 的 28 层），**prefill 独占 0.285s**，而 PyTorch 同批量 prefill 约
+0.026s。
+
+根因是适配器的 `flash_attn_varlen_paged` 对 prefill 走**逐序列的 Python 循环**，
+每序列每层约 6 个 kernel，batch 32 就是 28×32 次迭代。改为：当各序列的 query 与
+key 长度一致（同长 prompt 批总是如此）时，一次 gather + 两次批量 matmul + 一个可
+广播的 mask 完成；参差批量仍走原循环。与循环路径逐元素对拍最大差 `1.49e-08`。
+
+### 剩下的 1.24x
+
+profile（batch 1）：**82.4% 是 `cublas_matmul`**，非 GEMM 约 13.9ms 且无单项超过
+2.2%。GEMM 本身不慢——按解码 shape 单独微基准，Jittor 在两个大 shape 上反而更快
+（264 vs 286us、124 vs 146us；小 shape 的 1400+GB/s 是 L2 命中，不具代表性）。
+PyTorch 的总时间几乎等于它的 GEMM 时间，非 GEMM 只有约 2ms，而 Jittor 是 14ms。
+差距是每层约 8 个小 kernel 的启动开销，与 TRELLIS 的结论同型：没有单一大头，要再
+往下压需要系统性手段（融合 residual+norm+rope 链，或 CUDA graph 捕获）。
+
+**结论：vLLM 的"能跑"与"对拍一致"已达成，"速度不更慢"未达成**——各批量下稳定在
+约 1.22-1.24x。
 
 ## 复现
 
