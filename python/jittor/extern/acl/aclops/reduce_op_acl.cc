@@ -26,6 +26,7 @@
 #include "opt/tuner_manager.h"
 #include "utils/str_utils.h"
 #include "aclnn/aclnn.h"
+#include "aclnnop/aclnn_prod.h"
 #include "reduce_op_acl.h"
 
 namespace jittor
@@ -33,6 +34,12 @@ namespace jittor
     ReduceOpRunner::ReduceOpRunner() : BaseOpRunner("reduce")
     {
         use_nchw = false;
+    }
+
+    ReduceOpRunner::~ReduceOpRunner()
+    {
+        if (dim != nullptr)
+            aclDestroyIntArray(dim);
     }
 
     void ReduceOpRunner::setupInputDesc()
@@ -94,7 +101,7 @@ namespace jittor
         }
         dim = aclCreateIntArray(shifted_axes_.data(), shifted_axes_.size());
 
-        if (op_idx < 13)
+        if (op_idx <= 13)
         {
             if (input_padded_1d || attr->axes.size() == in_[0]->shape.size())
                 outputShapes[0] = {};
@@ -154,6 +161,98 @@ namespace jittor
                 mallocWorkSpace(workspaceSize);
             }
             ret = aclnnAmin(workspaceAddr, workspaceSize, executor, aclstream);
+            break;
+        }
+        case 13:
+        {
+            const bool reduce_all = attr->axes.size() == in_[0]->shape.size();
+            if (input_padded_1d || reduce_all)
+            {
+                ret = aclnnProdGetWorkspaceSize(
+                    inputTensors[0], get_dtype(out_[0]->dtype()),
+                    outputTensors[0], &workspaceSize, &executor);
+                CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnProdGetWorkspaceSize failed. ERROR: %d\n", name.c_str(), ret); return);
+            }
+            else if (shifted_axes_.size() == 1)
+            {
+                ret = aclnnProdDimGetWorkspaceSize(
+                    inputTensors[0], shifted_axes_[0], keepdims,
+                    get_dtype(out_[0]->dtype()), outputTensors[0],
+                    &workspaceSize, &executor);
+                CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnProdDimGetWorkspaceSize failed. ERROR: %d\n", name.c_str(), ret); return);
+            }
+            else
+            {
+                std::vector<int64_t> axes = shifted_axes_;
+                if (!keepdims)
+                    std::sort(axes.rbegin(), axes.rend());
+
+                std::vector<int64_t> current_shape = inputShapes[0];
+                aclTensor *current_tensor = inputTensors[0];
+                std::vector<aclTensor *> intermediate_tensors;
+                std::vector<void *> intermediate_buffers;
+
+                for (size_t index = 0; index < axes.size(); index++)
+                {
+                    const int64_t axis = axes[index];
+                    std::vector<int64_t> next_shape = current_shape;
+                    if (keepdims)
+                        next_shape[axis] = 1;
+                    else
+                        next_shape.erase(next_shape.begin() + axis);
+
+                    const bool is_last = index + 1 == axes.size();
+                    aclTensor *next_tensor = outputTensors[0];
+                    if (!is_last)
+                    {
+                        uint64_t buffer_size = out_[0]->dsize();
+                        for (int64_t extent : next_shape)
+                            buffer_size *= extent;
+
+                        void *buffer = nullptr;
+                        ret = aclrtMalloc(
+                            &buffer, buffer_size, ACL_MEM_MALLOC_HUGE_FIRST);
+                        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: product intermediate allocation failed. ERROR: %d\n", name.c_str(), ret); return);
+                        intermediate_buffers.push_back(buffer);
+
+                        next_tensor = nullptr;
+                        ret = CreateAclTensor(
+                            next_shape, buffer, buffer_size,
+                            get_dtype(out_[0]->dtype()), &next_tensor, use_nchw);
+                        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: product intermediate tensor creation failed. ERROR: %d\n", name.c_str(), ret); return);
+                        intermediate_tensors.push_back(next_tensor);
+                    }
+
+                    ret = aclnnProdDimGetWorkspaceSize(
+                        current_tensor, axis, keepdims,
+                        get_dtype(out_[0]->dtype()), next_tensor,
+                        &workspaceSize, &executor);
+                    CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnProdDimGetWorkspaceSize failed. ERROR: %d\n", name.c_str(), ret); return);
+                    if (workspaceSize > 0)
+                        mallocWorkSpace(workspaceSize);
+                    ret = aclnnProdDim(
+                        workspaceAddr, workspaceSize, executor, aclstream);
+                    CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnProdDim failed. ERROR: %d\n", name.c_str(), ret); return);
+
+                    current_shape = std::move(next_shape);
+                    current_tensor = next_tensor;
+                }
+
+                ret = aclrtSynchronizeStream(aclstream);
+                CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: product intermediate synchronization failed. ERROR: %d\n", name.c_str(), ret); return);
+                for (aclTensor *tensor : intermediate_tensors)
+                    aclDestroyTensor(tensor);
+                for (void *buffer : intermediate_buffers)
+                    aclrtFree(buffer);
+                break;
+            }
+            if (workspaceSize > 0)
+            {
+                mallocWorkSpace(workspaceSize);
+            }
+            ret = input_padded_1d || reduce_all
+                ? aclnnProd(workspaceAddr, workspaceSize, executor, aclstream)
+                : aclnnProdDim(workspaceAddr, workspaceSize, executor, aclstream);
             break;
         }
         default:

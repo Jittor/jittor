@@ -367,8 +367,7 @@ namespace jittor
                     if (rop->ns == ns_add)
                         op.op_idx = 9;
                     else if (rop->ns == ns_multiply)
-                        // TODO unsupported the multi dim
-                        op.op_idx = 999;
+                        op.op_idx = 13;
                     else if (rop->ns == ns_maximum)
                         op.op_idx = 11;
                     else if (rop->ns == ns_minimum)

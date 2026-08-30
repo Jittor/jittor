@@ -214,11 +214,12 @@ def sample_bool_any(op_info, device, dtype, requires_grad):
 # integer width, and the sample builders additionally pin all of them for parity.
 
 # CUDA uses packed 32-bit CAS overloads for uint8/int8/int16 add, multiply,
-# maximum, and minimum. NPU remains an explicit skip until the same real-device
-# matrix can run without aborting the test process.
+# maximum, and minimum. CANN product now covers every integer dtype in this
+# matrix; NPU sum/max/min remain explicit skips until their real-device matrix
+# can run without aborting the test process.
 _NPU_INT_REDUCE_SKIP = (
     skip("test_reference", device_type="npu",
-         reason="KI-BACKEND-001: sub-32-bit reduce atomics are unavailable on NPU"),
+         reason="KI-BACKEND-001: narrow sum/max/min are unavailable on NPU"),
 )
 
 op_db = [
@@ -230,7 +231,7 @@ op_db = [
     OpInfo("prod", op=jt.reduce_multiply, ref=prod_ref,
            sample_inputs_func=sample_int_prod,
            dtypes=cu.integral_types(), supports_autograd=False,
-           variant_test_name="int_reduce", skips=_NPU_INT_REDUCE_SKIP),
+           variant_test_name="int_reduce"),
     OpInfo("max", op=jt.reduce_maximum, ref=max_ref,
            sample_inputs_func=sample_int_max,
            dtypes=cu.integral_types(), supports_autograd=False,

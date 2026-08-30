@@ -2,7 +2,7 @@
 
 - Status: Maintained
 - Last reviewed: 2026-08-30
-- Baseline: `139aac05` plus the current ACL arg-reduce follow-up
+- Baseline: `a3ae89f0` plus the current ACL product-reduction follow-up
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -39,14 +39,14 @@ framework defects.
 - Review/expiry condition: remove only after sanitizer-backed root cause and
   repeated cold/warm stress, deadlock, multiprocess-cache, and performance gates
 
-## KI-BACKEND-001: narrow integer reductions lack NPU atomics
+## KI-BACKEND-001: narrow integer sum/max/min lack NPU atomics
 
 - Severity: High
 - Status: NPU skips
 - Owner: reduce and backend maintainers
 - Evidence: [`reduce_dtypes.py`](../../tests/opinfo/definitions/reduce_dtypes.py)
   and [device parity](../../tests/backends/parity/test_device_parity.py)
-- Symptom: `sum`, `prod`, `max`, and `min` for sub-32-bit integer samples abort
+- Symptom: `sum`, `max`, and `min` for sub-32-bit integer samples abort
   because their required ACL atomic overloads are not implemented. Jittor core
   bool `all_` and `any_` also lack a maintained generic ACL reduction kernel.
   The public `jt.all`/`Tensor.all` and `jt.any` paths needed by Transformers now
@@ -54,6 +54,9 @@ framework defects.
   nonzero. This does not establish support for the skipped core reduction ops.
 - Workaround: promote inputs to a supported width before reduction on NPU; use
   the verified public CANN 9 truth reductions where their semantics apply
+- Resolved subcase: full, single-axis, and multi-axis integer `prod` now route
+  through CANN 9 `aclnnProd`/`aclnnProdDim`; uint8, int8, int16, int32, and
+  int64 match NumPy without CPU compilation or fallback
 - Review/expiry condition: every affected dtype executes and matches the CPU
   reference on a real NPU, turning the skips into passes
 
@@ -84,20 +87,6 @@ framework defects.
 - Workaround: execute `irfft` on a backend with a maintained complex FFT path
 - Review/expiry condition: forward values match NumPy and the operation exits
   within the maintained timeout on repeated real-NPU runs
-
-## KI-BACKEND-004: float product reduction aborts on NPU
-
-- Severity: High
-- Status: NPU skip
-- Owner: reduce and ACL backend maintainers
-- Evidence: [`core_ops.py`](../../tests/opinfo/definitions/core_ops.py) and
-  [Ascend 910B validation](../results/2026-08-28-ascend-910b-validation.md)
-- Symptom: the maintained float32 `prod` reference reaches a native ACL failure
-  that aborts the test process instead of returning a Python exception
-- Workaround: execute product reduction on a supported backend; a host fallback
-  is not accepted as NPU support evidence
-- Review/expiry condition: full and dimension reductions match NumPy and leave
-  the process healthy on repeated real-NPU runs
 
 ## KI-OPS-002: integer floor-division backend verification incomplete
 

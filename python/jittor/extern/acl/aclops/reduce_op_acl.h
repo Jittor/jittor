@@ -9,10 +9,11 @@ namespace jittor
         int op_idx; // Specific to reduce operations
 
         ReduceOpRunner();
+        ~ReduceOpRunner() override;
 
     protected:
         ReduceAttr *attr;
-        aclIntArray *dim;
+        aclIntArray *dim = nullptr;
         bool keepdims;
         // On Ascend/ACL, aclnnAmax/Amin (and other reduce kernels) reject 1-D
         // inputs and return ERROR 161002, silently producing wrong results.

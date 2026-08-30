@@ -218,12 +218,11 @@ not throughput benchmarks.
 The maintained 910B gate deliberately skips these reproduced gaps instead of
 allowing them to abort or stall the process:
 
-- sub-32-bit integer `sum`, `prod`, `max`, and `min`, plus boolean `all` and
+- sub-32-bit integer `sum`, `max`, and `min`, plus boolean `all` and
   `any`, lack a complete ACL reduction path; promote inputs to a supported
   width when possible;
 - composed float32 `atan2` can raise a vector-core exception;
 - complex `irfft` can stall;
-- float32 `prod` can abort in the ACL reduction path;
 - native FlashAttention tests require an optional `jt.nn.FlashAttention`
   implementation and are skipped when it is absent;
 - Qwen3 bfloat16 is verified for eager, no-grad greedy inference. Fused ACL SDPA
@@ -243,6 +242,12 @@ ACL capabilities. Forward uses CANN MaxDim/MinDim and backward scatters the
 upstream gradient to the selected first index; the real-device regression rejects
 CPU compilation and fallback. See the
 [focused verification report](../../agent/results/2026-08-30-npu-arg-reduce-backward.md).
+
+Full, single-axis, and multi-axis `prod` use CANN `aclnnProd`/`aclnnProdDim`.
+Multi-axis reductions are lowered to ordered single-axis device reductions.
+Float32 forward/backward and uint8/int8/int16/int32/int64 forward match
+independent NumPy references on a real NPU without CPU compilation or fallback. See the
+[product verification report](../../agent/results/2026-08-30-npu-product-reduction.md).
 
 See the [active known-issues ledger](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)
 for executable evidence and exit conditions.

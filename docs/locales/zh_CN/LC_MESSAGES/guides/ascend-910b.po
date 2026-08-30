@@ -328,14 +328,14 @@ msgid ""
 msgstr ""
 "维护中的 910B 门禁会明确跳过以下已复现缺口，避免它们导致进程中止或停滞："
 
-#: a2464eba7b79444390cc92469ff57f53
+#: abb89986e8b34a0fa24af53212e094dc
 msgid ""
-"sub-32-bit integer `sum`, `prod`, `max`, and `min`, plus boolean `all` "
-"and `any`, lack a complete ACL reduction path; promote inputs to a "
-"supported width when possible;"
+"sub-32-bit integer `sum`, `max`, and `min`, plus boolean `all` and `any`,"
+" lack a complete ACL reduction path; promote inputs to a supported width "
+"when possible;"
 msgstr ""
-"低于 32 位的整数 `sum`、`prod`、`max` 和 `min`，以及布尔 `all` 和 "
-"`any`，尚无完整 ACL 归约路径；条件允许时请将输入提升到受支持的位宽；"
+"低于 32 位的整数 `sum`、`max` 和 `min`，以及布尔 `all` 和 `any`，"
+"尚无完整 ACL 归约路径；条件允许时请将输入提升到受支持的位宽；"
 
 #: cfd09dce6e7f4e318df6859dfd45302b
 msgid "composed float32 `atan2` can raise a vector-core exception;"
@@ -344,10 +344,6 @@ msgstr "组合实现的 float32 `atan2` 可能触发 vector core 异常；"
 #: 5b86b6a1e28f4c8ab310a43e99384e2b
 msgid "complex `irfft` can stall;"
 msgstr "复数 `irfft` 可能停滞；"
-
-#: 91d952743b7c4cd087cd432fd231b658
-msgid "float32 `prod` can abort in the ACL reduction path;"
-msgstr "float32 `prod` 可能在 ACL 归约路径中中止进程；"
 
 #: c5ff095ca0f748da91ac3ea49a6a78a8
 msgid ""
@@ -382,6 +378,22 @@ msgid ""
 msgstr ""
 "ACL 不提供通用的 float64 算子覆盖，因此不能把 float64 fallback 视为 NPU "
 "算子的验证证据。"
+
+#: 5867f71b0abb46e596acb6bd15969b6f
+msgid ""
+"Full, single-axis, and multi-axis `prod` use CANN "
+"`aclnnProd`/`aclnnProdDim`. Multi-axis reductions are lowered to ordered "
+"single-axis device reductions. Float32 forward/backward and "
+"uint8/int8/int16/int32/int64 forward match independent NumPy references "
+"on a real NPU without CPU compilation or fallback. See the [product "
+"verification report](../../agent/results/2026-08-30-npu-product-"
+"reduction.md)."
+msgstr ""
+"完整、单轴和多轴 `prod` 使用 CANN `aclnnProd`/`aclnnProdDim`。"
+"多轴归约会降低为按顺序执行的单轴设备归约。float32 前向/反向以及 "
+"uint8/int8/int16/int32/int64 前向均在真实 NPU 上与独立 NumPy 参考一致，"
+"且没有 CPU 编译或 fallback。参见 [product 验证报告]"
+"(../../agent/results/2026-08-30-npu-product-reduction.md)。"
 
 #: 678bc6e660684656bcdbe3a15b510a23
 msgid ""

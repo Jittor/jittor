@@ -712,6 +712,124 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(y, ny)
         print('test_sum pass')
 
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_product_reduction_forward_backward(self):
+        x_np = np.array(
+            [[1.5, -2.0, 3.0], [4.0, 0.5, -1.0]], dtype=np.float32
+        )
+        cotangent_np = np.array([0.25, -1.5], dtype=np.float32)
+        expected_by_row = np.prod(x_np, axis=1)
+        expected_grad = (
+            cotangent_np[:, None] * expected_by_row[:, None] / x_np
+        )
+        multi_np = np.array(
+            [
+                [[1.5, -2.0, 0.5], [2.0, 1.0, -1.0]],
+                [[-1.0, 0.25, 4.0], [0.5, -2.0, 3.0]],
+            ],
+            dtype=np.float32,
+        )
+        multi_cotangent_np = np.array([0.75, -1.25], dtype=np.float32)
+        expected_multi_kept = np.prod(multi_np, axis=(0, 2), keepdims=True)
+        expected_multi_grad = (
+            multi_cotangent_np[None, :, None]
+            * expected_multi_kept
+            / multi_np
+        )
+
+        integer_values = {
+            dtype: np.array([[-2, 1, 2], [1, -1, -2]], dtype=dtype)
+            for dtype in ("int8", "int16", "int32", "int64")
+        }
+        integer_values["uint8"] = np.array(
+            [[2, 1, 2], [1, 3, 2]], dtype=np.uint8
+        )
+
+        with jt.log_capture_scope(
+            log_v=0, log_vprefix="acl_op_exec.cc=100"
+        ) as logs:
+            x = jt.array(x_np)
+            full = jt.prod(x)
+            by_row = jt.prod(x, dim=1)
+            kept = jt.prod(x, dim=0, keepdims=True)
+            grad = jt.grad(
+                (by_row * jt.array(cotangent_np)).sum(), x
+            )
+            multi = jt.array(multi_np)
+            multi_axis = jt.prod(multi, dims=(0, 2))
+            multi_axis_kept = jt.prod(multi, dims=(0, 2), keepdims=True)
+            multi_grad = jt.grad(
+                (multi_axis * jt.array(multi_cotangent_np)).sum(), multi
+            )
+            integer_results = []
+            for dtype, values in integer_values.items():
+                value = jt.array(values, dtype=dtype)
+                stacked_values = np.stack([values, np.ones_like(values)])
+                integer_results.append((
+                    dtype,
+                    jt.prod(value),
+                    jt.prod(value, dim=1),
+                    jt.prod(jt.array(stacked_values, dtype=dtype), dims=(0, 2)),
+                ))
+            results = jt.fetch_sync(
+                [
+                    full, by_row, kept, grad,
+                    multi_axis, multi_axis_kept, multi_grad,
+                ]
+            )
+            (
+                full, by_row, kept, grad,
+                multi_axis, multi_axis_kept, multi_grad,
+            ) = results
+            integer_results = [
+                (dtype, *jt.fetch_sync([full_value, row_value, multi_value]))
+                for dtype, full_value, row_value, multi_value in integer_results
+            ]
+
+        np.testing.assert_allclose(full, np.prod(x_np), rtol=1e-6, atol=1e-6)
+        np.testing.assert_allclose(
+            by_row, expected_by_row, rtol=1e-6, atol=1e-6
+        )
+        np.testing.assert_allclose(
+            kept, np.prod(x_np, axis=0, keepdims=True), rtol=1e-6, atol=1e-6
+        )
+        np.testing.assert_allclose(
+            grad, expected_grad, rtol=1e-6, atol=1e-6
+        )
+        np.testing.assert_allclose(
+            multi_axis,
+            np.prod(multi_np, axis=(0, 2)),
+            rtol=1e-6,
+            atol=1e-6,
+        )
+        np.testing.assert_allclose(
+            multi_axis_kept, expected_multi_kept, rtol=1e-6, atol=1e-6
+        )
+        np.testing.assert_allclose(
+            multi_grad, expected_multi_grad, rtol=1e-6, atol=1e-6
+        )
+        for dtype, full_value, row_value, multi_value in integer_results:
+            values = integer_values[dtype]
+            np.testing.assert_array_equal(
+                full_value, np.prod(values, dtype=dtype)
+            )
+            np.testing.assert_array_equal(
+                row_value, np.prod(values, axis=1, dtype=dtype)
+            )
+            np.testing.assert_array_equal(
+                multi_value,
+                np.prod(
+                    np.stack([values, np.ones_like(values)]),
+                    axis=(0, 2),
+                    dtype=dtype,
+                ),
+            )
+
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertTrue(any("reduce.multiply" in message for message in messages))
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
     @jt.flag_scope(use_acl=1)
     def test_broadcast(self):
         x = jt.rand(3)
