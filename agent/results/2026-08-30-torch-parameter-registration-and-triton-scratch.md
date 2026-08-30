@@ -314,8 +314,25 @@ Jittor 执行器从"算子创建"到"kernel 启动"之间的 C++ 环节——每
 却被反复重建，而 Jittor 没有 CUDA graph 那样的捕获重放能力（源码里只有
 `gopt_disable` / `para_opt_level` 这类旋钮，没有 graph capture）。
 
-要真正抹平这 18ms，需要把每算子的 CPU 成本降到接近零——也就是 CUDA graph 级别的
-捕获重放，属于运行时层面的能力，本轮没有做。
+### CUDA graph 这条路：已实测确认前提不成立
+
+"需要 CUDA graph"不是推断，是试过的。用 ctypes 直接
+`cudaStreamBeginCapture(stream, cudaStreamCaptureModeRelaxed)`，让一个已经预热过的
+Jittor 逐元素算子在捕获期间执行，然后 `cudaStreamEndCapture`：
+
+```text
+CAP beginCapture  rc=0   ok
+CAP jittor ops ran during capture
+CAP endCapture    rc=901 operation failed due to a previous error during capture
+```
+
+`901` 是"捕获期间已发生错误"。原因清楚：Jittor 把 kernel 发到它自己的流上而不是传入
+的捕获流，`.sync()` 又触发了设备同步——两者各自都足以作废捕获。
+
+所以要抹平这 18ms，Jittor 执行器需要具备两项能力：捕获期间把 kernel 发到指定的捕获
+流，以及在捕获期间不做同步；此外重放期间输出缓冲的地址必须稳定，分配器要配合。再往上
+还要让 shim 的 `torch.cuda.CUDAGraph`（目前是空壳）真正落到这套机制上，vLLM 才能用它
+自己的 `cudagraph_mode`。这是一项独立的运行时工程，本轮没有做。
 
 （测量陷阱记录：Jittor 的惰性图会做公共子表达式消除与死代码消除，用固定输入或不
 保留输出的微基准会得到荒谬的数字——`qkv_proj` 一度量出 9.4us，而它要读 33MB 权重，
