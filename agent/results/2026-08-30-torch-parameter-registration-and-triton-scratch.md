@@ -329,10 +329,19 @@ CAP endCapture    rc=901 operation failed due to a previous error during capture
 `901` 是"捕获期间已发生错误"。原因清楚：Jittor 把 kernel 发到它自己的流上而不是传入
 的捕获流，`.sync()` 又触发了设备同步——两者各自都足以作废捕获。
 
-所以要抹平这 18ms，Jittor 执行器需要具备两项能力：捕获期间把 kernel 发到指定的捕获
-流，以及在捕获期间不做同步；此外重放期间输出缓冲的地址必须稳定，分配器要配合。再往上
-还要让 shim 的 `torch.cuda.CUDAGraph`（目前是空壳）真正落到这套机制上，vLLM 才能用它
-自己的 `cudagraph_mode`。这是一项独立的运行时工程，本轮没有做。
+再往下查到了根本障碍：**Jittor 的 kernel 启动全部不带流参数**。仓库里 34 处
+`<<<...>>>` 启动，带显式 stream 的是 `0` 处，全都落到 legacy 默认流上——而 CUDA 明确
+禁止捕获 legacy 默认流。JIT 生成的 kernel 同样如此。
+
+所以这条路要走通，需要依次做到：
+
+1. 每处 kernel 启动都带上流参数（涉及所有算子模板与 JIT 代码生成）；
+2. 执行器在捕获期间把 kernel 发到指定的捕获流，且不做同步；
+3. 重放期间输出缓冲地址稳定，分配器要配合；
+4. 让 shim 的 `torch.cuda.CUDAGraph`（目前是空壳）落到这套机制上，vLLM 才能启用它
+   自己的 `cudagraph_mode`。
+
+这是一项独立的运行时工程，本轮没有做。
 
 （测量陷阱记录：Jittor 的惰性图会做公共子表达式消除与死代码消除，用固定输入或不
 保留输出的微基准会得到荒谬的数字——`qkv_proj` 一度量出 9.4us，而它要读 33MB 权重，
