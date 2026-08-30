@@ -24,6 +24,11 @@ global-exclude *.py[cod]
 global-exclude *.ipynb
 global-exclude __pycache__
 global-exclude .DS_Store
+# Compiled gettext catalogs are generated from the tracked .po sources by the
+# docs i18n build, straight into docs/locales/**/LC_MESSAGES/ where the prunes
+# below do not reach. `recursive-include docs *` would otherwise ship whatever a
+# local docs build happened to leave behind.
+global-exclude *.mo
 prune python/jittor/**/__pycache__
 prune python/jittor_utils/**/__pycache__
 prune python/jittor/**/.pytest_cache
