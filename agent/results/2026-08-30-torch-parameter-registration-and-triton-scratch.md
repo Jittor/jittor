@@ -336,7 +336,12 @@ CAP endCapture    rc=901 operation failed due to a previous error during capture
 `<<<...>>>` 启动，带显式 stream 的是 `0` 处，全都落到 legacy 默认流上——而 CUDA 明确
 禁止捕获 legacy 默认流。JIT 生成的 kernel 同样如此。
 
-所以这条路要走通，需要依次做到：
+也试过捷径：`nvcc --default-stream per-thread` 会把空流的含义改成每线程默认流，而
+每线程默认流**是可以捕获的**，这样就不必逐处改 kernel 启动。用 `nvcc_flags` 环境变量
+加上该选项重建后，Jittor **立刻在运行时出错**（curand 等组件依赖 legacy 空流的隐式
+同步语义，换成每线程流后这层保证消失）。所以捷径不存在。
+
+这条路要走通，需要依次做到：
 
 1. 每处 kernel 启动都带上流参数（涉及所有算子模板与 JIT 代码生成）；
 2. 执行器在捕获期间把 kernel 发到指定的捕获流，且不做同步；
