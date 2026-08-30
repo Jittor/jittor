@@ -180,6 +180,164 @@ class TestACLTorchCompat(unittest.TestCase):
         self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_batch_norm_eval_forward_backward_stays_on_acl(self):
+        rng = np.random.RandomState(20260831)
+        source_np = rng.randn(2, 4, 3, 5).astype("float32")
+        weight_np = rng.randn(4).astype("float32")
+        bias_np = rng.randn(4).astype("float32")
+        mean_np = rng.randn(4).astype("float32")
+        variance_np = (np.abs(rng.randn(4)) + 0.5).astype("float32")
+        loss_weight_np = rng.randn(*source_np.shape).astype("float32")
+
+        dispatches = []
+        acl_batch_norm = jt.nn._batch_norm_eval_cuda
+
+        def record_batch_norm(*args):
+            result = acl_batch_norm(*args)
+            dispatches.append(result is not None)
+            return result
+
+        jt.nn._batch_norm_eval_cuda = record_batch_norm
+        try:
+            module = torch.nn.BatchNorm2d(4)
+            module.eval()
+            module.weight.assign(weight_np).start_grad()
+            module.bias.assign(bias_np).start_grad()
+            module.running_mean.assign(mean_np)
+            module.running_var.assign(variance_np)
+            source = torch.tensor(source_np)
+            source.requires_grad_(True)
+            with jt.log_capture_scope(
+                log_v=0, log_vprefix="acl_op_exec.cc=100"
+            ) as logs:
+                output = module(source)
+                gradients = torch.autograd.grad(
+                    (output * torch.tensor(loss_weight_np)).sum(),
+                    (source, module.weight, module.bias),
+                )
+                candidate = jt.fetch_sync([output] + list(gradients))
+        finally:
+            jt.nn._batch_norm_eval_cuda = acl_batch_norm
+
+        invstd = 1.0 / np.sqrt(variance_np + 1e-5)
+        broadcast = (None, slice(None), None, None)
+        normalized = (
+            source_np - mean_np[broadcast]
+        ) * invstd[broadcast]
+        expected = [
+            normalized * weight_np[broadcast] + bias_np[broadcast],
+            loss_weight_np * weight_np[broadcast] * invstd[broadcast],
+            (loss_weight_np * normalized).sum(axis=(0, 2, 3)),
+            loss_weight_np.sum(axis=(0, 2, 3)),
+        ]
+
+        self.assertEqual(dispatches, [True])
+        for actual, reference in zip(candidate, expected):
+            np.testing.assert_allclose(
+                actual, reference, rtol=2e-4, atol=2e-4
+            )
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_layer_norm_forward_backward_stays_on_acl(self):
+        rng = np.random.RandomState(20260831)
+        source_np = rng.randn(2, 12, 32).astype("float32")
+        weight_np = rng.randn(32).astype("float32")
+        bias_np = rng.randn(32).astype("float32")
+        loss_weight_np = rng.randn(*source_np.shape).astype("float32")
+
+        module = torch.nn.LayerNorm(32)
+        module.weight.assign(weight_np)
+        module.bias.assign(bias_np)
+        source = torch.tensor(source_np)
+        source.requires_grad_(True)
+        with jt.log_capture_scope(
+            log_v=0, log_vprefix="acl_op_exec.cc=100"
+        ) as logs:
+            output = module(source)
+            gradients = torch.autograd.grad(
+                (output * torch.tensor(loss_weight_np)).sum(),
+                (source, module.weight, module.bias),
+            )
+            candidate = jt.fetch_sync([output] + list(gradients))
+
+        with jt.flag_scope(use_acl=0, use_cuda=0):
+            reference_module = torch.nn.LayerNorm(32)
+            reference_module.weight.assign(weight_np)
+            reference_module.bias.assign(bias_np)
+            reference_source = torch.tensor(source_np)
+            reference_source.requires_grad_(True)
+            reference_output = reference_module(reference_source)
+            reference_gradients = torch.autograd.grad(
+                (reference_output * torch.tensor(loss_weight_np)).sum(),
+                (
+                    reference_source,
+                    reference_module.weight,
+                    reference_module.bias,
+                ),
+            )
+            reference = jt.fetch_sync(
+                [reference_output] + list(reference_gradients)
+            )
+
+        for actual, expected in zip(candidate, reference):
+            np.testing.assert_allclose(
+                actual, expected, rtol=2e-4, atol=2e-4
+            )
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_conv2d_without_bias_forward_backward_stays_on_acl(self):
+        rng = np.random.RandomState(20260831)
+        source_np = rng.randn(2, 3, 8, 8).astype("float32")
+        weight_np = rng.randn(5, 3, 3, 3).astype("float32")
+        loss_weight_np = rng.randn(2, 5, 8, 8).astype("float32")
+
+        source = torch.tensor(source_np)
+        weight = torch.tensor(weight_np)
+        source.requires_grad_(True)
+        weight.requires_grad_(True)
+        with jt.log_capture_scope(
+            log_v=0, log_vprefix="acl_op_exec.cc=100"
+        ) as logs:
+            output = torch.nn.functional.conv2d(
+                source, weight, bias=None, padding=1
+            )
+            gradients = torch.autograd.grad(
+                (output * torch.tensor(loss_weight_np)).sum(),
+                (source, weight),
+            )
+            candidate = jt.fetch_sync([output] + list(gradients))
+
+        with jt.flag_scope(use_acl=0, use_cuda=0):
+            reference_source = torch.tensor(source_np)
+            reference_weight = torch.tensor(weight_np)
+            reference_source.requires_grad_(True)
+            reference_weight.requires_grad_(True)
+            reference_output = torch.nn.functional.conv2d(
+                reference_source, reference_weight, bias=None, padding=1
+            )
+            reference_gradients = torch.autograd.grad(
+                (reference_output * torch.tensor(loss_weight_np)).sum(),
+                (reference_source, reference_weight),
+            )
+            reference = jt.fetch_sync(
+                [reference_output] + list(reference_gradients)
+            )
+
+        for actual, expected in zip(candidate, reference):
+            np.testing.assert_allclose(
+                actual, expected, rtol=3e-4, atol=3e-4
+            )
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_silu_forward_backward_stays_on_acl(self):
         source_np = np.array(
             [-4.0, -1.25, -0.1, 0.0, 0.75, 3.5], dtype="float32"

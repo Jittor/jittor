@@ -32,8 +32,42 @@
 
 namespace jittor
 {
+    static void setupNormTensorDescs(
+        const vector<Var *> &vars,
+        vector<vector<int64_t>> &shapes,
+        vector<aclTensor *> &tensors,
+        int nchwPrefix)
+    {
+        for (auto *var : vars)
+        {
+            vector<int64_t> shape;
+            for (int j = 0; j < var->shape.size(); j++)
+                shape.push_back(var->shape[j]);
+            shapes.push_back(shape);
+        }
+        for (int idx = 0; idx < vars.size(); idx++)
+        {
+            tensors.push_back(nullptr);
+            auto ret = CreateAclTensor(
+                shapes[idx], vars[idx]->mem_ptr, vars[idx]->size,
+                get_dtype(vars[idx]->dtype()), &tensors[idx],
+                idx < nchwPrefix);
+            CHECK_RET(ret == ACL_SUCCESS, return);
+        }
+    }
+
     BatchNormOpRunner::BatchNormOpRunner() : BaseOpRunner("BatchNorm")
     {
+    }
+
+    void BatchNormOpRunner::setupInputDesc()
+    {
+        setupNormTensorDescs(in_, inputShapes, inputTensors, 1);
+    }
+
+    void BatchNormOpRunner::setupOutputDesc()
+    {
+        setupNormTensorDescs(out_, outputShapes, outputTensors, 1);
     }
 
     void BatchNormOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
@@ -60,6 +94,16 @@ namespace jittor
     {
     }
 
+    void BatchNormBackwardOpRunner::setupInputDesc()
+    {
+        setupNormTensorDescs(in_, inputShapes, inputTensors, 2);
+    }
+
+    void BatchNormBackwardOpRunner::setupOutputDesc()
+    {
+        setupNormTensorDescs(out_, outputShapes, outputTensors, 1);
+    }
+
     void BatchNormBackwardOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
     {
         auto attr = dynamic_cast<BatchNormAttr *>(op_attr.get());
@@ -78,6 +122,7 @@ namespace jittor
         CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnBatchNormBackward failed. ERROR: %d\n", name.c_str(), ret); return);
 
         syncRun();
+        aclDestroyBoolArray(outMask);
 
         return;
     }

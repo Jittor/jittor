@@ -32,6 +32,11 @@ class _StubTorch(object):
     """Stands in for the ``torch`` argument on the Jittor paths."""
 
 
+class _StubFlags(object):
+    use_cuda = 0
+    use_acl = 0
+
+
 class _SharedNumpyTensor(object):
     def __init__(self, array):
         self.array = array
@@ -76,17 +81,18 @@ class TestEcosystemDeviceSelection(unittest.TestCase):
         )
 
     def test_npu_request_requires_acl_and_is_reported_separately(self):
+        flags = _StubFlags()
         with mock.patch.object(jt.compiler, "has_acl", 1):
-            jt.flags.use_cuda = 0
-            _ecosystem_runner._select_device(_StubTorch(), "jittor", "npu")
-            self.assertEqual(jt.flags.use_cuda, 1)
-            self.assertEqual(jt.flags.use_acl, 1)
-            self.assertEqual(
-                _ecosystem_runner._device_in_use(
-                    _StubTorch(), "jittor", "npu"
-                ),
-                "npu",
-            )
+            with mock.patch.object(jt, "flags", flags):
+                _ecosystem_runner._select_device(_StubTorch(), "jittor", "npu")
+                self.assertEqual(flags.use_cuda, 1)
+                self.assertEqual(flags.use_acl, 1)
+                self.assertEqual(
+                    _ecosystem_runner._device_in_use(
+                        _StubTorch(), "jittor", "npu"
+                    ),
+                    "npu",
+                )
 
     def test_npu_request_fails_without_acl(self):
         with mock.patch.object(jt.compiler, "has_acl", 0):

@@ -8,6 +8,8 @@ namespace jittor
     {
 
     protected:
+        void setupInputDesc() override;
+        void setupOutputDesc() override;
         void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
     public:
         BatchNormOpRunner();
@@ -17,6 +19,8 @@ namespace jittor
     {
 
     protected:
+        void setupInputDesc() override;
+        void setupOutputDesc() override;
         void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
     public:
         BatchNormBackwardOpRunner();

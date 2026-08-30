@@ -366,7 +366,14 @@ def main():
 
             # Explicit targets force every lazy gradient without introducing
             # hundreds of per-tensor D2H copies into the training measurement.
-            jt.sync([step_loss] + gradients)
+            # Submit exactly the observed training graph and wait for its
+            # device work here. A following sync_all() would traverse every
+            # live Var a second time even though these targets already cover
+            # the complete forward/backward step.
+            jt.sync(
+                [step_loss] + gradients,
+                device_sync=options.device != "cpu",
+            )
         return step_loss, gradients
 
     resident_values = [timing_loss_weights]
@@ -382,7 +389,8 @@ def main():
     for index in range(max(1, options.repeats)):
         started = time.perf_counter()
         values = one_step(timing_slots[index % len(timing_slots)])
-        _synchronize(torch, options.runtime, options.device)
+        if options.runtime != "jittor":
+            _synchronize(torch, options.runtime, options.device)
         durations.append(time.perf_counter() - started)
     del warm_values, values
 

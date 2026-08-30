@@ -165,7 +165,12 @@ def change_function():
     from .aclops.softmax_op import SoftmaxACL
     from .aclops.sigmoid_op import SigmoidACL
     from .aclops.silu_op import SiLUACL
-    from .aclops.norms_op import GroupNormACL, LayerNormACL, RmsNormACL
+    from .aclops.norms_op import (
+        BatchNormACL,
+        GroupNormACL,
+        LayerNormACL,
+        RmsNormACL,
+    )
     from .aclops.dropout_op import DropoutACL
     from .aclops.relu_op import LeakyReLUACL
     from .aclops.flip_op import FlipACL
@@ -806,6 +811,7 @@ def change_function():
     jt.Var.triu = jt.triu
     jt.Var.triu_ = lambda x, diagonal=0: x.assign(x.triu(diagonal))
     jt.nn.conv2d = warp(jt.nn.conv2d, conv_acl)
+    jt.nn.functional.conv2d = jt.nn.conv2d
     jt.nn.Conv2d = warp(jt.nn.Conv2d, Conv2D)
     jt.nn.Conv = warp(jt.nn.Conv, Conv2D)
 
@@ -827,6 +833,33 @@ def change_function():
             return fn(x, self.weight, self.bias)
         return _orig_layernorm_execute(self, x)
     jt.nn.LayerNorm.execute = _layernorm_execute_acl
+
+    _orig_batch_norm_eval_cuda = jt.nn._batch_norm_eval_cuda
+    def _batch_norm_eval_cuda_acl(
+            x, weight, bias, running_mean, running_var, eps):
+        values = (x, weight, bias, running_mean, running_var)
+        if (
+            jt.flags.use_acl
+            and jt.flags.use_cuda
+            and all(isinstance(value, jt.Var) for value in values)
+            and all(str(value.dtype) == "float32" for value in values)
+            and isinstance(eps, Real)
+        ):
+            shape = tuple(int(size) for size in x.shape)
+            epsilon = float(eps)
+            if (
+                len(shape) == 4
+                and all(size > 0 for size in shape)
+                and all(tuple(value.shape) == (shape[1],)
+                        for value in values[1:])
+                and math.isfinite(epsilon)
+                and epsilon > 0.0
+            ):
+                return BatchNormACL(epsilon)(
+                    x, weight, bias, running_mean, running_var)
+        return _orig_batch_norm_eval_cuda(
+            x, weight, bias, running_mean, running_var, eps)
+    jt.nn._batch_norm_eval_cuda = _batch_norm_eval_cuda_acl
 
     _orig_group_norm_cuda = jt.nn._group_norm_cuda
     def _group_norm_cuda_acl(x, num_groups, weight, bias, eps):

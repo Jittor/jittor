@@ -102,7 +102,7 @@ ConvNet improved to `1.08x`, and ViT remains open at about `1.33x` because its
 dominant CUDA GEMMs lag the PyTorch reference.
 Performance work uses isolated caches, synchronization, and exact commit labels.
 The ecosystem harness verifies twelve Transformers/Diffusers/PEFT/ms-swift/MMCV/MMEngine CPU/CUDA cases; its NPU scope verifies Diffusers UNet2D and MMCV/MMEngine forward and every gradient against `torch_npu` with zero CPU paths.
-Diffusers correctness and maintained float32 performance are accepted at `0.964x` native `torch_npu`; the tiny OpenMMLab NPU cases remain `1.97x/1.17x` slower. See the [Diffusers](../results/2026-08-30-diffusers-ascend-parity-performance.md) and [OpenMMLab](../results/2026-08-30-mmcv-mmengine-ascend-parity.md) reports.
+Diffusers correctness and maintained float32 performance are accepted at `0.964x` native `torch_npu`; the tiny OpenMMLab NPU cases now pass at `0.927x/0.796x`. See the [Diffusers](../results/2026-08-30-diffusers-ascend-parity-performance.md) and [OpenMMLab](../results/2026-08-30-mmcv-mmengine-ascend-parity.md) reports.
 Other ecosystem cases and the following verl/vLLM results remain CPU/CUDA evidence, not NPU claims. Current verl core
 algorithm/FSDP2 gates also pass on CPU/CUDA. The maintained framework FSDP2
 gate additionally passes single-node four-rank NCCL sharding, collectives, and

@@ -50,9 +50,9 @@ def _conv_output_shape(x, weight, stride, padding, dilation):
     return (x.shape[0], weight.shape[0], output_height, output_width)
 
 
-class _ConvACLNoBias(jt.Function):
+class _ConvACLNoBias:
 
-    def execute(self,
+    def __call__(self,
                 x,
                 weight,
                 bias=None,
@@ -60,19 +60,15 @@ class _ConvACLNoBias(jt.Function):
                 padding=0,
                 dilation=1,
                 groups=1):
-        self.input = x
-        self.weight = weight
         assert bias is None
         padding = _pair(padding)
         stride = _pair(stride)
         dilation = _pair(dilation)
         if groups <= 0:
             raise ValueError("groups must be a positive integer")
-        self.padding = padding
-        self.stride = stride
-        self.dilation = dilation
-        self.groups = groups
         attr_code = _conv_attr_code(stride, padding, dilation, groups, "conv2d")
+        grad_attr_code = _conv_attr_code(
+            stride, padding, dilation, groups, "conv2dbackward")
         output_shape = _conv_output_shape(x, weight, stride, padding, dilation)
         result = conv_cmd(
             "Conv2d",
@@ -80,27 +76,19 @@ class _ConvACLNoBias(jt.Function):
             output_dtypes=[x.dtype],
             output_shapes=[output_shape],
             attr_code=attr_code,
+            multi_grad_src=f"""
+            // aclop
+            Conv2dBackwardOpRunner op;
+            op.add(dout, true);
+            op.add(in0, true);
+            op.add(in1, true);
+            op.add(out0, false);
+            op.add(out1, false);
+            {grad_attr_code}
+            op.run();
+            """,
         )[0]
         return result
-
-    def grad(self, grad_output):
-        x = self.input
-        weight = self.weight
-        inputs = [grad_output, x, weight]
-        output_shapes = [x.shape, weight.shape, [weight.shape[0]]]
-        output_dtypes = [x.dtype, weight.dtype, x.dtype]
-        padding = self.padding
-        stride = self.stride
-        dilation = self.dilation
-        groups = self.groups
-        attr_code = _conv_attr_code(
-            stride, padding, dilation, groups, "conv2dbackward")
-        results = conv_cmd("Conv2dBackward",
-                           inputs,
-                           output_dtypes=output_dtypes,
-                           output_shapes=output_shapes,
-                           attr_code=attr_code)
-        return results[0], results[1]
 
 
 class ConvACL:
