@@ -766,6 +766,15 @@ def _compile(jitfn, signature, constants, options=None):
             "shared": int(getattr(md, "shared", 0) or 0),
             "scratch": int(getattr(md, "global_scratch_size", 0) or 0),
             "scratch_align": int(getattr(md, "global_scratch_align", 1) or 1),
+            # Which scratch pointers this triton version appends to the kernel's
+            # parameter list -- presence of the metadata field is the signal, not
+            # the size: a zero-size scratch is still a declared (null) parameter.
+            # 3.2 has neither field, 3.7 has both.
+            "has_scratch": hasattr(md, "global_scratch_size"),
+            "profile_scratch": int(getattr(md, "profile_scratch_size", 0) or 0),
+            "profile_scratch_align": int(
+                getattr(md, "profile_scratch_align", 1) or 1),
+            "has_profile_scratch": hasattr(md, "profile_scratch_size"),
             "n_ptx_params": _ptx_param_count(ptx, name),
         }
         _COMPILE_CACHE[key] = info
@@ -1036,12 +1045,26 @@ def run(jitfn, args, kwargs, grid):
         keepalive.append(cv)
         cvals.append(cv)
 
-    # global scratch (rare): triton prepends a scratch pointer as param 0
+    # Scratch pointers go AFTER the declared arguments, global first then profile
+    # -- triton's own launcher appends them there ("Add scratch objects" in the
+    # nvidia backend's driver.c). Each field the metadata exposes is a parameter
+    # the cubin declares even when its size is zero, in which case triton passes
+    # a null pointer, so presence drives the packing and size only drives the
+    # allocation. The buffer is per program instance, hence the grid scaling.
     n_expected = len(cvals)
-    scratch_base = 0
-    if info["scratch"] > 0:
-        scratch_base = drv.alloc(info["scratch"])
-        cvals = [ctypes.c_uint64(scratch_base)] + cvals
+    scratch_bases = []
+    grid_programs = g[0] * g[1] * g[2]
+    for have, size in ((info["has_scratch"], info["scratch"]),
+                       (info["has_profile_scratch"], info["profile_scratch"])):
+        if not have:
+            continue
+        base = 0
+        if size > 0:
+            base = drv.alloc(size * grid_programs)
+            scratch_bases.append(base)
+        cv = ctypes.c_uint64(base)
+        keepalive.append(cv)
+        cvals.append(cv)
         n_expected += 1
 
     # safety net: refuse to launch if our packing disagrees with the cubin
@@ -1068,7 +1091,7 @@ def run(jitfn, args, kwargs, grid):
     drv.launch(func, g, block, info["shared"], params)
     need_sync_after_launch = (
         _sync_after_launch_enabled()
-        or (scratch_base != 0)
+        or bool(scratch_bases)
         or (bounced and _copy_bounced_inputs_back())
     )
     if need_sync_after_launch:
@@ -1102,8 +1125,8 @@ def run(jitfn, args, kwargs, grid):
         for (_orig_ptr, bbase, _nbytes, bcap) in bounced:
             drv.guard_release(bbase, bcap)
 
-    if scratch_base:
-        drv.free(scratch_base)
+    for _sb in scratch_bases:
+        drv.free(_sb)
 
     if _ptrtrace:
         import sys as _sys

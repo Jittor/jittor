@@ -263,6 +263,38 @@ ok(float(_wt.weight.numpy().sum()) == 12.0, "_parameters[name]=v write-through p
 ok(float(_wt.rm.numpy().sum()) == 3.0, "_buffers[name]=v write-through persists")
 ok("rm" not in _wtp and "weight" in _wtp, "write-through preserves buffer/param classification")
 
+# torch registers a parameter only for nn.Parameter; a plain tensor assigned to a
+# module attribute stays an ordinary attribute, out of parameters() AND state_dict().
+# jittor's own rule is assignment-is-parameter, so a torch-authored class had every
+# scratch tensor turned into a trainable parameter -- vLLM's attention layer sets
+# `layer.v_range = torch.tensor(...)` and its loader then rejected the model for
+# carrying checkpoint weights it never initialised.
+class _RegM(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.w = torch.nn.Parameter(jt.ones(2))
+        self.plain = jt.ones(4)
+        self.register_buffer("buf", jt.zeros(3))
+_reg = _RegM()
+ok([n for n, _ in _reg.named_parameters()] == ["w"],
+   "plain tensor attribute is not a parameter (torch rule)")
+ok(sorted(_reg.state_dict().keys()) == ["buf", "w"],
+   "plain tensor attribute is not in state_dict (torch rule)")
+ok(tuple(_reg.plain.shape) == (4,), "plain tensor attribute stays readable")
+# Promotion and demotion both follow the assigned value, and a name that already
+# holds a parameter keeps it -- from_pretrained's dtype cast replaces a weight Var
+# with a plain one, and must not drop that weight out of the optimizer.
+_reg.plain = torch.nn.Parameter(jt.ones(4))
+ok(sorted(n for n, _ in _reg.named_parameters()) == ["plain", "w"],
+   "nn.Parameter assignment promotes a plain attribute")
+_reg.w = jt.zeros(2)
+ok(sorted(n for n, _ in _reg.named_parameters()) == ["plain", "w"],
+   "re-assigning a plain tensor over a parameter keeps it registered")
+# jittor's own module classes keep assignment-is-parameter even under the shim:
+# nn.Linear declares its weight that way, so the torch rule must not reach them.
+ok([n for n, _ in torch.nn.Linear(4, 3).named_parameters()] == ["weight", "bias"],
+   "jittor-authored classes keep assignment-is-parameter")
+
 # F.scaled_dot_product_attention (SDPA) — the default attention in transformers 5.x.
 # Verify forward against a softmax(QK^T/sqrt(d))V reference (plain/causal/bool-mask/
 # scale) and backward against a numeric gradient. Subtle spots: bool-mask semantics

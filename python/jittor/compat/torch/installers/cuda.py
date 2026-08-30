@@ -340,7 +340,56 @@ def _install_cuda(g, registry=None):
     cuda.reset_max_memory_allocated = _reset_peak
     cuda.memory_stats = lambda *a, **k: {"allocated_bytes.all.current": _mem_used(),
                                          "allocated_bytes.all.peak": _mem_peak[0]}
-    cuda.mem_get_info = lambda *a, **k: (64*1024**3, 64*1024**3)
+    # torch's mem_get_info is cudaMemGetInfo: the DRIVER's free/total for the whole
+    # device, counting other processes, the CUDA context and every byte jittor's
+    # pool holds -- not just the bytes currently live in Vars. Serving stacks size
+    # their weight/activation/KV budget from it (vLLM plans the KV cache as
+    # `total*util - (total-free) - peak_activation`), so the flat 64GiB stub that
+    # used to stand here made them plan against a device that does not exist.
+    _memgetinfo = [None]
+    def _cuda_mem_get_info_fn():
+        if _memgetinfo[0] is not None:
+            return _memgetinfo[0]
+        fn = False
+        try:
+            import ctypes as _ct
+            lib = None
+            for _n in ("libcudart.so", "libcudart.so.12", "libcudart.so.11.0"):
+                try:
+                    lib = _ct.CDLL(_n)
+                    break
+                except OSError:
+                    lib = None
+            if lib is not None:
+                lib.cudaMemGetInfo.argtypes = [_ct.POINTER(_ct.c_size_t),
+                                               _ct.POINTER(_ct.c_size_t)]
+                lib.cudaMemGetInfo.restype = _ct.c_int
+                def fn(_lib=lib, _ct=_ct):
+                    free, total = _ct.c_size_t(0), _ct.c_size_t(0)
+                    if _lib.cudaMemGetInfo(_ct.byref(free), _ct.byref(total)) != 0:
+                        return None
+                    return (int(free.value), int(total.value))
+        except Exception:
+            fn = False
+        _memgetinfo[0] = fn
+        return fn
+
+    def _mem_get_info(*a, **k):
+        fn = _cuda_mem_get_info_fn()
+        if fn:
+            got = fn()
+            if got and got[1] > 0:
+                return got
+        # No cudart to ask: fall back to jittor's own accounting. This knows the
+        # device total exactly and jittor's live bytes, but not the context's or
+        # another process's, so it reads slightly optimistic rather than fictional.
+        try:
+            mi = jt.get_mem_info()
+            total = int(mi.total_cuda_ram)
+            return (max(0, total - int(mi.total_cuda_used)), total)
+        except Exception:
+            return (0, 0)
+    cuda.mem_get_info = _mem_get_info
     cuda.ipc_collect = lambda *a, **k: None
     cuda.memory = _types.ModuleType("torch.cuda.memory")
     cuda.memory._set_allocator_settings = lambda *a, **k: None

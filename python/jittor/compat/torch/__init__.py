@@ -215,6 +215,10 @@ def install(torch, strict=True):
         setattr(torch, InstallContext.COMPLETE_ATTR, False)
         raise
     context.state.pop(_NAMESPACE_TRANSACTION, None)
+    # From here on a module tree can contain torch-authored classes, which
+    # register parameters by nn.Parameter rather than by assignment.
+    from jittor._runtime import core_api as _core_api
+    _core_api._torch_registration_semantics = True
     return torch
 
 
