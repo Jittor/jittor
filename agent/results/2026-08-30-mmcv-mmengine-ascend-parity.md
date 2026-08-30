@@ -98,4 +98,6 @@ downstream dependency origins, and equal TF32-disabled policy.
 - The observed NPU ratios do not meet the broader no-slower target. A stable,
   realistic shape protocol and ACL kernel profile are required before accepting
   or optimizing that target.
-- Diffusers, ms-swift, verl, and vLLM NPU coverage remains separate work.
+- Diffusers now has a separate real-NPU correctness result; see the
+  [Diffusers Ascend report](2026-08-30-diffusers-ascend-parity-performance.md).
+  ms-swift, verl, and vLLM NPU coverage remains separate work.

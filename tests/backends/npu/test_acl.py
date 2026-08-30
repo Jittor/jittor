@@ -640,7 +640,7 @@ class TestACL(unittest.TestCase):
             atol=2e-3, rtol=2e-2)
 
         self.assertIsNone(jt.nn._acl_scaled_dot_product_attention(
-            q, k, v, is_causal=True, enable_gqa=True))
+            q, k, v, dropout_p=0.1, enable_gqa=True))
         with jt.no_grad():
             self.assertIsNone(jt.nn._acl_scaled_dot_product_attention(
                 q.float16(), k.float16(), v.float16(),

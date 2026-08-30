@@ -537,6 +537,18 @@ namespace jittor
         }
     };
 
+    struct UpsampleNearest2dAttr : AclOpAttr
+    {
+        vector<int64_t> outputSize;
+        vector<int64_t> inputSize;
+
+        ~UpsampleNearest2dAttr()
+        {
+            outputSize.clear();
+            inputSize.clear();
+        }
+    };
+
     struct ConcatAttr : AclOpAttr
     {
         int64_t tensorNum;
@@ -666,6 +678,18 @@ namespace jittor
         ~LayerNormAttr()
         {
             normalizedShape.clear();
+        }
+    };
+
+    struct GroupNormAttr : AclOpAttr
+    {
+        int64_t batch;
+        int64_t channels;
+        int64_t spatialSize;
+        int64_t groups;
+        float eps;
+        ~GroupNormAttr()
+        {
         }
     };
 

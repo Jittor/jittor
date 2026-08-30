@@ -165,7 +165,7 @@ def change_function():
     from .aclops.softmax_op import SoftmaxACL
     from .aclops.sigmoid_op import SigmoidACL
     from .aclops.silu_op import SiLUACL
-    from .aclops.norms_op import LayerNormACL, RmsNormACL
+    from .aclops.norms_op import GroupNormACL, LayerNormACL, RmsNormACL
     from .aclops.dropout_op import DropoutACL
     from .aclops.relu_op import LeakyReLUACL
     from .aclops.flip_op import FlipACL
@@ -534,6 +534,26 @@ def change_function():
     def transpose_acl(x, *dim):
         return TransPoseACL()(x, *dim)
 
+    from .aclops.upsample_op import UpsampleNearest2dACL
+
+    original_resize = jt.nn.resize
+
+    def resize_acl(input, size, mode="nearest", align_corners=False,
+        tf_mode=False):
+        if (
+            jt.flags.use_cuda
+            and mode == "nearest"
+            and input.ndim == 4
+            and str(input.dtype) in ("float16", "float32", "bfloat16")
+            and not align_corners
+            and not tf_mode
+            and all(int(value) > 0 for value in input.shape)
+        ):
+            if isinstance(size, int):
+                size = (size, size)
+            return UpsampleNearest2dACL()(input, size)
+        return original_resize(input, size, mode, align_corners, tf_mode)
+
     from .aclops.relu_op import ReLUACL
     class ReLU(jt.nn.Module):
 
@@ -785,6 +805,8 @@ def change_function():
 
     jt.nn.Pool = warp(jt.nn.Pool, PoolACL)
     jt.pool.Pool = jt.nn.Pool
+    jt.nn.resize = warp(jt.nn.resize, resize_acl)
+    jt.nn.upsample = warp(jt.nn.upsample, resize_acl)
 
     # Route nn.LayerNorm through the native aclnnLayerNorm/LayerNormBackward
     # ops instead of the elementwise decomposition (mean/var/rsqrt/... = ~8+
@@ -799,6 +821,36 @@ def change_function():
             return fn(x, self.weight, self.bias)
         return _orig_layernorm_execute(self, x)
     jt.nn.LayerNorm.execute = _layernorm_execute_acl
+
+    _orig_group_norm_cuda = jt.nn._group_norm_cuda
+    def _group_norm_cuda_acl(x, num_groups, weight, bias, eps):
+        if (
+            jt.flags.use_acl
+            and jt.flags.use_cuda
+            and isinstance(x, jt.Var)
+            and isinstance(weight, jt.Var)
+            and isinstance(bias, jt.Var)
+            and isinstance(eps, Real)
+            and str(x.dtype) == "float32"
+            and str(weight.dtype) == "float32"
+            and str(bias.dtype) == "float32"
+        ):
+            shape = tuple(int(size) for size in x.shape)
+            groups = int(num_groups)
+            epsilon = float(eps)
+            if (
+                len(shape) >= 2
+                and all(size > 0 for size in shape)
+                and groups > 0
+                and shape[1] % groups == 0
+                and tuple(weight.shape) == (shape[1],)
+                and tuple(bias.shape) == (shape[1],)
+                and math.isfinite(epsilon)
+                and epsilon > 0.0
+            ):
+                return GroupNormACL(groups, epsilon)(x, weight, bias)
+        return _orig_group_norm_cuda(x, num_groups, weight, bias, eps)
+    jt.nn._group_norm_cuda = _group_norm_cuda_acl
 
     # Hugging Face RMSNorm modules already route through this hook. CANN provides
     # both aclnnRmsNorm and aclnnRmsNormGrad for the supported dtype matrix.
@@ -949,8 +1001,17 @@ def change_function():
     jt.nn.leaky_relu = warp(jt.nn.leaky_relu, leaky_relu)
     jt.nn.LeakyReLU = warp(jt.nn.LeakyReLU, LeakyReLU)
 
-    # jt.nn.silu = warp(jt.nn.silu, silu_acl)
-    # jt.nn.SiLU = warp(jt.nn.SiLU, SiLU)
+    _orig_silu = jt.nn.silu
+    def _silu_acl(x, inplace=False):
+        if (
+            jt.flags.use_acl
+            and jt.flags.use_cuda
+            and isinstance(x, jt.Var)
+            and str(x.dtype) == "float32"
+        ):
+            return SiLUACL()(x)
+        return _orig_silu(x, inplace=inplace)
+    jt.nn.silu = _silu_acl
 
     jt.sigmoid = warp(jt.sigmoid, sigmoid_acl)
     jt.nn.Sigmoid = warp(jt.nn.Sigmoid, Sigmoid)

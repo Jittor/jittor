@@ -80,7 +80,7 @@ OpInfo CUDA references. The maintained CPU gate also passes with a fail-closed
 independent binary PyTorch oracle, and compact ResNet18, ViT, GPT-2, and
 diffusion UNet forward/backward parity passes on CPU and CUDA. ROCm, most
 optional downstream dependencies, full training, and performance remain
-separate gates. On a real 910B3, the maintained Ascend gate passes `373 passed, 9 skipped`; float16/float32 `arg_reduce` backward and float32/integer `prod` execute without CPU fallback.
+separate gates. On a real 910B3, the maintained Ascend gate passes `379 passed, 9 skipped`; float16/float32 `arg_reduce` backward and float32/integer `prod` execute without CPU fallback.
 Transformers 4.56.2 Qwen3-8B float32 loads all 8,190,735,360 parameters; SDPA,
 greedy `arg_reduce`, and mask `all` run on ACL without CPU fallback. A native-shape `empty`
 fast path brings 0.6B decode to 15.90 token/s versus native `torch_npu` 16.19 token/s.
@@ -101,8 +101,8 @@ The same report records the real-scale follow-up: UNet is accepted at `0.79x`,
 ConvNet improved to `1.08x`, and ViT remains open at about `1.33x` because its
 dominant CUDA GEMMs lag the PyTorch reference.
 Performance work uses isolated caches, synchronization, and exact commit labels.
-The ecosystem harness verifies twelve Transformers/Diffusers/PEFT/ms-swift/MMCV/MMEngine CPU/CUDA cases; its NPU scope verifies MMCV/MMEngine forward and every gradient against `torch_npu` with zero CPU paths.
-The tiny NPU cases remain `1.97x/1.17x` slower; see the [Ascend OpenMMLab report](../results/2026-08-30-mmcv-mmengine-ascend-parity.md).
+The ecosystem harness verifies twelve Transformers/Diffusers/PEFT/ms-swift/MMCV/MMEngine CPU/CUDA cases; its NPU scope verifies Diffusers UNet2D and MMCV/MMEngine forward and every gradient against `torch_npu` with zero CPU paths.
+Diffusers correctness is accepted but its float32 training step remains `1.763x` slower; the tiny OpenMMLab NPU cases remain `1.97x/1.17x` slower. See the [Diffusers](../results/2026-08-30-diffusers-ascend-parity-performance.md) and [OpenMMLab](../results/2026-08-30-mmcv-mmengine-ascend-parity.md) reports.
 Other ecosystem cases and the following verl/vLLM results remain CPU/CUDA evidence, not NPU claims. Current verl core
 algorithm/FSDP2 gates also pass on CPU/CUDA. The maintained framework FSDP2
 gate additionally passes single-node four-rank NCCL sharding, collectives, and

@@ -9,6 +9,264 @@ import jittor as jt
 @unittest.skipIf(not jt.compiler.has_acl, "No ACL found")
 class TestACLTorchCompat(unittest.TestCase):
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_python_float_truediv_stays_on_acl(self):
+        source_np = np.array([0.12345679, 1.2345679, 3.25], dtype=np.float32)
+        scale = 0.28209479177387814
+        source = torch.tensor(source_np, dtype=torch.float32)
+        source.requires_grad_(True)
+
+        with jt.log_capture_scope(
+            log_v=0, log_vprefix="acl_op_exec.cc=100"
+        ) as logs:
+            quotient = source / scale
+            reflected = scale / source
+            gradient = torch.autograd.grad(
+                (quotient + reflected).sum(), source
+            )[0]
+            self.assertEqual(str(quotient.dtype), "float32")
+            self.assertEqual(str(reflected.dtype), "float32")
+            quotient, reflected, gradient = jt.fetch_sync(
+                [quotient, reflected, gradient]
+            )
+
+        scale32 = np.float32(scale)
+        np.testing.assert_array_equal(quotient, source_np / scale32)
+        np.testing.assert_array_equal(reflected, scale32 / source_np)
+        np.testing.assert_allclose(
+            gradient,
+            np.float32(1.0) / scale32 - scale32 / (source_np * source_np),
+            rtol=2e-6,
+            atol=2e-6,
+        )
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_nearest_interpolate_forward_backward_stays_on_acl(self):
+        source_np = np.arange(24, dtype=np.float32).reshape(1, 2, 3, 4)
+        for output_size in ((6, 8), (5, 7)):
+            with self.subTest(output_size=output_size):
+                source = torch.tensor(source_np, dtype=torch.float32)
+                source.requires_grad_(True)
+
+                with jt.log_capture_scope(
+                    log_v=0, log_vprefix="acl_op_exec.cc=100"
+                ) as logs:
+                    output = torch.nn.functional.interpolate(
+                        source, size=output_size, mode="nearest"
+                    )
+                    weight = torch.arange(
+                        output.numel(), dtype=torch.float32
+                    ).reshape(output.shape)
+                    gradient = torch.autograd.grad(
+                        (output * weight).sum(), source
+                    )[0]
+                    output, gradient = jt.fetch_sync([output, gradient])
+
+                row_indices = np.floor(
+                    np.arange(output_size[0]) * source_np.shape[2] / output_size[0]
+                ).astype(np.int64)
+                column_indices = np.floor(
+                    np.arange(output_size[1]) * source_np.shape[3] / output_size[1]
+                ).astype(np.int64)
+                expected_output = np.take(
+                    np.take(source_np, row_indices, axis=2), column_indices, axis=3
+                )
+                expected_weight = np.arange(
+                    np.prod(expected_output.shape), dtype=np.float32
+                ).reshape(expected_output.shape)
+                expected_gradient = np.zeros_like(source_np)
+                for output_row, input_row in enumerate(row_indices):
+                    for output_column, input_column in enumerate(column_indices):
+                        expected_gradient[:, :, input_row, input_column] += (
+                            expected_weight[:, :, output_row, output_column]
+                        )
+
+                np.testing.assert_array_equal(output, expected_output)
+                np.testing.assert_array_equal(gradient, expected_gradient)
+                messages = [entry["msg"].lower() for entry in logs]
+                self.assertFalse(
+                    any("compile cpu" in message for message in messages)
+                )
+                self.assertFalse(
+                    any("fallback cpu" in message for message in messages)
+                )
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_group_norm_forward_backward_stays_on_acl(self):
+        source_np = np.random.RandomState(0).randn(2, 4, 3, 5).astype("float32")
+        weight_np = np.array([0.5, 1.25, -0.75, 2.0], dtype="float32")
+        bias_np = np.array([-0.2, 0.1, 0.3, -0.4], dtype="float32")
+        loss_weight_np = np.random.RandomState(1).randn(2, 4, 3, 5).astype(
+            "float32"
+        )
+
+        candidates = []
+        native_dispatches = []
+        acl_group_norm = jt.nn._group_norm_cuda
+
+        def record_group_norm(*args):
+            result = acl_group_norm(*args)
+            native_dispatches.append(result is not None)
+            return result
+
+        jt.nn._group_norm_cuda = record_group_norm
+        try:
+            self.assertTrue(jt.flags.use_acl)
+            self.assertTrue(jt.flags.use_cuda)
+            with jt.log_capture_scope(
+                log_v=0, log_vprefix="acl_op_exec.cc=100"
+            ) as logs:
+                module = torch.nn.GroupNorm(2, 4, eps=1e-5)
+                module.weight.assign(weight_np)
+                module.bias.assign(bias_np)
+                module_source = torch.tensor(source_np)
+                module_source.requires_grad_(True)
+                module_output = module(module_source)
+                module_grads = torch.autograd.grad(
+                    (module_output * torch.tensor(loss_weight_np)).sum(),
+                    (module_source, module.weight, module.bias),
+                )
+                candidates.append(
+                    jt.fetch_sync([module_output] + list(module_grads))
+                )
+
+                functional_source = torch.tensor(source_np)
+                functional_weight = torch.tensor(weight_np)
+                functional_bias = torch.tensor(bias_np)
+                for value in (
+                    functional_source, functional_weight, functional_bias
+                ):
+                    value.requires_grad_(True)
+                functional_output = torch.nn.functional.group_norm(
+                    functional_source, 2, functional_weight, functional_bias, 1e-5
+                )
+                functional_grads = torch.autograd.grad(
+                    (functional_output * torch.tensor(loss_weight_np)).sum(),
+                    (functional_source, functional_weight, functional_bias),
+                )
+                candidates.append(
+                    jt.fetch_sync([functional_output] + list(functional_grads))
+                )
+        finally:
+            jt.nn._group_norm_cuda = acl_group_norm
+
+        self.assertEqual(native_dispatches, [True, True])
+        with jt.flag_scope(use_acl=0, use_cuda=0):
+            reference_module = torch.nn.GroupNorm(2, 4, eps=1e-5)
+            reference_module.weight.assign(weight_np)
+            reference_module.bias.assign(bias_np)
+            reference_source = torch.tensor(source_np)
+            reference_source.requires_grad_(True)
+            reference_output = reference_module(reference_source)
+            reference_grads = torch.autograd.grad(
+                (reference_output * torch.tensor(loss_weight_np)).sum(),
+                (
+                    reference_source,
+                    reference_module.weight,
+                    reference_module.bias,
+                ),
+            )
+            reference = jt.fetch_sync([reference_output] + list(reference_grads))
+
+        for candidate in candidates:
+            for actual, expected in zip(candidate, reference):
+                np.testing.assert_allclose(
+                    actual, expected, rtol=2e-4, atol=2e-4
+                )
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_silu_forward_backward_stays_on_acl(self):
+        source_np = np.array(
+            [-4.0, -1.25, -0.1, 0.0, 0.75, 3.5], dtype="float32"
+        )
+        loss_weight_np = np.array(
+            [0.25, -0.5, 1.5, 2.0, -1.0, 0.75], dtype="float32"
+        )
+
+        self.assertTrue(jt.flags.use_acl)
+        self.assertTrue(jt.flags.use_cuda)
+        source = torch.tensor(source_np)
+        source.requires_grad_(True)
+        with jt.log_capture_scope(
+            log_v=0, log_vprefix="acl_op_exec.cc=100"
+        ) as logs:
+            output = torch.nn.functional.silu(source)
+            gradient = torch.autograd.grad(
+                (output * torch.tensor(loss_weight_np)).sum(), source
+            )[0]
+            candidate = jt.fetch_sync([output, gradient])
+
+        with jt.flag_scope(use_acl=0, use_cuda=0):
+            reference_source = torch.tensor(source_np)
+            reference_source.requires_grad_(True)
+            reference_output = torch.nn.functional.silu(reference_source)
+            reference_gradient = torch.autograd.grad(
+                (reference_output * torch.tensor(loss_weight_np)).sum(),
+                reference_source,
+            )[0]
+            reference = jt.fetch_sync([reference_output, reference_gradient])
+
+        for actual, expected in zip(candidate, reference):
+            np.testing.assert_allclose(actual, expected, rtol=2e-6, atol=2e-6)
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_sdpa_forward_backward_stays_on_acl(self):
+        rng = np.random.RandomState(20260830)
+        shape = (2, 1, 64, 32)
+        query_np, key_np, value_np, loss_weight_np = (
+            rng.randn(*shape).astype("float32") * 0.1 for _ in range(4)
+        )
+
+        self.assertTrue(jt.flags.use_acl)
+        self.assertTrue(jt.flags.use_cuda)
+        inputs = [
+            torch.tensor(value) for value in (query_np, key_np, value_np)
+        ]
+        for value in inputs:
+            value.requires_grad_(True)
+        with jt.log_capture_scope(
+            log_v=0, log_vprefix="acl_op_exec.cc=100"
+        ) as logs:
+            output = torch.nn.functional.scaled_dot_product_attention(
+                *inputs, dropout_p=0.0, is_causal=False
+            )
+            grads = torch.autograd.grad(
+                (output * torch.tensor(loss_weight_np)).sum(), inputs
+            )
+            candidate = jt.fetch_sync([output] + list(grads))
+
+        with jt.flag_scope(use_acl=0, use_cuda=0):
+            reference_inputs = [
+                torch.tensor(value) for value in (query_np, key_np, value_np)
+            ]
+            for value in reference_inputs:
+                value.requires_grad_(True)
+            reference_output = torch.nn.functional.scaled_dot_product_attention(
+                *reference_inputs, dropout_p=0.0, is_causal=False
+            )
+            reference_grads = torch.autograd.grad(
+                (reference_output * torch.tensor(loss_weight_np)).sum(),
+                reference_inputs,
+            )
+            reference = jt.fetch_sync(
+                [reference_output] + list(reference_grads)
+            )
+
+        for actual, expected in zip(candidate, reference):
+            np.testing.assert_allclose(actual, expected, rtol=3e-5, atol=3e-5)
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_relu_inplace_argument_stays_on_acl(self):
         source = torch.tensor([-2.0, -0.5, 1.0, 3.0], dtype=torch.float32)
         source.requires_grad_(True)

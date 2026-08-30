@@ -1714,11 +1714,11 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             if sd is not None:
                 tgt = _truediv_target(str(self.dtype), sd)
                 src_dt = str(self.dtype)
-                # PyTorch's Python-float scalar division keeps the result dtype
-                # but uses the scalar value with enough precision to differ from
-                # division by a float32 tensor by 1 ulp in common cases. 3DGS hits
-                # both uint8 image normalization and RGB2SH float32/C0 this way.
-                use_wide = sd.startswith("float") and src_dt != "float64"
+                # CPU/CUDA widen Python floats for PyTorch 1-ulp parity; torch_npu
+                # stays in the tensor dtype because ACL has no float64 arithmetic.
+                acl_active = bool(getattr(jt.compiler, "has_acl", 0)) and (
+                    bool(getattr(jt.flags, "use_acl", 0)) and bool(jt.flags.use_cuda))
+                use_wide = sd.startswith("float") and src_dt != "float64" and not acl_active
                 calc_dt = "float64" if use_wide else tgt
                 a = self if src_dt == calc_dt else self.cast(calc_dt)
                 b = jt.array(other, dtype=calc_dt) if use_wide else other

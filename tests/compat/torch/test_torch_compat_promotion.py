@@ -246,6 +246,24 @@ class TestBinaryOpPromotion(Base):
             self.assertEqual(dts(8.0 / mk("int32", (2, 4, 8))), "float32", dev)
         both_devices(body)
 
+    def test_python_float_truediv_preserves_torch_rounding_on_cpu(self):
+        source = mk("float32", (0.12345679, 1.2345679, 3.25))
+        scale = 0.28209479177387814
+        with jt.flag_scope(use_cuda=0):
+            quotient = (source / scale).numpy()
+            reflected = (scale / source).numpy()
+
+        self.assertEqual(str(quotient.dtype), "float32")
+        self.assertEqual(str(reflected.dtype), "float32")
+        np.testing.assert_array_equal(
+            quotient.view(np.uint32),
+            np.array([1054872252, 1082919861, 1094211024], dtype=np.uint32),
+        )
+        np.testing.assert_array_equal(
+            reflected.view(np.uint32),
+            np.array([1074937066, 1047132944, 1035060060], dtype=np.uint32),
+        )
+
     def test_mixed_values_correct(self):
         # promotion must not just relabel the dtype -- the VALUES must be the
         # widened arithmetic (numpy is the independent reference).

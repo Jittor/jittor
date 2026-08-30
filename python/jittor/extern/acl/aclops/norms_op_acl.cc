@@ -145,6 +145,65 @@ namespace jittor
         return;
     }
 
+    GroupNormOpRunner::GroupNormOpRunner() : BaseOpRunner("GroupNorm")
+    {
+    }
+
+    void GroupNormOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    {
+        auto attr = dynamic_cast<GroupNormAttr *>(op_attr.get());
+        ret = aclnnGroupNormGetWorkspaceSize(
+            inputTensors[0], inputTensors[1], inputTensors[2],
+            attr->batch, attr->channels, attr->spatialSize, attr->groups,
+            attr->eps, outputTensors[0], outputTensors[1], outputTensors[2],
+            &workspaceSize, &executor);
+        checkRet(ret);
+        if (ret != ACL_SUCCESS)
+            return;
+
+        if (workspaceSize > 0)
+        {
+            mallocWorkSpace(workspaceSize);
+        }
+
+        ret = aclnnGroupNorm(workspaceAddr, workspaceSize, executor, aclstream);
+        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnGroupNorm failed. ERROR: %d\n", name.c_str(), ret); return);
+        syncRun();
+    }
+
+    GroupNormBackwardOpRunner::GroupNormBackwardOpRunner()
+        : BaseOpRunner("GroupNormBackward")
+    {
+    }
+
+    void GroupNormBackwardOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    {
+        auto attr = dynamic_cast<GroupNormAttr *>(op_attr.get());
+        bool outputMaskValues[3] = {true, true, true};
+        std::unique_ptr<aclBoolArray, decltype(&aclDestroyBoolArray)> outputMask(
+            aclCreateBoolArray(outputMaskValues, 3), aclDestroyBoolArray);
+        CHECK_RET(outputMask != nullptr,
+                  LOG_PRINT("%s: aclCreateBoolArray failed.\n", name.c_str()); return);
+        ret = aclnnGroupNormBackwardGetWorkspaceSize(
+            inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3],
+            inputTensors[4], attr->batch, attr->channels, attr->spatialSize,
+            attr->groups, outputMask.get(), outputTensors[0], outputTensors[1],
+            outputTensors[2], &workspaceSize, &executor);
+        checkRet(ret);
+        if (ret != ACL_SUCCESS)
+            return;
+
+        if (workspaceSize > 0)
+        {
+            mallocWorkSpace(workspaceSize);
+        }
+
+        ret = aclnnGroupNormBackward(
+            workspaceAddr, workspaceSize, executor, aclstream);
+        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnGroupNormBackward failed. ERROR: %d\n", name.c_str(), ret); return);
+        syncRun();
+    }
+
     RmsNormOpRunner::RmsNormOpRunner() : BaseOpRunner("RmsNorm")
     {
     }

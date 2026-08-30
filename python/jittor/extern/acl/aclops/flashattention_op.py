@@ -260,10 +260,10 @@ def _causal_mask(query_length, source_length):
 def scaled_dot_product_attention_acl(
         query, key, value, attn_mask=None, dropout_p=0.0,
         is_causal=False, scale=None, enable_gqa=False):
-    """Return fused ACL SDPA for the verified inference subset, else ``None``."""
-    if not (compiler.has_acl and jt.flags.use_cuda and jt.flags.use_acl
-            and getattr(jt.flags, "no_grad", 0)):
+    """Return fused ACL SDPA for a verified inference/training subset."""
+    if not (compiler.has_acl and jt.flags.use_cuda and jt.flags.use_acl):
         return None
+    training = not getattr(jt.flags, "no_grad", 0)
     if float(dropout_p or 0.0) != 0.0:
         return None
     if not all(isinstance(tensor, jt.Var) for tensor in (query, key, value)):
@@ -293,6 +293,10 @@ def scaled_dot_product_attention_acl(
     if query_heads != key_heads:
         if not enable_gqa or query_heads % key_heads != 0:
             return None
+    if training and (
+            str(query.dtype) != "float32" or attn_mask is not None
+            or is_causal or query_heads != key_heads):
+        return None
     head_dim = int(q_shape[-1])
     if head_dim <= 0 or head_dim > 256 or head_dim % 8 != 0:
         return None

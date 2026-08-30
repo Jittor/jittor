@@ -33,3 +33,4 @@
 #include <acl/aclops/triu_op_acl.h>
 #include <acl/aclops/embedding_op_acl.h>
 #include <acl/aclops/norms_op_acl.h>
+#include <acl/aclops/upsample_op_acl.h>
