@@ -294,9 +294,25 @@ rms_norm / rope / swiglu / kv_cache / packed_qkv 共 9 处），单次调用省 
 （约 1%）。诚实地说，这印证了归因：省下 CPU 时间只按比例兑现，因为瓶颈是 CPU 派发
 总量，而不是某一处热点。
 
-排除掉的一个假设：既然是按刷新窗口串行，缩小窗口或许能让两者交错。把适配器的
-`VJ_SYNC_EVERY` 从 1 扫到 28，中位数在 `0.0827~0.0839s` 之间无规律波动——同步点不是
-杠杆，序列化是执行层本身的性质。
+### 逐一排除的杠杆
+
+配置层与 Python 层能碰的都试过了，逐条记下以免后来者重走：
+
+| 试探 | 结果 |
+|---|---|
+| `VJ_SYNC_EVERY` 1→28（适配器刷新窗口） | `0.0827~0.0839s` 无规律，同步点不是杠杆 |
+| `VJ_EAGER=1`（关惰性执行） | `0.159s`，**慢一倍**——惰性执行是承重的 |
+| `use_parallel_op_compiler=0` / `check_graph=0` / `para_opt_level=3` | 无变化 |
+| `gopt_disable=1` / `para_opt_level=0` | 运行失败 |
+| `JITTOR_TORCH_CUDA_EMPTY_CACHE` gc vs noop | 无变化，`empty_cache` 不在热路径 |
+| shim 的张量操作（view/reshape/transpose/slice/contiguous） | 与 PyTorch **持平**，多数更快 |
+| 通用小算子派发 | Jittor **便宜 2.4 倍** |
+| 解码 shape 的 GEMV | Jittor 在两个大 shape 上**更快** |
+
+也就是说：GEMM 不慢、算子派发不慢、张量包装不慢、同步点不是问题。剩下的开销落在
+Jittor 执行器从"算子创建"到"kernel 启动"之间的 C++ 环节——每步解码的图结构完全相同
+却被反复重建，而 Jittor 没有 CUDA graph 那样的捕获重放能力（源码里只有
+`gopt_disable` / `para_opt_level` 这类旋钮，没有 graph capture）。
 
 要真正抹平这 18ms，需要把每算子的 CPU 成本降到接近零——也就是 CUDA graph 级别的
 捕获重放，属于运行时层面的能力，本轮没有做。
