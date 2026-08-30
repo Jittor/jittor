@@ -1,8 +1,8 @@
 # torch 的参数注册语义、Triton 尾部 scratch 参数与向量化归约的浮点顺序
 
-- Status: 七道门全绿（native 739 / CPU Torch 1513 / CUDA+oracle 1809 / `nox cuda`
-  `EXIT=0` / `nox structure` 245 / `nox packaging` `EXIT=0` / `nox optional`
-  `EXIT=0`）；vLLM 7B 输出正确
+- Status: 十一道门全绿（native 739 / CPU Torch 1513 / CUDA+oracle 1809 / `nox`
+  的 `cuda` `structure`(245) `cpu` `tutorials` `optional` `packaging` `mpi`
+  `nccl` 均 `EXIT=0`）；vLLM 7B 输出正确
 - Last reviewed: 2026-08-30
 - Baseline: `f10e9480`
 - Owner: Torch compatibility and downstream integration maintainers
@@ -210,6 +210,8 @@ Qwen2.5-7B-Instruct 现在给出 `' Paris. Which of'`（token `[12095, 13, 15920
    各 CUDA backend、opt pass、fsdp2 state dict）让它报出 24 处新增、118 处内容变化。
    刷新前逐项核对：wheel 的 **817 个成员全部**对应仓库中被 git 跟踪的源码，零意外
    内容，新增与变更也都落在 `jittor/` 源码目录内。
+
+刷新后的基线按文件哈希锁定内容，所以每次改动已发布的源码都要随之刷新一次。
 
 另：`nox -s optional` 一度报 `4 failed`（torchmetrics），是并发高负载下的超时——
 单轮 torchmetrics 就要 18 分钟，而每测超时是 600s。空载重跑 `EXIT=0`。
