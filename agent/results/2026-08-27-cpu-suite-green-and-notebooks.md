@@ -1116,10 +1116,39 @@ UNet 需要更准的数字：上表那两轮里 `1.03x` 是偏好的一轮。四
 对应结论都已落在 `agent/results/` 与 TODO 日志里。清掉它们释放 `45G`，随后从
 `hf-mirror.com` 下载了 `Qwen2.5-7B-Instruct`（`15G`，剩余 `33G`）。
 
-真正的阻碍在下一步：`vllm-main`（就是基线记录的 `51a9956` checkout）现在要求
-**Transformers v5**，而 `jt311` 与 `jt312b` 都固定在 `4.56.2`。不能只升其中一个
-——下游对拍的契约恰恰是两侧版本必须一致（就是本轮改的那条）；两侧一起升到
-Transformers 5 会波及整套 ecosystem 对拍与 notebook 门禁，不是可以顺手做的改动。
+`vllm-main`（就是基线记录的 `51a9956` checkout）要求 **Transformers v5**，而
+`jt311`/`jt312b` 都固定在 `4.56.2`。这一条我最初也判早了：不必动那两个环境——把
+Transformers 5 装进一个独立目录、只在这次运行时用 `PYTHONPATH` 前置即可，对拍门禁
+完全不受影响（`pip install --no-deps --target=…`，`106M`）。
+
+隔离环境搭起来之后连过四道坎，每道都是具体的、可定位的：
+
+1. `huggingface_hub` 太旧（缺 `is_offline_mode`）→ 同目录升级。
+2. `tokenizers` 版本被残留的 `0.23.1.dist-info` 误报 → 删掉残留元数据。
+3. `PACKAGE_DISTRIBUTION_MAPPING["flash_attn"]` KeyError。`flash_attn` 在
+   site-packages 里有目录却**没有 dist-info**，而 Transformers 5 这处字典查找没有
+   保护。在隔离目录里补一份最小元数据。
+4. `AttributeError: 'jittor_core.Var' object has no attribute '__dict__'`——
+   **这一条是 Jittor 自己的缺口，已修**，见下。
+
+第 4 条修完后 vLLM 已经能加载 7B 的权重，停在第五道坎：vLLM 的
+`attention.py` 把 `k_range`/`v_range` 作为普通属性赋给 module，PyTorch 里普通
+Tensor 赋值不会注册为参数，而 shim 的 `Module.__setattr__` 会把 Var 当成参数，
+于是权重加载器报「未从检查点初始化」。这是 shim 与 PyTorch 的语义差异，属于外部
+适配器需要维护的那一类，本轮没有继续。
+
+#### 顺带修掉的 Jittor 缺口：Var 没有暴露实例字典
+
+`pyjt_compiler.py` 在 `has_attr_dict` 时设了 `tp_dictoffset`（`VarHolder` 是唯一
+一个），却没有生成 `__dict__` 描述符——`PyType_Ready` 不会自动补，只有 Python 层
+建类才会。结果是属性赋值可用（`v.foo = 1` 能读回），而 `vars(v)` 与 `v.__dict__`
+都失败。任何在张量之间复制属性的库都会在此中断，vLLM 的 meta-tensor 路径
+（`to_meta_tensor` 里的 `tensor.__dict__.copy()`）正是如此。
+
+补上 `PyObject_GenericGetDict` / `PyObject_GenericSetDict` 即可——实例字典本来就在
+（`Var.__dictoffset__` 为 `32`），只是没有描述符。修复后 `vars()`、`__dict__.copy()`
+与 `__dict__` 赋值都可用，张量语义不变；回归见
+`tests/core/test_core.py::test_var_exposes_its_instance_dict`。
 
 顺带说明：更大模型的速度数据其实已经存在，只是不在本仓库里。外部项目的
 `vllm_jittor/QWEN_VERIFICATION.md` 记录了正确性（含 Qwen2.5-14B TP=2、两个
