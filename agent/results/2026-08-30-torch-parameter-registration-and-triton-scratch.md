@@ -262,7 +262,8 @@ miss 正是 prefill 的 28 层），**prefill 独占 0.285s**，而 PyTorch 同�
 根因是适配器的 `flash_attn_varlen_paged` 对 prefill 走**逐序列的 Python 循环**，
 每序列每层约 6 个 kernel，batch 32 就是 28×32 次迭代。改为：当各序列的 query 与
 key 长度一致（同长 prompt 批总是如此）时，一次 gather + 两次批量 matmul + 一个可
-广播的 mask 完成；参差批量仍走原循环。与循环路径逐元素对拍最大差 `1.49e-08`。
+广播的 mask 完成；参差批量仍走原循环。与循环路径逐元素对拍最大差 `1.49e-08`；
+另用 5 条长度各异的 prompt 端到端复核，两侧 8 个 token 逐一相同，回退路径无损。
 
 ### 剩下的 1.24x
 
@@ -270,8 +271,12 @@ profile（batch 1）：**82.4% 是 `cublas_matmul`**，非 GEMM 约 13.9ms 且�
 2.2%。GEMM 本身不慢——按解码 shape 单独微基准，Jittor 在两个大 shape 上反而更快
 （264 vs 286us、124 vs 146us；小 shape 的 1400+GB/s 是 L2 命中，不具代表性）。
 PyTorch 的总时间几乎等于它的 GEMM 时间，非 GEMM 只有约 2ms，而 Jittor 是 14ms。
-差距是每层约 8 个小 kernel 的启动开销，与 TRELLIS 的结论同型：没有单一大头，要再
-往下压需要系统性手段（融合 residual+norm+rope 链，或 CUDA graph 捕获）。
+差距落在每层约 8 个小算子上。它们**已经都是融合的 `jt.code` 自定义 kernel**
+（RMSNorm 双输出、KV 写入、分页 attention、RoPE、SwiGLU），数量与 PyTorch 的约 6 个
+相当，但单次 7~15us 对 PyTorch 的约 2us。也不是 Jittor 的通用算子开销：单算子
+微基准是 5.92us 对 PyTorch 的 5.26us，8 连算的摊薄成本更只有 1.6us（Jittor 会把
+它们融成一个 kernel，12.45us 对 PyTorch 的 43.99us）。所以是这些特定 kernel 在
+1×3584 这种极小张量上的效率问题，要定位需要 nsys 级别的逐 kernel 分析。
 
 **结论：vLLM 的"能跑"与"对拍一致"已达成，"速度不更慢"未达成**——各批量下稳定在
 约 1.22-1.24x。
