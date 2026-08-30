@@ -75,6 +75,24 @@ class TestEcosystemDeviceSelection(unittest.TestCase):
             _ecosystem_runner._device_in_use(_StubTorch(), "jittor", "cuda"), "cuda"
         )
 
+    def test_npu_request_requires_acl_and_is_reported_separately(self):
+        with mock.patch.object(jt.compiler, "has_acl", 1):
+            jt.flags.use_cuda = 0
+            _ecosystem_runner._select_device(_StubTorch(), "jittor", "npu")
+            self.assertEqual(jt.flags.use_cuda, 1)
+            self.assertEqual(jt.flags.use_acl, 1)
+            self.assertEqual(
+                _ecosystem_runner._device_in_use(
+                    _StubTorch(), "jittor", "npu"
+                ),
+                "npu",
+            )
+
+    def test_npu_request_fails_without_acl(self):
+        with mock.patch.object(jt.compiler, "has_acl", 0):
+            with self.assertRaisesRegex(SystemExit, "ACL is unavailable"):
+                _ecosystem_runner._select_device(_StubTorch(), "jittor", "npu")
+
     def test_jittor_tensors_are_never_moved_by_hand(self):
         """The returned callable is identity: Jittor moves the graph, not tensors."""
         move = _ecosystem_runner._select_device(_StubTorch(), "jittor", "cpu")

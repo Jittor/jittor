@@ -17,6 +17,7 @@ from _ecosystem_harness import (
     REAL_TORCH_PYTHON,
     EcosystemComparison,
     _cuda_is_available,
+    _npu_is_available,
     _torch_shim_is_active,
 )
 
@@ -74,6 +75,23 @@ class EcosystemParityCUDA(EcosystemParity):
     # reference implementations these libraries were written against.
     forward_tolerance = 5e-3
     backward_tolerance = 2e-2
+
+
+@unittest.skipUnless(REAL_TORCH_PYTHON, "REAL_TORCH_PYTHON is not configured")
+@unittest.skipUnless(_torch_shim_is_active(), "this interpreter does not run torch as Jittor")
+@unittest.skipUnless(_npu_is_available(), "ACL is unavailable")
+class EcosystemParityNPU(EcosystemComparison):
+    """OpenMMLab's pure-Python model surface on Jittor ACL and torch_npu."""
+
+    device = "npu"
+    forward_tolerance = 5e-3
+    backward_tolerance = 2e-2
+
+    def test_mmcv_conv_module(self):
+        self._compare("mmcv_conv_module")
+
+    def test_mmengine_base_module(self):
+        self._compare("mmengine_base_module")
 
 
 if __name__ == "__main__":

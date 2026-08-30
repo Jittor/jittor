@@ -73,6 +73,20 @@ class TestMmcvCompat(unittest.TestCase):
         self.assertTrue(hasattr(mmcv.cnn, "build_norm_layer"))
         self.assertTrue(hasattr(mmengine.model, "BaseModel"))
 
+    def test_mmcv_conv_module_constructs_with_torch_conv_attributes(self):
+        from mmcv.cnn import ConvModule
+
+        module = ConvModule(
+            3,
+            4,
+            3,
+            padding=1,
+            norm_cfg=dict(type="BN"),
+            act_cfg=dict(type="ReLU"),
+        )
+        self.assertFalse(module.transposed)
+        self.assertEqual(module.output_padding, (0, 0))
+
 
 if __name__ == "__main__":
     unittest.main()

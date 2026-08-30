@@ -9,6 +9,37 @@ import jittor as jt
 @unittest.skipIf(not jt.compiler.has_acl, "No ACL found")
 class TestACLTorchCompat(unittest.TestCase):
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_relu_inplace_argument_stays_on_acl(self):
+        source = torch.tensor([-2.0, -0.5, 1.0, 3.0], dtype=torch.float32)
+        source.requires_grad_(True)
+        relu = torch.nn.ReLU(inplace=True)
+        leaky_relu = torch.nn.LeakyReLU(negative_slope=0.2, inplace=True)
+
+        with jt.log_capture_scope(
+            log_v=0, log_vprefix="acl_op_exec.cc=100"
+        ) as logs:
+            output = (
+                relu(source)
+                + torch.nn.functional.relu(source, inplace=True)
+                + leaky_relu(source)
+                + torch.nn.functional.leaky_relu(
+                    source, negative_slope=0.2, inplace=True
+                )
+            )
+            gradient = torch.autograd.grad(output.sum(), source)[0]
+            self.assertTrue(output.is_cuda)
+            self.assertTrue(gradient.is_cuda)
+            output, gradient = jt.fetch_sync([output, gradient])
+
+        self.assertTrue(relu.inplace)
+        self.assertTrue(leaky_relu.inplace)
+        np.testing.assert_allclose(output, [-0.8, -0.2, 4.0, 12.0])
+        np.testing.assert_allclose(gradient, [0.4, 0.4, 4.0, 4.0])
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_empty_native_shapes_stay_on_device(self):
         native_shape = torch.ones((2, 3)).shape
         for shape in ((2, 3), [2, 3], native_shape):

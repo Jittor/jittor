@@ -987,14 +987,16 @@ def _install_nn_extras(nn, registry=None):
     # torch's nn.Conv2d exposes .transposed / .output_padding (torchvision &
     # mmcv's ConvModule read them to introspect the layer); jittor's Conv lacks
     # them. Add torch-compatible class attributes.
-    for _cn in ("Conv", "Conv1d", "Conv3d"):
+    for _cn in ("Conv", "Conv1d", "Conv2d", "Conv3d"):
         _c = getattr(nn, _cn, None)
         if _c is not None:
             if not hasattr(_c, "transposed"):
                 _c.transposed = False
             if not hasattr(_c, "output_padding"):
                 _c.output_padding = (0, 0)
-    for _cn in ("ConvTranspose", "ConvTranspose1d", "ConvTranspose3d"):
+    for _cn in (
+        "ConvTranspose", "ConvTranspose1d", "ConvTranspose2d", "ConvTranspose3d"
+    ):
         _c = getattr(nn, _cn, None)
         if _c is not None:
             _c.transposed = True

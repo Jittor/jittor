@@ -154,9 +154,10 @@ incl. a `generate()` greedy/beam/sampling test) and the diffusers generation pat
 `tests/compat/torch/test_ecosystem_parity.py` runs each case twice -- once in an
 interpreter whose `torch` is real PyTorch, once in this one -- from identical
 weights, and compares the forward output together with every parameter and input
-gradient on both CPU and CUDA. Point it at a real-PyTorch interpreter with
-`REAL_TORCH_PYTHON` and, optionally, bound the wall-clock ratio with
-`JITTOR_ECOSYSTEM_SPEED_RATIO`.
+gradient on both CPU and CUDA. A scoped real-NPU class covers MMCV ConvModule and
+MMEngine BaseModule against `torch_npu`, including fail-closed CPU fallback
+detection. Point it at a real-PyTorch interpreter with `REAL_TORCH_PYTHON` and,
+optionally, bound the wall-clock ratio with `JITTOR_ECOSYSTEM_SPEED_RATIO`.
 
 | Library | Covered by the parity gate | Notes |
 | --- | --- | --- |
@@ -164,7 +165,7 @@ gradient on both CPU and CUDA. Point it at a real-PyTorch interpreter with
 | `diffusers` | `UNet2DModel`, `DiTTransformer2DModel` | convolutional and latent-transformer backbones |
 | `peft` | LoRA on llama | |
 | `ms-swift` | its own LoRA tuner on llama | needs `peft < 0.20`; ms-swift 4.5.2 with peft 0.19 raises the same `TypeError` under real PyTorch |
-| `mmcv` / `mmengine` | `mmcv.cnn.ConvModule`, `mmengine.model.BaseModule` | pure-Python layers only, see below |
+| `mmcv` / `mmengine` | `mmcv.cnn.ConvModule`, `mmengine.model.BaseModule` | CPU, CUDA, and NPU; pure-Python layers only, see below |
 
 Two boundaries are architectural rather than missing work:
 

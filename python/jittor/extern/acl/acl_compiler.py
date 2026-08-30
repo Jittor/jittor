@@ -537,27 +537,29 @@ def change_function():
     from .aclops.relu_op import ReLUACL
     class ReLU(jt.nn.Module):
 
-        def __init__(self):
+        def __init__(self, inplace=False):
             super(ReLU, self).__init__()
+            self.inplace = inplace
 
         def execute(self, x):
             return ReLUACL()(x)
 
-    def relu(x):
+    def relu(x, inplace=False):
         return ReLUACL()(x)
 
     from .aclops.relu_op import LeakyReLUACL
 
     class LeakyReLU(jt.nn.Module):
 
-        def __init__(self, negative_slope=0.01):
+        def __init__(self, negative_slope=0.01, inplace=False):
             super(LeakyReLU, self).__init__()
             self.negative_slope = negative_slope
+            self.inplace = inplace
 
         def execute(self, x):
             return LeakyReLUACL()(x, self.negative_slope)
 
-    def leaky_relu(x, scale=0.01):
+    def leaky_relu(x, scale=0.01, inplace=False):
         return LeakyReLUACL()(x, scale)
 
     from .aclops.dropout_op import DropoutACL

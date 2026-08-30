@@ -21,6 +21,12 @@ Configuration
     Both runtimes claim their independent ``torch`` namespace first, then use
     this same directory for the libraries under comparison.
 
+``JITTOR_ECOSYSTEM_PACKAGE_SITE_CROSS_ABI``
+    Explicitly allow that directory in both interpreters when their CPython
+    minor versions differ. Use this only for a dependency tree whose compiled
+    modules use a compatible stable ABI; otherwise each interpreter must use
+    its own packages.
+
 ``JITTOR_ECOSYSTEM_SPEED_RATIO``
     Optional upper bound on ``jittor_seconds / torch_seconds``.  The wall-clock
     numbers are always reported; they are only asserted when this is set, since
@@ -54,6 +60,11 @@ RUNNER = Path(__file__).resolve().parent / "_ecosystem_runner.py"
 REAL_TORCH_PYTHON = os.environ.get("REAL_TORCH_PYTHON", "").strip()
 
 SPEED_RATIO = os.environ.get("JITTOR_ECOSYSTEM_SPEED_RATIO", "").strip()
+
+
+def _enabled(name):
+    value = os.environ.get(name, "").strip().lower()
+    return value not in ("", "0", "false", "no", "off")
 
 
 def _package_site():
@@ -105,6 +116,10 @@ def _reference_shares_this_abi():
 
 
 REFERENCE_ABI_MATCHES = _reference_shares_this_abi()
+REFERENCE_USES_PACKAGE_SITE = (
+    REFERENCE_ABI_MATCHES
+    or _enabled("JITTOR_ECOSYSTEM_PACKAGE_SITE_CROSS_ABI")
+)
 
 
 def _versions(report):
@@ -118,6 +133,12 @@ def _versions(report):
 def _torch_shim_is_active():
     """Whether this interpreter's ``torch`` is Jittor rather than PyTorch."""
     try:
+        # The deployed torch facade imports Jittor internally. Importing that
+        # facade first leaves a partially initialized ``torch`` in sys.modules,
+        # which the fail-closed shim installer must reject. Match the runner's
+        # Jittor-first activation order when shim mode was explicitly requested.
+        if _enabled("JITTOR_TORCH_SHIM"):
+            import jittor  # noqa: F401
         import torch
     except Exception:
         return False
@@ -133,7 +154,16 @@ def _cuda_is_available():
         import jittor as jt
     except Exception:
         return False
-    return bool(jt.has_cuda)
+    return bool(jt.has_cuda and not getattr(jt.compiler, "has_acl", 0))
+
+
+def _npu_is_available():
+    """Whether this Jittor build can actually execute through ACL."""
+    try:
+        import jittor as jt
+    except Exception:
+        return False
+    return bool(getattr(jt.compiler, "has_acl", 0))
 
 
 def _distributions_available(names):
@@ -156,7 +186,7 @@ def _run(python, runtime, case, output, weights=None, device="cpu"):
     if weights is not None:
         command += ["--weights", str(weights)]
     environment = os.environ.copy()
-    if PACKAGE_SITE and (python == sys.executable or REFERENCE_ABI_MATCHES):
+    if PACKAGE_SITE and (python == sys.executable or REFERENCE_USES_PACKAGE_SITE):
         environment["JITTOR_ECOSYSTEM_PACKAGE_SITE"] = PACKAGE_SITE
     else:
         environment.pop("JITTOR_ECOSYSTEM_PACKAGE_SITE", None)
@@ -250,7 +280,7 @@ class EcosystemComparison(unittest.TestCase):
                         case, label, report.get("device"), self.device
                     ),
                 )
-                if PACKAGE_SITE and REFERENCE_ABI_MATCHES:
+                if PACKAGE_SITE and REFERENCE_USES_PACKAGE_SITE:
                     self.assertEqual(
                         report.get("package_site"),
                         PACKAGE_SITE,
@@ -258,7 +288,7 @@ class EcosystemComparison(unittest.TestCase):
                             case, label
                         ),
                     )
-            if REFERENCE_ABI_MATCHES:
+            if REFERENCE_USES_PACKAGE_SITE:
                 self.assertEqual(
                     torch_report.get("dependencies"),
                     jittor_report.get("dependencies"),
@@ -279,6 +309,13 @@ class EcosystemComparison(unittest.TestCase):
                 jittor_report.get("tf32"),
                 "{} used different CUDA TF32 policies".format(case),
             )
+            if self.device == "npu":
+                backend = jittor_report.get("backend") or {}
+                self.assertTrue(backend.get("has_acl"), "ACL was not detected")
+                self.assertTrue(backend.get("use_acl"), "ACL dispatch was not enabled")
+                self.assertTrue(backend.get("use_cuda"), "device dispatch was not enabled")
+                self.assertEqual(jittor_report.get("fallback_count"), 0)
+                self.assertEqual(jittor_report.get("cpu_compile_count"), 0)
 
             reference = np.load(torch_output)
             candidate = np.load(jittor_output)

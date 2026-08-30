@@ -100,10 +100,10 @@ training/state-restore workflow in the maintained offline CPU notebook gate. See
 The same report records the real-scale follow-up: UNet is accepted at `0.79x`,
 ConvNet improved to `1.08x`, and ViT remains open at about `1.33x` because its
 dominant CUDA GEMMs lag the PyTorch reference.
-Performance work uses ASV, isolated caches, synchronized measurements, and exact
-commit labels. The same-version ecosystem harness now verifies twelve
-Transformers/Diffusers/PEFT/ms-swift/MMCV/MMEngine CPU and CUDA cases, while
-real-scale training remains incomplete; these and the following verl/vLLM results are CPU/CUDA evidence, not NPU claims. Current verl core
+Performance work uses isolated caches, synchronization, and exact commit labels.
+The ecosystem harness verifies twelve Transformers/Diffusers/PEFT/ms-swift/MMCV/MMEngine CPU/CUDA cases; its NPU scope verifies MMCV/MMEngine forward and every gradient against `torch_npu` with zero CPU paths.
+The tiny NPU cases remain `1.97x/1.17x` slower; see the [Ascend OpenMMLab report](../results/2026-08-30-mmcv-mmengine-ascend-parity.md).
+Other ecosystem cases and the following verl/vLLM results remain CPU/CUDA evidence, not NPU claims. Current verl core
 algorithm/FSDP2 gates also pass on CPU/CUDA. The maintained framework FSDP2
 gate additionally passes single-node four-rank NCCL sharding, collectives, and
 sharded SGD on real CUDA; tiny Qwen3 end-to-end verl PPO also passes native

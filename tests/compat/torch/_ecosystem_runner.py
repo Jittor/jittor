@@ -104,20 +104,36 @@ def _select_device(torch, runtime, device):
         import jittor as jt
 
         if device == "cuda":
-            if not jt.has_cuda:
+            if not jt.has_cuda or getattr(jt.compiler, "has_acl", 0):
                 raise SystemExit("CUDA is unavailable in this Jittor build")
             jt.flags.use_cuda = 1
+        elif device == "npu":
+            if not getattr(jt.compiler, "has_acl", 0):
+                raise SystemExit("ACL is unavailable in this Jittor build")
+            jt.flags.use_cuda = 1
+            jt.flags.use_acl = 1
         else:
             # Jittor turns CUDA on by default whenever a GPU is present, so the
             # CPU run has to turn it off explicitly. Leaving it alone measures
             # Jittor on the accelerator against PyTorch on the CPU, which looks
             # like a large speedup and proves nothing about either.
             jt.flags.use_cuda = 0
+            if hasattr(jt.flags, "use_acl"):
+                jt.flags.use_acl = 0
         return lambda tensor: tensor
     if device == "cuda":
         if not torch.cuda.is_available():
             raise SystemExit("CUDA is unavailable in this PyTorch build")
         return lambda tensor: tensor.cuda()
+    if device == "npu":
+        try:
+            importlib.import_module("torch_npu")
+        except ImportError as error:
+            raise SystemExit("torch_npu is unavailable: {}".format(error))
+        npu = getattr(torch, "npu", None)
+        if npu is None or not npu.is_available():
+            raise SystemExit("NPU is unavailable in this PyTorch build")
+        return lambda tensor: tensor.to("npu")
     return lambda tensor: tensor
 
 
@@ -130,10 +146,32 @@ def _device_in_use(torch, runtime, device):
     if runtime == "jittor":
         import jittor as jt
 
+        if (
+            device == "npu"
+            and getattr(jt.compiler, "has_acl", 0)
+            and jt.flags.use_cuda
+            and jt.flags.use_acl
+        ):
+            return "npu"
         return "cuda" if jt.flags.use_cuda else "cpu"
     if device == "cuda":
         return "cuda" if torch.cuda.is_available() else "cpu"
+    if device == "npu":
+        npu = getattr(torch, "npu", None)
+        return "npu" if npu is not None and npu.is_available() else "cpu"
     return "cpu"
+
+
+def _backend_report(runtime):
+    if runtime == "jittor":
+        import jittor as jt
+
+        return {
+            "has_acl": bool(getattr(jt.compiler, "has_acl", 0)),
+            "use_acl": bool(getattr(jt.flags, "use_acl", 0)),
+            "use_cuda": bool(jt.flags.use_cuda),
+        }
+    return {}
 
 
 def _configure_tf32(torch, device):
@@ -162,9 +200,11 @@ def _synchronize(torch, runtime, device):
     if runtime == "jittor":
         import jittor as jt
 
-        jt.sync_all(device == "cuda")
+        jt.sync_all(device != "cpu")
     elif device == "cuda":
         torch.cuda.synchronize()
+    elif device == "npu":
+        torch.npu.synchronize()
 
 
 def _make_inputs(torch, spec, seed, to_device):
@@ -207,7 +247,7 @@ def main():
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--runtime", choices=("torch", "jittor"), default="torch")
-    parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
+    parser.add_argument("--device", choices=("cpu", "cuda", "npu"), default="cpu")
     options = parser.parse_args()
 
     torch = _import_torch(options.runtime)
@@ -219,8 +259,8 @@ def main():
     model, input_spec = builder(torch)
     dependencies = _dependency_report(requirements)
     model.eval()
-    if options.device == "cuda" and options.runtime == "torch":
-        model.cuda()
+    if options.runtime == "torch" and options.device != "cpu":
+        model.to(options.device)
 
     # ``state_dict`` is not always complete: ms-swift's tuner deliberately
     # reports only its adapter, so transferring it would leave the two runtimes
@@ -268,6 +308,16 @@ def main():
             start_grad()
         else:
             parameter.requires_grad_(True)
+
+    capture_scope = None
+    execution_logs = []
+    if options.runtime == "jittor" and options.device == "npu":
+        import jittor as jt
+
+        capture_scope = jt.log_capture_scope(
+            log_v=0, log_vprefix="acl_op_exec.cc=100"
+        )
+        execution_logs = capture_scope.__enter__()
 
     inputs = _make_inputs(torch, input_spec, options.seed + 1, to_device)
     output = _primary_output(model(**inputs))
@@ -336,6 +386,16 @@ def main():
         durations.append(time.perf_counter() - started)
     del warm_values, values
 
+    if capture_scope is not None:
+        capture_scope.__exit__(None, None, None)
+    messages = [entry["msg"].lower() for entry in execution_logs]
+    fallbacks = [message for message in messages if "fallback cpu" in message]
+    cpu_compiles = [message for message in messages if "compile cpu" in message]
+    if fallbacks:
+        raise SystemExit("CPU fallback detected: {}".format(fallbacks[0]))
+    if cpu_compiles:
+        raise SystemExit("CPU-compiled operation detected: {}".format(cpu_compiles[0]))
+
     np.savez(options.output, **arrays)
     print(
         "ECOSYSTEM_RESULT "
@@ -346,6 +406,9 @@ def main():
                 "seconds": min(durations),
                 "loss": float(loss.detach().cpu().numpy().reshape(-1)[0]),
                 "device": _device_in_use(torch, options.runtime, options.device),
+                "backend": _backend_report(options.runtime),
+                "fallback_count": len(fallbacks),
+                "cpu_compile_count": len(cpu_compiles),
                 "package_site": os.environ.get("JITTOR_ECOSYSTEM_PACKAGE_SITE", ""),
                 "dependencies": dependencies,
                 "tf32": tf32,
