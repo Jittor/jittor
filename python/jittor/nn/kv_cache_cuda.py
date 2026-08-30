@@ -2,7 +2,7 @@
 
 import jittor as jt
 
-from ._cuda_inference import device_index
+from ._cuda_inference import cached_source, device_index
 
 
 def _reshape_and_cache_cuda(key, value, kv_cache, slot_mapping):
@@ -37,7 +37,7 @@ def _reshape_and_cache_cuda(key, value, kv_cache, slot_mapping):
     if str(slot_mapping.dtype) not in ("int32", "int64"):
         return None
 
-    cuda_src = r"""
+    cuda_src = cached_source(r"""
     __global__ static void reshape_and_cache(
             const in0_type* key, const in1_type* value,
             const in2_type* slots, out0_type* cache, int64_t total) {
@@ -66,11 +66,11 @@ def _reshape_and_cache_cuda(key, value, kv_cache, slot_mapping):
     if (total) reshape_and_cache<<<blocks, threads>>>(
         in0_p, in1_p, in2_p, out0_p, total);
     CHECK(0 == cudaGetLastError());
-    """ % {
+    """, {
         "block_size": cache_shape[2],
         "slot_capacity": cache_shape[0] * cache_shape[2],
         "token_stride": key_shape[1] * key_shape[2],
-    }
+    })
     jt.code([key, value, slot_mapping], [kv_cache], cuda_src=cuda_src)
     return kv_cache
 
@@ -132,7 +132,7 @@ def _paged_attention_decode_cuda(
     while threads < head_dim:
         threads *= 2
     warps = threads // 32
-    cuda_src = r"""
+    cuda_src = cached_source(r"""
     __device__ __forceinline__ float warp_sum(float value) {
         for (int offset = 16; offset > 0; offset >>= 1)
             value += __shfl_down_sync(0xffffffff, value, offset);
@@ -206,7 +206,7 @@ def _paged_attention_decode_cuda(
     paged_attention_decode<<<%(blocks)d, %(threads)d>>>(
         in0_p, in1_p, in2_p, in3_p, out0_p);
     CHECK(0 == cudaGetLastError());
-    """ % {
+    """, {
         "blocks": requests * query_heads,
         "block_size": cache_shape[2],
         "head_dim": head_dim,
@@ -217,7 +217,7 @@ def _paged_attention_decode_cuda(
         "scale": scale,
         "threads": threads,
         "warps": warps,
-    }
+    })
     return jt.code(query.shape, query.dtype, tensors, cuda_src=cuda_src)
 
 

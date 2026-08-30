@@ -265,21 +265,44 @@ key 长度一致（同长 prompt 批总是如此）时，一次 gather + 两次�
 广播的 mask 完成；参差批量仍走原循环。与循环路径逐元素对拍最大差 `1.49e-08`；
 另用 5 条长度各异的 prompt 端到端复核，两侧 8 个 token 逐一相同，回退路径无损。
 
-### 剩下的 1.24x
+### 剩下的 1.24x：GPU 在等 CPU，不是 kernel 慢
 
-profile（batch 1）：**82.4% 是 `cublas_matmul`**，非 GEMM 约 13.9ms 且无单项超过
-2.2%。GEMM 本身不慢——按解码 shape 单独微基准，Jittor 在两个大 shape 上反而更快
-（264 vs 286us、124 vs 146us；小 shape 的 1400+GB/s 是 L2 命中，不具代表性）。
-PyTorch 的总时间几乎等于它的 GEMM 时间，非 GEMM 只有约 2ms，而 Jittor 是 14ms。
-差距落在每层约 8 个小算子上。它们**已经都是融合的 `jt.code` 自定义 kernel**
-（RMSNorm 双输出、KV 写入、分页 attention、RoPE、SwiGLU），数量与 PyTorch 的约 6 个
-相当，但单次 7~15us 对 PyTorch 的约 2us。也不是 Jittor 的通用算子开销：单算子
-微基准是 5.92us 对 PyTorch 的 5.26us，8 连算的摊薄成本更只有 1.6us（Jittor 会把
-它们融成一个 kernel，12.45us 对 PyTorch 的 43.99us）。所以是这些特定 kernel 在
-1×3584 这种极小张量上的效率问题，要定位需要 nsys 级别的逐 kernel 分析。
+先前把它记成"小 kernel 慢"是不准确的，更正如下。
+
+PyTorch 侧用 `torch.profiler` 取到权威分解：**单次生成 GPU 总忙时 63.2ms**，其中
+**GEMM 占 97.0%（61.3ms）**，非 GEMM 只有 **1.88ms**；它的融合 kernel 每个仅
+`0.2~0.6us`（RMSNorm 0.20us、SiluAndMul 0.63us、RoPE 0.22us、KV 写 0.17us）。
+
+Jittor 的 profiler 把同类算子报成 `7~15us`。同一算法不可能差 30~70 倍——那是
+**CPU 侧每算子耗时**，不是 GPU kernel 时间。GPU 利用率采样证实了这点：
+
+| | GPU 利用率 | wall | 推得的 GPU 忙时 |
+|---|---|---:|---:|
+| PyTorch | 峰值 96%（profiler 口径 94%） | 67ms | 63.2ms |
+| Jittor | 73~82% | 83ms | ~65ms |
+
+**两侧的 GPU 实际工作量相当（62~65ms）**，Jittor 慢在 GPU 有约 20% 的时间空等
+CPU 派发，即每次生成约 18ms 的 CPU 时间没有被 GPU 执行掩盖。合成基准也印证方向：
+同样"一个大 GEMM + 8 个小算子"，PyTorch 掩盖了 73% 的小算子 CPU 成本
+（266+94 → 292），Jittor 只掩盖 52%（276+40 → 296）；而 Jittor 的 8 个小算子本身
+只要 39.6us，比 PyTorch 的 94.3us **便宜 2.4 倍**。
+
+顺带做了一项确定的优化：这些融合 kernel 每次调用都要把约 1.4KB 的 CUDA 源码用
+`%` 重新格式化一遍。改为按参数记忆化（`_cuda_inference.cached_source`，覆盖
+rms_norm / rope / swiglu / kv_cache / packed_qkv 共 9 处），单次调用省 `1.7~1.9us`
+（RMSNorm `13.76 -> 11.91us`、SwiGLU `9.36 -> 7.66us`），端到端 `0.0833 -> 0.0826s`
+（约 1%）。诚实地说，这印证了归因：省下 CPU 时间只按比例兑现，因为瓶颈是 CPU 派发
+总量，而不是某一处热点。
+
+要真正抹平这 18ms，需要把每算子的 CPU 成本降到接近零——也就是 CUDA graph 级别的
+捕获重放，属于运行时层面的能力，本轮没有做。
+
+（测量陷阱记录：Jittor 的惰性图会做公共子表达式消除与死代码消除，用固定输入或不
+保留输出的微基准会得到荒谬的数字——`qkv_proj` 一度量出 9.4us，而它要读 33MB 权重，
+意味着 3.5TB/s。上面所有 Jittor 微基准都改用了互不相同的输入并保留输出引用。）
 
 **结论：vLLM 的"能跑"与"对拍一致"已达成，"速度不更慢"未达成**——各批量下稳定在
-约 1.22-1.24x。
+约 1.22-1.24x，且已定位为 CPU 派发未充分重叠，而非算子实现慢。
 
 ## 复现
 
