@@ -10,6 +10,59 @@ import numpy as np
 from jittor import Function
 
 class TestCodeOp(unittest.TestCase):
+    def test_multi_output_grad(self):
+        a = jt.array(np.array([1.0, 2.0, 3.0], dtype="float32"))
+        b = jt.array(np.array([4.0, 5.0, 6.0], dtype="float32"))
+        c = jt.code(
+            a.shape,
+            a.dtype,
+            [a, b],
+            cpu_src='''
+                for (int i=0; i<in0_shape0; i++)
+                    @out(i) = @in0(i) * @in1(i);
+            ''',
+            cpu_grad_src=['''
+                for (int i=0; i<in0_shape0; i++) {
+                    @out0(i) = @dout(i) * @in1(i);
+                    @out1(i) = @dout(i) * @in0(i);
+                }
+            '''],
+            data={"multi_grad": 1, "multi_grad_output": 0},
+        )
+        grad_a, grad_b = jt.grad(c.sum(), [a, b])
+        np.testing.assert_allclose(grad_a.numpy(), b.numpy())
+        np.testing.assert_allclose(grad_b.numpy(), a.numpy())
+
+    def test_selected_output_partial_input_grads(self):
+        a = jt.array(np.array([1.0, 2.0, 3.0], dtype="float32"))
+        b = jt.array(np.array([4.0, 5.0, 6.0], dtype="float32"))
+        unused = jt.array(np.array([7.0, 8.0, 9.0], dtype="float32"))
+        _, result = jt.code(
+            [a.shape, a.shape],
+            [a.dtype, a.dtype],
+            [a, b, unused],
+            cpu_src='''
+                for (int i=0; i<in0_shape0; i++) {
+                    @out0(i) = @in0(i) + @in1(i) + @in2(i);
+                    @out1(i) = @in0(i) * @in1(i);
+                }
+            ''',
+            cpu_grad_src=['''
+                for (int i=0; i<in0_shape0; i++) {
+                    @out0(i) = @dout(i) * @in1(i);
+                    @out1(i) = @dout(i) * @in0(i);
+                }
+            '''],
+            data={
+                "multi_grad": 1,
+                "multi_grad_output": 1,
+                "multi_grad_input_count": 2,
+            },
+        )
+        grad_a, grad_b = jt.grad(result.sum(), [a, b])
+        np.testing.assert_allclose(grad_a.numpy(), b.numpy())
+        np.testing.assert_allclose(grad_b.numpy(), a.numpy())
+
     def test(self):
         a = jt.random([10])
         b = jt.code(a.shape, a.dtype, [a],

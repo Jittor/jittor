@@ -7,22 +7,34 @@ not install a second FFT implementation.
 """
 
 import numpy as np
+from collections import OrderedDict
 
 import jittor as jt
 
 
 _ComplexNumber = jt.nn.ComplexNumber
+_dft_mat_cache = OrderedDict()
+_dft_mat_cache_limit = 16
 
 
 def _dft_mats(size, inverse):
+    key = (int(size), bool(inverse), int(jt.flags.use_acl), int(jt.flags.use_cuda))
+    cached = _dft_mat_cache.get(key)
+    if cached is not None:
+        _dft_mat_cache.move_to_end(key)
+        return cached
     indices = np.arange(size)
     angle = (2.0 * np.pi / size) * np.outer(indices, indices)
     if not inverse:
         angle = -angle
-    return (
+    matrices = (
         jt.array(np.cos(angle).astype("float32")),
         jt.array(np.sin(angle).astype("float32")),
     )
+    _dft_mat_cache[key] = matrices
+    if len(_dft_mat_cache) > _dft_mat_cache_limit:
+        _dft_mat_cache.popitem(last=False)
+    return matrices
 
 
 def _to_last(value, dim):

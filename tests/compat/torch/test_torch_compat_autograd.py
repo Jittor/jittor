@@ -25,6 +25,7 @@ import unittest
 import numpy as np
 import jittor as torch          # the whole point: jittor IS torch here
 import jittor as jt
+from jittor.compat.torch.installers.autograd import _install_autograd_function
 
 # Exercise CPU always; add CUDA when the build has it. NPU(ACL) reports has_cuda too.
 _DEVICES = [("cpu", 0)] + ([("cuda", 1)] if jt.has_cuda else [])
@@ -48,6 +49,48 @@ class Base(unittest.TestCase):
         g = np.asarray(got); r = np.asarray(ref)
         self.assertEqual(tuple(g.shape), tuple(r.shape), f"shape {g.shape}!={r.shape}; {msg}")
         np.testing.assert_allclose(g, r, atol=atol, rtol=rtol, err_msg=msg)
+
+
+class TestCustomFunctionCompatibility(Base):
+    def test_native_function_skips_torch_context_recording(self):
+        _install_autograd_function(jt)
+
+        class NativeFunction(jt.Function):
+            def execute(self, value):
+                return value * value
+
+            def grad(self, grad_output):
+                return grad_output
+
+        function = NativeFunction()
+        value = jt.array(np.ones((2, 3), dtype="float32"))
+        function(value)
+        self.assertNotIn("_fwd_input_shapes", function.__dict__)
+        self.assertNotIn("_fwd_outputs", function.__dict__)
+        self.assertNotIn("needs_input_grad", function.__dict__)
+
+    def test_torch_style_function_keeps_context_and_broadcast_grad(self):
+        _install_autograd_function(jt)
+
+        class TorchStyleFunction(jt.Function):
+            def execute(self, value, bias):
+                self.seen_needs_input_grad = self.needs_input_grad
+                return value + bias
+
+            @staticmethod
+            def backward(ctx, grad_output):
+                return grad_output, grad_output
+
+        function = TorchStyleFunction()
+        value = jt.array(np.ones((2, 3), dtype="float32"))
+        bias = jt.array(np.ones((1, 3), dtype="float32"))
+        output = function(value, bias)
+        grad_value, grad_bias = jt.grad(output.sum(), [value, bias])
+
+        self.assertEqual(function.seen_needs_input_grad, (True, True))
+        self.assertEqual(function._fwd_input_shapes, [(2, 3), (1, 3)])
+        self.ac(grad_value.numpy(), np.ones((2, 3), dtype="float32"))
+        self.ac(grad_bias.numpy(), np.full((1, 3), 2.0, dtype="float32"))
 
 
 # ------------------------------------------------------------------ analytic gradients

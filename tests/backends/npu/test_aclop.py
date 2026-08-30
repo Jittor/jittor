@@ -220,6 +220,18 @@ class TestACL(unittest.TestCase):
         print("test concat success")
 
     @jt.flag_scope(use_acl=1)
+    def test_concat_grad(self):
+        a = jt.array(np.arange(4, dtype="float32").reshape(2, 2))
+        b = jt.array(np.arange(6, dtype="float32").reshape(3, 2))
+        weight = jt.array(np.arange(10, dtype="float32").reshape(5, 2))
+        result = jt.concat([a, b], 0)
+        grad_a, grad_b = jt.grad((result * weight).sum(), [a, b])
+        np.testing.assert_allclose(result.numpy(),
+                                   np.concatenate((a.numpy(), b.numpy()), 0))
+        np.testing.assert_allclose(grad_a.numpy(), weight.numpy()[:2])
+        np.testing.assert_allclose(grad_b.numpy(), weight.numpy()[2:])
+
+    @jt.flag_scope(use_acl=1)
     def test_maxpool_grad(self):
         a = jt.ones(1, 1, 4, 4)
         max_pool = jt.nn.Pool(2, op='maximum')
@@ -260,6 +272,18 @@ class TestACL(unittest.TestCase):
         b = self.measure_time(lambda: a.transpose(0, 2))
         np.testing.assert_allclose(b.numpy(), [[[1], [1]], [[1], [1]]])
         print("test transpose success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_transpose_grad(self):
+        a = jt.arange(24).reshape(2, 3, 4).float32()
+        weights = jt.arange(24).reshape(4, 2, 3).float32()
+        output = a.transpose((2, 0, 1))
+        gradient = jt.grad((output * weights).sum(), a)
+        np.testing.assert_allclose(
+            gradient.numpy(),
+            np.arange(24, dtype=np.float32).reshape(4, 2, 3).transpose(1, 2, 0),
+        )
+        print("test transpose grad success")
 
     @jt.flag_scope(use_acl=1)
     def test_matmul_1(self):

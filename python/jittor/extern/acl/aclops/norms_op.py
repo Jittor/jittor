@@ -11,46 +11,9 @@ import numpy as np
 from typing import Union
 from collections.abc import Sequence, Iterable
 
-def norms_cmd(name: str,
-            inputs: list,
-            output_dtypes: list = None,
-            output_shapes: list = None,
-            attr_code: str = "",
-            attr_header: str = "",
-            outputs: list = None):
-    attr_header = "\nnamespace jittor{" + attr_header + "}\n"
+from ._code import acl_code as norms_cmd
 
-    cuda_header = '''
-    #include "acl/aclops/aclops.h"
-    '''
-    outputs_ = []
-    if outputs is not None:
-        outputs_ = outputs
-    else:
-        assert output_dtypes is not None
-        assert output_shapes is not None
-        assert len(output_dtypes) == len(output_shapes)
-        for i in range(len(output_shapes)):
-            outputs_.append(jt.empty(output_shapes[i], output_dtypes[i]))
-    input_code = ''
-    for i in range(len(inputs)):
-        input_code += f"op.add(in{i}, true);\n"
 
-    output_code = ''
-    for i in range(len(outputs_)):
-        output_code += f"op.add(out{i}, false);\n"
-    return jt.code(outputs=outputs_,
-                   inputs=inputs,
-                   cuda_header=attr_header + cuda_header,
-                   cuda_src=f"""
-   
-    // aclop
-    {name}OpRunner op;
-    {input_code}
-    {output_code}
-    {attr_code}
-    op.run();""")
-    
 class BatchNormACL(jt.Function):
 
     def __init__(self,
@@ -195,7 +158,7 @@ class LayerNormACL(jt.Function):
         return result[0], result[1], result[2]
 
 
-class GroupNormACL(jt.Function):
+class GroupNormACL:
 
     def __init__(self, num_groups, eps):
         self.num_groups = int(num_groups)
@@ -213,41 +176,38 @@ class GroupNormACL(jt.Function):
         op.op_attr.reset(attr);
         '''
 
-    def execute(self, x, weight, bias):
-        self.input = x
-        self.weight = weight
+    def __call__(self, x, weight, bias):
         self.batch = int(x.shape[0])
         self.channels = int(x.shape[1])
         self.spatial_size = 1
         for size in x.shape[2:]:
             self.spatial_size *= int(size)
-        outputs = [
-            jt.empty(x.shape, x.dtype),
-            jt.empty((self.batch, self.num_groups), x.dtype),
-            jt.empty((self.batch, self.num_groups), x.dtype),
-        ]
         result = norms_cmd(
             "GroupNorm",
             inputs=[x, weight, bias],
-            outputs=outputs,
+            output_dtypes=[x.dtype, x.dtype, x.dtype],
+            output_shapes=[
+                x.shape,
+                (self.batch, self.num_groups),
+                (self.batch, self.num_groups),
+            ],
             attr_code=self._attr_code(),
+            multi_grad_src=f'''
+            // aclop
+            GroupNormBackwardOpRunner op;
+            op.add(dout, true);
+            op.add(in0, true);
+            op.add(pout1, true);
+            op.add(pout2, true);
+            op.add(in1, true);
+            op.add(out0, false);
+            op.add(out1, false);
+            op.add(out2, false);
+            {self._attr_code()}
+            op.run();
+            ''',
         )
-        self.mean = result[1]
-        self.rstd = result[2]
         return result[0]
-
-    def grad(self, grad_output):
-        outputs = [
-            jt.empty(self.input.shape, self.input.dtype),
-            jt.empty((self.channels,), self.weight.dtype),
-            jt.empty((self.channels,), self.weight.dtype),
-        ]
-        return norms_cmd(
-            "GroupNormBackward",
-            inputs=[grad_output, self.input, self.mean, self.rstd, self.weight],
-            outputs=outputs,
-            attr_code=self._attr_code(),
-        )
 
 
 class RmsNormACL(jt.Function):

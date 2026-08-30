@@ -108,6 +108,11 @@ def _install_autograd_function(g):
 
     _orig_fn_call = Fn.__call__
     def _call_record_inputs(self, *args, **kw):
+        # Native Jittor Functions provide grad() directly and do not need any
+        # torch ctx bookkeeping. ACL uses many such Functions in model hot
+        # paths, so avoid recording shapes and requires-grad state for them.
+        if getattr(type(self), "backward", None) is None:
+            return _orig_fn_call(self, *args, **kw)
         # capture forward input shapes (positional only -- jittor only tapes those)
         try:
             self._fwd_input_shapes = [

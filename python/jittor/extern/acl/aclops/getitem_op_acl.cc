@@ -150,6 +150,11 @@ namespace jittor
     void StridedSliceAssignV2OpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
     {
         auto attr = dynamic_cast<StrideAttr *>(op_attr.get());
+        if (jt_name == "stridedsliceassignv2_grad")
+        {
+            ret = aclrtMemsetAsync(out_[0]->mem_ptr, out_[0]->size, 0, out_[0]->size, aclstream);
+            CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclrtMemsetAsync failed. ERROR: %d\n", name.c_str(), ret); return);
+        }
         auto begins = aclCreateIntArray(attr->begins.data(), attr->begins.size());
         auto ends = aclCreateIntArray(attr->ends.data(), attr->ends.size());
         auto steps = aclCreateIntArray(attr->steps.data(), attr->steps.size());

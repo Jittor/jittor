@@ -268,6 +268,31 @@ class TestACL(unittest.TestCase):
         print('test_conv pass')
 
     @jt.flag_scope(use_acl=1)
+    def test_conv_with_bias_grad(self):
+        rng = np.random.RandomState(20260831)
+        x_np = rng.randn(2, 3, 8, 8).astype("float32")
+        w_np = rng.randn(4, 3, 3, 3).astype("float32")
+        b_np = rng.randn(4).astype("float32")
+        mask_np = rng.randn(2, 4, 8, 8).astype("float32")
+        x, w, b, mask = map(jt.array, (x_np, w_np, b_np, mask_np))
+        y = jt.nn.conv2d(x, w, b, padding=1)
+        y1 = y.numpy()
+        dx, dw, db = jt.grad((y * mask).sum(), [x, w, b])
+        dx1, dw1, db1 = dx.numpy(), dw.numpy(), db.numpy()
+
+        with jt.flag_scope(use_acl=0):
+            x, w, b, mask = map(jt.array, (x_np, w_np, b_np, mask_np))
+            y = jt.nn.conv2d(x, w, b, padding=1)
+            y2 = y.numpy()
+            dx, dw, db = jt.grad((y * mask).sum(), [x, w, b])
+            dx2, dw2, db2 = dx.numpy(), dw.numpy(), db.numpy()
+
+        np.testing.assert_allclose(y1, y2, rtol=1e-4, atol=1e-5)
+        np.testing.assert_allclose(dx1, dx2, rtol=1e-4, atol=1e-5)
+        np.testing.assert_allclose(dw1, dw2, rtol=1e-4, atol=1e-5)
+        np.testing.assert_allclose(db1, db2, rtol=1e-4, atol=1e-5)
+
+    @jt.flag_scope(use_acl=1)
     def test_matmul(self):
         # x = jt.rand(10, 3, 50, 50)
         # w = jt.rand(4,3,3,3)

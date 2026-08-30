@@ -192,6 +192,50 @@ def test_acl_getitem_preserves_async_dependencies():
     np.testing.assert_array_equal(actual, expected)
 
 
+def test_acl_slice_gradients_remain_lazy_and_zero_initialized():
+    if not getattr(jt.compiler, "has_acl", 0):
+        pytest.skip("ACL backend is unavailable")
+    source = np.arange(48, dtype=np.float32).reshape(2, 4, 6)
+    gradients = []
+    expected = []
+    with jt.flag_scope(use_acl=1):
+        for offset in range(4):
+            x = jt.array(source + offset)
+            weights = jt.array(
+                np.full((2, 2, 3), offset + 1, dtype=np.float32)
+            )
+            loss = (x[:, 1:3, 1::2] * weights).sum()
+            gradients.append(jt.grad(loss, x))
+            reference = np.zeros_like(source)
+            reference[:, 1:3, 1::2] = offset + 1
+            expected.append(reference)
+        jt.sync(gradients)
+    for actual, reference in zip(gradients, expected):
+        np.testing.assert_array_equal(actual.numpy(), reference)
+
+
+def test_acl_rfft_keeps_lazy_dft_constants_alive():
+    if not getattr(jt.compiler, "has_acl", 0):
+        pytest.skip("ACL backend is unavailable")
+    samples = (
+        ((8,), 910, -1, None),
+        ((3, 6), 911, -1, None),
+        ((7,), 912, -1, None),
+        ((8,), 913, -1, "ortho"),
+    )
+    with jt.flag_scope(use_acl=1, use_cuda=1):
+        for shape, seed, dim, norm in samples:
+            source = np.random.RandomState(seed).uniform(
+                -9, 9, size=shape
+            ).astype("float32")
+            x = jt.array(source)
+            actual = jt.fft.rfft(x, dim=dim, norm=norm)
+            expected = np.fft.rfft(x.numpy(), axis=dim, norm=norm)
+            np.testing.assert_allclose(
+                actual.numpy(), expected, rtol=1.3e-6, atol=1e-5
+            )
+
+
 if __name__ == "__main__":
     test_acl_indexing()
     raise SystemExit(1 if FAIL else 0)

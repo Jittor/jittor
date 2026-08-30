@@ -12,87 +12,80 @@ from typing import Union
 from collections.abc import Sequence, Iterable
 
 
-def getitem_cmd(name: str,
-                inputs: list,
-                output_dtypes: list = None,
-                output_shapes: list = None,
-                attr_code: str = "",
-                attr_header: str = "",
-                outputs: list = None):
-    attr_header = "\nnamespace jittor{" + attr_header + "}\n"
+from ._code import acl_code as getitem_cmd
 
-    cuda_header = '''
-    #include "acl/aclops/aclops.h"
-    '''
-    outputs_ = []
-    if outputs is not None:
-        outputs_ = outputs
-    else:
-        assert output_dtypes is not None
-        assert output_shapes is not None
-        assert len(output_dtypes) == len(output_shapes)
-        for i in range(len(output_shapes)):
-            outputs_.append(jt.empty(output_shapes[i], output_dtypes[i]))
-    input_code = ''
-    for i in range(len(inputs)):
-        input_code += f"op.add(in{i}, true);\n"
-
-    output_code = ''
-    for i in range(len(outputs_)):
-        output_code += f"op.add(out{i}, false);\n"
-    return jt.code(outputs=outputs_,
-                   inputs=inputs,
-                   cuda_header=attr_header + cuda_header,
-                   cuda_src=f"""
-   
-    // aclop
-    {name}OpRunner op;
-    {input_code}
-    {output_code}
-    {attr_code}
-    op.run();""")
+getitem_forward = getitem_cmd
 
 
-def getitem_forward(name: str,
-                    inputs: list,
-                    output_dtypes: list = None,
-                    output_shapes: list = None,
-                    attr_code: str = "",
-                    attr_header: str = "",
-                    outputs: list = None,
-                    extra_data: dict = {}):
-    attr_header = "\nnamespace jittor{" + attr_header + "}\n"
+def basic_slice_acl(x, slices):
+    """Use a native CodeOp gradient for basic, unit-stride slices."""
+    if not isinstance(slices, tuple):
+        slices = (slices, )
+    if not all(
+            item is Ellipsis
+            or (isinstance(item, slice) and item.step in (None, 1))
+            for item in slices):
+        return None
+    ellipsis = [i for i, item in enumerate(slices) if item is Ellipsis]
+    if len(ellipsis) > 1:
+        return None
+    if ellipsis:
+        index = ellipsis[0]
+        fill = x.ndim - len(slices) + 1
+        if fill < 0:
+            return None
+        slices = slices[:index] + (slice(None), ) * fill + slices[index + 1:]
+    if len(slices) > x.ndim:
+        return None
+    slices += (slice(None), ) * (x.ndim - len(slices))
 
-    cuda_header = '''
-    #include "acl/aclops/aclops.h"
-    '''
-    outputs_ = []
-    if outputs is not None:
-        outputs_ = outputs
-    else:
-        assert output_dtypes is not None
-        assert output_shapes is not None
-        assert len(output_dtypes) == len(output_shapes)
-        for i in range(len(output_shapes)):
-            outputs_.append(jt.empty(output_shapes[i], output_dtypes[i]))
-    input_code = ''
-    for i in range(len(inputs)):
-        input_code += f"op.add(in{i}, true);\n"
+    begins = []
+    ends = []
+    steps = []
+    axes = []
+    output_shape = []
+    for dim, item in enumerate(slices):
+        start, stop, step = item.indices(x.shape[dim])
+        begins.append(start)
+        ends.append(stop)
+        steps.append(step)
+        axes.append(dim)
+        output_shape.append(max(0, stop - start))
 
-    output_code = ''
-    for i in range(len(outputs_)):
-        output_code += f"op.add(out{i}, false);\n"
-    return jt.code(outputs=outputs_,
-                   inputs=inputs,
-                   cuda_header=attr_header + cuda_header,
-                   cuda_src=f"""
-    // aclop
-    {name}OpRunner op;
-    {input_code}
-    op.add(out0, false);
-    {attr_code}
-    op.run();""",
-                   data=extra_data)
+    begins_text = ", ".join(map(str, begins))
+    ends_text = ", ".join(map(str, ends))
+    steps_text = ", ".join(map(str, steps))
+    axes_text = ", ".join(map(str, axes))
+    forward_attr = f"""
+    op.jt_name = "slicev2";
+    StrideAttr *attr = new StrideAttr();
+    attr->begins = {{ {begins_text} }};
+    attr->ends = {{ {ends_text} }};
+    attr->steps = {{ {steps_text} }};
+    attr->axes = {{ {axes_text} }};
+    op.op_attr.reset(attr);
+    """
+    return getitem_forward(
+        "SliceV2",
+        [x],
+        output_dtypes=[x.dtype],
+        output_shapes=[output_shape],
+        attr_code=forward_attr,
+        cuda_grad_src=[f"""
+// aclop
+StridedSliceAssignV2OpRunner op;
+op.add(dout, true);
+op.add(out0, false);
+op.jt_name = "stridedsliceassignv2_grad";
+StrideAttr *attr = new StrideAttr();
+attr->begins = {{ {begins_text} }};
+attr->ends = {{ {ends_text} }};
+attr->steps = {{ {steps_text} }};
+attr->axes = {{ {axes_text} }};
+op.op_attr.reset(attr);
+op.run();
+"""],
+    )[0]
 
 
 def caculate_shape(tensors):
@@ -473,7 +466,7 @@ class GetItemACL(jt.Function):
                     sizes = [1]
                     steps = [1]
             attr_code = f"""
-            op.jt_name = "stridedsliceassignv2";
+            op.jt_name = "stridedsliceassignv2_grad";
             StrideAttr *attr = new StrideAttr();
             attr->begins = {{ {", ".join(map(str, begins))} }};
             attr->ends = {{ {", ".join(map(str, ends))} }};
@@ -482,12 +475,11 @@ class GetItemACL(jt.Function):
             op.op_attr.reset(attr);
             """
             inputs = [grad_output]
-            outputs = [jt.zeros(self.x_shape, dtype=grad_output.dtype)]
+            outputs = [jt.empty(self.x_shape, dtype=grad_output.dtype)]
             result = getitem_cmd("StridedSliceAssignV2",
                                  inputs=inputs,
                                  outputs=outputs,
                                  attr_code=attr_code)[0]
-            result.sync()
             if expand_dim:
                 result = result.squeeze(-1)
             return result, None

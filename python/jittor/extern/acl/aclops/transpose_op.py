@@ -12,54 +12,15 @@ from typing import Union
 from collections.abc import Sequence, Iterable
 
 
-def transpose_cmd(name: str,
-                  inputs: list,
-                  output_dtypes: list = None,
-                  output_shapes: list = None,
-                  attr_code: str = "",
-                  attr_header: str = "",
-                  outputs: list = None):
-    attr_header = "\nnamespace jittor{" + attr_header + "}\n"
-
-    cuda_header = '''
-    #include "acl/aclops/aclops.h"
-    '''
-    outputs_ = []
-    if outputs is not None:
-        outputs_ = outputs
-    else:
-        assert output_dtypes is not None
-        assert output_shapes is not None
-        assert len(output_dtypes) == len(output_shapes)
-        for i in range(len(output_shapes)):
-            outputs_.append(jt.empty(output_shapes[i], output_dtypes[i]))
-    input_code = ''
-    for i in range(len(inputs)):
-        input_code += f"op.add(in{i}, true);\n"
-
-    output_code = ''
-    for i in range(len(outputs_)):
-        output_code += f"op.add(out{i}, false);\n"
-    return jt.code(outputs=outputs_,
-                   inputs=inputs,
-                   cuda_header=attr_header + cuda_header,
-                   cuda_src=f"""
-   
-    // aclop
-    {name}OpRunner op;
-    {input_code}
-    {output_code}
-    {attr_code}
-    op.run();""")
+from ._code import acl_code as transpose_cmd
 
 
-class TransPoseACL(jt.Function):
+class TransPoseACL:
 
-    def __init__(self):
-        super(TransPoseACL, self).__init__()
+    def __call__(self, x, *dim):
+        return self.execute(x, *dim)
 
     def execute(self, x, *dim):
-        self.input = x
         if len(dim) == 0:
             # no-arg transpose reverses all dims (numpy/jittor .T semantics). Without this
             # dim stayed () -> output_shape [] -> aclnnPermute "output shape [1]" crash.
@@ -71,6 +32,11 @@ class TransPoseACL(jt.Function):
             a, b = dim
             axes[a], axes[b] = axes[b], axes[a]
             dim = axes
+        dim = list(dim)
+
+        inverse_dim = list(range(x.ndim))
+        for index, axis in enumerate(dim):
+            inverse_dim[axis] = index
 
         attr_code = f"""
         op.jt_name = "transpose";
@@ -82,24 +48,17 @@ class TransPoseACL(jt.Function):
         output_shape = [x.shape[i] for i in dim]
         output = transpose_cmd("Transpose", [x],
                                output_dtypes=[x.dtype],
-                               output_shapes=[jt.empty(output_shape).shape],
-                               attr_code=attr_code)[0]
-        self.dim = dim
-        return output
-
-    def grad(self, grad_output):
-        dim = list(range(grad_output.ndim))
-        for i, p in enumerate(self.dim):
-            dim[p] = i
-        output_shape = [grad_output.shape[i] for i in dim]
-        attr_code = f"""
-        op.jt_name = "transpose";
-        ReduceAttr *attr = new ReduceAttr();
-        attr->axes = {{ {", ".join(map(str, dim))} }};
-        op.op_attr.reset(attr);
-        """
-        output = transpose_cmd("Transpose", [grad_output],
-                               output_dtypes=[grad_output.dtype],
-                               output_shapes=[jt.empty(output_shape).shape],
-                               attr_code=attr_code)[0]
+                               output_shapes=[output_shape],
+                               attr_code=attr_code,
+                               cuda_grad_src=[f"""
+// aclop
+TransposeOpRunner op;
+op.add(dout, true);
+op.add(out0, false);
+op.jt_name = "transpose";
+ReduceAttr *attr = new ReduceAttr();
+attr->axes = {{ {", ".join(map(str, inverse_dim))} }};
+op.op_attr.reset(attr);
+op.run();
+"""])[0]
         return output

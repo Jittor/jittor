@@ -180,7 +180,6 @@ class TestCleanupStructure(unittest.TestCase):
         }
         acl_forward_helpers = frozenset(
             {
-                ("python/jittor/extern/acl/aclops/getitem_op.py", "getitem_forward"),
                 ("python/jittor/extern/acl/aclops/index_op.py", "range_forward"),
                 ("python/jittor/extern/acl/aclops/setitem_op.py", "setitem_forward"),
             }

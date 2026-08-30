@@ -18,6 +18,9 @@ namespace jittor {
 
 static auto make_code = get_op_info("code")
     .get_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, string&&, vector<string>&&, string&&, string&&, vector<string>&&, string&&, DataMap&&>();
+
+static auto make_code_multi = get_op_info("code")
+    .get_constructor<vector<VarPtr>, vector<NanoVector>&&, vector<NanoString>&&, vector<Var*>&&, string&&, vector<string>&&, string&&, string&&, vector<string>&&, string&&, DataMap&&>();
     
 static inline void check_vary_shape(NanoVector v) {
     ASSERT(v.size()) << "Vary shape should not be zero dimension";
@@ -41,9 +44,7 @@ CodeOp::CodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs,
     if (_outputs[0]->num < 0) {
         check_vary_shape(_outputs[0]->shape);
     }
-    if (this->cuda_grad_src.size() == 0 && this->cpu_grad_src.size() == 0) {
-        flags.set(NodeFlags::_manual_set_vnbb);
-    }
+    configure_grad();
 }
 
 
@@ -67,8 +68,7 @@ CodeOp::CodeOp(
             check_vary_shape(_outputs[i]->shape);
         }
     }
-    if (this->cuda_grad_src.size() == 0 && this->cpu_grad_src.size() == 0)
-        flags.set(NodeFlags::_manual_set_vnbb);
+    configure_grad();
 }
 
 CodeOp::CodeOp(
@@ -92,8 +92,18 @@ CodeOp::CodeOp(
             TODO: vary shape not allowed in direct output
         */
     }
-    if (this->cuda_grad_src.size() == 0 && this->cpu_grad_src.size() == 0)
+    configure_grad();
+}
+
+void CodeOp::configure_grad() {
+    if (cuda_grad_src.size() == 0 && cpu_grad_src.size() == 0)
         flags.set(NodeFlags::_manual_set_vnbb);
+    auto iter = data.find("multi_grad");
+    if (iter != data.end() && iter->second != 0) {
+        CHECK(cpu_grad_src.size() || cuda_grad_src.size())
+            << "multi-output code gradient requires a gradient source";
+        flags.set(NodeFlags::_grads);
+    }
 }
 
 
@@ -124,6 +134,61 @@ VarPtr CodeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
         move(cuda_src), {}, alias+cuda_header,
         DataMap(data)
     );
+}
+
+void CodeOp::grads(Var** douts, VarPtr* dins) {
+    string cpu_src = cpu_grad_src.size() ? cpu_grad_src[0] : "";
+    string cuda_src = cuda_grad_src.size() ? cuda_grad_src[0] : "";
+    if (!cpu_src.size() && !cuda_src.size())
+        return;
+
+    int output_index = 0;
+    auto iter = data.find("multi_grad_output");
+    if (iter != data.end())
+        output_index = int(iter->second);
+    CHECKop(output_index,>=,0);
+    CHECKop(output_index,<,_outputs.size());
+    if (douts[output_index] == nullptr)
+        return;
+
+    int input_count = _inputs.size();
+    iter = data.find("multi_grad_input_count");
+    if (iter != data.end())
+        input_count = int(iter->second);
+    CHECKop(input_count,>,0);
+    CHECKop(input_count,<=,_inputs.size());
+
+    auto inputs = clone(_inputs);
+    std::stringstream new_alias;
+    new_alias << "\n@alias(dout,in" << JK::dec3(inputs.size()) << ")\n";
+    inputs.push_back(douts[output_index]);
+    for (int i=0; i<_outputs.size(); i++) {
+        new_alias << "\n@alias(pout" << JK::dec3(i) << ",in"
+                  << JK::dec3(inputs.size()) << ")\n";
+        if (i == output_index)
+            new_alias << "\n@alias(pout,in" << JK::dec3(inputs.size()) << ")\n";
+        inputs.push_back(_outputs[i]);
+    }
+
+    vector<NanoVector> shapes;
+    vector<NanoString> dtypes;
+    shapes.reserve(input_count);
+    dtypes.reserve(input_count);
+    for (int i=0; i<input_count; i++) {
+        auto input = _inputs[i];
+        shapes.push_back(input->shape);
+        dtypes.push_back(input->dtype());
+    }
+    auto alias = new_alias.str();
+    auto outputs = make_code_multi(
+        move(shapes), move(dtypes), move(inputs),
+        move(cpu_src), {}, alias+cpu_header,
+        move(cuda_src), {}, alias+cuda_header,
+        {}
+    );
+    CHECKop(outputs.size(),==,input_count);
+    for (int i=0; i<outputs.size(); i++)
+        dins[i] = move(outputs[i]);
 }
 
 void CodeOp::jit_prepare(JK& jk) {

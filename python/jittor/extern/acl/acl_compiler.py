@@ -178,7 +178,7 @@ def change_function():
     from .aclops.where_op import WhereACL
     from .aclops.where_op import NonzeroACL
     from .aclops.floor_op import FloorIntACL
-    from .aclops.getitem_op import GetItemACL
+    from .aclops.getitem_op import GetItemACL, basic_slice_acl
     from .aclops.setitem_op import SetItemACL
     from .aclops.bmm_op import BmmACL
     from .aclops.matmul_op import MatmulACL
@@ -457,10 +457,16 @@ def change_function():
         if hasattr(np, 'int256') and isinstance(slices, np.int256):
             slices = int(slices)
 
+        def getitem_without_none(items):
+            result = basic_slice_acl(x, items)
+            if result is not None:
+                return result
+            return GetItemACL()(x, items, return_x)
+
         ## If not related to `None`, directly use `GetItemACL`
         if slices is not None and (not isinstance(slices, Iterable)
                                    or isinstance(slices, str)):
-            return GetItemACL()(x, slices, return_x)
+            return getitem_without_none(slices)
         
         if isinstance(slices, int) or isinstance(slices, slice):
             slices = (slices, )
@@ -488,7 +494,7 @@ def change_function():
 
         insert_positions = get_insert_positions(slices)
         slices_without_none = tuple(s for s in slices if s is not None)
-        result = GetItemACL()(x, slices_without_none, return_x)
+        result = getitem_without_none(slices_without_none)
 
         for i in insert_positions:
             result = result.unsqueeze(i)

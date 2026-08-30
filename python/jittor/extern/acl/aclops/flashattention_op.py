@@ -17,48 +17,10 @@ _causal_mask_cache = OrderedDict()
 _causal_mask_cache_limit = 16
 
 
-def flashattention_cmd(name: str,
-                       inputs: list,
-                       output_dtypes: list = None,
-                       output_shapes: list = None,
-                       attr_code: str = "",
-                       attr_header: str = "",
-                       outputs: list = None):
-    attr_header = "\nnamespace jittor{" + attr_header + "}\n"
-
-    cuda_header = '''
-    #include "acl/aclops/aclops.h"
-    '''
-    outputs_ = []
-    if outputs is not None:
-        outputs_ = outputs
-    else:
-        assert output_dtypes is not None
-        assert output_shapes is not None
-        assert len(output_dtypes) == len(output_shapes)
-        for i in range(len(output_shapes)):
-            outputs_.append(jt.empty(output_shapes[i], output_dtypes[i]))
-    input_code = ''
-    for i in range(len(inputs)):
-        input_code += f"op.add(in{i}, true);\n"
-
-    output_code = ''
-    for i in range(len(outputs_)):
-        output_code += f"op.add(out{i}, false);\n"
-    return jt.code(outputs=outputs_,
-                   inputs=inputs,
-                   cuda_header=attr_header + cuda_header,
-                   cuda_src=f"""
-   
-    // aclop
-    {name}OpRunner op;
-    {input_code}
-    {output_code}
-    {attr_code}
-    op.run();""")
+from ._code import acl_code as flashattention_cmd
 
 
-class FlashAttentionACL(jt.Function):
+class FlashAttentionACL:
 
     def __init__(self,
                  headnum,
@@ -86,7 +48,7 @@ class FlashAttentionACL(jt.Function):
         self.qstart = qstart
         self.kvstart = kvstart
 
-    def execute(
+    def __call__(
         self,
         q,
         k,
@@ -117,27 +79,19 @@ class FlashAttentionACL(jt.Function):
 
         output_shape = (B, N, SQ, 8)
 
-        self.q = q
-        self.k = k
-        self.v = v
-
-        self.prefix = (self.prefix if self.prefix is not None
-                       else [0 for _ in range(B)])
-        self.qstart = (self.qstart if self.qstart is not None
-                       else [0 for _ in range(B)])
-        self.kvstart = (self.kvstart if self.kvstart is not None
-                        else [0 for _ in range(B)])
-
-        self.hasRealshift = realshift is not None
-        self.hasDropmask = dropMask is not None
-        self.hasPaddingmask = paddingMask is not None
-        self.hasAttenmask = attenMask is not None
+        prefix = self.prefix if self.prefix is not None else [0 for _ in range(B)]
+        qstart = self.qstart if self.qstart is not None else [0 for _ in range(B)]
+        kvstart = self.kvstart if self.kvstart is not None else [0 for _ in range(B)]
+        has_realshift = realshift is not None
+        has_dropmask = dropMask is not None
+        has_paddingmask = paddingMask is not None
+        has_attenmask = attenMask is not None
 
         dummy = jt.empty((1,), q.dtype)
-        self.realshift = realshift if realshift is not None else dummy
-        self.dropMask = dropMask if dropMask is not None else dummy
-        self.paddingMask = paddingMask if paddingMask is not None else dummy
-        self.attenMask = attenMask if attenMask is not None else dummy
+        realshift = realshift if realshift is not None else dummy
+        dropMask = dropMask if dropMask is not None else dummy
+        paddingMask = paddingMask if paddingMask is not None else dummy
+        attenMask = attenMask if attenMask is not None else dummy
 
         attr_code = f"""
         op.jt_name = "flashattention";
@@ -151,19 +105,22 @@ class FlashAttentionACL(jt.Function):
         attr->innerPrecise = {self.innerprecise};
         attr->sparseMode = {self.sparsemode};
         attr->psetype = {self.psetype};
-        attr->prefix = {{ {", ".join(map(str, self.prefix))} }};
-        attr->qStartIdx = {{ {", ".join(map(str, self.qstart))} }};
-        attr->kvStartIdx = {{ {", ".join(map(str, self.kvstart))} }};
-        attr->hasRealshift = {"true" if self.hasRealshift else "false"};
-        attr->hasDropmask = {"true" if self.hasDropmask else "false"};
-        attr->hasPaddingmask = {"true" if self.hasPaddingmask else "false"};
-        attr->hasAttentmask = {"true" if self.hasAttenmask else "false"};
+        attr->prefix = {{ {", ".join(map(str, prefix))} }};
+        attr->qStartIdx = {{ {", ".join(map(str, qstart))} }};
+        attr->kvStartIdx = {{ {", ".join(map(str, kvstart))} }};
+        attr->hasRealshift = {"true" if has_realshift else "false"};
+        attr->hasDropmask = {"true" if has_dropmask else "false"};
+        attr->hasPaddingmask = {"true" if has_paddingmask else "false"};
+        attr->hasAttentmask = {"true" if has_attenmask else "false"};
         op.op_attr.reset(attr);
         """
+        grad_attr_code = attr_code.replace(
+            'op.jt_name = "flashattention";',
+            'op.jt_name = "flashattentionbackward";',
+        )
 
         inputs = [
-            q, k, v, self.realshift, self.dropMask, self.paddingMask,
-            self.attenMask
+            q, k, v, realshift, dropMask, paddingMask, attenMask
         ]
 
         result = flashattention_cmd(
@@ -171,49 +128,30 @@ class FlashAttentionACL(jt.Function):
             inputs,
             output_dtypes=["float", "float", q.dtype],
             output_shapes=[output_shape, output_shape, q.shape],
-            attr_code=attr_code)
-
-        self.maxout = result[0]
-        self.sumout = result[1]
-        self.attenout = result[2]
-
-        return self.attenout
-
-    def grad(self, dy):
-        attr_code = f"""
-        op.jt_name = "flashattentionbackward";
-        FlashAttentionAttr *attr = new FlashAttentionAttr();
-        attr->scale = {self.scale};
-        attr->keepProb = {self.prob};
-        attr->preToken = {self.pretokens};
-        attr->nextToken = {self.nexttokens};
-        attr->headNum = {self.headnum};
-        attr->inputLayout = "{self.layout}";
-        attr->innerPrecise = {self.innerprecise};
-        attr->sparseMode = {self.sparsemode};
-        attr->psetype = {self.psetype};
-        attr->prefix = {{ {", ".join(map(str, self.prefix))} }};
-        attr->qStartIdx = {{ {", ".join(map(str, self.qstart))} }};
-        attr->kvStartIdx = {{ {", ".join(map(str, self.kvstart))} }};
-        attr->hasRealshift = {"true" if self.hasRealshift else "false"};
-        attr->hasDropmask = {"true" if self.hasDropmask else "false"};
-        attr->hasPaddingmask = {"true" if self.hasPaddingmask else "false"};
-        attr->hasAttentmask = {"true" if self.hasAttenmask else "false"};
-        op.op_attr.reset(attr);
-        """
-        inputs = [
-            self.q, self.k, self.v, dy, self.realshift, self.dropMask,
-            self.paddingMask, self.attenMask, self.maxout, self.sumout,
-            self.attenout
-        ]
-
-        result = flashattention_cmd(
-            "FlashAttentionBackward",
-            inputs,
-            output_dtypes=[self.q.dtype, self.k.dtype, self.v.dtype],
-            output_shapes=[self.q.shape, self.k.shape, self.v.shape],
-            attr_code=attr_code)
-        return result
+            attr_code=attr_code,
+            multi_grad_output=2,
+            multi_grad_input_count=3,
+            multi_grad_src=f"""
+            // aclop
+            FlashAttentionBackwardOpRunner op;
+            op.add(in0, true);
+            op.add(in1, true);
+            op.add(in2, true);
+            op.add(dout, true);
+            op.add(in3, true);
+            op.add(in4, true);
+            op.add(in5, true);
+            op.add(in6, true);
+            op.add(pout0, true);
+            op.add(pout1, true);
+            op.add(pout2, true);
+            op.add(out0, false);
+            op.add(out1, false);
+            op.add(out2, false);
+            {grad_attr_code}
+            op.run();
+            """)
+        return result[2]
 
 
 class IncreFlashAttentionACL(jt.Function):

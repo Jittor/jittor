@@ -11,6 +11,8 @@ import numpy as np
 from typing import Union
 from collections.abc import Sequence, Iterable
 
+from ._code import acl_code as conv_cmd
+
 
 def _ntuple(n):
 
@@ -25,47 +27,30 @@ def _ntuple(n):
 _pair = _ntuple(2)
 
 
-def conv_cmd(name: str,
-                inputs: list,
-                output_dtypes: list = None,
-                output_shapes: list = None,
-                attr_code: str = "",
-                attr_header: str = "",
-                outputs: list = None):
-    attr_header = "\nnamespace jittor{" + attr_header + "}\n"
+def _conv_attr_code(stride, padding, dilation, groups, name):
+    return f"""
+        op.jt_name = "{name}";
+        ConvAttr *attr = new ConvAttr();
+        attr->convStrides = {{ {stride[0]}, {stride[1]} }};
+        attr->convPads = {{ {padding[0]}, {padding[1]} }};
+        attr->convDilations = {{ {dilation[0]}, {dilation[1]} }};
+        attr->group = {groups};
+        attr->convOutPads = {{ 0, 0 }};
+        op.op_attr.reset(attr);
+        """
 
-    cuda_header = '''
-    #include "acl/aclops/aclops.h"
-    '''
-    outputs_ = []
-    if outputs is not None:
-        outputs_ = outputs
-    else:
-        assert output_dtypes is not None
-        assert output_shapes is not None
-        assert len(output_dtypes) == len(output_shapes)
-        for i in range(len(output_shapes)):
-            outputs_.append(jt.empty(output_shapes[i], output_dtypes[i]))
-    input_code = ''
-    for i in range(len(inputs)):
-        input_code += f"op.add(in{i}, true);\n"
 
-    output_code = ''
-    for i in range(len(outputs_)):
-        output_code += f"op.add(out{i}, false);\n"
-    return jt.code(outputs=outputs_,
-                   inputs=inputs,
-                   cuda_header=attr_header + cuda_header,
-                   cuda_src=f"""
-   
-    // aclop
-    {name}OpRunner op;
-    {input_code}
-    {output_code}
-    {attr_code}
-    op.run();""")
+def _conv_output_shape(x, weight, stride, padding, dilation):
+    input_height, input_width = x.shape[-2:]
+    kernel_height, kernel_width = weight.shape[-2:]
+    output_height = (input_height + 2 * padding[0] - dilation[0] *
+                     (kernel_height - 1) - 1) // stride[0] + 1
+    output_width = (input_width + 2 * padding[1] - dilation[1] *
+                    (kernel_width - 1) - 1) // stride[1] + 1
+    return (x.shape[0], weight.shape[0], output_height, output_width)
 
-class ConvACL(jt.Function):
+
+class _ConvACLNoBias(jt.Function):
 
     def execute(self,
                 x,
@@ -77,43 +62,21 @@ class ConvACL(jt.Function):
                 groups=1):
         self.input = x
         self.weight = weight
-        self.bias = bias
+        assert bias is None
         padding = _pair(padding)
         stride = _pair(stride)
         dilation = _pair(dilation)
-        out_channels = weight.shape[0]
         if groups <= 0:
             raise ValueError("groups must be a positive integer")
         self.padding = padding
         self.stride = stride
         self.dilation = dilation
         self.groups = groups
-        attr_code = f"""
-            op.jt_name = "conv2d";
-            ConvAttr *attr = new ConvAttr();
-            attr->convStrides = {{ {stride[0]}, {stride[1]} }};
-            attr->convPads = {{ {padding[0]}, {padding[1]} }};
-            attr->convDilations = {{ {dilation[0]}, {dilation[1]} }};
-            attr->group = {groups};
-            attr->convOutPads = {{0,0}};
-            op.op_attr.reset(attr);
-            """
-        input_height, input_width = x.shape[-2:]
-        kernel_height, kernel_width = weight.shape[-2:]
-
-        output_height = (input_height + 2 * padding[0] - dilation[0] *
-                         (kernel_height - 1) - 1) // stride[0] + 1
-        output_width = (input_width + 2 * padding[1] - dilation[1] *
-                        (kernel_width - 1) - 1) // stride[1] + 1
-
-        output_shape = (x.shape[0], out_channels, output_height, output_width)
-
-        inputs = [x, weight]
-        if bias is not None:
-            inputs.append(bias)
+        attr_code = _conv_attr_code(stride, padding, dilation, groups, "conv2d")
+        output_shape = _conv_output_shape(x, weight, stride, padding, dilation)
         result = conv_cmd(
             "Conv2d",
-            inputs,
+            [x, weight],
             output_dtypes=[x.dtype],
             output_shapes=[output_shape],
             attr_code=attr_code,
@@ -123,38 +86,64 @@ class ConvACL(jt.Function):
     def grad(self, grad_output):
         x = self.input
         weight = self.weight
-        bias = self.bias
         inputs = [grad_output, x, weight]
-        if bias is not None:
-            inputs.append(bias)
-        output_shapes = [x.shape, weight.shape]
-        output_dtypes = [x.dtype, weight.dtype]
-        if bias is not None:
-            output_shapes.append(bias.shape)
-            output_dtypes.append(bias.dtype)
-        else:
-            output_shapes.append([weight.shape[0]])
-            output_dtypes.append(x.dtype)
+        output_shapes = [x.shape, weight.shape, [weight.shape[0]]]
+        output_dtypes = [x.dtype, weight.dtype, x.dtype]
         padding = self.padding
         stride = self.stride
         dilation = self.dilation
         groups = self.groups
-        attr_code = f"""
-            op.jt_name = "conv2dbackward";
-            ConvAttr *attr = new ConvAttr();
-            attr->convStrides = {{ {stride[0]}, {stride[1]} }};
-            attr->convPads = {{ {padding[0]}, {padding[1]} }};
-            attr->convDilations = {{ {dilation[0]}, {dilation[1]} }};
-            attr->group = {groups};
-            attr->convOutPads = {{ 0,0}};
-            op.op_attr.reset(attr);
-            """
+        attr_code = _conv_attr_code(
+            stride, padding, dilation, groups, "conv2dbackward")
         results = conv_cmd("Conv2dBackward",
-                                  inputs,
-                                  output_dtypes=output_dtypes,
-                                  output_shapes=output_shapes,
-                                  attr_code=attr_code)
-        if self.bias is None:
-            return results[0], results[1]
+                           inputs,
+                           output_dtypes=output_dtypes,
+                           output_shapes=output_shapes,
+                           attr_code=attr_code)
+        return results[0], results[1]
 
-        return results
+
+class ConvACL:
+
+    def __call__(self,
+                 x,
+                 weight,
+                 bias=None,
+                 stride=1,
+                 padding=0,
+                 dilation=1,
+                 groups=1):
+        if bias is None:
+            return _ConvACLNoBias()(x, weight, bias, stride, padding,
+                                    dilation, groups)
+        if groups <= 0:
+            raise ValueError("groups must be a positive integer")
+
+        padding = _pair(padding)
+        stride = _pair(stride)
+        dilation = _pair(dilation)
+        output_shape = _conv_output_shape(x, weight, stride, padding, dilation)
+        attr_code = _conv_attr_code(stride, padding, dilation, groups, "conv2d")
+        grad_attr_code = _conv_attr_code(
+            stride, padding, dilation, groups, "conv2dbackward")
+
+        return conv_cmd(
+            "Conv2d",
+            [x, weight, bias],
+            output_dtypes=[x.dtype],
+            output_shapes=[output_shape],
+            attr_code=attr_code,
+            multi_grad_src=f"""
+            // aclop
+            Conv2dBackwardOpRunner op;
+            op.add(dout, true);
+            op.add(in0, true);
+            op.add(in1, true);
+            op.add(in2, true);
+            op.add(out0, false);
+            op.add(out1, false);
+            op.add(out2, false);
+            {grad_attr_code}
+            op.run();
+            """,
+        )[0]

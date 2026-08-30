@@ -273,6 +273,8 @@ struct CodeOp : Op {
 
     const char* name() const override { return "code"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
+    void grads(Var** douts, VarPtr* dins) override;
+    void configure_grad();
     DECLARE_jit_run;
 };
 
