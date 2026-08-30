@@ -309,10 +309,81 @@ def change_function():
     def concat(x, dim=0):
         return ConcatACL()(x, dim)
 
+    def constant_pad_acl(x, amounts, value):
+        if (
+            not jt.flags.use_acl
+            or not jt.flags.use_cuda
+            or not all(isinstance(width, (int, np.integer)) for width in amounts)
+            or any(int(width) < 0 for width in amounts)
+        ):
+            return None
+
+        result = x
+        fill_value = float(value)
+        for pair_index in range(len(amounts) // 2):
+            before = int(amounts[2 * pair_index])
+            after = int(amounts[2 * pair_index + 1])
+            if before == 0 and after == 0:
+                continue
+
+            axis = result.ndim - pair_index - 1
+            parts = []
+            fill_shape = list(result.shape)
+            if before:
+                fill_shape[axis] = before
+                parts.append(jt.full(fill_shape, fill_value, dtype=result.dtype))
+            parts.append(result)
+            if after:
+                fill_shape[axis] = after
+                parts.append(jt.full(fill_shape, fill_value, dtype=result.dtype))
+            result = concat(parts, axis)
+        return result
+
     from .aclops.gather_scatter_op import GatherACL
 
     def gather_acl(input, dim, index):
         return GatherACL()(input, dim, index)
+
+    from .aclops.embedding_op import EmbeddingACL
+
+    def embedding_acl(
+        input,
+        weight,
+        padding_idx=None,
+        max_norm=None,
+        norm_type=2.0,
+        scale_grad_by_freq=False,
+        sparse=False,
+    ):
+        del norm_type
+        if (
+            not jt.flags.use_acl
+            or not jt.flags.use_cuda
+            or not isinstance(input, jt.Var)
+            or not isinstance(weight, jt.Var)
+            or input.ndim < 1
+            or weight.ndim != 2
+            or str(input.dtype) not in ("int32", "int64")
+            or str(weight.dtype) != "float32"
+            or max_norm is not None
+            or sparse
+            or not isinstance(scale_grad_by_freq, (bool, np.bool_))
+            or bool(scale_grad_by_freq)
+        ):
+            return None
+        try:
+            num_embeddings = int(weight.shape[0])
+        except (TypeError, ValueError):
+            return None
+        if padding_idx is not None:
+            if not isinstance(padding_idx, (int, np.integer)):
+                return None
+            padding_idx = int(padding_idx)
+            if padding_idx < 0:
+                return None
+            if padding_idx >= num_embeddings:
+                return None
+        return EmbeddingACL(padding_idx, scale_grad_by_freq)(input, weight)
 
     from .aclops.truth_reduce_op import truth_reduce
 
@@ -627,7 +698,13 @@ def change_function():
         if (
             jt.flags.use_acl
             and jt.flags.use_cuda
-            and getattr(jt.flags, "no_grad", 0)
+            and (
+                getattr(jt.flags, "no_grad", 0)
+                or (
+                    str(xq.dtype) == "float32"
+                    and str(xk.dtype) == "float32"
+                )
+            )
             and supported(xq)
             and supported(xk)
         ):
@@ -721,15 +798,13 @@ def change_function():
         return _orig_layernorm_execute(self, x)
     jt.nn.LayerNorm.execute = _layernorm_execute_acl
 
-    # Hugging Face RMSNorm modules already route through this inference hook.
-    # Keep training and unsupported dtype/shape combinations on the existing
-    # differentiable decomposition; use aclnnRmsNorm only for no-grad ACL runs.
+    # Hugging Face RMSNorm modules already route through this hook. CANN provides
+    # both aclnnRmsNorm and aclnnRmsNormGrad for the supported dtype matrix.
     _orig_rms_norm_cuda = jt.nn._rms_norm_cuda
     def _rms_norm_cuda_acl(x, gamma, epsilon=1e-6):
         if (
             jt.flags.use_acl
             and jt.flags.use_cuda
-            and getattr(jt.flags, "no_grad", 0)
             and isinstance(x, jt.Var)
             and isinstance(gamma, jt.Var)
             and isinstance(epsilon, Real)
@@ -749,6 +824,7 @@ def change_function():
                 and all(size > 0 for size in x_shape)
                 and gamma_shape == (x_shape[-1],)
                 and gamma_dtype in supported_gamma_dtypes.get(x_dtype, ())
+                and (getattr(jt.flags, "no_grad", 0) or x_dtype == "float32")
                 and math.isfinite(epsilon_value)
                 and epsilon_value > 0
             ):
@@ -760,6 +836,8 @@ def change_function():
     jt.Var.flip = lambda x, dim_vector=0: jt.flip(x, dim_vector)
     jt.concat = warp(jt.concat, concat)
     jt.stack = warp(jt.stack, stack_acl)
+    jt.nn._acl_constant_pad = constant_pad_acl
+    jt.nn._acl_embedding = embedding_acl
 
     # NPU matmul/bmm precision: default to full fp32 (cubeMathType=0) to match torch's
     # default (TF32/HF32 off) for numerical parity (G3). Set jt.acl_allow_hf32=True to

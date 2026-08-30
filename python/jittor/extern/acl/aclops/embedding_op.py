@@ -53,8 +53,10 @@ def embedding_cmd(name: str,
     
 class EmbeddingACL(jt.Function):
 
-    def __init__(self):
+    def __init__(self, padding_idx=None, scale_grad_by_freq=False):
         super(EmbeddingACL, self).__init__()
+        self.padding_idx = -1 if padding_idx is None else int(padding_idx)
+        self.scale_grad_by_freq = bool(scale_grad_by_freq)
 
     def execute(
         self,
@@ -82,6 +84,8 @@ class EmbeddingACL(jt.Function):
         op.jt_name = "embeddingbackward";
         EmbeddingAttr *attr = new EmbeddingAttr();
         attr->numEmbeddings = {self.weight_shape[0]};
+        attr->paddingIdx = {self.padding_idx};
+        attr->scaleGradByFreq = {str(self.scale_grad_by_freq).lower()};
         op.op_attr.reset(attr);
         """
         grad_weight = embedding_cmd("EmbeddingBackward",

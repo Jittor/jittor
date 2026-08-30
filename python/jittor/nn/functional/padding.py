@@ -1,5 +1,7 @@
 """Functional tensor padding."""
 
+import jittor as jt
+
 
 def pad(x, padding=None, mode="constant", value=0, pad=None):
     # Torch spells the amounts argument ``pad``; Jittor historically used
@@ -14,6 +16,13 @@ def pad(x, padding=None, mode="constant", value=0, pad=None):
     padding = list(padding)
     left = [0] * (x.ndim - len(padding) // 2) + padding[::2][::-1]
     right = [0] * (x.ndim - len(padding) // 2) + padding[1::2][::-1]
+
+    if mode == "constant":
+        acl_pad = getattr(jt.nn, "_acl_constant_pad", None)
+        if acl_pad is not None:
+            result = acl_pad(x, padding, value)
+            if result is not None:
+                return result
 
     out_dims = []
     out_shape = []

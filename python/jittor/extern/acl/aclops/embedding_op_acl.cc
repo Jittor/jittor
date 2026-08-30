@@ -62,7 +62,11 @@ namespace jittor
     {
         auto attr = dynamic_cast<EmbeddingAttr *>(op_attr.get());
         auto numEmbeddings = attr->numEmbeddings;
-        ret = aclnnEmbeddingDenseBackwardGetWorkspaceSize(inputTensors[0], inputTensors[1], numEmbeddings, 0, false, outputTensors[0], &workspaceSize, &executor);
+        auto paddingIdx = attr->paddingIdx;
+        auto scaleGradByFreq = attr->scaleGradByFreq;
+        ret = aclnnEmbeddingDenseBackwardGetWorkspaceSize(
+            inputTensors[0], inputTensors[1], numEmbeddings, paddingIdx,
+            scaleGradByFreq, outputTensors[0], &workspaceSize, &executor);
 
         checkRet(ret);
 

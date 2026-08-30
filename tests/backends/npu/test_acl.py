@@ -304,9 +304,116 @@ class TestACL(unittest.TestCase):
 
         x = jt.array(x_np)
         gamma = jt.array(gamma_np)
-        self.assertIsNone(jt.nn._rms_norm_cuda(x, gamma, 1e-6))
+        self.assertIsNone(
+            jt.nn._rms_norm_cuda(x.bfloat16(), gamma, 1e-6)
+        )
         with jt.no_grad():
             self.assertIsNone(jt.nn._rms_norm_cuda(x, gamma, object()))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_training_rms_norm(self):
+        rng = np.random.RandomState(20260830)
+        x_np = rng.randn(2, 3, 1024).astype("float32")
+        gamma_np = rng.uniform(
+            0.5, 1.5, size=(1024,)).astype("float32")
+        cotangent_np = rng.randn(2, 3, 1024).astype("float32")
+        epsilon = 1e-6
+
+        inverse_rms = 1.0 / np.sqrt(
+            np.mean(x_np * x_np, axis=-1, keepdims=True) + epsilon)
+        expected_output = x_np * inverse_rms * gamma_np
+        weighted_cotangent = cotangent_np * gamma_np
+        expected_grad_x = (
+            weighted_cotangent * inverse_rms
+            - x_np
+            * inverse_rms ** 3
+            * np.mean(weighted_cotangent * x_np, axis=-1, keepdims=True)
+        )
+        expected_grad_gamma = np.sum(
+            cotangent_np * x_np * inverse_rms, axis=(0, 1))
+
+        with jt.log_capture_scope(
+            log_v=0, log_vprefix="acl_op_exec.cc=100"
+        ) as logs:
+            x = jt.array(x_np)
+            gamma = jt.array(gamma_np)
+            output = jt.nn._rms_norm_cuda(x, gamma, epsilon)
+            self.assertIsNotNone(output)
+            grad_x, grad_gamma = jt.grad(
+                (output * jt.array(cotangent_np)).sum(), [x, gamma]
+            )
+            output, grad_x, grad_gamma = jt.fetch_sync(
+                [output, grad_x, grad_gamma]
+            )
+
+        np.testing.assert_allclose(
+            output, expected_output, atol=2e-5, rtol=2e-5)
+        np.testing.assert_allclose(
+            grad_x, expected_grad_x, atol=3e-5, rtol=3e-5)
+        np.testing.assert_allclose(
+            grad_gamma, expected_grad_gamma, atol=3e-5, rtol=3e-5)
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_training_embedding(self):
+        rng = np.random.RandomState(20260830)
+        weight_np = rng.randn(7, 5).astype("float32")
+        indices_np = np.array([[1, 3, 1, 2], [6, 3, 2, 2]], dtype="int64")
+        cotangent_np = rng.randn(2, 4, 5).astype("float32")
+        padding_idx = 3
+        expected_grad = np.zeros_like(weight_np)
+        expected_grad_no_padding = np.zeros_like(weight_np)
+        for batch in range(indices_np.shape[0]):
+            for token in range(indices_np.shape[1]):
+                index = indices_np[batch, token]
+                expected_grad_no_padding[index] += cotangent_np[batch, token]
+                if index != padding_idx:
+                    expected_grad[index] += cotangent_np[batch, token]
+
+        with jt.log_capture_scope(
+            log_v=0, log_vprefix="acl_op_exec.cc=100"
+        ) as logs:
+            weight = jt.array(weight_np)
+            output = jt.nn.embedding(
+                jt.array(indices_np), weight, padding_idx=padding_idx
+            )
+            grad_weight = jt.grad(
+                (output * jt.array(cotangent_np)).sum(), weight
+            )
+            output_no_padding = jt.nn.embedding(
+                jt.array(indices_np), weight
+            )
+            grad_weight_no_padding = jt.grad(
+                (output_no_padding * jt.array(cotangent_np)).sum(), weight
+            )
+            values = jt.fetch_sync([
+                output,
+                grad_weight,
+                output_no_padding,
+                grad_weight_no_padding,
+            ])
+
+        np.testing.assert_allclose(
+            values[0], weight_np[indices_np], atol=2e-5, rtol=2e-5
+        )
+        np.testing.assert_allclose(
+            values[1], expected_grad, atol=2e-5, rtol=2e-5
+        )
+        np.testing.assert_allclose(
+            values[2], weight_np[indices_np], atol=2e-5, rtol=2e-5
+        )
+        np.testing.assert_allclose(
+            values[3], expected_grad_no_padding, atol=2e-5, rtol=2e-5
+        )
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertTrue(any("compile acl op" in message for message in messages))
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+        self.assertIsNone(jt.nn._acl_embedding(
+            jt.array(indices_np), jt.array(weight_np).bfloat16()
+        ))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_inference_rotary_embedding(self):
@@ -356,6 +463,72 @@ class TestACL(unittest.TestCase):
                 err_msg=dtype)
         messages = [entry["msg"].lower() for entry in logs]
         self.assertTrue(any("compile acl op" in message for message in messages))
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_training_rotary_embedding(self):
+        rng = np.random.RandomState(20260830)
+        q_np = rng.randn(1, 16, 7, 128).astype("float32")
+        k_np = rng.randn(1, 8, 7, 128).astype("float32")
+        cos_np = rng.randn(1, 1, 7, 128).astype("float32")
+        sin_np = rng.randn(1, 1, 7, 128).astype("float32")
+        grad_q_np = rng.randn(*q_np.shape).astype("float32")
+        grad_k_np = rng.randn(*k_np.shape).astype("float32")
+
+        def rotate_half(value):
+            half = value.shape[-1] // 2
+            return np.concatenate(
+                (-value[..., half:], value[..., :half]), axis=-1)
+
+        expected_q = q_np * cos_np + rotate_half(q_np) * sin_np
+        expected_k = k_np * cos_np + rotate_half(k_np) * sin_np
+        expected_grad_q = (
+            grad_q_np * cos_np - rotate_half(grad_q_np * sin_np)
+        )
+        expected_grad_k = (
+            grad_k_np * cos_np - rotate_half(grad_k_np * sin_np)
+        )
+        expected_grad_cos = np.sum(
+            grad_q_np * q_np, axis=1, keepdims=True
+        ) + np.sum(grad_k_np * k_np, axis=1, keepdims=True)
+        expected_grad_sin = np.sum(
+            grad_q_np * rotate_half(q_np), axis=1, keepdims=True
+        ) + np.sum(
+            grad_k_np * rotate_half(k_np), axis=1, keepdims=True
+        )
+
+        with jt.log_capture_scope(
+            log_v=0, log_vprefix="acl_op_exec.cc=100"
+        ) as logs:
+            q = jt.array(q_np)
+            k = jt.array(k_np)
+            cos = jt.array(cos_np)
+            sin = jt.array(sin_np)
+            output_q, output_k = jt.nn.rotary_emb(
+                q, k, freq_cos=cos, freq_sin=sin
+            )
+            grad_q, grad_k, grad_cos, grad_sin = jt.grad(
+                (output_q * jt.array(grad_q_np)).sum()
+                + (output_k * jt.array(grad_k_np)).sum(),
+                [q, k, cos, sin],
+            )
+            values = jt.fetch_sync([
+                output_q, output_k, grad_q, grad_k, grad_cos, grad_sin
+            ])
+
+        expected = (
+            expected_q,
+            expected_k,
+            expected_grad_q,
+            expected_grad_k,
+            expected_grad_cos,
+            expected_grad_sin,
+        )
+        for actual, reference in zip(values, expected):
+            np.testing.assert_allclose(
+                actual, reference, atol=3e-5, rtol=3e-5)
+        messages = [entry["msg"].lower() for entry in logs]
         self.assertFalse(any("compile cpu" in message for message in messages))
         self.assertFalse(any("fallback cpu" in message for message in messages))
 

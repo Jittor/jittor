@@ -228,8 +228,13 @@ allowing them to abort or stall the process:
   implementation and are skipped when it is absent;
 - Qwen3 bfloat16 is verified for eager, no-grad greedy inference. Fused ACL SDPA
   is additionally verified for Qwen3-0.6B with FlashAttentionScoreV2 prefill and
-  IncreFlashAttentionV4 decode; Qwen3-8B BF16 SDPA, training, sampling,
-  quantization, and other model families remain separate capability gates;
+  IncreFlashAttentionV4 decode. Qwen3-0.6B float32 eager forward, causal-LM loss,
+  and backward are also verified with zero fallback; the optimized RoPE result
+  currently requires an external Transformers module patch to route Qwen3 to
+  `jt.nn.rotary_emb`. Optimizer update, BF16 training, Qwen3-8B BF16 SDPA and
+  training, sampling, quantization, and other model families remain separate
+  capability gates. See the
+  [Qwen3 forward/backward report](../../agent/results/transformers/2026-08-30-qwen3-ascend-training.md);
 - ACL does not provide general float64 operator coverage, so float64 fallback
   is not accepted as evidence for an NPU operation.
 

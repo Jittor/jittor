@@ -2,7 +2,7 @@
 
 - Status: Current index, not a history log
 - Last reviewed: 2026-08-30
-- Baseline reviewed: `139aac05` plus the current ACL arg-reduce follow-up
+- Baseline reviewed: `b6ce20cdf` plus the current Qwen3 ACL training follow-up
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -85,8 +85,8 @@ Transformers 4.56.2 Qwen3-8B float32 loads all 8,190,735,360 parameters; SDPA,
 greedy `arg_reduce`, and mask `all` run on ACL without CPU fallback. A native-shape `empty`
 fast path brings 0.6B decode to 15.90 token/s versus native `torch_npu` 16.19 token/s.
 Qwen3-0.6B BF16 SDPA passes zero-fallback generation at 14.92 token/s versus native 15.31 token/s.
-See the [Ascend guide](../../docs/guides/ascend-910b.md), [validation report](../results/2026-08-28-ascend-910b-validation.md), [arg-reduce backward follow-up](../results/2026-08-30-npu-arg-reduce-backward.md), [Qwen3 performance report](../results/transformers/2026-08-28-qwen3-ascend-performance.md), the complete [CPU](../results/2026-08-22-complete-cpu-test-suite.md) and [CUDA](../results/2026-08-22-cuda-test-suite.md) reports, plus the
-[parallel follow-up](../results/2026-08-22-cuda-parallel-range-network-oracle.md).
+Qwen3-0.6B FP32 eager forward/loss/backward also passes zero-fallback at `1.07x-1.12x` native `torch_npu`; optimizer update and BF16 training remain open. See the [forward/backward report](../results/transformers/2026-08-30-qwen3-ascend-training.md).
+See the [Ascend guide](../../docs/guides/ascend-910b.md), [validation report](../results/2026-08-28-ascend-910b-validation.md), [arg-reduce follow-up](../results/2026-08-30-npu-arg-reduce-backward.md), [Qwen3 inference report](../results/transformers/2026-08-28-qwen3-ascend-performance.md), complete [CPU](../results/2026-08-22-complete-cpu-test-suite.md)/[CUDA](../results/2026-08-22-cuda-test-suite.md) reports, and the [parallel follow-up](../results/2026-08-22-cuda-parallel-range-network-oracle.md).
 The current fail-closed optional CUDA base gate passes 16 TorchMetrics,
 MMCV/MMEngine, PEFT, TensorDict, and FlashAttention-adapter tests from one
 retained cache; TorchMetrics is split by domain so cold compilation does not
@@ -103,7 +103,7 @@ dominant CUDA GEMMs lag the PyTorch reference.
 Performance work uses ASV, isolated caches, synchronized measurements, and exact
 commit labels. The same-version ecosystem harness now verifies twelve
 Transformers/Diffusers/PEFT/ms-swift/MMCV/MMEngine CPU and CUDA cases, while
-real-scale training performance remains incomplete. Current verl core
+real-scale training remains incomplete; these and the following verl/vLLM results are CPU/CUDA evidence, not NPU claims. Current verl core
 algorithm/FSDP2 gates also pass on CPU/CUDA. The maintained framework FSDP2
 gate additionally passes single-node four-rank NCCL sharding, collectives, and
 sharded SGD on real CUDA; tiny Qwen3 end-to-end verl PPO also passes native

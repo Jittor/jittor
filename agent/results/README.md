@@ -70,6 +70,7 @@
 
 ## 性能
 
+- [2026-08-30 Qwen3-0.6B Ascend FP32 前向与反向优化](transformers/2026-08-30-qwen3-ascend-training.md)
 - [2026-08-28 Qwen3-0.6B Ascend 推理性能诊断与优化](transformers/2026-08-28-qwen3-ascend-performance.md)
 - [2026-08-26 Transformer 训练归一化与 float32 fused-attention 复验](2026-08-26-transformers-training-normalization.md)
 - [2026-07-07 Transformers 初始性能分析](2026-07-07-transformers-performance.md)

@@ -27,6 +27,7 @@
 #include "opt/tuner_manager.h"
 #include "utils/str_utils.h"
 #include "aclnn/aclnn.h"
+#include "aclnnop/aclnn_rms_norm_grad.h"
 #include "norms_op_acl.h"
 
 namespace jittor
@@ -165,6 +166,32 @@ namespace jittor
         ret = aclnnRmsNorm(
             workspaceAddr, workspaceSize, executor, aclstream);
         CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnRmsNorm failed. ERROR: %d\n", name.c_str(), ret); return);
+
+        syncRun();
+
+        return;
+    }
+
+    RmsNormGradOpRunner::RmsNormGradOpRunner() : BaseOpRunner("RmsNormGrad")
+    {
+    }
+
+    void RmsNormGradOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    {
+        ret = aclnnRmsNormGradGetWorkspaceSize(
+            inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3],
+            outputTensors[0], outputTensors[1], &workspaceSize, &executor);
+
+        checkRet(ret);
+
+        if (workspaceSize > 0)
+        {
+            mallocWorkSpace(workspaceSize);
+        }
+
+        ret = aclnnRmsNormGrad(
+            workspaceAddr, workspaceSize, executor, aclstream);
+        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnRmsNormGrad failed. ERROR: %d\n", name.c_str(), ret); return);
 
         syncRun();
 

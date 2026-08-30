@@ -45,7 +45,24 @@ def rope_cmd(name: str,
 class RotaryPositionEmbeddingACL(jt.Function):
 
     def execute(self, x, cos, sin):
+        self.input = x
+        self.cos = cos
+        self.sin = sin
         output = jt.empty(x.shape, x.dtype)
         return rope_cmd(
             "RotaryPositionEmbedding", [x, cos, sin], outputs=[output],
             attr_code='op.jt_name = "rotary_position_embedding";')[0]
+
+    def grad(self, grad_output):
+        outputs = [
+            jt.empty(self.input.shape, self.input.dtype),
+            jt.empty(self.cos.shape, self.cos.dtype),
+            jt.empty(self.sin.shape, self.sin.dtype),
+        ]
+        result = rope_cmd(
+            "RotaryPositionEmbeddingGrad",
+            [grad_output, self.cos, self.sin, self.input],
+            outputs=outputs,
+            attr_code='op.jt_name = "rotary_position_embedding_grad";',
+        )
+        return result[0], result[1], result[2]

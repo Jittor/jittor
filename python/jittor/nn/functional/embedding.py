@@ -12,6 +12,19 @@ def embedding(
     scale_grad_by_freq=False,
     sparse=False,
 ):
+    acl_embedding = getattr(jt.nn, "_acl_embedding", None)
+    if acl_embedding is not None:
+        result = acl_embedding(
+            input,
+            weight,
+            padding_idx,
+            max_norm,
+            norm_type,
+            scale_grad_by_freq,
+            sparse,
+        )
+        if result is not None:
+            return result
     if max_norm is not None:
         indices = input.reshape((-1,))
         if not jt.flags.use_acl:

@@ -27,6 +27,7 @@
 #include "opt/tuner_manager.h"
 #include "utils/str_utils.h"
 #include "aclnn/aclnn.h"
+#include "aclnnop/aclnn_rotary_position_embedding_grad.h"
 #include "rope_op_acl.h"
 
 namespace jittor
@@ -52,6 +53,31 @@ namespace jittor
             workspaceAddr, workspaceSize, executor, aclstream);
         CHECK_RET(ret == ACL_SUCCESS,
                   LOG_PRINT("%s: aclnnRotaryPositionEmbedding failed. ERROR: %d\n", name.c_str(), ret); return);
+
+        syncRun();
+    }
+
+    RotaryPositionEmbeddingGradOpRunner::RotaryPositionEmbeddingGradOpRunner()
+        : BaseOpRunner("RotaryPositionEmbeddingGrad")
+    {
+    }
+
+    void RotaryPositionEmbeddingGradOpRunner::executeOp(
+        std::unordered_map<string, AclOpFunctions>::iterator &it)
+    {
+        ret = aclnnRotaryPositionEmbeddingGradGetWorkspaceSize(
+            inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3],
+            0, outputTensors[0], outputTensors[1], outputTensors[2],
+            &workspaceSize, &executor);
+        checkRet(ret);
+
+        if (workspaceSize > 0)
+            mallocWorkSpace(workspaceSize);
+
+        ret = aclnnRotaryPositionEmbeddingGrad(
+            workspaceAddr, workspaceSize, executor, aclstream);
+        CHECK_RET(ret == ACL_SUCCESS,
+                  LOG_PRINT("%s: aclnnRotaryPositionEmbeddingGrad failed. ERROR: %d\n", name.c_str(), ret); return);
 
         syncRun();
     }

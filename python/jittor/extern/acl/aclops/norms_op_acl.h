@@ -49,4 +49,13 @@ namespace jittor
         RmsNormOpRunner();
     };
 
+    class RmsNormGradOpRunner : public BaseOpRunner
+    {
+
+    protected:
+        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+    public:
+        RmsNormGradOpRunner();
+    };
+
 }

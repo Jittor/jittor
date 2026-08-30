@@ -198,6 +198,8 @@ class LayerNormACL(jt.Function):
 class RmsNormACL(jt.Function):
 
     def execute(self, x, weight, eps):
+        self.input = x
+        self.weight = weight
         reduced_shape = list(x.shape[:-1]) + [1]
         outputs = [
             jt.empty(x.shape, x.dtype),
@@ -212,4 +214,21 @@ class RmsNormACL(jt.Function):
         result = norms_cmd(
             "RmsNorm", inputs=[x, weight], outputs=outputs,
             attr_code=attr_code)
+        self.rstd = result[1]
         return result[0]
+
+    def grad(self, grad_output):
+        outputs = [
+            jt.empty(self.input.shape, self.input.dtype),
+            jt.empty(self.weight.shape, "float32"),
+        ]
+        result = norms_cmd(
+            "RmsNormGrad",
+            inputs=[grad_output, self.input, self.rstd, self.weight],
+            outputs=outputs,
+            attr_code='op.jt_name = "rmsnormgrad";',
+        )
+        grad_weight = result[1]
+        if str(self.weight.dtype) != "float32":
+            grad_weight = grad_weight.cast(self.weight.dtype)
+        return result[0], grad_weight
