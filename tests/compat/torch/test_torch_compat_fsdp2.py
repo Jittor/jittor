@@ -659,6 +659,10 @@ class TestFSDP2Compat(unittest.TestCase):
         self.assertEqual(prefixed.get("step"), b"1")
         self.assertTrue(issubclass(TCPStore, Store))
         self.assertTrue(issubclass(FileStore, Store))
+        self.assertIs(jt._C._distributed_c10d.Store, Store)
+        self.assertIs(jt._C._distributed_c10d.TCPStore, TCPStore)
+        self.assertIs(jt._C._distributed_c10d.FileStore, FileStore)
+        self.assertIs(jt._C._distributed_c10d.PrefixStore, PrefixStore)
         self.assertEqual(Backend.NCCL, "nccl")
         # NCCL rides on CUDA, so its availability follows the build -- the CPU
         # session deliberately runs without a device, and asserting it

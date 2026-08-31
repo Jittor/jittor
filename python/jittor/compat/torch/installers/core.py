@@ -18,7 +18,7 @@ from ..nested import (
 )
 from ..types import (
     _dtype_to_str,
-    _make_dtypes, device, dtype,
+    _make_dtypes, device, dtype, make_torch_types_module,
 )
 
 def install(ctx):
@@ -26,6 +26,7 @@ def install(ctx):
     ctx.registry.publish("torch", g)
     g.torch = g
     ctx.registry.publish("torch.torch", g)
+    ctx.registry.publish("torch.types", make_torch_types_module())
     g._torch_make_parameter = _torch_make_parameter
     g._torch_prune_leaf_registry = _torch_prune_leaf_registry
     if not hasattr(g, "_vj_native_load"):

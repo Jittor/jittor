@@ -1,5 +1,9 @@
 """Torch-compatible dtype, device, and residency primitives."""
 
+import os
+import types as _python_types
+import typing
+
 import jittor as jt
 
 _NATIVE_DTYPE_CONVERTERS = {}
@@ -207,6 +211,38 @@ class device:
 # Model construction in from_pretrained is single-threaded, so a plain list
 # is sufficient.
 _DEVICE_CTX_STACK = []
+
+
+Number = typing.Union[int, float, bool]
+Device = typing.Union[device, str, int, type(None)]
+FileLike = typing.Union[str, os.PathLike, typing.IO[bytes]]
+
+
+class Storage:
+    """Typing-level storage protocol exposed by ``torch.types``."""
+
+    def __deepcopy__(self, memo):
+        raise NotImplementedError
+
+    def _new_shared(self, size):
+        raise NotImplementedError
+
+    def _write_file(self, file, is_real_file, save_size, element_size):
+        raise NotImplementedError
+
+    def element_size(self):
+        raise NotImplementedError
+
+
+def make_torch_types_module():
+    module = _python_types.ModuleType("torch.types")
+    module.Number = Number
+    module.Device = Device
+    module.FileLike = FileLike
+    module.Storage = Storage
+    module._Number = (int, float, bool)
+    module.__all__ = ["Number", "Device", "FileLike", "Storage"]
+    return module
 
 
 # ---- CPU-residency support for the torch device= API -----------------------

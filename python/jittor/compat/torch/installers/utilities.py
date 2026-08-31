@@ -564,6 +564,9 @@ def install(ctx):
             "__enter__": lambda self: self,
             "__exit__": lambda self, *a: False,
         })
+        _fake_tensor.unset_fake_temporarily = (
+            lambda: _ctxlib_utils.nullcontext()
+        )
         _functional_tensor.FunctionalTensor = type("FunctionalTensor", (), {})
         _subclasses.fake_tensor = _fake_tensor
         _subclasses.functional_tensor = _functional_tensor

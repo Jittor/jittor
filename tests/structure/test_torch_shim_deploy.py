@@ -34,6 +34,16 @@ def setUpModule():
 
 
 class TestTorchShimDeploy(unittest.TestCase):
+    def _write_flash_attn_metadata(self, source):
+        metadata_root = source / "flash_attn_dist_info"
+        metadata_root.mkdir()
+        (metadata_root / "METADATA").write_text(
+            "Name: flash-attn\nVersion: 2.7.4.post1\n", encoding="utf-8"
+        )
+        (metadata_root / "top_level.txt").write_text(
+            "flash_attn\n", encoding="utf-8"
+        )
+
     def test_resource_root_is_resolved_per_call(self):
         source = Path(deploy_module.__file__).resolve().parent / "resources"
         with tempfile.TemporaryDirectory() as target, mock.patch.object(
@@ -96,6 +106,7 @@ class TestTorchShimDeploy(unittest.TestCase):
         (source / "torch_dist_info" / "METADATA").write_text(
             "Name: torch\nVersion: 9.9.0\n", encoding="utf-8"
         )
+        self._write_flash_attn_metadata(source)
         for relative in (
             "example/__init__.py",
             "example/helpers.py",
@@ -214,6 +225,13 @@ class TestTorchShimDeploy(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "torch metadata"):
             deploy_module._plan(source / "target", resource_root=source)
 
+        (source / "torch_dist_info").mkdir()
+        (source / "torch_dist_info" / "METADATA").write_text(
+            "Name: torch\nVersion: 9.9.0\n", encoding="utf-8"
+        )
+        with self.assertRaisesRegex(RuntimeError, "flash-attn metadata"):
+            deploy_module._plan(source / "target", resource_root=source)
+
     def test_plan_rejects_any_first_level_stub_directory_without_initializer(self):
         temporary_directory = tempfile.TemporaryDirectory()
         self.addCleanup(temporary_directory.cleanup)
@@ -246,6 +264,7 @@ class TestTorchShimDeploy(unittest.TestCase):
         (package / "__init__.py").write_text("stub = True\n", encoding="utf-8")
         (bytecode_cache / "__init__.cpython-311.pyc").write_bytes(b"bytecode")
         metadata.write_text("Name: torch\nVersion: 9.9.0\n", encoding="utf-8")
+        self._write_flash_attn_metadata(source)
 
         planned = deploy_module._plan(source / "target", resource_root=source)
 
@@ -265,6 +284,7 @@ class TestTorchShimDeploy(unittest.TestCase):
         package_init = package / "__init__.py"
         package_init.write_text("stub = True\n", encoding="utf-8")
         metadata.write_text("Name: torch\nVersion: 9.9.0\n", encoding="utf-8")
+        self._write_flash_attn_metadata(source)
 
         _checked_target, problems = deploy_module.check_details(
             source / "stubs", resource_root=source

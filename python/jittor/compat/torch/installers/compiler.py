@@ -6,6 +6,8 @@ changing the compatibility semantics.
 
 import jittor as jt
 
+from ..library import install_torch_library
+
 
 def install(ctx):
     _modules = ctx.registry.module_map
@@ -31,7 +33,9 @@ def install(ctx):
     _alias("compile", _compile)
     # torch.jit: jittor has no TorchScript; the script/trace decorators are pass-throughs
     # (the eager fn already runs), and is_scripting/is_tracing report False.
+    import abc as _abc
     import types as _types2
+    import typing as _typing
     _compiler = getattr(g, "compiler", None) or _types2.ModuleType("torch.compiler")
     _cid = lambda f=None, *a, **k: (f if f is not None and callable(f) else (lambda h: h))
     _compiler.is_compiling = lambda: False
@@ -46,6 +50,26 @@ def install(ctx):
     _modules["torch.compiler"] = _compiler
     if not hasattr(g, "compiler"):
         g.compiler = _compiler
+    _inductor = _types2.ModuleType("torch._inductor")
+    _inductor.__path__ = []
+    _custom_graph_pass = _types2.ModuleType(
+        "torch._inductor.custom_graph_pass")
+    class CustomGraphPass(metaclass=_abc.ABCMeta):
+        @_abc.abstractmethod
+        def __call__(self, graph):
+            raise NotImplementedError
+
+        @_abc.abstractmethod
+        def uuid(self):
+            raise NotImplementedError
+    CustomGraphPass.__module__ = _custom_graph_pass.__name__
+    _custom_graph_pass.CustomGraphPass = CustomGraphPass
+    _custom_graph_pass.CustomGraphPassType = _typing.Union[
+        CustomGraphPass, _typing.Callable, type(None)]
+    _inductor.custom_graph_pass = _custom_graph_pass
+    _modules["torch._inductor"] = _inductor
+    _modules["torch._inductor.custom_graph_pass"] = _custom_graph_pass
+    g._inductor = _inductor
     _jit = _types2.SimpleNamespace()
     _jit.script = lambda f=None, **k: (f if f is not None else (lambda g: g))
     _jit.trace = lambda f=None, *a, **k: (f if f is not None else (lambda g: g))
@@ -138,72 +162,7 @@ def install(ctx):
     _modules["torch._functorch"] = _functorch_pkg
     _modules["torch._functorch.vmap"] = _functorch_vmap
     setattr(g, "_functorch", _functorch_pkg)
-    _library = _types2.ModuleType("torch.library")
-    class _OpNamespace:
-        def __init__(self, ns):
-            object.__setattr__(self, "_ns", ns)
-            object.__setattr__(self, "_ops", {})
-        def _register(self, name, fn):
-            object.__getattribute__(self, "_ops")[name] = fn
-        def __getattr__(self, name):
-            ops = object.__getattribute__(self, "_ops")
-            if name in ops:
-                return ops[name]
-            raise AttributeError("torch.ops.%s has no op '%s'" % (
-                object.__getattribute__(self, "_ns"), name))
-    class _OpsDispatcher:
-        def __init__(self, base):
-            object.__setattr__(self, "_base", base)
-            object.__setattr__(self, "_ns", {})
-        def _register(self, ns, name, fn):
-            namespaces = object.__getattribute__(self, "_ns")
-            namespaces.setdefault(ns, _OpNamespace(ns))._register(name, fn)
-        def __getattr__(self, name):
-            namespaces = object.__getattribute__(self, "_ns")
-            if name in namespaces:
-                return namespaces[name]
-            base = object.__getattribute__(self, "_base")
-            if base is not None:
-                return getattr(base, name)
-            raise AttributeError(name)
-    _ops_dispatcher = getattr(g, "ops", None)
-    if not isinstance(_ops_dispatcher, _OpsDispatcher):
-        _ops_dispatcher = _OpsDispatcher(_ops_dispatcher)
-    def _grouped_mm_fallback(input, weight, offs, *a, **k):
-        out = jt.zeros((input.shape[0], weight.shape[2]), dtype=input.dtype)
-        offs_list = offs.numpy().tolist() if hasattr(offs, "numpy") else list(offs)
-        start = 0
-        for i, end in enumerate(offs_list):
-            end = int(end)
-            if end > start:
-                out[start:end] = jt.matmul(input[start:end], weight[i])
-            start = end
-        return out
-    def _custom_op(name=None, fn=None, *a, **k):
-        def deco(impl):
-            if isinstance(name, str) and "::" in name:
-                ns, op = name.split("::", 1)
-                real = _grouped_mm_fallback if name == "transformers::grouped_mm_fallback" else impl
-                _ops_dispatcher._register(ns, op, real)
-            return impl
-        return deco(fn) if fn is not None else deco
-    _library.custom_op = _custom_op
-    _library.register_fake = lambda *a, **k: (lambda f: f)
-    _library.register_kernel = lambda *a, **k: (lambda f: f)
-    _library.impl = lambda *a, **k: (lambda f: f)
-    _library.register_autograd = lambda *a, **k: (lambda f: f)
-    _library.register_torch_dispatch = lambda *a, **k: (lambda f: f)
-    _library.register_vmap = lambda *a, **k: (lambda f: f)
-    _library.opcheck = lambda *a, **k: None
-    _library.get_ctx = lambda: None
-    _library.Library = type("Library", (), {
-        "__init__": lambda self, *a, **k: None,
-        "define": lambda self, *a, **k: None,
-        "impl": lambda self, *a, **k: None,
-    })
-    _modules["torch.library"] = _library
-    g.library = _library
-    g.ops = _ops_dispatcher
+    install_torch_library(g, _modules)
 
     # torch.func (functorch): functional transforms used by LoRA / meta-learning /
     # model ensembling (functorch). Jittor's autograd is graph-based, so these are

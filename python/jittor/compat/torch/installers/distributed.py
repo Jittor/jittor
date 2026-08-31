@@ -816,6 +816,7 @@ def _install_distributed(g, registry=None):
     dist.PrefixStore = PrefixStore
     for name in ("Store", "TCPStore", "FileStore", "PrefixStore"):
         setattr(c10d, name, getattr(dist, name))
+        setattr(g._C._distributed_c10d, name, getattr(dist, name))
 
     class _RendezvousModule(_types.ModuleType):
         def __call__(self, *args, **kwargs):

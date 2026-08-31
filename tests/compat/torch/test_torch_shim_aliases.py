@@ -3,6 +3,7 @@
 from __future__ import print_function
 
 import importlib
+import importlib.metadata
 import json
 import os
 from pathlib import Path
@@ -39,6 +40,25 @@ DEPLOYED_ONLY_BASELINE_KEYS = {
 
 
 class TestTorchShimAliases(unittest.TestCase):
+    def test_deployment_publishes_flash_attn_distribution_metadata(self):
+        from jittor.compat.shim.deploy import deploy
+
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "site-packages"
+            deploy(target)
+            distributions = {
+                dist.metadata["Name"]: dist
+                for dist in importlib.metadata.distributions(path=[target])
+            }
+            self.assertIn("flash-attn", distributions)
+            self.assertEqual(
+                distributions["flash-attn"].version, "2.7.4.post1")
+            self.assertEqual(
+                distributions["flash-attn"].read_text(
+                    "top_level.txt").strip(),
+                "flash_attn",
+            )
+
     def _subprocess_env(self, extra_pythonpath=None):
         env = os.environ.copy()
         python_root = Path(__file__).resolve().parents[3] / "python"

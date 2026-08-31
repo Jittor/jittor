@@ -1,0 +1,4 @@
+Metadata-Version: 2.1
+Name: flash-attn
+Version: 2.7.4.post1
+Summary: Jittor-backed flash-attn compatibility surface

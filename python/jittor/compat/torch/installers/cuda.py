@@ -173,7 +173,8 @@ class _DeviceProps:
 
 def _install_cuda(g, registry=None):
     _modules = registry_for(g, registry).module_map
-    import types as _types, contextlib
+    import threading
+    import types as _types
     cuda = _types.ModuleType("torch.cuda")
     def _cuda_visible_devices_empty():
         import os as _os_cuda
@@ -289,7 +290,15 @@ def _install_cuda(g, registry=None):
     # stub classes referenced in annotations / guarded paths
     cuda.CUDAGraph = type("CUDAGraph", (), {})
     class _Stream:
-        def __init__(self, *a, **k): self.cuda_stream = 0
+        def __init__(self, device=None, priority=0, *a, **k):
+            self.cuda_stream = 0
+            if device is None:
+                self.device = g.device("cuda", cuda.current_device())
+            elif isinstance(device, int):
+                self.device = g.device("cuda", device)
+            else:
+                self.device = g.device(device)
+            self.priority = int(priority)
         def __enter__(self): return self
         def __exit__(self, *a): return False
         def synchronize(self): jt.sync_all(True)
@@ -305,8 +314,39 @@ def _install_cuda(g, registry=None):
     g.Stream = cuda.Stream
     g.Event = cuda.Event
     g.CUDAGraph = cuda.CUDAGraph
-    cuda.stream = lambda s=None: contextlib.nullcontext()
-    cuda.current_stream = lambda *a, **k: _Stream()
+    # Jittor currently launches CUDA/ACL work on one physical backend stream.
+    # Keep the Python-visible current-stream identity coherent while all logical
+    # streams remain serialized on that physical stream.
+    _stream_state = threading.local()
+    _default_stream = _Stream()
+    def _current_stream(*a, **k):
+        return getattr(_stream_state, "current", _default_stream)
+    def _set_stream(stream):
+        if stream is None:
+            return None
+        if not isinstance(stream, _Stream):
+            raise TypeError("set_stream expects a torch.cuda.Stream or None")
+        _stream_state.current = stream
+        return None
+    class _StreamContext:
+        def __init__(self, stream):
+            if stream is not None and not isinstance(stream, _Stream):
+                raise TypeError("stream expects a torch.cuda.Stream or None")
+            self.stream = stream
+            self.previous = None
+        def __enter__(self):
+            if self.stream is not None:
+                self.previous = _current_stream()
+                _set_stream(self.stream)
+            return self
+        def __exit__(self, *exc):
+            if self.stream is not None:
+                _set_stream(self.previous)
+            return False
+    cuda.stream = _StreamContext
+    cuda.set_stream = _set_stream
+    cuda.current_stream = _current_stream
+    cuda.default_stream = lambda *a, **k: _default_stream
     # report REAL device memory from jittor's MemInfo (was a 0-stub, so training-code
     # memory logging printed 0). total_cuda_used on an accelerator, else total_cpu_used.
     # jittor doesn't expose a per-reset peak, so max_* track a process-lifetime high-water

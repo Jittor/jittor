@@ -13,6 +13,7 @@ It copies:
   - resources/torch_init.py                 -> <site-packages>/torch/__init__.py
   - resources/stubs/<pkg>/**/*.py           -> <site-packages>/<pkg>/**/*.py
   - resources/torch_dist_info/METADATA      -> <site-packages>/torch-<ver>.dist-info/METADATA
+  - resources/flash_attn_dist_info/*         -> <site-packages>/flash_attn-<ver>.dist-info/*
 
 Idempotent and safe to re-run after editing the packaged resources.
 """
@@ -45,14 +46,18 @@ def _default_site_packages():
 def _version(resource_root=None):
     root = os.fspath(resource_root or resources_root())
     meta = os.path.join(root, "torch_dist_info", "METADATA")
-    _required_source_file(meta, "torch metadata")
+    return _metadata_version(meta, "torch metadata")
+
+
+def _metadata_version(meta, label):
+    _required_source_file(meta, label)
     with open(meta, encoding="utf-8") as meta_file:
         for line in meta_file:
             if line.lower().startswith("version:"):
                 version = line.split(":", 1)[1].strip()
                 if version:
                     return version
-    raise RuntimeError("torch metadata has no Version field: %s" % meta)
+    raise RuntimeError("%s has no Version field: %s" % (label, meta))
 
 
 def _normalise_target(target):
@@ -159,6 +164,24 @@ def _plan(target, resource_root=None):
         _version(root), "version"
     )
     ops.append((meta, _destination(target, version_dir, "METADATA")))
+    flash_root = os.path.join(root, "flash_attn_dist_info")
+    flash_meta = _required_source_file(
+        os.path.join(flash_root, "METADATA"), "flash-attn metadata")
+    flash_top_level = _required_source_file(
+        os.path.join(flash_root, "top_level.txt"),
+        "flash-attn top-level metadata",
+    )
+    flash_version_dir = "flash_attn-%s.dist-info" % _safe_component(
+        _metadata_version(flash_meta, "flash-attn metadata"), "version"
+    )
+    ops.append((
+        flash_meta,
+        _destination(target, flash_version_dir, "METADATA"),
+    ))
+    ops.append((
+        flash_top_level,
+        _destination(target, flash_version_dir, "top_level.txt"),
+    ))
 
     destinations = [destination for _source, destination in ops]
     if len(destinations) != len(set(destinations)):
