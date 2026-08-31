@@ -122,14 +122,9 @@ def _install_optional_safetensors(context):
 def _install_optional_vllm(context):
     """Arm vLLM compatibility, which fires only if vLLM is imported later."""
 
-    from ..module_patcher import install_module_patches
     from ..vllm import register
 
     register()
-    # Registering fills the table; the finder that consults it has to be live
-    # before vLLM is imported. Entry points stay out of it -- scanning them
-    # here would drag unrelated adapters into every import of the shim.
-    install_module_patches(load_entry_points=False)
 
 
 _REQUIRED_STEPS = (

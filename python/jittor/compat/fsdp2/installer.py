@@ -102,6 +102,10 @@ def install_with_registry(dist, torch_module=None, registry=None):
         "torch.distributed.device_mesh", dist, "device_mesh")
     tensor_legacy_device_mesh_mod = module(
         "torch.distributed._tensor.device_mesh")
+    # Where the mesh lives now that the namespace has lost its underscore. Both
+    # spellings answer, because code written against either torch is in use.
+    tensor_device_mesh_mod = module(
+        "torch.distributed.tensor.device_mesh", tensor_mod, "device_mesh")
     fsdp_mod = module("torch.distributed.fsdp", dist, "fsdp")
     fsdp_api_mod = module("torch.distributed.fsdp.api")
     fsdp_full_mod = module(
@@ -261,7 +265,8 @@ def install_with_registry(dist, torch_module=None, registry=None):
     tensor_mod.parallel = tensor_parallel_mod
     tensor_mod.DeviceMesh = exports["DeviceMesh"]
     tensor_legacy_mod.device_mesh = tensor_legacy_device_mesh_mod
-    for mod in (device_mesh_mod, tensor_legacy_device_mesh_mod):
+    for mod in (device_mesh_mod, tensor_legacy_device_mesh_mod,
+                tensor_device_mesh_mod):
         mod.DeviceMesh = exports["DeviceMesh"]
         mod.init_device_mesh = exports["init_device_mesh"]
     parallel_classes = {}

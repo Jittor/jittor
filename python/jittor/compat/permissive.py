@@ -11,9 +11,10 @@ attributes fabricate themselves, so ``from torch._inductor.codecache import
 FxGraphCache`` yields something that can be subclassed, called, or referenced
 in an annotation -- and never executed, because the guard behind it is false.
 
-This is confined to torch-internal namespaces (``torch._*``) on purpose. A
-public torch API is either implemented here or genuinely missing, and quietly
-fabricating one would hide a real gap instead of exposing it.
+Use it only where absence is the expected state and the caller has already
+decided nothing below the prefix will run. A namespace that something does
+reach into deserves a real implementation or an honest ImportError -- quietly
+fabricating one hides the gap instead of exposing it.
 """
 import importlib.abc
 import importlib.machinery
@@ -36,7 +37,7 @@ def _fabricate(name):
     })
 
 
-class _PermissiveModule(types.ModuleType):
+class PermissiveModule(types.ModuleType):
     # An empty __path__ marks this a package, so submodule imports keep
     # descending through the finder rather than stopping here.
     __path__ = []
@@ -57,10 +58,13 @@ class _PermissiveFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
         return None
 
     def create_module(self, spec):
-        return _PermissiveModule(spec.name)
+        return PermissiveModule(spec.name)
 
     def exec_module(self, module):
         pass
+
+
+__all__ = ["PermissiveModule", "install_permissive_package"]
 
 
 def install_permissive_package(prefix, meta_path):

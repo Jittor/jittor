@@ -576,6 +576,11 @@ def install(ctx):
         _functional_tensor.FunctionalTensor = type("FunctionalTensor", (), {})
         _subclasses.fake_tensor = _fake_tensor
         _subclasses.functional_tensor = _functional_tensor
+        # torch re-exports these from the package itself, and code imports them
+        # from whichever of the two spellings it was written against.
+        _subclasses.FakeTensor = _fake_tensor.FakeTensor
+        _subclasses.FakeTensorMode = _fake_tensor.FakeTensorMode
+        _subclasses.FunctionalTensor = _functional_tensor.FunctionalTensor
         _modules["torch._subclasses"] = _subclasses
         _modules["torch._subclasses.fake_tensor"] = _fake_tensor
         _modules["torch._subclasses.functional_tensor"] = _functional_tensor

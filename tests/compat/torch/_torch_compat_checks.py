@@ -407,6 +407,17 @@ _opaque_schema = torch.library.infer_schema(_takes_opaque, mutates_args=())
 ok("_OpaqueArgument" in _opaque_schema and "Tensor" in _opaque_schema,
    "an opaque argument type is describable in an operator schema")
 
+# tril/triu are wrapped alongside the shape factories for their kwargs, so a
+# 1x1 matrix -- one element, and therefore shape-like -- has to stay a matrix.
+# A single-token causal attention is the case that hits it in a serving batch.
+ok(torch.triu(torch.ones(1, 1), diagonal=1).tolist() == [[0.0]]
+   and torch.tril(torch.ones(1, 1)).tolist() == [[1.0]],
+   "tril/triu keep a 1x1 matrix a matrix")
+_one = torch.zeros(1, 2, 1, 8)
+ok(tuple(torch.nn.functional.scaled_dot_product_attention(
+       _one, _one, _one, is_causal=True).shape) == (1, 2, 1, 8),
+   "causal attention works for a single-token sequence")
+
 # F.scaled_dot_product_attention (SDPA) — the default attention in transformers 5.x.
 # Verify forward against a softmax(QK^T/sqrt(d))V reference (plain/causal/bool-mask/
 # scale) and backward against a numeric gradient. Subtle spots: bool-mask semantics
