@@ -26,6 +26,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import _ecosystem_runner  # noqa: E402
+import _ecosystem_harness  # noqa: E402
 
 
 class _StubTorch(object):
@@ -122,6 +123,46 @@ class TestEcosystemDeviceSelection(unittest.TestCase):
                 self.assertEqual(actual, str(Path(directory).resolve()))
                 self.assertEqual(sys.path[0], actual)
                 self.assertEqual(sys.path.count(actual), 1)
+
+    def test_harness_selects_independent_reference_package_site(self):
+        with mock.patch.object(
+            _ecosystem_harness, "PACKAGE_SITE", "/packages/python39"
+        ):
+            with mock.patch.object(
+                _ecosystem_harness,
+                "REFERENCE_PACKAGE_SITE",
+                "/packages/python310",
+            ):
+                with mock.patch.object(
+                    _ecosystem_harness, "REFERENCE_SHARES_PACKAGE_SITE", False
+                ):
+                    self.assertEqual(
+                        _ecosystem_harness._runner_package_site(sys.executable),
+                        "/packages/python39",
+                    )
+                    self.assertEqual(
+                        _ecosystem_harness._runner_package_site(
+                            "/oracle/bin/python"
+                        ),
+                        "/packages/python310",
+                    )
+
+    def test_harness_shares_package_site_for_compatible_abis(self):
+        with mock.patch.object(
+            _ecosystem_harness, "PACKAGE_SITE", "/packages/shared"
+        ):
+            with mock.patch.object(
+                _ecosystem_harness, "REFERENCE_PACKAGE_SITE", ""
+            ):
+                with mock.patch.object(
+                    _ecosystem_harness, "REFERENCE_SHARES_PACKAGE_SITE", True
+                ):
+                    self.assertEqual(
+                        _ecosystem_harness._runner_package_site(
+                            "/oracle/bin/python"
+                        ),
+                        "/packages/shared",
+                    )
 
     def test_correctness_snapshot_does_not_alias_runtime_storage(self):
         storage = np.array([1.0, 2.0], dtype="float32")

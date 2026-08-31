@@ -57,10 +57,12 @@ when result JSON and `index.html` both exist.
 
 `tests/compat/torch/test_ecosystem_parity.py` and
 `test_ecosystem_speed.py` compare separate Jittor and binary-PyTorch processes.
-Both processes must claim their own `torch` namespace before loading one shared
-downstream package site; dependency versions and origins are part of the result
-contract. CUDA runs explicitly align matmul/cuDNN TF32, and optional cuDNN
-autotuning is applied to both runtimes.
+Both processes must claim their own `torch` namespace before loading downstream
+packages. They share one package site when their CPython ABIs are compatible;
+otherwise `JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE` supplies an independent
+oracle site. Shared sites must report equal versions and origins, while separate
+sites must report equal versions. CUDA runs explicitly align matmul/cuDNN TF32,
+and optional cuDNN autotuning is applied to both runtimes.
 
 Correctness tensors are copied immediately so later optimizer/gradient writes
 cannot mutate a NumPy view. Timed training preallocates multiple resident input

@@ -16,10 +16,15 @@ Configuration
     ``torch`` shim would be self-referential and would prove nothing.
 
 ``JITTOR_ECOSYSTEM_PACKAGE_SITE``
-    Optional site-packages directory for downstream libraries. When omitted,
-    the harness derives it from this interpreter's installed Transformers.
-    Both runtimes claim their independent ``torch`` namespace first, then use
-    this same directory for the libraries under comparison.
+    Optional site-packages directory for downstream libraries in the Jittor
+    interpreter. When omitted, the harness derives it from this interpreter's
+    installed Transformers. Both runtimes claim their independent ``torch``
+    namespace before loading these libraries.
+
+``JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE``
+    Optional independent site-packages directory for the real-PyTorch
+    interpreter. This is required when the two interpreters have different
+    CPython ABIs and the dependency tree includes ABI-specific extensions.
 
 ``JITTOR_ECOSYSTEM_PACKAGE_SITE_CROSS_ABI``
     Explicitly allow that directory in both interpreters when their CPython
@@ -41,6 +46,7 @@ Configuration
     applied to both runtimes for controlled algorithm-selection experiments.
 """
 
+import importlib.machinery
 import importlib.util
 import json
 import os
@@ -67,15 +73,22 @@ def _enabled(name):
     return value not in ("", "0", "false", "no", "off")
 
 
-def _package_site():
-    configured = os.environ.get("JITTOR_ECOSYSTEM_PACKAGE_SITE", "").strip()
+def _configured_package_site(name):
+    configured = os.environ.get(name, "").strip()
     if configured:
         site = Path(configured).expanduser().resolve()
         if not site.is_dir():
             raise RuntimeError(
-                "JITTOR_ECOSYSTEM_PACKAGE_SITE is not a directory: {}".format(site)
+                "{} is not a directory: {}".format(name, site)
             )
         return str(site)
+    return ""
+
+
+def _package_site():
+    configured = _configured_package_site("JITTOR_ECOSYSTEM_PACKAGE_SITE")
+    if configured:
+        return configured
     spec = importlib.util.find_spec("transformers")
     origin = getattr(spec, "origin", None)
     if not origin:
@@ -84,6 +97,9 @@ def _package_site():
 
 
 PACKAGE_SITE = _package_site()
+REFERENCE_PACKAGE_SITE = _configured_package_site(
+    "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE"
+)
 
 
 def _reference_shares_this_abi():
@@ -116,10 +132,24 @@ def _reference_shares_this_abi():
 
 
 REFERENCE_ABI_MATCHES = _reference_shares_this_abi()
-REFERENCE_USES_PACKAGE_SITE = (
-    REFERENCE_ABI_MATCHES
-    or _enabled("JITTOR_ECOSYSTEM_PACKAGE_SITE_CROSS_ABI")
+REFERENCE_SHARES_PACKAGE_SITE = (
+    not REFERENCE_PACKAGE_SITE
+    and bool(PACKAGE_SITE)
+    and (
+        REFERENCE_ABI_MATCHES
+        or _enabled("JITTOR_ECOSYSTEM_PACKAGE_SITE_CROSS_ABI")
+    )
 )
+
+
+def _runner_package_site(python):
+    if python == sys.executable:
+        return PACKAGE_SITE
+    if REFERENCE_PACKAGE_SITE:
+        return REFERENCE_PACKAGE_SITE
+    if REFERENCE_SHARES_PACKAGE_SITE:
+        return PACKAGE_SITE
+    return ""
 
 
 def _versions(report):
@@ -167,11 +197,15 @@ def _npu_is_available():
 
 
 def _distributions_available(names):
-    import importlib.util
-
     for name in names:
         try:
-            if importlib.util.find_spec(name) is None:
+            if PACKAGE_SITE:
+                spec = importlib.machinery.PathFinder.find_spec(
+                    name, [PACKAGE_SITE]
+                )
+            else:
+                spec = importlib.util.find_spec(name)
+            if spec is None:
                 return False
         except (ImportError, ValueError):
             return False
@@ -186,8 +220,9 @@ def _run(python, runtime, case, output, weights=None, device="cpu"):
     if weights is not None:
         command += ["--weights", str(weights)]
     environment = os.environ.copy()
-    if PACKAGE_SITE and (python == sys.executable or REFERENCE_USES_PACKAGE_SITE):
-        environment["JITTOR_ECOSYSTEM_PACKAGE_SITE"] = PACKAGE_SITE
+    package_site = _runner_package_site(python)
+    if package_site:
+        environment["JITTOR_ECOSYSTEM_PACKAGE_SITE"] = package_site
     else:
         environment.pop("JITTOR_ECOSYSTEM_PACKAGE_SITE", None)
     completed = subprocess.run(
@@ -280,15 +315,18 @@ class EcosystemComparison(unittest.TestCase):
                         case, label, report.get("device"), self.device
                     ),
                 )
-                if PACKAGE_SITE and REFERENCE_USES_PACKAGE_SITE:
+                expected_site = _runner_package_site(
+                    sys.executable if label == "jittor" else REAL_TORCH_PYTHON
+                )
+                if expected_site:
                     self.assertEqual(
                         report.get("package_site"),
-                        PACKAGE_SITE,
+                        expected_site,
                         "{}: {} used a different downstream package site".format(
                             case, label
                         ),
                     )
-            if REFERENCE_USES_PACKAGE_SITE:
+            if REFERENCE_SHARES_PACKAGE_SITE:
                 self.assertEqual(
                     torch_report.get("dependencies"),
                     jittor_report.get("dependencies"),

@@ -72,6 +72,7 @@
 
 ## 性能
 
+- [2026-08-31 ms-swift LoRA Ascend 数值、梯度与性能](2026-08-31-ms-swift-ascend-parity-performance.md)
 - [2026-08-30 Diffusers UNet2D Ascend 数值、梯度与性能](2026-08-30-diffusers-ascend-parity-performance.md)
 - [2026-08-30 Qwen3-0.6B Ascend FP32 前向与反向优化](transformers/2026-08-30-qwen3-ascend-training.md)
 - [2026-08-28 Qwen3-0.6B Ascend 推理性能诊断与优化](transformers/2026-08-28-qwen3-ascend-performance.md)

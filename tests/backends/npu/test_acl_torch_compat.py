@@ -425,6 +425,99 @@ class TestACLTorchCompat(unittest.TestCase):
         self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_sdpa_causal_and_additive_backward_stay_on_acl(self):
+        rng = np.random.RandomState(20260831)
+        shape = (2, 2, 8, 32)
+        query_np, key_np, value_np, loss_weight_np = (
+            rng.randn(*shape).astype("float32") * 0.1 for _ in range(4)
+        )
+        additive_np = rng.randn(shape[-2], shape[-2]).astype("float32") * 0.05
+        candidates = []
+        native_dispatches = []
+        acl_attention = jt.nn._acl_scaled_dot_product_attention
+
+        def record_attention(*args, **kwargs):
+            result = acl_attention(*args, **kwargs)
+            native_dispatches.append(result is not None)
+            return result
+
+        jt.nn._acl_scaled_dot_product_attention = record_attention
+        try:
+            with jt.log_capture_scope(
+                log_v=0, log_vprefix="acl_op_exec.cc=100"
+            ) as logs:
+                for is_causal, mask_np in (
+                    (True, None),
+                    (False, additive_np),
+                ):
+                    inputs = [
+                        torch.tensor(value)
+                        for value in (query_np, key_np, value_np)
+                    ]
+                    for value in inputs:
+                        value.requires_grad_(True)
+                    mask = (
+                        None if mask_np is None
+                        else torch.tensor(mask_np).stop_grad()
+                    )
+                    output = torch.nn.functional.scaled_dot_product_attention(
+                        *inputs,
+                        attn_mask=mask,
+                        dropout_p=0.0,
+                        is_causal=is_causal,
+                    )
+                    grads = torch.autograd.grad(
+                        (output * torch.tensor(loss_weight_np)).sum(), inputs
+                    )
+                    candidates.append(jt.fetch_sync([output] + list(grads)))
+        finally:
+            jt.nn._acl_scaled_dot_product_attention = acl_attention
+
+        self.assertEqual(native_dispatches, [True, True])
+        trainable_mask = torch.tensor(additive_np)
+        trainable_mask.requires_grad_(True)
+        self.assertIsNone(
+            acl_attention(
+                *(torch.tensor(value) for value in (
+                    query_np, key_np, value_np
+                )),
+                attn_mask=trainable_mask,
+            )
+        )
+        references = []
+        with jt.flag_scope(use_acl=0, use_cuda=0):
+            for is_causal, mask_np in (
+                (True, None),
+                (False, additive_np),
+            ):
+                inputs = [
+                    torch.tensor(value)
+                    for value in (query_np, key_np, value_np)
+                ]
+                for value in inputs:
+                    value.requires_grad_(True)
+                mask = None if mask_np is None else torch.tensor(mask_np)
+                output = torch.nn.functional.scaled_dot_product_attention(
+                    *inputs,
+                    attn_mask=mask,
+                    dropout_p=0.0,
+                    is_causal=is_causal,
+                )
+                grads = torch.autograd.grad(
+                    (output * torch.tensor(loss_weight_np)).sum(), inputs
+                )
+                references.append(jt.fetch_sync([output] + list(grads)))
+
+        for candidate, reference in zip(candidates, references):
+            for actual, expected in zip(candidate, reference):
+                np.testing.assert_allclose(
+                    actual, expected, rtol=3e-5, atol=3e-5
+                )
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_relu_inplace_argument_stays_on_acl(self):
         source = torch.tensor([-2.0, -0.5, 1.0, 3.0], dtype=torch.float32)
         source.requires_grad_(True)

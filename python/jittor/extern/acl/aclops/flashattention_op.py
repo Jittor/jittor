@@ -195,6 +195,11 @@ def _causal_mask(query_length, source_length):
     return mask
 
 
+def _compressed_causal_mask():
+    # CANN sparse mode 2 consumes this fixed-size optimized causal mask.
+    return _causal_mask(2048, 2048)
+
+
 def scaled_dot_product_attention_acl(
         query, key, value, attn_mask=None, dropout_p=0.0,
         is_causal=False, scale=None, enable_gqa=False):
@@ -232,8 +237,7 @@ def scaled_dot_product_attention_acl(
         if not enable_gqa or query_heads % key_heads != 0:
             return None
     if training and (
-            str(query.dtype) != "float32" or attn_mask is not None
-            or is_causal or query_heads != key_heads):
+            str(query.dtype) != "float32" or query_heads != key_heads):
         return None
     head_dim = int(q_shape[-1])
     if head_dim <= 0 or head_dim > 256 or head_dim % 8 != 0:
@@ -247,6 +251,8 @@ def scaled_dot_product_attention_acl(
     real_shift = None
     if attn_mask is not None:
         if is_causal or not isinstance(attn_mask, jt.Var):
+            return None
+        if training and not attn_mask.is_stop_grad():
             return None
         mask_dtype = str(attn_mask.dtype)
         if mask_dtype != "float32":
@@ -268,11 +274,13 @@ def scaled_dot_product_attention_acl(
             real_shift = real_shift.broadcast(target_shape)
 
     causal_mask = None
+    sparse_mode = 0
     if is_causal:
         if query_length != source_length:
             return None
         if query_length > 1:
-            causal_mask = _causal_mask(query_length, source_length)
+            causal_mask = _compressed_causal_mask()
+            sparse_mode = 2
     scale_factor = (1.0 / math.sqrt(head_dim) if scale is None
                     else float(scale))
     if (str(query.dtype) == "bfloat16" and query_length == 1
@@ -286,6 +294,7 @@ def scaled_dot_product_attention_acl(
         "acl_flash_attention_score_v2"
     return FlashAttentionACL(
         query_heads, "BNSD", scale=scale_factor,
+        sparsemode=sparse_mode,
         psetype=0 if real_shift is not None else 1,
     )(query, key, value, real_shift, None, None, causal_mask)
 
