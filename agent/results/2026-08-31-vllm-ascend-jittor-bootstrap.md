@@ -1,6 +1,6 @@
 # vLLM Ascend 与 Jittor-NPU bootstrap 验证
 
-- Status: native vLLM-Ascend inference accepted; Jittor Qwen3 strict load and one-token prefill parity accepted; multi-token engine inference open
+- Status: native vLLM-Ascend inference accepted; Jittor Qwen3 manual prefill/decode token parity accepted; engine integration and performance open
 - Date: 2026-08-31
 - Baseline: `0df29eed` plus the compatibility changes in this report's commit
 - Owner: Jittor compatibility and external vLLM adapter maintainers
@@ -15,9 +15,9 @@
    plugin 下的 bootstrap、custom-op 注册和真实 ACL tensor 执行。
 
 第二条路径已经完成 Qwen3-0.6B 模型构造、严格 safetensors 权重加载、attention
-独立对拍和完整 prefill，并让第一个 greedy token 与原生基线一致。尚未完成 worker、
-engine 采样循环和多 token decode，因此本报告不声明完整 Jittor-vLLM NPU 推理或
-性能通过。
+独立对拍、完整 prefill 和复用 KV cache 的手工 greedy decode，四个 token 与原生
+基线一致。尚未完成 worker 和 engine 采样/调度，因此本报告不声明完整
+Jittor-vLLM NPU engine 推理或性能通过。
 
 ## Native vLLM-Ascend baseline
 
@@ -70,7 +70,7 @@ Jittor 主仓库。当前文件 SHA-256：
 | `vllm_jittor_npu/bootstrap.py` | `25961da3ad6de1cceb59e4bdf6e0938f1cc183166726e351f8da992385a41459` |
 | `vllm_jittor_npu/platform.py` | `e3d7d2b9abcbf45d07df5cf0d168392d2a67d56f7dba28b9056a3e3bcca8939a` |
 | `vllm_jittor_npu/attention.py` | `7b1c3ba5c2aeabcca9c8e4a6cfd817f622c35a07c270ab3e6a1be4c3d0e45771` |
-| `probes/qwen3_forward.py` | `9f47c1dfd2cccf2e79d82de4eff435fe086335ea516bba6304a6c0310b39732b` |
+| `probes/qwen3_forward.py` | `ed8ca5891f4df4482ecdb87140008a64a916007384f55f060a430f7d60fed85d` |
 
 Bootstrap 只在检测到 `torch.__jittor_version__` 后激活，拒绝已加载的
 `torch_npu`，并让 Transformers 的可选 torch-npu 探测返回 false。platform 通过
@@ -123,13 +123,18 @@ worker 仍待实现。
   均在 `device`，fallback 为 0；embedding/hidden/logits 非零且有限，进程未加载
   `torch_npu` 或 `vllm_ascend`。热缓存严格加载为 `3.95s`，完整 prefill+logits 为
   `3.03s`；该时延尚无等价原生 prefill 协议，不作为性能验收。
+- 同一进程、模型和 28 层 KV cache 上继续手工 greedy decode，四个 token 为
+  `[12095, 13, 576, 6722]`，文本为 ` Paris. The capital`，逐 token 匹配原生基线。
+  四步 hidden/logits/cache 均在 `device`，fallback 为 0，且未加载 PyTorch-NPU。
+  首次 decode 含单 token shape 冷编译为 `95.08s`；随后两步热态为
+  `0.259s/0.256s`，约 `3.9 token/s`，明显慢于原生约 `10.96 token/s`。因此
+  correctness 接受，performance 不接受。
 
 ## Open work
 
 - 实现、测试外置 Jittor NPU worker 和 model runner，将已验证的 prefill/decode
   backend 接入 engine 调度和 KV cache 分配。
-- 完成 Qwen3-0.6B 多 token greedy decode，逐 token 对齐原生的
-  `[12095, 13, 576, 6722]`，并审计全程零 CPU/PyTorch fallback。
-- 建立等价暖态生成协议，完成吞吐、首 token、decode latency 和显存对比。
+- 优化单 token decode 的 KV gather、GQA 和 attention launch，达到不慢于原生的
+  等价暖态生成协议，再完成吞吐、首 token、decode latency 和显存对比。
 - 在当前 vLLM 版本重新验证历史 CUDA adapter 基线；旧 adapter 当时未版本化，
   不能作为当前可复现产物。
