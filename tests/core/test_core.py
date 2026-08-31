@@ -12,6 +12,25 @@ from _helpers.assertions import expect_error
 
 class TestCore(unittest.TestCase):
 
+    def test_var_exposes_its_instance_dict(self):
+        """A Var carries an instance dict; the descriptor must expose it.
+
+        `tp_dictoffset` alone is not enough -- `PyType_Ready` does not synthesise
+        the `__dict__` descriptor, only Python-level class creation does. Without
+        it attribute assignment works while `vars(v)` and `v.__dict__` both fail,
+        which breaks anything that copies attributes between tensors.
+        """
+        v = jt.ones(3)
+        v.alpha = 7
+        v.beta = "x"
+        self.assertTrue(hasattr(v, "__dict__"))
+        self.assertEqual(vars(v), {"alpha": 7, "beta": "x"})
+        w = jt.ones(3)
+        w.__dict__ = v.__dict__.copy()
+        self.assertEqual((w.alpha, w.beta), (7, "x"))
+        # the tensor itself is unaffected
+        self.assertEqual(float((v * 2).sum()), 6.0)
+
     def test_number_of_hold_vars(self):
         assert jt.random([1,2,3]).peek() == "float32[1,2,3,]"
         assert jt.core.number_of_hold_vars() == 0

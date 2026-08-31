@@ -560,6 +560,20 @@ void GetitemOp::jit_run() {
     
     
 
+    // `oid` is the output's linear index, so every iteration writes its own
+    // element and the nest collapses. The depth has to be a literal: a
+    // `#pragma` line is not run through the template substitution (only the
+    // `@if` around it is), and building it with `_Pragma` instead makes
+    // KernelIR read it as a function definition and abort. The `JIT_cpu` guard
+    // is not decoration: the CUDA build makes its `__global__` kernel by
+    // re-parsing *this* body with KernelIR, so anything added here lands in the
+    // CUDA source too. A gather does not vectorise either way, so the `if`
+    // clause costs nothing here.
+    @if(@is_def(JIT_cpu) && ODIM>0, index_t o_total = 1 @for(d, 0, ODIM, * oshape@d);)
+    @if(@is_def(JIT_cpu) && ODIM==1, #pragma omp parallel for if(o_total >= 65536))
+    @if(@is_def(JIT_cpu) && ODIM==2, #pragma omp parallel for collapse(2) if(o_total >= 65536))
+    @if(@is_def(JIT_cpu) && ODIM==3, #pragma omp parallel for collapse(3) if(o_total >= 65536))
+    @if(@is_def(JIT_cpu) && ODIM>=4, #pragma omp parallel for collapse(4) if(o_total >= 65536))
     @for(d, 0, ODIM, for (index_t i@d=0; i@d < oshape@d; i@d++)) {
         index_t oid = 0 @for(d, 0, ODIM, + i@d * ostride@d);
         @for(d, 0, IDIM, index_t iid@d = 

@@ -101,6 +101,18 @@ void TransposeOp::jit_run() {
     @for(i, DIM-2, -1, -1, auto xstride@i = xstride@{i+1} * xshape@{i+1};)
     index_t ystride@{DIM-1} = 1;
     @for(i, DIM-2, -1, -1, auto ystride@i = ystride@{i+1} * yshape@{i+1};)
+    // `yid` is the output's linear index, so every iteration writes its own
+    // element and the whole nest collapses. The depth has to be a literal: a
+    // `#pragma` line is not run through the template substitution (only the
+    // `@if` around it is), and building it with `_Pragma` instead makes
+    // KernelIR -- which parses this file as text for the CUDA path -- read it
+    // as a function definition. A transpose is a gather that does not vectorise
+    // either way, so the `if` clause costs nothing here.
+    @if(@is_def(JIT_cpu), index_t num = y->num;)
+    @if(@is_def(JIT_cpu) && DIM==1, #pragma omp parallel for if(num >= 65536))
+    @if(@is_def(JIT_cpu) && DIM==2, #pragma omp parallel for collapse(2) if(num >= 65536))
+    @if(@is_def(JIT_cpu) && DIM==3, #pragma omp parallel for collapse(3) if(num >= 65536))
+    @if(@is_def(JIT_cpu) && DIM>=4, #pragma omp parallel for collapse(4) if(num >= 65536))
     @for(d, 0, DIM, for (index_t yi@d=0; yi@d < yshape@d; yi@d++)) {
         auto yid = @for(d, 0, DIM, + yi@d * ystride@d);
         @for(d, 0, DIM, auto xi@d = yi@{AXES@d};)

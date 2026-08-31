@@ -57,12 +57,17 @@ when result JSON and `index.html` both exist.
 
 `tests/compat/torch/test_ecosystem_parity.py` and
 `test_ecosystem_speed.py` compare separate Jittor and binary-PyTorch processes.
-Both processes must claim their own `torch` namespace before loading downstream
-packages. They share one package site when their CPython ABIs are compatible;
-otherwise `JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE` supplies an independent
-oracle site. Shared sites must report equal versions and origins, while separate
-sites must report equal versions. CUDA runs explicitly align matmul/cuDNN TF32,
-and optional cuDNN autotuning is applied to both runtimes.
+Both processes must claim their own `torch` namespace before loading the
+downstream libraries. They share one package site only when their CPython ABIs
+are compatible, normally the same major and minor version: a site directory
+carries ABI-tagged extension modules, so a 3.12 reference cannot import a 3.11
+site and otherwise fails on the first compiled dependency with an unrelated
+error. When the ABIs differ,
+`JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE` supplies the independent oracle site
+and each side imports its own copy. Shared sites must report equal versions and
+origins; separate sites must report equal versions, while their origins are
+expected to differ. CUDA runs explicitly align matmul/cuDNN TF32, and optional
+cuDNN autotuning is applied to both runtimes.
 
 Correctness tensors are copied immediately so later optimizer/gradient writes
 cannot mutate a NumPy view. Timed training preallocates multiple resident input
@@ -89,6 +94,32 @@ PyTorch is an optional oracle and must be installed separately for the target
 platform; an absent or shim-resolved `torch` is reported as skipped, never as a
 zero-duration result. At least one mandatory Jittor CPU case must execute in CI,
 so a run in which every parameter skips is not acceptable.
+
+## CPU thread affinity
+
+Pin threads for any CPU comparison. Neither Jittor nor PyTorch sets an OpenMP
+affinity by default, and on a many-core host the scheduler migrates the threads
+between measurements: the same Jittor ViT step measured
+`0.5555`~`0.7074s` over six runs -- two distinct clusters `25%` apart, not a
+spread. Setting
+
+```bash
+export OMP_PROC_BIND=close
+export OMP_PLACES=cores
+```
+
+collapses that to `0.5165`~`0.5195s` across four runs, and it is worth `10`-`30%`
+to *both* runtimes, so an unpinned comparison can invert a verdict: a diffusion
+UNet reads `0.90x` unpinned and `1.16x` pinned, because PyTorch gains more from
+pinning than Jittor does on that model.
+
+Two corollaries for anyone reading a CPU number:
+
+- A ratio measured without pinning is not evidence. Pin both sides, take a
+  median over several runs, and say which configuration produced the number.
+- "Cores busy" observed with `/proc/stat` is the parallelism a workload
+  *achieved*, not a cap. Check `/sys/fs/cgroup/cpu.max` before concluding that
+  a quota is limiting anything.
 
 ## Record selected revisions
 

@@ -340,6 +340,22 @@ void SetitemOp::jit_run() {
         in->allocation == data->allocation)
         return;
 
+    // This is a scatter, so unlike getitem the nest cannot simply be collapsed:
+    // two output positions may address the same target element and the write is
+    // "last one wins". But that only matters *across* the loop that gets
+    // threaded. Every target index `iid@d` depends on exactly one output loop,
+    // `i@{IO@d}`, and through it injectively (a direct index or an affine
+    // slice). So if some dimension maps to output loop 0, distinct `i0` reach
+    // distinct target elements and threading that one loop alone is safe --
+    // whatever the other dimensions do, including a var index. If no dimension
+    // maps to it, every `i0` writes the same place and it must stay serial.
+    // Compile-time decidable, hence a constant the compiler folds away.
+    @if(@is_def(JIT_cpu) && ODIM>0,
+        bool jt_outer_is_injective = false;
+        @for(d, 0, IDIM, @if(IO@d==0, jt_outer_is_injective = true;))
+        index_t jt_o_total = 1 @for(d, 0, ODIM, * oshape@d);
+    )
+    @if(@is_def(JIT_cpu) && ODIM>0, #pragma omp parallel for if(jt_outer_is_injective && jt_o_total >= 65536))
     @for(d, 0, ODIM, for (index_t i@d=0; i@d < oshape@d; i@d++)) {
         index_t did = 0 @for(d, 0, ODIM, @if((BMASK>>d)&1,+ i@d * dstride@d));
         @for(d, 0, IDIM, index_t iid@d = 

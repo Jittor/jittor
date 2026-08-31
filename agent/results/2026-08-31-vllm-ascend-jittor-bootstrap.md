@@ -67,8 +67,8 @@ Bootstrap 只在检测到 `torch.__jittor_version__` 后激活，拒绝已加载
 
 ## Evidence
 
-- 受影响 Torch compatibility 测试：`46 passed`。
-- schema/library/stream/compiler-context 复验：`16 passed`。
+- 受影响 Torch compatibility 测试：`47 passed`。
+- schema/library/stream/compiler-context 复验：`17 passed`。
 - shim deploy 与资源结构：`21 passed`。
 - 完整 structure：`217 passed, 2 skipped, 2 failed`；两项失败均来自仓库内既有
   `.claude/worktrees`，不是本次变更。布局检查还报告既有 `TODO.md`、旧 egg-info

@@ -193,7 +193,10 @@ void CpuParallelPass::run() {
     // Collect first: the transform replaces nodes in the list being walked.
     vector<KernelIR*> targets;
     vector<string> guards;
+    vector<string> inner_guards;
     vector<int> depths;
+    // Whether that branch has to interchange the two outer loops first.
+    vector<bool> interchange;
     for (auto* body : bodies) {
         for (auto& loop : body->children) {
             if (loop->type != "loop") continue;
@@ -281,7 +284,14 @@ void CpuParallelPass::run() {
                     if (!disjoint) break;
                 }
             }
-            if (!disjoint) continue;
+            // Not fatal on its own. A reduction's outermost loop runs over a
+            // dimension the output index does not contain, so it can never be
+            // threaded -- but the loop below it, over a dimension the output
+            // does keep, can be. Swapping the two puts the threadable one on
+            // the outside, which is the only placement that pays: distributing
+            // the inner loop instead costs a thread team (or at best a barrier)
+            // on every one of the outer loop's thousands of iterations.
+            bool outer_ok = disjoint;
 
             // Total work, not just the trip count of the collapsed levels: a
             // loop of 64 rows over 4096 columns is worth threading and a loop
@@ -313,9 +323,57 @@ void CpuParallelPass::run() {
             // Fewer tiles than that and the threads are not worth their setup;
             // a tile is already thousands of elements, so this is not small.
             string least = split ? "32" : "64";
-            guards.push_back(parallelism + " >= " + least
-                             + " && (long long)(" + work + ") >= 65536");
+            guards.push_back(outer_ok
+                ? parallelism + " >= " + least
+                  + " && (long long)(" + work + ") >= 65536"
+                : string());
             targets.push_back(loop.get());
+            interchange.push_back(!outer_ok);
+
+            // A split loop's tile count is small by construction -- the tile is
+            // sized to fit a cache, not to give every core a share -- so the
+            // guard above is often false for the whole life of the kernel. The
+            // parallelism is in the loop *inside* it, over the other dimension.
+            // Offer that as a second branch rather than falling straight back
+            // to running the nest on one core: on a ViT step the SGD update
+            // was split with stride 4096 over a dimension of at most 3072, so
+            // it never once took the parallel branch.
+            string inner_guard;
+            // Interchange needs a perfect nest: anything else between the two
+            // headers would move relative to the loop it sits in.
+            bool perfect = loop->children.size() == 1
+                           && loop->children[0]->type == "loop";
+            {
+                for (auto& c : loop->children) {
+                    if (c->type != "loop") continue;
+                    if (!c->has_attr("lvalue") || !c->has_attr("rvalue")) break;
+                    string iv = c->get_attr("lvalue");
+                    string ib = c->get_attr("rvalue");
+                    if (!is_identifier(ib) || defines.count(ib)) break;
+                    bool ok = true;
+                    for (auto& idx : info.store_indices) {
+                        string expr = idx;
+                        for (int d=0; d<4; d++) {
+                            auto it = defines.find(expr);
+                            if (it == defines.end()) break;
+                            expr = it->second;
+                        }
+                        if (!scales_with(expr, iv)) { ok = false; break; }
+                    }
+                    if (ok && (outer_ok || perfect))
+                        inner_guard = "(" + ib + ") >= 64 && (long long)("
+                                      + work + ") >= 65536";
+                    break;
+                }
+            }
+            inner_guards.push_back(inner_guard);
+            if (!outer_ok && inner_guard.size() == 0) {
+                guards.pop_back();
+                depths.pop_back();
+                targets.pop_back();
+                interchange.pop_back();
+                inner_guards.pop_back();
+            }
         }
     }
 
@@ -327,19 +385,58 @@ void CpuParallelPass::run() {
                && father->children[pos].get() != loop) pos++;
         if (pos == father->children.size()) continue;
 
-        auto par = loop->clone(true);
-        string pragma = "#pragma omp parallel for";
-        if (depths[i] > 1) pragma += " collapse(" + std::to_string(depths[i]) + ")";
-        par->push_back(pragma, &par->before);
-        auto if_par = std::make_unique<KernelIR>("if (" + guards[i] + ") {}");
-        if_par->push_back(move(par), &if_par->children);
+        unique_ptr<KernelIR> if_par;
+        string serial_cond;
+        if (guards[i].size()) {
+            auto par = loop->clone(true);
+            string pragma = "#pragma omp parallel for";
+            if (depths[i] > 1)
+                pragma += " collapse(" + std::to_string(depths[i]) + ")";
+            par->push_back(pragma, &par->before);
+            if_par = std::make_unique<KernelIR>("if (" + guards[i] + ") {}");
+            if_par->push_back(move(par), &if_par->children);
+            serial_cond = "!(" + guards[i] + ")";
+        }
+
+        // Second branch: the outermost loop is out -- too few tiles, or it runs
+        // over a reduced dimension. For a reduction the fix is to interchange
+        // the two headers so the threadable dimension ends up outside, then
+        // thread that. Distributing the inner loop where it stands does not
+        // work: a thread team per outer iteration made ViT 5.3x slower, and
+        // hoisting the region to leave only a barrier per iteration was still
+        // 2x slower than not threading at all.
+        unique_ptr<KernelIR> if_inner;
+        if (inner_guards[i].size()) {
+            auto inner_par = loop->clone(true);
+            if (interchange[i])
+                // `false`: swap the headers, leave the bodies where they are.
+                inner_par->swap(*inner_par->children[0], false);
+            if (interchange[i])
+                inner_par->push_back("#pragma omp parallel for",
+                                     &inner_par->before);
+            else
+                for (auto& c : inner_par->children)
+                    if (c->type == "loop") {
+                        c->push_back("#pragma omp parallel for", &c->before);
+                        break;
+                    }
+            string cond = serial_cond.size()
+                ? serial_cond + " && (" + inner_guards[i] + ")"
+                : "(" + inner_guards[i] + ")";
+            if_inner = std::make_unique<KernelIR>("if (" + cond + ") {}");
+            if_inner->push_back(move(inner_par), &if_inner->children);
+            serial_cond = serial_cond.size()
+                ? serial_cond + " && !(" + inner_guards[i] + ")"
+                : "!(" + inner_guards[i] + ")";
+        }
 
         auto ser = loop->clone(true);
-        auto if_ser = std::make_unique<KernelIR>("if (!(" + guards[i] + ")) {}");
+        auto if_ser = std::make_unique<KernelIR>("if (" + serial_cond + ") {}");
         if_ser->push_back(move(ser), &if_ser->children);
 
         vector<unique_ptr<KernelIR>> both;
-        both.push_back(move(if_par));
+        if (if_par) both.push_back(move(if_par));
+        if (if_inner) both.push_back(move(if_inner));
         both.push_back(move(if_ser));
         father->insert(pos, both);
         loop->erase();
