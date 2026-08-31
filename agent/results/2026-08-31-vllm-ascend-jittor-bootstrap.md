@@ -2,7 +2,7 @@
 
 - Status: native vLLM-Ascend inference accepted; Jittor Qwen3 manual prefill/decode token parity accepted; engine integration and performance open
 - Date: 2026-08-31
-- Baseline: `c03b5203` plus the serving RMSNorm changes in this report's commit
+- Baseline: `8ba0b6de` plus the serving RoPE changes in this report's commit
 - Owner: Jittor compatibility and external vLLM adapter maintainers
 - Review when: vLLM, Transformers, CANN, ATB, or the external adapter version changes
 
@@ -61,6 +61,9 @@ text:       Paris. The capital
 - 公有 serving `rms_norm` 在调用时解析当前 backend hook；ACL/no-grad 的
   float32 activation + BF16/FP16 weight 会缓存一份 float32 weight 并执行
   `aclnnRmsNorm`，保持 float32 输出语义。
+- 公有 serving `rotary_embedding` 在 ACL/no-grad、NeoX、full rotary、64 对齐
+  head size 和 Q/K/cache 同 dtype 条件下，将 packed Q/K 转为 BNSD 并调用
+  `aclnnApplyRotaryPosEmb`；其他 RoPE 形态保留原路径。
 
 ## External adapter state
 
@@ -71,7 +74,7 @@ Jittor 主仓库。当前文件 SHA-256：
 | --- | --- |
 | `pyproject.toml` | `77872fe7d972071a55852f17103b7abb2ec3b55e04a8500eeaae7843eb9b92d2` |
 | `vllm_jittor_npu/__init__.py` | `fb67de68f407a898a47c44b9c96bdbcde2955c0e219fe2bf13e0fe7b29836582` |
-| `vllm_jittor_npu/bootstrap.py` | `d25b12837d03d0cfeadbbd68883d655b9741d28485c974d81b010cff5be08140` |
+| `vllm_jittor_npu/bootstrap.py` | `d59105b9bfd72fa23bdb41e3292247849c2733b24fda407138354e9221580a13` |
 | `vllm_jittor_npu/platform.py` | `f5dc05cfb9273bc10bebc321dfb131849869ad7dbd397d4634e600e793de04df` |
 | `vllm_jittor_npu/attention.py` | `7b1c3ba5c2aeabcca9c8e4a6cfd817f622c35a07c270ab3e6a1be4c3d0e45771` |
 | `probes/qwen3_forward.py` | `a37ab1f1b76c4462a130cbc5ea46d4df4e396102fd70085ea620142234c046c4` |
@@ -83,8 +86,8 @@ Bootstrap 只在检测到 `torch.__jittor_version__` 后激活，拒绝已加载
 和 CUDA graph。CUSTOM attention 使用公有 Jittor paged-attention，metadata 的 host
 materialization 每个 batch 只执行一次。adapter 还修复了 vLLM embedding loader 对
 PyTorch slice-view 写回的依赖；当前只支持未量化 TP=1，其他 TP 形态 fail-closed。
-adapter 通过 vLLM OOT CustomOp registry 将 `RMSNorm.forward_oot` 路由到公有 Jittor
-serving primitive；其他 CustomOp 不变。worker 仍待实现。
+adapter 通过 vLLM OOT CustomOp registry 将标准 `RMSNorm` 和 `RotaryEmbedding`
+路由到公有 Jittor serving primitive；其他 CustomOp 不变。worker 仍待实现。
 
 ## Evidence
 
@@ -127,6 +130,8 @@ serving primitive；其他 CustomOp 不变。worker 仍待实现。
 - 公有 serving RMSNorm：CPU serving 回归 `7 passed`；真实 NPU 上 float32 activation
   + BF16 weight 连续执行两次，weight cast cache 保持同一对象，输出匹配 NumPy、
   dtype 为 float32、驻留 `device` 且 fallback 为 0。
+- 公有 serving RoPE：真实 NPU packed Q/K、非连续 positions、head size 128 的 NeoX
+  full rotary 匹配 NumPy，Q/K 均驻留 `device` 且 fallback 为 0。
 - Qwen3-0.6B 完整 prefill：提示词 `The capital of France is` 编码为
   `[785, 6722, 315, 9625, 374]`，首个 greedy token 为 `12095`（` Paris`），与原生
   vLLM-Ascend 基线的第一个 token 一致。28 层 KV cache、hidden states 和 logits
@@ -136,10 +141,10 @@ serving primitive；其他 CustomOp 不变。worker 仍待实现。
 - 同一进程、模型和 28 层 KV cache 上继续手工 greedy decode，四个 token 为
   `[12095, 13, 576, 6722]`，文本为 ` Paris. The capital`，逐 token 匹配原生基线。
   四步 hidden/logits/cache 均在 `device`，fallback 为 0，且未加载 PyTorch-NPU。
-  incremental flash 加 OOT fused RMSNorm 后两步热态为 `0.225s/0.226s`，约
-  `4.4 token/s`，相比最初通用 attention 路径累计提升约 `12%`，但仍明显慢于原生
-  约 `10.96 token/s`。因此 correctness 接受，performance 不接受。
-- OOT fused RMSNorm 接入前的单 token profiler 设备算子合计约 `118ms`：
+  incremental flash 加 OOT fused RMSNorm/RoPE 后两步热态为 `0.214s/0.214s`，约
+  `4.7 token/s`，相比最初通用 attention 路径累计提升约 `16%`，但仍明显慢于
+  原生约 `10.96 token/s`。因此 correctness 接受，performance 不接受。
+- OOT fused RMSNorm/RoPE 接入前的单 token profiler 设备算子合计约 `118ms`：
   incremental flash 仅 `2.36ms`；
   KV Scatter 为 `8.03ms`，多组 block/KV Gather 合计超过 `15ms`，RoPE 约
   `8.10ms`，四类线性 matmul 合计约 `6.31ms`。未被设备算子覆盖的墙钟主要在

@@ -90,6 +90,11 @@ def rotary_embedding(positions, query, key, cos_sin_cache, head_size=None,
     if rotary_dim is None:
         rotary_dim = int(cos_sin_cache.shape[-1])
     rotary_dim = int(rotary_dim)
+    acl_rotated = _rotary_embedding_acl(
+        positions, query, key, cos_sin_cache,
+        head_size, is_neox, rotary_dim)
+    if acl_rotated is not None:
+        return acl_rotated
     if key is not None:
         fused = _rotary_embedding_cuda(
             positions, query, key, cos_sin_cache,
@@ -130,3 +135,51 @@ def rotary_embedding(positions, query, key, cos_sin_cache, head_size=None,
         return out.reshape(shape)
 
     return rotate(query), rotate(key)
+
+
+def _rotary_embedding_acl(
+        positions, query, key, cos_sin_cache,
+        head_size, is_neox, rotary_dim):
+    if not (
+        getattr(jt.compiler, "has_acl", 0)
+        and getattr(jt.flags, "use_acl", 0)
+        and jt.flags.use_cuda
+        and getattr(jt.flags, "no_grad", 0)
+        and key is not None
+        and is_neox
+        and rotary_dim == head_size
+        and head_size % 64 == 0
+        and str(query.dtype) == str(key.dtype) == str(cos_sin_cache.dtype)
+        and str(query.dtype) in ("float16", "bfloat16", "float32")
+    ):
+        return None
+
+    token_count = int(positions.numel())
+    cache = cos_sin_cache[positions.reshape((-1,))]
+    half = rotary_dim // 2
+    cos_half = cache[:, :half]
+    sin_half = cache[:, half:rotary_dim]
+    cos = jt.concat((cos_half, cos_half), dim=-1).reshape(
+        (1, 1, token_count, rotary_dim))
+    sin = jt.concat((sin_half, sin_half), dim=-1).reshape(
+        (1, 1, token_count, rotary_dim))
+
+    def to_bnsd(packed):
+        heads = int(packed.shape[-1]) // head_size
+        value = packed.reshape((token_count, heads, head_size))
+        return value.transpose(0, 1).reshape((1, heads, token_count, head_size))
+
+    query_bnsd = to_bnsd(query)
+    key_bnsd = to_bnsd(key)
+    query_bnsd, key_bnsd = jt.nn.rotary_emb(
+        query_bnsd, key_bnsd, freq_cos=cos, freq_sin=sin)
+
+    def from_bnsd(value, shape):
+        heads = int(value.shape[1])
+        return value.reshape((heads, token_count, head_size)).transpose(
+            0, 1).reshape(shape)
+
+    return (
+        from_bnsd(query_bnsd, query.shape),
+        from_bnsd(key_bnsd, key.shape),
+    )

@@ -644,6 +644,51 @@ class TestACL(unittest.TestCase):
         self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_serving_rotary_embedding_packed_neox_stays_on_device(self):
+        rng = np.random.RandomState(20260831)
+        tokens, query_heads, key_heads, head_size = 5, 16, 8, 128
+        positions_np = np.asarray([0, 3, 5, 8, 13], dtype="int32")
+        query_np = rng.randn(tokens, query_heads * head_size).astype("float32")
+        key_np = rng.randn(tokens, key_heads * head_size).astype("float32")
+        inv = 1.0 / (
+            10000 ** (np.arange(0, head_size, 2) / head_size)
+        )
+        angles = np.arange(32)[:, None] * inv[None, :]
+        cache_np = np.concatenate((np.cos(angles), np.sin(angles)), axis=-1)
+        cache_np = cache_np.astype("float32")
+
+        def reference(packed):
+            view = packed.reshape(tokens, -1, head_size)
+            cos = cache_np[positions_np, :head_size // 2][:, None, :]
+            sin = cache_np[positions_np, head_size // 2:][:, None, :]
+            first = view[..., :head_size // 2]
+            second = view[..., head_size // 2:]
+            return np.concatenate(
+                (first * cos - second * sin, second * cos + first * sin),
+                axis=-1,
+            ).reshape(packed.shape)
+
+        with jt.no_grad(), jt.log_capture_scope(
+                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+            actual_query, actual_key = jt.nn.rotary_embedding(
+                jt.array(positions_np), jt.array(query_np), jt.array(key_np),
+                jt.array(cache_np), head_size=head_size, is_neox=True,
+                rotary_dim=head_size)
+            actual_query.sync()
+            actual_key.sync()
+            query_location = actual_query.location()
+            key_location = actual_key.location()
+
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+        self.assertEqual(query_location, "device")
+        self.assertEqual(key_location, "device")
+        np.testing.assert_allclose(
+            actual_query.numpy(), reference(query_np), atol=3e-5, rtol=3e-5)
+        np.testing.assert_allclose(
+            actual_key.numpy(), reference(key_np), atol=3e-5, rtol=3e-5)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_training_rotary_embedding(self):
         rng = np.random.RandomState(20260830)
         q_np = rng.randn(1, 16, 7, 128).astype("float32")
