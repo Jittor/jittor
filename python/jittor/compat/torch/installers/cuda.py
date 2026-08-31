@@ -173,6 +173,8 @@ class _DeviceProps:
 
 def _install_cuda(g, registry=None):
     _modules = registry_for(g, registry).module_map
+    import contextlib
+    import itertools
     import threading
     import types as _types
     cuda = _types.ModuleType("torch.cuda")
@@ -347,6 +349,78 @@ def _install_cuda(g, registry=None):
     cuda.set_stream = _set_stream
     cuda.current_stream = _current_stream
     cuda.default_stream = lambda *a, **k: _default_stream
+    nvtx = _types.ModuleType("torch.cuda.nvtx")
+    _nvtx_state = threading.local()
+    _nvtx_handles = itertools.count(1)
+    _native_nvtx = [None]
+
+    def _load_native_nvtx():
+        if _native_nvtx[0] is False:
+            return None
+        if _native_nvtx[0] is None:
+            try:
+                from jittor.utils import nvtx as native_nvtx
+                _native_nvtx[0] = native_nvtx
+            except (ImportError, OSError, RuntimeError):
+                _native_nvtx[0] = False
+        return _native_nvtx[0] or None
+
+    def _nvtx_stack():
+        stack = getattr(_nvtx_state, "stack", None)
+        if stack is None:
+            stack = []
+            _nvtx_state.stack = stack
+        return stack
+
+    def _nvtx_range_push(message):
+        stack = _nvtx_stack()
+        stack.append(str(message))
+        native_nvtx = _load_native_nvtx()
+        if native_nvtx is not None:
+            native_nvtx.nvtxRangePushA(str(message).encode("utf-8"))
+        return len(stack) - 1
+
+    def _nvtx_range_pop():
+        stack = _nvtx_stack()
+        depth = len(stack) - 1
+        if stack:
+            stack.pop()
+        native_nvtx = _load_native_nvtx()
+        if native_nvtx is not None:
+            native_nvtx.nvtxRangePop()
+        return depth
+
+    def _nvtx_mark(message):
+        str(message)
+        return None
+
+    def _nvtx_range_start(message):
+        str(message)
+        return next(_nvtx_handles)
+
+    def _nvtx_range_end(range_id):
+        int(range_id)
+        return None
+
+    @contextlib.contextmanager
+    def _nvtx_range(message, *args, **kwargs):
+        _nvtx_range_push(str(message).format(*args, **kwargs))
+        try:
+            yield
+        finally:
+            _nvtx_range_pop()
+
+    nvtx.range_push = _nvtx_range_push
+    nvtx.range_pop = _nvtx_range_pop
+    nvtx.range_start = _nvtx_range_start
+    nvtx.range_end = _nvtx_range_end
+    nvtx.mark = _nvtx_mark
+    nvtx.range = _nvtx_range
+    nvtx.__all__ = [
+        "range_push", "range_pop", "range_start", "range_end", "mark", "range"
+    ]
+    cuda.nvtx = nvtx
+    _modules["torch.cuda.nvtx"] = nvtx
     # report REAL device memory from jittor's MemInfo (was a 0-stub, so training-code
     # memory logging printed 0). total_cuda_used on an accelerator, else total_cpu_used.
     # jittor doesn't expose a per-reset peak, so max_* track a process-lifetime high-water
@@ -438,6 +512,13 @@ def _install_cuda(g, registry=None):
     cuda.memory.max_memory_allocated = cuda.max_memory_allocated
     cuda.memory.memory_reserved = cuda.memory_reserved
     cuda.memory.max_memory_reserved = cuda.max_memory_reserved
+    class CUDAPluggableAllocator:
+        def __init__(self, path_to_so_file, alloc_fn_name, free_fn_name):
+            raise NotImplementedError(
+                "Jittor does not support PyTorch CUDA pluggable allocators"
+            )
+    cuda.memory.CUDAPluggableAllocator = CUDAPluggableAllocator
+    cuda.CUDAPluggableAllocator = CUDAPluggableAllocator
     # rng state (trainer checkpoints save/restore it). jittor has no portable
     # CUDA rng-state handle, so use a small placeholder Var round-trip.
     cuda.get_rng_state = lambda *a, **k: jt.array([0], dtype="uint8")

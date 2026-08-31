@@ -57,7 +57,7 @@ Jittor 主仓库。当前文件 SHA-256：
 | --- | --- |
 | `pyproject.toml` | `77872fe7d972071a55852f17103b7abb2ec3b55e04a8500eeaae7843eb9b92d2` |
 | `vllm_jittor_npu/__init__.py` | `fb67de68f407a898a47c44b9c96bdbcde2955c0e219fe2bf13e0fe7b29836582` |
-| `vllm_jittor_npu/bootstrap.py` | `0ce89a6294199b89fb5ae197f013889cec455b3d144a4fd118bd991d2b64e2ae` |
+| `vllm_jittor_npu/bootstrap.py` | `4ff168edbbc60084f99493af91f172f741652d478cabdafe87768a44c25a705f` |
 | `vllm_jittor_npu/platform.py` | `c0e8f56c32712e959e7c32818c52c006b43346de122ffb9258552a888511a652` |
 
 Bootstrap 只在检测到 `torch.__jittor_version__` 后激活，拒绝已加载的
@@ -81,11 +81,18 @@ Bootstrap 只在检测到 `torch.__jittor_version__` 后激活，拒绝已加载
   `acl_compiler=true`、`use_cuda=1`。通过新 `torch.library` 注册的乘法在 ACL
   执行，结果 tensor 在同步后报告 `location=device`，值为 `[6.0, -8.0]`；
   `torch_npu` 与 `vllm_ascend` 均未加载。
+- Qwen3 registry probe：lazy entry 成功加载
+  `vllm.model_executor.models.qwen3.Qwen3ForCausalLM`；当前 platform、ACL
+  compiler 与零 PyTorch-NPU/vllm-ascend 条件保持不变。为到达该层，本轮补齐
+  `torch.cuda.nvtx`、fail-closed CUDA pluggable allocator、`torch.func`、
+  `torch._ops`、symbolic scalar aliases、native module `reset_parameters` 和全局
+  module-registration hook。相关 Torch 兼容回归 `42 passed`，native reset 回归
+  `3 passed`。
 
 ## Open work
 
-- 实现并测试外置 Jittor NPU worker、model runner、paged KV cache 和 attention
-  backend。
+- 构造 Qwen3 模型并实现、测试外置 Jittor NPU worker、model runner、paged KV
+  cache 和 attention backend。
 - 加载 Qwen3-0.6B，完成 greedy token 对齐、零 CPU/PyTorch fallback 审计、暖态
   性能和显存对比。
 - 在当前 vLLM 版本重新验证历史 CUDA adapter 基线；旧 adapter 当时未版本化，

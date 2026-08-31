@@ -251,7 +251,7 @@ def install(ctx):
                               for k in (bs[0] if bs and bs[0] else {}))
         return params, buffers
 
-    _func_ns = _types2.SimpleNamespace()
+    _func_ns = _types2.ModuleType("torch.func")
     _func_ns.functional_call = _functional_call
     _func_ns.grad = _func_grad
     _func_ns.grad_and_value = _func_grad_and_value
@@ -260,7 +260,8 @@ def install(ctx):
     _func_ns.jacfwd = _jacrev          # same numerics; forward-mode falls back to reverse
     _func_ns.stack_module_state = _stack_module_state
     _func_ns.functionalize = lambda fn, **k: fn
-    _alias("func", _func_ns)
+    _modules["torch.func"] = _func_ns
+    g.func = _func_ns
     # torch.nn.utils also exposes stateless.functional_call (older API path).
     if not hasattr(g, "functional_call"):
         g.functional_call = _functional_call

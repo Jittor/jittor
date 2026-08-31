@@ -27,6 +27,20 @@ class Linear(Module):
             return x + self.bias
         return x
 
+    def reset_parameters(self):
+        self.weight.update(
+            init.invariant_uniform(
+                (self.out_features, self.in_features), self.weight.dtype
+            )
+        )
+        if self.bias is not None:
+            bound = 1.0 / math.sqrt(self.in_features)
+            self.bias.update(
+                init.uniform(
+                    (self.out_features,), self.bias.dtype, -bound, bound
+                )
+            )
+
 
 class Conv1d_sp(Linear):
     def __init__(self, inchannels, outchannels, kernel_size=1, bias=True):

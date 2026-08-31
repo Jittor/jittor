@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import unittest
 from typing import get_args, List, Optional, Sequence, Tuple
 
@@ -9,6 +10,16 @@ import jittor as torch
 
 
 class TestInferSchema(unittest.TestCase):
+    def test_unknown_ops_namespace_is_lazy_and_stable(self):
+        namespace = torch.ops.jittor_missing_namespace
+        self.assertIs(namespace, torch.ops.jittor_missing_namespace)
+        self.assertFalse(hasattr(namespace, "missing_op"))
+
+    def test_torch_func_is_an_importable_module(self):
+        func = importlib.import_module("torch.func")
+        self.assertIs(func, torch.func)
+        self.assertIs(func.functional_call, torch.functional_call)
+
     def test_library_registers_executable_default_overload(self):
         library = torch.library.Library("jittor_test", "DEF")
         self.assertEqual(
@@ -26,6 +37,8 @@ class TestInferSchema(unittest.TestCase):
         packet = torch.ops.jittor_test.scale
         self.assertIs(packet.default, packet)
         self.assertEqual(packet.overloads(), ["default"])
+        self.assertIsInstance(packet, torch._ops.OpOverload)
+        self.assertIsInstance(packet, torch._ops.OpOverloadPacket)
         self.assertEqual(packet._tags, (torch.Tag.pointwise,))
         self.assertEqual(packet(torch.array([3.0]), 4.0).numpy().tolist(), [12.0])
 
@@ -53,6 +66,10 @@ class TestInferSchema(unittest.TestCase):
             torch.types.__all__,
             ["Number", "Device", "FileLike", "Storage"],
         )
+        self.assertIs(torch.SymInt, int)
+        self.assertIs(torch.SymFloat, float)
+        self.assertIs(torch.SymBool, bool)
+        self.assertEqual(torch.types.py_sym_types, (int, float, bool))
 
     def test_tag_enum_matches_public_torch_contract(self):
         expected = {

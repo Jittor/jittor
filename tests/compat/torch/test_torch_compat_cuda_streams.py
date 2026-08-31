@@ -3,9 +3,35 @@
 import unittest
 
 import jittor as torch
+import torch.cuda.nvtx as nvtx
+from torch.cuda.memory import CUDAPluggableAllocator
 
 
 class TestCudaStreams(unittest.TestCase):
+    def test_pluggable_allocator_fails_closed(self):
+        self.assertIs(torch.cuda.CUDAPluggableAllocator, CUDAPluggableAllocator)
+        with self.assertRaisesRegex(NotImplementedError, "pluggable allocators"):
+            CUDAPluggableAllocator("allocator.so", "allocate", "free")
+
+    def test_nvtx_nested_ranges_and_decorator(self):
+        self.assertIs(torch.cuda.nvtx, nvtx)
+        self.assertEqual(nvtx.range_push("outer"), 0)
+        self.assertEqual(nvtx.range_push("inner"), 1)
+        self.assertEqual(nvtx.range_pop(), 1)
+        self.assertEqual(nvtx.range_pop(), 0)
+        self.assertEqual(nvtx.range_pop(), -1)
+
+        @nvtx.range("decorated {}", "call")
+        def decorated():
+            return 3
+
+        self.assertEqual(decorated(), 3)
+        with nvtx.range("context"):
+            self.assertIsNone(nvtx.mark("point"))
+        handle = nvtx.range_start("cross-thread")
+        self.assertIsInstance(handle, int)
+        self.assertIsNone(nvtx.range_end(handle))
+
     def setUp(self):
         torch.cuda.set_stream(torch.cuda.default_stream())
 

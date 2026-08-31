@@ -544,6 +544,11 @@ def install(ctx):
                         self.hooks_dict.pop(self.id, None)
                 except Exception:
                     pass
+            def __enter__(self):
+                return self
+            def __exit__(self, *exc):
+                self.remove()
+                return False
         _hooks.RemovableHandle = RemovableHandle
         _modules["torch.utils.hooks"] = _hooks
     g.utils.hooks = _modules["torch.utils.hooks"]

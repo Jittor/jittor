@@ -171,6 +171,12 @@ class LayerNorm(Module):
         xhat = jt.nn._ln_normalize(x, dims, self.eps)
         return xhat * weight + bias
 
+    def reset_parameters(self):
+        if isinstance(self.weight, jt.Var):
+            self.weight.update(jt.ones_like(self.weight))
+        if isinstance(self.bias, jt.Var):
+            self.bias.update(jt.zeros_like(self.bias))
+
 
 LayerNorm1d = LayerNorm
 LayerNorm2d = LayerNorm

@@ -112,8 +112,13 @@ class _OpsDispatcher:
             return namespaces[name]
         base = object.__getattribute__(self, "_base")
         if base is not None:
-            return getattr(base, name)
-        raise AttributeError(name)
+            try:
+                return getattr(base, name)
+            except AttributeError:
+                pass
+        namespace = _OpNamespace(name)
+        namespaces[name] = namespace
+        return namespace
 
 
 def _operator_name(schema_or_name):
@@ -244,8 +249,18 @@ def install_torch_library(torch_module, modules):
     library_module.opcheck = lambda *a, **k: None
     library_module.get_ctx = lambda: None
 
+    ops_module = types.ModuleType("torch._ops")
+    ops_module.OpOverload = _RegisteredOp
+    ops_module.OpOverloadPacket = _RegisteredOp
+    ops_module.HigherOrderOperator = type("HigherOrderOperator", (), {})
+    ops_module.__all__ = [
+        "OpOverload", "OpOverloadPacket", "HigherOrderOperator"
+    ]
+
     modules["torch.library"] = library_module
+    modules["torch._ops"] = ops_module
     torch_module.library = library_module
+    torch_module._ops = ops_module
     torch_module.ops = dispatcher
     torch_module.Tag = Tag
     torch_c = modules.get("torch._C")

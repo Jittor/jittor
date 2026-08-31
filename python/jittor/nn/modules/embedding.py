@@ -54,6 +54,14 @@ class Embedding(jt.Module):
             self.sparse,
         )
 
+    def reset_parameters(self):
+        weight = jt.init.gauss(
+            [self.num_embeddings, self.embedding_dim], self.weight.dtype
+        )
+        if self.padding_idx is not None:
+            weight[self.padding_idx] = 0
+        self.weight.update(weight)
+
 
 class EmbeddingBag(jt.Module):
     def __init__(self, num_embeddings, embedding_dim, mode="mean", dtype="float32"):

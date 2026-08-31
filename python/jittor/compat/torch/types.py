@@ -216,6 +216,10 @@ _DEVICE_CTX_STACK = []
 Number = typing.Union[int, float, bool]
 Device = typing.Union[device, str, int, type(None)]
 FileLike = typing.Union[str, os.PathLike, typing.IO[bytes]]
+SymInt = int
+SymFloat = float
+SymBool = bool
+py_sym_types = (SymInt, SymFloat, SymBool)
 
 
 class Storage:
@@ -241,6 +245,8 @@ def make_torch_types_module():
     module.FileLike = FileLike
     module.Storage = Storage
     module._Number = (int, float, bool)
+    module.py_sym_types = py_sym_types
+    module.PySymType = Number
     module.__all__ = ["Number", "Device", "FileLike", "Storage"]
     return module
 

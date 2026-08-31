@@ -19,6 +19,7 @@ from ..nested import (
 from ..types import (
     _dtype_to_str,
     _make_dtypes, device, dtype, make_torch_types_module,
+    SymBool, SymFloat, SymInt,
 )
 
 def install(ctx):
@@ -84,6 +85,9 @@ def install(ctx):
     _DTYPE_OBJS = _make_dtypes(g)
     g.dtype = dtype
     g.device = device
+    g.SymInt = SymInt
+    g.SymFloat = SymFloat
+    g.SymBool = SymBool
     g.GradScaler = _GradScaler        # picked up by torch.amp/torch.cuda.amp in the shim
     try:
         import jittor.nn as _jt_nn_top
