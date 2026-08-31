@@ -10,6 +10,35 @@ from jittor.compat._aliases import torch_namespace_owned
 
 
 class TestCudaStreams(unittest.TestCase):
+    def test_batch_invariant_precision_controls_are_mutable(self):
+        matmul = torch.backends.cuda.matmul
+        old_fp16 = matmul.allow_fp16_reduced_precision_reduction
+        old_bf16 = matmul.allow_bf16_reduced_precision_reduction
+        old_matmul_precision = matmul.fp32_precision
+        old_conv_precision = torch.backends.cudnn.conv.fp32_precision
+        old_rnn_precision = torch.backends.cudnn.rnn.fp32_precision
+        old_blas = torch.backends.cuda._preferred_blas_library
+        try:
+            matmul.allow_fp16_reduced_precision_reduction = (False, False)
+            matmul.allow_bf16_reduced_precision_reduction = (False, False)
+            matmul.fp32_precision = "ieee"
+            torch.backends.cudnn.conv.fp32_precision = "ieee"
+            torch.backends.cudnn.rnn.fp32_precision = "ieee"
+            previous = torch.backends.cuda.preferred_blas_library("cublaslt")
+            self.assertEqual(previous, old_blas)
+            self.assertEqual(
+                matmul.allow_fp16_reduced_precision_reduction, (False, False))
+            self.assertEqual(
+                matmul.allow_bf16_reduced_precision_reduction, (False, False))
+            self.assertEqual(torch.backends.cuda._preferred_blas_library, "cublaslt")
+        finally:
+            matmul.allow_fp16_reduced_precision_reduction = old_fp16
+            matmul.allow_bf16_reduced_precision_reduction = old_bf16
+            matmul.fp32_precision = old_matmul_precision
+            torch.backends.cudnn.conv.fp32_precision = old_conv_precision
+            torch.backends.cudnn.rnn.fp32_precision = old_rnn_precision
+            torch.backends.cuda._preferred_blas_library = old_blas
+
     def test_pluggable_allocator_fails_closed(self):
         self.assertIs(torch.cuda.CUDAPluggableAllocator, CUDAPluggableAllocator)
         with self.assertRaisesRegex(NotImplementedError, "pluggable allocators"):

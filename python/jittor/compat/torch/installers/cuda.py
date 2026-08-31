@@ -705,6 +705,10 @@ def _install_cuda(g, registry=None):
     cudnn.deterministic = getattr(cudnn, "deterministic", False)
     cudnn.allow_tf32 = getattr(cudnn, "allow_tf32", False)
     cudnn.version = getattr(cudnn, "version", lambda: None)
+    class _PrecisionBackend:
+        fp32_precision = "ieee"
+    cudnn.conv = getattr(cudnn, "conv", _PrecisionBackend())
+    cudnn.rnn = getattr(cudnn, "rnn", _PrecisionBackend())
     cudnn._jittor_cudnn_init = False
     cuda_backend = _modules.get("torch.backends.cuda")
     if cuda_backend is None:
@@ -724,6 +728,11 @@ def _install_cuda(g, registry=None):
     # there is swallowed into "no platform detected" rather than reported.
     cuda_backend.enable_cudnn_sdp = getattr(cuda_backend, "enable_cudnn_sdp", lambda *a, **k: None)
     class _MatmulBackend:
+        def __init__(self):
+            self.allow_fp16_reduced_precision_reduction = True
+            self.allow_bf16_reduced_precision_reduction = True
+            self.fp32_precision = "ieee"
+
         @property
         def allow_tf32(self):
             cuda_tf32 = bool(getattr(jt.flags, "cuda_allow_tf32", 0))
@@ -738,6 +747,14 @@ def _install_cuda(g, registry=None):
             jt.acl_allow_hf32 = enabled
     if not hasattr(cuda_backend, "matmul") or not isinstance(cuda_backend.matmul, _MatmulBackend):
         cuda_backend.matmul = _MatmulBackend()
+    cuda_backend._preferred_blas_library = getattr(
+        cuda_backend, "_preferred_blas_library", "cublas")
+    def _preferred_blas_library(backend=None):
+        previous = cuda_backend._preferred_blas_library
+        if backend is not None:
+            cuda_backend._preferred_blas_library = str(backend)
+        return previous
+    cuda_backend.preferred_blas_library = _preferred_blas_library
     mps = _modules.get("torch.backends.mps")
     if mps is None:
         mps = _types.ModuleType("torch.backends.mps")

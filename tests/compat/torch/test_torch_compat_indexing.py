@@ -186,6 +186,16 @@ class TestIndexSelect(Base):
                     msg=f"index_select d2 {dev}")
         both_devices(body)
 
+    def test_index_select_out_writes_and_returns_exact_tensor(self):
+        x = np.arange(20).reshape(5, 4).astype("float32")
+        idx = np.array([4, 1, 1], dtype="int64")
+        def body(dev):
+            out = torch.empty((3, 4), dtype=torch.float32)
+            result = torch.index_select(t(x), 0, t(idx), out=out)
+            self.assertIs(result, out)
+            self.ac(out.numpy(), x[idx], msg=f"index_select out {dev}")
+        both_devices(body)
+
 
 class TestMaskedSelect(Base):
     def test_masked_select(self):

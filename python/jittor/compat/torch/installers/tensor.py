@@ -1769,6 +1769,14 @@ def install(ctx):
     g.inference_mode = lambda func=None: _GradDecoratorCtx(_orig_no_grad, func)
 
     Var = jt.Var
+    _native_index_select = g.index_select
+    def _index_select(input, dim, index, *, out=None):
+        result = _native_index_select(input, dim, index)
+        if out is not None:
+            out.assign(result)
+            return out
+        return result
+    g.index_select = _index_select
     # torch.Tensor is both (a) the isinstance target and (b) a legacy constructor:
     # torch.Tensor(d0, d1, ...) makes an UNINITIALISED tensor of that shape (DETR's
     # _init_layers: torch.Tensor(num_levels, embed_dims)), while torch.Tensor(data)
