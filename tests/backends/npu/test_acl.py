@@ -14,6 +14,72 @@ import numpy as np
 @unittest.skipIf(not jt.compiler.has_acl, "No ACL found")
 class TestACL(unittest.TestCase):
 
+    @staticmethod
+    def _paged_attention_reference(query, key, value):
+        repeats = query.shape[1] // key.shape[1]
+        key = np.repeat(key, repeats, axis=1).astype("float64")
+        value = np.repeat(value, repeats, axis=1).astype("float64")
+        scale = query.shape[-1] ** -0.5
+        scores = np.einsum(
+            "qhd,khd->hqk", query.astype("float64"), key
+        ) * scale
+        offset = key.shape[0] - query.shape[0]
+        rows = np.arange(query.shape[0])[:, None]
+        columns = np.arange(key.shape[0])[None, :]
+        scores = np.where(
+            (columns > rows + offset)[None, :, :], -np.inf, scores
+        )
+        scores -= scores.max(axis=-1, keepdims=True)
+        weights = np.exp(scores)
+        weights /= weights.sum(axis=-1, keepdims=True)
+        return np.einsum("hqk,khd->qhd", weights, value)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_paged_attention_prefill_decode_stays_on_device(self):
+        rng = np.random.RandomState(31)
+        heads, kv_heads, head_dim, block_size = 4, 2, 4, 4
+        query = (rng.randn(3, heads, head_dim) * 0.1).astype("float32")
+        key = (rng.randn(4, kv_heads, head_dim) * 0.1).astype("float32")
+        value = (rng.randn(4, kv_heads, head_dim) * 0.1).astype("float32")
+        decode_query = (rng.randn(1, heads, head_dim) * 0.1).astype("float32")
+        cache = jt.zeros((2, 2, block_size, kv_heads, head_dim), "float32")
+
+        with jt.no_grad(), jt.log_capture_scope(
+                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+            jt.nn.reshape_and_cache(
+                jt.array(key[:3]), jt.array(value[:3]), cache,
+                jt.array([0, 1, 2]).int32(), slots=[0, 1, 2])
+            prefill = jt.nn.paged_attention(
+                jt.array(query), cache, jt.array([0, 3]).int32(),
+                jt.array([3]).int32(), jt.array([[0]]).int32(),
+                query_lengths=[0, 3], key_lengths=[3])
+            prefill.sync()
+            prefill_location = prefill.location()
+
+            jt.nn.reshape_and_cache(
+                jt.array(key[3:]), jt.array(value[3:]), cache,
+                jt.array([3]).int32(), slots=[3])
+            decode = jt.nn.paged_attention(
+                jt.array(decode_query), cache, jt.array([0, 1]).int32(),
+                jt.array([4]).int32(), jt.array([[0]]).int32(),
+                query_lengths=[0, 1], key_lengths=[4])
+            decode.sync()
+            cache.sync()
+            decode_location = decode.location()
+            cache_location = cache.location()
+
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+        self.assertEqual(prefill_location, "device")
+        self.assertEqual(decode_location, "device")
+        self.assertEqual(cache_location, "device")
+        np.testing.assert_allclose(
+            prefill.numpy(), self._paged_attention_reference(
+                query, key[:3], value[:3]), atol=1e-5, rtol=0)
+        np.testing.assert_allclose(
+            decode.numpy(), self._paged_attention_reference(
+                decode_query, key, value), atol=1e-5, rtol=0)
+
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_empty_tensor_numpy_skips_zero_byte_device_copy(self):
         value = jt.empty((0, 3), dtype="float32")

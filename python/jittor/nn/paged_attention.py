@@ -26,8 +26,12 @@ def reshape_and_cache(key, value, kv_cache, slot_mapping, slots=None):
     caller walks many layers with one metadata object.
     """
     from .kv_cache_cuda import _reshape_and_cache_cuda
+    from .kv_cache_acl import _reshape_and_cache_acl
 
     if _reshape_and_cache_cuda(key, value, kv_cache, slot_mapping) is not None:
+        return kv_cache
+    if _reshape_and_cache_acl(
+            key, value, kv_cache, slot_mapping, slots=slots) is not None:
         return kv_cache
     block_size = kv_cache.shape[2]
     if slots is None:
@@ -99,18 +103,21 @@ def paged_attention(query, kv_cache, cu_seqlens_q, seq_lens, block_table,
         span_q = starts[1] - starts[0]
         span_k = lengths[0]
         used = -(-span_k // block_size)      # blocks holding span_k keys
-        rows = block_table[:requests, :used]
-        cache = kv_cache[rows.reshape(-1)].reshape(
+        rows = _gather_block_table(block_table, requests, used)
+        cache = _gather_cache_blocks(kv_cache, rows.reshape(-1)).reshape(
             (requests, used, 2, block_size, num_kv_heads, head_dim))
-        keys = cache[:, :, 0].reshape(
-            (requests, used * block_size, num_kv_heads, head_dim))[:, :span_k]
-        values = cache[:, :, 1].reshape(
-            (requests, used * block_size, num_kv_heads, head_dim))[:, :span_k]
+        keys, values = _split_cache_kv(cache, 2)
+        keys = _slice_dim(keys.reshape(
+            (requests, used * block_size, num_kv_heads, head_dim)),
+            1, 0, span_k)
+        values = _slice_dim(values.reshape(
+            (requests, used * block_size, num_kv_heads, head_dim)),
+            1, 0, span_k)
         keys, values = keys.float32(), values.float32()
         if repeats > 1:
-            keys = keys.repeat_interleave(repeats, dim=2)
-            values = values.repeat_interleave(repeats, dim=2)
-        queries = q[:requests * span_q].reshape(
+            keys = _repeat_interleave_dim(keys, 2, repeats)
+            values = _repeat_interleave_dim(values, 2, repeats)
+        queries = _slice_dim(q, 0, 0, requests * span_q).reshape(
             (requests, span_q, num_heads, head_dim)).transpose(1, 2)
         keys = keys.transpose(1, 2)
         values = values.transpose(1, 2)
@@ -129,15 +136,19 @@ def paged_attention(query, kv_cache, cu_seqlens_q, seq_lens, block_table,
             continue
         span_k = lengths[i]
         used = -(-span_k // block_size)
-        cache = kv_cache[block_table[i, :used]]
-        keys = cache[:, 0].reshape(
-            (-1, num_kv_heads, head_dim))[:span_k].float32()
-        values = cache[:, 1].reshape(
-            (-1, num_kv_heads, head_dim))[:span_k].float32()
+        blocks = _gather_block_table(block_table, 1, used, request=i)
+        cache = _gather_cache_blocks(kv_cache, blocks.reshape(-1))
+        keys, values = _split_cache_kv(cache, 1)
+        keys = _slice_dim(
+            keys.reshape((-1, num_kv_heads, head_dim)), 0, 0, span_k
+        ).float32()
+        values = _slice_dim(
+            values.reshape((-1, num_kv_heads, head_dim)), 0, 0, span_k
+        ).float32()
         if repeats > 1:
-            keys = keys.repeat_interleave(repeats, dim=1)
-            values = values.repeat_interleave(repeats, dim=1)
-        queries = q[starts[i]:starts[i + 1]].transpose(0, 1)
+            keys = _repeat_interleave_dim(keys, 1, repeats)
+            values = _repeat_interleave_dim(values, 1, repeats)
+        queries = _slice_dim(q, 0, starts[i], span_q).transpose(0, 1)
         scores = jt.matmul(
             queries, keys.transpose(0, 1).transpose(1, 2)) * scale
         if causal:
@@ -160,6 +171,61 @@ def _causal_mask(span_q, span_k):
     rows = jt.arange(span_q).reshape(span_q, 1)
     cols = jt.arange(span_k).reshape(1, span_k)
     return (cols > (rows + offset)).float32()
+
+
+def _gather_cache_blocks(kv_cache, block_ids):
+    from .kv_cache_acl import _gather_cache_blocks_acl
+
+    selected = _gather_cache_blocks_acl(kv_cache, block_ids)
+    if selected is not None:
+        return selected
+    return kv_cache[block_ids]
+
+
+def _gather_block_table(block_table, request_count, block_count, request=None):
+    from .kv_cache_acl import _gather_block_table_acl
+
+    selected = _gather_block_table_acl(
+        block_table, request_count, block_count, request=request
+    )
+    if selected is not None:
+        return selected
+    if request is None:
+        return block_table[:request_count, :block_count]
+    return block_table[request, :block_count].reshape((1, block_count))
+
+
+def _split_cache_kv(cache, dim):
+    from .kv_cache_acl import _split_cache_kv_acl
+
+    selected = _split_cache_kv_acl(cache, dim)
+    if selected is not None:
+        return selected
+    key_slices = [slice(None)] * cache.ndim
+    value_slices = list(key_slices)
+    key_slices[dim] = 0
+    value_slices[dim] = 1
+    return cache[tuple(key_slices)], cache[tuple(value_slices)]
+
+
+def _slice_dim(value, dim, start, length):
+    from .kv_cache_acl import _slice_dim_acl
+
+    selected = _slice_dim_acl(value, dim, start, length)
+    if selected is not None:
+        return selected
+    slices = [slice(None)] * value.ndim
+    slices[dim] = slice(start, start + length)
+    return value[tuple(slices)]
+
+
+def _repeat_interleave_dim(value, dim, repeats):
+    from .kv_cache_acl import _repeat_interleave_dim_acl
+
+    expanded = _repeat_interleave_dim_acl(value, dim, repeats)
+    if expanded is not None:
+        return expanded
+    return value.repeat_interleave(repeats, dim=dim)
 
 
 

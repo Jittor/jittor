@@ -1,8 +1,8 @@
 # vLLM Ascend 与 Jittor-NPU bootstrap 验证
 
-- Status: native vLLM-Ascend inference accepted; Jittor platform bootstrap, Qwen3 construction and strict weight load accepted; Jittor-vLLM model inference open
+- Status: native vLLM-Ascend inference accepted; Jittor Qwen3 strict load and one-token prefill parity accepted; multi-token engine inference open
 - Date: 2026-08-31
-- Baseline: `ccafc52e` plus the compatibility changes in this report's commit
+- Baseline: `0df29eed` plus the compatibility changes in this report's commit
 - Owner: Jittor compatibility and external vLLM adapter maintainers
 - Review when: vLLM, Transformers, CANN, ATB, or the external adapter version changes
 
@@ -14,9 +14,10 @@
 2. `vLLM 0.20.2` 在 Jittor Torch shim 和外置 `vllm-jittor-npu` platform
    plugin 下的 bootstrap、custom-op 注册和真实 ACL tensor 执行。
 
-第二条路径已经完成 Qwen3-0.6B 模型构造和严格 safetensors 权重加载，但尚未完成
-attention 独立对拍、完整 forward、KV cache、采样和解码。因此本报告不声明
-Jittor-vLLM NPU 推理、token 对齐或性能通过。
+第二条路径已经完成 Qwen3-0.6B 模型构造、严格 safetensors 权重加载、attention
+独立对拍和完整 prefill，并让第一个 greedy token 与原生基线一致。尚未完成 worker、
+engine 采样循环和多 token decode，因此本报告不声明完整 Jittor-vLLM NPU 推理或
+性能通过。
 
 ## Native vLLM-Ascend baseline
 
@@ -53,6 +54,9 @@ text:       Paris. The capital
   vLLM Qwen3 构造、权重加载所需边界。
 - NVTX 的惰性原生导入会恢复共享 Jittor/Torch 根模块的 `torch.utils` 绑定，避免一次
   range 调用破坏已完成的 shim 安装图。
+- 公有 `jittor.nn.paged_attention/reshape_and_cache` 在 ACL 下用 Gather/Scatter 完成
+  block-table 读取、KV 更新、GQA 扩展和 packed slice；prefill、decode 和 KV cache
+  不再触发 `reindex` CPU fallback。
 
 ## External adapter state
 
@@ -63,15 +67,18 @@ Jittor 主仓库。当前文件 SHA-256：
 | --- | --- |
 | `pyproject.toml` | `77872fe7d972071a55852f17103b7abb2ec3b55e04a8500eeaae7843eb9b92d2` |
 | `vllm_jittor_npu/__init__.py` | `fb67de68f407a898a47c44b9c96bdbcde2955c0e219fe2bf13e0fe7b29836582` |
-| `vllm_jittor_npu/bootstrap.py` | `6faa4d55f4cdb47666f8c29ec4ba41818987fa519a935cd262fa86d95df8bdfe` |
-| `vllm_jittor_npu/platform.py` | `2db812921edde5727d8d835228681559b255e493e3b6c269a0f5eea08ebe2405` |
-| `vllm_jittor_npu/attention.py` | `e88de4df9c9c66dd1257c3e4cc64d8d17aded71d072f99cc58d5442540d0ed39` |
+| `vllm_jittor_npu/bootstrap.py` | `25961da3ad6de1cceb59e4bdf6e0938f1cc183166726e351f8da992385a41459` |
+| `vllm_jittor_npu/platform.py` | `e3d7d2b9abcbf45d07df5cf0d168392d2a67d56f7dba28b9056a3e3bcca8939a` |
+| `vllm_jittor_npu/attention.py` | `7b1c3ba5c2aeabcca9c8e4a6cfd817f622c35a07c270ab3e6a1be4c3d0e45771` |
+| `probes/qwen3_forward.py` | `9f47c1dfd2cccf2e79d82de4eff435fe086335ea516bba6304a6c0310b39732b` |
 
 Bootstrap 只在检测到 `torch.__jittor_version__` 后激活，拒绝已加载的
 `torch_npu`，并让 Transformers 的可选 torch-npu 探测返回 false。platform 通过
 `vllm.platform_plugins` entry point 注册为 `PlatformEnum.OOT`，禁用 TorchInductor
-和 CUDA graph。外置 adapter 已有标准 KV shape 的 CUSTOM attention 结构实现；它的
-数值正确性和性能尚未独立验证，worker 仍待实现。
+和 CUDA graph。CUSTOM attention 使用公有 Jittor paged-attention，metadata 的 host
+materialization 每个 batch 只执行一次。adapter 还修复了 vLLM embedding loader 对
+PyTorch slice-view 写回的依赖；当前只支持未量化 TP=1，其他 TP 形态 fail-closed。
+worker 仍待实现。
 
 ## Evidence
 
@@ -105,13 +112,24 @@ Bootstrap 只在检测到 `torch.__jittor_version__` 后激活，拒绝已加载
   正确。
 - 空 tensor 真实 NPU 回归：`empty((0, 3))` 在 `device` 驻留后，两次 `.numpy()` 和
   重复 `.sync()` 通过；零字节迁移不调用 vendor memcpy，也未复现 double-free。
+- 公有 paged-attention：CPU 独立 reference 与 negative-slot 契约 `6 passed`；真实
+  NPU 上同一 cache 的 float32 prefill、追加 token 和 decode 均匹配 NumPy，GQA、
+  cache 更新和输出全在 `device`，fallback 为 0。外置 backend 的 float32
+  prefill/decode 最大误差分别为 `6.25e-9/5.11e-9`；BF16 cache 最大误差
+  `1.64e-4`，均为零 fallback。
+- Qwen3-0.6B 完整 prefill：提示词 `The capital of France is` 编码为
+  `[785, 6722, 315, 9625, 374]`，首个 greedy token 为 `12095`（` Paris`），与原生
+  vLLM-Ascend 基线的第一个 token 一致。28 层 KV cache、hidden states 和 logits
+  均在 `device`，fallback 为 0；embedding/hidden/logits 非零且有限，进程未加载
+  `torch_npu` 或 `vllm_ascend`。热缓存严格加载为 `3.95s`，完整 prefill+logits 为
+  `3.03s`；该时延尚无等价原生 prefill 协议，不作为性能验收。
 
 ## Open work
 
-- 用独立 reference 对拍外置 attention 的 prefill、decode、GQA 和 KV cache 更新，
-  并消除 metadata host synchronization 路径。
-- 实现、测试外置 Jittor NPU worker、model runner 和 paged KV cache，完成
-  Qwen3-0.6B 完整 forward 与 greedy decode。
-- 完成 greedy token 对齐、零 CPU/PyTorch fallback 审计、暖态性能和显存对比。
+- 实现、测试外置 Jittor NPU worker 和 model runner，将已验证的 prefill/decode
+  backend 接入 engine 调度和 KV cache 分配。
+- 完成 Qwen3-0.6B 多 token greedy decode，逐 token 对齐原生的
+  `[12095, 13, 576, 6722]`，并审计全程零 CPU/PyTorch fallback。
+- 建立等价暖态生成协议，完成吞吐、首 token、decode latency 和显存对比。
 - 在当前 vLLM 版本重新验证历史 CUDA adapter 基线；旧 adapter 当时未版本化，
   不能作为当前可复现产物。

@@ -112,6 +112,18 @@ class TestPagedAttention(unittest.TestCase):
         np.testing.assert_allclose(stored[0, 1, 1], value[1], atol=0, rtol=0)
         np.testing.assert_allclose(stored[1, 0, 1], key[2], atol=0, rtol=0)
 
+    def test_reshape_and_cache_skips_negative_slots(self):
+        cache = jt.zeros((2, 2, 4, 1, 2), "float32")
+        key = jt.array([[[1.0, 2.0]], [[9.0, 9.0]], [[3.0, 4.0]]])
+        value = key + 10.0
+        slots = jt.array([0, -1, 5]).int32()
+        with jt.no_grad():
+            jt.nn.reshape_and_cache(key, value, cache, slots, slots=[0, -1, 5])
+        stored = np.asarray(cache.numpy())
+        np.testing.assert_array_equal(stored[0, 0, 0], key.numpy()[0])
+        np.testing.assert_array_equal(stored[1, 1, 1], value.numpy()[2])
+        self.assertEqual(np.count_nonzero(stored), 8)
+
 
 if __name__ == "__main__":
     unittest.main()
