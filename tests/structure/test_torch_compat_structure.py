@@ -433,9 +433,9 @@ class TestTorchCompatStructure(unittest.TestCase):
                 )
         installers = package_root / "installers"
         expected = {
-            "core.py", "tensor.py", "autograd.py", "nn.py", "cuda.py",
-            "distributed.py", "data.py", "distributions.py", "numerical.py",
-            "compiler.py", "utilities.py",
+            "core.py", "tensor.py", "autograd.py", "nn.py", "nn_init.py",
+            "cuda.py", "distributed.py", "data.py", "distributions.py",
+            "numerical.py", "compiler.py", "utilities.py",
         }
         self.assertEqual(
             {path.name for path in installers.glob("*.py") if path.name != "__init__.py"},
