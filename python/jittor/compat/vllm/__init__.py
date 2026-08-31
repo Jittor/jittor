@@ -96,10 +96,13 @@ class _ArmOnFirstImport(importlib.abc.MetaPathFinder):
 
 
 def register():
-    """Arm :func:`install` against the first import of vLLM. Idempotent."""
+    """Arm :func:`install` against the first import of vLLM.
 
-    for finder in sys.meta_path:
-        if isinstance(finder, _ArmOnFirstImport):
-            return False
-    sys.meta_path.insert(0, _ArmOnFirstImport())
+    Idempotent, and reports the state it establishes rather than whether this
+    particular call did the work -- callers record it in a status report that
+    has to read the same every time it is taken.
+    """
+
+    if not any(isinstance(finder, _ArmOnFirstImport) for finder in sys.meta_path):
+        sys.meta_path.insert(0, _ArmOnFirstImport())
     return True
