@@ -138,6 +138,7 @@ class TestTorchCompatStructure(unittest.TestCase):
             ("shim/resources/stubs/torchdata/__init__.py", "__getattr__", "<f-string>"),
             ("shim/resources/torch_init.py", "<module>", "__name__"),
             ("shim/runtime.py", "enable", repr("torch")),
+            ("vllm/__init__.py", "install", "name"),
             ("triton/__init__.py", "install", "name"),
         ]))
         self.assertEqual(sorted(mutation_calls), sorted([
@@ -413,6 +414,7 @@ class TestTorchCompatStructure(unittest.TestCase):
                 "optional.tensordict",
                 "optional.safetensors",
                 "optional.flash-attn",
+                "optional.vllm",
             ],
         )
 

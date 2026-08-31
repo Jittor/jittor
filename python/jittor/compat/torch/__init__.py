@@ -119,6 +119,19 @@ def _install_optional_safetensors(context):
     _install_safetensors_shim(context.registry)
 
 
+def _install_optional_vllm(context):
+    """Arm vLLM compatibility, which fires only if vLLM is imported later."""
+
+    from ..module_patcher import install_module_patches
+    from ..vllm import register
+
+    register()
+    # Registering fills the table; the finder that consults it has to be live
+    # before vLLM is imported. Entry points stay out of it -- scanning them
+    # here would drag unrelated adapters into every import of the shim.
+    install_module_patches(load_entry_points=False)
+
+
 _REQUIRED_STEPS = (
     ("core", core.install),
     ("tensor.base", tensor.install),
@@ -151,6 +164,7 @@ _OPTIONAL_STEPS = (
     ("optional.tensordict", autograd.install_tensordict),
     ("optional.safetensors", _install_optional_safetensors),
     ("optional.flash-attn", utilities.install_flash),
+    ("optional.vllm", _install_optional_vllm),
 )
 
 _NAMESPACE_TRANSACTION = "_torch_namespace_transaction"
