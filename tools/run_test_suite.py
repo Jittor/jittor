@@ -34,9 +34,6 @@ from _helpers.process_modes import TORCH_MODE_PATHS  # noqa: E402
 
 SESSIONS = ("native", "torch")
 
-_SUMMARY = re.compile(
-    r"^=+ .*?(?:(\d+) failed)?.*?(?:(\d+) passed)?.*?(?:(\d+) skipped)?.*?(?:(\d+) errors?)?.*=+$"
-)
 _COUNT = re.compile(r"(\d+) (passed|failed|skipped|error|errors|xfailed|xpassed)")
 _WARMUP_MARKER = "JITTOR_TEST_SUITE_CPU_READY"
 _WARMUP_ATTEMPTS = 3
@@ -80,15 +77,15 @@ def _session_arguments(session):
 
 
 def _parse_counts(output):
-    counts = {}
     for line in reversed(output.splitlines()):
-        if not line.startswith("=") or ("passed" not in line and "failed" not in line
-                                        and "error" not in line and "skipped" not in line):
+        matches = _COUNT.findall(line)
+        if not matches:
             continue
-        for number, kind in _COUNT.findall(line):
-            counts[kind.rstrip("s")] = int(number)
-        break
-    return counts
+        counts = {}
+        for number, kind in matches:
+            counts["error" if kind == "errors" else kind] = int(number)
+        return counts
+    return {}
 
 
 def _warmup(environment):

@@ -269,6 +269,32 @@ def test_complete_suite_runner_retries_a_zero_exit_cold_cache_refresh():
     assert run.call_count == 2
 
 
+def test_complete_suite_runner_parses_quiet_and_decorated_summaries():
+    module = _load_test_suite_runner()
+
+    quiet = "768 passed, 738 skipped, 178 warnings in 6328.52s (1:45:28)\n"
+    assert module._parse_counts(quiet) == {"passed": 768, "skipped": 738}
+
+    decorated = (
+        "FAILED tests/test_example.py::test_failure\n"
+        "====== 2 failed, 10 passed, 1 skipped, 3 xfailed, 1 xpassed, 4 errors ======\n"
+    )
+    assert module._parse_counts(decorated) == {
+        "failed": 2,
+        "passed": 10,
+        "skipped": 1,
+        "xfailed": 3,
+        "xpassed": 1,
+        "error": 4,
+    }
+
+
+def test_complete_suite_runner_uses_the_last_summary():
+    module = _load_test_suite_runner()
+    output = "1 passed in 0.1s\nrerun output\n2 passed, 1 skipped in 0.2s\n"
+    assert module._parse_counts(output) == {"passed": 2, "skipped": 1}
+
+
 def test_network_access_is_explicitly_marked():
     path = TEST_ROOT / "compiler" / "test_trace_var.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
