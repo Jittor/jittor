@@ -455,6 +455,39 @@ class TestACL(unittest.TestCase):
             self.assertIsNone(jt.nn._rms_norm_cuda(x, gamma, object()))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_serving_rms_norm_caches_mixed_dtype_weight(self):
+        rng = np.random.RandomState(20260831)
+        x_np = rng.randn(2, 16).astype("float32")
+        weight_np = rng.uniform(0.5, 1.5, size=(16,)).astype("float32")
+        x = jt.array(x_np)
+        weight = jt.array(weight_np).bfloat16()
+
+        with jt.no_grad(), jt.log_capture_scope(
+                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+            first = jt.nn.rms_norm(x, weight, 1e-6)
+            cached = weight.__dict__.get("_serving_float32_weight")
+            second = jt.nn.rms_norm(x, weight, 1e-6)
+            first.sync()
+            second.sync()
+            first_location = first.location()
+            second_location = second.location()
+
+        self.assertIsNotNone(cached)
+        self.assertIs(weight.__dict__.get("_serving_float32_weight"), cached)
+        self.assertEqual(str(first.dtype), "float32")
+        self.assertEqual(str(second.dtype), "float32")
+        self.assertEqual(first_location, "device")
+        self.assertEqual(second_location, "device")
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+        expected_weight = weight.float32().numpy()
+        expected = x_np / np.sqrt(
+            np.mean(x_np * x_np, axis=-1, keepdims=True) + 1e-6)
+        expected *= expected_weight
+        np.testing.assert_allclose(first.numpy(), expected, atol=2e-5, rtol=2e-5)
+        np.testing.assert_allclose(second.numpy(), expected, atol=2e-5, rtol=2e-5)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_training_rms_norm(self):
         rng = np.random.RandomState(20260830)
         x_np = rng.randn(2, 3, 1024).astype("float32")

@@ -36,7 +36,21 @@ def silu_and_mul(x):
 
 def rms_norm(x, weight, eps=1e-6):
     """Root-mean-square normalise ``x`` over its last axis and scale."""
-    fused = _rms_norm_cuda(x, weight, eps)
+    backend = getattr(jt.nn, "_rms_norm_cuda", _rms_norm_cuda)
+    backend_weight = weight
+    if (
+        getattr(jt.compiler, "has_acl", 0)
+        and getattr(jt.flags, "use_acl", 0)
+        and jt.flags.use_cuda
+        and getattr(jt.flags, "no_grad", 0)
+        and str(x.dtype) == "float32"
+        and str(weight.dtype) in ("float16", "bfloat16")
+    ):
+        backend_weight = weight.__dict__.get("_serving_float32_weight")
+        if backend_weight is None:
+            backend_weight = weight.float32()
+            weight.__dict__["_serving_float32_weight"] = backend_weight
+    fused = backend(x, backend_weight, eps)
     if fused is not None:
         return fused
     dtype = x.dtype
