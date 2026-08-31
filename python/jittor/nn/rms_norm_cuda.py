@@ -4,11 +4,19 @@ import math
 
 import jittor as jt
 
-from ._cuda_inference import cached_source, device_index
+from ._cuda_inference import cached_source, device_index, on_acl
+
+
+_autocast_probe = None
 
 
 def _autocast_enabled():
-    probe = getattr(jt, "is_autocast_enabled", None)
+    # Resolved once: the attribute lookup showed up in a decode profile at
+    # thousands of calls per step, in front of a one-microsecond kernel.
+    global _autocast_probe
+    if _autocast_probe is None:
+        _autocast_probe = getattr(jt, "is_autocast_enabled", None) or False
+    probe = _autocast_probe
     if not callable(probe):
         return False
     try:
@@ -24,7 +32,7 @@ def _rms_norm_contract(x, gamma, epsilon, residual=None):
         return None
     if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
         return None
-    if getattr(jt.compiler, "has_acl", 0):
+    if on_acl():
         return None
     try:
         if _autocast_enabled():
@@ -191,7 +199,7 @@ def multihead_rms_norm_cuda(x, gamma, scale=None, min_norm=1e-12):
         return None
     if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
         return None
-    if getattr(jt.compiler, "has_acl", 0):
+    if on_acl():
         return None
     if _autocast_enabled():
         return None

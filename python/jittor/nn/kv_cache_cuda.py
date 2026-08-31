@@ -2,7 +2,7 @@
 
 import jittor as jt
 
-from ._cuda_inference import cached_source, device_index
+from ._cuda_inference import cached_source, device_index, on_acl
 
 
 def _reshape_and_cache_cuda(key, value, kv_cache, slot_mapping):
@@ -12,7 +12,7 @@ def _reshape_and_cache_cuda(key, value, kv_cache, slot_mapping):
         return None
     if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
         return None
-    if getattr(jt.compiler, "has_acl", 0):
+    if on_acl():
         return None
     try:
         key_shape = tuple(int(size) for size in key.shape)
@@ -88,7 +88,7 @@ def _paged_attention_decode_cuda(
         return None
     if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
         return None
-    if getattr(jt.compiler, "has_acl", 0):
+    if on_acl():
         return None
     try:
         query_shape = tuple(int(size) for size in query.shape)

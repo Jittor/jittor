@@ -2,7 +2,7 @@
 
 import jittor as jt
 
-from ._cuda_inference import cached_source, device_index
+from ._cuda_inference import cached_source, device_index, on_acl
 
 
 def _silu_and_mul_cuda(x):
@@ -11,7 +11,7 @@ def _silu_and_mul_cuda(x):
         return None
     if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
         return None
-    if getattr(jt.compiler, "has_acl", 0) or device_index(x) < 0:
+    if on_acl() or device_index(x) < 0:
         return None
     if str(x.dtype) not in ("float16", "bfloat16", "float32"):
         return None

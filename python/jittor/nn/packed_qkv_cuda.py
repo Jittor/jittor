@@ -4,7 +4,7 @@ import math
 
 import jittor as jt
 
-from ._cuda_inference import cached_source, device_index
+from ._cuda_inference import cached_source, device_index, on_acl
 
 
 def packed_qkv_rms_rope_cuda(
@@ -28,7 +28,7 @@ def packed_qkv_rms_rope_cuda(
         return None
     if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
         return None
-    if getattr(jt.compiler, "has_acl", 0):
+    if on_acl():
         return None
     autocast_probe = getattr(jt, "is_autocast_enabled", None)
     if callable(autocast_probe):

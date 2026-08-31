@@ -21,6 +21,18 @@ def cached_source(template, params):
     return source
 
 
+_has_acl = None
+
+
+def on_acl():
+    """Whether this build targets Ascend. Fixed once the compiler is loaded, but
+    the fused-kernel guards were re-reading it through getattr on every call."""
+    global _has_acl
+    if _has_acl is None:
+        _has_acl = bool(getattr(jt.compiler, "has_acl", 0))
+    return _has_acl
+
+
 def device_index(value):
     get_device = getattr(value, "get_device", None)
     if callable(get_device):

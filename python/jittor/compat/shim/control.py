@@ -138,9 +138,13 @@ class TorchShimFlagsProxy:
         object.__setattr__(self, "_torch_shim", 0)
 
     def __getattr__(self, name):
+        # Only reached on a miss, and every flag read is a miss, so this is the
+        # hot path: a decode step reads jt.flags thousands of times. `self._inner`
+        # is in the instance dict, so plain attribute access finds it without
+        # recursing back here -- no need for the slower object.__getattribute__.
         if name == "torch_shim":
-            return object.__getattribute__(self, "_torch_shim")
-        return getattr(object.__getattribute__(self, "_inner"), name)
+            return self._torch_shim
+        return getattr(self._inner, name)
 
     def __setattr__(self, name, value):
         if name == "torch_shim":

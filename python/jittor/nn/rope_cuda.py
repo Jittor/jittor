@@ -2,7 +2,7 @@
 
 import jittor as jt
 
-from ._cuda_inference import cached_source, device_index
+from ._cuda_inference import cached_source, device_index, on_acl
 
 
 def _rotary_embedding_cuda(
@@ -21,7 +21,7 @@ def _rotary_embedding_cuda(
         return None
     if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
         return None
-    if getattr(jt.compiler, "has_acl", 0) or not is_neox_style:
+    if on_acl() or not is_neox_style:
         return None
     try:
         q_shape = tuple(int(size) for size in q.shape)
@@ -139,7 +139,7 @@ def partial_rotary_embedding_cuda(q, k, cos, sin, *, prefix_tokens, rotary_dim=N
         return None
     if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
         return None
-    if getattr(jt.compiler, "has_acl", 0):
+    if on_acl():
         return None
     dtypes = tuple(str(value.dtype) for value in tensors)
     if len(set(dtypes)) != 1 or dtypes[0] != "float32":
