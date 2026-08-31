@@ -1,8 +1,8 @@
 # Jittor Project Context
 
 - Status: Current index, not a history log
-- Last reviewed: 2026-08-30
-- Baseline reviewed: `a3ae89f0` plus the current ACL product-reduction follow-up
+- Last reviewed: 2026-09-01
+- Baseline reviewed: `e076a9e5`
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -73,7 +73,7 @@ and CPU-to-accelerator parity. See [test system](../../docs/testing/test-system.
 The complete CPU repository gate is
 [`tools/run_test_suite.py`](../../tools/run_test_suite.py), which owns separate
 native and Torch-mode processes, JIT caches, temporary directories, and process
-mode variables. Current AArch64 verification passes native `743 passed, 722 skipped` and split Torch/structure `1313 passed, 518 skipped` plus `219 passed, 2 skipped`; see the [ARM CPU stability report](../results/2026-08-30-arm-cpu-suite-stability.md).
+mode variables. Current AArch64 verification passes native `768 passed, 738 skipped`, Torch `1591 passed, 536 skipped`, and clean structure `232 passed, 2 skipped`; see the [current CPU suite](../results/2026-09-01-current-cpu-suite.md) and the [ARM CPU stability report](../results/2026-08-30-arm-cpu-suite-stability.md).
 The maintained CUDA gate also passes on a real RTX 4090 and covers the complete CUDA backend
 directory, dtype coverage, CPU/CUDA device parity, TF32 controls, and strict
 OpInfo CUDA references. The maintained CPU gate also passes with a fail-closed
