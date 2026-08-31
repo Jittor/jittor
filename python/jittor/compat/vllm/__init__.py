@@ -7,6 +7,10 @@ here -- the modules as empty stand-ins, the operators from Jittor's own public
 primitives in :mod:`.custom_ops`. :mod:`.flash_attn` does the same for the
 flash-attention wheel the attention backend expects to import.
 
+:mod:`.layers` and the attention patch in :mod:`.flash_attn` are a
+different kind of work: vLLM's own layers, pointed at Jittor's fused
+primitives instead of kernels this backend does not have.
+
 Nothing runs unless vLLM is actually imported, and then it runs *before* vLLM
 does. That timing is the whole difficulty: vLLM reaches for the compiled
 extension from inside its own package body, so anything that waits for a module
@@ -24,7 +28,9 @@ import importlib.machinery
 import sys
 import types
 
-from . import custom_ops, flash_attn
+from jittor.compat.module_patcher import register_module_patch
+
+from . import custom_ops, flash_attn, layers
 
 # The compiled bundles vLLM tries to import. Being importable-but-empty is what
 # tells vLLM its kernels are present, which is the question that leads it to
@@ -96,7 +102,13 @@ class _ArmOnFirstImport(importlib.abc.MetaPathFinder):
 
 
 def register():
-    """Arm :func:`install` against the first import of vLLM.
+    """Arm vLLM compatibility. Nothing runs until vLLM is actually imported.
+
+    Two mechanisms, because the work happens at two different moments. The
+    compiled-extension surface has to exist *before* vLLM's package body runs,
+    which a finder can do. The layer patches need vLLM's classes to exist, so
+    they run *after* the module defining them executes -- what the module
+    patcher is for.
 
     Idempotent, and reports the state it establishes rather than whether this
     particular call did the work -- callers record it in a status report that
@@ -105,4 +117,7 @@ def register():
 
     if not any(isinstance(finder, _ArmOnFirstImport) for finder in sys.meta_path):
         sys.meta_path.insert(0, _ArmOnFirstImport())
+    for patches in (layers.PATCHES, flash_attn.PATCHES):
+        for path, patch in patches.items():
+            register_module_patch(path, patch)
     return True

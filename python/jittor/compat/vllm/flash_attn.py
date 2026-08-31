@@ -13,7 +13,9 @@ use. Those resolve permissively, so a version that reaches for one more of them
 does not fail at import.
 """
 
+import os
 import sys
+import weakref
 
 import jittor as jt
 
@@ -199,3 +201,100 @@ def install():
     published.append(_INTERFACE)
     install_permissive_package(_BUNDLE, sys.meta_path)
     return tuple(published)
+
+
+def patch_attention_impl(module):
+    """Route V1's FlashAttention backend through Jittor's paged attention.
+
+    V1 does one unified variable-length attention against the paged cache and
+    writes this step's keys and values into that cache separately. Both go
+    through :mod:`jittor.nn` here.
+
+    Two things about the shape of this function are load-bearing. The metadata
+    it needs on the host -- slot mapping, sequence starts, sequence lengths --
+    is identical for every decoder layer in one forward pass, so it is
+    converted once per metadata object rather than once per layer; that
+    conversion is a device-to-host sync, and doing it per layer was the largest
+    single cost in a decode step. And the lazy graph has to be broken
+    periodically or it grows with the square of the layer count and never
+    finishes compiling; the cache write is ordered before the attention read by
+    the graph itself, so this sync is only bounding the residual stream.
+    """
+
+    impl = getattr(module, "FlashAttentionImpl", None)
+    if impl is None or getattr(impl, "_jittor_paged_attention", False):
+        return False
+    layers_between_syncs = _layers_between_syncs()
+    counter = [0]
+    metadata_cache = {}
+
+    def forward(self, layer, query, key, value, kv_cache, attn_metadata,
+                output, output_scale=None, output_block_scale=None):
+        if attn_metadata is None:      # the profiling pass has no cache yet
+            return output.fill_(0)
+        tokens = attn_metadata.num_actual_tokens
+        converted = _host_metadata(attn_metadata, metadata_cache)
+        slots, starts, lengths = converted
+        if (key is not None and value is not None and kv_cache is not None
+                and kv_cache.numel() > 0
+                and attn_metadata.slot_mapping is not None):
+            reshape_and_cache_kv_v1(
+                key[:tokens], value[:tokens], kv_cache,
+                attn_metadata.slot_mapping, slots=slots, no_sync=True)
+        attended = flash_attn_varlen_paged(
+            query[:tokens], kv_cache, attn_metadata.query_start_loc,
+            attn_metadata.seq_lens, attn_metadata.block_table, self.scale,
+            attn_metadata.causal, cq=starts, sk=lengths)
+        output[:tokens] = attended.reshape(
+            (tokens,) + tuple(output.shape[1:]))
+        counter[0] += 1
+        if counter[0] % layers_between_syncs == 0:
+            jt.sync_all()
+        return output
+
+    def do_kv_cache_update(self, layer, key, value, kv_cache, slot_mapping):
+        """Already done: forward writes the cache immediately before reading it.
+
+        V1 calls this once per layer as well, which would double every write
+        and pay an unconverted host sync for the slot mapping each time.
+        """
+        return
+
+    impl.forward = forward
+    impl.do_kv_cache_update = do_kv_cache_update
+    impl._jittor_paged_attention = True
+    return True
+
+
+def _layers_between_syncs():
+    raw = os.environ.get("JITTOR_VLLM_LAYERS_PER_SYNC", "16")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 16
+
+
+def _host_metadata(attn_metadata, cache):
+    """Convert one forward pass's metadata to host lists, once."""
+
+    key = id(attn_metadata)
+    entry = cache.get(key)
+    if entry is None:
+        entry = (host_lengths(attn_metadata.slot_mapping),
+                 host_lengths(attn_metadata.query_start_loc),
+                 host_lengths(attn_metadata.seq_lens))
+        cache[key] = entry
+        try:
+            # Drop the entry with the metadata object, so a later object
+            # reusing its id cannot pick up stale lengths.
+            weakref.finalize(attn_metadata, cache.pop, key, None)
+        except TypeError:
+            if len(cache) > 256:
+                cache.clear()
+    return entry
+
+
+#: Module path -> the patch that runs once that module has defined its classes.
+PATCHES = {
+    "vllm.v1.attention.backends.flash_attn": patch_attention_impl,
+}
