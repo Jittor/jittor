@@ -2,7 +2,7 @@
 
 - Status: native vLLM-Ascend inference accepted; Jittor Qwen3 manual prefill/decode token parity accepted; engine integration and performance open
 - Date: 2026-08-31
-- Baseline: `6cab7f9d` plus the compatibility changes in this report's commit
+- Baseline: `65854ed4` plus the evidence update in this report's commit
 - Owner: Jittor compatibility and external vLLM adapter maintainers
 - Review when: vLLM, Transformers, CANN, ATB, or the external adapter version changes
 
@@ -71,7 +71,8 @@ Jittor 主仓库。当前文件 SHA-256：
 | `vllm_jittor_npu/bootstrap.py` | `25961da3ad6de1cceb59e4bdf6e0938f1cc183166726e351f8da992385a41459` |
 | `vllm_jittor_npu/platform.py` | `e3d7d2b9abcbf45d07df5cf0d168392d2a67d56f7dba28b9056a3e3bcca8939a` |
 | `vllm_jittor_npu/attention.py` | `7b1c3ba5c2aeabcca9c8e4a6cfd817f622c35a07c270ab3e6a1be4c3d0e45771` |
-| `probes/qwen3_forward.py` | `ed8ca5891f4df4482ecdb87140008a64a916007384f55f060a430f7d60fed85d` |
+| `probes/qwen3_forward.py` | `a37ab1f1b76c4462a130cbc5ea46d4df4e396102fd70085ea620142234c046c4` |
+| `_state/npu-vllm/profiles/qwen3_decode_fused.json` | `44a44104122c4956d98b946910403a3792e414f49a89ed10bd1b1c3a01e3b343` |
 
 Bootstrap 只在检测到 `torch.__jittor_version__` 后激活，拒绝已加载的
 `torch_npu`，并让 Transformers 的可选 torch-npu 探测返回 false。platform 通过
@@ -131,12 +132,20 @@ worker 仍待实现。
   incremental flash 后两步热态为 `0.244s/0.240s`，约 `4.1 token/s`，相比通用
   attention 路径提升约 `6%`，但仍明显慢于原生约 `10.96 token/s`。因此
   correctness 接受，performance 不接受。
+- 单 token profiler 的设备算子合计约 `118ms`：incremental flash 仅 `2.36ms`；
+  KV Scatter 为 `8.03ms`，多组 block/KV Gather 合计超过 `15ms`，RoPE 约
+  `8.10ms`，四类线性 matmul 合计约 `6.31ms`。未被设备算子覆盖的墙钟主要在
+  Python 构图、调度与 profiler 开销。一个让 CANN 直接消费 block-size 16 strided
+  paged cache 的实验虽保持 token 正确，却退化到约 `6.95s/token`，已撤回且不进入
+  主仓库；CANN 文档推荐的 paged block size 为 128/256，后续不复用该实验结论到
+  其他 block size。
 
 ## Open work
 
 - 实现、测试外置 Jittor NPU worker 和 model runner，将已验证的 prefill/decode
   backend 接入 engine 调度和 KV cache 分配。
 - 优化单 token decode 的 KV gather、GQA 和 attention launch，达到不慢于原生的
-  等价暖态生成协议，再完成吞吐、首 token、decode latency 和显存对比。
+  等价暖态生成协议；同时拆分 Python build/sync 时延，降低每层重复 metadata 和
+  小算子调度开销，再完成吞吐、首 token、decode latency 和显存对比。
 - 在当前 vLLM 版本重新验证历史 CUDA adapter 基线；旧 adapter 当时未版本化，
   不能作为当前可复现产物。
