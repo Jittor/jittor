@@ -1,8 +1,9 @@
 # Python 3.12 wheel 与 Nox 解释器隔离验证
 
-- Status: Accepted for the maintained Python 3.12 and repository-structure gates
-- Last reviewed: 2026-08-28
-- Source baseline: `b8c4bef7` plus the changes documented here
+- Status: Accepted for the maintained Python 3.12 gate; repository-structure
+  source tests pass apart from external workspace contents recorded below
+- Last reviewed: 2026-08-31
+- Source baseline: `91e64815`
 - Owner: Build and test infrastructure maintainers
 - Review when: supported Python versions, Nox environments, wheel self-test, or
   external hardware interpreters change
@@ -10,7 +11,7 @@
 ## 结论
 
 Jittor 2.0 当前源码已在 Python 3.12.14 下完成语法检查、wheel 构建安装和真实
-CPU JIT 自测。自测从独立缓存编译 152 个核心单元，最终前向结果为
+CPU JIT 自测。自测从独立缓存编译 154 个核心单元，最终前向结果为
 `(1.0, 4.0, 9.0)`，梯度为 `(2.0, 4.0, 6.0)`。
 
 验证同时修复了 Nox 宿主解释器与 session 解释器不一致时的 ABI 配置污染。
@@ -34,22 +35,24 @@ Python 3.12 的 config helper 和头文件，生成 `cpython-312` 扩展并导�
 
 | Gate | Result |
 | --- | ---: |
-| Python 3.12.14 syntax scan | 669 files passed |
+| `nox -s py312` on Python 3.12.14 | passed in 8 minutes |
+| Python 3.12.14 syntax scan | 701 files passed |
 | Python 3.12 wheel build and isolated install | passed |
-| Installed-wheel CPU forward and gradient self-test | passed |
-| Python 3.12 Nox host / Python 3.11 structure session | 244 passed, 2 skipped |
-| Direct `python -m pytest -q tests/structure` | 219 passed, 2 skipped |
-| Focused Nox environment regressions | 3 passed |
-| Repository layout and documentation governance | passed |
-| Ruff lint | passed |
+| Installed-wheel CPU forward and gradient self-test | passed; 154 core units compiled |
+| NumPy/Fortran array and `trace_py_var` probe | passed with NumPy 1.26.4 |
+| Built wheel SHA-256 | `4f77f3f70cc52cfa72440d19354181d1eaf4b030a82601397c47483f8f045fb2` |
+| Direct `tests/structure` source coverage | 226 passed, 2 skipped |
+| Current-checkout structure failures | 2 external-worktree documentation scans |
 
 首次 JIT 和完整结构门禁均使用独立 `JITTOR_HOME` 串行执行。缓存、虚拟环境和
 临时 wheel 安装位于 `$JITTOR_LAB_ROOT/_state/nox/`，没有写入主仓库。
 
-完整 Ruff format ratchet 仍会报告仓库中既有的 10 个未格式化文件以及
-`noxfile.py` 的历史格式差异；本次新增测试已通过定向 `ruff format --check`，
-且本次改动通过 `git diff --check`。该格式债务不影响上述运行时门禁，但没有被
-本报告声明为通过。
+当前 checkout 的结构门禁还会扫描仓库内 ignored 的 `.claude/worktrees`，因此
+`test_documentation_governance_checker` 和
+`test_one_canonical_documentation_tree_remains` 失败；布局脚本还报告用户的
+`TODO.md` 和旧 `python/jittor.egg-info`。这些文件不属于当前 Git 提交，本轮没有
+删除或修改。该工作区状态不影响从受控源码副本构建、安装和执行的 Python 3.12
+门禁，但也没有被本报告声明为布局通过。
 
 ## 复查范围
 
