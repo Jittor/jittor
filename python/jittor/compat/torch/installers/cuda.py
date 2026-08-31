@@ -380,7 +380,56 @@ def _install_cuda(g, registry=None):
     cuda.reset_max_memory_allocated = _reset_peak
     cuda.memory_stats = lambda *a, **k: {"allocated_bytes.all.current": _mem_used(),
                                          "allocated_bytes.all.peak": _mem_peak[0]}
-    cuda.mem_get_info = lambda *a, **k: (64*1024**3, 64*1024**3)
+    # torch's mem_get_info is cudaMemGetInfo: the DRIVER's free/total for the whole
+    # device, counting other processes, the CUDA context and every byte jittor's
+    # pool holds -- not just the bytes currently live in Vars. Serving stacks size
+    # their weight/activation/KV budget from it (vLLM plans the KV cache as
+    # `total*util - (total-free) - peak_activation`), so the flat 64GiB stub that
+    # used to stand here made them plan against a device that does not exist.
+    _memgetinfo = [None]
+    def _cuda_mem_get_info_fn():
+        if _memgetinfo[0] is not None:
+            return _memgetinfo[0]
+        fn = False
+        try:
+            import ctypes as _ct
+            lib = None
+            for _n in ("libcudart.so", "libcudart.so.12", "libcudart.so.11.0"):
+                try:
+                    lib = _ct.CDLL(_n)
+                    break
+                except OSError:
+                    lib = None
+            if lib is not None:
+                lib.cudaMemGetInfo.argtypes = [_ct.POINTER(_ct.c_size_t),
+                                               _ct.POINTER(_ct.c_size_t)]
+                lib.cudaMemGetInfo.restype = _ct.c_int
+                def fn(_lib=lib, _ct=_ct):
+                    free, total = _ct.c_size_t(0), _ct.c_size_t(0)
+                    if _lib.cudaMemGetInfo(_ct.byref(free), _ct.byref(total)) != 0:
+                        return None
+                    return (int(free.value), int(total.value))
+        except Exception:
+            fn = False
+        _memgetinfo[0] = fn
+        return fn
+
+    def _mem_get_info(*a, **k):
+        fn = _cuda_mem_get_info_fn()
+        if fn:
+            got = fn()
+            if got and got[1] > 0:
+                return got
+        # No cudart to ask: fall back to jittor's own accounting. This knows the
+        # device total exactly and jittor's live bytes, but not the context's or
+        # another process's, so it reads slightly optimistic rather than fictional.
+        try:
+            mi = jt.get_mem_info()
+            total = int(mi.total_cuda_ram)
+            return (max(0, total - int(mi.total_cuda_used)), total)
+        except Exception:
+            return (0, 0)
+    cuda.mem_get_info = _mem_get_info
     cuda.ipc_collect = lambda *a, **k: None
     cuda.memory = _types.ModuleType("torch.cuda.memory")
     cuda.memory._set_allocator_settings = lambda *a, **k: None
@@ -646,7 +695,58 @@ def _install_version(g, registry=None):
     g.version = version
 
 
+def _install_accelerator(g, registry=None):
+    """torch.accelerator: the device-agnostic surface newer torch code uses.
+
+    A serving stack that has moved off the torch.cuda names (vLLM's V1 worker,
+    for one) reaches for these instead. They are the same handles the cuda
+    module already exposes, so this is a rename layer rather than a second
+    implementation -- and torch.OutOfMemoryError, which allocation-failure
+    handlers catch by name.
+    """
+    import types as _types_acc
+
+    cuda = getattr(g, "cuda", None)
+    if cuda is None:
+        return
+
+    if not hasattr(g, "OutOfMemoryError"):
+        g.OutOfMemoryError = type("OutOfMemoryError", (RuntimeError,), {})
+    if not hasattr(cuda, "OutOfMemoryError"):
+        cuda.OutOfMemoryError = g.OutOfMemoryError
+
+    # Build once, but publish on every install: a failed install restores the
+    # module table while this attribute survives on the jittor module, so an
+    # early return would leave torch.accelerator out of the registry the second
+    # time through.
+    accelerator = getattr(g, "accelerator", None)
+    if accelerator is not None:
+        if registry is not None:
+            registry.publish("torch.accelerator", accelerator)
+        return
+    accelerator = _types_acc.ModuleType("torch.accelerator")
+    accelerator.is_available = lambda *a, **k: True
+    accelerator.device_count = cuda.device_count
+    accelerator.current_device_index = lambda *a, **k: 0
+    accelerator.set_device_index = lambda *a, **k: None
+    accelerator.device_index = getattr(cuda, "device", None)
+    accelerator.current_stream = cuda.current_stream
+    accelerator.set_stream = getattr(cuda, "set_stream", lambda *a, **k: None)
+    accelerator.synchronize = cuda.synchronize
+    accelerator.empty_cache = cuda.empty_cache
+    accelerator.memory_allocated = cuda.memory_allocated
+    accelerator.memory_reserved = cuda.memory_reserved
+    accelerator.max_memory_allocated = cuda.max_memory_allocated
+    accelerator.memory_stats = cuda.memory_stats
+    accelerator.reset_peak_memory_stats = cuda.reset_peak_memory_stats
+    accelerator.current_accelerator = lambda *a, **k: g.device("cuda")
+    g.accelerator = accelerator
+    if registry is not None:
+        registry.publish("torch.accelerator", accelerator)
+
+
 def install(ctx):
     g = ctx.jittor_module
     _install_cuda(g, ctx.registry)
     _install_version(g, ctx.registry)
+    _install_accelerator(g, ctx.registry)

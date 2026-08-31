@@ -31,6 +31,15 @@ namespace jittor {
 #include "utils/log.h"
 #include "helper_cuda.h"
 
+// helper_cuda.h guards this overload behind `#ifdef NCCL_H_`, so it only appears
+// when nccl.h was included BEFORE it. Its own include guard makes the include
+// above a no-op in any translation unit that already pulled it in earlier -- a
+// JIT'd nccl op does, through the generated preamble -- and then
+// `checkCudaErrors(ncclResult_t)` resolves against the cudaError_t overload and
+// fails to compile. Declaring it here, after nccl.h, holds either way: the call
+// in `check` is dependent, so ADL finds this at the point of instantiation.
+const char *_cudaGetErrorEnum(ncclResult_t error);
+
 namespace jittor {
 
 EXTERN_LIB ncclComm_t comm;

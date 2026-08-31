@@ -1338,6 +1338,31 @@ class _WriteThroughDict(dict):
         if hasattr(self._owner, k):
             object.__delattr__(self._owner, k)
 
+# Jittor registers a parameter on assignment; torch registers one only for an
+# nn.Parameter and leaves a plain tensor attribute unregistered. Under the shim a
+# model tree mixes code written to each convention, so the two have to coexist:
+# jittor's own nn.Linear declares its weight by plain assignment, while
+# torch-authored code relies on `layer.foo = torch.tensor(...)` staying out of
+# parameters()/state_dict() -- vLLM's attention layer does exactly that with its
+# q/k/v_range scales, and its weight loader then reports them as checkpoint
+# weights that were never initialised.
+#
+# Only a value carrying POSITIVE evidence of being a plain torch tensor is
+# demoted, i.e. one the shim's own torch.tensor produced. Deciding it the other
+# way round -- treat anything unmarked as plain -- reads far more assignments as
+# non-parameters than intended, and the failure mode is a silently dropped weight:
+# it demoted vLLM's `self.bias = Parameter(torch.empty(...))` (whose marker an
+# adapter's replaced constructor had lost) until uninitialised memory reached a
+# matmul, and it demoted `self.output_bias = jt.ones(...)` in jittor-style code
+# that merely happened to run with the shim loaded. torch.ones/zeros cannot be
+# used as the signal either: they ARE jittor's own, so marking them would demote
+# the weights jittor's layers declare by assignment.
+_torch_registration_semantics = False
+
+def _torch_style_registration(value):
+    return (_torch_registration_semantics
+            and bool(getattr(value, "_jt_plain_tensor", False)))
+
 class Module:
     def __init__(self, *args, **kw):
         pass
@@ -1424,6 +1449,7 @@ class Module:
             if isinstance(v, parameter_list):
                 dc = v.params
             bufnames = v.__dict__.get("_buffer_names", ())
+            nonparams = v.__dict__.get("_non_parameter_names", ())
             # The prefix is the same for every parameter of this module, so it is
             # joined once here rather than once per parameter: a training step
             # walks the tree more than once, and this is its inner loop.
@@ -1440,6 +1466,8 @@ class Module:
                     if not getattr(p, "persistent", True):
                         continue
                     if k2 in bufnames:
+                        continue
+                    if k2 in nonparams:
                         continue
                     ps.append(p)
                     leaf = k2 if type(k2) is str else str(k2)
@@ -1501,11 +1529,16 @@ class Module:
             non_persistent_buffers = v.__dict__.get(
                 "_non_persistent_buffer_names", ()
             )
+            nonparams = v.__dict__.get("_non_parameter_names", ())
             for k2, p in dc.items():
                 if isinstance(k2, str) and k2.startswith("_"): continue
                 if isinstance(p, Var):
                     if id(p) in uniq_set: continue
                     if k2 in non_persistent_buffers:
+                        continue
+                    # neither a parameter nor a buffer -- torch keeps a plain
+                    # tensor attribute out of the checkpoint entirely.
+                    if k2 in nonparams:
                         continue
                     if not getattr(p, "persistent", True):
                         continue
@@ -1566,12 +1599,14 @@ class Module:
             if isinstance(v, jt.nn.ParameterList):
                 dc = v.params
             bufnames = v.__dict__.get("_buffer_names", ())
+            nonparams = v.__dict__.get("_non_parameter_names", ())
             for k2, p in dc.items():
                 if isinstance(k2, str) and k2.startswith("_"): continue
                 if isinstance(p, Var):
                     if getattr(p, "is_buffer", False): continue
                     if not getattr(p, "persistent", True): continue
                     if k2 in bufnames: continue
+                    if k2 in nonparams: continue
                     name = ".".join(stack[1:] + [str(k2)])
                     ps.append((name, p))
         def callback_leave(parents, k, v, n):
@@ -2074,6 +2109,21 @@ Arguments of hook are defined as::
                 and not getattr(value, "is_buffer", False)
                 and getattr(value, "persistent", True)
             )
+            if is_parameter and _torch_style_registration(value):
+                non_params = self.__dict__.get("_non_parameter_names")
+                if getattr(value, "_is_torch_parameter", False):
+                    # nn.Parameter marks the Var itself, so re-registering a name
+                    # that used to hold a plain tensor promotes it.
+                    if non_params:
+                        non_params.discard(key)
+                elif not (isinstance(self.__dict__.get(key), Var)
+                          and not (non_params and key in non_params)):
+                    # Only the FIRST assignment decides. A name already holding a
+                    # parameter stays one, so the dtype cast / weight load that
+                    # replaces a Var with a plain one (from_pretrained does this)
+                    # cannot silently demote a real weight out of the optimizer.
+                    self.__dict__.setdefault("_non_parameter_names", set()).add(key)
+                    is_parameter = False
             # Parameter identity belongs to the Var, not to its latest alias.
             # A private/helper alias must not erase an existing Parameter marker.
             if is_parameter:

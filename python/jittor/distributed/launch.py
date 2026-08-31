@@ -64,6 +64,17 @@ def main():
     if os.path.exists(rootinfo):
         os.remove(rootinfo)
 
+    if backend == "nccl":
+        # Each rank below gets exactly one visible device, so a rank cannot tell
+        # whether this machine supports GPU-to-GPU peer access -- it sees a single
+        # GPU. Decide here, where the whole device list is still visible, and let
+        # the ranks inherit the answer through the environment.
+        try:
+            from jittor.compile_extern import _skip_nccl_p2p_without_peer_access
+            _skip_nccl_p2p_without_peer_access()
+        except Exception:
+            pass
+
     procs = []
     for rank in range(a.nproc):
         env = dict(os.environ)

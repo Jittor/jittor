@@ -54,7 +54,12 @@ static void test_with_mpi() {
 }
 
 void NcclTestOp::jit_run() {
-    output->ptr<T>()[0] = 123;
+    // The output var lives in device memory, so storing through its pointer from
+    // the host faults ("invalid permissions") rather than writing the value. Copy
+    // it across instead -- the test reads this back to confirm the op ran.
+    T sentinel = 123;
+    checkCudaErrors(cudaMemcpy(output->ptr<T>(), &sentinel, sizeof(T),
+                               cudaMemcpyHostToDevice));
     if (cmd == "test_with_mpi") {
         test_with_mpi();
         return;

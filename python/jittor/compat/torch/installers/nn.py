@@ -1651,6 +1651,13 @@ def _install_module_methods(nn, registry=None):
         M.get_buffer = _get_buffer
     if not hasattr(M, "register_parameter"):
         def _register_parameter(self, name, param):
+            # This is torch's explicit "this attribute is a parameter" call, so
+            # it carries the same weight as wrapping the value in nn.Parameter --
+            # a torch-authored class otherwise only registers by that wrapper, and
+            # the value handed here need not have gone through it (vLLM builds its
+            # typed ModelWeightParameter through its own metaclass __call__).
+            if isinstance(param, jt.Var):
+                param._is_torch_parameter = True
             setattr(self, name, param)
         M.register_parameter = _register_parameter
     if not hasattr(M, "type"):

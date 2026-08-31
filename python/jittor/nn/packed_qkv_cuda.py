@@ -4,7 +4,7 @@ import math
 
 import jittor as jt
 
-from ._cuda_inference import device_index
+from ._cuda_inference import cached_source, device_index, on_acl
 
 
 def packed_qkv_rms_rope_cuda(
@@ -28,7 +28,7 @@ def packed_qkv_rms_rope_cuda(
         return None
     if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
         return None
-    if getattr(jt.compiler, "has_acl", 0):
+    if on_acl():
         return None
     autocast_probe = getattr(jt, "is_autocast_enabled", None)
     if callable(autocast_probe):
@@ -84,7 +84,7 @@ def packed_qkv_rms_rope_cuda(
         return None
 
     rows_per_block = 8
-    cuda_src = r"""
+    cuda_src = cached_source(r"""
     __device__ __forceinline__ float warp_sum(float value) {
         for (int offset = 16; offset > 0; offset >>= 1)
             value += __shfl_down_sync(0xffffffff, value, offset);
@@ -166,7 +166,7 @@ def packed_qkv_rms_rope_cuda(
         (rows + %(rows_per_block)d - 1) / %(rows_per_block)d, 256>>>(
             in0_p, in1_p, in2_p, in3_p, out0_p, rows);
     CHECK(0 == cudaGetLastError());
-    """ % {
+    """, {
         "head_dim": head_dim,
         "min_norm": min_norm_value,
         "num_heads": num_heads,
@@ -174,7 +174,7 @@ def packed_qkv_rms_rope_cuda(
         "rows_per_block": rows_per_block,
         "scale": scale_value,
         "token_count": token_count,
-    }
+    })
     return jt.code(qkv.shape, qkv.dtype, tensors, cuda_src=cuda_src)
 
 

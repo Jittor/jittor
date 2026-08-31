@@ -2,7 +2,7 @@
 
 import jittor as jt
 
-from ._cuda_inference import device_index
+from ._cuda_inference import cached_source, device_index, on_acl
 
 
 def _silu_and_mul_cuda(x):
@@ -11,7 +11,7 @@ def _silu_and_mul_cuda(x):
         return None
     if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
         return None
-    if getattr(jt.compiler, "has_acl", 0) or device_index(x) < 0:
+    if on_acl() or device_index(x) < 0:
         return None
     if str(x.dtype) not in ("float16", "bfloat16", "float32"):
         return None
@@ -23,7 +23,7 @@ def _silu_and_mul_cuda(x):
         return None
     gated_size = shape[-1] // 2
     output_shape = shape[:-1] + (gated_size,)
-    cuda_src = r"""
+    cuda_src = cached_source(r"""
     __global__ static void silu_and_mul(
             const in0_type* x, out0_type* y, int64_t total) {
         int64_t index = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
@@ -44,10 +44,10 @@ def _silu_and_mul_cuda(x):
     if (blocks > 4096) blocks = 4096;
     if (total) silu_and_mul<<<blocks, threads>>>(in0_p, out0_p, total);
     CHECK(0 == cudaGetLastError());
-    """ % {
+    """, {
         "gated_size": gated_size,
         "input_size": shape[-1],
-    }
+    })
     return jt.code(output_shape, x.dtype, [x], cuda_src=cuda_src)
 
 

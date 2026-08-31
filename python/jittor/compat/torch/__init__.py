@@ -131,10 +131,12 @@ _REQUIRED_STEPS = (
     ("core.extended", core.install_misc),
     ("serialization", _install_serialization),
     ("utilities", utilities.install),
+    ("utilities.runtime-knobs", utilities.install_runtime_knobs),
     ("data", data.install),
     ("distributions", distributions.install),
     ("compiler", compiler.install),
     ("numerical", numerical.install),
+    ("numerical.signal", numerical.install_signal),
     ("autograd.module-keys", autograd.install_parity),
     ("nn.module-keys", nn.install_parity),
     ("optim.module-keys", optimizers_owner.install_module_keys),
@@ -215,6 +217,10 @@ def install(torch, strict=True):
         setattr(torch, InstallContext.COMPLETE_ATTR, False)
         raise
     context.state.pop(_NAMESPACE_TRANSACTION, None)
+    # From here on a module tree can contain torch-authored classes, which
+    # register parameters by nn.Parameter rather than by assignment.
+    from jittor._runtime import core_api as _core_api
+    _core_api._torch_registration_semantics = True
     return torch
 
 

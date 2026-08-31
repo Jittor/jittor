@@ -9,6 +9,8 @@
 #include "ops/code_op.h"
 #include "ops/op_register.h"
 #include "misc/cuda_flags.h"
+#include <mutex>
+#include <unordered_map>
 
 #define __inline_static__ inline static
 
@@ -191,6 +193,55 @@ void CodeOp::grads(Var** douts, VarPtr* dins) {
         dins[i] = move(outputs[i]);
 }
 
+// The part of the key after "«HEADER:" is a pure function of the header and the
+// source: it walks the source once, character by character, to lift the CUDA
+// kernel definitions into the header. That walk was re-run on EVERY call, and an
+// inference kernel's source runs to well over a kilobyte -- a four-figure loop of
+// single-character appends in front of a kernel that itself takes about a
+// microsecond. The distinct sources are few (one per specialised kernel), so
+// remember the result. References into an unordered_map stay valid across
+// rehashes, and the lock only guards the map, not the walk's cost.
+static const string& code_op_key_tail(const string& header, const string& src) {
+    static std::mutex tail_lock;
+    static unordered_map<string, string> tails;
+    string key;
+    key.reserve(header.size() + src.size() + 1);
+    key += header;
+    key += '\1';
+    key += src;
+    std::lock_guard<std::mutex> guard(tail_lock);
+    auto found = tails.find(key);
+    if (found != tails.end())
+        return found->second;
+    string tail;
+    tail.reserve(header.size() + src.size() + 32);
+    tail += header;
+    tail += "\nnamespace jittor {\n";
+    size_t i = 0;
+    // move cuda kernel function into header
+    for (; i<src.size(); i++) {
+        if (src[i] == ' ' || src[i] == '\t' || src[i] == '\n') {
+            tail += src[i];
+        } else
+        if (src[i] == '_') {
+            int presum = 0;
+            while (i < src.size()) {
+                tail += src[i];
+                if (src[i] == '{') presum ++;
+                else if (src[i] == '}') {
+                    presum--;
+                    if (presum==0)
+                        break;
+                }
+                i++;
+            }
+        } else break;
+    }
+    tail += "}«CODE:";
+    for (; i<src.size(); i++) tail += src[i];
+    return tails.emplace(std::move(key), std::move(tail)).first->second;
+}
+
 void CodeOp::jit_prepare(JK& jk) {
 
     // forward: in0 in1 in2 -> out0 out1
@@ -215,31 +266,8 @@ void CodeOp::jit_prepare(JK& jk) {
     string& src = flags.get(NodeFlags::_cuda) ? 
         cuda_src : cpu_src;
 
-    jk << "«HEADER:" << header;
     CHECK(src.size());
-    jk << "\nnamespace jittor {\n";
-    int i=0;
-    // move cuda kernel function into header
-    for (; i<src.size(); i++) {
-        if (src[i] == ' ' || src[i] == '\t' || src[i] == '\n') {
-            jk << src[i];
-        } else
-        if (src[i] == '_') {
-            int presum = 0;
-            while (i < src.size()) {
-                jk << src[i];
-                if (src[i] == '{') presum ++;
-                else if (src[i] == '}') {
-                    presum--;
-                    if (presum==0)
-                        break;
-                }
-                i++;
-            }
-        } else break;
-    }
-    jk << "}«CODE:";
-    for (; i<src.size(); i++) jk << src[i];
+    jk << "«HEADER:" << code_op_key_tail(header, src);
 }
 
 } // jittor

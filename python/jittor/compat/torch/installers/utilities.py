@@ -13,6 +13,7 @@ from ..grad import (
     _amp_passthrough_decorator, _AutocastContext,
     _GradScaler,
 )
+from ..library import Tag
 from ..nested import (
     _torch_make_parameter,
 )
@@ -644,3 +645,28 @@ def install_parity(ctx):
     )
     python_dispatch._get_current_dispatch_mode = lambda *args, **kwargs: None
     g.utils._python_dispatch = python_dispatch
+
+
+def install_runtime_knobs(ctx):
+    """Thread-count knobs and the canonical torch.Tag enum.
+
+    Jittor sizes its own thread pools, so the setters are accepted and ignored
+    while the getters report the machine's CPU count -- code that reads one back
+    to size a work queue then gets a sane number rather than an AttributeError.
+    torch.Tag is published here before the compiler-family installer reaches
+    torch.library; both paths use the same canonical enum object.
+    """
+    import os
+
+    g = ctx.jittor_module
+
+    if not hasattr(g, "get_num_threads"):
+        g.get_num_threads = lambda: (os.cpu_count() or 1)
+    if not hasattr(g, "set_num_threads"):
+        g.set_num_threads = lambda *args, **kwargs: None
+    if not hasattr(g, "get_num_interop_threads"):
+        g.get_num_interop_threads = lambda: (os.cpu_count() or 1)
+    if not hasattr(g, "set_num_interop_threads"):
+        g.set_num_interop_threads = lambda *args, **kwargs: None
+
+    g.Tag = Tag

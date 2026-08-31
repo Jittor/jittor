@@ -263,6 +263,81 @@ ok(float(_wt.weight.numpy().sum()) == 12.0, "_parameters[name]=v write-through p
 ok(float(_wt.rm.numpy().sum()) == 3.0, "_buffers[name]=v write-through persists")
 ok("rm" not in _wtp and "weight" in _wtp, "write-through preserves buffer/param classification")
 
+# torch registers a parameter only for nn.Parameter; a plain tensor assigned to a
+# module attribute stays an ordinary attribute, out of parameters() AND state_dict().
+# jittor's own rule is assignment-is-parameter, so a torch-authored class had every
+# scratch tensor turned into a trainable parameter -- vLLM's attention layer sets
+# `layer.v_range = torch.tensor(...)` and its loader then rejected the model for
+# carrying checkpoint weights it never initialised. Only what torch.tensor produced
+# is read as plain: anything else stays a parameter, so a weight can never go
+# missing (jt.ones/torch.ones are the SAME function, and jittor's layers declare
+# their weights with it).
+class _RegM(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.w = torch.nn.Parameter(jt.ones(2))
+        self.plain = torch.tensor([1.0, 2.0, 3.0, 4.0])
+        self.register_buffer("buf", jt.zeros(3))
+_reg = _RegM()
+ok([n for n, _ in _reg.named_parameters()] == ["w"],
+   "plain tensor attribute is not a parameter (torch rule)")
+ok(sorted(_reg.state_dict().keys()) == ["buf", "w"],
+   "plain tensor attribute is not in state_dict (torch rule)")
+ok(tuple(_reg.plain.shape) == (4,), "plain tensor attribute stays readable")
+# Promotion and demotion both follow the assigned value, and a name that already
+# holds a parameter keeps it -- from_pretrained's dtype cast replaces a weight Var
+# with a plain one, and must not drop that weight out of the optimizer.
+_reg.plain = torch.nn.Parameter(torch.tensor([1.0, 2.0, 3.0, 4.0]))
+ok(sorted(n for n, _ in _reg.named_parameters()) == ["plain", "w"],
+   "nn.Parameter assignment promotes a plain attribute")
+_reg.w = torch.tensor([0.0, 0.0])
+ok(sorted(n for n, _ in _reg.named_parameters()) == ["plain", "w"],
+   "re-assigning a plain tensor over a parameter keeps it registered")
+# jittor's own module classes keep assignment-is-parameter even under the shim:
+# nn.Linear declares its weight that way, so the torch rule must not reach them.
+ok([n for n, _ in torch.nn.Linear(4, 3).named_parameters()] == ["weight", "bias"],
+   "jittor-authored classes keep assignment-is-parameter")
+# The marker IS the contract: it is the only signal Module.__setattr__ has that a
+# value assigned by torch-authored code is a parameter rather than a scratch
+# tensor. Anything that replaces nn.Parameter's constructor has to keep setting
+# it -- vLLM's adapter did not, and every `self.bias = Parameter(torch.empty(..))`
+# in its linear layers silently left named_parameters(), so the weight loader
+# never filled the bias and uninitialised memory reached the matmul.
+ok(bool(getattr(torch.nn.Parameter(jt.ones(2)), "_is_torch_parameter", False)),
+   "nn.Parameter marks the Var it returns")
+
+# torch surface a downstream stack reaches for that the shim used to lack, so an
+# out-of-tree adapter had to fill it in -- meaning every other shim user hit the
+# same holes silently. Audio front-ends (Whisper-style mel features) call
+# hann_window/stft; thread knobs come from multimodal renderers; accelerator is
+# the device-agnostic API newer torch code uses in place of torch.cuda.
+_hw = torch.hann_window(8).numpy()
+ok(abs(float(_hw[0])) < 1e-6 and abs(float(_hw[4]) - 1.0) < 1e-6
+   and abs(float(_hw[2]) - 0.5) < 1e-6,
+   "hann_window matches torch's periodic definition")
+_hw_sym = torch.hann_window(5, periodic=False).numpy()
+ok(abs(float(_hw_sym[0])) < 1e-6 and abs(float(_hw_sym[-1])) < 1e-6,
+   "hann_window(periodic=False) is symmetric and zero at both ends")
+_wave = torch.from_numpy(np.sin(np.arange(400, dtype=np.float32) * 0.1))
+_spec = torch.stft(_wave, n_fft=64, hop_length=16,
+                   window=torch.hann_window(64), return_complex=True)
+ok(tuple(_spec.shape) == (33, 26) and str(_spec.dtype) == "complex64",
+   "stft returns a onesided complex64 spectrogram")
+ok(torch.get_num_threads() > 0 and torch.get_num_interop_threads() > 0,
+   "thread-count getters report a usable count")
+torch.set_num_threads(4); torch.set_num_interop_threads(4)
+ok(True, "thread-count setters are accepted")
+ok(issubclass(torch.OutOfMemoryError, RuntimeError)
+   and torch.cuda.OutOfMemoryError is torch.OutOfMemoryError,
+   "OutOfMemoryError is a RuntimeError and shared with torch.cuda")
+ok(torch.Tag.needs_fixed_stride_order.name == "needs_fixed_stride_order"
+   and torch.Tag.needs_fixed_stride_order.value == 10,
+   "torch.Tag exposes the PyTorch operator metadata enum")
+ok(torch.accelerator.is_available() in (True, False)
+   and callable(torch.accelerator.synchronize)
+   and callable(torch.accelerator.memory_allocated),
+   "torch.accelerator mirrors the cuda handles")
+
 # F.scaled_dot_product_attention (SDPA) — the default attention in transformers 5.x.
 # Verify forward against a softmax(QK^T/sqrt(d))V reference (plain/causal/bool-mask/
 # scale) and backward against a numeric gradient. Subtle spots: bool-mask semantics

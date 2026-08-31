@@ -4,11 +4,19 @@ import math
 
 import jittor as jt
 
-from ._cuda_inference import device_index
+from ._cuda_inference import cached_source, device_index, on_acl
+
+
+_autocast_probe = None
 
 
 def _autocast_enabled():
-    probe = getattr(jt, "is_autocast_enabled", None)
+    # Resolved once: the attribute lookup showed up in a decode profile at
+    # thousands of calls per step, in front of a one-microsecond kernel.
+    global _autocast_probe
+    if _autocast_probe is None:
+        _autocast_probe = getattr(jt, "is_autocast_enabled", None) or False
+    probe = _autocast_probe
     if not callable(probe):
         return False
     try:
@@ -24,7 +32,7 @@ def _rms_norm_contract(x, gamma, epsilon, residual=None):
         return None
     if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
         return None
-    if getattr(jt.compiler, "has_acl", 0):
+    if on_acl():
         return None
     try:
         if _autocast_enabled():
@@ -68,7 +76,7 @@ def _rms_norm_cuda(x, gamma, epsilon=1e-6):
     if contract is None:
         return None
     hidden_size, threads, warps, epsilon_value = contract
-    cuda_src = r"""
+    cuda_src = cached_source(r"""
     __device__ __forceinline__ float warp_sum(float value) {
         for (int offset = 16; offset > 0; offset >>= 1)
             value += __shfl_down_sync(0xffffffff, value, offset);
@@ -106,12 +114,12 @@ def _rms_norm_cuda(x, gamma, epsilon=1e-6):
     int rows = in0->num / %(hidden_size)d;
     rms_norm<<<rows, %(threads)d>>>(in0_p, in1_p, out0_p);
     CHECK(0 == cudaGetLastError());
-    """ % {
+    """, {
         "epsilon": epsilon_value,
         "hidden_size": hidden_size,
         "threads": threads,
         "warps": warps,
-    }
+    })
     return jt.code(x.shape, x.dtype, [x, gamma], cuda_src=cuda_src)
 
 
@@ -121,7 +129,7 @@ def _fused_add_rms_norm_cuda(x, residual, gamma, epsilon=1e-6):
     if contract is None:
         return None
     hidden_size, threads, warps, epsilon_value = contract
-    cuda_src = r"""
+    cuda_src = cached_source(r"""
     __device__ __forceinline__ float warp_sum(float value) {
         for (int offset = 16; offset > 0; offset >>= 1)
             value += __shfl_down_sync(0xffffffff, value, offset);
@@ -166,12 +174,12 @@ def _fused_add_rms_norm_cuda(x, residual, gamma, epsilon=1e-6):
     fused_add_rms_norm<<<rows, %(threads)d>>>(
         in0_p, in1_p, in2_p, out0_p, out1_p);
     CHECK(0 == cudaGetLastError());
-    """ % {
+    """, {
         "epsilon": epsilon_value,
         "hidden_size": hidden_size,
         "threads": threads,
         "warps": warps,
-    }
+    })
     return jt.code(
         [x.shape, x.shape], [x.dtype, x.dtype], [x, residual, gamma],
         cuda_src=cuda_src,
@@ -191,7 +199,7 @@ def multihead_rms_norm_cuda(x, gamma, scale=None, min_norm=1e-12):
         return None
     if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
         return None
-    if getattr(jt.compiler, "has_acl", 0):
+    if on_acl():
         return None
     if _autocast_enabled():
         return None
@@ -223,7 +231,7 @@ def multihead_rms_norm_cuda(x, gamma, scale=None, min_norm=1e-12):
 
     if head_dim <= 256:
         rows_per_block = 8
-        cuda_src = r"""
+        cuda_src = cached_source(r"""
         __device__ __forceinline__ float warp_sum(float value) {
             for (int offset = 16; offset > 0; offset >>= 1)
                 value += __shfl_down_sync(0xffffffff, value, offset);
@@ -264,13 +272,13 @@ def multihead_rms_norm_cuda(x, gamma, scale=None, min_norm=1e-12):
             (rows + %(rows_per_block)d - 1) / %(rows_per_block)d, 256>>>(
                 in0_p, in1_p, out0_p, rows);
         CHECK(0 == cudaGetLastError());
-        """ % {
+        """, {
             "head_dim": head_dim,
             "min_norm": min_norm_value,
             "num_heads": num_heads,
             "rows_per_block": rows_per_block,
             "scale": scale_value,
-        }
+        })
         return jt.code(x.shape, x.dtype, [x, gamma], cuda_src=cuda_src)
 
     threads = 32
@@ -282,7 +290,7 @@ def multihead_rms_norm_cuda(x, gamma, scale=None, min_norm=1e-12):
         for (int offset = 16; offset > 0; offset >>= 1)
             value += __shfl_down_sync(0xffffffff, value, offset);
         return value;
-    }
+    })
     __global__ static void multihead_rms_norm(
             const in0_type* x, const in1_type* gamma, out0_type* y) {
         int row = blockIdx.x;

@@ -2,7 +2,7 @@
 
 import jittor as jt
 
-from ._cuda_inference import device_index
+from ._cuda_inference import cached_source, device_index, on_acl
 
 
 def _rotary_embedding_cuda(
@@ -21,7 +21,7 @@ def _rotary_embedding_cuda(
         return None
     if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
         return None
-    if getattr(jt.compiler, "has_acl", 0) or not is_neox_style:
+    if on_acl() or not is_neox_style:
         return None
     try:
         q_shape = tuple(int(size) for size in q.shape)
@@ -53,7 +53,7 @@ def _rotary_embedding_cuda(
     if str(positions.dtype) not in ("int32", "int64"):
         return None
 
-    cuda_src = r"""
+    cuda_src = cached_source(r"""
     __global__ static void rotary_embedding(
             const in0_type* positions, const in1_type* q, const in2_type* k,
             const in3_type* cache, out0_type* out_q, out1_type* out_k,
@@ -113,13 +113,13 @@ def _rotary_embedding_cuda(
     if (total) rotary_embedding<<<blocks, threads>>>(
         in0_p, in1_p, in2_p, in3_p, out0_p, out1_p, q_total, k_total);
     CHECK(0 == cudaGetLastError());
-    """ % {
+    """, {
         "cache_width": cache_shape[1],
         "head_size": head_size,
         "k_token_stride": k_shape[1],
         "q_token_stride": q_shape[1],
         "rotary_dim": rotary_dim,
-    }
+    })
     return jt.code(
         [q.shape, k.shape], [q.dtype, k.dtype],
         [positions, q, k, cos_sin_cache], cuda_src=cuda_src,
@@ -139,7 +139,7 @@ def partial_rotary_embedding_cuda(q, k, cos, sin, *, prefix_tokens, rotary_dim=N
         return None
     if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
         return None
-    if getattr(jt.compiler, "has_acl", 0):
+    if on_acl():
         return None
     dtypes = tuple(str(value.dtype) for value in tensors)
     if len(set(dtypes)) != 1 or dtypes[0] != "float32":
@@ -174,7 +174,7 @@ def partial_rotary_embedding_cuda(q, k, cos, sin, *, prefix_tokens, rotary_dim=N
     ):
         return None
 
-    cuda_src = r"""
+    cuda_src = cached_source(r"""
     __global__ static void partial_rope(
             const in0_type* q, const in1_type* k,
             const in2_type* cos, const in3_type* sin,
@@ -211,13 +211,13 @@ def partial_rotary_embedding_cuda(q, k, cos, sin, *, prefix_tokens, rotary_dim=N
     if (total) partial_rope<<<blocks, threads>>>(
         in0_p, in1_p, in2_p, in3_p, out0_p, out1_p, total);
     CHECK(0 == cudaGetLastError());
-    """ % {
+    """, {
         "head_dim": head_dim,
         "token_count": token_count,
         "prefix_count": prefix_count,
         "rotate": rotate,
         "table_dim": table_dim,
-    }
+    })
     return jt.code(
         [q.shape, k.shape],
         [q.dtype, k.dtype],

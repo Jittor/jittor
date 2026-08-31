@@ -2103,6 +2103,7 @@ def install(ctx):
         if requires_grad:
             v.requires_grad_(True)
             _torch_register_leaf(v)
+        v._jt_plain_tensor = True   # see _torch_style_registration (core_api)
         return v
     g.tensor = tensor
 
