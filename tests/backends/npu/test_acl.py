@@ -14,6 +14,18 @@ import numpy as np
 @unittest.skipIf(not jt.compiler.has_acl, "No ACL found")
 class TestACL(unittest.TestCase):
 
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_empty_tensor_numpy_skips_zero_byte_device_copy(self):
+        value = jt.empty((0, 3), dtype="float32")
+        value.sync()
+        self.assertEqual(value.location(), "device")
+        actual = value.numpy()
+        self.assertEqual(actual.shape, (0, 3))
+        self.assertEqual(actual.dtype, np.float32)
+        value.sync()
+        repeated = value.numpy()
+        self.assertEqual(repeated.shape, (0, 3))
+
     def test_source_converter_ignores_cuda_names_in_comments(self):
         from jittor.extern.acl import acl_compiler
 

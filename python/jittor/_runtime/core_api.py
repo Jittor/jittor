@@ -1361,7 +1361,7 @@ _torch_registration_semantics = False
 
 def _torch_style_registration(value):
     return (_torch_registration_semantics
-            and bool(getattr(value, "_jt_plain_tensor", False)))
+            and value.__dict__.get("_jt_plain_tensor") is True)
 
 class Module:
     def __init__(self, *args, **kw):
@@ -2103,11 +2103,12 @@ Arguments of hook are defined as::
     def __setattr__(self, key, value):
         if isinstance(value, Var):
             buffer_names = self.__dict__.get("_buffer_names", ())
+            value_attrs = value.__dict__
             is_parameter = (
                 not key.startswith("_")
                 and key not in buffer_names
-                and not getattr(value, "is_buffer", False)
-                and getattr(value, "persistent", True)
+                and value_attrs.get("is_buffer") is not True
+                and value_attrs.get("persistent") is not False
             )
             if is_parameter and _torch_style_registration(value):
                 non_params = self.__dict__.get("_non_parameter_names")
@@ -2155,7 +2156,7 @@ Arguments of hook are defined as::
         except Exception:
             pass
         if value is not None:
-            is_parameter = bool(getattr(value, "_is_torch_parameter", False))
+            is_parameter = value.__dict__.get("_is_torch_parameter") is True
             if not is_parameter:
                 value.persistent = persistent
                 # Raw buffers remain non-Parameters even when the same Var is

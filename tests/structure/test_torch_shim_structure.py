@@ -28,7 +28,7 @@ class TestTorchShimStructure(unittest.TestCase):
         self.assertFalse((self.repo_root / "python" / "jittor" / "torch_shim").exists())
         self.assertTrue(self.shim_root.is_dir())
 
-    def test_complete_33_file_manifest_matches_bytes(self):
+    def test_complete_36_file_manifest_matches_bytes(self):
         entries = []
         for line in self.manifest.read_text(encoding="utf-8").splitlines():
             if not line or line.startswith("#"):
@@ -37,8 +37,8 @@ class TestTorchShimStructure(unittest.TestCase):
             self.assertIsNotNone(match, line)
             entries.append(match.groups())
 
-        self.assertEqual(len(entries), 33)
-        self.assertEqual(len({path for _digest, path in entries}), 33)
+        self.assertEqual(len(entries), 36)
+        self.assertEqual(len({path for _digest, path in entries}), 36)
         for expected, relative in entries:
             with self.subTest(path=relative):
                 path = self.repo_root / relative
@@ -57,6 +57,7 @@ class TestTorchShimStructure(unittest.TestCase):
             "python/jittor/compat/shim/runtime.py",
             "python/jittor/compat/shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh",
             "python/jittor/compat/shim/resources/stubs/flash_attn/flash_attn_interface.py",
+            "python/jittor/compat/shim/resources/stubs/flash_attn/ops/triton/rotary.py",
             "python/jittor/compat/shim/resources/flash_attn_dist_info/METADATA",
             "python/jittor/compat/shim/resources/flash_attn_dist_info/top_level.txt",
             "python/jittor/compat/shim/resources/torch_dist_info/METADATA",

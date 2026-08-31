@@ -1,4 +1,4 @@
-# SHA-256 and canonical path for the 33-file Torch shim resource inventory.
+# SHA-256 and canonical path for the 36-file Torch shim resource inventory.
 d6299726f316eecf066ce96858fc1447693a40cb5bc36813c6f4cbf4d8d5abe8  docs/compatibility/torch-shim.md
 21075a1ff179af7be1829d33d9ddafe2c44d42cf9fe98616a00329dfd8bba873  python/jittor/compat/shim/__init__.py
 15a50fa4a451e172e9248cfd52d2351e1eb31241b7204d8e1c4a35039dc73872  python/jittor/compat/shim/backends/flash_attention.py
@@ -26,6 +26,9 @@ f52c020b3495b4038888dc11997e52ed9895a5e381601d57520e37be9fc55df4  python/jittor/
 cc8e79fa0c7c9ca98025abb2ee4cd4b26a5d8ae149cad6205ca2a339dcbe08e7  python/jittor/compat/shim/resources/stubs/__init__.py
 f2734e99b9eefa95eec3ac6b4c5a4abbc8a7d9776c69984d1a4700ca34246ca1  python/jittor/compat/shim/resources/stubs/flash_attn/__init__.py
 d517345af9564779bff8c4e8868c02f87d6666de767e820389655a7a69a06201  python/jittor/compat/shim/resources/stubs/flash_attn/flash_attn_interface.py
+689342e6a3667dfad306410342731fd023c3322009abdcb38ad42cf3f84d7dfb  python/jittor/compat/shim/resources/stubs/flash_attn/ops/__init__.py
+e7cbe27e52ce9a6b4b97427baec3e05cd21c99a6450fafe817d007aa8bf41217  python/jittor/compat/shim/resources/stubs/flash_attn/ops/triton/__init__.py
+f66b8959e5a99943685f7e581f9cc403aacbeba04e82ea4d232625df78a14e21  python/jittor/compat/shim/resources/stubs/flash_attn/ops/triton/rotary.py
 7c56238406709c1596ddae06583b8ff97c43e56e6b07cf63a28047fbac310747  python/jittor/compat/shim/resources/stubs/torchaudio/__init__.py
 8f0171734619e7a1e39da099e15d2d8e3d3ae2582655e546d351665d08b4a2ce  python/jittor/compat/shim/resources/stubs/torchdata/__init__.py
 5c506ac76cda47b257f393f0849fdea940d8de6e56bc22d869c0d76b69faffa0  python/jittor/compat/shim/resources/stubs/torchvision/__init__.py

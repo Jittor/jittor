@@ -6,6 +6,8 @@ import jittor as torch
 import torch.cuda.nvtx as nvtx
 from torch.cuda.memory import CUDAPluggableAllocator
 
+from jittor.compat._aliases import torch_namespace_owned
+
 
 class TestCudaStreams(unittest.TestCase):
     def test_pluggable_allocator_fails_closed(self):
@@ -31,6 +33,7 @@ class TestCudaStreams(unittest.TestCase):
         handle = nvtx.range_start("cross-thread")
         self.assertIsInstance(handle, int)
         self.assertIsNone(nvtx.range_end(handle))
+        self.assertTrue(torch_namespace_owned(torch))
 
     def setUp(self):
         torch.cuda.set_stream(torch.cuda.default_stream())

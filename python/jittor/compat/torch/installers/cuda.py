@@ -358,11 +358,17 @@ def _install_cuda(g, registry=None):
         if _native_nvtx[0] is False:
             return None
         if _native_nvtx[0] is None:
+            previous_utils = getattr(g, "utils", None)
             try:
                 from jittor.utils import nvtx as native_nvtx
                 _native_nvtx[0] = native_nvtx
             except (ImportError, OSError, RuntimeError):
                 _native_nvtx[0] = False
+            finally:
+                # Importing ``jittor.utils`` binds it on the shared jittor/torch
+                # root and would replace the published ``torch.utils`` module.
+                if previous_utils is not None:
+                    g.utils = previous_utils
         return _native_nvtx[0] or None
 
     def _nvtx_stack():

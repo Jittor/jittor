@@ -287,6 +287,40 @@ print('RESULT=' + json.dumps(sorted(k for k in sys.modules if k == 'torch' or k.
             )
         self.assertEqual(result, expected)
 
+    def test_deployed_flash_attn_rotary_matches_dense_reference(self):
+        from jittor.compat.shim.deploy import deploy
+
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "site-packages"
+            deploy(target)
+            result = self._run_order(
+                """
+import json
+import torch
+from flash_attn.ops.triton.rotary import apply_rotary
+x = torch.tensor([[[[1.0, 2.0, 3.0, 4.0]]]])
+cos = torch.zeros((1, 2))
+sin = torch.ones((1, 2))
+neox = apply_rotary(x, cos, sin)
+interleaved = apply_rotary(x, cos, sin, interleaved=True)
+same = apply_rotary(x, torch.ones((1, 2)), torch.zeros((1, 2)), inplace=True)
+print('RESULT=' + json.dumps({
+    'neox': neox.numpy().tolist(),
+    'interleaved': interleaved.numpy().tolist(),
+    'inplace_identity': same is x,
+}))
+""",
+                [target],
+            )
+        self.assertEqual(
+            result,
+            {
+                "neox": [[[[-3.0, -4.0, 1.0, 2.0]]]],
+                "interleaved": [[[[-2.0, 1.0, -4.0, 3.0]]]],
+                "inplace_identity": True,
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

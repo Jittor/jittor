@@ -477,6 +477,10 @@ def _install_distributed(g, registry=None):
         if str(backend).lower() == "mpi"
         else False
     )
+    dist.is_nccl_available = lambda: dist.is_backend_available("nccl")
+    dist.is_gloo_available = lambda: dist.is_backend_available("gloo")
+    dist.is_mpi_available = lambda: dist.is_backend_available("mpi")
+    dist.is_ucc_available = lambda: False
     dist.is_initialized = lambda *a, **k: bool(
         state["initialized"] or _native_distributed_active())
     dist.get_rank = _get_rank
@@ -610,11 +614,10 @@ def _install_distributed(g, registry=None):
         if not name.startswith("__"):
             setattr(c10d, name, getattr(dist, name))
     c10d.is_xccl_available = lambda *a, **k: False
-    c10d.is_nccl_available = lambda *a, **k: bool(getattr(jt, "has_cuda", False))
-    c10d.is_gloo_available = lambda *a, **k: False
-    c10d.is_mpi_available = lambda *a, **k: bool(
-        getattr(jt.compile_extern, "has_mpi", False))
-    c10d.is_ucc_available = lambda *a, **k: False
+    c10d.is_nccl_available = dist.is_nccl_available
+    c10d.is_gloo_available = dist.is_gloo_available
+    c10d.is_mpi_available = dist.is_mpi_available
+    c10d.is_ucc_available = dist.is_ucc_available
     c10d.ProcessGroup = dist.ProcessGroup
     c10d._get_default_group = lambda *a, **k: world_group
     c10d._get_default_store = lambda *a, **k: None

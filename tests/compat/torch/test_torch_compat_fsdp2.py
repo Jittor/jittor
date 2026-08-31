@@ -643,6 +643,9 @@ class TestFSDP2Compat(unittest.TestCase):
             TCPStore,
             batch_isend_irecv,
             is_backend_available,
+            is_gloo_available,
+            is_mpi_available,
+            is_nccl_available,
             rendezvous as distributed_rendezvous,
         )
         import torch.distributed._symmetric_memory as symmetric_memory
@@ -670,6 +673,9 @@ class TestFSDP2Compat(unittest.TestCase):
         self.assertEqual(
             is_backend_available("nccl"), bool(getattr(jt, "has_cuda", False)))
         self.assertFalse(is_backend_available("gloo"))
+        self.assertFalse(is_gloo_available())
+        self.assertEqual(is_nccl_available(), is_backend_available("nccl"))
+        self.assertEqual(is_mpi_available(), is_backend_available("mpi"))
         self.assertEqual(
             is_backend_available("mpi"),
             bool(getattr(jt.compile_extern, "has_mpi", False)),

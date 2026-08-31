@@ -127,11 +127,25 @@ void gc_all() {
     for (auto& kv : allocators) kv.second->gc();
 }
 
+static void migrate_empty_var(Var* var, Allocator* allocator) {
+    Allocation target(allocator, 0);
+    if (var->mem_ptr && var->allocator)
+        var->allocator->free(var->mem_ptr, var->size, var->allocation);
+    var->mem_ptr = target.ptr;
+    var->allocation = target.allocation;
+    var->allocator = target.allocator;
+    target.ptr = nullptr;
+}
+
 void migrate_to_cpu(Var* var, Allocator* allocator) {
     #ifdef HAS_CUDA
     if (!use_cuda_managed_allocator)
         allocator = cpu_allocator;
     #endif
+    if (var->size == 0) {
+        migrate_empty_var(var, allocator);
+        return;
+    }
     if (save_mem) {
         if (swap_timestamp != var->tflag) {
             swap_timestamp = ++tflag_count;
@@ -165,6 +179,10 @@ void migrate_to_cpu(Var* var, Allocator* allocator) {
 void migrate_to_gpu(Var* var, Allocator* allocator) {
     #ifdef HAS_CUDA
     // only happend when not using use_cuda_managed_allocator
+    if (var->size == 0) {
+        migrate_empty_var(var, allocator);
+        return;
+    }
     if (save_mem) {
         if (swap_timestamp != var->tflag) {
             swap_timestamp = ++tflag_count;
