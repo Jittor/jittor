@@ -383,6 +383,30 @@ ok(torch.accelerator.is_available() in (True, False)
    and callable(torch.accelerator.memory_allocated),
    "torch.accelerator mirrors the cuda handles")
 
+# The compiler-adjacent internals a serving stack imports at module scope while
+# gating the use behind a check this backend fails. torch._inductor answers any
+# submodule so those imports survive; torch._opaque_base is the base an opaque
+# argument type inherits from, and library schema inference has to accept one.
+import torch._inductor.codecache as _codecache
+ok(_codecache.FxGraphCache is not None
+   and torch._inductor.config.triton.cudagraphs is False,
+   "torch._inductor answers submodule imports while keeping its real config")
+from torch._opaque_base import OpaqueBase as _OpaqueBase
+
+
+class _OpaqueArgument(_OpaqueBase):
+    def __init__(self, value):
+        self.value = value
+
+
+def _takes_opaque(name: _OpaqueArgument, x: torch.Tensor) -> torch.Tensor:
+    return x
+
+
+_opaque_schema = torch.library.infer_schema(_takes_opaque, mutates_args=())
+ok("_OpaqueArgument" in _opaque_schema and "Tensor" in _opaque_schema,
+   "an opaque argument type is describable in an operator schema")
+
 # F.scaled_dot_product_attention (SDPA) — the default attention in transformers 5.x.
 # Verify forward against a softmax(QK^T/sqrt(d))V reference (plain/causal/bool-mask/
 # scale) and backward against a numeric gradient. Subtle spots: bool-mask semantics

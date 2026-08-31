@@ -4,8 +4,11 @@ This module contains source moved from the former monolithic installer without
 changing the compatibility semantics.
 """
 
+import sys as _sys
+
 import jittor as jt
 
+from .._permissive import install_permissive_package
 from ..library import install_torch_library
 
 
@@ -81,6 +84,25 @@ def install(ctx):
     _modules["torch._inductor.custom_graph_pass"] = _custom_graph_pass
     _modules["torch._inductor.config"] = _inductor_config
     g._inductor = _inductor
+    # The rest of inductor -- codecache, compile_fx, pattern_matcher and a
+    # dozen more -- gets imported at module scope by serving stacks whose use
+    # of it is gated on a compilation mode this backend never enters. Nothing
+    # below runs, so answer those imports rather than failing them; the two
+    # modules above keep their real definitions.
+    install_permissive_package("torch._inductor", _sys.meta_path)
+    # torch 2.11 introduced opaque value types: an object an operator takes as
+    # an argument and the graph carries along without inspecting it. Declaring
+    # the base is the whole of what a definition site needs -- there is no
+    # graph here to hoist a value into, so nothing else about it can matter.
+    _opaque_base = _types2.ModuleType("torch._opaque_base")
+
+    class OpaqueBase(object):
+        pass
+
+    OpaqueBase.__module__ = _opaque_base.__name__
+    _opaque_base.OpaqueBase = OpaqueBase
+    _modules["torch._opaque_base"] = _opaque_base
+    g._opaque_base = _opaque_base
     _jit = _types2.SimpleNamespace()
     _jit.script = lambda f=None, **k: (f if f is not None else (lambda g: g))
     _jit.trace = lambda f=None, *a, **k: (f if f is not None else (lambda g: g))

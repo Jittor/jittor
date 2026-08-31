@@ -335,8 +335,8 @@ after = compat._torch_namespace_snapshot()
 assert set(after) == set(baseline), (set(baseline) - set(after), set(after) - set(baseline))
 # A tripwire against the namespace growing by accident. Raise it only
 # alongside modules a change deliberately publishes -- the last move,
-# 196 to 197, came with torch._inductor.config.
-assert len(after) == 197, len(after)
+# 197 to 198, came with torch._opaque_base.
+assert len(after) == 198, len(after)
 assert after["torch"] is jt
 assert after["torch.nn"] is jt.nn
 assert after["torch.nn.functional"] is jt.nn.functional

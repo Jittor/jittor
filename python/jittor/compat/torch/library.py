@@ -356,7 +356,26 @@ def _schema_type(annotation, function, torch_module, error):
             return element[:-1] + "?[]"
         return element + "[]"
 
+    # torch 2.11 lets an op take an opaque value type -- a plain python object
+    # the graph carries rather than inspects. Serving stacks use one to pass a
+    # layer name without baking it in as a constant. Nothing here dispatches on
+    # the schema, so the name of the class is description enough; refusing it
+    # would only stop the op from being registered at all.
+    if isinstance(annotation, type) and _is_opaque_type(annotation, torch_module):
+        return "__torch__.torch.classes." + annotation.__name__
+
     error("Unsupported type annotation %s." % (annotation,))
+
+
+def _is_opaque_type(annotation, torch_module):
+    opaque_base = getattr(torch_module, "_opaque_base", None)
+    base = getattr(opaque_base, "OpaqueBase", None)
+    if base is None or base is object:
+        return False
+    try:
+        return issubclass(annotation, base)
+    except TypeError:
+        return False
 
 
 def _return_schema(annotation, function, torch_module, error):
