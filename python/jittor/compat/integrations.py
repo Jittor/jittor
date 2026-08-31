@@ -25,7 +25,7 @@ def apply_external_runtime_patches(logger=None):
     try:
         from jittor.compat import vllm as _vllm_compat
 
-        report["vllm_shim"] = {"ok": True, "triggers": list(_vllm_compat.register())}
+        report["vllm_shim"] = {"ok": True, "armed": bool(_vllm_compat.register())}
     except Exception as error:
         report["vllm_shim"] = {
             "ok": False,
