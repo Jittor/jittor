@@ -2,7 +2,7 @@
 
 - Status: native vLLM-Ascend inference accepted; Jittor Qwen3 manual prefill/decode token parity accepted; engine integration and performance open
 - Date: 2026-08-31
-- Baseline: `0df29eed` plus the compatibility changes in this report's commit
+- Baseline: `6cab7f9d` plus the compatibility changes in this report's commit
 - Owner: Jittor compatibility and external vLLM adapter maintainers
 - Review when: vLLM, Transformers, CANN, ATB, or the external adapter version changes
 
@@ -56,7 +56,8 @@ text:       Paris. The capital
   range 调用破坏已完成的 shim 安装图。
 - 公有 `jittor.nn.paged_attention/reshape_and_cache` 在 ACL 下用 Gather/Scatter 完成
   block-table 读取、KV 更新、GQA 扩展和 packed slice；prefill、decode 和 KV cache
-  不再触发 `reindex` CPU fallback。
+  不再触发 `reindex` CPU fallback。BF16 单 token decode 在 gather 后直接调用
+  `aclnnIncreFlashAttentionV4`，不再展开 GQA 或执行通用 matmul-softmax-matmul。
 
 ## External adapter state
 
@@ -115,8 +116,9 @@ worker 仍待实现。
 - 公有 paged-attention：CPU 独立 reference 与 negative-slot 契约 `6 passed`；真实
   NPU 上同一 cache 的 float32 prefill、追加 token 和 decode 均匹配 NumPy，GQA、
   cache 更新和输出全在 `device`，fallback 为 0。外置 backend 的 float32
-  prefill/decode 最大误差分别为 `6.25e-9/5.11e-9`；BF16 cache 最大误差
-  `1.64e-4`，均为零 fallback。
+  prefill/decode 最大误差分别为 `6.25e-9/5.11e-9`；BF16 incremental flash
+  最大误差 `2.59e-4`，实际 backend 为 `acl_incre_flash_attention_v4`，均为零
+  fallback。
 - Qwen3-0.6B 完整 prefill：提示词 `The capital of France is` 编码为
   `[785, 6722, 315, 9625, 374]`，首个 greedy token 为 `12095`（` Paris`），与原生
   vLLM-Ascend 基线的第一个 token 一致。28 层 KV cache、hidden states 和 logits
@@ -126,8 +128,8 @@ worker 仍待实现。
 - 同一进程、模型和 28 层 KV cache 上继续手工 greedy decode，四个 token 为
   `[12095, 13, 576, 6722]`，文本为 ` Paris. The capital`，逐 token 匹配原生基线。
   四步 hidden/logits/cache 均在 `device`，fallback 为 0，且未加载 PyTorch-NPU。
-  首次 decode 含单 token shape 冷编译为 `95.08s`；随后两步热态为
-  `0.259s/0.256s`，约 `3.9 token/s`，明显慢于原生约 `10.96 token/s`。因此
+  incremental flash 后两步热态为 `0.244s/0.240s`，约 `4.1 token/s`，相比通用
+  attention 路径提升约 `6%`，但仍明显慢于原生约 `10.96 token/s`。因此
   correctness 接受，performance 不接受。
 
 ## Open work

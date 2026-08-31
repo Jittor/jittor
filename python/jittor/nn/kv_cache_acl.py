@@ -161,4 +161,56 @@ def _repeat_interleave_dim_acl(value, dim, repeats):
     return value.reshape(reshaped).broadcast(expanded).reshape(result)
 
 
+def _decode_attention_acl(query, key, value, scale):
+    if not all(isinstance(tensor, jt.Var) for tensor in (query, key, value)):
+        return None
+    if not (_on_acl() and getattr(jt.flags, "no_grad", 0)):
+        return None
+    query_shape = tuple(int(size) for size in query.shape)
+    key_shape = tuple(int(size) for size in key.shape)
+    value_shape = tuple(int(size) for size in value.shape)
+    if (
+        len(query_shape) != 3
+        or len(key_shape) != 3
+        or value_shape != key_shape
+        or query_shape[0] != 1
+        or query_shape[-1] != key_shape[-1]
+        or query_shape[1] % key_shape[1] != 0
+    ):
+        return None
+    if str(key.dtype) not in ("bfloat16", "float32") or str(value.dtype) != str(
+        key.dtype
+    ):
+        return None
+
+    from jittor.extern.acl.aclops.flashattention_op import (
+        scaled_dot_product_attention_acl,
+    )
+
+    output_dtype = query.dtype
+    query = query.cast(key.dtype).transpose(0, 1).reshape(
+        (1, query_shape[1], 1, query_shape[2])
+    )
+    key = key.transpose(0, 1).reshape(
+        (1, key_shape[1], key_shape[0], key_shape[2])
+    )
+    value = value.transpose(0, 1).reshape(
+        (1, value_shape[1], value_shape[0], value_shape[2])
+    )
+    output = scaled_dot_product_attention_acl(
+        query,
+        key,
+        value,
+        dropout_p=0.0,
+        is_causal=False,
+        scale=scale,
+        enable_gqa=query_shape[1] != key_shape[1],
+    )
+    if output is None:
+        return None
+    return output.reshape((query_shape[1], query_shape[2])).reshape(
+        query_shape
+    ).cast(output_dtype)
+
+
 __all__ = []

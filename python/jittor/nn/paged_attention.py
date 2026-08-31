@@ -141,14 +141,20 @@ def paged_attention(query, kv_cache, cu_seqlens_q, seq_lens, block_table,
         keys, values = _split_cache_kv(cache, 1)
         keys = _slice_dim(
             keys.reshape((-1, num_kv_heads, head_dim)), 0, 0, span_k
-        ).float32()
+        )
         values = _slice_dim(
             values.reshape((-1, num_kv_heads, head_dim)), 0, 0, span_k
-        ).float32()
+        )
+        query_tokens = _slice_dim(q, 0, starts[i], span_q)
+        decoded = _decode_attention(query_tokens, keys, values, scale)
+        if decoded is not None:
+            outputs.append(decoded.cast(out_dtype))
+            continue
+        keys, values = keys.float32(), values.float32()
         if repeats > 1:
             keys = _repeat_interleave_dim(keys, 1, repeats)
             values = _repeat_interleave_dim(values, 1, repeats)
-        queries = _slice_dim(q, 0, starts[i], span_q).transpose(0, 1)
+        queries = query_tokens.transpose(0, 1)
         scores = jt.matmul(
             queries, keys.transpose(0, 1).transpose(1, 2)) * scale
         if causal:
@@ -226,6 +232,12 @@ def _repeat_interleave_dim(value, dim, repeats):
     if expanded is not None:
         return expanded
     return value.repeat_interleave(repeats, dim=dim)
+
+
+def _decode_attention(query, key, value, scale):
+    from .kv_cache_acl import _decode_attention_acl
+
+    return _decode_attention_acl(query, key, value, scale)
 
 
 
