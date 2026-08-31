@@ -18,6 +18,7 @@ _PACKAGE = Path(vllm_compat.__file__).resolve().parent
 # What an out-of-tree plugin could import just as well as this package can.
 _ALLOWED_JITTOR_IMPORTS = {
     "jittor",
+    "jittor.compat.module_patcher",
     "jittor.compat.permissive",
 }
 
@@ -46,7 +47,9 @@ def _imported_names(tree):
 class TestVllmCompatIsRelocatable(unittest.TestCase):
     def test_the_package_is_present_and_small(self):
         names = {path.name for path in _sources()}
-        self.assertEqual(names, {"__init__.py", "custom_ops.py", "flash_attn.py"})
+        self.assertEqual(
+            names,
+            {"__init__.py", "custom_ops.py", "flash_attn.py", "layers.py"})
         for path in _sources():
             with self.subTest(module=path.name):
                 self.assertLessEqual(
@@ -124,6 +127,27 @@ class TestVllmCompatArmsItselfWithoutRunning(unittest.TestCase):
 
         declared = {name for name, _ in custom_ops._OPERATORS}
         self.assertEqual(declared, set(custom_ops._IMPLEMENTATIONS))
+
+    def test_every_layer_patch_is_registered_against_a_vllm_module(self):
+        from jittor.compat.vllm import flash_attn, layers
+
+        for source in (layers.PATCHES, flash_attn.PATCHES):
+            self.assertTrue(source)
+            for path, patch in source.items():
+                with self.subTest(module=path):
+                    self.assertTrue(path.startswith("vllm."))
+                    self.assertTrue(callable(patch))
+
+    def test_arming_registers_every_layer_patch(self):
+        from jittor.compat.module_patcher import registered_module_patches
+        from jittor.compat.vllm import flash_attn, layers
+
+        vllm_compat.register()
+        registry = registered_module_patches()
+        for source in (layers.PATCHES, flash_attn.PATCHES):
+            for path, patch in source.items():
+                with self.subTest(module=path):
+                    self.assertIn(patch, registry.get(path, ()))
 
 
 if __name__ == "__main__":

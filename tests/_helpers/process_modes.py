@@ -3,6 +3,10 @@
 
 TORCH_MODE_PATHS = (
     "tests/compat/torch",
+    # vLLM compatibility is reached through the shim: its attention entry
+    # points import torch, which installs Torch mode into whatever process
+    # touches them.
+    "tests/compat/vllm",
     # The OpInfo runner exercises Torch-facing signatures for the shared
     # numerical surface. The rest of tests/ops asserts native Jittor behavior.
     "tests/ops/test_ops.py",
