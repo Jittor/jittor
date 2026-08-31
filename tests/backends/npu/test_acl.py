@@ -400,25 +400,23 @@ class TestACL(unittest.TestCase):
 
     @jt.flag_scope(use_acl=1)
     def test_conv(self):
-        x = jt.rand(10, 3, 50, 50)
-        w = jt.rand(4, 3, 3, 3)
-        # x = jt.rand(2, 2, 1, 1)
-        # w = jt.rand(2,2,1,1)
+        rng = np.random.RandomState(20260901)
+        x_np = rng.rand(10, 3, 50, 50).astype("float32")
+        w_np = rng.rand(4, 3, 3, 3).astype("float32")
+        mask_np = rng.rand(10, 4, 48, 48).astype("float32")
+        x, w, mask = map(jt.array, (x_np, w_np, mask_np))
         y = jt.nn.conv2d(x, w)
-        y.sync(True)
-        y1 = y.data
-        mask = jt.rand_like(y)
+        y1 = y.numpy()
         dx, dw = jt.grad((y * mask).sum(), [x, w])
-        dx1, dw1 = dx.data, dw.data
-        # dw, = jt.grad((y*mask).sum(), [w])
-        # dw1 = dw.data
+        dx1, dw1 = dx.numpy(), dw.numpy()
+
         with jt.flag_scope(use_acl=0):
+            x, w, mask = map(jt.array, (x_np, w_np, mask_np))
             y = jt.nn.conv2d(x, w)
-            y2 = y.data
+            y2 = y.numpy()
             dx, dw = jt.grad((y * mask).sum(), [x, w])
-            dx2, dw2 = dx.data, dw.data
-            # dw, = jt.grad((y*mask).sum(), [w])
-            # dw2 = dw.data
+            dx2, dw2 = dx.numpy(), dw.numpy()
+
         np.testing.assert_allclose(y1, y2, rtol=1e-4, atol=1e-5)
         np.testing.assert_allclose(dx1, dx2, rtol=1e-4, atol=1e-5)
         np.testing.assert_allclose(dw1, dw2, rtol=1e-4, atol=1e-5)
