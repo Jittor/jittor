@@ -139,6 +139,8 @@ class TestTorchCompatStructure(unittest.TestCase):
             ("shim/resources/torch_init.py", "<module>", "__name__"),
             ("shim/runtime.py", "enable", repr("torch")),
             ("vllm/__init__.py", "install", "name"),
+            ("vllm/flash_attn.py", "install", "_BUNDLE"),
+            ("vllm/flash_attn.py", "install", "_INTERFACE"),
             ("triton/__init__.py", "install", "name"),
         ]))
         self.assertEqual(sorted(mutation_calls), sorted([
@@ -435,9 +437,9 @@ class TestTorchCompatStructure(unittest.TestCase):
                 )
         installers = package_root / "installers"
         expected = {
-            "core.py", "tensor.py", "autograd.py", "nn.py", "nn_init.py",
-            "cuda.py", "distributed.py", "data.py", "distributions.py",
-            "numerical.py", "compiler.py", "utilities.py",
+            "core.py", "tensor.py", "factories.py", "autograd.py", "nn.py",
+            "nn_init.py", "cuda.py", "distributed.py", "data.py",
+            "distributions.py", "numerical.py", "compiler.py", "utilities.py",
         }
         self.assertEqual(
             {path.name for path in installers.glob("*.py") if path.name != "__init__.py"},
