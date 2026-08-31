@@ -1,8 +1,8 @@
 # Ascend 910B 环境、ACL 冷启动与 NPU 门禁验证
 
 - Status: Accepted within the maintained NPU gate; explicit skips remain
-- Last reviewed: 2026-08-29
-- Source baseline: `f8e39607` plus the changes documented here
+- Last reviewed: 2026-09-01
+- Source baseline: `77d1ee3e`
 - Owner: Jittor core and ACL backend maintainers
 - Review when: CANN/driver versions, ACL source transformation, NPU gate scope,
   or any listed skip changes
@@ -15,7 +15,7 @@ ACL 后端、扩展算子、索引、227 项 OpInfo、负整数 floor-divide 及
 
 设备证据不依赖导入成功或 CPU fallback：ACL matmul 回归捕获到
 `compile acl op`，同时断言日志中没有 `fallback cpu`。维护范围内最终共
-`362 passed, 11 skipped`；skip 均对应本报告和 known-issues ledger 中的明确能力边界。
+`394 passed, 9 skipped`；skip 均对应本报告和 known-issues ledger 中的明确能力边界。
 
 ## 环境与隔离
 
@@ -135,6 +135,18 @@ negative-dimension reductions pass on the real NPU. The Jittor core bool
 `all_`/`any_` OpInfo matrix remains a separate explicit skip and is not claimed
 by this ACL wrapper path.
 
+### Cross-device convolution oracle
+
+2026-09-01 的当前 HEAD 复验首先在旧 `test_conv` 中得到大范围数值差异。卷积
+kernel 并未失败：同一 NumPy 快照分别构造的 ACL 与 CPU 卷积最大绝对误差为
+`1.91e-6`，同文件新的 bias/gradient control 也通过。旧用例把惰性的 `jt.rand`
+和 `rand_like` 图从 ACL scope 直接复用到 CPU scope，两侧实际消费的随机图并不是
+一个稳定独立 oracle。
+
+当前大尺寸无 bias 用例从固定 NumPy RNG 快照构造输入、权重和 cotangent，并在
+ACL/CPU scope 内分别创建 Var；forward、input gradient 和 weight gradient 随后在
+真实 910B3 上通过。该修复没有放宽容差，也没有为卷积增加 fallback。
+
 ## Maintained gate
 
 ```bash
@@ -145,23 +157,27 @@ export ASCEND_RT_VISIBLE_DEVICES=<allocated-device>
 python -m nox -s npu
 ```
 
-Full Nox results after the serial prewarm:
+Current results after the serial prewarm and the exact Nox invocation set:
 
 | Stage | Result |
 | --- | ---: |
 | ACL device and float32 matmul probe | passed |
-| `tests/backends/npu/test_acl.py` | 26 passed |
-| `tests/backends/npu/test_acl_torch_compat.py` | 2 passed |
-| `tests/backends/npu/test_aclop.py` | 110 passed, 2 skipped |
-| `tests/backends/npu/test_acl_indexing.py` | 2 passed |
-| `tests/ops/test_ops.py` | 218 passed, 9 skipped |
+| `tests/backends/npu/test_acl.py` | 40 passed |
+| `tests/backends/npu/test_acl_torch_compat.py` | 14 passed |
+| `tests/backends/npu/test_aclop.py` | 112 passed, 2 skipped |
+| `tests/backends/npu/test_acl_indexing.py` | 4 passed |
+| `tests/ops/test_ops.py` | 220 passed, 7 skipped |
 | NPU floor-divide fixed vectors and broadcast | 2 passed |
 | NPU float32 NaN/Inf predicates | 1 passed |
 | NPU float32 fused/unfused NaN comparisons | 1 passed |
-| Total | 362 passed, 11 skipped |
+| Total | 394 passed, 9 skipped |
 
-The complete maintained session finished successfully in 43 minutes, including
-the Nox-managed core rebuild and all real-device tests.
+The first current-source Nox run performed the device probe and cold ACL rebuild,
+then stopped at the stale convolution oracle. After the focused fix, every target
+above was rerun in a separate process, in the same order and environment used by
+the Nox session. All maintained invocations passed. The nine skips are the two
+legacy FlashAttention cases plus the documented bool/narrow-integer reductions,
+`atan2`, and `irfft` capability boundaries.
 
 The floor-divide regression covers uint8, int8, int16, int32, and int64 fixed
 vectors plus int64 broadcasting against NumPy. The NaN comparison gate covers
@@ -172,7 +188,7 @@ execution.
 
 - Focused CPU semantic matrix: `49 passed, 16 skipped, 618 deselected`.
 - Torch preflight and bootstrap regressions: `8 passed, 16 deselected`.
-- Repository structure suite: `219 passed, 2 skipped`.
+- Repository structure suite: `232 passed, 2 skipped`.
 - Repository layout and documentation-governance gate: passed.
 - Documentation link audit and built-API audit: passed; the fresh Ascend catalog
   contains 56 translated messages with no fuzzy or untranslated entries.
