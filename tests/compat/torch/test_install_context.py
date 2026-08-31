@@ -335,8 +335,8 @@ after = compat._torch_namespace_snapshot()
 assert set(after) == set(baseline), (set(baseline) - set(after), set(after) - set(baseline))
 # A tripwire against the namespace growing by accident. Raise it only
 # alongside modules a change deliberately publishes -- the last move,
-# 186 to 189, came with the composable-FSDP2 entries.
-assert len(after) == 189, len(after)
+# 189 to 190, came with torch.accelerator.
+assert len(after) == 190, len(after)
 assert after["torch"] is jt
 assert after["torch.nn"] is jt.nn
 assert after["torch.nn.functional"] is jt.nn.functional

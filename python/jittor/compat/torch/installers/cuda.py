@@ -655,7 +655,58 @@ def _install_version(g, registry=None):
     g.version = version
 
 
+def _install_accelerator(g, registry=None):
+    """torch.accelerator: the device-agnostic surface newer torch code uses.
+
+    A serving stack that has moved off the torch.cuda names (vLLM's V1 worker,
+    for one) reaches for these instead. They are the same handles the cuda
+    module already exposes, so this is a rename layer rather than a second
+    implementation -- and torch.OutOfMemoryError, which allocation-failure
+    handlers catch by name.
+    """
+    import types as _types_acc
+
+    cuda = getattr(g, "cuda", None)
+    if cuda is None:
+        return
+
+    if not hasattr(g, "OutOfMemoryError"):
+        g.OutOfMemoryError = type("OutOfMemoryError", (RuntimeError,), {})
+    if not hasattr(cuda, "OutOfMemoryError"):
+        cuda.OutOfMemoryError = g.OutOfMemoryError
+
+    # Build once, but publish on every install: a failed install restores the
+    # module table while this attribute survives on the jittor module, so an
+    # early return would leave torch.accelerator out of the registry the second
+    # time through.
+    accelerator = getattr(g, "accelerator", None)
+    if accelerator is not None:
+        if registry is not None:
+            registry.publish("torch.accelerator", accelerator)
+        return
+    accelerator = _types_acc.ModuleType("torch.accelerator")
+    accelerator.is_available = lambda *a, **k: True
+    accelerator.device_count = cuda.device_count
+    accelerator.current_device_index = lambda *a, **k: 0
+    accelerator.set_device_index = lambda *a, **k: None
+    accelerator.device_index = getattr(cuda, "device", None)
+    accelerator.current_stream = cuda.current_stream
+    accelerator.set_stream = getattr(cuda, "set_stream", lambda *a, **k: None)
+    accelerator.synchronize = cuda.synchronize
+    accelerator.empty_cache = cuda.empty_cache
+    accelerator.memory_allocated = cuda.memory_allocated
+    accelerator.memory_reserved = cuda.memory_reserved
+    accelerator.max_memory_allocated = cuda.max_memory_allocated
+    accelerator.memory_stats = cuda.memory_stats
+    accelerator.reset_peak_memory_stats = cuda.reset_peak_memory_stats
+    accelerator.current_accelerator = lambda *a, **k: g.device("cuda")
+    g.accelerator = accelerator
+    if registry is not None:
+        registry.publish("torch.accelerator", accelerator)
+
+
 def install(ctx):
     g = ctx.jittor_module
     _install_cuda(g, ctx.registry)
     _install_version(g, ctx.registry)
+    _install_accelerator(g, ctx.registry)

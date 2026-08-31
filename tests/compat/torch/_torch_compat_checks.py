@@ -306,6 +306,37 @@ ok([n for n, _ in torch.nn.Linear(4, 3).named_parameters()] == ["weight", "bias"
 ok(bool(getattr(torch.nn.Parameter(jt.ones(2)), "_is_torch_parameter", False)),
    "nn.Parameter marks the Var it returns")
 
+# torch surface a downstream stack reaches for that the shim used to lack, so an
+# out-of-tree adapter had to fill it in -- meaning every other shim user hit the
+# same holes silently. Audio front-ends (Whisper-style mel features) call
+# hann_window/stft; thread knobs come from multimodal renderers; accelerator is
+# the device-agnostic API newer torch code uses in place of torch.cuda.
+_hw = torch.hann_window(8).numpy()
+ok(abs(float(_hw[0])) < 1e-6 and abs(float(_hw[4]) - 1.0) < 1e-6
+   and abs(float(_hw[2]) - 0.5) < 1e-6,
+   "hann_window matches torch's periodic definition")
+_hw_sym = torch.hann_window(5, periodic=False).numpy()
+ok(abs(float(_hw_sym[0])) < 1e-6 and abs(float(_hw_sym[-1])) < 1e-6,
+   "hann_window(periodic=False) is symmetric and zero at both ends")
+_wave = torch.from_numpy(np.sin(np.arange(400, dtype=np.float32) * 0.1))
+_spec = torch.stft(_wave, n_fft=64, hop_length=16,
+                   window=torch.hann_window(64), return_complex=True)
+ok(tuple(_spec.shape) == (33, 26) and str(_spec.dtype) == "complex64",
+   "stft returns a onesided complex64 spectrogram")
+ok(torch.get_num_threads() > 0 and torch.get_num_interop_threads() > 0,
+   "thread-count getters report a usable count")
+torch.set_num_threads(4); torch.set_num_interop_threads(4)
+ok(True, "thread-count setters are accepted")
+ok(issubclass(torch.OutOfMemoryError, RuntimeError)
+   and torch.cuda.OutOfMemoryError is torch.OutOfMemoryError,
+   "OutOfMemoryError is a RuntimeError and shared with torch.cuda")
+ok(torch.Tag.needs_fixed_stride_order == "needs_fixed_stride_order",
+   "torch.Tag resolves any attribute to its own name")
+ok(torch.accelerator.is_available() in (True, False)
+   and callable(torch.accelerator.synchronize)
+   and callable(torch.accelerator.memory_allocated),
+   "torch.accelerator mirrors the cuda handles")
+
 # F.scaled_dot_product_attention (SDPA) — the default attention in transformers 5.x.
 # Verify forward against a softmax(QK^T/sqrt(d))V reference (plain/causal/bool-mask/
 # scale) and backward against a numeric gradient. Subtle spots: bool-mask semantics

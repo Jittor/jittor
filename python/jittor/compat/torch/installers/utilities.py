@@ -641,3 +641,36 @@ def install_parity(ctx):
     )
     python_dispatch._get_current_dispatch_mode = lambda *args, **kwargs: None
     g.utils._python_dispatch = python_dispatch
+
+
+def install_runtime_knobs(ctx):
+    """Thread-count knobs and torch.Tag.
+
+    Jittor sizes its own thread pools, so the setters are accepted and ignored
+    while the getters report the machine's CPU count -- code that reads one back
+    to size a work queue then gets a sane number rather than an AttributeError.
+    torch.Tag is an enum-like namespace used only in operator metadata; any
+    attribute resolves to its own name, which is all a tag is used for here.
+    """
+    import os
+
+    g = ctx.jittor_module
+
+    if not hasattr(g, "get_num_threads"):
+        g.get_num_threads = lambda: (os.cpu_count() or 1)
+    if not hasattr(g, "set_num_threads"):
+        g.set_num_threads = lambda *args, **kwargs: None
+    if not hasattr(g, "get_num_interop_threads"):
+        g.get_num_interop_threads = lambda: (os.cpu_count() or 1)
+    if not hasattr(g, "set_num_interop_threads"):
+        g.set_num_interop_threads = lambda *args, **kwargs: None
+
+    if not hasattr(g, "Tag"):
+        class _TagMeta(type):
+            def __getattr__(cls, name):
+                return name
+
+        class Tag(metaclass=_TagMeta):
+            pass
+
+        g.Tag = Tag
