@@ -67,8 +67,19 @@ def install(ctx):
     _custom_graph_pass.CustomGraphPassType = _typing.Union[
         CustomGraphPass, _typing.Callable, type(None)]
     _inductor.custom_graph_pass = _custom_graph_pass
+    # torch._inductor.config: read and written by serving stacks that decide
+    # graph partitioning from it (vLLM sets custom_should_partition_ops and
+    # reads triton.cudagraphs). There is no inductor behind the shim, so these
+    # are settings nothing acts on -- but the module has to exist and hold them,
+    # or `import torch._inductor.config` fails outright.
+    _inductor_config = _types2.ModuleType("torch._inductor.config")
+    _inductor_config.custom_should_partition_ops = []
+    _inductor_config._config = {}
+    _inductor_config.triton = _types2.SimpleNamespace(cudagraphs=False)
+    _inductor.config = _inductor_config
     _modules["torch._inductor"] = _inductor
     _modules["torch._inductor.custom_graph_pass"] = _custom_graph_pass
+    _modules["torch._inductor.config"] = _inductor_config
     g._inductor = _inductor
     _jit = _types2.SimpleNamespace()
     _jit.script = lambda f=None, **k: (f if f is not None else (lambda g: g))

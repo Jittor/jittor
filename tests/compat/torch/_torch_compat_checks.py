@@ -306,6 +306,51 @@ ok([n for n, _ in torch.nn.Linear(4, 3).named_parameters()] == ["weight", "bias"
 ok(bool(getattr(torch.nn.Parameter(jt.ones(2)), "_is_torch_parameter", False)),
    "nn.Parameter marks the Var it returns")
 
+# torch code subclasses nn.Parameter to carry loader metadata, giving the
+# subclass its own __new__/__init__ and extra keyword arguments. All of it has
+# to run, and isinstance must answer for that subclass alone -- a serving stack
+# routes weight loading on `isinstance(param, SomeSubclass)`, so a blanket True
+# sends plain weights down a quantised path.
+class _BaseParam(torch.nn.Parameter):
+    def __new__(cls, data, **kw):
+        return super().__new__(cls, data=data, requires_grad=False)
+    def __init__(self, data, weight_loader=None):
+        self._weight_loader = weight_loader
+    @property
+    def weight_loader(self):
+        return self._weight_loader
+    def role(self):
+        return "base"
+
+class _WeightParam(_BaseParam):
+    def __init__(self, data, input_dim=None, **kw):
+        super().__init__(data, **kw)
+        self.input_dim = input_dim
+    def role(self):
+        return "weight"
+
+class _SiblingParam(_BaseParam):
+    pass
+
+def _a_loader(_x):
+    return "loaded"
+
+_sub = _WeightParam(data=jt.ones(4), input_dim=0, weight_loader=_a_loader)
+ok(isinstance(_sub, jt.Var) and tuple(_sub.shape) == (4,),
+   "Parameter subclass constructs a Var")
+ok(_sub.input_dim == 0, "Parameter subclass __init__ keeps its keyword arguments")
+ok(_sub.weight_loader is _a_loader, "Parameter subclass property is readable")
+ok(_sub.role() == "weight", "Parameter subclass method override wins")
+ok(not bool(_sub.requires_grad),
+   "Parameter subclass __new__ controls requires_grad")
+ok(isinstance(_sub, _WeightParam) and isinstance(_sub, _BaseParam)
+   and isinstance(_sub, torch.nn.Parameter),
+   "a subclass parameter is an instance of its own class and its bases")
+ok(not isinstance(_sub, _SiblingParam),
+   "a subclass parameter is NOT an instance of a sibling subclass")
+ok(not isinstance(torch.nn.Parameter(jt.ones(3)), _WeightParam),
+   "a plain parameter is not an instance of any subclass")
+
 # torch surface a downstream stack reaches for that the shim used to lack, so an
 # out-of-tree adapter had to fill it in -- meaning every other shim user hit the
 # same holes silently. Audio front-ends (Whisper-style mel features) call
