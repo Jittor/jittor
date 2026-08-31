@@ -1,8 +1,8 @@
 # Source Architecture and Module Boundaries
 
 - Status: Accepted
-- Last reviewed: 2026-08-12
-- Baseline: `582fc51d`
+- Last reviewed: 2026-08-31
+- Baseline: `f5e8e944` plus the boundary documentation changes described here
 - Owner: Jittor core maintainers
 - Review when: a public module moves, an implementation domain is added, or a
   runtime resource path changes
@@ -35,6 +35,9 @@ packaging, and runtime-resource ownership is defined by the broader
 python/
 ├── jittor/
 │   ├── __init__.py              # root composition and runtime initialization
+│   ├── __init__.pyi             # public root typing surface
+│   ├── _runtime/
+│   │   └── core_api.py          # native Python API after core bootstrap
 │   ├── nn/                      # neural-network public API
 │   │   ├── modules/             # stateful Module implementations
 │   │   ├── functional/          # stateless tensor functions
@@ -52,6 +55,7 @@ python/
 │   │   ├── fsdp2/               # distributed FSDP2 compatibility
 │   │   ├── triton/              # Triton API bridge and deployment command
 │   │   ├── shim/                # Torch shim runtime and deployment command
+│   │   ├── vllm/                # staged, relocatable vLLM integration
 │   │   ├── module_patcher.py
 │   │   └── external_backend.py
 │   ├── selftest.py              # installed smoke test
@@ -103,8 +107,12 @@ files or wrapper implementations.
 
 ### Root module ownership
 
-The Python files directly under `python/jittor/` are an exact reviewed set.
-`__init__.py` composes the runtime; `compiler.py`, `compile_extern.py`,
+The entries directly under `python/jittor/` are an exact reviewed set.
+`__init__.py` composes the runtime, while `jittor._runtime.core_api` is the one
+large native Python API implementation loaded after the compiled core. Public
+root exports retain object identity with that implementation, and legacy root
+pickle paths remain loadable. `__init__.pyi` owns the public root typing surface.
+`compiler.py`, `compile_extern.py`,
 `pyjt_compiler.py`, and `init_cupy.py` are compiler or device bootstrap
 boundaries; `distributions.py`, `init.py`, and `linalg.py` are public native
 domains; `selftest.py` is the installed smoke-test entry point. New root files
@@ -129,6 +137,14 @@ Torch installer runs after an explicit Torch-mode preflight, through a deployed
 `torch` entry point, or when the historical `jittor.torch_compat` alias is
 imported. This prevents class-level Torch adaptations from changing native
 Jittor APIs in unrelated processes.
+
+`jittor.compat.vllm` is a staged exception to the normal rule that
+project/version glue lives in an optional integration distribution. It may use
+only public Jittor APIs plus the public module-patcher mechanism, must remain
+relocatable, and activates only when vLLM is imported. Its exit condition is a
+versioned, installable vLLM plugin that preserves the maintained structure,
+correctness, and performance gates. The device platform and worker adapter stay
+outside the core repository while this extraction is incomplete.
 
 The ownership order is:
 

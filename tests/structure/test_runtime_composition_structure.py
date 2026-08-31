@@ -374,6 +374,14 @@ print("RESULT=" + json.dumps({
         self.assertIn("flag_scope", definitions)
         self.assertNotIn("compose", definitions)
 
+    def test_source_architecture_names_the_core_api_owner(self):
+        source = (
+            self.repo / "docs" / "architecture" / "source-architecture.md"
+        ).read_text(encoding="utf-8")
+        normalized = " ".join(source.split())
+        self.assertIn("`jittor._runtime.core_api`", normalized)
+        self.assertIn("Public root exports retain object identity", normalized)
+
     def test_preflight_and_lazy_shim_are_stdlib_only(self):
         allowed = {
             "__future__",

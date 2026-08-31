@@ -45,6 +45,14 @@ def _imported_names(tree):
 
 
 class TestVllmCompatIsRelocatable(unittest.TestCase):
+    def test_architecture_records_the_staged_plugin_boundary(self):
+        repo = _PACKAGE.parents[3]
+        source = (
+            repo / "docs" / "architecture" / "source-architecture.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("`jittor.compat.vllm` is a staged exception", source)
+        self.assertIn("versioned, installable vLLM plugin", source)
+
     def test_the_package_is_present_and_small(self):
         names = {path.name for path in _sources()}
         self.assertEqual(

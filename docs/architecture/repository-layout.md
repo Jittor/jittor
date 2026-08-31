@@ -2,6 +2,8 @@
 
 - Status: Accepted
 - Date: 2026-08-11
+- Last reviewed: 2026-08-31
+- Baseline: `f5e8e944` plus the boundary documentation changes described here
 - Scope: Jittor 2.0 repository structure, packaging, compatibility ownership,
   tests, tooling, and documentation
 - Supersedes: the long-term `facade.py + _private/` target and the decision to
@@ -107,6 +109,9 @@ must be present in the wheel.
 └── python/
     ├── jittor/
     │   ├── __init__.py
+    │   ├── __init__.pyi          # public root typing surface
+    │   ├── _runtime/
+    │   │   └── core_api.py       # native Python API after core bootstrap
     │   ├── nn/
     │   │   ├── __init__.py
     │   │   ├── backends/
@@ -125,6 +130,7 @@ must be present in the wheel.
     │   │   ├── shim/
     │   │   ├── fsdp2/
     │   │   ├── triton/
+    │   │   ├── vllm/             # staged, relocatable integration
     │   │   ├── module_patcher.py
     │   │   └── external_backend.py
     │   ├── selftest.py
@@ -258,6 +264,13 @@ Torch compatibility is separated by ownership rather than downstream project:
    `jittor-trellis`, `jittor-gs`, and `jittor-hf-compat`, registered through
    entry points. Mainline Jittor does not install a permanent TRELLIS or Gaussian
    Splatting finder for every process.
+
+`jittor.compat.vllm` is the explicit staged exception while the vLLM integration
+and its external device plugin are still converging. Structure tests constrain
+it to public Jittor APIs and the module-patcher entry point so extraction does
+not require a core API rewrite. It must move to a versioned, installable plugin
+once that plugin preserves the maintained correctness and performance gates;
+the external platform and worker adapter are not owned by `python/jittor`.
 
 Installers must report each attempted patch independently. A broad
 `try/except Exception: pass` around a chain of patches is forbidden because one
