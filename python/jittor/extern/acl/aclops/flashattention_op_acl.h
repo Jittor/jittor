@@ -33,4 +33,13 @@ namespace jittor
         IncreFlashAttentionOpRunner();
     };
 
+    class KVCacheMemcpyOpRunner : public BaseOpRunner
+    {
+    protected:
+        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+
+    public:
+        KVCacheMemcpyOpRunner();
+    };
+
 }

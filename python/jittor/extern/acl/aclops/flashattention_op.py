@@ -182,6 +182,61 @@ class IncreFlashAttentionACL(jt.Function):
         return result[0]
 
 
+class PagedIncreFlashAttentionACL(jt.Function):
+
+    def __init__(self, headnum, key_value_headnum, block_size, scale,
+                 actual_seq_lengths, layout="BNSD", innerprecise=0):
+        self.headnum = int(headnum)
+        self.key_value_headnum = int(key_value_headnum)
+        self.block_size = int(block_size)
+        self.scale = float(scale)
+        self.actual_seq_lengths = [int(length) for length in actual_seq_lengths]
+        self.layout = str(layout)
+        self.innerprecise = int(innerprecise)
+
+    def execute(self, q, kv_cache, block_table):
+        lengths = ", ".join(map(str, self.actual_seq_lengths))
+        attr_code = f"""
+        op.jt_name = "paged_increflashattention";
+        IncreFlashAttentionAttr *attr = new IncreFlashAttentionAttr();
+        attr->scale = {self.scale};
+        attr->headNum = {self.headnum};
+        attr->keyValueHeadNum = {self.key_value_headnum};
+        attr->inputLayout = "{self.layout}";
+        attr->innerPrecise = {self.innerprecise};
+        attr->blockSize = {self.block_size};
+        attr->hasBlockTable = true;
+        attr->actualSeqLengths = {{ {lengths} }};
+        op.op_attr.reset(attr);
+        """
+        result = flashattention_cmd(
+            "IncreFlashAttention", [q, kv_cache, block_table],
+            output_dtypes=[q.dtype], output_shapes=[q.shape],
+            attr_code=attr_code)
+        return result[0]
+
+
+class KVCacheMemcpyACL(jt.Function):
+
+    def __init__(self, block_size, slots):
+        self.block_size = int(block_size)
+        self.slots = [int(slot) for slot in slots]
+
+    def execute(self, key, value, kv_cache):
+        slots = ", ".join(map(str, self.slots))
+        attr_code = f"""
+        op.jt_name = "kv_cache_memcpy";
+        KVCacheMemcpyAttr *attr = new KVCacheMemcpyAttr();
+        attr->blockSize = {self.block_size};
+        attr->slots = {{ {slots} }};
+        op.op_attr.reset(attr);
+        """
+        result = flashattention_cmd(
+            "KVCacheMemcpy", [key, value], outputs=[kv_cache],
+            attr_code=attr_code)
+        return result[0]
+
+
 def _causal_mask(query_length, source_length):
     key = (int(query_length), int(source_length))
     cached = _causal_mask_cache.get(key)

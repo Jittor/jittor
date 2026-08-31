@@ -104,15 +104,57 @@ namespace jittor
     void IncreFlashAttentionOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
     {
         auto attr = dynamic_cast<IncreFlashAttentionAttr *>(op_attr.get());
+        aclTensor *keyTensor = nullptr;
+        aclTensor *valueTensor = nullptr;
+        aclTensor *blockTable = nullptr;
+        aclTensor *keyView = nullptr;
+        aclTensor *valueView = nullptr;
+        if (attr->hasBlockTable)
+        {
+            CHECK(inputShapes.size() == 3);
+            CHECK(inputShapes[1].size() == 5);
+            CHECK(inputShapes[1][1] == 2);
+            auto &cacheShape = inputShapes[1];
+            int64_t blocks = cacheShape[0];
+            int64_t blockSize = cacheShape[2];
+            int64_t width = cacheShape[3] * cacheShape[4];
+            std::vector<int64_t> viewDims{blocks, blockSize, width};
+            std::vector<int64_t> viewStrides{2 * blockSize * width, width, 1};
+            int64_t valueOffset = blockSize * width;
+            keyView = aclCreateTensor(
+                viewDims.data(), viewDims.size(), get_dtype(in_[1]->dtype()),
+                viewStrides.data(), 0, aclFormat::ACL_FORMAT_ND,
+                cacheShape.data(), cacheShape.size(), in_[1]->mem_ptr);
+            valueView = aclCreateTensor(
+                viewDims.data(), viewDims.size(), get_dtype(in_[1]->dtype()),
+                viewStrides.data(), valueOffset, aclFormat::ACL_FORMAT_ND,
+                cacheShape.data(), cacheShape.size(), in_[1]->mem_ptr);
+            CHECK(keyView != nullptr);
+            CHECK(valueView != nullptr);
+            keyTensor = keyView;
+            valueTensor = valueView;
+            blockTable = inputTensors[2];
+        }
+        else
+        {
+            keyTensor = inputTensors[1];
+            valueTensor = inputTensors[2];
+        }
         // The executor retains these lists through the execute call.
-        auto key = aclCreateTensorList(&inputTensors[1], 1);
-        auto value = aclCreateTensorList(&inputTensors[2], 1);
+        auto key = aclCreateTensorList(&keyTensor, 1);
+        auto value = aclCreateTensorList(&valueTensor, 1);
+        aclIntArray *actualSeqLengths = nullptr;
+        if (!attr->actualSeqLengths.empty())
+        {
+            actualSeqLengths = aclCreateIntArray(
+                attr->actualSeqLengths.data(), attr->actualSeqLengths.size());
+        }
         char *layout = const_cast<char *>(attr->inputLayout.data());
         ret = aclnnIncreFlashAttentionV4GetWorkspaceSize(
-            inputTensors[0], key, value, nullptr, nullptr, nullptr,
+            inputTensors[0], key, value, nullptr, nullptr, actualSeqLengths,
             nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
-            nullptr, nullptr, attr->headNum, attr->scale, layout,
-            attr->keyValueHeadNum, 0, attr->innerPrecise, outputTensors[0],
+            blockTable, nullptr, attr->headNum, attr->scale, layout,
+            attr->keyValueHeadNum, attr->blockSize, attr->innerPrecise, outputTensors[0],
             &workspaceSize, &executor);
         checkRet(ret);
 
@@ -126,7 +168,63 @@ namespace jittor
         CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnIncreFlashAttentionV4 failed. ERROR: %d\n", name.c_str(), ret); return);
 
         syncRun();
+        if (actualSeqLengths != nullptr)
+            aclDestroyIntArray(actualSeqLengths);
+        if (keyView != nullptr)
+            aclDestroyTensor(keyView);
+        if (valueView != nullptr)
+            aclDestroyTensor(valueView);
         return;
+    }
+
+    KVCacheMemcpyOpRunner::KVCacheMemcpyOpRunner() : BaseOpRunner("KVCacheMemcpy")
+    {
+    }
+
+    void KVCacheMemcpyOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    {
+        auto attr = dynamic_cast<KVCacheMemcpyAttr *>(op_attr.get());
+        CHECK(in_.size() == 2);
+        CHECK(out_.size() == 1);
+        CHECK(inputShapes[0].size() == 3);
+        CHECK(inputShapes[1] == inputShapes[0]);
+        CHECK(outputShapes[0].size() == 5);
+        CHECK(outputShapes[0][1] == 2);
+        CHECK(outputShapes[0][2] == attr->blockSize);
+        CHECK(outputShapes[0][3] == inputShapes[0][1]);
+        CHECK(outputShapes[0][4] == inputShapes[0][2]);
+        CHECK(attr->slots.size() >= size_t(inputShapes[0][0]));
+        CHECK(in_[0]->size == in_[1]->size);
+
+        int64_t tokens = inputShapes[0][0];
+        int64_t tokenBytes = tokens > 0 ? in_[0]->size / tokens : 0;
+        int64_t capacity = outputShapes[0][0] * attr->blockSize;
+        auto *cache = static_cast<char *>(out_[0]->mem_ptr);
+        auto *key = static_cast<char *>(in_[0]->mem_ptr);
+        auto *value = static_cast<char *>(in_[1]->mem_ptr);
+        for (int64_t token = 0; token < tokens; ++token)
+        {
+            int64_t slot = attr->slots[token];
+            if (slot < 0 || slot >= capacity)
+                continue;
+            int64_t block = slot / attr->blockSize;
+            int64_t offset = slot % attr->blockSize;
+            int64_t keyRow = block * 2 * attr->blockSize + offset;
+            int64_t valueRow = keyRow + attr->blockSize;
+            int64_t keyOffset = keyRow * tokenBytes;
+            int64_t valueOffset = valueRow * tokenBytes;
+            int64_t sourceOffset = token * tokenBytes;
+            ret = aclrtMemcpyAsync(
+                cache + keyOffset, out_[0]->size - keyOffset,
+                key + sourceOffset, tokenBytes,
+                ACL_MEMCPY_DEVICE_TO_DEVICE, aclstream);
+            CHECK_RET(ret == ACL_SUCCESS, return);
+            ret = aclrtMemcpyAsync(
+                cache + valueOffset, out_[0]->size - valueOffset,
+                value + sourceOffset, tokenBytes,
+                ACL_MEMCPY_DEVICE_TO_DEVICE, aclstream);
+            CHECK_RET(ret == ACL_SUCCESS, return);
+        }
     }
 
 }

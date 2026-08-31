@@ -51,6 +51,11 @@ def _reshape_and_cache_acl(key, value, kv_cache, slot_mapping, slots=None):
     if not valid_tokens:
         return kv_cache
 
+    if token_count <= 16 and len(valid_tokens) == token_count:
+        from jittor.extern.acl.aclops.flashattention_op import KVCacheMemcpyACL
+        KVCacheMemcpyACL(cache_shape[2], slots)(key, value, kv_cache)
+        return kv_cache
+
     source = jt.stack((key, value), dim=1)
     if len(valid_tokens) != token_count:
         source = _gather_rows(source, valid_tokens)
@@ -211,6 +216,61 @@ def _decode_attention_acl(query, key, value, scale):
     return output.reshape((query_shape[1], query_shape[2])).reshape(
         query_shape
     ).cast(output_dtype)
+
+
+def _paged_attention_decode_acl(query, kv_cache, block_table, scale,
+                                key_lengths=None):
+    tensors = (query, kv_cache, block_table)
+    if not all(isinstance(tensor, jt.Var) for tensor in tensors):
+        return None
+    if not (_on_acl() and getattr(jt.flags, "no_grad", 0)):
+        return None
+    if key_lengths is None:
+        return None
+
+    query_shape = tuple(int(size) for size in query.shape)
+    cache_shape = tuple(int(size) for size in kv_cache.shape)
+    table_shape = tuple(int(size) for size in block_table.shape)
+    lengths = [int(length) for length in key_lengths]
+    batch = len(lengths)
+    if (
+        batch != 1
+        or len(query_shape) != 3
+        or query_shape[0] != batch
+        or len(cache_shape) != 5
+        or cache_shape[1] != 2
+        or cache_shape[2] != 128
+        or len(table_shape) != 2
+        or table_shape[0] != batch
+        or str(kv_cache.dtype) != "bfloat16"
+        or str(block_table.dtype) != "int32"
+        or query_shape[2] != cache_shape[4]
+        or query_shape[1] % cache_shape[3] != 0
+    ):
+        return None
+    if any(
+        length <= 0 or -(-length // cache_shape[2]) > table_shape[1]
+        for length in lengths
+    ):
+        return None
+
+    from jittor.extern.acl.aclops.flashattention_op import (
+        PagedIncreFlashAttentionACL,
+    )
+
+    output_dtype = query.dtype
+    packed_query = query.cast(kv_cache.dtype).reshape(
+        (batch, query_shape[1], 1, query_shape[2])
+    )
+    output = PagedIncreFlashAttentionACL(
+        query_shape[1], cache_shape[3], cache_shape[2], scale, lengths
+    )(packed_query, kv_cache, block_table)
+    _paged_attention_decode_acl.backend_name = \
+        "acl_paged_incre_flash_attention_v4"
+    return output.reshape(query_shape).cast(output_dtype)
+
+
+_paged_attention_decode_acl.backend_name = None
 
 
 __all__ = []

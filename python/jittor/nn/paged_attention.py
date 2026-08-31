@@ -79,6 +79,11 @@ def paged_attention(query, kv_cache, cu_seqlens_q, seq_lens, block_table,
             query, kv_cache, seq_lens, block_table, scale)
         if decoded is not None:
             return decoded
+        from .kv_cache_acl import _paged_attention_decode_acl
+        decoded = _paged_attention_decode_acl(
+            query, kv_cache, block_table, scale, key_lengths=key_lengths)
+        if decoded is not None:
+            return decoded
 
     out_dtype = query.dtype
     q = query.float32()

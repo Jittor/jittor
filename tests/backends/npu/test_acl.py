@@ -122,6 +122,44 @@ class TestACL(unittest.TestCase):
             atol=4e-4, rtol=0)
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_block128_paged_decode_uses_direct_incremental_flash(self):
+        from jittor.nn.kv_cache_acl import _paged_attention_decode_acl
+
+        rng = np.random.RandomState(47)
+        heads, kv_heads, head_dim, length, block_size = 16, 8, 128, 7, 128
+        query = (rng.randn(1, heads, head_dim) * 0.1).astype("float32")
+        key = (rng.randn(length, kv_heads, head_dim) * 0.1).astype("float32")
+        value = (rng.randn(length, kv_heads, head_dim) * 0.1).astype("float32")
+        cache = jt.zeros(
+            (1, 2, block_size, kv_heads, head_dim), "bfloat16"
+        )
+
+        with jt.no_grad(), jt.log_capture_scope(
+                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+            jt.nn.reshape_and_cache(
+                jt.array(key).bfloat16(), jt.array(value).bfloat16(), cache,
+                jt.arange(length).int32(), slots=list(range(length)))
+            output = jt.nn.paged_attention(
+                jt.array(query), cache, jt.array([0, 1]).int32(),
+                jt.array([length]).int32(), jt.array([[0]]).int32(),
+                query_lengths=[0, 1], key_lengths=[length])
+            output.sync()
+            cache.sync()
+            output_location = output.location()
+
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+        self.assertEqual(
+            _paged_attention_decode_acl.backend_name,
+            "acl_paged_incre_flash_attention_v4",
+        )
+        self.assertEqual(output_location, "device")
+        self.assertTrue(np.isfinite(output.numpy()).all())
+        np.testing.assert_allclose(
+            output.numpy(), self._paged_attention_reference(query, key, value),
+            atol=7e-4, rtol=0)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_empty_tensor_numpy_skips_zero_byte_device_copy(self):
         value = jt.empty((0, 3), dtype="float32")
         value.sync()
