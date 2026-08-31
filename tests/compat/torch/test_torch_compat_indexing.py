@@ -190,10 +190,30 @@ class TestIndexSelect(Base):
         x = np.arange(20).reshape(5, 4).astype("float32")
         idx = np.array([4, 1, 1], dtype="int64")
         def body(dev):
-            out = torch.empty((3, 4), dtype=torch.float32)
+            parent = torch.full((5, 4), -1, dtype=torch.float32)
+            out = parent[:3]
             result = torch.index_select(t(x), 0, t(idx), out=out)
             self.assertIs(result, out)
             self.ac(out.numpy(), x[idx], msg=f"index_select out {dev}")
+            expected = np.full((5, 4), -1, dtype=np.float32)
+            expected[:3] = x[idx]
+            self.ac(parent.numpy(), expected,
+                    msg=f"index_select out sliced parent {dev}")
+        both_devices(body)
+
+    def test_add_out_writes_through_slice_view(self):
+        def body(dev):
+            parent = torch.zeros(3, dtype=torch.int32)
+            out = parent[:1]
+            result = torch.add(
+                torch.tensor([2], dtype=torch.int32),
+                torch.tensor([3], dtype=torch.int32),
+                alpha=2,
+                out=out,
+            )
+            self.assertIs(result, out)
+            self.ac(parent.numpy(), np.array([8, 0, 0], dtype=np.int32),
+                    msg=f"add out sliced parent {dev}")
         both_devices(body)
 
 

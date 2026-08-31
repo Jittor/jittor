@@ -778,6 +778,16 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         _write_index_parent(out, out)
         return out
 
+    _native_add = g.add
+    def _add(input, other, *, alpha=1, out=None):
+        if alpha != 1:
+            other = other * alpha
+        result = _native_add(input, other)
+        if out is not None:
+            return _assign_out(out, result)
+        return result
+    g.add = _add
+
     def _cumsum(x, dim=-1, dtype=None, out=None, **kw):
         if isinstance(x, jt.Var) and str(x.dtype) in ("bool", "uint8"):
             x = x.cast("int64")
@@ -1773,7 +1783,7 @@ def install(ctx):
     def _index_select(input, dim, index, *, out=None):
         result = _native_index_select(input, dim, index)
         if out is not None:
-            out.assign(result)
+            out[...] = result
             return out
         return result
     g.index_select = _index_select
