@@ -8,7 +8,7 @@ import sys as _sys
 
 import jittor as jt
 
-from .._permissive import install_permissive_package
+from ...permissive import install_permissive_package
 from ..library import install_torch_library
 
 
@@ -90,6 +90,18 @@ def install(ctx):
     # below runs, so answer those imports rather than failing them; the two
     # modules above keep their real definitions.
     install_permissive_package("torch._inductor", _sys.meta_path)
+    # The rest of torch's compile-and-dispatch internals, for the same reason:
+    # imported at module scope by code whose use of them is gated on a compiled
+    # path this backend never enters. The public counterparts that do matter --
+    # torch.library, torch.compiler, torch.distributed -- are implemented, and
+    # stay implemented: only these underscored namespaces are answered blind.
+    # torch.fx joins them for its submodules only: the names above stay real,
+    # and it is the graph-pickling and pass machinery underneath -- reached
+    # only from the compiled path -- that gets answered blind.
+    for _internal in ("torch._library", "torch._higher_order_ops",
+                      "torch._guards", "torch._logging", "torch._dynamo",
+                      "torch.fx"):
+        install_permissive_package(_internal, _sys.meta_path)
     # torch 2.11 introduced opaque value types: an object an operator takes as
     # an argument and the graph carries along without inspecting it. Declaring
     # the base is the whole of what a definition site needs -- there is no
@@ -123,6 +135,8 @@ def install(ctx):
     _alias("ScriptModule", _jit.ScriptModule)
     _modules.setdefault("torch.jit", _jit)
     _fx = _types2.ModuleType("torch.fx")
+    # A package, so its submodules can be imported and answered below.
+    _fx.__path__ = []
     _fx.Graph = type("Graph", (), {})
     _fx.GraphModule = type("GraphModule", (), {})
     _fx.Proxy = type("Proxy", (), {})
@@ -133,6 +147,9 @@ def install(ctx):
     # torch._dynamo: minimal importable stubs for libraries that probe or
     # decorate with Dynamo APIs. Jittor runs eagerly/JIT through its own stack.
     _dynamo = _types2.ModuleType("torch._dynamo")
+    # A package, so the submodules below and the permissive ones further down
+    # can be imported rather than only read as attributes.
+    _dynamo.__path__ = []
     _dynamo.disable = lambda f=None, **k: (f if f is not None else (lambda g: g))
     _dynamo.allow_in_graph = lambda f=None, **k: (f if f is not None else (lambda g: g))
     _dynamo.disallow_in_graph = lambda f=None, **k: (f if f is not None else (lambda g: g))

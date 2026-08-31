@@ -204,6 +204,13 @@ def _install_cuda(g, registry=None):
         return 1
     cuda.is_available = is_available
     cuda.device_count = device_count
+    # Whether torch itself was built with CUDA, as distinct from whether a
+    # device is present. Here the two are the same question.
+    cuda._is_compiled = is_available
+    # torch counts devices twice: once through the driver and once through
+    # NVML, so that it can answer before CUDA is initialised. Here both
+    # questions go to the same place.
+    cuda._device_count_nvml = device_count
     cuda.current_device = lambda: 0
     cuda.set_device = lambda *a, **k: None
     class _CudaDeviceContext:
@@ -645,6 +652,13 @@ def _install_cuda(g, registry=None):
         nn_c._parse_to = _parse_to
         c_mod._nn = nn_c
         c_mod._functorch = functorch_c
+        # Allocator tuning arrives as a settings string that the caching
+        # allocator parses. Jittor manages its own pool, so there is nothing to
+        # tune -- but the call has to exist, because the caller makes it before
+        # asking whether it could have had any effect.
+        c_mod._accelerator_setAllocatorSettings = lambda *args, **kwargs: None
+        c_mod._cuda_setAllocatorSettings = getattr(
+            c_mod, "_cuda_setAllocatorSettings", lambda *args, **kwargs: None)
         _modules["torch._C"] = c_mod
         _modules["torch._C._nn"] = nn_c
         _modules["torch._C._functorch"] = functorch_c
@@ -704,6 +718,11 @@ def _install_cuda(g, registry=None):
     cuda_backend.enable_flash_sdp = getattr(cuda_backend, "enable_flash_sdp", lambda *a, **k: None)
     cuda_backend.enable_mem_efficient_sdp = getattr(cuda_backend, "enable_mem_efficient_sdp", lambda *a, **k: None)
     cuda_backend.enable_math_sdp = getattr(cuda_backend, "enable_math_sdp", lambda *a, **k: None)
+    # The fourth of torch's attention-backend switches. Attention here picks
+    # its own path, so all four are settings nothing acts on -- but a serving
+    # stack turns cuDNN's off during platform detection, and an AttributeError
+    # there is swallowed into "no platform detected" rather than reported.
+    cuda_backend.enable_cudnn_sdp = getattr(cuda_backend, "enable_cudnn_sdp", lambda *a, **k: None)
     class _MatmulBackend:
         @property
         def allow_tf32(self):
