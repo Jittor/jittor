@@ -46,6 +46,7 @@ from .attention import (
     sequence_lengths,
     varlen_scaled_dot_product_attention,
 )
+from .fused_moe import fused_moe
 from .paged_attention import paged_attention, reshape_and_cache
 from .backends.cudnn import (
     _CUDNN_3D_HALF_DTYPES,
