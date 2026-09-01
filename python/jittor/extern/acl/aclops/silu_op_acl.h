@@ -24,4 +24,24 @@ namespace jittor
         SiLUBackwardOpRunner();
     };
 
+    class SwishOpRunner : public BaseOpRunner
+    {
+
+    protected:
+        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+
+    public:
+        SwishOpRunner();
+    };
+
+    class SwishBackwardOpRunner : public BaseOpRunner
+    {
+
+    protected:
+        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+
+    public:
+        SwishBackwardOpRunner();
+    };
+
 }

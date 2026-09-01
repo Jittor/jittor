@@ -27,6 +27,8 @@
 #include "opt/tuner_manager.h"
 #include "utils/str_utils.h"
 #include "aclnn/aclnn.h"
+#include <aclnnop/aclnn_swish.h>
+#include <aclnnop/aclnn_swish_backward.h>
 #include "silu_op_acl.h"
 
 namespace jittor
@@ -71,6 +73,55 @@ namespace jittor
 
         ret = aclnnSiluBackward(workspaceAddr, workspaceSize, executor, aclstream);
         CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnSiluBackward failed. ERROR: %d\n", name.c_str(), ret); return);
+
+        syncRun();
+
+        return;
+    }
+
+    SwishOpRunner::SwishOpRunner() : BaseOpRunner("Swish")
+    {
+    }
+
+    void SwishOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    {
+        ret = aclnnSwishGetWorkspaceSize(
+            inputTensors[0], nullptr, outputTensors[0], &workspaceSize, &executor);
+
+        checkRet(ret);
+
+        if (workspaceSize > 0)
+        {
+            mallocWorkSpace(workspaceSize);
+        }
+
+        ret = aclnnSwish(workspaceAddr, workspaceSize, executor, aclstream);
+        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnSwish failed. ERROR: %d\n", name.c_str(), ret); return);
+
+        syncRun();
+
+        return;
+    }
+
+    SwishBackwardOpRunner::SwishBackwardOpRunner() : BaseOpRunner("SwishBackward")
+    {
+    }
+
+    void SwishBackwardOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    {
+        ret = aclnnSwishBackwardGetWorkspaceSize(
+            inputTensors[0], inputTensors[1], nullptr, outputTensors[0],
+            &workspaceSize, &executor);
+
+        checkRet(ret);
+
+        if (workspaceSize > 0)
+        {
+            mallocWorkSpace(workspaceSize);
+        }
+
+        ret = aclnnSwishBackward(workspaceAddr, workspaceSize, executor, aclstream);
+        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnSwishBackward failed. ERROR: %d\n", name.c_str(), ret); return);
 
         syncRun();
 

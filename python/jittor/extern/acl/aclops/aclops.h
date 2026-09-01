@@ -14,6 +14,7 @@
 #include <acl/aclops/bmm_op_acl.h>
 #include <acl/aclops/pool_op_acl.h>
 #include <acl/aclops/flip_op_acl.h>
+#include <acl/aclops/roll_op_acl.h>
 #include <acl/aclops/concat_op_acl.h>
 #include <acl/aclops/gather_scatter_op_acl.h>
 #include <acl/aclops/cumsum_op_acl.h>

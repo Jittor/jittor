@@ -40,3 +40,28 @@ op.jt_name = "silubackward";
 op.run();
 '''])[0]
         return result
+
+
+class SwishACL:
+
+    def __call__(self, x):
+        return self.execute(x)
+
+    def execute(self, x):
+        result = silu_cmd(
+            "Swish",
+            inputs=[x],
+            output_dtypes=[x.dtype],
+            output_shapes=[x.shape],
+            attr_code='op.jt_name = "swish";',
+            cuda_grad_src=['''
+// aclop
+SwishBackwardOpRunner op;
+op.add(dout, true);
+op.add(in0, true);
+op.add(out0, false);
+op.jt_name = "swishbackward";
+op.run();
+'''],
+        )[0]
+        return result

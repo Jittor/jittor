@@ -1097,6 +1097,25 @@ def _install_module_methods(nn, registry=None):
         return result
 
     _orig_call = M.__call__
+    def _acl_bfloat16_rms_norm(value, weight, epsilon):
+        if not (
+            getattr(jt.compiler, "has_acl", 0)
+            and getattr(jt.flags, "use_acl", 0)
+            and jt.flags.use_cuda
+            and str(value.dtype) == "bfloat16"
+            and str(weight.dtype) == "bfloat16"
+        ):
+            return None
+        unit_weight = weight.__dict__.get("_torch_acl_rms_norm_unit_weight")
+        if unit_weight is None or tuple(unit_weight.shape) != tuple(weight.shape):
+            unit_weight = jt.ones(weight.shape, dtype="bfloat16")
+            unit_weight.stop_grad()
+            weight.__dict__["_torch_acl_rms_norm_unit_weight"] = unit_weight
+        normalized = jt.nn._rms_norm_cuda(value, unit_weight, epsilon)
+        if normalized is None:
+            return None
+        return weight * normalized
+
     def _standard_rms_norm(self, args, kwargs):
         cls_name = type(self).__name__
         if (
@@ -1112,6 +1131,9 @@ def _install_module_methods(nn, registry=None):
         if not isinstance(value, jt.Var) or not isinstance(weight, jt.Var):
             return None
         epsilon = self.__dict__["variance_epsilon"]
+        pytorch_order = _acl_bfloat16_rms_norm(value, weight, epsilon)
+        if pytorch_order is not None:
+            return pytorch_order
         fast = jt.nn._rms_norm_training_cuda(value, weight, epsilon)
         if fast is None:
             fast = jt.nn._rms_norm_cuda(value, weight, epsilon)

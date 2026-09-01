@@ -164,7 +164,7 @@ def change_function():
     from .aclops.rope_op import RotaryPositionEmbeddingACL
     from .aclops.softmax_op import SoftmaxACL
     from .aclops.sigmoid_op import SigmoidACL
-    from .aclops.silu_op import SiLUACL
+    from .aclops.silu_op import SiLUACL, SwishACL
     from .aclops.norms_op import (
         BatchNormACL,
         GroupNormACL,
@@ -174,6 +174,7 @@ def change_function():
     from .aclops.dropout_op import DropoutACL
     from .aclops.relu_op import LeakyReLUACL
     from .aclops.flip_op import FlipACL
+    from .aclops.roll_op import RollACL
     from .aclops.concat_op import ConcatACL
     from .aclops.gather_scatter_op import GatherACL
     from .aclops.arg_reduce_op import ArgReduceACL
@@ -928,6 +929,38 @@ def change_function():
 
     jt.flip = warp(jt.flip, flip_acl)
     jt.Var.flip = lambda x, dim_vector=0: jt.flip(x, dim_vector)
+    _orig_roll = jt.roll
+    def _roll_acl(x, shifts, dims=None):
+        if not (
+            jt.flags.use_acl
+            and jt.flags.use_cuda
+            and isinstance(x, jt.Var)
+            and str(x.dtype) in (
+                "bfloat16", "float16", "float32",
+                "int8", "uint8", "int32", "uint32", "bool",
+            )
+        ):
+            return _orig_roll(x, shifts, dims)
+        if dims is None:
+            shift = shifts[0] if isinstance(shifts, (tuple, list)) else shifts
+            if not isinstance(shift, int):
+                return _orig_roll(x, shifts, dims)
+            return RollACL()(x.reshape((-1,)), (shift,), (0,)).reshape(x.shape)
+        normalized_shifts = shifts if isinstance(shifts, (tuple, list)) else (shifts,)
+        normalized_dims = dims if isinstance(dims, (tuple, list)) else (dims,)
+        if (
+            len(normalized_shifts) != len(normalized_dims)
+            or not all(isinstance(value, int) for value in normalized_shifts)
+            or not all(isinstance(value, int) for value in normalized_dims)
+        ):
+            return _orig_roll(x, shifts, dims)
+        rank = int(x.ndim)
+        if rank == 0 or any(dim < -rank or dim >= rank for dim in normalized_dims):
+            return _orig_roll(x, shifts, dims)
+        normalized_dims = tuple(dim % rank for dim in normalized_dims)
+        return RollACL()(x, tuple(normalized_shifts), normalized_dims)
+    jt.roll = _roll_acl
+    jt.Var.roll = lambda x, shifts, dims=None: jt.roll(x, shifts, dims)
     jt.concat = warp(jt.concat, concat)
     jt.stack = warp(jt.stack, stack_acl)
     jt.nn._acl_constant_pad = constant_pad_acl
@@ -1047,11 +1080,14 @@ def change_function():
             jt.flags.use_acl
             and jt.flags.use_cuda
             and isinstance(x, jt.Var)
-            and str(x.dtype) == "float32"
+            and str(x.dtype) in ("float32", "bfloat16")
         ):
+            if str(x.dtype) == "bfloat16":
+                return SwishACL()(x)
             return SiLUACL()(x)
         return _orig_silu(x, inplace=inplace)
     jt.nn.silu = _silu_acl
+    jt.nn.functional.silu = _silu_acl
 
     jt.sigmoid = warp(jt.sigmoid, sigmoid_acl)
     jt.nn.Sigmoid = warp(jt.nn.Sigmoid, Sigmoid)

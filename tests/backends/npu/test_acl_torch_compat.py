@@ -6,6 +6,13 @@ import jittor as torch
 import jittor as jt
 
 
+def _bfloat16_round(values):
+    values = np.asarray(values, dtype=np.float32)
+    bits = values.view(np.uint32).copy()
+    bits += np.uint32(0x7fff) + ((bits >> 16) & np.uint32(1))
+    return (bits & np.uint32(0xffff0000)).view(np.float32)
+
+
 @unittest.skipIf(not jt.compiler.has_acl, "No ACL found")
 class TestACLTorchCompat(unittest.TestCase):
     @jt.flag_scope(use_acl=1, use_cuda=1)
@@ -95,6 +102,90 @@ class TestACLTorchCompat(unittest.TestCase):
         self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_standard_rms_norm_bfloat16_matches_pytorch_order(self):
+        class FixtureRMSNorm(torch.nn.Module):
+            def __init__(self, weight):
+                super().__init__()
+                self.weight = torch.tensor(
+                    weight, dtype=torch.bfloat16).requires_grad_(True)
+                self.variance_epsilon = 1e-6
+
+            def forward(self, hidden_states):
+                raise AssertionError("standard RMSNorm missed ACL dispatch")
+
+        rng = np.random.RandomState(20260901)
+        source_np = rng.randn(2, 3, 128).astype("float32")
+        weight_np = rng.uniform(0.1, 1.2, size=(128,)).astype("float32")
+        cotangent_np = rng.randn(2, 3, 128).astype("float32")
+        source_bf = _bfloat16_round(source_np)
+        weight_bf = _bfloat16_round(weight_np)
+        cotangent_bf = _bfloat16_round(cotangent_np)
+
+        module = FixtureRMSNorm(weight_bf)
+        source = torch.tensor(
+            source_bf, dtype=torch.bfloat16).requires_grad_(True)
+        cotangent = torch.tensor(cotangent_bf, dtype=torch.bfloat16)
+        with jt.log_capture_scope(
+            log_v=0, log_vprefix="acl_op_exec.cc=100"
+        ) as logs:
+            output = module(source)
+            cached = module.weight.__dict__.get(
+                "_torch_acl_rms_norm_unit_weight")
+            repeated = module(source)
+            self.assertIs(
+                module.weight.__dict__.get("_torch_acl_rms_norm_unit_weight"),
+                cached,
+            )
+            grad_source, grad_weight = torch.autograd.grad(
+                (output * cotangent).sum(), (source, module.weight)
+            )
+            values = jt.fetch_sync([
+                output.float(), repeated.float(),
+                grad_source.float(), grad_weight.float(),
+            ])
+
+        inverse_rms = np.float32(1.0) / np.sqrt(
+            np.mean(
+                source_bf * source_bf,
+                axis=-1,
+                keepdims=True,
+                dtype=np.float32,
+            ) + np.float32(1e-6)
+        )
+        normalized = source_bf * inverse_rms
+        normalized_bf = _bfloat16_round(normalized)
+        expected_output = _bfloat16_round(weight_bf * normalized_bf)
+        grad_normalized = _bfloat16_round(cotangent_bf * weight_bf)
+        mean_projection = np.mean(
+            grad_normalized * normalized,
+            axis=-1,
+            keepdims=True,
+            dtype=np.float32,
+        )
+        expected_grad_source = _bfloat16_round(
+            inverse_rms * (grad_normalized - normalized * mean_projection)
+        )
+        expected_grad_weight = _bfloat16_round(np.sum(
+            _bfloat16_round(cotangent_bf * normalized_bf),
+            axis=(0, 1),
+            dtype=np.float32,
+        ))
+        expected = (
+            expected_output,
+            expected_output,
+            expected_grad_source,
+            expected_grad_weight,
+        )
+        for actual, reference in zip(values, expected):
+            np.testing.assert_array_equal(actual, reference)
+        self.assertIsNotNone(cached)
+        self.assertEqual(str(cached.dtype), "bfloat16")
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertTrue(any("compile acl op" in message for message in messages))
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_python_float_truediv_stays_on_acl(self):
         source_np = np.array([0.12345679, 1.2345679, 3.25], dtype=np.float32)
         scale = 0.28209479177387814
@@ -125,6 +216,58 @@ class TestACLTorchCompat(unittest.TestCase):
             atol=2e-6,
         )
         messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_python_float_mul_keeps_bfloat16_on_acl(self):
+        source_np = _bfloat16_round(np.asarray(
+            [1.0, -2.0, 3.5, -7.25], dtype=np.float32))
+        scale = 128 ** -0.5
+        source = torch.tensor(source_np, dtype=torch.bfloat16)
+
+        with jt.log_capture_scope(
+            log_v=0, log_vprefix="acl_op_exec.cc=100"
+        ) as logs:
+            scaled = source * scale
+            reflected = scale * source
+            self.assertEqual(str(scaled.dtype), "bfloat16")
+            self.assertEqual(str(reflected.dtype), "bfloat16")
+            scaled.sync()
+            reflected.sync()
+            values = jt.fetch_sync([scaled.float(), reflected.float()])
+
+        expected = _bfloat16_round(source_np * np.float32(scale))
+        np.testing.assert_array_equal(values[0], expected)
+        np.testing.assert_array_equal(values[1], expected)
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_roll_bfloat16_forward_backward_stays_on_acl(self):
+        rng = np.random.RandomState(20260901)
+        source_np = _bfloat16_round(rng.randn(2, 3, 8).astype("float32"))
+        cotangent_np = _bfloat16_round(rng.randn(2, 3, 8).astype("float32"))
+        source = torch.tensor(
+            source_np, dtype=torch.bfloat16).requires_grad_(True)
+        cotangent = torch.tensor(cotangent_np, dtype=torch.bfloat16)
+
+        with jt.log_capture_scope(
+            log_v=0, log_vprefix="acl_op_exec.cc=100"
+        ) as logs:
+            output = torch.roll(source, shifts=4, dims=-1)
+            flat = torch.roll(source, shifts=5)
+            gradient = torch.autograd.grad(
+                (output * cotangent).sum(), source
+            )[0]
+            values = jt.fetch_sync([output.float(), flat.float(), gradient.float()])
+
+        np.testing.assert_array_equal(values[0], np.roll(source_np, 4, axis=-1))
+        np.testing.assert_array_equal(values[1], np.roll(source_np.reshape(-1), 5).reshape(source_np.shape))
+        np.testing.assert_array_equal(values[2], np.roll(cotangent_np, -4, axis=-1))
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertTrue(any("compile acl op" in message for message in messages))
         self.assertFalse(any("compile cpu" in message for message in messages))
         self.assertFalse(any("fallback cpu" in message for message in messages))
 
@@ -426,14 +569,16 @@ class TestACLTorchCompat(unittest.TestCase):
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_silu_forward_backward_stays_on_acl(self):
         source_np = np.array(
-            [-4.0, -1.25, -0.1, 0.0, 0.75, 3.5], dtype="float32"
+            [-4.0, -1.25, -0.1, 0.0, 0.75, 3.5, 5.9375],
+            dtype="float32",
         )
         loss_weight_np = np.array(
-            [0.25, -0.5, 1.5, 2.0, -1.0, 0.75], dtype="float32"
+            [0.25, -0.5, 1.5, 2.0, -1.0, 0.75, 1.0], dtype="float32"
         )
 
         self.assertTrue(jt.flags.use_acl)
         self.assertTrue(jt.flags.use_cuda)
+        self.assertIs(torch.nn.functional.silu, jt.nn.silu)
         source = torch.tensor(source_np)
         source.requires_grad_(True)
         with jt.log_capture_scope(
@@ -460,6 +605,42 @@ class TestACLTorchCompat(unittest.TestCase):
         messages = [entry["msg"].lower() for entry in logs]
         self.assertFalse(any("compile cpu" in message for message in messages))
         self.assertFalse(any("fallback cpu" in message for message in messages))
+
+        with jt.flag_scope(use_acl=1, use_cuda=1), jt.log_capture_scope(
+            log_v=0, log_vprefix="acl_op_exec.cc=100"
+        ) as bf_logs:
+            self.assertTrue(jt.flags.use_acl)
+            self.assertTrue(jt.flags.use_cuda)
+            source_bf = torch.tensor(source_np, dtype=torch.bfloat16)
+            source_bf.requires_grad_(True)
+            loss_weight_bf = torch.tensor(loss_weight_np, dtype=torch.bfloat16)
+            self.assertEqual(str(source_bf.dtype), "bfloat16")
+            self.assertEqual(str(loss_weight_bf.dtype), "bfloat16")
+            output_bf = torch.nn.functional.silu(source_bf)
+            output_bf.sync()
+            gradient_bf = torch.autograd.grad(
+                (output_bf * loss_weight_bf).sum(), source_bf
+            )[0]
+            self.assertEqual(str(output_bf.dtype), "bfloat16")
+            self.assertEqual(str(gradient_bf.dtype), "bfloat16")
+            bf_values = jt.fetch_sync([output_bf, gradient_bf])
+
+        expected_output_bf = np.asarray(
+            [-0.07177734375, -0.279296875, -0.047607421875,
+             0.0, 0.5078125, 3.390625, 5.90625],
+            dtype=np.float32,
+        )
+        expected_gradient_bf = np.asarray(
+            [-0.01318359375, -0.0031585693359375, 0.67578125,
+             1.0, -0.84375, 0.80078125, 1.015625],
+            dtype=np.float32,
+        )
+        np.testing.assert_array_equal(bf_values[0], expected_output_bf)
+        np.testing.assert_array_equal(bf_values[1], expected_gradient_bf)
+        bf_messages = [entry["msg"].lower() for entry in bf_logs]
+        self.assertTrue(any("compile acl op" in message for message in bf_messages))
+        self.assertFalse(any("compile cpu" in message for message in bf_messages))
+        self.assertFalse(any("fallback cpu" in message for message in bf_messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_sdpa_forward_backward_stays_on_acl(self):

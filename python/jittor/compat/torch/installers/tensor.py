@@ -1446,7 +1446,12 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             # `_extend_tokens` list concatenation). Match torch: defer to the sequence.
             if isinstance(other, (list, tuple)):
                 return NotImplemented
-            return native(self, other)
+            out = native(self, other)
+            if isinstance(other, (bool, int, float)) and isinstance(out, Var):
+                expected = _dtype_to_str(g.result_type(self, other))
+                if expected is not None and str(out.dtype) != expected:
+                    out = out.cast(expected)
+            return out
         _op.__name__ = opname
         return _op
     # (opname, reflected?) -- reflected ops receive the *other* operand as the left

@@ -52,6 +52,13 @@ def dts(v):
     return str(v.dtype)
 
 
+def bfloat16_round(values):
+    values = np.asarray(values, dtype=np.float32)
+    bits = values.view(np.uint32).copy()
+    bits += np.uint32(0x7fff) + ((bits >> 16) & np.uint32(1))
+    return (bits & np.uint32(0xffff0000)).view(np.float32)
+
+
 class Base(unittest.TestCase):
     def ac(self, got, ref, atol=1e-5, rtol=1e-5, msg=""):
         g = np.asarray(got); r = np.asarray(ref)
@@ -343,6 +350,25 @@ class TestTypePromotion(Base):
             self.assertEqual(dts(xi + 1.0), "float32", dev)    # int tensor + py float
             xf = torch.ones(3, dtype=torch.float32)
             self.assertEqual(dts(xf + 1), "float32", dev)      # float tensor + py int
+        both_devices(body)
+
+    def test_python_float_keeps_bfloat16_tensor_dtype(self):
+        source = np.array([1.0, -2.0, 3.5, -7.25], dtype=np.float32)
+        source_bf = bfloat16_round(source)
+        scale = 128 ** -0.5
+
+        def body(dev):
+            tensor = torch.tensor(source_bf, dtype=torch.bfloat16)
+            scaled = tensor * scale
+            reflected = scale * tensor
+            self.assertEqual(dts(scaled), "bfloat16", dev)
+            self.assertEqual(dts(reflected), "bfloat16", dev)
+            scaled.sync()
+            reflected.sync()
+            expected = bfloat16_round(source_bf * np.float32(scale))
+            self.ae(scaled.float().numpy(), expected, dev)
+            self.ae(reflected.float().numpy(), expected, dev)
+
         both_devices(body)
 
     def test_integer_true_division_promotes_to_default_float(self):
