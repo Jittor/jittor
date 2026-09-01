@@ -1,8 +1,8 @@
 # vLLM Ascend 与 Jittor-NPU bootstrap 验证
 
-- Status: native vLLM-Ascend inference accepted; Jittor Qwen3 manual and public engine token parity accepted; performance open
+- Status: native vLLM-Ascend inference accepted; Jittor Qwen3 restricted public-engine correctness and performance accepted; coverage expansion open
 - Date: 2026-09-02
-- Baseline: `e67a7350`
+- Baseline: `ed6ede29`
 - Owner: Jittor compatibility and external vLLM adapter maintainers
 - Review when: vLLM, Transformers, CANN, ATB, or the external adapter version changes
 
@@ -17,8 +17,8 @@
 第二条路径已经完成 Qwen3-0.6B 模型构造、严格 safetensors 权重加载、attention
 独立对拍、完整 prefill、复用 KV cache 的手工 greedy decode，以及公开
 `vllm.LLM.generate` 的 worker、scheduler、KV 分配和采样闭环。两条 Jittor 路径的
-四个 token 均与原生基线一致。本报告接受当前单请求短上下文 engine correctness，
-不接受性能，也不外推到多请求、长上下文、量化或 TP>1。
+四个 token 均与原生基线一致。本报告接受当前单请求、短上下文、未量化 TP=1 的
+engine correctness 和暖态串行请求性能；不外推到多请求、长上下文、量化或 TP>1。
 
 ## Native vLLM-Ascend baseline
 
@@ -33,8 +33,9 @@ token ids: [12095, 13, 576, 6722]
 text:       Paris. The capital
 ```
 
-复用 engine 后，另一条提示词的 4-token generation 为 `0.364996s`，约
-`10.96 token/s`。该数据只作为原生 vLLM-Ascend 参考，不是 Jittor 性能结果。
+当前可比协议使用相同提示词和 engine 配置，每个进程执行 10 次并排除第一个图热身
+请求。两轮各 9 个暖态请求的中位数为 `0.373187s/0.404710s`；合并 18 个样本的
+中位数为 `0.389976s`，范围为 `0.370808-0.412697s`。每次输出均为上述四个 token。
 
 ## Versioned Jittor compatibility changes
 
@@ -88,6 +89,9 @@ text:       Paris. The capital
 - 公有 `dual_rms_norm` 为两个张量提供成对 RMSNorm；ACL BF16 no-grad 在一个
   CodeOp 内执行两套精确舍入顺序。vLLM Qwen3Attention 仅在该受支持形态下改写
   forward 以成对调用，其他设备、dtype 和训练直接回到原实现。
+- Qwen3 单 token decode 在相同 ACL BF16 no-grad 契约下，将 Q/K 两套精确
+  `RmsNorm(unit weight) -> weight multiply` 和两次 RoPE 串入一个 CodeOp；prefill、
+  训练、其他 dtype、非 NeoX 或非完整 rotary 形态继续使用原路径。
 - `torch.add(..., out=view)` 和 `torch.index_select(..., out=view)` 返回原 `out`
   对象并写回切片的父 tensor；vLLM 的 optimistic sequence length 和 input ID
   staging 不再保留旧值。
@@ -107,10 +111,13 @@ Jittor 主仓库。当前文件 SHA-256：
 | `vllm_jittor_npu/worker.py` | `b383042d63711f538ed14ae748e2d589c28d9b0c37e2278409840b7b34d46239` |
 | `probes/qwen3_forward.py` | `fecdec74e781d1a21100c634a098a26670ae32d99ccc7a7d520f86691b50f2f5` |
 | `probes/qwen3_engine.py` | `8edec2385347bcfdf5a6ad6dc89491bbe482f4d8370b47b9ee26af322504c566` |
-| `_state/npu-vllm/current-a84614f4/logs/qwen3-engine-dual-qk-rms-10-rerun.log` | `384007a3983a7629beffa34892f6f2b325927b94e09a98c41cf8f383fb095111` |
-| `_state/npu-vllm/current-a84614f4/qwen3-decode-dual-qk-rms-cached.json` | `0fce751dc5064fc90424ee43dcc279e7b0bbd67efc48c82bee7ac766e2fe6e4e` |
-| `_state/npu-vllm/profiles/qwen3_decode_fused.json` | `44a44104122c4956d98b946910403a3792e414f49a89ed10bd1b1c3a01e3b343` |
-| `_state/npu-vllm/profiles/qwen3_decode_paged128.json` | `c163d5669e718cfc3c4872900e0f4385d627d6b29f5dd81412eebf3c4604e745` |
+| `probes/qwen3_native_engine.py` | `f48e76697b305cc4187179843c3006e5cc65e4e3ccf719ded3f51e3e1d27ba15` |
+| `_state/npu-vllm/current-a84614f4/logs/qwen3-engine-grouped-qk-rope-10.log` | `ae94242e44cb9cc1f12723028e03f6720bb648ba4c1c9bad82894bb7b4f02100` |
+| `_state/npu-vllm/current-a84614f4/logs/qwen3-engine-grouped-qk-rope-10-rerun.log` | `7ba8cdf695dac87017073a2540b8dc92df51c4cf0fefb2168dfb3bda0e3c280f` |
+| `_state/npu-vllm/current-a84614f4/logs/qwen3-engine-grouped-qk-rope-10-third.log` | `f48aa18cc6656831922390de29d295d60f301e693a55d898f5fafeb86115db3a` |
+| `_state/npu-vllm/current-a84614f4/qwen3-decode-grouped-qk-rope.json` | `db5a8788eef7731e4829504bf20793d959c891cf456b12961189ba3fbe31c9fe` |
+| `_state/npu-vllm/current-a84614f4/logs/qwen3-native-engine-10-current.log` | `c276f27f3ea4d508b0bc9a9c3c9802a348190476d74e3502190afede984e7a54` |
+| `_state/npu-vllm/current-a84614f4/logs/qwen3-native-engine-10-current-rerun.log` | `c2bf7621bf1774f710430d22d46e36aa0d338396ba5efa9a41574ba1844262eb` |
 
 Bootstrap 只在检测到 `torch.__jittor_version__` 后激活，拒绝已加载的
 `torch_npu`，并让 Transformers 的可选 torch-npu 探测返回 false。platform 通过
@@ -281,14 +288,25 @@ adapter 通过 vLLM OOT CustomOp registry 将标准 `RMSNorm` 和 `RotaryEmbeddi
   `0.615s` Jittor 基线累计改善约 `38.6%`，但相对原生仍慢约 `3.5%`。NPU
   Torch-compat `20 passed`、CPU vLLM layer patch `4 passed`、CPU serving
   `9 passed`，总体性能仍未验收。
+- `2.0@ed6ede29` 将每层 Q/K 的精确 BF16 RMSNorm、weight multiply 和两次 RoPE
+  串入一个 CodeOp。decode profile 中 28 个 `grouped_qk_rms_norm_rotary` 合计
+  `3.460ms`，设备算子合计约 `19.958ms`；四 token、hidden 轨迹和零 fallback 条件
+  保持。三轮各 9 个暖态公共 engine 请求的中位数为
+  `0.372231s/0.363298s/0.349610s`，合并 27 个样本中位数为 `0.363298s`，范围为
+  `0.346768-0.375979s`。当前原生基线两轮合并 18 个样本中位数为 `0.389976s`，
+  因此 Jittor 在该受限可比协议下快约 `6.84%`。所有公共请求均输出
+  `[12095, 13, 576, 6722]`，且 `fallback_count=0`、`cpu_compile_count=0`，未加载
+  `torch_npu` 或 `vllm_ascend`。NPU Torch-compat `21 passed`、完整原生 ACL
+  `45 passed`、CPU vLLM layer patch `4 passed`、CPU serving `9 passed`；本报告据此
+  接受受限协议的 correctness 和 performance，不扩大到其他 serving 形态。
 
 ## Open work
 
 - 将外置 adapter 纳入可版本化、可安装的维护边界，补充多请求、prefix cache、
   chunked prefill、长上下文、异常退出和重复 engine 生命周期集成测试；继续保持
   量化和 TP>1 fail-closed，直到分别验证。
-- 优化单 token decode 的 KV gather、GQA 和 attention launch，达到不慢于原生的
-  等价暖态生成协议；减少 `CpuGpuBuffer`/`InputBatch` 的整块 host 镜像同步和
-  metadata materialization，再完成吞吐、首 token、decode latency 和显存对比。
+- 继续减少 `CpuGpuBuffer`/`InputBatch` 的整块 host 镜像同步和 metadata
+  materialization，并完成多请求吞吐、首 token、逐 token decode latency、长上下文
+  和显存对比；当前性能验收只覆盖单请求短上下文暖态串行协议。
 - 在当前 vLLM 版本重新验证历史 CUDA adapter 基线；旧 adapter 当时未版本化，
   不能作为当前可复现产物。
