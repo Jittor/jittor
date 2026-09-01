@@ -142,9 +142,8 @@ adapter 通过 vLLM OOT CustomOp registry 将标准 `RMSNorm` 和 `RotaryEmbeddi
 - Torch indexing/out-view 定向回归：`26 passed`；其中 `add` 验证 `alpha`、返回对象
   identity 和父 tensor 写回，`index_select` 验证切片父 tensor 未选区域保持不变。
 - shim deploy 与资源结构：`21 passed`。
-- 完整 structure：`226 passed, 2 skipped, 2 failed`；两项失败均来自仓库内既有
-  `.claude/worktrees`，不是本次变更。布局检查还报告既有 `TODO.md`、旧 egg-info
-  和相同 worktree 污染。
+- 最终干净 worktree 的完整 structure 为 `232 passed, 2 skipped`；仓库布局和
+  文档治理检查同时通过，共检查 92 份活动 Markdown。
 - ratcheted Ruff lint：通过；新增文件的 Ruff Python 3.7 target 检查：通过。
 - Python 3.9 `py_compile` 和 `git diff --check`：通过。本机无真实 Python 3.7
   解释器，本轮未运行 `nox -s py37`。
