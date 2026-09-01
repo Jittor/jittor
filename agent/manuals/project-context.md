@@ -108,7 +108,7 @@ gate additionally passes single-node four-rank NCCL sharding, collectives, and
 sharded SGD on real CUDA; tiny Qwen3 end-to-end verl PPO also passes native
 single-node four-rank FSDP2, while multi-node and native 0.6B remain open.
 See the [verl weight-transfer and PPO report](../results/2026-08-24-verl-weight-transfer.md).
-The external NPU vLLM adapter on current HEAD passes public `vllm.LLM.generate` for Qwen3-0.6B with exact four-token parity, zero CPU fallback, and no loaded `torch_npu`/`vllm_ascend`; only single-request, short-context, unquantized TP=1 correctness is accepted, while its `0.615s` warm request remains slower than the `0.365s` native baseline. See the [vLLM Ascend report](../results/2026-08-31-vllm-ascend-jittor-bootstrap.md).
+The external NPU vLLM adapter on current HEAD passes public `vllm.LLM.generate` for Qwen3-0.6B with exact four-token parity, zero CPU fallback, and no loaded `torch_npu`/`vllm_ascend`; only single-request, short-context, unquantized TP=1 correctness is accepted. Preserving BF16 parameters, CANN SwiGLU, and a transpose-free single-token RoPE path reduce its maintained warm-request median from about `0.615s` to `0.53875s`, but it remains slower than the `0.364996s` native baseline. See the [vLLM Ascend report](../results/2026-08-31-vllm-ascend-jittor-bootstrap.md).
 Qwen3-0.6B vLLM real-CUDA inference
 now runs about 20.5% faster than its real-PyTorch reference on the maintained
 4-token protocol; TRELLIS.2 improved from about 1.20x to 1.093x slower, so its

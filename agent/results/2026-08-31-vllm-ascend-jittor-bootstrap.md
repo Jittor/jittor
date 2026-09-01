@@ -2,7 +2,7 @@
 
 - Status: native vLLM-Ascend inference accepted; Jittor Qwen3 manual and public engine token parity accepted; performance open
 - Date: 2026-09-01
-- Baseline: `d3c58fc0`
+- Baseline: `c7834d16`
 - Owner: Jittor compatibility and external vLLM adapter maintainers
 - Review when: vLLM, Transformers, CANN, ATB, or the external adapter version changes
 
@@ -69,6 +69,10 @@ text:       Paris. The capital
 - 公有 serving `rotary_embedding` 在 ACL/no-grad、NeoX、full rotary、64 对齐
   head size 和 Q/K/cache 同 dtype 条件下，将 packed Q/K 转为 BNSD 并调用
   `aclnnApplyRotaryPosEmb`；其他 RoPE 形态保留原路径。
+- 公有 serving `silu_and_mul` 在 ACL/no-grad 和受支持浮点 dtype 下调用
+  `aclnnSwiGlu`；未命中 ACL 时仍继续尝试既有 CUDA fused path。单 token decode
+  的 packed RoPE 直接 reshape 为 BNSD 并恢复原形状，不再执行四个恒等 transpose；
+  多 token 路径保持原有重排。
 - `torch.add(..., out=view)` 和 `torch.index_select(..., out=view)` 返回原 `out`
   对象并写回切片的父 tensor；vLLM 的 optimistic sequence length 和 input ID
   staging 不再保留旧值。
@@ -82,12 +86,13 @@ Jittor 主仓库。当前文件 SHA-256：
 | --- | --- |
 | `pyproject.toml` | `77872fe7d972071a55852f17103b7abb2ec3b55e04a8500eeaae7843eb9b92d2` |
 | `vllm_jittor_npu/__init__.py` | `fb67de68f407a898a47c44b9c96bdbcde2955c0e219fe2bf13e0fe7b29836582` |
-| `vllm_jittor_npu/bootstrap.py` | `d59105b9bfd72fa23bdb41e3292247849c2733b24fda407138354e9221580a13` |
+| `vllm_jittor_npu/bootstrap.py` | `9e8b9f9c02a9f5d9f56bba3d8affedaca42ad27ca29201d85d6c9f8267fa7819` |
 | `vllm_jittor_npu/platform.py` | `87e6e555483f7df944038585f02ae56475fe218d8bb8a9806e09552cca95d663` |
 | `vllm_jittor_npu/attention.py` | `41fc53d2b5245c5bac9bb7bc6c6d84aa610ea79952910e2efdf9ad609c76e8de` |
 | `vllm_jittor_npu/worker.py` | `b383042d63711f538ed14ae748e2d589c28d9b0c37e2278409840b7b34d46239` |
-| `probes/qwen3_forward.py` | `70b0964dd9ea8ba1552b76cfaf1b70af851f2d5b5f9d5e20f5957bcbf8e69708` |
+| `probes/qwen3_forward.py` | `fecdec74e781d1a21100c634a098a26670ae32d99ccc7a7d520f86691b50f2f5` |
 | `probes/qwen3_engine.py` | `8edec2385347bcfdf5a6ad6dc89491bbe482f4d8370b47b9ee26af322504c566` |
+| `_state/npu-vllm/current-a84614f4/logs/qwen3-engine-swiglu-rope-10.log` | `308aac72b243342478d63e0246402ad0713ca3b344522b622eae4de3cb00efdc` |
 | `_state/npu-vllm/profiles/qwen3_decode_fused.json` | `44a44104122c4956d98b946910403a3792e414f49a89ed10bd1b1c3a01e3b343` |
 | `_state/npu-vllm/profiles/qwen3_decode_paged128.json` | `c163d5669e718cfc3c4872900e0f4385d627d6b29f5dd81412eebf3c4604e745` |
 
@@ -96,7 +101,9 @@ Bootstrap 只在检测到 `torch.__jittor_version__` 后激活，拒绝已加载
 `vllm.platform_plugins` entry point 注册为 `PlatformEnum.OOT`，禁用 TorchInductor
 和 CUDA graph。CUSTOM attention 使用公有 Jittor paged-attention，metadata 的 host
 materialization 每个 batch 只执行一次。adapter 还修复了 vLLM embedding loader 对
-PyTorch slice-view 写回的依赖；当前只支持未量化 TP=1，其他 TP 形态 fail-closed。
+PyTorch slice-view 写回的依赖，并让自定义 vocab loader 用 `copy_` 写入既有参数，
+避免 BF16 embedding 被 checkpoint 的 FP32 tensor 替换；当前只支持未量化 TP=1，
+其他 TP 形态 fail-closed。
 adapter 通过 vLLM OOT CustomOp registry 将标准 `RMSNorm` 和 `RotaryEmbedding`
 路由到公有 Jittor serving primitive；其他 CustomOp 不变。worker 使用原 V1
 `GPUModelRunner`，在 Jittor NPU 上初始化单 rank MPI，并替换 Triton slot-mapping。
@@ -194,6 +201,17 @@ adapter 通过 vLLM OOT CustomOp registry 将标准 `RMSNorm` 和 `RotaryEmbeddi
   额外日志审计请求均输出 `[12095, 13, 576, 6722]`；审计得到
   `fallback_count=0`、`cpu_compile_count=0`，且 `torch_npu`、`vllm_ascend` 均未加载。
   这次复验确认当前 HEAD 的受限 engine correctness，未改变性能未验收结论。
+- `2.0@c7834d16` 加上外置 adapter 的 BF16 参数保持修复后，完整参数审计确认
+  embedding、QKV 和 MLP 权重均为 BF16 且驻留 device。随后接入 CANN SwiGLU 和
+  单 token RoPE reshape 快路；公开 engine 的 10 次请求中，首个图热身为
+  `2.990s`，其余 9 次为 `0.53619-0.55433s`，中位数 `0.53875s`。四个 greedy
+  token 始终为 `[12095, 13, 576, 6722]`，审计仍为零 fallback、零 CPU compile，
+  且未加载 `torch_npu`/`vllm_ascend`。相对同一 Jittor 协议此前约 `0.615s` 的
+  基线改善约 `12.4%`，但相对原生 `0.364996s` 仍慢约 `47.6%`，故只接受这轮
+  优化，不接受总体性能目标。
+- 新增 SwiGLU 和单 token RoPE 的真 NPU 定向回归 `2 passed`；完整
+  `tests/backends/npu/test_acl.py` 为 `42 passed`。CPU serving 回归为 `8 passed`，
+  包含 ACL miss 后 CUDA backend 仍可达的调度契约。
 
 ## Open work
 
