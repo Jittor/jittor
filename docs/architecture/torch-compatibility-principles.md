@@ -72,6 +72,23 @@ required installer graph.
 - Import and installer steps are idempotent and report each failed component
   independently.
 
+### Storage sharing
+
+Torch's aliases share storage; Jittor's Vars do not, and the difference is
+silent in the direction that matters -- a write that lands in a temporary
+instead of the tensor reports nothing, and surfaces much later as wrong numbers.
+
+- A basic-index slice is a view. `param[:rows] = w`, `param[:rows].copy_(w)`
+  and `param[:rows].data.copy_(w)` all have to reach `param`; a sharded weight
+  loader writes exactly that way, and losing the write leaves the parameter at
+  its initial value with nothing to report.
+- `Tensor.numpy()` shares storage in Torch and copies here. Do not emulate that
+  by handing out Jittor's own buffer (`Var.data`): the view detaches the moment
+  the graph re-materialises the Var, so the first write lands and every later
+  one vanishes -- worse than copying, because it looks like it works. The
+  faithful direction is a write-through array that mirrors each host write back
+  with a setitem the lazy graph can see.
+
 ## Device and fallback rules
 
 Host-side NumPy may be used as a test oracle or an explicitly documented

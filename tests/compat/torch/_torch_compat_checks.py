@@ -756,6 +756,31 @@ _va = jt.array(np.array([1, 2, 3], "float32")); _vb = jt.array(np.array([4, 5, 6
 ok(np.array_equal(torch.vstack([_va, _vb]).numpy(), np.vstack([[1, 2, 3], [4, 5, 6]])), "torch.vstack")
 ok(np.array_equal(torch.column_stack([_va, _vb]).numpy(), np.column_stack([[1, 2, 3], [4, 5, 6]])), "torch.column_stack")
 
+# A basic-index slice shares the parameter's storage, so a sharded weight
+# loader's `param[:rows].data.copy_(w)` has to reach the parameter itself. It
+# did not: the write landed in the slice and the weight was silently lost.
+_slice_w = torch.zeros(4, 3)
+_slice_w[:2].data.copy_(torch.arange(6).reshape(2, 3).float())
+ok(_slice_w.numpy().tolist() == [[0, 1, 2], [3, 4, 5], [0, 0, 0], [0, 0, 0]],
+   "slice .data.copy_ writes through to the parent")
+_slice_f = torch.ones(4, 3)
+_slice_f[2:].data.fill_(0)
+ok(_slice_f.numpy().tolist() == [[1, 1, 1], [1, 1, 1], [0, 0, 0], [0, 0, 0]],
+   "slice .data.fill_ writes through to the parent")
+_row_w = torch.zeros(3, 2)
+_row_w[1].data.copy_(torch.tensor([5.0, 6.0]))
+ok(_row_w.numpy().tolist() == [[0, 0], [5, 6], [0, 0]],
+   "row .data.copy_ writes through to the parent")
+_nested = torch.zeros(2, 2, 2)
+_nested[0][1].data.copy_(torch.tensor([9.0, 9.0]))
+ok(_nested.numpy()[0, 1].tolist() == [9, 9],
+   "nested .data.copy_ writes through every ancestor")
+_sel_out = torch.zeros(3, 4)
+torch.index_select(torch.arange(12).float(), 0, torch.tensor([3, 1, 2, 0]),
+                   out=_sel_out[0])
+ok(_sel_out.numpy()[0].tolist() == [3, 1, 2, 0],
+   "index_select(out=slice) writes through to the parent")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 
 

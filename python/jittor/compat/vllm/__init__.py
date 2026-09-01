@@ -9,7 +9,9 @@ flash-attention wheel the attention backend expects to import.
 
 :mod:`.layers` and the attention patch in :mod:`.flash_attn` are a
 different kind of work: vLLM's own layers, pointed at Jittor's fused
-primitives instead of kernels this backend does not have.
+primitives instead of kernels this backend does not have. :mod:`.backend`
+completes that substitution by declaring the paged cache layout those
+primitives read.
 
 Nothing runs unless vLLM is actually imported, and then it runs *before* vLLM
 does. That timing is the whole difficulty: vLLM reaches for the compiled
@@ -30,7 +32,7 @@ import types
 
 from jittor.compat.module_patcher import register_module_patch
 
-from . import custom_ops, flash_attn, layers
+from . import backend, custom_ops, flash_attn, layers
 
 # The compiled bundles vLLM tries to import. Being importable-but-empty is what
 # tells vLLM its kernels are present, which is the question that leads it to
@@ -117,7 +119,7 @@ def register():
 
     if not any(isinstance(finder, _ArmOnFirstImport) for finder in sys.meta_path):
         sys.meta_path.insert(0, _ArmOnFirstImport())
-    for patches in (layers.PATCHES, flash_attn.PATCHES):
+    for patches in (backend.PATCHES, layers.PATCHES, flash_attn.PATCHES):
         for path, patch in patches.items():
             register_module_patch(path, patch)
     return True

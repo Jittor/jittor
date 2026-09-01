@@ -57,7 +57,8 @@ class TestVllmCompatIsRelocatable(unittest.TestCase):
         names = {path.name for path in _sources()}
         self.assertEqual(
             names,
-            {"__init__.py", "custom_ops.py", "flash_attn.py", "layers.py"})
+            {"__init__.py", "backend.py", "custom_ops.py", "flash_attn.py",
+             "layers.py"})
         for path in _sources():
             with self.subTest(module=path.name):
                 self.assertLessEqual(
