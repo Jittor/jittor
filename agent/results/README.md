@@ -6,6 +6,7 @@
 
 ## 兼容性与功能验证
 
+- [2026-09-02 verl 核心算法 Ascend 数值、梯度与性能复验](2026-09-02-verl-ascend-core-algorithms.md)
 - [2026-09-01 当前 AArch64 CPU native/Torch 全量门禁](2026-09-01-current-cpu-suite.md)
 - [2026-08-30 MMCV/MMEngine Ascend 数值与梯度对拍](2026-08-30-mmcv-mmengine-ascend-parity.md)
 - [2026-08-30 Ascend product reduction 原生执行修复](2026-08-30-npu-product-reduction.md)

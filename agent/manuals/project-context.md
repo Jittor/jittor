@@ -2,7 +2,7 @@
 
 - Status: Current index, not a history log
 - Last reviewed: 2026-09-02
-- Baseline reviewed: `ed6ede29`
+- Baseline reviewed: `fdae6a0f`
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -102,12 +102,12 @@ dominant CUDA GEMMs lag the PyTorch reference.
 Performance work uses isolated caches, synchronization, and exact commit labels.
 The ecosystem harness verifies twelve Transformers/Diffusers/PEFT/ms-swift/MMCV/MMEngine CPU/CUDA cases; its NPU scope verifies Diffusers UNet2D, MMCV/MMEngine, and ms-swift LoRA Llama forward and every gradient against `torch_npu` with zero CPU paths.
 Diffusers correctness and maintained float32 performance are accepted at `0.964x` native `torch_npu`; the tiny OpenMMLab NPU cases now pass at `0.927x/0.796x`. See the [Diffusers](../results/2026-08-30-diffusers-ascend-parity-performance.md) and [OpenMMLab](../results/2026-08-30-mmcv-mmengine-ascend-parity.md) reports. The tiny ms-swift LoRA case uses fused float32 causal SDPA training and passes at `0.969x`; see the [ms-swift Ascend report](../results/2026-08-31-ms-swift-ascend-parity-performance.md).
-Other ecosystem cases and the following verl results remain CPU/CUDA evidence, not NPU claims. Current verl core
-algorithm/FSDP2 gates also pass on CPU/CUDA. The maintained framework FSDP2
-gate additionally passes single-node four-rank NCCL sharding, collectives, and
-sharded SGD on real CUDA; tiny Qwen3 end-to-end verl PPO also passes native
-single-node four-rank FSDP2, while multi-node and native 0.6B remain open.
-See the [verl weight-transfer and PPO report](../results/2026-08-24-verl-weight-transfer.md).
+On a real 910B3, the locked verl core algorithms pass exact loss/gradient parity
+against `torch_npu` for vanilla PPO, GSPO, SAPO, GPG, geometric-mean, CISPO, and
+GRPO with zero CPU fallback; only GPG passes the NPU micro-performance protocol,
+while full NPU workers/FSDP2/rollout/PPO remain open. The CPU/CUDA gate passes
+four-rank NCCL/FSDP2 and tiny Qwen3 PPO; see the [Ascend core report](../results/2026-09-02-verl-ascend-core-algorithms.md)
+and [CUDA PPO report](../results/2026-08-24-verl-weight-transfer.md).
 The external NPU vLLM adapter on current HEAD passes public `vllm.LLM.generate` for Qwen3-0.6B with exact four-token parity, zero CPU fallback, and no loaded `torch_npu`/`vllm_ascend`. Preserving BF16 parameters and grouping the maintained CANN serving operations, including the exact Q/K RMSNorm and RoPE sequence, reduce its pooled warm-request median from about `0.615s` to `0.36330s`. The current comparable native `vllm-ascend` baseline is `0.38998s`, so restricted single-request, short-context, unquantized TP=1 correctness and performance are accepted; broader serving coverage remains open. See the [vLLM Ascend report](../results/2026-08-31-vllm-ascend-jittor-bootstrap.md).
 Qwen3-0.6B vLLM real-CUDA inference
 now runs about 20.5% faster than its real-PyTorch reference on the maintained
