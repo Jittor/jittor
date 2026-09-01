@@ -175,12 +175,19 @@ def _rotary_embedding_acl(
             (token_count, cache_width))
         cache = jt.gather(cos_sin_cache, 0, cache_index)
     half = rotary_dim // 2
-    split_sizes = [half, rotary_dim - half]
-    if cache_width > rotary_dim:
-        split_sizes.append(cache_width - rotary_dim)
-    cos_half, sin_half = cache.split(split_sizes, dim=-1)[:2]
-    cos = jt.concat((cos_half, cos_half), dim=-1)
-    sin = jt.concat((sin_half, sin_half), dim=-1)
+    expanded = None
+    expand_backend = getattr(jt.nn, "_acl_expand_rotary_cache", None)
+    if expand_backend is not None:
+        expanded = expand_backend(cache, rotary_dim)
+    if expanded is None:
+        split_sizes = [half, rotary_dim - half]
+        if cache_width > rotary_dim:
+            split_sizes.append(cache_width - rotary_dim)
+        cos_half, sin_half = cache.split(split_sizes, dim=-1)[:2]
+        cos = jt.concat((cos_half, cos_half), dim=-1)
+        sin = jt.concat((sin_half, sin_half), dim=-1)
+    else:
+        cos, sin = expanded
     cos = cos.reshape((1, 1, token_count, rotary_dim))
     sin = sin.reshape((1, 1, token_count, rotary_dim))
 

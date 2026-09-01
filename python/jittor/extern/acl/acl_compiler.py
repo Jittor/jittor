@@ -161,7 +161,7 @@ def change_function():
     from .aclops.pool_op import PoolACL
     from .aclops.nantonum_op import NanToNumACL
     from .aclops.stack_op import StackACL
-    from .aclops.rope_op import RotaryPositionEmbeddingACL
+    from .aclops.rope_op import ExpandRotaryCacheACL, RotaryPositionEmbeddingACL
     from .aclops.softmax_op import SoftmaxACL
     from .aclops.sigmoid_op import SigmoidACL
     from .aclops.silu_op import SiLUACL, SwiGluACL, SwishACL
@@ -926,6 +926,22 @@ def change_function():
                 return RmsNormACL()(x, gamma, epsilon_value)
         return _orig_rms_norm_cuda(x, gamma, epsilon)
     jt.nn._rms_norm_cuda = _rms_norm_cuda_acl
+
+    def _expand_rotary_cache_acl(cache, rotary_dim):
+        if (
+            jt.flags.use_acl
+            and jt.flags.use_cuda
+            and getattr(jt.flags, "no_grad", 0)
+            and isinstance(cache, jt.Var)
+            and cache.ndim == 2
+            and int(cache.shape[-1]) == int(rotary_dim)
+            and int(rotary_dim) > 0
+            and int(rotary_dim) % 2 == 0
+            and str(cache.dtype) in ("float16", "bfloat16", "float32")
+        ):
+            return ExpandRotaryCacheACL()(cache)
+        return None
+    jt.nn._acl_expand_rotary_cache = _expand_rotary_cache_acl
 
     jt.flip = warp(jt.flip, flip_acl)
     jt.Var.flip = lambda x, dim_vector=0: jt.flip(x, dim_vector)

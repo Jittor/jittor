@@ -42,6 +42,66 @@ def rope_cmd(name: str,
     op.run();""")
 
 
+class ExpandRotaryCacheACL:
+
+    def __call__(self, cache):
+        width = int(cache.shape[-1])
+        half = width // 2
+        full_shape = list(cache.shape)
+        half_shape = list(full_shape)
+        half_shape[-1] = half
+        outputs = [
+            jt.empty(full_shape, cache.dtype),
+            jt.empty(full_shape, cache.dtype),
+            jt.empty(half_shape, cache.dtype),
+            jt.empty(half_shape, cache.dtype),
+        ]
+        result = jt.code(
+            outputs=outputs,
+            inputs=[cache],
+            cuda_header='''
+namespace jittor {}
+#include "acl/aclops/aclops.h"
+''',
+            cuda_src=f'''
+// aclop
+SplitWithSizeOpRunner split_op;
+split_op.add(in0, true);
+split_op.add(out2, false);
+split_op.add(out3, false);
+split_op.jt_name = "expand_rotary_cache";
+auto *split_attr = new SplitWithSizeAttr();
+split_attr->splitSize = {{ {half}, {half} }};
+split_attr->dim = {cache.ndim - 1};
+split_op.op_attr.reset(split_attr);
+split_op.run();
+
+ConcatOpRunner cos_op;
+cos_op.add(out2, true);
+cos_op.add(out2, true);
+cos_op.add(out0, false);
+cos_op.jt_name = "expand_rotary_cache";
+auto *cos_attr = new ConcatAttr();
+cos_attr->tensorNum = 2;
+cos_attr->dim = {cache.ndim - 1};
+cos_op.op_attr.reset(cos_attr);
+cos_op.run();
+
+ConcatOpRunner sin_op;
+sin_op.add(out3, true);
+sin_op.add(out3, true);
+sin_op.add(out1, false);
+sin_op.jt_name = "expand_rotary_cache";
+auto *sin_attr = new ConcatAttr();
+sin_attr->tensorNum = 2;
+sin_attr->dim = {cache.ndim - 1};
+sin_op.op_attr.reset(sin_attr);
+sin_op.run();
+''',
+        )
+        return result[0], result[1]
+
+
 class RotaryPositionEmbeddingACL(jt.Function):
 
     def execute(self, x, cos, sin):
