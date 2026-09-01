@@ -828,7 +828,7 @@ class TestACL(unittest.TestCase):
                 jt.array(positions_np), jt.array(query_np), jt.array(key_np),
                 jt.array(cache_np), head_size=head_size, is_neox=True,
                 rotary_dim=head_size)
-            single_positions_np = positions_np[-1:]
+            single_positions_np = positions_np[-1:].astype("int64")
             single_query_np = query_np[-1:]
             single_key_np = key_np[-1:]
             single_query, single_key = jt.nn.rotary_embedding(

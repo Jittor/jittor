@@ -154,13 +154,24 @@ def _rotary_embedding_acl(
         and is_neox
         and rotary_dim == head_size
         and head_size % 64 == 0
+        and str(positions.dtype) in ("int32", "int64")
+        and cos_sin_cache.ndim == 2
         and str(query.dtype) == str(key.dtype) == str(cos_sin_cache.dtype)
         and str(query.dtype) in ("float16", "bfloat16", "float32")
     ):
         return None
 
     token_count = int(positions.numel())
-    cache = cos_sin_cache[positions.reshape((-1,))]
+    flat_positions = positions.reshape((token_count,))
+    cache = None
+    acl_embedding = getattr(jt.nn, "_acl_embedding", None)
+    if acl_embedding is not None:
+        cache = acl_embedding(flat_positions, cos_sin_cache)
+    if cache is None:
+        cache_width = int(cos_sin_cache.shape[-1])
+        cache_index = flat_positions.reshape((token_count, 1)).broadcast(
+            (token_count, cache_width))
+        cache = jt.gather(cos_sin_cache, 0, cache_index)
     half = rotary_dim // 2
     cos_half = cache[:, :half]
     sin_half = cache[:, half:rotary_dim]
