@@ -9,7 +9,13 @@ import jittor as jt
 from _helpers.assertions import expect_error
 import numpy as np
 from jittor import init, Module
-import numpy as np
+
+
+def _bfloat16_round(values):
+    values = np.asarray(values, dtype=np.float32)
+    bits = values.view(np.uint32).copy()
+    bits += np.uint32(0x7fff) + ((bits >> 16) & np.uint32(1))
+    return (bits & np.uint32(0xffff0000)).view(np.float32)
 
 @unittest.skipIf(not jt.compiler.has_acl, "No ACL found")
 class TestACL(unittest.TestCase):
@@ -516,9 +522,7 @@ class TestACL(unittest.TestCase):
 
         x = jt.array(x_np)
         gamma = jt.array(gamma_np)
-        self.assertIsNone(
-            jt.nn._rms_norm_cuda(x.bfloat16(), gamma, 1e-6)
-        )
+        self.assertIsNone(jt.nn._rms_norm_cuda(x.float16(), gamma, 1e-6))
         with jt.no_grad():
             self.assertIsNone(jt.nn._rms_norm_cuda(x, gamma, object()))
 
@@ -590,6 +594,22 @@ class TestACL(unittest.TestCase):
             output, grad_x, grad_gamma = jt.fetch_sync(
                 [output, grad_x, grad_gamma]
             )
+            x_bf = _bfloat16_round(x_np)
+            gamma_bf = _bfloat16_round(gamma_np)
+            cotangent_bf = _bfloat16_round(cotangent_np)
+            x_var_bf = jt.array(x_bf).bfloat16()
+            gamma_var_bf = jt.array(gamma_bf).bfloat16()
+            output_bf = jt.nn._rms_norm_cuda(
+                x_var_bf, gamma_var_bf, epsilon)
+            self.assertIsNotNone(output_bf)
+            grad_x_bf, grad_gamma_bf = jt.grad(
+                (output_bf * jt.array(cotangent_bf).bfloat16()).sum(),
+                [x_var_bf, gamma_var_bf],
+            )
+            bf_values = jt.fetch_sync([
+                output_bf.float32(), grad_x_bf.float32(),
+                grad_gamma_bf.float32(),
+            ])
 
         np.testing.assert_allclose(
             output, expected_output, atol=2e-5, rtol=2e-5)
@@ -597,6 +617,22 @@ class TestACL(unittest.TestCase):
             grad_x, expected_grad_x, atol=3e-5, rtol=3e-5)
         np.testing.assert_allclose(
             grad_gamma, expected_grad_gamma, atol=3e-5, rtol=3e-5)
+        inverse_rms_bf = 1.0 / np.sqrt(
+            np.mean(x_bf * x_bf, axis=-1, keepdims=True) + epsilon)
+        weighted_bf = cotangent_bf * gamma_bf
+        expected_bf = (
+            _bfloat16_round(x_bf * inverse_rms_bf * gamma_bf),
+            _bfloat16_round(
+                weighted_bf * inverse_rms_bf
+                - x_bf * inverse_rms_bf ** 3
+                * np.mean(weighted_bf * x_bf, axis=-1, keepdims=True)
+            ),
+            _bfloat16_round(np.sum(
+                cotangent_bf * x_bf * inverse_rms_bf, axis=(0, 1))),
+        )
+        for actual, reference in zip(bf_values, expected_bf):
+            np.testing.assert_allclose(
+                actual, reference, atol=3e-2, rtol=3e-2)
         messages = [entry["msg"].lower() for entry in logs]
         self.assertFalse(any("compile cpu" in message for message in messages))
         self.assertFalse(any("fallback cpu" in message for message in messages))
@@ -639,6 +675,19 @@ class TestACL(unittest.TestCase):
                 output_no_padding,
                 grad_weight_no_padding,
             ])
+            weight_bf = _bfloat16_round(weight_np)
+            cotangent_bf = _bfloat16_round(cotangent_np)
+            weight_var_bf = jt.array(weight_bf).bfloat16()
+            output_bf = jt.nn.embedding(
+                jt.array(indices_np), weight_var_bf,
+                padding_idx=padding_idx,
+            )
+            grad_weight_bf = jt.grad(
+                (output_bf * jt.array(cotangent_bf).bfloat16()).sum(),
+                weight_var_bf,
+            )
+            bf_values = jt.fetch_sync([
+                output_bf.float32(), grad_weight_bf.float32()])
 
         np.testing.assert_allclose(
             values[0], weight_np[indices_np], atol=2e-5, rtol=2e-5
@@ -652,13 +701,23 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(
             values[3], expected_grad_no_padding, atol=2e-5, rtol=2e-5
         )
+        expected_grad_bf = np.zeros_like(weight_bf)
+        for batch in range(indices_np.shape[0]):
+            for token in range(indices_np.shape[1]):
+                index = indices_np[batch, token]
+                if index != padding_idx:
+                    expected_grad_bf[index] += cotangent_bf[batch, token]
+        np.testing.assert_allclose(
+            bf_values[0], weight_bf[indices_np], atol=3e-2, rtol=3e-2)
+        np.testing.assert_allclose(
+            bf_values[1], _bfloat16_round(expected_grad_bf),
+            atol=3e-2, rtol=3e-2)
         messages = [entry["msg"].lower() for entry in logs]
         self.assertTrue(any("compile acl op" in message for message in messages))
         self.assertFalse(any("compile cpu" in message for message in messages))
         self.assertFalse(any("fallback cpu" in message for message in messages))
-        self.assertIsNone(jt.nn._acl_embedding(
-            jt.array(indices_np), jt.array(weight_np).bfloat16()
-        ))
+        self.assertIsNotNone(jt.nn._acl_embedding(
+            jt.array(indices_np), jt.array(weight_np).bfloat16()))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_inference_rotary_embedding(self):
@@ -806,6 +865,25 @@ class TestACL(unittest.TestCase):
             values = jt.fetch_sync([
                 output_q, output_k, grad_q, grad_k, grad_cos, grad_sin
             ])
+            q_bf, k_bf = _bfloat16_round(q_np), _bfloat16_round(k_np)
+            cos_bf, sin_bf = _bfloat16_round(cos_np), _bfloat16_round(sin_np)
+            grad_q_bf = _bfloat16_round(grad_q_np)
+            grad_k_bf = _bfloat16_round(grad_k_np)
+            q_var_bf = jt.array(q_bf).bfloat16()
+            k_var_bf = jt.array(k_bf).bfloat16()
+            cos_var_bf = jt.array(cos_bf).bfloat16()
+            sin_var_bf = jt.array(sin_bf).bfloat16()
+            output_q_bf, output_k_bf = jt.nn.rotary_emb(
+                q_var_bf, k_var_bf,
+                freq_cos=cos_var_bf, freq_sin=sin_var_bf)
+            bf_grads = jt.grad(
+                (output_q_bf * jt.array(grad_q_bf).bfloat16()).sum()
+                + (output_k_bf * jt.array(grad_k_bf).bfloat16()).sum(),
+                [q_var_bf, k_var_bf, cos_var_bf, sin_var_bf],
+            )
+            bf_values = jt.fetch_sync([
+                output_q_bf.float32(), output_k_bf.float32()
+            ] + [value.float32() for value in bf_grads])
 
         expected = (
             expected_q,
@@ -818,6 +896,28 @@ class TestACL(unittest.TestCase):
         for actual, reference in zip(values, expected):
             np.testing.assert_allclose(
                 actual, reference, atol=3e-5, rtol=3e-5)
+        rotate_q_bf, rotate_k_bf = rotate_half(q_bf), rotate_half(k_bf)
+        grad_cos_q = _bfloat16_round(np.sum(
+            grad_q_bf * q_bf, axis=1, keepdims=True))
+        grad_cos_k = _bfloat16_round(np.sum(
+            grad_k_bf * k_bf, axis=1, keepdims=True))
+        grad_sin_q = _bfloat16_round(np.sum(
+            grad_q_bf * rotate_q_bf, axis=1, keepdims=True))
+        grad_sin_k = _bfloat16_round(np.sum(
+            grad_k_bf * rotate_k_bf, axis=1, keepdims=True))
+        expected_bf = (
+            _bfloat16_round(q_bf * cos_bf + rotate_q_bf * sin_bf),
+            _bfloat16_round(k_bf * cos_bf + rotate_k_bf * sin_bf),
+            _bfloat16_round(
+                grad_q_bf * cos_bf - rotate_half(grad_q_bf * sin_bf)),
+            _bfloat16_round(
+                grad_k_bf * cos_bf - rotate_half(grad_k_bf * sin_bf)),
+            _bfloat16_round(grad_cos_q + grad_cos_k),
+            _bfloat16_round(grad_sin_q + grad_sin_k),
+        )
+        for actual, reference in zip(bf_values, expected_bf):
+            np.testing.assert_allclose(
+                actual, reference, atol=6e-2, rtol=6e-2)
         messages = [entry["msg"].lower() for entry in logs]
         self.assertFalse(any("compile cpu" in message for message in messages))
         self.assertFalse(any("fallback cpu" in message for message in messages))

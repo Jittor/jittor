@@ -369,7 +369,7 @@ def change_function():
             or input.ndim < 1
             or weight.ndim != 2
             or str(input.dtype) not in ("int32", "int64")
-            or str(weight.dtype) != "float32"
+            or str(weight.dtype) not in ("float32", "bfloat16")
             or max_norm is not None
             or sparse
             or not isinstance(scale_grad_by_freq, (bool, np.bool_))
@@ -734,8 +734,8 @@ def change_function():
             and (
                 getattr(jt.flags, "no_grad", 0)
                 or (
-                    str(xq.dtype) == "float32"
-                    and str(xk.dtype) == "float32"
+                    str(xq.dtype) in ("float32", "bfloat16")
+                    and str(xk.dtype) in ("float32", "bfloat16")
                 )
             )
             and supported(xq)
@@ -917,7 +917,8 @@ def change_function():
                 and all(size > 0 for size in x_shape)
                 and gamma_shape == (x_shape[-1],)
                 and gamma_dtype in supported_gamma_dtypes.get(x_dtype, ())
-                and (getattr(jt.flags, "no_grad", 0) or x_dtype == "float32")
+                and (getattr(jt.flags, "no_grad", 0)
+                     or x_dtype in ("float32", "bfloat16"))
                 and math.isfinite(epsilon_value)
                 and epsilon_value > 0
             ):
