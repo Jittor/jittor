@@ -2,7 +2,7 @@
 
 - Status: Current index, not a history log
 - Last reviewed: 2026-09-01
-- Baseline reviewed: `eb7601ac`
+- Baseline reviewed: `406f56e1`
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -84,7 +84,7 @@ Transformers 4.56.2 Qwen3-8B float32 loads all 8,190,735,360 parameters; SDPA,
 greedy `arg_reduce`, and mask `all` run on ACL without CPU fallback. A native-shape `empty`
 fast path brings 0.6B decode to 15.90 token/s versus native `torch_npu` 16.19 token/s.
 Qwen3-0.6B BF16 SDPA passes zero-fallback generation at 14.92 token/s versus native 15.31 token/s.
-Qwen3-0.6B FP32 eager forward/loss/backward also passes zero-fallback at `1.07x-1.12x` native `torch_npu`. Transformers 5.5.3 BF16 completes forward, backward, and AdamW without CPU fallback; explicit fused AdamW matches CANN/PyTorch for two fixed-gradient steps and improves from `9.45x` to `1.35x` native, while the full step remains open at `1.57x`. See the [training report](../results/transformers/2026-08-30-qwen3-ascend-training.md).
+Qwen3-0.6B FP32 eager forward/loss/backward also passes zero-fallback at `1.07x-1.12x` native `torch_npu`. Transformers 5.5.3 BF16 completes forward, backward, and AdamW without CPU fallback; explicit fused AdamW matches CANN/PyTorch for two fixed-gradient steps. BF16 embedding/RMSNorm/RoPE training kernels pass independent real-NPU references. The default full step is `0.999x` native; a numerically identical explicit RMSNorm adapter reaches `0.917x`, while the faster `0.825x` RMSNorm+RoPE path changes the BF16 trajectory and remains opt-in. Cross-framework long training parity remains open. See the [training report](../results/transformers/2026-08-30-qwen3-ascend-training.md).
 See the [Ascend guide](../../docs/guides/ascend-910b.md), [validation report](../results/2026-08-28-ascend-910b-validation.md), [arg-reduce](../results/2026-08-30-npu-arg-reduce-backward.md)/[product](../results/2026-08-30-npu-product-reduction.md) follow-ups, [Qwen3 inference report](../results/transformers/2026-08-28-qwen3-ascend-performance.md), complete [CPU](../results/2026-08-22-complete-cpu-test-suite.md)/[CUDA](../results/2026-08-22-cuda-test-suite.md) reports, and the [parallel follow-up](../results/2026-08-22-cuda-parallel-range-network-oracle.md).
 The current fail-closed optional CUDA base gate passes 16 TorchMetrics,
 MMCV/MMEngine, PEFT, TensorDict, and FlashAttention-adapter tests from one
