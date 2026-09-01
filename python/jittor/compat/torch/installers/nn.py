@@ -1112,6 +1112,11 @@ def _install_module_methods(nn, registry=None):
             unit_weight = jt.ones(weight.shape, dtype="bfloat16")
             unit_weight.stop_grad()
             weight.__dict__["_torch_acl_rms_norm_unit_weight"] = unit_weight
+        grouped = getattr(jt.nn, "_acl_grouped_bfloat16_rms_norm", None)
+        if grouped is not None:
+            result = grouped(value, unit_weight, weight, epsilon)
+            if result is not None:
+                return result
         normalized = jt.nn._rms_norm_cuda(value, unit_weight, epsilon)
         if normalized is None:
             return None

@@ -139,8 +139,10 @@ class TestACLTorchCompat(unittest.TestCase):
             grad_source, grad_weight = torch.autograd.grad(
                 (output * cotangent).sum(), (source, module.weight)
             )
+            with torch.no_grad():
+                inference = module(source)
             values = jt.fetch_sync([
-                output.float(), repeated.float(),
+                output.float(), repeated.float(), inference.float(),
                 grad_source.float(), grad_weight.float(),
             ])
 
@@ -171,6 +173,7 @@ class TestACLTorchCompat(unittest.TestCase):
             dtype=np.float32,
         ))
         expected = (
+            expected_output,
             expected_output,
             expected_output,
             expected_grad_source,
