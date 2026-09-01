@@ -456,6 +456,13 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         owner.assign(updated)
         _restore_trainable_state(owner, owner_was_trainable)
 
+        # The owner may itself be a basic-index view of something else, which
+        # is how a sharded weight loader writes: ``param[:rows].data.copy_(w)``.
+        # Torch's slice shares the parameter's storage, so carry the write the
+        # rest of the way up; without this the parameter keeps its old values
+        # and the weight is silently lost.
+        _write_index_parent(owner, updated)
+
         # A retained ``data = parameter.data`` alias observes its own mutation,
         # just like a Torch tensor sharing the parameter storage.
         view_updated = updated

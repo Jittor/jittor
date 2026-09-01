@@ -57,9 +57,14 @@ def patch_rotary_embedding(module):
 
     def forward(self, positions, query, key=None):
         if key is not None:
+            # The helper aligns the cache with the query's device and dtype.
+            # Older vLLM only mutates the attribute and returns nothing; newer
+            # versions hand the aligned cache back to avoid re-reading it.
+            cache = self._match_cos_sin_cache_dtype(query)
+            if cache is None:
+                cache = self.cos_sin_cache
             return jt.nn.rotary_embedding(
-                positions, query, key,
-                self._match_cos_sin_cache_dtype(query),
+                positions, query, key, cache,
                 head_size=self.head_size, rotary_dim=self.rotary_dim,
                 is_neox=self.is_neox_style)
         return original(self, positions, query, key)
