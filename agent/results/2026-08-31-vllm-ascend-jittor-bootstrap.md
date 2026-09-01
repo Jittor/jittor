@@ -1,8 +1,8 @@
 # vLLM Ascend 与 Jittor-NPU bootstrap 验证
 
 - Status: native vLLM-Ascend inference accepted; Jittor Qwen3 manual and public engine token parity accepted; performance open
-- Date: 2026-09-01
-- Baseline: `dd3d2924`
+- Date: 2026-09-02
+- Baseline: `e32f5a63`
 - Owner: Jittor compatibility and external vLLM adapter maintainers
 - Review when: vLLM, Transformers, CANN, ATB, or the external adapter version changes
 
@@ -74,6 +74,9 @@ text:       Paris. The capital
   的 packed RoPE 直接 reshape 为 BNSD 并恢复原形状，不再执行四个恒等 transpose；
   多 token 路径保持原有重排。RoPE 位置表的 BF16/FP32 row lookup 复用
   `aclnnEmbedding`，FP16 使用直接 Gather，不再进入支持负索引的通用高级索引图。
+- 公有 `split` 在 ACL/no-grad、受支持浮点 dtype 和静态正整数 split sizes 下调用
+  `aclnnSplitWithSize`；整数 chunk size 与显式 size list 都支持。训练、零长度和
+  其他未覆盖形态保留原 SliceV2 路径及其反向语义。
 - `torch.add(..., out=view)` 和 `torch.index_select(..., out=view)` 返回原 `out`
   对象并写回切片的父 tensor；vLLM 的 optimistic sequence length 和 input ID
   staging 不再保留旧值。
@@ -93,8 +96,8 @@ Jittor 主仓库。当前文件 SHA-256：
 | `vllm_jittor_npu/worker.py` | `b383042d63711f538ed14ae748e2d589c28d9b0c37e2278409840b7b34d46239` |
 | `probes/qwen3_forward.py` | `fecdec74e781d1a21100c634a098a26670ae32d99ccc7a7d520f86691b50f2f5` |
 | `probes/qwen3_engine.py` | `8edec2385347bcfdf5a6ad6dc89491bbe482f4d8370b47b9ee26af322504c566` |
-| `_state/npu-vllm/current-a84614f4/logs/qwen3-engine-rope-embedding-10.log` | `b62bf70ad33af95d6f544be7d1b3dc5bbf49a9a17347b58b5d3bc33c78cd2adb` |
-| `_state/npu-vllm/current-a84614f4/qwen3-decode-rope-embedding.json` | `d93eb454cb7ca466306cd96aab6ea839b696ff00cfb674fedd879642d0dd66d4` |
+| `_state/npu-vllm/current-a84614f4/logs/qwen3-engine-split-rope-10.log` | `50a13981f05337b1b6823e5c258fb8576591c92065f01a7e0a0908e559b1581e` |
+| `_state/npu-vllm/current-a84614f4/qwen3-decode-split-rope.json` | `4a40edb08c1061e2e62ad3a435cc5797c6171dfecf6178fe6c2e52dc46d78f3d` |
 | `_state/npu-vllm/profiles/qwen3_decode_fused.json` | `44a44104122c4956d98b946910403a3792e414f49a89ed10bd1b1c3a01e3b343` |
 | `_state/npu-vllm/profiles/qwen3_decode_paged128.json` | `c163d5669e718cfc3c4872900e0f4385d627d6b29f5dd81412eebf3c4604e745` |
 
@@ -222,6 +225,19 @@ adapter 通过 vLLM OOT CustomOp registry 将标准 `RMSNorm` 和 `RotaryEmbeddi
   驻留和零 fallback/CPU compile 条件不变；相对 `0.615s` Jittor 基线累计改善约
   `19.6%`，但相对原生 `0.364996s` 仍慢约 `35.5%`。最终代码再次通过完整 ACL
   `42 passed` 和 CPU serving `8 passed`，总体性能仍未验收。
+- `2.0@e32f5a63` 将 QKV 的三个 SliceV2 以及 RoPE cos/sin 的两个 SliceV2
+  分别合并为一个 SplitWithSize；当前 decode profile 不再包含逐层 SliceV2，
+  两组 SplitWithSize 各执行 28 次，约为 `1.02ms/0.96ms`。公开 engine 的首个图
+  热身为 `2.786s`，其余 9 次为 `0.41668-0.42805s`，中位数 `0.41749s`。四个
+  token、device 驻留和零 fallback/CPU compile 条件不变；相对 `0.615s` Jittor
+  基线累计改善约 `32.1%`，但相对原生仍慢约 `14.4%`。完整 ACL 回归为
+  `44 passed`，覆盖 list/int/empty inference split 和训练 SliceV2 backward；CPU
+  serving 仍为 `8 passed`。
+- 一个显式静态 RoPE cache 实验消除了热 decode 的 split/concat，并将 profile
+  设备算子合计降到 `22.847ms`；但两轮公共 engine 中位数为 `0.43676s/0.42620s`，
+  均慢于不缓存的 `0.41749s`。该实验已从主仓与外置 adapter 完全撤回，不作为后续
+  优化基础。half-width cos/sin 也不能直接交给当前 RoPE 路径，形状契约要求完整
+  rotary width。
 
 ## Open work
 
