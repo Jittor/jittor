@@ -1,8 +1,9 @@
 # Qwen3-0.6B Ascend 训练验证与优化
 
-- Status: FP32 forward/backward accepted; BF16 one-step and short-step performance accepted, cross-framework trajectory open
+- Status: FP32 forward/backward accepted; BF16 one-step forward parity accepted,
+  exact-path performance and cross-framework trajectory open
 - Last reviewed: 2026-09-01
-- Source baseline: `406f56e1`
+- Source baseline: `8ab4d2b5`
 - Owner: Torch compatibility and ACL backend maintainers
 - Review when: CANN, Transformers Qwen3 modules, embedding/RMSNorm/RoPE lowering,
   dtype, checkpoint, sequence shape, optimizer, or timing protocol changes
@@ -77,26 +78,45 @@ Jittor 与 Torch-compatible 两步回归同样通过且零 CPU compile/fallback�
 三条路径分别通过独立 NumPy 前向/梯度参考和真实 NPU 测试，完整 native ACL 文件为
 `41 passed`，日志中没有 CPU compile 或 fallback。
 
-整模隔离显示 RMSNorm 是可保持当前 Jittor 数值轨迹的安全优化：仅替换
-`Qwen3RMSNorm.forward` 后，保存的全部 hidden state 和 logits 与当前默认路径逐元素
-相同，两个 snapshot 的 SHA-256 也相同；七次更新后的 loss、选取梯度和参数更新样本
-同样一致。RoPE 融合会改变 BF16 舍入轨迹：当前默认和 RMS-only 的 logits 相对
-`torch_npu` L2 为 `0.04388`，加入 RoPE 后为 `0.04807`。因此 RMSNorm 可由外置版本
-适配器默认启用，RoPE 只保留显式性能实验，不在核心里自动替换 Transformers 模块。
+后续复查撤回了旧版报告中“显式 RMSNorm adapter 快 `8.3%`”的归因。Torch 兼容层的
+标准 RMSNorm hook 已经自动接管 `*RMSNorm` 模块，显式替换
+`Qwen3RMSNorm.forward` 没有改变计算图；当时 `221.56 ms` 与 `241.20 ms` 的差异是
+短序列运行波动，不能作为 adapter 收益；这些旧测量不再作为当前结论。
 
-在一张空闲 910B3 上紧邻执行相同短序列、显式 fused AdamW、2 次 warmup 和 5 次
-同步计时，结果如下：
+## BF16 semantic parity follow-up
+
+`8ab4d2b5` 修复了三处最先出现的 BF16 语义差异：
+
+- Python 浮点标量与 BF16 tensor 运算按 `torch.result_type` 保持 BF16，不再提升到
+  FP32；
+- RMSNorm 使用 BF16 单位权重完成归一化，再单独乘原始 BF16 weight，保留 PyTorch
+  “FP32 归一化、BF16 舍入、BF16 affine”的顺序；
+- BF16 SiLU 改用 CANN 9 `aclnnSwish`。独立 raw CANN 探针与 `torch_npu` 的
+  BF16/FP32 前向、反向在固定边界值上逐元素一致，包括旧 `aclnnSilu` 会偏离的
+  `5.9375`。
+
+同一 checkpoint 和输入下，Jittor 的 29 份 hidden state 与最终 logits 均与
+`torch_npu` 逐元素一致。`hidden_grad_28` 逐元素一致，误差向前累积到
+`hidden_grad_0` 时相对 L2 为 `0.022717`；logits gradient 只差一个约
+`9.09e-13` 的 FP32 元素。Jittor/native 初始 loss 为
+`3.377089977/3.377089262`。这接受 BF16 单步前向和有限梯度，不等同于长期训练轨迹
+已经验收。
+
+在一张空闲 910B3 上紧邻执行 Transformers 5.5.3、BF16 eager、显式 fused AdamW、
+2 次 warmup 和 5 次同步计时，结果如下：
 
 | 实现 | Forward | Backward | AdamW | Full step | vs native |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Native `torch_npu`, fused | 102.67 ms | 112.66 ms | 26.20 ms | 241.53 ms | 1.000x |
-| Jittor, default Transformers | 110.46 ms | 106.09 ms | 24.65 ms | 241.20 ms | 0.999x |
-| Jittor, + RMSNorm adapter | 110.93 ms | 85.94 ms | 24.69 ms | 221.56 ms | 0.917x |
-| Jittor, + RMSNorm and RoPE adapters | 91.41 ms | 83.28 ms | 24.57 ms | 199.27 ms | 0.825x |
+| Native `torch_npu`, fused | 86.06 ms | 111.50 ms | 19.82 ms | 217.39 ms | 1.000x |
+| Jittor, exact default | 116.06 ms | 91.35 ms | 25.13 ms | 232.54 ms | 1.070x |
+| Jittor, direct CANN RoPE | 101.78 ms | 87.92 ms | 25.06 ms | 214.76 ms | 0.988x |
+| Jittor, exact Roll-RoPE experiment | 115.66 ms | 93.76 ms | 24.50 ms | 233.92 ms | 1.076x |
 
-默认 Transformers 路径的完整 step 已与 native 持平；数值不变的 RMSNorm 适配进一步
-快 `8.3%`。最后一行虽快 `17.5%`，但因 RoPE 改变轨迹不作为默认正确性结论。所有
-Jittor 行均为 `fallback_count=0`、`cpu_compile_count=0`。
+直接 CANN RoPE 达到性能目标，但 logits 相对 L2 为 `0.04270`，最差 retained hidden
+gradient 相对 L2 为 `0.23168`，因此拒绝作为默认路径。基于 `aclnnRoll` 的表达式与
+默认 snapshot SHA-256 完全相同，但没有性能收益。当前精确路径仍比相邻 native 慢
+约 `7.0%`，性能门禁保持开放。所有 Jittor 行均为 `fallback_count=0`、
+`cpu_compile_count=0`。
 
 ## 验证口径
 
@@ -157,6 +177,9 @@ Transformers 4.56.2 的 Qwen3 模块默认内联组合 RoPE，不会调用
   AdamW 定向 `1 passed`，完整 Torch-compat ACL 文件 `16 passed`。
 - BF16 embedding/RMSNorm/RoPE follow-up：real-NPU 定向 `3 passed`，完整 native
   ACL 文件 `41 passed`；结构测试 `232 passed, 2 skipped`。
+- BF16 semantic follow-up：完整 real-NPU Torch-compat ACL 文件 `19 passed`；CPU
+  dtype 文件 `25 passed, 2 skipped`；干净结构测试 `232 passed, 2 skipped`，仓库布局
+  门禁通过。
 
 native 与 Torch-compat 文件必须按仓库规则放在不同进程运行；同进程导入兼容层会
 改变 native 返回类型，不能作为有效门禁方式。
@@ -168,6 +191,7 @@ probe 和原始日志未版本化，位于：
 ```text
 $JITTOR_LAB_ROOT/qwen3-npu-training/probe_qwen3_training.py
 $JITTOR_LAB_ROOT/_state/qwen3-npu-training/20260830/logs/
+$JITTOR_LAB_ROOT/_state/qwen3-bf16/20260901/
 ```
 
 Transformers 5.5.3 环境使用完整部署的 shim site；仅设置环境变量而不部署 bundled
@@ -224,6 +248,12 @@ f5d7717a60d29631c7c749c9e3bc3fd11e2a80cecf4c96c361d56ae287768a51  probe_torch_ad
 e55e235f2fe4e9b21e06307672cea3904b9d4b1add51140c316a176db380d3c8  RMSNorm + RoPE snapshot
 311298ee7d69cb62a08b6ebea9c429b71665b2b7eeae1b992cece4e3b2cbf8ad  fused forward profile
 dab14d76b32dad33d91323d5a109f4a2dcecc908b5fbb06b75aecbf4e8bb09a9  fused backward profile
+2a11c8e649173a9bbaef6fc19efcd41bc3b3852cd907af84643e6a4d909ece6a  probe_qwen3_training.py (BF16 semantic follow-up)
+32e90b3c36dbfb3c9db995a2078873bc59f98ca42316256b008b819c745442af  probe_aclnn_swish.cc
+e9165acd269c11086dfb81effa90ecb7f49e89e2ae368a7e83880c324b7ce807  Jittor exact/roll-RoPE snapshot
+948b4b9c40334039bdb8a249c68b4d4088cde83e091f1645045bb815cfd9024f  torch_npu BF16 gradient snapshot
+f2ee46d87ea1fbe99eac0f4c63dabd788c092d71fa626bd3753b2f7bcf4c4578  exact forward profile
+04bbf90839ed37c312d26138ec617ce9a66c2618460c93728fdb82ada85ec8c7  exact backward profile
 ```
 
 ## 未覆盖边界
@@ -231,7 +261,7 @@ dab14d76b32dad33d91323d5a109f4a2dcecc908b5fbb06b75aecbf4e8bb09a9  fused backward
 - FP32 optimizer、完整 checkpoint restore 和长期参数轨迹仍未验证；BF16 显式 fused
   接受固定梯度两步精确对拍和短序列性能，整模跨框架训练轨迹仍未验收；
 - 没有验证 FP16、Qwen3-8B 训练、多卡训练、采样或量化；
-- 数值不变的 RMSNorm 仍需由外置 Transformers 版本适配器接入；RoPE 因改变 BF16
+- 精确 BF16 full step 仍比相邻 native 慢约 `7.0%`；直接 CANN RoPE 因改变 BF16
   舍入轨迹不应成为默认路由；
 - embedding 快路径未声明 `scale_grad_by_freq=True`、`max_norm` 或 sparse 支持；
 - 性能数字只代表该单卡、sequence length 8 的对应同步 eager 协议；FP32 不含
