@@ -14,6 +14,13 @@ gate is worse than an honest number. Run it as::
 
 Add ``JITTOR_ECOSYSTEM_SPEED_RATIO=1.2`` on a quiet machine to turn the ratios
 into a gate.
+
+The runner reports the fastest of its timed repeats, which is the right
+statistic -- interference only ever makes a sample slower. Three of them is
+not enough to pin it down on a shared machine, though: the same PyTorch CPU
+case has come back 25% apart between two whole-suite runs, wider than the
+ratios being judged. Raise ``JITTOR_ECOSYSTEM_REPEATS`` when a number has to
+be trusted rather than glanced at.
 """
 
 import os

@@ -67,6 +67,13 @@ REAL_TORCH_PYTHON = os.environ.get("REAL_TORCH_PYTHON", "").strip()
 
 SPEED_RATIO = os.environ.get("JITTOR_ECOSYSTEM_SPEED_RATIO", "").strip()
 
+#: Timed repeats per case. The runner reports the fastest of them, which is the
+#: right statistic -- interference can only make a sample slower -- but three
+#: samples do not pin it down on a shared machine: the same PyTorch CPU case
+#: has come back 25% apart between two whole-suite runs, which is far wider
+#: than the ratios being judged. More samples cost only wall clock.
+REPEATS = os.environ.get("JITTOR_ECOSYSTEM_REPEATS", "").strip()
+
 
 def _enabled(name):
     value = os.environ.get(name, "").strip().lower()
@@ -212,11 +219,13 @@ def _distributions_available(names):
     return True
 
 
-def _run(python, runtime, case, output, weights=None, device="cpu"):
+def _run(python, runtime, case, output, weights=None, device="cpu", repeats=None):
     command = [
         python, str(RUNNER), case, str(output),
         "--runtime", runtime, "--device", device,
     ]
+    if repeats:
+        command += ["--repeats", str(repeats)]
     if weights is not None:
         command += ["--weights", str(weights)]
     environment = os.environ.copy()
@@ -291,7 +300,8 @@ class EcosystemComparison(unittest.TestCase):
             jittor_output = root / "jittor.npz"
 
             torch_report, torch_log = _run(
-                REAL_TORCH_PYTHON, "torch", case, torch_output, device=self.device
+                REAL_TORCH_PYTHON, "torch", case, torch_output,
+                device=self.device, repeats=REPEATS,
             )
             weights = root / "torch.weights.npz"
             self.assertTrue(weights.exists(), torch_log[-2000:])
@@ -302,6 +312,7 @@ class EcosystemComparison(unittest.TestCase):
                 jittor_output,
                 weights=weights,
                 device=self.device,
+                repeats=REPEATS,
             )
 
             # Both runtimes report where they actually ran. Jittor enables CUDA
