@@ -2,7 +2,7 @@
 
 - Status: native vLLM-Ascend inference accepted; Jittor Qwen3 manual and public engine token parity accepted; performance open
 - Date: 2026-09-02
-- Baseline: `95a92bc3`
+- Baseline: `a299e9c4`
 - Owner: Jittor compatibility and external vLLM adapter maintainers
 - Review when: vLLM, Transformers, CANN, ATB, or the external adapter version changes
 
@@ -80,6 +80,9 @@ text:       Paris. The capital
 - serving RoPE 的 cos/sin split 与两次 duplicate-concat 在一个 ACL CodeOp 内按原
   顺序执行；中间 half-width tensors 只在该调用内存活。未命中 full-width、二维、
   偶数 rotary cache 契约时仍保留独立算子路径。
+- serving fused-add RMSNorm 在一个 CodeOp 内顺序执行独立 CANN Add 和 RMSNorm，
+  保持 batch-invariant 基线的舍入与 residual 输出语义；训练、mixed dtype 和其他
+  未覆盖形态继续走原路径，不调用非 batch-invariant 的 `aclnnAddRmsNorm`。
 - `torch.add(..., out=view)` 和 `torch.index_select(..., out=view)` 返回原 `out`
   对象并写回切片的父 tensor；vLLM 的 optimistic sequence length 和 input ID
   staging 不再保留旧值。
@@ -99,8 +102,8 @@ Jittor 主仓库。当前文件 SHA-256：
 | `vllm_jittor_npu/worker.py` | `b383042d63711f538ed14ae748e2d589c28d9b0c37e2278409840b7b34d46239` |
 | `probes/qwen3_forward.py` | `fecdec74e781d1a21100c634a098a26670ae32d99ccc7a7d520f86691b50f2f5` |
 | `probes/qwen3_engine.py` | `8edec2385347bcfdf5a6ad6dc89491bbe482f4d8370b47b9ee26af322504c566` |
-| `_state/npu-vllm/current-a84614f4/logs/qwen3-engine-grouped-rope-cache-10-rerun.log` | `92834c3702a6fbcc4a6b8fd1d3262636bb4c07e383b9b2ac6e626245f093f42a` |
-| `_state/npu-vllm/current-a84614f4/qwen3-decode-grouped-rope-cache.json` | `41d46d82df9487ca19d21433d4997217c83d8a96552229e291acb9663bda8c07` |
+| `_state/npu-vllm/current-a84614f4/logs/qwen3-engine-grouped-add-rms-10-rerun.log` | `b8ca945c7d889e808c32e6b4235e62498b80f7d1b16526912e9b6d9eb78a2a06` |
+| `_state/npu-vllm/current-a84614f4/qwen3-decode-grouped-add-rms.json` | `f73a0fd90786958c39a409107f12b592e0022dab5a64945737427ca8448e64bb` |
 | `_state/npu-vllm/profiles/qwen3_decode_fused.json` | `44a44104122c4956d98b946910403a3792e414f49a89ed10bd1b1c3a01e3b343` |
 | `_state/npu-vllm/profiles/qwen3_decode_paged128.json` | `c163d5669e718cfc3c4872900e0f4385d627d6b29f5dd81412eebf3c4604e745` |
 
@@ -251,6 +254,13 @@ adapter 通过 vLLM OOT CustomOp registry 将标准 `RMSNorm` 和 `RotaryEmbeddi
   公共中位数 `0.41589s/0.41700s` 与基线不可分辨；Q/K RMSNorm 改为原生 fused
   weight 语义后，同 engine ABBA 的 standard/fused 中位数约为
   `0.42755s/0.42752s`，同样无性能差异。两项均已完全撤回。
+- `2.0@a299e9c4` 将每层两个 residual Add 及其 RMSNorm 分别组合为一个 CodeOp；
+  当前 profile 中原 56 个 Add 和 56 个二维 RMSNorm 消失，56 个
+  `grouped_add_rms_norm` 合计约 `2.94ms`。固定输入的 grouped 与独立路径逐元素
+  完全一致。两轮各 9 个热请求中位数为 `0.39819s/0.40540s`，合并 18 个样本的
+  中位数为 `0.40157s`。相对 `0.615s` Jittor 基线累计改善约 `34.7%`，但相对
+  原生 `0.364996s` 仍慢约 `10.0%`。完整 ACL `45 passed`、CPU serving
+  `8 passed`，总体性能仍未验收。
 
 ## Open work
 
