@@ -279,9 +279,16 @@ void CudnnConvBackwardWOp::jit_run() {
             }
         ASSERT(best_algo_idx!=-1);
         algo=perf_results[best_algo_idx].algo;
-        if (benchmark) {
+        // Cache the choice whether it was measured or merely predicted.
+        // cudnnGet*Algorithm_v7 is deterministic for a descriptor set, so its
+        // answer is as reusable as a benchmarked one -- and it is a cuDNN call
+        // per convolution, not a free lookup. Caching only the benchmarked
+        // answer left the default path re-querying on every invocation: a
+        // diffusers UNet step made 663 of these queries where 27 would do, and
+        // that query, not the algorithm it returned, was the cost.
+        if (bwdw_algo_cache.size() < (size_t)max_cache_size) {
             bwdw_algo_cache[jk.to_string()] = algo;
-            if (bwdw_algo_cache.size()==max_cache_size)
+            if (bwdw_algo_cache.size()==(size_t)max_cache_size)
                 LOGw << "backward w algorithm cache is full";
         }
     }
