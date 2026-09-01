@@ -175,7 +175,7 @@ def change_function():
     from .aclops.relu_op import LeakyReLUACL
     from .aclops.flip_op import FlipACL
     from .aclops.roll_op import RollACL
-    from .aclops.concat_op import ConcatACL
+    from .aclops.concat_op import ConcatACL, SplitWithSizeACL
     from .aclops.gather_scatter_op import GatherACL
     from .aclops.arg_reduce_op import ArgReduceACL
     from .aclops.cumsum_op import CumsumACL
@@ -963,6 +963,53 @@ def change_function():
     jt.Var.roll = lambda x, shifts, dims=None: jt.roll(x, shifts, dims)
     jt.concat = warp(jt.concat, concat)
     jt.stack = warp(jt.stack, stack_acl)
+
+    _orig_split = jt.split
+    def _split_acl(x, split_size, dim=0):
+        if (
+            not jt.flags.use_acl
+            or not jt.flags.use_cuda
+            or not getattr(jt.flags, "no_grad", 0)
+            or not isinstance(x, jt.Var)
+            or str(x.dtype) not in ("float16", "bfloat16", "float32")
+            or not isinstance(dim, (int, np.integer))
+            or isinstance(dim, (bool, np.bool_))
+        ):
+            return _orig_split(x, split_size, dim)
+        axis = int(dim)
+        if axis < 0:
+            axis += x.ndim
+        if axis < 0 or axis >= x.ndim:
+            return _orig_split(x, split_size, dim)
+        if isinstance(split_size, (int, np.integer)) and not isinstance(
+                split_size, (bool, np.bool_)):
+            size = int(split_size)
+            if size <= 0:
+                return _orig_split(x, split_size, dim)
+            extent = int(x.shape[axis])
+            split_sizes = [size] * (extent // size)
+            if extent % size:
+                split_sizes.append(extent % size)
+        elif isinstance(split_size, Iterable):
+            split_sizes = list(split_size)
+            if not split_sizes or not all(
+                    isinstance(size, (int, np.integer))
+                    and not isinstance(size, (bool, np.bool_))
+                    and int(size) > 0
+                    for size in split_sizes):
+                return _orig_split(x, split_size, dim)
+            split_sizes = [int(size) for size in split_sizes]
+        else:
+            return _orig_split(x, split_size, dim)
+        if not split_sizes:
+            return _orig_split(x, split_size, dim)
+        if sum(split_sizes) != int(x.shape[axis]):
+            return _orig_split(x, split_size, dim)
+        return SplitWithSizeACL()(x, split_sizes, axis)
+    jt.split = _split_acl
+    jt.misc.split = _split_acl
+    jt.Var.split = lambda x, split_size, dim=0: _split_acl(
+        x, split_size, dim)
     jt.nn._acl_constant_pad = constant_pad_acl
     jt.nn._acl_embedding = embedding_acl
 

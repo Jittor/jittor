@@ -586,6 +586,60 @@ class TestACL(unittest.TestCase):
         self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_inference_split_uses_cann_split_with_size(self):
+        source_np = np.arange(20, dtype=np.float32).reshape(2, 10)
+        source = jt.array(source_np).bfloat16()
+
+        with jt.no_grad(), jt.log_capture_scope(
+                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+            outputs = source.split([3, 2, 5], dim=-1)
+            chunked = source.split(4, dim=-1)
+            empty_outputs = jt.empty((0, 10), dtype="float32").split(4, dim=0)
+            for output in outputs:
+                output.sync()
+            for output in chunked:
+                output.sync()
+            locations = [output.location() for output in outputs]
+            actual = [output.float32().numpy() for output in outputs]
+            chunked_actual = [output.float32().numpy() for output in chunked]
+
+        expected = np.split(source_np, [3, 5], axis=-1)
+        self.assertEqual(empty_outputs, ())
+        self.assertEqual(locations, ["device"] * 3)
+        for output, reference in zip(actual, expected):
+            np.testing.assert_array_equal(output, reference)
+        chunked_expected = np.split(source_np, [4, 8], axis=-1)
+        for output, reference in zip(chunked_actual, chunked_expected):
+            np.testing.assert_array_equal(output, reference)
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertTrue(any("compile acl op" in message for message in messages))
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_training_split_keeps_slice_backward(self):
+        source_np = np.arange(20, dtype=np.float32).reshape(2, 10)
+
+        with jt.log_capture_scope(
+                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+            source = jt.array(source_np)
+            first, second = source.split([3, 7], dim=-1)
+            loss = first.sum() + second.sum() * 2.0
+            grad = jt.grad(loss, source)
+            grad.sync()
+            location = grad.location()
+
+        expected = np.concatenate((
+            np.ones((2, 3), dtype=np.float32),
+            np.full((2, 7), 2.0, dtype=np.float32),
+        ), axis=-1)
+        self.assertEqual(location, "device")
+        np.testing.assert_array_equal(grad.numpy(), expected)
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_training_rms_norm(self):
         rng = np.random.RandomState(20260830)
         x_np = rng.randn(2, 3, 1024).astype("float32")
@@ -809,6 +863,7 @@ class TestACL(unittest.TestCase):
         angles = np.arange(32)[:, None] * inv[None, :]
         cache_np = np.concatenate((np.cos(angles), np.sin(angles)), axis=-1)
         cache_np = cache_np.astype("float32")
+        cache = jt.array(cache_np)
 
         def reference(packed, positions):
             token_count = len(positions)
@@ -826,15 +881,15 @@ class TestACL(unittest.TestCase):
                 log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
             actual_query, actual_key = jt.nn.rotary_embedding(
                 jt.array(positions_np), jt.array(query_np), jt.array(key_np),
-                jt.array(cache_np), head_size=head_size, is_neox=True,
+                cache, head_size=head_size, is_neox=True,
                 rotary_dim=head_size)
             single_positions_np = positions_np[-1:].astype("int64")
             single_query_np = query_np[-1:]
             single_key_np = key_np[-1:]
             single_query, single_key = jt.nn.rotary_embedding(
                 jt.array(single_positions_np), jt.array(single_query_np),
-                jt.array(single_key_np), jt.array(cache_np),
-                head_size=head_size, is_neox=True, rotary_dim=head_size)
+                jt.array(single_key_np), cache, head_size=head_size,
+                is_neox=True, rotary_dim=head_size)
             actual_query.sync()
             actual_key.sync()
             single_query.sync()

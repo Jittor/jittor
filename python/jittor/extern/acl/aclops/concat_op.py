@@ -77,3 +77,30 @@ class ConcatACL:
         for tensor in input_tensors[1:]:
             shape[axis] += tensor.shape[axis]
         return tuple(shape)
+
+
+class SplitWithSizeACL:
+
+    def __call__(self, x, split_sizes, dim=0):
+        return self.execute(x, split_sizes, dim)
+
+    def execute(self, x, split_sizes, dim=0):
+        output_shapes = []
+        for size in split_sizes:
+            shape = list(x.shape)
+            shape[dim] = size
+            output_shapes.append(shape)
+        attr_code = f"""
+        op.jt_name = "splitwithsize";
+        auto *attr = new SplitWithSizeAttr();
+        attr->splitSize = {{ {", ".join(map(str, split_sizes))} }};
+        attr->dim = {dim};
+        op.op_attr.reset(attr);
+        """
+        return tuple(concat_cmd(
+            "SplitWithSize",
+            [x],
+            output_dtypes=[x.dtype] * len(split_sizes),
+            output_shapes=output_shapes,
+            attr_code=attr_code,
+        ))

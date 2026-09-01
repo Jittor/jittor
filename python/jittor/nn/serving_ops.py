@@ -88,6 +88,7 @@ def rotary_embedding(positions, query, key, cos_sin_cache, head_size=None,
     through, which is what lets a partially-rotary model use the same call.
 
     Returns the rotated ``(query, key)``. ``key`` may be None.
+
     """
     if head_size is None:
         head_size = int(cos_sin_cache.shape[-1])
@@ -156,6 +157,7 @@ def _rotary_embedding_acl(
         and head_size % 64 == 0
         and str(positions.dtype) in ("int32", "int64")
         and cos_sin_cache.ndim == 2
+        and int(cos_sin_cache.shape[-1]) >= rotary_dim
         and str(query.dtype) == str(key.dtype) == str(cos_sin_cache.dtype)
         and str(query.dtype) in ("float16", "bfloat16", "float32")
     ):
@@ -163,22 +165,24 @@ def _rotary_embedding_acl(
 
     token_count = int(positions.numel())
     flat_positions = positions.reshape((token_count,))
+    cache_width = int(cos_sin_cache.shape[-1])
     cache = None
     acl_embedding = getattr(jt.nn, "_acl_embedding", None)
     if acl_embedding is not None:
         cache = acl_embedding(flat_positions, cos_sin_cache)
     if cache is None:
-        cache_width = int(cos_sin_cache.shape[-1])
         cache_index = flat_positions.reshape((token_count, 1)).broadcast(
             (token_count, cache_width))
         cache = jt.gather(cos_sin_cache, 0, cache_index)
     half = rotary_dim // 2
-    cos_half = cache[:, :half]
-    sin_half = cache[:, half:rotary_dim]
-    cos = jt.concat((cos_half, cos_half), dim=-1).reshape(
-        (1, 1, token_count, rotary_dim))
-    sin = jt.concat((sin_half, sin_half), dim=-1).reshape(
-        (1, 1, token_count, rotary_dim))
+    split_sizes = [half, rotary_dim - half]
+    if cache_width > rotary_dim:
+        split_sizes.append(cache_width - rotary_dim)
+    cos_half, sin_half = cache.split(split_sizes, dim=-1)[:2]
+    cos = jt.concat((cos_half, cos_half), dim=-1)
+    sin = jt.concat((sin_half, sin_half), dim=-1)
+    cos = cos.reshape((1, 1, token_count, rotary_dim))
+    sin = sin.reshape((1, 1, token_count, rotary_dim))
 
     def to_bnsd(packed):
         heads = int(packed.shape[-1]) // head_size
