@@ -161,7 +161,11 @@ def change_function():
     from .aclops.pool_op import PoolACL
     from .aclops.nantonum_op import NanToNumACL
     from .aclops.stack_op import StackACL
-    from .aclops.rope_op import ExpandRotaryCacheACL, RotaryPositionEmbeddingACL
+    from .aclops.rope_op import (
+        ExpandRotaryCacheACL,
+        GroupedQKRmsNormRotaryACL,
+        RotaryPositionEmbeddingACL,
+    )
     from .aclops.softmax_op import SoftmaxACL
     from .aclops.sigmoid_op import SigmoidACL
     from .aclops.silu_op import SiLUACL, SwiGluACL, SwishACL
@@ -1047,6 +1051,78 @@ def change_function():
             return ExpandRotaryCacheACL()(cache)
         return None
     jt.nn._acl_expand_rotary_cache = _expand_rotary_cache_acl
+
+    def _grouped_qk_rms_norm_rotary_acl(
+            positions, query, key, query_weight, key_weight,
+            cos_sin_cache, head_size, rotary_dim, is_neox, eps):
+        values = query, key, query_weight, key_weight, cos_sin_cache
+        if not (
+            jt.flags.use_acl
+            and jt.flags.use_cuda
+            and getattr(jt.flags, "no_grad", 0)
+            and all(isinstance(value, jt.Var) for value in values)
+            and isinstance(positions, jt.Var)
+            and all(str(value.dtype) == "bfloat16" for value in values)
+            and str(positions.dtype) in ("int32", "int64")
+            and int(positions.numel()) == 1
+            and is_neox
+            and int(head_size) == int(rotary_dim)
+            and int(head_size) > 0
+            and int(head_size) % 64 == 0
+            and cos_sin_cache.ndim == 2
+            and int(cos_sin_cache.shape[-1]) == int(rotary_dim)
+            and isinstance(eps, Real)
+        ):
+            return None
+        query_shape = tuple(int(size) for size in query.shape)
+        key_shape = tuple(int(size) for size in key.shape)
+        head_size = int(head_size)
+        epsilon = float(eps)
+        if (
+            len(query_shape) != 2
+            or len(key_shape) != 2
+            or query_shape[0] != 1
+            or key_shape[0] != 1
+            or query_shape[-1] % head_size != 0
+            or key_shape[-1] % head_size != 0
+            or tuple(query_weight.shape) != (head_size,)
+            or tuple(key_weight.shape) != (head_size,)
+            or not math.isfinite(epsilon)
+            or epsilon <= 0.0
+        ):
+            return None
+
+        def unit_weight(weight):
+            unit = weight.__dict__.get("_torch_acl_rms_norm_unit_weight")
+            if unit is None or tuple(unit.shape) != tuple(weight.shape):
+                unit = jt.ones(weight.shape, dtype="bfloat16")
+                unit.stop_grad()
+                weight.__dict__["_torch_acl_rms_norm_unit_weight"] = unit
+            return unit
+
+        selected = embedding_acl(
+            positions.reshape((1,)), cos_sin_cache)
+        cos, sin = ExpandRotaryCacheACL()(selected)
+        cos = cos.reshape((1, 1, 1, head_size))
+        sin = sin.reshape((1, 1, 1, head_size))
+        query_4d = query.reshape(
+            (1, query_shape[-1] // head_size, 1, head_size))
+        key_4d = key.reshape(
+            (1, key_shape[-1] // head_size, 1, head_size))
+        query_out, key_out = GroupedQKRmsNormRotaryACL()(
+            query_4d,
+            key_4d,
+            unit_weight(query_weight),
+            unit_weight(key_weight),
+            query_weight,
+            key_weight,
+            cos,
+            sin,
+            epsilon,
+        )
+        return query_out.reshape(query_shape), key_out.reshape(key_shape)
+    jt.nn._acl_grouped_qk_rms_norm_rotary = \
+        _grouped_qk_rms_norm_rotary_acl
 
     jt.flip = warp(jt.flip, flip_acl)
     jt.Var.flip = lambda x, dim_vector=0: jt.flip(x, dim_vector)

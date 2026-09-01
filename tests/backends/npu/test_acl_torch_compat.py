@@ -231,6 +231,60 @@ class TestACLTorchCompat(unittest.TestCase):
         self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_grouped_qk_rms_norm_rotary_matches_separate_ops(self):
+        rng = np.random.RandomState(20260902)
+        head_size = 128
+        query_np = rng.randn(1, 16 * head_size).astype("float32")
+        key_np = rng.randn(1, 8 * head_size).astype("float32")
+        query_weight_np = rng.uniform(0.1, 1.2, head_size).astype("float32")
+        key_weight_np = rng.uniform(0.1, 1.2, head_size).astype("float32")
+        inv = 1.0 / (
+            10000 ** (np.arange(0, head_size, 2) / head_size)
+        )
+        angles = np.arange(32)[:, None] * inv[None, :]
+        cache_np = np.concatenate(
+            (np.cos(angles), np.sin(angles)), axis=-1
+        ).astype("float32")
+
+        query = torch.tensor(query_np, dtype=torch.bfloat16)
+        key = torch.tensor(key_np, dtype=torch.bfloat16)
+        query_weight = torch.tensor(query_weight_np, dtype=torch.bfloat16)
+        key_weight = torch.tensor(key_weight_np, dtype=torch.bfloat16)
+        positions = torch.tensor([13], dtype=torch.int64)
+        cache = torch.tensor(cache_np, dtype=torch.bfloat16)
+
+        with torch.no_grad(), jt.log_capture_scope(
+                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+            actual = jt.nn._acl_grouped_qk_rms_norm_rotary(
+                positions, query, key, query_weight, key_weight,
+                cache, head_size, head_size, True, 1e-6)
+            query_view = query.reshape((1, 16, head_size))
+            key_view = key.reshape((1, 8, head_size))
+            reference_query, reference_key = jt.nn.dual_rms_norm(
+                query_view, key_view, query_weight, key_weight, 1e-6)
+            reference = jt.nn.rotary_embedding(
+                positions,
+                reference_query.reshape(query.shape),
+                reference_key.reshape(key.shape),
+                cache,
+                head_size=head_size,
+                rotary_dim=head_size,
+                is_neox=True,
+            )
+            values = jt.fetch_sync([
+                actual[0].float(), actual[1].float(),
+                reference[0].float(), reference[1].float(),
+            ])
+            locations = actual[0].location(), actual[1].location()
+
+        self.assertEqual(locations, ("device", "device"))
+        np.testing.assert_array_equal(values[0], values[2])
+        np.testing.assert_array_equal(values[1], values[3])
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_python_float_truediv_stays_on_acl(self):
         source_np = np.array([0.12345679, 1.2345679, 3.25], dtype=np.float32)
         scale = 0.28209479177387814

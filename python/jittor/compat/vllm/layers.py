@@ -135,6 +135,29 @@ def patch_qwen3_attention(module):
         qkv, _ = self.qkv_proj(hidden_states)
         q, k, v = qkv.split(
             [self.q_size, self.kv_size, self.kv_size], dim=-1)
+        grouped_backend = getattr(
+            jt.nn, "_acl_grouped_qk_rms_norm_rotary", None)
+        grouped = None
+        if grouped_backend is not None and int(positions.numel()) == 1:
+            cache = self.rotary_emb._match_cos_sin_cache_dtype(q)
+            if cache is None:
+                cache = self.rotary_emb.cos_sin_cache
+            grouped = grouped_backend(
+                positions,
+                q,
+                k,
+                q_weight,
+                k_weight,
+                cache,
+                self.head_dim,
+                self.rotary_emb.rotary_dim,
+                self.rotary_emb.is_neox_style,
+                self.q_norm.variance_epsilon,
+            )
+        if grouped is not None:
+            q, k = grouped
+            output, _ = self.o_proj(self.attn(q, k, v))
+            return output
         q_shape, k_shape = q.shape, k.shape
         q = q.view(*q.shape[:-1], q.shape[-1] // self.head_dim, self.head_dim)
         k = k.view(*k.shape[:-1], k.shape[-1] // self.head_dim, self.head_dim)

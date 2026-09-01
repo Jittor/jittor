@@ -102,6 +102,93 @@ sin_op.run();
         return result[0], result[1]
 
 
+class GroupedQKRmsNormRotaryACL:
+
+    def __call__(
+            self, query, key, query_unit, key_unit,
+            query_weight, key_weight, cos, sin, eps):
+        query_rstd_shape = list(query.shape[:-1]) + [1]
+        key_rstd_shape = list(key.shape[:-1]) + [1]
+        outputs = [
+            jt.empty(query.shape, query.dtype),
+            jt.empty(key.shape, key.dtype),
+            jt.empty(query.shape, query.dtype),
+            jt.empty(key.shape, key.dtype),
+            jt.empty(query.shape, query.dtype),
+            jt.empty(key.shape, key.dtype),
+            jt.empty(query_rstd_shape, "float32"),
+            jt.empty(key_rstd_shape, "float32"),
+        ]
+        result = jt.code(
+            outputs=outputs,
+            inputs=[
+                query, key, query_unit, key_unit,
+                query_weight, key_weight, cos, sin,
+            ],
+            cuda_header='''
+namespace jittor {}
+#include "acl/aclops/aclops.h"
+''',
+            cuda_src=f'''
+// aclop
+RmsNormOpRunner query_norm;
+query_norm.add(in0, true);
+query_norm.add(in2, true);
+query_norm.add(out2, false);
+query_norm.add(out6, false);
+query_norm.jt_name = "grouped_qk_rms_norm_rotary";
+auto *query_attr = new RmsNormAttr();
+query_attr->eps = {eps};
+query_norm.op_attr.reset(query_attr);
+query_norm.run();
+
+BinaryOpRunner query_multiply;
+query_multiply.name = "Mul";
+query_multiply.add(in4, true);
+query_multiply.add(out2, true);
+query_multiply.add(out4, false);
+query_multiply.jt_name = "grouped_qk_rms_norm_rotary";
+query_multiply.run();
+
+RmsNormOpRunner key_norm;
+key_norm.add(in1, true);
+key_norm.add(in3, true);
+key_norm.add(out3, false);
+key_norm.add(out7, false);
+key_norm.jt_name = "grouped_qk_rms_norm_rotary";
+auto *key_attr = new RmsNormAttr();
+key_attr->eps = {eps};
+key_norm.op_attr.reset(key_attr);
+key_norm.run();
+
+BinaryOpRunner key_multiply;
+key_multiply.name = "Mul";
+key_multiply.add(in5, true);
+key_multiply.add(out3, true);
+key_multiply.add(out5, false);
+key_multiply.jt_name = "grouped_qk_rms_norm_rotary";
+key_multiply.run();
+
+RotaryPositionEmbeddingOpRunner query_rope;
+query_rope.add(out4, true);
+query_rope.add(in6, true);
+query_rope.add(in7, true);
+query_rope.add(out0, false);
+query_rope.jt_name = "grouped_qk_rms_norm_rotary";
+query_rope.run();
+
+RotaryPositionEmbeddingOpRunner key_rope;
+key_rope.add(out5, true);
+key_rope.add(in6, true);
+key_rope.add(in7, true);
+key_rope.add(out1, false);
+key_rope.jt_name = "grouped_qk_rms_norm_rotary";
+key_rope.run();
+''',
+        )
+        return result[0], result[1]
+
+
 class RotaryPositionEmbeddingACL(jt.Function):
 
     def execute(self, x, cos, sin):
