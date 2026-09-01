@@ -170,6 +170,7 @@ def change_function():
         GroupNormACL,
         GroupedAddRmsNormACL,
         GroupedBFloat16RmsNormACL,
+        GroupedDualBFloat16RmsNormACL,
         LayerNormACL,
         RmsNormACL,
     )
@@ -983,6 +984,53 @@ def change_function():
             x, unit_weight, weight, epsilon)
     jt.nn._acl_grouped_bfloat16_rms_norm = \
         _grouped_bfloat16_rms_norm_acl
+
+    def _grouped_dual_bfloat16_rms_norm_acl(
+            first, second, first_weight, second_weight, eps):
+        values = first, second, first_weight, second_weight
+        if not (
+            jt.flags.use_acl
+            and jt.flags.use_cuda
+            and getattr(jt.flags, "no_grad", 0)
+            and all(isinstance(value, jt.Var) for value in values)
+            and all(str(value.dtype) == "bfloat16" for value in values)
+            and isinstance(eps, Real)
+        ):
+            return None
+        first_shape = tuple(int(size) for size in first.shape)
+        second_shape = tuple(int(size) for size in second.shape)
+        epsilon = float(eps)
+        if (
+            not first_shape
+            or not second_shape
+            or any(size <= 0 for size in first_shape + second_shape)
+            or first_shape[-1] != second_shape[-1]
+            or tuple(first_weight.shape) != (first_shape[-1],)
+            or tuple(second_weight.shape) != (second_shape[-1],)
+            or not math.isfinite(epsilon)
+            or epsilon <= 0.0
+        ):
+            return None
+
+        def unit_weight(weight):
+            unit = weight.__dict__.get("_torch_acl_rms_norm_unit_weight")
+            if unit is None or tuple(unit.shape) != tuple(weight.shape):
+                unit = jt.ones(weight.shape, dtype="bfloat16")
+                unit.stop_grad()
+                weight.__dict__["_torch_acl_rms_norm_unit_weight"] = unit
+            return unit
+
+        return GroupedDualBFloat16RmsNormACL()(
+            first,
+            second,
+            unit_weight(first_weight),
+            unit_weight(second_weight),
+            first_weight,
+            second_weight,
+            epsilon,
+        )
+    jt.nn._acl_grouped_dual_bfloat16_rms_norm = \
+        _grouped_dual_bfloat16_rms_norm_acl
 
     def _expand_rotary_cache_acl(cache, rotary_dim):
         if (

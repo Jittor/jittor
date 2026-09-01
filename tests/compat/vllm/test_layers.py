@@ -81,5 +81,26 @@ class TestRotaryEmbeddingPatch(unittest.TestCase):
         self.assertFalse(layers.patch_rotary_embedding(module))
 
 
+class TestQwen3AttentionPatch(unittest.TestCase):
+    def test_non_acl_execution_keeps_original_forward(self):
+        module = types.ModuleType("vllm.model_executor.models.qwen3")
+
+        class Qwen3Attention:
+            def __init__(self):
+                self.q_norm = types.SimpleNamespace(weight=jt.ones(8))
+                self.k_norm = types.SimpleNamespace(weight=jt.ones(8))
+
+            def forward(self, positions, hidden_states):
+                del positions
+                return hidden_states + 1.0
+
+        module.Qwen3Attention = Qwen3Attention
+        self.assertTrue(layers.patch_qwen3_attention(module))
+        self.assertFalse(layers.patch_qwen3_attention(module))
+        hidden = jt.zeros((2, 8))
+        output = module.Qwen3Attention().forward(jt.zeros((2,)), hidden)
+        np.testing.assert_array_equal(output.numpy(), np.ones((2, 8)))
+
+
 if __name__ == "__main__":
     unittest.main()

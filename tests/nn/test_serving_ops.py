@@ -47,6 +47,21 @@ class TestSiluAndMul(unittest.TestCase):
 
 
 class TestRmsNorm(unittest.TestCase):
+    def test_dual_rms_norm_matches_independent_calls(self):
+        rng = np.random.RandomState(20260902)
+        first = jt.array(rng.randn(2, 3, 8).astype("float32"))
+        second = jt.array(rng.randn(2, 2, 8).astype("float32"))
+        first_weight = jt.array((rng.rand(8) + 0.5).astype("float32"))
+        second_weight = jt.array((rng.rand(8) + 0.5).astype("float32"))
+        actual_first, actual_second = jt.nn.dual_rms_norm(
+            first, second, first_weight, second_weight, 1e-6)
+        expected_first = jt.nn.rms_norm(first, first_weight, 1e-6)
+        expected_second = jt.nn.rms_norm(second, second_weight, 1e-6)
+        np.testing.assert_allclose(
+            actual_first.numpy(), expected_first.numpy(), rtol=1e-6, atol=1e-6)
+        np.testing.assert_allclose(
+            actual_second.numpy(), expected_second.numpy(), rtol=1e-6, atol=1e-6)
+
     def test_normalises_over_the_last_axis_and_scales(self):
         raw = np.random.randn(6, 16).astype("float32")
         weight = (np.random.rand(16) + 0.5).astype("float32")

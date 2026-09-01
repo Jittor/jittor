@@ -189,6 +189,48 @@ class TestACLTorchCompat(unittest.TestCase):
         self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_dual_rms_norm_bfloat16_matches_pytorch_order(self):
+        rng = np.random.RandomState(20260902)
+        first_np = rng.randn(2, 3, 128).astype("float32")
+        second_np = rng.randn(2, 2, 128).astype("float32")
+        first_weight_np = rng.uniform(0.1, 1.2, 128).astype("float32")
+        second_weight_np = rng.uniform(0.1, 1.2, 128).astype("float32")
+
+        first_bf = _bfloat16_round(first_np)
+        second_bf = _bfloat16_round(second_np)
+        first_weight_bf = _bfloat16_round(first_weight_np)
+        second_weight_bf = _bfloat16_round(second_weight_np)
+        first = torch.tensor(first_bf, dtype=torch.bfloat16)
+        second = torch.tensor(second_bf, dtype=torch.bfloat16)
+        first_weight = torch.tensor(first_weight_bf, dtype=torch.bfloat16)
+        second_weight = torch.tensor(second_weight_bf, dtype=torch.bfloat16)
+
+        with torch.no_grad(), jt.log_capture_scope(
+                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+            actual = jt.nn.dual_rms_norm(
+                first, second, first_weight, second_weight, 1e-6)
+            values = jt.fetch_sync([value.float() for value in actual])
+            locations = tuple(value.location() for value in actual)
+
+        def reference(value, weight):
+            inverse_rms = np.float32(1.0) / np.sqrt(
+                np.mean(
+                    value * value, axis=-1, keepdims=True, dtype=np.float32
+                ) + np.float32(1e-6)
+            )
+            normalized = _bfloat16_round(value * inverse_rms)
+            return _bfloat16_round(weight * normalized)
+
+        self.assertEqual(locations, ("device", "device"))
+        np.testing.assert_array_equal(
+            values[0], reference(first_bf, first_weight_bf))
+        np.testing.assert_array_equal(
+            values[1], reference(second_bf, second_weight_bf))
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_python_float_truediv_stays_on_acl(self):
         source_np = np.array([0.12345679, 1.2345679, 3.25], dtype=np.float32)
         scale = 0.28209479177387814

@@ -18,7 +18,10 @@ from .rms_norm_cuda import _fused_add_rms_norm_cuda, _rms_norm_cuda
 from .rope_cuda import _rotary_embedding_cuda
 from .swiglu_cuda import _silu_and_mul_cuda
 
-__all__ = ["silu_and_mul", "rms_norm", "fused_add_rms_norm", "rotary_embedding"]
+__all__ = [
+    "silu_and_mul", "rms_norm", "dual_rms_norm",
+    "fused_add_rms_norm", "rotary_embedding",
+]
 
 
 def silu_and_mul(x):
@@ -62,6 +65,21 @@ def rms_norm(x, weight, eps=1e-6):
     value = x.float32()
     scale = jt.rsqrt((value * value).mean(-1, keepdims=True) + eps)
     return (value * scale).cast(dtype) * weight
+
+
+def dual_rms_norm(first, second, first_weight, second_weight, eps=1e-6):
+    """Apply independent last-axis RMSNorm operations to two tensors."""
+    acl_backend = getattr(
+        jt.nn, "_acl_grouped_dual_bfloat16_rms_norm", None)
+    if acl_backend is not None:
+        grouped = acl_backend(
+            first, second, first_weight, second_weight, eps)
+        if grouped is not None:
+            return grouped
+    return (
+        rms_norm(first, first_weight, eps),
+        rms_norm(second, second_weight, eps),
+    )
 
 
 def fused_add_rms_norm(x, residual, weight, eps=1e-6):

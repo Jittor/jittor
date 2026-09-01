@@ -284,3 +284,72 @@ multiply_op.run();
 ''',
         )
         return result[0]
+
+
+class GroupedDualBFloat16RmsNormACL:
+
+    def __call__(
+            self, first, second, first_unit, second_unit,
+            first_weight, second_weight, eps):
+        first_rstd_shape = list(first.shape[:-1]) + [1]
+        second_rstd_shape = list(second.shape[:-1]) + [1]
+        outputs = [
+            jt.empty(first.shape, first.dtype),
+            jt.empty(second.shape, second.dtype),
+            jt.empty(first.shape, first.dtype),
+            jt.empty(second.shape, second.dtype),
+            jt.empty(first_rstd_shape, "float32"),
+            jt.empty(second_rstd_shape, "float32"),
+        ]
+        result = jt.code(
+            outputs=outputs,
+            inputs=[
+                first, second, first_unit, second_unit,
+                first_weight, second_weight,
+            ],
+            cuda_header='''
+namespace jittor {}
+#include "acl/aclops/aclops.h"
+''',
+            cuda_src=f'''
+// aclop
+RmsNormOpRunner first_norm;
+first_norm.add(in0, true);
+first_norm.add(in2, true);
+first_norm.add(out2, false);
+first_norm.add(out4, false);
+first_norm.jt_name = "grouped_dual_bfloat16_rms_norm";
+auto *first_attr = new RmsNormAttr();
+first_attr->eps = {eps};
+first_norm.op_attr.reset(first_attr);
+first_norm.run();
+
+BinaryOpRunner first_multiply;
+first_multiply.name = "Mul";
+first_multiply.add(in4, true);
+first_multiply.add(out2, true);
+first_multiply.add(out0, false);
+first_multiply.jt_name = "grouped_dual_bfloat16_rms_norm";
+first_multiply.run();
+
+RmsNormOpRunner second_norm;
+second_norm.add(in1, true);
+second_norm.add(in3, true);
+second_norm.add(out3, false);
+second_norm.add(out5, false);
+second_norm.jt_name = "grouped_dual_bfloat16_rms_norm";
+auto *second_attr = new RmsNormAttr();
+second_attr->eps = {eps};
+second_norm.op_attr.reset(second_attr);
+second_norm.run();
+
+BinaryOpRunner second_multiply;
+second_multiply.name = "Mul";
+second_multiply.add(in5, true);
+second_multiply.add(out3, true);
+second_multiply.add(out1, false);
+second_multiply.jt_name = "grouped_dual_bfloat16_rms_norm";
+second_multiply.run();
+''',
+        )
+        return result[0], result[1]
