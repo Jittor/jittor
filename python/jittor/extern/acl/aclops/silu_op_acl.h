@@ -44,4 +44,14 @@ namespace jittor
         SwishBackwardOpRunner();
     };
 
+    class SwiGluOpRunner : public BaseOpRunner
+    {
+    protected:
+        void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+
+    public:
+        int64_t dim = -1;
+        SwiGluOpRunner();
+    };
+
 }

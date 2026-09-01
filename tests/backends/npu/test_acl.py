@@ -560,6 +560,32 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(second.numpy(), expected, atol=2e-5, rtol=2e-5)
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_serving_silu_and_mul_uses_cann_swiglu(self):
+        source_np = np.asarray(
+            [[-1.28125, -0.63671875, -1.3828125, -1.5]],
+            dtype=np.float32,
+        )
+        source = jt.array(source_np).bfloat16()
+
+        with jt.no_grad(), jt.log_capture_scope(
+                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+            output = jt.nn.silu_and_mul(source)
+            output.sync()
+            location = output.location()
+            actual = output.float32().numpy()
+
+        expected = np.asarray(
+            [[0.384765625, 0.330078125]], dtype=np.float32
+        )
+        self.assertEqual(str(output.dtype), "bfloat16")
+        self.assertEqual(location, "device")
+        np.testing.assert_array_equal(actual, expected)
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertTrue(any("compile acl op" in message for message in messages))
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_training_rms_norm(self):
         rng = np.random.RandomState(20260830)
         x_np = rng.randn(2, 3, 1024).astype("float32")
@@ -784,10 +810,11 @@ class TestACL(unittest.TestCase):
         cache_np = np.concatenate((np.cos(angles), np.sin(angles)), axis=-1)
         cache_np = cache_np.astype("float32")
 
-        def reference(packed):
-            view = packed.reshape(tokens, -1, head_size)
-            cos = cache_np[positions_np, :head_size // 2][:, None, :]
-            sin = cache_np[positions_np, head_size // 2:][:, None, :]
+        def reference(packed, positions):
+            token_count = len(positions)
+            view = packed.reshape(token_count, -1, head_size)
+            cos = cache_np[positions, :head_size // 2][:, None, :]
+            sin = cache_np[positions, head_size // 2:][:, None, :]
             first = view[..., :head_size // 2]
             second = view[..., head_size // 2:]
             return np.concatenate(
@@ -801,19 +828,41 @@ class TestACL(unittest.TestCase):
                 jt.array(positions_np), jt.array(query_np), jt.array(key_np),
                 jt.array(cache_np), head_size=head_size, is_neox=True,
                 rotary_dim=head_size)
+            single_positions_np = positions_np[-1:]
+            single_query_np = query_np[-1:]
+            single_key_np = key_np[-1:]
+            single_query, single_key = jt.nn.rotary_embedding(
+                jt.array(single_positions_np), jt.array(single_query_np),
+                jt.array(single_key_np), jt.array(cache_np),
+                head_size=head_size, is_neox=True, rotary_dim=head_size)
             actual_query.sync()
             actual_key.sync()
+            single_query.sync()
+            single_key.sync()
             query_location = actual_query.location()
             key_location = actual_key.location()
+            single_query_location = single_query.location()
+            single_key_location = single_key.location()
 
         messages = [entry["msg"].lower() for entry in logs]
         self.assertFalse(any("fallback cpu" in message for message in messages))
         self.assertEqual(query_location, "device")
         self.assertEqual(key_location, "device")
+        self.assertEqual(single_query_location, "device")
+        self.assertEqual(single_key_location, "device")
         np.testing.assert_allclose(
-            actual_query.numpy(), reference(query_np), atol=3e-5, rtol=3e-5)
+            actual_query.numpy(), reference(query_np, positions_np),
+            atol=3e-5, rtol=3e-5)
         np.testing.assert_allclose(
-            actual_key.numpy(), reference(key_np), atol=3e-5, rtol=3e-5)
+            actual_key.numpy(), reference(key_np, positions_np),
+            atol=3e-5, rtol=3e-5)
+        np.testing.assert_allclose(
+            single_query.numpy(),
+            reference(single_query_np, single_positions_np),
+            atol=3e-5, rtol=3e-5)
+        np.testing.assert_allclose(
+            single_key.numpy(), reference(single_key_np, single_positions_np),
+            atol=3e-5, rtol=3e-5)
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_training_rotary_embedding(self):

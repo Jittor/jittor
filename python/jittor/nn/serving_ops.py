@@ -7,9 +7,9 @@ packed query/key. Each already exists here as an inference CUDA kernel; this
 module is where they are named, so a serving stack can reach them without
 reaching into private modules.
 
-Every entry point takes the fused path when its preconditions hold -- CUDA,
-inference mode, a supported dtype -- and otherwise computes the same result
-from ordinary ops, so the same call works on CPU and under autograd.
+Every entry point takes an accelerator fused path when its preconditions hold --
+inference mode, a supported backend and dtype -- and otherwise computes the same
+result from ordinary ops, so the same call works on CPU and under autograd.
 """
 
 import jittor as jt
@@ -27,6 +27,11 @@ def silu_and_mul(x):
     The gate and the value arrive interleaved in one tensor because the two
     projections behind them are fused into a single matmul.
     """
+    acl_backend = getattr(jt.nn, "_silu_and_mul_acl", None)
+    if acl_backend is not None:
+        fused = acl_backend(x)
+        if fused is not None:
+            return fused
     fused = _silu_and_mul_cuda(x)
     if fused is not None:
         return fused
@@ -166,6 +171,8 @@ def _rotary_embedding_acl(
 
     def to_bnsd(packed):
         heads = int(packed.shape[-1]) // head_size
+        if token_count == 1:
+            return packed.reshape((1, heads, 1, head_size))
         value = packed.reshape((token_count, heads, head_size))
         return value.transpose(0, 1).reshape((1, heads, token_count, head_size))
 
@@ -176,6 +183,8 @@ def _rotary_embedding_acl(
 
     def from_bnsd(value, shape):
         heads = int(value.shape[1])
+        if token_count == 1:
+            return value.reshape(shape)
         return value.reshape((heads, token_count, head_size)).transpose(
             0, 1).reshape(shape)
 

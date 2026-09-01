@@ -164,7 +164,7 @@ def change_function():
     from .aclops.rope_op import RotaryPositionEmbeddingACL
     from .aclops.softmax_op import SoftmaxACL
     from .aclops.sigmoid_op import SigmoidACL
-    from .aclops.silu_op import SiLUACL, SwishACL
+    from .aclops.silu_op import SiLUACL, SwiGluACL, SwishACL
     from .aclops.norms_op import (
         BatchNormACL,
         GroupNormACL,
@@ -1088,6 +1088,21 @@ def change_function():
         return _orig_silu(x, inplace=inplace)
     jt.nn.silu = _silu_acl
     jt.nn.functional.silu = _silu_acl
+
+    def _silu_and_mul_acl(x):
+        if (
+            jt.flags.use_acl
+            and jt.flags.use_cuda
+            and getattr(jt.flags, "no_grad", 0)
+            and isinstance(x, jt.Var)
+            and str(x.dtype) in ("float16", "bfloat16", "float32")
+            and x.ndim > 0
+            and int(x.shape[-1]) > 0
+            and int(x.shape[-1]) % 2 == 0
+        ):
+            return SwiGluACL()(x, -1)
+        return None
+    jt.nn._silu_and_mul_acl = _silu_and_mul_acl
 
     jt.sigmoid = warp(jt.sigmoid, sigmoid_acl)
     jt.nn.Sigmoid = warp(jt.nn.Sigmoid, Sigmoid)

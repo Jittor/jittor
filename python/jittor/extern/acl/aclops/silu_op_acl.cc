@@ -29,6 +29,7 @@
 #include "aclnn/aclnn.h"
 #include <aclnnop/aclnn_swish.h>
 #include <aclnnop/aclnn_swish_backward.h>
+#include <aclnnop/aclnn_swi_glu.h>
 #include "silu_op_acl.h"
 
 namespace jittor
@@ -122,6 +123,31 @@ namespace jittor
 
         ret = aclnnSwishBackward(workspaceAddr, workspaceSize, executor, aclstream);
         CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnSwishBackward failed. ERROR: %d\n", name.c_str(), ret); return);
+
+        syncRun();
+
+        return;
+    }
+
+    SwiGluOpRunner::SwiGluOpRunner() : BaseOpRunner("SwiGlu")
+    {
+    }
+
+    void SwiGluOpRunner::executeOp(
+        std::unordered_map<string, AclOpFunctions>::iterator &it)
+    {
+        ret = aclnnSwiGluGetWorkspaceSize(
+            inputTensors[0], dim, outputTensors[0], &workspaceSize, &executor);
+
+        checkRet(ret);
+
+        if (workspaceSize > 0)
+        {
+            mallocWorkSpace(workspaceSize);
+        }
+
+        ret = aclnnSwiGlu(workspaceAddr, workspaceSize, executor, aclstream);
+        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnSwiGlu failed. ERROR: %d\n", name.c_str(), ret); return);
 
         syncRun();
 

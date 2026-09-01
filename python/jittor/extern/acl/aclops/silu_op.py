@@ -65,3 +65,24 @@ op.run();
 '''],
         )[0]
         return result
+
+
+class SwiGluACL:
+
+    def __call__(self, x, dim=-1):
+        return self.execute(x, dim)
+
+    def execute(self, x, dim=-1):
+        axis = int(dim) % int(x.ndim)
+        output_shape = list(x.shape)
+        output_shape[axis] //= 2
+        return silu_cmd(
+            "SwiGlu",
+            inputs=[x],
+            output_dtypes=[x.dtype],
+            output_shapes=[output_shape],
+            attr_code=f'''
+op.jt_name = "swiglu";
+op.dim = {axis};
+''',
+        )[0]
