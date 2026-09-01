@@ -208,6 +208,50 @@ class TestShapeOps(Base):
 
 
 class TestComparisonWhere(Base):
+    def test_clamp_boundary_gradient_matches_torch(self):
+        values = np.array(
+            [-1.10, -1.00, -0.50, 0.50, 1.00, 1.10], dtype="float32"
+        )
+        expected = np.array([0, 1, 1, 1, 1, 0], dtype="float32")
+
+        def body(dev):
+            x = torch.tensor(values, requires_grad=True)
+            (gradient,) = torch.autograd.grad(
+                torch.clamp(x, min=-1.0, max=1.0).sum(), x
+            )
+            self.ae(gradient.numpy(), expected, msg=f"clamp boundary grad {dev}")
+
+        both_devices(body)
+
+    def test_clamp_tensor_bound_gradients_match_torch(self):
+        values = np.array([-1.0, -0.5, 0.0, 0.5, 1.0], dtype="float32")
+        lower = np.array([-1.0, -0.4, -0.2, 0.5, 1.1], dtype="float32")
+        upper = np.array([-0.9, -0.3, 0.2, 0.5, 1.0], dtype="float32")
+        expected = (
+            np.array([1, 0, 1, 1, 0], dtype="float32"),
+            np.array([0, 1, 0, 0, 0], dtype="float32"),
+            np.array([0, 0, 0, 0, 1], dtype="float32"),
+        )
+
+        def body(dev):
+            x = torch.tensor(values, requires_grad=True)
+            min_value = torch.tensor(lower, requires_grad=True)
+            max_value = torch.tensor(upper, requires_grad=True)
+            gradients = torch.autograd.grad(
+                torch.clamp(x, min=min_value, max=max_value).sum(),
+                (x, min_value, max_value),
+            )
+            for name, gradient, reference in zip(
+                ("input", "min", "max"), gradients, expected
+            ):
+                self.ae(
+                    gradient.numpy(),
+                    reference,
+                    msg=f"clamp tensor {name} grad {dev}",
+                )
+
+        both_devices(body)
+
     def test_where(self):
         a = np.random.RandomState(6).randn(4, 5).astype("float32")
         b = np.random.RandomState(7).randn(4, 5).astype("float32")

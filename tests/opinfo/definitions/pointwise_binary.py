@@ -203,8 +203,8 @@ def sample_clamp(op_info, device, dtype, requires_grad):
     # min_v / max_v are python scalars passed as kwargs -> NOT differentiated; only
     # the input Var is. Keep every element strictly inside (min_v, max_v) so the
     # clamp is the identity on this sample and its gradient is a clean all-ones
-    # (the boundary kinks -- where torch's subgradient is 0 -- are tested by the
-    # forward ref against np.clip, not by gradcheck which would straddle the kink).
+    # Boundary points are covered by an analytic PyTorch-compatible regression;
+    # finite-difference gradcheck stays in the smooth interior.
     out = []
     for i, s in enumerate([(5,), (3, 4), (2, 3, 4)]):
         x = make_tensor(*s, dtype=dtype, low=-0.5, high=0.5,

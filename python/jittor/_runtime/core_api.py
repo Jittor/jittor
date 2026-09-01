@@ -7,6 +7,7 @@ from jittor import _core_profiler
 from typing import List, Tuple
 import contextlib
 import numpy as np
+import numbers
 from collections import OrderedDict
 from collections.abc import Sequence, Mapping
 import types
@@ -814,16 +815,38 @@ Var.squeeze = squeeze
 def clamp(x, min_v=None, max_v=None):
     if x.shape[0]==0:
         return x
-    # torch allows tensor min/max bounds (and doesn't assert ordering); only do the
-    # scalar ordering sanity-check when both bounds are plain scalars -- a Var bound
-    # can't be reduced to a single bool. maximum/minimum already broadcast tensors.
-    if min_v is not None and max_v is not None \
-            and not isinstance(min_v, Var) and not isinstance(max_v, Var):
-        assert min_v <= max_v
+    # Torch allows tensor bounds and reversed scalar bounds. Applying the lower
+    # then upper bound also gives Torch's all-max result when min_v > max_v.
+
+    def prepare_bound(value, bound):
+        if isinstance(bound, jt.Var):
+            dtype = jt.binary_dtype_infer("add", value.dtype, bound.dtype)
+            if value.dtype != dtype:
+                value = value.cast(dtype)
+            if bound.dtype != dtype:
+                bound = bound.cast(dtype)
+        elif "float" in str(value.dtype):
+            bound = jt.unary(bound, value.dtype)
+        elif isinstance(bound, numbers.Real) \
+                and not isinstance(bound, numbers.Integral):
+            value = value.cast("float32")
+            bound = jt.unary(bound, "float32")
+        else:
+            bound = jt.unary(bound, value.dtype)
+        return value, bound
+
     if min_v is not None:
-        x = x.maximum(min_v)
+        x, min_v = prepare_bound(x, min_v)
+        keep = x >= min_v
+        if "float" in str(x.dtype):
+            keep = keep | (x != x)
+        x = jt.ternary(keep, x, min_v)
     if max_v is not None:
-        x = x.minimum(max_v)
+        x, max_v = prepare_bound(x, max_v)
+        keep = x <= max_v
+        if "float" in str(x.dtype):
+            keep = keep | (x != x)
+        x = jt.ternary(keep, x, max_v)
     return x
 
 Var.clamp = clamp

@@ -297,7 +297,7 @@ class TestExtremeValues(_EdgeBase):
 
     def test_clamp_bounds_extremes(self):
         # clamp must pull +-inf and huge magnitudes into [lo, hi] exactly like numpy.clip.
-        x_np = np.array([np.inf, -np.inf, 1e30, -1e30, 0.5], dtype="float32")
+        x_np = np.array([np.inf, -np.inf, 1e30, -1e30, 0.5, np.nan], dtype="float32")
 
         def body(dev):
             got = jt.clamp(jt.array(x_np), -1.0, 1.0)
@@ -318,18 +318,76 @@ class TestExtremeValues(_EdgeBase):
         self._for_devices(body)
 
     def test_clamp_backward_passes_gradient_in_range(self):
-        # clamp's backward: gradient flows where lo < x < hi, and is cut where the
-        # value is clamped. Reference is the analytic mask, taken at points strictly
-        # inside / outside the band (boundary points are subgradient-ambiguous and
-        # deliberately avoided).
-        x_np = np.array([-2.0, -0.5, 0.0, 0.5, 2.0], dtype="float32")  # -2,2 clamped
+        # PyTorch routes the input gradient through both exact clamp boundaries.
+        x_np = np.array(
+            [-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0], dtype="float32"
+        )
 
         def body(dev):
             x = jt.array(x_np)
             loss = jt.clamp(x, -1.0, 1.0).sum()
             g = self._grad(loss, [x])[0]
-            ref = ((x_np > -1.0) & (x_np < 1.0)).astype("float32")  # 1 inside, 0 outside
+            ref = ((x_np >= -1.0) & (x_np <= 1.0)).astype("float32")
             self.assertEqual(g, ref, msg=f"clamp backward mask [{dev}]")
+        self._for_devices(body)
+
+    def test_clamp_reversed_bounds_use_upper_bound(self):
+        x_np = np.array([-2.0, 0.0, 2.0], dtype="float32")
+
+        def body(dev):
+            x = jt.array(x_np)
+            output = jt.clamp(x, 1.0, -1.0)
+            gradient = self._grad(output.sum(), [x])[0]
+            self.assertEqual(
+                output,
+                np.full_like(x_np, -1.0),
+                msg=f"clamp reversed forward [{dev}]",
+            )
+            self.assertEqual(
+                gradient,
+                np.zeros_like(x_np),
+                msg=f"clamp reversed backward [{dev}]",
+            )
+
+        self._for_devices(body)
+
+    def test_clamp_low_precision_scalar_bounds(self):
+        x_np = np.array([-2.0, -0.5, 0.0, 1.0, 2.0], dtype="float32")
+
+        def body(dev):
+            for dtype in ("float16", "bfloat16"):
+                x = jt.array(x_np).cast(dtype)
+                for lower, upper in ((-1, 1), (-0.5, 1.5)):
+                    output = jt.clamp(x, lower, upper)
+                    self.assertEqual(
+                        str(output.dtype),
+                        dtype,
+                        msg=f"clamp {dtype} dtype [{dev}]",
+                    )
+                    self.assertEqual(
+                        output.float32(),
+                        np.clip(x_np, lower, upper),
+                        msg=f"clamp {dtype} values [{dev}]",
+                    )
+
+        self._for_devices(body)
+
+    def test_clamp_integer_float_bounds_promote_float32(self):
+        x_np = np.array([-2, -1, 0, 1, 2], dtype="int64")
+
+        def body(dev):
+            output = jt.clamp(jt.array(x_np), -0.5, 1.5)
+            self.assertEqual(
+                str(output.dtype),
+                "float32",
+                msg=f"clamp integer promotion [{dev}]",
+            )
+            self.assertEqual(
+                output,
+                np.clip(x_np, -0.5, 1.5).astype("float32"),
+                msg=f"clamp integer values [{dev}]",
+            )
+
         self._for_devices(body)
 
 
