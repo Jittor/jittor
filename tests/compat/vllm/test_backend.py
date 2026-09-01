@@ -6,13 +6,23 @@ import unittest
 from jittor.compat.vllm import backend
 
 
-def _module(shape_fn, stride_fn=None):
+def _module(shape_fn, stride_fn=None, head_sizes=None):
     module = types.ModuleType("vllm.v1.attention.backends.flash_attn")
 
     class FlashAttentionBackend:
         get_kv_cache_shape = staticmethod(shape_fn)
         if stride_fn is not None:
             get_kv_cache_stride_order = staticmethod(stride_fn)
+        if head_sizes is not None:
+            @classmethod
+            def get_supported_head_sizes(cls):
+                return list(head_sizes)
+
+            @classmethod
+            def validate_head_size(cls, head_size):
+                if head_size not in cls.get_supported_head_sizes():
+                    raise ValueError("Head size %s is not supported by "
+                                     "FlashAttention." % head_size)
 
     module.FlashAttentionBackend = FlashAttentionBackend
     return module
@@ -74,6 +84,38 @@ class TestCacheLayoutDeclaration(unittest.TestCase):
             raise ValueError("Block size must be a multiple of 16.")
 
         self.assertFalse(backend.declare_cache_layout(_module(refuses)))
+
+
+class TestHeadSizeDeclaration(unittest.TestCase):
+    def test_a_head_size_the_kernel_refuses_is_accepted(self):
+        module = _module(_block_major, head_sizes=[32, 64, 128])
+        backend_class = module.FlashAttentionBackend
+        with self.assertRaises(ValueError):
+            backend_class.validate_head_size(16)
+        self.assertTrue(backend.declare_head_sizes(module))
+        backend_class.validate_head_size(16)   # no longer refused
+        self.assertIn(16, backend_class.get_supported_head_sizes())
+
+    def test_the_ceiling_is_still_enforced(self):
+        module = _module(_block_major, head_sizes=[32, 64, 128])
+        backend.declare_head_sizes(module)
+        module.FlashAttentionBackend.validate_head_size(256)
+        with self.assertRaises(ValueError):
+            module.FlashAttentionBackend.validate_head_size(257)
+        with self.assertRaises(ValueError):
+            module.FlashAttentionBackend.validate_head_size(0)
+
+    def test_a_backend_that_validates_elsewhere_is_left_alone(self):
+        module = _module(_block_major)
+        self.assertFalse(backend.declare_head_sizes(module))
+
+    def test_declare_backend_covers_both(self):
+        module = _module(_kv_first, head_sizes=[32])
+        self.assertTrue(backend.declare_backend(module))
+        self.assertEqual(
+            module.FlashAttentionBackend.get_kv_cache_shape(3, 16, 5, 7),
+            (3, 2, 16, 5, 7))
+        module.FlashAttentionBackend.validate_head_size(16)
 
 
 if __name__ == "__main__":

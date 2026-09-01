@@ -98,9 +98,12 @@ def install(ctx):
     # torch.fx joins them for its submodules only: the names above stay real,
     # and it is the graph-pickling and pass machinery underneath -- reached
     # only from the compiled path -- that gets answered blind.
+    # torch._dispatch carries the python dispatcher the compiled path enters
+    # around a trace. vLLM's compilation backend imports it at module scope
+    # while the tracing it belongs to never runs here.
     for _internal in ("torch._library", "torch._higher_order_ops",
                       "torch._guards", "torch._logging", "torch._dynamo",
-                      "torch.fx"):
+                      "torch._dispatch", "torch.fx"):
         install_permissive_package(_internal, _sys.meta_path)
     # torch 2.11 introduced opaque value types: an object an operator takes as
     # an argument and the graph carries along without inspecting it. Declaring

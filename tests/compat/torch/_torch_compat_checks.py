@@ -781,6 +781,11 @@ torch.index_select(torch.arange(12).float(), 0, torch.tensor([3, 1, 2, 0]),
 ok(_sel_out.numpy()[0].tolist() == [3, 1, 2, 0],
    "index_select(out=slice) writes through to the parent")
 
+# vLLM's compilation backend imports the python dispatcher at module scope; the
+# tracing it belongs to never runs here, so the import must not be what fails.
+from torch._dispatch.python import enable_python_dispatcher as _epd
+ok(_epd is not None, "torch._dispatch.python imports")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 
 

@@ -1,4 +1,4 @@
-"""The paged KV cache layout this backend reads.
+"""What this backend's substituted attention implementation actually does.
 
 vLLM's FlashAttention backend declares the shape of the cache vLLM then
 allocates for it, and it has spelled that shape both ways across versions:
@@ -8,8 +8,14 @@ go to :func:`jittor.nn.paged_attention` and :func:`jittor.nn.reshape_and_cache`,
 which take the block-major spelling -- so the answer is to declare that
 spelling, not to teach two kernels to index a cache two ways.
 
-Overriding a backend's own declaration is what substituting its implementation
-entitles us to do: the layout belongs to whoever reads the cache.
+The same reasoning covers the head sizes it accepts. vLLM's list is its
+compiled kernel's; that kernel is not what runs here, and jittor's paged
+attention takes any head size the fused decode path handles -- or falls back to
+a portable one that has no limit at all. A model outside vLLM's list would
+otherwise be refused by a check that no longer describes anything.
+
+Overriding a backend's own declarations is what substituting its implementation
+entitles us to do: they belong to whoever does the work.
 """
 
 _DECLARED = "_jittor_cache_layout"
@@ -47,7 +53,48 @@ def declare_cache_layout(module):
     return True
 
 
+_HEAD_SIZES = "_jittor_head_sizes"
+
+#: The fused decode kernel's ceiling. Above it the portable path still runs, but
+#: declaring more than the fast path covers would be promising the wrong thing.
+_MAX_HEAD_SIZE = 256
+
+
+def _supported_head_sizes():
+    return list(range(1, _MAX_HEAD_SIZE + 1))
+
+
+def _validate_head_size(head_size):
+    if not 1 <= int(head_size) <= _MAX_HEAD_SIZE:
+        raise ValueError(
+            "Head size %s is not supported by this backend. Supported head "
+            "sizes are 1 to %s." % (head_size, _MAX_HEAD_SIZE))
+
+
+def declare_head_sizes(module):
+    """Widen the head sizes the backend accepts to the ones we implement."""
+
+    backend = getattr(module, "FlashAttentionBackend", None)
+    if backend is None or getattr(backend, _HEAD_SIZES, False):
+        return False
+    if not hasattr(backend, "validate_head_size"):
+        # Newer vLLM validates elsewhere; nothing here to widen.
+        return False
+    setattr(backend, _HEAD_SIZES, True)
+    backend.validate_head_size = staticmethod(_validate_head_size)
+    if hasattr(backend, "get_supported_head_sizes"):
+        backend.get_supported_head_sizes = staticmethod(_supported_head_sizes)
+    return True
+
+
+def declare_backend(module):
+    """Declare both, so a caller reading either gets this implementation's."""
+
+    layout = declare_cache_layout(module)
+    return declare_head_sizes(module) or layout
+
+
 #: Module path -> the patch that runs once that module has defined its classes.
 PATCHES = {
-    "vllm.v1.attention.backends.flash_attn": declare_cache_layout,
+    "vllm.v1.attention.backends.flash_attn": declare_backend,
 }
