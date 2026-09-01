@@ -2,7 +2,7 @@
 
 - Status: FP32 forward/backward accepted; BF16 one-step functional, parity and performance open
 - Last reviewed: 2026-09-01
-- Source baseline: `d3c58fc0`
+- Source baseline: `532c250b`
 - Owner: Torch compatibility and ACL backend maintainers
 - Review when: CANN, Transformers Qwen3 modules, embedding/RMSNorm/RoPE lowering,
   dtype, checkpoint, sequence shape, optimizer, or timing protocol changes
@@ -49,9 +49,27 @@ Transformers 5.5.3 的异步权重线程没有 ACL thread context，因此复现
 | Native `torch_npu` | 84.93 ms | 109.48 ms | 30.23 ms | 224.64 ms |
 | Jittor | 130.58 ms | 179.36 ms | 285.61 ms | 595.55 ms |
 
-Jittor full step 为 native 的 `2.65x`，其中 AdamW 为 `9.45x`，是当前最明确的性能
-瓶颈。参数和一、二阶 moment 在更新后保持 BF16，避免了早先 state scalar 将更新图
-提升为 FP32 的错误，但尚未接入 CANN fused AdamW。
+默认 `fused=None` 下，Jittor full step 为 native 的 `2.65x`，其中 AdamW 为
+`9.45x`。参数和一、二阶 moment 在更新后保持 BF16，避免了早先 state scalar 将
+更新图提升为 FP32；默认路径的舍入语义保持不变。
+
+`532c250b` 进一步接入 CANN 9 `aclnnApplyAdamWV2`。独立 raw ACL 两步探针与
+`torch.optim.AdamW(fused=True)` 的 BF16 参数、moment 和 variance 逐元素一致；原生
+Jittor 与 Torch-compatible 两步回归同样通过且零 CPU compile/fallback。该能力只在
+显式 `fused=True` 时启用，不把 CANN 一次舍入的结果冒充默认 foreach-like 语义。
+
+相同模型、输入和同步计时的显式 fused 结果为：
+
+| 实现 | Forward | Backward | AdamW | Full step |
+| --- | ---: | ---: | ---: | ---: |
+| Native `torch_npu`, fused | 86.83 ms | 114.64 ms | 20.22 ms | 221.69 ms |
+| Jittor, fused TensorList | 134.03 ms | 185.93 ms | 27.33 ms | 347.29 ms |
+
+新的 TensorList mapped op 将 Jittor AdamW 从 `285.61ms` 降到 `27.33ms`，提升
+`10.45x`；full step 降低 `41.7%`。但 AdamW 仍为 native 的 `1.35x`，full step
+仍为 `1.57x`，因此性能门禁继续开放。七次更新后的 Jittor/native loss 分别为
+`3.8173/26.8827`；两侧模型 BF16 梯度本就不同，该数据不能替代固定梯度的 optimizer
+逐元素对拍，也不能证明长期训练轨迹一致。
 
 ## 验证口径
 
@@ -108,6 +126,8 @@ Transformers 4.56.2 的 Qwen3 模块默认内联组合 RoPE，不会调用
 - real-NPU 新增算子定向集合：`7 passed, 29 deselected`；
 - real-NPU native ACL 文件：`32 passed`；
 - real-NPU Torch-compat ACL 文件：`4 passed`。
+- BF16 follow-up CPU optimizer：`39 passed, 1 skipped`；real-NPU native fused
+  AdamW 定向 `1 passed`，完整 Torch-compat ACL 文件 `16 passed`。
 
 native 与 Torch-compat 文件必须按仓库规则放在不同进程运行；同进程导入兼容层会
 改变 native 返回类型，不能作为有效门禁方式。
@@ -142,6 +162,8 @@ HF_DEACTIVATE_ASYNC_LOAD=1 python probe_qwen3_training.py \
   --backend torch --model "$QWEN3_MODEL" \
   --sequence-length 8 --dtype bfloat16 --optimizer adamw \
   --warmups 2 --repeats 5
+
+# 对两侧同时追加 --fused，复现显式 CANN fused 协议。
 ```
 
 关键未版本化产物的 SHA-256：
@@ -155,15 +177,17 @@ b5c4146ec7908efb8307bf15c68420e2c663479a68ec22956d4ad70dbdfad4fb  jittor-fp32-tr
 93334fdd9d49bf822f2bd076b96a09a00b55341eec34c7e8ea441802b4d651c9  jittor-fp32-train-rmsnorm-rope-patched-steady-repeat.log
 bc8d79594b1be3892259b0f965d22ddcf594dd6f93070fa6fd14a1d74f1a6c0c  jittor-fp32-train-rmsnorm-rope-embedding-steady.log
 cc5e82527e7dc00cbc3b8b83d7e10d1402b1f6b8712639995974d81ac9afa9a3  jittor-fp32-train-rmsnorm-rope-embedding-steady-repeat.log
-bd71fb9aaf123066a67313a58a4057432af2de89785fa7098fe681dcaa9c9d1a  probe_qwen3_training.py (BF16 follow-up)
+052eb594c9ecca1027054921b9cfd05d1361ac9a556e16745c59f2483fae907c  probe_qwen3_training.py (current BF16/fused follow-up)
 ba5c4ba854a18a8111a72f9fbd1ec32407bcb1396eeae6eeb07110daf91ee3c0  jittor-bf16-snapshot.npz
 b5374886777d14d1115d3f9d28bcebf8e082320478663752448f73d8371bc9aa  torch-bf16-snapshot.npz
+4afc795a30a0de985a8ee81c73e724a4f5fac069b2ee5f3427192830838672ee  probe_apply_adamw_v2.cc
+f5d7717a60d29631c7c749c9e3bc3fd11e2a80cecf4c96c361d56ae287768a51  probe_torch_adamw.py
 ```
 
 ## 未覆盖边界
 
-- FP32 optimizer、完整 checkpoint restore 和长期参数轨迹仍未验证；BF16 只接受单步
-  可执行，精确数值轨迹与性能仍未验收；
+- FP32 optimizer、完整 checkpoint restore 和长期参数轨迹仍未验证；BF16 默认路径
+  只接受单步可执行，显式 fused 接受固定梯度两步精确对拍，整模轨迹与性能仍未验收；
 - 没有验证 FP16、Qwen3-8B 训练、多卡训练、采样或量化；
 - Transformers 默认 Qwen3 RoPE 尚未自动路由到融合入口；
 - embedding 快路径未声明 `scale_grad_by_freq=True`、`max_norm` 或 sparse 支持；

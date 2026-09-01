@@ -2,7 +2,7 @@
 
 - Status: Current index, not a history log
 - Last reviewed: 2026-09-01
-- Baseline reviewed: `d3c58fc0`
+- Baseline reviewed: `eb7601ac`
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -79,12 +79,12 @@ OpInfo CUDA references. The maintained CPU gate also passes with a fail-closed
 independent binary PyTorch oracle, and compact ResNet18, ViT, GPT-2, and
 diffusion UNet forward/backward parity passes on CPU and CUDA. ROCm, most
 optional downstream dependencies, full training, and performance remain
-separate gates. On a real 910B3, the maintained Ascend gate passes `395 passed, 9 skipped`; float16/float32 `arg_reduce` backward and float32/integer `prod` execute without CPU fallback.
+separate gates. On a real 910B3, the maintained Ascend gate passes `397 passed, 9 skipped`; float16/float32 `arg_reduce` backward and float32/integer `prod` execute without CPU fallback.
 Transformers 4.56.2 Qwen3-8B float32 loads all 8,190,735,360 parameters; SDPA,
 greedy `arg_reduce`, and mask `all` run on ACL without CPU fallback. A native-shape `empty`
 fast path brings 0.6B decode to 15.90 token/s versus native `torch_npu` 16.19 token/s.
 Qwen3-0.6B BF16 SDPA passes zero-fallback generation at 14.92 token/s versus native 15.31 token/s.
-Qwen3-0.6B FP32 eager forward/loss/backward also passes zero-fallback at `1.07x-1.12x` native `torch_npu`. Transformers 5.5.3 BF16 now completes forward, backward, and one AdamW update without CPU fallback; exact BF16 trajectory parity remains open, and the full step is `2.65x` native because AdamW is `9.45x` slower. See the [training report](../results/transformers/2026-08-30-qwen3-ascend-training.md).
+Qwen3-0.6B FP32 eager forward/loss/backward also passes zero-fallback at `1.07x-1.12x` native `torch_npu`. Transformers 5.5.3 BF16 completes forward, backward, and AdamW without CPU fallback; explicit fused AdamW matches CANN/PyTorch for two fixed-gradient steps and improves from `9.45x` to `1.35x` native, while the full step remains open at `1.57x`. See the [training report](../results/transformers/2026-08-30-qwen3-ascend-training.md).
 See the [Ascend guide](../../docs/guides/ascend-910b.md), [validation report](../results/2026-08-28-ascend-910b-validation.md), [arg-reduce](../results/2026-08-30-npu-arg-reduce-backward.md)/[product](../results/2026-08-30-npu-product-reduction.md) follow-ups, [Qwen3 inference report](../results/transformers/2026-08-28-qwen3-ascend-performance.md), complete [CPU](../results/2026-08-22-complete-cpu-test-suite.md)/[CUDA](../results/2026-08-22-cuda-test-suite.md) reports, and the [parallel follow-up](../results/2026-08-22-cuda-parallel-range-network-oracle.md).
 The current fail-closed optional CUDA base gate passes 16 TorchMetrics,
 MMCV/MMEngine, PEFT, TensorDict, and FlashAttention-adapter tests from one
