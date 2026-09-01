@@ -2,12 +2,11 @@
 
 - Status: Current index, not a history log
 - Last reviewed: 2026-09-01
-- Baseline reviewed: `77d1ee3e`
+- Baseline reviewed: `d3c58fc0`
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
   indexed contract becomes stale
-
 This file is the short handoff entry for repository work. Read only the linked
 document relevant to the task; do not append experiment transcripts or completed
 history here.
@@ -80,12 +79,12 @@ OpInfo CUDA references. The maintained CPU gate also passes with a fail-closed
 independent binary PyTorch oracle, and compact ResNet18, ViT, GPT-2, and
 diffusion UNet forward/backward parity passes on CPU and CUDA. ROCm, most
 optional downstream dependencies, full training, and performance remain
-separate gates. On a real 910B3, the maintained Ascend gate passes `394 passed, 9 skipped`; float16/float32 `arg_reduce` backward and float32/integer `prod` execute without CPU fallback.
+separate gates. On a real 910B3, the maintained Ascend gate passes `395 passed, 9 skipped`; float16/float32 `arg_reduce` backward and float32/integer `prod` execute without CPU fallback.
 Transformers 4.56.2 Qwen3-8B float32 loads all 8,190,735,360 parameters; SDPA,
 greedy `arg_reduce`, and mask `all` run on ACL without CPU fallback. A native-shape `empty`
 fast path brings 0.6B decode to 15.90 token/s versus native `torch_npu` 16.19 token/s.
 Qwen3-0.6B BF16 SDPA passes zero-fallback generation at 14.92 token/s versus native 15.31 token/s.
-Qwen3-0.6B FP32 eager forward/loss/backward also passes zero-fallback at `1.07x-1.12x` native `torch_npu`; optimizer update and BF16 training remain open. See the [forward/backward report](../results/transformers/2026-08-30-qwen3-ascend-training.md).
+Qwen3-0.6B FP32 eager forward/loss/backward also passes zero-fallback at `1.07x-1.12x` native `torch_npu`. Transformers 5.5.3 BF16 now completes forward, backward, and one AdamW update without CPU fallback; exact BF16 trajectory parity remains open, and the full step is `2.65x` native because AdamW is `9.45x` slower. See the [training report](../results/transformers/2026-08-30-qwen3-ascend-training.md).
 See the [Ascend guide](../../docs/guides/ascend-910b.md), [validation report](../results/2026-08-28-ascend-910b-validation.md), [arg-reduce](../results/2026-08-30-npu-arg-reduce-backward.md)/[product](../results/2026-08-30-npu-product-reduction.md) follow-ups, [Qwen3 inference report](../results/transformers/2026-08-28-qwen3-ascend-performance.md), complete [CPU](../results/2026-08-22-complete-cpu-test-suite.md)/[CUDA](../results/2026-08-22-cuda-test-suite.md) reports, and the [parallel follow-up](../results/2026-08-22-cuda-parallel-range-network-oracle.md).
 The current fail-closed optional CUDA base gate passes 16 TorchMetrics,
 MMCV/MMEngine, PEFT, TensorDict, and FlashAttention-adapter tests from one
@@ -103,12 +102,13 @@ dominant CUDA GEMMs lag the PyTorch reference.
 Performance work uses isolated caches, synchronization, and exact commit labels.
 The ecosystem harness verifies twelve Transformers/Diffusers/PEFT/ms-swift/MMCV/MMEngine CPU/CUDA cases; its NPU scope verifies Diffusers UNet2D, MMCV/MMEngine, and ms-swift LoRA Llama forward and every gradient against `torch_npu` with zero CPU paths.
 Diffusers correctness and maintained float32 performance are accepted at `0.964x` native `torch_npu`; the tiny OpenMMLab NPU cases now pass at `0.927x/0.796x`. See the [Diffusers](../results/2026-08-30-diffusers-ascend-parity-performance.md) and [OpenMMLab](../results/2026-08-30-mmcv-mmengine-ascend-parity.md) reports. The tiny ms-swift LoRA case uses fused float32 causal SDPA training and passes at `0.969x`; see the [ms-swift Ascend report](../results/2026-08-31-ms-swift-ascend-parity-performance.md).
-Other ecosystem cases and the following verl/vLLM results remain CPU/CUDA evidence, not NPU claims. Current verl core
+Other ecosystem cases and the following verl results remain CPU/CUDA evidence, not NPU claims. Current verl core
 algorithm/FSDP2 gates also pass on CPU/CUDA. The maintained framework FSDP2
 gate additionally passes single-node four-rank NCCL sharding, collectives, and
 sharded SGD on real CUDA; tiny Qwen3 end-to-end verl PPO also passes native
 single-node four-rank FSDP2, while multi-node and native 0.6B remain open.
 See the [verl weight-transfer and PPO report](../results/2026-08-24-verl-weight-transfer.md).
+The external NPU vLLM adapter on current HEAD passes public `vllm.LLM.generate` for Qwen3-0.6B with exact four-token parity, zero CPU fallback, and no loaded `torch_npu`/`vllm_ascend`; only single-request, short-context, unquantized TP=1 correctness is accepted, while its `0.615s` warm request remains slower than the `0.365s` native baseline. See the [vLLM Ascend report](../results/2026-08-31-vllm-ascend-jittor-bootstrap.md).
 Qwen3-0.6B vLLM real-CUDA inference
 now runs about 20.5% faster than its real-PyTorch reference on the maintained
 4-token protocol; TRELLIS.2 improved from about 1.20x to 1.093x slower, so its

@@ -2,7 +2,7 @@
 
 - Status: Accepted within the maintained NPU gate; explicit skips remain
 - Last reviewed: 2026-09-01
-- Source baseline: `77d1ee3e`
+- Source baseline: `d3c58fc0`
 - Owner: Jittor core and ACL backend maintainers
 - Review when: CANN/driver versions, ACL source transformation, NPU gate scope,
   or any listed skip changes
@@ -15,7 +15,7 @@ ACL 后端、扩展算子、索引、227 项 OpInfo、负整数 floor-divide 及
 
 设备证据不依赖导入成功或 CPU fallback：ACL matmul 回归捕获到
 `compile acl op`，同时断言日志中没有 `fallback cpu`。维护范围内最终共
-`394 passed, 9 skipped`；skip 均对应本报告和 known-issues ledger 中的明确能力边界。
+`395 passed, 9 skipped`；skip 均对应本报告和 known-issues ledger 中的明确能力边界。
 
 ## 环境与隔离
 
@@ -163,14 +163,14 @@ Current results after the serial prewarm and the exact Nox invocation set:
 | --- | ---: |
 | ACL device and float32 matmul probe | passed |
 | `tests/backends/npu/test_acl.py` | 40 passed |
-| `tests/backends/npu/test_acl_torch_compat.py` | 14 passed |
+| `tests/backends/npu/test_acl_torch_compat.py` | 15 passed |
 | `tests/backends/npu/test_aclop.py` | 112 passed, 2 skipped |
 | `tests/backends/npu/test_acl_indexing.py` | 4 passed |
 | `tests/ops/test_ops.py` | 220 passed, 7 skipped |
 | NPU floor-divide fixed vectors and broadcast | 2 passed |
 | NPU float32 NaN/Inf predicates | 1 passed |
 | NPU float32 fused/unfused NaN comparisons | 1 passed |
-| Total | 394 passed, 9 skipped |
+| Total | 395 passed, 9 skipped |
 
 The first current-source Nox run performed the device probe and cold ACL rebuild,
 then stopped at the stale convolution oracle. After the focused fix, every target
@@ -190,6 +190,8 @@ execution.
 - Torch preflight and bootstrap regressions: `8 passed, 16 deselected`.
 - Repository structure suite: `232 passed, 2 skipped`.
 - Repository layout and documentation-governance gate: passed.
+- BF16 AdamW state-scalar regression executes on ACL without CPU compilation or
+  fallback and preserves BF16 parameter and moment dtypes.
 - Documentation link audit and built-API audit: passed; the fresh Ascend catalog
   contains 56 translated messages with no fuzzy or untranslated entries.
 - Fresh English and Simplified Chinese HTML builds: passed. The exact strict

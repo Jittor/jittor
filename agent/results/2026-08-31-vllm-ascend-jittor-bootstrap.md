@@ -1,8 +1,8 @@
 # vLLM Ascend 与 Jittor-NPU bootstrap 验证
 
 - Status: native vLLM-Ascend inference accepted; Jittor Qwen3 manual and public engine token parity accepted; performance open
-- Date: 2026-08-31
-- Baseline: `19919ec3` plus the paged FIA changes in this report's commit
+- Date: 2026-09-01
+- Baseline: `d3c58fc0`
 - Owner: Jittor compatibility and external vLLM adapter maintainers
 - Review when: vLLM, Transformers, CANN, ATB, or the external adapter version changes
 
@@ -87,7 +87,7 @@ Jittor 主仓库。当前文件 SHA-256：
 | `vllm_jittor_npu/attention.py` | `41fc53d2b5245c5bac9bb7bc6c6d84aa610ea79952910e2efdf9ad609c76e8de` |
 | `vllm_jittor_npu/worker.py` | `b383042d63711f538ed14ae748e2d589c28d9b0c37e2278409840b7b34d46239` |
 | `probes/qwen3_forward.py` | `70b0964dd9ea8ba1552b76cfaf1b70af851f2d5b5f9d5e20f5957bcbf8e69708` |
-| `probes/qwen3_engine.py` | `84da6c46620112525cc5c7c14d936d94d56c7ae1fcca6f07b457f71c4969dd06` |
+| `probes/qwen3_engine.py` | `8edec2385347bcfdf5a6ad6dc89491bbe482f4d8370b47b9ee26af322504c566` |
 | `_state/npu-vllm/profiles/qwen3_decode_fused.json` | `44a44104122c4956d98b946910403a3792e414f49a89ed10bd1b1c3a01e3b343` |
 | `_state/npu-vllm/profiles/qwen3_decode_paged128.json` | `c163d5669e718cfc3c4872900e0f4385d627d6b29f5dd81412eebf3c4604e745` |
 
@@ -188,6 +188,12 @@ adapter 通过 vLLM OOT CustomOp registry 将标准 `RMSNorm` 和 `RotaryEmbeddi
   重复完整请求的稳态时延从 block16 通用路径的 `0.926s`，降到 block128 paged FIA
   和 direct prefill 的 `0.687s`，再降到 D2D cache update 后的 `0.610s/0.633s`，
   累计改善约 `33%`。原生同类复用 engine 结果为 `0.365s`，性能仍未验收。
+- 当前 `2.0@d3c58fc0` 从新的隔离 Jittor/ACL 缓存重新启动公开 engine。冷缓存
+  首请求因串行生成 ACL JIT 图耗时 `332.235s`；复用同一缓存再次启动后，三个请求
+  分别为 `3.035s/0.61484s/0.61563s`，后两个稳态样本中心约 `0.615s`。所有请求和
+  额外日志审计请求均输出 `[12095, 13, 576, 6722]`；审计得到
+  `fallback_count=0`、`cpu_compile_count=0`，且 `torch_npu`、`vllm_ascend` 均未加载。
+  这次复验确认当前 HEAD 的受限 engine correctness，未改变性能未验收结论。
 
 ## Open work
 

@@ -1,8 +1,8 @@
-# Qwen3-0.6B Ascend FP32 前向与反向优化
+# Qwen3-0.6B Ascend 训练验证与优化
 
-- Status: Accepted for FP32 eager forward, causal-LM loss, and backward on one Ascend 910B3
-- Last reviewed: 2026-08-30
-- Source baseline: `b6ce20cdf` plus the changes in this report's commit
+- Status: FP32 forward/backward accepted; BF16 one-step functional, parity and performance open
+- Last reviewed: 2026-09-01
+- Source baseline: `d3c58fc0`
 - Owner: Torch compatibility and ACL backend maintainers
 - Review when: CANN, Transformers Qwen3 modules, embedding/RMSNorm/RoPE lowering,
   dtype, checkpoint, sequence shape, optimizer, or timing protocol changes
@@ -25,6 +25,33 @@ Qwen3-0.6B 在一张 910B3 上完成 FP32 eager 前向、causal-LM loss 和反�
 接入 CANN 前向/反向，并用独立 NumPy 参考验证输出和梯度。最终 Jittor 的
 前向+反向中位数为 `204.44-214.08 ms`，同协议 `torch_npu` 为 `190.58 ms`，
 即约 `1.07x-1.12x`；最初跑通时为 `356.84 ms`、约 `1.87x`。
+
+## BF16 optimizer follow-up
+
+Transformers 5.5.3 的同一 Qwen3-0.6B checkpoint 随后在 BF16 下完成完整
+forward、causal-LM loss、backward 和一次 AdamW update。596,049,920 个参数、梯度和
+optimizer state 均在真实 910B3 上执行，日志为 `fallback_count=0`、
+`cpu_compile_count=0`。Jittor Torch shim 还显式让 Transformers 的
+`is_torch_npu_available()` 返回 false，进程没有导入真实 `torch_npu` 二进制扩展。
+Transformers 5.5.3 的异步权重线程没有 ACL thread context，因此复现命令使用其公开
+`HF_DEACTIVATE_ASYNC_LOAD=1` 开关关闭异步加载。
+
+该结果只接受“单步可执行”，不接受 BF16 数值轨迹或性能。固定输入下，Jittor/native
+初始 hidden state 完全一致，但差异逐层累积：最终 hidden/logits 的相对 L2 分别为
+`0.03573/0.03491`，cosine 为 `0.999362/0.999401`；初始 loss 分别为
+`3.313017/3.377089`。七次更新后的 loss 轨迹也不同，因此不能把 BF16 结果表述成
+与 `torch_npu` 精确对齐。
+
+同一短序列、2 次 warmup、5 次同步计时的中位数如下：
+
+| 实现 | Forward | Backward | AdamW | Full step |
+| --- | ---: | ---: | ---: | ---: |
+| Native `torch_npu` | 84.93 ms | 109.48 ms | 30.23 ms | 224.64 ms |
+| Jittor | 130.58 ms | 179.36 ms | 285.61 ms | 595.55 ms |
+
+Jittor full step 为 native 的 `2.65x`，其中 AdamW 为 `9.45x`，是当前最明确的性能
+瓶颈。参数和一、二阶 moment 在更新后保持 BF16，避免了早先 state scalar 将更新图
+提升为 FP32 的错误，但尚未接入 CANN fused AdamW。
 
 ## 验证口径
 
@@ -104,12 +131,23 @@ JITTOR_TORCH_SHIM=1 python probe_qwen3_training.py \
 python probe_qwen3_training.py \
   --backend torch --model "$QWEN3_MODEL" \
   --sequence-length 8 --warmups 2 --repeats 5
+
+HF_DEACTIVATE_ASYNC_LOAD=1 JITTOR_TORCH_SHIM=1 \
+python probe_qwen3_training.py \
+  --backend jittor --model "$QWEN3_MODEL" \
+  --sequence-length 8 --dtype bfloat16 --optimizer adamw \
+  --warmups 2 --repeats 5
+
+HF_DEACTIVATE_ASYNC_LOAD=1 python probe_qwen3_training.py \
+  --backend torch --model "$QWEN3_MODEL" \
+  --sequence-length 8 --dtype bfloat16 --optimizer adamw \
+  --warmups 2 --repeats 5
 ```
 
 关键未版本化产物的 SHA-256：
 
 ```text
-c27c0d6ef45856e76506b7ad77c150c310c46e1287025f82b8656c2f9d231c2c  probe_qwen3_training.py
+c27c0d6ef45856e76506b7ad77c150c310c46e1287025f82b8656c2f9d231c2c  probe_qwen3_training.py (FP32 evidence snapshot)
 f7d9d668baf3747e519f50f9891dd6b1645c095f83eebad02203b8a24b1dabbd  torch-fp32-train-steady.log
 b5c4146ec7908efb8307bf15c68420e2c663479a68ec22956d4ad70dbdfad4fb  jittor-fp32-train-steady.log
 66b956de542e03d9c8eb12c09eed9a16f403a2fb994cf67dd932e3c84d095a51  jittor-fp32-train-rmsnorm-steady.log
@@ -117,12 +155,17 @@ b5c4146ec7908efb8307bf15c68420e2c663479a68ec22956d4ad70dbdfad4fb  jittor-fp32-tr
 93334fdd9d49bf822f2bd076b96a09a00b55341eec34c7e8ea441802b4d651c9  jittor-fp32-train-rmsnorm-rope-patched-steady-repeat.log
 bc8d79594b1be3892259b0f965d22ddcf594dd6f93070fa6fd14a1d74f1a6c0c  jittor-fp32-train-rmsnorm-rope-embedding-steady.log
 cc5e82527e7dc00cbc3b8b83d7e10d1402b1f6b8712639995974d81ac9afa9a3  jittor-fp32-train-rmsnorm-rope-embedding-steady-repeat.log
+bd71fb9aaf123066a67313a58a4057432af2de89785fa7098fe681dcaa9c9d1a  probe_qwen3_training.py (BF16 follow-up)
+ba5c4ba854a18a8111a72f9fbd1ec32407bcb1396eeae6eeb07110daf91ee3c0  jittor-bf16-snapshot.npz
+b5374886777d14d1115d3f9d28bcebf8e082320478663752448f73d8371bc9aa  torch-bf16-snapshot.npz
 ```
 
 ## 未覆盖边界
 
-- 没有验证 optimizer update、参数轨迹或 checkpoint restore，因此不能称为完整训练；
-- 没有验证 BF16/FP16 训练、Qwen3-8B 训练、多卡训练、采样或量化；
+- FP32 optimizer、完整 checkpoint restore 和长期参数轨迹仍未验证；BF16 只接受单步
+  可执行，精确数值轨迹与性能仍未验收；
+- 没有验证 FP16、Qwen3-8B 训练、多卡训练、采样或量化；
 - Transformers 默认 Qwen3 RoPE 尚未自动路由到融合入口；
 - embedding 快路径未声明 `scale_grad_by_freq=True`、`max_norm` 或 sparse 支持；
-- 当前性能数字只代表该单卡、FP32、sequence length 8 的同步 eager 协议。
+- 性能数字只代表该单卡、sequence length 8 的对应同步 eager 协议；FP32 不含
+  optimizer，BF16 follow-up 包含 AdamW。
