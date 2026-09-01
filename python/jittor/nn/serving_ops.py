@@ -70,6 +70,11 @@ def fused_add_rms_norm(x, residual, weight, eps=1e-6):
     The updated residual is the sum, which the next layer adds onto in turn;
     returning both is what lets the two steps share one pass over the data.
     """
+    acl_backend = getattr(jt.nn, "_acl_grouped_add_rms_norm", None)
+    if acl_backend is not None:
+        fused = acl_backend(x, residual, weight, eps)
+        if fused is not None:
+            return fused
     fused = _fused_add_rms_norm_cuda(x, residual, weight, eps)
     if fused is not None:
         return fused

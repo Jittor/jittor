@@ -800,6 +800,36 @@ class TestACL(unittest.TestCase):
             jt.array(indices_np), jt.array(weight_np).bfloat16()))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_serving_grouped_add_rms_norm_matches_separate_ops(self):
+        rng = np.random.RandomState(20260902)
+        hidden_np = rng.randn(3, 128).astype("float32")
+        residual_np = rng.randn(3, 128).astype("float32")
+        weight_np = (rng.rand(128) + 0.5).astype("float32")
+
+        with jt.no_grad(), jt.log_capture_scope(
+                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+            hidden = jt.array(hidden_np).bfloat16()
+            residual = jt.array(residual_np).bfloat16()
+            weight = jt.array(weight_np).bfloat16()
+            actual, carried = jt.nn.fused_add_rms_norm(
+                hidden, residual, weight, 1e-6)
+            reference_carried = hidden + residual
+            reference = jt.nn.rms_norm(reference_carried, weight, 1e-6)
+            fetched = jt.fetch_sync([
+                actual.float32(), carried.float32(),
+                reference.float32(), reference_carried.float32(),
+            ])
+            locations = actual.location(), carried.location()
+
+        self.assertEqual(locations, ("device", "device"))
+        np.testing.assert_array_equal(fetched[0], fetched[2])
+        np.testing.assert_array_equal(fetched[1], fetched[3])
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertTrue(any("compile acl op" in message for message in messages))
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_inference_rotary_embedding(self):
         rng = np.random.RandomState(20260829)
         q_np = rng.randn(1, 16, 7, 128).astype("float32")

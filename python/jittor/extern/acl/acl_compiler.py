@@ -168,6 +168,7 @@ def change_function():
     from .aclops.norms_op import (
         BatchNormACL,
         GroupNormACL,
+        GroupedAddRmsNormACL,
         LayerNormACL,
         RmsNormACL,
     )
@@ -926,6 +927,33 @@ def change_function():
                 return RmsNormACL()(x, gamma, epsilon_value)
         return _orig_rms_norm_cuda(x, gamma, epsilon)
     jt.nn._rms_norm_cuda = _rms_norm_cuda_acl
+
+    def _grouped_add_rms_norm_acl(x, residual, weight, eps):
+        if not (
+            jt.flags.use_acl
+            and jt.flags.use_cuda
+            and getattr(jt.flags, "no_grad", 0)
+            and isinstance(x, jt.Var)
+            and isinstance(residual, jt.Var)
+            and isinstance(weight, jt.Var)
+            and isinstance(eps, Real)
+        ):
+            return None
+        shape = tuple(int(size) for size in x.shape)
+        epsilon = float(eps)
+        if (
+            not shape
+            or any(size <= 0 for size in shape)
+            or tuple(residual.shape) != shape
+            or tuple(weight.shape) != (shape[-1],)
+            or len({str(x.dtype), str(residual.dtype), str(weight.dtype)}) != 1
+            or str(x.dtype) not in ("float16", "bfloat16", "float32")
+            or not math.isfinite(epsilon)
+            or epsilon <= 0.0
+        ):
+            return None
+        return GroupedAddRmsNormACL()(x, residual, weight, epsilon)
+    jt.nn._acl_grouped_add_rms_norm = _grouped_add_rms_norm_acl
 
     def _expand_rotary_cache_acl(cache, rotary_dim):
         if (

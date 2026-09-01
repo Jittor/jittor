@@ -202,3 +202,44 @@ class RmsNormACL(jt.Function):
         if str(self.weight.dtype) != "float32":
             grad_weight = grad_weight.cast(self.weight.dtype)
         return result[0], grad_weight
+
+
+class GroupedAddRmsNormACL:
+
+    def __call__(self, x, residual, weight, eps):
+        reduced_shape = list(x.shape[:-1]) + [1]
+        outputs = [
+            jt.empty(x.shape, x.dtype),
+            jt.empty(x.shape, x.dtype),
+            jt.empty(reduced_shape, "float32"),
+        ]
+        result = jt.code(
+            outputs=outputs,
+            inputs=[x, residual, weight],
+            cuda_header='''
+namespace jittor {}
+#include "acl/aclops/aclops.h"
+''',
+            cuda_src=f'''
+// aclop
+BinaryOpRunner add_op;
+add_op.name = "Add";
+add_op.add(in0, true);
+add_op.add(in1, true);
+add_op.add(out1, false);
+add_op.jt_name = "grouped_add_rms_norm";
+add_op.run();
+
+RmsNormOpRunner norm_op;
+norm_op.add(out1, true);
+norm_op.add(in2, true);
+norm_op.add(out0, false);
+norm_op.add(out2, false);
+norm_op.jt_name = "grouped_add_rms_norm";
+auto *norm_attr = new RmsNormAttr();
+norm_attr->eps = {eps};
+norm_op.op_attr.reset(norm_attr);
+norm_op.run();
+''',
+        )
+        return result[0], result[1]
