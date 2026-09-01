@@ -2,7 +2,7 @@
 
 - Status: native vLLM-Ascend inference accepted; Jittor Qwen3 manual and public engine token parity accepted; performance open
 - Date: 2026-09-02
-- Baseline: `f49b0be0`
+- Baseline: `e67a7350`
 - Owner: Jittor compatibility and external vLLM adapter maintainers
 - Review when: vLLM, Transformers, CANN, ATB, or the external adapter version changes
 
@@ -85,6 +85,9 @@ text:       Paris. The capital
   未覆盖形态继续走原路径，不调用非 batch-invariant 的 `aclnnAddRmsNorm`。
 - BF16 标准 RMSNorm 的精确 `RmsNorm(unit weight) -> weight multiply` 舍入顺序在
   no-grad 时由一个 CodeOp 承载；训练继续使用原有可微路径，前向与梯度契约不变。
+- 公有 `dual_rms_norm` 为两个张量提供成对 RMSNorm；ACL BF16 no-grad 在一个
+  CodeOp 内执行两套精确舍入顺序。vLLM Qwen3Attention 仅在该受支持形态下改写
+  forward 以成对调用，其他设备、dtype 和训练直接回到原实现。
 - `torch.add(..., out=view)` 和 `torch.index_select(..., out=view)` 返回原 `out`
   对象并写回切片的父 tensor；vLLM 的 optimistic sequence length 和 input ID
   staging 不再保留旧值。
@@ -104,8 +107,8 @@ Jittor 主仓库。当前文件 SHA-256：
 | `vllm_jittor_npu/worker.py` | `b383042d63711f538ed14ae748e2d589c28d9b0c37e2278409840b7b34d46239` |
 | `probes/qwen3_forward.py` | `fecdec74e781d1a21100c634a098a26670ae32d99ccc7a7d520f86691b50f2f5` |
 | `probes/qwen3_engine.py` | `8edec2385347bcfdf5a6ad6dc89491bbe482f4d8370b47b9ee26af322504c566` |
-| `_state/npu-vllm/current-a84614f4/logs/qwen3-engine-grouped-bf16-rms-10-rerun.log` | `b1dce33fcdcb39ac8f08ed136ce469460ab45596b590141dadea74550af8fe14` |
-| `_state/npu-vllm/current-a84614f4/qwen3-decode-grouped-bf16-rms.json` | `3acf2f0f02e2af1e44f13839753bba1bbe980f01e3c4eb9a5e13c2b6128472ac` |
+| `_state/npu-vllm/current-a84614f4/logs/qwen3-engine-dual-qk-rms-10-rerun.log` | `384007a3983a7629beffa34892f6f2b325927b94e09a98c41cf8f383fb095111` |
+| `_state/npu-vllm/current-a84614f4/qwen3-decode-dual-qk-rms-cached.json` | `0fce751dc5064fc90424ee43dcc279e7b0bbd67efc48c82bee7ac766e2fe6e4e` |
 | `_state/npu-vllm/profiles/qwen3_decode_fused.json` | `44a44104122c4956d98b946910403a3792e414f49a89ed10bd1b1c3a01e3b343` |
 | `_state/npu-vllm/profiles/qwen3_decode_paged128.json` | `c163d5669e718cfc3c4872900e0f4385d627d6b29f5dd81412eebf3c4604e745` |
 
@@ -271,6 +274,13 @@ adapter 通过 vLLM OOT CustomOp registry 将标准 `RMSNorm` 和 `RotaryEmbeddi
   中位数为 `0.38482s`。相对 `0.615s` Jittor 基线累计改善约 `37.4%`，但相对原生
   仍慢约 `5.4%`。NPU Torch-compat `19 passed`、完整 ACL `45 passed`，总体性能
   仍未验收。
+- `2.0@e67a7350` 用一个双输出 CodeOp 承载每层 Q/K 两套精确 BF16 RMSNorm；
+  profile 中 56 个单路 grouped op 变为 28 个 `grouped_dual_bfloat16_rms_norm`，
+  合计约 `2.47ms`。四 token、hidden 轨迹和零 fallback 条件保持。两轮各 9 个热
+  请求中位数为 `0.38094s/0.37303s`，合并 18 个样本中位数为 `0.37790s`。相对
+  `0.615s` Jittor 基线累计改善约 `38.6%`，但相对原生仍慢约 `3.5%`。NPU
+  Torch-compat `20 passed`、CPU vLLM layer patch `4 passed`、CPU serving
+  `9 passed`，总体性能仍未验收。
 
 ## Open work
 
