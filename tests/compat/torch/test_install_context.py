@@ -15,6 +15,7 @@ from jittor.compat.torch.context import (
     InstallStepError,
     ModuleRegistry,
 )
+from jittor.compat.torch.installers import utilities
 
 
 class TestInstallContext(unittest.TestCase):
@@ -57,6 +58,34 @@ class TestInstallContext(unittest.TestCase):
         self.assertEqual(
             [report.status for report in context.reports], ["failed", "skipped"]
         )
+
+    def test_transformers_npu_probe_rejects_real_pytorch_extension(self):
+        def original(check_device=False):
+            del check_device
+            return True
+
+        import_utils = types.ModuleType("transformers.utils.import_utils")
+        import_utils.is_torch_npu_available = original
+        utils = types.ModuleType("transformers.utils")
+        utils.is_torch_npu_available = original
+        modules = {
+            "transformers.utils.import_utils": import_utils,
+            "transformers.utils": utils,
+        }
+
+        self.assertTrue(
+            utilities._patch_transformers_npu_probe(import_utils, modules)
+        )
+        guarded = import_utils.is_torch_npu_available
+        self.assertFalse(guarded())
+        self.assertFalse(guarded(check_device=True))
+        self.assertIs(utils.is_torch_npu_available, guarded)
+        self.assertIs(guarded._jittor_original_probe, original)
+        self.assertTrue(callable(guarded.cache_clear))
+        self.assertTrue(
+            utilities._patch_transformers_npu_probe(import_utils, modules)
+        )
+        self.assertIs(import_utils.is_torch_npu_available, guarded)
 
     def test_registry_ensure_publish_and_alias_preserve_identity(self):
         context = self.context()

@@ -6,6 +6,7 @@ import jittor as jt
 import numpy as np
 
 from .context import registry_for
+from .types import _dtype_to_str
 
 
 def _install_optimizers(g, registry=None):
@@ -619,6 +620,8 @@ def _install_optimizers(g, registry=None):
         setattr(_cls, _marker, True)
 
     def _make_adam_step_torch(decoupled_weight_decay=False):
+        def _update_in_target_dtype(target, value):
+            target.update(value.cast(_dtype_to_str(target.dtype)))
         def _adam_step_torch(self, loss=None, retain_graph=False, closure=None, **kwargs):
             native_fsdp_loss = None
             if closure is None and callable(loss):
@@ -681,17 +684,21 @@ def _install_optimizers(g, registry=None):
                     step_size = lr / bias_correction1
                     # The Torch division wrapper widens Python floats for 1-ulp
                     # parity; Adam scalars instead run in the state tensor dtype.
-                    bias_correction2_sqrt = jt.array(
-                        _math.sqrt(bias_correction2), dtype=v.dtype
-                    ).stop_grad()
+                    state_dtype = _dtype_to_str(v.dtype)
+                    correction_value = _math.sqrt(bias_correction2)
+                    if state_dtype == "bfloat16":
+                        scalar = jt.array(np.float32(correction_value)).cast(state_dtype)
+                    else:
+                        scalar = jt.array(correction_value, dtype=state_dtype)
+                    bias_correction2_sqrt = scalar.stop_grad()
                     if weight_decay != 0 and decoupled_weight_decay:
-                        p.update(p * (1 - lr * weight_decay))
+                        _update_in_target_dtype(p, p * (1 - lr * weight_decay))
                     elif weight_decay != 0:
                         g = g + p * weight_decay
-                    m.update(b0 * m + (1 - b0) * g)
-                    v.update(b1 * v + (1 - b1) * g * g)
+                    _update_in_target_dtype(m, b0 * m + (1 - b0) * g)
+                    _update_in_target_dtype(v, b1 * v + (1 - b1) * g * g)
                     denom = jt.sqrt(v) / bias_correction2_sqrt + eps
-                    p.update(p - m * step_size / denom)
+                    _update_in_target_dtype(p, p - m * step_size / denom)
                     try:
                         if was_trainable and p.is_stop_grad():
                             p.start_grad()

@@ -413,6 +413,7 @@ class TestTorchCompatStructure(unittest.TestCase):
             [name for name, _installer in compat._OPTIONAL_STEPS],
             [
                 "optional.torchmetrics",
+                "optional.transformers",
                 "optional.tensordict",
                 "optional.safetensors",
                 "optional.flash-attn",

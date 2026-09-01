@@ -161,6 +161,7 @@ _REQUIRED_STEPS = (
 
 _OPTIONAL_STEPS = (
     ("optional.torchmetrics", utilities.install_torchmetrics),
+    ("optional.transformers", utilities.install_transformers),
     ("optional.tensordict", autograd.install_tensordict),
     ("optional.safetensors", _install_optional_safetensors),
     ("optional.flash-attn", utilities.install_flash),

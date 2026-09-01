@@ -9,6 +9,35 @@ import jittor as jt
 @unittest.skipIf(not jt.compiler.has_acl, "No ACL found")
 class TestACLTorchCompat(unittest.TestCase):
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_adamw_bfloat16_state_scalar_stays_on_acl(self):
+        parameter = torch.tensor([1.0, -2.0], dtype=torch.bfloat16)
+        parameter.requires_grad_(True)
+        optimizer = torch.optim.AdamW([parameter], lr=0.01)
+        before = parameter.float().numpy().copy()
+
+        with jt.log_capture_scope(
+            log_v=0, log_vprefix="acl_op_exec.cc=100"
+        ) as logs:
+            (parameter * parameter).sum().backward()
+            optimizer.step()
+            after = parameter.float().numpy()
+
+        self.assertEqual(str(parameter.dtype).replace("torch.", ""), "bfloat16")
+        self.assertEqual(
+            str(optimizer.state[parameter]["exp_avg"].dtype).replace("torch.", ""),
+            "bfloat16",
+        )
+        self.assertEqual(
+            str(optimizer.state[parameter]["exp_avg_sq"].dtype).replace("torch.", ""),
+            "bfloat16",
+        )
+        self.assertTrue(np.isfinite(after).all())
+        self.assertFalse(np.array_equal(after, before))
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_python_float_truediv_stays_on_acl(self):
         source_np = np.array([0.12345679, 1.2345679, 3.25], dtype=np.float32)
         scale = 0.28209479177387814

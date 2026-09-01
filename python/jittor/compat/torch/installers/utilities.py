@@ -18,6 +18,63 @@ from ..nested import (
     _torch_make_parameter,
 )
 
+
+def _patch_transformers_npu_probe(module, modules):
+    """Keep PyTorch accelerator extensions out of the Jittor Torch runtime."""
+    if module is None:
+        return False
+    current = getattr(module, "is_torch_npu_available", None)
+    if not callable(current):
+        return False
+    if getattr(current, "_jittor_transformers_npu_guard", False):
+        guarded = current
+        original = current._jittor_original_probe
+    else:
+        from functools import lru_cache
+
+        original = current
+
+        @lru_cache()
+        def guarded(check_device=False):
+            del check_device
+            return False
+
+        guarded._jittor_transformers_npu_guard = True
+        guarded._jittor_original_probe = original
+        module.is_torch_npu_available = guarded
+
+    for name in ("transformers.utils", "transformers"):
+        owner = modules.get(name)
+        if owner is not None and getattr(owner, "is_torch_npu_available", None) is original:
+            owner.is_torch_npu_available = guarded
+    return True
+
+
+def _install_transformers_runtime_guard(g, registry=None):
+    """Make Transformers use Jittor's device API instead of real ``torch_npu``."""
+    modules = registry_for(g, registry).module_map
+    import builtins
+
+    _patch_transformers_npu_probe(
+        modules.get("transformers.utils.import_utils"), modules
+    )
+    original_import = builtins.__import__
+    if getattr(original_import, "_jittor_transformers_runtime_guard", False):
+        return
+
+    def _import(name, globals=None, locals=None, fromlist=(), level=0):
+        result = original_import(name, globals, locals, fromlist, level)
+        if name == "transformers.utils.import_utils" or name.startswith("transformers"):
+            _patch_transformers_npu_probe(
+                modules.get("transformers.utils.import_utils"), modules
+            )
+        return result
+
+    _import._jittor_transformers_runtime_guard = True
+    _import._jittor_original_import = original_import
+    builtins.__import__ = _import
+    g._transformers_runtime_guard_installed = True
+
 def _install_torchmetrics_fastpaths(g, registry=None):
     """Patch TorchMetrics internals with jittor-safe fast paths.
 
@@ -616,6 +673,10 @@ def install(ctx):
 
 def install_torchmetrics(ctx):
     _install_torchmetrics_fastpaths(ctx.jittor_module, ctx.registry)
+
+
+def install_transformers(ctx):
+    _install_transformers_runtime_guard(ctx.jittor_module, ctx.registry)
 
 
 def install_flash(ctx):
