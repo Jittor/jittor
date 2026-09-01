@@ -51,7 +51,6 @@ def _install_optimizers(g, registry=None):
         except Exception:
             pass
     Base.__init__ = _init
-
     def _torch_param_steps(pg):
         params = list(pg.get("params", []))
         steps = pg.get("_torch_steps")
@@ -62,7 +61,6 @@ def _install_optimizers(g, registry=None):
         if len(steps) > len(params):
             del steps[len(params):]
         return steps
-
     def _torch_optimizer_kind(opt):
         name = type(opt).__name__.lower()
         if "adamw" in name:
@@ -76,7 +74,6 @@ def _install_optimizers(g, registry=None):
         if "adan" in name:
             return "adan"
         return name
-
     # torch-compatible Optimizer.state: a mapping keyed by the parameter object,
     # each value a dict {"exp_avg","exp_avg_sq","step"} backed by jittor's
     # positional per-group state lists pg["m"] (exp_avg) / pg["values"] (exp_avg_sq).
@@ -95,7 +92,6 @@ def _install_optimizers(g, registry=None):
                 values = dict(*args, **kwargs)
                 for key, value in values.items():
                     self[key] = value
-
         class _OptState:
             def __init__(self, opt):
                 self._opt = opt
@@ -221,7 +217,6 @@ def _install_optimizers(g, registry=None):
         _state_getter = lambda self: Base._OptState(self)
         Base.state = property(_state_getter)
         Base._torch_state_installed = True
-
     if not getattr(Base, "_torch_state_dict_wrapped", False):
         _native_load_state_dict = Base.load_state_dict
         def _state_dict_torch(self):
@@ -257,7 +252,7 @@ def _install_optimizers(g, registry=None):
                     group.setdefault("foreach", None)
                     group.setdefault("capturable", False)
                     group.setdefault("differentiable", False)
-                    group.setdefault("fused", None)
+                    group.setdefault("fused", getattr(self, "fused", None))
                 elif kind == "sgd":
                     for key, default in (
                             ("momentum", 0), ("dampening", 0),
@@ -282,7 +277,6 @@ def _install_optimizers(g, registry=None):
                     group.setdefault("differentiable", False)
                 group["params"] = params
                 param_groups.append(group)
-
             state = {}
             for pg in self.param_groups:
                 steps = _torch_param_steps(pg)
@@ -317,7 +311,6 @@ def _install_optimizers(g, registry=None):
                             entry["step"] = jt.array(float(steps[i])).float32()
                         state[pid] = entry
             return {"state": state, "param_groups": param_groups}
-
         def _load_state_dict_torch(self, state_dict):
             if not isinstance(state_dict, Mapping) or "param_groups" not in state_dict:
                 return _native_load_state_dict(self, state_dict)
@@ -371,7 +364,6 @@ def _install_optimizers(g, registry=None):
                     max_step = max(max_step, step)
                     slots.append((st, step))
                 load_plan.append((dict(saved_pg), slots))
-
             # Apply only after the complete input has been validated. This keeps
             # malformed loads atomic instead of leaving half-reset moments.
             for pg in self.param_groups:
@@ -413,11 +405,9 @@ def _install_optimizers(g, registry=None):
                     steps[i] = step
             self.n_step = max_step
             return None
-
         Base.state_dict = _state_dict_torch
         Base.load_state_dict = _load_state_dict_torch
         Base._torch_state_dict_wrapped = True
-
     # torch's Optimizer.zero_grad accepts set_to_none=; jittor's rejects the kwarg.
     if not getattr(Base, "_torch_zero_grad_wrapped", False):
         _orig_zero = Base.zero_grad
@@ -477,7 +467,6 @@ def _install_optimizers(g, registry=None):
             return result
         Base.zero_grad = _zero_grad_compat
         Base._torch_zero_grad_wrapped = True
-
     # Native Optimizer.backward() advances n_step; tensor.backward() below does
     # not. Record which spelling produced the ready gradient so a subsequent
     # torch-style step() advances the counter exactly once in either case.
@@ -489,7 +478,6 @@ def _install_optimizers(g, registry=None):
             return result
         Base.backward = _backward_with_step_marker
         Base._torch_backward_step_marker = True
-
     # torch's Adam/AdamW default lr=1e-3 (jittor makes lr positional-required).
     # 3DGS builds the exposure optimizer as torch.optim.Adam([self._exposure]).
     for _cls_name in ("Adam", "AdamW", "RMSprop", "Adan"):
@@ -503,7 +491,6 @@ def _install_optimizers(g, registry=None):
             return _init_lr
         _cls.__init__ = _mk(_ci)
         _cls._torch_lr_default = True
-
     def _optimizer_has_ready_grads(opt):
         for _pg in getattr(opt, "param_groups", []):
             _grads = _pg.get("grads")
@@ -513,7 +500,6 @@ def _install_optimizers(g, registry=None):
                 if isinstance(_p, jt.Var) and isinstance(_g, jt.Var) and list(_p.shape) == list(_g.shape):
                     return True
         return False
-
     def _advance_ready_param_steps(opt):
         for pg in getattr(opt, "param_groups", []):
             steps = _torch_param_steps(pg)
@@ -522,21 +508,18 @@ def _install_optimizers(g, registry=None):
                 if isinstance(param, jt.Var) and isinstance(grad, jt.Var) \
                         and list(param.shape) == list(grad.shape):
                     steps[i] = int(steps[i]) + 1
-
     def _advance_trainable_param_steps(opt):
         for pg in getattr(opt, "param_groups", []):
             steps = _torch_param_steps(pg)
             for i, param in enumerate(pg.get("params", [])):
                 if isinstance(param, jt.Var) and param.requires_grad:
                     steps[i] = int(steps[i]) + 1
-
     def _optimizer_maybe_has_fsdp_params(opt):
         for _pg in getattr(opt, "param_groups", []):
             for _p in _pg.get("params", []):
                 if getattr(_p, "_jittor_fsdp2_state", None) is not None:
                     return True
         return False
-
     def _load_fsdp2_for_optimizer(opt):
         if not _optimizer_maybe_has_fsdp_params(opt):
             return None
@@ -545,7 +528,6 @@ def _install_optimizers(g, registry=None):
         except Exception:
             return None
         return _fsdp2_step
-
     def _wrap_step_accept_closure(_cls, _marker):
         if _cls is None or getattr(_cls, _marker, False):
             return
@@ -597,7 +579,6 @@ def _install_optimizers(g, registry=None):
                 out = _orig_step(self, loss, retain_graph=retain_graph)
                 object.__setattr__(self, "_torch_backward_advanced_n_step", False)
                 return out
-
             # Native SGD/RMSprop/Adan always post_step()->zero_grad(). Torch
             # keeps parameter.grad until the caller explicitly clears it.
             previous_post = self.__dict__.get("post_step", None)
@@ -618,10 +599,11 @@ def _install_optimizers(g, registry=None):
             return loss if called_closure and out is None else out
         _cls.step = _step_torch_closure
         setattr(_cls, _marker, True)
-
     def _make_adam_step_torch(decoupled_weight_decay=False):
         def _update_in_target_dtype(target, value):
-            target.update(value.cast(_dtype_to_str(target.dtype)))
+            if _dtype_to_str(value.dtype) != _dtype_to_str(target.dtype):
+                value = value.cast(_dtype_to_str(target.dtype))
+            target.update(value)
         def _adam_step_torch(self, loss=None, retain_graph=False, closure=None, **kwargs):
             native_fsdp_loss = None
             if closure is None and callable(loss):
@@ -672,6 +654,28 @@ def _install_optimizers(g, registry=None):
                 # unused parameters. loss.backward() then leaves the group
                 # without gradients and step() must be a no-op, not KeyError.
                 grads = pg.get("grads") or [None] * len(pg["params"])
+                fused = (decoupled_weight_decay and jt.flags.use_acl and
+                         pg.get("fused", getattr(self, "fused", None)) is True)
+                if fused:
+                    active = []
+                    for i, (p, g, v, m) in enumerate(zip(
+                            pg["params"], grads, pg["values"], pg["m"])):
+                        if not p.requires_grad or not isinstance(g, jt.Var) \
+                                or list(g.shape) != list(p.shape):
+                            continue
+                        param_steps[i] = int(param_steps[i]) + 1
+                        active.append((p, m, v, g, param_steps[i] - 1))
+                    from jittor.optim.algorithms.adam import _acl_fused_adamw_updates
+                    updates = _acl_fused_adamw_updates(
+                        active, lr, b0, b1, weight_decay, eps)
+                    for (p, m, v, _, _), (new_p, new_m, new_v) in zip(
+                            active, updates):
+                        _update_in_target_dtype(p, new_p)
+                        _update_in_target_dtype(m, new_m)
+                        _update_in_target_dtype(v, new_v)
+                        if p.is_stop_grad():
+                            p.start_grad()
+                    continue
                 for i, (p, g, v, m) in enumerate(zip(
                         pg["params"], grads, pg["values"], pg["m"])):
                     was_trainable = bool(p.requires_grad)
@@ -682,8 +686,6 @@ def _install_optimizers(g, registry=None):
                     bias_correction1 = 1 - b0 ** param_step
                     bias_correction2 = 1 - b1 ** param_step
                     step_size = lr / bias_correction1
-                    # The Torch division wrapper widens Python floats for 1-ulp
-                    # parity; Adam scalars instead run in the state tensor dtype.
                     state_dtype = _dtype_to_str(v.dtype)
                     correction_value = _math.sqrt(bias_correction2)
                     if state_dtype == "bfloat16":
@@ -714,30 +716,23 @@ def _install_optimizers(g, registry=None):
             object.__setattr__(self, "_torch_backward_advanced_n_step", False)
             return native_fsdp_loss if native_fsdp_loss is not None else loss
         return _adam_step_torch
-
     Adam = getattr(_optim, "Adam", None)
     if Adam is not None and not getattr(Adam, "_torch_adam_step", False):
         Adam.step = _make_adam_step_torch(False)
         Adam._torch_adam_step = True
-
     AdamW = getattr(_optim, "AdamW", None)
     if AdamW is not None and not getattr(AdamW, "_torch_adamw_step", False):
         AdamW.step = _make_adam_step_torch(True)
         AdamW._torch_adamw_step = True
-
     for _cls_name in ("SGD", "RMSprop", "Adan"):
         _wrap_step_accept_closure(getattr(_optim, _cls_name, None), "_torch_closure_step")
-
     Base._torch_compat_wrapped = True
-
     if not hasattr(_optim, "LBFGS"):
         class LBFGS(Base):
             def __init__(self, params, lr=1.0, *args, **kwargs):
                 super().__init__(params, lr)
-
             def step(self, closure=None):
                 raise NotImplementedError("torch.optim.LBFGS is not implemented by the jittor torch shim")
-
         _optim.LBFGS = LBFGS
 
     import types as _types_optim

@@ -24,6 +24,7 @@
 #include "ops/transpose_op.h"
 #include "ops/array_op.h"
 #include "ops/code_op.h"
+#include "ops/fused_adamw_op.h"
 #include "fused_op.h"
 #include "ops/unary_op.h"
 #include "ops/ternary_op.h"
@@ -484,6 +485,29 @@ namespace jittor
     extern int64 current_offset;
 
     static unordered_map<string, std::function<void(Op *)>> acl_ops = {
+        {"fused_adamw", [](Op *op)
+         {
+             auto _op = (FusedAdamwOp *)op;
+             AdamWListOpRunner runner;
+             AdamWAttr *attr = new AdamWAttr();
+             attr->tensorCount = _op->parameters.size();
+             attr->lr = _op->lr;
+             attr->beta1 = _op->beta1;
+             attr->beta2 = _op->beta2;
+             attr->weightDecay = _op->weight_decay;
+             attr->eps = _op->eps;
+             runner.jt_name = "fused_adamw";
+             runner.op_attr.reset(attr);
+             for (auto value : _op->parameters) runner.add(value, true);
+             for (auto value : _op->moments) runner.add(value, true);
+             for (auto value : _op->variances) runner.add(value, true);
+             for (auto value : _op->gradients) runner.add(value, true);
+             runner.add(_op->step, true);
+             for (auto value : _op->new_parameters) runner.add(value, false);
+             for (auto value : _op->new_moments) runner.add(value, false);
+             for (auto value : _op->new_variances) runner.add(value, false);
+             runner.run();
+         }},
         {"arg_reduce", [](Op *op)
          {
              auto _op = (ArgReduceOp *)op;

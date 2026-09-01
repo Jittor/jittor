@@ -14,6 +14,38 @@ import numpy as np
 @unittest.skipIf(not jt.compiler.has_acl, "No ACL found")
 class TestACL(unittest.TestCase):
 
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_native_fused_adamw_bfloat16_two_steps(self):
+        parameter = jt.array(np.asarray(
+            [1.0, -2.0, 0.5, -0.25], dtype=np.float32)).bfloat16()
+        optimizer = jt.optim.AdamW(
+            [parameter], lr=0.01, betas=(0.9, 0.999), eps=1e-8,
+            weight_decay=0.1, fused=True)
+        gradients = (
+            [0.25, -0.5, 1.0, -2.0],
+            [-0.125, 0.25, -0.5, 1.0],
+        )
+        expected = (
+            [0.98828125, -1.984375, 0.490234375, -0.240234375],
+            [0.984375, -1.9765625, 0.486328125, -0.2373046875],
+        )
+
+        with jt.log_capture_scope(
+                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+            for gradient, reference in zip(gradients, expected):
+                grad = jt.array(np.asarray(
+                    gradient, dtype=np.float32)).bfloat16()
+                optimizer.step((parameter * grad).sum())
+                np.testing.assert_array_equal(
+                    parameter.float().numpy(),
+                    np.asarray(reference, dtype=np.float32))
+
+        self.assertEqual(optimizer.n_step, 2)
+        self.assertFalse(parameter.is_stop_grad())
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
     @staticmethod
     def _paged_attention_reference(query, key, value):
         repeats = query.shape[1] // key.shape[1]

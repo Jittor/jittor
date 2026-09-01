@@ -9,6 +9,63 @@ import jittor as jt
 @unittest.skipIf(not jt.compiler.has_acl, "No ACL found")
 class TestACLTorchCompat(unittest.TestCase):
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_fused_adamw_bfloat16_matches_cann_two_steps(self):
+        initial = [1.0, -2.0, 0.5, -0.25, 4.0, -8.0, 0.125, -0.0625]
+        parameters = [
+            torch.tensor(initial, dtype=torch.bfloat16).requires_grad_(True)
+            for _ in range(2)
+        ]
+        optimizer = torch.optim.AdamW(
+            parameters, lr=0.01, betas=(0.9, 0.999), eps=1e-8,
+            weight_decay=0.1, fused=True)
+        gradients = (
+            [0.25, -0.5, 1.0, -2.0, 0.03125, -0.0625, 4.0, -8.0],
+            [-0.125, 0.25, -0.5, 1.0, -0.015625, 0.03125, -2.0, 4.0],
+        )
+        expected_parameters = (
+            [0.98828125, -1.984375, 0.490234375, -0.240234375,
+             3.984375, -7.96875, 0.11474609375, -0.052490234375],
+            [0.984375, -1.9765625, 0.486328125, -0.2373046875,
+             3.984375, -7.96875, 0.11181640625, -0.0498046875],
+        )
+
+        with jt.log_capture_scope(
+            log_v=0, log_vprefix="acl_op_exec.cc=100"
+        ) as logs:
+            for gradient, expected in zip(gradients, expected_parameters):
+                for parameter in parameters:
+                    parameter.grad = torch.tensor(
+                        gradient, dtype=torch.bfloat16)
+                optimizer.step()
+                for parameter in parameters:
+                    np.testing.assert_array_equal(
+                        parameter.float().numpy(),
+                        np.asarray(expected, dtype=np.float32),
+                    )
+
+        expected_moment = np.asarray(
+            [0.010009765625, -0.02001953125, 0.0400390625, -0.080078125,
+             0.001251220703125, -0.00250244140625, 0.16015625, -0.3203125],
+            dtype=np.float32,
+        )
+        expected_variance = np.asarray(
+            [7.82012939453125e-05, 0.00031280517578125, 0.001251220703125,
+             0.0050048828125, 1.2218952178955078e-06,
+             4.887580871582031e-06, 0.02001953125, 0.080078125],
+            dtype=np.float32,
+        )
+        for parameter in parameters:
+            state = optimizer.state[parameter]
+            self.assertEqual(state["step"], 2.0)
+            np.testing.assert_array_equal(
+                state["exp_avg"].float().numpy(), expected_moment)
+            np.testing.assert_array_equal(
+                state["exp_avg_sq"].float().numpy(), expected_variance)
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_adamw_bfloat16_state_scalar_stays_on_acl(self):
         parameter = torch.tensor([1.0, -2.0], dtype=torch.bfloat16)
         parameter.requires_grad_(True)

@@ -7,6 +7,25 @@ from ..base import (
     _update_preserve_dtype,
 )
 
+
+def _acl_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
+    from jittor.extern.acl.aclops.adamw_op import fused_adamw_acl
+
+    results = [None] * len(entries)
+    buckets = {}
+    for index, entry in enumerate(entries):
+        buckets.setdefault(int(entry[4]), []).append((index,) + entry[:4])
+    for step_value, bucket in buckets.items():
+        step = jt.array(float(step_value), dtype="float32").stop_grad()
+        updated = fused_adamw_acl(
+            [item[1] for item in bucket], [item[2] for item in bucket],
+            [item[3] for item in bucket], [item[4] for item in bucket],
+            step, lr, beta1, beta2, weight_decay, eps)
+        for output_index, item in enumerate(bucket):
+            results[item[0]] = tuple(
+                values[output_index] for values in updated)
+    return results
+
 class Adam(Optimizer):
     """ Adam Optimizer.
 
@@ -67,11 +86,13 @@ class AdamW(Optimizer):
         optimizer = nn.AdamW(model.parameters(), lr, eps=1e-8, betas=(0.9, 0.999))
         optimizer.step(loss)
     """
-    def __init__(self, params, lr, eps=1e-8, betas=(0.9, 0.999), weight_decay=0):
+    def __init__(self, params, lr, eps=1e-8, betas=(0.9, 0.999),
+                 weight_decay=0, fused=None):
         super().__init__(params, lr)
         self.eps = eps
         self.betas = betas
         self.weight_decay = weight_decay
+        self.fused = fused
         # assert weight_decay==0, "weight_decay is not supported yet"
 
         # initialize required arguments for each param_groups
@@ -99,6 +120,21 @@ class AdamW(Optimizer):
             eps = pg.get("eps", self.eps)
             weight_decay = pg.get("weight_decay", self.weight_decay)
             b0, b1 = pg.get("betas", self.betas)
+            fused = pg.get("fused", self.fused) is True and jt.flags.use_acl
+            if fused:
+                active = [(p, m, v, g, n - 1) for p, g, v, m in zip(
+                    pg["params"], pg["grads"], pg["values"], pg["m"])
+                    if _param_requires_grad(p) and _grad_matches_param(p, g)]
+                updates = _acl_fused_adamw_updates(
+                    active, lr, b0, b1, weight_decay, eps)
+                for (p, m, v, _, _), (new_p, new_m, new_v) in zip(
+                        active, updates):
+                    _update_preserve_dtype(p, new_p)
+                    _update_preserve_dtype(m, new_m)
+                    _update_preserve_dtype(v, new_v)
+                    if p.is_stop_grad():
+                        p.start_grad()
+                continue
             for p, g, v, m in zip(pg["params"], pg["grads"], pg["values"], pg["m"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
                 _update_preserve_dtype(p, p * (1 - lr * weight_decay))

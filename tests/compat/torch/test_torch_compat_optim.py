@@ -214,6 +214,17 @@ class TestAdam(Base):
 
         both_devices(body)
 
+    def test_adamw_accepts_and_serializes_fused_option(self):
+        value = jt.array(np.array([1.0, -2.0], dtype=np.float32))
+        optimizer = torch.optim.AdamW(
+            [value], lr=0.01, weight_decay=0.1, fused=True)
+        optimizer.step((value * value).sum())
+
+        self.assertIs(optimizer.fused, True)
+        self.assertTrue(np.isfinite(value.numpy()).all())
+        self.assertIs(
+            optimizer.state_dict()["param_groups"][0]["fused"], True)
+
     def test_adam_step_inside_no_grad_keeps_param_trainable(self):
         def body(dev):
             w = jt.array(np.array([1.0, 2.0], "float32"))

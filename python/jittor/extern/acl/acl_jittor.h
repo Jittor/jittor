@@ -455,6 +455,16 @@ namespace jittor
         virtual ~AclOpAttr() {}
     };
 
+    struct AdamWAttr : AclOpAttr
+    {
+        int64_t tensorCount;
+        float lr;
+        float beta1;
+        float beta2;
+        float weightDecay;
+        float eps;
+    };
+
     struct ConvAttr : AclOpAttr
     {
         vector<int64_t> convStrides;
