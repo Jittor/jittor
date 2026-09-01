@@ -2,7 +2,7 @@
 
 - Status: native vLLM-Ascend inference accepted; Jittor Qwen3 manual and public engine token parity accepted; performance open
 - Date: 2026-09-01
-- Baseline: `c7834d16`
+- Baseline: `dd3d2924`
 - Owner: Jittor compatibility and external vLLM adapter maintainers
 - Review when: vLLM, Transformers, CANN, ATB, or the external adapter version changes
 
@@ -72,7 +72,8 @@ text:       Paris. The capital
 - 公有 serving `silu_and_mul` 在 ACL/no-grad 和受支持浮点 dtype 下调用
   `aclnnSwiGlu`；未命中 ACL 时仍继续尝试既有 CUDA fused path。单 token decode
   的 packed RoPE 直接 reshape 为 BNSD 并恢复原形状，不再执行四个恒等 transpose；
-  多 token 路径保持原有重排。
+  多 token 路径保持原有重排。RoPE 位置表的 BF16/FP32 row lookup 复用
+  `aclnnEmbedding`，FP16 使用直接 Gather，不再进入支持负索引的通用高级索引图。
 - `torch.add(..., out=view)` 和 `torch.index_select(..., out=view)` 返回原 `out`
   对象并写回切片的父 tensor；vLLM 的 optimistic sequence length 和 input ID
   staging 不再保留旧值。
@@ -92,7 +93,8 @@ Jittor 主仓库。当前文件 SHA-256：
 | `vllm_jittor_npu/worker.py` | `b383042d63711f538ed14ae748e2d589c28d9b0c37e2278409840b7b34d46239` |
 | `probes/qwen3_forward.py` | `fecdec74e781d1a21100c634a098a26670ae32d99ccc7a7d520f86691b50f2f5` |
 | `probes/qwen3_engine.py` | `8edec2385347bcfdf5a6ad6dc89491bbe482f4d8370b47b9ee26af322504c566` |
-| `_state/npu-vllm/current-a84614f4/logs/qwen3-engine-swiglu-rope-10.log` | `308aac72b243342478d63e0246402ad0713ca3b344522b622eae4de3cb00efdc` |
+| `_state/npu-vllm/current-a84614f4/logs/qwen3-engine-rope-embedding-10.log` | `b62bf70ad33af95d6f544be7d1b3dc5bbf49a9a17347b58b5d3bc33c78cd2adb` |
+| `_state/npu-vllm/current-a84614f4/qwen3-decode-rope-embedding.json` | `d93eb454cb7ca466306cd96aab6ea839b696ff00cfb674fedd879642d0dd66d4` |
 | `_state/npu-vllm/profiles/qwen3_decode_fused.json` | `44a44104122c4956d98b946910403a3792e414f49a89ed10bd1b1c3a01e3b343` |
 | `_state/npu-vllm/profiles/qwen3_decode_paged128.json` | `c163d5669e718cfc3c4872900e0f4385d627d6b29f5dd81412eebf3c4604e745` |
 
@@ -212,6 +214,14 @@ adapter 通过 vLLM OOT CustomOp registry 将标准 `RMSNorm` 和 `RotaryEmbeddi
 - 新增 SwiGLU 和单 token RoPE 的真 NPU 定向回归 `2 passed`；完整
   `tests/backends/npu/test_acl.py` 为 `42 passed`。CPU serving 回归为 `8 passed`，
   包含 ACL miss 后 CUDA backend 仍可达的调度契约。
+- `2.0@dd3d2924` 将 RoPE 位置表 lookup 从通用高级索引改为 Embedding/Gather。
+  同一手工 decode profile 的设备算子合计从 `39.772ms` 降到 `28.476ms`；其中原有
+  两组索引归一化图和通用 Index 消失，29 次 Embedding（28 层 RoPE 加一次模型
+  embedding）合计 `0.837ms`。公开 engine 的 10 次请求中，首个图热身为
+  `2.882s`，其余 9 次为 `0.49239-0.50587s`，中位数 `0.49439s`。token、device
+  驻留和零 fallback/CPU compile 条件不变；相对 `0.615s` Jittor 基线累计改善约
+  `19.6%`，但相对原生 `0.364996s` 仍慢约 `35.5%`。最终代码再次通过完整 ACL
+  `42 passed` 和 CPU serving `8 passed`，总体性能仍未验收。
 
 ## Open work
 
