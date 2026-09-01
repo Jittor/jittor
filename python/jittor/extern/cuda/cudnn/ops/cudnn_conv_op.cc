@@ -228,20 +228,16 @@ void CudnnConvOp::jit_run() {
     int perf_count;
     STACK_ALLOC(cudnnConvolutionFwdAlgoPerf_t,perf_results,num_algos);
     cudnnConvolutionFwdAlgo_t algo;
-    // cuDNN's heuristic can select an order-of-magnitude slower algorithm for
-    // low-precision, non-overlapping ViT/CLIP patch projections. In the
-    // default auto mode, benchmark only this narrow shape family and cache the
-    // result below. Explicit benchmark=0/1 keeps its normal force-off/on
-    // semantics for all convolutions.
-    bool low_precision_patch_projection = has_fp16_or_bf16
-        && groups == 1
-        && dimX[1] <= 4 && dimW[1] == dimX[1]
-        && paddingh == 0 && paddingw == 0
-        && dilationh == 1 && dilationw == 1
-        && dimW[2] >= 8 && dimW[3] >= 8
-        && strideh == dimW[2] && stridew == dimW[3];
-    bool benchmark = cudnn_benchmark > 0
-        || (cudnn_benchmark < 0 && low_precision_patch_projection);
+    // Measure rather than predict, as both backward passes already do.
+    // cuDNN's heuristic is not merely imprecise here: on ordinary fp32 3x3
+    // convolutions it picks algorithms 2-3x slower than the measured best
+    // (4x256x32x32 and 4x384x16x16 each ran 2.2x faster once measured), and it
+    // was the only reason forward was the most expensive of the three passes in
+    // a diffusers UNet step. The measurement is paid once per shape -- the
+    // cache below keeps it -- and stops once the cache is full, which bounds
+    // the cost for a workload whose shapes never repeat. Explicit
+    // benchmark=0 still forces the heuristic.
+    bool benchmark = cudnn_benchmark != 0;
 
     JK& jk = get_jk();
     jk.clear();
