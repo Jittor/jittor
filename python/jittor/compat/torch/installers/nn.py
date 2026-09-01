@@ -4,6 +4,7 @@ This module contains source moved from the former monolithic installer without
 changing the compatibility semantics.
 """
 
+import weakref
 import os
 
 import jittor as jt
@@ -1186,6 +1187,11 @@ def _install_module_methods(nn, registry=None):
             _pipeline_state["mark"] = jt.core.number_of_lived_ops()
         return result
 
+    # Modules whose parameters are already in the backward registry. Kept
+    # outside the instance so it cannot show up in ``__dict__`` -- a module's
+    # field set is part of its published shape, and tests pin it exactly.
+    _leaves_published = weakref.WeakSet()
+
     def _call(self, *args, **kwargs):
         def dispatch(*call_args, **call_kwargs):
             # torch lets a module override forward per-INSTANCE (`self.forward =
@@ -1200,6 +1206,29 @@ def _install_module_methods(nn, registry=None):
             if _prefer_forward(type(self)):
                 return type(self).forward(self, *call_args, **call_kwargs)
             return _orig_call(self, *call_args, **call_kwargs)
+
+        # Publish this module's own parameters as backward leaves, once.
+        # `loss.backward()` has no graph walk to find them, so the registry is
+        # filled by whoever iterates named_parameters() -- and a training loop
+        # that never calls .parameters() (no optimizer, just backward and read
+        # .grad) used to get None for every weight, silently, where torch fills
+        # them. A module cannot contribute to a loss without being called, so
+        # this is the earliest point that is both reliable and paid once.
+        if self not in _leaves_published:
+            try:
+                _leaves_published.add(self)
+            except TypeError:
+                pass
+            try:
+                registry = getattr(jt, "_torch_leaf_params", None)
+                if registry is None:
+                    registry = jt._torch_leaf_params = {}
+                for _leaf in _orig_named_parameters(self, recurse=False):
+                    _leaf = _leaf[1] if isinstance(_leaf, tuple) else _leaf
+                    if isinstance(_leaf, jt.Var) and _leaf.requires_grad:
+                        registry[id(_leaf)] = _leaf
+            except Exception:
+                pass
 
         state = getattr(self, "_fsdp_state", None)
         if state is not None and getattr(state, "true_fsdp_initialized", False):
