@@ -3,8 +3,31 @@
 import jittor as jt
 
 
-def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
+def _check_conv2d_output_size(x, oh, ow, kernel_size, stride, padding, dilation):
+    """Reject a geometry whose output has no elements, with the numbers in it."""
+    if oh <= 0 or ow <= 0:
+        raise ValueError(
+            f"Conv2d output size is non-positive (oh={oh}, ow={ow}): input "
+            f"{tuple(x.shape)} is too small for kernel {tuple(kernel_size)}, "
+            f"stride {tuple(stride)}, padding {tuple(padding)}, "
+            f"dilation {tuple(dilation)}.")
+
+
+def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
+           *, _depthwise_fast_path=True):
     ''' Applies a 2D convolution over an input signal composed of several input planes.
+
+    This is the only 2-D convolution in the package: ``nn.Conv2d.execute`` and
+    ``nn.Conv._conv_forward`` both call it, so a layer computes the same thing
+    however it is invoked.  It used to be transcribed twice, and the two copies
+    had drifted: the module set ``{"G": G, "C": C}`` compile options on both operands
+    while this one set ``{"G"}`` on one, the module validated the input rank,
+    the channel count and the output size while this one validated nothing, and
+    the module took a CUDA depthwise fast path that this one did not.
+
+    ``_depthwise_fast_path`` is private: it exists so the depthwise CUDA kernel
+    can be cross-checked against the generic grouped path
+    (``tests/nn/test_depthwise_conv.py``).  Nothing else should pass it.
 
     :param x: the input image
     :type x: jt.Var
@@ -39,6 +62,34 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     out_channels = weight.shape[0]
     if groups <= 0:
         raise ValueError("groups must be a positive integer")
+    # Clear, torch-grade errors for the two most common Conv2d misuses, instead
+    # of an empty `AssertionError:` (channel mismatch) or a cryptic "not enough
+    # values to unpack" (wrong ndim). These used to live only in the module.
+    if x.ndim != 4:
+        raise ValueError(
+            f"Conv2d expected a 4-D input (N, C, H, W), but got a {x.ndim}-D input "
+            f"of shape {tuple(x.shape)}.")
+    in_channels = weight.shape[1] * groups
+    if x.shape[1] != in_channels:
+        raise ValueError(
+            f"Conv2d expected input with {in_channels} channels (in_channels), "
+            f"but got {x.shape[1]} channels; input shape {tuple(x.shape)}.")
+    Kh, Kw = weight.shape[-2:]
+    out_height = (x.shape[2]+padding[0]*2-Kh*dilation[0]+dilation[0]-1)//stride[0]+1
+    out_width = (x.shape[3]+padding[1]*2-Kw*dilation[1]+dilation[1]-1)//stride[1]+1
+    # Before any fast path: cuDNN and the depthwise kernel do not check this,
+    # so validating inside the reindex branches only would leave CUDA silent.
+    _check_conv2d_output_size(x, out_height, out_width, (Kh, Kw), stride,
+                              padding, dilation)
+    # Depthwise CUDA kernel; on CPU DepthwiseConv itself calls back into the
+    # grouped path below, so it is only worth taking when it is really CUDA.
+    if (_depthwise_fast_path
+            and groups == out_channels == x.shape[1]
+            and jt.flags.use_cuda and jt.compiler.is_cuda):
+        y = jt.nn.DepthwiseConv(stride, padding, dilation)(x, weight)
+        if bias is not None:
+            y = y + bias.broadcast(y.shape, [0, 2, 3])
+        return y
     # cuDNN path (memory-efficient fwd+bwd); falls back to reindex below on
     # CPU / no-cuDNN / non-float32. See _CudnnConv2d.
     _y = jt.nn._try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups)
@@ -46,9 +97,7 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
         return _y
     if groups == 1:
         N,C,H,W = x.shape
-        Kh, Kw = weight.shape[-2:]
-        oh = (H+padding[0]*2-Kh*dilation[0]+dilation[0]-1)//stride[0]+1
-        ow = (W+padding[1]*2-Kw*dilation[1]+dilation[1]-1)//stride[1]+1
+        oh, ow = out_height, out_width
         with jt.flag_scope(amp_reg = jt.flags.amp_reg | 36):
             xx = x.reindex([N,out_channels,C,oh,ow,Kh,Kw], [
                     'i0', # Nid
@@ -65,19 +114,16 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
         return y
     else:
         N,C,H,W = x.shape
-        Kh, Kw = weight.shape[-2:]
         G = groups
         CpG = C // G # channels per group
         oc = out_channels
-        oh = (H+padding[0]*2-Kh*dilation[0]+dilation[0]-1)//stride[0]+1
-        ow = (W+padding[1]*2-Kw*dilation[1]+dilation[1]-1)//stride[1]+1
+        oh, ow = out_height, out_width
         xx = x.reindex([N,G,oc//G,CpG,oh,ow,Kh,Kw], [
                 'i0', # Nid
                 f'i1*{CpG}+i3', # Gid
                 f'i4*{stride[0]}-{padding[0]}+i6*{dilation[0]}', # Hid+Khid
                 f'i5*{stride[1]}-{padding[1]}+i7*{dilation[1]}', # Wid+KWid
             ])
-        xx.compile_options = {"G":G}
         # w: [oc, CpG, Kh, Kw]
         ww = weight.reindex([N, G, oc//G, CpG, oh, ow, Kh, Kw], [
                 f'i1*{oc//G}+i2',
@@ -85,6 +131,10 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
                 'i6',
                 'i7'
             ])
+        # Both operands, and both keys: the module set {"G": G, "C": C} on xx
+        # and ww, this one set {"G": G} on xx alone, so the same layer produced
+        # two different fused-op keys depending on how it was called.
+        ww.compile_options = xx.compile_options = {"G":G,"C":C}
         yy = xx*ww
         y = yy.reindex_reduce('add', [N, oc, oh, ow], [
                 'i0',

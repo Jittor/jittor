@@ -8,6 +8,8 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 import unittest
+import unittest.mock
+
 import jittor as jt
 import numpy as np
 import jittor.models as jtmodels
@@ -136,9 +138,16 @@ class TestDepthwiseConv(unittest.TestCase):
                 m.eval()
 
         load_parameters(jittor_model2, jittor_model)
-        for m in jittor_model.modules():
-            if isinstance(m, jt.nn.Conv):
-                m.is_depthwise_conv = False
+        # Model 1 runs the generic grouped path, model 2 the depthwise CUDA
+        # kernel, and the two are compared below. The switch used to be the
+        # module attribute ``is_depthwise_conv``; the choice now belongs to
+        # jt.nn.conv2d (so that a layer built before `use_cuda = 1` still gets
+        # the fast path), and the private keyword is the way to turn it off.
+        # ``is_depthwise_conv`` stays as the descriptive attribute it names.
+        original_conv2d = jt.nn.conv2d
+        def _generic_conv2d(*args, **kwargs):
+            kwargs["_depthwise_fast_path"] = False
+            return original_conv2d(*args, **kwargs)
         cnt = 0
         for m in jittor_model2.modules():
             if isinstance(m, jt.nn.Conv):
@@ -148,7 +157,8 @@ class TestDepthwiseConv(unittest.TestCase):
         jt_optimizer = jt.nn.SGD(jittor_model.parameters(), lr = lr)
         jt_optimizer2 = jt.nn.SGD(jittor_model2.parameters(), lr = lr)
 
-        jittor_result = jittor_model(jittor_test_img)
+        with unittest.mock.patch.object(jt.nn, "conv2d", _generic_conv2d):
+            jittor_result = jittor_model(jittor_test_img)
         mask = jt.random(jittor_result.shape, jittor_result.dtype)
         loss = jittor_result * mask
         jt_optimizer.step(loss)

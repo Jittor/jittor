@@ -94,9 +94,10 @@ class Conv(jt.Module):
         self.padding = jt.nn._pair(padding)
         self.dilation = jt.nn._pair(dilation)
         self.groups = groups
+        # Descriptive only. The depthwise CUDA kernel is selected per call by
+        # jt.nn.conv2d, not decided here: deciding it in __init__ meant a layer
+        # built before `jt.flags.use_cuda = 1` never took the fast path.
         self.is_depthwise_conv = self.groups == self.out_channels and self.groups == self.in_channels
-        if self.is_depthwise_conv and jt.flags.use_cuda and jt.compiler.is_cuda:
-            self.depthwise_conv = jt.nn.DepthwiseConv(stride, padding, dilation)
         Kh, Kw = self.kernel_size
 
         self.weight = jt.nn.init.invariant_uniform([out_channels, in_channels//groups, Kh, Kw], dtype="float")
@@ -110,99 +111,19 @@ class Conv(jt.Module):
             self.bias = None
 
     def execute(self, x):
-        # Clear, torch-grade errors for the two most common Conv2d misuses, instead of an
-        # empty `AssertionError:` (channel mismatch) or a cryptic "not enough values to
-        # unpack" (wrong ndim). Covers all paths (depthwise / groups==1 / grouped) at once.
-        if x.ndim != 4:
-            raise ValueError(
-                f"Conv2d expected a 4-D input (N, C, H, W), but got a {x.ndim}-D input "
-                f"of shape {tuple(x.shape)}.")
-        if x.shape[1] != self.in_channels:
-            raise ValueError(
-                f"Conv2d expected input with {self.in_channels} channels (in_channels), "
-                f"but got {x.shape[1]} channels; input shape {tuple(x.shape)}.")
-        if hasattr(self, 'depthwise_conv'):
-            y = self.depthwise_conv(x, self.weight)
-            if self.bias is not None:
-                b = self.bias.broadcast(y.shape, [0,2,3])
-                y = y + b
-            return y
-        # cuDNN path (memory-efficient fwd+bwd); falls back to reindex below on
-        # CPU / no-cuDNN / non-float32. See _CudnnConv2d.
-        _y = jt.nn._try_cudnn_conv2d(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
-        if _y is not None:
-            return _y
-        if self.groups == 1:
-            N,C,H,W = x.shape
-            Kh, Kw = self.kernel_size
-            assert C==self.in_channels
-            oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
-            ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
-            if oh<=0 or ow<=0:
-                raise ValueError(
-                    f"Conv2d output size is non-positive (oh={oh}, ow={ow}): input "
-                    f"{tuple(x.shape)} is too small for kernel {tuple(self.kernel_size)}, "
-                    f"stride {tuple(self.stride)}, padding {tuple(self.padding)}, "
-                    f"dilation {tuple(self.dilation)}.")
-            with jt.flag_scope(amp_reg = jt.flags.amp_reg | 36):
-                xx = x.reindex([N,self.out_channels,C,oh,ow,Kh,Kw], [
-                    'i0', # Nid
-                    'i2', # Cid
-                    f'i3*{self.stride[0]}-{self.padding[0]}+i5*{self.dilation[0]}', # Hid+Khid
-                    f'i4*{self.stride[1]}-{self.padding[1]}+i6*{self.dilation[1]}', # Wid+KWid
-                ])
-                ww = self.weight.broadcast(xx.shape, [0,3,4])
-                yy = xx*ww
-                y = yy.sum([2,5,6]) # Kc, Kh, Kw
-            if self.bias is not None:
-                b = self.bias.broadcast(y.shape, [0,2,3])
-                y = y + b
-            return y
-        else:
-            N,C,H,W = x.shape
-            Kh, Kw = self.kernel_size
-            G = self.groups
-            CpG = C // G # channels per group
-            assert C==self.in_channels
-            oc = self.out_channels
-            oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
-            ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
-            if oh<=0 or ow<=0:
-                raise ValueError(
-                    f"Conv2d output size is non-positive (oh={oh}, ow={ow}): input "
-                    f"{tuple(x.shape)} is too small for kernel {tuple(self.kernel_size)}, "
-                    f"stride {tuple(self.stride)}, padding {tuple(self.padding)}, "
-                    f"dilation {tuple(self.dilation)}.")
-            xx = x.reindex([N,G,oc//G,CpG,oh,ow,Kh,Kw], [
-                'i0', # Nid
-                f'i1*{CpG}+i3', # Gid
-                f'i4*{self.stride[0]}-{self.padding[0]}+i6*{self.dilation[0]}', # Hid+Khid
-                f'i5*{self.stride[1]}-{self.padding[1]}+i7*{self.dilation[1]}', # Wid+KWid
-            ])
-            # w: [oc, CpG, Kh, Kw]
-            ww = self.weight.reindex([N, G, oc//G, CpG, oh, ow, Kh, Kw], [
-                f'i1*{oc//G}+i2',
-                'i3',
-                'i6',
-                'i7'
-            ])
-            ww.compile_options = xx.compile_options = {"G":G,"C":C}
-            yy = xx*ww
-            y = yy.reindex_reduce('add', [N, oc, oh, ow], [
-                'i0',
-                f'i1*{oc//G}+i2',
-                'i4',
-                'i5'
-            ])
-            if self.bias is not None:
-                b = self.bias.broadcast(y.shape, [0,2,3])
-                y = y + b
-            return y
+        return self._conv_forward(x, self.weight, self.bias)
 
     def _conv_forward(self, input, weight, bias=None):
         # torch nn.Conv2d API: apply the conv with an externally supplied weight
         # (and bias). Used by mmdet's NormedConv2d (seesaw loss / normed heads),
         # which normalizes the weight then calls self._conv_forward(x, weight_, bias).
+        #
+        # execute() goes through here too, so this module holds parameters and
+        # nothing else: there is one 2-D convolution and it lives in
+        # jt.nn.conv2d. The two used to be independent transcriptions that had
+        # already drifted apart in compile options, validation and the CUDA
+        # depthwise path -- and _conv_forward called the functional one, so the
+        # same layer computed different things depending on the entry point.
         return jt.nn.conv2d(input, weight, bias, self.stride, self.padding,
                             self.dilation, self.groups)
 
