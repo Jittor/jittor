@@ -63,16 +63,34 @@ class Adan(Optimizer):
             group["pre_grad"].append(jt.zeros(p.shape, p.dtype).stop_grad())
         self.param_groups.append(group)
 
+    def _global_max_grad_norm(self):
+        """The single gradient-norm bound to enforce this step.
+
+        ``Optimizer.clip_grad_norm`` renormalises the gradients of *every*
+        param group at once, so the bound cannot be applied group by group.
+        When groups disagree the tightest positive bound wins: it is the only
+        value that violates nobody's request.
+        """
+        bounds = [self.max_grad_norm]
+        bounds += [pg["max_grad_norm"] for pg in self.param_groups
+                   if "max_grad_norm" in pg]
+        positive = [b for b in bounds if b > 0]
+        return min(positive) if positive else 0.0
+
     def step(self, loss=None, retain_graph=False):
         self.pre_step(loss, retain_graph)
         n = float(self.n_step)
+        # Global clipping happens once, before any group is updated. Doing it
+        # inside the loop below applied the clip once per param group (leaving
+        # the gradients well under the requested norm) and let the groups
+        # visited first take their step on gradients that were not clipped yet.
+        max_grad_norm = self._global_max_grad_norm()
+        if max_grad_norm > 0: self.clip_grad_norm(max_grad_norm)
         for pg in self.param_groups:
             lr = pg.get("lr", self.lr)
             betas = pg.get("betas", self.betas)
             eps = pg.get("eps", self.eps)
             weight_decay = pg.get("weight_decay", self.weight_decay)
-            max_grad_norm = pg.get("max_grad_norm", self.max_grad_norm)
-            if max_grad_norm>0: self.clip_grad_norm(max_grad_norm)
             beta1, beta2, beta3 = betas
 
             bias_correction1 = 1 - beta1 ** n

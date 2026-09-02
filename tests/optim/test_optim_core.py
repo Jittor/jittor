@@ -548,5 +548,73 @@ class TestOptimizerPlumbing(_OptimCoreBase):
         self._devices(body)
 
 
+# ===========================================================================
+#  Adan: global gradient clipping
+# ===========================================================================
+class TestAdanGradClip(_OptimCoreBase):
+    """``clip_grad_norm`` renormalises every group's gradients at once, so Adan
+    must call it once per step, before any group is updated -- not once inside
+    the per-group loop."""
+
+    MAX_NORM = 1e-6      # small enough that a second clip visibly shrinks again
+
+    def _three_group_adan(self, seed):
+        rng = np.random.RandomState(seed)
+        params = [self._param(rng.randn(4).astype("float32")) for _ in range(3)]
+        grads = [rng.randn(4).astype("float32") for _ in range(3)]
+        opt = jt.optim.Adan([{"params": [p]} for p in params],
+                            lr=1e-3, max_grad_norm=self.MAX_NORM)
+        loss = sum(self._linear_loss(p, g) for p, g in zip(params, grads))
+        return opt, loss
+
+    def _grad_norm(self, opt):
+        flat = np.concatenate([_np(g).ravel()
+                               for pg in opt.param_groups for g in pg["grads"]])
+        return float(np.linalg.norm(flat))
+
+    def test_clip_called_once_per_step(self):
+        def body(dev):
+            opt, loss = self._three_group_adan(70)
+            real = opt.clip_grad_norm
+            n_calls = []
+
+            def spy(*args, **kwargs):
+                n_calls.append(args)
+                return real(*args, **kwargs)
+
+            opt.clip_grad_norm = spy
+            opt.step(loss)
+            self.assertEqual(
+                len(n_calls), 1,
+                msg=f"clip_grad_norm is global; call it once per step, "
+                    f"got {len(n_calls)} calls for 3 param groups [{dev}]")
+        self._devices(body)
+
+    def test_gradients_end_at_the_requested_norm(self):
+        # Clipping N times leaves the norm at max/(N-th application), i.e.
+        # well below what the user asked for.
+        def body(dev):
+            opt, loss = self._three_group_adan(71)
+            opt.step(loss)
+            got = self._grad_norm(opt)
+            self.assertAlmostEqual(
+                got / self.MAX_NORM, 1.0, places=3,
+                msg=f"gradient norm after step should be max_grad_norm, "
+                    f"got {got} [{dev}]")
+        self._devices(body)
+
+    def test_no_clip_when_bound_is_zero(self):
+        def body(dev):
+            rng = np.random.RandomState(72)
+            p = self._param(rng.randn(4).astype("float32"))
+            g = rng.randn(4).astype("float32")
+            opt = jt.optim.Adan([p], lr=1e-3, max_grad_norm=0.0)
+            opt.step(self._linear_loss(p, g))
+            self.assertAlmostEqual(self._grad_norm(opt),
+                                   float(np.linalg.norm(g)), places=5,
+                                   msg=f"max_grad_norm=0 must not clip [{dev}]")
+        self._devices(body)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
