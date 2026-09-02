@@ -10,6 +10,7 @@ import numpy as np
 from collections import OrderedDict
 
 import jittor as jt
+from jittor import _arg_policy
 
 
 _ComplexNumber = jt.nn.ComplexNumber
@@ -222,12 +223,68 @@ def ifftshift(input, dim=None):
     return _shift_dims(input, dim, True)
 
 
-def fftfreq(n, d=1.0, **kwargs):
-    return jt.array(np.fft.fftfreq(n, d).astype("float32"))
+def _freq_common(api, np_fn, n, d, dtype, device, requires_grad, out, kwargs):
+    """Shared tail of fftfreq/rfftfreq.
+
+    These two used to be ``def fftfreq(n, d=1.0, **kwargs)`` with the body
+    ignoring ``kwargs`` entirely. Three separate problems:
+
+    * ``dtype`` was swallowed and the result was ALWAYS float32, so
+      ``fftfreq(8, dtype="float64")`` silently returned float32 and every
+      downstream computation quietly lost precision. That is an observable
+      value, so it is implemented here rather than reported.
+    * ``device`` was swallowed. jittor has no per-Var device (placement follows
+      the global ``jt.flags.use_cuda``), so it is reported as `ignored` -- it
+      changes no value.
+    * **``**kwargs`` also swallowed misspellings.** ``fftfreq(8, dtpye="f64")``
+      returned a float32 Var and said nothing. A signature that accepts
+      anything and reads nothing is the hardest kind of lie to debug, so
+      unknown keywords now raise TypeError the way any other function would.
+    """
+    if kwargs:
+        raise TypeError("%s() got an unexpected keyword argument %r"
+                        % (api.rsplit(".", 1)[-1], sorted(kwargs)[0]))
+    if out is not None:
+        _arg_policy.unsupported(
+            api, "out", out,
+            "the result is returned as a new Var and nothing is written into "
+            "the supplied out Var, so the caller's buffer keeps its old values")
+    if device is not None:
+        _arg_policy.ignored(
+            api, "device", device,
+            "jittor has no per-Var device; placement follows the global "
+            "jt.flags.use_cuda")
+    values = np_fn(n, d)
+    # torch's default for these is the default floating dtype (float32 here).
+    name = _np_dtype(dtype) if dtype is not None else "float32"
+    # dtype= is NOT optional here: jt.array(np_float64_array) silently narrows
+    # to float32, which is exactly the bug this parameter is being added to fix.
+    result = jt.array(values.astype(name), dtype=name)
+    if requires_grad:
+        result.start_grad()
+    return result
 
 
-def rfftfreq(n, d=1.0, **kwargs):
-    return jt.array(np.fft.rfftfreq(n, d).astype("float32"))
+def _np_dtype(dtype):
+    """Accept the spellings jittor/torch users pass: 'float64', jt.float64, ..."""
+    name = getattr(dtype, "__name__", None) or str(dtype)
+    name = name.replace("jittor.", "").replace("torch.", "")
+    if name not in ("float16", "float32", "float64"):
+        raise TypeError(
+            "fftfreq/rfftfreq need a floating dtype, got %r" % (dtype,))
+    return name
+
+
+def fftfreq(n, d=1.0, *, out=None, dtype=None, device=None,
+            requires_grad=False, **kwargs):
+    return _freq_common("jittor.fft.fftfreq", np.fft.fftfreq, n, d, dtype,
+                        device, requires_grad, out, kwargs)
+
+
+def rfftfreq(n, d=1.0, *, out=None, dtype=None, device=None,
+             requires_grad=False, **kwargs):
+    return _freq_common("jittor.fft.rfftfreq", np.fft.rfftfreq, n, d, dtype,
+                        device, requires_grad, out, kwargs)
 
 
 __all__ = [

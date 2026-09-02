@@ -32,6 +32,11 @@ from jittor_utils import LOG
 import jittor as jt
 import time
 import jittor_utils as jit_utils
+from jittor import _arg_policy
+
+#: Distinguishes "the caller did not mention persistent_workers" from an
+#: explicit persistent_workers=False. See Dataset.__init__ for why that matters.
+_PERSISTENT_WORKERS_UNSET = object()
 
 dataset_root = os.path.join(jit_utils.home(), ".cache", "jittor", "dataset")
 # int() like the CHECK_MEMORY line below: os.environ.get returns a *string*,
@@ -147,7 +152,7 @@ class Dataset(object):
                  collate_fn = None,
                  worker_init_fn = None,
                  pin_memory = False,
-                 persistent_workers = False):
+                 persistent_workers = _PERSISTENT_WORKERS_UNSET):
         super().__init__()
         if os.environ.get("DISABLE_MULTIPROCESSING", '0') == '1':
             num_workers = 0
@@ -161,13 +166,53 @@ class Dataset(object):
         self.keep_numpy_array = keep_numpy_array
         self.endless = endless
         # torch-compatible options (additive). collate_fn overrides the
-        # default collate_batch when provided; worker_init_fn is called
-        # once per worker process after seeding; pin_memory / persistent_workers
-        # mirror torch's DataLoader semantics.
+        # default collate_batch when provided; worker_init_fn is called once
+        # per worker process after seeding.
         self.collate_fn = collate_fn
         self.worker_init_fn = worker_init_fn
-        self.pin_memory = pin_memory
-        self.persistent_workers = persistent_workers
+
+        # pin_memory and persistent_workers are accepted for signature
+        # compatibility and NOT honoured. The comment here used to claim they
+        # "mirror torch's DataLoader semantics", which was simply untrue: both
+        # were stored on self and read by nothing.
+        #
+        # Both are reported through jittor._arg_policy as `ignored`, not
+        # `unsupported`: what torch promises for them is a memory placement and
+        # a process lifetime, never a number. Every value this loader yields is
+        # the same either way.
+        if pin_memory:
+            _arg_policy.ignored(
+                "jittor.dataset.Dataset", "pin_memory", pin_memory,
+                "batches are returned from ordinary pageable memory, so "
+                "host-to-device copies do not get the pinned-memory speedup")
+        self.pin_memory = bool(pin_memory)
+
+        # persistent_workers needs care, because only ONE of its two values is
+        # a broken promise -- and it is the default.
+        #
+        # jittor's workers are started once and live for the whole Dataset, so
+        # persistent_workers=True is ALREADY satisfied: asking for it and
+        # getting it is not worth a warning. persistent_workers=False asks for
+        # workers to be torn down and rebuilt each epoch, which jittor never
+        # does -- but False is torch's default, so warning on it would print
+        # for every user who never mentioned the parameter.
+        #
+        # Hence the sentinel: warn only when False was passed EXPLICITLY. The
+        # observable difference is lifecycle, not values -- worker_init_fn runs
+        # once per worker rather than once per worker per epoch, and worker
+        # memory is never reclaimed between epochs.
+        if persistent_workers is _PERSISTENT_WORKERS_UNSET:
+            persistent_workers = True   # describe what actually happens
+        elif not persistent_workers:
+            _arg_policy.ignored(
+                "jittor.dataset.Dataset", "persistent_workers",
+                persistent_workers,
+                "worker processes are always kept alive for the lifetime of "
+                "the Dataset, so they are not torn down and recreated between "
+                "epochs and worker_init_fn runs once per worker rather than "
+                "once per epoch")
+            persistent_workers = True
+        self.persistent_workers = bool(persistent_workers)
         self.epoch_id = 0
         self.sampler = None
         self._disable_workers = False

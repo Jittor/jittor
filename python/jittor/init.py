@@ -11,6 +11,8 @@ import jittor as jt
 from jittor import NanoVector, Var
 import numpy as np
 import math
+
+from jittor import _arg_policy
 import warnings
 
 def eye(shape, dtype="float32"):
@@ -484,6 +486,24 @@ def kaiming_uniform_(var, a=0, mode='fan_in', nonlinearity='leaky_relu', generat
         linear.weight.kaiming_uniform_() # This is ok too
 
     '''
+    if generator is not None:
+        # `unsupported`, not `ignored`: a seeded generator asks for one specific
+        # tensor, and jittor draws a different one from its global RNG. That is
+        # a changed observable value, not a missed optimisation.
+        #
+        # Not implemented by reseeding the global RNG from the generator (the
+        # shortcut jittor.compat.torch.installers.factories uses for randn):
+        # torch ADVANCES a generator per draw, so reseeding on every call would
+        # make N layers initialised from the same generator come out with
+        # IDENTICAL weights wherever their shapes match -- trading a visible
+        # error for a much worse silent one. Real support needs a per-generator
+        # RNG stream in the core, which jittor does not have (only the process-
+        # wide jt.set_global_seed).
+        _arg_policy.unsupported(
+            "jittor.init.kaiming_uniform_", "generator", generator,
+            "jittor has only a process-wide RNG, so the draw cannot come from "
+            "the supplied generator's stream: the values differ from torch's "
+            "and the generator is neither read nor advanced")
     std = calculate_std(var,mode,nonlinearity,a)
     bound = math.sqrt(3.0) * std
     return uniform_(var,-bound, bound)
@@ -515,6 +535,24 @@ def kaiming_normal_(var, a=0, mode='fan_in', nonlinearity='leaky_relu', generato
         linear.weight.kaiming_normal_() # This is ok too
 
     '''
+    if generator is not None:
+        # `unsupported`, not `ignored`: a seeded generator asks for one specific
+        # tensor, and jittor draws a different one from its global RNG. That is
+        # a changed observable value, not a missed optimisation.
+        #
+        # Not implemented by reseeding the global RNG from the generator (the
+        # shortcut jittor.compat.torch.installers.factories uses for randn):
+        # torch ADVANCES a generator per draw, so reseeding on every call would
+        # make N layers initialised from the same generator come out with
+        # IDENTICAL weights wherever their shapes match -- trading a visible
+        # error for a much worse silent one. Real support needs a per-generator
+        # RNG stream in the core, which jittor does not have (only the process-
+        # wide jt.set_global_seed).
+        _arg_policy.unsupported(
+            "jittor.init.kaiming_normal_", "generator", generator,
+            "jittor has only a process-wide RNG, so the draw cannot come from "
+            "the supplied generator's stream: the values differ from torch's "
+            "and the generator is neither read nor advanced")
     std = calculate_std(var,mode,nonlinearity,a)
     return gauss_(var,0, std)
 Var.kaiming_normal_ = kaiming_normal_

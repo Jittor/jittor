@@ -39,6 +39,16 @@ treats garbage as valid.  That is a changed number, not a missed optimisation.
 return *different index tensors* for tied keys, and anything downstream that
 depends on tie order silently diverges.
 
+``Dataset(persistent_workers=...)`` -> **ignored, but only for one of its two
+values, and it is not the default**.  Jittor's workers live for the whole
+Dataset, so ``persistent_workers=True`` is *already honoured* and must not warn.
+``False`` asks for workers to be rebuilt each epoch, which never happens -- but
+``False`` is torch's default, so warning on it would print for every user who
+never mentioned the parameter.  The fix is a sentinel default so that only an
+**explicit** ``False`` reports.  The general lesson: "the parameter is never
+read" is not the same as "the promise is not kept" -- read the values, not the
+code.
+
 ``topk(x, k, sorted=False)`` -> **neither; do not route it here at all**.
 ``sorted=False`` asks for a *weaker* guarantee than what is returned, and torch
 leaves that ordering unspecified, so returning sorted output satisfies the

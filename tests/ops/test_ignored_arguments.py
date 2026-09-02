@@ -303,5 +303,161 @@ class TestPolicyRegistry(_PolicyCase):
         self.assertTrue(consequence)
 
 
+# ===========================================================================
+#  Non-operator parameters (5.19, "the rest"): dataset, autograd, init, fft
+# ===========================================================================
+class TestVjpJvpStrict(_PolicyCase):
+    """``strict=True`` was a dead switch, so it is `unsupported`, not `ignored`.
+
+    torch's strict mode raises when the output turns out to be independent of
+    one of the inputs. Both branches that would raise that in
+    ``autograd/functional.py`` key off ``grads_i is None`` -- but jittor's
+    ``jt.grad`` returns a **zero-filled Var** for an unrelated input, never
+    None. So the branch was unreachable and ``strict=True`` returned
+    byte-identical results to ``strict=False``: the caller believed a check was
+    on, and nothing was checked.
+    """
+
+    def _independent(self):
+        from jittor.autograd.functional import vjp, jvp
+        x = jt.array(np.array([1.0, 2.0], dtype="float32"))
+        y = jt.array(np.array([3.0, 4.0], dtype="float32"))
+        x.start_grad(); y.start_grad()
+        f = lambda a, b: (a * 2).sum()      # b is never used
+        v = jt.array(np.array([1.0], dtype="float32"))
+        return vjp, jvp, f, (x, y), v
+
+    def test_vjp_strict_raises(self):
+        vjp, _jvp, f, inputs, v = self._independent()
+        with self.assertRaises(NotImplementedError):
+            vjp(f, inputs, v=v, strict=True)
+
+    def test_jvp_strict_raises(self):
+        _vjp, jvp, f, inputs, _v = self._independent()
+        seed = (jt.array(np.array([1.0, 1.0], dtype="float32")),
+                jt.array(np.array([1.0, 1.0], dtype="float32")))
+        with self.assertRaises(NotImplementedError):
+            jvp(f, inputs, v=seed, strict=True)
+
+    def test_strict_false_is_unaffected(self):
+        vjp, _jvp, f, inputs, v = self._independent()
+        _out, res = vjp(f, inputs, v=v, strict=False)
+        np.testing.assert_allclose(res[0].numpy(), [2.0, 2.0], rtol=1e-6)
+        # this is the independence torch's strict mode exists to report, and
+        # the reason the old check could never see it: a zero Var, not None
+        np.testing.assert_allclose(res[1].numpy(), [0.0, 0.0], atol=0)
+
+    def test_escape_hatch_warns_and_returns_strict_false_behaviour(self):
+        _arg_policy.set_allow_unsupported(True)
+        vjp, _jvp, f, inputs, v = self._independent()
+        got = self.assertWarnsOnce(
+            "jittor.autograd.functional.vjp: strict=True",
+            lambda: vjp(f, inputs, v=v, strict=True))
+        np.testing.assert_allclose(got[1][1].numpy(), [0.0, 0.0], atol=0)
+
+
+class TestKaimingGenerator(_PolicyCase):
+    """``generator`` asks for one specific tensor; jittor draws a different one."""
+
+    def test_kaiming_uniform_generator_raises(self):
+        with self.assertRaises(NotImplementedError):
+            jt.init.kaiming_uniform_(jt.empty((4, 4)), generator=object())
+
+    def test_kaiming_normal_generator_raises(self):
+        with self.assertRaises(NotImplementedError):
+            jt.init.kaiming_normal_(jt.empty((4, 4)), generator=object())
+
+    def test_generator_none_is_the_silent_default(self):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            jt.init.kaiming_uniform_(jt.empty((4, 4)))
+            self.assertEqual([str(c.message) for c in caught], [])
+
+
+class TestDataLoaderResourceHints(_PolicyCase):
+    """pin_memory / persistent_workers: torch promises placement and lifetime,
+    never a value, so both are `ignored`."""
+
+    def _dataset(self, **kw):
+        return jt.dataset.Dataset(batch_size=2, num_workers=0, **kw)
+
+    def test_pin_memory_warns_once(self):
+        self.assertWarnsOnce(
+            "jittor.dataset.Dataset: pin_memory=True",
+            lambda: self._dataset(pin_memory=True))
+
+    def test_pin_memory_default_is_silent(self):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self._dataset()
+            self.assertEqual([str(c.message) for c in caught], [])
+
+    def test_persistent_workers_true_is_silent_because_it_is_honoured(self):
+        # jittor's workers already live for the whole Dataset, so asking for
+        # persistent workers and getting them deserves no warning.
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            d = self._dataset(persistent_workers=True)
+            self.assertEqual([str(c.message) for c in caught], [])
+        self.assertTrue(d.persistent_workers)
+
+    def test_persistent_workers_unset_is_silent_but_reports_the_truth(self):
+        # False is torch's default, and warning on a value nobody passed would
+        # print for every user. The attribute still describes what happens.
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            d = self._dataset()
+            self.assertEqual([str(c.message) for c in caught], [])
+        self.assertTrue(
+            d.persistent_workers,
+            "workers are always persistent, so the default must say so")
+
+    def test_persistent_workers_explicit_false_warns_once(self):
+        self.assertWarnsOnce(
+            "jittor.dataset.Dataset: persistent_workers=False",
+            lambda: self._dataset(persistent_workers=False))
+
+    def test_registry_records_both_as_ignored(self):
+        self._dataset(pin_memory=True, persistent_workers=False)
+        entries = _arg_policy.registry()
+        for name in ("pin_memory", "persistent_workers"):
+            self.assertEqual(entries[("jittor.dataset.Dataset", name)][0],
+                             "ignored")
+
+
+class TestFftFreqArguments(_PolicyCase):
+    """``dtype`` is implemented (it changes values); ``device`` is reported;
+    misspellings stop being swallowed."""
+
+    def test_dtype_is_honoured(self):
+        for fn in (jt.fft.fftfreq, jt.fft.rfftfreq):
+            with self.subTest(fn=fn.__name__):
+                self.assertEqual(str(fn(8).dtype), "float32")
+                self.assertEqual(str(fn(8, dtype="float64").dtype), "float64")
+
+    def test_dtype_values_match_numpy(self):
+        got = jt.fft.fftfreq(8, 0.5, dtype="float64").numpy()
+        np.testing.assert_allclose(got, np.fft.fftfreq(8, 0.5), rtol=0, atol=0)
+        got = jt.fft.rfftfreq(8, 0.5, dtype="float64").numpy()
+        np.testing.assert_allclose(got, np.fft.rfftfreq(8, 0.5), rtol=0, atol=0)
+
+    def test_unknown_keyword_raises_instead_of_being_swallowed(self):
+        # the old signature was (n, d=1.0, **kwargs) with kwargs unread, so a
+        # typo returned a plausible float32 result and said nothing
+        for fn in (jt.fft.fftfreq, jt.fft.rfftfreq):
+            with self.subTest(fn=fn.__name__):
+                with self.assertRaises(TypeError):
+                    fn(8, dtpye="float64")
+
+    def test_device_is_reported(self):
+        self.assertWarnsOnce(
+            "jittor.fft.fftfreq: device=",
+            lambda: jt.fft.fftfreq(8, device="cuda"))
+
+    def test_out_raises(self):
+        with self.assertRaises(NotImplementedError):
+            jt.fft.fftfreq(8, out=jt.empty((8,)))
+
+
 if __name__ == "__main__":
     unittest.main()

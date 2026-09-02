@@ -5,6 +5,35 @@ import jittor as jt
 
 __all__ = ["jvp", "vjp"]
 
+from .._arg_policy import unsupported as _unsupported_arg
+
+_STRICT_CONSEQUENCE = (
+    "jittor's jt.grad returns a zero-filled Var for an input the output does "
+    "not depend on, never None, so the independence check strict mode exists "
+    "for cannot fire and strict=True would silently behave exactly like "
+    "strict=False"
+)
+
+
+def _reject_strict(api, strict):
+    """``strict=True`` cannot be honoured here, so say so instead of pretending.
+
+    torch's strict mode raises when the output turns out to be independent of
+    some input. Both branches that would raise that here key off ``grads_i is
+    None``, and ``_autograd_grad`` gets its grads from ``jt.grad``, which
+    returns a **zero Var** for an unrelated input (it even logs "doesn't have
+    gradient. It will be set to zero"). So the branch was unreachable and
+    ``strict=True`` returned byte-identical results to ``strict=False`` --
+    a switch the caller believes turned a check on, which checked nothing.
+
+    This is ``unsupported`` rather than ``ignored`` because the caller acts on
+    the answer: they asked to be told about an unexpected independence and were
+    told nothing, so they conclude their function depends on every input when
+    it may not.
+    """
+    if strict:
+        _unsupported_arg(api, "strict", True, _STRICT_CONSEQUENCE)
+
 # Utility functions
 def _is_native_complex(x):
     # A native complex64/complex128 jt.Var (the new first-class complex dtype), as
@@ -341,6 +370,7 @@ def vjp(func, inputs, v=None, create_graph=False, strict=False):
             vjp (tuple of Tensors or Tensor): result of the dot product with
             the same shape as the inputs.
     """
+    _reject_strict("jittor.autograd.functional.vjp", strict)
     with jt.enable_grad():
         is_inputs_tuple, inputs = _as_tuple(inputs, "inputs", "vjp")
         inputs = _grad_preprocess(inputs, create_graph=create_graph, need_graph=True)
@@ -406,6 +436,7 @@ def jvp(func, inputs, v=None, create_graph=False, strict=False):
             the same shape as the output.
 
     """
+    _reject_strict("jittor.autograd.functional.jvp", strict)
     with jt.enable_grad():
         is_inputs_tuple, inputs = _as_tuple(inputs, "inputs", "jvp")
         inputs = _grad_preprocess(inputs, create_graph=create_graph, need_graph=True)
