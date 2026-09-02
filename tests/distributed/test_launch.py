@@ -21,11 +21,11 @@ hand. Every extra rank makes this more likely, which is the wrong direction.
 """
 import os
 from pathlib import Path
-import subprocess
-import sys
 import tempfile
 import time
 import unittest
+
+from _helpers.child_process import PYTHON, run_python_child
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _LAUNCH = _REPO_ROOT / "python" / "jittor" / "distributed" / "launch.py"
@@ -48,19 +48,16 @@ print("cache_name=%r" % os.environ.get("cache_name"), flush=True)
 
 
 def _launch(nproc, code, logdir, timeout):
-    env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join(
-        [os.fspath(_REPO_ROOT / "python")]
-        + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
-    # The ranks must not need a GPU, and --backend nccl keeps _detect_backend
-    # (which imports jittor) out of the picture.
+    # Through _helpers.child_process: the launcher itself imports jittor (for
+    # the peer-access probe) and passes its environment down to every rank, so
+    # an unpinned PYTHONPATH here would put another checkout in all of them.
+    # The ranks need no GPU, and --backend nccl keeps _detect_backend (which
+    # also imports jittor) out of the picture.
     start = time.time()
-    done = subprocess.run(
-        [sys.executable, os.fspath(_LAUNCH), "-n", str(nproc),
-         "--backend", "nccl", "--logdir", logdir,
-         "--", sys.executable, "-c", code],
-        env=env, cwd=os.fspath(_REPO_ROOT), stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT, text=True, timeout=timeout)
+    done = run_python_child(
+        [os.fspath(_LAUNCH), "-n", str(nproc), "--backend", "nccl",
+         "--logdir", logdir, "--", PYTHON, "-c", code],
+        cwd=_REPO_ROOT, merge_stderr=True, timeout=timeout)
     return done, time.time() - start
 
 

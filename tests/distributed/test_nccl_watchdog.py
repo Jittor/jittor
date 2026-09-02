@@ -44,13 +44,13 @@ regression that removed them would leave this test hanging, not failing.
 import json
 import os
 from pathlib import Path
-import subprocess
-import sys
 import tempfile
 import time
 import unittest
 
 import jittor as jt
+
+from _helpers.child_process import run_python_child
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -91,6 +91,8 @@ devices = sys.argv[4:]
 script = os.environ["JT_TEST_RANK_SCRIPT"]
 procs, logs = [], []
 for rank, device in enumerate(devices):
+    # os.environ here already carries the PYTHONPATH child_process pinned when
+    # it started this conductor, so the ranks import the tree under test.
     env = dict(os.environ)
     env["CUDA_VISIBLE_DEVICES"] = device
     env["cache_name"] = "nccl%d" % rank
@@ -201,10 +203,13 @@ class TestNcclWatchdog(unittest.TestCase):
             env["cache_name"] = "nccl%d" % rank
             env["JT_NCCL_RANK"] = "0"
             env["JT_NCCL_LOCAL_RANK"] = "0"
-            done = subprocess.run(
-                [sys.executable, "-c", _RANK_SCRIPT, "1"],
-                env=env, cwd=os.fspath(_REPO_ROOT),
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            # inherit=False: `env` is already complete and had things set
+            # per rank; the helper still pins PYTHONPATH to this checkout, so
+            # the rank imports the tree under test rather than whatever the
+            # editable install points at.
+            done = run_python_child(
+                ["-c", _RANK_SCRIPT, "1"], env=env, inherit=False,
+                cwd=_REPO_ROOT, merge_stderr=True,
                 timeout=_WARMUP_TIMEOUT_S)
             if done.returncode != 0:
                 raise unittest.SkipTest(
@@ -221,12 +226,11 @@ class TestNcclWatchdog(unittest.TestCase):
         self.rootinfo = os.path.join(self.tmp.name, "rootinfo.bin")
 
     def _conduct(self, mode, steps, timeout):
-        done = subprocess.run(
-            [sys.executable, "-c", _CONDUCTOR, mode, self.tmp.name,
-             str(steps)] + list(self.devices),
-            env=_base_env(self.rootinfo, len(self.devices)),
-            cwd=os.fspath(_REPO_ROOT), stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, text=True, timeout=timeout)
+        done = run_python_child(
+            ["-c", _CONDUCTOR, mode, self.tmp.name, str(steps)]
+            + list(self.devices),
+            env=_base_env(self.rootinfo, len(self.devices)), inherit=False,
+            cwd=_REPO_ROOT, merge_stderr=True, timeout=timeout)
         line = [l for l in done.stdout.splitlines() if l.startswith("SUMMARY ")]
         self.assertTrue(line, "conductor said nothing:\n" + done.stdout[-3000:])
         summary = json.loads(line[-1][len("SUMMARY "):])
