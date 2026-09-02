@@ -85,6 +85,14 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 构建 | — |  |
 | 门禁 | gates (0.01–0.04/06/12/13/18/19) | CPU c104-111 |
 
+## 执行中出现的、需要认领的杂项
+
+| 事项 | 现象 | 建议归属 |
+| --- | --- | --- |
+| wheel 内容基线过期 | `agent/scripts/test_check_wheel_contents.py::test_repository_default_policy_is_the_clean_final_baseline` 报 `817 != 793`，有人加了新模块没更新基线 | 构建分区，随 9.x 一并更新 |
+| 结构测试子进程超时 flaky | `test_root_domain_structure.py::test_native_cold_start_preserves_legacy_module_surfaces` 子进程 180s 超时，机器有负载时超、单独重跑通过 | 门禁分区，放宽 timeout 或改判据 |
+| `test_atomic_tuner` 抓不到日志 | 嫌疑指向 `9eb696d9`（WarpReducePass 把 atomicAdd 改写成复合块）；`atomic_tuner_pass` 无源码，待 1.01 还原后可直接读代码确认 | 门禁分区做 `9eb696d9^` 对照定论 |
+
 ## 任务
 
 | 编号 | 任务 | 状态 | 负责 | 提交 |
