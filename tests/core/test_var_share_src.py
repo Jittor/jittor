@@ -31,17 +31,13 @@ rather than crashing.
 Run::  python -m pytest tests/core/test_var_share_src.py
 """
 
-import os
-import subprocess
-import sys
 import unittest
 
 import numpy as np
 
 import jittor as jt
 
-
-PYTHON_DIR = os.path.dirname(os.path.dirname(os.path.abspath(jt.__file__)))
+from _helpers.child_process import run_child_script
 
 # `source` is created *after* `sharer` on purpose: top_weak_sync only sweeps in
 # holders older than the var being synced, so a newer one stays unexecuted and
@@ -60,19 +56,9 @@ print("DONE")
 
 def run_probe(source):
     """Run a probe in a child process pinned to this worktree."""
-    environment = dict(os.environ)
-    environment["PYTHONPATH"] = os.pathsep.join(
-        [PYTHON_DIR] + ([environment["PYTHONPATH"]]
-                        if environment.get("PYTHONPATH") else [])
-    )
-    done = subprocess.run(
-        [sys.executable, "-c", source],
-        env=environment,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        timeout=1800,
-    )
-    return done.returncode, done.stdout.decode("utf8", "replace")
+    done = run_child_script(source, text=True, merge_stderr=True,
+                            name="var_share_src")
+    return done.returncode, done.stdout
 
 
 class TestVarShareSrc(unittest.TestCase):
