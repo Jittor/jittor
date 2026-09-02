@@ -12,8 +12,8 @@ static auto hccl_all_reduce =
     get_op_info("hccl_all_reduce").get_constructor<VarPtr, Var*, string>();
 
 HcclAllReduceOp::HcclAllReduceOp(Var* x, string reduce_op) : x(x), reduce_op(reduce_op) {
-    flags.set(NodeFlags::_cpu, 0);
-    flags.set(NodeFlags::_cuda, 1);
+    set_flag(OpFlags::_cpu, 0);
+    set_flag(OpFlags::_cuda, 1);
     y = create_output(nullptr, x->dtype());
 }
 

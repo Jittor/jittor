@@ -19,7 +19,7 @@ namespace jittor {
 
 #ifndef JIT
 CurandRandomOp::CurandRandomOp(NanoVector shape, NanoString dtype, NanoString type) {
-    flags.set(NodeFlags::_cuda, 1);
+    set_flag(OpFlags::_cuda, 1);
     // curand generates float and double only. Anything else used to expand to
     // curandGenerate*Double against a pointer of the wrong type and fail deep
     // inside nvcc; say so here instead. jt.random() already lowers float16 and

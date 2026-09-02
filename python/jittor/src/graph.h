@@ -6,6 +6,10 @@
 // ***************************************************************
 #pragma once
 #include "node.h"
+// For Op::flag: the edge test below has to read an *Op* flag, and only an Op*
+// can name one now (NodeFlags in node.h). A forward declaration is no longer
+// enough, which is the type system doing its job.
+#include "op.h"
 
 namespace jittor {
 
@@ -50,8 +54,12 @@ void clean_graph();
 bool lookup_requires_grad_disabled_edge(Node* source, Node* target);
 
 inline bool is_requires_grad_disabled_edge(Node* source, Node* target) {
+    // Only ops carry the Op meaning of this bit ("I own frozen edge
+    // snapshots"); on a Var the same bit number means the user's reversible
+    // requires_grad_(False). The is_var() test above is what makes the read
+    // below an Op read, and it is now the type system that says so.
     if (target->is_var()
-            || !target->flags.get(NodeFlags::_requires_grad_disabled))
+            || !target->op()->flag(OpFlags::_requires_grad_disabled))
         return false;
     return lookup_requires_grad_disabled_edge(source, target);
 }

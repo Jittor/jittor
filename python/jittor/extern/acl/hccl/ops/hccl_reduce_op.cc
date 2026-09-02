@@ -9,8 +9,8 @@ namespace jittor {
 #ifndef JIT
 
 HcclReduceOp::HcclReduceOp(Var* x, string reduce_op, int root) : x(x), reduce_op(reduce_op), root(root) {
-    flags.set(NodeFlags::_cpu, 0);
-    flags.set(NodeFlags::_cuda, 1);
+    set_flag(OpFlags::_cpu, 0);
+    set_flag(OpFlags::_cuda, 1);
     y = create_output(nullptr, x->dtype());
 }
 

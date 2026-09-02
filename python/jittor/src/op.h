@@ -24,8 +24,13 @@ struct Op : Node {
     inline Caster<Var*, Node::output_t> outputs() { CHECK_EXIST; return &_outputs; }
     inline Var* input(uint i) { return Node::input(i)->var(); }
     inline Var* output(uint i) { return Node::output(i)->var(); }
-    inline uint type() const { CHECK_EXIST; return flags.get(NodeFlags::_op_type, NodeFlags::_op_type_nbits); }
-    inline void set_type(OpType t) { CHECK_EXIST; flags.set(NodeFlags::_op_type, t, NodeFlags::_op_type_nbits); }
+    // The Op-private half of the flag word; see Var::set_flag and NodeFlags.
+    inline void set_flag(OpFlags::Flags f, int a=1, int nbits=1)
+        { flags.set_bit((int)f, a, nbits); }
+    inline NodeFlags::nf_t flag(OpFlags::Flags f, int nbits=1) const
+        { return flags.get_bit((int)f, nbits); }
+    inline uint type() const { CHECK_EXIST; return flag(OpFlags::_op_type, OpFlags::_op_type_nbits); }
+    inline void set_type(OpType t) { CHECK_EXIST; set_flag(OpFlags::_op_type, t, OpFlags::_op_type_nbits); }
     
     Var* create_output(NanoVector shape, NanoString dtype);
     void init();

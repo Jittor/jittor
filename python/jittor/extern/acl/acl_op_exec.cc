@@ -188,15 +188,15 @@ namespace jittor
                 migrate_to_cpu(v, exe.allocator);
             }
         }
-        op->flags.set(NodeFlags::_cpu);
-        op->flags.set(NodeFlags::_cuda, 0);
+        op->set_flag(OpFlags::_cpu);
+        op->set_flag(OpFlags::_cuda, 0);
         if (op->name() == string("fused"))
         {
             auto fop = (FusedOp *)op;
             for (auto op : fop->ops)
             {
-                op->flags.set(NodeFlags::_cpu);
-                op->flags.set(NodeFlags::_cuda, 0);
+                op->set_flag(OpFlags::_cpu);
+                op->set_flag(OpFlags::_cuda, 0);
             }
         }
         op->do_run();
@@ -349,7 +349,7 @@ namespace jittor
                     // buffer before earlier ACL kernels finish. Queue the H2D
                     // copy on aclstream so reuse stays ordered with consumers.
                     const void *source = aop->ptr<void>();
-                    if (aop->output->flags.get(NodeFlags::_is_scalar))
+                    if (aop->output->flag(VarFlags::_is_scalar))
                         source = persistent_acl_scalar_data(
                             source, aop->output->size);
                     auto ret = aclrtMemcpyAsync(
@@ -566,7 +566,7 @@ namespace jittor
             src = &src_after_passes;
         }
         op->compile_optimize(*src);
-        if (!op->flags.get(NodeFlags::_cuda))
+        if (!op->flag(OpFlags::_cuda))
         {
             LOGv << "compile cpu";
             return oc.compile(op->get_jit_key(get_jk()), *src);

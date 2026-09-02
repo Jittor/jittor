@@ -56,6 +56,15 @@ struct Var : Node {
     // Both null means "not shared"; a var is never alone in a ring.
     Var* share_prev = nullptr;
     Var* share_next = nullptr;
+    // The Var-private half of the flag word. Reaching these needs a Var*, so
+    // a bare Node* cannot read a bit whose meaning depends on being a Var --
+    // which is the invariant the flag layout has always assumed and never
+    // enforced (see NodeFlags in node.h).
+    inline void set_flag(VarFlags::Flags f, int a=1, int nbits=1)
+        { flags.set_bit((int)f, a, nbits); }
+    inline NodeFlags::nf_t flag(VarFlags::Flags f, int nbits=1) const
+        { return flags.get_bit((int)f, nbits); }
+
     inline bool is_float() const { CHECK_EXIST; return ns.is_float(); }
     inline int dsize() const { CHECK_EXIST; return ns.dsize(); }
     inline NanoString dtype() const { CHECK_EXIST; return ns; }

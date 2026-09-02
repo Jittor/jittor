@@ -48,10 +48,11 @@ struct AmpGradGuard {
     int amp_reg_bk;
     AmpGradGuard(Op* op) {
         amp_reg_bk = amp_reg;
-        // Mirror only the six amp bits the constructor wrote (op.cc); an
-        // unmasked shift also drags _custom_flag and the requires_grad
-        // bookkeeping bits into amp_reg.
-        amp_reg |= ((op->flags.flags >> NodeFlags::_prefer_32) & 63);
+        // Mirror only the six amp bits the constructor wrote (op.cc). Reading
+        // the field by width rather than shifting the raw word is what keeps
+        // _custom_flag and the requires_grad bookkeeping bits out of amp_reg;
+        // the two sides now name the same field instead of the same number.
+        amp_reg |= op->flag(OpFlags::_prefer_32, OpFlags::_amp_nbits);
     }
 
     ~AmpGradGuard() {
@@ -75,8 +76,8 @@ VarPtr make_grad(Op* op, Var* out, Var* dout, Var* x, int x_index) {
 }
 
 inline static void assign_attrs(Var* a, Var* b) {
-    if (b->flags.get(NodeFlags::_stop_fuse))
-        a->flags.set(NodeFlags::_stop_fuse);
+    if (b->flag(VarFlags::_stop_fuse))
+        a->set_flag(VarFlags::_stop_fuse);
 }
 
 DEFINE_FLAG(int, missing_grad_error, 0, "Raise instead of warning when a target of grad receives no gradient at all and is filled with zeros.");
@@ -106,7 +107,7 @@ vector<VarPtr> grad(
 ) {
     LOGvv << "loss:" >> loss << "targets:" >> targets;
     CHECK(loss->is_float()) << "Loss should be float";
-    CHECK(!loss->flags.get(NodeFlags::_first_order_only))
+    CHECK(!loss->flag(VarFlags::_first_order_only))
         << "Higher-order gradients are not supported because this loss "
         << "depends on a first-order-only gradient result.";
     for (Var* var : targets)
@@ -115,7 +116,7 @@ vector<VarPtr> grad(
     // A var whose differentiability an earlier backward gave up (see the
     // retain_graph branch at the end of this function). Reaching one means the
     // caller is backwarding through a graph that was already released.
-    Var* released = loss->flags.get(NodeFlags::_graph_freed) ? loss : nullptr;
+    Var* released = loss->flag(VarFlags::_graph_freed) ? loss : nullptr;
     // successors of targets
     vector<Node*> ts(targets.begin(), targets.end());
     // bfs visit find all successors of targets
@@ -129,11 +130,11 @@ vector<VarPtr> grad(
     bfs_backward(gnodes, [&](Node* node) {
         if (node->tflag != nt)
             return false;
-        if (node->is_var() && node->flags.get(NodeFlags::_graph_freed))
+        if (node->is_var() && node->var()->flag(VarFlags::_graph_freed))
             released = node->var();
         if (node->is_stop_grad()
             || (node->is_var()
-                && node->flags.get(NodeFlags::_requires_grad_disabled)))
+                && node->var()->flag(VarFlags::_requires_grad_disabled)))
             return false;
         return true;
     });
@@ -186,7 +187,7 @@ vector<VarPtr> grad(
             id_buffer.emplace_back(op, index);
         
             // backward together
-            if (op->flags.get(NodeFlags::_grads)) {
+            if (op->flag(OpFlags::_grads)) {
                 // dont backward next time
                 op->tflag = 0;
                 for (Var* out : op->outputs()) {
@@ -227,7 +228,7 @@ vector<VarPtr> grad(
             j++;
             auto n_o = op->outputs().size();
         
-            if (op->flags.get(NodeFlags::_grads)) {
+            if (op->flag(OpFlags::_grads)) {
                 // backward together
                 auto n_i = op->inputs().size();
                 STACK_ALLOC(Var*, douts, n_o);
@@ -281,7 +282,7 @@ vector<VarPtr> grad(
                             // TODO: this is a dirty fix for
                             // stopping fuse lots of op together,
                             // try to find a better solution
-                            grad->flags.set(NodeFlags::_stop_fuse);
+                            grad->set_flag(VarFlags::_stop_fuse);
                         }
                         #endif
                         assign_attrs(grad.ptr, var);
@@ -324,12 +325,12 @@ vector<VarPtr> grad(
         // returning zeros that look like a legitimate x.stop_grad().
         for (int i=int(gvars.size())-1; i>=0; i--)
             if (gvars[i]->tflag != t && gvars[i]->backward_liveness) {
-                gvars[i]->flags.set(NodeFlags::_graph_freed);
+                gvars[i]->set_flag(VarFlags::_graph_freed);
                 gvars[i]->set_stop_grad();
             }
         for (int i=0; i<grads.size(); i++)
             if (grads[i]) {
-                grads[i]->flags.set(NodeFlags::_graph_freed);
+                grads[i]->set_flag(VarFlags::_graph_freed);
                 grads[i]->set_stop_grad();
             }
     }

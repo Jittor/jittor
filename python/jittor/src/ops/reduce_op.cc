@@ -264,11 +264,11 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
         forward(mean);
         return;
     }
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
     set_type(OpType::reduce);
     if (op.get(NanoString::_no_need_back_in))
-        flags.set(NodeFlags::_manual_set_vnbb);
+        set_flag(OpFlags::_manual_set_vnbb);
     ns = op;
     ASSERT(ns.is_binary());
     auto xdim = x->shape.size();
@@ -302,11 +302,11 @@ ReduceOp::ReduceOp(Var* x, NanoString op, uint dims_mask, uint keepdims_mask)
         forward(mean);
         return;
     }
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
     set_type(OpType::reduce);
     if (op.get(NanoString::_no_need_back_in))
-        flags.set(NodeFlags::_manual_set_vnbb);
+        set_flag(OpFlags::_manual_set_vnbb);
     ns = op;
     ASSERT(ns.is_binary());
     reduce_mask = dims_mask;
@@ -335,7 +335,7 @@ void ReduceOp::infer_shape() {
     }
     y->set_shape(yshape);
     if (yshape.size() == 1 && y->num == 1)
-        y->flags.set(NodeFlags::_is_scalar);
+        y->set_flag(VarFlags::_is_scalar);
 }
 
 VarPtr ReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {

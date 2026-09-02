@@ -18,8 +18,8 @@ namespace jittor {
 
 #ifndef JIT
 CubTestOp::CubTestOp(string cmd) : cmd(cmd) {
-    flags.set(NodeFlags::_cpu, 0);
-    flags.set(NodeFlags::_cuda, 1);
+    set_flag(OpFlags::_cpu, 0);
+    set_flag(OpFlags::_cuda, 1);
     output = create_output(1, ns_float32);
 }
 

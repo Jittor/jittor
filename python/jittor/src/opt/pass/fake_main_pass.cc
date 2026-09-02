@@ -24,7 +24,7 @@ void FakeMainPass::run() {
     all->push_back("#include <chrono>");
     all->push_back("using namespace std;");
     all->push_back("using namespace jittor;");
-    if (op->flags.get(NodeFlags::_cpu)) {
+    if (op->flag(OpFlags::_cpu)) {
         all->push_back("void* _fake_alloc(size_t size) {\n"
             "return aligned_alloc(alignment, size);\n"
         "}", nullptr, true);
@@ -119,7 +119,7 @@ void FakeMainPass::run() {
     }
     uint64_t in, out, compute;
     op->statistics(in, out, compute);
-    string need_sync = op->flags.get(NodeFlags::_cuda) ? "checkCudaErrors(cudaDeviceSynchronize());\n" : "";
+    string need_sync = op->flag(OpFlags::_cuda) ? "checkCudaErrors(cudaDeviceSynchronize());\n" : "";
     main->push_back("{\n"
         "auto warmup = _getenv(\"warmup\", 2);\n"
         "auto rerun = _getenv(\"rerun\", 10);\n"

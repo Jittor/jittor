@@ -17,7 +17,7 @@ namespace jittor {
 
 void FloatAtomicFixPass::run() {
     auto choice = op->get_loop_option("parallel");
-    bool is_cuda = op->flags.get(NodeFlags::_cuda);
+    bool is_cuda = op->flag(OpFlags::_cuda);
     if (is_cuda) choice=1;
     if (!choice) return;
 

@@ -35,27 +35,27 @@ static auto make_setitem = get_op_info("setitem")
 
 GetitemOp::GetitemOp(Var* x, VarSlices&& slices)
     : vs(move(slices)) {
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
-    flags.set(NodeFlags::_has_gopt);
-    flags.set(NodeFlags::_manual_set_vnbb);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
+    set_flag(OpFlags::_has_gopt);
+    set_flag(OpFlags::_manual_set_vnbb);
     for (int i=0; i<vs.n; i++)
         if (vs.slices[i].is_var())
-            vs.slices[i].var->flags.set(NodeFlags::_needed_by_backward);
+            vs.slices[i].var->set_flag(VarFlags::_needed_by_backward);
     create_output(nullptr, x->dtype());
 }
 
 GetitemOp::GetitemOp(Var* x, VarSlices&& slices, int _) 
     : vs(move(slices)) {
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
-    flags.set(NodeFlags::_has_gopt);
-    flags.set(NodeFlags::_custom_flag);
-    flags.set(NodeFlags::_grads);
-    flags.set(NodeFlags::_manual_set_vnbb);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
+    set_flag(OpFlags::_has_gopt);
+    set_flag(OpFlags::_custom_flag);
+    set_flag(OpFlags::_grads);
+    set_flag(OpFlags::_manual_set_vnbb);
     for (int i=0; i<vs.n; i++)
         if (vs.slices[i].is_var())
-            vs.slices[i].var->flags.set(NodeFlags::_needed_by_backward);
+            vs.slices[i].var->set_flag(VarFlags::_needed_by_backward);
     create_output(nullptr, x->dtype());
     auto out2 = create_output(nullptr, x->dtype());
     out2->share_with(x);
@@ -254,7 +254,7 @@ void GetitemOp::compile_optimize(string& src) {
 }
 
 void GetitemOp::_compile_optimize(string& src) {
-    if (!flags.get(NodeFlags::_cuda))
+    if (!flag(OpFlags::_cuda))
         return;
 
     auto jd = get_jit_define();
@@ -372,7 +372,7 @@ void GetitemOp::infer_shape() {
     
     // this will cause save checkpoint failed.
     // if (out_shape.n == 0)
-    //     out->flags.set(NodeFlags::_is_scalar);
+    //     out->set_flag(VarFlags::_is_scalar);
     // optimized shape (each dim is a loop var)
     StackVector<> o_shape;
     int fov = -1;

@@ -15,9 +15,9 @@ namespace jittor {
 
 CusparseSpmmcooOp::CusparseSpmmcooOp(Var* outputVar_, Var* x_, Var* row_indices_,Var* col_indices_,Var* value_,int A_row_,int A_col_,bool trans_A_,bool trans_B_)
     : outputVar(outputVar_), x(x_),row_indices(row_indices_), col_indices(col_indices_), value(value_),A_row(A_row_),A_col(A_col_),trans_A(trans_A_),trans_B(trans_B_) {
-    flags.set(NodeFlags::_cuda, 1);
-    flags.set(NodeFlags::_cpu, 0); 
-    flags.set(NodeFlags::_manual_set_vnbb);
+    set_flag(OpFlags::_cuda, 1);
+    set_flag(OpFlags::_cpu, 0); 
+    set_flag(OpFlags::_manual_set_vnbb);
     // The check now says what the message always claimed. jit_run reads the
     // values through ptr<T> with T taken from x, so a value array of another
     // float dtype was reinterpreted rather than converted.

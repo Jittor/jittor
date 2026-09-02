@@ -72,7 +72,7 @@ void PassManager::run_passes() {
     LOGvvvv << "KernelIR:\n" << ir.to_string();
     if (oc->op->ops.size() == 1 && oc->op->ops[0]->name() == string("array")) {
         ir.remove_all_unused();
-        if (oc->op->flags.get(NodeFlags::_cuda)) {
+        if (oc->op->flag(OpFlags::_cuda)) {
             ir.children.back()->erase();
             string type = oc->op->ops[0]->outputs().front()->dtype().to_cstring();
             ir.push_back("kernel<<<1,1>>>(op0_outputp, op0_outputv);");

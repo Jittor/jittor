@@ -77,7 +77,7 @@ static void setitem_inplace(SetitemOp* op) {
     if (data->allocator || data->is_sharing())
         return;
     auto data_op = data->input();
-    if (data_op->flags.get(NodeFlags::_custom_flag))
+    if (data_op->flag(OpFlags::_custom_flag))
         return;
 
     auto in_shape = input->shape;

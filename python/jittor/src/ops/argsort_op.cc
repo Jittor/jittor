@@ -80,8 +80,8 @@ ArgsortOp::ArgsortOp(Var* x, int dim, bool descending, NanoString dtype)
     #endif
     y = create_output(nullptr, dtype);
     y_key = create_output(nullptr, x->dtype());
-    flags.set(NodeFlags::_manual_set_vnbb);
-    y->flags.set(NodeFlags::_needed_by_backward);
+    set_flag(OpFlags::_manual_set_vnbb);
+    y->set_flag(VarFlags::_needed_by_backward);
 }
 
 VarPtr ArgsortOp::get_grad(Var* out, Var* dout, Var* v, int v_index, int dim, Var* y) {

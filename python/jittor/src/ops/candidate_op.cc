@@ -14,9 +14,9 @@ namespace jittor {
 
 #ifndef JIT
 CandidateOp::CandidateOp(Var* x, string&& fail_cond, NanoString dtype) : x(x), fail_cond(move(fail_cond)) {
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
-    flags.set(NodeFlags::_manual_set_vnbb);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
+    set_flag(OpFlags::_manual_set_vnbb);
     y = create_output(nullptr, dtype);
 }
 

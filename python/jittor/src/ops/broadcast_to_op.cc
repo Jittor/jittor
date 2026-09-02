@@ -27,9 +27,9 @@ BroadcastToOp::BroadcastToOp(Var* x, Var* y, NanoVector dims) : x(x), y(y) {
         forward(x);
         return;
     }
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
-    flags.set(NodeFlags::_manual_set_vnbb);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
+    set_flag(OpFlags::_manual_set_vnbb);
     set_type(OpType::broadcast);
     z = create_output(NanoVector(), x->dtype());
     bcast_mask = 0;
@@ -49,8 +49,8 @@ BroadcastToOp::BroadcastToOp(Var* x, Var* y, uint dims_mask, uint keepdims_mask)
         forward(x);
         return;
     }
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
     set_type(OpType::broadcast);
     z = create_output(NanoVector(), x->dtype());
     bcast_mask = dims_mask;
@@ -63,8 +63,8 @@ BroadcastToOp::BroadcastToOp(Var* x, NanoVector shape, uint dims_mask, uint keep
         forward(x);
         return;
     }
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
     set_type(OpType::broadcast);
     z = create_output(NanoVector(), x->dtype());
     bcast_mask = dims_mask;
@@ -78,8 +78,8 @@ BroadcastToOp::BroadcastToOp(Var* x, NanoVector shape, NanoVector dims) : x(x), 
         forward(x);
         return;
     }
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
     set_type(OpType::broadcast);
     CHECKop(shape.size(),>,0u) << "Number of shape should greater than 0.";
     for (auto v : shape)
@@ -166,7 +166,7 @@ void BroadcastToOp::infer_shape() {
     NanoVector zshape;
     for (int i=0; i<zdim; i++) zshape.push_back(zz[i]);
     z->set_shape(zshape);
-    z->flags.set(NodeFlags::_is_scalar, x->flags.get(NodeFlags::_is_scalar));
+    z->set_flag(VarFlags::_is_scalar, x->flag(VarFlags::_is_scalar));
     LOGvvv << "Broadcast x(" >> x >> ") shape" << yshapes << "-> z(" >> z >> ")"; 
 }
 

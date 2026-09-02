@@ -30,10 +30,10 @@ FuseTransposeOp::FuseTransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
         if (type==OpType::broadcast || type==OpType::element)
             tp = OpType::reduce;
     }
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
     set_type(tp);
-    flags.set(NodeFlags::_manual_set_vnbb);
+    set_flag(OpFlags::_manual_set_vnbb);
     int i=0;
     for (; i<axes.size(); i++)
         if (i!=axes[i]) break;

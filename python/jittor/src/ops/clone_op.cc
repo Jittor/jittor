@@ -17,9 +17,9 @@ static auto make_clone = get_op_info("clone")
     .get_constructor<VarPtr, Var*>();
 
 CloneOp::CloneOp(Var* x) : x(x) {
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
-    flags.set(NodeFlags::_manual_set_vnbb);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
+    set_flag(OpFlags::_manual_set_vnbb);
     y = create_output(nullptr, x->dtype());
     if (x->name.ptr)
         y->name = x->name;

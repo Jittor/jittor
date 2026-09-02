@@ -874,8 +874,8 @@ static unordered_set<string> unary_ops = {
 };
 
 UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
     set_type(OpType::element);
     ns = op;
     ASSERT(ns.is_unary() | ns.is_dtype());
@@ -890,16 +890,16 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
     } else 
         dtype = unary_dtype_infer(ns, x->ns);
     y = create_output(nullptr, dtype);
-    y->flags.set(NodeFlags::_is_scalar, x->flags.get(NodeFlags::_is_scalar));
+    y->set_flag(VarFlags::_is_scalar, x->flag(VarFlags::_is_scalar));
     bool bin = ns.get(NanoString::_no_need_back_in);
     bool bout = ns.get(NanoString::_no_need_back_out);
     if (bin || bout) {
-        flags.set(NodeFlags::_manual_set_vnbb);
+        set_flag(OpFlags::_manual_set_vnbb);
         if (!bin) {
-            x->flags.set(NodeFlags::_needed_by_backward);
+            x->set_flag(VarFlags::_needed_by_backward);
         }
         if (!bout) {
-            y->flags.set(NodeFlags::_needed_by_backward);
+            y->set_flag(VarFlags::_needed_by_backward);
         }
     }
 }

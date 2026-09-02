@@ -22,13 +22,13 @@ namespace jittor {
 #ifndef JIT
 CubArgsortOp::CubArgsortOp(Var* x, Var* indexes, Var* offsets, bool descending, NanoString dtype)
     : x(x), indexes(indexes), offsets(offsets), descending(descending) {
-    flags.set(NodeFlags::_cpu, 0);
-    flags.set(NodeFlags::_cuda, 1);
+    set_flag(OpFlags::_cpu, 0);
+    set_flag(OpFlags::_cuda, 1);
     ASSERT(offsets->dtype()==ns_int32);
     y = create_output(nullptr, dtype);
     y_key = create_output(nullptr, x->dtype());
-    flags.set(NodeFlags::_manual_set_vnbb);
-    y->flags.set(NodeFlags::_needed_by_backward);
+    set_flag(OpFlags::_manual_set_vnbb);
+    y->set_flag(VarFlags::_needed_by_backward);
 }
 
 VarPtr CubArgsortOp::grad(Var* out, Var* dout, Var* v, int v_index) {

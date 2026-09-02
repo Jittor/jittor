@@ -26,8 +26,8 @@ CudnnRnnBackwardXOp::CudnnRnnBackwardXOp(Var *x, Var* hx, Var* cx, Var* y, Var* 
         mode(mode), input_size(input_size), hidden_size(hidden_size), num_layers(num_layers),
         proj_size(proj_size), dropout(dropout), bias(bias), bidirectional(bidirectional) {
     
-    flags.set(NodeFlags::_cuda, 1);
-    flags.set(NodeFlags::_cpu, 0);
+    set_flag(OpFlags::_cuda, 1);
+    set_flag(OpFlags::_cpu, 0);
 
     ASSERTop(mode,==,"lstm");
     ASSERTop(proj_size,==,0);
@@ -41,8 +41,8 @@ CudnnRnnBackwardXOp::CudnnRnnBackwardXOp(Var* x, Var* hx, Var* y, Var* dy, Var* 
         mode(mode), input_size(input_size), hidden_size(hidden_size), num_layers(num_layers),
         proj_size(proj_size), dropout(dropout), bias(bias), bidirectional(bidirectional) {
 
-    flags.set(NodeFlags::_cuda, 1);
-    flags.set(NodeFlags::_cpu, 0);
+    set_flag(OpFlags::_cuda, 1);
+    set_flag(OpFlags::_cpu, 0);
 
     ASSERTop(mode,!=,"lstm");
     ASSERTop(proj_size,==,0);

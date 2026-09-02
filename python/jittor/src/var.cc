@@ -109,7 +109,7 @@ Var::Var(NanoVector shape, NanoString dtype)
     // complex dtypes are differentiable too (Wirtinger autograd), so they must not be
     // auto-stop_grad like integer/bool vars are. Only non-float AND non-complex stops grad.
     flags.set(NodeFlags::_stop_grad, (!dtype.is_float() && !dtype.is_complex()) || no_grad);
-    flags.set(NodeFlags::_stop_fuse, no_fuse);
+    set_flag(VarFlags::_stop_fuse, no_fuse);
     ns = dtype;
     ASSERT(ns.is_dtype());
     number_of_lived_vars++;
@@ -205,7 +205,7 @@ std::ostream& operator<<(std::ostream& os, const Var& var) {
         << ":i" << var._inputs.size()
         << ":o" << var._outputs.size()
         << ":s" << var.is_finished()
-        << ":n" << var.flags.get(NodeFlags::_needed_by_backward)
+        << ":n" << var.flag(VarFlags::_needed_by_backward)
         << ":g" << !var.is_stop_grad()
         << ',' 
         << var.dtype().to_cstring() << ',' << var.name << ',' << std::hex <<(uint64)var.mem_ptr << std::dec

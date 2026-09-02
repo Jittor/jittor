@@ -19,9 +19,9 @@ namespace jittor {
 
 #ifndef JIT
 WhereOp::WhereOp(Var* cond, NanoString dtype) : cond(cond) {
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
-    flags.set(NodeFlags::_manual_set_vnbb);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
+    set_flag(OpFlags::_manual_set_vnbb);
     auto ndim = cond->shape.size();
     #ifdef HAS_CUDA
     if (use_cuda) {

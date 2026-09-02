@@ -16,8 +16,8 @@ FusedAdamwOp::FusedAdamwOp(
     CHECK(parameters.size() == moments.size());
     CHECK(parameters.size() == variances.size());
     CHECK(parameters.size() == gradients.size());
-    flags.set(NodeFlags::_cuda);
-    flags.set(NodeFlags::_manual_set_vnbb);
+    set_flag(OpFlags::_cuda);
+    set_flag(OpFlags::_manual_set_vnbb);
     for (uint i=0; i<parameters.size(); ++i) {
         CHECK(parameters[i]->shape == moments[i]->shape);
         CHECK(parameters[i]->shape == variances[i]->shape);

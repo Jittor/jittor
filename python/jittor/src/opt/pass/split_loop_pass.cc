@@ -15,7 +15,7 @@ namespace jittor {
 void SplitLoopPass::run() {
     auto* lva_pass = pm->get_pass<LoopVarAnalyzePass>();
     ASSERT(lva_pass);
-    if (op->flags.get(NodeFlags::_cpu))
+    if (op->flag(OpFlags::_cpu))
         ir->push_back("using namespace std;", &ir->before);
     number_of_ranges_after_split = lva_pass->number_of_ranges;
     for (int i=0; i<number_of_ranges_after_split; i++) {

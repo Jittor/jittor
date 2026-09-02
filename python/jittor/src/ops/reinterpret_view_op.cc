@@ -14,9 +14,9 @@ static auto make_reinterpret_view = get_op_info("reinterpret_view")
 
 ReinterpretViewOp::ReinterpretViewOp(Var* x, NanoVector shape, NanoString dtype)
     : x(x), shape(shape), dtype(dtype) {
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
-    flags.set(NodeFlags::_manual_set_vnbb);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
+    set_flag(OpFlags::_manual_set_vnbb);
     CHECK(dtype.is_dtype()) << "reinterpret_view expects dtype, got" << dtype;
     y = create_output(nullptr, dtype);
 }

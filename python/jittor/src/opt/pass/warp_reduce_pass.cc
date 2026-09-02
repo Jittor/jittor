@@ -55,7 +55,7 @@ void WarpReducePass::run() {
     // below are simply wrong; the pass has never been measured on ROCm either.
     return;
 #else
-    if (!op->flags.get(NodeFlags::_cuda)) return;
+    if (!op->flag(OpFlags::_cuda)) return;
     if (op->get_loop_option("no_warp_reduce")) return;
     ir->dfs([&](unique_ptr<KernelIR>& i) {
         if (!i->has_attr("code")) return;

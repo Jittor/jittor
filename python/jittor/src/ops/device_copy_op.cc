@@ -25,12 +25,12 @@ static VarPtr make_device_copy(Var* x, int device) {
 }
 
 DeviceCopyOp::DeviceCopyOp(Var* x, int device) : x(x), device(device) {
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
-    flags.set(NodeFlags::_manual_set_vnbb);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
+    set_flag(OpFlags::_manual_set_vnbb);
     // This is the one op whose output device is not its input's, so
     // Op::init must leave the placement alone.
-    flags.set(NodeFlags::_manual_device);
+    set_flag(OpFlags::_manual_device);
     int count = get_device_count();
     CHECK(device >= 0 && (count == 0 || device < count))
         << "Invalid CUDA device index" << device >> ", visible device count is" << count;

@@ -16,9 +16,9 @@ namespace jittor {
 
 CusparseSpmmcsrOp::CusparseSpmmcsrOp(Var* outputVar_, Var* x_, Var* col_indices_,Var* value_,Var* row_offset_,int A_row_,int A_col_,bool trans_A_,bool trans_B_)
     : outputVar(outputVar_), x(x_), col_indices(col_indices_), value(value_),row_offset(row_offset_),A_row(A_row_),A_col(A_col_),trans_A(trans_A_),trans_B(trans_B_){
-    flags.set(NodeFlags::_cuda, 1);
-    flags.set(NodeFlags::_cpu, 0); 
-    flags.set(NodeFlags::_manual_set_vnbb);
+    set_flag(OpFlags::_cuda, 1);
+    set_flag(OpFlags::_cpu, 0); 
+    set_flag(OpFlags::_manual_set_vnbb);
     // The check now says what the message always claimed; see the COO variant.
     ASSERT(x->dtype().is_float()) << "spmm needs a float dtype, got" << x->dtype();
     ASSERT(x->dtype() == outputVar->dtype() && x->dtype() == value->dtype())

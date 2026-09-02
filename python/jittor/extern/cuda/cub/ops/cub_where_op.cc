@@ -24,8 +24,8 @@ namespace jittor {
 
 #ifndef JIT
 CubWhereOp::CubWhereOp(Var* cond, NanoString dtype) : cond(cond) {
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
     auto ndim = cond->shape.size();
     outs.reset(new Var*[ndim]);
     for (uint i=0; i<ndim; i++)

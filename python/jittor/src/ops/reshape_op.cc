@@ -18,9 +18,9 @@ static auto make_reshape = get_op_info("reshape")
     .get_constructor<VarPtr, Var*, NanoVector>();
 
 ReshapeOp::ReshapeOp(Var* x, NanoVector shape) : x(x), shape(shape) {
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
-    flags.set(NodeFlags::_manual_set_vnbb);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
+    set_flag(OpFlags::_manual_set_vnbb);
     y = create_output(nullptr, x->dtype());
     ASSERT(shape.size() > 0) << "input target shape of reshape can't be empty.";
 }

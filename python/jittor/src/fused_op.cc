@@ -167,12 +167,12 @@ void FusedOp::do_jit_prepare(JK& jk) {
     if (!use_cuda) {
         // only cpu
         jk << "«JIT_cpu:1";
-        this->flags.set(NodeFlags::_cuda, 0);
-        this->flags.set(NodeFlags::_cpu, 1);
+        this->set_flag(OpFlags::_cuda, 0);
+        this->set_flag(OpFlags::_cpu, 1);
     } else {
         jk << "«JIT_cuda:1";
-        this->flags.set(NodeFlags::_cpu, 0);
-        this->flags.set(NodeFlags::_cuda, 1);
+        this->set_flag(OpFlags::_cpu, 0);
+        this->set_flag(OpFlags::_cuda, 1);
     }
     jk << "«graph:";
     for (auto& t : edges) {

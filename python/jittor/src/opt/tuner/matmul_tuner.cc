@@ -83,7 +83,7 @@ void MatmulTuner::run(PassManager* pm, TunerManager* tm) {
         if (!is_matmul) continue;
         // TODO: support int8 * int8
         if (!(xx->dtype().is_float() && yy->dtype().is_float())) continue;
-        if (fop->flags.get(NodeFlags::_cpu))
+        if (fop->flag(OpFlags::_cpu))
             if (xx->dtype().dsize() != 4) continue;
         // Both relay ops create their output with the first operand's dtype, so
         // they can only stand in for a reduce whose output already has it. Auto
@@ -98,7 +98,7 @@ void MatmulTuner::run(PassManager* pm, TunerManager* tm) {
         if (xx->dtype().dsize() != yy->dtype().dsize()) continue;
         if (rop->y->dtype() != xx->dtype()) continue;
 
-        string relay_matmul_name = fop->flags.get(NodeFlags::_cpu) ?
+        string relay_matmul_name = fop->flag(OpFlags::_cpu) ?
             "mkl_matmul" : "cublas_matmul";
         if (!has_op(relay_matmul_name))
             return;

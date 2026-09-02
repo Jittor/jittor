@@ -181,7 +181,7 @@ static void scan(KernelIR* node, LoopScan& out,
 }
 
 void CpuParallelPass::run() {
-    if (op->flags.get(NodeFlags::_cuda)) return;
+    if (op->flag(OpFlags::_cuda)) return;
     // Uninstrumented accesses would skew what that mode measures, and the
     // reduction accumulators this relies on are skipped there too.
     if (op->get_loop_option("check_cache")) return;

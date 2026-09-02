@@ -39,8 +39,8 @@ CodeOp::CodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs,
     cuda_src(move(cuda_src)), cuda_grad_src(move(cuda_grad_src)), cuda_header(move(cuda_header)), 
     data(move(data))
 {
-    flags.set(NodeFlags::_cpu, !!this->cpu_src.size());
-    flags.set(NodeFlags::_cuda, !!this->cuda_src.size());
+    set_flag(OpFlags::_cpu, !!this->cpu_src.size());
+    set_flag(OpFlags::_cuda, !!this->cuda_src.size());
     _outputs.push_back(create_output(shape, dtype));
 
     if (_outputs[0]->num < 0) {
@@ -59,8 +59,8 @@ CodeOp::CodeOp(
     cuda_src(move(cuda_src)), cuda_grad_src(move(cuda_grad_src)), cuda_header(move(cuda_header)), 
     data(move(data))
 {
-    flags.set(NodeFlags::_cpu, !!this->cpu_src.size());
-    flags.set(NodeFlags::_cuda, !!this->cuda_src.size());
+    set_flag(OpFlags::_cpu, !!this->cpu_src.size());
+    set_flag(OpFlags::_cuda, !!this->cuda_src.size());
     CHECKop(shapes.size(),==,dtypes.size()) << "Number of outputs' shapes and dtypes should be the same";
     _outputs.resize(shapes.size());
     CHECKop(_outputs.size(),>,0);
@@ -82,8 +82,8 @@ CodeOp::CodeOp(
     cuda_src(move(cuda_src)), cuda_grad_src(move(cuda_grad_src)), cuda_header(move(cuda_header)), 
     data(move(data))
 {
-    flags.set(NodeFlags::_cpu, !!this->cpu_src.size());
-    flags.set(NodeFlags::_cuda, !!this->cuda_src.size());
+    set_flag(OpFlags::_cpu, !!this->cpu_src.size());
+    set_flag(OpFlags::_cuda, !!this->cuda_src.size());
     _outputs.resize(outputs.size());
     CHECKop(_outputs.size(),>,0);
     for (int i=0; i<outputs.size(); i++) {
@@ -99,12 +99,12 @@ CodeOp::CodeOp(
 
 void CodeOp::configure_grad() {
     if (cuda_grad_src.size() == 0 && cpu_grad_src.size() == 0)
-        flags.set(NodeFlags::_manual_set_vnbb);
+        set_flag(OpFlags::_manual_set_vnbb);
     auto iter = data.find("multi_grad");
     if (iter != data.end() && iter->second != 0) {
         CHECK(cpu_grad_src.size() || cuda_grad_src.size())
             << "multi-output code gradient requires a gradient source";
-        flags.set(NodeFlags::_grads);
+        set_flag(OpFlags::_grads);
     }
 }
 
@@ -261,9 +261,9 @@ void CodeOp::jit_prepare(JK& jk) {
         jk << "«out" << JK::dec3(i) << "_type:"
             << _outputs[i]->dtype();
     }
-    string& header = flags.get(NodeFlags::_cuda) ? 
+    string& header = flag(OpFlags::_cuda) ? 
         cuda_header : cpu_header;
-    string& src = flags.get(NodeFlags::_cuda) ? 
+    string& src = flag(OpFlags::_cuda) ? 
         cuda_src : cpu_src;
 
     CHECK(src.size());

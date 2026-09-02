@@ -51,11 +51,11 @@ static inline void set_shape(Var* x, const char* f, const string& format, int a,
 CudnnConvBackwardWOp::CudnnConvBackwardWOp(Var* x, Var* dy, int kh, int kw, int strideh, int stridew, int paddingh, int paddingw, int dilationh, int dilationw, int groups, string xformat, string wformat, string yformat)
         : x(x), dy(dy), kh(kh), kw(kw), strideh(strideh), stridew(stridew), paddingh(paddingh), paddingw(paddingw), dilationh(dilationh), dilationw(dilationw), groups(groups),
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
-    flags.set(NodeFlags::_cuda, 1);
-    flags.set(NodeFlags::_cpu, 0);
-    flags.set(NodeFlags::_manual_set_vnbb);
-    x->flags.set(NodeFlags::_needed_by_backward);
-    dy->flags.set(NodeFlags::_needed_by_backward);
+    set_flag(OpFlags::_cuda, 1);
+    set_flag(OpFlags::_cpu, 0);
+    set_flag(OpFlags::_manual_set_vnbb);
+    x->set_flag(VarFlags::_needed_by_backward);
+    dy->set_flag(VarFlags::_needed_by_backward);
     dw = create_output(nullptr, dtype_infer(dy->ns, x->ns));
 }
 

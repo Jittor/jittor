@@ -40,19 +40,19 @@ static auto make_unary = get_op_info("unary")
 
 SetitemOp::SetitemOp(Var* x, VarSlices&& slices, Var* y, NanoString op)
     : vs(move(slices)), op(op) {
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
-    flags.set(NodeFlags::_has_gopt);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
+    set_flag(OpFlags::_has_gopt);
     if (op.get(NanoString::_no_need_back_in)) {
-        flags.set(NodeFlags::_manual_set_vnbb);
+        set_flag(OpFlags::_manual_set_vnbb);
         for (int i=0; i<vs.n; i++)
             if (vs.slices[i].is_var())
-                vs.slices[i].var->flags.set(NodeFlags::_needed_by_backward);
+                vs.slices[i].var->set_flag(VarFlags::_needed_by_backward);
     }
     ASSERT(op == ns_void || op.is_binary());
     create_output(nullptr, x->dtype());
-    if (flags.get(NodeFlags::_custom_flag)) {
-        flags.set(NodeFlags::_grads);
+    if (flag(OpFlags::_custom_flag)) {
+        set_flag(OpFlags::_grads);
     }
 }
 

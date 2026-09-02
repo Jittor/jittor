@@ -161,9 +161,13 @@ void Node::release_pending_liveness() {
     }
     // Nothing is waiting to compute from this var any more. Its memory can go
     // even though the var itself stays alive, unless backward still needs it.
-    if (pending_liveness == 0 && is_var() && ((Var*)this)->mem_ptr != nullptr &&
-        flags.get(NodeFlags::_needed_by_backward) == 0) {
-        free_var_mem((Var*)this);
+    if (pending_liveness == 0 && is_var()) {
+        // _needed_by_backward is a Var flag, so it takes a Var* to read -- the
+        // is_var() test above is now what makes the read well typed, not a
+        // convention.
+        Var* v = (Var*)this;
+        if (v->mem_ptr != nullptr && v->flag(VarFlags::_needed_by_backward) == 0)
+            free_var_mem(v);
     }
 }
 

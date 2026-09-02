@@ -36,11 +36,11 @@ CublasBatchedMatmulOp::CublasBatchedMatmulOp(Var* a, Var* b, bool trans_a, bool 
     ASSERT(a->dtype().dsize() == b->dtype().dsize())
         << "matmul inputs must have the same dtype, but got a:" << a->dtype() << "b:" << b->dtype();
     c = create_output(nullptr, a->dtype());
-    flags.set(NodeFlags::_cpu, 0);
-    flags.set(NodeFlags::_cuda, 1);
-    flags.set(NodeFlags::_manual_set_vnbb);
-    a->flags.set(NodeFlags::_needed_by_backward);
-    b->flags.set(NodeFlags::_needed_by_backward);
+    set_flag(OpFlags::_cpu, 0);
+    set_flag(OpFlags::_cuda, 1);
+    set_flag(OpFlags::_manual_set_vnbb);
+    a->set_flag(VarFlags::_needed_by_backward);
+    b->set_flag(VarFlags::_needed_by_backward);
 }
 
 

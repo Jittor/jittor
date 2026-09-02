@@ -25,20 +25,20 @@ static auto make_number = get_op_info("number")
 
 ReindexReduceOp::ReindexReduceOp(Var* y, NanoString op, NanoVector shape, vector<string>&& indexes, vector<string>&& overflow_conditions, vector<Var*>&& extras)
     : y(y), shape(shape), indexes(move(indexes)), overflow_conditions(move(overflow_conditions)), extras(extras) {
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
     set_type(OpType::reduce);
     if (op.get(NanoString::_no_need_back_in))
-        flags.set(NodeFlags::_manual_set_vnbb);
+        set_flag(OpFlags::_manual_set_vnbb);
     ns = op;
     ASSERT((ns.is_binary() && ns!=ns_mean) || ns == ns_void);
     x = create_output(nullptr, y->dtype());
     for (auto e : extras) {
         if (e->shape != y->shape) {
-            e->flags.set(NodeFlags::_stop_fuse);
+            e->set_flag(VarFlags::_stop_fuse);
         }
         if (op.get(NanoString::_no_need_back_in))
-            e->flags.set(NodeFlags::_needed_by_backward);
+            e->set_flag(VarFlags::_needed_by_backward);
     }
 }
 

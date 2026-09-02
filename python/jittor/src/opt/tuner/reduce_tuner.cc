@@ -49,7 +49,7 @@ void ReduceTuner::run(PassManager* pm, TunerManager* tm) {
     confidence = 0;
     FusedOp* fo=tm->oc->op;
     if (!fo) return;
-    if (fo->flags.get(NodeFlags::_cuda)) return;
+    if (fo->flag(OpFlags::_cuda)) return;
     int rd=0;
     map<int,int> dim_map;
     for (uint i=0; i<fo->ops.size(); i++) {

@@ -24,11 +24,11 @@ static auto make_cublas_matmul = get_op_info("cublas_matmul")
 
 CublasMatmulOp::CublasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     : a(a), b(b), trans_a(trans_a), trans_b(trans_b) {
-    flags.set(NodeFlags::_cuda, 1);
-    flags.set(NodeFlags::_cpu, 0);
-    flags.set(NodeFlags::_manual_set_vnbb);
-    a->flags.set(NodeFlags::_needed_by_backward);
-    b->flags.set(NodeFlags::_needed_by_backward);
+    set_flag(OpFlags::_cuda, 1);
+    set_flag(OpFlags::_cpu, 0);
+    set_flag(OpFlags::_manual_set_vnbb);
+    a->set_flag(VarFlags::_needed_by_backward);
+    b->set_flag(VarFlags::_needed_by_backward);
     // TODO: support int8 * int8
     ASSERT(a->dtype().is_float() && b->dtype().is_float())
         << "cublas matmul requires floating-point inputs (float16/float32/float64), but got a:"

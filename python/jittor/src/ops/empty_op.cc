@@ -14,8 +14,8 @@
 namespace jittor {
 
 EmptyOp::EmptyOp(NanoVector shape, NanoString dtype) {
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
     create_output(shape, dtype);
 }
 

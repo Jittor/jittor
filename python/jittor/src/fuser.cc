@@ -62,7 +62,7 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
     // relation == 0: `op` and `other` both read `var` (siblings, so the
     //                question is only whether they may share one kernel).
     auto edge_fusable = [&](Var* var, Op* op, Op* other, int relation) -> bool {
-        if (var->flags.get(NodeFlags::_stop_fuse)) return false;
+        if (var->flag(VarFlags::_stop_fuse)) return false;
         if (relation == 1) {
             // vars before start_var_num are the batch's inputs: they already
             // exist in memory and are never fused away
@@ -70,7 +70,7 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
             if (op->type() == OpType::other || other->type() == OpType::other) return false;
             // a single element only pays for a kernel if it feeds a broadcast
             if (var->num <= 1 && op->type() != OpType::broadcast) return false;
-            if (var->flags.get(NodeFlags::_force_fuse)) return true;
+            if (var->flag(VarFlags::_force_fuse)) return true;
             // producer is a reduce: its output has to be written out
             if (other->type() == OpType::reduce) return false;
             // consumer is a broadcast: it reads the var many times
@@ -145,12 +145,12 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
         for_each_neighbor(op, 1, 0, [&](Var* var, Op* other, int relation, int is_control_dep) {
             unvisited_consumers[i]++;
             if (is_control_dep) return;
-            if (var->flags.get(NodeFlags::_force_fuse)) {
+            if (var->flag(VarFlags::_force_fuse)) {
                 auto shape = other->outputs().front()->shape;
                 if (!forced_shape.size()) {
                     forced_shape = shape;
                 } else if (forced_shape != shape) {
-                    var->flags.set(NodeFlags::_force_fuse, 0);
+                    var->set_flag(VarFlags::_force_fuse, 0);
                 }
             }
         });
@@ -230,14 +230,14 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
                     var_fused[i] = 1;
             }
         }
-        if (all_consumers_fusable == 0 || var->flags.get(NodeFlags::_out_hint)) {
+        if (all_consumers_fusable == 0 || var->flag(VarFlags::_out_hint)) {
             var_fused[i] = 1;
         } else if (var_fused[i]) {
             // The var crosses a kernel boundary but every individual edge is
             // fusable, so the producer may instead be recomputed inside each
             // consumer kernel ("sharing"). Decide how cheap that recompute is.
             if (producer->type() == OpType::broadcast || all_consumers_reduce ||
-                var->flags.get(NodeFlags::_force_fuse))
+                var->flag(VarFlags::_force_fuse))
                 var_fused[i] = 3;
             else {
                 if (var->dtype() == ns_bool || producer->inputs().size() > 2)

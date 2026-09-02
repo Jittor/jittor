@@ -11,16 +11,16 @@ namespace jittor {
 
 #ifndef JIT
 IndexOp::IndexOp(NanoVector shape, int64 dim, NanoString dtype) : dim(dim) {
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
     set_type(OpType::element);
     x.reset(new Var*[1]);
     x[0] = create_output(shape, dtype);
 }
 
 IndexOp::IndexOp(NanoVector shape, NanoString dtype) : dim(shape.size()) {
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
     set_type(OpType::element);
     x.reset(new Var*[dim]);
     for (int i=0; i<dim; i++)
@@ -28,18 +28,18 @@ IndexOp::IndexOp(NanoVector shape, NanoString dtype) : dim(shape.size()) {
 }
 
 IndexOp::IndexOp(Var* a, int64 dim, NanoString dtype) : dim(dim) {
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
     set_type(OpType::element);
-    flags.set(NodeFlags::_manual_set_vnbb);
+    set_flag(OpFlags::_manual_set_vnbb);
     x.reset(new Var*[1]);
     x[0] = create_output(nullptr, dtype);
 }
 
 IndexOp::IndexOp(Var* a, NanoString dtype) : dim(a->shape.size()) {
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
-    flags.set(NodeFlags::_manual_set_vnbb);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
+    set_flag(OpFlags::_manual_set_vnbb);
     set_type(OpType::element);
     x.reset(new Var*[dim]);
     for (int i=0; i<dim; i++)

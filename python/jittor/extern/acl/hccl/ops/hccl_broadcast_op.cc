@@ -13,8 +13,8 @@ static auto hccl_broadcast =
     get_op_info("hccl_broadcast").get_constructor<VarPtr, Var*, int>();
 
 HcclBroadcastOp::HcclBroadcastOp(Var* x, int root) : x(x), root(root) {
-    flags.set(NodeFlags::_cpu, 0);
-    flags.set(NodeFlags::_cuda, 1);
+    set_flag(OpFlags::_cpu, 0);
+    set_flag(OpFlags::_cuda, 1);
     y = create_output(nullptr, x->dtype());
 }
 

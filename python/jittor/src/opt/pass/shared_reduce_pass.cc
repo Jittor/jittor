@@ -267,7 +267,7 @@ void SharedReducePass::run() {
     auto use_shared_reduce = op->get_loop_option("use_shared_reduce", 1);
     if (use_shared_reduce == 0) return;
     if (para_opt_level < 4) return;
-    bool is_cuda = op->flags.get(NodeFlags::_cuda);
+    bool is_cuda = op->flag(OpFlags::_cuda);
     if (is_cuda) parallel = 1;
     if (!parallel) return;
     for (uint i = 0; i < ir->children.size(); ++i) {

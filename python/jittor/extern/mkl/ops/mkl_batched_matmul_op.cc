@@ -30,11 +30,11 @@ MklBatchedMatmulOp::MklBatchedMatmulOp(Var* a, Var* b, bool trans_a, bool trans_
         << "mkl batched matmul supports float32 only, but got a:"
         << a->dtype() << "b:" << b->dtype();
     c = create_output(nullptr, a->dtype());
-    flags.set(NodeFlags::_cpu, 1);
-    flags.set(NodeFlags::_cuda, 0);
-    flags.set(NodeFlags::_manual_set_vnbb);
-    a->flags.set(NodeFlags::_needed_by_backward);
-    b->flags.set(NodeFlags::_needed_by_backward);
+    set_flag(OpFlags::_cpu, 1);
+    set_flag(OpFlags::_cuda, 0);
+    set_flag(OpFlags::_manual_set_vnbb);
+    a->set_flag(VarFlags::_needed_by_backward);
+    b->set_flag(VarFlags::_needed_by_backward);
 }
 
 VarPtr MklBatchedMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {

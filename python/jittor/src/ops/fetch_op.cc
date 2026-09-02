@@ -112,11 +112,11 @@ FetchOp::FetchOp(vector<Var*>&& inputs, FetchFunc&& func)
     for (auto v : fetch_vars)
         if (!v->is_finished()) {
             all_finished = false;
-            v->flags.set(NodeFlags::_stop_fuse);
+            v->set_flag(VarFlags::_stop_fuse);
             v->flags.set(NodeFlags::_fetch);
         }
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
     flags.set(NodeFlags::_fetch);
     flags.set(NodeFlags::_stop_grad);
     fetcher_iter->ptr->flags.set(NodeFlags::_fetch);

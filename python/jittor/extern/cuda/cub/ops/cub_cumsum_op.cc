@@ -27,8 +27,8 @@ static auto make_cub_cumsum = get_op_info("cub_cumsum")
     .get_constructor<VarPtr, Var*, bool>();
 
 CubCumsumOp::CubCumsumOp(Var* x, bool reverse) : x(x),reverse(reverse) {
-    flags.set(NodeFlags::_cpu, 0);
-    flags.set(NodeFlags::_cuda, 1);
+    set_flag(OpFlags::_cpu, 0);
+    set_flag(OpFlags::_cuda, 1);
     y = create_output(nullptr, x->dtype());
 }
 

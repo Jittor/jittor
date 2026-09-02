@@ -27,11 +27,11 @@ namespace jittor {
 CudnnConv3dBackwardWOp::CudnnConv3dBackwardWOp(Var* x, Var* dy, int kd, int kh, int kw, int strided, int strideh, int stridew, int paddingd, int paddingh, int paddingw, int dilationd, int dilationh, int dilationw, int groups, string xformat)
         : x(x), dy(dy), kd(kd), kh(kh), kw(kw), strided(strided), strideh(strideh), stridew(stridew), paddingd(paddingd), paddingh(paddingh), paddingw(paddingw), dilationd(dilationd), dilationh(dilationh), dilationw(dilationw), groups(groups),
       xformat(move(xformat)) {
-    flags.set(NodeFlags::_cuda, 1);
-    flags.set(NodeFlags::_cpu, 0);
-    flags.set(NodeFlags::_manual_set_vnbb);
-    x->flags.set(NodeFlags::_needed_by_backward);
-    dy->flags.set(NodeFlags::_needed_by_backward);
+    set_flag(OpFlags::_cuda, 1);
+    set_flag(OpFlags::_cpu, 0);
+    set_flag(OpFlags::_manual_set_vnbb);
+    x->set_flag(VarFlags::_needed_by_backward);
+    dy->set_flag(VarFlags::_needed_by_backward);
     dw = create_output(nullptr, dtype_infer(dy->ns, x->ns));
 }
 

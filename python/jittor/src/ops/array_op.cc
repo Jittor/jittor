@@ -78,18 +78,18 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
     output = create_output(args.shape, args.dtype);
     NanoVector shape = output->shape;
     if (shape.size() == 1 && shape[0] == 1) {
-        output->flags.set(NodeFlags::_force_fuse);
-        output->flags.set(NodeFlags::_is_scalar);
+        output->set_flag(VarFlags::_force_fuse);
+        output->set_flag(VarFlags::_is_scalar);
         set_type(OpType::element);
     }
     #ifdef HAS_CUDA
     // Fused scalar values are emitted inside generated kernels on both backends.
-    if (use_cuda && output->flags.get(NodeFlags::_force_fuse))
-        flags.set(NodeFlags::_cuda, 1);
+    if (use_cuda && output->flag(VarFlags::_force_fuse))
+        set_flag(OpFlags::_cuda, 1);
     if (use_cuda && !save_mem && !use_cuda_host_allocator) {
-        flags.set(NodeFlags::_cpu, 0);
-        flags.set(NodeFlags::_cuda, 1);
-        if (!output->flags.get(NodeFlags::_force_fuse)) {
+        set_flag(OpFlags::_cpu, 0);
+        set_flag(OpFlags::_cuda, 1);
+        if (!output->flag(VarFlags::_force_fuse)) {
             // free prev allocation first
             event_queue.flush();
             // alloc new allocation
@@ -107,7 +107,7 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
 }
 
 void ArrayOp::jit_prepare(JK& jk) {
-    if (output->flags.get(NodeFlags::_force_fuse)) {
+    if (output->flag(VarFlags::_force_fuse)) {
         jk << "«T:" << output->dtype();
 
         // fill or find cbuffer for const var pass

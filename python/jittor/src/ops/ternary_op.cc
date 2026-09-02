@@ -36,15 +36,15 @@ TernaryOp::TernaryOp(Var* cond, Var* x, Var* y) : cond(cond), x(x), y(y) {
         forward(make_ternary(cond, x, y));
         return;
     }
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
     set_type(OpType::element);
-    flags.set(NodeFlags::_manual_set_vnbb);
-    cond->flags.set(NodeFlags::_needed_by_backward);
+    set_flag(OpFlags::_manual_set_vnbb);
+    cond->set_flag(VarFlags::_needed_by_backward);
     if (x->dtype() == y->dtype()) {
         z = create_output(nullptr, x->dtype());
     } else {
-        z = create_output(nullptr, dtype_infer(x->ns, y->ns, x->flags.get(NodeFlags::_is_scalar), y->flags.get(NodeFlags::_is_scalar)));
+        z = create_output(nullptr, dtype_infer(x->ns, y->ns, x->flag(VarFlags::_is_scalar), y->flag(VarFlags::_is_scalar)));
     }
 }
 

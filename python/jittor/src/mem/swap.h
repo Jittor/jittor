@@ -100,7 +100,7 @@ bool move_with_swap(Var* x, Allocator* allocator, bool force);
 void registe_swap(Var* x);
 
 inline void check_and_swap_out(Var* x, Allocator* allocator) {
-    if (x->flags.get(NodeFlags::_is_swapped))
+    if (x->flag(VarFlags::_is_swapped))
         move_with_swap(x, allocator, true);
 }
 

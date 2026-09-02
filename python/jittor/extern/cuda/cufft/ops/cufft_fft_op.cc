@@ -31,7 +31,7 @@ namespace jittor {
 static auto make_cufft_fft = get_op_info("cufft_fft")
     .get_constructor<VarPtr, Var*, bool>();
 CufftFftOp::CufftFftOp(Var* x, bool inverse) : x(x), inverse(inverse) {
-    flags.set(NodeFlags::_cuda, 1);
+    set_flag(OpFlags::_cuda, 1);
     y = create_output(x->shape, x->dtype());
 }
 

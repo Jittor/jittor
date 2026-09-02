@@ -14,9 +14,9 @@
 namespace jittor {
 
 TapeOp::TapeOp(Var* x) {
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
-    flags.set(NodeFlags::_manual_set_vnbb);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
+    set_flag(OpFlags::_manual_set_vnbb);
     create_output(nullptr, x->dtype());
 }
 
@@ -51,10 +51,10 @@ Tapes::Tapes(
     const vector<VarHolder*>& taped_outputs,
     GradCallback&& grad_callback
 ) {
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
-    flags.set(NodeFlags::_grads);
-    flags.set(NodeFlags::_manual_set_vnbb);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
+    set_flag(OpFlags::_grads);
+    set_flag(OpFlags::_manual_set_vnbb);
     callback = move(grad_callback);
     
 

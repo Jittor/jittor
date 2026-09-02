@@ -452,8 +452,8 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
     }
     #endif
 
-    flags.set(NodeFlags::_cpu);
-    flags.set(NodeFlags::_cuda);
+    set_flag(OpFlags::_cpu);
+    set_flag(OpFlags::_cuda);
     set_type(OpType::element);
     ns = op;
     ASSERT(ns.is_binary());
@@ -469,14 +469,14 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
             "y:" >> y->dtype().to_cstring() <<
             "(bitwise/shift ops are not defined for floating-point or complex types).";
     }
-    z = create_output(x->shape, binary_dtype_infer(op, x->ns, y->ns, x->flags.get(NodeFlags::_is_scalar), y->flags.get(NodeFlags::_is_scalar)));
+    z = create_output(x->shape, binary_dtype_infer(op, x->ns, y->ns, x->flag(VarFlags::_is_scalar), y->flag(VarFlags::_is_scalar)));
     bool is_comparison = ns==ns_less || ns==ns_less_equal ||
         ns==ns_greater || ns==ns_greater_equal ||
         ns==ns_equal || ns==ns_not_equal;
     bool is_scalar_float32_add =
         (ns==ns_add || ns==ns_subtract) &&
         x->dtype() == ns_float32 && y->dtype() == ns_float32 &&
-        (x->flags.get(NodeFlags::_is_scalar) || y->flags.get(NodeFlags::_is_scalar));
+        (x->flag(VarFlags::_is_scalar) || y->flag(VarFlags::_is_scalar));
     if (is_comparison &&
         (x->dtype().is_float() || x->dtype().is_complex() ||
          y->dtype().is_float() || y->dtype().is_complex())) {
@@ -497,15 +497,15 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
     bool bin = ns.get(NanoString::_no_need_back_in);
     bool bout = ns.get(NanoString::_no_need_back_out);
     if (bin || bout) {
-        flags.set(NodeFlags::_manual_set_vnbb);
+        set_flag(OpFlags::_manual_set_vnbb);
         if (!bin) {
             if (!(y->is_stop_grad() && (op==ns_multiply || op==ns_divide)))
-                x->flags.set(NodeFlags::_needed_by_backward);
+                x->set_flag(VarFlags::_needed_by_backward);
             if (!(x->is_stop_grad() && (op==ns_multiply)))
-                y->flags.set(NodeFlags::_needed_by_backward);
+                y->set_flag(VarFlags::_needed_by_backward);
         }
         if (!bout) {
-            z->flags.set(NodeFlags::_needed_by_backward);
+            z->set_flag(VarFlags::_needed_by_backward);
         }
     }
 }

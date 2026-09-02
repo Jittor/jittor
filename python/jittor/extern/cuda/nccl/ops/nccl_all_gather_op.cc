@@ -23,8 +23,8 @@ static auto nccl_reduce_scatter =
     get_op_info("nccl_reduce_scatter").get_constructor<VarPtr, Var*>();
 
 NcclAllGatherOp::NcclAllGatherOp(Var* x) : x(x) {
-    flags.set(NodeFlags::_cpu, 0);
-    flags.set(NodeFlags::_cuda, 1);
+    set_flag(OpFlags::_cpu, 0);
+    set_flag(OpFlags::_cuda, 1);
     y = create_output(nullptr, x->dtype());
 }
 

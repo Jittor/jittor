@@ -199,13 +199,12 @@ static inline void assign_var(Var* a, Var* b) {
     a->name = move(b->name);
     if (b->is_stop_grad())
         a->set_stop_grad();
-    if (b->flags.get(NodeFlags::_stop_fuse))
-        a->flags.set(NodeFlags::_stop_fuse);
-    if (b->flags.get(NodeFlags::_th_require_grad))
-        a->flags.set(NodeFlags::_th_require_grad);
-    a->flags.set(
-        NodeFlags::_requires_grad_disabled,
-        b->flags.get(NodeFlags::_requires_grad_disabled));
+    if (b->flag(VarFlags::_stop_fuse))
+        a->set_flag(VarFlags::_stop_fuse);
+    if (b->flag(VarFlags::_th_require_grad))
+        a->set_flag(VarFlags::_th_require_grad);
+    a->set_flag(VarFlags::_requires_grad_disabled,
+        b->flag(VarFlags::_requires_grad_disabled));
 }
 
 extern uint8 th_mode;
@@ -213,8 +212,8 @@ void VarHolder::operator=(VarPtr&& v) {
     if (th_mode) {
         if (var->is_stop_grad() != v->is_stop_grad())
             v.set_stop_grad(var->is_stop_grad());
-        if (var->flags.get(NodeFlags::_th_require_grad))
-            v.ptr->flags.set(NodeFlags::_th_require_grad);
+        if (var->flag(VarFlags::_th_require_grad))
+            v.ptr->set_flag(VarFlags::_th_require_grad);
     }
     assign_var(v.ptr, var);
     release_holder();
@@ -233,13 +232,13 @@ void VarHolder::set_requires_grad(bool flag) {
         } else {
             // Keep the same Var node so graphs built before a temporary freeze
             // become differentiable again when the flag is restored.
-            var->flags.set(NodeFlags::_requires_grad_disabled, 0);
+            var->set_flag(VarFlags::_requires_grad_disabled, 0);
         }
     } else {
         // stop_grad() releases backward liveness and is intentionally permanent.
         // requires_grad_(False) is a reversible leaf policy: existing graph edges
         // stay alive, while newly initialized Ops snapshot disabled input edges.
-        var->flags.set(NodeFlags::_requires_grad_disabled);
+        var->set_flag(VarFlags::_requires_grad_disabled);
     }
 }
 
@@ -254,8 +253,8 @@ VarHolder* VarHolder::start_grad() {
     std::swap(dvar.ptr, var);
     no_grad = no_grad_bk;
     th_mode = th_mode_bk;
-    var->flags.set(NodeFlags::_th_require_grad);
-    var->flags.set(NodeFlags::_requires_grad_disabled, 0);
+    var->set_flag(VarFlags::_th_require_grad);
+    var->set_flag(VarFlags::_requires_grad_disabled, 0);
     return this;
 }
 
@@ -277,7 +276,7 @@ VarHolder* VarHolder::assign(VarHolder* v) {
 }
 
 VarHolder* VarHolder::update(VarHolder* v) {
-    v->var->flags.set(NodeFlags::_out_hint);
+    v->var->set_flag(VarFlags::_out_hint);
     return assign(v);
 }
 
@@ -287,7 +286,7 @@ VarHolder* VarHolder::_update(VarHolder* v) {
     var->release_both_liveness();
     var = v->var;
     own_holder();
-    var->flags.set(NodeFlags::_out_hint);
+    var->set_flag(VarFlags::_out_hint);
     return this;
 }
 
@@ -305,7 +304,7 @@ ArrayArgs VarHolder::fetch_sync() {
             migrate_to_cpu(var, exe.allocator);
     }
     // this will casuse save wrong.
-    // if (var->flags.get(NodeFlags::_is_scalar))
+    // if (var->flag(VarFlags::_is_scalar))
     //     return {var->mem_ptr, {}, var->dtype()};
     return {var->mem_ptr, var->shape, var->dtype()};
 }
@@ -443,7 +442,7 @@ extern bool no_grad;
 
 VarHolder* ternary_out_hint(VarHolder* cond, VarHolder* x, VarHolder* y) {
     if (!no_grad)
-        cond->var->flags.set(NodeFlags::_out_hint);
+        cond->var->set_flag(VarFlags::_out_hint);
     return new VarHolder(make_ternary(cond->var, x->var, y->var));
 }
 

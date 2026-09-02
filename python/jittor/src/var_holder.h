@@ -139,7 +139,7 @@ struct VarHolder {
 
     // @pyjt(location)
     inline string location() {
-        if (var->flags.get(NodeFlags::_is_swapped))
+        if (var->flag(VarFlags::_is_swapped))
             return "disk";
         if (var->mem_ptr == nullptr)
             return "none";
@@ -230,8 +230,8 @@ struct VarHolder {
     // @attrs(return_self)
     inline VarHolder* stop_grad() {
         var->set_stop_grad();
-        var->flags.set(NodeFlags::_requires_grad_disabled, 0);
-        var->flags.set(NodeFlags::_first_order_only, 0);
+        var->set_flag(VarFlags::_requires_grad_disabled, 0);
+        var->set_flag(VarFlags::_first_order_only, 0);
         return this;
     }
 
@@ -246,7 +246,7 @@ struct VarHolder {
     // @pyjt(_set_first_order_only)
     // @attrs(return_self)
     inline VarHolder* set_first_order_only() {
-        var->flags.set(NodeFlags::_first_order_only);
+        var->set_flag(VarFlags::_first_order_only);
         return this;
     }
 
@@ -263,7 +263,7 @@ struct VarHolder {
     // @pyjt(stop_fuse)
     // @attrs(return_self)
     inline VarHolder* stop_fuse() {
-        var->flags.set(NodeFlags::_stop_fuse);
+        var->set_flag(VarFlags::_stop_fuse);
         return this;
     }
 
@@ -272,7 +272,7 @@ struct VarHolder {
      */ 
     // @pyjt(is_stop_fuse)
     inline bool is_stop_fuse() {
-        return var->flags.get(NodeFlags::_stop_fuse);
+        return var->flag(VarFlags::_stop_fuse);
     }
 
     /**
@@ -281,7 +281,7 @@ struct VarHolder {
     // @pyjt(out_hint)
     // @attrs(return_self)
     inline VarHolder* out_hint() {
-        var->flags.set(NodeFlags::_out_hint);
+        var->set_flag(VarFlags::_out_hint);
         return this;
     }
 
@@ -303,7 +303,7 @@ struct VarHolder {
     // @pyjt(__get__requires_grad)
     inline bool get_requires_grad() {
         return !var->is_stop_grad()
-            && !var->flags.get(NodeFlags::_requires_grad_disabled);
+            && !var->flag(VarFlags::_requires_grad_disabled);
     }
 
     /**
@@ -355,7 +355,7 @@ struct VarHolder {
             #endif
         }
         // this will cause state_dict only has one element
-        // if (var->flags.get(NodeFlags::_is_scalar))
+        // if (var->flag(VarFlags::_is_scalar))
         //     return {this, var->mem_ptr, {}, var->dtype()};
         return {this, var->mem_ptr, var->shape, var->dtype()};
     }

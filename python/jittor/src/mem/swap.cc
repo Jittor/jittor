@@ -61,7 +61,7 @@ unordered_map<Allocator*, Swap> swaps;
 
 void swap_to_disk(Var* x, Swap& swap) {
     swap_total += x->size;
-    ASSERT(!x->flags.get(NodeFlags::_is_swapped));
+    ASSERT(!x->flag(VarFlags::_is_swapped));
     // "search share_with" on swap.h's TODO list: a var that is a sub-range of
     // another var's block cannot be swapped out on its own -- the block stays
     // occupied and the other alias would read a hole. Refuse loudly rather
@@ -106,7 +106,7 @@ void swap_to_disk(Var* x, Swap& swap) {
     x->mem_ptr = nullptr;
     x->allocator = nullptr;
     x->allocation = 0;
-    x->flags.set(NodeFlags::_is_swapped);
+    x->set_flag(VarFlags::_is_swapped);
 }
 
 bool alloc_with_swap(Var* x, Allocator* allocator, bool force) {
@@ -177,7 +177,7 @@ bool alloc_with_swap(Var* x, Allocator* allocator, bool force) {
 }
 
 void free_with_swap(Var* x) {
-    if (x->flags.get(NodeFlags::_is_swapped)) {
+    if (x->flag(VarFlags::_is_swapped)) {
         string path = swap_file_path(x);
         if (remove(path.c_str()) != 0)
             LOGe << "failed to remove swap file" << path << x->shape << x->dtype();
@@ -212,7 +212,7 @@ bool move_with_swap(Var* x, Allocator* allocator, bool force) {
         allocation.allocation = 0;
         return false;
     }
-    if (x->flags.get(NodeFlags::_is_swapped)) {
+    if (x->flag(VarFlags::_is_swapped)) {
         string path = swap_file_path(x);
         #ifdef HAS_CUDA
         if (x->allocator->is_cuda()) {
@@ -244,7 +244,7 @@ bool move_with_swap(Var* x, Allocator* allocator, bool force) {
             
         if (remove(path.c_str()) != 0)
             LOGe << "failed to remove swap file" << path << x->shape << x->dtype();
-        x->flags.set(NodeFlags::_is_swapped, 0);
+        x->set_flag(VarFlags::_is_swapped, 0);
     } else {
         #ifdef HAS_CUDA
         if (x->allocator->is_cuda()) {

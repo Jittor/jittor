@@ -62,7 +62,7 @@ static bool split_assignment(const string& src, string& target, string& rest) {
 }
 
 void ReduceAccumulatorPass::run() {
-    if (op->flags.get(NodeFlags::_cuda)) return;
+    if (op->flag(OpFlags::_cuda)) return;
     // CheckCachePass has already run and paired every array access with a
     // memory_checker call. Introducing accesses now would leave them
     // uninstrumented and quietly skew the cache figures that mode exists to

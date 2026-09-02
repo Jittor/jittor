@@ -52,21 +52,26 @@ bool lookup_requires_grad_disabled_edge(Node* source, Node* target) {
 
 Op::Op() {
     flags.set(NodeFlags::_var, 0);
-    flags.set(NodeFlags::_cpu, 1);
-    flags.flags |= ((amp_reg & 63) << NodeFlags::_prefer_32);
+    set_flag(OpFlags::_cpu, 1);
+    // The six amp bits are one field, so they move as one. `set_flag` with a
+    // width also *clears* the field first, which `|=` did not -- identical
+    // here (a fresh Op has them at zero) and the honest spelling of "this is
+    // the amp field".
+    set_flag(OpFlags::_prefer_32, amp_reg & ((1<<OpFlags::_amp_nbits)-1),
+        OpFlags::_amp_nbits);
     number_of_lived_ops++;
     number_of_created_ops++;
     if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var)) trace_data.record_node(this);
 }
 
 Op::~Op() {
-    if (flags.get(NodeFlags::_requires_grad_disabled))
+    if (flag(OpFlags::_requires_grad_disabled))
         requires_grad_disabled_edges().erase(id);
     number_of_lived_ops--;
 }
 
 void Op::forward(Var* input) {
-    flags.set(NodeFlags::_forwarded);
+    set_flag(OpFlags::_forwarded);
     outputs_holder.emplace_back(input);
 }
 
@@ -109,7 +114,7 @@ Var* Op::create_output(NanoVector shape, NanoString dtype) {
 // moving something the caller computed. device-placement.md §5 has the
 // reasoning and why a third condition would cost more than it buys.
 static inline bool is_pending_scalar(Var* v) {
-    return !v->is_finished() && v->flags.get(NodeFlags::_is_scalar);
+    return !v->is_finished() && v->flag(VarFlags::_is_scalar);
 }
 
 // Move a pending scalar, and the pending subgraph that produces it, onto
@@ -176,45 +181,45 @@ void Op::propagate_device() {
 }
 
 void Op::init() {
-    bool first_init = !flags.get(NodeFlags::_requires_grad_snapshot);
+    bool first_init = !flag(OpFlags::_requires_grad_snapshot);
     bool has_disabled_input = false;
     bool has_first_order_only_input = false;
     bool all_inputs_stopped = _inputs.size() != 0;
     if (first_init) {
-        flags.set(NodeFlags::_requires_grad_snapshot);
+        set_flag(OpFlags::_requires_grad_snapshot);
         for (Var* v : inputs()) {
-            bool disabled = v->flags.get(NodeFlags::_requires_grad_disabled);
+            bool disabled = v->flag(VarFlags::_requires_grad_disabled);
             has_disabled_input |= disabled;
             has_first_order_only_input |=
-                v->flags.get(NodeFlags::_first_order_only);
+                v->flag(VarFlags::_first_order_only);
             all_inputs_stopped &= disabled || v->is_stop_grad();
         }
         if (has_disabled_input) {
-            flags.set(NodeFlags::_requires_grad_disabled);
+            set_flag(OpFlags::_requires_grad_disabled);
             auto& sources = requires_grad_disabled_edges()[id];
             for (Var* v : inputs())
-                if (v->flags.get(NodeFlags::_requires_grad_disabled))
+                if (v->flag(VarFlags::_requires_grad_disabled))
                     sources.push_back(v->id);
         }
     }
     infer_shape();
-    if (first_init && _inputs.size() && !flags.get(NodeFlags::_manual_device))
+    if (first_init && _inputs.size() && !flag(OpFlags::_manual_device))
         propagate_device();
     if (first_init && has_first_order_only_input)
         for (Var* v : outputs())
-            v->flags.set(NodeFlags::_first_order_only);
-    bool manual_set_vnbb = flags.get(NodeFlags::_manual_set_vnbb)
+            v->set_flag(VarFlags::_first_order_only);
+    bool manual_set_vnbb = flag(OpFlags::_manual_set_vnbb)
         || _inputs.size()==0
         || (_outputs.size()==1 && _outputs.front().node->is_stop_grad());
     for (Var* v : inputs()) {
         if (!manual_set_vnbb) {
-            v->flags.set(NodeFlags::_needed_by_backward);
+            v->set_flag(VarFlags::_needed_by_backward);
         }
     }
     Var* need_sync = nullptr;
     for (Var* v : outputs()) {
         if (!manual_set_vnbb)
-            v->flags.set(NodeFlags::_needed_by_backward);
+            v->set_flag(VarFlags::_needed_by_backward);
         if (v->num < 0)
             need_sync = v;
     }
@@ -225,7 +230,7 @@ void Op::init() {
     if (first_init && _inputs.size()) {
         if (all_inputs_stopped && has_disabled_input) {
             for (Var* v : outputs())
-                v->flags.set(NodeFlags::_requires_grad_disabled);
+                v->set_flag(VarFlags::_requires_grad_disabled);
         } else if (all_inputs_stopped && th_mode) {
             for (Var* v : outputs()) {
                 v->set_stop_grad();
@@ -277,11 +282,11 @@ void Op::do_jit_prepare(JK& jk) {
     jit_prepare(jk);
     if (jk.size == pre_size) {
         // not a jit op
-        bool has_cuda = flags.get(NodeFlags::_cuda);
-        bool has_cpu = flags.get(NodeFlags::_cpu);
+        bool has_cuda = flag(OpFlags::_cuda);
+        bool has_cpu = flag(OpFlags::_cpu);
         CHECK(has_cuda || has_cpu);
         if (has_cuda && has_cpu && !use_cuda)
-            flags.set(NodeFlags::_cuda, 0);
+            set_flag(OpFlags::_cuda, 0);
         jk.clear();
     } else {
         bool use_int64_t = false;
@@ -297,22 +302,22 @@ void Op::do_jit_prepare(JK& jk) {
                 use_int64_t = true;
         }
         jk << "«JIT:1";
-        if (use_cuda_op && flags.get(NodeFlags::_cuda)) {
+        if (use_cuda_op && flag(OpFlags::_cuda)) {
             jk << "«JIT_cuda:1";
-            flags.set(NodeFlags::_cpu, 0);
+            set_flag(OpFlags::_cpu, 0);
             // TODO: 64bit index in CUDA
             // use_int64_t = false;
         } else {
             if (use_cuda==2) {
-                if (flags.get(NodeFlags::_cuda))
+                if (flag(OpFlags::_cuda))
                     LOGf << "Op" << name() >> "'s vars are not allocated in cuda";
                 else
                     LOGf << "Op" << name() << "doesn't have cuda version";
             }
-            ASSERT(flags.get(NodeFlags::_cpu))
+            ASSERT(flag(OpFlags::_cpu))
                 << "Op" << name() << "doesn't have cpu version";
             jk << "«JIT_cpu:1";
-            flags.set(NodeFlags::_cuda, 0);
+            set_flag(OpFlags::_cuda, 0);
         }
         if (try_use_32bit_index) use_int64_t = false;
         if (use_int64_t)

@@ -18,8 +18,8 @@ static auto make_transpose = get_op_info("cutt_transpose")
     .get_constructor<VarPtr, Var*, NanoVector>();
 
 CuttTransposeOp::CuttTransposeOp(Var* x, NanoVector axes) : x(x), axes(axes) {
-    flags.set(NodeFlags::_cpu, 0);
-    flags.set(NodeFlags::_cuda, 1);
+    set_flag(OpFlags::_cpu, 0);
+    set_flag(OpFlags::_cuda, 1);
     int i=0;
     for (; i<axes.size(); i++)
         if (i!=axes[i]) break;
@@ -28,7 +28,7 @@ CuttTransposeOp::CuttTransposeOp(Var* x, NanoVector axes) : x(x), axes(axes) {
         return;
     }
     y = create_output(nullptr, x->dtype());
-    flags.set(NodeFlags::_manual_set_vnbb);
+    set_flag(OpFlags::_manual_set_vnbb);
 }
 
 void CuttTransposeOp::infer_shape() {

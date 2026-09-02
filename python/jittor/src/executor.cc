@@ -37,6 +37,18 @@
 
 namespace jittor {
 
+// bfs_q below holds vars and ops together, so this question has to be asked of
+// a node whose kind is not known yet. _has_gopt is an Op-only bit, and the
+// answer for a var is "no" -- which is what the old code got by accident: it
+// read the bit straight off the Node, and the bit number _has_gopt occupies
+// simply happened to be unused in the Var layout. The loop that consumes the
+// answer does `n->op()->graph_optimize()` without checking anything, so the
+// day a Var-only flag landed on that bit number, a Var would have been handed
+// to a virtual Op call. Ask the kind first.
+static inline bool has_gopt(Node* node) {
+    return !node->is_var() && node->op()->flag(OpFlags::_has_gopt);
+}
+
 Executor exe;
 EXTERN_LIB MemoryProfiler memory_profiler;
 DECLARE_FLAG(int, profile_memory_enable);
@@ -115,13 +127,13 @@ static inline void propergate_needed_flags(FusedOp& fused_op) {
         bool has_need = 0;
         auto op = ops[i];
         for (auto o : op->outputs())
-            if (o->flags.get(NodeFlags::_needed_by_backward) &&
+            if (o->flag(VarFlags::_needed_by_backward) &&
                 !(o->custom_data&1)) {
                 has_need = 1;
             }
         if (has_need)
             for (auto i : op->inputs()) {
-                i->flags.set(NodeFlags::_needed_by_backward);
+                i->set_flag(VarFlags::_needed_by_backward);
             }
     }
 }
@@ -263,7 +275,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             for (auto i : node->_inputs)
                 if (i.node->tflag != t && !i.node->is_finished()) {
                     i.node->tflag = t;
-                    need_opt += i.node->flags.get(NodeFlags::_has_gopt);
+                    need_opt += has_gopt(i.node);
                     bfs_q.push_back(i.node);
                 }
             // this var has been fetched
@@ -276,7 +288,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
                         (n.node->id <= max_id ||
                             n.node->flags.get(NodeFlags::_fetch))) {
                         n.node->tflag = t;
-                        need_opt += n.node->flags.get(NodeFlags::_has_gopt);
+                        need_opt += has_gopt(n.node);
                         bfs_q.push_back(n.node);
                     }
                 }
@@ -284,9 +296,9 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         }
         if (!need_opt || gopt_disable) break;
         for (Node* n : bfs_q) {
-            if (n->flags.get(NodeFlags::_has_gopt)) {
+            if (has_gopt(n)) {
                 n->op()->graph_optimize();
-                n->flags.set(NodeFlags::_has_gopt, 0);
+                n->op()->set_flag(OpFlags::_has_gopt, 0);
             }
         }
     }
@@ -629,7 +641,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             memory_profiler.check();
         LOGvvv << "Run" << op << "inputs:" << op->inputs() << "outputs:" << op->outputs();
         op->do_prepare(jkl);
-        bool is_cuda = op->flags.get(NodeFlags::_cuda);
+        bool is_cuda = op->flag(OpFlags::_cuda);
         #ifdef HAS_CUDA
         if (!is_cuda) {
             if (last_is_cuda) {
@@ -746,7 +758,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     LOGvv << "All" << op_num << "ops finished, return vars:" << vars;
     // a zero-sized var has no memory to point at (see the size==0 branch in
     // the raw allocators), which is not the same as an unallocated var
-    for (Var* v : vars) ASSERT(v->mem_ptr || v->size == 0 || v->flags.get(NodeFlags::_is_swapped) || !v->backward_liveness) << v;
+    for (Var* v : vars) ASSERT(v->mem_ptr || v->size == 0 || v->flag(VarFlags::_is_swapped) || !v->backward_liveness) << v;
     // clean fetcher free buffer
     fetcher_to_free.clear();
     #ifdef HAS_CUDA

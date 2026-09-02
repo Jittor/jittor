@@ -52,8 +52,8 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     }
     #endif
     y = create_output(nullptr, x->dtype());
-    flags.set(NodeFlags::_cuda);
-    flags.set(NodeFlags::_manual_set_vnbb);
+    set_flag(OpFlags::_cuda);
+    set_flag(OpFlags::_manual_set_vnbb);
 }
 
 void TransposeOp::infer_shape() {

@@ -89,10 +89,10 @@ ArgReduceOp::ArgReduceOp(Var* x, NanoString op, int dim, bool keepdims)
     y_key = create_output(nullptr, x->dtype());
     #ifdef IS_ACL
     if (x->dtype() == ns_float32 || x->dtype() == ns_float16)
-        flags.set(NodeFlags::_cuda);
+        set_flag(OpFlags::_cuda);
     #endif
-    flags.set(NodeFlags::_manual_set_vnbb);
-    y->flags.set(NodeFlags::_needed_by_backward);
+    set_flag(OpFlags::_manual_set_vnbb);
+    y->set_flag(VarFlags::_needed_by_backward);
 }
 VarPtr ArgReduceOp::get_grad(Var* out, Var* dout, Var* v, int v_index, int dim, Var* y) {
     // Do not have grad to extras input

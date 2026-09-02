@@ -313,7 +313,7 @@ void ConvTuner::forwardTune(FusedOp* fop) {
             // emits a kernel that references an undefined identifier. The
             // compile failure then surfaces at run time as a call through a
             // null relay pointer, i.e. a segfault rather than a diagnosis.
-            if (fop->flags.get(NodeFlags::_cuda) && wformat != "oihw" && wformat != "ohwi")
+            if (fop->flag(OpFlags::_cuda) && wformat != "oihw" && wformat != "ohwi")
                 continue;
             if (xoi.failed) continue;
             std::stringstream ss;
@@ -370,7 +370,7 @@ void ConvTuner::forwardTune(FusedOp* fop) {
             string relay_conv_name;
 
             if (y_id == 0) {
-                relay_conv_name = fop->flags.get(NodeFlags::_cpu) ?
+                relay_conv_name = fop->flag(OpFlags::_cpu) ?
                     "mkl_conv" : "cudnn_conv";
                 if (!has_op(relay_conv_name))
                     continue;
@@ -380,7 +380,7 @@ void ConvTuner::forwardTune(FusedOp* fop) {
                 rvar = make_conv(x, w, stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w, groups, xformat, wformat, yformat);
             } else
             if (x_id == 0) {
-                relay_conv_name = fop->flags.get(NodeFlags::_cpu) ?
+                relay_conv_name = fop->flag(OpFlags::_cpu) ?
                         "mkl_conv_backward_x" : "cudnn_conv_backward_x";
                 if (!has_op(relay_conv_name))
                     continue;
@@ -391,7 +391,7 @@ void ConvTuner::forwardTune(FusedOp* fop) {
                 LOGvvvv << w << y << height << width << stride_h << stride_w << padding_h << padding_w << dilation_h << dilation_w << groups << xformat << wformat << yformat;
                 rvar = make_conv_x(w, y, height, width, stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w, groups, xformat, wformat, yformat);
             } else {
-                relay_conv_name = fop->flags.get(NodeFlags::_cpu) ?
+                relay_conv_name = fop->flag(OpFlags::_cpu) ?
                         "mkl_conv_backward_w" : "cudnn_conv_backward_w";
                 if (!has_op(relay_conv_name))
                     continue;
