@@ -37,6 +37,11 @@ void* AlignedAllocator::alloc(size_t size, size_t& allocation) {
     // blocks and retry, exactly like they already do for cudaMalloc failures.
     if (!ptr)
         throw std::runtime_error("aligned_allocator: unable to allocate " + S(asize) + " bytes");
+    // alloc() must write back `allocation`. This allocator keeps no block table,
+    // so the pointer itself is the allocation handle: unique among live
+    // allocations, which is what the Var aliasing checks in getitem/setitem and
+    // the memory profiler's per-allocation dedup rely on.
+    allocation = (size_t)ptr;
     return ptr;
 }
 

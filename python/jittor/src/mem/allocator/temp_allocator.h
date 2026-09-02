@@ -37,10 +37,11 @@ struct TempAllocator : Allocator {
     std::map<unsigned long long, TempCachingBlock*> cached_blocks;
     std::vector<size_t> block_ids;  
     size_t tot_block_id;
-    std::unique_ptr<TempCachingBlock*[]> occupied_id_mapper;              
+    // value-initialized: free() indexes this table by allocation id.
+    std::unique_ptr<TempCachingBlock*[]> occupied_id_mapper;
 
 
-    inline TempAllocator(size_t cache_blocks_limit=2) : cache_blocks_limit(cache_blocks_limit), tot_block_id(0), occupied_id_mapper(new TempCachingBlock*[ID_LIMIT]) {
+    inline TempAllocator(size_t cache_blocks_limit=2) : cache_blocks_limit(cache_blocks_limit), tot_block_id(0), occupied_id_mapper(new TempCachingBlock*[ID_LIMIT]()) {
         temp_allocators.push_back(this);
     }
     inline TempAllocator(Allocator* underlying, size_t cache_blocks_limit=2) : TempAllocator(cache_blocks_limit) {

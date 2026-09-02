@@ -82,7 +82,10 @@ void* TempAllocator::alloc(size_t size, size_t& allocation) {
 
 void TempAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
     size = align_size(size);
-    ASSERT(occupied_id_mapper[allocation] != nullptr) << "allocation not found";
+    // validate the id before indexing the table, not after dereferencing it
+    ASSERT(allocation > 0 && allocation < ID_LIMIT)
+        << "allocation id out of range:" << allocation;
+    ASSERT(occupied_id_mapper[allocation] != nullptr) << "allocation not found:" << allocation;
     TempCachingBlock* block = occupied_id_mapper[allocation];
     occupied_id_mapper[allocation] = nullptr;
     used_memory -= block->size;

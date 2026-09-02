@@ -54,10 +54,10 @@ struct CachingBlockPool {
     void erase(CachingBlock* block);
     // insert a block, id of this block will be obtanined and returned in this function.
     size_t insert_occupied(CachingBlock* block);
-    // delete and return a block from pool and recycle id.
-    CachingBlock* erase_occupied(size_t allocation);
-    // return a block from pool
-    CachingBlock* get_occupied(size_t allocation);
+    // delete and return a block from pool and recycle id, validating the id first.
+    static CachingBlock* erase_occupied(size_t allocation);
+    // return a block from pool, validating the id first.
+    static CachingBlock* get_occupied(size_t allocation);
     // free all unsplit unoccupied blocks and recycle id.
     size_t free_all_cached_blocks(Allocator* underlying, long long free_size = -1);
 };

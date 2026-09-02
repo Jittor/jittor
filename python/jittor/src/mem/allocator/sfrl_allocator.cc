@@ -21,8 +21,11 @@ constexpr int64 sfrl_large_block_size_cpu=5242880;
 std::vector<size_t> CachingBlockPool::block_ids;
     //start from 1
 size_t CachingBlockPool::tot_block_id = 0;
+// The extra () value-initializes every slot to nullptr. Without it free() and
+// share_with() dereferenced whatever the heap happened to hold, and the
+// "!= nullptr" guards elsewhere were checking uninitialized memory.
 std::unique_ptr<CachingBlock*[]> CachingBlockPool::occupied_id_mapper(
-    new CachingBlock*[CachingBlockPool::ID_LIMIT]);
+    new CachingBlock*[CachingBlockPool::ID_LIMIT]());
 
 //CachingBlock
 CachingBlock::CachingBlock(size_t size, size_t origin_size) : 
@@ -78,17 +81,21 @@ size_t CachingBlockPool::insert_occupied(CachingBlock* block) {
     return id;
 }
 
-CachingBlock* CachingBlockPool::erase_occupied(size_t allocation) {
-    ASSERT(occupied_id_mapper[allocation] != nullptr) << "allocation not found";
-    block_ids.push_back(allocation);
+// Ids start at 1, so slot 0 is never a live allocation; validating the range
+// before indexing keeps an out-of-range allocation (a leftover byte offset from
+// share_with, say) from reading past the end of the table.
+CachingBlock* CachingBlockPool::get_occupied(size_t allocation) {
+    ASSERT(allocation > 0 && allocation < ID_LIMIT)
+        << "allocation id out of range:" << allocation;
     CachingBlock* block = occupied_id_mapper[allocation];
-    occupied_id_mapper[allocation] = nullptr;
+    ASSERT(block != nullptr) << "allocation not found:" << allocation;
     return block;
 }
 
-CachingBlock* CachingBlockPool::get_occupied(size_t allocation) {
-    ASSERT(occupied_id_mapper[allocation] != nullptr) << "allocation not found";
-    CachingBlock* block = occupied_id_mapper[allocation];
+CachingBlock* CachingBlockPool::erase_occupied(size_t allocation) {
+    CachingBlock* block = get_occupied(allocation);
+    occupied_id_mapper[allocation] = nullptr;
+    block_ids.push_back(allocation);
     return block;
 }
 
@@ -296,7 +303,17 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
 
 void SFRLAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
     std::unique_lock<std::mutex> lock(sfrl_allocator_mutex);
-    auto* block = CachingBlockPool::occupied_id_mapper[allocation];
+    // free() only trusts `allocation`, so validate it before dereferencing:
+    // range, registered, and still occupied. Callers are allowed to pass 0 for
+    // mem_ptr (see src/test/test_sfrl_allocator.cc), but when they do pass one
+    // it has to point inside the block the allocation names -- a shared child
+    // var passes its own offset pointer with its parent's allocation.
+    auto* block = CachingBlockPool::get_occupied(allocation);
+    ASSERT(block->occupied) << "double free of allocation:" << allocation;
+    if (mem_ptr)
+        ASSERT((char*)mem_ptr >= (char*)block->memory_ptr &&
+               (char*)mem_ptr <= (char*)block->memory_ptr + block->size)
+            << "mem_ptr does not belong to allocation:" << allocation;
     auto* blocks = block->blocks;
     if (block->share_times == 0) {
         blocks->erase_occupied(allocation);
@@ -319,7 +336,8 @@ void SFRLAllocator::gc() {
 
 bool SFRLAllocator::share_with(size_t size, size_t allocation) {
     std::unique_lock<std::mutex> lock(sfrl_allocator_mutex);
-    auto* block = CachingBlockPool::occupied_id_mapper[allocation];
+    auto* block = CachingBlockPool::get_occupied(allocation);
+    ASSERT(block->occupied) << "share_with a freed allocation:" << allocation;
     ++block->share_times;
     return true;
 }

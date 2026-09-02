@@ -23,6 +23,11 @@ void* NFEFAllocator::alloc(size_t size, size_t& allocation) {
         return underlying->alloc(size, allocation);
     auto ptr = iter->second.front();
     iter->second.pop_front();
+    // Recycled pointers never reach the underlying allocator, so the allocation
+    // handle has to be written here too -- otherwise the caller keeps whatever
+    // stale value it passed in, and two different buffers compare "same
+    // allocation" in the getitem/setitem aliasing check.
+    allocation = (size_t)ptr;
     return ptr;
 }
 

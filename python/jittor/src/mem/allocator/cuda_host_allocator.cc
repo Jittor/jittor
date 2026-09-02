@@ -24,6 +24,8 @@ void* CudaHostAllocator::alloc(size_t size, size_t& allocation) {
     }
     void* ptr;
     checkCudaErrors(cudaMallocHost(&ptr, size));
+    // alloc() must write back `allocation`; the pointer is the handle here.
+    allocation = (size_t)ptr;
     return ptr;
 }
 

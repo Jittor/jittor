@@ -31,8 +31,12 @@ void* CudaDeviceAllocator::alloc(size_t size, size_t& allocation) {
     }
     void* ptr;
     cudaError_t err = cudaMalloc(&ptr, size);
-    if (err == cudaSuccess)
+    if (err == cudaSuccess) {
+        // alloc() must write back `allocation`; this allocator has no block
+        // table, so the pointer is the allocation handle.
+        allocation = (size_t)ptr;
         return ptr;
+    }
     // Clean the sticky runtime error before a higher-level allocator retries.
     cudaGetLastError();
     if (!cuda_device_allocator_managed_fallback)
@@ -43,6 +47,7 @@ void* CudaDeviceAllocator::alloc(size_t size, size_t& allocation) {
     LOGw << "Unable to alloc cuda device memory for size" << size
         << ", falling back to cudaMallocManaged";
     checkCudaErrors(cudaMallocManaged(&ptr, size));
+    allocation = (size_t)ptr;
     return ptr;
 }
 
