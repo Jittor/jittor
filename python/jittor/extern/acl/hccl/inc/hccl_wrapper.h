@@ -30,30 +30,35 @@ namespace jittor {
 #include "mpi_wrapper.h"
 #endif
 
+// These used to log at LOGe and `return`. Inside an operator's jit_run() that
+// meant the collective silently did not run: the output var kept whatever
+// happened to be in it, the rank carried on, and nothing above a log line said
+// so. A failed collective is not recoverable -- the ranks are already out of
+// step -- so throw, and let the rank die loudly enough that the job can be torn
+// down instead of every rank continuing with garbage. 6.B03.
+//
+// Note these evaluate `ret` exactly once; the previous ACLCHECK evaluated it
+// twice on the failure path.
 #define ACLCHECK(ret) do {\
-    if(ret != ACL_SUCCESS)\
-    {\
-        LOGe << "retcode: " << ret;\
-        return;\
-    }\
-} while(0)\
-
-#define HCCLCHECK(ret) do {\
-    if(ret != HCCL_SUCCESS)\
-    {\
-        LOGe << HcclGetErrorString(ret) << " retcode: " << ret;\
-        return;\
-    }\
-} while(0)\
-
-// Return-value variants for functions that return a status (not void).
-#define ACLCHECK_R(ret, rv) do {\
-    if((ret) != ACL_SUCCESS) { LOGe << "acl retcode: " << (ret); return (rv); }\
+    auto _acl_r = (ret);\
+    if (_acl_r != ACL_SUCCESS)\
+        LOGf << "acl error in" << #ret << "retcode:" << _acl_r;\
 } while(0)
 
-#define HCCLCHECK_R(ret, rv) do {\
-    auto _r = (ret);\
-    if(_r != HCCL_SUCCESS) { LOGe << HcclGetErrorString(_r) << " retcode: " << _r; return (rv); }\
+#define HCCLCHECK(ret) do {\
+    auto _hccl_r = (ret);\
+    if (_hccl_r != HCCL_SUCCESS)\
+        LOGf << "hccl error in" << #ret\
+             << HcclGetErrorString(_hccl_r) << "retcode:" << _hccl_r;\
+} while(0)
+
+// Shutdown-only variant: destructors must not throw (that is std::terminate),
+// so during teardown we report and carry on.
+#define HCCLCHECK_PEEK(ret) do {\
+    auto _hccl_r = (ret);\
+    if (_hccl_r != HCCL_SUCCESS)\
+        LOGe << "hccl error during shutdown, ignored:" << #ret\
+             << HcclGetErrorString(_hccl_r) << "retcode:" << _hccl_r;\
 } while(0)
 
 #include <hccl.h>

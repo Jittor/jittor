@@ -79,14 +79,14 @@ static bool hccl_init_envfile() {
     int local_rank = lr ? atoi(lr) : world_rank;
 
     uint32_t device_count = 0;
-    ACLCHECK_R(aclrtGetDeviceCount(&device_count), false);
+    ACLCHECK(aclrtGetDeviceCount(&device_count));
     if (!device_count) return false;
     hccl_device_id = local_rank % device_count;
-    ACLCHECK_R(aclrtSetDevice(hccl_device_id), false);
+    ACLCHECK(aclrtSetDevice(hccl_device_id));
 
     string tmp_path = string(rf) + ".tmp";
     if (world_rank == 0) {
-        HCCLCHECK_R(HcclGetRootInfo(&root_info), false);
+        HCCLCHECK(HcclGetRootInfo(&root_info));
         // write atomically: tmp then rename
         FILE* f = fopen(tmp_path.c_str(), "wb");
         if (!f) { LOGe << "cannot open rootinfo tmp" << tmp_path; return false; }
@@ -113,8 +113,8 @@ static bool hccl_init_envfile() {
         }
     }
     LOGv << "HCCL(env) init dev" << hccl_device_id << "rank" << world_rank << "/" << world_size;
-    HCCLCHECK_R(HcclCommInitRootInfo((uint32_t)world_size, &root_info,
-                                     (uint32_t)world_rank, &comm), false);
+    HCCLCHECK(HcclCommInitRootInfo((uint32_t)world_size, &root_info,
+                                     (uint32_t)world_rank, &comm));
     use_device_mpi = true;
     hccl_inited = true;
     LOGi << "HCCL(env) init success dev" << hccl_device_id
@@ -167,7 +167,8 @@ void hccl_init() {
 struct hccl_finalizer {
     ~hccl_finalizer() {
         if (!hccl_inited) return;
-        HCCLCHECK(HcclCommDestroy(comm));
+        // HCCLCHECK throws now; a throw from a destructor is std::terminate.
+        HCCLCHECK_PEEK(HcclCommDestroy(comm));
     }
 };
 static hccl_finalizer hccl_finalizer;
