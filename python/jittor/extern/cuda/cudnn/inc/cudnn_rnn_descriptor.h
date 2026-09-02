@@ -25,6 +25,19 @@ static inline cudnnRNNMode_t rnn_string_to_rnn_mode(string mode) {
     return CUDNN_GRU;
 }
 
+/** cuDNN's RNN data type for a jittor dtype.
+
+    cudnnSetRNNDescriptor_v6 takes CUDNN_DATA_FLOAT, _DOUBLE or _HALF and
+    nothing else -- bfloat16 has no v6 RNN at any cuDNN version -- so refuse
+    here, naming the dtype, rather than letting the descriptor come back
+    CUDNN_STATUS_NOT_SUPPORTED with no operand named. Every RNN path (the op,
+    shape inference, the weight-offset query) goes through this. */
+static inline cudnnDataType_t cudnn_rnn_dtype(NanoString dtype) {
+    ASSERT(dtype == ns_float32 || dtype == ns_float64 || dtype == ns_float16)
+        << "cudnn rnn supports float16, float32 and float64, got" << dtype;
+    return cudnn_dtype(dtype);
+}
+
 static inline int rnn_string_to_num_linear_layers(string mode) {
     if (mode == "relu")
         return 2;
@@ -101,9 +114,16 @@ cudnnDropoutDescriptor_t cudnn_rnn_dropout_descriptor(cudnnHandle_t handle, floa
 struct RnnDescriptor {
     cudnnHandle_t handle;
     cudnnRNNDescriptor_t desc;
+    // The RNN's own data type. It used to be hardcoded CUDNN_DATA_FLOAT while
+    // the tensor descriptors around it were built from getDataType<Tx>(), so a
+    // half or bfloat16 RNN described its tensors as one type and itself as
+    // another -- cuDNN rejected the call with BAD_PARAM -- and the weight
+    // space was sized as if the weights were fp32.
+    cudnnDataType_t dataType;
 
     RnnDescriptor(cudnnHandle_t handle, string mode, int hidden_size, int num_layers, 
-        float dropout, bool bidirectional) : handle(handle) {
+        float dropout, bool bidirectional, cudnnDataType_t dataType)
+        : handle(handle), dataType(dataType) {
         checkCudaErrors(cudnnCreateRNNDescriptor(&desc));
         checkCudaErrors(cudnnSetRNNDescriptor_v6(
             handle,
@@ -115,8 +135,13 @@ struct RnnDescriptor {
             bidirectional ? CUDNN_BIDIRECTIONAL : CUDNN_UNIDIRECTIONAL,
             rnn_string_to_rnn_mode(mode),
             CUDNN_RNN_ALGO_STANDARD,
-            CUDNN_DATA_FLOAT
+            dataType
         ));
+        if (dataType != CUDNN_DATA_FLOAT && dataType != CUDNN_DATA_DOUBLE)
+            // A half/bfloat16 RNN accumulates in fp32 unless the math type
+            // says otherwise; without this cuDNN refuses the reduced-precision
+            // descriptor on several architectures.
+            checkCudaErrors(cudnnSetRNNMatrixMathType(desc, CUDNN_TENSOR_OP_MATH));
     }
 
     RnnDescriptor(const RnnDescriptor&) = delete;
@@ -130,7 +155,7 @@ struct RnnDescriptor {
     size_t weight_space_size(const cudnnTensorDescriptor_t &xDesc) {
         size_t size;
         checkCudaErrors(cudnnGetRNNParamsSize(
-            handle, desc, xDesc, &size, CUDNN_DATA_FLOAT
+            handle, desc, xDesc, &size, dataType
         ));
         return size;
     }
@@ -157,14 +182,20 @@ struct RnnDescriptor {
 struct RnnWeightDescriptor {
     cudnnFilterDescriptor_t desc;
     size_t size;
-    RnnWeightDescriptor(size_t size) : size(size) {
-        int dimW[3] = {(int) (size / sizeof(float)), 1, 1};
+    // `size` is in bytes; the filter's extent is in elements, so it depends on
+    // the weight dtype. Both were fixed at fp32, which described a half weight
+    // buffer as twice as many fp32 values as it holds.
+    RnnWeightDescriptor(size_t size, cudnnDataType_t dataType, int elem_size) : size(size) {
+        int dimW[3] = {(int) (size / elem_size), 1, 1};
         checkCudaErrors(cudnnCreateFilterDescriptor(&desc));
-        checkCudaErrors(cudnnSetFilterNdDescriptor(desc, CUDNN_DATA_FLOAT, CUDNN_TENSOR_NCHW, 3, dimW));
+        checkCudaErrors(cudnnSetFilterNdDescriptor(desc, dataType, CUDNN_TENSOR_NCHW, 3, dimW));
     }
     ~RnnWeightDescriptor() {
         peekCudaErrorsAlways(cudnnDestroyFilterDescriptor(desc));
     }
+
+    RnnWeightDescriptor(const RnnWeightDescriptor&) = delete;
+    RnnWeightDescriptor& operator=(const RnnWeightDescriptor&) = delete;
 };
 
 /** Training reserve-space size for an RNN of this shape, cached per
@@ -190,6 +221,6 @@ void cudnn_rnn_dropout_reset();
     TODO: support cudnn rnn-v8; support proj_size
  */
 // @pyjt(cudnn_rnn_weight_offset)
-vector<int32_t> cudnn_rnn_weight_offset(string mode, int input_size, int hidden_size, int num_layers, int proj_size, bool bias, bool bidirectional);
+vector<int32_t> cudnn_rnn_weight_offset(string mode, int input_size, int hidden_size, int num_layers, int proj_size, bool bias, bool bidirectional, string dtype="float32");
 
 } // jittor

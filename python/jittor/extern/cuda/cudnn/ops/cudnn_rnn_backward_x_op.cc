@@ -49,11 +49,14 @@ CudnnRnnBackwardXOp::CudnnRnnBackwardXOp(Var* x, Var* hx, Var* y, Var* dy, Var* 
 }
 
 void CudnnRnnBackwardXOp::init_rnn() {
-    dx = create_output(nullptr, ns_float32);
-    dhx = create_output(nullptr, ns_float32);
+    // Gradients carry the dtype of what they are gradients of. These were
+    // hardcoded fp32 while jit_run writes them through ptr<Tx>(), so on a
+    // half RNN cuDNN wrote half values into buffers laid out for floats.
+    dx = create_output(nullptr, x->ns);
+    dhx = create_output(nullptr, hx->ns);
     
     if (mode == "lstm")
-        dcx = create_output(nullptr, ns_float32);
+        dcx = create_output(nullptr, cx->ns);
     else
         dcx = nullptr;
 
@@ -130,8 +133,9 @@ void CudnnRnnBackwardXOp::jit_run() {
     checkCudaErrors(cudnnSetTensorNdDescriptor(dhyDesc, getDataType<Tx>(), 3, hidden_dims, hidden_strides));
     checkCudaErrors(cudnnSetTensorNdDescriptor(dcyDesc, getDataType<Tx>(), 3, hidden_dims, hidden_strides));
 
-    RnnWeightDescriptor w_desc(w->size);
-    RnnDescriptor rnn_desc(cudnn_handle, mode, hidden_size, num_layers, dropout, bidirectional);
+    RnnWeightDescriptor w_desc(w->size, getDataType<Tw>(), sizeof(Tw));
+    RnnDescriptor rnn_desc(cudnn_handle, mode, hidden_size, num_layers, dropout,
+        bidirectional, getDataType<Tx>());
 
     // Was uninitialized when work_space_size == 0, and the free below is
     // unconditional: a garbage pointer handed to the allocator.

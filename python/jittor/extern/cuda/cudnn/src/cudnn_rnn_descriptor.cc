@@ -111,7 +111,7 @@ size_t cudnn_rnn_reserve_space_size(string mode, int input_size, int hidden_size
             checkCudaErrors(cudnnCreateTensorDescriptor(&xDesc[i]));
             checkCudaErrors(cudnnSetTensorNdDescriptor(xDesc[i], dtype, 3, in_dims, in_strides));
         }
-        RnnDescriptor rnn_desc(cudnn_handle, mode, hidden_size, num_layers, dropout, bidirectional);
+        RnnDescriptor rnn_desc(cudnn_handle, mode, hidden_size, num_layers, dropout, bidirectional, dtype);
         size = rnn_desc.reserve_space_size(xDesc.data(), seq_length);
     } catch (...) {
         for (auto d : xDesc)
@@ -129,20 +129,27 @@ size_t cudnn_rnn_reserve_space_size(string mode, int input_size, int hidden_size
     return size;
 }
 
-vector<int32_t> cudnn_rnn_weight_offset(string mode, int input_size, int hidden_size, int num_layers, int proj_size, bool bias, bool bidirectional) {
+vector<int32_t> cudnn_rnn_weight_offset(string mode, int input_size, int hidden_size, int num_layers, int proj_size, bool bias, bool bidirectional, string dtype) {
+    // The offsets and the flat size are in *elements* of the weight dtype, so
+    // they depend on it. This used to be fp32 throughout, which is why the
+    // caller could only ever build an fp32 flat weight.
+    NanoString ns(dtype.c_str());
+    cudnnDataType_t data_type = cudnn_rnn_dtype(ns);
+    int elem_size = ns.dsize();
+
     // A pseudo mini-batch for fetching weight space size.
     int dimX[] = {1, input_size, 1};
     int strideX[] = {input_size, 1, 1};
     cudnnTensorDescriptor_t xDesc;
     checkCudaErrors(cudnnCreateTensorDescriptor(&xDesc));
-    checkCudaErrors(cudnnSetTensorNdDescriptor(xDesc, CUDNN_DATA_FLOAT, 3, dimX, strideX));
+    checkCudaErrors(cudnnSetTensorNdDescriptor(xDesc, data_type, 3, dimX, strideX));
 
-    RnnDescriptor rnn_desc(cudnn_handle, mode, hidden_size, num_layers, 0, bidirectional);
+    RnnDescriptor rnn_desc(cudnn_handle, mode, hidden_size, num_layers, 0, bidirectional, data_type);
     int weightSpaceSize = rnn_desc.weight_space_size(xDesc);
-    RnnWeightDescriptor w_desc(weightSpaceSize);
+    RnnWeightDescriptor w_desc(weightSpaceSize, data_type, elem_size);
     
     vector<int> weight_offsets;
-    weight_offsets.push_back(weightSpaceSize / sizeof(float));    
+    weight_offsets.push_back(weightSpaceSize / elem_size);    
 
     int num_directions = bidirectional + 1;
     int num_linear_layers = rnn_string_to_num_linear_layers(mode);
@@ -151,11 +158,13 @@ vector<int32_t> cudnn_rnn_weight_offset(string mode, int input_size, int hidden_
         for (int linLayerID = 0; linLayerID < num_linear_layers; linLayerID++) {
             cudnnFilterDescriptor_t linLayerMatDesc;
             cudnnFilterDescriptor_t linLayerBiasDesc;
-            float *linLayerMat = nullptr;
-            float *linLayerBias = nullptr;
+            char *linLayerMat = nullptr;
+            char *linLayerBias = nullptr;
 
             checkCudaErrors(cudnnCreateFilterDescriptor(&linLayerMatDesc));
             checkCudaErrors(cudnnCreateFilterDescriptor(&linLayerBiasDesc));
+            // Destroyed at the end of this iteration; they used to leak two
+            // filter descriptors per linear layer per query.
 
             checkCudaErrors(cudnnGetRNNLinLayerMatrixParams(
                 cudnn_handle, rnn_desc.desc,
@@ -167,7 +176,9 @@ vector<int32_t> cudnn_rnn_weight_offset(string mode, int input_size, int hidden_
                 linLayerMatDesc, 
                 (void **) &linLayerMat
             ));
-            weight_offsets.push_back(linLayerMat - (float *) nullptr);
+            // cuDNN hands back a byte address into a buffer based at 0; the
+            // caller indexes the flat weight by element.
+            weight_offsets.push_back((int)((linLayerMat - (char *) nullptr) / elem_size));
 
             if (bias) {
                 checkCudaErrors(cudnnGetRNNLinLayerBiasParams(
@@ -180,8 +191,11 @@ vector<int32_t> cudnn_rnn_weight_offset(string mode, int input_size, int hidden_
                     linLayerBiasDesc, 
                     (void **) &linLayerBias
                 ));
-                weight_offsets.push_back(linLayerBias - (float *) nullptr);
+                weight_offsets.push_back((int)((linLayerBias - (char *) nullptr) / elem_size));
             }
+
+            checkCudaErrors(cudnnDestroyFilterDescriptor(linLayerMatDesc));
+            checkCudaErrors(cudnnDestroyFilterDescriptor(linLayerBiasDesc));
         }
     }
 

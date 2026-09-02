@@ -51,6 +51,14 @@ CudnnRnnOp::CudnnRnnOp(Var* x, Var* hx, Var* w,
 }
 
 void CudnnRnnOp::init_rnn() {
+    // cuDNN describes the whole RNN with a single data type, so x, w and y
+    // have to agree. Saying so here turns a mixed-dtype call into a readable
+    // error at construction instead of CUDNN_STATUS_BAD_PARAM from inside
+    // cudnnRNNForward*, which names neither operand.
+    ASSERT(x->ns == w->ns) << "cudnn_rnn needs input and weight of the same dtype,"
+        << "got" << x->ns << "and" << w->ns;
+    cudnn_rnn_dtype(x->ns);   // refuse an unsupported dtype here, by name
+
     y = create_output(nullptr, dtype_infer(x->ns, w->ns));
     hy = create_output(nullptr, dtype_infer(x->ns, w->ns));
     if (mode == "lstm")
@@ -92,7 +100,7 @@ void CudnnRnnOp::infer_shape() {
         // reaches cuDNN, because the reserve-space size is cuDNN's to know.
         reservation->set_shape(cudnn_rnn_reserve_space_size(
             mode, input_size, hidden_size, num_layers, dropout, bidirectional,
-            seq_length, batch_size, CUDNN_DATA_FLOAT));
+            seq_length, batch_size, cudnn_rnn_dtype(x->dtype())));
         #endif
     }
 }
@@ -172,7 +180,8 @@ void CudnnRnnOp::jit_run() {
     checkCudaErrors(cudnnSetTensorNdDescriptor(hyDesc, getDataType<Tx>(), 3, hidden_dims, hidden_strides));
     checkCudaErrors(cudnnSetTensorNdDescriptor(cyDesc, getDataType<Tx>(), 3, hidden_dims, hidden_strides));
 
-    RnnDescriptor rnn_desc(cudnn_handle, mode, hidden_size, num_layers, dropout, bidirectional);
+    RnnDescriptor rnn_desc(cudnn_handle, mode, hidden_size, num_layers, dropout,
+        bidirectional, getDataType<Tx>());
 
     // Was uninitialized when work_space_size == 0, and the free below is
     // unconditional: a garbage pointer handed to the allocator.
@@ -182,7 +191,7 @@ void CudnnRnnOp::jit_run() {
     if (work_space_size > 0)
         work_space = exe.temp_allocator->alloc(work_space_size, work_space_allocation);
 
-    RnnWeightDescriptor w_desc(w->size);
+    RnnWeightDescriptor w_desc(w->size, getDataType<Tw>(), sizeof(Tw));
 
     if (is_train) {
         checkCudaErrors(cudnnRNNForwardTraining(

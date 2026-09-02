@@ -83,7 +83,15 @@ class RNNBase(jt.Module):
                 return num_gates
 
         if jt.flags.use_cuda and jt.cudnn and jt.compiler.is_cuda:
-            if getattr(self, '_cudnn_weight_size', None) is None:
+            # cuDNN describes the whole RNN with one data type, so the flat
+            # weight has to be in the parameters' dtype -- and the offsets
+            # cuDNN reports are element indices into a buffer of that dtype,
+            # so the query depends on it too. Both were pinned to float32,
+            # which is why a half RNN could not be built at all.
+            # str(): NanoString does not compare against None, and the flat
+            # layout only depends on the dtype's name.
+            dtype = str(self.weight_ih_l0.dtype)
+            if getattr(self, '_cudnn_weight_dtype', None) != dtype:
                 offset_array = jt.cudnn.cudnn_rnn_weight_offset(
                     cudnn_mode,
                     self.input_size,
@@ -91,15 +99,17 @@ class RNNBase(jt.Module):
                     self.num_layers,
                     self.proj_size,
                     self.bias,
-                    self.bidirectional
+                    self.bidirectional,
+                    dtype
                 )
                 self._cudnn_weight_size = offset_array[0]
                 self._cudnn_weight_offset = offset_array[1:]
+                self._cudnn_weight_dtype = dtype
 
             num_gates = {
                 "RNN": 1, "LSTM": 4, "GRU": 3
             }[self.mode]
-            ft_weight = jt.zeros(self._cudnn_weight_size, dtype=jt.float32)
+            ft_weight = jt.zeros(self._cudnn_weight_size, dtype=dtype)
 
             cnt = 0
             for layer in range(self.num_layers):
