@@ -382,7 +382,49 @@ def _install_lr_scheduler(g, registry=None):
     swa_utils.AveragedModel = AveragedModel
     swa_utils.get_swa_avg_fn = get_swa_avg_fn
     swa_utils.get_ema_avg_fn = get_ema_avg_fn
-    _update_bn = lambda *args, **kwargs: None
+    def _update_bn(loader, model, device=None):
+        """Recompute BatchNorm running statistics over `loader`.
+
+        Was `lambda *a, **k: None`. SWA averages weights across checkpoints,
+        which leaves every BatchNorm holding statistics for weights that no
+        longer exist; update_bn exists precisely to fix that. Skipping it costs
+        accuracy silently -- the model still runs and still reports a number.
+        """
+        bn_modules = [m for m in model.modules()
+                      if hasattr(m, "running_mean") and hasattr(m, "running_var")]
+        if not bn_modules:
+            return
+        saved_momentum = []
+        for bn in bn_modules:
+            saved_momentum.append(getattr(bn, "momentum", None))
+            # reset to a cumulative moving average over the whole loader
+            if isinstance(getattr(bn, "running_mean", None), jt.Var):
+                bn.running_mean.assign(jt.zeros_like(bn.running_mean))
+            if isinstance(getattr(bn, "running_var", None), jt.Var):
+                bn.running_var.assign(jt.ones_like(bn.running_var))
+        was_training = getattr(model, "is_training", lambda: True)()
+        model.train()
+        n = 0
+        try:
+            for batch in loader:
+                inputs = batch[0] if isinstance(batch, (list, tuple)) else batch
+                n += 1
+                for bn in bn_modules:
+                    # cumulative average: momentum = 1/n
+                    try:
+                        bn.momentum = 1.0 / n
+                    except Exception:
+                        pass
+                model(inputs)
+        finally:
+            for bn, mom in zip(bn_modules, saved_momentum):
+                if mom is not None:
+                    try:
+                        bn.momentum = mom
+                    except Exception:
+                        pass
+            if not was_training:
+                model.eval()
     swa_utils.update_bn = _update_bn
     _optim.swa_utils = swa_utils
     _modules["torch.optim.swa_utils"] = swa_utils

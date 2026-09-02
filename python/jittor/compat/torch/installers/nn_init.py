@@ -128,7 +128,32 @@ def _install_init_aliases(registry=None):
             return fan_in if mode == "fan_in" else fan_out
         _init._calculate_correct_fan = _calculate_correct_fan
     if not hasattr(_init, "dirac_"):
-        _init.dirac_ = lambda t, *a, **k: t   # best-effort no-op
+        def _dirac(tensor, groups=1):
+            """Identity ("Dirac delta") init for 3/4/5-D conv weights.
+
+            Was `lambda t, *a, **k: t`: an outright no-op, so a model relying
+            on dirac_ to start as an identity mapping started from whatever
+            uninitialised memory the tensor held instead.
+            """
+            import numpy as _np
+            shape = [int(d) for d in tensor.shape]
+            if len(shape) not in (3, 4, 5):
+                raise ValueError(
+                    "Only tensors with 3, 4, or 5 dimensions are supported")
+            groups = int(groups)
+            out_channels = shape[0]
+            if out_channels % groups != 0:
+                raise ValueError("dim 0 must be divisible by groups")
+            out_per_group = out_channels // groups
+            min_dim = min(out_per_group, shape[1])
+            arr = _np.zeros(shape, dtype=_np.float64)
+            centre = tuple(slice(d // 2, d // 2 + 1) for d in shape[2:])
+            for g in range(groups):
+                for d in range(min_dim):
+                    arr[(g * out_per_group + d, d) + centre] = 1.0
+            tensor.assign(jt.array(arr).cast(str(tensor.dtype)))
+            return tensor
+        _init.dirac_ = _dirac
     if not hasattr(_init, "orthogonal_"):
         def _orth(t, gain=1.0):
             import numpy as _np
@@ -143,7 +168,22 @@ def _install_init_aliases(registry=None):
             return t
         _init.orthogonal_ = _orth
     if not hasattr(_init, "sparse_"):
-        _init.sparse_ = lambda t, *a, **k: t  # best-effort no-op
+        def _sparse(tensor, sparsity, std=0.01, generator=None):
+            """Sparse init for a 2-D weight: was a no-op, now really sparse."""
+            import numpy as _np
+            shape = [int(d) for d in tensor.shape]
+            if len(shape) != 2:
+                raise ValueError("Only tensors with 2 dimensions are supported")
+            rows, cols = shape
+            num_zeros = int(_np.ceil(float(sparsity) * rows))
+            rng = _np.random.default_rng()
+            arr = rng.normal(0.0, float(std), size=(rows, cols))
+            for col in range(cols):
+                zero_rows = rng.permutation(rows)[:num_zeros]
+                arr[zero_rows, col] = 0.0
+            tensor.assign(jt.array(arr).cast(str(tensor.dtype)))
+            return tensor
+        _init.sparse_ = _sparse
 
     # torch.nn.init also exposes deprecated non-underscore spellings of the
     # in-place initializers (normal/xavier_normal/kaiming_uniform/kaiming_normal),

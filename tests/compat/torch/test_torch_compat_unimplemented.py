@@ -410,5 +410,243 @@ class TestDistributedDataParallel(StubPolicyBase):
         finally:
             jt.world_size = saved
 
+class TestBackwardGradient(StubPolicyBase):
+    """Tensor.backward(gradient=...) dropped its argument."""
+
+    def test_gradient_weights_the_backward_pass(self):
+        x = jt.array(np.arange(4, dtype="float32"))
+        x.requires_grad = True
+        y = x * x                       # dy/dx = 2x
+        weights = jt.array(np.array([1.0, 2.0, 3.0, 4.0], dtype="float32"))
+        y.backward(gradient=weights)
+        expect = 2 * np.arange(4, dtype="float32") * np.array([1., 2., 3., 4.])
+        np.testing.assert_allclose(x.grad.numpy(), expect, rtol=1e-5)
+
+    def test_unweighted_backward_is_unchanged(self):
+        x = jt.array(np.arange(4, dtype="float32"))
+        x.requires_grad = True
+        y = x * x
+        y.backward()
+        np.testing.assert_allclose(x.grad.numpy(),
+                                   2 * np.arange(4, dtype="float32"), rtol=1e-5)
+
+    def test_gradient_of_the_wrong_shape_is_rejected(self):
+        x = jt.array(np.arange(4, dtype="float32"))
+        x.requires_grad = True
+        y = x * x
+        with self.assertRaises(RuntimeError):
+            y.backward(gradient=jt.ones((3, 5, 7)))
+
+class TestTreeMap(StubPolicyBase):
+    """torch.utils._pytree.tree_map did not recurse."""
+
+    def _pytree(self):
+        import sys
+        return sys.modules["torch.utils._pytree"]
+
+    def test_tree_map_recurses_into_containers(self):
+        pytree = self._pytree()
+        tree = {"a": [1, 2], "b": (3, {"c": 4})}
+        got = pytree.tree_map(lambda v: v * 10, tree)
+        self.assertEqual(got, {"a": [10, 20], "b": (30, {"c": 40})})
+
+    def test_tree_map_only_moves_nested_tensors(self):
+        pytree = self._pytree()
+        batch = {"x": jt.ones((2,)), "meta": ["keep", 3]}
+        got = pytree.tree_map_only(jt.Var, lambda t: t + 1, batch)
+        np.testing.assert_allclose(got["x"].numpy(), np.full((2,), 2.0))
+        self.assertEqual(got["meta"], ["keep", 3])
+
+    def test_tree_map_preserves_the_structure(self):
+        pytree = self._pytree()
+        tree = [[1], [2, [3]]]
+        self.assertEqual(pytree.tree_map(lambda v: v, tree), tree)
+
+class TestSummaryWriter(StubPolicyBase):
+    """Every SummaryWriter method returned None and wrote nothing."""
+
+    def _has_real_writer(self):
+        try:
+            import tensorboardX  # noqa: F401
+            return True
+        except Exception:
+            return False
+
+    def test_writer_without_tensorboard_is_refused(self):
+        if self._has_real_writer():
+            self.skipTest("tensorboardX is installed; the writer is real")
+        import sys
+        SummaryWriter = sys.modules["torch.utils.tensorboard"].SummaryWriter
+        self.assertRefuses(lambda: SummaryWriter(log_dir="/tmp/jt-tb"),
+                           "SummaryWriter")
+
+    def test_stub_fallback_restores_the_silent_writer(self):
+        if self._has_real_writer():
+            self.skipTest("tensorboardX is installed; the writer is real")
+        import sys
+        SummaryWriter = sys.modules["torch.utils.tensorboard"].SummaryWriter
+        writer = self.assertStubFallback(lambda: SummaryWriter(log_dir="/tmp/jt-tb"))
+        self.assertIsNone(writer.add_scalar("loss", 1.0, 0))
+
+class TestInitAndSwa(StubPolicyBase):
+    """nn.init.dirac_/sparse_ and swa_utils.update_bn were identity/no-op."""
+
+    def test_dirac_builds_an_identity_kernel(self):
+        w = jt.zeros((4, 4, 3, 3))
+        torch.nn.init.dirac_(w)
+        arr = w.numpy()
+        self.assertEqual(arr.sum(), 4.0)
+        for c in range(4):
+            self.assertEqual(arr[c, c, 1, 1], 1.0)
+
+    def test_dirac_preserves_an_identity_signal(self):
+        w = jt.zeros((2, 2, 3, 3))
+        torch.nn.init.dirac_(w)
+        x = jt.array(np.random.RandomState(0).randn(1, 2, 5, 5).astype("float32"))
+        y = jt.nn.conv2d(x, w, padding=1)
+        np.testing.assert_allclose(y.numpy(), x.numpy(), atol=1e-5)
+
+    def test_dirac_rejects_a_2d_tensor(self):
+        with self.assertRaises(ValueError):
+            torch.nn.init.dirac_(jt.zeros((4, 4)))
+
+    def test_sparse_actually_zeroes_rows(self):
+        w = jt.zeros((10, 4))
+        torch.nn.init.sparse_(w, sparsity=0.5)
+        arr = w.numpy()
+        for col in range(4):
+            self.assertEqual(int((arr[:, col] == 0).sum()), 5)
+        self.assertNotEqual(float(np.abs(arr).sum()), 0.0)
+
+    def test_update_bn_recomputes_running_statistics(self):
+        import sys
+        swa = sys.modules["torch.optim.swa_utils"]
+        model = torch.nn.BatchNorm(4)
+        model.running_mean.assign(jt.ones(4) * 99.0)
+        batches = [jt.ones((8, 4)) * 5.0 for _ in range(3)]
+        swa.update_bn(batches, model)
+        np.testing.assert_allclose(model.running_mean.numpy(),
+                                   np.full(4, 5.0), atol=1e-4)
+
+class TestOverridesAndDefaults(StubPolicyBase):
+    """has_torch_function was constantly False; set_default_device did nothing."""
+
+    def setUp(self):
+        super().setUp()
+        self._use_cuda = jt.flags.use_cuda
+
+    def tearDown(self):
+        jt.flags.use_cuda = self._use_cuda
+        super().tearDown()
+
+    def test_has_torch_function_is_false_for_plain_vars(self):
+        import sys
+        overrides = sys.modules["torch.overrides"]
+        self.assertFalse(overrides.has_torch_function((jt.ones(2),)))
+
+    def test_has_torch_function_sees_a_subclass_override(self):
+        import sys
+        overrides = sys.modules["torch.overrides"]
+
+        class _Sub:
+            @classmethod
+            def __torch_function__(cls, func, types, args=(), kwargs=None):
+                return "intercepted"
+
+        self.assertTrue(overrides.has_torch_function((_Sub(),)))
+
+    def test_handle_torch_function_calls_the_override(self):
+        import sys
+        overrides = sys.modules["torch.overrides"]
+
+        class _Sub:
+            @classmethod
+            def __torch_function__(cls, func, types, args=(), kwargs=None):
+                return "intercepted"
+
+        got = overrides.handle_torch_function(lambda *a, **k: "plain", [_Sub()])
+        self.assertEqual(got, "intercepted")
+
+    def test_torch_function_mode_is_refused(self):
+        import sys
+        overrides = sys.modules["torch.overrides"]
+
+        def _enter():
+            with overrides.TorchFunctionMode():
+                pass
+
+        self.assertRefuses(_enter, "TorchFunctionMode")
+
+    def test_set_default_device_cpu_agrees_with_get(self):
+        torch.set_default_device("cpu")
+        self.assertEqual(str(torch.get_default_device()), "cpu")
+
+    def test_set_default_device_cuda_agrees_with_get(self):
+        if not jt.has_cuda:
+            self.skipTest("no accelerator on this box")
+        torch.set_default_device("cuda")
+        self.assertIn("cuda", str(torch.get_default_device()))
+
+    def test_set_default_device_non_zero_index_is_refused(self):
+        if not jt.has_cuda:
+            self.skipTest("no accelerator on this box")
+        self.assertRefuses(lambda: torch.set_default_device("cuda:1"),
+                           "set_default_device")
+
+    def test_set_default_device_unknown_backend_is_refused(self):
+        self.assertRefuses(lambda: torch.set_default_device("mps"),
+                           "set_default_device")
+
+class TestCudaDeviceAndEvents(StubPolicyBase):
+    """set_device was a no-op; Event.elapsed_time was a constant 0.0."""
+
+    def test_set_device_zero_is_accepted(self):
+        self.assertIsNone(torch.cuda.set_device(0))
+
+    def test_set_device_non_zero_is_refused(self):
+        self.assertRefuses(lambda: torch.cuda.set_device(1),
+                           "torch.cuda.set_device", "device 0")
+
+    def test_set_device_non_zero_stub_fallback(self):
+        self.assertStubFallback(lambda: torch.cuda.set_device(3))
+
+    def test_event_elapsed_time_measures_something(self):
+        import time
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        time.sleep(0.02)
+        end.record()
+        elapsed = start.elapsed_time(end)
+        self.assertGreater(elapsed, 5.0,
+                           "elapsed_time used to be a constant 0.0")
+
+    def test_event_without_enable_timing_refuses_to_time(self):
+        start = torch.cuda.Event()
+        end = torch.cuda.Event()
+        start.record()
+        end.record()
+        with self.assertRaises(RuntimeError):
+            start.elapsed_time(end)
+
+    def test_unrecorded_event_refuses_to_time(self):
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        with self.assertRaises(RuntimeError):
+            start.elapsed_time(end)
+
+class TestLibraryOpcheck(StubPolicyBase):
+    def test_opcheck_is_refused(self):
+        import sys
+        library = sys.modules["torch.library"]
+        self.assertRefuses(lambda: library.opcheck(None, ()),
+                           "torch.library.opcheck")
+
+    def test_opcheck_stub_fallback_returns_none(self):
+        import sys
+        library = sys.modules["torch.library"]
+        self.assertIsNone(self.assertStubFallback(
+            lambda: library.opcheck(None, ())))
+
 if __name__ == "__main__":
     unittest.main()

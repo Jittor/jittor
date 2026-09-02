@@ -212,7 +212,39 @@ def _install_cuda(g, registry=None):
     # questions go to the same place.
     cuda._device_count_nvml = device_count
     cuda.current_device = lambda: 0
-    cuda.set_device = lambda *a, **k: None
+
+    def _cuda_set_device(device=None, *a, **k):
+        """torch.cuda.set_device -- honoured for device 0, refused otherwise.
+
+        Was `lambda *a, **k: None` while device_count() reported the real
+        number of cards, so `set_device(1)` looked like it worked and every
+        subsequent allocation still landed on device 0.  Jittor has no
+        per-process current-device selection yet (that is the multi-card task),
+        so anything but device 0 must be an error rather than a no-op.
+        """
+        index = device
+        if index is None:
+            return None
+        if isinstance(index, str):
+            index = index.split(":")[-1] if ":" in index else 0
+        index = getattr(device, "index", index)
+        if index is None:
+            index = 0
+        try:
+            index = int(index)
+        except (TypeError, ValueError):
+            index = 0
+        if index == 0:
+            return None
+        from ...stub_policy import unimplemented as _unimpl_set_device
+        return _unimpl_set_device(
+            "torch.cuda.set_device(%d)" % index,
+            "leave every following allocation and kernel on device 0 while "
+            "the program believes it switched cards",
+            "Select the card with CUDA_VISIBLE_DEVICES before starting the "
+            "process.")
+
+    cuda.set_device = _cuda_set_device
     class _CudaDeviceContext:
         def __init__(self, device=None):
             self.device = device
@@ -311,15 +343,66 @@ def _install_cuda(g, registry=None):
         def __enter__(self): return self
         def __exit__(self, *a): return False
         def synchronize(self): jt.sync_all(True)
+        # Jittor serialises every logical stream onto one physical stream, so
+        # "wait for that other stream" is already satisfied by program order.
+        # These are honest no-ops, not missing implementations.
         def wait_stream(self, *a, **k): return None
         def wait_event(self, *a, **k): return None
-        def record_event(self, *a, **k): return None
+        def record_event(self, event=None, *a, **k):
+            if event is not None and hasattr(event, "record"):
+                event.record(self)
+            return event
         def query(self): return True
     cuda.Stream = _Stream
-    cuda.Event = type("Event", (), {"__init__": lambda self, *a, **k: None,
-                                      "record": lambda self, *a, **k: None,
-                                      "synchronize": lambda self: None,
-                                      "elapsed_time": lambda self, o: 0.0})
+
+    class _Event:
+        """torch.cuda.Event.
+
+        Timing used to be a lie: elapsed_time() returned 0.0 unconditionally,
+        so every `start.record(); ...; end.record(); start.elapsed_time(end)`
+        benchmark reported 0 ms and any code dividing by it produced inf/NaN.
+        Jittor has no CUDA event objects exposed, so record() takes a host
+        timestamp after a device synchronisation, which measures the same
+        wall-clock interval for the single physical stream used here.
+        """
+
+        def __init__(self, enable_timing=False, blocking=False,
+                     interprocess=False, *a, **k):
+            self.enable_timing = bool(enable_timing)
+            self._time = None
+
+        def record(self, stream=None, *a, **k):
+            import time as _time_event
+            try:
+                jt.sync_all(True)
+            except Exception:
+                pass
+            self._time = _time_event.perf_counter()
+            return None
+
+        def synchronize(self):
+            try:
+                jt.sync_all(True)
+            except Exception:
+                pass
+
+        def query(self):
+            return self._time is not None
+
+        def wait(self, stream=None):
+            return None
+
+        def elapsed_time(self, end_event):
+            if not self.enable_timing or not getattr(end_event, "enable_timing", False):
+                raise RuntimeError(
+                    "Both events must be created with enable_timing=True to "
+                    "call elapsed_time()")
+            if self._time is None or getattr(end_event, "_time", None) is None:
+                raise RuntimeError(
+                    "elapsed_time() needs both events to have been recorded")
+            return (end_event._time - self._time) * 1000.0
+
+    cuda.Event = _Event
     g.Stream = cuda.Stream
     g.Event = cuda.Event
     g.CUDAGraph = cuda.CUDAGraph
@@ -595,18 +678,70 @@ def _install_cuda(g, registry=None):
         pass
 
     if "torch.overrides" not in _modules:
+        from ...stub_policy import unimplemented as _unimplemented
         overrides = _types.ModuleType("torch.overrides")
+
         class TorchFunctionMode:
-            def __init__(self, *a, **k): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): return False
+            """torch.overrides.TorchFunctionMode -- refused, not faked.
+
+            A mode is supposed to intercept EVERY torch function called inside
+            it. Jittor's ops go straight to the C++ core and consult no such
+            hook, so entering this used to change nothing at all: a device mode
+            or a tracing mode silently observed and rewrote nothing.
+            """
+
+            def __init__(self, *a, **k):
+                pass
+
+            def __enter__(self):
+                _unimplemented(
+                    "torch.overrides.TorchFunctionMode",
+                    "intercept no torch call at all, so a device/tracing/"
+                    "logging mode silently observes and rewrites nothing",
+                    "Jittor ops dispatch in C++ and consult no "
+                    "__torch_function__ hook.",
+                    stub_result=self)
+                return self
+
+            def __exit__(self, *a):
+                return False
+
             def __torch_function__(self, func, types, args=(), kwargs=None):
                 return func(*args, **(kwargs or {}))
+
+        def _has_torch_function(*relevant_args):
+            """Truthfully report whether any argument overrides __torch_function__.
+
+            Was `lambda *a, **k: False`, so every torch-function protocol check
+            in downstream code took the "plain tensor" branch and a tensor
+            subclass's override was silently skipped.
+            """
+            for group in relevant_args:
+                items = group if isinstance(group, (tuple, list, set)) else (group,)
+                for item in items:
+                    tp = type(item)
+                    if tp is jt.Var:
+                        continue
+                    if getattr(tp, "__torch_function__", None) is not None:
+                        return True
+            return False
+
+        def _handle_torch_function(public_api, relevant_args, *args, **kwargs):
+            for item in (relevant_args or ()):
+                override = getattr(type(item), "__torch_function__", None)
+                if override is None or type(item) is jt.Var:
+                    continue
+                types_tuple = tuple(type(a) for a in relevant_args)
+                return override(public_api, types_tuple, args, kwargs)
+            return public_api(*args, **kwargs)
+
         overrides.TorchFunctionMode = TorchFunctionMode
         overrides.BaseTorchFunctionMode = TorchFunctionMode
         overrides.get_default_nowrap_functions = lambda: set()
-        overrides.has_torch_function = lambda *a, **k: False
-        overrides.handle_torch_function = lambda func, types, *a, **k: func(*a, **k)
+        overrides.has_torch_function = _has_torch_function
+        overrides.has_torch_function_unary = _has_torch_function
+        overrides.has_torch_function_variadic = _has_torch_function
+        overrides.handle_torch_function = _handle_torch_function
         _modules["torch.overrides"] = overrides
     g.overrides = _modules["torch.overrides"]
 

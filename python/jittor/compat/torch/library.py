@@ -246,7 +246,12 @@ def install_torch_library(torch_module, modules):
     library_module.register_autograd = register_autograd
     library_module.register_torch_dispatch = lambda *a, **k: lambda f: f
     library_module.register_vmap = lambda *a, **k: lambda f: f
-    library_module.opcheck = lambda *a, **k: None
+    from ..stub_policy import unimplemented_callable as _unimplemented_callable
+    library_module.opcheck = _unimplemented_callable(
+        "torch.library.opcheck",
+        "return None from every operator-correctness check, so a user's "
+        "custom-op test suite passes unconditionally whatever the operator does",
+        "Test the operator directly against a reference implementation.")
     library_module.get_ctx = lambda: None
 
     ops_module = types.ModuleType("torch._ops")

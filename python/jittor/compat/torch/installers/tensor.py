@@ -1060,6 +1060,22 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         # torch defaults retain_graph to create_graph. In the common
         # loss.backward() case both are false, so the graph must be freed.
         retain_graph = bool(create_graph) if retain_graph is None else bool(retain_graph)
+        # torch's `gradient` is the vector of the vector-Jacobian product:
+        # y.backward(v) computes d(sum(y*v))/dx. It used to be accepted and
+        # dropped, so every weighted backward -- per-sample loss weights, a
+        # manual chain rule from a custom head -- silently computed the
+        # UNWEIGHTED gradient d(sum(y))/dx and trained on the wrong numbers.
+        if gradient is not None:
+            grad_var = gradient if isinstance(gradient, Var) else jt.array(gradient)
+            if tuple(grad_var.shape) != tuple(self.shape):
+                try:
+                    grad_var = grad_var.broadcast(self.shape)
+                except Exception:
+                    raise RuntimeError(
+                        "Tensor.backward(gradient=...) expects a gradient with "
+                        "the same shape as the tensor, got %s for a tensor of "
+                        "shape %s" % (tuple(grad_var.shape), tuple(self.shape)))
+            self = (self * grad_var.cast(self.dtype)).sum()
         # Materialize the loss's FORWARD graph before computing gradients. A custom
         # CUDA-ext Function (3DGS rasterizer / fused-ssim) writes its outputs
         # out-of-band; if the forward is left lazy, jt.grad recomputes that

@@ -522,4 +522,46 @@ def install_misc(ctx):
     def get_default_device():
         return g.device("cuda", 0) if jt.flags.use_cuda else g.device("cpu")
     g.get_default_device = get_default_device
-    g.set_default_device = lambda *a, **k: None
+
+    def set_default_device(device=None):
+        """torch.set_default_device -- now actually moves the default.
+
+        Was `lambda *a, **k: None` while get_default_device() reported the real
+        residency, so set/get openly contradicted each other: a script that set
+        the default to "cuda" allocated on the CPU and was told it had not.
+        Jittor's default residency is the global use_cuda flag, so this sets it.
+        """
+        if device is None:
+            jt.flags.use_cuda = 0
+            return None
+        name = getattr(device, "type", None) or str(device)
+        index = getattr(device, "index", None)
+        if index is None and ":" in str(name):
+            name, _, raw_index = str(name).partition(":")
+            index = int(raw_index) if raw_index.isdigit() else None
+        name = str(name).split(":")[0]
+        if name == "cpu":
+            jt.flags.use_cuda = 0
+            return None
+        if name in ("cuda", "gpu", "npu"):
+            if index not in (None, 0):
+                from ...stub_policy import unimplemented
+                return unimplemented(
+                    "torch.set_default_device('%s:%d')" % (name, index),
+                    "keep allocating on device 0 while the program believes "
+                    "the default is device %d" % index,
+                    "Select the card with CUDA_VISIBLE_DEVICES before starting "
+                    "the process.")
+            if not jt.has_cuda:
+                raise RuntimeError(
+                    "torch.set_default_device(%r): this build has no CUDA/NPU "
+                    "device available." % (device,))
+            jt.flags.use_cuda = 1
+            return None
+        from ...stub_policy import unimplemented
+        return unimplemented(
+            "torch.set_default_device(%r)" % (name,),
+            "silently keep the previous default device",
+            "Only 'cpu' and 'cuda' defaults are supported.")
+
+    g.set_default_device = set_default_device

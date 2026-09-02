@@ -405,9 +405,45 @@ def install(ctx):
 
     if "torch.utils.tensorboard" not in _modules:
         _tb = _types2.ModuleType("torch.utils.tensorboard")
+
+        def _real_summary_writer():
+            """The genuine tensorboard writer, if one is installed.
+
+            Only tensorboardX is probed: `torch.utils.tensorboard` IS this
+            module under the shim, so importing it back would be circular.
+            """
+            try:
+                from tensorboardX import SummaryWriter as _RealWriter
+                return _RealWriter
+            except Exception:
+                return None
+
         class SummaryWriter:
+            """torch.utils.tensorboard.SummaryWriter.
+
+            Every add_* method used to return None and write nothing, and this
+            branch was always taken -- so a training run's entire logging
+            output silently vanished while the script reported success.
+
+            Now: delegate to a real writer when one is installed, otherwise
+            refuse at construction. Nothing here pretends to log.
+            """
+
+            def __new__(cls, *args, **kwargs):
+                real = _real_summary_writer()
+                if real is not None:
+                    return real(*args, **kwargs)
+                return object.__new__(cls)
+
             def __init__(self, log_dir=None, comment="", purge_step=None, max_queue=10,
                          flush_secs=120, filename_suffix="", *args, **kwargs):
+                from ...stub_policy import unimplemented
+                unimplemented(
+                    "torch.utils.tensorboard.SummaryWriter",
+                    "accept every add_scalar/add_image/add_graph call and write "
+                    "nothing, silently discarding the whole training log",
+                    "Install tensorboardX (or tensorboard) to get a real "
+                    "writer.")
                 self.log_dir = log_dir
                 self.comment = comment
                 self.purge_step = purge_step
@@ -568,8 +604,29 @@ def install(ctx):
         _pytree._dict_unflatten = _dict_unflatten
         _pytree.tree_flatten = _tree_flatten
         _pytree.tree_unflatten = _tree_unflatten
-        _pytree.tree_map = lambda f, x: f(x)
-        _pytree.tree_map_only = lambda typ, f, x: f(x) if isinstance(x, typ) else x
+        def _tree_map(f, x, *rests):
+            # This used to be `lambda f, x: f(x)` -- no recursion at all, right
+            # next to a real recursive _tree_flatten. So the standard
+            # `tree_map_only(Tensor, lambda t: t.to(dev), batch)` returned the
+            # batch unchanged: nothing moved to the device, and nothing failed.
+            leaves, spec = _tree_flatten(x)
+            if not rests:
+                return _tree_unflatten([f(leaf) for leaf in leaves], spec)
+            rest_leaves = [_tree_flatten(r)[0] for r in rests]
+            mapped = [f(leaf, *[rl[i] for rl in rest_leaves])
+                      for i, leaf in enumerate(leaves)]
+            return _tree_unflatten(mapped, spec)
+
+        def _tree_map_only(typ, f, x, *rests):
+            def _apply(leaf, *others):
+                return f(leaf, *others) if isinstance(leaf, typ) else leaf
+            return _tree_map(_apply, x, *rests)
+
+        _pytree.tree_map = _tree_map
+        _pytree.tree_map_only = _tree_map_only
+        _pytree.tree_map_ = _tree_map
+        _pytree.tree_all = lambda pred, x: all(pred(l) for l in _tree_flatten(x)[0])
+        _pytree.tree_any = lambda pred, x: any(pred(l) for l in _tree_flatten(x)[0])
         _pytree.tree_leaves = lambda x: _tree_flatten(x)[0]
         _pytree.register_pytree_node = lambda *a, **k: None
         _pytree._register_pytree_node = lambda *a, **k: None
