@@ -94,8 +94,11 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | --- | --- | --- |
 | wheel 内容基线过期 | `agent/scripts/test_check_wheel_contents.py::test_repository_default_policy_is_the_clean_final_baseline` 报 `817 != 793`，有人加了新模块没更新基线 | 构建分区，随 9.x 一并更新 |
 | 结构测试子进程超时 flaky | 已处理：`tests/structure` 里 4 处硬编码 `timeout=180` 的冷启动子进程探针（`test_root_domain_structure`、`test_nn_structure`、`test_torch_fsdp2_structure` ×2）统一改成 `_helpers.process_modes.SUBPROCESS_TIMEOUT`，默认 600s、可用 `JITTOR_TEST_SUBPROCESS_TIMEOUT` 覆盖，仍在门禁 `--timeout=900` 之内 | 门禁 gates |
+| `split{i}` 与 `parallel` 不兼容 | 同时设这两个 loop option，`ParallelPass` 在 `ASSERT(def)` 上失败（`Check failed: def`）。`SplitLoopPass` 给内层循环的 range 是 `::min(range{i}-id{i}, stride{i})`，定义在外层循环里且随它变化，`ParallelPass` 在调用点 `func->find_define` 找不到、也无法在调用点求值。CUDA 恒走 `ParallelPass`，所以 CUDA 上任何 split 候选都必然编译失败。用例已钉住：`tests/compiler/test_reduce_tuner.py::test_a_split_candidate_would_not_compile_under_parallel` | 代码生成分区，1.04 的前置 |
+| CUDA 归约需要的是线程分解候选，不是 CPU 那套 | `orderN` 候选实测五种形状全部不优于默认（最差 2.1 倍，破坏访存合并），`split{i}` 被上一条挡着，L1 分块尺寸对 GPU 无意义。真正有用的候选是 `ParallelPass` 里的线程分解，属于新工作 | 代码生成分区，待 1.04 前置解决后 |
+| `para_opt_level=4` 的块内共享内存归约比默认慢 1.6–2.0 倍 | 实测四种 UNet 形状：默认（warp shuffle）15.7/14.0/15.0/18.1us，lvl 4（`SharedReducePass`）25.3/31.3/25.3/34.8us，不优化 157/92/159/171us。默认值保持 3。要提升需要「warp shuffle → 每 warp 一个值 → 共享内存 → 每输出一次原子」的混合实现，并且要有生态 harness 的端到端数据；数据与方法在 `agent/skills/cuda-reduction-strategy-comparison/` | 代码生成分区，新任务待派 |
 | `tests/core/test_type_system.py` 一套门禁都不跑 | 它在 `TORCH_MODE_PATHS` 里，原生门禁的 `pytest_ignore_collect` 整片丢掉；而它又不在 `noxfile.py` 任何 session 的清单里 | 门禁分区，随 0.04 一并收进排除清单/torch 门禁 |
-| `test_atomic_tuner` 抓不到日志 | **已定论：与 `9eb696d9` 无关**，`9eb696d9^` 对照失败逐字一致。根因 `032ecfe1` 的 `full_reduce_cuda.py` 快路径使全归约不再走 JIT；用例第 4 项断言的代码路径已不存在 | 归约/代码生成分区：改用例（把第 4 项换成仍走 JIT 的归约，或断言快路径已接管），不要动 pass 顺序 |
+| `test_atomic_tuner` 抓不到日志 | **已修**：根因确认为 `032ecfe1` 的 `full_reduce_cuda.py` 快路径猴补 `Var.sum`/`Var.mean`，全归约不再进 JIT；第 4 条用例改走 `jt.reduce` | codegen，`72f020b3` |
 
 ## 任务
 
@@ -122,10 +125,10 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 0.19 | 结构测试从「精确清单」改成「规则」 | 已合并 | gates | c3bcd277 |
 | 0.20 | 布局收尾 | 待领 | | |
 | 0.21 | 测试起的子进程不带 PYTHONPATH，门禁机器上是假绿 | 待领 | | |
-| 1.01 | 把 `utils/data.gz` 解出的 `data.cc` 还原为可读的五个翻译单元 | 待领 | | |
-| 1.02 | `op_compiler.cc:30-69` 用正则给 `ParallelPass` 输出打补丁… | 待领 | | |
-| 1.03 | 查明 `SharedReducePass` 在约 4900 个归约 kernel 里零命中的触发… | 待领 | | |
-| 1.04 | `ReduceTuner::run` 不再对 CUDA 直接返回 | 待领 | | |
+| 1.01 | 把 `utils/data.gz` 解出的 `data.cc` 还原为可读的五个翻译单元 | 已合并 | codegen | ecb6a112（+72f020b3 用例） |
+| 1.02 | `op_compiler.cc:30-69` 用正则给 `ParallelPass` 输出打补丁… | 已合并 | codegen | 3eb34e6a |
+| 1.03 | 查明 `SharedReducePass` 在约 4900 个归约 kernel 里零命中的触发… | 已合并 | codegen | 3eb34e6a |
+| 1.04 | `ReduceTuner::run` 不再对 CUDA 直接返回 | 已合并 | codegen | aebb1d73 |
 | 1.05 | 布局收尾 | 待领 | | |
 | 2.01 | Var 与 Op 各持自己的 flag 类型 | 待领 | | |
 | 2.02 | 删除 `Node::custom_data` | 待领 | | |
