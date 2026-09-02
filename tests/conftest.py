@@ -318,3 +318,60 @@ def rocm_backend(request):
     finally:
         jt.flags.use_rocm = previous
 
+# --------------------------------------------------------------------------
+#  Cross-file state leakage survey (report only)
+# --------------------------------------------------------------------------
+_STATE_LEAKS = []
+
+
+def _state_leak_survey_enabled():
+    """On by default: it only reports, and the report is the deliverable.
+
+    Set ``JITTOR_TEST_STATE_LEAKS=0`` to switch it off -- worth doing when
+    timing something, since the snapshot forces a ``gc.collect()`` per file.
+    """
+    value = os.environ.get("JITTOR_TEST_STATE_LEAKS", "").strip().lower()
+    return value not in ("0", "false", "no", "off")
+
+
+@pytest.fixture(autouse=True, scope="module")
+def report_runtime_state_left_behind(request):
+    """Name the test *file* that changed runtime state, not its next victim.
+
+    Three known failures in this tree are one file leaving state for another
+    (see ``_helpers/state_leaks``). The expensive part of each was that the
+    symptom surfaced somewhere innocent, so this records the culprit instead.
+    """
+    if not _state_leak_survey_enabled():
+        yield
+        return
+    from _helpers import state_leaks
+
+    before = state_leaks.snapshot()
+    yield
+    after = state_leaks.snapshot()
+    changes = state_leaks.differences(before, after)
+    if changes:
+        path = getattr(request.node, "nodeid", str(request.node))
+        _STATE_LEAKS.append((path, changes))
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    if not _STATE_LEAKS:
+        return
+    terminalreporter.write_sep("=", "runtime state left behind by a test file")
+    terminalreporter.write_line(
+        "Reported, not failed: each line is a file that changed process-wide "
+        "state and did not put it back. A later file that reads that state "
+        "fails instead, in a place that has nothing to do with the cause."
+    )
+    for path, changes in _STATE_LEAKS:
+        terminalreporter.write_line(path)
+        for change in changes:
+            terminalreporter.write_line("    " + change)
+    destination = os.environ.get("JITTOR_TEST_STATE_LEAK_REPORT", "").strip()
+    if destination:
+        with open(destination, "w") as handle:
+            for path, changes in _STATE_LEAKS:
+                for change in changes:
+                    handle.write("%s\t%s\n" % (path, change))
