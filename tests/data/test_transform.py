@@ -981,5 +981,84 @@ class Tester(unittest.TestCase):
 
 
 
+class TestPillowVersionGates(unittest.TestCase):
+    """The two Pillow feature gates in ``transform.function_pil`` used to
+    compare version *strings*: ``"10.4.0" < "5.2.0"`` is True and
+    ``"10.4.0"[0] >= "5"`` is False, so on any Pillow >= 10 ``rotate(fill=...)``
+    raised "requires pillow>=5.2.0" and ``affine(fillcolor=...)`` silently
+    dropped the fill colour."""
+
+    def test_version_tuple_parsing(self):
+        from jittor.transform.function_pil import _version_tuple
+        cases = {
+            "5.2.0": (5, 2, 0),
+            "5.1.0": (5, 1, 0),
+            "4.3.0": (4, 3, 0),
+            "1.1.7": (1, 1, 7),
+            "9.5.0": (9, 5, 0),
+            "10.0.0": (10, 0, 0),
+            "10.4.0": (10, 4, 0),
+            "12.2.0": (12, 2, 0),
+            "11.0.0.dev0": (11, 0, 0),
+            "10.1.0.post1": (10, 1, 0),
+            "10.2": (10, 2, 0),
+            "10": (10, 0, 0),
+            "11.0.0rc1": (11, 0, 0),
+        }
+        for text, expected in cases.items():
+            self.assertEqual(_version_tuple(text), expected, text)
+        # the orderings the module depends on
+        assert _version_tuple("10.4.0") > (5, 2, 0)
+        assert _version_tuple("12.2.0") >= (5, 0, 0)
+        assert _version_tuple("4.3.0") < (5, 2, 0)
+        assert not _version_tuple("4.3.0") >= (5, 0, 0)
+        # ... which string comparison gets backwards
+        assert "10.4.0" < "5.2.0"
+        assert not "10.4.0"[0] >= "5"
+
+    def test_installed_pillow_is_recognised_as_modern(self):
+        from jittor.transform.function_pil import (
+            PILLOW_VERSION, PILLOW_VERSION_INFO)
+        if PILLOW_VERSION_INFO < (5, 2, 0):
+            self.skipTest("pillow %s predates the gated features"
+                          % PILLOW_VERSION)
+        assert PILLOW_VERSION_INFO >= (5, 2, 0)
+
+    def _needs_modern_pillow(self):
+        from jittor.transform.function_pil import PILLOW_VERSION_INFO
+        if PILLOW_VERSION_INFO < (5, 2, 0):
+            self.skipTest("needs pillow>=5.2.0")
+
+    def test_rotate_fill_is_accepted_and_applied(self):
+        self._needs_modern_pillow()
+        from jittor.transform import function_pil as F_pil
+        img = Image.new("L", (32, 32), 0)
+        out = F_pil.rotate(img, 45, fill=200)
+        # a corner is outside the rotated square, so it must carry the fill
+        self.assertEqual(np.asarray(out)[0, 0], 200)
+
+    def test_rotate_fill_rgb(self):
+        self._needs_modern_pillow()
+        from jittor.transform import function_pil as F_pil
+        img = Image.new("RGB", (32, 32), (0, 0, 0))
+        out = F_pil.rotate(img, 45, fill=200)
+        np.testing.assert_array_equal(np.asarray(out)[0, 0], [200, 200, 200])
+
+    def test_random_rotation_with_fill(self):
+        # the public entry point users reach for
+        self._needs_modern_pillow()
+        img = Image.new("L", (32, 32), 0)
+        out = transform.RandomRotation((45, 45), fill=200)(img)
+        self.assertEqual(np.asarray(out)[0, 0], 200)
+
+    def test_affine_fillcolor_reaches_pillow(self):
+        self._needs_modern_pillow()
+        from jittor.transform import function_pil as F_pil
+        img = Image.new("L", (32, 32), 0)
+        out = F_pil.affine(img, 0, (16, 16), 1.0, 0, fillcolor=200)
+        # translated by half the image, so the far corner is filled
+        self.assertEqual(np.asarray(out)[0, 0], 200)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -12,6 +12,30 @@
 # ***************************************************************
 from typing import Sequence
 from PIL import Image, ImageOps, ImageEnhance, __version__ as PILLOW_VERSION
+
+
+def _version_tuple(version):
+    """('10.4.0') -> (10, 4, 0).
+
+    Comparing version *strings* is wrong from Pillow 10 on: "10.4.0" < "5.2.0"
+    is True, so every string-compared version gate in this module answered
+    backwards on any modern Pillow. Compare tuples of ints instead.
+    """
+    parts = []
+    for chunk in str(version).split(".")[:3]:
+        digits = ""
+        for ch in chunk:
+            if not ch.isdigit():
+                break
+            digits += ch
+        parts.append(int(digits) if digits else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
+
+
+#: Installed Pillow version as (major, minor, micro).
+PILLOW_VERSION_INFO = _version_tuple(PILLOW_VERSION)
 import numpy as np
 import numbers
 import math
@@ -538,7 +562,7 @@ def rotate(img, angle, resample=False, expand=False, center=None, fill=None):
 
     """
     def parse_fill(fill, num_bands):
-        if PILLOW_VERSION < "5.2.0":
+        if PILLOW_VERSION_INFO < (5, 2, 0):
             if fill is None:
                 return {}
             else:
@@ -649,5 +673,5 @@ def affine(img, angle, translate, scale, shear, resample=0, fillcolor=None):
     output_size = img.size
     center = (img.size[0] * 0.5 + 0.5, img.size[1] * 0.5 + 0.5)
     matrix = _get_inverse_affine_matrix(center, angle, translate, scale, shear)
-    kwargs = {"fillcolor": fillcolor} if PILLOW_VERSION[0] >= '5' else {}
+    kwargs = {"fillcolor": fillcolor} if PILLOW_VERSION_INFO >= (5, 0, 0) else {}
     return img.transform(output_size, Image.AFFINE, matrix, resample, **kwargs)
