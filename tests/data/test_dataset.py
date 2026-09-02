@@ -448,5 +448,75 @@ class TestWorkerLogFlag(unittest.TestCase):
         assert "recv buffer" in out, out[-2000:]
 
 
+class TestDatasetDeepcopy(unittest.TestCase):
+    """``Dataset.__deepcopy__`` has to keep the memo contract: register the new
+    object (not its ``id``) and thread the memo through the attribute copies.
+    Otherwise a reference back to the dataset recurses forever and objects that
+    two places share come back as two separate copies."""
+
+    def _tiny(self):
+        class Tiny(Dataset):
+            def __init__(self):
+                super().__init__()
+                self.set_attrs(total_len=4, batch_size=2, shuffle=False)
+
+            def __getitem__(self, k):
+                return np.array([k], dtype="float32")
+        return Tiny()
+
+    @staticmethod
+    def _stack_depth():
+        import sys
+        depth, frame = 0, sys._getframe()
+        while frame is not None:
+            depth += 1
+            frame = frame.f_back
+        return depth
+
+    def test_reference_back_to_the_dataset_is_the_copy(self):
+        import sys
+        from copy import deepcopy
+        ds = self._tiny()
+        ds.sibling = ds
+        # A correct copy needs only a handful of frames. Cap the limit just
+        # above the current depth so a regression fails in milliseconds with
+        # RecursionError instead of grinding to the default limit.
+        previous = sys.getrecursionlimit()
+        sys.setrecursionlimit(self._stack_depth() + 120)
+        try:
+            copied = deepcopy(ds)
+        finally:
+            sys.setrecursionlimit(previous)
+        assert copied is not ds
+        assert copied.sibling is copied, "a cycle must resolve to the copy"
+
+    def test_shared_object_stays_shared(self):
+        from copy import deepcopy
+        ds = self._tiny()
+        shared = {"payload": [1, 2, 3]}
+        ds.extra = shared
+        holder = {"ds": ds, "shared": shared}
+        copied = deepcopy(holder)
+        assert copied["ds"] is not ds
+        assert copied["ds"].extra is copied["shared"], \
+            "the memo must be threaded into the attribute copies"
+        assert copied["ds"].extra is not shared
+
+    def test_dataset_seen_twice_copies_once(self):
+        from copy import deepcopy
+        ds = self._tiny()
+        copied = deepcopy({"a": ds, "b": ds})
+        assert copied["a"] is copied["b"]
+        assert isinstance(copied["a"], Dataset)
+
+    def test_copy_still_works_and_iterates(self):
+        from copy import deepcopy
+        ds = self._tiny()
+        copied = deepcopy(ds)
+        assert copied.dataset is copied
+        assert copied.total_len == 4
+        assert len([b for b in copied]) == 2
+
+
 if __name__ == "__main__":
     unittest.main()

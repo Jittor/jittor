@@ -467,11 +467,18 @@ Example::
             return y
 
         obj = self.__class__.__new__(self.__class__)
-        memo[d] = id(obj)
+        # The memo maps id(original) -> the *copy*, not to another id: anything
+        # that reaches this dataset again during the copy has to come back as
+        # obj. Registering it before copying the attributes is what makes a
+        # reference cycle terminate.
+        memo[d] = obj
         exclude_key = {"index_list", "idqueue", "idqueue_lock", "gid", "gidc", "num_idle", "num_idle_c", "workers", "index_list_numpy", "dataset", "idqueue", "idqueue_lock"}
         for k,v in self.__dict__.items():
             if k in exclude_key: continue
-            obj.__setattr__(k, deepcopy(v))
+            # thread the memo through, or objects shared between attributes
+            # (or shared with the caller's graph) get duplicated instead of
+            # staying the same object
+            obj.__setattr__(k, deepcopy(v, memo))
         obj.dataset = obj
         return obj
 
