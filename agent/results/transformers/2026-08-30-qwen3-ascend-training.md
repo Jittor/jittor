@@ -2,8 +2,8 @@
 
 - Status: FP32 forward/backward accepted; BF16 one-step forward parity accepted,
   exact-path performance and cross-framework trajectory open
-- Last reviewed: 2026-09-01
-- Source baseline: `8ab4d2b5`
+- Last reviewed: 2026-09-02
+- Source baseline: `8d45fdb0` plus this report's full-slice follow-up; semantic baseline `8ab4d2b5`
 - Owner: Torch compatibility and ACL backend maintainers
 - Review when: CANN, Transformers Qwen3 modules, embedding/RMSNorm/RoPE lowering,
   dtype, checkpoint, sequence shape, optimizer, or timing protocol changes
@@ -118,6 +118,50 @@ gradient 相对 L2 为 `0.23168`，因此拒绝作为默认路径。基于 `acln
 约 `7.0%`，性能门禁保持开放。所有 Jittor 行均为 `fallback_count=0`、
 `cpu_compile_count=0`。
 
+## Full-slice identity follow-up
+
+2026-09-02 在当前 `2.0` 基线上复查 exact backward profile，发现 ACL basic slice
+会把完整切片也降为 `SliceV2`，其反向再执行
+`aclrtMemsetAsync + aclnnStridedSliceAssignV2`。Qwen3 图中 57 次完整切片反向累计
+约 `10.742 ms`，虽然它们在数学上只是恒等映射。
+
+`basic_slice_acl` 现在只在所有维度均满足 `begin=0`、`end=shape`、`step=1` 时返回
+独立的 Jittor clone。CloneOp 共享输入存储并具有恒等梯度，因此不引入设备拷贝，也
+保持返回 Var 与输入不是同一 Python 对象。任一维度为真子区间、负区间或非单位步长
+时仍走原来的 CANN SliceV2 路径。
+
+同一张空闲 910B3、Transformers 5.5.3、BF16 eager、显式 fused AdamW、序列长度 8、
+2 次 warmup 和 5 次同步采样的紧邻结果如下：
+
+| Path | Forward | Backward | AdamW | Full step | vs native |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Native `torch_npu` | `85.718 ms` | `111.016 ms` | `22.260 ms` | `218.995 ms` | `1.000x` |
+| Jittor before follow-up | `118.577 ms` | `114.249 ms` | `25.086 ms` | `257.912 ms` | `1.178x` |
+| Jittor full-slice run A | `120.222 ms` | `106.535 ms` | `25.095 ms` | `251.852 ms` | `1.150x` |
+| Jittor full-slice run B | `118.437 ms` | `102.245 ms` | `24.988 ms` | `245.670 ms` | `1.122x` |
+
+两个候选进程的中心为 `248.761 ms`、约 `1.136x` native；相对紧邻原始 Jittor
+改善约 `3.5%`。当前 native 与此前 `217.39 ms` 基线一致，而当前 Jittor 原始路径
+比 2026-09-01 的 `232.54 ms` 慢；因此本节只接受候选相对紧邻原始路径的改善，不把
+不同日期的漂移归因于本修改，也仍不接受 exact-path 性能目标。
+
+device profile 与实现预期一致：
+
+| Phase | Before | After | Launches before/after |
+| --- | ---: | ---: | ---: |
+| Forward | `49.480 ms` | `50.699 ms` | `1266 / 1205` |
+| Backward | `98.228 ms` | `88.666 ms` | `1666 / 1609` |
+
+完整切片 backward 从 57 次降到 0；剩余 112 次真半切片仍使用
+`StridedSliceAssignV2`，累计约 `21.371 ms`。尝试将这些连续末维半切片改为
+`aclrtMemsetAsync + aclrtMemcpy2dAsync` 后，backward 退化到 `125.428 ms`、full step
+退化到 `272.504 ms`，该实现已完全撤回。
+
+候选重新生成的 61 个 hidden/logits/gradient 数组与已验收 exact snapshot 全部
+逐元素一致，两个 NPZ 的 SHA-256 均为
+`e9165acd269c11086dfb81effa90ecb7f49e89e2ae368a7e83880c324b7ce807`；整模和定向
+用例均为零 CPU compile/fallback。
+
 ## 验证口径
 
 | 项目 | 配置 |
@@ -180,6 +224,9 @@ Transformers 4.56.2 的 Qwen3 模块默认内联组合 RoPE，不会调用
 - BF16 semantic follow-up：完整 real-NPU Torch-compat ACL 文件 `19 passed`；CPU
   dtype 文件 `25 passed, 2 skipped`；干净结构测试 `232 passed, 2 skipped`，仓库布局
   门禁通过。
+- full-slice follow-up：real-NPU ACL indexing `5 passed`（内部 29 组 indexing 子用例
+  全部零误差），Torch basic slicing `1 passed, 25 deselected`，完整 native ACL
+  `46 passed`；61 个整模 snapshot 数组逐元素一致。
 
 native 与 Torch-compat 文件必须按仓库规则放在不同进程运行；同进程导入兼容层会
 改变 native 返回类型，不能作为有效门禁方式。
@@ -254,6 +301,14 @@ e9165acd269c11086dfb81effa90ecb7f49e89e2ae368a7e83880c324b7ce807  Jittor exact/r
 948b4b9c40334039bdb8a249c68b4d4088cde83e091f1645045bb815cfd9024f  torch_npu BF16 gradient snapshot
 f2ee46d87ea1fbe99eac0f4c63dabd788c092d71fa626bd3753b2f7bcf4c4578  exact forward profile
 04bbf90839ed37c312d26138ec617ce9a66c2618460c93728fdb82ada85ec8c7  exact backward profile
+570d96d1ece8657eab81f882c2be1b671f45d152b6060afe60652632a726769e  current native adjacent log
+ae15933b56e35fbd3226d5cf80ab6b1ca11d9ed43fd28f2edddfd87a1dd83186  current Jittor pre-follow-up log
+d7f229e5b682855597dd476fa572a1018d8da74bb740d6179bb03cc6c61db52f  full-slice run A log
+e28583a6f35803f2f7db874d855d0b488816549da4073bbecdd28105f2a77388  full-slice run B log
+6aaf0ae8819e8abe3322eae6e07a9c8d3617328d3fa1340abf4049308e6852a1  full-slice forward profile
+4faebde56b4b3151385349f2e4674d11a55c7c613253ee16ced77d06fabe3bcc  full-slice backward profile
+a3cbe9d78af7eafdb6124bb4dfc7a785de76eee562ed3fa423cbd8b26776efdc  rejected D2D half-slice log
+e9165acd269c11086dfb81effa90ecb7f49e89e2ae368a7e83880c324b7ce807  full-slice exact snapshot
 ```
 
 ## 未覆盖边界
@@ -261,8 +316,8 @@ f2ee46d87ea1fbe99eac0f4c63dabd788c092d71fa626bd3753b2f7bcf4c4578  exact forward 
 - FP32 optimizer、完整 checkpoint restore 和长期参数轨迹仍未验证；BF16 显式 fused
   接受固定梯度两步精确对拍和短序列性能，整模跨框架训练轨迹仍未验收；
 - 没有验证 FP16、Qwen3-8B 训练、多卡训练、采样或量化；
-- 精确 BF16 full step 仍比相邻 native 慢约 `7.0%`；直接 CANN RoPE 因改变 BF16
-  舍入轨迹不应成为默认路由；
+- 精确 BF16 full step 的历史相邻结果慢约 `7.0%`，当前 full-slice follow-up 的相邻
+  结果约慢 `13.6%`；直接 CANN RoPE 因改变 BF16 舍入轨迹不应成为默认路由；
 - embedding 快路径未声明 `scale_grad_by_freq=True`、`max_norm` 或 sparse 支持；
 - 性能数字只代表该单卡、sequence length 8 的对应同步 eager 协议；FP32 不含
   optimizer，BF16 follow-up 包含 AdamW。

@@ -52,6 +52,12 @@ def basic_slice_acl(x, slices):
         axes.append(dim)
         output_shape.append(max(0, stop - start))
 
+    if all(
+            start == 0 and stop == int(size) and step == 1
+            for start, stop, step, size in zip(
+                begins, ends, steps, x.shape)):
+        return x.clone()
+
     begins_text = ", ".join(map(str, begins))
     ends_text = ", ".join(map(str, ends))
     steps_text = ", ".join(map(str, steps))

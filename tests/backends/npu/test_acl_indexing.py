@@ -192,6 +192,35 @@ def test_acl_getitem_preserves_async_dependencies():
     np.testing.assert_array_equal(actual, expected)
 
 
+def test_acl_full_slice_uses_identity_forward_and_backward():
+    if not getattr(jt.compiler, "has_acl", 0):
+        pytest.skip("ACL backend is unavailable")
+    source = np.arange(2 * 4 * 6, dtype=np.float32).reshape(2, 4, 6)
+    weights = np.linspace(-1.0, 1.0, source.size, dtype=np.float32).reshape(
+        source.shape
+    )
+
+    with jt.flag_scope(use_acl=1, use_cuda=1), jt.log_capture_scope(
+            log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+        x = jt.array(source)
+        full_slice = x[:, :, :]
+        gradient = jt.grad((full_slice * jt.array(weights)).sum(), x)
+        full_slice.sync()
+        gradient.sync()
+        locations = full_slice.location(), gradient.location()
+        actual, actual_gradient = jt.fetch_sync([full_slice, gradient])
+
+    assert full_slice is not x
+    assert locations == ("device", "device")
+    np.testing.assert_array_equal(actual, source)
+    np.testing.assert_array_equal(actual_gradient, weights)
+    messages = [entry["msg"].lower() for entry in logs]
+    assert not any("slicev2" in message for message in messages)
+    assert not any("stridedsliceassignv2_grad" in message for message in messages)
+    assert not any("compile cpu" in message for message in messages)
+    assert not any("fallback cpu" in message for message in messages)
+
+
 def test_acl_slice_gradients_remain_lazy_and_zero_initialized():
     if not getattr(jt.compiler, "has_acl", 0):
         pytest.skip("ACL backend is unavailable")
