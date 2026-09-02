@@ -88,6 +88,9 @@ subprocess.run([os.environ["REAL_TORCH_PY"], "oracle.py", in_npz, out_npz], chec
   `assert (arr == 0).all()`，不要用 allclose。** 未初始化内存有相当概率碰巧接近 0。
 - dtype 陷阱：`jt.array(np.ones(4, "float64"))` 会静默降成 float32。要 float64 必须
   `jt.array(v, dtype="float64")`。
+- **测试互相污染**：`jt.flags.use_cuda` 是进程全局的，某些既有用例把它置 1 后不复原，
+  于是同文件里后面的用例全跑在 CUDA 上。写新用例时在 `setUp`/`tearDown` 里存取复原它，
+  否则单跑绿、全量跑红。
 
 ## 4. 「未初始化内存」类缺陷的判据
 
@@ -104,6 +107,15 @@ assert (out.numpy() == 0).all()   # 必须是 ==，不是 allclose
 ```
 
 配套做法：重复 N 次（`for _ in range(20)`），每次都必须恰好为 0。一次侥幸不是证据。
+
+更强的一招（不用投毒也成立）：把"多加了一个零贡献项"的结果与"没加这一项"的结果做
+**逐位相等**断言（`assert_array_equal`）。零贡献加上去必须不改变任何一位；只要有一位变了，
+那一项就不是零。
+
+`jt.numpy_code` 的 backward 拿到的 `out` 是**未初始化**的：每条分支都必须 `np.copyto(out, ...)`，
+`if` 没有 `else` 就是漏写。触发方式：让某个输出的 `dout` 全零但仍在图里，例如
+`loss = f(w).sum() + (v * jt.array(np.zeros(...))).sum()`——只用 `f(w)` 不够，
+那样反向根本不会被调用。
 
 ## 5. fail-before / pass-after 的机械做法
 

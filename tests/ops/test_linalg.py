@@ -322,5 +322,112 @@ class TestBUG4_2Op(unittest.TestCase):
         grad = jt.grad(log_prob, x)
         grad.sync()
 
+class TestEighZeroEigenvectorGrad(unittest.TestCase):
+    """``eigh``'s backward must write its output buffer unconditionally.
+
+    ``jt.numpy_code`` hands the backward a freshly allocated, *uninitialized*
+    output array.  The eigenvector branch skipped the write when ``dout`` was
+    all zeros (a loss that only reads the eigenvalues, or one that multiplies
+    the eigenvectors by a runtime zero), so whatever the allocator had recycled
+    into that memory was returned as the gradient and summed into the result.
+
+    Needs no torch: the eigenvalue gradient of a symmetric matrix is
+    ``V diag(dw) V^T``, which numpy computes directly.
+    """
+
+    SIZE = 5
+
+    def setUp(self):
+        # ``jt.linalg.eigh`` is a ``numpy_code`` op, so its backward always runs
+        # on the host.  Pin the device anyway: an earlier test in this file
+        # leaves ``use_cuda`` on, and the eigenvector branch of eigh's backward
+        # is separately broken under CUDA (~60% relative error against numpy,
+        # both before and after this fix), which would mask what is checked here.
+        self._saved_use_cuda = jt.flags.use_cuda
+        jt.flags.use_cuda = 0
+
+    def tearDown(self):
+        jt.flags.use_cuda = self._saved_use_cuda
+
+    @staticmethod
+    def _poison(shape, value):
+        """Fill and release buffers so the allocator hands back dirty memory."""
+        junk = [jt.ones(shape) * value for _ in range(128)]
+        for block in junk:
+            block.sync()
+        del junk
+
+    def _symmetric(self, seed):
+        rng = np.random.default_rng(seed)
+        a = rng.standard_normal((self.SIZE, self.SIZE))
+        return ((a + a.T) / 2).astype("float32"), rng
+
+    def _grad(self, x, w_seed, with_zero_eigenvector_term):
+        xv = jt.array(x)
+        w, v = jt.linalg.eigh(xv)
+        loss = (w * jt.array(w_seed)).sum()
+        if with_zero_eigenvector_term:
+            zeros = np.zeros((self.SIZE, self.SIZE), dtype="float32")
+            loss = loss + (v * jt.array(zeros)).sum()
+        grad, = jt.grad(loss, [xv])
+        return grad.numpy().copy()
+
+    def test_zero_dout_does_not_leak_recycled_memory(self):
+        x, rng = self._symmetric(0)
+        w_seed = rng.standard_normal(self.SIZE).astype("float32")
+        _, vectors = np.linalg.eigh(x.astype("float64"), UPLO="L")
+        expected = vectors @ np.diag(w_seed.astype("float64")) @ vectors.T
+        for trial in range(8):
+            with self.subTest(trial=trial):
+                self._poison((self.SIZE, self.SIZE), 98765.0 + trial)
+                got = self._grad(x, w_seed, with_zero_eigenvector_term=True)
+                np.testing.assert_allclose(got, expected, rtol=1e-4, atol=1e-4)
+
+    def test_zero_eigenvector_grad_contributes_exactly_zero(self):
+        """Not "close to zero" -- adding it must leave the sum bit-identical."""
+        x, rng = self._symmetric(1)
+        w_seed = rng.standard_normal(self.SIZE).astype("float32")
+        for trial in range(8):
+            with self.subTest(trial=trial):
+                self._poison((self.SIZE, self.SIZE), -4321.0 - trial)
+                with_term = self._grad(x, w_seed, with_zero_eigenvector_term=True)
+                without_term = self._grad(x, w_seed, with_zero_eigenvector_term=False)
+                np.testing.assert_array_equal(with_term, without_term)
+
+    def test_zero_dout_batched(self):
+        rng = np.random.default_rng(2)
+        a = rng.standard_normal((3, 4, 4))
+        x = ((a + np.swapaxes(a, -1, -2)) / 2).astype("float32")
+        w_seed = rng.standard_normal((3, 4)).astype("float32")
+        _, vectors = np.linalg.eigh(x.astype("float64"), UPLO="L")
+        expected = np.einsum(
+            "bij,bj,bkj->bik", vectors, w_seed.astype("float64"), vectors
+        )
+        for trial in range(4):
+            with self.subTest(trial=trial):
+                self._poison((3, 4, 4), 5555.0 + trial)
+                xv = jt.array(x)
+                w, v = jt.linalg.eigh(xv)
+                zeros = np.zeros((3, 4, 4), dtype="float32")
+                loss = (w * jt.array(w_seed)).sum() + (v * jt.array(zeros)).sum()
+                grad, = jt.grad(loss, [xv])
+                np.testing.assert_allclose(
+                    grad.numpy(), expected, rtol=1e-4, atol=1e-4)
+
+    def test_nonzero_dout_still_uses_the_eigenvector_formula(self):
+        """The fix must not disturb the ordinary (non-zero ``dout``) path."""
+        x, rng = self._symmetric(3)
+        v_seed = rng.standard_normal((self.SIZE, self.SIZE)).astype("float32")
+        values, vectors = np.linalg.eigh(x.astype("float64"), UPLO="L")
+        off = np.ones((self.SIZE, self.SIZE)) - np.eye(self.SIZE)
+        repeated = np.repeat(values[..., None], self.SIZE, axis=-1)
+        f = off / (repeated.T - repeated + np.eye(self.SIZE))
+        expected = vectors @ (f * (vectors.T @ v_seed.astype("float64"))) @ vectors.T
+        xv = jt.array(x)
+        _, v = jt.linalg.eigh(xv)
+        grad, = jt.grad((v * jt.array(v_seed)).sum(), [xv])
+        np.testing.assert_allclose(grad.numpy(), expected, rtol=1e-4, atol=1e-4)
+
+
 if __name__ == "__main__":
     unittest.main()

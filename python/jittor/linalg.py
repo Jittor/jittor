@@ -584,6 +584,12 @@ def eigh(x):
                 F = off_diag / (T(w_repeated) - w_repeated + np.eye(k))
                 t = _dot(_dot(v, F * _dot(T(v), dout)), T(v))
                 np.copyto(out, t)
+            else:
+                # ``out`` is a freshly allocated, *uninitialized* buffer: a
+                # zero eigenvector gradient still has to be written, otherwise
+                # recycled memory is returned as the gradient.  Same reason
+                # slogdet's out_index == 0 branch does an explicit copyto(0).
+                np.copyto(out, 0)
 
     sw = x.shape[:-2] + x.shape[-1:]
     sv = x.shape
