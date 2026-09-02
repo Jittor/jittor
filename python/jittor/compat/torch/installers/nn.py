@@ -28,6 +28,7 @@ from ..types import (
 )
 from ...diagnostics import EXPECTED, swallowed
 from ... import fsdp_hooks as _fsdp_hooks
+from ... import collectives as _collectives
 
 
 def _pipelining_from_environment():
@@ -133,46 +134,120 @@ def _install_nn_extras(nn, registry=None):
         def forward(self, *args, **kwargs):
             return self.module(*args, **kwargs)
 
+    def _ddp_world_size():
+        """This rank's view of the world. See collectives._world_size."""
+        return _collectives._world_size()
+
     class _DistributedDataParallel(_DataParallel):
-        """DDP without gradient synchronisation -- refused on >1 rank.
+        """DDP that really synchronises: broadcast at construction, all-reduce
+        at the backward completion point.
 
-        This class is a plain forwarding wrapper: no gradient bucket, no
-        autograd hook, no initial parameter broadcast, and ``no_sync()`` is a
-        nullcontext.  Jittor only ever all-reduces inside ``opt.step(loss)``;
-        the torch-idiomatic ``loss.backward(); opt.step()`` fills gradients
-        through ``Var.backward`` and never touches MPI/NCCL.  On N ranks that
-        trains N different models from N different random initialisations and
-        reports nothing.
+        Before 7.02 this was a plain forwarding wrapper -- no bucket, no hook,
+        no initial broadcast, ``no_sync()`` a nullcontext. Jittor only ever
+        all-reduced inside ``opt.step(loss)``, while the torch-idiomatic
+        ``loss.backward(); opt.step()`` fills gradients through ``Var.backward``
+        and never touched MPI. On N ranks that trained N different models from
+        N different random initialisations and reported nothing, so 7.01 made
+        it refuse instead. It no longer has to.
 
-        Real synchronisation is task 7.02.  Until then, constructing DDP on
-        more than one rank raises instead of quietly diverging.  Single-rank
-        DDP needs no synchronisation, so it keeps working.
+        Two things have to be true for the ranks to stay identical:
+
+        * **they must start identical** -- every parameter and buffer is
+          broadcast from rank 0 here, because each rank ran its own random
+          init;
+        * **they must apply the same update** -- gradients are averaged across
+          ranks at the point ``backward()`` finishes, before anything reads
+          ``.grad``. torch does this in autograd hooks for the same reason:
+          gradient clipping and logging between ``backward()`` and ``step()``
+          have to see the synchronised gradient, not this rank's own.
+
+        The all-reduce itself lives in ``installers/tensor.py`` (the backward
+        is there, and it sits *below* this file), reached through the
+        ``_jittor_ddp_state`` marker each parameter carries -- the same
+        inversion FSDP2 uses. ``_jittor_ddp_order`` is assigned here, in
+        ``module.parameters()`` order, so every rank issues its collectives in
+        the same sequence: that order is identical across ranks, whereas the
+        backward's own leaf collection is keyed by ``id()`` and is not.
         """
 
         require_backward_grad_sync = True
 
         def __init__(self, module, *args, **kwargs):
-            world = 1
-            try:
-                world = int(getattr(_jt, "world_size", 1))
-            except EXPECTED as exc:
-                swallowed("torch/installers/nn.py __init__: world = int(getattr(_jt, 'world_size', 1))", exc)
-                world = 1
-            if world > 1:
-                from ...stub_policy import unimplemented
-                unimplemented(
-                    "torch.nn.parallel.DistributedDataParallel (world_size=%d)" % world,
-                    "run the standard `loss.backward(); opt.step()` loop with "
-                    "NO gradient all-reduce and no initial parameter "
-                    "broadcast, so each rank trains a different model without "
-                    "any error",
-                    "Use jittor's optimizer-driven sync (`opt.step(loss)`), or "
-                    "run on a single rank.")
             super().__init__(module, *args, **kwargs)
+            state = _types_nn_private.SimpleNamespace(
+                sync_enabled=True, world_size=_ddp_world_size())
+            object.__setattr__(self, "_jittor_ddp_state", state)
+            self._jittor_ddp_broadcast_parameters()
+            self._jittor_ddp_mark_parameters()
+
+        def _jittor_ddp_named_parameters(self):
+            named = getattr(self.module, "named_parameters", None)
+            if callable(named):
+                for item in named():
+                    yield item[1] if isinstance(item, tuple) else item
+                return
+            for p in self.module.parameters():
+                yield p
+
+        def _jittor_ddp_broadcast_parameters(self):
+            """Make every rank start from rank 0's weights."""
+            if _ddp_world_size() <= 1:
+                return
+            for p in self._jittor_ddp_named_parameters():
+                if isinstance(p, _jt.Var):
+                    _collectives._broadcast_from_rank0(p)
+            buffers = getattr(self.module, "buffers", None)
+            if callable(buffers):
+                for b in buffers():
+                    b = b[1] if isinstance(b, tuple) else b
+                    if isinstance(b, _jt.Var):
+                        _collectives._broadcast_from_rank0(b)
+            _jt.sync_all()
+
+        def _jittor_ddp_mark_parameters(self):
+            """Tag the parameters the backward has to all-reduce, in rank-stable
+            order."""
+            state = self._jittor_ddp_state
+            for index, p in enumerate(self._jittor_ddp_named_parameters()):
+                if not isinstance(p, _jt.Var):
+                    continue
+                try:
+                    object.__setattr__(p, "_jittor_ddp_state", state)
+                    object.__setattr__(p, "_jittor_ddp_order", index)
+                except EXPECTED as exc:
+                    swallowed(
+                        "torch/installers/nn.py DDP: mark parameter %d for "
+                        "gradient all-reduce" % index, exc,
+                        "that parameter's gradient will NOT be synchronised, "
+                        "so this rank's copy of it will diverge")
 
         def no_sync(self):
-            import contextlib as _ctxlib
-            return _ctxlib.nullcontext()
+            """Skip the gradient all-reduce inside the block.
+
+            Used for gradient accumulation: the local gradients add up over
+            several micro-batches and only the final backward pays for one
+            collective. It used to be ``nullcontext()``, which was accidentally
+            correct only because nothing was ever synchronised.
+            """
+            return _DDPNoSync(self)
+
+    class _DDPNoSync:
+        def __init__(self, ddp):
+            self._ddp = ddp
+            self._previous = None
+
+        def __enter__(self):
+            state = self._ddp._jittor_ddp_state
+            self._previous = state.sync_enabled
+            state.sync_enabled = False
+            self._ddp.require_backward_grad_sync = False
+            return self._ddp
+
+        def __exit__(self, *exc_info):
+            state = self._ddp._jittor_ddp_state
+            state.sync_enabled = self._previous
+            self._ddp.require_backward_grad_sync = bool(self._previous)
+            return False
 
     parallel_mod.DataParallel = getattr(parallel_mod, "DataParallel", _DataParallel)
     parallel_mod.DistributedDataParallel = getattr(

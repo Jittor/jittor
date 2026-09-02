@@ -22,7 +22,8 @@ import jittor as jt
 from .diagnostics import EXPECTED, swallowed
 
 __all__ = ["_world_size", "_rank", "_in_true_distributed", "_nccl_ops",
-           "_slice_flat", "_all_gather_shards", "_reduce_scatter_padded"]
+           "_slice_flat", "_all_gather_shards", "_reduce_scatter_padded",
+           "_all_reduce_mean", "_broadcast_from_rank0"]
 
 
 def _world_size():
@@ -98,3 +99,28 @@ def _reduce_scatter_padded(full_grad):
     reduced = full_grad.mpi_all_reduce("sum")
     shard = int(reduced.shape[0]) // max(_world_size(), 1)
     return _slice_flat(reduced, _rank() * shard, shard)
+
+
+def _all_reduce_mean(var):
+    """Average ``var`` across every rank. The identity on one rank."""
+    if _world_size() <= 1:
+        return var
+    if not callable(getattr(var, "mpi_all_reduce", None)):
+        raise RuntimeError(
+            "this Jittor build has no mpi_all_reduce, so gradients cannot be "
+            "synchronised across the %d ranks it was launched with. Build "
+            "with MPI (mpicc on PATH at build time) or launch with NCCL."
+            % _world_size())
+    return var.mpi_all_reduce("mean")
+
+
+def _broadcast_from_rank0(var):
+    """Replace ``var`` with rank 0's copy in place. The identity on one rank."""
+    if _world_size() <= 1:
+        return var
+    if not callable(getattr(var, "mpi_broadcast", None)):
+        raise RuntimeError(
+            "this Jittor build has no mpi_broadcast, so parameters cannot be "
+            "broadcast to the %d ranks it was launched with." % _world_size())
+    var.assign(var.mpi_broadcast())
+    return var

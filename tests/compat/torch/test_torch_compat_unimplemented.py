@@ -388,7 +388,18 @@ class TestDataLoaderWorkers(StubPolicyBase):
 
 
 class TestDistributedDataParallel(StubPolicyBase):
-    """DDP never synchronised gradients on the loss.backward() path."""
+    """DDP synchronises for real now (7.02); it is no longer a stub.
+
+    This class used to assert the opposite -- that constructing DDP on more
+    than one rank raises -- which was 7.01's holding position while DDP was a
+    forwarding wrapper that never all-reduced anything. 7.02 implemented the
+    broadcast and the all-reduce, so refusing is no longer the contract.
+
+    The real multi-rank behaviour is checked where it can actually be observed:
+    ``tests/compat/torch/test_torch_ddp_grad_sync.py`` runs two ranks under
+    ``mpirun`` and compares their parameters. Faking ``jt.world_size`` here
+    would only produce a process that believes in ranks that do not exist.
+    """
 
     def test_single_rank_ddp_is_allowed(self):
         model = torch.nn.Linear(3, 2)
@@ -396,27 +407,50 @@ class TestDistributedDataParallel(StubPolicyBase):
         out = wrapped(jt.ones((2, 3)))
         self.assertEqual(tuple(out.shape), (2, 2))
 
-    def test_multi_rank_ddp_is_refused(self):
-        saved = getattr(jt, "world_size", 1)
-        jt.world_size = 4
-        try:
-            self.assertRefuses(
-                lambda: torch.nn.parallel.DistributedDataParallel(
-                    torch.nn.Linear(3, 2)),
-                "DistributedDataParallel", "all-reduce")
-        finally:
-            jt.world_size = saved
+    def test_single_rank_ddp_marks_its_parameters_for_synchronisation(self):
+        # The marker is how installers/tensor.py finds these gradients without
+        # importing DDP; the order is what keeps the collectives in the same
+        # sequence on every rank. Both are set even on one rank, where the
+        # all-reduce itself is skipped.
+        model = torch.nn.Linear(3, 2)
+        torch.nn.parallel.DistributedDataParallel(model)
+        orders = [getattr(p, "_jittor_ddp_order", None)
+                  for p in model.parameters()]
+        self.assertEqual(orders, list(range(len(orders))))
+        self.assertTrue(all(getattr(p, "_jittor_ddp_state", None) is not None
+                            for p in model.parameters()))
 
-    def test_multi_rank_ddp_stub_fallback(self):
-        saved = getattr(jt, "world_size", 1)
-        jt.world_size = 4
+    def test_no_sync_is_a_real_switch_not_a_nullcontext(self):
+        model = torch.nn.Linear(3, 2)
+        wrapped = torch.nn.parallel.DistributedDataParallel(model)
+        state = wrapped._jittor_ddp_state
+        self.assertTrue(state.sync_enabled)
+        with wrapped.no_sync():
+            self.assertFalse(state.sync_enabled)
+            self.assertFalse(wrapped.require_backward_grad_sync)
+        self.assertTrue(state.sync_enabled)
+        self.assertTrue(wrapped.require_backward_grad_sync)
+
+    def test_a_build_without_the_collectives_says_so(self):
+        # If a multi-rank job ever reaches the collectives on a build that has
+        # none, it has to stop and say why -- continuing would train every rank
+        # on its own gradients, which is the failure 7.02 exists to remove.
+        from jittor.compat import collectives
+
+        class NoCollectives:
+            pass
+
+        saved = collectives._world_size
+        collectives._world_size = lambda: 4
         try:
-            wrapped = self.assertStubFallback(
-                lambda: torch.nn.parallel.DistributedDataParallel(
-                    torch.nn.Linear(3, 2)))
-            self.assertIsNotNone(wrapped)
+            for call in (collectives._all_reduce_mean,
+                         collectives._broadcast_from_rank0):
+                with self.subTest(call=call.__name__):
+                    with self.assertRaises(RuntimeError) as caught:
+                        call(NoCollectives())
+                    self.assertIn("4 ranks", str(caught.exception))
         finally:
-            jt.world_size = saved
+            collectives._world_size = saved
 
 
 class TestBackwardGradient(StubPolicyBase):

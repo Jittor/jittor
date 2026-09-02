@@ -32,6 +32,59 @@ from ..types import (
 import collections as _collections
 from ...diagnostics import EXPECTED, swallowed
 from ... import fsdp_hooks as _fsdp_hooks
+from ... import collectives as _collectives
+
+
+def _ddp_all_reduce_grads(leaves):
+    """Average DDP-managed gradients across ranks, in a rank-stable order.
+
+    ``_jittor_ddp_state`` is set only by ``DistributedDataParallel`` (see
+    installers/nn.py), which sits *above* this file -- the marker carries the
+    state so nothing here has to import it, the same inversion FSDP2 uses.
+
+    Operates on the accumulated ``_torch_grad`` and assigns in place, because
+    that Var is also the one in the optimizer's ``pg["grads"]``: one write
+    updates ``p.grad`` and what ``step()`` consumes.
+
+    The ordering matters and is not incidental. Jittor's collectives are graph
+    ops, and every rank must issue them in the same sequence or they pair up
+    wrongly and the run deadlocks or mixes gradients between parameters. The
+    backward's own leaf collection is keyed by ``id()`` and differs between
+    processes; DDP stamps ``_jittor_ddp_order`` in ``module.parameters()``
+    order, identical on every rank, and that is what this sorts by. The
+    dependency chain then stops the scheduler reordering them again -- the same
+    guard jittor's own ``optim/base.py`` puts around its all-reduce.
+    """
+    if _collectives._world_size() <= 1:
+        return
+    pending = []
+    for leaf in leaves:
+        state = getattr(leaf, "_jittor_ddp_state", None)
+        if state is None or not getattr(state, "sync_enabled", False):
+            continue
+        order = getattr(leaf, "_jittor_ddp_order", None)
+        grad = getattr(leaf, "_torch_grad", None)
+        if order is None or not isinstance(grad, jt.Var):
+            continue
+        pending.append((order, grad))
+    if not pending:
+        return
+    pending.sort(key=lambda item: item[0])
+    dep = []
+    for _order, grad in pending:
+        grad.assign(_collectives._all_reduce_mean(grad))
+        try:
+            producer = grad._input(0)
+        except EXPECTED as exc:
+            swallowed("torch/installers/tensor.py _ddp_all_reduce_grads: "
+                      "grad._input(0) for the collective ordering chain", exc,
+                      "the all-reduces may be scheduled in a different order "
+                      "on different ranks")
+        else:
+            producer._add_dependency(dep)
+            dep = [producer]
+
+
 _MinMax = _collections.namedtuple("torch_return_types", ["values", "indices"])
 _TopK = _collections.namedtuple("topk", ["values", "indices"])
 _Sort = _collections.namedtuple("sort", ["values", "indices"])
@@ -1210,6 +1263,18 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                     and not _fsdp2_backward.optimizer_has_non_fsdp_params(o):
                 continue
             _fill_opt_grads(o, grad_by_id, filled_param_ids)
+        # DDP's synchronisation point, deliberately here rather than next to
+        # grad_optional above: it has to average the *accumulated* gradient.
+        # `no_sync()` exists so several micro-batches accumulate locally and
+        # only the closing backward pays for one collective -- averaging each
+        # backward's own contribution instead would leave everything gathered
+        # under no_sync() unsynchronised for good. By this line `p._torch_grad`
+        # is the accumulated Var and, for optimizer parameters, is the very Var
+        # in `pg["grads"]`, so one in-place assign updates `p.grad` and what
+        # step() consumes together. Still before backward() returns, which is
+        # what torch's autograd hooks guarantee: clipping and norm logging in
+        # between must see the synchronised gradient.
+        _ddp_all_reduce_grads(leaves)
         # retain_grad is per-forward in torch; clear so the next iteration's fresh
         # screenspace tensor doesn't leak (jittor Vars aren't weak-referenceable).
         if retained:
