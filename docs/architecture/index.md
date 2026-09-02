@@ -8,4 +8,5 @@ source-architecture
 torch-compatibility-principles
 complex-dtype
 pipelined-execution
+cudnn-convolution-plans
 ```
