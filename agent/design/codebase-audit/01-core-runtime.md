@@ -145,6 +145,35 @@ C++ 头文件。第三，错误处理只有一档：ASSERT/CHECK/LOGf 全部抛 
 
 ## 执行更正（2026-09-03，还原 data.gz 之后直接读源码）
 
+**共享内存树形归约比 warp shuffle 慢，本报告下文「需要一条可读的块内归约实现」的方向被实测推翻。**
+1.03 实测（RTX 4090，profiler 设备时间，每 kernel 平均，四种 UNet 形状）：
+
+| 形状 | 只有原子 | + WarpReduce（默认） | + SharedReduce（`para_opt_level=4`） |
+| --- | --- | --- | --- |
+| 8×384×32×32 | 157.0µs | **15.7µs** | 25.3µs |
+| 8×128×64×64 | 92.1µs | **14.0µs** | 31.3µs |
+| 16×192×32×32 | 159.2µs | **15.0µs** | 25.3µs |
+| 32×64×56×56 | 171.0µs | **18.1µs** | 34.8µs |
+
+`SharedReducePass` 没坏，打开就能跑、结果正确、比不优化快 6–10 倍；但它要 1024 项 `__shared__`、
+六次 `__syncthreads()`，尾部 warpReduce 还走 volatile 共享内存，而 shuffle 版本只是五条寄存器里的
+`__shfl_down_sync`。下文那个 52.9µs 对 PyTorch 3.7µs 的差距，`WarpReducePass`（提交 `9eb696d9`）
+已经解掉大部分，**不是靠这个 pass**。它唯一占优的是精度：2.3e-7 对 3.5e-7（纯原子 1.8e-6）。
+默认值保持 3。正确的提升形态是混合（warp shuffle → 每 warp 一个值 → 共享内存 → 每输出一次原子），
+已作为新任务登记。
+
+**两个 pass 的交互曾产生死代码**：SharedReduce 留下 `if (threadIdx.x == 0) atomicAdd(...)`，
+而 WarpReduce 匹配 `startswith(code,"atomicAdd")`，会把这条只剩一个活跃 lane 的原子再包一层
+shuffle；运行期 `__activemask() != 0xffffffff` 必然走回退，结果对但整段是死代码，每 kernel 多
+1.3–1.9µs。已按 SharedReduce 自己防重入的同一判据修掉（father 是 `if` 就跳过）。
+
+**1.04 是「下一层拦着」，不是「没实现」也不是「默认关着」**：`split{i}` 与 `parallel` 不能同时用——
+`SplitLoopPass` 给内层循环的 range 是 `::min(range{i}-id{i}, stride{i})`，定义在外层循环里且随它
+变化，`ParallelPass` 在调用点 `find_define` 找不到就 `ASSERT(def)` 失败。CUDA 恒走 ParallelPass，
+所以 `ReduceTuner` 一旦给 CUDA `split1`，**每个 CUDA 归约都会从能跑变成编译错误**。这不是 CUDA
+的性质：CPU 上 `{"parallel":1,"split1":64}` 一模一样地失败。`orderN` 候选实测五种形状全部不优于
+默认（最差 2.1 倍，把某维挪出最内层正好破坏访存合并）。
+
 **`SharedReducePass` 零命中的原因已查明，不是「匹配条件太严」，而是它默认根本不跑。**
 还原出的 `shared_reduce_pass.cc` 里 `run()` 第二行就是 `if (para_opt_level < 4) return;`，
 而 `para_opt_level` 的默认值是 3（`loop_var_analyze_pass.cc:17` 的 `DEFINE_FLAG`）。

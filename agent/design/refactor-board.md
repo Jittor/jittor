@@ -347,6 +347,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 9.17 | 死代码 | 待领 | | |
 | 9.18 | `disable_lock=1` 启用时明确告警并纳入缓存指纹 | 待领 | | |
 | 9.19 | 布局收尾 | 待领 | | |
+| 9.20 | asm_tuner 非原子写 .s，并发编译读到截断汇编 | 待领 | | |
 | 10.01 | `tools/run_test_suite.py` 拆成 `nox -s full` 周期性调度… | 待领 | | |
 | 10.02 | 默认 `nox` 含 cpu 数值测试，或把默认改名为 static | 待领 | | |
 | 10.03 | optional/rocm/mpi/nccl 四个 session 排上 runner 或在文档… | 待领 | | |

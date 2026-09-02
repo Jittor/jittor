@@ -433,6 +433,7 @@
 | 9.17 | 死代码：Windows MinGW 分支未定义的 `link`（`compiler.py:83`）、`cuda_wheel` 的 Darwin 分支、`env_or_try_find` 重复定义（`compiler.py:949`）、`src/utils/flags.cc`（27 行全注释但被 flag 扫描器读到，导致 12 个 flag 双定义）、`tests/system/legacy` | — | [构建](codebase-audit/04-build-tooling.md)§跨平台与死代码；[架构](codebase-audit/07-architecture.md)§重复 | flag 扫描改预处理后扫描或宏注册 |
 | 9.18 | `disable_lock=1` 启用时明确告警并纳入缓存指纹（`lock.py:18`、`src/lock.cc:31`） | 0.08 | [构建](codebase-audit/04-build-tooling.md)§锁与并发 | 告警可见 |
 | 9.19 | 布局收尾：`tools/` 只留仓库工具（`gen_pyi`、`local_doc_builder`、`dumpdef`、release、benchmarks 脚本），`agent/scripts` 并入；`python/jittor/tools/` 只留给用户的 nvtx/jtune/tracer；`MANIFEST.in` 改为从 `pyproject` 的 package-data 生成 | 9.01、4.15、5.26、0.19 | [布局](target-layout.md)§3、§5 | `tools/` 与 `python/jittor/tools/` 职责不重叠 |
+| 9.20 | **`utils/asm_tuner.py` 的 `pass_asm()` 非原子写 `.s`**：直接 `open(output_path,"w")` 截断再写。多 worker 并发编译同一个 kernel 进同一缓存目录时，有进程读到被截断的汇编，报 `unknown pseudo-op` / `end of file not at end of a line`。在三个互相独立的 `JITTOR_HOME` 上各复现一次，删掉那条缓存后单跑就过——**不是缓存损坏的偶然，是写法本身没有原子性**。改成写临时文件再 `os.replace`（0.07 的产物写入已经是这个模式，照抄）。注意 3.18 计划整条删掉 asm_tuner 链路，但那条周期长，这条是立刻能做的止血 | — | 2026-09-03 由 0.04 的全树运行暴露（`tests/data/test_dataset.py::TestDataset2::test_dataset_use_jittor`，`num_workers=4`） | 该用例在全树并发下稳定通过；写入路径无截断窗口 |
 
 ## 13. 阶段 10 · 测试体系补全
 
