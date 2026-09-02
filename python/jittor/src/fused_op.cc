@@ -178,6 +178,29 @@ void FusedOp::do_jit_prepare(JK& jk) {
     for (auto& t : edges) {
         uint i,j,k,l;
         std::tie(i,j,k,l) = t;
+        // Fixed-width edge encoding: hex2 keeps only the low 8 bits and hex1
+        // only the low 4. An id past those limits wraps, two structurally
+        // different fusions map to the same jit key, the cache lookup hits and
+        // an unrelated compiled kernel runs -- a silent wrong result. Until the
+        // key becomes variable width (task 3.02), refuse to build such a key.
+        //
+        // i is the producer: an op index for an edge internal to the fusion, or
+        // ops.size()+var_index for a var coming from outside it (executor.cc).
+        // k is the consumer op index, l its input slot. j is the producer's
+        // output slot and only has to be unique for internal edges -- for an
+        // external input, i already discriminates.
+        ASSERTop(i,<,256u) << "Fused op too large for the jit key encoding:"
+            << ops.size() << "ops plus" << vars.size()
+            << "vars exceed the 255 edge ids a two-hex-digit field can hold.";
+        ASSERTop(k,<,256u) << "Fused op too large for the jit key encoding:"
+            << ops.size() << "ops exceed the 255 consumer ids a two-hex-digit"
+            << "field can hold.";
+        ASSERTop(l,<,16u) << "Op" << ops[k]->name() << "has more than 16 inputs;"
+            << "the jit key encodes the input slot in a single hex digit.";
+        if (i < ops.size())
+            ASSERTop(j,<,16u) << "Op" << ops[i]->name() << "has more than 16"
+                << "outputs; the jit key encodes the output slot in a single"
+                << "hex digit.";
         jk << JK::hex2(i) << JK::hex1(j) << JK::hex2(k) << JK::hex1(l) << ',';
     }
     jk << "«var_info:" << JK::val;
