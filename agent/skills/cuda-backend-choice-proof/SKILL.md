@@ -153,10 +153,26 @@ libcudnn 内部 `cuStreamDestroy` 处**段错误**而不是返回错误码，测
 
 ### 坑：子进程 abort 会把 pytest 父进程一起带走
 
-jittor 装了 SIGCHLD handler（`utils/log.cc`），子进程只要不是正常退出或 SIGTERM，
-父进程就 `quick_exit(1)`。所以「修前」跑这类测试看到的不是一条 F，而是
-**pytest 打了一个点然后退出码 1、没有任何报告**。要看修前的真实行为，
-直接跑子进程脚本本身，不要经过 pytest。
+jittor 装了**进程级** SIGCHLD handler（`utils/log.cc`），子进程只要不是正常退出或
+SIGTERM，父进程就 `quick_exit(1)` 且不刷 stdio。于是「把会崩的用例放子进程里」这个
+标准做法反而**变成它本来要防的那件事**：pytest 零输出消失，看起来像 runner 坏了而
+不是测试失败（任务 6.C31）。
+
+**写法**：用 `tests/_helpers/child_process.py`，预期会崩的子进程传 `crash_isolated=True`：
+
+```python
+from _helpers.child_process import run_python_child, run_child_script
+
+proc = run_python_child(["-c", body], timeout=1800, crash_isolated=True)
+assert proc.returncode == 0, proc.stderr[-4000:]   # 崩了也能断言，134/139 照样可读
+```
+
+它隔一层 `sh`（sh 以 `128+signo` 正常退出，handler 不理会，而 `returncode` 仍是
+134/139），并给子进程设 `gdb_path=""`（否则 jittor 的崩溃处理器会 fork gdb，
+gdb 先 ptrace-stop 住子进程，gdb 一死子进程就永远停在那）。
+
+**不要裸起子进程**：`tests/structure/test_child_process_contract.py`（0.21）是静态门禁，
+`tests/` 下任何直接写 `sys.executable` 的启动都会红。
 
 ## 后端库的 `_cudaGetErrorEnum` 重载约定
 
