@@ -65,16 +65,31 @@ class ReduceLROnPlateau(object):
             self.n_bad = 0
             
     def update_lr(self, epoch):
+        # Param groups without their own "lr" key all read the single
+        # optimizer-wide ``optimizer.lr``.  Snapshot it once: reading it back
+        # inside the loop would compound the reduction, giving lr*factor**N
+        # for N such groups instead of lr*factor.
+        shared_lr = float(self.optimizer.lr)
+        new_shared_lr = None
         for i, param_group in enumerate(self.optimizer.param_groups):
-            old_lr = float(param_group.get("lr", self.optimizer.lr))
+            group_lr = param_group.get("lr")
+            if group_lr is None:
+                old_lr = shared_lr
+            else:
+                old_lr = float(group_lr)
             new_lr = max(old_lr * self.factor, self.min_lrs[i])
             if old_lr - new_lr > self.eps:
-                if param_group.get("lr")!=None:
-                    param_group["lr"] = max(param_group["lr"] * self.factor, self.min_lrs[i])
+                if group_lr is not None:
+                    param_group["lr"] = new_lr
                 else:
-                    self.optimizer.lr = new_lr
+                    # One shared lr has to satisfy every sharing group's
+                    # min_lr floor, so keep the largest candidate.
+                    new_shared_lr = new_lr if new_shared_lr is None \
+                        else max(new_shared_lr, new_lr)
                 if self.verbose:
                     print('Epoch {:5d}: reducing learning rate of group {} from {:.4e} to {:.4e}.'.format(epoch, i, old_lr, new_lr))
+        if new_shared_lr is not None:
+            self.optimizer.lr = new_shared_lr
                           
     def better(self, a, b):
         if self.mode == 'min' and self.threshold_mode == 'rel':

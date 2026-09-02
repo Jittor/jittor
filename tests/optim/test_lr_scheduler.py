@@ -50,5 +50,48 @@ class TestAttention(unittest.TestCase):
             t_scheduler.step(loss)
             assert j_opt.lr == t_opt.state_dict()['param_groups'][0]['lr']
 
+class TestReduceLROnPlateauGroups(unittest.TestCase):
+    """A reduction must lower the shared lr exactly once, not once per group."""
+
+    def _plateau_opt(self, n_groups):
+        params = [{"params": [jt.array([1.0])]} for _ in range(n_groups)]
+        # No group carries its own "lr", so every group falls back to the
+        # optimizer-wide lr -- this is jittor's default param group layout.
+        for pg in params:
+            assert "lr" not in pg
+        opt = jt.optim.SGD(params, 1.0)
+        return opt, jt.lr_scheduler.ReduceLROnPlateau(
+            opt, factor=0.1, patience=1, threshold=0.0)
+
+    def test_shared_lr_drops_once_per_reduction(self):
+        for n_groups in (1, 2, 3):
+            opt, sched = self._plateau_opt(n_groups)
+            sched.step(1.0)
+            sched.step(1.0)
+            sched.step(1.0)
+            np.testing.assert_allclose(opt.lr, 0.1, rtol=1e-6)
+
+    def test_min_lr_respected_for_shared_lr(self):
+        opt, sched = self._plateau_opt(3)
+        sched.min_lrs = [0.5] * 3
+        sched.step(1.0)
+        sched.step(1.0)
+        sched.step(1.0)
+        np.testing.assert_allclose(opt.lr, 0.5, rtol=1e-6)
+
+    def test_per_group_lr_still_scales_per_group(self):
+        params = [{"params": [jt.array([1.0])], "lr": 1.0},
+                  {"params": [jt.array([1.0])], "lr": 2.0}]
+        opt = jt.optim.SGD(params, 1.0)
+        sched = jt.lr_scheduler.ReduceLROnPlateau(
+            opt, factor=0.1, patience=1, threshold=0.0)
+        sched.step(1.0)
+        sched.step(1.0)
+        sched.step(1.0)
+        np.testing.assert_allclose(opt.param_groups[0]["lr"], 0.1, rtol=1e-6)
+        np.testing.assert_allclose(opt.param_groups[1]["lr"], 0.2, rtol=1e-6)
+        np.testing.assert_allclose(opt.lr, 1.0, rtol=1e-6)
+
+
 if __name__ == "__main__":
     unittest.main()
