@@ -376,10 +376,25 @@ void AtomicTunerPass::run() {
                         }
                     }
                     if (para_opt_level >= 3) {
-                        // A reduction-dominated kernel over a small outer
-                        // range does not have enough parallelism to fill the
-                        // machine; halve the thread budget so the atomics
-                        // contend less.
+                        // What it does, read off the emitted expression: when
+                        // the ranges of every thread dimension declared before
+                        // the atomic one multiply out to 256 or less, and the
+                        // kernel is reduction-dominated (reduce ops are at
+                        // least a third of the fused op), the thread budget
+                        // becomes max(thread_num/2, 65536) instead of
+                        // thread_num -- a halving with a floor, so it only
+                        // bites above 128k threads.
+                        //
+                        // NOTE: behaviour checked line by line against the
+                        // original; the intent is not fully understood. Halving
+                        // when there is little outer parallelism presumably
+                        // trades threads for less atomic contention, but why
+                        // the cutoffs are 256, 65536 and n_reduce*3 is not
+                        // recoverable from the code. It also sits under the
+                        // same "max_pos > 0" guard as the block above, which
+                        // borrows threads *for* the atomic dimension; the two
+                        // pull in opposite directions and nothing here says how
+                        // they are meant to combine.
                         string range_product;
                         for (auto& prev : prev_tns) {
                             auto* def = call->find_define(prev);
