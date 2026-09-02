@@ -245,7 +245,11 @@ def _manual_probes_are_enabled(config):
     value = os.environ.get("JITTOR_TEST_MANUAL", "").strip().lower()
     if value in ("1", "true", "yes", "on"):
         return True
-    return "manual" in (getattr(config.option, "markexpr", "") or "")
+    # getattr twice: the structure tests call this hook with a stand-in config
+    # that carries only the fields under test, and a marker rule should not
+    # depend on the rest of pytest's Config existing.
+    option = getattr(config, "option", None)
+    return "manual" in (getattr(option, "markexpr", "") or "")
 
 
 def pytest_collection_modifyitems(config, items):

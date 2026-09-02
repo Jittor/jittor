@@ -261,7 +261,11 @@ def test_complete_suite_runner_retries_a_zero_exit_cold_cache_refresh():
     refreshed = SimpleNamespace(returncode=0, stdout="jit_utils updated, rerun\n")
     ready = SimpleNamespace(returncode=0, stdout=module._WARMUP_MARKER + "\n")
 
-    with mock.patch.object(module.subprocess, "run", side_effect=(refreshed, ready)) as run:
+    # The runner starts its children through _helpers.child_process now, so
+    # that is what a warm-up retry has to be observed through (0.21: the
+    # warm-up used to compile whatever the editable install pointed at).
+    with mock.patch.object(module, "run_python_child",
+                           side_effect=(refreshed, ready)) as run:
         code, output = module._warmup({})
 
     assert code == 0
