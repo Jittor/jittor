@@ -27,11 +27,27 @@ void EventQueue::Worker::start() {
 }
 
 
+// The worker can be stopped from two places, in either order, and each of
+// them can be reached twice:
+//
+//  - `cleanup_callback`, drained by core.cleanup() (python's atexit) and by
+//    log_exiting() (a C-level std::atexit registered in log.cc);
+//  - ~Worker, during static destruction of the global `event_queue`.
+//
+// Neither knows about the other. `stop()` is a static function that reaches
+// the global, so running it after ~Worker is a use-after-destruction, and
+// join() on the already-joined thread throws std::system_error(EINVAL) out of
+// an atexit handler -- std::terminate, from a process that was exiting
+// cleanly. One flag makes every order safe and every call after the first a
+// no-op.
+static bool worker_stopped = false;
+
 void EventQueue::Worker::stop() {
-    LOGv << "stoping event queue worker...";
+    if (worker_stopped) return;
+    worker_stopped = true;
+    if (!event_queue.worker.thread.joinable()) return;
     event_queue.worker.run(nullptr);
     event_queue.worker.thread.join();
-    LOGv << "stopped event queue worker.";
 }
 
 EXTERN_LIB vector<void(*)()> cleanup_callback;
@@ -41,22 +57,15 @@ EventQueue::Worker::Worker() : thread(EventQueue::Worker::start) {
 }
 
 EventQueue::Worker::~Worker() {
-    // `event_queue` is a global, so this runs during static destruction. The
-    // worker is normally stopped before that, through cleanup_callback --
-    // core.cleanup() from python's atexit, or log_exiting(). Neither of those
-    // happens when `import jittor` raises partway through: the module never
-    // finishes, nothing registers the atexit, and the interpreter still tears
-    // down the statics of the .so it did load. ~std::thread then found a
-    // joinable thread and called std::terminate, so a failed import ended in
-    // "terminate called without an active exception" and SIGABRT -- and with
-    // the SIGCHLD handler above, a parent process watching that import saw
-    // nothing at all.
-    //
-    // stop() leaves the thread unjoinable, so this is a no-op on the normal
-    // path and only does the work when cleanup never ran.
-    if (!thread.joinable()) return;
-    run(nullptr);
-    thread.join();
+    // Runs during static destruction of the global `event_queue`. Normally the
+    // worker is already stopped through cleanup_callback -- but that list is
+    // drained by core.cleanup(), whose atexit registration sits at the end of
+    // the python module that `import jittor` was still executing when it
+    // raised. A failed import therefore reached ~std::thread with a joinable
+    // thread and called std::terminate: "terminate called without an active
+    // exception", SIGABRT, and (through the SIGCHLD handler in log.cc) a
+    // parent process that saw nothing at all.
+    stop();
 }
 
 void EventQueue::worker_caller() {
