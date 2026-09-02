@@ -56,6 +56,7 @@
 | 0.18 | 门禁每条目断言至少执行 1 个非 skip 用例 | 待领 | | |
 | 0.19 | 结构测试从「精确清单」改成「规则」 | 待领 | | |
 | 0.20 | 布局收尾 | 待领 | | |
+| 0.21 | 测试起的子进程不带 PYTHONPATH，门禁机器上是假绿 | 待领 | | |
 | 1.01 | 把 `utils/data.gz` 解出的 `data.cc` 还原为可读的五个翻译单元 | 待领 | | |
 | 1.02 | `op_compiler.cc:30-69` 用正则给 `ParallelPass` 输出打补丁… | 待领 | | |
 | 1.03 | 查明 `SharedReducePass` 在约 4900 个归约 kernel 里零命中的触发… | 待领 | | |
@@ -203,6 +204,7 @@
 | 6.P22 | H20 `to_dense` 对 COO 重复索引求和 | 已合并 | pyother | 9d1bf2a1 |
 | 6.P23 | eigh 的特征向量梯度在 CUDA 上错约 60% | 待领 | | |
 | 6.P24 | Pool3d 的 count_include_pad 读原始参数 | 待领 | | |
+| 6.P25 | Adan 偏差修正仍用全局 n_step；连带第一步 grad_diff 语义 | 待领 | | |
 | 6.B01 | MPI 的 int64 改 `MPI_INT64_T` | 已合并 | dist | 03518707 |
 | 6.B02 | ACL | 待领 | | |
 | 6.B03 | HCCL 宏错误时抛而非 return | 已合并 | dist | c657ab01 |

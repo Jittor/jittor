@@ -143,6 +143,7 @@
 | 0.18 | 门禁每条目断言至少执行 1 个非 skip 用例；`tests/nn/test_attention.py` 与 `test_opt_state_dict.py` 两个恒绿条目处理 | 0.04 | [测试](codebase-audit/05-tests.md)§跳过条件与假绿 | 门禁 summary 含每条目的 passed/skipped |
 | 0.19 | 结构测试从「精确清单」改成「规则」：`test_cleanup_structure.py` 的精确条目集合、`test_nn_structure.py:48-52,170-274` 的逐文件 import 与导出名清单、行数预算（`:1812-1821`）、`test_vllm_compat_structure.py:57-68` 的文件名与 300 行断言全部删除，只保留边界规则（import 方向、公开 API 快照、打包内容、循环依赖）；迁移守卫设过期时间。这是后面每一次目录搬动的前置 | — | [测试](codebase-audit/05-tests.md)§tests/structure 的成本；[架构](codebase-audit/07-architecture.md)§模块边界；系统 E4 | `tests/structure` < 2000 行；挪一个文件不需要改结构测试 |
 | 0.20 | 布局收尾：`agent/` 与 `docs/` 定权威——`agent/design` 并入 `docs/architecture`，`agent/results` 并入 `docs/results`，`agent/` 只留 manuals/skills/scripts；删 `tools/services/legacy`、`tests/system/`；根目录 AWESOME 列表与 asv 配置归 `docs/`、`benchmarks/` | 0.19 | [布局](target-layout.md)§3 | 仓库只有一棵文档树 |
+| 0.21 | 测试里起的子进程不带 `PYTHONPATH`，在 worktree/副本里测的是主树——**门禁机器上就是假绿**。已知一处：`tests/data/test_dataset.py::test_dataset_shuffle_mpi` 用 `mpirun -np 2 <裸 python> <script>`（同文件另两处已在 6.P15 改走 `run_child_script()`，这处因要拼 mpirun 命令行未改）。全树扫一遍 `subprocess`/`mpirun`/`os.system` 起的 python，统一走一个带 `PYTHONPATH` 的 helper，并加静态检查禁止裸起 | 0.13 | 2026-09-02 由 6.P15 的执行者发现；机理见 `agent/skills/jittor-worktree-verification` | 扫描脚本在门禁里跑；mpi 用例在有 mpi 的机器上真跑到本树代码 |
 
 ## 4. 阶段 1 · 还原不可见的核心
 
@@ -335,6 +336,7 @@
 | 6.P22 | H20 `to_dense` 对 COO 重复索引求和；spmm 不再转稠密（`sparse/coo.py:60-72`） | — | 同上 | 与 scipy 对拍 |
 | 6.P23 | **`eigh` 的特征向量梯度在 CUDA 上错约 60%**（对 numpy 相对误差，修 6.P07 前后都复现）。一直没被发现是因为 `tests/ops/test_linalg.py::TestBUG4_2Op` 设了 `jt.flags.use_cuda=1` 且从不还原，把 CUDA 泄漏给该文件后面每一个用例——即「本该在 CPU 跑的用例其实跑在 CUDA 上，而 CUDA 结果是错的」 | — | 2026-09-02 由 6.P07 的执行者发现并复现，不在原审计里 | CUDA 与 numpy 对拍通过；顺带修掉那处 flag 泄漏（属 0.12） |
 | 6.P24 | `Pool3d.__init__` 的 `count_include_pad and padding != 0` 读的是原始参数，元组 padding 恒为真、`padding=0` 恒为假，与 torch 的 `count_include_pad` 语义不一致 | — | 2026-09-02 由 6.P04/6.P05 的执行者发现，不在原审计里 | 元组与标量 padding 各一个与 torch 对拍的用例 |
+| 6.P25 | Adan 的偏差修正仍用全局 `self.n_step`（`optim/algorithms/adan.py:68`），与 6.P14 修掉的 Adam 同一根因：`n_step` 数的是 backward 次数，梯度累积写法下指数偏 k 倍。`base.py` 的 `Optimizer._advance_step_count(pg)` 已就位，改动一行。**但要连带定一个语义**：Adan 里 `if self.n_step>0` 决定第一步算不算 `grad_diff`，jittor 现在第一步 `grad_diff = g` 而官方实现是 `0`，改偏差修正会碰到它——两件事一起想清楚再改 | 6.P14 | 2026-09-02 由 6.P14 的执行者核实后留下，不在原审计里 | 梯度累积与不累积等价；第一步数值与官方 Adan 一致或明确写出为何不同 |
 
 ### 9.3 后端库
 
