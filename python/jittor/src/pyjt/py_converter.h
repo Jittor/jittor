@@ -170,6 +170,26 @@ DEF_IS(Slice, T) from_py_object(PyObject* obj) {
 #define GET_OBJ_FROM_RAW_PTR(obj) ((PyObject*)(((char*)obj) - sizeof(PyObject)))
 #define GET_OBJ_SIZE(T) (sizeof(PyObject)+sizeof(T))
 
+// Instance layout of a pyjt-generated type:
+//     [PyObject header][T][instance dict pointer, if the type has one][inited]
+// The trailing "inited" word exists only for types that declare
+// `@pyjt(__dealloc__)`; pyjt_compiler.py grows tp_basicsize for it.
+//
+// It is needed because tp_new is PyType_GenericNew, which only zeroes the
+// instance: the C++ object is constructed later, by tp_init.  When tp_init
+// finds no matching overload it returns -1 and CPython goes straight to
+// tp_dealloc, so without this flag the generated dealloc would run a C++
+// destructor over storage on which no constructor ever ran -- one line of
+// `jittor_core.RingBuffer()` used to segfault exactly that way.  tp_init sets
+// the flag once construction succeeded, tp_dealloc checks it first.
+//
+// Handwritten to_py_object paths below build their instance with
+// _PyObject_New, whose memory is NOT zeroed, so they must set the flag
+// themselves right after the placement new.
+#define GET_INITED_FLAG(T, has_dict, obj) \
+    (*(uint64*)(((char*)(obj)) + sizeof(PyObject) + sizeof(T) + \
+        ((has_dict) ? sizeof(PyObject*) : 0)))
+
 // DumpGraphs
 struct DumpGraphs;
 EXTERN_LIB PyTypeObject PyjtDumpGraphs;
@@ -224,6 +244,7 @@ DEF_IS(ZipFile, PyObject*) to_py_object(const T& a) {
     PyObjHolder obj(_PyObject_New(&PyjtZipFile));
     auto ptr = GET_RAW_PTR(T, obj.obj);
     new (ptr) T(a);
+    GET_INITED_FLAG(T, 0, obj.obj) = 1;
     return obj.release();
 }
 
@@ -443,6 +464,7 @@ DEF_IS(VarHolder*, PyObject*) to_py_object(T a) {
     // new attr_dict
     // will move and delete a
     new (ptr) typename std::remove_pointer<T>::type (a);
+    GET_INITED_FLAG(typename std::remove_pointer<T>::type, 1, obj.obj) = 1;
     return obj.release();
 }
 

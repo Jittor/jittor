@@ -490,6 +490,12 @@ def compile_src(src, h, basename):
             if name not in def_targets:
                 def_targets[name] = []
             def_targets[name].append(df)
+    # Types that declare __dealloc__ carry one extra word after the payload
+    # (and after the instance dict, if any) recording whether tp_init actually
+    # constructed the C++ object.  See GET_INITED_FLAG in pyjt/py_converter.h.
+    has_dealloc = any(
+        n.split(".")[-1] == "__dealloc__" for n in def_targets)
+    inited_flag = f"GET_INITED_FLAG({class_name}, {1 if has_attr_dict else 0}, self)"
     for name in def_targets:
         dfs = def_targets[name]
         target_scope_name = None
@@ -519,6 +525,9 @@ def compile_src(src, h, basename):
         func_cast = ""
         func_fill = ""
         before_return = ""
+        # appended to tp_init's success return so tp_dealloc knows a C++
+        # constructor really ran on this instance
+        init_success_mark = ""
         if name == "__init__":
             slot_name = "tp_init"
             func_head = "(PyObject* self, PyObject* _args, PyObject* kw) -> int"
@@ -531,6 +540,8 @@ def compile_src(src, h, basename):
             """
             if has_attr_dict:
                 func_fill += f"((PyObject**)(((char*)self) + sizeof(PyObject) + sizeof({class_name})))[0] = PyDict_New(); "
+            if has_dealloc:
+                init_success_mark = f"{inited_flag} = 1, "
 
         elif name == "__repr__":
             slot_name = "tp_repr"
@@ -567,10 +578,16 @@ def compile_src(src, h, basename):
         elif name == "__dealloc__":
             slot_name = "tp_dealloc"
             func_head = "(PyObject* self) -> void"
-            func_fill = "int64 n = 0"
             before_return = "Py_TYPE(self)->tp_free((PyObject *) self);"
             if has_attr_dict:
                 before_return = f"Py_XDECREF(((PyObject**)(((char*)self) + sizeof(PyObject) + sizeof({class_name})))[0]);" + before_return
+            # tp_init returns -1 for an unmatched overload and CPython then
+            # calls tp_dealloc on the still-zeroed instance; running ~T() there
+            # dereferences members that were never initialised.  The storage is
+            # zeroed by PyType_GenericNew, so the dict pointer is null and
+            # Py_XDECREF on it is a no-op.
+            func_fill = ("int64 n = 0; (void)n;\n"
+                f"if (!{inited_flag}) {{ {before_return} return; }}")
         
         elif name in binary_number_slots:
             slot_name = "tp_as_number->"+binary_number_slots[name]
@@ -694,7 +711,8 @@ def compile_src(src, h, basename):
                     func_return_failed = "return -1"
             else:
                 if "-> int" in func_head:
-                    arr_func_return.append(f"return ({func_call},0)")
+                    arr_func_return.append(
+                        f"return ({func_call},{init_success_mark}0)")
                     func_return_failed = "return -1"
                 else:
                     assert "-> void" in func_head, func_head
@@ -872,6 +890,7 @@ def compile_src(src, h, basename):
         tp.tp_name = "{core_name}.{class_info["pynames"][0]}";
         tp.tp_basicsize = GET_OBJ_SIZE({class_name});
         {f"tp.tp_dictoffset = tp.tp_basicsize; tp.tp_basicsize += sizeof(PyObject*); " if has_attr_dict else ""}
+        {"tp.tp_basicsize += sizeof(uint64); // GET_INITED_FLAG slot" if has_dealloc else ""}
         tp.tp_new = PyType_GenericNew;
         tp.tp_flags = Py_TPFLAGS_DEFAULT;
         {"tp.tp_flags |= Py_TPFLAGS_HEAPTYPE; htp.ht_name = htp.ht_qualname = to_py_object<string>(tp.tp_name);"
