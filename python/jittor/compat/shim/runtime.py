@@ -16,8 +16,8 @@ from .discovery import (
     scan_extension_dirs,
 )
 from .preflight import (
-    _ensure_dir, configure_torch_math_flags, is_truthy, jittor_python_root,
-    prepare_import_environment, prepend_sys_path,
+    _ensure_dir, append_sys_path, configure_torch_math_flags, is_truthy,
+    jittor_python_root, prepare_import_environment, prepend_sys_path,
 )
 from jittor.compat._aliases import torch_namespace_claimable
 
@@ -84,19 +84,27 @@ def enable(
     project_dir = pathlib.Path(prepared.project_root)
     runtime = pathlib.Path(prepared.runtime_root)
 
-    shim_site = _ensure_dir(runtime / "site-packages")
+    shim_site = _ensure_dir(runtime / "site-packages",
+                            "the deployed torch shim this process imports")
     jt_python = jittor_python_root()
     _deploy_torch_shim(shim_site)
     _write_build_sitecustomize(shim_site)
 
+    # Only the two directories this layer owns go in front of the standard
+    # library: the deployed shim (which is what makes `import torch` resolve
+    # here) and Jittor's own package root. The project directory used to be
+    # inserted at sys.path[0] as well, ahead of both -- so a project holding a
+    # `types.py` or a `copy.py` shadowed the stdlib for the whole process,
+    # Jittor's own imports included, from the moment enable() ran. A project
+    # only needs to be importable; it goes on the end.
     prepend_sys_path(shim_site)
     prepend_sys_path(jt_python)
-    prepend_sys_path(project_dir)
+    append_sys_path(project_dir)
     for p in import_paths or ():
         pp = pathlib.Path(p)
         if not pp.is_absolute():
             pp = project_dir / pp
-        prepend_sys_path(pp.resolve())
+        append_sys_path(pp.resolve())
 
     import jittor as jt
     configure_torch_math_flags(jt)
@@ -133,8 +141,8 @@ def enable(
             scanned.append(ext)
     scanned = _dedupe_extensions(scanned)
 
-    for ext in reversed(scanned):
-        prepend_sys_path(ext.root, after=project_dir)
+    for ext in scanned:
+        append_sys_path(ext.root)
 
     child_paths: List[Union[str, os.PathLike]] = [shim_site, jt_python, project_dir]
     child_paths += [ext.root for ext in scanned]

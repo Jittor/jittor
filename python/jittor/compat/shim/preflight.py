@@ -124,6 +124,13 @@ def _prepend_env_path(environ, name, path):
 
 
 def prepend_sys_path(path, after=None):
+    """Put ``path`` ahead of everything already on ``sys.path``.
+
+    Reserved for directories this layer owns: anything placed here precedes the
+    standard library, so a stray ``types.py`` or ``copy.py`` inside it breaks
+    the interpreter. Use :func:`append_sys_path` for directories that belong to
+    the user's project.
+    """
     value = os.fspath(path)
     if not value:
         return
@@ -137,16 +144,62 @@ def prepend_sys_path(path, after=None):
     sys.path.insert(0, value)
 
 
-def _ensure_dir(path):
+def append_sys_path(path):
+    """Make ``path`` importable without letting it shadow anything.
+
+    The shim used to insert the *project* directory at ``sys.path[0]``, ahead of
+    the standard library and of Jittor's own package root. A project holding a
+    file named after a stdlib module -- ``types.py`` and ``copy.py`` are the
+    ones seen in practice, and both are imported by Jittor itself -- then broke
+    the interpreter from the moment ``enable()`` ran, with a traceback pointing
+    anywhere but at the shim. A project directory only has to be *reachable*;
+    it has no claim to precedence, so it goes at the end.
+    """
+    value = os.fspath(path)
+    if not value or value in sys.path:
+        return
+    sys.path.append(value)
+
+
+_UNWRITABLE_HINT = (
+    "This path is derived from HOME/XDG_CACHE_HOME. On a read-only or "
+    "unwritable HOME, point the shim somewhere writable with "
+    "JITTOR_TORCH_CACHE_ROOT=<dir> (moves every project's runtime) or "
+    "JITTOR_TORCH_RUNTIME_ROOT=<dir> (this project only). Set "
+    "JITTOR_TORCH_SHIM=0 to start Jittor without the torch runtime at all."
+)
+
+
+def _ensure_dir(path, purpose=None):
+    """Create a directory the shim needs, or say what it was for and how to move it.
+
+    This runs during ``import jittor``, before the compiler and the native core
+    exist. A bare ``PermissionError: '/home/x/.cache/jittor'`` from here reads
+    as a Jittor installation problem, names no cause and offers no fix -- while
+    the actual cause is that the torch shim decided to put its runtime under an
+    unwritable HOME.
+    """
     value = pathlib.Path(path)
-    value.mkdir(parents=True, exist_ok=True)
+    what = (" (%s)" % purpose) if purpose else ""
+    try:
+        value.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise type(exc)(
+            "Jittor's torch compatibility layer could not create its runtime "
+            "directory %s%s: %s. %s" % (value, what, exc, _UNWRITABLE_HINT)
+        ) from exc
+    if not os.access(os.fspath(value), os.W_OK):
+        raise PermissionError(
+            "Jittor's torch compatibility layer needs to write to %s%s, but "
+            "that directory is not writable. %s" % (value, what, _UNWRITABLE_HINT)
+        )
     return value
 
 
 def _set_env_dir(environ, name, path, override=False):
     if override or not environ.get(name):
         environ[name] = os.fspath(path)
-    _ensure_dir(environ[name])
+    _ensure_dir(environ[name], "the directory $%s points at" % name)
 
 
 def _strict_math_nvcc_flags(value, remove_fast_math=False):
@@ -324,7 +377,7 @@ def prepare_import_environment(
     runtime = pathlib.Path(
         os.fspath(explicit_runtime or project_runtime_root(project, env))
     ).expanduser().resolve()
-    _ensure_dir(runtime)
+    _ensure_dir(runtime, "the torch shim's per-project runtime root")
     real_home = env.get("REAL_HOME") or env.get("HOME") or os.path.expanduser("~")
     env.setdefault("REAL_HOME", real_home)
     env["JITTOR_TORCH_PROJECT_ROOT"] = os.fspath(project)
@@ -363,7 +416,8 @@ def prepare_import_environment(
         _set_env_dir(env, name, runtime / subdir)
     if local_home and not is_truthy(env.get("JITTOR_TORCH_KEEP_HOME")):
         env["HOME"] = env.get("JITTOR_TORCH_HOME", os.fspath(runtime / "home"))
-        _ensure_dir(env["HOME"])
+        _ensure_dir(env["HOME"], "HOME for this process; "
+                                "JITTOR_TORCH_KEEP_HOME=1 keeps the real one")
     _set_env_dir(
         env,
         "TMPDIR",

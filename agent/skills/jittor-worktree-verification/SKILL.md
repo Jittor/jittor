@@ -172,6 +172,24 @@ stash 的 message 形如 `On <分支>: <你写的 -m 文本>` 或 `WIP on <分�
 
 **所以万一非要 stash，也一定要 `-m "<任务编号>"`**——没有 message 的话事后分不清哪条是自己的。
 
+## 跑套件期间不要改源码
+
+pytest 是**边跑边 import** 的：模块在第一次被用到时才加载。整套 `tests/compat/torch`
+要 15–25 分钟，这期间你对 `python/jittor/**` 的任何一次写入，都会被后面才 import 的
+测试读到——包括你用来做「修前失败」验证的 `git checkout --` 与 `git apply`。
+
+实测：一次 `tests/compat/torch` 在后台跑着，我在中途改了两个 shim 文件、又
+checkout 回去、再 apply 回来，结果是 **373 failed / 563 passed**；同一棵树静止不动
+重跑是 **1 failed / 943 passed**。那 373 条与改动毫无关系，全是半截源码造成的假失败。
+
+所以：
+
+- **后台跑套件时，工作区必须静止。** 要么等它跑完，要么先把要做的编辑做完再启动。
+- 「修前失败 / 修后通过」的 patch 对拉（`git diff > $TMPDIR/x.patch` → `checkout --`
+  → 跑 → `git apply`）**只能在没有后台套件时做**。
+- 看到「大面积、跨文件、与改动无关」的失败，第一反应先问「刚才这棵树动过吗」，
+  再去查缓存损坏或并发。静止重跑一次比读 373 条 traceback 快得多。
+
 ## 改了 C++ 之后
 
 改 `python/jittor/src/**` 或 `python/jittor/extern/**` 之后，**每个新进程**都要重编，

@@ -1,5 +1,6 @@
 import importlib.machinery
 import os
+import shutil
 import pathlib
 import sys
 import tempfile
@@ -765,6 +766,171 @@ class TestTorchBootstrap(unittest.TestCase):
             importlib.import_module("torch.utils.definitely_missing_submodule")
         self.assertLess(time.time() - start, 1.0)
         self.assertTrue(hasattr(torch, "utils"))
+
+
+class TestShimSysPathOwnership(unittest.TestCase):
+    """Only directories this layer owns may precede the standard library.
+
+    ``runtime.enable()`` used to insert the *project* directory at
+    ``sys.path[0]``, ahead of the standard library and of Jittor's own package
+    root. A project holding a file named after a stdlib module -- ``types.py``
+    and ``copy.py`` are the ones seen in practice, and Jittor imports both --
+    then broke the interpreter from the moment ``enable()`` ran, with a
+    traceback that pointed anywhere but at the shim.
+    """
+
+    #: A stdlib module nothing in this repository imports, so shadowing it in a
+    #: path search here cannot disturb anything else.
+    SHADOWED = "colorsys"
+
+    def setUp(self):
+        from jittor.compat.shim import preflight
+
+        self.preflight = preflight
+        self.saved_path = list(sys.path)
+        self.directory = tempfile.mkdtemp(dir=str(_TEST_STATE_ROOT))
+        pathlib.Path(self.directory, self.SHADOWED + ".py").write_text(
+            "MARKER = 'project copy'\n", encoding="utf-8")
+
+    def tearDown(self):
+        sys.path[:] = self.saved_path
+        shutil.rmtree(self.directory, ignore_errors=True)
+
+    def _resolved_origin(self):
+        # PathFinder answers from sys.path alone, so nothing has to be
+        # imported or evicted from sys.modules to see which copy wins.
+        spec = importlib.machinery.PathFinder.find_spec(self.SHADOWED, sys.path)
+        return pathlib.Path(spec.origin).resolve()
+
+    def test_a_prepended_directory_shadows_the_standard_library(self):
+        # Not a wish, a demonstration: this is what the old code did to the
+        # project directory, and why it may only be used for our own dirs.
+        self.preflight.prepend_sys_path(self.directory)
+        self.assertEqual(self._resolved_origin().parent,
+                         pathlib.Path(self.directory).resolve())
+
+    def test_an_appended_directory_does_not(self):
+        self.preflight.append_sys_path(self.directory)
+        self.assertNotEqual(self._resolved_origin().parent,
+                            pathlib.Path(self.directory).resolve())
+
+    def test_an_appended_directory_is_still_importable(self):
+        name = "jittor_shim_path_probe"
+        pathlib.Path(self.directory, name + ".py").write_text(
+            "VALUE = 7\n", encoding="utf-8")
+        self.assertIsNone(
+            importlib.machinery.PathFinder.find_spec(name, sys.path))
+        self.preflight.append_sys_path(self.directory)
+        spec = importlib.machinery.PathFinder.find_spec(name, sys.path)
+        self.assertIsNotNone(spec)
+
+    def test_appending_is_idempotent(self):
+        self.preflight.append_sys_path(self.directory)
+        self.preflight.append_sys_path(self.directory)
+        self.assertEqual(sys.path.count(self.directory), 1)
+
+    def test_enable_appends_the_project_and_prepends_only_its_own_dirs(self):
+        source = pathlib.Path(
+            sys.modules["jittor"].__file__).resolve().parents[1]
+        calls = []
+
+        def record_prepend(path, after=None):
+            calls.append(("prepend", os.fspath(path)))
+
+        def record_append(path):
+            calls.append(("append", os.fspath(path)))
+
+        from jittor.compat.shim import runtime as shim_runtime
+
+        with mock.patch.object(shim_runtime, "prepend_sys_path", record_prepend), \
+                mock.patch.object(shim_runtime, "append_sys_path", record_append), \
+                mock.patch.object(shim_runtime, "prepare_import_environment") as prepare, \
+                mock.patch.object(shim_runtime, "_deploy_torch_shim"), \
+                mock.patch.object(shim_runtime, "_write_build_sitecustomize"), \
+                mock.patch.object(shim_runtime, "_preload_jittor_cores", return_value=()), \
+                mock.patch.object(shim_runtime, "scan_extension_dirs", return_value=[]), \
+                mock.patch.object(shim_runtime, "_ensure_dir",
+                                  side_effect=lambda path, purpose=None: pathlib.Path(path)):
+            prepare.return_value = types.SimpleNamespace(
+                project_root=self.directory,
+                runtime_root=os.path.join(self.directory, "runtime"))
+            try:
+                shim_runtime.enable(project_root=self.directory,
+                                    build_extensions=False,
+                                    auto_scan_extensions=False,
+                                    configure_cuda=False,
+                                    verbose=False)
+            except Exception:
+                # enable() goes on to install the whole torch surface; the
+                # ordering decision has already been recorded by then.
+                pass
+
+        prepended = [path for kind, path in calls if kind == "prepend"]
+        appended = [path for kind, path in calls if kind == "append"]
+        self.assertIn(os.fspath(source), prepended)
+        self.assertNotIn(self.directory, prepended)
+        self.assertIn(self.directory, appended)
+
+
+@unittest.skipIf(os.geteuid() == 0, "root ignores directory permissions")
+class TestRuntimeDirectoryDiagnostics(unittest.TestCase):
+    """A shim directory it cannot create must say so, and say how to move it."""
+
+    HINTS = ("JITTOR_TORCH_CACHE_ROOT", "JITTOR_TORCH_RUNTIME_ROOT",
+             "JITTOR_TORCH_SHIM=0")
+
+    def setUp(self):
+        self.directory = pathlib.Path(
+            tempfile.mkdtemp(dir=str(_TEST_STATE_ROOT)))
+
+    def tearDown(self):
+        for path in sorted(self.directory.rglob("*"), reverse=True):
+            path.chmod(0o700)
+        self.directory.chmod(0o700)
+        shutil.rmtree(self.directory, ignore_errors=True)
+
+    def _assert_actionable(self, message, target):
+        self.assertIn(str(target), message)
+        for hint in self.HINTS:
+            self.assertIn(hint, message)
+
+    def test_creating_under_a_read_only_parent_names_the_shim_and_the_way_out(self):
+        from jittor.compat.shim import preflight
+
+        readonly = self.directory / "readonly"
+        readonly.mkdir()
+        readonly.chmod(0o500)
+        target = readonly / "runtime"
+        with self.assertRaises(PermissionError) as caught:
+            preflight._ensure_dir(target, "the torch shim's runtime root")
+        message = str(caught.exception)
+        self._assert_actionable(message, target)
+        self.assertIn("torch shim's runtime root", message)
+        # The bare errno message is what used to be all the user got.
+        self.assertNotEqual(message, "[Errno 13] Permission denied: %r" % str(target))
+
+    def test_an_existing_but_unwritable_directory_is_refused_too(self):
+        from jittor.compat.shim import preflight
+
+        target = self.directory / "existing"
+        target.mkdir()
+        target.chmod(0o500)
+        with self.assertRaises(PermissionError) as caught:
+            preflight._ensure_dir(target, "the deployed torch shim")
+        self._assert_actionable(str(caught.exception), target)
+
+    def test_import_time_preparation_reports_an_unwritable_home(self):
+        from jittor.compat.shim import preflight
+
+        home = self.directory / "home"
+        home.mkdir()
+        home.chmod(0o500)
+        environ = {"HOME": os.fspath(home)}
+        with self.assertRaises(PermissionError) as caught:
+            preflight.prepare_import_environment(
+                argv=["-c"], environ=environ, force=True, configure_cuda=False)
+        for hint in self.HINTS:
+            self.assertIn(hint, str(caught.exception))
 
 
 if __name__ == "__main__":
