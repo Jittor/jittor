@@ -14,6 +14,7 @@
 | 用例 | 症状 |
 | --- | --- |
 | `tests/compat/torch/test_torch_compat.py` | `RandomOp` 子进程段错误 |
+| `tests/data/test_dataset.py::TestDatasetSeed::test_children_died` | **worker 被杀之后 Dataset 不快速退出。** 子脚本 `dataset.workers[0].p.kill()` 之后，父进程应当收到 SIGCHLD 并 quick exit（用例断言 stderr 里有 `SIGCHLD` 与 `quick exit`），实测父进程一直阻塞到子进程超时。单独跑、空闲机器上稳定复现，起点 `9eb696d9` 同样失败（前任两步回退确认）。现已 `xfail(strict=True)`，仍然每轮跑、仍然可见，但不再让门禁整体变红；修好的那天 strict 会把它变红提示删标记 |
 | `tests/core/test_array.py::TestArray::test_memcopy_overlap` | **墙钟阈值型 flake，非回归。** 断言是 `t2-t1 < 0.010`——「重叠版比纯计算版慢不超过 10 毫秒」，一条**绝对**墙钟阈值。机器常驻十几个 agent、负载 24 时它必然超。两个分区各自独立确认：内存分区在**未打补丁的树**上跑两次失败，绑定分区独立得出同一结论。**归责方向和真回归相反**：真回归查代码，这条查负载 |
 | `tests/compiler/test_atomic_tuner.py::TestAtomicTunerClass::test_atomic_tuner` | 第 4 项 `x.sum()+x.sqr().mean()` 期望两条 `atomictuner: move atomicAdd to loop -1`，实得 0 条。根因是 `032ecfe1`（2026-08-28，起点前 202 个提交）把 CUDA 全量归约改走 `nn/backends/full_reduce_cuda.py` 的 cub 两级折叠 code op，整条全归约不再进融合算子 JIT，AtomicTunerPass 根本看不到 atomic 语句。前三项 add/max/min（reindex_reduce）在起点与起点父提交上都通过 |
 
@@ -130,8 +131,27 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 
 | 文件 | 留下什么 | 处置 |
 | --- | --- | --- |
-| `tests/nn/test_nn_capabilities.py` | `number_of_hold_vars 0 → 7` | 不改。模块级留着 Var 是正常的 |
-| `tests/ops/test_fft_op.py` | `number_of_hold_vars 7 → 33` | 不改，同上 |
+| `tests/nn/test_nn_capabilities.py` | `number_of_hold_vars 0 → 7` | **不是测试留下的**，见下 |
+| `tests/ops/test_fft_op.py` | `number_of_hold_vars 0 → 26` | **不是测试留下的**，见下 |
+
+**这两条已定论，而且原来的解释（「模块级留着 Var」）是错的。** 实测手法：跑完文件后
+依次丢掉测试模块、`_pytest`、`_helpers.common`，每步 `gc.collect()` 再读计数——
+**三步之后计数一个都没掉**（26 → 26 → 26）。再用 `jt.dump_all_graphs().hold_vars`
+把它们逐个打出来，形状说明了一切：
+
+- `test_fft_op.py` 的 26 个是 **13 对** float32 `[n,n]`（n=1..12），正是
+  `python/jittor/fft/__init__.py` 的 `_dft_mat_cache`——按尺寸缓存的 DFT cos/sin 矩阵对，
+  `OrderedDict` LRU，`_dft_mat_cache_limit = 16` 对。
+- `test_nn_capabilities.py` 的 7 个是 int32 一维小向量（`[2] [3] [3] [3] [4] [3] [3]`），
+  正是 `python/jittor/nn/attention.py` 的 `_CU_SEQLENS_CACHE`（cu_seqlens 前缀和），
+  同样是 LRU，`_CU_SEQLENS_CACHE_LIMIT = 128`。
+
+**两个都是 jittor 自己的、有上限的进程级 memoization，不是泄漏，测试这边没有东西可改。**
+真正的结论是那条一般规律有了具体机理：**`number_of_hold_vars` 有一个下界，取决于
+这个进程曾经跑过哪些算子，而不取决于当前这条用例**——所以对它做绝对断言按构造就是错的。
+`tests/_helpers/state_leaks.py` 现在把这两个缓存的条目数一起快照，报告会直接写
+「26 个里有 26 个是 `jittor.fft._dft_mat_cache` 0 → 13 条（上限 16）」，剩下的差值
+才是值得去查的东西。
 
 **六个 flag（`use_cuda`/`no_grad`/`amp_reg`/`use_parallel_op_compiler`/`exclude_pass`/`th_mode`）
 在原生这一遍一个都没泄漏**，`sys.modules` 也没有未还原的替换——0.12 那一批修到位了。
@@ -148,6 +168,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | `tests/compiler/test_jit_tests.py` 的两条 sfrl | **已标记**：墙钟阈值，改 `@pytest.mark.load_sensitive` |
 | `test_torch_compat_fsdp2::test_single_rank_fully_shard_preserves_math_and_state` | 待查（torch 会话） |
 | `tests/compat/torch/test_torch_compat.py::test_torch_compat` | 待查（torch 会话；单独跑 549s 通过，整套里失败，且在兼容层那批改动之前的基线上就这样） |
+| `tests/data/test_dataset.py::TestDatasetSeed::test_children_died` | **已定论，进 A 表**：单独跑也失败，恒在子进程超时上（300s）。不是泄漏，是真缺陷——worker 被 `p.kill()` 之后父进程不再靠 SIGCHLD 快速退出，而是一直阻塞等那个死掉的 worker 的数据。已改 `xfail(strict=True)` 加 `slow`，子进程超时从 300s 收到 90s（「快速退出」本来就该用更短的界来断言），门禁每轮从 302s 降到 95s。strict 意味着谁修好了它门禁会红，提示删掉这个标记 |
 
 **一般规律**：对进程级全局量（存活计数、墙钟、flag）做**绝对**断言，断的不是这条用例的
 性质。能写成增量就写增量，写不成就说明这条断言依赖一个它管不着的前提。

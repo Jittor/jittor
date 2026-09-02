@@ -47,6 +47,47 @@ _COUNTERS = (
     "number_of_lived_ops",
 )
 
+#: Process-level caches *inside jittor* that legitimately hold Vars, as
+#: ``(module, cache attribute, limit attribute, Vars per entry)``.
+#:
+#: Every one of these makes ``number_of_hold_vars`` rise and stay risen, and
+#: none of them is the test file's doing. Two whole-tree surveys reported them
+#: as leaks and both were read as "the test module kept a Var", which is wrong
+#: in a way that matters: there is nothing to fix in the test. The measurement
+#: that settled it -- ``jt.dump_all_graphs().hold_vars`` after dropping the test
+#: module, pytest and ``_helpers.common`` -- showed the count unchanged, and the
+#: held Vars were pairs of float32 [n,n] (DFT cos/sin matrices) and int32
+#: cumulative-sequence-length vectors. Both caches are LRU with a stated limit,
+#: so the floor they raise is bounded, not a leak.
+#:
+#: The consequence is the rule this survey exists to teach: **an absolute
+#: assertion on a global counter is wrong by construction**, because the floor
+#: depends on which operators the process has ever run, not on the test.
+BOUNDED_VAR_CACHES = (
+    ("jittor.fft", "_dft_mat_cache", "_dft_mat_cache_limit", 2),
+    ("jittor.nn.attention", "_CU_SEQLENS_CACHE", "_CU_SEQLENS_CACHE_LIMIT", 1),
+)
+
+
+def _bounded_cache_sizes():
+    """``{name: (entries, vars, limit)}`` for the caches above, if imported."""
+    sizes = {}
+    for module_name, attribute, limit_attribute, per_entry in BOUNDED_VAR_CACHES:
+        module = sys.modules.get(module_name)
+        if module is None:
+            continue
+        cache = getattr(module, attribute, None)
+        if cache is None:
+            continue
+        try:
+            entries = len(cache)
+        except TypeError:
+            continue
+        limit = getattr(module, limit_attribute, None)
+        sizes["%s.%s" % (module_name, attribute)] = (
+            entries, entries * per_entry, limit)
+    return sizes
+
 
 def _jittor():
     """The runtime, only if this session already imported it.
@@ -82,6 +123,7 @@ def snapshot(collect=True):
     return {
         "counters": counters,
         "flags": flags,
+        "caches": _bounded_cache_sizes(),
         "modules": {name: id(module) for name, module in list(sys.modules.items())},
     }
 
@@ -91,10 +133,20 @@ def differences(before, after):
     if not before or not after:
         return []
     report = []
+    explained, notes = _cache_growth(before, after)
     for name, value in sorted(after["counters"].items()):
         previous = before["counters"].get(name)
-        if previous is not None and previous != value:
-            report.append("%s %s -> %s" % (name, previous, value))
+        if previous is None or previous == value:
+            continue
+        line = "%s %s -> %s" % (name, previous, value)
+        # Say what is jittor's own bounded memoisation and what is left over.
+        # The residual is the only part anyone should go looking for.
+        if name in ("number_of_hold_vars", "number_of_lived_vars") and explained:
+            residual = (value - previous) - explained
+            line += " -- %d of %d is %s%s" % (
+                explained, value - previous, "; ".join(notes),
+                "" if residual <= 0 else "; %d unexplained" % residual)
+        report.append(line)
     for name, value in sorted(after["flags"].items()):
         previous = before["flags"].get(name)
         if previous is not None and previous != value:
@@ -106,3 +158,18 @@ def differences(before, after):
             # imported module and did not put the original back.
             report.append("sys.modules[%r] was replaced and not restored" % name)
     return report
+
+
+def _cache_growth(before, after):
+    """How many of the new Vars are jittor's own bounded caches warming up."""
+    explained = 0
+    notes = []
+    for name, (entries, held, limit) in sorted(after.get("caches", {}).items()):
+        was_entries, was_held, _limit = before.get("caches", {}).get(
+            name, (0, 0, limit))
+        if held <= was_held:
+            continue
+        explained += held - was_held
+        notes.append("%s %d -> %d entries (bounded at %s)" % (
+            name, was_entries, entries, limit))
+    return explained, notes

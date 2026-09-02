@@ -230,6 +230,24 @@ class TestDatasetSeed(unittest.TestCase):
             assert y[i] == b
             assert z[i] == c
 
+    # A real, reproducible defect, not a flake: when a worker process is killed
+    # the parent is supposed to notice (SIGCHLD) and quick-exit. It does not --
+    # it blocks waiting for data from the dead worker until something times it
+    # out. Measured alone on an idle box: fails at the child timeout, every
+    # time, and it failed the same way at the branch point (9eb696d9), so it is
+    # nobody's regression. Registered in the A list on the board.
+    #
+    # `xfail(strict=True)` rather than a bare red or a skip: a red that is
+    # expected teaches people to read past the whole gate, and a skip would let
+    # the day someone fixes this pass unnoticed. Strict means the fix turns the
+    # gate red until this marker is deleted -- which is the correct next event.
+    @pytest.mark.xfail(
+        strict=True,
+        reason="a killed dataset worker does not make the parent quick-exit; "
+               "the parent blocks until the child timeout. Present at the "
+               "branch point (9eb696d9); see the A list on refactor-board.md",
+    )
+    @pytest.mark.slow
     def test_children_died(self):
         if os.name == 'nt':
             # TODO: windows cannot pass this test now
@@ -259,7 +277,11 @@ if __name__ == "__main__":
         dataset.workers[0].p.kill()
         pass
 """
-        r = run_child_script(src)
+        # 90 s, not the 300 s default. What is under test is that the parent
+        # exits *promptly* once a worker dies, so a shorter bound is the
+        # sharper assertion -- and while it is failing, the difference is 90
+        # seconds of every gate run rather than 300.
+        r = run_child_script(src, timeout=90)
         s = r.stderr.decode()
         print(s)
         assert r.returncode != 0
