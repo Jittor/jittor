@@ -311,7 +311,10 @@ NCCL_TESTS = ("tests/distributed/test_fsdp2_nccl.py",)
 NOX_STATE_ROOT.mkdir(parents=True, exist_ok=True)
 nox.options.envdir = str(NOX_STATE_ROOT / "envs")
 nox.options.error_on_missing_interpreters = True
-nox.options.stop_on_first_error = True
+# Not stop_on_first_error: a gate exists to report what is broken, and stopping
+# at the first failing session reports one failure per run. Finding the second
+# one then costs another full run -- for the CPU gate, most of an hour (0.15).
+nox.options.stop_on_first_error = False
 nox.options.sessions = [
     "lint",
     "format",
@@ -435,12 +438,6 @@ def _source_copy(destination):
     shutil.copytree(str(REPO_ROOT), str(destination), symlinks=True, ignore=ignore_generated)
 
 
-def _pytest_invocations(session, defaults):
-    if session.posargs:
-        return (tuple(session.posargs),)
-    return tuple((target,) for target in defaults)
-
-
 def _mode_env(env, args):
     """The environment for one pytest invocation, with its process mode stated.
 
@@ -460,19 +457,31 @@ def _mode_env(env, args):
     return scoped
 
 
+def _by_process_mode(targets):
+    """Group targets into the two process modes, order preserved.
+
+    Torch compatibility mode is process-global, so the two groups cannot share
+    an interpreter. Within a group they can -- and should: one pytest process
+    per path pays the interpreter start and the jittor import once per path,
+    and a per-path loop stops at the first failing path, so a gate reports one
+    failure per run instead of all of them.
+    """
+    native, torch = [], []
+    for target in targets:
+        path = str(target).split("::", 1)[0]
+        (torch if path.startswith(TORCH_MODE_PATHS) else native).append(target)
+    return native, torch
+
+
 def _run_pytest(session, defaults, env, runner=None):
-    python = runner or "python"
-    for args in _pytest_invocations(session, defaults):
-        session.run(
-            python,
-            "-m",
-            "pytest",
-            "-v",
-            "--timeout=600",
-            *args,
-            env=_mode_env(env, args),
-            external=runner is not None,
-        )
+    if session.posargs:
+        _run_pytest_once(session, tuple(session.posargs),
+                         _mode_env(env, session.posargs), runner, timeout=600)
+        return
+    for group in _by_process_mode(defaults):
+        if group:
+            _run_pytest_once(session, tuple(group), _mode_env(env, group),
+                             runner, timeout=600)
 
 
 def _run_pytest_once(session, args, env, runner=None, timeout=900):
@@ -1621,12 +1630,14 @@ def npu(session):
         "assert x.numpy().tolist() == [[19.0, 22.0], [43.0, 50.0]]"
     )
     _run_with_cann(session, python, ("-c", probe), env)
-    for args in _pytest_invocations(session, NPU_TESTS):
+    groups = ((tuple(session.posargs),) if session.posargs
+              else tuple(group for group in _by_process_mode(NPU_TESTS) if group))
+    for group in groups:
         _run_with_cann(
             session,
             python,
-            ("-m", "pytest", "-v", "--timeout=600", *args),
-            env,
+            ("-m", "pytest", "-v", "--timeout=600", *group),
+            _mode_env(env, group),
         )
 
 
