@@ -253,6 +253,7 @@ def _manual_probes_are_enabled(config):
 
 
 def pytest_collection_modifyitems(config, items):
+    _snapshot_selected_files(config)
     network_enabled = _network_is_enabled() or config.getoption("--network")
     manual_enabled = _manual_probes_are_enabled(config)
     for item in items:
@@ -449,24 +450,38 @@ def _files_that_executed_nothing():
     )
 
 
-def _files_that_collected_nothing(config):
-    """Selected test files that produced no test at all.
+#: Files the selection covered, snapshotted when collection ended.
+_SELECTED_FILES = set()
 
-    Distinct from "everything skipped": a file that generates zero cases never
-    reaches a skip either, so it is invisible in every count pytest prints.
+
+def _snapshot_selected_files(config):
+    """What the selection covers, recorded at collection time.
+
+    Deliberately not recomputed at the end: on a shared machine the tree moves
+    under a long run (other people land commits), and a file that appeared an
+    hour after collection would otherwise be reported as "collected 0 tests" --
+    a finding about nothing.
     """
     try:
         from _helpers.gate_scope import selected_files
 
         arguments = [str(argument) for argument in config.args]
         if not arguments:
-            return []
-        selected = selected_files(TEST_ROOT.parent, arguments + [
+            return
+        _SELECTED_FILES.update(selected_files(TEST_ROOT.parent, arguments + [
             "--ignore=" + item for item in getattr(config.option, "ignore", []) or []
-        ])
+        ]))
     except Exception:
-        return []
-    return sorted(selected - _FILES_WITH_ITEMS)
+        pass
+
+
+def _files_that_collected_nothing():
+    """Selected test files that produced no test at all.
+
+    Distinct from "everything skipped": a file that generates zero cases never
+    reaches a skip either, so it is invisible in every count pytest prints.
+    """
+    return sorted(_SELECTED_FILES - _FILES_WITH_ITEMS)
 
 
 def _execution_exemptions():
@@ -485,8 +500,11 @@ def _requires_execution():
 
 
 def _report_files_that_executed_nothing(terminalreporter, config):
+    if getattr(config.option, "collectonly", False):
+        # --collect-only executes nothing on purpose; every file would be listed.
+        return
     silent = _files_that_executed_nothing()
-    empty = _files_that_collected_nothing(config)
+    empty = _files_that_collected_nothing()
     if not silent and not empty:
         return
     exemptions = _execution_exemptions()
@@ -522,8 +540,10 @@ def pytest_sessionfinish(session, exitstatus):
     if not _requires_execution():
         return
     exemptions = _execution_exemptions()
+    if getattr(session.config.option, "collectonly", False):
+        return
     unexplained = [
-        path for path in _files_that_executed_nothing() + _files_that_collected_nothing(session.config)
+        path for path in _files_that_executed_nothing() + _files_that_collected_nothing()
         if path not in exemptions
     ]
     if unexplained:

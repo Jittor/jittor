@@ -57,13 +57,13 @@ any other test that spawns a jittor process:
 """
 import os
 from pathlib import Path
-import subprocess
-import sys
 import tempfile
 import time
 import unittest
 
 import jittor as jt
+
+from _helpers.child_process import run_python_child
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -103,27 +103,23 @@ sys.exit(p.returncode if p.returncode >= 0 else 128 - p.returncode)
 def _run_import(env_overrides, timeout=_IMPORT_TIMEOUT_S, code=_CHILD):
     """Run `code` in a subprocess. Returns (returncode, output, seconds)."""
     env = dict(os.environ)
-    # A bare `python -c` does NOT pick up this worktree: jittor is usually
-    # installed editable and its .pth points at whatever tree was installed.
-    env["PYTHONPATH"] = os.pathsep.join(
-        [os.fspath(_REPO_ROOT / "python")]
-        + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
     env["use_nccl"] = "1"
     env.pop("JT_NCCL_ROOTINFO_FILE", None)
     env.update(env_overrides)
     start = time.time()
+    # inherit=False: this environment had JT_NCCL_ROOTINFO_FILE *removed*, and
+    # the helper merges onto os.environ, which would put it straight back.
+    # The helper also pins PYTHONPATH to this checkout -- a bare `python -c`
+    # picks up whatever the editable install points at instead.
     try:
-        done = subprocess.run(
-            [sys.executable, "-c", _RUNNER, code],
-            env=env, cwd=os.fspath(_REPO_ROOT),
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            timeout=timeout)
-    except subprocess.TimeoutExpired as e:
-        out = e.output.decode() if isinstance(e.output, bytes) else (e.output or "")
+        done = run_python_child(
+            ["-c", _RUNNER, code], env=env, inherit=False,
+            cwd=_REPO_ROOT, merge_stderr=True, timeout=timeout)
+    except AssertionError as expired:
         raise AssertionError(
             "import jittor did not return within {}s -- the rendezvous is "
             "hanging, which is exactly the defect this test exists for.\n"
-            "{}".format(timeout, out[-3000:]))
+            "{}".format(timeout, expired))
     return done.returncode, done.stdout, time.time() - start
 
 

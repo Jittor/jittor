@@ -216,12 +216,16 @@ class TestZeroInitResidual(unittest.TestCase):
 
         A Bottleneck without a downsample is then exactly relu(x) on its input.
         """
-        jt.flags.use_cuda = 0
-        block = resnet.Bottleneck(256, 64)
-        jt.init.zero_(block.bn3.weight)
-        block.eval()
-        x = jt.array(np.random.RandomState(7).rand(2, 256, 8, 8).astype("float32"))
-        out = block(x).numpy()
+        # flag_scope, not a bare assignment: use_cuda is process-global, and a
+        # test that turns it off for everything after it is how a later case
+        # ends up silently verified on the wrong device (0.12).
+        with jt.flag_scope(use_cuda=0):
+            block = resnet.Bottleneck(256, 64)
+            jt.init.zero_(block.bn3.weight)
+            block.eval()
+            x = jt.array(
+                np.random.RandomState(7).rand(2, 256, 8, 8).astype("float32"))
+            out = block(x).numpy()
         np.testing.assert_allclose(out, np.maximum(x.numpy(), 0), atol=1e-5,
                                    rtol=1e-5)
 

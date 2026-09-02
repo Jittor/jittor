@@ -7,6 +7,14 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
+"""A hand-run MNIST + MPI example, not a test.
+
+It was called ``test_mpi_in_py.py`` and its only test class is commented out at
+the bottom, so pytest collected zero cases from it -- and a file that collects
+zero cases is reported exactly like one that passes. Renamed so the tree says
+what it is; run it with ``python tests/distributed/mpi_in_py_example.py``.
+"""
+
 import unittest
 import os, sys
 import jittor as jt
