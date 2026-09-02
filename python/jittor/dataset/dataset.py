@@ -34,7 +34,9 @@ import time
 import jittor_utils as jit_utils
 
 dataset_root = os.path.join(jit_utils.home(), ".cache", "jittor", "dataset")
-mp_log_v = os.environ.get("mp_log_v", 0) 
+# int() like the CHECK_MEMORY line below: os.environ.get returns a *string*,
+# and "0" is truthy, so mp_log_v=0 used to switch the worker chatter ON.
+mp_log_v = int(os.environ.get("mp_log_v", "0"))
 mpi = jt.mpi
 if _has_pil:
     img_open_hook = HookTimer(Image, "open")

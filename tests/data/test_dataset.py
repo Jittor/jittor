@@ -348,5 +348,105 @@ if __name__ == "__main__":
         assert r.returncode == 0
         
 
+TINY_DATASET_WITH_FLAG_SRC = """
+import os
+import numpy as np
+import jittor as jt
+from jittor.dataset import Dataset
+import jittor.dataset.dataset as dsmod
+
+print("MP_LOG_V_TRUTHY=%s" % bool(dsmod.mp_log_v))
+
+class Tiny(Dataset):
+    def __init__(self):
+        super().__init__()
+        self.set_attrs(total_len=8, batch_size=4, shuffle=False, num_workers=2)
+    def __getitem__(self, k):
+        return np.array([k], dtype="float32")
+
+if __name__ == "__main__":
+    for batch in Tiny():
+        pass
+    print("DONE")
+"""
+
+
+# ---------------------------------------------------------------------------
+#  helpers for tests that need a fresh interpreter
+# ---------------------------------------------------------------------------
+def run_child_script(src, extra_env=None, timeout=300):
+    """Run ``src`` in a fresh interpreter that imports THIS tree's jittor.
+
+    pytest puts ``python/`` on its own ``sys.path`` (``pyproject.toml``'s
+    ``pythonpath``) but does not export ``PYTHONPATH``, so a bare subprocess
+    would import whatever jittor is installed in the environment instead of
+    the tree under test -- silently, and the test would prove nothing.
+    """
+    import subprocess as sp
+    import sys
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[2]
+    fname = os.path.join(jt.flags.cache_path, "dataset_child_%d.py" % os.getpid())
+    with open(fname, "w") as f:
+        f.write(src)
+    env = dict(os.environ)
+    parts = [str(repo_root / "python")]
+    if env.get("PYTHONPATH"):
+        parts.append(env["PYTHONPATH"])
+    env["PYTHONPATH"] = os.pathsep.join(parts)
+    if extra_env:
+        env.update(extra_env)
+    return sp.run([sys.executable, fname], stdout=sp.PIPE, stderr=sp.PIPE,
+                  env=env, timeout=timeout)
+
+
+class TestChildScriptHelper(unittest.TestCase):
+    def test_child_imports_this_tree(self):
+        from pathlib import Path
+        r = run_child_script(
+            "import jittor, os\n"
+            "print('JITTOR_AT=' + os.path.dirname(os.path.dirname(jittor.__file__)))\n")
+        out = r.stdout.decode()
+        assert r.returncode == 0, r.stderr.decode()[-3000:]
+        line = [l for l in out.splitlines() if l.startswith("JITTOR_AT=")]
+        assert line, out
+        expected = str(Path(__file__).resolve().parents[2] / "python")
+        self.assertEqual(line[0][len("JITTOR_AT="):], expected)
+
+
+class TestWorkerLogFlag(unittest.TestCase):
+    """``mp_log_v`` is a debug switch. ``os.environ.get(name, 0)`` returns the
+    string ``"0"``, which is truthy, so ``mp_log_v=0`` used to turn the worker
+    chatter ON -- the opposite of what it says."""
+
+    SRC = TINY_DATASET_WITH_FLAG_SRC
+
+    def _run(self, value):
+        env = {} if value is None else {"mp_log_v": value}
+        r = run_child_script(self.SRC, extra_env=env)
+        out = r.stdout.decode()
+        assert r.returncode == 0, out[-2000:] + r.stderr.decode()[-2000:]
+        assert "DONE" in out, out[-2000:]
+        truthy = [l for l in out.splitlines() if l.startswith("MP_LOG_V_TRUTHY=")]
+        assert truthy, out
+        return truthy[0].endswith("True"), out
+
+    def test_zero_turns_the_log_off(self):
+        truthy, out = self._run("0")
+        self.assertFalse(truthy, "mp_log_v=0 must be falsy")
+        assert "recv buffer" not in out, out[-2000:]
+
+    def test_unset_turns_the_log_off(self):
+        truthy, out = self._run(None)
+        self.assertFalse(truthy, "unset mp_log_v must be falsy")
+        assert "recv buffer" not in out, out[-2000:]
+
+    def test_one_turns_the_log_on(self):
+        truthy, out = self._run("1")
+        self.assertTrue(truthy, "mp_log_v=1 must be truthy")
+        assert "recv buffer" in out, out[-2000:]
+
+
 if __name__ == "__main__":
     unittest.main()
