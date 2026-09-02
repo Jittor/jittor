@@ -338,45 +338,29 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
     sig_write(thread_name.c_str());
     sig_write("'\n");
 #if defined(__linux__) && !defined(_WIN32)
-    // Recover the REAL faulting PC from the ucontext and dladdr-symbolize it.
-    // backtrace() (the [bt] dump below) can't unwind past the signal frame, so it only
-    // shows this handler -- naming the actual crashing function here makes segfault
-    // reports actionable (#11 hardening/diagnostics), independent of gdb being present.
-    if (arg) {
-        ucontext_t* uc = (ucontext_t*)arg;
+    // Recover the faulting PC from the ucontext. backtrace() cannot unwind past
+    // the signal frame, so this is the only thing that names where the fault
+    // actually happened -- but turning it into a symbol needs dladdr, which
+    // takes the loader lock and can allocate. Both the addresses and the
+    // symbolization now go to a process forked before the crash.
+    {
         void* fault_pc = nullptr;
-        #if defined(__aarch64__)
-            fault_pc = (void*)uc->uc_mcontext.pc;
-        #elif defined(__x86_64__) && defined(REG_RIP)
-            fault_pc = (void*)uc->uc_mcontext.gregs[REG_RIP];
-        #endif
-        void* caller_pc = nullptr;     // return addr -> the CALLER (revealed when PC==0,
-        #if defined(__aarch64__)       // i.e. a jump through a null function pointer)
-            caller_pc = (void*)uc->uc_mcontext.regs[30];   // x30 / LR
-        #endif
-        auto sym = [](const char* tag, void* pc) {
-            if (!pc) return;
-            Dl_info info;
-            // dladdr itself is NOT async-signal-safe -- it takes the loader
-            // lock and can allocate. It stays for now because it is the only
-            // thing that names the crashing function without gdb; moving
-            // symbolization to a pre-forked helper is the second half of 2.20.
-            // Its *output* at least no longer goes through stdio.
-            if (dladdr(pc, &info) && info.dli_sname) {
-                sig_write(tag); sig_write(" "); sig_write_ptr(pc);
-                sig_write(" in "); sig_write(info.dli_sname);
-                sig_write(" @ ");
-                sig_write(info.dli_fname ? info.dli_fname : "?");
-                sig_write("\n");
-            } else {
-                sig_write(tag); sig_write(" "); sig_write_ptr(pc);
-                sig_write(" (unresolved)\n");
-            }
-        };
+        void* caller_pc = nullptr;
+        if (arg) {
+            ucontext_t* uc = (ucontext_t*)arg;
+            #if defined(__aarch64__)
+                fault_pc = (void*)uc->uc_mcontext.pc;
+                // return addr -> the CALLER, revealed when PC==0, i.e. a jump
+                // through a null function pointer
+                caller_pc = (void*)uc->uc_mcontext.regs[30];   // x30 / LR
+            #elif defined(__x86_64__) && defined(REG_RIP)
+                fault_pc = (void*)uc->uc_mcontext.gregs[REG_RIP];
+            #endif
+        }
         if (!fault_pc)
             sig_write("Fault PC is NULL (jump through a null function pointer)\n");
-        sym("Fault PC", fault_pc);
-        sym("Caller (LR)", caller_pc);
+        if (!exited)
+            print_trace_from_signal(signal, fault_pc, caller_pc);
     }
 #endif
     if (protected_page && 
@@ -391,11 +375,6 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
     if (!exited) {
         exited = 1;
         if (signal == SIGSEGV) {
-            // print_trace forks gdb/addr2line from inside the handler. Same
-            // story as dladdr above: it is the second half of 2.20, kept for
-            // now because losing it would lose the only stack trace.
-            if (thread_name.size() == 0)
-                print_trace();
             sig_write("Segfault, exit\n");
         } else {
             sig_write("Get signal ");
@@ -477,6 +456,11 @@ int register_sigaction() {
     }
     sigaction(SIGQUIT, &sa, NULL);
     // sigaction(SIGABRT, &sa, NULL);
+    // Fork the symbolizer now, while the heap is healthy and before anything
+    // has gone wrong. Deliberately inside every guard above: a process that
+    // opted out of jittor's handlers, or that MPI/Jupyter/Ray owns, gets no
+    // extra child either.
+    start_trace_helper();
 #endif
     return 0;
 }

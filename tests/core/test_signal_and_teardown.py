@@ -197,5 +197,61 @@ class TestSignalHandlerStaysAsyncSignalSafe(unittest.TestCase):
         ]
         self.assertEqual(missing, [], "log.cc is missing: %s" % missing)
 
+
+class TestSymbolizerHelper(unittest.TestCase):
+    """Symbolization happens in a process forked before the crash.
+
+    Resolving a stack trace means reading the loader's tables and allocating.
+    Doing that from the signal handler is how a crash inside the allocator
+    becomes a hang instead of a report -- and a hung process looks exactly like
+    a slow one. So the handler only writes raw addresses to a helper that was
+    forked while the heap was still healthy.
+    """
+
+    def test_crash_report_comes_from_the_helper_with_modules_resolved(self):
+        child = run_child_script(
+            "import ctypes\n"
+            "import sys\n"
+            "import jittor as jt\n"
+            "print('READY', flush=True)\n"
+            "sys.stderr.flush()\n"
+            "ctypes.string_at(0)\n",
+            merge_stderr=True,
+            crash_isolated=True,
+            timeout=300,
+        )
+        output = child.stdout.decode("utf8", "replace")
+        self.assertIn("READY", output)
+        self.assertNotEqual(child.returncode, 0, output)
+        # Only the helper prints this header.
+        self.assertIn("[bt] crash report for pid", output)
+        # Frames come back as module+offset, which is what `addr2line -e` takes.
+        # The helper reads the *parent's* /proc/<pid>/maps rather than its own:
+        # it forked at import time and jittor dlopens JIT modules continuously
+        # afterwards, so its own address space is missing exactly the modules a
+        # crash is most likely to be in.
+        self.assertRegex(output, r"\[bt\] #\d+\s+0x[0-9a-f]{16} in \S+\+0x[0-9a-f]+")
+
+    def test_a_clean_exit_stays_prompt_and_quiet(self):
+        # The helper waits on a pipe. The first version of this let it hold the
+        # process open at exit: two copies of these statics (jit_utils_core and
+        # jittor_core) mean a second helper inherits the first one's parent-side
+        # fd, FD_CLOEXEC does not cover fork, so the pipe never reaches EOF and
+        # the wait never ended. Every jittor process hung on exit -- this fix's
+        # own failure mode. Shutdown is an explicit message now.
+        child = run_child_script(
+            "import jittor as jt\n"
+            "jt.array([1.0, 2.0]).sync()\n"
+            "print('CLEAN-EXIT', flush=True)\n",
+            merge_stderr=True,
+            timeout=300,
+        )
+        output = child.stdout.decode("utf8", "replace")
+        self.assertEqual(child.returncode, 0, output)
+        self.assertIn("CLEAN-EXIT", output)
+        # And no "a child process was killed by signal" line either: stopping
+        # the helper must not look like a crash to the SIGCHLD reporter.
+        self.assertNotIn("killed by signal", output)
+
 if __name__ == "__main__":
     unittest.main()

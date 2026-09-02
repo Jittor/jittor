@@ -10,6 +10,11 @@
 namespace jittor {
 
 void print_trace();
+// Signal-handler-safe: hands the frames to a process forked before
+// the crash. See tracer.cc.
+void print_trace_from_signal(int signal, void* fault_pc, void* caller_pc);
+void start_trace_helper();
+void stop_trace_helper();
 void breakpoint();
 
 } // jittor
