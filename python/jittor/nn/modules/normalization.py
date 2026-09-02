@@ -3,7 +3,11 @@
 import jittor as jt
 from jittor import Module, init
 
-from ..functional.normalization import fp32_guard
+from ..functional.normalization import (
+    _batch_norm_eval,
+    _batch_norm_train,
+    _unbiased,
+)
 from ... import _arg_policy
 
 
@@ -41,61 +45,33 @@ class BatchNorm(Module):
         object.__setattr__(self.num_batches_tracked, "persistent", False)
 
     def execute(self, x):
+        # Parameters and buffers live here; the arithmetic lives in
+        # nn.functional.normalization, which nn.functional.batch_norm also
+        # calls. This used to be a second transcription, and its two training
+        # branches did not even agree with each other: with MPI the statistics
+        # came from E[x^2]-E[x]^2 and the output was a scale-shift of raw x
+        # differentiated by composite autodiff, without MPI they came from the
+        # two-pass formula and went through the stable closed-form backward.
+        # Whether the job was distributed decided the numbers and the gradient.
         dims = [0] + list(range(2, x.ndim))
-        if self.is_train:
-            if self.track_running_stats:
-                self.num_batches_tracked.update(
-                    self.num_batches_tracked + 1
-                )
-            xmean = jt.mean(x, dims=dims)
-            x2mean = jt.mean(x * x, dims=dims)
-            sync = self.sync and jt.in_mpi
-            if sync:
-                xmean = xmean.mpi_all_reduce("mean")
-                x2mean = x2mean.mpi_all_reduce("mean")
-
-            xvar = (x2mean - xmean * xmean).maximum(0.0)
-            if sync:
-                weight = self.weight / jt.sqrt(xvar + self.eps)
-                bias = self.bias - xmean * weight
-                norm_x = x * weight.broadcast(x, dims) + bias.broadcast(x, dims)
-            else:
-                fast = jt.nn._batch_norm_cuda(
-                    x, self.weight, self.bias, self.eps
-                )
-                if fast is not None:
-                    norm_x = fast
-                else:
-                    xhat = jt.nn._ln_normalize(x, dims, self.eps)
-                    if self.affine:
-                        shape = [1, self.num_features] + [1] * (x.ndim - 2)
-                        norm_x = xhat * self.weight.reshape(shape) + self.bias.reshape(shape)
-                    else:
-                        norm_x = xhat
-
-            self.running_mean.update(
-                self.running_mean + (xmean.reshape((-1,)) - self.running_mean) * self.momentum
-            )
-            count = 1
-            for dim in dims:
-                count *= x.shape[dim]
-            if sync:
-                count *= jt.world_size
-            run_var = xvar * (count / (count - 1)) if count > 1 else xvar
-            self.running_var.update(
-                self.running_var + (run_var.reshape((-1,)) - self.running_var) * self.momentum
-            )
-            return norm_x
-
-        fast = jt.nn._batch_norm_eval_cuda(
-            x, self.weight, self.bias,
-            self.running_mean, self.running_var, self.eps,
-        )
-        if fast is not None:
-            return fast
-        weight = self.weight / jt.sqrt(self.running_var + self.eps)
-        bias = self.bias - self.running_mean * weight
-        return x * weight.broadcast(x, dims) + bias.broadcast(x, dims)
+        if not self.is_train:
+            return _batch_norm_eval(
+                x, dims, self.running_mean, self.running_var,
+                self.weight, self.bias, self.eps)
+        sync = self.sync and jt.in_mpi
+        norm_x, xmean, xvar = _batch_norm_train(
+            x, dims, self.weight, self.bias, self.eps, sync=sync)
+        if self.track_running_stats:
+            self.num_batches_tracked.update(self.num_batches_tracked + 1)
+        world_size = jt.world_size if sync else 1
+        self.running_mean.update(
+            self.running_mean
+            + (xmean.reshape((-1,)) - self.running_mean) * self.momentum)
+        self.running_var.update(
+            self.running_var
+            + (_unbiased(xvar, x, dims, world_size).reshape((-1,))
+               - self.running_var) * self.momentum)
+        return norm_x
 
 
 BatchNorm1d = BatchNorm
@@ -141,12 +117,8 @@ class InstanceNorm(Module):
         self.bias = init.constant((num_features,), "float32", 0.0) if affine else 0.0
 
     def execute(self, x):
-        dims = list(range(2, x.ndim))
-        xhat = jt.nn._ln_normalize(x, dims, self.eps)
-        if not self.affine:
-            return xhat
-        shape = [1, self.num_features] + [1] * len(dims)
-        return xhat * self.weight.reshape(shape) + self.bias.reshape(shape)
+        return jt.nn.instance_norm(x, weight=self.weight, bias=self.bias,
+                                   eps=self.eps)
 
 
 InstanceNorm1d = InstanceNorm
@@ -174,21 +146,12 @@ class LayerNorm(Module):
             init.constant(normalized_shape, "float32", 0.0) if elementwise_affine and bias else 0.0
         )
 
-    @fp32_guard
     def execute(self, x):
-        dims = [-i for i in range(len(self.normalized_shape), 0, -1)]
-        weight = 1.0 if self.weight is None else self.weight
-        bias = 0.0 if self.bias is None else self.bias
-        fast = jt.nn._layer_norm_cuda(
-            x, self.normalized_shape, weight, bias, self.eps
-        )
-        if fast is not None:
-            return fast
-        fast = jt.nn._layer_norm_no_grad_cuda(x, self.normalized_shape, weight, bias, self.eps)
-        if fast is not None:
-            return fast
-        xhat = jt.nn._ln_normalize(x, dims, self.eps)
-        return xhat * weight + bias
+        # fp32_guard lives on the functional; applying it here too would cast
+        # twice.
+        return jt.nn.layer_norm(x, self.normalized_shape, self.weight,
+                                self.bias, self.eps,
+                                self.elementwise_affine)
 
     def reset_parameters(self):
         if isinstance(self.weight, jt.Var):
@@ -212,18 +175,10 @@ class GroupNorm(Module):
         self.bias = init.constant((num_channels,), "float32", 0.0) if affine else 0.0
 
     def execute(self, x):
-        batch = x.shape[0]
-        channels = self.num_channels
-        assert channels % self.num_groups == 0, (
-            "GroupNorm: num_channels (%s) must be divisible by num_groups (%s)"
-            % (channels, self.num_groups)
-        )
-        fast = jt.nn._group_norm_cuda(x, self.num_groups, self.weight, self.bias, self.eps)
-        if fast is not None:
-            return fast
-        grouped = x.reshape((batch, self.num_groups, channels // self.num_groups, -1))
-        xhat = jt.nn._ln_normalize(grouped, [2, 3], self.eps).reshape(x.shape)
-        if not self.affine:
-            return xhat
-        shape = [1, channels] + [1] * (x.ndim - 2)
-        return xhat * self.weight.reshape(shape) + self.bias.reshape(shape)
+        if x.shape[1] != self.num_channels:
+            raise ValueError(
+                "GroupNorm: expected %s channels (num_channels), but got %s; "
+                "input shape %s"
+                % (self.num_channels, x.shape[1], tuple(x.shape)))
+        return jt.nn.group_norm(x, self.num_groups, self.weight, self.bias,
+                                self.eps)

@@ -301,3 +301,74 @@ assert (x.numpy() == before).all()
 
 顺带：`Var.setitem` 本身是就地的（`y = x.setitem(...)` 之后 `x` 被改，且 `y is x` 为假），
 所有转发到 setitem 的 API 默认都会继承这个语义。要 out-of-place 就得先 `clone()`。
+
+## 11. 「同一概念的多份实现」怎么证明它们不等价
+
+这一类任务（5.17/5.18 家族）最容易走偏的地方是：**把两份实现跑同一个用例、都绿，就当它们等价**。
+不是。那只说明这个用例选在了它们重合的地方。
+
+**判据：默认参数与良态输入下，两份实现往往恰好相等。要专门去找让它们分开的那个输入。**
+
+实测例子，全部来自 2026-09-03 的 5.17：
+
+| 两份实现 | 在什么输入下相等（藏住） | 在什么输入下分开（暴露） |
+|---|---|---|
+| BatchNorm 的 sync 分支（`E[x²]-E[x]²`）与非 sync 分支（两遍法 `mean((x-mean)²)`） | mean 0 / std 1：相对误差 < 1e-5 | **mean 100 / std 0.05**：相对误差约 7e-2。判据是 `var/mean²` 掉到 float32 的 1e-7 以下，两个平方项就在它们仅有的 7 位上相等，差出来的是舍入噪声 |
+| `jt.pool.AvgPool2d` 与 `jt.nn.AvgPool2d` | `count_include_pad=True` 或 `padding=0`：完全相同 | **`padding>0` 且 `count_include_pad=False`**：旧实现根本没读这个 flag |
+| `Pool.__init__` 的 `count_include_pad and padding != 0` | `ceil_mode=False`：该字段压根没人读，标量 0 与元组 (0,0) 走同一条路 | **`ceil_mode=True`**：才有代码去读它，元组恒真、标量 0 恒假的坑才发作 |
+| `nn.Conv2d.execute` 与 `nn.functional.conv2d` | 任何合法输入：数值相同 | **非法输入**（3 维、通道数不符、输出尺寸 ≤ 0）：一个抛 ValueError，另一个报 unpack 错或撞 C++ 断言 |
+
+**做法**：写对拍用例之前，先问「这两份实现在哪个参数上分叉」，然后**沿那个参数取值**，
+而不是沿数据取值。分叉常见于：
+
+- 只在某个分支里被读到的布尔参数（`count_include_pad`、`ceil_mode`）；
+- 只在某个部署下才跑的分支（`sync`、`jt.in_mpi`、`use_cuda`）——这类最危险，
+  因为**它在开发机上永远不跑**；
+- 数值条件数（均值远大于标准差、极小方差、极大动态范围）；
+- **非法输入**：两份实现的校验往往不一样，而校验差异不会被任何数值对拍发现。
+
+## 12. 「两个拼写必须是同一份实现」的断言强度怎么选
+
+合并重复实现之后，正确的回归断言是**逐位相等**（`assert_array_equal`），不是 `allclose`：
+它们如果真是同一张图，就该逐位相同；容差会放过「又抄了一份、数值接近」的回归。
+
+但 CUDA 上有三处例外，实测（不要靠猜，按下面的顺序量一遍）：
+
+1. **前向逐位相等**：CPU 与 CUDA 都成立，这是最强也最稳的断言，优先靠它。
+2. **反向在 CUDA 上不逐位可复现**。同一个调用跑两次，梯度最后一位就可能不同。已量到的：
+   - 深度可分离 conv 的权重梯度（反向用 atomicAdd 累加）——**不可复现**；
+   - 普通与分组 conv、`_ln_normalize` 系列——**可复现**。
+   所以「CUDA 反向一律给容差」是偷懒，「CUDA 反向一律逐位」会 flaky。**写一条用例把
+   哪个 kernel 不可复现量出来**，用它给容差背书，并让它在 kernel 变确定时失败提醒收紧。
+3. **一边走融合 kernel、另一边走通用路径时，连中间统计量都不逐位相等**。BN 的
+   `sync=False` 在 CUDA 上取融合 kernel，于是同一个 `jt.mean` 因为图的融合方式不同，
+   归约顺序也不同，均值差 6e-8。这时 CPU 用逐位、CUDA 用容差，并在注释里写明
+   「CPU 上它们是同一张图，逐位相等才是能抓住回归的那条断言」。
+
+## 13. 只在 MPI 下才跑的分支，怎么在单机上测
+
+`sync = self.sync and jt.in_mpi` 这种分支在开发机上永远是 False，于是它的缺陷
+只能在分布式作业里暴露。不要为此去起 mpirun——**把 world size 伪造成 1**：
+
+```python
+identity = lambda self, op: self
+original_reduce = getattr(jt.Var, "mpi_all_reduce", None)
+original_in_mpi = jt.compile_extern.in_mpi
+try:
+    jt.Var.mpi_all_reduce = identity      # 一个 rank 的 all-reduce 就是恒等
+    jt.compile_extern.in_mpi = True       # 见下
+    assert jt.in_mpi
+    ...                                   # 跑 sync 分支
+finally:
+    ...                                   # 逐个还原
+```
+
+这同时也是**判据本身**：一个 rank 的 all-reduce 不改变任何值，所以 sync 分支与非 sync
+分支必须给出相同的输出与相同的梯度。它们不同，就说明 sync 只是名义上「多做一次通信」，
+实际上是**另一份实现**。
+
+⚠ **`jt.in_mpi` / `jt.rank` / `jt.world_size` 必须写 `jt.compile_extern.*`，不能写 `jt.*`。**
+它们由 `compile_extern.distributed_state_getattr` 通过模块级 `__getattr__` 提供；给
+`jt.in_mpi` 赋值会在 `jittor.__dict__` 里留下一个条目，**永久遮蔽那个访问器**，
+后面所有读到的都是这个陈旧副本（6.B15 的提交说明写明了这一点）。
+

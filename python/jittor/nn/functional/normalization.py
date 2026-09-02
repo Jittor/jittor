@@ -7,27 +7,145 @@ import jittor as jt
 from ... import _arg_policy
 
 
-def batch_norm(x, running_mean, running_var, weight=1, bias=0, training=False, momentum=0.1, eps=1e-05):
-    dims = [0]+list(range(2,x.ndim))
+@lru_cache(maxsize=128)
+def _bn_function_cls(dims, eps):
+    # Normalize x with statistics supplied from OUTSIDE, so one body serves both
+    # local statistics and statistics all-reduced across MPI ranks. The module
+    # used to carry two: the sync branch scaled raw x by `weight/sqrt(var+eps)`
+    # and let composite autodiff differentiate through it, the non-sync branch
+    # called _ln_normalize -- different variance formula, different expression,
+    # different backward. Whether MPI was initialised decided the numbers.
+    #
+    # The grads below are the closed form written per input. Chained through
+    # `mean` and `var` they reproduce rstd*(g - mean(g) - xhat*mean(g*xhat))
+    # exactly, and every intermediate stays O(1)-scaled -- no (var+eps)^-1.5
+    # times raw x that has to catastrophically cancel. When the statistics were
+    # all-reduced, the chain runs back through mpi_all_reduce, which is what
+    # makes the cross-rank gradient right.
+    class _BN(jt.Function):
+        def execute(self, x, mean, var):
+            rstd = jt.rsqrt(var + eps).broadcast(x, dims)
+            xhat = (x - mean.broadcast(x, dims)) * rstd
+            self.xhat = xhat
+            self.rstd = rstd
+            return xhat
+
+        def grad(self, g):
+            xhat, rstd = self.xhat, self.rstd
+            return (
+                g * rstd,                                   # d/dx
+                -(g * rstd).sum(dims),                      # d/dmean
+                -0.5 * (g * xhat * rstd * rstd).sum(dims),  # d/dvar
+            )
+    return _BN
+
+
+def _bn_normalize(x, mean, var, dims, eps):
+    cls = _bn_function_cls(tuple(dims), float(eps))
+    return cls.apply(x, mean, var)
+
+
+def _batch_statistics(x, dims, sync):
+    """Mean and variance over ``dims``, optionally reduced across MPI ranks.
+
+    Two passes on purpose. ``E[x^2] - E[x]^2`` -- what the sync branch used --
+    cancels catastrophically as soon as the mean is large next to the standard
+    deviation, and it was used *only* under MPI, so the error appeared when the
+    job was distributed and nowhere else.
+
+    The variance is reduced after the mean, so the all-reduced value is the true
+    global two-pass variance and a world of one reproduces the single-process
+    numbers exactly. That is two collectives, the same count as the old
+    ``(mean, E[x^2])`` pair.
+    """
+    xmean = jt.mean(x, dims=dims)
+    if sync:
+        xmean = xmean.mpi_all_reduce("mean")
+    deviation = x - xmean.broadcast(x, dims)
+    xvar = jt.mean(deviation * deviation, dims=dims)
+    if sync:
+        xvar = xvar.mpi_all_reduce("mean")
+    return xmean, xvar
+
+
+def _affine(xhat, weight, bias, num_features, ndim):
+    """Per-channel scale and shift, skipped entirely when it is the identity."""
+    weight_is_var = isinstance(weight, jt.Var)
+    bias_is_var = isinstance(bias, jt.Var)
+    if not weight_is_var and not bias_is_var:
+        if weight == 1 and bias == 0:
+            return xhat
+        return xhat * weight + bias
+    shape = [1, num_features] + [1] * (ndim - 2)
+    if weight_is_var:
+        weight = weight.reshape(shape)
+    if bias_is_var:
+        bias = bias.reshape(shape)
+    return xhat * weight + bias
+
+
+def _batch_norm_train(x, dims, weight, bias, eps, sync=False):
+    """Training-mode batch norm. Returns ``(y, mean, var)``.
+
+    The single body behind ``nn.BatchNorm.execute`` and
+    ``nn.functional.batch_norm(training=True)``; the caller decides what to do
+    with the statistics (the module updates its running buffers, the functional
+    updates the buffers it was handed).
+    """
+    xmean, xvar = _batch_statistics(x, dims, sync)
+    if not sync:
+        # Fused CUDA kernel for the local case. It computes its own statistics,
+        # so it cannot serve the all-reduced ones; it is a backend accelerator
+        # for this same function, pinned against it by
+        # tests/nn/test_norm_unification.py. functional.batch_norm never
+        # reached it before -- training=True went down the generic path only.
+        fast = jt.nn._batch_norm_cuda(x, weight, bias, eps)
+        if fast is not None:
+            return fast, xmean, xvar
+    xhat = _bn_normalize(x, xmean, xvar, dims, eps)
+    return _affine(xhat, weight, bias, x.shape[1], x.ndim), xmean, xvar
+
+
+def _batch_norm_eval(x, dims, running_mean, running_var, weight, bias, eps):
+    """Eval-mode batch norm: normalize with the tracked statistics."""
+    fast = jt.nn._batch_norm_eval_cuda(
+        x, weight, bias, running_mean, running_var, eps)
+    if fast is not None:
+        return fast
+    scale = weight / jt.sqrt(running_var + eps)
+    shift = bias - running_mean * scale
+    return x * scale.broadcast(x, dims) + shift.broadcast(x, dims)
+
+
+def _unbiased(var, x, dims, world_size=1):
+    """Bessel-corrected variance for the running buffer, as torch stores it."""
+    count = world_size
+    for dim in dims:
+        count *= x.shape[dim]
+    return var * (count / (count - 1)) if count > 1 else var
+
+
+def batch_norm(x, running_mean, running_var, weight=1, bias=0, training=False,
+               momentum=0.1, eps=1e-05):
+    """Batch normalization, ``torch.nn.functional.batch_norm``'s signature.
+
+    Shares its body with :class:`jittor.nn.BatchNorm`; the module holds the
+    parameters and the running buffers and nothing else. Before that the two
+    were separate transcriptions and this one never reached the fused CUDA
+    kernel in training mode.
+    """
+    dims = [0] + list(range(2, x.ndim))
+    tracking = isinstance(running_mean, jt.Var) and isinstance(running_var, jt.Var)
     if training:
-        # compute batch statistics (torch F.batch_norm training path; used by timm)
-        xmean = x.mean(dims)
-        x2mean = (x*x).mean(dims)
-        xvar = (x2mean - xmean*xmean).maximum(0.0)
-        w = weight / jt.sqrt(xvar + eps)
-        b = bias - xmean * w
-        norm_x = x * w.broadcast(x, dims) + b.broadcast(x, dims)
-        # update running stats in-place (unbiased var), if real Vars were passed
-        if isinstance(running_mean, jt.Var) and isinstance(running_var, jt.Var):
-            n = x.numel() / x.shape[1]
-            run_var = xvar * (n/(n-1)) if n > 1 else xvar
-            running_mean.update(running_mean + (xmean.reshape((-1,)) - running_mean)*momentum)
-            running_var.update(running_var + (run_var.reshape((-1,)) - running_var)*momentum)
+        norm_x, xmean, xvar = _batch_norm_train(x, dims, weight, bias, eps)
+        if tracking:
+            running_mean.update(
+                running_mean + (xmean.reshape((-1,)) - running_mean) * momentum)
+            running_var.update(
+                running_var
+                + (_unbiased(xvar, x, dims).reshape((-1,)) - running_var) * momentum)
         return norm_x
-    w = weight / jt.sqrt(running_var+eps)
-    b = bias - running_mean * w
-    norm_x = x * w.broadcast(x, dims) + b.broadcast(x, dims)
-    return norm_x
+    return _batch_norm_eval(x, dims, running_mean, running_var, weight, bias, eps)
 
 
 def instance_norm(x,
@@ -66,11 +184,7 @@ def instance_norm(x,
     xhat = jt.nn._ln_normalize(x, dims, eps)   # stable custom backward, see _ln_normalize
     weight = 1.0 if weight is None else weight
     bias = 0.0 if bias is None else bias
-    if isinstance(weight, jt.Var):
-        weight = weight.reshape([1, x.shape[1]] + [1]*len(dims))
-    if isinstance(bias, jt.Var):
-        bias = bias.reshape([1, x.shape[1]] + [1]*len(dims))
-    return xhat * weight + bias
+    return _affine(xhat, weight, bias, x.shape[1], x.ndim)
 
 
 @lru_cache(maxsize=128)
@@ -126,11 +240,7 @@ def group_norm(x,
         return fast
     xg = x.reshape((N, num_groups, C//num_groups, -1))
     xhat = jt.nn._ln_normalize(xg, [2,3], eps).reshape(output_shape)  # stable custom backward
-    if isinstance(weight, jt.Var):
-        weight = weight.reshape([1, C] + [1]*(len(output_shape)-2))
-    if isinstance(bias, jt.Var):
-        bias = bias.reshape([1, C] + [1]*(len(output_shape)-2))
-    return xhat * weight + bias
+    return _affine(xhat, weight, bias, C, len(output_shape))
 
 
 def fp32_guard(func):
