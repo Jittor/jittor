@@ -169,8 +169,9 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
                 f'i6*{stride[2]}-{padding[2]}+i9*{dilation[2]}', # Did+KDid
             ])
         xx.compile_options = {"G":G}
-        # w: [oc, CpG, Kh, Kw, Kd]
-        ww = weight.reindex([N, G, oc//G, CpG, oh, ow, od, Kh, Kw, Kd], [
+        # w: [oc, CpG, Kd, Kh, Kw]; the broadcast shape must match xx's axis
+        # order [N,G,oc//G,CpG,od,oh,ow,Kd,Kh,Kw], so i7/i8/i9 are Kd/Kh/Kw.
+        ww = weight.reindex([N, G, oc//G, CpG, od, oh, ow, Kd, Kh, Kw], [
                 f'i1*{oc//G}+i2',
                 'i3',
                 'i7',
