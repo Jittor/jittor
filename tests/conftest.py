@@ -34,56 +34,26 @@ import pytest
 from _helpers.process_modes import TORCH_MODE_PATHS
 
 
-#: Whether this session selected whole directories rather than named files.
-SELECTION_IS_BROAD = False
-
-
-def _select_torch_mode_for_test_process():
-    """Keep native and Torch compatibility semantics in separate processes."""
-
-    global SELECTION_IS_BROAD
-
-    # Oracle tests preload an independent binary PyTorch and intentionally
-    # keep Jittor native.  Installing the Jittor Torch shim in that same
-    # process would try to replace an already-owned ``torch`` module graph.
-    if os.environ.get("REAL_TORCH_SITE", "").strip():
-        return
-
-    repo_root = Path(__file__).resolve().parents[1]
-    selected = []
-    for arg in sys.argv[1:]:
-        if not arg or arg.startswith("-"):
-            continue
-        raw_path = arg.split("::", 1)[0]
-        path = Path(raw_path)
-        if not path.exists():
-            continue
-        try:
-            normalized = path.resolve().relative_to(repo_root).as_posix()
-        except ValueError:
-            normalized = path.resolve().as_posix()
-        selected.append(normalized.rstrip("/"))
-    broad_roots = (".", "tests")
-    SELECTION_IS_BROAD = not selected or any(path in broad_roots for path in selected)
-    if SELECTION_IS_BROAD:
-        # A broad selection runs the native suite. Torch mode is process-global
-        # and changes lazy execution, reduction defaults and gradient
-        # semantics, so switching the whole tree into it made ordinary native
-        # tests fail. The Torch-mode paths are skipped here and covered by
-        # their own session; ``tools/run_test_suite.py`` runs both and reports
-        # a combined result.
-        return
-    if any(path.startswith(TORCH_MODE_PATHS) for path in selected):
-        os.environ.setdefault("JITTOR_TORCH_SHIM", "1")
-
-
-_select_torch_mode_for_test_process()
-
-
 def _torch_mode_is_active():
+    """Which of the two process modes this session runs in.
+
+    ``JITTOR_TORCH_SHIM`` decides, and nothing else does. It used to be decided
+    by reading ``sys.argv``: a selection that mentioned a Torch-mode path
+    switched the *whole process* into Torch mode, so adding one directory to a
+    command changed the semantics of every other directory in it -- lazy
+    execution, reduction defaults and gradient meaning all differ between the
+    two. The same tests then passed or failed depending on how they were
+    invoked, and ``-k``, xdist workers and IDE runners each produced a
+    different answer from the same source.
+    """
     module = sys.modules.get("torch")
     if module is not None and hasattr(module, "_torch_compat_install_context"):
         return True
+    # Oracle sessions preload an independent binary PyTorch and stay native:
+    # installing the Jittor shim there would try to replace a module graph
+    # something else already owns.
+    if os.environ.get("REAL_TORCH_SITE", "").strip():
+        return False
     value = os.environ.get("JITTOR_TORCH_SHIM", "").strip().lower()
     return value not in ("", "0", "false", "no", "off")
 
@@ -217,6 +187,31 @@ def pytest_ignore_collect(collection_path, config):
     return None
 
 
+def _torch_mode_paths_named_on_the_command_line(config):
+    """Selected paths that belong to the other process mode.
+
+    ``pytest_ignore_collect`` only filters what collection *walks into*; a path
+    named on the command line is collected whatever it says. So a native
+    session pointed straight at a Torch-mode file used to import it natively
+    and fail somewhere confusing. Reading the selection here decides nothing --
+    the mode is already fixed by ``JITTOR_TORCH_SHIM`` -- it only lets the
+    session say what is wrong instead of failing on a module-scope import.
+    """
+    named = []
+    for argument in config.args:
+        raw = str(argument).split("::", 1)[0]
+        path = Path(raw)
+        if not path.exists():
+            continue
+        try:
+            relative = path.resolve().relative_to(TEST_ROOT.parent).as_posix()
+        except ValueError:
+            continue
+        if relative.rstrip("/").startswith(TORCH_MODE_PATHS):
+            named.append(relative)
+    return named
+
+
 def pytest_sessionstart(session):
     found = [name for name in _LEGACY_SELECTION if name in os.environ]
     if found:
@@ -224,10 +219,38 @@ def pytest_sessionstart(session):
         raise pytest.UsageError(
             "legacy jittor.test selection variables are unsupported; " + guidance
         )
+    if not _torch_mode_is_active():
+        named = _torch_mode_paths_named_on_the_command_line(session.config)
+        if named:
+            raise pytest.UsageError(
+                "these paths run under Torch compatibility mode: %s. The mode is "
+                "process-global -- it changes lazy execution, reduction defaults "
+                "and what a gradient means -- so it is stated, not inferred from "
+                "the command line: re-run with JITTOR_TORCH_SHIM=1. Mixing them "
+                "into a native selection is what made the same test pass or fail "
+                "depending on which other directory was named alongside it."
+                % ", ".join(sorted(set(named))[:4])
+            )
+
+
+def _manual_probes_are_enabled(config):
+    """Manual probes are opt-in, by a variable rather than by how you invoked.
+
+    They used to be enabled by "the selection was not a whole directory", which
+    made the same file behave differently under ``pytest tests`` and
+    ``pytest tests/integration`` -- and, worse, applied the decision *before*
+    some of the markers were attached, so ``test_notebooks.py`` was never
+    actually deselected and cost a whole-tree run 537 seconds.
+    """
+    value = os.environ.get("JITTOR_TEST_MANUAL", "").strip().lower()
+    if value in ("1", "true", "yes", "on"):
+        return True
+    return "manual" in (getattr(config.option, "markexpr", "") or "")
 
 
 def pytest_collection_modifyitems(config, items):
     network_enabled = _network_is_enabled() or config.getoption("--network")
+    manual_enabled = _manual_probes_are_enabled(config)
     for item in items:
         _FILES_WITH_ITEMS.add(_relative_to_repo(item.fspath))
         try:
@@ -237,17 +260,23 @@ def pytest_collection_modifyitems(config, items):
         parts = set(relative)
         for marker in _backend_markers(item, relative):
             item.add_marker(getattr(pytest.mark, marker))
+        # Every marker this file attaches is attached before anything reads
+        # them. The previous order attached `manual` to the notebook smokes
+        # *after* deciding whether to skip manual probes, so the decision was
+        # made against markers that did not exist yet.
         if "manual" in parts or "system" in parts:
             item.add_marker(pytest.mark.manual)
-        if SELECTION_IS_BROAD and item.get_closest_marker("manual") is not None:
-            # The marker is documented as "must be selected explicitly". Some of
-            # these probes drive Jupyter kernels or spawn their own processes and
-            # do not survive being run after a thousand other tests have already
-            # used the runtime, so a whole-tree run deselects them and a named
-            # path still runs them.
+        if relative[-1] == "test_notebooks.py":
+            item.add_marker(pytest.mark.slow)
+            item.add_marker(pytest.mark.manual)
+        if not manual_enabled and item.get_closest_marker("manual") is not None:
+            # These probes drive Jupyter kernels or spawn their own processes
+            # and do not survive being run after a thousand other tests have
+            # already used the runtime.
             item.add_marker(
                 pytest.mark.skip(
-                    reason="manual probe; select its path explicitly to run it"
+                    reason="manual probe; set JITTOR_TEST_MANUAL=1 or pass "
+                    "-m manual to run it"
                 )
             )
         if item.get_closest_marker("network") is not None and not network_enabled:
@@ -257,9 +286,7 @@ def pytest_collection_modifyitems(config, items):
                     "JITTOR_TEST_NETWORK=1"
                 )
             )
-        if relative[-1] == "test_notebooks.py":
-            item.add_marker(pytest.mark.slow)
-            item.add_marker(pytest.mark.manual)
+
 
 
 def _input_generator():

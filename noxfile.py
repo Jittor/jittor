@@ -27,6 +27,7 @@ try:
         native_arguments as gate_native_arguments,
         torch_arguments as gate_torch_arguments,
     )
+    from _helpers.process_modes import TORCH_MODE_PATHS  # noqa: E402
 finally:
     sys.path.remove(str(REPO_ROOT / "tests"))
 
@@ -440,6 +441,25 @@ def _pytest_invocations(session, defaults):
     return tuple((target,) for target in defaults)
 
 
+def _mode_env(env, args):
+    """The environment for one pytest invocation, with its process mode stated.
+
+    Torch compatibility mode is process-global and is now chosen by
+    ``JITTOR_TORCH_SHIM`` alone (0.13). It used to be inferred from the command
+    line, which meant a session that listed both kinds of path silently ran the
+    native ones under the shim -- and a session that listed only Torch-mode
+    paths depended on that inference to work at all.
+    """
+    paths = [str(item).split("::", 1)[0] for item in args
+             if not str(item).startswith("-")]
+    mode = "1" if any(path.startswith(TORCH_MODE_PATHS) for path in paths) else "0"
+    if env.get("JITTOR_TORCH_SHIM") == mode:
+        return env
+    scoped = env.copy()
+    scoped["JITTOR_TORCH_SHIM"] = mode
+    return scoped
+
+
 def _run_pytest(session, defaults, env, runner=None):
     python = runner or "python"
     for args in _pytest_invocations(session, defaults):
@@ -450,7 +470,7 @@ def _run_pytest(session, defaults, env, runner=None):
             "-v",
             "--timeout=600",
             *args,
-            env=env,
+            env=_mode_env(env, args),
             external=runner is not None,
         )
 
@@ -782,6 +802,10 @@ def structure(session):
     _root, env = _session_env(session, "structure")
     env.update(
         {
+            # tests/structure is a Torch-mode path (process_modes.TORCH_MODE_PATHS):
+            # several of its modules import the shim at module scope. The mode is
+            # now stated rather than guessed from the command line (0.13).
+            "JITTOR_TORCH_SHIM": "1",
             "CUDA_VISIBLE_DEVICES": "",
             "nvcc_path": "",
             "use_cuda": "0",
