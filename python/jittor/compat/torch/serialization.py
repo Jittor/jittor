@@ -382,17 +382,75 @@ def install(ctx):
             assert pid[0] == "storage", pid
             marker, key, numel = pid[1], str(pid[2]), int(pid[4])
             if key not in cache:
-                cache[key] = (zf.read(data_dir + key), marker.dtype_str, numel)
+                # The key travels with the payload so a rebuild that cannot be
+                # honoured can name the archive record it was reading.
+                cache[key] = (zf.read(data_dir + key), marker.dtype_str,
+                              numel, key)
             return cache[key]
+        def _contiguous_stride(size):
+            """The stride torch gives a freshly allocated tensor of this size."""
+            stride = [1] * len(size)
+            for i in range(len(size) - 2, -1, -1):
+                stride[i] = stride[i + 1] * max(size[i + 1], 1)
+            return tuple(stride)
+
+        def _restore_strided(arr, offset, size, stride, key):
+            """Read a tensor out of its storage the way torch described it.
+
+            torch.save writes the whole storage and records, per tensor,
+            (storage_offset, size, stride). A tensor that is a *view* -- a
+            transpose, a slice, one head of a fused weight -- is therefore a
+            non-contiguous description of a larger buffer. This used to slice
+            `arr[offset:offset+numel]` and reshape, which reads a different set
+            of elements for every such view and reports success: right shape,
+            wrong numbers, no diagnostic.
+            """
+            numel = 1
+            for s in size:
+                numel *= s
+            if stride is None:
+                stride = _contiguous_stride(size)
+            if len(stride) != len(size):
+                raise _pickle.UnpicklingError(
+                    "checkpoint storage %s describes a tensor of shape %s with "
+                    "%d strides; the two must agree."
+                    % (key, size, len(stride)))
+            if numel == 0:
+                return _np_pt.empty(size, dtype=arr.dtype)
+            # Every element the description reaches must exist in the storage.
+            last = offset
+            for extent, step in zip(size, stride):
+                if step < 0:
+                    raise _pickle.UnpicklingError(
+                        "checkpoint storage %s describes shape %s with negative "
+                        "stride %s; torch does not produce negative strides, so "
+                        "this file is not a tensor this loader can reconstruct."
+                        % (key, size, tuple(stride)))
+                last += (extent - 1) * step
+            if offset < 0 or last >= arr.size:
+                raise _pickle.UnpicklingError(
+                    "checkpoint storage %s holds %d elements, but the tensor "
+                    "saved from it (shape %s, stride %s, offset %d) reaches "
+                    "element %d. The file is truncated or does not match this "
+                    "reader; loading it would silently produce wrong weights."
+                    % (key, arr.size, size, tuple(stride), offset, last))
+            if not size:
+                return arr[offset:offset + 1].reshape(())
+            if tuple(stride) == _contiguous_stride(size):
+                return _np_pt.ascontiguousarray(
+                    arr[offset:offset + numel]).reshape(size)
+            view = _np_pt.lib.stride_tricks.as_strided(
+                arr[offset:], shape=size,
+                strides=tuple(int(s) * arr.itemsize for s in stride))
+            return _np_pt.ascontiguousarray(view)
+
         def _rebuild_tensor_v2(storage, storage_offset, size, stride,
                                requires_grad=False, backward_hooks=None, metadata=None):
-            raw, dtype_str, numel = storage
+            raw, dtype_str, numel, key = storage
             arr = _np_from_storage(raw, dtype_str, numel)
             size = tuple(int(s) for s in size)
-            n = 1
-            for s in size: n *= s
-            sub = arr[storage_offset:storage_offset + n]
-            sub = _np_pt.ascontiguousarray(sub).reshape(size) if size else sub.reshape(())
+            stride = None if stride is None else tuple(int(s) for s in stride)
+            sub = _restore_strided(arr, int(storage_offset), size, stride, key)
             return jt.array(sub)
         def _rebuild_parameter(data, requires_grad=True, backward_hooks=None, *a, **k):
             return data

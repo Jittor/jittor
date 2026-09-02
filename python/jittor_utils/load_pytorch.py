@@ -71,22 +71,78 @@ class StorageType():
     def __str__(self):
         return f'StorageType(dtype={self.dtype})'
 
-def jittor_rebuild(storage, storage_offset, size, stride, requires_grad, backward_hooks):
+def expected_stride(size):
+    """The stride torch gives a freshly allocated (contiguous) tensor of this size."""
+    stride = [1] * len(size)
+    for i in range(len(size) - 2, -1, -1):
+        stride[i] = stride[i + 1] * max(size[i + 1], 1)
+    return tuple(stride)
+
+
+def rebuild_strided(storage, storage_offset, size, stride):
+    """Read one tensor out of its storage exactly as torch described it.
+
+    torch.save writes the whole *storage* and records, per tensor,
+    (storage_offset, size, stride).  A tensor that is a view -- a transpose, a
+    slice, one head of a fused QKV weight -- is therefore a non-contiguous
+    description of a larger buffer.
+
+    This used to narrow the storage to ``[offset : offset + prod(size)]``
+    *first* and then reindex the narrowed slice with the original strides.
+    Those strides index the full storage, so every element the view reaches
+    beyond the narrowed window fell outside the source: ``reindex`` fills
+    out-of-range reads with 0.  A checkpoint saved from a non-contiguous view
+    therefore loaded with the right shape, no warning, and zeros (or plain
+    wrong values) in place of most of its weights.
+    """
+    size = tuple(int(s) for s in size)
+    storage_offset = int(storage_offset)
+    stride = expected_stride(size) if stride is None else tuple(int(s) for s in stride)
+    if len(stride) != len(size):
+        raise ValueError(
+            f"checkpoint describes a tensor of shape {size} with {len(stride)} "
+            f"strides; the two must agree")
+    numel = 1
+    for s in size:
+        numel *= s
+    # The zip format hands over a jt.Var, the legacy one a numpy array; both
+    # are 1-D storages. Slice before converting so a contiguous tensor never
+    # materializes the whole storage twice.
+    total = int(storage.numel()) if isinstance(storage, jt.Var) else int(storage.size)
+    if numel > 0:
+        # Every element the description reaches has to exist in the storage.
+        last = storage_offset
+        for extent, step in zip(size, stride):
+            if step < 0:
+                raise ValueError(
+                    f"checkpoint describes shape {size} with negative stride "
+                    f"{stride}; torch does not produce negative strides, so "
+                    f"this is not a tensor this loader can reconstruct")
+            last += (extent - 1) * step
+        if storage_offset < 0 or last >= total:
+            raise ValueError(
+                f"checkpoint storage holds {total} elements, but the tensor "
+                f"saved from it (shape {size}, stride {stride}, offset "
+                f"{storage_offset}) reaches element {last}; the file is "
+                f"truncated or does not match this loader, and loading it "
+                f"would silently produce wrong weights")
     if len(size) == 0:
-        return jt.array(storage)
-    record_size = np.prod(size)
-    expect_stride = [1]
-    for i in range(len(size)-1, 0, -1):
-        expect_stride.append(expect_stride[-1]*size[i])
-    expect_stride = tuple(expect_stride[::-1])
-    if stride is not None and stride != expect_stride:
-        if len(stride) > 1: # reshape the memory layout based on stride
-            eval_list = []
-            for idx in range(len(stride)):
-                eval_list.append(f"@e0({idx}) * i{idx}")
-            evals = "+".join(eval_list)
-            return jt.array(storage[storage_offset:storage_offset+record_size]).reindex(size, [evals], extras=[jt.array(stride)])
-    return jt.array(storage[storage_offset:storage_offset+record_size]).reshape(size)
+        # jittor has no 0-d Var; a 1-element Var is what this loader has always
+        # produced for a scalar. What matters here is that it is *this* element
+        # of the storage, not the whole storage.
+        return jt.array(storage[storage_offset:storage_offset + 1])
+    if stride == expected_stride(size):
+        return jt.array(
+            storage[storage_offset:storage_offset + numel]).reshape(size)
+    evals = " + ".join(f"@e0({idx}) * i{idx}" for idx in range(len(size)))
+    if storage_offset:
+        evals = f"{storage_offset} + " + evals
+    source = storage if isinstance(storage, jt.Var) else jt.array(storage)
+    return source.reindex(list(size), [evals], extras=[jt.array(stride)])
+
+
+def jittor_rebuild(storage, storage_offset, size, stride, requires_grad, backward_hooks):
+    return rebuild_strided(storage, storage_offset, size, stride)
 
 def jittor_rebuild_var(data, requires_grad, backward_hooks):
     v = jt.array(data)
@@ -110,30 +166,43 @@ class UnpicklerWrapper(pickle.Unpickler):  # type: ignore[name-defined]
         return super().find_class(mod_name, name)
 
 class ArrayWrapper:
-    def __init__(self, storage, stride=None, size=None, requires_grad=None):
+    """A tensor whose storage is not filled in yet.
+
+    The legacy (non-zip) format unpickles the object graph first and writes the
+    storage bytes afterwards, so a tensor cannot be materialized at rebuild
+    time. Everything needed to materialize it later is kept here --
+    ``storage_offset`` included: dropping it used to hand every view of a
+    shared storage the *start* of that storage.
+    """
+
+    def __init__(self, storage, stride=None, size=None, requires_grad=None,
+                 storage_offset=0):
         self.requires_grad = requires_grad
         self.size = size
         self.storage = storage
         self.stride = stride
+        self.storage_offset = storage_offset
 
     def __str__(self):
         return self.storage.__str__()
 
 def jittor_rebuild_direct(storage, storage_offset, size, stride, requires_grad, backward_hooks):
-    if len(size) == 0:
-        return ArrayWrapper(storage, stride=stride, size=size)
-    storage.reshape(size)
-    return ArrayWrapper(storage, stride=stride, size=size)
+    return ArrayWrapper(storage, stride=stride, size=size,
+                        storage_offset=storage_offset)
 
 def jittor_rebuild_var_direct(data, requires_grad, backward_hooks):
-    v = ArrayWrapper(storage, requires_grad=requires_grad)
-    return v
+    # A Parameter wraps a tensor that jittor_rebuild_direct has already
+    # described; keep that description and only record requires_grad. This
+    # used to read a global named `storage` that does not exist, so every
+    # legacy checkpoint holding a Parameter raised NameError here.
+    if isinstance(data, ArrayWrapper):
+        data.requires_grad = requires_grad
+        return data
+    return ArrayWrapper(data, requires_grad=requires_grad)
 
 def jittor_rebuild_direct_v0(storage, storage_offset, size, stride):
-    if len(size) == 0:
-        return ArrayWrapper(storage, stride=stride, size=size)
-    storage.reshape(size)
-    return ArrayWrapper(storage, stride=stride, size=size)
+    return ArrayWrapper(storage, stride=stride, size=size,
+                        storage_offset=storage_offset)
 
 class DirectUnpicklerWrapper(pickle.Unpickler):  # type: ignore[name-defined]
     def find_class(self, mod_name, name):
@@ -223,29 +292,33 @@ def clean_globals():
     contents = None
     prefix = ""
 
-def load_pytorch(fn_name):
-    def dfs_results(result): # dfs the result dict in case of nested state dicts.
-        if not isinstance(result, dict):
-            return result
-        for key, params in result.items():
-            if isinstance(params, dict): # recursive
-                result[key] = dfs_results(params)
-            elif isinstance(params, ArrayWrapper): # process data
-                requires_grad = params.requires_grad
-                shape = params.size
-                result[key] = jt.array(params.storage)
-                if shape is not None and len(shape) > 0:
-                    if len(params.stride) > 1: # reshape based on stride
-                        eval_list = []
-                        for idx in range(len(params.stride)):
-                            eval_list.append(f"@e0({idx}) * i{idx}")
-                        evals = "+".join(eval_list)
-                        result[key] = result[key].reindex(params.size, [evals], extras=[jt.array(params.stride)])
-                    else: # no need to reshape if only one dimension
-                        result[key] = result[key].reshape(shape)
-                if requires_grad is not None:
-                    result[key].requires_grad = requires_grad
+def materialize_wrappers(result):
+    """Turn every deferred ArrayWrapper into a Var, recursing into sub-dicts.
+
+    Runs after the legacy format's storage bytes have been read, which is the
+    earliest moment a tensor can be built.
+    """
+    if not isinstance(result, dict):
         return result
+    for key, params in result.items():
+        if isinstance(params, dict): # recursive
+            result[key] = materialize_wrappers(params)
+        elif isinstance(params, ArrayWrapper): # process data
+            requires_grad = params.requires_grad
+            if params.size is None:
+                result[key] = jt.array(params.storage)
+            else:
+                # Same reconstruction as the zip path: honour offset and
+                # stride, or say why the description cannot be honoured.
+                result[key] = rebuild_strided(
+                    params.storage, params.storage_offset,
+                    params.size, params.stride)
+            if requires_grad is not None:
+                result[key].requires_grad = requires_grad
+    return result
+
+
+def load_pytorch(fn_name):
     import jittor as jt
     global contents, deserialized_objects, loaded_storages, prefix
     loaded_storages = {}
@@ -277,7 +350,7 @@ def load_pytorch(fn_name):
             unpickler = UnpicklerWrapper(data_file,  **pickle_load_args)
             unpickler.persistent_load = persistent_load
             result = unpickler.load()
-            result = dfs_results(result)
+            result = materialize_wrappers(result)
         else:
             deserialized_objects = {}
             f = open(fn_name, "rb")
@@ -308,7 +381,7 @@ def load_pytorch(fn_name):
                 if offset is not None:
                     offset = f.tell()
             
-            result = dfs_results(result)
+            result = materialize_wrappers(result)
         clean_globals()
         return result
 
