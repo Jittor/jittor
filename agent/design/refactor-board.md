@@ -122,9 +122,9 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 0.10 | 写缓存前检查可用磁盘空间，不足时给明确错误 | 已合并 | 构建 | 73eceeaf |
 | 0.11 | 「jit_utils 已更新请重跑」改非零退出码 | 已合并 | 构建 | 7e8c7c74 |
 | 0.12 | 14 处在用例里裸赋值 `jt.flags.*` 且无 tearDown 的测试改 `flag_… | 已合并 | gates | 26a20905 |
-| 0.13 | conftest 的模式由显式环境变量决定，删除 `sys.argv` 嗅探 | 进行中 | gates |  |
+| 0.13 | conftest 的模式由显式环境变量决定，删除 `sys.argv` 嗅探 | 已合并 | gates | 5c0f2364、a4ebb31a。**日常影响**：手跑 `tests/structure`、`tests/compat/torch`、`tests/ops/test_ops.py` 等 `TORCH_MODE_PATHS` 下的路径要带 `JITTOR_TORCH_SHIM=1`，不带会得到一条指名变量的报错（而不是一次语义不对的绿）。`nox -s structure` 已经自己设了 |
 | 0.14 | `_session_env` 不再 `os.environ.copy()` | 待领 | | |
-| 0.15 | 门禁分两层 | 待领 | | |
+| 0.15 | 门禁分两层 | 进行中 | gates | 第一步已合并（去掉 `stop_on_first_error`、同模式目标合并成一次调用，一轮报出全部失败）。smoke/full 分层与 xdist 等跨用例状态泄漏清单出来再做——在知道哪些用例互相污染之前并行分片，是把一个已知问题换成一个难查的问题 |
 | 0.16 | `test_device_parity.py` 按算子分片并行，不再在 `setUpClass`… | 待领 | | |
 | 0.17 | `pyproject.toml` 的 `pythonpath` 改由 conftest 按环境变… | 已合并 | 构建 | b19d098f |
 | 0.18 | 门禁每条目断言至少执行 1 个非 skip 用例 | 进行中 | gates | ee29bee3（记账与报告已合并；`EXECUTES_NOTHING` 待全树数据填完后开 `JITTOR_TEST_REQUIRE_EXECUTION`） |
