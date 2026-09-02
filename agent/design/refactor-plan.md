@@ -338,6 +338,7 @@
 | 6.P23 | **`eigh` 的特征向量梯度在 CUDA 上错约 60%**（对 numpy 相对误差，修 6.P07 前后都复现）。一直没被发现是因为 `tests/ops/test_linalg.py::TestBUG4_2Op` 设了 `jt.flags.use_cuda=1` 且从不还原，把 CUDA 泄漏给该文件后面每一个用例——即「本该在 CPU 跑的用例其实跑在 CUDA 上，而 CUDA 结果是错的」 | — | 2026-09-02 由 6.P07 的执行者发现并复现，不在原审计里 | CUDA 与 numpy 对拍通过；顺带修掉那处 flag 泄漏（属 0.12） |
 | 6.P24 | `Pool3d.__init__` 的 `count_include_pad and padding != 0` 读的是原始参数，元组 padding 恒为真、`padding=0` 恒为假，与 torch 的 `count_include_pad` 语义不一致 | — | 2026-09-02 由 6.P04/6.P05 的执行者发现，不在原审计里 | 元组与标量 padding 各一个与 torch 对拍的用例 |
 | 6.P25 | Adan 的偏差修正仍用全局 `self.n_step`（`optim/algorithms/adan.py:68`），与 6.P14 修掉的 Adam 同一根因：`n_step` 数的是 backward 次数，梯度累积写法下指数偏 k 倍。`base.py` 的 `Optimizer._advance_step_count(pg)` 已就位，改动一行。**但要连带定一个语义**：Adan 里 `if self.n_step>0` 决定第一步算不算 `grad_diff`，jittor 现在第一步 `grad_diff = g` 而官方实现是 `0`，改偏差修正会碰到它——两件事一起想清楚再改 | 6.P14 | 2026-09-02 由 6.P14 的执行者核实后留下，不在原审计里 | 梯度累积与不累积等价；第一步数值与官方 Adan 一致或明确写出为何不同 |
+| 6.P26 | **`MaxPool3d` 的 `ceil_mode` 输出尺寸比 torch 多一个平面**（torch 的规则含「末窗完全落在 padding 内则丢弃」的修正，3D max 路径没有）。5.17 把平均池化统一到 `_avg_pool_nd` 时顺带核实到，但没有一起修：改它会改 `MaxPool3d` 的输出形状，**进而改 `MaxUnpool3d` 的默认 `output_size`**——前向编码的行宽与反解形状是一对，两者必须同改（6.P06 刚修过 unpool 的默认 `output_size`，改动要与那条对齐）。当前状态由 `tests/nn/test_pool3d.py` 里的「已知差异锁」用例钉住 | 6.P06、5.17 | 2026-09-03 由 5.17 的执行者核实后留下，不在原审计里 | 与真 torch 的 `MaxPool3d(ceil_mode=True)` 输出形状一致；`MaxUnpool3d` 往返仍然正确；已知差异锁用例改成正向断言 |
 
 ### 9.3 后端库
 

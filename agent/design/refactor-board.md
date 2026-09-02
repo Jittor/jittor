@@ -278,6 +278,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 6.P23 | eigh 的特征向量梯度在 CUDA 上错约 60% | 待领 | | |
 | 6.P24 | Pool3d 的 count_include_pad 读原始参数 | 待领 | | |
 | 6.P25 | Adan 偏差修正仍用全局 n_step；连带第一步 grad_diff 语义 | 进行中 | pyother | |
+| 6.P26 | MaxPool3d 的 ceil_mode 输出尺寸比 torch 多一个平面 | 待领 | | |
 | 6.B01 | MPI 的 int64 改 `MPI_INT64_T` | 已合并 | dist | 03518707 |
 | 6.B02 | ACL | 待领 | | |
 | 6.B03 | HCCL 宏错误时抛而非 return | 已合并 | dist | c657ab01 |
