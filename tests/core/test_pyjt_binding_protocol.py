@@ -281,6 +281,31 @@ class TestKeywordArguments(unittest.TestCase):
         with self.assertRaises(Exception):
             self.x.sum(0, dim=1)
 
+
+class TestNonStdExceptionAtTheBoundary(unittest.TestCase):
+    """A C++ exception outside the std hierarchy must not terminate CPython."""
+
+    def test_custom_op_throwing_a_non_std_exception(self):
+        # The generated bindings are extern "C" functions: an exception that
+        # reaches that boundary calls std::terminate and the interpreter dies
+        # with no traceback, so this has to run in a child.  ``run_in_subprocess``
+        # asks for crash isolation, without which the child's abort trips
+        # jittor's SIGCHLD handler and takes this session down too.
+        proc = run_in_subprocess("""
+            jt.flags.use_cuda = 0
+            try:
+                x = jt.code([1], "float32", [], cpu_src='throw 42;')
+                x.sync()
+                print("NO-RAISE")
+            except Exception:
+                print("RAISED")
+            print("SURVIVED")
+        """)
+        output = proc.stdout.decode("utf8", "replace")
+        self.assertEqual(proc.returncode, 0, output)
+        self.assertIn("RAISED", output)
+        self.assertIn("SURVIVED", output)
+
 if __name__ == "__main__":
     unittest.main()
 

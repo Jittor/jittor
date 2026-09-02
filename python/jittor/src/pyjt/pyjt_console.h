@@ -528,9 +528,9 @@ inline array<T,N> get_array(const string& s) {
     get_pyjt_array(obj, shape, dtype, data);
     string dtype2 = array<T,N>::DTYPE();
     if (dtype2 != dtype)
-        throw new std::runtime_error(string("array dtype not match: ")+dtype+"!="+dtype2);
+        throw std::runtime_error(string("array dtype not match: ")+dtype+"!="+dtype2);
     if (shape.size() != N)
-        throw new std::runtime_error(string("array ndim not match: ")+std::to_string(shape.size())+"!="+std::to_string(N));
+        throw std::runtime_error(string("array ndim not match: ")+std::to_string(shape.size())+"!="+std::to_string(N));
     return array<T, N>(shape, (T*)data);
 }
 

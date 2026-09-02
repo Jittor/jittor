@@ -26,24 +26,35 @@ import os
 import unittest
 
 
-def _load_generator():
-    here = os.path.dirname(os.path.abspath(__file__))
-    repo_root = os.path.dirname(os.path.dirname(here))
-    path = os.path.join(repo_root, "python", "jittor", "pyjt_compiler.py")
-    spec = importlib.util.spec_from_file_location("_pyjt_compiler_under_test", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module, repo_root
-
-
-pyjt_compiler, REPO_ROOT = _load_generator()
+REPO_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 PAD = "// pad: compile_src starts scanning at offset 16\n"
+
+_generator = None
+
+
+def generator():
+    """The generator module, loaded on first use.
+
+    Deliberately not loaded at import time: collection must not execute
+    anything (tests/structure/test_pytest_contract.py enforces that).
+    """
+    global _generator
+    if _generator is None:
+        path = os.path.join(REPO_ROOT, "python", "jittor", "pyjt_compiler.py")
+        spec = importlib.util.spec_from_file_location(
+            "_pyjt_compiler_under_test", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _generator = module
+    return _generator
 
 
 def render(declaration, annotation="// @pyjt(f)\n"):
     """Generate the binding for one declaration and return the C++ text."""
-    return pyjt_compiler.compile_src(PAD + annotation + declaration, "test.h", "test")
+    return generator().compile_src(
+        PAD + annotation + declaration, "test.h", "test")
 
 
 class TestSplitArgs(unittest.TestCase):
@@ -51,14 +62,14 @@ class TestSplitArgs(unittest.TestCase):
 
     def test_plain_parameters(self):
         self.assertEqual(
-            [a.strip() for a in pyjt_compiler.split_args("int a, int b")],
+            [a.strip() for a in generator().split_args("int a, int b")],
             ["int a", "int b"])
 
     def test_comma_inside_a_default_value_call(self):
         # Only angle brackets were counted, so this split inside ``g(1,2)`` and
         # produced three parameters, the last two of them nonsense.
         self.assertEqual(
-            [a.strip() for a in pyjt_compiler.split_args("int a=g(1,2), int b")],
+            [a.strip() for a in generator().split_args("int a=g(1,2), int b")],
             ["int a=g(1,2)", "int b"])
 
     def test_greater_than_does_not_go_below_zero(self):
@@ -66,38 +77,38 @@ class TestSplitArgs(unittest.TestCase):
         # depth was -1 and *every* later comma was ignored: the whole tail of
         # the signature collapsed into a single parameter.
         self.assertEqual(
-            [a.strip() for a in pyjt_compiler.split_args("bool d=(0>1), int a, int b")],
+            [a.strip() for a in generator().split_args("bool d=(0>1), int a, int b")],
             ["bool d=(0>1)", "int a", "int b"])
 
     def test_shift_operators_are_not_template_brackets(self):
         self.assertEqual(
-            [a.strip() for a in pyjt_compiler.split_args("int a=(1<<3), int b=(8>>1)")],
+            [a.strip() for a in generator().split_args("int a=(1<<3), int b=(8>>1)")],
             ["int a=(1<<3)", "int b=(8>>1)"])
 
     def test_template_argument_commas_are_kept(self):
         self.assertEqual(
-            [a.strip() for a in pyjt_compiler.split_args("map<int,int> a, int b")],
+            [a.strip() for a in generator().split_args("map<int,int> a, int b")],
             ["map<int,int> a", "int b"])
 
     def test_nested_template_close(self):
         self.assertEqual(
-            [a.strip() for a in pyjt_compiler.split_args("vector<vector<int>> a, int b")],
+            [a.strip() for a in generator().split_args("vector<vector<int>> a, int b")],
             ["vector<vector<int>> a", "int b"])
 
     def test_function_type_parameter(self):
         self.assertEqual(
             [a.strip() for a in
-             pyjt_compiler.split_args("std::function<void(int,int)> cb, int x")],
+             generator().split_args("std::function<void(int,int)> cb, int x")],
             ["std::function<void(int,int)> cb", "int x"])
 
     def test_comma_inside_a_string_literal(self):
         self.assertEqual(
-            [a.strip() for a in pyjt_compiler.split_args('const char* s=",", int b')],
+            [a.strip() for a in generator().split_args('const char* s=",", int b')],
             ['const char* s=","', "int b"])
 
     def test_unbalanced_brackets_raise_instead_of_guessing(self):
         with self.assertRaises(ValueError):
-            pyjt_compiler.split_args("int a=(1, int b")
+            generator().split_args("int a=(1, int b")
 
 
 class TestDeclarationScan(unittest.TestCase):
@@ -138,7 +149,7 @@ class TestDeclarationScan(unittest.TestCase):
             + "    int value();\n"
             + "};\n"
         )
-        code = pyjt_compiler.compile_src(source, "test.h", "test")
+        code = generator().compile_src(source, "test.h", "test")
         self.assertIn("GET_RAW_PTR(Thing,self)", code)
         self.assertNotIn("((value()))", code)
 
@@ -169,6 +180,22 @@ class TestDefaultValues(unittest.TestCase):
         self.assertIn("arg1", code)
 
 
+class TestGeneratedExceptionHandling(unittest.TestCase):
+    """Every generated entry point needs a catch-all, not only ``std::exception``."""
+
+    def test_catch_all_is_emitted(self):
+        # These functions are called from CPython across an extern "C"
+        # boundary: an exception that escapes calls std::terminate and takes
+        # the interpreter down with no traceback.  A throw of a pointer or of
+        # any non-std type -- pyjt_console.h throws ``new std::runtime_error``,
+        # a pointer -- does not match ``catch (const std::exception&)``.
+        code = render("void f(int a);\n")
+        self.assertIn("catch (...)", code)
+        self.assertEqual(
+            code.count("catch (...)"),
+            code.count("} catch (const std::exception& e)"))
+
+
 class TestRealHeadersStillParse(unittest.TestCase):
     """The hardening must not change how today's headers are read."""
 
@@ -184,7 +211,7 @@ class TestRealHeadersStillParse(unittest.TestCase):
                     text = handle.read()
                 if "@pyjt" not in text:
                     continue
-                code = pyjt_compiler.compile_src(text, path, name.split('.')[0])
+                code = generator().compile_src(text, path, name.split('.')[0])
                 if not code:
                     continue
                 seen += 1

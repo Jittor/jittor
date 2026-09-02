@@ -147,6 +147,30 @@ self.assertIn("SURVIVED", output)
 只判返回码不够——jittor 的段错误处理器会打印 backtrace 后走 `exit(1)`，
 也有它自己 catch 住而进程正常退出的情况。
 
+### 子进程必须隔一层 shell，否则它崩了会把 pytest 一起带走
+
+jittor 在**父进程**里装了一个进程级的 SIGCHLD action（`src/utils/log.cc`）：只要有
+子进程不是正常退出（段错误、abort），它就打印
+
+```
+Caught SIGCHLD. Maybe out of memory, please reduce your worker size. ... quick exit
+```
+
+然后 `do_exit()`。于是「用子进程隔离崩溃」这件事本身失效了——**修前那一版的测试会把
+整个 pytest session 杀掉，日志里一个字都没有**（`-q` 的缓冲输出全丢），看起来像 runner
+坏了而不是测试失败。
+
+解法是让 pytest 的**直接子进程**永远正常退出，把崩溃留给中间那层 shell 去收：
+`run_python_child(..., expect_crash=True)`（`tests/_helpers/child_process.py` 的
+`shield_signal_death`）。`sh` 自己以 128+signo 正常退出，SIGCHLD action 看到的是
+`CLD_EXITED` 就不管了，而 `proc.returncode` 仍然是 134/139，崩溃照样能断言。
+它同时把 `gdb_path` 清空：jittor 的崩溃处理器会 fork 一个 gdb 抓 backtrace，
+在套件里跑就是灾难（gdb 先把进程 ptrace-stop 住，gdb 自己再死掉的话进程就永远停在那）。
+
+`expect_crash` 是可选项而不是默认：`subprocess.run` 超时只杀直接子进程（SIGKILL，
+拦不住），套了 shell 之后超时会留下一个孤儿孙子进程。只有真的预期崩溃的用例才付这个代价。
+
+
 ## 6. C++ 改动的重编成本
 
 改 `python/jittor/src/**` 或 `pyjt_compiler.py` 之后，**每个新进程**都要重编一次

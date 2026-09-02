@@ -923,6 +923,24 @@ def compile_src(src, h, basename):
                         );
                     }}
                 }}
+            }} catch (...) {{
+                // Every binding is an extern "C" function called from CPython,
+                // which has no C++ frames to unwind through: an exception that
+                // is not caught here reaches the language boundary and calls
+                // std::terminate, killing the interpreter with no traceback.
+                // `catch (const std::exception&)` above does not cover a throw
+                // of a pointer, an integer, or any type outside the std
+                // hierarchy -- pyjt_console.h's own `throw new
+                // std::runtime_error(...)` throws a *pointer* and misses it --
+                // nor an exception from third-party C++ in a custom op.
+                if (!PyErr_Occurred()) {{
+                    PyErr_Format(PyExc_RuntimeError,
+                        "%s\\n%s",
+                        "Unknown c++ exception (not derived from std::exception)"
+                        " raised while calling:",
+                        R""({decs})""
+                    );
+                }}
             }}
             {func_return_failed};
         }}
