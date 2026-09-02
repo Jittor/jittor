@@ -70,10 +70,18 @@ class TestCustomFunctionCompatibility(Base):
         self.assertNotIn("needs_input_grad", function.__dict__)
 
     def test_torch_style_function_keeps_context_and_broadcast_grad(self):
+        # The torch bookkeeping lives on the per-call CONTEXT -- the object
+        # handed to forward()/backward() as torch's `ctx` -- not on the
+        # Function instance, exactly as in torch, where the instance is not
+        # observable at all. So capture the ctx from inside execute() and
+        # assert on it; asserting on `function` would be asserting that state
+        # leaked back onto the shared instance.
         _install_autograd_function(jt)
+        seen = {}
 
         class TorchStyleFunction(jt.Function):
             def execute(self, value, bias):
+                seen["ctx"] = self
                 self.seen_needs_input_grad = self.needs_input_grad
                 return value + bias
 
@@ -87,10 +95,68 @@ class TestCustomFunctionCompatibility(Base):
         output = function(value, bias)
         grad_value, grad_bias = jt.grad(output.sum(), [value, bias])
 
-        self.assertEqual(function.seen_needs_input_grad, (True, True))
-        self.assertEqual(function._fwd_input_shapes, [(2, 3), (1, 3)])
+        ctx = seen["ctx"]
+        self.assertIsNot(ctx, function)
+        self.assertEqual(ctx.seen_needs_input_grad, (True, True))
+        self.assertEqual(ctx._fwd_input_shapes, [(2, 3), (1, 3)])
+        self.assertEqual([o[0] for o in ctx._fwd_outputs], [(2, 3)])
+        # ... and none of it is left on the instance, so a second call cannot
+        # inherit the first call's shapes or requires-grad flags.
+        for name in ("needs_input_grad", "_fwd_input_shapes", "_fwd_outputs"):
+            self.assertNotIn(name, function.__dict__)
         self.ac(grad_value.numpy(), np.ones((2, 3), dtype="float32"))
         self.ac(grad_bias.numpy(), np.full((1, 3), 2.0, dtype="float32"))
+
+    def test_an_unused_output_reaches_backward_as_zeros_not_none(self):
+        # torch's materialize_grads=True: an output that does not reach the
+        # differentiated scalar arrives at backward() as zeros_like(output).
+        # The shim needs the forward outputs' shapes to build those zeros, and
+        # it records them AFTER the forward returns -- so recording them on the
+        # Function instance put them somewhere backward() never looks (the
+        # context was copied from the instance before the call). backward()
+        # then got None and the user's arithmetic raised.
+        _install_autograd_function(jt)
+
+        class TwoOutputs(jt.Function):
+            def execute(self, value):
+                return value * 2, value * 3
+
+            @staticmethod
+            def backward(ctx, grad_a, grad_b):
+                return grad_a * 2 + grad_b * 3
+
+        value = jt.array(np.ones(4, dtype="float32"))
+        first, _second = TwoOutputs()(value)
+        grad_value = jt.grad(first.sum(), [value])[0]
+        self.ac(grad_value.numpy(), np.full(4, 2.0, dtype="float32"))
+
+    def test_a_second_call_does_not_steal_the_first_calls_context(self):
+        # One instance, two calls with different shapes. Each call's backward
+        # must use its OWN forward's input/output shapes.
+        _install_autograd_function(jt)
+
+        class TwoOutputs(jt.Function):
+            def execute(self, value, bias):
+                return value + bias, value * 3
+
+            @staticmethod
+            def backward(ctx, grad_a, grad_b):
+                return grad_a + grad_b * 3, grad_a
+
+        function = TwoOutputs()
+        v1 = jt.array(np.ones((2, 3), dtype="float32"))
+        b1 = jt.array(np.ones((1, 3), dtype="float32"))
+        out1, _ = function(v1, b1)
+        v2 = jt.array(np.ones((7, 5), dtype="float32"))
+        b2 = jt.array(np.ones((7, 5), dtype="float32"))
+        out2, _ = function(v2, b2)
+
+        g1v, g1b = jt.grad(out1.sum(), [v1, b1])
+        self.ac(g1v.numpy(), np.ones((2, 3), dtype="float32"))
+        self.ac(g1b.numpy(), np.full((1, 3), 2.0, dtype="float32"))
+        g2v, g2b = jt.grad(out2.sum(), [v2, b2])
+        self.ac(g2v.numpy(), np.ones((7, 5), dtype="float32"))
+        self.ac(g2b.numpy(), np.ones((7, 5), dtype="float32"))
 
 
 # ------------------------------------------------------------------ analytic gradients

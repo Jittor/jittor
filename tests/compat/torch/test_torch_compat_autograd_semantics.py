@@ -155,11 +155,21 @@ class TestImplicitGradOutputs(unittest.TestCase):
 
 
 class TestSavedTensorVersions(unittest.TestCase):
-    """torch raises when a saved tensor is modified in place before backward."""
+    """torch raises when a saved tensor is modified in place before backward.
 
-    def _function(self):
+    ``save_for_backward``/``saved_tensors`` live on the ``ctx``, which in torch
+    is a fresh object per call and is never the Function instance (torch's
+    ``forward`` is a staticmethod; there is no instance to look at). jittor now
+    matches that, so these tests capture the ctx from inside ``forward`` and
+    assert on it -- reading ``fn.saved_tensors`` off the instance after the
+    call would be reading a Function that saved nothing.
+    """
+
+    def _function(self, seen=None):
         class Square(torch.autograd.Function):
             def forward(ctx, a):
+                if seen is not None:
+                    seen.append(ctx)
                 ctx.save_for_backward(a)
                 return a * a
 
@@ -178,26 +188,53 @@ class TestSavedTensorVersions(unittest.TestCase):
     def test_inplace_modification_after_saving_is_detected(self):
         # jittor tapes a Function's inputs, so what forward saved is the taped
         # Var; this edits that object, which is the case the check can see.
-        Square = self._function()
+        seen = []
+        Square = self._function(seen)
         x = jt.array(np.full(3, 2.0, dtype="float32"))
         x.requires_grad = True
-        fn = Square()
-        fn(x)
-        saved = fn.saved_tensors[0]
+        Square()(x)
+        ctx = seen[0]
+        saved = ctx.saved_tensors[0]
         saved.update(saved * 5)
         with self.assertRaises(RuntimeError) as cm:
-            fn.saved_tensors
+            ctx.saved_tensors
         self.assertIn("inplace operation", str(cm.exception))
 
     def test_reading_the_saved_tensor_does_not_trip_the_check(self):
-        Square = self._function()
+        seen = []
+        Square = self._function(seen)
         x = jt.array(np.full(3, 2.0, dtype="float32"))
         x.requires_grad = True
-        fn = Square()
-        fn(x)
+        Square()(x)
         _ = (x * 3).numpy()
         x.sync()
-        self.assertEqual(len(fn.saved_tensors), 1)
+        self.assertEqual(len(seen[0].saved_tensors), 1)
+
+    def test_each_call_of_one_instance_saves_its_own_tensors(self):
+        # torch builds a ctx per apply(); two calls never share saved state.
+        # When they did, the first call's backward silently used the second
+        # call's tensors.
+        seen = []
+        Square = self._function(seen)
+        fn = Square()
+        a = jt.array(np.full(3, 2.0, dtype="float32"))
+        a.requires_grad = True
+        b = jt.array(np.full(3, 5.0, dtype="float32"))
+        b.requires_grad = True
+        out_a = fn(a)
+        out_b = fn(b)
+        self.assertEqual(len(seen), 2)
+        self.assertIsNot(seen[0], seen[1])
+        self.assertIsNot(seen[0], fn)
+        np.testing.assert_allclose(seen[0].saved_tensors[0].numpy(),
+                                   np.full(3, 2.0), rtol=1e-5)
+        np.testing.assert_allclose(seen[1].saved_tensors[0].numpy(),
+                                   np.full(3, 5.0), rtol=1e-5)
+        # d(a^2)/da = 2a = 4, not 2b = 10
+        np.testing.assert_allclose(jt.grad(out_a.sum(), [a])[0].numpy(),
+                                   np.full(3, 4.0), rtol=1e-5)
+        np.testing.assert_allclose(jt.grad(out_b.sum(), [b])[0].numpy(),
+                                   np.full(3, 10.0), rtol=1e-5)
 
 
 class TestBackwardSignature(unittest.TestCase):

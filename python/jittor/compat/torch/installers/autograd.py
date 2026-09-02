@@ -155,13 +155,25 @@ def _install_autograd_function(g):
         # paths, so avoid recording shapes and requires-grad state for them.
         if getattr(type(self), "backward", None) is None:
             return _orig_fn_call(self, *args, **kw)
+        # Everything below is recorded on the CALL CONTEXT, never on the
+        # Function instance. jittor's Function runs each call against a
+        # one-shot context (a shallow copy of the instance), which is the
+        # object handed to forward() and to backward() as torch's `ctx`.
+        # Recording on `self` used to look like it worked because the context
+        # is copied from the instance at the start of the call -- but only for
+        # the values written BEFORE the call. `_fwd_outputs`, written after it,
+        # never reached the backward at all, so materialize_grads silently did
+        # nothing and a Function with an unused output got None where torch
+        # gives zeros. Building the context here and running the call against
+        # it puts all three on the object that backward() actually reads.
+        ctx = self._new_call_context()
         # capture forward input shapes (positional only -- jittor only tapes those)
         try:
-            self._fwd_input_shapes = [
+            ctx._fwd_input_shapes = [
                 (tuple(v.shape) if isinstance(v, jt.Var) else None) for v in args]
         except EXPECTED as exc:
-            swallowed("torch/installers/autograd.py _call_record_inputs: self._fwd_input_shapes = [", exc)
-            self._fwd_input_shapes = None
+            swallowed("torch/installers/autograd.py _call_record_inputs: ctx._fwd_input_shapes = [", exc)
+            ctx._fwd_input_shapes = None
         # torch.autograd.Function exposes `ctx.needs_input_grad`: one bool per
         # argument PASSED to apply(), True iff it is a tensor requiring grad.
         # Custom Functions branch on it (e.g. flex_gemm spconv:
@@ -178,23 +190,23 @@ def _install_autograd_function(g):
         if kw:
             raise TypeError("apply() takes no keyword arguments")
         try:
-            self.needs_input_grad = tuple(
+            ctx.needs_input_grad = tuple(
                 bool(isinstance(v, jt.Var) and v.requires_grad) for v in args)
         except EXPECTED as exc:
-            swallowed("torch/installers/autograd.py _call_record_inputs: self.needs_input_grad = tuple(", exc)
-            self.needs_input_grad = tuple(isinstance(v, jt.Var) for v in args)
-        out = _orig_fn_call(self, *args, **kw)
+            swallowed("torch/installers/autograd.py _call_record_inputs: ctx.needs_input_grad = tuple(", exc)
+            ctx.needs_input_grad = tuple(isinstance(v, jt.Var) for v in args)
+        out = ctx._run_call(*args, **kw)
         # Capture each forward OUTPUT's (shape, dtype) so the grad bridge can
         # materialize a zeros grad for outputs that don't reach the backward'd
         # scalar (torch's materialize_grads=True; see grad() below).
         try:
             outs = out if isinstance(out, (tuple, list)) else (out,)
-            self._fwd_outputs = [
+            ctx._fwd_outputs = [
                 (tuple(o.shape), str(o.dtype)) if isinstance(o, jt.Var) else None
                 for o in outs]
         except EXPECTED as exc:
             swallowed("torch/installers/autograd.py _call_record_inputs: outs = out if isinstance(out, (tuple, list)) else (out,)", exc)
-            self._fwd_outputs = None
+            ctx._fwd_outputs = None
         return out
     if getattr(Fn.__call__, "_torch_records_inputs", False) is not True:
         _call_record_inputs._torch_records_inputs = True

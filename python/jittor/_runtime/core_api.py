@@ -2493,10 +2493,31 @@ can also be None)::
 
     def __call__(self, *args, **kw):
         # One context per call. `self` is only a factory from here on.
-        ctx = self._new_call_context()
+        return self._new_call_context()._run_call(*args, **kw)
+
+    def _run_call(self, *args, **kw):
+        """Run one call. ``self`` here is a one-shot context, not the instance.
+
+        Split out of ``__call__`` so that a wrapper which needs per-call
+        bookkeeping of its own can build the context, write onto it, and run
+        the call against that same object::
+
+            ctx = fn._new_call_context()
+            ctx.my_state = ...          # visible to execute() and to grad()
+            out = ctx._run_call(*args)
+            ctx.more_state = ...        # still visible to grad()
+
+        The torch compatibility layer does exactly this (it records
+        ``needs_input_grad`` and the forward input/output shapes). Writing that
+        bookkeeping onto the Function INSTANCE instead does not work, and fails
+        in two different directions: whatever is written before the call is
+        overwritten by the next call of the same instance, and whatever is
+        written after the call never reaches the backward at all, because the
+        context was copied from the instance when the call started.
+        """
         self._reject_var_keywords(type(self).__name__, kw)
         if flags.no_grad:
-            return ctx.execute(*args, **kw)
+            return self.execute(*args, **kw)
         backup = args
         args = list(args)
         taped_inputs = []
@@ -2512,7 +2533,7 @@ can also be None)::
                 input_mask[i] = len(taped_inputs)
                 args[i] = v
                 taped_inputs.append(v)
-        ori_res = ctx.execute(*args, **kw)
+        ori_res = self.execute(*args, **kw)
         if not isinstance(ori_res, Sequence):
             res = [ori_res]
         else:
@@ -2524,11 +2545,11 @@ can also be None)::
                 output_mask[i] = len(taped_outputs)
                 res[i] = v
                 taped_outputs.append(v)
-        ctx.input_mask = input_mask
-        ctx.output_mask = output_mask
+        self.input_mask = input_mask
+        self.output_mask = output_mask
         # tape output and input together so
         # backward treat them as one operator
-        tape_together(taped_inputs, taped_outputs, ctx._grad)
+        tape_together(taped_inputs, taped_outputs, self._grad)
         if isinstance(ori_res, Sequence):
             return res
         else:
