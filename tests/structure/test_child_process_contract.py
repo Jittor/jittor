@@ -21,8 +21,10 @@ passed the source in a variable -- that is, most of them.
 """
 
 import ast
+import os
 from pathlib import Path
 import sys
+import time
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TEST_ROOT = REPO_ROOT / "tests"
@@ -264,3 +266,67 @@ def test_without_torch_mode_clears_every_variable_that_installs_the_shim():
                 os.environ.pop(name, None)
             else:
                 os.environ[name] = value
+
+
+# --------------------------------------------------------------------------
+# The timeout has to end the whole tree, not just the direct child (9.23).
+# --------------------------------------------------------------------------
+
+#: A child that hangs *and* leaves a grandchild holding the same stdout pipe.
+#:
+#: This is not a contrived shape: it is what every dataset test looks like when
+#: the loader deadlocks. ``subprocess.run(timeout=N)`` SIGKILLs the direct child
+#: and then drains the pipes -- and the pipe is still open, because the
+#: grandchild inherited the write end and nothing killed *it*. The drain has no
+#: deadline, so the helper never returns: a `timeout=300` was measured still
+#: waiting ten minutes in.
+_HANGS_WITH_A_GRANDCHILD = """
+import subprocess, sys, time
+
+# inherits this process' stdout, so it holds the write end of the pipe
+child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)"])
+with open(%r, "w") as handle:
+    handle.write(str(child.pid))
+sys.stdout.write("started\\n")
+sys.stdout.flush()
+time.sleep(300)
+"""
+
+
+def _still_running(pid):
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
+def test_a_timeout_ends_the_grandchildren_too(tmp_path):
+    """A hung grandchild must not turn a timeout into a hung session."""
+    from _helpers.child_process import run_child_script
+
+    pid_file = tmp_path / "grandchild.pid"
+    started = time.time()
+    try:
+        run_child_script(
+            _HANGS_WITH_A_GRANDCHILD % str(pid_file),
+            timeout=2,
+            directory=str(tmp_path),
+        )
+    except AssertionError as failure:
+        assert "did not finish within 2 s" in str(failure), failure
+    else:
+        raise AssertionError("the hung child was reported as finishing")
+    elapsed = time.time() - started
+    # The budget is 2 s plus one drain window; anything near 300 s means the
+    # drain waited for the grandchild again.
+    assert elapsed < 60, "the helper took %.1f s to give up on a 2 s child" % elapsed
+
+    grandchild = int(pid_file.read_text())
+    for _ in range(200):
+        if not _still_running(grandchild):
+            break
+        time.sleep(0.05)
+    assert not _still_running(grandchild), (
+        "grandchild %d outlived the timeout: killing the direct child leaves "
+        "the rest of the tree running (and holding the pipe)" % grandchild)

@@ -53,6 +53,7 @@ in ``tests/`` that names the interpreter without going through this module.
 
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
@@ -216,6 +217,59 @@ def _crash_isolated(command, env):
     return ["/bin/sh", "-c", '"$@"; exit $?', "sh"] + command, env
 
 
+#: How long to keep draining after the process group has been killed.
+#:
+#: Everything that could still be holding the pipe has had SIGKILL by then, so
+#: this only covers the descheduled-writer case. A survivor that outlives it
+#: escaped the group on its own, and waiting longer would not change that.
+DRAIN_AFTER_KILL = 5
+
+
+def _kill_process_group(process):
+    """SIGKILL the child *and everything it started*.
+
+    ``subprocess.run(timeout=...)`` kills the direct child only, and then goes
+    back into ``communicate()`` to drain the pipes. A grandchild -- a dataset
+    worker, a compile pool, a job started by the ``crash_isolated`` shell --
+    inherited the write end of that pipe and is not killed, so the drain waits
+    for *it*: a helper asked for 300 s was measured still waiting at 600 s, and
+    a hung grandchild turned into a hung session rather than a failing test
+    (9.23).
+
+    Children are started with ``start_new_session=True``, so the child is the
+    leader of its own process group and one ``killpg`` reaches every descendant
+    that did not deliberately leave it.
+    """
+    if os.name != "posix":
+        process.kill()
+        return
+    try:
+        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        # Already reaped, or it left our session. The direct child is still
+        # ours either way.
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+
+
+def _drop_pipes(process):
+    """Close the streams, for a survivor that outlived even the group kill.
+
+    Whatever it is, it is not going to be waited for: reading its output is not
+    what the caller asked for, and a helper that hangs here is the defect this
+    whole path exists to remove.
+    """
+    for stream in (process.stdin, process.stdout, process.stderr):
+        if stream is None:
+            continue
+        try:
+            stream.close()
+        except (OSError, ValueError):
+            pass
+
+
 def _run(command, env, timeout, cwd, text, check, input, merge_stderr,
          shell=False, inherit=True, without_torch_mode=False):
     seconds = default_timeout(timeout)
@@ -223,22 +277,51 @@ def _run(command, env, timeout, cwd, text, check, input, merge_stderr,
     # decoding a child's output by the ambient locale fails outright under
     # LANG=C. Decode as UTF-8 and never let a stray byte become the failure.
     decoding = {"encoding": "utf-8", "errors": "replace"} if text else {}
+    options = dict(
+        env=child_env(env, inherit=inherit,
+                      without_torch_mode=without_torch_mode),
+        cwd=None if cwd is None else str(cwd),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
+        shell=shell,
+        **decoding
+    )
+    if input is not None:
+        options["stdin"] = subprocess.PIPE
+    if os.name == "posix":
+        # The child leads its own process group; see _kill_process_group.
+        options["start_new_session"] = True
+    # Not subprocess.run: its timeout path kills the direct child and then
+    # drains, which is exactly the wait a grandchild can hold open forever.
+    process = subprocess.Popen(command, **options)
     try:
-        return subprocess.run(
-            command,
-            env=child_env(env, inherit=inherit,
-                          without_torch_mode=without_torch_mode),
-            cwd=None if cwd is None else str(cwd),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
-            timeout=seconds,
-            check=check,
-            input=input,
-            shell=shell,
-            **decoding
-        )
+        stdout, stderr = process.communicate(input, timeout=seconds)
     except subprocess.TimeoutExpired as expired:
+        _kill_process_group(process)
+        try:
+            process.communicate(timeout=DRAIN_AFTER_KILL)
+        except subprocess.TimeoutExpired:
+            _drop_pipes(process)
+            try:
+                process.wait(timeout=DRAIN_AFTER_KILL)
+            except subprocess.TimeoutExpired:
+                pass
         raise _timeout_failure(command, seconds) from expired
+    except BaseException:
+        # Ctrl-C, or a failure in this process: the same reasoning applies, and
+        # leaving a detached group behind would outlive the session.
+        _kill_process_group(process)
+        _drop_pipes(process)
+        try:
+            process.wait(timeout=DRAIN_AFTER_KILL)
+        except subprocess.TimeoutExpired:
+            pass
+        raise
+    completed = subprocess.CompletedProcess(
+        process.args, process.returncode, stdout, stderr)
+    if check:
+        completed.check_returncode()
+    return completed
 
 
 def run_python_child(args, *, env=None, timeout=None, cwd=None, text=True,
@@ -250,11 +333,11 @@ def run_python_child(args, *, env=None, timeout=None, cwd=None, text=True,
     when they print the child's output on failure.
 
     ``crash_isolated=True`` for a child that is *expected* to die from a signal
-    -- see :func:`_crash_isolated`. Opt-in on purpose: the extra shell changes
-    what a timeout does. ``subprocess.run`` kills only its direct child on
-    ``TimeoutExpired``, with an uncatchable SIGKILL, so behind a wrapper the
-    grandchild is orphaned rather than killed. Only a crash test should pay
-    that; everything else is safer without it.
+    -- see :func:`_crash_isolated`. Opt-in on purpose: it costs an extra shell
+    and turns "killed by a signal" into "exited with 128 + signo", which is not
+    what most callers want to assert. A timeout is no longer a reason to avoid
+    it: the whole process group is killed, so the shell's own child goes with
+    it (9.23).
     """
     command = [PYTHON] + [str(arg) for arg in args]
     if crash_isolated:
