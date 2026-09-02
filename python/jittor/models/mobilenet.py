@@ -12,15 +12,9 @@
 import jittor as jt
 from jittor import init
 from jittor import nn
-__all__ = ['MobileNetV2', 'mobilenet_v2']
 
-def _make_divisible(v, divisor, min_value=None):
-    if (min_value is None):
-        min_value = divisor
-    new_v = max(min_value, ((int((v + (divisor / 2))) // divisor) * divisor))
-    if (new_v < (0.9 * v)):
-        new_v += divisor
-    return new_v
+from ._utils import make_divisible as _make_divisible
+__all__ = ['MobileNetV2', 'mobilenet_v2']
 
 class ConvBNReLU(nn.Sequential):
 

@@ -19,6 +19,10 @@ from functools import partial
 import jittor as jt
 from jittor import nn
 
+from ._utils import (
+    ConvNormActivation, SqueezeExcitation, StochasticDepth, make_divisible,
+)
+
 __all__ = [
     'EfficientNet',
     'efficientnet_b0', 'efficientnet_b1', 'efficientnet_b2', 'efficientnet_b3',
@@ -26,106 +30,15 @@ __all__ = [
 ]
 
 
-def _make_divisible(v, divisor=8, min_value=None):
-    """Make a channel count divisible by ``divisor`` (matches torchvision)."""
-    if min_value is None:
-        min_value = divisor
-    new_v = max(min_value, int(v + divisor / 2) // divisor * divisor)
-    # Make sure that rounding down does not go down by more than 10%.
-    if new_v < 0.9 * v:
-        new_v += divisor
-    return new_v
+class ConvBNActivation(ConvNormActivation):
+    """EfficientNet's spelling of :class:`ConvNormActivation`.
 
-
-class StochasticDepth(nn.Module):
-    """Stochastic Depth (drop whole residual branches), torchvision "row" mode.
-
-    During training, with probability ``p`` the entire input batch element's
-    residual branch is zeroed (and the kept samples are rescaled by
-    ``1 / (1 - p)``). During evaluation it is the identity function.
+    Kept as a name and for the SiLU default; the implementation is shared.
     """
 
-    def __init__(self, p, mode="row"):
-        super(StochasticDepth, self).__init__()
-        if not (0.0 <= p <= 1.0):
-            raise ValueError("drop probability has to be between 0 and 1, "
-                             "but got {}".format(p))
-        if mode not in ("batch", "row"):
-            raise ValueError("mode has to be either 'batch' or 'row', "
-                             "but got {}".format(mode))
-        self.p = p
-        self.mode = mode
-
-    def execute(self, x):
-        if not self.is_training() or self.p == 0.0:
-            return x
-        survival_rate = 1.0 - self.p
-        if self.mode == "row":
-            size = [x.shape[0]] + [1] * (x.ndim - 1)
-        else:
-            size = [1] * x.ndim
-        # Bernoulli(survival_rate) mask, then rescale to keep expectation.
-        noise = (jt.rand(size) < survival_rate).float32()
-        if survival_rate > 0.0:
-            noise = noise / survival_rate
-        return x * noise
-
-    def __repr__(self):
-        return "{}(p={}, mode={})".format(
-            self.__class__.__name__, self.p, self.mode)
-
-
-class ConvBNActivation(nn.Sequential):
-    """Conv -> BatchNorm -> Activation, mirroring torchvision's ConvNormActivation.
-
-    ``activation_layer=None`` means *no* activation, as in torchvision: the
-    MBConv projection is a 1x1 conv + norm and nothing else. Substituting a
-    default for ``None`` before the ``is not None`` test made that test always
-    true, so every projection in b0..b7 got an extra SiLU.
-    """
-
-    def __init__(self, in_planes, out_planes, kernel_size=3, stride=1,
-                 groups=1, norm_layer=None, activation_layer=nn.SiLU,
-                 dilation=1):
-        padding = (kernel_size - 1) // 2 * dilation
-        if norm_layer is None:
-            norm_layer = nn.BatchNorm
-        layers = [
-            nn.Conv(in_planes, out_planes, kernel_size, stride, padding,
-                    dilation=dilation, groups=groups, bias=False),
-            norm_layer(out_planes),
-        ]
-        if activation_layer is not None:
-            layers.append(activation_layer())
-        super(ConvBNActivation, self).__init__(*layers)
-        self.out_channels = out_planes
-
-
-class SqueezeExcitation(nn.Module):
-    """Squeeze-and-Excitation block (torchvision variant).
-
-    Uses 1x1 convolutions for the two fully-connected layers, an activation on
-    the reduction (SiLU for EfficientNet) and a Sigmoid gate.
-    """
-
-    def __init__(self, input_channels, squeeze_channels,
-                 activation=nn.SiLU, scale_activation=nn.Sigmoid):
-        super(SqueezeExcitation, self).__init__()
-        self.fc1 = nn.Conv(input_channels, squeeze_channels, 1)
-        self.fc2 = nn.Conv(squeeze_channels, input_channels, 1)
-        self.activation = activation()
-        self.scale_activation = scale_activation()
-
-    def _scale(self, x):
-        scale = x.mean([2, 3], keepdims=True)
-        scale = self.fc1(scale)
-        scale = self.activation(scale)
-        scale = self.fc2(scale)
-        scale = self.scale_activation(scale)
-        return scale
-
-    def execute(self, x):
-        return self._scale(x) * x
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("activation_layer", nn.SiLU)
+        super(ConvBNActivation, self).__init__(*args, **kwargs)
 
 
 class MBConvConfig:
@@ -142,7 +55,7 @@ class MBConvConfig:
 
     @staticmethod
     def adjust_channels(channels, width_mult, min_value=None):
-        return _make_divisible(channels * width_mult, 8, min_value)
+        return make_divisible(channels * width_mult, 8, min_value)
 
     @staticmethod
     def adjust_depth(num_layers, depth_mult):

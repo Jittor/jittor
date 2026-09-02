@@ -30,6 +30,10 @@ from functools import partial
 import jittor as jt
 from jittor import nn
 
+from ._utils import (
+    ConvNormActivation, SqueezeExcitation, StochasticDepth,
+)
+
 __all__ = [
     "MaxVit",
     "maxvit_t",
@@ -67,92 +71,6 @@ def _get_relative_position_index(height, width):
     relative_coords[:, :, 1] += width - 1
     relative_coords[:, :, 0] *= 2 * width - 1
     return relative_coords.sum(-1)  # H*W, H*W
-
-
-class StochasticDepth(nn.Module):
-    """Stochastic Depth (drop whole residual branches), torchvision "row" mode.
-
-    During training, with probability ``p`` each batch element's residual branch
-    is zeroed (and the kept samples are rescaled by ``1 / (1 - p)``). During
-    evaluation it is the identity function.
-    """
-
-    def __init__(self, p, mode="row"):
-        super(StochasticDepth, self).__init__()
-        if not (0.0 <= p <= 1.0):
-            raise ValueError("drop probability has to be between 0 and 1, "
-                             "but got {}".format(p))
-        if mode not in ("batch", "row"):
-            raise ValueError("mode has to be either 'batch' or 'row', "
-                             "but got {}".format(mode))
-        self.p = p
-        self.mode = mode
-
-    def execute(self, x):
-        if not self.is_training() or self.p == 0.0:
-            return x
-        survival_rate = 1.0 - self.p
-        if self.mode == "row":
-            size = [x.shape[0]] + [1] * (x.ndim - 1)
-        else:
-            size = [1] * x.ndim
-        noise = (jt.rand(size) < survival_rate).float32()
-        if survival_rate > 0.0:
-            noise = noise / survival_rate
-        return x * noise
-
-    def __repr__(self):
-        return "{}(p={}, mode={})".format(
-            self.__class__.__name__, self.p, self.mode)
-
-
-class ConvNormActivation(nn.Sequential):
-    """Conv -> (Norm) -> (Activation), mirroring torchvision ``Conv2dNormActivation``.
-
-    ``norm_layer`` / ``activation_layer`` may be ``None`` to skip that part. The
-    bias of the conv defaults to ``norm_layer is None`` unless overridden."""
-
-    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1,
-                 padding=None, groups=1, norm_layer=nn.BatchNorm2d,
-                 activation_layer=nn.ReLU, dilation=1, bias=None):
-        if padding is None:
-            padding = (kernel_size - 1) // 2 * dilation
-        if bias is None:
-            bias = norm_layer is None
-        layers = [
-            nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding,
-                      dilation=dilation, groups=groups, bias=bias),
-        ]
-        if norm_layer is not None:
-            layers.append(norm_layer(out_channels))
-        if activation_layer is not None:
-            layers.append(activation_layer())
-        super(ConvNormActivation, self).__init__(*layers)
-        self.out_channels = out_channels
-
-
-class SqueezeExcitation(nn.Module):
-    """Squeeze-and-Excitation block (torchvision variant), 1x1-conv FCs, an
-    activation on the reduction and a Sigmoid gate."""
-
-    def __init__(self, input_channels, squeeze_channels,
-                 activation=nn.ReLU, scale_activation=nn.Sigmoid):
-        super(SqueezeExcitation, self).__init__()
-        self.fc1 = nn.Conv2d(input_channels, squeeze_channels, 1)
-        self.fc2 = nn.Conv2d(squeeze_channels, input_channels, 1)
-        self.activation = activation()
-        self.scale_activation = scale_activation()
-
-    def _scale(self, x):
-        scale = x.mean([2, 3], keepdims=True)
-        scale = self.fc1(scale)
-        scale = self.activation(scale)
-        scale = self.fc2(scale)
-        scale = self.scale_activation(scale)
-        return scale
-
-    def execute(self, x):
-        return self._scale(x) * x
 
 
 class MBConv(nn.Module):

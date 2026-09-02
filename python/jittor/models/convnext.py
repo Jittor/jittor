@@ -19,48 +19,12 @@ from functools import partial
 import jittor as jt
 from jittor import nn
 
+from ._utils import StochasticDepth
+
 __all__ = [
     'ConvNeXt',
     'convnext_tiny', 'convnext_small', 'convnext_base', 'convnext_large',
 ]
-
-
-class StochasticDepth(nn.Module):
-    """Stochastic Depth (drop whole residual branches), torchvision "row" mode.
-
-    During training, with probability ``p`` each batch element's residual branch
-    is zeroed (and the kept samples are rescaled by ``1 / (1 - p)``). During
-    evaluation it is the identity function.
-    """
-
-    def __init__(self, p, mode="row"):
-        super(StochasticDepth, self).__init__()
-        if not (0.0 <= p <= 1.0):
-            raise ValueError("drop probability has to be between 0 and 1, "
-                             "but got {}".format(p))
-        if mode not in ("batch", "row"):
-            raise ValueError("mode has to be either 'batch' or 'row', "
-                             "but got {}".format(mode))
-        self.p = p
-        self.mode = mode
-
-    def execute(self, x):
-        if not self.is_training() or self.p == 0.0:
-            return x
-        survival_rate = 1.0 - self.p
-        if self.mode == "row":
-            size = [x.shape[0]] + [1] * (x.ndim - 1)
-        else:
-            size = [1] * x.ndim
-        # Bernoulli(survival_rate) mask, then rescale to keep expectation.
-        noise = (jt.rand(size) < survival_rate).float32()
-        if survival_rate > 0.0:
-            noise = noise / survival_rate
-        return x * noise
-
-    def __repr__(self):
-        return "{}(p={}, mode={})".format(
-            self.__class__.__name__, self.p, self.mode)
 
 
 class LayerNorm2d(nn.LayerNorm):

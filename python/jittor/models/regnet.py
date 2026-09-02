@@ -23,73 +23,15 @@ import numpy as np
 import jittor as jt
 from jittor import nn
 
+from ._utils import (
+    ConvNormActivation, SqueezeExcitation, make_divisible,
+)
+
 __all__ = [
     'RegNet',
     'regnet_y_400mf', 'regnet_y_800mf',
     'regnet_x_400mf', 'regnet_x_800mf',
 ]
-
-
-def _make_divisible(v, divisor=8, min_value=None):
-    """Make a channel count divisible by ``divisor`` (matches torchvision)."""
-    if min_value is None:
-        min_value = divisor
-    new_v = max(min_value, int(v + divisor / 2) // divisor * divisor)
-    # Make sure that rounding down does not go down by more than 10%.
-    if new_v < 0.9 * v:
-        new_v += divisor
-    return new_v
-
-
-class ConvNormActivation(nn.Sequential):
-    """Conv -> BatchNorm -> Activation, mirroring torchvision's ConvNormActivation."""
-
-    def __init__(self, in_planes, out_planes, kernel_size=3, stride=1,
-                 groups=1, norm_layer=None, activation_layer=None, dilation=1,
-                 bias=None):
-        padding = (kernel_size - 1) // 2 * dilation
-        if norm_layer is None:
-            norm_layer = nn.BatchNorm
-        if bias is None:
-            # torchvision: bias is disabled when a norm layer follows.
-            bias = norm_layer is None
-        layers = [
-            nn.Conv(in_planes, out_planes, kernel_size, stride, padding,
-                    dilation=dilation, groups=groups, bias=bias),
-        ]
-        if norm_layer is not None:
-            layers.append(norm_layer(out_planes))
-        if activation_layer is not None:
-            layers.append(activation_layer())
-        super(ConvNormActivation, self).__init__(*layers)
-        self.out_channels = out_planes
-
-
-class SqueezeExcitation(nn.Module):
-    """Squeeze-and-Excitation block (torchvision variant).
-
-    Uses 1x1 convolutions for the two fully-connected layers, an activation on
-    the reduction (ReLU for RegNet) and a Sigmoid gate.
-    """
-
-    def __init__(self, input_channels, squeeze_channels,
-                 activation=nn.ReLU, scale_activation=nn.Sigmoid):
-        super(SqueezeExcitation, self).__init__()
-        self.fc1 = nn.Conv(input_channels, squeeze_channels, 1)
-        self.fc2 = nn.Conv(squeeze_channels, input_channels, 1)
-        self.activation = activation()
-        self.scale_activation = scale_activation()
-
-    def _scale(self, x):
-        scale = x.mean([2, 3], keepdims=True)
-        scale = self.fc1(scale)
-        scale = self.activation(scale)
-        scale = self.fc2(scale)
-        scale = self.scale_activation(scale)
-        return scale
-
-    def execute(self, x):
-        return self._scale(x) * x
 
 
 class SimpleStemIN(ConvNormActivation):
@@ -279,7 +221,7 @@ class BlockParams:
                             for g, w_bot in zip(group_widths, widths)]
 
         # Compute the adjusted widths so that they are compatible with groups.
-        ws_bot = [_make_divisible(w_bot, g)
+        ws_bot = [make_divisible(w_bot, g)
                   for w_bot, g in zip(widths, group_widths_min)]
         stage_widths = [int(w_bot / b)
                         for w_bot, b in zip(ws_bot, bottleneck_ratios)]

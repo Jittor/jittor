@@ -191,20 +191,10 @@ class TestCleanupStructure(unittest.TestCase):
                 ("python/jittor/misc/tensor_ops.py", "_ntuple"),
             }
         )
+        # StochasticDepth / _make_divisible / SqueezeExcitation /
+        # ConvNormActivation used to be listed here as reviewed copies; they now
+        # live once in jittor/models/_utils.py.
         model_local_groups = {
-            frozenset(
-                {
-                    ("python/jittor/models/convnext.py", "StochasticDepth"),
-                    ("python/jittor/models/maxvit.py", "StochasticDepth"),
-                }
-            ),
-            frozenset(
-                {
-                    ("python/jittor/models/efficientnet.py", "_make_divisible"),
-                    ("python/jittor/models/mobilenet_v3.py", "_make_divisible"),
-                    ("python/jittor/models/regnet.py", "_make_divisible"),
-                }
-            ),
             frozenset(
                 {
                     ("python/jittor/models/googlenet.py", "BasicConv2d"),

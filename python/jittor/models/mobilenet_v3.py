@@ -14,18 +14,11 @@
 import jittor as jt
 from jittor import nn
 
+from ._utils import (
+    SqueezeExcitation as _SqueezeExcitation, make_divisible,
+)
+
 __all__ = ['MobileNetV3', 'mobilenet_v3_large', 'mobilenet_v3_small']
-
-
-def _make_divisible(v, divisor=8, min_value=None):
-    """Make a channel count divisible by ``divisor`` (matches torchvision)."""
-    if min_value is None:
-        min_value = divisor
-    new_v = max(min_value, int(v + divisor / 2) // divisor * divisor)
-    # Make sure that rounding down does not go down by more than 10%.
-    if new_v < 0.9 * v:
-        new_v += divisor
-    return new_v
 
 
 class Hardsigmoid(nn.Module):
@@ -61,32 +54,15 @@ class ConvBNActivation(nn.Sequential):
         self.out_channels = out_planes
 
 
-class SqueezeExcitation(nn.Module):
-    """Squeeze-and-Excitation block (torchvision MobileNetV3 variant).
-
-    Uses 1x1 convolutions for the two fully-connected layers, ReLU on the
-    reduction and Hardsigmoid as the gate. ``squeeze_channels`` defaults to
-    ``_make_divisible(input_channels // 4, 8)``.
-    """
+class SqueezeExcitation(_SqueezeExcitation):
+    """MobileNetV3's SE: ReLU on the reduction, Hardsigmoid as the gate, and a
+    ``squeeze_factor`` instead of an explicit channel count."""
 
     def __init__(self, input_channels, squeeze_factor=4):
-        super(SqueezeExcitation, self).__init__()
-        squeeze_channels = _make_divisible(input_channels // squeeze_factor, 8)
-        self.fc1 = nn.Conv(input_channels, squeeze_channels, 1)
-        self.relu = nn.ReLU()
-        self.fc2 = nn.Conv(squeeze_channels, input_channels, 1)
-        self.hardsigmoid = Hardsigmoid()
-
-    def _scale(self, x):
-        scale = x.mean([2, 3], keepdims=True)
-        scale = self.fc1(scale)
-        scale = self.relu(scale)
-        scale = self.fc2(scale)
-        scale = self.hardsigmoid(scale)
-        return scale
-
-    def execute(self, x):
-        return self._scale(x) * x
+        squeeze_channels = make_divisible(input_channels // squeeze_factor, 8)
+        super(SqueezeExcitation, self).__init__(
+            input_channels, squeeze_channels,
+            activation=nn.ReLU, scale_activation=Hardsigmoid)
 
 
 class InvertedResidualConfig:
@@ -105,7 +81,7 @@ class InvertedResidualConfig:
 
     @staticmethod
     def adjust_channels(channels, width_mult):
-        return _make_divisible(channels * width_mult, 8)
+        return make_divisible(channels * width_mult, 8)
 
 
 class InvertedResidual(nn.Module):
