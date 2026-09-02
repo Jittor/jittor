@@ -102,6 +102,8 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 全树只有两条「性能断言当正确性门禁」 | 全树扫了一遍时间断言（`time.time()` / `perf_counter` 的 16 个文件逐个看过）。**上界型**（负载会让它变红）只有两条：`tests/core/test_array.py:81` 的 `t2-t1 < 0.010`（绝对毫秒阈值，就是 A 表那条）、`tests/core/test_nano_string.py:28` 的 `nano_time < builtin_time * 1.25`（**相对**比值 + 5 次取最小，抗噪好得多，但仍是上界）。其余全是**下界型**——`test_nccl_rendezvous_timeout.py:188/249` 的 `assertGreater(elapsed, TIMEOUT)`、`test_torch_compat_unimplemented.py:635` 的 `assertGreater(elapsed, 5.0)`、`test_tracer.py:69` 的 `elapsed < 30`（2 秒超时的 15 倍余量，判的是"有界 vs 无界"）——负载只会让下界更成立，不会误伤。**结论：这类假红的来源只有一条，不是一类。** 修法应是把绝对阈值改成相对比值或改成有界性断言，不是放宽数字 | 门禁 gates，随 0.15 |
 | wheel 内容基线过期 | **已处理**：基线本身没错，错的是那条断言写死了条目数——任何人加一个模块都会改变它。用当前源码树真构建一个 wheel 核对，45 个新增全是各分区加的合法源码、1 个删除是 9.17 删的 `flags.cc`，基线整个重新生成（861 条）；条目数那条断言换成「基线头部的 `# entries:` 必须与自身条目数一致」这条规则。注意基线是对**当时的源码内容**取的哈希，发版前需要再刷一次（办法写在提交说明里） | 构建，`f869cab8` |
 | 结构测试子进程超时 flaky | 已处理，并已与 0.21 合并成一份实现：超时预算搬进 `tests/_helpers/child_process.DEFAULT_TIMEOUT`（600s，`JITTOR_TEST_CHILD_TIMEOUT` 与旧名 `JITTOR_TEST_SUBPROCESS_TIMEOUT` 都认，仍在门禁 `--timeout=900` 之内），`process_modes.SUBPROCESS_TIMEOUT` 随之删除——同一件事只留一处 | 门禁 gates，`46dbe946` |
+| `(void)x;` 的识别曾按「语句含 void 一词」 | 已修（3.09，`66e5a153`）。原判据会把 `memset((void*)p,0,n);` 整条删掉：编译通过、缓冲区没清零、静默算错。今天没被咬到只是因为树里没有算子往融合 kernel 里写带 void 转型的语句 | — |
+| `UnrollPass` 与 `ExpandEmptyBlockPass` 同名 | 已修（3.14，`6c899325`）。`exclude_pass` 与 `pass_map` 都按名字索引，`emplace` 不覆盖，后跑的那个根本没进表；`get_pass` 还会把它 C 风格强转成另一个类型。g++ 构建上 UnrollPass 根本不跑，所以运行期校验抓不到，用例改成实例化 30 个 pass 比名字 | — |
 | `split{i}` 与 `parallel` 不兼容 | 同时设这两个 loop option，`ParallelPass` 在 `ASSERT(def)` 上失败（`Check failed: def`）。`SplitLoopPass` 给内层循环的 range 是 `::min(range{i}-id{i}, stride{i})`，定义在外层循环里且随它变化，`ParallelPass` 在调用点 `func->find_define` 找不到、也无法在调用点求值。CUDA 恒走 `ParallelPass`，所以 CUDA 上任何 split 候选都必然编译失败。用例已钉住：`tests/compiler/test_reduce_tuner.py::test_a_split_candidate_would_not_compile_under_parallel` | 代码生成分区，1.04 的前置 |
 | CUDA 归约需要的是线程分解候选，不是 CPU 那套 | `orderN` 候选实测五种形状全部不优于默认（最差 2.1 倍，破坏访存合并），`split{i}` 被上一条挡着，L1 分块尺寸对 GPU 无意义。真正有用的候选是 `ParallelPass` 里的线程分解，属于新工作 | 代码生成分区，待 1.04 前置解决后 |
 | `para_opt_level=4` 的块内共享内存归约比默认慢 1.6–2.0 倍 | 实测四种 UNet 形状：默认（warp shuffle）15.7/14.0/15.0/18.1us，lvl 4（`SharedReducePass`）25.3/31.3/25.3/34.8us，不优化 157/92/159/171us。默认值保持 3。要提升需要「warp shuffle → 每 warp 一个值 → 共享内存 → 每输出一次原子」的混合实现，并且要有生态 harness 的端到端数据；数据与方法在 `agent/skills/cuda-reduction-strategy-comparison/` | 代码生成分区，新任务待派 |
@@ -176,12 +178,12 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 3.06 | 并行编译器修到可信 | 待领 | | |
 | 3.07 | 执行器在设备等待段释放 GIL | 待领 | | |
 | 3.08 | KernelIR 结构化 | 待领 | | |
-| 3.09 | 死代码消除不再按「语句含 `void` 一词」删除 | 待领 | | |
+| 3.09 | 死代码消除不再按「语句含 `void` 一词」删除 | 已合并 | codegen | 66e5a153 |
 | 3.10 | 算子内标识符改名走结构化成员表并先做合法性校验，替代三个硬编码白名单与 `op{i}_` 盲目前… | 待领 | | |
 | 3.11 | 生成源码里的结构体字节偏移改显式 setter，成员表用宏声明 | 待领 | | |
 | 3.12 | `float_atomic_fix_pass.cc:76-80`、`fake_main_pass… | 待领 | | |
 | 3.13 | 循环维度身份用整数向量，`range10` 不再被拆成 `range1*range0` | 待领 | | |
-| 3.14 | 两个同名 pass | 待领 | | |
+| 3.14 | 两个同名 pass | 已合并 | codegen | 6c899325 |
 | 3.15 | 一次编译只解析一遍 | 待领 | | |
 | 3.16 | `token_replace_all` 不再用 CHECK 抛异常做循环终止 | 待领 | | |
 | 3.17 | 只用于代码生成的 JIT 区段与普通 C++ 分离 | 待领 | | |
