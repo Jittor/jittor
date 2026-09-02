@@ -567,7 +567,13 @@ def install_misc(ctx):
         _state["dtype"] = d
     g.set_default_dtype = set_default_dtype
     def get_default_device():
-        return g.device("cuda", 0) if jt.flags.use_cuda else g.device("cpu")
+        if not jt.flags.use_cuda:
+            return g.device("cpu")
+        try:
+            index = int(jt.current_device())
+        except Exception:
+            index = 0
+        return g.device("cuda", index if index >= 0 else 0)
     g.get_default_device = get_default_device
 
     def set_default_device(device=None):
@@ -581,29 +587,39 @@ def install_misc(ctx):
         if device is None:
             jt.flags.use_cuda = 0
             return None
-        name = getattr(device, "type", None) or str(device)
-        index = getattr(device, "index", None)
-        if index is None and ":" in str(name):
-            name, _, raw_index = str(name).partition(":")
+        # Strings first: `str.index` is a method, so getattr(dev, "index")
+        # on "cuda:1" hands back a bound method rather than None, and the
+        # ":" branch below is then never taken.
+        if isinstance(device, str):
+            name, _, raw_index = device.partition(":")
             index = int(raw_index) if raw_index.isdigit() else None
+        else:
+            name = getattr(device, "type", None) or str(device)
+            index = getattr(device, "index", None)
+            if not isinstance(index, int) or isinstance(index, bool):
+                index = None
+            if index is None and ":" in str(name):
+                name, _, raw_index = str(name).partition(":")
+                index = int(raw_index) if raw_index.isdigit() else None
         name = str(name).split(":")[0]
         if name == "cpu":
             jt.flags.use_cuda = 0
             return None
         if name in ("cuda", "gpu", "npu"):
-            if index not in (None, 0):
-                from ...stub_policy import unimplemented
-                return unimplemented(
-                    "torch.set_default_device('%s:%d')" % (name, index),
-                    "keep allocating on device 0 while the program believes "
-                    "the default is device %d" % index,
-                    "Select the card with CUDA_VISIBLE_DEVICES before starting "
-                    "the process.")
             if not jt.has_cuda:
                 raise RuntimeError(
                     "torch.set_default_device(%r): this build has no CUDA/NPU "
                     "device available." % (device,))
             jt.flags.use_cuda = 1
+            # An index is honoured now: it becomes the current device, which
+            # is where new tensors are placed. This used to refuse anything
+            # but 0, because there was nothing to switch.
+            if index is not None:
+                try:
+                    jt.set_device(int(index))
+                except Exception as error:
+                    raise RuntimeError(
+                        "torch.set_default_device(%r): %s" % (device, error))
             return None
         from ...stub_policy import unimplemented
         return unimplemented(

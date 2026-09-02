@@ -5,7 +5,6 @@ import types as _python_types
 import typing
 
 import jittor as jt
-from ..diagnostics import EXPECTED, swallowed
 
 _NATIVE_DTYPE_CONVERTERS = {}
 
@@ -196,14 +195,33 @@ class device:
     # it on a thread-local stack so Var.device reports "meta" inside it. Tensors
     # are still really allocated (harmless -- real weights get loaded over them),
     # but transformers correctly skips the eager init.
+    # An *indexed* CUDA device context is not a no-op any more: torch's
+    # `with torch.device("cuda:1"):` makes device 1 the default new tensors
+    # are built on, and jittor now has a current device that means exactly
+    # that. A bare "cuda" still names the current device, so it stays a no-op.
     def __enter__(self):
         if self.type == "meta":
             _DEVICE_CTX_STACK.append(self)
+        elif self.type in ("cuda", "npu") and self.index is not None:
+            try:
+                self._prev_index = int(jt.current_device())
+                if self._prev_index != int(self.index):
+                    jt.set_device(int(self.index))
+            except Exception:
+                self._prev_index = None
         return self
 
     def __exit__(self, *exc):
         if self.type == "meta" and _DEVICE_CTX_STACK and _DEVICE_CTX_STACK[-1] is self:
             _DEVICE_CTX_STACK.pop()
+        prev = getattr(self, "_prev_index", None)
+        if prev is not None and prev >= 0:
+            try:
+                if int(jt.current_device()) != prev:
+                    jt.set_device(prev)
+            except Exception:
+                pass
+            self._prev_index = None
         return False
 
 
@@ -292,6 +310,60 @@ def _device_is_cuda(dev):
     return False
 
 
+def _cuda_index_of(dev):
+    """The CUDA device index a torch ``device=`` argument names, or None.
+
+    None means "no particular device": a bare "cuda", ``torch.device("cuda")``
+    or ``None`` itself, all of which mean the current device in torch.
+    Accepts an int, a "cuda:N"/"npu:N" string, and any object with
+    ``type``/``index``.
+
+    Strings are handled before the attribute lookup on purpose: ``str.index``
+    is a method, so ``getattr(dev, "index", None)`` on a string returns a
+    bound method rather than None.
+    """
+    if dev is None or isinstance(dev, bool):
+        return None
+    if isinstance(dev, int):
+        return dev if dev >= 0 else None
+    if isinstance(dev, str):
+        head, _, tail = dev.partition(":")
+        if head not in ("cuda", "npu") or not tail:
+            return None
+        try:
+            return int(tail)
+        except ValueError:
+            return None
+    if getattr(dev, "type", None) in ("cuda", "npu"):
+        idx = getattr(dev, "index", None)
+        return int(idx) if isinstance(idx, int) and not isinstance(idx, bool) else None
+    return None
+
+
+def _move_to_cuda_index(v, dev, default_index=None):
+    """Return ``v`` on the CUDA device ``dev`` names, copying when it is
+    somewhere else.
+
+    ``dev`` without an index -- a bare "cuda" -- means "wherever it already
+    is", which is what torch's ``.to("cuda")`` does for an already-CUDA
+    tensor. Pass the *original* Var's device as ``default_index`` for that
+    case: the residency helpers rebuild a host-resident Var from scratch, and
+    a rebuilt Var takes the current device, so without this a ``cuda:1``
+    tensor comes back on ``cuda:0``."""
+    idx = _cuda_index_of(dev)
+    if idx is None:
+        idx = default_index
+    if idx is None or idx < 0 or not isinstance(v, jt.Var):
+        return v
+    try:
+        current = int(v.device_id)
+    except Exception:
+        return v
+    if current < 0 or current == idx:
+        return v
+    return v.to_device(idx)
+
+
 def _var_is_cpu_resident(v):
     """True if a Var's data actually lives in host memory.
 
@@ -304,12 +376,11 @@ def _var_is_cpu_resident(v):
             return True
         if getattr(v, "_jittor_torch_force_cuda", False):
             return False
-    except (AttributeError, TypeError) as exc:
-        swallowed("torch/types.py _var_is_cpu_resident: if getattr(v, '_jittor_torch_force_cpu', False):", exc)
+    except Exception:
+        pass
     try:
         loc = v.location()
-    except EXPECTED as exc:
-        swallowed("torch/types.py _var_is_cpu_resident: loc = v.location()", exc)
+    except Exception:
         return False
     if loc == "cpu":
         return True
@@ -322,8 +393,7 @@ def _var_is_cpu_resident(v):
 def _var_has_cpu_residency_hint(v):
     try:
         return bool(getattr(v, "_jittor_torch_force_cpu", False))
-    except EXPECTED as exc:
-        swallowed("torch/types.py _var_has_cpu_residency_hint: return bool(getattr(v, '_jittor_torch_force_cpu', False))", exc)
+    except Exception:
         return False
 
 
@@ -349,27 +419,22 @@ def _make_cpu_resident(v, inplace=False):
             out.migrate_to_cpu()
             try:
                 out._jittor_torch_force_cpu = True
-            except (AttributeError, TypeError) as exc:
-                swallowed("torch/types.py _make_cpu_resident: out._jittor_torch_force_cpu = True", exc,
-                          "the Var will report residency from the global use_cuda flag "
-                          "instead of from where it actually lives")
+            except Exception:
+                pass
             return out
-        except EXPECTED as exc:
-            swallowed("torch/types.py _make_cpu_resident: out = v if inplace else v.clone()", exc)
+        except Exception:
+            pass
     try:
         arr = v.clone().numpy()
-    except EXPECTED as exc:
-        swallowed("torch/types.py _make_cpu_resident: arr = v.clone().numpy()", exc)
+    except Exception:
         arr = v.numpy()
     with jt.flag_scope(use_cuda=0):
         out = jt.array(arr)
         out.sync()
     try:
         out._jittor_torch_force_cpu = True
-    except (AttributeError, TypeError) as exc:
-        swallowed("torch/types.py _make_cpu_resident: out._jittor_torch_force_cpu = True", exc,
-                  "the Var will report residency from the global use_cuda flag "
-                  "instead of from where it actually lives")
+    except Exception:
+        pass
     return out
 
 
@@ -386,8 +451,7 @@ def _make_cuda_resident(v, force=False, inplace=False):
     loc = None
     try:
         loc = v.location()
-    except EXPECTED as exc:
-        swallowed("torch/types.py _make_cuda_resident: loc = v.location()", exc)
+    except Exception:
         loc = None
     if loc == "device":
         return v
@@ -403,17 +467,16 @@ def _make_cuda_resident(v, force=False, inplace=False):
             if v.location() == "device":
                 try:
                     v._jittor_torch_force_cpu = False
-                except (AttributeError, TypeError) as exc:
-                    swallowed("torch/types.py _make_cuda_resident: v._jittor_torch_force_cpu = False", exc,
-                              "the Var will keep reporting CPU residency after being moved")
+                except Exception:
+                    pass
                 return v
-    except EXPECTED as exc:
-        swallowed("torch/types.py _make_cuda_resident: if not getattr(v, '_jittor_torch_force_cpu', False) and...", exc)
+    except Exception:
+        pass
     try:
         if not force and v.location() == "device":
             return v
-    except EXPECTED as exc:
-        swallowed("torch/types.py _make_cuda_resident: if not force and v.location() == 'device':", exc)
+    except Exception:
+        pass
     if hasattr(v, "migrate_to_gpu"):
         try:
             # A lazy clone of a CPU Var may migrate the source when global
@@ -425,21 +488,19 @@ def _make_cuda_resident(v, force=False, inplace=False):
             out.migrate_to_gpu()
             try:
                 out._jittor_torch_force_cpu = False
-            except (AttributeError, TypeError) as exc:
-                swallowed("torch/types.py _make_cuda_resident: out._jittor_torch_force_cpu = False", exc,
-                          "the Var will keep reporting CPU residency after being moved")
+            except Exception:
+                pass
             return out
-        except EXPECTED as exc:
-            swallowed("torch/types.py _make_cuda_resident: if (not inplace) and loc == 'cpu':", exc)
+        except Exception:
+            pass
     arr = v.numpy()
     with jt.flag_scope(use_cuda=1):
         out = jt.array(arr)
         out.sync()
     try:
         out._jittor_torch_force_cpu = False
-    except (AttributeError, TypeError) as exc:
-        swallowed("torch/types.py _make_cuda_resident: out._jittor_torch_force_cpu = False", exc,
-                  "the Var will keep reporting CPU residency after being moved")
+    except Exception:
+        pass
     return out
 
 
@@ -454,8 +515,8 @@ def _mark_cpu_like(out, *inputs):
                 if getattr(x, "_jittor_torch_force_cpu", False):
                     out._jittor_torch_force_cpu = True
                     break
-            except (AttributeError, TypeError) as exc:
-                swallowed("torch/types.py _mark_cpu_like: if getattr(x, '_jittor_torch_force_cpu', False):", exc)
-    except EXPECTED as exc:
-        swallowed("torch/types.py _mark_cpu_like: if not isinstance(out, jt.Var):", exc)
+            except Exception:
+                pass
+    except Exception:
+        pass
     return out

@@ -24,6 +24,7 @@ from ..nn_modules import install_module_namespace
 from ..types import (
     _device_is_cpu, _device_is_cuda, _dtype_to_str,
     _make_cpu_resident, _make_cuda_resident, device, dtype,
+    _cuda_index_of,
 )
 from ...diagnostics import EXPECTED, swallowed
 
@@ -1694,7 +1695,26 @@ def _install_module_methods(nn, registry=None):
             if _device_is_cpu(dev):
                 out = _make_cpu_resident(out, inplace=(out is v))
             elif _device_is_cuda(dev):
+                src_index = getattr(v, "device_id", -1)
                 out = _make_cuda_resident(out, force=True, inplace=(out is v))
+                # A bare .to("cuda") must not drag a parameter off the device
+                # it is already on; see _move_to_cuda_index.
+                idx = _cuda_index_of(dev)
+                if idx is None and src_index is not None and src_index >= 0:
+                    idx = src_index
+                if idx is not None and isinstance(out, jt.Var):
+                    cur = getattr(out, "device_id", -1)
+                    if cur >= 0 and cur != int(idx):
+                        moved = out.to_device(int(idx))
+                        if out is v:
+                            # torch's Module.to is in place: the Parameter
+                            # object keeps its identity -- an optimizer or a
+                            # state_dict already holding it must keep working
+                            # -- and only its storage moves.
+                            v.assign(moved)
+                            out = v
+                        else:
+                            out = moved
             return out
 
         if dev is not None or ds is not None:

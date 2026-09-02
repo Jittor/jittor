@@ -13,9 +13,8 @@ from ..grad import (
     _GradScaler,
 )
 from ..types import (
-    device, dtype,
+    device, dtype, _cuda_index_of, _device_is_cpu,
 )
-from ...diagnostics import EXPECTED, swallowed
 
 _cuda_props_cache = {}
 
@@ -28,10 +27,10 @@ def _cuda_driver():
                 lib = ctypes.CDLL(n)
                 lib.cuInit(0)
                 return lib, ctypes
-            except OSError as exc:
-                swallowed("torch/installers/cuda.py _cuda_driver: lib = ctypes.CDLL(n)", exc)
-    except EXPECTED as exc:
-        swallowed("torch/installers/cuda.py _cuda_driver: import ctypes", exc)
+            except OSError:
+                pass
+    except Exception:
+        pass
     return None, None
 
 
@@ -39,8 +38,7 @@ def _cuda_device_index(device=None):
     if isinstance(device, str) and ":" in device:
         try:
             return int(device.split(":", 1)[1])
-        except EXPECTED as exc:
-            swallowed("torch/installers/cuda.py _cuda_device_index: return int(device.split(':', 1)[1])", exc)
+        except Exception:
             return 0
     if isinstance(device, int):
         return device
@@ -63,8 +61,8 @@ def _cuda_device_name(device=None):
             got = buf.value.decode("utf-8", "ignore")
             if got:
                 name = got
-    except EXPECTED as exc:
-        swallowed("torch/installers/cuda.py _cuda_device_name: lib, ctypes = _cuda_driver()", exc)
+    except Exception:
+        pass
     _cuda_props_cache["name"] = name
     return name
 
@@ -88,8 +86,8 @@ def _cuda_capability():
             lib.cuDeviceComputeCapability(ctypes.byref(maj), ctypes.byref(mino), dev)
             if maj.value > 0:
                 cc = (maj.value, mino.value)
-    except EXPECTED as exc:
-        swallowed("torch/installers/cuda.py _cuda_capability: lib, ctypes = _cuda_driver()", exc)
+    except Exception:
+        pass
     _cuda_props_cache["cap"] = cc
     return cc
 
@@ -116,8 +114,8 @@ def _cuda_sm_count():
             lib.cuDeviceGetAttribute(ctypes.byref(val), CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, dev)
             if val.value > 0:
                 n = val.value
-    except EXPECTED as exc:
-        swallowed("torch/installers/cuda.py _cuda_sm_count: lib, ctypes = _cuda_driver()", exc)
+    except Exception:
+        pass
     _cuda_props_cache["sm"] = n
     return n
 
@@ -138,8 +136,8 @@ def _cuda_total_memory():
                 fn(ctypes.byref(val), dev)
             if val.value > 0:
                 total = int(val.value)
-    except EXPECTED as exc:
-        swallowed("torch/installers/cuda.py _cuda_total_memory: lib, ctypes = _cuda_driver()", exc)
+    except Exception:
+        pass
     _cuda_props_cache["total_memory"] = total
     return total
 
@@ -191,19 +189,27 @@ def _install_cuda(g, registry=None):
                 return False
             return bool(getattr(jt, "has_cuda", 0)) or bool(getattr(jt.compiler, "has_cuda", 0)) \
                 or bool(getattr(jt.compiler, "has_acl", 0))
-        except EXPECTED as exc:
-            swallowed("torch/installers/cuda.py is_available: if _cuda_visible_devices_empty():", exc)
+        except Exception:
             return False
     def device_count():
         if not is_available():
             return 0
+        # Every visible device is usable from this process now, so the
+        # runtime's own count is the answer; it already honours
+        # CUDA_VISIBLE_DEVICES.
+        try:
+            n = int(jt.get_device_count())
+            if n > 0:
+                return n
+        except Exception:
+            pass
         try:
             import os as _os_cuda
             _cvd = _os_cuda.environ.get("CUDA_VISIBLE_DEVICES", None)
             if _cvd is not None:
                 return len([_d for _d in _cvd.split(",") if _d.strip()])
-        except EXPECTED as exc:
-            swallowed("torch/installers/cuda.py device_count: import os as _os_cuda", exc)
+        except Exception:
+            pass
         return 1
     cuda.is_available = is_available
     cuda.device_count = device_count
@@ -214,48 +220,67 @@ def _install_cuda(g, registry=None):
     # NVML, so that it can answer before CUDA is initialised. Here both
     # questions go to the same place.
     cuda._device_count_nvml = device_count
-    cuda.current_device = lambda: 0
-
-    def _cuda_set_device(device=None, *a, **k):
-        """torch.cuda.set_device -- honoured for device 0, refused otherwise.
-
-        Was `lambda *a, **k: None` while device_count() reported the real
-        number of cards, so `set_device(1)` looked like it worked and every
-        subsequent allocation still landed on device 0.  Jittor has no
-        per-process current-device selection yet (that is the multi-card task),
-        so anything but device 0 must be an error rather than a no-op.
-        """
-        index = device
-        if index is None:
-            return None
-        if isinstance(index, str):
-            index = index.split(":")[-1] if ":" in index else 0
-        index = getattr(device, "index", index)
-        if index is None:
-            index = 0
+    # Devices are real: every Var carries the CUDA device it lives on and
+    # jittor keeps a current device that new tensors are placed on -- torch's
+    # model exactly. This used to be `lambda: 0` next to a set_device that
+    # refused anything but 0.
+    def current_device():
         try:
-            index = int(index)
-        except (TypeError, ValueError):
-            index = 0
-        if index == 0:
-            return None
-        from ...stub_policy import unimplemented as _unimpl_set_device
-        return _unimpl_set_device(
-            "torch.cuda.set_device(%d)" % index,
-            "leave every following allocation and kernel on device 0 while "
-            "the program believes it switched cards",
-            "Select the card with CUDA_VISIBLE_DEVICES before starting the "
-            "process.")
+            d = int(jt.current_device())
+        except Exception:
+            d = -1
+        return d if d >= 0 else 0
 
-    cuda.set_device = _cuda_set_device
+    def set_device(device=None, *a, **k):
+        """torch.cuda.set_device: make a device current, in place."""
+        if device is None or _device_is_cpu(device):
+            return None
+        index = _cuda_index_of(device)
+        if index is None:
+            # A bare "cuda"/torch.device("cuda") names no particular device.
+            return None
+        try:
+            jt.set_device(int(index))
+        except Exception as error:
+            raise RuntimeError(
+                "torch.cuda.set_device(%r): %s" % (device, error))
+        return None
+
+    cuda.current_device = current_device
+    cuda.set_device = set_device
+
     class _CudaDeviceContext:
+        """``with torch.cuda.device(i):`` -- i is current inside the block."""
         def __init__(self, device=None):
             self.device = device
+            self.idx = None if _device_is_cpu(device) else _cuda_index_of(device)
+            self.prev_idx = -1
         def __enter__(self):
+            if self.idx is not None and self.idx >= 0:
+                self.prev_idx = current_device()
+                if self.prev_idx != self.idx:
+                    set_device(self.idx)
             return self
         def __exit__(self, *exc):
+            if self.prev_idx >= 0 and self.prev_idx != current_device():
+                set_device(self.prev_idx)
+            self.prev_idx = -1
             return False
     cuda.device = _CudaDeviceContext
+
+    class _CudaDeviceOf(_CudaDeviceContext):
+        """``with torch.cuda.device_of(tensor):`` -- the tensor's own device."""
+        def __init__(self, tensor):
+            idx = None
+            if isinstance(tensor, jt.Var):
+                try:
+                    got = int(tensor.device_id)
+                except Exception:
+                    got = -1
+                if got >= 0:
+                    idx = got
+            super().__init__(idx)
+    cuda.device_of = _CudaDeviceOf
     cuda.is_initialized = lambda *a, **k: bool(is_available() and getattr(jt.flags, "use_cuda", 0))
     cuda._is_in_bad_fork = lambda *a, **k: False
     # Match PyTorch's empty_cache() as a memory hint instead of a forced
@@ -266,8 +291,7 @@ def _install_cuda(g, registry=None):
         import os as _os_empty_cache
         _empty_cache_mode = str(_os_empty_cache.environ.get(
             "JITTOR_TORCH_CUDA_EMPTY_CACHE", "0")).strip().lower()
-    except EXPECTED as exc:
-        swallowed("torch/installers/cuda.py _install_cuda: import os as _os_empty_cache", exc)
+    except Exception:
         _empty_cache_mode = "0"
 
     def _empty_cache():
@@ -276,17 +300,17 @@ def _install_cuda(g, registry=None):
         if _empty_cache_mode in ("", "1", "true", "yes", "on", "gc"):
             try:
                 jt.gc()
-            except EXPECTED as exc:
-                swallowed("torch/installers/cuda.py _empty_cache: jt.gc()", exc)
+            except Exception:
+                pass
         elif _empty_cache_mode in ("sync", "full"):
             try:
                 jt.sync_all(True)
-            except EXPECTED as exc:
-                swallowed("torch/installers/cuda.py _empty_cache: jt.sync_all(True)", exc)
+            except Exception:
+                pass
             try:
                 jt.gc()
-            except EXPECTED as exc:
-                swallowed("torch/installers/cuda.py _empty_cache: jt.gc()", exc)
+            except Exception:
+                pass
     cuda.empty_cache = _empty_cache
     cuda.synchronize = lambda *a, **k: jt.sync_all(True)
     cuda.manual_seed = lambda s: jt.set_global_seed(int(s))
@@ -296,8 +320,7 @@ def _install_cuda(g, registry=None):
     def _device_name(*a, **k):
         try:
             return "Ascend910B/NPU" if getattr(jt.compiler, "has_acl", 0) else _cuda_device_name(a[0] if a else None)
-        except EXPECTED as exc:
-            swallowed("torch/installers/cuda.py _device_name: return 'Ascend910B/NPU' if getattr(jt.compiler, 'has_ac...", exc)
+        except Exception:
             return "CUDA"
     cuda.get_device_name = _device_name
     cuda.get_device_properties = lambda *a, **k: _DeviceProps()
@@ -380,16 +403,16 @@ def _install_cuda(g, registry=None):
             import time as _time_event
             try:
                 jt.sync_all(True)
-            except EXPECTED as exc:
-                swallowed("torch/installers/cuda.py record: jt.sync_all(True)", exc)
+            except Exception:
+                pass
             self._time = _time_event.perf_counter()
             return None
 
         def synchronize(self):
             try:
                 jt.sync_all(True)
-            except EXPECTED as exc:
-                swallowed("torch/installers/cuda.py synchronize: jt.sync_all(True)", exc)
+            except Exception:
+                pass
 
         def query(self):
             return self._time is not None
@@ -531,8 +554,7 @@ def _install_cuda(g, registry=None):
         try:
             mi = jt.get_mem_info()
             used = int(mi.total_cuda_used if jt.flags.use_cuda else mi.total_cpu_used)
-        except EXPECTED as exc:
-            swallowed("torch/installers/cuda.py _mem_used: mi = jt.get_mem_info()", exc)
+        except Exception:
             used = 0
         if used > _mem_peak[0]:
             _mem_peak[0] = used
@@ -550,8 +572,7 @@ def _install_cuda(g, registry=None):
         try:
             mi = jt.get_mem_info()
             _mem_peak[0] = int(mi.total_cuda_used if jt.flags.use_cuda else mi.total_cpu_used)
-        except EXPECTED as exc:
-            swallowed("torch/installers/cuda.py _reset_peak: mi = jt.get_mem_info()", exc)
+        except Exception:
             _mem_peak[0] = 0
     cuda.reset_peak_memory_stats = _reset_peak
     cuda.reset_max_memory_allocated = _reset_peak
@@ -586,8 +607,7 @@ def _install_cuda(g, registry=None):
                     if _lib.cudaMemGetInfo(_ct.byref(free), _ct.byref(total)) != 0:
                         return None
                     return (int(free.value), int(total.value))
-        except EXPECTED as exc:
-            swallowed("torch/installers/cuda.py _cuda_mem_get_info_fn: import ctypes as _ct", exc)
+        except Exception:
             fn = False
         _memgetinfo[0] = fn
         return fn
@@ -605,8 +625,7 @@ def _install_cuda(g, registry=None):
             mi = jt.get_mem_info()
             total = int(mi.total_cuda_ram)
             return (max(0, total - int(mi.total_cuda_used)), total)
-        except EXPECTED as exc:
-            swallowed("torch/installers/cuda.py _mem_get_info: mi = jt.get_mem_info()", exc)
+        except Exception:
             return (0, 0)
     cuda.mem_get_info = _mem_get_info
     cuda.ipc_collect = lambda *a, **k: None
@@ -683,8 +702,8 @@ def _install_cuda(g, registry=None):
     _modules["torch.multiprocessing.reductions"] = _mp_reductions
     try:
         g.multiprocessing.reductions = _mp_reductions
-    except (AttributeError, TypeError) as exc:
-        swallowed("torch/installers/cuda.py _install_cuda: g.multiprocessing.reductions = _mp_reductions", exc)
+    except Exception:
+        pass
 
     if "torch.overrides" not in _modules:
         from ...stub_policy import unimplemented as _unimplemented
@@ -835,8 +854,8 @@ def _install_cuda(g, registry=None):
                     try:
                         if getattr(jt, "cudnn", None) is not None and hasattr(jt.cudnn, "set_benchmark"):
                             jt.cudnn.set_benchmark(int(bool(value)))
-                    except EXPECTED as exc:
-                        swallowed("torch/installers/cuda.py __setattr__: if getattr(jt, 'cudnn', None) is not None and hasattr(j...", exc)
+                    except Exception:
+                        pass
                 if name == "allow_tf32" and not getattr(
                         self, "_jittor_cudnn_init", False):
                     if hasattr(jt.flags, "cuda_allow_cudnn_tf32"):
@@ -934,8 +953,8 @@ def _install_cuda(g, registry=None):
         g._torch_float32_matmul_precision = precision
         try:
             cuda_backend.matmul.allow_tf32 = precision in ("high", "medium")
-        except (AttributeError, TypeError) as exc:
-            swallowed("torch/installers/cuda.py _set_float32_matmul_precision: cuda_backend.matmul.allow_tf32 = precision in ('high', ...", exc)
+        except Exception:
+            pass
     g.get_float32_matmul_precision = _get_float32_matmul_precision
     g.set_float32_matmul_precision = _set_float32_matmul_precision
 
@@ -954,8 +973,7 @@ def _install_version(g, registry=None):
     try:
         nv = getattr(getattr(jt, "compiler", None), "nvcc_version", None)
         version.cuda = ".".join(map(str, nv[:2])) if nv else None
-    except EXPECTED as exc:
-        swallowed("torch/installers/cuda.py _install_version: nv = getattr(getattr(jt, 'compiler', None), 'nvcc_versi...", exc)
+    except Exception:
         version.cuda = None
     version.hip = None
     version.git_version = "jittor"
@@ -995,8 +1013,8 @@ def _install_accelerator(g, registry=None):
     accelerator = _types_acc.ModuleType("torch.accelerator")
     accelerator.is_available = lambda *a, **k: True
     accelerator.device_count = cuda.device_count
-    accelerator.current_device_index = lambda *a, **k: 0
-    accelerator.set_device_index = lambda *a, **k: None
+    accelerator.current_device_index = lambda *a, **k: cuda.current_device()
+    accelerator.set_device_index = lambda d, *a, **k: cuda.set_device(d)
     accelerator.device_index = getattr(cuda, "device", None)
     accelerator.current_stream = cuda.current_stream
     accelerator.set_stream = getattr(cuda, "set_stream", lambda *a, **k: None)

@@ -1741,12 +1741,21 @@ class Module:
         self.load_state_dict(state)
 
     def cuda(self, device=None):
+        ''' Enable CUDA. With ``device`` given, also move every parameter
+        onto that device index, in place: the Parameter objects keep their
+        identity -- an optimizer already holding them keeps working -- and
+        only their storage moves. '''
         flags.use_cuda = 1
+        if device is not None:
+            index = ori_int(getattr(device, "index", device))
+            for p in self.parameters():
+                moved = p.to_device(index)
+                if moved is not p:
+                    p.assign(moved)
         return self
 
     def npu(self, device=None):
-        flags.use_cuda = 1
-        return self
+        return self.cuda(device)
 
     def modules(self) -> List:
         ''' Returns a list of sub-modules in the module recursively.
