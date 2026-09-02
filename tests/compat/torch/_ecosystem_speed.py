@@ -31,6 +31,26 @@ def _llama(torch):
     return model, {"input_ids": ("int64", (4, 512), 32000)}
 
 
+def _qwen3(torch):
+    """Qwen3-style decoder: GQA, per-head q/k RMSNorm, SwiGLU, RoPE."""
+    from transformers import AutoConfig, AutoModelForCausalLM
+
+    config = AutoConfig.for_model(
+        "qwen3",
+        hidden_size=1024,
+        intermediate_size=2816,
+        num_hidden_layers=8,
+        num_attention_heads=16,
+        num_key_value_heads=8,
+        head_dim=64,
+        vocab_size=32000,
+        max_position_embeddings=1024,
+        attention_dropout=0.0,
+    )
+    model = AutoModelForCausalLM.from_config(config)
+    return model, {"input_ids": ("int64", (4, 512), 32000)}
+
+
 def _gpt2(torch):
     from transformers import AutoConfig, AutoModelForCausalLM
 
@@ -139,6 +159,7 @@ def _resnet_like(torch):
 CASES = {
     "large_transformers_llama": (_llama, ("transformers",)),
     "large_transformers_gpt2": (_gpt2, ("transformers",)),
+    "large_transformers_qwen3": (_qwen3, ("transformers",)),
     "large_transformers_bert": (_bert, ("transformers",)),
     "large_transformers_vit": (_vit, ("transformers",)),
     "large_diffusers_unet2d": (_diffusers_unet, ("diffusers",)),
