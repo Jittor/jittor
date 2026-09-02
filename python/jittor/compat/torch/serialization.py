@@ -4,6 +4,7 @@ import numpy as np
 import jittor as jt
 
 from .context import registry_for
+from .types import _make_cpu_resident, _make_cuda_resident
 
 
 def _install_safetensors_shim(registry=None):
@@ -177,7 +178,12 @@ def install(ctx):
         if isinstance(obj, jt.Var):
             # Var.numpy() can materialize a CUDA Var on CPU in-place. Checkpoint
             # serialization must not change the live module/optimizer tensors.
-            return {_VAR_TAG: True, "data": obj.clone().numpy(), "dtype": str(obj.dtype)}
+            # `str(obj.dtype)` returns the torch-compat dtype OBJECT (a str
+            # subclass), which pickles as a class reference. Store the bare
+            # name so a checkpoint carries no importable global at all.
+            return {_VAR_TAG: True, "data": obj.clone().numpy(),
+                    "dtype": str.__str__(obj.dtype) if isinstance(obj.dtype, str)
+                             else str(obj.dtype)}
         # Drop non-picklable callables (e.g. an LR scheduler's local lr_lambda
         # closure in an extra/scheduler state_dict). torch's LambdaLR.state_dict
         # does the same -- the lambda is rebuilt on load, not restored.
@@ -245,7 +251,128 @@ def install(ctx):
                "int64": _np_pt.int64, "int32": _np_pt.int32, "int16": _np_pt.int16,
                "int8": _np_pt.int8, "uint8": _np_pt.uint8, "bool": _np_pt.bool_}[dtype_str]
         return _np_pt.frombuffer(raw, dtype=npd, count=numel)
-    def _load_torch_pt(path_or_file):
+    # ---- restricted unpickling (torch.load(weights_only=...)) -------------
+    # This used to be a lie in two directions: `weights_only` was accepted and
+    # dropped on the floor -- so the documented "no arbitrary code execution"
+    # guarantee was simply absent -- and any class the unpickler could not
+    # import was replaced by `type(name, (), {})`, an EMPTY class.  A checkpoint
+    # referring to a class this process does not have therefore loaded
+    # "successfully" into objects with no attributes and no data.
+    _SAFE_NUMPY_NAMES = frozenset((
+        "ndarray", "dtype", "_reconstruct", "scalar",
+        "bool_", "int8", "int16", "int32", "int64", "intp", "longlong",
+        "uint8", "uint16", "uint32", "uint64", "uintp", "ulonglong",
+        "float16", "float32", "float64", "longdouble",
+        "complex64", "complex128", "clongdouble", "bytes_", "str_",
+    ))
+    _SAFE_GLOBALS = frozenset((
+        ("collections", "OrderedDict"), ("collections", "defaultdict"),
+        ("collections", "Counter"), ("collections", "deque"),
+        ("builtins", "set"), ("builtins", "frozenset"), ("builtins", "list"),
+        ("builtins", "dict"), ("builtins", "tuple"), ("builtins", "int"),
+        ("builtins", "float"), ("builtins", "complex"), ("builtins", "bool"),
+        ("builtins", "str"), ("builtins", "bytes"), ("builtins", "bytearray"),
+        ("_codecs", "encode"),
+        ("jittor.compat.torch.nested", "_rebuild_var_from_numpy"),
+        ("jittor.compat.torch.nested", "_rebuild_nested_tensor"),
+        # torch.dtype/torch.device are plain value objects here (a str subclass
+        # and a name/index pair); older checkpoints reference them by name.
+        ("jittor.compat.torch.types", "dtype"),
+        ("jittor.compat.torch.types", "device"),
+        ("torch", "dtype"), ("torch", "device"), ("torch", "Size"),
+    ))
+
+    def _is_safe_global(module, name):
+        if (module, name) in _SAFE_GLOBALS:
+            return True
+        if module in ("numpy", "numpy.core.multiarray", "numpy._core.multiarray",
+                      "numpy.core.numeric", "numpy._core.numeric"):
+            return name in _SAFE_NUMPY_NAMES
+        return False
+
+    def _resolve_global(module, name, weights_only):
+        """Import module.name, or refuse -- never fabricate an empty class."""
+        if weights_only and not _is_safe_global(module, name):
+            raise _pickle.UnpicklingError(
+                "Weights only load failed: %s.%s is not an allowed global. "
+                "torch.load defaults to weights_only=True; re-run with "
+                "torch.load(..., weights_only=False) only if you trust the "
+                "file, because that lets the checkpoint execute arbitrary code."
+                % (module, name))
+        try:
+            m = __import__(module, fromlist=[name])
+            return getattr(m, name)
+        except Exception as exc:
+            raise _pickle.UnpicklingError(
+                "checkpoint refers to %s.%s, which this interpreter cannot "
+                "import (%s). Jittor's torch compatibility layer used to "
+                "substitute an empty placeholder class here, which loaded the "
+                "checkpoint successfully into objects that held none of the "
+                "saved state. Install the package that defines it, or load the "
+                "checkpoint with weights_only=True to keep only tensors."
+                % (module, name, exc))
+
+    class _PortableUnpickler(_pickle.Unpickler):
+        """Plain-pickle loader for our own torch.save output."""
+        weights_only = True
+
+        def find_class(self, module, name):
+            return _resolve_global(module, name, self.weights_only)
+
+    def _portable_pickle_load(fh, weights_only):
+        up = _PortableUnpickler(fh)
+        up.weights_only = bool(weights_only)
+        return up.load()
+
+    # ---- map_location -----------------------------------------------------
+    def _apply_map_location(obj, map_location, _depth=0):
+        """Move every loaded Var to the requested device.
+
+        `map_location` was documented as "(ignored)": a checkpoint saved from
+        CUDA loaded onto whatever device happened to be current, so
+        `torch.load(p, map_location="cpu")` -- the standard way to read a GPU
+        checkpoint on a CPU-only box -- did nothing.
+        """
+        if map_location is None:
+            return obj
+        if isinstance(obj, dict):
+            return {k: _apply_map_location(v, map_location, _depth + 1)
+                    for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            built = [_apply_map_location(v, map_location, _depth + 1) for v in obj]
+            if isinstance(obj, tuple):
+                return type(obj)(*built) if hasattr(obj, "_fields") else tuple(built)
+            return type(obj)(built) if type(obj) is not list else built
+        if not isinstance(obj, jt.Var):
+            return obj
+        target = map_location
+        if callable(target) and not isinstance(target, (str, dict)):
+            moved = target(obj, "cpu")
+            return moved if isinstance(moved, jt.Var) else obj
+        if isinstance(target, dict):
+            target = target.get("cpu", target.get("cuda:0"))
+            if target is None:
+                return obj
+        name = getattr(target, "type", None) or str(target)
+        name = str(name).split(":")[0]
+        if name == "cpu":
+            return _make_cpu_resident(obj)
+        if name in ("cuda", "npu", "gpu"):
+            if not jt.flags.use_cuda:
+                raise RuntimeError(
+                    "torch.load(map_location=%r) asks for an accelerator, but "
+                    "no CUDA/NPU device is in use. Load with "
+                    "map_location='cpu'." % (map_location,))
+            return _make_cuda_resident(obj, force=True)
+        from ..stub_policy import unimplemented
+        return unimplemented(
+            "torch.load(map_location=%r)" % (name,),
+            "leave the tensors on whichever device happens to be current "
+            "instead of the requested one",
+            "Only 'cpu' and 'cuda' map_location targets are supported.",
+            stub_result=obj)
+
+    def _load_torch_pt(path_or_file, weights_only=True):
         zf = _zipfile.ZipFile(path_or_file, "r")
         names = zf.namelist()
         pkl_name = next(n for n in names if n.endswith("data.pkl"))
@@ -286,10 +413,7 @@ def install(ctx):
                     return tuple
                 if module == "torch" and name == "device":
                     return lambda *a, **k: "cpu"
-                try:
-                    m = __import__(module, fromlist=[name]); return getattr(m, name)
-                except Exception:
-                    return type(name, (), {})
+                return _resolve_global(module, name, weights_only)
         return _Unpick(_io.BytesIO(zf.read(pkl_name))).load()
 
     def _is_zip(f):
@@ -309,36 +433,44 @@ def install(ctx):
         except Exception:
             return False
         return magic == 0x1950a86a20f9469cfc6c
-    def load(f, *a, **k):
-        # accept map_location/weights_only/pickle_module kwargs (ignored).
-        # Real torch .pt is a zip archive -> use the torch-format loader;
-        # our own torch.save output is plain pickle -> _from_portable.
+    def load(f, map_location=None, pickle_module=None, *, weights_only=None,
+             mmap=None, **k):
+        # torch >= 2.6 (this shim reports 2.11) defaults weights_only=True.
+        # Both this and map_location used to be accepted and ignored.
+        if weights_only is None:
+            weights_only = True
+        weights_only = bool(weights_only)
         path = None
         if not hasattr(f, "read"):
             path = _os_pickle.fspath(f)
             native_load = getattr(g, "_vj_native_load", None)
             if native_load is not None and path.startswith(("jittorhub://", "http://", "https://")):
-                return native_load(path)
+                return _apply_map_location(native_load(path), map_location)
+        _zip = False
         try:
-            if _is_zip(f):
-                return _load_torch_pt(f)
-        except Exception as _e:
-            pass
+            _zip = _is_zip(f)
+        except Exception:
+            _zip = False
+        if _zip:
+            return _apply_map_location(
+                _load_torch_pt(f, weights_only=weights_only), map_location)
         if path is not None and path.lower().endswith((".pth", ".pt", ".bin")) and _is_legacy_torch_pickle(path):
             from jittor_utils.load_pytorch import load_pytorch as _load_pytorch
-            return _load_pytorch(path)
+            return _apply_map_location(_load_pytorch(path), map_location)
         try:
             if hasattr(f, "read"):
-                obj = _pickle.load(f)
+                obj = _portable_pickle_load(f, weights_only)
             else:
                 with open(f, "rb") as fh:
-                    obj = _pickle.load(fh)
+                    obj = _portable_pickle_load(fh, weights_only)
+        except _pickle.UnpicklingError:
+            raise
         except Exception:
             native_load = getattr(g, "_vj_native_load", None)
             if native_load is not None and path is not None and path.lower().endswith(".pkl"):
-                return native_load(path)
+                return _apply_map_location(native_load(path), map_location)
             raise
-        return _from_portable(obj)
+        return _apply_map_location(_from_portable(obj), map_location)
     g.save = save
     g.load = load
     # Stash the real pickle loader so adapters can restore it if torch.load gets

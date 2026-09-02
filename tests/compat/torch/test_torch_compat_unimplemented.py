@@ -231,5 +231,89 @@ class TestLoadStateDict(StubPolicyBase):
         with self.assertRaises(RuntimeError):
             model.load_state_dict({"encoder.layer.0.weight": jt.zeros((4, 4))})
 
+class TestTorchLoad(StubPolicyBase):
+    """torch.load ignored weights_only and map_location and faked unknown classes."""
+
+    def setUp(self):
+        super().setUp()
+        import tempfile
+        self._dir = tempfile.mkdtemp(prefix="jt_load_")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._dir, ignore_errors=True)
+        super().tearDown()
+
+    def _path(self, name):
+        return os.path.join(self._dir, name)
+
+    def test_plain_tensor_checkpoint_still_round_trips(self):
+        p = self._path("t.pkl")
+        x = jt.array(np.arange(6, dtype="float32"))
+        torch.save({"x": x, "step": 3}, p)
+        got = torch.load(p)
+        np.testing.assert_array_equal(got["x"].numpy(), x.numpy())
+        self.assertEqual(got["step"], 3)
+
+    def test_weights_only_rejects_an_arbitrary_class(self):
+        import pickle
+        p = self._path("obj.pkl")
+        with open(p, "wb") as fh:
+            pickle.dump({"cfg": _PayloadClass(5)}, fh)
+        with self.assertRaises(pickle.UnpicklingError) as cm:
+            torch.load(p)
+        self.assertIn("weights_only", str(cm.exception))
+
+    def test_weights_only_false_still_loads_the_real_class(self):
+        import pickle
+        p = self._path("obj2.pkl")
+        with open(p, "wb") as fh:
+            pickle.dump({"cfg": _PayloadClass(5)}, fh)
+        got = torch.load(p, weights_only=False)
+        self.assertIsInstance(got["cfg"], _PayloadClass)
+        self.assertEqual(got["cfg"].value, 5)
+
+    def test_unknown_class_is_no_longer_replaced_by_an_empty_type(self):
+        # Hand-built pickle referring to a module that does not exist. The old
+        # find_class returned `type(name, (), {})`, so the load "succeeded"
+        # with an attribute-free placeholder holding none of the saved state.
+        import pickle
+        p = self._path("ghost.pkl")
+        payload = (b"\x80\x04\x95\x00\x00\x00\x00\x00\x00\x00\x00"
+                   b"c__jittor_missing_module__\nGhost\n)\x81.")
+        with open(p, "wb") as fh:
+            fh.write(payload)
+        with self.assertRaises(pickle.UnpicklingError) as cm:
+            torch.load(p, weights_only=False)
+        self.assertIn("Ghost", str(cm.exception))
+
+    def test_map_location_cpu_puts_tensors_on_the_host(self):
+        from jittor.compat.torch.types import _var_is_cpu_resident
+        p = self._path("m.pkl")
+        torch.save({"w": jt.ones((4, 4))}, p)
+        got = torch.load(p, map_location="cpu")
+        self.assertTrue(_var_is_cpu_resident(got["w"]))
+
+    def test_map_location_cuda_without_a_device_is_an_error(self):
+        p = self._path("m2.pkl")
+        torch.save({"w": jt.ones((2, 2))}, p)
+        if jt.flags.use_cuda:
+            self.skipTest("this asserts the CPU-only diagnosis")
+        with self.assertRaises(RuntimeError) as cm:
+            torch.load(p, map_location="cuda")
+        self.assertIn("map_location", str(cm.exception))
+
+    def test_map_location_unsupported_target_is_refused(self):
+        p = self._path("m3.pkl")
+        torch.save({"w": jt.ones((2, 2))}, p)
+        self.assertRefuses(lambda: torch.load(p, map_location="mps"),
+                           "map_location")
+
+class _PayloadClass:
+    """Module-level so pickle can find it; stands in for a config object."""
+
+    def __init__(self, value):
+        self.value = value
+
 if __name__ == "__main__":
     unittest.main()
