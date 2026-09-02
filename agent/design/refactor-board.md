@@ -97,25 +97,25 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 
 | 编号 | 任务 | 状态 | 负责 | 提交 |
 | --- | --- | --- | --- | --- |
-| 0.01 | `TestGradients` 改用 `only_for=("cpu",)` 显式实例化 | 待领 | | |
-| 0.02 | 设备过滤后 bases 为空或方法数为 0 时生成器直接 raise | 待领 | | |
-| 0.03 | `tests/compiler/test_jit_tests.py` 进 CPU 门禁，并断言 … | 待领 | | |
-| 0.04 | 门禁改为「整个 `tests/` 减显式排除清单」，排除项必须写理由 | 待领 | | |
+| 0.01 | `TestGradients` 改用 `only_for=("cpu",)` 显式实例化 | 已合并 | gates | aee8ecaa（+355deb6e） |
+| 0.02 | 设备过滤后 bases 为空或方法数为 0 时生成器直接 raise | 已合并 | gates | e5eb0d05 |
+| 0.03 | `tests/compiler/test_jit_tests.py` 进 CPU 门禁，并断言 … | 已合并 | gates | a5e7f654 |
+| 0.04 | 门禁改为「整个 `tests/` 减显式排除清单」，排除项必须写理由 | 进行中 | gates |  |
 | 0.05 | 生态对拍进 nightly | 待领 | | |
-| 0.06 | `make_tensor` 种子改为 `hash(nodeid, shape, dtype)` … | 待领 | | |
+| 0.06 | `make_tensor` 种子改为 `hash(nodeid, shape, dtype)` … | 进行中 | gates |  |
 | 0.07 | 缓存路径追加构建配置指纹 | 待领 | | |
 | 0.08 | 锁统一为一种类型、一个 fd | 待领 | | |
 | 0.09 | 探测结果落盘 `cache_path/probe.json` | 待领 | | |
 | 0.10 | 写缓存前检查可用磁盘空间，不足时给明确错误 | 待领 | | |
 | 0.11 | 「jit_utils 已更新请重跑」改非零退出码 | 待领 | | |
-| 0.12 | 14 处在用例里裸赋值 `jt.flags.*` 且无 tearDown 的测试改 `flag_… | 待领 | | |
-| 0.13 | conftest 的模式由显式环境变量决定，删除 `sys.argv` 嗅探 | 待领 | | |
+| 0.12 | 14 处在用例里裸赋值 `jt.flags.*` 且无 tearDown 的测试改 `flag_… | 进行中 | gates |  |
+| 0.13 | conftest 的模式由显式环境变量决定，删除 `sys.argv` 嗅探 | 进行中 | gates |  |
 | 0.14 | `_session_env` 不再 `os.environ.copy()` | 待领 | | |
 | 0.15 | 门禁分两层 | 待领 | | |
 | 0.16 | `test_device_parity.py` 按算子分片并行，不再在 `setUpClass`… | 待领 | | |
 | 0.17 | `pyproject.toml` 的 `pythonpath` 改由 conftest 按环境变… | 待领 | | |
-| 0.18 | 门禁每条目断言至少执行 1 个非 skip 用例 | 待领 | | |
-| 0.19 | 结构测试从「精确清单」改成「规则」 | 待领 | | |
+| 0.18 | 门禁每条目断言至少执行 1 个非 skip 用例 | 进行中 | gates |  |
+| 0.19 | 结构测试从「精确清单」改成「规则」 | 已合并 | gates | c3bcd277 |
 | 0.20 | 布局收尾 | 待领 | | |
 | 0.21 | 测试起的子进程不带 PYTHONPATH，门禁机器上是假绿 | 待领 | | |
 | 1.01 | 把 `utils/data.gz` 解出的 `data.cc` 还原为可读的五个翻译单元 | 待领 | | |
