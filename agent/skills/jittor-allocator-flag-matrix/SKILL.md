@@ -1,6 +1,6 @@
 ---
 name: jittor-allocator-flag-matrix
-description: 复现和验证 Jittor 分配器相关缺陷的 flag 矩阵与判据。改动 src/mem/**、Var::alloc/share_with、getitem/setitem 的 inplace 路径，或看到"只在某些配置下结果不对/段错误"时用它——默认配置会掩盖几乎所有分配器 bug，测试不切 flag 就等于没测。
+description: 复现和证明 Jittor 分配器缺陷的手法：flag 矩阵、下毒再断言、share_with 别名的观察与证伪、跨流时序竞争的稳定复现、check_graph 的覆盖判据。改动 src/mem/**、Var::alloc/share_with、migrate_to_cpu/gpu、fetch_op、getitem/setitem 的 inplace 路径，或看到"只在某些配置下结果不对/段错误/偶发不对"时用它——默认配置会掩盖几乎所有分配器 bug，测试不切 flag、不下毒、不做够轮数就等于没测。
 ---
 
 # 分配器 flag 矩阵
@@ -75,14 +75,121 @@ pytest 不需要（`tests/conftest.py` 已经处理）。
   在有 CUDA 设备的机器上走 pinned 内存，本身就远超时限，且对机器负载极其敏感；
   它不在门禁里，不要把它当性能基准。
 
+## 怎么证明「读到的是别人的内存」——下毒再断言
+
+分配器 bug 的症状是「值不对」，而「值不对」有一百种原因。要把它钉死成
+**读到了不该读的那块内存**，唯一可靠的办法是**先在那块内存里写一个不可能出现的值，
+再断言读回来的不是它**。
+
+```python
+MAGIC  = 98765.0     # 被测数据
+POISON = 3.0         # 覆盖者
+```
+
+三条规则，缺一条就得到假绿：
+
+1. **下毒的缓冲区必须和被测缓冲区同形同 dtype。** SFRL 按 size 分桶，形状不同就
+   拿不到同一个块。pyops 分区的做法是一次造 128 个同形缓冲全填 `98765.0` 再全释放，
+   把 free list 铺满，下一次分配几乎必然命中其中一个。
+2. **第 0 轮永远是干净的。** free list 一开始是空的，第一轮没有可复用的块，
+   复现要从第 1 轮起。测试至少跑 3 轮，只跑 1 轮 = 没测。
+3. **下毒的写必须走 device kernel，不要走 `jt.array(np.…)`。** `jt.array` 是主机侧
+   分配加一次同步 H2D 拷贝，中间有几十毫秒的 Python/numpy 时间，异步窗口早就关上了。
+   正确写法是从一个**已经在设备上**的 var 派生：
+
+   ```python
+   seed = jt.array(np.zeros(n, "float32")) + 0.0   # 这个 + 0.0 把它挪到设备上
+   seed.sync()
+   poison = [seed + POISON for _ in range(8)]      # 纯 device kernel，没有主机拷贝
+   ```
+
+## 别名（`share_with`）怎么观察与怎么证伪
+
+`Var::share_with(x, offset)` 只是把 `allocator` 字段临时塞成父 Var 的指针；真正建立
+别名的是 `Var::alloc`，它成功后把子 var 的 `allocator`/`allocation` 覆盖成父块的，
+**从此没有任何字段记得「我是某块的子区间」**。建立别名的算子：`reshape`、`clone`、
+`tape`、`getitem`/`setitem` 的 inplace 路径、`code_op`、`fused_adamw`。
+
+从 Python 观察别名只有一条路：`operator<<(ostream&, const Var&)` 会把 `mem_ptr`
+以十六进制打出来，而 `jt.dump_all_graphs().nodes_info` 是唯一能读到它的接口。
+
+```python
+def var_mem_ptrs():
+    out = {}
+    for info in jt.dump_all_graphs().nodes_info:
+        if not info.startswith("Var("):
+            continue
+        body = info[len("Var("):]
+        # Var(id:f:b:p:iN:oN:sN:nN:gN,dtype,name,memptr)shape
+        out[body.split(":", 1)[0]] = body.split(",")[3].split(")")[0]
+    return out
+```
+
+两个 var 的 mem_ptr 相等就是别名（offset=0 的情形，`reshape` 就是）。
+
+**最短的一条别名断裂复现**（`use_cuda=1`）：
+
+```python
+a = jt.array(np.zeros(6, "float32")) + 0.0
+b = a.reshape((2, 3))        # b 与 a 共享同一块
+jt.sync_all(True)
+b.numpy()                    # fetch_sync -> migrate_to_cpu，把 b 单方面搬走
+a[1] = 7.0                   # setitem inplace，写进 a 那块（还在显存里）
+assert b.numpy()[0][1] == 7.0
+```
+
+`.numpy()` / `.item()` / `jt.fetch_sync` 在非 managed 配置下都是**真搬家**
+（`migrate_to_cpu` 新分配加 memcpy 加 free 原块），不是拷一份出来看。这是别名断裂
+最容易踩到的入口，比「混合 CPU-CUDA 图」好构造得多。
+
+## 跨流的时序 bug 怎么稳定复现
+
+`fetch_op` 在自己的非阻塞流上拷贝，源 var 的块在 `run_sync` 末尾
+（`executor.cc` 的 `fetcher_to_free.clear()`，**在 `cudaDeviceSynchronize` 之前**）
+就回了 free list。要赢这个竞争，得让副流上堆着足够多的活，而主流这边尽快把块要回来：
+
+1. **一次 fetch 多个 var**：`jt.fetch(v1, …, v8, cb)` 会在同一条流上排 8 组
+   D2D+D2H。32 MB 的 D2H 走 PCIe 约 2.7 ms，8 组就是 ~20 ms 的积压——后面几个 var
+   的 D2D 是在 20 ms 之后才执行的，源块早被抢走了。
+2. **中间一次设备同步都不能有**：`jt.sync_all(True)` 会
+   `cudaDeviceSynchronize()`，把所有流（包括副流）等干净，窗口就关了。释放那一步用
+   `jt.sync_all()`（不带 True）。
+3. 顺序是：`fetch` → `del srcs` → `jt.sync_all()`（这一步才真正释放块）→
+   造 poison → `jt.sync_all()` → 最后 `jt.sync_all(True)` 收货。
+
+这样构造，8 个 var 里有 7 个 100% 读到 poison。同样的场景改成「一次只 fetch 一个
+64 MB 的 var」则**一次都复现不了**——D2D 只要 60 µs，主机侧那点 Python 时间足够它跑完。
+所以「试了几次没复现」不等于没 bug，**要先把副流的积压做够**。
+
+## `check_graph` 与 `NODE_MEMCHECK`
+
+`jt.graph_check()` 分两半：liveness 三个计数器的一致性校验（一直在跑），和
+「活着但从 hold_vars 到不了」的悬挂节点扫描（走 `lived_nodes`）。后者的登记表原来
+只在 `#ifdef NODE_MEMCHECK` 下填，也就是**只有 `debug=1` 的构建**里才有内容；
+正式构建里它扫一张空表然后报告成功。
+
+现在登记跟着 `check_graph` 走：`jt.flag_scope(check_graph=1)` 里新建的节点才进表。
+判据是 `jt.graph_check()` 的返回值（扫过的节点数）：
+
+```python
+with jt.flag_scope(check_graph=1):
+    x = jt.array(...); (x*2).sum().sync()
+    assert jt.graph_check() > 0        # 0 表示这一半根本没在检查
+```
+
+**开着 `check_graph=1` 的进程里每次 `sync()` 都会跑一遍全图校验**，慢，只在查
+liveness 问题时开。
+
 ## 换页（swap / save_mem）怎么测
 
-`save_mem` 是**编译期**常量，不是运行期 flag。文档里的 `export JT_SAVE_MEM=1`
-当前**无效**（仓库里没有把它变成 `-DJT_SAVE_MEM` 的地方）。要跑到 `mem/swap.cc`：
+`save_mem` 是**编译期**常量，不是运行期 flag（`jt.flags.save_mem` 不存在，这是
+故意的：swap.h 顶上那张 TODO 还没做完，而 `if (save_mem)` 挂在每一次 Var 释放上）。
+`export JT_SAVE_MEM=1` 现在会被翻译成 `-DJT_SAVE_MEM=1`，并且它**自带一个缓存目录**
+（`jittor_utils.save_mem_build_flags` 进了构建配置指纹），所以开关它只会各编一次，
+不会互相顶掉对方的产物：
 
 ```bash
-export cc_flags=" -DJT_SAVE_MEM=1 "
-export JITTOR_HOME=<另一个缓存目录>     # 别污染你平时那个，切回去要重编
+export JT_SAVE_MEM=1                   # 会打一条 experimental 的警告，是对的
 ```
 
 然后在 Python 里把限额压到比工作集小：
