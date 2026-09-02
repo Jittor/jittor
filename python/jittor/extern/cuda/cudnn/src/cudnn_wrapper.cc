@@ -30,18 +30,31 @@ int get_benchmark() {
     return cudnn_benchmark;
 }
 
+static bool cudnn_handle_created = false;
+
+// See cublas_shutdown: report, never raise, and idempotent. cudnnDestroy is
+// the one that used to abort the process -- it runs first in static
+// destruction order, so "terminate called ... CUDNN_STATUS_INTERNAL_ERROR" was
+// the last thing many crashed runs printed, regardless of what went wrong.
+void cudnn_shutdown() {
+    if (!cudnn_handle_created) return;
+    cudnn_handle_created = false;
+    peekCudaErrorsAlways(cudnnDestroy(cudnn_handle));
+    cudnn_handle = nullptr;
+    LOGv << "cudnnDestroy finished";
+}
+
 struct cudnn_initer {
 
 inline cudnn_initer() {
     if (!get_device_count()) return;
     checkCudaErrors(cudnnCreate(&cudnn_handle));
+    cudnn_handle_created = true;
     LOGv << "cudnnCreate finished";
 }
 
 inline ~cudnn_initer() {
-    if (!get_device_count()) return;
-    checkCudaErrors(cudnnDestroy(cudnn_handle));
-    LOGv << "cudnnDestroy finished";
+    cudnn_shutdown();
 }
 
 } init;

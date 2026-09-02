@@ -19,4 +19,7 @@ namespace jittor {
 
 EXTERN_LIB curandGenerator_t gen;
 
+// Destroys the generator, reporting a failure instead of raising. Idempotent.
+void curand_shutdown();
+
 } // jittor

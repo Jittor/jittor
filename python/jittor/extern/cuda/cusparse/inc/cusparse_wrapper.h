@@ -18,6 +18,9 @@ namespace jittor {
 
 EXTERN_LIB cusparseHandle_t cusparse_handle;
 
+// Destroys cusparse_handle, reporting a failure instead of raising. Idempotent.
+void cusparse_shutdown();
+
 static inline cusparseIndexType_t get_index_dtype(NanoString dtype) {
     if (dtype == ns_int32) return CUSPARSE_INDEX_32I;
     if (dtype == ns_int64) return CUSPARSE_INDEX_64I;

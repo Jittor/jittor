@@ -60,6 +60,9 @@ cufftHandle cufft_get_plan(const CufftPlanKey& key);
 /** Destroy every cached plan. Reporting-only on failure: also runs at teardown. */
 void cufft_clear_plan_cache();
 
+// Destroys every cached plan, reporting failures instead of raising. Idempotent.
+void cufft_shutdown();
+
 // @pyjt(cufft_set_plan_cache_size)
 void cufft_set_plan_cache_size(int size);
 

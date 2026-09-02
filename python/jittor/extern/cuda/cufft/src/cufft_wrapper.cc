@@ -71,9 +71,18 @@ void cufft_clear_plan_cache() {
     for (auto& entry : cufft_plan_cache_)
         // Reporting-only: this also runs from a static destructor, and
         // throwing there terminates the process during CUDA teardown.
-        peekCudaErrors(cufftDestroy(entry.second));
+        // Unlatched, so a whole cache of failing plans is not reduced to one
+        // line that some earlier peek may already have consumed.
+        peekCudaErrorsAlways(cufftDestroy(entry.second));
     cufft_plan_cache_.clear();
     cufft_plan_order_.clear();
+}
+
+// See cublas_shutdown. Naturally idempotent: the second call has an empty
+// cache to walk.
+void cufft_shutdown() {
+    cufft_clear_plan_cache();
+    LOGv << "cufftDestroy finished";
 }
 
 struct cufft_initer {
@@ -84,9 +93,7 @@ inline cufft_initer() {
 }
 
 inline ~cufft_initer() {
-    if (!get_device_count()) return;
-    cufft_clear_plan_cache();
-    LOGv << "cufftDestroy finished";
+    cufft_shutdown();
 }
 
 } init;

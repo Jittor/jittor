@@ -65,7 +65,10 @@ struct DropoutDescriptor {
         }
     }
     ~DropoutDescriptor() {
-        checkCudaErrors(cudnnDestroyDropoutDescriptor(desc));
+        // Destructors are noexcept: checkCudaErrors here (it LOGf's, i.e.
+        // throws) turned any failing descriptor destroy -- including one
+        // during the unwinding of an earlier cuDNN error -- into terminate.
+        peekCudaErrorsAlways(cudnnDestroyDropoutDescriptor(desc));
         if (stateSpace)
             exe.temp_allocator->free(stateSpace, stateSize, stateAllocation);
     }
@@ -96,7 +99,8 @@ struct RnnDescriptor {
     }
 
     ~RnnDescriptor() {
-        checkCudaErrors(cudnnDestroyRNNDescriptor(desc));
+        // Same reason as ~DropoutDescriptor: report, never raise.
+        peekCudaErrorsAlways(cudnnDestroyRNNDescriptor(desc));
     }
 
     size_t weight_space_size(const cudnnTensorDescriptor_t &xDesc) {
@@ -135,7 +139,7 @@ struct RnnWeightDescriptor {
         checkCudaErrors(cudnnSetFilterNdDescriptor(desc, CUDNN_DATA_FLOAT, CUDNN_TENSOR_NCHW, 3, dimW));
     }
     ~RnnWeightDescriptor() {
-        cudnnDestroyFilterDescriptor(desc);
+        peekCudaErrorsAlways(cudnnDestroyFilterDescriptor(desc));
     }
 };
 

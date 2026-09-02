@@ -46,6 +46,9 @@ const char *_cudaGetErrorEnum(ncclResult_t error);
 namespace jittor {
 
 EXTERN_LIB ncclComm_t comm;
+
+// Destroys the communicator, reporting a failure instead of raising. Idempotent.
+void nccl_shutdown();
 EXTERN_LIB ncclUniqueId id;
 EXTERN_LIB int nccl_device_id;
 

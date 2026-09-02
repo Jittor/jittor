@@ -10,20 +10,29 @@
 namespace jittor {
 
 cusparseHandle_t cusparse_handle;
+static bool cusparse_handle_created = false;
+
+// See cublas_shutdown: report, never raise, and idempotent.
+void cusparse_shutdown() {
+    if (!cusparse_handle_created) return;
+    cusparse_handle_created = false;
+    LOGv << "cusparseDestroy:" <<  (void*)cusparse_handle;
+    peekCudaErrorsAlways(cusparseDestroy(cusparse_handle));
+    cusparse_handle = nullptr;
+    LOGv << "cusparseDestroy finished";
+}
 
 struct cusparse_initer {
 
     inline cusparse_initer() {
         if (!get_device_count()) return;
         checkCudaErrors(cusparseCreate(&cusparse_handle));
+        cusparse_handle_created = true;
         LOGv << "cusparseCreate finished" << (void*)cusparse_handle;
     }
 
     inline ~cusparse_initer() {
-        if (!get_device_count()) return;
-        LOGv << "cusparseDestroy:" <<  (void*)cusparse_handle;
-        checkCudaErrors(cusparseDestroy(cusparse_handle));
-        LOGv << "cusparseDestroy finished";
+        cusparse_shutdown();
     }
 
 } init;

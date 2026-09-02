@@ -35,6 +35,14 @@ void throw_mpi_error(int result,
         >> result >> '(' >> jt_mpi_err_buffer >> ')' << func;
 }
 
+void report_mpi_error(int result,
+    char const *const func, const char *const file, int const line) {
+    int resultlen;
+    MPI_Error_string(result, jt_mpi_err_buffer, &resultlen);
+    LOGe << "MPI teardown error at " >> file >> ":" >> line << "code="
+        >> result >> '(' >> jt_mpi_err_buffer >> ')' << func;
+}
+
 namespace jittor {
 
 MPI_Datatype MPI_HALF;
@@ -301,6 +309,17 @@ static bool detect_inside_mpi() {
     return false;
 }
 
+static bool mpi_initialized_here = false;
+
+// See cublas_shutdown: report, never raise, and idempotent.
+void mpi_shutdown() {
+    if (!mpi_initialized_here) return;
+    mpi_initialized_here = false;
+    MPI_PEEK(MPI_Type_free(&MPI_HALF));
+    MPI_PEEK(MPI_Op_free(&MPI_HALF_ADD));
+    MPI_PEEK(MPI_Finalize());
+}
+
 struct mpi_initer {
 
 mpi_initer() {
@@ -344,14 +363,11 @@ mpi_initer() {
     MPI_Type_contiguous(1, MPI_SHORT, &MPI_HALF);
     MPI_Type_commit(&MPI_HALF);
     MPI_Op_create(HalfAdd, /* commute= */1, &MPI_HALF_ADD);
-
+    mpi_initialized_here = true;
 }
 
 ~mpi_initer() {
-    if (!inside_mpi) return;
-    MPI_Type_free(&MPI_HALF);
-    MPI_Op_free(&MPI_HALF_ADD);
-    MPI_CHECK(MPI_Finalize());
+    mpi_shutdown();
 }
 
 };

@@ -107,6 +107,7 @@ curand 的口径：`curandGenerateUniform` 没有奇偶要求；`curandGenerateN
 | 库 | 触发方式 | 得到的错误 |
 | --- | --- | --- |
 | cuFFT | `jt.nn._fft2(jt.zeros((1, 0, 4, 2), "float32"))`——任一变换维长度为 0 | `cufftPlanMany` 返回 `CUFFT_INVALID_SIZE` |
+| 全部（退出期） | 见下「让每个 Destroy 都失败」 | `cudnnDestroy` 返回 `CUDNN_STATUS_INTERNAL_ERROR`，`cublasDestroy` 等同理 |
 
 判据不止「抛了」。**修前那一版会把无效句柄写进缓存**，所以还要断言：
 
@@ -118,6 +119,44 @@ curand 的口径：`curandGenerateUniform` 没有奇偶要求；`curandGenerateN
 
 `jt.nn._fft2` 是 cuFFT 算子唯一的入口（`jt.fft.*` 走 DFT 矩阵乘，不碰 cuFFT），
 且要求 `jt.flags.use_cuda == 1`、输入形状 `(batch, n1, n2, 2)`。
+
+### 让每个 Destroy 都失败（测退出期的析构/teardown 路径）
+
+要证明「句柄销毁失败时只记录不抛」，得先让销毁真的失败。**用越界的 kernel 把上下文
+打成 sticky error**——这正是现实里的形态（异步错误晚到），而且确定：
+
+```python
+x = jt.zeros((1,), "float32")
+y = jt.code(x.shape, x.dtype, [x], cuda_src="""
+    __global__ void jt_out_of_bounds_write(float* p) { p[1<<28] = 1.0f; }
+    jt_out_of_bounds_write<<<1,1>>>(out0_p);
+""")
+try: y.sync()
+except Exception: pass
+assert ctypes.CDLL(None).cudaDeviceSynchronize() == 700   # cudaErrorIllegalAddress
+```
+
+之后进程里每一个 CUDA 调用都返回 700，退出时静态析构里的 `cudnnDestroy` 返回
+`CUDNN_STATUS_INTERNAL_ERROR`。
+
+**不要用 `cudaDeviceReset()`。** 它把主上下文整个拆掉，`cudnnDestroy` 会在
+libcudnn 内部 `cuStreamDestroy` 处**段错误**而不是返回错误码，测的就不是那条路径了
+（而且 jittor 的 SIGSEGV handler 会 `quick_exit(1)`，看到的只是「退出码 1、没有任何输出」）。
+
+判据三条：
+
+1. 子进程退出码为 0，stderr 里没有 `terminate called`；
+2. stderr 里**有**那条 teardown 记录（只不抛不算数，被吞掉一样是 bug）；
+3. stderr 里**还有**真正的错误（`cudaErrorIllegalAddress`）——这才是这条改动的意义：
+   修前 terminate 发生在它打印之前，真错误完全看不到。
+   还要有一个**干净退出的对照**，断言正常跑一次不产生任何 teardown 记录。
+
+### 坑：子进程 abort 会把 pytest 父进程一起带走
+
+jittor 装了 SIGCHLD handler（`utils/log.cc`），子进程只要不是正常退出或 SIGTERM，
+父进程就 `quick_exit(1)`。所以「修前」跑这类测试看到的不是一条 F，而是
+**pytest 打了一个点然后退出码 1、没有任何报告**。要看修前的真实行为，
+直接跑子进程脚本本身，不要经过 pytest。
 
 ## 后端库的 `_cudaGetErrorEnum` 重载约定
 

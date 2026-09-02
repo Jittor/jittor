@@ -19,6 +19,9 @@
 namespace jittor {
 
 EXTERN_LIB cudnnHandle_t cudnn_handle;
+
+// Destroys cudnn_handle, reporting a failure instead of raising. Idempotent.
+void cudnn_shutdown();
 EXTERN_LIB int max_cache_size;
 EXTERN_LIB float max_workspace_ratio;
 EXTERN_LIB int cudnn_benchmark;

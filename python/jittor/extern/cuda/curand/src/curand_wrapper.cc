@@ -14,13 +14,27 @@
 namespace jittor {
 
 curandGenerator_t gen;
+static bool curand_gen_created = false;
+
+// See cublas_shutdown: report, never raise, and idempotent.
+void curand_shutdown() {
+    if (!curand_gen_created) return;
+    curand_gen_created = false;
+    peekCudaErrorsAlways( curandDestroyGenerator(gen) );
+    gen = nullptr;
+    LOGv << "curandDestroy finished";
+}
 
 struct curand_initer {
 
 inline curand_initer() {
     if (!get_device_count()) return;
     checkCudaErrors( curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT) );
+    curand_gen_created = true;
     add_set_seed_callback([](int seed) {
+        // The callback list is a separate global: nothing orders it against
+        // this generator at exit, so a set_seed after shutdown must not run.
+        if (!gen) return;
         checkCudaErrors( curandSetPseudoRandomGeneratorSeed(gen, seed) );
         // The seed alone does not rewind the generator: it keeps its position
         // in the sequence, so re-seeding with the same value after drawing
@@ -33,9 +47,7 @@ inline curand_initer() {
 }
 
 inline ~curand_initer() {
-    if (!get_device_count()) return;
-    checkCudaErrors( curandDestroyGenerator(gen) );
-    LOGv << "curandDestroy finished";
+    curand_shutdown();
 }
 
 } init_;

@@ -21,6 +21,9 @@ namespace jittor {
 
 EXTERN_LIB cublasHandle_t cublas_handle;
 
+// Destroys cublas_handle, reporting a failure instead of raising. Idempotent.
+void cublas_shutdown();
+
 static inline cudaDataType get_dtype(NanoString dtype) {
     if (dtype == ns_float32) return CUDA_R_32F;
     if (dtype == ns_float64) return CUDA_R_64F;

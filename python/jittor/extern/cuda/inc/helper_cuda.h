@@ -131,14 +131,34 @@ void check(T result, char const *const func, const char *const file,
   }
 }
 
+// Teardown/destructor variant: reports every failure, never throws.
+//
+// peek() latches on the first error because one failed CUDA call makes every
+// later call fail too, and one line beats ten thousand. Teardown is the
+// opposite case: a bounded number of handle destroys, each a separate fact,
+// and it is precisely where a swallowed message leaves nothing to go on.
+// check() is not an option there either -- destructors are noexcept, so its
+// LOGf calls std::terminate instead of reporting anything.
+template <typename T>
+void peek_always(T result, char const *const func, const char *const file,
+                 int const line) {
+  if (result) {
+    LOGe << "CUDA teardown error at" << file >> ":" >> line << " code="
+      >> static_cast<unsigned int>(result) >> "(" << _cudaGetErrorEnum(result) << ")"
+      << func;
+  }
+}
+
 #define checkCudaErrors(val) check((val), #val, __FILE__, __LINE__)
 #define peekCudaErrors(val) peek((val), #val, __FILE__, __LINE__)
+#define peekCudaErrorsAlways(val) peek_always((val), #val, __FILE__, __LINE__)
 
 #ifdef __DRIVER_TYPES_H__
 // This will output the proper CUDA error strings in the event
 // that a CUDA host call returns an error
 #define checkCudaErrors(val) check((val), #val, __FILE__, __LINE__)
 #define peekCudaErrors(val) peek((val), #val, __FILE__, __LINE__)
+#define peekCudaErrorsAlways(val) peek_always((val), #val, __FILE__, __LINE__)
 
 // This will output the proper error string when calling cudaGetLastError
 #define getLastCudaError(msg) __getLastCudaError(msg, __FILE__, __LINE__)

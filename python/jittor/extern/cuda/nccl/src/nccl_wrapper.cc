@@ -62,19 +62,31 @@ bool use_device_mpi = false;
 #endif
 
 
+static bool nccl_comm_created = false;
+
 // NCCL's p2p transport treats a refused peer access as fatal, and the error it
 // raises -- "unhandled cuda error" -- names neither the cause nor the cure. Name
 // both before it escapes: NCCL's own explanation goes to stderr, which a test
 // runner capturing output turns into a bare SIGABRT with nothing to go on.
 static void init_nccl_comm(int world_size, int world_rank) {
     auto result = ncclCommInitRank(&comm, world_size, id, world_rank);
-    if (result == ncclSuccess) return;
+    if (result == ncclSuccess) { nccl_comm_created = true; return; }
     LOGe << "ncclCommInitRank failed:" << ncclGetErrorString(result)
          << "\n  If NCCL reports that peer access is unsupported, this machine"
             " cannot do direct GPU-to-GPU transfers. Set NCCL_P2P_DISABLE=1 to"
             " route the collectives through shared memory instead."
          << "\n  Set NCCL_DEBUG=INFO for NCCL's own account of the failure.";
     checkCudaErrors(result);
+}
+
+// See cublas_shutdown: report, never raise, and idempotent. A rank that is
+// already failing is exactly the one whose communicator will refuse to be
+// destroyed, and it must still be able to print why it failed.
+void nccl_shutdown() {
+    if (!nccl_comm_created) return;
+    nccl_comm_created = false;
+    peekCudaErrorsAlways(ncclCommDestroy(comm));
+    comm = nullptr;
 }
 
 struct nccl_initer {
@@ -159,9 +171,7 @@ nccl_initer() {
 }
 
 ~nccl_initer() {
-    if (!get_device_count()) return;
-    if (!use_device_mpi) return;   // true for both MPI and env/file rendezvous
-    checkCudaErrors(ncclCommDestroy(comm));
+    nccl_shutdown();
 }
 
 };

@@ -26,6 +26,22 @@ static inline void mpi_check(int result,
 
 #define MPI_CHECK(val) mpi_check((val), #val, __FILE__, __LINE__)
 
+// Reporting-only variant for destructor and teardown paths. throw_mpi_error
+// LOGf's, i.e. throws, and a throw out of a noexcept destructor terminates the
+// process -- which is how an MPI_Finalize that merely came too late turned
+// into an abort that hid whatever the rank was actually failing on.
+extern void report_mpi_error(int result,
+    char const *const func, const char *const file, int const line);
+
+static inline void mpi_peek(int result,
+    char const *const func, const char *const file, int const line) {
+    if (result != MPI_SUCCESS) {
+        report_mpi_error(result, func, file, line);
+    }
+}
+
+#define MPI_PEEK(val) mpi_peek((val), #val, __FILE__, __LINE__)
+
 namespace jittor {
 
 EXTERN_LIB int mpi_world_size;
@@ -35,6 +51,9 @@ EXTERN_LIB int mpi_local_rank;
 EXTERN_LIB bool inside_mpi;
 EXTERN_LIB bool mpi_enabled;
 EXTERN_LIB bool use_device_mpi;
+
+// Finalizes MPI, reporting a failure instead of raising. Idempotent.
+void mpi_shutdown();
 
 /**
 Map a jittor dtype to the MPI datatype used to send it, and to the MPI
