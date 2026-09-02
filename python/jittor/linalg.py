@@ -546,6 +546,21 @@ def eigh(x):
     :return:w, v.
     w (...,M) : the eigenvalues.
     v (...,M,M) : normalized eigenvectors.
+
+    .. note::
+        Eigenvectors are only defined up to a per-column sign (and, for repeated
+        eigenvalues, up to a rotation within the eigenspace), and this function
+        does **not** normalize that choice. It is computed by LAPACK on the host
+        and by cuSOLVER under ``jt.flags.use_cuda`` -- ``jt.numpy_code`` hands
+        its callback ``cupy`` instead of ``numpy`` when CUDA is on -- and the two
+        do not agree on the signs. ``w``, ``v @ diag(w) @ v.T`` and ``v.T @ v``
+        are the same on both; individual columns of ``v`` may differ in sign.
+
+        The gradient follows the same rule: it is the correct gradient of the
+        ``v`` that *this* device returned, so a loss that is not invariant to the
+        sign convention (``(v * seed).sum()``, say) has a device-dependent
+        gradient. Prefer a sign-invariant formulation. Same caveat as
+        ``torch.linalg.eigh``.
     """
     if _is_native_complex(x):
         # native complex64 Hermitian -> bridge to the ComplexNumber path. The

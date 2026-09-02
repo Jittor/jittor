@@ -93,7 +93,17 @@ torch 版本、哪段脚本算出来的。仓库里已有的
   `jt.array(v, dtype="float64")`。
 - **测试互相污染**：`jt.flags.use_cuda` 是进程全局的，某些既有用例把它置 1 后不复原，
   于是同文件里后面的用例全跑在 CUDA 上。写新用例时在 `setUp`/`tearDown` 里存取复原它，
-  否则单跑绿、全量跑红。
+  否则单跑绿、全量跑红。**修的时候用 `@jt.flag_scope(use_cuda=1)` 装饰器，不要裸赋值。**
+  验证泄漏有没有真的修掉，用一个不经过 pytest 的小脚本：
+
+  ```python
+  import unittest, jittor as jt, importlib.util
+  spec = importlib.util.spec_from_file_location("m", "tests/<...>.py")
+  m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+  unittest.TextTestRunner(verbosity=0).run(
+      unittest.TestLoader().loadTestsFromTestCase(m.<那个类>))
+  assert jt.flags.use_cuda == 0, "use_cuda leaked!"
+  ```
 
 ## 4. 「未初始化内存」类缺陷的判据
 
@@ -187,6 +197,31 @@ for name in ("xshape1", "yshape1"):
     print(name, x.reindex_reduce("add", [2, 7], ["i0", f"({name})"]).numpy())
 # 写到第 3 列的那个 name 等于输入的 shape[1]==3；全 0 的那个越界了，等于 7
 ```
+
+## 7.5 `use_cuda` 打开时，`jt.numpy_code` 里的 `np` **不是 numpy，是 cupy**
+
+`pyjt/py_converter.h` 在 `use_cuda` 为真时 import 的是 `cupy`，并通过
+`init_cupy.numpy2cupy` 把 `data` 里的每个数组换成 `cupy.ndarray`。所以回调里的
+`np.linalg.*`、`np.einsum`、`np.copyto` 全都是 cupy 的实现。影响到**所有**
+`numpy_code` 算子（linalg 全家、cumsum 的 CPU 路径、gamma 采样……）：
+
+- 同一个 `jt.linalg.*` 在 CPU 上是 LAPACK、在 CUDA 上是 cuSOLVER，**是两套库**。
+- 回调里若用了 cupy 没有的 numpy API，只在 CUDA 上炸。
+- 调试时 `data["inputs"][0].flags['WRITEABLE']` 这类写法在 CUDA 上直接 KeyError——
+  这也是判断"我现在拿到的是 cupy 还是 numpy"最快的一招。
+
+**对拍推论：分解类算子（eigh/eig/svd/qr）不能用"和 numpy 的 U/V 逐元素相等"做判据。**
+特征向量只定义到每列一个符号（重根还差一个子空间内的旋转），LAPACK 与 cuSOLVER 不
+约定同一个符号。要断言的是**符号不变量**：
+
+- 特征值 / 奇异值本身；
+- 重建：`v @ diag(w) @ v.T == a`、`u @ diag(s) @ vh == a`；
+- 正交性：`v.T @ v == I`；
+- 梯度的**自洽性**：用该设备**自己返回的** `v` 代进闭式公式，而不是用 numpy 的 `v`；
+- 跨设备比较时，损失必须是符号不变的（例如对重建矩阵求和，而不是 `(v*seed).sum()`）。
+
+拿 numpy 的 `v` 当基准去对 CUDA 的梯度，会得到一个漂亮但完全错误的"相对误差 60%"
+结论——那是符号约定不同，不是梯度算错了。
 
 ## 8. 「只在默认参数下正确」是这一类缺陷最常见的形状
 
