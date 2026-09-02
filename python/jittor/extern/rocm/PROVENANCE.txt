@@ -1,0 +1,52 @@
+rocm_cache.tar.gz -- prebuilt object files with no source in this repository
+============================================================================
+
+What it is
+----------
+Two ELF relocatable objects, one per libstdc++ ABI:
+
+  rocm_cache.o        389048 bytes  built 2022-08-05 by "lzhengning"
+                      GCC (GNU) 7.3.1 20180303 (Red Hat 7.3.1-5)
+                      old ABI (no _GLIBCXX_USE_CXX11_ABI symbols)
+
+  rocm_cache_cxx11.o  449840 bytes  built 2022-08-05 by "lzhengning"
+                      GCC (Ubuntu 9.4.0-1ubuntu1~20.04.1) 9.4.0
+                      new ABI (514 __cxx11 symbols)
+
+archive SHA-256: 77c52dc063b71d23b508f70f9cd30649d7aa8ff040dc480848883579608a6999
+
+`rocm_compiler.py:install_rocm_jittor_core` picks one of the two by reading
+`gcc -v` for `--with-default-libstdcxx-abi`, extracts it next to this file, and
+links it into a module that is then loaded into the running process. Between
+them the objects define, among ~620 symbols:
+
+  jittor::process_rocm(...)
+  jittor::rocm_jittor_op_compiler(...)
+  jittor::process_cub / process_cudnn / process_cublas(...)
+
+`rocm_jittor.h` declares `rocm_jittor_op_compiler`; nothing in this repository
+defines it. The same is true of the others. **The source for these objects is
+not in this repository and no build script for them exists here.**
+
+Why this file exists
+--------------------
+`MANIFEST.in` has `recursive-include python/jittor/extern *`, so this archive
+is in every Jittor wheel -- including wheels installed on machines that have no
+AMD GPU and will never load it. A binary that ships to every user, is linked
+into their process, and has neither source nor build instructions is not
+something anyone can review, rebuild, or patch. Recording what is known about
+it is the minimum; it is not a substitute for the source.
+
+What has to happen before this is acceptable
+--------------------------------------------
+Either of:
+
+  1. The source is contributed to this repository together with a build script,
+     and these objects are built like everything else; or
+  2. The archive is moved out of the wheel and into the third-party download
+     manifest (`jittor_utils/manifest.py`), fetched on demand by the machines
+     that actually have ROCm, and verified against the SHA-256 above -- the
+     same treatment MKL, cub, cutt and NCCL already get.
+
+Until then `tests/structure/test_rocm_blob_provenance.py` pins the archive's
+digest, so the bytes cannot change without someone saying so.
