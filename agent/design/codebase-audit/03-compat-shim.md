@@ -49,6 +49,12 @@
 | Stream/Event 全部空壳 | `cuda.py:301-322`：wait_stream/wait_event/record_event 返回 None，query 恒 True，`Event.elapsed_time` 恒 0.0 | 用 event 计时得到 0 ms；依赖 stream 顺序的代码在单流上碰巧正确 | elapsed_time 应报错 | 主要 |
 | `torch.backends.*` 映射不透明 | `cuda.py:681-712`：allow_tf32 的 getter 走 `__getattribute__`，setter 被 `_jittor_cudnn_init` 门控且 `:704-706` 初始化赋值会穿过 setter；`cudnn.conv.fp32_precision` 是字面量 "ieee"；set_float32_matmul_precision 不影响 cudnn | 同一语义三个入口两套状态 | 一个精度策略对象加表格化单测 | 主要 |
 
+已修：7.01（49d41acf `torch.cuda.set_device(i!=0)` 报错、`Event.elapsed_time`
+改为真实计时并对未开 `enable_timing` / 未 record 报错；Stream 的
+`wait_stream`/`wait_event` 保持空操作并注明理由——jittor 把所有逻辑流串行到
+一条物理流上）。`torch.dtype` 是 str 子类、26 个占位 dtype、
+`torch.backends.*` 三条属于 7.08。
+
 ## 看起来支持其实是空操作（本层风险最集中处）
 | 问题 | 证据 | 后果 | 修改方向 | 严重度 |
 | --- | --- | --- | --- | --- |
@@ -65,6 +71,17 @@
 | `has_torch_function` 恒 False，TorchFunctionMode 惰性 | `installers/cuda.py:600-609` | 张量子类与 device mode 被静默绕过 | 声明不支持并报错 | 主要 |
 | `torch.library.opcheck` 返回 None | `library.py:249` | 用户的算子正确性测试无条件通过 | 抛 NotImplementedError | 主要 |
 | set_default_device 空操作而 get_default_device 报告真实设备 | `installers/core.py:485-488` | set/get 自相矛盾 | 一起实现或一起报错 | 次要 |
+
+已修：7.01（ff395ecc `torch.autocast`；b7c12ddc `load_state_dict(strict=)`；
+0446217e `torch.load(weights_only=, map_location=)` 与 `find_class` 兜底；
+47012a27 DataLoader `num_workers` 与 `checkpoint` 的显存代价；
+49d41acf `Var.backward(gradient=)`、`tree_map`/`tree_map_only`、SummaryWriter、
+`dirac_`/`sparse_`、`update_bn`、`has_torch_function`/TorchFunctionMode、
+`opcheck`、`set_default_device`）。统一开关见 `jittor/compat/stub_policy.py`：
+默认抛 `NotImplementedError`，`JITTOR_TORCH_ALLOW_STUB=1` 或
+`torch.compat_allow_stub(True)` 才降级为原来的静默行为并 warn 一次。
+负向测试在 `tests/compat/torch/test_torch_compat_unimplemented.py`。
+`_rebuild_tensor_v2` 丢弃 stride 一条未动，属于 7.15。
 
 ## 自定义算子、编译与自动微分
 | 问题 | 证据 | 后果 | 修改方向 | 严重度 |
@@ -95,6 +112,14 @@
 | TCPStore/FileStore 是进程内字典 | `distributed.py:770-788` | 基于 store 的 rendezvous 静默成功 | 报错 | 主要 |
 | tensor 层与 fsdp2 层双向耦合 | `tensor.py:1096-1122,1167-1172` 直接 import fsdp2；`distributed.py:220-223` 反过来 import `fsdp2.common`；`fsdp2/installer.py:49` import `compat.torch.context`；optimizers.py 中 31 处 fsdp 引用 | 三个包互为下层，无法单独理解或替换；`nn.py:1237-1242` 与 `shard.py:383-398` 两处 hook 同时生效 | 单向依赖 core→tensor→nn/optim→distributed→fsdp | 主要 |
 | FSDP 路径重写了一套 SGD/Adam，靠类名子串识别优化器 | `fsdp2/optimizer.py:93-133`、`:136-144`、`:170-172` | 同一数学两份实现；自定义 Adam 子类落到 NotImplementedError | 复用 jittor optimizer，只替换梯度来源 | 主要 |
+
+已修：7.01（46bc9ea7 DDP 在 world_size>1 时构造即报错，真实同步仍是 7.02；
+9053a7c0 `dist.nn.all_reduce`、分布式 checkpoint 读写、
+`new_subgroups_by_enumeration`、DeviceMesh 的取轴与 `get_group`、
+`DTensor.full_tensor`、TCPStore/FileStore）。判据是「单 rank 下本来就是恒等」：
+单进程路径保持精确，只有真的会算错的多 rank 情形才拒绝。
+其余条目（FSDP2 显存、mesh 分片、clip_grad_norm_ 跨 rank、双向耦合、
+优化器重写）属于 7.06/7.13。
 
 ## vLLM / shim / 模块补丁的边界
 | 问题 | 证据 | 后果 | 修改方向 | 严重度 |
