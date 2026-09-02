@@ -178,30 +178,27 @@ void FusedOp::do_jit_prepare(JK& jk) {
     for (auto& t : edges) {
         uint i,j,k,l;
         std::tie(i,j,k,l) = t;
-        // Fixed-width edge encoding: hex2 keeps only the low 8 bits and hex1
-        // only the low 4. An id past those limits wraps, two structurally
-        // different fusions map to the same jit key, the cache lookup hits and
-        // an unrelated compiled kernel runs -- a silent wrong result. Until the
-        // key becomes variable width (task 3.02), refuse to build such a key.
+        // Variable-width edge encoding.
         //
         // i is the producer: an op index for an edge internal to the fusion, or
         // ops.size()+var_index for a var coming from outside it (executor.cc).
-        // k is the consumer op index, l its input slot. j is the producer's
-        // output slot and only has to be unique for internal edges -- for an
-        // external input, i already discriminates.
-        ASSERTop(i,<,256u) << "Fused op too large for the jit key encoding:"
-            << ops.size() << "ops plus" << vars.size()
-            << "vars exceed the 255 edge ids a two-hex-digit field can hold.";
-        ASSERTop(k,<,256u) << "Fused op too large for the jit key encoding:"
-            << ops.size() << "ops exceed the 255 consumer ids a two-hex-digit"
-            << "field can hold.";
-        ASSERTop(l,<,16u) << "Op" << ops[k]->name() << "has more than 16 inputs;"
-            << "the jit key encodes the input slot in a single hex digit.";
-        if (i < ops.size())
-            ASSERTop(j,<,16u) << "Op" << ops[i]->name() << "has more than 16"
-                << "outputs; the jit key encodes the output slot in a single"
-                << "hex digit.";
-        jk << JK::hex2(i) << JK::hex1(j) << JK::hex2(k) << JK::hex1(l) << ',';
+        // j is the producer's output slot, k the consumer op index, l its input
+        // slot. These four used to be written as hex2/hex1/hex2/hex1 -- 8 bits
+        // for the op ids and 4 for the slots -- so a fusion holding more than
+        // 255 ops plus external input vars wrapped: two structurally different
+        // fusions produced the same jit key, the kernel cache lookup hit, and an
+        // unrelated compiled kernel ran, giving a silently wrong result. That
+        // was not a theoretical limit: F.interpolate(mode="bicubic") builds a
+        // fusion of 292 ops over 296 vars, whose edge ids reach 462.
+        //
+        // JK::hex is variable length with no leading zeros, and '.' and ',' are
+        // outside the hex alphabet, so each field is the maximal run of hex
+        // digits between two delimiters and each edge the run between two
+        // commas. The encoding is therefore injective for any field width: two
+        // different edge sequences cannot produce the same string. ('«' must not
+        // be used as a delimiter here -- it separates jit key entries.)
+        jk << JK::hex(i) << '.' << JK::hex(j) << '.'
+           << JK::hex(k) << '.' << JK::hex(l) << ',';
     }
     jk << "«var_info:" << JK::val;
     bool use_int64_t = false;
