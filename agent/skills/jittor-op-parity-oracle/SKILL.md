@@ -9,6 +9,22 @@ description: 给 Jittor 的 Python 层算子做数值对拍（correctness oracle
 修之后通过，且期望值来自一个与 Jittor 无关的独立实现。本 skill 给出选基准、起进程、
 定容差、做取证的固定做法。
 
+## 0. 先确认你测的是哪一份代码
+
+jittor 通常是 **editable 安装**（site-packages 里的 `.pth` 指向某一个固定的源码树）。
+在另一个 worktree / 副本里裸跑 `python -c "import jittor"` 或 `python script.py`，
+导入的是 `.pth` 指向的那一份，**不是你刚改的那一份**，于是"验证通过"毫无意义。
+
+- `pytest` 是安全的：`pyproject.toml` 里有 `pythonpath = ["python"]`，天然导入当前树。
+  要测别的副本才需要 `-o pythonpath=<那个副本>/python`。
+- **所有手写脚本、`python -c`、子进程都必须显式带** `PYTHONPATH=<你的源码树>/python`。
+
+第一次验证前先跑这句，打印的路径必须是你正在改的那棵树：
+
+```bash
+PYTHONPATH="$TREE/python" python -c "import jittor, os; print(os.path.dirname(jittor.__file__))"
+```
+
 ## 1. 选对拍基准：三档，从上往下选
 
 | 档 | 用什么 | 适用 | 代价 |

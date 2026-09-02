@@ -80,9 +80,9 @@ class Pool3d(jt.Module):
                 auto out_value = @expand_op(init_{self.op}, @out_type);
                 int out_index = -1;
                 for (int p = k2; p < k2_; ++p)
-                    for (int q = k3; q < k3_; ++q)\x20
-                        for (int r = k4; q < k4_; ++r)\x20
-                        if (out_value < @in0(i0, i1, p, q, r)) {{
+                    for (int q = k3; q < k3_; ++q)
+                        for (int r = k4; r < k4_; ++r)
+                            if (out_value < @in0(i0, i1, p, q, r)) {{
                             out_value = @in0(i0, i1, p, q, r);
                             out_index = p * in0_shape3 * in0_shape4 + q * in0_shape4 + r;
                         }}
