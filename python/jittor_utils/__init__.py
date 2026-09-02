@@ -509,12 +509,24 @@ BUILD_CONFIG_VARS = (
     "kernel_flags",
     "cuda_archs",
     "enable_lto",
+    # nvcc_path decides -DHAS_CUDA and a whole set of include directories, so
+    # it is a build configuration in the same sense as the flags above. It
+    # also has to distinguish "not set" (find nvcc if it is there) from "set
+    # to empty" (the documented way to force a CPU-only build), which is why
+    # get_build_config() records None rather than "" for a variable that is
+    # absent -- otherwise the CPU-only fast loop and the CUDA round share one
+    # directory and rebuild jit_utils_core from under each other.
+    "nvcc_path",
 )
 
 
 def get_build_config():
-    """The build knobs whose values decide what the compiled products are."""
-    return {name: os.environ.get(name, "") for name in BUILD_CONFIG_VARS}
+    """The build knobs whose values decide what the compiled products are.
+
+    A variable that is not set records as None, which is a different
+    configuration from one set to the empty string.
+    """
+    return {name: os.environ.get(name) for name in BUILD_CONFIG_VARS}
 
 
 def build_config_fingerprint(config=None):

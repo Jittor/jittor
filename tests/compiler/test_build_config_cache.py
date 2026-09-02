@@ -49,6 +49,24 @@ class TestBuildConfigFingerprint(unittest.TestCase):
             self.assertNotEqual(base, changed,
                                 f"{name} does not reach the cache directory")
 
+    def test_unset_and_empty_are_different_configurations(self):
+        """`nvcc_path=""` is the documented way to force a CPU-only build.
+
+        Recording an absent variable as "" made it indistinguishable from that,
+        so the CPU-only build and the CUDA build shared one directory and
+        rebuilt the products they both keep there from under each other.
+        """
+        self.assertNotEqual(jit_utils.build_config_fingerprint({}),
+                            jit_utils.build_config_fingerprint(
+                                {"nvcc_path": ""}))
+
+    def test_a_cpu_only_run_gets_its_own_directory(self):
+        with_nvcc = _cache_path_for({"nvcc_path": "/usr/local/cuda/bin/nvcc"})
+        without = _cache_path_for({"nvcc_path": ""})
+        self.assertNotEqual(with_nvcc[0], without[0])
+        # ...but they still share one build lock, and so one download area.
+        self.assertEqual(with_nvcc[1], without[1])
+
     def test_fingerprint_is_stable_and_short(self):
         config = {"nvcc_flags": " --fmad=false "}
         first = jit_utils.build_config_fingerprint(config)
