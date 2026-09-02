@@ -59,9 +59,10 @@ class Adam(Optimizer):
 
     def step(self, loss=None, retain_graph=False):
         self.pre_step(loss, retain_graph)
-        n = float(self.n_step)
         jt.flags.node_order = 1
         for pg in self.param_groups:
+            # bias correction counts optimizer steps, not backward calls
+            n = float(self._advance_step_count(pg))
             # get arguments from each param_groups
             lr = pg.get("lr", self.lr)
             eps = pg.get("eps", self.eps)
@@ -113,8 +114,9 @@ class AdamW(Optimizer):
 
     def step(self, loss=None, retain_graph=False):
         self.pre_step(loss, retain_graph)
-        n = float(self.n_step)
         for pg in self.param_groups:
+            # bias correction counts optimizer steps, not backward calls
+            n = float(self._advance_step_count(pg))
             # get arguments from each param_groups
             lr = pg.get("lr", self.lr)
             eps = pg.get("eps", self.eps)

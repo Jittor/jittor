@@ -55,6 +55,20 @@ class Optimizer(object):
     def add_param_group(self, group):
         self.param_groups.append(group)
 
+    def _advance_step_count(self, pg):
+        """Number of optimizer steps this param group has taken, 1-based.
+
+        Bias corrections must use this, not ``self.n_step``: ``n_step`` counts
+        ``backward`` calls, and the gradient-accumulation loop documented on
+        ``backward`` calls it once per micro-batch, so a correction keyed on it
+        runs ahead by the accumulation factor. Kept inside the param group so
+        it rides along in ``state_dict``/``load_state_dict`` and so a group
+        added mid-training starts its own correction at step 1.
+        """
+        n = int(pg.get("n_step", 0)) + 1
+        pg["n_step"] = n
+        return n
+
     def set_input_into_param_group(self, inputs):
         """ This function adds inputs to the optimizer as variables that need tuning.
             This is to enforce the calculation of gradients from the output to the input,

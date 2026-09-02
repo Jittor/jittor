@@ -706,5 +706,100 @@ class TestZeroGradClearsBuffers(_OptimCoreBase):
         self._devices(body)
 
 
+# ===========================================================================
+#  Adam-family bias correction counts optimizer steps, not backward calls
+# ===========================================================================
+class TestAdamBiasCorrectionStepCount(_OptimCoreBase):
+    """``Optimizer.backward`` bumps ``self.n_step``, so the gradient-accumulation
+    loop the base class documents calls it k times per optimizer step. A bias
+    correction keyed on ``n_step`` then uses the wrong exponent and takes a
+    visibly different step."""
+
+    FACTORIES = (
+        ("adam", lambda p, lr: jt.optim.Adam([p], lr, eps=1e-8)),
+        ("adamw", lambda p, lr: jt.optim.AdamW([p], lr, eps=1e-8)),
+    )
+
+    def test_accumulated_backward_matches_one_backward(self):
+        # loss is linear in p, so two half-gradients accumulate to exactly the
+        # gradient of the whole batch: the two spellings must agree.
+        p0 = np.random.RandomState(90).randn(8).astype("float32")
+        g1 = np.random.RandomState(91).randn(8).astype("float32")
+        g2 = np.random.RandomState(92).randn(8).astype("float32")
+        lr = 0.01
+
+        def body(dev):
+            for name, factory in self.FACTORIES:
+                with self.subTest(optimizer=name, device=dev):
+                    ref = self._param(p0)
+                    opt_ref = factory(ref, lr)
+                    opt_ref.step(self._linear_loss(ref, g1 + g2))
+
+                    acc = self._param(p0)
+                    opt_acc = factory(acc, lr)
+                    opt_acc.backward(self._linear_loss(acc, g1))
+                    opt_acc.backward(self._linear_loss(acc, g2))
+                    opt_acc.step()
+
+                    self.assertEqual(
+                        acc, ref, atol=self.TOL, rtol=self.TOL,
+                        msg=f"{name}: accumulating 2 backwards per step must "
+                            f"equal one backward of the summed gradient [{dev}]")
+        self._devices(body)
+
+    def test_accumulation_stays_equivalent_over_several_steps(self):
+        rng = np.random.RandomState(93)
+        p0 = rng.randn(5).astype("float32")
+        pairs = [(rng.randn(5).astype("float32"), rng.randn(5).astype("float32"))
+                 for _ in range(4)]
+        lr = 0.01
+
+        def body(dev):
+            for name, factory in self.FACTORIES:
+                with self.subTest(optimizer=name, device=dev):
+                    ref = self._param(p0)
+                    opt_ref = factory(ref, lr)
+                    acc = self._param(p0)
+                    opt_acc = factory(acc, lr)
+                    for ga, gb in pairs:
+                        opt_ref.step(self._linear_loss(ref, ga + gb))
+                        opt_acc.backward(self._linear_loss(acc, ga))
+                        opt_acc.backward(self._linear_loss(acc, gb))
+                        opt_acc.step()
+                    self.assertEqual(
+                        acc, ref, atol=self.TOL, rtol=self.TOL,
+                        msg=f"{name}: 4 accumulated steps [{dev}]")
+        self._devices(body)
+
+    def test_step_count_is_per_param_group(self):
+        # a group added after training started must start its own bias
+        # correction at step 1, not inherit the optimizer's history.
+        rng = np.random.RandomState(94)
+        pa0 = rng.randn(4).astype("float32")
+        pb0 = rng.randn(4).astype("float32")
+        ga = rng.randn(4).astype("float32")
+        gb = rng.randn(4).astype("float32")
+        lr = 0.01
+
+        def body(dev):
+            pa = self._param(pa0)
+            opt = jt.optim.Adam([pa], lr, eps=1e-8)
+            for _ in range(3):
+                opt.step(self._linear_loss(pa, ga))
+            pb = self._param(pb0)
+            opt.add_param_group({"params": [pb]})
+            opt.step(self._linear_loss(pa, ga) + self._linear_loss(pb, gb))
+
+            fresh = self._param(pb0)
+            opt_fresh = jt.optim.Adam([fresh], lr, eps=1e-8)
+            opt_fresh.step(self._linear_loss(fresh, gb))
+
+            self.assertEqual(
+                pb, fresh, atol=self.TOL, rtol=self.TOL,
+                msg=f"a param group added later takes its own first step "
+                    f"[{dev}]")
+        self._devices(body)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
