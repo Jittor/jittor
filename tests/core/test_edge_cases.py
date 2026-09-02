@@ -320,7 +320,8 @@ class TestExtremeValues(_EdgeBase):
     def test_clamp_backward_passes_gradient_in_range(self):
         # PyTorch routes the input gradient through both exact clamp boundaries.
         x_np = np.array(
-            [-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0], dtype="float32"
+            [-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0, np.nan],
+            dtype="float32",
         )
 
         def body(dev):

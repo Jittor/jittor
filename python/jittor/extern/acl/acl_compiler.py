@@ -161,6 +161,7 @@ def change_function():
     from .aclops.pool_op import PoolACL
     from .aclops.nantonum_op import NanToNumACL
     from .aclops.stack_op import StackACL
+    from .aclops.clamp_op import ClampACL
     from .aclops.rope_op import (
         ExpandRotaryCacheACL,
         GroupedQKRmsNormRotaryACL,
@@ -198,6 +199,25 @@ def change_function():
     from .aclops.transpose_op import TransPoseACL
 
     from .aclops.triu_op import TriuACL
+
+    def _clamp_acl(input, min_value, max_value):
+        if (
+            jt.flags.use_acl
+            and jt.flags.use_cuda
+            and isinstance(input, jt.Var)
+            and isinstance(min_value, jt.Var)
+            and isinstance(max_value, jt.Var)
+            and str(input.dtype) == "float32"
+            and str(min_value.dtype) == "float32"
+            and str(max_value.dtype) == "float32"
+            and min_value.numel() == 1
+            and max_value.numel() == 1
+            and min_value.is_stop_grad()
+            and max_value.is_stop_grad()
+        ):
+            return ClampACL()(input, min_value, max_value)
+        return None
+    jt._acl_clamp = _clamp_acl
 
     def triu_acl(x, diagonal=0):
         return TriuACL()(x, diagonal)

@@ -21,6 +21,35 @@ def _bfloat16_round(values):
 class TestACL(unittest.TestCase):
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_clamp_scalar_forward_backward_uses_cann(self):
+        source_np = np.array(
+            [-2.0, -1.0, -0.5, 0.0, 1.0, 2.0, np.nan],
+            dtype=np.float32,
+        )
+        expected = np.clip(source_np, -1.0, 1.0)
+        expected_grad = (
+            (source_np >= -1.0) & (source_np <= 1.0)
+        ).astype(np.float32)
+
+        with jt.log_capture_scope(
+                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+            source = jt.array(source_np)
+            output = jt.clamp(source, -1.0, 1.0)
+            gradient = jt.grad(output.sum(), source)
+            output.sync()
+            gradient.sync()
+            locations = output.location(), gradient.location()
+            actual, actual_grad = jt.fetch_sync([output, gradient])
+
+        self.assertEqual(locations, ("device", "device"))
+        np.testing.assert_allclose(actual, expected, equal_nan=True)
+        np.testing.assert_array_equal(actual_grad, expected_grad)
+        messages = [entry["msg"].lower() for entry in logs]
+        self.assertTrue(any("code->" in message for message in messages))
+        self.assertFalse(any("compile cpu" in message for message in messages))
+        self.assertFalse(any("fallback cpu" in message for message in messages))
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_native_fused_adamw_bfloat16_two_steps(self):
         parameter = jt.array(np.asarray(
             [1.0, -2.0, 0.5, -0.25], dtype=np.float32)).bfloat16()

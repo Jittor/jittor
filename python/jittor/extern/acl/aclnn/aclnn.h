@@ -32,6 +32,7 @@
 // binary
 #include "aclnnop/aclnn_maximum.h"
 #include "aclnnop/aclnn_minimum.h"
+#include "aclnnop/aclnn_clamp.h"
 #include "aclnnop/aclnn_add.h"
 #include "aclnnop/aclnn_sub.h"
 #include "aclnnop/aclnn_mul.h"

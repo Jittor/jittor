@@ -826,27 +826,46 @@ def clamp(x, min_v=None, max_v=None):
             if bound.dtype != dtype:
                 bound = bound.cast(dtype)
         elif "float" in str(value.dtype):
-            bound = jt.unary(bound, value.dtype)
+            bound = jt.unary(bound, value.dtype).stop_grad()
         elif isinstance(bound, numbers.Real) \
                 and not isinstance(bound, numbers.Integral):
             value = value.cast("float32")
-            bound = jt.unary(bound, "float32")
+            bound = jt.unary(bound, "float32").stop_grad()
         else:
-            bound = jt.unary(bound, value.dtype)
+            bound = jt.unary(bound, value.dtype).stop_grad()
         return value, bound
 
+    scalar_bounds = (
+        min_v is not None
+        and max_v is not None
+        and not isinstance(min_v, jt.Var)
+        and not isinstance(max_v, jt.Var)
+        and min_v <= max_v
+    )
     if min_v is not None:
         x, min_v = prepare_bound(x, min_v)
-        keep = x >= min_v
-        if "float" in str(x.dtype):
-            keep = keep | (x != x)
-        x = jt.ternary(keep, x, min_v)
     if max_v is not None:
         x, max_v = prepare_bound(x, max_v)
-        keep = x <= max_v
-        if "float" in str(x.dtype):
-            keep = keep | (x != x)
-        x = jt.ternary(keep, x, max_v)
+
+    if scalar_bounds:
+        backend = getattr(jt, "_acl_clamp", None)
+        if backend is not None:
+            result = backend(x, min_v, max_v)
+            if result is not None:
+                return result
+
+    def select_bound(value, bound, lower):
+        keep = value >= bound if lower else value <= bound
+        result = jt.ternary(keep, value, bound)
+        if "float" in str(value.dtype):
+            nan_value = value.clone().stop_grad()
+            result = jt.ternary(value != value, nan_value, result)
+        return result
+
+    if min_v is not None:
+        x = select_bound(x, min_v, True)
+    if max_v is not None:
+        x = select_bound(x, max_v, False)
     return x
 
 Var.clamp = clamp
