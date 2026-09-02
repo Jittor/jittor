@@ -157,7 +157,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 2.17 | 算子身份用注册期整型 id | 待领 | | |
 | 2.18 | 算子注册表惰性初始化 | 待领 | | |
 | 2.19 | 错误分两档 | 待领 | | |
-| 2.20 | 信号处理器只做 `write` 与 `_exit`，符号化交给预建 helper 进程 | 进行中 | bindings | |
+| 2.20 | 信号处理器只做 `write` 与 `_exit`，符号化交给预建 helper 进程 | 进行中 | bindings | 上半 9b92f38d；下半（预 fork 的符号化 helper）未做 |
 | 2.21 | `DEFINE_FLAG_WITH_SETTER` 先赋值再调 setter，签名收新旧两值 | 待领 | | |
 | 2.22 | 环境变量统一 `JT_` 前缀 | 待领 | | |
 | 2.23 | 布局收尾 | 待领 | | |
