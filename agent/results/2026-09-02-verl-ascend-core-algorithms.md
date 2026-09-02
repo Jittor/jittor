@@ -2,7 +2,7 @@
 
 - Status: core-algorithm correctness accepted on a real Ascend 910B3; performance and end-to-end PPO open
 - Date: 2026-09-02
-- Jittor baseline: `3758c4ab`
+- Jittor baseline: `97dc6ce9` (source behavior from `3758c4ab`)
 - verl source: `3d66a3d7ca1cf783df949816ec6862d5a7af9406`
 - Owner: Jittor Torch compatibility and verl adapter maintainers
 - Review when: verl policy-loss formulas, Jittor clamp/autograd semantics, CANN, or the NPU adapter changes
@@ -91,8 +91,55 @@ Jittor 结果全部在 `device`，捕获窗口内
 | `512 x 512` | CISPO | `1.698 ms` | `2.561 ms` | `1.508x` |
 
 GPG 达到不慢于原生；原生 CANN Clamp 将其余五条差距从约 `2.32x-2.62x` 缩小到
-`1.25x-1.75x`，但仍未通过性能目标。单独诊断表明 metrics 同步只解释部分差距，
-不能用模型训练耗时稀释结果。因此本轮仍不接受 verl NPU 或完整 PPO 性能。
+`1.25x-1.75x`，但仍未通过性能目标。下节的进一步诊断将差距定位到 policy
+metrics 触发的惰性图分段；不能用模型训练耗时稀释结果。因此本轮仍不接受 verl
+NPU 或完整 PPO 性能。
+
+### Metrics and lazy-graph diagnosis
+
+后续在 `512 x 512` 上对六条路径执行 Jittor device profile。profile 本身有明显
+插桩开销，下面的 device time 不能与墙钟 benchmark 直接比较，但图规模和相对热点
+可用于定位：
+
+| Path | Profiled device time | Launches |
+| --- | ---: | ---: |
+| vanilla | `6.301 ms` | 33 |
+| GSPO | `5.145 ms` | 34 |
+| SAPO | `2.424 ms` | 30 |
+| GPG | `0.659 ms` | 8 |
+| geometric-mean | `3.245 ms` | 26 |
+| CISPO | `1.802 ms` | 27 |
+
+vanilla 的前三个大融合图分别约为 `1.924/1.825/1.024 ms`；它们由 metrics
+`.item()`、loss 和 backward 分阶段触发。GPG 没有三项内联 metrics，因此只有 8 次
+launch，也已经通过性能门禁。
+
+为隔离该差异，实验 worktree 只把 vanilla 返回的三项 metrics 替换为空字典，loss、
+梯度、输入和同步协议保持不变。双端 21 个样本中位数如下：
+
+| Variant | torch_npu | Jittor | Jittor/native |
+| --- | ---: | ---: | ---: |
+| upstream metrics | `2.679 ms` | `3.692 ms` | `1.378x` |
+| metrics removed | `2.619 ms` | `2.589 ms` | `0.989x` |
+
+去掉 metrics 后 Jittor 已略快于原生，且 loss/gradient 仍精确一致、fallback 为 0。
+原生三项 metrics 只增加约 `0.060 ms`，Jittor 增加约 `1.103 ms`。因此剩余 vanilla
+差距不是 clamp 或 loss/backward 计算，而是惰性图在逐项 `.item()` 处被拆成多个
+前向执行阶段。
+
+以下实验均保持数值和梯度一致，但未达到性能目标，已经完全撤回：
+
+| Experiment | Jittor vanilla | Result |
+| --- | ---: | --- |
+| 四个共享中间量 `stop_fuse` | `3.558 ms` | 仍为原生 `1.328x` |
+| ACL `.item()` 改为全图 `sync_all` | `3.744 ms` | 退化且样本出现双峰 |
+| metrics 与 loss 一次性取回 | `3.731 ms` | 退化 |
+| 先堆叠逐 token metrics 再共同归约 | `3.268 ms` | 最好但仍为原生 `1.220x` |
+| 分组 ACL CodeOp masked mean | `3.319 ms` | 比纯 Jittor 分组归约更慢 |
+
+这些结果排除了扩大同步范围、简单切断融合和仅合并归约。下一步需要让 policy-loss
+forward、metrics 和 backward 共享一次专用融合计算，或在 verl NPU adapter 中延迟并
+统一提取 metrics；不能把全局 `.item()` 行为改成 `sync_all`。
 
 ## Validation
 
@@ -112,17 +159,25 @@ GPG 达到不慢于原生；原生 CANN Clamp 将其余五条差距从约 `2.32x
 
 | Artifact | SHA-256 |
 | --- | --- |
-| `verl-npu/probes/core_algos_parity.py` | `fc3b06f1e574df54d6d7709d33e761f00076622841f125c977ac782e07731d45` |
+| `verl-npu/probes/core_algos_parity.py` | `186da95cf350e842bc6a41a38e54b2249f4c4021fba5524b2b7802775ba34425` |
 | `_state/verl-npu/current/native.json` | `c029a3c281355f90c88cff7eb16e56b35fc04b60ecc111aefc114a6a9af0ce01` |
 | `_state/verl-npu/current/native-benchmark.json` | `27342011552fba92bdfef35507dda8d10947d13f11413c5a413067969531cab2` |
 | `_state/verl-npu/current/jittor-benchmark-cann-clamp.json` | `c31526b5ed8657e930b3d7aec66180931cf3d7b47b2c9d2f71fa4e267d5e5092` |
 | `_state/verl-npu/current/native-benchmark-512x512.json` | `673673a081450f52393fbef5fd150f2219aee07d2d95cb198038290b11539803` |
 | `_state/verl-npu/current/jittor-benchmark-cann-clamp-512x512.json` | `79e0f657165f1580ac7d931cd1395dfba5bfab21ad31a94ba24e42cabb0a413b` |
+| `_state/verl-npu/current/policy-profiles.json` | `966aa6dc16b9336a8a433f8ac0845c3ec9ad22b3943bafa01d379f39039e1427` |
+| `_state/verl-npu/current/native-vanilla-no-metrics-512x512.json` | `0bb43b8dc164f6e862a5d4ca9446803135a5960ad8bcceb1025a449bdbad55f0` |
+| `_state/verl-npu/current/jittor-vanilla-no-metrics-512x512.json` | `a0f6f64bfffdf5ab87e16b3fcd0379fb9128d903e6a917ffe8835b4ecbc47e2b` |
+| `_state/verl-npu/current/jittor-stop-fuse-aggressive.json` | `8ce333a1ebe61d846c66299dc240e4c1bbeba584afd158984047c5271007deb1` |
+| `_state/verl-npu/current/jittor-item-sync-all-512x512.json` | `589c54b2a7e9509a4cabf6f0983fad8ccbd972fbc0061d523211cb82c88024c8` |
+| `_state/verl-npu/current/jittor-vanilla-batch-metrics-loss-512x512.json` | `9183a7c34036942a8b65db5d18eb6863aa8725cb421268323347de6fc1780e18` |
+| `_state/verl-npu/current/jittor-vanilla-grouped-token-metrics-512x512.json` | `d80f6ed1644e84f328bc93c7177b2e47f6b4790b78cf2262889b32d1ba3b6f44` |
+| `_state/verl-npu/current/jittor-vanilla-grouped-acl-metrics-512x512.json` | `7835d675ca69b7f1da5938b02543af42164ec916a5b716c8fd7d25f331d11fe5` |
 
 ## Open work
 
-- 降低 policy-loss metrics 和 backward 的同步/调度开销，使全部六条维护协议不慢于
-  原生 `torch_npu`。
+- 为 policy-loss forward/metrics/backward 实现专用融合或在 adapter 中统一延迟提取
+  metrics，使全部六条维护协议不慢于原生 `torch_npu`。
 - 恢复或重建可维护的 verl NPU adapter，跑通真实 worker import、TensorDict batch、
   actor/critic forward-backward、optimizer、weight transfer 和 1-step PPO。
 - NPU FSDP2/HCCL、Ray 多进程、vLLM rollout 和 Qwen3 模型规模仍需分别验收；在此
