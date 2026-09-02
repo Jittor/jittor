@@ -45,7 +45,13 @@ struct NodeFlags {
         _needed_by_backward=_n+3,
         _out_hint=_n+4,
         _th_require_grad=_n+5,
-        _is_scalar=_n+5,
+        // Var-only. It used to share bit _n+5 with _th_require_grad, so every
+        // requires_grad_(True) parameter looked like a Python scalar to
+        // binary_dtype_infer: its dtype stopped participating in promotion and
+        // float_dtype's has_scalar branch skipped the amp_prefer32/16 override
+        // entirely -- mixed precision was silently disabled on every operator
+        // touching a parameter. Bit 26 is above both layouts.
+        _is_scalar=26,
         _is_swapped=_n+6,
         // Reversible torch-style requires_grad_(False). Unlike _stop_grad,
         // this flag must not release an already-built backward graph.
@@ -58,6 +64,9 @@ struct NodeFlags {
         // Var-only marker propagated through forward ops. A loss carrying this
         // bit depends on a gradient whose producer supports first order only.
         _first_order_only=25,
+        // NOTE: bits 6..22 are shared between the Var and Op layouts (see the
+        // comment on _requires_grad_disabled); 16..21 additionally mirror
+        // amp_reg for ops (op.cc). New Var-only flags go at 26 and above.
 
         // op related flags
         // bit0: support cpu
