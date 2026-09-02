@@ -76,15 +76,20 @@ class StochasticDepth(nn.Module):
 
 
 class ConvBNActivation(nn.Sequential):
-    """Conv -> BatchNorm -> Activation, mirroring torchvision's ConvNormActivation."""
+    """Conv -> BatchNorm -> Activation, mirroring torchvision's ConvNormActivation.
+
+    ``activation_layer=None`` means *no* activation, as in torchvision: the
+    MBConv projection is a 1x1 conv + norm and nothing else. Substituting a
+    default for ``None`` before the ``is not None`` test made that test always
+    true, so every projection in b0..b7 got an extra SiLU.
+    """
 
     def __init__(self, in_planes, out_planes, kernel_size=3, stride=1,
-                 groups=1, norm_layer=None, activation_layer=None, dilation=1):
+                 groups=1, norm_layer=None, activation_layer=nn.SiLU,
+                 dilation=1):
         padding = (kernel_size - 1) // 2 * dilation
         if norm_layer is None:
             norm_layer = nn.BatchNorm
-        if activation_layer is None:
-            activation_layer = nn.SiLU
         layers = [
             nn.Conv(in_planes, out_planes, kernel_size, stride, padding,
                     dilation=dilation, groups=groups, bias=False),
