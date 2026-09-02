@@ -13,6 +13,8 @@ import jittor as jt
 
 from ..context import registry_for
 from ...diagnostics import EXPECTED, swallowed
+from ... import collectives as _collectives
+from ... import fsdp_hooks as _fsdp_hooks
 
 
 class _JittorWork:
@@ -220,9 +222,7 @@ def _reduce_name(op, reduce_op):
 
 
 def _native_all_gather_flat(tensor):
-    from jittor.compat.fsdp2 import common
-
-    return common._all_gather_shards(tensor.reshape((-1,)))
+    return _collectives._all_gather_shards(tensor.reshape((-1,)))
 
 
 def _native_all_gather_object(object_list, obj, group=None):
@@ -253,7 +253,21 @@ def _native_all_gather_object(object_list, obj, group=None):
 
 
 def _install_fsdp2_distributed(dist, torch_module=None, registry=None):
-    """Install the FSDP2/DTensor compatibility surface."""
+    """Install the FSDP2/DTensor compatibility surface.
+
+    THE one place below fsdp2 that may name it. Everything else that needs
+    FSDP-aware behaviour -- Tensor.backward, optimizer step/zero_grad,
+    Module.__call__, the distributed state dict -- goes through
+    ``jittor.compat.fsdp_hooks`` instead, so that the dependency runs one way
+    (``core -> tensor -> nn/optim -> distributed -> fsdp``).
+
+    This edge stays because it is composition, not use: installing
+    ``torch.distributed`` is precisely when the FSDP2 surface has to be hung
+    off it, and the objects it needs (``dist``, the torch module, the install
+    registry) exist only here. It runs once, at install time, off any hot path.
+    ``tests/structure/test_compat_layering.py`` allows exactly this one and
+    fails on a second.
+    """
     from jittor.compat.fsdp2 import installer as _fsdp2_installer
     return _fsdp2_installer.install_with_registry(
         dist, torch_module, registry=registry
@@ -784,11 +798,14 @@ def _install_distributed(g, registry=None):
     def _get_model_state_dict(model, *a, options=None, **k):
         return model.state_dict(*a, **k) if hasattr(model, "state_dict") else {}
     def _set_model_state_dict(model, state_dict, *a, options=None, **k):
-        from jittor.compat.fsdp2 import _state_dict as _fsdp2_state_dict
-
+        # `_is_fsdp_module` is set only by fsdp2, so a model carrying it proves
+        # fsdp2 was imported and has registered -- see jittor/compat/
+        # fsdp_hooks.py for why this file must not import fsdp2 directly.
         if getattr(model, "_is_fsdp_module", False):
-            _fsdp2_state_dict._load_full_state_dict(model, state_dict)
-            return None
+            _fsdp = _fsdp_hooks.provider()
+            if _fsdp is not None:
+                _fsdp._load_full_state_dict(model, state_dict)
+                return None
         if hasattr(model, "load_state_dict"):
             return model.load_state_dict(state_dict, strict=getattr(options, "strict", True))
         return None

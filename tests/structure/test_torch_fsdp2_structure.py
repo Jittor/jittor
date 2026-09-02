@@ -58,10 +58,14 @@ _PUBLIC_NAMES = {
 }
 
 _OWNERSHIP = {
+    # The rank/world queries and the two collectives moved to
+    # jittor/compat/collectives.py, below both fsdp2 and the distributed
+    # installer, which was reaching up into fsdp2.common to borrow
+    # `_all_gather_shards` for plain `all_gather` (task 7.06). `common` still
+    # re-exports them for its own callers, but no longer owns them -- which is
+    # what the `value.__module__ == module.__name__` check below is for.
     common: {
-        "_prod", "_world_size", "_rank", "_in_true_distributed", "_nccl_ops",
-        "_flatten_var", "_ceil_div", "_pad_flat", "_slice_flat",
-        "_all_gather_shards", "_reduce_scatter_padded", "_param_numel",
+        "_prod", "_flatten_var", "_ceil_div", "_pad_flat", "_param_numel",
         "_fsdp2_flat_enabled",
     },
     dtensor: {

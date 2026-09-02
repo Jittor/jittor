@@ -31,6 +31,7 @@ from ..types import (
 
 import collections as _collections
 from ...diagnostics import EXPECTED, swallowed
+from ... import fsdp_hooks as _fsdp_hooks
 _MinMax = _collections.namedtuple("torch_return_types", ["values", "indices"])
 _TopK = _collections.namedtuple("topk", ["values", "indices"])
 _Sort = _collections.namedtuple("sort", ["values", "indices"])
@@ -1133,14 +1134,12 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         # stale strong refs in the registry would otherwise keep old params and
         # their Jittor graphs alive until OOM.
         fsdp_opts = [o for o in opts if _optimizer_maybe_has_fsdp_params(o)]
-        if fsdp_opts:
-            try:
-                from jittor.compat import fsdp2 as _fsdp2_backward
-            except EXPECTED as exc:
-                swallowed("torch/installers/tensor.py _backward: from jittor.compat import fsdp2 as _fsdp2_backward", exc)
-                _fsdp2_backward = None
-        else:
-            _fsdp2_backward = None
+        # Ask the seam rather than importing fsdp2: this file is *below* fsdp2
+        # in the dependency order (see jittor/compat/fsdp_hooks.py). The guard
+        # above already proves the answer cannot be None when it matters --
+        # `_optimizer_maybe_has_fsdp_params` looks for `_jittor_fsdp2_state`,
+        # a marker only fsdp2 sets, and fsdp2 registers when it is imported.
+        _fsdp2_backward = _fsdp_hooks.provider() if fsdp_opts else None
         fsdp_opt_ids = {id(o) for o in fsdp_opts} if _fsdp2_backward is not None else set()
         leaf_map = {}
         opt_ids = set()

@@ -8,6 +8,7 @@ import numpy as np
 from .context import registry_for
 from .types import _dtype_to_str
 from ..diagnostics import EXPECTED, swallowed
+from .. import fsdp_hooks as _fsdp_hooks
 
 
 def _install_optimizers(g, registry=None):
@@ -459,12 +460,9 @@ def _install_optimizers(g, registry=None):
             except (AttributeError, TypeError) as exc:
                 swallowed("torch/optimizers.py _zero_grad_compat: object.__setattr__(self, '_grad_map', {})", exc)
             result = _orig_zero(self)
-            try:
-                from jittor.compat import fsdp2 as _fsdp2_zero
-                if _fsdp2_zero.optimizer_has_fsdp_params(self):
-                    _fsdp2_zero.refresh_visible_full_grads(self)
-            except EXPECTED as exc:
-                swallowed("torch/optimizers.py _zero_grad_compat: from jittor.compat import fsdp2 as _fsdp2_zero", exc)
+            _fsdp2_zero = _fsdp_hooks.provider()
+            if _fsdp2_zero is not None and _fsdp2_zero.optimizer_has_fsdp_params(self):
+                _fsdp2_zero.refresh_visible_full_grads(self)
             object.__setattr__(self, "_torch_backward_advanced_n_step", False)
             return result
         Base.zero_grad = _zero_grad_compat
@@ -523,14 +521,14 @@ def _install_optimizers(g, registry=None):
                     return True
         return False
     def _load_fsdp2_for_optimizer(opt):
+        # The seam, not an import: this file is below fsdp2 in the dependency
+        # order (jittor/compat/fsdp_hooks.py). The guard is what makes the
+        # `None` answer safe -- `_jittor_fsdp2_state` is set only by fsdp2, and
+        # fsdp2 registers itself when imported, so an optimizer holding a
+        # sharded parameter always finds a provider here.
         if not _optimizer_maybe_has_fsdp_params(opt):
             return None
-        try:
-            from jittor.compat import fsdp2 as _fsdp2_step
-        except EXPECTED as exc:
-            swallowed("torch/optimizers.py _load_fsdp2_for_optimizer: from jittor.compat import fsdp2 as _fsdp2_step", exc)
-            return None
-        return _fsdp2_step
+        return _fsdp_hooks.provider()
     def _wrap_step_accept_closure(_cls, _marker):
         if _cls is None or getattr(_cls, _marker, False):
             return

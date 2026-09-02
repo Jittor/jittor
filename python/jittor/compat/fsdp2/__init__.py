@@ -86,4 +86,21 @@ def __getattr__(name):
     raise AttributeError("module %r has no attribute %r" % (__name__, name))
 
 
+# Publish this package to the layers below it. `installers/tensor.py`,
+# `optimizers.py` and `installers/nn.py` need FSDP-aware behaviour but sit
+# under fsdp2 in the dependency order, so they ask `fsdp_hooks.provider()`
+# instead of importing this package -- see jittor/compat/fsdp_hooks.py.
+#
+# This runs on *import*, not on install: a parameter can carry an FSDP marker
+# in a process where the torch shim's installers never ran, and those markers
+# are exactly what the lower layers test before asking for the provider.
+from jittor.compat import fsdp_hooks as _fsdp_hooks
+# Bound under its private name on purpose: fsdp2's public surface is the
+# torch-facing API (fully_shard, DTensor, ...), pinned byte-for-byte in
+# tests/structure/test_torch_fsdp2_structure.py. The seam contract is
+# plumbing, so it stays underscore-prefixed and out of that surface.
+from ._state_dict import _load_full_state_dict
+
+_fsdp_hooks.register(sys.modules[__name__])
+
 del _module, _name, _submodule_name

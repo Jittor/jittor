@@ -27,6 +27,7 @@ from ..types import (
     _cuda_index_of,
 )
 from ...diagnostics import EXPECTED, swallowed
+from ... import fsdp_hooks as _fsdp_hooks
 
 
 def _pipelining_from_environment():
@@ -1275,11 +1276,15 @@ def _install_module_methods(nn, registry=None):
             except EXPECTED as exc:
                 swallowed("torch/installers/nn.py _call: registry = getattr(jt, '_torch_leaf_params', None)", exc)
 
+        # `_fsdp_state` is set only by fsdp2, so a module carrying one is proof
+        # that fsdp2 was imported and therefore registered -- see
+        # jittor/compat/fsdp_hooks.py for why this file must not import it.
         state = getattr(self, "_fsdp_state", None)
         if state is not None and getattr(state, "true_fsdp_initialized", False):
-            from jittor.compat.fsdp2 import shard as _fsdp2_shard
-            return _maybe_pipeline(_fsdp2_shard._execute_with_true_fsdp(
-                self, dispatch, *args, **kwargs))
+            _fsdp = _fsdp_hooks.provider()
+            if _fsdp is not None:
+                return _maybe_pipeline(_fsdp._execute_with_true_fsdp(
+                    self, dispatch, *args, **kwargs))
         return _maybe_pipeline(dispatch(*args, **kwargs))
     M.__call__ = _call
     M.set_execution_pipelining = staticmethod(set_execution_pipelining)

@@ -803,5 +803,132 @@ class TestFSDP2Compat(unittest.TestCase):
         self.assertIsNotNone(PrivateFlatParameter(torch.ones(1)))
 
 
+class TestTheTwoForwardHooksActAsOne(unittest.TestCase):
+    """One forward unshards once.
+
+    Two hooks reach ``_execute_with_true_fsdp`` for the same forward, and both
+    are needed, because they cover different dispatch paths:
+
+    * ``Module.__call__`` (installed once, in ``compat/torch/installers/nn.py``)
+      is the only one that sees a torch-style ``forward`` override, a
+      per-instance ``self.forward``, or the fused RMSNorm shortcut -- none of
+      which reach ``execute``;
+    * the per-instance ``execute`` wrapper that ``fully_shard`` installs is the
+      only one that sees a direct ``module.execute(...)`` bypassing
+      ``__call__``.
+
+    On the ordinary jittor-style path both fire, nested, and the whole
+    unshard/reshard sequence therefore ran twice per forward. It was never
+    *wrong* -- each half is individually idempotent -- which is exactly why it
+    survived: the second pass was invisible except as work.
+
+    These tests drive the two hooks directly. ``fully_shard`` cannot reach the
+    true-FSDP path on one rank (``common._in_true_distributed()`` is false
+    without an MPI/NCCL world), so a real module would exercise nothing.
+    """
+
+    def _module(self, reshard_after_forward=True):
+        state = types.SimpleNamespace(
+            true_fsdp_initialized=True,
+            true_fsdp_flat=False,
+            true_fsdp_params=[],
+            reshard_after_forward=reshard_after_forward,
+        )
+        return types.SimpleNamespace(_fsdp_state=state), state
+
+    def _nested_call(self, module, forward):
+        """Exactly the nesting the two hooks produce for one forward."""
+        def execute_hook(*args, **kwargs):        # fully_shard's execute wrapper
+            return fsdp_shard._execute_with_true_fsdp(
+                module, forward, *args, **kwargs)
+
+        return fsdp_shard._execute_with_true_fsdp(   # Module.__call__'s hook
+            module, execute_hook)
+
+    def test_one_forward_unshards_and_reshards_exactly_once(self):
+        module, _state = self._module()
+        calls = {"unshard": 0, "reshard": 0}
+        real_unshard = fsdp_shard._unshard_module_params
+        real_reshard = fsdp_shard._reshard_module_params
+
+        def counting_unshard(m):
+            calls["unshard"] += 1
+            return real_unshard(m)
+
+        def counting_reshard(m):
+            calls["reshard"] += 1
+            return real_reshard(m)
+
+        with mock.patch.object(fsdp_shard, "_unshard_module_params",
+                               counting_unshard), \
+             mock.patch.object(fsdp_shard, "_reshard_module_params",
+                               counting_reshard):
+            out = self._nested_call(module, lambda: "forward-result")
+
+        self.assertEqual(out, "forward-result")
+        # Without the depth guard this is {"unshard": 2, "reshard": 2}: the
+        # inner hook reshards on the way out and the outer one then re-enters
+        # the entire sequence, on every forward.
+        self.assertEqual(calls, {"unshard": 1, "reshard": 1})
+
+    def test_the_parameters_are_whole_at_the_innermost_point(self):
+        module, state = self._module()
+        seen = []
+
+        def forward():
+            seen.append(bool(getattr(state, "true_fsdp_unsharded", False)))
+            return None
+
+        self._nested_call(module, forward)
+        self.assertEqual(seen, [True])
+        self.assertFalse(getattr(state, "true_fsdp_unsharded", False))
+
+    def test_the_unsharded_window_closes_in_the_outer_hook_not_the_inner_one(self):
+        # What the idempotence was covering up. The inner hook used to put the
+        # shards back before the outer hook's `finally` ran, so the window in
+        # which the parameters were whole ended in the middle of the outer
+        # hook. Anything the outer hook did after its inner call -- and the
+        # `nn.py` side wraps the result in the execution-pipelining hook there
+        # -- saw resharded parameters.
+        module, state = self._module()
+        real_reshard = fsdp_shard._reshard_module_params
+        found_unsharded = []
+
+        def recording_reshard(m):
+            found_unsharded.append(bool(getattr(state, "true_fsdp_unsharded", False)))
+            return real_reshard(m)
+
+        with mock.patch.object(fsdp_shard, "_reshard_module_params",
+                               recording_reshard):
+            self._nested_call(module, lambda: None)
+
+        # One reshard, and it is the one that actually closes the window --
+        # not a second visit finding the work already done.
+        self.assertEqual(found_unsharded, [True])
+
+    def test_the_depth_counter_is_left_clean_even_when_the_forward_raises(self):
+        module, state = self._module()
+
+        def boom():
+            raise ValueError("forward failed")
+
+        with self.assertRaises(ValueError):
+            self._nested_call(module, boom)
+
+        self.assertEqual(getattr(state, "true_fsdp_execute_depth", 0), 0)
+        self.assertFalse(getattr(state, "true_fsdp_unsharded", False))
+
+    def test_reshard_after_forward_false_keeps_the_parameters_whole(self):
+        module, state = self._module(reshard_after_forward=False)
+        self._nested_call(module, lambda: None)
+        self.assertTrue(getattr(state, "true_fsdp_unsharded", False))
+        self.assertEqual(getattr(state, "true_fsdp_execute_depth", 0), 0)
+
+    def test_a_module_without_fsdp_state_is_passed_straight_through(self):
+        plain = types.SimpleNamespace()
+        self.assertEqual(
+            fsdp_shard._execute_with_true_fsdp(plain, lambda: "plain"), "plain")
+
+
 if __name__ == "__main__":
     unittest.main()

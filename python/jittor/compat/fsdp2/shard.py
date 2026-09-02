@@ -368,17 +368,55 @@ def _reshard_module_params(module):
     return module
 
 
+#: Attribute on the FSDP state counting how deep we are inside this module's
+#: own forward. See :func:`_execute_with_true_fsdp`.
+_EXECUTE_DEPTH_ATTR = "true_fsdp_execute_depth"
+
+
 def _execute_with_true_fsdp(module, orig_execute, *args, **kwargs):
+    """Run one forward with this module's parameters unsharded.
+
+    Two hooks call this for the same forward, and they are both needed because
+    they cover different dispatch paths:
+
+    * ``Module.__call__`` (installed once, in ``compat/torch/installers/nn.py``)
+      is the only one that sees a torch-style ``forward`` override, a
+      per-instance ``self.forward``, or the fused RMSNorm shortcut -- none of
+      which reach ``execute``;
+    * the per-instance ``execute`` wrapper (installed by ``fully_shard`` in
+      :func:`_install_true_fsdp_execute`) is the only one that sees a direct
+      ``module.execute(...)`` call that bypasses ``__call__``.
+
+    On the ordinary jittor-style path both fire, nested. Unsharding and
+    resharding are individually idempotent, so the answer was never wrong, but
+    the inner hook resharded on the way out and the outer one then re-entered
+    the whole guard sequence for a second time on every single forward.
+
+    The depth counter makes the pair behave as one hook: whichever fires first
+    owns the unshard/reshard for that forward, and any nested call is a plain
+    pass-through. That also fixes the case the idempotence was quietly
+    covering: with ``reshard_after_forward`` true, the inner hook used to put
+    the shards back before the outer hook's ``finally`` had run, so the window
+    in which the module's parameters were unsharded ended in the middle of the
+    outer hook rather than at its end.
+    """
     state = getattr(module, "_fsdp_state", None)
     if state is None or not getattr(state, "true_fsdp_initialized", False):
         return orig_execute(*args, **kwargs)
-    _unshard_module_params(module)
+    depth = getattr(state, _EXECUTE_DEPTH_ATTR, 0)
+    if depth:
+        return orig_execute(*args, **kwargs)
+    setattr(state, _EXECUTE_DEPTH_ATTR, depth + 1)
     try:
-        out = orig_execute(*args, **kwargs)
+        _unshard_module_params(module)
+        try:
+            return orig_execute(*args, **kwargs)
+        finally:
+            if getattr(state, "reshard_after_forward", True):
+                _reshard_module_params(module)
     finally:
-        if getattr(state, "reshard_after_forward", True):
-            _reshard_module_params(module)
-    return out
+        setattr(state, _EXECUTE_DEPTH_ATTR, depth)
+
 
 
 def _install_true_fsdp_execute(module):
