@@ -311,6 +311,40 @@ def gauss_(var, mean=0.0, std=1.0):
 Var.gauss_ = gauss_
 Var.normal_ = gauss_
 
+def _calculate_fan_in_and_fan_out(shape):
+    """``(fan_in, fan_out)`` for a weight of this shape.
+
+    The single definition used by every initializer here. Matches
+    ``torch.nn.init._calculate_fan_in_and_fan_out``: dim 1 is the number of
+    input feature maps, dim 0 the number of output ones, and the trailing dims
+    are the receptive field that both get multiplied by.
+
+    There used to be two spellings of this -- a ``matsize`` loop in the
+    ``invariant_*``/``xavier_*`` family and ``fan *= var[0][0].numel()`` in
+    ``calculate_std``. They agreed numerically, but the second one indexes the
+    Var (real work, and it needs shape[0] and shape[1] to be non-empty) just to
+    read a number that is already in the shape.
+    """
+    if len(shape) < 2:
+        raise ValueError(
+            "fan in and fan out cannot be computed for a var with fewer than "
+            "2 dimensions, got shape %s" % (tuple(shape),))
+    receptive_field_size = 1
+    for i in shape[2:]:
+        receptive_field_size *= i
+    return shape[1] * receptive_field_size, shape[0] * receptive_field_size
+
+
+def _fan_for_mode(shape, mode):
+    """The fan selected by ``mode``, which must be 'fan_in' or 'fan_out'."""
+    mode = mode.lower()
+    if mode not in ("fan_in", "fan_out"):
+        raise ValueError(
+            "mode not supported, should be fan_in or fan_out, but got %r" % (mode,))
+    fan_in, fan_out = _calculate_fan_in_and_fan_out(shape)
+    return fan_in if mode == "fan_in" else fan_out
+
+
 def invariant_uniform(shape, dtype="float32", mode="fan_in"):
     ''' Return Jittor initialized Var by invariant_uniform.
 
@@ -331,14 +365,7 @@ def invariant_uniform(shape, dtype="float32", mode="fan_in"):
         print(a)
 
     '''
-    assert len(shape)>1
-    assert mode=="fan_in" or mode=="fan_out", \
-        f"mode not supported, should be fan_in or fan_out, but got {mode}"
-
-    matsize=1
-    for i in shape[2:]:
-        matsize *= i
-    fan = (shape[1] * matsize) if mode=="fan_in" else (shape[0] * matsize)
+    fan = _fan_for_mode(shape, mode)
     bound = math.sqrt(1.0/fan)
     return uniform(shape, dtype, -bound, bound)
 
@@ -385,13 +412,7 @@ def relu_invariant_gauss(shape, dtype="float32", mode="fan_in"):
         print(a)
     
     '''
-    assert len(shape)>1
-    assert mode=="fan_in" or mode=="fan_out"
-    
-    matsize=1
-    for i in shape[2:]:
-        matsize *= i
-    fan = (shape[1] * matsize) if mode=="fan_in" else (shape[0] * matsize)
+    fan = _fan_for_mode(shape, mode)
     std = math.sqrt(2.0/fan)
     return gauss(shape, dtype, 0, std)
 
@@ -419,28 +440,20 @@ def relu_invariant_gauss_(var, mode="fan_in"):
 Var.relu_invariant_gauss_ = relu_invariant_gauss_
 
 def calculate_std(var, mode, nonlinearity, param=0.01):
-    mode = mode.lower()
+    """The kaiming standard deviation ``gain / sqrt(fan)``.
+
+    Reads its gain from :func:`calculate_gain`, which is the module's one gain
+    table. There used to be a second, private table inline here that disagreed
+    with it: it had no ``'selu'`` entry, so ``kaiming_uniform_(w,
+    nonlinearity='selu')`` died with a bare ``KeyError: 'selu'`` while
+    ``calculate_gain('selu')`` happily returned 3/4. An unsupported name now
+    raises the same ValueError from the same place no matter which way in you
+    came.
+    """
     assert isinstance(param,(int,float))
     assert var.ndim>=2
-    assert mode in ['fan_in', 'fan_out']
-
-    fan = var.shape[1] if mode == 'fan_in' else var.shape[0]
-    fan *= var[0][0].numel()
-
-    gains = {
-        'linear':1,
-        'conv1d':1,
-        'conv2d':1,
-        'conv3d':1,
-        'conv_transpose1d':1,
-        'conv_transpose2d':1,
-        'conv_transpose3d':1,
-        'sigmoid':1,
-        'tanh':5.0/3,
-        'relu':math.sqrt(2.0),
-        'leaky_relu':math.sqrt(2.0 / (1 + param ** 2)),
-    }
-    gain = gains[nonlinearity]
+    fan = _fan_for_mode(var.shape, mode)
+    gain = calculate_gain(nonlinearity, param)
     std = gain/math.sqrt(fan)
     return std
 
@@ -530,12 +543,8 @@ def xavier_uniform(shape, dtype="float32", gain=1.0):
         a = init.xavier_uniform((2,2), gain=init.calculate_gain('relu'))
         print(a)
     '''
-    assert len(shape)>1
-
-    matsize=1
-    for i in shape[2:]:
-        matsize *= i
-    fan = (shape[1] * matsize) + (shape[0] * matsize)
+    fan_in, fan_out = _calculate_fan_in_and_fan_out(shape)
+    fan = fan_in + fan_out
     bound = gain * math.sqrt(6.0/fan)
     return uniform(shape, dtype, -bound, bound)
 
@@ -592,12 +601,8 @@ def xavier_gauss(shape, dtype="float32", gain=1.0):
         linear.weight.xavier_gauss_() # This is ok too
 
     '''
-    assert len(shape)>1
-    
-    matsize=1
-    for i in shape[2:]:
-        matsize *= i
-    fan = (shape[1] * matsize) + (shape[0] * matsize)
+    fan_in, fan_out = _calculate_fan_in_and_fan_out(shape)
+    fan = fan_in + fan_out
     std = gain * math.sqrt(2.0/fan)
     return gauss(shape, dtype, 0, std)
 

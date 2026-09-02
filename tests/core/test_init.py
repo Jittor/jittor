@@ -95,5 +95,133 @@ class TestInitFunc(unittest.TestCase):
         assert (linear.weight > 0).all()
 
 
+class TestInitOneGainTableOneFanRule(unittest.TestCase):
+    """init.py had two gain tables and two fan algorithms for the same concepts.
+
+    ``calculate_gain`` knew about ``'selu'`` (3/4) and raised a clear ValueError
+    for anything it did not know. ``calculate_std`` -- the function the whole
+    kaiming family actually goes through -- carried its own private dict that
+    was missing ``'selu'`` entirely, so ``kaiming_uniform_(w,
+    nonlinearity='selu')`` died with a bare ``KeyError: 'selu'``.
+
+    Reference values checked against real PyTorch 2.12.1 in a subprocess
+    (``torch.nn.init.calculate_gain`` and
+    ``torch.nn.init._calculate_fan_in_and_fan_out``); the two-stage form is
+    "numpy/py reference == torch" first, then "jittor == reference".
+    """
+
+    # stage 1 reference: exactly what torch 2.12.1 returns
+    TORCH_GAINS = {
+        'linear': 1.0,
+        'conv1d': 1.0,
+        'conv2d': 1.0,
+        'conv3d': 1.0,
+        'conv_transpose1d': 1.0,
+        'conv_transpose2d': 1.0,
+        'conv_transpose3d': 1.0,
+        'sigmoid': 1.0,
+        'tanh': 1.6666666666666667,
+        'relu': 1.4142135623730951,
+        'selu': 0.75,
+    }
+    # torch: _calculate_fan_in_and_fan_out
+    TORCH_FANS = {
+        (8, 4): (4, 8),
+        (8, 4, 3): (12, 24),
+        (8, 4, 3, 3): (36, 72),
+        (8, 4, 2, 3, 3): (72, 144),
+    }
+
+    def test_calculate_gain_matches_torch(self):
+        from jittor import init
+        for name, expected in self.TORCH_GAINS.items():
+            with self.subTest(nonlinearity=name):
+                self.assertAlmostEqual(
+                    float(init.calculate_gain(name)), expected, places=12)
+        # leaky_relu's gain depends on the negative slope
+        self.assertAlmostEqual(
+            float(init.calculate_gain('leaky_relu', 0.2)),
+            1.3867504905630728, places=12)
+        self.assertAlmostEqual(
+            float(init.calculate_gain('leaky_relu', 0)),
+            1.4142135623730951, places=12)
+
+    def test_kaiming_uses_the_same_gain_table_as_calculate_gain(self):
+        """This is the one that used to raise KeyError for 'selu'."""
+        import math
+        from jittor import init
+        var = jt.empty((8, 4, 3, 3))
+        fan_in = 4 * 3 * 3
+        for name, gain in self.TORCH_GAINS.items():
+            with self.subTest(nonlinearity=name):
+                std = init.calculate_std(var, 'fan_in', name, 0)
+                self.assertAlmostEqual(
+                    std, gain / math.sqrt(fan_in), places=10,
+                    msg="calculate_std disagrees with calculate_gain for %r"
+                        % name)
+        # and the whole way through the public entry points
+        for fn in (init.kaiming_uniform_, init.kaiming_normal_):
+            with self.subTest(fn=fn.__name__):
+                w = jt.empty((8, 4, 3, 3))
+                fn(w, nonlinearity='selu')      # used to be KeyError: 'selu'
+                self.assertEqual(tuple(w.shape), (8, 4, 3, 3))
+
+    def test_kaiming_selu_bound_matches_torch(self):
+        """kaiming_uniform_ with selu draws from [-bound, bound], bound=sqrt(3)*std."""
+        import math
+        from jittor import init
+        w = jt.empty((64, 32, 3, 3))
+        init.kaiming_uniform_(w, nonlinearity='selu')
+        fan_in = 32 * 3 * 3
+        bound = math.sqrt(3.0) * (0.75 / math.sqrt(fan_in))
+        a = w.numpy()
+        assert np.abs(a).max() <= bound + 1e-6, \
+            "samples must lie within the selu kaiming bound %g" % bound
+        # and be spread over it, i.e. not accidentally a different gain
+        assert np.abs(a).max() > 0.9 * bound, \
+            "samples do not fill the selu kaiming bound %g" % bound
+
+    def test_unknown_nonlinearity_raises_valueerror_everywhere(self):
+        from jittor import init
+        var = jt.empty((4, 4))
+        with self.assertRaises(ValueError):
+            init.calculate_gain('not_a_nonlinearity')
+        # used to be a bare KeyError from a private dict
+        with self.assertRaises(ValueError):
+            init.calculate_std(var, 'fan_in', 'not_a_nonlinearity', 0)
+        with self.assertRaises(ValueError):
+            init.kaiming_uniform_(jt.empty((4, 4)),
+                                  nonlinearity='not_a_nonlinearity')
+
+    def test_one_fan_rule_across_every_initializer(self):
+        import math
+        from jittor import init
+        for shape, (fan_in, fan_out) in self.TORCH_FANS.items():
+            with self.subTest(shape=shape):
+                self.assertEqual(
+                    init._calculate_fan_in_and_fan_out(shape), (fan_in, fan_out))
+                # calculate_std (the kaiming path) must use the same fan ...
+                var = jt.empty(shape)
+                self.assertAlmostEqual(
+                    init.calculate_std(var, 'fan_in', 'linear', 0),
+                    1.0 / math.sqrt(fan_in), places=10)
+                self.assertAlmostEqual(
+                    init.calculate_std(var, 'fan_out', 'linear', 0),
+                    1.0 / math.sqrt(fan_out), places=10)
+                # ... as invariant_uniform (bound = sqrt(1/fan)) ...
+                a = init.invariant_uniform(shape, mode='fan_in').numpy()
+                assert np.abs(a).max() <= math.sqrt(1.0 / fan_in) + 1e-6
+                # ... and xavier (fan = fan_in + fan_out)
+                b = init.xavier_uniform(shape).numpy()
+                assert np.abs(b).max() <= math.sqrt(6.0 / (fan_in + fan_out)) + 1e-6
+
+    def test_bad_mode_raises_valueerror(self):
+        from jittor import init
+        with self.assertRaises(ValueError):
+            init.calculate_std(jt.empty((4, 4)), 'fan_middle', 'relu', 0)
+        with self.assertRaises(ValueError):
+            init.invariant_uniform((4, 4), mode='fan_middle')
+
+
 if __name__ == "__main__":
     unittest.main()
