@@ -397,7 +397,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 7.18 | 布局收尾 | 待领 | | |
 | 8.01 | 描述符与 workspace 一律 RAII | 已合并 | cudabk | afb08e88 |
 | 8.02 | 集合通信走通信流加事件依赖，支持 `GroupStart/End` 桶化 | 待领 | | |
-| 8.03 | 精度策略收敛 | 已合并 | cudabk | PENDING |
+| 8.03 | 精度策略收敛 | 已合并 | cudabk | dab0690c |
 | 8.04 | cuDNN 9 | 待领 | | |
 | 8.05 | MKL | 待领 | | |
 | 8.06 | ACL 去样板 | 待领 | | |
