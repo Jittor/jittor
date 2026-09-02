@@ -24,9 +24,11 @@ against an INDEPENDENT reference (numpy, via ``OpInfo.ref``), and backward via
 green test means jittor matches the outside world -- the opposite of the legacy
 self-consistency checks the audit flagged as low-assurance.
 """
+import hashlib
+import itertools
 import os
 import unittest
-import itertools
+
 import numpy as np
 
 import jittor as jt
@@ -198,7 +200,39 @@ def default_tolerances(*dtypes):
 
 
 # ------------------------------------------------------------------ seeding
-_seed_counter = itertools.count(0x5EED)
+# The seed for a generated input used to come from a process-level counter
+# (``itertools.count(0x5EED)``). That made the data a test received depend on how
+# many make_tensor calls happened before it in the same process, so:
+#   * a case that failed in a full run got different inputs when re-run with -k
+#     and could not be reproduced;
+#   * inserting or deleting any test shifted the data of every test after it;
+#   * xdist and random ordering were unusable.
+# The seed is now a pure function of (test nodeid, draw ordinal within that test,
+# shape, dtype, range). The ordinal keeps the two operands of a binary op
+# different; resetting it per test keeps -k and full runs identical.
+_CURRENT_TEST_ID = ""
+_DRAW_ORDINAL = 0
+_DRAWN_INPUTS = []
+
+
+def stable_seed(*parts):
+    """A seed that does not move between processes (``hash()`` on str does)."""
+    material = "|".join(repr(part) for part in parts).encode("utf-8")
+    return int.from_bytes(hashlib.blake2b(material, digest_size=8).digest(),
+                          "big") & 0x7FFFFFFF
+
+
+def begin_test_inputs(test_id):
+    """Start a test: pin the seed material to it and restart the draw ordinal."""
+    global _CURRENT_TEST_ID, _DRAW_ORDINAL
+    _CURRENT_TEST_ID = test_id or ""
+    _DRAW_ORDINAL = 0
+    del _DRAWN_INPUTS[:]
+
+
+def drawn_inputs():
+    """What this test drew, in order -- reported alongside a failure."""
+    return tuple(_DRAWN_INPUTS)
 
 
 def freeze_rng(seed):
@@ -233,14 +267,25 @@ def make_tensor(*shape, dtype=float32, low=None, high=None, requires_grad=False,
     ``requires_grad`` is advisory (jittor leaf Vars are differentiable via
     ``jt.grad``); it tags which inputs a generic test should differentiate.
     """
+    global _DRAW_ORDINAL
     if len(shape) == 1 and isinstance(shape[0], (tuple, list, jt.NanoVector)):
         shape = tuple(shape[0])
     shape = tuple(int(s) for s in shape)
-    rng = np.random.RandomState((seed if seed is not None else next(_seed_counter)) & 0x7FFFFFFF)
 
     dlo, dhi = _DEFAULT_RANGE.get(dtype, (-9, 9))
     lo = dlo if low is None else low
     hi = dhi if high is None else high
+
+    ordinal = _DRAW_ORDINAL
+    _DRAW_ORDINAL += 1
+    if seed is None:
+        seed = stable_seed(_CURRENT_TEST_ID, ordinal, shape, dtype, lo, hi,
+                           noncontiguous, exclude_zero)
+    seed &= 0x7FFFFFFF
+    _DRAWN_INPUTS.append(
+        "draw #%d: shape=%s dtype=%s range=[%s, %s) seed=%d"
+        % (ordinal, list(shape), dtype, lo, hi, seed))
+    rng = np.random.RandomState(seed)
 
     npd = np_dtype(dtype)
     if dtype == bool_:

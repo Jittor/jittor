@@ -242,6 +242,46 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.manual)
 
 
+def _input_generator():
+    """``_helpers.common``, but only if the session already imported it.
+
+    Importing it here would pull Jittor into every static structure test, so this
+    stays a lookup: a test that never generated an input has nothing to seed.
+    """
+    return sys.modules.get("_helpers.common")
+
+
+@pytest.fixture(autouse=True)
+def deterministic_generated_inputs(request):
+    """Seed generated inputs from the test's own nodeid, not from run order.
+
+    ``make_tensor`` used to draw from a process-level counter, so the data a case
+    received depended on how many draws happened before it. A case that failed in
+    a full run got different data under ``-k`` and could not be reproduced.
+    """
+    common = _input_generator()
+    if common is not None:
+        common.begin_test_inputs(request.node.nodeid)
+    yield
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Print the seeds a failing test drew, so it can be reproduced exactly."""
+    outcome = yield
+    report = outcome.get_result()
+    if report.when != "call" or not report.failed:
+        return
+    common = _input_generator()
+    if common is None:
+        return
+    drawn = common.drawn_inputs()
+    if drawn:
+        report.sections.append(
+            ("generated inputs (deterministic; rerun this nodeid to reproduce)",
+             "\n".join(drawn)))
+
+
 @pytest.fixture(autouse=True)
 def rocm_backend(request):
     if request.node.get_closest_marker("rocm") is None:
