@@ -22,6 +22,10 @@ import numpy as np
 
 import jittor as jt
 
+MAGIC = 98765.0
+POISON = 3.0
+
+
 def _var_mem_ptrs():
     """{node id: mem_ptr} for every Var in the current graph.
 
@@ -106,6 +110,50 @@ class TestMigrateKeepsShareAlias(unittest.TestCase):
                 err_msg="a write through one alias was lost by migration")
             del a, b
             gc.collect()
+
+
+@unittest.skipIf(not jt.has_cuda, "Cuda not found")
+class TestFetchCrossStreamOrder(unittest.TestCase):
+    """``jt.fetch`` copies on a side stream; the default stream must wait.
+
+    fetch_op creates a non-blocking stream and makes it wait for the default
+    stream before copying, but never the other way round.  The source var's
+    block goes back to the SFRL free list the moment the var dies, with no
+    record of a copy still in flight, so the kernels that get that block next
+    overwrite it while the side stream is still reading it.
+    """
+
+    def test_fetched_data_is_not_overwritten_by_later_kernels(self):
+        n = 1 << 23              # 32 MB per var
+        nvar = 8                 # ~20 ms of device-to-host copies queued up
+        with jt.flag_scope(use_cuda=1):
+            seed = jt.array(np.zeros(n, "float32")) + 0.0
+            seed.sync()
+            for r in range(3):   # round 0 only fills the free list
+                got = []
+                srcs = [seed + MAGIC for _ in range(nvar)]
+                jt.sync_all(True)
+                jt.fetch(*srcs, lambda *vs: got.extend(v.copy() for v in vs))
+                del srcs
+                # run_sync clears fetcher_to_free -- releasing the source vars'
+                # blocks -- *before* it device-syncs, so with no device sync
+                # here the blocks are back in the free list while the fetch
+                # stream still has a queue of copies reading them
+                jt.sync_all()
+                poison = [seed + POISON for _ in range(nvar)]
+                jt.sync_all()
+                jt.sync_all(True)
+                del poison
+                gc.collect()
+                for _ in range(3):          # deliver the queued callbacks
+                    jt.fetch(jt.array(np.zeros(1, "float32")), lambda v: None)
+                    jt.sync_all(True)
+                assert got, "no fetch callback ran; the test would be void"
+                for i, v in enumerate(got):
+                    np.testing.assert_array_equal(
+                        v, MAGIC,
+                        err_msg=f"round {r} var {i}: fetch read memory the "
+                                "default stream had already handed out again")
 
 
 if __name__ == "__main__":
