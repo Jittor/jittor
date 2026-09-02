@@ -114,19 +114,23 @@ class TestParallelPass3(unittest.TestCase):
                 for i in range(tdim):
                     assert f"tnum{i}" in src
                 assert f"tnum{tdim}" not in src
-                if jt.flags.use_cuda:
-                    for i in range(tdim):
-                        assert f"int tn{i} = get_thread_range_log" in src, src
-                    for i in range(tdim-1):
-                        assert f"tn{i}=tn{i}+tn{i+1};" in src, src
-                    assert "thread_num /= thread_num_left;" not in src
-                else:
-                    for i in range(tdim-1):
-                        assert (
-                            f"int tn{i} = tn{i+1} + get_thread_range_log" in src
-                        ), src
-                    if tdim:
-                        assert "thread_num /= thread_num_left;" in src
+                # ParallelPass emits one get_thread_range_log per parallel
+                # dimension -- that is this dimension's own bit count -- and
+                # then accumulates them into the cumulative boundaries the
+                # kernel decodes tid{i} from. Both backends get the same shape;
+                # the CPU side used to have the accumulation spliced into these
+                # lines afterwards by a regex over the finished source
+                # (op_compiler.cc), which is why it used to be asserted in a
+                # different form here.
+                for i in range(tdim):
+                    assert f"int tn{i} = get_thread_range_log" in src, src
+                for i in range(tdim-1):
+                    assert f"tn{i}=tn{i}+tn{i+1};" in src, src
+                assert "thread_num /= thread_num_left;" not in src
+                if tdim:
+                    # threads actually handed out, i.e. what the omp region is
+                    # entered with on CPU and what sizes the grid on CUDA
+                    assert "thread_num=1<<tn0;" in src, src
         self.merge_loop_var = 0
         check(1, None, 0)
         check(2, None, 1)
@@ -177,10 +181,11 @@ class TestParallelPass3(unittest.TestCase):
             for i in range(tdim):
                 assert f"tnum{i}" in src
             assert f"tnum{tdim}" not in src, f"tnum{tdim}"
-            if jt.flags.use_cuda:
-                assert "thread_num /= thread_num_left;" not in src
-            else:
-                assert "thread_num /= thread_num_left;" in src
+            # cumulative thread-range boundaries come from ParallelPass on
+            # both backends now, not from a regex over the CPU source
+            assert "thread_num /= thread_num_left;" not in src
+            for i in range(tdim-1):
+                assert f"tn{i}=tn{i}+tn{i+1};" in src, src
             src_has_atomic = "atomic_add" in src or "atomicAdd" in src
             assert has_atomic == src_has_atomic
         assert np.allclose(a.data.sum(rdim), b), (b.sum(), a.data.sum())

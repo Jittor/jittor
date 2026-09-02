@@ -289,25 +289,37 @@ void ParallelPass::run() {
             call_code = call_code.substr(0, call_code.size() - 2) + ",tn" + S(d) + ");";
             new_func->push_back("int tn" + S(d) + ";", &new_func->inner);
         }
+        // The kernel decodes tid{d} from bit tn{d+1} up to bit tn{d}, so the
+        // tn's have to be cumulative (suffix sums), while get_thread_range_log
+        // returns one dimension's bit count at a time. Accumulate them here,
+        // for both backends: the CPU template needs exactly the same boundaries
+        // as CUDA, and used to get them from a regex that rewrote these lines
+        // in the finished source (OpCompiler::fix_parallel_thread_ranges).
+        //
+        // The only exception is the CUDA para_opt_level==0 path, which does not
+        // derive tn0 from the chain at all but from the thread count directly,
+        // so its accumulation stops one dimension earlier.
+        int accumulate_down_to = (is_cuda && !para_opt_level) ? 1 : 0;
+        for (int d = (int)new_loops.size() - 2; d >= accumulate_down_to; d--) {
+            new_block.push_back("tn" + S(d) + "=tn" + S(d) + "+tn" + S(d + 1) + ";");
+        }
         if (is_cuda) {
-            // The kernel decodes tid{d} from bit tn{d+1} up to bit tn{d}, so
-            // the tn's have to be cumulative (suffix sums), not per dimension.
             if (para_opt_level) {
-                for (int d = new_loops.size() - 2; d >= 0; d--) {
-                    new_block.push_back("tn" + S(d) + "=tn" + S(d) + "+tn" + S(d + 1) + ";");
-                }
                 new_block.push_back("tn0=std::max(tn0, 5);");
                 new_block.push_back("thread_num=1<<tn0;");
                 new_block.push_back("int p1 = std::max(thread_num/" + S(cuda_thread_num) + ", 1);");
                 new_block.push_back("int p2 = std::min(thread_num, " + S(cuda_thread_num) + ");");
             } else {
-                for (int d = new_loops.size() - 2; d > 0; d--) {
-                    new_block.push_back("tn" + S(d) + "=tn" + S(d) + "+tn" + S(d + 1) + ";");
-                }
                 new_block.push_back("tn0=NanoVector::get_nbits(thread_num)-2;");
                 new_block.push_back("int p1 = std::max(thread_num/1024, 1);");
                 new_block.push_back("int p2 = std::min(thread_num, 1024);");
             }
+        } else if (new_loops.size()) {
+            // Enter the omp region with the number of threads actually handed
+            // out, which is 1<<tn0 now that tn0 is cumulative -- the same value
+            // the CUDA branch computes one line above. With no parallel loop at
+            // all there is no tn0 and nothing to correct.
+            new_block.push_back("thread_num=1<<tn0;");
         }
 
         KernelIR tid_def("{}");
