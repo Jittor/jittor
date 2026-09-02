@@ -984,7 +984,12 @@ def check_cache_compile():
         _write_jit_utils_cache_key(files, output)
         with jit_utils.import_scope(import_flags):
             jit_utils.try_import_jit_utils_core()
-        assert jit_utils.cc
+        if not jit_utils.cc:
+            raise RuntimeError(
+                f"jit_utils_core was built at {output} but could not be "
+                f"imported. The build directory is on sys.path; a stale or "
+                f"partially written file there is the usual cause -- remove "
+                f"it and run again.")
         if not os.path.isfile(output + ".key"):
             # The child could not run; fall back to the original behaviour so a
             # missing key never blocks startup. The duplicate mapping above is
@@ -1468,8 +1473,14 @@ LOG.vv("compile order:", files)
 
 if platform.system() == 'Linux':
     libname = {"clang":"omp", "icc":"iomp5", "g++":"gomp"}[cc_type]
+    openmp_name = libname
     libname = ctypes.util.find_library(libname)
-    assert libname is not None, "openmp library not found"
+    if libname is None:
+        raise RuntimeError(
+            f"the OpenMP runtime lib{openmp_name} was not found, and every "
+            f"CPU kernel Jittor compiles links against it. Install it "
+            f"(libgomp for g++, libomp for clang) or set cc_path to a "
+            f"compiler whose runtime is installed.")
     ctypes.CDLL(libname, os.RTLD_NOW | os.RTLD_GLOBAL)
 
 # NOTE: sw_64 used to disable TLS certificate verification for the whole

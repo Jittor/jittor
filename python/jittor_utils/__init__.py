@@ -720,7 +720,11 @@ def _read_version(output):
     v = re.findall("[0-9]+\\.[0-9]+\\.[0-9]+", version)
     if len(v) == 0:
         v = re.findall("[0-9]+\\.[0-9]+", version)
-    assert len(v) != 0, f"Can not find version number from: {version}"
+    if len(v) == 0:
+        raise RuntimeError(
+            f"could not read a version number out of {output!r}'s output: "
+            f"{version!r}. Jittor puts this version in the cache directory "
+            f"name, so it cannot continue without it.")
     if 'clang' in version and platform.system() == 'Darwin':
         version = "("+v[-3]+")"
     else:

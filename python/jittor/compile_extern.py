@@ -40,7 +40,10 @@ def search_file(dirs, name, prefer_version=()):
             ))
             LOG.v(f"found {versioned[0]}")
             return versioned[0]
-    LOG.f(f"file {name} not found in {dirs}")
+    raise RuntimeError(
+        f"{name} not found. Searched: " + ", ".join(dirs) +
+        ". Install the package that provides it, or point Jittor at it with "
+        "cuda_home/CUDA_HOME.")
 
 def install_mkl(root_folder):
     # origin url is
@@ -263,7 +266,7 @@ please ensure it is installed along with the CUDA toolkit."""
 or you can let jittor install cuda and cudnn for you:
 >>> python3.{sys.version_info.minor} -m jittor_utils.install_cuda
 """
-            LOG.f(msg)
+            raise RuntimeError(msg) from e
 
 def setup_cuda_lib(lib_name, link=True, extra_flags=""):
     arch_key = "x86_64"
