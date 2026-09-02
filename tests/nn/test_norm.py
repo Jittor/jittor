@@ -407,5 +407,76 @@ class TestChannelBias(_NormBase):
             )
 
 
+class TestNormalizeIsOneImplementation(unittest.TestCase):
+    """``jt.normalize`` and ``jt.nn.normalize`` were two same-named functions
+    with DIFFERENT semantics. They are now one, on torch's rule.
+
+    Reference values checked against real PyTorch 2.12.1
+    (``torch.nn.functional.normalize``, defaults ``p=2, dim=1, eps=1e-12``,
+    formula ``v / max(||v||_p, eps)``) in a subprocess; the two-stage form is
+    "the reference below == torch" first, then "jittor == reference".
+
+    The three ways the ``jt.normalize`` spelling used to differ:
+
+    * ``eps`` clamped the SUM OF SQUARES, not the norm, so its effective floor
+      was ``sqrt(eps)``; with the old default ``1e-30`` that floor was
+      ``1e-15`` and ``normalize([1e-20, 0])`` came out 1000x larger than torch.
+    * ``p=1`` had no eps protection at all, so **a zero vector gave NaN**.
+    * ``p=inf`` tripped an ``assert``.
+    """
+
+    X = [[3.0, 4.0], [0.0, 0.0], [1e-20, 0.0]]
+
+    # stage 1: exactly what torch 2.12.1 returns for self.X
+    TORCH = {
+        2: [[0.6, 0.8], [0.0, 0.0], [1e-08, 0.0]],
+        1: [[3.0 / 7.0, 4.0 / 7.0], [0.0, 0.0], [1e-08, 0.0]],
+        float("inf"): [[0.75, 1.0], [0.0, 0.0], [1e-08, 0.0]],
+        3: [[0.666971743106842, 0.8892956972122192], [0.0, 0.0], [1e-08, 0.0]],
+    }
+
+    def _x(self):
+        return jt.array(np.array(self.X, dtype="float32"))
+
+    def test_both_spellings_match_torch(self):
+        for p, expected in self.TORCH.items():
+            for name, fn in (("jt.normalize", jt.normalize),
+                             ("jt.nn.normalize", jt.nn.normalize)):
+                with self.subTest(p=p, fn=name):
+                    got = fn(self._x(), p=p, dim=1).numpy()
+                    np.testing.assert_allclose(got, expected, rtol=1e-5,
+                                               atol=1e-12)
+
+    def test_the_two_spellings_agree_with_each_other(self):
+        for p in self.TORCH:
+            with self.subTest(p=p):
+                np.testing.assert_allclose(
+                    jt.normalize(self._x(), p=p, dim=1).numpy(),
+                    jt.nn.normalize(self._x(), p=p, dim=1).numpy(),
+                    rtol=0, atol=0)
+
+    def test_zero_vector_is_not_nan(self):
+        # jt.normalize(x, p=1) used to divide by an unclamped sum of absolute
+        # values, so an all-zero row produced NaN and poisoned everything after
+        for p in (1, 2, float("inf")):
+            with self.subTest(p=p):
+                got = jt.normalize(self._x(), p=p, dim=1).numpy()
+                assert not np.isnan(got).any(), \
+                    "p=%s: a zero row must normalize to zeros, not NaN" % p
+                np.testing.assert_allclose(got[1], [0.0, 0.0], atol=0)
+
+    def test_var_method_spelling_agrees(self):
+        x = self._x()
+        np.testing.assert_allclose(
+            x.normalize().numpy(), jt.nn.normalize(x).numpy(), rtol=0, atol=0)
+
+    def test_default_eps_is_torchs(self):
+        import inspect
+        for fn in (jt.normalize, jt.nn.normalize):
+            with self.subTest(fn=fn.__name__):
+                self.assertEqual(
+                    inspect.signature(fn).parameters["eps"].default, 1e-12)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

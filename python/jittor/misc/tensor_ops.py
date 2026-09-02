@@ -617,7 +617,7 @@ def cross(input, other, dim=-1):
     return jt.concat([a1.unsqueeze(dim),a2.unsqueeze(dim),a3.unsqueeze(dim)], dim=dim)
 jt.Var.cross = cross
 
-def normalize(input, p=2, dim=1, eps=1e-30):
+def normalize(input, p=2, dim=1, eps=1e-12):
     r'''        
     Performs L_p normalization of inputs over specified dimension.
 
@@ -630,6 +630,21 @@ def normalize(input, p=2, dim=1, eps=1e-30):
         dim (int) – the dimension to reduce. Default: 1
 
         eps (float) – small value to avoid division by zero. Default: 1e-12
+
+    .. note::
+        This is now a thin alias for :func:`jittor.nn.normalize`; the two used
+        to be separate implementations of the same name with **different
+        semantics**, and this one was the odd one out. What changed here:
+
+        * ``eps`` clamps the norm (``v / max(||v||_p, eps)``, torch's rule)
+          instead of clamping the *sum of squares*, whose effective floor was
+          ``sqrt(eps)``. With the old default of ``eps=1e-30`` the floor was
+          ``1e-15``, so ``normalize([1e-20, 0])`` returned ``1e-5`` where torch
+          returns ``1e-8``.
+        * The default ``eps`` is torch's ``1e-12`` (was ``1e-30``).
+        * ``p=1`` is protected at all. It used to divide by an unclamped sum of
+          absolute values, so **a zero vector produced NaN**.
+        * ``p=inf`` and other values of ``p`` work (used to hit an ``assert``).
 
     Example:
 
@@ -649,7 +664,8 @@ def normalize(input, p=2, dim=1, eps=1e-30):
         [0.02647221 0.59484214 0.80340654]
         [0.6910677  0.58067477 0.4303977 ]]
     '''
-    return input / input.norm(p, dim, True, eps)
+    from jittor.nn.functional.vector import normalize as _normalize
+    return _normalize(input, p=p, dim=dim, eps=eps)
 jt.Var.normalize = normalize
 
 def unbind(x, dim=0):
