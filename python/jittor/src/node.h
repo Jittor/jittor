@@ -64,6 +64,12 @@ struct NodeFlags {
         // Var-only marker propagated through forward ops. A loss carrying this
         // bit depends on a gradient whose producer supports first order only.
         _first_order_only=25,
+        // Var-only. Set together with _stop_grad when a backward releases the
+        // graph (grad.cc, the retain_graph=false branch). _stop_grad on its own
+        // cannot be told apart from the user's own x.stop_grad(), so a second
+        // backward used to walk into a released var, stop there, and hand back
+        // a zero gradient without a word.
+        _graph_freed=27,
         // NOTE: bits 6..22 are shared between the Var and Op layouts (see the
         // comment on _requires_grad_disabled); 16..21 additionally mirror
         // amp_reg for ops (op.cc). New Var-only flags go at 26 and above.

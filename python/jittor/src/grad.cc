@@ -112,6 +112,10 @@ vector<VarPtr> grad(
     for (Var* var : targets)
         CHECK(var->is_float() || var->dtype().is_complex())
             << "Targets of grad should be float or complex";
+    // A var whose differentiability an earlier backward gave up (see the
+    // retain_graph branch at the end of this function). Reaching one means the
+    // caller is backwarding through a graph that was already released.
+    Var* released = loss->flags.get(NodeFlags::_graph_freed) ? loss : nullptr;
     // successors of targets
     vector<Node*> ts(targets.begin(), targets.end());
     // bfs visit find all successors of targets
@@ -125,12 +129,21 @@ vector<VarPtr> grad(
     bfs_backward(gnodes, [&](Node* node) {
         if (node->tflag != nt)
             return false;
+        if (node->is_var() && node->flags.get(NodeFlags::_graph_freed))
+            released = node->var();
         if (node->is_stop_grad()
             || (node->is_var()
                 && node->flags.get(NodeFlags::_requires_grad_disabled)))
             return false;
         return true;
     });
+    if (released)
+        LOGf << "Trying to backward through the graph a second time. This"
+            << "backward graph was released by an earlier backward with"
+            << "retain_graph=False and cannot be walked again; continuing would"
+            << "silently produce zero gradients. Pass retain_graph=True to the"
+            << "first backward if you need to backward through the same graph"
+            << "twice, or rebuild the forward pass. Released var:" << released;
     LOGvv << "Size of grad nodes:" << gnodes.size();
     
     vector<Node*> sorted;
@@ -304,12 +317,21 @@ vector<VarPtr> grad(
                 vh->var->tflag = t;
             }
         SetupFreeBuffer setup_free_buffer;
+        // Mark before releasing: set_stop_grad drops backward liveness and can
+        // queue the node for free. The mark records *why* this var stopped
+        // being differentiable -- stop_grad alone cannot say -- so a later
+        // backward reaching it can report the released graph instead of
+        // returning zeros that look like a legitimate x.stop_grad().
         for (int i=int(gvars.size())-1; i>=0; i--)
-            if (gvars[i]->tflag != t && gvars[i]->backward_liveness)
+            if (gvars[i]->tflag != t && gvars[i]->backward_liveness) {
+                gvars[i]->flags.set(NodeFlags::_graph_freed);
                 gvars[i]->set_stop_grad();
+            }
         for (int i=0; i<grads.size(); i++)
-            if (grads[i])
+            if (grads[i]) {
+                grads[i]->flags.set(NodeFlags::_graph_freed);
                 grads[i]->set_stop_grad();
+            }
     }
     return results;
 }
