@@ -18,6 +18,9 @@ EXTERN_LIB int64 total_node;
 EXTERN_LIB int64 nt;
 EXTERN_LIB vector<Node*> free_buffer;
 EXTERN_LIB uint8 node_order;
+// Non-zero while lived_nodes is being maintained in a build without
+// NODE_MEMCHECK; set by check_graph's setter (graph.cc).
+EXTERN_LIB int node_track_lived;
 
 inline static Node* get_node(int64 id) 
 { return  lived_nodes_id.count(id) ? lived_nodes_id[id] : nullptr; }
@@ -70,6 +73,13 @@ struct NodeFlags {
         // backward used to walk into a released var, stop there, and hand back
         // a zero gradient without a word.
         _graph_freed=27,
+        // Set when this node was entered into lived_nodes (see Node::Node).
+        // The registry is filled either by a NODE_MEMCHECK build or, in an
+        // ordinary build, from the moment check_graph is switched on; the
+        // destructor needs to know which nodes it has to take back out.
+        // Unlike the four above this one is *not* Var-only -- ops are swept
+        // too -- so it needs a bit free in both layouts: 28, not 27.
+        _lived_tracked=28,
         // NOTE: bits 6..22 are shared between the Var and Op layouts (see the
         // comment on _requires_grad_disabled); 16..21 additionally mirror
         // amp_reg for ops (op.cc). New Var-only flags go at 26 and above.
@@ -175,16 +185,22 @@ struct Node {
     inline Node() {
         id = ++total_node;
         #ifdef NODE_MEMCHECK
-        lived_nodes_id[id] = this;
-        lived_nodes[(void*)this] = id;
+        bool track = true;
+        #else
+        bool track = PREDICT_BRANCH_NOT_TAKEN(node_track_lived != 0);
         #endif
+        if (track) {
+            lived_nodes_id[id] = this;
+            lived_nodes[(void*)this] = id;
+            flags.set(NodeFlags::_lived_tracked, 1);
+        }
         flags.set(NodeFlags::_node_order_low, node_order, 2);
     }
-    inline virtual ~Node() { 
-        #ifdef NODE_MEMCHECK
-        lived_nodes_id.erase(id);
-        lived_nodes.erase((void*)this);
-        #endif
+    inline virtual ~Node() {
+        if (PREDICT_BRANCH_NOT_TAKEN(flags.get(NodeFlags::_lived_tracked))) {
+            lived_nodes_id.erase(id);
+            lived_nodes.erase((void*)this);
+        }
         if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var)) trace_data.release_node(this);
     }
 

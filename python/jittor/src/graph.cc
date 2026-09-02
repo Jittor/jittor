@@ -12,7 +12,19 @@
 
 namespace jittor {
 
-DEFINE_FLAG(int, check_graph, 0, "Unify graph sanity check.");
+DEFINE_FLAG_WITH_SETTER(int, check_graph, 0, "Unify graph sanity check.");
+
+// do_graph_check's dangling-node sweep walks lived_nodes, which used to be
+// filled only under `#ifdef NODE_MEMCHECK`. In every build anyone ships that
+// made check_graph=1 sweep an empty table and report success -- half of the
+// only cross-check of the three liveness counters was a no-op exactly where
+// it was supposed to be watching. Registering nodes is what costs (a hash
+// insert per node), not the check, so the registry follows the flag instead
+// of the build type. Nodes made before the flag went on are not in it, which
+// costs coverage but can never produce a false report.
+void setter_check_graph(int value) {
+    node_track_lived = value != 0;
+}
 
 
 template <typename T>
@@ -22,7 +34,7 @@ string ss_convert(T x) {
     return ss.str();
 }
 
-void do_graph_check() {
+int64 do_graph_check() {
     vector<Node*> queue;
     unordered_map<Node*,int> visited;
     for (auto& vh : hold_vars) {
@@ -71,15 +83,34 @@ void do_graph_check() {
             continue;
         }
     }
+    int64 swept = 0;
     for (auto& kv : lived_nodes) {
         if (!kv.second) continue;
         auto* node = (Node*) kv.first;
+        swept++;
         if (!visited.count(node) && node->tflag != -1) {
             if (node->is_var() && node->_inputs.size())
                 continue;
             LOGf << "ERROR dnode" << (void*)node << kv.second << node;
         }
     }
+    // Say which half ran. Reporting "all clear" while half the check swept an
+    // empty table is the original defect; a check that cannot run has to be
+    // heard, not assumed.
+    if (swept == 0) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            LOGw << "graph check: liveness verified over" << (int64)queue.size()
+                << "nodes, but the dangling-node half swept nothing -- no node"
+                << "is registered. Nodes register while check_graph is on, or"
+                << "always in a NODE_MEMCHECK build; nodes made before it was"
+                << "switched on are not covered.";
+        }
+    } else
+        LOGvv << "graph check: liveness over" << (int64)queue.size()
+            << "nodes, dangling-node sweep over" << swept << "registered nodes";
+    return swept;
 }
 
 DumpGraphs dump_all_graphs() {

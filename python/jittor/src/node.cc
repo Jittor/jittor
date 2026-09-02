@@ -16,6 +16,9 @@ namespace jittor {
 
 int64 tflag_count = 0;
 int64 nt = 0;
+// See graph.cc: check_graph turns this on so that the dangling-node half of
+// do_graph_check has something to sweep in a build without NODE_MEMCHECK.
+int node_track_lived = 0;
 unordered_map<void*, int64> lived_nodes;
 unordered_map<int64, Node*> lived_nodes_id;
 int64 total_node = 0;

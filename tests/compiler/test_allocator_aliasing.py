@@ -156,5 +156,44 @@ class TestFetchCrossStreamOrder(unittest.TestCase):
                                 "default stream had already handed out again")
 
 
+class TestGraphCheckIsNotAStub(unittest.TestCase):
+    """``check_graph=1`` must actually check in a release build.
+
+    ``do_graph_check``'s dangling-node sweep walks ``lived_nodes``, which was
+    only ever filled under ``#ifdef NODE_MEMCHECK``.  In every build anyone
+    ships, that half of the only cross-check of the three liveness counters
+    swept an empty table and reported success.
+    """
+
+    def test_dangling_sweep_sees_nodes(self):
+        with jt.flag_scope(check_graph=1):
+            a = jt.array(np.arange(16, dtype="float32"))
+            b = (a * 2).sum()
+            b.sync()
+            gc.collect()
+            swept = jt.graph_check()
+            assert isinstance(swept, int), (
+                "graph_check does not report how much it checked")
+            assert swept > 0, (
+                "check_graph=1 swept 0 nodes: the dangling-node half of the "
+                "check is compiled out of every release build")
+            del a, b
+            gc.collect()
+
+    def test_tracking_is_off_by_default(self):
+        # the registry costs a hash insert per node, so nobody who did not ask
+        # for the check should pay for it
+        gc.collect()
+        before = jt.graph_check()
+        keep = [jt.array(np.arange(4, dtype="float32")) + float(i)
+                for i in range(50)]
+        jt.sync_all()
+        assert jt.graph_check() == before, (
+            "nodes are being registered into lived_nodes although nobody "
+            "asked for the check")
+        del keep
+        gc.collect()
+
+
 if __name__ == "__main__":
     unittest.main()

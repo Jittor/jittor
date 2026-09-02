@@ -24,8 +24,17 @@ struct DumpGraphs {
     vector<vector<int>> outputs;
 };
 
+/**
+ * Cross-check the three liveness counters against the graph, and sweep the
+ * live-node registry for nodes no hold_var can reach.
+ *
+ * Returns the number of registered nodes the second half swept. That half
+ * needs lived_nodes, which an ordinary build only fills while check_graph is
+ * on -- a return of 0 means it had nothing to check, not that it found
+ * nothing wrong.
+ */
 // @pyjt(graph_check)
-void do_graph_check();
+int64 do_graph_check();
 inline void graph_check() { if (check_graph) do_graph_check(); };
 // @pyjt(dump_all_graphs)
 DumpGraphs dump_all_graphs();
