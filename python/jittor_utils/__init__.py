@@ -533,6 +533,46 @@ def _write_build_config(path, config):
             pass
 
 
+def check_cache_disk_space(path, minimum_mb=None):
+    """Refuse to start a build on a filesystem that cannot hold one.
+
+    A full disk does not announce itself. The compiler writes a truncated
+    object file, ``cache_compile`` still records a matching key for it, and
+    what the user sees afterwards is scattered compile failures and segfaults
+    in operators that have nothing to do with anything they changed -- the
+    same picture a concurrently corrupted cache produces. One ``statvfs``
+    before any of that turns it into a sentence.
+
+    ``JT_MIN_FREE_SPACE_MB`` overrides the threshold; 0 disables the check.
+    """
+    if minimum_mb is None:
+        try:
+            minimum_mb = float(os.environ.get("JT_MIN_FREE_SPACE_MB", 512))
+        except ValueError:
+            minimum_mb = 512.0
+    if minimum_mb <= 0:
+        return
+    try:
+        st = os.statvfs(path)
+    except (OSError, AttributeError, ValueError):
+        # Windows, or a filesystem that will not answer. Not a reason to
+        # refuse to run.
+        return
+    free_mb = st.f_bavail * st.f_frsize / float(1 << 20)
+    if free_mb < minimum_mb:
+        raise RuntimeError(
+            f"only {free_mb:.0f} MB free on the filesystem holding the Jittor "
+            f"cache ({path}), and a build needs at least {minimum_mb:.0f} MB. "
+            f"Free some space or point JITTOR_HOME at a larger filesystem "
+            f"(JT_MIN_FREE_SPACE_MB=0 disables this check). Running out of "
+            f"space part-way through a build is not reported as such: it "
+            f"looks like scattered compile failures and segfaults in "
+            f"unrelated operators.")
+    if free_mb < minimum_mb * 4:
+        LOG.w(f"only {free_mb:.0f} MB free for the Jittor cache ({path}); "
+              f"a cold build writes on the order of 1 GB")
+
+
 # Set by find_cache_path(). Deliberately *above* the build-configuration
 # directory: the lock also guards the third-party downloads (mkl, cutt, cub)
 # that every configuration on this toolchain shares.
@@ -630,6 +670,7 @@ def find_cache_path():
     config = get_build_config()
     path = os.path.join(path, build_config_fingerprint(config))
     os.makedirs(path, exist_ok=True)
+    check_cache_disk_space(path)
     _write_build_config(path, config)
     if path not in sys.path:
         sys.path.append(path)
