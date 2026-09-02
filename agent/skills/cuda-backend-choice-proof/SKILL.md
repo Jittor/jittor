@@ -76,6 +76,29 @@ assert not np.allclose(y1.numpy(), y2.numpy())
 - 先确认"关掉随机性时两次一致"，再确认"打开时两次不一致"。只测后者的话，
   一个恒返回垃圾的实现也能通过。
 
+## 证明「多写/多取了一个元素」（越界写从 Python 看不见）
+
+越界写本身观测不到（分配器留了余量，不会段错误）。但**发生器被多取了一个值**是可观测的：
+
+```python
+def draw(sizes):
+    jt.set_seed(0)
+    return np.concatenate([jt.random((n,), "float32").numpy() for n in sizes])
+
+assert np.allclose(draw([3, 4]), draw([7]))   # 修前 False，修后 True
+assert np.allclose(draw([4, 4]), draw([8]))   # 偶数长度一直是 True，做对照
+```
+
+修前 `draw([3,4])` 的第 4 个值会跳掉一个——那个被跳掉的值正是写到输出缓冲区外面的那个。
+**必须同时有偶数长度的对照**，否则证明不了差别来自奇偶而不是别的。
+
+curand 的口径：`curandGenerateUniform` 没有奇偶要求；`curandGenerateNormal` 对伪随机
+发生器**要求偶数个**，所以 normal 的奇数长度只能「偶数前缀就地生成 + 末元素从两元素
+临时缓冲拷回」，它仍会消耗 num+1 个值——这条不要写成测试断言。
+
+`jt.random(shape, dtype)` 是 Python 包装：float16/bfloat16 会先按 float32 抽再 cast，
+所以 curand 算子实际只见 float32/float64。写 dtype 相关断言前先确认走的是哪条路。
+
 ## 确定性的失败触发器（证明「失败会抛」而不是「失败被吞掉」）
 
 改 `XXX_CALL` 宏从 fprintf 改成抛，必须有一个**确定性**的失败输入，否则无法证明修前修后
