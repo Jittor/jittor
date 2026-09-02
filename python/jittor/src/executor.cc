@@ -199,6 +199,7 @@ static void top_weak_sync(vector<Var*>& vars) {
 
 void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     exec_called ++;
+    last_run_ops = Op::number_of_created_ops;
     if (weak_sync && !use_threading)
         top_weak_sync(vars);
     auto allocator = get_allocator();
@@ -713,6 +714,8 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     }
     LOGvv << "cudaDeviceSynchronize times:" << sync_times << "/" <<queue.size() << "device_sync:" << device_sync;
     #endif
+    last_run_ops = Op::number_of_created_ops;
+    if (!flush_active) flush_suspended = false;
 }
 
 unordered_map<void*, size_t> allocation_map;
