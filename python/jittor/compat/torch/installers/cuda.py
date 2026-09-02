@@ -173,6 +173,126 @@ class _DeviceProps:
                 f"multi_processor_count={self.multi_processor_count})")
 
 
+#: ``torch.backends``' TF32 switches, and the single Jittor flag behind each.
+#:
+#: torch spells "may fp32 math use reduced-precision tensor cores" three ways
+#: per domain, and Jittor keeps one flag per domain (matmul and cuDNN are
+#: genuinely independent in torch too):
+#:
+#: =========================================== =============================
+#: torch spelling                              Jittor flag
+#: =========================================== =============================
+#: ``backends.cuda.matmul.allow_tf32``         ``flags.cuda_allow_tf32``
+#: ``backends.cuda.matmul.fp32_precision``     (same)
+#: ``get/set_float32_matmul_precision()``      (same)
+#: ``backends.cudnn.allow_tf32``               ``flags.cuda_allow_cudnn_tf32``
+#: ``backends.cudnn.conv.fp32_precision``      (same)
+#: ``backends.cudnn.rnn.fp32_precision``       (same)
+#: =========================================== =============================
+#:
+#: Every spelling is a *view* of its flag. It did not use to be: each kept its
+#: own state, so one semantic had three answers that disagreed the moment a
+#: write went through a spelling other than the one holding the state.
+#: ``fp32_precision`` was the literal string ``"ieee"`` on all four objects --
+#: it never reflected tf32 being on, and assigning to it did nothing at all --
+#: and ``get_float32_matmul_precision()`` read a string that
+#: ``matmul.allow_tf32 = True`` never touched.
+#:
+#: tests/compat/torch/test_torch_backends_tf32.py drives this table.
+_TF32_FLAGS = {
+    "matmul": "cuda_allow_tf32",
+    "cudnn": "cuda_allow_cudnn_tf32",
+}
+
+#: The two ``fp32_precision`` values this layer can actually deliver. torch
+#: also accepts "bf16" and "none"; Jittor has no separate bf16-accumulate mode
+#: and no per-op override, so accepting them would be inventing a semantics.
+_FP32_PRECISIONS = ("ieee", "tf32")
+
+
+#: Where a domain's setting lives on a build that has no such ``jt.flags``
+#: entry -- a CPU-only or pre-CUDA Jittor. Without it, ``cudnn.allow_tf32 =
+#: True`` there was a silent no-op that read back ``False``: the caller asked
+#: for something, got no error, and got the opposite answer. Real torch on a
+#: CPU-only build round-trips the setting too (inert, but honest), and keeping
+#: it here is what lets the six spellings agree on *every* build rather than
+#: only where the flags happen to exist.
+_TF32_FALLBACK = {}
+
+
+def _tf32_get(domain):
+    """Whether reduced-precision fp32 math is enabled for ``domain``."""
+    flag = _TF32_FLAGS[domain]
+    if hasattr(jt.flags, flag):
+        enabled = bool(getattr(jt.flags, flag))
+    else:
+        enabled = bool(_TF32_FALLBACK.get(domain, False))
+    if domain == "matmul":
+        # Ascend spells the same idea hf32, and it is not a jt.flags entry.
+        enabled = enabled or bool(getattr(jt, "acl_allow_hf32", False))
+    return enabled
+
+
+def _tf32_set(domain, value):
+    """Point every spelling of ``domain``'s switch at ``value``."""
+    enabled = bool(value)
+    flag = _TF32_FLAGS[domain]
+    if hasattr(jt.flags, flag):
+        setattr(jt.flags, flag, int(enabled))
+    else:
+        _TF32_FALLBACK[domain] = enabled
+    if domain == "matmul":
+        jt.acl_allow_hf32 = enabled
+    return enabled
+
+
+def _tf32_to_precision(enabled):
+    return "tf32" if enabled else "ieee"
+
+
+def _precision_to_tf32(value, where):
+    if not isinstance(value, str):
+        raise TypeError("%s.fp32_precision must be a string, not %s"
+                        % (where, type(value).__name__))
+    text = value.lower()
+    if text not in _FP32_PRECISIONS:
+        raise ValueError(
+            "%s.fp32_precision does not support %r on Jittor; supported "
+            "values are %s. torch also accepts 'bf16' and 'none', which would "
+            "need a separate bf16-accumulate mode and a per-op override that "
+            "Jittor does not have -- accepting them here would silently mean "
+            "something else."
+            % (where, value, " and ".join(repr(p) for p in _FP32_PRECISIONS)))
+    return text == "tf32"
+
+
+class _PrecisionBackend(object):
+    """``<backend>.fp32_precision`` as a view of the domain's flag.
+
+    ``torch.backends.cudnn.conv`` and ``.rnn`` are two of these. They used to
+    be instances of a class whose ``fp32_precision`` was the class attribute
+    ``"ieee"``: reading it never reported tf32 being on, and writing it only
+    shadowed the attribute on the instance.
+    """
+
+    __slots__ = ("_domain", "_label")
+
+    def __init__(self, domain, label):
+        object.__setattr__(self, "_domain", domain)
+        object.__setattr__(self, "_label", label)
+
+    @property
+    def fp32_precision(self):
+        return _tf32_to_precision(_tf32_get(self._domain))
+
+    @fp32_precision.setter
+    def fp32_precision(self, value):
+        _tf32_set(self._domain, _precision_to_tf32(value, self._label))
+
+    def __repr__(self):
+        return "<%s fp32_precision=%r>" % (self._label, self.fp32_precision)
+
+
 def _install_cuda(g, registry=None):
     _modules = registry_for(g, registry).module_map
     import contextlib
@@ -859,36 +979,46 @@ def _install_cuda(g, registry=None):
         _modules["torch.backends.cudnn"] = cudnn
     if type(cudnn).__name__ != "_CudnnBackendModule":
         class _CudnnBackendModule(_types.ModuleType):
+            # `allow_tf32` is a *view* of the jittor flag, not a stored
+            # attribute, so it cannot disagree with the other two spellings of
+            # the same switch (`cudnn.conv.fp32_precision`, `cudnn.rnn.
+            # fp32_precision`). Reading goes through __getattribute__ because a
+            # module cannot carry a property.
             def __getattribute__(self, name):
                 if name == "allow_tf32":
-                    return bool(getattr(
-                        jt.flags, "cuda_allow_cudnn_tf32", 0
-                    ))
+                    return _tf32_get("cudnn")
                 return super().__getattribute__(name)
 
             def __setattr__(self, name, value):
+                # `benchmark` is the one setting whose write has a side effect
+                # on the runtime rather than on a flag, so the install-time
+                # default assignment below must not fire it: writing the
+                # default back would call set_benchmark(0) and clobber whatever
+                # the process had already chosen. `allow_tf32` needs no such
+                # gate -- it reads and writes the same flag, so assigning its
+                # own current value at install time is a no-op by construction.
                 if name == "benchmark" and not getattr(self, "_jittor_cudnn_init", False):
                     try:
                         if getattr(jt, "cudnn", None) is not None and hasattr(jt.cudnn, "set_benchmark"):
                             jt.cudnn.set_benchmark(int(bool(value)))
                     except EXPECTED as exc:
-                        swallowed("torch/installers/cuda.py __setattr__: if getattr(jt, 'cudnn', None) is not None and hasattr(j...", exc)
-                if name == "allow_tf32" and not getattr(
-                        self, "_jittor_cudnn_init", False):
-                    if hasattr(jt.flags, "cuda_allow_cudnn_tf32"):
-                        jt.flags.cuda_allow_cudnn_tf32 = int(bool(value))
+                        swallowed("torch/installers/cuda.py cudnn.__setattr__: "
+                                  "jt.cudnn.set_benchmark(%r)" % (value,), exc,
+                                  "cuDNN autotuning stays as it was")
+                if name == "allow_tf32":
+                    _tf32_set("cudnn", value)
+                    return None
                 return super().__setattr__(name, value)
         cudnn.__class__ = _CudnnBackendModule
     cudnn._jittor_cudnn_init = True
     cudnn.enabled = getattr(cudnn, "enabled", True)
     cudnn.benchmark = getattr(cudnn, "benchmark", False)
     cudnn.deterministic = getattr(cudnn, "deterministic", False)
-    cudnn.allow_tf32 = getattr(cudnn, "allow_tf32", False)
     cudnn.version = getattr(cudnn, "version", lambda: None)
-    class _PrecisionBackend:
-        fp32_precision = "ieee"
-    cudnn.conv = getattr(cudnn, "conv", _PrecisionBackend())
-    cudnn.rnn = getattr(cudnn, "rnn", _PrecisionBackend())
+    if not isinstance(getattr(cudnn, "conv", None), _PrecisionBackend):
+        cudnn.conv = _PrecisionBackend("cudnn", "torch.backends.cudnn.conv")
+    if not isinstance(getattr(cudnn, "rnn", None), _PrecisionBackend):
+        cudnn.rnn = _PrecisionBackend("cudnn", "torch.backends.cudnn.rnn")
     cudnn._jittor_cudnn_init = False
     cuda_backend = _modules.get("torch.backends.cuda")
     if cuda_backend is None:
@@ -911,20 +1041,23 @@ def _install_cuda(g, registry=None):
         def __init__(self):
             self.allow_fp16_reduced_precision_reduction = True
             self.allow_bf16_reduced_precision_reduction = True
-            self.fp32_precision = "ieee"
 
         @property
         def allow_tf32(self):
-            cuda_tf32 = bool(getattr(jt.flags, "cuda_allow_tf32", 0))
-            acl_hf32 = bool(getattr(jt, "acl_allow_hf32", False))
-            return cuda_tf32 or acl_hf32
+            return _tf32_get("matmul")
 
         @allow_tf32.setter
         def allow_tf32(self, value):
-            enabled = bool(value)
-            if hasattr(jt.flags, "cuda_allow_tf32"):
-                jt.flags.cuda_allow_tf32 = int(enabled)
-            jt.acl_allow_hf32 = enabled
+            _tf32_set("matmul", value)
+
+        @property
+        def fp32_precision(self):
+            return _tf32_to_precision(_tf32_get("matmul"))
+
+        @fp32_precision.setter
+        def fp32_precision(self, value):
+            _tf32_set("matmul", _precision_to_tf32(
+                value, "torch.backends.cuda.matmul"))
     if not hasattr(cuda_backend, "matmul") or not isinstance(cuda_backend.matmul, _MatmulBackend):
         cuda_backend.matmul = _MatmulBackend()
     cuda_backend._preferred_blas_library = getattr(
@@ -957,21 +1090,27 @@ def _install_cuda(g, registry=None):
     backends.cpu = cpu
     backends.mkldnn = mkldnn
     g.backends = backends
-    if not hasattr(g, "_torch_float32_matmul_precision"):
-        g._torch_float32_matmul_precision = "highest"
+    # The third spelling of the matmul switch. torch offers a three-step
+    # ladder; jittor has one tf32 flag, so "high" and "medium" both mean it is
+    # on. Only that refinement is remembered -- the on/off half is *derived*
+    # from the flag, which is what keeps this from drifting away from
+    # `torch.backends.cuda.matmul.allow_tf32`. It used to be an independent
+    # string, so after `matmul.allow_tf32 = True` this still answered
+    # "highest", and after `set_float32_matmul_precision("high")` a reader of
+    # `cudnn.conv.fp32_precision` still saw "ieee".
     def _get_float32_matmul_precision():
-        return getattr(g, "_torch_float32_matmul_precision", "highest")
+        if not _tf32_get("matmul"):
+            return "highest"
+        return getattr(g, "_torch_float32_matmul_refinement", "high")
     def _set_float32_matmul_precision(precision):
         if not isinstance(precision, str):
             raise TypeError("precision must be a string")
         precision = precision.lower()
         if precision not in ("highest", "high", "medium"):
             raise ValueError("precision must be one of 'highest', 'high', or 'medium'")
-        g._torch_float32_matmul_precision = precision
-        try:
-            cuda_backend.matmul.allow_tf32 = precision in ("high", "medium")
-        except (AttributeError, TypeError) as exc:
-            swallowed("torch/installers/cuda.py _set_float32_matmul_precision: cuda_backend.matmul.allow_tf32 = precision in ('high', ...", exc)
+        if precision != "highest":
+            g._torch_float32_matmul_refinement = precision
+        _tf32_set("matmul", precision != "highest")
     g.get_float32_matmul_precision = _get_float32_matmul_precision
     g.set_float32_matmul_precision = _set_float32_matmul_precision
 
