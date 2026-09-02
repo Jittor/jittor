@@ -89,3 +89,46 @@ JITTOR_TEST_DEVICES=cpu nvcc_path="" pytest tests/core -q
 # 4. CUDA 轮（编译更久，放最后一次跑）
 nvcc_path=/usr/local/cuda/bin/nvcc pytest tests/core/test_xxx.py -q
 ```
+
+## 7. 改代码生成器：先证明生成结果没变，或只按预期变
+
+改 `opt/pass/**`、`op_compiler.cc`、tuner 这类**产出源码**的代码时，「测试绿了」
+是很弱的证据：生成器的输出空间远大于测试覆盖的那几种形状，一个只在
+`parallel depth=4 且有归约` 时才出现的形状变化，全套测试可以一条都不碰。
+
+可靠的判据是**逐字比对生成的源码**。Jittor 把每个 JIT kernel 的源码落盘，
+`jt.profile_scope` 的报告里就有路径：
+
+```python
+with jt.profile_scope(compile_options={"parallel":1, "max_parallel_depth":d}) as rep:
+    b = (a+a).data
+assert np.allclose(...)          # 数值也要断言，形状对不代表值对
+src_path = rep[1][1]             # rep[0] 是表头；[1] 是 FileName 列
+open(out_dir + tag + ".cc", "w").write(open(src_path).read())
+```
+
+做法：写一个 dump 脚本，覆盖你这次改动可能触及的**每一个分支**（CPU/CUDA、
+有无归约、`max_parallel_depth` 1..N、`merge_loop_var` 0/1），改前跑一次存一份，
+改后跑一次再存一份，`diff` 两个目录。
+
+判据分三档：
+
+- **该没变的必须零字节变化。** 例如只动 CPU 分支时，CUDA 的每一个 dump 都必须
+  一个字节不差。有一个变了就说明你以为的「只动 CPU」不成立。
+- **该变的，变化必须逐条能解释**，并且你能说出为什么新旧两种写法数值恒等。
+- 数值断言与 dump 写在同一个脚本里，**不要分开跑**：形状对而值错是最容易漏的一种。
+
+dump 脚本按分区放在自己的 `$TMPDIR` 下，不要提交；把 diff 摘要写进提交说明。
+
+### 顺带会查出来的东西：「它对，但对的原因是别人恰好不动它」
+
+代码生成器里有大量跨 pass 的隐式约定（谁先跑、谁设了哪个 attr、生成的语句
+是什么文本形状）。改动时经常发现某段代码**只在另一个 pass 恰好不碰它时才正确**。
+
+判断方法：把这段代码依赖的前提写成一句话，然后问「**谁保证这句话成立**」。
+如果答案是「另一个 pass 的某个 if 恰好把它排除了」，而那个 if 的条件与这段代码
+毫无关系（例如按 `dtype` 里有没有 `"__global__ void"` 来过滤），那就是一个
+未声明的巧合——不是 bug，但下一次有人放宽那个 if 就会静默出错。
+
+这类发现**比修复本身值钱**，务必写进提交说明：写清依赖的前提、今天由谁兜底、
+以及你的改动是消除了这个依赖还是只是搬了个位置。

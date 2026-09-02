@@ -61,6 +61,15 @@ void WarpReducePass::run() {
         if (!i->has_attr("code")) return;
         auto& code = i->attrs["code"];
         if (!startswith(code, "atomicAdd")) return;
+        // Someone upstream already decided which thread writes. SharedReducePass
+        // folds the reduction across the block and leaves
+        // "if (threadIdx.x == 0) atomicAdd(...)"; that atomic runs with a single
+        // active lane, so __activemask() never equals the full mask and the
+        // shuffle path below can never be taken -- every instruction it adds is
+        // dead. Measured on an RTX 4090 with para_opt_level=4, emitting it anyway
+        // costs 1.3-1.9us per reduce kernel on the shapes in
+        // tests/backends/cuda/test_shared_reduce.py.
+        if (i->father && i->father->type == "if") return;
         auto src = expr::make(code);
         vector<unique_ptr<expr::Expr>> results;
         // The reduction emits &(yp[yid]); accept the unparenthesised form too.

@@ -235,6 +235,33 @@ void apply_reduce_thread_order(unique_ptr<KernelIR>& call, unique_ptr<KernelIR>&
 
 extern int para_opt_level;
 
+// Off by default: para_opt_level's default is 3 (loop_var_analyze_pass.cc), so
+// the guard below returns before anything happens and no generated kernel in a
+// stock build contains shared_reduce. That is deliberate, not an oversight.
+//
+// Measured on an RTX 4090, float32, four-dimensional reductions over (0,2,3) --
+// the shapes a diffusers UNet backward produces -- as average device time per
+// kernel:
+//
+//     shape           atomics only   + WarpReducePass   + this pass
+//     8x384x32x32        157.0us          15.7us          25.3us
+//     8x128x64x64         92.1us          14.0us          31.3us
+//     16x192x32x32       159.2us          15.0us          25.3us
+//     32x64x56x56        171.0us          18.1us          34.8us
+//
+// Both strategies remove the atomic contention (6-10x over plain atomics), but
+// the warp shuffle in WarpReducePass is 1.6-2.0x faster than folding through
+// shared memory: shared_reduce needs a 1024-entry __shared__ array, six
+// __syncthreads(), and a volatile-memory warp tail, against five register-only
+// __shfl_down_sync. What this pass still has over it is the summation order --
+// relative error 2.3e-7 against 3.5e-7 -- and independence from whether a warp
+// happens to share an output address.
+//
+// Raising the default would need a block-level fold built on the shuffle
+// (warp reduce -> one value per warp -> shared memory -> one atomic), not this
+// one. tests/backends/cuda/test_shared_reduce.py pins that the pass still
+// produces correct code when switched on;
+// agent/skills/cuda-reduction-strategy-comparison/ has the measurement method.
 void SharedReducePass::run() {
     auto parallel = op->get_loop_option("parallel");
     auto use_shared_reduce = op->get_loop_option("use_shared_reduce", 1);
