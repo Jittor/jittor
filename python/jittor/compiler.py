@@ -955,6 +955,37 @@ def env_or_try_find(name, bname):
         return path
     return try_find_exe(bname)
 
+def query_cuda_archs():
+    """Compute capabilities of the GPUs on this machine, or None if unknown.
+
+    Runs a short child because the CUDA driver cannot be loaded and unloaded
+    inside this process. Only bare integers are accepted from its output: the
+    child inherits stdout and stderr from a full Jittor import, and *any* line
+    it happens to log used to be spliced into the cache directory name -- one
+    stray "Create lock file: ..." produced a cache directory named after that
+    message, and a second process that did not log it built into a different
+    one.
+    """
+    try:
+        child = sp.run(
+            [sys.executable, "-m", "jittor_utils.query_cuda_cc"],
+            stdout=sp.PIPE, stderr=sp.PIPE,
+            env=dict(os.environ, log_v="0", log_silent="1"))
+    except OSError as error:
+        LOG.v(f"could not query cuda archs: {error}")
+        return None
+    if child.returncode != 0:
+        LOG.v("could not query cuda archs: "
+              + child.stderr.decode("utf8", "replace"))
+        return None
+    archs = set()
+    for token in child.stdout.decode("utf8", "replace").split():
+        if token.isdigit():
+            archs.add(token)
+        else:
+            LOG.v(f"ignoring non-numeric output from query_cuda_cc: {token!r}")
+    return sorted(archs)
+
 def check_pybt(gdb_path, python_path):
     if gdb_path=='' or python_path=='':
         return False
@@ -1047,18 +1078,11 @@ if nvcc_path:
     cuda_wheel_stack = install_cuda.get_cuda_wheel_stack(v)
     if cuda_wheel_stack:
         cu += "_" + cuda_wheel_stack.fingerprint
-    try:
-        r, s = sp.getstatusoutput(f"log_v=0 {sys.executable} -m jittor_utils.query_cuda_cc")
-        if r==0:
-            s = sorted(list(set(s.strip().split())))
-            if len(s)==0:
-                LOG.e("No GPU Device Found!")
-            cu += "_sm_" + "_".join(s)
-            if "cuda_arch" not in os.environ:
-                os.environ["cuda_arch"] = " ".join(cu)
-            cu = cu.replace(":", "").replace(" ", "")
-    except:
-        pass
+    archs = query_cuda_archs()
+    if archs is not None:
+        if len(archs) == 0:
+            LOG.e("No GPU Device Found!")
+        cu += "_sm_" + "_".join(archs)
     LOG.i("cuda key:", cu)
     cache_path = os.path.join(cache_path, cu)
     # Ahead of the plain cache directory, which is already on the path. Any run
@@ -1497,4 +1521,9 @@ flags.gdb_path = gdb_path
 flags.addr2line_path = addr2line_path
 flags.has_pybt = has_pybt
 
-core.set_lock_path(lock.lock_path)
+# Hand the one lock descriptor over to C++. Both sides now take flock() on
+# this single open file description; before this line the C++ side took a
+# POSIX record lock on a descriptor of its own, which excluded neither the
+# Python side nor anything else, and whose release was tied to whichever
+# descriptor happened to be closed first.
+lock.jittor_lock.bind_core(core)
