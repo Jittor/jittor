@@ -41,6 +41,7 @@ when cheap, because the moment-buffer *update* runs as device kernels.
 Run::  python -m pytest tests/optim/test_optim_core.py
 """
 import unittest
+import math
 
 import numpy as np
 import jittor as jt
@@ -803,3 +804,204 @@ class TestAdamBiasCorrectionStepCount(_OptimCoreBase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# ===========================================================================
+#  Adan: bias correction counts optimizer steps, and step 1 has grad_diff = 0
+# ===========================================================================
+class TestAdanStepSemantics(_OptimCoreBase):
+    """Same root cause as the Adam fix, plus the first-step question it sits on.
+
+    ``Adan.step`` read the optimizer-wide ``self.n_step`` for its bias
+    correction. ``n_step`` counts ``backward()`` calls, so the documented
+    gradient-accumulation loop (k backwards, one step) inflated the exponent by
+    a factor of k.
+
+    The same counter also gated ``if self.n_step > 0`` around the grad_diff
+    update. That guard never excluded anything -- ``pre_step()`` runs
+    ``backward()``, so ``n_step`` is already 1 when the first step reaches it --
+    which meant step 1 computed ``grad_diff = g - 0 = g``. The official Adan
+    seeds ``pre_grad`` with the first gradient, making ``grad_diff = 0`` on
+    step 1. Both now key off the per-group step count.
+    """
+
+    @staticmethod
+    def _ref_adan(p0, grads, lr, betas, eps, weight_decay):
+        """The official Adan update, in numpy.
+
+        Follows the reference implementation from the Adan paper's repository
+        (https://github.com/sail-sg/Adan, ``adan.py``, the non-fused path):
+
+            if step == 1: pre_grad = grad          # so grad_diff == 0
+            grad_diff = grad - pre_grad
+            m = beta1*m + (1-beta1)*grad
+            d = beta2*d + (1-beta2)*grad_diff
+            u = grad + beta2*grad_diff
+            v = beta3*v + (1-beta3)*u*u
+            denom = sqrt(v)/sqrt(bc3) + eps
+            p -= lr * (m/bc1 + beta2*d/bc2) / denom
+            p /= 1 + lr*weight_decay
+            pre_grad = grad
+
+        jittor folds the ``sqrt(bc3)`` out of the denominator and into the two
+        step sizes instead, which is the same arithmetic; this reference is
+        written in jittor's factored form so the comparison is exact rather
+        than merely close.
+        """
+        beta1, beta2, beta3 = betas
+        p = p0.astype("float64").copy()
+        m = np.zeros_like(p); v = np.zeros_like(p); d = np.zeros_like(p)
+        pre_grad = np.zeros_like(p)
+        for step, g in enumerate(grads, start=1):
+            g = g.astype("float64")
+            grad_diff = np.zeros_like(p) if step == 1 else g - pre_grad
+            bc1 = 1 - beta1 ** step
+            bc2 = 1 - beta2 ** step
+            bc3_sqrt = math.sqrt(1 - beta3 ** step)
+            m = beta1 * m + (1 - beta1) * g
+            d = beta2 * d + (1 - beta2) * grad_diff
+            u = g + beta2 * grad_diff
+            v = beta3 * v + (1 - beta3) * u * u
+            step_size = lr * bc3_sqrt / bc1
+            step_size_diff = lr * beta2 * bc3_sqrt / bc2
+            p = p - (step_size * m + step_size_diff * d) / (np.sqrt(v) + eps * bc3_sqrt)
+            p = p / (1 + lr * weight_decay)
+            pre_grad = g
+        return p
+
+    LR = 0.01
+    BETAS = (0.98, 0.92, 0.99)
+    EPS = 1e-8
+
+    def test_first_step_matches_the_official_adan(self):
+        """Step 1 must use grad_diff = 0, not grad_diff = g.
+
+        This one passes BOTH before and after the fix, and that is worth
+        knowing rather than mistaking for "grad_diff does not matter": on the
+        first step the choice cancels out of the parameter update exactly.
+        With pre_grad = 0 and grad_diff = c*g for a constant c (c = 0 official,
+        c = 1 for the old jittor code), at step 1
+
+            m = (1-b1) g,  d = (1-b2) c g,  u = (1 + b2 c) g
+            v = (1-b3) (1 + b2 c)^2 g^2
+
+            step_size * m      = lr sqrt(1-b3) g
+            step_size_diff * d = lr sqrt(1-b3) b2 c g
+            sqrt(v)            = sqrt(1-b3) (1 + b2 c) |g|
+
+        so the update is lr (1 + b2 c) g / ((1 + b2 c) |g| + eps) -- the
+        (1 + b2 c) factor divides out and the step is lr*sign(g) either way.
+
+        What the choice does change is the STATE carried forward (d, v and
+        pre_grad), so the trajectories separate from step 2 on. That is what
+        ``test_multiple_steps_match_the_official_adan`` pins down, and that is
+        the test that fails before the fix. Keep this one as the guard that
+        step 1 itself stays correct.
+        """
+        p0 = np.random.RandomState(120).randn(6).astype("float32")
+        g0 = np.random.RandomState(121).randn(6).astype("float32")
+
+        def body(dev):
+            p = self._param(p0)
+            opt = jt.optim.Adan([p], self.LR, betas=self.BETAS, eps=self.EPS)
+            opt.step(self._linear_loss(p, g0))
+            expected = self._ref_adan(p0, [g0], self.LR, self.BETAS,
+                                      self.EPS, 0.0)
+            self.assertEqual(
+                p, expected.astype("float32"), atol=1e-5, rtol=1e-5,
+                msg=f"Adan's first step must match the official update [{dev}]")
+        self._devices(body)
+
+    def test_multiple_steps_match_the_official_adan(self):
+        rng = np.random.RandomState(122)
+        p0 = rng.randn(6).astype("float32")
+        grads = [rng.randn(6).astype("float32") for _ in range(5)]
+
+        def body(dev):
+            p = self._param(p0)
+            opt = jt.optim.Adan([p], self.LR, betas=self.BETAS, eps=self.EPS)
+            for g in grads:
+                opt.step(self._linear_loss(p, g))
+            expected = self._ref_adan(p0, grads, self.LR, self.BETAS,
+                                      self.EPS, 0.0)
+            self.assertEqual(
+                p, expected.astype("float32"), atol=1e-4, rtol=1e-4,
+                msg=f"Adan over 5 steps must match the official update [{dev}]")
+        self._devices(body)
+
+    def test_accumulated_backward_matches_one_backward(self):
+        # linear loss: two half gradients sum exactly to the whole-batch one,
+        # so any difference can only come from the step count.
+        p0 = np.random.RandomState(123).randn(8).astype("float32")
+        g1 = np.random.RandomState(124).randn(8).astype("float32")
+        g2 = np.random.RandomState(125).randn(8).astype("float32")
+
+        def body(dev):
+            ref = self._param(p0)
+            opt_ref = jt.optim.Adan([ref], self.LR, betas=self.BETAS,
+                                    eps=self.EPS)
+            opt_ref.step(self._linear_loss(ref, g1 + g2))
+
+            acc = self._param(p0)
+            opt_acc = jt.optim.Adan([acc], self.LR, betas=self.BETAS,
+                                    eps=self.EPS)
+            opt_acc.backward(self._linear_loss(acc, g1))
+            opt_acc.backward(self._linear_loss(acc, g2))
+            opt_acc.step()
+
+            self.assertEqual(
+                acc, ref, atol=self.TOL, rtol=self.TOL,
+                msg=f"Adan: 2 accumulated backwards must equal one backward "
+                    f"of the summed gradient [{dev}]")
+        self._devices(body)
+
+    def test_accumulation_stays_equivalent_over_several_steps(self):
+        rng = np.random.RandomState(126)
+        p0 = rng.randn(5).astype("float32")
+        pairs = [(rng.randn(5).astype("float32"), rng.randn(5).astype("float32"))
+                 for _ in range(4)]
+
+        def body(dev):
+            ref = self._param(p0)
+            opt_ref = jt.optim.Adan([ref], self.LR, betas=self.BETAS,
+                                    eps=self.EPS)
+            acc = self._param(p0)
+            opt_acc = jt.optim.Adan([acc], self.LR, betas=self.BETAS,
+                                    eps=self.EPS)
+            for ga, gb in pairs:
+                opt_ref.step(self._linear_loss(ref, ga + gb))
+                opt_acc.backward(self._linear_loss(acc, ga))
+                opt_acc.backward(self._linear_loss(acc, gb))
+                opt_acc.step()
+            self.assertEqual(
+                acc, ref, atol=self.TOL, rtol=self.TOL,
+                msg=f"Adan: 4 accumulated steps [{dev}]")
+        self._devices(body)
+
+    def test_step_count_is_per_param_group(self):
+        # a group added mid-training starts its own bias correction at step 1
+        rng = np.random.RandomState(127)
+        pa0 = rng.randn(4).astype("float32")
+        pb0 = rng.randn(4).astype("float32")
+        ga = rng.randn(4).astype("float32")
+        gb = rng.randn(4).astype("float32")
+
+        def body(dev):
+            pa = self._param(pa0)
+            opt = jt.optim.Adan([pa], self.LR, betas=self.BETAS, eps=self.EPS)
+            for _ in range(3):
+                opt.step(self._linear_loss(pa, ga))
+            pb = self._param(pb0)
+            opt.add_param_group({"params": [pb]})
+            opt.step(self._linear_loss(pa, ga) + self._linear_loss(pb, gb))
+
+            fresh = self._param(pb0)
+            opt_fresh = jt.optim.Adan([fresh], self.LR, betas=self.BETAS,
+                                      eps=self.EPS)
+            opt_fresh.step(self._linear_loss(fresh, gb))
+
+            self.assertEqual(
+                pb, fresh, atol=self.TOL, rtol=self.TOL,
+                msg=f"Adan: a param group added later takes its own first "
+                    f"step [{dev}]")
+        self._devices(body)

@@ -79,7 +79,6 @@ class Adan(Optimizer):
 
     def step(self, loss=None, retain_graph=False):
         self.pre_step(loss, retain_graph)
-        n = float(self.n_step)
         # Global clipping happens once, before any group is updated. Doing it
         # inside the loop below applied the clip once per param group (leaving
         # the gradients well under the requested norm) and let the groups
@@ -87,6 +86,13 @@ class Adan(Optimizer):
         max_grad_norm = self._global_max_grad_norm()
         if max_grad_norm > 0: self.clip_grad_norm(max_grad_norm)
         for pg in self.param_groups:
+            # Per param group, not the optimizer-wide self.n_step: n_step counts
+            # backward() calls, and the gradient-accumulation loop documented on
+            # Optimizer.backward calls it once per micro-batch, so a correction
+            # keyed on it runs ahead by the accumulation factor. Same root cause
+            # as 6.P14 fixed in Adam/AdamW.
+            n = float(self._advance_step_count(pg))
+            first_step = n == 1
             lr = pg.get("lr", self.lr)
             betas = pg.get("betas", self.betas)
             eps = pg.get("eps", self.eps)
@@ -110,7 +116,16 @@ class Adan(Optimizer):
                                             pg["pre_grad"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
 
-                if self.n_step>0:
+                if first_step:
+                    # Official Adan seeds pre_grad with the FIRST gradient, so
+                    # grad_diff is 0 on step 1. jittor seeded pre_grad with
+                    # zeros and still took the difference, making grad_diff = g
+                    # and giving a first update no other Adan produces. The old
+                    # guard here (`if self.n_step > 0`) never excluded anything:
+                    # pre_step() runs backward(), so n_step is already 1 by the
+                    # time the first step reaches this line.
+                    _update_preserve_dtype(pre_g, jt.zeros_like(pre_g))
+                else:
                     _update_preserve_dtype(
                         pre_g, g - pre_g)  # Update pre_g as grad_diff
 
