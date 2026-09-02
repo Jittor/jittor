@@ -201,6 +201,17 @@ static void top_weak_sync(vector<Var*>& vars) {
 // The device an op runs on: where its outputs are placed. Op::propagate_device
 // has already made the outputs agree with the inputs, so either end answers;
 // outputs first because device_copy is the one op where they differ.
+// A Var's memory belongs on the Var's own device, which is the op's device
+// for every op except device_copy -- the one op whose input deliberately
+// lives on another card. Migrating such an input into the op's pool moves the
+// bytes to the wrong device while Var::device_id still says otherwise, and
+// the next kernel that reads it faults with an illegal address.
+static inline Allocator* var_allocator(Var* v, Allocator* op_allocator) {
+    if (v->device_id >= 0 && v->device_id != op_allocator->device())
+        return get_allocator(v->device_id, false);
+    return op_allocator;
+}
+
 static inline int op_target_device(Op* op) {
     for (Var* v : op->outputs())
         if (v->device_id >= 0) return v->device_id;
@@ -640,11 +651,11 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         } else {
             for (Var* v : op->inputs()) {
                 if (!v->allocator->is_cuda())
-                    migrate_to_gpu(v, allocator);
+                    migrate_to_gpu(v, var_allocator(v, allocator));
             }
             for (Var* v : op->outputs()) {
                 if (!v->allocator->is_cuda())
-                    migrate_to_gpu(v, allocator);
+                    migrate_to_gpu(v, var_allocator(v, allocator));
             }
         }
         #endif
@@ -668,7 +679,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         // migrate to gpu
         if (PREDICT_BRANCH_NOT_TAKEN((!is_cuda && use_cuda && !use_cuda_managed_allocator))) {
             for (Var* v : op->outputs()) {
-                migrate_to_gpu(v, allocator);
+                migrate_to_gpu(v, var_allocator(v, allocator));
             }
         }
         #endif

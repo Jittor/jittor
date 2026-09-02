@@ -16,6 +16,7 @@ namespace jittor {
 
 struct VarHolder;
 VarPtr detach(Var* x);
+VarPtr device_copy(Var* x, int device);
 
 struct DataView {
     VarHolder* vh;
@@ -124,6 +125,17 @@ struct VarHolder {
      */
     // @pyjt(__get__device_id)
     inline int device_id() { return var->device_id; }
+
+    /**
+     * Return this Var on CUDA device ``device``, copying it there when it
+     * lives somewhere else -- the equivalent of torch's ``tensor.to("cuda:N")``.
+     * Ops on the result run on that device, and gradients flow back to this
+     * one. This is the only way data changes device.
+     */
+    // @pyjt(to_device)
+    inline VarHolder* to_device(int device) {
+        return new VarHolder(jittor::device_copy(var, device));
+    }
 
     // @pyjt(location)
     inline string location() {

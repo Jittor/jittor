@@ -514,6 +514,24 @@ def random(shape, dtype="float32", type="uniform"):
                     return ret.float16()
     return ret
 
+_core_to_device = Var.to_device
+
+def to_device(self, device):
+    ''' Return this Var on CUDA device ``device`` -- an index, or anything
+    with an ``index`` attribute such as a torch device. A Var already on that
+    device is returned unchanged; otherwise the data is copied there by the
+    ``device_copy`` op, whose gradient is a copy back.
+
+    Devices are independent: an op takes its inputs' device and mixing two
+    devices in one op is an error, as in torch. This is the only way data
+    changes device. '''
+    # `from jittor import *` shadows the builtin int with the cast op.
+    device = ori_int(getattr(device, "index", device))
+    if device == self.device_id:
+        return self
+    return _core_to_device(self, device)
+Var.to_device = to_device
+
 def float_auto(x):
     if jt.flags.amp_reg & 2:
         return x.float16()
