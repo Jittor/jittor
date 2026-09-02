@@ -15,12 +15,18 @@ from jittor_utils import lock, LOG
 import gzip
 import tarfile
 import zipfile
-jittor_offline_path = None
-try:
-    import jittor_offline
-    jittor_offline_path = os.path.dirname(jittor_offline.__file__)
-except:
-    pass
+# A directory of already-fetched third-party archives to copy from instead of
+# downloading. JITTOR_OFFLINE_PATH names one directly; the `jittor_offline`
+# package is the older way to ship one. Naming a directory is what lets a CI
+# job, or several test sessions on one machine, share a single mirror that was
+# populated once -- see `nox -s prefetch`.
+jittor_offline_path = os.environ.get("JITTOR_OFFLINE_PATH") or None
+if jittor_offline_path is None:
+    try:
+        import jittor_offline
+        jittor_offline_path = os.path.dirname(jittor_offline.__file__)
+    except Exception:
+        pass
 
 
 def ensure_dir(dir_path):

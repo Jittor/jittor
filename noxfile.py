@@ -48,6 +48,28 @@ LAB_ROOT = (
     .resolve()
 )
 NOX_STATE_ROOT = LAB_ROOT / "_state" / "nox"
+# Two caches that deliberately outlive a session.
+#
+# Every session used to get a fresh, empty JITTOR_HOME under its own scratch
+# directory, so every session paid a full cold build -- the C++ core, then
+# every operator -- and had to reach the network for MKL, cub, cutt and NCCL
+# first. That is most of what the 40-minute and 2-hour gates were spending
+# their time on, and none of it was testing anything: the build being
+# exercised is identical between sessions whose build configuration is
+# identical. It is safe to share because the cache path already partitions
+# below this root by everything that makes two builds different -- Jittor and
+# compiler and Python version, platform, CPU, and the build-configuration
+# fingerprint (cc_flags, nvcc_flags, kernel_flags, cuda_archs, enable_lto,
+# nvcc_path) -- and because a single lock now serialises the writers.
+#
+# Set JITTOR_NOX_SHARED_CACHE=0 to go back to one empty cache per session,
+# which is what to do when a *build* is what is under suspicion.
+NOX_JITTOR_CACHE = NOX_STATE_ROOT / "cache" / "jittor"
+# Third-party archives, fetched once by `nox -s prefetch` and copied from
+# afterwards. Sharing the cache above already removes the repeated downloads
+# on one machine; this is what makes a *fresh* machine, or a cleared cache,
+# not need the network at all.
+NOX_JITTOR_ASSETS = NOX_STATE_ROOT / "cache" / "jittor-assets"
 
 RUFF = "ruff==0.15.22"
 MYPY = "mypy==1.8.0"
@@ -340,6 +362,14 @@ def _set_python_config(session, python, env, external=False, required=False):
         env.pop("python_config_path", None)
 
 
+def _shared_jittor_cache():
+    """The Jittor cache root a session should use, honouring the opt-out."""
+    if os.environ.get("JITTOR_NOX_SHARED_CACHE", "1") == "0":
+        return None
+    NOX_JITTOR_CACHE.mkdir(parents=True, exist_ok=True)
+    return NOX_JITTOR_CACHE
+
+
 def _session_env(session, backend):
     root = Path(session.create_tmp()).resolve()
     if root.exists():
@@ -347,12 +377,16 @@ def _session_env(session, backend):
     root.mkdir(parents=True)
     paths = {
         "HOME": root / "home",
-        "JITTOR_HOME": root / "jittor-home",
         "XDG_CACHE_HOME": root / "xdg-cache",
         "JITTOR_TEST_STATE_ROOT": root / "test-state",
         "TMPDIR": root / "tmp",
         "CUDA_CACHE_PATH": root / "cuda-cache",
     }
+    # Everything above is scratch and is wiped with the session. The Jittor
+    # cache is not: it holds compiled products that are a pure function of the
+    # build configuration, and rebuilding them per session is the single
+    # largest cost in the gates.
+    paths["JITTOR_HOME"] = _shared_jittor_cache() or (root / "jittor-home")
     for path in paths.values():
         path.mkdir(parents=True, exist_ok=True)
 
@@ -366,6 +400,8 @@ def _session_env(session, backend):
             "cache_name": "nox_%s" % backend,
         }
     )
+    if NOX_JITTOR_ASSETS.is_dir():
+        env["JITTOR_OFFLINE_PATH"] = str(NOX_JITTOR_ASSETS)
     if session.python is False:
         env.pop("python_config_path", None)
     else:
@@ -664,6 +700,58 @@ def _asv_compare_base(results_dir, current_commit):
         if timestamp and timestamp.isdigit():
             ancestors.append((int(timestamp), commit))
     return max(ancestors)[1] if ancestors else None
+
+
+_PREFETCH_SCRIPT = """
+import os, platform, sys
+from jittor_utils import manifest
+from jittor_utils.misc import download_url_to_local
+
+destination = sys.argv[1]
+os.makedirs(destination, exist_ok=True)
+system = platform.system().lower().replace("darwin", "darwin")
+machine = platform.machine()
+wanted = "linux-x86_64" if (system, machine) == ("linux", "x86_64") else None
+fetched, skipped = [], []
+for asset in manifest.offline_assets(include_cuda=False):
+    # Only what this platform's build will actually ask for. The CUDA
+    # toolkits are excluded above: they are gigabytes, and a machine that
+    # needs one is not one this mirror is for.
+    if asset.platform not in ("any", wanted):
+        skipped.append(asset.filename)
+        continue
+    digest = manifest.digest_of(asset)[1]
+    if not digest:
+        # Nothing to verify it against, so it is not something to mirror.
+        skipped.append(asset.filename)
+        continue
+    try:
+        download_url_to_local(asset.url, asset.filename, destination, digest)
+        fetched.append(asset.filename)
+    except Exception as error:
+        print("could not prefetch %s: %s" % (asset.filename, error))
+print("mirror at", destination)
+print("present:", len(fetched), "skipped:", len(skipped))
+"""
+
+
+@nox.session(python="3.11", venv_backend="venv")
+def prefetch(session):
+    """Fill the shared third-party mirror so later sessions need no network.
+
+    Every gate session used to download MKL, cub, cutt and NCCL from one host
+    in Beijing, because every session started from an empty cache. Sharing the
+    cache removes the repeat downloads on a machine that has run once; this
+    session is what makes the *first* run on a fresh machine, or a CI job whose
+    only restorable state is a directory, not need the network either. Point
+    JITTOR_OFFLINE_PATH at the directory it fills, or let `_session_env` do it.
+    """
+    session.install("tqdm")
+    NOX_JITTOR_ASSETS.mkdir(parents=True, exist_ok=True)
+    session.run(
+        "python", "-c", _PREFETCH_SCRIPT, str(NOX_JITTOR_ASSETS),
+        env={"PYTHONPATH": str(REPO_ROOT / "python")},
+    )
 
 
 @nox.session(python="3.11")
