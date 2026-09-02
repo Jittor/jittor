@@ -4,6 +4,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
+import contextlib
 import unittest
 import jittor as jt
 import numpy as np
@@ -15,6 +16,13 @@ import time
 
 @jt.flag_scope(use_cuda=1)
 def main():
+    # The test below calls this twice. Every flag it sets is entered on the
+    # stack, so the second call starts from the same place as the first.
+    with contextlib.ExitStack() as stack:
+        return _run(stack)
+
+
+def _run(stack):
     global superglue
     superglue.split_size = int(os.environ.get("split_size", "12"))
     # superglue.split_size = 1000000
@@ -60,7 +68,9 @@ def main():
 
         use_fp16 = int(os.environ.get("use_fp16", "0"))
         if use_fp16:
-            jt.flags.amp_reg = 2
+            # main() is called twice by the test below and by nothing else, so
+            # the flags it sets have to come back off when it returns.
+            stack.enter_context(jt.flag_scope(amp_reg=2))
             for k,v in data.items():
                 if isinstance(v, jt.Var) and v.dtype == "float32":
                     v.assign(v.float16())
@@ -93,7 +103,8 @@ def main():
 
         jt.sync_all(True)
         time0 = time.time()
-        jt.flags.profiler_enable = int(os.environ.get("profiler", "0"))
+        stack.enter_context(
+            jt.flag_scope(profiler_enable=int(os.environ.get("profiler", "0"))))
 
         for x in range(20):
             print(x)

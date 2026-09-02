@@ -77,7 +77,12 @@ class TestLoss3d(unittest.TestCase):
     @unittest.skipIf(skip_emd_test, "No independent Torch, PyTorch EMD, or CUDA found")
     def test_emd_torch(self):
         if jt.has_cuda:
-            jt.flags.use_cuda = True
+            # Entered here and unwound by addCleanup, because the body below is
+            # the whole test. A bare assignment left CUDA on for every file that
+            # ran afterwards -- the flag is process-global.
+            scope = jt.flag_scope(use_cuda=1)
+            scope.__enter__()
+            self.addCleanup(scope.__exit__, None, None, None)
 
         pc1 = np.random.randn(10, 100, 3).astype(np.float32)
         pc2 = np.random.randn(10, 50, 3).astype(np.float32)

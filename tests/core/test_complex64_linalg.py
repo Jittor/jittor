@@ -47,7 +47,15 @@ class _Mixin:
     use_cuda = 0
 
     def setUp(self):
+        # Remembered, not assumed: Jittor turns CUDA on by default when a GPU
+        # is present, so restoring a hard-coded 0 would switch the accelerator
+        # off for every later file instead of putting things back.
+        self._previous_use_cuda = jt.flags.use_cuda
         jt.flags.use_cuda = self.use_cuda
+
+    def tearDown(self):
+        jt.sync_all()
+        jt.flags.use_cuda = self._previous_use_cuda
 
     # -------------------------------------------------------------------- inv
     def test_inv(self):

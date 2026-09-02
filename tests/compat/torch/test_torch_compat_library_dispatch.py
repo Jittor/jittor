@@ -30,6 +30,17 @@ def _fresh_ns():
 
 
 class TestDispatchKeySelection(unittest.TestCase):
+    def setUp(self):
+        # These cases are about which registered kernel gets picked, so they
+        # need residency pinned to CPU. Setting the flag inside each test left
+        # it set for every file that ran afterwards -- and the flag is
+        # process-global, so "afterwards" means the rest of the session.
+        self._previous_use_cuda = jt.flags.use_cuda
+        jt.flags.use_cuda = 0
+
+    def tearDown(self):
+        jt.flags.use_cuda = self._previous_use_cuda
+
     def _op(self, keys_to_impls, schema="f(Tensor x) -> Tensor"):
         ns = _fresh_ns()
         lib = torch.library.Library(ns, "DEF")
@@ -40,12 +51,10 @@ class TestDispatchKeySelection(unittest.TestCase):
 
     def test_cpu_tensor_takes_the_cpu_kernel_registered_first(self):
         op = self._op([("CPU", lambda x: x + 1), ("CUDA", lambda x: x + 100)])
-        jt.flags.use_cuda = 0
         self.assertEqual(op(jt.zeros(2)).numpy().tolist(), [1.0, 1.0])
 
     def test_cpu_tensor_takes_the_cpu_kernel_registered_last(self):
         op = self._op([("CUDA", lambda x: x + 100), ("CPU", lambda x: x + 1)])
-        jt.flags.use_cuda = 0
         self.assertEqual(op(jt.zeros(2)).numpy().tolist(), [1.0, 1.0])
 
     def test_meta_kernel_never_serves_a_real_call(self):
@@ -67,7 +76,6 @@ class TestDispatchKeySelection(unittest.TestCase):
         lib.impl("f", real, dispatch_key="CPU")
         lib.impl("f", real, dispatch_key="CUDA")
         lib.impl("f", meta, dispatch_key="Meta")
-        jt.flags.use_cuda = 0
         out = getattr(torch.ops, ns).f(jt.zeros(2))
         self.assertEqual(out.numpy().tolist(), [1.0, 1.0])
         self.assertTrue(marker.get("real"))
@@ -75,25 +83,21 @@ class TestDispatchKeySelection(unittest.TestCase):
 
     def test_meta_only_operator_refuses_to_run(self):
         op = self._op([("Meta", lambda x: jt.empty(x.shape, dtype=x.dtype))])
-        jt.flags.use_cuda = 0
         with self.assertRaises(NotImplementedError) as cm:
             op(jt.zeros(2))
         self.assertIn("fake", str(cm.exception))
 
     def test_composite_key_is_the_fallback_for_either_residency(self):
         op = self._op([("CompositeExplicitAutograd", lambda x: x + 7)])
-        jt.flags.use_cuda = 0
         self.assertEqual(op(jt.zeros(2)).numpy().tolist(), [7.0, 7.0])
 
     def test_backend_specific_kernel_beats_the_composite_fallback(self):
         op = self._op([("CompositeExplicitAutograd", lambda x: x + 7),
                        ("CPU", lambda x: x + 1)])
-        jt.flags.use_cuda = 0
         self.assertEqual(op(jt.zeros(2)).numpy().tolist(), [1.0, 1.0])
 
     def test_operator_with_no_usable_kernel_names_the_registered_keys(self):
         op = self._op([("XLA", lambda x: x)])
-        jt.flags.use_cuda = 0
         with self.assertRaises(NotImplementedError) as cm:
             op(jt.zeros(2))
         self.assertIn("XLA", str(cm.exception))
@@ -101,14 +105,10 @@ class TestDispatchKeySelection(unittest.TestCase):
     @unittest.skipUnless(jt.has_cuda, "needs an accelerator")
     def test_cuda_tensor_takes_the_cuda_kernel(self):
         op = self._op([("CPU", lambda x: x + 1), ("CUDA", lambda x: x + 100)])
-        saved = jt.flags.use_cuda
-        jt.flags.use_cuda = 1
-        try:
+        with jt.flag_scope(use_cuda=1):
             x = jt.zeros(2)
             x.sync()
             self.assertEqual(op(x).numpy().tolist(), [100.0, 100.0])
-        finally:
-            jt.flags.use_cuda = saved
 
 
 class TestRegisteredAutograd(unittest.TestCase):

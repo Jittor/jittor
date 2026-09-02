@@ -23,8 +23,9 @@ class TestMem(unittest.TestCase):
     @unittest.skipIf(skip_model_test, "skip_model_test")
     @jt.flag_scope(use_cuda=1)
     def test_oom(self):
+        # use_cuda comes from the @jt.flag_scope decorator above, which also
+        # puts it back; setting it again here only leaked it.
         backups = []
-        jt.flags.use_cuda = 1
 
         one_g = np.ones((1024*1024*1024//4,), "float32")
 

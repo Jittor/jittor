@@ -278,10 +278,10 @@ class TestOther(unittest.TestCase):
         assert b.isfinite().all().item()
         print("test_softmax_precision cpu ok")
         if not jt.has_cuda: return
-        jt.flags.use_cuda = 1
-        a = -jt.array([1.0,2.0,1e5])
-        b = a.log_softmax(0)
-        assert b.isfinite().all().item()
+        with jt.flag_scope(use_cuda=1):
+            a = -jt.array([1.0,2.0,1e5])
+            b = a.log_softmax(0)
+            assert b.isfinite().all().item()
         print("test_softmax_precision gpu ok")
 
     def test_code_softmax(self):

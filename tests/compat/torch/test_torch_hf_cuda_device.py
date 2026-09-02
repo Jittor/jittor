@@ -92,7 +92,14 @@ class TestTorchHFCudaDevice(unittest.TestCase):
     def setUp(self):
         if not getattr(jt, "has_cuda", 0):
             self.skipTest("needs CUDA")
+        # Restored in tearDown: without it this class turned CUDA on for every
+        # test that ran after it, in every file, for the rest of the session.
+        self._previous_use_cuda = jt.flags.use_cuda
         jt.flags.use_cuda = 1
+
+    def tearDown(self):
+        jt.sync_all()
+        jt.flags.use_cuda = self._previous_use_cuda
 
     def test_direct_alias_registers_torch_and_cuda(self):
         self.assertTrue(_ALIAS_REGISTERED)

@@ -18,13 +18,15 @@ class TestBMM(unittest.TestCase):
     def test_bmm_cuda(self):
         def check(batch, n, m, k):
             def calc(use_cuda, a, b, mask):
-                jt.flags.use_cuda = use_cuda
-                a = jt.array(a)
-                b = jt.array(b)
-                mask = jt.array(mask)
-                c = nn.bmm(a, b)
-                da, db = jt.grad(c*mask, [a, b])
-                return c.data, da.data, db.data
+                # flag_scope, not a bare assignment: this ran last with
+                # use_cuda=1 and left it on for every later file.
+                with jt.flag_scope(use_cuda=use_cuda):
+                    a = jt.array(a)
+                    b = jt.array(b)
+                    mask = jt.array(mask)
+                    c = nn.bmm(a, b)
+                    da, db = jt.grad(c*mask, [a, b])
+                    return c.data, da.data, db.data
             mask = np.random.rand(batch, n, k).astype("float32")
             a = np.random.rand(batch, n, m).astype("float32")
             b = np.random.rand(batch, m, k).astype("float32")
