@@ -909,6 +909,11 @@ def _write_jit_utils_cache_key(files, output):
         LOG.v("cache key child failed: " + result.stdout.decode("utf8", "replace"))
 
 
+#: Exit code used when jit_utils was rebuilt and the process must be restarted.
+#: Distinct from 1 so a caller can tell "rerun me" apart from a real failure.
+JIT_UTILS_UPDATED_EXIT_CODE = 3
+
+
 def check_cache_compile():
     files = [
         "src/utils/cache_compile.cc",
@@ -924,8 +929,13 @@ def check_cache_compile():
     output = jit_utils.cache_path+'/jit_utils_core'+extension_suffix
     recompile = compile(cc_path, cc_flags+f" {opt_flags} ", files, output, True)
     if recompile and jit_utils.cc:
-        LOG.e("jit_utils updated, please rerun your command.")
-        sys.exit(0)
+        # A non-zero code, because nothing the caller asked for was done. With
+        # exit 0 a CI job or a training script that touched src/utils/*.cc
+        # "succeeded" without running a single line of the user's program, and
+        # the only trace was one line of log among hundreds.
+        LOG.e("jit_utils was rebuilt and cannot be reloaded in this process. "
+              "Nothing else has run: rerun the same command.")
+        sys.exit(JIT_UTILS_UPDATED_EXIT_CODE)
     if not jit_utils.cc:
         # The cache key is written by cache_compile, which needs this very
         # library to be importable first. Doing that after importing it would
