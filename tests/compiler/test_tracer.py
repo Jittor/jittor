@@ -7,8 +7,29 @@
 import unittest
 import jittor as jt
 import os
+from pathlib import Path
 import subprocess as sp
 import sys
+
+REPO_PYTHON = str(Path(__file__).resolve().parents[2] / "python")
+
+
+def _child_env():
+    """Environment for a child that has to import *this* checkout's jittor.
+
+    pytest puts the checkout on sys.path for its own process only; it does not
+    export PYTHONPATH, so a bare `python child.py` imports whatever jittor is
+    installed. The parent does export `cache_name`, though, so such a child
+    loads the core this checkout just built while running some *other*
+    checkout's Python layer -- a new core against an old compiler.py. That
+    combination fails on whatever the two disagree about (it surfaced as
+    `jittor_core has no attribute set_lock_path` when the lock binding moved to
+    set_lock_fd) and says nothing about the code under test.
+    """
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = \
+        REPO_PYTHON + os.pathsep + environment.get("PYTHONPATH", "")
+    return environment
 
 class TestTracer(unittest.TestCase):
     def test_print_trace(self):
@@ -28,7 +49,10 @@ import jittor as jt
 with jt.flag_scope(extra_gdb_cmd="c;q"):
     jt.flags.gdb_attach = 1
 """)
-        out = sp.getoutput(sys.executable+' '+fname)
+        completed = sp.run(
+            (sys.executable, fname), env=_child_env(),
+            stdout=sp.PIPE, stderr=sp.STDOUT, universal_newlines=True)
+        out = completed.stdout
         print(out)
         assert "Attaching to" in out
 
@@ -62,7 +86,7 @@ with jt.flag_scope(gdb_path=%r, gdb_trace_timeout=2):
     print("ELAPSED", time.time() - start)
 """ % fake_gdb)
         completed = sp.run(
-            (sys.executable, fname),
+            (sys.executable, fname), env=_child_env(),
             stdout=sp.PIPE, stderr=sp.STDOUT, universal_newlines=True, timeout=300,
         )
         out = completed.stdout

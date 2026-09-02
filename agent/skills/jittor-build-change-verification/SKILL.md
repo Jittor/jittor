@@ -120,6 +120,38 @@ done
 反过来也要看一眼：`jittor.lock` 的位置**不应**随配置变化（它同时保护 mkl/cutt/cub 这些
 所有配置共享的下载）。
 
+## 4.5 改了 core 的导出接口之后：扫一遍起裸 python 的地方
+
+C++ 侧改了 pyjt 导出的名字或签名（`@pyjt(...)`、`core.xxx`），除了自己的测试之外
+还要扫一遍**测试里起子进程的地方**：
+
+```bash
+grep -rn "sys.executable\|getoutput\|os.system\|subprocess" tests/ | grep -v PYTHONPATH
+```
+
+失败的形状是这样的：某个用例用 `sp.getoutput(sys.executable + ' ' + fname)` 起一个
+裸 python。pytest 只把本 checkout 放进**自己进程**的 `sys.path`，不导出 `PYTHONPATH`，
+所以这个子进程导入的是**装好的那份** jittor（主树）。但父进程把 `cache_name` 写进了
+环境，于是子进程加载到的是**你这份分支刚编出来的 core**——新 core 配旧 Python 层。
+两边一旦对不上就炸：
+
+```
+AttributeError: module 'jittor_core' has no attribute 'set_lock_path'.
+Did you mean: 'set_lock_fd'?
+```
+
+而这条报错和你的改动看起来毫无关系（改的是锁，红的是 tracer）。修法是给子进程显式
+传环境：
+
+```python
+environment = dict(os.environ)
+environment["PYTHONPATH"] = REPO_PYTHON + os.pathsep + environment.get("PYTHONPATH", "")
+sp.run((sys.executable, fname), env=environment, ...)
+```
+
+判据：**任何以 `sys.executable` 起、又会 `import jittor` 的子进程，都必须显式带
+PYTHONPATH**。这条比"我的改动有没有效果"更狠：不带的话，跑的是两棵树的嵌合体。
+
 ## 5. 别被这些假象骗了
 
 - **改一行注释验证不了重编。** 注释不改变 `.o` 的字节，链接的缓存键因此不变，`.so`
