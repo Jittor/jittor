@@ -98,3 +98,115 @@ class TestReduceLROnPlateauGroups(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLegacySchedulerSingleLRStore(unittest.TestCase):
+    """The legacy schedulers must write one lr store per group, not two.
+
+    ``jt.optim.LRScheduler`` (the new-style base, e.g. ``LambdaLR``) stamps an
+    ``"lr"`` key into every param group at construction and never removes it.
+    The legacy schedulers branch on whether that key exists, so merely having
+    used a LambdaLR once flipped them from "update the shared optimizer.lr" to
+    "update the shared optimizer.lr *and* every group's own lr", each from a
+    different base. The two stores then drift and disagree about what the
+    learning rate is -- while training silently follows the per-group one.
+    """
+
+    def _opt(self, n_groups=2, lr=1.0):
+        opt = jt.optim.SGD(
+            [{"params": [jt.array([1.0])]} for _ in range(n_groups)], lr)
+        # jittor's default layout: no group carries its own "lr", so all of
+        # them fall back to the single optimizer-wide value.
+        for pg in opt.param_groups:
+            pg.pop("lr", None)
+        opt.lr = lr
+        return opt
+
+    def _effective(self, opt):
+        # exactly what Optimizer.step reads: pg.get("lr", self.lr)
+        return [float(pg.get("lr", opt.lr)) for pg in opt.param_groups]
+
+    def test_optimizer_lr_agrees_with_the_lr_training_actually_uses(self):
+        # The common recipe that triggers it: a LambdaLR warmup, then a
+        # legacy scheduler for the decay.
+        for name, make in (
+                ("StepLR",
+                 lambda o: jt.lr_scheduler.StepLR(o, step_size=1, gamma=0.5)),
+                ("MultiStepLR",
+                 lambda o: jt.lr_scheduler.MultiStepLR(
+                     o, milestones=[1, 2], gamma=0.5)),
+                ("ExponentialLR",
+                 lambda o: jt.lr_scheduler.ExponentialLR(o, gamma=0.5)),
+        ):
+            with self.subTest(scheduler=name):
+                opt = self._opt(2)
+                jt.optim.LambdaLR(opt, lambda epoch: 0.5)   # warmup
+                sched = make(opt)
+                for _ in range(3):
+                    sched.step()
+                for lr in self._effective(opt):
+                    self.assertAlmostEqual(
+                        float(opt.lr), lr, places=9,
+                        msg="%s: optimizer.lr reports %r but the optimizer "
+                            "trains with %r" % (name, float(opt.lr), lr))
+
+    def test_decay_is_applied_once_per_step_not_once_per_group(self):
+        # group count must not change the trajectory
+        for name, make, expect in (
+                ("StepLR",
+                 lambda o: jt.lr_scheduler.StepLR(o, step_size=1, gamma=0.5),
+                 [1.0, 0.5, 0.25]),
+                ("ExponentialLR",
+                 lambda o: jt.lr_scheduler.ExponentialLR(o, gamma=0.5),
+                 [1.0, 0.5, 0.25]),
+        ):
+            for n_groups in (1, 2, 3):
+                with self.subTest(scheduler=name, groups=n_groups):
+                    opt = self._opt(n_groups)
+                    sched = make(opt)
+                    got = []
+                    for _ in range(3):
+                        sched.step()
+                        got.append(self._effective(opt)[0])
+                    np.testing.assert_allclose(got, expect, rtol=1e-9)
+
+    def test_get_lr_returns_what_update_lr_will_set(self):
+        """One get_lr contract, matching jt.optim.LRScheduler.get_lr.
+
+        StepLR.get_lr used to return optimizer.lr with gamma never applied
+        (and update_lr never called it -- it was dead code), while
+        MultiStepLR.get_lr applied gamma on top of an update_lr that applied
+        it again from its own separate read of optimizer.lr.
+
+        The invariant is that ``update_lr()`` applies exactly ``get_lr()``:
+        gamma lands once, and get_lr is a pure query. (This pairs get_lr with
+        update_lr rather than step(), because some of these schedulers bump
+        last_epoch inside step() before computing -- as torch's do too.)
+        """
+        for name, make in (
+                ("StepLR",
+                 lambda o: jt.lr_scheduler.StepLR(o, step_size=1, gamma=0.5)),
+                ("MultiStepLR",
+                 lambda o: jt.lr_scheduler.MultiStepLR(
+                     o, milestones=[0, 1, 2], gamma=0.5)),
+                ("ExponentialLR",
+                 lambda o: jt.lr_scheduler.ExponentialLR(o, gamma=0.5)),
+                ("CosineAnnealingLR",
+                 lambda o: jt.lr_scheduler.CosineAnnealingLR(o, T_max=4)),
+        ):
+            with self.subTest(scheduler=name):
+                opt = self._opt(2)
+                sched = make(opt)
+                for _ in range(3):
+                    predicted = sched.get_lr()
+                    self.assertEqual(len(predicted), len(opt.param_groups))
+                    # a pure query: asking twice must not move the lr
+                    self.assertEqual(predicted, sched.get_lr())
+                    sched.update_lr()
+                    np.testing.assert_allclose(
+                        self._effective(opt), predicted, rtol=1e-9,
+                        err_msg="%s.update_lr() did not apply exactly "
+                                "get_lr()" % name)
+                    sched.last_epoch = getattr(sched, "last_epoch", 0) + 1
+                    if hasattr(sched, "cur_epoch"):
+                        sched.cur_epoch += 1
