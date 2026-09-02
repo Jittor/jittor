@@ -221,6 +221,68 @@ def test_acl_full_slice_uses_identity_forward_and_backward():
     assert not any("fallback cpu" in message for message in messages)
 
 
+def test_disabling_device_execution_disables_acl_dispatch():
+    if not getattr(jt.compiler, "has_acl", 0):
+        pytest.skip("ACL backend is unavailable")
+    source = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+    mask = source.sum(axis=-1) > 20
+
+    with jt.flag_scope(use_acl=1, use_cuda=0):
+        assert jt.flags.use_acl == 0
+        assert jt.flags.use_cuda == 0
+        output = jt.array(source)[jt.array(mask)]
+        actual = output.numpy()
+
+    np.testing.assert_array_equal(actual, source[mask])
+
+
+def test_acl_contiguous_last_axis_slice_gradients_use_concat():
+    if not getattr(jt.compiler, "has_acl", 0):
+        pytest.skip("ACL backend is unavailable")
+    from jittor.extern.acl.aclops.getitem_op import _slice_zero_cache
+
+    source_shape = (2, 3, 8)
+    slices = (slice(0, 3), slice(2, 6), slice(5, 8), slice(0, 3))
+    results = []
+    expected = []
+
+    with jt.flag_scope(use_acl=1, use_cuda=1), jt.log_capture_scope(
+            log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+        for dtype in ("float16", "bfloat16", "float32"):
+            for offset, last_slice in enumerate(slices):
+                x = jt.zeros(source_shape, dtype=dtype)
+                sliced_shape = x[..., last_slice].shape
+                weights_np = (
+                    np.arange(np.prod(sliced_shape), dtype=np.float32)
+                    .reshape(sliced_shape) + offset + 1
+                )
+                weights = jt.array(weights_np)
+                if dtype != "float32":
+                    weights = weights.cast(dtype)
+                gradient = jt.grad((x[..., last_slice] * weights).sum(), x)
+                gradient.sync()
+                location = gradient.location()
+                (actual,) = jt.fetch_sync([gradient.float()])
+                reference = np.zeros(source_shape, dtype=np.float32)
+                reference[..., last_slice] = weights_np
+                results.append((location, actual))
+                expected.append(reference)
+
+    for (location, actual), reference in zip(results, expected):
+        assert location == "device"
+        np.testing.assert_array_equal(actual, reference)
+    cached = {(key[1], key[2]) for key in _slice_zero_cache}
+    assert ((2, 3, 2), "float32") in cached
+    assert ((2, 3, 5), "float32") in cached
+    assert ((2, 3, 2), "float16") in cached
+    assert ((2, 3, 5), "float16") in cached
+    assert ((2, 3, 2), "bfloat16") in cached
+    assert ((2, 3, 5), "bfloat16") in cached
+    messages = [entry["msg"].lower() for entry in logs]
+    assert not any("compile cpu" in message for message in messages)
+    assert not any("fallback cpu" in message for message in messages)
+
+
 def test_acl_slice_gradients_remain_lazy_and_zero_initialized():
     if not getattr(jt.compiler, "has_acl", 0):
         pytest.skip("ACL backend is unavailable")

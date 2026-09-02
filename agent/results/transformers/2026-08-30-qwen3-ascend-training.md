@@ -3,7 +3,7 @@
 - Status: FP32 forward/backward accepted; BF16 one-step forward parity accepted,
   exact-path performance and cross-framework trajectory open
 - Last reviewed: 2026-09-02
-- Source baseline: `8d45fdb0` plus this report's full-slice follow-up; semantic baseline `8ab4d2b5`
+- Source baseline: `d02a72ed` plus this report's contiguous-slice follow-up; semantic baseline `8ab4d2b5`
 - Owner: Torch compatibility and ACL backend maintainers
 - Review when: CANN, Transformers Qwen3 modules, embedding/RMSNorm/RoPE lowering,
   dtype, checkpoint, sequence shape, optimizer, or timing protocol changes
@@ -162,6 +162,52 @@ device profile 与实现预期一致：
 `e9165acd269c11086dfb81effa90ecb7f49e89e2ae368a7e83880c324b7ce807`；整模和定向
 用例均为零 CPU compile/fallback。
 
+### Contiguous slice-gradient follow-up
+
+完整切片化简后，profile 仍有 112 次 RoPE 半切片反向，每次执行 memset 加
+`StridedSliceAssignV2`，合计 `21.371 ms`。新的受限 lowering 只接管 FP16、BF16 和
+FP32、非空、单位步长、前置维全部取满、仅末维为连续子区间的 basic slice：forward
+仍使用 SliceV2；backward 将 `dout` 与左右零块通过一次 CANN Cat 拼回原形状。其他
+dtype、跨维子区间和非单位步长继续使用原 slice-scatter。
+
+零块由最多 32 项的 LRU 按 `(device_id, shape, dtype)` 缓存并标记 stop-grad。它们作为
+SliceV2 CodeOp 的显式输入进入依赖图，因此没有未跟踪的异步初始化；Qwen3 的 56 个
+Q/K rotate-half 调用只保留两种 shape 的 BF16 零模板。
+
+扩大 indexing 回归时还复现了 ACL 构建中的 CPU scope 问题：中央 `warp()` 和 bool
+mask 规范化使用了不同的 backend 判断。现在统一以 `use_acl && use_cuda` 判断 ACL
+device execution；CPU bool mask 的 `nonzero [N, rank]` 被转换为逐维坐标 tuple，而
+不是错误 flatten 为 `N*rank` 个行索引。同 rank、低 rank 和 `masked_select` 三项从
+错误 shape 恢复为 Torch 结果。
+
+在空闲的同一张 910B3 上紧邻执行，配置仍为 Transformers 5.5.3、BF16 eager、显式
+fused AdamW、序列长度 8、2 次 warmup 和 5 次同步采样：
+
+| Path | Forward | Backward | AdamW | Full step | vs native |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Native `torch_npu` | `81.120 ms` | `111.297 ms` | `19.006 ms` | `211.424 ms` | `1.000x` |
+| Jittor `d02a72ed` | `120.805 ms` | `106.521 ms` | `25.275 ms` | `252.601 ms` | `1.195x` |
+| Jittor candidate A | `123.489 ms` | `79.202 ms` | `24.502 ms` | `227.192 ms` | `1.075x` |
+| Jittor candidate B | `118.797 ms` | `77.915 ms` | `24.575 ms` | `221.287 ms` | `1.047x` |
+| Jittor candidate C | `120.817 ms` | `79.881 ms` | `24.139 ms` | `224.837 ms` | `1.063x` |
+
+候选 full-step 三进程中位数为 `224.837 ms`，相对同卡 `d02a72ed` 改善约 `11.0%`，
+相对 native 为 `1.063x`。该优化已稳定收窄差距，但尚未满足“不慢于原生”的性能
+门禁。
+
+最终 profile 中 112 次 `StridedSliceAssignV2` 全部消失，112 次
+`contiguous_slice_grad` Cat 合计 `3.398 ms`。相对只含完整切片化简的 profile，forward
+从 `50.699 ms` 降至 `48.209 ms`，backward 从 `88.666 ms` 降至 `68.203 ms`；launch
+数分别保持 `1205/1609`，收益来自更低成本的 lowering 而非省略同步。optimizer
+profile 只有一个 `fused_adamw`，device time 为 `11.500 ms`，但整段墙钟约
+`24.5-25.3 ms`；剩余开销包含 930 个参数的 Python 状态整理、Var 重绑定和 ACL
+descriptor 调度，尚未优化。
+
+候选 exact snapshot 的 61 个数组继续逐元素一致，NPZ SHA-256 仍为
+`e9165acd269c11086dfb81effa90ecb7f49e89e2ae368a7e83880c324b7ce807`。尝试用非连续
+ACL tensor view 直接实现 exact rotate-half 时在最小用例触发 vendor `libnnopbase`
+段错误，已完全撤回；不以 fallback 隐藏该失败。
+
 ## 验证口径
 
 | 项目 | 配置 |
@@ -224,9 +270,10 @@ Transformers 4.56.2 的 Qwen3 模块默认内联组合 RoPE，不会调用
 - BF16 semantic follow-up：完整 real-NPU Torch-compat ACL 文件 `19 passed`；CPU
   dtype 文件 `25 passed, 2 skipped`；干净结构测试 `232 passed, 2 skipped`，仓库布局
   门禁通过。
-- full-slice follow-up：real-NPU ACL indexing `5 passed`（内部 29 组 indexing 子用例
-  全部零误差），Torch basic slicing `1 passed, 25 deselected`，完整 native ACL
-  `46 passed`；61 个整模 snapshot 数组逐元素一致。
+- slice follow-up：real-NPU ACL indexing `7 passed`（内部 29 组 indexing 子用例全部
+  零误差），完整 Torch indexing CPU/NPU `26 passed`，完整 native ACL `46 passed`；
+  完整 Torch-compat ACL `21 passed`；FP16/BF16/FP32 连续末维首段、中段、末段梯度及
+  缓存复用通过，61 个整模 snapshot 数组逐元素一致。
 
 native 与 Torch-compat 文件必须按仓库规则放在不同进程运行；同进程导入兼容层会
 改变 native 返回类型，不能作为有效门禁方式。
@@ -309,6 +356,15 @@ e28583a6f35803f2f7db874d855d0b488816549da4073bbecdd28105f2a77388  full-slice run
 4faebde56b4b3151385349f2e4674d11a55c7c613253ee16ced77d06fabe3bcc  full-slice backward profile
 a3cbe9d78af7eafdb6124bb4dfc7a785de76eee562ed3fa423cbd8b26776efdc  rejected D2D half-slice log
 e9165acd269c11086dfb81effa90ecb7f49e89e2ae368a7e83880c324b7ce807  full-slice exact snapshot
+3c8e4ceb369392f126c4722d5011e535fe8e213a8b2352bd7b9a19e04b2b57e6  NPU1 native adjacent log
+53fce9bfb652e4ee905a6d876b9d66db610cbe3095673c701a6acb9ec841b4f6  NPU1 d02a72ed adjacent log
+a068acad7a1733c79b6709779286baedf7b37744972d724a8a3bcfbc7fadbc2b  contiguous-slice run A log
+3a436f3d6b47fa6a5b4122a7358d157f543551975915e154199f7bb99c1d9de2  contiguous-slice run B log
+8293648dc9a2155b7e7f092e7ef91f6f5f4b1d0ebd6c7e6267aa05e4a6368f4e  contiguous-slice run C log
+c4cc2904e3de2d3d8fa4ebb8ee963f04b911f24d60735bccf6565e77195e8868  contiguous-slice forward profile
+5a703f2af4ad00726c1553e0d974d4fd0aacf8c25dca10e60ba946fd18382704  contiguous-slice backward profile
+eac08bf9f73673df844f0fac0440bc0e1b8fbc79f66a9129d85782cf983c2fe2  fused AdamW optimizer profile
+e9165acd269c11086dfb81effa90ecb7f49e89e2ae368a7e83880c324b7ce807  contiguous-slice exact snapshot
 ```
 
 ## 未覆盖边界
@@ -316,8 +372,8 @@ e9165acd269c11086dfb81effa90ecb7f49e89e2ae368a7e83880c324b7ce807  full-slice exa
 - FP32 optimizer、完整 checkpoint restore 和长期参数轨迹仍未验证；BF16 显式 fused
   接受固定梯度两步精确对拍和短序列性能，整模跨框架训练轨迹仍未验收；
 - 没有验证 FP16、Qwen3-8B 训练、多卡训练、采样或量化；
-- 精确 BF16 full step 的历史相邻结果慢约 `7.0%`，当前 full-slice follow-up 的相邻
-  结果约慢 `13.6%`；直接 CANN RoPE 因改变 BF16 舍入轨迹不应成为默认路由；
+- 精确 BF16 full step 的历史相邻结果慢约 `7.0%`，当前 slice follow-up 的同卡三进程
+  中位数约慢 `6.3%`；直接 CANN RoPE 因改变 BF16 舍入轨迹不应成为默认路由；
 - embedding 快路径未声明 `scale_grad_by_freq=True`、`max_norm` 或 sparse 支持；
 - 性能数字只代表该单卡、sequence length 8 的对应同步 eager 协议；FP32 不含
   optimizer，BF16 follow-up 包含 AdamW。
