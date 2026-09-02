@@ -308,10 +308,16 @@ void var_broadcast(VarHolder* x, int root) {
     if (!inside_mpi) return;
     Var* v = x->var;
     ASSERT(v->mem_ptr && !v->allocator->is_cuda());
+    ASSERT(root >= 0 && root < mpi_world_size)
+        << "mpi var_broadcast: root" << root << "out of range for world_size"
+        << mpi_world_size;
     int64 MPI_MAX_SIZE = 1ll<<30;
     for (int64 i=0; i<v->size; i+=MPI_MAX_SIZE) {
         int64 size = std::min(v->size-i, MPI_MAX_SIZE);
-        MPI_Bcast(v->ptr<uint8>()+i, size, MPI_BYTE, 0, MPI_COMM_WORLD);
+        // Was hardcoded 0 here, silently ignoring the root the caller asked
+        // for: every rank ended up with rank 0's data and the real root's
+        // data was overwritten, with no error.
+        MPI_CHECK(MPI_Bcast(v->ptr<uint8>()+i, size, MPI_BYTE, root, MPI_COMM_WORLD));
     }
 }
 
