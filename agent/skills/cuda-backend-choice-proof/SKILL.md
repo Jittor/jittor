@@ -25,7 +25,7 @@ JIT 算子里的 `LOGvvv` 可以被 Python 捕获，前缀匹配的是**生成�
 
 ```cpp
 LOGvvv << "cublas_matmul algo select:"
-    << "use_tensorcore=" >> use_tensorcore
+    << "precision=" >> float32_precision_tier_name(mode.tier)
     << "computeType=" >> cublas_compute_type_name(computeType)
     << "algo=" >> cublas_gemm_algo_name(algo);
 ```
@@ -42,9 +42,9 @@ from _helpers.logs import find_log_with_re
 with jt.log_capture_scope(log_silent=1, log_v=0,
                           log_vprefix="cublas_matmul=100") as raw_log:
     jt.matmul(a, b).sync()          # 必须 .sync()，否则惰性图还没跑
-found = find_log_with_re(raw_log, r"algo select: use_tensorcore=(\S+) computeType=(\S+) algo=(\S+)")
+found = find_log_with_re(raw_log, r"algo select: precision=(\S+) computeType=(\S+) algo=(\S+)")
 assert found, "no selection log captured"
-tc, compute, algo = found[-1]       # 取最后一条：一次 sync 可能跑了不止一个 gemm
+tier, compute, algo = found[-1]     # 取最后一条：一次 sync 可能跑了不止一个 gemm
 ```
 
 要点：
@@ -52,11 +52,38 @@ tc, compute, algo = found[-1]       # 取最后一条：一次 sync 可能跑了
 - `log_v=0` + `log_vprefix="<前缀>=100"`：只放行这一个文件的 LOGvvv，别的算子不吵。
 - `log_silent=1`：日志不打到终端，只进 buffer。
 - 取 `found[-1]`，不要取 `[0]`：同一次 sync 里 cast/random 也可能触发别的 gemm。
-- 改 flag（`jt.flags.use_tensorcore` 等）不会改 JIT key，不会重编，运行期读全局变量即可生效。
-  所以一个测试里循环 4 种取值是安全的。
+- 改 flag（`jt.flags.float32_matmul_precision`、`use_tensorcore` 等）不会改 JIT key，不会重编，
+  运行期读全局变量即可生效。所以一个测试里循环三档取值是安全的。
+- 六个 cuDNN 卷积算子打的是 `<算子名> precision select: precision=… computeType=… mathType=…`，
+  前缀 `cudnn_conv=100` 会同时命中 conv / conv3d / backward_x / backward_w，靠消息里的算子名区分。
 
 同样的手法适用于**缓存键**：把 `jk.to_string()` 打出来，断言 fp32 与 fp16 的键不同
 （`cudnn_conv3d` 的 fwd/bwdx/bwdw 三个 legacy 缓存就是靠这个证明不再互相串）。
+
+### 坑：捕不到日志的第一嫌疑是「那个算子根本没跑」
+
+`log_capture_scope` 捕到 **0 条**日志时，看起来和「算子不再打这条日志了」「改动没编进去」
+一模一样。真实原因往往是**惰性图把那个算子删了**：没人持有的 Var 不会被计算。
+
+```python
+with jt.log_capture_scope(...) as raw_log:
+    build()            # ← 返回值被丢掉了
+    jt.sync_all()      # ← 图里根本没有这个算子，什么都不会跑
+assert raw_log         # 0 条
+```
+
+`jt.sync_all()` 只推进图里已有的东西，它不会替你把一个无人引用的输出接回来。写法：
+
+```python
+    out = build()
+    jt.fetch_sync(out if isinstance(out, (list, tuple)) else [out])
+```
+
+反向也一样：`jt.grad(loss, [x, w])` 的返回值必须一起 fetch，否则 backward 算子不跑，
+你会以为 backward 那一侧的改动没生效。
+
+**分辨方法**：把同一段代码抄成一个独立的 `python -c`（带 `PYTHONPATH`）跑一遍。
+独立脚本能捕到、pytest 里捕不到 → 是测试的写法问题，不是算子的问题。
 
 ## 手法：证明随机状态每次调用都在推进
 
@@ -288,3 +315,40 @@ JITTOR_HOME=<自己的> python -m jittor_utils.query_cuda_cc   # 预热，让 lo
 选择类改动往往只有一两行。先把日志与测试加好，再把那一两行**临时改回旧写法**跑一次
 （只重编 custom_ops，几十秒），确认测试红；然后改回来跑绿。比 `git stash` 整个改动便宜，
 因为不会碰到核心 .so。
+
+具体做法（**禁止 `git stash`**，它在 worktree 之间共用一个栈）：
+
+```bash
+cp <算子.cc> $TMPDIR/new.cc                 # 先存好自己的版本
+git checkout HEAD -- <算子.cc>              # 退回旧写法
+<跑测试>                                    # 断言它红
+cp $TMPDIR/new.cc <算子.cc>                 # 还原；git diff --stat 确认回来了
+```
+
+旧文件只要不 include 新加的头就能照常编译，所以单文件回退通常不需要连带回退别的。
+
+### 精度类改动：数值 A/B 的取样要选对，否则「无差别」是假的
+
+`CUBLAS_COMPUTE_16F` 与 `_32F` 的差别**在全 1 输入上完全看不见**：float16 能精确表示
+2048 以内的整数，任何求和顺序的中间和都是精确的，两种累加给出同一个答案。用**不规则输入
+加 float64 参照**，并且规约长度要够：
+
+```python
+A = rng.randn(64, 8192).astype("float16"); B = rng.randn(8192, 64).astype("float16")
+ref = A.astype("float64") @ B.astype("float64")
+err = np.abs(got.astype("float64") - ref).max()
+```
+
+实测（sm_89）：`cublas_acc_matmul` 修前 0.6275、修后 0.1396，`cublas_matmul` 一直是 0.1396。
+断言写成「小于两者中间的一个数」（这里 0.3），不要钉死具体值。
+
+### 数值 A/B 没差别时，先确认你改的那条路真的跑了
+
+改了 legacy 路径，而算子有一条**快路径会先 return**，那么数值 A/B 两边完全一样是正常的——
+差别不在于改动无效，而在于那条代码没被执行。判据仍然是日志：新日志行出现 = 新二进制在跑；
+数值不变 = 这条路径今天到不了，或者库本身忽略了你设的那个字段。
+
+实测例：把 `cudnn_conv_backward_x/w` 的卷积描述符 compute type 从 `getDataType<Ty>()`
+改成 `CUDNN_DATA_FLOAT`，fp16 梯度的最大误差修前修后都是 0.05796——因为
+`cudnn_conv_plan.h` 的 backend-plan 快路径先 return 了，而它本来就写死 `CUDNN_DATA_FLOAT`。
+**这时候要在提交说明里写「消除了一处潜在不一致」，不要写成「提高了精度」。**

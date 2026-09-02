@@ -229,7 +229,16 @@ class TestStage2Delivery(unittest.TestCase):
         TinyLlamaBenchmarks().teardown("torch", "forward")
 
     def test_cudnn_math_policy_is_guarded_for_rocm_and_old_cudnn(self):
-        operations = self.repo_root / "python" / "jittor" / "extern" / "cuda" / "cudnn" / "ops"
+        """The two guards must survive; 8.03 moved where they live.
+
+        Each of the six convolution ops used to spell the ``#ifndef IS_ROCM``
+        / ``#if CUDNN_VERSION >= 8000`` / ``CUDNN_FMA_MATH`` chain itself, and
+        the six copies had drifted apart -- forward asked for tensor-op math
+        on float16 while backward left it at ``CUDNN_DEFAULT_MATH``. The chain
+        is now in one shared helper, so the ops are checked for *calling* it
+        and the helper is checked for the guards.
+        """
+        cudnn = self.repo_root / "python" / "jittor" / "extern" / "cuda" / "cudnn"
         names = (
             "cudnn_conv_op.cc",
             "cudnn_conv_backward_x_op.cc",
@@ -239,13 +248,21 @@ class TestStage2Delivery(unittest.TestCase):
             "cudnn_conv3d_backward_w_op.cc",
         )
         for name in names:
-            source = (operations / name).read_text(encoding="utf-8")
+            source = (cudnn / "ops" / name).read_text(encoding="utf-8")
             with self.subTest(operation=name):
                 self.assertIn("int conv_math_key = 0;", source)
                 self.assertIn("#ifndef IS_ROCM", source)
-                self.assertIn("#if CUDNN_VERSION >= 8000", source)
-                self.assertIn("CUDNN_FMA_MATH", source)
+                # One policy, not six: the accumulate type and the math type
+                # both come from the shared helper.
+                self.assertIn("cudnn_conv_math_type(", source)
+                self.assertIn("cudnn_conv_compute_type(", source)
                 self.assertIn('jk << "math=" << conv_math_key', source)
+
+        wrapper = (cudnn / "inc" / "cudnn_wrapper.h").read_text(encoding="utf-8")
+        self.assertIn("cudnnMathType_t cudnn_conv_math_type(", wrapper)
+        self.assertIn("#ifndef IS_ROCM", wrapper)
+        self.assertIn("#if CUDNN_VERSION >= 8000", wrapper)
+        self.assertIn("CUDNN_FMA_MATH", wrapper)
 
 
 if __name__ == "__main__":

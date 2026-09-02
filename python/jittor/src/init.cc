@@ -17,13 +17,44 @@
 #include "var.h"
 #include "op.h"
 #include "executor.h"
+#include "misc/float32_precision.h"
 
 namespace jittor {
 
 DEFINE_FLAG(vector<int>, cuda_archs, {}, "Cuda arch");
-DEFINE_FLAG(int, use_tensorcore, 0, "use tensor core");
-DEFINE_FLAG(int, cuda_allow_tf32, 0, "Allow TF32 compute for CUDA float32 matmul");
-DEFINE_FLAG(int, cuda_allow_cudnn_tf32, 0, "Allow TF32 compute for CUDA float32 cuDNN convolution");
+// How precisely a float32 product is accumulated, on the same three-name
+// scale torch uses, shared by matmul and convolution. See
+// misc/float32_precision.h for the full mapping and for why the three flags
+// below are now overrides on top of it rather than four separate encodings.
+int float32_matmul_precision_tier = F32_HIGHEST;
+
+DEFINE_FLAG_WITH_SETTER(string, float32_matmul_precision, "highest",
+    "Accumulate precision for float32 matmul and convolution: "
+    "highest (float32), high (tf32), medium (bfloat16). "
+    "float16/bfloat16 inputs always accumulate in float32.");
+
+void setter_float32_matmul_precision(const string& old_value, const string& value) {
+    int tier = parse_float32_precision_tier(value);
+    // Throwing here rolls the flag back to `old_value` (see DEFINE_FLAG_WITH_SETTER),
+    // so a typo leaves the previous policy in force instead of a half-applied one.
+    if (tier < 0)
+        LOGf << "float32_matmul_precision must be one of highest, high, medium; got"
+            << '"' >> value >> '"';
+    float32_matmul_precision_tier = tier;
+}
+
+// Deprecated: each raises the tier for the domain it names. Kept because they
+// are what `torch.backends.*` maps onto and what existing code sets; prefer
+// float32_matmul_precision, which covers both domains at once.
+DEFINE_FLAG(int, use_tensorcore, 0,
+    "Deprecated, use float32_matmul_precision. Raises the float32 accumulate "
+    "tier for matmul and convolution: 1=high(tf32), 2 and 3=medium(bfloat16).");
+DEFINE_FLAG(int, cuda_allow_tf32, 0,
+    "Deprecated, use float32_matmul_precision. Raises the float32 matmul "
+    "accumulate tier to high (tf32).");
+DEFINE_FLAG(int, cuda_allow_cudnn_tf32, 0,
+    "Deprecated, use float32_matmul_precision. Raises the float32 cuDNN "
+    "convolution accumulate tier to high (tf32).");
 
 unique_ptr<std::default_random_engine> eng;
 

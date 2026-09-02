@@ -11,13 +11,11 @@
 #include "var.h"
 #include "cublas_acc_matmul_op.h"
 #include "cublas_wrapper.h"
+#include "cublas_compute_type.h"
 
 using namespace std;
 
 namespace jittor {
-
-extern int use_tensorcore;
-extern int cuda_allow_tf32;
 
 #ifndef JIT
 
@@ -96,43 +94,17 @@ void CublasAccMatmulOp::jit_run() {
         || b->dtype() == ns_float64 || c->dtype() == ns_float64;
 
     // a: [n,m], b: [m,k], c: [n,k]
-    #if CUDART_VERSION >= 11000
-    cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT;
-    cublasComputeType_t computeType = has_fp64 ? CUBLAS_COMPUTE_64F : CUBLAS_COMPUTE_32F;
-    if (!has_fp64 && use_tensorcore>=3) {
-        computeType = CUBLAS_COMPUTE_32F_FAST_16F;
-    } else if (!has_fp64 && use_tensorcore==2) {
-        computeType = CUBLAS_COMPUTE_32F_FAST_16BF;
-    } else if (!has_fp64 && (use_tensorcore==1 || cuda_allow_tf32)) {
-        computeType = CUBLAS_COMPUTE_32F_FAST_TF32;
-    }
-    if (has_fp16) {
-        computeType = CUBLAS_COMPUTE_16F;
-    } else if (has_bf16) {
-        computeType = use_tensorcore ? CUBLAS_COMPUTE_32F_FAST_16BF : CUBLAS_COMPUTE_32F;
-    }
-    if (computeType == CUBLAS_COMPUTE_16F || computeType == CUBLAS_COMPUTE_64F) {
+    CublasGemmMode mode = cublas_gemm_mode(has_fp16, has_bf16, has_fp64);
+    auto computeType = mode.compute;
+    auto algo = mode.algo;
+    if (mode.typed_alpha) {
         alpha_p = (void*)&alpha;
         beta_p = (void*)&beta;
     }
-    #else
-    cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT;
-    cudaDataType_t computeType = get_dtype(c->dtype());
-    if (use_tensorcore) {
-        algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
-    }
-    if (has_fp16) {
-        computeType = CUDA_R_16F;
-        algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
-    } else if (has_bf16) {
-        computeType = CUDA_R_32F;
-        algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
-    }
-    if (computeType == CUDA_R_16F || computeType == CUDA_R_64F) {
-        alpha_p = (void*)&alpha;
-        beta_p = (void*)&beta;
-    }
-    #endif
+    LOGvvv << "cublas_acc_matmul algo select:"
+        << "precision=" >> float32_precision_tier_name(mode.tier)
+        << "computeType=" >> cublas_compute_type_name(computeType)
+        << "algo=" >> cublas_gemm_algo_name(algo);
     int ldb, lda;
     ldb = '@Trans_b' == 'N' ? k : m;
     lda = '@Trans_a' == 'N' ? m : n;

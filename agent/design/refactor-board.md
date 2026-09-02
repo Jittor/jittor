@@ -120,7 +120,8 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | `asm_tuner.py` 非原子写 `.s`，并发编译读到截断的汇编 | **已修**：`pass_asm()` 改成写 `<路径>.tmp.<pid>` 再 `os.replace`。判据是 inode——改名换 inode，原地重写不换，也就不会消掉那个窗口；用例 `test_asm_tuner.py::TestAsmTunerWritesAtomically` 钉住。缓存里已经存在的坏 `.s` 不会自动修复，删掉再跑 | 构建，`1919b035` |
 | `tests/backends/cuda/test_backend_teardown.py` 过不了 0.21 的静态门禁 | **已修**：gates 在 `a5ce7310` 里已改成 `run_python_child(..., crash_isolated=True)`。cudabk 复核了改后的文件保留全部断言（无 terminate / 退出码 0 / 有 teardown 记录 / 真错误 `cudaErrorIllegalAddress` 仍可见）加那条干净退出的对照，并把 `cuda-backend-choice-proof` 里「子进程 abort 会带走 pytest」那段从只描述现象改成指向 helper 的 `crash_isolated`（`1b117a91`） | 门禁 gates，`a5ce7310` |
 | 下一次 rebase 会全量重编一次 | 9.04（`2569fe3b`）同时改了缓存路径与缓存键格式，**这是预期的，不是缓存坏了，不要删自己的 `JITTOR_HOME`**（本机冷构建约 63s）。另外 `cache_name` 的语义从「不设 = 当前 git 分支」变成「不设 = `default`」——靠分支自动分开缓存来隔离并行任务的，改成显式设 `cache_name` 或不同 `JITTOR_HOME`；反过来切分支不再触发全量重编 | 全体，已由协调者广播 |
-| 8.03 的前期分析（未实现，交接用） | **三份 compute type 的逐字差异**：`cublas_matmul_op.cc` 与 `cublas_batched_matmul_op.cc` 在 `CUDART_VERSION>=11` 分支上**逐字相同**；`cublas_acc_matmul_op.cc` 只差 fp16 那一行——前两份是 `computeType = use_tensorcore ? CUBLAS_COMPUTE_16F : CUBLAS_COMPUTE_32F` 且同时设 algo，第三份**无条件** `CUBLAS_COMPUTE_16F` 且不设 algo。所以同一个 fp16 矩阵乘的累加精度取决于图里选中哪个算子。`cublas_acc_matmul` 全仓只有一个调用点（`tests/backends/cuda/test_cublas_matmul_grad.py:84`）。**等价映射**：`float32_matmul_precision` 三档可以做到默认值与今天完全等价——`highest` ≡ 今天的 `use_tensorcore=0, cuda_allow_tf32=0` ≡ `CUBLAS_COMPUTE_32F`；`high` ≡ `CUBLAS_COMPUTE_32F_FAST_TF32`（今天的 `use_tensorcore==1 || cuda_allow_tf32`，卷积侧对应 `CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION`）；`medium` ≡ `CUBLAS_COMPUTE_32F_FAST_16BF`（今天的 `use_tensorcore==2`），与 torch 的三档语义一致。**因此不改默认行为，也就不需要生态 harness 的端到端数据支撑**。`use_tensorcore>=3` 的 `CUBLAS_COMPUTE_32F_FAST_16F` 在 torch 三档里没有对应物，是要单独决定的一条（保留为第四档，或并进 medium，或删）。**唯一的实质行为变化**：`acc_matmul` 的 fp16 累加从 16F 变 32F——方向是对的（与 torch 默认及另外两份实现一致），影响面是那一个测试。卷积侧的 `cuda_allow_cudnn_tf32` 与 matmul 侧的 `cuda_allow_tf32` 今天是两个独立 flag，收敛后共用一个 | CUDA 后端，下一位接手 8.03 的人 |
+| 8.03 的前期分析（未实现，交接用） | **已落地**，见 8.03 与 `agent/design/float32-precision-policy.md`（三档映射表、默认值为何不变、两条实质行为变化各自的证据）。 | 已完成 |
+| 7.08 的 tf32 映射可以再进一步（8.03 之后） | 9aaedba9 把 high/medium 的细分记在 Python 侧（`_torch_float32_matmul_refinement`），理由是「Jittor 表达不了」。8.03 之后 `jt.flags.float32_matmul_precision` 是真的三档 C++ 状态，`medium` 会真的走 bf16 累加，**表达得了了**。但接上去之前要先决定：Jittor 这个策略是 matmul 与卷积**共用**的，torch 的 `set_float32_matmul_precision` 不动 cuDNN；直接接到共用策略上会让下游一句 `set_float32_matmul_precision("high")` 把卷积也降到 tf32。要么 shim 只写 per-domain 覆盖（现状，medium 仍然只到 tf32），要么核心再分出 matmul-only 一档。cudabk 没有替 7.08 做这个决定 | 7.08 接手人 |
 | `jt.flags.nvcc_flags` 的拼法变了 | 9.08 之后架构 flag 是 `--generate-code=arch=...,code=...`，不再是 `-arch=compute_N -code=sm_N`。按后者做字符串匹配的地方要改 | 各分区自查，`2d71f792` |
 | 全树跑时 `test_notebooks.py` 没有被当成 manual 跳过 | **已修**：`pytest_collection_modifyitems` 里 `test_notebooks.py` 的 `pytest.mark.manual` 加在跳过判断**之后**，所以全树跑时它照跑不误——2026-09-03 的全树原生一遍里实测 537 秒，是全树最慢的一项（第二名 289 秒）。现在所有标记先挂完再统一判断，manual 探针改由 `JITTOR_TEST_MANUAL=1` 或 `-m manual` 显式打开。**这是「筛选逻辑的顺序决定筛选结果」的第三例**（另两例：按 `sys.argv` 选 shim 模式、`@onlyCPU` 被设备过滤全部跳过） | 门禁 gates，`5c0f2364`（0.13） |
 
@@ -396,7 +397,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 7.18 | 布局收尾 | 待领 | | |
 | 8.01 | 描述符与 workspace 一律 RAII | 已合并 | cudabk | afb08e88 |
 | 8.02 | 集合通信走通信流加事件依赖，支持 `GroupStart/End` 桶化 | 待领 | | |
-| 8.03 | 精度策略收敛 | 待领（cudabk 已完成分析，见 A 表「8.03 的前期分析」） | | |
+| 8.03 | 精度策略收敛 | 已合并 | cudabk | PENDING |
 | 8.04 | cuDNN 9 | 待领 | | |
 | 8.05 | MKL | 待领 | | |
 | 8.06 | ACL 去样板 | 待领 | | |

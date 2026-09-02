@@ -29,9 +29,6 @@ static inline int findc(const char* format, const char& c) {
 
 namespace jittor {
 
-extern int use_tensorcore;
-extern int cuda_allow_cudnn_tf32;
-
 #ifndef JIT
 
 static inline void get_shape(Var* x, const char* f, const string& format, int& a, int& b, int &c, int& d) {
@@ -148,20 +145,24 @@ void CudnnConvBackwardXOp::jit_run() {
     // is the kernel rc order
     // currently, No perf difference is observed between
     // this two mode
+    bool has_fp16_or_bf16 = x->dtype() == ns_float16
+        || y->dtype() == ns_float16 || w->dtype() == ns_float16
+        || x->dtype() == ns_bfloat16
+        || y->dtype() == ns_bfloat16 || w->dtype() == ns_bfloat16;
+    cudnnDataType_t conv_compute_type =
+        cudnn_conv_compute_type(has_fp16_or_bf16, getDataType<Ty>());
     int conv_math_key = 0;
 #ifndef IS_ROCM
     bool fp32_conv = x->dtype() == ns_float32
         && y->dtype() == ns_float32 && w->dtype() == ns_float32;
-    cudnnMathType_t conv_math_type = CUDNN_DEFAULT_MATH;
-    if (use_tensorcore || (fp32_conv && cuda_allow_cudnn_tf32)) {
-        conv_math_type = CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION;
-#if CUDNN_VERSION >= 8000
-    } else if (fp32_conv) {
-        conv_math_type = CUDNN_FMA_MATH;
-#endif
-    }
+    cudnnMathType_t conv_math_type =
+        cudnn_conv_math_type(has_fp16_or_bf16, fp32_conv);
     conv_math_key = static_cast<int>(conv_math_type);
 #endif
+    LOGvvv << "cudnn_conv_backward_x precision select:"
+        << "precision=" >> float32_precision_tier_name(float32_conv_tier())
+        << "computeType=" >> cudnn_data_type_name(conv_compute_type)
+        << "mathType=" >> cudnn_math_type_name(conv_math_key);
 
     int dimY[] = {
         (int)y->shape[findc("@YFORMAT", 'a')], // n
@@ -216,7 +217,7 @@ void CudnnConvBackwardXOp::jit_run() {
         cudnnOdesc, getDataType<Ty>(), 4, dimY, strideY));
     checkCudaErrors(cudnnSetConvolutionNdDescriptor(
         cudnnConvDesc, 2, padA, convstrideA, dilationA,
-        CUDNN_CROSS_CORRELATION, getDataType<Ty>()));
+        CUDNN_CROSS_CORRELATION, conv_compute_type));
     // MIOpen requires groups to be set after descriptor initialization
     checkCudaErrors(cudnnSetConvolutionGroupCount( cudnnConvDesc, groups ));
 #ifndef IS_ROCM
