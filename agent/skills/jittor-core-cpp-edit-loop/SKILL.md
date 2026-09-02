@@ -120,6 +120,25 @@ open(out_dir + tag + ".cc", "w").write(open(src_path).read())
 
 dump 脚本按分区放在自己的 `$TMPDIR` 下，不要提交；把 diff 摘要写进提交说明。
 
+### 四个会让 A/B 比对说谎的坑（都踩过）
+
+1. **JIT 缓存会让「改后」重用「改前」的源码。** 同一个 `JITTOR_HOME`、同一组
+   `compile_options`，第二次跑直接命中缓存里的 `.cc`，diff 全绿——而你什么都没测到。
+   解法是给每一轮一个**只改 jit key、不进生成文本**的整数标记：
+   `co["_ab"] = 1001` / `1002`。别为此换 `JITTOR_HOME`，那是一次十分钟的冷编译。
+2. **`compile_options` 的值必须是 int。** 写成字符串会抛
+   `Check failed: is_type<typename T::key_type>(key) && is_type<...>(value)`，
+   来自 `py_converter.h`，与代码生成毫无关系，很容易被当成自己改坏了。
+3. **`rep[1][1]` 只是其中一个 kernel。** 一条表达式常常产生**多个**融合算子
+   （`mean` 加 broadcast 就是两个），profile 表里各占一行，而行的顺序不稳定：
+   两轮各抓到不同的那一个，diff 里就出现一段与你的改动无关的"差异"。
+   要比对就把每一行里存在的 `.cc` 路径**全部**读出来，排序后拼成一份再 diff。
+4. **函数名里有 jit key 的哈希**（`func_b8376c61c41d5631_0`）。加了 §1 的标记之后
+   这个哈希必然不同，比对前统一替换掉：`sed -E 's/func_[0-9a-f]{8,}_/func_HASH_/g'`。
+
+另外：dump 脚本里的数值断言不要只写 `rtol`。`a - mean(a)` 这类结果贴着零，
+`np.allclose(x, y, rtol=1e-4)` 会失败，看起来像"改动把值算错了"，其实是少写了 `atol`。
+
 ### 顺带会查出来的东西：「它对，但对的原因是别人恰好不动它」
 
 代码生成器里有大量跨 pass 的隐式约定（谁先跑、谁设了哪个 attr、生成的语句

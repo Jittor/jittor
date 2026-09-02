@@ -852,6 +852,90 @@ static void fix_op_member(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Identifier renaming inside a fused kernel.
+//
+// __get_fused_src splices several ops' jit_run bodies into one function, so
+// every op-local name gets an "op{i}_" prefix to keep the ops apart.  Names
+// that are *not* op-local -- language keywords, types the runtime knows,
+// members of the op struct -- have to be left alone, and are listed here.
+//
+// A name missing from these tables is not reported here: it is silently
+// renamed, and the C++ compiler then complains about "op0_size_t", an
+// identifier nobody wrote.  check_rename_conflict() below turns the common
+// shape of that mistake back into a jittor-level error that names the
+// identifier and the op.
+// ---------------------------------------------------------------------------
+
+// A member of an op struct that a jit_run body may name directly.
+// is_var marks the Var* members: those additionally go into op_members, the
+// positional input/output contract FusedOp relies on (see fix_op_member).
+struct JitOpMember {
+    const char* name;
+    bool is_var;
+};
+
+static const JitOpMember jit_op_members[] = {
+    {"x",       true},
+    {"y",       true},
+    {"z",       true},
+    {"cond",    true},
+    {"output",  true},
+    {"extras",  true},
+    // scalar members: bound like the others but not part of op_members
+    {"left",    false},
+    {"right",   false},
+};
+
+static const JitOpMember* find_jit_op_member(const string& s) {
+    for (const auto& m : jit_op_members)
+        if (s == m.name) return &m;
+    return nullptr;
+}
+
+// Identifiers that can never be op-local, so they are never renamed:
+// the C++ keyword set, the standard integer/size types, the CUDA builtins and
+// the jittor runtime names an op body is allowed to reference.  Types
+// registered through OpByType (int32/float32/float16/...) are checked
+// separately at call time because they are registered dynamically.
+static const unordered_set<string>& jit_reserved_identifiers() {
+    static const unordered_set<string> reserved = {
+        // --- C++ keywords, ISO/IEC 14882 [lex.key] -------------------------
+        "alignas", "alignof", "and", "and_eq", "asm", "auto",
+        "bitand", "bitor", "bool", "break",
+        "case", "catch", "char", "char8_t", "char16_t", "char32_t", "class",
+        "co_await", "co_return", "co_yield", "compl", "concept", "const",
+        "consteval", "constexpr", "constinit", "const_cast", "continue",
+        "decltype", "default", "delete", "do", "double", "dynamic_cast",
+        "else", "enum", "explicit", "export", "extern",
+        "false", "float", "for", "friend", "goto",
+        "if", "inline", "int", "long", "mutable",
+        "namespace", "new", "noexcept", "not", "not_eq", "nullptr",
+        "operator", "or", "or_eq", "private", "protected", "public",
+        "register", "reinterpret_cast", "requires", "return",
+        "short", "signed", "sizeof", "static", "static_assert", "static_cast",
+        "struct", "switch", "template", "this", "thread_local", "throw",
+        "true", "try", "typedef", "typeid", "typename",
+        "union", "unsigned", "using", "virtual", "void", "volatile",
+        "wchar_t", "while", "xor", "xor_eq",
+        // --- standard size / width types ----------------------------------
+        "size_t", "ssize_t", "ptrdiff_t", "intptr_t", "uintptr_t",
+        "int8_t", "int16_t", "int32_t", "int64_t",
+        "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+        "uint", "ushort", "ulong", "std",
+        // --- compiler / CUDA builtins -------------------------------------
+        "__restrict__", "__restrict", "__inline__", "__forceinline__",
+        "__global__", "__device__", "__host__", "__shared__", "__constant__",
+        "threadIdx", "blockIdx", "blockDim", "gridDim", "warpSize",
+        "__syncthreads", "atomicAdd", "atomicCAS",
+        // --- jittor runtime names -----------------------------------------
+        "get_random_engine", "CHECK", "STRINGIZE",
+        "Op", "Var", "Node", "itof", "assert", "ASSERT",
+        "float64",
+    };
+    return reserved;
+}
+
 string OpCompiler::__get_fused_src(
     const vector<Op*>& ops,
     const vector<string>& op_srcs,
@@ -869,22 +953,11 @@ string OpCompiler::__get_fused_src(
     fused_begin += "#define JIT 1\n";
     defs["JIT"] = "1";
     const string pattern = "::jit_run() {";
-    // TODO: better check member
-    const unordered_set<string> members = {
-        "x", "y", "z", "cond", "output", "extras"
-    };
-    const unordered_set<string> scalar_members = {
-        "left", "right"
-    };
-    const unordered_set<string> unchanged = {
-        "for", "const", "auto", "get_random_engine",
-        "int", "float", "bool", "CHECK", "STRINGIZE",
-        "void", "__restrict__", "if", "true", "false",
-        "Op", "Var", "Node", "itof", "assert", "ASSERT",
-        "float64"
-    };
+    // an identifier is left alone if it is reserved (jit_reserved_identifiers),
+    // is a dtype registered by an OpByType, is qualified (contains "::"), or is
+    // one of the LOG* macros; everything else is op-local and gets renamed.
     auto not_change = [&](const string& s) -> bool {
-        if (unchanged.count(s)) return true;
+        if (jit_reserved_identifiers().count(s)) return true;
         for (auto op_type : op_types)
             if (op_type->types.count(s))
                 return true;
@@ -930,6 +1003,32 @@ string OpCompiler::__get_fused_src(
         std::regex_match(src, cm, e);
         ASSERT(cm.size()>=2) << src;
         string name3 = cm[1];
+        // macros this op defines, and the last identifier we renamed, both used
+        // by check_rename_conflict below
+        unordered_set<string> op_defines;
+        string prev_renamed;
+        uint prev_renamed_end = 0;
+        // Two renamed identifiers with nothing but whitespace between them is a
+        // declaration, so the first one was being used as a type name -- and we
+        // just renamed that type out of existence.  Report it here, naming the
+        // identifier, instead of letting the C++ compiler report an error about
+        // an "op0_size_t" that appears nowhere in anybody's source.
+        auto check_rename_conflict = [&](uint pos) {
+            if (!prev_renamed.size() || pos <= prev_renamed_end) return;
+            if (op_defines.count(prev_renamed)) return;
+            for (uint p=prev_renamed_end; p<pos; p++)
+                if (!(src[p]==' ' || src[p]=='\t' || src[p]=='\n' || src[p]=='\r'))
+                    return;
+            LOGf << "Jit error: op" >> oi >> " (" >> ops[oi]->name() >> ") uses"
+                << "identifier" >> '\'' >> prev_renamed >> '\''
+                << "where C++ expects a type, but jittor does not know that name,"
+                << "so it renamed it to" >> '\'' >> ("op"+S(oi)+"_"+prev_renamed) >> "'."
+                << "\nIdentifiers inside a fused op are op-local unless they are"
+                << "reserved. If this is a global name (a keyword, a standard type,"
+                << "a runtime helper), add it to jit_reserved_identifiers() in"
+                << "op_compiler.cc; if it is meant to be op-local, give it a"
+                << "#define in this op so it is renamed together with its uses.";
+        };
         for (uint i=0; i<src.size(); i++) {
             if (src[i] == '#' &&
                 (i+1<src.size() && src[i+1] == 'i') &&
@@ -969,6 +1068,15 @@ string OpCompiler::__get_fused_src(
                     }
                     j = l;
                 } else {
+                    // op-local macro: "#define T float32" -> "#define op0_T float32".
+                    // Remember the name: a renamed macro standing where C++ wants
+                    // a type is legitimate (that is what "index_t"/"Tx" are), so
+                    // check_rename_conflict below must not flag it.
+                    auto macro_name = src.substr(j, k-j);
+                    auto paren = macro_name.find('(');
+                    if (paren != string::npos)
+                        macro_name = macro_name.substr(0, paren);
+                    op_defines.insert(macro_name);
                     fused_defines += "#define op" + S(oi) + "_";
                     for (; j<l; j++) fused_defines += src[j];
                 }
@@ -999,9 +1107,11 @@ string OpCompiler::__get_fused_src(
                     uint l=j;
                     while (l<src.size() && isvar(src[l])) l++;
                     auto var = src.substr(j, l-j);
+                    const JitOpMember* op_member = nullptr;
                     if (var[0] == ':' || isdigit(var[0]) || not_change(var) || src[j-1]=='.' || src[j-1]=='>') {} else
-                    if (members.count(var) || scalar_members.count(var)) {
-                        bool is_member = members.count(var);
+                    if ((op_member = find_jit_op_member(var))) {
+                        bool is_member = op_member->is_var;
+                        check_rename_conflict(j);
                         string arg_name = "op" + S(oi) + "_" + var;
                         if (l<src.size() && src[l]=='[') {
                             // handle extras[...]
@@ -1028,10 +1138,16 @@ string OpCompiler::__get_fused_src(
                                 op_members[oi].push_back(arg_name);
                         }
                         fused_kernel += arg_name;
+                        prev_renamed = var;
+                        prev_renamed_end = l;
                         j = l-1;
                         continue;
-                    } else
+                    } else {
+                        check_rename_conflict(j);
                         fused_kernel += "op" + S(oi) + "_";
+                        prev_renamed = var;
+                        prev_renamed_end = l;
+                    }
                     for (uint p=j; p<l; p++) fused_kernel += src[p];
                     j = l-1;
                     continue;
