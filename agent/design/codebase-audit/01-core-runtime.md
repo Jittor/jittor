@@ -143,6 +143,23 @@ C++ 头文件。第三，错误处理只有一档：ASSERT/CHECK/LOGf 全部抛 
 | `DEFINE_FLAG_WITH_SETTER` 的 setter 在赋值**之前**被调用 | `log.h:228-242` `set_##name(v) { setter_##name(v); name = v; }`；绕过证据 `tracer.cc:137-139` 的 setter 必须手工回写才能让另一个 setter 看到新值；`log.cc:441` 的 setter 抛异常时赋值被跳过而用户以为设置成功 | setter 看到的永远是旧值，每个有副作用的 setter 都要自己打补丁 | 先赋值再调 setter，签名改成收新旧两值 | 主要 |
 | `token_replace_all` 用异常做循环终止 | `str_utils.cc:227-239` 的正常终止条件是 `:187` 的 CHECK 抛出，即每次调用必然抛一次并走完整的格式化与构造；同一个 catch 还吞掉真正的错误 | 源码改写静默失败并返回未改写的源码；每次调用付一次异常开销 | 用返回值表达"无更多匹配" | 次要 |
 
+## 执行更正（2026-09-03，还原 data.gz 之后直接读源码）
+
+**`SharedReducePass` 零命中的原因已查明，不是「匹配条件太严」，而是它默认根本不跑。**
+还原出的 `shared_reduce_pass.cc` 里 `run()` 第二行就是 `if (para_opt_level < 4) return;`，
+而 `para_opt_level` 的默认值是 3（`loop_var_analyze_pass.cc:17` 的 `DEFINE_FLAG`）。
+下面那条「无法查明它的触发条件」的描述到此闭合：触发条件是一个默认关着的优化等级开关。
+这也说明为什么它「在 `pass_manager.cc` 确实被调用」却一次都不生效。
+
+**`tests/compiler/test_atomic_tuner.py` 的第 4 条用例已失效，与 `WarpReducePass` 无关。**
+结构上 AtomicTunerPass 在 `pass_manager.cc:117`、WarpReducePass 在 `:120`，前者先跑，后者不可能
+影响它。实测四次 `check()` 里前三次日志正常，失败的是 `x.sum()+x.sqr().mean()` 那次——原因是
+CUDA 全量归约的 CUB 快路径把 `Var.sum`/`Var.mean` 猴补成两级 CUB 折叠，全量归约**根本不再进
+代码生成器**，自然没有 atomicAdd 可调。绕开猴补直接 `jt.reduce(x,"add")`，两条日志一字不差地回来。
+这正是本仓库另一条审计发现（`install_full_reduce_fast_path` 只替换 `Var.sum`/`Var.mean` 而不替换
+`jt.sum`/`jt.mean`，见 [Python API 层](02-python-api.md)）的一个下游后果：**同一语义两条路径，
+测试钉在其中一条上，另一条被替换后测试静默失效**。
+
 ## 补充：CUDA 归约没有任何优化路径（2026-09-02 实测）
 
 追查 UNet 剩余 3% 时发现的，是第一节「核心的一部分不在源码树里」的一个具体代价。
