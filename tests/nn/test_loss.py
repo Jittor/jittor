@@ -175,5 +175,119 @@ class TestLoss(unittest.TestCase):
         tc_y=tc_loss(torch.from_numpy(output), torch.from_numpy(target))
         assert np.allclose(jt_y.numpy(), tc_y.numpy())
         
+class TestLossReductionContract(unittest.TestCase):
+    """Every loss must reject an unrecognised ``reduction`` the same way.
+
+    Before the shared helper, ``reduction='MEAN'`` produced three different
+    outcomes: ``cross_entropy_loss`` silently behaved like ``'none'``,
+    ``l1_loss`` silently behaved like ``'mean'``, and ``mse_loss`` raised
+    jittor's internal "no such reduce" from ``Var.reduce``. Two of the three
+    gave a number back.
+    """
+
+    BAD = ("MEAN", "Sum", "average", "", "batchmean")   # batchmean: kl_div only
+
+    def _pair(self, n=6):
+        rng = np.random.RandomState(0)
+        a = jt.array(rng.randn(n).astype("float32"))
+        b = jt.array(rng.randn(n).astype("float32"))
+        return a, b
+
+    def _logits_and_labels(self):
+        rng = np.random.RandomState(1)
+        output = jt.array(rng.randn(4, 3).astype("float32"))
+        target = jt.array(np.array([0, 1, 2, 1], dtype="int32"))
+        return output, target
+
+    def _cases(self):
+        a, b = self._pair()
+        probs = jt.array(np.array([0.1, 0.4, 0.6, 0.9, 0.2, 0.7], "float32"))
+        labels = jt.array(np.array([0., 1., 1., 1., 0., 0.], "float32"))
+        output, target = self._logits_and_labels()
+        log_probs = jnn.log_softmax(output, dim=1)
+        cases = {
+            "mse_loss": lambda r: jnn.mse_loss(a, b, reduction=r),
+            "l1_loss": lambda r: jnn.l1_loss(a, b, reduction=r),
+            "smooth_l1_loss": lambda r: jnn.smooth_l1_loss(a, b, reduction=r),
+            "huber_loss": lambda r: jnn.huber_loss(a, b, reduction=r),
+            "cross_entropy_loss":
+                lambda r: jnn.cross_entropy_loss(output, target, reduction=r),
+            "nll_loss": lambda r: jnn.nll_loss(log_probs, target, reduction=r),
+            "binary_cross_entropy":
+                lambda r: jnn.binary_cross_entropy(probs, labels, reduction=r),
+            "binary_cross_entropy_with_logits":
+                lambda r: jnn.binary_cross_entropy_with_logits(
+                    a, labels, reduction=r),
+            "kl_div": lambda r: jnn.kl_div(log_probs, jt.exp(log_probs),
+                                           reduction=r),
+            "gaussian_nll_loss":
+                lambda r: jnn.gaussian_nll_loss(
+                    a, b, jt.abs(b) + 1.0, reduction=r),
+            "margin_ranking_loss":
+                lambda r: jnn.margin_ranking_loss(
+                    a, b, jt.ones((6,)), reduction=r),
+        }
+        return cases
+
+    def test_unknown_reduction_always_raises_value_error(self):
+        for name, call in self._cases().items():
+            for bad in self.BAD:
+                if name == "kl_div" and bad == "batchmean":
+                    continue           # a valid value for kl_div only
+                with self.subTest(loss=name, reduction=bad):
+                    with self.assertRaises(ValueError) as ctx:
+                        out = call(bad)
+                        # force evaluation in case the loss is lazy
+                        out.sync()
+                    assert "reduction" in str(ctx.exception), ctx.exception
+
+    def test_the_three_valid_reductions_still_agree_with_each_other(self):
+        for name, call in self._cases().items():
+            with self.subTest(loss=name):
+                none = call("none")
+                summed = call("sum")
+                mean = call("mean")
+                np.testing.assert_allclose(
+                    summed.numpy(), none.numpy().sum(), rtol=1e-5, atol=1e-5,
+                    err_msg=name)
+                np.testing.assert_allclose(
+                    mean.numpy(), none.numpy().mean(), rtol=1e-5, atol=1e-5,
+                    err_msg=name)
+
+    def test_kl_div_batchmean(self):
+        output, _ = self._logits_and_labels()
+        log_probs = jnn.log_softmax(output, dim=1)
+        target = jt.exp(log_probs)
+        none = jnn.kl_div(log_probs, target, reduction="none")
+        got = jnn.kl_div(log_probs, target, reduction="batchmean")
+        np.testing.assert_allclose(got.numpy(), none.numpy().sum() / 4,
+                                   rtol=1e-5, atol=1e-5)
+
+    def test_legacy_size_average_and_reduce_follow_torch(self):
+        # torch._Reduction.legacy_get_string: size_average=None means True and
+        # reduce=None means True, so (None, True) is 'mean' -- jittor's copies
+        # of this translation read None as False and answered 'sum'.
+        probs = jt.array(np.array([0.1, 0.4, 0.6, 0.9], "float32"))
+        labels = jt.array(np.array([0., 1., 1., 0.], "float32"))
+        none = jnn.binary_cross_entropy(probs, labels, reduction="none").numpy()
+        combos = {
+            (None, True): none.mean(),
+            (True, True): none.mean(),
+            (False, True): none.sum(),
+            (None, False): none,
+            (True, False): none,
+            (False, False): none,
+            (True, None): none.mean(),
+            (False, None): none.sum(),
+        }
+        for (size_average, reduce), expected in combos.items():
+            with self.subTest(size_average=size_average, reduce=reduce):
+                got = jnn.binary_cross_entropy(
+                    probs, labels, size_average=size_average,
+                    reduce=reduce).numpy()
+                np.testing.assert_allclose(got, expected, rtol=1e-5, atol=1e-5)
+
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -4,6 +4,53 @@ import jittor as jt
 
 from .vector import cosine_similarity
 
+#: the reductions every torch loss accepts
+_REDUCTIONS = ("none", "mean", "sum")
+
+
+def _check_reduction(reduction, allowed=_REDUCTIONS):
+    """Reject an unrecognised ``reduction``.
+
+    Each loss used to spell its own reduction dispatch, and they disagreed
+    about what an unknown value means: ``cross_entropy_loss`` fell through to
+    the per-element branch (silently ``'none'``), ``l1_loss`` fell through to
+    ``mean``, and ``mse_loss`` handed the string to ``Var.reduce`` and got
+    jittor's internal "no such reduce". Two of the three returned a number.
+    """
+    if reduction not in allowed:
+        raise ValueError(
+            "reduction must be one of %s, got %r"
+            % (list(allowed), reduction))
+
+
+def _reduce(loss, reduction, allowed=_REDUCTIONS):
+    """Apply a torch-style ``reduction`` to a per-element loss."""
+    _check_reduction(reduction, allowed)
+    if reduction == "none":
+        return loss
+    if reduction == "sum":
+        return loss.sum()
+    return loss.mean()
+
+
+def _legacy_reduction(reduction, size_average, reduce):
+    """Translate torch's deprecated ``size_average``/``reduce`` pair.
+
+    Follows ``torch.nn._reduction.legacy_get_string``: both default to *True*
+    when left as ``None``. The copies of this translation in this module read
+    ``size_average=None`` as false and answered ``'sum'`` where torch says
+    ``'mean'``.
+    """
+    if size_average is None and reduce is None:
+        return reduction
+    if size_average is None:
+        size_average = True
+    if reduce is None:
+        reduce = True
+    if not reduce:
+        return "none"
+    return "mean" if size_average else "sum"
+
 
 def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction='mean'):
     target_shape = target.shape
@@ -29,15 +76,15 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
     output = output - output.max([1], keepdims=True)
     logsum = output.exp().sum(1).log()
     loss = (logsum - (output*target).sum(1)) * target_weight
+    _check_reduction(reduction)
     if reduction == 'sum':
         return loss.sum()
-    elif reduction == 'mean':
+    if reduction == 'mean':
         # Torch divides by the sum of selected class weights. That denominator
         # may legitimately be negative; clamping it to a positive epsilon
         # changes both the sign and scale of the result.
         return loss.sum() / target_weight.sum()
-    else:
-        return loss.reshape(target_shape)
+    return loss.reshape(target_shape)
 
 
 # PyTorch and older Jittor applications use this shorter spelling.  The native
@@ -48,9 +95,7 @@ cross_entropy = cross_entropy_loss
 
 def mse_loss(output, target, reduction="mean"):
     loss = (output-target).sqr()
-    # reduction='none' returns the per-element loss (torch semantics); Var.reduce only
-    # knows mean/sum, so don't forward 'none' to it (it raised "no such reduce").
-    return loss if reduction == "none" else loss.reduce(reduction)
+    return _reduce(loss, reduction)
 
 
 def bce_loss(output, target, weight=None, size_average=True):
@@ -67,9 +112,7 @@ def bce_loss(output, target, weight=None, size_average=True):
 
 def l1_loss(output, target, reduction="mean"):
     loss = (output-target).abs()
-    if reduction == "none": return loss
-    if reduction == "sum": return loss.sum()
-    return loss.mean()
+    return _reduce(loss, reduction)
 
 
 def smooth_l1_loss(y_true, y_pred,reduction="mean"):
@@ -84,14 +127,7 @@ def smooth_l1_loss(y_true, y_pred,reduction="mean"):
     diff = jt.abs(y_true - y_pred)
     less_than_one = (diff<1.0).float32()
     loss = (less_than_one * 0.5 * diff.sqr()) + (1 - less_than_one) * (diff - 0.5)
-    if reduction=="mean":
-        return loss.mean()
-    elif reduction=="sum":
-        return loss.sum()
-    elif reduction=="none":
-        return loss
-    else:
-        raise ValueError(f'not support {reduction}')
+    return _reduce(loss, reduction)
 
 
 def huber_loss(input, target, reduction="mean", delta=1.0):
@@ -104,13 +140,7 @@ def huber_loss(input, target, reduction="mean", delta=1.0):
         0.5 * distance * distance,
         delta * (distance - 0.5 * delta),
     )
-    if reduction == "none":
-        return loss
-    if reduction == "sum":
-        return loss.sum()
-    if reduction == "mean":
-        return loss.mean()
-    raise ValueError(f"not support {reduction}")
+    return _reduce(loss, reduction)
 
 
 def binary_cross_entropy(input, target, weight=None, size_average=None, reduce=None,
@@ -121,17 +151,8 @@ def binary_cross_entropy(input, target, weight=None, size_average=None, reduce=N
     loss = -(target * log_input + (1.0 - target) * log_inverse)
     if weight is not None:
         loss = loss * weight
-    if size_average is not None or reduce is not None:
-        reduction = "mean" if size_average else "sum"
-        if reduce is False:
-            reduction = "none"
-    if reduction == "none":
-        return loss
-    if reduction == "sum":
-        return loss.sum()
-    if reduction == "mean":
-        return loss.mean()
-    raise ValueError(f"not support {reduction}")
+    reduction = _legacy_reduction(reduction, size_average, reduce)
+    return _reduce(loss, reduction)
 
 
 def kl_div(input, target, size_average=None, reduce=None, reduction="mean",
@@ -142,48 +163,26 @@ def kl_div(input, target, size_average=None, reduce=None, reduction="mean",
     else:
         safe_target = jt.maximum(target, 1e-12)
         loss = target * (jt.log(safe_target) - input)
-    if reduction == "none":
-        return loss
-    if reduction == "sum":
-        return loss.sum()
+    allowed = _REDUCTIONS + ("batchmean",)
+    _check_reduction(reduction, allowed)
     if reduction == "batchmean":
         return loss.sum() / input.shape[0]
-    if reduction == "mean":
-        return loss.mean()
-    raise ValueError(f"not support {reduction}")
+    return _reduce(loss, reduction, allowed)
 
 
 def margin_ranking_loss(input1, input2, target, margin=0.0,
                         size_average=None, reduce=None, reduction="mean"):
     loss = jt.maximum(-target * (input1 - input2) + margin, 0.0)
-    if size_average is not None or reduce is not None:
-        reduction = "mean" if size_average else "sum"
-        if reduce is False:
-            reduction = "none"
-    if reduction == "none":
-        return loss
-    if reduction == "sum":
-        return loss.sum()
-    if reduction == "mean":
-        return loss.mean()
-    raise ValueError(f"not support {reduction}")
+    reduction = _legacy_reduction(reduction, size_average, reduce)
+    return _reduce(loss, reduction)
 
 
 def cosine_embedding_loss(input1, input2, target, margin=0.0,
                           size_average=None, reduce=None, reduction="mean"):
     cosine = cosine_similarity(input1, input2)
     loss = jt.ternary(target == 1, 1.0 - cosine, jt.maximum(cosine - margin, 0.0))
-    if size_average is not None or reduce is not None:
-        reduction = "mean" if size_average else "sum"
-        if reduce is False:
-            reduction = "none"
-    if reduction == "none":
-        return loss
-    if reduction == "sum":
-        return loss.sum()
-    if reduction == "mean":
-        return loss.mean()
-    raise ValueError(f"not support {reduction}")
+    reduction = _legacy_reduction(reduction, size_average, reduce)
+    return _reduce(loss, reduction)
 
 
 def gaussian_nll_loss(input, target, var, full=False, eps=1e-6, reduction="mean"):
@@ -191,13 +190,7 @@ def gaussian_nll_loss(input, target, var, full=False, eps=1e-6, reduction="mean"
     loss = 0.5 * (jt.log(variance) + (input - target) ** 2 / variance)
     if full:
         loss = loss + 0.5 * 1.8378770664093453
-    if reduction == "none":
-        return loss
-    if reduction == "sum":
-        return loss.sum()
-    if reduction == "mean":
-        return loss.mean()
-    raise ValueError(f"not support {reduction}")
+    return _reduce(loss, reduction)
 
 
 def nll_loss(output,target,weight=None,ignore_index=-100,reduction='mean'):
@@ -219,15 +212,13 @@ def nll_loss(output,target,weight=None,ignore_index=-100,reduction='mean'):
         loss = -output[index,target]*weight[target]
     else:
         loss = -output[target[0]]*weight[target[0]]
+    _check_reduction(reduction)
     if reduction=="mean":
         total_weight  = weight[target].sum() if output.ndim==2 else weight[target[0]].sum()
         return loss.sum()/total_weight
-    elif reduction=="sum":
+    if reduction=="sum":
         return loss.sum()
-    elif reduction=="none":
-        return loss
-    else:
-        raise ValueError(f'not support {reduction}')
+    return loss
 
 
 def binary_cross_entropy_with_logits(output, target, weight=None, pos_weight=None, size_average=True, reduction=None):
@@ -251,14 +242,5 @@ def binary_cross_entropy_with_logits(output, target, weight=None, pos_weight=Non
     # torch supports reduction='none'/'sum'/'mean'; the original only had the
     # size_average bool (no per-element 'none'). When reduction is given it wins.
     if reduction is not None:
-        if reduction == "none":
-            return loss
-        if reduction == "sum":
-            return loss.sum()
-        if reduction == "mean":
-            return loss.mean()
-        raise ValueError(f'not support {reduction}')
-    if size_average:
-        return loss.mean()
-    else:
-        return loss.sum()
+        return _reduce(loss, reduction)
+    return loss.mean() if size_average else loss.sum()
