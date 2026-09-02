@@ -205,5 +205,35 @@ class TestInstanceDictParticipatesInGC(unittest.TestCase):
         del v.foo
         self.assertFalse(hasattr(v, "foo"))
 
+class TestScalarConversionBuffer(unittest.TestCase):
+    """A converted Python scalar must survive until its consumer copies it.
+
+    Scalar -> 1-element-array conversion used to hand back the address of one
+    process-wide union, so whatever ran between the conversion and the copy
+    could overwrite the value.  ``Var.data = 2.0`` is exactly that shape: the
+    binding converts 2.0, then ``set_data`` syncs the graph, and a python
+    callback executing inside that sync (numpy_code, fetch) converts scalars of
+    its own.
+    """
+
+    def test_set_data_scalar_survives_callback_during_sync(self):
+        def fwd(np_out, data):
+            # runs during the sync that set_data performs
+            jt.array(7.0)
+            data["outputs"][0][:] = 1.0
+
+        x = jt.numpy_code([(1,)], ["float32"], [jt.zeros(1)], fwd)[0]
+        b = x + 0.0
+        b.data = 2.0
+        np.testing.assert_allclose(b.numpy(), [2.0])
+
+    def test_scalar_arrays_are_correct(self):
+        np.testing.assert_allclose(jt.array(1.5).numpy(), 1.5)
+        np.testing.assert_array_equal(jt.array(7).numpy(), 7)
+        np.testing.assert_array_equal(jt.array(True).numpy(), True)
+        self.assertEqual(str(jt.array(1.5).dtype), "float32")
+        self.assertEqual(str(jt.array(7).dtype), "int32")
+        self.assertEqual(str(jt.array(True).dtype), "bool")
+
 if __name__ == "__main__":
     unittest.main()

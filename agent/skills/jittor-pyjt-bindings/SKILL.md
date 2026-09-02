@@ -96,7 +96,20 @@ self.assertIn("SURVIVED", output)
 CPU 与 CUDA 是两份缓存，两边都要跑一次；CPU-only 用
 `JITTOR_TEST_DEVICES=cpu nvcc_path=""`，快很多。
 
-## 5. 类型对象改了布局时要额外确认的事
+## 5. 选测试文件时别把整个进程翻成 torch 模式
+
+`tests/conftest.py` 会看你在命令行上点了哪些文件：只要其中任何一个属于
+`tests/_helpers/process_modes.py` 的 `TORCH_MODE_PATHS`（`tests/core/test_type_system.py`、
+`tests/core/test_regression.py`、`tests/ops/test_ops.py`、`tests/compat/torch/…` 等），
+它就给**整个 pytest 进程**设上 `JITTOR_TORCH_SHIM=1`。torch 模式改的是全局语义
+（惰性执行、归约默认值、梯度语义、`finfo`/`iinfo` 的形状），于是同一条命令里的原生
+用例会成片地假失败——症状是 `TypeError: all() got ...`、`'finfo' object has no attribute`、
+`number_of_hold_vars` 对不上这类与你的改动毫无关系的错。
+
+判据：**同一个文件单独跑通、和别的文件一起跑就挂**，先查是不是混进了 torch 模式路径。
+把 torch 模式的文件单独起一条命令跑。
+
+## 6. 类型对象改了布局时要额外确认的事
 
 给生成的类型加字段（改 `tp_basicsize`）或改 `tp_flags` 之后，除了新测试还要跑：
 

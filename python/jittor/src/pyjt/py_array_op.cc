@@ -89,17 +89,21 @@ ArrayOp::ArrayOp(PyObject* obj) {
     args.ptr = nullptr;
     allocation.ptr = nullptr;
     void* ori_ptr = nullptr;
+    // ArrayOp copies out of args before this function returns, so the staging
+    // union can live on this frame -- it must not be shared with any other
+    // conversion that might run in between.
+    tmp_data_t scalar;
     if (PyFloat_CheckExact(obj)) {
-        tmp_data.f32 = PyFloat_AS_DOUBLE(obj);
-        args = {&tmp_data, 1, ns_float32};
+        scalar.f32 = PyFloat_AS_DOUBLE(obj);
+        args = {&scalar, 1, ns_float32};
     } else
     if (PyLong_CheckExact(obj)) {
-        tmp_data.i32 = PyLong_AsLong(obj);
-        args = {&tmp_data, 1, ns_int32};
+        scalar.i32 = PyLong_AsLong(obj);
+        args = {&scalar, 1, ns_int32};
     } else
     if (PyBool_Check(obj)) {
-        tmp_data.i8 = obj == Py_True;
-        args = {&tmp_data, 1, ns_bool};
+        scalar.i8 = obj == Py_True;
+        args = {&scalar, 1, ns_bool};
     } else
     if (Py_TYPE(obj) == &PyjtVarHolder.ht_type) {
         auto ptr = GET_RAW_PTR(VarHolder, obj);

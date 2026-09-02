@@ -389,18 +389,34 @@ DEF_IS(ArrayArgs, PyObject*) to_py_object(const T& a) {
     return obj.release();
 }
 
+// A scalar converted here may be held by the caller across arbitrary work --
+// `Var.data = 2.0` syncs the graph before it copies, and a numpy_code/fetch
+// callback running in that sync can convert scalars of its own.  So the
+// ArrayArgs owns its buffer instead of pointing at shared storage.
+template<class T2>
+inline void _fill_scalar_array_args(ArrayArgs& args, T2 value, NanoString dtype) {
+    args.buffer.reset(new char[sizeof(T2)]);
+    *(T2*)args.buffer.get() = value;
+    args.ptr = args.buffer.get();
+    args.shape.push_back(1);
+    args.dtype = dtype;
+}
+
 DEF_IS(ArrayArgs, T) from_py_object(PyObject* obj) {
     if (PyFloat_CheckExact(obj)) {
-        tmp_data.f32 = PyFloat_AS_DOUBLE(obj);
-        return {&tmp_data, 1, ns_float32};
+        T args;
+        _fill_scalar_array_args(args, (float32)PyFloat_AS_DOUBLE(obj), ns_float32);
+        return args;
     }
     if (PyLong_CheckExact(obj)) {
-        tmp_data.i32 = PyLong_AsLong(obj);
-        return {&tmp_data, 1, ns_int32};
+        T args;
+        _fill_scalar_array_args(args, (int32)PyLong_AsLong(obj), ns_int32);
+        return args;
     }
     if (PyBool_Check(obj)) {
-        tmp_data.i8 = obj == Py_True;
-        return {&tmp_data, 1, ns_bool};
+        T args;
+        _fill_scalar_array_args(args, (int8)(obj == Py_True), ns_bool);
+        return args;
     }
     if (Py_TYPE(obj) == &PyjtVarHolder.ht_type) {
         auto ptr = GET_RAW_PTR(VarHolder, obj);

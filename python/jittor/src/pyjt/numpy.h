@@ -122,13 +122,17 @@ inline int64 PyArray_Size(PyArray_Proxy* arr) {
     return size;
 }
 
+// Staging storage for turning one Python scalar into a 1-element array.
+// It used to be a single process-wide instance; every scalar conversion
+// returned *its address*, so the value only survived until the next scalar
+// went through -- and a python callback running inside `sync()` (numpy_code,
+// fetch) is enough to make that happen mid-call.  Each conversion now owns
+// its own storage.
 union tmp_data_t {
     int32 i32;
     float32 f32;
     int8 i8;
 };
-
-EXTERN_LIB tmp_data_t tmp_data;
 
 void numpy_init();
 

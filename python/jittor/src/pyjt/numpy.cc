@@ -53,7 +53,6 @@ PyObject* (*PyArray_NewCopy)(PyObject *, int);
 int (*PyArray_CopyInto)(PyObject *, PyObject *);
 void (*PyArray_CastScalarToCtype)(PyObject* scalar, void* ctypeptr, PyArrayDescr_Proxy* outcode);
 
-tmp_data_t tmp_data;
 
 void numpy_init() {
     PyObjHolder np(PyImport_ImportModule("numpy.core.multiarray"), "numpy is not installed");
