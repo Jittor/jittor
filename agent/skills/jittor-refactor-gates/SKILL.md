@@ -247,3 +247,45 @@ AtomicTunerPass **之后**，原子调优早已打完日志才轮到它改写。
 **git 里根本没有**（2020 年 `8f316a2e` 删的），实现藏在 `python/jittor/utils/data.gz` 解压出的
 `data.cc` 里，编译时 `-include vdp`。所以这三个 pass 的日志 `__FILE__` 是 `data.cc`——
 `log_vprefix` 要写 `data=100` 才抓得到，写 `atomic=100` 抓不到。这就是任务 1.01 要还原的东西。
+
+## 「不报错，只是变慢」——卡住的进程怎么找
+
+今晚出现两次，两次的症状都不是"有东西失败了"，而是**别人的跑变得极慢**：一次是崩溃处理器
+fork 出的 gdb 自己挂住，把被追踪进程 ptrace-stop 在那里；一次是编译池的空闲态死锁，
+一个进程握着构建锁卡了 4 小时 42 分。这类故障不会进任何日志，只会让所有等锁的人变慢。
+
+### 判据
+
+```bash
+# 跑很久、CPU 却接近 0 的 python / pytest / gdb：卡住了，不是在干活
+ps -eo pid,etimes,stat,pcpu,args --sort=-etimes | awk '$2>1800 && $4<1.0' | grep -E "python|pytest|gdb"
+
+# stat 里带 t 或 T 的：被 ptrace 停住了（多半是崩溃处理器 fork 的 gdb 没退出）
+ps -eo pid,stat,args | awk '$2 ~ /^[tT]/'
+
+# 谁握着构建锁
+fuser -v "$JITTOR_HOME/.cache/jittor/jittor.lock" 2>&1
+```
+
+三条都要看：`etimes` 大而 `pcpu` 小说明它在等而不是在算；`t`/`T` 说明它根本不会自己醒过来。
+
+### 处置
+
+- ptrace-stop 的：先杀 gdb（`ps -eo pid,args | grep "[g]db"`），被停住的进程通常会自己继续。
+- 握锁不干活的：确认没有 agent 在用那个 `JITTOR_HOME` 之后再杀；杀完**必须删掉那个
+  `JITTOR_HOME` 的缓存再重跑**，否则半写的产物会在毫不相干的算子上报错。
+- 预防：测试里起可能崩溃的子进程一律 `crash_isolated=True`（见
+  `tests/_helpers/child_process.py`），它同时会给子进程设 `gdb_path=""`——
+  崩溃处理器不 fork gdb，就不会有 gdb 挂住这一类。
+
+### 顺带：性能断言当正确性门禁
+
+机器上常驻十几个 agent 时，**上界型墙钟断言必然假红**，而且归责方向和真回归相反——
+真回归查代码，这类查负载。判据是看断言的方向：
+
+- `assert elapsed < <绝对秒数>`：负载会让它变红，**这是假红的唯一来源**；
+- `assert a_time < b_time * k`（相对比值，最好再 best-of-n）：抗噪好得多；
+- `assertGreater(elapsed, timeout)`：下界，负载只会让它更成立，安全。
+
+修法是把绝对阈值换成相对比值或换成"有界 vs 无界"的断言，**不是把数字放宽**——
+放宽只是把假红推迟到下一次负载更高的时候。

@@ -14,6 +14,7 @@
 | 用例 | 症状 |
 | --- | --- |
 | `tests/compat/torch/test_torch_compat.py` | `RandomOp` 子进程段错误 |
+| `tests/core/test_array.py::TestArray::test_memcopy_overlap` | **墙钟阈值型 flake，非回归。** 断言是 `t2-t1 < 0.010`——「重叠版比纯计算版慢不超过 10 毫秒」，一条**绝对**墙钟阈值。机器常驻十几个 agent、负载 24 时它必然超。两个分区各自独立确认：内存分区在**未打补丁的树**上跑两次失败，绑定分区独立得出同一结论。**归责方向和真回归相反**：真回归查代码，这条查负载 |
 | `tests/compiler/test_atomic_tuner.py::TestAtomicTunerClass::test_atomic_tuner` | 第 4 项 `x.sum()+x.sqr().mean()` 期望两条 `atomictuner: move atomicAdd to loop -1`，实得 0 条。根因是 `032ecfe1`（2026-08-28，起点前 202 个提交）把 CUDA 全量归约改走 `nn/backends/full_reduce_cuda.py` 的 cub 两级折叠 code op，整条全归约不再进融合算子 JIT，AtomicTunerPass 根本看不到 atomic 语句。前三项 add/max/min（reindex_reduce）在起点与起点父提交上都通过 |
 
 （这份表正在用一棵钉在 `9eb696d9` 的只读 worktree 实测补全，跑完会把失败 nodeid 逐条列全。）
@@ -94,6 +95,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 
 | 事项 | 现象 | 建议归属 |
 | --- | --- | --- |
+| 全树只有两条「性能断言当正确性门禁」 | 全树扫了一遍时间断言（`time.time()` / `perf_counter` 的 16 个文件逐个看过）。**上界型**（负载会让它变红）只有两条：`tests/core/test_array.py:81` 的 `t2-t1 < 0.010`（绝对毫秒阈值，就是 A 表那条）、`tests/core/test_nano_string.py:28` 的 `nano_time < builtin_time * 1.25`（**相对**比值 + 5 次取最小，抗噪好得多，但仍是上界）。其余全是**下界型**——`test_nccl_rendezvous_timeout.py:188/249` 的 `assertGreater(elapsed, TIMEOUT)`、`test_torch_compat_unimplemented.py:635` 的 `assertGreater(elapsed, 5.0)`、`test_tracer.py:69` 的 `elapsed < 30`（2 秒超时的 15 倍余量，判的是"有界 vs 无界"）——负载只会让下界更成立，不会误伤。**结论：这类假红的来源只有一条，不是一类。** 修法应是把绝对阈值改成相对比值或改成有界性断言，不是放宽数字 | 门禁 gates，随 0.15 |
 | wheel 内容基线过期 | **已处理**：基线本身没错，错的是那条断言写死了条目数——任何人加一个模块都会改变它。用当前源码树真构建一个 wheel 核对，45 个新增全是各分区加的合法源码、1 个删除是 9.17 删的 `flags.cc`，基线整个重新生成（861 条）；条目数那条断言换成「基线头部的 `# entries:` 必须与自身条目数一致」这条规则。注意基线是对**当时的源码内容**取的哈希，发版前需要再刷一次（办法写在提交说明里） | 构建，`f869cab8` |
 | 结构测试子进程超时 flaky | 已处理，并已与 0.21 合并成一份实现：超时预算搬进 `tests/_helpers/child_process.DEFAULT_TIMEOUT`（600s，`JITTOR_TEST_CHILD_TIMEOUT` 与旧名 `JITTOR_TEST_SUBPROCESS_TIMEOUT` 都认，仍在门禁 `--timeout=900` 之内），`process_modes.SUBPROCESS_TIMEOUT` 随之删除——同一件事只留一处 | 门禁 gates，`46dbe946` |
 | `split{i}` 与 `parallel` 不兼容 | 同时设这两个 loop option，`ParallelPass` 在 `ASSERT(def)` 上失败（`Check failed: def`）。`SplitLoopPass` 给内层循环的 range 是 `::min(range{i}-id{i}, stride{i})`，定义在外层循环里且随它变化，`ParallelPass` 在调用点 `func->find_define` 找不到、也无法在调用点求值。CUDA 恒走 `ParallelPass`，所以 CUDA 上任何 split 候选都必然编译失败。用例已钉住：`tests/compiler/test_reduce_tuner.py::test_a_split_candidate_would_not_compile_under_parallel` | 代码生成分区，1.04 的前置 |
