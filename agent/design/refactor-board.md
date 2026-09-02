@@ -114,6 +114,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | `test_atomic_tuner` 抓不到日志 | **已修**：根因确认为 `032ecfe1` 的 `full_reduce_cuda.py` 快路径猴补 `Var.sum`/`Var.mean`，全归约不再进 JIT；第 4 条用例改走 `jt.reduce` | codegen，`72f020b3` |
 | `asm_tuner.py` 非原子写 `.s`，并发编译读到截断的汇编 | **已修**：`pass_asm()` 改成写 `<路径>.tmp.<pid>` 再 `os.replace`。判据是 inode——改名换 inode，原地重写不换，也就不会消掉那个窗口；用例 `test_asm_tuner.py::TestAsmTunerWritesAtomically` 钉住。缓存里已经存在的坏 `.s` 不会自动修复，删掉再跑 | 构建，`1919b035` |
 | `tests/backends/cuda/test_backend_teardown.py` 过不了 0.21 的静态门禁 | **已修**：gates 在 `a5ce7310` 里已改成 `run_python_child(..., crash_isolated=True)`。cudabk 复核了改后的文件保留全部断言（无 terminate / 退出码 0 / 有 teardown 记录 / 真错误 `cudaErrorIllegalAddress` 仍可见）加那条干净退出的对照，并把 `cuda-backend-choice-proof` 里「子进程 abort 会带走 pytest」那段从只描述现象改成指向 helper 的 `crash_isolated`（`1b117a91`） | 门禁 gates，`a5ce7310` |
+| 下一次 rebase 会全量重编一次 | 9.04（`2569fe3b`）同时改了缓存路径与缓存键格式，**这是预期的，不是缓存坏了，不要删自己的 `JITTOR_HOME`**（本机冷构建约 63s）。另外 `cache_name` 的语义从「不设 = 当前 git 分支」变成「不设 = `default`」——靠分支自动分开缓存来隔离并行任务的，改成显式设 `cache_name` 或不同 `JITTOR_HOME`；反过来切分支不再触发全量重编 | 全体，已由协调者广播 |
 | `jt.flags.nvcc_flags` 的拼法变了 | 9.08 之后架构 flag 是 `--generate-code=arch=...,code=...`，不再是 `-arch=compute_N -code=sm_N`。按后者做字符串匹配的地方要改 | 各分区自查，`2d71f792` |
 | 全树跑时 `test_notebooks.py` 没有被当成 manual 跳过 | **已修**：`pytest_collection_modifyitems` 里 `test_notebooks.py` 的 `pytest.mark.manual` 加在跳过判断**之后**，所以全树跑时它照跑不误——2026-09-03 的全树原生一遍里实测 537 秒，是全树最慢的一项（第二名 289 秒）。现在所有标记先挂完再统一判断，manual 探针改由 `JITTOR_TEST_MANUAL=1` 或 `-m manual` 显式打开。**这是「筛选逻辑的顺序决定筛选结果」的第三例**（另两例：按 `sys.argv` 选 shim 模式、`@onlyCPU` 被设备过滤全部跳过） | 门禁 gates，`5c0f2364`（0.13） |
 
@@ -349,7 +350,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 9.01 | `import jittor` 不编译不下载 | 待领 | | |
 | 9.02 | `install_cuda.py:113-122` 的 `os.execl` 自重启删除，用 d… | 已合并 | 构建 | 6b45c078 |
 | 9.03 | 构建期失败一律抛带上下文的 `RuntimeError`，不用 LOGf/裸 assert | 已合并 | 构建 | 9197c8c6 |
-| 9.04 | 依赖跟踪改用编译器的 `-MD -MF` | 部分合并 | 构建 | 65a2dc12（clean_cache 从一份布局定义生成；`-MD -MF`、hash64、主机名/`-march=native`/git 分支/路径哈希位数**未做**——每条都改变缓存路径或缓存键，该在一个提交里一起做，不要分四次各让所有人全量重编一次。审计里"删掉 helper_cuda.h 例外"那条已更正：裸删会让 CPU 构建整个失败，必须与 `-MD -MF` 同做） |
+| 9.04 | 依赖跟踪改用编译器的 `-MD -MF` | 已合并 | 构建 | 65a2dc12（clean_cache 从一份布局定义生成）、2569fe3b（依赖跟踪、SHA-256、主机名/`-march=native`/git 分支/路径哈希位数，一个提交只让大家重编一次）。依赖跟踪走的是「扫描器认识 `#ifdef`」而不是 `-MD -MF`：`process()` 兼着 JT_XXX 宏发现（必须在编译前）与依赖跟踪（只能在编译后），拆开才可能用 depfile，已登记为 9.21 |
 | 9.05 | 下载安全 | 已合并 | 构建 | e111ebcc |
 | 9.06 | 删 cutlass 下载 | 已合并 | 构建 | 50673d69 |
 | 9.07 | import 过程不反向写环境变量 | 待领 | | |
@@ -357,9 +358,9 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 9.09 | `cuda_wheel` 失败时 LOG.w 出原因，strict 为默认 | 已合并 | 构建 | c63dd809 |
 | 9.10 | 2.0 版本策略 | 待领 | | |
 | 9.11 | release 的 platform-validation 阶段跑 selftest | 已合并 | 构建 | 2af4658e |
-| 9.12 | `extern/rocm/rocm_cache.tar.gz` 的预编译 .o 改从源码构建，或… | 待领 | | |
-| 9.13 | README 加「首次运行会发生什么」 | 待领 | | |
-| 9.14 | 一次性的构建前置条件检查 | 待领 | | |
+| 9.12 | `extern/rocm/rocm_cache.tar.gz` 的预编译 .o 改从源码构建，或… | 已合并 | 构建 | 46cc77d5（源码不在本仓库，做不到从源码构建；按任务允许的第二条补了来源说明与字节钉定，并写清要怎样才算可接受） |
+| 9.13 | README 加「首次运行会发生什么」 | 已合并 | 构建 | dad3cd26 |
+| 9.14 | 一次性的构建前置条件检查 | 已合并 | 构建 | b2bd11fd（审计那 17 个失败点：4 个可操作 → 15 个「是」、2 个「部分」、0 个「否」） |
 | 9.15 | noxfile | 已合并 | 构建 | 84c7f766 |
 | 9.16 | `agent/scripts/check_repo_layout.sh` 收缩为少数真会复发的检… | 待领 | | |
 | 9.17 | 死代码 | 已合并 | 构建 | f99250bb |
