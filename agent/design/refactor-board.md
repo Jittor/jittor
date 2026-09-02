@@ -253,7 +253,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 6.C18 | CachingBlock 保存底层 allocation 并原样回传，不再传 0 | 进行中 | mem | |
 | 6.C19 | 每个分配器一把锁并覆盖 `gc()` | 进行中 | mem | |
 | 6.C20 | swap | 进行中 | mem | |
-| 6.C21 | 检查 `NODE_MEMCHECK` 外 `check_graph` 静默空转 | 进行中 | bindings | |
+| 6.C21 | 检查 `NODE_MEMCHECK` 外 `check_graph` 静默空转 | 进行中 | mem | 绑定分区已让出（曾误领）。前置核实结论：`do_graph_check()` 前半段（从 hold_vars 反向遍历、重算 f/b/p）在任何构建下都真跑；只有后半段查悬挂节点的那个循环读 `lived_nodes`，而它只在 `-DNODE_MEMCHECK`（`compiler.py:1164`）下填充——所以 `check_graph=1` 在 release 下交付的是它宣称的一半。另：`Node::memcheck_all_exist()` 在出厂 object 里也是空的，它本该断言什么无法从 object 恢复（见 812714d5 还原者说明），不要当成还原时丢的 |
 | 6.C22 | pyjt 关键字参数 | 已合并 | bindings | ed148a56 |
 | 6.C23 | `is_type<NanoString>` 收窄 | 已合并 | bindings | f8f9de43 |
 | 6.C24 | 带实例 `__dict__` 的类型加 `Py_TPFLAGS_HAVE_GC` 与 trave… | 已合并 | bindings | 4a30c5e4 |
