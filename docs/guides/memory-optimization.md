@@ -28,6 +28,17 @@ smaller batches before changing global memory limits.
 Jittor can move values between device memory, host memory, and disk when a
 limit is reached. Limits are bytes; `-1` means unlimited.
 
+`JT_SAVE_MEM` is a **build** switch, not a runtime flag: it becomes a
+compile-time constant so that the swap branch on every value release costs
+nothing in a build that did not ask for it. Setting it therefore selects a
+separate build configuration, and the first run after setting or clearing it
+recompiles.
+
+Swapping is **experimental and unfinished** -- aliased values (`share_with`),
+migration between devices, the dual allocator and foreign allocators are all
+still open in its own TODO list. Enable it only if you have measured that you
+need it.
+
 ```bash
 export JT_SAVE_MEM=1
 export cpu_mem_limit=16000000000

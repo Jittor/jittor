@@ -520,13 +520,41 @@ BUILD_CONFIG_VARS = (
 )
 
 
+def save_mem_build_flags(env=None):
+    """The compiler flags implied by ``JT_SAVE_MEM``.
+
+    The documented way to enable swapping is ``export JT_SAVE_MEM=1``, but
+    nothing ever turned that into the ``-DJT_SAVE_MEM=1`` that
+    ``src/mem/swap.h`` actually reads, so the whole subsystem was unreachable
+    in every build while the documentation said otherwise. Swapping is still
+    unfinished (see the TODO list at the top of that header), which is exactly
+    why it stays a build switch instead of a runtime flag: an ordinary build
+    folds every ``if (save_mem)`` away, including the two on the Var release
+    path.
+    """
+    if env is None:
+        env = os.environ
+    value = (env.get("JT_SAVE_MEM") or "").strip()
+    if value.lower() in ("", "0", "false", "off", "no"):
+        return ""
+    return " -DJT_SAVE_MEM=1 "
+
+
 def get_build_config():
     """The build knobs whose values decide what the compiled products are.
 
     A variable that is not set records as None, which is a different
     configuration from one set to the empty string.
     """
-    return {name: os.environ.get(name) for name in BUILD_CONFIG_VARS}
+    config = {name: os.environ.get(name) for name in BUILD_CONFIG_VARS}
+    # A build that swaps shares no object code with one that does not, so it
+    # needs its own directory. Recorded only when it is switched on: "off" is
+    # the configuration every existing cache directory was built with, and
+    # naming it would invalidate all of them for no reason.
+    save_mem = save_mem_build_flags()
+    if save_mem:
+        config["JT_SAVE_MEM"] = save_mem
+    return config
 
 
 def build_config_fingerprint(config=None):

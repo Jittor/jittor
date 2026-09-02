@@ -62,6 +62,11 @@ unordered_map<Allocator*, Swap> swaps;
 void swap_to_disk(Var* x, Swap& swap) {
     swap_total += x->size;
     ASSERT(!x->flags.get(NodeFlags::_is_swapped));
+    // "search share_with" on swap.h's TODO list: a var that is a sub-range of
+    // another var's block cannot be swapped out on its own -- the block stays
+    // occupied and the other alias would read a hole. Refuse loudly rather
+    // than corrupt it silently.
+    ASSERT(!x->share_next) << "cannot swap out an aliased var" << x;
     string path = swap_file_path(x);
     #ifdef HAS_CUDA
     if (x->allocator->is_cuda()) {
@@ -191,6 +196,9 @@ void free_with_swap(Var* x) {
 
 bool move_with_swap(Var* x, Allocator* allocator, bool force) {
     if (allocator == x->allocator) return true;
+    // same reason as swap_to_disk: moving one member of a share group breaks
+    // the alias for the rest (see migrate_group in mem/allocator.cc)
+    ASSERT(!x->share_next) << "cannot move an aliased var with swap" << x;
     swap_total += x->size;
     Allocation allocation(x->mem_ptr, x->allocation, x->size, x->allocator);
     x->mem_ptr = nullptr;

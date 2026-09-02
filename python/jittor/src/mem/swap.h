@@ -37,6 +37,14 @@ global
 share_with handle:
     free var, until allocator reduce size
 
+UNFINISHED. The TODO list below is the author's own, and none of it is done.
+Because `save_mem` is a compile-time constant, an ordinary build folds every
+`if (save_mem)` away -- including the two on the hottest path there is, one per
+Var release (var.cc) -- and none of this code is reachable. That isolation is
+the point: do not turn `save_mem` into a runtime flag while the list stands.
+Building with -DJT_SAVE_MEM=1 (set JT_SAVE_MEM=1, which is a *build* switch and
+gets its own cache directory) opts into an incomplete feature.
+
 TODO:
     change exe.allocator->alloc to exe.temp_allocator->alloc
     handle cutt jt_alloc

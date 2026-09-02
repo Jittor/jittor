@@ -195,5 +195,21 @@ class TestGraphCheckIsNotAStub(unittest.TestCase):
         gc.collect()
 
 
+class TestSaveMemStaysBehindABuildSwitch(unittest.TestCase):
+    """Swapping is unfinished, so it must not be reachable by default.
+
+    ``swap.h`` opens with the author's own TODO list -- share_with, migrate,
+    the dual allocator, foreign allocators -- and ``free_var``/``free_var_mem``
+    consult ``save_mem`` on *every* Var release.  Keeping ``save_mem`` a
+    compile-time constant is what keeps an admittedly unfinished feature off
+    the hottest path in the runtime.
+    """
+
+    def test_save_mem_is_not_a_runtime_flag(self):
+        assert not hasattr(jt.flags, "save_mem"), (
+            "save_mem became a runtime flag; while swap.h's TODO list stands "
+            "it has to stay a build switch (JT_SAVE_MEM)")
+
+
 if __name__ == "__main__":
     unittest.main()

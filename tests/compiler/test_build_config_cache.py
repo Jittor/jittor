@@ -95,6 +95,23 @@ class TestCachePathComponents(unittest.TestCase):
         self.assertNotEqual(first, second)
         self.assertTrue(first.endswith(os.path.join("slot-a", os.path.basename(first))))
 
+class TestSaveMemIsABuildSwitch(unittest.TestCase):
+    """`export JT_SAVE_MEM=1` is documented as the way to enable swapping.
+
+    Nothing ever turned it into the `-DJT_SAVE_MEM=1` that `src/mem/swap.h`
+    reads, so `save_mem` was a hard-coded 0 in every build ever shipped and
+    the documented switch did nothing at all.
+    """
+
+    def test_off_by_default(self):
+        self.assertEqual(jit_utils.save_mem_build_flags({}), "")
+        self.assertEqual(jit_utils.save_mem_build_flags({"JT_SAVE_MEM": ""}), "")
+        self.assertEqual(jit_utils.save_mem_build_flags({"JT_SAVE_MEM": "0"}), "")
+
+    def test_on_reaches_the_compiler(self):
+        self.assertIn("-DJT_SAVE_MEM=1",
+                      jit_utils.save_mem_build_flags({"JT_SAVE_MEM": "1"}))
+
 
 class TestBuildConfigFingerprint(unittest.TestCase):
 
@@ -122,6 +139,23 @@ class TestBuildConfigFingerprint(unittest.TestCase):
         self.assertNotEqual(with_nvcc[0], without[0])
         # ...but they still share one build lock, and so one download area.
         self.assertEqual(with_nvcc[1], without[1])
+
+    def test_a_swapping_build_gets_its_own_directory(self):
+        """`JT_SAVE_MEM` decides whether the swap code is compiled in at all.
+
+        `save_mem` is a compile-time constant (src/mem/swap.h) so that the
+        branch it guards -- one per Var release -- folds away in a build that
+        did not ask for swapping. Two builds that disagree about it share no
+        object code, so they must not share a directory. A build with it off
+        keeps the directory it always had: that is what every existing cache
+        was built with.
+        """
+        plain = _cache_path_for({})
+        swapping = _cache_path_for({"JT_SAVE_MEM": "1"})
+        self.assertNotEqual(plain[0], swapping[0])
+        # ...but still one lock, and so one download area
+        self.assertEqual(plain[1], swapping[1])
+        self.assertEqual(plain, _cache_path_for({"JT_SAVE_MEM": "0"}))
 
     def test_fingerprint_is_stable_and_short(self):
         config = {"nvcc_flags": " --fmad=false "}

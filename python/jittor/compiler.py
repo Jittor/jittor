@@ -1163,6 +1163,19 @@ def check_debug_flags():
         global cc_flags
         cc_flags += " -g -DNODE_MEMCHECK "
 
+def check_save_mem_flags():
+    """Turn JT_SAVE_MEM into the define src/mem/swap.h actually reads."""
+    flags = jit_utils.save_mem_build_flags()
+    if not flags:
+        return
+    global cc_flags
+    cc_flags += flags
+    LOG.w("JT_SAVE_MEM=1: memory swapping is built in. It is unfinished -- "
+          "share_with, migrate, the dual allocator and foreign allocators are "
+          "all still on its TODO list (src/mem/swap.h) -- and it needs its own "
+          "build, so this configuration compiles into a cache directory of "
+          "its own.")
+
 cc_flags = " "
 # os.RTLD_NOW | os.RTLD_GLOBAL cause segfault when import torch first
 import_flags = os.RTLD_NOW | os.RTLD_GLOBAL
@@ -1183,6 +1196,7 @@ if os.name == 'nt':
     # prevent windows recompile
     jittor_path = jittor_path.lower()
 check_debug_flags()
+check_save_mem_flags()
 
 sys.path.append(cache_path)
 LOG.i(f"Jittor({__version__}) src: {jittor_path}")
