@@ -86,6 +86,7 @@ struct SFRLAllocator : Allocator {
     void try_free_this_allocators();
     void setup(Allocator* underlying);
     uint64 flags() const override { return underlying->flags(); }
+    int device() const override { return underlying->device(); }
     const char* name() const override;
     void* alloc(size_t size, size_t& allocation) override;
     void free(void* mem_ptr, size_t size, const size_t& allocation) override;

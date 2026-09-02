@@ -10,6 +10,7 @@
 #include "mem/mem_info.h"
 #include "helper_cuda.h"
 #include "mem/allocator/cuda_device_allocator.h"
+#include "misc/cuda_flags.h"
 
 namespace jittor {
 
@@ -24,6 +25,8 @@ const char* CudaDeviceAllocator::name() const {return "cuda_device";}
 void* CudaDeviceAllocator::alloc(size_t size, size_t& allocation) {
     if (size==0) return (void*)0x10;
     void* ptr;
+    // cudaMalloc allocates on the current device; this pool belongs to one.
+    if (device_id != current_device()) set_current_device(device_id);
     cudaError_t err = cudaMalloc(&ptr, size);
     if (err == cudaSuccess)
         return ptr;

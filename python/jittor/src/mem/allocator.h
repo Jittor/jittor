@@ -16,6 +16,8 @@ struct Allocator {
     };
     int64 used_memory=0, unused_memory=0;
     inline virtual uint64 flags() const { return 0; };
+    // CUDA device the memory belongs to; -1 for host memory.
+    inline virtual int device() const { return -1; }
     inline bool is_cuda() const { return flags() & _cuda; }
     inline bool is_aligned() const { return flags() & _aligned; }
     virtual const char* name() const = 0;
@@ -50,6 +52,8 @@ struct Allocation {
 
 EXTERN_LIB Allocator* cpu_allocator;
 Allocator* get_allocator(bool temp_allocator=false);
+// The allocator chain for one CUDA device (host chain when device < 0).
+Allocator* get_allocator(int device, bool temp_allocator);
 // @pyjt(gc)
 void gc_all();
 

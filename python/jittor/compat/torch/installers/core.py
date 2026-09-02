@@ -483,6 +483,19 @@ def install_misc(ctx):
         _state["dtype"] = d
     g.set_default_dtype = set_default_dtype
     def get_default_device():
-        return g.device("cuda", 0) if jt.flags.use_cuda else g.device("cpu")
+        if not jt.flags.use_cuda:
+            return g.device("cpu")
+        try:
+            idx = int(jt.current_device())
+        except Exception:
+            idx = 0
+        return g.device("cuda", idx if idx >= 0 else 0)
     g.get_default_device = get_default_device
-    g.set_default_device = lambda *a, **k: None
+    def set_default_device(device=None, *a, **k):
+        # torch.set_default_device("cuda:1") makes new tensors land on 1.
+        dev = g.device(device) if isinstance(device, str) else device
+        idx = getattr(dev, "index", None)
+        if getattr(dev, "type", None) in ("cuda", "npu") and idx is not None:
+            jt.flags.use_cuda = 1
+            jt.set_device(int(idx))
+    g.set_default_device = set_default_device

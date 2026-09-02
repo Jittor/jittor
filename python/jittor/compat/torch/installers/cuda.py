@@ -13,7 +13,7 @@ from ..grad import (
     _GradScaler,
 )
 from ..types import (
-    device, dtype,
+    device, dtype, _device_is_cpu,
 )
 
 _cuda_props_cache = {}
@@ -195,6 +195,12 @@ def _install_cuda(g, registry=None):
         if not is_available():
             return 0
         try:
+            n = int(jt.get_device_count())
+            if n > 0:
+                return n
+        except Exception:
+            pass
+        try:
             import os as _os_cuda
             _cvd = _os_cuda.environ.get("CUDA_VISIBLE_DEVICES", None)
             if _cvd is not None:
@@ -211,16 +217,53 @@ def _install_cuda(g, registry=None):
     # NVML, so that it can answer before CUDA is initialised. Here both
     # questions go to the same place.
     cuda._device_count_nvml = device_count
-    cuda.current_device = lambda: 0
-    cuda.set_device = lambda *a, **k: None
+    # Devices are real: every Var carries the CUDA device it lives on and
+    # jittor keeps a current device for new tensors, exactly torch's model.
+    def current_device():
+        try:
+            d = int(jt.current_device())
+        except Exception:
+            d = -1
+        return d if d >= 0 else 0
+
+    def set_device(device):
+        idx = _cuda_device_index(device)
+        if idx is None or idx < 0:
+            return
+        if _device_is_cpu(device):
+            return
+        try:
+            jt.set_device(int(idx))
+        except Exception as error:
+            raise RuntimeError("torch.cuda.set_device({!r}): {}".format(device, error))
+
+    cuda.current_device = current_device
+    cuda.set_device = set_device
+
     class _CudaDeviceContext:
+        """``with torch.cuda.device(i):`` -- switch the current device, restore on exit."""
         def __init__(self, device=None):
             self.device = device
+            self.idx = None if device is None else _cuda_device_index(device)
+            self.prev_idx = -1
         def __enter__(self):
+            if self.idx is not None and self.idx >= 0 and not _device_is_cpu(self.device):
+                self.prev_idx = current_device()
+                if self.prev_idx != self.idx:
+                    set_device(self.idx)
             return self
         def __exit__(self, *exc):
+            if self.prev_idx >= 0 and self.prev_idx != current_device():
+                set_device(self.prev_idx)
             return False
     cuda.device = _CudaDeviceContext
+
+    class _CudaDeviceOf(_CudaDeviceContext):
+        """``with torch.cuda.device_of(tensor):``"""
+        def __init__(self, tensor):
+            idx = getattr(tensor, "device_id", None) if isinstance(tensor, jt.Var) else None
+            super().__init__(int(idx) if idx is not None and idx >= 0 else None)
+    cuda.device_of = _CudaDeviceOf
     cuda.is_initialized = lambda *a, **k: bool(is_available() and getattr(jt.flags, "use_cuda", 0))
     cuda._is_in_bad_fork = lambda *a, **k: False
     # Match PyTorch's empty_cache() as a memory hint instead of a forced
@@ -850,8 +893,8 @@ def _install_accelerator(g, registry=None):
     accelerator = _types_acc.ModuleType("torch.accelerator")
     accelerator.is_available = lambda *a, **k: True
     accelerator.device_count = cuda.device_count
-    accelerator.current_device_index = lambda *a, **k: 0
-    accelerator.set_device_index = lambda *a, **k: None
+    accelerator.current_device_index = lambda *a, **k: cuda.current_device()
+    accelerator.set_device_index = lambda d, *a, **k: cuda.set_device(d)
     accelerator.device_index = getattr(cuda, "device", None)
     accelerator.current_stream = cuda.current_stream
     accelerator.set_stream = getattr(cuda, "set_stream", lambda *a, **k: None)

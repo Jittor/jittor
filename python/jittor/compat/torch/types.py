@@ -198,11 +198,28 @@ class device:
     def __enter__(self):
         if self.type == "meta":
             _DEVICE_CTX_STACK.append(self)
+        elif self.type in ("cuda", "npu") and self.index is not None:
+            # torch: ``with torch.device("cuda:1"):`` makes device 1 the
+            # default for new tensors until the block ends.
+            try:
+                self._prev_index = int(jt.current_device())
+                if self._prev_index != int(self.index):
+                    jt.set_device(int(self.index))
+            except Exception:
+                self._prev_index = None
         return self
 
     def __exit__(self, *exc):
         if self.type == "meta" and _DEVICE_CTX_STACK and _DEVICE_CTX_STACK[-1] is self:
             _DEVICE_CTX_STACK.pop()
+        prev = getattr(self, "_prev_index", None)
+        if prev is not None and prev >= 0:
+            try:
+                if int(jt.current_device()) != prev:
+                    jt.set_device(prev)
+            except Exception:
+                pass
+            self._prev_index = None
         return False
 
 
@@ -277,6 +294,31 @@ def _device_is_cpu(dev):
     if isinstance(dev, str):
         return dev == "cpu" or dev.split(":")[0] == "cpu"
     return False
+
+
+def _cuda_index_of(dev):
+    """The device index named by a CUDA device request, or None.
+
+    Accepts an int, "cuda:1" (a bare "cuda" has no index), a device object
+    with ``type``/``index``. Strings are handled first: ``str.index`` is a
+    method, so ``getattr(dev, "index")`` must never be asked of one.
+    """
+    if dev is None or isinstance(dev, bool):
+        return None
+    if isinstance(dev, int):
+        return dev if dev >= 0 else None
+    if isinstance(dev, str):
+        head, _, tail = dev.partition(":")
+        if head not in ("cuda", "npu") or not tail:
+            return None
+        try:
+            return int(tail)
+        except ValueError:
+            return None
+    if getattr(dev, "type", None) in ("cuda", "npu"):
+        idx = getattr(dev, "index", None)
+        return int(idx) if isinstance(idx, int) and not isinstance(idx, bool) else None
+    return None
 
 
 def _device_is_cuda(dev):

@@ -65,7 +65,37 @@ void setter_use_cuda_host_allocator(int value) {
 
 extern int64 sfrl_large_block_size_device;
 
+#ifdef HAS_CUDA
+// One device-memory pool per CUDA device. The global instances stay the
+// pools of device 0 so code that names them keeps working.
+static vector<unique_ptr<CudaDeviceAllocator>> device_allocators;
+static vector<unique_ptr<CudaManagedAllocator>> managed_allocators;
+
+static Allocator* cuda_base_allocator(int device) {
+    if (use_cuda_managed_allocator) {
+        if (device == 0) return &cuda_managed_allocator;
+        if ((int)managed_allocators.size() <= device) managed_allocators.resize(device+1);
+        auto& a = managed_allocators[device];
+        if (!a) { a = std::make_unique<CudaManagedAllocator>(); a->device_id = device; }
+        return a.get();
+    }
+    if (device == 0) return &cuda_device_allocator;
+    if ((int)device_allocators.size() <= device) device_allocators.resize(device+1);
+    auto& a = device_allocators[device];
+    if (!a) { a = std::make_unique<CudaDeviceAllocator>(); a->device_id = device; }
+    return a.get();
+}
+#endif
+
 Allocator* get_allocator(bool temp_allocator) {
+    int device = -1;
+#ifdef HAS_CUDA
+    if (use_cuda) device = current_device();
+#endif
+    return get_allocator(device, temp_allocator);
+}
+
+Allocator* get_allocator(int device, bool temp_allocator) {
     Allocator* allocator = nullptr;
     if (use_cuda && sfrl_large_block_size_device >= (1ll<<40)) {
         // if super large block is used, don't use
@@ -73,14 +103,9 @@ Allocator* get_allocator(bool temp_allocator) {
         temp_allocator = false;
     }
 #ifdef HAS_CUDA
-    if (use_cuda && !allocator) {
-        if (use_cuda_managed_allocator) {
-            LOGvv << "Using cuda_managed_allocator";
-            allocator = &cuda_managed_allocator;
-        } else {
-            LOGvv << "Using cuda_device_allocator";
-            allocator = &cuda_device_allocator;
-        }
+    if (use_cuda && device >= 0 && !allocator) {
+        LOGvv << "Using cuda allocator of device" << device;
+        allocator = cuda_base_allocator(device);
     } else
     if (use_cuda_host_allocator) {
         // The cuda host allocator (pinned memory via cudaMallocHost) requires a
@@ -163,9 +188,13 @@ void migrate_to_cpu(Var* var, Allocator* allocator) {
     } else
     if (!use_cuda_managed_allocator) {
         if (!var->allocator->is_cuda()) return;
-        // must be a device allocator
+        // must be a device allocator. Issue the copy from the Var's own
+        // device so it is ordered after the kernel that produced it.
         Allocation a(allocator, var->size);
+        int dev = var->allocator->device(), prev = current_device();
+        if (dev >= 0 && dev != prev) set_current_device(dev);
         checkCudaErrors(cudaMemcpy(a.ptr, var->mem_ptr, var->size, cudaMemcpyDeviceToHost));
+        if (dev >= 0 && dev != prev) set_current_device(prev);
         var->allocator->free(var->mem_ptr, var->size, var->allocation);
         var->mem_ptr = a.ptr;
         var->allocation = a.allocation;

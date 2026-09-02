@@ -27,6 +27,12 @@ struct Var : Node {
     size_t allocation;
     int64 size, num;
     VarHolder* holder = nullptr;
+    // CUDA device this Var lives on (or will be placed on when it is
+    // computed); -1 when no CUDA device exists. Fixed when the Var is
+    // created: an op's outputs take their inputs' device, a source op takes
+    // the current device. Host residency is orthogonal: a Var migrated to the
+    // CPU keeps its device_id and returns to that device.
+    int device_id = -1;
     inline bool is_float() const { CHECK_EXIST; return ns.is_float(); }
     inline int dsize() const { CHECK_EXIST; return ns.dsize(); }
     inline NanoString dtype() const { CHECK_EXIST; return ns; }

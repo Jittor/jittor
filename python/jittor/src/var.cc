@@ -11,6 +11,7 @@
 #include "mem/allocator.h"
 #include "pybind/py_var_tracer.h"
 #include "mem/swap.h"
+#include "misc/cuda_flags.h"
 
 namespace jittor {
 
@@ -74,6 +75,7 @@ Var::Var(NanoVector shape, NanoString dtype)
     : shape(shape), 
       loop_options(compile_options) {
     flags.set(NodeFlags::_var, 1);
+    device_id = current_device();
     // complex dtypes are differentiable too (Wirtinger autograd), so they must not be
     // auto-stop_grad like integer/bool vars are. Only non-float AND non-complex stops grad.
     flags.set(NodeFlags::_stop_grad, (!dtype.is_float() && !dtype.is_complex()) || no_grad);

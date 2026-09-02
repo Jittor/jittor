@@ -24,6 +24,7 @@ from ..nn_modules import install_module_namespace
 from ..types import (
     _device_is_cpu, _device_is_cuda, _dtype_to_str,
     _make_cpu_resident, _make_cuda_resident, device, dtype,
+    _cuda_index_of,
 )
 
 
@@ -1581,6 +1582,18 @@ def _install_module_methods(nn, registry=None):
                 out = _make_cpu_resident(out, inplace=(out is v))
             elif _device_is_cuda(dev):
                 out = _make_cuda_resident(out, force=True, inplace=(out is v))
+                idx = _cuda_index_of(dev)
+                if idx is not None and isinstance(out, jt.Var):
+                    cur = getattr(out, "device_id", -1)
+                    if cur >= 0 and cur != int(idx):
+                        moved = out.to_device(int(idx))
+                        if out is v:
+                            # in-place semantics: the parameter object keeps
+                            # its identity, its storage moves.
+                            v.assign(moved)
+                            out = v
+                        else:
+                            out = moved
             return out
 
         if dev is not None or ds is not None:

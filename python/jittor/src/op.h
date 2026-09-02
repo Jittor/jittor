@@ -26,6 +26,8 @@ struct Op : Node {
     
     Var* create_output(NanoVector shape, NanoString dtype);
     void init();
+    // Give every output the device of the inputs (see Var::device_id).
+    void propagate_device();
 
     // Op::forward should be call in constructor
     // A forwarded operator will suicide in after constructor

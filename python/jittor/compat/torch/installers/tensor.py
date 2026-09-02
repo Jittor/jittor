@@ -26,6 +26,7 @@ from ..types import (
     _DEVICE_CTX_STACK, _device_is_cpu, _device_is_cuda, _dtype_to_str,
     _make_cpu_resident, _make_cuda_resident, _mark_cpu_like,
     _var_has_cpu_residency_hint, _var_is_cpu_resident, device, dtype,
+    _cuda_index_of,
 )
 
 import collections as _collections
@@ -841,9 +842,13 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         # global use_cuda flag is 1. Only fall back to the global flag when
         # CUDA is on and the Var is genuinely device-resident.
         if (jt.flags.use_cuda or getattr(jt.compiler, "has_acl", 0)):
-            return device("cpu") if _var_is_cpu_resident(self) else device("cuda", 0)
+            if _var_is_cpu_resident(self):
+                return device("cpu")
+            idx = getattr(self, "device_id", 0)
+            return device("cuda", int(idx) if idx is not None and idx >= 0 else 0)
         return device("cpu")
     Var.device = property(_device)
+    Var.get_device = lambda self: (-1 if self.device.type == "cpu" else int(self.device.index or 0))
 
     _orig_getitem = getattr(Var, "__getitem__", None)
     if _orig_getitem is not None and not getattr(_orig_getitem, "_torch_cpu_residency", False):
@@ -1282,6 +1287,24 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         return self
     Var.retain_grad = _retain_grad
 
+    def _move_to_cuda_index(out, dev):
+        """Honor the index in a CUDA device request: ``x.to("cuda:1")`` copies
+        onto device 1 when ``x`` is elsewhere; a bare "cuda" keeps the Var where
+        it is, as torch does."""
+        idx = _cuda_index_of(dev)
+        if idx is None or not isinstance(out, Var):
+            return out
+        try:
+            cur = out.device_id
+        except AttributeError:
+            return out
+        if cur == idx or cur < 0:
+            return out
+        moved = out.to_device(idx)
+        if getattr(out, "_torch_0d", False):
+            moved._torch_0d = True
+        return moved
+
     def _to(self, *args, **kwargs):
         ds = None
         dev = None
@@ -1314,6 +1337,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             out = _make_cpu_resident(out)
         elif _device_is_cuda(dev):
             out = _make_cuda_resident(out, force=True)
+            out = _move_to_cuda_index(out, dev)
         if getattr(self, "_torch_0d", False):
             out._torch_0d = True
         return out
@@ -1358,6 +1382,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     def _var_cuda(self, device=None, *a, **k):
         jt.flags.use_cuda = 1
         out = _make_cuda_resident(self, force=True)
+        out = _move_to_cuda_index(out, device)
         if getattr(self, "_torch_0d", False):
             out._torch_0d = True
         return out

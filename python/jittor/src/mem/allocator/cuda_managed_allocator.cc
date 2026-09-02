@@ -8,6 +8,7 @@
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
 #include "mem/allocator/cuda_managed_allocator.h"
+#include "misc/cuda_flags.h"
 
 namespace jittor {
 
@@ -20,6 +21,7 @@ const char* CudaManagedAllocator::name() const {return "cuda_managed";}
 void* CudaManagedAllocator::alloc(size_t size, size_t& allocation) {
     if (size==0) return (void*)0x10;
     void* ptr;
+    if (device_id != current_device()) set_current_device(device_id);
     checkCudaErrors(cudaMallocManaged(&ptr, size));
     return ptr;
 }

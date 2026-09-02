@@ -6,12 +6,10 @@
 // ***************************************************************
 
 #include "common.h"
+#include "misc/cuda_flags.h"
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
-#ifdef __linux__
-#include <fstream>
-#include <unistd.h>
-#endif
+#include "helper_cuda.h"
 #endif
 
 namespace jittor {
@@ -19,7 +17,7 @@ namespace jittor {
 DEFINE_FLAG_WITH_SETTER(int, use_cuda, 0,
     "Use cuda or not. 1 for trying to use cuda, 2 for forcing to use cuda.");
 DEFINE_FLAG_WITH_SETTER(int, device_id, -1,
-    "number of the device to used");
+    "The CUDA device new Vars are placed on, torch.cuda.current_device. Setting it switches the current device in place; it never restarts the process. It reads -1 until a device has been set or queried; jt.current_device() is always the truth.");
 DEFINE_FLAG_WITH_SETTER(int, sync_run, 1,
     "Enable per-op-sync or not");
 
@@ -73,44 +71,78 @@ void setter_use_cuda(int value) {
     use_cuda = value;
 }
 
-void setter_device_id(int value) {
-#if defined(HAS_CUDA) && defined(__linux__)
-    // case1: set env device_id, not restart
-    // case2: set in python, restart
-    // case3: restart, device id and CUDA env set both
-    if (value<0)
-        return;
-    int count=0;
-    cudaGetDeviceCount(&count);
-    auto s = getenv("CUDA_VISIBLE_DEVICES");
-    auto s2 = getenv("device_id");
-    auto sv = std::to_string(value);
-    if (s2 && s2 == sv && (!s || count!=1)) {
-        // only handle case1 and case3(not cuda)
-        LOGi << "change to device #" >> value;
-        cudaSetDevice(value);
+#ifdef HAS_CUDA
+static int cur_device = -1;   // -1: not yet queried from the runtime
+static vector<device_switch_hook_t> device_switch_hooks;
+
+int current_device() {
+    if (cur_device < 0) {
+        int d = 0;
+        if (get_device_count() <= 0 || cudaGetDevice(&d) != cudaSuccess) {
+            cudaGetLastError();
+            return -1;
+        }
+        cur_device = d;
+        device_id = d;
+    }
+    return cur_device;
+}
+
+void add_device_switch_hook(device_switch_hook_t hook) {
+    device_switch_hooks.push_back(hook);
+    // The hook must see the device that is current right now.
+    int d = current_device();
+    if (d >= 0) hook(d);
+}
+
+void set_current_device(int device) {
+    int count = get_device_count();
+    CHECK(device >= 0 && device < count)
+        << "Invalid CUDA device index" << device << ", device count is" << count;
+    int cur = current_device();
+    // Keep the flag readable as the current device even when nothing moves.
+    device_id = device;
+    if (device == cur) return;
+    checkCudaErrors(cudaSetDevice(device));
+    cur_device = device;
+    for (auto hook : device_switch_hooks) hook(device);
+}
+
+void enable_peer_access(int from, int to) {
+    static vector<char> enabled;  // (from, to) pairs already handled
+    if (from == to || from < 0 || to < 0) return;
+    int n = get_device_count();
+    if (enabled.size() < (size_t)n*n) enabled.resize(n*n, 0);
+    auto& done = enabled[from*n+to];
+    if (done) return;
+    done = 1;
+    int can = 0;
+    if (cudaDeviceCanAccessPeer(&can, to, from) != cudaSuccess || !can) {
+        cudaGetLastError();
         return;
     }
-    if (s && s == sv)
+    int prev = current_device();
+    checkCudaErrors(cudaSetDevice(to));
+    auto err = cudaDeviceEnablePeerAccess(from, 0);
+    if (err != cudaSuccess && err != cudaErrorPeerAccessAlreadyEnabled)
+        LOGw << "cudaDeviceEnablePeerAccess(" << from << "->" << to << ") failed:" << cudaGetErrorString(err);
+    cudaGetLastError();
+    checkCudaErrors(cudaSetDevice(prev));
+}
+#endif
+
+void setter_device_id(int value) {
+#ifdef HAS_CUDA
+    // Below zero is "unset": the runtime default stays whatever device is
+    // current, which the flag reports once it has been queried or set.
+    if (value < 0) return;
+    if (!get_device_count()) {
+        LOGw << "No CUDA device available; ignoring device_id" << value;
         return;
-    setenv("CUDA_VISIBLE_DEVICES", sv.c_str(), 1);
-    setenv("device_id", sv.c_str(), 1);
-    std::ifstream ifs("/proc/self/cmdline");
-    if (!(ifs && ifs.good())) return;
-    string cmd((std::istreambuf_iterator<char>(ifs)),
-               (std::istreambuf_iterator<char>()));
-    vector<char*> ss;
-    auto cstr = (char*)cmd.c_str();
-    ss.push_back(cstr);
-    for (int i=0; i<cmd.size(); i++)
-        if (cstr[i] == '\0')
-            ss.push_back(&cstr[i+1]);
-    ss.pop_back();
-    ss.push_back(nullptr);
-    LOGi << "[restart] change to device #" >> value;
-    execvp(ss[0], &ss[0]);
-    ss.pop_back();
-    LOGe << "restart failed" << ss;
+    }
+    set_current_device(value);
+#else
+    CHECK(value < 0) << "No CUDA found.";
 #endif
 }
 

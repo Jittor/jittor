@@ -10,6 +10,16 @@
 namespace jittor {
 
 cudnnHandle_t cudnn_handle;
+// The global handle is the current device's; a handle only works on the
+// device it was created on, so each device gets its own on first use.
+static vector<cudnnHandle_t> cudnn_handles;
+
+static void cudnn_switch_device(int device) {
+    if ((int)cudnn_handles.size() <= device) cudnn_handles.resize(device+1, nullptr);
+    if (!cudnn_handles[device])
+        checkCudaErrors(cudnnCreate(&cudnn_handles[device]));
+    cudnn_handle = cudnn_handles[device];
+}
 int max_cache_size = 100;
 float max_workspace_ratio = 0.25;
 int cudnn_benchmark = -1;
@@ -34,13 +44,15 @@ struct cudnn_initer {
 
 inline cudnn_initer() {
     if (!get_device_count()) return;
-    checkCudaErrors(cudnnCreate(&cudnn_handle));
+    add_device_switch_hook(cudnn_switch_device);
     LOGv << "cudnnCreate finished";
 }
 
 inline ~cudnn_initer() {
     if (!get_device_count()) return;
-    checkCudaErrors(cudnnDestroy(cudnn_handle));
+    for (auto h : cudnn_handles)
+        if (h) checkCudaErrors(cudnnDestroy(h));
+    cudnn_handles.clear();
     LOGv << "cudnnDestroy finished";
 }
 

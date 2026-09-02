@@ -15,6 +15,7 @@ import numpy as np
 
 from ..types import (
     _device_is_cpu, _device_is_cuda, _dtype_to_str, _make_cuda_resident,
+    _cuda_index_of,
 )
 from ..nested import _torch_register_leaf
 
@@ -84,8 +85,10 @@ def _wrap_constructors(g):
             _requested_device = kwargs.get("device")
             _want_cpu = _device_is_cpu(_requested_device)
             _want_cuda = _device_is_cuda(_requested_device)
+            _cuda_index = None
             if _want_cuda:
                 jt.flags.use_cuda = 1
+                _cuda_index = _cuda_index_of(_requested_device)
             _requires_grad = bool(kwargs.get("requires_grad", False))
             for k in _DROP:
                 kwargs.pop(k, None)
@@ -139,7 +142,12 @@ def _wrap_constructors(g):
             if _want_cpu and jt.flags.use_cuda:
                 # Build on the host so the result is genuinely CPU-resident.
                 with jt.flag_scope(use_cuda=0):
-                    out = orig(*args, **kwargs)
+                    if _cuda_index is not None and int(_cuda_index) >= 0:
+                        # device='cuda:N': build the Var on N instead of copying it there.
+                        with jt.flag_scope(device_id=int(_cuda_index)):
+                            out = orig(*args, **kwargs)
+                    else:
+                        out = orig(*args, **kwargs)
                     if _cast_to is not None:
                         out = out.cast(_cast_to)
                     out.sync()
@@ -152,7 +160,12 @@ def _wrap_constructors(g):
                     out.requires_grad_(True)
                     _torch_register_leaf(out)
                 return out
-            out = orig(*args, **kwargs)
+            if _cuda_index is not None and int(_cuda_index) >= 0:
+                # device='cuda:N': build the Var on N instead of copying it there.
+                with jt.flag_scope(device_id=int(_cuda_index)):
+                    out = orig(*args, **kwargs)
+            else:
+                out = orig(*args, **kwargs)
             if _cast_to is not None:
                 out = out.cast(_cast_to)
             if _want_cuda:

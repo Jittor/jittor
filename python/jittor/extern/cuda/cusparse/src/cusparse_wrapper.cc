@@ -10,19 +10,29 @@
 namespace jittor {
 
 cusparseHandle_t cusparse_handle;
+static vector<cusparseHandle_t> cusparse_handles;
+
+static void cusparse_switch_device(int device) {
+    if ((int)cusparse_handles.size() <= device) cusparse_handles.resize(device+1, nullptr);
+    if (!cusparse_handles[device])
+        checkCudaErrors(cusparseCreate(&cusparse_handles[device]));
+    cusparse_handle = cusparse_handles[device];
+}
 
 struct cusparse_initer {
 
     inline cusparse_initer() {
         if (!get_device_count()) return;
-        checkCudaErrors(cusparseCreate(&cusparse_handle));
+        add_device_switch_hook(cusparse_switch_device);
         LOGv << "cusparseCreate finished" << (void*)cusparse_handle;
     }
 
     inline ~cusparse_initer() {
         if (!get_device_count()) return;
         LOGv << "cusparseDestroy:" <<  (void*)cusparse_handle;
-        checkCudaErrors(cusparseDestroy(cusparse_handle));
+        for (auto h : cusparse_handles)
+            if (h) checkCudaErrors(cusparseDestroy(h));
+        cusparse_handles.clear();
         LOGv << "cusparseDestroy finished";
     }
 

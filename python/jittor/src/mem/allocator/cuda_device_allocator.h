@@ -11,7 +11,9 @@
 namespace jittor {
 
 struct CudaDeviceAllocator : Allocator {
+    int device_id = 0;
     uint64 flags() const override { return _cuda; }
+    int device() const override { return device_id; }
     const char* name() const override;
     void* alloc(size_t size, size_t& allocation) override;
     void free(void* mem_ptr, size_t size, const size_t& allocation) override;

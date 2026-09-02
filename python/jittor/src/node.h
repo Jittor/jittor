@@ -84,6 +84,9 @@ struct NodeFlags {
         // reduce keep type unchange
         _reduce_keep=_prefer_32+2,
         _custom_flag = _prefer_32+6,
+        // The op places its outputs itself (device_copy); Op::init must not
+        // overwrite Var::device_id from the inputs.
+        _manual_device = 26,
     };
 
     inline void set(Flags f, int a=1, int nbits=1) {

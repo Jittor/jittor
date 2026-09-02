@@ -88,6 +88,69 @@ Var* Op::create_output(NanoVector shape, NanoString dtype) {
     return output;
 }
 
+// An input that has no data anywhere yet can still follow the device of the
+// operands it is combined with -- the ``2`` in ``x * 2``, its broadcast, the
+// ``1`` a gradient starts from -- as a CPU scalar may in torch. The pending
+// subgraph behind it is retargeted as a whole; it must be small and must not
+// contain data resident on another device. Anything else is a genuine
+// cross-device use and is refused, as torch refuses it.
+static bool retarget_pending(Var* v, int dev) {
+    if (v->is_finished()) return v->device_id == dev;
+    vector<Var*> seen;
+    vector<Node*> queue{v};
+    for (size_t i = 0; i < queue.size(); i++) {
+        auto node = queue[i];
+        if (node->is_var()) {
+            Var* var = node->var();
+            if (var->is_finished()) {
+                if (var->device_id != dev) return false;
+                continue;
+            }
+            seen.push_back(var);
+        }
+        if (seen.size() > 32) return false;
+        for (auto& e : node->_inputs) {
+            bool dup = false;
+            for (auto* q : queue) if (q == e.node) { dup = true; break; }
+            if (!dup) queue.push_back(e.node);
+        }
+    }
+    for (Var* var : seen) var->device_id = dev;
+    return true;
+}
+
+void Op::propagate_device() {
+    int dev = -1;
+    for (Var* v : inputs()) {
+        if (v->device_id < 0) continue;
+        if (!v->is_finished()) continue;
+        if (dev < 0) dev = v->device_id;
+        else if (dev != v->device_id)
+            LOGf << "Expected all inputs to be on the same CUDA device, but found"
+                << "cuda:" >> dev << "and cuda:" >> v->device_id << "for op" << name()
+                << "\nMove one side with Var.to_device() first.";
+    }
+    if (dev < 0) {
+        // Nothing finished: the pending inputs decide, and they must agree.
+        for (Var* v : inputs())
+            if (v->device_id >= 0) {
+                if (dev < 0) dev = v->device_id;
+                else if (dev != v->device_id && !retarget_pending(v, dev))
+                    LOGf << "Expected all inputs to be on the same CUDA device, but found"
+                        << "cuda:" >> dev << "and cuda:" >> v->device_id << "for op" << name()
+                        << "\nMove one side with Var.to_device() first.";
+            }
+    }
+    if (dev < 0) return;
+    for (Var* v : inputs())
+        if (v->device_id != dev && v->device_id >= 0 && !retarget_pending(v, dev))
+            LOGf << "Expected all inputs to be on the same CUDA device, but found"
+                << "cuda:" >> dev << "and cuda:" >> v->device_id << "for op" << name()
+                << "\nMove one side with Var.to_device() first.";
+    for (Var* v : outputs())
+        v->device_id = dev;
+}
+
 void Op::init() {
     bool first_init = !flags.get(NodeFlags::_requires_grad_snapshot);
     bool has_disabled_input = false;
@@ -111,6 +174,8 @@ void Op::init() {
         }
     }
     infer_shape();
+    if (first_init && !flags.get(NodeFlags::_manual_device))
+        propagate_device();
     if (first_init && has_first_order_only_input)
         for (Var* v : outputs())
             v->flags.set(NodeFlags::_first_order_only);

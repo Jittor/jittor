@@ -15,6 +15,7 @@
 namespace jittor {
 
 struct VarHolder;
+VarPtr device_copy(Var* x, int device);
 VarPtr detach(Var* x);
 
 struct DataView {
@@ -208,6 +209,20 @@ struct VarHolder {
     inline VarHolder* set_first_order_only() {
         var->flags.set(NodeFlags::_first_order_only);
         return this;
+    }
+
+    // @pyjt(__get__device_id)
+    inline int device_id() {
+        // The CUDA device index this Var lives on or will be computed on;
+        // -1 without CUDA. Host-resident Vars keep the device they belong to.
+        return var->device_id;
+    }
+
+    // @pyjt(to_device)
+    inline VarHolder* to_device(int device) {
+        // Copy onto the CUDA device with index ``device``, the equivalent of
+        // torch's tensor.to with a device index. Ops on the result run there.
+        return new VarHolder(jittor::device_copy(var, device));
     }
 
     /* detach the grad */
