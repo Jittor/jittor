@@ -22,6 +22,13 @@ def build_submanifold_conv3d_neighbors(coords, kernel_size, dilation=1):
     encoded as ``-1``. CPU uses an unordered map and CUDA uses an open-addressed
     table that compares full coordinates, so signed and large coordinates do
     not rely on collision-prone packed integer keys.
+
+    A coordinate repeated in ``coords`` resolves to its **first** occurrence on
+    both backends.
+
+    The returned tensor carries the topology it was built from, so
+    :func:`submanifold_conv3d` can reject a cache that belongs to different
+    coordinates instead of quietly convolving with the wrong neighbors.
     """
     if not isinstance(coords, jt.Var):
         raise TypeError("coords must be a jittor.Var")
@@ -135,7 +142,15 @@ def build_submanifold_conv3d_neighbors(coords, kernel_size, dilation=1):
             & (%(capacity)d - 1));
         for (int probe = 0; probe < %(capacity)d; ++probe) {
             int old = atomicCAS(slots + slot, -1, index);
-            if (old == -1 || sparse_coord_equal(coords, old, b, z, y, x)) return;
+            if (old == -1) return;
+            if (sparse_coord_equal(coords, old, b, z, y, x)) {
+                // Duplicate coordinate. Which thread wins the CAS above is a
+                // race, so keep the lowest point index: that is the first
+                // occurrence, which is what the CPU table stores, and it makes
+                // the two backends agree instead of silently disagreeing.
+                atomicMin(slots + slot, index);
+                return;
+            }
             slot = (slot + 1) & (%(capacity)d - 1);
         }
     }
@@ -207,7 +222,42 @@ def build_submanifold_conv3d_neighbors(coords, kernel_size, dilation=1):
         cuda_header=cuda_header,
         cuda_src=cuda_src,
     )
+    neighbors._submanifold_topology = (coords, kernel, dilation)
     return neighbors
+
+
+def _check_neighbors_topology(neighbors, coords, kernel, dilation):
+    """Reject a cached neighbor table that does not belong to these inputs.
+
+    The shape check this replaced passed for any ``[points, kernel_volume]``
+    tensor, so a table cached for a different point cloud (or a different
+    dilation) was accepted and the convolution read the wrong neighbors -- with
+    no error, and the docstring recommending exactly that caching.
+    """
+    topology = getattr(neighbors, "_submanifold_topology", None)
+    if topology is None:
+        raise ValueError(
+            "neighbors must come from build_submanifold_conv3d_neighbors: "
+            "only that function records which coordinates, kernel and dilation "
+            "the table was built for, and without it a stale table cannot be "
+            "told from a valid one")
+    source_coords, source_kernel, source_dilation = topology
+    if tuple(source_kernel) != tuple(kernel):
+        raise ValueError(
+            "cached neighbors were built for kernel %s, not %s"
+            % (tuple(source_kernel), tuple(kernel)))
+    if tuple(source_dilation) != tuple(dilation):
+        raise ValueError(
+            "cached neighbors were built for dilation %s, not %s"
+            % (tuple(source_dilation), tuple(dilation)))
+    if source_coords is coords:
+        return
+    same_shape = (tuple(int(size) for size in source_coords.shape)
+                  == tuple(int(size) for size in coords.shape))
+    if not same_shape or bool((source_coords != coords).any()):
+        raise ValueError(
+            "cached neighbors were built for different coordinates; rebuild "
+            "them with build_submanifold_conv3d_neighbors(coords, ...)")
 
 
 def submanifold_conv3d(feats, coords, weight, bias=None, dilation=1, neighbors=None):
@@ -216,7 +266,12 @@ def submanifold_conv3d(feats, coords, weight, bias=None, dilation=1, neighbors=N
     ``weight`` uses ``[out, kd, kh, kw, in]`` layout. Neighbor discovery runs
     once and every tap is evaluated by one batched matrix multiplication, so
     the implementation has no per-tap Python dispatch or host synchronization.
-    Pass a cached ``neighbors`` tensor to reuse topology.
+
+    Pass a cached ``neighbors`` tensor to reuse topology. It has to come from
+    :func:`build_submanifold_conv3d_neighbors` and to have been built for these
+    ``coords``, this kernel and this ``dilation``; anything else is rejected
+    rather than used. Reusing the same ``coords`` object costs nothing to
+    check; a different object of equal content costs one comparison.
     """
     if not all(isinstance(value, jt.Var) for value in (feats, coords, weight)):
         raise TypeError("feats, coords and weight must be jittor.Var values")
@@ -231,6 +286,10 @@ def submanifold_conv3d(feats, coords, weight, bias=None, dilation=1, neighbors=N
     taps = kernel[0] * kernel[1] * kernel[2]
     if neighbors is None:
         neighbors = build_submanifold_conv3d_neighbors(coords, kernel, dilation=dilation)
+    else:
+        _check_neighbors_topology(
+            neighbors, coords, _triple(kernel, "kernel_size"),
+            _triple(dilation, "dilation"))
     if tuple(int(size) for size in neighbors.shape) != (feat_shape[0], taps):
         raise ValueError("neighbors must have shape [points, kernel_volume]")
     if str(neighbors.dtype) not in ("int32", "int64"):

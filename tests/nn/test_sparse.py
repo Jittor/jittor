@@ -143,6 +143,156 @@ class TestSparseCOODuplicates(unittest.TestCase):
             self._scipy_dense(indices, values, shape).T, rtol=1e-6, atol=1e-6)
 
 
+def _reference_first_occurrence_neighbors(coords, kernel, dilation):
+    """Neighbor table with the documented rule: a repeated coordinate resolves
+    to its first occurrence."""
+    table = {}
+    for index, row in enumerate(coords):
+        table.setdefault(tuple(int(v) for v in row), index)
+    centers = [k // 2 for k in kernel]
+    out = np.full((len(coords), kernel[0] * kernel[1] * kernel[2]), -1, "int32")
+    for i, row in enumerate(coords):
+        tap = 0
+        for kz in range(kernel[0]):
+            for ky in range(kernel[1]):
+                for kx in range(kernel[2]):
+                    key = (int(row[0]),
+                           int(row[1]) + (kz - centers[0]) * dilation[0],
+                           int(row[2]) + (ky - centers[1]) * dilation[1],
+                           int(row[3]) + (kx - centers[2]) * dilation[2])
+                    out[i, tap] = table.get(key, -1)
+                    tap += 1
+    return out
+
+
+class TestSubmanifoldDuplicateCoords(unittest.TestCase):
+    """Duplicate coordinates must mean the same thing on both backends, and a
+    cached neighbor table must belong to the coordinates it is used with."""
+
+    KERNEL = (1, 1, 3)
+    DILATION = (1, 1, 1)
+
+    def _duplicated_coords(self, n_points=512, n_distinct=4):
+        # every coordinate appears n_points/n_distinct times; the CPU table
+        # keeps the first occurrence and CUDA used to keep whichever thread
+        # happened to win an atomicCAS.
+        coords = np.zeros((n_points, 4), dtype=np.int32)
+        coords[:, 3] = np.arange(n_points, dtype=np.int32) % n_distinct
+        return coords
+
+    def _build(self, coords_np, use_cuda):
+        with jt.flag_scope(use_cuda=use_cuda):
+            return jt.sparse.build_submanifold_conv3d_neighbors(
+                jt.array(coords_np), self.KERNEL, dilation=self.DILATION
+            ).numpy()
+
+    def test_first_occurrence_on_cpu(self):
+        coords_np = self._duplicated_coords()
+        got = self._build(coords_np, 0)
+        expected = _reference_first_occurrence_neighbors(
+            coords_np, self.KERNEL, self.DILATION)
+        np.testing.assert_array_equal(got, expected)
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_first_occurrence_on_cuda_matches_cpu(self):
+        coords_np = self._duplicated_coords()
+        expected = _reference_first_occurrence_neighbors(
+            coords_np, self.KERNEL, self.DILATION)
+        cpu = self._build(coords_np, 0)
+        cuda = self._build(coords_np, 1)
+        np.testing.assert_array_equal(cpu, expected)
+        np.testing.assert_array_equal(cuda, expected)
+        np.testing.assert_array_equal(cuda, cpu)
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_convolution_output_agrees_across_backends(self):
+        coords_np = self._duplicated_coords(n_points=256, n_distinct=4)
+        rng = np.random.RandomState(3)
+        feats_np = rng.randn(coords_np.shape[0], 3).astype("float32")
+        weight_np = rng.randn(2, 1, 1, 3, 3).astype("float32")
+
+        def run(use_cuda):
+            with jt.flag_scope(use_cuda=use_cuda):
+                return jt.sparse.submanifold_conv3d(
+                    jt.array(feats_np), jt.array(coords_np),
+                    jt.array(weight_np), dilation=self.DILATION).numpy()
+
+        np.testing.assert_allclose(run(1), run(0), atol=1e-5, rtol=1e-5)
+
+
+class TestSubmanifoldNeighborCache(unittest.TestCase):
+    KERNEL = (1, 1, 3)
+
+    def _inputs(self, seed=5):
+        rng = np.random.RandomState(seed)
+        coords = np.array([[0, 0, 0, 0], [0, 0, 0, 1], [0, 0, 0, 2]], "int32")
+        feats = rng.randn(3, 2).astype("float32")
+        weight = rng.randn(2, 1, 1, 3, 2).astype("float32")
+        return coords, feats, weight
+
+    def test_matching_cache_is_accepted(self):
+        coords_np, feats_np, weight_np = self._inputs()
+        coords = jt.array(coords_np)
+        cache = jt.sparse.build_submanifold_conv3d_neighbors(coords, self.KERNEL)
+        cached = jt.sparse.submanifold_conv3d(
+            jt.array(feats_np), coords, jt.array(weight_np), neighbors=cache)
+        fresh = jt.sparse.submanifold_conv3d(
+            jt.array(feats_np), coords, jt.array(weight_np))
+        np.testing.assert_allclose(cached.numpy(), fresh.numpy(),
+                                   atol=1e-6, rtol=1e-6)
+
+    def test_equal_but_distinct_coords_object_is_accepted(self):
+        coords_np, feats_np, weight_np = self._inputs()
+        cache = jt.sparse.build_submanifold_conv3d_neighbors(
+            jt.array(coords_np), self.KERNEL)
+        out = jt.sparse.submanifold_conv3d(
+            jt.array(feats_np), jt.array(coords_np), jt.array(weight_np),
+            neighbors=cache)
+        self.assertEqual(tuple(out.shape), (3, 2))
+
+    def test_cache_for_other_coordinates_is_rejected(self):
+        coords_np, feats_np, weight_np = self._inputs()
+        other = coords_np.copy()
+        other[2, 3] = 9        # same shape, different topology
+        cache = jt.sparse.build_submanifold_conv3d_neighbors(
+            jt.array(other), self.KERNEL)
+        with self.assertRaises(ValueError) as ctx:
+            jt.sparse.submanifold_conv3d(
+                jt.array(feats_np), jt.array(coords_np), jt.array(weight_np),
+                neighbors=cache)
+        assert "different coordinates" in str(ctx.exception), ctx.exception
+
+    def test_cache_for_other_dilation_is_rejected(self):
+        coords_np, feats_np, weight_np = self._inputs()
+        coords = jt.array(coords_np)
+        cache = jt.sparse.build_submanifold_conv3d_neighbors(
+            coords, self.KERNEL, dilation=2)
+        with self.assertRaises(ValueError) as ctx:
+            jt.sparse.submanifold_conv3d(
+                jt.array(feats_np), coords, jt.array(weight_np),
+                dilation=1, neighbors=cache)
+        assert "dilation" in str(ctx.exception), ctx.exception
+
+    def test_cache_for_other_kernel_is_rejected(self):
+        coords_np, feats_np, weight_np = self._inputs()
+        coords = jt.array(coords_np)
+        cache = jt.sparse.build_submanifold_conv3d_neighbors(coords, (3, 1, 1))
+        with self.assertRaises(ValueError) as ctx:
+            jt.sparse.submanifold_conv3d(
+                jt.array(feats_np), coords, jt.array(weight_np),
+                neighbors=cache)
+        assert "kernel" in str(ctx.exception), ctx.exception
+
+    def test_untracked_neighbors_tensor_is_rejected(self):
+        coords_np, feats_np, weight_np = self._inputs()
+        raw = jt.array(np.zeros((3, 3), dtype=np.int32))
+        with self.assertRaises(ValueError) as ctx:
+            jt.sparse.submanifold_conv3d(
+                jt.array(feats_np), jt.array(coords_np), jt.array(weight_np),
+                neighbors=raw)
+        assert "build_submanifold_conv3d_neighbors" in str(ctx.exception)
+
+
 @unittest.skipIf(not jt.has_cuda, "No CUDA found")
 class TestSparseCOODuplicatesCuda(TestSparseCOODuplicates):
     """Same contract on CUDA: the scatter-add there goes through atomics, and
