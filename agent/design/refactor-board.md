@@ -207,7 +207,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 5.16 | `state_dict(to="torch")` 用 `from_numpy`，不强制 floa… | 待领 | | |
 | 5.17 | 同一概念合并 | 待领 | | |
 | 5.18 | 同一概念合并 | 进行中 | pyother | |
-| 5.19 | 被静默忽略的参数改为传非默认值时 warn 或 raise | 进行中 | pyother | |
+| 5.19 | 被静默忽略的参数改为传非默认值时 warn 或 raise | 进行中 | pyops（算子参数）+ pyother（其余） | 1710aef1（算子参数：relu/leaky_relu/silu/mish 的 inplace、instance_norm 与 InstanceNorm 的 running stats/momentum/is_train/sync、svd 的 compute_uv/driver、inv_ex 的 check_errors、ctc_loss 的 zero_infinity、sort 的 stable；topk 的 sorted 判为无需处理，见提交说明）。共用基础设施 `python/jittor/_arg_policy.py`，pyother 直接复用，不要另起近义模块 |
 | 5.20 | import 期副作用删除 | 待领 | | |
 | 5.21 | 六个 monkeypatch 安装器写成显式有序清单并加断言 | 待领 | | |
 | 5.22 | `nn` facade 不导出 39 个下划线名，内部用模块局部名不经 `jt.nn.*` 晚绑… | 待领 | | |
