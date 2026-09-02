@@ -13,6 +13,8 @@ import numpy as np
 import math
 from collections.abc import Sequence,Iterable
 
+from .. import _arg_policy
+
 def knn(unknown, known, k):
     ''' find k neighbors for unknown array from known array
 
@@ -148,6 +150,20 @@ def __index__(x):
 jt.Var.__index__ = __index__
 
 def sort(input, dim=-1, descending=False, stable=False):
+    ''' Sort along ``dim``, returning ``(values, indices)`` like ``torch.sort``.
+
+    ``stable=True`` is not implemented: jittor's ``argsort`` is not a stable sort
+    on CPU (verified against ``numpy.argsort(kind="stable")`` -- equal keys come
+    back permuted), so accepting the flag would promise an ordering the sort does
+    not deliver. It happens to be stable on the current CUDA backend, which is
+    exactly why the difference has to be refused rather than assumed.
+    '''
+    if stable:
+        _arg_policy.unsupported(
+            "jittor.sort", "stable", stable,
+            "jittor's argsort is not stable on CPU, so equal elements come back "
+            "in an arbitrary order and the indices of tied keys differ from "
+            "torch's")
     index, value = jt.argsort(input, dim, descending)
     return value, index
 jt.Var.sort = sort
@@ -1267,6 +1283,14 @@ jt.Var.diag = diag
         
 
 def topk(input, k, dim=None, largest=True, sorted=True):
+    ''' Top-``k`` values and indices along ``dim``, like ``torch.topk``.
+
+    ``sorted=False`` is accepted and has no effect: torch leaves the ordering
+    *unspecified* in that case, and this implementation always returns the k
+    elements in sorted order, which satisfies the weaker contract. Nothing the
+    caller asked for is withheld, so this one is not routed through
+    ``_arg_policy`` -- see ``tests/ops/test_ignored_arguments.py``.
+    '''
     if input.numel()==0:
         return jt.array([],dtype=input.dtype),jt.array([],dtype='int32')
     if dim is None:
@@ -2466,7 +2490,10 @@ def ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0, reducti
             if reduction is none, it will return (N,) array,
             if reduction is mean or sum, it will return one scalar
         zero_infinity (bool, default False):
-            zero_infinity for grad
+            NOT IMPLEMENTED -- passing True raises NotImplementedError. torch
+            zeroes infinite losses and their gradients; this implementation
+            does not, and silently accepting the flag would leave inf/nan in
+            the reduced loss.
 
     Example:
 
@@ -2488,6 +2515,12 @@ def ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0, reducti
         dinput = jt.grad(loss, input)
 
     '''
+    if zero_infinity:
+        _arg_policy.unsupported(
+            "jittor.ctc_loss", "zero_infinity", zero_infinity,
+            "infinite losses (a target longer than the input) and their "
+            "gradients are kept as inf instead of being zeroed, so the reduced "
+            "loss and every gradient in the batch become inf/nan")
     result = jt.misc._CTCLossFunction.apply(
         log_probs, targets, input_lengths, target_lengths, blank,
         zero_infinity,
@@ -2517,7 +2550,10 @@ class CTCLoss(jt.Module):
             if reduction is none, it will return (N,) array,
             if reduction is mean or sum, it will return one scalar
         zero_infinity (bool, default False):
-            zero_infinity for grad
+            NOT IMPLEMENTED -- passing True raises NotImplementedError. torch
+            zeroes infinite losses and their gradients; this implementation
+            does not, and silently accepting the flag would leave inf/nan in
+            the reduced loss.
 
     Input:
 

@@ -4,6 +4,7 @@ import jittor as jt
 from jittor import Module, init
 
 from ..functional.normalization import fp32_guard
+from ... import _arg_policy
 
 
 class BatchNorm(Module):
@@ -112,6 +113,24 @@ class InstanceNorm(Module):
         is_train=True,
         sync=True,
     ):
+        # This module has no running statistics: it normalises every sample with
+        # its own spatial statistics in both train and eval mode. That makes
+        # three of its parameters inert rather than merely unused.
+        if momentum != 0.1:
+            _arg_policy.ignored(
+                "jittor.nn.InstanceNorm", "momentum", momentum,
+                "momentum only ever weights a running-statistics update, and "
+                "this module tracks no running statistics")
+        if not is_train:
+            _arg_policy.ignored(
+                "jittor.nn.InstanceNorm", "is_train", is_train,
+                "with no running statistics there is no eval-mode behaviour to "
+                "switch to, so both modes normalise with per-sample statistics")
+        if not sync:
+            _arg_policy.ignored(
+                "jittor.nn.InstanceNorm", "sync", sync,
+                "the statistics are per sample and never cross rank "
+                "boundaries, so there is nothing for this flag to turn off")
         self.sync = sync
         self.num_features = num_features
         self.is_train = is_train

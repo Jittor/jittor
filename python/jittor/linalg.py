@@ -10,6 +10,7 @@
 # ***************************************************************
 import jittor as jt
 from functools import partial
+from . import _arg_policy
 from .nn import ComplexNumber
 
 
@@ -487,6 +488,16 @@ def svd(x, full_matrices=False, *, compute_uv=True, driver=None):
     :param driver: accepted for torch signature compatibility (ignored).
     :return: named tuple ``SVD(U, S, Vh)``.
     '''
+    if not compute_uv:
+        _arg_policy.ignored(
+            "jittor.linalg.svd", "compute_uv", compute_uv,
+            "U and Vh are computed and returned anyway, so none of the work the "
+            "flag asks to skip is skipped (S is correct either way; use "
+            "jt.linalg.svdvals to actually skip it)")
+    if driver is not None:
+        _arg_policy.ignored(
+            "jittor.linalg.svd", "driver", driver,
+            "the decomposition always goes through numpy/cupy's default driver")
     if _is_native_complex(x):
         # native complex64 -> bridge to the ComplexNumber path, return native.
         u, s, v = complex_svd(_native_to_cn(x))
@@ -517,6 +528,10 @@ def svdvals(x, *, driver=None):
     :param driver: accepted for torch signature compatibility (ignored).
     :return: singular values ``S`` ``(...,K)``.
     '''
+    if driver is not None:
+        _arg_policy.ignored(
+            "jittor.linalg.svdvals", "driver", driver,
+            "the decomposition always goes through numpy/cupy's default driver")
     if _is_native_complex(x):
         return _cn_to_native(complex_svd(_native_to_cn(x))[1])
     if isinstance(x, ComplexNumber):
@@ -693,11 +708,24 @@ def inv_ex(x, *, check_errors=False, out=None):
     Compute a matrix inverse and return ``(inverse, info)`` like
     ``torch.linalg.inv_ex``.
 
-    Jittor's :func:`inv` path already raises when numpy/Jittor cannot invert the
-    input, so successful calls have a zero ``info`` tensor. This covers the
-    common torch-compat use case where callers import ``inv_ex`` and check
-    ``info == 0`` to build a validity mask.
+    .. warning::
+        ``info`` is **always zero**. torch reports a singular input by returning
+        ``info > 0`` for the offending matrix and leaving ``check_errors=False``
+        callers to build a validity mask from ``info == 0``; Jittor's :func:`inv`
+        raises instead, so a singular input never reaches the ``info`` tensor and
+        a mask built from it marks every matrix valid. Detect singular inputs by
+        catching the exception until non-raising reporting is implemented.
     """
+    if not check_errors:
+        # check_errors=True happens to be honoured -- jt.linalg.inv raises on a
+        # singular input, which is what torch does for that flag.  It is the
+        # *default* that is broken: torch promises the caller can keep going and
+        # read the failure out of `info`, and here `info` never reports anything.
+        _arg_policy.ignored(
+            "jittor.linalg.inv_ex", "check_errors", check_errors,
+            "info is always 0 -- a singular input raises out of jt.linalg.inv "
+            "instead of being reported through info, so an `info == 0` validity "
+            "mask is unconditionally all-true (check_errors=True *is* honoured)")
     inverse = inv(x)
     info_shape = tuple(int(s) for s in x.shape[:-2])
     info = jt.zeros(info_shape, dtype="int32")

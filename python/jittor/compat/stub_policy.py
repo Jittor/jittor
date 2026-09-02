@@ -35,8 +35,9 @@ never raises; it warns once so the difference is on the record.
 
 from __future__ import absolute_import
 
-import os
 import warnings
+
+from .._arg_policy import env_flag_enabled
 
 __all__ = [
     "allow_stub",
@@ -65,18 +66,11 @@ _warned = set()
 _registry = {}
 
 
-def _env_allows():
-    raw = os.environ.get(ENV_VAR)
-    if raw is None:
-        return False
-    return str(raw).strip().lower() not in ("", "0", "false", "no", "off")
-
-
 def allow_stub():
     """True when silent-stub fallback has been explicitly enabled."""
     if _override is not None:
         return bool(_override)
-    return _env_allows()
+    return env_flag_enabled(ENV_VAR)
 
 
 def set_allow_stub(value):

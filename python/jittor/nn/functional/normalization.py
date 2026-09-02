@@ -4,6 +4,8 @@ from functools import lru_cache, wraps
 
 import jittor as jt
 
+from ... import _arg_policy
+
 
 def batch_norm(x, running_mean, running_var, weight=1, bias=0, training=False, momentum=0.1, eps=1e-05):
     dims = [0]+list(range(2,x.ndim))
@@ -35,6 +37,31 @@ def instance_norm(x,
     bias = 0,
     momentum = 0.1,
     eps = 1e-5):
+    ''' Per-sample normalisation over the spatial dims, like ``torch.nn.functional.instance_norm``.
+
+    ``running_mean``/``running_var``/``momentum`` describe running-statistics
+    tracking, which this implementation does not have; see ``jittor._arg_policy``
+    and ``tests/ops/test_ignored_arguments.py``.
+    '''
+    if momentum != 0.1:
+        # In torch momentum only ever feeds the running-stat update. There is no
+        # such update here, so no value of it can change anything -- and the
+        # caller who bothered to pass one is asking for tracking.
+        _arg_policy.ignored(
+            "jittor.nn.instance_norm", "momentum", momentum,
+            "momentum only ever weights a running-statistics update, and no "
+            "running statistics are tracked, so every value behaves like the "
+            "default")
+    if running_mean is not None or running_var is not None:
+        # torch updates these from the batch and, once tracking is on, uses them
+        # instead of the per-sample statistics in eval mode. Accepting them and
+        # normalising per-sample anyway returns different numbers than asked for.
+        _arg_policy.unsupported(
+            "jittor.nn.instance_norm", "running_mean/running_var",
+            "not None",
+            "the running statistics are neither updated nor used, so the buffers "
+            "stay at their initial values and eval-mode normalisation silently "
+            "uses per-sample statistics instead of the tracked ones")
     dims = list(range(2,x.ndim))
     xhat = jt.nn._ln_normalize(x, dims, eps)   # stable custom backward, see _ln_normalize
     weight = 1.0 if weight is None else weight

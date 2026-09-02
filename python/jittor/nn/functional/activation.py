@@ -4,6 +4,14 @@ import numpy as np
 
 import jittor as jt
 
+from ... import _arg_policy
+
+
+_INPLACE_CONSEQUENCE = (
+    "the input var is left untouched and a new one is returned, so none of the "
+    "memory the flag asks for is saved"
+)
+
 
 def relu(x, inplace=False):
     r''' Applies the element-wise function:
@@ -25,6 +33,9 @@ def relu(x, inplace=False):
         >>> nn.relu(a)
         jt.Var([0.        1.1338731 6.128115 ], dtype=float32)
     '''
+    if inplace:
+        _arg_policy.ignored("jittor.nn.relu", "inplace", inplace,
+                            _INPLACE_CONSEQUENCE)
     cond = x>0.0
     return jt.ternary_out_hint(cond, x, 0.0)
 
@@ -55,6 +66,9 @@ def leaky_relu(x, scale=0.01, negative_slope=None, inplace=False):
         >>> nn.leaky_relu(a)
         jt.Var([-3.8380371e-03  1.1338731e+00  6.1281152e+00], dtype=float32)
     '''
+    if inplace:
+        _arg_policy.ignored("jittor.nn.leaky_relu", "inplace", inplace,
+                            _INPLACE_CONSEQUENCE)
     return jt.ternary(x>0, x, x*scale)
 
 
@@ -191,6 +205,9 @@ def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignor
         >>> nn.silu(a)
         jt.Var([-0.15552104 -0.27603802  1.9016962 ], dtype=float32)
     '''
+    if inplace:
+        _arg_policy.ignored("jittor.nn.silu", "inplace", inplace,
+                            _INPLACE_CONSEQUENCE)
     return x * x.sigmoid()
 
 
@@ -277,4 +294,7 @@ def hardtanh(x, min_val=-1, max_val=1):
 
 
 def mish(x, inplace=False):
+    if inplace:
+        _arg_policy.ignored("jittor.nn.mish", "inplace", inplace,
+                            _INPLACE_CONSEQUENCE)
     return x * jt.tanh(jt.nn.softplus(x))
