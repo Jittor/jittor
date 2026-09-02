@@ -199,7 +199,11 @@ def _autograd_grad(
         return (None,) * len(inputs)
     else:
         acc_loss = None
-        for new_output, grad_output in zip(new_outputs, grad_outputs):
+        # ``new_grad_outputs`` -- not ``grad_outputs``: outputs that are None or
+        # do not require grad were dropped above, so pairing the survivors with
+        # the *unfiltered* seeds shifts every seed onto the wrong output (and
+        # silently discards the trailing ones, because zip stops at the shorter).
+        for new_output, grad_output in zip(new_outputs, new_grad_outputs):
             if isinstance(new_output, jt.nn.ComplexNumber):
                 # Legacy ComplexNumber: the value is a real [..., 2] (real, imag) stack,
                 # so the real-valued seeded loss is just <out.value, grad.value>.
