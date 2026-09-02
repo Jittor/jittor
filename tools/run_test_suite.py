@@ -30,7 +30,10 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 sys.path.insert(0, str(REPO_ROOT / "tests"))
-from _helpers.process_modes import TORCH_MODE_PATHS  # noqa: E402
+from _helpers.gate_scope import (  # noqa: E402
+    native_arguments,
+    torch_arguments,
+)
 
 SESSIONS = ("native", "torch")
 
@@ -68,12 +71,8 @@ def _session_environment(session):
 
 
 def _session_arguments(session):
-    if session == "torch":
-        return list(TORCH_MODE_PATHS)
-    arguments = ["tests"]
-    for path in TORCH_MODE_PATHS:
-        arguments.append("--ignore=" + path)
-    return arguments
+    """The same selection `nox -s cpu` uses, from the same source."""
+    return list(torch_arguments() if session == "torch" else native_arguments())
 
 
 def _parse_counts(output):

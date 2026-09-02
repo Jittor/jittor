@@ -22,7 +22,10 @@ jobs:
     runs-on: ${{ needs.baseline.outputs.host_runner }}
     container:
       image: ${{ needs.baseline.outputs.cpu_ci_image }}
-    timeout-minutes: 90
+    # The CPU gate runs the whole test tree in two process modes (0.04); the
+    # 90-minute budget was sized for a 22-file whitelist. 0.15 splits this into
+    # a smoke tier for PRs and a full tier, which is where the number comes back down.
+    timeout-minutes: 240
     steps:
       - name: Check out source
         uses: actions/checkout@v6

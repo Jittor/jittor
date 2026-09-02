@@ -17,6 +17,19 @@ sys.dont_write_bytecode = True
 
 REPO_ROOT = Path(__file__).resolve().parent
 
+# The gate's scope lives next to the tests it selects, so `nox -s cpu` and
+# `tools/run_test_suite.py` cannot drift apart -- and so adding a test file is
+# enough to have it gated. See tests/_helpers/gate_scope.py.
+sys.path.insert(0, str(REPO_ROOT / "tests"))
+try:
+    from _helpers.gate_scope import (  # noqa: E402
+        EXCLUDED as GATE_EXCLUSIONS,
+        native_arguments as gate_native_arguments,
+        torch_arguments as gate_torch_arguments,
+    )
+finally:
+    sys.path.remove(str(REPO_ROOT / "tests"))
+
 # Nox imports this file through Python's loader before session isolation starts.
 _loader_cache = globals().get("__cached__")
 if isinstance(_loader_cache, str):
@@ -149,36 +162,11 @@ STRUCTURE_TESTS = (
     "agent/scripts/test_check_wheel_contents.py",
     "tests/structure",
 )
-CPU_TESTS = (
-    "tests/compiler/test_custom_op.py",
-    # The bridge to src/test/*.cc: expression solver, kernel IR, op compiler, op
-    # relay and the SFRL allocator have unit tests in C++ that no gate ran.
-    "tests/compiler/test_jit_tests.py",
-    "tests/compiler/test_utils.py",
-    "tests/core/test_autograd_engine.py",
-    "tests/core/test_misc_shape.py",
-    "tests/core/test_regression.py",
-    "tests/core/test_rootcause_semantics.py",
-    "tests/nn/test_attention.py",
-    "tests/nn/test_depthwise_conv.py",
-    "tests/nn/test_nn_capabilities.py",
-    "tests/ops/test_device_type_harness.py",
-    # The OpInfo registry's two batteries: forward against numpy, backward via
-    # gradcheck. The gradcheck half is pinned to CPU, so this is the only gate
-    # that can run it -- without this entry the derivative formulas of every
-    # registered operator are verified nowhere.
-    "tests/ops/test_ops.py",
-    "tests/ops/test_reduce_op.py",
-    "tests/core/test_array.py::TestArray::test_array_dtype",
-    "tests/optim/test_opt_state_dict.py",
-    "tests/optim/test_optim_core.py",
-    "tests/optim/test_optimizer.py",
-    "tests/optim/test_optimizer_save_load.py",
-    "tests/compat/torch/test_torch_compat_grad_management.py",
-    "tests/compat/torch/test_torch_bootstrap.py::TestTorchBootstrap::test_preflight_nvcc_flags_keep_command_separators",
-    "tests/compat/torch/test_torch_cpp_extension.py::TestTorchCppExtensionArchFlags::test_reports_the_builder_cxx11_abi",
-    "tests/integration/test_notebooks.py",
-)
+# No CPU_TESTS list any more. The CPU gate runs the whole tree in two
+# processes -- native semantics and Torch-compatibility semantics cannot share
+# an interpreter -- and the only paths it skips are the ones that say why in
+# tests/_helpers/gate_scope.py. The list this replaced reached 22 of 332 test
+# files; everything else was written, merged and then never run by CI again.
 CPU_TORCH_ORACLE_TESTS = (
     "tests/ops/test_cumprod_op.py",
     "tests/optim/test_adamw.py",
@@ -429,6 +417,27 @@ def _run_pytest(session, defaults, env, runner=None):
             env=env,
             external=runner is not None,
         )
+
+
+def _run_pytest_once(session, args, env, runner=None, timeout=900):
+    """One pytest process for one whole set of paths.
+
+    A tree-wide gate runs as a single invocation on purpose: one process per
+    path would pay the interpreter and import cost hundreds of times, and a
+    per-path loop stops at the first failing path, which is how a gate ends up
+    reporting one failure per run instead of all of them.
+    """
+    python = runner or "python"
+    session.run(
+        python,
+        "-m",
+        "pytest",
+        "-v",
+        "--timeout=%d" % timeout,
+        *args,
+        env=env,
+        external=runner is not None,
+    )
 
 
 def _hardware_python():
@@ -1275,7 +1284,7 @@ def py313(session):
 
 @nox.session(python="3.11", venv_backend="venv")
 def cpu(session):
-    """Run the maintained CPU smoke gate on a clean Jittor cache."""
+    """Run the whole test tree on CPU, in both process modes, on a clean cache."""
     _root, env = _session_env(session, "cpu")
     real_torch_site = os.environ.get("REAL_TORCH_SITE", "").strip()
     require_real_torch = os.environ.get("JITTOR_REQUIRE_REAL_TORCH", "").strip() == "1"
@@ -1286,6 +1295,9 @@ def cpu(session):
     env["REAL_TORCH_SITE"] = ""
     env["nvcc_path"] = ""
     env["JITTOR_TEST_DEVICES"] = "cpu"
+    # Explicit, not inherited: a developer with the shim exported would
+    # otherwise run the native half of the gate in Torch mode and never know.
+    env["JITTOR_TORCH_SHIM"] = "0"
     session.install(
         "astunparse==1.6.3",
         IPYKERNEL,
@@ -1308,16 +1320,17 @@ def cpu(session):
         "assert float(x.item()) == 6.0"
     )
     session.run("python", "-c", probe, env=env)
-    session.run(
-        "python",
-        "-m",
-        "pytest",
-        "--collect-only",
-        "-q",
-        "tests",
-        env=env,
-    )
-    _run_pytest(session, CPU_TESTS, env)
+    if session.posargs:
+        _run_pytest(session, (), env)
+        return
+    # Two processes, one tree. Torch compatibility mode is process-global -- it
+    # changes lazy execution, reduction defaults and gradient semantics -- so a
+    # single `pytest tests` run cannot assert both. Each session still selects
+    # by exclusion, so a new test file is gated the moment it is written.
+    _run_pytest_once(session, gate_native_arguments(), env)
+    torch_env = env.copy()
+    torch_env["JITTOR_TORCH_SHIM"] = "1"
+    _run_pytest_once(session, gate_torch_arguments(), torch_env)
     oracle_env = env.copy()
     if real_torch_site:
         oracle_env["REAL_TORCH_SITE"] = real_torch_site
