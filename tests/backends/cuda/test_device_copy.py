@@ -41,9 +41,6 @@ def _device_count():
         return 0
 
 
-_TWO_DEVICES = jt.has_cuda and _device_count() >= 2
-
-
 def _peer_regime():
     """"peer" if device 0 and 1 can read each other's memory, else "staged".
 
@@ -72,6 +69,19 @@ def _peer_regime():
 
 
 class _DeviceCase(unittest.TestCase):
+    #: See tests/backends/cuda/test_multi_device.py: the device count is asked
+    #: for at run time, never during collection.
+    min_devices = 2
+
+    @classmethod
+    def setUpClass(cls):
+        if not jt.has_cuda:
+            raise unittest.SkipTest("this machine has no CUDA build")
+        if _device_count() < cls.min_devices:
+            raise unittest.SkipTest(
+                "this machine has %d visible CUDA device(s), the test needs %d"
+                % (_device_count(), cls.min_devices))
+
     def setUp(self):
         self._saved = (jt.flags.use_cuda, jt.current_device())
         jt.flags.use_cuda = 1
@@ -84,7 +94,6 @@ class _DeviceCase(unittest.TestCase):
         jt.flags.use_cuda = self._saved[0]
 
 
-@unittest.skipIf(not _TWO_DEVICES, "Needs two visible CUDA devices")
 class TestDeviceCopy(_DeviceCase):
     def test_round_trip(self):
         a = np.random.RandomState(1).randn(1000).astype("float32")

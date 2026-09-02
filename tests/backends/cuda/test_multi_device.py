@@ -31,9 +31,6 @@ def _device_count():
         return 0
 
 
-_HAS_CUDA = jt.has_cuda and _device_count() >= 1
-_TWO_DEVICES = jt.has_cuda and _device_count() >= 2
-
 # CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL, from cuda.h. The driver API is used
 # rather than the runtime's cudaPointerGetAttributes because that struct's
 # layout changed between CUDA versions while cuPointerGetAttribute's signature
@@ -69,6 +66,23 @@ def _pointer_device(ptr):
 
 
 class _DeviceCase(unittest.TestCase):
+    #: How many visible CUDA devices this class needs. Checked in
+    #: ``setUpClass``, not in a module-level ``skipIf``: asking the backend how
+    #: many devices there are during *collection* makes collection itself fail
+    #: on a machine without CUDA, and these files have to be collectable
+    #: everywhere and skipped where the hardware is missing
+    #: (tests/structure/test_pytest_contract.py).
+    min_devices = 1
+
+    @classmethod
+    def setUpClass(cls):
+        if not jt.has_cuda:
+            raise unittest.SkipTest("this machine has no CUDA build")
+        if _device_count() < cls.min_devices:
+            raise unittest.SkipTest(
+                "this machine has %d visible CUDA device(s), the test needs %d"
+                % (_device_count(), cls.min_devices))
+
     def setUp(self):
         self._saved = (jt.flags.use_cuda, jt.current_device())
         jt.flags.use_cuda = 1
@@ -81,7 +95,6 @@ class _DeviceCase(unittest.TestCase):
         jt.flags.use_cuda = self._saved[0]
 
 
-@unittest.skipIf(not _HAS_CUDA, "No cuda found")
 class TestCurrentDevice(_DeviceCase):
     def test_current_device_is_the_flag(self):
         self.assertEqual(jt.current_device(), 0)
@@ -108,8 +121,9 @@ class TestCurrentDevice(_DeviceCase):
         self.assertEqual(float(marker.numpy()[0]), 42.0)
 
 
-@unittest.skipIf(not _TWO_DEVICES, "Needs two visible CUDA devices")
 class TestSecondDevice(_DeviceCase):
+    min_devices = 2
+
     def test_data_really_lands_on_the_second_device(self):
         with jt.flag_scope(device_id=1):
             x = jt.array(np.ones(1024, "float32"))

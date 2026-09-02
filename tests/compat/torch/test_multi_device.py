@@ -34,11 +34,25 @@ def _device_count():
         return 0
 
 
-_HAS_CUDA = _IS_SHIM and jt.has_cuda and _device_count() >= 1
-_TWO_DEVICES = _IS_SHIM and jt.has_cuda and _device_count() >= 2
-
 
 class _Case(unittest.TestCase):
+    #: See tests/backends/cuda/test_multi_device.py: the device count is asked
+    #: for at run time. A module-level query would make collection itself
+    #: depend on the backend, and this file has to be collectable on a machine
+    #: with no CUDA and skipped there.
+    min_devices = 1
+
+    @classmethod
+    def setUpClass(cls):
+        if not _IS_SHIM:
+            raise unittest.SkipTest("the torch facade is not installed here")
+        if not jt.has_cuda:
+            raise unittest.SkipTest("this machine has no CUDA build")
+        if _device_count() < cls.min_devices:
+            raise unittest.SkipTest(
+                "this machine has %d visible CUDA device(s), the test needs %d"
+                % (_device_count(), cls.min_devices))
+
     def setUp(self):
         self._saved = (jt.flags.use_cuda, jt.current_device())
         jt.flags.use_cuda = 1
@@ -54,7 +68,6 @@ class _Case(unittest.TestCase):
         jt.flags.use_cuda = self._saved[0]
 
 
-@unittest.skipIf(not _HAS_CUDA, "needs the torch facade and a CUDA device")
 class TestDeviceApi(_Case):
     def test_count_and_current(self):
         self.assertEqual(torch.cuda.device_count(), _device_count())
@@ -74,8 +87,9 @@ class TestDeviceApi(_Case):
         self.assertEqual(torch.get_default_device(), torch.device("cuda", 0))
 
 
-@unittest.skipIf(not _TWO_DEVICES, "needs two visible CUDA devices")
 class TestMultiDeviceFacade(_Case):
+    min_devices = 2
+
     def test_set_device_places_new_tensors(self):
         torch.cuda.set_device(1)
         try:
