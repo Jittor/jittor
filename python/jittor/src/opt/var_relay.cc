@@ -91,6 +91,7 @@ int VarRelayManager::add_relay_group(const vector<pair<Var*, Var*>>& group) {
         auto& p = relay_group.relayed_pairs[i];
         oprc.op = p.first->input();
         auto op_info = get_op_info(oprc.op->name());
+        oprc.var_members = op_info.var_members;
         oprc.relayed_members.resize(op_info.var_members.size());
         for (uint i=0; i<op_info.var_members.size(); i++) {
             auto offset = op_info.var_members[i].second;
@@ -186,15 +187,33 @@ string VarRelayManager::get_relay_src(int group_id, int op_id) {
     ss << "\n    // @relay_op\n";
     ss << "    Op* "<<relay_op_name<<
         " = context->vrm.relay_groups["<<group_id<<"].oprcs["<<op_id<<"].op;\n";
+    ss << "    auto& rctx_"<<S(group_id)<<"_"<<S(op_id)<<
+        " = context->vrm.relay_groups["<<group_id<<"].oprcs["<<op_id<<"];\n";
     for (uint i=0; i<oprc.relayed_members.size(); i++) {
         int j = oprc.relayed_members[i];
-        auto offset = op_info.var_members[i].second;
-        ss << "    GET_VAR_MEMBER("<<relay_op_name<<
-            ", "<<offset<<") = vars["<<j<<"].var;\n";
+        // -1 means the member is null and stays null; the old code emitted
+        // vars[-1] for it
+        if (j < 0) continue;
+        // name the member, do not write its byte offset into the kernel: see
+        // OpRelayContext::var_members
+        ss << "    rctx_"<<S(group_id)<<"_"<<S(op_id)<<".set_var_member(\""<<
+            op_info.var_members[i].first<<"\", vars["<<j<<"].var);\n";
     }
     ss << "    "<<relay_op_name<<"->do_run();\n";
     LOGvvv << "get_relay_src\n" << ss.str();
     return ss.str();
+}
+
+void OpRelayContext::set_var_member(const char* name, Var* v) {
+    for (auto& m : var_members)
+        if (m.first == name) {
+            GET_VAR_MEMBER(op, m.second) = v;
+            return;
+        }
+    LOGf << "Relay op" << op->name() << "has no Var member" >> '\'' >> name >> '\''
+        << "\nThe kernel that asks for it was generated against a different"
+        << "version of this op and is being reused from the JIT cache."
+        << "\nThe registered members are:" << var_members;
 }
 
 } // jittor

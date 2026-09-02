@@ -293,6 +293,46 @@ def gen_jit_flags():
     with open(os.path.join(cache_path, "gen", "jit_flags.h"), 'w', encoding='utf8') as f:
         f.write(jit_src)
 
+# The Var* members of an op struct.  Their names and byte offsets go into the
+# op registry (VAR_MEMBER_NAME_AND_OFFSET -> offsetof), and VarRelayManager
+# relays a member by looking it up there by name.
+#
+# A member that is not picked up here is not an error anywhere downstream: it
+# simply never gets relayed, so the relayed op runs with whatever that member
+# happened to point at last.  So only the canonical spelling is accepted, and a
+# declaration that looks like a member of pointer-to-Var type but is not spelled
+# that way fails the build instead of being silently skipped.
+_VAR_MEMBER_DECL = re.compile(r"^[ \t]*Var[ \t]*\*(?P<names>[^;=(){}]*);", re.M)
+# the same thing however spelled: "jittor::Var*", "const Var*", extra spaces
+_VAR_MEMBER_LOOSE = re.compile(r"^[ \t]*(?:const[ \t]+)?(?:\w+::)*Var[ \t]*\*", re.M)
+
+
+def parse_var_members(src, header="<src>"):
+    """Names of the Var* members declared in an op header, in declaration order."""
+    def statement(start):
+        end = src.find(";", start)
+        return src[start:end + 1 if end != -1 else len(src)].strip()
+
+    strict_starts = {m.start() for m in _VAR_MEMBER_DECL.finditer(src)}
+    unparsed = [
+        statement(m.start())
+        for m in _VAR_MEMBER_LOOSE.finditer(src)
+        if m.start() not in strict_starts and "(" not in statement(m.start())
+    ]
+    assert not unparsed, (
+        f"{header}: Var member declaration(s) this build step cannot read: "
+        f"{unparsed}. Write them as `Var* name;` or `Var* a, * b;` -- a member "
+        f"it cannot read is left out of the op registry, and relaying then "
+        f"leaves that member pointing at whatever it pointed at last, silently.")
+    names = []
+    for m in _VAR_MEMBER_DECL.finditer(src):
+        text = m.group("names")
+        for c in "*,":
+            text = text.replace(c, " ")
+        names.extend(text.split())
+    return names
+
+
 def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
     def add_src(
         cc_func_name,
@@ -464,12 +504,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
             name = 'make_'+func_name+'_'*i
             constructors.append(f"{{ &typeid(&{name}), (void*)&{name} }}")
         constructors = ",".join(constructors)
-        var_member_reg = r"\n\s*Var\b(.*);"
-        var_member_match = re.findall(var_member_reg, src)
-        var_member_match = " ".join(var_member_match)
-        for c in "*,": var_member_match = var_member_match.replace(c, " ")
-        var_member = var_member_match.split()
-        LOG.vv("var_member_match "+var_member_match)
+        var_member = parse_var_members(src, header)
         LOG.vv("var_member "+str(var_member))
         var_member_src = [ f"VAR_MEMBER_NAME_AND_OFFSET({name}, {name2})" for name in var_member ]
         var_member_src = ",".join(var_member_src)

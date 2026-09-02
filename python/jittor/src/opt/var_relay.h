@@ -14,6 +14,19 @@ struct OpRelayContext {
     Op* op;
     // j=relayed_members[i] represents: op's i-th member is relay to fused_op's j-th vars
     vector<int> relayed_members;
+    // name and byte offset of each Var* member of op, copied from the op
+    // registry when the relay group is built.
+    //
+    // The generated kernel names the member it wants to set and this resolves
+    // the name here.  It must not carry the offset instead: the kernel source
+    // is written to the JIT cache and reused, while the offset belongs to a
+    // struct layout that changes whenever an op gains a member or the compiler
+    // ABI changes -- and the jit key says nothing about either.  A kernel that
+    // outlives the layout it was generated against writes a Var* into the
+    // wrong member and nothing reports it.
+    vector<pair<string, uint64>> var_members;
+    // set op's Var* member `name` to v; fails if op has no such member
+    void set_var_member(const char* name, Var* v);
 };
 
 struct VarRelayGroup {
