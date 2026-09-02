@@ -46,6 +46,7 @@ except ImportError:
 If conda is used, please install with command:
 >>> conda install pywin32""")
 
+import jittor_utils
 from jittor_utils import cache_path, LOG
 
 disable_lock = os.environ.get("disable_lock", "0") == "1"
@@ -275,5 +276,9 @@ class unlock_scope(_base_scope):
         if self.is_locked:
             jittor_lock.lock()
 
-lock_path = os.path.abspath(os.path.join(cache_path, "../jittor.lock"))
+# find_cache_path() picks this: it sits one level *above* the
+# build-configuration directory, because the lock also guards the third-party
+# downloads (mkl, cutt, cub) that every configuration on this toolchain shares.
+lock_path = jittor_utils.lock_path or \
+    os.path.abspath(os.path.join(cache_path, "../jittor.lock"))
 jittor_lock = Lock(lock_path)

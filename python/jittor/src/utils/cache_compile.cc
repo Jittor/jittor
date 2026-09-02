@@ -9,6 +9,12 @@
 #ifdef _WIN32
 #include <filesystem>
 #endif
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 #include "misc/hash.h"
 #include "utils/cache_compile.h"
 #include "utils/str_utils.h"
@@ -220,6 +226,55 @@ static inline void check_win_file(const string& name) {
 #endif
 }
 
+// Build the product under a private name and rename it into place, rather
+// than letting the compiler write the final path directly.
+//
+// A linker writes its output by truncating the existing file. Rebuilding a
+// shared library in place therefore corrupts the copy another process already
+// has mapped -- which is exactly what happens when sources change while a test
+// run is in flight -- and a reader that arrives mid-write sees a half-written
+// file rather than either version. rename() within a directory is atomic, so
+// neither can happen: the old inode stays alive for whoever already opened it,
+// and the path flips from one complete product to the next.
+static bool can_install_atomically(const string& cmd) {
+    // These wrappers rewrite the command line by string-matching the output
+    // name (asm_tuner.py keys on "_op.so" and "_op.cc" to derive its
+    // intermediate .s files), so a renamed output sends them down the wrong
+    // branch. They keep the old in-place behaviour.
+    if (cmd.find("asm_tuner.py") != string::npos) return false;
+    if (cmd.find("dlink_compiler.py") != string::npos) return false;
+    return true;
+}
+
+static void run_and_install(const string& cmd, const string& output_name,
+                            const string& tmp_dir) {
+#ifdef _WIN32
+    check_win_file(output_name);
+    system_with_check(cmd.c_str(), tmp_dir.c_str());
+#else
+    auto pos = cmd.rfind(output_name);
+    if (!can_install_atomically(cmd) || pos == string::npos) {
+        system_with_check(cmd.c_str(), tmp_dir.c_str());
+        return;
+    }
+    string tmp_name = output_name + ".tmp." + std::to_string(getpid());
+    string tmp_cmd = cmd.substr(0, pos) + tmp_name
+        + cmd.substr(pos + output_name.size());
+    try {
+        system_with_check(tmp_cmd.c_str(), tmp_dir.c_str());
+    } catch (...) {
+        remove(tmp_name.c_str());
+        throw;
+    }
+    if (rename(tmp_name.c_str(), output_name.c_str()) != 0) {
+        string reason = strerror(errno);
+        remove(tmp_name.c_str());
+        LOGf << "could not install" << tmp_name << "as" << output_name
+             << ":" << reason;
+    }
+#endif
+}
+
 static inline bool is_full_path(const string& name) {
 #ifdef _WIN32
     return name.size()>=2 && (name[1]==':' || (name[0]=='\\' && name[1]=='\\'));
@@ -302,15 +357,13 @@ bool cache_compile(string cmd, const string& cache_path_, const string& jittor_p
     if (output_cache_key.size() == 0) {
         LOGvv << "Cache key of" << output_name << "not found.";
         LOGvvv << "Run cmd:" << cmd;
-        check_win_file(output_name);
-        system_with_check(cmd.c_str(), tmp_dir.c_str());
+        run_and_install(cmd, output_name, tmp_dir);
         ran = true;
     }
     if (output_cache_key.size() != 0 && output_cache_key != cache_key) {
         LOGvv << "Cache key of" << output_name << "changed.";
         LOGvvv << "Run cmd:" << cmd;
-        check_win_file(output_name);
-        system_with_check(cmd.c_str(), tmp_dir.c_str());
+        run_and_install(cmd, output_name, tmp_dir);
         ran = true;
     }
     if (output_cache_key != cache_key) {

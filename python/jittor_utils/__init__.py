@@ -477,7 +477,68 @@ def short(s):
         return ss[:14]+'x'+get_str_hash(ss)[:2]
     return ss
 
+# Environment variables that change what the compiler is asked to produce
+# without changing any component of the cache directory below. Two processes
+# that disagree on any of these produce *different* object code, and used to
+# write it into the same directory: the torch shim, for example, appends
+# ``--fmad=false --prec-div=true --prec-sqrt=true`` to ``nvcc_flags`` and drops
+# ``--use_fast_math``, so turning it on or off recompiled every CUDA kernel
+# into the same ``jit/`` directory -- and when the two ran at once, the second
+# writer replaced a shared library the first had already dlopen'd.
+BUILD_CONFIG_VARS = (
+    "cc_flags",
+    "nvcc_flags",
+    "kernel_flags",
+    "cuda_archs",
+    "enable_lto",
+)
+
+
+def get_build_config():
+    """The build knobs whose values decide what the compiled products are."""
+    return {name: os.environ.get(name, "") for name in BUILD_CONFIG_VARS}
+
+
+def build_config_fingerprint(config=None):
+    """A short, stable directory name for one build configuration."""
+    import hashlib
+    if config is None:
+        config = get_build_config()
+    canonical = json.dumps(config, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(canonical.encode("utf8")).hexdigest()
+    return "cfg" + digest[:8]
+
+
+def _write_build_config(path, config):
+    """Leave the knobs next to the products, so ``cfgXXXXXXXX`` can be read back.
+
+    Written once and never rewritten: every process that lands in this
+    directory computed the same fingerprint from the same values, so the file
+    is either absent or already correct.
+    """
+    record = os.path.join(path, "build_config.json")
+    if os.path.exists(record):
+        return
+    temporary = "%s.%d.tmp" % (record, os.getpid())
+    try:
+        with open(temporary, "w") as f:
+            json.dump(config, f, indent=1, sort_keys=True)
+        os.replace(temporary, record)
+    except OSError:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+
+
+# Set by find_cache_path(). Deliberately *above* the build-configuration
+# directory: the lock also guards the third-party downloads (mkl, cutt, cub)
+# that every configuration on this toolchain shares.
+lock_path = None
+
+
 def find_cache_path():
+    global lock_path
     path = home()
     # jittor version key
     jtv = "jt"+get_jittor_version().rsplit('.', 1)[0]
@@ -519,7 +580,11 @@ def find_cache_path():
     os.environ["cache_name"] = cache_name
     LOG.v("cache_name: ", cache_name)
     path = os.path.join(path, *dirs)
+    lock_path = os.path.abspath(os.path.join(path, os.pardir, "jittor.lock"))
+    config = get_build_config()
+    path = os.path.join(path, build_config_fingerprint(config))
     os.makedirs(path, exist_ok=True)
+    _write_build_config(path, config)
     if path not in sys.path:
         sys.path.append(path)
     return path
