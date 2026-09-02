@@ -10,7 +10,8 @@
    [项目上下文](manuals/project-context.md)。
 3. 按任务读取[环境规则](manuals/environment.md)、
    [已知问题总账](manuals/known-issues.md)或对应的 `docs/` 文档。
-4. 在[结果索引](results/README.md)中查找已有验证和性能结论。
+4. 在[结果索引](results/README.md)中查找已有验证和性能结论，
+   在[设计文档](design/README.md)中查找某个机制为什么是现在这样。
 5. 需要对拍或专项基准时，优先复用 `skills/` 中已有工具。
 
 ## 目录
@@ -18,6 +19,7 @@
 ```text
 agent/
 ├── README.md                 # 总入口
+├── design/                   # 设计与分析文档（成因、机制、待决策方案）
 ├── manuals/                  # 协作、环境、问题总账和上下文索引
 │   ├── collaboration.md
 │   ├── environment.md

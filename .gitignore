@@ -47,6 +47,10 @@ extern/mkl/mkldnn_lnx*/*
 # outside the repository or under the ignored worklog/cache paths below.
 /agent/*
 !/agent/README.md
+!/agent/design/
+/agent/design/**
+!/agent/design/**/
+!/agent/design/**/*.md
 !/agent/manuals/
 !/agent/manuals/**/
 !/agent/manuals/**/*.md
