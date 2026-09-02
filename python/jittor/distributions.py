@@ -528,38 +528,172 @@ class Bernoulli(Distribution):
         return self.probs
 
 
-class RelaxedBernoulli(Bernoulli):
+def _softplus(z):
+    # stable log(1+exp(z)) = max(z,0) + log(1+exp(-|z|))
+    return jt.maximum(z, 0.0) + jt.safe_log(1.0 + jt.exp(-jt.abs(z)))
+
+
+def _log_temperature(temperature):
+    if isinstance(temperature, jt.Var):
+        return jt.safe_log(temperature)
+    return math.log(float(temperature))
+
+
+def _no_closed_form(cls_name, name):
+    raise NotImplementedError(
+        f"{cls_name}.{name} has no closed form (torch.distributions raises here "
+        f"too). The discrete parent's {name} describes a different random "
+        f"variable and would be silently wrong.")
+
+
+class LogitRelaxedBernoulli(Distribution):
+    ''' torch.distributions.LogitRelaxedBernoulli.
+
+    The relaxed Bernoulli *in logit space*: samples are unbounded reals, and
+    ``sigmoid`` of them is what :class:`RelaxedBernoulli` returns. This is a
+    distinct distribution, not an alias of RelaxedBernoulli -- aliasing the two
+    made every ``LogitRelaxedBernoulli`` sample come back already squashed into
+    (0, 1) and every ``log_prob`` answer the wrong density.
+    '''
+    has_rsample = True
+
     def __init__(self, temperature, probs=None, logits=None, validate_args=None):
+        assert (probs is not None) or (logits is not None)
         self.temperature = temperature
-        super().__init__(probs=probs, logits=logits)
+        if logits is not None:
+            self.logits = logits
+            self.probs = jt.sigmoid(logits)
+        else:
+            self.probs = probs
+            self.logits = jt.safe_log(probs) - jt.safe_log(1 - probs)
+        self.batch_shape = _bshape(logits if logits is not None else probs)
+        self.event_shape = ()
 
     def rsample(self, sample_shape=None):
         shape = _full_shape(sample_shape, self.batch_shape)
         u = jt.rand(shape)
         logit = self.logits + jt.safe_log(u) - jt.safe_log(1 - u)
-        return jt.sigmoid(logit / self.temperature)
+        return logit / self.temperature
 
     def sample(self, sample_shape=None):
         return self.rsample(sample_shape).stop_grad()
 
+    def log_prob(self, value):
+        # log T + diff - 2*softplus(diff), diff = logits - T*value
+        diff = self.logits - value * self.temperature
+        return _log_temperature(self.temperature) + diff - 2 * _softplus(diff)
 
-LogitRelaxedBernoulli = RelaxedBernoulli
+    def entropy(self):
+        _no_closed_form(type(self).__name__, "entropy")
 
 
-class RelaxedOneHotCategorical(OneHotCategorical):
+class RelaxedBernoulli(Bernoulli):
+    ''' torch.distributions.RelaxedBernoulli: sigmoid of a
+    :class:`LogitRelaxedBernoulli`, so samples live in (0, 1). '''
+    has_rsample = True
+
     def __init__(self, temperature, probs=None, logits=None, validate_args=None):
         self.temperature = temperature
         super().__init__(probs=probs, logits=logits)
-        self.base_dist = self
+        self.base_dist = LogitRelaxedBernoulli(
+            temperature, probs=probs, logits=logits)
+
+    def rsample(self, sample_shape=None):
+        return jt.sigmoid(self.base_dist.rsample(sample_shape))
+
+    def sample(self, sample_shape=None):
+        return self.rsample(sample_shape).stop_grad()
+
+    def log_prob(self, value):
+        # sigmoid transform of the base distribution:
+        #   log p(y) = log p_base(x) - log|dy/dx|,  x = logit(y),
+        #   -log|dy/dx| = softplus(x) + softplus(-x)
+        x = jt.safe_log(value) - jt.safe_log(1 - value)
+        return self.base_dist.log_prob(x) + _softplus(x) + _softplus(-x)
+
+    def entropy(self):
+        _no_closed_form(type(self).__name__, "entropy")
+
+    @property
+    def mean(self):
+        _no_closed_form(type(self).__name__, "mean")
+
+    @property
+    def mode(self):
+        _no_closed_form(type(self).__name__, "mode")
+
+
+class ExpRelaxedCategorical(Distribution):
+    ''' torch.distributions.relaxed_categorical.ExpRelaxedCategorical: the
+    relaxed one-hot categorical in *log* space. Samples are log-probability
+    vectors (they exponentiate to the simplex). '''
+    has_rsample = True
+
+    def __init__(self, temperature, probs=None, logits=None, validate_args=None):
+        self.temperature = temperature
+        self._categorical = Categorical(probs=probs, logits=logits)
+        self.probs = self._categorical.probs
+        self.logits = self._categorical.logits
+        self.batch_shape = tuple(self.probs.shape[:-1])
+        self.event_shape = (self.probs.shape[-1],)
 
     def rsample(self, sample_shape=None):
         shape = _norm_sample_shape(sample_shape) + tuple(self.probs.shape)
         u = jt.rand(shape)
         g = -jt.safe_log(-jt.safe_log(u + 1e-20) + 1e-20)
-        return nn.softmax((self.logits + g) / self.temperature, dim=-1)
+        scores = (self.logits + g) / self.temperature
+        return nn.log_softmax(scores, dim=-1)
 
     def sample(self, sample_shape=None):
         return self.rsample(sample_shape).stop_grad()
+
+    def log_prob(self, value):
+        # value is a vector of log-probabilities
+        K = self.probs.shape[-1]
+        log_scale = (math.lgamma(K)
+                     + (K - 1) * _log_temperature(self.temperature))
+        score = self.logits - value * self.temperature
+        score = nn.log_softmax(score, dim=-1).sum(-1)
+        return score + log_scale
+
+    def entropy(self):
+        _no_closed_form(type(self).__name__, "entropy")
+
+
+class RelaxedOneHotCategorical(OneHotCategorical):
+    ''' torch.distributions.RelaxedOneHotCategorical: exp of an
+    :class:`ExpRelaxedCategorical`, so samples are points on the simplex.
+
+    The discrete ``OneHotCategorical.log_prob`` it used to inherit reads the
+    argmax of a *relaxed* (non-one-hot) sample and returns the categorical mass
+    of that index -- a different, silently wrong number.
+    '''
+    has_rsample = True
+
+    def __init__(self, temperature, probs=None, logits=None, validate_args=None):
+        self.temperature = temperature
+        super().__init__(probs=probs, logits=logits)
+        self.base_dist = ExpRelaxedCategorical(
+            temperature, probs=probs, logits=logits)
+
+    def rsample(self, sample_shape=None):
+        return jt.exp(self.base_dist.rsample(sample_shape))
+
+    def sample(self, sample_shape=None):
+        return self.rsample(sample_shape).stop_grad()
+
+    def log_prob(self, value):
+        # exp transform of the base distribution: x = log(y),
+        # log|dy/dx| summed over the event dim is sum(log y)
+        log_value = jt.safe_log(value)
+        return self.base_dist.log_prob(log_value) - log_value.sum(-1)
+
+    def entropy(self):
+        _no_closed_form(type(self).__name__, "entropy")
+
+    @property
+    def mode(self):
+        _no_closed_form(type(self).__name__, "mode")
 
 
 class Exponential(Distribution):

@@ -7,6 +7,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
+import math
 import unittest
 import jittor as jt
 import numpy as np
@@ -284,6 +285,172 @@ class TestMoreDistributions(unittest.TestCase):
         self._ac(_grad1(jt.lgamma.apply(jx).sum(), jx), "lgamma_grad")
         ja = jt.array([2.0, 3.0])
         self._ac(_grad1(jd.Beta(ja, jt.array([3.0, 1.5])).entropy().sum(), ja), "beta_ent_grad")
+
+
+def _np_softplus(z):
+    return np.maximum(z, 0.0) + np.log1p(np.exp(-np.abs(z)))
+
+
+def _np_log_softmax(z):
+    m = z.max(axis=-1, keepdims=True)
+    shifted = z - m
+    return shifted - np.log(np.exp(shifted).sum(axis=-1, keepdims=True))
+
+
+class TestRelaxedDistributions(unittest.TestCase):
+    """LogitRelaxedBernoulli / RelaxedBernoulli / ExpRelaxedCategorical /
+    RelaxedOneHotCategorical against torch's formulas.
+
+    ``LogitRelaxedBernoulli`` used to be a plain alias of ``RelaxedBernoulli``
+    (so its samples came back squashed through a sigmoid and its log_prob was
+    the wrong density), and ``RelaxedOneHotCategorical`` inherited the discrete
+    ``OneHotCategorical.log_prob`` while pointing ``base_dist`` at itself.
+
+    The numpy references below are torch's own formulas; the expected numbers
+    are what torch 2.12.1 prints for the same inputs, so the references are
+    pinned to the real library, not to a re-derivation.
+    """
+
+    TOL = 2e-4
+
+    T = 0.5
+    LOGITS = np.array([[-1.0, 0.5], [2.0, -0.25]], dtype=np.float64)
+    LOGIT_VALUES = np.array([[0.3, -1.2], [0.75, 2.5]], dtype=np.float64)
+    UNIT_VALUES = np.array([[0.2, 0.7], [0.55, 0.9]], dtype=np.float64)
+    CLOGITS = np.array([[0.1, -0.4, 1.2], [-2.0, 0.5, 0.3]], dtype=np.float64)
+    SIMPLEX_VALUES = np.array([[0.5, 0.2, 0.3], [0.1, 0.6, 0.3]], dtype=np.float64)
+
+    # torch 2.12.1 reference output
+    TORCH_LOGIT_RELAXED_BERNOULLI_LOG_PROB = np.array(
+        [[-2.3933083469327423, -2.367817830790807],
+         [-2.6776364513312636, -2.5959737365254503]])
+    TORCH_RELAXED_BERNOULLI_LOG_PROB = np.array(
+        [[-0.27030796411579217, -0.5202508110292254],
+         [-1.4753279283138316, -0.0954026955206726]])
+    TORCH_EXP_RELAXED_CATEGORICAL_LOG_PROB = np.array(
+        [-4.672430492080289, -4.725313779988706])
+    TORCH_RELAXED_ONE_HOT_LOG_PROB = np.array(
+        [-1.165872594760307, -0.7079302589027341])
+
+    # ---- numpy references (torch's formulas) ------------------------------
+    def _ref_logit_relaxed_bernoulli_log_prob(self, value):
+        diff = self.LOGITS - value * self.T
+        return np.log(self.T) + diff - 2 * _np_softplus(diff)
+
+    def _ref_relaxed_bernoulli_log_prob(self, value):
+        x = np.log(value) - np.log1p(-value)
+        return (self._ref_logit_relaxed_bernoulli_log_prob(x)
+                + _np_softplus(x) + _np_softplus(-x))
+
+    def _ref_exp_relaxed_categorical_log_prob(self, log_value):
+        K = self.CLOGITS.shape[-1]
+        log_scale = math.lgamma(K) + (K - 1) * np.log(self.T)
+        score = self.CLOGITS - log_value * self.T
+        return _np_log_softmax(score).sum(-1) + log_scale
+
+    def _ref_relaxed_one_hot_log_prob(self, value):
+        log_value = np.log(value)
+        return (self._ref_exp_relaxed_categorical_log_prob(log_value)
+                - log_value.sum(-1))
+
+    def test_numpy_references_match_torch(self):
+        np.testing.assert_allclose(
+            self._ref_logit_relaxed_bernoulli_log_prob(self.LOGIT_VALUES),
+            self.TORCH_LOGIT_RELAXED_BERNOULLI_LOG_PROB, rtol=1e-12)
+        np.testing.assert_allclose(
+            self._ref_relaxed_bernoulli_log_prob(self.UNIT_VALUES),
+            self.TORCH_RELAXED_BERNOULLI_LOG_PROB, rtol=1e-12)
+        np.testing.assert_allclose(
+            self._ref_exp_relaxed_categorical_log_prob(np.log(self.SIMPLEX_VALUES)),
+            self.TORCH_EXP_RELAXED_CATEGORICAL_LOG_PROB, rtol=1e-12)
+        np.testing.assert_allclose(
+            self._ref_relaxed_one_hot_log_prob(self.SIMPLEX_VALUES),
+            self.TORCH_RELAXED_ONE_HOT_LOG_PROB, rtol=1e-12)
+
+    # ---- jittor ------------------------------------------------------------
+    def _v(self, arr):
+        return jt.array(arr.astype("float32"), dtype="float32")
+
+    def test_logit_relaxed_bernoulli_is_its_own_distribution(self):
+        assert jd.LogitRelaxedBernoulli is not jd.RelaxedBernoulli
+        d = jd.LogitRelaxedBernoulli(self.T, logits=self._v(self.LOGITS))
+        np.testing.assert_allclose(
+            d.log_prob(self._v(self.LOGIT_VALUES)).numpy(),
+            self.TORCH_LOGIT_RELAXED_BERNOULLI_LOG_PROB,
+            atol=self.TOL, rtol=self.TOL)
+
+    def test_logit_relaxed_bernoulli_samples_are_unbounded(self):
+        jt.set_global_seed(1234)
+        d = jd.LogitRelaxedBernoulli(self.T, logits=self._v(self.LOGITS))
+        x = d.rsample((4096,)).numpy()
+        self.assertEqual(x.shape, (4096, 2, 2))
+        # a logit-space sample must leave (0, 1) -- the old alias returned
+        # sigmoid(...) and never did.
+        assert (x < 0).any() and (x > 1).any(), (x.min(), x.max())
+        # and sigmoid of it lands in RelaxedBernoulli's support
+        y = 1.0 / (1.0 + np.exp(-x))
+        assert ((y >= 0) & (y <= 1)).all()
+
+    def test_relaxed_bernoulli_log_prob_and_base_dist(self):
+        d = jd.RelaxedBernoulli(self.T, logits=self._v(self.LOGITS))
+        assert isinstance(d.base_dist, jd.LogitRelaxedBernoulli)
+        np.testing.assert_allclose(
+            d.log_prob(self._v(self.UNIT_VALUES)).numpy(),
+            self.TORCH_RELAXED_BERNOULLI_LOG_PROB,
+            atol=self.TOL, rtol=self.TOL)
+        jt.set_global_seed(4321)
+        y = d.rsample((512,)).numpy()
+        self.assertEqual(y.shape, (512, 2, 2))
+        assert ((y >= 0) & (y <= 1)).all()
+
+    def test_exp_relaxed_categorical_log_prob(self):
+        d = jd.ExpRelaxedCategorical(self.T, logits=self._v(self.CLOGITS))
+        np.testing.assert_allclose(
+            d.log_prob(self._v(np.log(self.SIMPLEX_VALUES))).numpy(),
+            self.TORCH_EXP_RELAXED_CATEGORICAL_LOG_PROB,
+            atol=self.TOL, rtol=self.TOL)
+        jt.set_global_seed(99)
+        x = d.rsample((16,)).numpy()
+        self.assertEqual(x.shape, (16, 2, 3))
+        # samples are log-probability vectors: exponentiate to the simplex
+        np.testing.assert_allclose(np.exp(x).sum(-1), 1.0, atol=1e-5)
+
+    def test_relaxed_one_hot_log_prob_and_base_dist(self):
+        d = jd.RelaxedOneHotCategorical(self.T, logits=self._v(self.CLOGITS))
+        assert isinstance(d.base_dist, jd.ExpRelaxedCategorical)
+        assert d.base_dist is not d
+        np.testing.assert_allclose(
+            d.log_prob(self._v(self.SIMPLEX_VALUES)).numpy(),
+            self.TORCH_RELAXED_ONE_HOT_LOG_PROB,
+            atol=self.TOL, rtol=self.TOL)
+        jt.set_global_seed(7)
+        y = d.rsample((16,)).numpy()
+        self.assertEqual(y.shape, (16, 2, 3))
+        np.testing.assert_allclose(y.sum(-1), 1.0, atol=1e-5)
+
+    def test_relaxed_log_prob_differs_from_the_discrete_parent(self):
+        # the whole point: the inherited discrete log_prob answers a different
+        # question, so the two must not agree on a relaxed sample.
+        d = jd.RelaxedOneHotCategorical(self.T, logits=self._v(self.CLOGITS))
+        discrete = jd.OneHotCategorical(logits=self._v(self.CLOGITS))
+        relaxed = d.log_prob(self._v(self.SIMPLEX_VALUES)).numpy()
+        assert not np.allclose(relaxed,
+                               discrete.log_prob(self._v(self.SIMPLEX_VALUES)).numpy(),
+                               atol=1e-3)
+
+    def test_no_closed_form_moments(self):
+        # torch raises NotImplementedError for all of these; inheriting the
+        # discrete answer would be silently wrong.
+        rb = jd.RelaxedBernoulli(self.T, logits=self._v(self.LOGITS))
+        roc = jd.RelaxedOneHotCategorical(self.T, logits=self._v(self.CLOGITS))
+        lrb = jd.LogitRelaxedBernoulli(self.T, logits=self._v(self.LOGITS))
+        for dist, names in ((rb, ("entropy", "mean", "mode")),
+                            (roc, ("entropy", "mode")),
+                            (lrb, ("entropy",))):
+            for name in names:
+                with self.assertRaises(NotImplementedError):
+                    attr = getattr(dist, name)
+                    attr() if callable(attr) else attr
 
 
 if __name__ == "__main__":
