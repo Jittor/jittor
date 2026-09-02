@@ -26,7 +26,9 @@
 | 用例 | 引入提交 | 责任 |
 | --- | --- | --- |
 | `tests/compat/torch/test_torch_compat_interpolate.py::TestInterpolateBicubic::test_bicubic_constant_stays_constant` | `13ac1d14` [6.C05] | coreops，正改成变长编码（原属 3.02） |
-| `tests/structure/test_runtime_composition_structure.py::test_moved_scope_state_stays_synchronized_with_the_root` | `956c4b23` [6.B15] | dist，同时会重写该用例本身 |
+
+（`test_runtime_composition_structure.py::test_moved_scope_state_stays_synchronized_with_the_root`
+已由 `90fc2f0b` 修复并移出本表：2026-09-03 复测 `JITTOR_TORCH_SHIM=1` 下该文件 13 passed。）
 | 并发编译读到写了一半的 `.s`：原生 `tests/data/test_dataset.py::TestDataset2::test_dataset_use_jittor`（`.so` 里 `undefined symbol: SetitemOp::jit_run`）+ CPU torch 536 条散布失败（`op.s` 报 `unknown pseudo-op .lasf10` / `invalid operands (*UND* and *UND*) for -` / `junk at end of line`） | `70d97137..a12d81c0` 之间的构建改动 | **已由 `1919b035`「asm_tuner 写 .s 改成临时文件加改名」修掉**，待复跑确认 |
 | `tests/structure/test_nn_structure.py::TestModuleBoundaries::test_first_import_paths_are_cycle_free_in_fresh_processes` | `46dbe946` [0.21] | gates，**已修**：收编子进程调用时把调用点原来的 `env.pop` 丢了。旧写法自己 pop 掉四个 `JITTOR_TORCH_*` / `REAL_TORCH_SITE`；改走 helper 后 `env=` 是**叠加**在 `os.environ` 上的，叠加无法删除，于是四个变量原样回来了——而 `tests/structure` 自己就在 `TORCH_MODE_PATHS` 里，父进程带着 `JITTOR_TORCH_SHIM=1`。子进程先塞了个假 `torch` 模块再 import jittor，于是报 `cannot install Jittor Torch compatibility over an existing Torch module graph`。修法不止是加 `inherit=False`：helper 现在**拒绝**「完整环境 + inherit=True」这种有歧义的调用（认 `PATH` 在不在里面），并提供 `without_torch_mode=True` 把这四个变量的清理写进 helper，不再让每个调用方自己记得 |
 | `tests/structure/test_stage2_delivery.py::TestStage2Delivery::test_nox_keeps_fast_structure_and_packaging_separate` | `6adbf488` [0.04] | gates，**已修**：断言 noxfile **源码文本**里出现 `tests/optim/test_optimizer.py` 等具体路径，而清单已搬进 `gate_scope.py`。这两条改成从 `gate_scope` 求门禁选择集再判断；仍是清单的那六条 oracle 路径继续按文本断言（"要跟真 PyTorch 对拍"是测试的属性，不是树的属性） |
@@ -331,7 +333,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 8.06 | ACL 去样板 | 待领 | | |
 | 8.07 | conv 族共享描述符与计划层 | 待领 | | |
 | 8.08 | `ProcessGroup` 对象替代全局唯一 communicator | 待领 | | |
-| 8.09 | NCCL | 待领 | | |
+| 8.09 | NCCL | 已合并 | dist | f2d9c291, 95a1c956 |
 | 8.10 | `distributed/launch.py:102-107` 改 `wait(timeout)… | 待领 | | |
 | 8.11 | `nccl_reduce`/`mpi_reduce` 非 root 不分配输出 | 待领 | | |
 | 8.12 | 算子内不再复用全局 jit key 缓冲做缓存键 | 待领 | | |
