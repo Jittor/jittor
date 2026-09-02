@@ -22,6 +22,7 @@
 #include "mpi_wrapper.h"
 #include "common.h"
 #include "ops/array_op.h"
+#include "misc/collective_dtype.h"
 
 char jt_mpi_err_buffer[MPI_MAX_ERROR_STRING];
 
@@ -170,6 +171,41 @@ bool inside_mpi = false;
 bool mpi_enabled = false;
 bool use_device_mpi = false;
 
+// The one MPI dtype table. Expanded from the canonical list in
+// misc/collective_dtype.h so it cannot drift from NCCL's and HCCL's.
+// MPI_HALF is created in mpi_initer below (a contiguous 1 x MPI_SHORT), so
+// this must not be called before MPI init.
+static MPI_Datatype mpi_dtype_unsupported(NanoString dtype) {
+    LOGf << "MPI collectives do not support dtype" << dtype;
+    return MPI_DATATYPE_NULL;
+}
+
+#define JT_MPI_DTYPE_float16  MPI_HALF
+#define JT_MPI_DTYPE_bfloat16 mpi_dtype_unsupported(dtype)
+#define JT_MPI_DTYPE_float32 MPI_FLOAT
+#define JT_MPI_DTYPE_float64 MPI_DOUBLE
+#define JT_MPI_DTYPE_int16   MPI_INT16_T
+#define JT_MPI_DTYPE_int32   MPI_INT32_T
+#define JT_MPI_DTYPE_int64   MPI_INT64_T
+#define JT_MPI_DTYPE_uint8   MPI_UINT8_T
+
+MPI_Datatype mpi_dtype(NanoString dtype) {
+    #define JT_MPI_DTYPE_CASE(T) if (dtype == ns_##T) return JT_MPI_DTYPE_##T;
+    JT_COLLECTIVE_DTYPES(JT_MPI_DTYPE_CASE)
+    #undef JT_MPI_DTYPE_CASE
+    return mpi_dtype_unsupported(dtype);
+}
+
+MPI_Op mpi_add_op(NanoString dtype) {
+    // float16 is not an MPI predefined type, so MPI_SUM does not know how to
+    // add it; MPI_HALF_ADD is our user-defined operator (see HalfAdd above).
+    if (dtype == ns_float16) return MPI_HALF_ADD;
+    // Validate the dtype through the same table, so an unsupported dtype fails
+    // here too rather than reaching MPI with a sum operator and no datatype.
+    mpi_dtype(dtype);
+    return MPI_SUM;
+}
+
 int _mpi_world_size() {
     return mpi_enabled ? mpi_world_size : 1;
 }
@@ -283,24 +319,8 @@ void var_reduce(VarHolder* x, int root) {
     if (!inside_mpi) return;
     Var* v = x->var;
     ASSERT(v->mem_ptr && !v->allocator->is_cuda());
-    MPI_Datatype dtype;
-    MPI_Op op;
-    if (v->dtype() == ns_float16)
-        dtype = MPI_HALF, op = MPI_HALF_ADD;
-    else if (v->dtype() == ns_int16)
-        dtype = MPI_SHORT, op = MPI_SUM;
-    else if (v->dtype() == ns_float32)
-        dtype = MPI_FLOAT, op = MPI_SUM;
-    else if (v->dtype() == ns_float64)
-        dtype = MPI_DOUBLE, op = MPI_SUM;
-    else if (v->dtype() == ns_int32)
-        dtype = MPI_INT, op = MPI_SUM;
-    else if (v->dtype() == ns_int64)
-        dtype = MPI_LONG_LONG_INT, op = MPI_SUM;
-    else if (v->dtype() == ns_uint8)
-        dtype = MPI_UNSIGNED_CHAR, op = MPI_SUM;
-    else
-        LOGf << "Not supported dtype" << v->dtype();
+    MPI_Datatype dtype = mpi_dtype(v->dtype());
+    MPI_Op op = mpi_add_op(v->dtype());
     // mpi reduce performace magically reduce from 4194304
     int64 MPI_MAX_SIZE = (4194304) / v->dtype().dsize();
     for (int64 i=0; i<v->num; i+=MPI_MAX_SIZE) {
@@ -317,24 +337,8 @@ void var_all_reduce(VarHolder* x) {
     if (!inside_mpi) return;
     Var* v = x->var;
     ASSERT(v->mem_ptr && !v->allocator->is_cuda());
-    MPI_Datatype dtype;
-    MPI_Op op;
-    if (v->dtype() == ns_float16)
-        dtype = MPI_HALF, op = MPI_HALF_ADD;
-    else if (v->dtype() == ns_int16)
-        dtype = MPI_SHORT, op = MPI_SUM;
-    else if (v->dtype() == ns_float32)
-        dtype = MPI_FLOAT, op = MPI_SUM;
-    else if (v->dtype() == ns_float64)
-        dtype = MPI_DOUBLE, op = MPI_SUM;
-    else if (v->dtype() == ns_int32)
-        dtype = MPI_INT, op = MPI_SUM;
-    else if (v->dtype() == ns_int64)
-        dtype = MPI_LONG_LONG_INT, op = MPI_SUM;
-    else if (v->dtype() == ns_uint8)
-        dtype = MPI_UNSIGNED_CHAR, op = MPI_SUM;
-    else
-        LOGf << "Not supported dtype" << v->dtype();
+    MPI_Datatype dtype = mpi_dtype(v->dtype());
+    MPI_Op op = mpi_add_op(v->dtype());
     int64 MPI_MAX_SIZE = (1<<30) / v->dtype().dsize();
     for (int64 i=0; i<v->num; i+=MPI_MAX_SIZE) {
         int64 size = std::min(v->num-i, MPI_MAX_SIZE);

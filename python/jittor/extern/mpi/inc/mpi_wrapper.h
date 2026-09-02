@@ -12,6 +12,7 @@
 #include <common.h>
 #include <mpi.h>
 #include "var_holder.h"
+#include "misc/nano_string.h"
 
 extern void throw_mpi_error(int result, 
     char const *const func, const char *const file, int const line);
@@ -34,6 +35,18 @@ EXTERN_LIB int mpi_local_rank;
 EXTERN_LIB bool inside_mpi;
 EXTERN_LIB bool mpi_enabled;
 EXTERN_LIB bool use_device_mpi;
+
+/**
+Map a jittor dtype to the MPI datatype used to send it, and to the MPI
+reduction operator that implements `add` for it.
+
+These are the only mapping tables for MPI; the operator files and the
+`var_*` helpers below all go through them. See `misc/collective_dtype.h`
+for why the per-operator copies were removed. Both raise (LOGf) on a dtype
+MPI cannot carry, instead of expanding to nothing.
+*/
+MPI_Datatype mpi_dtype(NanoString dtype);
+MPI_Op mpi_add_op(NanoString dtype);
 
 /**
 Return number of MPI nodes.

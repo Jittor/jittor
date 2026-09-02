@@ -47,18 +47,11 @@ void NcclReduceScatterOp::jit_prepare(JK& jk) {
 #ifdef JIT_cuda
 
 void NcclReduceScatterOp::jit_run() {
-    @define(T_NCCL,
-        @if(@strcmp(@Tx,float)==0 || @strcmp(@Tx,float32)==0, ncclFloat)
-        @if(@strcmp(@Tx,int)==0 || @strcmp(@Tx,int32)==0, ncclInt)
-        @if(@strcmp(@Tx,float64)==0, ncclFloat64)
-        @if(@strcmp(@Tx,int64)==0, ncclInt64)
-        @if(@strcmp(@Tx,uint8)==0, ncclUint8)
-        @if(@strcmp(@Tx,float16)==0, ncclHalf)
-        @if(@strcmp(@Tx,bfloat16)==0, ncclBfloat16)
-    )
+    // dtype -> ncclDataType_t goes through the single table in
+    // nccl_wrapper.cc (see misc/collective_dtype.h).
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
-    checkCudaErrors(ncclReduceScatter(xp, yp, y->num, @T_NCCL, ncclSum, comm, 0));
+    checkCudaErrors(ncclReduceScatter(xp, yp, y->num, nccl_dtype(x->dtype()), ncclSum, comm, 0));
 }
 
 #endif

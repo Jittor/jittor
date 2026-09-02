@@ -30,6 +30,9 @@ namespace jittor {
 #include <nccl.h>
 #include "utils/log.h"
 #include "helper_cuda.h"
+// nccl_dtype() below takes a NanoString; in the JT_NCCL_NO_MPI build we do not
+// pull in mpi_wrapper.h, so include it here rather than rely on that path.
+#include "misc/nano_string.h"
 
 // helper_cuda.h guards this overload behind `#ifdef NCCL_H_`, so it only appears
 // when nccl.h was included BEFORE it. Its own include guard makes the include
@@ -45,5 +48,19 @@ namespace jittor {
 EXTERN_LIB ncclComm_t comm;
 EXTERN_LIB ncclUniqueId id;
 EXTERN_LIB int nccl_device_id;
+
+/**
+Map a jittor dtype to the NCCL datatype used to send it.
+
+This is the only NCCL dtype table; the five collective operators all go
+through it. It is expanded from the same canonical dtype list as MPI's and
+HCCL's tables (misc/collective_dtype.h), so the three cannot drift apart --
+they already had: before this, nccl_all_reduce_op.cc was the one operator of
+the five whose table had no bfloat16 entry, so a bf16 all-reduce failed to
+compile while bf16 broadcast/reduce/all_gather/reduce_scatter worked.
+
+Raises (LOGf) on a dtype NCCL has no type for, instead of expanding to nothing.
+*/
+ncclDataType_t nccl_dtype(NanoString dtype);
 
 } // jittor

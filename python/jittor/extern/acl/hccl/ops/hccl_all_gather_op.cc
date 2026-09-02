@@ -48,19 +48,13 @@ void HcclAllGatherOp::jit_prepare(JK& jk) {
 
 void HcclAllGatherOp::jit_run() {
     LOGir << "HcclAllGatherOp::jit_run";
-    @define(T_HCCL,
-        @if(@strcmp(@Tx,float)==0 || @strcmp(@Tx,float32)==0, HcclDataType::HCCL_DATA_TYPE_FP32)
-        @if(@strcmp(@Tx,int)==0 || @strcmp(@Tx,int32)==0, HcclDataType::HCCL_DATA_TYPE_INT32)
-        @if(@strcmp(@Tx,float64)==0, HcclDataType::HCCL_DATA_TYPE_FP64)
-        @if(@strcmp(@Tx,int64)==0, HcclDataType::HCCL_DATA_TYPE_INT64)
-        @if(@strcmp(@Tx,uint8)==0, HcclDataType::HCCL_DATA_TYPE_UINT8)
-        @if(@strcmp(@Tx,float16)==0, HcclDataType::HCCL_DATA_TYPE_FP16)
-    )
+    // dtype -> HcclDataType goes through the single table in
+    // hccl_wrapper.cc (see misc/collective_dtype.h).
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
     ACLCHECK(aclrtSynchronizeDevice());
     ACLCHECK(aclrtSynchronizeStream(aclstream));
-    HCCLCHECK(HcclAllGather(xp, yp, (uint64_t)x->num, @T_HCCL, comm, aclstream));
+    HCCLCHECK(HcclAllGather(xp, yp, (uint64_t)x->num, hccl_dtype(x->dtype()), comm, aclstream));
     ACLCHECK(aclrtSynchronizeDevice());
     ACLCHECK(aclrtSynchronizeStream(aclstream));
 }

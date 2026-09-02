@@ -77,19 +77,14 @@ void MpiReduceOp::jit_prepare(JK& jk) {
 #else // JIT
 #ifdef JIT_cpu
 void MpiReduceOp::jit_run() {
-    @define(T_MPI,
-        @if(@strcmp(@Tx,float)==0 || @strcmp(@Tx,float32)==0, MPI_FLOAT)
-        @if(@strcmp(@Tx,int)==0 || @strcmp(@Tx,int32)==0, MPI_INT)
-        @if(@strcmp(@Tx,float64)==0 || @strcmp(@Tx,double)==0, MPI_DOUBLE)
-        @if(@strcmp(@Tx,int64)==0, MPI_DOUBLE_INT)
-    )
-    @define(OP_MPI,
-        @if(@strcmp(@OP,add)==0, MPI_SUM)
-    )
+    // dtype -> MPI type/op goes through the single table in mpi_wrapper.cc
+    // (see misc/collective_dtype.h); the copy this replaces mapped int64 to
+    // the 16-byte MAXLOC pair MPI_DOUBLE_INT.
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
     index_t num = y->num;
-    MPI_CHECK(MPI_Reduce(xp, yp, num, T_MPI, OP_MPI, root, MPI_COMM_WORLD));
+    MPI_CHECK(MPI_Reduce(xp, yp, num,
+        mpi_dtype(x->dtype()), mpi_add_op(x->dtype()), root, MPI_COMM_WORLD));
     if (root != mpi_world_rank)
         for (index_t i=0; i<num; i++) yp[i] = 0;
 }

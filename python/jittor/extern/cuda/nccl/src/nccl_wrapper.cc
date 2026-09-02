@@ -10,6 +10,7 @@
 #include "misc/cuda_flags.h"
 #include "nccl_wrapper.h"
 #include "event_queue.h"
+#include "misc/collective_dtype.h"
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -20,6 +21,30 @@ const char *_cudaGetErrorEnum(ncclResult_t error) {
 }
 
 namespace jittor {
+
+// The one NCCL dtype table, expanded from the canonical list in
+// misc/collective_dtype.h. NCCL has no 16-bit integer type, so int16 is
+// declared as a hole rather than quietly missing from the table.
+static ncclDataType_t nccl_dtype_unsupported(NanoString dtype) {
+    LOGf << "NCCL collectives do not support dtype" << dtype;
+    return ncclFloat;
+}
+
+#define JT_NCCL_DTYPE_float16  ncclHalf
+#define JT_NCCL_DTYPE_bfloat16 ncclBfloat16
+#define JT_NCCL_DTYPE_float32  ncclFloat
+#define JT_NCCL_DTYPE_float64  ncclFloat64
+#define JT_NCCL_DTYPE_int16    nccl_dtype_unsupported(dtype)
+#define JT_NCCL_DTYPE_int32    ncclInt
+#define JT_NCCL_DTYPE_int64    ncclInt64
+#define JT_NCCL_DTYPE_uint8    ncclUint8
+
+ncclDataType_t nccl_dtype(NanoString dtype) {
+    #define JT_NCCL_DTYPE_CASE(T) if (dtype == ns_##T) return JT_NCCL_DTYPE_##T;
+    JT_COLLECTIVE_DTYPES(JT_NCCL_DTYPE_CASE)
+    #undef JT_NCCL_DTYPE_CASE
+    return nccl_dtype_unsupported(dtype);
+}
 
 ncclComm_t comm;
 ncclUniqueId id;

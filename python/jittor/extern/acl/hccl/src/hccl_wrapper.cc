@@ -11,6 +11,7 @@
 #include "hccl_wrapper.h"
 #include "event_queue.h"
 #include "acl_jittor.h"
+#include "misc/collective_dtype.h"
 #include <acl/acl.h>
 #include <cstdio>
 #include <cstdlib>
@@ -19,6 +20,33 @@
 #include <ctime>
 
 namespace jittor {
+
+// The one HCCL dtype table, expanded from the canonical list in
+// misc/collective_dtype.h. bfloat16 and int16 are declared as holes: CANN does
+// define HCCL_DATA_TYPE_BFP16 / HCCL_DATA_TYPE_INT16, but no Ascend hardware
+// was available to compile against, and naming an enum this build has never
+// referenced is exactly the kind of unverified change this table exists to
+// prevent. Adding them is a one-line change once a CANN build can be run.
+static HcclDataType hccl_dtype_unsupported(NanoString dtype) {
+    LOGf << "HCCL collectives do not support dtype" << dtype;
+    return HcclDataType::HCCL_DATA_TYPE_FP32;
+}
+
+#define JT_HCCL_DTYPE_float16  HcclDataType::HCCL_DATA_TYPE_FP16
+#define JT_HCCL_DTYPE_bfloat16 hccl_dtype_unsupported(dtype)
+#define JT_HCCL_DTYPE_float32  HcclDataType::HCCL_DATA_TYPE_FP32
+#define JT_HCCL_DTYPE_float64  HcclDataType::HCCL_DATA_TYPE_FP64
+#define JT_HCCL_DTYPE_int16    hccl_dtype_unsupported(dtype)
+#define JT_HCCL_DTYPE_int32    HcclDataType::HCCL_DATA_TYPE_INT32
+#define JT_HCCL_DTYPE_int64    HcclDataType::HCCL_DATA_TYPE_INT64
+#define JT_HCCL_DTYPE_uint8    HcclDataType::HCCL_DATA_TYPE_UINT8
+
+HcclDataType hccl_dtype(NanoString dtype) {
+    #define JT_HCCL_DTYPE_CASE(T) if (dtype == ns_##T) return JT_HCCL_DTYPE_##T;
+    JT_COLLECTIVE_DTYPES(JT_HCCL_DTYPE_CASE)
+    #undef JT_HCCL_DTYPE_CASE
+    return hccl_dtype_unsupported(dtype);
+}
 
 HcclRootInfo root_info;
 HcclComm comm;

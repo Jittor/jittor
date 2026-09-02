@@ -63,15 +63,12 @@ void MpiBroadcastOp::jit_prepare(JK& jk) {
 #else // JIT
 #ifdef JIT_cpu
 void MpiBroadcastOp::jit_run() {
-    @define(T_MPI,
-        @if(@strcmp(@Tx,float)==0 || @strcmp(@Tx,float32)==0, MPI_FLOAT)
-        @if(@strcmp(@Tx,int)==0 || @strcmp(@Tx,int32)==0, MPI_INT)
-        @if(@strcmp(@Tx,float64)==0 || @strcmp(@Tx,double)==0, MPI_DOUBLE)
-        @if(@strcmp(@Tx,int64)==0, MPI_DOUBLE_INT)
-        @if(@strcmp(@Tx,uint8)==0, MPI_CHAR)
-    )
+    // dtype -> MPI type goes through the single table in mpi_wrapper.cc
+    // (see misc/collective_dtype.h); the copy this replaces mapped int64 to
+    // the 16-byte MAXLOC pair MPI_DOUBLE_INT, so a broadcast of n int64
+    // elements wrote 2n of them.
     auto* __restrict__ yp = y->ptr<Tx>();
-    MPI_Bcast(yp, y->num, T_MPI, root, MPI_COMM_WORLD);
+    MPI_CHECK(MPI_Bcast(yp, y->num, mpi_dtype(y->dtype()), root, MPI_COMM_WORLD));
 }
 #endif // JIT_cpu
 #endif // JIT

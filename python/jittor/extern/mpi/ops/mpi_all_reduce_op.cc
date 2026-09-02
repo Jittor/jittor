@@ -78,19 +78,15 @@ void MpiAllReduceOp::jit_prepare(JK& jk) {
 #else // JIT
 #ifdef JIT_cpu
 void MpiAllReduceOp::jit_run() {
-    @define(T_MPI,
-        @if(@strcmp(@Tx,float)==0 || @strcmp(@Tx,float32)==0, MPI_FLOAT)
-        @if(@strcmp(@Tx,int)==0 || @strcmp(@Tx,int32)==0, MPI_INT)
-        @if(@strcmp(@Tx,float64)==0 || @strcmp(@Tx,double)==0, MPI_DOUBLE)
-        @if(@strcmp(@Tx,int64)==0, MPI_DOUBLE_INT)
-    )
-    @define(OP_MPI,
-        @if(@strcmp(@OP,add)==0, MPI_SUM)
-    )
+    // dtype -> MPI type/op goes through the single table in mpi_wrapper.cc
+    // (see misc/collective_dtype.h). The per-operator table this replaces
+    // mapped int64 to MPI_DOUBLE_INT, a 16-byte MAXLOC pair, so `num`
+    // elements of it read 2x past the end of x and returned garbage.
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
     index_t num = y->num;
-    MPI_Allreduce(xp, yp, num, T_MPI, OP_MPI, MPI_COMM_WORLD);
+    MPI_CHECK(MPI_Allreduce(xp, yp, num,
+        mpi_dtype(x->dtype()), mpi_add_op(x->dtype()), MPI_COMM_WORLD));
 }
 #endif // JIT_cpu
 #endif // JIT
