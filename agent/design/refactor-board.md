@@ -215,8 +215,8 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 5.15 | `.half()`/`.float16()` 删死的 amp 分支 | 待领 | | |
 | 5.16 | `state_dict(to="torch")` 用 `from_numpy`，不强制 floa… | 待领 | | |
 | 5.17 | 同一概念合并 | 待领 | | |
-| 5.18 | 同一概念合并 | 进行中 | pyother | |
-| 5.19 | 被静默忽略的参数改为传非默认值时 warn 或 raise | 进行中 | pyops（算子参数）+ pyother（其余） | 1710aef1（算子参数：relu/leaky_relu/silu/mish 的 inplace、instance_norm 与 InstanceNorm 的 running stats/momentum/is_train/sync、svd 的 compute_uv/driver、inv_ex 的 check_errors、ctc_loss 的 zero_infinity、sort 的 stable；topk 的 sorted 判为无需处理，见提交说明）。共用基础设施 `python/jittor/_arg_policy.py`，pyother 直接复用，不要另起近义模块 |
+| 5.18 | 同一概念合并 | 已合并 | pyother | 40fa8695（efficientnet 投影层）37ac0ac5（models/_utils）4179c899（loss 的 _reduce）d5892775（分布类）d569f22d（旧式 scheduler）dd1cbe30（init 的 gain 表与 fan）96cb9b1c（linalg helper）+ normalize 合并 |
+| 5.19 | 被静默忽略的参数改为传非默认值时 warn 或 raise | 进行中 | pyops（算子参数）+ pyother（其余） | 1710aef1（算子参数：relu/leaky_relu/silu/mish 的 inplace、instance_norm 与 InstanceNorm 的 running stats/momentum/is_train/sync、svd 的 compute_uv/driver、inv_ex 的 check_errors、ctc_loss 的 zero_infinity、sort 的 stable；topk 的 sorted 判为无需处理，见提交说明）。共用基础设施 `python/jittor/_arg_policy.py`，pyother 直接复用，不要另起近义模块。其余（pyother）：4cf6df28（resnet 的 zero_init_residual——判为该实现而不是 warn，按 torchvision 清零残差分支末端 BN 的 gamma）、211339c9（vjp/jvp 的 strict 归 unsupported、DataLoader 的 pin_memory/persistent_workers 归 ignored 且 persistent_workers 用哨兵默认值只在显式传 False 时 warn、kaiming 的 generator 归 unsupported、fftfreq/rfftfreq 的 dtype 直接实现且未知 kwargs 抛 TypeError） |
 | 5.20 | import 期副作用删除 | 待领 | | |
 | 5.21 | 六个 monkeypatch 安装器写成显式有序清单并加断言 | 待领 | | |
 | 5.22 | `nn` facade 不导出 39 个下划线名，内部用模块局部名不经 `jt.nn.*` 晚绑… | 待领 | | |
@@ -279,7 +279,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 6.P22 | H20 `to_dense` 对 COO 重复索引求和 | 已合并 | pyother | 9d1bf2a1 |
 | 6.P23 | eigh 的特征向量梯度在 CUDA 上错约 60% | 待领 | | |
 | 6.P24 | Pool3d 的 count_include_pad 读原始参数 | 待领 | | |
-| 6.P25 | Adan 偏差修正仍用全局 n_step；连带第一步 grad_diff 语义 | 进行中 | pyother | |
+| 6.P25 | Adan 偏差修正仍用全局 n_step；连带第一步 grad_diff 语义 | 已合并 | pyother | 2d5804a4 |
 | 6.P26 | MaxPool3d 的 ceil_mode 输出尺寸比 torch 多一个平面 | 待领 | | |
 | 6.B01 | MPI 的 int64 改 `MPI_INT64_T` | 已合并 | dist | 03518707 |
 | 6.B02 | ACL | 待领 | | |
