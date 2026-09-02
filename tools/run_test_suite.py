@@ -23,13 +23,13 @@ import argparse
 import os
 from pathlib import Path
 import re
-import subprocess
 import sys
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 sys.path.insert(0, str(REPO_ROOT / "tests"))
+from _helpers.child_process import PYTHON, run_python_child  # noqa: E402
 from _helpers.gate_scope import (  # noqa: E402
     native_arguments,
     torch_arguments,
@@ -98,16 +98,15 @@ def _warmup(environment):
         "print(%r)" % _WARMUP_MARKER
     )
     outputs = []
-    command = [sys.executable, "-c", probe]
     for _attempt in range(_WARMUP_ATTEMPTS):
-        completed = subprocess.run(
-            command,
-            cwd=str(REPO_ROOT),
-            env=environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            universal_newlines=True,
-        )
+        # Through the helper, so the warm-up compiles *this* checkout. A bare
+        # child imported whatever the editable install points at, so the warm-up
+        # filled the session's JITTOR_HOME with the main tree's core and the
+        # pytest run that followed compiled everything a second time. The log
+        # said so all along -- cache_name read `2.0`, not the branch.
+        completed = run_python_child(
+            ["-c", probe], cwd=REPO_ROOT, env=environment, inherit=False,
+            merge_stderr=True, timeout=0)
         outputs.append(completed.stdout)
         if completed.returncode != 0:
             return completed.returncode, "\n".join(outputs)
@@ -119,7 +118,7 @@ def _warmup(environment):
 
 def _run(session, extra, quiet):
     environment = _session_environment(session)
-    command = [sys.executable, "-m", "pytest"]
+    command = [PYTHON, "-m", "pytest"]
     command += _session_arguments(session)
     command += ["-p", "no:cacheprovider", "--timeout=900"]
     command += ["-q"] if quiet else []
@@ -130,14 +129,11 @@ def _run(session, extra, quiet):
     if warmup_code != 0:
         return warmup_code, {}, warmup_output
     print(" ".join(command), flush=True)
-    completed = subprocess.run(
-        command,
-        cwd=str(REPO_ROOT),
-        env=environment,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        universal_newlines=True,
-    )
+    # timeout=0: a whole-suite run has no natural bound, and capping it would
+    # turn a long run into a failure rather than reporting one.
+    completed = run_python_child(
+        command[1:], cwd=REPO_ROOT, env=environment, inherit=False,
+        merge_stderr=True, timeout=0)
     print(completed.stdout, flush=True)
     output = warmup_output + "\n" + completed.stdout
     return completed.returncode, _parse_counts(completed.stdout), output

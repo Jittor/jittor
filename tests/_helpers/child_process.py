@@ -121,8 +121,14 @@ def child_env(extra=None, inherit=True):
 
 
 def default_timeout(timeout=None):
+    """The budget for one child. ``timeout=0`` means "no limit".
+
+    A whole-suite runner has no natural bound -- capping it would only turn a
+    long run into a failure -- so it opts out explicitly rather than by
+    forgetting to pass anything.
+    """
     if timeout is not None:
-        return timeout
+        return timeout or None
     for name in TIMEOUT_VARIABLES:
         configured = os.environ.get(name, "").strip()
         if configured.isdigit():

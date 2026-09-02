@@ -93,12 +93,14 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 事项 | 现象 | 建议归属 |
 | --- | --- | --- |
 | wheel 内容基线过期 | `agent/scripts/test_check_wheel_contents.py::test_repository_default_policy_is_the_clean_final_baseline` 报 `817 != 793`，有人加了新模块没更新基线 | 构建分区，随 9.x 一并更新 |
-| 结构测试子进程超时 flaky | 已处理：`tests/structure` 里 4 处硬编码 `timeout=180` 的冷启动子进程探针（`test_root_domain_structure`、`test_nn_structure`、`test_torch_fsdp2_structure` ×2）统一改成 `_helpers.process_modes.SUBPROCESS_TIMEOUT`，默认 600s、可用 `JITTOR_TEST_SUBPROCESS_TIMEOUT` 覆盖，仍在门禁 `--timeout=900` 之内 | 门禁 gates |
+| 结构测试子进程超时 flaky | 已处理，并已与 0.21 合并成一份实现：超时预算搬进 `tests/_helpers/child_process.DEFAULT_TIMEOUT`（600s，`JITTOR_TEST_CHILD_TIMEOUT` 与旧名 `JITTOR_TEST_SUBPROCESS_TIMEOUT` 都认，仍在门禁 `--timeout=900` 之内），`process_modes.SUBPROCESS_TIMEOUT` 随之删除——同一件事只留一处 | 门禁 gates，`46dbe946` |
 | `split{i}` 与 `parallel` 不兼容 | 同时设这两个 loop option，`ParallelPass` 在 `ASSERT(def)` 上失败（`Check failed: def`）。`SplitLoopPass` 给内层循环的 range 是 `::min(range{i}-id{i}, stride{i})`，定义在外层循环里且随它变化，`ParallelPass` 在调用点 `func->find_define` 找不到、也无法在调用点求值。CUDA 恒走 `ParallelPass`，所以 CUDA 上任何 split 候选都必然编译失败。用例已钉住：`tests/compiler/test_reduce_tuner.py::test_a_split_candidate_would_not_compile_under_parallel` | 代码生成分区，1.04 的前置 |
 | CUDA 归约需要的是线程分解候选，不是 CPU 那套 | `orderN` 候选实测五种形状全部不优于默认（最差 2.1 倍，破坏访存合并），`split{i}` 被上一条挡着，L1 分块尺寸对 GPU 无意义。真正有用的候选是 `ParallelPass` 里的线程分解，属于新工作 | 代码生成分区，待 1.04 前置解决后 |
 | `para_opt_level=4` 的块内共享内存归约比默认慢 1.6–2.0 倍 | 实测四种 UNet 形状：默认（warp shuffle）15.7/14.0/15.0/18.1us，lvl 4（`SharedReducePass`）25.3/31.3/25.3/34.8us，不优化 157/92/159/171us。默认值保持 3。要提升需要「warp shuffle → 每 warp 一个值 → 共享内存 → 每输出一次原子」的混合实现，并且要有生态 harness 的端到端数据；数据与方法在 `agent/skills/cuda-reduction-strategy-comparison/` | 代码生成分区，新任务待派 |
-| `tests/core/test_type_system.py` 一套门禁都不跑 | 它在 `TORCH_MODE_PATHS` 里，原生门禁的 `pytest_ignore_collect` 整片丢掉；而它又不在 `noxfile.py` 任何 session 的清单里 | 门禁分区，随 0.04 一并收进排除清单/torch 门禁 |
+| `tests/core/test_type_system.py` 一套门禁都不跑 | **已修**：0.04 之后 CPU 门禁的 torch 会话就是 `TORCH_MODE_PATHS` 本身，这个文件自然进来了。同一批还有 233 个此前一套 workflow 都碰不到的文件 | 门禁 gates，`6adbf488` |
 | `test_atomic_tuner` 抓不到日志 | **已修**：根因确认为 `032ecfe1` 的 `full_reduce_cuda.py` 快路径猴补 `Var.sum`/`Var.mean`，全归约不再进 JIT；第 4 条用例改走 `jt.reduce` | codegen，`72f020b3` |
+| `asm_tuner.py` 非原子写 `.s`，并发编译读到截断的汇编 | `python/jittor/utils/asm_tuner.py` 的 `pass_asm()` 直接 `open(output_path,"w")` 截断再写，没有临时文件也没有 `os.replace`。`tests/data/test_dataset.py::TestDataset2::test_dataset_use_jittor` 用 `num_workers=4`，四个 worker 子进程并发编译同一个 setitem kernel 进同一个缓存目录，于是有进程读到写了一半的 `.s`，报 `Assembler messages: unknown pseudo-op: '.by'` / `end of file not at end of a line`。**三个互相独立的 `JITTOR_HOME` 上各复现一次**；删掉那一条缓存后单跑就过——不是缓存损坏的偶然，是写法本身没有原子性。表现出来是「毫不相干的算子编译失败」，正是最容易被误判成并发损坏、然后被无视的那一类 | 构建分区，挨着 0.07/0.08 |
+| 全树跑时 `test_notebooks.py` 没有被当成 manual 跳过 | `tests/conftest.py` 的 `pytest_collection_modifyitems` 里，`test_notebooks.py` 的 `pytest.mark.manual` 是在 `SELECTION_IS_BROAD` 那段跳过判断**之后**才加上的，所以全树跑时它照跑不误——2026-09-03 的全树原生一遍里它实测 537 秒，是全树最慢的一项（第二名 289 秒）。顺序问题，不是标记问题 | 门禁 gates，随 0.13/0.15 |
 
 ## 任务
 
@@ -107,7 +109,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 0.01 | `TestGradients` 改用 `only_for=("cpu",)` 显式实例化 | 已合并 | gates | aee8ecaa（+355deb6e） |
 | 0.02 | 设备过滤后 bases 为空或方法数为 0 时生成器直接 raise | 已合并 | gates | e5eb0d05 |
 | 0.03 | `tests/compiler/test_jit_tests.py` 进 CPU 门禁，并断言 … | 已合并 | gates | a5e7f654 |
-| 0.04 | 门禁改为「整个 `tests/` 减显式排除清单」，排除项必须写理由 | 进行中 | gates |  |
+| 0.04 | 门禁改为「整个 `tests/` 减显式排除清单」，排除项必须写理由 | 已合并 | gates | 6adbf488、689e206b |
 | 0.05 | 生态对拍进 nightly | 待领 | | |
 | 0.06 | `make_tensor` 种子改为 `hash(nodeid, shape, dtype)` … | 进行中 | gates |  |
 | 0.07 | 缓存路径追加构建配置指纹 | 待领 | | |
@@ -115,16 +117,16 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 0.09 | 探测结果落盘 `cache_path/probe.json` | 待领 | | |
 | 0.10 | 写缓存前检查可用磁盘空间，不足时给明确错误 | 待领 | | |
 | 0.11 | 「jit_utils 已更新请重跑」改非零退出码 | 待领 | | |
-| 0.12 | 14 处在用例里裸赋值 `jt.flags.*` 且无 tearDown 的测试改 `flag_… | 进行中 | gates |  |
+| 0.12 | 14 处在用例里裸赋值 `jt.flags.*` 且无 tearDown 的测试改 `flag_… | 已合并 | gates | 26a20905 |
 | 0.13 | conftest 的模式由显式环境变量决定，删除 `sys.argv` 嗅探 | 进行中 | gates |  |
 | 0.14 | `_session_env` 不再 `os.environ.copy()` | 待领 | | |
 | 0.15 | 门禁分两层 | 待领 | | |
 | 0.16 | `test_device_parity.py` 按算子分片并行，不再在 `setUpClass`… | 待领 | | |
 | 0.17 | `pyproject.toml` 的 `pythonpath` 改由 conftest 按环境变… | 待领 | | |
-| 0.18 | 门禁每条目断言至少执行 1 个非 skip 用例 | 进行中 | gates |  |
+| 0.18 | 门禁每条目断言至少执行 1 个非 skip 用例 | 进行中 | gates | ee29bee3（记账与报告已合并；`EXECUTES_NOTHING` 待全树数据填完后开 `JITTOR_TEST_REQUIRE_EXECUTION`） |
 | 0.19 | 结构测试从「精确清单」改成「规则」 | 已合并 | gates | c3bcd277 |
 | 0.20 | 布局收尾 | 待领 | | |
-| 0.21 | 测试起的子进程不带 PYTHONPATH，门禁机器上是假绿 | 待领 | | |
+| 0.21 | 测试起的子进程不带 PYTHONPATH，门禁机器上是假绿 | 已合并 | gates | 46dbe946、a5ce7310 |
 | 1.01 | 把 `utils/data.gz` 解出的 `data.cc` 还原为可读的五个翻译单元 | 已合并 | codegen | ecb6a112（+72f020b3 用例） |
 | 1.02 | `op_compiler.cc:30-69` 用正则给 `ParallelPass` 输出打补丁… | 已合并 | codegen | 3eb34e6a |
 | 1.03 | 查明 `SharedReducePass` 在约 4900 个归约 kernel 里零命中的触发… | 已合并 | codegen | 3eb34e6a |

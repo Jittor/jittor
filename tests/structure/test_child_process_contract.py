@@ -40,8 +40,16 @@ _LAUNCHER_MODULES = {"subprocess", "sp", "os"}
 _INTERPRETER_NAMES = {"PYTHON", "python_executable"}
 
 
+#: The suite runner lives outside tests/ but starts the same children, and it
+#: got this wrong in the way that matters: its warm-up compiled the main tree
+#: into the session's cache, so every pytest run that followed compiled the
+#: branch a second time.
+_ALSO_SCANNED = (REPO_ROOT / "tools" / "run_test_suite.py",)
+
+
 def _python_files():
-    return sorted(path for path in TEST_ROOT.rglob("*.py"))
+    return sorted(TEST_ROOT.rglob("*.py")) + [
+        path for path in _ALSO_SCANNED if path.is_file()]
 
 
 def _dotted(node):
