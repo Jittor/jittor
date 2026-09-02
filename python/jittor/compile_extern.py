@@ -941,6 +941,30 @@ def _resolve_distributed_state():
 in_mpi, rank, world_size = _resolve_distributed_state()
 
 
+_DISTRIBUTED_STATE_NAMES = ("in_mpi", "rank", "world_size")
+
+
+def distributed_state_getattr(name):
+    """Module ``__getattr__`` serving the distributed identity from its owner.
+
+    Bound as ``__getattr__`` in both ``jittor/__init__.py`` and
+    ``jittor/_runtime/core_api.py``, so ``jt.rank`` and ``core_api.in_mpi`` are
+    read channels rather than copies taken at import time. They used to be
+    copies -- ``jt.rank`` from the import list, ``core_api.in_mpi`` via
+    ``from jittor import *`` -- and anything that later corrected
+    ``compile_extern.rank`` (the torch NCCL installer does exactly that) left
+    them stale with no error. ``Module.mpi_param_broadcast()`` read the stale
+    one and silently did nothing, so every rank kept its own random init. 6.B15.
+
+    Assigning any of these names on either module would put an entry in that
+    module's ``__dict__``, which shadows ``__getattr__`` permanently and brings
+    the snapshot straight back. Write to ``compile_extern`` instead.
+    """
+    if name in _DISTRIBUTED_STATE_NAMES:
+        return globals()[name]
+    raise AttributeError(name)
+
+
 def distributed_requested():
     """Why this process believes it is one rank of a multi-rank job, or None.
 

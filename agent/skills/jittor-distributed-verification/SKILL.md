@@ -143,6 +143,53 @@ python <你的脚本>.py
 EXIT=0、照样绿。每次跑完都要看清 `N passed` 里的 N 是不是你以为的那些用例，
 skip 的数量有没有突然变大。
 
+## 「看起来是局部的，其实是全局的」
+
+这个形状在 Jittor 这套代码里反复出现，而且每次都表现为**静默的错结果**而不是报错。
+认出它比修它重要。三种变体：
+
+**1. 副本冒充读通道。** 一个名字看着是"当前值"，其实是某次 import 时抄的快照。
+之后有人改了真正的来源，快照不会跟着变，读它的代码就悄悄走错分支。
+- 实例：`_runtime/core_api.py` 顶上 `from jittor import *` 抄走一份 `in_mpi`，
+  `Module.mpi_param_broadcast()` 读的是它。任何在 import 之后才打开分布式的路径
+  （torch 的 NCCL installer 就是）都改不到这份快照，于是参数广播**直接 return**，
+  每个 rank 保留自己的随机初始化。
+- **判据**：`"x" in vars(mod)` 为真 -> 是副本；为假而 `mod.x` 能取到 -> 是读通道
+  （模块级 `__getattr__`）。
+- **改法**：让所有读取点走读通道（PEP 562 的模块 `__getattr__`），唯一来源只有一处。
+  注意**给模块属性赋值会遮蔽 `__getattr__`**，把副本又造回来——写入必须写唯一来源。
+
+**2. 全局开关被当成局部设置。** `jt.flags.use_cuda = 1` 之类，设了不还原就泄漏给
+后面所有用例。表现是"本该在 CPU 跑的用例全在 CUDA 上跑"，而那条路径的梯度恰好是错的。
+- **改法**：try/finally 还原，并在测试里**断言还原成功**。
+
+**3. 上下文由调用方式推断。** 不是快照也不是开关，而是"进程的语义取决于你怎么调它"。
+- 实例：`tests/conftest.py` 按 `sys.argv` 决定整个进程的 torch shim 模式。选择集合里
+  只要有一个路径命中 `TORCH_MODE_PATHS`（含 `tests/compat/torch`），**整个进程**就设
+  `JITTOR_TORCH_SHIM=1`，惰性求值、归约默认值、梯度语义全部换一套。于是
+  `pytest tests/core tests/nn tests/compat/torch` 会让 core 和 nn 在 shim 语义下跑，
+  产生一大批**假失败**。
+- **判据**：加一个目录进选择集合，前面那些目录的结果会不会变？会，就是这个形状。
+- **改法（测试侧）**：按语义分组跑，不要混：
+  ```bash
+  JITTOR_TORCH_SHIM=0 pytest tests/core tests/nn tests/optim tests/distributed
+  JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch
+  ```
+  归责之前先确认失败不是这么来的。
+
+### 怎么写抓得到它的测试
+
+**只写唯一来源，查所有读取点。** 绝不「写几份、查几份」。
+
+一条真实的反例：结构用例本来是
+```python
+core_api.in_mpi = True; jittor.in_mpi = True; compile_extern.in_mpi = True   # 写三份
+with scope: assertFalse(三份)                                                # 查三份
+```
+它看起来在守护「三个视图保持同步」，实际守护的是「我刚手动同步过的三份现在还一致吗」
+——**三份互相独立的快照也照样通过**。也就是说它验不出它声称要验的东西。改成
+写 `compile_extern.in_mpi` 一处、断言三个读取点都跟着变之后，旧实现下它才会失败。
+
 ## 别的坑
 
 - **第一次多进程跑很慢**：`jittor.lock` 是 flock 互斥的，N 个 rank 的首次编译是**串行**的。

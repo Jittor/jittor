@@ -338,14 +338,20 @@ print("RESULT=" + json.dumps({
                 return 0
 
         old_mpi = core_api.mpi
-        old_core_in_mpi = core_api.in_mpi
-        old_root_in_mpi = jittor.in_mpi
         old_compile_in_mpi = core_api.compile_extern.in_mpi
         fake_mpi = FakeMPI()
         try:
             core_api.mpi = fake_mpi
-            core_api.in_mpi = True
-            jittor.in_mpi = True
+            # Write the ONE owner and check every reader follows. Setting all
+            # three by hand (as this used to) passes just as happily when the
+            # three are independent snapshots, so it could not catch the bug it
+            # looked like it was guarding: core_api kept its own `in_mpi` copy
+            # from `from jittor import *`, and anything that later turned
+            # distributed on left that copy stale -- with
+            # Module.mpi_param_broadcast() reading the stale one and silently
+            # broadcasting nothing. Assigning jittor.in_mpi / core_api.in_mpi
+            # here would also shadow the module __getattr__ that now serves
+            # them, putting the snapshot back. 6.B15.
             core_api.compile_extern.in_mpi = True
             scope_type = getattr(core_api, "__single_process_scope")
             with scope_type(rank=0) as selected:
@@ -359,8 +365,6 @@ print("RESULT=" + json.dumps({
             self.assertTrue(fake_mpi.state)
         finally:
             core_api.mpi = old_mpi
-            core_api.in_mpi = old_core_in_mpi
-            jittor.in_mpi = old_root_in_mpi
             core_api.compile_extern.in_mpi = old_compile_in_mpi
 
     def test_core_api_is_the_only_large_python_api_implementation(self):

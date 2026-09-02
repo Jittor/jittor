@@ -3,6 +3,7 @@
 import jittor as jt
 from jittor import *
 from jittor import _core_profiler
+from jittor.compile_extern import distributed_state_getattr as __getattr__
 
 from typing import List, Tuple
 import contextlib
