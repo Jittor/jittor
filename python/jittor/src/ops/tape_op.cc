@@ -70,6 +70,10 @@ Tapes::Tapes(
         out->add_inputs({this});
         auto v = taped_outputs[i]->var;
         auto op = v->input();
+        // Wiring a new input into a tape that already ran corrupts its
+        // liveness bookkeeping; fail loudly instead.
+        ASSERT(op && !op->is_finished())
+            << "tape output" << i << "must still be pending when taped together";
         op->add_inputs(vector<Node*>{out.ptr});
     }
     // set tapes input 
