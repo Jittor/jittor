@@ -72,7 +72,11 @@ tracer；C++ 核心里有 16 处 Torch 兼容概念 `th_mode`；后端模块在 
 **第一档，先做能改变"能不能信"的**
 
 1. 把 `data.gz` 里的五个翻译单元还原进源码树。在此之前任何涉及 liveness 或融合的改动都是
-   盲改。（[核心](01-core-runtime.md)）
+   盲改。这条已经有了具体代价：`SharedReducePass` 在全仓约 4900 个生成的归约 kernel 里
+   **一个都没生效**，而它只有 `.h` 没有 `.cc`，无法查明触发条件；CUDA 上的空间维归约
+   因此退化为每线程直接 `atomicAdd`，实测一个 UNet 归约 kernel 有约 19.6 万次原子加、
+   64 路争用，而 PyTorch 的对应实现走共享内存树形归约。同一层的 `ReduceTuner` 又在
+   `reduce_tuner.cc:14` 对 CUDA 直接返回。（[核心](01-core-runtime.md)）
 2. 修那批静默算错的缺陷。按入口常见程度排：flag 位重叠导致的 AMP 失效、转置标记陈旧
    （任何优化器 step 都触发）、`no_grad` 装饰器递归后永久泄漏、`.item()` 无符号读越界、
    融合边号回绕、`jt.Function` 实例复用。（[核心](01-core-runtime.md)、[Python](02-python-api.md)）

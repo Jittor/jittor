@@ -142,3 +142,16 @@ C++ 头文件。第三，错误处理只有一档：ASSERT/CHECK/LOGf 全部抛 
 | 环境变量解析失败静默回退默认值，唯一的警告还会被吞掉 | `log.h:180-196` 把"解析成功"编码为"再读一次失败"：`export log_v="1 "` 的尾随空格使 peek 不设 failbit 从而静默回退；`log.cc:173` 在 log_silent 下吞掉这条警告 | 写错的环境变量表现为"设置无效"且无提示 | 用 from_chars 加全串消费校验，启动期配置 fail fast | 主要 |
 | `DEFINE_FLAG_WITH_SETTER` 的 setter 在赋值**之前**被调用 | `log.h:228-242` `set_##name(v) { setter_##name(v); name = v; }`；绕过证据 `tracer.cc:137-139` 的 setter 必须手工回写才能让另一个 setter 看到新值；`log.cc:441` 的 setter 抛异常时赋值被跳过而用户以为设置成功 | setter 看到的永远是旧值，每个有副作用的 setter 都要自己打补丁 | 先赋值再调 setter，签名改成收新旧两值 | 主要 |
 | `token_replace_all` 用异常做循环终止 | `str_utils.cc:227-239` 的正常终止条件是 `:187` 的 CHECK 抛出，即每次调用必然抛一次并走完整的格式化与构造；同一个 catch 还吞掉真正的错误 | 源码改写静默失败并返回未改写的源码；每次调用付一次异常开销 | 用返回值表达"无更多匹配" | 次要 |
+
+## 补充：CUDA 归约没有任何优化路径（2026-09-02 实测）
+
+追查 UNet 剩余 3% 时发现的，是第一节「核心的一部分不在源码树里」的一个具体代价。
+
+| 问题 | 证据 | 后果 | 修改方向 | 严重度 |
+| --- | --- | --- | --- | --- |
+| 归约调优器对 CUDA 直接返回，CUDA 归约完全不调优 | `opt/tuner/reduce_tuner.cc:14` `if (fo->flags.get(NodeFlags::_cuda)) return;` 是 `ReduceTuner::run` 的第五行。其后的 split/order 候选（`:53-58`）只对 CPU 生效 | CUDA 上归约的循环切分与顺序没有任何搜索，只能拿 `ParallelPass` 给的默认配置 | 给 CUDA 归约一套自己的候选，或说明为什么不需要 | 主要 |
+| `SharedReducePass` 在整个负载里从未生效 | 统计四个 JIT 缓存共约 4900 个生成的归约 kernel：含 `atomicAdd` 的有相当比例，含 `shared_reduce_add` 的 **0 个**。该 pass 在 `pass_manager.cc:117` 确实被调用，但它只有 `.h` 没有 `.cc`——实现在 `utils/data.gz` 里，无法查明它的触发条件 | 空间维归约退化为「每线程私有累加后直接 `atomicAdd` 到全局」。以 UNet 一个实测 kernel 为例（`reduce OP_add DIM_4 REDUCE_c`，16 次/步、每次 52.9us）：3072 个输出地址、每输出 64 个线程各做一次原子加，合计约 19.6 万次原子加，64 路争用；PyTorch 对应的 `reduce_kernel` 走共享内存树形归约，每输出只写一次，平均 3.7us | 需要一条可读的块内归约实现。在 `data.gz` 还原之前，写新 pass 无法与既有 pass 协调 | 关键 |
+
+这两条合起来解释了 UNet 剩余差距里 kernel 侧的大部分：卷积改走 backend 计划缓存后
+Jittor 的卷积与 GEMM 已比 PyTorch 快 2.57ms，而逐元素与归约合计慢 3.44ms。
+
