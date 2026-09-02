@@ -1982,8 +1982,26 @@ inline static void searchsorted(
     return ret
 
 
+def _scatter_into(x, dim, index, src, reduce='void'):
+    '''The in-place core shared by ``scatter`` and ``scatter_``: writes into ``x``.'''
+    shape = index.shape
+    # torch allows a SCALAR src: scatter(x, dim, index, value) fills the indexed
+    # positions with a constant (e.g. phimoe masks logits with torch.scatter(.., -inf)).
+    if not isinstance(src, jt.Var):
+        src = jt.array(src).cast(x.dtype).broadcast(shape)
+    if src.shape != shape and src.numel() != 1:
+        src = src[tuple( slice(None,s) for s in shape )]
+    indexes = [ f'i{i}' for i in range(len(shape)) ]
+    indexes[dim] = index
+    return x.setitem(tuple(indexes), src, reduce)
+
+
 def scatter(x:jt.Var, dim:int, index:jt.Var, src:jt.Var, reduce='void'):
-    ''' if x is a 3-D array, rewrite x like:
+    ''' Out-of-place scatter, matching ``torch.Tensor.scatter``: ``x`` is left
+    unchanged and a new array is returned. Use :func:`scatter_` for the in-place
+    form.
+
+    if x is a 3-D array, the RESULT looks like x with:
 
     self[index[i][j][k]][j][k] = src[i][j][k]  # if dim == 0
     self[i][index[i][j][k]][k] = src[i][j][k]  # if dim == 1
@@ -2024,28 +2042,23 @@ Example::
         [2.0000, 2.0000, 2.0000, 3.2300]])
 
     '''
-    shape = index.shape
-    # torch allows a SCALAR src: scatter(x, dim, index, value) fills the indexed
-    # positions with a constant (e.g. phimoe masks logits with torch.scatter(.., -inf)).
-    if not isinstance(src, jt.Var):
-        src = jt.array(src).cast(x.dtype).broadcast(shape)
-    if src.shape != shape and src.numel() != 1:
-        src = src[tuple( slice(None,s) for s in shape )]
-    indexes = [ f'i{i}' for i in range(len(shape)) ]
-    indexes[dim] = index
-    return x.setitem(tuple(indexes), src, reduce)
+    # Clone first: the write below goes through setitem, which mutates its
+    # target. Without the clone `y = x.scatter(...)` silently rewrote x -- the
+    # opposite of torch, and the reason scatter_add had to clone by hand.
+    return _scatter_into(x.clone(), dim, index, src, reduce)
 
 def scatter_(x, dim, index, src, reduce='void'):
-    return x.assign(x.scatter(dim, index, src, reduce))
+    ''' In-place scatter, matching ``torch.Tensor.scatter_``: writes into ``x``
+    and returns it. '''
+    return x.assign(_scatter_into(x, dim, index, src, reduce))
 
 jt.Var.scatter = scatter
 jt.Var.scatter_ = scatter_
 
 def scatter_add(x, dim, index, src):
     ''' torch's Tensor.scatter_add (out-of-place): accumulate src into a COPY of x
-    at `index` along `dim`. jittor's scatter(reduce='add') accumulates in place, so
-    clone first to keep torch's out-of-place semantics. '''
-    return x.clone().scatter(dim, index, src, reduce='add')
+    at `index` along `dim`. `scatter` is itself out-of-place, so no extra clone. '''
+    return x.scatter(dim, index, src, reduce='add')
 def scatter_add_(x, dim, index, src):
     return x.scatter_(dim, index, src, reduce='add')
 jt.Var.scatter_add = scatter_add
