@@ -1488,40 +1488,6 @@ if platform.system() == 'Linux':
 # certifi instead; nothing jittor does justifies turning it off for the
 # application it is imported into.
 
-data_gz_path = os.path.join(jittor_path, "utils", "data.gz")
-use_data_gz = os.path.isfile(data_gz_path)
-if os.environ.get("use_data_gz", "1") == "0":
-    use_data_gz = False
-if use_data_gz:
-    import gzip
-    with gzip.open(data_gz_path, 'rb') as f:
-        data = f.read()
-        md5 = hashlib.md5(data).hexdigest()
-    target_md5 = None
-    data_gz_md5_path = os.path.join(cache_path, "data.md5")
-    if os.path.isfile(data_gz_md5_path):
-        with open(data_gz_md5_path, 'r') as f:
-            target_md5 = f.read()
-    data_o_path = os.path.join(cache_path, "data.o")
-    if target_md5 != md5:
-        data_s_path = os.path.join(cache_path, "data.cc")
-        with open(data_s_path, "w") as f:
-            f.write(data.decode("utf8"))
-        dflags = (cc_flags+opt_flags)\
-            .replace("-Wall", "") \
-            .replace("-Werror", "") \
-            .replace("-shared", "")
-        vdp = os.path.join(jittor_path, "src", "utils", "vdp")
-        run_cmd(fix_cl_flags(f"\"{cc_path}\" {dflags} -include \"{vdp}\" \"{data_s_path}\" -c -o \"{data_o_path}\""))
-        os.remove(data_s_path)
-        with open(data_gz_md5_path, 'w') as f:
-            f.write(md5)
-    files.append(data_o_path)
-    files = [f for f in files if "__data__" not in f]
-else:
-    files = [f for f in files 
-        if "__data__" not in f or "src" in f.split("__data__")[1]]
-
 cc_flags += f" -l\"jit_utils_core{lib_suffix}\" "
 compile(cc_path, cc_flags+opt_flags, files, 'jittor_core'+extension_suffix)
 cc_flags += f" -l\"jittor_core{lib_suffix}\" "

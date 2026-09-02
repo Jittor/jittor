@@ -59,7 +59,6 @@ class TestPackagingStructure(unittest.TestCase):
             "recursive-include python/jittor/math_util/src *",
             "recursive-include python/jittor/src *",
             "recursive-include python/jittor/utils *.py",
-            "include python/jittor/utils/data.gz",
             "recursive-include python/jittor_utils/class *",
         }
         self.assertTrue(runtime_resources.issubset(directives))
@@ -87,7 +86,6 @@ class TestPackagingStructure(unittest.TestCase):
             "python/jittor/compat/shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh",
             "python/jittor/compat/shim/resources/stubs/flash_attn/flash_attn_interface.py",
             "python/jittor/compat/shim/resources/torch_init.py",
-            "python/jittor/utils/data.gz",
             "python/jittor/nn/backends/softmax_cuda.py",
             "python/jittor/nn/backends/group_norm_cuda.py",
         )

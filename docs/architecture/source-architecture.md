@@ -181,7 +181,6 @@ paths and therefore require special review:
 - `python/jittor/src/`
 - `python/jittor/extern/`
 - `python/jittor/math_util/src/`
-- `python/jittor/utils/data.gz`
 - `python/jittor/compat/shim/cpp_extension/`
 
 A move is complete only when source checkouts, sdists, wheels, cold JIT builds,

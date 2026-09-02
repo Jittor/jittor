@@ -9,7 +9,6 @@ recursive-include python/jittor/extern *
 recursive-include python/jittor/math_util/src *
 recursive-include python/jittor/src *
 recursive-include python/jittor/utils *.py
-include python/jittor/utils/data.gz
 recursive-include python/jittor_utils/class *
 
 # Repository examples and tools ship in the sdist, but package discovery remains under python/.
@@ -33,8 +32,6 @@ prune python/jittor/**/__pycache__
 prune python/jittor_utils/**/__pycache__
 prune python/jittor/**/.pytest_cache
 prune python/jittor_utils/**/.pytest_cache
-prune python/jittor/**/__data__
-prune python/jittor_utils/**/__data__
 prune examples/**/__pycache__
 prune examples/**/.pytest_cache
 prune examples/**/.ipynb_checkpoints
