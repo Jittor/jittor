@@ -12,7 +12,7 @@ import jittor as jt
 import unittest
 import os
 
-from _helpers.child_process import run_python_child
+from _helpers.child_process import python_executable, shell
 
 class TestLazyExecution(unittest.TestCase):
     @unittest.skipIf(not jt.has_cuda, "No cuda found")
@@ -39,11 +39,33 @@ print(c)
         fpath = os.path.join(jt.flags.cache_path, "lazy_error.py")
         with open(fpath, 'w') as f:
             f.write(code)
-        res = run_python_child([fpath], merge_stderr=True).stdout
-        assert 'print(c)' in res
-        res = run_python_child([fpath], env={"lazy_execution": "0"},
-                               merge_stderr=True).stdout
-        assert "''')" in res
+        # shell(), not run_python_child(): this child is *meant* to abort --
+        # the assertion inside the kernel is the thing being tested. Reaped
+        # directly, jittor's own SIGCHLD handler in this process reads a child
+        # that dumped core as "maybe out of memory" and quick-exits pytest:
+        #
+        #   [e log.cc:250] Caught SIGCHLD. Maybe out of memory ... quick exit
+        #
+        # The whole session then disappears with exit status 1 and no output
+        # at all -- not even a summary. Keeping /bin/sh in between leaves the
+        # shell as the reaped child, and it exits normally.
+        command = "%s %s" % (python_executable(), fpath)
+        res = shell(command, merge_stderr=True).stdout
+        # Lazy execution attributes the failure to the point the graph is
+        # forced, which is `print(c)` rather than the statement that built
+        # the operator.
+        assert 'print(c)' in res, res
+
+        res = shell(command, env={"lazy_execution": "0"},
+                    merge_stderr=True).stdout
+        # With it off, the same failure is attributed to the statement that
+        # built the operator. This used to look for the quotes that close
+        # cuda_src, which stopped being reachable when CPython began printing
+        # only the first physical line of a multi-line call with a `^^^^`
+        # marker under it (3.11) -- so the assertion had become about
+        # traceback formatting rather than about lazy execution.
+        assert 'jt.code(' in res, res
+        assert 'print(c)' not in res, res
         
 
 
