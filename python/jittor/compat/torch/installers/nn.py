@@ -130,7 +130,40 @@ def _install_nn_extras(nn, registry=None):
             return self.module(*args, **kwargs)
 
     class _DistributedDataParallel(_DataParallel):
+        """DDP without gradient synchronisation -- refused on >1 rank.
+
+        This class is a plain forwarding wrapper: no gradient bucket, no
+        autograd hook, no initial parameter broadcast, and ``no_sync()`` is a
+        nullcontext.  Jittor only ever all-reduces inside ``opt.step(loss)``;
+        the torch-idiomatic ``loss.backward(); opt.step()`` fills gradients
+        through ``Var.backward`` and never touches MPI/NCCL.  On N ranks that
+        trains N different models from N different random initialisations and
+        reports nothing.
+
+        Real synchronisation is task 7.02.  Until then, constructing DDP on
+        more than one rank raises instead of quietly diverging.  Single-rank
+        DDP needs no synchronisation, so it keeps working.
+        """
+
         require_backward_grad_sync = True
+
+        def __init__(self, module, *args, **kwargs):
+            world = 1
+            try:
+                world = int(getattr(_jt, "world_size", 1))
+            except Exception:
+                world = 1
+            if world > 1:
+                from ...stub_policy import unimplemented
+                unimplemented(
+                    "torch.nn.parallel.DistributedDataParallel (world_size=%d)" % world,
+                    "run the standard `loss.backward(); opt.step()` loop with "
+                    "NO gradient all-reduce and no initial parameter "
+                    "broadcast, so each rank trains a different model without "
+                    "any error",
+                    "Use jittor's optimizer-driven sync (`opt.step(loss)`), or "
+                    "run on a single rank.")
+            super().__init__(module, *args, **kwargs)
 
         def no_sync(self):
             import contextlib as _ctxlib

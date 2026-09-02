@@ -379,5 +379,36 @@ class TestDataLoaderWorkers(StubPolicyBase):
             list(loader)
         self.assertTrue(any("THREADS" in str(w.message) for w in caught))
 
+class TestDistributedDataParallel(StubPolicyBase):
+    """DDP never synchronised gradients on the loss.backward() path."""
+
+    def test_single_rank_ddp_is_allowed(self):
+        model = torch.nn.Linear(3, 2)
+        wrapped = torch.nn.parallel.DistributedDataParallel(model)
+        out = wrapped(jt.ones((2, 3)))
+        self.assertEqual(tuple(out.shape), (2, 2))
+
+    def test_multi_rank_ddp_is_refused(self):
+        saved = getattr(jt, "world_size", 1)
+        jt.world_size = 4
+        try:
+            self.assertRefuses(
+                lambda: torch.nn.parallel.DistributedDataParallel(
+                    torch.nn.Linear(3, 2)),
+                "DistributedDataParallel", "all-reduce")
+        finally:
+            jt.world_size = saved
+
+    def test_multi_rank_ddp_stub_fallback(self):
+        saved = getattr(jt, "world_size", 1)
+        jt.world_size = 4
+        try:
+            wrapped = self.assertStubFallback(
+                lambda: torch.nn.parallel.DistributedDataParallel(
+                    torch.nn.Linear(3, 2)))
+            self.assertIsNotNone(wrapped)
+        finally:
+            jt.world_size = saved
+
 if __name__ == "__main__":
     unittest.main()
