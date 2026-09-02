@@ -100,6 +100,251 @@ reviewed change.
   gradients, and device dispatch as part of an operator's contract.
 - First-time extension/JIT builds sharing a cache must run serially.
 
+## GitHub collaboration workflow / GitHub 协作流程
+
+This section is the repository's default workflow for day-to-day GitHub
+development. GitHub branch-protection settings are part of the repository
+configuration and must enforce the same rules on the configured default branch.
+The repository may maintain multiple lines (for example `master` and `2.0`);
+the GitHub repository setting and the Issue determine the correct target for a
+PR. Do not assume that the checked-out branch is the default branch.
+
+本节是日常 GitHub 开发的默认流程。GitHub 的分支保护设置属于仓库配置，必须在当前默认
+分支上落实相同规则。仓库可能同时维护多条分支线（例如 `master` 和 `2.0`）；PR 的目标由
+GitHub 仓库设置和 Issue 决定，不要假定当前检出分支就是默认分支。
+
+### 1. Issue and scope / Issue 与范围
+
+- Search existing issues first. A routine, narrowly scoped fix may open a PR
+  directly, but a new public API, behavior change, backend change, packaging
+  change, performance claim, or architectural change starts with an Issue.
+- Give the Issue one owner, a concrete acceptance condition, and the affected
+  area/backend. Link follow-up work instead of expanding one Issue indefinitely.
+- One PR should implement one coherent intent. Split independent changes even
+  when they touch the same files.
+
+- 先搜索已有 Issue。日常且范围很小的修复可以直接发起 PR；新公开 API、行为变化、后端、
+  打包、性能声明或架构变化必须先建立 Issue。
+- Issue 应明确一个负责人、可验证的验收条件，以及受影响的模块和后端；后续工作用关联
+  Issue 管理，不要无限扩大单个 Issue 的范围。
+- 一个 PR 只实现一个完整意图；即使修改同一批文件，彼此独立的改动也应拆开。
+
+### 2. Branches and remotes / 分支与远程仓库
+
+- Treat the default branch as protected: do not push to it or commit directly
+  on it. Release branches and tags are maintainer-owned.
+- External contributors work from a fork. Committers may use a branch in the
+  canonical repository, but the PR and review rules are identical.
+- Use a short-lived branch named `<type>/<issue>-<slug>`, for example
+  `fix/123-floor-divide`, `feat/456-sdpa-mask`, `docs/789-contributing`, or
+  `ci/321-cuda-gate`. Use `chore/<slug>` when there is no Issue and the change
+  is purely maintenance.
+- Start from a clean, up-to-date target branch and use fast-forward pulls. Replace
+  `<target-branch>` with the branch named by the Issue or maintainer:
+
+  ```bash
+  git fetch origin
+  git switch <target-branch>
+  git pull --ff-only origin <target-branch>
+  git switch -c fix/123-floor-divide
+  ```
+
+- Keep generated files, JIT/build caches, model weights, credentials, and
+  unrelated formatting out of the branch. Use an isolated `JITTOR_HOME` or
+  `cache_name` for each checkout or concurrent run.
+
+- 默认分支必须受保护：禁止直接 push 或直接在其上提交；发布分支和 tag 由维护者管理。
+- 外部贡献者从 fork 开发；Committer 可以在主仓库建立分支，但 PR 和评审规则完全相同。
+- 使用短生命周期分支，命名为 `<type>/<issue>-<slug>`，例如
+  `fix/123-floor-divide`、`feat/456-sdpa-mask`、`docs/789-contributing`、
+  `ci/321-cuda-gate`。没有 Issue 且仅是维护性改动时使用 `chore/<slug>`。
+- 从干净且最新的目标分支开始，并使用 fast-forward 拉取；将 `<target-branch>` 替换为 Issue
+  或维护者指定的分支：
+
+  ```bash
+  git fetch origin
+  git switch <target-branch>
+  git pull --ff-only origin <target-branch>
+  git switch -c fix/123-floor-divide
+  ```
+
+- 生成文件、JIT/构建缓存、模型权重、凭据和无关格式化不得进入分支；每个工作树或并行
+  运行都要使用隔离的 `JITTOR_HOME` 或 `cache_name`。
+
+### 3. Commits / 提交信息
+
+Use a small number of reviewable, atomic commits. The preferred subject format
+is:
+
+```text
+<type>(<scope>): <imperative summary>
+```
+
+Use one of `feat`, `fix`, `docs`, `test`, `perf`, `refactor`, `build`, `ci`,
+`chore`, or `revert`; omit `(scope)` when it adds no information. Keep the
+subject concise, explain non-obvious trade-offs in the body, and include issue
+references when useful. Chinese summaries are fine, for example
+`fix(reduce): 修正负整数 floor divide`.
+
+Do not create merge commits on a topic branch. Before requesting review, update
+the branch from the target branch and resolve conflicts locally. It is fine to
+use temporary fixup commits during review; the maintainer merges the final PR
+with **Squash and merge**, so the PR title becomes the release-facing commit
+subject. Never rewrite a branch while another contributor is building on it
+without coordinating in the PR.
+
+提交应保持少量、原子且便于评审。推荐主题格式为：
+
+```text
+<type>(<scope>): <祈使式摘要>
+```
+
+`type` 使用 `feat`、`fix`、`docs`、`test`、`perf`、`refactor`、`build`、`ci`、
+`chore` 或 `revert`；括号中的 scope 没有信息量时可以省略。主题保持简洁，非显然的取舍
+写在正文中，并在需要时关联 Issue。评审期间可以使用临时 fixup 提交；维护者最终使用
+**Squash and merge**，PR 标题将成为面向发布的提交主题。不要在没有与 PR 中其他贡献者
+沟通的情况下重写他们正在基于其开发的分支。
+
+### 4. Local verification / 本地验证
+
+Run the smallest relevant check first, then expand it according to the change:
+
+| Change | Required evidence before review |
+| --- | --- |
+| Repository or documentation only | `python -m nox -s structure docs_links`; run `docs`, `docs_zh`, or `tutorials` when their sources are affected |
+| Python API or refactor | focused pytest, import/identity checks where public APIs are involved, and `structure` |
+| Core operator or autograd | independent forward reference, gradient check, and CPU regression |
+| CUDA/NPU/ROCm behavior | real-device execution plus CPU/device parity on every advertised backend |
+| Packaging or runtime resource | `packaging`/`structure`, wheel or sdist audit, and installed `python -m jittor.selftest` |
+| Distributed behavior | focused multi-process test and the relevant MPI/NCCL/FSDP2 gate |
+| Performance claim | correctness gate plus a reproducible benchmark comparison with the baseline commit |
+
+The normal pull-request baseline is the `lint`, `format`, `typing`, `structure`,
+`packaging`, and supported-Python checks exposed by `noxfile.py`. A local full
+run is:
+
+```bash
+python -m nox -s lint format typing structure packaging py37 py312 py313
+```
+
+Hardware workflows use protected runners and are intentionally triggered on
+trusted pushes rather than arbitrary fork pull requests. A contributor must
+still attach the exact command, device, software versions, cache isolation,
+pass/skip counts, and limitations in the PR. A maintainer reruns the privileged
+CUDA/NPU gate before merge when the change affects that backend. An unavailable
+runner is an environment limitation; it must not be converted into an
+unconditional test skip or presented as backend support.
+
+先运行最小相关检查，再按改动范围扩大验证。PR 的常规基线是 `noxfile.py` 暴露的
+`lint`、`format`、`typing`、`structure`、`packaging` 和受支持 Python 版本检查；本地完整
+运行命令为：
+
+```bash
+python -m nox -s lint format typing structure packaging py37 py312 py313
+```
+
+硬件工作流使用受保护 runner，有意只在可信 push 上触发，不对任意 fork PR 执行。贡献者仍
+必须在 PR 中记录精确命令、设备、软件版本、缓存隔离方式、通过/跳过数量和限制；涉及后端
+时，维护者在合并前重新运行有权限的 CUDA/NPU 门禁。runner 不可用属于环境限制，不能因此
+改成无条件 skip，也不能据此宣称支持该后端。
+
+### 5. Pull request lifecycle / PR 生命周期
+
+1. Open a draft PR early when design or implementation feedback is useful. Set
+   the target to the default branch, link the Issue (`Fixes #123` when the PR
+   fully resolves it), and declare dependencies or stacked PRs.
+2. Fill every section of the PR template: problem and intended behavior,
+   implementation boundary, compatibility impact, tests with environment and
+   backend, limitations, and documentation/release-note impact. Mark a draft
+   **Ready for review** only after the checklist is truthful.
+3. The author performs a self-review of the rendered diff, test output, public
+   API changes, and staged files. Do not use `git add -A`; stage only files in
+   scope.
+4. Reviewers discuss correctness and maintainability in the PR. The author
+   resolves conversations with a new commit or a clear reply; do not silently
+   force-push away an unresolved decision.
+5. A routine PR needs one approval from a relevant Committer or Module
+   Maintainer and all required checks green. Core JIT, backend kernels, public
+   API/compatibility, packaging, distributed, security, and other high-risk or
+   breaking changes need two approvals, including the affected Module
+   Maintainer, plus an Issue/design decision when applicable.
+6. The merge owner confirms no unresolved conversations, a current base branch,
+   passing required checks, and documented follow-up issues. Merge with
+   **Squash and merge**, then delete the topic branch. Only maintainers create
+   release tags or merge release branches.
+
+1. 如果需要尽早获得设计或实现反馈，可以先发起 Draft PR。目标设为默认分支，关联 Issue
+   （完全解决时使用 `Fixes #123`），并声明依赖或堆叠 PR。
+2. 填写 PR 模板的每一项：问题和预期行为、实现边界、兼容性影响、带环境和后端信息的测试、
+   限制，以及文档/发布说明影响。只有清单内容真实完整时才标记 **Ready for review**。
+3. 提交者自行检查渲染后的 diff、测试输出、公开 API 变化和暂存文件；不要使用 `git add -A`，
+   只暂存属于本次改动的文件。
+4. 评审在 PR 中讨论正确性和可维护性。提交者用新提交或明确回复解决对话，不要通过无提示
+   force-push 隐去尚未解决的决定。
+5. 常规 PR 需要相关 Committer 或模块维护者至少一项批准，并通过所有必需检查。核心 JIT、
+   后端 kernel、公开 API/兼容层、打包、分布式、安全及其他高风险或破坏性变化，需要包括
+   受影响模块维护者在内的两项批准，并在适用时先有 Issue/设计决策。
+6. 合并者确认没有未解决对话、目标分支已更新、必需检查通过且后续工作已建 Issue；使用
+   **Squash and merge** 后删除主题分支。发布 tag 或合并发布分支只能由维护者执行。
+
+### Maintainer repository settings / 维护者仓库设置
+
+Apply these rules to the configured default branch in **Settings > Branches >
+Branch protection rules** (or the equivalent ruleset):
+
+- require a pull request before merging; require at least one approval and
+  dismiss stale approvals after new commits;
+- require conversation resolution, successful required status checks, and the
+  branch to be up to date before merging;
+- disable force-push and deletion for the protected branch; allow only
+  **Squash and merge** for normal changes;
+- require the `nox / lint`, `nox / format`, `nox / typing`, `nox / structure`,
+  `nox / packaging`, `nox / py37`, `nox / py312`, and `nox / py313` checks for
+  code PRs. Add `nox / docs*`, `nox / cpu`, or other checks to a path-specific
+  ruleset when the repository's GitHub configuration exposes them as required;
+- keep self-hosted CUDA/NPU checks out of the untrusted fork-PR required set.
+  A maintainer must run the privileged gate on a trusted push and record the
+  result before merging a backend change;
+- when module ownership is formalized, add a `.github/CODEOWNERS` file and
+  require the affected owner review. Until then, the merge owner explicitly
+  selects a relevant Module Maintainer and records that decision in the PR.
+
+在当前默认分支的 **Settings → Branches → Branch protection rules**（或等效 ruleset）中落实：
+
+- 合并前必须通过 PR；至少一项批准，新提交后自动使旧批准失效；
+- 必须解决所有评审对话、通过必需状态检查，并要求分支与目标分支保持最新；
+- 禁止保护分支 force-push 和删除；普通改动只允许 **Squash and merge**；
+- 代码 PR 必须通过 `nox / lint`、`nox / format`、`nox / typing`、`nox / structure`、
+  `nox / packaging`、`nox / py37`、`nox / py312` 和 `nox / py313`。当 GitHub 配置将其暴露
+  为必需检查时，再按路径规则加入 `nox / docs*`、`nox / cpu` 或其他门禁；
+- 不要把自托管 CUDA/NPU 检查加入不可信 fork PR 的必需集合。后端改动合并前，维护者必须
+  在可信 push 上运行有权限的门禁，并在 PR 中记录结果；
+- 模块归属稳定后增加 `.github/CODEOWNERS` 并要求对应 owner 评审；在此之前，由合并者在
+  PR 中明确选择相关模块维护者并记录这一决定。
+
+### 6. Failures, exceptions, and releases / 失败、例外与发布
+
+Classify a failing check before changing the code: (a) a reproducible product
+failure belongs in the PR and usually needs a regression test, (b) a flaky or
+infrastructure failure is rerun and recorded by a maintainer, or (c) an
+unsupported backend is documented with an exact contract, owner, workaround,
+and exit condition in `agent/manuals/known-issues.md`. Never hide installation,
+registration, compilation, or backend errors with a broad exception or an
+unexplained skip.
+
+Release changes also update the relevant `docs/releases/` page and user-facing
+documentation. Only a maintainer creates a `v*` tag after the release PR is
+merged; the tag workflow builds and audits the sdist/wheel and performs the
+platform validation described in the release documentation.
+
+遇到失败时先判断类别再改代码：(a) 可复现的产品失败应在 PR 中说明并通常补回归测试；
+(b) flaky 或基础设施失败由维护者重新运行并记录；(c) 不支持的后端必须在
+`agent/manuals/known-issues.md` 中记录精确契约、负责人、workaround 和退出条件。不得用
+宽泛异常或无解释的 skip 隐藏安装、注册、编译或后端错误。
+
+发布相关改动同时更新 `docs/releases/` 对应页面和面向用户的文档。发布 PR 合并后只能由
+维护者创建 `v*` tag；tag 工作流会构建并审计 sdist/wheel，并执行发布文档中说明的平台验证。
+
 ## Tests / 测试
 
 The repository suite lives at root [`tests/`](tests/) and is collected by
@@ -130,11 +375,14 @@ python -m pytest --collect-only -q tests
 
 ### Nox gates / Nox 门禁
 
-[`noxfile.py`](noxfile.py) is the canonical command surface. The default gate is
-`lint`, `format`, `typing`, `structure`, and `py37`.
+[`noxfile.py`](noxfile.py) is the canonical command surface. Its default local
+sessions are `lint`, `format`, `typing`, `structure`, `packaging`, `py37`,
+`py312`, and `py313`; hardware and documentation sessions are selected when
+their surfaces are affected.
 
 [`noxfile.py`](noxfile.py) 是统一命令入口；默认门禁包括 `lint`、`format`、
-`typing`、`structure` 与 `py37`。
+`typing`、`structure`、`packaging`、`py37`、`py312` 与 `py313`；涉及硬件或文档时再选择相应
+session。
 
 ```bash
 python -m nox

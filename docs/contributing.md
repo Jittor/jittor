@@ -1,4 +1,16 @@
-# Documentation workflow
+# GitHub and documentation workflow
+
+The complete GitHub collaboration policy is maintained in the root
+[`CONTRIBUTING.md`](../CONTRIBUTING.md). Read it before opening an Issue or
+pull request; it defines the branch, commit, review, merge, CI-evidence, and
+release rules. This page records the additional workflow for documentation
+authors.
+
+完整的 GitHub 协作规范维护在根目录的
+[`CONTRIBUTING.md`](../CONTRIBUTING.md)。提交 Issue 或 PR 前请先阅读该文件，其中规定了
+分支、提交信息、评审、合并、CI 证据和发布规则。本页补充文档作者需要遵守的工作流程。
+
+## Documentation workflow / 文档工作流
 
 English MyST Markdown under `docs/` is the only Sphinx source. Simplified
 Chinese translations live in gettext catalogs under
