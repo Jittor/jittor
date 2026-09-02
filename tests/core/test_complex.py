@@ -494,5 +494,69 @@ class TestGradFunctional(unittest.TestCase, TestResultAndGrad):
             check_grad=False,
         )
 
+class TestComplexNumberArithmetic(unittest.TestCase):
+    """ComplexNumber operators against numpy's complex arithmetic.
+
+    numpy is the oracle here: the operators are plain algebra, so a sign or an
+    operand-order slip shows up as a mismatch and nothing else can.
+    """
+
+    TOL = 1e-5
+
+    def _cn(self, arr):
+        return ComplexNumber(jt.array(arr.real.astype("float32")),
+                             jt.array(arr.imag.astype("float32")))
+
+    def _assert_matches(self, got, expect, msg):
+        np.testing.assert_allclose(got.real.numpy(), expect.real,
+                                   atol=self.TOL, rtol=self.TOL,
+                                   err_msg=msg + " (real)")
+        np.testing.assert_allclose(got.imag.numpy(), expect.imag,
+                                   atol=self.TOL, rtol=self.TOL,
+                                   err_msg=msg + " (imag)")
+
+    def test_rsub_scalar(self):
+        # scalar - z  ==  (s - re) - im*i ; the imaginary part flips sign.
+        a = np.array([[1.0 + 2.0j, -3.0 + 4.0j, 5.0 - 6.0j]])
+        for scalar in (2.0, -1, 0):
+            self._assert_matches(self._cn(a).__rsub__(scalar), scalar - a,
+                                 f"{scalar} - z")
+            # the operator protocol has to reach the same place
+            self._assert_matches(scalar - self._cn(a), scalar - a,
+                                 f"{scalar} - z (operator)")
+
+    def test_rsub_complex(self):
+        a = np.array([[1.0 + 2.0j, -3.0 + 4.0j]])
+        b = np.array([[0.5 - 1.5j, 2.0 + 0.25j]])
+        self._assert_matches(self._cn(a).__rsub__(self._cn(b)), b - a, "w - z")
+
+    def test_imatmul_operand_order(self):
+        # z @= w must compute z @ w, not w @ z -- matmul does not commute.
+        a = np.array([[1.0 + 1.0j, 2.0 - 1.0j],
+                      [0.0 + 3.0j, -1.0 + 0.5j]])
+        b = np.array([[2.0 + 0.0j, 0.0 + 1.0j],
+                      [1.0 - 1.0j, 3.0 + 2.0j]])
+        assert not np.allclose(a @ b, b @ a), "test inputs must not commute"
+        self._assert_matches(self._cn(a).__imatmul__(self._cn(b)), a @ b,
+                             "z @= w")
+        z = self._cn(a)
+        z @= self._cn(b)
+        self._assert_matches(z, a @ b, "z @= w (operator)")
+        # and it stays consistent with the out-of-place operator
+        self._assert_matches(self._cn(a) @ self._cn(b), a @ b, "z @ w")
+
+    def test_other_binary_ops_still_agree(self):
+        a = np.array([[1.0 + 2.0j, -3.0 + 4.0j]])
+        b = np.array([[0.5 - 1.5j, 2.0 + 0.25j]])
+        self._assert_matches(self._cn(a) + self._cn(b), a + b, "z + w")
+        self._assert_matches(self._cn(a) - self._cn(b), a - b, "z - w")
+        self._assert_matches(self._cn(a) * self._cn(b), a * b, "z * w")
+        self._assert_matches(self._cn(a) / self._cn(b), a / b, "z / w")
+        self._assert_matches(2.0 + self._cn(a), 2.0 + a, "2 + z")
+        self._assert_matches(self._cn(a) - 2.0, a - 2.0, "z - 2")
+        self._assert_matches(2.0 * self._cn(a), 2.0 * a, "2 * z")
+        self._assert_matches(2.0 / self._cn(a), 2.0 / a, "2 / z")
+
+
 if __name__ == "__main__":
     unittest.main()

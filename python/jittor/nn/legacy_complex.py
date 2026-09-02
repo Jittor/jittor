@@ -175,7 +175,8 @@ class ComplexNumber:
         if isinstance(other, ComplexNumber):
             return ComplexNumber(other.real - self.real, other.imag - self.imag)
         elif isinstance(other, (int, float)):
-            return ComplexNumber(other - self.real, self.imag)
+            # s - (a+bi) == (s-a) - bi: the imaginary part is negated too.
+            return ComplexNumber(other - self.real, -self.imag)
         else:
             raise NotImplementedError
 
@@ -235,10 +236,12 @@ class ComplexNumber:
             raise NotImplementedError
 
     def __imatmul__(self, other):
+        # `z @= w` is `z @ w`; matmul does not commute, so the operands must
+        # keep the order the out-of-place operator uses.
         if isinstance(other, ComplexNumber):
             return ComplexNumber(
-                other.real @ self.real - other.imag @ self.imag,
-                other.imag @ self.real + other.real @ self.imag,
+                self.real @ other.real - self.imag @ other.imag,
+                self.real @ other.imag + self.imag @ other.real,
             )
         else:
             raise NotImplementedError
