@@ -264,24 +264,39 @@ ArrayArgs VarHolder::fetch_sync() {
 }
 
 inline static void cast_item_data(ItemData& data) {
+    // The conversion and the dtype rewrite must stay in the same branch: the
+    // bfloat16 arm used to be compiled out on ROCm while `dtype = ns_float32`
+    // sat outside the #ifndef, so a ROCm bf16 scalar was handed to Python as
+    // the raw bit pattern reinterpreted as float32.
     if (data.dtype == ns_float16) {
         auto* fp16 = (float16*)&data;
+        float32 value = float32(fp16[0]);
         auto* fp32 = (float32*)&data;
-        fp32[0] = float32(fp16[0]);
-    }
-    #ifndef IS_ROCM 
-    else if (data.dtype == ns_bfloat16) {
+        fp32[0] = value;
+        data.dtype = ns_float32;
+    } else if (data.dtype == ns_bfloat16) {
+        #ifndef IS_ROCM
         auto* bf16 = (bfloat16*)&data;
+        float32 value = float32(bf16[0]);
+        #else
+        // ROCm has no host-side bfloat16 -> float32 conversion operator, but
+        // bfloat16 is the high half of a float32: widening is an exact
+        // 16-bit shift of the bit pattern.
+        uint32 bits = uint32(*(uint16*)&data) << 16;
+        float32 value;
+        std::memcpy(&value, &bits, sizeof(value));
+        #endif
         auto* fp32 = (float32*)&data;
-        fp32[0] = float32(bf16[0]);
+        fp32[0] = value;
+        data.dtype = ns_float32;
     }
-    #endif
-    data.dtype = ns_float32;
 }
 
 ItemData VarHolder::item() {
     CHECK(var->num==1) << "Item var size should be 1, but got" << var->num;
-    ItemData data;
+    // Value-initialize: only dsize bytes are written below, and the converter
+    // may read all 8 (unsigned dtypes go through PyLong_FromUnsignedLongLong).
+    ItemData data{};
     data.dtype = var->dtype();
     auto dsize = data.dtype.dsize();
     if (!(var->mem_ptr && !var->allocator->is_cuda())) {

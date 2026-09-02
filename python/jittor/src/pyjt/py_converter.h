@@ -510,6 +510,17 @@ DEF_IS(ItemData, PyObject*) to_py_object(T a) {
         return PyLong_FromLongLong((int64)*(int16*)&a.data);
     if (a.dtype == ns_int8)
         return PyLong_FromLongLong((int64)*(int8*)&a.data);
+    // Unsigned dtypes used to fall through to the int64 branch below, which
+    // reads all 8 bytes of the payload while item() only wrote dsize of them.
+    if (a.dtype == ns_uint8)
+        return PyLong_FromUnsignedLongLong((uint64)*(uint8*)&a.data);
+    if (a.dtype == ns_uint16)
+        return PyLong_FromUnsignedLongLong((uint64)*(uint16*)&a.data);
+    if (a.dtype == ns_uint32)
+        return PyLong_FromUnsignedLongLong((uint64)*(uint32*)&a.data);
+    if (a.dtype == ns_uint64)
+        return PyLong_FromUnsignedLongLong(*(uint64*)&a.data);
+    ASSERT(a.dtype == ns_int64) << "Unhandled dtype in item():" << a.dtype;
     return PyLong_FromLongLong(a.data);
 }
 
