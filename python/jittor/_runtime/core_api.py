@@ -6,6 +6,7 @@ from jittor import _core_profiler
 from jittor.compile_extern import distributed_state_getattr as __getattr__
 
 from typing import List, Tuple
+import functools as _functools
 import contextlib
 import numpy as np
 import numbers
@@ -105,16 +106,52 @@ def safeunpickle(path):
 class _call_no_record_scope:
     def __enter__(self): pass
     def __exit__(self, *exc): pass
+
+    def _new_scope(self):
+        """A fresh scope object for one decorated call.
+
+        ``__call__`` used to close over ``self`` and re-enter that one instance
+        on every call, which is half of why ``@jt.no_grad()`` leaked: a
+        recursive call re-entered the same object. Scopes that keep no
+        per-entry state can go on returning ``self``; :class:`flag_scope`
+        overrides this.
+        """
+        return self
+
     def __call__(self, func):
+        @_functools.wraps(func)
         def inner(*args, **kw):
-            with self:
+            with self._new_scope():
                 ret = func(*args, **kw)
             return ret
         return inner
 
 class flag_scope(_call_no_record_scope):
+    """Set jittor flags for the duration of a ``with`` block or a call.
+
+    The saved values live on a **stack**, not on a single attribute. With one
+    attribute, entering the same scope object twice without leaving it in
+    between overwrote the outer entry's backup with the inner one's, and the
+    outer ``__exit__`` then "restored" the inner scope's values -- permanently.
+
+    That is not an exotic case: ``__call__`` decorates a function with one
+    scope instance, so ``@jt.no_grad()`` on a **recursive** function hits it on
+    the first recursive call. The outer frame saved ``no_grad=0``, the inner
+    frame overwrote that backup with ``no_grad=1`` (already inside the scope),
+    and on the way out the process was left with ``no_grad=1`` for good --
+    every subsequent ``jt.grad`` silently returning zeros, no error, training
+    loss simply not moving.
+    """
+
     def __init__(self, **jt_flags):
         self.jt_flags = jt_flags
+        # one entry per active __enter__, so nesting and recursion compose
+        self._flags_bk_stack = []
+
+    def _new_scope(self):
+        # a decorated call gets its own scope object as well as its own stack
+        # entry, so recursion through the decorator cannot share either
+        return type(self)(**self.jt_flags)
 
     def _flush_if_device_changes(self, wanted):
         """Run everything still pending before the device flag moves.
@@ -136,7 +173,10 @@ class flag_scope(_call_no_record_scope):
         sync_all()
 
     def __enter__(self):
-        flags_bk = self.flags_bk = {}
+        flags_bk = {}
+        # push BEFORE setting anything, so the __exit__ in the except branch
+        # below pops this entry and not an enclosing scope's
+        self._flags_bk_stack.append(flags_bk)
         try:
             if "use_cuda" in self.jt_flags:
                 self._flush_if_device_changes(self.jt_flags["use_cuda"])
@@ -154,16 +194,20 @@ class flag_scope(_call_no_record_scope):
             raise
 
     def __exit__(self, *exc):
+        if not self._flags_bk_stack:
+            # __exit__ without a matching __enter__; nothing was saved
+            return
+        flags_bk = self._flags_bk_stack.pop()
         # Not while an exception is unwinding: the pending work is likely what
         # raised, and a second error here would bury the first one.
         unwinding = len(exc) > 0 and exc[0] is not None
         try:
-            if "use_cuda" in self.flags_bk and not unwinding:
-                self._flush_if_device_changes(self.flags_bk["use_cuda"])
+            if "use_cuda" in flags_bk and not unwinding:
+                self._flush_if_device_changes(flags_bk["use_cuda"])
         finally:
             # Restoring the flags is not optional: leaving the scope's values in
             # place because the flush raised would corrupt everything after it.
-            for k,v in self.flags_bk.items():
+            for k,v in flags_bk.items():
                 setattr(flags, k, v)
 
 class no_grad(flag_scope):
@@ -179,8 +223,10 @@ Example::
 
     '''
     def __init__(self, **jt_flags):
-        self.jt_flags = jt_flags
+        # via super(), not by setting self.jt_flags directly: bypassing
+        # flag_scope.__init__ would leave the backup stack uncreated
         jt_flags["no_grad"] = 1
+        super().__init__(**jt_flags)
 
 class enable_grad(flag_scope):
     ''' enable_grad scope, all variable created inside this
@@ -195,8 +241,8 @@ Example::
 
     '''
     def __init__(self, **jt_flags):
-        self.jt_flags = jt_flags
         jt_flags["no_grad"] = 0
+        super().__init__(**jt_flags)
 
 single_log_capture = None
 
