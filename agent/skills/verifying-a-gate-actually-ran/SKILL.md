@@ -149,3 +149,41 @@ JITTOR_TEST_DEVICES=cpu python -m pytest <目标> --collect-only -q | grep -c '<
 （8 核，机器负载 19；改之前的白名单是 22 个文件）。所以改的同时要把 CI 的
 `timeout-minutes` 一并调够，并且说明它由后续的 smoke/full 分层降回来。
 **不写清楚这一点，下一个人会以为门禁坏了，然后把范围改回去。**
+
+## 七、把散落的调用收编进 helper 时，调用点原来做的事是契约
+
+收编（把 N 处内联的 `subprocess.run` 改成一个 helper）会系统性地丢掉一类东西：**每处调用
+自己做的那点准备工作**。它看起来像样板，实际上是那处调用的契约。
+
+实测的一次：一个探针在子进程里先塞一个假的 `torch` 模块再 `import jittor`，所以它必须
+先 `env.pop` 掉四个 `JITTOR_TORCH_*` / `REAL_TORCH_SITE`。收编之后 helper 的 `env=`
+是**叠加**在 `os.environ` 上的——**叠加删不掉东西**，四个变量原样回来，子进程报
+"cannot install Jittor Torch compatibility over an existing Torch module graph"，
+而这个用例的名字是"检查 import 环路"。
+
+### 判据：把静默的损失变成第一次调用就响的错误
+
+修一遍已知实例是不够的，因为**人工扫一遍只能找到你想得起来的那些**。真正的修法是让这类
+调用**报错**：
+
+```python
+if inherit and extra and "PATH" in extra:
+    raise AssertionError(
+        "child_env() 拿到的像是一个完整环境（里面有 PATH）而 inherit=True。"
+        "叠加到 os.environ 上删不掉任何变量，你做过的 env.pop 会被静默撤销。"
+        "完整环境请传 inherit=False，或者只传你要改的那几个变量。")
+```
+
+判据很朴素：**"字典里有 PATH" ⇒ 调用方给的是完整环境** ⇒ 它多半删过东西 ⇒ 叠加语义会
+悄悄撤销。加上这条断言的那一刻，同一棵树里又冒出四处同样的问题——其中一处 pop 的正是它
+要测的那个变量（`test_openmp_threads` pop `OMP_NUM_THREADS`，然后断言子进程里它被自动
+设成物理核数）。**这证明它不是一处疏忽，是收编动作系统性会丢的东西。**
+
+同一个形状的第二个例子：子进程可能被信号杀死时必须隔离（`crash_isolated=True`），
+否则 jittor 的 SIGCHLD 处理器会让 pytest 无声消失。也是"把契约写进 helper 的一个显式
+选项，而不是指望每个调用方记得"。
+
+**收编前先做一遍这个检查**：逐处 diff 内联版本，列出它做了但 helper 不会做的事
+（`env.pop`、`cwd`、超时、编码、信号处理），每一项要么进 helper 的显式选项，要么在调用点
+留一行注释说明为什么不需要。做不到就不要收编——一份能跑但语义被削掉的 helper，比五处
+重复代码贵得多。
