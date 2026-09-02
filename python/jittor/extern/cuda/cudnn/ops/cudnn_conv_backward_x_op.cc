@@ -11,6 +11,7 @@
 #include "var.h"
 #include "cudnn_conv_backward_x_op.h"
 #include "cudnn_wrapper.h"
+#include "cudnn_conv_plan.h"
 #include "executor.h"
 #include "ops/op_register.h"
 #include "mem/mem_info.h"
@@ -140,7 +141,12 @@ void CudnnConvBackwardXOp::jit_run() {
     ));
 
     auto ws = w->shape;
-    int dimW[] = {(int)ws[0],(int)ws[1],(int)ws[2],(int)ws[3]};
+    // cuDNN takes filter dimensions in KCRS order whatever the memory layout;
+    // read them through the layout string, as infer_shape does.
+    int dimW[] = {
+        (int)ws[findc("@WFORMAT", 'o')], (int)ws[findc("@WFORMAT", 'i')],
+        (int)ws[findc("@WFORMAT", 'h')], (int)ws[findc("@WFORMAT", 'w')],
+    };
     // cudnn only support this two format
     // https://docs.nvidia.com/deeplearning/sdk/cudnn-api/index.html#cudnnSetFilterNdDescriptor
     #define filterFormat_oihw CUDNN_TENSOR_NCHW
@@ -204,6 +210,33 @@ void CudnnConvBackwardXOp::jit_run() {
         4, dimY, strideY
     ));
 
+#ifndef IS_ROCM
+    {
+        // Backend-API plan cache; falls through to the legacy path below when
+        // no plan can be built for this configuration.
+        ConvPlanRequest req; memset(&req, 0, sizeof(req));
+        req.kind = CONV_PLAN_BWD_DATA;
+        req.dtype_x = getDataType<Tx>(); req.dtype_w = getDataType<Tw>(); req.dtype_y = getDataType<Ty>();
+        for (int i=0; i<4; i++) {
+            req.xdim[i] = dimX[i]; req.xstride[i] = strideX[i];
+            req.ydim[i] = dimY[i]; req.ystride[i] = strideY[i];
+            req.wdim[i] = dimW[i];
+        }
+        conv_plan_filter_strides(req.wstride, dimW, filterFormat_@WFORMAT == CUDNN_TENSOR_NHWC);
+        req.pad[0] = paddingh; req.pad[1] = paddingw;
+        req.stride[0] = strideh; req.stride[1] = stridew;
+        req.dilation[0] = dilationh; req.dilation[1] = dilationw;
+        req.allow_tf32 = conv_math_type == CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION;
+        req.benchmark = cudnn_benchmark != 0;
+        if (cudnn_conv_backend_run(req, x->ptr<Tx>(), w->ptr<Tw>(), y->ptr<Ty>())) {
+            checkCudaErrors(cudnnDestroyTensorDescriptor( cudnnIdesc ));
+            checkCudaErrors(cudnnDestroyFilterDescriptor( cudnnFdesc ));
+            checkCudaErrors(cudnnDestroyTensorDescriptor( cudnnOdesc ));
+            checkCudaErrors(cudnnDestroyConvolutionDescriptor( cudnnConvDesc ));
+            return;
+        }
+    }
+#endif
     cudnnConvolutionBwdDataAlgo_t algos[] = {
         CUDNN_CONVOLUTION_BWD_DATA_ALGO_0,
         CUDNN_CONVOLUTION_BWD_DATA_ALGO_1,

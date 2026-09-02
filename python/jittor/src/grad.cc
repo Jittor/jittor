@@ -48,7 +48,10 @@ struct AmpGradGuard {
     int amp_reg_bk;
     AmpGradGuard(Op* op) {
         amp_reg_bk = amp_reg;
-        amp_reg |= (op->flags.flags >> NodeFlags::_prefer_32);
+        // Mirror only the six amp bits the constructor wrote (op.cc); an
+        // unmasked shift also drags _custom_flag and the requires_grad
+        // bookkeeping bits into amp_reg.
+        amp_reg |= ((op->flags.flags >> NodeFlags::_prefer_32) & 63);
     }
 
     ~AmpGradGuard() {

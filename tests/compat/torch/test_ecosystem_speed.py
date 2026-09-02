@@ -39,6 +39,7 @@ SPEED_CASES = (
     "large_transformers_bert",
     "large_transformers_gpt2",
     "large_transformers_llama",
+    "large_transformers_qwen3",
     "large_transformers_vit",
     "large_diffusers_unet2d",
 )
@@ -70,6 +71,9 @@ class _Speed:
 
     def test_large_transformers_llama(self):
         self._compare("large_transformers_llama")
+
+    def test_large_transformers_qwen3(self):
+        self._compare("large_transformers_qwen3")
 
     def test_large_transformers_vit(self):
         self._compare("large_transformers_vit")

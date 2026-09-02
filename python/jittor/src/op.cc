@@ -32,6 +32,7 @@ string_view_map<jit_op_entry_t> jit_ops;
 string_view_map<string> jit_key_mapper;
 
 int64 Op::number_of_lived_ops = 0;
+int64 Op::number_of_created_ops = 0;
 
 // Only Ops with disabled inputs have an entry. Node flag bits record whether
 // an Op has already snapshotted and provide the common no-map-lookup fast path.
@@ -54,6 +55,7 @@ Op::Op() {
     flags.set(NodeFlags::_cpu, 1);
     flags.flags |= ((amp_reg & 63) << NodeFlags::_prefer_32);
     number_of_lived_ops++;
+    number_of_created_ops++;
     if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var)) trace_data.record_node(this);
 }
 

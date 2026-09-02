@@ -9,12 +9,28 @@ import math
 import numpy as np
 
 from typing import Union
+from collections import OrderedDict
 from collections.abc import Sequence, Iterable
 
 
 from ._code import acl_code as getitem_cmd
 
 getitem_forward = getitem_cmd
+_slice_zero_cache = OrderedDict()
+
+
+def _cached_slice_zero(shape, dtype):
+    device_id = int(getattr(jt.flags, "device_id", -1))
+    key = (device_id, tuple(shape), str(dtype))
+    value = _slice_zero_cache.get(key)
+    if value is not None:
+        _slice_zero_cache.move_to_end(key)
+        return value
+    value = jt.zeros(shape, dtype=dtype).stop_grad()
+    _slice_zero_cache[key] = value
+    if len(_slice_zero_cache) > 32:
+        _slice_zero_cache.popitem(last=False)
+    return value
 
 
 def basic_slice_acl(x, slices):
@@ -71,13 +87,50 @@ def basic_slice_acl(x, slices):
     attr->axes = {{ {axes_text} }};
     op.op_attr.reset(attr);
     """
-    return getitem_forward(
-        "SliceV2",
-        [x],
-        output_dtypes=[x.dtype],
-        output_shapes=[output_shape],
-        attr_code=forward_attr,
-        cuda_grad_src=[f"""
+
+    contiguous_last_axis = (
+        str(x.dtype) in ("float16", "bfloat16", "float32")
+        and all(
+            begin == 0 and end == int(size) and step == 1
+            for begin, end, step, size in zip(
+                begins[:-1], ends[:-1], steps[:-1], x.shape[:-1]
+            )
+        )
+        and steps[-1] == 1
+        and output_shape[-1] > 0
+    )
+    inputs = [x]
+    if contiguous_last_axis:
+        before = begins[-1]
+        after = int(x.shape[-1]) - ends[-1]
+        concat_inputs = []
+        fill_shape = list(output_shape)
+        if before:
+            fill_shape[-1] = before
+            inputs.append(_cached_slice_zero(fill_shape, x.dtype))
+            concat_inputs.append("in1")
+        concat_inputs.append("dout")
+        if after:
+            fill_shape[-1] = after
+            inputs.append(_cached_slice_zero(fill_shape, x.dtype))
+            concat_inputs.append("in{}".format(len(inputs) - 1))
+        grad_inputs = "\n".join(
+            "op.add({}, true);".format(name) for name in concat_inputs
+        )
+        grad_src = f"""
+// aclop
+ConcatOpRunner op;
+{grad_inputs}
+op.add(out0, false);
+op.jt_name = "contiguous_slice_grad";
+ConcatAttr *attr = new ConcatAttr();
+attr->tensorNum = {len(concat_inputs)};
+attr->dim = {len(output_shape) - 1};
+op.op_attr.reset(attr);
+op.run();
+"""
+    else:
+        grad_src = f"""
 // aclop
 StridedSliceAssignV2OpRunner op;
 op.add(dout, true);
@@ -90,7 +143,14 @@ attr->steps = {{ {steps_text} }};
 attr->axes = {{ {axes_text} }};
 op.op_attr.reset(attr);
 op.run();
-"""],
+"""
+    return getitem_forward(
+        "SliceV2",
+        inputs,
+        output_dtypes=[x.dtype],
+        output_shapes=[output_shape],
+        attr_code=forward_attr,
+        cuda_grad_src=[grad_src],
     )[0]
 
 

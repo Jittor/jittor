@@ -90,89 +90,50 @@ must be present in the wheel.
 
 ## Target Layout
 
+The tree below is the destination decided on 2026-09-02. The reasoning, a
+source-to-destination table for every move, the packaging coupling and the
+sequencing live in [`agent/design/target-layout.md`](../../agent/design/target-layout.md).
+It replaces the earlier tree in this section, which described the layout as it
+stood after the 2.0 domain-package migration rather than where it should go.
+
 ```text
 .
-├── pyproject.toml
-├── README.md
-├── LICENSE.txt
-├── AGENTS.md
-├── CONTRIBUTING.md
-├── noxfile.py
-├── .pre-commit-config.yaml
-├── .github/workflows/
-├── asv.conf.json
-├── benchmarks/
-├── docs/
-├── examples/
-├── tests/
-├── tools/
-└── python/
-    ├── jittor/
-    │   ├── __init__.py
-    │   ├── __init__.pyi          # public root typing surface
-    │   ├── _runtime/
-    │   │   └── core_api.py       # native Python API after core bootstrap
-    │   ├── nn/
-    │   │   ├── __init__.py
-    │   │   ├── backends/
-    │   │   ├── modules/
-    │   │   ├── functional/
-    │   │   ├── utils/
-    │   │   └── attention.py
-    │   ├── autograd/
-    │   ├── fft/                  # differentiable native FFT namespace
-    │   ├── misc/
-    │   ├── pool/
-    │   ├── optim/
-    │   ├── sparse/
-    │   ├── compat/
-    │   │   ├── torch/
-    │   │   ├── shim/
-    │   │   ├── fsdp2/
-    │   │   ├── triton/
-    │   │   ├── vllm/             # staged, relocatable integration
-    │   │   ├── module_patcher.py
-    │   │   └── external_backend.py
-    │   ├── selftest.py
-    │   ├── src/
-    │   ├── extern/
-    │   ├── utils/
-    │   └── math_util/
-    └── jittor_utils/
+├── pyproject.toml  README.md  LICENSE.txt  AGENTS.md  CONTRIBUTING.md  noxfile.py
+├── src/                      # C++ core, beside the Python package, not package data
+│   ├── core/                 # node var op graph grad executor fused_op
+│   ├── type/  mem/  codegen/  ops/  runtime/  bindings/  third_party/  tests/
+├── backends/                 # one shape per backend: build fragment + kernels/ + registry entries
+│   ├── cpu/  cuda/  acl/  rocm/  corex/
+│   └── comm/                 # mpi nccl hccl
+├── python/jittor/            # pure Python
+│   ├── _core/                # var module function flags hooks
+│   ├── build/                # compiler compile_extern pyjt_compiler cuda_wheel install_cuda + jittor_utils
+│   ├── ops/                  # today's misc/, with tensor_ops split by domain
+│   ├── nn/  optim/  autograd/  fft/  sparse/  dataset/  transform/  models/
+│   ├── linalg/  distributions/  init/
+│   ├── distributed/  contrib/  tools/
+├── compat/                   # separate distribution (jittor-torch): torch shim fsdp2 vllm triton
+├── tools/  tests/  docs/  examples/  benchmarks/
+└── agent/                    # manuals/ skills/ scripts/ only
 ```
 
-The tree is a destination, not authorization for a flag-day move. Each migration
-must leave the repository buildable and preserve the hard path invariants.
+Three rules the old tree did not state:
 
-It also abbreviates: it names the packages the migration reshaped, not every
-entry that legitimately exists. The authoritative list is the exact set asserted
-by `test_runtime_root_has_an_exact_reviewed_entry_set` in
-[`tests/structure/test_cleanup_structure.py`](../../tests/structure/test_cleanup_structure.py),
-which additionally covers `ccl/`, `dataset/`, `distributed/`, `einops/`,
-`loss3d/`, `models/`, `transform/`, and the `distributions.py`, `init.py` and
-`linalg.py` domains.
+- The C++ core and the backends are not Python package data. They live beside
+  the package and are built by an explicit step, not by `import jittor`.
+- One concept, one place. A CUDA kernel lives under `backends/cuda/` whichever
+  Python layer calls it; a build tool lives under `jittor/build/`; a tensor
+  operation lives under `jittor/ops/`.
+- Layout moves are the last step of each refactor phase, never the first. A
+  move only makes sense once the code it moves has one shape; see the
+  "布局收尾" rows of [`agent/design/refactor-plan.md`](../../agent/design/refactor-plan.md).
 
-Those stay where they are, deliberately:
-
-- **They are public imports.** `jittor.ccl.ccl_2d`, `jittor.dataset.MNIST` and
-  `jittor.models.resnet50` are what user code already writes, and 2.0 keeps the
-  1.x import surface working.
-- **They are not duplicates.** The concern that prompted this review was
-  overlapping functionality, and the duplicate scanner described below covers
-  exactly that. `ccl` is three separate labelling algorithms with three separate
-  kernels; `dataset` is the `torch.utils.data` equivalent and shares no
-  implementation with it; `models` is the model zoo. Nothing here is a second
-  copy of something else.
-- **The set is closed.** The structure test asserts the *exact* entry set, so a
-  new top-level file or package fails the gate until it is reviewed. The
-  problem the original complaint described -- accumulation -- is what that gate
-  prevents.
-
-What did move were the entries that were genuinely misplaced: `gradfunctional`
-became [`jittor.autograd`](#canonical-and-legacy-imports), `contrib.py` became
-`jittor.compat.contrib`, and the compatibility files listed at the end of
-Decision 1 left the runtime root. Each keeps a compatibility entry point that
-resolves to the same object.
+The exact entry set asserted by `test_runtime_root_has_an_exact_reviewed_entry_set`
+freezes the *current* tree, not this one. It is converted into rule-based checks
+(plan task 0.19) before the first move lands; until then every move updates that
+set in the same commit. Public 1.x import paths (`jittor.ccl.ccl_2d`,
+`jittor.pool.AvgPool2d`, `jittor.misc.*`) survive every move as deprecated
+forwarding modules for one major version.
 
 ## Decision 1: Domain Packages
 

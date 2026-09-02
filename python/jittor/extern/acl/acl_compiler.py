@@ -800,20 +800,22 @@ def change_function():
     def isinf_acl(x):
         return jt.misc._isinf_acl(x)
 
-    def warp(origin_func, new_func, name=None):
+    def acl_active():
+        return bool(jt.flags.use_acl and jt.flags.use_cuda)
 
+    def warp(origin_func, new_func, name=None):
         if isinstance(origin_func, type):
 
             class WrappedClass(origin_func, new_func):
 
                 def __init__(self, *args, **kwargs):
-                    if jt.flags.use_acl:
+                    if acl_active():
                         new_func.__init__(self, *args, **kwargs)
                     else:
                         origin_func.__init__(self, *args, **kwargs)
 
                 def execute(self, *args, **kwargs):
-                    if jt.flags.use_acl:
+                    if acl_active():
                         return new_func.execute(self, *args, **kwargs)
                     elif name == 'setitem':
                         return args[0].assign(origin_func(*args, **kwargs))
@@ -825,7 +827,7 @@ def change_function():
         else:
 
             def warpper(*args, **kwargs):
-                if jt.flags.use_acl:
+                if acl_active():
                     return new_func(*args, **kwargs)
                 elif name == 'setitem':
                     return args[0].assign(origin_func(*args, **kwargs))
@@ -1270,14 +1272,15 @@ def change_function():
     def _normalize_bool_slice(slices):
         # A top-level boolean-Var index (x[mask]) is not accepted by this
         # build's native getitem ("convert bool slice into jt.array"), and the
-        # warp() wrapper only routes to the ACL op when use_acl is set -- so on
-        # the pure-CPU path the bool mask reaches native getitem and fails.
+        # warp() only routes to ACL when both backend and device execution are
+        # enabled, so a pure-CPU scope needs integer coordinates.
         # Convert a bool-Var mask to integer indices there. The ACL backend's
         # GetItemACL handles bool-Var masks natively, so leave them untouched
-        # when use_acl is set (converting to nonzero indices there regresses
-        # the Ascend path with a device-to-host memcpy param error).
-        if (not jt.flags.use_acl) and isinstance(slices, jt.Var) and slices.dtype == "bool":
-            return slices.nonzero().reshape(-1)
+        # when ACL device execution is active (converting to nonzero indices
+        # there regresses the Ascend path with a D2H memcpy parameter error).
+        if not acl_active() and isinstance(slices, jt.Var) and slices.dtype == "bool":
+            nonzero = slices.nonzero()
+            return tuple(nonzero[:, dim] for dim in range(nonzero.shape[1]))
         return slices
 
     jt.Var.getitem = lambda x, slices, return_x=None: warp(
@@ -1301,12 +1304,10 @@ def change_function():
             return fake_setitem(x, slices, value, reduce)
         # A top-level boolean-Var index (x[mask] = v) is not accepted by this
         # build's native setitem on the pure-CPU path (convert bool slice
-        # into jt.array). The warp() wrapper only routes to the ACL op when
-        # use_acl is set, so on CPU the bool mask reaches native setitem and
-        # fails. Convert the bool mask to a tuple of integer index columns
-        # there. The ACL backend handles bool-Var masks natively, so leave
-        # them untouched when use_acl is set.
-        if (not jt.flags.use_acl) and isinstance(slices, jt.Var) and slices.dtype == "bool":
+        # into jt.array). Convert the bool mask to a tuple of integer index
+        # columns there. The ACL backend handles bool-Var masks natively, so
+        # leave them untouched during ACL device execution.
+        if not acl_active() and isinstance(slices, jt.Var) and slices.dtype == "bool":
             nz = slices.nonzero()
             slices = tuple(nz[:, d] for d in range(nz.shape[1]))
         return warp(fake_setitem, setitem_acl, name='setitem')(x, slices, value)
