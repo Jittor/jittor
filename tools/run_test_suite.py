@@ -41,6 +41,17 @@ _COUNT = re.compile(r"(\d+) (passed|failed|skipped|error|errors|xfailed|xpassed)
 _WARMUP_MARKER = "JITTOR_TEST_SUITE_CPU_READY"
 _WARMUP_ATTEMPTS = 3
 
+#: ``compiler.JIT_UTILS_UPDATED_EXIT_CODE``. A cold or stale cache rebuilds
+#: ``jit_utils`` and the process cannot reload it, so it exits and asks to be
+#: re-run -- which is what the warm-up loop is for.
+#:
+#: The retry used to work by accident: the rebuild exited *zero* and printed a
+#: message, so "no marker, exit 0" caught it. 0.11 made that exit non-zero so CI
+#: could see it, and the same change made this loop give up on the first
+#: attempt. The condition has to name the code, not rely on the exit status
+#: being wrong.
+_JIT_UTILS_UPDATED_EXIT_CODE = 3
+
 
 def _lab_root():
     configured = os.environ.get("JITTOR_LAB_ROOT")
@@ -108,6 +119,8 @@ def _warmup(environment):
             ["-c", probe], cwd=REPO_ROOT, env=environment, inherit=False,
             merge_stderr=True, timeout=0)
         outputs.append(completed.stdout)
+        if completed.returncode == _JIT_UTILS_UPDATED_EXIT_CODE:
+            continue
         if completed.returncode != 0:
             return completed.returncode, "\n".join(outputs)
         if _WARMUP_MARKER in completed.stdout:

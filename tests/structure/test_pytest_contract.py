@@ -182,6 +182,7 @@ def test_pytest_owns_collection_and_strict_xfail_policy():
         "slow",
         "network",
         "manual",
+        "load_sensitive",
     }
 
 
