@@ -104,7 +104,12 @@ const char *_cudaGetErrorEnum(NppStatus error);
 #endif
 
 namespace jittor {
-EXTERN_LIB bool peek_logged;
+// Defined in utils/log.cc. Whether this occurrence of (file, line, code) should
+// be reported, and how many times that exact failure has fired so far. It
+// replaces a single process-wide bool that silenced every error after the very
+// first one -- including the real kernel failures reported during teardown.
+EXTERN_LIB bool peek_should_log(const char* file, int line, unsigned int code,
+                                int64_t* nth);
 }
 
 template <typename T>
@@ -112,11 +117,12 @@ void peek(T result, char const *const func, const char *const file,
            int const line) {
   if (result) {
     // DEVICE_RESET
-    if (jittor::peek_logged) return;
-    jittor::peek_logged = 1;
+    int64_t nth = 0;
+    if (!jittor::peek_should_log(file, line,
+            static_cast<unsigned int>(result), &nth)) return;
     LOGe << "Peek CUDA error at" << file >> ":" >> line << " code="
       >> static_cast<unsigned int>(result) >> "(" << _cudaGetErrorEnum(result) << ")"
-      << func;
+      << func << "occurrence" >> nth;
   }
 }
 

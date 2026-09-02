@@ -13,6 +13,10 @@
 #include <iomanip>
 #include <thread>
 #include <unordered_map>
+#include <map>
+#include <mutex>
+#include <tuple>
+#include <cstdint>
 #include <fstream>
 #include "utils/cross_platform.h"
 #include "utils/log.h"
@@ -21,7 +25,32 @@
 
 namespace jittor {
 
-bool peek_logged = 0;
+// Rate limit for peekCudaErrors (extern/cuda/inc/helper_cuda.h).
+//
+// This used to be `bool peek_logged`: one latch for the whole process, set by
+// the first asynchronous CUDA error and never reset, so every later error --
+// from any call site, of any kind -- was dropped for the rest of the run. peek
+// sits on the teardown and async-free paths (array_op.cc and fetch_op.cc
+// destroy their stream and event through it, cuda_dual_allocator through
+// cudaLaunchHostFunc), which is exactly where the errors that explain a
+// corrupted stream show up: they all came after some earlier, often harmless,
+// first error.
+//
+// A counter per (call site, error code) with power-of-two backoff keeps a hot
+// loop from flooding the log while a *new* failure always gets through.
+bool peek_should_log(const char* file, int line, unsigned int code, int64_t* nth) {
+    // Deliberately never destroyed. peek() runs during teardown, after static
+    // destructors have begun; a destroyed table would be worse than a leak.
+    static std::mutex* m = new std::mutex();
+    static std::map<std::tuple<std::string, int, unsigned int>, int64_t>* counts =
+        new std::map<std::tuple<std::string, int, unsigned int>, int64_t>();
+    std::lock_guard<std::mutex> lk(*m);
+    auto& n = (*counts)[std::make_tuple(std::string(file), line, code)];
+    n++;
+    if (nth) *nth = n;
+    // 1st, 2nd, 4th, 8th ... occurrence of this exact failure
+    return (n & (n - 1)) == 0;
+}
 typedef uint32_t uint;
 using string = std::string;
 using stringstream = std::stringstream;
