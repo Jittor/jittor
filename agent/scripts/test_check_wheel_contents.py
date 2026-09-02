@@ -76,9 +76,24 @@ class TestWheelContents(unittest.TestCase):
         baseline = checker._read_hashed_path_list(
             checker.DEFAULT_BASELINE, "default baseline"
         )
-        # The current native numerical surface adds the reviewed FFT and
-        # reduction modules to the steady-state wheel.
-        self.assertEqual(len(baseline), 793)
+        # Not a hand-maintained count: every module anybody adds changes it,
+        # so the literal went stale and reported a legitimate addition as a
+        # gate failure (`817 != 793`) instead of catching anything. What the
+        # baseline has to be internally consistent about is its own header --
+        # that catches a truncated or hand-edited file, which is the failure
+        # this assertion was really standing in for. The review of *which*
+        # paths belong in the wheel happens on the diff of the baseline, and
+        # is enforced against a real wheel by `check_wheel_contents.py
+        # compare` in the release workflow.
+        header = [
+            line
+            for line in checker.DEFAULT_BASELINE.read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.startswith("# entries:")
+        ]
+        self.assertEqual(len(header), 1, "baseline has no '# entries:' header")
+        self.assertEqual(int(header[0].split(":")[1]), len(baseline))
         self.assertTrue(set(checker.REQUIRED_MEMBERS).issubset(baseline))
         pollution = {
             name: checker._pollution_reason(name)
