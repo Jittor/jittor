@@ -24,7 +24,21 @@ struct Var : Node {
     // this var will be generated after alloc.
     void* mem_ptr = nullptr;
     Allocator* allocator = nullptr;
-    size_t allocation;
+    // Handle the allocator hands back from alloc(); its meaning belongs to
+    // `allocator` and to nothing else. It used to have no initializer at all --
+    // the only member of Var that had none -- so before alloc() it held stack
+    // or heap residue, which the "already shared in place" checks in
+    // getitem_op/setitem_op compare for equality.
+    size_t allocation = 0;
+    // Memory this var wants to alias, requested by share_with() and resolved by
+    // alloc(). These two used to be stored in `allocator` and `allocation`, the
+    // Var* reinterpreted as an Allocator*, told apart from a real allocator
+    // only by mem_ptr == nullptr. So every `var->allocator->is_cuda()` that
+    // could be reached between share_with() and alloc() was a virtual call on a
+    // Var, and no caller could ask "is this var sharing?" without knowing that
+    // unwritten rule.
+    Var* share_src = nullptr;
+    size_t share_offset = 0;
     int64 size, num;
     VarHolder* holder = nullptr;
     inline bool is_float() const { CHECK_EXIST; return ns.is_float(); }
@@ -45,7 +59,9 @@ struct Var : Node {
     int64 numel();
     void set_shape(NanoVector shape);
     bool alloc(Allocator* allocator);
-    inline void share_with(Var* x, size_t offset = 0) { CHECK_EXIST; allocator = (Allocator*)x; allocation = offset; }
+    inline void share_with(Var* x, size_t offset = 0) { CHECK_EXIST; share_src = x; share_offset = offset; }
+    // Whether alloc() still owes this var an aliased buffer.
+    inline bool is_sharing() const { CHECK_EXIST; return share_src != nullptr; }
 };
 
 struct VarPtr {

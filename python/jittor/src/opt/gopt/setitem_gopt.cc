@@ -51,7 +51,7 @@ static void setitem_inplace(SetitemOp* op) {
     }
     auto output = op->outputs().front();
     // return if output is all ready shared
-    if (output->allocator) return;
+    if (output->allocator || output->is_sharing()) return;
     output->share_with(input);
     
     auto data = op->input(1);
@@ -74,7 +74,7 @@ static void setitem_inplace(SetitemOp* op) {
            (!input_op 
             || input_op->inputs().size() == 0))))
         return;
-    if (data->allocator)
+    if (data->allocator || data->is_sharing())
         return;
     auto data_op = data->input();
     if (data_op->flags.get(NodeFlags::_custom_flag))
@@ -125,7 +125,7 @@ static void getitem_inplace(GetitemOp* op) {
     auto ou = op->outputs().front();
 
     // return if out is all ready inplaced
-    if (ou->allocator)
+    if (ou->allocator || ou->is_sharing())
         return;
 
     VarSlices vs = op->vs;
@@ -198,7 +198,7 @@ static int64 slice_len(const VarSlice& s, int64 dim_size) {
 static void getitem_contiguous_inplace(GetitemOp* op) {
     auto in = op->inputs().front();
     auto ou = op->outputs().front();
-    if (ou->allocator)
+    if (ou->allocator || ou->is_sharing())
         return;
 
     VarSlices vs = op->vs;

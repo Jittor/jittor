@@ -115,13 +115,25 @@ void Var::set_shape(NanoVector shape) {
 
 bool Var::alloc(Allocator* allocator) {
     if (mem_ptr) return true;
-    if (auto* x = (Var*)(this->allocator)) {
-        if (x->allocator->share_with(size, x->allocation)) {
-            mem_ptr = ((char*) x->mem_ptr) + allocation;
+    if (auto* x = share_src) {
+        // x->allocator used to be dereferenced unconditionally: sharing with a
+        // var that has not been allocated yet (nothing forces the source to be
+        // allocated first) called a virtual function through a null pointer.
+        // With the request in its own field the source's state can be asked
+        // about, and an unusable source simply falls through to a real alloc.
+        if (x->allocator && x->allocator->share_with(size, x->allocation)) {
+            mem_ptr = ((char*) x->mem_ptr) + share_offset;
             allocation = x->allocation;
             this->allocator = x->allocator;
+            // The request is consumed. This is what overwriting `allocator`
+            // used to do implicitly; keeping it would re-alias on a later
+            // alloc of the same var (free_var_mem then realloc).
+            share_src = nullptr;
+            share_offset = 0;
             return true;
         }
+        share_src = nullptr;
+        share_offset = 0;
     }
     mem_ptr = allocator->alloc(size, allocation);
     this->allocator = allocator;

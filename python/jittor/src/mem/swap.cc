@@ -107,7 +107,10 @@ void swap_to_disk(Var* x, Swap& swap) {
 bool alloc_with_swap(Var* x, Allocator* allocator, bool force) {
 
     auto& swap = swaps[allocator];
-    if (x->allocator) {
+    // "allocator is set" used to mean either of two things: already allocated,
+    // or a pending share_with whose Var* was parked in that field. Both skip
+    // the limit/swap machinery below, so both are spelled out here.
+    if (x->mem_ptr || x->is_sharing()) {
         // shared memory, no need alloc
         if (x->alloc(allocator)) {
             swap.lived[{x->size, x->id}] = x;

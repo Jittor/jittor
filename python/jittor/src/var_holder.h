@@ -391,8 +391,9 @@ struct VarHolder {
     // @pyjt(share_with)
     // @attrs(return_self)
     inline VarHolder* share_with(VarHolder* other) {
-        CHECK(!var->allocator) << "This var is already executed or shared.";
-        var->allocator = (Allocator*)(other->var);
+        CHECK(!var->allocator && !var->is_sharing())
+            << "This var is already executed or shared.";
+        var->share_with(other->var);
         return this;
     }
 
