@@ -58,6 +58,8 @@ import unittest
 
 import numpy as np
 
+from _helpers.child_process import PYTHON, run_python_child
+
 import _ecosystem_cases
 
 
@@ -150,7 +152,7 @@ REFERENCE_SHARES_PACKAGE_SITE = (
 
 
 def _runner_package_site(python):
-    if python == sys.executable:
+    if python == PYTHON:
         return PACKAGE_SITE
     if REFERENCE_PACKAGE_SITE:
         return REFERENCE_PACKAGE_SITE
@@ -234,17 +236,26 @@ def _run(python, runtime, case, output, weights=None, device="cpu", repeats=None
         environment["JITTOR_ECOSYSTEM_PACKAGE_SITE"] = package_site
     else:
         environment.pop("JITTOR_ECOSYSTEM_PACKAGE_SITE", None)
-    completed = subprocess.run(
-        command,
-        env=environment,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        # The runner prints Jittor's own logging, which is not ASCII.
-        encoding="utf-8",
-        errors="replace",
-        timeout=1800,
-    )
+    if python == PYTHON:
+        # The Jittor side must run *this* checkout, so it is pinned.
+        completed = run_python_child(
+            command[1:], env=environment, inherit=False, merge_stderr=True,
+            timeout=1800)
+    else:
+        # The oracle is a different interpreter with its own real PyTorch
+        # installation. Pinning this checkout onto it is exactly what the
+        # comparison must not do, so it is launched unpinned and on purpose.
+        completed = subprocess.run(
+            command,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            # The runner prints Jittor's own logging, which is not ASCII.
+            encoding="utf-8",
+            errors="replace",
+            timeout=1800,
+        )
     marker = "ECOSYSTEM_RESULT "
     for line in completed.stdout.splitlines():
         if line.startswith(marker):
@@ -306,7 +317,7 @@ class EcosystemComparison(unittest.TestCase):
             weights = root / "torch.weights.npz"
             self.assertTrue(weights.exists(), torch_log[-2000:])
             jittor_report, _jittor_log = _run(
-                sys.executable,
+                PYTHON,
                 "jittor",
                 case,
                 jittor_output,
@@ -327,7 +338,7 @@ class EcosystemComparison(unittest.TestCase):
                     ),
                 )
                 expected_site = _runner_package_site(
-                    sys.executable if label == "jittor" else REAL_TORCH_PYTHON
+                    PYTHON if label == "jittor" else REAL_TORCH_PYTHON
                 )
                 if expected_site:
                     self.assertEqual(

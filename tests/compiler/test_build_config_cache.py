@@ -14,28 +14,20 @@ build anything.
 
 import json
 import os
-from pathlib import Path
-import subprocess
-import sys
 import tempfile
 import unittest
 
 import jittor_utils as jit_utils
 
-
-REPO_PYTHON = str(Path(__file__).resolve().parents[2] / "python")
+from _helpers.child_process import run_python_child
 
 
 def _cache_path_for(env_overrides):
     """cache_path as computed by a fresh interpreter with these variables set."""
-    env = dict(os.environ)
-    env["PYTHONPATH"] = REPO_PYTHON + os.pathsep + env.get("PYTHONPATH", "")
-    env.update(env_overrides)
     script = ("import jittor_utils, json, sys;"
               "sys.stdout.write(json.dumps(["
               "jittor_utils.cache_path, jittor_utils.lock_path]))")
-    out = subprocess.run([sys.executable, "-c", script], env=env,
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    out = run_python_child(["-c", script], env=env_overrides, text=False)
     assert out.returncode == 0, out.stderr.decode()
     return json.loads(out.stdout.decode())
 

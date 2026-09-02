@@ -15,27 +15,17 @@ jobs training N different models.
 Each case runs in a subprocess because the condition is decided during
 ``import jittor``.
 """
-import os
 from pathlib import Path
-import subprocess
-import sys
 import unittest
+
+from _helpers.child_process import run_python_child
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _run_import(env_overrides, code="import jittor"):
-    env = dict(os.environ)
-    # A bare `python -c` does NOT pick up this worktree: jittor is usually
-    # installed editable and its .pth points at whatever tree was installed.
-    # pytest fixes sys.path only for its own process, not for children.
-    env["PYTHONPATH"] = os.pathsep.join(
-        [os.fspath(_REPO_ROOT / "python")] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
-    env.update(env_overrides)
-    return subprocess.run(
-        [sys.executable, "-c", code],
-        env=env, cwd=os.fspath(_REPO_ROOT),
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=1800)
+    return run_python_child(["-c", code], env=env_overrides, cwd=_REPO_ROOT,
+                            merge_stderr=True, timeout=1800)
 
 
 # No CUDA and no nvcc, so setup_nccl() cannot bring NCCL up. Setting

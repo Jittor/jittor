@@ -9,14 +9,13 @@ import inspect
 import os
 import pickle
 from pathlib import Path
-import subprocess
-import sys
 import unittest
 
-from _helpers.process_modes import SUBPROCESS_TIMEOUT
 
 import jittor as jt
 import numpy as np
+
+from _helpers.child_process import run_python_child
 
 
 class TestRootDomainStructure(unittest.TestCase):
@@ -336,15 +335,8 @@ print("legacy-native-surfaces-ok")
                 "use_cuda": "0",
             }
         )
-        result = subprocess.run(
-            [sys.executable, "-c", probe],
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=SUBPROCESS_TIMEOUT,
-        )
-        self.assertEqual(result.returncode, 0, result.stdout)
+        result = run_python_child(["-c", probe], env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("legacy-native-surfaces-ok", result.stdout)
 
 

@@ -11,11 +11,10 @@ The default is only a default: an explicit ``OMP_NUM_THREADS`` always wins.
 """
 
 import os
-from pathlib import Path
-import subprocess
-import sys
 import tempfile
 import unittest
+
+from _helpers.child_process import run_python_child
 
 from jittor_utils import (
     _physical_core_count_from_sysfs,
@@ -72,20 +71,11 @@ class TestOpenmpDefault(unittest.TestCase):
         """The value has to be in place before anything links OpenMP."""
         environment = dict(os.environ)
         environment.pop("OMP_NUM_THREADS", None)
-        # Without this the child imports whatever jittor is installed while
-        # loading the core this checkout built (the parent exports
-        # cache_name), which is a different tree's Python layer against a new
-        # binary. See tests/compiler/test_tracer.py:_child_env.
-        environment["PYTHONPATH"] = str(
-            Path(__file__).resolve().parents[2] / "python"
-        ) + os.pathsep + environment.get("PYTHONPATH", "")
-        completed = subprocess.run(
-            (sys.executable, "-c",
-             "import os, jittor; print('THREADS', os.environ.get('OMP_NUM_THREADS'))"),
+        completed = run_python_child(
+            ["-c",
+             "import os, jittor; print('THREADS', os.environ.get('OMP_NUM_THREADS'))"],
             env=environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            universal_newlines=True,
+            merge_stderr=True,
         )
         marker = [line for line in completed.stdout.splitlines()
                   if line.startswith("THREADS ")]

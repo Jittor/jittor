@@ -9,9 +9,6 @@ DataLoader worker and every gate subprocess.
 
 import json
 import os
-from pathlib import Path
-import subprocess
-import sys
 import tempfile
 import time
 import unittest
@@ -19,8 +16,7 @@ import unittest
 import jittor_utils as jit_utils
 from jittor_utils import probe
 
-
-REPO_PYTHON = str(Path(__file__).resolve().parents[2] / "python")
+from _helpers.child_process import run_python_child
 
 
 class TestProbeCache(unittest.TestCase):
@@ -77,13 +73,10 @@ class TestWarmImportRunsNoProbes(unittest.TestCase):
     """The acceptance criterion: a warm import spawns no probe subprocess."""
 
     def _import_and_report(self):
-        env = dict(os.environ)
-        env["PYTHONPATH"] = REPO_PYTHON + os.pathsep + env.get("PYTHONPATH", "")
         script = ("import jittor;"
                   "from jittor_utils import probe;"
                   "print('MISSES', probe.MISSES)")
-        out = subprocess.run([sys.executable, "-c", script], env=env,
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out = run_python_child(["-c", script], text=False)
         assert out.returncode == 0, out.stderr.decode()[-4000:]
         for line in out.stdout.decode().splitlines():
             if line.startswith("MISSES "):

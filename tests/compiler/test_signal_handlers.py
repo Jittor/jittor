@@ -1,14 +1,10 @@
 """Process-level signal handlers must respect embedded host ownership."""
 
 import os
-from pathlib import Path
 import signal
-import subprocess
-import sys
 import unittest
 
-
-REPO_PYTHON = str(Path(__file__).resolve().parents[2] / "python")
+from _helpers.child_process import run_python_child
 
 _JUPYTER_CHILD_PROBE = r"""
 import os
@@ -40,20 +36,16 @@ class TestSignalHandlerOwnership(unittest.TestCase):
         ):
             environment.pop(name, None)
         environment.update({
-            "PYTHONPATH": REPO_PYTHON + os.pathsep + environment.get("PYTHONPATH", ""),
             "JPY_PARENT_PID": str(os.getpid()),
             "CUDA_VISIBLE_DEVICES": "",
             "nvcc_path": "",
             "use_cuda": "0",
             "JITTOR_TORCH_SHIM": "0",
         })
-        completed = subprocess.run(
-            (sys.executable, "-c", _JUPYTER_CHILD_PROBE),
+        completed = run_python_child(
+            ["-c", _JUPYTER_CHILD_PROBE],
             env=environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            universal_newlines=True,
-            timeout=120,
+            merge_stderr=True,
         )
         self.assertEqual(completed.returncode, 0, completed.stdout)
         self.assertIn("CHILD_RETURN -{}".format(signal.SIGKILL), completed.stdout)

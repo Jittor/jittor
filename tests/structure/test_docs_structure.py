@@ -7,9 +7,10 @@ from importlib.util import module_from_spec, spec_from_file_location
 import json
 from pathlib import Path
 import subprocess
-import sys
 from tempfile import TemporaryDirectory
 import unittest
+
+from _helpers.child_process import run_python_child
 
 
 EXPECTED_EXTENSIONS = [
@@ -280,14 +281,9 @@ class TestDocsStructure(unittest.TestCase):
         self.assertEqual(violations, [])
 
     def test_internal_markdown_links_pass(self):
-        result = subprocess.run(
-            (sys.executable, "tools/docs/check_links.py"),
-            cwd=str(self.repo_root),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            universal_newlines=True,
-            check=False,
-        )
+        result = run_python_child(
+            ["tools/docs/check_links.py"], cwd=self.repo_root,
+            merge_stderr=True)
         self.assertEqual(result.returncode, 0, result.stdout)
 
 

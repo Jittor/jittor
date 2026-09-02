@@ -10,13 +10,11 @@ import json
 import os
 import pickle
 from pathlib import Path
-import subprocess
 import sys
 import types
 import unittest
 from unittest import mock
 
-from _helpers.process_modes import SUBPROCESS_TIMEOUT
 
 import jittor as jt
 from jittor.compat import fsdp2 as fsdp
@@ -30,6 +28,8 @@ from jittor.compat.fsdp2 import installer
 from jittor.compat.fsdp2 import optimizer
 from jittor.compat.fsdp2 import shard
 from jittor.compat.torch.context import ModuleRegistry
+
+from _helpers.child_process import run_python_child
 
 
 _PUBLIC_NAMES = {
@@ -306,11 +306,8 @@ assert second is jittor.torch_fsdp2_compat
             ("jittor.compat.fsdp2", "jittor.torch_fsdp2_compat"),
             ("jittor.torch_fsdp2_compat", "jittor.compat.fsdp2"),
         ):
-            result = subprocess.run(
-                [sys.executable, "-c", template % (first, second)],
-                cwd=str(repo_root), env=env, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, text=True, timeout=SUBPROCESS_TIMEOUT,
-            )
+            result = run_python_child(
+                ["-c", template % (first, second)], cwd=repo_root, env=env)
             self.assertEqual(
                 result.returncode, 0,
                 "import order %s -> %s failed:\n%s\n%s"
@@ -401,11 +398,7 @@ value = pickle.loads(payload)
 from jittor.compat import fsdp2
 assert value is fsdp2.DeviceMesh
 """ % _LEGACY_PICKLES["DeviceMesh"]
-        result = subprocess.run(
-            [sys.executable, "-c", code], cwd=str(repo_root), env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            timeout=SUBPROCESS_TIMEOUT,
-        )
+        result = run_python_child(["-c", code], cwd=repo_root, env=env)
         self.assertEqual(
             result.returncode, 0,
             "pickle-first legacy import failed:\n%s\n%s"

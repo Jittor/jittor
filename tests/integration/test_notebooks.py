@@ -12,6 +12,8 @@ import sys
 
 import pytest
 
+from _helpers.child_process import run_python_child
+
 
 _TOPICS = (
     "ConditionGAN",
@@ -90,23 +92,11 @@ def _materialize(topic, destination):
     pytest.importorskip("jupytext")
     output = destination / (topic + ".ipynb")
     output.parent.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(
-        (
-            sys.executable,
-            "-m",
-            "jupytext",
-            "--to",
-            "ipynb",
-            "--output",
-            str(output),
-            str(_topic_path(topic)),
-        ),
-        cwd=str(destination),
-        env=os.environ.copy(),
-        universal_newlines=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
+    result = run_python_child(
+        ["-m", "jupytext", "--to", "ipynb", "--output", str(output),
+         str(_topic_path(topic))],
+        cwd=destination,
+        merge_stderr=True,
     )
     assert result.returncode == 0, result.stdout
     assert output.is_file()

@@ -25,6 +25,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from _helpers import child_process  # noqa: E402
+
 import _ecosystem_runner  # noqa: E402
 import _ecosystem_harness  # noqa: E402
 
@@ -137,7 +139,7 @@ class TestEcosystemDeviceSelection(unittest.TestCase):
                     _ecosystem_harness, "REFERENCE_SHARES_PACKAGE_SITE", False
                 ):
                     self.assertEqual(
-                        _ecosystem_harness._runner_package_site(sys.executable),
+                        _ecosystem_harness._runner_package_site(child_process.PYTHON),
                         "/packages/python39",
                     )
                     self.assertEqual(

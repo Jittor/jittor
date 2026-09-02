@@ -10,12 +10,12 @@ Two ways the old checks could evaporate:
 """
 
 import os
-import subprocess
-import sys
 import tempfile
 import unittest
 
 import jittor_utils as jit_utils
+
+from _helpers.child_process import run_python_child
 
 
 class TestSearchFileRaises(unittest.TestCase):
@@ -72,14 +72,8 @@ class TestGetVersionRaises(unittest.TestCase):
             "    print('ASSERTED')\n"
             "else:\n"
             "    print('SILENT')\n")
-        env = dict(os.environ)
-        repo_python = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(
-                os.path.abspath(__file__)))), "python")
-        env["PYTHONPATH"] = repo_python + os.pathsep + env.get("PYTHONPATH", "")
         try:
-            out = subprocess.run([sys.executable, "-O", "-c", script], env=env,
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            out = run_python_child(["-O", "-c", script], text=False)
         finally:
             import shutil
             shutil.rmtree(directory, ignore_errors=True)

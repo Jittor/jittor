@@ -6,10 +6,10 @@ import ast
 import importlib.util
 import os
 from pathlib import Path
-import subprocess
-import sys
 from types import SimpleNamespace
 from unittest import mock
+
+from _helpers.child_process import run_python_child
 
 
 try:
@@ -466,21 +466,10 @@ def test_legacy_packaged_runner_is_absent():
 def test_legacy_numeric_selection_fails_loudly():
     env = os.environ.copy()
     env["test_skip_l"] = "10"
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "--collect-only",
-            "-q",
-            "tests/structure/test_pytest_contract.py",
-        ],
-        cwd=str(REPO_ROOT),
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        universal_newlines=True,
-    )
+    result = run_python_child(
+        ["-m", "pytest", "--collect-only", "-q",
+         "tests/structure/test_pytest_contract.py"],
+        cwd=REPO_ROOT, env=env, inherit=False, merge_stderr=True)
     assert result.returncode != 0
     assert "legacy jittor.test selection variables are unsupported" in result.stdout
 

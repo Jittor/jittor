@@ -18,6 +18,9 @@ import numpy as np
 import random
 import pytest
 
+from _helpers.child_process import run_child_script as _run_child_script
+from _helpers.child_process import run_mpi_python
+
 pass_this_test = False
 msg = ""
 mid = 0
@@ -289,13 +292,10 @@ for d in dataset:
         fname = os.path.join(jt.flags.cache_path, "test_dataset_shuffle_mpi.py")
         with open(fname, 'w') as f:
             f.write(src)
-        import subprocess as sp
-        import sys
-        cmd = sys.executable + " " + fname
-        mpirun_path = jt.compile_extern.mpicc_path.replace("mpicc", "mpirun")
-        cmd = mpirun_path + " -np 2 " + cmd
-        print(cmd)
-        r = sp.run(cmd, shell=True, stdout=sp.PIPE, stderr=sp.PIPE)
+        # mpirun starts both ranks itself, so neither inherits this process'
+        # sys.path: without the helper's pinned PYTHONPATH they would import
+        # the installed jittor and the assertion below would prove nothing.
+        r = run_mpi_python(2, [fname], text=False)
         s = r.stdout.decode()
         # print(s)
         st = set([ l for l in s.splitlines() if l.startswith("CHECK:") ])
@@ -363,28 +363,12 @@ if __name__ == "__main__":
 def run_child_script(src, extra_env=None, timeout=300):
     """Run ``src`` in a fresh interpreter that imports THIS tree's jittor.
 
-    pytest puts ``python/`` on its own ``sys.path`` (``pyproject.toml``'s
-    ``pythonpath``) but does not export ``PYTHONPATH``, so a bare subprocess
-    would import whatever jittor is installed in the environment instead of
-    the tree under test -- silently, and the test would prove nothing.
+    Kept as a named wrapper because several tests below call it; the pinning it
+    used to do by hand now lives in ``_helpers.child_process``, which every
+    child-launching test shares.
     """
-    import subprocess as sp
-    import sys
-    from pathlib import Path
-
-    repo_root = Path(__file__).resolve().parents[2]
-    fname = os.path.join(jt.flags.cache_path, "dataset_child_%d.py" % os.getpid())
-    with open(fname, "w") as f:
-        f.write(src)
-    env = dict(os.environ)
-    parts = [str(repo_root / "python")]
-    if env.get("PYTHONPATH"):
-        parts.append(env["PYTHONPATH"])
-    env["PYTHONPATH"] = os.pathsep.join(parts)
-    if extra_env:
-        env.update(extra_env)
-    return sp.run([sys.executable, fname], stdout=sp.PIPE, stderr=sp.PIPE,
-                  env=env, timeout=timeout)
+    return _run_child_script(src, env=extra_env, timeout=timeout,
+                             directory=jt.flags.cache_path, name="dataset_child")
 
 
 class TestChildScriptHelper(unittest.TestCase):

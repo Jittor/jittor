@@ -22,15 +22,14 @@ import inspect
 import os
 import pickle
 from pathlib import Path
-import subprocess
-import sys
 import types as python_types
 import unittest
 
-from _helpers.process_modes import SUBPROCESS_TIMEOUT
 
 import jittor
 import jittor.nn as nn
+
+from _helpers.child_process import run_python_child
 
 
 NN_ROOT = Path(nn.__file__).resolve().parent
@@ -451,14 +450,7 @@ class TestModuleBoundaries(unittest.TestCase):
                 "assert tuple(nn.functional.__all__) == %r\n"
                 "assert tuple(nn.modules.__all__) == %r\n"
             ) % (tuple(sorted(_FUNCTIONAL_API)), tuple(sorted(_MODULE_API)))
-            result = subprocess.run(
-                [sys.executable, "-c", script],
-                cwd=str(REPO_ROOT),
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=SUBPROCESS_TIMEOUT,
-            )
+            result = run_python_child(["-c", script], cwd=REPO_ROOT, env=env)
             with self.subTest(entry=entry):
                 self.assertEqual(result.returncode, 0, result.stderr)
 

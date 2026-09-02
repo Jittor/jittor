@@ -10,8 +10,9 @@
 # ***************************************************************
 import jittor as jt
 import unittest
-import sys, os
-from subprocess import getoutput
+import os
+
+from _helpers.child_process import run_python_child
 
 class TestLazyExecution(unittest.TestCase):
     @unittest.skipIf(not jt.has_cuda, "No cuda found")
@@ -38,9 +39,10 @@ print(c)
         fpath = os.path.join(jt.flags.cache_path, "lazy_error.py")
         with open(fpath, 'w') as f:
             f.write(code)
-        res = getoutput(f"{sys.executable} {fpath}")
+        res = run_python_child([fpath], merge_stderr=True).stdout
         assert 'print(c)' in res
-        res = getoutput(f"lazy_execution=0 {sys.executable} {fpath}")
+        res = run_python_child([fpath], env={"lazy_execution": "0"},
+                               merge_stderr=True).stdout
         assert "''')" in res
         
 

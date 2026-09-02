@@ -10,6 +10,8 @@
 import unittest
 import os, sys
 import jittor as jt
+
+from _helpers.child_process import run_mpi_python
 import numpy as np
 from jittor import nn
 from jittor import dataset
@@ -35,9 +37,11 @@ def fork_with_mpi(num_procs=4):
         return
     else:
         print(sys.argv)
-        cmd = " ".join(["mpirun", "-np", str(num_procs), sys.executable] + sys.argv)
-        print("[RUN CMD]:", cmd)
-        os.system(cmd)
+        # mpirun starts the ranks itself, so none of them inherits this
+        # process' sys.path: the helper pins PYTHONPATH for every rank.
+        completed = run_mpi_python(num_procs, sys.argv, merge_stderr=True,
+                                   launcher="mpirun")
+        print(completed.stdout)
         exit(0)
 
 def main():

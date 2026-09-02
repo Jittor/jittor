@@ -61,15 +61,41 @@ cd <worktree> && JITTOR_HOME=... TMPDIR=... pytest tests/<...> -x -q
 - benchmark 脚本、profile 脚本、复现脚本
 - `python -m` 起的模块
 
-`pytest` 起的子进程也一样：pytest 改的是自己进程的 `sys.path`，**不会**写
-`os.environ["PYTHONPATH"]`，所以子进程不继承。测试里 spawn 子进程时有两条出路：
+### 测试里起子进程：只有一个入口，而且是强制的
 
-- **子进程还是 pytest，且 `cwd` 设成仓库根**——rootdir 会重新解析到这个仓库，
-  `tests/conftest.py` 再次生效，天然正确。`tests/_helpers/distributed.py`
-  的 `run_mpi_test()` 走的就是这条（`mpirun -np N python -m pytest <abs path>`，
-  `cwd=repo_root`），所以它是对的。
-- **子进程是裸 python**——必须显式传 `env["PYTHONPATH"] = <repo_root>/python`，
-  否则父进程测的是 worktree、子进程测的是主树，两边结论会打架。
+`pytest` 起的子进程也一样：pytest 改的是自己进程的 `sys.path`，**不会**写
+`os.environ["PYTHONPATH"]`，所以子进程不继承。
+
+不要再自己拼 `subprocess.run([sys.executable, ...])`。全树统一走
+`tests/_helpers/child_process.py`：
+
+```python
+from _helpers.child_process import run_python_child, run_child_script, run_mpi_python
+
+r = run_python_child(["-c", src], env={"use_cuda": "0"}, merge_stderr=True)
+r = run_child_script(source_text)                    # 写成文件再跑，traceback 有真行号
+r = run_mpi_python(2, [script_path])                 # mpirun -np 2 python script
+```
+
+要点：
+
+- `PYTHONPATH` 由 `child_env()` 钉住，且钉的是 `conftest.source_python_dir()` ——
+  和父进程 `sys.path[0]` **同一个函数**，两边不可能漂移。
+- `env=` 是**叠加**在 `os.environ` 上的。调用方如果是先 `dict(os.environ)` 再
+  **删掉**某个变量，必须传 `inherit=False`，否则合并会把它原样加回来。
+- 默认超时 900 s，`JITTOR_TEST_CHILD_TIMEOUT` 可调。冷子进程要编译整个核心，
+  按空闲机器调的 180 s 在有负载时必然假红。
+- 需要进程句柄（`Popen` 让子进程保持活着）时才自己起，但必须
+  `env=child_env()`。
+
+`tests/structure/test_child_process_contract.py` 会在门禁里静态扫全树，两条规则：
+`tests/` 下不许出现 `sys.executable`（改用 `child_process.PYTHON`）；任何起进程的调用
+只要碰到解释器或 `mpirun`，就必须走 helper 或显式 `env=child_env(...)`。
+
+这不是洁癖：`[0.08]` 把 core 的 `set_lock_path` 改名成 `set_lock_fd` 之后，
+`test_tracer` 的子进程加载的是**分支编的 core**、导入的是**主树的 `compiler.py`**，
+`AttributeError` 指向的两棵树都不是问题所在。安静的那一半更贵——子进程照样跑通，
+测试照样绿，只是它验证的是另一棵树。
 
 ## 判据
 

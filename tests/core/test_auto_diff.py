@@ -7,8 +7,9 @@
 import unittest
 import numpy as np
 import os
-import sys
 import jittor as jt
+
+from _helpers.child_process import run_python_child
 from _helpers.torch_runtime import import_torch_modules, modules_available
 
 skip_this_test = not modules_available("torch", "torchvision")
@@ -47,8 +48,8 @@ net(data)
             f.write(code)
         print(jt.flags.cache_path)
         os.system(f"rm -rf {jt.flags.cache_path}/../../auto_diff/resnet50")
-        assert os.system(sys.executable+" /tmp/test_pt_hook.py") == 0
-        assert os.system(sys.executable+" /tmp/test_pt_hook.py") == 0
+        assert run_python_child(["/tmp/test_pt_hook.py"]).returncode == 0
+        assert run_python_child(["/tmp/test_pt_hook.py"]).returncode == 0
         code = '''
 import numpy as np
 import jittor as jt
@@ -67,7 +68,7 @@ net(data)
 '''
         with open("/tmp/test_jt_hook.py", 'w') as f:
             f.write(code)
-        assert os.system(sys.executable+" /tmp/test_jt_hook.py") == 0
+        assert run_python_child(["/tmp/test_jt_hook.py"]).returncode == 0
         
 
 if __name__ == "__main__":

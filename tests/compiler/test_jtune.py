@@ -10,7 +10,8 @@ import jittor as jt
 import os
 import re
 import shlex
-import sys
+
+from _helpers.child_process import PYTHON, shell
 
 class TestJtune(unittest.TestCase):
     @classmethod
@@ -29,8 +30,9 @@ class TestJtune(unittest.TestCase):
         self.jtune_path = os.path.join(jt.flags.jittor_path, "utils/jtune.py")
 
     def run_cmd(self, cmd):
-        cmd = f"warmup=0 rerun=0 {sys.executable} {self.jtune_path} {self.fname} {cmd}"
-        return jt.compiler.run_cmd(cmd)
+        # jtune.py imports jittor, so the child has to reach *this* checkout.
+        cmd = f"warmup=0 rerun=0 {PYTHON} {self.jtune_path} {self.fname} {cmd}"
+        return shell(cmd, merge_stderr=True, check=True).stdout
 
     def test_run_so(self):
         res = self.run_cmd("run_so").splitlines()

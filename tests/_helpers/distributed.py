@@ -2,10 +2,10 @@
 
 import os
 from pathlib import Path
-import subprocess
-import sys
 
 import jittor as jt
+
+from _helpers.child_process import run_mpi_python
 
 
 _MIGRATED_TEST_PATHS = {
@@ -28,16 +28,10 @@ def run_mpi_test(num_procs, name):
     if relative is None:
         raise ValueError("unknown migrated MPI test: {}".format(name))
     repo_root = Path(__file__).resolve().parents[2]
-    mpirun_path = jt.compile_extern.mpicc_path.replace("mpicc", "mpirun")
-    command = [
-        mpirun_path,
-        "-np",
-        str(num_procs),
-        sys.executable,
-        "-m",
-        "pytest",
-        "-q",
-        os.fspath(repo_root / relative),
-    ]
-    print("run cmd:", " ".join(command))
-    subprocess.run(command, cwd=os.fspath(repo_root), check=True)
+    # Every rank is started by mpirun, not by this process, so none of them
+    # inherits the checkout on sys.path -- the helper pins PYTHONPATH for all.
+    completed = run_mpi_python(
+        num_procs, ["-m", "pytest", "-q", os.fspath(repo_root / relative)],
+        cwd=repo_root, merge_stderr=True)
+    print(completed.stdout)
+    assert completed.returncode == 0, completed.stdout[-4000:]

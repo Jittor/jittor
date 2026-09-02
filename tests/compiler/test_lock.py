@@ -8,21 +8,23 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 import unittest
-import os, subprocess, sys, tempfile
+import os, subprocess, tempfile
 import jittor as jt
 import jittor_utils as jit_utils
 from jittor_utils import lock as jit_lock
+
+from _helpers.child_process import PYTHON, child_env, run_python_child, shell_status
 
 class TestLock(unittest.TestCase):
     def test(self):
         if os.environ.get('lock_full_test', '0') == '1':
             cache_path = os.path.join(jit_utils.home(), ".cache", "jittor", "lock")
             assert os.system(f"rm -rf {cache_path}") == 0
-            cmd = f"cache_name=lock {sys.executable} -m jittor.selftest"
+            cmd = f"cache_name=lock {PYTHON} -m jittor.selftest"
         else:
-            cmd = f"{sys.executable} -m jittor.selftest"
+            cmd = f"{PYTHON} -m jittor.selftest"
         print("run cmd twice", cmd)
-        assert os.system(f"{cmd} & {cmd} & wait %1 && wait %2") == 0
+        assert shell_status(f"{cmd} & {cmd} & wait %1 && wait %2") == 0
 
 
 # A bare Python child: it must not import jittor, or it would block on the very
@@ -54,8 +56,7 @@ sys.stdin.readline()
 
 
 def _lock_state(path):
-    out = subprocess.run([sys.executable, "-c", _PROBE, path],
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    out = run_python_child(["-c", _PROBE, path], text=False)
     return out.stdout.decode().strip()
 
 
@@ -123,7 +124,10 @@ class TestBuildLockTimeout(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "jittor.lock")
             open(path, "w").close()
-            holder = subprocess.Popen([sys.executable, "-c", _HOLDER, path],
+            # Popen, not a helper runner: the test needs the process alive
+            # while it takes the lock, so it still pins PYTHONPATH itself.
+            holder = subprocess.Popen([PYTHON, "-c", _HOLDER, path],
+                                      env=child_env(),
                                       stdin=subprocess.PIPE,
                                       stdout=subprocess.PIPE)
             try:

@@ -6,11 +6,9 @@
 # ***************************************************************
 import unittest
 import jittor as jt
-import os
 import numpy as np
-import subprocess
-import sys
 
+from _helpers.child_process import run_python_child
 from _helpers.torch_runtime import import_torch_modules, modules_available
 
 
@@ -45,7 +43,7 @@ import torch
 A = torch.rand(N, N)
 torch.matmul(A, A)
 """
-        subprocess.run([sys.executable, "-c", src], check=True)
+        run_python_child(["-c", src], check=True)
         src = _REAL_TORCH_PREAMBLE + """N = 100
 import torch
 A = torch.rand(N, N)
@@ -57,7 +55,7 @@ b = a.broadcast([N,N,N], dims=[0]) * a.broadcast([N,N,N], dims=[2])
 b = b.sum(1)
 b.sync()
 """
-        subprocess.run([sys.executable, "-c", src], check=True)
+        run_python_child(["-c", src], check=True)
 
     @unittest.skipIf(not has_torch, "No independent Torch found")
     def test_mkl_conflict1(self):
@@ -79,7 +77,7 @@ m = torch.nn.Conv2d(3, 4, 5, 1, 2)
 m(torch.rand(*nchw))
 
 """
-        subprocess.run([sys.executable, "-c", src], check=True)
+        run_python_child(["-c", src], check=True)
 
     @unittest.skipIf(not has_torch, "No independent Torch found")
     def test_mkl_conflict2(self):
@@ -101,7 +99,7 @@ jt.mkl_ops.mkl_conv(x, w, 1, 1, 2, 2).sync()
 
 
 """
-        subprocess.run([sys.executable, "-c", src], check=True)
+        run_python_child(["-c", src], check=True)
 
     def test_cuda_lowsm(self):
         if not jt.has_cuda: return
@@ -118,7 +116,8 @@ a = jittor.ones((3,4,2), dtype="float32")
 b = jittor.ones((5, 2), dtype="float32")
 print(matmul_transpose(a, b))
 """
-        assert os.system(f"cuda_archs=52 {sys.executable} -c '{src}'")==0
+        assert run_python_child(["-c", src],
+                                env={"cuda_archs": "52"}).returncode == 0
 
     def test_parallel(self):
         a = jt.code([4], "int", cpu_src="""

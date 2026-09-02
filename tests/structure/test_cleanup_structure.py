@@ -29,10 +29,11 @@ import datetime
 import os
 from pathlib import Path
 import subprocess
-import sys
 import tempfile
 from typing import Dict, List, Tuple
 import unittest
+
+from _helpers.child_process import run_python_child
 
 
 #: After this date the migration guards in this file must be deleted rather than
@@ -386,13 +387,8 @@ class TestCleanupStructure(unittest.TestCase):
 
     def test_documentation_governance_checker(self):
         checker = self.repo_root / "agent" / "scripts" / "check_docs_governance.py"
-        result = subprocess.run(
-            [sys.executable, str(checker)],
-            cwd=str(self.repo_root),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            universal_newlines=True,
-        )
+        result = run_python_child(
+            [checker], cwd=self.repo_root, merge_stderr=True)
         self.assertEqual(result.returncode, 0, result.stdout)
 
     def test_development_trees_are_not_import_packages(self):
@@ -454,14 +450,9 @@ for forbidden in ('jittor', 'PIL', 'pywebio'):
             )
             for target in targets:
                 with self.subTest(path=target.relative_to(self.repo_root).as_posix()):
-                    result = subprocess.run(
-                        [sys.executable, "-c", probe, str(target)],
-                        cwd=str(work),
-                        env=env,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        universal_newlines=True,
-                    )
+                    result = run_python_child(
+                        ["-c", probe, str(target)], cwd=work, env=env,
+                        inherit=False, merge_stderr=True)
                     self.assertEqual(result.returncode, 0, result.stdout)
 
     def test_pack_offline_dry_run_writes_nothing(self):
@@ -470,14 +461,9 @@ for forbidden in ('jittor', 'PIL', 'pywebio'):
             output = Path(temporary) / "output"
             env = os.environ.copy()
             env["PYTHONDONTWRITEBYTECODE"] = "1"
-            result = subprocess.run(
-                [sys.executable, str(script), "--dry-run", "--output-dir", str(output)],
-                cwd=temporary,
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                universal_newlines=True,
-            )
+            result = run_python_child(
+                [script, "--dry-run", "--output-dir", str(output)],
+                cwd=temporary, env=env, inherit=False, merge_stderr=True)
             self.assertEqual(result.returncode, 0, result.stdout)
             self.assertFalse(output.exists(), result.stdout)
 

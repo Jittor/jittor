@@ -6,7 +6,6 @@ import inspect
 import os
 import pickle
 from pathlib import Path
-import subprocess
 import sys
 import unittest
 
@@ -20,6 +19,8 @@ from jittor.compat.torch import nested
 from jittor.compat.torch import optimizers
 from jittor.compat.torch import serialization
 from jittor.compat.torch import types
+
+from _helpers.child_process import run_python_child
 
 
 def _class_callables(cls):
@@ -200,13 +201,8 @@ class TestTorchCompatStructure(unittest.TestCase):
         )
         env = os.environ.copy()
         env["PYTHONDONTWRITEBYTECODE"] = "1"
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            env=env,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
+        result = run_python_child(
+            ["-c", code], env=env, inherit=False, merge_stderr=True)
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertNotIn("torch_compat not fully installed", result.stdout)
 

@@ -26,11 +26,11 @@ Run::  python -m pytest tests/core/test_grad_missing.py
 """
 
 import os
-import subprocess
-import sys
 import unittest
 
 import jittor as jt
+
+from _helpers.child_process import run_python_child
 
 
 PYTHON_DIR = os.path.dirname(os.path.dirname(os.path.abspath(jt.__file__)))
@@ -50,17 +50,8 @@ def unrelated_pair():
 
 def run(body, flag=0):
     source = PREAMBLE.format(flag=flag) + body
-    environment = dict(os.environ)
-    environment["PYTHONPATH"] = os.pathsep.join(
-        [PYTHON_DIR] + ([environment["PYTHONPATH"]] if environment.get("PYTHONPATH") else [])
-    )
-    done = subprocess.run(
-        [sys.executable, "-c", source],
-        env=environment,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        timeout=1800,
-    )
+    done = run_python_child(["-c", source], text=False, merge_stderr=True,
+                            timeout=1800)
     return done.returncode, done.stdout.decode("utf8", "replace")
 
 

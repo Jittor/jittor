@@ -7,10 +7,10 @@ import json
 import os
 import pickle
 from pathlib import Path
-import subprocess
-import sys
 import tempfile
 import unittest
+
+from _helpers.child_process import run_python_child
 
 
 class TestRuntimeCompositionStructure(unittest.TestCase):
@@ -120,18 +120,8 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
             env.pop("JITTOR_TORCH_SHIM", None)
             env.pop("JITTOR_TORCH_PROJECT_ROOT", None)
             env.pop("JITTOR_TORCH_RUNTIME_ROOT", None)
-        result = subprocess.run(
-            [sys.executable, "-c", source],
-            env=env,
-            text=True,
-            # Jittor's own logging is not ASCII -- op keys are separated by
-            # U+00AB -- so decoding by the ambient locale fails outright under
-            # LANG=C. Only the RESULT= line is read, and it is plain ASCII.
-            encoding="utf-8",
-            errors="replace",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
+        result = run_python_child(
+            ["-c", source], env=env, inherit=False, merge_stderr=True)
         self.assertEqual(result.returncode, 0, result.stdout)
         line = next(
             line for line in result.stdout.splitlines() if line.startswith("RESULT=")
@@ -228,8 +218,8 @@ print("RESULT=" + json.dumps({
                 [str(root), str(self.repo / "python"), env.get("PYTHONPATH", "")]
             ).rstrip(os.pathsep)
 
-            native = subprocess.run(
-                [sys.executable, "-c", r'''
+            native = run_python_child(
+                ["-c", r'''
 import json, sys
 import jittor as jt
 print("RESULT=" + json.dumps({
@@ -238,11 +228,7 @@ print("RESULT=" + json.dumps({
     "triton_is_shim": bool(getattr(sys.modules.get("triton"), "__triton_shim__", False)),
 }))
 '''],
-                env=env,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-            )
+                env=env, inherit=False, merge_stderr=True)
             self.assertEqual(native.returncode, 0, native.stdout)
             native_line = next(
                 line for line in native.stdout.splitlines() if line.startswith("RESULT=")
@@ -256,8 +242,8 @@ print("RESULT=" + json.dumps({
                 },
             )
 
-            explicit = subprocess.run(
-                [sys.executable, "-c", r'''
+            explicit = run_python_child(
+                ["-c", r'''
 import json, sys
 import torch
 import jittor as jt
@@ -266,11 +252,7 @@ print("RESULT=" + json.dumps({
     "torch_installed": jt._torch_compat_install_complete,
 }))
 '''],
-                env=env,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-            )
+                env=env, inherit=False, merge_stderr=True)
             self.assertEqual(explicit.returncode, 0, explicit.stdout)
             explicit_line = next(
                 line for line in explicit.stdout.splitlines() if line.startswith("RESULT=")
@@ -280,8 +262,8 @@ print("RESULT=" + json.dumps({
                 {"torch_is_jittor": True, "torch_installed": True},
             )
 
-            late = subprocess.run(
-                [sys.executable, "-c", r'''
+            late = run_python_child(
+                ["-c", r'''
 import json, sys
 import numpy as np
 import jittor as jt
@@ -294,11 +276,7 @@ print("RESULT=" + json.dumps({
     "torch_is_jittor": torch is jt and sys.modules.get("torch") is jt,
 }))
 '''],
-                env=env,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-            )
+                env=env, inherit=False, merge_stderr=True)
             self.assertEqual(late.returncode, 0, late.stdout)
             late_line = next(
                 line for line in late.stdout.splitlines() if line.startswith("RESULT=")

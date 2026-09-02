@@ -7,12 +7,13 @@ import importlib.metadata
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
 import unittest
 
 import jittor as jt
+
+from _helpers.child_process import run_python_child
 
 
 DEPLOYED_ONLY_BASELINE_KEYS = {
@@ -81,13 +82,9 @@ class TestTorchShimAliases(unittest.TestCase):
         return env
 
     def _run_order(self, source, extra_pythonpath=None):
-        result = subprocess.run(
-            [sys.executable, "-c", source],
-            env=self._subprocess_env(extra_pythonpath),
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
+        result = run_python_child(
+            ["-c", source], env=self._subprocess_env(extra_pythonpath),
+            inherit=False, merge_stderr=True)
         self.assertEqual(result.returncode, 0, result.stdout)
         line = next(
             line for line in result.stdout.splitlines() if line.startswith("RESULT=")

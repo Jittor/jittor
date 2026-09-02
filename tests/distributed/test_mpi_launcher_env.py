@@ -22,12 +22,12 @@ Two failure modes are covered.
 import os
 from pathlib import Path
 import re
-import subprocess
-import sys
 import unittest
 
 import jittor as jt
 from jittor import compile_extern
+
+from _helpers.child_process import run_python_child
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _WRAPPER_SRC = (_REPO_ROOT / "python" / "jittor" / "extern" / "mpi" / "src"
@@ -41,17 +41,13 @@ _LAUNCHER_ENV_KEYS = (
 
 def _run_child(env_overrides, code):
     env = dict(os.environ)
-    # Editable installs put the *installed* tree on sys.path; pytest fixes only
-    # its own process. Children must be told explicitly.
-    env["PYTHONPATH"] = os.pathsep.join(
-        [os.fspath(_REPO_ROOT / "python")]
-        + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
     for key in _LAUNCHER_ENV_KEYS:
         env.pop(key, None)
     env.update(env_overrides)
-    return subprocess.run(
-        [sys.executable, "-c", code], env=env, cwd=os.fspath(_REPO_ROOT),
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=1800)
+    # inherit=False: this caller *removed* variables, and merging back onto
+    # os.environ would put every one of them straight back.
+    return run_python_child(["-c", code], env=env, inherit=False,
+                            cwd=_REPO_ROOT, merge_stderr=True, timeout=1800)
 
 
 class TestMpiLauncherDetection(unittest.TestCase):

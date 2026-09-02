@@ -3,7 +3,6 @@
 from __future__ import print_function
 
 import os
-import subprocess
 import sys
 import types
 import unittest
@@ -16,6 +15,8 @@ from jittor.compat.torch.context import (
     ModuleRegistry,
 )
 from jittor.compat.torch.installers import utilities
+
+from _helpers.child_process import run_python_child
 
 
 class TestInstallContext(unittest.TestCase):
@@ -376,13 +377,8 @@ assert compat._NAMESPACE_TRANSACTION not in jt._torch_compat_install_context.sta
 '''
         env = os.environ.copy()
         env["PYTHONDONTWRITEBYTECODE"] = "1"
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            env=env,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
+        result = run_python_child(
+            ["-c", code], env=env, inherit=False, merge_stderr=True)
         self.assertEqual(result.returncode, 0, result.stdout)
 
     def test_packaged_flash_attn_optional_step_completes(self):

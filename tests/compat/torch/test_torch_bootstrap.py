@@ -1,13 +1,14 @@
 import importlib.machinery
 import os
 import pathlib
-import subprocess
 import sys
 import tempfile
 import textwrap
 import types
 import unittest
 from unittest import mock
+
+from _helpers.child_process import run_python_child
 
 
 _CACHE_ROOT = pathlib.Path(
@@ -685,19 +686,12 @@ class TestTorchBootstrap(unittest.TestCase):
                 env.pop(name, None)
             from jittor_utils import home as jittor_home
             env["JITTOR_HOME"] = jittor_home()
-            python_root = os.fspath(
-                pathlib.Path(__file__).resolve().parents[3] / "python"
-            )
-            env["PYTHONPATH"] = os.pathsep.join(filter(None, (
-                python_root, env.get("PYTHONPATH", ""),
-            )))
             env["CUDA_VISIBLE_DEVICES"] = ""
             env["JITTOR_TORCH_SKIP_EXT_BUILD"] = "1"
             env.pop("JITTOR_TORCH_CACHE_ROOT", None)
             env["XDG_CACHE_HOME"] = os.path.join(d, "xdg-cache")
-            output = subprocess.check_output(
-                [sys.executable, entry], cwd=d, env=env, text=True,
-            )
+            output = run_python_child(
+                [entry], cwd=d, env=env, inherit=False, check=True).stdout
             line = next(line for line in output.splitlines() if line.startswith("RESULT="))
             import json
             result = json.loads(line[len("RESULT="):])

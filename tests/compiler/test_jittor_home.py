@@ -16,12 +16,12 @@ from __future__ import print_function
 import json
 import os
 from pathlib import Path
-import subprocess
-import sys
 import tempfile
 import unittest
 
 import jittor_utils
+
+from _helpers.child_process import run_python_child
 
 
 _RUNNER = r"""
@@ -50,13 +50,8 @@ def _run(fake_home, env_setup=""):
     script = _RUNNER.format(repo=repo_python, home=fake_home, env_setup=env_setup)
     environment = dict(os.environ)
     environment.pop("JITTOR_HOME", None)
-    completed = subprocess.run(
-        (sys.executable, "-c", script),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        universal_newlines=True,
-        env=environment,
-    )
+    completed = run_python_child(
+        ["-c", script], env=environment, inherit=False, merge_stderr=True)
     assert completed.returncode == 0, completed.stdout
     home = config = None
     for line in completed.stdout.splitlines():

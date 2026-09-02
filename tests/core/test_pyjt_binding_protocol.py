@@ -14,15 +14,14 @@ Python exception, which is why each case is spelled out separately.
 """
 
 import gc
-import os
-import subprocess
-import sys
 import textwrap
 import unittest
 
 import jittor as jt
 import jittor_core
 import numpy as np
+
+from _helpers.child_process import run_python_child
 
 
 def run_in_subprocess(body):
@@ -38,17 +37,8 @@ def run_in_subprocess(body):
     whatever jittor is installed in site-packages and test the wrong tree.
     """
     source = "import jittor as jt\nimport jittor_core\n" + textwrap.dedent(body)
-    env = dict(os.environ)
-    package_root = os.path.dirname(os.path.dirname(os.path.abspath(jt.__file__)))
-    env["PYTHONPATH"] = os.pathsep.join(
-        [package_root] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
-    return subprocess.run(
-        [sys.executable, "-c", source],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        env=env,
-        timeout=1800,
-    )
+    return run_python_child(["-c", source], text=False, merge_stderr=True,
+                            timeout=1800)
 
 
 class TestConstructionFailureDealloc(unittest.TestCase):

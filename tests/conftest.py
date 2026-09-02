@@ -6,32 +6,23 @@ from pathlib import Path
 import sys
 
 
-def source_python_dir():
-    """The ``python/`` directory this test session imports jittor from.
+TEST_ROOT = Path(__file__).resolve().parent
+if str(TEST_ROOT) not in sys.path:
+    sys.path.insert(0, str(TEST_ROOT))
 
-    ``pyproject.toml`` used to say ``pythonpath = ["python"]``, which pytest
-    resolves against *rootdir*. That is right for the ordinary case and wrong
-    for the two people actually hit: checking a second copy of the tree, which
-    needed ``-o pythonpath=...`` on every single invocation, and deliberately
-    exercising the installed package.
-
-    ``JITTOR_SOURCE_ROOT`` names the checkout to import. Unset, it is the
-    checkout this file belongs to -- the same answer as before, so nothing
-    changes for a normal run. Set but empty, nothing is inserted and whatever
-    is installed wins.
-    """
-    override = os.environ.get("JITTOR_SOURCE_ROOT")
-    if override is None:
-        root = Path(__file__).resolve().parents[1]
-    elif override.strip():
-        root = Path(override.strip()).expanduser().resolve()
-    else:
-        return None
-    return str(root / "python")
-
+# `_helpers.child_process` reaches nothing that could pull jittor in, and owning
+# `source_python_dir` there is what keeps this process' `sys.path` and the
+# `PYTHONPATH` of every child process it starts from ever disagreeing.
+from _helpers.child_process import source_python_dir  # noqa: E402
 
 # Before any import that might reach jittor: this replaces what the pytest
 # `pythonpath` ini option used to do, and has to happen just as early.
+#
+# `pyproject.toml` used to say `pythonpath = ["python"]`, which pytest resolves
+# against *rootdir*. Right for the ordinary case and wrong for the two people
+# actually hit: checking a second copy of the tree, which needed
+# `-o pythonpath=...` on every single invocation, and deliberately exercising
+# the installed package. `JITTOR_SOURCE_ROOT` names the checkout instead.
 _python_dir = source_python_dir()
 if _python_dir is not None:
     while _python_dir in sys.path:
@@ -133,11 +124,6 @@ def _preload_real_torch():
 
 
 _preload_real_torch()
-
-
-TEST_ROOT = Path(__file__).resolve().parent
-if str(TEST_ROOT) not in sys.path:
-    sys.path.insert(0, str(TEST_ROOT))
 
 
 _LEGACY_SELECTION = {
@@ -331,3 +317,4 @@ def rocm_backend(request):
         yield
     finally:
         jt.flags.use_rocm = previous
+

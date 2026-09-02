@@ -9,7 +9,6 @@ Run:  python -m pytest tests/compat/torch/test_torch_compat_attention.py
 import unittest
 import os
 import pathlib
-import subprocess
 import sys
 import tempfile
 import threading
@@ -19,6 +18,8 @@ import numpy as np
 import jittor as torch
 import jittor as jt
 from jittor import nn
+
+from _helpers.child_process import run_python_child
 
 _DEVICES = [("cpu", 0)] + ([("cuda", 1)] if jt.has_cuda else [])
 
@@ -563,9 +564,8 @@ os.environ[name] = "reload-idempotency-test"
 after = module.backend_environment_epoch()
 assert after == before + 1, (before, after)
 '''
-        completed = subprocess.run(
-            [sys.executable, "-c", script, flashattn_jittor.__file__],
-            text=True, capture_output=True, timeout=30)
+        completed = run_python_child(
+            ["-c", script, flashattn_jittor.__file__], timeout=30)
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_flash_backend_environment_epoch_detects_silent_hook_rejection(self):

@@ -23,11 +23,11 @@ Run::  python -m pytest tests/core/test_grad_nullptr.py
 """
 
 import os
-import subprocess
-import sys
 import unittest
 
 import jittor as jt
+
+from _helpers.child_process import run_python_child
 
 
 #: Repo ``python/`` directory. Jittor is installed editable, so a bare
@@ -50,17 +50,8 @@ print("GRAD", g.numpy().tolist())
 
 def _run(setup, tweak):
     source = PROGRAM.format(setup=setup, tweak=tweak)
-    environment = dict(os.environ)
-    environment["PYTHONPATH"] = os.pathsep.join(
-        [PYTHON_DIR] + ([environment["PYTHONPATH"]] if environment.get("PYTHONPATH") else [])
-    )
-    return subprocess.run(
-        [sys.executable, "-c", source],
-        env=environment,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        timeout=1800,
-    )
+    return run_python_child(["-c", source], text=False, merge_stderr=True,
+                            timeout=1800)
 
 
 class TestGradNullptr(unittest.TestCase):

@@ -15,9 +15,9 @@ contract these pin.
 """
 
 import os
-import subprocess
-import sys
 import unittest
+
+from _helpers.child_process import run_python_child
 
 
 _SCRIPT = """
@@ -43,10 +43,8 @@ print("FILLED", filled, len(named))
 
 
 def _run(script):
-    environment = dict(os.environ, JITTOR_TORCH_SHIM="1")
-    finished = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True,
-        env=environment, timeout=900)
+    finished = run_python_child(["-c", script], env={"JITTOR_TORCH_SHIM": "1"},
+                                timeout=900)
     for line in finished.stdout.splitlines():
         if line.startswith("FILLED"):
             _, filled, total = line.split()

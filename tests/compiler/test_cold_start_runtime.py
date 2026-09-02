@@ -23,13 +23,10 @@ import json
 import os
 from pathlib import Path
 import shutil
-import subprocess
-import sys
 import tempfile
 import unittest
 
-
-REPO_PYTHON = str(Path(__file__).resolve().parents[2] / "python")
+from _helpers.child_process import run_python_child
 
 
 _PROBE = r"""
@@ -68,7 +65,6 @@ def _cold_start_probe(home):
     environment.update({
         "JITTOR_HOME": home,
         "TMPDIR": os.path.join(home, "tmp"),
-        "PYTHONPATH": REPO_PYTHON + os.pathsep + environment.get("PYTHONPATH", ""),
         "CUDA_VISIBLE_DEVICES": "",
         "nvcc_path": "",
         "use_cuda": "0",
@@ -76,13 +72,8 @@ def _cold_start_probe(home):
         "JITTOR_TORCH_SHIM": "0",
     })
     os.makedirs(environment["TMPDIR"], exist_ok=True)
-    completed = subprocess.run(
-        (sys.executable, "-c", _PROBE),
-        env=environment,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        universal_newlines=True,
-    )
+    completed = run_python_child(
+        ["-c", _PROBE], env=environment, merge_stderr=True)
     marker = "PROBE_RESULT "
     for line in completed.stdout.splitlines():
         if line.startswith(marker):

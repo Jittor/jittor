@@ -6,7 +6,6 @@ import ast
 import importlib
 import os
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
 import types
@@ -14,6 +13,8 @@ import unittest
 from unittest import mock
 
 import jittor
+
+from _helpers.child_process import run_python_child
 
 
 _CHILD_MODULES = ("backend", "deploy", "language", "launch")
@@ -214,13 +215,8 @@ class TestTritonStructure(unittest.TestCase):
                 "assert sys.modules['triton.language'] is canonical.language\n"
                 "assert jittor.triton_shim is canonical\n"
             )
-            result = subprocess.run(
-                [sys.executable, "-c", code],
-                env=env,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-            )
+            result = run_python_child(
+                ["-c", code], env=env, inherit=False, merge_stderr=True)
             self.assertEqual(result.returncode, 0, result.stdout)
 
     def test_all_moved_sources_parse_as_python37(self):
