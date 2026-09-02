@@ -333,6 +333,8 @@
 | 6.P20 | H18 `ComplexNumber.__rsub__` 虚部符号、`__imatmul__` 操作数顺序（`legacy_complex.py:174-180,237-244`） | — | 同上 | 与 numpy 对拍 |
 | 6.P21 | H19 稀疏卷积重复坐标 CPU/CUDA 语义统一；neighbors 缓存校验内容不只 shape（`sparse/convolution.py:74,137-138,232-235`） | — | 同上 | 重复坐标用例两后端一致 |
 | 6.P22 | H20 `to_dense` 对 COO 重复索引求和；spmm 不再转稠密（`sparse/coo.py:60-72`） | — | 同上 | 与 scipy 对拍 |
+| 6.P23 | **`eigh` 的特征向量梯度在 CUDA 上错约 60%**（对 numpy 相对误差，修 6.P07 前后都复现）。一直没被发现是因为 `tests/ops/test_linalg.py::TestBUG4_2Op` 设了 `jt.flags.use_cuda=1` 且从不还原，把 CUDA 泄漏给该文件后面每一个用例——即「本该在 CPU 跑的用例其实跑在 CUDA 上，而 CUDA 结果是错的」 | — | 2026-09-02 由 6.P07 的执行者发现并复现，不在原审计里 | CUDA 与 numpy 对拍通过；顺带修掉那处 flag 泄漏（属 0.12） |
+| 6.P24 | `Pool3d.__init__` 的 `count_include_pad and padding != 0` 读的是原始参数，元组 padding 恒为真、`padding=0` 恒为假，与 torch 的 `count_include_pad` 语义不一致 | — | 2026-09-02 由 6.P04/6.P05 的执行者发现，不在原审计里 | 元组与标量 padding 各一个与 torch 对拍的用例 |
 
 ### 9.3 后端库
 

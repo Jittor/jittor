@@ -201,6 +201,8 @@
 | 6.P20 | H18 `ComplexNumber.__rsub__` 虚部符号、`__imatmul__` … | 进行中 | pyother | |
 | 6.P21 | H19 稀疏卷积重复坐标 CPU/CUDA 语义统一 | 进行中 | pyother | |
 | 6.P22 | H20 `to_dense` 对 COO 重复索引求和 | 进行中 | pyother | |
+| 6.P23 | eigh 的特征向量梯度在 CUDA 上错约 60% | 待领 | | |
+| 6.P24 | Pool3d 的 count_include_pad 读原始参数 | 待领 | | |
 | 6.B01 | MPI 的 int64 改 `MPI_INT64_T` | 待领 | | |
 | 6.B02 | ACL | 待领 | | |
 | 6.B03 | HCCL 宏错误时抛而非 return | 待领 | | |
