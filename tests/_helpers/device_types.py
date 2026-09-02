@@ -35,7 +35,7 @@ class DeviceTypeTestBase(cu.JittorTestCase):
     use_cuda = 0
 
     def run_on_device(self, body, *a, **k):
-        with jt.flag_scope(use_cuda=self.use_cuda):
+        with jt.flag_scope(**cu.device_flags_for(self.device_type)):
             return body(*a, **k)
 
 
@@ -49,6 +49,13 @@ class CUDATestBase(DeviceTypeTestBase):
     use_cuda = 1
 
 
+class ROCMTestBase(DeviceTypeTestBase):
+    # A ROCm build compiles with ``-DHAS_CUDA``, so ``use_cuda`` is necessary but
+    # not sufficient; ``device_flags_for`` adds ``use_rocm``.
+    device_type = "rocm"
+    use_cuda = 1
+
+
 class NPUTestBase(DeviceTypeTestBase):
     device_type = "npu"
     use_cuda = 1
@@ -58,14 +65,26 @@ class NPUTestBase(DeviceTypeTestBase):
 _BASE_FOR_DEVICE = {
     "cpu": CPUTestBase,
     "cuda": CUDATestBase,
+    "rocm": ROCMTestBase,
     "npu": NPUTestBase,
 }
+assert set(_BASE_FOR_DEVICE) == set(cu.KNOWN_DEVICE_TYPES), (
+    "every known device label needs a base class, or selecting it runs nothing")
 
 
 def _buildable_bases():
     """Bases this build can actually execute (``cpu`` always, plus one accelerator)."""
-    return {d: _BASE_FOR_DEVICE[d] for d in cu.buildable_device_types()
-            if d in _BASE_FOR_DEVICE}
+    return {d: _BASE_FOR_DEVICE[d] for d in cu.buildable_device_types()}
+
+
+def _check_device_names(argument, names):
+    unknown = sorted(set(names) - set(cu.KNOWN_DEVICE_TYPES))
+    if unknown:
+        raise ValueError(
+            "%s names unknown device label(s) %s; known labels are %s. A label with "
+            "no base class filters every device away, which generates zero test "
+            "cases and reports as a pass."
+            % (argument, ", ".join(unknown), ", ".join(cu.KNOWN_DEVICE_TYPES)))
 
 
 # ----------------------------------------------------------------- dtype policy
@@ -244,6 +263,11 @@ def instantiate_device_type_tests(generic_cls, scope, *, only_for=None, except_f
     assert generic_name.startswith("Test"), "template class name must start with 'Test'"
     stem = generic_name[len("Test"):]
 
+    if only_for:
+        _check_device_names("only_for", only_for)
+    if except_for:
+        _check_device_names("except_for", except_for)
+
     pinned = _buildable_bases()
     if only_for:
         pinned = {d: b for d, b in pinned.items() if d in set(only_for)}
@@ -256,6 +280,10 @@ def instantiate_device_type_tests(generic_cls, scope, *, only_for=None, except_f
     # collect the template's test methods (functions named test*)
     members = {n: getattr(generic_cls, n) for n in dir(generic_cls)
                if n.startswith("test") and callable(getattr(generic_cls, n))}
+    if not members:
+        raise RuntimeError(
+            "%s defines no test methods, so instantiating it would register empty "
+            "classes that collect as zero cases and report as a pass." % generic_name)
 
     if not bases:
         _install_unselected_placeholder(scope, stem, pinned, selected)
@@ -267,6 +295,7 @@ def instantiate_device_type_tests(generic_cls, scope, *, only_for=None, except_f
         new_cls = type(cls_name, (base,), {"device_type": device_type,
                                            "use_cuda": cu.use_cuda_for(device_type)})
 
+        installed = 0
         for name, fn in members.items():
             restriction = getattr(fn, "_device_restriction", None)
             if restriction is not None and device_type not in restriction:
@@ -278,6 +307,19 @@ def instantiate_device_type_tests(generic_cls, scope, *, only_for=None, except_f
                 _instantiate_dtype_method(new_cls, name, fn, device_type)
             else:
                 _instantiate_plain_method(new_cls, name, fn, device_type)
+            installed += 1
+
+        if installed == 0:
+            # Every method carried a per-method device pin that excludes this
+            # device. The class would collect as zero cases and pass. Pin the
+            # whole template with only_for/except_for instead, so the class is
+            # never created rather than created empty.
+            raise RuntimeError(
+                "%s would be generated with no test methods: every test method of "
+                "%s is restricted away from %r by a per-method device pin. Pin the "
+                "template at the instantiate_device_type_tests call (only_for=...) "
+                "so the class is not created at all."
+                % (cls_name, generic_name, device_type))
 
         scope[cls_name] = new_cls
 
@@ -286,10 +328,10 @@ def instantiate_device_type_tests(generic_cls, scope, *, only_for=None, except_f
 
 
 def _instantiate_plain_method(new_cls, name, fn, device_type):
-    use_cuda = cu.use_cuda_for(device_type)
+    flags = cu.device_flags_for(device_type)
 
-    def method(self, fn=fn, use_cuda=use_cuda, device=device_type):
-        with jt.flag_scope(use_cuda=use_cuda):
+    def method(self, fn=fn, flags=flags, device=device_type):
+        with jt.flag_scope(**flags):
             return fn(self, device)
     method.__name__ = name
     method.__doc__ = fn.__doc__
@@ -298,12 +340,12 @@ def _instantiate_plain_method(new_cls, name, fn, device_type):
 
 
 def _instantiate_dtype_method(new_cls, name, fn, device_type):
-    use_cuda = cu.use_cuda_for(device_type)
+    flags = cu.device_flags_for(device_type)
     for dtype in fn._dtypes:
         mname = f"{name}_{dtype}"
 
-        def method(self, fn=fn, use_cuda=use_cuda, device=device_type, dtype=dtype):
-            with jt.flag_scope(use_cuda=use_cuda):
+        def method(self, fn=fn, flags=flags, device=device_type, dtype=dtype):
+            with jt.flag_scope(**flags):
                 return fn(self, device, dtype)
         method.__name__ = mname
         method.__doc__ = fn.__doc__
@@ -312,7 +354,7 @@ def _instantiate_dtype_method(new_cls, name, fn, device_type):
 
 
 def _instantiate_op_method(new_cls, name, fn, device_type):
-    use_cuda = cu.use_cuda_for(device_type)
+    flags = cu.device_flags_for(device_type)
     policy = fn._op_dtypes_policy
     allowed = fn._op_allowed_dtypes
     for op in fn._op_db:
@@ -320,8 +362,8 @@ def _instantiate_op_method(new_cls, name, fn, device_type):
             suffix = op.full_name + (f"_{dtype}" if dtype is not None else "")
             mname = f"{name}_{suffix}"
 
-            def method(self, fn=fn, op=op, dtype=dtype, use_cuda=use_cuda, device=device_type):
-                with jt.flag_scope(use_cuda=use_cuda):
+            def method(self, fn=fn, op=op, dtype=dtype, flags=flags, device=device_type):
+                with jt.flag_scope(**flags):
                     return fn(self, device, dtype, op)
             method.__name__ = mname
             method.__doc__ = f"{fn.__doc__ or name} :: {op.full_name}"

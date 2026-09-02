@@ -66,10 +66,25 @@ def buildable_device_types():
 def selected_device_types():
     """The runner's ``JITTOR_TEST_DEVICES`` selection, or ``None`` when it is unset.
 
+    A label no base class implements is an error. It used to select no device at
+    all, which is indistinguishable from a green run: the ROCm session set
+    ``JITTOR_TEST_DEVICES=rocm`` and the MPI session set ``=mpi``, neither name was
+    known here, and every device-parametrized test in those sessions generated
+    zero cases and reported success.
     """
     raw = os.environ.get("JITTOR_TEST_DEVICES", "")
     want = tuple(part.strip() for part in raw.split(",") if part.strip())
-    return want or None
+    if not want:
+        return None
+    unknown = sorted({d for d in want if d not in KNOWN_DEVICE_TYPES})
+    if unknown:
+        raise ValueError(
+            "JITTOR_TEST_DEVICES=%r names unknown device label(s) %s; known labels "
+            "are %s. An unknown label selects no device, so device-parametrized "
+            "tests generate zero cases and the session still reports success."
+            % (raw, ", ".join(unknown), ", ".join(KNOWN_DEVICE_TYPES))
+        )
+    return want
 
 
 def get_all_device_types():
@@ -82,8 +97,21 @@ def get_all_device_types():
 
 
 def use_cuda_for(device):
-    """The ``use_cuda`` flag value for a device label (cuda and npu both ride it)."""
+    """The ``use_cuda`` flag value for a device label (cuda, rocm and npu all ride it)."""
     return 0 if device == "cpu" else 1
+
+
+def device_flags_for(device):
+    """The complete ``jt.flag_scope`` keyword set that puts jittor on ``device``.
+
+    ``use_cuda`` alone is ambiguous: a ROCm build compiles with ``-DHAS_CUDA`` and
+    needs ``use_rocm`` as well, so a test class that only flipped ``use_cuda``
+    would run the CUDA path on an AMD box.
+    """
+    flags = {"use_cuda": use_cuda_for(device)}
+    if device == "rocm":
+        flags["use_rocm"] = 1
+    return flags
 
 
 # ---------------------------------------------------------------------- dtypes

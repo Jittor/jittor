@@ -22,7 +22,8 @@ import unittest
 import pytest
 
 from _helpers import common as cu
-from _helpers.device_types import instantiate_device_type_tests
+from _helpers import device_types as dt
+from _helpers.device_types import instantiate_device_type_tests, onlyCPU
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -32,6 +33,15 @@ def _template():
     class TestSample(cu.JittorTestCase):
         def test_anything(self, device):
             assert device
+
+    return TestSample
+
+
+def _cpu_pinned_template():
+    class TestSample(cu.JittorTestCase):
+        @onlyCPU
+        def test_anything(self, device):
+            assert device == "cpu"
 
     return TestSample
 
@@ -121,3 +131,76 @@ def test_the_backward_battery_is_cpu_pinned_and_reachable_from_the_cpu_gate():
                 pinned.append((node.name, device_pins))
     assert pinned == []
 
+
+# ---------------------------------------------------------- misconfiguration is loud
+# Everything above is about a *correct* configuration reaching the gate. These are
+# about a wrong one: before this, every way of getting the device filter wrong
+# produced zero test cases, and zero test cases is reported exactly like success.
+
+
+def test_a_generated_class_is_never_left_without_test_methods(two_device_build, monkeypatch):
+    """The original defect: a per-method pin emptying the only class generated."""
+    monkeypatch.setenv("JITTOR_TEST_DEVICES", "cuda")
+    with pytest.raises(RuntimeError) as raised:
+        instantiate_device_type_tests(_cpu_pinned_template(), {})
+    assert "TestSampleCUDA" in str(raised.value)
+
+
+def test_a_template_without_test_methods_is_an_error(two_device_build):
+    class TestEmpty(cu.JittorTestCase):
+        pass
+
+    with pytest.raises(RuntimeError):
+        instantiate_device_type_tests(TestEmpty, {})
+
+
+def test_an_unknown_device_pin_is_an_error(two_device_build):
+    with pytest.raises(ValueError) as raised:
+        instantiate_device_type_tests(_template(), {}, only_for=("gpu",))
+    assert "gpu" in str(raised.value)
+
+
+def test_an_unknown_runner_selection_is_an_error(monkeypatch):
+    """``JITTOR_TEST_DEVICES=rocm`` and ``=mpi`` used to select nothing at all."""
+    monkeypatch.setenv("JITTOR_TEST_DEVICES", "mpi")
+    with pytest.raises(ValueError) as raised:
+        cu.get_all_device_types()
+    assert "mpi" in str(raised.value)
+
+
+def test_every_known_device_label_has_a_base_class():
+    assert set(dt._BASE_FOR_DEVICE) == set(cu.KNOWN_DEVICE_TYPES)
+
+
+def test_rocm_needs_more_than_use_cuda():
+    """A ROCm build compiles with -DHAS_CUDA, so use_cuda alone runs the wrong path."""
+    assert cu.device_flags_for("rocm") == {"use_cuda": 1, "use_rocm": 1}
+    assert cu.device_flags_for("cuda") == {"use_cuda": 1}
+    assert cu.device_flags_for("cpu") == {"use_cuda": 0}
+
+
+def _noxfile_device_selections():
+    tree = ast.parse((REPO_ROOT / "noxfile.py").read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Constant):
+            continue
+        for target in node.targets:
+            if (
+                isinstance(target, ast.Subscript)
+                and isinstance(target.slice, ast.Constant)
+                and target.slice.value == "JITTOR_TEST_DEVICES"
+            ):
+                yield node.lineno, node.value.value
+
+
+def test_the_gate_and_the_harness_share_one_device_enumeration():
+    """The gate's device names and the harness's are the same list, or a gate runs nothing."""
+    selections = list(_noxfile_device_selections())
+    assert selections, "noxfile.py sets JITTOR_TEST_DEVICES nowhere"
+    unknown = [
+        (line, value)
+        for line, value in selections
+        for name in value.split(",")
+        if name.strip() and name.strip() not in cu.KNOWN_DEVICE_TYPES
+    ]
+    assert unknown == []

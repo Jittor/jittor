@@ -1528,7 +1528,12 @@ def mpi(session):
     _root, env = _session_env(session, "mpi")
     python = _hardware_python()
     _set_hardware_python_config(session, python, env)
-    env["JITTOR_TEST_DEVICES"] = "mpi"
+    # "mpi" is a transport, not a device label: the harness knows cpu/cuda/rocm/npu
+    # and used to filter every device away when it saw this, so every
+    # device-parametrized test in this session generated zero cases and passed.
+    # These tests gate themselves on jt.has_cuda and exercise both, so leave the
+    # selection unset and let the build decide.
+    env.pop("JITTOR_TEST_DEVICES", None)
     session.run("mpirun", "--version", external=True, env=env)
     session.run(python, "-m", "pytest", "--version", external=True, env=env)
     _run_pytest(session, MPI_TESTS, env, runner=python)
