@@ -718,19 +718,28 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     if (!flush_active) flush_suspended = false;
 }
 
-unordered_map<void*, size_t> allocation_map;
-unordered_map<void*, size_t> size_map;
+// Allocations handed to foreign libraries (cupy, cutt) through the hooks
+// below. This used to be two parallel maps read with operator[], so an
+// unknown pointer silently inserted a zero size and a zero allocation and then
+// released *that* -- and nothing was ever erased, so the maps only grew.
+struct ForeignCudaAllocation { size_t size, allocation; };
+static unordered_map<void*, ForeignCudaAllocation> foreign_cuda_allocations;
 
 extern "C" void* jittor_cuda_malloc(void*, size_t size, int device_id) {
     size_t allocation;
     void* ptr=exe.allocator->alloc(size, allocation);
-    allocation_map[ptr]=allocation;
-    size_map[ptr]=size;
+    if (ptr) foreign_cuda_allocations[ptr] = {size, allocation};
     return ptr;
 }
 
 extern "C" void jittor_cuda_free(void*, void* ptr, int device_id) {
-    exe.allocator->free(ptr, size_map[ptr], allocation_map[ptr]);
+    if (!ptr) return;
+    auto iter = foreign_cuda_allocations.find(ptr);
+    CHECK(iter != foreign_cuda_allocations.end())
+        << "jittor_cuda_free: pointer was not allocated by jittor_cuda_malloc" << ptr;
+    auto info = iter->second;
+    foreign_cuda_allocations.erase(iter);
+    exe.allocator->free(ptr, info.size, info.allocation);
 }
 
 extern "C" void* get_jittor_cuda_malloc() {
