@@ -36,6 +36,7 @@ list<VarHolder*>::iterator sync_ptr = hold_vars.end();
 // merely started earlier. An execution error is not raised here -- this runs
 // inside a VarHolder constructor -- the failing operators stay pending and
 // the caller's own sync raises it, exactly as lazy execution would.
+#ifdef IS_CUDA
 static void auto_flush() {
     exe.flush_active = true;
     vector<Var*> vars;
@@ -59,14 +60,17 @@ static void auto_flush() {
         exe.last_run_ops = Op::number_of_created_ops;
     exe.flush_active = false;
 }
+#endif
 
 void add_hold_vars(VarHolder* self) {
     hold_vars.push_front(self);
     self->iter = hold_vars.begin();
+#ifdef IS_CUDA
     if (auto_flush_ops > 0 && use_cuda && !exe.flush_active
         && !exe.flush_suspended
         && Op::number_of_created_ops - exe.last_run_ops >= auto_flush_ops)
         auto_flush();
+#endif
     if (lazy_execution && Op::number_of_lived_ops < 100000) return;
     auto v = self->var;
     for (int i=0; i<5; i++) {

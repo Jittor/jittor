@@ -126,5 +126,33 @@ class TestAutoFlush(unittest.TestCase):
         np.testing.assert_allclose(pipelined, reference, rtol=1e-6, atol=0)
 
 
+@unittest.skipIf(not jt.compiler.has_acl, "No ACL found")
+class TestAutoFlushBackendBoundary(unittest.TestCase):
+
+    def test_acl_does_not_enable_cuda_pipeline(self):
+        seen = []
+
+        def forward(np, data):
+            seen.append(1)
+            np.copyto(data["outputs"][0], data["inputs"][0] + 1)
+
+        with jt.flag_scope(use_acl=1, use_cuda=1, auto_flush_ops=1):
+            x = jt.ones(4, dtype="float32")
+            x.sync()
+            self.assertEqual(x.location(), "device")
+
+            # numpy_code is an intentional host-side observer: if the CUDA-only
+            # pipeline leaks into ACL, these callbacks run before explicit sync.
+            outputs = [
+                jt.numpy_code([4], "float32", [x], forward)
+                for _ in range(20)
+            ]
+            self.assertEqual(seen, [])
+            jt.sync_all()
+            self.assertEqual(len(seen), 20)
+            np.testing.assert_array_equal(
+                outputs[-1].numpy(), np.full(4, 2.0, dtype="float32"))
+
+
 if __name__ == "__main__":
     unittest.main()
