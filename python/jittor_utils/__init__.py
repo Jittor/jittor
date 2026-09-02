@@ -636,29 +636,6 @@ def _git_head_file(path):
         path = parent
 
 
-def _read_git_branch(cwd):
-    r = sp.run(["git", "branch"], cwd=cwd, stdout=sp.PIPE, stderr=sp.PIPE)
-    assert r.returncode == 0
-    bs = r.stdout.decode().splitlines()
-    for b in bs:
-        if b.startswith("* "): break
-
-    return b[2:]
-
-
-def get_git_branch(cwd):
-    """Branch of the checkout holding ``cwd``, remembered against its HEAD.
-
-    Outside a checkout there is nothing to invalidate against, so the answer is
-    computed every time rather than cached wrongly.
-    """
-    head = _git_head_file(cwd)
-    if head is None:
-        return _read_git_branch(cwd)
-    return probe.cached("git_branch:" + os.path.abspath(cwd), [head],
-                        lambda: _read_git_branch(cwd))
-
-
 def cache_root():
     """``<home>/.cache/jittor`` -- everything Jittor caches lives under here."""
     return os.path.join(home(), ".cache", "jittor")
@@ -739,6 +716,56 @@ def _listdir(path):
         return []
 
 
+def _read_target_arch(cc):
+    """Exactly what this compiler turns ``-march=native`` into, as text.
+
+    ``-march=native`` is added to every CPU compile, so the machine's
+    instruction set is part of what the products are -- but the cache path used
+    to encode the CPU as the first 14 characters of its ``model name`` plus two
+    hash characters. That is wrong in both directions: two machines with the
+    same marketing name but different microcode or a different microarchitecture
+    revision share a directory and can be handed an illegal instruction, while
+    the *hostname* (which changes nothing about the code) was in the path and
+    made every node of a cluster rebuild from scratch.
+
+    Asking the compiler removes the guesswork: this is the concrete
+    ``-march=``/``-mtune=`` and the state of every target feature.
+    """
+    out = run_cmd(f'"{cc}" -march=native -Q --help=target')
+    lines = [line.strip() for line in out.splitlines()
+             if line.strip().startswith("-m")]
+    if lines:
+        return "\n".join(lines)
+    # clang has no -Q --help=target; its cc1 line carries the same facts.
+    out = run_cmd(f'"{cc}" -march=native -E -v - < /dev/null')
+    for line in out.splitlines():
+        if "-target-cpu" in line or "cc1" in line:
+            return line.strip()
+    raise RuntimeError("could not read the -march=native expansion from " + cc)
+
+
+def target_arch_key(cc=None):
+    """A short, stable directory component for this machine's instruction set.
+
+    Falls back to the CPU model string when the compiler cannot be asked, which
+    is no worse than what the path used to carry.
+    """
+    cc = cc or cc_path
+    if not cc or cc_type == "cl" or platform.machine() not in ("x86_64", "AMD64"):
+        return short(get_cpu_version())
+    try:
+        expansion = probe.cached("target_arch:" + resolve_exe(cc), [resolve_exe(cc)],
+                                 lambda: _read_target_arch(cc))
+    except Exception as error:
+        LOG.v(f"could not read the -march=native expansion: {error}")
+        return short(get_cpu_version())
+    import hashlib
+    # 10 hex digits keeps the whole component under short()'s 14-character
+    # limit, so it survives into the path intact rather than being truncated
+    # and re-hashed.
+    return "arch" + hashlib.sha256(expansion.encode("utf8")).hexdigest()[:10]
+
+
 def find_cache_path():
     global lock_path
     path = home()
@@ -747,31 +774,46 @@ def find_cache_path():
     # cc version key
     ccv = cc_type+get_version(cc_path)[1:-1] \
         if cc_type != "cl" else cc_type
-    # os version key
-    osv = platform.platform() + platform.node()
+    # os version key. Deliberately without platform.node(): the hostname
+    # changes nothing about the compiled products, and having it here meant
+    # every node of a cluster rebuilt the whole framework instead of sharing
+    # one cache on a shared filesystem.
+    osv = platform.platform()
     if len(osv)>14:
         osv = osv[:14] + 'x'+get_str_hash(osv)[:2]
     # py version
     pyv = "py"+platform.python_version()
-    # cpu version
-    cpuv = get_cpu_version()
-    jittor_path_key = get_str_hash(__file__)[:4]
+    # what -march=native actually expands to, rather than the CPU's name
+    cpuv = target_arch_key()
+    # Which checkout this is. Four hex digits is a 65536-slot space that two
+    # parallel worktrees can collide in -- and a collision means two different
+    # source trees sharing one cache directory, which presents as products
+    # rebuilding for no reason or, worse, not rebuilding when they should.
+    jittor_path_key = get_str_hash(os.path.abspath(__file__))[:12]
     dirs = [".cache", "jittor", jtv, ccv, pyv, osv, cpuv, jittor_path_key]
     dirs = list(map(short, dirs))
-    cache_name = "default"
-    try:
-        if "cache_name" in os.environ:
-            cache_name = os.environ["cache_name"]
-        else:
-            cache_name = get_git_branch(os.path.dirname(__file__))
-        for c in " (){}": cache_name = cache_name.replace(c, "_")
-    except:
-        pass
+    # An explicitly named isolation slot, and nothing else.
+    #
+    # This used to default to the current git branch, which coupled the cache
+    # to something that has no bearing on what gets compiled. Switching
+    # branches rebuilt everything from scratch instead of letting
+    # cache_compile's content hashes rebuild only what changed; a detached HEAD
+    # walked off the end of a for/else and produced a cache named after
+    # whatever the last line of `git branch` happened to be; and a pip install
+    # that landed inside somebody's git repository silently inherited that
+    # repository's branch name. Nothing is lost by dropping it: two checkouts
+    # are already kept apart by jittor_path_key above, and two branches in one
+    # checkout *should* share a cache and rebuild incrementally.
+    cache_name = os.environ.get("cache_name", "default")
+    for c in " (){}": cache_name = cache_name.replace(c, "_")
     if os.environ.get("debug")=="1":
         dirs[-1] += "_debug"
     for name in os.path.normpath(cache_name).split(os.path.sep):
         dirs.append(name)
-    os.environ["cache_name"] = cache_name
+    # Deliberately not written back into os.environ: an import that mutates the
+    # environment changes the behaviour of every child process the user starts
+    # afterwards, and did so differently depending on whether the parent had
+    # imported jittor.
     LOG.v("cache_name: ", cache_name)
     path = os.path.join(path, *dirs)
     lock_path = os.path.abspath(os.path.join(path, os.pardir, "jittor.lock"))

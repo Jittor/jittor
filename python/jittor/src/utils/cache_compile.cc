@@ -163,7 +163,78 @@ size_t skip_comments(const string& src, size_t i) {
     return i;
 }
 
-void process(string src, vector<string>& input_names, string& cmd) {
+// Is NAME defined by a -D on this command line?
+//
+// The scanner cannot evaluate the preprocessor, but it can read the one thing
+// that decides most of the conditionals that matter here: what the build is
+// configured with. -DHAS_CUDA is the whole difference between a source's
+// `#include "helper_cuda.h"` being real and being dead text.
+bool macro_defined_on_cmd(const string& cmd, const string& name) {
+    string pattern = "-D" + name;
+    size_t pos = 0;
+    while ((pos = cmd.find(pattern, pos)) != string::npos) {
+        size_t after = pos + pattern.size();
+        bool left = pos == 0 || cmd[pos-1]==' ' || cmd[pos-1]=='"' || cmd[pos-1]=='\'';
+        bool right = after >= cmd.size() || cmd[after]==' ' || cmd[after]=='='
+                  || cmd[after]=='"' || cmd[after]=='\'';
+        if (left && right) return true;
+        pos = after;
+    }
+    return false;
+}
+
+// Scan a source for the headers it includes and for the JT_* macros the
+// environment wants turned into -D flags.
+//
+// `strict` marks each name with whether failing to resolve it is an error.
+// A name is strict only when every enclosing conditional is known to be true
+// -- which in practice means "not inside any conditional" or "inside
+// `#ifdef X` with -DX on the command line". Everything else is best effort:
+// tracked if it can be found, ignored if it cannot.
+//
+// That rule is what replaced two hardcoded exceptions. `helper_cuda.h` and
+// `test.h` were skipped by name because the scanner does not understand
+// `#ifdef`: both are included under conditions that are false in an ordinary
+// build (`#ifdef HAS_CUDA` in 47 files, `#ifdef TEST` here), the include path
+// that would resolve them is only present when those conditions hold, and an
+// unresolvable include was fatal. Skipping them by name also meant that
+// editing `helper_cuda.h` -- included by 47 files -- rebuilt nothing at all.
+//
+// This is still a hand-written approximation of the preprocessor, which is
+// the thing that should eventually go away; asking the compiler for its own
+// dependency list (`-MD -MF`) is the end state, and is blocked on separating
+// the JT_* macro discovery below from dependency tracking, because that
+// discovery has to happen *before* the first compile and a depfile only
+// exists *after* it. That separation is task 9.21.
+void process(string src, vector<string>& input_names, string& cmd,
+             vector<char>* strict_out) {
+    // 1 = this conditional is known to be true, 0 = we cannot say.
+    vector<char> conds;
+    auto all_known = [&]() {
+        for (char c : conds) if (!c) return false;
+        return true;
+    };
+    // `#ifdef JT_XXX` plus an environment variable of the same name means
+    // "compile this branch in". This is a second, unrelated job the scanner
+    // does: it decides part of the command line, so it has to happen before
+    // the compile rather than after it. Separating it from dependency
+    // tracking is what unblocks using the compiler's own -MD -MF (task 9.21).
+    auto inject_jt_macro = [&](const string& name) {
+        if (name.size() <= 2 || name[0] != 'J' || name[1] != 'T') return;
+        auto env = getenv(name.c_str());
+        if (!env || string(env) == "0") return;
+        string dflag = " -D" + name + "=" + string(env);
+        if (cmd.find(dflag) != string::npos) return;
+        // -D flags should insert before -o flag
+        #ifdef _MSC_VER
+        string patt = " -Fo: ";
+        #else
+        string patt = " -o ";
+        #endif
+        auto cmds = split(cmd, patt, 2);
+        if (cmds.size() == 2)
+            cmd = cmds[0] + dflag + patt + cmds[1];
+    };
     for (size_t i=0; i<src.size(); i++) {
         i = skip_comments(src, i);
         if (i>=src.size()) break;
@@ -173,40 +244,64 @@ void process(string src, vector<string>& input_names, string& cmd) {
             auto j=i+1;
             while (j<src.size() && (src[j] != ' ' && src[j] != '\"' && src[j] != '\n' && src[j] != '\r')) j++;
             if (j>=src.size()) return;
-            if (j-i != 8 && j-i != 6 && j-i != 3) continue;
+            auto directive = src.substr(i, j-i);
+            // Everything below reads the *argument* of this directive, so it
+            // must not run past the end of the line. `#else` and `#endif` have
+            // no argument: without this bound the scan walked onto the next
+            // line, and `i = l` at the bottom then skipped over whatever
+            // directive was there. An `#endif` immediately followed by
+            // `#ifdef HAS_CUDA` swallowed the `#ifdef`, so the conditional was
+            // never opened and the include inside it looked unconditional.
+            auto eol = j;
+            while (eol < src.size() && src[eol] != '\n') eol++;
             auto k=src[j] == '\"' ? j : j+1;
-            while (k<src.size() && src[k] == ' ') k++;
-            if (k>=src.size()) return;
-            auto l=k+1;
-            while (l<src.size() && (src[l] != ' ' && src[l] != '\n' && src[l] != '\r')) l++;
-            if (src[k] == '"' && src[l-1] == '"' && j-i==8 && src.substr(i,j-i) == "#include") {
+            if (k > eol) k = eol;
+            while (k<eol && src[k] == ' ') k++;
+            auto l=k<eol ? k+1 : eol;
+            while (l<eol && (src[l] != ' ' && src[l] != '\r')) l++;
+            bool has_argument = l > k;
+            if (directive == "#endif") {
+                if (conds.size()) conds.pop_back();
+                i = eol;
+                continue;
+            }
+            if (directive == "#else" || directive == "#elif") {
+                // The branch we are entering is one we did not evaluate.
+                if (conds.size()) conds.back() = 0;
+                i = eol;
+                continue;
+            }
+            if (directive == "#ifdef" || directive == "#ifndef") {
+                auto name = has_argument ? strip(src.substr(k, l-k)) : string();
+                if (directive == "#ifdef") inject_jt_macro(name);
+                bool defined = macro_defined_on_cmd(cmd, name);
+                // `#ifndef GUARD_H` around a whole header is the common case:
+                // the guard is never on the command line, so the body is
+                // known-live and keeps the error for a missing include.
+                conds.push_back((directive == "#ifdef") == defined ? 1 : 0);
+                i = eol;
+                continue;
+            }
+            if (directive == "#if") {
+                if (has_argument) inject_jt_macro(strip(src.substr(k, l-k)));
+                conds.push_back(0);
+                i = eol;
+                continue;
+            }
+            bool quoted = has_argument && src[k] == '"' && src[l-1] == '"';
+            // Angle brackets were not tracked at all, so a project header
+            // included as <...> could be edited without rebuilding anything.
+            // They are resolved against the same search path and simply
+            // ignored when they turn out to be system headers.
+            bool angled = has_argument && src[k] == '<' && src[l-1] == '>';
+            if ((quoted || angled) && directive == "#include") {
                 auto inc = src.substr(k+1, l-k-2);
-                if (inc != "test.h" && inc != "helper_cuda.h") {
-                    LOGvvvv << "Found include" << inc; 
-                    input_names.push_back(inc);
-                }
+                LOGvvvv << "Found include" << inc;
+                input_names.push_back(inc);
+                if (strict_out)
+                    strict_out->push_back(quoted && all_known() ? 1 : 0);
             }
-            if (l-k>2 && src[k] == 'J' && src[k+1] == 'T' && (src.substr(i,j-i) == "#ifdef" || src.substr(i,j-i) == "#if")) {
-                auto inc = strip(src.substr(k, l-k));
-                auto env = getenv(inc.c_str());
-                if (env && string(env)!="0") {
-                    auto senv = string(env);
-                    string dflag = " -D"+inc+"="+senv;
-                    if (cmd.find(dflag) == string::npos) {
-                        // -D flags should insert before -o flag
-                        #ifdef _MSC_VER
-                        string patt = " -Fo: ";
-                        #else
-                        string patt = " -o ";
-                        #endif
-                        auto cmds = split(cmd, patt, 2);
-                        if (cmds.size() == 2) {
-                            cmd = cmds[0] + dflag + patt + cmds[1];
-                        }
-                    }
-                }
-            }
-            i=l;
+            i=eol;
         }
     }
 }
@@ -327,12 +422,35 @@ bool cache_compile(string cmd, const string& cache_path_, const string& jittor_p
         // *.lib
         if (back == 'b') continue;
         ASSERT(src.size()) << "Source read failed:" << input_names[i] << "cmd:" << cmd;
-        auto hash = S(hash64(src));
+        auto hash = content_hash(src);
         vector<string> new_names;
+        vector<char> new_strict;
+        // Scan only files that belong to this project.
+        //
+        // Now that `<...>` includes are followed, the search reaches system
+        // headers -- `<cuda_fp16.h>` resolves through -I/usr/local/cuda/include.
+        // Those headers include their own private files relative to their own
+        // directory (`#include "detail/__target_macros"`), which this resolver
+        // knows nothing about, so descending into them turned every CUDA
+        // toolkit header into a fatal "include not found". A system header is
+        // still hashed -- upgrading the toolkit should rebuild -- but its
+        // insides are the toolkit's business.
+        // jittor_path, not src_path: extern/ headers are ours too. With
+        // neither root configured there is nothing to be outside of, so scan
+        // everything -- that is the TEST harness and the default arguments.
+        bool in_project = jittor_path.empty() && cache_path.empty();
+        if (!in_project)
+            in_project =
+                (jittor_path.size() &&
+                 input_names[i].compare(0, jittor_path.size(), jittor_path) == 0) ||
+                (cache_path.size() &&
+                 input_names[i].compare(0, cache_path.size(), cache_path) == 0);
         // *.obj, *.o, *.pyd
-        if (back != 'j' && back != 'o' && back != 'd')
-            process(src, new_names, cmd);
-        for (auto& name : new_names) {
+        if (in_project && back != 'j' && back != 'o' && back != 'd')
+            process(src, new_names, cmd, &new_strict);
+        for (size_t n=0; n<new_names.size(); n++) {
+            const auto& name = new_names[n];
+            bool strict = n < new_strict.size() ? new_strict[n] != 0 : true;
             string full_name;
             if (name.substr(0, 4) == "jit/" || name.substr(0, 4) == "gen/")
                 full_name = join(cache_path, name);
@@ -349,8 +467,22 @@ bool cache_compile(string cmd, const string& cache_path_, const string& jittor_p
                         break;
                     }
                 }
-                ASSERT(found) << "Include file" << name << "not found in" << extra_include
-                    >> "\nCommands:" << cmd;
+                if (!found) {
+                    // Not an error unless every enclosing conditional is known
+                    // to hold and the include was quoted. A `<...>` include is
+                    // usually a system header, and a quoted one under an
+                    // `#ifdef` we could not evaluate is text the compiler will
+                    // never see -- `#include "helper_cuda.h"` under
+                    // `#ifdef HAS_CUDA` in a CPU build is exactly that, and
+                    // used to be excluded by name for this reason.
+                    if (!strict) {
+                        LOGvvvv << "Include file" << name
+                            << "not resolved and not required here, skipping";
+                        continue;
+                    }
+                    ASSERT(found) << "Include file" << name << "not found in" << extra_include
+                        >> "\nCommands:" << cmd;
+                }
                 LOGvvvv << "Include file found:" << full_name;
             }
             input_names.push_back(full_name);
@@ -447,7 +579,7 @@ void test_find_nams_error(string cmd) {
 void test_process(string src, vector<string> files) {
     vector<string> ifiles;
     string cmd;
-    jittor::jit_compiler::process(src, ifiles, cmd);
+    jittor::jit_compiler::process(src, ifiles, cmd, nullptr);
     CHECK(files.size() == ifiles.size());
     for (size_t i=0; i<files.size(); i++)
         CHECKop(files[i],==,ifiles[i]);
@@ -471,8 +603,16 @@ void test_main() {
     
     test_process("", {});
     test_process("#inc <asd>", {});
-    test_process("#include <asd>", {});
+    // Angle brackets are tracked now: a project header included as <...> used
+    // to be invisible to the cache. It is resolved against the same search
+    // path and dropped later if it turns out to be a system header.
+    test_process("#include <asd>", {"asd"});
     test_process("#include \"asd\"", {"asd"});
+    // A conditional whose macro is not on the command line makes what is
+    // inside best-effort rather than fatal -- this is what replaced the
+    // hardcoded "test.h"/"helper_cuda.h" exceptions.
+    test_process("#ifdef HAS_CUDA\n#include \"helper_cuda.h\"\n#endif",
+        {"helper_cuda.h"});
     test_process("//#include \"asd\"", {});
     test_process("/*#include \"asd\"*/", {});
     test_process("#include \"asd\"\n#include \"zxc\"", {"asd", "zxc"});

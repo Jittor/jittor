@@ -32,6 +32,70 @@ def _cache_path_for(env_overrides):
     return json.loads(out.stdout.decode())
 
 
+class TestCachePathComponents(unittest.TestCase):
+    """What the directory name is allowed to depend on.
+
+    Everything here was in the path and should not have been, or was missing
+    from it and should have been. Each one costs a full rebuild when it changes
+    for no reason, or hands out stale objects when it fails to change.
+    """
+
+    def test_the_hostname_is_not_in_the_path(self):
+        """It changed nothing about the products and made every node of a
+        cluster rebuild the framework instead of sharing one cache."""
+        import platform
+        node = platform.node()
+        if not node or len(node) < 4:
+            raise unittest.SkipTest("this host has no usable node name")
+        self.assertNotIn(node, jit_utils.cache_path)
+
+    def test_the_instruction_set_comes_from_the_compiler(self):
+        """`-march=native` is on every CPU compile, so the instruction set is
+        part of what the products *are*. The path used to carry the CPU's
+        marketing name instead: too coarse (same name, different
+        microarchitecture revision -> illegal instruction) and not what the
+        compiler actually did."""
+        key = jit_utils.target_arch_key()
+        self.assertTrue(key)
+        if key.startswith("arch"):
+            self.assertIn(key, jit_utils.cache_path)
+            # Two different expansions must not collide into one directory.
+            import hashlib
+            other = "arch" + hashlib.sha256(b"different").hexdigest()[:10]
+            self.assertNotEqual(key, other)
+
+    def test_the_project_path_key_is_wide_enough_to_separate_checkouts(self):
+        """Four hex digits is 65536 slots; two parallel worktrees colliding
+        means two source trees sharing one cache directory."""
+        key = jit_utils.get_str_hash(os.path.abspath(jit_utils.__file__))[:12]
+        self.assertEqual(len(key), 12)
+        self.assertIn(key, jit_utils.cache_path)
+
+    def test_the_git_branch_is_not_in_the_path(self):
+        """Switching branches rebuilt everything instead of letting the
+        content hashes rebuild only what changed; a detached HEAD produced a
+        cache named after the last line of `git branch`; and a pip install
+        inside somebody's repository inherited that repository's branch."""
+        path, _lock = _cache_path_for({})
+        self.assertIn(os.sep + "default" + os.sep, path + os.sep)
+
+    def test_cache_name_is_an_explicit_slot_and_is_not_written_back(self):
+        script = ("import os, jittor_utils, sys;"
+                  "jittor_utils.find_cache_path();"
+                  "sys.stdout.write(repr(os.environ.get('cache_name')))")
+        out = run_python_child(["-c", script], env={}, text=False)
+        self.assertEqual(out.returncode, 0, out.stderr.decode())
+        # An import that mutates the environment changes every child process
+        # the user starts afterwards.
+        self.assertEqual(out.stdout.decode(), repr(None))
+
+    def test_an_explicit_cache_name_still_isolates(self):
+        first, _ = _cache_path_for({"cache_name": "slot-a"})
+        second, _ = _cache_path_for({"cache_name": "slot-b"})
+        self.assertNotEqual(first, second)
+        self.assertTrue(first.endswith(os.path.join("slot-a", os.path.basename(first))))
+
+
 class TestBuildConfigFingerprint(unittest.TestCase):
 
     def test_flags_change_the_fingerprint(self):

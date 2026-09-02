@@ -160,12 +160,12 @@ Jittor 是即时编译的，所以 `import jittor` 不只是导入一个库：�
   name includes the Jittor, compiler and Python versions, the platform, the CPU,
   and the build configuration (`cc_flags`, `nvcc_flags`, `cuda_archs`,
   `enable_lto`, `nvcc_path`). Changing any of them builds into a new directory
-  rather than overwriting the old one. When Jittor is installed inside a git
-  checkout, the branch name is part of it too, so switching branches rebuilds;
-  set `cache_name` to a fixed value to pin it. 目录名包含 Jittor / 编译器 /
-  Python 版本、平台、CPU 与构建配置；其中任何一项变化都会写进新目录而不是覆盖旧的。
-  如果 Jittor 装在一个 git 仓库里，分支名也是其中一部分，切分支会触发重编——设
-  `cache_name` 为固定值即可钉住。
+  rather than overwriting the old one, and different checkouts get different
+  directories. Two runs that must not share a cache need different
+  `cache_name` values (or different `JITTOR_HOME`s). 目录名包含 Jittor / 编译器 /
+  Python 版本、平台、CPU 与构建配置；其中任何一项变化都会写进新目录而不是覆盖旧的，
+  不同的源码目录也各有各的目录。两个不能共用缓存的运行要设不同的 `cache_name`
+  （或不同的 `JITTOR_HOME`）。
 
 Before reporting a build problem, run the preconditions check. It reports
 everything that is missing at once, and says for each item whether Jittor can

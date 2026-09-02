@@ -268,21 +268,21 @@ def check_cuda(nvcc_path=None):
     return results
 
 
-def check_git_affects_cache():
-    """Whether the cache directory depends on `git`, which is invisible today."""
-    from jittor_utils import _git_head_file
-    import jittor_utils
-    source = os.path.dirname(jittor_utils.__file__)
-    if _git_head_file(source) is None:
-        return _ok("git", "this install is not in a git checkout")
-    if not shutil.which("git"):
-        return _warn(
-            "git", "this install is inside a git checkout but git is not on "
-            "PATH, and the cache directory is named after the branch",
-            "install git, or set cache_name to a fixed value so the cache "
-            "directory does not depend on it")
-    return _ok("git", "checkout detected; the cache directory is named after "
-               "the branch (set cache_name to override)")
+def check_cache_isolation():
+    """Which slot of the cache this process will use.
+
+    The cache directory used to be named after the current git branch, so this
+    check warned about git. It no longer is -- switching branches now reuses
+    the cache and rebuilds only what changed -- and the remaining thing worth
+    reporting is which explicitly named slot is in effect, because two runs
+    that must not share a cache have to differ here or in JITTOR_HOME.
+    """
+    slot = os.environ.get("cache_name")
+    if slot:
+        return _ok("cache isolation", "cache_name=%s" % slot)
+    return _ok("cache isolation",
+               "default slot; set cache_name (or JITTOR_HOME) to isolate "
+               "concurrent runs from each other")
 
 
 def run_all():
@@ -297,7 +297,7 @@ def run_all():
     results.append(check_network(needed=third_party.status != "ok"))
     cuda = check_cuda()
     results.extend(cuda if isinstance(cuda, list) else [cuda])
-    results.append(check_git_affects_cache())
+    results.append(check_cache_isolation())
     return results
 
 

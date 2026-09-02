@@ -99,7 +99,7 @@ class TestPreflightChecks(unittest.TestCase):
         names = {result.name for result in preflight.run_all()}
         for expected in ("c++ compiler", "python headers", "openmp runtime",
                          "disk space", "third-party archives", "network",
-                         "git"):
+                         "cache isolation"):
             self.assertIn(expected, names)
 
     def test_the_command_line_reports_and_sets_an_exit_status(self):
