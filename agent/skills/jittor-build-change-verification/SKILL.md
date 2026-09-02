@@ -34,6 +34,18 @@ E="JITTOR_HOME=$JH TMPDIR=$TD PYTHONPATH=$WT/python nvcc_path=/usr/local/cuda/bi
 
 跑之前 `df -h`。磁盘满的症状和并发损坏一模一样（散布的编译失败加段错误）。
 
+**一条命令里只要有一个分支漏了 PYTHONPATH，整条就作废。** `cmd_a || cmd_b` 这种写法
+最容易漏：`cmd_a` 带了、`cmd_b` 忘了，而失败时跑的恰恰是 `cmd_b`。同一个坑还有
+`for` 循环里只给第一次带、以及 `env A=1 python` 后面接的第二条命令。判据不是"我写没写"，
+而是**看日志第一行**：
+
+```
+[i ...] Jittor(1.3.11.0) src: /path/to/some/tree/python/jittor
+```
+
+这个路径不是你的 worktree，后面的一切结论全部作废——而且它会安安静静地把**别人那棵树**
+从头编一遍（本机实测 156 个文件），你只会觉得"这条命令怎么这么慢"。
+
 **验证用的临时缓存长得比想象中快**：本文第 1、3 节各要一个全新的 `JITTOR_HOME`，
 一次冷启动加一次并发冷启动在本机占了 24 GB。跑完就删：
 
@@ -239,6 +251,12 @@ subprocess.run("%s %s" % (sys.executable, path), shell=True, env=child_env(),
 - **在 jittor 进程里 `kill` 子进程会把自己也带走。** jittor 装了 SIGCHLD handler，看到
   子进程被信号杀死就判定 OOM 并 `quick exit`，测试进程整个消失、不打任何 traceback。
   测试里要结束子进程，让它自己退（读 stdin 一行、或用哨兵文件），别 `kill()`。
+- **加了一个过滤/守卫之后，先问它在"输入为空"时退化成什么。** 这类改动的失败形状
+  不是报错，是**静默地什么都不做**，于是测试全绿而保护为零。今晚一晚上撞了四次：
+  「项目外的文件不下钻」用路径前缀判断，而 C++ TEST harness 传的 roots 是**空的**，
+  于是什么都不算项目内、什么都不扫，改头文件不再触发重编（空 roots 现在等于"全扫"）；
+  `@onlyCPU` 在 CUDA 门禁下生成**零个**用例；`SharedReducePass` 因为默认 flag 从不运行；
+  `is_type<NanoString>` 万能匹配。写完守卫，把它的输入置空跑一遍，看它是不是变成了空操作。
 - **不要 `kill -9` 正在编译的 jittor 进程。** 会留下损坏的缓存，下一次运行在毫不相干的
   算子上大面积报错。真要杀，先把整个 `JITTOR_HOME` 删掉。
 

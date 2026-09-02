@@ -1199,12 +1199,14 @@ def check_debug_flags():
         cc_flags += " -g -DNODE_MEMCHECK "
 
 def check_save_mem_flags():
-    """Turn JT_SAVE_MEM into the define src/mem/swap.h actually reads."""
+    """Warn when the unfinished swapping build is explicitly enabled.
+
+    ``jt_config_macro_flags`` adds the normalized define with the other
+    source-controlled JT_* macros later in command-line construction.
+    """
     flags = jit_utils.save_mem_build_flags()
     if not flags:
         return
-    global cc_flags
-    cc_flags += flags
     LOG.w("JT_SAVE_MEM=1: memory swapping is built in. It is unfinished -- "
           "share_with, migrate, the dual allocator and foreign allocators are "
           "all still on its TODO list (src/mem/swap.h) -- and it needs its own "
@@ -1323,6 +1325,54 @@ if platform.machine() in ["x86_64", "AMD64"]:
 elif platform.machine() == 'arm64' and platform.system() == "Darwin":
     cc_flags += f" -mcpu={check_clang_latest_supported_cpu()} "
 cc_flags += " -fdiagnostics-color=always "
+
+#: Build-configuration macros the C++ sources test with `#ifdef`, and which the
+#: environment can turn on. There are only a few, they change rarely, and
+#: `tests/compiler/test_jt_config_macros.py` greps the sources and fails if
+#: this tuple stops matching -- so the list cannot drift without anyone
+#: noticing.
+#:
+#: This used to be discovered by `cache_compile.cc`, which scanned every source
+#: it was already reading for dependency tracking and rewrote the compiler
+#: command line in place when it found one. That coupled two unrelated jobs:
+#: deciding the command line, which must happen *before* a compile, and
+#: collecting dependencies, which the compiler can only report *after* one.
+#: While they shared a scanner, the compiler's own `-MD -MF` could not be used
+#: for dependencies at all -- the first, cold compile would have gone out
+#: without its `-D`. Deciding the flags here, from a declared list, is what
+#: separates them (task 9.21).
+JT_CONFIG_MACROS = (
+    "JT_CHECK_NAN",
+    "JT_HAS_HALF_SIMD",
+    "JT_HCCL_NO_MPI",
+    "JT_NCCL_NO_MPI",
+    "JT_SAVE_MEM",
+    "JT_SYNC",
+    "JT_bfs_executor",
+)
+
+def jt_config_macro_flags(environ=None):
+    """`-D` flags for the JT_* macros this environment turns on.
+
+    A variable that is unset, empty or "0" is off, which is the same rule the
+    scanner used. Everything downstream derives from cc_flags, so setting them
+    here reaches the nvcc command line too.
+    """
+    environ = os.environ if environ is None else environ
+    flags = []
+    for name in JT_CONFIG_MACROS:
+        if name == "JT_SAVE_MEM":
+            value = jit_utils.save_mem_build_flags(environ)
+            if value:
+                flags.append(value)
+            continue
+        value = environ.get(name)
+        if value in (None, "", "0"):
+            continue
+        flags.append(f" -D{name}={value} ")
+    return "".join(flags)
+
+cc_flags += jt_config_macro_flags()
 # 2. Non standard include path
 if platform.system() == 'Darwin':
     # TODO: if not using apple clang, there is no need to add -lomp

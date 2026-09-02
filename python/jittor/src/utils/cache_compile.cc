@@ -183,8 +183,17 @@ bool macro_defined_on_cmd(const string& cmd, const string& name) {
     return false;
 }
 
-// Scan a source for the headers it includes and for the JT_* macros the
-// environment wants turned into -D flags.
+// Scan a source for the headers it includes.
+//
+// It used to do a second, unrelated job as well: find `#ifdef JT_XXX`, look the
+// name up in the environment, and rewrite the compiler command line in place.
+// That coupled "decide the command line", which has to happen before a
+// compile, to "collect dependencies", which the compiler can only report after
+// one -- and while they shared a scanner the compiler's own `-MD -MF` could
+// not be used, because the first cold compile would have gone out without its
+// `-D`. Those flags are now decided in Python from a declared list
+// (`compiler.JT_CONFIG_MACROS`), which is what unblocks replacing the rest of
+// this function with a depfile.
 //
 // `strict` marks each name with whether failing to resolve it is an error.
 // A name is strict only when every enclosing conditional is known to be true
@@ -200,40 +209,18 @@ bool macro_defined_on_cmd(const string& cmd, const string& name) {
 // unresolvable include was fatal. Skipping them by name also meant that
 // editing `helper_cuda.h` -- included by 47 files -- rebuilt nothing at all.
 //
-// This is still a hand-written approximation of the preprocessor, which is
-// the thing that should eventually go away; asking the compiler for its own
-// dependency list (`-MD -MF`) is the end state, and is blocked on separating
-// the JT_* macro discovery below from dependency tracking, because that
-// discovery has to happen *before* the first compile and a depfile only
-// exists *after* it. That separation is task 9.21.
-void process(string src, vector<string>& input_names, string& cmd,
+// This is still a hand-written approximation of the preprocessor, and asking
+// the compiler for its own dependency list (`-MD -MF`) remains the end state.
+// The coupling that blocked it is gone; what is left is the mechanical work of
+// reading depfiles, plus the wrappers that rewrite the command line by string
+// matching (asm_tuner.py, dlink_compiler.py) and MSVC, which has no -MF.
+void process(string src, vector<string>& input_names, const string& cmd,
              vector<char>* strict_out) {
     // 1 = this conditional is known to be true, 0 = we cannot say.
     vector<char> conds;
     auto all_known = [&]() {
         for (char c : conds) if (!c) return false;
         return true;
-    };
-    // `#ifdef JT_XXX` plus an environment variable of the same name means
-    // "compile this branch in". This is a second, unrelated job the scanner
-    // does: it decides part of the command line, so it has to happen before
-    // the compile rather than after it. Separating it from dependency
-    // tracking is what unblocks using the compiler's own -MD -MF (task 9.21).
-    auto inject_jt_macro = [&](const string& name) {
-        if (name.size() <= 2 || name[0] != 'J' || name[1] != 'T') return;
-        auto env = getenv(name.c_str());
-        if (!env || string(env) == "0") return;
-        string dflag = " -D" + name + "=" + string(env);
-        if (cmd.find(dflag) != string::npos) return;
-        // -D flags should insert before -o flag
-        #ifdef _MSC_VER
-        string patt = " -Fo: ";
-        #else
-        string patt = " -o ";
-        #endif
-        auto cmds = split(cmd, patt, 2);
-        if (cmds.size() == 2)
-            cmd = cmds[0] + dflag + patt + cmds[1];
     };
     for (size_t i=0; i<src.size(); i++) {
         i = skip_comments(src, i);
@@ -273,7 +260,6 @@ void process(string src, vector<string>& input_names, string& cmd,
             }
             if (directive == "#ifdef" || directive == "#ifndef") {
                 auto name = has_argument ? strip(src.substr(k, l-k)) : string();
-                if (directive == "#ifdef") inject_jt_macro(name);
                 bool defined = macro_defined_on_cmd(cmd, name);
                 // `#ifndef GUARD_H` around a whole header is the common case:
                 // the guard is never on the command line, so the body is
@@ -283,7 +269,6 @@ void process(string src, vector<string>& input_names, string& cmd,
                 continue;
             }
             if (directive == "#if") {
-                if (has_argument) inject_jt_macro(strip(src.substr(k, l-k)));
                 conds.push_back(0);
                 i = eol;
                 continue;
