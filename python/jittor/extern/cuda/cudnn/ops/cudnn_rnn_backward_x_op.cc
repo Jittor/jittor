@@ -133,7 +133,9 @@ void CudnnRnnBackwardXOp::jit_run() {
     RnnWeightDescriptor w_desc(w->size);
     RnnDescriptor rnn_desc(cudnn_handle, mode, hidden_size, num_layers, dropout, bidirectional);
 
-    void *work_space;
+    // Was uninitialized when work_space_size == 0, and the free below is
+    // unconditional: a garbage pointer handed to the allocator.
+    void *work_space = nullptr;
     size_t work_space_size = rnn_desc.work_space_size(dxDesc.data(), seq_length);
     size_t work_space_allocation;
     if (work_space_size > 0)

@@ -85,16 +85,14 @@ void CudnnRnnOp::infer_shape() {
 
     if (reservation) {
         #ifdef IS_CUDA
-        int in_dims[3] = {batch_size, input_size, 1};
-        int in_strides[3] = {in_dims[1] * in_dims[2], in_dims[2], 1};
-
-        vector<cudnnTensorDescriptor_t> xDesc(seq_length);
-        RnnDescriptor rnn_desc(cudnn_handle, mode, hidden_size, num_layers, dropout, bidirectional);
-        for (int i = 0; i < seq_length; ++i) {
-            checkCudaErrors(cudnnCreateTensorDescriptor(&xDesc[i]));
-            checkCudaErrors(cudnnSetTensorNdDescriptor(xDesc[i], CUDNN_DATA_FLOAT, 3, in_dims, in_strides));
-        }
-        reservation->set_shape(rnn_desc.reserve_space_size(xDesc.data(), seq_length));
+        // Was: seq_length cudnnCreateTensorDescriptor here and no Destroy
+        // anywhere, i.e. seq_length leaked descriptors per shape inference,
+        // which for a training RNN is per step. The query is cached per
+        // configuration now and cleans up after itself; shape inference still
+        // reaches cuDNN, because the reserve-space size is cuDNN's to know.
+        reservation->set_shape(cudnn_rnn_reserve_space_size(
+            mode, input_size, hidden_size, num_layers, dropout, bidirectional,
+            seq_length, batch_size, CUDNN_DATA_FLOAT));
         #endif
     }
 }
@@ -176,7 +174,9 @@ void CudnnRnnOp::jit_run() {
 
     RnnDescriptor rnn_desc(cudnn_handle, mode, hidden_size, num_layers, dropout, bidirectional);
 
-    void *work_space;
+    // Was uninitialized when work_space_size == 0, and the free below is
+    // unconditional: a garbage pointer handed to the allocator.
+    void *work_space = nullptr;
     size_t work_space_size = rnn_desc.work_space_size(xDesc.data(), seq_length);
     size_t work_space_allocation;
     if (work_space_size > 0)

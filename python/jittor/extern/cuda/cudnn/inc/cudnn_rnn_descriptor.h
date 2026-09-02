@@ -37,26 +37,39 @@ static inline int rnn_string_to_num_linear_layers(string mode) {
 }
 
 /** A wrapper for CUDNN dropout descriptor
+ *
+ * The state buffer is cuDNN's RNG state for dropout, and cuDNN advances it in
+ * place on every call that uses it.  So this object has to outlive the call:
+ * built per call -- which is what a member of a `jit_run` local amounts to --
+ * it was re-seeded from the global seed every single time, and every step of
+ * training drew the *same* dropout mask sequence.  Nothing about that is
+ * visible from Python; the loss curve just quietly belongs to a model that was
+ * regularized far less than it asked for.  Get one of these from
+ * `cudnn_rnn_dropout_descriptor()`, which keeps them across calls.
  */
 struct DropoutDescriptor {
     cudnnDropoutDescriptor_t desc;
     size_t stateSize, stateAllocation;
     float dropout;
     void *stateSpace;
+    // Freed through the allocator that served it: this outlives the call, and
+    // `exe.allocator` is not necessarily the same object by then.
+    Allocator *stateAllocator;
 
-    DropoutDescriptor(cudnnHandle_t handle, float dropout) 
-        : dropout(dropout), stateSpace(nullptr) {
+    DropoutDescriptor(cudnnHandle_t handle, float dropout, int seed)
+        : dropout(dropout), stateSpace(nullptr), stateAllocator(nullptr) {
         checkCudaErrors(cudnnCreateDropoutDescriptor(&desc));
         if (dropout > 0) {
             checkCudaErrors(cudnnDropoutGetStatesSize(handle, &stateSize));
-            stateSpace = exe.temp_allocator->alloc(stateSize, stateAllocation);
+            stateAllocator = exe.allocator;
+            stateSpace = stateAllocator->alloc(stateSize, stateAllocation);
             checkCudaErrors(cudnnSetDropoutDescriptor(
                 desc,
-                cudnn_handle,
+                handle,
                 dropout,
                 stateSpace,
                 stateSize,
-                get_seed()
+                seed
             ));
         } else {
             checkCudaErrors(cudnnSetDropoutDescriptor(
@@ -70,26 +83,34 @@ struct DropoutDescriptor {
         // during the unwinding of an earlier cuDNN error -- into terminate.
         peekCudaErrorsAlways(cudnnDestroyDropoutDescriptor(desc));
         if (stateSpace)
-            exe.temp_allocator->free(stateSpace, stateSize, stateAllocation);
+            stateAllocator->free(stateSpace, stateSize, stateAllocation);
     }
+
+    DropoutDescriptor(const DropoutDescriptor&) = delete;
+    DropoutDescriptor& operator=(const DropoutDescriptor&) = delete;
 };
+
+/** The dropout state for `dropout`, created on first use and reused after
+    that, so consecutive RNN calls continue the mask sequence instead of
+    restarting it.  `jt.set_seed()` drops the cache, so seeding still
+    reproduces a run exactly. */
+cudnnDropoutDescriptor_t cudnn_rnn_dropout_descriptor(cudnnHandle_t handle, float dropout);
 
 /** A wrapper for CUDNN RNN descriptor
  */
 struct RnnDescriptor {
     cudnnHandle_t handle;
     cudnnRNNDescriptor_t desc;
-    DropoutDescriptor dropoutDesc;
-    
+
     RnnDescriptor(cudnnHandle_t handle, string mode, int hidden_size, int num_layers, 
-        float dropout, bool bidirectional) : handle(handle), dropoutDesc(handle, dropout) {
+        float dropout, bool bidirectional) : handle(handle) {
         checkCudaErrors(cudnnCreateRNNDescriptor(&desc));
         checkCudaErrors(cudnnSetRNNDescriptor_v6(
             handle,
             desc,
             hidden_size,
             num_layers,
-            dropoutDesc.desc,
+            cudnn_rnn_dropout_descriptor(handle, dropout),
             CUDNN_LINEAR_INPUT,
             bidirectional ? CUDNN_BIDIRECTIONAL : CUDNN_UNIDIRECTIONAL,
             rnn_string_to_rnn_mode(mode),
@@ -97,6 +118,9 @@ struct RnnDescriptor {
             CUDNN_DATA_FLOAT
         ));
     }
+
+    RnnDescriptor(const RnnDescriptor&) = delete;
+    RnnDescriptor& operator=(const RnnDescriptor&) = delete;
 
     ~RnnDescriptor() {
         // Same reason as ~DropoutDescriptor: report, never raise.
@@ -142,6 +166,19 @@ struct RnnWeightDescriptor {
         peekCudaErrorsAlways(cudnnDestroyFilterDescriptor(desc));
     }
 };
+
+/** Training reserve-space size for an RNN of this shape, cached per
+    configuration. Shape inference needs the number and cuDNN will only give it
+    up through descriptors, so the call lives here where it happens once rather
+    than in infer_shape where it happened -- and leaked seq_length descriptors
+    -- on every step. */
+size_t cudnn_rnn_reserve_space_size(string mode, int input_size, int hidden_size,
+    int num_layers, float dropout, bool bidirectional,
+    int seq_length, int batch_size, cudnnDataType_t dtype);
+
+/** Drops the cached dropout states, so the next RNN call rebuilds them from
+    the current seed. Registered as a set_seed callback. */
+void cudnn_rnn_dropout_reset();
 
 /** 
     Returns offsets of RNN linear parameters in a flatten array.
