@@ -66,7 +66,10 @@ VarPtr make_grad(Op* op, Var* out, Var* dout, Var* x, int x_index) {
         << "out:" >> out << "dout:" >> dout << "x:" >> x << "xid:" >> x_index;
     AmpGradGuard agg(op);
     auto dx = op->grad(out, dout, x, x_index);
-    if (x->loop_options)
+    // A null dx is an ordinary path, not an error: floor/round/ceil, mod,
+    // floor_divide, the bitwise ops and the default Op::grad all return one.
+    // The guard used to test the input x and then dereference the result.
+    if (dx && x->loop_options)
         dx->loop_options = x->loop_options;
     return dx;
 }
@@ -262,7 +265,9 @@ vector<VarPtr> grad(
                 }
             }
         }
-        if (auto_mixed_precision_level == 3 && grad->ns != var->ns) {
+        // Same story: this var may have collected no gradient at all, in which
+        // case grad is null and there is nothing to cast.
+        if (grad && auto_mixed_precision_level == 3 && grad->ns != var->ns) {
             grad = make_unary(grad, var->ns);
         }
     }
