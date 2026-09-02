@@ -169,5 +169,67 @@ class TestAutocast(StubPolicyBase):
             lambda: torch.autocast("cuda", dtype="float8_e4m3fn"))
         self.assertIsNotNone(ctx)
 
+class TestLoadStateDict(StubPolicyBase):
+    """Module.load_state_dict returned _IncompatibleKeys([], []) unconditionally."""
+
+    def _model(self):
+        return torch.nn.Linear(4, 3)
+
+    def test_missing_keys_are_reported(self):
+        model = self._model()
+        sd = dict(model.state_dict())
+        sd.pop("bias")
+        result = model.load_state_dict(sd, strict=False)
+        self.assertIn("bias", result.missing_keys)
+        self.assertEqual(result.unexpected_keys, [])
+
+    def test_unexpected_keys_are_reported(self):
+        model = self._model()
+        sd = dict(model.state_dict())
+        sd["not_a_param"] = jt.zeros(3)
+        result = model.load_state_dict(sd, strict=False)
+        self.assertIn("not_a_param", result.unexpected_keys)
+        self.assertEqual(result.missing_keys, [])
+
+    def test_strict_true_rejects_a_missing_key(self):
+        model = self._model()
+        sd = dict(model.state_dict())
+        sd.pop("weight")
+        with self.assertRaises(RuntimeError) as cm:
+            model.load_state_dict(sd)
+        self.assertIn("Missing key", str(cm.exception))
+        self.assertIn("weight", str(cm.exception))
+
+    def test_strict_true_rejects_an_unexpected_key(self):
+        model = self._model()
+        sd = dict(model.state_dict())
+        sd["extra.weight"] = jt.zeros(2)
+        with self.assertRaises(RuntimeError) as cm:
+            model.load_state_dict(sd)
+        self.assertIn("Unexpected key", str(cm.exception))
+
+    def test_shape_mismatch_raises_even_when_not_strict(self):
+        model = self._model()
+        sd = dict(model.state_dict())
+        sd["weight"] = jt.zeros((7, 7))
+        with self.assertRaises(RuntimeError) as cm:
+            model.load_state_dict(sd, strict=False)
+        self.assertIn("size mismatch", str(cm.exception))
+
+    def test_a_matching_checkpoint_still_loads(self):
+        src = self._model()
+        dst = self._model()
+        result = dst.load_state_dict(src.state_dict())
+        self.assertEqual(list(result.missing_keys), [])
+        self.assertEqual(list(result.unexpected_keys), [])
+        np.testing.assert_allclose(dst.weight.numpy(), src.weight.numpy())
+
+    def test_an_entirely_wrong_checkpoint_no_longer_loads_silently(self):
+        # The regression this whole task exists for: before, this returned
+        # IncompatibleKeys([], []) and left the model randomly initialised.
+        model = self._model()
+        with self.assertRaises(RuntimeError):
+            model.load_state_dict({"encoder.layer.0.weight": jt.zeros((4, 4))})
+
 if __name__ == "__main__":
     unittest.main()

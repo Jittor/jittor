@@ -1350,7 +1350,65 @@ def _install_module_methods(nn, registry=None):
             converted[key] = src.cast(target_dtype)
         return state_dict if converted is None else converted
 
+    def _state_dict_key_diff(root, state_dict):
+        """(missing, unexpected, mismatched) between a module and a state dict.
+
+        This used to be nothing at all: the wrapper returned
+        ``_IncompatibleKeys([], [])`` unconditionally, so ``strict=True`` --
+        the whole point of which is to reject a checkpoint that does not match
+        the model -- accepted a checkpoint with every key wrong and left the
+        model at its random initialisation without a word.
+        """
+        own = {}
+        try:
+            for name, value in root.state_dict().items():
+                own[str(name)] = value
+        except Exception:
+            return [], [], []
+        given = list(state_dict.keys()) if hasattr(state_dict, "keys") else []
+        given_set = set(str(k) for k in given)
+        missing = [k for k in own if k not in given_set]
+        unexpected = [str(k) for k in given if str(k) not in own]
+        mismatched = []
+        for key in given:
+            target = own.get(str(key))
+            if not isinstance(target, jt.Var):
+                continue
+            src = state_dict[key]
+            src_shape = getattr(src, "shape", None)
+            if src_shape is None:
+                continue
+            if tuple(int(d) for d in src_shape) != tuple(int(d) for d in target.shape):
+                mismatched.append((str(key), tuple(int(d) for d in src_shape),
+                                   tuple(int(d) for d in target.shape)))
+        # torch never reports num_batches_tracked as missing for modules that
+        # do not keep one; jittor's BatchNorm has no such buffer at all.
+        missing = [k for k in missing if not k.endswith("num_batches_tracked")]
+        return missing, unexpected, mismatched
+
     def _load_state_dict(self, state_dict, strict=True, assign=False):
+        missing, unexpected, mismatched = _state_dict_key_diff(self, state_dict)
+        # torch raises on a shape mismatch whatever `strict` says: the value
+        # cannot be copied at all.  jittor's load_parameters only LOG.e'd it.
+        if mismatched:
+            raise RuntimeError(
+                "Error(s) in loading state_dict for %s:\n\t%s"
+                % (type(self).__name__,
+                   "\n\t".join(
+                       "size mismatch for %s: copying a param with shape %s "
+                       "from checkpoint, the shape in current model is %s."
+                       % (k, list(a), list(b)) for k, a, b in mismatched)))
+        if strict and (missing or unexpected):
+            parts = []
+            if missing:
+                parts.append("Missing key(s) in state_dict: %s. "
+                             % ", ".join('"%s"' % k for k in sorted(missing)))
+            if unexpected:
+                parts.append("Unexpected key(s) in state_dict: %s. "
+                             % ", ".join('"%s"' % k for k in sorted(unexpected)))
+            raise RuntimeError(
+                "Error(s) in loading state_dict for %s:\n\t%s"
+                % (type(self).__name__, "\n\t".join(parts)))
         # preserve trainable flags: jittor assign can flip stop_grad
         trainable = set()
         try:
@@ -1360,6 +1418,11 @@ def _install_module_methods(nn, registry=None):
         except Exception:
             pass
         load_state = state_dict if assign else _preserve_target_dtypes_for_load(self, state_dict)
+        if unexpected:
+            # jittor's load_parameters LOG.w's on every unknown key; drop them
+            # here so a strict=False load stays quiet, exactly like torch.
+            load_state = {k: v for k, v in load_state.items()
+                          if str(k) not in set(unexpected)}
         _orig_load_state_dict(self, load_state)
         try:
             for n, p in self.named_parameters():
@@ -1367,7 +1430,7 @@ def _install_module_methods(nn, registry=None):
                     p.start_grad()
         except Exception:
             pass
-        return _IncompatibleKeys([], [])
+        return _IncompatibleKeys(missing, unexpected)
     M.load_state_dict = _load_state_dict
 
     # torch's Module.parameters() returns an *iterator*; peft does
