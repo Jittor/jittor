@@ -26,14 +26,18 @@ struct TempAllocator : Allocator {
     static const size_t ID_LIMIT = 1 << 21;
     static vector<TempAllocator*> temp_allocators;
     Allocator* underlying;
-    size_t cache_blocks_limit, used_memory, unused_memory;
+    // used_memory / unused_memory belong to Allocator and are deliberately not
+    // redeclared here: shadowing them made every workspace allocation invisible
+    // through a base pointer, so cpu_mem_limit / device_mem_limit never saw the
+    // 20+ cuDNN / cub workspace call sites.
+    size_t cache_blocks_limit;
     std::map<unsigned long long, TempCachingBlock*> cached_blocks;
     std::vector<size_t> block_ids;  
     size_t tot_block_id;
     std::unique_ptr<TempCachingBlock*[]> occupied_id_mapper;              
 
 
-    inline TempAllocator(size_t cache_blocks_limit=2) : cache_blocks_limit(cache_blocks_limit), used_memory(0), unused_memory(0), tot_block_id(0), occupied_id_mapper(new TempCachingBlock*[ID_LIMIT]) {
+    inline TempAllocator(size_t cache_blocks_limit=2) : cache_blocks_limit(cache_blocks_limit), tot_block_id(0), occupied_id_mapper(new TempCachingBlock*[ID_LIMIT]) {
         temp_allocators.push_back(this);
     }
     inline TempAllocator(Allocator* underlying, size_t cache_blocks_limit=2) : TempAllocator(cache_blocks_limit) {
