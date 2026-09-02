@@ -21,6 +21,9 @@ CPU-only build (reported, not silent).
 
 Run::  python -m pytest tests/backends/parity/test_device_parity.py
 """
+import gc
+import sys
+import traceback
 import unittest
 
 import numpy as np
@@ -136,8 +139,6 @@ class TestDeviceParity(JittorTestCase):
 
     _linalg_ok = False
     _linalg_reason = "linalg availability was not probed"
-    _parallel_flag_supported = False
-    _previous_parallel_compiler = None
 
     # float32 kernels on CPU vs accelerator: allow accumulation-order round-off but
     # nothing larger (a real kernel bug is orders of magnitude past this). TWO metrics,
@@ -165,28 +166,44 @@ class TestDeviceParity(JittorTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        # Compile serially for this verifier: otherwise an asynchronous compile error can
-        # surface in the following test and be attributed to the wrong operator.
-        try:
-            cls._previous_parallel_compiler = jt.flags.use_parallel_op_compiler
-            jt.flags.use_parallel_op_compiler = 0
-            cls._parallel_flag_supported = True
-        except Exception:
-            cls._parallel_flag_supported = False
-
-        # Probe only when this accelerator class actually runs. Collection must not compile
-        # or synchronize CUDA kernels.
+        # The parallel op compiler stays ON here (0.16). It used to be switched off for
+        # this whole class, with the reason "otherwise an asynchronous compile error can
+        # surface in the following test and be attributed to the wrong operator". That
+        # reason is real but the remedy was the wrong one: it cost this battery its
+        # compile parallelism -- the dominant term in the CUDA gate, ~227 operators
+        # compiling one kernel at a time -- to work around a *lifetime* bug, not a
+        # concurrency one.
+        #
+        # The mechanism, measured rather than assumed: a Var whose op failed to compile
+        # stays in the graph for as long as anything references it, and every later
+        # ``sync_all(True)`` re-raises that same failure. What holds the reference after
+        # a failed test is the exception's traceback -- the failing frame's locals. So
+        # the next operator's test really is blamed for this operator's kernel, and
+        # serialising the compiler never addressed that: it only made the first report
+        # arrive with a smaller fused op in it. ``_check`` below drops those frames, so
+        # the failure stays where it happened whether or not the compiler is parallel.
+        # ``tests/compiler/test_parallel_compile_attribution.py`` is the proof, on CPU.
+        #
+        # Probe only when this accelerator class actually runs. Collection must not
+        # compile or synchronize CUDA kernels.
         cls._linalg_ok, cls._linalg_reason = _cuda_linalg_works()
 
-    @classmethod
-    def tearDownClass(cls):
-        try:
-            if cls._parallel_flag_supported:
-                jt.flags.use_parallel_op_compiler = cls._previous_parallel_compiler
-        finally:
-            super().tearDownClass()
-
     def _check(self, op):
+        """One operator's parity check, with its runtime state contained.
+
+        A failure here must not travel: see ``setUpClass``. ``clear_frames`` releases
+        the Vars the failing frames hold (pytest keeps the traceback for the report),
+        so the poisoned op is collectable before the next test builds a graph. The
+        report keeps its message and line numbers; only ``--showlocals`` gets less.
+        """
+        try:
+            self._compare(op)
+        except Exception:
+            traceback.clear_frames(sys.exc_info()[2])
+            gc.collect()
+            raise
+
+    def _compare(self, op):
         if op.full_name in _LINALG_OPS and not self._linalg_ok:
             self.skipTest(self._linalg_reason)
         samples = op.sample_inputs("cpu", "float32", requires_grad=True)

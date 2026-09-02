@@ -59,7 +59,7 @@ def _lab_root():
     return root.expanduser().resolve()
 
 
-def _session_environment(session):
+def _session_environment(session, serial_compile=False):
     state = _lab_root() / "_state" / "test-suite" / session
     (state / "home").mkdir(parents=True, exist_ok=True)
     (state / "tmp").mkdir(parents=True, exist_ok=True)
@@ -70,7 +70,14 @@ def _session_environment(session):
     environment["JITTOR_TEST_DEVICES"] = "cpu"
     environment["REAL_TORCH_SITE"] = ""
     environment["JITTOR_TORCH_SHIM"] = "1" if session == "torch" else "0"
-    environment["use_parallel_op_compiler"] = "0"
+    # Set, never inherited -- like every other name in this function. On by
+    # default, like the gate: it used to be forced off here with no reason
+    # recorded, which made this script measure something `nox -s cpu` does not
+    # run, and the parallel op compiler is where a cold whole-tree run's time
+    # goes. ``--serial-compile`` restores the old value for bisecting a compile
+    # failure; tests/compiler/test_parallel_compile_attribution.py is why that
+    # is a diagnostic convenience and not a correctness measure.
+    environment["use_parallel_op_compiler"] = "0" if serial_compile else "16"
     # Jittor's segfault handler shells out to gdb for a backtrace. That is
     # useful interactively and ruinous in a suite: gdb ptrace-stops the process
     # first, and if gdb itself dies -- on this distribution it crashes into the
@@ -130,11 +137,34 @@ def _warmup(environment):
     return 1, "\n".join(outputs)
 
 
-def _run(session, extra, quiet):
-    environment = _session_environment(session)
+def _tier_arguments(tier):
+    """What the fast tier drops, from the same list the nox session reads."""
+    if tier != "smoke":
+        return []
+    return ["-m", "not slow"]
+
+
+def _parallel_arguments(jobs):
+    """xdist, per file. ``noxfile._xdist`` explains why not per test."""
+    if not jobs or jobs <= 1:
+        return []
+    try:
+        import xdist  # noqa: F401
+    except ImportError:
+        raise SystemExit(
+            "--jobs %d needs pytest-xdist (requirements/dev-tools.txt); "
+            "running serially instead would report a wall clock for a gate "
+            "nobody runs" % jobs)
+    return ["-n", str(jobs), "--dist", "loadfile"]
+
+
+def _run(session, extra, quiet, tier="full", jobs=0, serial_compile=False):
+    environment = _session_environment(session, serial_compile=serial_compile)
     command = [PYTHON, "-m", "pytest"]
     command += _session_arguments(session)
     command += ["-p", "no:cacheprovider", "--timeout=900"]
+    command += _tier_arguments(tier)
+    command += _parallel_arguments(jobs)
     command += ["-q"] if quiet else []
     command += extra
     print("=== {} session ===".format(session), flush=True)
@@ -156,6 +186,14 @@ def _run(session, extra, quiet):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--session", choices=SESSIONS, action="append", default=None)
+    parser.add_argument("--tier", choices=("smoke", "full"), default="full",
+                        help="smoke drops the files recorded in "
+                             "tests/_helpers/tiers.SLOW_FILES")
+    parser.add_argument("--jobs", type=int, default=0,
+                        help="xdist workers per session (default: one process)")
+    parser.add_argument("--serial-compile", action="store_true",
+                        help="use_parallel_op_compiler=0; for bisecting a "
+                             "compile failure, not for timing a gate")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("extra", nargs="*", help="extra pytest arguments")
     options = parser.parse_args()
@@ -164,7 +202,10 @@ def main():
     results = {}
     failures = []
     for session in sessions:
-        code, counts, output = _run(session, options.extra, not options.verbose)
+        code, counts, output = _run(
+            session, options.extra, not options.verbose,
+            tier=options.tier, jobs=options.jobs,
+            serial_compile=options.serial_compile)
         results[session] = (code, counts)
         for line in output.splitlines():
             if line.startswith("FAILED ") or line.startswith("ERROR "):

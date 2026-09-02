@@ -417,6 +417,13 @@ def report_runtime_state_left_behind(request):
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    if not _SELECTED_FILES:
+        # The xdist controller collects nothing, so it never reached the
+        # collection-time snapshot. Taking it here is the exception the
+        # docstring on `_snapshot_selected_files` warns about, and it is the
+        # right trade: a slightly later reading of the tree beats reporting
+        # "no file collected nothing" because nothing was ever recorded.
+        _snapshot_selected_files(config)
     _report_files_that_executed_nothing(terminalreporter, config)
     if _MISSING_REAL_TORCH:
         terminalreporter.write_sep(
@@ -430,6 +437,16 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
         for nodeid, reason in _MISSING_REAL_TORCH:
             terminalreporter.write_line("%s  (%s)" % (nodeid, reason))
     if not _STATE_LEAKS:
+        workers = getattr(config.option, "numprocesses", None)
+        destination = os.environ.get("JITTOR_TEST_STATE_LEAK_REPORT", "").strip()
+        if workers and destination:
+            terminalreporter.write_sep(
+                "=", "runtime state survey ran per worker")
+            terminalreporter.write_line(
+                "This is the xdist controller, which executed no test file. "
+                "Each worker wrote its own report next to %s (one file per "
+                "worker id); which files shared a process is a per-worker fact."
+                % destination)
         return
     terminalreporter.write_sep("=", "runtime state left behind by a test file")
     terminalreporter.write_line(
@@ -441,12 +458,36 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
         terminalreporter.write_line(path)
         for change in changes:
             terminalreporter.write_line("    " + change)
+    _write_state_leak_report()
+
+
+def _write_state_leak_report(suffix=""):
     destination = os.environ.get("JITTOR_TEST_STATE_LEAK_REPORT", "").strip()
-    if destination:
-        with open(destination, "w") as handle:
-            for path, changes in _STATE_LEAKS:
-                for change in changes:
-                    handle.write("%s\t%s\n" % (path, change))
+    if not destination:
+        return
+    with open(destination + suffix, "w") as handle:
+        for path, changes in _STATE_LEAKS:
+            for change in changes:
+                handle.write("%s\t%s\n" % (path, change))
+
+
+def _xdist_worker_id(config):
+    return getattr(config, "workerinput", {}).get("workerid")
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Flush this worker's survey when the summary hook will not run here.
+
+    ``pytest_terminal_summary`` runs on the xdist controller only, and the
+    survey above is per process: the moment the gate went parallel the report
+    would have gone silently empty, which is the exact shape of failure -- a
+    check that stops checking without anyone noticing -- the survey exists to
+    catch. Each worker writes its own file instead; which files shared a process
+    is a per-worker fact anyway, so a merged report would be misleading.
+    """
+    worker = _xdist_worker_id(session.config)
+    if worker is not None:
+        _write_state_leak_report(suffix="." + worker)
 
 
 # --------------------------------------------------------------------------
@@ -474,9 +515,22 @@ def pytest_runtest_logreport(report):
     difference visible.
     """
     relative = _relative_to_repo(report.fspath)
+    # Also the xdist controller's only view of what was collected: the
+    # collection hook runs in the workers, so without this the per-file
+    # accounting below reports nothing at all the moment the gate goes
+    # parallel -- a check that stops checking, silently.
+    _FILES_WITH_ITEMS.add(relative)
     record = _FILE_OUTCOMES.setdefault(
         relative, {"executed": 0, "skipped": 0, "reasons": set()})
-    if report.when == "call" and not report.skipped:
+    # An expected failure ran, and it proved something: that a registered defect
+    # is still there. pytest reports it as *skipped* with a `wasxfail` note, so
+    # counting it as a skip would let a file whose only case is an xfail look
+    # like a file that executed nothing -- and its "skip reason" is then the
+    # assertion text, which can match an environment pattern by accident and
+    # explain the emptiness away. Measured: an xfail whose message happened to
+    # contain the word "dataset" was accepted as "this machine has no dataset".
+    if report.when == "call" and (not report.skipped
+                                  or hasattr(report, "wasxfail")):
         record["executed"] += 1
     elif report.skipped and report.when in ("setup", "call"):
         record["skipped"] += 1

@@ -78,6 +78,7 @@ ASV = "asv==0.6.6"
 BUILD = "build==1.3.0"
 PYTEST = "pytest==7.4.4"
 PYTEST_TIMEOUT = "pytest-timeout==2.3.1"
+PYTEST_XDIST = "pytest-xdist==3.6.1"
 SCIPY = "scipy==1.13.1"
 SETUPTOOLS = "setuptools==83.0.0"
 WHEEL = "wheel==0.45.1"
@@ -201,10 +202,13 @@ CPU_TORCH_ORACLE_TESTS = (
     "tests/nn/test_relu.py",
     "tests/models/test_network_training_parity.py",
 )
+#: Sharded across workers by itself (0.16); named so the CUDA session can lift
+#: it out of the sequential group without the two lists drifting apart.
+DEVICE_PARITY_TEST = "tests/backends/parity/test_device_parity.py"
 CUDA_TESTS = (
     "tests/backends/cuda",
     "tests/backends/parity/test_dtype_coverage.py",
-    "tests/backends/parity/test_device_parity.py",
+    DEVICE_PARITY_TEST,
     "tests/compat/torch/test_torch_compat_cuda_tf32.py",
     "tests/ops/test_ops.py",
     "tests/models/test_network_training_parity.py",
@@ -471,6 +475,51 @@ def _by_process_mode(targets):
         path = str(target).split("::", 1)[0]
         (torch if path.startswith(TORCH_MODE_PATHS) else native).append(target)
     return native, torch
+
+
+#: What both CPU tiers install. One list, because a test that passes in the
+#: fast tier and fails in the full one because a dependency was only in the
+#: latter is a difference nobody can read off the failure.
+CPU_GATE_REQUIREMENTS = (
+    "astunparse==1.6.3",
+    IPYKERNEL,
+    JUPYTEXT,
+    NBCLIENT,
+    NBFORMAT,
+    "numpy==1.26.4",
+    "pillow==11.0.0",
+    PYTEST,
+    PYTEST_TIMEOUT,
+    PYTEST_XDIST,
+    SCIPY,
+    SETUPTOOLS,
+    "tqdm==4.67.1",
+)
+
+#: Workers a CPU gate runs with. Sized for the CI runner, not for the largest
+#: machine anyone has: ``tests/_helpers/tiers.SMOKE_WORKERS`` is the same number
+#: and the fast tier's budget is checked against it, so the two have to agree.
+GATE_WORKERS = int(os.environ.get("JITTOR_GATE_WORKERS", "4"))
+
+
+def _xdist(workers, distribution="loadfile"):
+    """pytest-xdist arguments, or nothing when the gate stays in one process.
+
+    ``loadfile`` by default, and that is the load-bearing part. Cross-file state
+    leakage is a known and surveyed property of this tree (0.12/0.15): the
+    survey in ``tests/conftest.py`` measures what each *file* leaves behind, and
+    several files' tests depend on running in their written order. Distributing
+    per test (``--dist load``) would break both at once and turn a catalogued
+    problem into an irreproducible one. Per file, a worker sees a subset of the
+    files in a fixed order -- the same kind of run the survey describes.
+
+    ``load`` is correct for a *generated* battery where every case is
+    independent by construction; ``test_device_parity.py`` is the one such
+    caller (0.16) and passes it explicitly.
+    """
+    if not workers or workers <= 1:
+        return ()
+    return ("-n", str(workers), "--dist", distribution)
 
 
 def _run_pytest(session, defaults, env, runner=None):
@@ -1403,14 +1452,20 @@ def py313(session):
     _upper_python_compatibility(session, "3.13", "py313", "numpy>=2.1,<3.0")
 
 
-@nox.session(python="3.11", venv_backend="venv")
-def cpu(session):
-    """Run the whole test tree on CPU, in both process modes, on a clean cache."""
+#: One CPU probe for both tiers: the gate has to prove it is running the tree it
+#: thinks it is before it reports anything about the tree.
+_CPU_PROBE = (
+    "import jittor as jt; "
+    "assert not jt.compiler.has_cuda; "
+    "assert not getattr(jt.compiler, 'has_acl', 0); "
+    "x = (jt.array([1.0, 2.0]) * 2).sum(); x.sync(); "
+    "assert float(x.item()) == 6.0"
+)
+
+
+def _cpu_gate_env(session):
+    """The environment both CPU tiers run in, and what it refuses to inherit."""
     _root, env = _session_env(session, "cpu")
-    real_torch_site = os.environ.get("REAL_TORCH_SITE", "").strip()
-    require_real_torch = os.environ.get("JITTOR_REQUIRE_REAL_TORCH", "").strip() == "1"
-    if require_real_torch and not real_torch_site:
-        session.error("JITTOR_REQUIRE_REAL_TORCH=1 requires REAL_TORCH_SITE")
     # Nox overlays this mapping on the parent environment, so removing the key
     # would still leak a caller-provided real Torch into ordinary Jittor tests.
     env["REAL_TORCH_SITE"] = ""
@@ -1419,28 +1474,58 @@ def cpu(session):
     # Explicit, not inherited: a developer with the shim exported would
     # otherwise run the native half of the gate in Torch mode and never know.
     env["JITTOR_TORCH_SHIM"] = "0"
-    session.install(
-        "astunparse==1.6.3",
-        IPYKERNEL,
-        JUPYTEXT,
-        NBCLIENT,
-        NBFORMAT,
-        "numpy==1.26.4",
-        "pillow==11.0.0",
-        PYTEST,
-        PYTEST_TIMEOUT,
-        SCIPY,
-        SETUPTOOLS,
-        "tqdm==4.67.1",
-    )
-    probe = (
-        "import jittor as jt; "
-        "assert not jt.compiler.has_cuda; "
-        "assert not getattr(jt.compiler, 'has_acl', 0); "
-        "x = (jt.array([1.0, 2.0]) * 2).sum(); x.sync(); "
-        "assert float(x.item()) == 6.0"
-    )
-    session.run("python", "-c", probe, env=env)
+    # Stated rather than defaulted. The gate compiles kernels in parallel --
+    # that is where a whole-tree run's time goes -- and an "asynchronous compile
+    # error lands on the wrong test" report used to be answered by switching it
+    # off somewhere (see 0.16). It is a lifetime bug, not a concurrency one, and
+    # it is fixed where it lives; the gate does not pay for the workaround.
+    env["use_parallel_op_compiler"] = os.environ.get(
+        "use_parallel_op_compiler", "16")
+    return env
+
+
+@nox.session(python="3.11", venv_backend="venv")
+def smoke(session):
+    """The pull-request tier: the whole tree minus the recorded slow files.
+
+    Fast is the whole point, so say what is traded for it. This tier runs every
+    file ``gate_scope`` reaches except those listed in
+    ``tests/_helpers/tiers.SLOW_FILES``, each with its measured cost and the
+    reason it is worth an entry; ``nox -s cpu`` runs all of them and nothing is
+    dropped from the tree. The oracle comparison against an independent PyTorch
+    and the manual probes stay in the full tier too: both need a second
+    interpreter or a Jupyter kernel, and neither is what a pull request is
+    waiting to hear.
+    """
+    env = _cpu_gate_env(session)
+    session.install(*CPU_GATE_REQUIREMENTS)
+    session.run("python", "-c", _CPU_PROBE, env=env)
+    if session.posargs:
+        _run_pytest(session, (), env)
+        return
+    fast = ("-m", "not slow") + _xdist(GATE_WORKERS)
+    _run_pytest_once(session, gate_native_arguments() + fast, env)
+    torch_env = env.copy()
+    torch_env["JITTOR_TORCH_SHIM"] = "1"
+    _run_pytest_once(session, gate_torch_arguments() + fast, torch_env)
+
+
+@nox.session(python="3.11", venv_backend="venv")
+def cpu(session):
+    """The full tier: the whole test tree on CPU, in both process modes.
+
+    Everything ``nox -s smoke`` runs plus everything it defers: the files listed
+    in ``tests/_helpers/tiers.SLOW_FILES``, the manual probes, and the oracle
+    comparison against an independent PyTorch. Nothing here is optional -- the
+    fast tier is an ordering, not a subset of what is verified.
+    """
+    real_torch_site = os.environ.get("REAL_TORCH_SITE", "").strip()
+    require_real_torch = os.environ.get("JITTOR_REQUIRE_REAL_TORCH", "").strip() == "1"
+    if require_real_torch and not real_torch_site:
+        session.error("JITTOR_REQUIRE_REAL_TORCH=1 requires REAL_TORCH_SITE")
+    env = _cpu_gate_env(session)
+    session.install(*CPU_GATE_REQUIREMENTS)
+    session.run("python", "-c", _CPU_PROBE, env=env)
     if session.posargs:
         _run_pytest(session, (), env)
         return
@@ -1448,10 +1533,11 @@ def cpu(session):
     # changes lazy execution, reduction defaults and gradient semantics -- so a
     # single `pytest tests` run cannot assert both. Each session still selects
     # by exclusion, so a new test file is gated the moment it is written.
-    _run_pytest_once(session, gate_native_arguments(), env)
+    parallel = _xdist(GATE_WORKERS)
+    _run_pytest_once(session, gate_native_arguments() + parallel, env)
     torch_env = env.copy()
     torch_env["JITTOR_TORCH_SHIM"] = "1"
-    _run_pytest_once(session, gate_torch_arguments(), torch_env)
+    _run_pytest_once(session, gate_torch_arguments() + parallel, torch_env)
     # The manual probes get their own process, which is the whole reason they
     # are marked: they drive Jupyter kernels and spawn their own children, and
     # they do not survive being run after a thousand other tests have already
@@ -1707,7 +1793,29 @@ def cuda(session):
         "assert float(x.item()) == 6.0"
     )
     session.run(python, "-c", probe, env=env, external=True)
-    _run_pytest(session, CUDA_TESTS, env, runner=python)
+    if session.posargs:
+        _run_pytest(session, (), env, runner=python)
+        return
+    rest = tuple(target for target in CUDA_TESTS if target != DEVICE_PARITY_TEST)
+    _run_pytest(session, rest, env, runner=python)
+    # 0.16. The device-parity battery is one generated case per operator, ~227 of
+    # them, each running the same forward and backward on CPU and on the
+    # accelerator. Every case is independent by construction -- it builds its own
+    # inputs from its own OpInfo sample -- which is what makes `--dist load`
+    # (distribute per test) correct here and wrong for the tree at large.
+    #
+    # Sharding is xdist's, not a hand-rolled slice, on purpose: a home-made
+    # "op_db[i::n]" that drops a case shows up as a *faster, greener* gate, which
+    # is the worst possible failure mode for a verifier. xdist checks that every
+    # worker collected the same set and accounts for every test it hands out, so
+    # "an operator stopped being checked" cannot pass silently.
+    _run_pytest_once(
+        session,
+        (DEVICE_PARITY_TEST,) + _xdist(GATE_WORKERS, "load"),
+        _mode_env(env, (DEVICE_PARITY_TEST,)),
+        runner=python,
+        timeout=1800,
+    )
 
 
 @nox.session(python=False)

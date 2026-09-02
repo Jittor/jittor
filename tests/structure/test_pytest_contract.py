@@ -245,12 +245,19 @@ def test_complete_suite_runner_owns_cpu_and_process_mode_environment(monkeypatch
 
     native = module._session_environment("native")
     torch = module._session_environment("torch")
+    serial = module._session_environment("native", serial_compile=True)
 
     for environment in (native, torch):
         assert environment["nvcc_path"] == ""
         assert environment["JITTOR_TEST_DEVICES"] == "cpu"
         assert environment["REAL_TORCH_SITE"] == ""
-        assert environment["use_parallel_op_compiler"] == "0"
+        # Owned, not inherited: the caller exported 1 above and the runner
+        # decides. The value is now the gate's own default rather than 0 --
+        # this script used to force the parallel op compiler off, which made it
+        # time a configuration `nox -s cpu` never runs.
+        assert environment["use_parallel_op_compiler"] == "16"
+    # ...and --serial-compile is a stated override, not the inherited value.
+    assert serial["use_parallel_op_compiler"] == "0"
     assert native["JITTOR_TORCH_SHIM"] == "0"
     assert torch["JITTOR_TORCH_SHIM"] == "1"
     assert native["JITTOR_HOME"] != torch["JITTOR_HOME"]

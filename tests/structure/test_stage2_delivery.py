@@ -106,7 +106,13 @@ class TestStage2Delivery(unittest.TestCase):
         structure = functions["structure"]
         packaging = functions["packaging"]
         benchmark = functions["benchmark"] + functions["_record_asv"]
-        cpu = functions["cpu"]
+        # Both CPU tiers plus the environment helper they share (0.15): the
+        # claims below are about what the CPU gate does, and after the split
+        # they are spread over three functions rather than one. Asserting only
+        # `cpu` would have gone quietly green while `smoke` -- the tier a pull
+        # request actually waits for -- inherited none of them.
+        cpu = (functions["cpu"] + functions["smoke"]
+               + functions["_cpu_gate_env"])
         upper_python = functions["_upper_python_compatibility"]
         py312 = functions["py312"]
         py313 = functions["py313"]
@@ -152,8 +158,15 @@ class TestStage2Delivery(unittest.TestCase):
         for target in ("tests/optim/test_optimizer.py", "tests/core/test_array.py"):
             self.assertIn(target, self._cpu_gate_files(), target)
         self.assertIn('env["REAL_TORCH_SITE"] = ""', cpu)
-        self.assertIn("SCIPY", cpu)
+        self.assertIn("CPU_GATE_REQUIREMENTS", cpu)
+        self.assertIn("SCIPY,", source)
         self.assertIn('SCIPY = "scipy==', source)
+        # The fast tier is a deferral, not a second selection: it starts from the
+        # same two gate_scope selections and drops what tiers.py records.
+        smoke = functions["smoke"]
+        self.assertIn("gate_native_arguments()", smoke)
+        self.assertIn("gate_torch_arguments()", smoke)
+        self.assertIn('"-m", "not slow"', smoke)
         development_requirements = (self.repo_root / "requirements" / "dev-tools.txt").read_text(
             encoding="utf-8"
         )
