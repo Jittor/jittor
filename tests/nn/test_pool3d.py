@@ -121,6 +121,134 @@ class TestMaxPool3dIndices(unittest.TestCase):
         np.testing.assert_allclose(value.numpy(), plain, rtol=1e-6, atol=1e-6)
 
 
+def _reference_maxpool3d_grad(x, dout, kernel, stride, padding, ceil_mode=False):
+    """Route each output gradient to the first argmax of its window."""
+    _, indices = _reference_maxpool3d(x, kernel, stride, padding, ceil_mode)
+    n, c, depth, height, width = x.shape
+    grad = np.zeros((n, c, depth * height * width), dtype=np.float64)
+    flat_index = indices.reshape(n, c, -1)
+    flat_dout = dout.reshape(n, c, -1)
+    for bi in range(n):
+        for ci in range(c):
+            for i, g in zip(flat_index[bi, ci], flat_dout[bi, ci]):
+                grad[bi, ci, i] += g
+    return grad.reshape(x.shape)
+
+
+def _pool3d_grad(x, kernel, stride, padding, op, ceil_mode, use_cuda, seed):
+    jt.flags.use_cuda = use_cuda
+    try:
+        xv = jt.array(x)
+        y = jt.nn.Pool3d(
+            kernel, stride=stride, padding=padding, op=op, ceil_mode=ceil_mode
+        )(xv)
+        assert tuple(y.shape) == seed.shape, (tuple(y.shape), seed.shape)
+        grad, = jt.grad((y * jt.array(seed)).sum(), [xv])
+        return grad.numpy().copy(), y.numpy().copy()
+    finally:
+        jt.flags.use_cuda = 0
+
+
+class TestPool3dBackward(unittest.TestCase):
+    """The CUDA backward kernel looped to ``out_shape`` (the *input* extent).
+
+    ``out`` in a ``cuda_grad_src`` is the gradient w.r.t. the input, so its
+    shape is the input's; the loop must be bounded by ``pout_shape`` (the
+    forward output), which is what the launch configuration, the CPU backward
+    and the 2D kernels all use.  Looping to ``out_shape`` reads ``pout``/``dout``
+    out of bounds and accumulates gradient that does not exist.
+    """
+
+    #: shapes small enough for the python reference, big enough that the input
+    #: extent differs from the pooled extent in every dimension.
+    CASES = (
+        (2, 2, 0),
+        ((2, 3, 2), (2, 2, 3), 0),
+        (3, 2, 0),
+        (3, 2, 1),
+    )
+
+    @staticmethod
+    def _inputs(shape, distinct=True):
+        rng = np.random.default_rng(20240902)
+        if distinct:
+            x = rng.permutation(int(np.prod(shape))).astype("float64")
+            x = (x / x.size).reshape(shape).astype("float32")
+        else:
+            # A small alphabet makes ties common, which is what an
+            # out-of-bounds ``pout`` read needs in order to be mistaken for a
+            # real maximum by the ``@pout == @in0`` test in the kernel.
+            x = rng.integers(0, 4, size=shape).astype("float32")
+        return x
+
+    def _seed(self, shape, kernel, stride, padding, ceil_mode):
+        kernel, stride, padding = _triple(kernel), _triple(stride), _triple(padding)
+        sizes = [shape[0], shape[1]] + [
+            _out_size(shape[2 + i], kernel[i], stride[i], padding[i], ceil_mode)
+            for i in range(3)
+        ]
+        rng = np.random.default_rng(7)
+        return rng.standard_normal(sizes).astype("float32")
+
+    def test_max_backward_cpu_matches_reference(self):
+        shape = (2, 2, 6, 7, 8)
+        for kernel, stride, padding in self.CASES:
+            with self.subTest(kernel=kernel, stride=stride, padding=padding):
+                x = self._inputs(shape)
+                seed = self._seed(shape, kernel, stride, padding, False)
+                got, _ = _pool3d_grad(x, kernel, stride, padding, "maximum", False, 0, seed)
+                expected = _reference_maxpool3d_grad(
+                    x, seed.astype(np.float64), kernel, stride, padding
+                )
+                np.testing.assert_allclose(got, expected, rtol=1e-5, atol=1e-5)
+
+    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    def test_max_backward_cuda_matches_reference(self):
+        shape = (2, 2, 6, 7, 8)
+        for kernel, stride, padding in self.CASES:
+            with self.subTest(kernel=kernel, stride=stride, padding=padding):
+                x = self._inputs(shape)
+                seed = self._seed(shape, kernel, stride, padding, False)
+                got, _ = _pool3d_grad(x, kernel, stride, padding, "maximum", False, 1, seed)
+                expected = _reference_maxpool3d_grad(
+                    x, seed.astype(np.float64), kernel, stride, padding
+                )
+                np.testing.assert_allclose(got, expected, rtol=1e-5, atol=1e-5)
+
+    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    def test_cuda_backward_matches_cpu_backward(self):
+        shape = (2, 2, 6, 7, 8)
+        for op, ceil_mode in (("maximum", False), ("maximum", True), ("mean", True)):
+            for kernel, stride, padding in self.CASES:
+                for distinct in (True, False):
+                    if op == "mean" and not distinct:
+                        continue
+                    with self.subTest(op=op, kernel=kernel, stride=stride,
+                                      padding=padding, ceil_mode=ceil_mode,
+                                      distinct=distinct):
+                        x = self._inputs(shape, distinct)
+                        seed = self._seed(shape, kernel, stride, padding, ceil_mode)
+                        on_cpu, y_cpu = _pool3d_grad(
+                            x, kernel, stride, padding, op, ceil_mode, 0, seed)
+                        on_cuda, y_cuda = _pool3d_grad(
+                            x, kernel, stride, padding, op, ceil_mode, 1, seed)
+                        np.testing.assert_allclose(y_cuda, y_cpu, rtol=1e-6, atol=1e-6)
+                        np.testing.assert_allclose(on_cuda, on_cpu, rtol=1e-5, atol=1e-5)
+
+    def test_mean_backward_conserves_mass(self):
+        """Every output spreads ``dout`` over exactly ``count`` inputs."""
+        shape = (2, 2, 6, 7, 8)
+        for kernel, stride, padding in ((2, 2, 0), ((2, 3, 2), (2, 2, 3), 0), (3, 2, 0)):
+            for use_cuda in ((0, 1) if jt.compiler.has_cuda else (0,)):
+                with self.subTest(kernel=kernel, stride=stride, use_cuda=use_cuda):
+                    x = self._inputs(shape)
+                    seed = self._seed(shape, kernel, stride, padding, True)
+                    grad, _ = _pool3d_grad(
+                        x, kernel, stride, padding, "mean", True, use_cuda, seed)
+                    self.assertAlmostEqual(
+                        float(grad.sum()), float(seed.sum()), places=2)
+
+
 class TestMaxPool3dIndicesCuda(TestMaxPool3dIndices):
     @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
     def setUp(self):

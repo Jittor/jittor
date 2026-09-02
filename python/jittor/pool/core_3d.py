@@ -159,9 +159,9 @@ class Pool3d(jt.Module):
                         int s2 = blockDim.z * gridDim.x;
                         int i1 = blockIdx.y;
                         int i0 = blockIdx.z;
-                        for (int i4 = p4; i4 < out_shape4; i4 += s4)
-                        for (int i3 = p3; i3 < out_shape3; i3 += s3)
-                        for (int i2 = p2; i2 < out_shape2; i2 += s2)
+                        for (int i4 = p4; i4 < pout_shape4; i4 += s4)
+                        for (int i3 = p3; i3 < pout_shape3; i3 += s3)
+                        for (int i2 = p2; i2 < pout_shape2; i2 += s2)
                                 {{ {backward_body} }}
                     }}
                     cudaMemsetAsync(out_p, 0, out->size);
