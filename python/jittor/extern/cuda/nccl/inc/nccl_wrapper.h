@@ -66,4 +66,20 @@ Raises (LOGf) on a dtype NCCL has no type for, instead of expanding to nothing.
 */
 ncclDataType_t nccl_dtype(NanoString dtype);
 
+/**
+Build this rank's NCCL communicator. Call once, after `import jittor` has
+loaded this module; safe to call again (it returns immediately).
+
+This used to be a static constructor (`static nccl_initer nccl_init;`), so it
+ran during dlopen. HCCL moved off that shape and its wrapper says why: a
+blocking rendezvous plus a blocking communicator build at load time hangs
+`import jittor` with no way to interrupt or report it. NCCL kept the static
+constructor, and there it is worse -- a failure has nowhere to go. The
+exception has to unwind through the C frames of the dynamic loader, finds no
+handler, and the process dies in std::terminate; `import jittor` never gets to
+raise anything a caller could catch or a traceback could point at. 8.09.
+*/
+// @pyjt(nccl_init)
+void nccl_init();
+
 } // jittor

@@ -11,6 +11,7 @@
 #include "nccl_wrapper.h"
 #include "event_queue.h"
 #include "misc/collective_dtype.h"
+#include "misc/file_rendezvous.h"
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -89,9 +90,12 @@ void nccl_shutdown() {
     comm = nullptr;
 }
 
-struct nccl_initer {
-
-nccl_initer() {
+// See nccl_wrapper.h for why this is a function called from Python rather than
+// the static constructor it used to be. nccl_comm_created (set by
+// init_nccl_comm, cleared by nccl_shutdown) is the "already done" flag, so
+// there is one piece of state rather than two that can disagree.
+void nccl_init() {
+    if (nccl_comm_created) return;
     int device_count = get_device_count();
     if (!device_count) return;
     // ---- MPI-free env/file rendezvous (torchrun-style; NO mpirun) ----
@@ -116,26 +120,31 @@ nccl_initer() {
         event_queue.run_sync([]() {
             checkCudaErrors(cudaSetDevice(nccl_device_id));
         });
+        // Rendezvous through the shared helper (misc/file_rendezvous.h), which
+        // fails loudly on timeout. What this replaces did not: non-zero ranks
+        // polled for a hardcoded 121 s and then fell through WITHOUT CHECKING
+        // WHETHER THEY HAD READ ANYTHING, handing the still-zero id to
+        // ncclCommInitRank. And when JT_NCCL_ROOTINFO_FILE was unset there was
+        // no wait at all: the uninitialized id went straight in. Whether that
+        // ends in a permanent hang or in NCCL's "internal error - please report
+        // this issue to the NCCL developers" depends on the NCCL build; neither
+        // names the rank that never showed up, which is the one thing the
+        // operator needs. 8.09.
+        if (world_size < 1 || world_rank < 0 || world_rank >= world_size)
+            LOGf << "NCCL(env): JT_NCCL_RANK=" >> world_rank
+                 << "is not a rank of a JT_NCCL_WORLD_SIZE=" >> world_size << "job.";
+        rendezvous_require_unlocked(world_size, "NCCL(env)");
+        if (world_size > 1 && (!rf || !rf[0]))
+            LOGf << "NCCL(env): JT_NCCL_WORLD_SIZE=" >> world_size
+                 << "but JT_NCCL_ROOTINFO_FILE is not set. Every rank needs the"
+                    " same path, on a filesystem all of them share, to exchange"
+                    " the NCCL unique id.";
         if (world_rank == 0) {
             checkCudaErrors(ncclGetUniqueId(&id));
-            if (rf) {
-                std::string tmp = std::string(rf) + ".tmp";
-                FILE* f = fopen(tmp.c_str(), "wb");
-                if (f) { fwrite(&id, 1, sizeof(id), f); fclose(f); rename(tmp.c_str(), rf); }
-            }
-        } else if (rf) {
-            for (int i = 0; i < 6000; i++) { // up to ~120s
-                FILE* f = fopen(rf, "rb");
-                if (f) {
-                    fseek(f, 0, SEEK_END); long sz = ftell(f);
-                    if (sz >= (long)sizeof(id)) {
-                        fseek(f, 0, SEEK_SET);
-                        size_t n = fread(&id, 1, sizeof(id), f); fclose(f);
-                        if (n == sizeof(id)) break;
-                    } else fclose(f);
-                }
-                struct timespec ts{0, 20*1000*1000}; nanosleep(&ts, nullptr);
-            }
+            if (rf && rf[0])
+                rendezvous_write(rf, &id, sizeof(id));
+        } else {
+            rendezvous_read(rf, &id, sizeof(id), world_rank, "the NCCL unique id");
         }
         use_device_mpi = true;
         init_nccl_comm(world_size, world_rank);
@@ -163,6 +172,7 @@ nccl_initer() {
         return;
     }
     use_device_mpi = true;
+    rendezvous_require_unlocked(mpi_world_size, "NCCL(MPI)");
     if (mpi_world_rank == 0)
         checkCudaErrors(ncclGetUniqueId(&id));
     MPI_CHECK(MPI_Bcast((void *)&id, sizeof(id), MPI_BYTE, 0, MPI_COMM_WORLD));
@@ -170,12 +180,13 @@ nccl_initer() {
 #endif
 }
 
-~nccl_initer() {
-    nccl_shutdown();
-}
-
+// The communicator is built by nccl_init() now, but something still has to
+// tear it down at exit, so what used to be nccl_initer's destructor lives on
+// by itself.
+struct nccl_finalizer {
+    ~nccl_finalizer() { nccl_shutdown(); }
 };
 
-static nccl_initer nccl_init;
+static nccl_finalizer nccl_final;
 
 } // jittor

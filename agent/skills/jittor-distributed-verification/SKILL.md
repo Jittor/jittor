@@ -120,6 +120,99 @@ python <你的脚本>.py
 `bfloat16` 不能用 numpy 造（`np.dtype("bfloat16")` 不存在）：
 用 `jt.array(x.astype("float32")).cast("bfloat16")`，读回来前先 `.float32()`。
 
+## 单卡就能复现「一个 rank 起不来，其余全挂」
+
+多卡失败模式里最贵的一类不需要多卡去复现：**等一个永远不会到的 peer**。
+非 0 rank 在 rendezvous 上等，根本走不到第二张卡，所以一张卡就够。
+
+```bash
+CUDA_VISIBLE_DEVICES=<一张卡> nvcc_path=/usr/local/cuda/bin/nvcc \
+PATH=/usr/local/cuda/bin:$PATH PYTHONPATH=<worktree>/python \
+JITTOR_HOME=... TMPDIR=... use_nccl=1 \
+JT_NCCL_WORLD_SIZE=2 JT_NCCL_RANK=1 JT_NCCL_LOCAL_RANK=0 \
+JT_NCCL_ROOTINFO_FILE=$TMPDIR/never_written.bin \
+JT_RENDEZVOUS_TIMEOUT_S=5 \
+python -c "import jittor"
+```
+
+**判据**：约 5 秒内退出，且错误里同时有「rendezvous」「rank 1」和那个路径。
+`JT_RENDEZVOUS_TIMEOUT_S` 生效本身就是一半的验收——8.09 之前的轮询是写死的
+6000×20ms，任何环境变量都改不动它。
+
+把 `JT_NCCL_ROOTINFO_FILE` 整个不设，是同一个缺陷的另一张脸（不等待，直接拿
+未初始化的 id 去建通信器）。两条都要测。
+
+去掉 `JT_RENDEZVOUS_TIMEOUT_S`、把 rank 改回 0、world_size 改回 1，就是
+happy path，必须仍然通过——只测失败分支的话，「无条件抛」也能全绿。
+
+### 写这类子进程测试之前，先知道这两个坑
+
+两个都会让**测试进程自己消失**，而不是给你一条失败。
+
+**1. 子进程被信号打死会连带打死父进程。** jittor 在 `utils/log.cc` 里装了 SIGCHLD
+处理器：任何 `si_code != CLD_EXITED` 的子进程都被当成 OOM，父进程直接
+`_Exit(1)`。`_Exit` **不刷 stdio**，所以 pytest 会**一个字都不输出**、退出码 1。
+它看起来不像崩溃，看起来像什么都没发生。
+
+**2. `import jittor` 失败会在退出时 abort（CUDA 构建）。** 全局 `EventQueue`
+起了一个 worker 线程，注销它的 `core.cleanup()` 只由**跑完**的 import 挂上
+atexit。没跑完时 `~std::thread` 落在 joinable 的线程上：
+`terminate called without an active exception` + SIGABRT，接着触发第 1 条。
+这是 jittor 自己的退出期缺陷，和被测的东西无关。
+
+于是这类测试要两层包装（`tests/distributed/test_nccl_rendezvous_timeout.py`
+是现成的样板）：
+
+- **最里层**（真正 import jittor 的那个）：`try: import jittor / except: 打印
+  traceback，flush，`os._exit(9)`。绕开解释器退出期，就没有第 2 条。
+  用一个**独特的退出码**而不是「非 0」——它证明失败是以**可捕获的 Python 异常**
+  回来的，而不是从静态构造器里 unwind 进动态链接器变成 terminate。
+- **中间层**：一个**不 import jittor** 的普通 python，用 subprocess 跑最里层，
+  把被信号打死的孙进程翻译成 shell 风格的 `128+signum` 退出码。它没有 SIGCHLD
+  处理器，所以第 1 条打不到 pytest。少了这层，拿这个测试去跑**修复前**的代码
+  不会得到一条红的断言，只会得到「pytest 凭空消失」。
+
+## 「等别的 rank」和「拿着编译锁」不能同时发生
+
+`jittor.lock` 是**整个缓存目录一把 flock**，而 `import jittor` 从头到尾都握着它
+（`jittor/__init__.py` 的 `with lock.lock_scope():`）。所以：
+
+> **任何会阻塞等待其他 rank 的动作，都必须在释放编译锁之后做。**
+
+否则就是死锁：这个 rank 拿着锁等别人，别人要拿这把锁才能编译、才能走到会合点。
+`compile_custom_ops` 里那句 `with lock.unlock_scope():` 包住 dlopen（注释写的是
+"unlock scope when initialize"）就是为这个存在的——通信器原本由 dlopen 期的静态构造器建，
+所以正好落在锁外。**把它改成显式调用就同时把它挪回了锁内**，2 卡冷缓存 MPI 跑立刻死锁。
+
+现在 `setup_nccl()` / `setup_hccl()` 都用 `lock.unlock_scope()` 包住 init 调用，
+`misc/file_rendezvous.h` 里的 `rendezvous_require_unlocked()` 在真去等之前检查一次，
+拿着锁就直接报错而不是挂死。
+
+### 认出它（症状是「什么都没有」）
+
+死锁期间**没有任何输出**：一个 rank 100% CPU（OpenMPI 的集合通信是忙等），
+其余 0% 睡在 flock 上。三步确认：
+
+```bash
+# 1. 谁在忙、谁在睡
+ps -o pid,stat,pcpu,wchan:30 -p <每个 rank 的 pid>
+#    R + 99% = 忙等在 MPI 里；S + hrtimer_nanosleep + 0% = 在排队等锁
+
+# 2. 锁在谁手里（jittor 会把持有者写进锁文件本身）
+find $JITTOR_HOME -name jittor.lock -exec sh -c 'echo "== $1"; head -c 400 "$1"' _ {} \;
+#    输出 {"pid":..., "time":..., "cmd":...}
+
+# 3. 那个 pid 是不是正好就是「忙等的那个」。是 -> 就是这个死锁。
+```
+
+**判据**：持有锁的 pid 同时是 `R`+99% 且没有编译器子进程
+（`ps --ppid <pid>`）、缓存里几分钟没有新文件
+（`find $JITTOR_HOME/.cache -newermt "-3 minutes" -type f`）——那它不是在编译，
+是在等人。
+
+`JT_LOCK_TIMEOUT`（默认 1800s）最终会让等锁的一方报错，但等半小时才知道太贵；
+上面三步一分钟就能定性。
+
 ## 分布式里最难测的一类：静默不执行
 
 分布式的坏结果很少是异常，多数是**该做的事没做**：集合通信被跳过、参数没广播、
@@ -194,6 +287,13 @@ with scope: assertFalse(三份)                                                #
 
 - **第一次多进程跑很慢**：`jittor.lock` 是 flock 互斥的，N 个 rank 的首次编译是**串行**的。
   按单进程耗时设超时一定会误判成挂死。用哨兵文件等，别用 `pgrep`。
+- **别在同一个 `JITTOR_HOME` 里同时跑两份活**（哪怕都是你自己的）。那把锁是整个缓存目录
+  一把，不是每个 cfg 一把：一个 `mpirun -np 2` 的首次编译会让你另开的那条 pytest 干等十几
+  分钟，看起来完全像挂死。分辨方法——
+  `ps -o stat,pcpu,wchan:30 -p <pid>`：**`S` + `hrtimer_nanosleep` + 0% CPU 是在排队等锁**，
+  `R` + 99% 才是真在编译。要并行就给第二条活另一个 `JITTOR_HOME`（代价是一次全量重编）。
+- **`has_mpi` 变了会换 cfg 目录，也就是全量重编一次核心。** 所以「加上 PATH 再跑一遍
+  MPI 版」不是在原缓存上多跑几个用例，是从零编一棵树。排时间的时候按十分钟起算。
 - **别 `kill -9` 正在编译的 rank**：留下损坏的 JIT 缓存，下次在毫不相干的算子上大面积报错。
 - **`JT_NCCL_WORLD_SIZE` / `JT_HCCL_WORLD_SIZE` 一旦设了，`use_mpi` 会被强制关掉**
   （`compile_extern.py` 里显式 `os.environ["use_mpi"]="0"`），MPI 算子根本不会编译。

@@ -678,6 +678,26 @@ def setup_nccl():
         return_module=True, dlopen_flags=os.RTLD_GLOBAL | os.RTLD_NOW,
         gen_name_="jittor_nccl_core")
     nccl_ops = nccl.ops
+    # Build the communicator explicitly, here, instead of from a static
+    # constructor that ran during the dlopen two lines up. Same reason HCCL
+    # does (see hccl_init): a rendezvous that blocks or fails inside a static
+    # constructor cannot report itself -- the exception unwinds through the
+    # dynamic loader's C frames and aborts the process, so the operator sees
+    # `terminate called after throwing` with no Python traceback. Called here
+    # rather than at the end of import so nothing can observe nccl_ops before
+    # its communicator exists. 8.09.
+    #
+    # THE LOCK MUST BE DROPPED FIRST. This blocks until every other rank
+    # arrives -- MPI_Bcast of the unique id, or the shared-file rendezvous --
+    # and the other ranks cannot arrive while this one holds jittor.lock,
+    # because they need it to compile. compile_custom_ops releases the lock
+    # around its own dlopen for exactly this reason ("unlock scope when
+    # initialize"); taking the communicator build out of that dlopen took it
+    # out of that release too, and a cold two-rank MPI run then deadlocked:
+    # rank 0 spinning in MPI_Bcast holding the lock, rank 1 waiting for the
+    # lock to build its core.
+    with lock.unlock_scope():
+        nccl.nccl_init()
     LOG.vv("Get nccl_ops: "+str(dir(nccl_ops)))
 
 def setup_hccl(no_mpi=False):
@@ -1072,7 +1092,10 @@ if _want_hccl:
         # Initialize the communicator now, after import is otherwise complete.
         # (Doing this in a static ctor at dlopen time hung.)
         LOG.i("setup_hccl: initializing HCCL communicator...")
-        hccl_mod.hccl_init()
+        # Outside the build lock, for the same reason as nccl_init above: this
+        # waits for the other ranks, and they need the lock to get here.
+        with lock.unlock_scope():
+            hccl_mod.hccl_init()
         LOG.i("setup_hccl: HCCL communicator ready")
     except Exception as e:
         if distributed_requested():

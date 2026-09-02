@@ -12,6 +12,7 @@
 #include "event_queue.h"
 #include "acl_jittor.h"
 #include "misc/collective_dtype.h"
+#include "misc/file_rendezvous.h"
 #include <acl/acl.h>
 #include <cstdio>
 #include <cstdlib>
@@ -72,11 +73,24 @@ static bool hccl_init_envfile() {
     const char* rk = getenv("JT_HCCL_RANK");
     const char* lr = getenv("JT_HCCL_LOCAL_RANK");
     const char* rf = getenv("JT_HCCL_ROOTINFO_FILE");
-    if (!ws || !rk || !rf) return false;
+    // JT_HCCL_WORLD_SIZE unset means the launcher did not ask for env mode, so
+    // fall through to the MPI bootstrap. But once it IS set, compile_extern has
+    // already turned MPI off (use_mpi=0) and compiled this module with
+    // JT_HCCL_NO_MPI, so there is nothing to fall back to: a missing rank id or
+    // rootinfo path can only end as a silent single-card run. 8.09.
+    if (!ws) return false;
+    if (!rk || !rf)
+        LOGf << "HCCL(env): JT_HCCL_WORLD_SIZE is set but"
+             << (rk ? "JT_HCCL_ROOTINFO_FILE" : "JT_HCCL_RANK") << "is not."
+                " Every rank needs its own rank id, and one rootinfo path on a"
+                " filesystem all of them share.";
 
     int world_size = atoi(ws);
     int world_rank = atoi(rk);
     int local_rank = lr ? atoi(lr) : world_rank;
+    if (world_size < 1 || world_rank < 0 || world_rank >= world_size)
+        LOGf << "HCCL(env): JT_HCCL_RANK=" >> world_rank
+             << "is not a rank of a JT_HCCL_WORLD_SIZE=" >> world_size << "job.";
 
     uint32_t device_count = 0;
     ACLCHECK(aclrtGetDeviceCount(&device_count));
@@ -84,33 +98,18 @@ static bool hccl_init_envfile() {
     hccl_device_id = local_rank % device_count;
     ACLCHECK(aclrtSetDevice(hccl_device_id));
 
-    string tmp_path = string(rf) + ".tmp";
+    // Shared rendezvous helper (misc/file_rendezvous.h), which throws on a
+    // failed write or a timeout. What it replaces logged at LOGe and returned
+    // false for both, and this function's caller reads false as "env mode not
+    // in use": a rank whose peers never appeared went on to a silent
+    // single-card run instead of failing the job. 8.09.
+    rendezvous_require_unlocked(world_size, "HCCL(env)");
     if (world_rank == 0) {
         HCCLCHECK(HcclGetRootInfo(&root_info));
-        // write atomically: tmp then rename
-        FILE* f = fopen(tmp_path.c_str(), "wb");
-        if (!f) { LOGe << "cannot open rootinfo tmp" << tmp_path; return false; }
-        fwrite(&root_info, 1, HCCL_ROOT_INFO_BYTES, f);
-        fclose(f);
-        rename(tmp_path.c_str(), rf);
+        rendezvous_write(rf, &root_info, HCCL_ROOT_INFO_BYTES);
     } else {
-        // poll for the rootinfo file to appear and be full-size
-        for (int i = 0; i < 6000; i++) { // up to ~120s
-            FILE* f = fopen(rf, "rb");
-            if (f) {
-                fseek(f, 0, SEEK_END);
-                long sz = ftell(f);
-                if (sz >= (long)HCCL_ROOT_INFO_BYTES) {
-                    fseek(f, 0, SEEK_SET);
-                    size_t n = fread(&root_info, 1, HCCL_ROOT_INFO_BYTES, f);
-                    fclose(f);
-                    if (n == HCCL_ROOT_INFO_BYTES) break;
-                } else fclose(f);
-            }
-            struct timespec ts{0, 20*1000*1000}; // 20ms
-            nanosleep(&ts, nullptr);
-            if (i == 5999) { LOGe << "timeout waiting for rootinfo file" << rf; return false; }
-        }
+        rendezvous_read(rf, &root_info, HCCL_ROOT_INFO_BYTES, world_rank,
+                        "the HCCL root info");
     }
     LOGv << "HCCL(env) init dev" << hccl_device_id << "rank" << world_rank << "/" << world_size;
     HCCLCHECK(HcclCommInitRootInfo((uint32_t)world_size, &root_info,
@@ -147,6 +146,7 @@ void hccl_init() {
     // aclrtSetDevice(local_rank); re-assert it to be safe.
     ACLCHECK(aclrtSetDevice(hccl_device_id));
     use_device_mpi = true;
+    rendezvous_require_unlocked(mpi_world_size, "HCCL(MPI)");
     if (mpi_world_rank == 0)
         HCCLCHECK(HcclGetRootInfo(&root_info));
     MPI_CHECK(MPI_Bcast(&root_info, HCCL_ROOT_INFO_BYTES, MPI_CHAR, 0, MPI_COMM_WORLD));
