@@ -183,7 +183,19 @@ if inherit and extra and "PATH" in extra:
 否则 jittor 的 SIGCHLD 处理器会让 pytest 无声消失。也是"把契约写进 helper 的一个显式
 选项，而不是指望每个调用方记得"。
 
-**收编前先做一遍这个检查**：逐处 diff 内联版本，列出它做了但 helper 不会做的事
-（`env.pop`、`cwd`、超时、编码、信号处理），每一项要么进 helper 的显式选项，要么在调用点
-留一行注释说明为什么不需要。做不到就不要收编——一份能跑但语义被削掉的 helper，比五处
-重复代码贵得多。
+### 收编前的检查清单
+
+逐处 diff 内联版本，列出它做了但 helper 不会做的事，每一项要么进 helper 的显式选项，
+要么在调用点留一行注释说明为什么不需要：
+
+- `env.pop(...)` / `del env[...]`——**叠加语义删不掉东西**，这是最隐蔽的一类；
+- `cwd`——决定 rootdir，进而决定哪份 conftest 生效；
+- 超时——按什么假设定的？冷缓存下还成立吗？
+- 编码（`encoding` / `errors`）——Jittor 的日志不是 ASCII，`LANG=C` 下按环境编码解会抛；
+- 信号处理 / 崩溃隔离——子进程会不会被信号杀死；
+- **打桩点**。收编重复代码时最容易悄悄失效的就是测试里的 `mock.patch.object(module.subprocess, "run")`：
+  桩还在、桩住的东西已经不在调用路径上了，**测试照样绿**。改完 helper 之后 grep 一遍
+  `mock.patch.*subprocess`、`mock.patch.*Popen`，确认每个桩仍然在新的调用路径上，
+  并确认它要观察的行为没变。
+
+做不到就不要收编——一份能跑但语义被削掉的 helper，比五处重复代码贵得多。
