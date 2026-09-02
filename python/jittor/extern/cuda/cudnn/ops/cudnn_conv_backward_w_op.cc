@@ -11,6 +11,7 @@
 #include "var.h"
 #include "cudnn_conv_backward_w_op.h"
 #include "cudnn_wrapper.h"
+#include "cudnn_conv_plan.h"
 #include "executor.h"
 #include "ops/op_register.h"
 #include "mem/mem_info.h"
@@ -87,15 +88,9 @@ static auto make_backwardx = get_op_info("cudnn_conv_backward_x")
     .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>();
 
 VarPtr CudnnConvBackwardWOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-    int xn, xc, xh, xw, wh, ww, wci, wco, yn, yc, yh, yw;
-
-    if (xformat == "nchw") {
-        x->shape.unpack(xn, xc, xh, xw);
-        dy->shape.unpack(yn, yc, yh, yw);
-    } else {
-        x->shape.unpack(xn, xh, xw, xc);
-        dy->shape.unpack(yn, yh, yw, yc);
-    }
+    int xn, xc, xh, xw;
+    // Spatial sizes through the layout string, as infer_shape reads them.
+    get_shape(x, "abcd", xformat, xn, xc, xh, xw);
 
     if (v_index == 0) {
         return make_backwardx(dout, dy, xh, xw, strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups, xformat, wformat, yformat);
@@ -149,7 +144,12 @@ void CudnnConvBackwardWOp::jit_run() {
     ));
 
     auto ws = w->shape;
-    int dimW[] = {(int)ws[0],(int)ws[1],(int)ws[2],(int)ws[3]};
+    // cuDNN takes filter dimensions in KCRS order whatever the memory layout;
+    // read them through the layout string, as infer_shape does.
+    int dimW[] = {
+        (int)ws[findc("@WFORMAT", 'o')], (int)ws[findc("@WFORMAT", 'i')],
+        (int)ws[findc("@WFORMAT", 'h')], (int)ws[findc("@WFORMAT", 'w')],
+    };
     // cudnn only support this two format
     // https://docs.nvidia.com/deeplearning/sdk/cudnn-api/index.html#cudnnSetFilterNdDescriptor
     #define filterFormat_oihw CUDNN_TENSOR_NCHW
@@ -212,6 +212,33 @@ void CudnnConvBackwardWOp::jit_run() {
         4, dimY, strideY
     ));
 
+#ifndef IS_ROCM
+    {
+        // Backend-API plan cache; falls through to the legacy path below when
+        // no plan can be built for this configuration.
+        ConvPlanRequest req; memset(&req, 0, sizeof(req));
+        req.kind = CONV_PLAN_BWD_FILTER;
+        req.dtype_x = getDataType<Tx>(); req.dtype_w = getDataType<Tw>(); req.dtype_y = getDataType<Ty>();
+        for (int i=0; i<4; i++) {
+            req.xdim[i] = dimX[i]; req.xstride[i] = strideX[i];
+            req.ydim[i] = dimY[i]; req.ystride[i] = strideY[i];
+            req.wdim[i] = dimW[i];
+        }
+        conv_plan_filter_strides(req.wstride, dimW, filterFormat_@WFORMAT == CUDNN_TENSOR_NHWC);
+        req.pad[0] = paddingh; req.pad[1] = paddingw;
+        req.stride[0] = strideh; req.stride[1] = stridew;
+        req.dilation[0] = dilationh; req.dilation[1] = dilationw;
+        req.allow_tf32 = conv_math_type == CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION;
+        req.benchmark = cudnn_benchmark != 0;
+        if (cudnn_conv_backend_run(req, x->ptr<Tx>(), w->ptr<Tw>(), y->ptr<Ty>())) {
+            checkCudaErrors(cudnnDestroyTensorDescriptor( cudnnIdesc ));
+            checkCudaErrors(cudnnDestroyFilterDescriptor( cudnnFdesc ));
+            checkCudaErrors(cudnnDestroyTensorDescriptor( cudnnOdesc ));
+            checkCudaErrors(cudnnDestroyConvolutionDescriptor( cudnnConvDesc ));
+            return;
+        }
+    }
+#endif
     cudnnConvolutionBwdFilterAlgo_t algos[] = {
         CUDNN_CONVOLUTION_BWD_FILTER_ALGO_0,
         CUDNN_CONVOLUTION_BWD_FILTER_ALGO_1,
