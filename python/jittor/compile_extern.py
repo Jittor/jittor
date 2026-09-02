@@ -471,12 +471,13 @@ def install_cutt(root_folder):
     return dirname
 
 def setup_cutt():
-    global cutt_ops, use_cutt
+    global cutt_ops, cutt, use_cutt
     if not has_cuda:
         use_cutt = False
         return
     use_cutt = os.environ.get("use_cutt", "1")=="1"
     cutt_ops = None
+    cutt = None
     if not use_cutt: return
     cutt_include_path = os.environ.get("cutt_include_path")
     cutt_lib_path = os.environ.get("cutt_lib_path")
@@ -504,8 +505,11 @@ def setup_cutt():
 
     cutt_op_dir = os.path.join(jittor_path, "extern", "cuda", "cutt", "ops")
     cutt_op_files = [os.path.join(cutt_op_dir, name) for name in os.listdir(cutt_op_dir)]
-    cutt_ops = compile_custom_ops(cutt_op_files, 
+    # Keep the module, not just its .ops: the plan-cache accessors are free
+    # functions on the module, and every other backend is exposed this way.
+    cutt = compile_custom_ops(cutt_op_files, return_module=True,
         extra_flags=f" -I\"{cutt_include_path}\" -L\"{cutt_lib_path}\" -llibcutt ")
+    cutt_ops = cutt.ops
     LOG.vv("Get cutt_ops: "+str(dir(cutt_ops)))
 
 def install_cutlass(root_folder):
@@ -947,7 +951,7 @@ if FIX_TORCH_ERROR:
     except:
         pass
 
-cudnn = cublas = curand = cufft = cusparse = None
+cudnn = cublas = curand = cufft = cusparse = cutt = None
 
 # Env/file-based distributed mode (MPI-free) for Ascend. The launcher sets
 # JT_HCCL_* and spawns one plain process per rank. We use this because the

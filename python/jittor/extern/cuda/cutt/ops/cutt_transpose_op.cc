@@ -63,11 +63,7 @@ void CuttTransposeOp::jit_prepare(JK& jk) {
     jk << "«T:1";
 }
 
-unordered_map<string, unsigned int> cutt_plan_cache;
-
 #else // JIT
-
-EXTERN_LIB unordered_map<string, unsigned int> cutt_plan_cache;
 
 void CuttTransposeOp::jit_run() {
     // Return if x is empty
@@ -98,25 +94,25 @@ void CuttTransposeOp::jit_run() {
         checkCudaErrors(cudaMemcpyAsync(yp, xp, x->size, cudaMemcpyDeviceToDevice, 0));
         return;
     }
-    JK& jk = get_jk();
-    jk.clear();
-    jk << dim << ',';
-    for (int i=0; i<dim; i++) jk << x_shape[i] << ',';
-    for (int i=0; i<dim; i++) jk << reverse[i] << ',';
-    jk << x->dtype().dsize() << '.';
-    auto iter = cutt_plan_cache.find(jk.to_string());
-    LOGvvv << "Run cutt_transpose with key:" << jk.to_string();
-
-    if (iter!=cutt_plan_cache.end()){
-        cuttExecute(iter->second, xp, yp);
-    } else {
-        cuttHandle plan;
-        checkCudaErrors(cudaDeviceSynchronize());
-        auto ret = cuttPlan(&plan, dim, x_shape.data(), reverse.data(), x->dtype().dsize(), 0);
-        CHECK(0==ret) << ret << jk.to_string() << x << y;
-        cutt_plan_cache[jk.to_string()] = plan;
-        cuttExecute(plan, xp, yp);
+    // The plan key is a POD whose bytes are compared directly: no string is
+    // built here, and the shared global JIT key buffer (which also serves the
+    // executor) is left alone.
+    ASSERT(dim <= CUTT_PLAN_MAX_RANK)
+        << "cutt_transpose supports at most" << CUTT_PLAN_MAX_RANK
+        << "non-unit dimensions, got" << dim;
+    CuttPlanKey key;
+    std::memset(&key, 0, sizeof(key));
+    key.rank = dim;
+    key.dsize = x->dtype().dsize();
+    int device = 0;
+    checkCudaErrors(cudaGetDevice(&device));
+    key.device = device;
+    for (int i=0; i<dim; i++) {
+        key.shape[i] = x_shape[i];
+        key.permutation[i] = reverse[i];
     }
+    LOGvvv << "Run cutt_transpose with key rank=" >> dim >> " dsize=" >> key.dsize;
+    cuttExecute(cutt_get_plan(key), xp, yp);
 }
 #endif // JIT
 

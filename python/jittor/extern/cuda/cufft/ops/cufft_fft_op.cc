@@ -16,7 +16,6 @@
 #include "cufft_fft_op.h"
 #include "cufft_wrapper.h"
 
-#include <array>
 #include <complex>
 #include <iostream>
 #include <random>
@@ -59,32 +58,19 @@ void CufftFftOp::jit_run() {
     auto* __restrict__ xp = x->mem_ptr;
     auto* __restrict__ yp = y->mem_ptr;
 
-    int batch_size = x->shape[0];
-    int n1 = x->shape[1], n2 = x->shape[2];
-    int fft_size = batch_size * n1 * n2;
-    std::array<int, 2> fft = {n1, n2};
+    CufftPlanKey key;
+    // memset first: the struct's bytes are the cache key, so any padding has
+    // to be defined.
+    std::memset(&key, 0, sizeof(key));
+    key.batch = x->shape[0];
+    key.n0 = x->shape[1];
+    key.n1 = x->shape[2];
+    key.type = (int64)(TS == "float64" ? CUFFT_Z2Z : CUFFT_C2C);
+    int device = 0;
+    checkCudaErrors(cudaGetDevice(&device));
+    key.device = device;
 
-    auto op_type = CUFFT_C2C;
-    if (TS == "float32") {
-        op_type = CUFFT_C2C;
-    } else if (TS == "float64") {
-        op_type = CUFFT_Z2Z;
-    }
-    JK& jk = get_jk();
-    jk.clear();
-    jk << fft[0] << "," << fft[1] << "," << TS << "," << batch_size;
-    auto iter = cufft_handle_cache.find(jk.to_string());
-    cufftHandle plan;
-    if (iter!=cufft_handle_cache.end()) plan = iter->second;
-    else {
-        CUFFT_CALL(cufftCreate(&plan));
-        CUFFT_CALL(cufftPlanMany(&plan, 2, fft.data(), 
-                                nullptr, 1, fft[0] * fft[1], // *inembed, istride, idist
-                                nullptr, 1, fft[0] * fft[1], // *onembed, ostride, odist
-                                op_type, batch_size));
-        CUFFT_CALL(cufftSetStream(plan, 0));
-        cufft_handle_cache[jk.to_string()] = plan;
-    }
+    cufftHandle plan = cufft_get_plan(key);
     /*
      * Note:
      *  Identical pointers to data and output arrays implies in-place transformation

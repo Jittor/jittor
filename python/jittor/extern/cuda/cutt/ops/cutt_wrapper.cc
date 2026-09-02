@@ -6,7 +6,10 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <list>
+#include <unordered_map>
 #include "cutt_wrapper.h"
+#include "utils/log.h"
 
 
 namespace jittor {
@@ -19,6 +22,70 @@ void jt_free(void* p, size_t len, size_t& allocation) {
     exe.allocator->free(p, len, allocation);
 }
 
+int cutt_max_cache_size = 64;
+
+static std::unordered_map<CuttPlanKey, cuttHandle, CuttPlanKeyHash, CuttPlanKeyEq>
+    cutt_plan_cache_;
+// Creation order, oldest first; the eviction victim comes off the front.
+static std::list<CuttPlanKey> cutt_plan_order_;
+
+static void evict_oldest_plan() {
+    if (cutt_plan_order_.empty()) return;
+    auto oldest = cutt_plan_order_.front();
+    cutt_plan_order_.pop_front();
+    auto iter = cutt_plan_cache_.find(oldest);
+    if (iter == cutt_plan_cache_.end()) return;
+    auto plan = iter->second;
+    cutt_plan_cache_.erase(iter);
+    auto ret = cuttDestroy(plan);
+    CHECK(ret == CUTT_SUCCESS) << "cuttDestroy failed with" << (int)ret;
+}
+
+int cutt_plan_cache_size() { return (int)cutt_plan_cache_.size(); }
+
+void cutt_set_plan_cache_size(int size) {
+    // A plan is handed out by reference and executed after this call returns,
+    // so the cache cannot be emptied entirely.
+    cutt_max_cache_size = size < 1 ? 1 : size;
+    while ((int)cutt_plan_cache_.size() > cutt_max_cache_size)
+        evict_oldest_plan();
+}
+
+cuttHandle cutt_get_plan(const CuttPlanKey& key) {
+    auto iter = cutt_plan_cache_.find(key);
+    if (iter != cutt_plan_cache_.end()) return iter->second;
+
+    int rank = (int)key.rank;
+    int shape[CUTT_PLAN_MAX_RANK], permutation[CUTT_PLAN_MAX_RANK];
+    for (int i = 0; i < rank; i++) {
+        shape[i] = (int)key.shape[i];
+        permutation[i] = (int)key.permutation[i];
+    }
+    cuttHandle plan;
+    checkCudaErrors(cudaDeviceSynchronize());
+    auto ret = cuttPlan(&plan, rank, shape, permutation, (size_t)key.dsize, 0);
+    CHECK(ret == CUTT_SUCCESS) << "cuttPlan failed with" << (int)ret
+        << "rank" << rank << "dsize" << key.dsize;
+
+    while ((int)cutt_plan_cache_.size() >= cutt_max_cache_size)
+        evict_oldest_plan();
+    cutt_plan_cache_[key] = plan;
+    cutt_plan_order_.push_back(key);
+    return plan;
+}
+
+void cutt_clear_plan_cache() {
+    for (auto& entry : cutt_plan_cache_) {
+        auto ret = cuttDestroy(entry.second);
+        // Reporting-only: this also runs from a static destructor, and
+        // throwing there terminates the process during CUDA teardown.
+        if (ret != CUTT_SUCCESS)
+            LOGe << "cuttDestroy failed with" << (int)ret;
+    }
+    cutt_plan_cache_.clear();
+    cutt_plan_order_.clear();
+}
+
 struct cutt_initer {
 
 inline cutt_initer() {
@@ -28,6 +95,7 @@ inline cutt_initer() {
 }
 
 inline ~cutt_initer() {
+    cutt_clear_plan_cache();
     LOGv << "cuttDestroy finished";
 }
 

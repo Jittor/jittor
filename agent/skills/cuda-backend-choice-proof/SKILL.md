@@ -107,6 +107,49 @@ assert not np.allclose(y1.numpy(), y2.numpy())
 接着被 `compile_extern.py` 翻译成误导性的 `CUDA found but cufft is not loaded`。
 修法：照抄 `curand/src/helper_curand.cc` 的写法，在该后端的 `src/` 下补一个。
 
+## 证明「缓存有界」「句柄不泄漏」
+
+缓存与泄漏从 Python 看不见，得先把观测点做出来，再断言。
+
+**观测点**：按 `cudnn_wrapper.h` 的既有写法，在该后端的 wrapper 头里加两个 pyjt 自由函数——
+一个读当前缓存条数、一个设上限：
+
+```cpp
+// @pyjt(cufft_set_plan_cache_size)
+void cufft_set_plan_cache_size(int size);
+// @pyjt(cufft_plan_cache_size)
+int cufft_plan_cache_size();
+```
+
+**名字必须带后端前缀**。所有后端的 .so 共用 `jittor` 命名空间，两个 .so 里同名的
+`jittor::set_plan_cache_size(int)` 会被 ELF 符号插入互相绑串。
+
+**pyjt 自由函数挂在模块上，不是挂在 `.ops` 上**。`compile_custom_ops(files)` 默认返回
+`module.ops`，所以只有 `compile_custom_ops(..., return_module=True)` 拿到的模块上才看得到
+它们（`jt.cudnn`、`jt.cufft` 是这样，`cutt_ops` 原本不是）。
+
+**测试三条**（缺一条都证明不完）：
+
+1. 同一形状重复调用，缓存条数只 +1（命中生效）；
+2. 上限设小，跑一串不同形状，每次断言 `cache_size() <= 上限`，且结果仍然对；
+3. 上限设 1，跑 A、跑 B（淘汰 A）、再跑 A，断言结果仍然对——证明淘汰掉的计划能被
+   正确重建，而不是留下悬垂句柄。
+
+**泄漏（显存）**：用 ctypes 直接问 runtime，jittor 没有暴露 free memory。
+
+```python
+import ctypes
+lib = ctypes.CDLL(None)          # libcudart 已被 jittor 以 RTLD_GLOBAL 载入
+def free_mb():
+    f = ctypes.c_size_t(); t = ctypes.c_size_t()
+    assert lib.cudaMemGetInfo(ctypes.byref(f), ctypes.byref(t)) == 0
+    return f.value / 1024 / 1024
+```
+
+把缓存上限设成 1，跑几十个互不相同的形状，前后对比。cuFFT 的 `cufftCreate` 泄漏在
+80 个形状上是 4.0MB；修好之后是 0.0MB。**先做一次 warm-up 再取基线**，否则分配器
+自己的增长会盖过要测的量。
+
 ## 环境（少设一个测的就是别的东西）
 
 ```bash
