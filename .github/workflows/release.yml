@@ -167,6 +167,26 @@ jobs:
                   raise SystemExit("installed resource is missing: %s" % relative)
           print("installed canonical wheel", installed.version)
           PY
+      - name: Run the self-test against the installed wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Everything above this step reads the wheel as an archive: version,
+          # member list, three resource files. None of it runs Jittor, so a
+          # wheel whose C++ core does not compile passed the whole release
+          # pipeline. This step compiles it and trains for three steps.
+          # Nothing here needs a GPU; the CPU build is what a released wheel
+          # falls back to and is what every user gets first.
+          # The install above is --no-deps on purpose, so the runtime
+          # dependencies have to be added before anything can import Jittor.
+          wheel="$(find canonical-dist -maxdepth 1 -type f -name 'jittor-*-py3-none-any.whl' -print)"
+          python -m pip install "${wheel}"
+          # Out of the checkout: importing from the repository root picks up
+          # ./python/jittor and tests the source tree instead of the wheel.
+          cd "${RUNNER_TEMP}"
+          nvcc_path="" python -m jittor.selftest
+        env:
+          JITTOR_HOME: ${{ runner.temp }}/jittor-home
 
   publish-pypi:
     name: Publish to PyPI

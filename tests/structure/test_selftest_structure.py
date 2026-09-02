@@ -56,6 +56,47 @@ class TestSelftestStructure(unittest.TestCase):
             exec(compile(module, str(self.selftest_path), "exec"), namespace)
             self.assertEqual(namespace["_backend_name"](), expected)
 
+    def test_the_selftest_trains_rather_than_squaring_three_numbers(self):
+        """A forward and backward over `[1,2,3]**2` proves the core built.
+
+        It proves nothing else: one elementwise operator and the autodiff
+        bookkeeping around it. A wheel whose convolution, normalisation or
+        optimiser update is broken passed it, and the release pipeline has
+        nothing else that runs Jittor at all.
+        """
+        source = self.selftest_path.read_text(encoding="utf-8")
+        for needle in ("Conv2d", "BatchNorm2d", "optim.SGD", "optimizer.step"):
+            self.assertIn(needle, source)
+        namespace = {}
+        tree = ast.parse(source)
+        assignment = next(
+            node for node in tree.body
+            if isinstance(node, ast.Assign)
+            and getattr(node.targets[0], "id", None) == "KEY_MODULES"
+        )
+        modules = ast.literal_eval(assignment.value)
+        self.assertGreaterEqual(len(modules), 10)
+        for name in modules:
+            self.assertTrue(name.startswith("jittor."), name)
+        # Importing the torch shim changes process-wide state, so it must not
+        # be on a list every release runs.
+        self.assertNotIn("jittor.compat.torch", modules)
+
+    def test_the_release_workflow_runs_the_selftest(self):
+        """Otherwise a wheel whose core does not compile can be published.
+
+        Every other step in the release pipeline reads the wheel as an
+        archive: version, member list, three resource files. None of them
+        imports it.
+        """
+        workflow = (self.repo_root / ".github" / "workflows"
+                    / "release.yml").read_text(encoding="utf-8")
+        self.assertIn("jittor.selftest", workflow)
+        validation = workflow.split("platform-validation:", 1)
+        self.assertEqual(len(validation), 2, "no platform-validation job")
+        after = validation[1].split("\n  publish-", 1)[0]
+        self.assertIn("jittor.selftest", after)
+
     def test_nox_structure_runs_the_installed_wheel_selftest(self):
         source = (self.repo_root / "noxfile.py").read_text(encoding="utf-8")
         self.assertIn('"--target",\n        str(wheel_install)', source)
