@@ -415,7 +415,14 @@ def generate_error_code_from_func_header(func_head, target_scope_name, name, dfs
     return error_code
 
 def compile_src(src, h, basename):
-    res = list(reg.finditer(src, re.S))
+    # `reg.finditer(src, re.S)` passed the flag where `pos` goes, so scanning
+    # started at offset 16 and an annotation in the first 16 characters of a
+    # header was never seen -- the binding was silently not generated.  Every
+    # real header opens with a copyright banner, which is why nothing was ever
+    # missing; a header that did not would have lost its bindings with no
+    # error.  (`reg` is already compiled with re.DOTALL; the argument was
+    # redundant as well as wrong.)
+    res = list(reg.finditer(src))
     if len(res)==0: return
     class_ranges = None
     class_name = None

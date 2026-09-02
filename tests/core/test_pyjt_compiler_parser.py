@@ -15,10 +15,9 @@ from a test instead of from a wrong answer at runtime.
 The module is loaded straight from its file: importing ``jittor`` would build
 the whole C++ core, and none of this needs it.
 
-Note for anyone adding a case: ``compile_src`` starts scanning at offset 16
-(``reg.finditer(src, re.S)`` passes the flag where ``pos`` goes), so a source
-fragment must be padded before its first ``// @pyjt`` or it is silently not
-seen at all.
+A fragment may start with its ``// @pyjt`` annotation on line one.  It could
+not until recently: ``compile_src`` scanned from offset 16, so an annotation
+in the first 16 characters was never seen.
 """
 
 import importlib.util
@@ -28,8 +27,6 @@ import unittest
 
 REPO_ROOT = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-PAD = "// pad: compile_src starts scanning at offset 16\n"
 
 _generator = None
 
@@ -54,7 +51,7 @@ def generator():
 def render(declaration, annotation="// @pyjt(f)\n"):
     """Generate the binding for one declaration and return the C++ text."""
     return generator().compile_src(
-        PAD + annotation + declaration, "test.h", "test")
+        annotation + declaration, "test.h", "test")
 
 
 class TestSplitArgs(unittest.TestCase):
@@ -111,6 +108,28 @@ class TestSplitArgs(unittest.TestCase):
             generator().split_args("int a=(1, int b")
 
 
+class TestAnnotationScanStart(unittest.TestCase):
+    """The scan starts at the beginning of the file, not 16 bytes in."""
+
+    def test_annotation_on_the_first_line(self):
+        # ``compile_src`` called ``reg.finditer(src, re.S)``: re.S is 16, and
+        # the second positional argument of ``finditer`` is ``pos``.  Scanning
+        # therefore began at offset 16 and an annotation before that was never
+        # seen -- ``compile_src`` returned None and the bindings were silently
+        # absent.  Every real header opens with a copyright banner, which is
+        # the only reason nothing was ever missing.
+        code = generator().compile_src(
+            "// @pyjt(f)\nvoid f(int a);\n", "test.h", "test")
+        self.assertTrue(code, "an annotation on line 1 was not seen at all")
+        self.assertIn("arg0", code)
+
+    def test_annotation_after_a_short_prologue(self):
+        code = generator().compile_src(
+            "#pragma once\n// @pyjt(f)\nvoid f(int a);\n", "test.h", "test")
+        self.assertTrue(code)
+        self.assertIn("arg0", code)
+
+
 class TestDeclarationScan(unittest.TestCase):
     """``find_bc`` finds the parameter list, and only the parameter list."""
 
@@ -138,8 +157,7 @@ class TestDeclarationScan(unittest.TestCase):
         # above a plain declaration ate the `// @pyjt(Thing)` that opens the
         # class, and every method of that class came out as a free function.
         source = (
-            PAD
-            + "/** An ordinary doc comment on a plain declaration. */\n"
+            "/** An ordinary doc comment on a plain declaration. */\n"
             + "void unrelated(int a);\n"
             + "\n"
             + "// @pyjt(Thing)\n"
