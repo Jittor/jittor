@@ -42,7 +42,10 @@ class TestAtomicTunerClass(unittest.TestCase):
         x=jt.random([100,64,128,128])
         with jt.log_capture_scope(
             # log_silent=1,
-            log_v=0, log_vprefix="atomic=100,data=100",
+            # log_vprefix selects by source file name. The pass used to be
+            # compiled as "data.cc" out of utils/data.gz, hence the second
+            # entry; it now lives in opt/pass/atomic_tuner_pass.cc.
+            log_v=0, log_vprefix="atomic=100",
         ) as logs:
             y=model(x).numpy()
         with jt.log_capture_scope(
@@ -66,7 +69,17 @@ class TestAtomicTunerClass(unittest.TestCase):
         self.check(self.maxNet, ['atomictuner: move cuda_atomic_max to loop 1', 'atomictuner: move cuda_atomic_max to loop 2'])
         self.check(self.minNet, ['atomictuner: move cuda_atomic_min to loop 1', 'atomictuner: move cuda_atomic_min to loop 2'])
 
-        self.check(lambda x: x.sum()+x.sqr().mean(), [
+        # A whole-Var reduction: the destination address depends on no loop
+        # variable, so the accumulation is lifted out of the entire nest
+        # ("to loop -1") and one atomic is left per kernel.
+        #
+        # This case used to be written `x.sum()+x.sqr().mean()`. Since the CUDA
+        # full-reduce fast path was installed, `Var.sum`/`Var.mean` are replaced
+        # (nn/backends/full_reduce_cuda.py) by a two-stage CUB reduction that is
+        # a `jt.code` op and never reaches the code generator -- so that spelling
+        # stopped exercising the atomic tuner at all and the assertion below was
+        # measuring a path nothing runs any more. Call the reduce op directly.
+        self.check(lambda x: jt.reduce(x, "add") + jt.reduce(x*x, "add"), [
             'atomictuner: move atomicAdd to loop -1',
             'atomictuner: move atomicAdd to loop -1',
         ])
