@@ -5,8 +5,24 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 import unittest
+
+import pytest
+
 import jittor as jt
 from jittor import LOG
+
+
+#: C++ unit tests whose assertion is a wall-clock budget.
+#:
+#: ``src/test/test_sfrl_allocator.cc`` asserts ``time_limit`` of 400 ms. With
+#: nine agents on the box it measured 1775 ms and 10919 ms -- 4x and 27x over,
+#: which is not "a bit slow", it is a different question being answered. What
+#: they guard (the allocator must not degrade) is worth keeping, so they are
+#: marked rather than deleted and run on an idle machine.
+LOAD_SENSITIVE_TESTS = frozenset((
+    "sfrl_allocator_share",
+    "sfrl_allocator_time",
+))
 
 
 def _run_test(name):
@@ -41,6 +57,10 @@ def _make_test(name):
         _run_test(name)
 
     generated_test.__name__ = "test_" + name
+    if name in LOAD_SENSITIVE_TESTS:
+        # pytest reads `pytestmark` off the function, which is the only way to
+        # mark a method that is generated rather than written.
+        generated_test.pytestmark = [pytest.mark.load_sensitive]
     return generated_test
 
 

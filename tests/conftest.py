@@ -233,6 +233,23 @@ def pytest_sessionstart(session):
             )
 
 
+def _load_sensitive_tests_are_enabled(config):
+    """Wall-clock upper bounds only mean something on an idle machine.
+
+    A test that asserts ``elapsed < <constant>`` fails under load for reasons
+    that have nothing to do with the code, and it fails *the same way* a real
+    regression does -- red. The difference is where to look: a regression is in
+    the diff, this is in ``uptime``. Three of these cost three different people
+    an A/B bisect on one evening, so they are opt-in and the reason is in the
+    skip message.
+    """
+    value = os.environ.get("JITTOR_TEST_LOAD_SENSITIVE", "").strip().lower()
+    if value in ("1", "true", "yes", "on"):
+        return True
+    option = getattr(config, "option", None)
+    return "load_sensitive" in (getattr(option, "markexpr", "") or "")
+
+
 def _manual_probes_are_enabled(config):
     """Manual probes are opt-in, by a variable rather than by how you invoked.
 
@@ -256,6 +273,7 @@ def pytest_collection_modifyitems(config, items):
     _snapshot_selected_files(config)
     network_enabled = _network_is_enabled() or config.getoption("--network")
     manual_enabled = _manual_probes_are_enabled(config)
+    load_sensitive_enabled = _load_sensitive_tests_are_enabled(config)
     for item in items:
         _FILES_WITH_ITEMS.add(_relative_to_repo(item.fspath))
         try:
@@ -282,6 +300,15 @@ def pytest_collection_modifyitems(config, items):
                 pytest.mark.skip(
                     reason="manual probe; set JITTOR_TEST_MANUAL=1 or pass "
                     "-m manual to run it"
+                )
+            )
+        if (not load_sensitive_enabled
+                and item.get_closest_marker("load_sensitive") is not None):
+            item.add_marker(
+                pytest.mark.skip(
+                    reason="asserts an upper bound on wall-clock time; this "
+                    "machine's load decides the result. Run it on an idle box "
+                    "with JITTOR_TEST_LOAD_SENSITIVE=1 or -m load_sensitive"
                 )
             )
         if item.get_closest_marker("network") is not None and not network_enabled:

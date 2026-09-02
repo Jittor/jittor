@@ -132,4 +132,5 @@ markers = [
     "slow: tests excluded from the fast pull-request gate",
     "network: tests requiring external network access",
     "manual: tests or probes that must be selected explicitly",
+    "load_sensitive: asserts an upper bound on wall-clock time; only meaningful on an idle machine",
 ]
