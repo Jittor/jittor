@@ -135,18 +135,39 @@ GitHub 仓库设置和 Issue 决定，不要假定当前检出分支就是默认
   on it. Release branches and tags are maintainer-owned.
 - External contributors work from a fork. Committers may use a branch in the
   canonical repository, but the PR and review rules are identical.
-- Use a short-lived branch named `<type>/<issue>-<slug>`, for example
-  `fix/123-floor-divide`, `feat/456-sdpa-mask`, `docs/789-contributing`, or
-  `ci/321-cuda-gate`. Use `chore/<slug>` when there is no Issue and the change
-  is purely maintenance.
-- Start from a clean, up-to-date target branch and use fast-forward pulls. Replace
-  `<target-branch>` with the branch named by the Issue or maintainer:
+- Each developer maintains one long-lived personal branch, named
+  `dev/<name>` or `<team>/<name>` (for example `dev/zhangyi`). The branch is
+  owned by one person and is the normal place for that person's daily commits.
+  A short-lived task branch is optional when a change must be isolated from the
+  personal branch; it is not required for every Issue.
+- Open a PR from the personal branch only at a coherent, independently
+  reviewable milestone. A milestone may contain several related commits and
+  be a large update, but it must not combine unrelated work.
+- Initialize the personal branch once from a clean, up-to-date target branch.
+  Replace `<target-branch>` with the branch named by the Issue or maintainer:
 
   ```bash
   git fetch origin
   git switch <target-branch>
   git pull --ff-only origin <target-branch>
-  git switch -c fix/123-floor-divide
+  git switch -c dev/<your-name>
+  git push -u origin dev/<your-name>
+  ```
+
+  If the personal branch already exists on the remote, check it out with
+  `git switch --track origin/dev/<your-name>` instead of creating it. If it is
+  already present locally, update it with `git switch dev/<your-name>` followed
+  by `git pull --ff-only origin dev/<your-name>`.
+
+- Before opening or updating a PR, synchronize the personal branch with the
+  target branch and resolve conflicts locally. Use a regular merge to preserve
+  the long-lived branch history:
+
+  ```bash
+  git fetch origin
+  git switch dev/<your-name>
+  git merge --no-ff origin/<target-branch>
+  git push origin dev/<your-name>
   ```
 
 - Keep generated files, JIT/build caches, model weights, credentials, and
@@ -155,17 +176,34 @@ GitHub 仓库设置和 Issue 决定，不要假定当前检出分支就是默认
 
 - 默认分支必须受保护：禁止直接 push 或直接在其上提交；发布分支和 tag 由维护者管理。
 - 外部贡献者从 fork 开发；Committer 可以在主仓库建立分支，但 PR 和评审规则完全相同。
-- 使用短生命周期分支，命名为 `<type>/<issue>-<slug>`，例如
-  `fix/123-floor-divide`、`feat/456-sdpa-mask`、`docs/789-contributing`、
-  `ci/321-cuda-gate`。没有 Issue 且仅是维护性改动时使用 `chore/<slug>`。
-- 从干净且最新的目标分支开始，并使用 fast-forward 拉取；将 `<target-branch>` 替换为 Issue
-  或维护者指定的分支：
+- 每位开发者维护一个长期个人分支，命名为 `dev/<name>` 或 `<team>/<name>`（例如
+  `dev/zhangyi`）。该分支由一人负责，是其日常提交的默认位置。只有在需要将某项改动与
+  个人分支隔离时才创建短生命周期任务分支，不要求每个 Issue 都建新分支。
+- 个人分支只在形成可独立评审和验收的里程碑时发起 PR。一个里程碑可以包含多个相关提交，
+  也可以是较大的完整更新，但不能混入无关工作。
+- 首次创建个人分支时，从干净且最新的目标分支开始；将 `<target-branch>` 替换为 Issue 或
+  维护者指定的分支：
 
   ```bash
   git fetch origin
   git switch <target-branch>
   git pull --ff-only origin <target-branch>
-  git switch -c fix/123-floor-divide
+  git switch -c dev/<your-name>
+  git push -u origin dev/<your-name>
+  ```
+
+  如果远程已经有个人分支但本地尚未检出，使用 `git switch --track origin/dev/<your-name>`
+  而不是创建新分支；如果本地已有该分支，则执行 `git switch dev/<your-name>` 和
+  `git pull --ff-only origin dev/<your-name>`。
+
+- 发起或更新 PR 前，先将个人分支同步到目标分支并在本地解决冲突。使用普通 merge 保留
+  长期个人分支的历史：
+
+  ```bash
+  git fetch origin
+  git switch dev/<your-name>
+  git merge --no-ff origin/<target-branch>
+  git push origin dev/<your-name>
   ```
 
 - 生成文件、JIT/构建缓存、模型权重、凭据和无关格式化不得进入分支；每个工作树或并行
@@ -173,8 +211,9 @@ GitHub 仓库设置和 Issue 决定，不要假定当前检出分支就是默认
 
 ### 3. Commits / 提交信息
 
-Use a small number of reviewable, atomic commits. The preferred subject format
-is:
+Keep each commit logically clear and reviewable. A long-lived personal branch
+may accumulate multiple commits between PRs, and one milestone PR may contain
+several related commits. The preferred subject format is:
 
 ```text
 <type>(<scope>): <imperative summary>
@@ -186,14 +225,15 @@ subject concise, explain non-obvious trade-offs in the body, and include issue
 references when useful. Chinese summaries are fine, for example
 `fix(reduce): 修正负整数 floor divide`.
 
-Do not create merge commits on a topic branch. Before requesting review, update
-the branch from the target branch and resolve conflicts locally. It is fine to
-use temporary fixup commits during review; the maintainer merges the final PR
-with **Squash and merge**, so the PR title becomes the release-facing commit
-subject. Never rewrite a branch while another contributor is building on it
-without coordinating in the PR.
+Merge commits are allowed on a long-lived personal branch when synchronizing it
+with the target branch; use the regular merge shown above and resolve conflicts
+locally. Do not require squashing the personal branch before every PR. During
+review, keep corrective commits when they make the discussion clearer, or
+rewrite the branch only after coordinating with anyone who depends on it. Never
+force-push without that coordination.
 
-提交应保持少量、原子且便于评审。推荐主题格式为：
+每个提交都应逻辑清晰、便于评审。长期个人分支可以在两次 PR 之间持续积累多个提交，
+一个里程碑 PR 也可以包含多个相关提交。推荐主题格式为：
 
 ```text
 <type>(<scope>): <祈使式摘要>
@@ -201,9 +241,9 @@ without coordinating in the PR.
 
 `type` 使用 `feat`、`fix`、`docs`、`test`、`perf`、`refactor`、`build`、`ci`、
 `chore` 或 `revert`；括号中的 scope 没有信息量时可以省略。主题保持简洁，非显然的取舍
-写在正文中，并在需要时关联 Issue。评审期间可以使用临时 fixup 提交；维护者最终使用
-**Squash and merge**，PR 标题将成为面向发布的提交主题。不要在没有与 PR 中其他贡献者
-沟通的情况下重写他们正在基于其开发的分支。
+写在正文中，并在需要时关联 Issue。长期个人分支与目标分支同步时允许产生 merge commit；
+评审期间可以保留修复提交，也可以在与依赖该分支的协作者沟通后整理历史。没有完成沟通时，
+不要 force-push 或重写其他人正在使用的个人分支。
 
 ### 4. Local verification / 本地验证
 
@@ -250,8 +290,10 @@ python -m nox -s lint format typing structure packaging py37 py312 py313
 
 ### 5. Pull request lifecycle / PR 生命周期
 
-1. Open a draft PR early when design or implementation feedback is useful. Set
-   the target to the default branch, link the Issue (`Fixes #123` when the PR
+1. Open a PR from the long-lived personal branch when a coherent milestone is
+   ready for independent review and acceptance. Use draft status when early
+   design or implementation feedback is useful. Set the target to the branch
+   named by the Issue or maintainer, link the Issue (`Fixes #123` when the PR
    fully resolves it), and declare dependencies or stacked PRs.
 2. Fill every section of the PR template: problem and intended behavior,
    implementation boundary, compatibility impact, tests with environment and
@@ -270,11 +312,13 @@ python -m nox -s lint format typing structure packaging py37 py312 py313
    Maintainer, plus an Issue/design decision when applicable.
 6. The merge owner confirms no unresolved conversations, a current base branch,
    passing required checks, and documented follow-up issues. Merge with
-   **Squash and merge**, then delete the topic branch. Only maintainers create
-   release tags or merge release branches.
+   **Create a merge commit** and keep the personal branch for later work. Before
+   the next milestone, merge the latest target branch back into that personal
+   branch. Only maintainers create release tags or merge release branches.
 
-1. 如果需要尽早获得设计或实现反馈，可以先发起 Draft PR。目标设为默认分支，关联 Issue
-   （完全解决时使用 `Fixes #123`），并声明依赖或堆叠 PR。
+1. 个人分支形成可独立评审和验收的完整里程碑后再发起 PR；如果需要提前获得设计或实现反馈，
+   可以先使用 Draft 状态。目标设为 Issue 或维护者指定的分支，关联 Issue（完全解决时使用
+   `Fixes #123`），并声明依赖或堆叠 PR。
 2. 填写 PR 模板的每一项：问题和预期行为、实现边界、兼容性影响、带环境和后端信息的测试、
    限制，以及文档/发布说明影响。只有清单内容真实完整时才标记 **Ready for review**。
 3. 提交者自行检查渲染后的 diff、测试输出、公开 API 变化和暂存文件；不要使用 `git add -A`，
@@ -285,7 +329,8 @@ python -m nox -s lint format typing structure packaging py37 py312 py313
    后端 kernel、公开 API/兼容层、打包、分布式、安全及其他高风险或破坏性变化，需要包括
    受影响模块维护者在内的两项批准，并在适用时先有 Issue/设计决策。
 6. 合并者确认没有未解决对话、目标分支已更新、必需检查通过且后续工作已建 Issue；使用
-   **Squash and merge** 后删除主题分支。发布 tag 或合并发布分支只能由维护者执行。
+   **Create a merge commit** 合并，并保留个人分支供后续开发。下一次里程碑开始前，先将最新
+   目标分支 merge 回个人分支。发布 tag 或合并发布分支只能由维护者执行。
 
 ### Maintainer repository settings / 维护者仓库设置
 
@@ -296,8 +341,16 @@ Branch protection rules** (or the equivalent ruleset):
   dismiss stale approvals after new commits;
 - require conversation resolution, successful required status checks, and the
   branch to be up to date before merging;
-- disable force-push and deletion for the protected branch; allow only
-  **Squash and merge** for normal changes;
+- disable force-push and deletion for the protected branch; allow
+  **Create a merge commit** for normal changes and do not require a linear
+  history;
+- **Squash and merge** and **Rebase and merge** are not the default for this
+  workflow; use them only when the merge owner explicitly documents an
+  exceptional reason.
+- do not enable automatic deletion of pull-request head branches, because
+  long-lived personal branches must be retained. A personal branch may be
+  force-pushed only by its owner, only when no collaborator depends on it, and
+  only after the change is disclosed in the PR;
 - require the `nox / lint`, `nox / format`, `nox / typing`, `nox / structure`,
   `nox / packaging`, `nox / py37`, `nox / py312`, and `nox / py313` checks for
   code PRs. Add `nox / docs*`, `nox / cpu`, or other checks to a path-specific
@@ -313,7 +366,12 @@ Branch protection rules** (or the equivalent ruleset):
 
 - 合并前必须通过 PR；至少一项批准，新提交后自动使旧批准失效；
 - 必须解决所有评审对话、通过必需状态检查，并要求分支与目标分支保持最新；
-- 禁止保护分支 force-push 和删除；普通改动只允许 **Squash and merge**；
+- 禁止保护分支 force-push 和删除；普通改动允许使用 **Create a merge commit**，不要要求线性
+  历史；
+- **Squash and merge** 与 **Rebase and merge** 不是本流程的默认方式；只有合并者明确记录特殊
+  原因时才使用；
+- 不要启用自动删除 PR head branch 的设置，因为长期个人分支需要保留。个人分支只有在没有
+  其他协作者依赖、且已在 PR 中说明时，才允许由其负责人 force-push；
 - 代码 PR 必须通过 `nox / lint`、`nox / format`、`nox / typing`、`nox / structure`、
   `nox / packaging`、`nox / py37`、`nox / py312` 和 `nox / py313`。当 GitHub 配置将其暴露
   为必需检查时，再按路径规则加入 `nox / docs*`、`nox / cpu` 或其他门禁；

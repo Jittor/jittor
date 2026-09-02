@@ -23,6 +23,14 @@
 
 Fixes #
 
+## Personal Branch and Milestone / 个人分支与里程碑
+
+<!-- Which long-lived personal branch is this PR from, and what independently
+reviewable milestone does it complete? 一个 PR 应对应一个完整里程碑，不要求只包含一个提交。 -->
+
+Personal branch / 个人分支：
+Milestone / 里程碑：
+
 ## Type of Change / 修改类型
 
 <!-- Check the relevant option(s). -->
@@ -83,6 +91,8 @@ Limitations or unavailable runners:
       我已阅读[贡献指南](../CONTRIBUTING.md)。
 - [ ] I have self-reviewed the rendered diff and staged only files in scope.
       我已自行检查渲染后的 diff，且只暂存了本次改动涉及的文件。
+- [ ] I have synchronized my personal branch with the target branch before review.
+      我已在评审前将个人分支同步到目标分支。
 - [ ] I have checked whether this change needs a documentation, release-note, or follow-up Issue update.
       我已确认是否需要更新文档、发布说明或后续 Issue。
 
