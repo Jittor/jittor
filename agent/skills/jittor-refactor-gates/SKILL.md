@@ -110,6 +110,18 @@ export nvcc_path=/usr/local/cuda/bin/nvcc PATH=/usr/local/cuda/bin:$PATH
   但你的 worktree 里那个文件根本没变。
 - 处理：确认三套门禁各有各的 `JITTOR_HOME`，CUDA 那套确认 `JITTOR_LAB_ROOT` 也是自己的。
 
+**独立的 `JITTOR_HOME` 还不够：两个 jittor 进程同时冷启动会互相污染 cuda key。** 实测两棵 worktree
+各自 `JITTOR_HOME`、同时起，`compiler.py:1062` 算出的 cuda key 变成
+
+```
+cu12.2.140_..._sm_0902_232043.337919_48_89_Create_[i_file..../jittor.lock_lock_lock.py85]
+```
+
+——**另一个进程的日志行被当成算力值读了进来**，接着 `make_cache_dir` 拿这个含 `/` 的字符串建目录，
+报 `FileNotFoundError`，两棵树双双 `1 error in 0.36s`。这看着像"两个提交都挂了"，其实一次都没跑。
+
+判据：日志里 `cuda key:` 那行不是干净的 `sm_89`。**做 A/B 对照一律串行**，别为省时间并排跑。
+
 ### 串号：提交里混进了别人的改动
 
 - 成因：`git stash` 的栈存在公共的 `.git` 里，**所有 worktree 共用一个栈，worktree 不隔离它**。
@@ -151,6 +163,7 @@ if flock -n 9 9>$G/native.lock; then echo "没在跑"; else echo "在跑"; fi
 | 用例 | 症状 | 状态 |
 | --- | --- | --- |
 | `tests/compat/torch/test_torch_compat.py` | 段错误 | 分支起点就存在，非任何 agent 引入 |
+| `tests/compiler/test_atomic_tuner.py::test_atomic_tuner` | 第 4 项抓到 0 条 `to loop -1` 日志 | 起点就存在；根因 `032ecfe1` 全归约快路径绕开 JIT，是过期断言 |
 
 对照起点的办法（`git stash` 已禁用，别用它切来切去）：另开一个只读的 worktree 钉在起点上，
 在里面跑同一条用例：
@@ -186,3 +199,27 @@ git worktree add /自己目录/baseline origin/2.0     # 起点，只读，不�
 
 判成红之前先回到第 3 节那三道检查、第 4 节那几类假失败、第 6 节的起点已知失败清单——
 **在并行环境里，第一次看到的红有很大概率不是回归。**同一个提交复现两次再下结论。
+
+## 9. 被点名的提交不等于有罪：先看 pass 顺序再跑对照
+
+实例：`test_atomic_tuner` 抓不到 `atomictuner:` 日志，嫌疑指向 `9eb696d9`（新增 WarpReducePass，
+把 `atomicAdd(...);` 改写成复合块）。**读一眼 `pass_manager.cc` 就能排除**：WarpReducePass 挂在
+AtomicTunerPass **之后**，原子调优早已打完日志才轮到它改写。跑 `9eb696d9^` 对照，失败逐字一致，坐实。
+
+真正的原因在别处：`032ecfe1` 给 CUDA 全量归约装了 `nn/backends/full_reduce_cuda.py` 的 cub 两级折叠
+快路径，`x.sum()` 从此不进融合算子 JIT，AtomicTunerPass 连一条 atomic 语句都看不到。
+
+三条可复用的手法：
+
+1. **先读顺序，再跑对照。**一次 `pass_manager.cc` 的阅读能省掉两次冷编译。
+2. **看用例是几项挂的。**这个用例前三项（reindex_reduce 的 add/max/min）一直是通过的，只有第 4 项
+   （全归约）挂——"整个用例红了"和"用例里某一项红了"是完全不同的线索，前者才指向 pass，
+   后者指向那一项碰到的那条代码路径。
+3. **JIT 缓存目录就是证据。**`$JITTOR_HOME/.../jit/` 下的文件名带算子键。该用例跑完那里只有
+   `reindex_reduce` 和 `code__IN_SIZE_1...` 两族，没有 `reduce`——全归约被 code op 接管了，
+   一眼可见，不用去读被混淆的 `data.cc`。
+
+顺带一条：`opt/pass/` 下 `atomic_tuner_pass.cc`、`parallel_pass.cc`、`shared_reduce_pass.cc`
+**git 里根本没有**（2020 年 `8f316a2e` 删的），实现藏在 `python/jittor/utils/data.gz` 解压出的
+`data.cc` 里，编译时 `-include vdp`。所以这三个 pass 的日志 `__FILE__` 是 `data.cc`——
+`log_vprefix` 要写 `data=100` 才抓得到，写 `atomic=100` 抓不到。这就是任务 1.01 要还原的东西。

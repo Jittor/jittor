@@ -14,8 +14,11 @@
 | 用例 | 症状 |
 | --- | --- |
 | `tests/compat/torch/test_torch_compat.py` | `RandomOp` 子进程段错误 |
+| `tests/compiler/test_atomic_tuner.py::TestAtomicTunerClass::test_atomic_tuner` | 第 4 项 `x.sum()+x.sqr().mean()` 期望两条 `atomictuner: move atomicAdd to loop -1`，实得 0 条。根因是 `032ecfe1`（2026-08-28，起点前 202 个提交）把 CUDA 全量归约改走 `nn/backends/full_reduce_cuda.py` 的 cub 两级折叠 code op，整条全归约不再进融合算子 JIT，AtomicTunerPass 根本看不到 atomic 语句。前三项 add/max/min（reindex_reduce）在起点与起点父提交上都通过 |
 
 （这份表正在用一棵钉在 `9eb696d9` 的只读 worktree 实测补全，跑完会把失败 nodeid 逐条列全。）
+
+**`test_atomic_tuner` 已定论，`9eb696d9` 洗清。** 两棵只读 worktree、两份独立 `JITTOR_HOME`、同一条用例、**串行**跑（并行会串号，见 skill）：`9eb696d9^`(`a88ae02a`) 与 `9eb696d9` 的失败**逐字一致**——同为第 69 行第 4 项 `AssertionError: (0, 2)`。WarpReducePass 挂在 `pass_manager.cc` 的 `AtomicTunerPass` **之后**，原子调优早已打完日志才轮到它改写，它不可能吃掉这些日志。真正的原因见上表那一行：`032ecfe1` 的全归约快路径绕开了整个 JIT。**该用例现在断言的是一条已经不存在的代码路径，属于过期断言，不是回归。**
 
 ### B. 已归责、修复进行中——不要重复归因
 
@@ -91,7 +94,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | --- | --- | --- |
 | wheel 内容基线过期 | `agent/scripts/test_check_wheel_contents.py::test_repository_default_policy_is_the_clean_final_baseline` 报 `817 != 793`，有人加了新模块没更新基线 | 构建分区，随 9.x 一并更新 |
 | 结构测试子进程超时 flaky | `test_root_domain_structure.py::test_native_cold_start_preserves_legacy_module_surfaces` 子进程 180s 超时，机器有负载时超、单独重跑通过 | 门禁分区，放宽 timeout 或改判据 |
-| `test_atomic_tuner` 抓不到日志 | 嫌疑指向 `9eb696d9`（WarpReducePass 把 atomicAdd 改写成复合块）；`atomic_tuner_pass` 无源码，待 1.01 还原后可直接读代码确认 | 门禁分区做 `9eb696d9^` 对照定论 |
+| `test_atomic_tuner` 抓不到日志 | **已定论：与 `9eb696d9` 无关**，`9eb696d9^` 对照失败逐字一致。根因 `032ecfe1` 的 `full_reduce_cuda.py` 快路径使全归约不再走 JIT；用例第 4 项断言的代码路径已不存在 | 归约/代码生成分区：改用例（把第 4 项换成仍走 JIT 的归约，或断言快路径已接管），不要动 pass 顺序 |
 
 ## 任务
 
