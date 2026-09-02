@@ -1044,6 +1044,103 @@ def _read_cuda_archs():
             LOG.v(f"ignoring non-numeric output from query_cuda_cc: {token!r}")
     return sorted(archs)
 
+def parse_nvcc_arch_list(text):
+    """The integers in an ``nvcc --list-gpu-arch`` listing."""
+    archs = set()
+    for token in text.split():
+        token = token.strip()
+        if token.startswith("compute_") and token[len("compute_"):].isdigit():
+            archs.add(int(token[len("compute_"):]))
+    return sorted(archs)
+
+
+def _read_nvcc_archs(nvcc):
+    try:
+        child = sp.run([nvcc, "--list-gpu-arch"], stdout=sp.PIPE, stderr=sp.PIPE)
+    except OSError as error:
+        LOG.v(f"could not list nvcc gpu archs: {error}")
+        return []
+    if child.returncode != 0:
+        # --list-gpu-arch arrived in CUDA 11.1. Older toolkits fall back to
+        # the version table in the caller.
+        LOG.v("could not list nvcc gpu archs: "
+              + child.stderr.decode("utf8", "replace"))
+        return []
+    return parse_nvcc_arch_list(child.stdout.decode("utf8", "replace"))
+
+
+def query_nvcc_archs(nvcc):
+    """Virtual architectures this nvcc can generate code for, newest last.
+
+    This used to be a literal: ``max_arch = 90``, with a version ladder below
+    it for older toolkits. A literal ceiling ages into a wrong answer -- every
+    CUDA release after the one it was written for reads as 90 -- and the
+    consequence is not a missing optimisation but a build that cannot run.
+    Empty if this nvcc is too old to be asked (before CUDA 11.1).
+    """
+    return jit_utils.probe.cached("nvcc_archs:" + nvcc, [nvcc],
+                                  lambda: _read_nvcc_archs(nvcc))
+
+
+def select_cuda_archs(requested, max_arch, min_arch=30):
+    """The architectures to actually compile for, sorted and deduplicated.
+
+    Anything below ``min_arch`` is dropped: nvcc cannot target it at all.
+    Anything above ``max_arch`` is replaced by ``max_arch``, which is only
+    survivable because ``cuda_arch_flags`` keeps that architecture's PTX for
+    the driver to JIT -- see the warning below.
+    """
+    archs = []
+    for arch in requested:
+        arch = int(arch)
+        if arch < min_arch:
+            LOG.w(f"CUDA arch({arch})<{min_arch} is not supported")
+            continue
+        if arch > max_arch:
+            LOG.w(f"CUDA arch({arch}) is newer than anything this nvcc can "
+                  f"generate code for (highest is {max_arch}). Building for "
+                  f"compute_{max_arch} and embedding its PTX, which the driver "
+                  f"JIT-compiles for sm_{arch} the first time each kernel runs. "
+                  f"A CUDA toolkit that knows sm_{arch} removes that cost.")
+            arch = max_arch
+        archs.append(arch)
+    return sorted(set(archs))
+
+
+def cuda_arch_flags(archs):
+    """``-gencode`` for each architecture, keeping PTX for the newest one.
+
+    The old form was ``-arch=compute_<min>`` followed by one ``-code=sm_X`` per
+    architecture. That has two faults. Every cubin is compiled from the
+    *lowest* virtual architecture, so an sm_90 cubin is built from compute_70
+    sources and none of the newer instructions are available to it. And the
+    product contains cubins only: no PTX. A GPU newer than every ``sm_`` in
+    the list therefore has neither a loadable cubin nor anything to JIT, and
+    fails at launch with "no kernel image is available for execution on the
+    device". PTX for the highest architecture is the only thing that makes a
+    build forward compatible at all.
+    """
+    archs = sorted(set(int(arch) for arch in archs))
+    if not archs:
+        return ""
+    # Two things about the spelling, both learned the hard way.
+    #
+    # `--generate-code=...` rather than `-gencode ...`: cache_compile parses
+    # this command line to find the source files, and takes any token that is
+    # not itself an option to be one. Split across two tokens, the value is
+    # read as a file name and every CUDA operator fails to compile with
+    # "Source read failed: arch=compute_89,...".
+    #
+    # Two clauses rather than the `code=[sm_X,compute_X]` list: the command
+    # goes to a shell, where square brackets are a glob pattern. Unmatched
+    # patterns survive today, but nothing here needs to depend on that.
+    parts = [f" --generate-code=arch=compute_{arch},code=sm_{arch} "
+             for arch in archs]
+    top = archs[-1]
+    parts.append(f" --generate-code=arch=compute_{top},code=compute_{top} ")
+    return "".join(parts)
+
+
 def check_pybt(gdb_path, python_path):
     if gdb_path=='' or python_path=='':
         return False
@@ -1518,27 +1615,23 @@ if has_cuda and is_cuda:
     nvcc_flags = " " + os.environ.get("nvcc_flags", "") + " "
     nvcc_flags += convert_nvcc_flags(cc_flags)
     nvcc_version = list(jit_utils.get_int_version(nvcc_path))
-    max_arch = 90
-    if nvcc_version < [11,]:
-        max_arch = 75
-    elif nvcc_version < [11,1]:
-        max_arch = 80
-    elif nvcc_version < [11,8]:
+    supported_archs = query_nvcc_archs(nvcc_path)
+    if supported_archs:
+        max_arch = max(supported_archs)
+    else:
+        # nvcc too old for --list-gpu-arch (before CUDA 11.1), so the ceiling
+        # has to come from its version. This table only has to stay correct
+        # for toolkits that cannot answer for themselves, which is why it is
+        # no longer the source of the answer for the ones that can.
         max_arch = 86
+        if nvcc_version < [11,]:
+            max_arch = 75
+        elif nvcc_version < [11,1]:
+            max_arch = 80
     if len(flags.cuda_archs):
-        min_arch = 30
-        archs = []
-        for arch in flags.cuda_archs:
-            if arch<min_arch:
-                LOG.w(f"CUDA arch({arch})<{min_arch} is not supported")
-                continue
-            if arch>max_arch:
-                LOG.w(f"CUDA arch({arch})>{max_arch} will be backward-compatible")
-                arch = max_arch
-            archs.append(arch)
+        archs = select_cuda_archs(flags.cuda_archs, max_arch)
         flags.cuda_archs = archs
-        nvcc_flags += f" -arch=compute_{min(archs)} "
-        nvcc_flags += ''.join(map(lambda x:f' -code=sm_{x} ', archs))
+        nvcc_flags += cuda_arch_flags(archs)
 
 flags.cc_path = cc_path
 flags.cc_type = cc_type

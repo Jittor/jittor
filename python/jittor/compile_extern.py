@@ -461,8 +461,7 @@ def install_cutt(root_folder):
         # -Xptxas -dlcm=ca actually not work
         arch_flag = " -Xptxas -dlcm=ca "
         if len(flags.cuda_archs):
-            arch_flag = f" -arch=compute_{min(flags.cuda_archs)} "
-            arch_flag += ''.join(map(lambda x:f' -code=sm_{x} ', flags.cuda_archs))
+            arch_flag = cuda_arch_flags(flags.cuda_archs)
         cutt_include = f" -I\"{dirname}/include\" -I\"{dirname}/src\" "
         files = glob.glob(dirname+"/src/*.c*", recursive=True)
         files2 = []
@@ -552,8 +551,7 @@ def install_nccl(root_folder):
         LOG.i("installing nccl...")
         arch_flag = ""
         if len(flags.cuda_archs):
-            arch_flag = f" -arch=compute_{min(flags.cuda_archs)} "
-            arch_flag += ''.join(map(lambda x:f' -code=sm_{x} ', flags.cuda_archs))
+            arch_flag = cuda_arch_flags(flags.cuda_archs)
         run_cmd(f"CC=\"{cc_path}\" CXX=\"{cc_path}\" make -j8 src.build CUDA_HOME='{cuda_home}' NVCC_GENCODE='{arch_flag} --cudart=shared ' ", cwd=dirname)
     return dirname
 
