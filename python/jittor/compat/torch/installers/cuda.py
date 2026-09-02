@@ -5,6 +5,7 @@ changing the compatibility semantics.
 """
 
 import jittor as jt
+from ..types import _device_index
 
 from ..context import registry_for
 
@@ -194,6 +195,14 @@ def _install_cuda(g, registry=None):
     def device_count():
         if not is_available():
             return 0
+        # The runtime already honors CUDA_VISIBLE_DEVICES; every visible
+        # device is usable from this process.
+        try:
+            n = int(jt.core.get_device_count())
+            if n > 0:
+                return n
+        except Exception:
+            pass
         try:
             import os as _os_cuda
             _cvd = _os_cuda.environ.get("CUDA_VISIBLE_DEVICES", None)
@@ -211,16 +220,41 @@ def _install_cuda(g, registry=None):
     # NVML, so that it can answer before CUDA is initialised. Here both
     # questions go to the same place.
     cuda._device_count_nvml = device_count
-    cuda.current_device = lambda: 0
-    cuda.set_device = lambda *a, **k: None
+    # The current device is jt.flags.device_id: new tensors are placed on it,
+    # kernels launch on it, and Var.to_device moves data between devices.
+    def current_device():
+        return max(int(getattr(jt.flags, "device_id", 0)), 0)
+    def set_device(device):
+        idx = _device_index(device)
+        if idx is None:
+            return
+        count = device_count()
+        if count and not 0 <= idx < count:
+            raise RuntimeError("CUDA error: invalid device ordinal cuda:%d (%d visible)" % (idx, count))
+        jt.flags.device_id = idx
+    cuda.current_device = current_device
+    cuda.set_device = set_device
     class _CudaDeviceContext:
+        """torch.cuda.device(idx): make idx current inside the block."""
         def __init__(self, device=None):
-            self.device = device
+            self.idx = _device_index(device)
+            self.prev = None
         def __enter__(self):
+            if self.idx is not None:
+                self.prev = current_device()
+                if self.idx != self.prev:
+                    set_device(self.idx)
             return self
         def __exit__(self, *exc):
+            if self.prev is not None and self.prev != current_device():
+                set_device(self.prev)
             return False
     cuda.device = _CudaDeviceContext
+    class _CudaDeviceOf(_CudaDeviceContext):
+        def __init__(self, tensor):
+            dev = getattr(tensor, "device", None)
+            super().__init__(dev if getattr(dev, "type", "cpu") != "cpu" else None)
+    cuda.device_of = _CudaDeviceOf
     cuda.is_initialized = lambda *a, **k: bool(is_available() and getattr(jt.flags, "use_cuda", 0))
     cuda._is_in_bad_fork = lambda *a, **k: False
     # Match PyTorch's empty_cache() as a memory hint instead of a forced

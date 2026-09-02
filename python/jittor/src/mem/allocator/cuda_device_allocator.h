@@ -18,6 +18,8 @@ struct CudaDeviceAllocator : Allocator {
 };
 
 EXTERN_LIB CudaDeviceAllocator cuda_device_allocator;
+// The raw allocator for one device (device 0 is cuda_device_allocator itself).
+CudaDeviceAllocator& cuda_device_allocator_for(int device);
 
 }
 

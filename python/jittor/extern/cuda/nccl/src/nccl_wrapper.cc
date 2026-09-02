@@ -76,6 +76,8 @@ nccl_initer() {
         inside_mpi = true;
         nccl_device_id = device_count ? (local_rank % device_count) : 0;
         checkCudaErrors(cudaSetDevice(nccl_device_id));
+    device_id = nccl_device_id;
+    switch_cuda_device(nccl_device_id);
         event_queue.run_sync([]() {
             checkCudaErrors(cudaSetDevice(nccl_device_id));
         });

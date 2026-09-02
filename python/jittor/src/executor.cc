@@ -206,6 +206,11 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     auto temp_allocator = get_allocator(true);
     this->allocator = allocator;
     this->temp_allocator = temp_allocator;
+    #ifdef HAS_CUDA
+    // Start every run on the default device so `allocator` and the current
+    // device agree; ops on other devices switch below.
+    if (use_cuda) switch_cuda_device(default_cuda_device());
+    #endif
     // bfs find all ops need to run
     int op_num = 0;
     vector<Node*> bfs_q;
@@ -560,6 +565,20 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             root = fuse_ops[rr-1];
             load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
         }
+        #ifdef HAS_CUDA
+        if (use_cuda) {
+            // Run the op on its outputs' device (inherited from its inputs at
+            // creation) with that device's allocators.
+            int dev = op->outputs().size() ? (int)op->outputs().front()->cuda_device : default_cuda_device();
+            if (dev != current_cuda_device()) {
+                switch_cuda_device(dev);
+                allocator = get_allocator(false, dev);
+                temp_allocator = get_allocator(true, dev);
+                this->allocator = allocator;
+                this->temp_allocator = temp_allocator;
+            }
+        }
+        #endif
         if (save_mem) {
             swap_timestamp = ++tflag_count;
             for (auto* var : op->inputs()) {
@@ -600,9 +619,16 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
                         migrate_to_cpu(var, allocator);
             }
         } else {
+            bool cross_device = op->flags.get(NodeFlags::_cross_device);
             for (Var* v : op->inputs()) {
                 if (!v->allocator->is_cuda())
                     migrate_to_gpu(v, allocator);
+                else if (!cross_device && v->allocator->device >= 0
+                        && v->allocator->device != allocator->device)
+                    // A scalar constant first used on another device, or a
+                    // value whose op was exempted from the creation-time
+                    // check: bring it over rather than fault.
+                    migrate_to_device(v, allocator);
             }
             for (Var* v : op->outputs()) {
                 if (!v->allocator->is_cuda())
@@ -702,7 +728,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         sync_times++;
         try {
         // CHECK(EventQueue::OK == event_queue.run_sync([]() {
-            checkCudaErrors(cudaDeviceSynchronize());
+            synchronize_all_devices();
         // }));
         // TODO: run_sync cause hang, tmp fix it
         } catch (const std::exception& e) {

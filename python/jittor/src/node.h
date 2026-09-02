@@ -83,6 +83,8 @@ struct NodeFlags {
         _prefer_16=_prefer_32+1,
         // reduce keep type unchange
         _reduce_keep=_prefer_32+2,
+        // outputs keep their own device instead of inheriting the inputs'
+        _cross_device=_prefer_32+3,
         _custom_flag = _prefer_32+6,
     };
 

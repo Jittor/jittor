@@ -11,6 +11,7 @@ Split out of the tensor installer, which it runs as part of.
 import functools
 
 import jittor as jt
+from ..types import _device_index
 import numpy as np
 
 from ..types import (
@@ -152,7 +153,14 @@ def _wrap_constructors(g):
                     out.requires_grad_(True)
                     _torch_register_leaf(out)
                 return out
-            out = orig(*args, **kwargs)
+            # device="cuda:N": build under that current device so the new Var
+            # is placed there (torch semantics), then restore the current one.
+            _cuda_index = _device_index(_requested_device) if _want_cuda else None
+            if _cuda_index is not None and _cuda_index != max(int(jt.flags.device_id), 0):
+                with jt.flag_scope(device_id=_cuda_index):
+                    out = orig(*args, **kwargs)
+            else:
+                out = orig(*args, **kwargs)
             if _cast_to is not None:
                 out = out.cast(_cast_to)
             if _want_cuda:

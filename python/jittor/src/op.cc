@@ -112,6 +112,23 @@ void Op::init() {
                     sources.push_back(v->id);
         }
     }
+    if (_inputs.size() && !flags.get(NodeFlags::_cross_device)) {
+        // torch semantics: an op runs on its inputs' device and its outputs
+        // live there; mixing devices is an error, except for one-element
+        // values (scalar constants and scalars), which the executor copies
+        // to wherever they are used. (_is_scalar shares its bit with
+        // _th_require_grad, so the element count is the reliable test.)
+        int dev = -1;
+        for (Var* v : inputs()) {
+            if (v->num == 1) continue;
+            if (dev < 0) dev = v->cuda_device;
+            else if (dev != v->cuda_device)
+                LOGf << "Expected all inputs of" << name() << "on the same CUDA device, got cuda:"
+                    << dev << "and cuda:" << (int)v->cuda_device << "; move one side with .to(...) first";
+        }
+        if (dev < 0) dev = inputs().front()->cuda_device;
+        for (Var* v : outputs()) v->cuda_device = dev;
+    }
     infer_shape();
     if (first_init && has_first_order_only_input)
         for (Var* v : outputs())

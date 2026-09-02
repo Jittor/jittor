@@ -26,18 +26,30 @@ namespace jittor {
 namespace array_local {
 cudaStream_t stream;
 cudaEvent_t event;
+// One stream and event per device; the globals name the current device's.
+static cudaStream_t streams[64];
+static cudaEvent_t events[64];
 
 struct Init {
 Init() {
     if (!get_device_count()) return;
-    checkCudaErrors(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
-    checkCudaErrors(cudaEventCreate(&event, cudaEventDisableTiming));
+    register_device_switch_hook([](int device) {
+        if (!streams[device]) {
+            checkCudaErrors(cudaStreamCreateWithFlags(&streams[device], cudaStreamNonBlocking));
+            checkCudaErrors(cudaEventCreate(&events[device], cudaEventDisableTiming));
+        }
+        stream = streams[device];
+        event = events[device];
+    });
 }
 ~Init() {
     if (!get_device_count()) return;
     peekCudaErrors(cudaDeviceSynchronize());
-    peekCudaErrors(cudaStreamDestroy(stream));
-    peekCudaErrors(cudaEventDestroy(event));
+    for (int i = 0; i < 64; i++)
+        if (streams[i]) {
+            peekCudaErrors(cudaStreamDestroy(streams[i]));
+            peekCudaErrors(cudaEventDestroy(events[i]));
+        }
 }
 } init;
 

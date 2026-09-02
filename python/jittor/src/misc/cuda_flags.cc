@@ -6,8 +6,10 @@
 // ***************************************************************
 
 #include "common.h"
+#include "misc/cuda_flags.h"
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
+#include "helper_cuda.h"
 #ifdef __linux__
 #include <fstream>
 #include <unistd.h>
@@ -73,44 +75,78 @@ void setter_use_cuda(int value) {
     use_cuda = value;
 }
 
-void setter_device_id(int value) {
-#if defined(HAS_CUDA) && defined(__linux__)
-    // case1: set env device_id, not restart
-    // case2: set in python, restart
-    // case3: restart, device id and CUDA env set both
-    if (value<0)
-        return;
-    int count=0;
-    cudaGetDeviceCount(&count);
-    auto s = getenv("CUDA_VISIBLE_DEVICES");
-    auto s2 = getenv("device_id");
-    auto sv = std::to_string(value);
-    if (s2 && s2 == sv && (!s || count!=1)) {
-        // only handle case1 and case3(not cuda)
-        LOGi << "change to device #" >> value;
-        cudaSetDevice(value);
+static int exec_device = -1;
+static uint64 used_devices = 0;
+static vector<std::function<void(int)>>& device_hooks() {
+    static vector<std::function<void(int)>> hooks;
+    return hooks;
+}
+
+int default_cuda_device() {
+    return device_id < 0 ? 0 : device_id;
+}
+
+int current_cuda_device() {
+    return exec_device;
+}
+
+void switch_cuda_device(int device) {
+#ifdef HAS_CUDA
+    if (device == exec_device) return;
+    CHECK(device >= 0 && device < get_device_count())
+        << "cuda:" << device << "is not a visible device," << get_device_count() << "visible";
+    checkCudaErrors(cudaSetDevice(device));
+    exec_device = device;
+    used_devices |= 1ull << device;
+    for (auto& hook : device_hooks())
+        hook(device);
+#endif
+}
+
+void register_device_switch_hook(std::function<void(int)> hook) {
+#ifdef HAS_CUDA
+    if (!get_device_count()) return;
+    device_hooks().push_back(hook);
+    if (exec_device < 0)
+        // Runs every hook, this one included, for the initial device.
+        switch_cuda_device(default_cuda_device());
+    else
+        hook(exec_device);
+#endif
+}
+
+void synchronize_all_devices() {
+#ifdef HAS_CUDA
+    if (!use_cuda) return;
+    if (exec_device < 0 || used_devices == (1ull << exec_device)) {
+        checkCudaErrors(cudaDeviceSynchronize());
         return;
     }
-    if (s && s == sv)
+    for (int i = 0; i < 64; i++)
+        if (used_devices & (1ull << i)) {
+            checkCudaErrors(cudaSetDevice(i));
+            checkCudaErrors(cudaDeviceSynchronize());
+        }
+    checkCudaErrors(cudaSetDevice(exec_device));
+#endif
+}
+
+void setter_device_id(int value) {
+    // The current device, as torch.cuda.set_device: new Vars are placed on it
+    // and it becomes the CUDA current device. Other devices stay visible and
+    // reachable through Var.to_device; nothing is re-executed.
+    if (value < 0) {
+        device_id = value;
         return;
-    setenv("CUDA_VISIBLE_DEVICES", sv.c_str(), 1);
-    setenv("device_id", sv.c_str(), 1);
-    std::ifstream ifs("/proc/self/cmdline");
-    if (!(ifs && ifs.good())) return;
-    string cmd((std::istreambuf_iterator<char>(ifs)),
-               (std::istreambuf_iterator<char>()));
-    vector<char*> ss;
-    auto cstr = (char*)cmd.c_str();
-    ss.push_back(cstr);
-    for (int i=0; i<cmd.size(); i++)
-        if (cstr[i] == '\0')
-            ss.push_back(&cstr[i+1]);
-    ss.pop_back();
-    ss.push_back(nullptr);
-    LOGi << "[restart] change to device #" >> value;
-    execvp(ss[0], &ss[0]);
-    ss.pop_back();
-    LOGe << "restart failed" << ss;
+    }
+#ifdef HAS_CUDA
+    int count = get_device_count();
+    CHECK(count == 0 || value < count)
+        << "device_id" << value << "is out of range:" << count << "CUDA devices visible";
+    device_id = value;
+    if (count) switch_cuda_device(value);
+#else
+    device_id = value;
 #endif
 }
 

@@ -5,6 +5,7 @@ changing the compatibility semantics.
 """
 
 import jittor as jt
+from ..types import _device_index, _move_to_cuda_index
 from jittor import nn
 import numbers
 import numpy as np
@@ -841,7 +842,12 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         # global use_cuda flag is 1. Only fall back to the global flag when
         # CUDA is on and the Var is genuinely device-resident.
         if (jt.flags.use_cuda or getattr(jt.compiler, "has_acl", 0)):
-            return device("cpu") if _var_is_cpu_resident(self) else device("cuda", 0)
+            if _var_is_cpu_resident(self):
+                return device("cpu")
+            try:
+                return device("cuda", int(self.device_index()))
+            except Exception:
+                return device("cuda", 0)
         return device("cpu")
     Var.device = property(_device)
 
@@ -1314,6 +1320,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             out = _make_cpu_resident(out)
         elif _device_is_cuda(dev):
             out = _make_cuda_resident(out, force=True)
+            out = _move_to_cuda_index(out, dev)
         if getattr(self, "_torch_0d", False):
             out._torch_0d = True
         return out
@@ -1358,10 +1365,20 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     def _var_cuda(self, device=None, *a, **k):
         jt.flags.use_cuda = 1
         out = _make_cuda_resident(self, force=True)
+        out = _move_to_cuda_index(out, device)
         if getattr(self, "_torch_0d", False):
             out._torch_0d = True
         return out
     Var.cuda = _var_cuda
+    # torch: the device index, -1 for a CPU tensor.
+    def _var_get_device(self):
+        if _var_is_cpu_resident(self):
+            return -1
+        try:
+            return int(self.device_index())
+        except Exception:
+            return 0
+    Var.get_device = _var_get_device
 
     # ---- integer/float dtype cast methods (torch parity) ----
     # jittor aliases Var.long = Var.int32 and Var.int = Var.int32, so BOTH

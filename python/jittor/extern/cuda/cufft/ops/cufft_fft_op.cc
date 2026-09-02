@@ -15,6 +15,7 @@
 #include "helper_cuda.h"
 #include "cufft_fft_op.h"
 #include "cufft_wrapper.h"
+#include "misc/cuda_flags.h"
 
 #include <complex>
 #include <iostream>
@@ -72,6 +73,7 @@ void CufftFftOp::jit_run() {
     JK& jk = get_jk();
     jk.clear();
     jk << fft[0] << "," << fft[1] << "," << TS << "," << batch_size;
+    jk << "«dev:" << current_cuda_device();
     auto iter = cufft_handle_cache.find(jk.to_string());
     cufftHandle plan;
     if (iter!=cufft_handle_cache.end()) plan = iter->second;

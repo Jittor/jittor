@@ -30,17 +30,26 @@ int get_benchmark() {
     return cudnn_benchmark;
 }
 
+static cudnnHandle_t cudnn_handles[64];
+
 struct cudnn_initer {
 
 inline cudnn_initer() {
     if (!get_device_count()) return;
-    checkCudaErrors(cudnnCreate(&cudnn_handle));
-    LOGv << "cudnnCreate finished";
+    // One handle per device; `cudnn_handle` always names the current device's.
+    register_device_switch_hook([](int device) {
+        if (!cudnn_handles[device]) {
+            checkCudaErrors(cudnnCreate(&cudnn_handles[device]));
+            LOGv << "cudnnCreate finished for device" << device;
+        }
+        cudnn_handle = cudnn_handles[device];
+    });
 }
 
 inline ~cudnn_initer() {
     if (!get_device_count()) return;
-    checkCudaErrors(cudnnDestroy(cudnn_handle));
+    for (auto& h : cudnn_handles)
+        if (h) checkCudaErrors(cudnnDestroy(h));
     LOGv << "cudnnDestroy finished";
 }
 

@@ -291,6 +291,44 @@ def _device_is_cuda(dev):
     return False
 
 
+def _device_index(dev):
+    """The CUDA index a torch device argument names, or None when it names no
+    particular device ("cuda", torch.device("cuda"), None). Accepts the
+    `device` class, torch.device-like objects, "cuda:N" strings and ints."""
+    if dev is None:
+        return None
+    if isinstance(dev, bool):
+        return None
+    if isinstance(dev, int):
+        return dev
+    if isinstance(dev, str):
+        head, _, tail = dev.partition(":")
+        if head in ("cuda", "npu") and tail.isdigit():
+            return int(tail)
+        return None
+    idx = getattr(dev, "index", None)
+    if isinstance(idx, int) and not isinstance(idx, bool):
+        return idx
+    return None
+
+
+def _move_to_cuda_index(v, dev):
+    """Return v on the CUDA device `dev` names, copying across devices when
+    needed. An unindexed device means the current device, as in torch."""
+    if not isinstance(v, jt.Var):
+        return v
+    idx = _device_index(dev)
+    if idx is None:
+        idx = max(int(getattr(jt.flags, "device_id", 0)), 0)
+    try:
+        current = int(v.device_index())
+    except Exception:
+        return v
+    if current == idx:
+        return v
+    return jt.core.ops.device_copy(v, idx)
+
+
 def _var_is_cpu_resident(v):
     """True if a Var's data actually lives in host memory.
 

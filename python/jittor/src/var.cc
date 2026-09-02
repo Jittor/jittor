@@ -7,6 +7,7 @@
 #include <type_traits>
 
 #include "var.h"
+#include "misc/cuda_flags.h"
 #include "op.h"
 #include "mem/allocator.h"
 #include "pybind/py_var_tracer.h"
@@ -80,6 +81,7 @@ Var::Var(NanoVector shape, NanoString dtype)
     flags.set(NodeFlags::_stop_fuse, no_fuse);
     ns = dtype;
     ASSERT(ns.is_dtype());
+    cuda_device = default_cuda_device();
     number_of_lived_vars++;
     numel();
     if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var)) trace_data.record_node(this);

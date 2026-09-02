@@ -10,12 +10,17 @@
 namespace jittor {
 
 cusparseHandle_t cusparse_handle;
+static cusparseHandle_t cusparse_handles[64];
 
 struct cusparse_initer {
 
     inline cusparse_initer() {
         if (!get_device_count()) return;
-        checkCudaErrors(cusparseCreate(&cusparse_handle));
+        register_device_switch_hook([](int device) {
+            if (!cusparse_handles[device])
+                checkCudaErrors(cusparseCreate(&cusparse_handles[device]));
+            cusparse_handle = cusparse_handles[device];
+        });
         LOGv << "cusparseCreate finished" << (void*)cusparse_handle;
     }
 

@@ -8,6 +8,7 @@ import weakref
 import os
 
 import jittor as jt
+from ..types import _device_index, _move_to_cuda_index
 from jittor import nn
 
 from ..context import registry_for
@@ -1581,6 +1582,14 @@ def _install_module_methods(nn, registry=None):
                 out = _make_cpu_resident(out, inplace=(out is v))
             elif _device_is_cuda(dev):
                 out = _make_cuda_resident(out, force=True, inplace=(out is v))
+                moved = _move_to_cuda_index(out, dev)
+                if moved is not out:
+                    if out is v:
+                        # Keep the Parameter object (optimizers hold it) and
+                        # swap its storage, as torch's Module.to does.
+                        out.assign(moved)
+                    else:
+                        out = moved
             return out
 
         if dev is not None or ds is not None:

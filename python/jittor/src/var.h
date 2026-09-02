@@ -27,6 +27,10 @@ struct Var : Node {
     size_t allocation;
     int64 size, num;
     VarHolder* holder = nullptr;
+    // The CUDA device this Var is placed on (torch's tensor.device.index).
+    // Taken from the current device at creation, inherited from an op's
+    // inputs, or set by device_copy; the executor runs the Var there.
+    int16 cuda_device = 0;
     inline bool is_float() const { CHECK_EXIST; return ns.is_float(); }
     inline int dsize() const { CHECK_EXIST; return ns.dsize(); }
     inline NanoString dtype() const { CHECK_EXIST; return ns; }

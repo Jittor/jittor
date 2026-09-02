@@ -14,13 +14,32 @@
 namespace jittor {
 
 curandGenerator_t gen;
+// One generator per device; `gen` always names the current device's. Every
+// generator is seeded the same way so a seed is reproducible on any device.
+static curandGenerator_t gens[64];
+static int last_seed = -1;
+
+static void seed_generator(curandGenerator_t g, int seed) {
+    checkCudaErrors( curandSetPseudoRandomGeneratorSeed(g, seed) );
+    checkCudaErrors( curandSetGeneratorOffset(g, 0) );
+}
 
 struct curand_initer {
 
 inline curand_initer() {
     if (!get_device_count()) return;
-    checkCudaErrors( curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT) );
+    register_device_switch_hook([](int device) {
+        if (!gens[device]) {
+            checkCudaErrors( curandCreateGenerator(&gens[device], CURAND_RNG_PSEUDO_DEFAULT) );
+            if (last_seed >= 0) seed_generator(gens[device], last_seed);
+        }
+        gen = gens[device];
+    });
     add_set_seed_callback([](int seed) {
+        last_seed = seed;
+        for (auto g : gens)
+            if (g) seed_generator(g, seed);
+        return;
         checkCudaErrors( curandSetPseudoRandomGeneratorSeed(gen, seed) );
         // The seed alone does not rewind the generator: it keeps its position
         // in the sequence, so re-seeding with the same value after drawing
@@ -34,7 +53,8 @@ inline curand_initer() {
 
 inline ~curand_initer() {
     if (!get_device_count()) return;
-    checkCudaErrors( curandDestroyGenerator(gen) );
+    for (auto g : gens)
+        if (g) checkCudaErrors( curandDestroyGenerator(g) );
     LOGv << "curandDestroy finished";
 }
 

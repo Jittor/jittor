@@ -66,7 +66,12 @@ void setter_use_cuda_host_allocator(int value) {
 extern int64 sfrl_large_block_size_device;
 
 Allocator* get_allocator(bool temp_allocator) {
+    return get_allocator(temp_allocator, default_cuda_device());
+}
+
+Allocator* get_allocator(bool temp_allocator, int device) {
     Allocator* allocator = nullptr;
+    int allocator_device = -1;
     if (use_cuda && sfrl_large_block_size_device >= (1ll<<40)) {
         // if super large block is used, don't use
         // temp allocator
@@ -78,8 +83,9 @@ Allocator* get_allocator(bool temp_allocator) {
             LOGvv << "Using cuda_managed_allocator";
             allocator = &cuda_managed_allocator;
         } else {
-            LOGvv << "Using cuda_device_allocator";
-            allocator = &cuda_device_allocator;
+            LOGvv << "Using cuda_device_allocator" << device;
+            allocator = &cuda_device_allocator_for(device);
+            allocator_device = device;
         }
     } else
     if (use_cuda_host_allocator) {
@@ -107,6 +113,7 @@ Allocator* get_allocator(bool temp_allocator) {
     if (use_nfef_allocator) {
         LOGvv << "Using use_nfef_allocator";
         allocator = setup_allocator<NFEFAllocator>(allocator);
+        allocator->device = allocator_device;
         return allocator;
     }
     if (temp_allocator && use_temp_allocator) {
@@ -120,6 +127,7 @@ Allocator* get_allocator(bool temp_allocator) {
         LOGvv << "Using stat_allocator at last";
         allocator = setup_allocator<StatAllocator>(allocator);
     }
+    allocator->device = allocator_device;
     return allocator;
 }
 
@@ -175,6 +183,20 @@ void migrate_to_cpu(Var* var, Allocator* allocator) {
     #endif
 }
 
+
+void migrate_to_device(Var* var, Allocator* allocator) {
+    #ifdef HAS_CUDA
+    if (var->size == 0 || !var->allocator->is_cuda() || var->allocator->device == allocator->device) return;
+    int src = var->allocator->device;
+    Allocation a(allocator, var->size);
+    checkCudaErrors(cudaMemcpyPeer(a.ptr, allocator->device, var->mem_ptr, src, var->size));
+    var->allocator->free(var->mem_ptr, var->size, var->allocation);
+    var->mem_ptr = a.ptr;
+    var->allocation = a.allocation;
+    var->allocator = a.allocator;
+    a.ptr = nullptr;
+    #endif
+}
 
 void migrate_to_gpu(Var* var, Allocator* allocator) {
     #ifdef HAS_CUDA

@@ -97,6 +97,9 @@ struct VarHolder {
         return this; 
     };
 
+    // @pyjt(device_index)
+    inline int device_index() { return var->cuda_device; }
+
     // @pyjt(location)
     inline string location() {
         if (var->flags.get(NodeFlags::_is_swapped))

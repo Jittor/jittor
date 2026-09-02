@@ -472,6 +472,19 @@ def float_auto(x):
     return x.float32()
 Var.float_auto = float_auto
 
+def to_device(self, device):
+    ''' Return this Var on CUDA device ``device`` (an index, or an object
+    with an ``index``); a copy is made when it lives on another device.
+    Devices are independent: an op takes its inputs' device, and mixing two
+    devices in one op is an error, as in torch. '''
+    # ``from jittor import *`` shadows the builtin int with the cast op.
+    device = ori_int(getattr(device, "index", device))
+    if device == self.device_index():
+        return self
+    import jittor_core
+    return jittor_core.ops.device_copy(self, device)
+Var.to_device = to_device
+
 def array64(data, dtype=None):
     with jt.flag_scope(auto_convert_64_to_32=0):
         return array(data, dtype)
@@ -1634,7 +1647,15 @@ class Module:
         self.load_state_dict(state)
 
     def cuda(self, device=None):
+        ''' Enable CUDA; with ``device`` given, also move every parameter and
+        buffer onto that device index, in place. '''
         flags.use_cuda = 1
+        if device is not None:
+            index = ori_int(getattr(device, "index", device))
+            for p in self.parameters():
+                moved = p.to_device(index)
+                if moved is not p:
+                    p.assign(moved)
         return self
 
     def npu(self, device=None):
