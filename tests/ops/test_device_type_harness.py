@@ -54,14 +54,20 @@ def _cases(cls):
     return [name for name in dir(cls) if name.startswith("test")]
 
 
-@pytest.fixture
-def two_device_build(monkeypatch):
-    """Pretend this is a CUDA build, whatever the machine actually is."""
+def _pretend_two_device_build(monkeypatch):
+    """Pretend this is a CUDA build, whatever the machine actually is.
+
+    A plain helper rather than a fixture: ``tests/structure/test_pytest_contract.py``
+    reserves module-level ``test_*`` parameters for pytest's own fixtures, because a
+    ``test_*`` function with an unknown parameter is almost always a mis-collected
+    helper.
+    """
     monkeypatch.setattr(cu, "buildable_device_types", lambda: ("cpu", "cuda"))
     monkeypatch.delenv("JITTOR_TEST_DEVICES", raising=False)
 
 
-def test_an_author_pin_reaches_the_gate_that_selected_that_device(two_device_build, monkeypatch):
+def test_an_author_pin_reaches_the_gate_that_selected_that_device(monkeypatch):
+    _pretend_two_device_build(monkeypatch)
     monkeypatch.setenv("JITTOR_TEST_DEVICES", "cpu")
     scope = {}
     instantiate_device_type_tests(_template(), scope, only_for=("cpu",))
@@ -71,7 +77,8 @@ def test_an_author_pin_reaches_the_gate_that_selected_that_device(two_device_bui
     assert _cases(generated["TestSampleCPU"]) == ["test_anything"]
 
 
-def test_a_pinned_battery_is_visibly_skipped_rather_than_dropped(two_device_build, monkeypatch):
+def test_a_pinned_battery_is_visibly_skipped_rather_than_dropped(monkeypatch):
+    _pretend_two_device_build(monkeypatch)
     monkeypatch.setenv("JITTOR_TEST_DEVICES", "cuda")
     scope = {}
     instantiate_device_type_tests(_template(), scope, only_for=("cpu",))
@@ -88,7 +95,8 @@ def test_a_pinned_battery_is_visibly_skipped_rather_than_dropped(two_device_buil
     assert "cpu" in reason and "cuda" in reason
 
 
-def test_an_unpinned_battery_still_follows_the_runner_selection(two_device_build, monkeypatch):
+def test_an_unpinned_battery_still_follows_the_runner_selection(monkeypatch):
+    _pretend_two_device_build(monkeypatch)
     monkeypatch.setenv("JITTOR_TEST_DEVICES", "cuda")
     scope = {}
     instantiate_device_type_tests(_template(), scope)
@@ -138,7 +146,8 @@ def test_the_backward_battery_is_cpu_pinned_and_reachable_from_the_cpu_gate():
 # produced zero test cases, and zero test cases is reported exactly like success.
 
 
-def test_a_generated_class_is_never_left_without_test_methods(two_device_build, monkeypatch):
+def test_a_generated_class_is_never_left_without_test_methods(monkeypatch):
+    _pretend_two_device_build(monkeypatch)
     """The original defect: a per-method pin emptying the only class generated."""
     monkeypatch.setenv("JITTOR_TEST_DEVICES", "cuda")
     with pytest.raises(RuntimeError) as raised:
@@ -146,7 +155,8 @@ def test_a_generated_class_is_never_left_without_test_methods(two_device_build, 
     assert "TestSampleCUDA" in str(raised.value)
 
 
-def test_a_template_without_test_methods_is_an_error(two_device_build):
+def test_a_template_without_test_methods_is_an_error(monkeypatch):
+    _pretend_two_device_build(monkeypatch)
     class TestEmpty(cu.JittorTestCase):
         pass
 
@@ -154,7 +164,8 @@ def test_a_template_without_test_methods_is_an_error(two_device_build):
         instantiate_device_type_tests(TestEmpty, {})
 
 
-def test_an_unknown_device_pin_is_an_error(two_device_build):
+def test_an_unknown_device_pin_is_an_error(monkeypatch):
+    _pretend_two_device_build(monkeypatch)
     with pytest.raises(ValueError) as raised:
         instantiate_device_type_tests(_template(), {}, only_for=("gpu",))
     assert "gpu" in str(raised.value)
