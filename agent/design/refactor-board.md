@@ -21,7 +21,7 @@
 | 绑定 | bindings | 6.C02、6.C22–6.C25、6.C27–6.C29 |
 | Python 核心 | | |
 | Python 算子 | | |
-| Python 其他 | | |
+| Python 其他 | pyother | 6.P10–6.P22 |
 | 兼容层 | | |
 | CUDA 后端 | | |
 | ACL/ROCm/Corex | | |
@@ -185,19 +185,19 @@
 | 6.P07 | H5 eigh 反向 `dout` 全零时写零 | 待领 | | |
 | 6.P08 | H6 `_autograd_grad` 的 zip 用过滤后的 `new_grad_output… | 待领 | | |
 | 6.P09 | H7 irfft 对实数输入与显式 `n` 的处理走 `:68-73` 的判别函数 | 待领 | | |
-| 6.P10 | H8 ReduceLROnPlateau 每轮从初始 lr 计算 | 待领 | | |
-| 6.P11 | H9 `unique(return_counts=True, return_inverse=Fa… | 待领 | | |
-| 6.P12 | H10 Adan 的 `clip_grad_norm` 移出 param_group 循环 | 待领 | | |
-| 6.P13 | H11 `zero_grad` 清缓冲而非只翻标志 | 待领 | | |
-| 6.P14 | H12 Adam 偏差修正用每 param 的步数 | 待领 | | |
-| 6.P15 | H13 worker 异常不再变成给父进程发 SIGINT | 待领 | | |
-| 6.P16 | H14 `mp_log_v` 做 int 转换 | 待领 | | |
-| 6.P17 | H15 Pillow 版本用元组比较 | 待领 | | |
-| 6.P18 | H16 `Dataset.__deepcopy__` memo 存对象不存 id | 待领 | | |
-| 6.P19 | H17 `LogitRelaxedBernoulli` 返回 logit | 待领 | | |
-| 6.P20 | H18 `ComplexNumber.__rsub__` 虚部符号、`__imatmul__` … | 待领 | | |
-| 6.P21 | H19 稀疏卷积重复坐标 CPU/CUDA 语义统一 | 待领 | | |
-| 6.P22 | H20 `to_dense` 对 COO 重复索引求和 | 待领 | | |
+| 6.P10 | H8 ReduceLROnPlateau 每轮从初始 lr 计算 | 进行中 | pyother | |
+| 6.P11 | H9 `unique(return_counts=True, return_inverse=Fa… | 进行中 | pyother | |
+| 6.P12 | H10 Adan 的 `clip_grad_norm` 移出 param_group 循环 | 进行中 | pyother | |
+| 6.P13 | H11 `zero_grad` 清缓冲而非只翻标志 | 进行中 | pyother | |
+| 6.P14 | H12 Adam 偏差修正用每 param 的步数 | 进行中 | pyother | |
+| 6.P15 | H13 worker 异常不再变成给父进程发 SIGINT | 进行中 | pyother | |
+| 6.P16 | H14 `mp_log_v` 做 int 转换 | 进行中 | pyother | |
+| 6.P17 | H15 Pillow 版本用元组比较 | 进行中 | pyother | |
+| 6.P18 | H16 `Dataset.__deepcopy__` memo 存对象不存 id | 进行中 | pyother | |
+| 6.P19 | H17 `LogitRelaxedBernoulli` 返回 logit | 进行中 | pyother | |
+| 6.P20 | H18 `ComplexNumber.__rsub__` 虚部符号、`__imatmul__` … | 进行中 | pyother | |
+| 6.P21 | H19 稀疏卷积重复坐标 CPU/CUDA 语义统一 | 进行中 | pyother | |
+| 6.P22 | H20 `to_dense` 对 COO 重复索引求和 | 进行中 | pyother | |
 | 6.B01 | MPI 的 int64 改 `MPI_INT64_T` | 待领 | | |
 | 6.B02 | ACL | 待领 | | |
 | 6.B03 | HCCL 宏错误时抛而非 return | 待领 | | |
