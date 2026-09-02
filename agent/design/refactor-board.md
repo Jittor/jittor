@@ -187,7 +187,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 2.01 | Var 与 Op 各持自己的 flag 类型 | 待领 | | |
 | 2.02 | 删除 `Node::custom_data` | 待领 | | |
 | 2.03 | `tflag` 全局计数器加魔数改为 epoch 对象或局部集合 | 待领 | | |
-| 2.04 | `Var::allocator` 去类型双关 | 待领 | | |
+| 2.04 | `Var::allocator` 去类型双关 | 已合并 | | 9b3841b7 |
 | 2.05 | 真正的 0 维张量 | 待领 | | |
 | 2.06 | 边表由 list 加反向迭代器改 SmallVector，按下标 O(1) | 待领 | | |
 | 2.07 | `hold_vars`/`sync_ptr` 析构里 `std::next(end())` 的 … | 待领 | | |
@@ -231,7 +231,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 3.22 | CUDA 归约块内树形归约 | 待领 | | |
 | 3.23 | 融合逐元素 kernel 带宽效率 | 待领 | | |
 | 3.24 | 布局收尾 | 待领 | | |
-| 4.01 | 分配器 id 空间随分配器实例走，不再是进程静态 2M 单例 | 待领 | | |
+| 4.01 | 分配器 id 空间随分配器实例走，不再是进程静态 2M 单例 | 已合并 | | 4e407447 |
 | 4.02 | 合并多卡 | 待领 | | |
 | 4.03 | `BackendRegistry` | 待领 | | |
 | 4.04 | `OpRegistry` | 待领 | | |
@@ -252,17 +252,17 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 5.04 | 参数模型 | 待领 | | |
 | 5.05 | `eval()`/`train()` 只切 `is_train`，冻结统一由 `requires… | 待领 | | |
 | 5.06 | hook 存实例级有序字典，多 hook、prepend/always_call 生效、可移除 … | 待领 | | |
-| 5.07 | `jt.Function` 每次调用创建一次性上下文对象，实例无状态 | 待领 | | |
-| 5.08 | `flag_scope` 的备份改局部栈，`__call__` 每次新建 scope | 待领 | | |
+| 5.07 | `jt.Function` 每次调用创建一次性上下文对象，实例无状态 | 已合并 | | 5c4e624b |
+| 5.08 | `flag_scope` 的备份改局部栈，`__call__` 每次新建 scope | 已合并 | | 5720e7e8 |
 | 5.09 | 29 处融合 kernel 的启用条件由全局 `no_grad` 改为「输出不需要梯度」 | 待领 | | |
 | 5.10 | 索引与计数统一 int64 | 待领 | | |
 | 5.11 | `amp_reg` 位常量命名导出，一律 `\ | 待领 | | |
 | 5.12 | matmul 四条路径共用能力表，dtype 用枚举不用子串 | 待领 | | |
 | 5.13 | `unique` | 待领 | | |
-| 5.14 | `Var.scatter` 改非就地 | 待领 | | |
+| 5.14 | `Var.scatter` 改非就地 | 已合并 | | 0b75e187 |
 | 5.15 | `.half()`/`.float16()` 删死的 amp 分支 | 待领 | | |
 | 5.16 | `state_dict(to="torch")` 用 `from_numpy`，不强制 floa… | 待领 | | |
-| 5.17 | 同一概念合并 | 待领 | | |
+| 5.17 | 同一概念合并 | 已合并 | | 3344cb40 |
 | 5.18 | 同一概念合并 | 已合并 | pyother | 40fa8695（efficientnet 投影层）37ac0ac5（models/_utils）4179c899（loss 的 _reduce）d5892775（分布类）d569f22d（旧式 scheduler）dd1cbe30（init 的 gain 表与 fan）96cb9b1c（linalg helper）f23dc9b8（normalize 合并到 torch 语义） |
 | 5.19 | 被静默忽略的参数改为传非默认值时 warn 或 raise | 进行中 | pyops（算子参数）+ pyother（其余） | 1710aef1（算子参数：relu/leaky_relu/silu/mish 的 inplace、instance_norm 与 InstanceNorm 的 running stats/momentum/is_train/sync、svd 的 compute_uv/driver、inv_ex 的 check_errors、ctc_loss 的 zero_infinity、sort 的 stable；topk 的 sorted 判为无需处理，见提交说明）。共用基础设施 `python/jittor/_arg_policy.py`，pyother 直接复用，不要另起近义模块。其余（pyother）：4cf6df28（resnet 的 zero_init_residual——判为该实现而不是 warn，按 torchvision 清零残差分支末端 BN 的 gamma）、211339c9（vjp/jvp 的 strict 归 unsupported、DataLoader 的 pin_memory/persistent_workers 归 ignored 且 persistent_workers 用哨兵默认值只在显式传 False 时 warn、kaiming 的 generator 归 unsupported、fftfreq/rfftfreq 的 dtype 直接实现且未知 kwargs 抛 TypeError） |
 | 5.20 | import 期副作用删除 | 待领 | | |
@@ -272,22 +272,22 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 5.24 | 10 个 `jt._*` 跨模块契约 | 待领 | | |
 | 5.25 | `python/jittor/utils/` 拆散 | 待领 | | |
 | 5.26 | 布局收尾 | 待领 | | |
-| 6.C01 | `.item()` 对无符号 dtype | 待领 | | |
+| 6.C01 | `.item()` 对无符号 dtype | 已合并 | | 9b3023b1 |
 | 6.C02 | `PySlice_Unpack` 返回值检查，三个变量初始化 | 已合并 | bindings | 78d08344 |
 | 6.C03 | 整数提升 | 并入 2.16 | | |
 | 6.C04 | 含 `void` 语句被删 | 并入 3.09 | | |
-| 6.C05 | 融合边号 ≥256 回绕 | 待领 | | |
-| 6.C06 | `grad.cc:65-68` 判空对象改为 `dx` | 待领 | | |
-| 6.C07 | 缺失梯度默认报错 | 待领 | | |
+| 6.C05 | 融合边号 ≥256 回绕 | 已合并 | | 21a4f4fc |
+| 6.C06 | `grad.cc:65-68` 判空对象改为 `dx` | 已合并 | | 4875a7aa |
+| 6.C07 | 缺失梯度默认报错 | 已合并 | | 78c154e4 |
 | 6.C08 | `grad.cc:146-261` 两趟遍历合一趟并快照结构，删无边界游标 | 待领 | | |
-| 6.C09 | `backward()` 可重复 | 待领 | | |
+| 6.C09 | `backward()` 可重复 | 已合并 | | 93b6e813 |
 | 6.C10 | CUDA 分配钩子两张 map 用 `find` 加显式错误，释放后 `erase` | 进行中 | mem | |
 | 6.C11 | CPU 分配失败抛异常，返回值必须检查 | 进行中 | mem | |
 | 6.C12 | `cuda_device_allocator.cc:32-37` 的 managed 回退放到 … | 进行中 | mem | |
 | 6.C13 | 零字节分配不返回伪指针 `0x10` | 进行中 | mem | |
 | 6.C14 | SFRL | 进行中 | mem | |
-| 6.C15 | `migrate_to_cpu/gpu` 迁移前检查 share_with 关系，整组迁移或拒绝 | 待领 | | |
-| 6.C16 | fetch 跨流 | 待领 | | |
+| 6.C15 | `migrate_to_cpu/gpu` 迁移前检查 share_with 关系，整组迁移或拒绝 | 已合并 | | 7e223483 |
+| 6.C16 | fetch 跨流 | 已合并 | | 9095484b |
 | 6.C17 | `TempAllocator` 删遮蔽基类的 `used_memory`/`unused_mem… | 进行中 | mem | |
 | 6.C18 | CachingBlock 保存底层 allocation 并原样回传，不再传 0 | 进行中 | mem | |
 | 6.C19 | 每个分配器一把锁并覆盖 `gc()` | 进行中 | mem | |
@@ -325,8 +325,8 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 6.P20 | H18 `ComplexNumber.__rsub__` 虚部符号、`__imatmul__` … | 已合并 | pyother | 8b36f3c4 |
 | 6.P21 | H19 稀疏卷积重复坐标 CPU/CUDA 语义统一 | 已合并 | pyother | b3ebd1b5 |
 | 6.P22 | H20 `to_dense` 对 COO 重复索引求和 | 已合并 | pyother | 9d1bf2a1 |
-| 6.P23 | eigh 的特征向量梯度在 CUDA 上错约 60% | 待领 | | |
-| 6.P24 | Pool3d 的 count_include_pad 读原始参数 | 待领 | | |
+| 6.P23 | eigh 的特征向量梯度在 CUDA 上错约 60% | 已合并 | | d361100e |
+| 6.P24 | Pool3d 的 count_include_pad 读原始参数 | 已合并 | | d221dbde |
 | 6.P25 | Adan 偏差修正仍用全局 n_step；连带第一步 grad_diff 语义 | 已合并 | pyother | 2d5804a4 |
 | 6.P26 | MaxPool3d 的 ceil_mode 输出尺寸比 torch 多一个平面 | 待领 | | |
 | 6.B01 | MPI 的 int64 改 `MPI_INT64_T` | 已合并 | dist | 03518707 |
@@ -360,7 +360,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 7.12 | 独立 torch 包 | 待领 | | |
 | 7.13 | FSDP2 | 待领 | | |
 | 7.14 | vLLM 边界检查把 `torch` 视作 jittor 别名 | 进行中 | 兼容层分区 | |
-| 7.15 | `_rebuild_tensor_v2` 按 stride 还原或报错 | 待领 | | |
+| 7.15 | `_rebuild_tensor_v2` 按 stride 还原或报错 | 已合并 | | 7e7877c8 |
 | 7.16 | compat/ 内 129 个 `except: pass` 与 258 个宽泛 except … | 进行中 | 兼容层分区 | |
 | 7.17 | `runtime.enable()` 只把 shim 的 site 目录加进 sys.path … | 进行中 | 兼容层分区 | |
 | 7.18 | 布局收尾 | 待领 | | |
@@ -392,7 +392,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 9.07 | import 过程不反向写环境变量 | 待领 | | |
 | 9.08 | 新架 GPU | 已合并 | 构建 | 2d71f792 |
 | 9.09 | `cuda_wheel` 失败时 LOG.w 出原因，strict 为默认 | 已合并 | 构建 | c63dd809 |
-| 9.10 | 2.0 版本策略 | 待领 | | |
+| 9.10 | 2.0 版本策略 | 已合并 | | 77dcc747 |
 | 9.11 | release 的 platform-validation 阶段跑 selftest | 已合并 | 构建 | 2af4658e |
 | 9.12 | `extern/rocm/rocm_cache.tar.gz` 的预编译 .o 改从源码构建，或… | 已合并 | 构建 | 46cc77d5（源码不在本仓库，做不到从源码构建；按任务允许的第二条补了来源说明与字节钉定，并写清要怎样才算可接受） |
 | 9.13 | README 加「首次运行会发生什么」 | 已合并 | 构建 | dad3cd26 |
