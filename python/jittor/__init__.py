@@ -61,7 +61,19 @@ with lock.lock_scope():
     from jittor_core.ops import *
     _core_profiler = core.profiler
     from . import compile_extern
-    from .compile_extern import mkl_ops, mpi, mpi_ops, distributed_state_getattr as __getattr__
+    from .compile_extern import mkl_ops, mpi, mpi_ops
+    # in_mpi / rank / world_size are deliberately NOT imported here. Importing
+    # them bound a snapshot of compile_extern.rank taken at import time, and
+    # anything that later corrected compile_extern.rank -- the torch NCCL
+    # installer does exactly that -- left jt.rank stale with no error.
+    # distributed_state_getattr serves all three from their single owner
+    # instead, and it is installed before the submodules below are imported
+    # because several of them read jt.rank at import time.
+    #
+    # Assigning jt.rank / jt.world_size / jt.in_mpi anywhere would put an entry
+    # in this module's __dict__, which shadows __getattr__ permanently and
+    # brings the stale copy straight back. Write to compile_extern. 6.B15.
+    from .compile_extern import distributed_state_getattr as __getattr__
     if core.get_device_count() == 0:
         has_cuda = compile_extern.has_cuda = compiler.has_cuda = False
     if has_cuda:
