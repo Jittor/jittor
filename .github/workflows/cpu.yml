@@ -4,8 +4,8 @@ on:
   pull_request:
   push:
   schedule:
-    # The full tier is nightly (0.15). A pull request waits for `smoke`; this is
-    # what keeps "deferred" from meaning "not run".
+    # Nightly, so the full tier keeps running once `smoke` becomes what a pull
+    # request waits for (0.15).
     - cron: "0 2 * * *"
   workflow_dispatch:
 
@@ -20,43 +20,14 @@ jobs:
   baseline:
     uses: ./.github/workflows/_ci-baseline.yml
 
-  smoke:
-    needs: baseline
-    name: nox / smoke
-    runs-on: ${{ needs.baseline.outputs.host_runner }}
-    container:
-      image: ${{ needs.baseline.outputs.cpu_ci_image }}
-    # The pull-request tier (0.15): the whole tree in two process modes, minus
-    # the files recorded in tests/_helpers/tiers.SLOW_FILES, run under xdist.
-    # The budget itself is asserted in tests/structure/test_gate_tiers.py --
-    # arithmetically, against measured per-file costs, because an assertion on
-    # elapsed wall clock fails on a busy runner for reasons that have nothing to
-    # do with the change. This number is the runner's patience, not the promise.
-    timeout-minutes: 30
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-      - name: Install native CPU toolchain
-        run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ needs.baseline.outputs.python_version }}
-      - name: Install pinned development tools
-        run: python -m pip install -r requirements/dev-tools.txt
-      - name: Run the fast CPU tier
-        run: python -m nox -s smoke
+  # The `smoke` job lands with the measured tier (0.15). `nox -s smoke` exists
+  # and works, but until `tests/_helpers/tiers.SLOW_FILES` has entries the fast
+  # tier selects exactly what the full tier does, so wiring it into CI now would
+  # add a second whole-tree run under a 30-minute budget it cannot meet -- a red
+  # that says nothing about the change that triggered it.
 
   cpu:
     needs: baseline
-    # The full tier does not gate a pull request; `smoke` does. It still runs on
-    # every push to a branch and nightly, so "deferred" cannot quietly become
-    # "never".
-    if: github.event_name != 'pull_request'
     name: nox / cpu
     runs-on: ${{ needs.baseline.outputs.host_runner }}
     container:

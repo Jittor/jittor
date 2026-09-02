@@ -274,8 +274,16 @@ def pytest_collection_modifyitems(config, items):
     network_enabled = _network_is_enabled() or config.getoption("--network")
     manual_enabled = _manual_probes_are_enabled(config)
     load_sensitive_enabled = _load_sensitive_tests_are_enabled(config)
+    from _helpers import tiers
     for item in items:
-        _FILES_WITH_ITEMS.add(_relative_to_repo(item.fspath))
+        repo_relative = _relative_to_repo(item.fspath)
+        _FILES_WITH_ITEMS.add(repo_relative)
+        # The fast tier selects with `-m "not slow"`; the marker is attached from
+        # one recorded list rather than from decorators scattered through the
+        # tree, so "what a pull request waits for" is reviewable in one diff.
+        # Attached, never skipped: outside the fast tier this changes nothing.
+        if tiers.is_slow(repo_relative):
+            item.add_marker(pytest.mark.slow)
         try:
             relative = Path(str(item.fspath)).resolve().relative_to(TEST_ROOT).parts
         except ValueError:
