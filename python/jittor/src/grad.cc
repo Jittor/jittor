@@ -79,11 +79,22 @@ inline static void assign_attrs(Var* a, Var* b) {
         a->flags.set(NodeFlags::_stop_fuse);
 }
 
-map<string,int> grad_breaks;
+DEFINE_FLAG(int, missing_grad_error, 0, "Raise instead of warning when a target of grad receives no gradient at all and is filled with zeros.");
 
 void warn_grad_break(int i, Var* v) {
-    if (grad_breaks.count(v->name.c_str())) return;
-    grad_breaks[v->name.c_str()] = 1;
+    // This used to deduplicate through a process-global map keyed on
+    // v->name.c_str(). Almost every var's name is the empty string, so exactly
+    // one missing gradient was ever announced per process and every later one
+    // -- any var, any later call -- was silent, and training converged to the
+    // wrong thing with a clean log. There is no deduplication now: one report
+    // per missing target per grad() call.
+    if (missing_grad_error) {
+        LOGf << "grads[">>i>>"] '">> v->name>>"' doesn't have gradient:" << v
+            << "\nThe target is not reachable from the loss through a"
+            << "differentiable path. Drop it from the target list, or clear"
+            << "jt.flags.missing_grad_error to get a zero gradient and a"
+            << "warning instead.";
+    }
     LOGw << "grads[">>i>>"] '">> v->name>>"' doesn't have gradient. It will be set to zero:" << v;
 }
 
