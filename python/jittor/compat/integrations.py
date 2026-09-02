@@ -94,3 +94,43 @@ def apply_external_runtime_patches(logger=None):
 
 
 apply_external_runtime_patches.last_report = {}
+
+
+# ---------------------------------------------------------------------------
+# Custom-operator replacements for specific downstream libraries.
+#
+# torch.library.custom_op is a generic registration API and must not know any
+# model's operator names; it used to carry a hard-coded branch for
+# "transformers::grouped_mm_fallback" that discarded the caller's own
+# implementation.  The knowledge lives here instead, where library-specific
+# adaptation belongs, and torch.library looks it up by name.
+# ---------------------------------------------------------------------------
+
+def _transformers_grouped_mm_fallback(input, weight, offsets, *args, **kwargs):
+    """Grouped matmul over row ranges delimited by `offsets`.
+
+    transformers registers this op as a fallback for a fused CUDA kernel that
+    Jittor does not provide; its own body is written against torch primitives
+    that do not survive the shim, so the adaptation is done here.
+    """
+    import jittor as jt
+
+    output = jt.zeros((input.shape[0], weight.shape[2]), dtype=input.dtype)
+    values = offsets.numpy().tolist() if hasattr(offsets, "numpy") else list(offsets)
+    start = 0
+    for index, end in enumerate(values):
+        end = int(end)
+        if end > start:
+            output[start:end] = jt.matmul(input[start:end], weight[index])
+        start = end
+    return output
+
+
+_CUSTOM_OP_OVERRIDES = {
+    "transformers::grouped_mm_fallback": _transformers_grouped_mm_fallback,
+}
+
+
+def custom_op_overrides():
+    """{"namespace::op": implementation} that replace a library's own version."""
+    return dict(_CUSTOM_OP_OVERRIDES)

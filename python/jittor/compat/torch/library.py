@@ -40,6 +40,114 @@ class Tag(enum.Enum):
     view_copy = 16
 
 
+# Dispatch keys, in the order torch's dispatcher would consider them for a real
+# (non-meta) tensor of each residency.  "Meta" is deliberately absent from both
+# lists: a meta kernel returns a correctly-shaped tensor holding NOTHING, so
+# serving a real call from it produces fake numbers silently.
+_CUDA_DISPATCH_ORDER = (
+    "CUDA", "AutogradCUDA", "PrivateUse1", "AutogradPrivateUse1",
+    "CompositeExplicitAutograd", "CompositeExplicitAutogradNonFunctional",
+    "CompositeImplicitAutograd", "Autograd", "BackendSelect", "",
+)
+_CPU_DISPATCH_ORDER = (
+    "CPU", "AutogradCPU",
+    "CompositeExplicitAutograd", "CompositeExplicitAutogradNonFunctional",
+    "CompositeImplicitAutograd", "Autograd", "BackendSelect", "",
+)
+_FAKE_ONLY_KEYS = ("Meta", "FakeTensor", "SparseCPU", "SparseCUDA")
+
+
+def _argument_residency(args, kwargs):
+    """"cuda" or "cpu", from the first tensor argument -- as torch dispatches."""
+    import jittor as jt
+
+    from .types import _var_is_cpu_resident
+
+    def walk(value):
+        if isinstance(value, jt.Var):
+            return "cpu" if _var_is_cpu_resident(value) else "cuda"
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                found = walk(item)
+                if found is not None:
+                    return found
+        return None
+
+    for value in list(args) + list((kwargs or {}).values()):
+        found = walk(value)
+        if found is not None:
+            return found
+    return "cuda" if getattr(jt.flags, "use_cuda", 0) else "cpu"
+
+
+class _AutogradContext:
+    """The ``ctx`` handed to a torch.library register_autograd backward."""
+
+    def __init__(self):
+        self._saved_tensors = ()
+        self._saved_versions = ()
+
+    def save_for_backward(self, *tensors):
+        import jittor as jt
+
+        self._saved_tensors = tuple(tensors)
+        self._saved_versions = tuple(
+            (t.id if isinstance(t, jt.Var) else None) for t in tensors)
+
+    @property
+    def saved_tensors(self):
+        import jittor as jt
+
+        for tensor, version in zip(self._saved_tensors, self._saved_versions):
+            if isinstance(tensor, jt.Var) and version is not None \
+                    and tensor.id != version:
+                raise RuntimeError(
+                    "one of the variables needed for gradient computation has "
+                    "been modified by an inplace operation")
+        return self._saved_tensors
+
+
+def _call_with_registered_autograd(op, function, args, kwargs):
+    """Run the forward inside a jt.Function so the registered backward runs.
+
+    ``register_autograd`` used to write ``op._backward`` and ``op._setup_context``
+    and nothing in the tree ever read them again.  A custom operator whose
+    forward leaves the tape (any op implemented with numpy, a C++ extension, or
+    an explicit stop_grad) therefore produced gradients of exactly zero, with
+    no error -- the model trained, and that operator never learned.
+    """
+    import jittor as jt
+
+    if getattr(jt.flags, "no_grad", 0):
+        return function(*args, **kwargs)
+    slots = [i for i, value in enumerate(args)
+             if isinstance(value, jt.Var) and value.requires_grad]
+    if not slots:
+        return function(*args, **kwargs)
+
+    class _LibraryAutograd(jt.Function):
+        def execute(self, *taped):
+            full = list(args)
+            for slot, value in zip(slots, taped):
+                full[slot] = value
+            self._ctx = _AutogradContext()
+            output = function(*full, **kwargs)
+            if op._setup_context is not None:
+                op._setup_context(self._ctx, tuple(full), output)
+            return output
+
+        def grad(self, *grads):
+            produced = op._backward(self._ctx, *grads)
+            if not isinstance(produced, (tuple, list)):
+                produced = (produced,)
+            picked = []
+            for slot in slots:
+                picked.append(produced[slot] if slot < len(produced) else None)
+            return tuple(picked)
+
+    return _LibraryAutograd.apply(*[args[slot] for slot in slots])
+
+
 class _RegisteredOp:
     def __init__(self, namespace, name):
         self.namespace = namespace
@@ -51,6 +159,7 @@ class _RegisteredOp:
         self._fake_impl = None
         self._backward = None
         self._setup_context = None
+        self._overridden_by_integration = None
 
     def register_impl(self, dispatch_key, function, allow_override=False):
         key = str(dispatch_key or "CompositeExplicitAutograd")
@@ -61,13 +170,43 @@ class _RegisteredOp:
             )
         self._implementations[key] = function
 
-    def __call__(self, *args, **kwargs):
-        if not self._implementations:
+    def select_impl(self, args=(), kwargs=None):
+        """Pick the kernel torch's dispatcher would pick for these arguments.
+
+        This used to be ``next(reversed(list(self._implementations.values())))``
+        -- the LAST registration, whatever key it carried.  So registering
+        "CPU" and then "CUDA" ran the CUDA kernel on CPU tensors, and the very
+        common ``impl(..., ("CPU", "CUDA", "Meta"))`` put the *meta* kernel
+        last, which meant every real call returned an empty fake tensor.
+        """
+        impls = self._implementations
+        if not impls:
             raise NotImplementedError(
-                "operator %s::%s has no Jittor implementation" % (self.namespace, self.name)
-            )
-        function = next(reversed(list(self._implementations.values())))
-        return function(*args, **kwargs)
+                "operator %s::%s has no Jittor implementation"
+                % (self.namespace, self.name))
+        residency = _argument_residency(args, kwargs)
+        order = _CUDA_DISPATCH_ORDER if residency == "cuda" else _CPU_DISPATCH_ORDER
+        for key in order:
+            if key in impls:
+                return impls[key]
+        registered = sorted(k or "<default>" for k in impls)
+        if all(k in _FAKE_ONLY_KEYS for k in impls):
+            raise NotImplementedError(
+                "operator %s::%s only has %s kernel(s) registered. Those "
+                "produce correctly-shaped tensors with meaningless contents; "
+                "running one for a real %s tensor would silently return fake "
+                "numbers. Register a %s (or CompositeExplicitAutograd) kernel."
+                % (self.namespace, self.name, ", ".join(registered),
+                   residency, residency.upper()))
+        raise NotImplementedError(
+            "operator %s::%s has no kernel for %s tensors; registered keys are "
+            "%s" % (self.namespace, self.name, residency, ", ".join(registered)))
+
+    def __call__(self, *args, **kwargs):
+        function = self.select_impl(args, kwargs)
+        if self._backward is None:
+            return function(*args, **kwargs)
+        return _call_with_registered_autograd(self, function, args, kwargs)
 
     def overloads(self):
         return ["default"]
@@ -128,6 +267,20 @@ def _operator_name(schema_or_name):
     return name.split(".", 1)[0].strip()
 
 
+def _integration_custom_op_overrides():
+    """Integration-supplied replacements for ops downstream libraries register.
+
+    Kept out of this module on purpose: a generic registration API must not
+    know any model's operator names.
+    """
+    try:
+        from ..integrations import custom_op_overrides
+
+        return custom_op_overrides()
+    except Exception:
+        return {}
+
+
 def install_torch_library(torch_module, modules):
     """Publish one executable ``torch.library`` and ``torch.ops`` surface."""
     library_module = types.ModuleType("torch.library")
@@ -169,29 +322,27 @@ def install_torch_library(torch_module, modules):
             return None
 
     def custom_op(name=None, fn=None, *args, **kwargs):
+        """torch.library.custom_op -- a generic registration API.
+
+        It used to carry a hard-coded branch comparing ``name`` against one
+        specific downstream library's operator, throwing the caller's
+        implementation away and substituting the shim's own.  A model-specific
+        special case inside a general-purpose registration API silently
+        overrides any library that registers that exact name.
+        Integration-supplied replacements now come from
+        jittor.compat.integrations, keyed by name, and the substitution is
+        recorded on the operator as ``_overridden_by_integration``.
+        """
         def decorator(implementation):
             if isinstance(name, str) and "::" in name:
                 namespace, op_name = name.split("::", 1)
-                actual = implementation
-                if name == "transformers::grouped_mm_fallback":
-
-                    def actual(input, weight, offsets, *op_args, **op_kwargs):
-                        import jittor as jt
-
-                        output = jt.zeros((input.shape[0], weight.shape[2]), dtype=input.dtype)
-                        values = (
-                            offsets.numpy().tolist() if hasattr(offsets, "numpy") else list(offsets)
-                        )
-                        start = 0
-                        for index, end in enumerate(values):
-                            end = int(end)
-                            if end > start:
-                                output[start:end] = jt.matmul(input[start:end], weight[index])
-                            start = end
-                        return output
-
-                dispatcher.get_or_create(namespace, op_name).register_impl(
-                    "CompositeExplicitAutograd", actual, allow_override=True
+                override = _integration_custom_op_overrides().get(name)
+                op = dispatcher.get_or_create(namespace, op_name)
+                if override is not None:
+                    op._overridden_by_integration = name
+                op.register_impl(
+                    "CompositeExplicitAutograd", override or implementation,
+                    allow_override=True
                 )
             return implementation
 
