@@ -35,9 +35,11 @@
 个模式。举证据最硬的几条：`_th_require_grad` 与 `_is_scalar` 共用同一个 flag 位
 （`node.h:47-48`），于是每个 `requires_grad_(True)` 的参数在类型推导里被当成标量，**AMP 在
 所有涉及参数的算子上静默失效**；`.item()` 对无符号 dtype 读满 8 字节而只写了 dsize 字节
-（`var_holder.cc:284`），`jt.array(np.uint8([200])).item()` 返回随机大整数；融合图的边在 jit key 里
-用两位十六进制编码算子号（`fused_op.cc:181`），超过 255 个后回绕，两个结构不同的融合段
-命中同一个已编译 kernel；`torch.autocast` 是完全空操作，混合精度训练静默跑成 fp32；
+（`var_holder.cc:284`），`jt.array(np.uint8([200])).item()` 返回随机大整数；整数提升只做"取最大
+字节数加与运算"（`nano_string.h:251-254`），`uint8(200)+int8(1)` 得 −55；死代码消除会删掉任何
+含 `void` 这个词的语句（`kernel_ir.cc:865-871`），`memset((void*)p,0,n)` 从融合 kernel 里凭空消失；
+融合图的边在 jit key 里用两位十六进制编码算子号（`fused_op.cc:181`），超过 255 个后回绕，
+两个结构不同的融合段命中同一个已编译 kernel；`torch.autocast` 是完全空操作，混合精度训练静默跑成 fp32；
 DDP 没有任何 hook 与 bucket，标准的 `loss.backward(); opt.step()` 写法下梯度从不同步，
 N 卡训出 N 个不同的模型；MPI 的 int64 被映射成 `MPI_DOUBLE_INT`，按元素数传会读越界。
 Python API 层的审计者在 CPU 上实际复现了 20 条这类缺陷。共同点是它们都发生在**并行路径

@@ -105,3 +105,40 @@ C++ 头文件。第三，错误处理只有一档：ASSERT/CHECK/LOGf 全部抛 
 | 信号处理器不是 async-signal-safe 且检查窗口写死 | `utils/log.cc:268-322` 内有 cerr、dladdr、fork addr2line、LOGf，最后 exit(1) 触发 atexit 与静态析构而其他线程仍在跑。`parallel_compiler.cc:246,353` 读的 segfault_happen 在 exit 前一行才置位 | 崩溃诊断本身可能二次崩溃或挂死；协作退出路径是死代码 | 处理器内只做 write 与 _exit | 次要 |
 | 已知损坏的机制留在代码里 | `executor.cc:704-707` 把 event_queue.run_sync 注释掉写着 "TODO: run_sync cause hang"；`event_queue.h:26` 用 volatile 当同步原语。`ops/tape_op.cc:38-44` 注释 "this is still not enough… please find a better solution" | 异步执行的基础设施存在但不可用；执行器异步化没有可复用的底座 | 修好并加测试或删除 | 次要 |
 | 算子注册表的键不对称且 73 处依赖静态初始化顺序 | `ops/op_register.cc:34` 按 op_info.name 存，而 `:15,38,43` 按截断到第一个点之前的名字查——注册带点的名字后永远查不到。`op_register.h:20-28` 用 RTTI 在 void* 上分派。全仓 73 处命名空间作用域的 `static auto make_xxx = get_op_info(...)` 而注册本身也是静态初始化 | 两组静态初始化的相对顺序未定义；若查询先于注册，ASSERT 在 main 之前抛出即 terminate 且无诊断。跨 .so 的 type_info 比较也可能静默不匹配 | 注册表改惰性初始化；查询延迟到首次使用；构造函数签名用编译期校验 | 主要 |
+
+## 补充：代码生成与优化 pass（文本当作 IR）
+
+第二轮审计在同一层补出的发现，均已单独核实其中三条。
+
+| 问题 | 证据 | 后果 | 修改方向 | 严重度 |
+| --- | --- | --- | --- | --- |
+| 死代码消除按"语句里出现 void 这个词"整条删除 | `opt/kernel_ir.cc:865-871`：取出标识符后 `if (var=="void") { if (type=="") { code=""; break; } }`。本意只删 `(void)count;`（`reduce_op.cc:405`、`transpose_op.cc:123` 依赖此行为）；触发点 `remove_intermediate_pass.cc:39,45`、`merge_loop_var_pass.cc:151`。**已核实** | `memset((void*)zp,0,n);` 这类语句从融合 kernel 里凭空消失，能编译通过，结果静默错误 | 解析时结构化识别 `(void)expr;` 形态并打属性，不在文本里搜关键字 | 关键 |
+| 算子内可用的标识符是隐含白名单，违反即生成非法 C++ | `op_compiler.cc:914-933` 三个硬编码集合：`members{x,y,z,cond,output,extras}`、`scalar_members{left,right}`、`unchanged{for,const,auto,int,float,bool,CHECK,void,if,true,false,Op,Var,Node,...}`；`:1074-1076` 其余标识符一律加 `op{i}_` 前缀 | `size_t`、`int64`、`uint`、`nullptr`、`return`、`else`、`while`、`static` 都不在白名单，会变成 `op0_return`。任何人给含这些写法的算子加 `set_type(OpType::element)` 就会得到与真实原因完全脱节的编译错误 | 用结构化成员表做重命名，改名前做合法性校验 | 关键 |
+| 用 `std::regex` 在最终 C++ 文本上打补丁，修一个没有源码的 pass 的语义 bug | `op_compiler.cc:30-69` 的 `fix_parallel_thread_ranges` 匹配 `^(\s*)int (tn[0-9]+) = (get_thread_range_log\(thread_num_left, [^;]+\));\s*$` 并重写成累加形式；触发条件是 `:1156` 的子串嗅探；产生方 `ParallelPass` 无源码（见第一节） | CPU 线程划分的正确性依赖另一个不可读 pass 输出的确切文本格式（空格、变量名、行尾分号）。格式一变即静默不匹配；单测 `tests/compiler/test_parallel_pass.py:124-129` 断言的正是打完补丁之后的文本 | 在 IR 层修正累积逻辑 | 关键 |
+| 两个 pass 注册同一个名字，`get_pass` 用 C 风格下转型 | `opt/pass/unroll_pass.h:13` 与 `expand_empty_block_pass.h:13` 都是 `Pass("expand_empty_block")`；`pass_manager.h:54` 的 emplace 不覆盖，`:62` `return (T*)iter->second;` 无校验 | `exclude_pass="expand_empty_block"` 同时关掉两个且无法单独关 unroll；一旦有人按 UnrollPass 取就是无声的类型混淆 | 改名；pass 按类型索引 | 主要 |
+| 循环维度的身份用名字字符串表达，`range10` 二义 | `merge_loop_var_pass.cc:22-24` 用 `str.size()==6` 判断"是单个 range"；`:74-82` 逐字符拆分把 `range_b` 展开成 `range1*range0`；`:128` 新 id 是字符串拼接 | 维度数 ≥10（7 维张量加几次 split 即可）时 `range10` 被拆成 `range1*range0`，循环上界完全错误且能编译通过；`size()==6` 的保护同时失效 | loop id 用整数向量，名字只在输出时生成 | 主要 |
+| 一次编译至少重跑 2 遍完整 pass pipeline，每遍从文本重新解析 | `opt/pass_manager.cc:47` 构造即 `all(oc->get_src())` 把整份生成的 C++ 重新解析成 KernelIR；`tuner_manager.cc:35-38` 与 `:57-59` 各一遍，`jit_searcher.cc:33-35` 每个候选一遍；而 `jit_searcher.cc:58-61` 的 timeout 字段声明了却全文无人读取，`reorder_tuner.cc:22-24` 的候选是 N! 量级 | 首次执行每个融合算子付两次"全文解析加 25 个 pass 加全树 to_string" | tuner 只改 loop_options 不重跑 pass；一次解析后 clone IR | 主要 |
+
+## 补充：内存与分配器（第二轮）
+
+| 问题 | 证据 | 后果 | 修改方向 | 严重度 |
+| --- | --- | --- | --- | --- |
+| SFRL 的 free/share_with 直接索引未清零的静态映射表，先解引用后校验 | `sfrl_allocator.cc:24-25` `new CachingBlock*[ID_LIMIT]`（默认初始化，元素不确定）；`:291-292`、`:313-315` 直接 `occupied_id_mapper[allocation]` 后解引用；对照 `:82,90` 的 erase/get 是有非空断言的。free 完全忽略传入的 mem_ptr 与 size，只信 allocation | 二次释放时 id 可能已重新分配给别的块，静默释放错误的块使两个 var 拿到同一段内存；id 未复用则读到从未写过的垃圾指针（数组没清零，非空校验形同虚设）；allocation 超过 2^21 直接读表外 | `new ...[N]()` 清零；三重校验 | 关键 |
+| alloc 的"必须写回 allocation"契约被 5 个分配器违反，`Var::allocation` 从无初值 | `aligned_allocator.cc:16-28`、`cuda_device_allocator.cc:24-38`、`cuda_host_allocator.cc:19-24`、`cuda_managed_allocator.cc:20-25`、`nfef_allocator.cc:24-26` 均不写形参；`var.h:27` 是 Var 里唯一没有初值的成员 | `getitem_op.cc:515-518` 与 `setitem_op.cc:336-341` 用 `allocator` 与 `allocation` 相等判断"已就地共享，跳过 memcpy"。在 `use_sfrl_allocator=0` 或 `use_nfef_allocator=1` 下两边都是未初始化残值，相等即误判，**静默错数**而非崩溃 | 每个 alloc 实现必须写 allocation；给初值；别名判断改用显式 share 关系 | 主要 |
+| migrate_to_cpu/gpu 静默解除 share_with 建立的别名 | `allocator.cc:167-173,194-200` 新分配加 memcpy 加 free 原块；`var.cc:121` 共享路径把偏移覆盖成父块的 allocation，迁移代码无从得知"我是某块的子区间"；调用点 `executor.cc:593-610` | getitem/setitem inplace 与 fused_adamw 建立的别名，在混合 CPU-CUDA 图里被单方面迁移后断开，通过一个别名的写对另一个不可见 | 迁移前检查共享关系，整组迁移或拒绝 | 主要 |
+| fetch 的跨流内存复用只做了一半的顺序保证 | `fetch_op.cc:48` 建非阻塞流；`:121-122` 只有 stream 等默认流，`:156-159` 没有反向的默认流等 stream；`:103` 不做设备同步；`sfrl_allocator.cc:293-301` 源 var 释放后块立即回 free list 且无流完成跟踪 | 默认流上的下一批 kernel 可以覆盖 mem_ptr 而 stream 上的拷贝还没执行，fetch 到被覆盖后的数据。这比"依赖单流"更强：这里确实有第二条流 | 拷贝后记 event 让默认流等待 | 主要 |
+| TempAllocator 用同名成员遮蔽基类的统计字段 | `allocator.h:17` 基类声明 used_memory/unused_memory；`temp_allocator.h:29` 重新声明；`swap.cc:90,92,107,126` 全部通过基类指针读 | 通过基类指针看到的 TempAllocator 用量恒为 0，`cpu_mem_limit`/`device_mem_limit` 对所有 workspace 分配（cuDNN conv、cub sort/where 等 20+ 调用点）完全失效；而 `mem_info.cc:184-193` 用派生类指针所以显示正确——"显示正常、限额不生效" | 删掉派生类里的重复声明 | 主要 |
+| 缓存回收把 allocation=0 传给底层分配器，使分层配置不可嵌套 | `sfrl_allocator.cc:183`、`temp_allocator.cc:93,100,116`；底层真正返回的 allocation 在 `:260` 拿到后被 `:284` 覆盖丢弃。而 id 从 1 开始，`occupied_id_mapper[0]` 永远是未初始化垃圾 | `allocator.cc:103-122` 的分层设计明确鼓励嵌套，当前默认配置只是侥幸没踩到 | CachingBlock 保存底层 allocation 并原样回传 | 主要 |
+| 回收策略的正常路径实际是死代码，全局单锁且覆盖不全 | `sfrl_allocator.cc:241` 一把 mutex 供所有 SFRL 实例共用；`:307-310` gc() 不加锁却改同样的结构，而 `allocator.h:53` 把 gc_all 暴露给 Python；`temp_allocator.cc:41-110` 完全无锁；`allocator.cc:45` 使 free_ratio=1，令 `:227` 的条件恒假——每次缓存未命中都调的 free_all_sfrl_allocators 是纯开销的空操作 | 锁给了错误的安全感；CPU 与 GPU 分配互相串行；OOM 前的行为只由异常路径决定 | 每个分配器一把自己的锁并覆盖 gc()；free_ratio 改小或删掉这条已死策略 | 主要 |
+
+## 补充：绑定层与失败模式（第二轮）
+
+| 问题 | 证据 | 后果 | 修改方向 | 严重度 |
+| --- | --- | --- | --- | --- |
+| 构造失败后在零初始化对象上跑 C++ 析构 | `pyjt_compiler.py:875` 无条件 `tp_new = PyType_GenericNew`（内存 memset 为 0），`:876` 无 GC 标志；tp_init 无匹配重载时 return -1（`:722`）→ CPython 立即调 tp_dealloc → `py_ring_buffer.cc:241-243` → `ring_buffer.cc:73` 在检查 init **之前**无条件解引用。**已核实 tp_new 与 tp_flags** | 一行 `jittor_core.RingBuffer()` 即段错误。VarHolder 侥幸安全（`var_holder.cc:141` 有判空）是巧合不是设计 | 生成带"已构造"标志的 tp_new，或让 tp_dealloc 先检查 | 关键 |
+| 标量转数组共享一个非线程局部的全局 union | `numpy.h:125-131`/`numpy.cc:56` `tmp_data_t tmp_data;` 全局非 thread_local；`py_converter.h:363-374` 返回它的地址而非拷贝 | 一次调用里出现两个标量参数时后者覆盖前者；跨线程只靠 GIL 侥幸串行，而并行编译器正是释放 GIL 的地方 | 标量走自带 buffer | 主要 |
+| 整数提升用"取最大字节数加与运算"替代提升格，静默溢出 | `nano_string.h:251-254`（浮点分支之外）：`dsize_ = max(...); is_unsigned = x.is_unsigned() && y.is_unsigned();`。**已核实** | `uint8 + int8` 得 int8（NumPy 给 int16），`uint8(200)+int8(1)` 得 −55 无警告；`uint32+int32` 得 int32（应 int64）；`uint64+int64` 得 int64（NumPy 给 float64） | 混合符号时单独提一档 dsize，达上限退到 float64 | 关键 |
+| 信号处理器整条路径非 async-signal-safe 且以抛异常收尾 | `log.cc:250-254` 里 LOGe 走 ostringstream 即 malloc；`:268-269` cerr；`:307` LOGf 即 throw；`:314` print_trace 里 fork+execvp 与 system；`:321` exit(1) 触发 atexit 遍历 cleanup_callback 执行显存释放；`:204,206,689` 的标志是普通 bool/int 而非 `volatile sig_atomic_t` | 崩在 malloc 内部时处理器再进 malloc 即死锁，进程挂死而非给出崩溃报告 | 处理器内只做 write 与 _exit，符号化交给预建的 helper 进程 | 关键 |
+| 环境变量解析失败静默回退默认值，唯一的警告还会被吞掉 | `log.h:180-196` 把"解析成功"编码为"再读一次失败"：`export log_v="1 "` 的尾随空格使 peek 不设 failbit 从而静默回退；`log.cc:173` 在 log_silent 下吞掉这条警告 | 写错的环境变量表现为"设置无效"且无提示 | 用 from_chars 加全串消费校验，启动期配置 fail fast | 主要 |
+| `DEFINE_FLAG_WITH_SETTER` 的 setter 在赋值**之前**被调用 | `log.h:228-242` `set_##name(v) { setter_##name(v); name = v; }`；绕过证据 `tracer.cc:137-139` 的 setter 必须手工回写才能让另一个 setter 看到新值；`log.cc:441` 的 setter 抛异常时赋值被跳过而用户以为设置成功 | setter 看到的永远是旧值，每个有副作用的 setter 都要自己打补丁 | 先赋值再调 setter，签名改成收新旧两值 | 主要 |
+| `token_replace_all` 用异常做循环终止 | `str_utils.cc:227-239` 的正常终止条件是 `:187` 的 CHECK 抛出，即每次调用必然抛一次并走完整的格式化与构造；同一个 catch 还吞掉真正的错误 | 源码改写静默失败并返回未改写的源码；每次调用付一次异常开销 | 用返回值表达"无更多匹配" | 次要 |
