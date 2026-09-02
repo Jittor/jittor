@@ -51,6 +51,23 @@ pyother: stash pop                          -> 拿到 dist 的 5 个文件
 6. `git fetch` / `rebase` / `push origin HEAD:<branch>` 是安全的：远端的
    非快进保护会把并发推挤成串行，推被拒就 `fetch && rebase` 再推。
 
+## 万一非用 stash 不可
+
+不该有这种情况，但如果真的走到这一步：**一定带 `-m` 写上自己的任务编号**
+（`git stash push -m "6.P14 wip" <文件>`）。理由不是可读性，是可恢复性——
+stash 条目被别人 pop 走之后，那个 commit 只是变成悬垂对象，还在对象库里，
+可以按 message 找回来：
+
+```bash
+git fsck --unreachable | awk '/commit/ {print $3}' \
+  | xargs -r git log --no-walk --format='%h %ci %s' 2>/dev/null | grep '<你的编号>'
+git show <找到的 hash>          # 看内容
+git stash apply <找到的 hash>   # 或者 git cherry-pick -n
+```
+
+没有 `-m` 的 stash 消息是自动生成的 `WIP on <分支>: ...`，多个 agent 的条目
+长得一模一样，找回时分不清哪条是自己的。
+
 ## 万一已经拿到了别人的东西
 
 按这个顺序做，先保存再清理，**不要直接 `git checkout --` 丢掉**：
