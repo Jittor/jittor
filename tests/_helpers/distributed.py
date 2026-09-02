@@ -12,6 +12,7 @@ _MIGRATED_TEST_PATHS = {
     "test_mpi": "tests/distributed/test_mpi.py",
     "test_mpi_batchnorm": "tests/distributed/test_mpi_batchnorm.py",
     "test_mpi_dtypes": "tests/distributed/test_mpi_dtypes.py",
+    "test_mpi_half_reduce": "tests/distributed/test_mpi_half_reduce.py",
     "test_mpi_op": "tests/distributed/test_mpi_op.py",
     "test_mpi_var_ops": "tests/distributed/test_mpi_var_ops.py",
     "test_nccl_ops": "tests/distributed/test_nccl_ops.py",

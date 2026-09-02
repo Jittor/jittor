@@ -40,128 +40,147 @@ namespace jittor {
 MPI_Datatype MPI_HALF;
 MPI_Op MPI_HALF_ADD;
 
-#if !defined(__x86_64__) && !defined(_M_X64)
-// ARM架构下的FP16-FP32转换辅助函数
-static inline float fp16_to_fp32_value(uint16_t h) {
-    unsigned sign = ((h >> 15) & 1);
-    unsigned exponent = ((h >> 10) & 0x1f);
-    unsigned mantissa = ((h & 0x3ff) << 13);
-    
-    if (exponent == 0) {
-        if (mantissa == 0) {
-            return sign ? -0.0f : 0.0f;
+// ---- fp16 <-> fp32 --------------------------------------------------------
+//
+// One scalar implementation is the definition of the MPI_HALF sum on every
+// architecture. Before this, x86 and ARM had entirely separate code and the two
+// did not agree, so the same all-reduce gave different numbers on different
+// hosts:
+//
+//   * x86 used _mm256_cvtph_ps / _mm256_cvtps_ph -- IEEE round-to-nearest-even
+//     with full subnormal support -- and never checked at run time that the CPU
+//     actually has F16C and AVX. On a machine without them the build either
+//     fails to compile or the binary dies with SIGILL.
+//   * the ARM fallback *truncated* the mantissa instead of rounding (up to one
+//     ulp different on almost every value), and flushed everything below 2^-14
+//     to zero, so fp16 subnormals vanished on ARM and survived on x86.
+//
+// The x86 SIMD path is kept, but only as an accelerator that is bit-identical
+// to the scalar code, entered only after a run-time CPUID check.
+// JT_MPI_HALF_SIMD=0 forces the scalar path, which is how the tests run the
+// exact code an ARM host would run while sitting on an x86 machine.
+
+static inline float jt_fp16_to_fp32(uint16_t h) {
+    uint32_t sign = (uint32_t)(h & 0x8000u) << 16;
+    uint32_t exp = (h >> 10) & 0x1fu;
+    uint32_t man = h & 0x03ffu;
+    uint32_t out;
+    if (exp == 0) {
+        if (man == 0) {
+            out = sign;                              // +-0
         } else {
-            // 非规格化数
-            while (!(mantissa & 0x400000)) {
-                mantissa <<= 1;
-                exponent -= 1;
-            }
-            exponent += 1;
-            mantissa &= ~0x400000;
+            // Subnormal: normalize into an fp32 normal. fp32 has the range for
+            // every fp16 subnormal, so nothing is lost here.
+            uint32_t e = 127 - 15 + 1;
+            while (!(man & 0x0400u)) { man <<= 1; e--; }
+            man &= 0x03ffu;
+            out = sign | (e << 23) | (man << 13);
         }
-    } else if (exponent == 31) {
-        if (mantissa == 0) {
-            return sign ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity();
-        } else {
-            return std::numeric_limits<float>::quiet_NaN();
-        }
+    } else if (exp == 0x1fu) {
+        out = sign | 0x7f800000u | (man << 13);      // inf / nan (payload kept)
+    } else {
+        out = sign | ((exp - 15 + 127) << 23) | (man << 13);
     }
-    
-    exponent += (127 - 15);
-    mantissa <<= 10;
-    
-    unsigned int i = ((sign << 31) | (exponent << 23) | mantissa);
     float f;
-    std::memcpy(&f, &i, sizeof(float));
+    std::memcpy(&f, &out, sizeof(f));
     return f;
 }
 
-static inline uint16_t fp32_to_fp16_value(float f) {
-    unsigned int i;
-    std::memcpy(&i, &f, sizeof(float));
-    
-    unsigned sign = ((i >> 31) & 0x1);
-    unsigned exponent = ((i >> 23) & 0xff);
-    unsigned mantissa = (i & 0x7fffff);
-    
-    unsigned short h = 0;
-    
-    if (exponent == 0) {
-        // 零或非规格化数
-        h = (sign << 15);
-    } else if (exponent == 0xff) {
-        // 无穷大或NaN
-        h = (sign << 15) | 0x7c00;
-        if (mantissa) h |= 0x200;
-    } else {
-        // 规格化数
-        int new_exp = exponent - 127 + 15;
-        if (new_exp < 0) {
-            // 下溢出到零
-            h = (sign << 15);
-        } else if (new_exp > 30) {
-            // 上溢出到无穷大
-            h = (sign << 15) | 0x7c00;
-        } else {
-            // 正常转换
-            h = (sign << 15) | (new_exp << 10) | (mantissa >> 13);
-        }
+// Round to nearest, ties to even -- the same rounding F16C does, and the same
+// rounding numpy's float32->float16 cast does, so results are checkable.
+static inline uint16_t jt_fp32_to_fp16(float f) {
+    uint32_t x;
+    std::memcpy(&x, &f, sizeof(x));
+    uint16_t sign = (uint16_t)((x >> 16) & 0x8000u);
+    uint32_t mag = x & 0x7fffffffu;
+
+    if (mag > 0x7f800000u)                           // nan -> quiet nan
+        return (uint16_t)(sign | 0x7e00u);
+    if (mag >= 0x47800000u)                          // >= 65536 -> inf
+        return (uint16_t)(sign | 0x7c00u);
+    if (mag >= 0x38800000u) {                        // >= 2^-14: fp16 normal
+        uint32_t out = (uint32_t)sign
+                     | (((mag >> 23) - 112u) << 10)  // 127-15 = 112
+                     | ((mag >> 13) & 0x03ffu);
+        uint32_t rem = mag & 0x1fffu;                // bits being dropped
+        // A carry out of the mantissa lands in the exponent, which is exactly
+        // what we want -- including 65504 rounding up to inf.
+        if (rem > 0x1000u || (rem == 0x1000u && (out & 1u))) out++;
+        return (uint16_t)out;
     }
-    
-    return h;
+    if (mag >= 0x33000000u) {                        // >= 2^-25: fp16 subnormal
+        uint32_t m = (mag & 0x007fffffu) | 0x00800000u;
+        int shift = 126 - (int)(mag >> 23);          // 14 .. 24
+        uint32_t out = m >> shift;
+        uint32_t rem = m & ((1u << shift) - 1u);
+        uint32_t half = 1u << (shift - 1);
+        if (rem > half || (rem == half && (out & 1u))) out++;
+        return (uint16_t)(sign | out);
+    }
+    return sign;                                     // underflow to signed zero
 }
-#endif
+
+static void half_add_scalar(const uint16_t* in, uint16_t* inout, int n) {
+    for (int i = 0; i < n; i++)
+        inout[i] = jt_fp32_to_fp16(
+            jt_fp16_to_fp32(in[i]) + jt_fp16_to_fp32(inout[i]));
+}
+
+#if defined(__x86_64__) || defined(_M_X64)
+#if defined(__GNUC__) || defined(__clang__)
+#include <cpuid.h>
+
+// target(...) lets this compile even when the translation unit is not built
+// with -mf16c, so the binary still runs on CPUs without it -- the call is
+// guarded by the CPUID check below.
+__attribute__((target("avx,f16c")))
+static void half_add_f16c(const uint16_t* in, uint16_t* inout, int n) {
+    int i = 0;
+    for (; i + 8 <= n; i += 8) {
+        __m256 a = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)(in + i)));
+        __m256 b = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)(inout + i)));
+        _mm_storeu_si128((__m128i*)(inout + i),
+            _mm256_cvtps_ph(_mm256_add_ps(a, b),
+                _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
+    }
+    // Tail through the scalar code rather than a second SIMD spelling, so
+    // there is only one thing to keep in agreement.
+    half_add_scalar(in + i, inout + i, n - i);
+}
+
+static bool detect_half_simd() {
+    if (const char* env = getenv("JT_MPI_HALF_SIMD"))
+        if (env[0] == '0') return false;
+    unsigned int eax, ebx, ecx, edx;
+    if (!__get_cpuid(1, &eax, &ebx, &ecx, &edx)) return false;
+    const unsigned int OSXSAVE = 1u << 27, AVX = 1u << 28, F16C = 1u << 29;
+    if ((ecx & (OSXSAVE | AVX | F16C)) != (OSXSAVE | AVX | F16C)) return false;
+    // The OS must also have enabled XMM+YMM state saving, otherwise AVX faults.
+    unsigned int xcr0_lo, xcr0_hi;
+    __asm__ __volatile__("xgetbv" : "=a"(xcr0_lo), "=d"(xcr0_hi) : "c"(0));
+    (void)xcr0_hi;
+    return (xcr0_lo & 0x6u) == 0x6u;
+}
+
+static bool half_simd_enabled() {
+    static const bool enabled = detect_half_simd();
+    return enabled;
+}
+#define JT_HAS_HALF_SIMD 1
+#endif // GNUC || clang
+#endif // x86_64
 
 void HalfAdd(void* invec, void* inoutvec, int* len, MPI_Datatype* type) {
-#if defined(__x86_64__) || defined(_M_X64)
-    short* in = (short*)invec;
-    short* inout = (short*)inoutvec;
-
-    int i = 0;
-    int total = *len;
-    for (; i+8 <= total; i += 8) {
-        // 将半精度浮点数转换为单精度浮点数
-        __m256 in1 = _mm256_cvtph_ps(_mm_loadu_si128((__m128i*)(in + i)));
-        __m256 in2 = _mm256_cvtph_ps(_mm_loadu_si128((__m128i*)(inout + i)));
-
-        // 执行向量加法
-        __m256 out = _mm256_add_ps(in1, in2);
-
-        // 将单精度浮点数转换回半精度浮点数，并存储结果
-        _mm_storeu_si128((__m128i*)(inout + i), _mm256_cvtps_ph(out, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
-    }
-
-    // 处理剩余的半精度浮点数
-    for (; i < total; i++) {
-        // 将半精度浮点数转换为单精度浮点数
-        __m128 in1 = _mm_cvtph_ps(_mm_set1_epi16(*(in + i)));
-        __m128 in2 = _mm_cvtph_ps(_mm_set1_epi16(*(inout + i)));
-
-        // 执行向量加法
-        __m128 out = _mm_add_ps(in1, in2);
-
-        // 将单精度浮点数转换回半精度浮点数，并存储结果
-        *(inout + i) = _mm_cvtps_ph(out, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC)[0];
-    }
-#else
-    // ARM架构实现：使用基本的半精度浮点数运算
-    uint16_t* in = (uint16_t*)invec;
+    const uint16_t* in = (const uint16_t*)invec;
     uint16_t* inout = (uint16_t*)inoutvec;
-    int total = *len;
-    
-    // 简单的逐元素相加实现
-    for (int i = 0; i < total; i++) {
-        // 将FP16转换为FP32
-        float in_val = fp16_to_fp32_value(in[i]);
-        float inout_val = fp16_to_fp32_value(inout[i]);
-        
-        // 执行加法
-        float result = in_val + inout_val;
-        
-        // 将结果转回FP16
-        inout[i] = fp32_to_fp16_value(result);
+    int n = *len;
+#ifdef JT_HAS_HALF_SIMD
+    if (half_simd_enabled()) {
+        half_add_f16c(in, inout, n);
+        return;
     }
 #endif
+    half_add_scalar(in, inout, n);
 }
 
 int mpi_world_size = 1;
