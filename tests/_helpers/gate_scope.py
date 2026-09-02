@@ -43,14 +43,45 @@ TEST_ROOT = "tests"
 EXCLUDED = ()
 
 
-#: ``(path, reason)`` -- a file a gate runs but that is expected to execute no
-#: case there. This is the *narrow* list: "nothing to do on this hardware" is a
-#: fact about the machine, and the reason has to say which machine.
+#: Substrings of a skip reason that name something *this machine* lacks.
 #:
 #: A gate entry that only ever skips looks exactly like one that passes. That is
 #: how 227 operators' backward formulas stayed unverified in three green gates
-#: (0.01). Under ``JITTOR_TEST_REQUIRE_EXECUTION=1`` an entry has to execute a
-#: case or appear here.
+#: (0.01). But "this file executed nothing" is only a finding when the file
+#: could have run: on a CPU box, ``tests/backends/cuda`` executing nothing is a
+#: fact about the box.
+#:
+#: A rule, not a list, on purpose. The list version would be 73 paths on this
+#: machine and a different 73 on the next one, and every device test added later
+#: would have to remember to join it. The rule instead reads what the test
+#: itself said when it skipped: if every case in a file skipped for a reason
+#: that names missing hardware, a missing launcher or a missing independent
+#: PyTorch, the environment explains it. If even one case skipped for a reason
+#: that does not, the file is unexplained and
+#: ``JITTOR_TEST_REQUIRE_EXECUTION=1`` fails the run.
+#:
+#: This is deliberately not satisfied by a bare "skip": a reason that does not
+#: say what is missing cannot be checked by anyone later, which is the whole
+#: problem being fixed.
+#: Matched as substrings of the lowercased reason. Deliberately *names of
+#: things* rather than phrases: "No CUDA found", "cuda is required" and "not
+#: use cublas, skip" are three ways of saying the same fact about the machine,
+#: and a phrase list would have to grow one entry per author.
+ENVIRONMENT_SKIP_PATTERNS = (
+    # accelerators and the libraries that only exist alongside them
+    "cuda", "cudnn", "cublas", "cutt", "cusparse", "cufft", "curand",
+    "gpu", "accelerator", "acl", "npu", "ascend", "cann", "rocm", "hip",
+    "triton",
+    # an independent PyTorch build, which only the oracle sessions have
+    "torch",
+    # multi-rank launchers
+    "mpi", "nccl", "world size",
+    # opt-in assets and probes
+    "download", "dataset", "network", "manual probe",
+)
+
+#: ``(path, reason)`` -- a file exempt even though its skips do not explain it.
+#: Empty is the correct state; the rule above should cover the honest cases.
 EXECUTES_NOTHING = ()
 
 

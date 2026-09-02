@@ -25,7 +25,7 @@ def setUpModule():
             "torch", "torchvision.models", "torch.nn"
         )
 
-@unittest.skipIf(skip_this_test, "skip_this_test")
+@unittest.skipIf(skip_this_test, "needs an independent torch and torchvision")
 class TestAutoDiff(unittest.TestCase):
     def test_pt_hook(self):
         code = '''

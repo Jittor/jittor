@@ -13,7 +13,7 @@ if jt.has_cuda:
 else:
     cublas_ops = cudnn_ops = cub_ops = None
 
-@unittest.skipIf(cublas_ops==None, "Not use cublas, Skip")
+@unittest.skipIf(cublas_ops==None, "CUDA cublas is unavailable in this build")
 class TestCublasTestOp(unittest.TestCase):
     def test(self):
         assert cublas_ops.cublas_test(2).data==123
@@ -21,13 +21,13 @@ class TestCublasTestOp(unittest.TestCase):
         assert cublas_ops.cublas_test(10).data==123
         assert cublas_ops.cublas_test(20).data==123
 
-@unittest.skipIf(cudnn_ops==None, "Not use cudnn, Skip")
+@unittest.skipIf(cudnn_ops==None, "CUDA cudnn is unavailable in this build")
 class TestCudnnTestOp(unittest.TestCase):
     def test(self):
         assert cudnn_ops.cudnn_test("").data == 123
         assert cudnn_ops.cudnn_test("-c2048 -h7 -w7 -k512 -r1 -s1 -pad_h0 -pad_w0 -u1 -v1").data == 123
         
-@unittest.skipIf(cub_ops==None, "Not use cub, Skip")
+@unittest.skipIf(cub_ops==None, "CUDA cub is unavailable in this build")
 class TestCubTestOp(unittest.TestCase):
     @jt.flag_scope(use_cuda=1)
     def test(self):

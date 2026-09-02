@@ -436,11 +436,40 @@ def pytest_runtest_logreport(report):
     difference visible.
     """
     relative = _relative_to_repo(report.fspath)
-    record = _FILE_OUTCOMES.setdefault(relative, {"executed": 0, "skipped": 0})
+    record = _FILE_OUTCOMES.setdefault(
+        relative, {"executed": 0, "skipped": 0, "reasons": set()})
     if report.when == "call" and not report.skipped:
         record["executed"] += 1
     elif report.skipped and report.when in ("setup", "call"):
         record["skipped"] += 1
+        record["reasons"].add(_skip_reason(report))
+
+
+def _skip_reason(report):
+    """What the test said when it skipped, lowercased.
+
+    pytest puts it in ``longrepr`` as ``(path, lineno, "Skipped: <reason>")``.
+    The reason is the only thing that can distinguish "this box has no GPU"
+    from "this entry quietly stopped testing anything".
+    """
+    longrepr = getattr(report, "longrepr", None)
+    if isinstance(longrepr, tuple) and len(longrepr) == 3:
+        return str(longrepr[2]).lower()
+    return str(longrepr or "").lower()
+
+
+def _environment_explains(reasons):
+    """Whether every skip in a file blamed something this machine lacks."""
+    try:
+        from _helpers.gate_scope import ENVIRONMENT_SKIP_PATTERNS
+    except Exception:
+        return False
+    if not reasons:
+        return False
+    return all(
+        any(pattern in reason for pattern in ENVIRONMENT_SKIP_PATTERNS)
+        for reason in reasons
+    )
 
 
 def _files_that_executed_nothing():
@@ -526,7 +555,12 @@ def _report_files_that_executed_nothing(terminalreporter, config):
 
 def _exemption_note(path, exemptions):
     reason = exemptions.get(path)
-    return "  -- expected here: " + reason if reason else ""
+    if reason:
+        return "  -- expected here: " + reason
+    record = _FILE_OUTCOMES.get(path, {})
+    if _environment_explains(record.get("reasons", set())):
+        return "  -- explained: " + "; ".join(sorted(record["reasons"]))[:120]
+    return ""
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -543,8 +577,14 @@ def pytest_sessionfinish(session, exitstatus):
     if getattr(session.config.option, "collectonly", False):
         return
     unexplained = [
-        path for path in _files_that_executed_nothing() + _files_that_collected_nothing()
+        path for path in _files_that_executed_nothing()
         if path not in exemptions
+        and not _environment_explains(
+            _FILE_OUTCOMES.get(path, {}).get("reasons", set()))
     ]
+    # A file that collected nothing never reached a skip, so nothing explains
+    # it -- that is exactly the shape 0.01 had.
+    unexplained += [path for path in _files_that_collected_nothing()
+                    if path not in exemptions]
     if unexplained:
         session.exitstatus = 1

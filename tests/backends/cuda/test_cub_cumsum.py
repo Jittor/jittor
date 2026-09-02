@@ -40,7 +40,7 @@ class TestCubCumsumOp(unittest.TestCase):
     def setUp(self):
         self.is_reversed = False
 
-    @unittest.skipIf(cub_ops==None, "Not use cub, Skip")
+    @unittest.skipIf(cub_ops==None, "CUDA cub is unavailable in this build")
     @jt.flag_scope(use_cuda=1)
     def test_1d(self):
         check_forward([20])
@@ -48,7 +48,7 @@ class TestCubCumsumOp(unittest.TestCase):
         check_forward([6007], 0)
         check_forward([6007], -1)
 
-    @unittest.skipIf(cub_ops==None, "Not use cub, Skip")
+    @unittest.skipIf(cub_ops==None, "CUDA cub is unavailable in this build")
     @jt.flag_scope(use_cuda=1)
     def test_1d_backward(self):
         check_backward([20])
@@ -56,7 +56,7 @@ class TestCubCumsumOp(unittest.TestCase):
         check_backward([6007], 0)
         check_backward([6007], -1)
 
-    @unittest.skipIf(cub_ops==None, "Not use cub, Skip")
+    @unittest.skipIf(cub_ops==None, "CUDA cub is unavailable in this build")
     @jt.flag_scope(use_cuda=1)
     def test_2d(self):
         check_forward([5,5])
@@ -64,7 +64,7 @@ class TestCubCumsumOp(unittest.TestCase):
         check_forward([2000, 6007], 1)
         check_forward([2000, 6007], -1)
 
-    @unittest.skipIf(cub_ops==None, "Not use cub, Skip")
+    @unittest.skipIf(cub_ops==None, "CUDA cub is unavailable in this build")
     @jt.flag_scope(use_cuda=1)
     def test_2d_backward(self):
         check_backward([5,5])
@@ -72,7 +72,7 @@ class TestCubCumsumOp(unittest.TestCase):
         check_backward([2000, 6007], 1)
         check_backward([2000, 6007], -1)
 
-    @unittest.skipIf(cub_ops==None, "Not use cub, Skip")
+    @unittest.skipIf(cub_ops==None, "CUDA cub is unavailable in this build")
     @jt.flag_scope(use_cuda=1)
     def test_nd(self):
         check_forward([5,6,7,8], 0)
@@ -87,7 +87,7 @@ class TestCubCumsumOp(unittest.TestCase):
         check_forward([16,14,14,4096], -1)
         check_forward([16,14,14,4095], 3)
 
-    @unittest.skipIf(cub_ops==None, "Not use cub, Skip")
+    @unittest.skipIf(cub_ops==None, "CUDA cub is unavailable in this build")
     @jt.flag_scope(use_cuda=1)
     def test_nd_backward(self):
         check_backward([5,6,7,8], 0)
