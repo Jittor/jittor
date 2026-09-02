@@ -10,7 +10,7 @@
 namespace jittor {
 
 struct UnrollPass : Pass {
-    UnrollPass() : Pass("expand_empty_block") {};
+    UnrollPass() : Pass("unroll") {};
     void run() override;
 };
 

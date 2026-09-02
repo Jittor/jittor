@@ -15,7 +15,7 @@ namespace jittor {
 
 vector<int> ReorderLoopPass::search_parse_loop_order() {
     vector<int> order;
-    auto* sl_pass = pm->get_pass<SplitLoopPass>("split_loop");
+    auto* sl_pass = pm->get_pass<SplitLoopPass>();
     ASSERT(sl_pass);
     auto number_of_ranges_after_split = sl_pass->number_of_ranges_after_split;
     if (!number_of_ranges_after_split) return order;

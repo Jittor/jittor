@@ -13,7 +13,7 @@
 namespace jittor {
 
 void SplitLoopPass::run() {
-    auto* lva_pass = pm->get_pass<LoopVarAnalyzePass>("loop_var_analyze");
+    auto* lva_pass = pm->get_pass<LoopVarAnalyzePass>();
     ASSERT(lva_pass);
     if (op->flags.get(NodeFlags::_cpu))
         ir->push_back("using namespace std;", &ir->before);

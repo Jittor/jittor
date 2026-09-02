@@ -34,8 +34,8 @@ void BroadcastTuner::run(PassManager* pm, TunerManager* tm) {
     }
     if (!bc || rd) return;
 
-    auto* lva_pass = pm->get_pass<LoopVarAnalyzePass>("loop_var_analyze");
-    auto* sl_pass = pm->get_pass<SplitLoopPass>("split_loop");
+    auto* lva_pass = pm->get_pass<LoopVarAnalyzePass>();
+    auto* sl_pass = pm->get_pass<SplitLoopPass>();
     if (!sl_pass || !lva_pass) return;
     auto number_of_ranges = lva_pass->number_of_ranges;
     if (number_of_ranges<2) return;

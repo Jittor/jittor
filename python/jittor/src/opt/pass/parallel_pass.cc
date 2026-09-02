@@ -194,7 +194,7 @@ void ParallelPass::run() {
         ir->push_front("#include \"misc/cpu_atomic.h\"", &ir->before);
         ir->push_front("#include <omp.h>", &ir->before);
         max_parallel_depth = op->get_loop_option("max_parallel_depth", 2);
-        auto* lva = pm->get_pass<LoopVarAnalyzePass>("loop_var_analyze");
+        auto* lva = pm->get_pass<LoopVarAnalyzePass>();
         auto number_of_ranges = lva->number_of_ranges;
         // leave the innermost range serial unless the user asked otherwise
         if (!op->loop_options->count("max_parallel_depth")) {
