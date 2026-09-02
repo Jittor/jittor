@@ -86,7 +86,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 内存 | mem (6.C10–6.C20) | GPU2 c12-23 |
 | 绑定 | bindings (6.C02/22/23/24/25/27/28/29) | GPU0 c0-11 |
 | Python 核心 | — |  |
-| Python 算子 | pyops (6.P03–6.P09) | GPU5 c36-47 |
+| Python 算子 | pyops (5.10、5.12、5.13) | GPU5 c36-47 |
 | Python 其他 | pyother (5.18、5.19、6.P25) | GPU6 c64-75 |
 | 兼容层 | compat (7.01) | CPU c96-103 |
 | CUDA 后端 | cudabk (6.B07/08/17、8.01、8.03) | GPU7 c76-87 |
@@ -255,14 +255,14 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 5.07 | `jt.Function` 每次调用创建一次性上下文对象，实例无状态 | 已合并 | | 5c4e624b |
 | 5.08 | `flag_scope` 的备份改局部栈，`__call__` 每次新建 scope | 已合并 | | 5720e7e8 |
 | 5.09 | 29 处融合 kernel 的启用条件由全局 `no_grad` 改为「输出不需要梯度」 | 待领 | | |
-| 5.10 | 索引与计数统一 int64 | 待领 | | |
+| 5.10 | 索引与计数统一 int64 | 进行中 | pyops | |
 | 5.11 | `amp_reg` 位常量命名导出，一律 `\ | 待领 | | |
-| 5.12 | matmul 四条路径共用能力表，dtype 用枚举不用子串 | 待领 | | |
-| 5.13 | `unique` | 待领 | | |
+| 5.12 | matmul 四条路径共用能力表，dtype 用枚举不用子串 | 进行中 | pyops | |
+| 5.13 | `unique` | 进行中 | pyops | |
 | 5.14 | `Var.scatter` 改非就地 | 已合并 | | 0b75e187 |
 | 5.15 | `.half()`/`.float16()` 删死的 amp 分支 | 待领 | | |
 | 5.16 | `state_dict(to="torch")` 用 `from_numpy`，不强制 floa… | 待领 | | |
-| 5.17 | 同一概念合并 | 已合并 | | 3344cb40 |
+| 5.17 | 同一概念合并 | 已合并 | pyops | 1793f08f（平均池化：删 `pool/layers.py` 旧 AvgPool2d 并转发，2D/3D 同一套 `count_include_pad` 语义）3344cb40（`nn.Conv2d.execute` 委托 `functional.conv2d`，编译选项与输出尺寸校验合一）cd7ce682（BatchNorm/LayerNorm/GroupNorm 模块只做参数管理；`batch_norm(training=True)` 走融合 kernel；BN 的 sync 与非 sync 合并成一套数学——含审计 2026-09-03 补充的第三处：sync 分支的 `E[x²]-E[x]²` 只在 MPI 下跑，均值远大于标准差时相对误差约 7e-2） |
 | 5.18 | 同一概念合并 | 已合并 | pyother | 40fa8695（efficientnet 投影层）37ac0ac5（models/_utils）4179c899（loss 的 _reduce）d5892775（分布类）d569f22d（旧式 scheduler）dd1cbe30（init 的 gain 表与 fan）96cb9b1c（linalg helper）f23dc9b8（normalize 合并到 torch 语义） |
 | 5.19 | 被静默忽略的参数改为传非默认值时 warn 或 raise | 进行中 | pyops（算子参数）+ pyother（其余） | 1710aef1（算子参数：relu/leaky_relu/silu/mish 的 inplace、instance_norm 与 InstanceNorm 的 running stats/momentum/is_train/sync、svd 的 compute_uv/driver、inv_ex 的 check_errors、ctc_loss 的 zero_infinity、sort 的 stable；topk 的 sorted 判为无需处理，见提交说明）。共用基础设施 `python/jittor/_arg_policy.py`，pyother 直接复用，不要另起近义模块。其余（pyother）：4cf6df28（resnet 的 zero_init_residual——判为该实现而不是 warn，按 torchvision 清零残差分支末端 BN 的 gamma）、211339c9（vjp/jvp 的 strict 归 unsupported、DataLoader 的 pin_memory/persistent_workers 归 ignored 且 persistent_workers 用哨兵默认值只在显式传 False 时 warn、kaiming 的 generator 归 unsupported、fftfreq/rfftfreq 的 dtype 直接实现且未知 kwargs 抛 TypeError） |
 | 5.20 | import 期副作用删除 | 待领 | | |
