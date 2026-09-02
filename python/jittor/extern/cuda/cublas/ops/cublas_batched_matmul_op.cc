@@ -147,10 +147,10 @@ void CublasBatchedMatmulOp::jit_run() {
     }
     if (has_fp16) {
         computeType = use_tensorcore ? CUBLAS_COMPUTE_16F : CUBLAS_COMPUTE_32F;
-        algo = use_tensorcore ? CUBLAS_GEMM_DEFAULT : CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+        algo = use_tensorcore ? CUBLAS_GEMM_DEFAULT_TENSOR_OP : CUBLAS_GEMM_DEFAULT;
     } else if (has_bf16) {
         computeType = use_tensorcore ? CUBLAS_COMPUTE_32F_FAST_16BF : CUBLAS_COMPUTE_32F;
-        algo = use_tensorcore ? CUBLAS_GEMM_DEFAULT : CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+        algo = use_tensorcore ? CUBLAS_GEMM_DEFAULT_TENSOR_OP : CUBLAS_GEMM_DEFAULT;
     }
     if (computeType == CUBLAS_COMPUTE_16F || computeType == CUBLAS_COMPUTE_64F) {
         alpha_p = (void*)&alpha;
@@ -174,6 +174,10 @@ void CublasBatchedMatmulOp::jit_run() {
         beta_p = (void*)&beta;
     }
     #endif
+    LOGvvv << "cublas_batched_matmul algo select:"
+        << "use_tensorcore=" >> use_tensorcore
+        << "computeType=" >> cublas_compute_type_name(computeType)
+        << "algo=" >> cublas_gemm_algo_name(algo);
     checkCudaErrors(cublasGemmStridedBatchedEx(handle_,
     CUBLAS_OP_@Trans_b, CUBLAS_OP_@Trans_a,
     k, n, m, alpha_p,
