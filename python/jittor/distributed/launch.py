@@ -19,10 +19,12 @@ data-parallel API (``jt.rank``/``jt.world_size``/``var.mpi_all_reduce`` /
 launcher sets the ``JT_{NCCL,HCCL}_*`` env vars.
 """
 import argparse
+import glob
 import os
 import signal
 import subprocess
 import sys
+import time
 
 
 def _visible_devices_for_rank(rank):
@@ -43,6 +45,46 @@ def _detect_backend():
     except Exception:
         pass
     return "nccl"
+
+
+# How long each pass of the wait loop gives one rank before moving on. The
+# whole loop is a round-robin, so N ranks are checked every N * _POLL_S.
+_POLL_S = 0.2
+# After SIGTERM, how long a rank gets to flush its logs before SIGKILL.
+_TERM_GRACE_S = 5.0
+
+
+def _stop_all(procs, keep=()):
+    """Terminate every rank still running. SIGTERM first, so logs get flushed."""
+    alive = [(rank, p) for rank, (p, _) in enumerate(procs)
+             if rank not in keep and p.poll() is None]
+    for _, p in alive:
+        p.terminate()
+    deadline = time.time() + _TERM_GRACE_S
+    for _, p in alive:
+        try:
+            p.wait(timeout=max(0.0, deadline - time.time()))
+        except subprocess.TimeoutExpired:
+            p.kill()
+    for _, (p, logf) in enumerate(procs):
+        if p.poll() is None:
+            p.kill()
+        if not logf.closed:
+            logf.close()
+
+
+def _cleanup(rootinfo):
+    """Remove the rendezvous file and the watchdog heartbeats beside it.
+
+    A heartbeat left behind (a rank that was killed rather than shut down)
+    would make the next job started on this path see a peer that is not there.
+    """
+    for path in [rootinfo] + glob.glob(rootinfo + ".hb*") + \
+            glob.glob(rootinfo + ".tmp"):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 def main():
@@ -87,7 +129,14 @@ def main():
         else:
             env[f"{prefix}_LOCAL_RANK"] = str(rank)   # single node: local == global
         env[f"{prefix}_ROOTINFO_FILE"] = rootinfo
-        env["cache_name"] = f"{backend}{rank}"    # per-rank JIT cache (no .so clash)
+        # No per-rank cache_name. Every rank builds the same kernels from the
+        # same sources, so a cache each meant an N-card job compiled the whole
+        # tree N times and stored it N times -- minutes and gigabytes per extra
+        # card, for nothing. One shared cache is what the mpirun path has always
+        # used: jittor.lock serializes the builds, so rank 0 compiles and the
+        # others wait and then find it done. (8.09 made this safe by dropping
+        # that lock around the rendezvous; before it, a rank waiting for peers
+        # held the lock they needed.) 8.10.
         logf = open(os.path.join(a.logdir, f"rank{rank}.log"), "w")
         print(f"[jt.launch] {backend} rank {rank} -> {' '.join(cmd)}  (log: {logf.name})", flush=True)
         procs.append((subprocess.Popen(cmd, env=env, stdout=logf, stderr=subprocess.STDOUT), logf))
@@ -98,23 +147,41 @@ def main():
     signal.signal(signal.SIGINT, _sigint)
 
     rc = 0
+    first_failure = None
     try:
-        for rank, (p, logf) in enumerate(procs):
-            r = p.wait()
-            logf.close()
-            if r != 0:
-                rc = rc or r
-                print(f"[jt.launch] rank {rank} exited with code {r}", file=sys.stderr)
+        # Poll every rank, rather than wait() on them in order. Waiting in rank
+        # order means a launcher whose rank 3 has already crashed still sits on
+        # rank 0 -- and rank 0 is very likely hung *because* rank 3 died, so the
+        # job never ends and nothing says why. The first non-zero exit ends the
+        # loop, and the `finally` below takes the rest down with it. 8.10.
+        pending = list(range(len(procs)))
+        while pending and first_failure is None:
+            for rank in list(pending):
+                p, logf = procs[rank]
+                try:
+                    r = p.wait(timeout=_POLL_S)
+                except subprocess.TimeoutExpired:
+                    continue
+                pending.remove(rank)
+                logf.close()
+                if r != 0:
+                    first_failure = (rank, r)
+                    rc = r
+                    print(f"[jt.launch] rank {rank} exited with code {r}; "
+                          f"stopping the other ranks", file=sys.stderr)
+                    break
     finally:
-        for p, _ in procs:
-            if p.poll() is None:
-                p.kill()
-        if os.path.exists(rootinfo):
-            try:
-                os.remove(rootinfo)
-            except OSError:
-                pass
-    print(f"[jt.launch] all ranks done, rc={rc}")
+        _stop_all(procs, keep=() if first_failure is None
+                  else (first_failure[0],))
+        _cleanup(rootinfo)
+    if first_failure is None:
+        print(f"[jt.launch] all ranks done, rc={rc}")
+    else:
+        rank, r = first_failure
+        print(f"[jt.launch] rank {rank} failed with code {r}; "
+              f"see {os.path.join(a.logdir, f'rank{rank}.log')} for the cause "
+              f"-- the other ranks' logs usually only show them waiting for it",
+              file=sys.stderr)
     sys.exit(rc)
 
 
