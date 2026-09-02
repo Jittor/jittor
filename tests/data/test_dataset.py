@@ -256,14 +256,7 @@ if __name__ == "__main__":
         dataset.workers[0].p.kill()
         pass
 """
-        fname = os.path.join(jt.flags.cache_path, "children_dead_test.py")
-        with open(fname, 'w') as f:
-            f.write(src)
-        import subprocess as sp
-        import sys
-        cmd = sys.executable + " " + fname
-        print(cmd)
-        r = sp.run(cmd, shell=True, stdout=sp.PIPE, stderr=sp.PIPE)
+        r = run_child_script(src)
         s = r.stderr.decode()
         print(s)
         assert r.returncode != 0
@@ -335,14 +328,7 @@ if __name__ == "__main__":
         break
     dataset.terminate()
 """
-        fname = os.path.join(jt.flags.cache_path, "children_dead_test.py")
-        with open(fname, 'w') as f:
-            f.write(src)
-        import subprocess as sp
-        import sys
-        cmd = sys.executable + " " + fname
-        print(cmd)
-        r = sp.run(cmd, shell=True, stdout=sp.PIPE, stderr=sp.PIPE)
+        r = run_child_script(src)
         s = r.stderr.decode()
         print(s)
         assert r.returncode == 0
@@ -516,6 +502,58 @@ class TestDatasetDeepcopy(unittest.TestCase):
         assert copied.dataset is copied
         assert copied.total_len == 4
         assert len([b for b in copied]) == 2
+
+
+class TestWorkerExceptionPropagation(unittest.TestCase):
+    """An exception raised inside a worker must come back to the caller as an
+    exception. It used to be delivered as SIGINT to the parent, which jittor's
+    handler turns into an immediate process exit -- indistinguishable from the
+    user pressing Ctrl-C, and impossible to catch."""
+
+    SRC = """
+import numpy as np
+import jittor as jt
+from jittor.dataset import Dataset
+
+class Boom(Dataset):
+    def __init__(self):
+        super().__init__()
+        self.set_attrs(total_len=64, batch_size=4, shuffle=False, num_workers=2)
+    def __getitem__(self, k):
+        if k == 7:
+            raise ValueError("boom in worker")
+        return np.array([k], dtype="float32")
+
+if __name__ == "__main__":
+    ds = Boom()
+    try:
+        for batch in ds:
+            pass
+    except Exception as e:
+        print("RAISED=%s" % type(e).__name__)
+        print("HAS_MESSAGE=%s" % ("boom in worker" in str(e)))
+        print("HAS_TRACEBACK=%s" % ("__getitem__" in str(e)))
+        print("HAS_VALUEERROR=%s" % ("ValueError" in str(e)))
+    else:
+        print("NO_EXCEPTION")
+    print("STILL_ALIVE")
+"""
+
+    def test_worker_exception_reaches_the_caller(self):
+        r = run_child_script(self.SRC)
+        out = r.stdout.decode()
+        err = r.stderr.decode()
+        assert r.returncode == 0, (
+            "the parent must survive to raise, got returncode %s\\n%s\\n%s"
+            % (r.returncode, out[-2000:], err[-3000:]))
+        assert "STILL_ALIVE" in out, out[-2000:] + err[-2000:]
+        assert "NO_EXCEPTION" not in out, out[-2000:]
+        assert "RAISED=RuntimeError" in out, out[-2000:]
+        assert "HAS_MESSAGE=True" in out, out[-2000:]
+        assert "HAS_TRACEBACK=True" in out, out[-2000:]
+        assert "HAS_VALUEERROR=True" in out, out[-2000:]
+        # and nothing pretends the user pressed Ctrl-C
+        assert "Caught SIGINT" not in err, err[-2000:]
 
 
 if __name__ == "__main__":

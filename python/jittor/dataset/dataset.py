@@ -27,7 +27,7 @@ except ImportError:
     Image = _MissingPIL()
     _has_pil = False
 import multiprocessing as mp
-import signal
+import sys
 from jittor_utils import LOG
 import jittor as jt
 import time
@@ -84,15 +84,28 @@ if os.name == "nt":
 
     jt.RingBuffer = RingBuffer
 
+#: bytes reserved per worker for the traceback of a failing worker
+WORKER_ERROR_CAPACITY = 16 * 1024
+
+
 class Worker:
     def __init__(self, target, args, buffer_size, keep_numpy_array=False):
         self.buffer = jt.RingBuffer(buffer_size)
         self.buffer.keep_numpy_array(keep_numpy_array)
 
         self.status = mp.Array('f', 5, lock=False)
-        self.p = mp.Process(target=target, args=args+(self.buffer,self.status))
+        # Shared slot the worker fills in before it dies, so the parent can
+        # re-raise the real exception instead of guessing why a child left.
+        self.error = mp.Array('c', WORKER_ERROR_CAPACITY, lock=False)
+        self.p = mp.Process(
+            target=target, args=args+(self.buffer, self.status, self.error))
         self.p.daemon = True
         self.p.start()
+
+    def take_error(self):
+        """The traceback this worker died with, or None."""
+        raw = self.error.value
+        return raw.decode("utf-8", "replace") if raw else None
 
 class Dataset(object):
     '''
@@ -247,7 +260,7 @@ class Dataset(object):
             for w in self.workers:
                 w.p.terminate()
     
-    def _worker_main(self, worker_id, buffer, status):
+    def _worker_main(self, worker_id, buffer, status, error):
         import jittor_utils
         jt.flags.use_cuda_host_allocator = 0
 
@@ -321,11 +334,25 @@ class Dataset(object):
                     img_open_hook.duration
                 img_open_hook.duration = 0.0
         except Exception:
+            # Do NOT signal the parent: SIGINT is indistinguishable from the
+            # user pressing Ctrl-C, and jittor's handler turns it into an
+            # immediate process exit, so a plain bug in __getitem__ surfaced as
+            # "Caught SIGINT, quick exit" with no exception the caller could
+            # catch. Hand the traceback to the parent and let it re-raise.
             import traceback
             line = traceback.format_exc()
-            print(line)
-            os.kill(os.getppid(), signal.SIGINT)
-            exit(0)
+            print(line, file=sys.stderr, flush=True)
+            try:
+                error.value = line.encode("utf-8", "replace")[
+                    :WORKER_ERROR_CAPACITY - 1]
+                # wake the parent: it blocks on idqueue.pop()
+                with self.idqueue_lock:
+                    self.idqueue.push(worker_id)
+            except Exception:
+                traceback.print_exc()
+            # os._exit: no atexit hooks, and CLD_EXITED so the parent's SIGCHLD
+            # handler stays quiet and the error we just stored is what reports.
+            os._exit(1)
 
     def display_worker_status(self):
         ''' Display dataset worker status, when dataset.num_workers > 0, it will display infomation blow:
@@ -385,6 +412,30 @@ Example::
             s = w.status
             msg.append(f"#{i}\t{s[0]:.3f}\t{s[4]:.3f}\t{s[1]:.3f}\t{s[2]:.3f}\t{s[3]:.3f}\t{w.buffer}")
         LOG.i('\n'.join(msg))
+
+    def _check_worker_error(self, worker_id, worker):
+        """Re-raise, in this process, the exception that killed a worker."""
+        message = worker.take_error()
+        if message is None:
+            return
+        self._abort_workers()
+        raise RuntimeError(
+            "exception in dataset worker %d:\n%s" % (worker_id, message))
+
+    def _abort_workers(self):
+        """Drop the worker pool without waiting for it to go idle.
+
+        A dead worker never reports itself idle, so the ordinary
+        ``_stop_all_workers`` handshake would block forever after a failure.
+        """
+        try:
+            self.terminate()
+        except Exception:
+            pass
+        for name in ("index_list", "idqueue", "idqueue_lock", "gid", "gidc",
+                     "num_idle", "num_idle_c", "workers", "index_list_numpy"):
+            if hasattr(self, name):
+                delattr(self, name)
 
     def _stop_all_workers(self):
         # stop workers
@@ -615,6 +666,7 @@ Example::
                     self.last_ids[i%10] = worker_id
                     self.batch_id = i
                     w = self.workers[worker_id]
+                    self._check_worker_error(worker_id, w)
                     if mp_log_v:
                         print(f"#{worker_id} {os.getpid()} recv buffer", w.buffer)
                     batch = w.buffer.recv()
