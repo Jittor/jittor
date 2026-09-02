@@ -222,6 +222,37 @@ assert jt.flags.use_parallel_op_compiler == 0
 """
 
 
+#: ``compiler.JIT_UTILS_UPDATED_EXIT_CODE``.
+_JIT_UTILS_UPDATED_EXIT_CODE = 3
+
+
+def _warm_the_notebook_cache(attempts=3):
+    """Build the cache in a process that is allowed to exit and be re-run.
+
+    The first ``import jittor`` against a cold ``JITTOR_HOME`` rebuilds
+    ``jit_utils``, which cannot be reloaded in the process that built it, so it
+    exits and asks to be re-run. A shell can do that. A Jupyter kernel cannot:
+    the notebook's first cell is ``import jittor`` and the exit surfaces as
+    ``SystemExit`` in cell 0, which reads as "the notebook is broken".
+
+    This test gives every run a fresh ``JITTOR_HOME`` under ``tmp_path`` -- on
+    purpose, since a cold start is part of what the smokes check -- so the
+    rebuild is guaranteed, not occasional. Doing it here, where the exit code
+    means what it says, keeps the kernel's first import a warm one.
+    """
+    probe = "import jittor as jt; jt.array([1.0, 2.0]).sync()"
+    for _attempt in range(attempts):
+        completed = run_python_child(["-c", probe], merge_stderr=True, timeout=0)
+        if completed.returncode == _JIT_UTILS_UPDATED_EXIT_CODE:
+            continue
+        assert completed.returncode == 0, (
+            "could not warm the notebook cache:\n" + completed.stdout[-4000:])
+        return
+    raise AssertionError(
+        "jit_utils kept rebuilding after %d attempts; the notebook kernel would "
+        "have died in cell 0 with SystemExit" % attempts)
+
+
 @pytest.mark.cpu
 @pytest.mark.timeout(1800)
 def test_notebook_smokes_execute_offline_on_cpu(tmp_path, monkeypatch):
@@ -247,6 +278,8 @@ def test_notebook_smokes_execute_offline_on_cpu(tmp_path, monkeypatch):
     monkeypatch.setenv("JITTOR_HOME", str(tmp_path / "jittor-cache"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg-cache"))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    _warm_the_notebook_cache()
 
     try:
         import nbclient
