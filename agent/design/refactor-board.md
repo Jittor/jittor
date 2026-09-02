@@ -120,6 +120,39 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | `jt.flags.nvcc_flags` 的拼法变了 | 9.08 之后架构 flag 是 `--generate-code=arch=...,code=...`，不再是 `-arch=compute_N -code=sm_N`。按后者做字符串匹配的地方要改 | 各分区自查，`2d71f792` |
 | 全树跑时 `test_notebooks.py` 没有被当成 manual 跳过 | **已修**：`pytest_collection_modifyitems` 里 `test_notebooks.py` 的 `pytest.mark.manual` 加在跳过判断**之后**，所以全树跑时它照跑不误——2026-09-03 的全树原生一遍里实测 537 秒，是全树最慢的一项（第二名 289 秒）。现在所有标记先挂完再统一判断，manual 探针改由 `JITTOR_TEST_MANUAL=1` 或 `-m manual` 显式打开。**这是「筛选逻辑的顺序决定筛选结果」的第三例**（另两例：按 `sys.argv` 选 shim 模式、`@onlyCPU` 被设备过滤全部跳过） | 门禁 gates，`5c0f2364`（0.13） |
 
+## 跨用例状态泄漏清单（0.15 的前置，2026-09-03 全树实测）
+
+`tests/conftest.py` 在**每个测试文件**前后拍一次快照（三个存活计数、六个关键 flag、
+`sys.modules` 里换了对象的条目），只报告不失败。全树原生一遍的结论比预期干净得多：
+
+| 文件 | 留下什么 | 处置 |
+| --- | --- | --- |
+| `tests/nn/test_nn_capabilities.py` | `number_of_hold_vars 0 → 7` | 不改。模块级留着 Var 是正常的 |
+| `tests/ops/test_fft_op.py` | `number_of_hold_vars 7 → 33` | 不改，同上 |
+
+**六个 flag（`use_cuda`/`no_grad`/`amp_reg`/`use_parallel_op_compiler`/`exclude_pass`/`th_mode`）
+在原生这一遍一个都没泄漏**，`sys.modules` 也没有未还原的替换——0.12 那一批修到位了。
+
+### 受害者一侧才是要改的地方
+
+已知的五个"单独跑绿、合跑红"样本里，机理清楚的三个都不是污染源的错，是**受害者对全局
+计数器做了绝对断言**：
+
+| 样本 | 状态 |
+| --- | --- |
+| `test_fused_op.py::TestFusedOp::test_add` | **已修**（`bffe0bf4`）：断言 `(hv,lv,lo) == (0,0,0)` 改成比用例开头的基线增量。它真正想断的是"这张图创建了几个节点、融合后活下来几个"，那是一个差 |
+| `tests/ops/test_linalg.py::TestBUG4_2Op` | **已修**：`use_cuda=1` 改 `@jt.flag_scope`（0.12 / 6.P23） |
+| `tests/compiler/test_jit_tests.py` 的两条 sfrl | **已标记**：墙钟阈值，改 `@pytest.mark.load_sensitive` |
+| `test_torch_compat_fsdp2::test_single_rank_fully_shard_preserves_math_and_state` | 待查（torch 会话） |
+| `tests/compat/torch/test_torch_compat.py::test_torch_compat` | 待查（torch 会话；单独跑 549s 通过，整套里失败，且在兼容层那批改动之前的基线上就这样） |
+
+**一般规律**：对进程级全局量（存活计数、墙钟、flag）做**绝对**断言，断的不是这条用例的
+性质。能写成增量就写增量，写不成就说明这条断言依赖一个它管不着的前提。
+
+还有一类**绝对上界**留着没改，风险低但同形状：`test_inception.py:125`
+（`lived_vars < 50000`）、`test_resnet.py:136/138`（`< 8100` / `< 7000`）。
+余量是实测污染量（33）的两个数量级，暂不动；真要动就同样改成比循环前的基线。
+
 ## 任务
 
 | 编号 | 任务 | 状态 | 负责 | 提交 |
