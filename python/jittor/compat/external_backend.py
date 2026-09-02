@@ -17,6 +17,7 @@ from types import ModuleType
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ._entry_points import entry_points as _entry_points
+from .diagnostics import EXPECTED, swallowed
 
 
 EXTERNAL_BACKEND_ENTRY_POINT = "jittor.external_backends"
@@ -72,8 +73,8 @@ def _default_project_roots(environment_names: Sequence[str]) -> List[pathlib.Pat
             roots.append(entry.parent)
     try:
         roots.append(pathlib.Path.cwd())
-    except OSError:
-        pass
+    except OSError as exc:
+        swallowed("external_backend.py _default_project_roots: roots.append(pathlib.Path.cwd())", exc)
     runtime = os.environ.get("JITTOR_TORCH_RUNTIME_ROOT")
     if runtime:
         path = pathlib.Path(runtime).expanduser()
@@ -348,7 +349,8 @@ class ExternalBackend:
         for name in self.module_names():
             try:
                 module = self.try_import(name)
-            except Exception as exc:
+            except EXPECTED as exc:
+                swallowed("external_backend.py import_installed: module = self.try_import(name)", exc)
                 self._log("import %s failed: %s" % (name, exc))
                 continue
             if module is not None:
@@ -388,7 +390,8 @@ class ExternalBackend:
                 if selected is not None:
                     return selected
                 raise ImportError("module %s has no %s entry points" % (name, self.spec.name))
-            except Exception as exc:
+            except EXPECTED as exc:
+                swallowed("external_backend.py import_local: imported = importlib.import_module(name)", exc)
                 self._log("import local %s from %s failed: %s" % (name, root, exc))
                 for key in list(sys.modules):
                     if key == name or key.startswith(name + "."):
@@ -423,7 +426,8 @@ class ExternalBackend:
         try:
             with manifest.open("r", encoding="utf-8") as file:
                 data = json.load(file)
-        except Exception as exc:
+        except EXPECTED as exc:
+            swallowed("external_backend.py load_manifest: with manifest.open('r', encoding='utf-8') as file:", exc)
             self._log("read manifest %s failed: %s" % (manifest, exc))
             return None
         sources = data.get("sources") or data.get("source_files")
@@ -473,7 +477,8 @@ class ExternalBackend:
                 build_directory=build_dir,
                 verbose=self._verbose(),
             )
-        except Exception as exc:
+        except EXPECTED as exc:
+            swallowed("external_backend.py load_manifest: module = self._load_extension(", exc)
             self._log("compile manifest %s failed: %s" % (manifest, exc))
             return None
         selected = self.select_backend(module)
@@ -497,7 +502,8 @@ class ExternalBackend:
             sys.modules[name] = module
             spec.loader.exec_module(module)
             return self.select_backend(module)
-        except Exception as exc:
+        except EXPECTED as exc:
+            swallowed("external_backend.py load_build_script: spec = importlib.util.spec_from_file_location(name, os....", exc)
             self._log("load %s failed: %s" % (path, exc))
             return None
 
@@ -518,7 +524,8 @@ class ExternalBackend:
                 [os.fspath(root)], force=force, verbose=self._verbose()
             )
             return True
-        except Exception as exc:
+        except EXPECTED as exc:
+            swallowed("external_backend.py build_setup: from jittor.compat.shim import bootstrap", exc)
             self._log("build setup.py %s failed: %s" % (root, exc))
             return False
 
@@ -594,7 +601,8 @@ class ExternalBackend:
             try:
                 backend = self.load_source_root(source)
                 miss = self._candidate_capability_miss(backend, capability_key)
-            except BaseException:
+            except EXPECTED as exc:
+                swallowed("external_backend.py _load_candidate: backend = self.load_source_root(source)", exc)
                 self._restore_source_import_state(state)
                 raise
             if backend is None or miss is not None:
@@ -620,7 +628,8 @@ class ExternalBackend:
             for kind, source in candidates:
                 try:
                     backend, miss = self._load_candidate(source, capability_key)
-                except Exception as exc:
+                except EXPECTED as exc:
+                    swallowed("external_backend.py load: backend, miss = self._load_candidate(source, capability...", exc)
                     attempts.append(BackendAttempt(str(source or kind), "failed", repr(exc)))
                     continue
                 if backend is None:
@@ -716,7 +725,8 @@ def load_external_backend_entry_points() -> Tuple[BackendEntryPointResult, ...]:
     results = []
     try:
         entry_points = _entry_points(EXTERNAL_BACKEND_ENTRY_POINT)
-    except Exception as exc:
+    except EXPECTED as exc:
+        swallowed("external_backend.py load_external_backend_entry_points: entry_points = _entry_points(EXTERNAL_BACKEND_ENTRY_POINT)", exc)
         return (BackendEntryPointResult("discovery", EXTERNAL_BACKEND_ENTRY_POINT, "failed", repr(exc)),)
     with _REGISTRY_LOCK:
         for entry_point in entry_points:
@@ -737,7 +747,8 @@ def load_external_backend_entry_points() -> Tuple[BackendEntryPointResult, ...]:
                         register_external_backend(backend)
                 else:
                     raise TypeError("entry point did not return an external backend")
-            except Exception as exc:
+            except EXPECTED as exc:
+                swallowed("external_backend.py load_external_backend_entry_points: value = entry_point.load()", exc)
                 results.append(BackendEntryPointResult(key[0], key[1], "failed", repr(exc)))
                 continue
             _ENTRY_POINTS_LOADED.add(key)

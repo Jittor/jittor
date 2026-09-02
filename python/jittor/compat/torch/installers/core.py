@@ -21,6 +21,7 @@ from ..types import (
     _make_dtypes, device, dtype, make_torch_types_module,
     SymBool, SymFloat, SymInt,
 )
+from ...diagnostics import EXPECTED, swallowed
 
 def install(ctx):
     g = ctx.jittor_module
@@ -50,6 +51,19 @@ def install(ctx):
     g.compat_allow_stub = _compat_allow_stub
     g.compat_unimplemented_apis = _unimplemented_registry
     g.compat_approximate_apis = _approximate_registry
+
+    # Every failure this layer decided to continue past, on the record. The
+    # handlers used to be `except Exception: pass`, so a marker that failed to
+    # propagate or a dtype that failed to restore left nothing behind at all.
+    # See jittor/compat/diagnostics.py; JITTOR_COMPAT_DEBUG=1 also prints them.
+    from ...diagnostics import (
+        records as _swallowed_records,
+        counts as _swallowed_counts,
+        set_debug as _set_compat_debug,
+    )
+    g.compat_swallowed = _swallowed_records
+    g.compat_swallowed_counts = _swallowed_counts
+    g.compat_debug = _set_compat_debug
 
     # Who owns what `torch.__version__` reports.
     #
@@ -107,13 +121,13 @@ def install(ctx):
                         import numpy as _np
                         if obj.dtype == _np.int8:
                             obj = obj.view(_np.uint8)
-                    except Exception:
-                        pass
+                    except EXPECTED as exc:
+                        swallowed("torch/installers/core.py _fromarray_compat: import numpy as _np", exc)
                 return _pil_fromarray(obj, mode=mode, *args, **kwargs)
             _fromarray_compat._jittor_torch_compat = True
             _PILImage.fromarray = _fromarray_compat
-    except Exception:
-        pass
+    except EXPECTED as exc:
+        swallowed("torch/installers/core.py install: from PIL import Image as _PILImage", exc)
 
     # Critical: jittor dispatches every op to CPU unless flags.use_cuda is set.
     # The accelerator (Ascend NPU via jt.compiler.has_acl, or NVIDIA GPU via
@@ -132,8 +146,8 @@ def install(ctx):
         _no_gpu = _cvd is not None and _cvd.strip() == ""
         if (getattr(jt.compiler, "has_acl", 0) or getattr(jt, "has_cuda", 0)) and not _no_gpu:
             jt.flags.use_cuda = 1
-    except Exception:
-        pass
+    except EXPECTED as exc:
+        swallowed("torch/installers/core.py install: import os as _os", exc)
     _DTYPE_OBJS = _make_dtypes(g)
     g.dtype = dtype
     g.device = device
@@ -147,8 +161,8 @@ def install(ctx):
                            "conv_transpose1d", "conv_transpose2d", "conv_transpose3d"):
             if not hasattr(g, _conv_name) and hasattr(_jt_nn_top, _conv_name):
                 setattr(g, _conv_name, getattr(_jt_nn_top, _conv_name))
-    except Exception:
-        pass
+    except (AttributeError, TypeError) as exc:
+        swallowed("torch/installers/core.py install: import jittor.nn as _jt_nn_top", exc)
     ctx.state["dtypes"] = _DTYPE_OBJS
     ctx.state["Var"] = jt.Var
 
@@ -251,7 +265,8 @@ def install_misc(ctx):
                 state = int(list(state)[0])
             else:
                 state = int(state)
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("torch/installers/core.py _set_rng_state: if isinstance(state, Var):", exc)
             state = int(getattr(_random_mod, "_seed", 0))
         _manual_seed(state)
     g.manual_seed = _manual_seed

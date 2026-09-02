@@ -20,6 +20,7 @@ from .preflight import (
     _prepend_env_path,
     project_dir as _project_dir,
 )
+from ..diagnostics import EXPECTED, swallowed
 
 def _deploy_torch_shim(target: pathlib.Path) -> None:
     from jittor.compat.shim import deploy
@@ -99,7 +100,8 @@ def _preload_jittor_cores(verbose: bool) -> List[str]:
         import jittor as jt  # noqa: F401
         from jittor import compiler
         search_root = pathlib.Path(compiler.cache_path).parent
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("shim/build.py _preload_jittor_cores: import jittor as jt # noqa: F401", exc)
         return loaded
     for name in ("jit_utils_core", "jittor_core"):
         # If the interpreter already imported this core, that exact file is the
@@ -127,7 +129,8 @@ def _preload_jittor_cores(verbose: bool) -> List[str]:
                 _prepend_env_path(
                     os.environ, "LD_LIBRARY_PATH", pathlib.Path(so).parent
                 )
-            except Exception as e:
+            except EXPECTED as e:
+                swallowed("shim/build.py _preload_jittor_cores: ctypes.CDLL(so, mode=ctypes.RTLD_GLOBAL)", e)
                 _log(verbose, "could not preload %s: %s" % (so, e))
     return loaded
 
@@ -307,7 +310,8 @@ def _needs_build(ext: NativeExtension, env: Optional[dict] = None) -> bool:
     inputs = _extension_inputs(ext)
     try:
         from jittor.compat.shim import cpp_extension as _cpp_ext
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("shim/build.py _needs_build: from jittor.compat.shim import cpp_extension as _cpp_ext", exc)
         return True
     if _cached_setuptools_outputs_current(ext, inputs, _cpp_ext, env):
         return False
@@ -380,7 +384,7 @@ def build_extension_dirs(
             for path in _extension_outputs(ext.root):
                 if os.path.sep + "build" + os.path.sep not in path:
                     _cpp_ext.write_toolchain_stamp(path, {"root": ext.root})
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("shim/build.py build_extension_dirs: from jittor.compat.shim import cpp_extension as _cpp_ext", exc)
         built.append(ext.root)
     return built

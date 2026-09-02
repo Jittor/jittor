@@ -20,6 +20,7 @@ import weakref
 import jittor as jt
 
 from ..permissive import PermissiveModule, install_permissive_package
+from ..diagnostics import EXPECTED, swallowed
 
 # torch is the shim itself, and this module is imported while the shim is still
 # installing, so it cannot be reached at module scope -- only from a call, by
@@ -38,7 +39,8 @@ def host_lengths(tensor):
     """
     try:
         return [int(value) for value in tensor.cpu().numpy().tolist()]
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("vllm/flash_attn.py host_lengths: return [int(value) for value in tensor.cpu().numpy().to...", exc)
         return [int(value) for value in tensor]
 
 

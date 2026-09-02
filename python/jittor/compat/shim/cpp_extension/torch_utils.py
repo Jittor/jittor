@@ -13,6 +13,7 @@ import os
 import sys
 import types
 import hashlib
+from ...diagnostics import EXPECTED, swallowed
 
 
 def _jt_cpp_build_cfg():
@@ -26,7 +27,8 @@ def _default_build_root(*parts):
         try:
             import jittor as _jt
             root = os.path.join(_jt.flags.cache_path, "torch_extensions")
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("shim/cpp_extension/torch_utils.py _default_build_root: import jittor as _jt", exc)
             root = os.path.join(os.path.expanduser("~"), ".cache", "jittor_torch_extensions")
     return os.path.join(root, *parts)
 
@@ -42,8 +44,8 @@ def _write_if_changed(path, data):
     try:
         with open(path, "r", encoding="utf-8") as f:
             old = f.read()
-    except OSError:
-        pass
+    except OSError as exc:
+        swallowed("shim/cpp_extension/torch_utils.py _write_if_changed: with open(path, 'r', encoding='utf-8') as f:", exc)
     if old == data:
         return
     with open(path, "w", encoding="utf-8") as f:
@@ -142,7 +144,8 @@ def _make_build_extension():
 
 try:
     BuildExtension = _make_build_extension()
-except Exception:  # pragma: no cover - setuptools missing
+except EXPECTED as exc:
+    swallowed("shim/cpp_extension/torch_utils.py <module>: BuildExtension = _make_build_extension()", exc)
     class BuildExtension:
         def __init__(self, *a, **k):
             raise RuntimeError(
@@ -282,7 +285,8 @@ def library_paths(cuda=False):
 def _jt_cuda_home():
     try:
         return _jt_cpp_build_cfg()["cuda_home"]
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("shim/cpp_extension/torch_utils.py _jt_cuda_home: return _jt_cpp_build_cfg()['cuda_home']", exc)
         return os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH")
 
 
@@ -299,7 +303,8 @@ def make_cpp_extension_module():
     mod.ROCM_HOME = None
     try:
         mod.CUDA_HOME = _jt_cuda_home()
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("shim/cpp_extension/torch_utils.py make_cpp_extension_module: mod.CUDA_HOME = _jt_cuda_home()", exc)
         mod.CUDA_HOME = os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH")
     mod._jittor_cpp_extension = True
     return mod

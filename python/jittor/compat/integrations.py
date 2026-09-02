@@ -1,6 +1,7 @@
 """Independent optional runtime integrations and their structured report."""
 
 from __future__ import absolute_import
+from .diagnostics import EXPECTED, swallowed
 
 
 def _warning(logger, message):
@@ -15,7 +16,8 @@ def apply_external_runtime_patches(logger=None):
         from jittor.compat import triton as _triton_compat  # noqa: F401
 
         report["triton_shim"] = {"ok": True}
-    except Exception as error:
+    except EXPECTED as error:
+        swallowed("integrations.py apply_external_runtime_patches: from jittor.compat import triton as _triton_compat # no...", error)
         report["triton_shim"] = {
             "ok": False,
             "error": "%s: %s" % (type(error).__name__, error),
@@ -26,7 +28,8 @@ def apply_external_runtime_patches(logger=None):
         from jittor.compat import vllm as _vllm_compat
 
         report["vllm_shim"] = {"ok": True, "armed": bool(_vllm_compat.register())}
-    except Exception as error:
+    except EXPECTED as error:
+        swallowed("integrations.py apply_external_runtime_patches: from jittor.compat import vllm as _vllm_compat", error)
         report["vllm_shim"] = {
             "ok": False,
             "error": "%s: %s" % (type(error).__name__, error),
@@ -54,7 +57,8 @@ def apply_external_runtime_patches(logger=None):
                 "external module patch %s (%s) failed: %s"
                 % (item.name, item.callback, item.detail or "unknown error"),
             )
-    except Exception as error:
+    except EXPECTED as error:
+        swallowed("integrations.py apply_external_runtime_patches: from jittor.compat.module_patcher import install_module...", error)
         report["module_patches"] = {
             "ok": False,
             "error": "%s: %s" % (type(error).__name__, error),
@@ -82,7 +86,8 @@ def apply_external_runtime_patches(logger=None):
                 "external backend %s (%s) failed: %s"
                 % (item.name, item.value, item.detail or "unknown error"),
             )
-    except Exception as error:
+    except EXPECTED as error:
+        swallowed("integrations.py apply_external_runtime_patches: from jittor.compat.external_backend import load_externa...", error)
         report["external_backends"] = {
             "ok": False,
             "error": "%s: %s" % (type(error).__name__, error),

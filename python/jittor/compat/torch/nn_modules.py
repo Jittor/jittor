@@ -5,6 +5,7 @@ import types
 import jittor as jt
 
 from .context import registry_for
+from ..diagnostics import EXPECTED, swallowed
 
 
 def install_module_namespace(nn, registry=None):
@@ -13,7 +14,8 @@ def install_module_namespace(nn, registry=None):
     if modules_pkg is None:
         try:
             from jittor.nn import modules as modules_pkg
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("torch/nn_modules.py install_module_namespace: from jittor.nn import modules as modules_pkg", exc)
             modules_pkg = None
     if modules_pkg is None:
         modules_pkg = types.ModuleType("torch.nn.modules")
@@ -94,8 +96,8 @@ def install_module_namespace(nn, registry=None):
         if class_name and class_name[0].isupper() and not hasattr(modules_pkg, class_name):
             try:
                 setattr(modules_pkg, class_name, getattr(nn, class_name))
-            except Exception:
-                pass
+            except (AttributeError, TypeError) as exc:
+                swallowed("torch/nn_modules.py install_module_namespace: setattr(modules_pkg, class_name, getattr(nn, class_name))", exc)
 
     container_mod = modules.get("torch.nn.modules.container")
     if container_mod is None:

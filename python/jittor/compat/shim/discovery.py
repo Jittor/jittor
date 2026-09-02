@@ -13,6 +13,7 @@ import sys
 from typing import Iterable, List, Optional, Sequence, Tuple, Union
 
 from .preflight import jittor_python_root, project_dir as _project_dir
+from ..diagnostics import swallowed
 
 _TRUTHY = {"1", "true", "yes", "on"}
 _NATIVE_SUFFIXES = (".cu", ".cuh", ".cpp", ".cc", ".cxx")
@@ -317,8 +318,8 @@ def _pythonpath_extension_roots(project_dir: pathlib.Path, runtime: pathlib.Path
         if raw_prefix:
             try:
                 prefixes.append(pathlib.Path(raw_prefix).resolve())
-            except OSError:
-                pass
+            except OSError as exc:
+                swallowed("shim/discovery.py _pythonpath_extension_roots: prefixes.append(pathlib.Path(raw_prefix).resolve())", exc)
     roots: List[pathlib.Path] = []
     for raw in raw_paths:
         try:

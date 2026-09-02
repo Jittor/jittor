@@ -6,6 +6,7 @@ import jittor as jt
 from jittor import nn
 
 from . import common, dtensor
+from ..diagnostics import EXPECTED, swallowed
 
 
 _EXPORTS = (
@@ -85,8 +86,8 @@ def _mark_fsdp_param_var(var, state, entry, role):
             var, "full_tensor", types.MethodType(_fsdp_var_full_tensor, var))
         object.__setattr__(
             var, "redistribute", types.MethodType(_fsdp_var_redistribute, var))
-    except Exception:
-        pass
+    except EXPECTED as exc:
+        swallowed("fsdp2/shard.py _mark_fsdp_param_var: object.__setattr__(var, '_jittor_fsdp2_state', state)", exc)
     return var
 
 
@@ -139,8 +140,8 @@ def _fsdp_var_redistribute(self, device_mesh=None, placements=None, **kwargs):
         object.__setattr__(self, "_spec", types.SimpleNamespace(
             mesh=getattr(self, "_dtensor_device_mesh", None),
             placements=getattr(self, "_dtensor_placements", ())))
-    except Exception:
-        pass
+    except EXPECTED as exc:
+        swallowed("fsdp2/shard.py _fsdp_var_redistribute: if device_mesh is not None:", exc)
     return self
 
 
@@ -153,16 +154,16 @@ def _named_parameters_with_owner(module, recurse=True):
             items = mod.named_children()
             if items is not None:
                 return list(items)
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("fsdp2/shard.py child_items: items = mod.named_children()", exc)
         try:
             modules = getattr(mod, "_modules", None)
             if callable(modules):
                 modules = modules()
             if isinstance(modules, dict):
                 return list(modules.items())
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("fsdp2/shard.py child_items: modules = getattr(mod, '_modules', None)", exc)
         return []
 
     def visit(mod, prefix=""):
@@ -170,8 +171,8 @@ def _named_parameters_with_owner(module, recurse=True):
         try:
             if isinstance(mod, nn.ParameterList):
                 dc = mod.params
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("fsdp2/shard.py visit: if isinstance(mod, nn.ParameterList):", exc)
         bufnames = getattr(mod, "__dict__", {}).get("_buffer_names", ())
         for name, value in list(dc.items()):
             if isinstance(name, str) and name.startswith("_"):
@@ -198,8 +199,8 @@ def _iter_modules(module, recurse=True):
     if recurse and hasattr(module, "modules"):
         try:
             return list(module.modules())
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("fsdp2/shard.py _iter_modules: return list(module.modules())", exc)
     return [module]
 
 

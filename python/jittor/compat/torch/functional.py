@@ -3,6 +3,7 @@
 import jittor as jt
 
 from .types import _dtype_to_str
+from ..diagnostics import swallowed
 
 
 def _torch_norm_impl(input, p="fro", dim=None, keepdim=False, dtype=None):
@@ -168,8 +169,8 @@ def _repeat_interleave(x, repeats, dim=None, *, output_size=None):
     if hasattr(jt, "repeat_interleave"):
         try:
             return jt.repeat_interleave(x, repeats, dim=dim, output_size=output_size)
-        except TypeError:
-            pass
+        except TypeError as exc:
+            swallowed("torch/functional.py _repeat_interleave: return jt.repeat_interleave(x, repeats, dim=dim, output...", exc)
     if isinstance(repeats, int):
         idx = jt.arange(x.shape[dim]).reshape(-1, 1).broadcast([x.shape[dim], repeats]).reshape(-1)
     else:

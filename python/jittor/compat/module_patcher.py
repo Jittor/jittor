@@ -17,6 +17,7 @@ from types import ModuleType
 from typing import Callable, Dict, List, Mapping, Optional, Tuple
 
 from ._entry_points import entry_points as _entry_points
+from .diagnostics import EXPECTED, swallowed
 
 
 MODULE_PATCH_ENTRY_POINT = "jittor.module_patches"
@@ -171,7 +172,8 @@ def _load_entry_point_patches() -> List[PatchResult]:
     results = []
     try:
         entry_points = _entry_points(MODULE_PATCH_ENTRY_POINT)
-    except Exception as exc:
+    except EXPECTED as exc:
+        swallowed("module_patcher.py _load_entry_point_patches: entry_points = _entry_points(MODULE_PATCH_ENTRY_POINT)", exc)
         return [PatchResult("entry_point", MODULE_PATCH_ENTRY_POINT, "discovery", "failed", repr(exc))]
     for entry_point in entry_points:
         key = (getattr(entry_point, "name", ""), getattr(entry_point, "value", repr(entry_point)))
@@ -180,7 +182,8 @@ def _load_entry_point_patches() -> List[PatchResult]:
             continue
         try:
             _register_entry_point_value(entry_point.load())
-        except Exception as exc:
+        except EXPECTED as exc:
+            swallowed("module_patcher.py _load_entry_point_patches: _register_entry_point_value(entry_point.load())", exc)
             results.append(PatchResult("entry_point", key[0], key[1], "failed", repr(exc)))
             continue
         _ENTRY_POINTS_LOADED.add(key)
@@ -196,7 +199,8 @@ def _apply_module_patches(module: ModuleType) -> List[PatchResult]:
         callback_name = _callback_name(callback)
         try:
             changed = callback(module)
-        except Exception as exc:
+        except EXPECTED as exc:
+            swallowed("module_patcher.py _apply_module_patches: changed = callback(module)", exc)
             results.append(PatchResult("module", module.__name__, callback_name, "failed", repr(exc)))
             continue
         status = "patched" if changed is not False else "unchanged"

@@ -5,6 +5,7 @@ import numpy as np
 import jittor as jt
 
 from . import common, grad_sync, shard
+from ..diagnostics import EXPECTED, swallowed
 
 
 _EXPORTS = (
@@ -290,8 +291,8 @@ def optimizer_step(opt, loss=None, retain_graph=False):
     _refresh_all_optimizer_fsdp_params(states, opt)
     try:
         opt._build_grad_map()
-    except Exception:
-        pass
+    except EXPECTED as exc:
+        swallowed("fsdp2/optimizer.py optimizer_step: opt._build_grad_map()", exc)
     return True
 
 

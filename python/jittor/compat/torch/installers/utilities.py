@@ -17,6 +17,7 @@ from ..library import Tag
 from ..nested import (
     _torch_make_parameter,
 )
+from ...diagnostics import EXPECTED, swallowed
 
 
 def _patch_transformers_npu_probe(module, modules):
@@ -243,7 +244,8 @@ def _install_flash_attn_shim(registry=None):
     _modules["torch"] = jt
     try:
         spec.loader.exec_module(shim)
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("torch/installers/utilities.py _install_flash_attn_shim: spec.loader.exec_module(shim)", exc)
         if old_flash is None:
             _modules.pop("flash_attn", None)
         else:
@@ -329,14 +331,14 @@ def install(ctx):
         if _os_hub.path.exists(tmp):
             try:
                 _os_hub.remove(tmp)
-            except OSError:
-                pass
+            except OSError as exc:
+                swallowed("torch/installers/utilities.py _download_url_to_file: _os_hub.remove(tmp)", exc)
         _urlreq_hub.urlretrieve(url, tmp)
         if (not _os_hub.path.isfile(tmp)) or _os_hub.path.getsize(tmp) == 0:
             try:
                 _os_hub.remove(tmp)
-            except OSError:
-                pass
+            except OSError as exc:
+                swallowed("torch/installers/utilities.py _download_url_to_file: _os_hub.remove(tmp)", exc)
             raise RuntimeError(f"downloaded empty checkpoint from {url}")
         _os_hub.replace(tmp, dst)
     def _load_state_dict_from_url(url, model_dir=None, map_location=None, progress=True,
@@ -350,8 +352,8 @@ def install(ctx):
             if _os_hub.path.exists(cached_file):
                 try:
                     _os_hub.remove(cached_file)
-                except OSError:
-                    pass
+                except OSError as exc:
+                    swallowed("torch/installers/utilities.py _load_state_dict_from_url: _os_hub.remove(cached_file)", exc)
             _download_url_to_file(url, cached_file, progress=progress)
         return g.load(cached_file, map_location=map_location, weights_only=weights_only)
     hub.download_url_to_file = _download_url_to_file
@@ -415,7 +417,8 @@ def install(ctx):
             try:
                 from tensorboardX import SummaryWriter as _RealWriter
                 return _RealWriter
-            except Exception:
+            except EXPECTED as exc:
+                swallowed("torch/installers/utilities.py _real_summary_writer: from tensorboardX import SummaryWriter as _RealWriter", exc)
                 return None
 
         class SummaryWriter:
@@ -482,8 +485,8 @@ def install(ctx):
             g.cuda.amp.custom_fwd = _amp_passthrough_decorator
             g.cuda.amp.custom_bwd = _amp_passthrough_decorator
             _modules["torch.cuda.amp"] = g.cuda.amp
-    except Exception:
-        pass
+    except EXPECTED as exc:
+        swallowed("torch/installers/utilities.py install: if hasattr(g, 'cuda'):", exc)
 
     # `import jittor as torch; torch.utils.data.Dataset` (attribute access, used by some
     # HF/training code as a base class) needs a `utils` namespace on the jittor module --
@@ -650,14 +653,15 @@ def install(ctx):
                 self.hooks_dict = hooks_dict
                 try:
                     self.id = max(hooks_dict.keys(), default=0) + 1 if hooks_dict is not None else 0
-                except Exception:
+                except EXPECTED as exc:
+                    swallowed("torch/installers/utilities.py __init__: self.id = max(hooks_dict.keys(), default=0) + 1 if hook...", exc)
                     self.id = 0
             def remove(self):
                 try:
                     if self.hooks_dict is not None:
                         self.hooks_dict.pop(self.id, None)
-                except Exception:
-                    pass
+                except EXPECTED as exc:
+                    swallowed("torch/installers/utilities.py remove: if self.hooks_dict is not None:", exc)
             def __enter__(self):
                 return self
             def __exit__(self, *exc):

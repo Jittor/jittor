@@ -5,6 +5,7 @@ import os
 import numpy as np
 
 import jittor as jt
+from ..diagnostics import EXPECTED, swallowed
 
 
 def _prod(xs):
@@ -12,8 +13,8 @@ def _prod(xs):
     for x in xs:
         try:
             out *= int(x)
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("fsdp2/common.py _prod: out *= int(x)", exc)
     return out
 
 
@@ -50,7 +51,8 @@ def _nccl_ops():
             if callable(setup):
                 setup()
             return getattr(jt.compile_extern, "nccl_ops", None)
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("fsdp2/common.py _nccl_ops: ops = getattr(jt.compile_extern, 'nccl_ops', None)", exc)
         return None
     return None
 

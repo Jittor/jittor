@@ -8,6 +8,7 @@ import jittor as jt
 from jittor import nn
 
 from . import config, dtensor, grad_sync, optimizer, shard
+from ..diagnostics import EXPECTED, swallowed
 
 
 class _FSDPModuleMeta(abc.ABCMeta):
@@ -150,13 +151,14 @@ def _inject_fsdp_methods(module):
             fsdp_cls = type(cls.__name__ + "FSDP2Compat", (cls, FSDPModule),
                             {"__module__": cls.__module__})
             cache[cls] = fsdp_cls
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("fsdp2/api.py _inject_fsdp_methods: fsdp_cls = type(cls.__name__ + 'FSDP2Compat', (cls, FSD...", exc)
             fsdp_cls = None
     if fsdp_cls is not None:
         try:
             module.__class__ = fsdp_cls
-        except Exception:
-            pass
+        except (AttributeError, TypeError) as exc:
+            swallowed("fsdp2/api.py _inject_fsdp_methods: module.__class__ = fsdp_cls", exc)
     return module
 
 
@@ -257,8 +259,8 @@ class FullyShardedDataParallel(nn.Module, FSDPModule):
             if old is None:
                 try:
                     delattr(module, "_fsdp_state_dict_type")
-                except Exception:
-                    pass
+                except (AttributeError, TypeError) as exc:
+                    swallowed("fsdp2/api.py state_dict_type: delattr(module, '_fsdp_state_dict_type')", exc)
             else:
                 object.__setattr__(module, "_fsdp_state_dict_type", old)
 

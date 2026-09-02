@@ -29,6 +29,13 @@ from jittor.compat.external_backend import (
     ExternalBackendSpec,
     register_external_backend,
 )
+# Absolute, like the import above it, and for the same reason: this module is
+# also exec'd as a *standalone* module -- tests/compat/torch/
+# test_torch_compat_attention.py reloads it by path to check that its
+# environment-epoch hook is installed once per interpreter rather than once per
+# exec. A module exec'd that way has no parent package, so `from ...diagnostics`
+# raises ImportError before the file's first statement runs.
+from jittor.compat.diagnostics import EXPECTED, swallowed
 
 
 _TRUTHY = {"1", "true", "yes", "on"}
@@ -254,7 +261,8 @@ def _default_build_root(*parts: str) -> str:
             try:
                 import jittor as jt
                 root = os.path.join(jt.flags.cache_path, "torch_extensions")
-            except Exception:
+            except EXPECTED as exc:
+                swallowed("shim/backends/flash_attention.py _default_build_root: import jittor as jt", exc)
                 root = os.path.join(os.path.expanduser("~"), ".cache", "jittor_torch_extensions")
     path = os.path.join(os.path.abspath(os.path.expanduser(root)), *parts)
     os.makedirs(path, exist_ok=True)
@@ -278,8 +286,8 @@ def _official_build_dir(root: pathlib.Path) -> str:
         ).strip()
         if head:
             digest_key += "|" + head
-    except Exception:
-        pass
+    except EXPECTED as exc:
+        swallowed("shim/backends/flash_attention.py _official_build_dir: head = subprocess.check_output(", exc)
     digest_key += "|head_dims=" + ",".join(_official_head_dims(root))
     digest_key += "|dtypes=" + ",".join(_official_dtypes())
     digest_key += "|native_forward_backward_dropout=1"
@@ -297,8 +305,8 @@ def _official_packed_build_dir(root: pathlib.Path) -> str:
         ).strip()
         if head:
             digest_key += "|" + head
-    except Exception:
-        pass
+    except EXPECTED as exc:
+        swallowed("shim/backends/flash_attention.py _official_packed_build_dir: head = subprocess.check_output(", exc)
     digest_key += "|head_dims=" + ",".join(_official_head_dims(root))
     digest_key += "|dtypes=" + ",".join(_official_dtypes())
     digest_key += "|direct_packed_forward=6"
@@ -333,7 +341,8 @@ def _ensure_official_cutlass(root: pathlib.Path) -> bool:
                 stderr=subprocess.PIPE,
                 text=True,
             )
-        except Exception as exc:
+        except EXPECTED as exc:
+            swallowed("shim/backends/flash_attention.py _ensure_official_cutlass: _log('initializing official flash-attn CUTLASS submodule')", exc)
             _remember_error("initialize official flash-attn CUTLASS failed: %s" % exc)
             return False
     if not cutlass_h.is_file():
@@ -1005,8 +1014,8 @@ def _window_size_pair(window_size, window_size_left=-1, window_size_right=-1) ->
     if window_size is not None:
         try:
             return int(window_size[0]), int(window_size[1])
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("shim/backends/flash_attention.py _window_size_pair: return int(window_size[0]), int(window_size[1])", exc)
     return int(window_size_left), int(window_size_right)
 
 
@@ -1048,11 +1057,13 @@ def _is_cuda_jittor_var(x) -> bool:
         return False
     try:
         import jittor as jt
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("shim/backends/flash_attention.py _is_cuda_jittor_var: import jittor as jt", exc)
         return False
     try:
         return bool(jt.flags.use_cuda) and isinstance(x, jt.Var)
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("shim/backends/flash_attention.py _is_cuda_jittor_var: return bool(jt.flags.use_cuda) and isinstance(x, jt.Var)", exc)
         return False
 
 
@@ -1123,7 +1134,8 @@ split_qkv<<<(n + 255) / 256, 256>>>(@ARGS);
             )
             _PACKED_SPLIT_STATS["qkv_cuda"] += 1
             return q, k, v
-    except Exception as exc:
+    except EXPECTED as exc:
+        swallowed("shim/backends/flash_attention.py _split_qkvpacked_cuda: import jittor as jt", exc)
         _PACKED_SPLIT_STATS["error"] += 1
         _remember_error("fused qkvpacked split failed: %s" % exc)
         return None
@@ -1196,7 +1208,8 @@ split_kv<<<(n + 255) / 256, 256>>>(@ARGS);
             )
             _PACKED_SPLIT_STATS["kv_cuda"] += 1
             return k, v
-    except Exception as exc:
+    except EXPECTED as exc:
+        swallowed("shim/backends/flash_attention.py _split_kvpacked_cuda: import jittor as jt", exc)
         _PACKED_SPLIT_STATS["error"] += 1
         _remember_error("fused kvpacked split failed: %s" % exc)
         return None
@@ -1239,11 +1252,13 @@ def _mark_readonly_borrow(*tensors):
             old_value = getattr(tensor, _READONLY_BORROW_ATTR)
         except AttributeError:
             old_value = _MISSING_ATTR
-        except Exception:
+        except (AttributeError, TypeError) as exc:
+            swallowed("shim/backends/flash_attention.py _mark_readonly_borrow: old_value = getattr(tensor, _READONLY_BORROW_ATTR)", exc)
             continue
         try:
             setattr(tensor, _READONLY_BORROW_ATTR, True)
-        except Exception:
+        except (AttributeError, TypeError) as exc:
+            swallowed("shim/backends/flash_attention.py _mark_readonly_borrow: setattr(tensor, _READONLY_BORROW_ATTR, True)", exc)
             continue
         saved.append((tensor, old_value))
     return saved
@@ -1256,8 +1271,8 @@ def _restore_readonly_borrow(saved) -> None:
                 delattr(tensor, _READONLY_BORROW_ATTR)
             else:
                 setattr(tensor, _READONLY_BORROW_ATTR, old_value)
-        except Exception:
-            pass
+        except (AttributeError, TypeError) as exc:
+            swallowed("shim/backends/flash_attention.py _restore_readonly_borrow: if old_value is _MISSING_ATTR:", exc)
 
 
 def _direct_packed_enabled() -> bool:
@@ -1657,7 +1672,8 @@ def _load_official_packed_flash_attention(root: pathlib.Path, low_level: ModuleT
                 "official-packed", build_dir, module_name),
             verbose=_verbose(),
         )
-    except Exception as exc:
+    except EXPECTED as exc:
+        swallowed("shim/backends/flash_attention.py _load_official_packed_flash_attention: from jittor.compat.shim.cpp_extension.torch_utils impor...", exc)
         _remember_error("compile official flash-attn packed direct backend failed: %s" % exc)
         return None
 
@@ -1693,7 +1709,8 @@ def _load_official_flash_attention(root: pathlib.Path) -> Optional[ModuleType]:
             verbose=_verbose(),
             force=_truthy(os.environ.get("JITTOR_FLASH_ATTN_FORCE_BUILD")),
         )
-    except Exception as exc:
+    except EXPECTED as exc:
+        swallowed("shim/backends/flash_attention.py _load_official_flash_attention: from jittor.compat.shim.cpp_extension.torch_utils impor...", exc)
         _remember_error("compile official flash-attn backend failed: %s" % exc)
         return None
     packed = _load_official_packed_flash_attention(root, low)
@@ -1719,8 +1736,8 @@ def _setup_child_env(root: pathlib.Path) -> dict:
 
         jittor_python = pathlib.Path(jt.__file__).resolve().parents[1]
         paths.append(os.fspath(jittor_python))
-    except Exception:
-        pass
+    except OSError as exc:
+        swallowed("shim/backends/flash_attention.py _setup_child_env: import jittor as jt", exc)
     paths.append(os.fspath(root))
     paths.append(os.fspath(root.parent))
     existing = env.get("PYTHONPATH")
@@ -1744,7 +1761,8 @@ def _build_setup_backend(root: pathlib.Path) -> bool:
         )
         importlib.invalidate_caches()
         return bool(built) or True
-    except Exception as exc:
+    except EXPECTED as exc:
+        swallowed("shim/backends/flash_attention.py _build_setup_backend: from jittor.compat.shim import bootstrap", exc)
         _remember_error("build setup.py %s failed: %s" % (root, exc))
         return False
 
@@ -1808,9 +1826,10 @@ def _install_backend_environment_epoch_hook():
             if ((isinstance(name, bytes) and name in state["byte_names"])
                     or (isinstance(name, str) and name in state["names"])):
                 state["epoch"] += 1
-        except BaseException:
+        except EXPECTED as exc:
             # An audit hook exception would abort the environment write. Mark
             # the token unusable and leave the write itself untouched.
+            swallowed("shim/backends/flash_attention.py audit_hook: if event == _BACKEND_ENV_EPOCH_PROBE:", exc)
             state["reliable"] = False
 
     # Audit hooks cannot be removed. Keep the state on sys so module reloads
@@ -1819,8 +1838,8 @@ def _install_backend_environment_epoch_hook():
     try:
         sys.addaudithook(audit_hook)
         sys.audit(_BACKEND_ENV_EPOCH_PROBE)
-    except Exception:
-        pass
+    except EXPECTED as exc:
+        swallowed("shim/backends/flash_attention.py _install_backend_environment_epoch_hook: sys.addaudithook(audit_hook)", exc)
     return state if state["active"] else None
 
 

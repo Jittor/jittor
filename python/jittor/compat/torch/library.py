@@ -12,6 +12,7 @@ import enum
 import inspect
 import types
 import typing
+from ..diagnostics import EXPECTED, swallowed
 
 
 _EMPTY = inspect.Parameter.empty
@@ -253,8 +254,8 @@ class _OpsDispatcher:
         if base is not None:
             try:
                 return getattr(base, name)
-            except AttributeError:
-                pass
+            except AttributeError as exc:
+                swallowed("torch/library.py __getattr__: return getattr(base, name)", exc)
         namespace = _OpNamespace(name)
         namespaces[name] = namespace
         return namespace
@@ -277,7 +278,8 @@ def _integration_custom_op_overrides():
         from ..integrations import custom_op_overrides
 
         return custom_op_overrides()
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("torch/library.py _integration_custom_op_overrides: from ..integrations import custom_op_overrides", exc)
         return {}
 
 
@@ -457,7 +459,8 @@ def _evaluate_annotation(annotation, function, torch_module, error):
     }
     try:
         return eval(annotation, function.__globals__, localns)
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("torch/library.py _evaluate_annotation: return eval(annotation, function.__globals__, localns)", exc)
         error("Unsupported type annotation %s. It is not a type." % annotation)
 
 

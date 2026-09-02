@@ -8,6 +8,7 @@ import jittor as jt
 from jittor import nn
 
 from ..context import registry_for
+from ...diagnostics import EXPECTED, swallowed
 
 
 def _install_init_aliases(registry=None):
@@ -216,8 +217,8 @@ def _install_init_aliases(registry=None):
                 object.__setattr__(guarded, key, value)
                 if callable(value):
                     protected.add(key)
-            except Exception:
-                pass
+            except EXPECTED as exc:
+                swallowed("torch/installers/nn_init.py _install_init_aliases: value = getattr(_init, key)", exc)
     object.__setattr__(guarded, "_protected", protected)
     nn.init = guarded
     _modules["torch.nn.init"] = guarded

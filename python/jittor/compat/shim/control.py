@@ -8,6 +8,7 @@ import sys
 from jittor.compat._aliases import torch_namespace_owned
 
 from .preflight import is_truthy, prepare_import_environment, project_runtime_root
+from ..diagnostics import EXPECTED, swallowed
 
 
 def _strict_bootstrap(value):
@@ -19,7 +20,8 @@ def _strict_bootstrap(value):
 def _logger(root_module):
     try:
         return getattr(getattr(root_module, "compiler", None), "LOG", None)
-    except Exception:
+    except (AttributeError, TypeError) as exc:
+        swallowed("shim/control.py _logger: return getattr(getattr(root_module, 'compiler', None), ...", exc)
         return None
 
 
@@ -28,8 +30,8 @@ def _warn(root_module, message):
         logger = _logger(root_module)
         if logger is not None:
             logger.w(message)
-    except Exception:
-        pass
+    except EXPECTED as exc:
+        swallowed("shim/control.py _warn: logger = _logger(root_module)", exc)
 
 
 def _apply_external_patches(root_module, state):
@@ -100,7 +102,8 @@ def enable_runtime(root_module, preflight_result=None, strict=None):
             verbose=False,
             strict=strict,
         )
-    except Exception as error:
+    except EXPECTED as error:
+        swallowed("shim/control.py enable_runtime: prepare_import_environment(", error)
         from jittor.compat.torch.context import InstallStepError
 
         if isinstance(error, InstallStepError):

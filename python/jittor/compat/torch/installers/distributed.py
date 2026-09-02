@@ -12,6 +12,7 @@ import numpy as np
 import jittor as jt
 
 from ..context import registry_for
+from ...diagnostics import EXPECTED, swallowed
 
 
 class _JittorWork:
@@ -57,7 +58,8 @@ class _JittorProcessGroup:
 def _native_distributed_active():
     try:
         world_size = int(getattr(jt, "world_size", 1))
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("torch/installers/distributed.py _native_distributed_active: world_size = int(getattr(jt, 'world_size', 1))", exc)
         world_size = 1
     return world_size > 1 and (
         os.environ.get("JT_NCCL_WORLD_SIZE") is not None
@@ -564,7 +566,8 @@ def _install_distributed(g, registry=None):
         const_mod.default_pg_timeout = getattr(
             const_mod, "default_pg_timeout", _datetime_dist.timedelta(minutes=30)
         )
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("torch/installers/distributed.py _install_distributed: import datetime as _datetime_dist", exc)
         const_mod.default_pg_timeout = getattr(const_mod, "default_pg_timeout", None)
     dist.constants = const_mod
     join_mod = _modules.get("torch.distributed.algorithms.join")

@@ -9,6 +9,7 @@ from collections.abc import MutableMapping
 from dataclasses import dataclass, field
 
 from .._aliases import _is_deployed_torch_placeholder
+from ..diagnostics import EXPECTED, swallowed
 
 
 class InstallStepError(RuntimeError):
@@ -166,7 +167,8 @@ class InstallContext:
             return None
         try:
             result = installer(self)
-        except Exception as error:
+        except EXPECTED as error:
+            swallowed("torch/context.py run_required: result = installer(self)", error)
             self._record(step, True, "failed", repr(error))
             raise InstallStepError(step, error) from error
         self.markers[step] = "complete"
@@ -179,7 +181,8 @@ class InstallContext:
             return None
         try:
             result = installer(self)
-        except Exception as error:
+        except EXPECTED as error:
+            swallowed("torch/context.py run_optional: result = installer(self)", error)
             self.markers[step] = "failed"
             self._record(step, False, "failed", repr(error))
             return None

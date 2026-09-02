@@ -20,6 +20,7 @@ from .preflight import (
     jittor_python_root, prepare_import_environment, prepend_sys_path,
 )
 from jittor.compat._aliases import torch_namespace_claimable
+from ..diagnostics import EXPECTED, swallowed
 
 def enable(
     project_root: Optional[Union[str, os.PathLike]] = None,
@@ -119,7 +120,8 @@ def enable(
             getattr(jt, "utils", None),
             registry=jt._torch_compat_install_context.registry,
         )
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("shim/runtime.py enable: from jittor.compat.shim.cpp_extension.torch_utils impor...", exc)
         if strict_bootstrap:
             raise
         pass

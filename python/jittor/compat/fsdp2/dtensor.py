@@ -8,6 +8,7 @@ import numpy as np
 import jittor as jt
 
 from . import common
+from ..diagnostics import EXPECTED, swallowed
 
 
 class DeviceMesh:
@@ -22,7 +23,8 @@ class DeviceMesh:
         else:
             try:
                 self.shape = tuple(int(x) for x in self.mesh)
-            except Exception:
+            except EXPECTED as exc:
+                swallowed("fsdp2/dtensor.py __init__: self.shape = tuple(int(x) for x in self.mesh)", exc)
                 self.shape = tuple(getattr(self.mesh, "shape", (1,)))
         if not self.shape:
             self.shape = (1,)
@@ -64,7 +66,8 @@ class DeviceMesh:
             dim = self.mesh_dim_names.index(dim)
         try:
             return int(self.shape[int(dim)])
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("fsdp2/dtensor.py size: return int(self.shape[int(dim)])", exc)
             return 1
 
     def __enter__(self):
@@ -80,7 +83,8 @@ class DeviceMesh:
         try:
             return int(os.environ.get("JT_NCCL_LOCAL_RANK",
                                       os.environ.get("LOCAL_RANK", "0")))
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("fsdp2/dtensor.py get_local_rank: return int(os.environ.get('JT_NCCL_LOCAL_RANK',", exc)
             return 0
 
     def get_group(self, *args, **kwargs):
@@ -220,8 +224,8 @@ def _mark_dtensor(tensor, device_mesh=None, placements=None):
                     placements or getattr(self, "_dtensor_placements", None),
                 )
             object.__setattr__(tensor, "redistribute", types.MethodType(_redistribute, tensor))
-    except Exception:
-        pass
+    except EXPECTED as exc:
+        swallowed("fsdp2/dtensor.py _mark_dtensor: object.__setattr__(tensor, '_dtensor_device_mesh', mesh)", exc)
     return tensor
 
 
@@ -316,11 +320,14 @@ def _dtensor_from_array(array, device_mesh=None, placements=None, dtype=None):
     if dtype is not None:
         try:
             tensor = tensor.astype(dtype)
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("fsdp2/dtensor.py _dtensor_from_array: tensor = tensor.astype(dtype)", exc)
             try:
                 tensor = tensor.astype(str(dtype).split(".")[-1])
-            except Exception:
-                pass
+            except EXPECTED as exc:
+                swallowed("fsdp2/dtensor.py _dtensor_from_array: restore the saved dtype", exc,
+                          "the DTensor keeps its source dtype, so a later op may promote "
+                          "or truncate where torch would not")
     return _mark_dtensor(tensor, device_mesh, placements)
 
 

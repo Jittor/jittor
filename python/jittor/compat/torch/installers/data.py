@@ -13,6 +13,7 @@ import jittor as jt
 
 from ..context import registry_for
 from ... import stub_policy as _stub_policy_data
+from ...diagnostics import EXPECTED, swallowed
 
 
 def _install_torchdata_stateful_dataloader(g, registry=None):
@@ -256,7 +257,8 @@ def install(ctx):
                 base_seed = 0
                 try:
                     base_seed = int(jt.get_seed())
-                except Exception:
+                except EXPECTED as exc:
+                    swallowed("torch/installers/data.py __init__: base_seed = int(jt.get_seed())", exc)
                     base_seed = 0
                 self._pool = _futures_data.ThreadPoolExecutor(
                     max_workers=self._num_workers,
@@ -310,8 +312,8 @@ def install(ctx):
                     pool = getattr(self, "_pool", None)
                     if pool is not None:
                         pool.shutdown(wait=False)
-                except Exception:
-                    pass
+                except EXPECTED as exc:
+                    swallowed("torch/installers/data.py __del__: pool = getattr(self, '_pool', None)", exc)
 
         _worker_ids = _itertools_data.count()
 

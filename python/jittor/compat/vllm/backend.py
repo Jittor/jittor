@@ -1,3 +1,4 @@
+from ..diagnostics import EXPECTED, swallowed
 """What this backend's substituted attention implementation actually does.
 
 vLLM's FlashAttention backend declares the shape of the cache vLLM then
@@ -41,7 +42,8 @@ def declare_cache_layout(module):
         return False
     try:
         probe = tuple(backend.get_kv_cache_shape(*_PROBE))
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("vllm/backend.py declare_cache_layout: probe = tuple(backend.get_kv_cache_shape(*_PROBE))", exc)
         return False
     setattr(backend, _DECLARED, True)
     if probe[:2] != (2, _PROBE[0]):

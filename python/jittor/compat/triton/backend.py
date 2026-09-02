@@ -38,6 +38,7 @@ importing :mod:`jittor.compat.triton` never imports jittor or triton eagerly.
 import ctypes
 import os
 import threading
+from ..diagnostics import EXPECTED, swallowed
 
 __all__ = ["is_available", "run", "make_do_bench", "JittorTritonError"]
 
@@ -70,13 +71,15 @@ def real_triton():
             return None  # don't fight an installed shadow here; caller handles it
         try:
             import triton as mod  # noqa: F401
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("triton/backend.py real_triton: import triton as mod # noqa: F401", exc)
             return None
     # sanity: a real triton has a compiler with ASTSource
     try:
         from triton.compiler import ASTSource  # noqa: F401
         from triton.backends.compiler import GPUTarget  # noqa: F401
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("triton/backend.py real_triton: from triton.compiler import ASTSource # noqa: F401", exc)
         return None
     return mod
 
@@ -94,7 +97,8 @@ def is_available():
         if real_triton() is not None:
             import jittor as jt
             ok = bool(getattr(jt, "has_cuda", 0))
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("triton/backend.py is_available: if real_triton() is not None:", exc)
         ok = False
     _available = ok
     return ok
@@ -154,7 +158,8 @@ class _Driver:
                             break
                         except OSError:
                             rt = None
-            except Exception:
+            except EXPECTED as exc:
+                swallowed("triton/backend.py _load_cudart: import glob", exc)
                 rt = None
         if rt is None:
             return None
@@ -170,7 +175,8 @@ class _Driver:
             rt.cudaMemcpy.restype = ctypes.c_int
             rt.cudaDeviceSynchronize.argtypes = []
             rt.cudaDeviceSynchronize.restype = ctypes.c_int
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("triton/backend.py _load_cudart: c_vp, c_vpp = ctypes.c_void_p, ctypes.POINTER(ctypes.c_...", exc)
             return None
         return rt
 
@@ -237,8 +243,8 @@ class _Driver:
             s = ctypes.c_char_p()
             try:
                 self.lib.cuGetErrorString(res, ctypes.byref(s))
-            except Exception:
-                pass
+            except EXPECTED as exc:
+                swallowed("triton/backend.py check: self.lib.cuGetErrorString(res, ctypes.byref(s))", exc)
             raise JittorTritonError("%s -> CUresult %d (%s)" % (
                 what, res, s.value.decode() if s.value else "?"))
 
@@ -294,8 +300,8 @@ class _Driver:
         """
         try:
             self.lib.cuCtxSetCurrent(self.ctx)
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("triton/backend.py ensure_ctx: self.lib.cuCtxSetCurrent(self.ctx)", exc)
 
     def alloc(self, nbytes):
         """Allocate device memory via the runtime API (works on jittor's context;
@@ -319,8 +325,8 @@ class _Driver:
                 self.rt.cudaFree(ctypes.c_void_p(int(ptr_int)))
             else:
                 self.lib.cuMemFree(ctypes.c_void_p(int(ptr_int)))
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("triton/backend.py free: if self.rt is not None:", exc)
 
     def memset0(self, ptr_int, nbytes):
         if nbytes <= 0:
@@ -502,7 +508,8 @@ def _tensor_nbytes(v, ptr_sig):
         for s in shape:
             n *= int(s)
         return n * elsize
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("triton/backend.py _tensor_nbytes: elsize = _TCODE_BYTES.get(ptr_sig[1:], 0)", exc)
         return 0
 
 
@@ -602,7 +609,8 @@ def _int_env(name, default):
         return default
     try:
         return int(value)
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("triton/backend.py _int_env: return int(value)", exc)
         return default
 
 
@@ -703,19 +711,21 @@ def _make_ast_source(ASTSource, jitfn, signature, constants):
     try:
         from triton.compiler import AttrsDescriptor as _AD
         return ASTSource(jitfn, signature, constants, _AD())
-    except Exception:
-        pass
+    except EXPECTED as exc:
+        swallowed("triton/backend.py _make_ast_source: from triton.compiler import AttrsDescriptor as _AD", exc)
     # 3.2+: attrs defaults to None (ASTSource auto-builds an empty descriptor);
     # constants stays positional, but the keyword name drifted across releases.
     last = None
     try:
         return ASTSource(jitfn, signature, constants, None)
-    except Exception as e:
+    except EXPECTED as e:
+        swallowed("triton/backend.py _make_ast_source: return ASTSource(jitfn, signature, constants, None)", e)
         last = e
     for kw in ("constexprs", "constants"):
         try:
             return ASTSource(jitfn, signature, **{kw: constants})
-        except Exception as e:        # noqa: PERF203
+        except EXPECTED as e:
+            swallowed("triton/backend.py _make_ast_source: return ASTSource(jitfn, signature, **{kw: constants})", e)
             last = e
     raise JittorTritonError(
         "could not construct triton ASTSource for kernel %r across known "
@@ -836,8 +846,8 @@ def run(jitfn, args, kwargs, grid):
                 if _is_var(_a) and tuple(_a.shape) == (64,) and "int" in str(_a.dtype):
                     print("  PTRTRACE run() ENTRY sorted_idx-like rp=%x" % _tensor_ptr(_a),
                           file=_sys.stderr)
-            except Exception:
-                pass
+            except EXPECTED as exc:
+                swallowed("triton/backend.py run: if _is_var(_a) and tuple(_a.shape) == (64,) and 'int' i...", exc)
 
     # -- separate launch-meta kwargs (num_warps/...) from real kernel kwargs --
     kwargs = dict(kwargs)
@@ -936,7 +946,8 @@ def run(jitfn, args, kwargs, grid):
                             if bool(_tensor_is_cuda(gpu)):
                                 val = gpu
                                 moved = True
-                    except Exception:
+                    except EXPECTED as exc:
+                        swallowed("triton/backend.py run: import jittor as _jt", exc)
                         moved = False
                 if not moved:
                     raise JittorTritonError(
@@ -972,8 +983,8 @@ def run(jitfn, args, kwargs, grid):
         try:
             pnames = [getattr(p, "name", "?") for p in (jitfn.params or [])]
             print("  jitfn.params order: %r" % pnames, file=_sys.stderr)
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("triton/backend.py run: pnames = [getattr(p, 'name', '?') for p in (jitfn.param...", exc)
         print("  constexpr_names: %r" % sorted(constexpr_names), file=_sys.stderr)
         print("  signature (runtime order): %r" % list(signature.items()),
               file=_sys.stderr)
@@ -1034,9 +1045,10 @@ def run(jitfn, args, kwargs, grid):
                         drv.copy_dtod(bbase, ptr, nbytes)
                         bounced.append((ptr, bbase, nbytes, bcap))
                         cv = ctypes.c_uint64(bbase)
-                    except Exception:
+                    except EXPECTED as exc:
                         # never let the guard path turn a working launch into a
                         # failure — fall back to the raw pointer.
+                        swallowed("triton/backend.py run: bbase, bcap = drv.guard_acquire(nbytes, _guard_bytes())", exc)
                         cv = ctypes.c_uint64(ptr)
                 else:
                     cv = ctypes.c_uint64(ptr)
@@ -1119,8 +1131,8 @@ def run(jitfn, args, kwargs, grid):
             for (orig_ptr, bbase, nbytes, bcap) in bounced:
                 try:
                     drv.copy_dtod(orig_ptr, bbase, nbytes)
-                except Exception:
-                    pass
+                except EXPECTED as exc:
+                    swallowed("triton/backend.py run: drv.copy_dtod(orig_ptr, bbase, nbytes)", exc)
             drv.synchronize()
         for (_orig_ptr, bbase, _nbytes, bcap) in bounced:
             drv.guard_release(bbase, bcap)

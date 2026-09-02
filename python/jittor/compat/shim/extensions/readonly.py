@@ -8,6 +8,7 @@ import contextlib
 from typing import Dict, Iterable, Optional, Set, Tuple
 
 from jittor.compat.module_patcher import install_module_patches, register_module_patch
+from ...diagnostics import EXPECTED, swallowed
 
 
 _READONLY_BORROW_ATTR = "_jittor_torch_ext_readonly_borrow"
@@ -41,7 +42,8 @@ def _get_var_type():
 def _is_var(obj) -> bool:
     try:
         return isinstance(obj, _get_var_type())
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("shim/extensions/readonly.py _is_var: return isinstance(obj, _get_var_type())", exc)
         return False
 
 
@@ -72,17 +74,20 @@ def _mark_readonly_tensor(tensor, saved) -> None:
     try:
         if getattr(tensor, _FORCE_CPU_ATTR, False):
             return
-    except Exception:
+    except (AttributeError, TypeError) as exc:
+        swallowed("shim/extensions/readonly.py _mark_readonly_tensor: if getattr(tensor, _FORCE_CPU_ATTR, False):", exc)
         return
     try:
         old_value = getattr(tensor, _READONLY_BORROW_ATTR)
     except AttributeError:
         old_value = _MISSING
-    except Exception:
+    except (AttributeError, TypeError) as exc:
+        swallowed("shim/extensions/readonly.py _mark_readonly_tensor: old_value = getattr(tensor, _READONLY_BORROW_ATTR)", exc)
         return
     try:
         setattr(tensor, _READONLY_BORROW_ATTR, True)
-    except Exception:
+    except (AttributeError, TypeError) as exc:
+        swallowed("shim/extensions/readonly.py _mark_readonly_tensor: setattr(tensor, _READONLY_BORROW_ATTR, True)", exc)
         return
     saved.append((tensor, old_value))
 
@@ -92,7 +97,8 @@ def _mark_readonly(args, kwargs):
     seen: Set[int] = set()
     try:
         var_type = _get_var_type()
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("shim/extensions/readonly.py _mark_readonly: var_type = _get_var_type()", exc)
         var_type = None
 
     for item in args:
@@ -134,8 +140,8 @@ def _restore(saved) -> None:
                 delattr(tensor, _READONLY_BORROW_ATTR)
             else:
                 setattr(tensor, _READONLY_BORROW_ATTR, old_value)
-        except Exception:
-            pass
+        except (AttributeError, TypeError) as exc:
+            swallowed("shim/extensions/readonly.py _restore: if old_value is _MISSING:", exc)
 
 
 @contextlib.contextmanager
@@ -263,8 +269,8 @@ def _patch_module(module, readonly_functions: Iterable[str],
         if callable(fn):
             try:
                 setattr(module, name, _wrap_copy_scope_function(fn))
-            except Exception:
-                pass
+            except EXPECTED as exc:
+                swallowed("shim/extensions/readonly.py _patch_module: setattr(module, name, _wrap_copy_scope_function(fn))", exc)
     for name in scratch_borrow_functions:
         try:
             fn = getattr(module, name)
@@ -273,8 +279,8 @@ def _patch_module(module, readonly_functions: Iterable[str],
         if callable(fn):
             try:
                 setattr(module, name, _wrap_scratch_borrow_function(fn))
-            except Exception:
-                pass
+            except EXPECTED as exc:
+                swallowed("shim/extensions/readonly.py _patch_module: setattr(module, name, _wrap_scratch_borrow_function(fn))", exc)
     for name, positions in readonly_arg_functions.items():
         try:
             fn = getattr(module, name)
@@ -283,8 +289,8 @@ def _patch_module(module, readonly_functions: Iterable[str],
         if callable(fn):
             try:
                 setattr(module, name, _wrap_readonly_arg_function(fn, positions))
-            except Exception:
-                pass
+            except EXPECTED as exc:
+                swallowed("shim/extensions/readonly.py _patch_module: setattr(module, name, _wrap_readonly_arg_function(fn, p...", exc)
     for name in readonly_functions:
         try:
             fn = getattr(module, name)
@@ -293,8 +299,8 @@ def _patch_module(module, readonly_functions: Iterable[str],
         if callable(fn):
             try:
                 setattr(module, name, _wrap_readonly_function(fn))
-            except Exception:
-                pass
+            except EXPECTED as exc:
+                swallowed("shim/extensions/readonly.py _patch_module: setattr(module, name, _wrap_readonly_function(fn))", exc)
 
 
 def _patch_registered_module(module) -> bool:

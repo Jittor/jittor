@@ -25,6 +25,7 @@ from ..types import (
     _device_is_cpu, _device_is_cuda, _dtype_to_str,
     _make_cpu_resident, _make_cuda_resident, device, dtype,
 )
+from ...diagnostics import EXPECTED, swallowed
 
 
 def _pipelining_from_environment():
@@ -77,7 +78,8 @@ def _install_nn_extras(nn, registry=None):
     modules_pkg = install_module_namespace(nn, registry)
     try:
         from jittor.misc import _single, _pair, _triple, _ntuple
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("torch/installers/nn.py _install_nn_extras: from jittor.misc import _single, _pair, _triple, _ntuple", exc)
         _single = lambda x: x if isinstance(x, tuple) else (x,)
         _pair = lambda x: x if isinstance(x, tuple) else (x, x)
         _triple = lambda x: x if isinstance(x, tuple) else (x, x, x)
@@ -151,7 +153,8 @@ def _install_nn_extras(nn, registry=None):
             world = 1
             try:
                 world = int(getattr(_jt, "world_size", 1))
-            except Exception:
+            except EXPECTED as exc:
+                swallowed("torch/installers/nn.py __init__: world = int(getattr(_jt, 'world_size', 1))", exc)
                 world = 1
             if world > 1:
                 from ...stub_policy import unimplemented
@@ -221,7 +224,9 @@ def _install_nn_extras(nn, registry=None):
                 gg = None
                 if opt is not None:
                     try: gg = opt.find_grad(p)
-                    except Exception: gg = None
+                    except EXPECTED as exc:
+                        swallowed("torch/installers/nn.py _grads_of: gg = opt.find_grad(p)", exc)
+                        gg = None
                 if gg is None:
                     gg = getattr(p, "grad", None)
                 if gg is not None:
@@ -275,7 +280,7 @@ def _install_nn_extras(nn, registry=None):
             wmat = _to_mat(w)
             h, wd = int(wmat.shape[0]), int(wmat.shape[1])
             try: delattr(module, name)
-            except Exception: pass
+            except (AttributeError, TypeError) as exc: swallowed("torch/installers/nn.py spectral_norm: delattr(module, name)", exc)
             setattr(module, name + "_orig", w.clone())
             module.register_buffer(name + "_u", _l2_normalize(_jt.randn(h), eps))
             module.register_buffer(name + "_v", _l2_normalize(_jt.randn(wd), eps))
@@ -352,7 +357,8 @@ def _install_nn_extras(nn, registry=None):
             if opt is not None:
                 try:
                     grad = opt.find_grad(parameter)
-                except Exception:
+                except EXPECTED as exc:
+                    swallowed("torch/installers/nn.py _clip_grads_with_norm_: grad = opt.find_grad(parameter)", exc)
                     grad = None
             if grad is None:
                 grad = getattr(parameter, "grad", None)
@@ -1040,8 +1046,8 @@ def _install_nn_extras(nn, registry=None):
             try:
                 _cls.__name__ = _nm
                 _cls.__qualname__ = _nm
-            except Exception:
-                pass
+            except (AttributeError, TypeError) as exc:
+                swallowed("torch/installers/nn.py _install_nn_extras: _cls.__name__ = _nm", exc)
 
     _install_module_methods(nn, registry)
 
@@ -1255,8 +1261,8 @@ def _install_module_methods(nn, registry=None):
         if self not in _leaves_published:
             try:
                 _leaves_published.add(self)
-            except TypeError:
-                pass
+            except TypeError as exc:
+                swallowed("torch/installers/nn.py _call: _leaves_published.add(self)", exc)
             try:
                 registry = getattr(jt, "_torch_leaf_params", None)
                 if registry is None:
@@ -1265,8 +1271,8 @@ def _install_module_methods(nn, registry=None):
                     _leaf = _leaf[1] if isinstance(_leaf, tuple) else _leaf
                     if isinstance(_leaf, jt.Var) and _leaf.requires_grad:
                         registry[id(_leaf)] = _leaf
-            except Exception:
-                pass
+            except EXPECTED as exc:
+                swallowed("torch/installers/nn.py _call: registry = getattr(jt, '_torch_leaf_params', None)", exc)
 
         state = getattr(self, "_fsdp_state", None)
         if state is not None and getattr(state, "true_fsdp_initialized", False):
@@ -1300,8 +1306,8 @@ def _install_module_methods(nn, registry=None):
             try:
                 if isinstance(v, jt.Var) and v.requires_grad:
                     reg[id(v)] = v
-            except Exception:
-                pass
+            except EXPECTED as exc:
+                swallowed("torch/installers/nn.py _named_parameters: if isinstance(v, jt.Var) and v.requires_grad:", exc)
             yield (prefix + ("." if prefix else "") + name, v)
     M.named_parameters = _named_parameters
 
@@ -1353,7 +1359,8 @@ def _install_module_methods(nn, registry=None):
             return value
         try:
             return jt.array(value.cpu().detach().numpy())
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("torch/installers/nn.py _state_source_to_var: return jt.array(value.cpu().detach().numpy())", exc)
             return jt.array(value)
 
     def _preserve_target_dtypes_for_load(root, state_dict):
@@ -1396,7 +1403,8 @@ def _install_module_methods(nn, registry=None):
         try:
             for name, value in root.state_dict().items():
                 own[str(name)] = value
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("torch/installers/nn.py _state_dict_key_diff: for name, value in root.state_dict().items():", exc)
             return [], [], []
         given = list(state_dict.keys()) if hasattr(state_dict, "keys") else []
         given_set = set(str(k) for k in given)
@@ -1448,8 +1456,8 @@ def _install_module_methods(nn, registry=None):
             for n, p in self.named_parameters():
                 if p.requires_grad:
                     trainable.add(n)
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("torch/installers/nn.py _load_state_dict: for n, p in self.named_parameters():", exc)
         load_state = state_dict if assign else _preserve_target_dtypes_for_load(self, state_dict)
         if unexpected:
             # jittor's load_parameters LOG.w's on every unknown key; drop them
@@ -1461,8 +1469,8 @@ def _install_module_methods(nn, registry=None):
             for n, p in self.named_parameters():
                 if n in trainable and p.is_stop_grad():
                     p.start_grad()
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("torch/installers/nn.py _load_state_dict: for n, p in self.named_parameters():", exc)
         return _IncompatibleKeys(missing, unexpected)
     M.load_state_dict = _load_state_dict
 
@@ -1498,8 +1506,10 @@ def _install_module_methods(nn, registry=None):
             for p in params:
                 if isinstance(p, jt.Var) and p.requires_grad:
                     reg[id(p)] = p
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("torch/installers/nn.py _register_leaf_params: register autograd leaves", exc,
+                      "these parameters will not receive .grad from a "
+                      "loss.backward() that runs without an optimizer")
     _orig_parameters = M.parameters
     def _parameters(self, recurse=True):
         pl = _orig_parameters(self, recurse=recurse)
@@ -1522,13 +1532,14 @@ def _install_module_methods(nn, registry=None):
         mode = bool(mode)
         try:
             mods = self.modules() if hasattr(self, "modules") else [self]
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("torch/installers/nn.py _set_is_train: mods = self.modules() if hasattr(self, 'modules') else ...", exc)
             mods = [self]
         for m in mods:
             try:
                 m.is_train = mode
-            except Exception:
-                pass
+            except (AttributeError, TypeError) as exc:
+                swallowed("torch/installers/nn.py _set_is_train: m.is_train = mode", exc)
     def _train(self, mode=True):
         # torch semantics: set this module's flag, then recurse into DIRECT
         # children calling each child's .train(mode) so overridden train()
@@ -1539,12 +1550,13 @@ def _install_module_methods(nn, registry=None):
         mode = bool(mode)
         try:
             self.is_train = mode
-        except Exception:
-            pass
+        except (AttributeError, TypeError) as exc:
+            swallowed("torch/installers/nn.py _train: self.is_train = mode", exc)
         kids = None
         try:
             kids = list(self.children())
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("torch/installers/nn.py _train: kids = list(self.children())", exc)
             kids = None
         if kids is None:
             _set_is_train(self, mode)          # fallback: flat sweep
@@ -1555,8 +1567,8 @@ def _install_module_methods(nn, registry=None):
                 try:
                     tr(mode)
                     continue
-                except Exception:
-                    pass
+                except EXPECTED as exc:
+                    swallowed("torch/installers/nn.py _train: tr(mode)", exc)
             _set_is_train(child, mode)
         return self
     M.train = _train
@@ -1584,7 +1596,8 @@ def _install_module_methods(nn, registry=None):
         converted = {}
         try:
             modules = list(self.modules()) if hasattr(self, "modules") else [self]
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("torch/installers/nn.py _module_replace_vars: modules = list(self.modules()) if hasattr(self, 'module...", exc)
             modules = [self]
         if not modules or modules[0] is not self:
             modules.insert(0, self)
@@ -1618,32 +1631,32 @@ def _install_module_methods(nn, registry=None):
                             if new_value is not value:
                                 try:
                                     new_value.persistent = getattr(value, "persistent")
-                                except Exception:
-                                    pass
+                                except (AttributeError, TypeError) as exc:
+                                    swallowed("torch/installers/nn.py _module_replace_vars: new_value.persistent = getattr(value, 'persistent')", exc)
                                 try:
                                     new_value.is_buffer = getattr(value, "is_buffer")
-                                except Exception:
-                                    pass
+                                except (AttributeError, TypeError) as exc:
+                                    swallowed("torch/installers/nn.py _module_replace_vars: new_value.is_buffer = getattr(value, 'is_buffer')", exc)
                                 try:
                                     new_value._torch_grad = getattr(value, "_torch_grad")
-                                except Exception:
-                                    pass
+                                except (AttributeError, TypeError) as exc:
+                                    swallowed("torch/installers/nn.py _module_replace_vars: new_value._torch_grad = getattr(value, '_torch_grad')", exc)
                                 try:
                                     if value.is_stop_grad() and not new_value.is_stop_grad():
                                         new_value.stop_grad()
                                     elif (not value.is_stop_grad()) and new_value.is_stop_grad():
                                         new_value.start_grad()
                                         _torch_register_leaf(new_value)
-                                except Exception:
-                                    pass
+                                except EXPECTED as exc:
+                                    swallowed("torch/installers/nn.py _module_replace_vars: if value.is_stop_grad() and not new_value.is_stop_grad():", exc)
                                 try:
                                     reg = getattr(jt, "_torch_leaf_params", None)
                                     if isinstance(reg, dict) and vid in reg:
                                         reg.pop(vid, None)
                                         if not new_value.is_stop_grad():
                                             reg[id(new_value)] = new_value
-                                except Exception:
-                                    pass
+                                except EXPECTED as exc:
+                                    swallowed("torch/installers/nn.py _module_replace_vars: reg = getattr(jt, '_torch_leaf_params', None)", exc)
                         if new_value is value:
                             continue
                         container[name] = new_value
@@ -1718,14 +1731,14 @@ def _install_module_methods(nn, registry=None):
             for p in self.parameters():
                 if getattr(p, "_torch_grad", None) is not None:
                     object.__setattr__(p, "_torch_grad", None)
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("torch/installers/nn.py _zero_grad: for p in self.parameters():", exc)
         opt = getattr(jt, "_current_optimizer", None)
         if opt is not None:
             try:
                 opt.zero_grad()
-            except Exception:
-                pass
+            except EXPECTED as exc:
+                swallowed("torch/installers/nn.py _zero_grad: opt.zero_grad()", exc)
         return None
     M.zero_grad = _zero_grad
     if not hasattr(M, "buffers"):
@@ -2266,7 +2279,8 @@ def install(ctx):
             _sdpa_flash_cast("float32_to_%s" % cast_target)
         try:
             from jittor.compat.shim.backends import flash_attention as _fa_jittor
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("torch/installers/nn.py _try_flash_scaled_dot_product_attention: from jittor.compat.shim.backends import flash_attention...", exc)
             _sdpa_flash_miss("no_loader")
             return None
         if training_requested and dropout == 0.0 and not _fa_jittor.required():
@@ -2358,7 +2372,8 @@ def install(ctx):
         try:
             out = fn(
                 q_dense, k_dense, v_dense, dropout, float(sf), bool(is_causal))
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("torch/installers/nn.py _try_flash_scaled_dot_product_attention: out = fn(", exc)
             if _fa_jittor.required():
                 raise
             _sdpa_flash_miss("call_failed")

@@ -2,6 +2,7 @@
 
 import numpy as np
 import jittor as jt
+from ..diagnostics import EXPECTED, swallowed
 
 
 class _TorchSize(tuple):
@@ -237,8 +238,10 @@ def _rebuild_var_from_numpy(np_arr, dtype_str=None):
         # the original was already bf16-representable).
         try:
             v = v.astype(dtype_str)
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("torch/nested.py _rebuild_var_from_numpy: v = v.astype(dtype_str)", exc,
+                      "the tensor keeps the dtype numpy inferred, not the one that "
+                      "was saved")
     return v
 
 
@@ -254,8 +257,8 @@ def _torch_register_leaf(v):
             if not hasattr(jt, "_torch_leaf_params"):
                 jt._torch_leaf_params = {}
             jt._torch_leaf_params[id(v)] = v
-    except Exception:
-        pass
+    except EXPECTED as exc:
+        swallowed("torch/nested.py _torch_register_leaf: if isinstance(v, jt.Var) and v.requires_grad:", exc)
 
 def _torch_prune_leaf_registry(keep_ids=None, keep_non_parameters=False):
     """Drop stale torch-facing leaves from the global backward registry."""
@@ -277,8 +280,8 @@ def _torch_prune_leaf_registry(keep_ids=None, keep_non_parameters=False):
                 continue
             if not (isinstance(v, jt.Var) and v.requires_grad):
                 reg.pop(k, None)
-    except Exception:
-        pass
+    except EXPECTED as exc:
+        swallowed("torch/nested.py _torch_prune_leaf_registry: reg = getattr(jt, '_torch_leaf_params', None)", exc)
 
 def _torch_make_parameter(data=None, requires_grad=True):
     """Create a torch.nn.Parameter-compatible jittor Var.
@@ -294,14 +297,15 @@ def _torch_make_parameter(data=None, requires_grad=True):
     if requires_grad:
         try:
             v.requires_grad = True
-        except Exception:
+        except (AttributeError, TypeError) as exc:
+            swallowed("torch/nested.py _torch_make_parameter: v.requires_grad = True", exc)
             v.start_grad()
             _torch_register_leaf(v)
     else:
         try:
             v.stop_grad()
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("torch/nested.py _torch_make_parameter: v.stop_grad()", exc)
     # Parameter is a semantic role, not every Var. Keep the marker on the
     # Python holder so isinstance(..., nn.Parameter) can distinguish raw
     # tensors produced under no_grad from actual model parameters.

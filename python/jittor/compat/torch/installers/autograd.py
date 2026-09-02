@@ -8,6 +8,7 @@ import jittor as jt
 import numpy as np
 
 from ..context import registry_for
+from ...diagnostics import EXPECTED, swallowed
 
 
 def _install_tensordict_compat():
@@ -15,7 +16,8 @@ def _install_tensordict_compat():
     try:
         from tensordict.base import TensorDictBase
         from tensordict._lazy import LazyStackedTensorDict
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("torch/installers/autograd.py _install_tensordict_compat: from tensordict.base import TensorDictBase", exc)
         return
 
     if getattr(TensorDictBase, "_jittor_index_compat", False):
@@ -157,7 +159,8 @@ def _install_autograd_function(g):
         try:
             self._fwd_input_shapes = [
                 (tuple(v.shape) if isinstance(v, jt.Var) else None) for v in args]
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("torch/installers/autograd.py _call_record_inputs: self._fwd_input_shapes = [", exc)
             self._fwd_input_shapes = None
         # torch.autograd.Function exposes `ctx.needs_input_grad`: one bool per
         # argument PASSED to apply(), True iff it is a tensor requiring grad.
@@ -177,7 +180,8 @@ def _install_autograd_function(g):
         try:
             self.needs_input_grad = tuple(
                 bool(isinstance(v, jt.Var) and v.requires_grad) for v in args)
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("torch/installers/autograd.py _call_record_inputs: self.needs_input_grad = tuple(", exc)
             self.needs_input_grad = tuple(isinstance(v, jt.Var) for v in args)
         out = _orig_fn_call(self, *args, **kw)
         # Capture each forward OUTPUT's (shape, dtype) so the grad bridge can
@@ -188,7 +192,8 @@ def _install_autograd_function(g):
             self._fwd_outputs = [
                 (tuple(o.shape), str(o.dtype)) if isinstance(o, jt.Var) else None
                 for o in outs]
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("torch/installers/autograd.py _call_record_inputs: outs = out if isinstance(out, (tuple, list)) else (out,)", exc)
             self._fwd_outputs = None
         return out
     if getattr(Fn.__call__, "_torch_records_inputs", False) is not True:

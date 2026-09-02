@@ -5,6 +5,7 @@ import numpy as np
 import jittor as jt
 
 from . import common, shard
+from ..diagnostics import EXPECTED, swallowed
 
 
 _EXPORTS = (
@@ -177,8 +178,10 @@ def _sync_visible_full_grads_to_optimizer(opt):
             object.__setattr__(opt, "_Optimizer__zero_grad", False)
             try:
                 opt._build_grad_map()
-            except Exception:
-                pass
+            except EXPECTED as exc:
+                swallowed("fsdp2/grad_sync.py _sync_visible_full_grads_to_optimizer: opt._build_grad_map()", exc,
+                          "the optimizer keeps the grad map from before this sync, so "
+                          "step() may apply stale or missing gradients")
 
 
 def refresh_visible_full_grads(opt):
@@ -316,8 +319,8 @@ def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
         object.__setattr__(opt, "_Optimizer__zero_grad", False)
         try:
             opt._build_grad_map()
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("fsdp2/grad_sync.py fill_fsdp_optimizer_grads_from_grad_map: opt._build_grad_map()", exc)
     for opt in optimizers or ():
         refresh_visible_full_grads(opt)
     return True

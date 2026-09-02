@@ -12,6 +12,7 @@ import os
 import pathlib
 import sys
 import importlib.util
+from ..diagnostics import EXPECTED, swallowed
 
 
 _TRUTHY = frozenset(("1", "true", "yes", "on"))
@@ -262,8 +263,8 @@ def configure_torch_math_flags(jittor_module):
             flags.nvcc_flags = _strict_math_nvcc_flags(
                 current, remove_fast_math=True
             )
-    except Exception:
-        pass
+    except EXPECTED as exc:
+        swallowed("shim/preflight.py configure_torch_math_flags: current = getattr(flags, 'nvcc_flags', None)", exc)
 
 
 def _best_jtcuda(environ, real_home):

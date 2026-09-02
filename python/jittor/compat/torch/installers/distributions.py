@@ -6,6 +6,7 @@ changing the compatibility semantics.
 
 import jittor as jt
 from jittor import nn
+from ...diagnostics import EXPECTED, swallowed
 
 
 def install(ctx):
@@ -27,7 +28,8 @@ def install(ctx):
                 def check(self, x):
                     try:
                         return jt.ones_like(x).bool()
-                    except Exception:
+                    except EXPECTED as exc:
+                        swallowed("torch/installers/distributions.py check: return jt.ones_like(x).bool()", exc)
                         return True
             for _cn in ("positive", "real", "nonnegative", "nonnegative_integer",
                         "positive_integer", "unit_interval", "simplex",

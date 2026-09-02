@@ -3,6 +3,7 @@
 import jittor as jt
 
 from .context import registry_for
+from ..diagnostics import EXPECTED, swallowed
 
 
 def _install_lr_scheduler(g, registry=None):
@@ -35,7 +36,7 @@ def _install_lr_scheduler(g, registry=None):
         for pg, lr in zip(getattr(opt, "param_groups", []) or [], lrs):
             pg["lr"] = lr
         try: opt.lr = lrs[0]
-        except Exception: pass
+        except (AttributeError, TypeError) as exc: swallowed("torch/lr_scheduler.py _set_lrs: opt.lr = lrs[0]", exc)
 
     class LRScheduler:
         def __init__(self, optimizer, last_epoch=-1, verbose=False):
@@ -352,8 +353,8 @@ def _install_lr_scheduler(g, registry=None):
             if device is not None and hasattr(self.module, "to"):
                 try:
                     self.module.to(device)
-                except Exception:
-                    pass
+                except EXPECTED as exc:
+                    swallowed("torch/lr_scheduler.py __init__: self.module.to(device)", exc)
         def execute(self, *args, **kwargs):
             return self.module(*args, **kwargs)
         def update_parameters(self, model):
@@ -361,23 +362,25 @@ def _install_lr_scheduler(g, registry=None):
             model_params = list(model.parameters())
             try:
                 n = int(self.n_averaged.item())
-            except Exception:
+            except EXPECTED as exc:
+                swallowed("torch/lr_scheduler.py update_parameters: n = int(self.n_averaged.item())", exc)
                 n = 0
             if n == 0:
                 for ap, mp in zip(avg_params, model_params):
                     try: ap.update(mp)
-                    except Exception: pass
+                    except EXPECTED as exc: swallowed("torch/lr_scheduler.py update_parameters: ap.update(mp)", exc)
             elif self.multi_avg_fn is not None:
                 self.multi_avg_fn(avg_params, model_params, self.n_averaged)
             else:
                 for ap, mp in zip(avg_params, model_params):
                     try:
                         ap.update(self.avg_fn(ap, mp, self.n_averaged))
-                    except Exception:
-                        pass
+                    except EXPECTED as exc:
+                        swallowed("torch/lr_scheduler.py update_parameters: ap.update(self.avg_fn(ap, mp, self.n_averaged))", exc)
             try:
                 self.n_averaged.update(self.n_averaged + 1)
-            except Exception:
+            except EXPECTED as exc:
+                swallowed("torch/lr_scheduler.py update_parameters: self.n_averaged.update(self.n_averaged + 1)", exc)
                 self.n_averaged = jt.array(n + 1).int64()
     swa_utils.AveragedModel = AveragedModel
     swa_utils.get_swa_avg_fn = get_swa_avg_fn
@@ -413,16 +416,16 @@ def _install_lr_scheduler(g, registry=None):
                     # cumulative average: momentum = 1/n
                     try:
                         bn.momentum = 1.0 / n
-                    except Exception:
-                        pass
+                    except (AttributeError, TypeError) as exc:
+                        swallowed("torch/lr_scheduler.py _update_bn: bn.momentum = 1.0 / n", exc)
                 model(inputs)
         finally:
             for bn, mom in zip(bn_modules, saved_momentum):
                 if mom is not None:
                     try:
                         bn.momentum = mom
-                    except Exception:
-                        pass
+                    except (AttributeError, TypeError) as exc:
+                        swallowed("torch/lr_scheduler.py _update_bn: bn.momentum = mom", exc)
             if not was_training:
                 model.eval()
     swa_utils.update_bn = _update_bn

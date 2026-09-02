@@ -20,6 +20,7 @@ from ..nested import (
 from ..types import (
     _dtype_to_str,
 )
+from ...diagnostics import EXPECTED, swallowed
 
 def install(ctx):
     _modules = ctx.registry.module_map
@@ -232,7 +233,8 @@ def install(ctx):
             if a.numel() == 0:
                 return True
             return bool((a == b).all().item())
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("torch/installers/numerical.py _torch_equal: if isinstance(a, _NestedTensor) or isinstance(b, _Neste...", exc)
             return False
     g.equal = _torch_equal
     Var.equal = lambda self, other: _torch_equal(self, other)
@@ -546,7 +548,8 @@ def install(ctx):
         r = g.nan_to_num(input, nan=nan, posinf=posinf, neginf=neginf)
         try:
             input.assign(r); return input          # honour in-place semantics
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("torch/installers/numerical.py _nan_to_num_inplace: input.assign(r); return input # honour in-place semantics", exc)
             return r
     _alias("nan_to_num_", _nan_to_num_inplace)
     # torch.randint_like(input, low, high=None, *, dtype=...): jittor's native lacks

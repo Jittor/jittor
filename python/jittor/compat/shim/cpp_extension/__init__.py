@@ -32,6 +32,7 @@ import hashlib
 import json
 import re
 import shlex
+from ...diagnostics import EXPECTED, swallowed
 
 # --- in-jittor shim locations (was jtorch/include + jtorch/src in the adapter) ---
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -158,8 +159,8 @@ def _find_pybind_include():
         inc = pybind11.get_include()
         if os.path.isfile(os.path.join(inc, "pybind11", "pybind11.h")):
             return inc
-    except Exception:
-        pass
+    except EXPECTED as exc:
+        swallowed("shim/cpp_extension/__init__.py _find_pybind_include: import pybind11", exc)
 
     candidates = []
     for prefix in dict.fromkeys([
@@ -347,7 +348,8 @@ def _metadata_root():
         try:
             import jittor as _jt
             root = os.path.join(_jt.flags.cache_path, "torch_extensions")
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("shim/cpp_extension/__init__.py _metadata_root: import jittor as _jt", exc)
             root = os.path.join(os.path.expanduser("~"), ".cache", "jittor_torch_extensions")
     root = os.path.join(os.path.abspath(root), "metadata")
     os.makedirs(root, exist_ok=True)
@@ -360,7 +362,8 @@ def _shared_object_root():
         try:
             import jittor as _jt
             root = os.path.join(_jt.flags.cache_path, "torch_extensions")
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("shim/cpp_extension/__init__.py _shared_object_root: import jittor as _jt", exc)
             root = os.path.join(os.path.expanduser("~"), ".cache", "jittor_torch_extensions")
     root = os.path.join(os.path.abspath(root), "shared_objects")
     os.makedirs(root, exist_ok=True)
@@ -453,8 +456,8 @@ def _write_object_stamp(src, obj, cmd):
         }
         with open(_object_stamp_path(obj), "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, sort_keys=True)
-    except OSError:
-        pass
+    except OSError as exc:
+        swallowed("shim/cpp_extension/__init__.py _write_object_stamp: st = os.stat(src)", exc)
 
 
 def _file_sha256(path):

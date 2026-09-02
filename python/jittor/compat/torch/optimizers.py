@@ -7,6 +7,7 @@ import numpy as np
 
 from .context import registry_for
 from .types import _dtype_to_str
+from ..diagnostics import EXPECTED, swallowed
 
 
 def _install_optimizers(g, registry=None):
@@ -48,8 +49,8 @@ def _install_optimizers(g, registry=None):
         try:
             for pg in self.param_groups:
                 pg.setdefault("lr", self.lr)
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("torch/optimizers.py _init: for pg in self.param_groups:", exc)
     Base.__init__ = _init
     def _torch_param_steps(pg):
         params = list(pg.get("params", []))
@@ -450,19 +451,20 @@ def _install_optimizers(g, registry=None):
                         _value = _new_grads[_i]
                     try:
                         _p.grad = _value
-                    except Exception:
+                    except (AttributeError, TypeError) as exc:
+                        swallowed("torch/optimizers.py _zero_grad_compat: _p.grad = _value", exc)
                         object.__setattr__(_p, "_torch_grad", _value)
             try:
                 object.__setattr__(self, "_grad_map", {})
-            except Exception:
-                pass
+            except (AttributeError, TypeError) as exc:
+                swallowed("torch/optimizers.py _zero_grad_compat: object.__setattr__(self, '_grad_map', {})", exc)
             result = _orig_zero(self)
             try:
                 from jittor.compat import fsdp2 as _fsdp2_zero
                 if _fsdp2_zero.optimizer_has_fsdp_params(self):
                     _fsdp2_zero.refresh_visible_full_grads(self)
-            except Exception:
-                pass
+            except EXPECTED as exc:
+                swallowed("torch/optimizers.py _zero_grad_compat: from jittor.compat import fsdp2 as _fsdp2_zero", exc)
             object.__setattr__(self, "_torch_backward_advanced_n_step", False)
             return result
         Base.zero_grad = _zero_grad_compat
@@ -525,7 +527,8 @@ def _install_optimizers(g, registry=None):
             return None
         try:
             from jittor.compat import fsdp2 as _fsdp2_step
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("torch/optimizers.py _load_fsdp2_for_optimizer: from jittor.compat import fsdp2 as _fsdp2_step", exc)
             return None
         return _fsdp2_step
     def _wrap_step_accept_closure(_cls, _marker):
@@ -554,8 +557,8 @@ def _install_optimizers(g, registry=None):
                     if native_fsdp_loss is not None:
                         try:
                             self.post_step()
-                        except Exception:
-                            pass
+                        except EXPECTED as exc:
+                            swallowed("torch/optimizers.py _step_torch_closure: self.post_step()", exc)
                     else:
                         jt.flags.node_order = 0
                         object.__setattr__(
@@ -624,8 +627,8 @@ def _install_optimizers(g, registry=None):
                     if native_fsdp_loss is not None:
                         try:
                             self.post_step()
-                        except Exception:
-                            pass
+                        except EXPECTED as exc:
+                            swallowed("torch/optimizers.py _adam_step_torch: self.post_step()", exc)
                     else:
                         jt.flags.node_order = 0
                         object.__setattr__(
@@ -704,8 +707,8 @@ def _install_optimizers(g, registry=None):
                     try:
                         if was_trainable and p.is_stop_grad():
                             p.start_grad()
-                    except Exception:
-                        pass
+                    except EXPECTED as exc:
+                        swallowed("torch/optimizers.py _adam_step_torch: if was_trainable and p.is_stop_grad():", exc)
             # The torch loss.backward(); optimizer.step() spelling keeps grads
             # until an explicit zero_grad(). Preserve Jittor's historical
             # step(loss) behavior for callers using that native shorthand.
@@ -764,12 +767,12 @@ def _install_optimizers(g, registry=None):
                     for p in pg.get("params", []):
                         if p.requires_grad:
                             trainable.append(p)
-            except Exception:
-                pass
+            except EXPECTED as exc:
+                swallowed("torch/optimizers.py _lsd: for pg in self.param_groups:", exc)
             r = _orig_lsd(self, state)
             for p in trainable:
                 try: p.start_grad()
-                except Exception: pass
+                except EXPECTED as exc: swallowed("torch/optimizers.py _lsd: p.start_grad()", exc)
             return r
         Base.load_state_dict = _lsd
 

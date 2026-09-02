@@ -27,6 +27,7 @@ import os
 import sys
 import shutil
 import sysconfig
+from ..diagnostics import swallowed
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -84,7 +85,8 @@ def _is_real_triton(target):
     try:
         with open(init, "r") as f:
             head = f.read(4096)
-    except Exception:
+    except OSError as exc:
+        swallowed("triton/deploy.py _is_real_triton: with open(init, 'r') as f:", exc)
         return True  # be conservative
     return "__jittor_triton_shim__" not in head
 

@@ -368,8 +368,9 @@ print("RESULT=" + json.dumps({
         self.assertIn("Public root exports retain object identity", normalized)
 
     def test_preflight_and_lazy_shim_are_stdlib_only(self):
-        allowed = {
+        stdlib = {
             "__future__",
+            "collections",
             "dataclasses",
             "glob",
             "hashlib",
@@ -377,7 +378,21 @@ print("RESULT=" + json.dumps({
             "os",
             "pathlib",
             "sys",
+            "traceback",
+            "warnings",
         }
+        # `diagnostics` is this layer's own recorder, and it is on this list
+        # only because it is itself stdlib-only -- which the loop below checks
+        # rather than assumes. Preflight runs before the compiler and the
+        # native core exist, and that is what must not change; being unable to
+        # record what preflight swallowed would be the wrong way to keep it.
+        allowed = stdlib | {"diagnostics"}
+        self.assertTrue(
+            {node.module.split(".", 1)[0] if isinstance(node, ast.ImportFrom)
+             else "" for node in ast.walk(
+                 ast.parse((self.compat / "diagnostics.py").read_text(encoding="utf-8")))
+             if isinstance(node, (ast.Import, ast.ImportFrom))} <= stdlib | {""},
+            "diagnostics.py must stay stdlib-only to be importable this early")
         for relative in ("shim/preflight.py", "shim/__init__.py"):
             path = self.compat / relative
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

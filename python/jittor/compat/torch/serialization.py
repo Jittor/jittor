@@ -5,6 +5,7 @@ import jittor as jt
 
 from .context import registry_for
 from .types import _make_cpu_resident, _make_cuda_resident
+from ..diagnostics import EXPECTED, swallowed
 
 
 def _install_safetensors_shim(registry=None):
@@ -14,7 +15,8 @@ def _install_safetensors_shim(registry=None):
         import json
         import struct
         import safetensors as _st
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("torch/serialization.py _install_safetensors_shim: import json", exc)
         return
     if getattr(_st, "_jittor_torch_compat", False):
         return
@@ -153,14 +155,14 @@ def _install_safetensors_shim(registry=None):
         _save = lambda tensors, metadata=None: _save_dict(tensors, metadata)
         _stt.save = _save
         _stt.save_file = _save_file
-    except Exception:
-        pass
+    except EXPECTED as exc:
+        swallowed("torch/serialization.py _install_safetensors_shim: import safetensors.torch as _stt", exc)
     try:
         import safetensors.numpy as _stn
         _stn.load_file = _load_file
         _stn.save_file = _save_file
-    except Exception:
-        pass
+    except (AttributeError, TypeError) as exc:
+        swallowed("torch/serialization.py _install_safetensors_shim: import safetensors.numpy as _stn", exc)
 
 
 def install(ctx):
@@ -201,7 +203,8 @@ def install(ctx):
                 if hasattr(obj, "_fields"):
                     try:
                         return type(obj)(*items)
-                    except Exception:
+                    except EXPECTED as exc:
+                        swallowed("torch/serialization.py _to_portable: return type(obj)(*items)", exc)
                         return tuple(items)
                 return tuple(items)
             return list(items)
@@ -220,8 +223,8 @@ def install(ctx):
     def save(obj, f, *a, **k):
         try:
             jt.sync_all(True)
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("torch/serialization.py save: jt.sync_all(True)", exc)
         portable = _to_portable(obj)
         if hasattr(f, "write"):
             _pickle.dump(portable, f)
@@ -488,7 +491,8 @@ def install(ctx):
         try:
             with open(path, "rb") as fh:
                 magic = _pickle.load(fh, encoding="utf-8")
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("torch/serialization.py _is_legacy_torch_pickle: with open(path, 'rb') as fh:", exc)
             return False
         return magic == 0x1950a86a20f9469cfc6c
     def load(f, map_location=None, pickle_module=None, *, weights_only=None,
@@ -507,7 +511,8 @@ def install(ctx):
         _zip = False
         try:
             _zip = _is_zip(f)
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("torch/serialization.py load: _zip = _is_zip(f)", exc)
             _zip = False
         if _zip:
             return _apply_map_location(
@@ -523,7 +528,8 @@ def install(ctx):
                     obj = _portable_pickle_load(fh, weights_only)
         except _pickle.UnpicklingError:
             raise
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("torch/serialization.py load: if hasattr(f, 'read'):", exc)
             native_load = getattr(g, "_vj_native_load", None)
             if native_load is not None and path is not None and path.lower().endswith(".pkl"):
                 return _apply_map_location(native_load(path), map_location)

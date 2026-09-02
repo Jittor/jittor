@@ -67,6 +67,7 @@ from .installers import (
     utilities,
 )
 from . import serialization
+from ..diagnostics import EXPECTED, swallowed
 
 
 _COMPAT_PUBLIC_SYMBOLS = (
@@ -222,7 +223,8 @@ def install(torch, strict=True):
         for step, installer in _OPTIONAL_STEPS:
             context.run_optional(step, installer)
         context.mark_complete()
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("torch/__init__.py install: for step, installer in _REQUIRED_STEPS:", exc)
         staged = _torch_namespace_snapshot()
         _restore_namespace(before)
         context.state[_NAMESPACE_TRANSACTION] = {

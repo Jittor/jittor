@@ -29,6 +29,7 @@ from ..types import (
 )
 
 import collections as _collections
+from ...diagnostics import EXPECTED, swallowed
 _MinMax = _collections.namedtuple("torch_return_types", ["values", "indices"])
 _TopK = _collections.namedtuple("topk", ["values", "indices"])
 _Sort = _collections.namedtuple("sort", ["values", "indices"])
@@ -375,8 +376,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                     return _DTYPE_OBJS.get(name, name)
                 Var.dtype = property(_dtype_get)
                 Var._dtype_wrapped = True
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("torch/installers/tensor.py _install_tensor_methods: _native_desc = Var.__dict__.get('dtype') # C getset_des...", exc)
 
     if not hasattr(Var, "_vj_native_data_descriptor"):
         native_data_descriptor = Var.__dict__.get("data")
@@ -415,7 +416,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     def _data_owner_uses_device(owner):
         try:
             location = owner.location()
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("torch/installers/tensor.py _data_owner_uses_device: location = owner.location()", exc)
             location = None
         if location == "device":
             return True
@@ -506,8 +508,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                     region_rank = 1 + (len(self.shape) - len(mask.shape))
                     while len(value.shape) > region_rank and value.shape[0] == 1:
                         value = value.squeeze(0)
-            except Exception:
-                pass
+            except EXPECTED as exc:
+                swallowed("torch/installers/tensor.py _torch_setitem: mask = slices", exc)
             result = _orig_setitem(self, slices, value)
             _write_index_parent(self, self)
             return result
@@ -678,8 +680,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         if "float" in str(a.dtype) or (isinstance(b, Var) and "float" in str(b.dtype)):
             try:
                 out = out | jt.isnan(a) | jt.isnan(b)
-            except Exception:
-                pass
+            except EXPECTED as exc:
+                swallowed("torch/installers/tensor.py _torch_ne: out = out | jt.isnan(a) | jt.isnan(b)", exc)
         return out
 
     g.ne = _torch_ne
@@ -871,8 +873,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                         out._torch_data_path = getattr(
                             self, "_torch_data_path", ()
                         ) + (slices,)
-                except Exception:
-                    pass
+                except EXPECTED as exc:
+                    swallowed("torch/installers/tensor.py _torch_getitem: out._torch_index_parent = self", exc)
             return out
         _torch_getitem._torch_cpu_residency = True
         Var.__getitem__ = _torch_getitem
@@ -1046,8 +1048,10 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         object.__setattr__(opt, "_Optimizer__zero_grad", False)
         try:
             opt._build_grad_map()
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("torch/installers/tensor.py _fill_opt_grads: opt._build_grad_map()", exc,
+                      "the optimizer keeps the grad map from before this backward, so "
+                      "step() may apply stale or missing gradients")
 
     def _optimizer_maybe_has_fsdp_params(opt):
         for _pg in getattr(opt, "param_groups", []):
@@ -1090,8 +1094,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         # Forcing the forward to settle once here decouples it from the grad pass.
         try:
             self.sync()
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("torch/installers/tensor.py _backward: self.sync()", exc)
         # Collect EVERY live optimizer (torch allows several at once — 3DGS uses a
         # Gaussian Adam + an exposure Adam; routing to just _current_optimizer
         # left the other's params with .grad=None -> KeyError 'grads' in step()).
@@ -1118,7 +1122,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         if fsdp_opts:
             try:
                 from jittor.compat import fsdp2 as _fsdp2_backward
-            except Exception:
+            except EXPECTED as exc:
+                swallowed("torch/installers/tensor.py _backward: from jittor.compat import fsdp2 as _fsdp2_backward", exc)
                 _fsdp2_backward = None
         else:
             _fsdp2_backward = None
@@ -1213,8 +1218,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 continue
             try:
                 return o.find_grad(self)
-            except Exception:
-                pass
+            except EXPECTED as exc:
+                swallowed("torch/installers/tensor.py _grad_get: return o.find_grad(self)", exc)
         return None
     def _grad_set(self, value):
         object.__setattr__(self, "_torch_grad", value)
@@ -1234,8 +1239,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                     full = getattr(fsdp_entry, "full_param", None)
                     if full is not None and full is not self:
                         object.__setattr__(full, "_torch_grad", None)
-            except Exception:
-                pass
+            except (AttributeError, TypeError) as exc:
+                swallowed("torch/installers/tensor.py _grad_set: if value is None:", exc)
         # Write through by identity so step() sees manual grad assignment and,
         # critically, p.grad=None cannot leave an old optimizer slot behind.
         for r in getattr(jt, "_active_optimizers", None) or []:
@@ -1271,8 +1276,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                         object.__setattr__(o, "_torch_backward_advanced_n_step", False)
                     if value is not None:
                         object.__setattr__(o, "_Optimizer__zero_grad", False)
-                except Exception:
-                    pass
+                except (AttributeError, TypeError) as exc:
+                    swallowed("torch/installers/tensor.py _grad_set: object.__setattr__(o, '_grad_map', {})", exc)
     Var.grad = property(_grad_get, _grad_set)
 
     # torch's `is_leaf`: True for tensors not produced by a grad-tracked op
@@ -1298,8 +1303,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     def _retain_grad(self):
         try:
             jt._torch_retained[id(self)] = self
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("torch/installers/tensor.py _retain_grad: jt._torch_retained[id(self)] = self", exc)
         return self
     Var.retain_grad = _retain_grad
 
@@ -1372,8 +1377,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             out._jittor_torch_force_cpu = True
             if getattr(self, "_torch_0d", False):
                 out._torch_0d = True
-        except Exception:
-            pass
+        except (AttributeError, TypeError) as exc:
+            swallowed("torch/installers/tensor.py _var_cpu: out._jittor_torch_force_cpu = True", exc)
         return out
     Var.cpu = _var_cpu
     def _var_cuda(self, device=None, *a, **k):
@@ -1794,8 +1799,8 @@ def install(ctx):
             else:
                 try:
                     targets = list(targets)
-                except Exception:
-                    pass
+                except EXPECTED as exc:
+                    swallowed("torch/installers/tensor.py _grad_compat: targets = list(targets)", exc)
         res = _native_grad(loss, targets, *a, **k)
         if single and isinstance(res, (list, tuple)) and len(res) == 1:
             return res[0]
@@ -2077,7 +2082,8 @@ def install(ctx):
         if hasattr(cond, "all") and not isinstance(cond, (bool, int, float)):
             try:
                 return bool(cond.all().item())
-            except Exception:
+            except EXPECTED as exc:
+                swallowed("torch/installers/tensor.py _check_to_pybool: return bool(cond.all().item())", exc)
                 return bool(cond)
         return bool(cond)
     def _check_with(_exc):

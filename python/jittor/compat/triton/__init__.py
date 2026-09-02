@@ -89,6 +89,7 @@ import sys
 import types
 
 from . import language
+from ..diagnostics import EXPECTED, swallowed
 
 __all__ = [
     "jit", "JITFunction", "KernelInterface",
@@ -205,7 +206,8 @@ class JITFunction(KernelInterface):
         # NotImplementedError/TracingError and we keep the original contract.
         try:
             from . import launch as _launch_mod
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("triton/__init__.py _launch: from . import launch as _launch_mod", exc)
             _launch_mod = None
         if _launch_mod is not None:
             try:
@@ -368,7 +370,8 @@ def _detect_real_triton():
         return existing  # a real triton is already imported
     try:
         spec = importlib.util.find_spec("triton")
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("triton/__init__.py _detect_real_triton: spec = importlib.util.find_spec('triton')", exc)
         spec = None
     if spec is None:
         return None
@@ -380,11 +383,12 @@ def _detect_real_triton():
                 head = f.read(2048)
             if "__jittor_triton_shim__" in head or "__triton_shim__" in head:
                 return None
-        except Exception:
-            pass
+        except OSError as exc:
+            swallowed("triton/__init__.py _detect_real_triton: with open(origin) as f:", exc)
     try:
         real = importlib.import_module("triton")
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("triton/__init__.py _detect_real_triton: real = importlib.import_module('triton')", exc)
         return None
     if getattr(real, "__triton_shim__", False) or \
        getattr(real, "__jittor_triton_shim__", False):
@@ -403,7 +407,8 @@ def _args_have_jittor_var(args, kwargs):
     try:
         import jittor as jt
         Var = jt.Var
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("triton/__init__.py _args_have_jittor_var: import jittor as jt", exc)
         Var = ()
 
     def _is_t(v):
@@ -448,8 +453,8 @@ def _ensure_libcuda_linkable():
             if nv:
                 home = os.path.dirname(os.path.dirname(nv))
                 cands.append(os.path.join(home, "lib64", "stubs", "libcuda.so"))
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("triton/__init__.py _ensure_libcuda_linkable: import jittor.compiler as _c", exc)
         cands += glob.glob("/usr/local/cuda*/targets/x86_64-linux/lib/stubs/libcuda.so")
         cands += glob.glob("/usr/local/cuda*/lib64/stubs/libcuda.so")
         for so in cands:
@@ -459,8 +464,8 @@ def _ensure_libcuda_linkable():
                 if d not in cur.split(os.pathsep):
                     os.environ["LIBRARY_PATH"] = (d + os.pathsep + cur) if cur else d
                 return
-    except Exception:
-        pass
+    except EXPECTED as exc:
+        swallowed("triton/__init__.py _ensure_libcuda_linkable: for d in ('/usr/lib/x86_64-linux-gnu', '/lib/x86_64-lin...", exc)
 
 
 def activate_bridge(real=None):
@@ -512,8 +517,8 @@ def activate_bridge(real=None):
             try:
                 import triton.runtime.autotuner as _at
                 _at.do_bench = bench  # rebind the name already imported there
-            except Exception:
-                pass
+            except (AttributeError, TypeError) as exc:
+                swallowed("triton/__init__.py activate_bridge: import triton.runtime.autotuner as _at", exc)
             # Triton >=3.2's Autotuner.__init__ does
             #   self.do_bench = driver.active.get_benchmarker()
             # instead of using triton.testing.do_bench directly. The jittor
@@ -528,20 +533,21 @@ def activate_bridge(real=None):
                 if _active is not None and not hasattr(_active, "get_benchmarker"):
                     try:
                         _active.get_benchmarker = lambda *a, **k: bench
-                    except Exception:
-                        pass
+                    except (AttributeError, TypeError) as exc:
+                        swallowed("triton/__init__.py activate_bridge: _active.get_benchmarker = lambda *a, **k: bench", exc)
                     try:
                         type(_active).get_benchmarker = lambda self, *a, **k: bench
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-        except Exception:
-            pass
+                    except EXPECTED as exc:
+                        swallowed("triton/__init__.py activate_bridge: type(_active).get_benchmarker = lambda self, *a, **k: b...", exc)
+            except EXPECTED as exc:
+                swallowed("triton/__init__.py activate_bridge: from triton.runtime import driver as _drv", exc)
+        except EXPECTED as exc:
+            swallowed("triton/__init__.py activate_bridge: bench = backend.make_do_bench()", exc)
 
         _bridge_active = True
         return True
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("triton/__init__.py activate_bridge: from . import backend", exc)
         return False
 
 
@@ -652,6 +658,6 @@ triton = _self_module
 # real triton (it patches it for jittor instead), so this is safe to call here.
 try:
     install()
-except Exception:
+except EXPECTED as exc:
     # never let registration failure break ``import jittor.compat.triton``
-    pass
+    swallowed("triton/__init__.py <module>: install()", exc)

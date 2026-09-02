@@ -17,6 +17,7 @@ from ..types import (
     _device_is_cpu, _device_is_cuda, _dtype_to_str, _make_cuda_resident,
 )
 from ..nested import _torch_register_leaf
+from ...diagnostics import EXPECTED, swallowed
 
 
 def _wrap_constructors(g):
@@ -52,8 +53,8 @@ def _wrap_constructors(g):
                 try:
                     if int(np.prod(tuple(v.shape))) == 1:
                         return int(v.item())
-                except Exception:
-                    pass
+                except EXPECTED as exc:
+                    swallowed("torch/installers/factories.py _shape_dim: if int(np.prod(tuple(v.shape))) == 1:", exc)
             return v
         def _shape_arg(v):
             if isinstance(v, jt.NanoVector):
@@ -125,7 +126,8 @@ def _wrap_constructors(g):
                     if _accepts_dtype:
                         try:
                             kwargs["dtype"] = _dtype_to_str(g.get_default_dtype())
-                        except Exception:
+                        except EXPECTED as exc:
+                            swallowed("torch/installers/factories.py wrapped: kwargs['dtype'] = _dtype_to_str(g.get_default_dtype())", exc)
                             kwargs.pop("dtype")
                     else:
                         kwargs.pop("dtype")
@@ -146,8 +148,8 @@ def _wrap_constructors(g):
                 try:
                     out._jittor_torch_ext_mutable = True
                     out._jittor_torch_force_cpu = True
-                except Exception:
-                    pass
+                except (AttributeError, TypeError) as exc:
+                    swallowed("torch/installers/factories.py wrapped: out._jittor_torch_ext_mutable = True", exc)
                 if _requires_grad:
                     out.requires_grad_(True)
                     _torch_register_leaf(out)
@@ -159,8 +161,8 @@ def _wrap_constructors(g):
                 out = _make_cuda_resident(out, force=True)
             try:
                 out._jittor_torch_ext_mutable = True
-            except Exception:
-                pass
+            except (AttributeError, TypeError) as exc:
+                swallowed("torch/installers/factories.py wrapped: out._jittor_torch_ext_mutable = True", exc)
             if _requires_grad:
                 out.requires_grad_(True)
                 _torch_register_leaf(out)
@@ -220,7 +222,8 @@ def _install_random_and_linspace(g):
                 try:
                     s = fn()
                     break
-                except Exception:
+                except EXPECTED as exc:
+                    swallowed("torch/installers/factories.py _seed_from: s = fn()", exc)
                     s = None
         if s is None:
             s = getattr(gen, "_seed", None)
