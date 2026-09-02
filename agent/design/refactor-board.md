@@ -93,7 +93,8 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 事项 | 现象 | 建议归属 |
 | --- | --- | --- |
 | wheel 内容基线过期 | `agent/scripts/test_check_wheel_contents.py::test_repository_default_policy_is_the_clean_final_baseline` 报 `817 != 793`，有人加了新模块没更新基线 | 构建分区，随 9.x 一并更新 |
-| 结构测试子进程超时 flaky | `test_root_domain_structure.py::test_native_cold_start_preserves_legacy_module_surfaces` 子进程 180s 超时，机器有负载时超、单独重跑通过 | 门禁分区，放宽 timeout 或改判据 |
+| 结构测试子进程超时 flaky | 已处理：`tests/structure` 里 4 处硬编码 `timeout=180` 的冷启动子进程探针（`test_root_domain_structure`、`test_nn_structure`、`test_torch_fsdp2_structure` ×2）统一改成 `_helpers.process_modes.SUBPROCESS_TIMEOUT`，默认 600s、可用 `JITTOR_TEST_SUBPROCESS_TIMEOUT` 覆盖，仍在门禁 `--timeout=900` 之内 | 门禁 gates |
+| `tests/core/test_type_system.py` 一套门禁都不跑 | 它在 `TORCH_MODE_PATHS` 里，原生门禁的 `pytest_ignore_collect` 整片丢掉；而它又不在 `noxfile.py` 任何 session 的清单里 | 门禁分区，随 0.04 一并收进排除清单/torch 门禁 |
 | `test_atomic_tuner` 抓不到日志 | **已定论：与 `9eb696d9` 无关**，`9eb696d9^` 对照失败逐字一致。根因 `032ecfe1` 的 `full_reduce_cuda.py` 快路径使全归约不再走 JIT；用例第 4 项断言的代码路径已不存在 | 归约/代码生成分区：改用例（把第 4 项换成仍走 JIT 的归约，或断言快路径已接管），不要动 pass 顺序 |
 
 ## 任务

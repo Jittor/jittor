@@ -219,6 +219,30 @@ AtomicTunerPass **之后**，原子调优早已打完日志才轮到它改写。
    `reindex_reduce` 和 `code__IN_SIZE_1...` 两族，没有 `reduce`——全归约被 code op 接管了，
    一眼可见，不用去读被混淆的 `data.cc`。
 
+## 10. 最贵的一类失效：一次正确的优化让一条测试静默失去意义
+
+`test_atomic_tuner` 那件事的真正教训不是归因手法，是**没有任何机制会告诉你这件事发生了**。
+
+`032ecfe1` 给 CUDA 全归约装了 CUB 两级折叠快路径，`sum` 从 726us 降到 38us——**这是一次正确的优化**。
+但 `x.sum()` 从此不进融合算子 JIT，`test_atomic_tuner` 第 4 项断言的那条原子路径不再被执行。
+用例没有变红：它断言的日志条数从「2」变成「0」才红，而那是三个多月后才有人跑到它。
+
+**它三个多月没被发现，是因为当时没有任何一套门禁会跑 `tests/compiler`。**
+用例还在仓库里，看着像有覆盖，实际上既没在测原来那件事，也没在测现在这件事。这是 0.04
+（门禁改成「整个 `tests/` 减显式排除清单」）存在的全部理由：**不在门禁里的测试不是覆盖，是装饰。**
+
+推论，写给每一个做优化的 agent：
+
+- 给一条热路径装快路径 / 绕过某个 pass 时，**去 grep 谁在测被绕开的那条路径**。
+  测试不会因为它测的代码路径消失而变红——它只会变得没有意义。
+- 判断一条用例是不是还在测它声称要测的东西，看 JIT 缓存目录里有没有对应的 kernel 族比读断言快得多。
+- 门禁 agent 这边：`passed` 只涨不跌之外，还要盯**收集总数**和排除清单。一条从没被任何 session
+  收集过的用例，和一条删掉的用例，效果完全一样。
+
+同类的活口（本轮实测）：`tests/core/test_type_system.py` 在 `TORCH_MODE_PATHS` 里，所以原生门禁
+（`pytest tests`，conftest 的 `pytest_ignore_collect` 会整片丢掉这些路径）不收它；而它又不在
+`noxfile.py` 任何一个 session 的清单里。**它现在一套门禁都不跑。**
+
 顺带一条：`opt/pass/` 下 `atomic_tuner_pass.cc`、`parallel_pass.cc`、`shared_reduce_pass.cc`
 **git 里根本没有**（2020 年 `8f316a2e` 删的），实现藏在 `python/jittor/utils/data.gz` 解压出的
 `data.cc` 里，编译时 `-include vdp`。所以这三个 pass 的日志 `__FILE__` 是 `data.cc`——

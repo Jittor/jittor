@@ -13,6 +13,8 @@ import subprocess
 import sys
 import unittest
 
+from _helpers.process_modes import SUBPROCESS_TIMEOUT
+
 import jittor as jt
 import numpy as np
 
@@ -340,7 +342,7 @@ print("legacy-native-surfaces-ok")
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            timeout=180,
+            timeout=SUBPROCESS_TIMEOUT,
         )
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn("legacy-native-surfaces-ok", result.stdout)

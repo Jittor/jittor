@@ -27,6 +27,8 @@ import sys
 import types as python_types
 import unittest
 
+from _helpers.process_modes import SUBPROCESS_TIMEOUT
+
 import jittor
 import jittor.nn as nn
 
@@ -455,7 +457,7 @@ class TestModuleBoundaries(unittest.TestCase):
                 env=env,
                 capture_output=True,
                 text=True,
-                timeout=180,
+                timeout=SUBPROCESS_TIMEOUT,
             )
             with self.subTest(entry=entry):
                 self.assertEqual(result.returncode, 0, result.stderr)
