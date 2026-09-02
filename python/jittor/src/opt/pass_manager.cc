@@ -28,6 +28,7 @@
 #include "opt/pass/parallel_pass.h"
 #include "opt/pass/atomic_tuner_pass.h"
 #include "opt/pass/shared_reduce_pass.h"
+#include "opt/pass/warp_reduce_pass.h"
 #include "opt/pass/float_atomic_fix_pass.h"
 #include "opt/pass/reduce_accumulator_pass.h"
 #include "opt/pass/cpu_parallel_pass.h"
@@ -115,6 +116,8 @@ void PassManager::run_passes() {
     run_pass<ParallelPass>();
     run_pass<AtomicTunerPass>();
     run_pass<SharedReducePass>();
+    // After the atomic tuner has decided where the atomics go.
+    run_pass<WarpReducePass>();
     run_pass<FloatAtomicFixPass>();
     // After every pass that restructures loops, so it only sees the final nest.
     run_pass<ReduceAccumulatorPass>();
