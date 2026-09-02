@@ -13,6 +13,13 @@ CI workflow 能触达的只有 74 个文件（25.6%），PR 门禁只有 50 个�
 | 问题 | 证据 | 后果 | 修改方向 | 严重度 |
 | --- | --- | --- | --- | --- |
 | 门禁是手写白名单，与测试树增长完全脱钩 | `noxfile.py:152` CPU_TESTS 19 条、`:173` oracle 9 条、`:184` CUDA 6 条、`:272` NPU 8 条、`:282` ROCM 1 条。展开后 CI 可达 74/289 文件，215 个文件不在任何 workflow 路径上 | 新增测试默认不进门禁，写了等于没写 | 门禁改为目录加显式排除清单，排除须写理由 | 关键 |
+
+**已修：`6adbf488`、`689e206b`（0.04）。** 补两个执行时才知道的事实。一，腐化是单调的：
+本次动手前重数一遍，树已经长到 332 个文件，可达 98 个——比审计时又多了 136 个碰不到的文件，
+白名单一个都没跟上。二，**排除清单落地后是空的**：332 个文件里没有任何一个是真的不该跑的。
+所以那份白名单不是在保护什么，它只是没人维护。代价一并测了：CPU 全树原生一遍 53 分钟
+（8 核，机器有负载），`cpu.yml` 的 timeout 从 90 分钟放宽到 240，由 0.15 的分层降回来。
+
 | 未覆盖测试按目录分布集中在核心 | 未覆盖：compat/torch 55、compiler 45、core 32、ops 30、nn 19、data 7、distributed 8、compat/vllm 3、backends/triton 3、backends/cpu 2 | JIT 优化 pass（src/opt 82 文件 7589 行）、内存分配器（src/mem 26 文件）、oneDNN CPU 卷积、dataset/transform（3355 行）全部无门禁保护 | 至少把 compiler+core+ops 全目录纳入 CPU 门禁（不需硬件） | 关键 |
 | tools/run_test_suite.py 是文档宣称的完整入口但无人调用 | grep 无命中于 noxfile.py 与 .github/；只出现在 docs 与 agent/results | 唯一的全量口径是人工命令，绿不绿取决于谁记得跑 | 拆成 nox -s full 周期性调度并入 CI，否则删掉并承认没有全量口径 | 关键 |
 | 默认 nox 不含任何数值测试 | `noxfile.py:294` sessions = [lint, format, typing, structure, packaging, py37, py312, py313] | 本地 nox 全绿不等于代码能算对 | 把 cpu 加入默认或把默认改名为 static | 主要 |
@@ -24,6 +31,14 @@ CI workflow 能触达的只有 74 个文件（25.6%），PR 门禁只有 50 个�
 | --- | --- | --- | --- | --- |
 | CPU 门禁条目 tests/nn/test_attention.py 在门禁里 100% 恒跳过 | 该文件只有 1 个用例，受 `:17 skip_this_test = not modules_available("torch","fairseq")` 控制；而 `noxfile.py:1277` 在运行前强制 `REAL_TORCH_SITE=""`，venv 也不装 torch/fairseq | 一条门禁条目常年报告 1 skipped 并被当作通过 | 门禁断言每个条目至少执行 1 个非 skip 用例 | 主要 |
 | CPU 门禁条目 test_opt_state_dict.py 函数体就是 return | `tests/optim/test_opt_state_dict.py:11-13` | 门禁里一条恒绿的空条目 | 删除或补真正断言 | 主要 |
+
+**已修：`ee29bee3`（0.18）。** `test_opt_state_dict.py` 现在有真跑的用例；另一条恒绿条目
+`tests/nn/test_attention.py` 的唯一用例 skip 在「No Torch found」上，属"这台机器上没东西可跑"。
+两者的区别不该靠人记：conftest 现在按**文件**记账并单列一节「files this session proved
+nothing about」，分「collected 0 tests」（连 skip 都不会出现，正是 0.01 那一次的形态）
+与「N skipped, 0 executed」两类；`JITTOR_TEST_REQUIRE_EXECUTION=1` 时没写明理由的条目
+让整轮退出非零。
+
 | 6 个用例被首行 return 静默停用并报告为 PASS | `backends/cuda/test_bf16.py:223`（注释写 this test cannot pass now）、`test_cudnn_op.py:132`、`core/test_core.py:276/295`、`compiler/test_ring_buffer2.py:97`、`optim/test_opt_state_dict.py:11` | 已知缺陷伪装成通过；xfail_strict 机制被绕开 | 改 expectedFailure 并登记；加禁止首行 return 的静态检查 | 主要 |
 | 4 个用例 skipIf(True) 永久停用，其中 2 个是仅有的内存泄漏测试 | `core/test_function.py:291`、`compiler/test_numpy_code_op.py:152`、`ops/test_arg_pool_op.py:110`、`data/test_emnist.py:19` | **内存释放契约零覆盖**；liveness_info 只在 12 个文件零星使用 | 泄漏测试改短循环加 RSS 阈值放 nightly | 主要 |
 | 静态可判定：487 个用例（19.5%）依赖加速器，205 个（8.2%）依赖真 PyTorch | AST 统计 2502 个测试方法的 skip 装饰器。实测印证：全量 CPU 双进程 `2359 passed, 1274 skipped`——**35% 的用例在 CPU 机器上从不执行** | 按 skip 原因分桶统计并在 CI summary 输出 | 对"本环境应能跑却 skip"的桶设阈值 | 主要 |
@@ -75,7 +90,21 @@ CI workflow 能触达的只有 74 个文件（25.6%），PR 门禁只有 50 个�
 | --- | --- | --- | --- | --- |
 | make_tensor 默认种子来自**进程级递增计数器** | `_helpers/common.py:146` `_seed_counter = itertools.count(0x5EED)`；`:184` 用 next(_seed_counter) | 同一用例在全量跑和 -k 单跑下拿到**不同输入数据**：全量失败的 case 单跑复现不了；插入或删除任何用例都会平移下游所有数据；无法用 xdist 或随机顺序 | 种子改为 hash(nodeid+shape+dtype) 的确定性函数并在失败信息里打印 | 关键 |
 | 14 处在 setUp 或用例体里改进程级 flag 且所在类无 tearDown | `core/test_complex64_linalg.py:50`、`compat/torch/test_torch_hf_cuda_device.py:95`、`test_ecosystem_device_selection.py:61/64/69/77`、`nn/test_bmm.py:21`、`nn/test_loss3d.py:80`、`core/test_misc_op.py:281`、`ops/test_linalg.py:309`、`backends/rocm/test_rocm.py:330` | 一个类跑过之后同进程后续用例的 use_cuda/use_rocm 被改写，后续用例可能在错误设备上通过 | 统一走 flag_scope；加静态检查禁止裸赋值 | 主要 |
+
+**已修：`26a20905`（0.12）。** 逐条核对时 `test_ecosystem_device_selection.py` 洗清了——
+它用 `setUp` 存值加 `addCleanup(self._put_back)`，是对的；静态检查因此也要认 `addCleanup`。
+另外 `test_torch_compat_library_dispatch.py` 有 7 处同类问题不在审计名单上，一并收进
+setUp/tearDown。检查（`tests/structure/test_flag_scope_contract.py`）接受三种还原方式：
+`flag_scope`、setUp/tearDown 配对（含 `addCleanup` 注册的方法）、`try/finally`。
+
 | conftest 用 sys.argv 嗅探决定进程语义 | `tests/conftest.py:24-60`，`:43 SELECTION_IS_BROAD`；`:174 pytest_ignore_collect` 在 native 会话整体忽略 TORCH_MODE_PATHS | 语义随调用方式改变；用 -k、xdist worker 或 IDE runner 时行为不可预期。CPU 门禁的 --collect-only 因此**连 62 个 Torch-mode 文件的可导入性都没检查** | 模式由显式环境变量决定 | 主要 |
+
+**已修：`5c0f2364`（0.13）。** `SELECTION_IS_BROAD` 不止决定模式，还决定 manual 探针跑不跑，
+而后者的判断发生在**部分标记还没挂上之前**：`test_notebooks.py` 的 `manual` 标记是在跳过
+判断之后才加的，所以全树跑时它从来没被跳过——2026-09-03 的全树实测里它花了 537 秒，
+是全树最慢的一项。这是同一个形状的第三例（另两例：按 argv 选 shim 模式、`@onlyCPU` 被设备
+过滤全部跳过）：**筛选逻辑的顺序决定了筛选结果**。
+
 | retry 装饰器吞掉任意异常 | `_helpers/retry.py:9-16` `except Exception: pass` | 不稳定的 tuner 路径被掩盖成绿，不稳定率不可观测 | 记录并上报重试次数 | 次要 |
 | 门禁在非默认配置下运行 | 运行时默认 use_parallel_op_compiler=16（`parallel_compiler.cc:27`）；但 `noxfile.py:687/1128/1548`、`tools/run_test_suite.py:59`、`test_notebooks.py:253` 全部强制 0，`test_device_parity.py:172` 也在 setUpClass 关掉 | 用户拿到的默认路径在全量套件里从不被执行 | nightly 保留一条并行编译的全量运行 | 主要 |
 | _session_env 直接继承宿主环境 | `noxfile.py:363` `env = os.environ.copy()` | OMP_NUM_THREADS、OMP_PROC_BIND、CPU 亲和性、MKL_* 全部泄漏进门禁 | 门禁显式设定并断言线程数与亲和掩码 | 主要 |
