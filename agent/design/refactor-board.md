@@ -24,7 +24,7 @@
 | 绑定 | bindings (6.C02/22/23/24/25/27/28/29) | GPU0 c0-11 |
 | Python 核心 | — |  |
 | Python 算子 | pyops (6.P03–6.P09) | GPU5 c36-47 |
-| Python 其他 | pyother (6.P10–6.P22) | GPU6 c64-75 |
+| Python 其他 | pyother (5.18、5.19、6.P25) | GPU6 c64-75 |
 | 兼容层 | compat (7.01) | CPU c96-103 |
 | CUDA 后端 | cudabk (6.B05/07/08/09/12/13/14) | GPU7 c76-87 |
 | ACL/ROCm/Corex | — |  |
