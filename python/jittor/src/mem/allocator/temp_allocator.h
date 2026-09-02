@@ -38,13 +38,18 @@ struct TempAllocator : Allocator {
     std::map<unsigned long long, TempCachingBlock*> cached_blocks;
     std::vector<size_t> block_ids;
     size_t tot_block_id;
-    // value-initialized: free() indexes this table by allocation id.
-    std::unique_ptr<TempCachingBlock*[]> occupied_id_mapper;
+    // id -> block for the ids this instance has handed out. A vector rather
+    // than an eager `new TempCachingBlock*[1<<21]()`: with one temp pool per
+    // device the 16 MB table was paid per device, while the number of live
+    // workspace allocations is a handful. New slots are value-initialized to
+    // nullptr, so free() indexing an id this instance never issued reads as
+    // "not found" instead of as whatever the heap held.
+    std::vector<TempCachingBlock*> occupied_id_mapper;
     // One lock per instance; recursive because the OOM retry path calls
     // gc_all(), which comes back into this instance's gc().
     std::recursive_mutex mutex;
 
-    inline TempAllocator(size_t cache_blocks_limit=2) : cache_blocks_limit(cache_blocks_limit), tot_block_id(0), occupied_id_mapper(new TempCachingBlock*[ID_LIMIT]()) {
+    inline TempAllocator(size_t cache_blocks_limit=2) : cache_blocks_limit(cache_blocks_limit), tot_block_id(0) {
         temp_allocators.push_back(this);
     }
     inline TempAllocator(Allocator* underlying, size_t cache_blocks_limit=2) : TempAllocator(cache_blocks_limit) {

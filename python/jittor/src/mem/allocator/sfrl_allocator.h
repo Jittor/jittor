@@ -34,24 +34,55 @@ struct CachingBlock {
     CachingBlock(size_t size, size_t origin_size, CachingBlockPool* blocks, void* memory_ptr);
 };
 
+// The block ids an allocator hands out as `allocation` handles, and the table
+// that maps a live id back to its block.
+//
+// This used to be a process-wide static: one counter and one eagerly
+// allocated 16 MB pointer array (`CachingBlock*[1<<21]`) shared by the CPU
+// pool, the CUDA pool, the host pool, the dual staging pools and the temp
+// pools alike. Sharing one id space across devices is not merely wasteful:
+// an id handed out by one device's pool indexes the same table slot as an id
+// from another's, so `free(ptr, size, allocation)` cannot tell which pool an
+// allocation came from, and per-device pools (see get_allocator(device, ...))
+// could not exist at all. The space now belongs to one allocator instance,
+// and the table grows to the number of allocations that instance actually has
+// live -- typically a few thousand slots, not two million.
+struct BlockIdSpace {
+    // Ids start at 1: slot 0 is never a live allocation, so a zero
+    // `allocation` handle is always a caller error rather than a hit.
+    static const size_t ID_LIMIT = 1 << 21;
+    // One lock per id space, always taken *inside* the owning allocator's
+    // lock and never the other way round.
+    std::mutex mutex;
+    // ids released by recycle_block_id, reused before the counter grows
+    std::vector<size_t> free_ids;
+    size_t tot_block_id = 0;
+    // index -> block, sized to tot_block_id+1; every new slot is nullptr, so
+    // an id that was never handed out reads as "not found" instead of as
+    // whatever the heap happened to hold.
+    std::vector<CachingBlock*> occupied_id_mapper;
+
+    size_t new_block_id();
+    void recycle_block_id(size_t id);
+    void set_occupied(size_t id, CachingBlock* block);
+    // return a block from the table, validating the id first.
+    CachingBlock* get_occupied(size_t allocation);
+    // delete and return a block from the table and recycle its id.
+    CachingBlock* erase_occupied(size_t allocation);
+};
+
 struct CachingBlockPool {
     std::map<pair<size_t,size_t>, CachingBlock*> blocks;
-    //for recycle block_id
-    static std::vector<size_t> block_ids;  
-    //start from 1
-    static size_t tot_block_id;           
-    static std::unique_ptr<CachingBlock*[]> occupied_id_mapper;              
-    static const size_t ID_LIMIT = 1 << 21;
+    // The id space of the allocator that owns this pool. Both of an
+    // allocator's pools (small and large) share one space, because `free`
+    // only gets an id and has to find the block in either.
+    BlockIdSpace* ids = nullptr;
+    static const size_t ID_LIMIT = BlockIdSpace::ID_LIMIT;
 
     pair<size_t,size_t> get_key(CachingBlock* block);
 
     CachingBlockPool();
     ~CachingBlockPool();
-    // The block id space is a process-wide static shared by every SFRL
-    // instance, so it carries its own lock, always taken *inside* an
-    // allocator's lock and never the other way round.
-    static size_t new_block_id();
-    static void recycle_block_id(size_t id);
     // return a block whose size >= input size and delete it from pool, return nullptr if no block is found.
     CachingBlock* pop_block(size_t size);
     // insert a block, id of this block will be obtanined in this function.
@@ -60,10 +91,6 @@ struct CachingBlockPool {
     void erase(CachingBlock* block);
     // insert a block, id of this block will be obtanined and returned in this function.
     size_t insert_occupied(CachingBlock* block);
-    // delete and return a block from pool and recycle id, validating the id first.
-    static CachingBlock* erase_occupied(size_t allocation);
-    // return a block from pool, validating the id first.
-    static CachingBlock* get_occupied(size_t allocation);
     // free all unsplit unoccupied blocks and recycle id.
     size_t free_all_cached_blocks(Allocator* underlying, long long free_size = -1);
 };
@@ -73,6 +100,10 @@ struct SFRLAllocator : Allocator {
     CachingBlockPool small_blocks, large_blocks;
     std::map<void*, CachingBlock*> occupied_blocks;
     Allocator* underlying;
+    // The ids this allocator hands out. Private to the instance: two SFRL
+    // allocators both start at 1, and an id from one is not a valid handle
+    // for the other.
+    BlockIdSpace id_space;
 
     static const size_t ALIGN_SIZE = 512;
     static const size_t SMALL_BLOCK_SIZE = 1048576;
@@ -98,7 +129,11 @@ struct SFRLAllocator : Allocator {
     bool should_split(CachingBlock* block, size_t size);
     void try_merge_two_blocks(CachingBlock* b1, CachingBlock* b2, CachingBlockPool& blocks);
 
-    inline SFRLAllocator(float free_ratio = 1, float min_free_size=0) : free_ratio(free_ratio), min_free_size(min_free_size) { sfrl_allocators.push_front(this); iter = sfrl_allocators.begin(); }
+    inline SFRLAllocator(float free_ratio = 1, float min_free_size=0) : free_ratio(free_ratio), min_free_size(min_free_size) {
+        small_blocks.ids = &id_space;
+        large_blocks.ids = &id_space;
+        sfrl_allocators.push_front(this); iter = sfrl_allocators.begin();
+    }
     inline SFRLAllocator(Allocator* underlying, float free_ratio = 1, float min_free_size=0) : SFRLAllocator(free_ratio, min_free_size) {
         setup(underlying);
     }

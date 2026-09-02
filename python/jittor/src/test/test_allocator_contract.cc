@@ -65,6 +65,49 @@ JIT_TEST(sfrl_allocator_rejects_bad_allocation) {
     expect_error([&]() { sfrl.free(ptr, 1024, allocation); });
 }
 
+// The block id space belongs to the allocator instance, not to the process.
+// It used to be one static counter plus one static 16 MB table shared by the
+// CPU pool, every CUDA pool, the host pool and the staging pools, so an id
+// from one pool indexed the same slot as an id from another and no pool could
+// tell its own handles from a neighbour's. Per-device pools need the opposite:
+// each instance numbers from 1, and a handle is only meaningful to the
+// allocator that issued it.
+JIT_TEST(sfrl_allocator_id_space_is_per_instance) {
+    SFRLAllocator a(&aligned_allocator);
+    SFRLAllocator b(&aligned_allocator);
+    size_t alloc_a = 0, alloc_b = 0;
+    void* pa = a.alloc(1024, alloc_a);
+    void* pb = b.alloc(1024, alloc_b);
+    // Independent spaces both start at 1. With one shared counter these were
+    // necessarily different, which is exactly what made the table ambiguous.
+    ASSERTop(alloc_a, ==, alloc_b);
+    // And a handle issued by one instance is not a handle of the other: b has
+    // never handed out an id beyond its own first, so a's larger ids are out
+    // of its table entirely.
+    size_t alloc_a2 = 0, alloc_a3 = 0;
+    void* pa2 = a.alloc(2048, alloc_a2);
+    void* pa3 = a.alloc(4096, alloc_a3);
+    expect_error([&]() { b.free(nullptr, 4096, alloc_a3); });
+    a.free(pa3, 4096, alloc_a3);
+    a.free(pa2, 2048, alloc_a2);
+    a.free(pa, 1024, alloc_a);
+    b.free(pb, 1024, alloc_b);
+    a.gc();
+    b.gc();
+}
+
+// The table grows with the ids actually issued instead of being reserved up
+// front, so an id past the high-water mark must still be rejected rather than
+// read out of bounds.
+JIT_TEST(sfrl_allocator_rejects_unissued_id) {
+    SFRLAllocator sfrl(&aligned_allocator);
+    size_t allocation = 0;
+    void* ptr = sfrl.alloc(1024, allocation);
+    expect_error([&]() { sfrl.free(nullptr, 16, allocation + 1000); });
+    expect_error([&]() { sfrl.share_with(16, allocation + 1000); });
+    sfrl.free(ptr, 1024, allocation);
+}
+
 // CachingBlock now keeps the underlying allocator's handle and hands it back
 // unchanged, so a caching allocator can sit on top of another one.
 JIT_TEST(sfrl_allocator_nested) {

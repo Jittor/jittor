@@ -76,6 +76,8 @@ void* TempAllocator::alloc(size_t size, size_t& allocation) {
     }
 
     used_memory += block->size;
+    if (occupied_id_mapper.size() <= block->id)
+        occupied_id_mapper.resize(block->id+1, nullptr);
     occupied_id_mapper[block->id] = block;
     allocation = block->id;
     return block->memory_ptr;
@@ -85,7 +87,7 @@ void TempAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
     std::unique_lock<std::recursive_mutex> lock(mutex);
     size = align_size(size);
     // validate the id before indexing the table, not after dereferencing it
-    ASSERT(allocation > 0 && allocation < ID_LIMIT)
+    ASSERT(allocation > 0 && allocation < ID_LIMIT && allocation < occupied_id_mapper.size())
         << "allocation id out of range:" << allocation;
     ASSERT(occupied_id_mapper[allocation] != nullptr) << "allocation not found:" << allocation;
     TempCachingBlock* block = occupied_id_mapper[allocation];
