@@ -96,11 +96,18 @@ Var* Op::create_output(NanoVector shape, NanoString dtype) {
 // source; broadcast_to_op.cc and unary_op.cc carry it forward). Such a value
 // follows the operand it meets instead of forcing a device error.
 //
-// Both halves of that test are load-bearing. Element count alone would sweep
-// in a real one-element user tensor. Pendingness alone would let a
-// deliberately placed `jt.zeros(1000)` that has not been synced yet be
-// retargeted to whatever device it first meets -- silently, where torch
-// raises.
+// Both halves of that test are load-bearing, and each has a test:
+// element count alone sweeps in a real one-element user tensor that already
+// holds data; pendingness alone retargets a `jt.array(np.ones(1000))` the
+// caller deliberately built on cuda:0 and merely has not synced yet --
+// silently, where torch raises. See tests/backends/cuda/test_multi_device.py.
+//
+// One edge remains and is accepted: `jt.zeros(n)` is `unary(0).broadcast(n)`,
+// and _is_scalar comes through the broadcast, so an unsynced zeros/ones does
+// follow its operand. It is a constant with no data anywhere, produced
+// bit-identically on either card, so this is constant placement rather than
+// moving something the caller computed. device-placement.md §5 has the
+// reasoning and why a third condition would cost more than it buys.
 static inline bool is_pending_scalar(Var* v) {
     return !v->is_finished() && v->flags.get(NodeFlags::_is_scalar);
 }
