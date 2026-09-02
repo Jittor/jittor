@@ -20,8 +20,39 @@
 #include "ops/setitem_op.h"
 #include "type/fp16_compute.h"
 #include "mem/swap.h"
+#include "pyjt/py_converter.h"
 
 namespace jittor {
+
+namespace {
+struct VarDataOwner {
+    PyObject* holder;
+    Var* var;
+};
+}
+
+static void free_var_data_owner(PyObject* capsule) {
+    auto owner = (VarDataOwner*)PyCapsule_GetPointer(capsule, "jittor.var_data");
+    if (!owner) return;
+    owner->var->release_both_liveness();
+    Py_XDECREF(owner->holder);
+    delete owner;
+}
+
+PyObject* new_var_data_owner(VarHolder* vh) {
+    auto owner = new VarDataOwner{GET_OBJ_FROM_RAW_PTR(vh), vh->var};
+    owner->var->own_both_liveness();
+    Py_INCREF(owner->holder);
+    auto capsule = PyCapsule_New((void*)owner, "jittor.var_data",
+        &free_var_data_owner);
+    if (!capsule) {
+        owner->var->release_both_liveness();
+        Py_DECREF(owner->holder);
+        delete owner;
+        return nullptr;
+    }
+    return capsule;
+}
 
 DEFINE_FLAG(int, lazy_execution, 1, "Default enabled, if disable, use immediately eager execution rather than lazy execution, This flag makes error message and traceback infomation better. But this flag will raise memory consumption and lower the performance.");
 

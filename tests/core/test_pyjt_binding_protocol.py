@@ -373,6 +373,53 @@ class TestNanoStringOverloadMatching(unittest.TestCase):
         float64 = Meta("float64", (), {})
         self.assertEqual(str(self.x.cast(float64).dtype), "float64")
 
+
+class TestDataViewLifetime(unittest.TestCase):
+    """``Var.data`` keeps the allocation it points at, not just the wrapper."""
+
+    def test_view_survives_assign(self):
+        # ``assign`` leaves the VarHolder in place and swaps a different Var
+        # into it, releasing the old one -- and the numpy view's base was that
+        # VarHolder, so it stayed alive while the memory under it was freed
+        # and handed to the next allocation.
+        size = 4096
+        v = jt.array(np.arange(size, dtype="float32"))
+        view = v.data
+        expected = np.arange(size, dtype="float32")
+        np.testing.assert_array_equal(view, expected)
+
+        v.assign(jt.zeros(size, "float32"))
+        v.sync()
+        jt.gc()
+        # Churn same-sized allocations so a freed block gets reused.
+        for value in range(1, 33):
+            filler = jt.full([size], float(value), "float32")
+            filler.sync()
+            del filler
+        jt.gc()
+
+        np.testing.assert_array_equal(view, expected)
+
+    def test_view_survives_the_wrapper(self):
+        size = 1024
+        expected = np.arange(size, dtype="float32")
+        v = jt.array(expected)
+        view = v.data
+        del v
+        gc.collect()
+        for value in range(1, 33):
+            filler = jt.full([size], float(value), "float32")
+            filler.sync()
+            del filler
+        jt.gc()
+        np.testing.assert_array_equal(view, expected)
+
+    def test_view_still_aliases_the_var(self):
+        v = jt.array(np.zeros(8, dtype="float32"))
+        view = v.data
+        view[0] = 5.0
+        np.testing.assert_array_equal(v.numpy()[0], np.float32(5.0))
+
 if __name__ == "__main__":
     unittest.main()
 

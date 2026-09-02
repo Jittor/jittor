@@ -24,6 +24,25 @@ struct DataView {
     NanoString dtype;
 };
 
+/** The base object for the numpy array `Var.data` returns.
+ *
+ * It holds two claims, for two different reasons:
+ *
+ *  - an extra liveness on the Var that was current when `.data` was taken, so
+ *    the allocation the view points at cannot be freed.  The base used to be
+ *    the VarHolder's PyObject, which pins the python wrapper but not the
+ *    memory: `assign` keeps the wrapper and swaps a *different* Var into it,
+ *    releasing the old one.  `a = v.data; v.assign(other); a[0]` then read
+ *    freed memory while its base object was still perfectly alive.
+ *  - a reference to the VarHolder's PyObject, because `Var.data`'s documented
+ *    lifetime is that the view keeps the whole Var alive
+ *    (tests/core/test_array.py::TestArray::test_data asserts exactly that:
+ *    `del a` must not change liveness_info() while the view is held).
+ *
+ * Returns a new reference, or nullptr with the python error set.
+ */
+PyObject* new_var_data_owner(VarHolder* vh);
+
 struct ItemData {
     int64 data;
     NanoString dtype;

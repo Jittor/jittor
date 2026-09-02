@@ -603,6 +603,8 @@ DEF_IS(VarHolder*, T) from_py_object(PyObject* obj, unique_ptr<VarHolder>& holde
 }
 
 struct DataView;
+struct VarHolder;
+EXTERN_LIB PyObject* new_var_data_owner(VarHolder* vh);
 DEF_IS(DataView, PyObject*) to_py_object(T a) {
 #if defined(__linux__) || defined(_WIN32)
     STACK_ALLOC(int64_t, dims, a.shape.size());
@@ -623,9 +625,9 @@ DEF_IS(DataView, PyObject*) to_py_object(T a) {
         NULL // obj
     ));
     if (a.vh) {
-        auto obj = GET_OBJ_FROM_RAW_PTR(a.vh);
-        PyObjHolder oh2(obj);
-        Py_INCREF(obj);
+        // The base must own the *allocation*, not only the python wrapper:
+        // see new_var_data_owner in var_holder.h.
+        PyObjHolder oh2(new_var_data_owner(a.vh));
         ASSERT(PyArray_SetBaseObject(oh.obj, oh2.obj)==0);
         oh2.release();
     }
