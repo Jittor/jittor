@@ -151,6 +151,9 @@ STRUCTURE_TESTS = (
 )
 CPU_TESTS = (
     "tests/compiler/test_custom_op.py",
+    # The bridge to src/test/*.cc: expression solver, kernel IR, op compiler, op
+    # relay and the SFRL allocator have unit tests in C++ that no gate ran.
+    "tests/compiler/test_jit_tests.py",
     "tests/compiler/test_utils.py",
     "tests/core/test_autograd_engine.py",
     "tests/core/test_misc_shape.py",

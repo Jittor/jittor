@@ -80,7 +80,30 @@ JITTOR_TEST_DEVICES=cpu python -m pytest <目标> --collect-only -q | grep -c '<
 这意味着「`pytest tests` 全绿」不覆盖这些文件。要覆盖全树必须跑两个会话
 （`tools/run_test_suite.py` 就是干这个的：native 会话 `tests` 加 `--ignore=`，torch 会话只跑这些路径）。
 
-## 四、并发与缓存
+## 四、多 worktree 并行时，`.git` 里哪些是共用的
+
+同一个仓库的多个 `git worktree` **不隔离** `.git` 里的大部分东西。分不清就会出现
+"我 pop 出来的是别人的改动"。
+
+| 共用（全仓库一份） | 每个 worktree 独立 |
+| --- | --- |
+| **stash 栈**、refs/branches/tags、reflog、object 库、config、hooks | index、工作区文件、`HEAD`、当前分支、`MERGE_HEAD` 等运行状态 |
+
+所以：
+
+- **不要用 `git stash`。** 别人在另一个 worktree 里 `git stash pop`，弹出的可能是你的改动。
+  真要临时搁置几个文件，用补丁：
+
+  ```bash
+  git diff <文件...> > $MYTMP/wip.patch && git checkout -- <文件...>
+  # 恢复
+  git apply $MYTMP/wip.patch
+  ```
+
+- 一次只做一个任务，改完就测、测完就提交，不要让无关的 WIP 留在树里。
+- 分支名也是共用的：同一个分支不能在两个 worktree 同时 checkout。
+
+## 五、并发与缓存
 
 - 每个并行进程独立 `JITTOR_HOME` 与 `TMPDIR`。共享缓存的并发运行会互相损坏，表象是
   **在无关算子上大面积报梯度不符**，看起来像真实回归。
