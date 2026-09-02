@@ -19,6 +19,32 @@ namespace jittor {
 
 DECLARE_FLAG(int, l1_cache_size);
 
+// CUDA reductions get no candidates from here. That is a guard around a real
+// incompatibility one layer down, not an unwritten backend:
+//
+//  * The candidates this tuner offers are `split1` (a tile sized from
+//    l1_cache_size, see below) and a few `orderN`. `split{i}` makes
+//    SplitLoopPass give the inner loop the range `::min(range{i}-id{i},
+//    stride{i})`, defined inside the outer loop. ParallelPass has to evaluate
+//    every range at the call site to size the thread grid, so it looks the name
+//    up with `func->find_define` and aborts when that fails
+//    (parallel_pass.cc, "Check failed: def"). CUDA always runs ParallelPass, so
+//    every `split{i}` candidate would turn a working reduction into a compile
+//    error. It is not CUDA-specific: `{"parallel":1, "split1":256}` fails the
+//    same way on CPU. tests/compiler/test_reduce_tuner.py pins this.
+//  * The tile size itself is a CPU idea: `l1_cache_size / var_size` blocks a
+//    loop for a core's private cache. What decides a CUDA reduction's speed is
+//    the thread decomposition, which ParallelPass picks, and how the trailing
+//    atomic is folded, which AtomicTunerPass / WarpReducePass do.
+//  * The `orderN` candidates would apply -- ReorderLoopPass is device
+//    independent -- but measured on an RTX 4090 over five reduction shapes
+//    (spatial, full, leading-dim) none of `order1=1` or `order2=1` beats the
+//    default, and several are 1.3-2.1x worse, because moving a loop out of the
+//    innermost position is exactly what stops the reads from coalescing.
+//
+// So the useful CUDA candidate set is not "the CPU one, enabled": it would be
+// thread-decomposition candidates, which live in ParallelPass, and it needs the
+// split/parallel incompatibility fixed first.
 void ReduceTuner::run(PassManager* pm, TunerManager* tm) {
     confidence = 0;
     FusedOp* fo=tm->oc->op;
