@@ -14,6 +14,58 @@ import os
 import re
 import platform
 
+class TestAsmTunerWritesAtomically(unittest.TestCase):
+    """`pass_asm` must not truncate the `.s` it is about to rewrite.
+
+    Several processes compile into one cache directory as a matter of course
+    (a DataLoader with num_workers=4 is four of them). While a writer holds a
+    truncated destination open, a reader sees a *prefix* of the assembly and
+    the assembler reports `unknown pseudo-op` / `end of file not at end of a
+    line` on an operator nobody touched -- which reads as a corrupted cache
+    and gets dismissed as one.
+    """
+
+    @staticmethod
+    def _pass_asm():
+        """`pass_asm` alone: asm_tuner.py is a script and parses argv on import."""
+        import ast
+        import jittor
+        source_path = os.path.join(os.path.dirname(jittor.__file__),
+                                   "utils", "asm_tuner.py")
+        with open(source_path, encoding="utf-8") as handle:
+            tree = ast.parse(handle.read(), filename=source_path)
+        function = next(node for node in tree.body
+                        if isinstance(node, ast.FunctionDef)
+                        and node.name == "pass_asm")
+        module = ast.Module(body=[function], type_ignores=[])
+        ast.fix_missing_locations(module)
+        namespace = {"os": os}
+        exec(compile(module, source_path, "exec"), namespace)
+        return namespace["pass_asm"], namespace
+
+    def test_the_destination_is_replaced_not_rewritten_in_place(self):
+        import tempfile
+        pass_asm, namespace = self._pass_asm()
+        with tempfile.TemporaryDirectory() as directory:
+            destination = os.path.join(directory, "kernel.s")
+            with open(destination, "w") as handle:
+                handle.write("stale\n")
+            before = os.stat(destination).st_ino
+
+            namespace["cc_content"] = ["int main() {}\n"]
+            namespace["s_content"] = ["\t.text\n", "\t.globl kernel\n"]
+            pass_asm(os.path.join(directory, "kernel.cc"),
+                     os.path.join(directory, "kernel.post.s"))
+
+            with open(destination) as handle:
+                self.assertEqual(handle.read(), "\t.text\n\t.globl kernel\n")
+            # A rename gives the path a different inode. Rewriting in place
+            # keeps it -- and keeps the window where the file is a prefix.
+            self.assertNotEqual(os.stat(destination).st_ino, before)
+            self.assertEqual(
+                [name for name in os.listdir(directory) if ".tmp." in name], [])
+
+
 class TestAsmTuner(unittest.TestCase):
     @classmethod
     def setUpClass(self):

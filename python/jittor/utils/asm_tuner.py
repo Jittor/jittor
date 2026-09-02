@@ -109,8 +109,34 @@ def pass_asm(cc_path,s_path):
                 assert 0, "no such command: "+line.split("@begin")[1]
     
     output_path=s_path.replace(".post.s",".s")
-    with open(output_path,"w") as f:
-        f.write("".join(s_content))
+    # Temporary file plus rename, not open(path, "w").
+    #
+    # Truncating the destination and writing into it means that between those
+    # two moments the file on disk is a *prefix* of the assembly. Several
+    # processes compile into one cache directory as a matter of course (a
+    # DataLoader with num_workers=4 is four of them), so a reader lands in
+    # that window and the assembler reports
+    #
+    #   Assembler messages: unknown pseudo-op: '.by'
+    #   end of file not at end of a line
+    #
+    # on an operator that has nothing to do with anything anyone changed --
+    # which reads as a corrupted cache, and gets dismissed as one. rename() is
+    # atomic within a filesystem, so a reader sees either the old file or the
+    # complete new one. Reproduced on three independent JITTOR_HOMEs before
+    # this change; the .tmp name carries the pid so two writers do not share
+    # one temporary either.
+    temporary = "%s.tmp.%d" % (output_path, os.getpid())
+    try:
+        with open(temporary, "w") as f:
+            f.write("".join(s_content))
+        os.replace(temporary, output_path)
+    except BaseException:
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+        raise
 
 def run_cmd(cmd):
     LOG.vvvv(f"Run cmd: {cmd}")
