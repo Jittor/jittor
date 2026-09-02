@@ -18,17 +18,17 @@ def _prod(xs):
 
 
 def _world_size():
-    try:
-        return int(getattr(jt, "world_size", 1))
-    except Exception:
-        return 1
+    # Deliberately not wrapped in try/except. If jittor's world_size cannot be
+    # read, returning 1 here does not degrade gracefully -- it turns an N-rank
+    # job into N independent single-rank jobs that each train the full model and
+    # never exchange anything, which looks like it is working. 6.B04.
+    return int(getattr(jt, "world_size", 1))
 
 
 def _rank():
-    try:
-        return int(getattr(jt, "rank", 0))
-    except Exception:
-        return 0
+    # Same reasoning as _world_size: a swallowed error here makes every rank
+    # believe it is rank 0 and shard identically.
+    return int(getattr(jt, "rank", 0))
 
 
 def _in_true_distributed():

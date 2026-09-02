@@ -943,6 +943,54 @@ elif _jt_nccl_no_mpi:
     rank = int(os.environ.get("JT_NCCL_RANK", "0"))
     world_size = int(_jt_nccl_ws)
 
+
+def distributed_requested():
+    """Why this process believes it is one rank of a multi-rank job, or None.
+
+    Only the launcher knows this, and it tells us through the environment
+    before any collective backend is brought up. That ordering is the whole
+    point: once distributed has been *requested*, a backend that then fails to
+    initialize must be a hard error. Falling back to single card turns one
+    N-card job into N independent single-card jobs which look like they are
+    training correctly and are completely wrong. 6.B04.
+
+    Returns None when nothing asked for distributed, so a plain single-process
+    run stays silent exactly as before.
+    """
+    for var in ("JT_HCCL_WORLD_SIZE", "JT_NCCL_WORLD_SIZE"):
+        value = os.environ.get(var)
+        if value and value.strip().isdigit() and int(value) > 1:
+            return "{}={}".format(var, value)
+    if in_mpi and world_size > 1:
+        return "MPI world_size={}".format(world_size)
+    return None
+
+
+def check_distributed_backend_ready():
+    """Fail loudly if distributed was requested but no collective backend came up.
+
+    Every silent-degradation path funnels here: setup_nccl()'s several early
+    returns (no CUDA, no nccl install, no rendezvous), a failed setup_hccl(),
+    an MPI module that did not load. Any one of them leaves the process
+    reporting world_size>1 with nothing to communicate through.
+    """
+    reason = distributed_requested()
+    if reason is None:
+        return
+    backends = [name for name, ops in (("hccl", hccl_ops),
+                                       ("nccl", nccl_ops),
+                                       ("mpi", mpi_ops)) if ops is not None]
+    if backends:
+        LOG.v("distributed requested ({}), collective backends: {}".format(
+            reason, ", ".join(backends)))
+        return
+    raise RuntimeError(
+        "distributed was requested ({}) but no collective backend could be "
+        "initialized (hccl/nccl/mpi ops are all unavailable). Every rank would "
+        "run as an independent single-card job and silently produce wrong "
+        "results, so this is a hard error. Check that the backend's runtime is "
+        "installed and visible to this process.".format(reason))
+
 # Enable the device collective backend used for multi-card data parallel.
 # HCCL on Ascend, NCCL on CUDA.
 #
@@ -970,6 +1018,15 @@ if _want_hccl:
         hccl_mod.hccl_init()
         LOG.i("setup_hccl: HCCL communicator ready")
     except Exception as e:
+        if distributed_requested():
+            # Distributed was explicitly requested by a launcher. Continuing
+            # here would leave every rank running as an independent single-card
+            # job -- they train, they print sensible losses, and nothing is ever
+            # exchanged between them. 6.B04.
+            raise RuntimeError(
+                "HCCL setup failed, but distributed was requested ({}). "
+                "Refusing to silently fall back to single card.".format(
+                    distributed_requested())) from e
         LOG.w("HCCL setup failed, multi-card on Ascend disabled, msg:", e)
 
 setup_nccl()
@@ -987,3 +1044,6 @@ setup_cuda_extern()
 for mod in jit_utils.backends:
     if mod.install_extern():
         break
+
+# Last gate: distributed was requested -> a collective backend must exist.
+check_distributed_backend_ready()
