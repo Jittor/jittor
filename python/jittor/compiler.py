@@ -1472,9 +1472,10 @@ if platform.system() == 'Linux':
     assert libname is not None, "openmp library not found"
     ctypes.CDLL(libname, os.RTLD_NOW | os.RTLD_GLOBAL)
 
-if platform.machine()=='sw_64':
-    import ssl
-    ssl._create_default_https_context = ssl._create_unverified_context
+# NOTE: sw_64 used to disable TLS certificate verification for the whole
+# process here. See the note in jittor_utils/__init__.py: use SSL_CERT_FILE or
+# certifi instead; nothing jittor does justifies turning it off for the
+# application it is imported into.
 
 data_gz_path = os.path.join(jittor_path, "utils", "data.gz")
 use_data_gz = os.path.isfile(data_gz_path)

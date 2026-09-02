@@ -8,7 +8,8 @@ import os, sys, shutil, re
 import platform
 from .compiler import *
 from jittor_utils import run_cmd, get_version, get_int_version
-from jittor_utils.misc import download_url_to_local
+from jittor_utils.misc import download_url_to_local, safe_tar_extractall
+from jittor_utils import manifest
 import jittor_utils as jit_utils
 
 def search_file(dirs, name, prefer_version=()):
@@ -43,37 +44,11 @@ def search_file(dirs, name, prefer_version=()):
 
 def install_mkl(root_folder):
     # origin url is
-    # url = "https://github.com/intel/mkl-dnn/releases/download/v1.0.2/mkldnn_lnx_1.0.2_cpu_gomp.tgz"
-    import platform
-    url = None
-    if platform.system()=="Linux":
-        if platform.machine()=='x86_64':
-            filename = "dnnl_lnx_2.2.0_cpu_gomp.tgz"
-            md5 = "35bbbdf550a9d8ad54db798e372000f6"
-        elif platform.machine()=='aarch64':
-            filename = "dnnl_lnx_2.2.0_cpu_gomp_aarch64.tgz"
-            md5 = "72cf9b0b8fd6c3c786d35a9daaee22b8"
-        else:
-            raise RuntimeError(f"platform.machine()=={platform.machine()} not support yet,"
-            " Please contact us on https://github.com/jittor/jittor ")
-    elif os.name == "nt":
-        # url = "https://github.com/oneapi-src/oneDNN/releases/download/v2.2/dnnl_win_2.2.0_cpu_iomp.zip"
-        # url = "https://github.com/oneapi-src/oneDNN/releases/download/v2.2/dnnl_win_2.2.0_cpu_vcomp.zip"
-        filename = "dnnl_win_2.2.0_cpu_vcomp.zip"
-        md5 = "fa12c693b2ec07700d174e1e99d60a7e"
-    elif platform.system() == "Darwin":
-        if platform.machine() == "arm64":
-            filename = "dnnl_mac_2.2.0_cpu_omp_arm64.tgz"
-            md5 = "d8fdf56d3cf618685d22d18f08119f88"
-        else:
-            filename = "dnnl_mac_2.2.0_cpu_omp_x86_64.tgz"
-            md5 = "6e2f065d6a589c82081536b684768fe6"
-    else:
-        raise RuntimeError(f"platform.machine()=={platform.machine()} not support yet,"
-        " Please contact us on https://github.com/jittor/jittor ")
-
-    if not url:
-        url = "https://cg.cs.tsinghua.edu.cn/jittor/assets/" + filename
+    # https://github.com/oneapi-src/oneDNN/releases/download/v2.2/
+    asset = manifest.mkl_asset()
+    filename = asset.filename
+    url = asset.url
+    md5 = manifest.digest_of(asset)[1]
     fullname = os.path.join(root_folder, filename)
     dirname = os.path.join(root_folder, filename.rsplit(".",1)[0])
 
@@ -89,7 +64,7 @@ def install_mkl(root_folder):
         else:
             import tarfile
             with tarfile.open(fullname, "r") as tar:
-                tar.extractall(root_folder)
+                safe_tar_extractall(tar, root_folder)
         if os.name == 'nt':
             # this env is used for execute example/text
             bin_path = os.path.join(dirname, "bin")
@@ -168,10 +143,9 @@ def setup_mkl():
 
 
 def install_cub(root_folder):
-    url = "https://github.com/NVIDIA/cub/archive/1.11.0.tar.gz"
-    url = "https://codeload.github.com/NVIDIA/cub/tar.gz/1.11.0"
-    filename = "cub-1.11.0.tgz"
-    md5 = "97196a885598e40592100e1caaf3d5ea"
+    asset = manifest.CUB
+    url, filename = asset.url, asset.filename
+    md5 = manifest.digest_of(asset)[1]
     fullname = os.path.join(root_folder, filename)
     dirname = os.path.join(root_folder, filename.replace(".tgz",""))
     
@@ -181,7 +155,7 @@ def install_cub(root_folder):
         import tarfile
     
         with tarfile.open(fullname, "r") as tar:
-            tar.extractall(root_folder)
+            safe_tar_extractall(tar, root_folder)
         # assert 0 == os.system(f"cd {dirname}/examples && "
         #             f"{nvcc_path} --cudart=shared -ccbin=\"{cc_path}\"  device/example_device_radix_sort.cu -O2 -I.. -std=c++14 -o test")
         # if core.get_device_count():
@@ -421,19 +395,18 @@ if setup_fake_cuda_lib:
 
 def install_cutt(root_folder):
     # Modified from: https://github.com/ap-hynninen/cutt
-    url = "https://codeload.github.com/Jittor/cutt/zip/v1.2"
-
-    filename = "cutt-1.2.zip"
+    asset = manifest.CUTT
+    url, filename = asset.url, asset.filename
     fullname = os.path.join(root_folder, filename)
     dirname = os.path.join(root_folder, filename.replace(".zip",""))
-    true_md5 = "14d0fd1132c8cd657dc3cf29ce4db931"
+    true_md5 = manifest.digest_of(asset)[1]
 
     if os.path.exists(fullname):
-        from jittor_utils.misc import calculate_md5
-        md5 = calculate_md5(fullname)
-        if md5 != true_md5:
+        from jittor_utils.misc import check_file_exist
+        if not check_file_exist(fullname, true_md5):
             os.remove(fullname)
-            shutil.rmtree(dirname)
+            if os.path.isdir(dirname):
+                shutil.rmtree(dirname)
     CUTT_PATH = os.environ.get("CUTT_PATH", "")
     if not os.path.isfile(os.path.join(cache_path, "libcutt"+so)) or CUTT_PATH:
         if CUTT_PATH:
@@ -584,17 +557,16 @@ def setup_cutlass():
 
 
 def install_nccl(root_folder):
-    url = "https://github.com/NVIDIA/nccl/archive/v2.8.4-1.tar.gz"
-    url = "https://codeload.github.com/NVIDIA/nccl/tar.gz/v2.8.4-1"
-
-    filename = "nccl.tgz"
+    asset = manifest.NCCL
+    url, filename = asset.url, asset.filename
     fullname = os.path.join(root_folder, filename)
     dirname = os.path.join(root_folder, "nccl-2.8.4-1")
-    true_md5 = "900666558c5bc43e0a5e84045b88a06f"
+    true_md5 = manifest.digest_of(asset)[1]
 
     if os.path.exists(fullname):
-        md5 = run_cmd('md5sum '+fullname).split()[0]
-        if md5 != true_md5:
+        # Was `md5sum` via the shell, which is neither on Windows nor on macOS.
+        from jittor_utils.misc import check_file_exist
+        if not check_file_exist(fullname, true_md5):
             os.remove(fullname)
             if os.path.isdir(dirname):
                 shutil.rmtree(dirname)
@@ -610,7 +582,7 @@ def install_nccl(root_folder):
 
         import tarfile
         with tarfile.open(fullname, "r") as tar:
-            tar.extractall(root_folder)
+            safe_tar_extractall(tar, root_folder)
 
         LOG.i("installing nccl...")
         arch_flag = ""

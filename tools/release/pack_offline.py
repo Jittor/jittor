@@ -15,35 +15,31 @@ import sys
 import urllib.request
 
 
-URLS = (
-    (
-        "https://cg.cs.tsinghua.edu.cn/jittor/assets/dnnl_lnx_2.2.0_cpu_gomp.tgz",
-        "dnnl_lnx_2.2.0_cpu_gomp.tgz",
-    ),
-    (
-        "https://cg.cs.tsinghua.edu.cn/jittor/assets/dnnl_lnx_2.2.0_cpu_gomp_aarch64.tgz",
-        "dnnl_lnx_2.2.0_cpu_gomp_aarch64.tgz",
-    ),
-    ("https://codeload.github.com/NVIDIA/cub/tar.gz/1.11.0", "cub-1.11.0.tgz"),
-    ("https://codeload.github.com/Jittor/cutt/zip/v1.2", "cutt-1.2.zip"),
-    ("https://codeload.github.com/NVIDIA/nccl/tar.gz/v2.8.4-1", "nccl.tgz"),
-    (
-        "https://storage.googleapis.com/cvdf-datasets/mnist/train-images-idx3-ubyte.gz",
-        "train-images-idx3-ubyte.gz",
-    ),
-    (
-        "https://storage.googleapis.com/cvdf-datasets/mnist/train-labels-idx1-ubyte.gz",
-        "train-labels-idx1-ubyte.gz",
-    ),
-    (
-        "https://storage.googleapis.com/cvdf-datasets/mnist/t10k-images-idx3-ubyte.gz",
-        "t10k-images-idx3-ubyte.gz",
-    ),
-    (
-        "https://storage.googleapis.com/cvdf-datasets/mnist/t10k-labels-idx1-ubyte.gz",
-        "t10k-labels-idx1-ubyte.gz",
-    ),
-)
+def _manifest():
+    """Load jittor_utils/manifest.py by path.
+
+    Importing ``jittor_utils`` would run its package __init__, which looks for
+    a C++ compiler and computes a cache path -- neither of which this script
+    needs, and both of which would make packaging require a build toolchain.
+    """
+    import importlib.util
+    path = _repo_root() / "python" / "jittor_utils" / "manifest.py"
+    spec = importlib.util.spec_from_file_location("jittor_manifest", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _urls():
+    """(url, filename) for everything an offline install may need.
+
+    This list used to be maintained here by hand and had drifted: it was
+    missing msvc.zip and every jtcuda archive, so the "offline" package still
+    went to the network on any Windows or driver-only CUDA machine.
+    """
+    return tuple((asset.url, asset.filename)
+                 for asset in _manifest().offline_assets())
+
 
 SETUP_SOURCE = """\
 from setuptools import setup
@@ -101,7 +97,8 @@ def main(argv=None):
 
     output_dir = args.output_dir.expanduser().resolve()
     print("offline package output:", output_dir)
-    for url, filename in URLS:
+    urls = _urls()
+    for url, filename in urls:
         print("download {} -> {}".format(url, filename))
     if args.dry_run:
         print("dry-run: no directories, downloads, or build artifacts created")
@@ -116,7 +113,7 @@ def main(argv=None):
     output_dir.mkdir(parents=True, exist_ok=True)
     package_root = _write_package_files(work_root)
 
-    for url, filename in URLS:
+    for url, filename in urls:
         destination = package_root / filename
         urllib.request.urlretrieve(url, str(destination))
 

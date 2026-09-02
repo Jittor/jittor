@@ -420,11 +420,27 @@ if os.environ.get("DISABLE_MULTIPROCESSING", '0') == '1':
 
 
 def download(url, filename):
+    """Fetch ``url`` to ``filename`` if it is not already there.
+
+    Not dead code -- tests/compiler/test_trace_var.py fetches its sample image
+    with it. There is no checksum to check for an arbitrary URL, but the two
+    bad habits are gone: "the file is bigger than 100 bytes so it must be
+    complete" (a truncated download passes that, and passes it forever), and
+    downloading onto the destination path so that an interrupted transfer
+    leaves exactly such a file.
+    """
     if os.path.isfile(filename):
-        if os.path.getsize(filename) > 100:
-            return
+        LOG.v("Already downloaded", filename)
+        return
     LOG.v("Downloading", url)
-    urllib.request.urlretrieve(url, filename)
+    part = filename + ".part"
+    try:
+        urllib.request.urlretrieve(url, part)
+    except Exception:
+        if os.path.isfile(part):
+            os.remove(part)
+        raise
+    os.replace(part, filename)
     LOG.v("Download finished")
 
 def get_jittor_version():
@@ -938,11 +954,15 @@ cache_path = find_cache_path()
 _py3_config_path = None
 _py3_include_path = None
 _py3_extension_suffix = None
-try:
-    import ssl
-    ssl._create_default_https_context = ssl._create_unverified_context
-except:
-    pass
+# NOTE: this used to be
+#     ssl._create_default_https_context = ssl._create_unverified_context
+# with no condition and no way to turn it off. That statement does not affect
+# jittor's downloads; it affects *every* use of stdlib ssl anywhere in the
+# process, including the user's own HTTPS calls made later, silently and for
+# the lifetime of the interpreter. A framework cannot make that decision on
+# an application's behalf. If certificate verification fails on your machine,
+# point SSL_CERT_FILE / SSL_CERT_DIR at your CA bundle (or install certifi),
+# which affects this process's downloads without disarming anyone else's.
 
 try:
     import sys

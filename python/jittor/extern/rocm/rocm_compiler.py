@@ -46,10 +46,12 @@ def install_rocm_jittor_core():
             os.remove(o_file)
         with tarfile.open(rocm_cache_gz_path, "r:gz") as tar:
             if (check_gcc_use_cxx11_abi()):
-                tar.extractall(rocm_compiler_home, members=[tar.getmember("rocm_cache_cxx11.o")])
+                safe_tar_extractall(tar, rocm_compiler_home,
+                                    members=[tar.getmember("rocm_cache_cxx11.o")])
                 o_files = [ os.path.join(rocm_compiler_home, "rocm_cache_cxx11.o") ]
             else:
-                tar.extractall(rocm_compiler_home, members=[tar.getmember("rocm_cache.o")])
+                safe_tar_extractall(tar, rocm_compiler_home,
+                                    members=[tar.getmember("rocm_cache.o")])
                 o_files = [ os.path.join(rocm_compiler_home, "rocm_cache.o") ]
     
     cc_files = sorted(glob.glob(rocm_compiler_home + "/**/*.cc", recursive=True))
