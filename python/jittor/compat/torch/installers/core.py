@@ -50,6 +50,38 @@ def install(ctx):
     g.compat_allow_stub = _compat_allow_stub
     g.compat_unimplemented_apis = _unimplemented_registry
     g.compat_approximate_apis = _approximate_registry
+
+    # Who owns what `torch.__version__` reports.
+    #
+    # `torch` IS this module, so `torch.__version__ = x` is `jittor.__version__
+    # = x`: it changes the framework's own version number for every user in the
+    # process. An adapter used to do exactly that (the vLLM one), which is why
+    # the boundary rules now forbid a staged adapter from assigning to any
+    # attribute of torch/jittor at all. The decision belongs here, in the layer
+    # that knows both numbers, and it is explicit, idempotent and reversible.
+    #
+    # By default `torch.__version__` keeps Jittor's version (that is what this
+    # module is) and the torch API level lives at `torch.__torch_version__` /
+    # `torch.version.__version__`. A caller that must present the API level --
+    # a library that gates features on `torch.__version__` and cannot be told
+    # otherwise -- asks for it here.
+    def _compat_report_torch_api_version(enable=True):
+        """Report the torch API level (not Jittor's) from torch.__version__.
+
+        Returns the value now reported. ``enable=False`` restores Jittor's own
+        version. Querying with no argument is not possible on purpose: read
+        ``torch.__version__`` for that.
+        """
+        native = getattr(g, "__jittor_version__", None) or _NATIVE_VERSION[0]
+        api = getattr(g, "__torch_version__", None)
+        if enable and api is not None:
+            g.__version__ = api
+        else:
+            g.__version__ = native
+        return g.__version__
+
+    _NATIVE_VERSION = (getattr(g, "__version__", None),)
+    g.compat_report_torch_api_version = _compat_report_torch_api_version
     if not hasattr(g, "_vj_native_load"):
         g._vj_native_load = getattr(g, "load", None)
     if not hasattr(g, "_vj_native_save"):

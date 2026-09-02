@@ -57,14 +57,20 @@ def install():
         return False
     import torch
 
-    # vLLM decides what it may use from `torch.__version__`. This shim keeps
-    # Jittor's own version there on purpose -- torch *is* jittor here, and the
-    # API level it implements is `torch.__torch_version__`. vLLM reads only the
-    # former, so say it here, where the decision to run vLLM has already been
-    # made, rather than changing what every other user of the shim sees.
-    api_version = getattr(torch, "__torch_version__", None)
-    if api_version is not None:
-        torch.__version__ = api_version
+    # vLLM decides what it may use from `torch.__version__`, and needs the
+    # torch API level there rather than Jittor's own version.
+    #
+    # This used to be `torch.__version__ = api_version`. `torch` IS jittor, so
+    # that statement rewrote the framework's version number for every user in
+    # the process -- an adapter restricted to public APIs silently changing
+    # what `jittor.__version__` says. Ask the compatibility layer to report the
+    # API level instead: the decision, and its reversal, belong to the layer
+    # that owns both numbers. Adapters must not assign to torch/jittor
+    # attributes at all; tests/structure/test_vllm_compat_structure.py enforces
+    # that.
+    report = getattr(torch, "compat_report_torch_api_version", None)
+    if report is not None:
+        report(True)
 
     for name in _EXTENSION_MODULES:
         if name not in sys.modules:
