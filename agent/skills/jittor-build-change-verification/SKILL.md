@@ -41,6 +41,24 @@ E="JITTOR_HOME=$JH TMPDIR=$TD PYTHONPATH=$WT/python nvcc_path=/usr/local/cuda/bi
 rm -rf $JH.cold $JH.conc
 ```
 
+## 0.5 一条命令跑完四种情形
+
+四节都手跑一遍要半小时，还容易漏掉判据。同目录下的 `verify_build_change.sh` 把四种
+情形连同它们的断言写成了一个脚本，退出码为 0 才算通过：
+
+```bash
+JITTOR_SRC=$WT JITTOR_HOME=$JH TMPDIR=$TD \
+PYTHON=<解释器> NVCC=/usr/local/cuda/bin/nvcc JOBS=4 \
+bash agent/skills/jittor-build-change-verification/verify_build_change.sh
+```
+
+**它会 `rm -rf $JITTOR_HOME`**，所以给它一个专用的缓存目录。每一步都写一份日志到
+`$TMPDIR/verify-build/`，失败时先看那里。它自己也断言了「导入的是不是本 worktree」，
+因为其余每一条断言在导错树的时候都是空的。
+
+脚本跑绿之后，下面各节仍然要读——它自动化的是**判据**，不是**判断**。本机一次完整
+运行的量级：冷缓存 71s，热缓存 2s，4 路并发冷启动 76s，切 flag 后每次 1-2s。
+
 ## 1. 冷缓存
 
 ```bash
@@ -156,6 +174,59 @@ sp.run((sys.executable, fname), env=environment, ...)
 
 判据：**任何以 `sys.executable` 起、又会 `import jittor` 的子进程，都必须显式带
 PYTHONPATH**。这条比"我的改动有没有效果"更狠：不带的话，跑的是两棵树的嵌合体。
+
+## 4.6 改了编译命令行：import 成功证明不了任何事
+
+`cache_compile` 会**解析编译命令行**来找源文件，规则是"不是选项的 token 就是源文件"。
+所以一个分成两段的 flag 会被当成文件名：
+
+```
+ -gencode arch=compute_89,code=[sm_89,compute_89]     # 两个 token
+ → Check failed: src.size()  Source read failed: arch=compute_89,code=...
+```
+
+**而 `import jittor` 全程是绿的**——核心走的是另一条编译路径，只有 JIT 算子经过
+`cache_compile`。所以改了 `nvcc_flags` / `cc_flags` 的组装之后，必须**真的编一个算子
+出来再看产物**：
+
+```bash
+$E python -c "
+import jittor as jt, jittor.compiler as c, glob, os
+jt.flags.use_cuda = 1
+(jt.random((256,256)) @ jt.random((256,256))).sum().item()      # 逼它编一个 CUDA kernel
+so = max(glob.glob(os.path.join(c.cache_path,'jit','*.so')), key=os.path.getmtime)
+print(so)"
+cuobjdump -lelf -lptx <那个 .so>        # cubin 有几个？PTX 有没有？
+```
+
+两条硬性要求：**每个 flag 必须是一个 token**（用 `--generate-code=...`，不要
+`-gencode ...`），**token 里不能有 shell 通配符**（命令要经过 shell，`[...]` 是通配
+模式）。
+
+## 4.7 子进程本来就该崩的用例，中间必须留一层 shell
+
+这条是 4.5 的直接陷阱。把 `getoutput(f"{sys.executable} {f}")` 改成
+`subprocess.run([sys.executable, f], env=...)` 是给子进程补 PYTHONPATH 的自然写法，
+但它同时**去掉了中间那层 shell**。如果这个子进程本来就应该 abort（例如用例测的正是
+kernel 里的 assert 触发时的报错），那么它现在是 pytest 的**直接子进程**，jittor 装在
+父进程里的 SIGCHLD handler 看到 `si_code=3`（CLD_DUMPED）就判定 OOM 并 quick exit：
+
+```
+[e ... log.cc:250] Caught SIGCHLD. Maybe out of memory ... si_status: 6 , quick exit
+```
+
+**整个 pytest 进程消失，一行输出都没有**，`-q` 下连 summary 都不打——看起来像是挂了，
+不像是失败。写法：保留 shell，同时传 env。
+
+```python
+subprocess.run("%s %s" % (sys.executable, path), shell=True, env=child_env(),
+               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+```
+
+判据：**用例跑完退出码非 0 但没有任何输出**，第一个要怀疑的就是这个。
+
+`tests/_helpers/child_process.py` 的 `child_env()` 是这两节共用的那份环境构造，新写
+子进程时直接用它，不要再抄一份。
 
 ## 5. 别被这些假象骗了
 
