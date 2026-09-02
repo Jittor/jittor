@@ -23,6 +23,9 @@ from jittor_utils import (
     run_cmd,
     find_exe,
     try_find_exe,
+    # There used to be a byte-identical copy of this in this module, shadowing
+    # the one here; fixing one meant missing the other.
+    env_or_try_find,
     cc_path,
     cc_type,
     cache_path,
@@ -77,11 +80,10 @@ def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="",
         # windows need xxxx.lib
         afile = output.rsplit('.', 1)[0] + ".lib"
         afile = os.path.join(cache_path, afile)
-        if cc_type != 'cl':
-            # initialize order in windows seems reversed
-            inputs = list(inputs[::-1])
-            link = link + f' -Wl,--export-all-symbols,--out-implib,"{afile}" '
-            
+        # The MinGW branch that used to live here read a name (`link`) that is
+        # defined neither in this function nor at module scope, so executing it
+        # raised NameError unconditionally: it has never run. Rather than leave
+        # code that cannot work, Windows builds go through cl.
     if not os.path.isabs(output):
         output = os.path.join(cache_path, output)
     # don't recompile object file in inputs
@@ -192,6 +194,39 @@ def gen_jit_tests():
     with open(os.path.join(cache_path, "gen", "jit_tests.h"), 'w', encoding='utf8') as f:
         f.write(jit_src)
 
+def strip_cxx_comments(src):
+    """Remove /* */ and // comments, so a scanner reads only live code.
+
+    ``gen_jit_flags`` regexes DEFINE_FLAG out of the sources. Without this,
+    a *commented-out* definition is indistinguishable from a real one: 27
+    lines of commented-out flags in src/utils/flags.cc gave twelve flags a
+    second definition, and which default and doc string reached ``jt.flags``
+    depended on the order glob happened to return the files in.
+    """
+    out = []
+    i = 0
+    n = len(src)
+    while i < n:
+        c = src[i]
+        if c == '"' or c == "'":
+            j = i + 1
+            while j < n and src[j] != c:
+                j += 2 if src[j] == '\\' else 1
+            out.append(src[i:min(j+1, n)])
+            i = j + 1
+        elif src.startswith("//", i):
+            j = src.find("\n", i)
+            i = n if j < 0 else j
+        elif src.startswith("/*", i):
+            j = src.find("*/", i+2)
+            i = n if j < 0 else j + 2
+            out.append(" ")
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
 def gen_jit_flags():
     all_src = glob.glob(jittor_path+"/src/**/*.cc", recursive=True)
     jit_declares = []
@@ -203,7 +238,7 @@ def gen_jit_flags():
     for src_name in all_src:
         with open(src_name, 'rb') as f:
             src = f.read().decode("utf8")
-        defs = re_def.findall(src)
+        defs = re_def.findall(strip_cxx_comments(src))
         for _, args in defs:
             args = args.split(",")
             type = args[0].strip()
@@ -955,15 +990,6 @@ def check_cache_compile():
             # missing key never blocks startup. The duplicate mapping above is
             # the cost, and the next run starts from a cached key.
             compile(cc_path, cc_flags+f" {opt_flags} ", files, output, True)
-
-def env_or_try_find(name, bname):
-    if name in os.environ:
-        path = os.environ[name]
-        if path != "":
-            version = jit_utils.get_version(path)
-            LOG.i(f"Found {bname}{version} at {path}")
-        return path
-    return try_find_exe(bname)
 
 def query_cuda_archs():
     """Compute capabilities of the GPUs on this machine, or None if unknown.

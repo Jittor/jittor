@@ -151,10 +151,10 @@ class CudaWheelStack:
     def find_library(self, name, component=None):
         component = component or LIBRARY_COMPONENTS.get(name)
         dirs = self.lib_dirs(component) if component else self.lib_dirs()
+        # No macOS branch: NVIDIA publishes no macOS CUDA wheels, so a stack
+        # object never exists there to look a .dylib up in.
         if os.name == "nt":
             patterns = (name + "64*.dll", name + "*.dll")
-        elif os.uname().sysname == "Darwin":
-            patterns = ("lib" + name + ".dylib", "lib" + name + ".*.dylib")
         else:
             patterns = ("lib" + name + ".so", "lib" + name + ".so.*")
         matches = []
