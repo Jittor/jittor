@@ -35,6 +35,7 @@ struct EventQueue {
         static void stop();
 
         Worker();
+        ~Worker();
 
         inline void run(Func func) {
             {

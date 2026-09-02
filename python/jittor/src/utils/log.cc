@@ -228,6 +228,37 @@ static inline void do_exit() {
     #endif
 }
 
+// Writing from a signal handler: write(2) only, no allocation, no stdio.
+//
+// The handlers below reach LOGe and std::cerr, neither of which is
+// async-signal-safe, and then leave through do_exit() -- quick_exit does not
+// flush stdio. A message written that way is composed and then thrown away, so
+// the process appears to vanish without saying anything. These two write
+// straight to fd 2, which survives quick_exit and cannot deadlock against a
+// malloc the signal interrupted.
+static void sig_write(const char* s) {
+    if (!s) return;
+    size_t n = 0;
+    while (s[n]) n++;
+    ssize_t written = write(2, s, n);
+    (void)written;
+}
+
+static void sig_write_int(int value) {
+    char buffer[24];
+    int i = sizeof(buffer);
+    bool negative = value < 0;
+    unsigned magnitude = negative ? -(unsigned)value : (unsigned)value;
+    if (!magnitude) buffer[--i] = '0';
+    while (magnitude) {
+        buffer[--i] = (char)('0' + magnitude % 10);
+        magnitude /= 10;
+    }
+    if (negative) buffer[--i] = '-';
+    ssize_t written = write(2, buffer + i, sizeof(buffer) - i);
+    (void)written;
+}
+
 void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
     if (signal == SIGQUIT) {
         if (_pid == getpid()) {
@@ -246,14 +277,31 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
         return;
     }
     if (signal == SIGCHLD) {
-        if (si->si_code != CLD_EXITED && si->si_status != SIGTERM && _pid == getpid()) {
-            LOGe << "Caught SIGCHLD. Maybe out of memory, please reduce your worker size." 
-                << "si_errno:" << si->si_errno 
-                << "si_code:" << si->si_code 
-                << "si_status:" << si->si_status
-                << ", quick exit";
-            exited = true;
-            do_exit();
+        // A child died from a signal rather than exiting.
+        //
+        // This used to quick_exit the whole process, which is wrong twice
+        // over. It fired for ANY child, including every child jittor did not
+        // start -- a test's deliberately crashing subprocess, an embedding
+        // host's own children -- so an unrelated child's segfault killed the
+        // parent. And the explanation never arrived: LOGe buffers, quick_exit
+        // does not flush, so what the user saw was the parent disappearing in
+        // silence. That is exactly backwards, because a child dying by signal
+        // is the case that most needs to be reported.
+        //
+        // Report it and return. Whoever started the child is already checking:
+        // run_cmd below CHECKs the return code (with the overcommit/OOM hint
+        // this message used to carry), and every other launch site is Python
+        // code with the child's returncode in hand. An out-of-memory compiler
+        // still fails loudly -- now with a traceback pointing at the command.
+        if (si->si_code != CLD_EXITED && si->si_status != SIGTERM &&
+            _pid == getpid()) {
+            sig_write("[jittor] a child process was killed by signal ");
+            sig_write_int(si->si_status);
+            sig_write(" (si_code=");
+            sig_write_int(si->si_code);
+            sig_write("). If it was a compiler, this is usually out of memory:"
+                      " reduce the worker size"
+                      " (use_parallel_op_compiler) or raise the memory limit.\n");
         }
         return;
     }

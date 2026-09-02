@@ -40,6 +40,25 @@ EventQueue::Worker::Worker() : thread(EventQueue::Worker::start) {
     cleanup_callback.push_back(&EventQueue::Worker::stop);
 }
 
+EventQueue::Worker::~Worker() {
+    // `event_queue` is a global, so this runs during static destruction. The
+    // worker is normally stopped before that, through cleanup_callback --
+    // core.cleanup() from python's atexit, or log_exiting(). Neither of those
+    // happens when `import jittor` raises partway through: the module never
+    // finishes, nothing registers the atexit, and the interpreter still tears
+    // down the statics of the .so it did load. ~std::thread then found a
+    // joinable thread and called std::terminate, so a failed import ended in
+    // "terminate called without an active exception" and SIGABRT -- and with
+    // the SIGCHLD handler above, a parent process watching that import saw
+    // nothing at all.
+    //
+    // stop() leaves the thread unjoinable, so this is a no-op on the normal
+    // path and only does the work when cleanup never ran.
+    if (!thread.joinable()) return;
+    run(nullptr);
+    thread.join();
+}
+
 void EventQueue::worker_caller() {
     int status = OK;
     try {
