@@ -1056,9 +1056,14 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                     return True
         return False
 
-    def _backward(self, gradient=None, retain_graph=False, create_graph=False, **kw):
-        # torch defaults retain_graph to create_graph. In the common
-        # loss.backward() case both are false, so the graph must be freed.
+    def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
+        # torch's signature is (gradient=None, retain_graph=None,
+        # create_graph=False, inputs=None) and retain_graph defaults to
+        # create_graph. The default here was False, not None, so the line below
+        # could never see None: `loss.backward(create_graph=True)` freed the
+        # graph anyway and the second-order backward it was asked for then
+        # failed. In the common loss.backward() case both are false, so the
+        # graph is still freed.
         retain_graph = bool(create_graph) if retain_graph is None else bool(retain_graph)
         # torch's `gradient` is the vector of the vector-Jacobian product:
         # y.backward(v) computes d(sum(y*v))/dx. It used to be accepted and

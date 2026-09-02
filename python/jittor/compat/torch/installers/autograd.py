@@ -62,10 +62,36 @@ def _install_autograd_function(g):
         def save_for_backward(self, *tensors):
             # torch stores a tuple; a single un-tupled call still yields a tuple
             self._saved_tensors = tuple(tensors)
+            # torch also records each saved tensor's version counter and raises
+            # if the tensor was modified in place before backward reads it.
+            # Without that, an in-place edit between forward and backward is
+            # used silently: the backward computes with the NEW values and
+            # returns a gradient for a forward that never happened.
+            # jittor has no version counter, but Var.id is one in practice --
+            # it is stable across reads, sync and numpy(), and changes on
+            # update()/assign()/setitem/augmented assignment.
+            #
+            # Scope: jittor's Function.__call__ tapes its inputs, so what a
+            # forward saves is the taped Var, not the caller's object. This
+            # therefore catches an in-place edit of the tensor the forward
+            # actually saved (the usual case: an intermediate computed inside
+            # forward), not an edit of the caller's original made afterwards.
+            self._saved_versions = tuple(
+                (t.id if isinstance(t, jt.Var) else None) for t in tensors)
         Fn.save_for_backward = save_for_backward
     if "saved_tensors" not in getattr(Fn, "__dict__", {}):
         def _saved_tensors(self):
-            return getattr(self, "_saved_tensors", ())
+            saved = getattr(self, "_saved_tensors", ())
+            versions = getattr(self, "_saved_versions", None)
+            if versions:
+                for tensor, version in zip(saved, versions):
+                    if isinstance(tensor, jt.Var) and version is not None \
+                            and tensor.id != version:
+                        raise RuntimeError(
+                            "one of the variables needed for gradient "
+                            "computation has been modified by an inplace "
+                            "operation")
+            return saved
         Fn.saved_tensors = property(_saved_tensors)
     # torch's autograd engine reduces (sums) each grad a Function.backward returns
     # down to the shape of the corresponding *input* whenever forward broadcast that
@@ -91,6 +117,20 @@ def _install_autograd_function(g):
         g_items = 1
         for s in gshape: g_items *= int(s)
         if tgt_items == 0 or (tgt_items != g_items and g_items % max(tgt_items, 1) != 0):
+            # The returned grad cannot be reduced to this input's shape by any
+            # broadcast rule, so it is almost certainly a mistake in the
+            # Function's backward. Substituting zeros keeps the 3DGS-style
+            # placeholder case working, but doing it SILENTLY hides a genuinely
+            # wrong backward -- the gradient just becomes zero and the model
+            # quietly stops learning through that input.
+            import warnings as _warnings
+            _warnings.warn(
+                "a custom autograd Function returned a gradient of shape %s "
+                "for an input of shape %s; the element counts (%d vs %d) are "
+                "not broadcast-compatible, so a zero gradient is used for that "
+                "input. Check the backward's return order."
+                % (tuple(gshape), tuple(shape), g_items, tgt_items),
+                RuntimeWarning, stacklevel=3)
             return jt.zeros([int(s) for s in shape], dtype=grad.dtype)
         # drop leading dims that the input doesn't have (broadcast prepended them)
         extra = len(gshape) - len(shape)
@@ -119,11 +159,21 @@ def _install_autograd_function(g):
                 (tuple(v.shape) if isinstance(v, jt.Var) else None) for v in args]
         except Exception:
             self._fwd_input_shapes = None
-        # torch.autograd.Function exposes `ctx.needs_input_grad`: a tuple with one
-        # bool per positional forward arg, True iff that arg is a tensor that
-        # requires grad. Custom Functions branch on it (e.g. flex_gemm spconv:
-        # `need_grad = any(ctx.needs_input_grad)`). A non-Var arg, or a Var with
-        # stop-grad, contributes False -- matching torch.
+        # torch.autograd.Function exposes `ctx.needs_input_grad`: one bool per
+        # argument PASSED to apply(), True iff it is a tensor requiring grad.
+        # Custom Functions branch on it (e.g. flex_gemm spconv:
+        # `need_grad = any(ctx.needs_input_grad)`).
+        #
+        # Checked against real torch 2.12: `apply(a, b, 3.0)` gives three flags
+        # and `apply(a, b)` on a `forward(ctx, a, b, c=1.0)` gives *two* -- the
+        # tuple follows the call, not the signature -- and `apply()` rejects
+        # keyword arguments outright. The positional tuple below therefore
+        # already matches torch; what did not match was the failure mode of a
+        # keyword call, which fell through to jittor's Function.__call__ and
+        # raised "Function.__call__() got an unexpected keyword argument".
+        # Reject it here with torch's own wording instead.
+        if kw:
+            raise TypeError("apply() takes no keyword arguments")
         try:
             self.needs_input_grad = tuple(
                 bool(isinstance(v, jt.Var) and v.requires_grad) for v in args)
@@ -230,10 +280,25 @@ def _install_autograd(g, registry=None):
         outs = _as_list(outputs)
         ins = _as_list(inputs)
         if grad_outputs is None:
+            # torch: "grad can be implicitly created only for scalar outputs".
+            # This used to sum every output element, i.e. silently assume a
+            # grad_output of ones -- a different vector-Jacobian product from
+            # the one the caller forgot to specify, with no error.
+            non_scalar = [tuple(o.shape) for o in outs
+                          if isinstance(o, _jt.Var) and o.numel() != 1]
+            if non_scalar:
+                raise RuntimeError(
+                    "grad can be implicitly created only for scalar outputs "
+                    "(got output shape(s) %s); pass grad_outputs="
+                    % ", ".join(str(shape) for shape in non_scalar))
             loss = outs[0].sum() if len(outs) == 1 else sum(o.sum() for o in outs)
         else:
             gos = _as_list(grad_outputs)
             loss = sum((o * w).sum() for o, w in zip(outs, gos))
+        # torch keeps these two separate: retain_graph decides whether the graph
+        # survives the call, create_graph decides whether the RETURNED grads are
+        # themselves differentiable. Folding create_graph into retain_graph made
+        # create_graph=False still hand back differentiable tensors.
         rg = bool(create_graph) if retain_graph is None else bool(retain_graph)
         if materialize_grads and allow_unused is False:
             raise ValueError(
@@ -254,6 +319,18 @@ def _install_autograd(g, registry=None):
             raise RuntimeError(
                 "One of the differentiated Tensors appears to not have been "
                 "used in the graph. Set allow_unused=True if this is desired.")
+        if not create_graph:
+            # detach() severs the graph edge but leaves jittor's requires_grad
+            # flag set, and torch reports requires_grad=False here; clear it on
+            # the detached copy so the *returned* tensor answers like torch's
+            # without touching the graph the caller may still be using.
+            detached = []
+            for g in gs:
+                if isinstance(g, _jt.Var):
+                    g = g.detach()
+                    g.stop_grad()
+                detached.append(g)
+            gs = detached
         return tuple(gs)
     autograd.grad = grad
 
