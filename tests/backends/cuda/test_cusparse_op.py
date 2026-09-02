@@ -55,24 +55,29 @@ class TestSpmmCsrOp(unittest.TestCase):
         ], dtype="float16")
         np.testing.assert_allclose(output.data, expected_output, atol=1e-5)
 
-    # @unittest.skipIf(not jt.has_cuda, "No CUDA support, skipping test")
-    # @jt.flag_scope(use_cuda=1, lazy_execution=0)
-    # def test_spmm_csr_forward_float64_int32(self):
-    #     x = jt.array([[3.0, 2.0, 1.0], [3.0, 2.0, 1.0], [3.0, 2.0, 1.0]], dtype="float64")
-    #     col_indices = jt.array([0, 1, 1, 2], dtype="int32")
-    #     row_offset = jt.array([0, 2, 3, 4], dtype="int32")
-    #     csr_weight = jt.array([3.0, 1.0, 4.0, 2.0], dtype="float64")
-    #     output = jt.zeros((3, 3), dtype="float64")
-    #     cusparse_ops.cusparse_spmmcsr(
-    #         output, x, col_indices, csr_weight, row_offset,
-    #         3, 3,False, False
-    #     ).fetch_sync()
-    #     expected_output = np.array([
-    #         [12.0, 8.0, 4.0],
-    #         [12.0, 8.0, 4.0],
-    #         [6.0, 4.0, 2.0]
-    #     ], dtype="float64")
-    #     np.testing.assert_allclose(output.data, expected_output, atol=1e-5)
+    @jt.flag_scope(use_cuda=1, lazy_execution=0)
+    def test_spmm_csr_forward_float64_int32(self):
+        # Commented out rather than fixed until 6.B08: the op passed
+        # CUDA_R_32F and float alpha/beta whatever the dtype was, so this case
+        # was computed in single precision and scaled by whatever eight bytes
+        # started at &alpha. atol is tight on purpose -- 1e-5 would have
+        # passed for an fp32 accumulation too.
+        x = jt.array([[3.0, 2.0, 1.0], [3.0, 2.0, 1.0], [3.0, 2.0, 1.0]], dtype="float64")
+        col_indices = jt.array([0, 1, 1, 2], dtype="int32")
+        row_offset = jt.array([0, 2, 3, 4], dtype="int32")
+        csr_weight = jt.array([3.0, 1.0, 4.0, 2.0], dtype="float64")
+        output = jt.zeros((3, 3), dtype="float64")
+        cusparse_ops.cusparse_spmmcsr(
+            output, x, col_indices, csr_weight, row_offset,
+            3, 3,False, False
+        ).fetch_sync()
+        assert str(output.dtype) == "float64", output.dtype
+        expected_output = np.array([
+            [12.0, 8.0, 4.0],
+            [12.0, 8.0, 4.0],
+            [6.0, 4.0, 2.0]
+        ], dtype="float64")
+        np.testing.assert_allclose(output.data, expected_output, atol=1e-12)
 
     
     @jt.flag_scope(use_cuda=1, lazy_execution=0)
