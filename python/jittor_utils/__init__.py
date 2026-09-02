@@ -27,6 +27,8 @@ if platform.system() == 'Darwin':
 from pathlib import Path
 import json
 
+from . import probe
+
 
 def _user_config_file():
     src_path = os.path.join(str(Path.home()), ".cache", "jittor")
@@ -537,6 +539,58 @@ def _write_build_config(path, config):
 lock_path = None
 
 
+def _git_head_file(path):
+    """The file whose change can change the branch name, or None.
+
+    In a linked worktree ``.git`` is a *file* naming the real git directory,
+    and HEAD lives there, not next to the sources.
+    """
+    path = os.path.abspath(path)
+    while True:
+        candidate = os.path.join(path, ".git")
+        if os.path.isdir(candidate):
+            return os.path.join(candidate, "HEAD")
+        if os.path.isfile(candidate):
+            try:
+                with open(candidate) as f:
+                    line = f.readline().strip()
+            except OSError:
+                return None
+            if not line.startswith("gitdir:"):
+                return None
+            gitdir = line[len("gitdir:"):].strip()
+            if not os.path.isabs(gitdir):
+                gitdir = os.path.join(path, gitdir)
+            return os.path.join(gitdir, "HEAD")
+        parent = os.path.dirname(path)
+        if parent == path:
+            return None
+        path = parent
+
+
+def _read_git_branch(cwd):
+    r = sp.run(["git", "branch"], cwd=cwd, stdout=sp.PIPE, stderr=sp.PIPE)
+    assert r.returncode == 0
+    bs = r.stdout.decode().splitlines()
+    for b in bs:
+        if b.startswith("* "): break
+
+    return b[2:]
+
+
+def get_git_branch(cwd):
+    """Branch of the checkout holding ``cwd``, remembered against its HEAD.
+
+    Outside a checkout there is nothing to invalidate against, so the answer is
+    computed every time rather than cached wrongly.
+    """
+    head = _git_head_file(cwd)
+    if head is None:
+        return _read_git_branch(cwd)
+    return probe.cached("git_branch:" + os.path.abspath(cwd), [head],
+                        lambda: _read_git_branch(cwd))
+
+
 def find_cache_path():
     global lock_path
     path = home()
@@ -561,15 +615,7 @@ def find_cache_path():
         if "cache_name" in os.environ:
             cache_name = os.environ["cache_name"]
         else:
-            # try to get branch name from git
-            r = sp.run(["git","branch"], cwd=os.path.dirname(__file__), stdout=sp.PIPE,
-                   stderr=sp.PIPE)
-            assert r.returncode == 0
-            bs = r.stdout.decode().splitlines()
-            for b in bs:
-                if b.startswith("* "): break
-            
-            cache_name = b[2:]
+            cache_name = get_git_branch(os.path.dirname(__file__))
         for c in " (){}": cache_name = cache_name.replace(c, "_")
     except:
         pass
@@ -589,7 +635,24 @@ def find_cache_path():
         sys.path.append(path)
     return path
 
+def resolve_exe(name):
+    """Absolute path of the tool a probe is about, so it can be stamped."""
+    if os.path.sep in name or (os.altsep and os.altsep in name):
+        return name
+    return shutil.which(name) or name
+
+
 def get_version(output):
+    """``--version`` of a tool, remembered until that tool's file changes.
+
+    Six of these were ``nvcc --version``, one per CUDA library, every import.
+    """
+    tool = resolve_exe(output)
+    return probe.cached("version:" + tool, [tool],
+                        lambda: _read_version(output))
+
+
+def _read_version(output):
     if output.endswith("mpicc"):
         version = run_cmd(f"\"{output}\" --showme:version")
     elif os.name == 'nt' and (
@@ -739,7 +802,10 @@ def get_py3_include_path():
             raise RuntimeError("Python include path not found. please report this bug to us.")
         _py3_include_path = '-I"' + include_path + '"'
     else:
-        _py3_include_path = run_cmd(get_py3_config_path()+" --includes")
+        config_path = get_py3_config_path()
+        _py3_include_path = probe.cached(
+            "py3_includes:" + config_path, [config_path, sys.executable],
+            lambda: run_cmd(config_path+" --includes"))
         
         # macOS (>=13) is shiped with a fake python3-config which outputs wrong include paths
         # check the include paths and fix them
@@ -763,7 +829,11 @@ def get_py3_extension_suffix():
         # Windows
         _py3_extension_suffix = f".cp3{sys.version_info.minor}-win_amd64.pyd"
     else:
-        _py3_extension_suffix = run_cmd(get_py3_config_path()+" --extension-suffix")
+        config_path = get_py3_config_path()
+        _py3_extension_suffix = probe.cached(
+            "py3_extension_suffix:" + config_path,
+            [config_path, sys.executable],
+            lambda: run_cmd(config_path+" --extension-suffix"))
     return _py3_extension_suffix
 
 def get_total_mem():

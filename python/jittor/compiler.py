@@ -965,7 +965,24 @@ def query_cuda_archs():
     stray "Create lock file: ..." produced a cache directory named after that
     message, and a second process that did not log it built into a different
     one.
+
+    The answer is cached against the driver version, so the usual import does
+    not start a second interpreter at all. That child is also the one that has
+    deadlocked: it was started while this process held the build lock, and
+    anything it did that needed the lock waited for a holder that was waiting
+    for it.
     """
+    driver = ""
+    try:
+        with open("/proc/driver/nvidia/version") as f:
+            driver = f.readline().strip()
+    except OSError:
+        pass
+    return jit_utils.probe.cached(
+        "cuda_archs", [], lambda: _read_cuda_archs(), extra=driver)
+
+
+def _read_cuda_archs():
     try:
         child = sp.run(
             [sys.executable, "-m", "jittor_utils.query_cuda_cc"],

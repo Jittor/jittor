@@ -892,8 +892,12 @@ def setup_mpi():
         return
 
     global mpi_compile_flags, mpi_link_flags, mpi_flags
-    mpi_compile_flags = run_cmd(mpicc_path+" --showme:compile")
-    mpi_link_flags = run_cmd(mpicc_path+" --showme:link")
+    mpi_compile_flags = jit_utils.probe.cached(
+        "mpi_compile_flags:" + mpicc_path, [mpicc_path],
+        lambda: run_cmd(mpicc_path+" --showme:compile"))
+    mpi_link_flags = jit_utils.probe.cached(
+        "mpi_link_flags:" + mpicc_path, [mpicc_path],
+        lambda: run_cmd(mpicc_path+" --showme:link"))
     mpi_flags = mpi_compile_flags + " " + mpi_link_flags
     LOG.v("mpi_flags: "+mpi_flags)
 

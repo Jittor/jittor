@@ -57,8 +57,24 @@ def get_cuda_driver_win():
         return None
 
 def get_cuda_driver():
+    """The driver's CUDA version, cached against the driver itself.
+
+    ``nvidia-smi`` takes a noticeable fraction of a second and is started on
+    every import on every machine that has a GPU.
+    """
     if os.name == 'nt':
         return get_cuda_driver_win()
+    driver = ""
+    try:
+        with open("/proc/driver/nvidia/version") as f:
+            driver = f.readline().strip()
+    except OSError:
+        pass
+    return jit_utils.probe.cached("cuda_driver", [], _read_cuda_driver,
+                                  extra=driver)
+
+
+def _read_cuda_driver():
     ret, out = sp.getstatusoutput("nvidia-smi -q -u")
     if ret != 0: return None
     try:
