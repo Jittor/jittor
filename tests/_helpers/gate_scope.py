@@ -43,6 +43,17 @@ TEST_ROOT = "tests"
 EXCLUDED = ()
 
 
+#: ``(path, reason)`` -- a file a gate runs but that is expected to execute no
+#: case there. This is the *narrow* list: "nothing to do on this hardware" is a
+#: fact about the machine, and the reason has to say which machine.
+#:
+#: A gate entry that only ever skips looks exactly like one that passes. That is
+#: how 227 operators' backward formulas stayed unverified in three green gates
+#: (0.01). Under ``JITTOR_TEST_REQUIRE_EXECUTION=1`` an entry has to execute a
+#: case or appear here.
+EXECUTES_NOTHING = ()
+
+
 def excluded_paths():
     return tuple(path for path, _reason in EXCLUDED)
 

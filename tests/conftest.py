@@ -229,6 +229,7 @@ def pytest_sessionstart(session):
 def pytest_collection_modifyitems(config, items):
     network_enabled = _network_is_enabled() or config.getoption("--network")
     for item in items:
+        _FILES_WITH_ITEMS.add(_relative_to_repo(item.fspath))
         try:
             relative = Path(str(item.fspath)).resolve().relative_to(TEST_ROOT).parts
         except ValueError:
@@ -357,6 +358,7 @@ def report_runtime_state_left_behind(request):
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    _report_files_that_executed_nothing(terminalreporter, config)
     if not _STATE_LEAKS:
         return
     terminalreporter.write_sep("=", "runtime state left behind by a test file")
@@ -375,3 +377,123 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
             for path, changes in _STATE_LEAKS:
                 for change in changes:
                     handle.write("%s\t%s\n" % (path, change))
+
+
+# --------------------------------------------------------------------------
+#  Per-file execution accounting (0.18)
+# --------------------------------------------------------------------------
+#: {relative path: {"executed": n, "skipped": n}} for this session.
+_FILE_OUTCOMES = {}
+_FILES_WITH_ITEMS = set()
+
+
+def _relative_to_repo(path):
+    try:
+        return Path(str(path)).resolve().relative_to(TEST_ROOT.parent).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def pytest_runtest_logreport(report):
+    """Count what each test *file* actually executed.
+
+    "The gate is green" and "the gate ran nothing" produce identical output, and
+    this repository has already paid for that: the OpInfo backward battery --
+    227 operators' derivative formulas -- instantiated zero cases in all three
+    gates while all three reported success. Counting per file makes the
+    difference visible.
+    """
+    relative = _relative_to_repo(report.fspath)
+    record = _FILE_OUTCOMES.setdefault(relative, {"executed": 0, "skipped": 0})
+    if report.when == "call" and not report.skipped:
+        record["executed"] += 1
+    elif report.skipped and report.when in ("setup", "call"):
+        record["skipped"] += 1
+
+
+def _files_that_executed_nothing():
+    return sorted(
+        path for path in _FILES_WITH_ITEMS
+        if _FILE_OUTCOMES.get(path, {}).get("executed", 0) == 0
+    )
+
+
+def _files_that_collected_nothing(config):
+    """Selected test files that produced no test at all.
+
+    Distinct from "everything skipped": a file that generates zero cases never
+    reaches a skip either, so it is invisible in every count pytest prints.
+    """
+    try:
+        from _helpers.gate_scope import selected_files
+
+        arguments = [str(argument) for argument in config.args]
+        if not arguments:
+            return []
+        selected = selected_files(TEST_ROOT.parent, arguments + [
+            "--ignore=" + item for item in getattr(config.option, "ignore", []) or []
+        ])
+    except Exception:
+        return []
+    return sorted(selected - _FILES_WITH_ITEMS)
+
+
+def _execution_exemptions():
+    """{path: reason} for files a gate may legitimately never execute."""
+    try:
+        from _helpers.gate_scope import EXECUTES_NOTHING
+
+        return dict(EXECUTES_NOTHING)
+    except Exception:
+        return {}
+
+
+def _requires_execution():
+    value = os.environ.get("JITTOR_TEST_REQUIRE_EXECUTION", "").strip().lower()
+    return value in ("1", "true", "yes", "on")
+
+
+def _report_files_that_executed_nothing(terminalreporter, config):
+    silent = _files_that_executed_nothing()
+    empty = _files_that_collected_nothing(config)
+    if not silent and not empty:
+        return
+    exemptions = _execution_exemptions()
+    terminalreporter.write_sep("=", "files this session proved nothing about")
+    for path in empty:
+        terminalreporter.write_line(
+            "%s  collected 0 tests%s"
+            % (path, _exemption_note(path, exemptions)))
+    for path in silent:
+        skipped = _FILE_OUTCOMES.get(path, {}).get("skipped", 0)
+        terminalreporter.write_line(
+            "%s  %d skipped, 0 executed%s"
+            % (path, skipped, _exemption_note(path, exemptions)))
+    if not _requires_execution():
+        terminalreporter.write_line(
+            "Reported only. Set JITTOR_TEST_REQUIRE_EXECUTION=1 (the gates do) "
+            "to make an unexplained entry fail the run.")
+
+
+def _exemption_note(path, exemptions):
+    reason = exemptions.get(path)
+    return "  -- expected here: " + reason if reason else ""
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Fail a gate whose entry never executed a case and never said why.
+
+    A gate entry that only ever skips is indistinguishable from one that passes,
+    which is how 227 operators' backward formulas went unverified in three green
+    gates. Under ``JITTOR_TEST_REQUIRE_EXECUTION=1`` an entry has to either run
+    something or be listed in ``gate_scope.EXECUTES_NOTHING`` with a reason.
+    """
+    if not _requires_execution():
+        return
+    exemptions = _execution_exemptions()
+    unexplained = [
+        path for path in _files_that_executed_nothing() + _files_that_collected_nothing(session.config)
+        if path not in exemptions
+    ]
+    if unexplained:
+        session.exitstatus = 1
