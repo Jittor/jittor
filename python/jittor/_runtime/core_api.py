@@ -2205,35 +2205,66 @@ Arguments of hook are defined as::
         '''
         self.load_parameters(load(path))
 
-    def eval(self):
-        ''' Sets the module in evaluation mode. '''
+    def _set_training(self, is_train):
+        """Flip ``is_train`` on this module and every sub-module.
+
+        That is ALL train()/eval() do, as in torch: the flag decides what
+        BatchNorm and Dropout do, and nothing else. Freezing is a separate
+        thing, spelled ``requires_grad``.
+
+        ``eval()`` used to also call ``stop_grad()`` on every parameter and
+        remember, in a dict keyed by ``id(p)``, which ones ``train()`` should
+        later ``start_grad()``. Three things were wrong with that, all silent:
+
+        * **torch's eval() does not freeze anything.** Evaluating a loss with
+          gradients (adversarial examples, Grad-CAM, meta-learning inner loops,
+          any "eval then backprop" script ported from torch) got no gradient at
+          all after ``model.eval()``, with nothing said. And ``stop_grad()`` is
+          documented in ``var_holder.h`` as *permanent* -- ``start_grad()``
+          does not undo it, it detaches and swaps in a NEW Var node.
+
+        * **``id(p)`` is not an identity.** CPython reuses the id of a
+          collected object, so after a Var was replaced (a dtype cast, a
+          checkpoint load -- ``from_pretrained`` does both) or garbage
+          collected, ``train()`` looked up an unrelated Var's entry and
+          restored the wrong answer. The dict also only ever grew.
+
+        * **The backup lives on whichever module you called eval() on.**
+          ``child.eval()`` then ``parent.train()`` found no backup on the
+          parent, so the child's parameters stayed frozen for the rest of the
+          process -- the model trained, that sub-tree did not, and the loss
+          curve was the only hint.
+
+        Deliberate freezing was destroyed too: ``requires_grad = False`` is a
+        different, reversible flag, but ``eval()``'s ``stop_grad()`` clears it
+        and records "was trainable", so an eval/train round trip silently
+        UNFROZE a parameter the caller had frozen on purpose.
+
+        For the memory that the old ``eval()`` incidentally saved, use what
+        torch users use: ``with jt.no_grad():`` around inference.
+        """
         def callback(parents, k, v, n):
             if isinstance(v, Module):
-                v.is_train = False
+                v.is_train = is_train
         self.dfs([], None, callback, None)
-
-        # backup stop grad or not
-        if not hasattr(self, "backup_grad_state"):
-            self.backup_grad_state = {}
-        for p in self.parameters():
-            if id(p) not in self.backup_grad_state:
-                self.backup_grad_state[id(p)] = not p.is_stop_grad()
-            p.stop_grad()
         return self
+
+    def eval(self):
+        ''' Sets the module in evaluation mode.
+
+        Only the training flag changes -- BatchNorm switches to its running
+        statistics and Dropout becomes a no-op. Parameters are NOT frozen; use
+        ``requires_grad_(False)`` to freeze, or ``with jt.no_grad():`` to skip
+        building the graph. See ``_set_training``. '''
+        return self._set_training(False)
 
     def train(self):
-        ''' Sets the module in training mode. '''
-        def callback(parents, k, v, n):
-            if isinstance(v, Module):
-                v.is_train = True
-        self.dfs([], None, callback, None)
+        ''' Sets the module in training mode.
 
-        # backup stop grad or not
-        if hasattr(self, "backup_grad_state"):
-            for p in self.parameters():
-                if id(p) in self.backup_grad_state and self.backup_grad_state[id(p)]:
-                    p.start_grad()
-        return self
+        The mirror of ``eval()``: only the training flag changes. It does not
+        unfreeze anything, so a parameter frozen with ``requires_grad_(False)``
+        stays frozen. See ``_set_training``. '''
+        return self._set_training(True)
 
     def is_training(self) -> bool:
         ''' Returns whether the module is in training mode.'''
