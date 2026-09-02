@@ -3,11 +3,64 @@
 一行一个任务，与 [refactor-plan.md](refactor-plan.md) 的编号对应。领任务把状态改成「进行中」并写名字，
 完成改成「已合并」并填提交号；推送冲突说明别人先领了。状态只有四种：待领 / 进行中 / 已合并 / 并入 X。
 
+## 起点已知失败清单（归责之前先减掉这些）
+
+**任何失败在算成回归之前，先确认它在分支起点是否也失败。** 分支起点是
+`9eb696d9`（`origin/2.0`，即 `merge-base origin/2.0 origin/2.0-refactor`）。
+没有这份清单，会把继承来的失败当成新回归、把责任安到无辜的提交上。
+
+### A. 分支起点就存在的失败——不是任何 agent 引入的
+
+| 用例 | 症状 |
+| --- | --- |
+| `tests/compat/torch/test_torch_compat.py` | `RandomOp` 子进程段错误 |
+
+（这份表正在用一棵钉在 `9eb696d9` 的只读 worktree 实测补全，跑完会把失败 nodeid 逐条列全。）
+
+### B. 已归责、修复进行中——不要重复归因
+
+| 用例 | 引入提交 | 责任 |
+| --- | --- | --- |
+| `tests/compat/torch/test_torch_compat_interpolate.py::TestInterpolateBicubic::test_bicubic_constant_stays_constant` | `13ac1d14` [6.C05] | coreops，正改成变长编码（原属 3.02） |
+| `tests/structure/test_runtime_composition_structure.py::test_moved_scope_state_stays_synchronized_with_the_root` | `956c4b23` [6.B15] | dist，同时会重写该用例本身 |
+
+### C. 先看这条：把 `tests/compat/torch` 和原生目录写在同一条 pytest 命令里，会让原生用例整片变红
+
+这是**跑法造成的假失败**，不是回归，也不在上面 A 表里。`tests/conftest.py`
+的 `_select_torch_mode_for_test_process()` 按 `sys.argv` 选模式：
+
+- 选择「宽」（只写 `tests` 或 `.`）→ 原生模式；
+- 选择「窄」且其中**任何一个**路径命中 `TORCH_MODE_PATHS`（含 `tests/compat/torch`）
+  → 给**整个进程**设上 `JITTOR_TORCH_SHIM=1`。
+
+所以
+
+```bash
+pytest tests/core tests/nn tests/optim tests/structure tests/distributed tests/compat/torch
+```
+
+会把 `tests/core`、`tests/nn`、`tests/optim` 全部拖进 torch shim 模式跑。conftest 自己的注释
+写得很清楚：torch 模式是进程全局的，会改掉惰性求值、归约默认值和梯度语义，
+**「switching the whole tree into it made ordinary native tests fail」**。
+
+**正确跑法是拆成两条命令**，和门禁的划分一致：
+
+```bash
+JITTOR_TORCH_SHIM=0 pytest tests/core tests/nn tests/optim tests/distributed   # 原生
+JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  # shim
+```
+
+拿着一把 F 又不确定来源时，**先按这条拆开重跑**，再来对 A 表。
+
 ## 门禁 agent 的最新结果
+
+三套门禁的判据不是 `failed == 0`，而是：`failed` 不超过上面 A 表，且 `passed` **不下降**。
+整改期间每个 agent 都在加测试，所以 passed 一路上涨是正常的，起点那行的数是下界不是等号。
 
 | 提交 | 原生 | CPU torch | CUDA | 失败用例 / 责任任务 |
 | --- | --- | --- | --- | --- |
-| 0e5e031b（分支起点） | 775 passed | 1595 passed | 进行中 | — |
+| 9eb696d9（分支起点） | 775 passed / 765 skipped | 1595 passed / 285 skipped | 574 passed / 9 skipped / 0 failed | — |
+| `70d97137` | **822 passed / 816 skipped / 0 failed**（50 分） | 进行中 | 未开始 | 原生绿；收集总数 1540 → 1638，是有人加了测试 |
 
 ## 热点文件占有
 
