@@ -27,6 +27,7 @@ import jittor as jt
 import jittor as torch
 from jittor.compat import stub_policy
 
+
 class StubPolicyBase(unittest.TestCase):
     """Every test runs with the escape hatch OFF unless it says otherwise."""
 
@@ -68,6 +69,7 @@ class StubPolicyBase(unittest.TestCase):
         finally:
             stub_policy.set_allow_stub(False)
 
+
 class TestStubPolicy(StubPolicyBase):
     def test_hatch_is_off_by_default(self):
         stub_policy.set_allow_stub(None)
@@ -106,6 +108,7 @@ class TestStubPolicy(StubPolicyBase):
             self.assertEqual(len(caught), 1)
         finally:
             stub_policy.set_allow_stub(False)
+
 
 class TestAutocast(StubPolicyBase):
     """torch.autocast used to be a total no-op: mixed precision silently ran fp32."""
@@ -169,6 +172,7 @@ class TestAutocast(StubPolicyBase):
             lambda: torch.autocast("cuda", dtype="float8_e4m3fn"))
         self.assertIsNotNone(ctx)
 
+
 class TestLoadStateDict(StubPolicyBase):
     """Module.load_state_dict returned _IncompatibleKeys([], []) unconditionally."""
 
@@ -230,6 +234,7 @@ class TestLoadStateDict(StubPolicyBase):
         model = self._model()
         with self.assertRaises(RuntimeError):
             model.load_state_dict({"encoder.layer.0.weight": jt.zeros((4, 4))})
+
 
 class TestTorchLoad(StubPolicyBase):
     """torch.load ignored weights_only and map_location and faked unknown classes."""
@@ -309,11 +314,13 @@ class TestTorchLoad(StubPolicyBase):
         self.assertRefuses(lambda: torch.load(p, map_location="mps"),
                            "map_location")
 
+
 class _PayloadClass:
     """Module-level so pickle can find it; stands in for a config object."""
 
     def __init__(self, value):
         self.value = value
+
 
 class TestDataLoaderWorkers(StubPolicyBase):
     """DataLoader recorded num_workers and then always went single-process."""
@@ -379,6 +386,7 @@ class TestDataLoaderWorkers(StubPolicyBase):
             list(loader)
         self.assertTrue(any("THREADS" in str(w.message) for w in caught))
 
+
 class TestDistributedDataParallel(StubPolicyBase):
     """DDP never synchronised gradients on the loss.backward() path."""
 
@@ -410,6 +418,7 @@ class TestDistributedDataParallel(StubPolicyBase):
         finally:
             jt.world_size = saved
 
+
 class TestBackwardGradient(StubPolicyBase):
     """Tensor.backward(gradient=...) dropped its argument."""
 
@@ -437,6 +446,7 @@ class TestBackwardGradient(StubPolicyBase):
         with self.assertRaises(RuntimeError):
             y.backward(gradient=jt.ones((3, 5, 7)))
 
+
 class TestTreeMap(StubPolicyBase):
     """torch.utils._pytree.tree_map did not recurse."""
 
@@ -461,6 +471,7 @@ class TestTreeMap(StubPolicyBase):
         pytree = self._pytree()
         tree = [[1], [2, [3]]]
         self.assertEqual(pytree.tree_map(lambda v: v, tree), tree)
+
 
 class TestSummaryWriter(StubPolicyBase):
     """Every SummaryWriter method returned None and wrote nothing."""
@@ -487,6 +498,7 @@ class TestSummaryWriter(StubPolicyBase):
         SummaryWriter = sys.modules["torch.utils.tensorboard"].SummaryWriter
         writer = self.assertStubFallback(lambda: SummaryWriter(log_dir="/tmp/jt-tb"))
         self.assertIsNone(writer.add_scalar("loss", 1.0, 0))
+
 
 class TestInitAndSwa(StubPolicyBase):
     """nn.init.dirac_/sparse_ and swa_utils.update_bn were identity/no-op."""
@@ -527,6 +539,7 @@ class TestInitAndSwa(StubPolicyBase):
         swa.update_bn(batches, model)
         np.testing.assert_allclose(model.running_mean.numpy(),
                                    np.full(4, 5.0), atol=1e-4)
+
 
 class TestOverridesAndDefaults(StubPolicyBase):
     """has_torch_function was constantly False; set_default_device did nothing."""
@@ -597,6 +610,7 @@ class TestOverridesAndDefaults(StubPolicyBase):
         self.assertRefuses(lambda: torch.set_default_device("mps"),
                            "set_default_device")
 
+
 class TestCudaDeviceAndEvents(StubPolicyBase):
     """set_device was a no-op; Event.elapsed_time was a constant 0.0."""
 
@@ -635,6 +649,7 @@ class TestCudaDeviceAndEvents(StubPolicyBase):
         with self.assertRaises(RuntimeError):
             start.elapsed_time(end)
 
+
 class TestLibraryOpcheck(StubPolicyBase):
     def test_opcheck_is_refused(self):
         import sys
@@ -647,6 +662,171 @@ class TestLibraryOpcheck(StubPolicyBase):
         library = sys.modules["torch.library"]
         self.assertIsNone(self.assertStubFallback(
             lambda: library.opcheck(None, ())))
+
+
+class TestDistributedStubs(StubPolicyBase):
+    """dcp save/load, subgroups, stores and DTensor were identities."""
+
+    def _dist(self):
+        import sys
+        return sys.modules["torch.distributed"]
+
+    def test_dcp_save_is_refused(self):
+        import sys
+        dcp = sys.modules["torch.distributed.checkpoint"]
+        self.assertRefuses(lambda: dcp.save({"w": jt.ones(2)}),
+                           "checkpoint.save", "discarding the checkpoint")
+
+    def test_dcp_load_is_refused(self):
+        import sys
+        dcp = sys.modules["torch.distributed.checkpoint"]
+        self.assertRefuses(lambda: dcp.load({"w": jt.ones(2)}),
+                           "checkpoint.load")
+
+    def test_dcp_save_stub_fallback(self):
+        import sys
+        dcp = sys.modules["torch.distributed.checkpoint"]
+        self.assertStubFallback(lambda: dcp.save({"w": jt.ones(2)}))
+
+    def test_single_rank_store_still_works(self):
+        # One rank has nobody to meet, so a per-process dict IS a correct store.
+        dist = self._dist()
+        store = dist.TCPStore()
+        store.set("step", b"1")
+        self.assertEqual(store.get("step"), b"1")
+
+    def test_multi_rank_tcp_store_is_refused(self):
+        dist = self._dist()
+        self.assertRefuses(
+            lambda: dist.TCPStore("127.0.0.1", 29500, 2, True),
+            "TCPStore", "dictionary")
+
+    def test_multi_rank_file_store_is_refused(self):
+        dist = self._dist()
+        self.assertRefuses(lambda: dist.FileStore("/tmp/jt-store", 2),
+                           "FileStore")
+
+    def test_whole_world_subgroup_enumeration_is_allowed(self):
+        dist = self._dist()
+        groups, cur = dist.new_subgroups_by_enumeration([[0]])
+        self.assertIs(cur, dist.group.WORLD)
+
+    def test_partitioning_subgroup_enumeration_is_refused(self):
+        dist = self._dist()
+        saved = getattr(jt, "world_size", 1)
+        jt.world_size = 4
+        os.environ.setdefault("JT_NCCL_WORLD_SIZE", "4")
+        try:
+            self.assertRefuses(
+                lambda: dist.new_subgroups_by_enumeration([[0, 1], [2, 3]]),
+                "new_subgroups_by_enumeration")
+        finally:
+            jt.world_size = saved
+            os.environ.pop("JT_NCCL_WORLD_SIZE", None)
+
+    def test_single_rank_autograd_all_reduce_is_the_identity(self):
+        dist = self._dist()
+        x = jt.ones((3,))
+        np.testing.assert_allclose(dist.nn.all_reduce(x).numpy(), x.numpy())
+
+
+class TestDeviceMeshAndDTensor(StubPolicyBase):
+    def _mesh_mod(self):
+        from jittor.compat.fsdp2 import dtensor
+        return dtensor
+
+    def test_one_dimensional_mesh_indexing_still_works(self):
+        dtensor = self._mesh_mod()
+        mesh = dtensor.DeviceMesh("cpu", (1,))
+        self.assertIs(mesh["dp"], mesh)
+
+    def test_two_dimensional_mesh_on_one_rank_is_harmless(self):
+        # Every collective on a one-rank world is a no-op, so a collapsed mesh
+        # cannot send anything to the wrong ranks.
+        dtensor = self._mesh_mod()
+        mesh = dtensor.DeviceMesh("cpu", (2, 2), mesh_dim_names=("dp", "tp"))
+        self.assertIs(mesh["dp"], mesh)
+
+    def test_two_dimensional_mesh_axis_selection_is_refused(self):
+        dtensor = self._mesh_mod()
+        saved = getattr(jt, "world_size", 1)
+        jt.world_size = 4
+        try:
+            mesh = dtensor.DeviceMesh("cpu", (2, 2), mesh_dim_names=("dp", "tp"))
+            self.assertRefuses(lambda: mesh["dp"], "DeviceMesh")
+        finally:
+            jt.world_size = saved
+
+    def test_two_dimensional_mesh_get_group_is_refused(self):
+        dtensor = self._mesh_mod()
+        saved = getattr(jt, "world_size", 1)
+        jt.world_size = 4
+        try:
+            mesh = dtensor.DeviceMesh("cpu", (2, 2), mesh_dim_names=("dp", "tp"))
+            self.assertRefuses(lambda: mesh.get_group(), "DeviceMesh.get_group")
+        finally:
+            jt.world_size = saved
+
+    def test_full_tensor_on_one_rank_returns_the_tensor(self):
+        dtensor = self._mesh_mod()
+        local = jt.ones((2, 2))
+        dt = dtensor.DTensor(local, dtensor.DeviceMesh("cpu", (1,)),
+                             (dtensor.Shard(0),))
+        np.testing.assert_allclose(dt.full_tensor().numpy(), local.numpy())
+
+    def test_sharded_full_tensor_on_many_ranks_is_refused(self):
+        dtensor = self._mesh_mod()
+        saved = getattr(jt, "world_size", 1)
+        jt.world_size = 4
+        try:
+            dt = dtensor.DTensor(jt.ones((2, 2)),
+                                 dtensor.DeviceMesh("cpu", (4,)),
+                                 (dtensor.Shard(0),))
+            self.assertRefuses(lambda: dt.full_tensor(),
+                               "DTensor.full_tensor", "LOCAL SHARD")
+        finally:
+            jt.world_size = saved
+
+    def test_replicated_full_tensor_on_many_ranks_is_exact(self):
+        dtensor = self._mesh_mod()
+        saved = getattr(jt, "world_size", 1)
+        jt.world_size = 4
+        try:
+            local = jt.ones((2, 2))
+            dt = dtensor.DTensor(local, dtensor.DeviceMesh("cpu", (4,)),
+                                 (dtensor.Replicate(),))
+            np.testing.assert_allclose(dt.full_tensor().numpy(), local.numpy())
+        finally:
+            jt.world_size = saved
+
+
+class TestGeneratedUnimplementedList(StubPolicyBase):
+    """The plan asks tests/compat/torch to publish the list of gaps."""
+
+    def test_every_declared_gap_states_its_consequence(self):
+        for api, info in torch.compat_unimplemented_apis().items():
+            self.assertTrue(info["effect"],
+                            "%s is refused without saying what breaks" % api)
+
+    def test_the_list_is_rendered_for_humans(self):
+        # Renders whatever this process has touched; the printout is the
+        # "auto-generated unimplemented API list" the plan asks for.
+        lines = ["# torch APIs Jittor refuses to fake",
+                 "",
+                 "| API | what a silent stub would do |",
+                 "| --- | --- |"]
+        for api, info in sorted(torch.compat_unimplemented_apis().items()):
+            lines.append("| `%s` | %s |" % (api, info["effect"]))
+        approximate = torch.compat_approximate_apis()
+        if approximate:
+            lines += ["", "# torch APIs Jittor approximates", "",
+                      "| API | how it differs |", "| --- | --- |"]
+            for api, info in sorted(approximate.items()):
+                lines.append("| `%s` | %s |" % (api, info["effect"]))
+        rendered = "\n".join(lines)
+        print("\n" + rendered)
+        self.assertIn("| API |", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

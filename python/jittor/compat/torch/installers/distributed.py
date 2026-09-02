@@ -507,7 +507,28 @@ def _install_distributed(g, registry=None):
     dist.broadcast_object_list = _broadcast_object_list
     dist.gather_object = _gather_object
     dist.new_group = _new_group
-    dist.new_subgroups_by_enumeration = lambda *a, **k: ([dist.group.WORLD], dist.group.WORLD)
+    def _new_subgroups_by_enumeration(ranks_per_subgroup_list=None, *a, **k):
+        """Was `([WORLD], WORLD)` whatever the enumeration asked for.
+
+        Returning the world group means every "subgroup" collective actually
+        reaches all ranks: a pipeline/tensor-parallel all-reduce meant for 2
+        ranks quietly averages across all 8. `new_group` already refuses this
+        (see _new_group below); this entry point must agree.
+        """
+        groups = list(ranks_per_subgroup_list or [])
+        world = _distributed_world_size()
+        if world <= 1 or (len(groups) <= 1
+                          and (not groups or len(groups[0]) == world)):
+            return ([dist.group.WORLD], dist.group.WORLD)
+        from ...stub_policy import unimplemented
+        return unimplemented(
+            "torch.distributed.new_subgroups_by_enumeration",
+            "hand back the WORLD group for every requested subgroup, so a "
+            "subgroup collective silently reduces across all %d ranks" % world,
+            "Jittor has no communicator subgroups yet.",
+            stub_result=([dist.group.WORLD], dist.group.WORLD))
+
+    dist.new_subgroups_by_enumeration = _new_subgroups_by_enumeration
     dist.get_global_rank = lambda group=None, group_rank=0: (
         int(group_rank)
         if group is None or getattr(group, "ranks", None) is None
@@ -654,7 +675,28 @@ def _install_distributed(g, registry=None):
         _modules["torch.distributed.optim"] = optim
     dist.optim = optim
 
-    dist.nn.all_reduce = lambda input, *a, **k: input
+    def _autograd_all_reduce(input, op=None, group=None, *a, **k):
+        """Differentiable all-reduce -- real on >1 rank, identity on 1 rank.
+
+        Was `lambda input, *a, **k: input`: on N ranks both the value AND the
+        gradient were wrong, with no error. On a single rank an all-reduce IS
+        the identity, so that case stays exact.
+        """
+        if _group_size(group) <= 1:
+            return input
+        reduce_name = _reduce_name(op, _ReduceOp)
+        if reduce_name in ("sum", "mean"):
+            # nccl_all_reduce is a real jittor op, so this stays differentiable.
+            return input.mpi_all_reduce(reduce_name)
+        from ...stub_policy import unimplemented
+        return unimplemented(
+            "torch.distributed.nn.all_reduce(op=%s)" % reduce_name,
+            "return the local tensor unchanged, so both the value and its "
+            "gradient are wrong on every rank",
+            "Only sum and mean are differentiable here.",
+            stub_result=input)
+
+    dist.nn.all_reduce = _autograd_all_reduce
     _modules["torch.distributed.nn"] = dist.nn
 
     symmetric_memory = _modules.get("torch.distributed._symmetric_memory")
@@ -700,10 +742,30 @@ def _install_distributed(g, registry=None):
             self.path = path
     checkpoint.FileSystemReader = FileSystemReader
     checkpoint.FileSystemWriter = FileSystemWriter
-    checkpoint.load_state_dict = lambda state_dict, *a, **k: state_dict
-    checkpoint.save_state_dict = lambda state_dict, *a, **k: state_dict
-    checkpoint.load = lambda state_dict=None, *a, **k: state_dict
-    checkpoint.save = lambda state_dict=None, *a, **k: state_dict
+    # torch.distributed.checkpoint save/load were the identity: dcp.save()
+    # wrote nothing and returned successfully, so a sharded checkpoint was
+    # silently never persisted and dcp.load() silently left the model at its
+    # current weights. Refuse instead of losing the run.
+    from ...stub_policy import unimplemented_callable as _dcp_unimplemented
+    _dcp_save_effect = ("write no bytes at all while reporting a successful "
+                        "save, silently discarding the checkpoint")
+    _dcp_load_effect = ("return the state dict unchanged without reading the "
+                        "checkpoint, silently leaving the model at its current "
+                        "weights")
+    _dcp_hint = ("Use torch.save / Module.state_dict for a single-rank "
+                 "checkpoint; sharded dcp is task 8.18.")
+    checkpoint.load_state_dict = _dcp_unimplemented(
+        "torch.distributed.checkpoint.load_state_dict", _dcp_load_effect,
+        _dcp_hint, stub_result=None)
+    checkpoint.save_state_dict = _dcp_unimplemented(
+        "torch.distributed.checkpoint.save_state_dict", _dcp_save_effect,
+        _dcp_hint, stub_result=None)
+    checkpoint.load = _dcp_unimplemented(
+        "torch.distributed.checkpoint.load", _dcp_load_effect, _dcp_hint,
+        stub_result=None)
+    checkpoint.save = _dcp_unimplemented(
+        "torch.distributed.checkpoint.save", _dcp_save_effect, _dcp_hint,
+        stub_result=None)
     checkpoint_sd = _types.ModuleType("torch.distributed.checkpoint.state_dict")
     class StateDictOptions:
         def __init__(self, *, full_state_dict=False, cpu_offload=False,
@@ -744,7 +806,9 @@ def _install_distributed(g, registry=None):
         "TORCH_SAVE": "torch_save",
         "SAFETENSORS": "safetensors",
     })
-    checkpoint_fs._write_item = lambda *a, **k: None
+    checkpoint_fs._write_item = _dcp_unimplemented(
+        "torch.distributed.checkpoint.filesystem._write_item",
+        _dcp_save_effect, _dcp_hint, stub_result=None)
     _modules["torch.distributed.checkpoint"] = checkpoint
     _modules["torch.distributed.checkpoint.state_dict"] = checkpoint_sd
     _modules["torch.distributed.checkpoint.filesystem"] = checkpoint_fs
@@ -767,6 +831,28 @@ def _install_distributed(g, registry=None):
         _m.ShardedTensor = ShardedTensor
         _modules[_m.__name__] = _m
 
+    def _require_single_rank_store(api, world_size=None):
+        """A store is a rendezvous point; this one is a per-process dict.
+
+        On one rank that IS a correct store -- there is nobody to meet -- so
+        single-process use stays exact. On more than one rank the old behaviour
+        was that every rank "found" the others instantly without exchanging a
+        byte and then proceeded as if the rendezvous had succeeded.
+        """
+        size = world_size if world_size is not None else _distributed_world_size()
+        try:
+            size = int(size)
+        except (TypeError, ValueError):
+            size = 1
+        if size <= 1:
+            return
+        from ...stub_policy import unimplemented
+        unimplemented(
+            api,
+            "back a %d-rank rendezvous with a per-process dictionary, so every "
+            "rank meets nobody and immediately reports success" % size,
+            "Cross-process rendezvous is task 8.15.")
+
     class Store:
         def __init__(self, *a, **k):
             self._data = {}
@@ -785,10 +871,29 @@ def _install_distributed(g, registry=None):
             return True
 
     class TCPStore(Store):
-        pass
+        """A TCP rendezvous store -- refused, because this one is a dict.
+
+        Store subclasses used to share `Store`'s in-PROCESS dictionary. A
+        rendezvous built on TCPStore therefore "succeeded" instantly on every
+        rank without any of them ever exchanging a byte, and each rank then
+        proceeded believing it had met the others.
+        """
+
+        def __init__(self, host_name=None, port=None, world_size=None,
+                     is_master=False, timeout=None, wait_for_workers=True,
+                     *a, **k):
+            _require_single_rank_store("torch.distributed.TCPStore", world_size)
+            Store.__init__(self)
+            self.host = host_name
+            self.port = port
 
     class FileStore(Store):
-        pass
+        """A file-backed rendezvous store -- refused, because this one is a dict."""
+
+        def __init__(self, file_name=None, world_size=None, *a, **k):
+            _require_single_rank_store("torch.distributed.FileStore", world_size)
+            Store.__init__(self)
+            self.path = file_name
 
     class PrefixStore(Store):
         def __init__(self, prefix, store):

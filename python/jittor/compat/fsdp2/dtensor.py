@@ -34,7 +34,26 @@ class DeviceMesh:
             self.device_type, self.mesh, self.mesh_dim_names)
 
     def __getitem__(self, key):
-        return self
+        """Sub-mesh selection -- refused for a real multi-dimensional mesh.
+
+        This returned `self` for every key, so `mesh["dp"] is mesh["tp"]`: a 2D
+        parallel plan silently collapsed to one dimension and every collective
+        that should have run on one axis ran on all ranks instead.
+        """
+        if self.ndim <= 1 or common._world_size() <= 1:
+            return self
+        names = self.mesh_dim_names or ()
+        keys = key if isinstance(key, (tuple, list)) else (key,)
+        if len(keys) == len(names) and all(k in names for k in keys):
+            return self
+        from ..stub_policy import unimplemented
+        return unimplemented(
+            "DeviceMesh[%r]" % (key,),
+            "hand back the FULL mesh for every axis, so `mesh['dp']` and "
+            "`mesh['tp']` are the same object and a 2-D parallel plan "
+            "collapses to one dimension without an error",
+            "Jittor has no communicator subgroups yet (task 8.08).",
+            stub_result=self)
 
     def size(self, dim=None, *, mesh_dim=None):
         if mesh_dim is not None:
@@ -65,7 +84,20 @@ class DeviceMesh:
             return 0
 
     def get_group(self, *args, **kwargs):
-        return None
+        """The process group backing a mesh dimension.
+
+        Returns None -- i.e. "the world group" to every caller -- which is only
+        true for a one-dimensional mesh that spans the whole world.
+        """
+        if self.ndim <= 1 or common._world_size() <= 1:
+            return None
+        from ..stub_policy import unimplemented
+        return unimplemented(
+            "DeviceMesh.get_group",
+            "return the WORLD group for a mesh axis, so a per-axis collective "
+            "silently reduces across every rank",
+            "Jittor has no communicator subgroups yet (task 8.08).",
+            stub_result=None)
 
     def get_all_groups(self):
         return [self.get_group()]
@@ -135,6 +167,35 @@ class Partial(Placement):
         return "Partial(reduce_op=%r)" % self.reduce_op
 
 
+def _full_tensor(dtensor, *args, **kwargs):
+    """Reassemble a DTensor's global value from its shards.
+
+    This used to `return self._local_tensor`: on N ranks every rank got its own
+    1/N slice back and computed the rest of the program on a fraction of the
+    weights, with the right shape only when the placement happened to be
+    Replicate.  Replicated placements really are the identity, so those stay
+    exact; a genuinely sharded tensor needs an all-gather that jittor's
+    DTensor layer does not have.
+    """
+    local = getattr(dtensor, "_local_tensor", dtensor)
+    placements = tuple(getattr(dtensor, "placements", None)
+                       or getattr(dtensor, "_dtensor_placements", None)
+                       or (Replicate(),))
+    if common._world_size() <= 1:
+        return local
+    if all(p.is_replicate() for p in placements):
+        return local
+    from ..stub_policy import unimplemented
+    return unimplemented(
+        "DTensor.full_tensor (placements=%s)"
+        % ", ".join(repr(p) for p in placements),
+        "return this rank's LOCAL SHARD as if it were the full tensor, so "
+        "every rank computes with 1/%d of the weights and no error is raised"
+        % common._world_size(),
+        "Jittor's DTensor layer has no cross-rank all-gather yet (task 7.13).",
+        stub_result=local)
+
+
 def _mark_dtensor(tensor, device_mesh=None, placements=None):
     mesh = device_mesh or DeviceMesh(
         "cuda" if getattr(jt, "has_cuda", 0) else "cpu", (1,))
@@ -149,7 +210,8 @@ def _mark_dtensor(tensor, device_mesh=None, placements=None):
         if not callable(getattr(tensor, "to_local", None)):
             object.__setattr__(tensor, "to_local", types.MethodType(lambda self, *a, **k: self, tensor))
         if not callable(getattr(tensor, "full_tensor", None)):
-            object.__setattr__(tensor, "full_tensor", types.MethodType(lambda self, *a, **k: self, tensor))
+            object.__setattr__(tensor, "full_tensor",
+                               types.MethodType(_full_tensor, tensor))
         if not callable(getattr(tensor, "redistribute", None)):
             def _redistribute(self, device_mesh=None, placements=None, **kwargs):
                 return _mark_dtensor(
@@ -185,7 +247,7 @@ class DTensor(metaclass=_DTensorMeta):
         return self._local_tensor
 
     def full_tensor(self, *args, **kwargs):
-        return self._local_tensor
+        return _full_tensor(self, *args, **kwargs)
 
     def redistribute(self, device_mesh=None, placements=None, **kwargs):
         self.device_mesh = device_mesh or self.device_mesh
