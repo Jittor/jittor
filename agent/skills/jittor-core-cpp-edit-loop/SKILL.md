@@ -14,7 +14,7 @@ description: 改 python/jittor/src 下 C++ 核心时的编辑—重编—验证�
 在 git worktree 里裸跑 `python -c "import jittor"` 导入的是那棵树，**不是你改的这棵**。
 一行复现（`jt.array(np.uint8([200])).item()` 这种）最容易这样跑，然后得出"已经是对的"的错误结论。
 
-- `pytest` 是安全的：`pyproject.toml` 里有 `pythonpath = ["python"]`，跑在哪个 worktree 就导哪棵树。
+- `pytest` 是安全的：`tests/conftest.py` 让它跑在哪个 worktree 就导哪棵树（`JITTOR_SOURCE_ROOT` 可覆盖）。
 - **任何手写的 `python -c`、`python 脚本.py`、子进程，都必须显式加 `PYTHONPATH=<你的 worktree>/python`。**
 
 每轮验证前先跑一次这个，必须打印出你自己的目录：

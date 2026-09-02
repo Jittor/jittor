@@ -11,7 +11,7 @@ description: 改动 pyjt 绑定层（python/jittor/pyjt_compiler.py 代码生成
 ## 1. 先确认导入的是自己这棵树
 
 `pip install -e` 装的 `.pth` 指向**另一棵源码树**。pytest 靠 `pyproject.toml` 里的
-`pythonpath = ["python"]` 天然导入当前目录的代码，但下面这些**不会**：
+`tests/conftest.py` 天然导入当前目录的代码，但下面这些**不会**：
 
 - `python -c ...` / `python some_script.py`
 - 测试里 `subprocess.run([sys.executable, ...])` 起的子进程

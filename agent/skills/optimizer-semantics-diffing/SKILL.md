@@ -10,7 +10,7 @@ description: 验证 jittor 优化器语义（梯度累积等价性、全局梯�
 
 ## 0. 前置：别测错一棵树
 
-- `pytest` 会用当前 worktree 的 `python/`（`pyproject.toml` 里有 `pythonpath = ["python"]`）。
+- `pytest` 会用当前 worktree 的 `python/`（`tests/conftest.py` 决定，可用 `JITTOR_SOURCE_ROOT` 覆盖）。
 - **手写的 `python -c`、脚本、子进程都不会**：`jittor` 是 editable 安装，`.pth` 指向主树。
   必须显式 `PYTHONPATH=<worktree>/python`，并且第一次验证前先自检：
   `python -c "import jittor,os;print(os.path.dirname(jittor.__file__))"` 必须打印 worktree 路径。

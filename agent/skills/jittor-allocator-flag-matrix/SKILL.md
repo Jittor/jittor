@@ -48,7 +48,7 @@ taskset -c <你的核> python agent/skills/jittor-allocator-flag-matrix/probe_al
 
 **`PYTHONPATH` 不能省**：jt311 里的 jittor 是 editable 安装，`.pth` 指向主树；
 手写的 `python -c` / `python 脚本.py` 不加它就是在测别人的代码，症状是「bug 复现不出来」。
-pytest 不需要（`pyproject.toml` 里有 `pythonpath = ["python"]`）。
+pytest 不需要（`tests/conftest.py` 已经处理）。
 
 ## 判据
 

@@ -103,7 +103,7 @@ in the same commit, saying so in the message.
 
 - **`torch is jittor`.** Importing the wrong tree means testing a different
   shim than the one you edited, and every conclusion inverts. In a worktree,
-  `pytest` is correct (`pyproject.toml` sets `pythonpath = ["python"]`) but any
+  `pytest` is correct (`tests/conftest.py` puts this checkout first) but any
   hand-run `python -c` / script / subprocess needs
   `PYTHONPATH=<worktree>/python` explicitly, because the conda env has jittor
   installed editable against the *main* tree. Self-check before believing

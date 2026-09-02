@@ -117,7 +117,9 @@ cell_metadata_filter = "tags"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["python"]
+# No `pythonpath` here: tests/conftest.py decides which checkout to import,
+# so JITTOR_SOURCE_ROOT can point a run at a copy of the tree without
+# `-o pythonpath=...` on every invocation.
 addopts = "--strict-markers --strict-config -p no:cacheprovider"
 xfail_strict = true
 markers = [

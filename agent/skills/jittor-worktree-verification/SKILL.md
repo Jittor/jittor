@@ -41,7 +41,7 @@ cat "$(python -c 'import site;print(site.getsitepackages()[0])')"/__editable__*j
 
 ## pytest 是对的，手写命令不是
 
-`pyproject.toml` 里有 `pythonpath = ["python"]`，pytest 会把 **rootdir 下的 `python/`**
+`tests/conftest.py` 会把 **本 checkout 的 `python/`**
 插到 `sys.path[0]`。所以在 worktree 里跑 pytest 天然导入本 worktree——**这是唯一
 自动正确的入口**。
 
@@ -50,7 +50,8 @@ cat "$(python -c 'import site;print(site.getsitepackages()[0])')"/__editable__*j
 cd <worktree> && JITTOR_HOME=... TMPDIR=... pytest tests/<...> -x -q
 ```
 
-要用 pytest 测**另一个**目录的副本，必须显式覆盖：`-o pythonpath=<那个目录>/python`。
+要用 pytest 测**另一个**目录的副本：`JITTOR_SOURCE_ROOT=<那个目录> pytest ...`
+（以前要在每条命令上写 `-o pythonpath=<那个目录>/python`）。
 
 会**静默测错代码**的入口（都要手动加 `PYTHONPATH`）：
 
@@ -64,7 +65,7 @@ cd <worktree> && JITTOR_HOME=... TMPDIR=... pytest tests/<...> -x -q
 `os.environ["PYTHONPATH"]`，所以子进程不继承。测试里 spawn 子进程时有两条出路：
 
 - **子进程还是 pytest，且 `cwd` 设成仓库根**——rootdir 会重新解析到这个仓库，
-  `pythonpath = ["python"]` 再次生效，天然正确。`tests/_helpers/distributed.py`
+  `tests/conftest.py` 再次生效，天然正确。`tests/_helpers/distributed.py`
   的 `run_mpi_test()` 走的就是这条（`mpirun -np N python -m pytest <abs path>`，
   `cwd=repo_root`），所以它是对的。
 - **子进程是裸 python**——必须显式传 `env["PYTHONPATH"] = <repo_root>/python`，

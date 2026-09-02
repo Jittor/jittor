@@ -17,7 +17,7 @@ description: 在相信一次绿色的测试运行之前，先证明它跑的是�
 开发环境里 `jittor` 是 editable 安装：site-packages 的 `.pth` 指向**主工作树**。所以在
 worktree 里裸跑 `python -c "import jittor"` 导入的是主树，不是你的改动。
 
-- `pytest` 是对的：`pyproject.toml` 里有 `pythonpath = ["python"]`，相对 rootdir 解析，
+- `pytest` 是对的：`tests/conftest.py` 把本 checkout 的 `python/` 放在 sys.path 最前，
   在 worktree 里跑 pytest 天然导入本 worktree。
 - **手写的 `python -c`、`python 脚本.py`、`subprocess`、`nox` 一律不对**，必须显式设
   `PYTHONPATH=<你的工作树>/python`。
