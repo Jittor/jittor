@@ -141,5 +141,86 @@ class TestDigestChecking(unittest.TestCase):
                 Path(source).as_uri(), "downloaded.bin", d, digest)
 
 
+class TestMklCheckedByLoadingIt(unittest.TestCase):
+    """Installing MKL used to compile *and run* an upstream example.
+
+    On the import path, with the user's compiler, and with
+    ``assert 0 == os.system(...)`` as the whole diagnostic. Loading the
+    library and resolving the symbol jittor's own operators call answers the
+    same question -- is this archive usable from this process -- without
+    building and executing a third-party program.
+    """
+
+    def test_a_missing_library_is_named(self):
+        from jittor.compile_extern import check_mkl_usable
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(RuntimeError) as caught:
+                check_mkl_usable(d)
+            self.assertIn(d, str(caught.exception))
+
+    def test_a_library_without_the_symbol_is_rejected(self):
+        from jittor.compile_extern import check_mkl_usable
+        with tempfile.TemporaryDirectory() as d:
+            lib = os.path.join(d, "lib")
+            os.makedirs(lib)
+            # A real, loadable shared object that simply is not oneDNN.
+            import ctypes.util
+            source = ctypes.util.find_library("m")
+            self.assertIsNotNone(source, "libm not found")
+            import shutil
+            found = None
+            for root in ("/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu",
+                         "/lib64", "/usr/lib"):
+                candidate = os.path.join(root, source)
+                if os.path.isfile(candidate):
+                    found = candidate
+                    break
+            if found is None:
+                self.skipTest("no plain shared object to stand in for oneDNN")
+            shutil.copy(found, os.path.join(lib, "libmkldnn.so"))
+            with self.assertRaises(RuntimeError) as caught:
+                check_mkl_usable(d)
+            self.assertIn("dnnl_sgemm", str(caught.exception))
+
+    def test_the_real_one_passes(self):
+        from jittor.compile_extern import check_mkl_usable
+        import jittor_utils as jit_utils
+        root = os.path.join(jit_utils.home(), ".cache", "jittor", "mkl")
+        installed = [name for name in sorted(os.listdir(root))
+                     if name.startswith("dnnl")
+                     and os.path.isdir(os.path.join(root, name))] \
+            if os.path.isdir(root) else []
+        if not installed:
+            self.skipTest("MKL is not installed in this cache")
+        check_mkl_usable(os.path.join(root, installed[0]))
+
+
+class TestCutlassIsGone(unittest.TestCase):
+    """Downloaded on every CUDA machine; referenced by nothing."""
+
+    def test_the_build_no_longer_fetches_or_sets_up_cutlass(self):
+        """Unrelated mentions elsewhere (the vLLM shim names CUTLASS kernels)
+        are not this: what had to go is the download and the setup hook."""
+        import jittor.compile_extern as compile_extern
+        for name in ("install_cutlass", "setup_cutlass", "use_cutlass",
+                     "cutlass_ops"):
+            self.assertFalse(hasattr(compile_extern, name),
+                             f"compile_extern.{name} is back")
+        source = (REPO / "python" / "jittor" / "compile_extern.py").read_text(
+            encoding="utf8")
+        self.assertNotIn("cutlass", source.lower())
+
+    def test_nccl_is_not_fetched_before_the_conditions_are_checked(self):
+        """The device-count and MPI checks used to come after the download."""
+        source = (REPO / "python" / "jittor" / "compile_extern.py").read_text(
+            encoding="utf8")
+        body = source[source.index("def install_nccl("):]
+        body = body[:body.index("\ndef ")]
+        self.assertLess(body.index("get_device_count"),
+                        body.index("download_url_to_local"))
+        self.assertLess(body.index("inside_mpi"),
+                        body.index("download_url_to_local"))
+
+
 if __name__ == "__main__":
     unittest.main()

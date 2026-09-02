@@ -66,20 +66,49 @@ def install_mkl(root_folder):
             with tarfile.open(fullname, "r") as tar:
                 safe_tar_extractall(tar, root_folder)
         if os.name == 'nt':
-            # this env is used for execute example/text
+            # dnnl.dll and its dependencies live here.
             bin_path = os.path.join(dirname, "bin")
             sys.path.append(bin_path)
             os.environ["PATH"] = os.environ.get("PATH", "") + ";" + bin_path
-            cmd = f"cd /d {dirname}/examples && {cc_path} {dirname}/examples/cnn_inference_f32.cpp -I{dirname}/include -Fe: {dirname}/examples/test.exe {fix_cl_flags(cc_flags).replace('-LD', '')} {dirname}/lib/mkldnn.lib"
+        check_mkl_usable(dirname)
 
-            assert 0 == os.system(cmd)
-            assert 0 == os.system(f"{dirname}/examples/test")
-        elif platform.system() == "Darwin":
-            assert 0 == os.system(f"cd {dirname}/examples && "
-            f"{cc_path} -std=c++14 cnn_inference_f32.cpp -Ofast -lmkldnn -I ../include -L ../lib -o test && DYLD_LIBRARY_PATH=../lib/ ./test")
-        else:
-            assert 0 == os.system(f"cd {dirname}/examples && "
-            f"{cc_path} -std=c++14 cnn_inference_f32.cpp -Ofast -lmkldnn -I ../include -L ../lib -o test && LD_LIBRARY_PATH=../lib/ ./test")
+
+def check_mkl_usable(dirname):
+    """Load the library we just unpacked and look for the symbol we use.
+
+    This used to compile one of the upstream examples with the user's compiler
+    and then *run* the resulting binary, on the import path, with `assert 0 ==
+    os.system(...)` as the only diagnostic -- so a broken download reached the
+    user as a bare AssertionError, and every import of a fresh cache built and
+    executed a third-party program. Loading the library and resolving
+    ``dnnl_sgemm`` (the entry point jittor's own MKL operators call) answers
+    the same question: is this archive usable from this process.
+    """
+    candidates = [
+        os.path.join(dirname, "lib", "libmkldnn.so"),
+        os.path.join(dirname, "lib", "libmkldnn.dylib"),
+        os.path.join(dirname, "bin", "dnnl.dll"),
+    ]
+    for lib_path in candidates:
+        if os.path.isfile(lib_path):
+            break
+    else:
+        raise RuntimeError(
+            f"the MKL/oneDNN archive unpacked into {dirname} but none of "
+            f"{candidates} exists; delete that directory and its archive to "
+            f"download it again.")
+    try:
+        lib = ctypes.CDLL(lib_path, dlopen_flags)
+    except OSError as error:
+        raise RuntimeError(
+            f"could not load {lib_path}: {error}. Delete {dirname} and its "
+            f"archive to download it again.") from error
+    if not hasattr(lib, "dnnl_sgemm"):
+        raise RuntimeError(
+            f"{lib_path} loaded but has no dnnl_sgemm, which jittor's MKL "
+            f"operators call. This is not the expected oneDNN build; delete "
+            f"{dirname} and its archive to download it again.")
+    LOG.v(f"mkl usable: {lib_path}")
 
 def setup_mkl():
     global mkl_ops, use_mkl
@@ -358,7 +387,7 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
 
 def _setup_fake_cuda_lib(lib_name=None, link=True, extra_flags=""):
     if lib_name is None:
-        lib_names = ["cudnn", "cublas", "curand", "cufft", "cub", "cutt", "cutlass"]
+        lib_names = ["cudnn", "cublas", "curand", "cufft", "cub", "cutt"]
         for lib_name in lib_names:
             _setup_fake_cuda_lib(lib_name, link, extra_flags)
         return
@@ -485,77 +514,6 @@ def setup_cutt():
     cutt_ops = cutt.ops
     LOG.vv("Get cutt_ops: "+str(dir(cutt_ops)))
 
-def install_cutlass(root_folder):
-    # Modified from: https://github.com/ap-hynninen/cutlass
-    # url = "https://cloud.tsinghua.edu.cn/f/171e49e5825549548bc4/?dl=1"
-    url = "https://cg.cs.tsinghua.edu.cn/jittor/assets/cutlass.zip"
-
-    filename = "cutlass.zip"
-    fullname = os.path.join(root_folder, filename)
-    dirname = os.path.join(root_folder, filename.replace(".zip",""))
-    true_md5 = "999ecb7e217e40c497bc3d0ded6643f0"
-
-    if os.path.exists(fullname):
-        from jittor_utils.misc import calculate_md5
-        md5 = calculate_md5(fullname)
-        if md5 != true_md5:
-            os.remove(fullname)
-            shutil.rmtree(dirname)
-    CUTLASS_PATH = os.environ.get("CUTLASS_PATH", "")
-    if not os.path.isfile(os.path.join(jit_utils.home(), ".cache/jittor/cutlass/cutlass/include/cutlass/cutlass.h")) or CUTLASS_PATH:
-        if CUTLASS_PATH:
-            dirname = CUTLASS_PATH
-        else:
-            LOG.i("Downloading cutlass...")
-            download_url_to_local(url, filename, root_folder, true_md5)
-
-            import zipfile
-
-            zf = zipfile.ZipFile(fullname)
-            try:
-                zf.extractall(path=root_folder)
-            except RuntimeError as e:
-                print(e)
-                raise
-            zf.close()
-
-        # LOG.i("installing cutlass...")
-        # # -Xptxas -dlcm=ca actually not work
-        # arch_flag = " -Xptxas -dlcm=ca "
-        # if len(flags.cuda_archs):
-        #     arch_flag = f" -arch=compute_{min(flags.cuda_archs)} "
-        #     arch_flag += ''.join(map(lambda x:f' -code=sm_{x} ', flags.cuda_archs))
-        # cutlass_include = f" -I\"{dirname}/include\" -I\"{dirname}/src\" "
-        # files = glob.glob(dirname+"/src/*.c*", recursive=True)
-        # files2 = []
-        # for f in files:
-        #     if f.endswith("cutlass_bench.cpp") or \
-        #         f.endswith("cutlass_test.cpp"):
-        #         continue
-        #     files2.append(f)
-        # cutlass_flags = cc_flags+opt_flags+cutlass_include
-        # compile(cc_path, cutlass_flags, files2, cache_path+"/libcutlass"+so, cuda_flags=arch_flag)
-    return dirname
-
-def setup_cutlass():
-    global cutlass_ops, use_cutlass
-    if not has_cuda:
-        use_cutlass = False
-        return
-    use_cutlass = os.environ.get("use_cutlass", "1")=="1"
-    cutlass_ops = None
-    if not use_cutlass: return
-    cutlass_include_path = os.environ.get("cutlass_include_path")
-    
-    if cutlass_include_path is None:
-        LOG.v("setup cutlass...")
-        # cutlass_path decouple with cc_path
-        cutlass_path = os.path.join(jit_utils.home(), ".cache", "jittor", "cutlass")
-        
-        make_cache_dir(cutlass_path)
-        install_cutlass(cutlass_path)
-
-
 def install_nccl(root_folder):
     asset = manifest.NCCL
     url, filename = asset.url, asset.filename
@@ -571,14 +529,18 @@ def install_nccl(root_folder):
             if os.path.isdir(dirname):
                 shutil.rmtree(dirname)
     if not os.path.isfile(os.path.join(dirname, "build", "lib", "libnccl.so")):
-        if not os.path.isfile(os.path.join(root_folder, filename)):
-            LOG.i("Downloading nccl...")
-        download_url_to_local(url, filename, root_folder, true_md5)
-
+        # Decide before fetching anything. NCCL is only ever built for a
+        # multi-process run on a machine that has GPUs, and these two checks
+        # used to come *after* the download, so every CPU-only and every
+        # single-process import paid for a trip to the mirror to fetch an
+        # archive it then threw away.
         if core.get_device_count() == 0:
             return
         if not inside_mpi():
             return
+        if not os.path.isfile(os.path.join(root_folder, filename)):
+            LOG.i("Downloading nccl...")
+        download_url_to_local(url, filename, root_folder, true_md5)
 
         import tarfile
         with tarfile.open(fullname, "r") as tar:
@@ -1101,7 +1063,6 @@ if _want_hccl:
 
 setup_nccl()
 setup_cutt()
-setup_cutlass()
 
 # try:
 setup_mkl()
