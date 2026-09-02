@@ -50,16 +50,19 @@ void* TempAllocator::alloc(size_t size, size_t& allocation) {
         unused_memory -= block->size;
     } else {
         void* ptr = nullptr;
+        size_t under_allocation = 0;
         try {
-            ptr = underlying->alloc(size, allocation);
+            ptr = underlying->alloc(size, under_allocation);
         } catch (...) {
             // Temporary workspaces use a distinct allocator. Another caching
             // allocator may own most free device memory, so reclaim all idle
             // pools and retry just as SFRLAllocator does on allocation failure.
             gc_all();
-            ptr = underlying->alloc(size, allocation);
+            ptr = underlying->alloc(size, under_allocation);
         }
         block = new TempCachingBlock(size, ptr);
+        // keep the underlying handle so release can hand it back unchanged
+        block->allocation = under_allocation;
         size_t id;
         if (!block_ids.empty()) {
             id = block_ids.back();
@@ -90,14 +93,16 @@ void TempAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
         auto it = cached_blocks.lower_bound(get_key(block));
         if (it == cached_blocks.begin()) {
             can_add = false;
-            underlying->free((void*)block->memory_ptr, block->size, 0);
+            // hand back the underlying allocation, not 0: a nested caching
+            // allocator below would be asked to release block id 0.
+            underlying->free((void*)block->memory_ptr, block->size, block->allocation);
             unused_memory -= block->size;
             block_ids.push_back(block->id);
             delete block;
         } else {
             --it;
             TempCachingBlock* block = it->second;
-            underlying->free((void*)block->memory_ptr, block->size, 0);
+            underlying->free((void*)block->memory_ptr, block->size, block->allocation);
             unused_memory -= block->size;
             block_ids.push_back(block->id);
             cached_blocks.erase(it);
@@ -113,7 +118,7 @@ void TempAllocator::gc() {
     while (!cached_blocks.empty()) {
         auto it = cached_blocks.begin();
         TempCachingBlock* block = it->second;
-        underlying->free((void*)block->memory_ptr, block->size, 0);
+        underlying->free((void*)block->memory_ptr, block->size, block->allocation);
         unused_memory -= block->size;
         block_ids.push_back(block->id);
         cached_blocks.erase(it);

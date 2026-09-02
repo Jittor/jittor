@@ -26,10 +26,10 @@ std::unique_ptr<CachingBlock*[]> CachingBlockPool::occupied_id_mapper(
 
 //CachingBlock
 CachingBlock::CachingBlock(size_t size, size_t origin_size) : 
-    size(size), origin_size(origin_size), id(0), share_times(0), memory_ptr(nullptr), blocks(nullptr), prev(nullptr), next(nullptr), occupied(false) {}
+    size(size), origin_size(origin_size), id(0), allocation(0), share_times(0), memory_ptr(nullptr), blocks(nullptr), prev(nullptr), next(nullptr), occupied(false) {}
 
 CachingBlock::CachingBlock(size_t size, size_t origin_size, CachingBlockPool* blocks, void* memory_ptr) : 
-    size(size), origin_size(origin_size), id(0), share_times(0), memory_ptr(memory_ptr), blocks(blocks), prev(nullptr), next(nullptr), occupied(false) {}
+    size(size), origin_size(origin_size), id(0), allocation(0), share_times(0), memory_ptr(memory_ptr), blocks(blocks), prev(nullptr), next(nullptr), occupied(false) {}
 
 //CachingBlockPool
 CachingBlockPool::CachingBlockPool() {
@@ -180,7 +180,10 @@ size_t CachingBlockPool::free_all_cached_blocks(Allocator* underlying, long long
             break;
         CachingBlock* block = it->second;
         if (!block->prev && !block->next) {
-            underlying->free((void*)block->memory_ptr, block->size, 0);
+            // Hand back the allocation the underlying allocator gave us, not 0:
+            // a nested caching allocator below would otherwise be asked to
+            // release block id 0, which is never a live allocation.
+            underlying->free((void*)block->memory_ptr, block->size, block->allocation);
             freed_memory += block->size;
             auto cur = it;
             ++it;
@@ -198,6 +201,8 @@ void SFRLAllocator::try_merge_two_blocks(CachingBlock* dst, CachingBlock* src, C
     if (!src || src->occupied) {
         return;
     }
+    // Neighbours only ever arise from splitting one underlying segment.
+    ASSERT(dst->allocation == src->allocation) << "merging blocks of different allocations";
     if (dst->prev == src) {
         dst->memory_ptr = src->memory_ptr;
         dst->prev = src->prev;
@@ -256,20 +261,23 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
         free_all_sfrl_allocators();
         size_t alloc_size = allocation_size(size);
         void* ptr = nullptr;
+        size_t under_allocation = 0;
         try {
-            ptr = underlying->alloc(alloc_size, allocation);
+            ptr = underlying->alloc(alloc_size, under_allocation);
         } catch (...) {
             unused_memory -= large_blocks.free_all_cached_blocks(underlying);
             unused_memory -= small_blocks.free_all_cached_blocks(underlying);
             gc_all();
-            ptr = underlying->alloc(alloc_size, allocation);
+            ptr = underlying->alloc(alloc_size, under_allocation);
         }
         block = new CachingBlock(alloc_size, alloc_size, blocks, ptr);
+        block->allocation = under_allocation;
     } else {
         unused_memory -= block->size;
     }
     if (should_split(block, size)) {
         CachingBlock* rest = new CachingBlock(block->size - size, block->origin_size, block->blocks, static_cast<char*>(block->memory_ptr) + size);
+        rest->allocation = block->allocation;   // same underlying segment
         block->size = size;
         if (block->next) {
             block->next->prev = rest;

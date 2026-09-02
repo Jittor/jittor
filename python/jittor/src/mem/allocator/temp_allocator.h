@@ -15,10 +15,13 @@ namespace jittor {
 struct TempCachingBlock {
     size_t size;
     size_t id;
+    // allocation handle returned by the underlying allocator, handed back
+    // verbatim on release instead of 0.
+    size_t allocation;
     void* memory_ptr;
-    
-    TempCachingBlock(size_t size):size(size),id(0) {}
-    TempCachingBlock(size_t size, void* memory_ptr):size(size),id(0), memory_ptr(memory_ptr) {}
+
+    TempCachingBlock(size_t size):size(size),id(0),allocation(0),memory_ptr(nullptr) {}
+    TempCachingBlock(size_t size, void* memory_ptr):size(size),id(0),allocation(0),memory_ptr(memory_ptr) {}
 };
 
 struct TempAllocator : Allocator {

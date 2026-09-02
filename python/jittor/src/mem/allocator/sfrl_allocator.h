@@ -18,6 +18,10 @@ struct CachingBlock {
     // origin size before split
     size_t origin_size;
     size_t id;
+    // allocation handle of the underlying allocator for the whole segment this
+    // block was split out of; every piece of one segment carries the same value
+    // and it must be handed back verbatim when the segment is released.
+    size_t allocation;
     size_t share_times;
     void* memory_ptr;
     CachingBlockPool* blocks;
