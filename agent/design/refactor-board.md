@@ -17,7 +17,7 @@
 | 执行器 | | |
 | 代码生成 | | |
 | 类型与日志 | | |
-| 内存 | | |
+| 内存 | mem | 6.C10–6.C14（部分）、6.C17–6.C20 |
 | 绑定 | bindings | 6.C02、6.C22–6.C25、6.C27–6.C29 |
 | Python 核心 | | |
 | Python 算子 | | |
@@ -155,17 +155,17 @@
 | 6.C07 | 缺失梯度默认报错 | 待领 | | |
 | 6.C08 | `grad.cc:146-261` 两趟遍历合一趟并快照结构，删无边界游标 | 待领 | | |
 | 6.C09 | `backward()` 可重复 | 待领 | | |
-| 6.C10 | CUDA 分配钩子两张 map 用 `find` 加显式错误，释放后 `erase` | 待领 | | |
-| 6.C11 | CPU 分配失败抛异常，返回值必须检查 | 待领 | | |
-| 6.C12 | `cuda_device_allocator.cc:32-37` 的 managed 回退放到 … | 待领 | | |
-| 6.C13 | 零字节分配不返回伪指针 `0x10` | 待领 | | |
-| 6.C14 | SFRL | 待领 | | |
+| 6.C10 | CUDA 分配钩子两张 map 用 `find` 加显式错误，释放后 `erase` | 进行中 | mem | |
+| 6.C11 | CPU 分配失败抛异常，返回值必须检查 | 进行中 | mem | |
+| 6.C12 | `cuda_device_allocator.cc:32-37` 的 managed 回退放到 … | 进行中 | mem | |
+| 6.C13 | 零字节分配不返回伪指针 `0x10` | 进行中 | mem | |
+| 6.C14 | SFRL | 进行中 | mem | |
 | 6.C15 | `migrate_to_cpu/gpu` 迁移前检查 share_with 关系，整组迁移或拒绝 | 待领 | | |
 | 6.C16 | fetch 跨流 | 待领 | | |
-| 6.C17 | `TempAllocator` 删遮蔽基类的 `used_memory`/`unused_mem… | 待领 | | |
-| 6.C18 | CachingBlock 保存底层 allocation 并原样回传，不再传 0 | 待领 | | |
-| 6.C19 | 每个分配器一把锁并覆盖 `gc()` | 待领 | | |
-| 6.C20 | swap | 待领 | | |
+| 6.C17 | `TempAllocator` 删遮蔽基类的 `used_memory`/`unused_mem… | 进行中 | mem | |
+| 6.C18 | CachingBlock 保存底层 allocation 并原样回传，不再传 0 | 进行中 | mem | |
+| 6.C19 | 每个分配器一把锁并覆盖 `gc()` | 进行中 | mem | |
+| 6.C20 | swap | 进行中 | mem | |
 | 6.C21 | 检查 `NODE_MEMCHECK` 外 `check_graph` 静默空转 | 待领 | | |
 | 6.C22 | pyjt 关键字参数 | 进行中 | bindings | |
 | 6.C23 | `is_type<NanoString>` 收窄 | 进行中 | bindings | |
