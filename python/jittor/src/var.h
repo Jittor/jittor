@@ -41,6 +41,15 @@ struct Var : Node {
     size_t share_offset = 0;
     int64 size, num;
     VarHolder* holder = nullptr;
+    // Circular list of the vars that currently point into one allocation.
+    // `share_src` above is only the *request*, and alloc() clears it once it
+    // is served; from then on a child is indistinguishable from its parent
+    // (same allocator, same allocation, a mem_ptr inside the parent's block),
+    // so without this ring nothing can tell that moving one var's memory would
+    // break another var's view of it -- see migrate_group in mem/allocator.cc.
+    // Both null means "not shared"; a var is never alone in a ring.
+    Var* share_prev = nullptr;
+    Var* share_next = nullptr;
     inline bool is_float() const { CHECK_EXIST; return ns.is_float(); }
     inline int dsize() const { CHECK_EXIST; return ns.dsize(); }
     inline NanoString dtype() const { CHECK_EXIST; return ns; }
@@ -63,6 +72,12 @@ struct Var : Node {
     // Whether alloc() still owes this var an aliased buffer.
     inline bool is_sharing() const { CHECK_EXIST; return share_src != nullptr; }
 };
+
+// Maintain the share ring described above. Linking happens once, in
+// Var::alloc, when the underlying allocator accepts the share; unlinking
+// happens wherever a var stops pointing at that allocation.
+void share_group_link(Var* parent, Var* child);
+void share_group_unlink(Var* v);
 
 struct VarPtr {
     Var* ptr;

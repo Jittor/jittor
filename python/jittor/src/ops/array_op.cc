@@ -118,6 +118,11 @@ void ArrayOp::run() {
     #endif
     // free prev allocation and move into it
     auto o = output;
+    // This replaces the output's memory without going through free_var_mem,
+    // so the share ring has to be told: whatever o was a sub-range of, it is
+    // not one any more (see share_group_link in var.cc).
+    if (PREDICT_BRANCH_NOT_TAKEN(o->share_next != nullptr))
+        share_group_unlink(o);
     if (save_mem)
         free_with_swap(o);
     else

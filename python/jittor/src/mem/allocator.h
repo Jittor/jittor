@@ -23,6 +23,10 @@ struct Allocator {
     virtual void free(void* mem_ptr, size_t size, const size_t& allocation) = 0;
     inline virtual void gc() {};
     inline virtual bool share_with(size_t size, size_t allocation) { return false; };
+    // Whether share_with() can actually hold one block for several owners.
+    // Asked *before* anything is moved, because a migration that cannot keep
+    // a share group together has to be decided on, not discovered halfway.
+    inline virtual bool can_share() const { return false; };
     inline virtual ~Allocator() {}
 };
 

@@ -31,9 +31,37 @@ DEFINE_FLAG_WITH_SETTER(int, auto_mixed_precision_level, 0, "Auto mixed-precisio
 
 void (*_var_free_hook)(Var*);
 
+// A var joins its parent's ring the moment the allocator agrees to share, and
+// leaves it the moment it stops pointing into that allocation. A ring never
+// holds a single var: the last two leave together.
+void share_group_link(Var* parent, Var* child) {
+    if (PREDICT_BRANCH_NOT_TAKEN(child->share_next != nullptr))
+        share_group_unlink(child);
+    if (!parent->share_next)
+        parent->share_next = parent->share_prev = parent;
+    child->share_prev = parent;
+    child->share_next = parent->share_next;
+    parent->share_next->share_prev = child;
+    parent->share_next = child;
+}
+
+void share_group_unlink(Var* v) {
+    if (!v->share_next) return;
+    Var* nxt = v->share_next;
+    Var* prv = v->share_prev;
+    v->share_next = v->share_prev = nullptr;
+    if (nxt == v) return;
+    prv->share_next = nxt;
+    nxt->share_prev = prv;
+    if (nxt->share_next == nxt)
+        nxt->share_next = nxt->share_prev = nullptr;
+}
+
 void free_var(Var* v) {
     if (PREDICT_BRANCH_NOT_TAKEN((bool)_var_free_hook)) _var_free_hook(v);
     Var::number_of_lived_vars--;
+    if (PREDICT_BRANCH_NOT_TAKEN(v->share_next != nullptr))
+        share_group_unlink(v);
     if (save_mem)
         free_with_swap(v);
     else
@@ -49,6 +77,8 @@ void free_var(Var* v) {
 }
 
 void free_var_mem(Var* v) {
+    if (PREDICT_BRANCH_NOT_TAKEN(v->share_next != nullptr))
+        share_group_unlink(v);
     if (save_mem)
         free_with_swap(v);
     else {
@@ -130,6 +160,12 @@ bool Var::alloc(Allocator* allocator) {
             // alloc of the same var (free_var_mem then realloc).
             share_src = nullptr;
             share_offset = 0;
+            // The request is gone but the *relationship* has to outlive it:
+            // from here on this var is a sub-range of x's block and nothing
+            // else records that, so migration would move it alone and drop
+            // the alias. A parent with no block (a zero-sized var: see the
+            // size==0 branch in the raw allocators) has no sub-ranges.
+            if (mem_ptr) share_group_link(x, this);
             return true;
         }
         share_src = nullptr;

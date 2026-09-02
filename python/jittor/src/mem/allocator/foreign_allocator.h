@@ -15,6 +15,7 @@ struct ForeignAllocator : Allocator {
     void* alloc(size_t size, size_t& allocation) override;
     void free(void* mem_ptr, size_t size, const size_t& allocation) override;
     bool share_with(size_t size, size_t allocation) override;
+    bool can_share() const override { return true; }
 };
 
 void make_foreign_allocation(Allocation& a, void* ptr, size_t size, std::function<void()>&& del_func);

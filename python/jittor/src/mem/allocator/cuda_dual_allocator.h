@@ -68,6 +68,7 @@ struct CudaDualAllocator : Allocator {
         da.ref_cnt++;
         return true;
     };
+    bool can_share() const override { return true; }
 
     inline DualAllocation get_dual_allocation(const size_t& allocation) {
         return allocations[allocation];
@@ -94,6 +95,7 @@ struct DelayFree final : Allocator {
     bool share_with(size_t size, size_t allocation) override {
         return cuda_dual_allocator.share_with(size, allocation);
     };
+    bool can_share() const override { return true; }
     void free(void* mem_ptr, size_t size, const size_t& allocation) override {
         using namespace cuda_dual_local;
         if (no_cuda_error_when_free) return;

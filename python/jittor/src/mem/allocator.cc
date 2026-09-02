@@ -128,6 +128,10 @@ void gc_all() {
 }
 
 static void migrate_empty_var(Var* var, Allocator* allocator) {
+    // a zero-sized var carries no data, so leaving its share group *is* the
+    // whole migration; the free below drops its reference to the parent block
+    if (PREDICT_BRANCH_NOT_TAKEN(var->share_next != nullptr))
+        share_group_unlink(var);
     Allocation target(allocator, 0);
     if (var->mem_ptr && var->allocator)
         var->allocator->free(var->mem_ptr, var->size, var->allocation);
@@ -136,6 +140,96 @@ static void migrate_empty_var(Var* var, Allocator* allocator) {
     var->allocator = target.allocator;
     target.ptr = nullptr;
 }
+
+#ifdef HAS_CUDA
+// Move every var that shares one allocation, in one step.
+//
+// Var::alloc's share_with branch leaves a child indistinguishable from its
+// parent, so the single-var path below -- fresh block, memcpy, free the old
+// one -- gives the migrated var a private copy and drops the alias without a
+// word: an in-place write through either var stops being visible through the
+// other. The ring built in var.cc is what makes the group visible here; the
+// group moves into one new block that keeps every member's relative offset.
+static bool migrate_group(Var* var, Allocator* allocator, bool to_gpu) {
+    auto* old_allocator = var->allocator;
+    auto old_allocation = var->allocation;
+    vector<Var*> members;
+    {
+        // Collect the ring before pruning it: unlinking rewires what we walk.
+        vector<Var*> ring;
+        Var* p = var;
+        do { ring.push_back(p); p = p->share_next; } while (p != var);
+        for (auto* v : ring) {
+            if (v->mem_ptr && v->allocator == old_allocator
+                    && v->allocation == old_allocation) {
+                members.push_back(v);
+                continue;
+            }
+            // A var's memory can be replaced without going through
+            // free_var_mem -- ArrayOp::run does exactly that -- and such a var
+            // left the group when that happened; only the ring still says
+            // otherwise. It is not an alias any more, so drop it.
+            LOGvvvv << "share ring: dropping stale member" << v;
+            share_group_unlink(v);
+        }
+    }
+    if (members.size() < 2) {
+        // nothing is actually aliased: let the caller take the plain path
+        share_group_unlink(var);
+        return false;
+    }
+    if (!allocator->can_share()) {
+        // The target cannot express one block held by several vars, so this
+        // group cannot survive the move at all. That is what has always
+        // happened here; the difference is that it no longer happens quietly.
+        // Only the debug allocator configurations reach this
+        // (use_sfrl_allocator=0, use_nfef_allocator=1): the default stack and
+        // cpu_allocator are both SFRL, which can share.
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            LOGw << "allocator" << allocator->name() << "cannot hold a share"
+                << "group, so migrating an aliased var breaks the alias:"
+                << "this allocator configuration cannot represent"
+                << "Var::share_with. Writes through one alias will not be"
+                << "visible through the other.";
+        }
+        share_group_unlink(var);
+        return false;
+    }
+    char* base = (char*)var->mem_ptr;
+    char* end = base + var->size;
+    for (auto* v : members) {
+        char* vp = (char*)v->mem_ptr;
+        if (vp < base) base = vp;
+        if (vp + v->size > end) end = vp + v->size;
+    }
+    size_t total = end - base;
+    vector<size_t> offsets(members.size());
+    for (size_t i=0; i<members.size(); i++)
+        offsets[i] = (char*)members[i]->mem_ptr - base;
+    Allocation a(allocator, total);
+    checkCudaErrors(cudaMemcpy(a.ptr, base, total,
+        to_gpu ? cudaMemcpyHostToDevice : cudaMemcpyDeviceToHost));
+    // Take one reference per extra member before touching any var, so a target
+    // that cannot express sharing fails with the group still intact.
+    for (size_t i=1; i<members.size(); i++)
+        CHECK(allocator->share_with(members[i]->size, a.allocation))
+            << "allocator" << allocator->name()
+            << "cannot hold a share group; migrating one var of an aliased "
+               "group would silently unshare it";
+    for (size_t i=0; i<members.size(); i++) {
+        auto* v = members[i];
+        v->mem_ptr = (char*)a.ptr + offsets[i];
+        v->allocation = a.allocation;
+        v->allocator = allocator;
+    }
+    for (size_t i=0; i<members.size(); i++)
+        old_allocator->free(base + offsets[i], members[i]->size, old_allocation);
+    a.ptr = nullptr;
+    return true;
+}
+#endif
 
 void migrate_to_cpu(Var* var, Allocator* allocator) {
     #ifdef HAS_CUDA
@@ -155,6 +249,14 @@ void migrate_to_cpu(Var* var, Allocator* allocator) {
         return;
     }
     #ifdef HAS_CUDA
+    // An aliased var can only move together with the rest of its group; if it
+    // turns out not to be aliased after all, migrate_group says so and the
+    // plain path below runs instead (see migrate_group).
+    if (PREDICT_BRANCH_NOT_TAKEN(var->share_next != nullptr)
+        && var->mem_ptr && var->allocator->is_cuda()
+        && (var->allocator == &delay_free || !use_cuda_managed_allocator)
+        && migrate_group(var, allocator, false))
+        return;
     if (var->allocator == &delay_free) {
         var->allocator = allocator;
         delay_free.migrate_to_cpu(
@@ -191,6 +293,10 @@ void migrate_to_gpu(Var* var, Allocator* allocator) {
         move_with_swap(var, allocator, true);
         return;
     }
+    // aliased: all or nothing (see migrate_group)
+    if (PREDICT_BRANCH_NOT_TAKEN(var->share_next != nullptr)
+        && var->mem_ptr && migrate_group(var, allocator, true))
+        return;
     Allocation a(allocator, var->size);
     checkCudaErrors(cudaMemcpy(a.ptr, var->mem_ptr, var->size, cudaMemcpyHostToDevice));
     var->allocator->free(var->mem_ptr, var->size, var->allocation);

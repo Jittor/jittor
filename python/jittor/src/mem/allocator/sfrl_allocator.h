@@ -112,6 +112,7 @@ struct SFRLAllocator : Allocator {
     void free(void* mem_ptr, size_t size, const size_t& allocation) override;
     void gc() override;
     virtual bool share_with(size_t size, size_t allocation) override;
+    bool can_share() const override { return true; }
 };
 
 DECLARE_FLAG(int, use_sfrl_allocator);
