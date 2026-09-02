@@ -39,6 +39,7 @@ unsigned long long TempAllocator::get_key(TempCachingBlock* block) {
 }
 
 void* TempAllocator::alloc(size_t size, size_t& allocation) {
+    std::unique_lock<std::recursive_mutex> lock(mutex);
     size = align_size(size);
 
     auto temp = TempCachingBlock(size);
@@ -81,6 +82,7 @@ void* TempAllocator::alloc(size_t size, size_t& allocation) {
 }
 
 void TempAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
+    std::unique_lock<std::recursive_mutex> lock(mutex);
     size = align_size(size);
     // validate the id before indexing the table, not after dereferencing it
     ASSERT(allocation > 0 && allocation < ID_LIMIT)
@@ -118,6 +120,9 @@ void TempAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
 }
 
 void TempAllocator::gc() {
+    // never block: see SFRLAllocator::gc for why this is try_lock
+    std::unique_lock<std::recursive_mutex> lock(mutex, std::try_to_lock);
+    if (!lock.owns_lock()) return;
     while (!cached_blocks.empty()) {
         auto it = cached_blocks.begin();
         TempCachingBlock* block = it->second;

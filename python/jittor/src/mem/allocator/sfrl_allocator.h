@@ -8,6 +8,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
+#include <mutex>
 #include "mem/allocator.h"
 
 namespace jittor {
@@ -46,6 +47,11 @@ struct CachingBlockPool {
 
     CachingBlockPool();
     ~CachingBlockPool();
+    // The block id space is a process-wide static shared by every SFRL
+    // instance, so it carries its own lock, always taken *inside* an
+    // allocator's lock and never the other way round.
+    static size_t new_block_id();
+    static void recycle_block_id(size_t id);
     // return a block whose size >= input size and delete it from pool, return nullptr if no block is found.
     CachingBlock* pop_block(size_t size);
     // insert a block, id of this block will be obtanined in this function.
@@ -71,7 +77,19 @@ struct SFRLAllocator : Allocator {
     static const size_t ALIGN_SIZE = 512;
     static const size_t SMALL_BLOCK_SIZE = 1048576;
     static const size_t LARGE_ALIGN_SIZE = 2097152;
+    // Opt-in reclaim policy: on a cache miss, if the idle share of this
+    // allocator's memory exceeds free_ratio, cached blocks are returned to the
+    // underlying allocator until only min_free_size stays cached.
+    // free_ratio >= 1 disables it (the condition can never hold), which is the
+    // default: reclaiming for the general-purpose allocators would give back
+    // the whole cache to cudaMalloc/free on every steady-state training step.
+    // The default allocators therefore reclaim only on OOM retry and jt.gc();
+    // the dual staging pools opt in with free_ratio=0.3.
     float free_ratio, min_free_size;
+    // One lock per allocator instance: a single global lock made every CPU
+    // allocation wait behind every GPU allocation. Recursive because the OOM
+    // retry path calls gc_all(), which comes back into this instance's gc().
+    std::recursive_mutex mutex;
     static list<SFRLAllocator*> sfrl_allocators;
     list<SFRLAllocator*>::iterator iter;
     CachingBlockPool* get_blocks(size_t size);
@@ -85,9 +103,8 @@ struct SFRLAllocator : Allocator {
         setup(underlying);
     }
     ~SFRLAllocator();
-    // free all unused memory of all sfrl allocators.
-    static void free_all_sfrl_allocators();
-    void try_free_this_allocators();
+    // apply the reclaim policy above to this allocator; caller holds the lock.
+    void try_free_this_allocator();
     void setup(Allocator* underlying);
     uint64 flags() const override { return underlying->flags(); }
     const char* name() const override;

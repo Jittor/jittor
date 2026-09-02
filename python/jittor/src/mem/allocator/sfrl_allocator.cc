@@ -27,6 +27,9 @@ size_t CachingBlockPool::tot_block_id = 0;
 std::unique_ptr<CachingBlock*[]> CachingBlockPool::occupied_id_mapper(
     new CachingBlock*[CachingBlockPool::ID_LIMIT]());
 
+// Guards block_ids / tot_block_id, which are shared by every SFRL instance.
+static std::mutex block_id_mutex;
+
 //CachingBlock
 CachingBlock::CachingBlock(size_t size, size_t origin_size) : 
     size(size), origin_size(origin_size), id(0), allocation(0), share_times(0), memory_ptr(nullptr), blocks(nullptr), prev(nullptr), next(nullptr), occupied(false) {}
@@ -49,33 +52,34 @@ pair<size_t, size_t> CachingBlockPool::get_key(CachingBlock* block) {
     return std::make_pair((size_t)block->size, (size_t)(block->origin_size * ID_LIMIT + block->id));
 }
 
-void CachingBlockPool::insert(CachingBlock* block) {
-    size_t id;
+size_t CachingBlockPool::new_block_id() {
+    std::lock_guard<std::mutex> lock(block_id_mutex);
     if (!block_ids.empty()) {
-        id = block_ids.back();
+        size_t id = block_ids.back();
         block_ids.pop_back();
-    } else {
-        ASSERT(tot_block_id < ID_LIMIT - 1) << "block id limit extended.";
-        id = ++tot_block_id;
+        return id;
     }
-    block->id = id;
+    ASSERT(tot_block_id < ID_LIMIT - 1) << "block id limit extended.";
+    return ++tot_block_id;
+}
+
+void CachingBlockPool::recycle_block_id(size_t id) {
+    std::lock_guard<std::mutex> lock(block_id_mutex);
+    block_ids.push_back(id);
+}
+
+void CachingBlockPool::insert(CachingBlock* block) {
+    block->id = new_block_id();
     blocks[get_key(block)] = block;
 }
 
 void CachingBlockPool::erase(CachingBlock* block) {
-    block_ids.push_back(block->id);
+    recycle_block_id(block->id);
     blocks.erase(get_key(block));
 }
 
 size_t CachingBlockPool::insert_occupied(CachingBlock* block) {
-    size_t id;
-    if (!block_ids.empty()) {
-        id = block_ids.back();
-        block_ids.pop_back();
-    } else {
-        ASSERT(tot_block_id < ID_LIMIT - 1) << "block id limit extended.";
-        id = ++tot_block_id;
-    }
+    size_t id = new_block_id();
     block->id = id;
     occupied_id_mapper[id] = block;
     return id;
@@ -95,7 +99,7 @@ CachingBlock* CachingBlockPool::get_occupied(size_t allocation) {
 CachingBlock* CachingBlockPool::erase_occupied(size_t allocation) {
     CachingBlock* block = get_occupied(allocation);
     occupied_id_mapper[allocation] = nullptr;
-    block_ids.push_back(allocation);
+    recycle_block_id(allocation);
     return block;
 }
 
@@ -105,7 +109,7 @@ CachingBlock* CachingBlockPool::pop_block(size_t size) {
     CachingBlock* block = nullptr;
     if (it != blocks.end()) {
         block = it->second;
-        block_ids.push_back(block->id);
+        recycle_block_id(block->id);
         blocks.erase(it);
     }
     return block;
@@ -194,7 +198,7 @@ size_t CachingBlockPool::free_all_cached_blocks(Allocator* underlying, long long
             freed_memory += block->size;
             auto cur = it;
             ++it;
-            block_ids.push_back(cur->second->id);
+            recycle_block_id(cur->second->id);
             blocks.erase(cur);
             delete block;
         } else {
@@ -234,26 +238,20 @@ CachingBlockPool* SFRLAllocator::get_blocks(size_t size) {
         return &large_blocks;
 }
 
-void SFRLAllocator::free_all_sfrl_allocators() {
-    for (auto i : sfrl_allocators) {
-        if (float(i->unused_memory) > i->free_ratio * float(i->unused_memory + i->used_memory) && i->unused_memory > i->min_free_size) {
-            i->unused_memory -= i->large_blocks.free_all_cached_blocks(i->underlying, i->unused_memory - i->min_free_size);
-            i->unused_memory -= i->small_blocks.free_all_cached_blocks(i->underlying, i->unused_memory - i->min_free_size);
-        }
+// This used to sweep *every* SFRL instance on every cache miss, which both made
+// each allocation walk a global list and forced a cross-allocator lock order.
+// Each allocator now applies the policy to itself, under its own lock.
+void SFRLAllocator::try_free_this_allocator() {
+    if (free_ratio >= 1) return;    // policy disabled, see the header
+    if (float(unused_memory) > free_ratio * float(unused_memory + used_memory)
+        && unused_memory > min_free_size) {
+        unused_memory -= large_blocks.free_all_cached_blocks(underlying, unused_memory - (long long)min_free_size);
+        unused_memory -= small_blocks.free_all_cached_blocks(underlying, unused_memory - (long long)min_free_size);
     }
 }
-
-inline void SFRLAllocator::try_free_this_allocators() {
-    if (float(unused_memory) > free_ratio * float(unused_memory + used_memory)) {
-            unused_memory -= large_blocks.free_all_cached_blocks(underlying);
-            unused_memory -= small_blocks.free_all_cached_blocks(underlying);
-    }
-}
-
-std::mutex sfrl_allocator_mutex;
 
 void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
-    std::unique_lock<std::mutex> lock(sfrl_allocator_mutex);
+    std::unique_lock<std::recursive_mutex> lock(mutex);
     #ifdef IS_ACL
     // output of acl op need additional 32 bytes
     size = align_size(size+32);
@@ -265,7 +263,7 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
     CachingBlock* block = blocks->pop_block(size);
     //alloc from GPU
     if (block == nullptr) {
-        free_all_sfrl_allocators();
+        try_free_this_allocator();
         size_t alloc_size = allocation_size(size);
         void* ptr = nullptr;
         size_t under_allocation = 0;
@@ -302,7 +300,7 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
 }
 
 void SFRLAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
-    std::unique_lock<std::mutex> lock(sfrl_allocator_mutex);
+    std::unique_lock<std::recursive_mutex> lock(mutex);
     // free() only trusts `allocation`, so validate it before dereferencing:
     // range, registered, and still occupied. Callers are allowed to pass 0 for
     // mem_ptr (see src/test/test_sfrl_allocator.cc), but when they do pass one
@@ -330,12 +328,18 @@ void SFRLAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
 }
 
 void SFRLAllocator::gc() {
+    // gc_all() is reachable both from Python (jt.gc()) and from inside another
+    // allocator's alloc() retry, so it must never block: try_lock keeps two
+    // threads from taking two instance locks in opposite orders. The recursive
+    // mutex makes the same-thread reentry from our own retry path succeed.
+    std::unique_lock<std::recursive_mutex> lock(mutex, std::try_to_lock);
+    if (!lock.owns_lock()) return;
     unused_memory -= small_blocks.free_all_cached_blocks(underlying);
     unused_memory -= large_blocks.free_all_cached_blocks(underlying);
 }
 
 bool SFRLAllocator::share_with(size_t size, size_t allocation) {
-    std::unique_lock<std::mutex> lock(sfrl_allocator_mutex);
+    std::unique_lock<std::recursive_mutex> lock(mutex);
     auto* block = CachingBlockPool::get_occupied(allocation);
     ASSERT(block->occupied) << "share_with a freed allocation:" << allocation;
     ++block->share_times;

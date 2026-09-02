@@ -8,6 +8,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
+#include <mutex>
 #include "mem/allocator.h"
 
 namespace jittor {
@@ -35,11 +36,13 @@ struct TempAllocator : Allocator {
     // 20+ cuDNN / cub workspace call sites.
     size_t cache_blocks_limit;
     std::map<unsigned long long, TempCachingBlock*> cached_blocks;
-    std::vector<size_t> block_ids;  
+    std::vector<size_t> block_ids;
     size_t tot_block_id;
     // value-initialized: free() indexes this table by allocation id.
     std::unique_ptr<TempCachingBlock*[]> occupied_id_mapper;
-
+    // One lock per instance; recursive because the OOM retry path calls
+    // gc_all(), which comes back into this instance's gc().
+    std::recursive_mutex mutex;
 
     inline TempAllocator(size_t cache_blocks_limit=2) : cache_blocks_limit(cache_blocks_limit), tot_block_id(0), occupied_id_mapper(new TempCachingBlock*[ID_LIMIT]()) {
         temp_allocators.push_back(this);
