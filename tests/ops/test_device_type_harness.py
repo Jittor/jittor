@@ -104,15 +104,13 @@ def test_an_unpinned_battery_still_follows_the_runner_selection(monkeypatch):
     assert list(_generated(scope)) == ["TestSampleCUDA"]
 
 
-def _noxfile_tuple(name):
-    tree = ast.parse((REPO_ROOT / "noxfile.py").read_text(encoding="utf-8"))
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id == name for target in node.targets
-        ):
-            return [element.value for element in node.value.elts
-                    if isinstance(element, ast.Constant)]
-    raise AssertionError("%s is not defined in noxfile.py" % name)
+def _cpu_gate_files():
+    """Test files the CPU gate would run, across both of its process modes."""
+    from _helpers.gate_scope import (
+        native_arguments, selected_files, torch_arguments)
+
+    return (selected_files(REPO_ROOT, native_arguments())
+            | selected_files(REPO_ROOT, torch_arguments()))
 
 
 def _decorator_names(function):
@@ -125,7 +123,10 @@ def test_the_backward_battery_is_cpu_pinned_and_reachable_from_the_cpu_gate():
     """gradcheck runs on CPU only, so the CPU gate is the only one that can run it."""
     source = (REPO_ROOT / "tests" / "ops" / "test_ops.py").read_text(encoding="utf-8")
     assert 'instantiate_device_type_tests(TestGradients, globals(), only_for=("cpu",))' in source
-    assert "tests/ops/test_ops.py" in _noxfile_tuple("CPU_TESTS")
+    # 0.04 replaced the hand-written CPU_TESTS list with "the tree minus stated
+    # exceptions", so the question is no longer "is this path in the list" but
+    # "would the gate collect this file".
+    assert "tests/ops/test_ops.py" in _cpu_gate_files()
 
     # A per-method pin does not survive an accelerator session's device selection:
     # it filters methods out of the classes the session asked for instead of
