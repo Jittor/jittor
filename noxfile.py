@@ -1452,6 +1452,18 @@ def cpu(session):
     torch_env = env.copy()
     torch_env["JITTOR_TORCH_SHIM"] = "1"
     _run_pytest_once(session, gate_torch_arguments(), torch_env)
+    # The manual probes get their own process, which is the whole reason they
+    # are marked: they drive Jupyter kernels and spawn their own children, and
+    # they do not survive being run after a thousand other tests have already
+    # used the runtime. Running them here rather than leaving them opt-in keeps
+    # them gated -- before 0.13 they ran inside the native session by accident
+    # (the marker was attached after the decision that reads it) and cost 537 s
+    # there; on their own they take about the same and mean something.
+    manual_env = env.copy()
+    manual_env["JITTOR_TEST_MANUAL"] = "1"
+    _run_pytest_once(
+        session, gate_native_arguments() + ("-m", "manual"),
+        manual_env, timeout=1800)
     oracle_env = env.copy()
     if real_torch_site:
         oracle_env["REAL_TORCH_SITE"] = real_torch_site
