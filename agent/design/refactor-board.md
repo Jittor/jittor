@@ -203,21 +203,21 @@
 | 6.P22 | H20 `to_dense` 对 COO 重复索引求和 | 进行中 | pyother | |
 | 6.P23 | eigh 的特征向量梯度在 CUDA 上错约 60% | 待领 | | |
 | 6.P24 | Pool3d 的 count_include_pad 读原始参数 | 待领 | | |
-| 6.B01 | MPI 的 int64 改 `MPI_INT64_T` | 待领 | | |
+| 6.B01 | MPI 的 int64 改 `MPI_INT64_T` | 已合并 | dist | 03518707 |
 | 6.B02 | ACL | 待领 | | |
-| 6.B03 | HCCL 宏错误时抛而非 return | 待领 | | |
-| 6.B04 | 分布式一旦被请求，初始化失败硬失败 | 待领 | | |
+| 6.B03 | HCCL 宏错误时抛而非 return | 已合并 | dist | c657ab01 |
+| 6.B04 | 分布式一旦被请求，初始化失败硬失败 | 已合并 | dist | 8ae65e24 |
 | 6.B05 | cuBLAS `use_tensorcore` 三目判断写反 | 待领 | | |
-| 6.B06 | `var_broadcast` 用传入的 root | 待领 | | |
+| 6.B06 | `var_broadcast` 用传入的 root | 已合并 | dist | 89dd014b |
 | 6.B07 | cuDNN RNN | 待领 | | |
 | 6.B08 | cuSPARSE | 待领 | | |
 | 6.B09 | curand 奇数长度用临时 buffer 不越界写 | 待领 | | |
-| 6.B10 | MPI fp16 归约统一标量参考实现加可选 SIMD 与运行期 CPUID 检测 | 待领 | | |
-| 6.B11 | ACL 六个算子静默把输入升到 fp32 | 待领 | | |
+| 6.B10 | MPI fp16 归约统一标量参考实现加可选 SIMD 与运行期 CPUID 检测 | 已合并 | dist | 734d55a1 |
+| 6.B11 | ACL 六个算子静默把输入升到 fp32 | 已合并 | dist | 492e5385 |
 | 6.B12 | `cutt_transpose_op.cc:77` 的 `cudaGetLastError()`… | 待领 | | |
 | 6.B13 | cuFFT `cufftCreate` 后被 `cufftPlanMany` 覆盖的句柄泄漏 | 待领 | | |
 | 6.B14 | conv3d 三算子迁到 backend plan 缓存 | 待领 | | |
-| 6.B15 | MPI 同时识别 PMI_/SLURM_ 环境变量或要求显式声明 | 待领 | | |
+| 6.B15 | MPI 同时识别 PMI_/SLURM_ 环境变量或要求显式声明 | 已合并 | dist | 956c4b23 |
 | 6.B16 | `sync_run` 在 ACL 上实现或删 flag | 待领 | | |
 | 6.B17 | 析构不得抛 | 待领 | | |
 | 7.01 | 「看起来支持其实空操作」一律改为实现或抛 `NotImplementedError`，需显式 `… | 已合并 | 兼容层分区 | ff395ecc b7c12ddc 0446217e 47012a27 46bc9ea7 49d41acf 9053a7c0 |
