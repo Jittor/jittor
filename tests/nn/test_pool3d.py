@@ -249,6 +249,187 @@ class TestPool3dBackward(unittest.TestCase):
                         float(grad.sum()), float(seed.sum()), places=2)
 
 
+def _jittor_out_size(size, kernel, stride, padding, ceil_mode):
+    if ceil_mode:
+        return (size + 2 * padding - kernel + stride - 1) // stride + 1
+    return (size + 2 * padding - kernel) // stride + 1
+
+
+def _torch_out_size(size, kernel, stride, padding, ceil_mode):
+    """torch's ``pooling_output_shape``, including the ceil_mode correction."""
+    out = _jittor_out_size(size, kernel, stride, padding, ceil_mode)
+    if ceil_mode and (out - 1) * stride >= size + padding:
+        out -= 1
+    return out
+
+
+def _reference_avgpool3d(x, kernel, stride, padding, out_sizes, count_include_pad):
+    """torch's avg_pool3d divisor rules, spelled out.
+
+    ``count_include_pad=True``  -> divide by the window clipped to the *padded*
+    volume ``[-p, size + p)`` (the full kernel volume unless ceil_mode pushed the
+    window past the padding).
+    ``count_include_pad=False`` -> divide by the window clipped to the real input.
+    """
+    kernel, stride, padding = _triple(kernel), _triple(stride), _triple(padding)
+    n, c = x.shape[:2]
+    sizes = x.shape[2:]
+    out = np.zeros((n, c) + tuple(out_sizes), dtype=np.float64)
+    for i in range(out_sizes[0]):
+        for j in range(out_sizes[1]):
+            for k in range(out_sizes[2]):
+                index = (i, j, k)
+                starts = [index[a] * stride[a] - padding[a] for a in range(3)]
+                padded_ends = [min(starts[a] + kernel[a], sizes[a] + padding[a])
+                               for a in range(3)]
+                lo = [max(starts[a], 0) for a in range(3)]
+                hi = [min(starts[a] + kernel[a], sizes[a]) for a in range(3)]
+                window = x[:, :, lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]]
+                if count_include_pad:
+                    divisor = 1
+                    for a in range(3):
+                        divisor *= padded_ends[a] - starts[a]
+                else:
+                    divisor = 1
+                    for a in range(3):
+                        divisor *= hi[a] - lo[a]
+                out[:, :, i, j, k] = window.sum(axis=(2, 3, 4)) / divisor
+    return out
+
+
+class TestAvgPool3dCountIncludePad(unittest.TestCase):
+    """``count_include_pad`` selects the averaging divisor -- nothing else.
+
+    ``Pool3d.__init__`` used to compute it as ``count_include_pad and padding != 0``
+    on the *raw* argument, so ``padding=(0,0,0)`` (a tuple is never ``== 0``) took a
+    different branch than ``padding=0`` and the same pooling produced different
+    numbers.  The two divisor implementations were wrong in their own ways too: the
+    ``True`` branch of the ceil_mode kernel divided by the whole kernel volume even
+    when the window hung past the padded volume, and the non-ceil_mode path went
+    through ``reduce('mean')``, which always divides by the kernel volume -- so
+    ``count_include_pad=False`` was silently ignored there.
+
+    The reference above is torch's rule; it was checked case-by-case against a
+    binary PyTorch 2.12 build in a separate process (48 legal combinations of
+    kernel/stride/padding/ceil_mode/count_include_pad).
+    """
+
+    SHAPE = (1, 2, 6, 7, 8)
+    GEOMETRIES = ((3, 2), ((2, 3, 2), (2, 2, 3)), (2, 2), (3, 3))
+
+    def setUp(self):
+        rng = np.random.default_rng(2024)
+        self.x = rng.standard_normal(self.SHAPE).astype("float32")
+
+    def _pool(self, kernel, stride, padding, ceil_mode, count_include_pad):
+        return jt.pool.Pool3d(
+            kernel, stride=stride, padding=padding, ceil_mode=ceil_mode,
+            count_include_pad=count_include_pad, op="mean")(jt.array(self.x)).numpy()
+
+    def test_scalar_and_tuple_padding_are_equivalent(self):
+        """The regression: ``0`` and ``(0,0,0)`` describe the same pooling."""
+        for kernel, stride in self.GEOMETRIES:
+            for ceil_mode in (False, True):
+                for count_include_pad in (True, False):
+                    for scalar, tup in ((0, (0, 0, 0)), (1, (1, 1, 1))):
+                        with self.subTest(kernel=kernel, ceil_mode=ceil_mode,
+                                          count_include_pad=count_include_pad,
+                                          padding=scalar):
+                            a = self._pool(kernel, stride, scalar, ceil_mode,
+                                           count_include_pad)
+                            b = self._pool(kernel, stride, tup, ceil_mode,
+                                           count_include_pad)
+                            np.testing.assert_allclose(a, b, rtol=1e-6, atol=1e-6)
+
+    def test_divisor_matches_torch_rule(self):
+        for kernel, stride in self.GEOMETRIES:
+            for padding in (0, 1, (0, 0, 0), (1, 1, 1)):
+                for ceil_mode in (False, True):
+                    for count_include_pad in (True, False):
+                        with self.subTest(kernel=kernel, stride=stride,
+                                          padding=padding, ceil_mode=ceil_mode,
+                                          count_include_pad=count_include_pad):
+                            got = self._pool(kernel, stride, padding, ceil_mode,
+                                             count_include_pad)
+                            k, st, pd = _triple(kernel), _triple(stride), _triple(padding)
+                            # Compare over the planes torch actually emits: with
+                            # ceil_mode and padding, Pool3d emits extra planes
+                            # whose window lies entirely in the padding, and torch
+                            # has no reference value for them (see
+                            # test_ceil_mode_output_size_still_diverges_from_torch).
+                            out_sizes = [
+                                _torch_out_size(self.SHAPE[2 + a], k[a], st[a],
+                                                pd[a], ceil_mode)
+                                for a in range(3)
+                            ]
+                            expected = _reference_avgpool3d(
+                                self.x.astype(np.float64), kernel, stride, padding,
+                                out_sizes, count_include_pad)
+                            got = got[:, :, :out_sizes[0], :out_sizes[1], :out_sizes[2]]
+                            np.testing.assert_allclose(
+                                got, expected, rtol=1e-4, atol=1e-4)
+
+    def test_count_include_pad_false_is_not_ignored(self):
+        """With real padding the two settings must give different numbers."""
+        for ceil_mode in (False, True):
+            with self.subTest(ceil_mode=ceil_mode):
+                on = self._pool(3, 2, 1, ceil_mode, True)
+                off = self._pool(3, 2, 1, ceil_mode, False)
+                self.assertGreater(float(np.abs(on - off).max()), 1e-3)
+
+    def test_no_padding_makes_the_setting_irrelevant(self):
+        for ceil_mode in (False, True):
+            for kernel, stride in self.GEOMETRIES:
+                with self.subTest(kernel=kernel, ceil_mode=ceil_mode):
+                    on = self._pool(kernel, stride, 0, ceil_mode, True)
+                    off = self._pool(kernel, stride, 0, ceil_mode, False)
+                    np.testing.assert_allclose(on, off, rtol=1e-6, atol=1e-6)
+
+    def test_ceil_mode_output_size_still_diverges_from_torch(self):
+        """Known gap lock -- NOT a statement that this behaviour is right.
+
+        torch drops the last window when it would start inside the right padding
+        (``pooling_output_shape``'s ``if (out-1)*stride >= size + padding: out--``).
+        Pool3d has no such correction, so with ``ceil_mode=True`` and non-zero
+        padding it emits one extra plane. That is a *shape* defect shared by the
+        max and mean paths, outside the divisor fix this class covers.
+
+        If you fix it: this test will fail, and the right change is to delete it
+        and fold those combinations into ``test_divisor_matches_torch_rule``.
+        """
+        diverging = []
+        for kernel, stride in self.GEOMETRIES:
+            for padding in (0, 1):
+                for ceil_mode in (False, True):
+                    k, st, pd = _triple(kernel), _triple(stride), _triple(padding)
+                    got = tuple(
+                        _jittor_out_size(self.SHAPE[2 + a], k[a], st[a], pd[a], ceil_mode)
+                        for a in range(3))
+                    want = tuple(
+                        _torch_out_size(self.SHAPE[2 + a], k[a], st[a], pd[a], ceil_mode)
+                        for a in range(3))
+                    actual = tuple(self._pool(
+                        kernel, stride, padding, ceil_mode, True).shape[2:])
+                    self.assertEqual(actual, got)
+                    if got != want:
+                        diverging.append((kernel, stride, padding, ceil_mode))
+        self.assertEqual(
+            diverging,
+            [((2, 3, 2), (2, 2, 3), 1, True), (2, 2, 1, True), (3, 3, 1, True)],
+            "the set of ceil_mode output-size divergences from torch changed",
+        )
+
+
+class TestAvgPool3dCountIncludePadCuda(TestAvgPool3dCountIncludePad):
+    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    def setUp(self):
+        super().setUp()
+        jt.flags.use_cuda = 1
+
+    def tearDown(self):
+        jt.flags.use_cuda = 0
+
+
 class TestMaxPool3dIndicesCuda(TestMaxPool3dIndices):
     @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
     def setUp(self):

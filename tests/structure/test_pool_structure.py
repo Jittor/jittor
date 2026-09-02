@@ -212,7 +212,11 @@ class TestPoolStructure(unittest.TestCase):
                     ("return_indices", None), ("kernel_size", (2, 2, 2)),
                     ("op", "maximum"), ("stride", (2, 2, 2)),
                     ("padding", (0, 0, 0)), ("ceil_mode", False),
-                    ("count_include_pad", False),
+                    # 3D stores the argument as given; the 2D Pool above still
+                    # folds `padding != 0` into it (6.P24 only covered Pool3d).
+                    # With padding 0 the two divisors coincide, so this is a
+                    # stored-field difference, not a numerical one.
+                    ("count_include_pad", True),
                 ),
             ),
             (pool_facade.AdaptiveAvgPool2d(2), (("output_size", 2),)),
@@ -263,7 +267,7 @@ class TestPoolStructure(unittest.TestCase):
                         ("return_indices", None),
                         ("kernel_size", (2, 2, 2)), ("op", "mean"),
                         ("stride", (2, 2, 2)), ("padding", (0, 0, 0)),
-                        ("ceil_mode", False), ("count_include_pad", False),
+                        ("ceil_mode", False), ("count_include_pad", True),
                     ),
                 )),),
             ),
@@ -287,7 +291,7 @@ class TestPoolStructure(unittest.TestCase):
                         ("return_indices", None),
                         ("kernel_size", (2, 2, 2)), ("op", "maximum"),
                         ("stride", (2, 2, 2)), ("padding", (0, 0, 0)),
-                        ("ceil_mode", False), ("count_include_pad", False),
+                        ("ceil_mode", False), ("count_include_pad", True),
                     ),
                 )),),
             ),

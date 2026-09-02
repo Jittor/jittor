@@ -238,3 +238,39 @@ for name in ("xshape1", "yshape1"):
 奇偶各一。已有的 opinfo / 回归样本往往**只覆盖默认值**（jittor 的 irfft opinfo 样本
 全部是 `n == 2*(half-1)`），所以"既有测试全绿"完全不能说明这条路径被测过。
 先去数一下样本里那个参数取过几个不同的值。
+
+## 9. 两个收尾动作，做完修复别忘了
+
+### 9.1 结构测试可能把 buggy 的值钉死了
+
+`tests/structure/test_*_structure.py` 里有大量"默认实例的字段快照"。它们是照着**当时的
+实现**写出来的，所以一个字段如果本来就算错，快照里存的就是错值。改了构造函数的字段
+计算之后，这类测试会失败——**先判断是"我改坏了"还是"快照本来就钉的是 bug"**，
+后者要同步更新快照并在旁边写清楚为什么变。别把它当成回归就把改动撤回去。
+
+同类还有：`test_package_import_direction` 这种"实现模块只准 `import jittor`"的规则，
+所以别在 `jittor/pool/*.py` 里随手 `import numpy`——纯 Python 算得出来就纯 Python 算。
+
+### 9.2 已知差异要用"锁"钉住，不要留白
+
+修完一处后往往还剩一批"知道不对但不属于本任务"的组合（例如 ceil_mode 的输出尺寸
+规则）。两种做法都不好：跳过（差异从此隐形）、或者顺手一起改（越界）。用**已知差异锁**：
+
+```python
+def test_still_diverges_from_torch(self):
+    """Known gap lock -- NOT a statement that this behaviour is right.
+    If you fix it: this test fails; delete it and fold these cases into the
+    parity test above."""
+    diverging = [combo for combo in ALL if jittor_shape(combo) != torch_shape(combo)]
+    self.assertEqual(diverging, [ ...穷举出来的那几个... ])
+```
+
+它同时防两件事：差异变大（回归）和差异被修好却没人更新测试。对拍测试本身则只比较
+**双方都有定义**的那部分（例如只比 torch 真正会输出的那些平面），不要用 nan 兜底。
+
+### 9.3 布尔参数被折进启发式条件，是"标量/元组不等价"的典型来源
+
+`self.count_include_pad = count_include_pad and padding != 0` 这种写法读的是**原始入参**：
+`padding=0` 恒为假、`padding=(0,0,0)` 恒为真（元组永远不等于 int），于是同一个语义的两种
+写法走不同分支、算出不同的数。查这类问题的固定动作：**把每个"看起来只是校验/优化"的
+`and`/`or` 条件拆开，对标量与元组各跑一遍，断言两者结果相同。**
