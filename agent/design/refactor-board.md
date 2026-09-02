@@ -84,7 +84,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | Python 算子 | pyops (6.P03–6.P09) | GPU5 c36-47 |
 | Python 其他 | pyother (5.18、5.19、6.P25) | GPU6 c64-75 |
 | 兼容层 | compat (7.01) | CPU c96-103 |
-| CUDA 后端 | cudabk (6.B05/07/08/09/12/13/14) | GPU7 c76-87 |
+| CUDA 后端 | cudabk (6.B07/08/17、8.01、8.03) | GPU7 c76-87 |
 | ACL/ROCm/Corex | — |  |
 | 分布式 | dist (6.B01/03/04/06/10/11/15) | CPU c88-95 |
 | 构建 | build (0.07–0.11/0.17, 9.02–9.06/9.08/9.09/9.11/9.15/9.17, 9.04 部分) | GPU4 c48-63 |
@@ -102,7 +102,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | `tests/core/test_type_system.py` 一套门禁都不跑 | **已修**：0.04 之后 CPU 门禁的 torch 会话就是 `TORCH_MODE_PATHS` 本身，这个文件自然进来了。同一批还有 233 个此前一套 workflow 都碰不到的文件 | 门禁 gates，`6adbf488` |
 | `test_atomic_tuner` 抓不到日志 | **已修**：根因确认为 `032ecfe1` 的 `full_reduce_cuda.py` 快路径猴补 `Var.sum`/`Var.mean`，全归约不再进 JIT；第 4 条用例改走 `jt.reduce` | codegen，`72f020b3` |
 | `asm_tuner.py` 非原子写 `.s`，并发编译读到截断的汇编 | **已修**：`pass_asm()` 改成写 `<路径>.tmp.<pid>` 再 `os.replace`。判据是 inode——改名换 inode，原地重写不换，也就不会消掉那个窗口；用例 `test_asm_tuner.py::TestAsmTunerWritesAtomically` 钉住。缓存里已经存在的坏 `.s` 不会自动修复，删掉再跑 | 构建，`1919b035` |
-| `tests/backends/cuda/test_backend_teardown.py` 过不了 0.21 的静态门禁 | `272f00ba`（6.B17）加的 `subprocess.run([sys.executable, ...])` 自己拼了 PYTHONPATH，但没走 `_helpers/child_process`，而 `46dbe946` 的静态检查禁止这么写。两个提交是并行落地的，谁都没错，只是撞上了。现症：`tests/structure/test_child_process_contract.py` 两个用例红（`test_no_test_names_the_interpreter_directly`、`test_every_child_launch_pins_this_tree`） | CUDA 后端 cudabk，改成 `run_child_script` 即可 |
+| `tests/backends/cuda/test_backend_teardown.py` 过不了 0.21 的静态门禁 | **已修**：gates 在 `a5ce7310` 里已改成 `run_python_child(..., crash_isolated=True)`。cudabk 复核了改后的文件保留全部断言（无 terminate / 退出码 0 / 有 teardown 记录 / 真错误 `cudaErrorIllegalAddress` 仍可见）加那条干净退出的对照，并把 `cuda-backend-choice-proof` 里「子进程 abort 会带走 pytest」那段从只描述现象改成指向 helper 的 `crash_isolated`（`1b117a91`） | 门禁 gates，`a5ce7310` |
 | `jt.flags.nvcc_flags` 的拼法变了 | 9.08 之后架构 flag 是 `--generate-code=arch=...,code=...`，不再是 `-arch=compute_N -code=sm_N`。按后者做字符串匹配的地方要改 | 各分区自查，`2d71f792` |
 | 全树跑时 `test_notebooks.py` 没有被当成 manual 跳过 | **已修**：`pytest_collection_modifyitems` 里 `test_notebooks.py` 的 `pytest.mark.manual` 加在跳过判断**之后**，所以全树跑时它照跑不误——2026-09-03 的全树原生一遍里实测 537 秒，是全树最慢的一项（第二名 289 秒）。现在所有标记先挂完再统一判断，manual 探针改由 `JITTOR_TEST_MANUAL=1` 或 `-m manual` 显式打开。**这是「筛选逻辑的顺序决定筛选结果」的第三例**（另两例：按 `sys.argv` 选 shim 模式、`@onlyCPU` 被设备过滤全部跳过） | 门禁 gates，`5c0f2364`（0.13） |
 
@@ -285,19 +285,19 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 6.B02 | ACL | 待领 | | |
 | 6.B03 | HCCL 宏错误时抛而非 return | 已合并 | dist | c657ab01 |
 | 6.B04 | 分布式一旦被请求，初始化失败硬失败 | 已合并 | dist | 8ae65e24 |
-| 6.B05 | cuBLAS `use_tensorcore` 三目判断写反 | 待领 | | |
+| 6.B05 | cuBLAS `use_tensorcore` 三目判断写反 | 已合并 | cudabk | 9f5c3e90 |
 | 6.B06 | `var_broadcast` 用传入的 root | 已合并 | dist | 89dd014b |
-| 6.B07 | cuDNN RNN | 待领 | | |
-| 6.B08 | cuSPARSE | 待领 | | |
-| 6.B09 | curand 奇数长度用临时 buffer 不越界写 | 待领 | | |
+| 6.B07 | cuDNN RNN（dropout 掩码/work_space/infer_shape 泄漏 + 按实际 dtype） | 已合并 | cudabk | f5540427、da5bcad4 |
+| 6.B08 | cuSPARSE | 进行中 | cudabk | |
+| 6.B09 | curand 奇数长度用临时 buffer 不越界写 | 已合并 | cudabk | 08a1bd66 |
 | 6.B10 | MPI fp16 归约统一标量参考实现加可选 SIMD 与运行期 CPUID 检测 | 已合并 | dist | 734d55a1 |
 | 6.B11 | ACL 六个算子静默把输入升到 fp32 | 已合并 | dist | 492e5385 |
-| 6.B12 | `cutt_transpose_op.cc:77` 的 `cudaGetLastError()`… | 待领 | | |
-| 6.B13 | cuFFT `cufftCreate` 后被 `cufftPlanMany` 覆盖的句柄泄漏 | 待领 | | |
-| 6.B14 | conv3d 三算子迁到 backend plan 缓存 | 待领 | | |
+| 6.B12 | `cutt_transpose_op.cc:77` 的 `cudaGetLastError()`… | 已合并 | cudabk | 58215816 |
+| 6.B13 | cuFFT `cufftCreate` 后被 `cufftPlanMany` 覆盖的句柄泄漏 | 已合并 | cudabk | 11697758 |
+| 6.B14 | conv3d 三算子迁到 backend plan 缓存 | 已合并 | cudabk | 8432a181 |
 | 6.B15 | MPI 同时识别 PMI_/SLURM_ 环境变量或要求显式声明 | 已合并 | dist | 956c4b23 |
 | 6.B16 | `sync_run` 在 ACL 上实现或删 flag | 待领 | | |
-| 6.B17 | 析构不得抛 | 待领 | | |
+| 6.B17 | 析构不得抛 | 已合并 | cudabk | 272f00ba |
 | 7.01 | 「看起来支持其实空操作」一律改为实现或抛 `NotImplementedError`，需显式 `… | 已合并 | 兼容层分区 | ff395ecc b7c12ddc 0446217e 47012a27 46bc9ea7 49d41acf 9053a7c0 |
 | 7.02 | DDP 真实梯度同步 | 待领 | | |
 | 7.03 | 每个 torch API 一个模块级一等对象加保真度标注 | 待领 | | |
