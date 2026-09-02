@@ -32,7 +32,10 @@ void* CudaDeviceAllocator::alloc(size_t size, size_t& allocation) {
     if (!cuda_device_allocator_managed_fallback)
         throw std::runtime_error("cudaMalloc failed");
     display_memory_info(__FILELINE__);
-    LOGf << "Unable to alloc cuda device memory for size" << size;
+    // LOGf throws, so everything below it used to be unreachable and
+    // cuda_device_allocator_managed_fallback only changed the error message.
+    LOGw << "Unable to alloc cuda device memory for size" << size
+        << ", falling back to cudaMallocManaged";
     checkCudaErrors(cudaMallocManaged(&ptr, size));
     return ptr;
 }
