@@ -135,6 +135,21 @@ Pool/unpool 这类算子的 kernel 是 f-string 拼出来的 C++。定位手法�
    "结果不对"。所以这类改动要在**带 timeout 的子进程**里先复现，别在主进程里跑：
    `timeout 120 python repro.py; echo "exit=$?"`（124 = 超时 = 死循环）。
 
+## 6.5 「索引编码 / 解码」类缺陷的定位顺序
+
+pool→unpool、argmax→scatter 这类算子，索引是一个**扁平下标**，编码和解码各用一次形状。
+出错时按这个顺序查，**不要一上来就改解码表达式**：
+
+1. 编码那一侧用的是谁的宽度？（pool 前向用的是 `in0_shape*`，即**原始输入**的 H/W）
+2. 解码那一侧的形状是怎么来的？**优先怀疑「输出形状的默认值」**，而不是解码表达式本身。
+   解码表达式用输出形状是对的；错的往往是输出形状被默认成了别的东西。
+3. 解码越界会发生什么？`reindex_reduce` 把越界目标当 overflow **静默丢弃**，
+   所以症状是「一部分值凭空消失」而不是报错。判据：`out.sum() == pooled.sum()`。
+4. 反解 kernel 尺寸的默认输出形状必须**反演前向公式**：`(pooled-1)*stride + kernel`
+   （torch 的 `_unpool_output_size`）。写成 `pooled*stride` 时 stride==kernel 下恰好相等，
+   所以只有 stride != kernel 才暴露——这类「默认参数只在常用配置下正确」的 bug
+   要专门构造 stride != kernel 的用例。
+
 ## 7. `reindex` 与 `reindex_reduce` 里 `xshape`/`yshape` 的方向是反的
 
 这是最容易改错方向的地方，实测结论（见 `python/jittor/src/ops/*.cc`）：

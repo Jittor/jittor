@@ -48,7 +48,12 @@ class MaxUnpool2d(jt.Module):
         if output_size:
             h, w = output_size[-2:]
         else:
-            h, w = ph * sh, pw * sw
+            # The index in ``id`` was encoded with the *original* row width, and
+            # the decode below uses the reconstructed width, so a default that
+            # does not reproduce the original shape silently relocates (and
+            # drops) values.  Use torch's convention, which inverts the pooling
+            # formula: it agrees with ``ph * sh`` whenever stride == kernel_size.
+            h, w = (ph - 1) * sh + kh, (pw - 1) * sw + kw
         if self.stride == self.kernel_size:
             x = x.reindex(shape=[b, c, h, w],
                 indexes=['i0', 'i1', f'i2/{kh}', f'i3/{kw}'],
@@ -91,7 +96,8 @@ class MaxUnpool3d(jt.Module):
         if output_size:
             d, h, w = output_size[-3:]
         else:
-            d, h, w = pd * sd, ph * sh, pw * sw
+            # Same inversion as MaxUnpool2d; see the note there.
+            d, h, w = (pd - 1) * sd + kd, (ph - 1) * sh + kh, (pw - 1) * sw + kw
         if self.stride == self.kernel_size:
             x = x.reindex(shape=[b, c, d, h, w],
                 indexes=['i0', 'i1', f'i2/{kd}', f'i3/{kh}', f'i4/{kw}'],
