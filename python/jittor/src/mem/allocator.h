@@ -30,17 +30,21 @@ struct AlignedAllocator;
 EXTERN_LIB AlignedAllocator aligned_allocator;
 
 struct Allocation {
-    void* ptr;
-    size_t allocation, size;
-    Allocator* allocator;
+    // All four have initializers: ~Allocation() branches on ptr, and the
+    // default-constructed Allocations in fetch_op's vector are destroyed
+    // whether or not the placement-new that fills them ever runs.
+    void* ptr = nullptr;
+    size_t allocation = 0, size = 0;
+    Allocator* allocator = nullptr;
     inline Allocation() = default;
     inline Allocation(void* ptr, size_t allocation, size_t size, Allocator* allocator)
         : ptr(ptr), allocation(allocation), size(size), allocator(allocator) {}
     inline Allocation(Allocation&& o)
         : ptr(o.ptr), allocation(o.allocation), size(o.size), allocator(o.allocator)
         { o.ptr = nullptr; }
-    inline Allocation(unique_ptr<char[]>&& p) 
-        { ptr = p.release(); allocator = (Allocator*)&aligned_allocator; }
+    inline Allocation(unique_ptr<char[]>&& p)
+        { ptr = p.release(); allocator = (Allocator*)&aligned_allocator;
+          allocation = (size_t)ptr; }
     inline Allocation(Allocator* at, size_t size)
         : size(size), allocator(at)
         { allocator = at; ptr = at->alloc(size, allocation); }

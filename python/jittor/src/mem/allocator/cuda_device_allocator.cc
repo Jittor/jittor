@@ -22,7 +22,13 @@ DEFINE_FLAG(int, cuda_device_allocator_managed_fallback, 0,
 const char* CudaDeviceAllocator::name() const {return "cuda_device";}
 
 void* CudaDeviceAllocator::alloc(size_t size, size_t& allocation) {
-    if (size==0) return (void*)0x10;
+    if (size==0) {
+        // A zero-byte allocation used to return the fake pointer 0x10, which
+        // looks allocated to everything downstream and, if the var's shape
+        // changed between alloc and free, was handed to cudaFree.
+        allocation = 0;
+        return nullptr;
+    }
     void* ptr;
     cudaError_t err = cudaMalloc(&ptr, size);
     if (err == cudaSuccess)
@@ -41,7 +47,9 @@ void* CudaDeviceAllocator::alloc(size_t size, size_t& allocation) {
 }
 
 void CudaDeviceAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
-    if (size==0) return;
+    // Key the release on the pointer, not on the size: the var's shape may have
+    // changed since alloc, and a zero-byte alloc hands back no pointer at all.
+    if (mem_ptr==nullptr) return;
     if (no_cuda_error_when_free) return;
     checkCudaErrors(cudaFree(mem_ptr));
 }

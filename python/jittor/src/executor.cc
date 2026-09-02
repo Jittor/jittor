@@ -613,13 +613,15 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         }
         #endif
         #ifdef NODE_MEMCHECK
+        // a zero-sized var legitimately has no memory (see the size==0 branch
+        // in the raw allocators), so only non-empty vars must be backed
         if (is_fused_op) {
             for (auto& vi : fused_op.vars)
                 if (vi.type == 0)
-                    ASSERT(vi.var->mem_ptr) << vi.var;
+                    ASSERT(vi.var->mem_ptr || vi.var->size == 0) << vi.var;
         } else {
             for (auto* v : op->inputs())
-                ASSERT(v->mem_ptr) << v;
+                ASSERT(v->mem_ptr || v->size == 0) << v;
         }
         #endif
         last_is_cuda = is_cuda;
@@ -695,7 +697,9 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         }
     }
     LOGvv << "All" << op_num << "ops finished, return vars:" << vars;
-    for (Var* v : vars) ASSERT(v->mem_ptr || v->flags.get(NodeFlags::_is_swapped) || !v->backward_liveness) << v;
+    // a zero-sized var has no memory to point at (see the size==0 branch in
+    // the raw allocators), which is not the same as an unallocated var
+    for (Var* v : vars) ASSERT(v->mem_ptr || v->size == 0 || v->flags.get(NodeFlags::_is_swapped) || !v->backward_liveness) << v;
     // clean fetcher free buffer
     fetcher_to_free.clear();
     #ifdef HAS_CUDA

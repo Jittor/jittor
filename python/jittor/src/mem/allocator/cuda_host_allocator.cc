@@ -17,14 +17,18 @@ EXTERN_LIB bool no_cuda_error_when_free;
 const char* CudaHostAllocator::name() const {return "cuda_host";}
 
 void* CudaHostAllocator::alloc(size_t size, size_t& allocation) {
-    if (size==0) return (void*)0x10;
+    if (size==0) {
+        // No fake 0x10 pointer: see CudaDeviceAllocator::alloc.
+        allocation = 0;
+        return nullptr;
+    }
     void* ptr;
     checkCudaErrors(cudaMallocHost(&ptr, size));
     return ptr;
 }
 
 void CudaHostAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
-    if (size==0) return;
+    if (mem_ptr==nullptr) return;
     if (no_cuda_error_when_free) return;
     checkCudaErrors(cudaFreeHost(mem_ptr));
 }

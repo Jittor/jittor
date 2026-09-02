@@ -18,14 +18,18 @@ EXTERN_LIB bool no_cuda_error_when_free;
 const char* CudaManagedAllocator::name() const {return "cuda_managed";}
 
 void* CudaManagedAllocator::alloc(size_t size, size_t& allocation) {
-    if (size==0) return (void*)0x10;
+    if (size==0) {
+        // No fake 0x10 pointer: see CudaDeviceAllocator::alloc.
+        allocation = 0;
+        return nullptr;
+    }
     void* ptr;
     checkCudaErrors(cudaMallocManaged(&ptr, size));
     return ptr;
 }
 
 void CudaManagedAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
-    if (size==0) return;
+    if (mem_ptr==nullptr) return;
     if (no_cuda_error_when_free) return;
     checkCudaErrors(cudaFree(mem_ptr));
 }
