@@ -32,6 +32,8 @@ struct KernelIR {
     // * loop_id: generate by rename_loop_index
     // * split_id: generate by split_loop
     // * used: generate by check_unused
+    // * void_discard: generate at parse time; the statement is only
+    //     "(void)a[, (void)b]*;", so it names no live use and is not emitted
     // * rvalue2: generate by split_loop, used in loop type, represent stride
     unordered_map<string,string> attrs;
     // before...

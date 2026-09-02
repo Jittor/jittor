@@ -364,4 +364,68 @@ JIT_TEST(kernel_ir_remove_intermediate) {
     CHECK(ir.children.at(0)->children.size()==0);
 }
 
+JIT_TEST(kernel_ir_void_discard) {
+    // Dead-code elimination has to drop "(void)a;" -- op sources write it to
+    // silence an unused-variable warning in the ordinary compile, and letting it
+    // count as a use would keep every variable it names alive in the generated
+    // kernel. It used to decide that by looking for the identifier `void`
+    // anywhere in the statement, so any statement that merely mentioned the word
+    // was deleted instead: a memset through a void* disappeared from the fused
+    // kernel, still compiled, and silently left the buffer uninitialised.
+    KernelIR ir(R"(
+        void func(int* p, int n) {
+            int a = n;
+            int b = n;
+            int c = n;
+            memset((void*)p, 0, n);
+            p[0] = c;
+            (void)a;
+            (void)b, (void)a;
+        }
+    )");
+    ir.remove_all_unused();
+    // a source that is one function makes `ir` itself the func node
+    string body = ir.to_string();
+
+    // the statement that only discards is gone, and so are the definitions it
+    // named -- nothing else uses a or b
+    CHECK(body.find("(void)") == string::npos) << body;
+    CHECK(body.find("int a") == string::npos) << body;
+    CHECK(body.find("int b") == string::npos) << body;
+
+    // the memset is real code and stays, with its argument intact
+    CHECK(body.find("memset((void*)p, 0, n);") != string::npos) << body;
+    // and so does the definition the surviving code uses
+    CHECK(body.find("int c") != string::npos) << body;
+}
+
+JIT_TEST(kernel_ir_void_discard_shapes) {
+    // Only a statement that is nothing but discards may be dropped. Each of
+    // these mentions void and must survive untouched.
+    const char* kept[] = {
+        "cudaMemsetAsync((void*)op0_yp, 0, n, stream);",
+        "memset((void*)p, 0, n);",
+        "f((void*)p);",
+        "((void (*)(int))g)(1);",
+    };
+    for (auto* line : kept) {
+        KernelIR ir(string("void func() { int n=1; int* p=0; ") + line + " }");
+        ir.remove_all_unused();
+        CHECK(ir.to_string().find(line) != string::npos)
+            << line << "was dropped:" << ir.to_string();
+    }
+    // ... while these are discards and must go
+    const char* dropped[] = {
+        "(void)n;",
+        "(void)n, (void)p;",
+        "(void)(n);",
+    };
+    for (auto* line : dropped) {
+        KernelIR ir(string("void func() { int n=1; int* p=0; ") + line + " }");
+        ir.remove_all_unused();
+        CHECK(ir.to_string().find("(void)") == string::npos)
+            << line << "was kept:" << ir.to_string();
+    }
+}
+
 } // jittor

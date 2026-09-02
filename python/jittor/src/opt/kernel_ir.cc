@@ -24,6 +24,49 @@ vector<typename unordered_map<string,T>::iterator> sort(unordered_map<string,T>&
 
 bool isvar(char x) { return isalnum(x) || x == '_' || x == ':'; }
 
+// Is this statement nothing but a list of discarded expressions, i.e.
+// "(void)a;" or "(void)a, (void)b;"?
+//
+// Op sources write that to silence an unused-variable warning in the ordinary
+// (non-JIT) compile of the same file. In the generated kernel it must not count
+// as a use of `a` -- otherwise every variable so marked would survive dead-code
+// elimination -- and the statement itself must not be emitted.
+//
+// This used to be decided by scanning the statement for the identifier `void`
+// anywhere in it, which deleted any statement that merely mentioned the word:
+// "memset((void*)p, 0, n);" vanished from the fused kernel, compiled fine, and
+// silently produced wrong results. Match the shape instead.
+static bool is_void_discard(const string& code) {
+    uint end = code.size();
+    while (end && (code[end-1]==' ' || code[end-1]=='\n')) end--;
+    if (!end || code[end-1] != ';') return false;
+    end--;
+    uint i = 0;
+    int parts = 0;
+    while (i < end) {
+        while (i<end && (code[i]==' ' || code[i]=='\n')) i++;
+        // every part has to start with the cast
+        if (code.compare(i, 6, "(void)") != 0) return false;
+        i += 6;
+        // ... and name something
+        int depth = 0;
+        uint start = i;
+        while (i < end) {
+            char c = code[i];
+            if (c=='(' || c=='[') depth++;
+            else if (c==')' || c==']') depth--;
+            else if (c==',' && depth==0) break;
+            i++;
+        }
+        uint stop = i;
+        while (stop>start && (code[stop-1]==' ' || code[stop-1]=='\n')) stop--;
+        if (stop == start) return false;
+        parts++;
+        if (i<end) i++;  // skip the comma
+    }
+    return parts > 0;
+}
+
 std::ostream& operator<<(std::ostream& os, KernelIR& ir) {
     return os << ir.to_string();
 }
@@ -121,6 +164,8 @@ void KernelIR::try_parse_define(const string& s) {
         }
     }
     attrs = {{"code",s}};
+    if (is_void_discard(s))
+        attrs["void_discard"] = "1";
 }
 
 
@@ -853,6 +898,12 @@ void KernelIR::expand_empty_block() {
 void KernelIR::check_unused() {
     if (has_attr("raw")) return;
     attrs["used"] = "";
+    if (has_attr("void_discard")) {
+        // Marked at parse time (is_void_discard). Drop it without scanning: the
+        // names it lists are exactly the ones it must not keep alive.
+        attrs["code"] = "";
+        return;
+    }
     const char* ss[] = {"code", "rvalue", "rvalue2"};
     for (const char* s : ss) {
         auto& code = get_attr(s);
@@ -862,13 +913,6 @@ void KernelIR::check_unused() {
             uint j=i+1;
             while (j<code.size() && isvar(code[j])) j++;
             string var = code.substr(i,j-i);
-            if (var=="void") {
-                if (type=="") {
-                    // remove (void)xxx;
-                    code = "";
-                    break;
-                }
-            }
             auto* def = find_define(var);
             if (def) {
                 def->attrs["used"] = "1";
