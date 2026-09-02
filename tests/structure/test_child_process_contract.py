@@ -206,3 +206,61 @@ def test_the_default_child_timeout_is_generous_and_configurable():
             os.environ.pop("JITTOR_TEST_CHILD_TIMEOUT", None)
         else:
             os.environ["JITTOR_TEST_CHILD_TIMEOUT"] = previous
+
+
+def test_a_complete_environment_is_not_silently_merged():
+    """Merging a full environment onto ``os.environ`` cannot remove anything.
+
+    This is how a *deliberately native* probe ended up inheriting
+    ``JITTOR_TORCH_SHIM=1``. The caller built ``dict(os.environ)``, popped the
+    four Torch variables, and passed the result -- and the helper merged it back
+    onto ``os.environ``, restoring every one of them. The child then refused to
+    compose with "cannot install Jittor Torch compatibility over an existing
+    Torch module graph", in a test about import cycles.
+
+    Removals are the reason a caller passes a whole environment, so the helper
+    now refuses the ambiguous call instead of quietly dropping them.
+    """
+    import os
+
+    import pytest
+
+    child_process = _child_process_module()
+    complete = dict(os.environ)
+    complete.pop("JITTOR_TORCH_SHIM", None)
+    with pytest.raises(AssertionError) as raised:
+        child_process.child_env(complete)
+    assert "inherit=False" in str(raised.value)
+    # Stated instead of merged: the removal survives.
+    kept = child_process.child_env(complete, inherit=False)
+    assert "JITTOR_TORCH_SHIM" not in kept
+
+
+def test_without_torch_mode_clears_every_variable_that_installs_the_shim():
+    """One option, not four pops repeated at each call site.
+
+    ``tests/structure`` is itself a Torch-mode path, so a probe that has to
+    start native cannot assume these are unset -- it has to clear them. Leaving
+    that to each caller is what got lost when the call sites were collected into
+    this helper.
+    """
+    import os
+
+    child_process = _child_process_module()
+    previous = {name: os.environ.get(name)
+                for name in child_process.TORCH_MODE_VARIABLES}
+    for name in child_process.TORCH_MODE_VARIABLES:
+        os.environ[name] = "1"
+    try:
+        env = child_process.child_env(without_torch_mode=True)
+        assert not [name for name in child_process.TORCH_MODE_VARIABLES
+                    if name in env]
+        inherited = child_process.child_env()
+        assert all(name in inherited
+                   for name in child_process.TORCH_MODE_VARIABLES)
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value

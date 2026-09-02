@@ -42,9 +42,12 @@ class TestSignalHandlerOwnership(unittest.TestCase):
             "use_cuda": "0",
             "JITTOR_TORCH_SHIM": "0",
         })
+        # inherit=False: this environment had four variables *removed*, and
+        # merging it back onto os.environ would put every one of them back.
         completed = run_python_child(
             ["-c", _JUPYTER_CHILD_PROBE],
             env=environment,
+            inherit=False,
             merge_stderr=True,
         )
         self.assertEqual(completed.returncode, 0, completed.stdout)

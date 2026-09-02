@@ -84,6 +84,16 @@ class TestStage2Delivery(unittest.TestCase):
         self.assertIn("canonical wheel must be universal", release)
         self.assertIn("-py3-none-any.whl", release)
 
+    @staticmethod
+    def _cpu_gate_files():
+        """Test files the CPU gate would collect, across both process modes."""
+        from _helpers.gate_scope import (
+            native_arguments, selected_files, torch_arguments)
+
+        repo_root = Path(__file__).resolve().parents[2]
+        return (selected_files(repo_root, native_arguments())
+                | selected_files(repo_root, torch_arguments()))
+
     def test_nox_keeps_fast_structure_and_packaging_separate(self):
         path = self.repo_root / "noxfile.py"
         source = path.read_text(encoding="utf-8")
@@ -122,17 +132,25 @@ class TestStage2Delivery(unittest.TestCase):
         self.assertIn('env["ASV_PYTHONPATH"]', benchmark)
         self.assertIn("CPU_TORCH_ORACLE_TESTS", cpu)
         self.assertNotIn('"tests/optim"', source)
+        # The oracle list is still a list: each entry names a file that has to
+        # run against an independent binary PyTorch, which is a property of the
+        # test, not of the tree.
         for target in (
-            "tests/optim/test_optimizer.py",
             "tests/optim/test_adamw.py",
             "tests/nn/test_affine_grid.py",
             "tests/nn/test_attention_oracle.py",
             "tests/nn/test_batchnorm.py",
             "tests/nn/test_loss.py",
             "tests/nn/test_relu.py",
-            "tests/core/test_array.py::TestArray::test_array_dtype",
         ):
             self.assertIn(target, source)
+        # These two used to be named in noxfile's CPU_TESTS. 0.04 deleted that
+        # list -- the gate is now the tree minus stated exceptions -- so the
+        # question is whether the gate reaches them, not whether the file
+        # mentions them. Asserting the old text would assert an implementation
+        # that no longer exists.
+        for target in ("tests/optim/test_optimizer.py", "tests/core/test_array.py"):
+            self.assertIn(target, self._cpu_gate_files(), target)
         self.assertIn('env["REAL_TORCH_SITE"] = ""', cpu)
         self.assertIn("SCIPY", cpu)
         self.assertIn('SCIPY = "scipy==', source)

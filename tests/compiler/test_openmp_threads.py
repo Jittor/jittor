@@ -71,10 +71,13 @@ class TestOpenmpDefault(unittest.TestCase):
         """The value has to be in place before anything links OpenMP."""
         environment = dict(os.environ)
         environment.pop("OMP_NUM_THREADS", None)
+        # inherit=False: this environment had a variable *removed*, and merging
+        # it back onto os.environ would put OMP_NUM_THREADS straight back.
         completed = run_python_child(
             ["-c",
              "import os, jittor; print('THREADS', os.environ.get('OMP_NUM_THREADS'))"],
             env=environment,
+            inherit=False,
             merge_stderr=True,
         )
         marker = [line for line in completed.stdout.splitlines()

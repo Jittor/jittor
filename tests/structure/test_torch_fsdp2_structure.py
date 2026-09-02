@@ -7,7 +7,6 @@ import hashlib
 import importlib
 import inspect
 import json
-import os
 import pickle
 from pathlib import Path
 import sys
@@ -286,11 +285,7 @@ class TestTorchFSDP2Structure(unittest.TestCase):
 
     def test_canonical_and_legacy_first_import_orders(self):
         repo_root = Path(fsdp.__file__).resolve().parents[4]
-        env = os.environ.copy()
-        python_root = str(repo_root / "python")
-        env["PYTHONPATH"] = os.pathsep.join(filter(None, (
-            python_root, env.get("PYTHONPATH", ""))))
-        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env = {"PYTHONDONTWRITEBYTECODE": "1"}
         template = r"""
 import importlib
 import sys
@@ -386,10 +381,7 @@ assert second is jittor.torch_fsdp2_compat
                 self.assertIs(pickle.loads(payload), expected[name])
 
         repo_root = Path(fsdp.__file__).resolve().parents[4]
-        env = os.environ.copy()
-        env["PYTHONPATH"] = os.pathsep.join(filter(None, (
-            str(repo_root / "python"), env.get("PYTHONPATH", ""))))
-        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env = {"PYTHONDONTWRITEBYTECODE": "1"}
         code = r"""
 import base64
 import pickle

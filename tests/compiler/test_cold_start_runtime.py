@@ -73,7 +73,7 @@ def _cold_start_probe(home):
     })
     os.makedirs(environment["TMPDIR"], exist_ok=True)
     completed = run_python_child(
-        ["-c", _PROBE], env=environment, merge_stderr=True)
+        ["-c", _PROBE], env=environment, inherit=False, merge_stderr=True)
     marker = "PROBE_RESULT "
     for line in completed.stdout.splitlines():
         if line.startswith(marker):

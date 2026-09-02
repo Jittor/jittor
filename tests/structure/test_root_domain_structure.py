@@ -6,7 +6,6 @@ import ast
 from collections.abc import Sequence
 import importlib
 import inspect
-import os
 import pickle
 from pathlib import Path
 import unittest
@@ -316,26 +315,19 @@ functional = importlib.import_module("jittor.gradfunctional.functional")
 assert functional.__all__ == ["jvp", "vjp"], functional.__all__
 print("legacy-native-surfaces-ok")
 '''
-        env = os.environ.copy()
-        for name in (
-            "JITTOR_TORCH_SHIM",
-            "JITTOR_TORCH_PROJECT_ROOT",
-            "JITTOR_TORCH_RUNTIME_ROOT",
-            "REAL_TORCH_SITE",
-        ):
-            env.pop(name, None)
-        env.update(
-            {
-                "CUDA_VISIBLE_DEVICES": "",
-                "JITTOR_LEGACY_SURFACES": __import__("json").dumps(
-                    {name: sorted(values) for name, values in expected.items()}
-                ),
-                "PYTHONDONTWRITEBYTECODE": "1",
-                "nvcc_path": "",
-                "use_cuda": "0",
-            }
-        )
-        result = run_python_child(["-c", probe], env=env)
+        env = {
+            "CUDA_VISIBLE_DEVICES": "",
+            "JITTOR_LEGACY_SURFACES": __import__("json").dumps(
+                {name: sorted(values) for name, values in expected.items()}
+            ),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "nvcc_path": "",
+            "use_cuda": "0",
+        }
+        # This asserts the *native* surface; this file is a Torch-mode path, so
+        # the four shim variables have to be cleared rather than assumed unset.
+        result = run_python_child(["-c", probe], env=env,
+                                  without_torch_mode=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("legacy-native-surfaces-ok", result.stdout)
 

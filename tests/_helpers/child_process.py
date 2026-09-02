@@ -71,6 +71,20 @@ DEFAULT_TIMEOUT = 600
 #: Both names are honoured: the first is this helper's, the second predates it.
 TIMEOUT_VARIABLES = ("JITTOR_TEST_CHILD_TIMEOUT", "JITTOR_TEST_SUBPROCESS_TIMEOUT")
 
+#: Variables that ask a child to install the Torch compatibility layer.
+#:
+#: A probe that installs a stand-in ``torch`` module and then imports jittor
+#: needs all four gone, or composition refuses with "cannot install Jittor Torch
+#: compatibility over an existing Torch module graph". The parent inherits them
+#: from the session -- ``tests/structure`` is itself a Torch-mode path -- so
+#: "the environment I did not set them in" is not the same as "they are unset".
+TORCH_MODE_VARIABLES = (
+    "REAL_TORCH_SITE",
+    "JITTOR_TORCH_SHIM",
+    "JITTOR_TORCH_PROJECT_ROOT",
+    "JITTOR_TORCH_RUNTIME_ROOT",
+)
+
 
 def source_python_dir():
     """The ``python/`` directory this test session imports jittor from.
@@ -97,7 +111,7 @@ def python_executable():
     return PYTHON
 
 
-def child_env(extra=None, inherit=True):
+def child_env(extra=None, inherit=True, without_torch_mode=False):
     """An environment whose ``PYTHONPATH`` starts at this session's checkout.
 
     ``extra`` is applied on top of the inherited environment, but the pinned
@@ -107,9 +121,24 @@ def child_env(extra=None, inherit=True):
     a caller that *removed* a variable needs that, since merging onto
     ``os.environ`` would put it straight back.
     """
+    if inherit and extra and "PATH" in extra:
+        # Merging a complete environment onto os.environ cannot *remove*
+        # anything, so every `env.pop(...)` the caller did is silently undone.
+        # That is not hypothetical: it turned a deliberately native probe into
+        # one that inherited JITTOR_TORCH_SHIM=1 and failed on composition.
+        raise AssertionError(
+            "child_env() was handed what looks like a complete environment "
+            "(it contains PATH) while inherit=True. Merging it onto os.environ "
+            "cannot remove a variable, so any env.pop() the caller did is lost. "
+            "Pass inherit=False for a complete environment, or pass only the "
+            "variables to change."
+        )
     env = dict(os.environ) if inherit else {}
     if extra:
         env.update({key: str(value) for key, value in extra.items()})
+    if without_torch_mode:
+        for name in TORCH_MODE_VARIABLES:
+            env.pop(name, None)
     pinned = source_python_dir()
     if pinned is not None:
         existing = env.get("PYTHONPATH", "")
@@ -178,7 +207,7 @@ def _crash_isolated(command, env):
 
 
 def _run(command, env, timeout, cwd, text, check, input, merge_stderr,
-         shell=False, inherit=True):
+         shell=False, inherit=True, without_torch_mode=False):
     seconds = default_timeout(timeout)
     # Jittor's own logging is not ASCII (op keys are separated by U+00AB), so
     # decoding a child's output by the ambient locale fails outright under
@@ -187,7 +216,8 @@ def _run(command, env, timeout, cwd, text, check, input, merge_stderr,
     try:
         return subprocess.run(
             command,
-            env=child_env(env, inherit=inherit),
+            env=child_env(env, inherit=inherit,
+                          without_torch_mode=without_torch_mode),
             cwd=None if cwd is None else str(cwd),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
@@ -203,7 +233,7 @@ def _run(command, env, timeout, cwd, text, check, input, merge_stderr,
 
 def run_python_child(args, *, env=None, timeout=None, cwd=None, text=True,
                      check=False, input=None, merge_stderr=False, inherit=True,
-                     crash_isolated=False):
+                     crash_isolated=False, without_torch_mode=False):
     """Run ``[PYTHON, *args]`` against this tree, with a clear timeout.
 
     ``merge_stderr`` folds stderr into stdout, which is what most callers want
@@ -220,12 +250,13 @@ def run_python_child(args, *, env=None, timeout=None, cwd=None, text=True,
     if crash_isolated:
         command, env = _crash_isolated(command, env)
     return _run(command, env, timeout, cwd, text, check, input, merge_stderr,
-                inherit=inherit)
+                inherit=inherit, without_torch_mode=without_torch_mode)
 
 
 def run_child_script(source, *, env=None, timeout=None, cwd=None, text=False,
                      check=False, merge_stderr=False, directory=None,
-                     name="child", inherit=True, crash_isolated=False):
+                     name="child", inherit=True, crash_isolated=False,
+                     without_torch_mode=False):
     """Write ``source`` to a file and run it, so tracebacks name real lines.
 
     ``python -c`` reports ``<string>`` for every frame, which makes a failing
@@ -241,7 +272,8 @@ def run_child_script(source, *, env=None, timeout=None, cwd=None, text=False,
     if crash_isolated:
         command, env = _crash_isolated(command, env)
     return _run(command, env, timeout, cwd, text, check, None,
-                merge_stderr, inherit=inherit)
+                merge_stderr, inherit=inherit,
+                without_torch_mode=without_torch_mode)
 
 
 def mpirun_path():
@@ -257,7 +289,7 @@ def mpirun_path():
 
 def run_mpi_python(num_procs, args, *, env=None, timeout=None, cwd=None,
                    text=True, check=False, merge_stderr=False, launcher=None,
-                   inherit=True):
+                   inherit=True, without_torch_mode=False):
     """Run ``mpirun -np N python <args>`` against this tree.
 
     ``mpirun`` starts the ranks itself, so the parent's ``sys.path`` reaches
@@ -267,11 +299,12 @@ def run_mpi_python(num_procs, args, *, env=None, timeout=None, cwd=None,
     command = [launcher or mpirun_path(), "-np", str(num_procs), PYTHON]
     command += [str(arg) for arg in args]
     return _run(command, env, timeout, cwd, text, check, None, merge_stderr,
-                inherit=inherit)
+                inherit=inherit, without_torch_mode=without_torch_mode)
 
 
 def shell(command, *, env=None, timeout=None, cwd=None, text=True,
-          check=False, merge_stderr=False, inherit=True):
+          check=False, merge_stderr=False, inherit=True,
+          without_torch_mode=False):
     """Run a shell command line that needs its own quoting or job control.
 
     A few tests build a pipeline (``$(python -m jittor_utils.config ...)``) or
@@ -279,7 +312,8 @@ def shell(command, *, env=None, timeout=None, cwd=None, text=True,
     so they run here instead of through ``os.system``.
     """
     return _run(command, env, timeout, cwd, text, check, None, merge_stderr,
-                shell=True, inherit=inherit)
+                shell=True, inherit=inherit,
+                without_torch_mode=without_torch_mode)
 
 
 def shell_status(command, *, env=None, timeout=None, cwd=None):

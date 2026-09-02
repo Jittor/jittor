@@ -19,7 +19,6 @@ not require touching this file; changing what jittor.nn exports must.**
 import ast
 import importlib
 import inspect
-import os
 import pickle
 from pathlib import Path
 import types as python_types
@@ -426,22 +425,15 @@ class TestModuleBoundaries(unittest.TestCase):
             "from jittor import nn",
             "from jittor.nn import functional, modules",
         )
-        env = dict(os.environ)
-        env.update(
-            {
-                "PYTHONDONTWRITEBYTECODE": "1",
-                "PYTHONPATH": str(REPO_ROOT / "python"),
-                "nvcc_path": "",
-                "use_cuda": "0",
-            }
-        )
-        for name in (
-            "REAL_TORCH_SITE",
-            "JITTOR_TORCH_SHIM",
-            "JITTOR_TORCH_PROJECT_ROOT",
-            "JITTOR_TORCH_RUNTIME_ROOT",
-        ):
-            env.pop(name, None)
+        # without_torch_mode: the script installs a stand-in `torch` module
+        # before importing jittor, and composition refuses to install over an
+        # existing Torch module graph. This file is itself a Torch-mode path,
+        # so the parent has JITTOR_TORCH_SHIM=1 and the child would inherit it.
+        env = {
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "nvcc_path": "",
+            "use_cuda": "0",
+        }
         for entry in entries:
             script = (
                 "import sys, types\n"
@@ -451,7 +443,8 @@ class TestModuleBoundaries(unittest.TestCase):
                 "assert tuple(nn.functional.__all__) == %r\n"
                 "assert tuple(nn.modules.__all__) == %r\n"
             ) % (tuple(sorted(_FUNCTIONAL_API)), tuple(sorted(_MODULE_API)))
-            result = run_python_child(["-c", script], cwd=REPO_ROOT, env=env)
+            result = run_python_child(["-c", script], cwd=REPO_ROOT, env=env,
+                                      without_torch_mode=True)
             with self.subTest(entry=entry):
                 self.assertEqual(result.returncode, 0, result.stderr)
 
