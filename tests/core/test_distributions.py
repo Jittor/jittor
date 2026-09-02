@@ -453,5 +453,170 @@ class TestRelaxedDistributions(unittest.TestCase):
                     attr() if callable(attr) else attr
 
 
+class TestDistributionCommonContract(unittest.TestCase):
+    """One base class, one ``sample`` implementation, one detach rule.
+
+    Six distributions (including the two most used, Normal and Categorical)
+    did not inherit ``Distribution``, so ``isinstance(d, jd.Distribution)`` was
+    False for them. And ``sample()`` was re-implemented per class: five of them
+    returned ``rsample()`` undetached, so a draw carried a gradient path back
+    into the parameters -- exactly the silent drift that shows up in RL and
+    variational inference.
+    """
+
+    def _every_distribution(self):
+        """(name, constructed instance, list of parameter Vars) for each one."""
+        def V(x):
+            v = jt.array(np.asarray(x, dtype="float32"))
+            v.start_grad()
+            return v
+
+        probs = V([0.2, 0.3, 0.5])
+        cases = []
+        p = V([0.3, 0.7])
+        cases.append(("Bernoulli", jd.Bernoulli(probs=p), [p]))
+        pr = V([[0.2, 0.3, 0.5]])
+        cases.append(("Categorical", jd.Categorical(probs=pr), [pr]))
+        pr2 = V([[0.2, 0.3, 0.5]])
+        cases.append(("OneHotCategorical", jd.OneHotCategorical(probs=pr2), [pr2]))
+        mu, sigma = V([0.0, 1.0]), V([1.0, 2.0])
+        cases.append(("Normal", jd.Normal(mu, sigma), [mu, sigma]))
+        lo, hi = V([0.0, 1.0]), V([1.0, 3.0])
+        cases.append(("Uniform", jd.Uniform(lo, hi), [lo, hi]))
+        gp = V([0.3, 0.6])
+        cases.append(("Geometric", jd.Geometric(gp), [gp]))
+        rate = V([1.0, 2.0])
+        cases.append(("Exponential", jd.Exponential(rate), [rate]))
+        c1, c0 = V([2.0, 3.0]), V([3.0, 1.5])
+        cases.append(("Beta", jd.Beta(c1, c0), [c1, c0]))
+        conc, r = V([2.0, 3.0]), V([1.0, 2.0])
+        cases.append(("Gamma", jd.Gamma(conc, r), [conc, r]))
+        alpha = V([[2.0, 3.0, 4.0]])
+        cases.append(("Dirichlet", jd.Dirichlet(alpha), [alpha]))
+        lmu, lsig = V([0.0, 0.5]), V([1.0, 1.5])
+        cases.append(("LogNormal", jd.LogNormal(lmu, lsig), [lmu, lsig]))
+        return cases
+
+    def test_every_distribution_is_a_Distribution(self):
+        for name, dist, _params in self._every_distribution():
+            with self.subTest(distribution=name):
+                self.assertIsInstance(dist, jd.Distribution)
+        # the relaxed family too
+        t = 0.5
+        logits = jt.array(np.array([[0.1, -0.4, 1.2]], "float32"))
+        for dist in (jd.RelaxedBernoulli(t, logits=logits),
+                     jd.LogitRelaxedBernoulli(t, logits=logits),
+                     jd.RelaxedOneHotCategorical(t, logits=logits),
+                     jd.ExpRelaxedCategorical(t, logits=logits),
+                     jd.GammaDistribution(jt.array(np.array([2.0], "float32")),
+                                          jt.array(np.array([1.0], "float32")))):
+            self.assertIsInstance(dist, jd.Distribution)
+
+    def test_sample_never_carries_a_gradient(self):
+        for name, dist, params in self._every_distribution():
+            with self.subTest(distribution=name):
+                drawn = dist.sample((4,))
+                assert isinstance(drawn, jt.Var), name
+                grads = jt.grad(drawn.float32().sum(), params,
+                                retain_graph=False)
+                for param, grad in zip(params, grads):
+                    np.testing.assert_allclose(
+                        grad.numpy(), np.zeros(param.shape), atol=0, rtol=0,
+                        err_msg="%s.sample() leaked a gradient into its "
+                                "parameters" % name)
+
+    def test_rsample_still_carries_a_gradient(self):
+        # the reparameterised draw is the one that must stay connected
+        mu = jt.array(np.array([0.0, 1.0], "float32"))
+        sigma = jt.array(np.array([1.0, 2.0], "float32"))
+        mu.start_grad()
+        sigma.start_grad()
+        drawn = jd.Normal(mu, sigma).rsample((8,))
+        grad_mu, grad_sigma = jt.grad(drawn.sum(), [mu, sigma])
+        np.testing.assert_allclose(grad_mu.numpy(), [8.0, 8.0], rtol=1e-5)
+        assert not np.allclose(grad_sigma.numpy(), 0.0)
+
+    def test_subclasses_do_not_reimplement_sample(self):
+        # the detach lives in exactly one place
+        import inspect
+        for name in dir(jd):
+            obj = getattr(jd, name)
+            if not (inspect.isclass(obj) and issubclass(obj, jd.Distribution)):
+                continue
+            if obj is jd.Distribution:
+                continue
+            self.assertNotIn(
+                "sample", obj.__dict__,
+                msg="%s overrides sample(); override _sample_impl instead so "
+                    "the detach stays in Distribution.sample" % name)
+
+    def test_relaxed_sample_is_relaxed_not_the_discrete_parents_draw(self):
+        """RelaxedBernoulli/RelaxedOneHotCategorical derive from their DISCRETE
+        parents for API reasons, so the parent's ``_sample_impl`` shadows the
+        base class's "fall back to rsample" rule. If that shadowing is not
+        broken explicitly, ``sample()`` silently returns a hard 0/1 draw
+        instead of a relaxed one and every gradient estimator built on it is
+        wrong while still running.
+        """
+        logits = jt.array(np.array([[0.1, -0.4, 1.2]], "float32"))
+        logits.start_grad()
+        for name, dist in (
+                ("RelaxedBernoulli", jd.RelaxedBernoulli(0.5, logits=logits)),
+                ("RelaxedOneHotCategorical",
+                 jd.RelaxedOneHotCategorical(0.5, logits=logits))):
+            with self.subTest(distribution=name):
+                drawn = dist.sample((64,)).numpy()
+                hard = np.isclose(drawn, 0.0) | np.isclose(drawn, 1.0)
+                assert not hard.all(), (
+                    "%s.sample() returned the discrete parent's hard draw "
+                    "instead of a relaxed sample" % name)
+                # bounds are inclusive here on purpose: a float32 draw can
+                # underflow to exactly 0.0, and torch's own sample() does too.
+                assert (drawn >= 0.0).all() and (drawn <= 1.0).all(), (
+                    "%s.sample() must live in [0, 1]" % name)
+                # and it is still a detached draw
+                grad, = jt.grad(dist.sample((8,)).sum(), [logits])
+                np.testing.assert_allclose(
+                    grad.numpy(), np.zeros(logits.shape), atol=0, rtol=0)
+                # while rsample stays connected
+                grad, = jt.grad(dist.rsample((8,)).sum(), [logits])
+                assert not np.allclose(grad.numpy(), 0.0), name
+
+    def test_kl_divergence_raises_for_unsupported_pairs(self):
+        """Falling off the end of the if-chain used to return None, which every
+        caller then fed straight into arithmetic. Raising is the contract.
+
+        Note the parity gap this pins down rather than closes: torch 2.12 DOES
+        have registered KL formulas for all five pairs below (Exponential,
+        Beta, Gamma, Poisson and LogNormal against themselves). jittor has
+        none of them. Raising is strictly better than the silent None, but a
+        follow-up that implements the formulas should replace these
+        assertions with numeric ones rather than delete them.
+        """
+        rate = jt.array(np.array([1.0, 2.0], "float32"))
+        pairs = [
+            (jd.Exponential(rate), jd.Exponential(rate * 2)),
+            (jd.Beta(rate, rate), jd.Beta(rate, rate)),
+            (jd.Gamma(rate, rate), jd.Gamma(rate, rate)),
+            (jd.Poisson(rate), jd.Poisson(rate)),
+            (jd.LogNormal(rate, rate), jd.LogNormal(rate, rate)),
+        ]
+        for cur, old in pairs:
+            with self.subTest(distribution=type(cur).__name__):
+                with self.assertRaises(NotImplementedError):
+                    jd.kl_divergence(cur, old)
+
+    def test_kl_divergence_supported_pairs_still_work(self):
+        mu = jt.array(np.array([0.0, 1.0], "float32"))
+        sigma = jt.array(np.array([1.0, 2.0], "float32"))
+        out = jd.kl_divergence(jd.Normal(mu, sigma), jd.Normal(mu, sigma))
+        np.testing.assert_allclose(out.numpy(), [0.0, 0.0], atol=1e-6)
+        probs = jt.array(np.array([[0.2, 0.3, 0.5]], "float32"))
+        out = jd.kl_divergence(jd.Categorical(probs=probs),
+                               jd.Categorical(probs=probs))
+        np.testing.assert_allclose(out.numpy(), [0.0], atol=1e-6)
+
+
+
 if __name__ == "__main__":
     unittest.main()

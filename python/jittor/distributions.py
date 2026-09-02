@@ -218,11 +218,79 @@ kernel(in0->num/in0->shape[in0->shape.size()-1], 0, in0_p, out0_p, in0->shape[in
         cpu_src=src, cuda_src=src)
 
 
-class OneHotCategorical:
+def _logsigmoid(z):
+    # stable log(sigmoid(z)) = min(z,0) - log(1+exp(-|z|))
+    return jt.minimum(z, 0.0) - jt.safe_log(1.0 + jt.exp(-jt.abs(z)))
+
+
+class Distribution:
+    ''' Base class for every distribution in this module, matching
+    torch.distributions.Distribution closely enough for ``isinstance`` checks
+    and for the shared ``sample`` contract.
+
+    ``sample()`` is implemented **here, once**, and always detaches: torch's
+    ``sample`` is ``with torch.no_grad(): return self.rsample(...)``, so a draw
+    never carries a gradient path back to the parameters. Subclasses provide
+    ``_sample_impl`` (the drawing itself) and never call ``stop_grad``
+    themselves. Half the distributions here used to override ``sample``
+    without detaching, which silently reconnected policy/variational
+    parameters to their own samples.
+    '''
+    has_rsample = False
+    arg_constraints = {}
+    batch_shape = ()
+    event_shape = ()
+
+    def __init__(self, batch_shape=(), event_shape=(), validate_args=None):
+        self.batch_shape = tuple(batch_shape)
+        self.event_shape = tuple(event_shape)
+        self._validate_args = validate_args
+
+    def _extended_shape(self, sample_shape=None):
+        return _full_shape(sample_shape, self.batch_shape, self.event_shape)
+
+    def _validate_sample(self, value):
+        return None
+
+    def _sample_impl(self, sample_shape=None):
+        ''' Draw a sample. Subclasses override this, never :meth:`sample`. '''
+        if type(self).rsample is Distribution.rsample:
+            raise NotImplementedError(
+                "%s implements neither _sample_impl nor rsample"
+                % type(self).__name__)
+        return self.rsample(sample_shape)
+
+    def sample(self, sample_shape=None):
+        ''' A detached draw: no gradient flows back to the parameters. '''
+        result = self._sample_impl(sample_shape)
+        return result.stop_grad() if isinstance(result, jt.Var) else result
+
+    def rsample(self, sample_shape=None):
+        ''' The reparameterised (pathwise-differentiable) draw.
+
+        Defaults to the undetached ``_sample_impl``, which is the pathwise
+        sample for the location-scale and inverse-CDF distributions here. For a
+        discrete distribution there is no reparameterisation and the draw
+        simply carries no gradient -- torch raises in that case, jittor has
+        always returned the draw, and callers rely on that.
+        '''
+        if type(self)._sample_impl is Distribution._sample_impl:
+            raise NotImplementedError(
+                "%s implements neither _sample_impl nor rsample"
+                % type(self).__name__)
+        return self._sample_impl(sample_shape)
+
+    def log_prob(self, value):
+        raise NotImplementedError
+    def entropy(self):
+        raise NotImplementedError
+
+
+class OneHotCategorical(Distribution):
     def __init__(self, probs=None, logits=None):
         Categorical.__init__(self, probs, logits)
 
-    def sample(self, sample_shape=[]):
+    def _sample_impl(self, sample_shape=[]):
         # torch parity: sample_shape + batch_shape + event_shape, where for a
         # one-hot draw event_shape = (num_categories,). The cum_probs comparison
         # already produces the one-hot over the last (category) axis.
@@ -250,7 +318,7 @@ class OneHotCategorical:
         return (self.probs == self.probs.max(-1, keepdims=True)).int64()
     
     
-class Categorical:
+class Categorical(Distribution):
     def __init__(self, probs=None, logits=None):
         assert not (probs is None and logits is None)
         # Align to torch.distributions.Categorical: logits map to probs via SOFTMAX
@@ -271,7 +339,7 @@ class Categorical:
             self.cum_probs_l = self.cum_probs[..., :-1]
             self.cum_probs_r = self.cum_probs[..., 1:]
 
-    def sample(self, sample_shape=()):
+    def _sample_impl(self, sample_shape=()):
         # torch parity: returns sample_shape + batch_shape, batch_shape = probs.shape[:-1].
         shape = _norm_sample_shape(sample_shape) + tuple(self.probs.shape[:-1]) + (1,)
         rand = jt.rand(shape)
@@ -295,21 +363,21 @@ class Categorical:
         return self.probs.argmax(dim=-1)
 
 
-class Normal:
+class Normal(Distribution):
     def __init__(self, mu, sigma):
         self.mu = mu
         self.sigma = sigma
         # torch parity: batch_shape = broadcast(mu, sigma), event_shape = ()
         self.batch_shape = _bshape(mu, sigma)
 
-    def sample(self, sample_shape=None):
-        # torch semantics: sample() is non-differentiable (detached) and returns
+    def _sample_impl(self, sample_shape=None):
+        # torch semantics: sample() returns
         # sample_shape + batch_shape. Build eps of the FULL shape, then affine-map
-        # mu + sigma*eps (parameters broadcast in); stop_grad to detach.
+        # mu + sigma*eps (parameters broadcast in); the base class detaches.
         shape = _full_shape(sample_shape, self.batch_shape)
         mu = self.mu if isinstance(self.mu, jt.Var) else jt.array(self.mu)
         sigma = self.sigma if isinstance(self.sigma, jt.Var) else jt.array(self.sigma)
-        return (mu + sigma * jt.randn(shape)).stop_grad()
+        return mu + sigma * jt.randn(shape)
 
     def rsample(self, sample_shape=None):
         # reparameterized (pathwise) sample: mu + sigma*eps, eps~N(0,1).
@@ -340,7 +408,7 @@ class Normal:
         return self.mu
 
 
-class Uniform:
+class Uniform(Distribution):
     def __init__(self,low,high):
         self.low = low
         self.high = high
@@ -350,7 +418,7 @@ class Uniform:
         if not isinstance(low, jt.Var) and not isinstance(high, jt.Var):
             assert high > low
 
-    def sample(self, sample_shape=None):
+    def _sample_impl(self, sample_shape=None):
         # torch parity: sample_shape + batch_shape. jittor has no jt.uniform; draw
         # U[0,1) of the FULL shape and affine-map to [low, high) (params broadcast).
         shape = _full_shape(sample_shape, self.batch_shape)
@@ -375,7 +443,7 @@ class Uniform:
         return jt.safe_log(self.high - self.low)
 
 
-class Geometric:
+class Geometric(Distribution):
     def __init__(self,p=None,logits=None):
         assert (p is not None) or (logits is not None)
         if p is None:
@@ -390,7 +458,7 @@ class Geometric:
         # torch parity: batch_shape = broadcast(prob), event_shape = ()
         self.batch_shape = _bshape(self.prob)
 
-    def sample(self, sample_shape=None):
+    def _sample_impl(self, sample_shape=None):
         # torch parity: sample_shape + batch_shape. inverse-CDF: floor(log(U)/log(1-p))
         # with U of the FULL shape so prob broadcasts in (was self.probs typo + drop).
         shape = _full_shape(sample_shape, self.batch_shape)
@@ -404,7 +472,7 @@ class Geometric:
         return binary_cross_entropy_with_logits(jt.array(self.logits),jt.array(self.prob)) / self.prob
 
 
-class GammaDistribution:
+class GammaDistribution(Distribution):
     '''
     For now only support gamma distribution.
     '''
@@ -413,7 +481,7 @@ class GammaDistribution:
         self.rate = rate
         self.lgamma_alpha = lgamma.apply(jt.array([concentration,]))
 
-    def sample(self, shape):
+    def _sample_impl(self, shape):
         return sample_gamma(self.concentration, shape)
     
     def cdf(self, value):
@@ -454,38 +522,13 @@ def kl_divergence(cur_dist, old_dist):
         # KL(p||q) = p*log(p/q) + (1-p)*log((1-p)/(1-q))
         p, q = cur_dist.probs, old_dist.probs
         return p * (jt.safe_log(p) - jt.safe_log(q)) + (1 - p) * (jt.safe_log(1 - p) - jt.safe_log(1 - q))
-
-
-def _logsigmoid(z):
-    # stable log(sigmoid(z)) = min(z,0) - log(1+exp(-|z|))
-    return jt.minimum(z, 0.0) - jt.safe_log(1.0 + jt.exp(-jt.abs(z)))
-
-
-class Distribution:
-    ''' Minimal base class for torch.distributions.Distribution (used for isinstance
-    checks and as a common interface). '''
-    has_rsample = False
-    arg_constraints = {}
-
-    def __init__(self, batch_shape=(), event_shape=(), validate_args=None):
-        self.batch_shape = tuple(batch_shape)
-        self.event_shape = tuple(event_shape)
-        self._validate_args = validate_args
-
-    def _extended_shape(self, sample_shape=None):
-        return _full_shape(sample_shape, self.batch_shape, self.event_shape)
-
-    def _validate_sample(self, value):
-        return None
-
-    def sample(self, sample_shape=None):
-        raise NotImplementedError
-    def rsample(self, sample_shape=None):
-        return self.sample(sample_shape)
-    def log_prob(self, value):
-        raise NotImplementedError
-    def entropy(self):
-        raise NotImplementedError
+    # No branch matched. Falling off the end returned None, which every caller
+    # then fed into arithmetic; torch raises NotImplementedError for a pair it
+    # has no registered formula for, and so do we.
+    raise NotImplementedError(
+        "kl_divergence is not implemented for %s; the supported distributions "
+        "are Normal, Categorical, OneHotCategorical, Uniform, Geometric and "
+        "Bernoulli" % type(cur_dist).__name__)
 
 
 class Bernoulli(Distribution):
@@ -504,7 +547,7 @@ class Bernoulli(Distribution):
         # (1,) that _as_var/jt.array forces (jittor has no 0-d Var).
         self.batch_shape = _bshape(logits if logits is not None else probs)
 
-    def sample(self, sample_shape=None):
+    def _sample_impl(self, sample_shape=None):
         # torch parity: sample_shape + batch_shape. Draw U of the FULL shape so
         # probs broadcasts in (was: sample_shape used as the whole output shape,
         # which dropped batch dims and raised a broadcast error for batched probs).
@@ -575,9 +618,6 @@ class LogitRelaxedBernoulli(Distribution):
         logit = self.logits + jt.safe_log(u) - jt.safe_log(1 - u)
         return logit / self.temperature
 
-    def sample(self, sample_shape=None):
-        return self.rsample(sample_shape).stop_grad()
-
     def log_prob(self, value):
         # log T + diff - 2*softplus(diff), diff = logits - T*value
         diff = self.logits - value * self.temperature
@@ -601,8 +641,12 @@ class RelaxedBernoulli(Bernoulli):
     def rsample(self, sample_shape=None):
         return jt.sigmoid(self.base_dist.rsample(sample_shape))
 
-    def sample(self, sample_shape=None):
-        return self.rsample(sample_shape).stop_grad()
+    def _sample_impl(self, sample_shape=None):
+        # Must be spelled out: this class derives from the DISCRETE Bernoulli,
+        # whose concrete _sample_impl would otherwise shadow the base class's
+        # "fall back to rsample" rule and make sample() return a hard 0/1 draw
+        # instead of a relaxed one in (0, 1).
+        return self.rsample(sample_shape)
 
     def log_prob(self, value):
         # sigmoid transform of the base distribution:
@@ -644,9 +688,6 @@ class ExpRelaxedCategorical(Distribution):
         scores = (self.logits + g) / self.temperature
         return nn.log_softmax(scores, dim=-1)
 
-    def sample(self, sample_shape=None):
-        return self.rsample(sample_shape).stop_grad()
-
     def log_prob(self, value):
         # value is a vector of log-probabilities
         K = self.probs.shape[-1]
@@ -679,8 +720,11 @@ class RelaxedOneHotCategorical(OneHotCategorical):
     def rsample(self, sample_shape=None):
         return jt.exp(self.base_dist.rsample(sample_shape))
 
-    def sample(self, sample_shape=None):
-        return self.rsample(sample_shape).stop_grad()
+    def _sample_impl(self, sample_shape=None):
+        # As in RelaxedBernoulli: the discrete OneHotCategorical._sample_impl
+        # would otherwise shadow the rsample fallback and hand back a hard
+        # one-hot vector instead of a point on the simplex.
+        return self.rsample(sample_shape)
 
     def log_prob(self, value):
         # exp transform of the base distribution: x = log(y),
@@ -702,7 +746,7 @@ class Exponential(Distribution):
         # torch parity: batch_shape from the RAW rate (python scalar -> ())
         self.batch_shape = _bshape(rate)
 
-    def sample(self, sample_shape=None):
+    def _sample_impl(self, sample_shape=None):
         # torch parity: sample_shape + batch_shape. inverse-CDF -log(1-U)/rate with
         # U of the FULL shape so rate broadcasts in (was: sample_shape alone, which
         # dropped batch dims and raised a broadcast error for batched rate).
@@ -726,7 +770,7 @@ class Independent(Distribution):
         self.base_dist = base_distribution
         self.reinterpreted_batch_ndims = reinterpreted_batch_ndims
 
-    def sample(self, sample_shape=None):
+    def _sample_impl(self, sample_shape=None):
         return self.base_dist.sample(sample_shape)
 
     def rsample(self, sample_shape=None):
@@ -788,9 +832,6 @@ class Beta(Distribution):
         y = sample_gamma(b, shape)
         return x / (x + y)
 
-    def sample(self, sample_shape=None):
-        return self.rsample(sample_shape)
-
     def log_prob(self, value):
         value = _as_var(value)
         a, b = self.concentration1, self.concentration0
@@ -829,9 +870,6 @@ class Gamma(Distribution):
         shape = _full_shape(sample_shape, self.batch_shape)
         return sample_gamma(self.concentration, shape) / self.rate
 
-    def sample(self, sample_shape=None):
-        return self.rsample(sample_shape)
-
     def log_prob(self, value):
         value = _as_var(value)
         c, r = self.concentration, self.rate
@@ -858,7 +896,7 @@ class Poisson(Distribution):
         # torch parity: batch_shape from the RAW rate (python scalar -> ())
         self.batch_shape = _bshape(rate)
 
-    def sample(self, sample_shape=None):
+    def _sample_impl(self, sample_shape=None):
         # torch parity: sample_shape + batch_shape. Broadcast the rate into the FULL
         # shape before drawing (was: np.broadcast_to(lam, sample_shape), which dropped
         # the batch dims and raised a numpy broadcast error for batched rate).
@@ -897,9 +935,6 @@ class Dirichlet(Distribution):
         g = sample_gamma(a, shape)
         return g / g.sum(-1, keepdims=True)
 
-    def sample(self, sample_shape=None):
-        return self.rsample(sample_shape)
-
     def log_prob(self, value):
         value = _as_var(value)
         a = self.concentration
@@ -934,9 +969,6 @@ class LogNormal(Distribution):
         shape = _full_shape(sample_shape, self.batch_shape)
         eps = jt.randn(shape)
         return jt.exp(self.loc + self.scale * eps)
-
-    def sample(self, sample_shape=None):
-        return self.rsample(sample_shape)
 
     def log_prob(self, value):
         value = _as_var(value)
@@ -983,9 +1015,6 @@ class LogisticNormal(Distribution):
             x = transform(x)
         return x
 
-    def sample(self, sample_shape=None):
-        return self.rsample(sample_shape).stop_grad()
-
     def log_prob(self, value):
         # Best-effort inverse transform. This is mainly for compatibility; verl's
         # DataProto/tensordict import path only needs the class to exist.
@@ -1029,9 +1058,6 @@ class MultivariateNormal(Distribution):
         shape = _full_shape(sample_shape, self.batch_shape, self.event_shape)
         eps = jt.randn(shape)
         return self.loc + eps.matmul(self._L.transpose(1, 0))
-
-    def sample(self, sample_shape=None):
-        return self.rsample(sample_shape)
 
     def log_prob(self, value):
         value = _as_var(value)
