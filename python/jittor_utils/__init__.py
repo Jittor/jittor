@@ -659,11 +659,91 @@ def get_git_branch(cwd):
                         lambda: _read_git_branch(cwd))
 
 
+def cache_root():
+    """``<home>/.cache/jittor`` -- everything Jittor caches lives under here."""
+    return os.path.join(home(), ".cache", "jittor")
+
+
+def version_dir_name():
+    """First component of the build tree: ``jt<major.minor>``."""
+    return "jt" + get_jittor_version().rsplit('.', 1)[0]
+
+
+#: What Jittor writes directly under :func:`cache_root`, grouped by what it is.
+#:
+#: One description, used by :func:`find_cache_path` to build the tree and by
+#: ``jittor_utils.clean_cache`` to take it apart. They used to be written out
+#: independently and had drifted apart in three ways, each of which made
+#: ``clean_cache`` quietly do the wrong thing:
+#:
+#: * it deleted ``<root>/default`` and ``<root>/master``, which stopped being
+#:   top-level directories when the cache name became the *ninth* path
+#:   component -- so those two lines had not removed anything in a long time;
+#: * ``clean_core``'s ``jt*`` glob matched ``jtcuda`` as well, so "clean the
+#:   compiled products" also deleted the bundled CUDA toolkit that
+#:   ``clean_cuda`` is supposed to own;
+#: * ``clean_swap`` deleted ``<root>/tmp``, which has never existed: swap
+#:   files go in a ``tmp`` *inside* each build tree.
+#:
+#: and ``mkl``, ``msvc``, ``cutlass``, ``auto_diff`` and ``probe.json`` were
+#: not reachable from any subcommand at all.
+CACHE_GROUPS = (
+    ("core", "compiled products, one tree per Jittor version"),
+    ("cuda", "CUDA toolkits and CUDA-only third-party sources"),
+    ("deps", "third-party archives every build on this machine shares"),
+    ("dataset", "downloaded datasets"),
+    ("probe", "remembered toolchain probe results"),
+    ("swap", "swap files, which live inside the build trees"),
+)
+
+#: Names owned by a group other than ``core``. ``core`` is "every build tree",
+#: which is ``jt*`` minus these -- spelling that out is what keeps ``jtcuda``
+#: from being deleted as though it were a build tree.
+_CACHE_GROUP_NAMES = {
+    "cuda": ("jtcuda", "cutt", "cub", "nccl", "cutlass"),
+    "deps": ("mkl", "msvc", "torch-shim", "auto_diff"),
+    "dataset": ("dataset",),
+    "probe": ("probe.json",),
+}
+
+
+def cache_group_paths(group, root=None):
+    """Absolute paths a ``clean_cache`` subcommand should remove."""
+    root = root or cache_root()
+    if group == "core":
+        owned = set()
+        for names in _CACHE_GROUP_NAMES.values():
+            owned.update(names)
+        return sorted(
+            os.path.join(root, name)
+            for name in _listdir(root)
+            if name.startswith("jt") and name not in owned)
+    if group == "swap":
+        # Inside each build tree, at whatever depth the configuration and
+        # CUDA-key components put it.
+        found = []
+        for tree in cache_group_paths("core", root):
+            for current, directories, _ in os.walk(tree):
+                if os.path.basename(current) == "tmp":
+                    found.append(current)
+                    directories[:] = []
+        return sorted(found)
+    return [os.path.join(root, name)
+            for name in _CACHE_GROUP_NAMES.get(group, ())]
+
+
+def _listdir(path):
+    try:
+        return os.listdir(path)
+    except OSError:
+        return []
+
+
 def find_cache_path():
     global lock_path
     path = home()
     # jittor version key
-    jtv = "jt"+get_jittor_version().rsplit('.', 1)[0]
+    jtv = version_dir_name()
     # cc version key
     ccv = cc_type+get_version(cc_path)[1:-1] \
         if cc_type != "cl" else cc_type

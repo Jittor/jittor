@@ -25,13 +25,13 @@ CPU 型号、git 分支），**内容**按命令行加源码哈希判定，中�
 | 问题 | 证据 | 后果 | 修改方向 | 严重度 |
 | --- | --- | --- | --- | --- |
 | 编译配置不进缓存路径，不同配置的进程在同一目录互相重编 | 缓存路径成分见 `jittor_utils/__init__.py:480-525`：版本、cc 版本、py 版本、platform+node、CPU 型号、`__file__` 哈希前 4 位、git 分支。**不含** nvcc_flags/cc_flags/cuda_archs/enable_lto/kernel_flags。而 torch shim 会往 nvcc_flags 塞 `--fmad=false --prec-div=true --prec-sqrt=true` 并去掉 `--use_fast_math`（`compat/shim/preflight.py:179-189`） | 同一台机上 shim 开与关共用 `cache_path/jit/`，每次切换重编全部 CUDA kernel；并发时后写者替换前者已 dlopen 的 .so 产生同一库两份映射——这个失败模式 `compiler.py:929-938` 的注释已为 jit_utils_core 单独描述过但没推广 | 缓存路径追加构建配置指纹；写新目录切指针不要原地重建 | 关键 |
-| helper_cuda.h 被显式排除在缓存键之外 | `src/utils/cache_compile.cc:178`：`if (inc != "test.h" && inc != "helper_cuda.h")` 才计入依赖；该头被 41 个源文件包含 | 改 `extern/cuda/inc/helper_cuda.h` 不触发任何重编译，直接用过期目标文件 | 删除这条例外 | 主要 |
+| helper_cuda.h 被显式排除在缓存键之外 | `src/utils/cache_compile.cc:184`：`if (inc != "test.h" && inc != "helper_cuda.h")` 才计入依赖；该头被 47 个源文件包含 | 改 `extern/cuda/inc/helper_cuda.h` 不触发任何重编译，直接用过期目标文件 | **更正（2026-09-03，构建分区实测）：不能只"删除这条例外"。** 这两条例外是扫描器不认识 `#ifdef` 的补丁：47 个文件里的 `#include "helper_cuda.h"` 都在 `#ifdef HAS_CUDA` 里，而 `extern/cuda/inc` 只加进 `nvcc_flags`（`compiler.py:1494`），不在 CPU 编译的 `-I` 列表里。裸删这条例外之后，**CPU 构建**扫到这一行会解析不到文件并触发 `cache_compile.cc:352` 的 `ASSERT(found)` 而整个失败。`test.h` 同理（只在 `#ifdef TEST` 下包含，且在 `src/utils/` 不在 `src/`）。所以这一条必须和同表的 `-MD -MF` 一起做——让编译器回答依赖，就同时消掉了 `#ifdef` 与`<...>` 两个问题，也就不再需要任何按文件名写死的例外 | 主要 |
 | 只跟踪 `#include "..."`，不跟踪 `<...>` | `cache_compile.cc:176` 只在 `src[k]=='"'` 时记录 | 尖括号包含的项目内头文件改动不触发重编 | 依赖跟踪改用编译器的 `-MD -MF`，不要手写预处理器 | 主要 |
 | 缓存内容哈希是可构造碰撞的多项式哈希 | `src/misc/hash.h:31-37`：`v += mul*c; mul *= 257` 模 2^64 线性 | 判定产物是否最新的唯一依据比同仓库已在用的 md5 还弱 | 换 SHA-256 或 xxhash64 | 次要 |
 | 缓存路径含主机名却不含 CPU 指令集边界 | `jittor_utils/__init__.py:488` 用 `platform.node()`；`compiler.py:1094` 无条件加 `-march=native`；CPU 只以 model name 前 14 字符加 2 位哈希入键 | 主机名入键使集群每节点全量重编，缓存无法共享；反过来同型号不同微码的机器共享缓存可能拿到非法指令 | 主机名移出键；用编译器实际展开的 -march=native 结果入键 | 主要 |
 | 缓存路径依赖 git branch | `jittor_utils/__init__.py:503-514` 在 jittor_utils 目录跑 git branch 取 `* ` 开头那行，失败静默回落 default，结果写回 `os.environ["cache_name"]`（`:519`）传给所有子进程 | 切分支等于全量重编；detached HEAD 时 for/else 拿到最后一行得到错误 cache_name；pip 装到某 git 仓库内的 site-packages 会意外继承那个仓库的分支名 | 缓存名由源码内容哈希决定，不要把内部状态写回 os.environ | 主要 |
 | 项目路径只用 4 位十六进制入键 | `jittor_utils/__init__.py:495` `get_str_hash(__file__)[:4]` | 65536 空间，两个并行 worktree 撞键就是两套源码共用一个缓存目录 | 至少 12 位或直接用规范化绝对路径 | 次要 |
-| clean_cache 与实际布局脱节 | `jittor_utils/clean_cache.py:26-27` 删 `cache_path/default`、`/master`（当前布局下分支名是最后一级）；clean_cuda 不删 cutlass、mkl | 清缓存清不干净 | 清理逻辑从同一份布局定义生成 | 次要 |
+| clean_cache 与实际布局脱节 | `jittor_utils/clean_cache.py:26-27` 删 `cache_path/default`、`/master`（当前布局下分支名是第九级）；`clean_core` 的 `jt*` 通配同时匹配 `jtcuda`；`clean_swap` 删 `<root>/tmp` 而 swap 文件在构建树**里面**的 `tmp`；cutlass、mkl、msvc、auto_diff、probe.json 任何子命令都够不到 | 清缓存清不干净，且"清编译产物"会顺手删掉自带的 CUDA 工具链 | 清理逻辑从同一份布局定义生成（**已完成**：`jittor_utils.CACHE_GROUPS` / `cache_group_paths()`） | 次要 |
 
 ## 锁与并发
 | 问题 | 证据 | 后果 | 修改方向 | 严重度 |
