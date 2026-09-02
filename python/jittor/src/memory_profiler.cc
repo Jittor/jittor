@@ -85,13 +85,14 @@ void MemoryProfiler::check() {
                 queue.push_back(vh->var);
             }
         bfs_both(queue, [](Node*){return true;});
-        vector<int> backup_custom_data;
-        backup_custom_data.resize(queue.size());
-        for (int i=0; i<queue.size(); i++)
-            backup_custom_data[i] = queue[i]->custom_data;
+        // No hand backup/restore of Node::custom_data around this call any
+        // more. check() runs from inside Executor::run_sync's op loop (see the
+        // profile_memory_enable branch there), and the sort used to write its
+        // in-degrees into the same per-node int the executor keeps its op and
+        // var indices in -- so this call site had to save and restore the
+        // whole field for the run in progress to survive. The sort keeps its
+        // own in-degrees now (graph.h), so there is nothing to protect.
         toplogical_sort_forward(queue, queue2, [](Node*){});
-        for (int i=0; i<queue.size(); i++)
-            queue[i]->custom_data = backup_custom_data[i];
         queue.swap(queue2);
         int64 cpu_sum = 0;
         for (Node* node : queue) {
