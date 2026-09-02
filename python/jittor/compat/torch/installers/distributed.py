@@ -142,12 +142,12 @@ def _bootstrap_native_distributed(rank, world_size, backend=None):
     if ops is None:
         raise RuntimeError("Jittor NCCL setup did not publish collective ops")
 
+    # compile_extern is the single owner; jt.rank / jt.world_size / jt.in_mpi
+    # read through to it. Assigning them here as well used to create a second
+    # copy that then had to be kept in sync by hand. 6.B15.
     jt.compile_extern.rank = rank
     jt.compile_extern.world_size = world_size
     jt.compile_extern.in_mpi = True
-    jt.rank = rank
-    jt.world_size = world_size
-    jt.in_mpi = True
 
     def _all_reduce(self, op="mean"):
         if op not in ("sum", "mean"):

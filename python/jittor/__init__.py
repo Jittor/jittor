@@ -61,7 +61,29 @@ with lock.lock_scope():
     from jittor_core.ops import *
     _core_profiler = core.profiler
     from . import compile_extern
-    from .compile_extern import mkl_ops, mpi, mpi_ops, in_mpi, rank, world_size
+    from .compile_extern import mkl_ops, mpi, mpi_ops
+    # in_mpi / rank / world_size are deliberately NOT imported here. Importing
+    # them made jt.rank a snapshot of compile_extern.rank taken at import time:
+    # anything that later corrected compile_extern.rank (the torch NCCL
+    # installer, single_process_scope) left jt.rank stale, and the two
+    # disagreed with no error. They are served by __getattr__ below so there is
+    # one owner. 6.B15.
+
+    # Single source for the distributed identity: compile_extern owns it (and
+    # takes it from the C++ MPI globals), everything else reads through. This
+    # has to be installed here, before the submodules below are imported --
+    # several of them read jt.rank at import time. Assigning jt.rank /
+    # jt.world_size / jt.in_mpi anywhere would shadow this and re-create the
+    # stale copy, so writers must set compile_extern's attribute instead.
+    _DISTRIBUTED_STATE_NAMES = ("in_mpi", "rank", "world_size")
+
+    def __getattr__(name):
+        if name in _DISTRIBUTED_STATE_NAMES:
+            return getattr(compile_extern, name)
+        raise AttributeError(
+            "module {!r} has no attribute {!r}".format(__name__, name))
+
+    globals()["__getattr__"] = __getattr__
     if core.get_device_count() == 0:
         has_cuda = compile_extern.has_cuda = compiler.has_cuda = False
     if has_cuda:

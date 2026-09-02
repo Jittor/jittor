@@ -81,6 +81,52 @@ cd <worktree> && JITTOR_HOME=... TMPDIR=... pytest tests/<...> -x -q
 
 任何一条答不上来，这次验证不算数。
 
+## 多个 worktree 并行时，`.git` 里哪些是共用的
+
+同一个仓库的所有 worktree **共用一个 `.git` 目录**。哪些状态是共用的、哪些是本 worktree
+私有的，决定了你能不能把某个操作当成"只影响我自己"。
+
+| 东西 | 共用还是私有 | 后果 |
+| --- | --- | --- |
+| `refs/stash`（stash 栈） | **共用** | **别人的 `git stash pop` 会拿走你的改动** |
+| `refs/heads/*`、`refs/remotes/*`、所有 tag | 共用 | 你能看见别人的分支；`git fetch` 互相影响 |
+| objects（提交、blob） | 共用 | 好事：别人的悬垂 commit 你也能找回 |
+| `HEAD`、index（暂存区） | 每 worktree 私有 | `git add` 只影响自己 |
+| HEAD 的 reflog | 每 worktree 私有（在 `.git/worktrees/<name>/`） | |
+
+**因此：worktree 里禁止 `git stash`。** stash 栈是全局的一个栈，两个 agent 各自
+`push` 再各自 `pop`，拿回来的是对方的改动——这不是理论风险，已经真实发生过一次完整对调。
+
+### 要做「修前失败、修后通过」怎么办
+
+用补丁文件，存在**自己的 `TMPDIR`** 里：
+
+```bash
+git diff -- <你改的文件> > "$TMPDIR/fix.patch"   # 存下修后状态
+git checkout -- <你改的文件>                      # 回到修前
+<跑测试，确认它失败——这一步才是重点>
+git apply "$TMPDIR/fix.patch"                     # 回到修后
+<再跑一次，确认它通过>
+```
+
+新增的文件不在 `git diff` 里，用 `mv` 挪走再挪回来，**不要** `git stash -u`。
+
+### 万一已经被 stash 串号了
+
+stash commit 只是变成悬垂对象，没被删。按 message 找回来：
+
+```bash
+for c in $(git fsck --unreachable --no-progress 2>/dev/null | grep commit | awk '{print $3}'); do
+  echo "$c :: $(git log -1 --format='%ci %s' $c)"
+done | sort -k2
+```
+
+stash 的 message 形如 `On <分支>: <你写的 -m 文本>` 或 `WIP on <分支>: <提交标题>`。
+认出自己那条之后 `git stash apply <commit>`（先把误 pop 进来的别人的文件
+`git checkout --` 还原掉，别提交它们；还原前先 `git diff > 一份patch` 存起来还给对方）。
+
+**所以万一非要 stash，也一定要 `-m "<任务编号>"`**——没有 message 的话事后分不清哪条是自己的。
+
 ## 改了 C++ 之后
 
 改 `python/jittor/src/**` 或 `python/jittor/extern/**` 之后，**每个新进程**都要重编，

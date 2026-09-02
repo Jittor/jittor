@@ -10,6 +10,7 @@
 #include <cmath>
 #include <limits>
 #include <cstring>
+#include <cstdlib>
 #include <vector>
 
 #if defined(__x86_64__) || defined(_M_X64)
@@ -246,10 +247,45 @@ static void getHostName(char* hostname, int maxlen) {
     }
 }
 
+// Was `getenv("OMPI_COMM_WORLD_SIZE")` alone, i.e. Open MPI only: launched
+// with MPICH, Intel MPI, MVAPICH or srun, jittor did not notice it was in an
+// MPI job at all and every rank ran as an independent single-card process.
+//
+// This list is mirrored by compile_extern._MPI_LAUNCHER_VARS /
+// _MPI_LAUNCHER_SIZE_VARS, because Python must answer the same question before
+// this module is even loaded. tests/distributed/test_mpi_launcher_env.py
+// asserts the two stay identical.
+static bool detect_inside_mpi() {
+    // Explicit declaration always wins, in either direction: JT_MPI=0 to stay
+    // single-process under a launcher, JT_MPI=1 for a launcher we do not know.
+    if (const char* forced = getenv("JT_MPI")) {
+        if (forced[0])
+            return !(forced[0] == '0' && forced[1] == '\0');
+    }
+    // Presence of these means "started by an MPI launcher".
+    static const char* launcher_vars[] = {
+        "OMPI_COMM_WORLD_SIZE",   // Open MPI (mpirun / orterun / prterun)
+        "PMI_SIZE",               // MPICH, Intel MPI (mpiexec.hydra)
+        "MV2_COMM_WORLD_SIZE",    // MVAPICH2
+        "PMIX_RANK",              // PMIx-based launchers
+    };
+    for (auto* v : launcher_vars)
+        if (getenv(v)) return true;
+    // Slurm is different: srun is routinely used to start ordinary single-task
+    // jobs that have nothing to do with MPI, so require an actual multi-task
+    // allocation before deciding to call MPI_Init.
+    static const char* slurm_size_vars[] = { "SLURM_NTASKS", "SLURM_NPROCS" };
+    for (auto* v : slurm_size_vars) {
+        const char* s = getenv(v);
+        if (s && atoi(s) > 1) return true;
+    }
+    return false;
+}
+
 struct mpi_initer {
 
 mpi_initer() {
-    inside_mpi = !!getenv("OMPI_COMM_WORLD_SIZE");
+    inside_mpi = detect_inside_mpi();
     if (!inside_mpi) return;
     mpi_enabled = true;
     LOGvv << "MPI init...";

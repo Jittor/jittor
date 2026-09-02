@@ -319,21 +319,23 @@ class __single_process_scope:
         self.rank = rank
 
     def __enter__(self):
-        global in_mpi
-        self.bk_in_mpi = in_mpi = jt.in_mpi
+        # compile_extern owns in_mpi; this module used to keep its own copy
+        # (pulled in by `from jittor import *` at import time) and mutate that
+        # alongside, so a later correction to compile_extern.in_mpi left this
+        # copy stale and mpi_param_broadcast() below silently did nothing. 6.B15.
+        self.bk_in_mpi = compile_extern.in_mpi
         if mpi:
             self.bk_mpi_state = mpi.get_state()
-        if not in_mpi:
+        if not self.bk_in_mpi:
             return True
 
         ret = self.rank == mpi.world_rank()
-        in_mpi = jt.in_mpi = compile_extern.in_mpi = False
+        compile_extern.in_mpi = False
         mpi.set_state(False)
         return ret
 
     def __exit__(self, *exc):
-        global in_mpi
-        in_mpi = jt.in_mpi = compile_extern.in_mpi = self.bk_in_mpi
+        compile_extern.in_mpi = self.bk_in_mpi
         if mpi:
             mpi.set_state(self.bk_mpi_state)
 
@@ -2138,7 +2140,8 @@ Arguments of hook are defined as::
         self.is_train = value
 
     def mpi_param_broadcast(self, root=0):
-        if not in_mpi: return
+        # Read through to the owner, never a module-level snapshot. 6.B15.
+        if not compile_extern.in_mpi: return
         for p in self.parameters():
             p.update(p.mpi_broadcast(root))
 

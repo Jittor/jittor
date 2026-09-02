@@ -832,8 +832,42 @@ def manual_link(flags):
                 ctypes.CDLL(libname, dlopen_flags)
                 break
 
+# Which environment variables mean "this process was started by an MPI
+# launcher". Mirrored by detect_inside_mpi() in extern/mpi/src/mpi_wrapper.cc,
+# which must answer the same question in C++ before MPI_Init; both lists are
+# pinned together by tests/distributed/test_mpi_launcher_env.py.
+#
+# Only OMPI_COMM_WORLD_SIZE used to be recognized, so MPICH, Intel MPI, MVAPICH
+# and srun all fell through to a silent single-card run. 6.B15.
+_MPI_LAUNCHER_VARS = (
+    "OMPI_COMM_WORLD_SIZE",   # Open MPI (mpirun / orterun / prterun)
+    "PMI_SIZE",               # MPICH, Intel MPI (mpiexec.hydra)
+    "MV2_COMM_WORLD_SIZE",    # MVAPICH2
+    "PMIX_RANK",              # PMIx-based launchers
+)
+
+# Slurm is different: srun is routinely used to start ordinary single-task jobs
+# that have nothing to do with MPI, so require an actual multi-task allocation.
+_MPI_LAUNCHER_SIZE_VARS = ("SLURM_NTASKS", "SLURM_NPROCS")
+
+
 def inside_mpi():
-    return "OMPI_COMM_WORLD_SIZE" in os.environ
+    """Whether this process is one rank of an MPI job.
+
+    ``JT_MPI`` overrides in either direction: ``0`` to stay single-process under
+    a launcher, ``1`` to declare an MPI job started by a launcher we do not
+    recognize.
+    """
+    forced = os.environ.get("JT_MPI")
+    if forced:
+        return forced != "0"
+    if any(v in os.environ for v in _MPI_LAUNCHER_VARS):
+        return True
+    for var in _MPI_LAUNCHER_SIZE_VARS:
+        value = os.environ.get(var, "")
+        if value.strip().isdigit() and int(value) > 1:
+            return True
+    return False
 
 def setup_mpi():
     global mpi_ops, mpi, use_mpi
@@ -931,17 +965,35 @@ if _jt_hccl_no_mpi or _jt_nccl_no_mpi:
     os.environ["use_mpi"] = "0"   # make setup_mpi() a no-op (no libmpi load)
 
 setup_mpi()
-rank = mpi.world_rank() if in_mpi else 0
-world_size = mpi.world_size() if in_mpi else 1
 
-if _jt_hccl_no_mpi:
-    in_mpi = True                 # let the optimizer take the distributed path
-    rank = int(os.environ.get("JT_HCCL_RANK", "0"))
-    world_size = int(_jt_hccl_ws)
-elif _jt_nccl_no_mpi:
-    in_mpi = True
-    rank = int(os.environ.get("JT_NCCL_RANK", "0"))
-    world_size = int(_jt_nccl_ws)
+
+def _resolve_distributed_state():
+    """The one place (rank, world_size, in_mpi) is decided. 6.B15.
+
+    There is exactly one authority per bootstrap path, and Python reads it
+    rather than deriving its own answer:
+
+    * MPI: the C++ globals, filled by MPI_Comm_rank/MPI_Comm_size in
+      mpi_wrapper.cc and read back through mpi.world_rank()/world_size().
+    * MPI-free env/file rendezvous (JT_HCCL_* / JT_NCCL_*): the launcher's
+      environment, which nccl_wrapper.cc / hccl_wrapper.cc read into the very
+      same C++ globals, so the two sides cannot disagree.
+
+    Keeping the three branches in one function is the point: the previous shape
+    had them as three separate assignments to module globals, and any branch
+    that forgot one left C++ believing rank 0 while Python believed rank 2.
+    """
+    if _jt_hccl_no_mpi:
+        # in_mpi True so the optimizer takes the distributed path.
+        return True, int(os.environ.get("JT_HCCL_RANK", "0")), int(_jt_hccl_ws)
+    if _jt_nccl_no_mpi:
+        return True, int(os.environ.get("JT_NCCL_RANK", "0")), int(_jt_nccl_ws)
+    if in_mpi:
+        return True, mpi.world_rank(), mpi.world_size()
+    return False, 0, 1
+
+
+in_mpi, rank, world_size = _resolve_distributed_state()
 
 
 def distributed_requested():
@@ -966,6 +1018,43 @@ def distributed_requested():
     return None
 
 
+def check_rank_agrees_with_cxx():
+    """C++ and Python must report the same rank/world_size. 6.B15.
+
+    The C++ side is what the collective operators actually use (mpi_world_rank
+    and friends); the Python side is what user code and the optimizer read. A
+    process where C++ thinks it is rank 0 and Python thinks it is rank 2 does
+    not crash -- it exchanges tensors with the wrong peers and trains something
+    meaningless. Cheap to check once at import, so check it.
+
+    Only checkable where both sides exist, i.e. the MPI path. On the env/file
+    rendezvous the C++ globals are filled from the same launcher variables this
+    module reads, inside nccl_wrapper.cc / hccl_wrapper.cc.
+    """
+    if mpi is None or _jt_hccl_no_mpi or _jt_nccl_no_mpi:
+        return
+    # First: did both sides recognize the launcher? This is where the two
+    # detection lists (inside_mpi() here, detect_inside_mpi() in
+    # mpi_wrapper.cc) would show up as having drifted apart.
+    cxx_enabled = bool(mpi.get_state())
+    if cxx_enabled != bool(in_mpi):
+        raise RuntimeError(
+            "distributed state is inconsistent: the C++ MPI layer is {} while "
+            "Python believes in_mpi={}. The launcher-detection lists in "
+            "compile_extern.inside_mpi() and detect_inside_mpi() in "
+            "extern/mpi/src/mpi_wrapper.cc have drifted apart.".format(
+                "enabled" if cxx_enabled else "disabled", in_mpi))
+    if not in_mpi:
+        return
+    cxx = (mpi.world_rank(), mpi.world_size())
+    py = (rank, world_size)
+    if cxx != py:
+        raise RuntimeError(
+            "distributed state is inconsistent: C++ reports rank/world_size {} "
+            "while Python reports {}. The collectives would use the C++ values "
+            "and user code the Python ones.".format(cxx, py))
+
+
 def check_distributed_backend_ready():
     """Fail loudly if distributed was requested but no collective backend came up.
 
@@ -974,6 +1063,7 @@ def check_distributed_backend_ready():
     an MPI module that did not load. Any one of them leaves the process
     reporting world_size>1 with nothing to communicate through.
     """
+    check_rank_agrees_with_cxx()
     reason = distributed_requested()
     if reason is None:
         return
