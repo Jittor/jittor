@@ -8,6 +8,34 @@ description: 改动 pyjt 绑定层（python/jittor/pyjt_compiler.py 代码生成
 绑定层的共同失败模式是**生成器不报错、生成的 C++ 能编译、行为悄悄不对**。
 所以「测试跑绿了」不算通过，还要确认你测的是自己那份生成结果。
 
+## 0. 先记住这一条：新测试证明你想到的那半，既有测试守着你没想到的那半
+
+**「我新写的测试全绿」不能说明改对了。** 新测试只覆盖你**已经理解**的那部分契约；
+你改错的往往正是你没意识到它存在的另一半。
+
+真实案例（6.C27）：`Var.data` 返回的 numpy 视图 base 指向 VarHolder 的 PyObject，
+而 `assign` 换掉 Var、释放旧的，视图就读已释放内存。第一版改法是让 base 指向一个
+只对那个 Var 多持一份 liveness 的胶囊——**为它新写的三条测试全通过**。
+
+挂掉的是 `tests/core/test_array.py::TestArray::test_data`，一条既有用例，
+断言的是同一个契约的另一半：
+
+```python
+li = jt.liveness_info()
+del a                              # 丢掉 VarHolder
+assert li == jt.liveness_info()    # 视图还在，整个 Var 对象就得还在
+del d                             # 丢掉视图
+assert li != jt.liveness_info()
+```
+
+`Var.data` 的生命周期契约是「视图活着，**整个 Var 对象**活着」，不只是那块内存。
+只钉 allocation、不钉包装对象，就把契约改了一半。最终版两份都持。
+
+**所以每条改动至少跑两组：** 本任务的新测试，**加上受影响目录的既有测试**
+（改绑定层就是 `tests/core`，改算子就是 `tests/ops`）。发现这个 bug 的是后者，
+而且是在我已经准备提交之后。少跑那一组，这个回归会带着「三条新测试全绿」的
+提交说明进主干。
+
 ## 1. 先确认导入的是自己这棵树
 
 `pip install -e` 装的 `.pth` 指向**另一棵源码树**。pytest 靠 `pyproject.toml` 里的
