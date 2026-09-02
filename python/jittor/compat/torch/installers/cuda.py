@@ -266,8 +266,8 @@ def _install_cuda(g, registry=None):
     cuda.get_device_properties = lambda *a, **k: _DeviceProps()
     class _amp:
         @staticmethod
-        def autocast(*a, **k):
-            return _AutocastContext()
+        def autocast(device_type="cuda", *a, **k):
+            return _AutocastContext(device_type, *a, **k)
         GradScaler = _GradScaler
         custom_fwd = staticmethod(_amp_passthrough_decorator)
         custom_bwd = staticmethod(_amp_passthrough_decorator)

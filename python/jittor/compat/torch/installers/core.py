@@ -30,6 +30,26 @@ def install(ctx):
     ctx.registry.publish("torch.types", make_torch_types_module())
     g._torch_make_parameter = _torch_make_parameter
     g._torch_prune_leaf_registry = _torch_prune_leaf_registry
+
+    # Escape hatch for the APIs this layer refuses to fake.  See
+    # jittor/compat/stub_policy.py; JITTOR_TORCH_ALLOW_STUB=1 does the same.
+    from ...stub_policy import (
+        allow_stub as _allow_stub,
+        set_allow_stub as _set_allow_stub,
+        registry as _unimplemented_registry,
+        approximate_registry as _approximate_registry,
+    )
+
+    def _compat_allow_stub(value=None):
+        """Query (no argument) or set the silent-stub escape hatch."""
+        if value is None:
+            return _allow_stub()
+        _set_allow_stub(value)
+        return _allow_stub()
+
+    g.compat_allow_stub = _compat_allow_stub
+    g.compat_unimplemented_apis = _unimplemented_registry
+    g.compat_approximate_apis = _approximate_registry
     if not hasattr(g, "_vj_native_load"):
         g._vj_native_load = getattr(g, "load", None)
     if not hasattr(g, "_vj_native_save"):
@@ -233,14 +253,31 @@ def install_misc(ctx):
         return _torch_norm_impl(input, p=p, dim=dim, keepdim=keepdim, dtype=dtype)
     g.norm = norm
 
-    # autocast / grad-mode query helpers
-    g.is_autocast_enabled = lambda *a, **k: False
+    # autocast / grad-mode query helpers.  These used to be constants
+    # (is_autocast_enabled -> False always) even while torch.autocast claimed
+    # to be active, so nothing in a program could detect that mixed precision
+    # had silently not happened.  They now report the live autocast region.
+    from ..grad import autocast_is_enabled as _autocast_is_enabled
+    from ..grad import autocast_dtype as _autocast_dtype
+
+    def _is_autocast_enabled(device_type=None, *a, **k):
+        return _autocast_is_enabled(device_type)
+
+    def _get_autocast_dtype(device_type=None, *a, **k):
+        name = _autocast_dtype(device_type)
+        if name is None:
+            return getattr(g, "float32", "float32")
+        return getattr(g, name, name)
+
+    g.is_autocast_enabled = _is_autocast_enabled
     g.set_autocast_enabled = lambda *a, **k: None
     g.is_grad_enabled = lambda: not bool(getattr(jt.flags, "no_grad", 0))
     g.set_grad_enabled = lambda mode: (g.enable_grad() if mode else g.no_grad())
-    g.get_autocast_dtype = lambda *a, **k: getattr(g, "float32", "float32")
-    g.get_autocast_gpu_dtype = lambda *a, **k: getattr(g, "float16", "float16")
-    g.is_autocast_available = lambda *a, **k: False
+    g.get_autocast_dtype = _get_autocast_dtype
+    g.get_autocast_gpu_dtype = lambda *a, **k: (
+        _get_autocast_dtype("cuda") if _autocast_is_enabled("cuda")
+        else getattr(g, "float16", "float16"))
+    g.is_autocast_available = lambda *a, **k: True
     g.are_deterministic_algorithms_enabled = lambda: False
     g.use_deterministic_algorithms = lambda *a, **k: None
     g.is_floating_point = lambda x: ("float" in str(x.dtype))

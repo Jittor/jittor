@@ -51,25 +51,135 @@ class _GradDecoratorCtx:
         return self._scope.__exit__(*exc)
 
 
+# Jittor's auto-mixed-precision control registers (src/misc/nano_string.h).
+# amp_reg drives dtype inference for every op created while it is set.
+_AMP_PREFER32 = 1
+_AMP_PREFER16 = 2
+_AMP_KEEP_REDUCE = 4
+_AMP_KEEP_WHITE = 8
+_AMP_ARRAY_PREFER = 16
+
+# Thread-local nesting state so `torch.is_autocast_enabled()` answers truthfully
+# and nested/`enabled=False` regions restore the enclosing setting.
+import threading as _threading
+
+_autocast_state = _threading.local()
+
+
+def _autocast_stack():
+    stack = getattr(_autocast_state, "stack", None)
+    if stack is None:
+        stack = _autocast_state.stack = []
+    return stack
+
+
+def autocast_is_enabled(device_type=None):
+    """True inside an *enabled* torch.autocast region (torch.is_autocast_enabled)."""
+    for entry in reversed(_autocast_stack()):
+        if device_type is None or entry["device_type"] == str(device_type):
+            return bool(entry["enabled"])
+    return False
+
+
+def autocast_dtype(device_type=None):
+    """dtype of the innermost enabled autocast region, else None."""
+    for entry in reversed(_autocast_stack()):
+        if device_type is None or entry["device_type"] == str(device_type):
+            return entry["dtype"] if entry["enabled"] else None
+    return None
+
+
+def _autocast_default_dtype(device_type):
+    # torch: float16 on cuda, bfloat16 on cpu.
+    return "bfloat16" if str(device_type) in ("cpu", "") else "float16"
+
+
 class _AutocastContext:
-    """torch.autocast is BOTH a context manager and a decorator -- accelerate does
-    `new_forward = autocast(model_forward)`. On jittor, bf16/fp16 is determined by
-    the actual tensor dtypes (no global autocast state), so this is a no-op that
-    supports `with autocast(...):`, `@autocast(...)`, and `autocast(...)(fn)`."""
-    def __init__(self, *a, **k):
-        pass
+    """torch.autocast, implemented on jittor's amp registers.
+
+    It used to be a total no-op: every argument was accepted, nothing changed,
+    and a script that asked for mixed precision silently trained in float32 with
+    none of the promised memory or speed -- while ``is_autocast_enabled()``
+    agreed it was off, so nothing in the program could notice.
+
+    The region now sets ``jt.flags.amp_reg`` so op dtype inference actually
+    prefers the low-precision type (matmul/conv in fp16, ``exp``/``pow`` and
+    reductions kept in fp32, mirroring torch's autocast lists), and restores the
+    previous register on exit.  It is still BOTH a context manager and a
+    decorator -- accelerate does ``new_forward = autocast(model_forward)``.
+
+    Known difference from torch, warned about once: jittor's register selects
+    *bfloat16* only when an operand already is bfloat16, so an all-float32 model
+    under ``autocast(dtype=torch.bfloat16)`` computes in float16 -- same
+    mantissa-or-better, narrower exponent range.
+    """
+
+    def __init__(self, device_type=None, dtype=None, enabled=True,
+                 cache_enabled=None, *a, **k):
+        # torch.cuda.amp.autocast()/torch.cpu.amp.autocast() omit device_type.
+        if device_type is None:
+            device_type = k.pop("device", None) or "cuda"
+        self.device_type = str(device_type)
+        self.enabled = bool(enabled)
+        self.cache_enabled = cache_enabled
+        if dtype is None:
+            dtype = _autocast_default_dtype(self.device_type)
+        name = getattr(dtype, "__name__", None) or str(dtype)
+        name = name.split(".")[-1]
+        self.fast_dtype = name
+        self._saved = None
+        self._entered = 0
+        if self.enabled and name not in ("float16", "half", "bfloat16",
+                                         "float32", "float", "double",
+                                         "float64"):
+            from ..stub_policy import unimplemented
+            unimplemented(
+                "torch.autocast(dtype=%s)" % name,
+                "accept an autocast dtype jittor cannot express and silently "
+                "keep computing in the tensors' original dtype",
+                "Use torch.float16, torch.bfloat16 or torch.float32.")
+
+    def _amp_reg_for(self):
+        if self.fast_dtype in ("float32", "float", "double", "float64"):
+            return _AMP_PREFER32
+        if self.fast_dtype == "bfloat16":
+            from ..stub_policy import degraded
+            degraded(
+                "torch.autocast(dtype=torch.bfloat16)",
+                "jittor's amp register keeps bfloat16 only when an operand "
+                "already is bfloat16; an all-float32 region computes in "
+                "float16 instead",
+                "Cast the module with .to(torch.bfloat16) to stay in bfloat16.")
+        return _AMP_PREFER16
 
     def __enter__(self):
+        _autocast_stack().append({"device_type": self.device_type,
+                                  "enabled": self.enabled,
+                                  "dtype": self.fast_dtype})
+        self._entered += 1
+        self._saved = int(getattr(jt.flags, "amp_reg", 0))
+        jt.flags.amp_reg = self._amp_reg_for() if self.enabled else 0
         return self
 
     def __exit__(self, *exc):
+        if self._entered:
+            self._entered -= 1
+            stack = _autocast_stack()
+            if stack:
+                stack.pop()
+            if self._saved is not None:
+                jt.flags.amp_reg = self._saved
+                self._saved = None
         return False
 
     def __call__(self, func):
         import functools
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            return func(*args, **kwargs)
+            with type(self)(self.device_type, dtype=self.fast_dtype,
+                            enabled=self.enabled,
+                            cache_enabled=self.cache_enabled):
+                return func(*args, **kwargs)
         return wrapper
 
 

@@ -431,7 +431,7 @@ def install(ctx):
         _modules["torch.utils.tensorboard"] = _tb
 
     _amp = _types2.ModuleType("torch.amp")
-    _amp.autocast = lambda *args, **kwargs: _AutocastContext()
+    _amp.autocast = _AutocastContext
     _amp.GradScaler = _GradScaler
     _amp.custom_fwd = _amp_passthrough_decorator
     _amp.custom_bwd = _amp_passthrough_decorator

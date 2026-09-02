@@ -241,7 +241,7 @@ def install(ctx):
     _alias("trapz", _trapz)
     _alias("trapezoid", _trapz)
     _alias("repeat_interleave", _repeat_interleave)
-    _alias("autocast", lambda *a, **k: _AutocastContext())
+    _alias("autocast", _AutocastContext)
     # Real loop-based torch.vmap. The old no-op stub (`lambda fn,*a,**k: fn`)
     # ignored in_dims/out_dims, so transformers' vmap-based causal-mask builder
     # (taken when a model passes and_mask/or_mask -- e.g. falcon) collapsed to a
