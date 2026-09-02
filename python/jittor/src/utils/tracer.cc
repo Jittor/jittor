@@ -52,7 +52,7 @@ string get_cmds(const vector<const char*>& argv) {
 }
 #endif
 
-void setter_gdb_attach(int v) {
+void setter_gdb_attach(const int& old_value, const int& v) {
     if (v && gdb_path.size()) {
         static int gdb_attached = 0;
         if (gdb_attached) return;
@@ -140,15 +140,19 @@ void setter_gdb_attach(int v) {
     }
 }
 
-void setter_gdb_path(string v) {
-    gdb_path = v;
-    setter_gdb_attach(gdb_attach);
+void setter_gdb_path(const string& old_value, const string& v) {
+    // `gdb_path = v;` used to be here: the setter had to publish its own value
+    // before calling into another setter that reads it. The macro assigns
+    // first now, so gdb_path already holds v.
+    setter_gdb_attach(gdb_attach, gdb_attach);
 }
 
 void breakpoint() {
     static bool is_attached = 0;
     if (is_attached) return;
-    setter_gdb_attach(1);
+    // Run the attach side effect without changing the flag, which is what
+    // calling the setter directly has always meant here.
+    setter_gdb_attach(gdb_attach, 1);
 }
 
 // ---------------------------------------------------------------------------

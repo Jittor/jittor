@@ -37,7 +37,7 @@ DEFINE_FLAG(int, profiler_record_shape, 0, "Profiler record shape for op.");
 DEFINE_FLAG(int, profiler_hide_relay, 0, "Profiler hide relayed op.");
 DEFINE_FLAG_WITH_SETTER(int, profiler_enable, 0, "Enable profiler.");
 
-void setter_profiler_enable(int value) {
+void setter_profiler_enable(const int& old_value, const int& value) {
     if (value)
         Profiler::start();
     else

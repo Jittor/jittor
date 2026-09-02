@@ -93,7 +93,7 @@ void free_var_mem(Var* v) {
     }
 }
 
-void setter_auto_mixed_precision_level(int value) {
+void setter_auto_mixed_precision_level(const int& old_value, const int& value) {
     if (value <= 2) amp_reg = 0; else
     if (value == 3) amp_reg = amp_keep_reduce | amp_keep_white; else
     if (value == 4) amp_reg = amp_prefer16; else

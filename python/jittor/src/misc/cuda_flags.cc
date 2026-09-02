@@ -26,7 +26,9 @@ DEFINE_FLAG_WITH_SETTER(int, use_cuda, 0,
 // there and leave an unterminated string.
 DEFINE_FLAG_WITH_SETTER(int, device_id, -1,
     "The CUDA device new Vars are placed on, torch's current device. Setting it switches the device in place -- cudaSetDevice plus a handle swap in every library wrapper -- and never restarts the process; the other devices stay usable. Reads -1 only when no CUDA device exists.");
-DEFINE_FLAG_WITH_SETTER(int, sync_run, 1,
+// This had a setter whose entire body was `if (sync_run == value) return;
+// sync_run = value;` -- the assignment the macro was about to do anyway.
+DEFINE_FLAG(int, sync_run, 1,
     "Enable per-op-sync or not");
 
 EXTERN_LIB void sync_all(bool device_sync);
@@ -46,13 +48,10 @@ int get_device_count() {
 }
 #endif
 
-void setter_sync_run(int value) {
-    if(sync_run == value) return;
-    sync_run = value;
-}
-
-void setter_use_cuda(int value) {
-    if (use_cuda == value) return;
+void setter_use_cuda(const int& old_value, const int& requested) {
+    if (old_value == requested) return;
+    // Local: the CUDA branch below may downgrade what was asked for.
+    int value = requested;
 #ifdef HAS_CUDA
     if (value) {
         int count=0;
@@ -77,9 +76,11 @@ void setter_use_cuda(int value) {
 #else
     CHECK(value==0) << "No CUDA found.";
 #endif
-    if (use_cuda != value)
+    if (old_value != value)
         sync_all(0);
-    // jtorch will call this directly
+    // Not a write-back: the macro already assigned the requested value. This
+    // publishes the *correction* made above when CUDA was asked for and no
+    // device answered.
     use_cuda = value;
 }
 
@@ -186,7 +187,7 @@ void sync_devices(uint64 devices) {
 
 #endif
 
-void setter_device_id(int value) {
+void setter_device_id(const int& old_value, const int& value) {
 #ifdef HAS_CUDA
     // Below zero is "unset", and it is also what this setter is handed at
     // static-init time from the flag's default. Return before touching the

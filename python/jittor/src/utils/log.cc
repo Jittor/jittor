@@ -532,7 +532,7 @@ DEFINE_FLAG(int, log_v, 0, "Verbose level of logging");
 DEFINE_FLAG_WITH_SETTER(string, log_vprefix, "",
     "Verbose level of logging prefix\n"
     "example: log_vprefix='op=1,node=2,executor.cc:38$=1000'");
-void setter_log_vprefix(string value) {
+void setter_log_vprefix(const string& old_value, const string& value) {
     unordered_map<uint64_t, int> new_map;
     auto& s = value;
     for (uint i=0; i<s.size(); i++) {
@@ -555,9 +555,10 @@ void setter_log_vprefix(string value) {
 }
 DEFINE_FLAG_WITH_SETTER(string, log_file, "",
     "log to file, mpi env will add $OMPI_COMM_WORLD_RANK suffix\n");
-void setter_log_file(string value) {
-    if (value.size() == 0)
+void setter_log_file(const string& old_value, const string& new_value) {
+    if (new_value.size() == 0)
         return;
+    string value = new_value;
     auto c = getenv("OMPI_COMM_WORLD_RANK");
     if (c) value += string("_") + c;
     static std::ofstream out;

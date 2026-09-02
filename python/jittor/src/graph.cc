@@ -22,7 +22,7 @@ DEFINE_FLAG_WITH_SETTER(int, check_graph, 0, "Unify graph sanity check.");
 // insert per node), not the check, so the registry follows the flag instead
 // of the build type. Nodes made before the flag went on are not in it, which
 // costs coverage but can never produce a false report.
-void setter_check_graph(int value) {
+void setter_check_graph(const int& old_value, const int& value) {
     node_track_lived = value != 0;
 }
 

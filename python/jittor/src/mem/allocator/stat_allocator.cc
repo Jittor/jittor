@@ -15,9 +15,10 @@ DEFINE_FLAG(size_t, stat_allocator_total_alloc_byte, 0, "Total alloc byte");
 DEFINE_FLAG(size_t, stat_allocator_total_free_call, 0, "Number of alloc function call");
 DEFINE_FLAG(size_t, stat_allocator_total_free_byte, 0, "Total alloc byte");
 
-void setter_use_stat_allocator(int value) {
-    // if enabled, clean prev records
-    if (!use_stat_allocator && value) {
+void setter_use_stat_allocator(const int& old_value, const int& value) {
+    // if enabled, clean prev records -- "was it off before" now reads the old
+    // value it was always asking for, not the flag it happens to run before.
+    if (!old_value && value) {
         stat_allocator_total_alloc_call = 0;
         stat_allocator_total_alloc_byte = 0;
         stat_allocator_total_free_call = 0;

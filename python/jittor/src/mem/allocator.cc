@@ -53,11 +53,13 @@ Allocator* cpu_allocator = setup_allocator<SFRLAllocator>(&aligned_allocator);
 
 DEFINE_FLAG_WITH_SETTER(int, use_cuda_host_allocator, 1, "use cuda host allocator for cpu memory globally");
 
-void setter_use_cuda_host_allocator(int value) {
+void setter_use_cuda_host_allocator(const int& old_value, const int& value) {
     #ifdef HAS_CUDA
+    // `use_cuda_host_allocator = value;` used to be here so that the
+    // get_allocator() below could see the new value. The macro assigns first
+    // now, so it already does.
     auto use_cuda_bk = use_cuda;
     use_cuda = 0;
-    use_cuda_host_allocator = value;
     cpu_allocator = get_allocator();
     use_cuda = use_cuda_bk;
     #endif

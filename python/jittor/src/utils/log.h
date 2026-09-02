@@ -9,6 +9,11 @@
 #include <sstream>
 #include <functional>
 #include <iostream>
+#include <type_traits>
+#include <limits>
+#include <cstdlib>
+#include <cerrno>
+#include <cctype>
 #include "types.h"
 
 namespace jittor {
@@ -182,21 +187,95 @@ struct LogFatalVoidify {
     !(cond) ? (void) 0 : _LOG(level, v)
 #define LOG_IF(level, cond) _LOG_IF(level, cond, 0)
 
+// Parse a whole environment value, or fail.
+//
+// The previous implementation encoded "parsed successfully" as "reading one
+// more character failed", which is not the same question. `export log_v="1 "`
+// leaves the trailing space in the stream without setting failbit, so the
+// override was dropped and the default used; the single warning it emitted was
+// level 'w', which log_silent swallows (send_log in log.cc). A flag that does
+// not take effect and says nothing about it is worse than a startup failure,
+// so an unparsable value is fatal now.
+//
+// std::from_chars would be the natural tool, but this header is included by
+// nvcc-compiled translation units and the build is -std=c++14 (compiler.py),
+// where <charconv> does not exist. strtoll/strtoull/strtold answer the same two
+// questions: did it parse, and did it consume every character.
+// strtoll/strtold skip leading whitespace; a flag's value is the whole string.
+inline bool env_value_is_parsable(const string& s) {
+    return !s.empty() && !std::isspace((unsigned char)s[0]);
+}
+
+inline bool parse_env_integer(const string& s, long long& out) {
+    if (!env_value_is_parsable(s)) return false;
+    errno = 0;
+    char* end = nullptr;
+    out = std::strtoll(s.c_str(), &end, 10);
+    return errno == 0 && end == s.c_str() + s.size();
+}
+
+inline bool parse_env_integer(const string& s, unsigned long long& out) {
+    // strtoull silently wraps a negative literal into a huge positive value.
+    if (!env_value_is_parsable(s) || s[0] == '-') return false;
+    errno = 0;
+    char* end = nullptr;
+    out = std::strtoull(s.c_str(), &end, 10);
+    return errno == 0 && end == s.c_str() + s.size();
+}
+
+template<class T>
+inline typename std::enable_if<std::is_integral<T>::value, bool>::type
+parse_env_value(const string& s, T& out) {
+    // uint8 flags used to go through operator>>(unsigned char&), which reads
+    // one *character*: node_order=1 meant 49. Parsing as a number and range
+    // checking is what every caller already assumed.
+    typename std::conditional<std::is_signed<T>::value,
+                              long long, unsigned long long>::type v = 0;
+    if (!parse_env_integer(s, v)) return false;
+    if (v > (decltype(v))std::numeric_limits<T>::max()) return false;
+    if (std::is_signed<T>::value && v < (decltype(v))std::numeric_limits<T>::min())
+        return false;
+    out = (T)v;
+    return true;
+}
+
+template<class T>
+inline typename std::enable_if<std::is_floating_point<T>::value, bool>::type
+parse_env_value(const string& s, T& out) {
+    if (!env_value_is_parsable(s)) return false;
+    errno = 0;
+    char* end = nullptr;
+    long double v = std::strtold(s.c_str(), &end);
+    if (errno != 0 || end != s.c_str() + s.size()) return false;
+    out = (T)v;
+    return true;
+}
+
+template<class T>
+inline typename std::enable_if<!std::is_arithmetic<T>::value, bool>::type
+parse_env_value(const string& s, T& out) {
+    // The only flags that get here are containers (cuda_archs is a vector<int>,
+    // compile_options a map). Their extractors in types.h stop by *failing* at
+    // end of input -- that is how the loop terminates -- so "did it fail" is
+    // the wrong question for them and only "did it reach the end of the value"
+    // can be asked. Whitespace is a separator inside these, not trailing junk.
+    if (s.empty()) return false;
+    std::istringstream is(s);
+    is >> out;
+    return is.eof();
+}
+
 template<class T> T get_from_env(const char* name,const T& _default) {
     auto ss = getenv(name);
     if (ss == NULL) return _default;
     string s = ss;
-    std::istringstream is(s);
-    T env;
-    if (is >> env) {
-        is.peek();
-        if (!is) {
-            return env;
-        }
-    }
-    if (s.size() && is.eof())
+    T env = _default;
+    if (parse_env_value(s, env))
         return env;
-    LOGw << "Load" << name << "from env(" << s << ") failed, use default" << _default;
+    LOGf << "Cannot parse environment variable" << name >> "=\"" >> s >> "\":"
+        << "not a valid value for this flag. Fix it or unset it."
+        << "(This used to be ignored, silently leaving the default"
+        << _default >> ".)";
     return _default;
 }
 
@@ -212,7 +291,7 @@ EXTERN_LIB void set_ ## name (const type&);
 
 #define DEFINE_FLAG(type, name, default, doc) \
     DECLARE_FLAG(type, name)
-#define DEFINE_FLAG_WITH_SETTER(type, name, default, doc, setter) \
+#define DEFINE_FLAG_WITH_SETTER(type, name, default, doc) \
     DECLARE_FLAG(type, name)
 
 #else
@@ -230,18 +309,35 @@ EXTERN_LIB void set_ ## name (const type&);
     }; \
     int caller_ ## name = (init_ ## name (jittor::get_from_env<type>(#name, default)), 0);
 
+// The setter runs *after* the assignment and is handed both values.
+//
+// It used to run before, so every setter saw the flag still holding the old
+// value. Setters that needed the new one wrote it themselves first (tracer.cc's
+// setter_gdb_path, allocator.cc's setter_use_cuda_host_allocator, cuda_flags.cc's
+// setter_sync_run, which did nothing else), and each of those hand-written
+// assignments was a chance to forget. A setter that threw also left the flag
+// untouched while the exception blamed the value: assignment and side effect
+// were not one operation. Now the assignment happens first and is rolled back
+// if the setter throws, so the pair either both take effect or neither does.
 #define DEFINE_FLAG_WITH_SETTER(type, name, default, doc) \
     DECLARE_FLAG(type, name) \
     type name; \
     std::string doc_ ## name = doc; \
-    void setter_ ## name (type value); \
+    void setter_ ## name (const type& old_value, const type& new_value); \
     void set_ ## name (const type& value) { \
-        setter_ ## name (value); \
+        type old_value = name; \
         name = value; \
+        try { \
+            setter_ ## name (old_value, value); \
+        } catch (...) { \
+            name = old_value; \
+            throw; \
+        } \
     }; \
     void init_ ## name (const type& value) { \
-        setter_ ## name (value); \
+        type old_value = name; \
         name = value; \
+        setter_ ## name (old_value, value); \
         if (getenv(#name)) LOGi << "Load " #name":" << value; \
     }; \
     int caller_ ## name = (init_ ## name (jittor::get_from_env<type>(#name, default)), 0);
