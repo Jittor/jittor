@@ -35,7 +35,10 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
         self.assertFalse(definitions & forbidden)
         self.assertFalse(any(name.startswith("_jt_torch_") for name in definitions))
         self.assertFalse(definitions)
-        self.assertLess(len(source.splitlines()), 220)
+        # No line budget here. "The root defines nothing" (above) and the import
+        # ordering (below) are the architecture contract; a line count is a proxy
+        # that goes red when someone adds a necessary comment and stays green when
+        # someone adds a wrong one.
         self.assertNotIn("jittor.torch_shim", source)
         self.assertIn("prepare_import_environment as _prepare_compat_import", source)
         self.assertIn("if _compat_preflight_result.active:", source)

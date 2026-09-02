@@ -1,9 +1,31 @@
-"""Contracts for the Stage 6 tools, examples, and runtime-wheel cleanup."""
+"""Boundary rules left over from the Stage 6 tools, examples and wheel cleanup.
+
+Two kinds of assertion used to live here, and only one of them earned its place.
+
+**Rules** stay: no module/package path collisions, no shadowed definitions, no
+unreviewed cross-file duplicates, imports pointing only at canonical runtime
+modules, development trees that are not import packages, shell tools that parse,
+tool imports without side effects. These say something true about the design and
+survive a file moving.
+
+**Manifests** are gone: the exact entry set of ``python/jittor``, the exact set of
+root-level modules, the list of documentation files that must exist, the list of
+moved tool and example paths, the list of ``extern`` subdirectories. Every one of
+them was a copy of the directory tree written a second time, so relocating a
+single file meant editing this test -- and none of them would have caught a wrong
+answer from any of that code.
+
+**Migration guards** -- assertions that something already deleted stays deleted --
+are true forever the moment the migration lands, and then cost the gate time for
+nothing. They now carry an expiry date; see
+``test_migration_guards_have_not_outlived_their_purpose``.
+"""
 
 from __future__ import print_function
 
 import ast
 import copy
+import datetime
 import os
 from pathlib import Path
 import subprocess
@@ -13,12 +35,33 @@ from typing import Dict, List, Tuple
 import unittest
 
 
+#: After this date the migration guards in this file must be deleted rather than
+#: carried forever. Moving the date is a decision someone makes on purpose, with
+#: a reason; leaving them in place silently is what the audit found.
+MIGRATION_GUARD_EXPIRY = datetime.date(2027, 3, 1)
+
+
 class TestCleanupStructure(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.repo_root = Path(__file__).resolve().parents[2]
         if not (cls.repo_root / "pyproject.toml").is_file():
             raise unittest.SkipTest("cleanup contracts require a source checkout")
+
+    def test_migration_guards_have_not_outlived_their_purpose(self):
+        guards = (
+            "test_retired_runtime_payloads_are_absent",
+            "test_legacy_fsdp2_path_names_are_absent_everywhere",
+            "test_vcompiler_retirement_is_documented",
+        )
+        self.assertLess(
+            datetime.date.today(),
+            MIGRATION_GUARD_EXPIRY,
+            "these one-shot migration guards have been true since the migration "
+            "landed and are now pure gate weight: %s. Delete them together with "
+            "this test, or move MIGRATION_GUARD_EXPIRY with a written reason."
+            % ", ".join(guards),
+        )
 
     def test_retired_runtime_payloads_are_absent(self):
         retired = (
@@ -230,84 +273,6 @@ class TestCleanupStructure(unittest.TestCase):
         )
         self.assertEqual(unreviewed, [])
 
-    def test_runtime_root_has_an_exact_reviewed_entry_set(self):
-        runtime_root = self.repo_root / "python" / "jittor"
-        expected = {
-            "__init__.py",
-            "__init__.pyi",
-            "_runtime",
-            "autograd",
-            "ccl",
-            "compile_extern.py",
-            "compiler.py",
-            "compat",
-            "dataset",
-            "distributions.py",
-            "distributed",
-            "einops",
-            "extern",
-            "fft",
-            "init.py",
-            "init_cupy.py",
-            "linalg.py",
-            "loss3d",
-            "math_util",
-            "misc",
-            "models",
-            "nn",
-            "optim",
-            "pool",
-            "pyjt_compiler.py",
-            "selftest.py",
-            "sparse",
-            "src",
-            "transform",
-            "utils",
-        }
-        # ``__pycache__`` appears as soon as anything imports Jittor, and
-        # ``.gitignore`` already declares it as build output. The contract here
-        # is about source entries, so a built working tree must not fail it.
-        actual = {
-            path.name
-            for path in runtime_root.iterdir()
-            if path.name != "__pycache__"
-        }
-        self.assertEqual(actual, expected)
-
-    def test_remaining_root_python_files_have_reviewed_owners(self):
-        runtime_root = self.repo_root / "python" / "jittor"
-        reviewed = {
-            "__init__.py": "runtime composition",
-            "compile_extern.py": "compiler bootstrap and external libraries",
-            "compiler.py": "JIT compiler bootstrap",
-            "distributions.py": "native public distributions domain",
-            "init.py": "native public initialization domain",
-            "init_cupy.py": "CUDA bootstrap boundary",
-            "linalg.py": "native public linear algebra domain",
-            "pyjt_compiler.py": "Python binding compiler boundary",
-            "selftest.py": "installed smoke-test entry point",
-        }
-        actual = {path.name for path in runtime_root.glob("*.py")}
-        self.assertEqual(actual, set(reviewed))
-
-        public_domains = {"distributions.py", "init.py", "linalg.py"}
-        definitions = {}
-        for name in public_domains:
-            path = runtime_root / name
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            definitions[name] = {
-                node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))
-            }
-            self.assertTrue(definitions[name], reviewed[name])
-
-        # These public domains intentionally share no top-level implementation
-        # names; a future overlap requires a package ownership review.
-        for left in sorted(public_domains):
-            for right in sorted(public_domains):
-                if left >= right:
-                    continue
-                self.assertEqual(definitions[left] & definitions[right], set())
-
     def test_legacy_fsdp2_path_names_are_absent_everywhere(self):
         forbidden_names = {
             "jittor_fsdp2",
@@ -423,31 +388,11 @@ class TestCleanupStructure(unittest.TestCase):
                     ):
                         found.append((relative, module))
 
-        self.assertEqual(sorted(found), intentional_compatibility_imports)
-
-    def test_documentation_has_one_root_readme_and_semantic_owners(self):
-        retired = (
-            "README.cn.md",
-            "README.src.md",
-            "agent/manuals/design",
-        )
-        required = (
-            "README.md",
-            "agent/manuals/environment.md",
-            "agent/manuals/known-issues.md",
-            "docs/architecture/complex-dtype.md",
-            "docs/architecture/source-architecture.md",
-            "docs/architecture/torch-compatibility-principles.md",
-            "docs/development/known-issues/parallel-compiler-segfault.md",
-            "docs/research/agentic-optimization.md",
-            "docs/testing/test-system.md",
-        )
-        for relative in retired:
-            with self.subTest(retired=relative):
-                self.assertFalse((self.repo_root / relative).exists())
-        for relative in required:
-            with self.subTest(required=relative):
-                self.assertTrue((self.repo_root / relative).is_file())
+        # A subset, not an exact match: removing one of these compatibility
+        # imports is progress and must not turn the gate red. Adding a new import
+        # of a retired module still fails, which is the rule being enforced.
+        unexpected = sorted(set(found) - set(intentional_compatibility_imports))
+        self.assertEqual(unexpected, [])
 
     def test_documentation_governance_checker(self):
         checker = self.repo_root / "agent" / "scripts" / "check_docs_governance.py"
@@ -459,24 +404,6 @@ class TestCleanupStructure(unittest.TestCase):
             universal_newlines=True,
         )
         self.assertEqual(result.returncode, 0, result.stdout)
-
-    def test_moved_tools_and_example_targets_exist(self):
-        required = (
-            "examples/gan/simple_cgan.py",
-            "tools/benchmarks/legacy/inference_perf.py",
-            "tools/build/build_aarch64_mkl.sh",
-            "tools/distributed/tmpi",
-            "tools/install/legacy/install.sh",
-            "tools/install/legacy/install_llvm.sh",
-            "tools/install/legacy/install_mkl.sh",
-            "tools/release/legacy/polish.py",
-            "tools/release/legacy/polish_centos.py",
-            "tools/release/pack_offline.py",
-            "tools/services/legacy/converter_server.sh",
-        )
-        for relative in required:
-            with self.subTest(path=relative):
-                self.assertTrue((self.repo_root / relative).is_file())
 
     def test_development_trees_are_not_import_packages(self):
         initializers = []
@@ -570,38 +497,6 @@ for forbidden in ('jittor', 'PIL', 'pywebio'):
         self.assertIn("jittor.vcompiler", source)
         self.assertIn("breaking", source.lower())
         self.assertIn("compile_custom_op", source)
-
-    def test_extern_runtime_contract_and_llvm_retirement_are_intact(self):
-        required = (
-            "python/jittor/extern/__init__.py",
-            "python/jittor/extern/acl/aclops",
-            "python/jittor/extern/acl/aclnn",
-            "python/jittor/extern/acl/hccl",
-            "python/jittor/extern/corex/corex_compiler.py",
-            "python/jittor/extern/cuda/inc",
-            "python/jittor/extern/cuda/src",
-            "python/jittor/extern/cuda/cub",
-            "python/jittor/extern/cuda/cublas",
-            "python/jittor/extern/cuda/cudnn",
-            "python/jittor/extern/cuda/cufft",
-            "python/jittor/extern/cuda/curand",
-            "python/jittor/extern/cuda/cusparse",
-            "python/jittor/extern/cuda/cutt",
-            "python/jittor/extern/cuda/nccl",
-            "python/jittor/extern/mkl/ops",
-            "python/jittor/extern/mpi/inc",
-            "python/jittor/extern/mpi/ops",
-            "python/jittor/extern/mpi/src",
-            "python/jittor/extern/rocm",
-        )
-        for relative in required:
-            with self.subTest(path=relative):
-                self.assertTrue((self.repo_root / relative).exists())
-        compiler = (self.repo_root / "python" / "jittor" / "compiler.py").read_text(
-            encoding="utf-8"
-        )
-        self.assertNotIn("def compile_extern():", compiler)
-
 
 if __name__ == "__main__":
     unittest.main()
