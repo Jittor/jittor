@@ -141,15 +141,34 @@ VarHolder::VarHolder(VarHolder* v) : var(v->var) {
     operator delete(v);
 }
 
-void VarHolder::release_from_holders() {
-    if (PREDICT_BRANCH_NOT_TAKEN(!var)) return;
+// Take a holder out of hold_vars, keeping sync_ptr valid.
+//
+// sync_ptr is how far top_weak_sync (executor.cc) has already walked: it and
+// everything after it towards end() has been consumed. When the holder it
+// points at leaves the list the boundary must move on to the next one -- but
+// only when the holder is actually *in* the list.
+//
+// Both callers used to advance it unconditionally, and release_from_holders()
+// leaves iter == end(), so a destructor running after it evaluated
+// std::next(end()) whenever sync_ptr was end() too. That is UB; in libstdc++
+// the list is circular, so it quietly returns begin(). top_weak_sync then
+// breaks on its very first line -- `if (sync_ptr == hold_vars.begin()) break;`
+// -- for the rest of the process, and weak sync stops working with no error,
+// no warning and no wrong value to notice.
+static inline void unlink_from_hold_vars(list<VarHolder*>::iterator& iter) {
+    if (iter == hold_vars.end()) return;
     if (iter == sync_ptr)
         sync_ptr = std::next(sync_ptr);
+    hold_vars.erase(iter);
+    iter = hold_vars.end();
+}
+
+void VarHolder::release_from_holders() {
+    if (PREDICT_BRANCH_NOT_TAKEN(!var)) return;
     if (iter != hold_vars.end()) {
-        hold_vars.erase(iter);
+        unlink_from_hold_vars(iter);
         release_holder();
     }
-    iter = hold_vars.end();
 }
 
 static auto make_array_from_pyobj = get_op_info("array")
@@ -170,10 +189,7 @@ VarHolder::VarHolder(PyObject* obj, NanoString dtype) {
 
 VarHolder::~VarHolder() {
     if (PREDICT_BRANCH_NOT_TAKEN(!var)) return;
-    if (iter == sync_ptr)
-        sync_ptr = std::next(sync_ptr);
-    if (iter != hold_vars.end())
-        hold_vars.erase(iter);
+    unlink_from_hold_vars(iter);
     release_holder();
     var->release_both_liveness();
 }
