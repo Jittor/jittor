@@ -129,14 +129,99 @@ python -m pip install jittor
 python -m jittor.selftest
 ```
 
+### What the first run does / 首次运行会发生什么
+
+Jittor compiles at runtime, so `import jittor` is not only a library import: the
+first one builds the C++ core and then compiles each operator as your program
+reaches it. This is what to expect.
+
+Jittor 是即时编译的，所以 `import jittor` 不只是导入一个库：第一次会编译 C++
+内核，之后每个算子在被用到时再编译。具体代价如下。
+
+- **Time / 耗时.** The first import compiles the core: minutes on a typical
+  machine, and longer on few-core ones. Later imports reuse the cache and take
+  a couple of seconds. 首次 import 要编译内核，通常几分钟，核心数少的机器更久；
+  之后的 import 走缓存，约一两秒。
+- **Network / 联网.** Jittor downloads a small set of third-party archives once
+  (MKL/oneDNN, cub, cutt — tens of MB). See *Offline install* below if the
+  machine has no network. 首次会下载少量第三方归档（MKL/oneDNN、cub、cutt，
+  几十 MB）。无网络的机器见下面的「离线安装」。
+- **Disk / 磁盘.** The cache holds the compiled core and every operator built so
+  far, on the order of 1–2 GB. It lives under `~/.cache/jittor`; set
+  `JITTOR_HOME` to move it. 缓存放内核与已编译的算子，量级 1–2 GB，默认在
+  `~/.cache/jittor`，可用 `JITTOR_HOME` 改位置。
+- **No automatic CUDA toolkit / 不会自动下载 CUDA.** Jittor does **not**
+  download a CUDA toolkit by itself. If the machine has an NVIDIA driver but no
+  `nvcc`, Jittor says so and builds for CPU; install a toolkit, or set
+  `nvcc_path=""` to make the CPU-only build explicit. Jittor **不会**自己下载
+  CUDA 工具链。有驱动但没有 `nvcc` 时它会明确告知并按 CPU 构建；请自行安装工具链，
+  或设 `nvcc_path=""` 明确选择 CPU。
+- **The cache directory depends on your toolchain / 缓存目录取决于工具链.** Its
+  name includes the Jittor, compiler and Python versions, the platform, the CPU,
+  and the build configuration (`cc_flags`, `nvcc_flags`, `cuda_archs`,
+  `enable_lto`, `nvcc_path`). Changing any of them builds into a new directory
+  rather than overwriting the old one. When Jittor is installed inside a git
+  checkout, the branch name is part of it too, so switching branches rebuilds;
+  set `cache_name` to a fixed value to pin it. 目录名包含 Jittor / 编译器 /
+  Python 版本、平台、CPU 与构建配置；其中任何一项变化都会写进新目录而不是覆盖旧的。
+  如果 Jittor 装在一个 git 仓库里，分支名也是其中一部分，切分支会触发重编——设
+  `cache_name` 为固定值即可钉住。
+
+Before reporting a build problem, run the preconditions check. It reports
+everything that is missing at once, and says for each item whether Jittor can
+resolve it or you have to:
+
+报构建问题之前先跑一次前置条件检查。它一次列出所有缺失项，并逐条说明是 Jittor
+能自己解决还是需要你动手：
+
+```bash
+python -m jittor_utils.preflight
+```
+
+To reclaim disk space, remove part or all of the cache:
+
+要回收磁盘空间，可以按组或整体清理缓存：
+
+```bash
+python -m jittor_utils.clean_cache help    # list the groups / 列出可清理的组
+python -m jittor_utils.clean_cache core    # compiled products only / 只清编译产物
+python -m jittor_utils.clean_cache all     # everything / 全部
+```
+
+### Offline install / 离线安装
+
+On a machine without a network, fetch the third-party archives elsewhere and
+point Jittor at them. On a connected machine with this repository checked out:
+
+无网络的机器上，先在别处把第三方归档准备好再指过去。在一台有网络、且已检出本仓库的
+机器上：
+
+```bash
+nox -s prefetch          # fills a mirror directory / 填充镜像目录
+```
+
+Copy the directory it fills to the offline machine and set:
+
+把它填充的目录拷到离线机器，然后设置：
+
+```bash
+export JITTOR_OFFLINE_PATH=/path/to/that/directory
+```
+
+Jittor copies from there instead of downloading. `python -m
+jittor_utils.preflight` reports whether anything is still missing.
+
+Jittor 会从那里拷贝而不是下载。`python -m jittor_utils.preflight` 会告诉你还缺什么。
+
 ### CUDA 12 component wheels / CUDA 12 组件包
 
 On Linux x86_64, the `cuda12` extra installs a pinned CUDA 12.2 and cuDNN 8
-runtime stack. Jittor still needs an `nvcc` compiler, supplied by the system or
-its automatic JTCUDA fallback.
+runtime stack. Jittor still needs an `nvcc` compiler, and does not download one
+for you: install a CUDA toolkit and put `nvcc` on PATH, or set `nvcc_path` to it.
 
 Linux x86_64 可使用 `cuda12` extra 安装固定版本的 CUDA 12.2 与 cuDNN 8
-运行时；JIT 编译仍需要系统 `nvcc`，或使用 Jittor 的自动 JTCUDA 回退。
+运行时；JIT 编译仍需要 `nvcc`，且 Jittor 不会替你下载：请安装 CUDA 工具链并把
+`nvcc` 放进 PATH，或用 `nvcc_path` 指过去。
 
 ```bash
 python -m pip install "jittor[cuda12]"

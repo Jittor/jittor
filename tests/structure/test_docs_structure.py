@@ -280,6 +280,39 @@ class TestDocsStructure(unittest.TestCase):
                     violations.append("{}: {}".format(path.relative_to(self.repo_root), marker))
         self.assertEqual(violations, [])
 
+    def test_readme_says_what_the_first_run_costs(self):
+        """`pip install jittor` is not the whole story and the README has to say so.
+
+        A first import builds the C++ core, needs the network once, and leaves
+        1-2 GB of cache. None of that was written down, so every one of those
+        arrived as a surprise -- and the surprise looks like a hang.
+        """
+        readme = (self.repo_root / "README.md").read_text(encoding="utf-8")
+        for marker in (
+                "What the first run does",
+                "Offline install",
+                # The escape hatches a stuck user needs, by name.
+                "python -m jittor_utils.preflight",
+                "python -m jittor_utils.clean_cache",
+                "JITTOR_OFFLINE_PATH",
+                "JITTOR_HOME",
+                "nvcc_path",
+                "cache_name",
+        ):
+            self.assertIn(marker, readme, marker)
+
+    def test_readme_does_not_promise_an_automatic_cuda_download(self):
+        """It did, for a while after the behaviour was removed.
+
+        `[9.02]` deleted the import-time toolkit download; the README kept
+        offering "its automatic JTCUDA fallback" as the way `nvcc` gets there.
+        A promise nothing checks is a promise that outlives the code.
+        """
+        readme = (self.repo_root / "README.md").read_text(encoding="utf-8")
+        self.assertNotIn("automatic JTCUDA", readme)
+        self.assertNotIn("自动 JTCUDA", readme)
+        self.assertIn("does not download one", readme)
+
     def test_internal_markdown_links_pass(self):
         result = run_python_child(
             ["tools/docs/check_links.py"], cwd=self.repo_root,
