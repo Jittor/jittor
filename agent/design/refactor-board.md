@@ -188,19 +188,19 @@
 | 6.P07 | H5 eigh 反向 `dout` 全零时写零 | 已合并 | pyops | aeeca502 |
 | 6.P08 | H6 `_autograd_grad` 的 zip 用过滤后的 `new_grad_output… | 已合并 | pyops | e9c704cb |
 | 6.P09 | H7 irfft 对实数输入与显式 `n` 的处理走 `:68-73` 的判别函数 | 已合并 | pyops | b59563c1（实数输入在默认 `n` 下原本就与 numpy 一致；错的是显式 `n`） |
-| 6.P10 | H8 ReduceLROnPlateau 每轮从初始 lr 计算 | 进行中 | pyother | |
-| 6.P11 | H9 `unique(return_counts=True, return_inverse=Fa… | 进行中 | pyother | |
-| 6.P12 | H10 Adan 的 `clip_grad_norm` 移出 param_group 循环 | 进行中 | pyother | |
-| 6.P13 | H11 `zero_grad` 清缓冲而非只翻标志 | 进行中 | pyother | |
-| 6.P14 | H12 Adam 偏差修正用每 param 的步数 | 进行中 | pyother | |
-| 6.P15 | H13 worker 异常不再变成给父进程发 SIGINT | 进行中 | pyother | |
-| 6.P16 | H14 `mp_log_v` 做 int 转换 | 进行中 | pyother | |
-| 6.P17 | H15 Pillow 版本用元组比较 | 进行中 | pyother | |
-| 6.P18 | H16 `Dataset.__deepcopy__` memo 存对象不存 id | 进行中 | pyother | |
-| 6.P19 | H17 `LogitRelaxedBernoulli` 返回 logit | 进行中 | pyother | |
-| 6.P20 | H18 `ComplexNumber.__rsub__` 虚部符号、`__imatmul__` … | 进行中 | pyother | |
-| 6.P21 | H19 稀疏卷积重复坐标 CPU/CUDA 语义统一 | 进行中 | pyother | |
-| 6.P22 | H20 `to_dense` 对 COO 重复索引求和 | 进行中 | pyother | |
+| 6.P10 | H8 ReduceLROnPlateau 每轮从初始 lr 计算 | 已合并 | pyother | 634a8e8a |
+| 6.P11 | H9 `unique(return_counts=True, return_inverse=Fa… | 已合并 | pyother | 7c854f1d |
+| 6.P12 | H10 Adan 的 `clip_grad_norm` 移出 param_group 循环 | 已合并 | pyother | 888947fd |
+| 6.P13 | H11 `zero_grad` 清缓冲而非只翻标志 | 已合并 | pyother | b116b545 |
+| 6.P14 | H12 Adam 偏差修正用每 param 的步数 | 已合并 | pyother | 0d67526a |
+| 6.P15 | H13 worker 异常不再变成给父进程发 SIGINT | 已合并 | pyother | 042bc2c7 |
+| 6.P16 | H14 `mp_log_v` 做 int 转换 | 已合并 | pyother | f7162b68 |
+| 6.P17 | H15 Pillow 版本用元组比较 | 已合并 | pyother | 03cf502d |
+| 6.P18 | H16 `Dataset.__deepcopy__` memo 存对象不存 id | 已合并 | pyother | 9763203a |
+| 6.P19 | H17 `LogitRelaxedBernoulli` 返回 logit | 已合并 | pyother | 2a76e252 |
+| 6.P20 | H18 `ComplexNumber.__rsub__` 虚部符号、`__imatmul__` … | 已合并 | pyother | 8b36f3c4 |
+| 6.P21 | H19 稀疏卷积重复坐标 CPU/CUDA 语义统一 | 已合并 | pyother | b3ebd1b5 |
+| 6.P22 | H20 `to_dense` 对 COO 重复索引求和 | 已合并 | pyother | 9d1bf2a1 |
 | 6.P23 | eigh 的特征向量梯度在 CUDA 上错约 60% | 待领 | | |
 | 6.P24 | Pool3d 的 count_include_pad 读原始参数 | 待领 | | |
 | 6.B01 | MPI 的 int64 改 `MPI_INT64_T` | 已合并 | dist | 03518707 |
