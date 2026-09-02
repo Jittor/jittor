@@ -8,8 +8,11 @@
 // ***************************************************************
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
+#include "helper_cuda.h"
 #endif
 #include <stdio.h>
+#include <memory>
+#include <random>
 #include <thread>
 #ifndef _MSC_VER
 #include <unistd.h>
@@ -24,7 +27,28 @@ int64 swap_timestamp;
 int64 swap_total;
 constexpr int64 SWAP_BUF_SIZE = 1<<23; // 8M
 extern string cache_path;
-static int _pid = getpid();
+
+// Swap file names used to be built from a pid captured at static-init time, so
+// a forked child kept writing the *parent's* file names -- and var ids collide
+// across a fork too, because total_node is inherited. Read the pid at call
+// time and mix in a per-process random token: the token also keeps a stale file
+// left by a dead process with a recycled pid from being picked up.
+static string swap_file_prefix() {
+    static int cached_pid = -1;
+    static string prefix;
+    int pid = getpid();
+    if (pid != cached_pid) {
+        std::random_device rd;
+        uint64 token = ((uint64)rd() << 32) | rd();
+        cached_pid = pid;
+        prefix = cache_path + "/tmp/swap-" + S(pid) + "-" + S(token) + "-";
+    }
+    return prefix;
+}
+
+static string swap_file_path(Var* x) {
+    return swap_file_prefix() + S(x->id) + ".bin";
+}
 
 DEFINE_FLAG(int64, cpu_mem_limit, -1, "cpu_mem_limit");
 DEFINE_FLAG(int64, device_mem_limit, -1, "device_mem_limit");
@@ -38,16 +62,22 @@ unordered_map<Allocator*, Swap> swaps;
 void swap_to_disk(Var* x, Swap& swap) {
     swap_total += x->size;
     ASSERT(!x->flags.get(NodeFlags::_is_swapped));
-    string path = cache_path + "/tmp/" + S(_pid) + "-" + S(x->id) + ".bin";
+    string path = swap_file_path(x);
     #ifdef HAS_CUDA
     if (x->allocator->is_cuda()) {
-        static char* buffer = new char[SWAP_BUF_SIZE];
+        // was a function-local `static char* buffer = new char[8MB]`: leaked,
+        // and two threads swapping at once trampled each other's staging area
+        int64 buf_size = std::min(x->size, SWAP_BUF_SIZE);
+        std::unique_ptr<char[]> buf(new char[buf_size]);
+        char* buffer = buf.get();
         auto* memptr = (char*)x->mem_ptr;
         auto* fd = fopen(path.c_str(), "wb");
         CHECK(fd) << "swap file open failed:" << path << x;
         for (int64 i=0; i<x->size; i+=SWAP_BUF_SIZE) {
             int64 cp_size = std::min(x->size-i, SWAP_BUF_SIZE);
-            cudaMemcpy(buffer, memptr+i, cp_size, cudaMemcpyDeviceToHost);
+            // the return value used to be dropped: a failed D2H copy wrote the
+            // staging buffer's previous contents to disk as if it were the var
+            checkCudaErrors(cudaMemcpy(buffer, memptr+i, cp_size, cudaMemcpyDeviceToHost));
             auto res = fwrite(buffer, cp_size, 1, fd);
             if (res!=1) {
                 fclose(fd);
@@ -140,7 +170,7 @@ bool alloc_with_swap(Var* x, Allocator* allocator, bool force) {
 
 void free_with_swap(Var* x) {
     if (x->flags.get(NodeFlags::_is_swapped)) {
-        string path = cache_path + "/tmp/" + S(_pid) + "-" + S(x->id) + ".bin";
+        string path = swap_file_path(x);
         if (remove(path.c_str()) != 0)
             LOGe << "failed to remove swap file" << path << x->shape << x->dtype();
     } else {
@@ -172,21 +202,23 @@ bool move_with_swap(Var* x, Allocator* allocator, bool force) {
         return false;
     }
     if (x->flags.get(NodeFlags::_is_swapped)) {
-        string path = cache_path + "/tmp/" + S(_pid) + "-" + S(x->id) + ".bin";
+        string path = swap_file_path(x);
         #ifdef HAS_CUDA
         if (x->allocator->is_cuda()) {
-            static char* buffer = new char[SWAP_BUF_SIZE];
+            int64 buf_size = std::min(x->size, SWAP_BUF_SIZE);
+            std::unique_ptr<char[]> buf(new char[buf_size]);
+            char* buffer = buf.get();
             auto* memptr = (char*)x->mem_ptr;
             auto* fd = fopen(path.c_str(), "rb");
             CHECK(fd) << "swap file open failed:" << path << x;
             for (int64 i=0; i<x->size; i+=SWAP_BUF_SIZE) {
                 int64 cp_size = std::min(x->size-i, SWAP_BUF_SIZE);
                 auto res = fread(buffer, cp_size, 1, fd);
-                cudaMemcpy(memptr+i, buffer, cp_size, cudaMemcpyHostToDevice);
                 if (res != 1) {
                     fclose(fd);
                     LOGf << "swap file read failed" << path << x;
                 }
+                checkCudaErrors(cudaMemcpy(memptr+i, buffer, cp_size, cudaMemcpyHostToDevice));
             }
             fclose(fd); 
         } else
@@ -206,12 +238,12 @@ bool move_with_swap(Var* x, Allocator* allocator, bool force) {
         #ifdef HAS_CUDA
         if (x->allocator->is_cuda()) {
             if (allocation.allocator->is_cuda())
-                cudaMemcpy(x->mem_ptr, allocation.ptr, x->size, cudaMemcpyDeviceToDevice);
+                checkCudaErrors(cudaMemcpy(x->mem_ptr, allocation.ptr, x->size, cudaMemcpyDeviceToDevice));
             else
-                cudaMemcpy(x->mem_ptr, allocation.ptr, x->size, cudaMemcpyHostToDevice);
+                checkCudaErrors(cudaMemcpy(x->mem_ptr, allocation.ptr, x->size, cudaMemcpyHostToDevice));
         } else
         if (allocation.allocator->is_cuda()) {
-            cudaMemcpy(x->mem_ptr, allocation.ptr, x->size, cudaMemcpyDeviceToHost);
+            checkCudaErrors(cudaMemcpy(x->mem_ptr, allocation.ptr, x->size, cudaMemcpyDeviceToHost));
         } else
         #endif
         {
