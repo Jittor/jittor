@@ -7,19 +7,25 @@
 
 #include "common.h"
 #ifdef HAS_CUDA
+// Only under HAS_CUDA: without it the header declares `use_cuda`/`device_id`
+// as constants for the rest of the tree, which would clash with the real
+// flag definitions below.
 #include <cuda_runtime.h>
-#ifdef __linux__
-#include <fstream>
-#include <unistd.h>
-#endif
+#include "helper_cuda.h"
+#include "misc/cuda_flags.h"
 #endif
 
 namespace jittor {
 
 DEFINE_FLAG_WITH_SETTER(int, use_cuda, 0,
     "Use cuda or not. 1 for trying to use cuda, 2 for forcing to use cuda.");
+// NB: compiler.gen_jit_flags extracts this doc with the regex
+// DEFINE_FLAG...\((.*?)\); and then eval()s it as one Python expression, so
+// the text must be a single literal on a single line and must not contain the
+// two characters ");" -- a doc ending a parenthetical would truncate the match
+// there and leave an unterminated string.
 DEFINE_FLAG_WITH_SETTER(int, device_id, -1,
-    "number of the device to used");
+    "The CUDA device new Vars are placed on, torch's current device. Setting it switches the device in place -- cudaSetDevice plus a handle swap in every library wrapper -- and never restarts the process; the other devices stay usable. Reads -1 only when no CUDA device exists.");
 DEFINE_FLAG_WITH_SETTER(int, sync_run, 1,
     "Enable per-op-sync or not");
 
@@ -60,6 +66,10 @@ void setter_use_cuda(int value) {
             value = 0;
         } else {
             LOGi << "CUDA enabled.";
+            // Pin down which device is current now, so jt.flags.device_id
+            // reads it rather than -1 and flag_scope(device_id=N) restores to
+            // a real device instead of to "unset".
+            current_device();
         }
     } else {
         LOGv << "CUDA disabled.";
@@ -73,44 +83,125 @@ void setter_use_cuda(int value) {
     use_cuda = value;
 }
 
-void setter_device_id(int value) {
-#if defined(HAS_CUDA) && defined(__linux__)
-    // case1: set env device_id, not restart
-    // case2: set in python, restart
-    // case3: restart, device id and CUDA env set both
-    if (value<0)
-        return;
-    int count=0;
-    cudaGetDeviceCount(&count);
-    auto s = getenv("CUDA_VISIBLE_DEVICES");
-    auto s2 = getenv("device_id");
-    auto sv = std::to_string(value);
-    if (s2 && s2 == sv && (!s || count!=1)) {
-        // only handle case1 and case3(not cuda)
-        LOGi << "change to device #" >> value;
-        cudaSetDevice(value);
+#ifdef HAS_CUDA
+
+// The device the CUDA runtime is on, cached so that placing a Var (which asks
+// on every construction) is a load rather than a driver call. -1 means "not
+// asked yet"; get_device_count()==0 keeps it there forever.
+static int cur_device = -1;
+// Function-local so that a hook registered from another translation unit's
+// static initializer (array_op.cc has one) cannot run before this vector is
+// constructed -- the order between two namespace-scope statics is undefined.
+static vector<device_switch_hook_t>& device_switch_hooks() {
+    static vector<device_switch_hook_t> hooks;
+    return hooks;
+}
+
+int current_device() {
+    if (cur_device < 0) {
+        if (get_device_count() <= 0) return -1;
+        int d = 0;
+        if (cudaGetDevice(&d) != cudaSuccess) {
+            cudaGetLastError();
+            return -1;
+        }
+        cur_device = d;
+        // Keep the flag readable as the current device from the first query
+        // on. flag_scope saves whatever it reads on entry and writes it back
+        // on exit, so a flag that still said -1 would restore to "unset" and
+        // silently leave the scope's device current.
+        device_id = d;
+    }
+    return cur_device;
+}
+
+void set_current_device(int device) {
+    int count = get_device_count();
+    CHECK(device >= 0 && device < count)
+        << "Invalid CUDA device index" << device >> ", visible device count is" << count;
+    int cur = current_device();
+    // The flag names the current device even when nothing has to move.
+    device_id = device;
+    if (device == cur) return;
+    checkCudaErrors(cudaSetDevice(device));
+    cur_device = device;
+    for (auto hook : device_switch_hooks()) hook(device);
+}
+
+void add_device_switch_hook(device_switch_hook_t hook) {
+    if (!get_device_count()) return;
+    device_switch_hooks().push_back(hook);
+    // The hook owns per-device state that its callers reach through one
+    // global name, so it has to be run for the device that is current now --
+    // otherwise that global stays null until the first switch, which may
+    // never come in a single-device process.
+    int d = current_device();
+    if (d >= 0) hook(d);
+}
+
+void enable_peer_access(int from, int to) {
+    if (from == to || from < 0 || to < 0) return;
+    int n = get_device_count();
+    if (from >= n || to >= n) return;
+    // One entry per ordered pair; cudaDeviceEnablePeerAccess is per (context,
+    // peer) and asking twice is an error rather than a no-op.
+    static vector<char> enabled;
+    if ((int)enabled.size() < n*n) enabled.resize(n*n, 0);
+    auto& done = enabled[from*n+to];
+    if (done) return;
+    done = 1;
+    int can = 0;
+    if (cudaDeviceCanAccessPeer(&can, to, from) != cudaSuccess || !can) {
+        // Not an error: without peer access cudaMemcpy stages through the
+        // host on its own, which is slower but correct.
+        cudaGetLastError();
         return;
     }
-    if (s && s == sv)
+    int prev = current_device();
+    checkCudaErrors(cudaSetDevice(to));
+    auto err = cudaDeviceEnablePeerAccess(from, 0);
+    if (err != cudaSuccess && err != cudaErrorPeerAccessAlreadyEnabled)
+        LOGw << "cudaDeviceEnablePeerAccess(" >> from << "->" >> to >> ") failed:"
+            << cudaGetErrorString(err);
+    cudaGetLastError();
+    checkCudaErrors(cudaSetDevice(prev));
+}
+
+void sync_devices(uint64 devices) {
+    if (!devices) {
+        checkCudaErrors(cudaDeviceSynchronize());
         return;
-    setenv("CUDA_VISIBLE_DEVICES", sv.c_str(), 1);
-    setenv("device_id", sv.c_str(), 1);
-    std::ifstream ifs("/proc/self/cmdline");
-    if (!(ifs && ifs.good())) return;
-    string cmd((std::istreambuf_iterator<char>(ifs)),
-               (std::istreambuf_iterator<char>()));
-    vector<char*> ss;
-    auto cstr = (char*)cmd.c_str();
-    ss.push_back(cstr);
-    for (int i=0; i<cmd.size(); i++)
-        if (cstr[i] == '\0')
-            ss.push_back(&cstr[i+1]);
-    ss.pop_back();
-    ss.push_back(nullptr);
-    LOGi << "[restart] change to device #" >> value;
-    execvp(ss[0], &ss[0]);
-    ss.pop_back();
-    LOGe << "restart failed" << ss;
+    }
+    // cudaDeviceSynchronize only waits on the current device, so a run that
+    // launched on two devices needs one call per device -- and the caller's
+    // current device back afterwards.
+    int prev = current_device();
+    for (int d = 0; d < 64; d++) {
+        if (!((devices >> d) & 1)) continue;
+        if (d != current_device()) set_current_device(d);
+        checkCudaErrors(cudaDeviceSynchronize());
+    }
+    if (prev >= 0 && prev != current_device()) set_current_device(prev);
+}
+
+#endif
+
+void setter_device_id(int value) {
+#ifdef HAS_CUDA
+    // Below zero is "unset", and it is also what this setter is handed at
+    // static-init time from the flag's default. Return before touching the
+    // CUDA runtime: initialising it this early (before NCCL picks a device,
+    // before a fork) is exactly what the old restart-the-process setter was
+    // careful to avoid. current_device() makes the flag truthful the first
+    // time a Var is placed, so flag_scope never has a -1 to restore.
+    if (value < 0) return;
+    if (!get_device_count()) {
+        LOGw << "No CUDA device available; ignoring device_id" << value;
+        return;
+    }
+    set_current_device(value);
+#else
+    CHECK(value < 0) << "No CUDA found.";
 #endif
 }
 

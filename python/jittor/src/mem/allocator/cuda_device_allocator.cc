@@ -10,6 +10,7 @@
 #include "mem/mem_info.h"
 #include "helper_cuda.h"
 #include "mem/allocator/cuda_device_allocator.h"
+#include "misc/cuda_flags.h"
 
 namespace jittor {
 
@@ -30,6 +31,10 @@ void* CudaDeviceAllocator::alloc(size_t size, size_t& allocation) {
         return nullptr;
     }
     void* ptr;
+    // cudaMalloc allocates on the *current* device, and this pool belongs to
+    // exactly one -- otherwise a block cached here could come back on the
+    // wrong device's kernels.
+    if (device_id != current_device()) set_current_device(device_id);
     cudaError_t err = cudaMalloc(&ptr, size);
     if (err == cudaSuccess) {
         // alloc() must write back `allocation`; this allocator has no block
@@ -56,6 +61,7 @@ void CudaDeviceAllocator::free(void* mem_ptr, size_t size, const size_t& allocat
     // changed since alloc, and a zero-byte alloc hands back no pointer at all.
     if (mem_ptr==nullptr) return;
     if (no_cuda_error_when_free) return;
+    if (device_id != current_device()) set_current_device(device_id);
     checkCudaErrors(cudaFree(mem_ptr));
 }
 

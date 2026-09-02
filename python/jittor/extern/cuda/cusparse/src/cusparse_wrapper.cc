@@ -10,14 +10,28 @@
 namespace jittor {
 
 cusparseHandle_t cusparse_handle;
-static bool cusparse_handle_created = false;
+// One handle per device; the global is the current device's. See
+// cublas_wrapper.cc for why.
+static vector<cusparseHandle_t> cusparse_handles;
+
+static void cusparse_switch_device(int device) {
+    if ((int)cusparse_handles.size() <= device) cusparse_handles.resize(device+1, nullptr);
+    if (!cusparse_handles[device]) {
+        checkCudaErrors(cusparseCreate(&cusparse_handles[device]));
+        LOGv << "cusparseCreate finished for device" << device << (void*)cusparse_handles[device];
+    }
+    cusparse_handle = cusparse_handles[device];
+}
 
 // See cublas_shutdown: report, never raise, and idempotent.
 void cusparse_shutdown() {
-    if (!cusparse_handle_created) return;
-    cusparse_handle_created = false;
-    LOGv << "cusparseDestroy:" <<  (void*)cusparse_handle;
-    peekCudaErrorsAlways(cusparseDestroy(cusparse_handle));
+    if (cusparse_handles.empty()) return;
+    for (auto h : cusparse_handles) {
+        if (!h) continue;
+        LOGv << "cusparseDestroy:" <<  (void*)h;
+        peekCudaErrorsAlways(cusparseDestroy(h));
+    }
+    cusparse_handles.clear();
     cusparse_handle = nullptr;
     LOGv << "cusparseDestroy finished";
 }
@@ -26,9 +40,7 @@ struct cusparse_initer {
 
     inline cusparse_initer() {
         if (!get_device_count()) return;
-        checkCudaErrors(cusparseCreate(&cusparse_handle));
-        cusparse_handle_created = true;
-        LOGv << "cusparseCreate finished" << (void*)cusparse_handle;
+        add_device_switch_hook(cusparse_switch_device);
     }
 
     inline ~cusparse_initer() {

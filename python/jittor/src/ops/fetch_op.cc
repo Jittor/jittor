@@ -38,6 +38,21 @@ cudaEvent_t event;
 // fallback for allocators that cannot express one block with two owners.
 cudaEvent_t copy_done_event;
 
+// `event` is recorded on the *source* device's default stream, so there has
+// to be one per device: an event belongs to the device it was created on and
+// cannot be recorded on another device's stream. `stream` and
+// copy_done_event stay single -- the staging buffers all come from
+// cuda_dual_device_allocator, which is device 0's pool, and a stream may
+// legally wait on another device's event and copy across devices under UVA.
+static vector<cudaEvent_t> events;
+
+static void fetch_switch_device(int device) {
+    if ((int)events.size() <= device) events.resize(device+1, nullptr);
+    if (!events[device])
+        checkCudaErrors(cudaEventCreate(&events[device], cudaEventDisableTiming));
+    event = events[device];
+}
+
 volatile int64 n_to_fetch;
 std::mutex m;
 list<FetchResult> fetch_tasks;
@@ -55,8 +70,8 @@ struct Init {
 Init() {
     if (!get_device_count()) return;
     checkCudaErrors(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
-    checkCudaErrors(cudaEventCreate(&event, cudaEventDisableTiming));
     checkCudaErrors(cudaEventCreate(&copy_done_event, cudaEventDisableTiming));
+    add_device_switch_hook(fetch_switch_device);
     // stream = aclstream;
 }
 ~Init() {
@@ -66,7 +81,10 @@ Init() {
         f.func.deleter = nullptr;
     peekCudaErrors(cudaDeviceSynchronize());
     peekCudaErrors(cudaStreamDestroy(stream));
-    peekCudaErrors(cudaEventDestroy(event));
+    for (auto e : events)
+        if (e) peekCudaErrors(cudaEventDestroy(e));
+    events.clear();
+    event = nullptr;
     peekCudaErrors(cudaEventDestroy(copy_done_event));
 }
 } ;
@@ -127,6 +145,9 @@ void FetchOp::run() {
     // Set when some source could not be pinned, and the default stream has to
     // be held back instead.
     bool need_copy_fence = false;
+    // Devices this fetch read from, and the device to come back to.
+    uint64 src_devices = 0;
+    int entry_device = current_device();
     event_queue.flush();
     #endif
     LOGvvvv << "fetch" << fetch_vars.size() << "vars" << fetch_vars;
@@ -136,6 +157,15 @@ void FetchOp::run() {
 
         #ifdef HAS_CUDA
         if (v->allocator->is_cuda()) {
+            // The event that orders this fetch after the kernels that
+            // produced v has to be recorded on v's *own* device: stream 0 is
+            // whichever device is current, and an event of another device
+            // cannot be recorded on it at all.
+            int src = v->allocator->device();
+            if (src >= 0) {
+                if (src != current_device()) set_current_device(src);
+                if (src < 64) src_devices |= 1ull << src;
+            }
             checkCudaErrors(cudaEventRecord(event, 0));
             checkCudaErrors(cudaStreamWaitEvent(stream, event, 0));
             new (&allocation) Allocation(&cuda_dual_allocator, v->size);
@@ -185,7 +215,13 @@ void FetchOp::run() {
             // staging copies have run. Recorded before the device-to-host leg
             // so at least the PCIe transfers stay off the critical path.
             checkCudaErrors(cudaEventRecord(copy_done_event, stream));
-            checkCudaErrors(cudaStreamWaitEvent(0, copy_done_event, 0));
+            // Hold back the default stream of every device the sources came
+            // from, not only whichever one happens to be current.
+            for (int d = 0; d < 64; d++) {
+                if (!((src_devices >> d) & 1)) continue;
+                if (d != current_device()) set_current_device(d);
+                checkCudaErrors(cudaStreamWaitEvent(0, copy_done_event, 0));
+            }
         }
         for (uint j=0; j<allocations.size(); j++) {
             auto& allocation = allocations[j];
@@ -207,6 +243,8 @@ void FetchOp::run() {
             allocations.emplace_back(move(p));
         fetch_tasks.push_back({move(func), move(allocations), move(arrays)});
         checkCudaErrors(_cudaLaunchHostFunc(stream, &to_fetch, 0));
+        if (entry_device >= 0 && entry_device != current_device())
+            set_current_device(entry_device);
     } else
     #endif
     {

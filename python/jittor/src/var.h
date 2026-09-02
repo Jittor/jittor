@@ -41,6 +41,12 @@ struct Var : Node {
     size_t share_offset = 0;
     int64 size, num;
     VarHolder* holder = nullptr;
+    // The CUDA device this Var lives on, or will be computed on; -1 when no
+    // CUDA device exists. Fixed when the Var is created: an op's outputs take
+    // their inputs' device (Op::propagate_device), a source op takes the
+    // current device. Host residency is a different axis -- a Var migrated to
+    // the CPU keeps its device_id and goes back to that device.
+    int device_id = -1;
     // Circular list of the vars that currently point into one allocation.
     // `share_src` above is only the *request*, and alloc() clears it once it
     // is served; from then on a child is indistinguishable from its parent

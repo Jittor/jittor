@@ -26,18 +26,41 @@ namespace jittor {
 namespace array_local {
 cudaStream_t stream;
 cudaEvent_t event;
+// A stream and an event belong to the device they were created on: an event
+// of device 0 cannot be recorded on device 1's default stream. So there is a
+// pair per device and the globals name the current device's, swapped by the
+// device-switch hook -- the same shape as the library handles.
+static vector<cudaStream_t> streams;
+static vector<cudaEvent_t> events;
+
+static void array_switch_device(int device) {
+    if ((int)streams.size() <= device) {
+        streams.resize(device+1, nullptr);
+        events.resize(device+1, nullptr);
+    }
+    if (!streams[device]) {
+        checkCudaErrors(cudaStreamCreateWithFlags(&streams[device], cudaStreamNonBlocking));
+        checkCudaErrors(cudaEventCreate(&events[device], cudaEventDisableTiming));
+    }
+    stream = streams[device];
+    event = events[device];
+}
 
 struct Init {
 Init() {
     if (!get_device_count()) return;
-    checkCudaErrors(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
-    checkCudaErrors(cudaEventCreate(&event, cudaEventDisableTiming));
+    add_device_switch_hook(array_switch_device);
 }
 ~Init() {
     if (!get_device_count()) return;
     peekCudaErrors(cudaDeviceSynchronize());
-    peekCudaErrors(cudaStreamDestroy(stream));
-    peekCudaErrors(cudaEventDestroy(event));
+    for (size_t i=0; i<streams.size(); i++)
+        if (streams[i]) {
+            peekCudaErrors(cudaStreamDestroy(streams[i]));
+            peekCudaErrors(cudaEventDestroy(events[i]));
+        }
+    streams.clear();
+    events.clear();
 }
 } init;
 

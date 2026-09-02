@@ -339,7 +339,10 @@ void nccl_init() {
         mpi_local_rank = local_rank;
         inside_mpi = true;
         nccl_device_id = device_count ? (local_rank % device_count) : 0;
-        checkCudaErrors(cudaSetDevice(nccl_device_id));
+        // Through the placement runtime rather than straight to the driver, so
+        // the memory pools and the library handles agree with it about which
+        // device this rank is on.
+        set_current_device(nccl_device_id);
         event_queue.run_sync([]() {
             checkCudaErrors(cudaSetDevice(nccl_device_id));
         });
@@ -386,7 +389,7 @@ void nccl_init() {
         nccl_device_id = nccl_device_id % device_count;
     }
     LOGv << "NCCL init in device" << nccl_device_id << "local_rank" << mpi_local_rank;
-    checkCudaErrors(cudaSetDevice(nccl_device_id));
+    set_current_device(nccl_device_id);
     event_queue.run_sync([]() {
         checkCudaErrors(cudaSetDevice(nccl_device_id));
     });

@@ -80,6 +80,10 @@ struct NodeFlags {
         // Unlike the four above this one is *not* Var-only -- ops are swept
         // too -- so it needs a bit free in both layouts: 28, not 27.
         _lived_tracked=28,
+        // Op-only. The op places its outputs on a device of its own choosing
+        // (device_copy), so Op::init must not overwrite Var::device_id from
+        // the inputs. Bit 29 is free in both layouts.
+        _manual_device=29,
         // NOTE: bits 6..22 are shared between the Var and Op layouts (see the
         // comment on _requires_grad_disabled); 16..21 additionally mirror
         // amp_reg for ops (op.cc). New Var-only flags go at 26 and above.

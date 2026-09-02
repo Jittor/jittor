@@ -14,13 +14,39 @@
 namespace jittor {
 
 curandGenerator_t gen;
-static bool curand_gen_created = false;
+// One generator per device; the global is the current device's. A generator
+// draws from the device it was created on, so a single global one would make
+// jt.rand() on device 1 either fail or fill device-0 memory.
+static vector<curandGenerator_t> gens;
+// The last seed, replayed onto a generator created after set_seed so every
+// device answers the same seed the same way.
+static int curand_last_seed = -1;
+
+static void curand_seed_generator(curandGenerator_t g, int seed) {
+    checkCudaErrors( curandSetPseudoRandomGeneratorSeed(g, seed) );
+    // The seed alone does not rewind the generator: it keeps its position
+    // in the sequence, so re-seeding with the same value after drawing
+    // continues from where it left off and jt.set_seed() does not
+    // reproduce. set_seed() resets the CPU side's offset for the same
+    // reason; this is the CUDA half of it.
+    checkCudaErrors( curandSetGeneratorOffset(g, 0) );
+}
+
+static void curand_switch_device(int device) {
+    if ((int)gens.size() <= device) gens.resize(device+1, nullptr);
+    if (!gens[device]) {
+        checkCudaErrors( curandCreateGenerator(&gens[device], CURAND_RNG_PSEUDO_DEFAULT) );
+        if (curand_last_seed >= 0) curand_seed_generator(gens[device], curand_last_seed);
+    }
+    gen = gens[device];
+}
 
 // See cublas_shutdown: report, never raise, and idempotent.
 void curand_shutdown() {
-    if (!curand_gen_created) return;
-    curand_gen_created = false;
-    peekCudaErrorsAlways( curandDestroyGenerator(gen) );
+    if (gens.empty()) return;
+    for (auto g : gens)
+        if (g) peekCudaErrorsAlways( curandDestroyGenerator(g) );
+    gens.clear();
     gen = nullptr;
     LOGv << "curandDestroy finished";
 }
@@ -29,19 +55,13 @@ struct curand_initer {
 
 inline curand_initer() {
     if (!get_device_count()) return;
-    checkCudaErrors( curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT) );
-    curand_gen_created = true;
+    add_device_switch_hook(curand_switch_device);
     add_set_seed_callback([](int seed) {
+        curand_last_seed = seed;
         // The callback list is a separate global: nothing orders it against
-        // this generator at exit, so a set_seed after shutdown must not run.
-        if (!gen) return;
-        checkCudaErrors( curandSetPseudoRandomGeneratorSeed(gen, seed) );
-        // The seed alone does not rewind the generator: it keeps its position
-        // in the sequence, so re-seeding with the same value after drawing
-        // continues from where it left off and jt.set_seed() does not
-        // reproduce. set_seed() resets the CPU side's offset for the same
-        // reason; this is the CUDA half of it.
-        checkCudaErrors( curandSetGeneratorOffset(gen, 0) );
+        // these generators at exit, so a set_seed after shutdown must not run.
+        for (auto g : gens)
+            if (g) curand_seed_generator(g, seed);
     });
     LOGv << "curandCreate finished";
 }

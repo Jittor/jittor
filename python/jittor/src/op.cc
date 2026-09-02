@@ -90,6 +90,84 @@ Var* Op::create_output(NanoVector shape, NanoString dtype) {
     return output;
 }
 
+// A pending Var marked _is_scalar is torch's CPU scalar: it has no data
+// anywhere yet, and it is the `2` in `x * 2`, the `1` a gradient starts from,
+// or a broadcast/unary of one (array_op.cc sets the flag on a shape-[1]
+// source; broadcast_to_op.cc and unary_op.cc carry it forward). Such a value
+// follows the operand it meets instead of forcing a device error.
+//
+// Both halves of that test are load-bearing. Element count alone would sweep
+// in a real one-element user tensor. Pendingness alone would let a
+// deliberately placed `jt.zeros(1000)` that has not been synced yet be
+// retargeted to whatever device it first meets -- silently, where torch
+// raises.
+static inline bool is_pending_scalar(Var* v) {
+    return !v->is_finished() && v->flags.get(NodeFlags::_is_scalar);
+}
+
+// Move a pending scalar, and the pending subgraph that produces it, onto
+// `dev`. Refuses (returning false) if that subgraph reaches data that already
+// exists on another device -- then it is not a scalar constant being placed,
+// it is a genuine cross-device use.
+static bool retarget_pending(Var* v, int dev) {
+    if (v->device_id == dev) return true;
+    if (v->is_finished()) return false;
+    vector<Var*> seen;
+    vector<Node*> queue{v};
+    for (size_t i = 0; i < queue.size(); i++) {
+        auto node = queue[i];
+        if (node->is_var()) {
+            Var* var = node->var();
+            if (var->is_finished()) {
+                if (var->device_id != dev) return false;
+                continue;
+            }
+            seen.push_back(var);
+        }
+        // A scalar's producer chain is a handful of nodes (array, broadcast,
+        // unary). A long walk means this is not one, so stop rather than pay
+        // for it on every op.
+        if (seen.size() > 32) return false;
+        for (auto& e : node->_inputs) {
+            bool dup = false;
+            for (auto* q : queue) if (q == e.node) { dup = true; break; }
+            if (!dup) queue.push_back(e.node);
+        }
+    }
+    for (Var* var : seen) var->device_id = dev;
+    return true;
+}
+
+void Op::propagate_device() {
+    // Placement only has a question to answer when more than one device is
+    // visible; with one, every Var already carries the same index.
+    static int device_count = get_device_count();
+    if (device_count < 2) return;
+    int dev = -1;
+    for (Var* v : inputs()) {
+        if (v->device_id < 0 || is_pending_scalar(v)) continue;
+        if (dev < 0) dev = v->device_id;
+        else if (dev != v->device_id)
+            LOGf << "Expected all inputs to be on the same CUDA device, but found"
+                << "cuda:" >> dev << "and cuda:" >> v->device_id << "for op" << name() >> "."
+                << "\nMove one side with Var.to_device() / .to(\"cuda:N\") first.";
+    }
+    if (dev < 0)
+        // Every input is a pending scalar (or device-less): the first one
+        // decides and the rest follow it.
+        for (Var* v : inputs())
+            if (v->device_id >= 0) { dev = v->device_id; break; }
+    if (dev < 0) return;
+    for (Var* v : inputs())
+        if (v->device_id != dev && v->device_id >= 0
+                && !(is_pending_scalar(v) && retarget_pending(v, dev)))
+            LOGf << "Expected all inputs to be on the same CUDA device, but found"
+                << "cuda:" >> dev << "and cuda:" >> v->device_id << "for op" << name() >> "."
+                << "\nMove one side with Var.to_device() / .to(\"cuda:N\") first.";
+    for (Var* v : outputs())
+        v->device_id = dev;
+}
+
 void Op::init() {
     bool first_init = !flags.get(NodeFlags::_requires_grad_snapshot);
     bool has_disabled_input = false;
@@ -113,6 +191,8 @@ void Op::init() {
         }
     }
     infer_shape();
+    if (first_init && _inputs.size() && !flags.get(NodeFlags::_manual_device))
+        propagate_device();
     if (first_init && has_first_order_only_input)
         for (Var* v : outputs())
             v->flags.set(NodeFlags::_first_order_only);

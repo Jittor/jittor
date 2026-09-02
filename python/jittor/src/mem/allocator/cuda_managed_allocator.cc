@@ -8,6 +8,7 @@
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
 #include "mem/allocator/cuda_managed_allocator.h"
+#include "misc/cuda_flags.h"
 
 namespace jittor {
 
@@ -24,6 +25,7 @@ void* CudaManagedAllocator::alloc(size_t size, size_t& allocation) {
         return nullptr;
     }
     void* ptr;
+    if (device_id != current_device()) set_current_device(device_id);
     checkCudaErrors(cudaMallocManaged(&ptr, size));
     // alloc() must write back `allocation`; the pointer is the handle here.
     allocation = (size_t)ptr;

@@ -197,6 +197,19 @@ static void top_weak_sync(vector<Var*>& vars) {
     }
 }
 
+#ifdef HAS_CUDA
+// The device an op runs on: where its outputs are placed. Op::propagate_device
+// has already made the outputs agree with the inputs, so either end answers;
+// outputs first because device_copy is the one op where they differ.
+static inline int op_target_device(Op* op) {
+    for (Var* v : op->outputs())
+        if (v->device_id >= 0) return v->device_id;
+    for (Var* v : op->inputs())
+        if (v->device_id >= 0) return v->device_id;
+    return current_device();
+}
+#endif
+
 void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     exec_called ++;
     last_run_ops = Op::number_of_created_ops;
@@ -206,6 +219,13 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     auto temp_allocator = get_allocator(true);
     this->allocator = allocator;
     this->temp_allocator = temp_allocator;
+    #ifdef HAS_CUDA
+    // Each op allocates from and launches on the device its outputs live on;
+    // the caller gets its own current device back when the run is over, and
+    // every device the run touched is waited on rather than just one.
+    int entry_device = use_cuda ? current_device() : -1;
+    uint64 touched_devices = 0;
+    #endif
     // bfs find all ops need to run
     int op_num = 0;
     vector<Node*> bfs_q;
@@ -560,6 +580,21 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             root = fuse_ops[rr-1];
             load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
         }
+        #ifdef HAS_CUDA
+        if (use_cuda) {
+            int dev = op_target_device(op);
+            if (dev >= 0) {
+                if (dev != current_device()) set_current_device(dev);
+                if (allocator->device() != dev) {
+                    allocator = get_allocator(dev, false);
+                    temp_allocator = get_allocator(dev, true);
+                    this->allocator = allocator;
+                    this->temp_allocator = temp_allocator;
+                }
+                if (dev < 64) touched_devices |= 1ull << dev;
+            }
+        }
+        #endif
         if (save_mem) {
             swap_timestamp = ++tflag_count;
             for (auto* var : op->inputs()) {
@@ -588,8 +623,9 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         if (!is_cuda) {
             if (last_is_cuda) {
                 // if prev op in gpu and this op in cpu
-                //  cuda sync
-                checkCudaErrors(cudaDeviceSynchronize());
+                //  cuda sync -- on every device that has been launched on,
+                //  not only the one that happens to be current
+                sync_devices(touched_devices);
                 sync_times++;
             }
             for (Var* v : op->inputs()) {
@@ -708,7 +744,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         sync_times++;
         try {
         // CHECK(EventQueue::OK == event_queue.run_sync([]() {
-            checkCudaErrors(cudaDeviceSynchronize());
+            sync_devices(touched_devices);
         // }));
         // TODO: run_sync cause hang, tmp fix it
         } catch (const std::exception& e) {
@@ -718,6 +754,8 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         }
         event_queue.flush();
     }
+    if (use_cuda && entry_device >= 0 && entry_device != current_device())
+        set_current_device(entry_device);
     LOGvv << "cudaDeviceSynchronize times:" << sync_times << "/" <<queue.size() << "device_sync:" << device_sync;
     #endif
     last_run_ops = Op::number_of_created_ops;
@@ -728,13 +766,19 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
 // below. This used to be two parallel maps read with operator[], so an
 // unknown pointer silently inserted a zero size and a zero allocation and then
 // released *that* -- and nothing was ever erased, so the maps only grew.
-struct ForeignCudaAllocation { size_t size, allocation; };
+//
+// The allocator is recorded too: `exe.allocator` is now the pool of the
+// device the executor is on, so it is not the same object at free time as it
+// was at alloc time. Freeing into the wrong pool hands it an id it never
+// issued, which is a lost block at best and someone else's block at worst.
+struct ForeignCudaAllocation { size_t size, allocation; Allocator* allocator; };
 static unordered_map<void*, ForeignCudaAllocation> foreign_cuda_allocations;
 
 extern "C" void* jittor_cuda_malloc(void*, size_t size, int device_id) {
     size_t allocation;
-    void* ptr=exe.allocator->alloc(size, allocation);
-    if (ptr) foreign_cuda_allocations[ptr] = {size, allocation};
+    auto* allocator = exe.allocator;
+    void* ptr=allocator->alloc(size, allocation);
+    if (ptr) foreign_cuda_allocations[ptr] = {size, allocation, allocator};
     return ptr;
 }
 
@@ -745,7 +789,7 @@ extern "C" void jittor_cuda_free(void*, void* ptr, int device_id) {
         << "jittor_cuda_free: pointer was not allocated by jittor_cuda_malloc" << ptr;
     auto info = iter->second;
     foreign_cuda_allocations.erase(iter);
-    exe.allocator->free(ptr, info.size, info.allocation);
+    info.allocator->free(ptr, info.size, info.allocation);
 }
 
 extern "C" void* get_jittor_cuda_malloc() {

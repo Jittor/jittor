@@ -14,12 +14,26 @@
 
 namespace jittor {
 
+// cuTT plans hold device buffers that outlive the run that built them, and
+// they are released from a static destructor at exit. `exe.allocator` is the
+// pool of whichever device the executor was last on, so it is not the same
+// object then as it was at alloc time -- freeing a device-1 block into device
+// 0's pool hands it an id that pool never issued. Remember the allocator with
+// the pointer instead.
+static std::unordered_map<void*, Allocator*> cutt_allocators;
+
 void jt_alloc(void** p, size_t len, size_t& allocation) {
-    *p = exe.allocator->alloc(len, allocation);
+    auto* allocator = exe.allocator;
+    *p = allocator->alloc(len, allocation);
+    if (*p) cutt_allocators[*p] = allocator;
 }
 
 void jt_free(void* p, size_t len, size_t& allocation) {
-    exe.allocator->free(p, len, allocation);
+    if (!p) return;
+    auto iter = cutt_allocators.find(p);
+    auto* allocator = iter == cutt_allocators.end() ? exe.allocator : iter->second;
+    if (iter != cutt_allocators.end()) cutt_allocators.erase(iter);
+    allocator->free(p, len, allocation);
 }
 
 int cutt_max_cache_size = 64;

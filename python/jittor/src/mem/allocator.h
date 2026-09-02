@@ -16,6 +16,11 @@ struct Allocator {
     };
     int64 used_memory=0, unused_memory=0;
     inline virtual uint64 flags() const { return 0; };
+    // The CUDA device the memory this allocator hands out lives on; -1 for
+    // host memory. Forwarded by the wrapper allocators (SFRL, stat, temp,
+    // NFEF) so that a Var can be asked which device its bytes are on without
+    // knowing which stack it was allocated through.
+    inline virtual int device() const { return -1; }
     inline bool is_cuda() const { return flags() & _cuda; }
     inline bool is_aligned() const { return flags() & _aligned; }
     virtual const char* name() const = 0;
@@ -58,6 +63,9 @@ struct Allocation {
 
 EXTERN_LIB Allocator* cpu_allocator;
 Allocator* get_allocator(bool temp_allocator=false);
+// The allocator stack for one CUDA device. `device` < 0 selects the host
+// stack, which is what a CPU-only process gets.
+Allocator* get_allocator(int device, bool temp_allocator);
 // @pyjt(gc)
 void gc_all();
 

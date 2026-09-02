@@ -116,6 +116,15 @@ struct VarHolder {
         return this; 
     };
 
+    /**
+     * The CUDA device index this Var lives on, or will be computed on; -1
+     * when there is no CUDA device. Host residency is a different question
+     * (see ``location``): a Var migrated to host memory keeps the device it
+     * belongs to and goes back to it.
+     */
+    // @pyjt(__get__device_id)
+    inline int device_id() { return var->device_id; }
+
     // @pyjt(location)
     inline string location() {
         if (var->flags.get(NodeFlags::_is_swapped))
