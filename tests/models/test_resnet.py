@@ -152,5 +152,79 @@ class TestResnetFp16(TestResnetFp32):
     def tearDown(self):
         jt.flags.auto_mixed_precision_level = 0
 
+class TestZeroInitResidual(unittest.TestCase):
+    """``zero_init_residual`` was accepted and never acted on.
+
+    torchvision's ResNet, when the flag is set, zeroes the gamma of the last
+    BatchNorm in every residual branch (``bn3`` for Bottleneck, ``bn2`` for
+    BasicBlock) so each block starts as the identity. jittor took the argument
+    and built an ordinarily-initialised network, so ResNet-50 and up converged
+    differently from torchvision with no indication anything was ignored.
+    """
+
+    def _last_bn_weights(self, model):
+        """gamma of the last BN of each residual branch, torchvision's rule."""
+        out = []
+        for m in model.modules():
+            if isinstance(m, resnet.Bottleneck):
+                out.append(m.bn3.weight.numpy())
+            elif isinstance(m, resnet.BasicBlock):
+                out.append(m.bn2.weight.numpy())
+        return out
+
+    def _other_bn_weights(self, model):
+        """gamma of every OTHER BN -- these must stay at 1."""
+        out = []
+        for m in model.modules():
+            if isinstance(m, resnet.Bottleneck):
+                out += [m.bn1.weight.numpy(), m.bn2.weight.numpy()]
+            elif isinstance(m, resnet.BasicBlock):
+                out.append(m.bn1.weight.numpy())
+        return out
+
+    def test_flag_zeroes_the_last_bn_of_each_residual_branch(self):
+        # Bottleneck (resnet50) and BasicBlock (resnet18) take different paths
+        for name in ("resnet18", "resnet50"):
+            with self.subTest(model=name):
+                model = getattr(resnet, name)(zero_init_residual=True)
+                last = self._last_bn_weights(model)
+                assert last, "no residual blocks found in %s" % name
+                for w in last:
+                    np.testing.assert_allclose(
+                        w, np.zeros_like(w), atol=0, rtol=0,
+                        err_msg="%s: last BN of a residual branch must start "
+                                "at gamma=0" % name)
+                # every other BN keeps the default gamma=1
+                for w in self._other_bn_weights(model):
+                    np.testing.assert_allclose(
+                        w, np.ones_like(w), atol=0, rtol=0,
+                        err_msg="%s: zero_init_residual must only touch the "
+                                "last BN of each residual branch" % name)
+
+    def test_default_is_unchanged(self):
+        for name in ("resnet18", "resnet50"):
+            with self.subTest(model=name):
+                model = getattr(resnet, name)()
+                for w in self._last_bn_weights(model):
+                    np.testing.assert_allclose(
+                        w, np.ones_like(w), atol=0, rtol=0,
+                        err_msg="%s: without the flag every BN starts at "
+                                "gamma=1" % name)
+
+    def test_residual_block_starts_as_the_identity(self):
+        """The point of the flag: with gamma=0 the branch contributes nothing.
+
+        A Bottleneck without a downsample is then exactly relu(x) on its input.
+        """
+        jt.flags.use_cuda = 0
+        block = resnet.Bottleneck(256, 64)
+        jt.init.zero_(block.bn3.weight)
+        block.eval()
+        x = jt.array(np.random.RandomState(7).rand(2, 256, 8, 8).astype("float32"))
+        out = block(x).numpy()
+        np.testing.assert_allclose(out, np.maximum(x.numpy(), 0), atol=1e-5,
+                                   rtol=1e-5)
+
+
 if __name__ == "__main__":
     unittest.main()

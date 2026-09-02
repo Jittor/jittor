@@ -117,6 +117,18 @@ class ResNet(nn.Module):
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2, dilate=replace_stride_with_dilation[2])
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Linear((512 * block.expansion), num_classes)
+        if zero_init_residual:
+            # torchvision's ResNet does this and jittor accepted the flag
+            # without acting on it, so `zero_init_residual=True` silently built
+            # an ordinarily-initialised network. Zeroing the last BN gamma in
+            # each residual branch makes every block start as the identity,
+            # which is what the flag is for (and what changes ResNet-50+
+            # convergence against torchvision).
+            for m in self.modules():
+                if isinstance(m, Bottleneck) and isinstance(m.bn3.weight, jt.Var):
+                    jt.init.zero_(m.bn3.weight)
+                elif isinstance(m, BasicBlock) and isinstance(m.bn2.weight, jt.Var):
+                    jt.init.zero_(m.bn2.weight)
 
     def _make_layer(self, block, planes, blocks, stride=1, dilate=False):
         norm_layer = self._norm_layer
