@@ -10,17 +10,17 @@ per process behind NCCL.
 
 This document describes the device model that replaces it. It keeps the
 meta-operator graph and lazy execution untouched; it adds placement. Two
-implementations of this model exist on the branches `device-select` and
-`multi-device`; §5 records how they differ and what remains to be decided
-before one of them is merged.
+implementations of this model existed on the branches `device-select` and
+`multi-device`; §5 records what was taken from each and why, and what the
+merged version does *not* prove.
 
 ## 1. Model
 
-- **Every `Var` carries a device**, the accelerator index it lives on or will
-  be computed on, fixed when the Var is created. An op's outputs take the
-  device of its inputs; a source op (`array`, `random`, `zeros`, …) takes the
-  *current device*. A Var migrated to host memory keeps its device and
-  returns to it.
+- **Every `Var` carries `Var::device_id`**, the accelerator index it lives on
+  or will be computed on, fixed when the Var is created. An op's outputs take
+  the device of its inputs (`Op::propagate_device`); a source op (`array`,
+  `random`, `zeros`, …) takes the *current device*. A Var migrated to host
+  memory keeps its device and returns to it.
 - **The current device** is `jt.flags.device_id` / `jt.current_device()`, set
   with `jt.set_device(i)` and scoped with `jt.flag_scope(device_id=i)`.
   Setting it calls `cudaSetDevice` and lets each library wrapper swap in that
@@ -31,14 +31,22 @@ before one of them is merged.
   `device_sync` waits on every device the run touched and restores the
   caller's current device.
 - **Mixing devices in one op is an error at graph-construction time**, as in
-  torch: `Expected all inputs to be on the same CUDA device`. One exception
-  mirrors torch's CPU scalars: a pending one-element source with no data yet
-  (the `2` in `x * 2`, a gradient's starting `1`) follows the operand it meets.
+  torch: `Expected all inputs to be on the same CUDA device`. This runs from
+  `Op::init`, so `jt.grad`'s new operators are checked by the same rule — a
+  forward that is refused cannot be followed by a silently mixed backward.
+  One exception mirrors torch's CPU scalars: a Var that is **both** unfinished
+  **and** flagged `_is_scalar` (the `2` in `x * 2`, a gradient's starting `1`)
+  follows the operand it meets, together with the small pending subgraph
+  behind it. See §5 for why both halves of that test are needed and where its
+  edge is.
 - **`Var.to_device(i)`** is the `device_copy` op and the only way data changes
   device. The copy runs on the destination's stream after the producer's event
   on the source, and the source's stream waits for the copy before it may
   reuse the memory. It is differentiable: the gradient is a copy back. Peer
   access is enabled once per device pair where the hardware allows it.
+  `device_copy` is the one op whose output device is not its inputs' — it says
+  so with `NodeFlags::_manual_device`, and it is also the one op whose input
+  must be migrated to the *input's* device rather than the op's.
 
 ## 2. Per-device state
 
@@ -77,20 +85,65 @@ preserved. A bare `.to("cuda")` means the current device, as in torch.
   axes; see `multi-backend-design.md`, which proposes making the backend a
   value on the device rather than a build-time property.
 
-## 5. Two implementations, one decision outstanding
+## 5. Merged: what was taken from each branch, and why
 
-Both branches implement §1 to §3 and pass their own multi-device, facade and
-regression suites on two GPUs. They differ in detail:
+Task 4.02 merged the two implementations. The model above is what landed; this
+section records the four choices and the one place where the model has an edge
+that neither branch had noticed.
 
-| | `device-select` | `multi-device` |
+| | taken from | why |
 | --- | --- | --- |
-| Var field | `Var::cuda_device`, `Var.device_index()` | `Var::device_id` |
-| scalar exemption | element count (a flag bit was unavailable) | pending source with no data yet |
-| copy ordering | `cudaMemcpyPeer` | destination stream with events both ways |
-| facade extras | `Module.cuda(i)` moves parameters | `get/set_default_device`, `torch.accelerator.*` |
+| `Var::device_id` | `multi-device` | The word "device id" is already the vocabulary of `jt.flags.device_id`, `CUDA_VISIBLE_DEVICES` and `torch.cuda.current_device`. `device-select`'s `Var::cuda_device` / `Var.device_index()` names the same thing twice more. |
+| scalar exemption = `!is_finished() && _is_scalar` | both, as a conjunction | Neither half alone is sound; see below. |
+| copy ordering = destination stream + events both ways | `multi-device` | `device-select` used `cudaMemcpyPeer`, which gets the ordering by being *synchronous* — every move drains both pipelines. Events express the dependency without the drain. |
+| facade surface | union of both | `device-select`'s `Module.cuda(i)`, `multi-device`'s `get/set_default_device` with an index and `torch.accelerator.*`. |
 
-Neither has run the full CUDA or native gates. Before either is merged:
-choose one field name and one scalar rule, run both gates on the chosen
-branch, and confirm the structure-test failures each branch reports are the
-three that already fail on `2.0` (optim facade signature, runtime
-composition) and not new ones.
+### Why the scalar rule is a conjunction
+
+`device-select` exempted by element count, `multi-device` by pendingness. Each
+is wrong on a case the other catches, and the repository has a test for each:
+
+* **Element count alone** exempts a real one-element tensor that already holds
+  the user's data (`tests/backends/cuda/test_multi_device.py::
+  test_a_one_element_tensor_is_not_a_scalar`). `device-select` chose it because
+  a flag bit was said to be unavailable; that is no longer true —
+  `node.h`'s `_is_scalar` has been its own bit (26) since the mixed-precision
+  fix.
+* **Pendingness alone** retargets a `jt.array(np.ones(1000))` that the user
+  deliberately built on `cuda:0` and merely has not synced yet
+  (`::test_a_placed_pending_tensor_is_not_retargeted`) — silently, where torch
+  raises.
+
+`_is_scalar` is set by `array_op.cc` on a shape-`[1]` source and carried
+through `broadcast_to_op.cc` and `unary_op.cc`, so `x * 2` passes and a real
+array does not.
+
+### The edge the conjunction does not remove
+
+`jt.zeros(n)` / `jt.ones(n)` are `unary(0).broadcast(n)`: the `_is_scalar` flag
+comes through the broadcast, so an unsynced `jt.zeros(1000)` built on `cuda:0`
+*does* follow an operand on `cuda:1`, where torch would raise. This was
+expected to be excluded by the conjunction and is not; measuring it is what
+`::test_a_pending_broadcast_constant_does_follow` exists for.
+
+It is accepted rather than patched. The value is a compile-time constant with
+no data anywhere, produced bit-identically on either card, so nothing the user
+computed is moved — this is constant placement, not data movement. Every path
+that does carry data (a `jt.array` of more than one element, or any value that
+has already been computed) is still refused. Narrowing it further would need a
+fourth condition, and the obvious candidate — "the Var has no `VarHolder`" —
+breaks the legitimate torch-compatible `two = jt.array(2.0); x_on_cuda1 * two`.
+
+### What the merged version does not prove
+
+The copy ordering is **not** exercised as a regression guard on this hardware.
+All eight GPUs here report `cudaDeviceCanAccessPeer == 0` for every pair
+(consumer cards, P2P disabled), so the driver stages every cross-device copy
+through host memory and serialises it against the source device itself:
+deleting the `cudaEventRecord`/`cudaStreamWaitEvent` pair from
+`DeviceCopyOp::run` leaves the whole file passing. The test is written and
+reports which regime it ran in (`_peer_regime`); it becomes a guard on a
+peer-capable pair. See `agent/skills/multi-device-verification/SKILL.md`.
+
+Streams and events beyond the per-device default stream stay out of scope
+(task 4.08), as does `save_mem`, which still assumes device 0.

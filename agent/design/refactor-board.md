@@ -231,8 +231,8 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 3.22 | CUDA 归约块内树形归约 | 待领 | | |
 | 3.23 | 融合逐元素 kernel 带宽效率 | 待领 | | |
 | 3.24 | 布局收尾 | 待领 | | |
-| 4.01 | 分配器 id 空间随分配器实例走，不再是进程静态 2M 单例 | 已合并 | | 4e407447 |
-| 4.02 | 合并多卡 | 待领 | | |
+| 4.01 | 分配器 id 空间随分配器实例走，不再是进程静态 2M 单例 | 已合并 | device | 4e407447 |
+| 4.02 | 合并多卡 | 已合并 | device | `ad9aab3a`（Var 带设备、算子在自己设备上跑、逐设备分配器与库句柄）、`c97b707a`（跨卡拷贝算子）、`93b48a8e`（torch facade）。选了什么、为什么，改写进 `device-placement.md` §5。**一处未达成**：跨卡拷贝的定序在本机不是回归网——8 张卡两两 `cudaDeviceCanAccessPeer` 全 0，驱动把跨卡拷贝经主机中转并自行与源卡串行，把 event 对整对删掉测试仍全过（实测）。测试写好了并会打印当前处于哪种情形，换到能 peer 的机器上才成为守卫。方法沉淀在 `agent/skills/multi-device-verification` |
 | 4.03 | `BackendRegistry` | 待领 | | |
 | 4.04 | `OpRegistry` | 待领 | | |
 | 4.05 | Python 分派表 | 待领 | | |
