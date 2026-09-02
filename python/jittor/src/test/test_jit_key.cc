@@ -13,12 +13,6 @@ JIT_TEST(jit_key) {
     jk.clear();
     for (int i=0; i<JK::buffer_size/2; i++)
         jk.buffer[i] = i%256;
-    expect_error([&]() {
-        for (int i=0; i<JK::buffer_size; i++)
-            jk.buffer[i] = i%256;
-    });
-    std::cerr << "get segfault, ok" << std::endl;
-
     jk << JK::key << "key" << JK::val << "value";
     jk << JK::key << "key" << JK::val << JK::hex(0x123123);
     jk << JK::key << "key" << JK::val << JK::hex1(0x123123);
@@ -66,6 +60,28 @@ JIT_TEST(jit_key) {
         };
     ASSERTop(keys,==,k2);
 
+}
+
+// Writing past the end of the jit key buffer must reach the mprotect guard
+// page, and that fault must stop the process: the key selects which compiled
+// kernel runs, so an overrun that merely wrapped or truncated would pick the
+// wrong kernel and give a wrong answer with no error.
+//
+// This case is EXPECTED TO KILL THE PROCESS. It used to live inside
+// `expect_error()` in the case above, which worked only because the SIGSEGV
+// handler threw a C++ exception -- throwing out of a signal handler is
+// undefined behaviour that happened to unwind on this ABI, and the case had
+// been "passing" on it for years. The handler now reports through write(2) and
+// `_exit`s (2.20), so there is nothing to catch and nothing should try:
+// tests/compiler/test_jit_tests.py runs this one in a child process and asserts
+// on its exit status and on the message the handler prints.
+JIT_TEST(jit_key_guard_page) {
+    JK& jk = get_jk();
+    jk.clear();
+    for (int i=0; i<JK::buffer_size; i++)
+        jk.buffer[i] = i%256;
+    LOGf << "writing past the jit key buffer did not fault: the guard page is"
+        << "missing, so an over-long key would be truncated in silence";
 }
 
 } // jittor

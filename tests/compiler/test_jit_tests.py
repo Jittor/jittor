@@ -11,6 +11,8 @@ import pytest
 import jittor as jt
 from jittor import LOG
 
+from _helpers.child_process import run_child_script
+
 
 #: C++ unit tests whose assertion is a wall-clock budget.
 #:
@@ -24,6 +26,26 @@ LOAD_SENSITIVE_TESTS = frozenset((
     "sfrl_allocator_time",
 ))
 
+#: C++ unit tests whose whole point is that the process dies, mapped to a string
+#: their crash report must contain.
+#:
+#: ``jit_key_guard_page`` writes past the jit key buffer into the mprotect guard
+#: page on purpose. The fault is delivered to jittor's signal handler, which
+#: reports and ``_exit``s -- there is no catchable path and there should not be
+#: one, because throwing out of a signal handler is undefined behaviour. (It
+#: used to be caught with ``expect_error()``, and "passed" for years on exactly
+#: that undefined behaviour; 2.20 replaced it with defined behaviour and this
+#: dependency surfaced.)
+#:
+#: So these are asserted on the child's exit status instead. ``crash_isolated``
+#: keeps the crash from taking this pytest process down with it -- here the
+#: crash is what is under test, but the runner surviving is a precondition for
+#: reporting it, which is the opposite of the cases in
+#: ``tests/core/test_signal_and_teardown.py`` that deliberately do not isolate.
+CRASHING_TESTS = {
+    "jit_key_guard_page": "Accessing protect pages",
+}
+
 
 def _run_test(name):
     target = getattr(jt.tests, name)
@@ -31,6 +53,20 @@ def _run_test(name):
     doc = doc[doc.find("From"):].strip()
     LOG.i(f"Run test {name} {doc}")
     target()
+
+
+def _run_crashing_test(case, name, expected):
+    child = run_child_script(
+        "import jittor as jt\n"
+        "jt.tests.%s()\n"
+        "print('NOT-REACHED', flush=True)\n" % name,
+        merge_stderr=True,
+        crash_isolated=True,
+    )
+    output = child.stdout.decode("utf8", "replace")
+    case.assertNotIn("NOT-REACHED", output)
+    case.assertNotEqual(child.returncode, 0, output)
+    case.assertIn(expected, output)
 
 
 class TestJitTests(unittest.TestCase):
@@ -54,7 +90,10 @@ class TestJitTests(unittest.TestCase):
 
 def _make_test(name):
     def generated_test(self):
-        _run_test(name)
+        if name in CRASHING_TESTS:
+            _run_crashing_test(self, name, CRASHING_TESTS[name])
+        else:
+            _run_test(name)
 
     generated_test.__name__ = "test_" + name
     if name in LOAD_SENSITIVE_TESTS:
