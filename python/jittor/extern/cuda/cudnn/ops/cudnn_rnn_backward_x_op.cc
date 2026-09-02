@@ -7,6 +7,7 @@
 // ***************************************************************
 #include "var.h"
 #include "cudnn_rnn_descriptor.h"
+#include "cudnn_descriptor.h"
 #include "cudnn_rnn_backward_x_op.h"
 #include "cudnn_wrapper.h"
 #include "executor.h"
@@ -104,28 +105,19 @@ void CudnnRnnBackwardXOp::jit_run() {
     int hidden_dims[3] = {num_layers * num_directions, batch_size, hidden_size};
     int hidden_strides[3] = {hidden_dims[1] * hidden_dims[2], hidden_dims[2], 1};
 
-    vector<cudnnTensorDescriptor_t> xDesc(seq_length), dxDesc(seq_length);
-    vector<cudnnTensorDescriptor_t> yDesc(seq_length), dyDesc(seq_length);
+    // Owned: 4*seq_length + 6 descriptors; see the forward op.
+    CudnnTensorDescriptorArray xDesc(seq_length), dxDesc(seq_length);
+    CudnnTensorDescriptorArray yDesc(seq_length), dyDesc(seq_length);
 
     for (int i = 0; i < seq_length; ++i) {
-        checkCudaErrors(cudnnCreateTensorDescriptor(&xDesc[i]));
-        checkCudaErrors(cudnnCreateTensorDescriptor(&dxDesc[i]));
-        checkCudaErrors(cudnnCreateTensorDescriptor(&yDesc[i]));
-        checkCudaErrors(cudnnCreateTensorDescriptor(&dyDesc[i]));
         checkCudaErrors(cudnnSetTensorNdDescriptor(xDesc[i], getDataType<Ty>(), 3, in_dims, in_strides));
         checkCudaErrors(cudnnSetTensorNdDescriptor(dxDesc[i], getDataType<Ty>(), 3, in_dims, in_strides));
         checkCudaErrors(cudnnSetTensorNdDescriptor(yDesc[i], getDataType<Ty>(), 3, out_dims, out_strides));
         checkCudaErrors(cudnnSetTensorNdDescriptor(dyDesc[i], getDataType<Ty>(), 3, out_dims, out_strides));
     }
 
-    cudnnTensorDescriptor_t dhyDesc, dcyDesc;
-    cudnnTensorDescriptor_t hxDesc, cxDesc, dhxDesc, dcxDesc;
-    checkCudaErrors(cudnnCreateTensorDescriptor(&hxDesc));
-    checkCudaErrors(cudnnCreateTensorDescriptor(&cxDesc));
-    checkCudaErrors(cudnnCreateTensorDescriptor(&dhxDesc));
-    checkCudaErrors(cudnnCreateTensorDescriptor(&dcxDesc));
-    checkCudaErrors(cudnnCreateTensorDescriptor(&dhyDesc));
-    checkCudaErrors(cudnnCreateTensorDescriptor(&dcyDesc));
+    CudnnTensorDescriptor dhyDesc, dcyDesc;
+    CudnnTensorDescriptor hxDesc, cxDesc, dhxDesc, dcxDesc;
     checkCudaErrors(cudnnSetTensorNdDescriptor(hxDesc, getDataType<Tx>(), 3, hidden_dims, hidden_strides));
     checkCudaErrors(cudnnSetTensorNdDescriptor(cxDesc, getDataType<Tx>(), 3, hidden_dims, hidden_strides));
     checkCudaErrors(cudnnSetTensorNdDescriptor(dhxDesc, getDataType<Tx>(), 3, hidden_dims, hidden_strides));
@@ -137,13 +129,8 @@ void CudnnRnnBackwardXOp::jit_run() {
     RnnDescriptor rnn_desc(cudnn_handle, mode, hidden_size, num_layers, dropout,
         bidirectional, getDataType<Tx>());
 
-    // Was uninitialized when work_space_size == 0, and the free below is
-    // unconditional: a garbage pointer handed to the allocator.
-    void *work_space = nullptr;
-    size_t work_space_size = rnn_desc.work_space_size(dxDesc.data(), seq_length);
-    size_t work_space_allocation;
-    if (work_space_size > 0)
-        work_space = exe.temp_allocator->alloc(work_space_size, work_space_allocation);
+    // Was a bare `void*` left uninitialized when the size came back zero.
+    CudnnWorkspace work_space(rnn_desc.work_space_size(dxDesc.data(), seq_length));
 
     size_t reserveSpaceSize = reservation->size;
 
@@ -160,7 +147,7 @@ void CudnnRnnBackwardXOp::jit_run() {
         dxDesc.data(), dx->ptr<Tx>(),
         dhxDesc, dhx->ptr<Tx>(),
         dcxDesc, mode == "lstm" ? dcx->ptr<Tx>() : nullptr,
-        work_space, work_space_size,
+        work_space.ptr, work_space.size,
         reservation->ptr<Tx>(), reservation->size
     ));
 
@@ -172,27 +159,11 @@ void CudnnRnnBackwardXOp::jit_run() {
         xDesc.data(), x->ptr<Tx>(),
         hxDesc, hx->ptr<Tx>(),
         yDesc.data(), y->ptr<Ty>(),
-        work_space, work_space_size,
+        work_space.ptr, work_space.size,
         w_desc.desc, dw->ptr<Tw>(),
         reservation->ptr<Tx>(), reservation->size
     ));
 
-    for (int i = 0; i < seq_length; ++i) {
-        checkCudaErrors(cudnnDestroyTensorDescriptor(xDesc[i]));
-        checkCudaErrors(cudnnDestroyTensorDescriptor(dxDesc[i]));
-        checkCudaErrors(cudnnDestroyTensorDescriptor(yDesc[i]));
-        checkCudaErrors(cudnnDestroyTensorDescriptor(dyDesc[i]));
-    }
-
-    checkCudaErrors(cudnnDestroyTensorDescriptor(dhyDesc));
-    checkCudaErrors(cudnnDestroyTensorDescriptor(dcyDesc));
-    checkCudaErrors(cudnnDestroyTensorDescriptor(hxDesc));
-    checkCudaErrors(cudnnDestroyTensorDescriptor(cxDesc));
-    checkCudaErrors(cudnnDestroyTensorDescriptor(dhxDesc));
-    checkCudaErrors(cudnnDestroyTensorDescriptor(dcxDesc));
-
-    if (work_space)
-        exe.temp_allocator->free(work_space, work_space_size, work_space_allocation);
 }
 
 #endif

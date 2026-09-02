@@ -7,6 +7,7 @@
 // ***************************************************************
 #include "var.h"
 #include "cudnn_conv3d_op.h"
+#include "cudnn_descriptor.h"
 #include "cudnn_wrapper.h"
 #include "executor.h"
 #include "ops/op_register.h"
@@ -96,15 +97,13 @@ template <typename T_ELEM> __inline__  cudnnDataType_t getDataType();
 void CudnnConv3dOp::jit_run() {
     cudnnHandle_t& handle_ = cudnn_handle;
 
-    cudnnTensorDescriptor_t cudnnIdesc;
-    cudnnFilterDescriptor_t cudnnFdesc;
-    cudnnTensorDescriptor_t cudnnOdesc;
-    cudnnConvolutionDescriptor_t cudnnConvDesc;
-    
-    checkCudaErrors(cudnnCreateTensorDescriptor( &cudnnIdesc ));
-    checkCudaErrors(cudnnCreateFilterDescriptor( &cudnnFdesc ));
-    checkCudaErrors(cudnnCreateTensorDescriptor( &cudnnOdesc ));
-    checkCudaErrors(cudnnCreateConvolutionDescriptor( &cudnnConvDesc ));
+    // Owned, so a throw anywhere below releases them. There is no backend
+    // fast path for 3-D yet (6.B14 left these on the legacy API), so unlike
+    // the 2-D ops they are built unconditionally.
+    CudnnTensorDescriptor cudnnIdesc;
+    CudnnFilterDescriptor cudnnFdesc;
+    CudnnTensorDescriptor cudnnOdesc;
+    CudnnConvolutionDescriptor cudnnConvDesc;
 
     int xn, xc, xd, xh, xw, wd, wh, ww, wci, wco, yn, yc, yd, yh, yw;
     int sx[] = {0,0,0,0,1};
@@ -254,8 +253,7 @@ void CudnnConv3dOp::jit_run() {
                 if (sz > mem_info.total_cuda_ram * max_workspace_ratio) continue;
                 if (CUDNN_STATUS_SUCCESS == ret && sz > max_ws_size) max_ws_size = sz;
             } 
-            size_t allocation;
-            void* ws = exe.temp_allocator->alloc(max_ws_size, allocation);
+            CudnnWorkspace search_ws(max_ws_size);
             checkCudaErrors(cudnnFindConvolutionForwardAlgorithmEx(
                 handle_,
                 cudnnIdesc, x->ptr<Tx>(),
@@ -265,9 +263,8 @@ void CudnnConv3dOp::jit_run() {
                 num_algos,
                 &perf_count,
                 perf_results,
-                ws,
-                max_ws_size));
-            exe.temp_allocator->free(ws, max_ws_size, allocation);
+                search_ws.ptr,
+                search_ws.size));
         } else {
             checkCudaErrors(cudnnGetConvolutionForwardAlgorithm_v7(
                 handle_,
@@ -295,15 +292,11 @@ void CudnnConv3dOp::jit_run() {
     }
 
     // TODO: warp work space
-    void *workSpace = 0;
     size_t workSpaceSize;
     checkCudaErrors (cudnnGetConvolutionForwardWorkspaceSize(
         handle_, cudnnIdesc, cudnnFdesc, cudnnConvDesc, 
         cudnnOdesc, algo, &workSpaceSize) );
-    size_t allocation;
-    if (workSpaceSize > 0) {
-        workSpace = exe.temp_allocator->alloc(workSpaceSize, allocation);
-    }
+    CudnnWorkspace workSpace(workSpaceSize);
     float alpha=1, beta=0;
     checkCudaErrors(cudnnConvolutionForward(
         handle_,
@@ -312,17 +305,10 @@ void CudnnConv3dOp::jit_run() {
         cudnnFdesc, w->ptr<Tw>(),
         cudnnConvDesc,
         algo,
-        workSpace, workSpaceSize,
+        workSpace.ptr, workSpace.size,
         (void*)(&beta),
         cudnnOdesc, y->ptr<Ty>())
     );
-    if (workSpace)
-        exe.temp_allocator->free(workSpace, workSpaceSize, allocation);
-
-    checkCudaErrors(cudnnDestroyTensorDescriptor( cudnnIdesc ));
-    checkCudaErrors(cudnnDestroyFilterDescriptor( cudnnFdesc ));
-    checkCudaErrors(cudnnDestroyTensorDescriptor( cudnnOdesc ));
-    checkCudaErrors(cudnnDestroyConvolutionDescriptor( cudnnConvDesc ));
 }
 #endif
 #endif // JIT

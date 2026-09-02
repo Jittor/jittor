@@ -7,6 +7,7 @@
 // ***************************************************************
 #include "var.h"
 #include "cudnn_rnn_descriptor.h"
+#include "cudnn_descriptor.h"
 #include "cudnn_rnn_op.h"
 #include "cudnn_wrapper.h"
 #include "executor.h"
@@ -157,22 +158,16 @@ void CudnnRnnOp::jit_run() {
     int hidden_dims[3] = {num_layers * num_directions, batch_size, hidden_size};
     int hidden_strides[3] = {hidden_dims[1] * hidden_dims[2], hidden_dims[2], 1};
 
-    vector<cudnnTensorDescriptor_t> xDesc(seq_length);
-    vector<cudnnTensorDescriptor_t> yDesc(seq_length);
-    cudnnTensorDescriptor_t hxDesc, cxDesc;
-    cudnnTensorDescriptor_t hyDesc, cyDesc;
+    // Owned: 2*seq_length + 4 descriptors, and every cuDNN call below throws
+    // on failure. Hand-written Destroys at the bottom of the function meant an
+    // error released none of them.
+    CudnnTensorDescriptorArray xDesc(seq_length), yDesc(seq_length);
+    CudnnTensorDescriptor hxDesc, cxDesc, hyDesc, cyDesc;
 
     for (int i = 0; i < seq_length; ++i) {
-        checkCudaErrors(cudnnCreateTensorDescriptor(&xDesc[i]));
-        checkCudaErrors(cudnnCreateTensorDescriptor(&yDesc[i]));
         checkCudaErrors(cudnnSetTensorNdDescriptor(xDesc[i], getDataType<Tx>(), 3, in_dims, in_strides));
         checkCudaErrors(cudnnSetTensorNdDescriptor(yDesc[i], getDataType<Ty>(), 3, out_dims, out_strides));
     }
-
-    checkCudaErrors(cudnnCreateTensorDescriptor(&hxDesc));
-    checkCudaErrors(cudnnCreateTensorDescriptor(&cxDesc));
-    checkCudaErrors(cudnnCreateTensorDescriptor(&hyDesc));
-    checkCudaErrors(cudnnCreateTensorDescriptor(&cyDesc));
 
     checkCudaErrors(cudnnSetTensorNdDescriptor(hxDesc, getDataType<Tx>(), 3, hidden_dims, hidden_strides));
     checkCudaErrors(cudnnSetTensorNdDescriptor(cxDesc, getDataType<Tx>(), 3, hidden_dims, hidden_strides));
@@ -183,13 +178,9 @@ void CudnnRnnOp::jit_run() {
     RnnDescriptor rnn_desc(cudnn_handle, mode, hidden_size, num_layers, dropout,
         bidirectional, getDataType<Tx>());
 
-    // Was uninitialized when work_space_size == 0, and the free below is
-    // unconditional: a garbage pointer handed to the allocator.
-    void *work_space = nullptr;
-    size_t work_space_size = rnn_desc.work_space_size(xDesc.data(), seq_length);
-    size_t work_space_allocation;
-    if (work_space_size > 0)
-        work_space = exe.temp_allocator->alloc(work_space_size, work_space_allocation);
+    // Was a bare `void*` left uninitialized when the size came back zero, and
+    // freed unconditionally at the bottom.
+    CudnnWorkspace work_space(rnn_desc.work_space_size(xDesc.data(), seq_length));
 
     RnnWeightDescriptor w_desc(w->size, getDataType<Tw>(), sizeof(Tw));
 
@@ -204,7 +195,7 @@ void CudnnRnnOp::jit_run() {
             yDesc.data(), y->ptr<Ty>(),
             hyDesc, hy->ptr<Ty>(),
             cyDesc, mode == "lstm" ? cy->ptr<Ty>() : nullptr,
-            work_space, work_space_size,
+            work_space.ptr, work_space.size,
             reservation->ptr<Tx>(), reservation->size
         ));
     } else {
@@ -218,22 +209,10 @@ void CudnnRnnOp::jit_run() {
             yDesc.data(), y->ptr<Ty>(),
             hyDesc, hy->ptr<Ty>(),
             cyDesc, mode == "lstm" ? cy->ptr<Ty>() : nullptr,
-            work_space, work_space_size
+            work_space.ptr, work_space.size
         ));
     }
 
-    for (int i = 0; i < seq_length; i++) {
-        checkCudaErrors(cudnnDestroyTensorDescriptor(xDesc[i]));
-        checkCudaErrors(cudnnDestroyTensorDescriptor(yDesc[i]));
-    }
-
-    checkCudaErrors(cudnnDestroyTensorDescriptor(hxDesc));
-    checkCudaErrors(cudnnDestroyTensorDescriptor(cxDesc));
-    checkCudaErrors(cudnnDestroyTensorDescriptor(hyDesc));
-    checkCudaErrors(cudnnDestroyTensorDescriptor(cyDesc));
-
-    if (work_space)
-        exe.temp_allocator->free(work_space, work_space_size, work_space_allocation);
 }
 
 #endif

@@ -10,6 +10,7 @@
 #include "mem/allocator.h"
 #include "var.h"
 #include "cudnn_conv_backward_w_op.h"
+#include "cudnn_descriptor.h"
 #include "cudnn_wrapper.h"
 #include "cudnn_conv_plan.h"
 #include "executor.h"
@@ -113,16 +114,8 @@ void CudnnConvBackwardWOp::jit_run() {
     auto y = dy;        
     cudnnHandle_t& handle_ = cudnn_handle;
 
-    cudnnTensorDescriptor_t cudnnIdesc;
-    cudnnFilterDescriptor_t cudnnFdesc;
-    cudnnTensorDescriptor_t cudnnOdesc;
-    cudnnConvolutionDescriptor_t cudnnConvDesc;
-    
-    checkCudaErrors(cudnnCreateTensorDescriptor( &cudnnIdesc ));
-    checkCudaErrors(cudnnCreateFilterDescriptor( &cudnnFdesc ));
-    checkCudaErrors(cudnnCreateTensorDescriptor( &cudnnOdesc ));
-    checkCudaErrors(cudnnCreateConvolutionDescriptor( &cudnnConvDesc ));
-
+    // Integer arithmetic on Var shapes down to the backend fast path; the
+    // legacy descriptors are built below, only if the fallback needs them.
     int dimX[] = {
         (int)x->shape[findc("@XFORMAT", 'a')], // n
         (int)x->shape[findc("@XFORMAT", 'b')], // c
@@ -137,12 +130,6 @@ void CudnnConvBackwardWOp::jit_run() {
         _strideX[findc("@XFORMAT", 'c')], // h
         _strideX[findc("@XFORMAT", 'd')], // w
     };
-    // dimX: nchw
-    checkCudaErrors(cudnnSetTensorNdDescriptor(
-        cudnnIdesc, getDataType<Tx>(),
-        4, dimX, strideX
-    ));
-
     auto ws = w->shape;
     // cuDNN takes filter dimensions in KCRS order whatever the memory layout;
     // read them through the layout string, as infer_shape does.
@@ -155,12 +142,6 @@ void CudnnConvBackwardWOp::jit_run() {
     #define filterFormat_oihw CUDNN_TENSOR_NCHW
     #define filterFormat_ohwi CUDNN_TENSOR_NHWC
 
-    // dimW: KCRS(oihw)
-    checkCudaErrors(cudnnSetFilterNdDescriptor(
-        cudnnFdesc, getDataType<Tw>(),
-        filterFormat_@WFORMAT, 4, dimW
-    ));
-
     int padA[] = {paddingh, paddingw};
     int convstrideA[] = {strideh, stridew};
     int dilationA[] = {dilationh, dilationw};
@@ -169,14 +150,6 @@ void CudnnConvBackwardWOp::jit_run() {
     // is the kernel rc order
     // currently, No perf difference is observed between
     // this two mode
-    checkCudaErrors(cudnnSetConvolutionNdDescriptor(
-        cudnnConvDesc, /*convDim=*/2,
-        padA, convstrideA, dilationA,
-        CUDNN_CROSS_CORRELATION, getDataType<Ty>()
-    ));
-    // MIOpen requires groups to be set after descriptor initialization
-    checkCudaErrors(cudnnSetConvolutionGroupCount( cudnnConvDesc, groups ));
-
     int conv_math_key = 0;
 #ifndef IS_ROCM
     bool fp32_conv = x->dtype() == ns_float32
@@ -189,7 +162,6 @@ void CudnnConvBackwardWOp::jit_run() {
         conv_math_type = CUDNN_FMA_MATH;
 #endif
     }
-    checkCudaErrors(cudnnSetConvolutionMathType(cudnnConvDesc, conv_math_type));
     conv_math_key = static_cast<int>(conv_math_type);
 #endif
 
@@ -207,10 +179,6 @@ void CudnnConvBackwardWOp::jit_run() {
         _strideY[findc("@YFORMAT", 'c')], // h
         _strideY[findc("@YFORMAT", 'd')], // w
     };
-    checkCudaErrors(cudnnSetTensorNdDescriptor(
-        cudnnOdesc, getDataType<Ty>(),
-        4, dimY, strideY
-    ));
 
 #ifndef IS_ROCM
     {
@@ -231,13 +199,30 @@ void CudnnConvBackwardWOp::jit_run() {
         req.allow_tf32 = conv_math_type == CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION;
         req.benchmark = cudnn_benchmark != 0;
         if (cudnn_conv_backend_run(req, x->ptr<Tx>(), w->ptr<Tw>(), y->ptr<Ty>())) {
-            checkCudaErrors(cudnnDestroyTensorDescriptor( cudnnIdesc ));
-            checkCudaErrors(cudnnDestroyFilterDescriptor( cudnnFdesc ));
-            checkCudaErrors(cudnnDestroyTensorDescriptor( cudnnOdesc ));
-            checkCudaErrors(cudnnDestroyConvolutionDescriptor( cudnnConvDesc ));
             return;
         }
     }
+#endif
+
+    // ---- legacy cuDNN API fallback: from here on descriptors are needed ----
+    CudnnTensorDescriptor cudnnIdesc;
+    CudnnFilterDescriptor cudnnFdesc;
+    CudnnTensorDescriptor cudnnOdesc;
+    CudnnConvolutionDescriptor cudnnConvDesc;
+
+    checkCudaErrors(cudnnSetTensorNdDescriptor(
+        cudnnIdesc, getDataType<Tx>(), 4, dimX, strideX));
+    checkCudaErrors(cudnnSetFilterNdDescriptor(
+        cudnnFdesc, getDataType<Tw>(), filterFormat_@WFORMAT, 4, dimW));
+    checkCudaErrors(cudnnSetTensorNdDescriptor(
+        cudnnOdesc, getDataType<Ty>(), 4, dimY, strideY));
+    checkCudaErrors(cudnnSetConvolutionNdDescriptor(
+        cudnnConvDesc, /*convDim=*/2, padA, convstrideA, dilationA,
+        CUDNN_CROSS_CORRELATION, getDataType<Ty>()));
+    // MIOpen requires groups to be set after descriptor initialization
+    checkCudaErrors(cudnnSetConvolutionGroupCount( cudnnConvDesc, groups ));
+#ifndef IS_ROCM
+    checkCudaErrors(cudnnSetConvolutionMathType(cudnnConvDesc, conv_math_type));
 #endif
     cudnnConvolutionBwdFilterAlgo_t algos[] = {
         CUDNN_CONVOLUTION_BWD_FILTER_ALGO_0,
@@ -273,8 +258,7 @@ void CudnnConvBackwardWOp::jit_run() {
                 if (sz > mem_info.total_cuda_ram * max_workspace_ratio) continue;
                 if (CUDNN_STATUS_SUCCESS == ret && sz > max_ws_size) max_ws_size = sz;
             } 
-            size_t allocation;
-            void* ws = exe.temp_allocator->alloc(max_ws_size, allocation);
+            CudnnWorkspace search_ws(max_ws_size);
             checkCudaErrors(cudnnFindConvolutionBackwardFilterAlgorithmEx(
                 handle_,
                 cudnnIdesc, x->ptr<Tx>(),
@@ -284,9 +268,8 @@ void CudnnConvBackwardWOp::jit_run() {
                 num_algos,
                 &perf_count,
                 perf_results,
-                ws,
-                max_ws_size));
-            exe.temp_allocator->free(ws, max_ws_size, allocation);
+                search_ws.ptr,
+                search_ws.size));
         } else {
             checkCudaErrors(cudnnGetConvolutionBackwardFilterAlgorithm_v7(
                 handle_,
@@ -321,15 +304,11 @@ void CudnnConvBackwardWOp::jit_run() {
     }
 
     // TODO: warp work space
-    void *workSpace = 0;
     size_t workSpaceSize;
     checkCudaErrors (cudnnGetConvolutionBackwardFilterWorkspaceSize(
         handle_, cudnnIdesc, cudnnOdesc, cudnnConvDesc, 
         cudnnFdesc, algo, &workSpaceSize));
-    size_t allocation;
-    if (workSpaceSize > 0) {
-        workSpace = exe.temp_allocator->alloc(workSpaceSize, allocation);
-    }
+    CudnnWorkspace workSpace(workSpaceSize);
     float alpha=1, beta=0;
     checkCudaErrors(cudnnConvolutionBackwardFilter(
         handle_,
@@ -338,17 +317,10 @@ void CudnnConvBackwardWOp::jit_run() {
         cudnnOdesc, y->ptr<Ty>(),
         cudnnConvDesc,
         algo,
-        workSpace, workSpaceSize,
+        workSpace.ptr, workSpace.size,
         (void*)(&beta),
         cudnnFdesc,  w->ptr<Tw>())
     );
-    if (workSpace)
-        exe.temp_allocator->free(workSpace, workSpaceSize, allocation);
-        
-    checkCudaErrors(cudnnDestroyTensorDescriptor( cudnnIdesc ));
-    checkCudaErrors(cudnnDestroyFilterDescriptor( cudnnFdesc ));
-    checkCudaErrors(cudnnDestroyTensorDescriptor( cudnnOdesc ));
-    checkCudaErrors(cudnnDestroyConvolutionDescriptor( cudnnConvDesc ));
 }
 #endif
 #endif // JIT

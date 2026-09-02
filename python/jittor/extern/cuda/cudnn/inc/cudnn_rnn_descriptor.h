@@ -8,6 +8,7 @@
 #pragma once
 #include "op.h"
 #include "cudnn_wrapper.h"
+#include "cudnn_descriptor.h"
 #include "executor.h"
 #include "init.h"
 
@@ -180,18 +181,18 @@ struct RnnDescriptor {
 /** 
  */
 struct RnnWeightDescriptor {
+    // Ownership comes from CudnnFilterDescriptor; this type only adds the
+    // shape. `desc` stays a public member so call sites read unchanged.
+    CudnnFilterDescriptor filter;
     cudnnFilterDescriptor_t desc;
     size_t size;
     // `size` is in bytes; the filter's extent is in elements, so it depends on
     // the weight dtype. Both were fixed at fp32, which described a half weight
     // buffer as twice as many fp32 values as it holds.
-    RnnWeightDescriptor(size_t size, cudnnDataType_t dataType, int elem_size) : size(size) {
+    RnnWeightDescriptor(size_t size, cudnnDataType_t dataType, int elem_size)
+        : desc(filter.desc), size(size) {
         int dimW[3] = {(int) (size / elem_size), 1, 1};
-        checkCudaErrors(cudnnCreateFilterDescriptor(&desc));
         checkCudaErrors(cudnnSetFilterNdDescriptor(desc, dataType, CUDNN_TENSOR_NCHW, 3, dimW));
-    }
-    ~RnnWeightDescriptor() {
-        peekCudaErrorsAlways(cudnnDestroyFilterDescriptor(desc));
     }
 
     RnnWeightDescriptor(const RnnWeightDescriptor&) = delete;

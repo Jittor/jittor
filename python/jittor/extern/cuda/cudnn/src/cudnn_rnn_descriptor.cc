@@ -9,6 +9,7 @@
 #include <unordered_map>
 
 #include "cudnn_rnn_descriptor.h"
+#include "cudnn_descriptor.h"
 #include "misc/cuda_flags.h"
 
 namespace jittor {
@@ -102,24 +103,12 @@ size_t cudnn_rnn_reserve_space_size(string mode, int input_size, int hidden_size
     int in_dims[3] = {batch_size, input_size, 1};
     int in_strides[3] = {in_dims[1] * in_dims[2], in_dims[2], 1};
 
-    vector<cudnnTensorDescriptor_t> xDesc(seq_length, nullptr);
-    size_t size = 0;
-    // The query can throw (checkCudaErrors); the descriptors are destroyed on
-    // the way out either way.
-    try {
-        for (int i = 0; i < seq_length; ++i) {
-            checkCudaErrors(cudnnCreateTensorDescriptor(&xDesc[i]));
-            checkCudaErrors(cudnnSetTensorNdDescriptor(xDesc[i], dtype, 3, in_dims, in_strides));
-        }
-        RnnDescriptor rnn_desc(cudnn_handle, mode, hidden_size, num_layers, dropout, bidirectional, dtype);
-        size = rnn_desc.reserve_space_size(xDesc.data(), seq_length);
-    } catch (...) {
-        for (auto d : xDesc)
-            if (d) peekCudaErrorsAlways(cudnnDestroyTensorDescriptor(d));
-        throw;
-    }
-    for (auto d : xDesc)
-        if (d) checkCudaErrors(cudnnDestroyTensorDescriptor(d));
+    // Owned: the query throws on failure and the descriptors go either way.
+    CudnnTensorDescriptorArray xDesc(seq_length);
+    for (int i = 0; i < seq_length; ++i)
+        checkCudaErrors(cudnnSetTensorNdDescriptor(xDesc[i], dtype, 3, in_dims, in_strides));
+    RnnDescriptor rnn_desc(cudnn_handle, mode, hidden_size, num_layers, dropout, bidirectional, dtype);
+    size_t size = rnn_desc.reserve_space_size(xDesc.data(), seq_length);
 
     rnn_reserve_cache[key] = size;
     // Readable proof that this is a cache miss and not a per-step query; see
@@ -140,8 +129,7 @@ vector<int32_t> cudnn_rnn_weight_offset(string mode, int input_size, int hidden_
     // A pseudo mini-batch for fetching weight space size.
     int dimX[] = {1, input_size, 1};
     int strideX[] = {input_size, 1, 1};
-    cudnnTensorDescriptor_t xDesc;
-    checkCudaErrors(cudnnCreateTensorDescriptor(&xDesc));
+    CudnnTensorDescriptor xDesc;
     checkCudaErrors(cudnnSetTensorNdDescriptor(xDesc, data_type, 3, dimX, strideX));
 
     RnnDescriptor rnn_desc(cudnn_handle, mode, hidden_size, num_layers, 0, bidirectional, data_type);
@@ -156,15 +144,12 @@ vector<int32_t> cudnn_rnn_weight_offset(string mode, int input_size, int hidden_
     
     for (int layer = 0; layer < num_layers * num_directions; layer++) {
         for (int linLayerID = 0; linLayerID < num_linear_layers; linLayerID++) {
-            cudnnFilterDescriptor_t linLayerMatDesc;
-            cudnnFilterDescriptor_t linLayerBiasDesc;
+            // Owned per iteration; they used to leak two filter descriptors
+            // per linear layer per query.
+            CudnnFilterDescriptor linLayerMatDesc;
+            CudnnFilterDescriptor linLayerBiasDesc;
             char *linLayerMat = nullptr;
             char *linLayerBias = nullptr;
-
-            checkCudaErrors(cudnnCreateFilterDescriptor(&linLayerMatDesc));
-            checkCudaErrors(cudnnCreateFilterDescriptor(&linLayerBiasDesc));
-            // Destroyed at the end of this iteration; they used to leak two
-            // filter descriptors per linear layer per query.
 
             checkCudaErrors(cudnnGetRNNLinLayerMatrixParams(
                 cudnn_handle, rnn_desc.desc,
@@ -194,12 +179,8 @@ vector<int32_t> cudnn_rnn_weight_offset(string mode, int input_size, int hidden_
                 weight_offsets.push_back((int)((linLayerBias - (char *) nullptr) / elem_size));
             }
 
-            checkCudaErrors(cudnnDestroyFilterDescriptor(linLayerMatDesc));
-            checkCudaErrors(cudnnDestroyFilterDescriptor(linLayerBiasDesc));
         }
     }
-
-    checkCudaErrors(cudnnDestroyTensorDescriptor(xDesc));
 
     return weight_offsets;
 }
