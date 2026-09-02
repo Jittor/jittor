@@ -32,7 +32,7 @@ import jittor as jt
 from _helpers import common as cu
 from _helpers.common import JittorTestCase, to_numpy, float64
 from _helpers.device_types import (
-    instantiate_device_type_tests, ops, OpDTypes, onlyCPU,
+    instantiate_device_type_tests, ops, OpDTypes,
 )
 from opinfo.database import op_db
 from _helpers.gradcheck import gradcheck, gradgradcheck, GradcheckError
@@ -77,9 +77,15 @@ class TestCommon(JittorTestCase):
 
 
 class TestGradients(JittorTestCase):
-    """Backward correctness via gradcheck/gradgradcheck (float64, CPU)."""
+    """Backward correctness via gradcheck/gradgradcheck (float64, CPU).
 
-    @onlyCPU
+    The CPU pin lives on the ``instantiate_device_type_tests`` call below, not on
+    the individual methods. A per-method ``@onlyCPU`` only filters methods out of
+    whatever classes the *session* asked for, so under ``JITTOR_TEST_DEVICES=cuda``
+    it produced an empty ``TestGradientsCUDA`` and no CPU class at all -- zero
+    backward cases, reported green.
+    """
+
     @ops(op_db, dtypes=OpDTypes.none)
     def test_gradcheck(self, device, dtype, op):
         if not op.supports_autograd:
@@ -108,7 +114,6 @@ class TestGradients(JittorTestCase):
         if ran == 0:
             self.skipTest(f"{op.full_name}: no differentiable samples")
 
-    @onlyCPU
     @ops(op_db, dtypes=OpDTypes.none)
     def test_gradgradcheck(self, device, dtype, op):
         if not op.supports_autograd or not op.supports_gradgrad:
@@ -139,7 +144,12 @@ class TestGradients(JittorTestCase):
 
 
 instantiate_device_type_tests(TestCommon, globals())
-instantiate_device_type_tests(TestGradients, globals())
+# gradcheck compares a float64 numerical Jacobian against the analytical one; the
+# derivative formula it checks is device-independent, and float64 is the only
+# precision in which the comparison is meaningful. Pinning it to CPU here (rather
+# than per method) is what makes it survive an accelerator session's device
+# selection instead of vanishing into an empty class.
+instantiate_device_type_tests(TestGradients, globals(), only_for=("cpu",))
 
 
 if __name__ == "__main__":

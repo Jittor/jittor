@@ -159,6 +159,12 @@ CPU_TESTS = (
     "tests/nn/test_attention.py",
     "tests/nn/test_depthwise_conv.py",
     "tests/nn/test_nn_capabilities.py",
+    "tests/ops/test_device_type_harness.py",
+    # The OpInfo registry's two batteries: forward against numpy, backward via
+    # gradcheck. The gradcheck half is pinned to CPU, so this is the only gate
+    # that can run it -- without this entry the derivative formulas of every
+    # registered operator are verified nowhere.
+    "tests/ops/test_ops.py",
     "tests/ops/test_reduce_op.py",
     "tests/core/test_array.py::TestArray::test_array_dtype",
     "tests/optim/test_opt_state_dict.py",

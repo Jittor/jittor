@@ -54,15 +54,18 @@ class NPUTestBase(DeviceTypeTestBase):
     use_cuda = 1
 
 
-def _device_bases():
-    bases = {"cpu": CPUTestBase}
-    if cu.HAS_ACL:
-        bases["npu"] = NPUTestBase
-    elif cu.HAS_CUDA:
-        bases["cuda"] = CUDATestBase
-    # honor JITTOR_TEST_DEVICES filter
-    avail = set(cu.get_all_device_types())
-    return {d: b for d, b in bases.items() if d in avail}
+#: The base class for every label in :data:`common.KNOWN_DEVICE_TYPES`.
+_BASE_FOR_DEVICE = {
+    "cpu": CPUTestBase,
+    "cuda": CUDATestBase,
+    "npu": NPUTestBase,
+}
+
+
+def _buildable_bases():
+    """Bases this build can actually execute (``cpu`` always, plus one accelerator)."""
+    return {d: _BASE_FOR_DEVICE[d] for d in cu.buildable_device_types()
+            if d in _BASE_FOR_DEVICE}
 
 
 # ----------------------------------------------------------------- dtype policy
@@ -188,26 +191,76 @@ def _wrap_device_skips(fn, method, device_type):
     return method
 
 
+def _install_unselected_placeholder(scope, stem, pinned, selected):
+    """Register one visibly-skipped case for a battery this session cannot run.
+
+    Registering nothing is what let a whole battery disappear without a trace:
+    pytest reports "0 selected" for an empty module the same way it reports a
+    green run. One skipped case with the reason spelled out keeps the deselection
+    in the log, where a gate summary can count it.
+    """
+    if pinned:
+        reason = ("device pin %s is not in this session's selection %s "
+                  "(JITTOR_TEST_DEVICES)" % (sorted(pinned), sorted(selected)))
+    else:
+        reason = ("device pin matches no device this build supports %s"
+                  % (sorted(cu.buildable_device_types()),))
+
+    def test_device_selection_left_this_battery_unrun(self):
+        self.skipTest("Test%s: %s" % (stem, reason))
+
+    cls_name = "Test%sUnselected" % stem
+    scope[cls_name] = type(cls_name, (unittest.TestCase,), {
+        "__doc__": "Placeholder: Test%s is not runnable in this session." % stem,
+        test_device_selection_left_this_battery_unrun.__name__:
+            test_device_selection_left_this_battery_unrun,
+    })
+
+
 def instantiate_device_type_tests(generic_cls, scope, *, only_for=None, except_for=None):
     """Expand ``generic_cls`` into per-device classes, registered into ``scope``.
 
     ``scope`` is the caller's ``globals()``; the generated classes (e.g.
     ``TestOpsCPU``) are inserted there so unittest/pytest discover them, and the
     abstract template is removed so it is not collected on its own.
-    """
-    bases = _device_bases()
-    if only_for:
-        bases = {d: b for d, b in bases.items() if d in set(only_for)}
-    if except_for:
-        bases = {d: b for d, b in bases.items() if d not in set(except_for)}
 
+    Two filters apply, and they are deliberately kept apart:
+
+    ``only_for`` / ``except_for``
+        the *author's* pin -- the devices on which this battery is meaningful at
+        all. A CPU-only numerical battery (gradcheck in float64) says
+        ``only_for=("cpu",)``.
+    ``JITTOR_TEST_DEVICES``
+        the *runner's* selection -- which devices this gate is exercising.
+
+    Collapsing the two is what emptied the backward gate: ``TestGradients`` was
+    pinned to CPU with per-method ``@onlyCPU``, the CUDA gate selected only
+    ``cuda``, so the only class generated was ``TestGradientsCUDA`` -- from which
+    every ``@onlyCPU`` method was then filtered out. An empty class collects as
+    zero cases and reports as a pass, so 227 operators' derivative formulas were
+    verified nowhere while the gate stayed green.
+    """
     generic_name = generic_cls.__name__
     assert generic_name.startswith("Test"), "template class name must start with 'Test'"
     stem = generic_name[len("Test"):]
 
+    pinned = _buildable_bases()
+    if only_for:
+        pinned = {d: b for d, b in pinned.items() if d in set(only_for)}
+    if except_for:
+        pinned = {d: b for d, b in pinned.items() if d not in set(except_for)}
+
+    selected = set(cu.get_all_device_types())
+    bases = {d: b for d, b in pinned.items() if d in selected}
+
     # collect the template's test methods (functions named test*)
     members = {n: getattr(generic_cls, n) for n in dir(generic_cls)
                if n.startswith("test") and callable(getattr(generic_cls, n))}
+
+    if not bases:
+        _install_unselected_placeholder(scope, stem, pinned, selected)
+        scope.pop(generic_name, None)
+        return
 
     for device_type, base in bases.items():
         cls_name = f"Test{stem}{device_type.upper()}"

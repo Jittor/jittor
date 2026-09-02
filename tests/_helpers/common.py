@@ -37,19 +37,46 @@ import jittor as jt
 # build that same flag drives ACL, so ``has_acl`` is the only honest CUDA-vs-NPU
 # discriminator. A jittor build targets exactly one accelerator.
 HAS_ACL = bool(getattr(jt.compiler, "has_acl", 0))
+HAS_ROCM = bool(getattr(jt.compiler, "has_rocm", 0))
 HAS_CUDA = bool(jt.has_cuda)
 
+#: Every device label this harness knows how to run a test on. It is the single
+#: enumeration ``JITTOR_TEST_DEVICES``, the ``only_for``/``except_for`` pins and
+#: ``device_types._BASE_FOR_DEVICE`` are all checked against.
+KNOWN_DEVICE_TYPES = ("cpu", "cuda", "rocm", "npu")
 
-def get_all_device_types():
-    """Device labels this build can actually run (``cpu`` always; one accelerator)."""
+
+def buildable_device_types():
+    """Device labels this build can actually execute: ``cpu`` always, plus one accelerator.
+
+    Ordered the way :func:`jittor.selftest._backend_name` orders it -- a ROCm build
+    compiles with ``-DHAS_CUDA``, so ``has_rocm`` has to be consulted before
+    ``has_cuda`` or an AMD box would label itself ``cuda``.
+    """
     devs = ["cpu"]
     if HAS_ACL:
         devs.append("npu")
+    elif HAS_ROCM:
+        devs.append("rocm")
     elif HAS_CUDA:
         devs.append("cuda")
-    only = os.environ.get("JITTOR_TEST_DEVICES")
-    if only:
-        want = {s.strip() for s in only.split(",") if s.strip()}
+    return tuple(devs)
+
+
+def selected_device_types():
+    """The runner's ``JITTOR_TEST_DEVICES`` selection, or ``None`` when it is unset.
+
+    """
+    raw = os.environ.get("JITTOR_TEST_DEVICES", "")
+    want = tuple(part.strip() for part in raw.split(",") if part.strip())
+    return want or None
+
+
+def get_all_device_types():
+    """Device labels to run on: what this build supports, narrowed by the runner."""
+    devs = list(buildable_device_types())
+    want = selected_device_types()
+    if want is not None:
         devs = [d for d in devs if d in want]
     return devs
 
