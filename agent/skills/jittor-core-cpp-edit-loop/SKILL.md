@@ -1,6 +1,6 @@
 ---
 name: jittor-core-cpp-edit-loop
-description: 改 python/jittor/src 下 C++ 核心时的编辑—重编—验证循环。包含隔离缓存与解释器选树的自检、把重编从 ~10 分钟压到 ~30 秒的 CPU-only 循环、每次 C++ 改动后第一次 pytest 必然失败的"jit_utils updated"陷阱，以及"读到未初始化字节"这类静默错值的复现判据。
+description: 改 python/jittor/src 下 C++ 核心时的编辑—重编—验证循环。包含隔离缓存与解释器选树的自检、把重编从 ~10 分钟压到 ~30 秒的 CPU-only 循环、每次 C++ 改动后第一次 pytest 必然失败的"jit_utils updated"陷阱、"读到未初始化字节"这类静默错值的复现判据，以及怎么给 UB 类改动找到可达后果、并在禁止 git stash 的前提下跑出「修前失败」那一轮。
 ---
 
 # 改 Jittor C++ 核心的验证循环
@@ -132,3 +132,52 @@ dump 脚本按分区放在自己的 `$TMPDIR` 下，不要提交；把 diff 摘�
 
 这类发现**比修复本身值钱**，务必写进提交说明：写清依赖的前提、今天由谁兜底、
 以及你的改动是消除了这个依赖还是只是搬了个位置。
+
+## 7. 给 UB 和「只是不该这么写」的改动写修前失败的测试
+
+整改里有一类任务没有错的返回值可断言：字段被类型双关、`std::next(end())`、setter 与赋值的
+顺序。**不要试图直接观测 UB**——它按定义没有稳定表现，写出来的断言换个编译器就翻。
+做法是找**同一个缺陷的可达后果**：先问「这个缺陷让代码没法做到什么」，再从那里找必然的失败。
+
+| 缺陷形态 | 直接观测 | 可达后果（拿它写用例） |
+| --- | --- | --- |
+| 字段被类型双关（`Var::allocator` 里存 `Var*`） | 对 Var 发虚调用，行为不定 | 双关让 `alloc` **没法**问「源 var 分配过没有」，于是 `x->allocator->share_with(...)` 是空指针虚调用。`b.share_with(a)` 而 a 从没执行过 → 必然段错误，`gdb` 栈顶就是 `Var::alloc` |
+| 迭代器 `std::next(end())` | libstdc++ 绕回 `begin()`，"看起来没事" | `sync_ptr` 变成 `begin()` → `top_weak_sync` 第一行就 break → weak sync 从此静默不工作。判据用 `jt.number_of_lived_ops()`（是函数不是属性），**两个子进程跑同一个探针**（触发/不触发各一次）比大小，比断言绝对值稳 |
+| setter 在赋值之前跑 | 每个 setter 自己回写，行为看着正确 | 找**旧顺序真的把 setter 的工作抹掉**的那一处：`setter_use_cuda` 无设备时把值回退成 0，紧接着的 `name = value` 又把 1 写回去 |
+| 环境变量解析静默回退 | 有一句 warning | warning 是 'w' 级，`log_silent=1` 时被 `send_log` 吞掉：`log_v="1 " log_silent=1` 下**一个字都不打**，flag 还是 0。断言"什么都没打印" |
+
+三条里有两条的可达后果是**进程级崩溃或静默失效**，所以这类用例一律 `subprocess.run`
+起子进程断言退出码与输出，并显式传 `PYTHONPATH=<worktree>/python`（见 §1）。
+
+如果确实找不到可达后果（纯可维护性重构），**在提交说明里直说**，用往返用例把契约钉住，
+不要编一个看着像回归测试的空断言。
+
+## 8. 怎么跑出「修前失败」这一轮（禁止 `git stash`）
+
+C++ 改动没有开关可切，只能真的拿旧代码编一次。两种做法，按代价选：
+
+**A. 换回文件重编**（同一个缓存，适合改动只在一两个文件里）
+
+```bash
+cp python/jittor/src/xxx.cc $SCRATCH/xxx.cc.fixed      # 先存好，别只靠 git
+git checkout -- python/jittor/src/xxx.cc
+<跑用例，记录失败输出>
+cp $SCRATCH/xxx.cc.fixed python/jittor/src/xxx.cc      # 换回来
+```
+
+**B. 拿一棵干净的源码树另建一个缓存**（不动自己的工作树，可以在别的任务跑着的时候做）
+
+```bash
+git archive HEAD | tar -x -C $SCRATCH/pristine          # HEAD = 改动之前的状态
+PYTHONPATH=$SCRATCH/pristine/python \
+JITTOR_HOME=$SCRATCH/pristine_home TMPDIR=$SCRATCH/pristine_tmp \
+nvcc_path="" python $SCRATCH/probe.py                   # CPU-only：整棵树 86MB，冷编约 1 分钟
+```
+
+B 的好处：**工作树一直是修好的状态**，不用来回换文件，也不会跟正在跑的长测试打架；
+CPU-only 缓存小得多。前提是复现路径与 CUDA 无关——`Var::alloc` 的空指针、weak sync、
+环境变量解析都满足，`setter_use_cuda` 的回退不满足（要 `HAS_CUDA`），那一条只能用 A，
+或者在应用该任务的补丁**之前**先在当前构建上跑一次探针。
+
+两种做法都要记得：换过源码之后第一次 pytest 必然吃一个 "jit_utils updated"（见 §4），
+要原样重跑一遍。
