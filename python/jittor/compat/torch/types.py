@@ -5,6 +5,7 @@ import types as _python_types
 import typing
 
 import jittor as jt
+from ..diagnostics import EXPECTED, swallowed
 
 _NATIVE_DTYPE_CONVERTERS = {}
 
@@ -207,7 +208,9 @@ class device:
                 self._prev_index = int(jt.current_device())
                 if self._prev_index != int(self.index):
                     jt.set_device(int(self.index))
-            except Exception:
+            except EXPECTED as exc:
+                swallowed("types.py device.__enter__: switch to %s" % (self,), exc,
+                          "the block runs on the current device instead")
                 self._prev_index = None
         return self
 
@@ -219,8 +222,9 @@ class device:
             try:
                 if int(jt.current_device()) != prev:
                     jt.set_device(prev)
-            except Exception:
-                pass
+            except EXPECTED as exc:
+                swallowed("types.py device.__exit__: restore device %r" % (prev,),
+                          exc, "the block's device stays current after the block")
             self._prev_index = None
         return False
 
@@ -357,7 +361,9 @@ def _move_to_cuda_index(v, dev, default_index=None):
         return v
     try:
         current = int(v.device_id)
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("types.py _move_to_cuda_index: current = int(v.device_id)", exc,
+                  "the Var is left where it is instead of being moved")
         return v
     if current < 0 or current == idx:
         return v
@@ -376,11 +382,12 @@ def _var_is_cpu_resident(v):
             return True
         if getattr(v, "_jittor_torch_force_cuda", False):
             return False
-    except Exception:
-        pass
+    except (AttributeError, TypeError) as exc:
+        swallowed("torch/types.py _var_is_cpu_resident: if getattr(v, '_jittor_torch_force_cpu', False):", exc)
     try:
         loc = v.location()
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("torch/types.py _var_is_cpu_resident: loc = v.location()", exc)
         return False
     if loc == "cpu":
         return True
@@ -393,7 +400,8 @@ def _var_is_cpu_resident(v):
 def _var_has_cpu_residency_hint(v):
     try:
         return bool(getattr(v, "_jittor_torch_force_cpu", False))
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("torch/types.py _var_has_cpu_residency_hint: return bool(getattr(v, '_jittor_torch_force_cpu', False))", exc)
         return False
 
 
@@ -419,22 +427,27 @@ def _make_cpu_resident(v, inplace=False):
             out.migrate_to_cpu()
             try:
                 out._jittor_torch_force_cpu = True
-            except Exception:
-                pass
+            except (AttributeError, TypeError) as exc:
+                swallowed("torch/types.py _make_cpu_resident: out._jittor_torch_force_cpu = True", exc,
+                          "the Var will report residency from the global use_cuda flag "
+                          "instead of from where it actually lives")
             return out
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("torch/types.py _make_cpu_resident: out = v if inplace else v.clone()", exc)
     try:
         arr = v.clone().numpy()
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("torch/types.py _make_cpu_resident: arr = v.clone().numpy()", exc)
         arr = v.numpy()
     with jt.flag_scope(use_cuda=0):
         out = jt.array(arr)
         out.sync()
     try:
         out._jittor_torch_force_cpu = True
-    except Exception:
-        pass
+    except (AttributeError, TypeError) as exc:
+        swallowed("torch/types.py _make_cpu_resident: out._jittor_torch_force_cpu = True", exc,
+                  "the Var will report residency from the global use_cuda flag "
+                  "instead of from where it actually lives")
     return out
 
 
@@ -451,7 +464,8 @@ def _make_cuda_resident(v, force=False, inplace=False):
     loc = None
     try:
         loc = v.location()
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("torch/types.py _make_cuda_resident: loc = v.location()", exc)
         loc = None
     if loc == "device":
         return v
@@ -467,16 +481,17 @@ def _make_cuda_resident(v, force=False, inplace=False):
             if v.location() == "device":
                 try:
                     v._jittor_torch_force_cpu = False
-                except Exception:
-                    pass
+                except (AttributeError, TypeError) as exc:
+                    swallowed("torch/types.py _make_cuda_resident: v._jittor_torch_force_cpu = False", exc,
+                              "the Var will keep reporting CPU residency after being moved")
                 return v
-    except Exception:
-        pass
+    except EXPECTED as exc:
+        swallowed("torch/types.py _make_cuda_resident: if not getattr(v, '_jittor_torch_force_cpu', False) and...", exc)
     try:
         if not force and v.location() == "device":
             return v
-    except Exception:
-        pass
+    except EXPECTED as exc:
+        swallowed("torch/types.py _make_cuda_resident: if not force and v.location() == 'device':", exc)
     if hasattr(v, "migrate_to_gpu"):
         try:
             # A lazy clone of a CPU Var may migrate the source when global
@@ -488,19 +503,21 @@ def _make_cuda_resident(v, force=False, inplace=False):
             out.migrate_to_gpu()
             try:
                 out._jittor_torch_force_cpu = False
-            except Exception:
-                pass
+            except (AttributeError, TypeError) as exc:
+                swallowed("torch/types.py _make_cuda_resident: out._jittor_torch_force_cpu = False", exc,
+                          "the Var will keep reporting CPU residency after being moved")
             return out
-        except Exception:
-            pass
+        except EXPECTED as exc:
+            swallowed("torch/types.py _make_cuda_resident: if (not inplace) and loc == 'cpu':", exc)
     arr = v.numpy()
     with jt.flag_scope(use_cuda=1):
         out = jt.array(arr)
         out.sync()
     try:
         out._jittor_torch_force_cpu = False
-    except Exception:
-        pass
+    except (AttributeError, TypeError) as exc:
+        swallowed("torch/types.py _make_cuda_resident: out._jittor_torch_force_cpu = False", exc,
+                  "the Var will keep reporting CPU residency after being moved")
     return out
 
 
@@ -515,8 +532,8 @@ def _mark_cpu_like(out, *inputs):
                 if getattr(x, "_jittor_torch_force_cpu", False):
                     out._jittor_torch_force_cpu = True
                     break
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except (AttributeError, TypeError) as exc:
+                swallowed("torch/types.py _mark_cpu_like: if getattr(x, '_jittor_torch_force_cpu', False):", exc)
+    except EXPECTED as exc:
+        swallowed("torch/types.py _mark_cpu_like: if not isinstance(out, jt.Var):", exc)
     return out

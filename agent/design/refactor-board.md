@@ -26,6 +26,8 @@
 | 用例 | 引入提交 | 责任 |
 | --- | --- | --- |
 | `tests/compat/torch/test_torch_compat_interpolate.py::TestInterpolateBicubic::test_bicubic_constant_stays_constant` | `13ac1d14` [6.C05] | coreops，正改成变长编码（原属 3.02） |
+| `tests/compat/torch/test_torch_compat_autograd.py::TestCustomFunctionCompatibility::test_torch_style_function_keeps_context_and_broadcast_grad`、`test_torch_compat_autograd_semantics.py::TestSavedTensorVersions` 两条 | `5c4e624b` [5.07] | autograd。**已实测确认**：把工作区还原到 `origin/2.0-refactor` 干净树（`git diff > .patch` + `git checkout --`，不用 stash）后三条同样失败，与其他分区改动无关。一次性上下文使 `execute` 里写在 `self` 上的属性（`self.seen_needs_input_grad`）不再留在用户持有的实例上 |
+| `tests/structure/test_pytest_contract.py::test_test_modules_avoid_collection_time_backend_side_effects` | `93b48a8e` [4.02 3/3] | 4.02。`tests/backends/cuda/test_device_copy.py:44`、`tests/backends/cuda/test_multi_device.py:34,35`、`tests/compat/torch/test_multi_device.py:37,38` 在**模块体**里调本地 helper `_device_count()`，收集期就去问设备数。改法：挪进 fixture，或用可调用形式的 `skipIf` |
 
 （`test_runtime_composition_structure.py::test_moved_scope_state_stays_synchronized_with_the_root`
 已由 `90fc2f0b` 修复并移出本表：2026-09-03 复测 `JITTOR_TORCH_SHIM=1` 下该文件 13 passed。）
@@ -351,7 +353,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 7.03 | 每个 torch API 一个模块级一等对象加保真度标注 | 待领 | | |
 | 7.04 | 激活显式、一次性、可查询 | 待领 | | |
 | 7.05 | install 事务化 | 待领 | | |
-| 7.06 | 依赖单向化 core→tensor→nn/optim→distributed→fsdp→适配器 | 待领 | | |
+| 7.06 | 依赖单向化 core→tensor→nn/optim→distributed→fsdp→适配器 | 已合并 | 兼容层分区 | 27c4bdeb |
 | 7.07 | 第三方库补丁搬出 compat/ | 待领 | | |
 | 7.08 | `torch.dtype` 改真正的对象而非 str 子类 | 待领 | | |
 | 7.09 | `torch.library` | 进行中 | 兼容层分区 | |
@@ -359,10 +361,10 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 7.11 | autograd 语义 | 进行中 | 兼容层分区 | |
 | 7.12 | 独立 torch 包 | 待领 | | |
 | 7.13 | FSDP2 | 待领 | | |
-| 7.14 | vLLM 边界检查把 `torch` 视作 jittor 别名 | 进行中 | 兼容层分区 | |
+| 7.14 | vLLM 边界检查把 `torch` 视作 jittor 别名 | 已合并 | 兼容层分区 | 178be65a |
 | 7.15 | `_rebuild_tensor_v2` 按 stride 还原或报错 | 已合并 | | 7e7877c8 |
-| 7.16 | compat/ 内 129 个 `except: pass` 与 258 个宽泛 except … | 进行中 | 兼容层分区 | |
-| 7.17 | `runtime.enable()` 只把 shim 的 site 目录加进 sys.path … | 进行中 | 兼容层分区 | |
+| 7.16 | compat/ 内 129 个 `except: pass` 与 258 个宽泛 except … | 已合并 | 兼容层分区 | 72dbc22d（+ 一次修复：`93b48a8e` [4.02 3/3] rebase 时把 cuda.py/types.py 整段解回 7.16 之前，`swallowed()` 24→0、16→0，全树违规回到 47 条；已用三方合并恢复，见提交说明） |
+| 7.17 | `runtime.enable()` 只把 shim 的 site 目录加进 sys.path … | 已合并 | 兼容层分区 | d5c769fb |
 | 7.18 | 布局收尾 | 待领 | | |
 | 8.01 | 描述符与 workspace 一律 RAII | 已合并 | cudabk | afb08e88 |
 | 8.02 | 集合通信走通信流加事件依赖，支持 `GroupStart/End` 桶化 | 待领 | | |

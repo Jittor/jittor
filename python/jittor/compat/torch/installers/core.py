@@ -571,7 +571,10 @@ def install_misc(ctx):
             return g.device("cpu")
         try:
             index = int(jt.current_device())
-        except Exception:
+        except EXPECTED as exc:
+            swallowed("torch/installers/core.py get_default_device: "
+                      "index = int(jt.current_device())", exc,
+                      "reporting cuda:0, which is wrong on any other device")
             index = 0
         return g.device("cuda", index if index >= 0 else 0)
     g.get_default_device = get_default_device
