@@ -16,6 +16,7 @@
 | 构建 | [codebase-audit/04-build-tooling.md](codebase-audit/04-build-tooling.md) | 系统 | [system-design-audit.md](system-design-audit.md)（条目号 A1…F5） |
 | 多后端 | [multi-backend-design.md](multi-backend-design.md) | 多卡 | [device-placement.md](device-placement.md) |
 | 流水 | [pipelined-execution.md](pipelined-execution.md) | 卷积 | [cudnn-convolution-plans.md](cudnn-convolution-plans.md) |
+| 布局 | [target-layout.md](target-layout.md)（目标目录树与每处搬动的理由） | | |
 
 **每个任务的完成定义**（表格里的「验收」列只写该任务特有的部分，下面这些对所有任务生效）：
 
@@ -56,6 +57,9 @@
 6. **分布式改造等设备与流模型。** 通信流、process group、事件依赖都建立在阶段 4 的设备字段
    和流模型之上，先做只会再返工一次。
 7. **删除类任务随时可做**，但先删会让别的 agent 的分支冲突，所以集中在阶段 11 并留到相关重构合并之后。
+8. **目录布局是每个阶段的收尾，不是开头。** 终点在 [目标目录布局](target-layout.md)；每个阶段表格的最后一行
+   「布局收尾」只做 `git mv`、转发模块与结构测试同步，不夹带行为改动。把四份 CUDA kernel 挪进一个目录
+   改不了「有四份」，所以搬动必须等该阶段把代码改成一种形状之后。
 
 ## 2. 已完成，勿重做
 
@@ -94,6 +98,8 @@
 | 0.16 | `test_device_parity.py` 按算子分片并行，不再在 `setUpClass` 关并行编译（`:172`）；目标 CUDA 门禁 < 40 分钟 | 3.06 | [测试](codebase-audit/05-tests.md)§耗时分布 | CUDA 门禁总时长 |
 | 0.17 | `pyproject.toml` 的 `pythonpath` 改由 conftest 按环境变量决定，副本与工作树可用 pytest 验证 | — | 系统 F3；[构建](codebase-audit/04-build-tooling.md)§门禁 | `-o pythonpath` 不再必需 |
 | 0.18 | 门禁每条目断言至少执行 1 个非 skip 用例；`tests/nn/test_attention.py` 与 `test_opt_state_dict.py` 两个恒绿条目处理 | 0.04 | [测试](codebase-audit/05-tests.md)§跳过条件与假绿 | 门禁 summary 含每条目的 passed/skipped |
+| 0.19 | 结构测试从「精确清单」改成「规则」：`test_cleanup_structure.py` 的精确条目集合、`test_nn_structure.py:48-52,170-274` 的逐文件 import 与导出名清单、行数预算（`:1812-1821`）、`test_vllm_compat_structure.py:57-68` 的文件名与 300 行断言全部删除，只保留边界规则（import 方向、公开 API 快照、打包内容、循环依赖）；迁移守卫设过期时间。这是后面每一次目录搬动的前置 | — | [测试](codebase-audit/05-tests.md)§tests/structure 的成本；[架构](codebase-audit/07-architecture.md)§模块边界；系统 E4 | `tests/structure` < 2000 行；挪一个文件不需要改结构测试 |
+| 0.20 | 布局收尾：`agent/` 与 `docs/` 定权威——`agent/design` 并入 `docs/architecture`，`agent/results` 并入 `docs/results`，`agent/` 只留 manuals/skills/scripts；删 `tools/services/legacy`、`tests/system/`；根目录 AWESOME 列表与 asv 配置归 `docs/`、`benchmarks/` | 0.19 | [布局](target-layout.md)§3 | 仓库只有一棵文档树 |
 
 ## 4. 阶段 1 · 还原不可见的核心
 
@@ -103,6 +109,7 @@
 | 1.02 | `op_compiler.cc:30-69` 用正则给 `ParallelPass` 输出打补丁的 `fix_parallel_thread_ranges` 删除，累积逻辑在 pass 的 IR 层修正；`tests/compiler/test_parallel_pass.py:124-129` 改断言 IR 结果 | 1.01 | [核心](codebase-audit/01-core-runtime.md)§补充：代码生成与优化 pass | `:1156` 的子串嗅探消失 |
 | 1.03 | 查明 `SharedReducePass` 在约 4900 个归约 kernel 里零命中的触发条件；修成可用的块内共享内存树形归约或删除（与 `WarpReducePass` 协调：warp 内归约后再做块内归约） | 1.01 | [核心](codebase-audit/01-core-runtime.md)§补充：CUDA 归约 | UNet 那个 `REDUCE_c` kernel 每输出只写一次；生成代码含块内归约 |
 | 1.04 | `ReduceTuner::run` 不再对 CUDA 直接返回（`reduce_tuner.cc:14`）：给 CUDA 归约一套切分与顺序候选，或在注释里写明为何不需要并加测试 | 1.01、1.03 | [核心](codebase-audit/01-core-runtime.md)§补充：CUDA 归约 | 空间维归约与全归约各有一个走了非默认候选的用例 |
+| 1.05 | 布局收尾：还原的 `fuser.cc`、`node.cc` 与 `src/` 根下其余 39 个文件进 `src/core/`；三个还原的 pass 进 `opt/pass/`；`src/test` 改 `src/tests`；`use_data_gz` 相关的 `utils/data.gz`、`vdp` 删除 | 1.01、0.19 | [布局](target-layout.md)§3 | `src/` 根下无 .cc/.h |
 
 ## 5. 阶段 2 · 核心数据结构（架构）
 
@@ -132,6 +139,7 @@
 | 2.20 | 信号处理器只做 `write` 与 `_exit`，符号化交给预建 helper 进程（`utils/log.cc:250-322`）；标志改 `volatile sig_atomic_t`；jit key 溢出改正常异常（与 3.02 配合） | 2.19 | [核心](codebase-audit/01-core-runtime.md)§错误处理、§补充：绑定层与失败模式 | 在 malloc 内崩溃能给出报告而非挂死 |
 | 2.21 | `DEFINE_FLAG_WITH_SETTER` 先赋值再调 setter，签名收新旧两值（`log.h:228-242`）；删 `tracer.cc:137-139` 的手工回写；环境变量解析用 `from_chars` 加全串消费，失败 fail fast（`log.h:180-196`、`log.cc:173`） | 2.13 | [核心](codebase-audit/01-core-runtime.md)§补充：绑定层与失败模式 | `export log_v="1 "` 报错而非静默默认 |
 | 2.22 | 环境变量统一 `JT_` 前缀（76 个小写同名变量保留并告警），构建期变量与运行期 flag 分两个命名空间，同名不再一个追加一个替换（`compiler.py:1116-1117` 对 `log.h:226`）；启动时把非默认 flag 打成一行摘要；生成自动导出的变量清单 | 2.13 | [构建](codebase-audit/04-build-tooling.md)§环境变量作为配置 | shell 里导出的 `name`/`debug` 不再改变框架行为 |
+| 2.23 | 布局收尾：`src/misc/nano_*` 并入 `src/type/`，miniz 进 `src/third_party/`，`init.cc`/`cuda_flags.cc`/`profiler/`/`lock.cc` 进 `src/runtime/`，`pyjt/`+`pybind/` 进 `src/bindings/`；`src/misc/` 目录消失 | 2.13、2.14、2.15、0.19 | [布局](target-layout.md)§3 | `src/misc/` 不存在 |
 
 ## 6. 阶段 3 · 执行器与编译管线（架构）
 
@@ -162,6 +170,7 @@
 | 3.21 | 每算子建图成本：边表分配（2.06）、jit key 拼接（3.02）、pyjt 绑定层开销逐项计量并降低；目标 UNet 前向建图 9 ms → ≤ 5 ms | 2.06、3.02 | 流水（末段）；系统 A4 | 分相计时报告 |
 | 3.22 | CUDA 归约块内树形归约：在 `WarpReducePass` 之上加共享内存的块级归约（每输出只写一次），或让修好的 `SharedReducePass` 承担 | 1.03、1.04 | [核心](codebase-audit/01-core-runtime.md)§补充：CUDA 归约 | UNet 归约类 kernel 合计不慢于 PyTorch 的 1.13 ms |
 | 3.23 | 融合逐元素 kernel 带宽效率：UNet 61 种融合 kernel 合计 4.47 ms、约 475 GB/s（峰值一半），逐 kernel 看生成代码与访存模式 | 3.08 | 流水（末段）；[核心](codebase-audit/01-core-runtime.md)§补充：CUDA 归约（末段的角色分解） | 逐元素类合计 ≤ PyTorch 的 3.07 ms |
+| 3.24 | 布局收尾：`src/opt/`、`op_compiler.*`、`jit_key.*`、`jit_compiler.*`、`opt/kernel_ir.*` 进 `src/codegen/`；`src/ops/` 只留七个元算子，getitem/setitem/argsort/candidate/where/copy/clone/fused_adamw 等进 `src/ops/composite/` | 3.08、0.19 | [布局](target-layout.md)§3；[架构](codebase-audit/07-architecture.md)§核心抽象（元算子名不副实） | `src/ops/` 顶层只有元算子 |
 
 ## 7. 阶段 4 · 设备与后端注册表（架构）
 
@@ -181,6 +190,7 @@
 | 4.12 | 删除 `process_jittor_source` 与 `process_acl`（整树文本替换、`WTF` 补丁）；ROCm 自己实现并注册（需 ROCm 硬件） | 4.11 | [多后端](multi-backend-design.md)§4 阶段 5；[架构](codebase-audit/07-architecture.md)§代码规模 | 核心源码不再是移植的输入 |
 | 4.13 | 跨后端契约矩阵：一张算子矩阵对每个注册后端跑同一套对拍 | 4.11 | [多后端](multi-backend-design.md)§4 阶段 6 | 新门禁层 |
 | 4.14 | `Module.cuda(i)`/`npu(i)`/`x.to(...)`/`x.cpu()` 语义落实（`core_api.py:1678-1685`、`tensor_ops.py:2604-2618,2849-2853`）：设备号生效，`.to()` 按 torch 签名解析不依赖 kwargs 顺序，`x.cpu()` 真迁移 | 4.02 | [Python](codebase-audit/02-python-api.md)§Module 与参数模型 | `x.to(device='cuda', dtype=float16)` 两者都生效 |
+| 4.15 | 布局收尾：`python/jittor/extern/` 整体搬到顶层 `backends/<name>/`，每后端同一形状（build 片段 + kernels/ + 注册项）；`nn/backends/` 10 个与 `nn/` 根下 6 个 `*_cuda.py` 以及 `flash_attention.py` 的 CUDA 串进 `backends/cuda/kernels/`，Python 层只留调用；`python/jittor/src/` 搬出包到顶层 `src/`，`MANIFEST.in`/`pyproject` 的打包与 `jittor_path` 解析随 9.01 同一提交改 | 4.10、4.12、9.01、0.19 | [布局](target-layout.md)§3、§5 | `python/jittor/` 下无 .cc/.cu；`grep cuda_src` 于 `python/jittor` 为 0 |
 
 ## 8. 阶段 5 · Python 对象模型（架构）
 
@@ -213,6 +223,7 @@
 | 5.23 | 根命名空间显式 `__all__`（替代 5 次星号导入），`.pyi` 从 `__all__` 生成并加一致性门禁（`__init__.py:57-125`） | 5.22 | [架构](codebase-audit/07-architecture.md)§公共 API | `.pyi` 顶层名与 `__all__` 一致 |
 | 5.24 | 10 个 `jt._*` 跨模块契约（`_torch_leaf_params`、`_active_optimizers`、`_current_optimizer`、`_torch_retained`…）收进 Runtime 对象 | 2.13 | [架构](codebase-audit/07-architecture.md)§公共 API | 根命名空间无下划线契约 |
 | 5.25 | `python/jittor/utils/` 拆散：编译器资源归 compiler 包、`gen_pyi`/`local_doc_builder` 归 `tools/`、`pytorch_converter.py` 归 compat、`converter_server.py` 与其启动脚本合并 | 3.18 | [架构](codebase-audit/07-architecture.md)§模块边界 | `utils/` 不存在或只剩一个明确职责 |
+| 5.26 | 布局收尾：`_runtime/core_api.py` 拆成 `_core/{var,module,function,flags,hooks}.py`；`misc/` 改名 `ops/` 并把 `tensor_ops.py` 按 indexing/reduction/shape/sort/scan 拆开；`pool/` 并入 `nn`；`linalg.py`/`distributions.py`/`init.py` 各自成包；`ccl/`、`loss3d/`、`math_util/`、`einops/` 进 `contrib/` 或分出去；`compiler.py`/`compile_extern.py`/`pyjt_compiler.py`/`cuda_wheel.py`/`install_cuda.py` 与 `python/jittor_utils/` 合成 `build/` 包；1.x 公开路径留 deprecated 转发模块 | 5.04–5.08、5.13、5.17、5.18、5.25、4.07、0.19 | [布局](target-layout.md)§3、§4 | 包根下只剩 `__init__.py`、`__init__.pyi`、`selftest.py`；无 > 1500 行的 .py |
 
 ## 9. 阶段 6 · 静默算错的单点修复（可并行）
 
@@ -325,6 +336,7 @@
 | 7.15 | `_rebuild_tensor_v2` 按 stride 还原或报错（`serialization.py:260-268`） | 5.02 | [兼容](codebase-audit/03-compat-shim.md)§看起来支持其实是空操作 | 非连续视图保存的权重读出正确 |
 | 7.16 | compat/ 内 129 个 `except: pass` 与 258 个宽泛 except 限定异常类型并至少 debug 打点 | 7.03 | [兼容](codebase-audit/03-compat-shim.md)§代码结构与测试 | `grep "except: pass"` 于 compat 为 0 |
 | 7.17 | `runtime.enable()` 只把 shim 的 site 目录加进 sys.path 不插项目目录（`runtime.py:95-97`）；`_ensure_dir` 的 PermissionError 改明确诊断（`preflight.py:142`） | 7.04 | [兼容](codebase-audit/03-compat-shim.md)§vLLM / shim | 只读 HOME 下 import 给出可操作错误 |
+| 7.18 | 布局收尾：`python/jittor/compat/` 搬到顶层 `compat/` 成独立 distribution `jittor-torch`（含 torch/shim/fsdp2/triton；vllm 适配器按既定方向分到自己的仓库）；`compat/shim/cpp_extension/src` 的打包随之迁移 | 7.12、0.19 | [布局](target-layout.md)§3；vLLM 适配器边界（路线图） | `pip install jittor` 不带 compat；`jittor-torch` 单独可装 |
 
 ## 11. 阶段 8 · 后端库与分布式（结构性）
 
@@ -344,6 +356,11 @@
 | 8.12 | 算子内不再复用全局 jit key 缓冲做缓存键（`cufft_fft_op.cc:72-73`、`cutt_transpose_op.cc:102-103`、`cudnn_conv_op.cc:276-277`、`cudnn_conv3d_op.cc:217-218`），改 POD 哈希 | 3.02 | [后端](codebase-audit/06-backends.md)§每次调用；系统 B6 | 算子执行期无字符串拼接 |
 | 8.13 | cuTT 计划未命中时的 `cudaDeviceSynchronize` 删除或降流同步（`cutt_transpose_op.cc:115`） | — | [后端](codebase-audit/06-backends.md)§每次调用 | 首次转置不清空流水 |
 | 8.14 | Corex：`check()` 只读、路径可配置（`corex_compiler.py:68,86,88`）；`process_acl` 同名改写随 4.12 删除 | 4.12 | [后端](codebase-audit/06-backends.md)§其余后端 | 探测无副作用 |
+| 8.15 | 多机 rendezvous：NCCL unique id 经 TCP store 交换，契约为 `MASTER_ADDR/MASTER_PORT/RANK/WORLD_SIZE/LOCAL_RANK`，替代 `nccl_wrapper.cc:82-101` 的共享文件轮询（要求共享文件系统，120 s 后无失败路径）与只认 OpenMPI 的 mpirun 引导；`TCPStore`/`FileStore` 真实实现（`distributed.py:770-788` 当前是进程内字典，7.01 先改报错）；`init_process_group(init_method="env://" \| "tcp://…")` 生效；HCCL 同一套 | 8.08、6.B15 | [后端](codebase-audit/06-backends.md)§分布式；[兼容](codebase-audit/03-compat-shim.md)§分布式与 FSDP2 | 两台机器各 N 卡 all-reduce 对拍；`MASTER_ADDR` 写错在超时内报错而非挂死 |
+| 8.16 | 多机启动器：`jittor.distributed.launch` 今天只有 `-n`（单机，`launch.py:50`），加 `--nnodes/--node_rank/--master_addr/--master_port`；shim 下 `torchrun` 可用（`is_torchelastic_launched` 恒 False，`distributed.py:519`）；`LOCAL_RANK` → 设备映射走 4.02 的 `set_device`，不再改写 `CUDA_VISIBLE_DEVICES` 重启进程 | 4.02、8.15、8.10 | [后端](codebase-audit/06-backends.md)§分布式；[多卡](device-placement.md) | `torchrun --nnodes=2 --nproc_per_node=N` 跑通 transformers 训练脚本，两机 loss 轨迹一致 |
+| 8.17 | 跨机网络与诊断：`NCCL_SOCKET_IFNAME`/`NCCL_IB_*`/`HCCL_*` 透传并进启动摘要；跨机 all-reduce/all-gather 带宽微基准；通信超时报出对端 rank 与主机名（接 8.09 的 watchdog）；一个 rank 掉线其余在超时内退出 | 8.09、8.15 | [后端](codebase-audit/06-backends.md)§分布式 | 带宽基准进 nightly；掉线用例 |
+| 8.18 | 多机 checkpoint：rank 0 保存、全 rank 加载的 `state_dict` 契约，FSDP 分片 checkpoint 的 `dcp.save/load` 真实实现（接 7.01 的报错），跨 rank 的 optimizer state 合并与重分片 | 7.13、8.15 | [兼容](codebase-audit/03-compat-shim.md)§分布式与 FSDP2 | 2 机保存、4 机加载的续训用例 |
+| 8.19 | 布局收尾：`extern/mpi`、`extern/cuda/nccl`、`extern/acl/hccl` 进 `backends/comm/`；Python 侧的启动器、process group、rendezvous 收进 `python/jittor/distributed/`；`compat` 的 `distributed.py` 只做 torch 命名的委托 | 8.08、8.15、4.15、0.19 | [布局](target-layout.md)§3 | 三个通信后端同一目录形状 |
 
 ## 12. 阶段 9 · 构建、缓存与打包
 
@@ -367,6 +384,7 @@
 | 9.16 | `agent/scripts/check_repo_layout.sh` 收缩为少数真会复发的检查，已删除路径交给 git 历史（40+ 条黑名单、8 组全树 grep） | — | [构建](codebase-audit/04-build-tooling.md)§门禁 | 脚本 < 100 行且 < 5 s |
 | 9.17 | 死代码：Windows MinGW 分支未定义的 `link`（`compiler.py:83`）、`cuda_wheel` 的 Darwin 分支、`env_or_try_find` 重复定义（`compiler.py:949`）、`src/utils/flags.cc`（27 行全注释但被 flag 扫描器读到，导致 12 个 flag 双定义）、`tests/system/legacy` | — | [构建](codebase-audit/04-build-tooling.md)§跨平台与死代码；[架构](codebase-audit/07-architecture.md)§重复 | flag 扫描改预处理后扫描或宏注册 |
 | 9.18 | `disable_lock=1` 启用时明确告警并纳入缓存指纹（`lock.py:18`、`src/lock.cc:31`） | 0.08 | [构建](codebase-audit/04-build-tooling.md)§锁与并发 | 告警可见 |
+| 9.19 | 布局收尾：`tools/` 只留仓库工具（`gen_pyi`、`local_doc_builder`、`dumpdef`、release、benchmarks 脚本），`agent/scripts` 并入；`python/jittor/tools/` 只留给用户的 nvtx/jtune/tracer；`MANIFEST.in` 改为从 `pyproject` 的 package-data 生成 | 9.01、4.15、5.26、0.19 | [布局](target-layout.md)§3、§5 | `tools/` 与 `python/jittor/tools/` 职责不重叠 |
 
 ## 13. 阶段 10 · 测试体系补全
 
@@ -384,7 +402,7 @@
 | 10.10 | gradcheck 加「故意写错导数应当失败」的负向自测（`_helpers/gradcheck.py`） | 0.01 | [测试](codebase-audit/05-tests.md)§算子证据链 | 负向测试 |
 | 10.11 | 设备对拍加 dtype 轴（int8/int16，`test_device_parity.py:192`）；容差按 `sqrt(reduce_size)*eps` 缩放或 per-OpInfo（`:159-163`）；linalg 的 cupy 探针失败改 error（`:63-89`） | 0.16 | [测试](codebase-audit/05-tests.md)§对拍口径与容差 | 窄整数 reduce 有对拍 |
 | 10.12 | `retry` 装饰器记录并上报重试次数（`_helpers/retry.py`） | — | [测试](codebase-audit/05-tests.md)§测试自身的可靠性 | 不稳定率可观测 |
-| 10.13 | `tests/structure` 压缩成公开 API 快照、循环依赖检查、打包内容三类；删行数与文件名断言（`test_nn_structure.py:1812-1821`、`test_vllm_compat_structure.py:57-68`）；迁移守卫设过期时间；marker 真正建立 `-m "not slow"` 快门禁或删除 | 0.15 | [测试](codebase-audit/05-tests.md)§tests/structure 的成本；[兼容](codebase-audit/03-compat-shim.md)§代码结构；系统 E4 | structure 行数 < 2000；PR 门禁不因加注释变红 |
+| 10.13 | marker 真正建立 `-m "not slow"` 快门禁或删除（`conftest.py:113-150` 打了 marker 而 `noxfile.py:410` 从不传 `-m`）；结构测试本身的压缩已提前为 0.19 | 0.15、0.19 | [测试](codebase-audit/05-tests.md)§tests/structure 的成本 | PR 门禁按 marker 筛选 |
 | 10.14 | notebook 门禁按 topic 参数化；34 个 skip-execution 标签需写理由并设比例上限 | — | [测试](codebase-audit/05-tests.md)§完全没有测试保护 | 每 topic 独立结果 |
 | 10.15 | 速度 harness 记录并断言两侧线程数、亲和掩码与精度策略；重复次数默认 ≥ 10 | 0.05 | 系统 F2 | 报告含这三项 |
 | 10.16 | 提供计时 API：固定输入池、全量物化、剔除首编译；文档列出 CSE/死码消除/未物化三个陷阱 | — | 系统 F4 | `jt.benchmark` 或等价物 |
@@ -393,13 +411,17 @@
 | 10.19 | 每个带 `grad()` 的后端算子有对 CPU 参考的梯度单测（`test_cudnn_conv_plan` 已示范） | 0.01 | 系统 B3 | 清单齐全 |
 | 10.20 | 给测试提供受支持的内省 API，替代 283 处 `jt.flags.*`、137 处 `compile_extern`/`jt.compiler.*`、127 个文件触碰下划线名 | 2.13、4.05 | [架构](codebase-audit/07-architecture.md)§公共 API | 内部重构不再牵动大面积测试 |
 | 10.21 | import 方向做成 lint 规则（import-linter 或 ruff 插件）；mypy 覆盖从 7 个文件扩到核心包（`pyproject.toml:70-91`） | 4.07、7.06 | [架构](codebase-audit/07-architecture.md)§代码规模 | 三个真环在 lint 里报错 |
+| 10.22 | 多机门禁：两节点 smoke（需两台带 GPU 的 runner）跑 DDP 与 FSDP 各一个小模型并对拍单机结果；无硬件时单机多进程模拟 `world_size > 本机卡数` 的 rendezvous、超时与失败传播路径 | 8.15、8.16、8.17 | [测试](codebase-audit/05-tests.md)§门禁范围 | nightly 有多机条目；掉线用例在超时内结束 |
+| 10.23 | 布局收尾：`tests/` 内部镜像源码目录（`tests/core` ↔ `src/core`，`tests/codegen` ↔ `src/codegen`，`tests/backends/<name>` ↔ `backends/<name>`，`tests/compat` 随 `compat/` 分出去）；`tests/system/` 删除 | 0.19、4.15、7.18 | [布局](target-layout.md)§2 | 每个源码目录有同名测试目录 |
 
 ## 14. 阶段 11 · 清理与删除（相关重构合并之后）
+
+各阶段的「布局收尾」行（0.20、1.05、2.23、3.24、4.15、5.26、7.18、8.19、9.19、10.23）已经覆盖搬动；这里只剩删除与合并。
 
 | 编号 | 任务 | 前置 | 出处 | 验收 |
 | --- | --- | --- | --- | --- |
 | 11.01 | 删已被取代的绕过与死路径：`nn/backends/cudnn.py` 的 `_CudnnConv2d`（8.07）、`var_holder.cc` 十层写回（5.02）、`change_function()`（4.11）、`process_jittor_source`（4.12）、`asm_tuner`（3.18）、event_queue 死代码（3.19） | 各自前置 | 各自出处 | grep 为 0 |
-| 11.02 | `agent/` 与 `docs/` 两套架构文档定权威：设计文档并入 `docs/architecture/` 或在 `docs/` 只保留指针；`agent/scripts` 并入 `tools/` | — | [架构](codebase-audit/07-architecture.md)§模块边界 | 一处权威 |
+| 11.02 | 已提前为 0.20 | | | |
 | 11.03 | 单文件异常拆分：`misc/tensor_ops.py` 2874、`_runtime/core_api.py` 2614、`installers/nn.py` 2454、`installers/tensor.py` 2413、`flash_attention.py` 2086、`compiler.py` 1500、`acl_compiler.py` 1397、`op_compiler.cc` 1171、`opt/expr.cc` 1180 按域下推一层 | 5.x、7.03 | [架构](codebase-audit/07-architecture.md)§代码规模 | 无 > 1500 行的源文件 |
 | 11.04 | 关键接口写成显式契约（`executor.h` 40 行对 744 行实现、`allocator.h` 58 行下挂 8 个实现、compat 28k 行无契约）；`Installer`/`Backend` 协议类型统一 19 处 install 与 7 处 check 的签名 | 3.01、4.03、7.03 | [架构](codebase-audit/07-architecture.md)§代码规模、§重复 | 接口文件承载设计意图 |
 
