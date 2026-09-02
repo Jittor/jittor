@@ -1,6 +1,7 @@
 import jittor as jt
 
 from ._code import acl_code
+from ._code import check_acl_float_dtype
 
 
 def _leaky_relu_attr(name, negative_slope):
@@ -16,7 +17,7 @@ def _leaky_relu_attr(name, negative_slope):
 class ReLUACL:
 
     def __call__(self, x):
-        input_value = x.float32()
+        input_value = check_acl_float_dtype(x, "relu")
         return acl_code(
             "Unary",
             inputs=[input_value],
@@ -38,7 +39,7 @@ class ReLUACL:
 class LeakyReLUACL:
 
     def __call__(self, x, negative_slope=0.01):
-        input_value = x.float32()
+        input_value = check_acl_float_dtype(x, "leaky_relu")
         slope = float(negative_slope)
         return acl_code(
             "LeakyReLU",

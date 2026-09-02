@@ -13,6 +13,7 @@ from collections.abc import Sequence, Iterable
 
 
 from ._code import acl_code as silu_cmd
+from ._code import check_acl_float_dtype
 
 
 class SiLUACL:
@@ -21,7 +22,7 @@ class SiLUACL:
         return self.execute(x)
 
     def execute(self, x):
-        x = x.float32()
+        check_acl_float_dtype(x, "silu")
         attr_code = """
         op.jt_name = "silu";
         """

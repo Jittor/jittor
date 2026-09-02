@@ -1,5 +1,28 @@
 import jittor as jt
 
+# The float dtypes the ACL kernels accept. This is the set adamw_op.py and
+# getitem_op.py already declare, and the norm kernels in this directory are
+# literally named grouped_bfloat16_rms_norm, so bf16 already reaches ACL
+# unconverted from several other ops here.
+ACL_FLOAT_DTYPES = ("float16", "bfloat16", "float32")
+
+
+def check_acl_float_dtype(x, op_name):
+    """Reject an unsupported dtype instead of quietly widening it. 6.B11.
+
+    Six ops used to open with ``x = x.float32()``. That is not a conversion for
+    the kernel's benefit: the result var keeps the promoted dtype, so a bf16 or
+    fp16 model silently became fp32 at that point and stayed fp32 for the rest
+    of the graph -- disagreeing with torch, costing bandwidth, and reported
+    nowhere. Declaring what is supported and failing on the rest is the
+    behaviour the other 28 op files in this directory already have.
+    """
+    dtype = str(x.dtype)
+    if dtype not in ACL_FLOAT_DTYPES:
+        raise TypeError("{} on ACL supports {}, got {}".format(
+            op_name, "/".join(ACL_FLOAT_DTYPES), dtype))
+    return x
+
 
 def acl_code(name,
              inputs,

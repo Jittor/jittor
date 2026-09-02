@@ -5,6 +5,8 @@ import ctypes
 import glob
 import jittor.compiler as compiler
 import jittor as jt
+
+from ._code import check_acl_float_dtype
 import math
 import numpy as np
 
@@ -59,7 +61,7 @@ class SigmoidACL(jt.Function):
         super(SigmoidACL, self).__init__()
 
     def execute(self, x):
-        x = x.float32()
+        check_acl_float_dtype(x, "sigmoid")
         inputs = [x]
         outputs = [jt.empty(x.shape, x.dtype)]
         attr_code = f"""

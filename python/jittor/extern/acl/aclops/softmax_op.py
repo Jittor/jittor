@@ -5,6 +5,8 @@ import ctypes
 import glob
 import jittor.compiler as compiler
 import jittor as jt
+
+from ._code import check_acl_float_dtype
 import math
 import numpy as np
 
@@ -59,9 +61,11 @@ class SoftmaxACL(jt.Function):
         super(SoftmaxACL, self).__init__()
 
     def execute(self, x, dim):
-        x = x.float32()
+        check_acl_float_dtype(x, "softmax")
         inputs = [x]
-        outputs = [jt.empty(x.shape)]
+        # jt.empty defaults to float32, which would put the silent
+        # widening back through the output var. 6.B11.
+        outputs = [jt.empty(x.shape, x.dtype)]
         self.dim = dim
         attr_code = f"""
         op.jt_name = "softmax";

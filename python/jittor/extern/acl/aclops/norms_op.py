@@ -12,6 +12,7 @@ from typing import Union
 from collections.abc import Sequence, Iterable
 
 from ._code import acl_code as norms_cmd
+from ._code import check_acl_float_dtype
 
 
 class BatchNormACL:
@@ -83,7 +84,7 @@ class LayerNormACL:
         """
 
     def __call__(self, x, weight, bias):
-        input_value = x.float32()
+        input_value = check_acl_float_dtype(x, "layernorm")
         # aclnnLayerNorm outputs: out (x.shape), mean & rstd (reduced over the
         # normalized dims -> same leading shape with the normalized dims = 1).
         nd = len(self.normalized_shape)
