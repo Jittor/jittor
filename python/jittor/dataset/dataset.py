@@ -44,12 +44,39 @@ dataset_root = os.path.join(jit_utils.home(), ".cache", "jittor", "dataset")
 mp_log_v = int(os.environ.get("mp_log_v", "0"))
 mpi = jt.mpi
 if _has_pil:
+    #: Times ``PIL.Image.open``, and is NOT installed here. Importing this
+    #: module used to install it, which replaced ``PIL.Image.open`` for the
+    #: whole process -- permanently, and with a non-function object. Dataset
+    #: workers install it for themselves (see ``_worker_main``); anyone else
+    #: who wants the measurement asks for it with ``time_image_open()``.
     img_open_hook = HookTimer(Image, "open")
 else:
     # PIL is optional; provide a no-op timer so worker status logging still works.
     class _NoopTimer:
         duration = 0.0
+        def install(self): return self
+        def uninstall(self): pass
+        def __enter__(self): return self
+        def __exit__(self, exc_type, exc, tb): return False
     img_open_hook = _NoopTimer()
+
+
+def time_image_open():
+    """Measure time spent in ``PIL.Image.open``, for as long as you ask.
+
+    ``jittor.dataset`` needs this measurement for the ``open(s)`` column of
+    :meth:`Dataset.display_worker_status`, but it used to take it by patching
+    ``PIL.Image.open`` at import, for the whole process, with no way back. Now
+    it is opt-in and scoped::
+
+        with jt.dataset.time_image_open() as timer:
+            ...
+        print(timer.duration)
+
+    Outside the block ``PIL.Image.open`` is the function PIL defined.
+    ``duration`` accumulates; set it to ``0.0`` to start a fresh measurement.
+    """
+    return img_open_hook
 CHECK_MEMORY = int(os.environ.get("CHECK_MEMORY", "0"))
 
 if os.name == "nt":
@@ -326,6 +353,15 @@ class Dataset(object):
         jt.flags.use_parallel_op_compiler = 0
         import time
         try:
+            # Time PIL.Image.open in THIS process only. A worker is jittor's
+            # own process and exists to load data, so the measurement it
+            # reports back through status[4] is paid for here -- not in the
+            # user's process at `import jittor.dataset`, which is where it used
+            # to be installed and never removed. No uninstall: a worker only
+            # ever leaves via os._exit. Inside the try, so that a failure here
+            # reaches the parent like every other worker error instead of
+            # killing the worker before it can report and hanging the parent.
+            img_open_hook.install()
             gid_obj = self.gid.get_obj()
             gid_lock = self.gid.get_lock()
             start = time.time()

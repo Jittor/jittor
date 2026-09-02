@@ -1905,6 +1905,11 @@ def set_global_seed(seed, different_seed_for_mpi=True):
     ''' Sets the seeds of the random number generators of Python, numpy and jittor,
     simultaneously.
 
+    This reaches outside jittor on purpose -- it reseeds Python's ``random``,
+    numpy's global RNG and (when installed) cupy's. Call it deliberately; it is
+    NOT called for you at import. Use :func:`jittor.set_seed` to seed jittor
+    alone.
+
     .. note::
     Jittor also gurantees each worker of jittor.dataset.Dataset to hold a different seed,
     also gurantees each process hold a different seed which using mpi,
@@ -1923,7 +1928,30 @@ def set_global_seed(seed, different_seed_for_mpi=True):
         pass
 
 import time
-set_global_seed(int(time.time() * 1000000) % 100000007)
+
+def _seed_jittor_at_import():
+    """Give jittor's own RNG a per-process seed, and touch nothing else.
+
+    This line used to call ``set_global_seed``, so merely importing jittor
+    reseeded Python's ``random``, numpy's global RNG and cupy's::
+
+        import numpy as np
+        np.random.seed(0)          # the caller's reproducible stream
+        import jittor              # ...silently thrown away here
+
+    Nothing was printed and nothing failed; the caller's numpy stream just
+    stopped being the one they asked for, and differed on every run because
+    the seed jittor substituted came from the wall clock. It also runs at
+    ``import jittor`` -- not at first use -- so a library that imports jittor
+    somewhere down its own import chain reseeded its user's numpy too.
+
+    jittor does need a per-process seed of its own; it has no business
+    reseeding three libraries it does not own. Callers who want all four
+    seeded together still say so, with ``jt.set_global_seed(...)``.
+    """
+    jt.set_seed(int(time.time() * 1000000) % 100000007 + jt.rank * 2591)
+
+_seed_jittor_at_import()
 
 def searchsorted(sorted, values, right=False, out_int32=False, side=None, sorter=None, out=None):
     """

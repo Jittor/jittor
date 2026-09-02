@@ -12,7 +12,10 @@ import jittor as jt
 import numpy as np
 from collections.abc import Sequence, Mapping
 from PIL import Image
+import functools
 import time
+
+from jittor_utils import LOG
 
 def get_random_list(n):
     return list(np.random.permutation(range(n)))
@@ -55,14 +58,96 @@ def collate_batch(batch):
         raise TypeError(f"Not support type <{elem_type.__name__}>")
 
 class HookTimer:
-    def __init__(self, obj, attr):
+    """Accumulate the wall time spent inside ``getattr(obj, attr)``.
+
+    **Opt in, and put it back.** Constructing one no longer installs it: use it
+    as a context manager, or call :meth:`install` / :meth:`uninstall` around
+    the region you want measured.
+
+    ``HookTimer(PIL.Image, "open")`` used to install itself in ``__init__``,
+    from the top level of ``jittor.dataset.dataset`` -- so ``import
+    jittor.dataset`` replaced ``PIL.Image.open``, process-wide, for every
+    library in the process, with no way to undo it. And it replaced it with the
+    timer OBJECT, which is not a function: ``inspect.signature``,
+    ``functools.wraps`` and pickling all stopped working on ``PIL.Image.open``
+    for code that had never heard of jittor. What installs now is a
+    ``functools.wraps``-ed function, so the attribute keeps looking like what
+    it replaced.
+    """
+
+    def __init__(self, obj, attr, install=False):
+        self.obj = obj
+        self.attr = attr
+        #: kept for callers that reach for the un-timed callable
         self.origin = getattr(obj, attr)
         self.duration = 0.0
-        setattr(obj, attr, self)
+        self._wrapper = None
+        # nesting depth, so an inner `with` does not un-hook the outer one
+        self._depth = 0
+        if install:
+            self.install()
+
+    @property
+    def installed(self):
+        return self._wrapper is not None
+
+    def install(self):
+        """Wrap the attribute. Nests; returns self so ``with`` works."""
+        self._depth += 1
+        if self.installed:
+            return self
+        origin = getattr(self.obj, self.attr)
+        self.origin = origin
+
+        @functools.wraps(origin)
+        def timed(*args, **kw):
+            start = time.time()
+            try:
+                return origin(*args, **kw)
+            finally:
+                # in a finally, so a raising call is still accounted for and a
+                # single failure cannot silently stop the clock for good
+                self.duration += time.time() - start
+
+        timed._jittor_hook_timer = self
+        self._wrapper = timed
+        setattr(self.obj, self.attr, timed)
+        return self
+
+    def uninstall(self):
+        """Put the original attribute back. Idempotent.
+
+        If something else replaced the attribute after us, leave that in place
+        rather than clobbering it, and say so -- restoring blindly would delete
+        the other patch without a word.
+        """
+        if self._depth == 0:
+            return
+        self._depth -= 1
+        if self._depth:
+            return
+        wrapper = self._wrapper
+        if wrapper is None:
+            return
+        self._wrapper = None
+        current = getattr(self.obj, self.attr, None)
+        if current is wrapper:
+            setattr(self.obj, self.attr, self.origin)
+            return
+        LOG.w(f"HookTimer: {self.obj!r}.{self.attr} was replaced by someone "
+              f"else while hooked; leaving the newer value in place")
+
+    def __enter__(self):
+        return self.install()
+
+    def __exit__(self, exc_type, exc, tb):
+        self.uninstall()
+        return False
 
     def __call__(self, *args, **kw):
         start = time.time()
-        rt = self.origin(*args, **kw)
-        self.duration += time.time() - start
-        return rt
+        try:
+            return self.origin(*args, **kw)
+        finally:
+            self.duration += time.time() - start
 
