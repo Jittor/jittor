@@ -87,6 +87,16 @@ r = run_mpi_python(2, [script_path])                 # mpirun -np 2 python scrip
   按空闲机器调的 180 s 在有负载时必然假红。
 - 需要进程句柄（`Popen` 让子进程保持活着）时才自己起，但必须
   `env=child_env()`。
+- **子进程可能被信号杀死（段错误 / abort）时必须传 `crash_isolated=True`。**
+  jittor 装了一个进程级 SIGCHLD 处理器（`src/utils/log.cc`）：直接子进程**非正常退出**
+  时它让父进程 quick-exit。于是「把会崩的用例放子进程里跑」这个标准做法**反过来生效**——
+  子进程 abort，处理器在 pytest 里触发，pytest 中途消失、`-q` 缓冲里的输出全丢。
+  看起来是「runner 坏了」，不是「某条测试失败了」（6.C31，两个分区各栽过一次）。
+  `crash_isolated=True` 在中间隔一层 `sh`：pytest 的直接子进程永远正常退出
+  （`128+signo`，属 `CLD_EXITED`，处理器不理），`returncode` 仍是 134/139，崩溃照样可断言；
+  同时把 `gdb_path` 清空，免得崩溃处理器 fork 出的 gdb 把子进程 ptrace-stop 在那里。
+  **是 opt-in 不是默认**：包一层 shell 之后 `subprocess.run` 超时只杀得掉 `sh`，
+  孙进程会变孤儿，这个代价只该由崩溃测试付。
 
 `tests/structure/test_child_process_contract.py` 会在门禁里静态扫全树，两条规则：
 `tests/` 下不许出现 `sys.executable`（改用 `child_process.PYTHON`）；任何起进程的调用

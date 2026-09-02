@@ -18,37 +18,31 @@ CUDNN_STATUS_INTERNAL_ERROR cudnnDestroy`` -- a message about the cleanup,
 standing in for the message about the fault.  The test below reproduces that
 sequence and asserts the real error is the one that survives.
 
-Note when re-checking this against the old code: the child's SIGABRT takes the
-*runner* with it.  jittor installs a SIGCHLD handler that quick_exit(1)s the
-parent whenever a child dies other than by a clean exit or SIGTERM
-(``utils/log.cc``), so a pre-fix run of this file ends as ``pytest`` exiting 1
-after one dot, not as a reported failure.  Run the child body directly to see
-the abort.
+Note when re-checking this against the old code: the child's SIGABRT used to
+take the *runner* with it.  jittor installs a SIGCHLD handler that
+quick_exit(1)s the parent whenever a direct child dies other than by a clean
+exit or SIGTERM (``utils/log.cc``), so a pre-fix run of this file ended as
+``pytest`` exiting 1 after one dot, not as a reported failure (6.C31).
+``crash_isolated=True`` below puts a shell in between, so the abort is now
+reported as this test failing.
 """
-import os
-from pathlib import Path
-import subprocess
-import sys
 import textwrap
 import unittest
 
 import jittor as jt
 
+from _helpers.child_process import run_python_child
+
 
 def _run_child(body):
-    """Run ``body`` in a fresh interpreter against *this* jittor tree."""
-    # The tree under test is the one imported here, not whatever the
-    # site-packages .pth points at: a child that picks up a different checkout
-    # tests code this test never touched, and says nothing about it.
-    python_root = Path(jt.__file__).resolve().parents[1]
-    env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join(
-        [os.fspath(python_root)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else [])
-    )
-    return subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(body)],
-        env=env, capture_output=True, text=True, timeout=1800,
-    )
+    """Run ``body`` in a fresh interpreter against *this* jittor tree.
+
+    ``crash_isolated``: the whole point of this file is a child that aborts,
+    and without the shell in between jittor's SIGCHLD handler deletes pytest
+    instead of letting the abort be asserted.
+    """
+    return run_python_child(
+        ["-c", textwrap.dedent(body)], timeout=1800, crash_isolated=True)
 
 
 # Creates the cublas / cudnn / curand handles whose teardown is under test.

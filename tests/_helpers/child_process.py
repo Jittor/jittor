@@ -30,6 +30,7 @@ What to call
 ------------
 =========================== =====================================================
 :func:`run_python_child`    ``python <args>`` -- the common case
+                            (``crash_isolated=True`` when it may die by signal)
 :func:`run_child_script`    write a source string to a file and run it
 :func:`run_mpi_python`      ``mpirun -np N python <args>``
 :func:`shell`               a shell command line that needs quoting or job control
@@ -140,6 +141,36 @@ def _timeout_failure(command, seconds):
     )
 
 
+def _crash_isolated(command, env):
+    """Put a shell between pytest and a child that is expected to crash.
+
+    Jittor installs a *process-level* ``SIGCHLD`` handler (see
+    ``src/utils/log.cc``): when a direct child dies from a signal rather than
+    exiting, the handler quick-exits the parent. That makes the standard
+    technique -- "run the case that segfaults in a child so it cannot take the
+    session down" -- do exactly what it was meant to prevent: the child aborts,
+    the handler fires inside pytest, and pytest vanishes mid-run with no output
+    at all (``-q`` buffers it, so it is lost). It reads as "the runner broke",
+    not "a test failed", and it has already cost two partitions an afternoon
+    each (6.C31).
+
+    ``sh`` between the two absorbs the signal death: pytest's direct child
+    always exits normally, with ``128 + signo``, which is ``CLD_EXITED`` and
+    leaves the handler alone. ``returncode`` is still 134 or 139, so the crash
+    remains assertable.
+
+    ``gdb_path`` is cleared for the same reason ``tools/run_test_suite.py``
+    clears it: Jittor's crash handler forks gdb for a backtrace, and gdb
+    ptrace-stops the child first -- if gdb then dies, the child stays stopped
+    forever and the timeout is the only thing that ends it.
+    """
+    env = dict(env or {})
+    env.setdefault("gdb_path", "")
+    if os.name != "posix":
+        return command, env
+    return ["/bin/sh", "-c", '"$@"; exit $?', "sh"] + command, env
+
+
 def _run(command, env, timeout, cwd, text, check, input, merge_stderr,
          shell=False, inherit=True):
     seconds = default_timeout(timeout)
@@ -165,20 +196,30 @@ def _run(command, env, timeout, cwd, text, check, input, merge_stderr,
 
 
 def run_python_child(args, *, env=None, timeout=None, cwd=None, text=True,
-                     check=False, input=None, merge_stderr=False, inherit=True):
+                     check=False, input=None, merge_stderr=False, inherit=True,
+                     crash_isolated=False):
     """Run ``[PYTHON, *args]`` against this tree, with a clear timeout.
 
     ``merge_stderr`` folds stderr into stdout, which is what most callers want
     when they print the child's output on failure.
+
+    ``crash_isolated=True`` for a child that is *expected* to die from a signal
+    -- see :func:`_crash_isolated`. Opt-in on purpose: the extra shell changes
+    what a timeout does. ``subprocess.run`` kills only its direct child on
+    ``TimeoutExpired``, with an uncatchable SIGKILL, so behind a wrapper the
+    grandchild is orphaned rather than killed. Only a crash test should pay
+    that; everything else is safer without it.
     """
     command = [PYTHON] + [str(arg) for arg in args]
+    if crash_isolated:
+        command, env = _crash_isolated(command, env)
     return _run(command, env, timeout, cwd, text, check, input, merge_stderr,
                 inherit=inherit)
 
 
 def run_child_script(source, *, env=None, timeout=None, cwd=None, text=False,
                      check=False, merge_stderr=False, directory=None,
-                     name="child", inherit=True):
+                     name="child", inherit=True, crash_isolated=False):
     """Write ``source`` to a file and run it, so tracebacks name real lines.
 
     ``python -c`` reports ``<string>`` for every frame, which makes a failing
@@ -190,7 +231,10 @@ def run_child_script(source, *, env=None, timeout=None, cwd=None, text=False,
     path = os.path.join(str(directory), "%s_%d.py" % (name, os.getpid()))
     with open(path, "w") as handle:
         handle.write(source)
-    return _run([PYTHON, path], env, timeout, cwd, text, check, None,
+    command = [PYTHON, path]
+    if crash_isolated:
+        command, env = _crash_isolated(command, env)
+    return _run(command, env, timeout, cwd, text, check, None,
                 merge_stderr, inherit=inherit)
 
 

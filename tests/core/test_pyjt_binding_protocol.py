@@ -14,6 +14,7 @@ Python exception, which is why each case is spelled out separately.
 """
 
 import gc
+import signal
 import textwrap
 import unittest
 
@@ -31,14 +32,14 @@ def run_in_subprocess(body):
     test process would take the whole session down with it, so the assertion
     has to be made on a child process' return code.
 
-    The child is pinned to *this* process' jittor package.  pytest puts the
-    checkout on ``sys.path`` via ``pythonpath`` in pyproject.toml, which a bare
-    subprocess does not inherit -- without this it would silently import
-    whatever jittor is installed in site-packages and test the wrong tree.
+    ``crash_isolated`` is what makes that true. Jittor's process-level SIGCHLD
+    handler quick-exits the parent when a direct child dies from a signal, so
+    without the shell in between a regressed case here would not fail -- it
+    would make pytest disappear mid-run with no output (6.C31).
     """
     source = "import jittor as jt\nimport jittor_core\n" + textwrap.dedent(body)
     return run_python_child(["-c", source], text=False, merge_stderr=True,
-                            timeout=1800)
+                            timeout=1800, crash_isolated=True)
 
 
 class TestConstructionFailureDealloc(unittest.TestCase):
@@ -282,3 +283,28 @@ class TestKeywordArguments(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCrashIsolationSurvivesTheSigchldHandler(unittest.TestCase):
+    """A child that dies by signal must fail the test, not delete the session.
+
+    Jittor installs a process-level ``SIGCHLD`` handler that quick-exits the
+    parent when a *direct* child dies from a signal. Every crash test in this
+    file depends on the opposite: that a child can abort and be asserted on.
+    Without ``crash_isolated`` the handler fires inside pytest and pytest
+    vanishes mid-run with no output -- which reads as a broken runner rather
+    than a failing test, and is what 6.C31 records.
+
+    This case is the guard on that guard: it makes the child abort on purpose.
+    If the isolation regresses, the whole session disappears here, in a test
+    whose name says why.
+    """
+
+    def test_an_aborting_child_reports_its_signal_and_leaves_pytest_alive(self):
+        proc = run_python_child(
+            ["-c", "import os, signal; os.kill(os.getpid(), signal.SIGABRT)"],
+            text=False, merge_stderr=True, timeout=300, crash_isolated=True)
+        # The shell exits 128 + signo, so the crash is still assertable.
+        self.assertEqual(proc.returncode, 128 + int(signal.SIGABRT))
+        # Reaching this line at all is the other half of the assertion.
+        self.assertTrue(True)
