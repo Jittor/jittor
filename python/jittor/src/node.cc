@@ -48,6 +48,14 @@ extern void free_var_mem(Var* v);
 //     the whole file.
 //   * Nodes deleted during a drain go to `free_buffer` and are destroyed by
 //     the outermost SetupFreeBuffer, never in the middle of the drain.
+//
+// NOTE: one deliberate deviation from the shipped object. It stored these as
+// `void (*)(Node*)`, casting `&Node::release_forward_liveness` -- a pointer to
+// member -- to a plain function pointer and calling `op(node)`. That cast is
+// undefined behaviour that happens to work on the Itanium ABI. Every operation
+// in the queue is a non-virtual member of Node taking no arguments, so a real
+// pointer to member expresses the same thing and `(node->*op)()` compiles to the
+// same call. No symbol changes: the queue is a file static.
 typedef void (Node::*liveness_op_t)();
 static vector<pair<Node*, liveness_op_t>> liveness_queue;
 static size_t liveness_queue_front = 0;
@@ -123,6 +131,12 @@ void Node::__release() {
     tflag = -1;
 }
 
+// Empty in the shipped object too, not lost in the restoration. The memory
+// checker it belongs to is `exist()` plus the `lived_nodes` maps above, all of
+// which compile to nothing unless NODE_MEMCHECK is defined (node.h); this is the
+// out-of-line half and it has no body on either side of that #ifdef. The single
+// caller is Op::do_jit_prepare in op.cc. Left as it was found: what it should assert
+// under NODE_MEMCHECK is not recoverable from the object.
 void Node::memcheck_all_exist() const {
 }
 
