@@ -76,6 +76,37 @@ assert not np.allclose(y1.numpy(), y2.numpy())
 - 先确认"关掉随机性时两次一致"，再确认"打开时两次不一致"。只测后者的话，
   一个恒返回垃圾的实现也能通过。
 
+## 确定性的失败触发器（证明「失败会抛」而不是「失败被吞掉」）
+
+改 `XXX_CALL` 宏从 fprintf 改成抛，必须有一个**确定性**的失败输入，否则无法证明修前修后
+的差别。已知可用的：
+
+| 库 | 触发方式 | 得到的错误 |
+| --- | --- | --- |
+| cuFFT | `jt.nn._fft2(jt.zeros((1, 0, 4, 2), "float32"))`——任一变换维长度为 0 | `cufftPlanMany` 返回 `CUFFT_INVALID_SIZE` |
+
+判据不止「抛了」。**修前那一版会把无效句柄写进缓存**，所以还要断言：
+
+1. 同一形状连续失败两次（缓存里没有留下"能用"的坏句柄）；
+2. 失败之后正常形状的变换仍然正确（缓存没被污染）。
+
+修前跑这个测试，退出时 `peekCudaErrors(cufftDestroy(...))` 会打出
+`code=1( CUFFT_INVALID_PLAN )`——那就是坏句柄进了缓存的直接证据。
+
+`jt.nn._fft2` 是 cuFFT 算子唯一的入口（`jt.fft.*` 走 DFT 矩阵乘，不碰 cuFFT），
+且要求 `jt.flags.use_cuda == 1`、输入形状 `(batch, n1, n2, 2)`。
+
+## 后端库的 `_cudaGetErrorEnum` 重载约定
+
+`checkCudaErrors(x)` 需要一个 `_cudaGetErrorEnum(该状态类型)` 重载。
+`extern/cuda/src/helper_cuda.cc` 里那些重载被 `#ifdef _CUFFT_H_` / `#ifdef CUSPARSEAPI`
+之类包着，而该文件并不 include 这些库的头，所以**它们一个都没被编进 libcuda_extern**。
+每个后端靠自己目录下的 `*/src/helper_<lib>.cc` 提供重载（cublas/cudnn/curand/cusparse 都有）。
+
+症状：`ImportError: .../gen_ops_xxx.so: undefined symbol: _Z17_cudaGetErrorEnum13cufftResult_t`，
+接着被 `compile_extern.py` 翻译成误导性的 `CUDA found but cufft is not loaded`。
+修法：照抄 `curand/src/helper_curand.cc` 的写法，在该后端的 `src/` 下补一个。
+
 ## 环境（少设一个测的就是别的东西）
 
 ```bash

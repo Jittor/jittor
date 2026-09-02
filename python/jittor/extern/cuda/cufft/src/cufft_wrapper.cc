@@ -24,7 +24,9 @@ inline cufft_initer() {
 inline ~cufft_initer() {
     if (!get_device_count()) return;
     for (auto it = cufft_handle_cache.begin(); it != cufft_handle_cache.end(); it++) {
-        CUFFT_CALL(cufftDestroy(it->second));
+        // Destructor: CUFFT_CALL raises now, and throwing out of a static
+        // destructor terminates the process during CUDA teardown. Report only.
+        peekCudaErrors(cufftDestroy(it->second));
     }
     cufft_handle_cache.clear();
     LOGv << "cufftDestroy finished";

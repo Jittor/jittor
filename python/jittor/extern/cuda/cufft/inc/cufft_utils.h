@@ -49,39 +49,25 @@
 
 #pragma once
 
-// CUDA API error checking
+#include <cufftXt.h>
+
+#include "helper_cuda.h"
+
+// A failed CUDA or cuFFT call used to be printed to stderr and then ignored.
+// The caller went on regardless: a failed cufftPlanMany left an invalid handle
+// that was written into the plan cache and executed, so the op produced
+// undefined output instead of reporting the failure -- and every later call
+// with the same shape reused the same invalid handle. Both macros raise now,
+// via the same checkCudaErrors used by the rest of the CUDA backends.
+//
+// checkCudaErrors throws, so neither macro may appear in a destructor. Use
+// peekCudaErrors there (see cufft_wrapper.cc).
 #ifndef CUDA_RT_CALL
-#define CUDA_RT_CALL( call )                                                                                           \
-    {                                                                                                                  \
-        auto status = static_cast<cudaError_t>( call );                                                                \
-        if ( status != cudaSuccess )                                                                                   \
-            fprintf( stderr,                                                                                           \
-                     "ERROR: CUDA RT call \"%s\" in line %d of file %s failed "                                        \
-                     "with "                                                                                           \
-                     "%s (%d).\n",                                                                                     \
-                     #call,                                                                                            \
-                     __LINE__,                                                                                         \
-                     __FILE__,                                                                                         \
-                     cudaGetErrorString( status ),                                                                     \
-                     status );                                                                                         \
-    }
+#define CUDA_RT_CALL( call ) checkCudaErrors( call )
 #endif  // CUDA_RT_CALL
 
-// cufft API error chekcing
 #ifndef CUFFT_CALL
-#define CUFFT_CALL( call )                                                                                             \
-    {                                                                                                                  \
-        auto status = static_cast<cufftResult>( call );                                                                \
-        if ( status != CUFFT_SUCCESS )                                                                                 \
-            fprintf( stderr,                                                                                           \
-                     "ERROR: CUFFT call \"%s\" in line %d of file %s failed "                                          \
-                     "with "                                                                                           \
-                     "code (%d).\n",                                                                                   \
-                     #call,                                                                                            \
-                     __LINE__,                                                                                         \
-                     __FILE__,                                                                                         \
-                     status );                                                                                         \
-    }
+#define CUFFT_CALL( call ) checkCudaErrors( call )
 #endif  // CUFFT_CALL
 
 // template <> struct traits<CUFFT_C2C> {

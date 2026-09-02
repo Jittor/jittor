@@ -74,7 +74,6 @@ void CuttTransposeOp::jit_run() {
     if (x->num == 0)
         return;
 
-    cudaGetLastError();
     auto* __restrict__ xp = x->mem_ptr;
     auto* __restrict__ yp = y->mem_ptr;
     StackVector<int> x_shape;
