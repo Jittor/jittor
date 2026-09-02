@@ -307,7 +307,7 @@
 | 6.C28 | 生成带「已构造」标志的 `tp_new` 或 `tp_dealloc` 先检查（`pyjt_compiler.py:875`；`ring_buffer.cc:73`） | — | [核心](codebase-audit/01-core-runtime.md)§补充：绑定层与失败模式 | `jittor_core.RingBuffer()` 抛异常不段错误 |
 | 6.C29 | 标量转数组的全局 `tmp_data` 改自带 buffer（`numpy.h:125-131`、`py_converter.h:363-374`） | — | [核心](codebase-audit/01-core-runtime.md)§补充：绑定层与失败模式 | 一次调用两个标量参数正确 |
 | 6.C30 | `helper_cuda.h` 的 `peek` 去掉进程级闩 `peek_logged`（`log.cc:24`），改限频或按 call site 去重 | — | [后端](codebase-audit/06-backends.md)§错误处理 | 第二次异步错误仍报出 |
-| 6.C31 | **CUDA 构建上任何「失败的」`import jittor` 都会在退出期 abort。** 全局 EventQueue 的 worker 线程只由**跑完**的 import 通过 `core.cleanup()` 注销；没跑完就是 `~std::thread` 落在 joinable 线程上 → `terminate called without an active exception`。再叠加 jittor 自己的 SIGCHLD 处理器（父进程 `_Exit(1)` 且不刷 stdio），后果是**子进程 import 失败 → 父进程无声消失，一行输出都不留**。要动核心的静态析构顺序 | 2.19（析构不得抛） | 2026-09-03 由 8.09 的执行者发现，不在原审计里 | 构造一个必然失败的 import（如缺失依赖），子进程退出码与 stderr 都可读；父进程不消失 |
+| 6.C31 | **进程级 SIGCHLD 处理器让任何被信号杀死的子进程连带杀掉父进程，且不留输出。** 两个分区独立撞上同一机制：(a) CUDA 构建上任何「失败的」`import jittor` 都会在退出期 abort—— 全局 EventQueue 的 worker 线程只由**跑完**的 import 通过 `core.cleanup()` 注销；没跑完就是 `~std::thread` 落在 joinable 线程上 → `terminate called without an active exception`。再叠加 jittor 自己的 SIGCHLD 处理器（父进程 `_Exit(1)` 且不刷 stdio），后果是**子进程 import 失败 → 父进程无声消失，一行输出都不留**。要动核心的静态析构顺序。(b) 任何**崩溃类测试**的子进程会直接杀掉整个 pytest session 而不是让那条用例失败，零输出——写这类测试必须在中间隔一层 shell。合起来：**这个处理器把「子进程异常退出」变成了「父进程无声消失」，掩盖的正是最需要诊断的那类失败**。处理器本身也不是 async-signal-safe | 2.19（析构不得抛） | 2026-09-03 由 8.09 与 6.C25 的执行者独立发现，不在原审计里 | 构造一个必然失败的 import 与一个必然崩溃的子进程，两者的退出码与 stderr 都可读；父进程不消失 |
 
 ### 9.2 Python 层
 
