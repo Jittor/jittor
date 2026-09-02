@@ -55,11 +55,14 @@ class TestReduceLROnPlateauGroups(unittest.TestCase):
 
     def _plateau_opt(self, n_groups):
         params = [{"params": [jt.array([1.0])]} for _ in range(n_groups)]
+        opt = jt.optim.SGD(params, 1.0)
         # No group carries its own "lr", so every group falls back to the
         # optimizer-wide lr -- this is jittor's default param group layout.
-        for pg in params:
-            assert "lr" not in pg
-        opt = jt.optim.SGD(params, 1.0)
+        # (Drop the key explicitly: a torch-mode session installs an optimizer
+        # that seeds one per group, which is a different code path.)
+        for pg in opt.param_groups:
+            pg.pop("lr", None)
+        opt.lr = 1.0
         return opt, jt.lr_scheduler.ReduceLROnPlateau(
             opt, factor=0.1, patience=1, threshold=0.0)
 

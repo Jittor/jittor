@@ -572,35 +572,43 @@ class TestAdanGradClip(_OptimCoreBase):
                                for pg in opt.param_groups for g in pg["grads"]])
         return float(np.linalg.norm(flat))
 
+    def _watch_clip(self, opt):
+        """Record every ``clip_grad_norm`` call the step makes, and the global
+        gradient norm each call leaves behind. Observed inside the step because
+        ``post_step`` clears the buffers afterwards."""
+        real = opt.clip_grad_norm
+        record = {"calls": 0, "norm_after": None}
+
+        def spy(*args, **kwargs):
+            record["calls"] += 1
+            out = real(*args, **kwargs)
+            record["norm_after"] = self._grad_norm(opt)
+            return out
+
+        opt.clip_grad_norm = spy
+        return record
+
     def test_clip_called_once_per_step(self):
         def body(dev):
             opt, loss = self._three_group_adan(70)
-            real = opt.clip_grad_norm
-            n_calls = []
-
-            def spy(*args, **kwargs):
-                n_calls.append(args)
-                return real(*args, **kwargs)
-
-            opt.clip_grad_norm = spy
+            record = self._watch_clip(opt)
             opt.step(loss)
             self.assertEqual(
-                len(n_calls), 1,
+                record["calls"], 1,
                 msg=f"clip_grad_norm is global; call it once per step, "
-                    f"got {len(n_calls)} calls for 3 param groups [{dev}]")
+                    f"got {record['calls']} calls for 3 param groups [{dev}]")
         self._devices(body)
 
     def test_gradients_end_at_the_requested_norm(self):
-        # Clipping N times leaves the norm at max/(N-th application), i.e.
-        # well below what the user asked for.
+        # Clipping N times leaves the norm well below what the user asked for.
         def body(dev):
             opt, loss = self._three_group_adan(71)
+            record = self._watch_clip(opt)
             opt.step(loss)
-            got = self._grad_norm(opt)
             self.assertAlmostEqual(
-                got / self.MAX_NORM, 1.0, places=3,
-                msg=f"gradient norm after step should be max_grad_norm, "
-                    f"got {got} [{dev}]")
+                record["norm_after"] / self.MAX_NORM, 1.0, places=3,
+                msg=f"gradient norm after clipping should be max_grad_norm, "
+                    f"got {record['norm_after']} [{dev}]")
         self._devices(body)
 
     def test_no_clip_when_bound_is_zero(self):
@@ -609,10 +617,92 @@ class TestAdanGradClip(_OptimCoreBase):
             p = self._param(rng.randn(4).astype("float32"))
             g = rng.randn(4).astype("float32")
             opt = jt.optim.Adan([p], lr=1e-3, max_grad_norm=0.0)
+            record = self._watch_clip(opt)
             opt.step(self._linear_loss(p, g))
-            self.assertAlmostEqual(self._grad_norm(opt),
-                                   float(np.linalg.norm(g)), places=5,
-                                   msg=f"max_grad_norm=0 must not clip [{dev}]")
+            self.assertEqual(record["calls"], 0,
+                             msg=f"max_grad_norm=0 must not clip [{dev}]")
+        self._devices(body)
+
+
+# ===========================================================================
+#  zero_grad must clear the gradient buffers, not just a flag
+# ===========================================================================
+class TestZeroGradClearsBuffers(_OptimCoreBase):
+    """``post_step`` calls ``zero_grad`` after every step. If that only flips a
+    bookkeeping flag, the buffers keep the consumed gradients and anything that
+    reads them afterwards silently works on stale data."""
+
+    def test_step_without_loss_after_a_step_is_a_no_op(self):
+        # step(loss) ends with zero_grad(); a following step() has no gradient
+        # to apply, so the parameter must not move again.
+        p0 = np.random.RandomState(80).randn(6).astype("float32")
+        g0 = np.random.RandomState(81).randn(6).astype("float32")
+        lr = 0.1
+
+        def body(dev):
+            p = self._param(p0)
+            opt = jt.optim.SGD([p], lr)
+            opt.step(self._linear_loss(p, g0))
+            after_first = _np(p).copy()
+            opt.step()                       # no loss, no backward
+            self.assertEqual(p, after_first, atol=self.TOL, rtol=self.TOL,
+                             msg=f"step() after zero_grad re-applied the "
+                                 f"previous gradient [{dev}]")
+        self._devices(body)
+
+    def test_buffers_are_zero_after_zero_grad(self):
+        p0 = np.random.RandomState(82).randn(6).astype("float32")
+        g0 = np.random.RandomState(83).randn(6).astype("float32")
+
+        def body(dev):
+            p = self._param(p0)
+            opt = jt.optim.SGD([p], 0.1)
+            opt.backward(self._linear_loss(p, g0))
+            self.assertEqual(opt.param_groups[0]["grads"][0], g0,
+                             atol=self.TOL, rtol=self.TOL)
+            opt.zero_grad()
+            self.assertEqual(opt.param_groups[0]["grads"][0],
+                             np.zeros_like(g0), atol=self.TOL, rtol=self.TOL,
+                             msg=f"zero_grad left the buffer untouched [{dev}]")
+            # opt_grad() is the documented accessor and must agree
+            self.assertEqual(p.opt_grad(opt), np.zeros_like(g0),
+                             atol=self.TOL, rtol=self.TOL,
+                             msg=f"opt_grad after zero_grad [{dev}]")
+        self._devices(body)
+
+    def test_clip_grad_norm_after_step_sees_zero_gradients(self):
+        p0 = np.random.RandomState(84).randn(6).astype("float32")
+        g0 = np.random.RandomState(85).randn(6).astype("float32")
+
+        def body(dev):
+            p = self._param(p0)
+            opt = jt.optim.SGD([p], 0.1)
+            opt.step(self._linear_loss(p, g0))
+            opt.clip_grad_norm(1e-3, 2)
+            norm = float(np.linalg.norm(_np(opt.param_groups[0]["grads"][0])))
+            self.assertLessEqual(
+                norm, 1e-3 + self.TOL,
+                msg=f"clip_grad_norm after step left un-clipped gradients "
+                    f"(norm {norm}) [{dev}]")
+        self._devices(body)
+
+    def test_zero_grad_then_backward_does_not_accumulate(self):
+        # the flag's original job -- overwrite instead of accumulate -- must
+        # survive the buffer clearing.
+        p0 = np.random.RandomState(86).randn(6).astype("float32")
+        g0 = np.random.RandomState(87).randn(6).astype("float32")
+        lr = 0.1
+
+        def body(dev):
+            p = self._param(p0)
+            opt = jt.optim.SGD([p], lr)
+            opt.backward(self._linear_loss(p, g0))
+            opt.zero_grad()
+            opt.backward(self._linear_loss(p, g0))
+            opt.step()
+            self.assertEqual(p, p0 - lr * g0, atol=self.TOL, rtol=self.TOL,
+                             msg=f"zero_grad must discard the first backward "
+                                 f"[{dev}]")
         self._devices(body)
 
 

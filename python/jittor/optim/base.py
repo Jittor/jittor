@@ -150,6 +150,22 @@ class Optimizer(object):
 
 
     def zero_grad(self):
+        ''' Reset the accumulated gradients of every param group to zero.
+
+        The buffers in ``pg["grads"]`` are cleared, not just marked: they are
+        public (``opt_grad``, ``clip_grad_norm`` and user code all read them),
+        and ``post_step`` calls this after every step, so leaving the consumed
+        gradients in place made every later reader silently work on stale data.
+
+        The write is skipped when the gradients are already known to be zero,
+        and in the ordinary training loop the zeros are overwritten by the next
+        ``backward`` before anything can observe them, so jittor's lazy graph
+        drops them without ever running the fill.
+        '''
+        if not self.__zero_grad:
+            for pg in self.param_groups:
+                for g in pg.get("grads", ()):
+                    g.update(jt.zeros_like(g).stop_grad())
         self.__zero_grad = True
 
     def backward(self, loss, retain_graph=False):
