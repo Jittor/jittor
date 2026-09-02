@@ -467,7 +467,13 @@ DEF_IS(VarHolder*, bool) is_type(PyObject* obj) {
 }
 
 DEF_IS(VarHolder*, PyObject*) to_py_object(T a) {
-    PyObjHolder obj(_PyObject_New(&PyjtVarHolder.ht_type));
+    // tp_alloc, not _PyObject_New: VarHolder is a GC type (its instance dict
+    // can close a reference cycle), and GC instances need the collector's
+    // header in front of them plus a place on the tracked list.  tp_alloc also
+    // zeroes the storage, so the dict slot and the inited flag below start out
+    // null even if a collection runs before they are filled in.
+    auto vh_type = &PyjtVarHolder.ht_type;
+    PyObjHolder obj(vh_type->tp_alloc(vh_type, 0));
     auto ptr = GET_RAW_PTR(T, obj.obj);
     ((PyObject**)(((char*)obj.obj) + sizeof(PyObject) + sizeof(typename std::remove_pointer<T>::type)))[0] = PyDict_New();
     // new attr_dict

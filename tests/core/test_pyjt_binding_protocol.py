@@ -13,6 +13,7 @@ A break here shows up as a crash or as silently wrong data, never as a normal
 Python exception, which is why each case is spelled out separately.
 """
 
+import gc
 import os
 import subprocess
 import sys
@@ -153,6 +154,56 @@ class TestSliceUnpack(unittest.TestCase):
         np.testing.assert_array_equal(self.a[::-1].numpy(), np_a[::-1])
         np.testing.assert_array_equal(self.a[1:3, ::2].numpy(), np_a[1:3, ::2])
 
+
+class TestInstanceDictParticipatesInGC(unittest.TestCase):
+    """A type with an instance ``__dict__`` must be collectable.
+
+    ``tp_dictoffset`` was set without ``Py_TPFLAGS_HAVE_GC``/traverse/clear, so
+    any cycle closed through the dict -- ``v.foo = v``, or the ``grad``/``_base``
+    back-pointers a torch shim hangs off a tensor -- was never collected, and
+    each leaked wrapper pinned its whole graph and the device memory behind it.
+    """
+
+    def test_var_type_is_gc_enabled(self):
+        Py_TPFLAGS_HAVE_GC = 1 << 14
+        self.assertTrue(jt.Var.__flags__ & Py_TPFLAGS_HAVE_GC)
+        self.assertTrue(gc.is_tracked(jt.array([1.0])))
+
+    def test_self_referencing_var_is_collected(self):
+        gc.collect()
+        jt.gc()
+        before = jt.liveness_info()["lived_vars"]
+        for _ in range(50):
+            v = jt.array([1.0, 2.0])
+            v.self_ref = v          # cycle through the instance dict
+            del v
+        gc.collect()
+        jt.gc()
+        after = jt.liveness_info()["lived_vars"]
+        self.assertEqual(after, before)
+
+    def test_two_var_cycle_is_collected(self):
+        gc.collect()
+        jt.gc()
+        before = jt.liveness_info()["lived_vars"]
+        for _ in range(20):
+            a = jt.array([1.0])
+            b = jt.array([2.0])
+            a.peer = b
+            b.peer = a
+            del a, b
+        gc.collect()
+        jt.gc()
+        self.assertEqual(jt.liveness_info()["lived_vars"], before)
+
+    def test_attributes_and_dict_still_work(self):
+        v = jt.array([1.0])
+        v.foo = 42
+        self.assertEqual(v.foo, 42)
+        self.assertEqual(v.__dict__["foo"], 42)
+        self.assertEqual(vars(v)["foo"], 42)
+        del v.foo
+        self.assertFalse(hasattr(v, "foo"))
 
 if __name__ == "__main__":
     unittest.main()

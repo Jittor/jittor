@@ -586,7 +586,11 @@ def compile_src(src, h, basename):
             # dereferences members that were never initialised.  The storage is
             # zeroed by PyType_GenericNew, so the dict pointer is null and
             # Py_XDECREF on it is a no-op.
-            func_fill = ("int64 n = 0; (void)n;\n"
+            # A GC-tracked instance has to leave the collector's list before
+            # its storage goes away; untracking an object that was never
+            # tracked is a no-op, so this is safe on the failed-tp_init path.
+            untrack = "PyObject_GC_UnTrack(self);\n" if has_attr_dict else ""
+            func_fill = (f"int64 n = 0; (void)n;\n{untrack}"
                 f"if (!{inited_flag}) {{ {before_return} return; }}")
         
         elif name in binary_number_slots:
@@ -843,6 +847,27 @@ def compile_src(src, h, basename):
     has_map = class_name in ["VarHolder", "NanoVector"]
     has_seq = class_name in ["VarHolder", "NanoVector"]
     # add extra include to avoid compile error
+    # A type carrying an instance dict can close a reference cycle through it
+    # -- `v.foo = v`, or the grad/_base back-pointers a torch shim hangs off a
+    # tensor.  Without Py_TPFLAGS_HAVE_GC plus traverse/clear those cycles are
+    # never collected, and every leaked wrapper pins its whole computation
+    # graph and the device memory behind it.
+    gc_type_code = ""
+    if has_attr_dict:
+        dict_slot = (f"((PyObject**)(((char*)self) + sizeof(PyObject) + "
+                     f"sizeof({class_name})))[0]")
+        gc_type_code = f"""
+        tp.tp_flags |= Py_TPFLAGS_HAVE_GC;
+        tp.tp_traverse = [](PyObject* self, visitproc visit, void* arg) -> int {{
+            Py_VISIT({dict_slot});
+            return 0;
+        }};
+        tp.tp_clear = [](PyObject* self) -> int {{
+            Py_CLEAR({dict_slot});
+            return 0;
+        }};
+        tp.tp_free = PyObject_GC_Del;
+        """
     src_code = ""
     if include_name.endswith("var_slices.h"):
         src_code += '#include "var_holder.h"\n' 
@@ -893,6 +918,7 @@ def compile_src(src, h, basename):
         {"tp.tp_basicsize += sizeof(uint64); // GET_INITED_FLAG slot" if has_dealloc else ""}
         tp.tp_new = PyType_GenericNew;
         tp.tp_flags = Py_TPFLAGS_DEFAULT;
+        {gc_type_code}
         {"tp.tp_flags |= Py_TPFLAGS_HEAPTYPE; htp.ht_name = htp.ht_qualname = to_py_object<string>(tp.tp_name);"
         if "heaptype" in class_info["attrs"] else ""}
         tp.tp_methods = &class_defs[0];
