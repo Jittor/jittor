@@ -153,7 +153,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 2.17 | 算子身份用注册期整型 id | 待领 | | |
 | 2.18 | 算子注册表惰性初始化 | 待领 | | |
 | 2.19 | 错误分两档 | 待领 | | |
-| 2.20 | 信号处理器只做 `write` 与 `_exit`，符号化交给预建 helper 进程 | 待领 | | |
+| 2.20 | 信号处理器只做 `write` 与 `_exit`，符号化交给预建 helper 进程 | 进行中 | bindings | |
 | 2.21 | `DEFINE_FLAG_WITH_SETTER` 先赋值再调 setter，签名收新旧两值 | 待领 | | |
 | 2.22 | 环境变量统一 `JT_` 前缀 | 待领 | | |
 | 2.23 | 布局收尾 | 待领 | | |
@@ -242,7 +242,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 6.C18 | CachingBlock 保存底层 allocation 并原样回传，不再传 0 | 进行中 | mem | |
 | 6.C19 | 每个分配器一把锁并覆盖 `gc()` | 进行中 | mem | |
 | 6.C20 | swap | 进行中 | mem | |
-| 6.C21 | 检查 `NODE_MEMCHECK` 外 `check_graph` 静默空转 | 待领 | | |
+| 6.C21 | 检查 `NODE_MEMCHECK` 外 `check_graph` 静默空转 | 进行中 | bindings | |
 | 6.C22 | pyjt 关键字参数 | 已合并 | bindings | ed148a56 |
 | 6.C23 | `is_type<NanoString>` 收窄 | 已合并 | bindings | f8f9de43 |
 | 6.C24 | 带实例 `__dict__` 的类型加 `Py_TPFLAGS_HAVE_GC` 与 trave… | 已合并 | bindings | 4a30c5e4 |
@@ -252,7 +252,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 6.C28 | 生成带「已构造」标志的 `tp_new` 或 `tp_dealloc` 先检查 | 已合并 | bindings | 8bd40d02 |
 | 6.C29 | 标量转数组的全局 `tmp_data` 改自带 buffer | 已合并 | bindings | b57c31a1 |
 | 6.C30 | `helper_cuda.h` 的 `peek` 去掉进程级闩 `peek_logged` | 待领 | | |
-| 6.C31 | 失败的 import jittor 在退出期 abort，父进程无声消失 | 待领 | | |
+| 6.C31 | 失败的 import jittor 在退出期 abort，父进程无声消失 | 已合并 | bindings | 64350894 |
 | 6.P01 | 转置标记陈旧 | 并入 5.03 | | |
 | 6.P02 | Function 实例复用、no_grad 泄漏、tied weight 参数集合 | 并入 5.07、5.08、5.04 | | |
 | 6.P03 | H1 分组 conv3d 的 ww reindex 形状顺序 | 已合并 | pyops | a50c5678 |
