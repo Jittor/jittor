@@ -574,7 +574,9 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             }
         } else {
             for (auto* var : op->outputs()) {
-                var->alloc(allocator);
+                // the return value used to be discarded: a CPU OOM reached the
+                // generated kernel as a null pointer and crashed there
+                CHECK(var->alloc(allocator)) << "Unable to allocate memory for" << var;
             }
         }
         if (PREDICT_BRANCH_NOT_TAKEN(profile_memory_enable))

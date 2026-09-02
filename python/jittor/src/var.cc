@@ -125,7 +125,10 @@ bool Var::alloc(Allocator* allocator) {
     }
     mem_ptr = allocator->alloc(size, allocation);
     this->allocator = allocator;
-    return mem_ptr;
+    // A failed allocation throws (see AlignedAllocator::alloc and
+    // CudaDeviceAllocator::alloc), so a null pointer here only means a
+    // zero-sized var, which is allocated as far as callers are concerned.
+    return mem_ptr != nullptr || size == 0;
 }
 
 VarPtr clone(Var* x);
