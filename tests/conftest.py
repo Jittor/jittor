@@ -418,6 +418,17 @@ def report_runtime_state_left_behind(request):
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
     _report_files_that_executed_nothing(terminalreporter, config)
+    if _MISSING_REAL_TORCH:
+        terminalreporter.write_sep(
+            "=", "skipped for want of the PyTorch this session declared it has")
+        terminalreporter.write_line(
+            "JITTOR_REQUIRE_REAL_TORCH=1 says an independent PyTorch is "
+            "configured. These cases disagreed, so the comparison this session "
+            "exists for did not happen -- check REAL_TORCH_PYTHON and "
+            "REAL_TORCH_SITE rather than the tests."
+        )
+        for nodeid, reason in _MISSING_REAL_TORCH:
+            terminalreporter.write_line("%s  (%s)" % (nodeid, reason))
     if not _STATE_LEAKS:
         return
     terminalreporter.write_sep("=", "runtime state left behind by a test file")
@@ -469,7 +480,18 @@ def pytest_runtest_logreport(report):
         record["executed"] += 1
     elif report.skipped and report.when in ("setup", "call"):
         record["skipped"] += 1
-        record["reasons"].add(_skip_reason(report))
+        reason = _skip_reason(report)
+        record["reasons"].add(reason)
+        if _real_torch_is_required() and _blames_missing_torch(reason):
+            _MISSING_REAL_TORCH.append((report.nodeid, reason))
+
+
+def _blames_missing_torch(reason):
+    try:
+        from _helpers.gate_scope import REAL_TORCH_PATTERNS
+    except Exception:
+        return False
+    return any(pattern in reason for pattern in REAL_TORCH_PATTERNS)
 
 
 def _skip_reason(report):
@@ -485,18 +507,40 @@ def _skip_reason(report):
     return str(longrepr or "").lower()
 
 
+def _real_torch_is_required():
+    """Whether this session promised to have an independent PyTorch."""
+    value = os.environ.get("JITTOR_REQUIRE_REAL_TORCH", "").strip().lower()
+    return value in ("1", "true", "yes", "on")
+
+
+def _accepted_skip_patterns():
+    try:
+        from _helpers.gate_scope import (
+            ENVIRONMENT_SKIP_PATTERNS, REAL_TORCH_PATTERNS)
+    except Exception:
+        return ()
+    if not _real_torch_is_required():
+        return ENVIRONMENT_SKIP_PATTERNS
+    # The inversion: a session that declares it has real PyTorch cannot also
+    # accept "no torch" as an explanation, or it reports success for the one
+    # thing it exists to check.
+    return tuple(pattern for pattern in ENVIRONMENT_SKIP_PATTERNS
+                 if pattern not in REAL_TORCH_PATTERNS)
+
+
 def _environment_explains(reasons):
     """Whether every skip in a file blamed something this machine lacks."""
-    try:
-        from _helpers.gate_scope import ENVIRONMENT_SKIP_PATTERNS
-    except Exception:
-        return False
-    if not reasons:
+    patterns = _accepted_skip_patterns()
+    if not reasons or not patterns:
         return False
     return all(
-        any(pattern in reason for pattern in ENVIRONMENT_SKIP_PATTERNS)
+        any(pattern in reason for pattern in patterns)
         for reason in reasons
     )
+
+
+#: ``(nodeid, reason)`` for skips that a real-PyTorch session must not have.
+_MISSING_REAL_TORCH = []
 
 
 def _files_that_executed_nothing():
@@ -591,18 +635,23 @@ def _exemption_note(path, exemptions):
 
 
 def pytest_sessionfinish(session, exitstatus):
-    """Fail a gate whose entry never executed a case and never said why.
+    """Fail a gate that proved nothing, in either of the two ways it can.
 
     A gate entry that only ever skips is indistinguishable from one that passes,
     which is how 227 operators' backward formulas went unverified in three green
     gates. Under ``JITTOR_TEST_REQUIRE_EXECUTION=1`` an entry has to either run
     something or be listed in ``gate_scope.EXECUTES_NOTHING`` with a reason.
     """
+    if _MISSING_REAL_TORCH:
+        # Not gated on JITTOR_TEST_REQUIRE_EXECUTION: a session that declared it
+        # has real PyTorch and then skipped for want of it is misconfigured
+        # whatever else it was asked to check.
+        session.exitstatus = 1
     if not _requires_execution():
         return
-    exemptions = _execution_exemptions()
     if getattr(session.config.option, "collectonly", False):
         return
+    exemptions = _execution_exemptions()
     unexplained = [
         path for path in _files_that_executed_nothing()
         if path not in exemptions

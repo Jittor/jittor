@@ -114,7 +114,8 @@ def _warmup(environment):
         # child imported whatever the editable install points at, so the warm-up
         # filled the session's JITTOR_HOME with the main tree's core and the
         # pytest run that followed compiled everything a second time. The log
-        # said so all along -- cache_name read `2.0`, not the branch.
+        # said so all along: the `src:` line it prints names the tree it
+        # actually imported.
         completed = run_python_child(
             ["-c", probe], cwd=REPO_ROOT, env=environment, inherit=False,
             merge_stderr=True, timeout=0)

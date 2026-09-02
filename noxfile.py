@@ -1460,6 +1460,92 @@ def cpu(session):
     _run_pytest(session, CPU_TORCH_ORACLE_TESTS, oracle_env)
 
 
+#: The ecosystem comparison: numbers first, then wall clock.
+ECOSYSTEM_TESTS = (
+    "tests/compat/torch/test_ecosystem_parity.py",
+    "tests/compat/torch/test_ecosystem_speed.py",
+)
+
+#: Speed ceiling for the nightly ecosystem gate: Jittor may take at most this
+#: multiple of PyTorch's wall clock.
+#:
+#: Asserted in nightly only, never in the PR gate. A wall-clock upper bound is
+#: the one kind of assertion a loaded machine can fail on its own (see the
+#: `load_sensitive` marker), and a false red on the speed gate costs more than
+#: a late true red: it teaches people to ignore the gate that also checks the
+#: numbers. The ratio is always *reported*, whether or not it is asserted.
+ECOSYSTEM_SPEED_RATIO = "1.07"
+
+
+@nox.session(python="3.11", venv_backend="venv")
+def ecosystem(session):
+    """Compare seven downstream frameworks against an independent PyTorch.
+
+    This is the project's headline claim -- "import torch and your code runs,
+    with the same numbers and comparable speed" -- and until now it had no
+    automatic gate at all. The comparison needs two interpreters, because real
+    PyTorch and the Jittor shim both own the name ``torch``: ``REAL_TORCH_PYTHON``
+    produces the weights and the reference values, this one recomputes from the
+    same weights.
+
+    Fail-closed on purpose. These tests skip themselves when
+    ``REAL_TORCH_PYTHON`` is unset -- correctly, since comparing the shim
+    against itself would prove nothing -- so a nightly job that lost its oracle
+    would otherwise report success for the one thing it exists to check.
+    ``JITTOR_REQUIRE_REAL_TORCH=1`` turns "skipped for want of torch" into a
+    failure that names every case that did not happen.
+    """
+    _root, env = _session_env(session, "ecosystem")
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    if not oracle:
+        session.error(
+            "REAL_TORCH_PYTHON must name an interpreter whose `import torch` is "
+            "an independent binary PyTorch. Comparing Jittor's shim against "
+            "itself is self-referential, which is why the cases skip without it "
+            "-- and why this session refuses to run rather than report a green "
+            "that means nothing."
+        )
+    if not Path(oracle).is_file():
+        session.error("REAL_TORCH_PYTHON is not an interpreter: %s" % oracle)
+    session.install(
+        "numpy==1.26.4",
+        "pillow==11.0.0",
+        PYTEST,
+        PYTEST_TIMEOUT,
+        SCIPY,
+        SETUPTOOLS,
+        "tqdm==4.67.1",
+    )
+    env.update(
+        {
+            "REAL_TORCH_PYTHON": oracle,
+            "JITTOR_REQUIRE_REAL_TORCH": "1",
+            "JITTOR_TEST_REQUIRE_EXECUTION": "1",
+            "JITTOR_TORCH_SHIM": "1",
+            "JITTOR_ECOSYSTEM_SPEED_RATIO": os.environ.get(
+                "JITTOR_ECOSYSTEM_SPEED_RATIO", ECOSYSTEM_SPEED_RATIO),
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+        }
+    )
+    reference_site = os.environ.get(
+        "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE", "").strip()
+    if reference_site:
+        env["JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE"] = reference_site
+    # Both interpreters report which device they ran on, and the harness fails
+    # if they disagree -- a CPU-versus-GPU comparison would be meaningless.
+    env.setdefault("JITTOR_TEST_DEVICES", os.environ.get("JITTOR_TEST_DEVICES", "cpu"))
+    session.run(
+        oracle, "-c",
+        "import torch, sys; "
+        "assert not hasattr(torch, '_torch_compat_install_context'), "
+        "'REAL_TORCH_PYTHON resolves to the Jittor shim, not an independent build'; "
+        "print('oracle torch', torch.__version__)",
+        external=True, env=env,
+    )
+    _run_pytest_once(session, ECOSYSTEM_TESTS, env, timeout=3600)
+
+
 @nox.session(python=False)
 def optional(session):
     """Run fail-closed optional compatibility gates on real CUDA."""

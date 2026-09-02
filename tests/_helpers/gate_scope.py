@@ -72,13 +72,28 @@ ENVIRONMENT_SKIP_PATTERNS = (
     "cuda", "cudnn", "cublas", "cutt", "cusparse", "cufft", "curand",
     "gpu", "accelerator", "acl", "npu", "ascend", "cann", "rocm", "hip",
     "triton",
-    # an independent PyTorch build, which only the oracle sessions have
+    # an independent PyTorch build, which only the oracle sessions have.
+    # Withdrawn when JITTOR_REQUIRE_REAL_TORCH=1 -- see REAL_TORCH_PATTERNS.
     "torch",
     # multi-rank launchers
     "mpi", "nccl", "world size",
     # opt-in assets and probes
     "download", "dataset", "network", "manual probe",
 )
+
+#: The subset of the above that stops being an explanation once a session
+#: promises to *have* an independent PyTorch.
+#:
+#: This is the fail-open trap in the audit, stated as code. The comparison
+#: against real PyTorch is the project's core claim, and its tests skip
+#: themselves when ``REAL_TORCH_PYTHON`` is unset -- correctly, since comparing
+#: Jittor's own shim against itself proves nothing. But a nightly gate whose
+#: whole purpose is that comparison then reports success while doing nothing,
+#: for exactly the reason it was built to prevent. So in a session that declares
+#: ``JITTOR_REQUIRE_REAL_TORCH=1``, "no torch" is a *configuration error*, not a
+#: fact about the machine, and every such skip fails the run.
+REAL_TORCH_PATTERNS = ("torch",)
+
 
 #: ``(path, reason)`` -- a file exempt even though its skips do not explain it.
 #: Empty is the correct state; the rule above should cover the honest cases.

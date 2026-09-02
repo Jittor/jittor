@@ -1,0 +1,65 @@
+name: Ecosystem
+
+# The project's headline claim -- "import torch and your code runs, with the
+# same numbers and comparable speed" -- had no automatic gate at all (0.05).
+# Nightly rather than per-PR: it runs seven downstream frameworks twice each,
+# once in an independent PyTorch and once in Jittor.
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  baseline:
+    uses: ./.github/workflows/_ci-baseline.yml
+
+  ecosystem:
+    needs: baseline
+    name: nox / ecosystem
+    runs-on: ${{ needs.baseline.outputs.host_runner }}
+    container:
+      image: ${{ needs.baseline.outputs.cpu_ci_image }}
+    timeout-minutes: 240
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install native CPU toolchain
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential libomp-dev
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ needs.baseline.outputs.python_version }}
+      - name: Install pinned development tools
+        run: python -m pip install -r requirements/dev-tools.txt
+      # A separate interpreter, because real PyTorch and the Jittor shim both
+      # own the name `torch`: one process cannot hold both. The oracle carries
+      # the downstream libraries too, so each side imports its own.
+      - name: Build the independent PyTorch oracle
+        run: |
+          set -euo pipefail
+          python -m venv "${RUNNER_TEMP}/oracle"
+          "${RUNNER_TEMP}/oracle/bin/python" -m pip install --upgrade pip
+          "${RUNNER_TEMP}/oracle/bin/python" -m pip install \
+            --index-url https://download.pytorch.org/whl/cpu torch==2.7.1
+          "${RUNNER_TEMP}/oracle/bin/python" -m pip install \
+            transformers==4.46.3 diffusers==0.31.0 peft==0.13.2 \
+            mmengine==0.10.5 numpy==1.26.4
+          echo "REAL_TORCH_PYTHON=${RUNNER_TEMP}/oracle/bin/python" >> "$GITHUB_ENV"
+      - name: Compare seven frameworks against PyTorch
+        env:
+          # Reported always, asserted only here: a wall-clock ceiling is the one
+          # assertion a loaded machine can fail on its own, and a false red on
+          # the speed gate teaches people to ignore the numbers gate beside it.
+          JITTOR_ECOSYSTEM_SPEED_RATIO: "1.07"
+        run: python -m nox -s ecosystem
