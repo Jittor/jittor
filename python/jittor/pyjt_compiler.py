@@ -72,21 +72,97 @@ unary_number_slots = {
     "__abs__": "nb_absolute",
 }
 
+def skip_literal_or_comment(s, i):
+    """Return the index just past a string/char literal or comment at ``s[i]``.
+
+    Returns ``i`` unchanged when ``s[i]`` starts neither.  The C++ "parser"
+    here is a character scan, so a ``)`` inside ``"..."`` or a ``,`` inside
+    ``/* ... */`` used to be read as real punctuation and silently produced a
+    wrong parameter list.
+    """
+    c = s[i]
+    if c in "\"'":
+        j = i+1
+        while j < len(s):
+            if s[j] == '\\': j += 2; continue
+            if s[j] == c: return j+1
+            j += 1
+        raise ValueError(f"unterminated {c} literal in C++ source: {s[i:i+40]!r}")
+    if c == '/' and i+1 < len(s):
+        if s[i+1] == '/':
+            j = s.find('\n', i)
+            return len(s) if j < 0 else j+1
+        if s[i+1] == '*':
+            j = s.find('*/', i+2)
+            if j < 0:
+                raise ValueError(f"unterminated block comment: {s[i:i+40]!r}")
+            return j+2
+    return i
+
 def split_args(s):
-    # split args xxx,xxx, xx<xx,xx>, xx
+    """Split a C++ parameter list on the commas that separate parameters.
+
+    Counts (), [], {} as well as <>, because only counting angle brackets split
+    ``int a=g(1,2), int b`` in the middle of ``g(1,2)``.  A ``>`` never pushes
+    the depth below zero either: it used to, and from then on ``presum`` could
+    never return to 0, so *every* later comma was ignored and the whole tail of
+    the signature collapsed into one parameter.  Anything left unbalanced at the
+    end raises instead of returning a plausible-looking wrong answer.
+    """
     s = s.strip()
     if s=="": return []
     prev = -1
-    presum = 0
+    round_depth = 0
+    angle_depth = 0
     args = []
-    for i in range(len(s)):
-        if s[i]=='<':
-            presum += 1
-        elif s[i]=='>':
-            presum -= 1
-        if presum==0 and s[i]==',':
+    i = 0
+    while i < len(s):
+        j = skip_literal_or_comment(s, i)
+        if j != i:
+            i = j
+            continue
+        c = s[i]
+        if c in "([{":
+            round_depth += 1
+        elif c in ")]}":
+            round_depth -= 1
+            if round_depth < 0:
+                raise ValueError(f"unbalanced '{c}' in C++ parameter list: {s!r}")
+        elif c == '<':
+            # `<<` and `<=` are operators, not the start of a template argument
+            # list; both characters have to be consumed or the second `<` opens
+            # a bracket that never closes.  A bare `a < b` does count here, and
+            # the balance check at the end turns that into an error rather than
+            # a silent mis-split.
+            if s[i+1:i+2] in ("<", "="):
+                i += 2
+                continue
+            angle_depth += 1
+        elif c == '>':
+            # A `>` only ever closes something that was opened: `->`, `>=` and
+            # a top-level comparison leave the depth alone.  This is what used
+            # to drive it negative, after which it could never return to 0 and
+            # every remaining comma was ignored.
+            if s[i-1:i] == '-':
+                pass
+            elif s[i+1:i+2] == '=':
+                i += 2
+                continue
+            elif s[i+1:i+2] == '>':
+                # `vector<vector<int>>` closes two; `8 >> 1` closes none.
+                angle_depth -= min(angle_depth, 2)
+                i += 2
+                continue
+            elif angle_depth > 0:
+                angle_depth -= 1
+        elif c == ',' and round_depth == 0 and angle_depth == 0:
             args.append(s[prev+1:i])
             prev = i
+        i += 1
+    if round_depth != 0 or angle_depth != 0:
+        raise ValueError(
+            f"unbalanced brackets in C++ parameter list (round={round_depth}, "
+            f"angle={angle_depth}): {s!r}")
     args.append(s[prev+1:])
     return args
 
@@ -282,7 +358,14 @@ def get_hash_condition(s):
     return f"khash == {get_hash(s)}u"
 
 reg = re.compile(
-    '(/\\*(.*?)\\*/\\s*)?(//\\s*@pyjt\\(([^\\n]*)\\)\\s*)'
+    # The doc-comment group must not run past its own `*/`.  With `(.*?)` and
+    # re.DOTALL it could: a `/** ... */` that is NOT followed by an @pyjt
+    # annotation made the engine keep expanding to the next `*/` that IS one,
+    # swallowing every annotation in between.  A single doc comment written
+    # above an ordinary declaration was enough to eat the `// @pyjt(Var)` that
+    # opens a class, after which every method of that class was emitted as a
+    # free function -- "was not declared in this scope", from a comment.
+    '(/\\*((?:(?!\\*/)[\\s\\S])*)\\*/\\s*)?(//\\s*@pyjt\\(([^\\n]*)\\)\\s*)'
     # ^^^^^^^^^^^^^^^^^          ^^^^    ^^^^
     # doc string $1              pyjt    args $3
     +
@@ -354,20 +437,40 @@ def compile_src(src, h, basename):
         pynames = esplit(pyjt)
         end = x.end()
         def find_bc(i):
-            while src[i] not in "({;":
+            # Locate the opening bracket of the declaration that follows the
+            # annotation, and its match.  Both scans skip string/char literals
+            # and comments: `void f(const char* s = ")")` used to end the
+            # parameter list at the `)` inside the literal, and a `,` or brace
+            # inside a comment counted as punctuation.
+            while True:
+                j = skip_literal_or_comment(src, i)
+                if j != i:
+                    i = j
+                    continue
+                if src[i] in "({;":
+                    break
                 i += 1
             j = i+1
             if src[i]==';':
                 return i, j
-            presum = 1
+            closing = {'(': ')', '{': '}', '[': ']'}
+            stack = [src[i]]
             while True:
+                if j >= len(src):
+                    raise ValueError(
+                        "unterminated declaration after @pyjt: "
+                        + src[i:i+80])
+                k = skip_literal_or_comment(src, j)
+                if k != j:
+                    j = k
+                    continue
                 if src[j] in "({[":
-                    presum += 1
+                    stack.append(src[j])
                 elif src[j] in ")}]":
-                    presum -= 1
-                    if presum==0:
-                        s = src[i]+src[j]
-                        assert s in ("()","{}","()"), "braces not match "+s
+                    opener = stack.pop()
+                    assert closing[opener] == src[j], \
+                        "braces not match " + opener + src[j]
+                    if not stack:
                         return i, j
                 j += 1
         # // @pyjt(DType)
@@ -422,6 +525,15 @@ def compile_src(src, h, basename):
         dec = src[end:b+1].strip()
         arr = src[end:a].strip().split()
         func_name = arr[-1]
+        # `VarHolder *foo(...)` splits into ["VarHolder", "*foo"], which used to
+        # make the function name literally "*foo" and emit `*foo(...)` as the
+        # call.  The pointer belongs to the return type.
+        return_prefix = ""
+        while func_name[:1] in ("*", "&"):
+            return_prefix += func_name[0]
+            func_name = func_name[1:]
+        assert func_name and re.fullmatch(r"[A-Za-z_~][A-Za-z_0-9]*", func_name), \
+            f"cannot read a function name out of {src[end:a].strip()!r} in {h}"
 
         is_constructor = False
         if is_scope_def and func_name==class_name:
@@ -432,8 +544,12 @@ def compile_src(src, h, basename):
             if arg=="": continue
             default = ""
             if "=" in arg:
-                arg, default = arg.split('=')
-                default = default
+                # split once: a default value may itself contain `==`, `>=` or
+                # `<=`, which used to raise "too many values to unpack" during
+                # the build.
+                arg, default = arg.split('=', 1)
+                assert "=" not in arg, \
+                    f"cannot read a parameter out of {arg + '=' + default!r} in {h}"
             arg = arg.strip()
             name = arg.split(' ')[-1]
             tp = arg[:-len(name)]
@@ -457,6 +573,7 @@ def compile_src(src, h, basename):
                 continue
             if return_t != "": return_t += " "
             return_t += a
+        return_t += return_prefix
 
         if is_scope_def and class_info and "submodule" in class_info["attrs"]:
             is_static = True

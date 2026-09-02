@@ -91,7 +91,40 @@ for f in /tmp/gen_new/*.cc; do
 done   # 全是 0
 ```
 
-## 4. 会段错误的用例：用子进程判返回码
+**改生成器时这个 diff 必须是空的**（除非你就是要改生成结果）。它是重编之前唯一
+能发现「顺手把别的绑定改坏了」的手段。
+
+## 4. 改带 @pyjt 的头文件同样会踩生成器的雷
+
+生成器对 C++ 的「解析」是字符扫描加一个正则，**给已有头文件加一行完全合法的 C++
+就可能让整个类的绑定塌掉**。真实踩过的一条：给 `var_holder.h` 里一个普通声明写了
+`/** ... */` 文档注释，注解正则的可选文档注释组（`(.*?)` 加 `re.DOTALL`）一路吃到
+下一个 `*/`，把 `// @pyjt(Var)` 整条吞掉，于是 `VarHolder` 的**所有方法**被当成
+自由函数生成：
+
+```
+error: 'debug_msg' was not declared in this scope
+   return to_py_object<string>((debug_msg()));
+```
+
+报错在生成的 .cc 里，和你改的那一行毫无关系。判据：生成的调用长成
+`((foo(arg0)))` 而不是 `((GET_RAW_PTR(Cls,self))->foo(arg0))`，就是类范围丢了。
+
+所以**任何**对带 `@pyjt` 头文件的改动（不只是改生成器），提交前都跑一遍 §3 的
+render + diff，确认变的只有你想变的那几处。
+
+### 生成器可以脱离核心单独测
+
+`pyjt_compiler.py` 只依赖 `jittor_utils`，`tests/core/test_pyjt_compiler_parser.py`
+用 `importlib` 按路径直接加载它，整个文件不到一秒跑完。新增一种绑定写法就在那里
+加一个用例——那份文件的每个用例都对应一种「合法但曾经被解析错」的写法。
+
+写这类用例有个坑：`compile_src` 里是 `reg.finditer(src, re.S)`，`re.S` 落在了 `pos`
+参数上，所以**源码前 16 个字符不参与扫描**。测试片段必须先垫一行注释，否则你的
+`// @pyjt(...)` 根本不会被看见，`compile_src` 返回 `None`，看起来像「什么都没生成」。
+（真实头文件都有版权头，所以线上没暴露这一条。）
+
+## 5. 会段错误的用例：用子进程判返回码
 
 绑定层的 bug 有相当一部分表现为段错误（CPython 协议用错、在未构造对象上跑析构、
 读已释放内存）。直接写进 pytest 会把整个 session 带走，看起来像「测试崩了」而不是
@@ -114,14 +147,14 @@ self.assertIn("SURVIVED", output)
 只判返回码不够——jittor 的段错误处理器会打印 backtrace 后走 `exit(1)`，
 也有它自己 catch 住而进程正常退出的情况。
 
-## 5. C++ 改动的重编成本
+## 6. C++ 改动的重编成本
 
 改 `python/jittor/src/**` 或 `pyjt_compiler.py` 之后，**每个新进程**都要重编一次
 `jittor_core`（分钟级）。所以：把一批改动攒起来一次验证，不要改一行跑一次。
 CPU 与 CUDA 是两份缓存，两边都要跑一次；CPU-only 用
 `JITTOR_TEST_DEVICES=cpu nvcc_path=""`，快很多。
 
-## 6. 选测试文件时别把整个进程翻成 torch 模式
+## 7. 选测试文件时别把整个进程翻成 torch 模式
 
 `tests/conftest.py` 会看你在命令行上点了哪些文件：只要其中任何一个属于
 `tests/_helpers/process_modes.py` 的 `TORCH_MODE_PATHS`（`tests/core/test_type_system.py`、
@@ -134,7 +167,7 @@ CPU 与 CUDA 是两份缓存，两边都要跑一次；CPU-only 用
 判据：**同一个文件单独跑通、和别的文件一起跑就挂**，先查是不是混进了 torch 模式路径。
 把 torch 模式的文件单独起一条命令跑。
 
-## 7. 类型对象改了布局时要额外确认的事
+## 8. 类型对象改了布局时要额外确认的事
 
 给生成的类型加字段（改 `tp_basicsize`）或改 `tp_flags` 之后，除了新测试还要跑：
 
