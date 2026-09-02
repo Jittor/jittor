@@ -9,9 +9,48 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 import jittor as jt
+import numpy as np
 from functools import partial
 from . import _arg_policy
 from .nn import ComplexNumber
+
+
+# ---------------------------------------------------------------------------
+# Helpers shared by the numpy_code bodies below.
+#
+# Each of these used to be re-declared inside every forward_code/backward_code
+# in this file -- the batched transpose 12 times, the einsum matmul 11 times,
+# and the complex<->stack pair 8 times each. They were byte-identical copies,
+# so a fix to one of them reached only that one op.
+#
+# The bodies take ``np`` as a parameter (numpy is injected by numpy_code),
+# which is why these lived inside; defining them here needs numpy at module
+# scope, which is what the import above adds. The injected ``np`` is the same
+# numpy module, so behaviour is unchanged.
+# ---------------------------------------------------------------------------
+def _transpose(x):
+    """Batched transpose: swap the last two axes."""
+    return np.swapaxes(x, -1, -2)
+
+
+def _conj_transpose(x):
+    """Batched conjugate transpose (the Hermitian adjoint)."""
+    return np.conj(np.swapaxes(x, -1, -2))
+
+
+def _matmul(a, b):
+    """Batched matrix product over the last two axes."""
+    return np.einsum('...ij,...jk->...ik', a, b)
+
+
+def _stack_to_complex(x):
+    """float ``[..., 2]`` (real, imag) stack -> complex array."""
+    return x[..., 0] + 1j * x[..., 1]
+
+
+def _complex_to_stack(x):
+    """complex array -> float ``[..., 2]`` (real, imag) stack."""
+    return np.stack([np.real(x), np.imag(x)], axis=-1)
 
 
 # ---------------------------------------------------------------------------
@@ -53,10 +92,6 @@ def complex_inv(x:ComplexNumber):
     assert x.shape[-2] == x.shape[-1], "only square matrix is supported for complex_inv"
 
     def forward_code(np, data):
-        def _stack_to_complex(x):
-            return x[..., 0] + 1j * x[..., 1]
-        def _complex_to_stack(x):
-            return np.stack([np.real(x), np.imag(x)], axis=-1)
 
         a = _stack_to_complex(data["inputs"][0])
         m_a = data["outputs"][0]
@@ -65,13 +100,8 @@ def complex_inv(x:ComplexNumber):
 
 
     def backward_code(np, data):
-        def T(x):
-            return np.conj(np.swapaxes(x, -1, -2))
-        def _stack_to_complex(x):
-            return x[..., 0] + 1j * x[..., 1]
-        def _complex_to_stack(x):
-            return np.stack([np.real(x), np.imag(x)], axis=-1)
-        _dot = partial(np.einsum, '...ij,...jk->...ik')
+        T = _conj_transpose
+        _dot = _matmul
         dout = _stack_to_complex(data["dout"])
         out = data["outputs"][0]
         mx = _stack_to_complex(data["f_outputs"][0])
@@ -100,10 +130,6 @@ def complex_eig(x:ComplexNumber):
     assert x.real.dtype == jt.float32 and x.imag.dtype == jt.float32, "real and imag in ComplexNumber should be jt.float32"
     assert x.shape[-2] == x.shape[-1], "only square matrix is supported for complex_eig"
     def forward_code(np, data):
-        def _stack_to_complex(x):
-            return x[..., 0] + 1j * x[..., 1]
-        def _complex_to_stack(x):
-            return np.stack([np.real(x), np.imag(x)], axis=-1)
         a = _stack_to_complex(data["inputs"][0])
         w, v = data["outputs"]
         tw, tv = np.linalg.eig(a)
@@ -140,10 +166,6 @@ def complex_eigh(x:ComplexNumber):
     assert x.real.dtype == jt.float32 and x.imag.dtype == jt.float32, "real and imag in ComplexNumber should be jt.float32"
     assert x.shape[-2] == x.shape[-1], "only square matrix is supported for complex_eigh"
     def forward_code(np, data):
-        def _stack_to_complex(x):
-            return x[..., 0] + 1j * x[..., 1]
-        def _complex_to_stack(x):
-            return np.stack([np.real(x), np.imag(x)], axis=-1)
         a = _stack_to_complex(data["inputs"][0])
         w, v = data["outputs"]
         # np.linalg.eigh handles complex Hermitian natively: w real, v complex.
@@ -178,10 +200,6 @@ def complex_qr(x):
     assert x.real.dtype == jt.float32 and x.imag.dtype == jt.float32, "real and imag in ComplexNumber should be jt.float32"
     assert x.shape[-2] == x.shape[-1], "only square matrix is supported for linalg_qr"
     def forward_code(np, data):
-        def _stack_to_complex(x):
-            return x[..., 0] + 1j * x[..., 1]
-        def _complex_to_stack(x):
-            return np.stack([np.real(x), np.imag(x)], axis=-1)
         a = _stack_to_complex(data["inputs"][0])
         qr = data["outputs"][0]
         Q, R = np.linalg.qr(a)
@@ -190,15 +208,10 @@ def complex_qr(x):
 
     def backward_code(np, data):
         # reference: https://github.com/tencent-quantum-lab/tensorcircuit/blob/master/tensorcircuit/backends/pytorch_ops.py
-        def H(x):
-            return np.conj(np.swapaxes(x, -1, -2))
+        H = _conj_transpose
         def _TriangularSolve(x, r):
             return H(np.linalg.solve(r, H(x)))
-        def _stack_to_complex(x):
-            return x[..., 0] + 1j * x[..., 1]
-        def _complex_to_stack(x):
-            return np.stack([np.real(x), np.imag(x)], axis=-1)
-        _dot = partial(np.einsum, '...ij,...jk->...ik')
+        _dot = _matmul
         _diag = partial(np.einsum, '...ii->...i')
 
         dout = data["dout"]
@@ -253,10 +266,6 @@ def complex_svd(x:ComplexNumber):
     :return:u,s,v.
     '''
     def forward_code(np, data):
-        def _stack_to_complex(x):
-            return x[..., 0] + 1j * x[..., 1]
-        def _complex_to_stack(x):
-            return np.stack([np.real(x), np.imag(x)], axis=-1)
         a = _stack_to_complex(data["inputs"][0])
         u, s, v = data["outputs"]
         #TODO:remove copyto
@@ -303,10 +312,6 @@ def complex_pinv(x:ComplexNumber):
     assert isinstance(x, ComplexNumber), "complex_pinv is implemented for nn.ComplexNumber"
     assert x.real.dtype == jt.float32 and x.imag.dtype == jt.float32, "real and imag in ComplexNumber should be jt.float32"
     def forward_code(np, data):
-        def _stack_to_complex(x):
-            return x[..., 0] + 1j * x[..., 1]
-        def _complex_to_stack(x):
-            return np.stack([np.real(x), np.imag(x)], axis=-1)
         a = _stack_to_complex(data["inputs"][0])
         m_a = data["outputs"][0]
         t_a = np.linalg.pinv(a)
@@ -352,9 +357,8 @@ def _svd_reduced(x):
         np.copyto(v, tv)
 
     def backward_code(np, data):
-        def T(x):
-            return np.swapaxes(x, -1, -2)
-        _dot = partial(np.einsum, '...ij,...jk->...ik')
+        T = _transpose
+        _dot = _matmul
         dout = data["dout"]
         out = data["outputs"][0]
         inp = data["inputs"][0]
@@ -595,9 +599,8 @@ def eigh(x):
         np.copyto(v, tv)
 
     def backward_code(np, data):
-        def T(x):
-            return np.swapaxes(x, -1, -2)
-        _dot = partial(np.einsum, '...ij,...jk->...ik')
+        T = _transpose
+        _dot = _matmul
         dout = data["dout"]
         out = data["outputs"][0]
         inp = data["inputs"][0]
@@ -682,9 +685,8 @@ def inv(x):
         np.copyto(m_a, t_a)
 
     def backward_code(np, data):
-        def T(x):
-            return np.swapaxes(x, -1, -2)
-        _dot = partial(np.einsum, '...ij,...jk->...ik')
+        T = _transpose
+        _dot = _matmul
         dout = data["dout"]
         out = data["outputs"][0]
         lmx = data["f_outputs"]
@@ -757,9 +759,8 @@ def pinv(x):
         np.copyto(m_a, t_a)
 
     def backward_code(np, data):
-        def T(x):
-            return np.swapaxes(x, -1, -2)
-        _dot = partial(np.einsum, '...ij,...jk->...ik')
+        T = _transpose
+        _dot = _matmul
         dout = data["dout"]
         out = data["outputs"][0]
         inp = data["inputs"][0]
@@ -1123,9 +1124,8 @@ def det(x):
         np.copyto(L, tL)
 
     def backward_code(np, data):
-        def T(x):
-            return np.swapaxes(x, -1, -2)
-        _dot = partial(np.einsum, '...ij,...jk->...ik')
+        T = _transpose
+        _dot = _matmul
         dout = data["dout"]
         out = data["outputs"][0]
         f_out = data["f_outputs"][0]
@@ -1166,9 +1166,8 @@ def slogdet(x):
         np.copyto(sign, sign_)
 
     def backward_code(np, data):
-        def T(x):
-            return np.swapaxes(x, -1, -2)
-        _dot = partial(np.einsum, '...ij,...jk->...ik')
+        T = _transpose
+        _dot = _matmul
         dout = data["dout"]
         out = data["outputs"][0]
         inp = data["inputs"][0]
@@ -1209,9 +1208,8 @@ def cholesky(x):
         np.copyto(L, tL)
 
     def backward_code(np, data):
-        def T(x):
-            return np.swapaxes(x, -1, -2)
-        _dot = partial(np.einsum, '...ij,...jk->...ik')
+        T = _transpose
+        _dot = _matmul
         dout = data["dout"]
         out = data["outputs"][0]
         f_out = data["f_outputs"][0]
@@ -1250,9 +1248,8 @@ def solve(a,b):
         np.copyto(L, ans)
 
     def backward_code1(np, data):
-        def T(x):
-            return np.swapaxes(x, -1, -2)
-        _dot = partial(np.einsum, '...ij,...jk->...ik')
+        T = _transpose
+        _dot = _matmul
         dout = data["dout"]
         out = data["outputs"][0]
         f_out = data["f_outputs"][0]
@@ -1265,8 +1262,7 @@ def solve(a,b):
         # gradient wrt b: solve(A,b)=A^-1 b  =>  dL/db = A^-T @ dout.
         # (was a stub writing 0 -> silently zero grad through the RHS, breaking
         #  any training that backprops into b, e.g. differentiable solves / GP.)
-        def T(x):
-            return np.swapaxes(x, -1, -2)
+        T = _transpose
         dout = data["dout"]
         out = data["outputs"][0]
         a = data["inputs"][0]
@@ -1312,9 +1308,8 @@ def qr(x):
         # The OLD code assumed square R (output shapes were both x.shape) and the
         # Q term lived entirely in span(Q) — wrong/crash for tall m>n. R was even
         # allocated (m,n) instead of (k,n).
-        def T(x):
-            return np.swapaxes(x, -1, -2)
-        _dot = partial(np.einsum, '...ij,...jk->...ik')
+        T = _transpose
+        _dot = _matmul
         dout = data["dout"]
         out = data["outputs"][0]
         q, r = data["f_outputs"]

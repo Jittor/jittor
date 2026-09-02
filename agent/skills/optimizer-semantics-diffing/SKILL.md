@@ -100,6 +100,59 @@ opt.lr = 1.0
 因为 torch 模式下装上的优化器会给每组塞一个 `"lr"`，不删就走到另一条分支，用例静默变成
 「测了个别的东西」。
 
+## 4b. 两套 scheduler 并存：找到那个「真正被用的 lr」
+
+`jt.lr_scheduler.*`（旧式）与 `jt.optim.LRScheduler`（新式，LambdaLR 的基类）是两套。
+**新式的构造函数会把 `"lr"` 塞进每个 param group 且从不移除**，而旧式的 `update_lr`
+分支在「这个 group 有没有自己的 lr 键」上。于是「用过一次 LambdaLR」会永久改变旧式
+scheduler 走哪条分支——行为取决于历史。
+
+**唯一算数的观测量**是 `Optimizer.step` 实际读的那个值：
+
+```python
+def effective_lr(opt):
+    return [float(pg.get("lr", opt.lr)) for pg in opt.param_groups]   # base.py 就是这么读的
+```
+
+**三个抓不住它的写法**（都试过，都是绿的）：
+
+1. **比较「有没有先跑过 LambdaLR」两条轨迹的 effective lr**——用 `lambda e: 1.0` 时
+   `pg["lr"]` 与 `opt.lr` 相等，两个存储各乘同一个 gamma，结果一模一样。
+2. **比较 effective lr 的衰减比值**（`lr_k / lr_0` 是不是 `gamma**k`）——两个存储被乘
+   的是同一个 gamma，比值恒对，即使两者的绝对值已经差了一倍。
+3. **只改组数（1/2/3）比较轨迹**——只能抓到「一次衰减被施加 N 次」那类（第 4 节），
+   抓不到两存储漂移。
+
+**抓得住的判据**：让两个存储从**不同的基数**出发，再断言
+`opt.lr == effective_lr(opt)`。
+
+```python
+opt = SGD([{"params":[p]} for p in ...], 1.0)
+for pg in opt.param_groups: pg.pop("lr", None)     # 回到 jittor 默认布局
+opt.lr = 1.0
+jt.optim.LambdaLR(opt, lambda e: 0.5)              # 只构造，就已经埋下 pg["lr"]=0.5
+sched = jt.lr_scheduler.StepLR(opt, step_size=1, gamma=0.5)
+for _ in range(3): sched.step()
+# 改前：opt.lr == 0.25，而 effective == 0.125（训练用的是后者，打日志的人读的是前者）
+assert all(abs(float(opt.lr) - lr) < 1e-9 for lr in effective_lr(opt))
+```
+
+`lambda e: 0.5` 是关键：identity lambda 会让两个存储始终相等，测不出来。
+
+**另一条独立的判据**（针对同名方法语义不一致）：`update_lr()` 必须恰好施加一次
+`get_lr()`。
+
+```python
+predicted = sched.get_lr()
+assert predicted == sched.get_lr()      # 纯查询，问两次不能改 lr
+sched.update_lr()
+assert effective_lr(opt) == predicted
+```
+
+**注意配的是 `update_lr` 而不是 `step`**：一部分 scheduler 在 `step()` 里**先**
+`last_epoch += 1` 再算，所以从外面调 `get_lr()` 拿到的是上一轮的值——torch 也是这样，
+拿 `step()` 去配会得到一条假失败。
+
 ## 5. 不要在同一个 pytest 进程里混跑原生用例与 torch 兼容用例
 
 `tests/conftest.py` 的 `pytest_ignore_collect` 会在**宽选择**（`pytest tests/`）时
