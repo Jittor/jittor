@@ -9,4 +9,6 @@ torch-compatibility-principles
 complex-dtype
 pipelined-execution
 cudnn-convolution-plans
+multi-backend-design
+device-placement
 ```
