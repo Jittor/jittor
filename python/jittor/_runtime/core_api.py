@@ -150,7 +150,7 @@ class flag_scope(_call_no_record_scope):
 
     def _new_scope(self):
         # a decorated call gets its own scope object as well as its own stack
-        # entry, so recursion through the decorator cannot share either
+        # entry; both are needed for reentrancy across threads and generators
         return type(self)(**self.jt_flags)
 
     def _flush_if_device_changes(self, wanted):
@@ -223,8 +223,6 @@ Example::
 
     '''
     def __init__(self, **jt_flags):
-        # via super(), not by setting self.jt_flags directly: bypassing
-        # flag_scope.__init__ would leave the backup stack uncreated
         jt_flags["no_grad"] = 1
         super().__init__(**jt_flags)
 
@@ -2427,9 +2425,51 @@ can also be None)::
     assert db.data == 0
 
     '''
-    def __call__(self, *args):
+    def _new_call_context(self):
+        """A one-shot object to run this call's ``execute``/``grad`` against.
+
+        Everything a Function saves for its backward -- the user's
+        ``self.x = x`` and the framework's own input/output masks -- used to
+        live on the Function INSTANCE. Calling one instance twice therefore
+        overwrote the first call's saved state, and the first call's backward
+        then ran against the second call's tensors: a **wrong gradient with no
+        warning**::
+
+            f = Mul(); o1 = f(a, b); o2 = f(a, c)
+            jt.grad(o1, a)      # used to give dc, not db
+
+        ``MyFunc.apply(...)`` happened to be safe because it builds a new
+        instance per call, and the examples above only show that spelling --
+        but ``f = MyFunc(); f(x); f(y)`` is just as natural, and 50+ Function
+        subclasses in this tree save state this way.
+
+        The context starts as a shallow copy of the instance ``__dict__``, so
+        anything ``__init__`` configured is visible to ``execute``, while
+        writes made during the call land on the context and leave the shared
+        instance alone. Binding ``ctx._grad`` into the tape keeps the context
+        alive exactly as long as its backward might run.
+        """
+        ctx = object.__new__(type(self))
+        ctx.__dict__.update(self.__dict__)
+        return ctx
+
+    @staticmethod
+    def _reject_var_keywords(owner, kw):
+        # Only positional arguments are taped, so a Var passed by keyword would
+        # silently come back with no gradient. Say so instead.
+        for k, v in kw.items():
+            if isinstance(v, Var) and not v.is_stop_grad():
+                raise TypeError(
+                    f"{owner}: pass differentiable Var arguments positionally, "
+                    f"not as the keyword {k!r}. Keyword arguments are not taped, "
+                    "so this Var would silently receive no gradient.")
+
+    def __call__(self, *args, **kw):
+        # One context per call. `self` is only a factory from here on.
+        ctx = self._new_call_context()
+        self._reject_var_keywords(type(self).__name__, kw)
         if flags.no_grad:
-            return self.execute(*args)
+            return ctx.execute(*args, **kw)
         backup = args
         args = list(args)
         taped_inputs = []
@@ -2445,7 +2485,7 @@ can also be None)::
                 input_mask[i] = len(taped_inputs)
                 args[i] = v
                 taped_inputs.append(v)
-        ori_res = self.execute(*args)
+        ori_res = ctx.execute(*args, **kw)
         if not isinstance(ori_res, Sequence):
             res = [ori_res]
         else:
@@ -2457,11 +2497,11 @@ can also be None)::
                 output_mask[i] = len(taped_outputs)
                 res[i] = v
                 taped_outputs.append(v)
-        self.input_mask = input_mask
-        self.output_mask = output_mask
+        ctx.input_mask = input_mask
+        ctx.output_mask = output_mask
         # tape output and input together so
         # backward treat them as one operator
-        tape_together(taped_inputs, taped_outputs, self._grad)
+        tape_together(taped_inputs, taped_outputs, ctx._grad)
         if isinstance(ori_res, Sequence):
             return res
         else:
@@ -2488,6 +2528,8 @@ can also be None)::
 
     @classmethod
     def apply(cls, *args, **kw):
+        # Same contract as __call__, which now also accepts **kw (it used to
+        # reject it outright, so `apply` could not actually forward keywords).
         func = cls()
         return func(*args, **kw)
 

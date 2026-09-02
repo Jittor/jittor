@@ -331,5 +331,127 @@ class TestFunctionWithEagerExecution(TestFunction):
     def tearDownClass(self):
         jt.flags.lazy_execution = 1
 
+class TestFunctionCallIsIndependent(unittest.TestCase):
+    """One Function instance called twice used to corrupt the first backward.
+
+    ``execute`` saved its intermediates on ``self`` (as every example and 50+
+    subclasses in this tree do), and so did the framework's own input/output
+    masks. A second call overwrote both, so the FIRST call's backward ran
+    against the SECOND call's tensors and returned a wrong gradient with no
+    warning at all.
+
+    ``MyFunc.apply(...)`` was accidentally safe (it builds a fresh instance per
+    call) and the class docstring only shows that spelling -- but
+    ``f = MyFunc(); f(x); f(y)`` is just as natural a thing to write.
+    """
+
+    class Mul(Function):
+        def execute(self, a, b):
+            self.a, self.b = a, b
+            return a * b
+
+        def grad(self, g):
+            return g * self.b, g * self.a
+
+    def _v(self, x):
+        v = jt.array(np.array([x], dtype="float32"))
+        v.start_grad()
+        return v
+
+    def test_one_instance_called_twice_keeps_both_backwards(self):
+        a = self._v(1.0)
+        b = self._v(2.0)
+        c = self._v(10.0)
+        f = self.Mul()
+        o1 = f(a, b)
+        o2 = f(a, c)
+        # d(a*b)/da == b == 2, NOT c == 10
+        np.testing.assert_allclose(
+            jt.grad(o1, [a])[0].numpy(), [2.0], rtol=1e-6,
+            err_msg="the second call overwrote the first call's saved state")
+        np.testing.assert_allclose(
+            jt.grad(o2, [a])[0].numpy(), [10.0], rtol=1e-6)
+
+    def test_interleaved_calls_in_a_loop(self):
+        f = self.Mul()
+        a = self._v(1.0)
+        outs, factors = [], []
+        for k in range(1, 6):
+            bk = self._v(float(k))
+            outs.append(f(a, bk))
+            factors.append(float(k))
+        for out, k in zip(outs, factors):
+            np.testing.assert_allclose(
+                jt.grad(out, [a])[0].numpy(), [k], rtol=1e-6,
+                err_msg="call %g's backward used another call's state" % k)
+
+    def test_the_instance_is_not_mutated_by_a_call(self):
+        # the call's scratch state must not leak back onto the shared instance
+        f = self.Mul()
+        a, b = self._v(1.0), self._v(2.0)
+        f(a, b)
+        for attr in ("a", "b", "input_mask", "output_mask"):
+            self.assertNotIn(
+                attr, f.__dict__,
+                "%r leaked from the call onto the shared instance" % attr)
+
+    def test_apply_still_works_and_agrees(self):
+        a, b = self._v(1.0), self._v(3.0)
+        o = self.Mul.apply(a, b)
+        np.testing.assert_allclose(jt.grad(o, [a])[0].numpy(), [3.0], rtol=1e-6)
+
+    def test_init_configuration_is_visible_to_execute(self):
+        # a context is a copy of the instance, so __init__'s config survives
+        class Scale(Function):
+            def __init__(self, k):
+                self.k = k
+
+            def execute(self, x):
+                self.x = x
+                return x * self.k
+
+            def grad(self, g):
+                return g * self.k
+
+        f = Scale(4.0)
+        x = self._v(2.0)
+        o = f(x)
+        np.testing.assert_allclose(o.numpy(), [8.0], rtol=1e-6)
+        np.testing.assert_allclose(jt.grad(o, [x])[0].numpy(), [4.0], rtol=1e-6)
+        self.assertEqual(f.k, 4.0)
+
+    def test_non_var_keyword_arguments_now_work(self):
+        # __call__ used to take (*args) only, so apply(**kw) raised TypeError
+        class AddK(Function):
+            def execute(self, x, k=1):
+                self.k = k
+                return x + k
+
+            def grad(self, g):
+                return g
+
+        x = self._v(5.0)
+        np.testing.assert_allclose(
+            AddK.apply(x, k=3).numpy(), [8.0], rtol=1e-6)
+        np.testing.assert_allclose(
+            AddK()(x, k=3).numpy(), [8.0], rtol=1e-6)
+
+    def test_var_keyword_argument_is_refused_loudly(self):
+        # only positional args are taped, so a Var by keyword would silently
+        # come back with no gradient -- refuse it instead
+        a, b = self._v(1.0), self._v(2.0)
+        with self.assertRaises(TypeError) as cm:
+            self.Mul.apply(a, b=b)
+        self.assertIn("positionally", str(cm.exception))
+
+    def test_no_grad_path_also_uses_a_context(self):
+        f = self.Mul()
+        a, b = self._v(1.0), self._v(2.0)
+        with jt.no_grad():
+            out = f(a, b)
+        np.testing.assert_allclose(out.numpy(), [2.0], rtol=1e-6)
+        self.assertNotIn("a", f.__dict__)
+
+
 if __name__ == "__main__":
     unittest.main()
