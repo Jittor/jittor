@@ -9,6 +9,7 @@ from .context import registry_for
 from .types import _dtype_to_str
 from ..diagnostics import EXPECTED, swallowed
 from .. import fsdp_hooks as _fsdp_hooks
+from .. import optimizer_kinds as _optimizer_kinds
 
 
 def _install_optimizers(g, registry=None):
@@ -64,18 +65,20 @@ def _install_optimizers(g, registry=None):
             del steps[len(params):]
         return steps
     def _torch_optimizer_kind(opt):
-        name = type(opt).__name__.lower()
-        if "adamw" in name:
-            return "adamw"
-        if "adam" in name:
-            return "adam"
-        if "rmsprop" in name:
-            return "rmsprop"
-        if "sgd" in name:
-            return "sgd"
-        if "adan" in name:
-            return "adan"
-        return name
+        """Which optimizer's state layout `opt` has.
+
+        Identity through the MRO, not a substring of the class name -- `SGDW`
+        and `MyAdamWrapper` used to match rules they do not implement. This
+        answer only describes *state layout* (which keys `state` and
+        `state_dict()` expose), so unlike the FSDP2 one it does not refuse a
+        subclass that overrides step(): such a subclass still keeps the base
+        class's state arrays. It falls back to the lowercased class name so an
+        unrecognised optimizer keeps its previous, harmless behaviour here.
+
+        See jittor/compat/optimizer_kinds.py.
+        """
+        return (_optimizer_kinds.kind_of(opt)
+                or type(opt).__name__.lower())
     # torch-compatible Optimizer.state: a mapping keyed by the parameter object,
     # each value a dict {"exp_avg","exp_avg_sq","step"} backed by jittor's
     # positional per-group state lists pg["m"] (exp_avg) / pg["values"] (exp_avg_sq).

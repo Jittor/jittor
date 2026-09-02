@@ -5,6 +5,7 @@ import numpy as np
 import jittor as jt
 
 from . import common, grad_sync, shard
+from .. import optimizer_kinds
 from ..diagnostics import EXPECTED, swallowed
 
 
@@ -134,15 +135,50 @@ def _adam_update_for_param(opt, pg, param, grad, value, momentum, *,
     return (param - momentum * step_size / denom).stop_grad(), value, momentum
 
 
+#: The update rules this module implements against a shard. Anything else has
+#: to refuse: applying one of these three to an optimizer that implements a
+#: different rule would train the model with arithmetic nobody asked for.
+_SHARDED_KINDS = ("sgd", "adam", "adamw")
+
+
+def _unsupported_optimizer_message(opt, kind):
+    """Say which of the three reasons this optimizer cannot be stepped.
+
+    The old message was `FSDP2 optimizer step is not implemented for <name>`
+    for all of them, which does not distinguish "write one" from "your
+    subclass was being ignored until now".
+    """
+    name = type(opt).__name__
+    loose = optimizer_kinds.kind_of(opt)
+    if loose is None:
+        return (
+            "FSDP2 cannot step %s: it does not inherit any update rule FSDP2 "
+            "can apply to a shard (%s). Wrap it so the sharded parameters are "
+            "stepped by an optimizer that does, or run without fully_shard."
+            % (name, ", ".join(_SHARDED_KINDS)))
+    if kind is None:
+        return (
+            "FSDP2 cannot step %s: it inherits from the %s optimizer but "
+            "overrides step(), so it defines its own update rule. FSDP2 would "
+            "have to apply the base %s update to the shards instead, which "
+            "would silently train the model with arithmetic %s does not "
+            "implement. (Until this check existed, that is exactly what "
+            "happened.)" % (name, loose, loose, name))
+    return (
+        "FSDP2 cannot step %s: the %s update rule is not implemented against a "
+        "shard, only %s are." % (name, kind, ", ".join(_SHARDED_KINDS)))
+
+
 def _optimizer_kind(opt):
-    name = type(opt).__name__.lower()
-    if "adamw" in name:
-        return "adamw"
-    if "adam" in name:
-        return "adam"
-    if "sgd" in name:
-        return "sgd"
-    return name
+    """Which sharded update to run, or ``None`` when that is not knowable.
+
+    This selects *arithmetic to apply to the user's weights*, so it asks for
+    the strict answer: a subclass that replaces ``step()`` is not treated as
+    its base class. It used to substring-match the class name, which meant a
+    subclass named ``...Adam...`` with its own update rule silently got the
+    base AdamW update instead of its own. See jittor/compat/optimizer_kinds.py.
+    """
+    return optimizer_kinds.kind_of(opt, require_unmodified_step=True)
 
 
 def optimizer_step(opt, loss=None, retain_graph=False):
@@ -169,8 +205,8 @@ def optimizer_step(opt, loss=None, retain_graph=False):
     grad_sync._sync_visible_full_grads_to_optimizer(opt)
 
     kind = _optimizer_kind(opt)
-    if kind not in ("sgd", "adam", "adamw"):
-        return False
+    if kind not in _SHARDED_KINDS:
+        raise NotImplementedError(_unsupported_optimizer_message(opt, kind))
     has_fsdp_grad = False
     for pg in getattr(opt, "param_groups", []):
         grads = pg.get("grads") or []
