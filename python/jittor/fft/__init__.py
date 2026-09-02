@@ -147,19 +147,50 @@ def rfft(input, n=None, dim=-1, norm=None):
     return _make_complex(real[selection], imag[selection])
 
 
+def _resize_at(value, dim, size):
+    """Truncate or zero-pad ``value`` along ``dim`` to exactly ``size``."""
+    length = value.shape[dim]
+    if length == size:
+        return value
+    slices = [slice(None)] * value.ndim
+    if length > size:
+        slices[dim] = slice(0, size)
+        return value[tuple(slices)]
+    padding = list(value.shape)
+    padding[dim] = size - length
+    return jt.concat([value, jt.zeros(padding, value.dtype)], dim=dim)
+
+
 def irfft(input, n=None, dim=-1, norm=None):
-    dimension = dim if dim >= 0 else dim + input.real.ndim
-    half = input.real.shape[dimension]
-    length = (2 * (half - 1)) if n is None else n
-    real, imag = input.real, input.imag
-    mirror_indices = list(range(half - 2, 0, -1))
+    # ``_real_imag`` is the accessor that tells a real input apart from a
+    # complex one; ``input.real``/``input.imag`` cannot, because a real Var
+    # answers both (returning itself and a zero Var).
+    real, imag = _real_imag(input)
+    dimension = dim if dim >= 0 else dim + real.ndim
+    half = real.shape[dimension]
+    length = (2 * (half - 1)) if n is None else int(n)
+    if length < 1:
+        raise RuntimeError(
+            f"irfft: invalid number of data points ({length}) specified")
+    # The half spectrum that describes a signal of `length` samples has exactly
+    # length//2 + 1 entries, so resize the input to that before mirroring it.
+    # Resizing the *mirrored* spectrum instead (which is what passing `length`
+    # to _fft_core did) truncates or pads in the middle of the conjugate pairs.
+    keep = length // 2 + 1
+    real = _resize_at(real, dimension, keep)
+    imag = (jt.zeros(real.shape, real.dtype) if imag is None
+            else _resize_at(imag, dimension, keep))
+    # Bin `length - k` is the conjugate of bin `k`; for even `length` the
+    # Nyquist bin is its own mirror and must not be repeated.
+    first_mirror = keep - 2 if length % 2 == 0 else keep - 1
+    mirror_indices = list(range(first_mirror, 0, -1))
     if mirror_indices:
         slices = [slice(None)] * real.ndim
         slices[dimension] = mirror_indices
         mirrored = tuple(slices)
         real = jt.concat([real, real[mirrored]], dim=dimension)
         imag = jt.concat([imag, -imag[mirrored]], dim=dimension)
-    return _fft_core(_make_complex(real, imag), length, dim, True, norm).real
+    return _fft_core(_make_complex(real, imag), None, dim, True, norm).real
 
 
 def _shift_dims(value, dim, inverse):

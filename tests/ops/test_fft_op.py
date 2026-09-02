@@ -269,5 +269,92 @@ class TestFFTOp(unittest.TestCase):
         grad_x_jt = jt.grad(loss, x).data[:, :, :, 0]
         assert(np.allclose(grad_x_jt, grad_x_torch))
 
+class TestIrfftAgainstNumpy(unittest.TestCase):
+    """``jt.fft.irfft`` versus ``numpy.fft.irfft``.
+
+    ``irfft`` takes a *half* spectrum and rebuilds the missing bins by conjugate
+    symmetry.  How many bins are missing depends on the requested output length
+    ``n``, so the input has to be resized to ``n // 2 + 1`` *before* mirroring.
+    Resizing the already-mirrored spectrum to ``n`` instead cuts through the
+    conjugate pairs and produces a plausible-looking but wrong signal.
+
+    numpy is the oracle throughout -- ``irfft`` is fully specified by
+    ``numpy.fft``, and no torch is needed.
+    """
+
+    @staticmethod
+    def _as_complex_var(spectrum):
+        stacked = np.stack([spectrum.real, spectrum.imag], -1).astype("float32")
+        return nn.view_as_complex(jt.array(stacked))
+
+    def _check(self, spectrum, n=None, norm=None, dim=-1, axis=-1):
+        got = jt.fft.irfft(self._as_complex_var(spectrum), n=n, dim=dim, norm=norm)
+        expected = np.fft.irfft(spectrum, n=n, axis=axis, norm=norm)
+        self.assertEqual(tuple(got.shape), expected.shape)
+        np.testing.assert_allclose(got.numpy(), expected, rtol=1e-4, atol=1e-4)
+
+    def setUp(self):
+        rng = np.random.default_rng(11)
+        self.signal = rng.standard_normal(6).astype("float32")
+        self.spectrum = np.fft.rfft(self.signal)
+
+    def test_default_length(self):
+        self._check(self.spectrum)
+
+    def test_explicit_even_length(self):
+        for n in (2, 4, 6, 8, 12):
+            with self.subTest(n=n):
+                self._check(self.spectrum, n=n)
+
+    def test_explicit_odd_length(self):
+        """Odd ``n`` has no Nyquist bin, so one more bin gets mirrored."""
+        for n in (1, 3, 5, 7, 9, 11):
+            with self.subTest(n=n):
+                self._check(self.spectrum, n=n)
+
+    def test_norms(self):
+        for norm in (None, "ortho", "forward", "backward"):
+            for n in (None, 5, 8):
+                with self.subTest(norm=norm, n=n):
+                    self._check(self.spectrum, n=n, norm=norm)
+
+    def test_batched_and_non_last_dim(self):
+        rng = np.random.default_rng(12)
+        batch = rng.standard_normal((3, 6)).astype("float32")
+        spectrum = np.fft.rfft(batch, axis=-1)
+        self._check(spectrum, n=None)
+        self._check(spectrum, n=7)
+        spectrum0 = np.fft.rfft(batch, axis=0)
+        self._check(spectrum0, n=None, dim=0, axis=0)
+        self._check(spectrum0, n=5, dim=0, axis=0)
+        self._check(spectrum0, n=5, dim=-2, axis=0)
+
+    def test_real_input_goes_through_the_same_path(self):
+        """A real Var answers ``.real``/``.imag``, so it must be recognized."""
+        rng = np.random.default_rng(13)
+        half = rng.standard_normal(4).astype("float32")
+        for n in (None, 3, 6, 9):
+            with self.subTest(n=n):
+                got = jt.fft.irfft(jt.array(half), n=n)
+                expected = np.fft.irfft(half, n=n)
+                self.assertEqual(tuple(got.shape), expected.shape)
+                np.testing.assert_allclose(
+                    got.numpy(), expected, rtol=1e-4, atol=1e-4)
+
+    def test_round_trip_with_rfft(self):
+        for length in (6, 7):
+            with self.subTest(length=length):
+                rng = np.random.default_rng(length)
+                signal = rng.standard_normal(length).astype("float32")
+                spectrum = jt.fft.rfft(jt.array(signal))
+                back = jt.fft.irfft(spectrum, n=length)
+                np.testing.assert_allclose(
+                    back.numpy(), signal, rtol=1e-4, atol=1e-4)
+
+    def test_invalid_length_raises(self):
+        with self.assertRaises(RuntimeError):
+            jt.fft.irfft(self._as_complex_var(self.spectrum), n=0)
+
+
 if __name__ == "__main__":
     unittest.main()
