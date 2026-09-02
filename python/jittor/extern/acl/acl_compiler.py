@@ -147,7 +147,8 @@ def post_process():
         import jittor as jt
         jt.flags.use_cuda_host_allocator = 1
         jt.flags.use_parallel_op_compiler = 0
-        jt.flags.amp_reg |= 32 + 4  # 32 keep float16, 4 keep reduce type
+        jt.flags.amp_reg |= (jt.amp_flags.reduce16_no_fp32_acc
+                             | jt.amp_flags.keep_reduce)
         mod.init_acl_ops()
 
 def change_function():

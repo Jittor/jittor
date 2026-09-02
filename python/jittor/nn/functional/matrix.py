@@ -51,7 +51,8 @@ def matmul_transpose(a, b):
         return jt.compile_extern.cublas_ops.cublas_matmul(a, b, 0, 1)
 
     shape = list(a.shape)[:-1] + list(b.shape)
-    with jt.flag_scope(amp_reg=jt.flags.amp_reg | 36):
+    with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce
+                      | jt.amp_flags.reduce16_no_fp32_acc):
         a = a.broadcast(shape, [len(shape) - 2])
         b = b.broadcast(shape)
         return (a * b).sum(len(shape) - 1)
@@ -173,7 +174,8 @@ def matmul(a, b):
         c = jt.matmul(a, b)
         assert c.shape == [8, 10, 3, 5]
     """
-    with jt.flag_scope(amp_reg=jt.flags.amp_reg | 36):
+    with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce
+                      | jt.amp_flags.reduce16_no_fp32_acc):
         len_a = len(a.shape)
         len_b = len(b.shape)
         if len_b == 1:

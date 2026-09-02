@@ -98,7 +98,8 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
     if groups == 1:
         N,C,H,W = x.shape
         oh, ow = out_height, out_width
-        with jt.flag_scope(amp_reg = jt.flags.amp_reg | 36):
+        with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce
+                      | jt.amp_flags.reduce16_no_fp32_acc):
             xx = x.reindex([N,out_channels,C,oh,ow,Kh,Kw], [
                     'i0', # Nid
                     'i2', # Cid

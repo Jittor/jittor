@@ -461,16 +461,65 @@ def array(data, dtype=None):
     else:
         ret = ops.array(data)
     # TODO: move those code to core
+    return _amp_array_preference(ret)
+
+class amp_flags:
+    """Named bits of ``jt.flags.amp_reg``, the auto-mixed-precision register.
+
+    The register is a bit field, and every reader in the tree used to spell its
+    bits as bare integers -- ``amp_reg & 16``, ``amp_reg | 36``, ``amp_reg=4``
+    -- across six files, with the meaning written down only in the flag's
+    description string in ``src/var.cc``. ``36`` is ``keep_reduce |
+    array_prefer``; you had to know that.
+
+    These MUST match ``amp_prefer32`` .. ``amp_array_prefer`` in
+    ``src/misc/nano_string.h`` and the ``auto_mixed_precision_level`` setter in
+    ``src/var.cc``; ``tests/core/test_amp_reg_bits.py`` reads the header and
+    fails if they drift.
+    """
+
+    #: force float32 for ops whose inputs are all non-scalar floats
+    prefer32 = 1
+    #: force float16 (bfloat16 if an input is bfloat16) for the same
+    prefer16 = 2
+    #: let a reduce keep its input's float type instead of accumulating in f32
+    keep_reduce = 4
+    #: let "white list" ops (exp, log, pow, ...) follow the preference too,
+    #: instead of always computing in float32
+    keep_white = 8
+    #: apply the preference to array-like producers (jt.array, jt.random) too
+    array_prefer = 16
+    #: a float16 sum/mean does NOT use a float32 intermediate accumulator
+    #: (read directly as ``amp_reg & 32`` in src/ops/reduce_op.cc)
+    reduce16_no_fp32_acc = 32
+
+
+def _amp_array_preference(ret):
+    """Apply the array-like AMP preference to a freshly produced Var.
+
+    ``array()`` and ``random()`` each carried their own copy of this, and the
+    copies had drifted: ``array()`` skipped one-element and non-float results,
+    ``random()`` did not. So under ``auto_mixed_precision_level=5``,
+    ``jt.array([1.0])`` stayed float32 while ``jt.random((1,))`` came back
+    float16 -- the same value, produced two ways, with two dtypes.
+
+    ``array()``'s guards are the ones that survive. A Var of one element is a
+    scalar as far as jittor's dtype inference is concerned (``dtype_infer``
+    passes ``has_scalar`` and then skips the preference entirely), so casting
+    one down here would make ``jt.array(1e-8) * x`` disagree with
+    ``1e-8 * x``; and a non-float result has no float preference to apply.
+    """
     amp_reg = jt.flags.amp_reg
-    if amp_reg and ret.numel() != 1 and ret.dtype.is_float():
-        if amp_reg & 16:
-            if amp_reg & 1:
-                if ret.dtype != "float32":
-                    return ret.float32()
-            elif amp_reg & 2:
-                if ret.dtype != "float16":
-                    return ret.float16()
+    if not (amp_reg & amp_flags.array_prefer):
+        return ret
+    if ret.numel() == 1 or not ret.dtype.is_float():
+        return ret
+    if amp_reg & amp_flags.prefer32:
+        return ret if ret.dtype == "float32" else ret.float32()
+    if amp_reg & amp_flags.prefer16:
+        return ret if ret.dtype == "float16" else ret.float16()
     return ret
+
 
 def random(shape, dtype="float32", type="uniform"):
     ''' Constructs a random jittor Var.
@@ -503,16 +552,7 @@ def random(shape, dtype="float32", type="uniform"):
         ret = ops.random(shape, "float32", type).cast(dtype)
     else:
         ret = ops.random(shape, dtype, type)
-    amp_reg = jt.flags.amp_reg
-    if amp_reg:
-        if amp_reg & 16:
-            if amp_reg & 1:
-                if ret.dtype != "float32":
-                    return ret.float32()
-            elif amp_reg & 2:
-                if ret.dtype != "float16":
-                    return ret.float16()
-    return ret
+    return _amp_array_preference(ret)
 
 _core_to_device = Var.to_device
 
@@ -533,7 +573,7 @@ def to_device(self, device):
 Var.to_device = to_device
 
 def float_auto(x):
-    if jt.flags.amp_reg & 2:
+    if jt.flags.amp_reg & amp_flags.prefer16:
         return x.float16()
     return x.float32()
 Var.float_auto = float_auto

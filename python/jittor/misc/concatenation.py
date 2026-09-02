@@ -46,7 +46,19 @@ def _concat_bounded(arr, dim, dtype):
 def concat(arr, dim=0):
     """Concatenate a sequence of Vars along ``dim``."""
 
-    with jt.flag_scope(amp_reg=4):
+    # `amp_reg=4` here was an ASSIGNMENT, not a bit set: for the whole body it
+    # replaced whatever AMP policy the caller had configured with "keep_reduce
+    # and nothing else". concat is one of the most-called ops in the tree, so
+    # under `auto_mixed_precision_level=6` (prefer16|array_prefer|keep_reduce|
+    # keep_white) every concat silently dropped three of those four bits, and
+    # the merged output dtype came back float32 in the middle of a float16
+    # graph. Nothing reported it; the extra casts just showed up in the profile.
+    #
+    # The bit itself is vestigial: `keep_reduce` only reaches
+    # `reduce_dtype_infer`, and this function creates no reduce -- it is an
+    # `empty` plus a chain of `setitem`. It is OR-ed in rather than dropped so
+    # that this commit changes exactly one thing, the clobbering.
+    with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce):
         if not isinstance(arr, Sequence):
             raise TypeError("concat arr needs to be a tuple or list")
         if len(arr) == 0:
