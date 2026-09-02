@@ -18,6 +18,7 @@ fabricating one hides the gap instead of exposing it.
 """
 import importlib.abc
 import importlib.machinery
+import os
 import types
 
 
@@ -48,14 +49,70 @@ class PermissiveModule(types.ModuleType):
         return _fabricate(name)
 
 
+# Every module name a permissive finder actually fabricated in this process.
+# Audit hook: run a workload with JITTOR_TORCH_PERMISSIVE_AUDIT=1 and read this
+# back to see which import-time references a new library really needs, instead
+# of guessing at an allowlist.
+_fabricated = set()
+
+# Names refused, with the prefix they fell under. Useful for the same purpose.
+_refused = set()
+
+
+def fabricated_modules():
+    """Module names this process answered with a fabricated stub."""
+    return set(_fabricated)
+
+
+def refused_modules():
+    """Module names a permissive prefix declined to fabricate."""
+    return set(_refused)
+
+
+def _audit_mode():
+    """True when JITTOR_TORCH_PERMISSIVE_AUDIT asks for record-everything mode.
+
+    In audit mode every import under a permissive prefix is fabricated and
+    recorded, so a workload can be run once to discover exactly which
+    import-time references it needs before a name is added to an allowlist.
+    """
+    return str(os.environ.get("JITTOR_TORCH_PERMISSIVE_AUDIT", "")).strip().lower() \
+        not in ("", "0", "false", "no", "off")
+
+
 class _PermissiveFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
-    def __init__(self, prefix):
+    def __init__(self, prefix, allow=()):
         self.prefix = prefix
+        # Exact module names under this prefix that may be fabricated. A name
+        # ending in ".*" allows that subtree.
+        self.allow = set(allow)
+
+    def add_allowed(self, names):
+        self.allow.update(names)
+
+    def _allows(self, fullname):
+        if fullname == self.prefix:
+            return True
+        if fullname in self.allow:
+            return True
+        for entry in self.allow:
+            if entry.endswith(".*") and (
+                    fullname == entry[:-2] or fullname.startswith(entry[:-1])):
+                return True
+        return False
 
     def find_spec(self, fullname, path, target=None):
-        if fullname == self.prefix or fullname.startswith(self.prefix + "."):
-            return importlib.machinery.ModuleSpec(fullname, self, is_package=True)
-        return None
+        if fullname != self.prefix and not fullname.startswith(self.prefix + "."):
+            return None
+        if not self._allows(fullname) and not _audit_mode():
+            # Not on the known import-time list. Declining here produces a
+            # normal ImportError, which is the honest answer: fabricating it
+            # would hand back an object that silently returns None from every
+            # call. See install_permissive_package's docstring.
+            _refused.add(fullname)
+            return None
+        _fabricated.add(fullname)
+        return importlib.machinery.ModuleSpec(fullname, self, is_package=True)
 
     def create_module(self, spec):
         return PermissiveModule(spec.name)
@@ -64,17 +121,29 @@ class _PermissiveFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
         pass
 
 
-__all__ = ["PermissiveModule", "install_permissive_package"]
+__all__ = ["PermissiveModule", "install_permissive_package",
+           "fabricated_modules", "refused_modules"]
 
 
-def install_permissive_package(prefix, meta_path):
-    """Answer every unresolved import under ``prefix`` with a fabricated stub.
+def install_permissive_package(prefix, meta_path, allow=()):
+    """Answer a KNOWN list of unresolved imports under ``prefix`` with a stub.
+
+    ``allow`` is the list of module names that libraries reference at import
+    time while gating their *use* behind a runtime check this backend never
+    passes. Everything else under the prefix gets a normal ImportError: it used
+    to be answered too, so ``from torch.fx.passes.shape_prop import ShapeProp``
+    succeeded, ``ShapeProp(...)`` constructed, and calling it returned None --
+    a whole analysis pass that silently did nothing.
+
+    An entry ending in ``.*`` allows that subtree.
 
     Modules already published keep their real implementation: the import
     machinery consults its module table before any finder, so this only ever
-    fills in names nothing else provides. Installing twice is a no-op.
+    fills in names nothing else provides. Installing twice widens the existing
+    finder's allowlist rather than adding a second one.
     """
     for finder in meta_path:
         if isinstance(finder, _PermissiveFinder) and finder.prefix == prefix:
+            finder.add_allowed(allow)
             return
-    meta_path.insert(0, _PermissiveFinder(prefix))
+    meta_path.insert(0, _PermissiveFinder(prefix, allow))

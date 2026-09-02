@@ -29,9 +29,38 @@ def install(ctx):
     _alias("ge", lambda a, b: a >= b)
     _alias("le", lambda a, b: a <= b)
     _alias("eq", lambda a, b: a == b)
-    # torch.compile: jittor already JIT-compiles every op, so this is a pass-through.
-    # Handles torch.compile(model), @torch.compile, and torch.compile(mode=...)(model).
+    # torch.compile: jittor already JIT-compiles every op, so the call itself is
+    # a pass-through. Handles torch.compile(model), @torch.compile, and
+    # torch.compile(mode=...)(model).
+    #
+    # What is NOT a pass-through are the arguments that assert something about
+    # the compilation. `fullgraph=True` is an assertion that the callable
+    # compiles into one graph with no breaks -- accepting it silently means
+    # that assertion is never checked and never can be. A `backend=` other than
+    # the default names a compiler that will not run: a custom backend callable
+    # is simply dropped. Those are refused; `mode`/`options`/`dynamic` are
+    # performance hints with no correctness claim and stay accepted.
+    _COMPILE_DEFAULT_BACKENDS = (None, "", "inductor", "eager", "aot_eager")
+
     def _compile(model=None, *a, **k):
+        from ...stub_policy import unimplemented
+        if k.get("fullgraph"):
+            unimplemented(
+                "torch.compile(fullgraph=True)",
+                "accept an assertion that the callable compiles into a single "
+                "graph without breaks, while nothing is compiled and the "
+                "assertion is never checked",
+                "Drop fullgraph=True: on jittor the function runs eagerly and "
+                "every op is JIT-compiled individually.")
+        backend = k.get("backend")
+        if backend not in _COMPILE_DEFAULT_BACKENDS:
+            name = getattr(backend, "__name__", None) or repr(backend)
+            unimplemented(
+                "torch.compile(backend=%s)" % name,
+                "silently discard the requested compiler backend and run the "
+                "model eagerly, so a custom backend's rewrites never happen",
+                "Jittor compiles through its own stack; there is no pluggable "
+                "torch.compile backend.")
         return model if model is not None else (lambda m: m)
     _alias("compile", _compile)
     # torch.jit: jittor has no TorchScript; the script/trace decorators are pass-throughs
@@ -89,7 +118,25 @@ def install(ctx):
     # of it is gated on a compilation mode this backend never enters. Nothing
     # below runs, so answer those imports rather than failing them; the two
     # modules above keep their real definitions.
-    install_permissive_package("torch._inductor", _sys.meta_path)
+    # Only the modules downstream code is KNOWN to reference at import time get
+    # fabricated; everything else under the prefix raises a normal ImportError.
+    # Fabricating a whole namespace answered `from torch.fx.passes.shape_prop
+    # import ShapeProp` too: the class constructed, the pass ran, and every
+    # call returned None -- an analysis that silently did nothing.
+    #
+    # To extend a list, do not guess: run the workload with
+    # JITTOR_TORCH_PERMISSIVE_AUDIT=1 (which fabricates everything and records
+    # it) and read jittor.compat.permissive.fabricated_modules(). Refused names
+    # are recorded in refused_modules() the same way.
+    install_permissive_package(
+        "torch._inductor", _sys.meta_path,
+        allow=(
+            # named by serving stacks at module scope, gated on a compilation
+            # mode this backend never enters
+            "torch._inductor.codecache",
+            "torch._inductor.compile_fx",
+            "torch._inductor.pattern_matcher",
+        ))
     # The rest of torch's compile-and-dispatch internals, for the same reason:
     # imported at module scope by code whose use of them is gated on a compiled
     # path this backend never enters. The public counterparts that do matter --
@@ -101,10 +148,23 @@ def install(ctx):
     # torch._dispatch carries the python dispatcher the compiled path enters
     # around a trace. vLLM's compilation backend imports it at module scope
     # while the tracing it belongs to never runs here.
+    # These are torch's private compile-and-dispatch plumbing: there is no
+    # analysis or rewrite underneath them that could silently no-op, and
+    # absence is the expected state, so their subtrees stay permissive.
     for _internal in ("torch._library", "torch._higher_order_ops",
                       "torch._guards", "torch._logging", "torch._dynamo",
-                      "torch._dispatch", "torch.fx"):
-        install_permissive_package(_internal, _sys.meta_path)
+                      "torch._dispatch"):
+        install_permissive_package(_internal, _sys.meta_path,
+                                   allow=(_internal + ".*",))
+    # torch.fx is NOT one of them. Underneath it live real graph analyses and
+    # rewrite passes (shape propagation, partitioning, the pass manager); a
+    # fabricated one constructs, runs and returns None, which reads as "the
+    # pass found nothing" rather than "the pass does not exist". Only the
+    # module a definition site needs is answered.
+    install_permissive_package(
+        "torch.fx", _sys.meta_path,
+        allow=("torch.fx.immutable_collections", "torch.fx.proxy",
+               "torch.fx.node", "torch.fx.graph", "torch.fx.graph_module"))
     # torch 2.11 introduced opaque value types: an object an operator takes as
     # an argument and the graph carries along without inspecting it. Declaring
     # the base is the whole of what a definition site needs -- there is no
@@ -119,8 +179,39 @@ def install(ctx):
     _modules["torch._opaque_base"] = _opaque_base
     g._opaque_base = _opaque_base
     _jit = _types2.SimpleNamespace()
-    _jit.script = lambda f=None, **k: (f if f is not None else (lambda g: g))
-    _jit.trace = lambda f=None, *a, **k: (f if f is not None else (lambda g: g))
+
+    def _jit_script(obj=None, **k):
+        # Scripting a Python callable that already runs eagerly produces the
+        # same values, so the pass-through is honest. What is not honest is
+        # accepting a request to script something and handing back an object
+        # that has no .graph/.code and cannot be saved as TorchScript -- those
+        # attribute accesses fail loudly, which is the correct outcome.
+        return obj if obj is not None else (lambda f: f)
+
+    def _jit_trace(func=None, example_inputs=None, *a, **k):
+        from ...stub_policy import degraded, unimplemented
+        # `strict=False` changes what tracing is allowed to capture; with no
+        # trace at all the flag decides nothing. `check_trace` asks torch to
+        # re-run the traced graph and compare it against eager -- a check that
+        # cannot run and would otherwise be reported as passed.
+        if k.get("check_trace"):
+            unimplemented(
+                "torch.jit.trace(check_trace=True)",
+                "report that the traced graph was verified against eager "
+                "execution when no graph was produced and nothing was compared",
+                "Pass check_trace=False, or verify the outputs yourself.")
+        if func is not None:
+            degraded(
+                "torch.jit.trace",
+                "the callable is returned unchanged instead of a TorchScript "
+                "trace, so control flow is not specialised and the result has "
+                "no .graph/.code and cannot be saved as TorchScript",
+                "Values are identical; only the traced artefact is missing.")
+        return func if func is not None else (lambda f: f)
+
+    _jit.script = _jit_script
+    _jit.trace = _jit_trace
+    _jit.trace_module = _jit_trace
     _jit.script_if_tracing = lambda f: f
     _jit.ignore = lambda f=None, **k: (f if callable(f) else (lambda g: g))
     _jit.unused = lambda f: f
