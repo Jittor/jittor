@@ -121,23 +121,67 @@ def check_cuda_env():
         + fix_env("LD_LIBRARY_PATH") \
         + fix_env("CUDA_HOME")
     if changed:
-        try:
-            # LD_LIBRARY_PATH change must triggle restart
-            # because dyloader already setup            
-            # with open("/proc/self/maps", "r") as f:
-            #     cudart_loaded = "cudart" in f.read().lower()
-            # if cudart_loaded:
-                with open("/proc/self/cmdline", "r") as f:
-                    argv = f.read().split("\x00")
-                    if len(argv[-1]) == 0: del argv[-1]
-                if 'ipykernel_launcher' in argv:
-                    LOG.i(f"needed restart but not {sys.executable} {argv[1:]}, you can ignore this warning.")
-                else:
-                    LOG.i(f"restart {sys.executable} {argv[1:]}")
-                    os.execl(sys.executable, sys.executable, *argv[1:])
-        except:
-            pass
+        # NOTE: this used to read /proc/self/cmdline and os.execl() the user's
+        # own process, so that the loader would pick up the new
+        # LD_LIBRARY_PATH. A library must not restart the program it was
+        # imported into:
+        #
+        #  * a script started via its shebang has argv[0] == the script, so
+        #    `argv[1:]` drops the script and the "restart" runs
+        #    `python <first argument>`;
+        #  * everything the process did before `import jittor` -- opened files,
+        #    parsed arguments, allocated memory -- is gone;
+        #  * inside an MPI rank or a multiprocessing worker, one rank
+        #    re-exec'ing itself takes the job with it;
+        #  * the whole thing was wrapped in `except: pass`, so when it failed
+        #    the process continued in the state the restart was meant to fix.
+        #
+        # Nothing here needs a restart. LD_LIBRARY_PATH matters to the loader
+        # when it resolves a *name*; jittor loads the CUDA libraries by
+        # absolute path (see preload_cuda_library / search_file), which the
+        # loader honours in an already-running process. The corrected
+        # environment is still exported for the child processes that read it.
+        LOG.v("corrected CUDA paths in the environment for child processes")
     
+
+#: Every published jtcuda archive is between one and a half and two and a half
+#: gigabytes; the exact figure is not worth a HEAD request on the import path.
+JTCUDA_APPROX_SIZE_GB = 2
+
+
+def _download_is_allowed(asset):
+    """Whether to fetch a ~2 GB CUDA toolkit without being asked to.
+
+    ``import jittor`` used to start this download by itself whenever the
+    machine had a driver but no nvcc on PATH. The user saw one line of
+    "Downloading" and an import that did not return for a quarter of an hour,
+    with no size, no progress, and no way to say no -- and on a restricted
+    network, no output at all.
+
+    It now happens only when asked: run
+
+        python -m jittor_utils.install_cuda
+
+    or set JTCUDA_AUTO_INSTALL=1 for unattended machines that want the old
+    behaviour.
+    """
+    if _install_cuda_requested:
+        return True
+    if os.environ.get("JTCUDA_AUTO_INSTALL", "0") == "1":
+        return True
+    LOG.i(
+        f"No nvcc found, and jittor can install a bundled CUDA toolkit "
+        f"({asset.filename}, about {JTCUDA_APPROX_SIZE_GB} GB) for you. It "
+        f"will not do that on its own: run "
+        f"`{os.path.basename(sys.executable)} -m jittor_utils.install_cuda` "
+        f"once, or set JTCUDA_AUTO_INSTALL=1, or install CUDA yourself and "
+        f"put nvcc on PATH. Continuing on CPU.")
+    return False
+
+
+#: Set when this module is run as a command, i.e. the user asked for it.
+_install_cuda_requested = False
+
 
 def install_cuda():
     if "nvcc_path" in os.environ and os.environ["nvcc_path"] == "":
@@ -168,8 +212,13 @@ def install_cuda():
     if os.path.isfile(nvcc_path):
         return nvcc_path
 
+    if not _download_is_allowed(asset):
+        return None
+
     os.makedirs(jtcuda_path, exist_ok=True)
     cuda_tgz_path = os.path.join(jtcuda_path, cuda_tgz)
+    LOG.i(f"Downloading {cuda_tgz} (about {JTCUDA_APPROX_SIZE_GB} GB) "
+          f"from {asset.url} into {jtcuda_path}")
     download_url_to_local(asset.url, cuda_tgz, jtcuda_path, md5)
 
 
@@ -188,5 +237,7 @@ def install_cuda():
 
 
 if __name__ == "__main__":
+    # Running the module *is* the request; the import path never is.
+    _install_cuda_requested = True
     nvcc_path = install_cuda()
     LOG.i("nvcc is installed at ", nvcc_path)
