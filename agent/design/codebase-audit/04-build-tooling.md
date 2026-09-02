@@ -94,28 +94,30 @@ CPU 型号、git 分支），**内容**按命令行加源码哈希判定，中�
 | pytest 配置强制注入主源码树 | `pyproject.toml` `pythonpath = ["python"]` | 副本或 worktree 里跑 pytest 会导入主树 | conftest 按环境变量决定 | 次要 |
 | 门禁一律关掉并行编译器 | `noxfile.py:687/1128/1548`、`tools/run_test_suite.py:59` | 门禁验证的不是用户默认跑到的代码路径（默认值 16） | 修好同步原语后默认打开，另设串行 session 做对照 | 主要 |
 
-## 新用户从 pip install 到跑通第一次训练：至少 17 个失败点，只有 4 个信息可操作
+## 新用户从 pip install 到跑通第一次训练：至少 17 个失败点
+
+**审计时只有 4 个信息可操作（2、11、17，加上 1）。2026-09-03 复核：15 个「是」、2 个「部分」（4、12）、0 个「否」。** 改善来自 0.08/0.10/0.11/9.02/9.03/9.05/9.08/9.09，以及 9.14 新增的 `python -m jittor_utils.preflight`——它在任何编译开始前一次性检查编译器、Python 头文件、OpenMP、磁盘、镜像可达性、CUDA 组件与 git，**一次报告全部缺失项**并逐条标注「Jittor 能自己解决」还是「需要你动手」；核心编译失败时同一份报告会附在错误信息后面。
 | # | 失败点 | 失败信息 | 可操作 |
 | --- | --- | --- | --- |
 | 1 | 没有 g++ | `RuntimeError: g++ not found`（`jittor_utils/__init__.py:554`） | 是 |
 | 2 | 没有 python3-dev | 明确列出搜索路径并提示装 python3.x-dev（`:653-656`） | **是，写得很好** |
-| 3 | 没有 OpenMP 运行库 | `assert libname is not None, "openmp library not found"`（`compiler.py:1395`） | 部分 |
-| 4 | git 不在 PATH 或 detached HEAD | 无任何信息，静默改变缓存路径 | 否 |
-| 5 | 有驱动无 nvcc 触发自动下载 2GB | 只有一行 Downloading，无大小无耗时无取消方式 | 否 |
-| 6 | 下载失败或镜像不可达 | `Download File failed, url: ...`（`misc.py:70-74`） | 部分 |
-| 7 | MD5 不匹配（代理返回错误页） | `MD5 mismatch...`（`misc.py:76`），不删坏文件不提示重试 | 否，下次运行因文件已存在反复失败 |
-| 8 | 磁盘满或缓存被截断 | 无检查，表现为散布编译失败与段错误 | 否 |
-| 9 | 核心编译失败 | `system_with_check` 抛完整命令行加 "This might be an overcommit issue"（`log.cc:679-682`），这条建议只对退出码异常成立，普通编译错误也带上，误导 | 部分 |
-| 10 | jit_utils 需要重编 | LOG.e 后 **exit 0** | 否，脚本看起来成功了 |
+| 3 | 没有 OpenMP 运行库 | 现在是带安装命令的 RuntimeError（9.03），且 `jittor_utils.preflight` 在编译前就报（9.14） | **是** |
+| 4 | git 不在 PATH 或 detached HEAD | preflight 会说明「缓存目录按分支命名，可用 cache_name 覆盖」并在 git 缺失时告警（9.14）；缓存键本身移除 git 分支属 9.04 剩余部分 | 部分 |
+| 5 | 有驱动无 nvcc 触发自动下载 2GB | **已删除**（9.02）：import 期不再自动下载工具链，改为显式命令；preflight 直接说「有驱动无 nvcc，装工具链或显式设 nvcc_path=""」 | **是** |
+| 6 | 下载失败或镜像不可达 | preflight 在编译前就测镜像可达性，并指向 `nox -s prefetch` 加 `JITTOR_OFFLINE_PATH` 的离线路径（9.14/9.15） | **是** |
+| 7 | 校验和不匹配（代理返回错误页） | **已修**（9.05）：换 SHA-256，先下到 `.part` 再改名，校验失败即删除坏文件并说明原因 | **是** |
+| 8 | 磁盘满或缓存被截断 | **已修**（0.10）：写缓存前 statvfs 检查并给出可操作错误；preflight 也单列一条（9.14） | **是** |
+| 9 | 核心编译失败 | 完整命令行加编译器输出；失败时附一份 preflight 报告，把这台机器上所有不满足的前置条件一次列出（9.14） | **是** |
+| 10 | jit_utils 需要重编 | **已修**（0.11）：非零退出码，信息说明「什么都没跑，重跑同一条命令」 | **是** |
 | 11 | 旧的 CPU-only jittor_core 遮蔽 CUDA 版本 | 明确指出被导入的文件路径与删除方法（`compiler.py:1454-1460`） | **是，写得很好** |
 | 12 | cuDNN 是 9.x | 建议装 jittor[cuda12]（`compile_extern.py:338-341`） | 部分，该建议在装了 torch 的环境会导致依赖冲突 |
-| 13 | jittor[cuda12] 组件版本不完全匹配 | 静默返回 None | 否 |
-| 14 | cublas/curand/cufft/cusparse 任一找不到 | LOG.f 中止；search_file 只打印 file X not found in [dirs] | 部分 |
-| 15 | GPU 架构新于 nvcc 支持范围 | warn 说"will be backward-compatible"——这句话是**错的**，没有 PTX 就没有向后兼容 | 否，警告掩盖了随后的运行期失败 |
-| 16 | 另一个进程持锁或孤儿锁 | 无任何输出，无限等待（F_SETLKW 无超时） | 否，实测两次各 40 分钟 |
+| 13 | jittor[cuda12] 组件版本不完全匹配 | **已修**（9.09）：说出具体是哪个包哪个版本不对、后果是回落到系统 CUDA；全装齐却不可用时默认直接报错 | **是** |
+| 14 | cublas/curand/cufft/cusparse 任一找不到 | **已修**（9.03）：`search_file` 抛 RuntimeError，列出搜索过的每个目录并说明「装提供它的包，或用 cuda_home/CUDA_HOME 指过去」 | **是** |
+| 15 | GPU 架构新于 nvcc 支持范围 | **已修**（9.08）：产物真的带 PTX 了，所以向后兼容这件事成立；warn 改成说实话（钳到 nvcc 能生成的最高架构、靠 PTX 由驱动 JIT、首次运行慢） | **是** |
+| 16 | 另一个进程持锁或孤儿锁 | **已修**（0.08）：统一 flock、加超时与持有者诊断（`JT_LOCK_TIMEOUT` / `JT_LOCK_REPORT_AFTER`），等待时会说是谁在持锁 | **是** |
 | 17 | 单个算子 JIT 编译失败 | LOGf 带 jit_key、生成源文件路径与编译器输出（`parallel_compiler.cc:204-211`） | **是，写得很好** |
 
-可诊断性呈两极：**已被人踩过并专门写过注释的失败点信息质量很高，其余全靠猜**。缺的不是
+（审计原文）可诊断性呈两极：**已被人踩过并专门写过注释的失败点信息质量很高，其余全靠猜**。缺的不是
 文案，而是一层统一的"构建前置条件检查"——在任何编译开始前一次性校验编译器、Python 头
 文件、OpenMP、磁盘空间、网络可达性与 CUDA 组件版本，一次报告全部缺失项，并区分可自动
 修复与需用户操作。现在这些检查散在 1500 行的模块顶层脚本里，按执行顺序一个个把用户拦下来。

@@ -1568,6 +1568,15 @@ for file in jit_utils_core_files:
     files.remove(file)
 LOG.vv("compile order:", files)
 
+# Everything a build needs, checked once and reported together -- but only
+# when there is actually a build to do. These preconditions used to be checked
+# in whatever order the module-level code ran in, so a user missing three of
+# them found out one `pip install` at a time, paying a cold build between each.
+if not os.path.isfile(os.path.join(cache_path,
+                                   'jittor_core'+extension_suffix)):
+    from jittor_utils import preflight as _preflight
+    _preflight.assert_ready()
+
 if platform.system() == 'Linux':
     libname = {"clang":"omp", "icc":"iomp5", "g++":"gomp"}[cc_type]
     openmp_name = libname
@@ -1586,7 +1595,22 @@ if platform.system() == 'Linux':
 # application it is imported into.
 
 cc_flags += f" -l\"jit_utils_core{lib_suffix}\" "
-compile(cc_path, cc_flags+opt_flags, files, 'jittor_core'+extension_suffix)
+try:
+    compile(cc_path, cc_flags+opt_flags, files, 'jittor_core'+extension_suffix)
+except RuntimeError as error:
+    # A build that fails here usually fails for a reason the preconditions
+    # above can name. Say all of them, rather than leaving the user with a
+    # compiler diagnostic and nothing to act on.
+    from jittor_utils import preflight as _preflight
+    try:
+        _report = _preflight.format_report(_preflight.run_all(),
+                                           only_problems=True)
+    except Exception:
+        raise error
+    if _report and _report != "all build preconditions satisfied":
+        raise RuntimeError("%s\n\nBuild preconditions on this machine:\n%s"
+                           % (error, _report))
+    raise
 cc_flags += f" -l\"jittor_core{lib_suffix}\" "
 
 with jit_utils.import_scope(import_flags):
