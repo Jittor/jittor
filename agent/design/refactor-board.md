@@ -355,7 +355,14 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 7.05 | install 事务化 | 待领 | | |
 | 7.06 | 依赖单向化 core→tensor→nn/optim→distributed→fsdp→适配器 | 已合并 | 兼容层分区 | 27c4bdeb |
 | 7.07 | 第三方库补丁搬出 compat/ | 待领 | | |
-| 7.08 | `torch.dtype` 改真正的对象而非 str 子类 | 待领 | | |
+| 7.08 | `torch.dtype` 改真正的对象而非 str 子类 | **部分完成** | 兼容层分区 | 9aaedba9（仅 `torch.backends` 一项） |
+
+**7.08 只做了三分之一，另两项仍待领**（兼容层分区，2026-09-03）：
+
+- 已做：**`torch.backends.*` 映射表格化并单测** — `9aaedba9`。六种拼写合成两条状态。`fp32_precision` 原本是四个 backend 对象上的字面量 `"ieee"`（`_PrecisionBackend` 的**类属性**），读不反映 tf32 已打开、写它什么都不做；`get_float32_matmul_precision()` 读的则是一个`matmul.allow_tf32` 从不更新的独立字符串。四条缺陷都用探针在旧实现上逐条实测复现过，不是推断。
+- 未做：**`torch.dtype` 改真正的对象** — **未动，且不建议顺手做**。`types.py` 的 `class dtype(str)` 里 str 继承是**承重**的，文件自己写明了理由：jittor 的 C++ 类型分发构造器要求 str/NanoString；而且 jittor **自己的 Python 代码**（`contrib.concat`、`linalg`、`nn`）会`str(var.dtype)` 再把结果直接喂回 C++ 分发。所以「入口处一次转换」要求先把**每一个** dtype 跨进 C++ 的边界找全再改；改一半会让错误的 dtype 静默流进算子。这是本任务里唯一一条「做一半比不做更糟」的，应整块领、单独排期。
+- 未做：**26 个占位 dtype 参与计算时抛 `NotImplementedError`**。占位清单在 `types.py:_make_dtypes` 的 specs 里已有注释标出（complex 3、量化 5、float8/float4 6、sub-byte uint 7，另有 uint16/32/64）。难点不在识别而在拦截点：这些 dtype 对象**必须**继续存在且可作字典键（transformers/safetensors/torchao 在 import 期就按它们建表），所以只能在「真的参与计算或分配」那一步抛，不能在被引用时抛。
+
 | 7.09 | `torch.library` | 进行中 | 兼容层分区 | |
 | 7.10 | `torch.compile`/`jit.trace`/`jit.script` 保留 pass… | 进行中 | 兼容层分区 | |
 | 7.11 | autograd 语义 | 进行中 | 兼容层分区 | |
