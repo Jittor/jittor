@@ -181,13 +181,13 @@
 | 6.C30 | `helper_cuda.h` 的 `peek` 去掉进程级闩 `peek_logged` | 待领 | | |
 | 6.P01 | 转置标记陈旧 | 并入 5.03 | | |
 | 6.P02 | Function 实例复用、no_grad 泄漏、tied weight 参数集合 | 并入 5.07、5.08、5.04 | | |
-| 6.P03 | H1 分组 conv3d 的 ww reindex 形状顺序 | 待领 | | |
-| 6.P04 | H2 Pool3d `return_indices` 内核第三层循环变量 | 待领 | | |
-| 6.P05 | H3 Pool3d CUDA 反向用 `pout_shape` 作上界 | 待领 | | |
-| 6.P06 | H4 MaxUnpool2d/3d 在 `stride != kernel_size` 时用原始… | 待领 | | |
-| 6.P07 | H5 eigh 反向 `dout` 全零时写零 | 待领 | | |
-| 6.P08 | H6 `_autograd_grad` 的 zip 用过滤后的 `new_grad_output… | 待领 | | |
-| 6.P09 | H7 irfft 对实数输入与显式 `n` 的处理走 `:68-73` 的判别函数 | 待领 | | |
+| 6.P03 | H1 分组 conv3d 的 ww reindex 形状顺序 | 已合并 | pyops | a50c5678 |
+| 6.P04 | H2 Pool3d `return_indices` 内核第三层循环变量 | 已合并 | pyops | 2fb2d15d |
+| 6.P05 | H3 Pool3d CUDA 反向用 `pout_shape` 作上界 | 已合并 | pyops | 359031f4 |
+| 6.P06 | H4 MaxUnpool2d/3d 在 `stride != kernel_size` 时用原始… | 已合并 | pyops | 70d97137（机制与审计描述不同：`xshape3` 本就是重建体宽度，真正错的是默认 `output_size`） |
+| 6.P07 | H5 eigh 反向 `dout` 全零时写零 | 已合并 | pyops | aeeca502 |
+| 6.P08 | H6 `_autograd_grad` 的 zip 用过滤后的 `new_grad_output… | 已合并 | pyops | e9c704cb |
+| 6.P09 | H7 irfft 对实数输入与显式 `n` 的处理走 `:68-73` 的判别函数 | 已合并 | pyops | b59563c1（实数输入在默认 `n` 下原本就与 numpy 一致；错的是显式 `n`） |
 | 6.P10 | H8 ReduceLROnPlateau 每轮从初始 lr 计算 | 进行中 | pyother | |
 | 6.P11 | H9 `unique(return_counts=True, return_inverse=Fa… | 进行中 | pyother | |
 | 6.P12 | H10 Adan 的 `clip_grad_norm` 移出 param_group 循环 | 进行中 | pyother | |
