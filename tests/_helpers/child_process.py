@@ -23,14 +23,24 @@ So: every child process a test starts goes through this module, which pins
 
 The second reason is timeouts. A cold child pays for a full core compile. A
 timeout tuned for an idle machine turns into a recurring false red as soon as
-anything else runs on the box, so the default here is generous and the message
-says what actually happened.
+anything else runs on the box, so the budget here is 600 s rather than the 180 s
+that kept flaking, and the message says what actually happened.
+
+The third is everything a call site used to do for itself. Collecting these
+launches into one place dropped the preparation each one did -- and that
+preparation was the contract, not boilerplate. The options below exist because
+each of them was lost exactly once:
+
+=============================== =============================================
+``crash_isolated=True``         the child may die from a signal
+``without_torch_mode=True``     the child must start with no Torch shim
+``inherit=False``               ``env`` is complete, and had things *removed*
+=============================== =============================================
 
 What to call
 ------------
 =========================== =====================================================
 :func:`run_python_child`    ``python <args>`` -- the common case
-                            (``crash_isolated=True`` when it may die by signal)
 :func:`run_child_script`    write a source string to a file and run it
 :func:`run_mpi_python`      ``mpirun -np N python <args>``
 :func:`shell`               a shell command line that needs quoting or job control
