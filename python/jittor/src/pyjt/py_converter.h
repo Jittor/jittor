@@ -156,10 +156,19 @@ DEF_IS(Slice, bool) is_type(PyObject* obj) {
     return PySlice_Check(obj);
 }
 DEF_IS(Slice, T) from_py_object(PyObject* obj) {
-    Py_ssize_t start, stop, step;
+    // PySlice_Unpack returns -1 and leaves all three outputs UNWRITTEN when the
+    // slice cannot be used -- step == 0, or a bound whose __index__ raises.  The
+    // return value therefore has to be checked before the values are read, or
+    // uninitialised stack becomes the slice bounds handed to getitem/setitem.
+    Py_ssize_t start = 0, stop = 0, step = 1;
     auto slice = (PySliceObject*)obj;
 
-    PySlice_Unpack(obj, &start, &stop, &step);
+    if (PySlice_Unpack(obj, &start, &stop, &step) < 0) {
+        // The Python exception (ValueError / whatever __index__ raised) is
+        // already set; the generated binding's catch block forwards an
+        // existing Python error unchanged, so it reaches the caller as-is.
+        throw std::runtime_error("invalid slice");
+    }
     return {start, stop, step, 
         (slice->start == Py_None) |
         ((slice->stop == Py_None) << 1) |

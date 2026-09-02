@@ -21,6 +21,7 @@ import unittest
 
 import jittor as jt
 import jittor_core
+import numpy as np
 
 
 def run_in_subprocess(body):
@@ -104,6 +105,53 @@ class TestConstructionFailureDealloc(unittest.TestCase):
             v.foo = 1
             assert v.foo == 1
             del v
+
+
+class TestSliceUnpack(unittest.TestCase):
+    """``PySlice_Unpack`` failures must not become slice bounds.
+
+    CPython returns -1 and leaves ``start``/``stop``/``step`` untouched when a
+    slice is unusable (``step == 0``, or an ``__index__`` that raises), so the
+    converter has to check the return value before reading them -- otherwise
+    uninitialised stack is what reaches getitem/setitem.
+    """
+
+    def setUp(self):
+        self.a = jt.array(np.arange(20, dtype="float32").reshape(4, 5))
+
+    def test_zero_step_getitem_raises_value_error(self):
+        for index in (
+            lambda a: a[::0],
+            lambda a: a[1:3:0],
+            lambda a: a[0, ::0],
+            lambda a: a[::0, 0],
+            lambda a: a[::0, ::0],
+        ):
+            with self.assertRaises(ValueError):
+                index(self.a)
+
+    def test_zero_step_setitem_raises_value_error(self):
+        b = jt.array(np.arange(20, dtype="float32").reshape(4, 5))
+        with self.assertRaises(ValueError):
+            b[::0] = 1.0
+        # the failed store must not have touched the data
+        np.testing.assert_array_equal(
+            b.numpy(), np.arange(20, dtype="float32").reshape(4, 5))
+
+    def test_failing_index_protocol_propagates(self):
+        class Boom:
+            def __index__(self):
+                raise RuntimeError("boom")
+
+        with self.assertRaises(Exception) as ctx:
+            self.a[:: Boom()]
+        self.assertNotIsInstance(ctx.exception, SystemError)
+
+    def test_normal_slices_still_work(self):
+        np_a = np.arange(20, dtype="float32").reshape(4, 5)
+        np.testing.assert_array_equal(self.a[::2].numpy(), np_a[::2])
+        np.testing.assert_array_equal(self.a[::-1].numpy(), np_a[::-1])
+        np.testing.assert_array_equal(self.a[1:3, ::2].numpy(), np_a[1:3, ::2])
 
 
 if __name__ == "__main__":
