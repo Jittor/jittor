@@ -266,6 +266,14 @@ static void run_and_install(const string& cmd, const string& output_name,
         remove(tmp_name.c_str());
         throw;
     }
+    if (!file_exist(tmp_name)) {
+        // The command succeeded but wrote nothing where we redirected it: a
+        // wrapper that ignores its -o argument, or the TEST build, where
+        // system_with_check is a stub and cache_compile writes the output
+        // itself. Leave the path exactly as the command left it.
+        LOGvv << "no product at" << tmp_name >> ", installed nothing";
+        return;
+    }
     if (rename(tmp_name.c_str(), output_name.c_str()) != 0) {
         string reason = strerror(errno);
         remove(tmp_name.c_str());
