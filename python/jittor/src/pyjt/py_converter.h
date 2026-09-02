@@ -315,18 +315,57 @@ DEF_IS(ZipFile, const T&) from_py_object(PyObject* obj) {
 // NanoString
 struct NanoString;
 EXTERN_LIB PyTypeObject PyjtNanoString;
+// Every branch here ends in ns_valid_name(): a NanoString parameter only
+// matches an object that actually names a dtype or an operator.
+//
+// The check used to be "is it a str, a type, ANY callable, or does it have a
+// `.type` attribute", which matched almost everything.  Two consequences:
+// an arbitrary function or class won the NanoString overload and then failed
+// inside the conversion, and `PyObject_HasAttrString` ran (and swallowed the
+// exceptions of) a user-defined `__getattr__` on every overload probe.  With
+// PyTorch's `Tensor.type()` present in the shim, every tensor has a `.type`
+// attribute and would be a candidate dtype.
 DEF_IS(NanoString, bool) is_type(PyObject* obj) {
-    return Py_TYPE(obj) == &PyjtNanoString ||
-        // PyUnicode_Check (not CheckExact) so str SUBCLASSES are accepted too:
-        // torch_compat's `dtype` is a str subclass whose underlying value is the
-        // bare jittor name ("float32"), fed back into NanoString params by
-        // jittor's own python (contrib.concat/linalg/nn do str(var.dtype)).
-        PyUnicode_Check(obj) ||
-        PyType_CheckExact(obj) ||
-        // jt.float.__name__
-        PyCallable_Check(obj) ||
-        // numpy.dtype.type
-        PyObject_HasAttrString(obj, "type");
+    if (Py_TYPE(obj) == &PyjtNanoString) return true;
+    // PyUnicode_Check (not CheckExact) so str SUBCLASSES are accepted too:
+    // torch_compat's `dtype` is a str subclass whose underlying value is the
+    // bare jittor name ("float32"), fed back into NanoString params by
+    // jittor's own python (contrib.concat/linalg/nn do str(var.dtype)).
+    if (PyUnicode_Check(obj)) {
+        auto s = PyUnicode_AsUTF8(obj);
+        if (!s) { PyErr_Clear(); return false; }
+        return ns_valid_name(s);
+    }
+    // numpy scalar types (np.float32) and the python builtins (float, int,
+    // bool) are spelled as type objects whose name is the dtype.  PyType_Check
+    // rather than CheckExact so a class built by a custom metaclass still
+    // arrives here instead of falling through to the callable branch, which is
+    // how it used to be accepted.
+    if (PyType_Check(obj))
+        return ns_valid_name(_PyType_Name((PyTypeObject *)obj));
+    // jt.float and friends are builtin functions named after the dtype.  Only
+    // functions are probed: both kinds carry a real __name__ slot, so no user
+    // __getattr__ runs here.
+    if (PyFunction_Check(obj) || PyCFunction_Check(obj)) {
+        PyObject* n = PyObject_GetAttrString(obj, "__name__");
+        if (!n) { PyErr_Clear(); return false; }
+        auto s = PyUnicode_Check(n) ? PyUnicode_AsUTF8(n) : nullptr;
+        bool ok = s && ns_valid_name(s);
+        if (!s) PyErr_Clear();
+        Py_DECREF(n);
+        return ok;
+    }
+    // numpy.dtype keeps the scalar type in `.type`.  Restricted to real dtype
+    // instances rather than "anything with that attribute name".
+    if (PyArrayDescr_Type && PyObject_TypeCheck(obj, PyArrayDescr_Type)) {
+        PyObject* t = PyObject_GetAttrString(obj, "type");
+        if (!t) { PyErr_Clear(); return false; }
+        bool ok = PyType_CheckExact(t) &&
+            ns_valid_name(_PyType_Name((PyTypeObject *)t));
+        Py_DECREF(t);
+        return ok;
+    }
+    return false;
 }
 
 DEF_IS(NanoString, PyObject*) to_py_object(T a) {
@@ -336,16 +375,17 @@ DEF_IS(NanoString, PyObject*) to_py_object(T a) {
     return obj.release();
 }
 
+// Kept branch-for-branch in step with is_type above.
 DEF_IS(NanoString, T) from_py_object(PyObject* obj) {
     if (Py_TYPE(obj) == &PyjtNanoString)
         return *GET_RAW_PTR(T, obj);
     if (PyUnicode_Check(obj))   // str or str subclass (e.g. torch_compat dtype)
         return T(PyUnicode_AsUTF8(obj));
     // PyType
-    if (PyType_CheckExact(obj))
+    if (PyType_Check(obj))
         return T(_PyType_Name((PyTypeObject *)obj));
     // jt.float.__name__
-    if (PyCallable_Check(obj)) {
+    if (PyFunction_Check(obj) || PyCFunction_Check(obj)) {
         PyObjHolder t(PyObject_GetAttrString(obj, "__name__"));
         return T(PyUnicode_AsUTF8(t.obj));
     }

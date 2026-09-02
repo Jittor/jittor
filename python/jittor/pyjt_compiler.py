@@ -889,9 +889,15 @@ def compile_src(src, h, basename):
                 {{
                 {arr_func_prepare[did]}
                 if ({arr_func_quick_check_runable[did]}) {{
-                    matched_overload=true;
                     {arr_func_args_convert[did]};
                     {arr_fill_with_default[did]};
+                    // Only now is the overload really matched.  Setting this
+                    // before the conversions made a failed *argument*
+                    // conversion report as an operator error: the catch below
+                    // trusts matched_overload to decide between "your
+                    // arguments are wrong, here are the signatures" and "the
+                    // operator itself failed".
+                    matched_overload=true;
                     {arr_func_return[did]};
                 }}
                 }}

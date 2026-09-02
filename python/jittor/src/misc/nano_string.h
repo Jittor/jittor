@@ -186,6 +186,23 @@ struct NanoString {
     operator uint32() const { return data; }
 };
 
+/** Does `s` name a NanoString -- a dtype or an operator name?
+ *
+ * Mirrors the `NanoString(const char*)` constructor above, including its
+ * tolerance for the torch-compat shim's "torch.<dtype>" spelling.  It exists so
+ * that `is_type<NanoString>` in pyjt/py_converter.h can ask the same question
+ * the conversion will answer: when the two disagreed, the type check claimed a
+ * NanoString overload for something that was not one, and the failure surfaced
+ * from inside the conversion as an operator error instead of a bad argument.
+ */
+inline bool ns_valid_name(const char* s) {
+    if (!s) return false;
+    if (__string_to_ns.count(s)) return true;
+    if (s[0]=='t'&&s[1]=='o'&&s[2]=='r'&&s[3]=='c'&&s[4]=='h'&&s[5]=='.')
+        return __string_to_ns.count(s+6) != 0;
+    return false;
+}
+
 // @pyjt(NanoString.__eq__)
 inline bool eq(const NanoString& a, const NanoString& b) {
     return a.data == b.data;

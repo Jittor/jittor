@@ -306,6 +306,73 @@ class TestNonStdExceptionAtTheBoundary(unittest.TestCase):
         self.assertIn("RAISED", output)
         self.assertIn("SURVIVED", output)
 
+
+class TestNanoStringOverloadMatching(unittest.TestCase):
+    """A dtype parameter only matches something that names a dtype.
+
+    ``is_type<NanoString>`` used to accept any string, any type, any callable,
+    and any object with a ``.type`` attribute.  Such an argument won the
+    NanoString overload and then failed inside the conversion -- and because
+    ``matched_overload`` was set *before* the conversion ran, the binding
+    reported it as an operator failure ("Something wrong... Could you please
+    report this issue?") instead of listing the signatures it could not match.
+    With PyTorch's ``Tensor.type()`` in the shim, every tensor carries a
+    ``.type`` attribute and was a candidate dtype.
+    """
+
+    def setUp(self):
+        self.x = jt.array(np.arange(4, dtype="float32"))
+
+    def test_function_is_not_a_dtype(self):
+        def not_a_dtype():
+            return None
+
+        with self.assertRaises(Exception) as ctx:
+            jt.ops.unary(self.x, not_a_dtype)
+        self.assertIn("Wrong inputs arguments", str(ctx.exception))
+
+    def test_object_with_a_type_attribute_is_not_a_dtype(self):
+        class HasType:
+            type = float
+
+        with self.assertRaises(Exception) as ctx:
+            jt.ops.unary(self.x, HasType())
+        self.assertIn("Wrong inputs arguments", str(ctx.exception))
+
+    def test_unknown_dtype_string_reports_the_argument(self):
+        with self.assertRaises(Exception) as ctx:
+            jt.ops.unary(self.x, "not_a_real_dtype")
+        self.assertIn("Wrong inputs arguments", str(ctx.exception))
+
+    def test_getattr_is_not_run_on_arbitrary_objects(self):
+        # ``PyObject_HasAttrString(obj, "type")`` ran a user ``__getattr__`` on
+        # every overload probe and swallowed whatever it raised.
+        class Probe:
+            calls = 0
+
+            def __getattr__(self, name):
+                Probe.calls += 1
+                raise ValueError("__getattr__ must not be reached")
+
+        with self.assertRaises(Exception):
+            jt.ops.unary(self.x, Probe())
+        self.assertEqual(Probe.calls, 0)
+
+    def test_the_dtype_spellings_that_do_work_still_work(self):
+        self.assertEqual(str(self.x.cast("float64").dtype), "float64")
+        self.assertEqual(str(self.x.cast(jt.float64).dtype), "float64")
+        self.assertEqual(str(self.x.cast(np.float64).dtype), "float64")
+        self.assertEqual(str(self.x.cast(np.dtype("float64")).dtype), "float64")
+        self.assertEqual(str(self.x.cast(float).dtype), "float32")
+
+        class Meta(type):
+            pass
+
+        # A class built by a custom metaclass used to arrive through the
+        # "any callable" branch; it now arrives as a type object.
+        float64 = Meta("float64", (), {})
+        self.assertEqual(str(self.x.cast(float64).dtype), "float64")
+
 if __name__ == "__main__":
     unittest.main()
 
