@@ -1524,6 +1524,13 @@ def ecosystem(session):
             "JITTOR_TORCH_SHIM": "1",
             "JITTOR_ECOSYSTEM_SPEED_RATIO": os.environ.get(
                 "JITTOR_ECOSYSTEM_SPEED_RATIO", ECOSYSTEM_SPEED_RATIO),
+            # Without this the whole speed half skips itself -- "set
+            # JITTOR_ECOSYSTEM_LARGE=1 to run the realistic-size measurement"
+            # -- and a nightly speed gate that measures nothing is the same
+            # fail-open this session exists to close, one layer down. The
+            # realistic sizes *are* the measurement; toy sizes would compare
+            # framework overhead rather than the work.
+            "JITTOR_ECOSYSTEM_LARGE": "1",
             "HF_HUB_OFFLINE": "1",
             "TRANSFORMERS_OFFLINE": "1",
         }

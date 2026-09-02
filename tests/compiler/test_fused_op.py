@@ -61,11 +61,24 @@ def get_np_matmul_toughtput(size):
 class TestFusedOp(unittest.TestCase):
     def test_add(self):
         jt.clean()
+        # Deltas, not absolutes. These counters are process-global: a file that
+        # ran earlier and kept a module-level Var alive shifts every one of
+        # them, and this case then fails for something another file did.
+        # `jt.clean()` does not help -- a Var another module still references is
+        # alive by definition. What this case is actually about is how many
+        # nodes *this* graph creates and how many survive fusion, which is a
+        # difference.
+        baseline = (
+            jt.number_of_hold_vars(),
+            jt.number_of_lived_vars(),
+            jt.number_of_lived_ops(),
+        )
+
         def check(hv, lv, lo):
             self.assertEqual((
-                jt.number_of_hold_vars(),
-                jt.number_of_lived_vars(),
-                jt.number_of_lived_ops()),
+                jt.number_of_hold_vars() - baseline[0],
+                jt.number_of_lived_vars() - baseline[1],
+                jt.number_of_lived_ops() - baseline[2]),
                 (hv, lv, lo))
         for i in range(8):
             check(0,0,0)

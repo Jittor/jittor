@@ -62,4 +62,7 @@ jobs:
           # assertion a loaded machine can fail on its own, and a false red on
           # the speed gate teaches people to ignore the numbers gate beside it.
           JITTOR_ECOSYSTEM_SPEED_RATIO: "1.07"
+          # The realistic sizes are the measurement; without this the speed
+          # half skips itself and the gate would be green having measured nothing.
+          JITTOR_ECOSYSTEM_LARGE: "1"
         run: python -m nox -s ecosystem
