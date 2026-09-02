@@ -636,6 +636,19 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     Var.sub_ = lambda self, o, alpha=1: _ip(self, self - (o * alpha))
     Var.mul_ = lambda self, o: _ip(self, self * o)
     Var.div_ = lambda self, o: _ip(self, self / o)
+    # CUDA fusion of an exact-shape float tensor with a graph-produced bool mask
+    # can turn finite extreme values into NaN in the native __imul__ slot. Keep
+    # the workaround to that non-leaf mask case; all other calls retain the
+    # native slot's shape, dtype, autograd, and dispatch behavior.
+    _native_imul = Var.__imul__
+    def _torch_imul(self, other):
+        if (isinstance(other, Var) and str(other.dtype) == "bool"
+                and getattr(jt, "_torch_leaf_params", {}).get(id(self)) is not self
+                and str(self.dtype) in ("float16", "bfloat16", "float32", "float64")
+                and tuple(self.shape) == tuple(other.shape)):
+            return _ip(self, self * other)
+        return _native_imul(self, other)
+    Var.__imul__ = _torch_imul
     # in-place unary math ops (recurrent_gemma uses x.log_(); common torch idioms)
     for _name, _fn in (("log_", jt.log), ("exp_", jt.exp), ("sqrt_", jt.sqrt),
                        ("neg_", lambda x: -x), ("abs_", jt.abs), ("sigmoid_", jt.sigmoid),

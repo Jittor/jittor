@@ -22,8 +22,8 @@ import unittest, numpy as np
 try:
     import torch  # torch_shim -> jittor
     import jittor as jt
-    from transformers import AutoConfig, AutoModel, AutoModelForCausalLM
-    _HAS = (getattr(torch, '__name__', '') == 'torch') and hasattr(torch, 'tensor')
+    from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoModelForSeq2SeqLM
+    _HAS = torch is jt and hasattr(torch, 'tensor')
 except Exception:
     _HAS = False
 
@@ -181,6 +181,66 @@ class TestTorchHFModels(unittest.TestCase):
         self.assertTrue(_valid(m.generate(ids2, attention_mask=torch.ones(2, 4),
                                           max_new_tokens=5, do_sample=False)),
                         "batched generation produced invalid tokens")
+
+    def test_t5_batched_generate_and_encoder_decoder_cache(self):
+        if not getattr(jt, 'has_cuda', 0):
+            self.skipTest('needs CUDA')
+        jt.flags.use_cuda = 1
+        device = torch.device('cuda')
+        cfg = dict(CFG['t5'])
+        cfg.update(pad_token_id=0, decoder_start_token_id=0, eos_token_id=1)
+        m = AutoModelForSeq2SeqLM.from_config(AutoConfig.for_model('t5', **cfg))
+        m.to(device)
+        m.eval()
+        self.assertTrue(all(parameter.is_cuda for parameter in m.parameters()))
+        input_ids = torch.tensor(
+            np.array([[5, 6, 7, 1], [8, 9, 10, 1]], dtype='int64'),
+            device=device,
+        )
+        attention_mask = torch.ones((2, 4), dtype=torch.long, device=device)
+        self.assertTrue(input_ids.is_cuda)
+        self.assertTrue(attention_mask.is_cuda)
+
+        generation = m.generate(input_ids=input_ids, attention_mask=attention_mask,
+                                min_new_tokens=2, max_new_tokens=2, do_sample=False,
+                                num_beams=1, use_cache=True,
+                                return_dict_in_generate=True, output_scores=True)
+        self.assertEqual(tuple(generation.sequences.shape), (2, 3))
+        self.assertTrue(generation.sequences.is_cuda)
+        self.assertEqual(len(generation.scores), 2)
+        for score in generation.scores:
+            self.assertTrue(score.is_cuda)
+            values = score.float().numpy()
+            self.assertFalse(np.isnan(values).any())
+            self.assertTrue(np.isneginf(values[:, cfg['eos_token_id']]).all())
+            self.assertTrue(np.isfinite(np.delete(values, cfg['eos_token_id'], axis=1)).all())
+
+        decoder_prefix = torch.tensor(
+            np.array([[0, 11], [0, 12]], dtype='int64'), device=device
+        )
+        with torch.no_grad():
+            prefill = m(input_ids=input_ids, attention_mask=attention_mask,
+                        decoder_input_ids=decoder_prefix, use_cache=True,
+                        return_dict=True)
+            prefill_length = int(prefill.past_key_values.get_seq_length())
+            step_tokens = torch.tensor(
+                np.array([[13], [14]], dtype='int64'), device=device
+            )
+            cached = m(input_ids=input_ids, attention_mask=attention_mask,
+                       decoder_input_ids=step_tokens,
+                       past_key_values=prefill.past_key_values,
+                       use_cache=True, return_dict=True)
+            full = m(input_ids=input_ids, attention_mask=attention_mask,
+                     decoder_input_ids=torch.cat([decoder_prefix, step_tokens], dim=1),
+                     use_cache=False, return_dict=True)
+        self.assertEqual(prefill_length, 2)
+        self.assertEqual(int(cached.past_key_values.get_seq_length()), 3)
+        self.assertTrue(cached.logits.is_cuda)
+        self.assertTrue(cached.past_key_values.self_attention_cache.layers[0].keys.is_cuda)
+        self.assertTrue(np.isfinite(cached.logits.float().numpy()).all())
+        np.testing.assert_allclose(cached.logits[:, -1].float().numpy(),
+                                   full.logits[:, -1].float().numpy(),
+                                   atol=1e-5, rtol=1e-5)
 
 
 if __name__ == '__main__':
