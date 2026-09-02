@@ -5,16 +5,18 @@ import jittor as jt
 from ..functional.pooling import (
     adaptive_avg_pool2d as adaptive_avg_pool2d,
     avg_pool2d as avg_pool2d,
+    avg_pool3d as avg_pool3d,
 )
 
 
 class AvgPool2d(jt.Module):
     '''2D average pooling, torch-compatible (N,C,H,W) -> (N,C,Hout,Wout).
 
-    Unlike ``jittor.pool.AvgPool2d`` this honours ``count_include_pad`` exactly as
-    PyTorch documents it: when ``True`` (default) padded zeros are counted in the
-    averaging denominator; when ``False`` only real input elements are.  ``ceil_mode``
-    overshoot beyond the input is never counted as padding (matches torch).
+    ``count_include_pad`` selects the averaging denominator exactly as PyTorch
+    documents it: when ``True`` (default) padded zeros are counted, when ``False``
+    only real input elements are.  ``ceil_mode`` overshoot beyond the input is
+    never counted as padding.  ``jittor.pool.AvgPool2d`` forwards here, so the two
+    spellings are the same numbers.
     '''
     def __init__(self, kernel_size, stride=None, padding=0, ceil_mode=False,
                  count_include_pad=True):
@@ -26,6 +28,32 @@ class AvgPool2d(jt.Module):
 
     def execute(self, x):
         return jt.nn.avg_pool2d(
+            x,
+            self.kernel_size,
+            self.stride,
+            self.padding,
+            self.ceil_mode,
+            self.count_include_pad,
+        )
+
+
+class AvgPool3d(jt.Module):
+    '''3D average pooling, torch-compatible (N,C,D,H,W) -> (N,C,Do,Ho,Wo).
+
+    Same semantics as :class:`AvgPool2d` one rank up, and literally the same
+    implementation (:func:`jittor.nn.functional.avg_pool3d`).  Before this the
+    2-D and 3-D members of ``jt.nn`` followed two different averaging rules.
+    '''
+    def __init__(self, kernel_size, stride=None, padding=0, ceil_mode=False,
+                 count_include_pad=True):
+        self.kernel_size = kernel_size
+        self.stride = stride if stride is not None else kernel_size
+        self.padding = padding
+        self.ceil_mode = ceil_mode
+        self.count_include_pad = count_include_pad
+
+    def execute(self, x):
+        return jt.nn.avg_pool3d(
             x,
             self.kernel_size,
             self.stride,

@@ -91,7 +91,7 @@ from .normalization import (
     layer_norm,
 )
 from .padding import pad
-from .pooling import adaptive_avg_pool2d, avg_pool2d
+from .pooling import adaptive_avg_pool2d, avg_pool2d, avg_pool3d
 from .shape import flatten, identity
 from .softmax import _get_softmax_dim, log_sigmoid, log_softmax, logsumexp, softmax
 from .tensor import kron, one_hot, tensordot
@@ -111,6 +111,7 @@ __all__ = sorted(
         "affine_grid_generator_4D",
         "affine_grid_generator_5D",
         "avg_pool2d",
+        "avg_pool3d",
         "backward",
         "baddbmm",
         "batch_norm",

@@ -203,7 +203,10 @@ class TestPoolStructure(unittest.TestCase):
                     ("return_indices", None), ("kernel_size", (2, 2)),
                     ("op", "maximum"), ("stride", (2, 2)),
                     ("padding", (0, 0)), ("ceil_mode", False),
-                    ("count_include_pad", False),
+                    # Both ranks now store the argument as given. Pool used to
+                    # fold `padding != 0` into it, which made padding=0 and
+                    # padding=(0,0) take different branches.
+                    ("count_include_pad", True),
                 ),
             ),
             (
@@ -212,10 +215,6 @@ class TestPoolStructure(unittest.TestCase):
                     ("return_indices", None), ("kernel_size", (2, 2, 2)),
                     ("op", "maximum"), ("stride", (2, 2, 2)),
                     ("padding", (0, 0, 0)), ("ceil_mode", False),
-                    # 3D stores the argument as given; the 2D Pool above still
-                    # folds `padding != 0` into it (6.P24 only covered Pool3d).
-                    # With padding 0 the two divisors coincide, so this is a
-                    # stored-field difference, not a numerical one.
                     ("count_include_pad", True),
                 ),
             ),
@@ -247,26 +246,25 @@ class TestPoolStructure(unittest.TestCase):
                 pool_facade.AdaptiveMaxPool3d(2),
                 (("output_size", (2, 2, 2)), ("return_indices", False)),
             ),
+            # The legacy average-pooling wrappers forward to jt.nn now: there
+            # is one implementation of average pooling and jt.pool is a
+            # spelling of it, not a second copy.
             (
                 pool_facade.AvgPool2d(2),
                 (("layer", (
-                    "Pool",
+                    "AvgPool2d",
                     (
-                        ("return_indices", None), ("kernel_size", (2, 2)),
-                        ("op", "mean"), ("stride", (2, 2)),
-                        ("padding", (0, 0)), ("ceil_mode", False),
-                        ("count_include_pad", False),
+                        ("kernel_size", 2), ("stride", 2), ("padding", 0),
+                        ("ceil_mode", False), ("count_include_pad", True),
                     ),
                 )),),
             ),
             (
                 pool_facade.AvgPool3d(2),
                 (("layer", (
-                    "Pool3d",
+                    "AvgPool3d",
                     (
-                        ("return_indices", None),
-                        ("kernel_size", (2, 2, 2)), ("op", "mean"),
-                        ("stride", (2, 2, 2)), ("padding", (0, 0, 0)),
+                        ("kernel_size", 2), ("stride", 2), ("padding", 0),
                         ("ceil_mode", False), ("count_include_pad", True),
                     ),
                 )),),
@@ -279,7 +277,7 @@ class TestPoolStructure(unittest.TestCase):
                         ("return_indices", None), ("kernel_size", (2, 2)),
                         ("op", "maximum"), ("stride", (2, 2)),
                         ("padding", (0, 0)), ("ceil_mode", False),
-                        ("count_include_pad", False),
+                        ("count_include_pad", True),
                     ),
                 )),),
             ),
@@ -354,11 +352,14 @@ class TestPoolStructure(unittest.TestCase):
             lambda: pool_facade.pool3d("input", 2, "minimum", 1, 3),
             (2, 3, 1), {"op": "minimum"},
         )
-        self._assert_factory_dispatch(
-            "AvgPool2d",
-            lambda: pool_facade.avg_pool2d("input", 2, 3, 1, True, False),
-            (2, 3, 1, True, False), {},
-        )
+        # pool.avg_pool2d forwards to jt.nn.avg_pool2d -- late-bound through
+        # the nn facade rather than through pool's own AvgPool2d, because the
+        # implementation lives there now.
+        calls = []
+        with mock.patch.object(nn, "avg_pool2d",
+                               lambda *a, **k: calls.append((a, k))):
+            pool_facade.avg_pool2d("input", 2, 3, 1, True, False)
+        self.assertEqual(calls, [(("input", 2, 3, 1, True, False), {})])
         self._assert_factory_dispatch(
             "MaxPool2d",
             lambda: pool_facade.max_pool2d(kernel_size=2, input="input"),
@@ -377,13 +378,10 @@ class TestPoolStructure(unittest.TestCase):
             def __init__(self, *args, **kwargs):
                 calls.append((args, kwargs))
 
-        with mock.patch.object(pool_facade, "Pool", FakeCore):
+        with mock.patch.object(nn, "AvgPool2d", FakeCore):
             average = pool_facade.AvgPool2d(2, 3, 1, True, False)
         self.assertIsInstance(average.layer, FakeCore)
-        self.assertEqual(calls.pop(), ((), {
-            "kernel_size": 2, "stride": 3, "padding": 1,
-            "ceil_mode": True, "count_include_pad": False, "op": "mean",
-        }))
+        self.assertEqual(calls.pop(), ((2, 3, 1, True, False), {}))
 
         dilation_calls = []
         with (
@@ -402,13 +400,10 @@ class TestPoolStructure(unittest.TestCase):
             "op": "maximum",
         }))
 
-        with mock.patch.object(pool_facade, "Pool3d", FakeCore):
+        with mock.patch.object(nn, "AvgPool3d", FakeCore):
             average3d = pool_facade.AvgPool3d(2, 3, 1, True, False)
         self.assertIsInstance(average3d.layer, FakeCore)
-        self.assertEqual(calls.pop(), ((), {
-            "kernel_size": 2, "stride": 3, "padding": 1,
-            "ceil_mode": True, "count_include_pad": False, "op": "mean",
-        }))
+        self.assertEqual(calls.pop(), ((2, 3, 1, True, False), {}))
 
         with (
             mock.patch.object(pool_facade, "Pool3d", FakeCore),
@@ -550,7 +545,7 @@ class TestPoolStructure(unittest.TestCase):
     def test_nn_and_functional_aliases_remain_stable(self):
         shared = (
             "AdaptiveAvgPool1d", "AdaptiveAvgPool3d", "AdaptiveMaxPool2d",
-            "AdaptiveMaxPool3d", "AvgPool1d", "AvgPool3d", "MaxPool1d",
+            "AdaptiveMaxPool3d", "AvgPool1d", "MaxPool1d",
             "MaxPool2d", "MaxPool3d", "MaxUnpool2d", "MaxUnpool3d",
             "Pool", "Pool3d", "max_pool2d", "max_pool3d", "pool",
             "pool2d", "pool3d",
@@ -564,9 +559,14 @@ class TestPoolStructure(unittest.TestCase):
                 else:
                     self.assertIs(public, source)
 
+        # The average-pooling family lives in jt.nn; jt.pool keeps a forwarding
+        # wrapper of the same name, so these are deliberately different objects
+        # that produce the same numbers (tests/nn/test_avg_pool_parity.py).
         self.assertIsNot(nn.AvgPool2d, pool_facade.AvgPool2d)
+        self.assertIsNot(nn.AvgPool3d, pool_facade.AvgPool3d)
         self.assertIsNot(nn.AdaptiveAvgPool2d, pool_facade.AdaptiveAvgPool2d)
         self.assertIsNot(nn.avg_pool2d, pool_facade.avg_pool2d)
+        self.assertIs(nn.functional.avg_pool3d, nn.avg_pool3d)
         module_classes = (
             "Pool", "Pool3d", "AdaptiveAvgPool2d", "AdaptiveAvgPool1d",
             "MaxPool1d", "AvgPool1d", "AdaptiveMaxPool2d",

@@ -14,7 +14,14 @@ class Pool(jt.Module):
         self.stride = stride if isinstance(stride, tuple) else (stride, stride)
         self.padding = padding if isinstance(padding, tuple) else (padding, padding)
         self.ceil_mode = ceil_mode
-        self.count_include_pad = count_include_pad and padding != 0
+        # torch's count_include_pad selects the averaging *divisor*; it is not
+        # conditional on the padding being non-zero. The old
+        # ``count_include_pad and padding != 0`` read the raw argument, so
+        # padding=(0,0) took a different branch than padding=0 (a tuple is
+        # never == 0) and the same pooling produced different numbers. Same fix
+        # as Pool3d. op="mean" no longer reads this at all -- it delegates to
+        # jt.nn.avg_pool2d -- but MaxPool2d/MaxPool3d still snapshot it.
+        self.count_include_pad = count_include_pad
         for item in self.kernel_size:
             if item <= 0:
                 raise RuntimeError(f"kernel_size must be greater than zero, but got {item}")
@@ -26,6 +33,13 @@ class Pool(jt.Module):
                 raise RuntimeError(f"padding must be non-negative, but got {item}")
 
     def execute(self, x):
+        if self.op == "mean":
+            # One implementation of average pooling for the whole package; see
+            # jittor/nn/functional/pooling.py. The kernels below stay for
+            # maximum/minimum, whose semantics this class still owns.
+            return jt.nn.avg_pool2d(
+                x, self.kernel_size, self.stride, self.padding,
+                self.ceil_mode, self.count_include_pad)
         N,C,H,W = x.shape
         # torch only requires the *padded* input to be at least the kernel size
         # (so the output has size >= 1). The original guard ignored padding, which
@@ -40,21 +54,12 @@ class Pool(jt.Module):
             h = (H+self.padding[0]*2-self.kernel_size[0])//self.stride[0]+1
             w = (W+self.padding[1]*2-self.kernel_size[1])//self.stride[1]+1
             use_code_op = self.op in ['maximum', 'minimum']
-            # some second order avg_pool is require, so we don't use code op here
         else:
             h = (H+self.padding[0]*2-self.kernel_size[0] + self.stride[0] - 1)//self.stride[0]+1
             w = (W+self.padding[1]*2-self.kernel_size[1] + self.stride[1] - 1)//self.stride[1]+1
-            use_code_op = self.op in ['maximum', 'minimum', 'mean']
+            use_code_op = self.op in ['maximum', 'minimum']
 
         if use_code_op and jt.pool.pool_use_code_op:
-            if self.op == 'mean':
-                if self.count_include_pad:
-                    count = f"int count = {self.kernel_size[0]*self.kernel_size[1]};"
-                else:
-                    count = "int count = (k2_ - k2) * (k3_ - k3);"
-                count += "float32 rcount = 1.0f / count;"
-            else:
-                count = ""
             forward_body = f'''
                 int k3 = i3*{self.stride[1]}-{self.padding[1]};
                 int k2 = i2*{self.stride[0]}-{self.padding[0]};
@@ -62,7 +67,6 @@ class Pool(jt.Module):
                 int k2_ = min(k2 + {self.kernel_size[0]}, in0_shape2);
                 k3 = max(0, k3);
                 k2 = max(0, k2);
-                {count}
             '''
             if not self.return_indices:
                 forward_body += f'''
@@ -91,16 +95,13 @@ class Pool(jt.Module):
                 int k2_ = min(k2 + {self.kernel_size[0]}, in0_shape2);
                 k3 = max(0, k3);
                 k2 = max(0, k2);
-                {count}
                 int bo=1;
                 for (int p = k2; p < k2_ && bo; ++p)
                     for (int q = k3; q < k3_ && bo; ++q) {{
-                        {"atomicAdd(&@out(i0,i1,p,q), @dout(i0,i1,i2,i3)/count);"
-                            if self.op == "mean" else
-                        f"""if (@pout(i0,i1,i2,i3) == @in0(i0,i1,p,q)) {{
+                        if (@pout(i0,i1,i2,i3) == @in0(i0,i1,p,q)) {{
                             atomicAdd(&@out(i0,i1,p,q), @dout(i0,i1,i2,i3)),
                             bo=0;
-                        }}"""}
+                        }}
                     }}
             '''
             if self.return_indices:

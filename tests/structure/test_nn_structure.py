@@ -51,6 +51,7 @@ _FUNCTIONAL_API = (
     "affine_grid_generator_4D",
     "affine_grid_generator_5D",
     "avg_pool2d",
+    "avg_pool3d",
     "backward",
     "baddbmm",
     "batch_norm",

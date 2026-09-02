@@ -1,6 +1,124 @@
-"""Torch-compatible functional average pooling."""
+"""Torch-compatible functional average pooling.
+
+Average pooling has exactly one implementation in this package.  Everything
+that averages a window -- ``nn.functional.avg_pool2d`` / ``avg_pool3d``,
+``nn.AvgPool2d`` / ``nn.AvgPool3d``, ``jt.pool.AvgPool2d`` / ``AvgPool3d`` /
+``avg_pool2d``, and ``jt.pool.Pool(op="mean")`` / ``Pool3d(op="mean")`` --
+ends in :func:`_avg_pool_nd`.  There used to be three (a corrected 2-D one
+here, an uncorrected 2-D one in ``jt.pool``, and a third in the 3-D pooling
+kernel), which is how ``jt.nn.AvgPool2d`` and ``jt.pool.AvgPool2d`` came to
+return different numbers for the same arguments.
+"""
 
 import jittor as jt
+
+
+def _pool_output_size(size, kernel, stride, padding, ceil_mode):
+    """One spatial extent of a pooling output, exactly as torch computes it.
+
+    ``ceil_mode`` rounds up, and then torch *drops a trailing window that would
+    start inside the right padding* -- ``pooling_output_shape_pad_lr``'s
+    ``if ((out - 1) * stride >= size + padding) --out;``.  Omitting that
+    correction is why the legacy ``Pool``/``Pool3d`` emit one extra plane for
+    ``ceil_mode=True`` with non-zero padding.
+    """
+    if not ceil_mode:
+        return (size + 2 * padding - kernel) // stride + 1
+    out_size = (size + 2 * padding - kernel + stride - 1) // stride + 1
+    if (out_size - 1) * stride >= size + padding:
+        out_size -= 1
+    return out_size
+
+
+def _window_counts(size, kernel, stride, padding, out_size, count_include_pad):
+    """The averaging divisor along one axis, per output position.
+
+    torch clamps each window to the *padded* extent when ``count_include_pad``
+    is true and to the real input when it is false.  The divisor separates per
+    axis, so the N-d divisor is the outer product of these vectors -- and it
+    depends only on the geometry, so it is a constant rather than a graph node.
+    """
+    counts = []
+    for index in range(out_size):
+        start = index * stride - padding
+        end = start + kernel
+        if count_include_pad:
+            low, high = start, min(end, size + padding)
+        else:
+            low, high = max(start, 0), min(end, size)
+        counts.append(max(high - low, 1))
+    return counts
+
+
+def _avg_pool_nd(x, rank, kernel_size, stride, padding, ceil_mode,
+                 count_include_pad, api):
+    """Average pooling over the trailing ``rank`` dimensions.
+
+    2-D and 3-D differ only in the rank, so they share this body; keeping two
+    copies is what let the two of them drift apart in the first place.
+    """
+    if x.ndim != rank + 2:
+        raise ValueError(
+            "{}: expected a {}-D input (N, C and {} spatial dims), but got a "
+            "{}-D input of shape {}.".format(
+                api, rank + 2, rank, x.ndim, tuple(x.shape)))
+    as_tuple = jt.nn._pair if rank == 2 else jt.nn._triple
+    kernel = as_tuple(kernel_size)
+    strides = kernel if stride is None else as_tuple(stride)
+    pads = as_tuple(padding)
+    sizes = [int(s) for s in x.shape[2:]]
+    for axis in range(rank):
+        if kernel[axis] <= 0:
+            raise RuntimeError(
+                "{}: kernel_size must be greater than zero, but got {}".format(
+                    api, kernel_size))
+        if strides[axis] <= 0:
+            raise RuntimeError(
+                "{}: stride must be greater than zero, but got {}".format(
+                    api, stride))
+        if pads[axis] < 0:
+            raise RuntimeError(
+                "{}: padding must be non-negative, but got {}".format(
+                    api, padding))
+        if pads[axis] * 2 > kernel[axis]:
+            raise RuntimeError(
+                "{}: padding should be at most half of kernel size, but got "
+                "padding={} and kernel_size={}".format(api, padding,
+                                                       kernel_size))
+    out_sizes = [
+        _pool_output_size(sizes[a], kernel[a], strides[a], pads[a], ceil_mode)
+        for a in range(rank)
+    ]
+    if min(out_sizes) <= 0:
+        raise RuntimeError(
+            "{}: output size is non-positive ({}): input {} is too small for "
+            "kernel {}, stride {}, padding {}.".format(
+                api, tuple(out_sizes), tuple(x.shape), kernel, strides, pads))
+    window = ["i{}*{}-{}+i{}".format(2 + a, strides[a], pads[a], 2 + rank + a)
+              for a in range(rank)]
+    summed = x.reindex(
+        [x.shape[0], x.shape[1]] + out_sizes + list(kernel),
+        ["i0", "i1"] + window,
+        overflow_value=0.0,
+    ).reduce("add", list(range(2 + rank, 2 + 2 * rank)))
+    if count_include_pad and not any(pads) and not ceil_mode:
+        # Every window is full, so the divisor is a scalar and the whole
+        # per-position table below collapses.
+        volume = 1
+        for extent in kernel:
+            volume *= extent
+        return summed / volume
+    divisor = None
+    for axis in range(rank):
+        counts = _window_counts(sizes[axis], kernel[axis], strides[axis],
+                                pads[axis], out_sizes[axis], count_include_pad)
+        view = [1, 1] + [1] * rank
+        view[2 + axis] = out_sizes[axis]
+        part = jt.array(counts).reshape(view)
+        divisor = part if divisor is None else divisor * part
+    # The counts are integers; casting them to the input dtype (rather than
+    # letting an int32/float16 division promote) keeps float16 in, float16 out.
+    return summed / divisor.cast(summed.dtype)
 
 
 def avg_pool2d(
@@ -12,46 +130,21 @@ def avg_pool2d(
     count_include_pad=True,
 ):
     """Apply two-dimensional average pooling with Torch divisor semantics."""
-    stride = kernel_size if stride is None else stride
-    kh, kw = jt.nn._pair(kernel_size)
-    sh, sw = jt.nn._pair(stride)
-    ph, pw = jt.nn._pair(padding)
-    n, channels, height, width = x.shape
-    if ceil_mode:
-        out_height = (height + 2 * ph - kh + sh - 1) // sh + 1
-        out_width = (width + 2 * pw - kw + sw - 1) // sw + 1
-        if (out_height - 1) * sh >= height + ph:
-            out_height -= 1
-        if (out_width - 1) * sw >= width + pw:
-            out_width -= 1
-    else:
-        out_height = (height + 2 * ph - kh) // sh + 1
-        out_width = (width + 2 * pw - kw) // sw + 1
-    indexes = ["i0", "i1", "i2*{}+i4-{}".format(sh, ph), "i3*{}+i5-{}".format(sw, pw)]
-    summed = x.reindex(
-        [n, channels, out_height, out_width, kh, kw],
-        indexes,
-        overflow_value=0.0,
-    ).reduce("add", [4, 5])
-    if count_include_pad and ph == 0 and pw == 0 and not ceil_mode:
-        return summed / (kh * kw)
+    return _avg_pool_nd(x, 2, kernel_size, stride, padding, ceil_mode,
+                        count_include_pad, "avg_pool2d")
 
-    out_y = jt.index((out_height,), dim=0).reshape(out_height, 1).float32()
-    out_x = jt.index((out_width,), dim=0).reshape(1, out_width).float32()
-    if count_include_pad:
-        height_low = (out_y * sh - ph).maximum(-float(ph))
-        height_high = (out_y * sh - ph + kh).minimum(float(height + ph))
-        width_low = (out_x * sw - pw).maximum(-float(pw))
-        width_high = (out_x * sw - pw + kw).minimum(float(width + pw))
-    else:
-        height_low = (out_y * sh - ph).maximum(0.0)
-        height_high = (out_y * sh - ph + kh).minimum(float(height))
-        width_low = (out_x * sw - pw).maximum(0.0)
-        width_high = (out_x * sw - pw + kw).minimum(float(width))
-    divisor = ((height_high - height_low) * (width_high - width_low)).reshape(
-        1, 1, out_height, out_width
-    )
-    return summed / divisor
+
+def avg_pool3d(
+    x,
+    kernel_size,
+    stride=None,
+    padding=0,
+    ceil_mode=False,
+    count_include_pad=True,
+):
+    """Apply three-dimensional average pooling with Torch divisor semantics."""
+    return _avg_pool_nd(x, 3, kernel_size, stride, padding, ceil_mode,
+                        count_include_pad, "avg_pool3d")
 
 
 def adaptive_avg_pool2d(input, output_size):
@@ -92,4 +185,4 @@ def adaptive_avg_pool2d(input, output_size):
     return output.reduce("sum", [4, 5]) / pixel_count[None, None, ...]
 
 
-__all__ = ["adaptive_avg_pool2d", "avg_pool2d"]
+__all__ = ["adaptive_avg_pool2d", "avg_pool2d", "avg_pool3d"]

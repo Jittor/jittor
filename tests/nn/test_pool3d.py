@@ -309,6 +309,12 @@ class TestAvgPool3dCountIncludePad(unittest.TestCase):
     through ``reduce('mean')``, which always divides by the kernel volume -- so
     ``count_include_pad=False`` was silently ignored there.
 
+    Both of those are gone: ``Pool3d.execute`` now forwards ``op="mean"`` to
+    ``jt.nn.avg_pool3d``, the one implementation of average pooling in the
+    package (see ``tests/nn/test_avg_pool_parity.py``).  This class stays as the
+    3-D-specific divisor regression; the parity test covers the fact that every
+    spelling reaches the same code.
+
     The reference above is torch's rule; it was checked case-by-case against a
     binary PyTorch 2.12 build in a separate process (48 legal combinations of
     kernel/stride/padding/ceil_mode/count_include_pad).
@@ -352,11 +358,10 @@ class TestAvgPool3dCountIncludePad(unittest.TestCase):
                             got = self._pool(kernel, stride, padding, ceil_mode,
                                              count_include_pad)
                             k, st, pd = _triple(kernel), _triple(stride), _triple(padding)
-                            # Compare over the planes torch actually emits: with
-                            # ceil_mode and padding, Pool3d emits extra planes
-                            # whose window lies entirely in the padding, and torch
-                            # has no reference value for them (see
-                            # test_ceil_mode_output_size_still_diverges_from_torch).
+                            # Since the mean path moved to jt.nn.avg_pool3d
+                            # these sizes agree with torch exactly; the slice
+                            # below is a no-op and the assertion right after it
+                            # is what says so.
                             out_sizes = [
                                 _torch_out_size(self.SHAPE[2 + a], k[a], st[a],
                                                 pd[a], ceil_mode)
@@ -365,7 +370,7 @@ class TestAvgPool3dCountIncludePad(unittest.TestCase):
                             expected = _reference_avgpool3d(
                                 self.x.astype(np.float64), kernel, stride, padding,
                                 out_sizes, count_include_pad)
-                            got = got[:, :, :out_sizes[0], :out_sizes[1], :out_sizes[2]]
+                            self.assertEqual(list(got.shape[2:]), out_sizes)
                             np.testing.assert_allclose(
                                 got, expected, rtol=1e-4, atol=1e-4)
 
@@ -385,17 +390,33 @@ class TestAvgPool3dCountIncludePad(unittest.TestCase):
                     off = self._pool(kernel, stride, 0, ceil_mode, False)
                     np.testing.assert_allclose(on, off, rtol=1e-6, atol=1e-6)
 
-    def test_ceil_mode_output_size_still_diverges_from_torch(self):
+    def test_ceil_mode_output_size_matches_torch_for_the_mean_path(self):
+        """The mean path picked up torch's output size along with its divisor."""
+        for kernel, stride in self.GEOMETRIES:
+            for padding in (0, 1):
+                for ceil_mode in (False, True):
+                    k, st, pd = _triple(kernel), _triple(stride), _triple(padding)
+                    want = tuple(
+                        _torch_out_size(self.SHAPE[2 + a], k[a], st[a], pd[a], ceil_mode)
+                        for a in range(3))
+                    actual = tuple(self._pool(
+                        kernel, stride, padding, ceil_mode, True).shape[2:])
+                    self.assertEqual(actual, want, (kernel, stride, padding, ceil_mode))
+
+    def test_max_path_ceil_mode_output_size_still_diverges_from_torch(self):
         """Known gap lock -- NOT a statement that this behaviour is right.
 
         torch drops the last window when it would start inside the right padding
         (``pooling_output_shape``'s ``if (out-1)*stride >= size + padding: out--``).
-        Pool3d has no such correction, so with ``ceil_mode=True`` and non-zero
-        padding it emits one extra plane. That is a *shape* defect shared by the
-        max and mean paths, outside the divisor fix this class covers.
+        The generated max/min kernels in ``pool/core_3d.py`` have no such
+        correction, so ``ceil_mode=True`` with non-zero padding still emits one
+        extra plane there.  The mean path no longer does, because it forwards to
+        ``jt.nn.avg_pool3d``; fixing max as well changes ``MaxPool3d`` output
+        shapes and the ``MaxUnpool3d`` default output size with them, which is a
+        larger change than the average-pooling unification this file grew out of.
 
         If you fix it: this test will fail, and the right change is to delete it
-        and fold those combinations into ``test_divisor_matches_torch_rule``.
+        and assert torch's size for every op.
         """
         diverging = []
         for kernel, stride in self.GEOMETRIES:
@@ -408,8 +429,10 @@ class TestAvgPool3dCountIncludePad(unittest.TestCase):
                     want = tuple(
                         _torch_out_size(self.SHAPE[2 + a], k[a], st[a], pd[a], ceil_mode)
                         for a in range(3))
-                    actual = tuple(self._pool(
-                        kernel, stride, padding, ceil_mode, True).shape[2:])
+                    actual = tuple(jt.pool.Pool3d(
+                        kernel, stride=stride, padding=padding,
+                        ceil_mode=ceil_mode, op="maximum",
+                    )(jt.array(self.x)).shape[2:])
                     self.assertEqual(actual, got)
                     if got != want:
                         diverging.append((kernel, stride, padding, ceil_mode))

@@ -10,7 +10,8 @@ formula (no scipy / no real torch assumed), on BOTH CPU and CUDA:
                                                  to the padded input under ceil_mode).
        count_include_pad=False               -> only real (in-bounds) input elements
                                                  count toward the denominator.
-     (jittor.pool.AvgPool2d ignored the flag; nn.AvgPool2d is corrected.)
+     (jittor.pool.AvgPool2d used to ignore the flag; it forwards to
+      nn.AvgPool2d now -- see tests/nn/test_avg_pool_parity.py.)
 
   2. ``F.adaptive_avg_pool2d(x, out)`` with out NOT dividing the input size.
        torch uses variable-width overlapping bins

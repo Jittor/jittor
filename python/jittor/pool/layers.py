@@ -18,23 +18,33 @@ def pool3d(x, kernel_size, op, padding=0, stride=None):
 
 
 class AvgPool2d(jt.Module):
+    '''Deprecated spelling of :class:`jittor.nn.AvgPool2d`; forwards to it.
+
+    This class used to wrap ``Pool(op="mean")``, which ignored
+    ``count_include_pad`` outside its ceil_mode kernel and used jittor's
+    uncorrected ceil_mode output size.  ``jt.nn.AvgPool2d`` and
+    ``jt.pool.AvgPool2d`` therefore returned different numbers -- and different
+    shapes -- for the same arguments.  Now there is one implementation.
+    '''
     def __init__(self, kernel_size, stride=None, padding=0, ceil_mode=False, count_include_pad=True):
-        self.layer = jt.pool.Pool(kernel_size=kernel_size, stride=stride, padding=padding, ceil_mode=ceil_mode, count_include_pad=count_include_pad, op="mean")
+        self.layer = jt.nn.AvgPool2d(kernel_size, stride, padding, ceil_mode, count_include_pad)
 
     def execute(self, x):
         return self.layer(x)
 
 
 class AvgPool3d(jt.Module):
+    '''Deprecated spelling of :class:`jittor.nn.AvgPool3d`; forwards to it.'''
     def __init__(self, kernel_size, stride=None, padding=0, ceil_mode=False, count_include_pad=True):
-        self.layer = jt.pool.Pool3d(kernel_size=kernel_size, stride=stride, padding=padding, ceil_mode=ceil_mode, count_include_pad=count_include_pad, op="mean")
+        self.layer = jt.nn.AvgPool3d(kernel_size, stride, padding, ceil_mode, count_include_pad)
 
     def execute(self, x):
         return self.layer(x)
 
 
 def avg_pool2d(x, kernel_size, stride=None, padding=0, ceil_mode=False, count_include_pad=True):
-    return jt.pool.AvgPool2d(kernel_size, stride, padding, ceil_mode, count_include_pad)(x)
+    '''Deprecated spelling of :func:`jittor.nn.avg_pool2d`; forwards to it.'''
+    return jt.nn.avg_pool2d(x, kernel_size, stride, padding, ceil_mode, count_include_pad)
 
 
 def _no_dilation(dilation):

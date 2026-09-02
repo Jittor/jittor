@@ -10,7 +10,6 @@ from jittor.pool import (
     AdaptiveMaxPool2d,
     AdaptiveMaxPool3d,
     AvgPool1d,
-    AvgPool3d,
     MaxPool1d,
     MaxPool2d,
     MaxPool3d,
@@ -78,7 +77,7 @@ from .padding import (
     ZeroPad2d,
 )
 from .parameter import Parameter, ParameterList
-from .pooling import AdaptiveAvgPool2d, AvgPool2d
+from .pooling import AdaptiveAvgPool2d, AvgPool2d, AvgPool3d
 from .recurrent import GRU, LSTM, RNN
 from .recurrent_base import RNNBase
 from .recurrent_cells import GRUCell, LSTMCell, RNNCell

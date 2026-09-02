@@ -11,21 +11,6 @@ def _triple(x):
         return (x,x,x)
 
 
-def _valid_element_counts(size, kernel, stride, padding, out_size):
-    """Per-output-position count of real (non-padded) input elements, one axis.
-
-    This is torch's ``count_include_pad=False`` divisor: the window
-    ``[i*stride - padding, i*stride - padding + kernel)`` intersected with
-    ``[0, size)``.  It depends only on the geometry, so it is a constant.
-    """
-    counts = []
-    for index in range(out_size):
-        start = index * stride - padding
-        end = min(start + kernel, size)
-        counts.append(max(end - max(start, 0), 1))
-    return counts
-
-
 class Pool3d(jt.Module):
     def __init__(self, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False, count_include_pad=True, op="maximum"):
         assert dilation == None
@@ -51,6 +36,11 @@ class Pool3d(jt.Module):
             raise RuntimeError(f"padding must be non-negative, but got {padding}")
 
     def execute(self, x):
+        if self.op == "mean":
+            # Same single implementation as Pool; see core_2d.Pool.execute.
+            return jt.nn.avg_pool3d(
+                x, self.kernel_size, self.stride, self.padding,
+                self.ceil_mode, self.count_include_pad)
         N,C,D,H,W = x.shape
         if D <= self.kernel_size[0] or H <= self.kernel_size[1] or W <= self.kernel_size[2]:
             raise RuntimeError(f"size of var should be larger than kernel_size")
@@ -64,27 +54,9 @@ class Pool3d(jt.Module):
             d = (D+self.padding[0]*2-self.kernel_size[0] + self.stride[0] - 1)//self.stride[0]+1
             h = (H+self.padding[1]*2-self.kernel_size[1] + self.stride[1] - 1)//self.stride[1]+1
             w = (W+self.padding[2]*2-self.kernel_size[2] + self.stride[2] - 1)//self.stride[2]+1
-            use_code_op = self.op in ['maximum', 'minimum', 'mean']
+            use_code_op = self.op in ['maximum', 'minimum']
 
         if use_code_op and jt.pool.pool_use_code_op:
-            if self.op == 'mean':
-                if self.count_include_pad:
-                    # torch counts the padded positions but stops at the edge of
-                    # the padded volume, so a ceil_mode window hanging past
-                    # ``size + padding`` divides by less than the kernel volume.
-                    # Written from i2/i3/i4 because k2/k3/k4 are clamped to >= 0
-                    # by the time this runs.
-                    starts = [f"(i{2+a}*{self.stride[a]}-{self.padding[a]})" for a in range(3)]
-                    terms = [
-                        f"(min({starts[a]}+{self.kernel_size[a]}, in0_shape{2+a}+{self.padding[a]}) - {starts[a]})"
-                        for a in range(3)
-                    ]
-                    count = "int count = " + " * ".join(terms) + ";"
-                else:
-                    count = "int count = (k2_ - k2) * (k3_ - k3) * (k4_ - k4);"
-                count += "float32 rcount = 1.0f / count;"
-            else:
-                count = ""
             forward_body = f'''
                 int k4 = i4*{self.stride[2]}-{self.padding[2]};
                 int k3 = i3*{self.stride[1]}-{self.padding[1]};
@@ -95,7 +67,6 @@ class Pool3d(jt.Module):
                 k4 = max(0, k4);
                 k3 = max(0, k3);
                 k2 = max(0, k2);
-                {count}
             '''
             if not self.return_indices:
                 forward_body += f'''
@@ -129,17 +100,14 @@ class Pool3d(jt.Module):
                 k4 = max(0, k4);
                 k3 = max(0, k3);
                 k2 = max(0, k2);
-                {count}
                 int bo=1;
                 for (int p = k2; p < k2_ && bo; ++p)
                     for (int q = k3; q < k3_ && bo; ++q)\x20
                         for (int r = k4; r < k4_ && bo; ++r) {{
-                            {"atomicAdd(&@out(i0,i1,p,q,r), @dout(i0,i1,i2,i3,i4)/count);"
-                                if self.op == "mean" else
-                            f"""if (@pout(i0,i1,i2,i3,i4) == @in0(i0,i1,p,q,r)) {{
+                            if (@pout(i0,i1,i2,i3,i4) == @in0(i0,i1,p,q,r)) {{
                                 atomicAdd(&@out(i0,i1,p,q,r), @dout(i0,i1,i2,i3,i4)),
                                 bo=0;
-                            }}"""}
+                            }}
                         }}
             '''
             if self.return_indices:
@@ -237,23 +205,6 @@ class Pool3d(jt.Module):
                 f"i3*{self.stride[1]}-{self.padding[1]}+i6", # Hid
                 f"i4*{self.stride[2]}-{self.padding[2]}+i7", # Hid
             ])
-            if self.op == 'mean' and not self.count_include_pad:
-                # reduce('mean') always divides by the full kernel volume, which
-                # is torch's count_include_pad=True. For False the divisor is the
-                # number of *real* input elements the window covers; the padded
-                # reads are 0 (reindex's overflow_value), so summing and dividing
-                # by that count is exact. The divisor separates per axis, so it
-                # is three small constant vectors rather than a 3-D table.
-                divisor = None
-                for axis, (size, out) in enumerate(((D, d), (H, h), (W, w))):
-                    counts = _valid_element_counts(
-                        size, self.kernel_size[axis], self.stride[axis],
-                        self.padding[axis], out)
-                    shape = [1, 1, 1, 1, 1]
-                    shape[2 + axis] = out
-                    part = jt.array(counts, dtype=x.dtype).reshape(shape)
-                    divisor = part if divisor is None else divisor * part
-                return xx.reduce('add', [5,6,7]) / divisor
             return xx.reduce(self.op, [5,6,7])
 
 
