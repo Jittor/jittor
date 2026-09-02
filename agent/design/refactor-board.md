@@ -18,7 +18,7 @@
 | 代码生成 | | |
 | 类型与日志 | | |
 | 内存 | | |
-| 绑定 | | |
+| 绑定 | bindings | 6.C02、6.C22–6.C25、6.C27–6.C29 |
 | Python 核心 | | |
 | Python 算子 | | |
 | Python 其他 | | |
@@ -147,7 +147,7 @@
 | 5.25 | `python/jittor/utils/` 拆散 | 待领 | | |
 | 5.26 | 布局收尾 | 待领 | | |
 | 6.C01 | `.item()` 对无符号 dtype | 待领 | | |
-| 6.C02 | `PySlice_Unpack` 返回值检查，三个变量初始化 | 待领 | | |
+| 6.C02 | `PySlice_Unpack` 返回值检查，三个变量初始化 | 进行中 | bindings | |
 | 6.C03 | 整数提升 | 并入 2.16 | | |
 | 6.C04 | 含 `void` 语句被删 | 并入 3.09 | | |
 | 6.C05 | 融合边号 ≥256 回绕 | 待领 | | |
@@ -167,14 +167,14 @@
 | 6.C19 | 每个分配器一把锁并覆盖 `gc()` | 待领 | | |
 | 6.C20 | swap | 待领 | | |
 | 6.C21 | 检查 `NODE_MEMCHECK` 外 `check_graph` 静默空转 | 待领 | | |
-| 6.C22 | pyjt 关键字参数 | 待领 | | |
-| 6.C23 | `is_type<NanoString>` 收窄 | 待领 | | |
-| 6.C24 | 带实例 `__dict__` 的类型加 `Py_TPFLAGS_HAVE_GC` 与 trave… | 待领 | | |
-| 6.C25 | 生成绑定补 `catch (...)` | 待领 | | |
+| 6.C22 | pyjt 关键字参数 | 进行中 | bindings | |
+| 6.C23 | `is_type<NanoString>` 收窄 | 进行中 | bindings | |
+| 6.C24 | 带实例 `__dict__` 的类型加 `Py_TPFLAGS_HAVE_GC` 与 trave… | 进行中 | bindings | |
+| 6.C25 | 生成绑定补 `catch (...)` | 进行中 | bindings | |
 | 6.C26 | `pyjt_compiler.py` 的 C++ 解析 | 待领 | | |
-| 6.C27 | `Var.data` 返回的 numpy 视图 base 指向包裹该次 allocation 的… | 待领 | | |
-| 6.C28 | 生成带「已构造」标志的 `tp_new` 或 `tp_dealloc` 先检查 | 待领 | | |
-| 6.C29 | 标量转数组的全局 `tmp_data` 改自带 buffer | 待领 | | |
+| 6.C27 | `Var.data` 返回的 numpy 视图 base 指向包裹该次 allocation 的… | 进行中 | bindings | |
+| 6.C28 | 生成带「已构造」标志的 `tp_new` 或 `tp_dealloc` 先检查 | 进行中 | bindings | |
+| 6.C29 | 标量转数组的全局 `tmp_data` 改自带 buffer | 进行中 | bindings | |
 | 6.C30 | `helper_cuda.h` 的 `peek` 去掉进程级闩 `peek_logged` | 待领 | | |
 | 6.P01 | 转置标记陈旧 | 并入 5.03 | | |
 | 6.P02 | Function 实例复用、no_grad 泄漏、tied weight 参数集合 | 并入 5.07、5.08、5.04 | | |
