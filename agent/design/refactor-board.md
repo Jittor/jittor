@@ -85,21 +85,23 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | CUDA 后端 | cudabk (6.B05/07/08/09/12/13/14) | GPU7 c76-87 |
 | ACL/ROCm/Corex | — |  |
 | 分布式 | dist (6.B01/03/04/06/10/11/15) | CPU c88-95 |
-| 构建 | — |  |
+| 构建 | build (0.07–0.11/0.17, 9.02–9.06/9.08/9.09/9.11/9.15/9.17, 9.04 部分) | GPU4 c48-63 |
 | 门禁 | gates (0.01–0.04/06/12/13/18/19) | CPU c104-111 |
 
 ## 执行中出现的、需要认领的杂项
 
 | 事项 | 现象 | 建议归属 |
 | --- | --- | --- |
-| wheel 内容基线过期 | `agent/scripts/test_check_wheel_contents.py::test_repository_default_policy_is_the_clean_final_baseline` 报 `817 != 793`，有人加了新模块没更新基线 | 构建分区，随 9.x 一并更新 |
+| wheel 内容基线过期 | **已处理**：基线本身没错，错的是那条断言写死了条目数——任何人加一个模块都会改变它。用当前源码树真构建一个 wheel 核对，45 个新增全是各分区加的合法源码、1 个删除是 9.17 删的 `flags.cc`，基线整个重新生成（861 条）；条目数那条断言换成「基线头部的 `# entries:` 必须与自身条目数一致」这条规则。注意基线是对**当时的源码内容**取的哈希，发版前需要再刷一次（办法写在提交说明里） | 构建，`f869cab8` |
 | 结构测试子进程超时 flaky | 已处理，并已与 0.21 合并成一份实现：超时预算搬进 `tests/_helpers/child_process.DEFAULT_TIMEOUT`（600s，`JITTOR_TEST_CHILD_TIMEOUT` 与旧名 `JITTOR_TEST_SUBPROCESS_TIMEOUT` 都认，仍在门禁 `--timeout=900` 之内），`process_modes.SUBPROCESS_TIMEOUT` 随之删除——同一件事只留一处 | 门禁 gates，`46dbe946` |
 | `split{i}` 与 `parallel` 不兼容 | 同时设这两个 loop option，`ParallelPass` 在 `ASSERT(def)` 上失败（`Check failed: def`）。`SplitLoopPass` 给内层循环的 range 是 `::min(range{i}-id{i}, stride{i})`，定义在外层循环里且随它变化，`ParallelPass` 在调用点 `func->find_define` 找不到、也无法在调用点求值。CUDA 恒走 `ParallelPass`，所以 CUDA 上任何 split 候选都必然编译失败。用例已钉住：`tests/compiler/test_reduce_tuner.py::test_a_split_candidate_would_not_compile_under_parallel` | 代码生成分区，1.04 的前置 |
 | CUDA 归约需要的是线程分解候选，不是 CPU 那套 | `orderN` 候选实测五种形状全部不优于默认（最差 2.1 倍，破坏访存合并），`split{i}` 被上一条挡着，L1 分块尺寸对 GPU 无意义。真正有用的候选是 `ParallelPass` 里的线程分解，属于新工作 | 代码生成分区，待 1.04 前置解决后 |
 | `para_opt_level=4` 的块内共享内存归约比默认慢 1.6–2.0 倍 | 实测四种 UNet 形状：默认（warp shuffle）15.7/14.0/15.0/18.1us，lvl 4（`SharedReducePass`）25.3/31.3/25.3/34.8us，不优化 157/92/159/171us。默认值保持 3。要提升需要「warp shuffle → 每 warp 一个值 → 共享内存 → 每输出一次原子」的混合实现，并且要有生态 harness 的端到端数据；数据与方法在 `agent/skills/cuda-reduction-strategy-comparison/` | 代码生成分区，新任务待派 |
 | `tests/core/test_type_system.py` 一套门禁都不跑 | **已修**：0.04 之后 CPU 门禁的 torch 会话就是 `TORCH_MODE_PATHS` 本身，这个文件自然进来了。同一批还有 233 个此前一套 workflow 都碰不到的文件 | 门禁 gates，`6adbf488` |
 | `test_atomic_tuner` 抓不到日志 | **已修**：根因确认为 `032ecfe1` 的 `full_reduce_cuda.py` 快路径猴补 `Var.sum`/`Var.mean`，全归约不再进 JIT；第 4 条用例改走 `jt.reduce` | codegen，`72f020b3` |
-| `asm_tuner.py` 非原子写 `.s`，并发编译读到截断的汇编 | `python/jittor/utils/asm_tuner.py` 的 `pass_asm()` 直接 `open(output_path,"w")` 截断再写，没有临时文件也没有 `os.replace`。`tests/data/test_dataset.py::TestDataset2::test_dataset_use_jittor` 用 `num_workers=4`，四个 worker 子进程并发编译同一个 setitem kernel 进同一个缓存目录，于是有进程读到写了一半的 `.s`，报 `Assembler messages: unknown pseudo-op: '.by'` / `end of file not at end of a line`。**三个互相独立的 `JITTOR_HOME` 上各复现一次**；删掉那一条缓存后单跑就过——不是缓存损坏的偶然，是写法本身没有原子性。表现出来是「毫不相干的算子编译失败」，正是最容易被误判成并发损坏、然后被无视的那一类 | 构建分区，挨着 0.07/0.08 |
+| `asm_tuner.py` 非原子写 `.s`，并发编译读到截断的汇编 | **已修**：`pass_asm()` 改成写 `<路径>.tmp.<pid>` 再 `os.replace`。判据是 inode——改名换 inode，原地重写不换，也就不会消掉那个窗口；用例 `test_asm_tuner.py::TestAsmTunerWritesAtomically` 钉住。缓存里已经存在的坏 `.s` 不会自动修复，删掉再跑 | 构建，`fed3a45c` |
+| `tests/backends/cuda/test_backend_teardown.py` 过不了 0.21 的静态门禁 | `272f00ba`（6.B17）加的 `subprocess.run([sys.executable, ...])` 自己拼了 PYTHONPATH，但没走 `_helpers/child_process`，而 `46dbe946` 的静态检查禁止这么写。两个提交是并行落地的，谁都没错，只是撞上了。现症：`tests/structure/test_child_process_contract.py` 两个用例红（`test_no_test_names_the_interpreter_directly`、`test_every_child_launch_pins_this_tree`） | CUDA 后端 cudabk，改成 `run_child_script` 即可 |
+| `jt.flags.nvcc_flags` 的拼法变了 | 9.08 之后架构 flag 是 `--generate-code=arch=...,code=...`，不再是 `-arch=compute_N -code=sm_N`。按后者做字符串匹配的地方要改 | 各分区自查，`2d71f792` |
 | 全树跑时 `test_notebooks.py` 没有被当成 manual 跳过 | `tests/conftest.py` 的 `pytest_collection_modifyitems` 里，`test_notebooks.py` 的 `pytest.mark.manual` 是在 `SELECTION_IS_BROAD` 那段跳过判断**之后**才加上的，所以全树跑时它照跑不误——2026-09-03 的全树原生一遍里它实测 537 秒，是全树最慢的一项（第二名 289 秒）。顺序问题，不是标记问题 | 门禁 gates，随 0.13/0.15 |
 
 ## 任务
@@ -112,17 +114,17 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 0.04 | 门禁改为「整个 `tests/` 减显式排除清单」，排除项必须写理由 | 已合并 | gates | 6adbf488、689e206b |
 | 0.05 | 生态对拍进 nightly | 待领 | | |
 | 0.06 | `make_tensor` 种子改为 `hash(nodeid, shape, dtype)` … | 进行中 | gates |  |
-| 0.07 | 缓存路径追加构建配置指纹 | 待领 | | |
-| 0.08 | 锁统一为一种类型、一个 fd | 待领 | | |
-| 0.09 | 探测结果落盘 `cache_path/probe.json` | 待领 | | |
-| 0.10 | 写缓存前检查可用磁盘空间，不足时给明确错误 | 待领 | | |
-| 0.11 | 「jit_utils 已更新请重跑」改非零退出码 | 待领 | | |
+| 0.07 | 缓存路径追加构建配置指纹 | 已合并 | 构建 | 82dfce6e、6379b2b5、6fdb3807、b25fcdfa（复验） |
+| 0.08 | 锁统一为一种类型、一个 fd | 已合并 | 构建 | 460bead0 |
+| 0.09 | 探测结果落盘 `cache_path/probe.json` | 已合并 | 构建 | 240a92a3 |
+| 0.10 | 写缓存前检查可用磁盘空间，不足时给明确错误 | 已合并 | 构建 | 73eceeaf |
+| 0.11 | 「jit_utils 已更新请重跑」改非零退出码 | 已合并 | 构建 | 7e8c7c74 |
 | 0.12 | 14 处在用例里裸赋值 `jt.flags.*` 且无 tearDown 的测试改 `flag_… | 已合并 | gates | 26a20905 |
 | 0.13 | conftest 的模式由显式环境变量决定，删除 `sys.argv` 嗅探 | 进行中 | gates |  |
 | 0.14 | `_session_env` 不再 `os.environ.copy()` | 待领 | | |
 | 0.15 | 门禁分两层 | 待领 | | |
 | 0.16 | `test_device_parity.py` 按算子分片并行，不再在 `setUpClass`… | 待领 | | |
-| 0.17 | `pyproject.toml` 的 `pythonpath` 改由 conftest 按环境变… | 待领 | | |
+| 0.17 | `pyproject.toml` 的 `pythonpath` 改由 conftest 按环境变… | 已合并 | 构建 | b19d098f |
 | 0.18 | 门禁每条目断言至少执行 1 个非 skip 用例 | 进行中 | gates | ee29bee3（记账与报告已合并；`EXECUTES_NOTHING` 待全树数据填完后开 `JITTOR_TEST_REQUIRE_EXECUTION`） |
 | 0.19 | 结构测试从「精确清单」改成「规则」 | 已合并 | gates | c3bcd277 |
 | 0.20 | 布局收尾 | 待领 | | |
@@ -331,22 +333,22 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 8.18 | 多机 checkpoint | 待领 | | |
 | 8.19 | 布局收尾 | 待领 | | |
 | 9.01 | `import jittor` 不编译不下载 | 待领 | | |
-| 9.02 | `install_cuda.py:113-122` 的 `os.execl` 自重启删除，用 d… | 待领 | | |
-| 9.03 | 构建期失败一律抛带上下文的 `RuntimeError`，不用 LOGf/裸 assert | 待领 | | |
-| 9.04 | 依赖跟踪改用编译器的 `-MD -MF` | 待领 | | |
-| 9.05 | 下载安全 | 待领 | | |
-| 9.06 | 删 cutlass 下载 | 待领 | | |
+| 9.02 | `install_cuda.py:113-122` 的 `os.execl` 自重启删除，用 d… | 已合并 | 构建 | 6b45c078 |
+| 9.03 | 构建期失败一律抛带上下文的 `RuntimeError`，不用 LOGf/裸 assert | 已合并 | 构建 | 9197c8c6 |
+| 9.04 | 依赖跟踪改用编译器的 `-MD -MF` | 部分合并 | 构建 | 65a2dc12（clean_cache 从一份布局定义生成；`-MD -MF`、hash64、主机名/`-march=native`/git 分支/路径哈希位数**未做**——每条都改变缓存路径或缓存键，该在一个提交里一起做，不要分四次各让所有人全量重编一次。审计里"删掉 helper_cuda.h 例外"那条已更正：裸删会让 CPU 构建整个失败，必须与 `-MD -MF` 同做） |
+| 9.05 | 下载安全 | 已合并 | 构建 | e111ebcc |
+| 9.06 | 删 cutlass 下载 | 已合并 | 构建 | 50673d69 |
 | 9.07 | import 过程不反向写环境变量 | 待领 | | |
-| 9.08 | 新架 GPU | 待领 | | |
-| 9.09 | `cuda_wheel` 失败时 LOG.w 出原因，strict 为默认 | 待领 | | |
+| 9.08 | 新架 GPU | 已合并 | 构建 | 2d71f792 |
+| 9.09 | `cuda_wheel` 失败时 LOG.w 出原因，strict 为默认 | 已合并 | 构建 | c63dd809 |
 | 9.10 | 2.0 版本策略 | 待领 | | |
-| 9.11 | release 的 platform-validation 阶段跑 selftest | 待领 | | |
+| 9.11 | release 的 platform-validation 阶段跑 selftest | 已合并 | 构建 | 2af4658e |
 | 9.12 | `extern/rocm/rocm_cache.tar.gz` 的预编译 .o 改从源码构建，或… | 待领 | | |
 | 9.13 | README 加「首次运行会发生什么」 | 待领 | | |
 | 9.14 | 一次性的构建前置条件检查 | 待领 | | |
-| 9.15 | noxfile | 待领 | | |
+| 9.15 | noxfile | 已合并 | 构建 | 84c7f766 |
 | 9.16 | `agent/scripts/check_repo_layout.sh` 收缩为少数真会复发的检… | 待领 | | |
-| 9.17 | 死代码 | 待领 | | |
+| 9.17 | 死代码 | 已合并 | 构建 | f99250bb |
 | 9.18 | `disable_lock=1` 启用时明确告警并纳入缓存指纹 | 待领 | | |
 | 9.19 | 布局收尾 | 待领 | | |
 | 9.20 | asm_tuner 非原子写 .s，并发编译读到截断汇编 | 待领 | | |
