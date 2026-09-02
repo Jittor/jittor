@@ -876,6 +876,10 @@ def unique(
     
     dimlen = indice.shape[0]
 
+    # counts are derived from inverse, so the kernel has to fill inverse in
+    # whenever either of the two is asked for.
+    need_inverse = return_inverse or return_counts
+
     diff = jt.logical_not(jt.all(input_sorted[1:] == input_sorted[: -1], 1))
     diff = jt.concat([jt.Var([False]), diff], 0)
     diff = jt.array(diff, dtype = jt.int32)
@@ -894,7 +898,7 @@ def unique(
                 @alias(inverse, out1)
             ''',
             cpu_src=
-            f"bool return_inverse = {int(return_inverse)};" +
+            f"bool return_inverse = {int(need_inverse)};" +
             '''
                 int tot = -1;
                 for (int i = 0; i < input_sorted_shape0; ++i) {
@@ -927,7 +931,7 @@ def unique(
                 @alias(inverse, out1)
             ''',
             cuda_src=
-            f"bool return_inverse = {int(return_inverse)};" +
+            f"bool return_inverse = {int(need_inverse)};" +
             '''
                 int dimlen = input_sorted_shape0, dimsize = input_sorted_shape1;
                 size_t raw_allocation;
@@ -970,15 +974,17 @@ def unique(
     if temp_shape != None:
         inverse = inverse.view(temp_shape).transpose(dim, 0)
 
+    if return_counts:
+        counts = jt.zeros(indice_shape, dtype=jt.int32)
+        jt.scatter_(counts, 0, inverse.flatten(), jt.ones(dimlen), reduce='add')
+
+    if return_inverse and return_counts:
+        return output, inverse, counts
     if return_inverse:
-        if return_counts:
-            counts = jt.zeros(indice_shape, dtype=jt.int32)
-            jt.scatter_(counts, 0, inverse.flatten(), jt.ones(dimlen), reduce='add')
-            return output, inverse, counts
-        else:
-            return output, inverse
-    else:
-        return output
+        return output, inverse
+    if return_counts:
+        return output, counts
+    return output
 
 jt.Var.unique = unique
 

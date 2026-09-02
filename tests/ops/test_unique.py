@@ -54,5 +54,47 @@ class TestSparse(unittest.TestCase):
         self.test_unique_dim()
     
         
+class TestUniqueReturnCounts(unittest.TestCase):
+    """return_counts must be honoured on its own, not only together with
+    return_inverse."""
+
+    def _check(self, data, dim=None):
+        np_kwargs = {} if dim is None else {"axis": dim}
+        expect_v, expect_c = np.unique(data, return_counts=True, **np_kwargs)
+
+        v, c = jt.unique(jt.array(data), return_counts=True, dim=dim)
+        np.testing.assert_array_equal(v.numpy(), expect_v)
+        np.testing.assert_array_equal(c.numpy(), expect_c)
+
+        # ... and the three-value form keeps agreeing with it
+        v3, inv3, c3 = jt.unique(jt.array(data), return_inverse=True,
+                                 return_counts=True, dim=dim)
+        np.testing.assert_array_equal(v3.numpy(), expect_v)
+        np.testing.assert_array_equal(c3.numpy(), expect_c)
+
+        # plain call still returns a bare Var
+        only_v = jt.unique(jt.array(data), dim=dim)
+        assert isinstance(only_v, jt.Var)
+        np.testing.assert_array_equal(only_v.numpy(), expect_v)
+
+    def test_counts_flat(self):
+        self._check(np.array([1, 3, 2, 3, 2], dtype=np.int32))
+        self._check(np.array([5], dtype=np.int32))
+
+    def test_counts_dim(self):
+        data = np.array([[1, 3], [2, 3], [1, 3], [2, 3]], dtype=np.int32)
+        self._check(data, 0)
+
+    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @jt.flag_scope(use_cuda=1)
+    def test_counts_flat_cuda(self):
+        self.test_counts_flat()
+
+    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @jt.flag_scope(use_cuda=1)
+    def test_counts_dim_cuda(self):
+        self.test_counts_dim()
+
+
 if __name__ == "__main__":
     unittest.main()
