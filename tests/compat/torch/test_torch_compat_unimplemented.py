@@ -315,5 +315,69 @@ class _PayloadClass:
     def __init__(self, value):
         self.value = value
 
+class TestDataLoaderWorkers(StubPolicyBase):
+    """DataLoader recorded num_workers and then always went single-process."""
+
+    def _loader(self, **kwargs):
+        data = torch.utils.data
+        items = list(range(16))
+
+        class _DS(data.Dataset):
+            def __len__(self):
+                return len(items)
+
+            def __getitem__(self, i):
+                import threading
+                return (items[i], threading.get_ident())
+
+        return data.DataLoader(_DS(), batch_size=4,
+                               collate_fn=lambda b: b, **kwargs)
+
+    def test_num_workers_zero_stays_single_process(self):
+        loader = self._loader(num_workers=0)
+        it = iter(loader)
+        self.assertEqual(type(it).__name__, "_SingleProcessDataLoaderIter")
+
+    def test_num_workers_selects_the_worker_iterator(self):
+        loader = self._loader(num_workers=2)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            it = iter(loader)
+            self.assertEqual(type(it).__name__, "_MultiProcessingDataLoaderIter")
+            list(it)
+
+    def test_workers_actually_run_off_the_main_thread(self):
+        import threading
+        main = threading.get_ident()
+        loader = self._loader(num_workers=2)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            batches = list(loader)
+        threads = {tid for batch in batches for _, tid in batch}
+        self.assertTrue(threads - {main},
+                        "batches must be prepared off the calling thread")
+
+    def test_worker_batches_arrive_in_order_and_complete(self):
+        loader = self._loader(num_workers=3)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            values = [v for batch in loader for v, _ in batch]
+        self.assertEqual(values, list(range(16)))
+
+    def test_worker_init_fn_is_called(self):
+        seen = []
+        loader = self._loader(num_workers=2, worker_init_fn=seen.append)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            list(loader)
+        self.assertTrue(seen, "worker_init_fn must run in each worker")
+
+    def test_multi_worker_use_warns_about_threads_not_processes(self):
+        loader = self._loader(num_workers=2)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            list(loader)
+        self.assertTrue(any("THREADS" in str(w.message) for w in caught))
+
 if __name__ == "__main__":
     unittest.main()

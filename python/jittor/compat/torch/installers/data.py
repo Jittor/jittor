@@ -4,9 +4,15 @@ This module contains source moved from the former monolithic installer without
 changing the compatibility semantics.
 """
 
+import collections as _collections_data
+import concurrent.futures as _futures_data
+import itertools as _itertools_data
+import threading as _threading_data
+
 import jittor as jt
 
 from ..context import registry_for
+from ... import stub_policy as _stub_policy_data
 
 
 def _install_torchdata_stateful_dataloader(g, registry=None):
@@ -210,8 +216,112 @@ def install(ctx):
                 batch_indices = next(self._batch_iter)
                 return self._loader.collate_fn([self._loader.dataset[i] for i in batch_indices])
 
+        class _WorkerInfo:
+            def __init__(self, id, num_workers, seed, dataset):
+                self.id = id
+                self.num_workers = num_workers
+                self.seed = seed
+                self.dataset = dataset
+
+        _worker_state = _threading_data.local()
+
+        def _get_worker_info():
+            return getattr(_worker_state, "info", None)
+
         class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
-            pass
+            """Real background fetching for DataLoader(num_workers>0).
+
+            This class used to be ``pass``: DataLoader recorded num_workers,
+            prefetch_factor, worker_init_fn and persistent_workers and then
+            built a single-process iterator regardless, so every input pipeline
+            silently ran serially in the training thread -- which reads as "the
+            framework is slow" rather than "the flag did nothing".
+
+            Batches are now prepared by ``num_workers`` background workers with
+            a bounded look-ahead of ``prefetch_factor`` batches each, delivered
+            strictly in order.  The workers are threads, not processes (see the
+            one-time warning): datasets here hold jittor Vars, which do not
+            survive a fork, and the win being bought -- overlapping file IO and
+            decode with compute -- is available to threads.
+            """
+
+            def __init__(self, loader):
+                self._loader = loader
+                self._batch_iter = iter(loader.batch_sampler)
+                self._num_workers = max(1, int(loader.num_workers or 0))
+                prefetch = loader.prefetch_factor
+                self._prefetch = max(1, int(prefetch if prefetch else 2))
+                self._timeout = float(loader.timeout or 0) or None
+                self._pending = _collections_data.deque()
+                base_seed = 0
+                try:
+                    base_seed = int(jt.get_seed())
+                except Exception:
+                    base_seed = 0
+                self._pool = _futures_data.ThreadPoolExecutor(
+                    max_workers=self._num_workers,
+                    thread_name_prefix="jt-dataloader",
+                    initializer=_init_worker,
+                    initargs=(loader, base_seed))
+                _stub_policy_data.degraded(
+                    "torch.utils.data.DataLoader(num_workers>0)",
+                    "batches are prefetched by %d worker THREADS rather than "
+                    "worker processes" % self._num_workers,
+                    "Datasets holding jittor Vars cannot be forked; "
+                    "pass num_workers=0 for strictly serial fetching.")
+                self._fill()
+
+            def _fetch(self, batch_indices):
+                loader = self._loader
+                return loader.collate_fn([loader.dataset[i] for i in batch_indices])
+
+            def _fill(self):
+                want = self._num_workers * self._prefetch
+                while len(self._pending) < want:
+                    try:
+                        batch_indices = next(self._batch_iter)
+                    except StopIteration:
+                        return
+                    self._pending.append(self._pool.submit(self._fetch, batch_indices))
+
+            def __next__(self):
+                if not self._pending:
+                    self._shutdown()
+                    raise StopIteration
+                future = self._pending.popleft()
+                try:
+                    batch = future.result(timeout=self._timeout)
+                except _futures_data.TimeoutError:
+                    self._shutdown()
+                    raise RuntimeError(
+                        "DataLoader timed out after %s seconds waiting for a "
+                        "worker batch" % self._timeout)
+                self._fill()
+                return batch
+
+            def _shutdown(self):
+                pool = getattr(self, "_pool", None)
+                if pool is not None and not self._loader.persistent_workers:
+                    self._pool = None
+                    pool.shutdown(wait=False)
+
+            def __del__(self):
+                try:
+                    pool = getattr(self, "_pool", None)
+                    if pool is not None:
+                        pool.shutdown(wait=False)
+                except Exception:
+                    pass
+
+        _worker_ids = _itertools_data.count()
+
+        def _init_worker(loader, base_seed):
+            worker_id = next(_worker_ids) % max(1, int(loader.num_workers or 1))
+            _worker_state.info = _WorkerInfo(
+                worker_id, int(loader.num_workers or 0),
+                base_seed + worker_id, loader.dataset)
+            if loader.worker_init_fn is not None:
+                loader.worker_init_fn(worker_id)
 
         class _DataLoader:
             def __init__(self, dataset, batch_size=1, shuffle=False, sampler=None,
@@ -242,7 +352,10 @@ def install(ctx):
                     self.batch_sampler = _BatchSampler(self.sampler, batch_size, drop_last)
                 self._iterator = None
             def __iter__(self):
-                self._iterator = _SingleProcessDataLoaderIter(self)
+                if int(self.num_workers or 0) > 0:
+                    self._iterator = _MultiProcessingDataLoaderIter(self)
+                else:
+                    self._iterator = _SingleProcessDataLoaderIter(self)
                 return self._iterator
             def __len__(self):
                 return len(self.batch_sampler)
@@ -261,7 +374,7 @@ def install(ctx):
             "DataLoader": _DataLoader,
             "default_collate": _default_collate,
             "default_convert": lambda x: x,
-            "get_worker_info": lambda: None,
+            "get_worker_info": _get_worker_info,
         }.items():
             setattr(_data, _name, _value)
         _modules["torch.utils.data"] = _data
@@ -309,6 +422,19 @@ def install(ctx):
     if "torch.utils.checkpoint" not in _modules:
         _ckpt = _types2.ModuleType("torch.utils.checkpoint")
         def _checkpoint(fn, *args, use_reentrant=None, **kwargs):
+            """Run fn directly: correct values, but no activation recompute.
+
+            jittor has no gradient-checkpointing primitive, so the activation
+            memory this API exists to save is NOT saved and `use_reentrant`
+            has no meaning here. The result is numerically identical, which is
+            why this stays a pass-through rather than an error -- but the
+            memory guarantee the caller asked for is absent.
+            """
+            _stub_policy_data.degraded(
+                "torch.utils.checkpoint.checkpoint",
+                "the wrapped function is run directly, so activations are kept "
+                "and no memory is saved",
+                "use_reentrant has no effect on jittor.")
             return fn(*args, **kwargs)
         _ckpt.checkpoint = _checkpoint
         _modules["torch.utils.checkpoint"] = _ckpt
