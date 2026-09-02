@@ -755,21 +755,47 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # .data_ptr() / .untyped_storage().nbytes() to detect shared/tied weights.
     # jittor has no exposed storage object; expose identity-based stand-ins so
     # save_pretrained's tied-weight detection works (each Var is its own storage).
+    def _storage_owner(var):
+        owner = getattr(var, "_torch_data_owner", None)
+        return owner if isinstance(owner, Var) else var
+
+    def _storage_offset(var):
+        try:
+            return int(getattr(var, "_torch_data_offset", 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def _var_data_ptr(var):
+        # Jittor does not expose a raw allocation pointer. Use the stable
+        # identity of the root Var as a process-local storage token and add the
+        # byte offset for basic views (notably ``view(-1)[-1]``), which
+        # safetensors uses to compute an alias's end address.
+        owner = _storage_owner(var)
+        # The pointer token itself must stay independent of the logical shape;
+        # views and tied aliases use the same root allocation token.
+        offset = _storage_offset(var)
+        return id(owner) + offset * _DTYPE_BYTES.get(str(owner.dtype), 4)
+
+    def _storage_size(var):
+        owner = _storage_owner(var)
+        return int(owner.numel()) * _DTYPE_BYTES.get(str(owner.dtype), 4)
+
     class _Storage:
         def __init__(self, var):
             self._var = var
         def data_ptr(self):
-            return id(self._var)
+            return id(_storage_owner(self._var))
         def size(self):
-            return int(self._var.numel())
+            return int(_storage_owner(self._var).numel())
         def nbytes(self):
-            return int(self._var.numel()) * _DTYPE_BYTES.get(str(self._var.dtype), 4)
+            owner = _storage_owner(self._var)
+            return int(owner.numel()) * _DTYPE_BYTES.get(str(owner.dtype), 4)
     if not hasattr(Var, "storage"):
         Var.storage = lambda self: _Storage(self)
     if not hasattr(Var, "untyped_storage"):
         Var.untyped_storage = lambda self: _Storage(self)
     if not hasattr(Var, "data_ptr"):
-        Var.data_ptr = lambda self: id(self)
+        Var.data_ptr = _var_data_ptr
     # torch tensors expose is_contiguous()/contiguous(); jittor Vars are always
     # contiguous in the sense safetensors cares about.
     if not hasattr(Var, "is_contiguous"):
@@ -865,12 +891,26 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 try:
                     out._torch_index_parent = self
                     out._torch_index_slices = slices
-                    data_owner = getattr(self, "_torch_data_owner", None)
-                    if isinstance(data_owner, Var):
-                        out._torch_data_owner = data_owner
-                        out._torch_data_path = getattr(
-                            self, "_torch_data_path", ()
-                        ) + (slices,)
+                    data_owner = _storage_owner(self)
+                    out._torch_data_owner = data_owner
+                    # Keep the complete indexing path for write-through data
+                    # aliases.  A row view such as ``weight.data[0]`` must
+                    # update only that row; dropping this path would make
+                    # ``zero_``/``copy_`` assign the row-shaped value to the
+                    # whole parameter and corrupt its logical shape.
+                    out._torch_data_path = getattr(
+                        self, "_torch_data_path", ()
+                    ) + (slices,)
+                    parent_offset = _storage_offset(self)
+                    # Safetensors probes a flat view's last element to infer
+                    # the storage extent. Preserve its exact element offset.
+                    if isinstance(slices, numbers.Integral) and self.ndim == 1:
+                        index = int(slices)
+                        if index < 0:
+                            index += int(self.shape[0])
+                        out._torch_data_offset = parent_offset + index
+                    else:
+                        out._torch_data_offset = parent_offset
                 except Exception:
                     pass
             return out
@@ -2238,7 +2278,19 @@ def install_methods(ctx):
             return _bitcast(self, shape[0])
         if len(shape) == 1 and isinstance(shape[0], tuple) and type(shape[0]) is not tuple:
             shape = (tuple(int(s) for s in shape[0]),)
-        return _orig_reshape(self, *shape)
+        out = _orig_reshape(self, *shape)
+        if isinstance(out, Var):
+            try:
+                owner = getattr(self, "_torch_data_owner", None)
+                if not isinstance(owner, Var):
+                    owner = self
+                out._torch_data_owner = owner
+                out._torch_data_offset = int(
+                    getattr(self, "_torch_data_offset", 0)
+                )
+            except Exception:
+                pass
+        return out
     Var.reshape = _torch_reshape
     Var.view = _torch_reshape
 

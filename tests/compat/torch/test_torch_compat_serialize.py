@@ -170,6 +170,43 @@ class TestStateDict(Base):
             self.assertEqual(tuple(sd["bias"].shape), (3,), f"bias shape {dev}")
         both_devices(body)
 
+    def test_state_dict_keeps_tied_weight_aliases(self):
+        # PyTorch de-duplicates tied Parameters in named_parameters(), but keeps
+        # every public attribute path in state_dict() for checkpoint compatibility.
+        class TiedLinear(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.encoder = nn.Linear(3, 3, bias=False)
+                self.decoder = nn.Linear(3, 3, bias=False)
+                self.decoder.weight = self.encoder.weight
+
+        def body(dev):
+            model = TiedLinear()
+            self.assertEqual(
+                [name for name, _ in model.named_parameters()],
+                ["encoder.weight"],
+                f"tied parameter is enumerated once {dev}",
+            )
+            state = model.state_dict()
+            self.assertEqual(
+                set(state), {"encoder.weight", "decoder.weight"},
+                f"tied state keys {dev}",
+            )
+            self.assertEqual(
+                state["encoder.weight"].untyped_storage().data_ptr(),
+                state["decoder.weight"].untyped_storage().data_ptr(),
+                f"tied state aliases share storage {dev}",
+            )
+            weight = state["encoder.weight"]
+            storage = weight.untyped_storage()
+            self.assertEqual(
+                weight.view(-1)[-1].data_ptr() + weight.element_size(),
+                storage.data_ptr() + storage.nbytes(),
+                f"full view covers its root storage {dev}",
+            )
+
+        both_devices(body)
+
     def test_state_dict_to_numpy(self):
         def body(dev):
             m = nn.Conv2d(2, 3, 3)
