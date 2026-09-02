@@ -19,8 +19,13 @@ static unique_ptr<expr::Expr> trace_and_expand(KernelIR* ir, expr::Expr* e) {
     std::function<void(expr::Expr*)> func =
     [&](expr::Expr* c) {
         if (!c->is_sym()) return;
-        if (startswith(c->str, "range") && c->str.size() == 6)
-            // dont expand range
+        if (is_single_range_name(c->str))
+            // a base range stands for itself; don't expand it into the shape
+            // expression it is read from.  A merged loop's range is a product
+            // of base ranges and does get expanded, because the index
+            // expressions this is matched against are written in base ranges.
+            // (The test used to be `size()==6`, i.e. "range" plus one
+            // character, which reads range10 as a merged range.)
             return;
         if (endswith(c->str, "outputd"))
             return;
@@ -71,15 +76,20 @@ void MergeLoopVarPass::run() {
                 i->before.size() == 0 && i->after.size() == 0)) {
                 continue;
             }
-            if (range_b.size() > 6) {
-                // range23 -> range2*range3
-                string tmp = range_b.substr(0, 6);
-                for (int i=6; i<range_b.size(); i++) {
-                    tmp += "*range";
-                    tmp += range_b[i];
-                }
-                range_b = tmp;
-            }
+            auto aid_ranges = parse_loop_id(fa->attrs["loop_id"]);
+            auto bid_ranges = parse_loop_id(i->attrs["loop_id"]);
+            if (!aid_ranges.size() || !bid_ranges.size())
+                // not a loop we know how to name; leave it alone
+                continue;
+            // The template below is matched against index expressions, which
+            // are written in base ranges, so the inner loop's range has to be
+            // written that way too: a merged loop's range is the product of the
+            // ranges it covers, a single loop's range is itself.  This used to
+            // be a per-character split of the name, which turns range10 -- one
+            // range -- into range1*range0.
+            range_b = "range" + S(bid_ranges[0]);
+            for (uint k=1; k<bid_ranges.size(); k++)
+                range_b += "*range" + S(bid_ranges[k]);
             /*
                 for (id_a : range_a)
                     for (id_b : range_b)
@@ -125,8 +135,17 @@ void MergeLoopVarPass::run() {
             auto ni = i->clone();
             auto aid = fa->attrs["loop_id"];
             auto bid = i->attrs["loop_id"];
-            auto newid = aid+bid;
+            auto merged_ranges = aid_ranges;
+            merged_ranges.insert(merged_ranges.end(),
+                bid_ranges.begin(), bid_ranges.end());
+            auto newid = format_loop_id(merged_ranges);
             auto new_range = "range" + newid;
+            // If this name could also be read as one range, the lookup below
+            // could find somebody else's definition, skip defining ours, and
+            // give the merged loop the wrong trip count -- silently, and it
+            // would still compile.  format_loop_id is what rules that out.
+            ASSERT(!is_single_range_name(new_range))
+                << "merged loop id" << newid << "reads as a single range";
             auto x = i->find_define(new_range);
             if (!x) {
                 ir->push_back(i->attrs["dtype"]+" "+new_range+" = "+range_b+" * "+range_a+";");

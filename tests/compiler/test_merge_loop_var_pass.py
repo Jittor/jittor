@@ -4,9 +4,19 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
+"""MergeLoopVarPass: fusing two nested loops into one.
+
+The merged loop is named after the ranges it covers, so the name has to say
+which ranges those are without ambiguity -- see parse_loop_id in kernel_ir.h.
+"range0_1" is the merge of ranges 0 and 1; "range10" is range number 10.
+"""
+import itertools
+import re
 import unittest
+
+import numpy as np
+
 import jittor as jt
-import numpy as numpy
 
 class TestMergeLoopVarPass(unittest.TestCase):
     def test(self):
@@ -17,8 +27,8 @@ class TestMergeLoopVarPass(unittest.TestCase):
             b.sync()
         with open(rep[1][1]) as f:
             src = f.read()
-            assert "range01" in src
-            assert "range23" in src
+            assert "range0_1" in src
+            assert "range2_3" in src
 
     def test2(self):
         a = jt.ones([10,10,10,10])
@@ -28,7 +38,7 @@ class TestMergeLoopVarPass(unittest.TestCase):
             b.sync()
         with open(rep[1][1]) as f:
             src = f.read()
-            assert "range0123" in src
+            assert "range0_1_2_3" in src
 
     def test3(self):
         a = jt.ones([10,10,10,10])
@@ -39,7 +49,7 @@ class TestMergeLoopVarPass(unittest.TestCase):
             b.sync()
         with open(rep[1][1]) as f:
             src = f.read()
-            assert "range23" in src
+            assert "range2_3" in src
 
     def test4(self):
         # don't optimize reindex like op yet
@@ -50,7 +60,7 @@ class TestMergeLoopVarPass(unittest.TestCase):
             b.sync()
         with open(rep[1][1]) as f:
             src = f.read()
-            assert "range23" not in src
+            assert "range2_3" not in src
 
     def test5(self):
         a = jt.ones([10,10,10,10])
@@ -60,8 +70,54 @@ class TestMergeLoopVarPass(unittest.TestCase):
             b.sync()
         with open(rep[1][1]) as f:
             src = f.read()
-            assert "range01" not in src
-            assert "range23" in src
+            assert "range0_1" not in src
+            assert "range2_3" in src
+
+    def test_merged_range_name_says_which_ranges(self):
+        """A merged range's name must not also read as a single range.
+
+        The name used to be the plain concatenation of the two loop ids, so the
+        merge of ranges 0 and 1 was called "range01" and the merge of 1 and 0
+        would be called "range10" -- the name of range number 10.  The merged
+        range is only defined ``if (!find_define(...))``, so a name that already
+        exists is reused rather than defined and the merged loop silently runs
+        the wrong number of iterations.
+        """
+        a = jt.ones([4] * 10)
+        a.sync()
+        with jt.profile_scope(compile_options={"_mlv_name": 1}) as rep:
+            b = a + 1
+            b.sync()
+        with open(rep[1][1]) as f:
+            src = f.read()
+        # a merged range is defined as a product of the ranges it covers
+        merged = re.findall(r"\brange([0-9_]+) = ([^;]*\*[^;]*);", src)
+        assert merged, "expected MergeLoopVarPass to merge something:\n" + src
+        for name, rhs in merged:
+            assert "_" in name, (
+                "merged range 'range%s' is spelled in plain digits, so it also "
+                "reads as range number %s: %s" % (name, name, rhs))
+
+    def test_many_ranges_still_compute_the_right_values(self):
+        """10 dimensions (the NanoVector limit) plus splits, which push the
+        range count past 10 and so past the point where a name is one digit."""
+        for nd, nsplit in itertools.product((7, 8, 9, 10), (0, 1, 2, 3)):
+            shape = [2] * nd
+            a = jt.random(shape)
+            a.sync()
+            co = {"_mlv_dims": nd * 10 + nsplit}
+            for k in range(nsplit):
+                co["split%d" % k] = 2
+            with jt.flag_scope(compile_options=co):
+                got = (a + a).numpy()
+                red = jt.reduce(a, "add", (nd - 1,)).numpy()
+            ref = a.numpy()
+            np.testing.assert_allclose(got, ref * 2, rtol=1e-5, atol=1e-5,
+                                       err_msg="ndim=%d splits=%d" % (nd, nsplit))
+            np.testing.assert_allclose(red, ref.sum(axis=nd - 1), rtol=1e-4,
+                                       atol=1e-4,
+                                       err_msg="ndim=%d splits=%d" % (nd, nsplit))
+
 
 @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
 class TestMergeLoopVarPassCuda(TestMergeLoopVarPass):

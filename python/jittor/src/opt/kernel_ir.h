@@ -220,6 +220,41 @@ struct KernelIR {
 
 std::ostream& operator<<(std::ostream& os, KernelIR& ir);
 
+// ---------------------------------------------------------------------------
+// Loop identity
+//
+// A loop's identity is the list of ranges it iterates.  A base loop, and a loop
+// created by split_loop, covers exactly one range, so its id is a single
+// integer; MergeLoopVarPass fuses two nested loops into one that covers both,
+// so that loop's id is the concatenation of theirs.
+//
+// The id is carried as text in attrs["loop_id"] because it is also the suffix
+// of the loop's range and index variables (range{id}, id{id}).  Components are
+// separated by '_' so that the text stays readable in one way only:
+// "range10" is range number 10, "range1_0" is the merge of ranges 1 and 0.
+//
+// Plain concatenation, which is what this used to be, is ambiguous in both
+// directions and both directions have a failure mode:
+//   * reading "range10" as two ranges -- MergeLoopVarPass really did take the
+//     name apart character by character, which turns the trip count of range 10
+//     into range1*range0;
+//   * writing the merge of 1 and 0 as "range10" -- the merged range is only
+//     defined `if (!find_define(...))`, so a name that already exists is reused
+//     instead of defined, and the merged loop silently inherits the wrong trip
+//     count and still compiles.
+// Neither is reachable today: NanoVector caps a tensor at 10 dimensions, so
+// base ranges stop at range9, and a split loop can never take part in a merge
+// (its parent's `inner` holds the split range's definition, which fails
+// MergeLoopVarPass's `inner.size()==3` test).  Both of those are accidents of
+// unrelated code.  These functions are what makes the naming safe on its own.
+//
+// parse_loop_id returns an empty vector if the text is not a loop id at all.
+vector<int> parse_loop_id(const string& loop_id);
+string format_loop_id(const vector<int>& ranges);
+// "range7"/"range10" name one range; "range1_0" names a merged loop's range,
+// which stands for a product of ranges and may be expanded into it.
+bool is_single_range_name(const string& name);
+
 // match aaa::bbb
 bool isvar(char x);
 

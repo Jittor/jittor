@@ -22,6 +22,42 @@ vector<typename unordered_map<string,T>::iterator> sort(unordered_map<string,T>&
     return v;
 }
 
+vector<int> parse_loop_id(const string& loop_id) {
+    vector<int> ranges;
+    int64 cur = 0;
+    bool has_digit = false;
+    for (char c : loop_id) {
+        if (c == '_') {
+            if (!has_digit) return {};
+            ranges.push_back((int)cur);
+            cur = 0;
+            has_digit = false;
+        } else if (c >= '0' && c <= '9') {
+            cur = cur * 10 + (c - '0');
+            if (cur > 100000) return {};
+            has_digit = true;
+        } else
+            return {};
+    }
+    if (!has_digit) return {};
+    ranges.push_back((int)cur);
+    return ranges;
+}
+
+string format_loop_id(const vector<int>& ranges) {
+    string loop_id;
+    for (uint i=0; i<ranges.size(); i++) {
+        if (i) loop_id += '_';
+        loop_id += S(ranges[i]);
+    }
+    return loop_id;
+}
+
+bool is_single_range_name(const string& name) {
+    return startswith(name, "range") &&
+        parse_loop_id(name.substr(5)).size() == 1;
+}
+
 bool isvar(char x) { return isalnum(x) || x == '_' || x == ':'; }
 
 // Is this statement nothing but a list of discarded expressions, i.e.
