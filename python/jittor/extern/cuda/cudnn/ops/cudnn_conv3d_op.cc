@@ -212,14 +212,31 @@ void CudnnConv3dOp::jit_run() {
     int perf_count;
     STACK_ALLOC(cudnnConvolutionFwdAlgoPerf_t,perf_results,num_algos);
     cudnnConvolutionFwdAlgo_t algo;
-    bool benchmark = (cudnn_benchmark < 0 || cudnn_benchmark > 0) && !has_fp16_or_bf16;
+    // Same criterion as conv2d: cudnn_benchmark alone decides.
+    // Half precision used to be excluded here, which meant a 3D half
+    // convolution was never measured and the flag did nothing in 3D
+    // backward at all.
+    bool benchmark = cudnn_benchmark != 0;
 
     JK& jk = get_jk();
     jk.clear();
-    jk << dimX[0] << "," << dimX[1] << "," << dimX[2] << "," << dimX[3] << "," << dimX[4] << ",";
-    jk << dimW[0] << "," << dimW[1] << "," << dimW[2] << "," << dimW[3] << "," << dimW[4] << ",";
-    jk << paddingd << paddingh << paddingw << "," << strided << strideh <<stridew << "," << dilationd << dilationh << dilationw << "," << groups << ".";
-    jk << "math=" << conv_math_key << ".";
+    // conv3d shares this cache with conv2d, so the key needs a namespace of
+    // its own; and it has to carry the dtypes, the output extent, the compute
+    // type and the workspace budget, or an fp32 and an fp16 convolution of the
+    // same shape get one another's algorithm and a changed
+    // max_workspace_ratio never invalidates anything.
+    jk << "conv3d.fwd;";
+    jk << "x=" << x->dtype() << ":";
+    jk << dimX[0] << "," << dimX[1] << "," << dimX[2] << "," << dimX[3] << "," << dimX[4] << ";";
+    jk << "w=" << w->dtype() << ":";
+    jk << dimW[0] << "," << dimW[1] << "," << dimW[2] << "," << dimW[3] << "," << dimW[4] << ";";
+    jk << "y=" << y->dtype() << ":";
+    jk << dimY[0] << "," << dimY[1] << "," << dimY[2] << "," << dimY[3] << "," << dimY[4] << ";";
+    jk << "conv=" << paddingd << paddingh << paddingw << "," << strided << strideh <<stridew << "," << dilationd << dilationh << dilationw << "," << groups << ";";
+    jk << "compute=" << static_cast<int>(conv_compute_type) << ":";
+    jk << "math=" << conv_math_key << ":";
+    jk << "workspace_ratio=" << max_workspace_ratio << ".";
+    LOGvvv << "cudnn_conv3d fwd algo cache key:" << jk.to_string();
     auto iter = fwd_algo_cache.find(jk.to_string());
     
     if (iter!=fwd_algo_cache.end()) algo = iter->second;
