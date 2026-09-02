@@ -104,7 +104,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | `asm_tuner.py` 非原子写 `.s`，并发编译读到截断的汇编 | **已修**：`pass_asm()` 改成写 `<路径>.tmp.<pid>` 再 `os.replace`。判据是 inode——改名换 inode，原地重写不换，也就不会消掉那个窗口；用例 `test_asm_tuner.py::TestAsmTunerWritesAtomically` 钉住。缓存里已经存在的坏 `.s` 不会自动修复，删掉再跑 | 构建，`1919b035` |
 | `tests/backends/cuda/test_backend_teardown.py` 过不了 0.21 的静态门禁 | `272f00ba`（6.B17）加的 `subprocess.run([sys.executable, ...])` 自己拼了 PYTHONPATH，但没走 `_helpers/child_process`，而 `46dbe946` 的静态检查禁止这么写。两个提交是并行落地的，谁都没错，只是撞上了。现症：`tests/structure/test_child_process_contract.py` 两个用例红（`test_no_test_names_the_interpreter_directly`、`test_every_child_launch_pins_this_tree`） | CUDA 后端 cudabk，改成 `run_child_script` 即可 |
 | `jt.flags.nvcc_flags` 的拼法变了 | 9.08 之后架构 flag 是 `--generate-code=arch=...,code=...`，不再是 `-arch=compute_N -code=sm_N`。按后者做字符串匹配的地方要改 | 各分区自查，`2d71f792` |
-| 全树跑时 `test_notebooks.py` 没有被当成 manual 跳过 | `tests/conftest.py` 的 `pytest_collection_modifyitems` 里，`test_notebooks.py` 的 `pytest.mark.manual` 是在 `SELECTION_IS_BROAD` 那段跳过判断**之后**才加上的，所以全树跑时它照跑不误——2026-09-03 的全树原生一遍里它实测 537 秒，是全树最慢的一项（第二名 289 秒）。顺序问题，不是标记问题 | 门禁 gates，随 0.13/0.15 |
+| 全树跑时 `test_notebooks.py` 没有被当成 manual 跳过 | **已修**：`pytest_collection_modifyitems` 里 `test_notebooks.py` 的 `pytest.mark.manual` 加在跳过判断**之后**，所以全树跑时它照跑不误——2026-09-03 的全树原生一遍里实测 537 秒，是全树最慢的一项（第二名 289 秒）。现在所有标记先挂完再统一判断，manual 探针改由 `JITTOR_TEST_MANUAL=1` 或 `-m manual` 显式打开。**这是「筛选逻辑的顺序决定筛选结果」的第三例**（另两例：按 `sys.argv` 选 shim 模式、`@onlyCPU` 被设备过滤全部跳过） | 门禁 gates，`5c0f2364`（0.13） |
 
 ## 任务
 
