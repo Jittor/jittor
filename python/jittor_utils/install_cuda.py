@@ -34,8 +34,32 @@ def get_cuda_wheel_stack(nvcc_version=None, refresh=False):
     key = str(nvcc_version or "")
     if not refresh and key in _cuda_wheel_stacks:
         return _cuda_wheel_stacks[key]
-    strict = _truthy(os.environ.get("JITTOR_CUDA_WHEEL_STRICT"))
-    stack = cuda_wheel.discover_cuda_wheel_stack(nvcc_version, strict=strict)
+    report = cuda_wheel.inspect_cuda_wheel_stack(nvcc_version)
+    stack = report.stack
+    if stack is None and report.reason:
+        # A failure here is not fatal -- the build falls back to the system
+        # CUDA, which is a supported way to run. What was fatal was doing it
+        # in silence: the user who installed jittor[cuda12] and got the
+        # system CUDA anyway learned about it several minutes later through a
+        # cuDNN 9 error with no visible connection to the cause.
+        #
+        # JITTOR_CUDA_WHEEL_STRICT=1 turns any such failure into an error;
+        # without it, a stack that resolved completely at its pinned versions
+        # and then failed validation still raises, because nothing but a
+        # broken jittor[cuda12] can produce that.
+        if _truthy(os.environ.get("JITTOR_CUDA_WHEEL_STRICT")) or report.broken:
+            raise cuda_wheel.CudaWheelError(report.reason)
+        message = (
+            "not using the NVIDIA CUDA pip wheels: %s. Falling back to the "
+            "CUDA found on this system. If that CUDA ships cuDNN 9, the "
+            "failure you get later comes from here." % report.reason)
+        if report.present:
+            # Some of the stack is installed, so this is plausibly a
+            # jittor[cuda12] that drifted rather than a machine that never
+            # had one.
+            LOG.w(message)
+        else:
+            LOG.v(message)
     _cuda_wheel_stacks[key] = stack
     if stack:
         # This affects compiler subprocesses and future child processes.  The

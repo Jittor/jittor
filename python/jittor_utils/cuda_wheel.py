@@ -14,6 +14,7 @@ libraries supplied by pip.
 
 from __future__ import print_function
 
+import collections
 import hashlib
 import os
 import re
@@ -229,48 +230,115 @@ def _validate_stack(stack):
             raise CudaWheelError("lib%s is missing from the NVIDIA wheel stack" % name)
 
 
-def discover_cuda_wheel_stack(nvcc_version=None, distribution=None, strict=False):
-    """Return the supported CUDA 12.2 wheel stack, or ``None``.
+#: What ``inspect_cuda_wheel_stack`` returns.
+#:
+#: ``stack``   the resolved stack, or None
+#: ``reason``  why it is None, in one sentence, or None on success
+#: ``present`` how many of the pinned component distributions are installed at
+#:             all, at any version -- the signal for whether the user asked
+#:             for this stack or merely has some ``nvidia-*`` wheels because
+#:             something else (torch, most often) depends on them
+#: ``broken``  the stack resolved completely at the pinned versions and then
+#:             failed validation, which no third party's dependencies can
+#:             cause: this is a broken ``jittor[cuda12]`` and nothing else
+CudaWheelReport = collections.namedtuple(
+    "CudaWheelReport", "stack reason present broken")
+
+
+def inspect_cuda_wheel_stack(nvcc_version=None, distribution=None):
+    """Resolve the CUDA 12.2 wheel stack and say why if it cannot be.
+
+    Every one of these failures used to be swallowed -- the diagnostic strings
+    below were constructed and then dropped on the floor by a bare
+    ``return None``. The user who installed ``jittor[cuda12]`` and then, say,
+    let something upgrade one wheel, silently got the *system* CUDA instead,
+    and found out several minutes later through an unrelated-looking cuDNN 9
+    error. The two events had no visible connection.
 
     ``distribution`` is injectable for unit tests and follows
     ``importlib.metadata.distribution``'s interface.
     """
 
-    if os.name != "posix" or _truthy(os.environ.get("JITTOR_CUDA_WHEEL_DISABLE")):
-        return None
+    if os.name != "posix":
+        return CudaWheelReport(None, None, 0, False)
+    if _truthy(os.environ.get("JITTOR_CUDA_WHEEL_DISABLE")):
+        return CudaWheelReport(
+            None, "JITTOR_CUDA_WHEEL_DISABLE is set", 0, False)
     if nvcc_version and _version_tuple(nvcc_version)[:2] != (12, 2):
-        message = (
-            "jittor[cuda12] requires nvcc 12.2, found %s" % nvcc_version
-        )
-        if strict:
-            raise CudaWheelError(message)
-        return None
+        return CudaWheelReport(
+            None, "jittor[cuda12] requires nvcc 12.2, found %s" % nvcc_version,
+            0, False)
 
     distribution = distribution or importlib_metadata.distribution
     components = {}
     versions = {}
-    try:
-        for component, dist_name, expected, relative_path in CUDA12_COMPONENTS:
+    reason = None
+    for component, dist_name, expected, relative_path in CUDA12_COMPONENTS:
+        try:
             dist = distribution(dist_name)
-            actual = str(dist.version)
-            if actual != expected:
-                raise CudaWheelError(
-                    "%s==%s is required, found %s" % (dist_name, expected, actual)
-                )
-            root = os.path.abspath(os.fspath(dist.locate_file(relative_path)))
-            if not os.path.isdir(root):
-                raise CudaWheelError(
-                    "%s does not contain %s" % (dist_name, relative_path)
-                )
-            components[component] = root
-            versions[component] = actual
-        stack = CudaWheelStack(components, versions)
+        except importlib_metadata.PackageNotFoundError:
+            reason = reason or "%s is not installed" % dist_name
+            continue
+        actual = str(dist.version)
+        if actual != expected:
+            reason = reason or (
+                "%s==%s is required, found %s" % (dist_name, expected, actual))
+            continue
+        root = os.path.abspath(os.fspath(dist.locate_file(relative_path)))
+        if not os.path.isdir(root):
+            reason = reason or (
+                "%s does not contain %s" % (dist_name, relative_path))
+            continue
+        components[component] = root
+        versions[component] = actual
+
+    if reason is not None:
+        # Only now, and only on the failure path: the success path must not
+        # read any distribution's metadata twice.
+        return CudaWheelReport(
+            None, reason, _count_installed(distribution), False)
+    stack = CudaWheelStack(components, versions)
+    try:
         _validate_stack(stack)
-        return stack
-    except (CudaWheelError, importlib_metadata.PackageNotFoundError):
-        if strict:
-            raise
-        return None
+    except CudaWheelError as error:
+        # Every pinned wheel is installed at its pinned version and the set is
+        # still unusable. Nothing outside jittor[cuda12] pins this exact
+        # combination, so this is that installation and it is broken.
+        return CudaWheelReport(
+            None, str(error), len(CUDA12_COMPONENTS), True)
+    return CudaWheelReport(stack, None, len(CUDA12_COMPONENTS), False)
+
+
+def _count_installed(distribution):
+    """How many of the pinned component distributions exist at any version."""
+    present = 0
+    for _, dist_name, _, _ in CUDA12_COMPONENTS:
+        try:
+            distribution(dist_name)
+        except Exception:
+            continue
+        present += 1
+    return present
+
+
+def discover_cuda_wheel_stack(nvcc_version=None, distribution=None, strict=None):
+    """Return the supported CUDA 12.2 wheel stack, or ``None``.
+
+    ``strict`` unset means "raise for a failure that can only be a broken
+    ``jittor[cuda12]``". That is strict by default for the case where strict
+    is safe, and it deliberately stops short of the whole set: a machine that
+    has ``nvidia-cublas-cu12`` at some other version because torch depends on
+    it is the *normal* case, and raising there would refuse to run on every
+    system-CUDA install. ``strict=True`` raises for any failure to resolve.
+    """
+    report = inspect_cuda_wheel_stack(nvcc_version, distribution)
+    if report.stack is not None:
+        return report.stack
+    if strict is None:
+        strict = report.broken
+    if strict and report.reason:
+        raise CudaWheelError(report.reason)
+    return None
 
 
 def is_nvidia_wheel_path(path):

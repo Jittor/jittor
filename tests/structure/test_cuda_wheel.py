@@ -196,6 +196,59 @@ class TestCudaWheel(unittest.TestCase):
                 r"nvidia-cudnn-cu12==8\.9\.7\.29 is required, found 8\.9\.6\.50"):
             self.fixture.discover(strict=True)
 
+    def test_a_declined_stack_says_why(self):
+        """The diagnostic used to be built and then dropped by `return None`.
+
+        The user who installed jittor[cuda12] and then let something upgrade
+        one wheel got the system CUDA in silence, and met the consequence
+        several minutes later as a cuDNN 9 error with no visible cause.
+        """
+        self.fixture.distributions["nvidia-cudnn-cu12"].version = "8.9.6.50"
+        report = cuda_wheel.inspect_cuda_wheel_stack(
+            nvcc_version="12.2.140", distribution=self.fixture.registry)
+
+        self.assertIsNone(report.stack)
+        self.assertIn("nvidia-cudnn-cu12==8.9.7.29 is required, found 8.9.6.50",
+                      report.reason)
+        # Some of the stack is installed, so the caller should say so out loud
+        # rather than at log level v.
+        self.assertEqual(report.present, len(cuda_wheel.CUDA12_COMPONENTS))
+        self.assertFalse(report.broken)
+
+    def test_a_machine_with_none_of_the_stack_is_not_a_broken_install(self):
+        registry = _DistributionRegistry({})
+        report = cuda_wheel.inspect_cuda_wheel_stack(
+            nvcc_version="12.2.140", distribution=registry)
+
+        self.assertIsNone(report.stack)
+        self.assertEqual(report.present, 0)
+        self.assertFalse(report.broken)
+        # And it must not raise by default: running against the system CUDA is
+        # a supported configuration, and torch pulls in some of these wheels
+        # at its own versions on plenty of machines.
+        self.assertIsNone(cuda_wheel.discover_cuda_wheel_stack(
+            nvcc_version="12.2.140", distribution=registry))
+
+    def test_a_complete_but_unusable_stack_is_fatal_by_default(self):
+        """Nothing but a broken jittor[cuda12] can produce this.
+
+        Every pinned wheel is installed at its pinned version and the set is
+        still missing a library, so there is no third party whose dependency
+        resolution could have caused it and nothing to fall back to quietly.
+        """
+        library = self.fixture.library_paths["cudnn"]
+        library.unlink()
+
+        report = cuda_wheel.inspect_cuda_wheel_stack(
+            nvcc_version="12.2.140", distribution=self.fixture.registry)
+        self.assertIsNone(report.stack)
+        self.assertTrue(report.broken)
+        self.assertIn("libcudnn", report.reason)
+
+        with self.assertRaises(cuda_wheel.CudaWheelError):
+            cuda_wheel.discover_cuda_wheel_stack(
+                nvcc_version="12.2.140", distribution=self.fixture.registry)
+
     def test_wrong_nvcc_version_is_rejected_before_metadata_lookup(self):
         def unexpected_distribution(_):
             self.fail("distribution metadata should not be read for incompatible nvcc")
