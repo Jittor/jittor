@@ -11,6 +11,7 @@
 #endif
 #include <random>
 
+#include <csignal>
 #include "init.h"
 #include "ops/op_register.h"
 #include "var.h"
@@ -34,7 +35,7 @@ int64 current_offset;
 EXTERN_LIB list<VarPtr> fetcher;
 EXTERN_LIB list<VarPtr> fetcher_to_free;
 EXTERN_LIB vector<void(*)()> cleanup_callback;
-EXTERN_LIB bool exited;
+EXTERN_LIB volatile sig_atomic_t exited;
 
 void cleanup() {
     exited = true;

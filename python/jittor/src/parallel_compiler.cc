@@ -13,6 +13,7 @@
 #include <condition_variable>
 #include <iomanip>
 
+#include <csignal>
 #include "parallel_compiler.h"
 #include "op_compiler.h"
 #include "executor.h"
@@ -27,7 +28,7 @@ namespace jittor {
 DEFINE_FLAG(int, use_parallel_op_compiler, 16, "Number of threads that parallel op comiler used, default 16, set this value to 0 will disable parallel op compiler.");
 
 // from log.cc
-EXTERN_LIB int segfault_happen;
+EXTERN_LIB volatile sig_atomic_t segfault_happen;
 
 // RAII: release the Python GIL on the main thread while the parallel op
 // compiler runs, and reacquire it on scope exit (incl. exception unwind).

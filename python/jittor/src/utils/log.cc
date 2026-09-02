@@ -201,9 +201,13 @@ std::vector<std::map<string,string>> log_capture_read() {
 
 void log_exiting();
 
-bool exited = false;
+// Read and written from a signal handler, so `volatile sig_atomic_t`: plain
+// bool/int gives the compiler licence to cache or tear them across the
+// interruption, and nothing else in the language says "this can change under
+// you at any instruction".
+volatile sig_atomic_t exited = 0;
 size_t thread_local protected_page = 0;
-int segfault_happen = 0;
+volatile sig_atomic_t segfault_happen = 0;
 static int _pid = getpid();
 vector<void(*)()> cleanup_callback;
 vector<void(*)()> sigquit_callback;
@@ -244,6 +248,18 @@ static void sig_write(const char* s) {
     (void)written;
 }
 
+static void sig_write_ptr(const void* p) {
+    static const char digits[] = "0123456789abcdef";
+    char buffer[2 + sizeof(void*) * 2];
+    buffer[0] = '0';
+    buffer[1] = 'x';
+    uintptr_t v = (uintptr_t)p;
+    for (size_t i = 0; i < sizeof(void*) * 2; i++)
+        buffer[2 + sizeof(void*) * 2 - 1 - i] = digits[(v >> (4 * i)) & 0xf];
+    ssize_t written = write(2, buffer, sizeof(buffer));
+    (void)written;
+}
+
 static void sig_write_int(int value) {
     char buffer[24];
     int i = sizeof(buffer);
@@ -262,11 +278,11 @@ static void sig_write_int(int value) {
 void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
     if (signal == SIGQUIT) {
         if (_pid == getpid()) {
-            std::cerr << "Caught SIGQUIT" << std::endl;
+            sig_write("Caught SIGQUIT\n");
             int64 now = clock();
             if (now > last_q_time && last_q_time+CLOCKS_PER_SEC/10 > now) {
                 last_q_time = now;
-                std::cerr << "GDB attach..." << std::endl;
+                sig_write("GDB attach...\n");
                 breakpoint();
             } else {
                 last_q_time = now;
@@ -306,16 +322,21 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
         return;
     }
     if (signal == SIGINT) {
-        if (_pid == getpid()) {
-            LOGe << "Caught SIGINT, quick exit";
-        }
-        exited = true;
+        // LOGe builds an ostringstream: a malloc, from a handler that may have
+        // interrupted malloc.
+        if (_pid == getpid())
+            sig_write("Caught SIGINT, quick exit\n");
+        exited = 1;
         do_exit();
     }
     if (exited) do_exit();
-    std::cerr << "Caught segfault at address " << si->si_addr << ", "
-        << "thread_name: '" << thread_name << "', flush log..." << std::endl;
-    std::cerr.flush();
+    sig_write("Caught segfault at address ");
+    sig_write_ptr(si->si_addr);
+    sig_write(", thread_name: '");
+    // thread_name is a std::string owned by this thread; reading its bytes
+    // allocates nothing.
+    sig_write(thread_name.c_str());
+    sig_write("'\n");
 #if defined(__linux__) && !defined(_WIN32)
     // Recover the REAL faulting PC from the ucontext and dladdr-symbolize it.
     // backtrace() (the [bt] dump below) can't unwind past the signal frame, so it only
@@ -336,37 +357,59 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
         auto sym = [](const char* tag, void* pc) {
             if (!pc) return;
             Dl_info info;
-            if (dladdr(pc, &info) && info.dli_sname)
-                std::cerr << tag << " " << pc << " in " << info.dli_sname
-                          << " @ " << (info.dli_fname ? info.dli_fname : "?") << std::endl;
-            else
-                std::cerr << tag << " " << pc << " (unresolved)" << std::endl;
+            // dladdr itself is NOT async-signal-safe -- it takes the loader
+            // lock and can allocate. It stays for now because it is the only
+            // thing that names the crashing function without gdb; moving
+            // symbolization to a pre-forked helper is the second half of 2.20.
+            // Its *output* at least no longer goes through stdio.
+            if (dladdr(pc, &info) && info.dli_sname) {
+                sig_write(tag); sig_write(" "); sig_write_ptr(pc);
+                sig_write(" in "); sig_write(info.dli_sname);
+                sig_write(" @ ");
+                sig_write(info.dli_fname ? info.dli_fname : "?");
+                sig_write("\n");
+            } else {
+                sig_write(tag); sig_write(" "); sig_write_ptr(pc);
+                sig_write(" (unresolved)\n");
+            }
         };
         if (!fault_pc)
-            std::cerr << "Fault PC is NULL (jump through a null function pointer)" << std::endl;
+            sig_write("Fault PC is NULL (jump through a null function pointer)\n");
         sym("Fault PC", fault_pc);
         sym("Caller (LR)", caller_pc);
-        std::cerr.flush();
     }
 #endif
     if (protected_page && 
         si->si_addr>=(void*)protected_page && 
         si->si_addr<(void*)(protected_page+4*1024)) {
-        LOGf << "Accessing protect pages, maybe jit_key too long";
+        // LOGf *throws*. Throwing out of a signal handler unwinds through a
+        // frame the runtime did not create; there is no catch on this path, so
+        // it reached std::terminate -- a second crash on top of the first, and
+        // the original fault address never got reported.
+        sig_write("Accessing protect pages, maybe jit_key too long\n");
     }
     if (!exited) {
-        exited = true;
+        exited = 1;
         if (signal == SIGSEGV) {
-            // only print trace in main thread
+            // print_trace forks gdb/addr2line from inside the handler. Same
+            // story as dladdr above: it is the second half of 2.20, kept for
+            // now because losing it would lose the only stack trace.
             if (thread_name.size() == 0)
                 print_trace();
-            std::cerr << "Segfault, exit" << std::endl;
+            sig_write("Segfault, exit\n");
         } else {
-            std::cerr << "Get signal " << signal << ", exit" << std::endl;
+            sig_write("Get signal ");
+            sig_write_int(signal);
+            sig_write(", exit\n");
         }
     }
     segfault_happen = 1;
-    exit(1);
+    // _exit, not exit: exit() runs atexit handlers and static destructors --
+    // including cleanup_callback, which frees device memory -- while the other
+    // threads of a process that just faulted are still running. That turned a
+    // crash report into a hang or a second crash often enough to be the reason
+    // a segfault sometimes produced no report at all.
+    _exit(1);
 }
 #endif
 

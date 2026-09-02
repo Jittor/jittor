@@ -36,6 +36,15 @@ assert li != jt.liveness_info()
 而且是在我已经准备提交之后。少跑那一组，这个回归会带着「三条新测试全绿」的
 提交说明进主干。
 
+**同一条教训的另一个方向：`#ifdef` 里的代码在错误的平台上根本没被编译。**
+6.C31 的 EventQueue 修复整个包在 `#ifdef HAS_CUDA` 里。CPU 那一跑绿、新写的测试也绿
+——因为 CPU 构建**连编都没编到它**。真正的失败要在 CUDA 上才出现，而且不是原来那个
+（`terminate called without an active exception` 变成了
+`terminate called after throwing std::system_error: Invalid argument`，只是把失败
+搬了个地方）。所以「受影响目录」的正确含义是**代码真正被编译的那个构建**：
+改 `#ifdef HAS_CUDA` / `IS_CUDA` 下的东西，CPU-only 那一跑对它零覆盖，
+收尾必须带 `nvcc_path` 再跑一次。
+
 ## 1. 先确认导入的是自己这棵树
 
 `pip install -e` 装的 `.pth` 指向**另一棵源码树**。pytest 靠 `pyproject.toml` 里的
