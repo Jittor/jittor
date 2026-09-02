@@ -172,6 +172,44 @@ atexit。没跑完时 `~std::thread` 落在 joinable 的线程上：
   处理器，所以第 1 条打不到 pytest。少了这层，拿这个测试去跑**修复前**的代码
   不会得到一条红的断言，只会得到「pytest 凭空消失」。
 
+## 两卡验证「一个 rank 死了，其余怎么办」
+
+这条要真两张卡，`tests/distributed/test_nccl_watchdog.py` 是现成的样板。步骤与判据：
+
+1. **先各自预热**。每个 rank 用 `JT_NCCL_WORLD_SIZE=1` 单独跑一遍（`cache_name=nccl<r>`
+   一 rank 一个缓存，和 `jittor.distributed.launch` 一致）。不预热的话，冷编译会和
+   rendezvous 的超时赛跑。
+2. **`NCCL_P2P_DISABLE=1`**。本机 `nvidia-smi topo -p2p r` 全是 CNS（任何一对 GPU 都没有
+   peer access），而 NCCL 把被拒的 peer access 当致命错误，报的是
+   `unhandled cuda error`。`_skip_nccl_p2p_without_peer_access()` 在能看见整张设备表时会
+   替你设上；每个 rank 只看得见一张卡，它判断不出来，所以手写实验必须自己设。
+3. **按 pid 杀**，绝不用 `pkill -f`——模式会匹配到你自己的 shell 和脚本文本。
+4. **等的是哨兵**（双方都打印了 `STEP 5`），不是 sleep。
+
+**判据**：幸存 rank 在预算内退出，**且消息里指名是哪个 rank 没了**。只说「通信超时」等于
+没说——N 个 rank 全都这么说，运维还是不知道该看谁的日志。
+
+### 已知：`ncclCommGetAsyncError` 抓不到同机的这一类
+
+实测（NCCL 2.18.3，两张 4090，`NCCL_P2P_DISABLE=1`）：kill 掉一个 rank 之后，幸存 rank 的
+通信器**整整两分钟停在 `ncclSuccess`**，kernel 一直在转。同机 + 无 peer access 走的是共享
+内存传输，**没有 socket 可断**，异步错误就不会被置位。所以只靠 `ncclCommGetAsyncError`
+的 watchdog 在单机多卡上是**恒绿的死代码**——写完必须真杀一个 rank 验证，不能读代码通过。
+
+补的办法是心跳文件（`<rootinfo>.hb<rank>`，见 `nccl_wrapper.cc`）：不挑传输方式，而且能
+说出是哪个 rank。判定陈旧要用**本机 steady clock 上「这个文件多久没变过」**，不要拿文件
+mtime 去和本机时钟比——共享文件系统差几秒就会让所有 peer 看起来都死了。
+
+### 这类测试必须多一层 conductor
+
+上面「子进程被信号打死会连带打死父进程」那条在这里是**必然**触发的：测试本身就要
+`SIGKILL` 一个 rank。第一版直接从 pytest 里杀，得到的不是一条红断言，是
+**pytest 凭空消失、零输出、退出码 1**。
+
+所以：pytest → **一个不 import jittor 的 conductor 进程** → 两个 rank。conductor 负责启动、
+等哨兵、按 pid 杀、按预算等幸存者，最后打印一行 JSON 给 pytest 断言。它没有 jittor 的
+SIGCHLD 处理器，所以孙进程被信号打死打不到 pytest。
+
 ## 「等别的 rank」和「拿着编译锁」不能同时发生
 
 `jittor.lock` 是**整个缓存目录一把 flock**，而 `import jittor` 从头到尾都握着它
