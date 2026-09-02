@@ -66,7 +66,32 @@ grep -n 'YOUR_NEW_MARKER' "$GEN/pyjt_jit_op_maker.cc"   # 没有就是在测旧�
 `pyjt_jit_op_maker.cc` 是 `var_holder.h` + `jit_op_maker.h` 合并生成的，
 `Var` 上的方法都在这里；类型对象（`tp_*` 槽位）也在这里。
 
-## 3. 会段错误的用例：用子进程判返回码
+## 3. 改生成器：先在沙箱里 diff 生成结果，再重编
+
+`pyjt_compiler.py` 只依赖 `jittor_utils`，不依赖编译好的核心，所以生成器可以单独跑。
+用本目录的 `render_bindings.py` 把两份源码（或同一份改动前后）各渲染一遍再 diff，
+几秒钟就能看清改动对生成的 C++ 做了什么，不用等重编：
+
+```bash
+GENH=$(find "$JITTOR_HOME/.cache/jittor" -name jit_op_maker.h | head -1)
+python render_bindings.py <改动前的 repo>/python /tmp/gen_old "$(dirname $GENH)"
+python render_bindings.py <改动后的 repo>/python /tmp/gen_new "$(dirname $GENH)"
+diff -u /tmp/gen_old/pyjt_nano_vector.cc /tmp/gen_new/pyjt_nano_vector.cc
+```
+
+（`jit_op_maker.h` 本身是生成出来的，只存在于缓存里；脚本会像 compiler.py 那样把
+`var_holder.h` 拼在它前面，`Var` 的方法和类型对象才会出现在输出里。）
+
+先在小文件（`pyjt_nano_vector.cc`、`pyjt_py_ring_buffer.cc`）上看结构对不对，再看
+`pyjt_jit_op_maker.cc`（3 万多行，所有算子）。一个很便宜的整体检查是花括号配平：
+
+```bash
+for f in /tmp/gen_new/*.cc; do
+  echo "$(basename $f) $(( $(tr -cd '{' < $f | wc -c) - $(tr -cd '}' < $f | wc -c) ))"
+done   # 全是 0
+```
+
+## 4. 会段错误的用例：用子进程判返回码
 
 绑定层的 bug 有相当一部分表现为段错误（CPython 协议用错、在未构造对象上跑析构、
 读已释放内存）。直接写进 pytest 会把整个 session 带走，看起来像「测试崩了」而不是
@@ -89,14 +114,14 @@ self.assertIn("SURVIVED", output)
 只判返回码不够——jittor 的段错误处理器会打印 backtrace 后走 `exit(1)`，
 也有它自己 catch 住而进程正常退出的情况。
 
-## 4. C++ 改动的重编成本
+## 5. C++ 改动的重编成本
 
 改 `python/jittor/src/**` 或 `pyjt_compiler.py` 之后，**每个新进程**都要重编一次
 `jittor_core`（分钟级）。所以：把一批改动攒起来一次验证，不要改一行跑一次。
 CPU 与 CUDA 是两份缓存，两边都要跑一次；CPU-only 用
 `JITTOR_TEST_DEVICES=cpu nvcc_path=""`，快很多。
 
-## 5. 选测试文件时别把整个进程翻成 torch 模式
+## 6. 选测试文件时别把整个进程翻成 torch 模式
 
 `tests/conftest.py` 会看你在命令行上点了哪些文件：只要其中任何一个属于
 `tests/_helpers/process_modes.py` 的 `TORCH_MODE_PATHS`（`tests/core/test_type_system.py`、
@@ -109,7 +134,7 @@ CPU 与 CUDA 是两份缓存，两边都要跑一次；CPU-only 用
 判据：**同一个文件单独跑通、和别的文件一起跑就挂**，先查是不是混进了 torch 模式路径。
 把 torch 模式的文件单独起一条命令跑。
 
-## 6. 类型对象改了布局时要额外确认的事
+## 7. 类型对象改了布局时要额外确认的事
 
 给生成的类型加字段（改 `tp_basicsize`）或改 `tp_flags` 之后，除了新测试还要跑：
 

@@ -175,6 +175,56 @@ DEF_IS(Slice, T) from_py_object(PyObject* obj) {
         ((slice->step == Py_None) << 2)};
 }
 
+// PyLong_AsLong returns a 64-bit long on LP64, and the generated bindings
+// assigned it straight into whatever width the C++ parameter has.  A value
+// that does not fit was therefore truncated in silence: `x.sum(dim=2**40)`
+// became `dim=0` and reduced over the wrong axis.  These conversions report
+// the overflow the way CPython does, and the binding's PyErr_Occurred() check
+// turns it into an OverflowError.
+inline int32 pyjt_as_int32(PyObject* obj) {
+    int64 v = PyLong_AsLongLong(obj);
+    if (v == -1 && PyErr_Occurred()) return -1;
+    if (v < (int64)(-2147483647-1) || v > (int64)2147483647) {
+        PyErr_SetString(PyExc_OverflowError,
+            "Python int too large to convert to C int32");
+        return -1;
+    }
+    return (int32)v;
+}
+
+inline uint32 pyjt_as_uint32(PyObject* obj) {
+    uint64 v = PyLong_AsUnsignedLongLong(obj);
+    if (v == (uint64)-1 && PyErr_Occurred()) return 0;
+    if (v > (uint64)4294967295u) {
+        PyErr_SetString(PyExc_OverflowError,
+            "Python int too large to convert to C uint32");
+        return 0;
+    }
+    return (uint32)v;
+}
+
+inline uint16 pyjt_as_uint16(PyObject* obj) {
+    uint64 v = PyLong_AsUnsignedLongLong(obj);
+    if (v == (uint64)-1 && PyErr_Occurred()) return 0;
+    if (v > (uint64)65535u) {
+        PyErr_SetString(PyExc_OverflowError,
+            "Python int too large to convert to C uint16");
+        return 0;
+    }
+    return (uint16)v;
+}
+
+inline uint8 pyjt_as_uint8(PyObject* obj) {
+    uint64 v = PyLong_AsUnsignedLongLong(obj);
+    if (v == (uint64)-1 && PyErr_Occurred()) return 0;
+    if (v > (uint64)255u) {
+        PyErr_SetString(PyExc_OverflowError,
+            "Python int too large to convert to C uint8");
+        return 0;
+    }
+    return (uint8)v;
+}
+
 #define GET_RAW_PTR(T, obj) ((T*)(((char*)obj) + sizeof(PyObject)))
 #define GET_OBJ_FROM_RAW_PTR(obj) ((PyObject*)(((char*)obj) - sizeof(PyObject)))
 #define GET_OBJ_SIZE(T) (sizeof(PyObject)+sizeof(T))

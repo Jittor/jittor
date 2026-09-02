@@ -225,5 +225,60 @@ class TestScalarConversionBuffer(unittest.TestCase):
         self.assertEqual(str(jt.array(7).dtype), "int32")
         self.assertEqual(str(jt.array(True).dtype), "bool")
 
+class TestKeywordArguments(unittest.TestCase):
+    """Keyword arguments must be mapped to parameter slots before type checks.
+
+    Three failures came out of doing it the other way round: a signature with
+    no keyword-fillable parameter never looked at ``kw`` at all and dropped
+    whatever was passed; overload selection probed ``args[tid]``, which under
+    FASTCALL holds a *keyword value* once ``tid >= n``, so the answer depended
+    on the order the caller wrote its keywords; and the single
+    ``PyErr_Occurred()`` check ran before the keyword conversions, so an
+    overflowing keyword value was used anyway.
+    """
+
+    def setUp(self):
+        self.x = jt.array(np.arange(12, dtype="float32").reshape(3, 4))
+
+    def test_unknown_keyword_is_rejected(self):
+        # detach() takes no keyword-fillable parameter at all; the keyword used
+        # to be dropped and the call to succeed with default semantics.
+        with self.assertRaises(Exception):
+            self.x.detach(non_blocking=True)
+
+    def test_keyword_order_does_not_change_the_overload(self):
+        a = self.x.sum(dim=1, keepdims=True)
+        b = self.x.sum(keepdims=True, dim=1)
+        self.assertEqual(a.shape, b.shape)
+        np.testing.assert_allclose(a.numpy(), b.numpy())
+        np.testing.assert_allclose(
+            a.numpy(), self.x.numpy().sum(axis=1, keepdims=True))
+
+    def test_overflowing_keyword_value_raises(self):
+        # PyLong_AsLong overflows, sets OverflowError and returns -1; the old
+        # code ignored it and reduced over dim -1 instead.
+        with self.assertRaises(Exception) as ctx:
+            self.x.sum(dim=2 ** 40)
+        self.assertNotIsInstance(ctx.exception, SystemError)
+
+    def test_overflowing_positional_value_raises(self):
+        with self.assertRaises(Exception):
+            self.x.sum(2 ** 40)
+
+    def test_keywords_that_do_exist_still_work(self):
+        np.testing.assert_allclose(
+            self.x.sum(dim=0).numpy(), self.x.numpy().sum(axis=0))
+        np.testing.assert_allclose(
+            self.x.sum(dim=0, keepdims=True).numpy(),
+            self.x.numpy().sum(axis=0, keepdims=True))
+        # `keepdim` is accepted as an alias of `keepdims`
+        np.testing.assert_allclose(
+            self.x.sum(dim=0, keepdim=True).numpy(),
+            self.x.numpy().sum(axis=0, keepdims=True))
+
+    def test_duplicate_value_for_one_parameter_is_rejected(self):
+        with self.assertRaises(Exception):
+            self.x.sum(0, dim=1)
+
 if __name__ == "__main__":
     unittest.main()

@@ -28,11 +28,14 @@ def parse_attrs(s):
 
 pytype_map = {
     "const char*": ["PyUnicode_AsUTF8", "PyUnicode_FromString", "PyUnicode_CheckExact"],
-    "int": ["PyLong_AsLong", "PyLong_FromLong", "PyLong_CheckExact"],
+    # The As* conversions are range-checked (pyjt_as_*, in pyjt/py_converter.h):
+    # PyLong_AsLong hands back a 64-bit value that used to be truncated into a
+    # narrower parameter without a word.
+    "int": ["pyjt_as_int32", "PyLong_FromLong", "PyLong_CheckExact"],
     "int64": ["PyLong_AsLongLong", "PyLong_FromLongLong", "PyLong_CheckExact"],
-    "uint": ["PyLong_AsUnsignedLong", "PyLong_FromUnsignedLong", "PyLong_CheckExact"],
-    "uint8": ["PyLong_AsUnsignedLong", "PyLong_FromUnsignedLong", "PyLong_CheckExact"],
-    "uint16": ["PyLong_AsUnsignedLong", "PyLong_FromUnsignedLong", "PyLong_CheckExact"],
+    "uint": ["pyjt_as_uint32", "PyLong_FromUnsignedLong", "PyLong_CheckExact"],
+    "uint8": ["pyjt_as_uint8", "PyLong_FromUnsignedLong", "PyLong_CheckExact"],
+    "uint16": ["pyjt_as_uint16", "PyLong_FromUnsignedLong", "PyLong_CheckExact"],
     "uint64": ["PyLong_AsUnsignedLongLong", "PyLong_FromUnsignedLongLong", "PyLong_CheckExact"],
     "void": ["...", "GET_PY_NONE", "..."],
     "PyObject*": ["","",""],
@@ -103,20 +106,71 @@ def get_def_code(df, scope_name, pyname, self_as_arg0=False):
         max_args -= 1
         min_args -= 1
         arg_names = ["self"] + arg_names[:-1]
+    # C++ parameters that a keyword may fill.  Var parameters stay positional.
     kw_args_id = []
     for aid, arg in enumerate(args):
         if "VarHolder*" != arg[0] and is_fast_call:
+            if self_as_arg0 and aid == 0: continue
             kw_args_id.append(aid)
+
+    # Keyword arguments are mapped to parameter slots BEFORE any type check or
+    # conversion runs.  Doing it the other way round -- probing args[tid] first
+    # and filling keywords afterwards -- went wrong three ways: under FASTCALL
+    # args[tid] holds a *keyword value* once tid >= n, so overload selection
+    # depended on the order the caller wrote its keywords; a signature with no
+    # keyword-fillable parameter did not look at kw at all and silently ignored
+    # whatever was passed; and the single PyErr_Occurred() check sat before the
+    # keyword conversions, so an overflowing keyword value was converted, left
+    # its OverflowError set, and the wrong number was used anyway.
+    slot_of = lambda tid: tid - (1 if self_as_arg0 else 0)
+    use_slots = is_fast_call and len(kw_args_id) > 0
+    func_prepare = ""
+    if use_slots:
+        for tid in range(len(args)):
+            if self_as_arg0 and tid == 0: continue
+            arg_names[tid] = f"_slots[{slot_of(tid)}]"
+        kw_cases = "".join([f'''
+                                if ({get_hash_condition(args[aid][1])}) {{
+                                    // hash match {args[aid][1]}
+                                    if (_slots[{slot_of(aid)}]) {{ _kwok = false; break; }}
+                                    _slots[{slot_of(aid)}] = vo;
+                                    continue;
+                                }}
+                        '''
+                        for aid in kw_args_id
+                        ])
+        func_prepare = f"""
+                    PyObject* _slots[{max(max_args, 1)}] = {{}};
+                    (void)_slots;
+                    bool _kwok = n <= {max_args};
+                    for (int64 i=0; i<n && i<{max_args}; i++) _slots[i] = args[i];
+                    if (_kwok && kw) {{
+                        auto kw_n = Py_SIZE(kw);
+                        for (int i=0; i<kw_n; i++) {{
+                            auto ko = PyTuple_GET_ITEM(kw, i);
+                            auto vo = args[i+n];
+                            auto ks = PyUnicode_AsUTF8(ko);
+                            uint khash = hash(ks);
+                            {kw_cases}
+                            // not a keyword of this overload
+                            _kwok = false; break;
+                        }}
+                    }}
+        """
+        func_quick_check_size = "_kwok"
+    elif is_fast_call:
+        # No keyword-fillable parameter: a keyword can only be a mistake, and
+        # must make this overload not match instead of being dropped.
+        func_quick_check_size = \
+            f"n<={max_args} && n>={min_args} && (kw==nullptr || Py_SIZE(kw)==0)"
+    else:
+        func_quick_check_size = f"n<={max_args} && n>={min_args}"
+
     func_quick_check_runable = ""
-    func_quick_check_size = f"n<={max_args} && n>={min_args}"
-    if len(kw_args_id):
-        func_quick_check_size = f"n+(kw?Py_SIZE(kw):0)<={max_args} && n+(kw?Py_SIZE(kw):0)>={min_args}"
     fill_with_default = ""
     func_args_convert = ""
     func_call = df["func_name"]+"("
     pytypes = [ get_pytype_map(a[0],0) for a in args ]
-    holder_dec_array = []
-    holder_set_array = []
     for tid, tpc in enumerate(pytypes):
         check = get_pytype_map(args[tid][0],2)
         default_arg = args[tid][2]
@@ -129,25 +183,29 @@ def get_def_code(df, scope_name, pyname, self_as_arg0=False):
         if jtp == "VarSlices":
             holder_dec = f"vector<unique_ptr<VarHolder>> arg{tid}_holder"
             holder_set = f", arg{tid}_holder"
-        holder_dec_array.append(holder_dec)
-        holder_set_array.append(holder_set)
+        is_self = self_as_arg0 and tid == 0
+        if use_slots and not is_self:
+            present = arg_names[tid]
+        else:
+            present = f"n>{slot_of(tid)}"
         if len(default_arg):
             func_args_convert += f"""
                         {holder_dec};
                         {jtp} arg{tid};
-                        if (n>{tid-self_as_arg0}) {{
+                        if ({present}) {{
                             CHECK(({check}({arg_names[tid]})));
                             arg{tid} = {tpc}({arg_names[tid]}{holder_set});
                             arg_filled |= 1ull << {tid};
-                        }}
-            """
-            fill_with_default += f"""
-                        if (!(arg_filled & (1ull<<{tid}))) {{
+                        }} else {{
                             arg{tid} = {default_arg};
                         }}
             """
         else:
-            func_quick_check_runable += f" && {check}({arg_names[tid]})"
+            if use_slots and not is_self:
+                func_quick_check_runable += \
+                    f" && {arg_names[tid]} && {check}({arg_names[tid]})"
+            else:
+                func_quick_check_runable += f" && {check}({arg_names[tid]})"
             func_args_convert += f"""
                         {holder_dec};
                         {jtp} arg{tid} = {tpc}({arg_names[tid]}{holder_set});
@@ -162,35 +220,10 @@ def get_def_code(df, scope_name, pyname, self_as_arg0=False):
             "__ge__", "__eq__", "__ne__"]:
             if rname in df["attrs"]:
                 func_quick_check_runable += " && op==Py_"+rname[2:-2].upper()
-    # fill args with keyword arguments
-    fill_with_kw = ""
-    if is_fast_call and len(kw_args_id):
-        fill_with_kw = f"""
-                        if (kw) {{
-                            auto kw_n = Py_SIZE(kw);
-                            for (int i=0; i<kw_n; i++) {{
-                                auto ko = PyTuple_GET_ITEM(kw, i);
-                                auto vo = args[i+n];
-                                auto ks = PyUnicode_AsUTF8(ko);
-                                uint khash = hash(ks);
-                                {"".join([
-                                f'''
-                                if ({get_hash_condition(args[aid][1])}) {{
-                                    // hash match {args[aid][1]}
-                                    CHECK(({get_pytype_map(args[aid][0],2)}(vo)));
-                                    arg{aid} = {pytypes[aid]}(vo{holder_set_array[aid]});
-                                    arg_filled |= 1ull << {aid};
-                                    continue;
-                                }}
-                                '''
-                                for aid in kw_args_id
-                                ])}
-                                LOGf << "Not a valid keyword:" << ks;
-                            }}
-                        }}
-        """
 
     if len(args):
+        # Every value -- positional and keyword alike -- has been converted by
+        # now, so one check here really does cover them all.
         func_args_convert += """
                         CHECK(!PyErr_Occurred());
         """
@@ -215,13 +248,15 @@ def get_def_code(df, scope_name, pyname, self_as_arg0=False):
     if no_need_convert:
         func_quick_check_runable = ""
         func_args_convert = ""
-        fill_with_kw = fill_with_default = ""
+        fill_with_default = ""
+        func_prepare = ""
     return (
         func_quick_check_size + func_quick_check_runable, 
         func_args_convert, 
-        fill_with_kw+fill_with_default, 
+        fill_with_default, 
         func_call, 
-        has_return
+        has_return,
+        func_prepare
     )
 
 hash_to_key_map = {}
@@ -508,6 +543,7 @@ def compile_src(src, h, basename):
         arr_fill_with_default = []
         arr_func_call = []
         arr_has_return = []
+        arr_func_prepare = []
         self_as_arg0 = False
         for df in dfs:
             self_as_arg0 = class_info and \
@@ -520,6 +556,7 @@ def compile_src(src, h, basename):
             arr_fill_with_default.append(res[2])
             arr_func_call.append(res[3])
             arr_has_return.append(res[4])
+            arr_func_prepare.append(res[5])
             
         slot_name = None
         func_cast = ""
@@ -732,11 +769,14 @@ def compile_src(src, h, basename):
                 uint64 arg_filled=0;
                 (void)arg_filled;
                 {"".join([f'''
+                {{
+                {arr_func_prepare[did]}
                 if ({arr_func_quick_check_runable[did]}) {{
                     matched_overload=true;
                     {arr_func_args_convert[did]};
                     {arr_fill_with_default[did]};
                     {arr_func_return[did]};
+                }}
                 }}
                 '''
                 for did in range(len(arr_func_return))
