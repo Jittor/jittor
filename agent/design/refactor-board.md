@@ -126,7 +126,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 0.02 | 设备过滤后 bases 为空或方法数为 0 时生成器直接 raise | 已合并 | gates | e5eb0d05 |
 | 0.03 | `tests/compiler/test_jit_tests.py` 进 CPU 门禁，并断言 … | 已合并 | gates | a5e7f654 |
 | 0.04 | 门禁改为「整个 `tests/` 减显式排除清单」，排除项必须写理由 | 已合并 | gates | 6adbf488、689e206b |
-| 0.05 | 生态对拍进 nightly | 待领 | | |
+| 0.05 | 生态对拍进 nightly | 已合并 | gates | 97125c6e。`nox -s ecosystem` + `.github/workflows/ecosystem.yml`（每天 02:00）。**fail-open 是这里的真问题**：这些用例在 `REAL_TORCH_PYTHON` 没设时自我 skip（对的，拿 shim 和自己比证明不了什么），于是丢了 oracle 的 nightly 会**为它唯一存在的理由报成功**。三道闸：`JITTOR_REQUIRE_REAL_TORCH=1` 时把「缺 torch」从 0.18 的环境解释里撤走并让这类 skip 退出非零、逐条列出哪些对拍没发生；session 层缺 oracle 直接 abort；起手在 oracle 解释器里断言它的 `torch` **不是** shim（防的是最坏情况：两边其实是同一棵树，对拍全绿而什么都没证明——本机 jt311 的 `torch` 正是 shim）。本机验证（jt311 对 jt312b 的 torch 2.12.1）：12 个 CPU 对拍用例真跑、逐参数与逐输入梯度全过、8 分 23 秒 |
 | 0.06 | `make_tensor` 种子改为 `hash(nodeid, shape, dtype)` … | 进行中 | gates |  |
 | 0.07 | 缓存路径追加构建配置指纹 | 已合并 | 构建 | 82dfce6e、6379b2b5、6fdb3807、b25fcdfa（复验） |
 | 0.08 | 锁统一为一种类型、一个 fd | 已合并 | 构建 | 460bead0 |
@@ -139,7 +139,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 0.15 | 门禁分两层 | 进行中 | gates | 第一步已合并（去掉 `stop_on_first_error`、同模式目标合并成一次调用，一轮报出全部失败）。smoke/full 分层与 xdist 等跨用例状态泄漏清单出来再做——在知道哪些用例互相污染之前并行分片，是把一个已知问题换成一个难查的问题 |
 | 0.16 | `test_device_parity.py` 按算子分片并行，不再在 `setUpClass`… | 待领 | | |
 | 0.17 | `pyproject.toml` 的 `pythonpath` 改由 conftest 按环境变… | 已合并 | 构建 | b19d098f |
-| 0.18 | 门禁每条目断言至少执行 1 个非 skip 用例 | 进行中 | gates | ee29bee3（记账与报告已合并；`EXECUTES_NOTHING` 待全树数据填完后开 `JITTOR_TEST_REQUIRE_EXECUTION`） |
+| 0.18 | 门禁每条目断言至少执行 1 个非 skip 用例 | 已合并 | gates | ee29bee3、d00c17aa。恒 skip 的判据**从路径清单改成规则**：读测试自己写的 skip 理由，全都在说「这台机器缺某样东西」才算解释得通。清单版在这台机器上会是 73 条、换台机器又是另外 73 条，而且每加一个设备测试都要记得报到。规则一上线就抓出四个说不清自己缺什么的文件（`Not use cub, Skip`、`skip_this_test`），都改成说明缺什么，而不是给它们开豁免 |
 | 0.19 | 结构测试从「精确清单」改成「规则」 | 已合并 | gates | c3bcd277 |
 | 0.20 | 布局收尾 | 待领 | | |
 | 0.21 | 测试起的子进程不带 PYTHONPATH，门禁机器上是假绿 | 已合并 | gates | 46dbe946、a5ce7310 |
