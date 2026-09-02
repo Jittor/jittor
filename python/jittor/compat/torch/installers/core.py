@@ -620,7 +620,7 @@ def install_misc(ctx):
             if index is not None:
                 try:
                     jt.set_device(int(index))
-                except Exception as error:
+                except (AttributeError, RuntimeError, TypeError, ValueError) as error:
                     raise RuntimeError(
                         "torch.set_default_device(%r): %s" % (device, error))
             return None

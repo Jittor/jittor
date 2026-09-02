@@ -369,7 +369,7 @@ def _install_cuda(g, registry=None):
             return None
         try:
             jt.set_device(int(index))
-        except Exception as error:
+        except (AttributeError, RuntimeError, TypeError, ValueError) as error:
             raise RuntimeError(
                 "torch.cuda.set_device(%r): %s" % (device, error))
         return None
