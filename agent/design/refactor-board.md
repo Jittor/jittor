@@ -226,15 +226,15 @@
 | 7.06 | 依赖单向化 core→tensor→nn/optim→distributed→fsdp→适配器 | 待领 | | |
 | 7.07 | 第三方库补丁搬出 compat/ | 待领 | | |
 | 7.08 | `torch.dtype` 改真正的对象而非 str 子类 | 待领 | | |
-| 7.09 | `torch.library` | 待领 | | |
-| 7.10 | `torch.compile`/`jit.trace`/`jit.script` 保留 pass… | 待领 | | |
-| 7.11 | autograd 语义 | 待领 | | |
+| 7.09 | `torch.library` | 进行中 | 兼容层分区 | |
+| 7.10 | `torch.compile`/`jit.trace`/`jit.script` 保留 pass… | 进行中 | 兼容层分区 | |
+| 7.11 | autograd 语义 | 进行中 | 兼容层分区 | |
 | 7.12 | 独立 torch 包 | 待领 | | |
 | 7.13 | FSDP2 | 待领 | | |
-| 7.14 | vLLM 边界检查把 `torch` 视作 jittor 别名 | 待领 | | |
+| 7.14 | vLLM 边界检查把 `torch` 视作 jittor 别名 | 进行中 | 兼容层分区 | |
 | 7.15 | `_rebuild_tensor_v2` 按 stride 还原或报错 | 待领 | | |
-| 7.16 | compat/ 内 129 个 `except: pass` 与 258 个宽泛 except … | 待领 | | |
-| 7.17 | `runtime.enable()` 只把 shim 的 site 目录加进 sys.path … | 待领 | | |
+| 7.16 | compat/ 内 129 个 `except: pass` 与 258 个宽泛 except … | 进行中 | 兼容层分区 | |
+| 7.17 | `runtime.enable()` 只把 shim 的 site 目录加进 sys.path … | 进行中 | 兼容层分区 | |
 | 7.18 | 布局收尾 | 待领 | | |
 | 8.01 | 描述符与 workspace 一律 RAII | 待领 | | |
 | 8.02 | 集合通信走通信流加事件依赖，支持 `GroupStart/End` 桶化 | 待领 | | |
