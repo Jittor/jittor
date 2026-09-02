@@ -65,7 +65,7 @@ _OWNERSHIP = {
     },
     dtensor: {
         "DeviceMesh", "init_device_mesh", "Placement", "Replicate", "Shard",
-        "Partial", "_mark_dtensor", "_DTensorMeta", "DTensor",
+        "Partial", "_StridedShard", "_mark_dtensor", "_DTensorMeta", "DTensor",
         "distribute_tensor", "distribute_module", "is_dtensor",
         "_shape_from_args", "_np_dtype", "_dtensor_from_array", "empty",
         "ones", "zeros", "full", "rand", "randn", "linspace", "logspace",

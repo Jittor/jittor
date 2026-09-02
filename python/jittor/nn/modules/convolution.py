@@ -268,7 +268,13 @@ class Conv1d(jt.Module):
             raise ValueError("Input shape must be `(N, C, L)`!")
         N,C,D = x.shape
         assert C==self.in_channels
+        # Re-seat both parameters on the inner 2d convolution every call. A loader that
+        # *replaces* the parameter Var rather than writing into it -- which is what
+        # `from_pretrained` does through `module._parameters[name] = value` -- otherwise leaves
+        # the inner convolution holding the tensors from construction, so the layer would keep
+        # convolving with its initial bias while `self.bias` reports the checkpoint's.
         self._conv[0].weight = self.weight.unsqueeze(-1)
+        self._conv[0].bias = self.bias
         x = x.unsqueeze(-1)
         x = self._conv[0](x)
         y = x.squeeze(-1)

@@ -183,8 +183,8 @@ def install_with_registry(dist, torch_module=None, registry=None):
     for owner, names in (
         (dtensor, (
             "DeviceMesh", "init_device_mesh", "DTensor", "Placement",
-            "Replicate", "Shard", "Partial", "distribute_tensor",
-            "distribute_module", "is_dtensor",
+            "Replicate", "Shard", "_StridedShard", "Partial",
+            "distribute_tensor", "distribute_module", "is_dtensor",
         )),
         (config, (
             "StateDictType", "ShardingStrategy", "BackwardPrefetch",
@@ -249,8 +249,8 @@ def install_with_registry(dist, torch_module=None, registry=None):
     }
     for mod in (tensor_mod, tensor_legacy_mod, tensor_api_mod, tensor_placement_mod,
                 tensor_utils_mod):
-        for k in ("DTensor", "Placement", "Replicate", "Shard", "Partial",
-                  "DeviceMesh", "init_device_mesh", "distribute_tensor",
+        for k in ("DTensor", "Placement", "Replicate", "Shard", "_StridedShard",
+                  "Partial", "DeviceMesh", "init_device_mesh", "distribute_tensor",
                   "distribute_module", "is_dtensor"):
             setattr(mod, k, exports[k])
         for k, v in tensor_factories.items():

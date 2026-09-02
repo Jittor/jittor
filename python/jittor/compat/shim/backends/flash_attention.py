@@ -342,7 +342,10 @@ def _ensure_official_cutlass(root: pathlib.Path) -> bool:
     return True
 
 
-_OFFICIAL_FLASH_ATTN_HEAD_DIMS = ["32", "64", "96", "128", "192", "256"]
+# Every head dimension upstream instantiates. The list has to be complete, not just the ones a
+# caller asks to build: dimensions left out here get no generated stub either, and flash-attn's
+# dispatch still references them, so a missing entry is an undefined symbol at load time.
+_OFFICIAL_FLASH_ATTN_HEAD_DIMS = ["32", "64", "96", "128", "160", "192", "256"]
 _OFFICIAL_FLASH_ATTN_DTYPES = ["fp16", "bf16"]
 
 

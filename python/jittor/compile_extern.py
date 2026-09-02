@@ -287,7 +287,9 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
         include_search_dirs = component_include_dirs + [cuda_include, extra_include_path, "/usr/include"]
         library_search_dirs = component_lib_dirs + [
             cuda_bin, cuda_lib, extra_lib_path,
-            f"/usr/lib/{arch_key}-linux-gnu", "/usr/lib",
+            # Debian-style multiarch, then the RPM-style 64-bit directory: on RHEL-derived
+            # distributions /usr/lib is 32-bit only and the CUDA libraries live in /usr/lib64.
+            f"/usr/lib/{arch_key}-linux-gnu", "/usr/lib64", "/usr/lib",
         ]
         cuda_include_name = search_file(include_search_dirs, lib_name+".h")
         extra_flags = f' -I"{os.path.dirname(cuda_include_name)}" ' + extra_flags
@@ -334,15 +336,22 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
                     cudnn_major = int(match.group(1)) if match else None
                 except OSError:
                     pass
-            if cudnn_major and cudnn_major >= 9:
-                raise RuntimeError(
-                    "Jittor currently requires cuDNN 8; cuDNN %s uses removed legacy RNN APIs. "
-                    "Install jittor[cuda12] for cuDNN 8.9.7." % cudnn_major
+            # cuDNN 9 removed the legacy RNN API (`cudnnRNNForwardTraining`,
+            # `cudnnGetRNNLinLayerMatrixParams` and friends) that `cudnn_rnn_op` is written
+            # against. Every convolution entry point the other operators use is still present,
+            # so only the RNN operators are dropped: `nn.RNN`/`LSTM`/`GRU` then run their
+            # native Jittor implementation instead of silently failing to link.
+            globals()["cudnn_supports_rnn"] = not (cudnn_major and cudnn_major >= 9)
+            if not globals()["cudnn_supports_rnn"]:
+                LOG.i(
+                    f"cuDNN {cudnn_major} removed the legacy RNN API. cuDNN convolution stays "
+                    "enabled; RNN/LSTM/GRU use the native Jittor implementation."
                 )
             # cuDNN 8 wheels contain only versioned split libraries.  Load all
             # six before the public library so RNN and convolution symbols are
-            # available without relying on LD_LIBRARY_PATH.
-            if nvcc_version >= (11,0,0) and not cuda_wheel_stack:
+            # available without relying on LD_LIBRARY_PATH. cuDNN 9 merged them back into
+            # libcudnn_ops/libcudnn_cnn/libcudnn_adv, so this preload is cuDNN 8 only.
+            if nvcc_version >= (11,0,0) and not cuda_wheel_stack and globals()["cudnn_supports_rnn"]:
                 libs = [
                     "libcudnn_ops_infer.so", "libcudnn_ops_train.so",
                     "libcudnn_cnn_infer.so", "libcudnn_cnn_train.so",
@@ -370,6 +379,10 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
     for r, _, f in os.walk(culib_src_dir):
         for fname in f:
             culib_src_files.append(os.path.join(r, fname))
+    if lib_name == "cudnn" and not globals().get("cudnn_supports_rnn", True):
+        culib_src_files = [
+            f for f in culib_src_files if "rnn" not in os.path.basename(f)
+        ]
     if len(culib_src_files) == 0:
         return
 
@@ -914,6 +927,9 @@ if FIX_TORCH_ERROR:
         pass
 
 cudnn = cublas = curand = cufft = cusparse = None
+# Set by `setup_cuda_lib` once the cuDNN major version is known. cuDNN 9 dropped the legacy
+# RNN API the `cudnn_rnn` operators are written against, so they are not built there.
+cudnn_supports_rnn = True
 
 # Env/file-based distributed mode (MPI-free) for Ascend. The launcher sets
 # JT_HCCL_* and spawns one plain process per rank. We use this because the

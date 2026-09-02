@@ -91,7 +91,7 @@ from .normalization import (
     layer_norm,
 )
 from .padding import pad
-from .pooling import adaptive_avg_pool2d, avg_pool2d
+from .pooling import adaptive_avg_pool1d, adaptive_avg_pool2d, avg_pool2d
 from .shape import flatten, identity
 from .softmax import _get_softmax_dim, log_sigmoid, log_softmax, logsumexp, softmax
 from .tensor import kron, one_hot, tensordot
@@ -106,6 +106,7 @@ upsample = resize
 
 __all__ = sorted(
     (
+        "adaptive_avg_pool1d",
         "adaptive_avg_pool2d",
         "affine_grid",
         "affine_grid_generator_4D",

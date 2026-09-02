@@ -263,8 +263,8 @@ _IMPLEMENTATION_SYMBOLS = (
             "ReplicationPad2d",
         ),
     ),
-    (parameter_layers, ("Parameter", "ParameterList")),
-    (pooling_function, ("adaptive_avg_pool2d", "avg_pool2d")),
+    (parameter_layers, ("Buffer", "Parameter", "ParameterList")),
+    (pooling_function, ("adaptive_avg_pool1d", "adaptive_avg_pool2d", "avg_pool2d")),
     (pooling, ("AvgPool2d", "AdaptiveAvgPool2d")),
     (recurrent_base, ("RNNBase",)),
     (recurrent_cells, ("LSTMCell", "RNNCell", "GRUCell")),
@@ -310,6 +310,7 @@ _COMPAT_PATCHED_SYMBOLS = {
 }
 _RUNTIME_PATCHED_SYMBOLS = _ACL_PATCHED_SYMBOLS | _COMPAT_PATCHED_SYMBOLS
 _FUNCTIONAL_API = (
+    "adaptive_avg_pool1d",
     "adaptive_avg_pool2d",
     "affine_grid",
     "affine_grid_generator_4D",
@@ -440,6 +441,7 @@ _MODULE_API = (
     "BatchNorm2d",
     "BatchNorm3d",
     "Bilinear",
+    "Buffer",
     "CTCLoss",
     "ComplexNumber",
     "ConstantPad1d",

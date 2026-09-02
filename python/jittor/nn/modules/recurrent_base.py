@@ -168,7 +168,11 @@ class RNNBase(jt.Module):
                 hx = (jt.zeros((num_directions * self.num_layers, input.shape[1], self.hidden_size), dtype=input.dtype),
                       jt.zeros((num_directions * self.num_layers, input.shape[1], self.hidden_size), dtype=input.dtype))
 
-        if jt.flags.use_cuda and jt.cudnn and self.proj_size == 0 and jt.compiler.is_cuda:
+        # `cudnn_rnn` is absent when Jittor is built against cuDNN 9, which removed the legacy
+        # RNN API it wraps; the native implementation below covers that case.
+        has_cudnn_rnn = jt.cudnn is not None and hasattr(jt.cudnn.ops, "cudnn_rnn")
+
+        if jt.flags.use_cuda and has_cudnn_rnn and self.proj_size == 0 and jt.compiler.is_cuda:
             output, hidden_n = self._execute_cudnn_rnn(input, hx)
             # batch_first: the input was permuted to (seq,batch,feat) above; permute the
             # output back to (batch,seq,feat) to match torch (and jittor's own docstring).

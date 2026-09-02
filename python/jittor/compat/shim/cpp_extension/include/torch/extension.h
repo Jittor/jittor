@@ -260,6 +260,9 @@ public:
     Tensor transpose(int64_t, int64_t) const {
         throw std::runtime_error("Tensor::transpose is not implemented in the Jittor torch shim");
     }
+    Tensor max() const {
+        throw std::runtime_error("Tensor::max is not implemented in the Jittor torch shim");
+    }
     Tensor clone() const;
     // in-place reallocation (diff-gaussian-rasterization's resizeFunctional grows
     // empty byte buffers to the size the rasterizer computes): swaps the underlying

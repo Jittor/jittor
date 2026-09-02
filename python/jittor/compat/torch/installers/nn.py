@@ -705,9 +705,17 @@ def _install_nn_extras(nn, registry=None):
                 self.weight = _jt2.ones(normalized_shape) if elementwise_affine else None
             def execute(self, x):
                 import jittor as _jt2
-                v = (x.float32() ** 2).mean(-1, keepdims=True)
-                x = x * _jt2.rsqrt(v + self.eps)
-                return x * self.weight if self.weight is not None else x
+                # Accumulate the mean square in float32 for range, then come back to the input's
+                # dtype, as torch does: `nn.RMSNorm` answers in the dtype it was given, even when
+                # the weight is wider. Staying in float32 here would widen everything downstream
+                # -- in a bfloat16 transformer that is the whole attention path.
+                dtype = x.dtype
+                value = x.float32()
+                scale = _jt2.rsqrt((value * value).mean(-1, keepdims=True) + self.eps)
+                out = (value * scale).cast(dtype)
+                if self.weight is not None:
+                    out = (out * self.weight).cast(dtype)
+                return out
         nn.RMSNorm = RMSNorm
     # Transformer modules build on the canonical jittor.nn.MultiheadAttention.
     import jittor as _jtm

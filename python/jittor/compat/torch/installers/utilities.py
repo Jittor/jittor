@@ -507,15 +507,27 @@ def install(ctx):
             return list(x), None
         def _list_unflatten(values, context):
             return list(values)
-        def _list_flatten_with_keys(x):
-            return [(i, v) for i, v in enumerate(x)], None
         def _tuple_flatten(x):
             return list(x), None
+        def _tuple_unflatten(values, context):
+            return tuple(values)
         def _dict_flatten(x):
             keys = list(x.keys())
             return [x[k] for k in keys], keys
         def _dict_unflatten(values, context):
             return {k: v for k, v in zip(context, values)}
+        # The `*_with_keys` variants pair each child with the key that reaches it, so callers
+        # can report a path into the tree. Torch keys sequences by position and mappings by
+        # key, and returns the same context as the plain flatten; keep both properties.
+        def _list_flatten_with_keys(x):
+            values, context = _list_flatten(x)
+            return [(SequenceKey(i), v) for i, v in enumerate(values)], context
+        def _tuple_flatten_with_keys(x):
+            values, context = _tuple_flatten(x)
+            return [(SequenceKey(i), v) for i, v in enumerate(values)], context
+        def _dict_flatten_with_keys(x):
+            values, context = _dict_flatten(x)
+            return [(MappingKey(k), v) for k, v in zip(context, values)], context
         def _get_node_type(x):
             return dict if isinstance(x, dict) else type(x)
         SUPPORTED_NODES = {
@@ -564,8 +576,12 @@ def install(ctx):
         _pytree._list_flatten = _list_flatten
         _pytree._list_unflatten = _list_unflatten
         _pytree._list_flatten_with_keys = _list_flatten_with_keys
+        _pytree._tuple_flatten = _tuple_flatten
+        _pytree._tuple_unflatten = _tuple_unflatten
+        _pytree._tuple_flatten_with_keys = _tuple_flatten_with_keys
         _pytree._dict_flatten = _dict_flatten
         _pytree._dict_unflatten = _dict_unflatten
+        _pytree._dict_flatten_with_keys = _dict_flatten_with_keys
         _pytree.tree_flatten = _tree_flatten
         _pytree.tree_unflatten = _tree_unflatten
         _pytree.tree_map = lambda f, x: f(x)

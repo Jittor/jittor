@@ -92,4 +92,30 @@ def adaptive_avg_pool2d(input, output_size):
     return output.reduce("sum", [4, 5]) / pixel_count[None, None, ...]
 
 
-__all__ = ["adaptive_avg_pool2d", "avg_pool2d"]
+def adaptive_avg_pool1d(input, output_size):
+    """Apply one-dimensional adaptive average pooling with overlapping bins.
+
+    Routed through the two-dimensional kernel over a singleton height so both spellings place
+    bin boundaries identically: output `i` averages `[floor(i * L / out), ceil((i + 1) * L / out))`,
+    a window whose width varies when `out` does not divide `L`.
+    """
+    if isinstance(output_size, (tuple, list)):
+        length = output_size[0]
+    else:
+        length = output_size
+    if length is None:
+        length = input.shape[-1]
+
+    batched = input.ndim == 3
+    if not batched:
+        if input.ndim != 2:
+            raise ValueError(
+                "adaptive_avg_pool1d expects a (N, C, L) or (C, L) input, got shape "
+                f"{tuple(input.shape)}"
+            )
+        input = input.unsqueeze(0)
+    pooled = adaptive_avg_pool2d(input.unsqueeze(2), (1, int(length))).squeeze(2)
+    return pooled if batched else pooled.squeeze(0)
+
+
+__all__ = ["adaptive_avg_pool1d", "adaptive_avg_pool2d", "avg_pool2d"]

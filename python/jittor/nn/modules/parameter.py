@@ -72,6 +72,24 @@ def _make_parameter(data, requires_grad=True):
     return data
 
 
+def _make_buffer(data, persistent=True):
+    """Torch-compatible Buffer wrapper.
+
+    Marking the Var is enough to give it the buffer role: ``Module.__setattr__`` keeps a Var
+    tagged ``is_buffer`` out of the parameter set, and ``named_buffers`` reports it even when
+    the attribute name was never passed to ``register_buffer``. As with Parameter, the wrapper
+    shares the supplied data instead of cloning it.
+    """
+    if data is None:
+        data = jt.empty(0)
+    if not isinstance(data, jt.Var):
+        data = jt.array(data)
+    data.is_buffer = True
+    data.persistent = bool(persistent)
+    data._is_torch_parameter = False
+    return data
+
+
 def _run_subclass_init(cls, var, args, kwargs):
     """Run a Parameter subclass's ``__init__`` and keep the state it sets.
 
@@ -170,4 +188,23 @@ class Parameter(metaclass=_ParameterMeta):
         """Accept whatever __new__ accepted; the Var is already built."""
 
 
-__all__ = ["Parameter", "ParameterList"]
+class _BufferMeta(type):
+    def __instancecheck__(cls, obj):
+        return isinstance(obj, jt.Var) and bool(getattr(obj, "is_buffer", False))
+
+
+class Buffer(metaclass=_BufferMeta):
+    """Semantic buffer role backed by a marked :class:`jittor.Var`.
+
+    Assigning one to a module is the declarative form of ``register_buffer``: state that moves
+    and serialises with the module but is never handed to an optimizer.
+    """
+
+    def __new__(cls, data=None, *, persistent=True):
+        return _make_buffer(data, persistent=persistent)
+
+    def __init__(self, *args, **kwargs):
+        """Accept whatever __new__ accepted; the Var is already built."""
+
+
+__all__ = ["Buffer", "Parameter", "ParameterList"]

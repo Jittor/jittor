@@ -127,6 +127,23 @@ class Shard(Placement):
         return "Shard(dim=%s)" % self.dim
 
 
+class _StridedShard(Shard):
+    """A shard whose local pieces are interleaved rather than contiguous.
+
+    Torch introduces this when a dimension is sharded twice, as FSDP2 over tensor parallelism
+    does: `split_factor` is the number of times the dimension was already split before this
+    placement applies. Libraries import it by name to describe such a mesh, which is what this
+    surface records.
+    """
+
+    def __init__(self, dim=0, split_factor=1):
+        super().__init__(dim)
+        self.split_factor = int(split_factor)
+
+    def __repr__(self):
+        return "_StridedShard(dim=%s, sf=%s)" % (self.dim, self.split_factor)
+
+
 class Partial(Placement):
     def __init__(self, reduce_op="sum"):
         self.reduce_op = reduce_op
@@ -321,6 +338,7 @@ _EXPORTS = (
     "Placement",
     "Replicate",
     "Shard",
+    "_StridedShard",
     "Partial",
     "_mark_dtensor",
     "_DTensorMeta",

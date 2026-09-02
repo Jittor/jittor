@@ -77,7 +77,7 @@ from .padding import (
     ReplicationPad2d,
     ZeroPad2d,
 )
-from .parameter import Parameter, ParameterList
+from .parameter import Buffer, Parameter, ParameterList
 from .pooling import AdaptiveAvgPool2d, AvgPool2d
 from .recurrent import GRU, LSTM, RNN
 from .recurrent_base import RNNBase
@@ -109,6 +109,7 @@ __all__ = sorted(
         "BatchNorm2d",
         "BatchNorm3d",
         "Bilinear",
+        "Buffer",
         "CTCLoss",
         "ComplexNumber",
         "ConstantPad1d",

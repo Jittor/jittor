@@ -444,6 +444,16 @@ def install(ctx):
     def _heaviside(input, values):
         return (input > 0).float32() + (input == 0).float32() * values
     _alias("heaviside", _heaviside); Var.heaviside = _heaviside
+    def _sinc(input):
+        x = input if isinstance(input, Var) else jt.array(input)
+        if not x.dtype.is_float():
+            x = x.float32()
+        scaled = x * float(np.pi)
+        # sinc(0) is 1 by the limit; feed the division a non-zero denominator there so the
+        # guarded branch is never selected out of a NaN.
+        safe = jt.ternary(x == 0, jt.ones_like(scaled), scaled)
+        return jt.ternary(x == 0, jt.ones_like(scaled), jt.sin(safe) / safe)
+    _alias("sinc", _sinc); Var.sinc = _sinc
     def _float_power(input, exponent):
         b = exponent.float64() if isinstance(exponent, Var) else exponent
         return (input.float64() ** b)
@@ -677,6 +687,20 @@ def install_signal(ctx):
         window = 0.5 - 0.5 * np.cos(2.0 * np.pi * index / denominator)
         return g.from_numpy(window.astype(np.float32))
 
+    def kaiser_window(window_length, periodic=True, beta=12.0, *, dtype=None,
+                      device=None, requires_grad=False, **kwargs):
+        length = int(window_length)
+        if length <= 0:
+            return g.from_numpy(np.zeros(0, np.float32))
+        if length == 1:
+            return g.from_numpy(np.ones(1, np.float32))
+        # `np.kaiser` is the symmetric window. torch's periodic form is the symmetric window of
+        # the next length with its last, duplicate sample dropped, which is what makes it tile.
+        window = np.kaiser(length + 1 if periodic else length, float(beta))
+        if periodic:
+            window = window[:-1]
+        return g.from_numpy(window.astype(np.float32))
+
     def stft(input, n_fft, hop_length=None, win_length=None, window=None,
              center=True, pad_mode="reflect", normalized=False, onesided=True,
              return_complex=True, **kwargs):
@@ -720,5 +744,7 @@ def install_signal(ctx):
 
     if not hasattr(g, "hann_window"):
         g.hann_window = hann_window
+    if not hasattr(g, "kaiser_window"):
+        g.kaiser_window = kaiser_window
     if not hasattr(g, "stft"):
         g.stft = stft
