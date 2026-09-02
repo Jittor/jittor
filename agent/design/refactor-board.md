@@ -290,7 +290,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 6.B05 | cuBLAS `use_tensorcore` 三目判断写反 | 已合并 | cudabk | 9f5c3e90 |
 | 6.B06 | `var_broadcast` 用传入的 root | 已合并 | dist | 89dd014b |
 | 6.B07 | cuDNN RNN（dropout 掩码/work_space/infer_shape 泄漏 + 按实际 dtype） | 已合并 | cudabk | f5540427、da5bcad4 |
-| 6.B08 | cuSPARSE | 已合并 | cudabk | bf708f1c |
+| 6.B08 | cuSPARSE | 已合并 | cudabk | 44b8a8a6 |
 | 6.B09 | curand 奇数长度用临时 buffer 不越界写 | 已合并 | cudabk | 08a1bd66 |
 | 6.B10 | MPI fp16 归约统一标量参考实现加可选 SIMD 与运行期 CPUID 检测 | 已合并 | dist | 734d55a1 |
 | 6.B11 | ACL 六个算子静默把输入升到 fp32 | 已合并 | dist | 492e5385 |
