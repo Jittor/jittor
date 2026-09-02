@@ -77,8 +77,11 @@ subprocess.run([os.environ["REAL_TORCH_PY"], "oracle.py", in_npz, out_npz], chec
 ```
 
 测试用例本身**不要**依赖真 torch（CI 里没有）：把 oracle 跑出来的数字**固化成常量**
-写进测试，或者用 `unittest.skipUnless(os.environ.get("REAL_TORCH_PY"), ...)`。固化时在
-注释里写清楚是哪个 torch 版本、哪段脚本算出来的。
+写进测试，或者换成一个能算出同样结果的 numpy 参考实现。固化时在注释里写清楚是哪个
+torch 版本、哪段脚本算出来的。仓库里已有的
+`tests/_helpers/torch_runtime.py`（`modules_available` / `import_torch_modules` +
+`REAL_TORCH_SITE`）是给"进程里预装了二进制 torch"的那种会话用的，没预装时它会让整个
+用例 skip——所以**不要**把新的对拍用例挂在它上面，否则日常跑的是 skip 不是绿。
 
 ## 3. 容差
 
@@ -119,15 +122,20 @@ assert (out.numpy() == 0).all()   # 必须是 ==，不是 allclose
 
 ## 5. fail-before / pass-after 的机械做法
 
+**不要用 `git stash`。** stash 栈存在公共的 `.git` 里，多个 worktree 共用同一个栈，
+`pop` 出来的可能是别人的改动。用补丁文件：
+
 ```bash
-git stash push -q <只 stash 被改的源文件>        # 测试文件是 untracked，不会被 stash
-<跑测试>                                        # 必须看到 FAILED，并确认失败原因就是该缺陷
-git stash pop
+git diff <被改的源文件> > "$TMPDIR/wip.patch"   # 测试文件保持在树里，它是新增的
+git checkout -- <被改的源文件>
+<跑测试>                                        # 必须看到 FAILED
+git apply "$TMPDIR/wip.patch"
 <跑测试>                                        # 必须全绿
 ```
 
 失败原因要看一眼：如果修前是 `ImportError` / 形状不匹配之类的**别的**原因，说明测试
-测的不是这个缺陷。
+测的不是这个缺陷。反过来，修前"挂死 / 段错误"也是有效证据（越界循环就是这样），
+用 `timeout N` 记录退出码 124 即可，不必要求它以 assert 失败。
 
 ## 6. `jt.code` 内核（code op）缺陷的取证
 
