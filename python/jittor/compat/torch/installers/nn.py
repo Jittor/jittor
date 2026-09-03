@@ -1299,6 +1299,67 @@ def _install_module_methods(nn, registry=None):
             yield (prefix + ("." if prefix and name else "") + name, mod)
     M.named_modules = _named_modules
 
+    # Native Jittor de-duplicates Vars in state_dict().  That is appropriate for
+    # its historical parameter-list API, but PyTorch state_dict() deliberately
+    # keeps every attribute path for tied weights.  Hugging Face BERT MLM, for
+    # example, must expose both word_embeddings.weight and decoder.weight even
+    # though named_parameters() correctly yields the shared Parameter once.
+    def _state_dict(self, to=None, recurse=True, destination=None, prefix="",
+                    keep_vars=None):
+        states = {}
+        stack = []
+
+        def callback(parents, key, module, n_children):
+            stack.append(str(key))
+            values = module.__dict__
+            if isinstance(module, jt.nn.ParameterList):
+                values = module.params
+            non_persistent = module.__dict__.get(
+                "_non_persistent_buffer_names", ()
+            )
+            non_parameters = module.__dict__.get("_non_parameter_names", ())
+            for name, value in values.items():
+                if isinstance(name, str) and name.startswith("_"):
+                    continue
+                if not isinstance(value, jt.Var):
+                    continue
+                if name in non_persistent or name in non_parameters:
+                    continue
+                if not getattr(value, "persistent", True):
+                    continue
+                state_name = ".".join(stack[1:] + [str(name)])
+                states[state_name] = value
+                if len(state_name) > len(value.name()):
+                    value.name(state_name)
+
+        def callback_leave(parents, key, module, n_children):
+            stack.pop()
+
+        self.dfs([], None, callback, callback_leave, recurse)
+        if keep_vars is False:
+            states = {
+                name: value.detach() if isinstance(value, jt.Var) else value
+                for name, value in states.items()
+            }
+        if to == "numpy":
+            states = {
+                name: value.numpy() if isinstance(value, jt.Var) else value
+                for name, value in states.items()
+            }
+        elif to == "torch":
+            import torch
+            states = {
+                name: torch.Tensor(value.numpy()) if isinstance(value, jt.Var) else value
+                for name, value in states.items()
+            }
+        if prefix:
+            states = {prefix + name: value for name, value in states.items()}
+        if destination is not None:
+            destination.update(states)
+            return destination
+        return states
+    M.state_dict = _state_dict
+
     # torch's Module.load_state_dict(state, strict=True, assign=False) accepts a
     # `strict` kwarg and returns a namedtuple(missing_keys, unexpected_keys);
     # jittor's takes only `params` and returns None. Wrap for torch callers

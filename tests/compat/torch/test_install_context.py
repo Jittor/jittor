@@ -87,6 +87,48 @@ class TestInstallContext(unittest.TestCase):
         )
         self.assertIs(import_utils.is_torch_npu_available, guarded)
 
+    def test_transformers_generation_preserves_scalar_decoder_start_intent(self):
+        class FakeTensor:
+            def __init__(self, shape):
+                self.shape = shape
+
+            def broadcast(self, shape):
+                return FakeTensor(shape)
+
+        class GenerationMixin:
+            def _prepare_special_tokens(self, generation_config):
+                generation_config._decoder_start_token_tensor = FakeTensor((1,))
+
+            def _prepare_decoder_input_ids_for_generation(
+                self, batch_size, model_input_name, model_kwargs,
+                decoder_start_token_id, device=None,
+            ):
+                del model_input_name, model_kwargs, device
+                return batch_size, decoder_start_token_id.shape
+
+        module = types.ModuleType("transformers.generation.utils")
+        module.GenerationMixin = GenerationMixin
+        self.assertTrue(utilities._patch_transformers_generation_utils(module))
+        self.assertTrue(utilities._patch_transformers_generation_utils(module))
+
+        config = types.SimpleNamespace(decoder_start_token_id=0, bos_token_id=None)
+        model = GenerationMixin()
+        model.config = types.SimpleNamespace(is_encoder_decoder=True)
+        model._prepare_special_tokens(config)
+        result = model._prepare_decoder_input_ids_for_generation(
+            2, "input_ids", {}, config._decoder_start_token_tensor
+        )
+        self.assertEqual(result, (2, (2,)))
+
+        vector_config = types.SimpleNamespace(
+            decoder_start_token_id=[0], bos_token_id=None
+        )
+        model._prepare_special_tokens(vector_config)
+        result = model._prepare_decoder_input_ids_for_generation(
+            2, "input_ids", {}, vector_config._decoder_start_token_tensor
+        )
+        self.assertEqual(result, (2, (1,)))
+
     def test_registry_ensure_publish_and_alias_preserve_identity(self):
         context = self.context()
         package = context.registry.ensure("torch", package=True)

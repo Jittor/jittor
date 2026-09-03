@@ -1,8 +1,8 @@
 # Active Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-08-30
-- Baseline: `a3ae89f0` plus the current ACL product-reduction follow-up
+- Last reviewed: 2026-09-03
+- Baseline: `e27b6b80` plus the Transformers generation/in-place follow-up
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 

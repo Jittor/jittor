@@ -1,8 +1,8 @@
 # Jittor Project Context
 
 - Status: Current index, not a history log
-- Last reviewed: 2026-09-02
-- Baseline reviewed: `d02a72ed` plus the contiguous slice-gradient follow-up
+- Last reviewed: 2026-09-03
+- Baseline reviewed: `26c5fb13` plus the Transformers model-matrix follow-up
 - Owner: Jittor core maintainers
 - Freshness expires: 2026-11-12
 - Review when: a modernization stage lands, a top-level goal changes, or an
@@ -80,8 +80,8 @@ independent binary PyTorch oracle, and compact ResNet18, ViT, GPT-2, and
 diffusion UNet forward/backward parity passes on CPU and CUDA. ROCm, most
 optional downstream dependencies, full training, and performance remain
 separate gates. On a real 910B3, the maintained Ascend gate passes `397 passed, 9 skipped`; float16/float32 `arg_reduce` backward and float32/integer `prod` execute without CPU fallback.
-Transformers 4.56.2 Qwen3-8B float32 loads all 8,190,735,360 parameters; SDPA,
-greedy `arg_reduce`, and mask `all` run on ACL without CPU fallback. A native-shape `empty`
+Transformers 4.56.2 tiny FP32 text core matrix passes 17/17 models on real CUDA, including sliding-window, MQA, fused-QKV, and sparse-MoE paths; see the [17-model matrix](../results/transformers/2026-09-03-transformers-text-core-matrix-cuda.md) and [initial anchors](../results/transformers/2026-09-03-transformers-text-architectures-cuda.md).
+Qwen3-8B float32 loads all 8,190,735,360 parameters; SDPA, greedy `arg_reduce`, and mask `all` run on ACL without CPU fallback. A native-shape `empty`
 fast path brings 0.6B decode to 15.90 token/s versus native `torch_npu` 16.19 token/s.
 Qwen3-0.6B BF16 SDPA passes zero-fallback generation at 14.92 token/s versus native 15.31 token/s.
 Qwen3-0.6B FP32 eager forward/loss/backward also passes zero-fallback at `1.07x-1.12x` native `torch_npu`. Transformers 5.5.3 BF16 completes forward, backward, and AdamW without CPU fallback; explicit fused AdamW matches CANN/PyTorch for two fixed-gradient steps. BF16 embedding/RMSNorm/RoPE training kernels pass independent real-NPU references. After correcting Python-scalar promotion, RMSNorm rounding order, and BF16 SiLU, all 29 hidden states and logits match native `torch_npu` elementwise for the maintained one-step input. Eliminating 57 no-op full-slice gradients and lowering 112 continuous last-axis gradients to cached-zero CANN Cat preserves the exact snapshot and brings the current same-device protocol from `1.195x` to about `1.063x`; direct CANN RoPE reaches `0.988x` but is rejected because its logits and gradient trajectory differ. Cross-framework long training parity and the exact-path performance gate remain open. See the [training report](../results/transformers/2026-08-30-qwen3-ascend-training.md).

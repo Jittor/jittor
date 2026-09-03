@@ -6,6 +6,8 @@
 
 ## 兼容性与功能验证
 
+- [2026-09-03 Transformers 4.56.2 文本核心 17 模型 CUDA 扩展验证](transformers/2026-09-03-transformers-text-core-matrix-cuda.md)
+- [2026-09-03 Transformers 4.56.2 三类文本架构 CUDA 兼容验证](transformers/2026-09-03-transformers-text-architectures-cuda.md)
 - [2026-09-02 verl 核心算法 Ascend 数值、梯度与性能复验](2026-09-02-verl-ascend-core-algorithms.md)
 - [2026-09-01 当前 AArch64 CPU native/Torch 全量门禁](2026-09-01-current-cpu-suite.md)
 - [2026-08-30 MMCV/MMEngine Ascend 数值与梯度对拍](2026-08-30-mmcv-mmengine-ascend-parity.md)
