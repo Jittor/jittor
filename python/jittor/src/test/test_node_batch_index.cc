@@ -23,14 +23,16 @@ JIT_TEST(node_batch_index_is_checked) {
     VarPtr a({4}, "float32");
     Node* node = a.ptr;
 
-    int64 mine = ++tflag_count;
+    TraversalEpoch mine_epoch("batch_index_mine");
+    int64 mine = mine_epoch.stamp;
     node->set_batch_index(mine, 7);
     CHECKop(node->batch_index_at(mine),==,7);
 
     // A second traversal renumbers the same node. This is exactly what the
     // shared custom_data used to allow silently: the first traversal kept
     // reading, and got the second one's index.
-    int64 theirs = ++tflag_count;
+    TraversalEpoch their_epoch("batch_index_theirs");
+    int64 theirs = their_epoch.stamp;
     node->set_batch_index(theirs, 0);
     CHECKop(node->batch_index_at(theirs),==,0);
     expect_error([&]() { node->batch_index_at(mine); });
@@ -76,13 +78,10 @@ JIT_TEST(node_index_table) {
 
 
 
-// Node::tflag is the other shared slot: one global counter, and a traversal
-// that starts while another is walking silently takes the outer one's marks
-// away. TraversalEpoch cannot stop that -- giving each traversal its own marks
-// costs too much on this path -- but it makes it *detected*, and precisely: an
-// inner traversal that never touches a node the outer one marked costs it
-// nothing.
-JIT_TEST(traversal_epoch_detects_overwrite) {
+// A nested synchronous traversal may borrow Node::tflag, but it has to return
+// every outer mark before the outer traversal resumes. Keeping the restoration
+// log on the inner epoch pays nothing on the common, non-nested path.
+JIT_TEST(traversal_epoch_restores_outer_marks) {
     VarPtr a({4}, "float32");
     VarPtr b({4}, "float32");
     {
@@ -96,13 +95,14 @@ JIT_TEST(traversal_epoch_detects_overwrite) {
             // not a problem, and must not be reported as one.
             inner.mark(b.ptr);
             CHECK(outer.marked(a.ptr));
-            // ... but this one takes a node the outer traversal had visited.
+            // This temporarily takes a node the outer traversal had visited.
             inner.mark(a.ptr);
             CHECK(inner.marked(a.ptr));
         }
-        // The outer traversal's answers are no longer true, and saying so is
-        // the whole point: without this it would walk `a` a second time.
-        expect_error([&]() { outer.marked(a.ptr); });
+        // Synchronous nesting has returned, so the outer walk must be able to
+        // continue without revisiting a or losing b's pre-existing stamp.
+        CHECK(outer.marked(a.ptr));
+        CHECK(!outer.marked(b.ptr));
     }
     // A later traversal is unaffected by any of that.
     TraversalEpoch solo("solo");

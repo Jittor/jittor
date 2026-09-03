@@ -68,13 +68,13 @@ DECLARE_FLAG(int, use_cuda_managed_allocator);
 void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int ll, int rr, int64 tt) {
     fused_op.ops.clear();
     fused_op.edges.clear();
-    auto ntt = ++tflag_count;
+    TraversalEpoch fused_epoch("load_fused_op");
     for (int i=ll; i<rr; i++) {
         int opid = fuse_ops[i];
         Op* op = ops[opid];
         uint64_t fid1 = fused_op.ops.size();
         op->custom_data = fid1;
-        op->tflag = ntt;
+        fused_epoch.mark(op);
         fused_op.ops.push_back(op);
     }
     LOGvvv << "Prepare fused_op" << fused_op.ops;
@@ -89,7 +89,7 @@ void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, i
             iid++;
             int iop_id;
             int iv_id;
-            if (v->_inputs.size() && v->input()->tflag == ntt) {
+            if (v->_inputs.size() && fused_epoch.marked(v->input())) {
                 auto e = v->_inputs.front();
                 iop_id = e.node->custom_data;
                 iv_id = e.back->index;
@@ -189,12 +189,12 @@ void check_op_async_error(Op* op, bool is_fused_op, const std::exception& e, jit
 }
 
 static void top_weak_sync(vector<Var*>& vars) {
-    auto t = ++tflag_count;
+    TraversalEpoch epoch("top_weak_sync");
     int64 max_id=0;
     for (auto v : vars) {
         if (v->is_finished()) continue;
         max_id = std::max(v->id, max_id);
-        v->tflag = t;
+        epoch.mark(v);
     }
     while (true) {
         if (sync_ptr == hold_vars.begin())
@@ -203,7 +203,7 @@ static void top_weak_sync(vector<Var*>& vars) {
         auto v = (*next_ptr)->var;
         if (v->id > max_id) break;
         sync_ptr = next_ptr;
-        if (v->tflag == t) continue;
+        if (epoch.marked(v)) continue;
         if (v->_outputs.size()) continue;
         if (v->is_finished()) continue;
         vars.push_back(v);
@@ -255,17 +255,18 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     vector<Node*> bfs_q;
     bfs_q.reserve(vars.size());
     int start_var_num = 0;
+    unique_ptr<TraversalEpoch> batch_epoch;
     while (1) {
         op_num = 0;
         start_var_num = 0;
         bfs_q.clear();
         // get all nodes need to be executed
         int need_opt = 0;
-        auto t = ++tflag_count;
+        batch_epoch.reset(new TraversalEpoch("Executor::run_sync"));
         int64 max_id = 0;
         for (Var* v : vars)
-            if (!v->is_finished() && v->tflag != t) {
-                v->tflag = t;
+            if (!v->is_finished() && !batch_epoch->marked(v)) {
+                batch_epoch->mark(v);
                 start_var_num++;
                 bfs_q.push_back(v);
                 max_id = std::max(max_id, v->id);
@@ -274,8 +275,8 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             auto node = bfs_q[i];
             op_num += !node->is_var();
             for (auto i : node->_inputs)
-                if (i.node->tflag != t && !i.node->is_finished()) {
-                    i.node->tflag = t;
+                if (!batch_epoch->marked(i.node) && !i.node->is_finished()) {
+                    batch_epoch->mark(i.node);
                     need_opt += has_gopt(i.node);
                     bfs_q.push_back(i.node);
                 }
@@ -283,12 +284,12 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             if (weak_sync || node->flags.get(NodeFlags::_fetch)) {
                 for (auto& n : node->_outputs) {
                     // if not in queue and is fetch op
-                    if (n.node->tflag != t &&
+                    if (!batch_epoch->marked(n.node) &&
                         n.node->pending_liveness &&
                         !n.node->is_finished() &&
                         (n.node->id <= max_id ||
                             n.node->flags.get(NodeFlags::_fetch))) {
-                        n.node->tflag = t;
+                        batch_epoch->mark(n.node);
                         need_opt += has_gopt(n.node);
                         bfs_q.push_back(n.node);
                     }
@@ -303,7 +304,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             }
         }
     }
-    auto tt = tflag_count;
+    auto tt = batch_epoch->stamp;
     vector<Op*> ops;
     vector<Var*> all_vars;
     ops.reserve(op_num);
@@ -591,6 +592,10 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     // compile all ops, prevent compiling during running
     parallel_compile_all_ops(queue, range, fused_op, fuse_ops, ops, tt);
 
+    // Planning is the last consumer of the batch tflags. Restore any outer
+    // traversal before SetupFreeBuffer can destroy nodes from this batch.
+    batch_epoch.reset();
+
     // running
     SetupFreeBuffer setup_free_buffer;
     vector<Var*> outputs_bk;
@@ -626,16 +631,17 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         }
         #endif
         if (save_mem) {
-            swap_timestamp = ++tflag_count;
+            TraversalEpoch swap_epoch("Executor::swap");
+            swap_timestamp = swap_epoch.stamp;
             for (auto* var : op->inputs()) {
-                var->tflag = swap_timestamp;
+                swap_epoch.mark(var);
             }
             for (auto* var : op->inputs()) {
                 check_and_swap_out(var, allocator);
             }
             for (auto* var : op->outputs()) {
                 alloc_with_swap(var, allocator, true);
-                var->tflag = swap_timestamp;
+                swap_epoch.mark(var);
             }
         } else {
             for (auto* var : op->outputs()) {

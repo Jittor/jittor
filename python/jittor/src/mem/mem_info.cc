@@ -76,10 +76,9 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     // get the oldest var
     if (trace_py_var) {
         vector<Node*> queue;
-        auto t = ++tflag_count;
+        unordered_set<Node*> seeds;
         for (auto& vh : hold_vars)
-            if (vh->var->tflag != t) {
-                vh->var->tflag = t;
+            if (seeds.insert(vh->var).second) {
                 queue.push_back(vh->var);
             }
         bfs_both(queue, [](Node*){return true;});

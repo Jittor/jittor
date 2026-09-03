@@ -41,11 +41,9 @@ So there are two things to hold, and they are different:
 
 * **the behaviour** -- a full traversal running inside ``run_sync``'s op loop
   does not change the answer.  That is the first case below.
-* **the mechanism** -- when two traversals *do* interleave on that field, the
-  second one's numbering is *detected* rather than silently returned.  That is
-  the second case, and it is the one that keeps holding when somebody writes a
-  new traversal next month.  Asserting only the first would pin today's call
-  order and call it a guarantee.
+* **the mechanism** -- a synchronous inner traversal restores every outer mark
+  before returning.  That is the second case, and it is the one that keeps
+  holding when somebody writes a new traversal next month.
 
 Run::  python -m pytest tests/core/test_traversal_state_isolation.py
 """
@@ -84,13 +82,11 @@ class TestBatchIndexIsChecked(unittest.TestCase):
     def test_reading_a_batch_index_with_a_stale_stamp_is_an_error(self):
         jt.tests.node_batch_index_is_checked()
 
-    def test_a_nested_traversal_taking_an_outer_one_s_marks_is_detected(self):
+    def test_a_nested_traversal_restores_the_outer_one_s_marks(self):
         # The other shared slot: Node::tflag. A traversal that starts while
-        # another is walking overwrites its marks, and the outer one then walks
-        # a graph it has already walked. TraversalEpoch cannot stop that
-        # (per-traversal marks cost too much here, see the [2.02] measurements)
-        # but it reports it, and only when a node was actually taken away.
-        jt.tests.traversal_epoch_detects_overwrite()
+        # another is walking temporarily borrows its marks. TraversalEpoch logs
+        # only those nested writes and restores them before the outer resumes.
+        jt.tests.traversal_epoch_restores_outer_marks()
 
     def test_the_table_the_other_traversals_use_behaves(self):
         # The same question for NodeIndex: a reference stays valid across

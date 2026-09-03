@@ -14,7 +14,7 @@ namespace jittor {
 EXTERN_LIB unordered_map<void*, int64> lived_nodes;
 EXTERN_LIB unordered_map<int64, Node*> lived_nodes_id;
 EXTERN_LIB int64 total_node;
-EXTERN_LIB int64 nt;
+EXTERN_LIB int free_buffer_depth;
 EXTERN_LIB vector<Node*> free_buffer;
 EXTERN_LIB uint8 node_order;
 // Non-zero while lived_nodes is being maintained in a build without
@@ -152,6 +152,12 @@ struct NodeFlags {
         // destructor needs to know which nodes it has to take back out. Ops
         // are swept too, so this cannot be a Var-only bit.
         _lived_tracked = _shared_high,
+        // This node is already queued for deletion by the outermost
+        // SetupFreeBuffer. It used to borrow tflag and a process-global epoch.
+        _queued_for_free,
+        // VarRelay released this node's liveness accounting without destroying
+        // it; graph checking must not report that state as a dangling node.
+        _released,
         _shared_high_end,
     };
     static constexpr int _node_order_nbits = NodeBits::_node_order_nbits;
@@ -420,10 +426,7 @@ struct SetupFreeBuffer {
 
 bool outside;
 inline SetupFreeBuffer() {
-    outside = !nt;
-    if (outside) {
-        nt = ++tflag_count;
-    }
+    outside = free_buffer_depth++ == 0;
 }
 
 inline ~SetupFreeBuffer() {
@@ -431,8 +434,8 @@ inline ~SetupFreeBuffer() {
         for (int i=0; i<free_buffer.size(); i++)
             delete free_buffer[i];
         free_buffer.clear();
-        nt = 0;
     }
+    free_buffer_depth--;
 }
 
 };

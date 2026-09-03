@@ -12,12 +12,14 @@
 #include "graph.h"
 #include "op_compiler.h"
 #include "mem/allocator.h"
+#include "executor.h"
 
 namespace jittor {
 
 static auto make_binary_op = op_constructor<VarPtr, Var*, Var*, NanoString>("binary");
 static auto make_broadcast_to_op = op_constructor<VarPtr, Var*, NanoVector, NanoVector>("broadcast_to");
 static auto make_reduce = op_constructor<VarPtr, Var*, NanoString, NanoVector, bool>("reduce");
+static auto make_array = op_constructor<VarPtr, const void*, NanoVector, NanoString>("array");
 
 JIT_TEST(op_register) {
     VarPtr a({10,10,1}, "float32");
@@ -25,6 +27,22 @@ JIT_TEST(op_register) {
     auto c = make_binary_op(a, b, ns_add);
     CHECK(c->size==1000*4);
     CHECK(c->input()->name_ex()=="binary.add");
+}
+
+JIT_TEST(nested_run_sync_restores_outer_epoch) {
+    float lhs[] = {1.f, 2.f, 3.f, 4.f};
+    float rhs[] = {5.f, 6.f, 7.f, 8.f};
+    auto a = make_array(lhs, {4}, ns_float32);
+    auto b = make_array(rhs, {4}, ns_float32);
+    auto c = make_binary_op(a, b, ns_add);
+
+    vector<Node*> graph{c.ptr};
+    bfs_backward(graph, [](Node*) { return true; });
+    TraversalEpoch outer("outer_around_run_sync");
+    for (Node* node : graph) outer.mark(node);
+
+    exe.run_sync({c.ptr}, false);
+    for (Node* node : graph) CHECK(outer.marked(node));
 }
 
 // Mark vars the batch says have to stay in memory, the way run_sync's
@@ -54,7 +72,8 @@ JIT_TEST(fused_op_relay_matmul) {
     // the three -- into the same field update_ops() packs its own indices
     // into. It is the batch's verdict vector now, indexed the way the executor
     // indexes it, so stamp the batch the way run_sync does.
-    int64 batch_stamp = ++tflag_count;
+    TraversalEpoch batch_epoch("op_relay_batch");
+    int64 batch_stamp = batch_epoch.stamp;
     for (uint i=0; i<q.size(); i++) q[i]->set_batch_index(batch_stamp, i);
     vector<int> var_fused(q.size(), 0);
     CHECKop(q.size(),==,10);

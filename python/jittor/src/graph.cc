@@ -89,7 +89,7 @@ int64 do_graph_check() {
         if (!kv.second) continue;
         auto* node = (Node*) kv.first;
         swept++;
-        if (!visited.count(node) && node->tflag != -1) {
+        if (!visited.count(node) && !node->flags.get(NodeFlags::_released)) {
             if (node->is_var() && node->_inputs.size())
                 continue;
             LOGf << "ERROR dnode" << (void*)node << kv.second << node;
@@ -117,10 +117,9 @@ int64 do_graph_check() {
 DumpGraphs dump_all_graphs() {
     DumpGraphs graphs;
     vector<Node*> queue;
-    auto t = ++tflag_count;
+    unordered_set<Node*> seeds;
     for (auto& vh : hold_vars)
-        if (vh->var->tflag != t) {
-            vh->var->tflag = t;
+        if (seeds.insert(vh->var).second) {
             queue.push_back(vh->var);
             graphs.hold_vars.emplace_back(ss_convert(vh->var));
         }
@@ -155,19 +154,19 @@ DumpGraphs dump_all_graphs() {
 
 void clean_graph() {
     vector<Node*> queue;
-    auto t = ++tflag_count;
+    unordered_set<Node*> seeds;
     for (auto& vh : hold_vars)
-        if (vh->var->tflag != t) {
-            vh->var->tflag = t;
+        if (seeds.insert(vh->var).second) {
             queue.push_back(vh->var);
         }
     bfs_both(queue, [](Node*){return true;});
-    t = ++tflag_count;
+    unordered_set<Node*> held;
+    held.reserve(hold_vars.size());
     for (auto& vh : hold_vars)
-        vh->var->tflag = t;
+        held.insert(vh->var);
     SetupFreeBuffer setup_free_buffer;
     for (auto node : queue) {
-        if (node->tflag != t) {
+        if (!held.count(node)) {
             node->set_stop_grad();
         }
     }

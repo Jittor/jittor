@@ -78,10 +78,9 @@ void MemoryProfiler::check() {
         std::vector<std::pair<std::pair<string, vector<Stack>>, size_t>> live_vars;
         vector<Node*> queue, queue2;
 
-        auto t = ++tflag_count;
+        unordered_set<Node*> seeds;
         for (auto& vh : hold_vars)
-            if (vh->var->tflag != t) {
-                vh->var->tflag = t;
+            if (seeds.insert(vh->var).second) {
                 queue.push_back(vh->var);
             }
         bfs_both(queue, [](Node*){return true;});

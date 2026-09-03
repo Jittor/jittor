@@ -120,13 +120,15 @@ vector<VarPtr> grad(
     // bfs visit find all successors of targets
     LOGvv << "Size of successors:" << ts.size();
     bfs_forward(ts, [](Node*){ return true; });
+    NodeIndex successors;
+    successors.reset(ts.size());
+    for (Node* node : ts) successors[node] = 1;
     vector<Node*> gnodes;
     gnodes.reserve(ts.size());
-    auto nt = tflag_count;
-    if (loss->tflag == nt)
+    if (successors.has(loss))
         gnodes.push_back(loss);
     bfs_backward(gnodes, [&](Node* node) {
-        if (node->tflag != nt)
+        if (!successors.has(node))
             return false;
         if (node->is_var() && node->var()->flag(VarFlags::_graph_freed))
             released = node->var();
@@ -147,7 +149,9 @@ vector<VarPtr> grad(
     
     vector<Node*> sorted;
     toplogical_sort_backward(gnodes, sorted, [](Node*){});
-    nt = tflag_count;
+    NodeIndex grad_nodes;
+    grad_nodes.reset(sorted.size());
+    for (Node* node : sorted) grad_nodes[node] = 1;
     vector<Var*> gvars;
     gvars.reserve(sorted.size());
     // Position of each gradient var in `gvars`. This used to be written into
@@ -170,7 +174,7 @@ vector<VarPtr> grad(
     vector<int> target_id(targets.size());
     for (int i=0; i<targets.size(); i++) {
         Var* var = targets[i];
-        target_id[i] = (var->tflag == nt) ?
+        target_id[i] = gvar_index.has(var) ?
             gvar_index.get(var) : -1;
     }
 
@@ -181,6 +185,8 @@ vector<VarPtr> grad(
 
     vector<pair<Node*, int64>> id_buffer;
     id_buffer.reserve(sorted.size()+10);
+    NodeIndex consumed_grouped_ops;
+    consumed_grouped_ops.reset(sorted.size());
 
     // backup id in custum data
     for (int i=1; i<gvars.size(); i++) {
@@ -188,29 +194,30 @@ vector<VarPtr> grad(
         for (auto it : var->outputs_with_index()) {
             Op* op = it.op;
             auto index = it.index;
-            if (op->tflag != nt) continue;
+            if (!grad_nodes.has(op)) continue;
+            if (op->flag(OpFlags::_grads) && consumed_grouped_ops.has(op))
+                continue;
             id_buffer.emplace_back(op, index);
         
             // backward together
             if (op->flag(OpFlags::_grads)) {
-                // dont backward next time
-                op->tflag = 0;
+                consumed_grouped_ops[op] = 1;
                 for (Var* out : op->outputs()) {
                     id_buffer.emplace_back(
                         out, 
-                        out->tflag == nt ? gvar_index.get(out) : -1);
+                        gvar_index.has(out) ? gvar_index.get(out) : -1);
                 }
                 for (Var* in : op->inputs()) {
                     id_buffer.emplace_back(
                         in, 
-                        in->tflag == nt ? gvar_index.get(in) : -1);
+                        gvar_index.has(in) ? gvar_index.get(in) : -1);
                 }
             } else {
                 // single var backward
                 for (Var* out : op->outputs()) {
                     id_buffer.emplace_back(
                         out, 
-                        out->tflag == nt ? gvar_index.get(out) : -1);
+                        gvar_index.has(out) ? gvar_index.get(out) : -1);
                 }
             }
         }
@@ -317,11 +324,10 @@ vector<VarPtr> grad(
         }
     }
     if (!retain_graph) {
-        auto t = ++tflag_count;
+        unordered_set<Var*> held_vars;
+        held_vars.reserve(hold_vars.size());
         for (auto& vh : hold_vars)
-            if (vh->var->tflag != t) {
-                vh->var->tflag = t;
-            }
+            held_vars.insert(vh->var);
         SetupFreeBuffer setup_free_buffer;
         // Mark before releasing: set_stop_grad drops backward liveness and can
         // queue the node for free. The mark records *why* this var stopped
@@ -329,7 +335,7 @@ vector<VarPtr> grad(
         // backward reaching it can report the released graph instead of
         // returning zeros that look like a legitimate x.stop_grad().
         for (int i=int(gvars.size())-1; i>=0; i--)
-            if (gvars[i]->tflag != t && gvars[i]->backward_liveness) {
+            if (!held_vars.count(gvars[i]) && gvars[i]->backward_liveness) {
                 gvars[i]->set_flag(VarFlags::_graph_freed);
                 gvars[i]->set_stop_grad();
             }

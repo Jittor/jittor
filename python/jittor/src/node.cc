@@ -14,7 +14,7 @@
 namespace jittor {
 
 int64 tflag_count = 0;
-int64 nt = 0;
+int free_buffer_depth = 0;
 // See graph.cc: check_graph turns this on so that the dangling-node half of
 // do_graph_check has something to sweep in a build without NODE_MEMCHECK.
 int node_track_lived = 0;
@@ -110,13 +110,13 @@ void Node::batch_index_mismatch(int64 stamp) const {
 void Node::free() {
     CHECK_EXIST;
     // already scheduled for deletion in this free_buffer round
-    if (tflag == nt) return;
+    if (flags.get(NodeFlags::_queued_for_free)) return;
     // A var that still has an input op and is either alive forward or not yet
     // finished is going to be recomputed or written; it is not garbage.
     if (is_var() && _inputs.size() && (forward_liveness || !is_finished())) {
         return;
     }
-    tflag = nt;
+    flags.set(NodeFlags::_queued_for_free);
     free_buffer.push_back(this);
     for (auto in : _inputs) {
         in.node->_outputs.erase(in.back);
@@ -146,7 +146,7 @@ void Node::__release() {
         Var::number_of_lived_vars--;
     else
         Op::number_of_lived_ops--;
-    tflag = -1;
+    flags.set(NodeFlags::_released);
 }
 
 // Empty in the shipped object too, not lost in the restoration. The memory

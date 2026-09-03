@@ -19,6 +19,7 @@
 #include "mem/allocator/nfef_allocator.h"
 #include "mem/allocator/temp_allocator.h"
 #include "mem/swap.h"
+#include "misc/traversal_epoch.h"
 #include "var.h"
 
 namespace jittor {
@@ -283,8 +284,11 @@ void migrate_to_cpu(Var* var, Allocator* allocator) {
     }
     if (save_mem) {
         if (swap_timestamp != var->tflag) {
-            swap_timestamp = ++tflag_count;
-            var->tflag = swap_timestamp;
+            TraversalEpoch epoch("migrate_to_cpu");
+            swap_timestamp = epoch.stamp;
+            epoch.mark(var);
+            move_with_swap(var, cpu_allocator, true);
+            return;
         }
         move_with_swap(var, cpu_allocator, true);
         return;
@@ -333,8 +337,11 @@ void migrate_to_gpu(Var* var, Allocator* allocator) {
     }
     if (save_mem) {
         if (swap_timestamp != var->tflag) {
-            swap_timestamp = ++tflag_count;
-            var->tflag = swap_timestamp;
+            TraversalEpoch epoch("migrate_to_gpu");
+            swap_timestamp = epoch.stamp;
+            epoch.mark(var);
+            move_with_swap(var, allocator, true);
+            return;
         }
         move_with_swap(var, allocator, true);
         return;
