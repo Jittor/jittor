@@ -2,7 +2,7 @@
 
 - Status: 17-model tiny FP32 text core matrix accepted on CUDA
 - Last reviewed: 2026-09-03
-- Source baseline: `26c5fb13fa77d04230c4d6daa3f2eb7bb63706ed` plus this report's follow-up
+- Source baseline: `eb4fdedf` plus this report's acceptance-level follow-up
 - Owner: Torch compatibility and Transformers maintainers
 - Review when: Transformers model/cache/generation/serialization APIs, MoE routing,
   sliding-window attention, or the covered Jittor compatibility paths change
@@ -31,6 +31,24 @@ oracle，并使用 Transformers 4.56.2、相同配置、权重和固定输入。
 均经过 fail-closed 比较；所有生成模型还验证 cache prefill/decode、cached-vs-full
 logits、greedy 与 3-beam generation。模型参数、输入、loss、输出、梯度、cache 和生成
 结果均断言位于目标 CUDA device，不以导入成功或 CPU fallback 作为通过。
+
+## 验收层级
+
+按工作日志中 L0-L5 的严格累计定义，本轮不能标记为“完整 L3”或“完整 L4”。当前正式
+状态是：**17/17 模型完成 L0，能力子门禁覆盖到 L4-partial，M2 文本模型实现矩阵完成**。
+
+| 层级 | 当前状态 | 已通过证据 | 尚缺条件 |
+| --- | --- | --- | --- |
+| L0 | COMPLETE | 17/17 公共 Config/AutoClass、tiny config、参数清单与两端独立构造 | 无 |
+| L1 | PARTIAL | 17/17 相同权重前向、输出结构/mask 与真实 CUDA 数值对拍，无 CPU fallback | 尚未对 17 个模型逐一完成 CPU 对拍 |
+| L2 | PARTIAL | 17/17 task loss 与全部实际参与计算的 trainable gradients 对拍 | train/eval、dropout、zero-grad 和 optimizer step 尚未在整个矩阵逐项补齐 |
+| L3 | PARTIAL | 主锚点及本轮 10 个新增模型完成 state/safetensors/双向 `save_pretrained` round-trip | DeBERTa-v2/MPNet 正式 round-trip 及矩阵级 tokenizer 尚未完成 |
+| L4 | PARTIAL | 10 个 Decoder-only 与 3 个 Encoder-decoder 均完成 prefill/decode、cache、greedy/beam | 未使用真实公开 checkpoint/tokenizer，sampling 未形成矩阵门禁 |
+| L5 | NOT RUN | 无性能验收声明 | 需同 device/dtype/shape 的稳态吞吐、显存与热点证据 |
+
+因此这里的“17/17 PASS”只表示已声明的 tiny FP32 CUDA 数值与公共模型工作流通过，不能
+替换 L3 的 tokenizer 条件或 L4 的真实 checkpoint 条件。后续要把整体等级提升到完整
+L3/L4，必须补齐上表缺口后重新更新状态，不能只复用当前 generation 结果。
 
 ## 环境与判据
 
