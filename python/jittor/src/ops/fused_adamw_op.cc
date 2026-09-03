@@ -12,10 +12,10 @@ FusedAdamwOp::FusedAdamwOp(
     : parameters(parameters), moments(moments), variances(variances),
       gradients(gradients), step(step), lr(lr), beta1(beta1), beta2(beta2),
       weight_decay(weight_decay), eps(eps) {
-    CHECK(parameters.size() > 0);
-    CHECK(parameters.size() == moments.size());
-    CHECK(parameters.size() == variances.size());
-    CHECK(parameters.size() == gradients.size());
+    USER_CHECKop(parameters.size(),>,0);
+    USER_CHECKop(parameters.size(),==,moments.size());
+    USER_CHECKop(parameters.size(),==,variances.size());
+    USER_CHECKop(parameters.size(),==,gradients.size());
     set_flag(OpFlags::_cuda);
     set_flag(OpFlags::_manual_set_vnbb);
     for (uint i=0; i<parameters.size(); ++i) {

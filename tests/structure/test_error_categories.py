@@ -54,6 +54,10 @@ MIGRATED_NUMPY_TYPE_BOUNDARIES = {
     "python/jittor/src/pyjt/numpy.h": 1,
 }
 
+MIGRATED_FUSED_ADAMW_CARDINALITY_BOUNDARIES = {
+    "python/jittor/src/ops/fused_adamw_op.cc": 4,
+}
+
 MIGRATED_TERNARY_SHAPE_BOUNDARIES = {
     "python/jittor/src/ops/ternary_op.cc": 2,
 }
@@ -152,6 +156,13 @@ def test_numpy_type_boundary_migration_is_explicit_and_bounded():
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_NUMPY_TYPE_BOUNDARIES[
         "python/jittor/src/pyjt/numpy.h"]
+
+
+def test_fused_adamw_cardinality_migration_is_explicit_and_bounded():
+    source = (ROOT / "python/jittor/src/ops/fused_adamw_op.cc").read_text()
+    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    assert actual == MIGRATED_FUSED_ADAMW_CARDINALITY_BOUNDARIES[
+        "python/jittor/src/ops/fused_adamw_op.cc"]
 
 
 def test_public_ternary_shape_migration_is_explicit_and_bounded():
