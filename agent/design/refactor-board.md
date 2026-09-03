@@ -258,7 +258,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 3.14 | 两个同名 pass | 已合并 | codegen | 6c899325 |
 | 3.15 | 一次编译只解析一遍 | 已合并 | codegen | 97cac22f；“只解析一遍”实测不值得，见下方结论行 |
 | 3.16 | `token_replace_all` 不再用 CHECK 抛异常做循环终止 | 已合并 | codegen | 9aa683c4。显式终止批量替换，非法模板不再被正常路径异常吞掉；新增 2、C++ TEST 46、CPU op_compiler 5、真实 CUDA GPU3 1 项通过 |
-| 3.17 | 只用于代码生成的 JIT 区段与普通 C++ 分离 | 已合并 | codegen | 2aa190af。KernelIR 逃逸 `_Pragma`，字符串/格式串保持原样，生成源码用 `#line` 指回原算子；C++ TEST 48、CPU/GPU3 自定义融合 op 各1项通过，未改 `jit_compiler.cc` |
+| 3.17 | 只用于代码生成的 JIT 区段与普通 C++ 分离 | 已合并 | codegen | 2aa190af。KernelIR 逃逸 `_Pragma`，字符串/格式串保持原样，生成源码用 `#line` 指回原算子；968ae198 修复重复 `#line` 行号被登记成同名 IR scope 符号的回归，C++ TEST 11、scalar gradient 与 compiler contract 聚焦通过；未改 `jit_compiler.cc` |
 | 3.18 | 删掉 `asm_tuner` 链路 | 待领 | | cb853074、acfed956 已合入前置：普通 CPU kernel 先绕过旧包装，随后 clang 输出 store 改为 `__builtin_nontemporal_store`，删除 `asm_tuner.py`、文本指令和专属测试；真实 broadcast 数值/生成代码通过，clang 汇编有 `movntss`。但同一 broadcast 冷编译只从约 1.00s 降至 0.80s，普通小 kernel 也仅从 0.89s 降至 0.69s，均约 20-22%，未达到 ≥50% 验收，仍需继续降低 CPU kernel 冷编译成本 |
 | 3.19 | `event_queue` 异步基础设施修好并加测试，或删除 | 待领 | | |
 | 3.20 | 执行器提供「提交部分图」显式接口，`jt.grad` 与 `Function` 回调降开销，让反… | 待领 | | |
