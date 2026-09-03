@@ -11,6 +11,15 @@ def _triple(x):
         return (x,x,x)
 
 
+def _pool_output_size(size, kernel, stride, padding, ceil_mode):
+    if not ceil_mode:
+        return (size + 2 * padding - kernel) // stride + 1
+    out_size = (size + 2 * padding - kernel + stride - 1) // stride + 1
+    if (out_size - 1) * stride >= size + padding:
+        out_size -= 1
+    return out_size
+
+
 class Pool3d(jt.Module):
     def __init__(self, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False, count_include_pad=True, op="maximum"):
         assert dilation == None
@@ -44,17 +53,13 @@ class Pool3d(jt.Module):
         N,C,D,H,W = x.shape
         if D <= self.kernel_size[0] or H <= self.kernel_size[1] or W <= self.kernel_size[2]:
             raise RuntimeError(f"size of var should be larger than kernel_size")
-        if self.ceil_mode == False:
-            d = (D+self.padding[0]*2-self.kernel_size[0])//self.stride[0]+1
-            h = (H+self.padding[1]*2-self.kernel_size[1])//self.stride[1]+1
-            w = (W+self.padding[2]*2-self.kernel_size[2])//self.stride[2]+1
-            use_code_op = self.op in ['maximum', 'minimum']
-            # some second order avg_pool is require, so we don't use code op here
-        else:
-            d = (D+self.padding[0]*2-self.kernel_size[0] + self.stride[0] - 1)//self.stride[0]+1
-            h = (H+self.padding[1]*2-self.kernel_size[1] + self.stride[1] - 1)//self.stride[1]+1
-            w = (W+self.padding[2]*2-self.kernel_size[2] + self.stride[2] - 1)//self.stride[2]+1
-            use_code_op = self.op in ['maximum', 'minimum']
+        d, h, w = (
+            _pool_output_size(size, kernel, stride, padding, self.ceil_mode)
+            for size, kernel, stride, padding in zip(
+                (D, H, W), self.kernel_size, self.stride, self.padding
+            )
+        )
+        use_code_op = self.op in ['maximum', 'minimum']
 
         if use_code_op and jt.pool.pool_use_code_op:
             forward_body = f'''

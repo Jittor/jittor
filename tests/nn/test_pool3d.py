@@ -32,7 +32,10 @@ def _triple(v):
 
 def _out_size(size, kernel, stride, padding, ceil_mode):
     if ceil_mode:
-        return (size + 2 * padding - kernel + stride - 1) // stride + 1
+        out = (size + 2 * padding - kernel + stride - 1) // stride + 1
+        if (out - 1) * stride >= size + padding:
+            out -= 1
+        return out
     return (size + 2 * padding - kernel) // stride + 1
 
 
@@ -403,29 +406,11 @@ class TestAvgPool3dCountIncludePad(unittest.TestCase):
                         kernel, stride, padding, ceil_mode, True).shape[2:])
                     self.assertEqual(actual, want, (kernel, stride, padding, ceil_mode))
 
-    def test_max_path_ceil_mode_output_size_still_diverges_from_torch(self):
-        """Known gap lock -- NOT a statement that this behaviour is right.
-
-        torch drops the last window when it would start inside the right padding
-        (``pooling_output_shape``'s ``if (out-1)*stride >= size + padding: out--``).
-        The generated max/min kernels in ``pool/core_3d.py`` have no such
-        correction, so ``ceil_mode=True`` with non-zero padding still emits one
-        extra plane there.  The mean path no longer does, because it forwards to
-        ``jt.nn.avg_pool3d``; fixing max as well changes ``MaxPool3d`` output
-        shapes and the ``MaxUnpool3d`` default output size with them, which is a
-        larger change than the average-pooling unification this file grew out of.
-
-        If you fix it: this test will fail, and the right change is to delete it
-        and assert torch's size for every op.
-        """
-        diverging = []
+    def test_max_path_ceil_mode_output_size_matches_torch(self):
         for kernel, stride in self.GEOMETRIES:
             for padding in (0, 1):
                 for ceil_mode in (False, True):
                     k, st, pd = _triple(kernel), _triple(stride), _triple(padding)
-                    got = tuple(
-                        _jittor_out_size(self.SHAPE[2 + a], k[a], st[a], pd[a], ceil_mode)
-                        for a in range(3))
                     want = tuple(
                         _torch_out_size(self.SHAPE[2 + a], k[a], st[a], pd[a], ceil_mode)
                         for a in range(3))
@@ -433,14 +418,25 @@ class TestAvgPool3dCountIncludePad(unittest.TestCase):
                         kernel, stride=stride, padding=padding,
                         ceil_mode=ceil_mode, op="maximum",
                     )(jt.array(self.x)).shape[2:])
-                    self.assertEqual(actual, got)
-                    if got != want:
-                        diverging.append((kernel, stride, padding, ceil_mode))
-        self.assertEqual(
-            diverging,
-            [((2, 3, 2), (2, 2, 3), 1, True), (2, 2, 1, True), (3, 3, 1, True)],
-            "the set of ceil_mode output-size divergences from torch changed",
-        )
+                    self.assertEqual(actual, want, (kernel, stride, padding, ceil_mode))
+
+    def test_ceil_mode_indices_still_round_trip_through_max_unpool3d(self):
+        kernel, stride, padding = (2, 3, 2), (2, 2, 3), 1
+        value, index = jt.nn.MaxPool3d(
+            kernel, stride=stride, padding=padding, ceil_mode=True,
+            return_indices=True,
+        )(jt.array(self.x))
+        out = jt.nn.MaxUnpool3d(kernel, stride=stride)(
+            value, index, output_size=self.x.shape)
+        expected = np.zeros(self.x.shape, dtype="float32")
+        flat_expected = expected.reshape(self.SHAPE[:2] + (-1,))
+        flat_value = value.numpy().reshape(self.SHAPE[:2] + (-1,))
+        flat_index = index.numpy().astype(np.int64).reshape(self.SHAPE[:2] + (-1,))
+        for bi in range(self.SHAPE[0]):
+            for ci in range(self.SHAPE[1]):
+                for offset, pooled in zip(flat_index[bi, ci], flat_value[bi, ci]):
+                    flat_expected[bi, ci, offset] += pooled
+        np.testing.assert_allclose(out.numpy(), expected, rtol=1e-6, atol=1e-6)
 
 
 class TestAvgPool3dCountIncludePadCuda(TestAvgPool3dCountIncludePad):
