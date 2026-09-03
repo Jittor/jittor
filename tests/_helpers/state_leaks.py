@@ -25,6 +25,7 @@ that goes red on its first run gets switched off rather than read.
 """
 
 import gc
+import os
 import sys
 
 
@@ -67,6 +68,47 @@ BOUNDED_VAR_CACHES = (
     ("jittor.fft", "_dft_mat_cache", "_dft_mat_cache_limit", 2),
     ("jittor.nn.attention", "_CU_SEQLENS_CACHE", "_CU_SEQLENS_CACHE_LIMIT", 1),
 )
+
+
+def resident_set_size_bytes():
+    """Return current RSS where available, otherwise the process high-water RSS."""
+    try:
+        with open("/proc/self/statm") as handle:
+            resident_pages = int(handle.read().split()[1])
+        return resident_pages * os.sysconf("SC_PAGE_SIZE")
+    except (OSError, ValueError, IndexError):
+        import resource
+
+        value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return int(value if sys.platform == "darwin" else value * 1024)
+
+
+def assert_rss_growth_bounded(workload, *, warmup=8, iterations=64,
+                              max_growth_bytes=16 << 20, cleanup=None):
+    """Exercise one allocation lifecycle and fail when retained RSS is unbounded."""
+    for _ in range(warmup):
+        workload()
+    if cleanup is not None:
+        cleanup()
+    gc.collect()
+    before = resident_set_size_bytes()
+
+    for index in range(iterations):
+        workload()
+        if cleanup is not None and (index + 1) % 8 == 0:
+            cleanup()
+    if cleanup is not None:
+        cleanup()
+    gc.collect()
+    after = resident_set_size_bytes()
+
+    growth = max(0, after - before)
+    if growth > max_growth_bytes:
+        raise AssertionError(
+            "RSS grew by %.2f MiB across %d iterations (limit %.2f MiB)"
+            % (growth / (1 << 20), iterations, max_growth_bytes / (1 << 20))
+        )
+    return growth
 
 
 def _bounded_cache_sizes():

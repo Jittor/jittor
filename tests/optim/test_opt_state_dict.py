@@ -8,8 +8,9 @@ import unittest
 
 
 class TestOptStateDict(unittest.TestCase):
+    @unittest.expectedFailure
     def test_opt_state_dict(self):
-        return
+        self.fail("KI-TEST-001: optimizer state-dict coverage is not implemented")
 
 if __name__ == "__main__":
     unittest.main()

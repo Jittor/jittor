@@ -493,6 +493,59 @@ def test_module_level_helpers_are_not_named_like_tests():
     assert offenders == []
 
 
+def _test_functions(tree):
+    return (
+        node for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name.startswith("test")
+    )
+
+
+def _without_docstring(body):
+    if (body and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, (ast.Str, ast.Constant))
+            and isinstance(getattr(body[0].value, "value", None), str)):
+        return body[1:]
+    return body
+
+
+def test_test_bodies_do_not_start_with_an_unconditional_return():
+    offenders = []
+    for path in _test_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in _test_functions(tree):
+            body = _without_docstring(node.body)
+            if body and isinstance(body[0], ast.Return):
+                offenders.append("{}:{} {}".format(
+                    path.relative_to(REPO_ROOT), body[0].lineno, node.name))
+    assert offenders == [], "test bodies cannot silently pass via an initial return:\n" + "\n".join(
+        offenders
+    )
+
+
+def test_tests_do_not_use_constant_true_skip_decorators():
+    offenders = []
+    for path in _test_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            for decorator in node.decorator_list:
+                if not isinstance(decorator, ast.Call) or not decorator.args:
+                    continue
+                name = _dotted_name(decorator.func)
+                if not name.endswith("skipIf"):
+                    continue
+                try:
+                    condition = ast.literal_eval(decorator.args[0])
+                except (ValueError, TypeError):
+                    continue
+                if bool(condition):
+                    offenders.append("{}:{} {}".format(
+                        path.relative_to(REPO_ROOT), decorator.lineno, node.name))
+    assert offenders == [], "constant-true skips hide disabled tests:\n" + "\n".join(offenders)
+
+
 def test_legacy_packaged_runner_is_absent():
     legacy = REPO_ROOT / "python" / "jittor" / "test"
     assert not (legacy / "__main__.py").exists()

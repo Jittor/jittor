@@ -220,9 +220,9 @@ class TestBF16(unittest.TestCase):
         c = a.maximum(b)
         c.sync()
 
+    @unittest.expectedFailure
     def test_reduce_dtype_infer(self):
-        return
-        # this test cannot pass now
+        # KI-TEST-001: reduction dtype inference is not yet consistent.
         with jt.flag_scope(amp_reg=1):
             a = jt.random((3,4,5,5)).bfloat16()
             b = a.sum()

@@ -13,6 +13,9 @@ import jittor as jt
 import numpy
 import ctypes
 import sys
+import pytest
+
+from _helpers.state_leaks import assert_rss_growth_bounded
 
 try:
     import cupy
@@ -149,7 +152,7 @@ class TestCodeOp(unittest.TestCase):
                 check()
         check()
 
-    @unittest.skipIf(True, "Memory leak testing is not in progress, Skip")
+    @pytest.mark.slow
     def test_memory_leak(self):
         def forward_code(np, data):
             a,b = data["inputs"]
@@ -171,9 +174,9 @@ class TestCodeOp(unittest.TestCase):
             else:
                 np.negative(dout, out)
 
-        for i in range(1000000):
-            a = jt.random((10000,1))
-            b = jt.random((10000,1))
+        def exercise():
+            a = jt.random((4096, 1))
+            b = jt.random((4096, 1))
             c, d = jt.numpy_code(
                 [a.shape, a.shape],
                 [a.dtype, a.dtype],
@@ -191,6 +194,10 @@ class TestCodeOp(unittest.TestCase):
             assert numpy.allclose(dcb.data,one)
             assert numpy.allclose(dda.data,one)
             assert numpy.allclose(ddb.data,mone)
+
+        assert_rss_growth_bounded(
+            exercise, iterations=128, max_growth_bytes=8 << 20,
+            cleanup=jt.clean)
 
 if __name__ == "__main__":
     unittest.main()

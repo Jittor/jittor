@@ -16,7 +16,7 @@ import pytest
 # offline or flaky-network run does not skip it: the download blocks until the
 # suite timeout fires.
 @pytest.mark.network
-@unittest.skipIf(True, f"skip emnist test")
+@pytest.mark.manual
 class TestEMNIST(unittest.TestCase):
     def test_emnist(self):
         import pylab as pl

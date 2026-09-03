@@ -9,8 +9,10 @@
 import unittest
 import jittor as jt
 import numpy as np
+import pytest
 from collections.abc import Sequence, Mapping
 from _helpers.assertions import expect_error
+from _helpers.state_leaks import assert_rss_growth_bounded
 from jittor import Function
 
 class TestFunction(unittest.TestCase):
@@ -288,7 +290,7 @@ class TestFunction(unittest.TestCase):
         jt.dump_all_graphs()
         self.assertEqual(jt.liveness_info()["lived_vars"], 0)
 
-    @unittest.skipIf(True, "skip memleak test")
+    @pytest.mark.slow
     def test_zmem_leak3(self):
         def test():
             class MyFunc(Function):
@@ -306,20 +308,8 @@ class TestFunction(unittest.TestCase):
             c,_,d = MyFunc()(a, "a", b)
             g = jt.grad(c+d*3, [a, b])
             jt.sync(g)
-        import resource
-        t1 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        for i in range(100000):
-            test()
-            if i % 10000 == 0:
-                jt.clean()
-        t2 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        for i in range(1000000):
-            test()
-            if i % 10000 == 0:
-                jt.clean()
-        t3 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        print(t1,t2,t3)
-        assert t3 < t2 + 10, (t1,t2,t3)
+        assert_rss_growth_bounded(
+            test, iterations=512, max_growth_bytes=4 << 20, cleanup=jt.clean)
         self.assertEqual(jt.liveness_info()["lived_vars"], 0)
 
 

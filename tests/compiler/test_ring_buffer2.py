@@ -94,8 +94,9 @@ class TestRingBuffer(unittest.TestCase):
     # Downloads an external dataset archive; see the note in
     # tests/models/test_resnet.py.
     @pytest.mark.network
+    @unittest.expectedFailure
     def test_dataset(self):
-        return
+        # KI-TEST-001: the repeated dataset/RingBuffer path remains unstable.
         self.train_loader = MNIST(train=True, transform=trans.Resize(224)) \
             .set_attrs(batch_size=300, shuffle=True)
         self.train_loader.num_workers = 1

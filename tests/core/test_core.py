@@ -273,9 +273,9 @@ class TestCore(unittest.TestCase):
         a.hahaha = 1
         assert a.hahaha == 1
 
+    @unittest.expectedFailure
     def test_swap(self):
-        # TODO: add skip
-        return
+        # KI-TEST-001: host swapping remains a reproduced failure.
         jt.gc()
         jt.display_memory_info()
         with jt.flag_scope(cpu_mem_limit=50*1024*1024):
@@ -292,9 +292,10 @@ class TestCore(unittest.TestCase):
             for i in range(len(np_arrays)):
                 np.testing.assert_allclose(jt_arrays[i].numpy(), np_arrays[i])
 
+    @unittest.skipUnless(jt.has_cuda, "CUDA is required")
+    @unittest.expectedFailure
     def test_swap_cuda(self):
-        # TODO: add skip
-        return
+        # KI-TEST-001: device swapping remains a reproduced failure.
         jt.gc()
         jt.display_memory_info()
         if jt.has_cuda:

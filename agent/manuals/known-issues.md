@@ -1,8 +1,8 @@
 # Active Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-08-30
-- Baseline: `a3ae89f0` plus the current ACL product-reduction follow-up
+- Last reviewed: 2026-09-03
+- Baseline: `a1668aca` plus task 10.04
 - Owner: Jittor core maintainers
 - Review cadence: on every strict XPASS, related fix, or quarterly maintenance
 
@@ -21,6 +21,27 @@ framework defects.
   supported domain.
 - **Research:** an intentionally unsupported capability requiring architectural
   work.
+
+## KI-TEST-001: formerly silent test cases expose unresolved contracts
+
+- Severity: Medium
+- Status: Strict expected failures
+- Owner: test infrastructure and affected backend maintainers
+- Evidence: `TestBF16.test_reduce_dtype_infer`,
+  `TestCudnnConvOp.test_backward_nhwc`, `TestCore.test_swap`,
+  `TestCore.test_swap_cuda`, `TestRingBuffer.test_dataset`,
+  `TestOptStateDict.test_opt_state_dict`, and
+  `TestArgPoolOp.test_cuda_old_pool`
+- Symptom: these tests were permanently disabled with an initial `return` or
+  `skipIf(True)`, so pytest reported success without executing their contracts.
+  They now run as strict expected failures when their declared hardware/network
+  prerequisites exist; optimizer state-dict coverage fails explicitly until it
+  has an implementation.
+- Workaround: do not cite these nodeids as passing evidence for reduction dtype
+  inference, NHWC cuDNN backward, tensor swapping, repeated dataset RingBuffer
+  use, optimizer state restoration, or legacy CUDA pooling.
+- Review/expiry condition: fix and independently verify each named contract,
+  then remove its expected-failure marker and this entry when the list is empty.
 
 ## KI-COMPILER-001: parallel compiler can corrupt process state
 
