@@ -2676,43 +2676,78 @@ def _simple_for(x, func):
 #   isfinite(x) = |x| < inf      (nan<inf and inf<inf are both False)
 #   isinf(x)    = |x| == inf
 #   isnan(x)    = NOT((x>=0) or (x<=0))   (nan fails every comparison)
-# Integer dtypes have no nan/inf, so return the trivial constant.
+#
+# The comparisons are not used on CPU/CUDA because Jittor compiles fused kernels
+# with -Ofast, i.e. -ffinite-math-only, under which the compiler is free to fold
+# `x >= 0 || x <= 0` to true. _simple_for exists to compile this one kernel at
+# -O2 instead. On ACL the expressions are evaluated by aclnn, not by a kernel
+# Jittor compiled, so the same spelling is safe there.
 def _isnan_acl(x):
     x = x if isinstance(x, jt.Var) else jt.array(x)
-    if "float" not in str(x.dtype): return jt.zeros(x.shape, "bool")
+    if not x.dtype.is_float(): return jt.zeros(x.shape, "bool")
     return jt.logical_not((x >= 0) | (x <= 0))
 def _isinf_acl(x):
     x = x if isinstance(x, jt.Var) else jt.array(x)
-    if "float" not in str(x.dtype): return jt.zeros(x.shape, "bool")
+    if not x.dtype.is_float(): return jt.zeros(x.shape, "bool")
     return x.abs() == float("inf")
 def _isfinite_acl(x):
     x = x if isinstance(x, jt.Var) else jt.array(x)
-    if "float" not in str(x.dtype): return jt.ones(x.shape, "bool")
+    if not x.dtype.is_float(): return jt.ones(x.shape, "bool")
     return x.abs() < float("inf")
 
+
+def _classify_value(dtype):
+    """The C++ expression these kernels must test, per input dtype.
+
+    Every one of them used to test ``float(x)`` unconditionally. That is a
+    *narrowing* cast for float64: 1e300 is an ordinary finite double and becomes
+    inf as a float, so ``jt.isinf`` said True for it on CPU and CUDA while the
+    ACL path -- which never narrows -- said False. Same public API, different
+    answer per backend.
+
+    float16/bfloat16 still widen to float. That direction is lossless, and
+    neither type has a std::isnan overload to call instead.
+    """
+    return "x" if dtype in ("float32", "float64") else "float(x)"
+
+
+def _classify(x, expr, acl_body, integral):
+    """One body for isnan/isinf/isfinite and the two signed-infinity variants.
+
+    ``integral`` is the answer for a dtype that has neither nan nor infinity --
+    torch's answer too: isnan/isinf are all-False over an integer tensor and
+    isfinite is all-True. That used to fall out of casting the integer to float;
+    saying it directly is what lets the float kernel keep the input's own type.
+    """
+    x = x if isinstance(x, jt.Var) else jt.array(x)
+    if not x.dtype.is_float():
+        return (jt.ones if integral else jt.zeros)(x.shape, "bool")
+    if jt.flags.use_acl:
+        return acl_body(x)
+    return jt.misc._simple_for(x, expr(jt.misc._classify_value(str(x.dtype))))
+
+
 def isnan(x):
-    if jt.flags.use_acl: return jt.misc._isnan_acl(x)
-    return jt.misc._simple_for(x, "isnan(float(x))")
+    return jt.misc._classify(
+        x, lambda v: f"isnan({v})", jt.misc._isnan_acl, False)
 jt.Var.isnan = isnan
 def isfinite(x):
-    if jt.flags.use_acl: return jt.misc._isfinite_acl(x)
-    return jt.misc._simple_for(x, "!isnan(float(x)) && !isinf(float(x))")
+    return jt.misc._classify(
+        x, lambda v: f"!isnan({v}) && !isinf({v})", jt.misc._isfinite_acl, True)
 jt.Var.isfinite = isfinite
 def isinf(x):
-    if jt.flags.use_acl: return jt.misc._isinf_acl(x)
-    return jt.misc._simple_for(x, "isinf(float(x))")
+    return jt.misc._classify(
+        x, lambda v: f"isinf({v})", jt.misc._isinf_acl, False)
 jt.Var.isinf = isinf
 def isneginf(x):
-    if jt.flags.use_acl:
-        x = x if isinstance(x, jt.Var) else jt.array(x)
-        return (x < 0) & jt.misc._isinf_acl(x)
-    return jt.misc._simple_for(x, "x<0 && isinf(float(x))")
+    return jt.misc._classify(
+        x, lambda v: f"x<0 && isinf({v})",
+        lambda v: (v < 0) & jt.misc._isinf_acl(v), False)
 jt.Var.isneginf = isneginf
 def isposinf(x):
-    if jt.flags.use_acl:
-        x = x if isinstance(x, jt.Var) else jt.array(x)
-        return (x > 0) & jt.misc._isinf_acl(x)
-    return jt.misc._simple_for(x, "x>0 && isinf(float(x))")
+    return jt.misc._classify(
+        x, lambda v: f"x>0 && isinf({v})",
+        lambda v: (v > 0) & jt.misc._isinf_acl(v), False)
 jt.Var.isposinf = isposinf
 
 # fake torch interface

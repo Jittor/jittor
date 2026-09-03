@@ -8,6 +8,8 @@ from .tensor_ops import (
     _CumMax,
     _CumMin,
     _SCATTER_REDUCE_JT,
+    _classify,
+    _classify_value,
     _isfinite_acl,
     _isinf_acl,
     _isnan_acl,
