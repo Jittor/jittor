@@ -21,16 +21,7 @@ namespace jittor
         ret = aclnnRollGetWorkspaceSize(
             inputTensors[0], shifts_array, dims_array, outputTensors[0],
             &workspaceSize, &executor);
-        checkRet(ret);
-
-        if (workspaceSize > 0)
-            mallocWorkSpace(workspaceSize);
-
-        ret = aclnnRoll(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS,
-                  LOG_PRINT("%s: aclnnRoll failed. ERROR: %d\n", name.c_str(), ret); return);
-
-        syncRun();
+        launch(ret, aclnnRoll, true);
         aclDestroyIntArray(dims_array);
         aclDestroyIntArray(shifts_array);
     }

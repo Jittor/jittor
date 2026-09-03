@@ -18,6 +18,7 @@ SIGMOID_SOURCE = ROOT / "python/jittor/extern/acl/aclops/sigmoid_op_acl.cc"
 TRANSPOSE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/transpose_op_acl.cc"
 SOFTMAX_SOURCE = ROOT / "python/jittor/extern/acl/aclops/softmax_op_acl.cc"
 EMBEDDING_SOURCE = ROOT / "python/jittor/extern/acl/aclops/embedding_op_acl.cc"
+ROLL_SOURCE = ROOT / "python/jittor/extern/acl/aclops/roll_op_acl.cc"
 
 
 def test_acl_launcher_tail_has_one_auditable_contract():
@@ -155,3 +156,15 @@ def test_embedding_forward_uses_launcher_and_backward_remains_present():
     assert "mallocWorkSpace(workspaceSize)" not in forward
     assert "syncRun();" not in forward
     assert "void EmbeddingBackwardOpRunner::executeOp" in source
+
+
+def test_roll_family_uses_launcher_and_keeps_array_cleanup():
+    source = ROLL_SOURCE.read_text()
+    assert "shifts_array" in source
+    assert "dims_array" in source
+    assert "launch(ret, aclnnRoll, true);" in source
+    assert "aclDestroyIntArray(dims_array);" in source
+    assert "aclDestroyIntArray(shifts_array);" in source
+    assert "checkRet(ret);" not in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
