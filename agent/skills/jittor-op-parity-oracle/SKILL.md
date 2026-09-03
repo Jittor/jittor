@@ -1,6 +1,6 @@
 ---
 name: jittor-op-parity-oracle
-description: 给 Jittor 的 Python 层算子做数值对拍（correctness oracle）。当你要证明某个算子「静默算错」或「已经修对」时用它——如何选对拍基准（numpy/scipy 优先，必要时用独立进程里的真 PyTorch）、为什么绝不能在 Jittor 环境里 import torch、容差怎么定、fail-before/pass-after 怎么做、以及 code-op 内核（jt.code）出错时的取证手法。
+description: 给 Jittor 的 Python 层算子做数值对拍（correctness oracle）。当你要证明某个算子「静默算错」或「已经修对」时用它——如何选对拍基准（numpy/scipy 优先，必要时用独立进程里的真 PyTorch）、为什么绝不能在 Jittor 环境里 import torch、容差怎么定、fail-before/pass-after 怎么做、以及 code-op 内核（jt.code）出错时的取证手法。**写任何依赖 NaN/Inf 行为的内核之前先读开头那条 -Ofast 警告。**
 ---
 
 # Jittor 算子对拍口径
@@ -8,6 +8,27 @@ description: 给 Jittor 的 Python 层算子做数值对拍（correctness oracle
 修「静默算错」类缺陷时，**"改完测试绿了" 不算证据**。证据是：同一个测试在修之前失败、
 修之后通过，且期望值来自一个与 Jittor 无关的独立实现。本 skill 给出选基准、起进程、
 定容差、做取证的固定做法。
+
+---
+
+> ## ⚠ 先读这条：`-Ofast` 会把 NaN/Inf 的判断折叠掉
+>
+> jittor 的**融合内核用 `-Ofast` 编译**（`compiler.py` 里 `kernel_opt_flags += " -Ofast "`，
+> CUDA 那边另有 `--use_fast_math`）。`-Ofast` 蕴含 `-ffast-math`、进而
+> `-ffinite-math-only`——**编译器被允许假设 NaN 和 Inf 不存在**，于是
+> `x != x`、`x >= 0 || x <= 0`、`|x| == inf` 这些写法可以被直接折叠成常量。
+>
+> **任何依赖「NaN 不等于自己」或 inf 比较行为的东西，都不能写成普通 Var 运算进融合体。**
+> 它必须进一个显式压低优化级别的 `jt.code`——`misc/tensor_ops.py` 的 `_simple_for`
+> （`flag_scope(compile_options={"FLAGS: -O2 ":1})`）就是干这个的，isnan/isinf/isfinite
+> 全部走它。
+>
+> 推论：**「用原始比较写一遍」不能当对拍基准**，它在 CPU/CUDA 上不可信。这类东西能对拍的
+> 只有 dtype 策略和普通值上的答案，NaN/±Inf 那几个元素要排除掉并写明理由。
+>
+> 展开与实测见 §16；ACL 上同样的表达式是安全的，因为那边由 aclnn 求值、不经过 jittor 编的内核。
+
+---
 
 ## 0. 先确认你测的是哪一份代码
 
@@ -24,6 +45,32 @@ jittor 通常是 **editable 安装**（site-packages 里的 `.pth` 指向某一�
 ```bash
 PYTHONPATH="$TREE/python" python -c "import jittor, os; print(os.path.dirname(jittor.__file__))"
 ```
+
+## 0.5 核实审计条目：现象、原因、可达性是三件事
+
+简报第 2 节要你「确认证据今天仍然成立」。实测下来，**证据过期很少见，
+「原因写错了」和「其实不可达」很常见**——而照着错误的原因去修，会修不到点上。
+2026-09-03 的 5.10/5.12/5.13 四条，全部是「现象属实」但另外两项之一不成立：
+
+| 审计/注释怎么说 | 现象 | 真正的原因 / 可达性 |
+|---|---|---|
+| `unique`：CUDA「只对 32 位整数键排得对」，所以把 float 绕去 CPU | 属实，CUDA 上非 int32 结果是错的 | **原因错**。cub 什么键都能排；错的是两个 kernel 写索引的输出 var 用了**输入的** dtype，CUDA 那条 `cudaMemcpy` 拷的是原始 int32 字节——**输入恰好是 int32 时重解释是恒等的**，所以从没人发现。修对原因之后四条路径全删 |
+| `cumsum`：CPU 与 CUDA 两套实现两套反向 | 属实 | **两套反向数学上一致**，所以它从没算错过，也因此一直没被发现。真正可达的是它俩共用的 dim 守卫**只接受一个负数** |
+| `matmul`：`"float" in dtype` 会匹配 bfloat16/float64 | 属实 | **不是缺陷**，cuBLAS 两个都支持 |
+| `matmul`：2D 查两个操作数的 complex、batched 只查 a | 属实 | **不可达**，两条路径都已先要求两个 dtype 相等。真正可达的是**第三个调用点 `bmm_transpose` 什么都不查** |
+| 「有一条 `assert` 不超过 2^31」 | 文件行号写错了，但断言真实存在 | **断言是诚实的**：把算术改回 32 位、只删断言，2^31 之后的行全部返回第一行的值 |
+
+**做法**：拿到一条审计条目，分开问三个问题，一个一个证。
+
+1. **现象**还在吗？（照着复现，别信行号，按内容找）
+2. 给出的**原因**对吗？——注释和审计记的往往是**当时观察到的症状**。
+   按 §14 的办法把分派器旁路掉、逐 dtype/逐参数扫一遍，让数据说原因。
+3. 这条路**可达**吗？——前面的守卫可能已经把它挡掉了（冗余检查），
+   或者两条分支恰好数学等价（`cumsum`）。不可达就写进提交说明，别硬改。
+
+**遇到一条「挡住某种情况」的 assert，问的不是「它是不是在掩盖问题」，而是「它在守什么」。**
+把它守的那件事改对（这里是改成 64 位算术），断言才能删；先删断言就是把一个响亮的
+失败换成一个静默的错答案。
 
 ## 1. 选对拍基准：三档，从上往下选
 
@@ -425,7 +472,7 @@ for dtype in ("int8","int32","int64","float16","float32","float64"):
 
 顺带：`.numpy()` 只同步**那一个** var 的图，不足以把异步错误逼出来；`jt.sync_all()` 才是。
 
-## 16. 依赖 NaN/Inf 语义的表达式不能写成普通 Var 运算
+## 16. 依赖 NaN/Inf 语义的表达式不能写成普通 Var 运算（开头那条警告的展开）
 
 jittor 的融合内核用 `-Ofast` 编译（`compiler.py` 里 `kernel_opt_flags += " -Ofast "`），
 `-Ofast` 蕴含 `-ffast-math`、进而 `-ffinite-math-only`——**编译器可以假设不存在 NaN 和 Inf**，
