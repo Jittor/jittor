@@ -7,7 +7,7 @@
 
 Importing jittor rewrites ``Var`` and the root namespace in a fixed sequence of
 steps: native bindings, indexing, the CUDA full-reduce fast path, the backends'
-``post_process``, the generated ``x.func_()`` in-place aliases, ACL's operator
+``post_process``, the declared ``x.func_()`` in-place aliases, ACL's operator
 swap, the MPI-free collectives, and finally the Torch compatibility layer. There
 are 169 assignments of the form ``Var.x = ...`` across eight files, and **which
 one wins is decided entirely by the order these steps run in**.
@@ -73,9 +73,8 @@ SEQUENCE = (
         "nn.full_reduce_fast_path", True,
         "jittor/nn/backends/full_reduce_cuda.py. Replaces Var.sum/Var.mean "
         "and the root jt.sum/jt.mean with the two-stage CUB reduction. Must "
-        "precede the in-place alias generation (so sum_/mean_ wrap the fast "
-        "path, not the binding it replaced) and the Torch wrappers (so they "
-        "layer on top rather than under)."),
+        "precede the explicit in-place alias installation and the Torch "
+        "wrappers, so every Var method provider settles first."),
     Step(
         "backends.post_process", False,
         "jittor_utils.backends[*].post_process(). Hardware backends adjust "
@@ -83,11 +82,8 @@ SEQUENCE = (
         "complete, before anything reads those flags."),
     Step(
         "root.inplace_aliases", True,
-        "jittor/__init__.py. Generates x.func_() for every eligible Var "
-        "method by walking Var.__dict__. Order-critical in both directions: a "
-        "method installed after this point gets no in-place alias, and a "
-        "method replaced after this point leaves its alias bound to the OLD "
-        "implementation."),
+        "jittor/__init__.py. Installs the explicit true-in-place Var method "
+        "allowlist after nn, misc and full-reduce bindings are settled."),
     Step(
         "acl.change_function", False,
         "jittor/extern/acl/acl_compiler.py. Swaps operator implementations "

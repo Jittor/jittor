@@ -170,11 +170,11 @@ def sort(input, dim=-1, descending=False, stable=False):
 jt.Var.sort = sort
 
 def all(x, dim=()):
-    return x.all_(dim).bool()
+    return jt.ops.all_(x, dim).bool()
 jt.Var.all = all
 
 def any(x,dim=()):
-    return x.any_(dim).bool()
+    return jt.ops.any_(x, dim).bool()
 jt.Var.any = any
     
 def bernoulli(input):

@@ -209,29 +209,43 @@ if _ran_post_process:
     _record_install("backends.post_process")
 del _ran_post_process
 
-# impl x.func(...) -> func_(...)
-args = {"x", "input", "self"}
-_white_list = {"mul", "add", "sub"}
-for k,v in list(Var.__dict__.items()):
-    if k.startswith("_"): continue
-    if k.endswith("_"): continue
-    if not callable(v): continue
+# ``all_`` and ``any_`` are reduction primitive names, not mutating methods.
+delattr(Var, "all_")
+delattr(Var, "any_")
 
-    if k not in _white_list:
-        if not hasattr(v, "__code__"): continue
-        conames = v.__code__.co_varnames
-        if len(conames) == 0: continue
-        arg_name = conames[0]
-        if arg_name not in args: continue
+_INPLACE_ALIASES = {
+    "deg2rad_": deg2rad,
+    "hardsigmoid_": nn.hardsigmoid,
+    "hardswish_": nn.hardswish,
+    "log2_": log2,
+    "masked_fill_": masked_fill,
+    "mul_": mul,
+    "pow_": pow,
+    "rad2deg_": rad2deg,
+    "rrelu_": nn.rrelu,
+    "rsqrt_": rsqrt,
+    "scatter_reduce_": scatter_reduce,
+    "sqr_": sqr,
+    "sub_": sub,
+    "squeeze_": squeeze,
+    "t_": t,
+    "transpose_": transpose,
+    "unsqueeze_": unsqueeze,
+}
 
-    new_k = k+"_"
-    if hasattr(Var, new_k): continue
-    def inplace_wrapper(new_k, prev_func):
-        setattr(Var, new_k, lambda x, *args, **kw: x.assign(prev_func(x, *args, **kw)))
-    inplace_wrapper(new_k, v)
-# Aliases are generated from Var.__dict__ as it stands RIGHT NOW: a method
-# installed later gets no alias, and a method replaced later leaves its alias
-# bound to the old implementation. See jittor/_install_order.py.
+
+def _make_inplace_alias(name, operation):
+    def inplace(self, *args, **kwargs):
+        return self.assign(operation(self, *args, **kwargs))
+    inplace.__name__ = name
+    return inplace
+
+
+for _alias_name, _operation in _INPLACE_ALIASES.items():
+    if not hasattr(Var, _alias_name):
+        setattr(Var, _alias_name, _make_inplace_alias(_alias_name, _operation))
+del _alias_name
+del _operation
 _record_install("root.inplace_aliases")
 
 from . import math_util

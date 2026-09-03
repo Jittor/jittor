@@ -101,9 +101,8 @@ class TestTheDeclarationIsEnforced(unittest.TestCase):
                         names.index("optim.public_exports"))
 
     def test_the_fast_path_is_declared_before_the_inplace_aliases(self):
-        # sum_/mean_ are generated from Var.__dict__ as it stands; generating
-        # them first would bind them to the implementation the fast path
-        # replaced.
+        # All Var method providers settle before the explicit in-place
+        # allowlist is installed; no later module may invent another alias.
         names = [step.name for step in _install_order.SEQUENCE]
         self.assertLess(names.index("nn.full_reduce_fast_path"),
                         names.index("root.inplace_aliases"))

@@ -191,7 +191,7 @@ class TestMiscStructure(unittest.TestCase):
             "log", "targets", "inputs", "targets_len", 3, "sum", True,
         )
 
-    def test_var_bindings_and_root_scan_remain_stable(self):
+    def test_var_bindings_do_not_invent_inplace_aliases(self):
         for name in ("repeat", "chunk", "expand"):
             with self.subTest(binding=name):
                 self.assertIs(getattr(jt.Var, name), _MOVED[name])
@@ -205,14 +205,7 @@ class TestMiscStructure(unittest.TestCase):
         self.assertIs(jt.repeat_interleave, misc.repeat_interleave)
         for name in ("repeat_", "repeat_interleave_", "chunk_", "expand_"):
             with self.subTest(inplace=name):
-                self.assertTrue(callable(getattr(jt.Var, name)))
-        for name in ("repeat", "chunk", "expand"):
-            wrapper = getattr(jt.Var, name + "_")
-            captured = tuple(
-                cell.cell_contents for cell in (wrapper.__closure__ or ())
-            )
-            with self.subTest(inplace_closure=name):
-                self.assertIn(_MOVED[name], captured)
+                self.assertFalse(hasattr(jt.Var, name))
 
     def test_cartesian_product_dispatches_through_public_meshgrid(self):
         calls = []
