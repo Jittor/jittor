@@ -16,4 +16,3 @@ new deployments.
 - `docs/legacy/`: documentation tooling pending Stage 8 retirement.
 - `install/legacy/`: installers for old environments.
 - `release/`: release-only utilities and offline asset packaging.
-- `services/legacy/`: explicitly enabled long-running services.

@@ -84,12 +84,11 @@ class TestWhatLeftTheDrawer(unittest.TestCase):
                         offenders.append("%s -> %s" % (path, name))
         self.assertEqual(offenders, [])
 
-    def test_the_converter_launcher_names_the_module_it_runs(self):
-        # The container installs the published wheel and names the module in
-        # FLASK_APP, so the script and the package have to agree.
-        script = _text(REPO_ROOT / "tools" / "services" / "legacy"
-                       / "converter_server.sh")
-        self.assertIn("FLASK_APP=jittor.compat.converter_server", script)
+    def test_legacy_converter_service_is_absent(self):
+        self.assertFalse(
+            (REPO_ROOT / "tools" / "services" / "legacy").exists())
+        server = _text(PACKAGE / "compat" / "converter_server.py")
+        self.assertNotIn("tools/services/legacy", server)
 
     def test_the_user_tools_package_costs_nothing_to_have(self):
         # jittor.tools.nvtx dlopens the NVTX library at import; importing

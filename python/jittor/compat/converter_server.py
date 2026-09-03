@@ -1,10 +1,9 @@
-"""HTTP front end for the PyTorch-source converter.
+"""Optional HTTP front end for the PyTorch-source converter.
 
 Lives next to :mod:`jittor.compat.pytorch_converter`, the translator it
-exposes, rather than in the former ``jittor/utils`` drawer. Its launcher is
-``tools/services/legacy/converter_server.sh``; that script installs the
-published wheel inside a container and names this module in ``FLASK_APP``,
-so the two have to agree.
+exposes, rather than in the former ``jittor/utils`` drawer. Applications that
+need an HTTP service own its deployment, TLS, authentication, and resource
+limits; the repository no longer ships a long-running service launcher.
 """
 
 from flask import Flask
