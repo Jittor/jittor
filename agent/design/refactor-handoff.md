@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；本波审计基线 `8589860b`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 审计基线 498 个 |
+| 分支 | `2.0-refactor`；本波审计基线 `7c018c86`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 审计基线 501 个 |
 | 提交里出现过的任务号 | 212 个 |
 | 看板 | 已合并 **196** / 进行中 **0** / 待领 **74** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
@@ -186,16 +186,23 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `bindings` | 2.19 再迁 10 处 code/numpy/reindex shape/数量用户边界；累计 17 处，结构、C++、跨 pyjt 聚焦通过，其余调用点待分类 |
 | `compat` | 7.03 将 `compile/trace/script` 提升为稳定模块级 callable 并登记 approximate fidelity；身份、metadata、CPU 行为 4 项通过；完整 API 迁移仍待领 |
 
+第十三波合入 2 个严格保持待领的前置；8.06 经只读复核后未在轻量波次冒进：
+
+| 分区 | 第十三波结果 |
+| --- | --- |
+| `bindings` | 2.19 再迁 transpose/fuse_transpose/reshape 共 9 处视图形状边界；结构、三 TU 语法与 Python 负向节点通过 |
+| `compat` | 7.03 将 numerical owner 的 `eye` 提升为稳定模块对象并登记 approximate fidelity；CPU 3 项通过 |
+| `device` | 8.06 横跨 65 个 executeOp、胖注册表与 Python 属性通道，未形成足够独立的轻量切片，本波未改 |
+
 ## 6. 下一波起点
 
-按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第十三波使用 `device`、`bindings`、
+按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第十四波使用 `device`、`bindings`、
 `compat` 三个分区，只做下列互不抢热点的独立前置：
 
-- `device`：8.06，先做 ACL 去样板的代码组织前置：统一 launcher 注册/类型擦除接口，整理 `op_idx_map` 和
-  属性数据通道；不做性能优化，静态合同与 910B3 上机文档后续补齐，实机前保持待领。
-- `bindings`：续做 2.19 的下一组用户 shape/数量边界，精确迁移并保持旧宏语义不变；完整 486/62 分类前保持待领。
-- `compat`：续做 7.03 的 tensor factory 或 numerical owner 家族，先挑最终 owner 明确的模块级对象；不跨域改
-  `eye`/`empty_like`，完整 tensor/nn/module/cuda/data 迁移前保持待领。
+- `device`：8.06 只领一个能独立验证的 launcher 注册/类型擦除切片，先选一类算子证明接口，不铺 65 个尾巴；
+  静态合同和 910B3 上机步骤齐全后仍保持待实机。
+- `bindings`：续做 2.19 的下一组用户输入边界，精确迁移并保持旧宏语义不变；完整分类前保持待领。
+- `compat`：续做 7.03 的 `empty_like` 最终 owner 或一个明确的 numerical family，保持模块身份和 fidelity 可查询。
 
 Corex 8.14 的正式前置 4.12 尚未满足；ACL/NPU、ROCm、Corex 等本机缺硬件的后端允许先完成代码组织、
 公共接口和迁移文档，不做性能优化，但看板必须保留待实机状态并写清机型、SDK、命令和禁止 CPU fallback
