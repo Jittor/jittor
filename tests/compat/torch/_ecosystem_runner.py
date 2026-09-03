@@ -174,6 +174,23 @@ def _backend_report(runtime):
     return {}
 
 
+def _runtime_conditions(torch, tf32):
+    affinity = []
+    if hasattr(os, "sched_getaffinity"):
+        affinity = sorted(os.sched_getaffinity(0))
+    get_threads = getattr(torch, "get_num_threads", None)
+    return {
+        "affinity": affinity,
+        "runtime_threads": int(get_threads()) if callable(get_threads) else None,
+        "thread_env": {
+            name: os.environ.get(name, "")
+            for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS",
+                         "OPENBLAS_NUM_THREADS")
+        },
+        "precision": tf32,
+    }
+
+
 def _configure_tf32(torch, device):
     enabled = os.environ.get("JITTOR_ECOSYSTEM_TF32", "1").strip().lower()
     enabled = enabled not in ("", "0", "false", "no", "off")
@@ -253,6 +270,7 @@ def main():
     torch = _import_torch(options.runtime)
     to_device = _select_device(torch, options.runtime, options.device)
     tf32 = _configure_tf32(torch, options.device)
+    runtime_conditions = _runtime_conditions(torch, tf32)
 
     torch.manual_seed(options.seed)
     builder, requirements = _ecosystem_cases.CASES[options.case]
@@ -420,6 +438,7 @@ def main():
                 "package_site": os.environ.get("JITTOR_ECOSYSTEM_PACKAGE_SITE", ""),
                 "dependencies": dependencies,
                 "tf32": tf32,
+                "runtime_conditions": runtime_conditions,
             }
         )
     )

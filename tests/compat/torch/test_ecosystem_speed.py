@@ -15,12 +15,11 @@ gate is worse than an honest number. Run it as::
 Add ``JITTOR_ECOSYSTEM_SPEED_RATIO=1.2`` on a quiet machine to turn the ratios
 into a gate.
 
-The runner reports the fastest of its timed repeats, which is the right
-statistic -- interference only ever makes a sample slower. Three of them is
-not enough to pin it down on a shared machine, though: the same PyTorch CPU
-case has come back 25% apart between two whole-suite runs, wider than the
-ratios being judged. Raise ``JITTOR_ECOSYSTEM_REPEATS`` when a number has to
-be trusted rather than glanced at.
+The runner reports the fastest of at least ten timed repeats, which is the
+right statistic -- interference only ever makes a sample slower. The same
+PyTorch CPU case has come back 25% apart between shorter whole-suite runs,
+wider than the ratios being judged; ``JITTOR_ECOSYSTEM_REPEATS`` may raise,
+but not lower, this floor.
 """
 
 import os
@@ -32,6 +31,13 @@ from _ecosystem_harness import (
     _cuda_is_available,
     _torch_shim_is_active,
 )
+
+
+def _speed_repeats():
+    value = int(os.environ.get("JITTOR_ECOSYSTEM_REPEATS", "10"))
+    if value < 10:
+        raise ValueError("JITTOR_ECOSYSTEM_REPEATS must be at least 10")
+    return value
 
 
 SPEED_CASES = (
@@ -59,6 +65,7 @@ class _Speed:
     # by the small cases, which compare every gradient at a tight tolerance.
     forward_tolerance = 2e-2
     backward_tolerance = 5e-2
+    repeats = _speed_repeats()
 
     def test_large_convnet(self):
         self._compare("large_convnet")

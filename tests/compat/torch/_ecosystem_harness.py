@@ -299,6 +299,7 @@ class EcosystemComparison(unittest.TestCase):
     backward_tolerance = 1e-2
 
     device = "cpu"
+    repeats = REPEATS
 
     def _compare(self, case):
         _builder, requirements = _ecosystem_cases.CASES[case]
@@ -312,7 +313,7 @@ class EcosystemComparison(unittest.TestCase):
 
             torch_report, torch_log = _run(
                 REAL_TORCH_PYTHON, "torch", case, torch_output,
-                device=self.device, repeats=REPEATS,
+                device=self.device, repeats=self.repeats,
             )
             weights = root / "torch.weights.npz"
             self.assertTrue(weights.exists(), torch_log[-2000:])
@@ -323,7 +324,7 @@ class EcosystemComparison(unittest.TestCase):
                 jittor_output,
                 weights=weights,
                 device=self.device,
-                repeats=REPEATS,
+                repeats=self.repeats,
             )
 
             # Both runtimes report where they actually ran. Jittor enables CUDA
@@ -368,6 +369,12 @@ class EcosystemComparison(unittest.TestCase):
                 torch_report.get("tf32"),
                 jittor_report.get("tf32"),
                 "{} used different CUDA TF32 policies".format(case),
+            )
+            self.assertEqual(
+                torch_report.get("runtime_conditions"),
+                jittor_report.get("runtime_conditions"),
+                "{} timed the runtimes with different thread counts, affinity, "
+                "or precision policy".format(case),
             )
             if self.device == "npu":
                 backend = jittor_report.get("backend") or {}
