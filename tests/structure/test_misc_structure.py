@@ -153,12 +153,18 @@ class TestMiscStructure(unittest.TestCase):
                 self.assertIs(pickle.loads(legacy_pickle), implementation)
 
     def test_tensor_operation_dependencies_remain_dynamic(self):
-        marker = object()
+        # cumsum resolves its kernel through the module at call time, so a
+        # patch here takes effect. The vehicle used to be `numpy_cumsum`, which
+        # cumsum called directly on CPU; cumsum now has one implementation for
+        # both devices and reaches it through `_scan_2d`, so that is what the
+        # late binding has to carry. `wraps` because the result is reshaped by
+        # the caller and a bare marker would not survive it.
         value = jt.array([1.0, 2.0])
-        with mock.patch.object(misc, "numpy_cumsum", return_value=marker) as patched:
+        with mock.patch.object(misc, "_scan_2d",
+                               wraps=misc._scan_2d) as patched:
             with jt.flag_scope(use_cuda=0):
-                self.assertIs(misc.cumsum(value, 0), marker)
-        patched.assert_called_once_with(value, 0)
+                misc.cumsum(value, 0).sync()
+        patched.assert_called_once()
 
         loss = misc.CTCLoss(blank=3, reduction="sum", zero_infinity=True)
         with mock.patch.object(misc, "ctc_loss", return_value=marker) as patched:

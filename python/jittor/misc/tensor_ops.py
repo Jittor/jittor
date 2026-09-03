@@ -1411,6 +1411,68 @@ def cub_cumsum(x, dim=None):
         x = x.permute(order)
     return x
 
+def _cumsum_dim(dim, ndim):
+    '''torch's dim contract: ``-ndim <= dim < ndim``, negatives from the end.
+
+    The old guard was ``assert(dim >= -1 and dim < len(x.shape))``, which
+    accepted exactly *one* negative value: ``cumsum(x, -2)`` on a 3-D tensor
+    raised, while ``cumsum(x, 1)`` -- the same axis -- did not.
+    '''
+    if dim is None:
+        dim = -1
+    ndim = max(ndim, 1)
+    if not -ndim <= dim < ndim:
+        raise IndexError(
+            "cumsum: dim %d is out of range for a %d-dimensional input"
+            % (dim, ndim))
+    return dim % ndim
+
+
+def _scan_2d(x, reverse):
+    '''Inclusive prefix sum along axis 1 of a 2-D var. The kernel, only.
+
+    Which backend runs it is the one thing that varies here; the shape
+    handling, the dim contract and the derivative all sit above it in
+    :func:`cumsum` and :class:`_Cumsum`. The CPU side used to be
+    ``jt.numpy_code``: a host callback that pulled the input out of the lazy
+    graph, ran a Python function per execution, and carried its own separate
+    backward.
+    '''
+    if jt.flags.use_cuda:
+        return jt.compile_extern.cub_ops.cub_cumsum(x, reverse)
+    index = "n - 1 - k" if reverse else "k"
+    return jt.code(x.shape, x.dtype, [x], cpu_src=f'''
+        @alias(x, in0)
+        @alias(y, out0)
+        int64 rows = y_shape0, n = y_shape1;
+        for (int64 r = 0; r < rows; ++r) {{
+            y_type acc = 0;
+            for (int64 k = 0; k < n; ++k) {{
+                int64 i = {index};
+                acc += @x(r, i);
+                @y(r, i) = acc;
+            }}
+        }}
+    ''')
+
+
+class _Cumsum(jt.Function):
+    '''cumsum's derivative, written once.
+
+    ``d/dx_j sum_{i<=k} x_i`` is 1 exactly when ``j <= k``, so the gradient of
+    an inclusive forward scan is an inclusive *reverse* scan of the seed. Each
+    backend used to carry its own copy of that rule -- ``CubCumsumOp::grad`` in
+    C++, a numpy flip/cumsum/flip in Python -- and neither knew about the
+    other.
+    '''
+
+    def execute(self, x):
+        return jt.misc._scan_2d(x, False)
+
+    def grad(self, g):
+        return jt.misc._scan_2d(g, True)
+
+
 def cumsum(x, dim=None):
     '''
     Parameters:
@@ -1421,14 +1483,33 @@ def cumsum(x, dim=None):
     Returns:
     --------
     the cumulative sum in dim of x
+
+    One implementation for every backend. It used to be two, chosen by
+    ``jt.flags.use_cuda``: CUB on CUDA and a numpy host callback on CPU, with a
+    gradient rule each and a ``dim`` guard each.
     '''
-    if (dim == None):
-        dim = -1
-    assert(dim >= -1 and dim < len(x.shape))
-    if jt.flags.use_cuda:
-        return jt.misc.cub_cumsum(x, dim)
+    dim = jt.misc._cumsum_dim(dim, x.ndim)
+    shape = list(x.shape)
+    last = max(len(shape) - 1, 0)
+    order = None
+    if dim != last:
+        order = list(range(len(shape)))
+        order[dim], order[last] = order[last], order[dim]
+        x = x.permute(order)
+    moved_shape = x.shape
+    if x.numel() == 0:
+        # Nothing to scan, and the empty case has to be caught here rather than
+        # in the kernel: flattening to 2-D cannot infer -1 against a zero-length
+        # axis, and a zero-row result asks the CUDA block scan for a grid of
+        # zero blocks -- "invalid configuration argument", raised
+        # asynchronously, so it surfaces in whatever runs next.
+        y = x.clone()
     else:
-        return jt.misc.numpy_cumsum(x, dim)
+        y = jt.misc._Cumsum.apply(
+            x.reshape([-1, x.shape[-1]])).reshape(moved_shape)
+    if order is not None:
+        y = y.permute(order)
+    return y
 
 jt.Var.cumsum = cumsum
 
