@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；本波审计基线 `e6ee99aa`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 审计基线 494 个 |
+| 分支 | `2.0-refactor`；本波审计基线 `8589860b`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 审计基线 498 个 |
 | 提交里出现过的任务号 | 212 个 |
 | 看板 | 已合并 **196** / 进行中 **0** / 待领 **74** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
@@ -178,18 +178,28 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | 6.B02 收口 65 处 ACL 执行失败、launcher 查表与 fused 当前算子归因；代码阶段完成，仍待 910B3 |
 | `gates` | 0.20 删除 legacy converter service 与活跃导航，结构/布局通过；其余文档树和系统布局未做 |
 
+第十二波合入 3 个严格保持待领的代码组织前置：
+
+| 分区 | 第十二波结果 |
+| --- | --- |
+| `device` | 8.14 新增 Corex `discover()` 只读探测、`COREX_HOME` 路径配置和离线 fake compiler 合同；2 项通过。正式依赖 4.12 未满足，本机无 Corex/Iluvatar 硬件 |
+| `bindings` | 2.19 再迁 10 处 code/numpy/reindex shape/数量用户边界；累计 17 处，结构、C++、跨 pyjt 聚焦通过，其余调用点待分类 |
+| `compat` | 7.03 将 `compile/trace/script` 提升为稳定模块级 callable 并登记 approximate fidelity；身份、metadata、CPU 行为 4 项通过；完整 API 迁移仍待领 |
+
 ## 6. 下一波起点
 
-按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第十二波使用 `device`、`bindings`、
+按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第十三波使用 `device`、`bindings`、
 `compat` 三个分区，只做下列互不抢热点的独立前置：
 
-- `device`：8.14，仅做不依赖 4.12 的 Corex `check()` 只读探测、`COREX_HOME` 可配置路径和上机文档；
-  不删 `process_acl`，不标完成，等 4.12 与真实 Corex/Iluvatar 卡。
-- `bindings`：续做 2.19 的 shape/数量用户边界 cohort，精确迁约 10 处到 `USER_CHECK`，完整分类前保持待领。
-- `compat`：续做 7.03 的 compiler installer family，把 `compile/jit.trace/jit.script` 变成稳定对象并登记保真度。
+- `device`：8.06，先做 ACL 去样板的代码组织前置：统一 launcher 注册/类型擦除接口，整理 `op_idx_map` 和
+  属性数据通道；不做性能优化，静态合同与 910B3 上机文档后续补齐，实机前保持待领。
+- `bindings`：续做 2.19 的下一组用户 shape/数量边界，精确迁移并保持旧宏语义不变；完整 486/62 分类前保持待领。
+- `compat`：续做 7.03 的 tensor factory 或 numerical owner 家族，先挑最终 owner 明确的模块级对象；不跨域改
+  `eye`/`empty_like`，完整 tensor/nn/module/cuda/data 迁移前保持待领。
 
-Corex 8.14 的正式前置 4.12 尚未满足，本波只允许与源码改写无关的探测/路径/文档前置；设备模型统一后再
-删除旧 `process_acl` 并完成实机验收。
+Corex 8.14 的正式前置 4.12 尚未满足；ACL/NPU、ROCm、Corex 等本机缺硬件的后端允许先完成代码组织、
+公共接口和迁移文档，不做性能优化，但看板必须保留待实机状态并写清机型、SDK、命令和禁止 CPU fallback
+的检查。设备模型统一后再删除旧 `process_acl` 并完成实机验收。
 
 用户已明确批准：ACL/NPU、ROCm、Corex 等本机缺硬件的后端可以先完成代码组织、公共接口和迁移文档，
 不做性能优化；必须在看板写清待跑机型与命令，真实设备验收前不得宣称硬件验证完成。3.18 与 3.22 的

@@ -237,7 +237,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 2.16 | 类型提升表 | 已合并 | bindings | d821c34a（int_dtype_promote 提升格；标量按 `_is_scalar` 标志认，不再按形状；float 标量把整数张量提到默认 float dtype）、a39a2f1c（补：双标量走提升格，交换左右操作数不再改变 dtype 与结果） |
 | 2.17 | 算子身份用注册期整型 id | 已合并 | coreops | 1d792e16。OpInfo 注册分配 OpId，核心/tuner/pass 名字比较归零，fast_strcmp 删除，Tape 用显式 pending flag；CPU 80 项、CUDA 5 项及结构契约通过 |
 | 2.18 | 算子注册表惰性初始化 | 已合并 | coreops | bca71d1f。注册表函数内惰性构造，typed polymorphic constructor 取代 `type_info + void*` 手工分派，ACL API/op_types 同步惰性；结构 3、C++ 注册 3、custom-op 2、GPU2 跨 so 1 项通过 |
-| 2.19 | 错误分两档 | 待领 | | ed12fe21 已合入析构半项；c119f3bf 建立保持 runtime_error 转换兼容的 UserError/InternalInvariantError 与流式检查入口，并迁移 arg_reduce/argsort/reduce/broadcast_to 共 7 处公开维度边界。C++ 具体类型、Python 跨 pyjt 可捕获各 1 项，迁移计数 2 项、析构/信号新宏防绕过 2 项通过；旧 LOGf/CHECK/ASSERT 未变，其余调用点分类仍待领 |
+| 2.19 | 错误分两档 | 待领 | | ed12fe21 已合入析构半项；c119f3bf 建立保持 runtime_error 转换兼容的 UserError/InternalInvariantError 与流式检查入口，并迁移 arg_reduce/argsort/reduce/broadcast_to 共 7 处公开维度边界；83754995 再迁 code_op/numpy_code_op/reindex_op/reindex_reduce_op 共 10 处 shape/数量用户边界。C++ 具体类型、Python 跨 pyjt 可捕获、析构/信号防绕过及两组结构计数聚焦通过；旧 LOGf/CHECK/ASSERT 未变，其余 469/52 调用点分类仍待领 |
 | 2.20 | 信号处理器只做 `write` 与 `_exit`，符号化交给预建 helper 进程 | 已合并 | bindings | 上半 9b92f38d（去 stdio/LOGf/exit，标志改 volatile sig_atomic_t）；下半 640a4f07（符号化搬进崩溃前 fork 的 helper，经父进程 /proc/<pid>/maps 解析）；d874b01d 修 jit_key 用例（它原先靠信号处理器抛异常） |
 | 2.21 | `DEFINE_FLAG_WITH_SETTER` 先赋值再调 setter，签名收新旧两值 | 已合并 | coreops | 14336afd |
 | 2.22 | 环境变量统一 `JT_` 前缀 | 待领 | | |
@@ -383,7 +383,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 6.B17 | 析构不得抛 | 已合并 | cudabk | 272f00ba |
 | 7.01 | 「看起来支持其实空操作」一律改为实现或抛 `NotImplementedError`，需显式 `… | 已合并 | 兼容层分区 | ff395ecc b7c12ddc 0446217e 47012a27 46bc9ea7 49d41acf 9053a7c0 |
 | 7.02 | DDP 真实梯度同步 | 已合并 | 兼容层分区 | 4f08f1da |
-| 7.03 | 每个 torch API 一个模块级一等对象加保真度标注 | 待领 | | 3f009970 已合入 1/N：新增 exact/approximate/unimplemented 保真度注册与确定性报告；factories 最终拥有的 20 个 API 成为可独立 import、与 `torch.*` 同身份的稳定模块级 callable，当前语义保守标 approximate。身份 1 passed，元数据/CPU 调用 2 passed。`empty_like`/`eye` 留给其最终 compiler/numerical owner；tensor 79、nn 126 及 module/cuda/data 尚未迁移，保持待领 |
+| 7.03 | 每个 torch API 一个模块级一等对象加保真度标注 | 待领 | | 3f009970 已合入 1/N：新增 exact/approximate/unimplemented 保真度注册与确定性报告；factories 最终拥有的 20 个 API 成为可独立 import、与 `torch.*` 同身份的稳定模块级 callable，当前语义保守标 approximate。8589860b 再把 compiler family 的 `compile/trace/script` 提升为稳定模块级对象并登记 fidelity；身份/metadata/CPU 聚焦 4 项通过。`empty_like`/`eye` 留给其最终 compiler/numerical owner；tensor 79、nn 126 及 module/cuda/data 尚未迁移，保持待领 |
 | 7.04 | 激活显式、一次性、可查询 | 已合并 | compat | `f704b9d4`：删除 argv 源码嗅探与 `jt.flags` 代理，部署/运行时入口统一为幂等 `activate()`（`enable` 仅同对象别名），公开不可变 `activation_status()`；HOME/TMPDIR/NCCL/严格数学环境只在显式 preflight 中准备，并接入 `EXPLICIT_REQUIRES_GRAD` 策略。聚焦 bootstrap 41 passed，策略接线 1 passed，部署静态测试 15 passed；结构实算单例仍命中既有 JIT IR 重复行号失败，非本项激活回归。 |
 | 7.05 | install 事务化 | 待领 | | |
 | 7.06 | 依赖单向化 core→tensor→nn/optim→distributed→fsdp→适配器 | 已合并 | 兼容层分区 | 27c4bdeb |
@@ -427,7 +427,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 8.11 | 图同构优先：reduce 保留全尺寸输出，broadcast 去 rank 相关别名，flat 策略可配置 | 已合并 | dist | a1e769d5 |
 | 8.12 | 算子内不再复用全局 jit key 缓冲做缓存键 | 待领 | | |
 | 8.13 | cuTT 计划未命中时的 `cudaDeviceSynchronize` 删除或降流同步 | 已合并 | cudabk | c0d2cc5c |
-| 8.14 | Corex | 待领 | | |
+| 8.14 | Corex | 待领 | | 32cb3f8f 已合入独立前置：`discover()` 通过 `COREX_HOME` 解析 `bin/clang++`，返回只读结构化结果；新增离线 fake compiler 探测 2 passed 与 Corex 上机指南。正式依赖 4.12 未满足，不删 `process_acl`；本机无 Corex/Iluvatar 硬件，仍需真实设备验证 |
 | 8.15 | 多机 rendezvous | 待领 | dist（2/N） | 6d3b2ae3：TCPStore/FileStore 与 `env://`/`tcp://`；120174a6：NCCL WORLD unique id 经 Store 交换、错误 endpoint 有界超时。仍缺 HCCL、NCCL 子组 unique id、真实两机 collective 与跨机失败验收 |
 | 8.16 | 多机启动器 | 待领 | | |
 | 8.17 | 跨机网络与诊断 | 待领 | | |
