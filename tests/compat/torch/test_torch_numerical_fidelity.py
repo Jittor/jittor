@@ -414,6 +414,55 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertEqual(str(actual_left.dtype), "int64")
         self.assertEqual(str(actual_right.dtype), "int32")
 
+    def test_nan_reduction_family_is_stable_module_level_objects(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        for name in ("nansum", "nanmean"):
+            with self.subTest(name=name):
+                implementation = getattr(numerical, name)
+                self.assertTrue(callable(implementation))
+                self.assertIs(getattr(torch, name), implementation)
+                self.assertEqual(implementation.__module__, numerical.__name__)
+                self.assertEqual(implementation.__name__, name)
+
+    def test_nan_reduction_family_fidelity_is_queryable(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        for name in ("nansum", "nanmean"):
+            with self.subTest(name=name):
+                record = fidelity.fidelity_of("torch." + name)
+                self.assertIs(record.implementation, getattr(numerical, name))
+                self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+                self.assertIn("device", record.detail)
+                self.assertIn("out", record.detail)
+
+    def test_nan_reduction_family_cpu_full_and_dim_keepdim_matches_numpy(self):
+        values = np.array([[1.0, np.nan, 3.0], [np.nan, 5.0, 6.0]], dtype="float32")
+        with torch.flag_scope(use_cuda=0):
+            actual_sum = torch.nansum(torch.array(values)).numpy()
+            actual_mean = torch.nanmean(torch.array(values)).numpy()
+            sum_dim = torch.nansum(
+                torch.array(values), dim=0, keepdim=True).numpy()
+            mean_dim = torch.nanmean(
+                torch.array(values), dim=1, keepdim=False).numpy()
+        np.testing.assert_allclose(actual_sum, np.nansum(values), rtol=1e-6)
+        np.testing.assert_allclose(actual_mean, np.nanmean(values), rtol=1e-6)
+        np.testing.assert_allclose(
+            sum_dim, np.nansum(values, axis=0, keepdims=True), rtol=1e-6)
+        np.testing.assert_allclose(
+            mean_dim, np.nanmean(values, axis=1), rtol=1e-6)
+
+    def test_nan_reduction_family_var_methods_keep_nan_count(self):
+        values = np.array([[1.0, np.nan, 3.0], [np.nan, 5.0, 6.0]], dtype="float32")
+        with torch.flag_scope(use_cuda=0):
+            tensor = torch.array(values)
+            actual_sum = tensor.nansum(dim=0).numpy()
+            actual_mean = tensor.nanmean(dim=1, keepdim=True).numpy()
+        np.testing.assert_allclose(actual_sum, np.nansum(values, axis=0), rtol=1e-6)
+        np.testing.assert_allclose(
+            actual_mean, np.nanmean(values, axis=1, keepdims=True), rtol=1e-6)
+
 
 if __name__ == "__main__":
     unittest.main()

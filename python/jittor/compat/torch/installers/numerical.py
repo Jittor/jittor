@@ -389,6 +389,47 @@ for _pairwise_search_name in ("cdist", "bucketize"):
 del _pairwise_search_name
 
 
+_NAN_REDUCTION_FIDELITY_DETAIL = (
+    "matches Torch NaN-ignoring reductions and NaN counts for supported real "
+    "tensor inputs but omits device, layout, and out keyword semantics"
+)
+
+
+def _nansum_impl(input, dim=None, keepdim=False, **kwargs):
+    values = jt.nan_to_num(input, nan=0.0)
+    return (values.sum() if dim is None
+            else values.sum(dim, keepdims=keepdim))
+
+
+def nansum(input, dim=None, keepdim=False, **kwargs):
+    """Sum tensor values while treating NaNs as zero."""
+    return _nansum_impl(input, dim=dim, keepdim=keepdim, **kwargs)
+
+
+def _nanmean_impl(input, dim=None, keepdim=False, **kwargs):
+    count = 1.0 - jt.isnan(input).float32()
+    values = jt.nan_to_num(input, nan=0.0)
+    if dim is None:
+        return values.sum() / count.sum()
+    return (values.sum(dim, keepdims=keepdim)
+            / count.sum(dim, keepdims=keepdim))
+
+
+def nanmean(input, dim=None, keepdim=False, **kwargs):
+    """Mean tensor values while ignoring NaNs in the denominator."""
+    return _nanmean_impl(input, dim=dim, keepdim=keepdim, **kwargs)
+
+
+for _nan_reduction_name in ("nansum", "nanmean"):
+    register_fidelity(
+        "torch." + _nan_reduction_name,
+        globals()[_nan_reduction_name],
+        Fidelity.APPROXIMATE,
+        _NAN_REDUCTION_FIDELITY_DETAIL,
+    )
+del _nan_reduction_name
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
@@ -769,18 +810,8 @@ def install(ctx):
         # jittor has no 0-dim tensors; a full reduction stays (1,).
         return out.reshape(target) if target else out.reshape(-1)
     _alias("logsumexp", _logsumexp); Var.logsumexp = _logsumexp
-    def _nansum(input, dim=None, keepdim=False, **k):
-        z = jt.nan_to_num(input, nan=0.0)
-        return z.sum() if dim is None else z.sum(dim, keepdims=keepdim)
-    _alias("nansum", _nansum); Var.nansum = _nansum
-    def _nanmean(input, dim=None, keepdim=False, **k):
-        # Keep the non-NaN count explicit rather than coupling it to comparison codegen.
-        cnt = 1.0 - jt.isnan(input).float32()
-        z = jt.nan_to_num(input, nan=0.0)
-        if dim is None:
-            return z.sum() / cnt.sum()
-        return z.sum(dim, keepdims=keepdim) / cnt.sum(dim, keepdims=keepdim)
-    _alias("nanmean", _nanmean); Var.nanmean = _nanmean
+    _alias("nansum", nansum); Var.nansum = _nansum_impl
+    _alias("nanmean", nanmean); Var.nanmean = _nanmean_impl
     def _std_mean(input, dim=None, unbiased=True, keepdim=False, correction=None, **k):
         mean = input.mean() if dim is None else input.mean(dim, keepdims=keepdim)
         std = input.std() if dim is None else input.std(dim)  # jittor std is unbiased
