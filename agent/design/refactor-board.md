@@ -212,7 +212,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 0.17 | `pyproject.toml` 的 `pythonpath` 改由 conftest 按环境变… | 已合并 | 构建 | b19d098f |
 | 0.18 | 门禁每条目断言至少执行 1 个非 skip 用例 | 已合并 | gates | ee29bee3、2f3f1aaf。恒 skip 的判据**从路径清单改成规则**：读测试自己写的 skip 理由，全都在说「这台机器缺某样东西」才算解释得通。清单版在这台机器上会是 73 条、换台机器又是另外 73 条，而且每加一个设备测试都要记得报到。规则一上线就抓出四个说不清自己缺什么的文件（`Not use cub, Skip`、`skip_this_test`），都改成说明缺什么，而不是给它们开豁免 |
 | 0.19 | 结构测试从「精确清单」改成「规则」 | 已合并 | gates | c3bcd277 |
-| 0.20 | 布局收尾 | 待领 | | |
+| 0.20 | 布局收尾 | 待领 | | ef31a0d6 已合入 1/N：删除 `tools/services/legacy` 的 converter launcher 与说明，清除 tools 活跃导航和 compat converter 对旧部署脚本的引用；converter 模块保留，HTTP 服务部署由应用负责。不存在结构节点 1 passed，仓库布局通过。`agent/design`/`agent/results` 权威树迁移、`tests/system` 删除及 AWESOME/ASV 归位均未做，保持待领 |
 | 0.21 | 测试起的子进程不带 PYTHONPATH，门禁机器上是假绿 | 已合并 | gates | 46dbe946、a5ce7310 |
 | 1.01 | 把 `utils/data.gz` 解出的 `data.cc` 还原为可读的五个翻译单元 | 已合并 | codegen | ecb6a112（+72f020b3 用例） |
 | 1.02 | `op_compiler.cc:30-69` 用正则给 `ParallelPass` 输出打补丁… | 已合并 | codegen | 3eb34e6a |
