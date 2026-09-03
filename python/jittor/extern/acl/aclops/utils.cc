@@ -103,8 +103,8 @@ namespace jittor
             {"NanToNum", 60},
     };
 
-    int CreateAclTensor(const std::vector<int64_t> &shape, void *deviceAddr, int64_t size,
-                        aclDataType dataType, aclTensor **tensor, bool use_nchw)
+    aclError CreateAclTensor(const std::vector<int64_t> &shape, void *deviceAddr, int64_t size,
+                             aclDataType dataType, aclTensor **tensor, bool use_nchw)
     {
         // 计算连续tensor的strides
         std::vector<int64_t> strides(shape.size(), 1);
@@ -115,17 +115,18 @@ namespace jittor
         if (shape.size() == 0)
             strides = {};
         // 调用aclCreateTensor接口创建aclTensor
+        *tensor = nullptr;
         if (use_nchw)
             *tensor = aclCreateTensor(shape.data(), shape.size(), dataType, strides.data(), 0, aclFormat::ACL_FORMAT_NCHW,
                                       shape.data(), shape.size(), deviceAddr);
         else
             *tensor = aclCreateTensor(shape.data(), shape.size(), dataType, strides.data(), 0, aclFormat::ACL_FORMAT_ND,
                                       shape.data(), shape.size(), deviceAddr);
-        return 0;
+        return *tensor == nullptr ? ACL_ERROR_FAILURE : ACL_SUCCESS;
     }
 
-    int CreateFakeTransAclTensor(std::vector<int64_t> &shape, void *deviceAddr, int64_t size,
-                                 aclDataType dataType, aclTensor **tensor, bool use_nchw)
+    aclError CreateFakeTransAclTensor(std::vector<int64_t> &shape, void *deviceAddr, int64_t size,
+                                      aclDataType dataType, aclTensor **tensor, bool use_nchw)
     {
         // 计算连续tensor的strides
         std::vector<int64_t> strides(shape.size(), 1);
@@ -142,12 +143,13 @@ namespace jittor
             std::swap(strides[n - 1], strides[n - 2]);
         }
         // 调用aclCreateTensor接口创建aclTensor
+        *tensor = nullptr;
         if (use_nchw)
             *tensor = aclCreateTensor(shape.data(), shape.size(), dataType, strides.data(), 0, aclFormat::ACL_FORMAT_NCHW,
                                       shape.data(), shape.size(), deviceAddr);
         else
             *tensor = aclCreateTensor(shape.data(), shape.size(), dataType, strides.data(), 0, aclFormat::ACL_FORMAT_ND,
                                       shape.data(), shape.size(), deviceAddr);
-        return 0;
+        return *tensor == nullptr ? ACL_ERROR_FAILURE : ACL_SUCCESS;
     }
 }

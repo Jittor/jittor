@@ -26,7 +26,9 @@ namespace jittor
     EXTERN_LIB aclrtStream aclstream;
     EXTERN_LIB void *workspaceAddr;
 
-    void mallocWorkSpace(uint64_t size);
+    // Returns a temp-allocator-owned buffer. Allocation failure throws and
+    // leaves workspaceAddr in an empty, retryable state.
+    void *mallocWorkSpace(uint64_t size);
 
     void acl_jittor_op_compiler(string &filename, string &src, bool is_acl, string &extra_flags);
 

@@ -194,6 +194,57 @@ fi
 replacement for the `BaseOpRunner` `sync_run=1` check above and may rebuild the
 JIT cache when toggled.
 
+## Verify ACL tensor and workspace ownership
+
+The ACL runner creates tensor descriptors explicitly and obtains its shared
+aclnn workspace from Jittor's temporary allocator. On Ascend 910B3, source CANN,
+check the device, and record memory before running a process that grows the
+workspace through several normal matrix multiplications:
+
+```bash
+source "$CANN_SET_ENV"
+export ASCEND_RT_VISIBLE_DEVICES=<allocated-device>
+npu-smi info | tee "$TMPDIR/before-workspace.txt"
+
+sync_run=1 python - <<'PY' 2>&1 | tee "$TMPDIR/workspace-normal.log"
+import numpy as np
+import jittor as jt
+
+assert getattr(jt.compiler, "has_acl", 0), "ACL was not detected"
+jt.flags.use_acl = 1
+jt.flags.use_cuda = 1
+for width in (64, 128, 256):
+    value = np.arange(width * width, dtype=np.float32).reshape(width, width)
+    actual = jt.matmul(jt.array(value), jt.array(value)).numpy()
+    np.testing.assert_allclose(actual, value @ value, rtol=2e-4, atol=2e-2)
+print("ACL workspace normal path passed")
+PY
+
+if rg -i "fallback cpu|cpu fallback" "$TMPDIR/workspace-normal.log"; then
+  exit 1
+fi
+
+npu-smi info | tee "$TMPDIR/after-workspace.txt"
+```
+
+The normal run is accepted only with correct values and no CPU fallback. After
+the Python process exit, it must no longer appear in `npu-smi`; compare
+`before-workspace.txt` and `after-workspace.txt` to confirm its workspace was
+released rather than retained by an orphan process.
+
+Do not manufacture an unbounded allocation on a shared NPU. When an existing
+workload naturally reproduces a workspace failure, preserve its log and extract
+the attribution with:
+
+```bash
+rg "ACL workspace allocation failed" "$TMPDIR/workspace-failure.log"
+```
+
+The error must report `workspace requested bytes`, the `workspace allocator`,
+and the underlying allocation failure. A later small probe in a fresh process
+must still pass without CPU fallback; otherwise the failed allocation did not
+leave the global workspace in a retryable empty state.
+
 ## Run the maintained NPU gate
 
 The NPU nox session creates isolated state, checks `npu-smi`, runs a real ACL

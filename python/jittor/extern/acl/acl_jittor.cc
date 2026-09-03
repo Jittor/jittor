@@ -6,6 +6,7 @@
 // ***************************************************************
 #include "common.h"
 #include "op.h"
+#include "executor.h"
 #include "acl_jittor.h"
 #include "utils/str_utils.h"
 #include <chrono>
@@ -131,6 +132,8 @@ namespace jittor
     aclrtStream aclstream;
     void *workspaceAddr = nullptr;
     uint64_t nowWorkSpaceSize = 0;
+    Allocator *workspaceAllocator = nullptr;
+    size_t workspaceAllocation = 0;
 
 #define CHECK_ACL(x) ASSERTop(x, ==, 0)
 
@@ -146,25 +149,72 @@ namespace jittor
                  << "retcode:" << _acl_r;                                   \
     } while (0)
 
-    void mallocWorkSpace(uint64_t size)
+    void releaseWorkSpace()
     {
-        uint64_t alloc_size = size + 32;
-        alloc_size = ((alloc_size - 1) / 32 + 1) * 32;
-        if (alloc_size > nowWorkSpaceSize)
+        void *ptr = workspaceAddr;
+        size_t size = nowWorkSpaceSize;
+        Allocator *allocator = workspaceAllocator;
+        size_t allocation = workspaceAllocation;
+        workspaceAddr = nullptr;
+        nowWorkSpaceSize = 0;
+        workspaceAllocator = nullptr;
+        workspaceAllocation = 0;
+        if (ptr != nullptr)
         {
-            // The workspace buffer is shared by every aclnn op enqueued on
-            // aclstream. Growing it frees the old buffer, which may still be
-            // in use by a previously-enqueued (async) op. Drain the stream
-            // once here so the free is safe. This path only triggers when the
-            // workspace grows (essentially warmup), so it is not on the hot
-            // path -- which lets us drop the per-op syncs in acl_op_exec.cc.
-            if (workspaceAddr != nullptr)
-                aclrtSynchronizeStream(aclstream);
-            aclrtFree(workspaceAddr);
-            nowWorkSpaceSize = alloc_size;
-            auto ret = aclrtMalloc(&workspaceAddr, nowWorkSpaceSize, ACL_MEM_MALLOC_HUGE_FIRST);
-            CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("allocate workspace failed. ERROR: %d\n", ret); return);
+            ASSERT(allocator != nullptr);
+            allocator->free(ptr, size, allocation);
+            allocator->gc();
         }
+    }
+
+    void *mallocWorkSpace(uint64_t size)
+    {
+        if (size == 0)
+            return nullptr;
+        if (size > std::numeric_limits<uint64_t>::max() - 31)
+            LOGf << "ACL workspace allocation failed: workspace requested bytes"
+                 << size << "overflow alignment";
+        uint64_t alloc_size = (size + 31) / 32 * 32;
+        if (alloc_size <= nowWorkSpaceSize)
+            return workspaceAddr;
+
+        // The workspace is shared by aclnn ops enqueued on aclstream. Drain
+        // before returning the old allocation to its owner; releaseWorkSpace
+        // clears every global field before allocator code can fail.
+        if (workspaceAddr != nullptr)
+        {
+            auto sync_ret = aclrtSynchronizeStream(aclstream);
+            if (sync_ret != ACL_SUCCESS)
+                LOGf << "ACL workspace synchronization failed, return code"
+                     << sync_ret << acl_error_to_string(sync_ret);
+        }
+        releaseWorkSpace();
+
+        Allocator *new_allocator = exe.temp_allocator;
+        if (new_allocator == nullptr)
+            LOGf << "ACL workspace allocation failed: workspace allocator is null;"
+                 << "workspace requested bytes" << alloc_size;
+        size_t new_allocation = 0;
+        void *new_workspace = nullptr;
+        try
+        {
+            new_workspace = new_allocator->alloc(alloc_size, new_allocation);
+        }
+        catch (const std::exception &error)
+        {
+            LOGf << "ACL workspace allocation failed: workspace requested bytes"
+                 << alloc_size << "workspace allocator" << new_allocator->name()
+                 << error.what();
+        }
+        if (new_workspace == nullptr)
+            LOGf << "ACL workspace allocation failed: workspace requested bytes"
+                 << alloc_size << "workspace allocator" << new_allocator->name();
+
+        workspaceAddr = new_workspace;
+        nowWorkSpaceSize = alloc_size;
+        workspaceAllocator = new_allocator;
+        workspaceAllocation = new_allocation;
+        return workspaceAddr;
     }
     static void *acl_jittor_process_callback(void *)
     {
@@ -216,13 +266,22 @@ namespace jittor
         {
             acl_jittor_thread_running = 0;
             // CHECK_ACL(aclrtUnSubscribeReport(acl_jittor_tid, 0));
+            if (workspaceAddr != nullptr)
+            {
+                CHECK_ACL_PEEK(aclrtSynchronizeStream(aclstream));
+                try
+                {
+                    releaseWorkSpace();
+                }
+                catch (const std::exception &error)
+                {
+                    LOGe << "ACL workspace release failed during shutdown:"
+                         << error.what();
+                }
+            }
             aclrtDestroyStream(aclstream);
             aclrtResetDevice(deviceId);
             CHECK_ACL_PEEK(aclFinalize());
-            if (nowWorkSpaceSize > 0)
-            {
-                aclrtFree(workspaceAddr);
-            }
         }
 
     } _acl_jittor_initer;
