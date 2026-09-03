@@ -9,7 +9,54 @@ import sys as _sys
 import jittor as jt
 
 from ...permissive import install_permissive_package
+from ..fidelity import Fidelity, register_fidelity
 from ..library import install_torch_library
+
+
+_COMPILE_DEFAULT_BACKENDS = (None, "", "inductor", "eager", "aot_eager")
+
+
+def compile(model=None, *args, **kwargs):
+    """Expose the compiler-family callable as a stable module-level object."""
+    from ...stub_policy import unimplemented
+    if kwargs.get("fullgraph"):
+        unimplemented(
+            "torch.compile(fullgraph=True)",
+            "accept an unchecked single-graph assertion",
+            "Drop fullgraph=True because Jittor runs each op through its own JIT.",
+        )
+    backend = kwargs.get("backend")
+    if backend not in _COMPILE_DEFAULT_BACKENDS:
+        name = getattr(backend, "__name__", None) or repr(backend)
+        unimplemented(
+            "torch.compile(backend=%s)" % name,
+            "silently discard a custom compiler backend",
+            "Jittor has no pluggable torch.compile backend.",
+        )
+    return model if model is not None else (lambda value: value)
+
+
+def script(obj=None, **kwargs):
+    """TorchScript scripting remains an explicit eager pass-through."""
+    return obj if obj is not None else (lambda value: value)
+
+
+def trace(func=None, example_inputs=None, *args, **kwargs):
+    """Expose eager tracing behavior as a stable module-level object."""
+    from ...stub_policy import degraded, unimplemented
+    if kwargs.get("check_trace"):
+        unimplemented(
+            "torch.jit.trace(check_trace=True)",
+            "report an unchecked traced graph comparison",
+            "Pass check_trace=False, or verify outputs yourself.",
+        )
+    if func is not None:
+        degraded(
+            "torch.jit.trace",
+            "return an eager callable instead of a TorchScript artifact",
+            "Values are identical; only the traced artifact is missing.",
+        )
+    return func if func is not None else (lambda value: value)
 
 
 def install(ctx):
@@ -62,7 +109,7 @@ def install(ctx):
                 "Jittor compiles through its own stack; there is no pluggable "
                 "torch.compile backend.")
         return model if model is not None else (lambda m: m)
-    _alias("compile", _compile)
+    _alias("compile", compile)
     # torch.jit: jittor has no TorchScript; the script/trace decorators are pass-throughs
     # (the eager fn already runs), and is_scripting/is_tracing report False.
     import abc as _abc
@@ -209,9 +256,18 @@ def install(ctx):
                 "Values are identical; only the traced artefact is missing.")
         return func if func is not None else (lambda f: f)
 
-    _jit.script = _jit_script
-    _jit.trace = _jit_trace
-    _jit.trace_module = _jit_trace
+    _jit.script = script
+    _jit.trace = trace
+    _jit.trace_module = trace
+    register_fidelity(
+        "torch.compile", compile, Fidelity.APPROXIMATE,
+        "Jittor executes eagerly and does not produce a single compiled graph.")
+    register_fidelity(
+        "torch.jit.script", script, Fidelity.APPROXIMATE,
+        "Jittor does not emit a TorchScript artifact.")
+    register_fidelity(
+        "torch.jit.trace", trace, Fidelity.APPROXIMATE,
+        "Jittor returns the eager callable instead of a traced artifact.")
     _jit.script_if_tracing = lambda f: f
     _jit.ignore = lambda f=None, **k: (f if callable(f) else (lambda g: g))
     _jit.unused = lambda f: f
