@@ -11,6 +11,7 @@
 #include "opt/expr.h"
 #include "opt/pass_manager.h"
 #include "opt/pass/parallel_pass.h"
+#include "ops/op_register.h"
 #include "opt/pass/loop_var_analyze_pass.h"
 
 namespace jittor {
@@ -367,7 +368,7 @@ void ParallelPass::run() {
 
         bool force_atomic = false;
         for (auto o : op->ops) {
-            if (o->name() == string("reindex_reduce")) {
+            if (o->is_op(op_ids::reindex_reduce())) {
                 force_atomic = true;
             }
         }

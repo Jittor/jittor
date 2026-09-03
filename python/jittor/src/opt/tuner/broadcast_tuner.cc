@@ -13,6 +13,7 @@
 #include "opt/pass_manager.h"
 #include "opt/pass/loop_var_analyze_pass.h"
 #include "opt/pass/split_loop_pass.h"
+#include "ops/op_register.h"
 
 namespace jittor {
 
@@ -27,8 +28,8 @@ void BroadcastTuner::run(PassManager* pm, TunerManager* tm) {
     int bc=0, rd=0;
     for (uint i=0; i<fo->ops.size(); i++) {
         Op* op = fo->ops[i];
-        if (op->name_ex() == "reindex") return;
-        if (op->name_ex() == "index") return;
+        if (op->is_op(op_ids::reindex())) return;
+        if (op->is_op(op_ids::index())) return;
         if (op->type() == OpType::reduce) rd = 1;
         if (op->type() == OpType::broadcast) bc = 1;
     }

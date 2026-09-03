@@ -115,13 +115,13 @@ struct OpInspector {
     OpInspector(ReduceOp* op) : op(op) { init(op); }
 
     OpInspector(Op* op) : op(op) {
-        if (strcmp(op->name(), "reduce") == 0)
+        if (op->is_op(op_ids::reduce()))
             init((ReduceOp*)op);
-        else if (strcmp(op->name(), "broadcast_to") == 0)
+        else if (op->is_op(op_ids::broadcast_to()))
             init((BroadcastToOp*)op);
-        else if (strcmp(op->name(), "reindex") == 0)
+        else if (op->is_op(op_ids::reindex()))
             init((ReindexOp*)op);
-        else if (strcmp(op->name(), "reindex_reduce") == 0)
+        else if (op->is_op(op_ids::reindex_reduce()))
             init((ReindexReduceOp*)op);
         else
             failed = 1;
@@ -217,12 +217,13 @@ std::ostream& operator<<(std::ostream& os, const OpInspector& oi) {
 
 void ConvTuner::forwardTune(FusedOp* fop) {
     for (Op* op : fop->ops)
-    if (op->name_ex()=="reduce.add" || op->name_ex()=="reindex_reduce.add") {
+    if ((op->is_op(op_ids::reduce()) || op->is_op(op_ids::reindex_reduce()))
+        && op->ns == ns_add) {
         // reduce op and reindex reduce op have the same memory layout
         // it is ok to force cast.
         auto op_iop = op->input(0)->input();
         if (!(op_iop
-            && op_iop->name_ex()=="binary.multiply"
+            && op_iop->is_op(op_ids::binary()) && op_iop->ns == ns_multiply
             && fop->has(op_iop)))
             continue;
         auto bop = (BinaryOp*)op_iop;
@@ -251,10 +252,10 @@ void ConvTuner::forwardTune(FusedOp* fop) {
             OpInspector yoi(ops[y_id]);
             OpInspector woi(ops[w_id]);
             vector<string>* xop_indexes;
-            if (strcmp(xoi.op->name(), "reindex") == 0) {
+            if (xoi.op->is_op(op_ids::reindex())) {
                 xop_indexes = &((ReindexOp*)xoi.op)->indexes;
             } else
-            if (strcmp(xoi.op->name(), "reindex_reduce") == 0) {
+            if (xoi.op->is_op(op_ids::reindex_reduce())) {
                 xop_indexes = &((ReindexReduceOp*)xoi.op)->indexes;
             } else
                 continue;

@@ -21,14 +21,15 @@ namespace jittor {
 void MatmulTuner::run(PassManager* pm, TunerManager* tm) {
     FusedOp* fop=tm->oc->op;
     for (Op* op : fop->ops) {
-        if (op->name_ex()!="reduce.add") continue;
+        if (!op->is_op(op_ids::reduce()) || op->ns != ns_add) continue;
         auto rop = (ReduceOp*)op;
-        if (!(rop->x->input() && rop->x->input()->name_ex()=="binary.multiply" && fop->has(rop->x->input())))
+        if (!(rop->x->input() && rop->x->input()->is_op(op_ids::binary())
+            && rop->x->input()->ns == ns_multiply && fop->has(rop->x->input())))
             continue;
         auto bop = (BinaryOp*)(rop->x->input());
-        if (!(bop->x->input() && bop->x->input()->name_ex()=="broadcast_to" && fop->has(bop->x->input())))
+        if (!(bop->x->input() && bop->x->input()->is_op(op_ids::broadcast_to()) && fop->has(bop->x->input())))
             continue;
-        if (!(bop->y->input() && bop->y->input()->name_ex()=="broadcast_to" && fop->has(bop->y->input())))
+        if (!(bop->y->input() && bop->y->input()->is_op(op_ids::broadcast_to()) && fop->has(bop->y->input())))
             continue;
         auto bcop1 = (BroadcastToOp*)(bop->x->input());
         auto bcop2 = (BroadcastToOp*)(bop->y->input());

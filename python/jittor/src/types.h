@@ -26,6 +26,7 @@ typedef uint64_t uint64;
 typedef float float32;
 typedef double float64;
 typedef uint32_t uint;
+typedef uint32 OpId;
 
 using string = std::string;
 using std::move;

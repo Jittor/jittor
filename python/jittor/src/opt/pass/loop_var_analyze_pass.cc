@@ -11,6 +11,7 @@
 #include "ops/reduce_op.h"
 #include "ops/broadcast_to_op.h"
 #include "ops/reindex_op.h"
+#include "ops/op_register.h"
 
 namespace jittor {
 
@@ -29,7 +30,7 @@ void LoopVarAnalyzePass::run() {
         // TODO: fix it
         // ugly temp fix for index_var
         auto opid = this->op->get_node_id(op);
-        if (op->name()==string("index") && 
+        if (op->is_op(op_ids::index()) &&
             op->inputs().size()+op->outputs().size() != op_members[opid].size()) {
             op_members[opid].insert(op_members[opid].begin(), "wtf");
         }
@@ -123,11 +124,11 @@ void LoopVarAnalyzePass::run() {
                 && (op->outputs().front()->shape.size() != max_elm_dim || 
                     std::abs(op->outputs().front()->num) != max_elm_size))
                 continue;
-            if (op->name_ex() == "array")
+            if (op->is_op(op_ids::array()))
                 // array op should not be loop var
                 continue;
             Var* loop_var;
-            if (op->type() == OpType::broadcast || op->name_ex() == "index") {
+            if (op->type() == OpType::broadcast || op->is_op(op_ids::index())) {
                 loop_var = op->output(0);
             } else {
                 loop_var = op->inputs().front();
@@ -173,7 +174,7 @@ void LoopVarAnalyzePass::run() {
         // loop var may not exist(relayed)
         if (!pm->oc->op_exist(opi))
             continue;
-        if (opi->name()==string("array"))
+        if (opi->is_op(op_ids::array()))
             continue;
         if (opi->type() == OpType::reduce) {
             ndim = ((ReduceOp*)opi)->inputs().front()->shape.size();
@@ -256,7 +257,7 @@ void LoopVarAnalyzePass::run() {
         for (int i=0; i<this->op->ops.size(); i++) {
             auto op = this->op->ops[i];
             if (op->type() == OpType::element &&
-                op->name() != string("array") &&
+                !op->is_op(op_ids::array()) &&
                 op->outputs().front()->num == 1) {
                 replace_vars.emplace_back("op"+S(i)+"_xstride0", "0");
                 replace_vars.emplace_back("op"+S(i)+"_ystride0", "0");
@@ -271,7 +272,7 @@ void LoopVarAnalyzePass::run() {
     for (int i=0; i<this->op->ops.size(); i++) {
         auto op = this->op->ops[i];
         if (op->type() == OpType::element &&
-            op->name() == string("array") &&
+            op->is_op(op_ids::array()) &&
             op->outputs().front()->num == 1) {
             ir->replace({{"op"+S(i)+"_outputshape0", "1"}});
         }
@@ -282,7 +283,7 @@ void LoopVarAnalyzePass::run() {
     for (int i=0; i<this->op->ops.size(); i++) {
         auto op = this->op->ops[i];
         if (op->type() == OpType::element &&
-            op->name() == string("index")) {
+            op->is_op(op_ids::index())) {
             for (int j=1; j<op->outputs().size(); j++)
                 replace_vars.push_back({"op"+S(i)+"_x"+S(j)+"stride", "op"+S(i)+"_x0stride"});
         }
@@ -296,8 +297,7 @@ void LoopVarAnalyzePass::run() {
 
     // check reindex run arguments op
     for (Op* op : this->op->ops) {
-        string op_name = op->name();
-        if (op_name == "reindex" || op_name == "reindex_reduce") {
+        if (op->is_op(op_ids::reindex()) || op->is_op(op_ids::reindex_reduce())) {
             ReindexOp* rop = (ReindexOp*)op;
             vector<string> ss = rop->indexes;
             for (auto& s : rop->overflow_conditions) ss.push_back(s);

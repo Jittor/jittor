@@ -23,10 +23,14 @@ JIT_TEST(op_register_reads_and_writes_the_same_key) {
     ASSERT(has_op("jit_test_op")) << "the truncated spelling must resolve too";
     ASSERTop(get_op_info(dotted).name,==,string(dotted));
     ASSERTop(get_op_info("jit_test_op").name,==,string(dotted));
+    CHECKop(get_op_id(dotted),==,get_op_id("jit_test_op"));
+    CHECKop(get_op_id(dotted),!=,(OpId)0);
 
     // and the ordinary case is unchanged: "binary.add" finds "binary"
     ASSERT(has_op("binary.add"));
     ASSERTop(get_op_info("binary.add").name,==,string("binary"));
+    CHECKop(get_op_id("binary.add"),==,op_ids::binary());
+    CHECKop(op_ids::binary(),!=,op_ids::array());
 }
 
 // A constructor resolved on first call, not at load time. The point is what
@@ -44,6 +48,7 @@ JIT_TEST(op_constructor_resolves_lazily) {
     VarPtr a({4}, "float32");
     auto b = make_unary(a, ns_float64);
     ASSERT(b->dtype() == ns_float64);
+    CHECK(b->input()->is_op(get_op_id("unary")));
 }
 
 }

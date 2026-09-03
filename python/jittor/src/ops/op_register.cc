@@ -10,6 +10,7 @@
 namespace jittor {
 
 unordered_map<string, OpInfo> op_info_map;
+static OpId next_op_id = 1;
 
 //: The one key the map is read and written by.
 //:
@@ -31,7 +32,9 @@ void op_registe(const OpInfo& op_info) {
                 << "\nsource_path:" << op_info.source_path
                 << "\nextra_flags:" << op_info.extra_flags
                 << "\nold_extra_flags:" << iter->second.extra_flags;
-            iter->second = op_info;
+            OpInfo replacement = op_info;
+            replacement.id = iter->second.id;
+            iter->second = move(replacement);
             return;
         }
         ASSERT(false) << "Op" << op_info.name << "is already registed, "
@@ -42,7 +45,9 @@ void op_registe(const OpInfo& op_info) {
         << "\nextra_flags:" << op_info.extra_flags
         << "\nconstructors:" << op_info.constructors
         << "\nvar_members:" << op_info.var_members;
-    op_info_map[op_key(op_info.name)] = op_info;
+    OpInfo registered = op_info;
+    registered.id = next_op_id++;
+    op_info_map[op_key(op_info.name)] = move(registered);
 }
 
 bool has_op(const string& name) {
@@ -54,6 +59,31 @@ OpInfo get_op_info(const string& name) {
     ASSERT(iter != op_info_map.end()) << "Op" << name << "not found.";
     return iter->second;
 }
+
+OpId get_op_id(const string& name) {
+    return get_op_info(name).id;
+}
+
+#define DEFINE_BUILTIN_OP_ID(name) \
+    OpId op_ids::name() { \
+        static OpId id = get_op_id(#name); \
+        return id; \
+    }
+
+DEFINE_BUILTIN_OP_ID(array)
+DEFINE_BUILTIN_OP_ID(binary)
+DEFINE_BUILTIN_OP_ID(broadcast_to)
+DEFINE_BUILTIN_OP_ID(empty)
+DEFINE_BUILTIN_OP_ID(fused)
+DEFINE_BUILTIN_OP_ID(getitem)
+DEFINE_BUILTIN_OP_ID(index)
+DEFINE_BUILTIN_OP_ID(reduce)
+DEFINE_BUILTIN_OP_ID(reindex)
+DEFINE_BUILTIN_OP_ID(reindex_reduce)
+DEFINE_BUILTIN_OP_ID(safe_clip)
+DEFINE_BUILTIN_OP_ID(setitem)
+
+#undef DEFINE_BUILTIN_OP_ID
 
 vector<OpByType*> op_types;
 

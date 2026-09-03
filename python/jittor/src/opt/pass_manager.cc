@@ -6,6 +6,7 @@
 // ***************************************************************
 #include "var.h"
 #include "opt/pass_manager.h"
+#include "ops/op_register.h"
 #include "opt/pass/replace_for_num_pass.h"
 #include "opt/pass/loop_var_analyze_pass.h"
 #include "opt/pass/remove_loop_pass.h"
@@ -94,7 +95,7 @@ void PassManager::run_passes() {
     auto& ir = *main_ir;
 
     LOGvvvv << "KernelIR:\n" << ir.to_string();
-    if (oc->op->ops.size() == 1 && oc->op->ops[0]->name() == string("array")) {
+    if (oc->op->ops.size() == 1 && oc->op->ops[0]->is_op(op_ids::array())) {
         ir.remove_all_unused();
         if (oc->op->flag(OpFlags::_cuda)) {
             ir.children.back()->erase();
@@ -158,4 +159,3 @@ void PassManager::run_passes() {
 }
 
 } // jittor
-

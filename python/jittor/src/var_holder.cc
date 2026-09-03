@@ -77,7 +77,7 @@ static void auto_flush() {
         // A tape output must stay pending until tape_together has wired it
         // into its Tapes node, the same rule eager execution applies below.
         auto op = var->input();
-        if (op && op->name() == string("tape")) continue;
+        if (op && op->flag(OpFlags::_must_stay_pending)) continue;
         vars.push_back(var);
     }
     if (vars.size()) {
@@ -107,7 +107,7 @@ void add_hold_vars(VarHolder* self) {
     for (int i=0; i<5; i++) {
         auto op = v->input();
         if (!op) break;
-        if (i==0 && op->name() == string("tape")) return;
+        if (i==0 && op->flag(OpFlags::_must_stay_pending)) return;
         if (op->type() == OpType::other) break;
         if (op->type() == OpType::reduce) break;
         if (op->inputs().size() == 0)
@@ -456,10 +456,6 @@ void migrate_all_to_cpu() {
 
 static auto make_setitem = op_constructor<VarPtr, Var*, VarSlices&&, Var*, NanoString>("setitem");
 
-inline static bool fast_strcmp(const char* a, const char* b) {
-    return ((const uint64*)a)[0] == ((const uint64*)b)[0];
-}
-
 VarHolder* VarHolder::check_cascade_setitem(VarHolder* out) {
     // return this;
     auto v = var;
@@ -468,7 +464,7 @@ VarHolder* VarHolder::check_cascade_setitem(VarHolder* out) {
     while (n<10) {
         Op* iop = v->input();
         if (!iop) break;
-        if (!fast_strcmp(iop->name(), "getitem")) break;
+        if (!iop->is_op(op_ids::getitem())) break;
         v = iop->inputs().front();
         GetitemOp* gop = (GetitemOp*)iop;
         if (gop->vs.n == 1 && gop->vs.slices[0].is_int()) {

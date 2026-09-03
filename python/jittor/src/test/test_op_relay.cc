@@ -26,7 +26,8 @@ JIT_TEST(op_register) {
     VarPtr b({1,10,10}, "float32");
     auto c = make_binary_op(a, b, ns_add);
     CHECK(c->size==1000*4);
-    CHECK(c->input()->name_ex()=="binary.add");
+    CHECK(c->input()->is_op(op_ids::binary()));
+    CHECK(c->input()->ns == ns_add);
 }
 
 JIT_TEST(nested_run_sync_restores_outer_epoch) {

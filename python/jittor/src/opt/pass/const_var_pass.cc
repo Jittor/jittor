@@ -9,6 +9,7 @@
 #include "var.h"
 #include "opt/pass_manager.h"
 #include "opt/pass/const_var_pass.h"
+#include "ops/op_register.h"
 #include "ops/array_op.h"
 #include "jit_key.h"
 
@@ -21,7 +22,7 @@ void ConstVarPass::run() {
     int changed = 0;
     for (int i=0; i<op->ops.size(); i++) {
         auto opi = op->ops[i];
-        if (opi->name() != string("array"))
+        if (!opi->is_op(op_ids::array()))
             continue;
         string s;
         auto* v = opi->output(0);

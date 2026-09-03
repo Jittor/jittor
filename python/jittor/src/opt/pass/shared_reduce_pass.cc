@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include "opt/pass/shared_reduce_pass.h"
+#include "ops/op_register.h"
 #include <set>
 #include <fstream>
 #include <algorithm>
@@ -57,7 +58,7 @@ int find_reduce_op_id(unique_ptr<KernelIR>& kernel, FusedOp* op) {
             if (pos == string::npos) break;
             int op_id = parse_int_at(code, pos + 2);
             ASSERT(op_id >= 0 && op_id < (int)op->ops.size());
-            if (op->ops[op_id]->name() == string("reduce")) reduce_ids.insert(op_id);
+            if (op->ops[op_id]->is_op(op_ids::reduce())) reduce_ids.insert(op_id);
             search_pos = pos + 1;
         }
     });

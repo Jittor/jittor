@@ -7,6 +7,7 @@
 #include <cmath>
 #include <fstream>
 #include "misc/nan_checker.h"
+#include "ops/op_register.h"
 #ifdef IS_CUDA
 #include "misc/cuda_flags.h"
 #include <cuda_runtime.h>
@@ -54,8 +55,8 @@ void dump_var(Var* v, string name) {
 bool check_nan(Var* v, Op* op) {
     if (!v->dtype().is_float() || v->num == 0) return true;
     if (v->input() && (
-            v->input()->name() == string("empty") ||
-            v->input()->name() == string("setitem")))
+            v->input()->is_op(op_ids::empty()) ||
+            v->input()->is_op(op_ids::setitem())))
         return true;
     #ifdef IS_CUDA
     if (v->allocator->is_cuda()) {

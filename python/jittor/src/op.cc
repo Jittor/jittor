@@ -18,6 +18,7 @@
 #include "var_holder.h"
 #include "fused_op.h"
 #include "graph.h"
+#include "ops/op_register.h"
 
 namespace jittor {
 
@@ -68,6 +69,12 @@ Op::~Op() {
     if (flag(OpFlags::_requires_grad_disabled))
         requires_grad_disabled_edges().erase(id);
     number_of_lived_ops--;
+}
+
+OpId Op::type_id() const {
+    if (!registered_op_id)
+        registered_op_id = get_op_id(name());
+    return registered_op_id;
 }
 
 void Op::forward(Var* input) {
@@ -456,7 +463,7 @@ std::ostream& operator<<(std::ostream& os, const Op* op) {
         print_node_trace(op, os);
         os << '}';
     }
-    if (op->name_ex() == "fused") {
+    if (op->is_op(op_ids::fused())) {
         os << ((FusedOp*)op)->ops;
     }
     return os;

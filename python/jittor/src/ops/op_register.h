@@ -17,6 +17,9 @@ struct OpInfo {
     vector<pair<const std::type_info*, void*>> constructors;
     // string: var member name, uint64: var member offset
     vector<pair<string, uint64>> var_members;
+    // Zero is reserved for an Op instance that has not resolved its
+    // registration yet. Every registered base op receives one process-local id.
+    OpId id = 0;
 
     template<class To, class ...Ts> auto get_constructor() {
         typedef To (*func_t)(Ts...);
@@ -32,6 +35,24 @@ struct OpInfo {
 void op_registe(const OpInfo& op_info);
 bool has_op(const string& name);
 OpInfo get_op_info(const string& name);
+OpId get_op_id(const string& name);
+
+// Canonical ids used by core correctness and optimization decisions. Each
+// function resolves the registry once on first use, after static registration.
+namespace op_ids {
+OpId array();
+OpId binary();
+OpId broadcast_to();
+OpId empty();
+OpId fused();
+OpId getitem();
+OpId index();
+OpId reduce();
+OpId reindex();
+OpId reindex_reduce();
+OpId safe_clip();
+OpId setitem();
+}
 
 /** An op constructor resolved on first call instead of at load time.
  *

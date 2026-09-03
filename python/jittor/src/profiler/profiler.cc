@@ -26,6 +26,7 @@
 #include "executor.h"
 #include "utils/str_utils.h"
 #include "pybind/py_var_tracer.h"
+#include "ops/op_register.h"
 
 namespace jittor {
 
@@ -99,7 +100,7 @@ EXTERN_LIB string _get_stack_info(Node* node, const char* change_line="");
 
 static  string get_stack_info(Op* op) {
     string stack_info = "stack info:\n";
-    if (string("fused") == op->name()) {
+    if (op->is_op(op_ids::fused())) {
         auto fop = (FusedOp*)op;
         map<string, int> stacks;
         for (Op* op : fop->ops) {
@@ -238,7 +239,7 @@ void Profiler::record_and_run(
         auto ikey=jit_key_mapper.find(jit_key);
         const char* key = ikey==jit_key_mapper.end() ?
             jit_key : ikey->second.c_str();
-        bool is_fused = op->name() == string("fused");
+        bool is_fused = op->is_op(op_ids::fused());
         string marks = get_marks(op, is_fused);
         string new_key;
         if (marks.size()) {

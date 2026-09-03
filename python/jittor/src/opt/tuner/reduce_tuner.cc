@@ -11,6 +11,7 @@
 #include "var.h"
 #include "ops/reduce_op.h"
 #include "opt/tuner/reduce_tuner.h"
+#include "ops/op_register.h"
 #include "opt/pass_manager.h"
 #include "opt/pass/loop_var_analyze_pass.h"
 #include "opt/pass/split_loop_pass.h"
@@ -54,7 +55,7 @@ void ReduceTuner::run(PassManager* pm, TunerManager* tm) {
     map<int,int> dim_map;
     for (uint i=0; i<fo->ops.size(); i++) {
         Op* op = fo->ops[i];
-        if (op->name() == string("reindex_reduce")) return;
+        if (op->is_op(op_ids::reindex_reduce())) return;
         if (op->type() == OpType::reduce) {
             rd = 1;
             auto mask = ((ReduceOp*)op)->reduce_mask;

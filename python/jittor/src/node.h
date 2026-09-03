@@ -104,6 +104,9 @@ struct OpFlags {
         // (device_copy), so Op::init must not overwrite Var::device_id from
         // the inputs.
         _manual_device,
+        // Its outputs must remain pending until a later graph-wiring step adds
+        // their control edges. TapeOp uses this while Tapes is assembled.
+        _must_stay_pending,
         // Six consecutive bits mirroring amp_reg; op.cc writes them and
         // grad.cc reads them back as one field. Only the first three have
         // names, but all six belong to amp -- hence the placeholders, which

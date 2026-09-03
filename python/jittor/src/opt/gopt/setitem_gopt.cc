@@ -8,14 +8,9 @@
 #include "var.h"
 #include "ops/setitem_op.h"
 #include "ops/getitem_op.h"
+#include "ops/op_register.h"
 
 namespace jittor {
-
-inline static bool fast_strcmp(const char* a, const char* b) {
-    return ((const uint64*)a)[0] == ((const uint64*)b)[0];
-    // while (*b && *a == *b) a++, b++;
-    // return !*b;
-}
 
 // add dependency b -> a
 static inline void add_dependency(Node* a, Node* b) {
@@ -41,11 +36,10 @@ static void setitem_inplace(SetitemOp* op) {
     auto input_op = input->input();
     if (input_op) {
         // make sure input op will not use input
-        auto input_name = input_op->name();
         if (!(input_op->type() == OpType::broadcast || 
             input_op->inputs().size() == 0 ||
-            fast_strcmp(input_name, "setitem") ||
-            fast_strcmp(input_name, "getitem")))
+            input_op->is_op(op_ids::setitem()) ||
+            input_op->is_op(op_ids::getitem())))
             // TODO: inplace getitem maybe risky, getitem maybe inplace too
         return;
     }

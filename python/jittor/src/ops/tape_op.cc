@@ -17,6 +17,7 @@ TapeOp::TapeOp(Var* x) {
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);
     set_flag(OpFlags::_manual_set_vnbb);
+    set_flag(OpFlags::_must_stay_pending);
     create_output(nullptr, x->dtype());
 }
 

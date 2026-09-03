@@ -110,9 +110,9 @@ int OpCompiler::total_member_count() {
     int i = 0;
     for (auto& v : op_members) {
         // array need a extra local var
-        if (op->ops[i]->name()==string("array"))
+        if (op->ops[i]->is_op(op_ids::array()))
             member_count += 1;
-        if (op->ops[i]->name()==string("safe_clip"))
+        if (op->ops[i]->is_op(op_ids::safe_clip()))
             member_count += 2;
         member_count += v.size();
         i += 1;
@@ -980,7 +980,7 @@ string OpCompiler::__get_fused_src(
             fused_kernel += src;
             continue;
         }
-        if (ops[oi]->name()==string("array")) {
+        if (ops[oi]->is_op(op_ids::array())) {
             string op_name = "op" + S(oi);
             string arg_name = op_name + "_output";
             string argp_name = op_name + "_outputp";
@@ -1196,7 +1196,7 @@ string OpCompiler::get_src() {
 
 OpCompiler::OpCompiler(Op* op) {
     _op = op;
-    this->op = op->name()==string("fused") ? (FusedOp*)op : nullptr;
+    this->op = op->is_op(op_ids::fused()) ? (FusedOp*)op : nullptr;
     src = get_jit_src(op);
 }
 

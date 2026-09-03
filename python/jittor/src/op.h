@@ -19,6 +19,7 @@ struct Op : Node {
     // Monotone count of every operator ever constructed; the auto-flush
     // pipeline measures how much graph was built since it last launched.
     static int64 number_of_created_ops;
+    mutable OpId registered_op_id = 0;
     
     inline Caster<Var*, Node::input_t> inputs() { CHECK_EXIST; return &_inputs; }
     inline Caster<Var*, Node::output_t> outputs() { CHECK_EXIST; return &_outputs; }
@@ -31,6 +32,8 @@ struct Op : Node {
         { return flags.get_bit((int)f, nbits); }
     inline uint type() const { CHECK_EXIST; return flag(OpFlags::_op_type, OpFlags::_op_type_nbits); }
     inline void set_type(OpType t) { CHECK_EXIST; set_flag(OpFlags::_op_type, t, OpFlags::_op_type_nbits); }
+    OpId type_id() const;
+    inline bool is_op(OpId id) const { return type_id() == id; }
     
     Var* create_output(NanoVector shape, NanoString dtype);
     void init();
