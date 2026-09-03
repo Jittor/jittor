@@ -237,7 +237,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 2.16 | 类型提升表 | 已合并 | bindings | d821c34a（int_dtype_promote 提升格；标量按 `_is_scalar` 标志认，不再按形状；float 标量把整数张量提到默认 float dtype）、a39a2f1c（补：双标量走提升格，交换左右操作数不再改变 dtype 与结果） |
 | 2.17 | 算子身份用注册期整型 id | 已合并 | coreops | 1d792e16。OpInfo 注册分配 OpId，核心/tuner/pass 名字比较归零，fast_strcmp 删除，Tape 用显式 pending flag；CPU 80 项、CUDA 5 项及结构契约通过 |
 | 2.18 | 算子注册表惰性初始化 | 已合并 | coreops | bca71d1f。注册表函数内惰性构造，typed polymorphic constructor 取代 `type_info + void*` 手工分派，ACL API/op_types 同步惰性；结构 3、C++ 注册 3、custom-op 2、GPU2 跨 so 1 项通过 |
-| 2.19 | 错误分两档 | 待领 | | ed12fe21 已合入第一半：析构不得抛，生成的 `tp_dealloc` 异常时仍释放实例并保存/恢复解释器异常；486 处 ASSERT/CHECK 与 62 处 LOGf 的用户错误/内部不变量归类仍待领 |
+| 2.19 | 错误分两档 | 待领 | | ed12fe21 已合入析构半项；c119f3bf 建立保持 runtime_error 转换兼容的 UserError/InternalInvariantError 与流式检查入口，并迁移 arg_reduce/argsort/reduce/broadcast_to 共 7 处公开维度边界。C++ 具体类型、Python 跨 pyjt 可捕获各 1 项，迁移计数 2 项、析构/信号新宏防绕过 2 项通过；旧 LOGf/CHECK/ASSERT 未变，其余调用点分类仍待领 |
 | 2.20 | 信号处理器只做 `write` 与 `_exit`，符号化交给预建 helper 进程 | 已合并 | bindings | 上半 9b92f38d（去 stdio/LOGf/exit，标志改 volatile sig_atomic_t）；下半 640a4f07（符号化搬进崩溃前 fork 的 helper，经父进程 /proc/<pid>/maps 解析）；d874b01d 修 jit_key 用例（它原先靠信号处理器抛异常） |
 | 2.21 | `DEFINE_FLAG_WITH_SETTER` 先赋值再调 setter，签名收新旧两值 | 已合并 | coreops | 14336afd |
 | 2.22 | 环境变量统一 `JT_` 前缀 | 待领 | | |
