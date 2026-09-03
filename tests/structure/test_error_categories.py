@@ -62,6 +62,10 @@ MIGRATED_SET_DATA_USER_BOUNDARIES = {
     "python/jittor/src/var_holder.cc": 2,
 }
 
+MIGRATED_PY_ARRAY_USER_BOUNDARIES = {
+    "python/jittor/src/pyjt/py_array_op.cc": 2,
+}
+
 MIGRATED_FUSED_ADAMW_CARDINALITY_BOUNDARIES = {
     "python/jittor/src/ops/fused_adamw_op.cc": 4,
 }
@@ -178,6 +182,13 @@ def test_set_data_user_boundary_migration_is_explicit_and_bounded():
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_SET_DATA_USER_BOUNDARIES[
         "python/jittor/src/var_holder.cc"]
+
+
+def test_py_array_user_boundary_migration_is_explicit_and_bounded():
+    source = (ROOT / "python/jittor/src/pyjt/py_array_op.cc").read_text()
+    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    assert actual == MIGRATED_PY_ARRAY_USER_BOUNDARIES[
+        "python/jittor/src/pyjt/py_array_op.cc"]
 
 
 def test_fused_adamw_cardinality_migration_is_explicit_and_bounded():

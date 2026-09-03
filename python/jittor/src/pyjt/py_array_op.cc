@@ -51,7 +51,7 @@ void get_pyjt_array(PyObject* obj, vector<int64>& shape, string& dtype, void*& d
 }
 
 VarHolder* reuse_np_array(PyObject* obj) {
-    CHECK(Py_TYPE(obj) == PyArray_Type);
+    USER_CHECK(Py_TYPE(obj) == PyArray_Type);
     auto arr = (PyArray_Proxy*)obj;
     NanoVector shape;
     NanoString dtype;
@@ -60,7 +60,7 @@ VarHolder* reuse_np_array(PyObject* obj) {
     else
         shape.push_back(1);
     dtype = get_type_str(arr);
-    CHECK(is_c_style(arr));
+    USER_CHECK(is_c_style(arr));
 
     VarPtr vp(shape, dtype);
     vp->finish_pending_liveness();

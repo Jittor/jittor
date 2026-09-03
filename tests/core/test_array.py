@@ -51,6 +51,21 @@ class TestArray(unittest.TestCase):
             match="size==var->size",
         )
 
+    def test_reuse_np_array_rejects_non_numpy_input(self):
+        expect_error(
+            lambda: jt.reuse_np_array(jt.array([1, 2, 3])),
+            exc_type=RuntimeError,
+            match="PyArray_Type",
+        )
+
+    def test_reuse_np_array_rejects_non_contiguous_input(self):
+        value = np.arange(6, dtype=np.float32)[::2]
+        expect_error(
+            lambda: jt.reuse_np_array(value),
+            exc_type=RuntimeError,
+            match="is_c_style",
+        )
+
     def _memcopy_overlap_timings(self):
         """Ten forward passes with and without a concurrent fetch.
 
