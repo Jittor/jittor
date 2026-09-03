@@ -45,8 +45,6 @@ const char *_cudaGetErrorEnum(ncclResult_t error);
 
 namespace jittor {
 
-EXTERN_LIB ncclComm_t comm;
-
 // Destroys the communicator, reporting a failure instead of raising. Idempotent.
 void nccl_shutdown();
 EXTERN_LIB ncclUniqueId id;
@@ -65,6 +63,22 @@ compile while bf16 broadcast/reduce/all_gather/reduce_scatter worked.
 Raises (LOGf) on a dtype NCCL has no type for, instead of expanding to nothing.
 */
 ncclDataType_t nccl_dtype(NanoString dtype);
+
+/**
+Create and query NCCL process groups.
+
+Group 0 is the communicator built by nccl_init(). Every later group owns an
+independent communicator whose local rank order follows `ranks`. All world
+ranks must call nccl_create_process_group in the same order, matching
+torch.distributed.new_group's collective contract.
+*/
+// @pyjt(nccl_create_process_group)
+int nccl_create_process_group(vector<int> ranks);
+// @pyjt(nccl_process_group_size)
+int nccl_process_group_size(int group_id=0);
+// @pyjt(nccl_process_group_rank)
+int nccl_process_group_rank(int group_id=0);
+ncclComm_t nccl_process_group_comm(int group_id=0);
 
 /**
 Build this rank's NCCL communicator. Call once, after `import jittor` has

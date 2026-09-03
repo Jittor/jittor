@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <unordered_set>
 #include <unistd.h>
 #include <ctime>
 
@@ -50,9 +51,51 @@ HcclDataType hccl_dtype(NanoString dtype) {
 }
 
 HcclRootInfo root_info;
-HcclComm comm;
+static HcclComm world_comm;
 uint32_t hccl_device_id = 0;
 static bool hccl_inited = false;
+
+struct HcclProcessGroupState {
+    HcclComm communicator = nullptr;
+    vector<int> ranks;
+    int local_rank = -1;
+    bool owns_communicator = false;
+};
+
+static vector<HcclProcessGroupState> hccl_process_groups;
+
+static HcclProcessGroupState& hccl_process_group(int group_id) {
+    if (group_id < 0 || group_id >= (int)hccl_process_groups.size())
+        LOGf << "HCCL process group" << group_id << "does not exist";
+    return hccl_process_groups[group_id];
+}
+
+HcclComm hccl_process_group_comm(int group_id) {
+    auto& group = hccl_process_group(group_id);
+    if (group.local_rank < 0 || !group.communicator)
+        LOGf << "global rank" << mpi_world_rank << "is not a member of HCCL"
+             << "process group" << group_id;
+    return group.communicator;
+}
+
+int hccl_process_group_size(int group_id) {
+    return (int)hccl_process_group(group_id).ranks.size();
+}
+
+int hccl_process_group_rank(int group_id) {
+    return hccl_process_group(group_id).local_rank;
+}
+
+static void register_hccl_world_group(int world_size, int world_rank) {
+    HcclProcessGroupState group;
+    group.communicator = world_comm;
+    group.local_rank = world_rank;
+    group.ranks.reserve(world_size);
+    for (int rank=0; rank<world_size; ++rank) group.ranks.push_back(rank);
+    hccl_process_groups.clear();
+    hccl_process_groups.push_back(group);
+    hccl_inited = true;
+}
 
 #ifdef JT_HCCL_NO_MPI
 // In MPI-free builds these globals are owned here (the mpi module isn't loaded).
@@ -88,6 +131,10 @@ static bool hccl_init_envfile() {
     int world_size = atoi(ws);
     int world_rank = atoi(rk);
     int local_rank = lr ? atoi(lr) : world_rank;
+    mpi_world_size = world_size;
+    mpi_world_rank = world_rank;
+    mpi_local_rank = local_rank;
+    inside_mpi = true;
     if (world_size < 1 || world_rank < 0 || world_rank >= world_size)
         LOGf << "HCCL(env): JT_HCCL_RANK=" >> world_rank
              << "is not a rank of a JT_HCCL_WORLD_SIZE=" >> world_size << "job.";
@@ -113,9 +160,9 @@ static bool hccl_init_envfile() {
     }
     LOGv << "HCCL(env) init dev" << hccl_device_id << "rank" << world_rank << "/" << world_size;
     HCCLCHECK(HcclCommInitRootInfo((uint32_t)world_size, &root_info,
-                                     (uint32_t)world_rank, &comm));
+                                     (uint32_t)world_rank, &world_comm));
     use_device_mpi = true;
-    hccl_inited = true;
+    register_hccl_world_group(world_size, world_rank);
     LOGi << "HCCL(env) init success dev" << hccl_device_id
          << "rank" << world_rank << "/" << world_size;
     return true;
@@ -153,10 +200,11 @@ void hccl_init() {
     // Rank count / rank id for the collective communicator must come from
     // the MPI world, NOT the local device_count (which broke multi-node and
     // any run where ranks != visible devices).
-    HCCLCHECK(HcclCommInitRootInfo(mpi_world_size, &root_info, mpi_world_rank, &comm));
+    HCCLCHECK(HcclCommInitRootInfo(
+        mpi_world_size, &root_info, mpi_world_rank, &world_comm));
     // NOTE: do NOT recreate aclstream here -- the acl initer already created
     // the global stream that all ops (incl. these collectives) run on.
-    hccl_inited = true;
+    register_hccl_world_group(mpi_world_size, mpi_world_rank);
     LOGi << "HCCL init success on device" << hccl_device_id
          << "rank" << mpi_world_rank << "/" << mpi_world_size;
 #else
@@ -164,11 +212,74 @@ void hccl_init() {
 #endif
 }
 
+int hccl_create_process_group(vector<int> ranks) {
+    if (!hccl_inited || hccl_process_groups.empty())
+        LOGf << "HCCL WORLD communicator must be initialized before creating"
+                " a process group";
+    if (ranks.empty()) LOGf << "HCCL process group ranks cannot be empty";
+
+    unordered_set<int> seen;
+    int local_rank = -1;
+    for (int i=0; i<(int)ranks.size(); ++i) {
+        int rank = ranks[i];
+        if (rank < 0 || rank >= mpi_world_size)
+            LOGf << "HCCL process group rank" << rank << "is outside world size"
+                 << mpi_world_size;
+        if (!seen.insert(rank).second)
+            LOGf << "HCCL process group contains duplicate rank" << rank;
+        if (rank == mpi_world_rank) local_rank = i;
+    }
+
+    int group_id = (int)hccl_process_groups.size();
+    HcclRootInfo group_root_info;
+    const int root = ranks[0];
+#ifdef JT_HCCL_NO_MPI
+    const char* rootinfo_path = getenv("JT_HCCL_ROOTINFO_FILE");
+    if (!rootinfo_path || !rootinfo_path[0])
+        LOGf << "HCCL process groups require JT_HCCL_ROOTINFO_FILE in"
+                " MPI-free mode";
+    string group_path = string(rootinfo_path) + ".pg" + S(group_id);
+    rendezvous_require_unlocked((int)ranks.size(), "HCCL ProcessGroup(env)");
+    if (mpi_world_rank == root) {
+        HCCLCHECK(HcclGetRootInfo(&group_root_info));
+        if (ranks.size() > 1)
+            rendezvous_write(group_path, &group_root_info,
+                             HCCL_ROOT_INFO_BYTES);
+    } else if (local_rank >= 0) {
+        rendezvous_read(group_path, &group_root_info, HCCL_ROOT_INFO_BYTES,
+                        mpi_world_rank, "the HCCL process-group root info");
+    }
+#else
+    rendezvous_require_unlocked(mpi_world_size, "HCCL ProcessGroup(MPI)");
+    if (mpi_world_rank == root)
+        HCCLCHECK(HcclGetRootInfo(&group_root_info));
+    MPI_CHECK(MPI_Bcast(&group_root_info, HCCL_ROOT_INFO_BYTES, MPI_CHAR,
+                        root, MPI_COMM_WORLD));
+#endif
+
+    HcclProcessGroupState group;
+    group.ranks = ranks;
+    group.local_rank = local_rank;
+    if (local_rank >= 0) {
+        HCCLCHECK(HcclCommInitRootInfo(
+            (uint32_t)ranks.size(), &group_root_info, (uint32_t)local_rank,
+            &group.communicator));
+        group.owns_communicator = true;
+    }
+    hccl_process_groups.push_back(group);
+    return group_id;
+}
+
 struct hccl_finalizer {
     ~hccl_finalizer() {
         if (!hccl_inited) return;
+        for (int i=(int)hccl_process_groups.size()-1; i>=1; --i) {
+            auto& group = hccl_process_groups[i];
+            if (group.owns_communicator && group.communicator)
+                HCCLCHECK_PEEK(HcclCommDestroy(group.communicator));
+        }
         // HCCLCHECK throws now; a throw from a destructor is std::terminate.
-        HCCLCHECK_PEEK(HcclCommDestroy(comm));
+        HCCLCHECK_PEEK(HcclCommDestroy(world_comm));
     }
 };
 static hccl_finalizer hccl_finalizer;

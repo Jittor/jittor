@@ -7,8 +7,10 @@ struct HcclReduceOp : Op {
     Var* x, * y;
     string reduce_op;
     int root;
+    int group_id;
 
-    HcclReduceOp(Var* x, string reduce_op="sum", int root=0);
+    HcclReduceOp(Var* x, string reduce_op="sum", int root=0,
+                 int group_id=0);
     void infer_shape() override;
     
     const char* name() const override { return "hccl_reduce"; }

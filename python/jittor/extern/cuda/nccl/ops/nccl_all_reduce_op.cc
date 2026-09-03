@@ -19,9 +19,11 @@ namespace jittor {
 
 #ifndef JIT
 
-static auto nccl_all_reduce = op_constructor<VarPtr, Var*>("nccl_all_reduce");
+static auto nccl_all_reduce =
+    op_constructor<VarPtr, Var*, int>("nccl_all_reduce");
 
-NcclAllReduceOp::NcclAllReduceOp(Var* x) : x(x) {
+NcclAllReduceOp::NcclAllReduceOp(Var* x, int group_id)
+    : x(x), group_id(group_id) {
     set_flag(OpFlags::_cpu, 0);
     set_flag(OpFlags::_cuda, 1);
     y = create_output(nullptr, x->dtype());
@@ -32,7 +34,7 @@ void NcclAllReduceOp::infer_shape() {
 }
 
 VarPtr NcclAllReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-    return nccl_all_reduce(dout);
+    return nccl_all_reduce(dout, group_id);
 }
 
 void NcclAllReduceOp::jit_prepare(JK& jk) {
@@ -47,7 +49,9 @@ void NcclAllReduceOp::jit_run() {
     // nccl_wrapper.cc (see misc/collective_dtype.h).
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
-    checkCudaErrors(ncclAllReduce(xp, yp, y->num, nccl_dtype(x->dtype()), ncclSum, comm, 0));
+    checkCudaErrors(ncclAllReduce(
+        xp, yp, y->num, nccl_dtype(x->dtype()), ncclSum,
+        nccl_process_group_comm(group_id), 0));
 }
 
 #endif

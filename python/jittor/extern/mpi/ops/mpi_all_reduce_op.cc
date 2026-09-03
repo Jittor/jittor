@@ -37,17 +37,17 @@ MpiAllReduceOp::MpiAllReduceOp(Var* x, NanoString op) : x(x), op(op) {
 
     if (use_device_mpi && use_cuda) {
         static auto nccl_all_reduce = has_op("nccl_all_reduce")
-            ? get_op_info("nccl_all_reduce").get_constructor<VarPtr, Var*>()
+            ? get_op_info("nccl_all_reduce").get_constructor<VarPtr, Var*, int>()
             : nullptr;
         static auto hccl_all_reduce = has_op("hccl_all_reduce")
-            ? get_op_info("hccl_all_reduce").get_constructor<VarPtr, Var*, string>()
+            ? get_op_info("hccl_all_reduce").get_constructor<VarPtr, Var*, string, int>()
             : nullptr;
         if (nccl_all_reduce) {
-            auto var = nccl_all_reduce(x);
+            auto var = nccl_all_reduce(x, 0);
             forward(var);
             return;
         } else if (hccl_all_reduce) {
-            auto var = hccl_all_reduce(x, "sum");
+            auto var = hccl_all_reduce(x, "sum", 0);
             //exe.run_sync({var}, true);
             forward(var);
             return;

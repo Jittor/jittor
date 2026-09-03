@@ -6,8 +6,9 @@ namespace jittor {
 struct HcclAllReduceOp : Op {
     Var* x, * y;
     string reduce_op;
+    int group_id;
 
-    HcclAllReduceOp(Var* x, string reduce_op="sum");
+    HcclAllReduceOp(Var* x, string reduce_op="sum", int group_id=0);
     void infer_shape() override;
     
     const char* name() const override { return "hccl_all_reduce"; }

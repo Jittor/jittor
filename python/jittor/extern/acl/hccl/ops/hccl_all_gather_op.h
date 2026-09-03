@@ -14,8 +14,9 @@ namespace jittor {
 
 struct HcclAllGatherOp : Op {
     Var* x, * y;
+    int group_id;
 
-    HcclAllGatherOp(Var* x);
+    HcclAllGatherOp(Var* x, int group_id=0);
     void infer_shape() override;
     
     const char* name() const override { return "hccl_all_gather"; }

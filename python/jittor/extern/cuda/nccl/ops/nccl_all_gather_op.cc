@@ -19,9 +19,11 @@ namespace jittor {
 
 #ifndef JIT
 
-static auto nccl_reduce_scatter = op_constructor<VarPtr, Var*>("nccl_reduce_scatter");
+static auto nccl_reduce_scatter =
+    op_constructor<VarPtr, Var*, int>("nccl_reduce_scatter");
 
-NcclAllGatherOp::NcclAllGatherOp(Var* x) : x(x) {
+NcclAllGatherOp::NcclAllGatherOp(Var* x, int group_id)
+    : x(x), group_id(group_id) {
     set_flag(OpFlags::_cpu, 0);
     set_flag(OpFlags::_cuda, 1);
     y = create_output(nullptr, x->dtype());
@@ -29,14 +31,14 @@ NcclAllGatherOp::NcclAllGatherOp(Var* x) : x(x) {
 
 void NcclAllGatherOp::infer_shape() {
     NanoVector yshape;
-    yshape.push_back(mpi_world_size * x->shape[0]);
+    yshape.push_back(nccl_process_group_size(group_id) * x->shape[0]);
     for (int i=1; i<x->shape.size(); i++)
         yshape.push_back(x->shape[i]);
     y->set_shape(yshape);
 }
 
 VarPtr NcclAllGatherOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-    return nccl_reduce_scatter(dout);
+    return nccl_reduce_scatter(dout, group_id);
 }
 
 void NcclAllGatherOp::jit_prepare(JK& jk) {
@@ -51,7 +53,9 @@ void NcclAllGatherOp::jit_run() {
     // nccl_wrapper.cc (see misc/collective_dtype.h).
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
-    checkCudaErrors(ncclAllGather(xp, yp, x->num, nccl_dtype(x->dtype()), comm, 0));
+    checkCudaErrors(ncclAllGather(
+        xp, yp, x->num, nccl_dtype(x->dtype()),
+        nccl_process_group_comm(group_id), 0));
 }
 
 #endif

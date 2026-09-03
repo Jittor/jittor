@@ -9,8 +9,9 @@ namespace jittor {
 
 struct NcclReduceScatterOp : Op {
     Var* x, * y;
+    int group_id;
 
-    NcclReduceScatterOp(Var* x);
+    NcclReduceScatterOp(Var* x, int group_id=0);
     void infer_shape() override;
 
     const char* name() const override { return "nccl_reduce_scatter"; }

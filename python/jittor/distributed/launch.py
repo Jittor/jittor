@@ -80,7 +80,7 @@ def _cleanup(rootinfo):
     would make the next job started on this path see a peer that is not there.
     """
     for path in [rootinfo] + glob.glob(rootinfo + ".hb*") + \
-            glob.glob(rootinfo + ".tmp"):
+            glob.glob(rootinfo + ".tmp") + glob.glob(rootinfo + ".pg*"):
         try:
             os.remove(path)
         except OSError:

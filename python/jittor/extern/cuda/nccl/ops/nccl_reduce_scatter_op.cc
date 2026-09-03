@@ -15,9 +15,11 @@ namespace jittor {
 
 #ifndef JIT
 
-static auto nccl_all_gather = op_constructor<VarPtr, Var*>("nccl_all_gather");
+static auto nccl_all_gather =
+    op_constructor<VarPtr, Var*, int>("nccl_all_gather");
 
-NcclReduceScatterOp::NcclReduceScatterOp(Var* x) : x(x) {
+NcclReduceScatterOp::NcclReduceScatterOp(Var* x, int group_id)
+    : x(x), group_id(group_id) {
     set_flag(OpFlags::_cpu, 0);
     set_flag(OpFlags::_cuda, 1);
     y = create_output(nullptr, x->dtype());
@@ -26,16 +28,17 @@ NcclReduceScatterOp::NcclReduceScatterOp(Var* x) : x(x) {
 void NcclReduceScatterOp::infer_shape() {
     NanoVector yshape;
     CHECKop(x->shape.size(),>=,1);
-    CHECKop(x->shape[0] % mpi_world_size,==,0)
-        << "nccl_reduce_scatter expects dim0 divisible by world size";
-    yshape.push_back(x->shape[0] / mpi_world_size);
+    int group_size = nccl_process_group_size(group_id);
+    CHECKop(x->shape[0] % group_size,==,0)
+        << "nccl_reduce_scatter expects dim0 divisible by process-group size";
+    yshape.push_back(x->shape[0] / group_size);
     for (int i=1; i<x->shape.size(); i++)
         yshape.push_back(x->shape[i]);
     y->set_shape(yshape);
 }
 
 VarPtr NcclReduceScatterOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-    return nccl_all_gather(dout);
+    return nccl_all_gather(dout, group_id);
 }
 
 void NcclReduceScatterOp::jit_prepare(JK& jk) {
@@ -50,7 +53,9 @@ void NcclReduceScatterOp::jit_run() {
     // nccl_wrapper.cc (see misc/collective_dtype.h).
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
-    checkCudaErrors(ncclReduceScatter(xp, yp, y->num, nccl_dtype(x->dtype()), ncclSum, comm, 0));
+    checkCudaErrors(ncclReduceScatter(
+        xp, yp, y->num, nccl_dtype(x->dtype()), ncclSum,
+        nccl_process_group_comm(group_id), 0));
 }
 
 #endif

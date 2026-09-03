@@ -81,8 +81,16 @@ nothing (which used to be a confusing compile error inside generated code).
     HcclDataType hccl_dtype(NanoString dtype);
 
     EXTERN_LIB HcclRootInfo root_info;
-    EXTERN_LIB HcclComm comm;
     EXTERN_LIB uint32_t hccl_device_id;
+
+    // Group 0 is WORLD; later ids own independent HCCL communicators.
+    // @pyjt(hccl_create_process_group)
+    int hccl_create_process_group(vector<int> ranks);
+    // @pyjt(hccl_process_group_size)
+    int hccl_process_group_size(int group_id=0);
+    // @pyjt(hccl_process_group_rank)
+    int hccl_process_group_rank(int group_id=0);
+    HcclComm hccl_process_group_comm(int group_id=0);
 
     // Initialize the HCCL communicator for this rank. Must be called once,
     // after `import jittor` completes (not during it). Safe to call repeatedly.

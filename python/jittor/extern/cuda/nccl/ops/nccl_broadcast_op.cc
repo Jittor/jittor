@@ -18,7 +18,8 @@
 namespace jittor {
 
 #ifndef JIT
-NcclBroadcastOp::NcclBroadcastOp(Var* x, int root) : x(x), root(root) {
+NcclBroadcastOp::NcclBroadcastOp(Var* x, int root, int group_id)
+    : x(x), root(root), group_id(group_id) {
     set_flag(OpFlags::_cpu, 0);
     set_flag(OpFlags::_cuda, 1);
     y = create_output(nullptr, x->dtype());
@@ -29,8 +30,9 @@ void NcclBroadcastOp::infer_shape() {
 }
 
 VarPtr NcclBroadcastOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-    static auto nccl_reduce = op_constructor<VarPtr, Var*, int>("nccl_reduce");
-    return nccl_reduce(dout,root);
+    static auto nccl_reduce =
+        op_constructor<VarPtr, Var*, int, int>("nccl_reduce");
+    return nccl_reduce(dout, root, group_id);
 }
 
 void NcclBroadcastOp::jit_prepare(JK& jk) {
@@ -45,7 +47,9 @@ void NcclBroadcastOp::jit_run() {
     // nccl_wrapper.cc (see misc/collective_dtype.h).
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
-    checkCudaErrors(ncclBroadcast(xp, yp, y->num, nccl_dtype(x->dtype()), root, comm, 0));
+    checkCudaErrors(ncclBroadcast(
+        xp, yp, y->num, nccl_dtype(x->dtype()), root,
+        nccl_process_group_comm(group_id), 0));
 }
 
 #endif

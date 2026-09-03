@@ -210,6 +210,25 @@ mtime 去和本机时钟比——共享文件系统差几秒就会让所有 peer
 等哨兵、按 pid 杀、按预算等幸存者，最后打印一行 JSON 给 pytest 断言。它没有 jittor 的
 SIGCHLD 处理器，所以孙进程被信号打死打不到 pytest。
 
+## ProcessGroup：两卡也能证明不是 WORLD 的别名
+
+子组测试不一定要四张卡。两 rank 足以区分真实 communicator 与两种常见假实现：
+
+1. 所有 rank 先以同一顺序创建一个 rank 顺序反转的全员组，再依次创建每个 rank 的
+   singleton 组。`new_group` 是 collective；只让成员创建会让后续 group id 漂移。
+2. 在反转组上做一次 sum，断言 local rank 与全局 rank 相反，并断言它的后端句柄不是
+   WORLD 的句柄。
+3. 每个 rank 在自己的 singleton 组上对 `100 + rank` 做 sum，结果必须仍是
+   `100 + rank`。若底层算子忽略 group、仍使用 WORLD communicator，结果会变成所有
+   rank 的和；若 Python 直接把 singleton 当恒等，这条数值会绿，但第 2 步的独立句柄
+   断言会红。
+4. 最后再在 WORLD 上归约 `rank + 1`。它必须得到 `n(n+1)/2`，证明建组和子组通信没有
+   覆盖 DDP 使用的默认 communicator。
+
+环境/文件 rendezvous 与 MPI bootstrap 都要各跑一次同一用例：前者覆盖按 group id 派生
+的 root-info 文件，后者覆盖以组首 rank 为 root 的 MPI 广播。只跑其中一条不能证明另一条
+不会在建组时挂住。
+
 ## 「等别的 rank」和「拿着编译锁」不能同时发生
 
 `jittor.lock` 是**整个缓存目录一把 flock**，而 `import jittor` 从头到尾都握着它

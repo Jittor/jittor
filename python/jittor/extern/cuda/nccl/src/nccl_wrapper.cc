@@ -18,6 +18,7 @@
 #include <ctime>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -52,7 +53,6 @@ ncclDataType_t nccl_dtype(NanoString dtype) {
     return nccl_dtype_unsupported(dtype);
 }
 
-ncclComm_t comm;
 ncclUniqueId id;
 int nccl_device_id = 0;
 #ifdef JT_NCCL_NO_MPI
@@ -68,21 +68,55 @@ bool use_device_mpi = false;
 #endif
 
 
+struct NcclProcessGroupState {
+    ncclComm_t communicator = nullptr;
+    vector<int> ranks;
+    int local_rank = -1;
+    bool owns_communicator = false;
+};
+
+static vector<NcclProcessGroupState> nccl_process_groups;
 static bool nccl_comm_created = false;
+
+static NcclProcessGroupState& nccl_process_group(int group_id) {
+    if (group_id < 0 || group_id >= (int)nccl_process_groups.size())
+        LOGf << "NCCL process group" << group_id << "does not exist";
+    return nccl_process_groups[group_id];
+}
+
+ncclComm_t nccl_process_group_comm(int group_id) {
+    auto& group = nccl_process_group(group_id);
+    if (group.local_rank < 0 || !group.communicator)
+        LOGf << "global rank" << mpi_world_rank << "is not a member of NCCL"
+             << "process group" << group_id;
+    return group.communicator;
+}
+
+int nccl_process_group_size(int group_id) {
+    return (int)nccl_process_group(group_id).ranks.size();
+}
+
+int nccl_process_group_rank(int group_id) {
+    return nccl_process_group(group_id).local_rank;
+}
 
 // NCCL's p2p transport treats a refused peer access as fatal, and the error it
 // raises -- "unhandled cuda error" -- names neither the cause nor the cure. Name
 // both before it escapes: NCCL's own explanation goes to stderr, which a test
 // runner capturing output turns into a bare SIGABRT with nothing to go on.
-static void init_nccl_comm(int world_size, int world_rank) {
-    auto result = ncclCommInitRank(&comm, world_size, id, world_rank);
-    if (result == ncclSuccess) { nccl_comm_created = true; return; }
+static ncclComm_t init_nccl_comm(int world_size, int world_rank,
+                                 const ncclUniqueId& unique_id) {
+    ncclComm_t communicator = nullptr;
+    auto result = ncclCommInitRank(
+        &communicator, world_size, unique_id, world_rank);
+    if (result == ncclSuccess) return communicator;
     LOGe << "ncclCommInitRank failed:" << ncclGetErrorString(result)
          << "\n  If NCCL reports that peer access is unsupported, this machine"
             " cannot do direct GPU-to-GPU transfers. Set NCCL_P2P_DISABLE=1 to"
             " route the collectives through shared memory instead."
          << "\n  Set NCCL_DEBUG=INFO for NCCL's own account of the failure.";
     checkCudaErrors(result);
+    return nullptr;
 }
 
 
@@ -191,7 +225,9 @@ static void nccl_watchdog_die(int world_rank, double grace, const string& why) {
          << "\n  The first failing rank's log is the cause; this message is"
             " only the consequence."
          << "\n  JT_NCCL_WATCHDOG_INTERVAL_S=0 disables this check.";
-    ncclCommAbort(comm);
+    auto& world = nccl_process_group(0);
+    ncclCommAbort(world.communicator);
+    world.communicator = nullptr;
     // An aborted communicator must not then be destroyed; tell nccl_shutdown
     // there is nothing left to tear down.
     nccl_comm_created = false;
@@ -221,7 +257,7 @@ static void nccl_watchdog_loop(double interval, double stale, double grace,
         ncclResult_t async = ncclSuccess;
         // A failure of the query itself is not a peer failure; only the stop
         // flag ends this loop.
-        if (ncclCommGetAsyncError(comm, &async) == ncclSuccess &&
+        if (ncclCommGetAsyncError(nccl_process_group_comm(0), &async) == ncclSuccess &&
             async != ncclSuccess && async != ncclInProgress) {
             nccl_watchdog_die(world_rank, grace,
                 string("the communicator reports ") + ncclGetErrorString(async) +
@@ -305,12 +341,98 @@ static void nccl_watchdog_join() {
 // already failing is exactly the one whose communicator will refuse to be
 // destroyed, and it must still be able to print why it failed.
 void nccl_shutdown() {
-    // The watchdog polls `comm`; it has to be gone before the comm is.
+    // The watchdog polls the WORLD communicator; it has to be gone before any
+    // process-group communicator is destroyed.
     nccl_watchdog_join();
-    if (!nccl_comm_created) return;
+    for (int i=(int)nccl_process_groups.size()-1; i>=1; --i) {
+        auto& group = nccl_process_groups[i];
+        if (group.owns_communicator && group.communicator) {
+            peekCudaErrorsAlways(ncclCommDestroy(group.communicator));
+            group.communicator = nullptr;
+        }
+    }
+    if (!nccl_comm_created) {
+        nccl_process_groups.clear();
+        return;
+    }
     nccl_comm_created = false;
-    peekCudaErrorsAlways(ncclCommDestroy(comm));
-    comm = nullptr;
+    auto& world = nccl_process_group(0);
+    if (world.communicator)
+        peekCudaErrorsAlways(ncclCommDestroy(world.communicator));
+    world.communicator = nullptr;
+    nccl_process_groups.clear();
+}
+
+static void register_nccl_world_group(ncclComm_t communicator,
+                                      int world_size, int world_rank) {
+    NcclProcessGroupState group;
+    group.communicator = communicator;
+    group.local_rank = world_rank;
+    group.ranks.reserve(world_size);
+    for (int rank=0; rank<world_size; ++rank) group.ranks.push_back(rank);
+    nccl_process_groups.clear();
+    nccl_process_groups.push_back(group);
+    nccl_comm_created = true;
+}
+
+int nccl_create_process_group(vector<int> ranks) {
+    if (!nccl_comm_created || nccl_process_groups.empty())
+        LOGf << "NCCL WORLD communicator must be initialized before creating"
+                " a process group";
+    if (ranks.empty()) LOGf << "NCCL process group ranks cannot be empty";
+
+    unordered_set<int> seen;
+    int local_rank = -1;
+    for (int i=0; i<(int)ranks.size(); ++i) {
+        int rank = ranks[i];
+        if (rank < 0 || rank >= mpi_world_size)
+            LOGf << "NCCL process group rank" << rank << "is outside world size"
+                 << mpi_world_size;
+        if (!seen.insert(rank).second)
+            LOGf << "NCCL process group contains duplicate rank" << rank;
+        if (rank == mpi_world_rank) local_rank = i;
+    }
+
+    int group_id = (int)nccl_process_groups.size();
+    ncclUniqueId group_unique_id;
+    const int root = ranks[0];
+#ifdef JT_NCCL_NO_MPI
+    const char* rootinfo = getenv("JT_NCCL_ROOTINFO_FILE");
+    if (!rootinfo || !rootinfo[0])
+        LOGf << "NCCL process groups require JT_NCCL_ROOTINFO_FILE in"
+                " MPI-free mode";
+    string group_path = string(rootinfo) + ".pg" + S(group_id);
+    rendezvous_require_unlocked((int)ranks.size(), "NCCL ProcessGroup(env)");
+    if (mpi_world_rank == root) {
+        checkCudaErrors(ncclGetUniqueId(&group_unique_id));
+        if (ranks.size() > 1)
+            rendezvous_write(group_path, &group_unique_id,
+                             sizeof(group_unique_id));
+    } else if (local_rank >= 0) {
+        rendezvous_read(group_path, &group_unique_id, sizeof(group_unique_id),
+                        mpi_world_rank, "the NCCL process-group unique id");
+    }
+#else
+    // new_group is collective over WORLD even for non-members. Broadcasting
+    // the new id on MPI_COMM_WORLD gives every rank the same group sequence;
+    // only members then enter ncclCommInitRank.
+    rendezvous_require_unlocked(mpi_world_size, "NCCL ProcessGroup(MPI)");
+    if (mpi_world_rank == root)
+        checkCudaErrors(ncclGetUniqueId(&group_unique_id));
+    MPI_CHECK(MPI_Bcast((void*)&group_unique_id, sizeof(group_unique_id),
+                        MPI_BYTE, root, MPI_COMM_WORLD));
+#endif
+
+    NcclProcessGroupState group;
+    group.ranks = ranks;
+    group.local_rank = local_rank;
+    if (local_rank >= 0) {
+        group.communicator = init_nccl_comm(
+            (int)ranks.size(), local_rank, group_unique_id);
+        group.owns_communicator = true;
+    }
+    nccl_process_groups.push_back(group);
+    return group_id;
 }
 
 // See nccl_wrapper.h for why this is a function called from Python rather than
@@ -373,7 +495,9 @@ void nccl_init() {
             rendezvous_read(rf, &id, sizeof(id), world_rank, "the NCCL unique id");
         }
         use_device_mpi = true;
-        init_nccl_comm(world_size, world_rank);
+        register_nccl_world_group(
+            init_nccl_comm(world_size, world_rank, id),
+            world_size, world_rank);
         nccl_watchdog_start(world_size, world_rank, rf);
         LOGi << "NCCL(env) init success dev" << nccl_device_id
              << "rank" << world_rank << "/" << world_size;
@@ -403,7 +527,9 @@ void nccl_init() {
     if (mpi_world_rank == 0)
         checkCudaErrors(ncclGetUniqueId(&id));
     MPI_CHECK(MPI_Bcast((void *)&id, sizeof(id), MPI_BYTE, 0, MPI_COMM_WORLD));
-    init_nccl_comm(mpi_world_size, mpi_world_rank);
+    register_nccl_world_group(
+        init_nccl_comm(mpi_world_size, mpi_world_rank, id),
+        mpi_world_size, mpi_world_rank);
     nccl_watchdog_start(mpi_world_size, mpi_world_rank, nullptr);
 #endif
 }

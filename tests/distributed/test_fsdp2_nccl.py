@@ -140,6 +140,61 @@ class TestFSDP2Nccl(unittest.TestCase):
         dist.barrier()
 
     @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0)
+    def test_world_and_subgroup_process_groups_coexist(self):
+        dist = importlib.import_module("torch.distributed")
+        dist.init_process_group(
+            backend="cpu:gloo,cuda:nccl",
+            rank=int(jt.rank),
+            world_size=int(jt.world_size),
+        )
+        rank = int(jt.rank)
+        world_size = int(jt.world_size)
+
+        # A second full-membership group must own a communicator distinct from
+        # WORLD. Reversing rank order also proves that group-local rank is not
+        # another spelling of the global rank.
+        reversed_group = dist.new_group(list(reversed(range(world_size))))
+        self.assertNotEqual(
+            reversed_group._backend_handle,
+            dist.group.WORLD._backend_handle,
+        )
+        self.assertEqual(reversed_group.rank(), world_size - rank - 1)
+
+        subgroup_value = jt.array(
+            np.asarray([rank + 1], dtype="float32")
+        )
+        dist.all_reduce(
+            subgroup_value, op=dist.ReduceOp.SUM, group=reversed_group
+        )
+        total = world_size * (world_size + 1) / 2
+        np.testing.assert_array_equal(
+            subgroup_value.numpy(), np.asarray([total], dtype="float32")
+        )
+
+        # Build one singleton communicator per rank. All ranks create the same
+        # groups in the same order, then use only the group they belong to.
+        singleton_groups = [
+            dist.new_group([owner]) for owner in range(world_size)
+        ]
+        local_group = singleton_groups[rank]
+        local_value = jt.array(
+            np.asarray([100 + rank], dtype="float32")
+        )
+        dist.all_reduce(local_value, op=dist.ReduceOp.SUM, group=local_group)
+        np.testing.assert_array_equal(
+            local_value.numpy(),
+            np.asarray([100 + rank], dtype="float32"),
+        )
+
+        # WORLD remains usable after subgroup construction and execution. This
+        # is the composition DDP + tensor-parallel groups need.
+        world_value = jt.array(np.asarray([rank + 1], dtype="float32"))
+        dist.all_reduce(world_value, op=dist.ReduceOp.SUM)
+        np.testing.assert_array_equal(
+            world_value.numpy(), np.asarray([total], dtype="float32")
+        )
+
+    @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0)
     def test_nccl_all_gather_autograd(self):
         world_size = int(jt.world_size)
         rank = int(jt.rank)

@@ -36,17 +36,17 @@ MpiReduceOp::MpiReduceOp(Var* x, NanoString op, int root) : x(x), op(op), root(r
     #ifdef HAS_CUDA
     if (use_device_mpi && use_cuda) {
         static auto nccl_reduce = has_op("nccl_reduce")
-            ? get_op_info("nccl_reduce").get_constructor<VarPtr, Var*, int>()
+            ? get_op_info("nccl_reduce").get_constructor<VarPtr, Var*, int, int>()
             : nullptr;
         static auto hccl_reduce = has_op("hccl_reduce")
-            ? get_op_info("hccl_reduce").get_constructor<VarPtr, Var*, string, int>()
+            ? get_op_info("hccl_reduce").get_constructor<VarPtr, Var*, string, int, int>()
             : nullptr;
         if (nccl_reduce) {
-            auto var = nccl_reduce(x, root);
+            auto var = nccl_reduce(x, root, 0);
             forward(var);
             return;
         } else if (hccl_reduce) {
-            auto var = hccl_reduce(x, "sum", root);
+            auto var = hccl_reduce(x, "sum", root, 0);
             //exe.run_sync({var}, true);
             forward(var);
             return;

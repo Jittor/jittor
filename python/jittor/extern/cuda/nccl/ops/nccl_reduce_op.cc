@@ -18,7 +18,8 @@
 namespace jittor {
 
 #ifndef JIT
-NcclReduceOp::NcclReduceOp(Var* x, int root) : x(x), root(root) {
+NcclReduceOp::NcclReduceOp(Var* x, int root, int group_id)
+    : x(x), root(root), group_id(group_id) {
     set_flag(OpFlags::_cpu, 0);
     set_flag(OpFlags::_cuda, 1);
     y = create_output(nullptr, x->dtype());
@@ -29,8 +30,9 @@ void NcclReduceOp::infer_shape() {
 }
 
 VarPtr NcclReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-    static auto nccl_broadcast = op_constructor<VarPtr, Var*, int>("nccl_broadcast");
-    return nccl_broadcast(dout,root);
+    static auto nccl_broadcast =
+        op_constructor<VarPtr, Var*, int, int>("nccl_broadcast");
+    return nccl_broadcast(dout, root, group_id);
 }
 
 void NcclReduceOp::jit_prepare(JK& jk) {
@@ -45,12 +47,14 @@ void NcclReduceOp::jit_run() {
     // nccl_wrapper.cc (see misc/collective_dtype.h).
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
-    checkCudaErrors(ncclReduce(xp, yp, y->num, nccl_dtype(x->dtype()), ncclSum, root, comm, 0));
+    checkCudaErrors(ncclReduce(
+        xp, yp, y->num, nccl_dtype(x->dtype()), ncclSum, root,
+        nccl_process_group_comm(group_id), 0));
     // See mpi_reduce_op.cc for why the non-root output stays full-size and
     // deterministic rather than being shrunk or aliased away: every rank must
     // run the same graph. Its contents are meaningless by definition; zero is
     // a filler, not a value.
-    if (root != mpi_world_rank)
+    if (root != nccl_process_group_rank(group_id))
         checkCudaErrors(cudaMemsetAsync(yp, 0, y->size));
 }
 

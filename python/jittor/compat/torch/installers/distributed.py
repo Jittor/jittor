@@ -34,6 +34,59 @@ class _JittorProcessGroup:
         self._name = name
         self.group_name = name
         self.bound_device_id = 0
+        self._backend_kind = None
+        self._backend_handle = 0 if ranks is None else None
+
+    def _create_backend_communicator(self):
+        compile_extern = jt.compile_extern
+        choices = (
+            ("nccl", getattr(compile_extern, "nccl", None),
+             getattr(compile_extern, "nccl_ops", None)),
+            ("hccl", getattr(compile_extern, "hccl_mod", None),
+             getattr(compile_extern, "hccl_ops", None)),
+        )
+        for kind, module, ops in choices:
+            create = getattr(
+                module, "{}_create_process_group".format(kind), None
+            )
+            if module is None or ops is None or not callable(create):
+                continue
+            from jittor_utils import lock as _jit_lock
+            with _jit_lock.unlock_scope():
+                handle = create(list(self.ranks))
+            self._backend_kind = kind
+            self._backend_handle = int(handle)
+            return
+        if self.size() > 1:
+            raise NotImplementedError(
+                "Jittor process-group subgroups require NCCL or HCCL"
+            )
+
+    def _all_reduce(self, tensor, reduce_name):
+        if self.rank() < 0:
+            return tensor
+        if self._backend_handle is None:
+            if self.size() == 1:
+                return tensor
+            raise RuntimeError("process group has no backend communicator")
+        if self._backend_kind == "nccl":
+            if reduce_name not in ("sum", "mean"):
+                raise NotImplementedError(
+                    "NCCL process-group all_reduce supports sum and mean only"
+                )
+            result = jt.compile_extern.nccl_ops.nccl_all_reduce(
+                tensor, self._backend_handle
+            )
+            return result / self.size() if reduce_name == "mean" else result
+        if self._backend_kind == "hccl":
+            op = "sum" if reduce_name == "mean" else reduce_name
+            result = jt.compile_extern.hccl_ops.hccl_all_reduce(
+                tensor, op, self._backend_handle
+            )
+            return result / self.size() if reduce_name == "mean" else result
+        if self.ranks is None:
+            return tensor.mpi_all_reduce(reduce_name)
+        raise RuntimeError("process group has no collective backend")
 
     def rank(self):
         rank = _distributed_rank()
@@ -51,7 +104,18 @@ class _JittorProcessGroup:
         return self._name
 
     def _get_backend_name(self):
-        return "nccl" if os.environ.get("JT_NCCL_WORLD_SIZE") is not None else "mpi"
+        if self._backend_kind is not None:
+            return self._backend_kind
+        if os.environ.get("JT_NCCL_WORLD_SIZE") is not None:
+            return "nccl"
+        if os.environ.get("JT_HCCL_WORLD_SIZE") is not None:
+            return "hccl"
+        if (getattr(jt.compile_extern, "nccl_ops", None) is not None
+                and bool(getattr(jt.flags, "use_cuda", 0))):
+            return "nccl"
+        if getattr(jt.compile_extern, "hccl_ops", None) is not None:
+            return "hccl"
+        return "mpi"
 
     def _get_backend(self, device=None):
         return self
@@ -183,9 +247,9 @@ def _group_size(group):
     return int(size() if callable(size) else size or 1)
 
 
-def _require_supported_group(group):
+def _require_supported_group(group, allow_subgroup=False):
     size = _group_size(group)
-    if size not in (1, _distributed_world_size()):
+    if not allow_subgroup and size not in (1, _distributed_world_size()):
         raise NotImplementedError(
             "Jittor torch.distributed currently supports only WORLD and singleton groups"
         )
@@ -346,9 +410,15 @@ def _install_distributed(g, registry=None):
     _ReduceOp.RedOpType = _ReduceOp
 
     def _all_reduce(tensor, op=None, group=None, async_op=False):
-        size = _require_supported_group(group)
+        size = _require_supported_group(group, allow_subgroup=True)
+        if group is not None and getattr(group, "rank", lambda: 0)() < 0:
+            return _collective_result(tensor, async_op)
+        reduce_name = _reduce_name(op, _ReduceOp)
+        if group is not None and hasattr(group, "_all_reduce"):
+            result = group._all_reduce(tensor, reduce_name)
+            _copy_tensor(tensor, result)
+            return _collective_result(tensor, async_op)
         if size > 1:
-            reduce_name = _reduce_name(op, _ReduceOp)
             if reduce_name in ("sum", "mean"):
                 result = tensor.mpi_all_reduce(reduce_name)
             else:
@@ -450,13 +520,17 @@ def _install_distributed(g, registry=None):
     def _new_group(ranks=None, *args, **kwargs):
         ranks = (
             tuple(range(_distributed_world_size()))
-            if ranks is None else tuple(ranks)
+            if ranks is None else tuple(int(rank) for rank in ranks)
         )
-        if len(ranks) not in (1, _distributed_world_size()):
-            raise NotImplementedError(
-                "Jittor torch.distributed supports only WORLD and singleton groups"
-            )
+        if not ranks:
+            raise ValueError("process group ranks cannot be empty")
+        if len(set(ranks)) != len(ranks):
+            raise ValueError("process group ranks must be unique")
+        if any(int(rank) < 0 or int(rank) >= _distributed_world_size()
+               for rank in ranks):
+            raise ValueError("process group rank is outside WORLD")
         group = _JittorProcessGroup(ranks, "subgroup")
+        group._create_backend_communicator()
         pg_map[group] = (group._get_backend_name(),)
         return group
 
@@ -524,25 +598,27 @@ def _install_distributed(g, registry=None):
     dist.gather_object = _gather_object
     dist.new_group = _new_group
     def _new_subgroups_by_enumeration(ranks_per_subgroup_list=None, *a, **k):
-        """Was `([WORLD], WORLD)` whatever the enumeration asked for.
-
-        Returning the world group means every "subgroup" collective actually
-        reaches all ranks: a pipeline/tensor-parallel all-reduce meant for 2
-        ranks quietly averages across all 8. `new_group` already refuses this
-        (see _new_group below); this entry point must agree.
-        """
         groups = list(ranks_per_subgroup_list or [])
         world = _distributed_world_size()
         if world <= 1 or (len(groups) <= 1
                           and (not groups or len(groups[0]) == world)):
             return ([dist.group.WORLD], dist.group.WORLD)
-        from ...stub_policy import unimplemented
-        return unimplemented(
-            "torch.distributed.new_subgroups_by_enumeration",
-            "hand back the WORLD group for every requested subgroup, so a "
-            "subgroup collective silently reduces across all %d ranks" % world,
-            "Jittor has no communicator subgroups yet.",
-            stub_result=([dist.group.WORLD], dist.group.WORLD))
+        try:
+            process_groups = [_new_group(ranks) for ranks in groups]
+        except NotImplementedError:
+            from ...stub_policy import unimplemented
+            return unimplemented(
+                "torch.distributed.new_subgroups_by_enumeration",
+                "hand back the WORLD group for every requested subgroup, so "
+                "a subgroup collective silently reduces across all %d ranks"
+                % world,
+                "This runtime has no NCCL/HCCL process-group backend.",
+                stub_result=([dist.group.WORLD], dist.group.WORLD))
+        rank = _distributed_rank()
+        current = next(
+            (group for group in process_groups if rank in group.ranks), -100
+        )
+        return process_groups, current
 
     dist.new_subgroups_by_enumeration = _new_subgroups_by_enumeration
     dist.get_global_rank = lambda group=None, group_rank=0: (
@@ -699,9 +775,13 @@ def _install_distributed(g, registry=None):
         gradient were wrong, with no error. On a single rank an all-reduce IS
         the identity, so that case stays exact.
         """
-        if _group_size(group) <= 1:
+        if group is not None and getattr(group, "rank", lambda: 0)() < 0:
             return input
         reduce_name = _reduce_name(op, _ReduceOp)
+        if group is not None and hasattr(group, "_all_reduce"):
+            return group._all_reduce(input, reduce_name)
+        if _group_size(group) <= 1:
+            return input
         if reduce_name in ("sum", "mean"):
             # nccl_all_reduce is a real jittor op, so this stays differentiable.
             return input.mpi_all_reduce(reduce_name)

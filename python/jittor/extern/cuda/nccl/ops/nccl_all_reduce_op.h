@@ -13,8 +13,9 @@ namespace jittor {
 
 struct NcclAllReduceOp : Op {
     Var* x, * y;
+    int group_id;
 
-    NcclAllReduceOp(Var* x);
+    NcclAllReduceOp(Var* x, int group_id=0);
     void infer_shape() override;
     
     const char* name() const override { return "nccl_all_reduce"; }

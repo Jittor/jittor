@@ -18,9 +18,11 @@ namespace jittor {
 
 #ifndef JIT
 
-static auto hccl_all_gather = op_constructor<VarPtr, Var*>("hccl_all_gather");
+static auto hccl_all_gather =
+    op_constructor<VarPtr, Var*, int>("hccl_all_gather");
 
-HcclAllGatherOp::HcclAllGatherOp(Var* x) : x(x) {
+HcclAllGatherOp::HcclAllGatherOp(Var* x, int group_id)
+    : x(x), group_id(group_id) {
     set_flag(OpFlags::_cpu, 0);
     set_flag(OpFlags::_cuda, 1);
     y = create_output(nullptr, x->dtype());
@@ -28,7 +30,7 @@ HcclAllGatherOp::HcclAllGatherOp(Var* x) : x(x) {
 
 void HcclAllGatherOp::infer_shape() {
     NanoVector yshape;
-    yshape.push_back(mpi_world_size * x->shape[0]);
+    yshape.push_back(hccl_process_group_size(group_id) * x->shape[0]);
     for (int i=1; i<x->shape.size(); i++)
         yshape.push_back(x->shape[i]);
     y->set_shape(yshape);
@@ -53,7 +55,9 @@ void HcclAllGatherOp::jit_run() {
     auto* __restrict__ yp = y->ptr<Tx>();
     ACLCHECK(aclrtSynchronizeDevice());
     ACLCHECK(aclrtSynchronizeStream(aclstream));
-    HCCLCHECK(HcclAllGather(xp, yp, (uint64_t)x->num, hccl_dtype(x->dtype()), comm, aclstream));
+    HCCLCHECK(HcclAllGather(
+        xp, yp, (uint64_t)x->num, hccl_dtype(x->dtype()),
+        hccl_process_group_comm(group_id), aclstream));
     ACLCHECK(aclrtSynchronizeDevice());
     ACLCHECK(aclrtSynchronizeStream(aclstream));
 }

@@ -40,7 +40,7 @@ static void test_with_mpi() {
 
     //communicating using NCCL
     checkCudaErrors(ncclAllReduce((const void*)sendbuff, (void*)recvbuff, size, ncclFloat, ncclSum,
-        comm, s));
+        nccl_process_group_comm(), s));
 
     //completing NCCL operation by synchronizing on the CUDA stream
     checkCudaErrors(cudaStreamSynchronize(s));

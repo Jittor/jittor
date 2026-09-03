@@ -8,7 +8,8 @@ namespace jittor {
 
 #ifndef JIT
 
-HcclReduceOp::HcclReduceOp(Var* x, string reduce_op, int root) : x(x), reduce_op(reduce_op), root(root) {
+HcclReduceOp::HcclReduceOp(Var* x, string reduce_op, int root, int group_id)
+    : x(x), reduce_op(reduce_op), root(root), group_id(group_id) {
     set_flag(OpFlags::_cpu, 0);
     set_flag(OpFlags::_cuda, 1);
     y = create_output(nullptr, x->dtype());
@@ -19,8 +20,9 @@ void HcclReduceOp::infer_shape() {
 }
 
 VarPtr HcclReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-    static auto hccl_broadcast = op_constructor<VarPtr, Var*, int>("hccl_broadcast");
-    return hccl_broadcast(dout, root);
+    static auto hccl_broadcast =
+        op_constructor<VarPtr, Var*, int, int>("hccl_broadcast");
+    return hccl_broadcast(dout, root, group_id);
 }
 
 void HcclReduceOp::jit_prepare(JK& jk) {
@@ -46,7 +48,9 @@ void HcclReduceOp::jit_run() {
 
     ACLCHECK(aclrtSynchronizeDevice());
     ACLCHECK(aclrtSynchronizeStream(aclstream));
-    HCCLCHECK(HcclReduce(xp, yp, (uint64_t)x->num, hccl_dtype(x->dtype()), @REDUCE_OP, @Root, comm, aclstream));
+    HCCLCHECK(HcclReduce(
+        xp, yp, (uint64_t)x->num, hccl_dtype(x->dtype()), @REDUCE_OP,
+        @Root, hccl_process_group_comm(group_id), aclstream));
     ACLCHECK(aclrtSynchronizeDevice());
     ACLCHECK(aclrtSynchronizeStream(aclstream));
 }
