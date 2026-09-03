@@ -3,9 +3,8 @@
 一行一个任务，与 [refactor-plan.md](refactor-plan.md) 的编号对应。领任务把状态改成「进行中」并写名字，
 完成改成「已合并」并填提交号；推送冲突说明别人先领了。状态只有四种：待领 / 进行中 / 已合并 / 并入 X。
 
-> **2026-09-02**：上一轮并行执行已停。看板上还标着「进行中」的 16 行没有 agent 在跑，未提交的残留散在
-> 六个 worktree 里，五个 `wip/*` 分支上有已提交未验证的工作。接手前先读
-> [交接说明](refactor-handoff.md)，据此把状态改对，再领新任务。
+> **2026-09-03**：上一轮中断留下的五个 `wip/*` 与工作树残留已经验证、合入或明确退回待领；任务表已无
+> 「进行中」或「部分完成」。下一波从 [交接说明](refactor-handoff.md) 第 6 节开始。
 
 ## 起点已知失败清单（归责之前先减掉这些）
 
@@ -26,7 +25,7 @@
 
 **`test_atomic_tuner` 已定论，`9eb696d9` 洗清。** 两棵只读 worktree、两份独立 `JITTOR_HOME`、同一条用例、**串行**跑（并行会串号，见 skill）：`9eb696d9^`(`a88ae02a`) 与 `9eb696d9` 的失败**逐字一致**——同为第 69 行第 4 项 `AssertionError: (0, 2)`。WarpReducePass 挂在 `pass_manager.cc` 的 `AtomicTunerPass` **之后**，原子调优早已打完日志才轮到它改写，它不可能吃掉这些日志。真正的原因见上表那一行：`032ecfe1` 的全归约快路径绕开了整个 JIT。**该用例现在断言的是一条已经不存在的代码路径，属于过期断言，不是回归。**
 
-### B. 已归责、修复进行中——不要重复归因
+### B. 已归责，按表中状态处理——不要重复归因
 
 | 用例 | 引入提交 | 责任 |
 | --- | --- | --- |
@@ -76,7 +75,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 提交 | 原生 | CPU torch | CUDA | 失败用例 / 责任任务 |
 | --- | --- | --- | --- | --- |
 | 9eb696d9（分支起点） | 775 passed / 765 skipped | 1595 passed / 285 skipped | 574 passed / 9 skipped / 0 failed | — |
-| `70d97137` | **822 passed / 816 skipped / 0 failed**（50 分） | 进行中 | 未开始 | 原生绿；收集总数 1540 → 1638，是有人加了测试 |
+| `70d97137` | **822 passed / 816 skipped / 0 failed**（50 分） | 未完成（运行中断） | 未开始 | 原生绿；收集总数 1540 → 1638，是有人加了测试 |
 | `a12d81c0` | 1039 passed / 866 skipped / **1 failed**（51 分） | 1207 passed / 536 skipped / **536 failed**（59 分） | 未跑 | 两套的失败**同一个根因**：并发编译读到写了一半的 `.s`（详见下方一行）。`passed` 两套都在涨，判据里下降的那一半没触发 |
 
 ## 热点文件占有
@@ -199,7 +198,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 0.03 | `tests/compiler/test_jit_tests.py` 进 CPU 门禁，并断言 … | 已合并 | gates | a5e7f654 |
 | 0.04 | 门禁改为「整个 `tests/` 减显式排除清单」，排除项必须写理由 | 已合并 | gates | 6adbf488、689e206b |
 | 0.05 | 生态对拍进 nightly | 已合并 | gates | 97125c6e。`nox -s ecosystem` + `.github/workflows/ecosystem.yml`（每天 02:00）。**fail-open 是这里的真问题**：这些用例在 `REAL_TORCH_PYTHON` 没设时自我 skip（对的，拿 shim 和自己比证明不了什么），于是丢了 oracle 的 nightly 会**为它唯一存在的理由报成功**。三道闸：`JITTOR_REQUIRE_REAL_TORCH=1` 时把「缺 torch」从 0.18 的环境解释里撤走并让这类 skip 退出非零、逐条列出哪些对拍没发生；session 层缺 oracle 直接 abort；起手在 oracle 解释器里断言它的 `torch` **不是** shim（防的是最坏情况：两边其实是同一棵树，对拍全绿而什么都没证明——本机 jt311 的 `torch` 正是 shim）。本机验证（jt311 对 jt312b 的 torch 2.12.1）：12 个 CPU 对拍用例真跑、逐参数与逐输入梯度全过、8 分 23 秒 |
-| 0.06 | `make_tensor` 种子改为 `hash(nodeid, shape, dtype)` … | 进行中 | gates |  |
+| 0.06 | `make_tensor` 种子改为 `hash(nodeid, shape, dtype)` … | 已合并 | gates | a4d041e6。稳定种子包含 nodeid/shape/dtype 等输入，失败信息报告 seed；6 条契约测试覆盖单跑/全量一致性，固定 seed 值不受进程哈希盐影响 |
 | 0.07 | 缓存路径追加构建配置指纹 | 已合并 | 构建 | 82dfce6e、6379b2b5、6fdb3807、b25fcdfa（复验） |
 | 0.08 | 锁统一为一种类型、一个 fd | 已合并 | 构建 | 460bead0 |
 | 0.09 | 探测结果落盘 `cache_path/probe.json` | 已合并 | 构建 | 240a92a3 |
@@ -389,26 +388,26 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 7.05 | install 事务化 | 待领 | | |
 | 7.06 | 依赖单向化 core→tensor→nn/optim→distributed→fsdp→适配器 | 已合并 | 兼容层分区 | 27c4bdeb |
 | 7.07 | 第三方库补丁搬出 compat/ | 待领 | | |
-| 7.08 | `torch.dtype` 改真正的对象而非 str 子类 | **部分完成** | 兼容层分区 | 9aaedba9（仅 `torch.backends` 一项） |
+| 7.08 | `torch.dtype` 改真正的对象而非 str 子类 | 待领 | | 9aaedba9 已合入 `torch.backends` 映射；dtype 真对象、完整 C++ dtype 边界迁移和占位 dtype 的计算/分配拦截仍需整体完成 |
 
 **7.08 只做了三分之一，另两项仍待领**（兼容层分区，2026-09-03）：
 
 - 已做：**`torch.backends.*` 映射表格化并单测** — `9aaedba9`。六种拼写合成两条状态。`fp32_precision` 原本是四个 backend 对象上的字面量 `"ieee"`（`_PrecisionBackend` 的**类属性**），读不反映 tf32 已打开、写它什么都不做；`get_float32_matmul_precision()` 读的则是一个`matmul.allow_tf32` 从不更新的独立字符串。四条缺陷都用探针在旧实现上逐条实测复现过，不是推断。
 - 未做：**`torch.dtype` 改真正的对象** — **未动，且不建议顺手做**。`types.py` 的 `class dtype(str)` 里 str 继承是**承重**的，文件自己写明了理由：jittor 的 C++ 类型分发构造器要求 str/NanoString；而且 jittor **自己的 Python 代码**（`contrib.concat`、`linalg`、`nn`）会`str(var.dtype)` 再把结果直接喂回 C++ 分发。所以「入口处一次转换」要求先把**每一个** dtype 跨进 C++ 的边界找全再改；改一半会让错误的 dtype 静默流进算子。这是本任务里唯一一条「做一半比不做更糟」的，应整块领、单独排期。
-- 未做：**26 个占位 dtype 参与计算时抛 `NotImplementedError`**。占位清单在 `types.py:_make_dtypes` 的 specs 里已有注释标出（complex 3、量化 5、float8/float4 6、sub-byte uint 7，另有 uint16/32/64）。难点不在识别而在拦截点：这些 dtype 对象**必须**继续存在且可作字典键（transformers/safetensors/torchao 在 import 期就按它们建表），所以只能在「真的参与计算或分配」那一步抛，不能在被引用时抛。
+- 未做：**占位 dtype 参与计算时抛 `NotImplementedError`**。占位清单在 `types.py:_make_dtypes` 的 specs 里已有注释标出。难点不在识别而在拦截点：这些 dtype 对象**必须**继续存在且可作字典键（transformers/safetensors/torchao 在 import 期就按它们建表），所以只能在「真的参与计算或分配」那一步抛，不能在被引用时抛。
 
-| 7.09 | `torch.library` | 进行中 | 兼容层分区 | |
-| 7.10 | `torch.compile`/`jit.trace`/`jit.script` 保留 pass… | 进行中 | 兼容层分区 | |
-| 7.11 | autograd 语义 | 进行中 | 兼容层分区 | |
+| 7.09 | `torch.library` | 待领 | | 99901e6c 已完成驻留路由、Meta 排除、`register_autograd` 接线与模型特判迁移；dtype 参与 dispatch key 选择及其回归仍待完成 |
+| 7.10 | `torch.compile`/`jit.trace`/`jit.script` 保留 pass… | 已合并 | 兼容层分区 | 3d898ece。语义参数拒绝、permissive allowlist/audit 与 ShapeProp ImportError 验收均有测试 |
+| 7.11 | autograd 语义 | 待领 | | 7cc3fa71 已合入 create/retain、隐式输出、sum warn、saved version 等大部分语义；`is_leaf` 仍恒 True、`grad_fn` 仍恒 None，等待内核提供反向可达叶子查询 |
 | 7.12 | 独立 torch 包 | 待领 | | |
-| 7.13 | FSDP2 | **部分完成** | 兼容层分区 | 37c0aed4（仅优化器识别一项） |
+| 7.13 | FSDP2 | 待领 | | 已合入 37c0aed4、c0e6e1ae、48da7360、873dd5cf；仍缺峰值显存达标、复用原生 optimizer 更新逻辑与 DeviceMesh 真实分组 |
 
-**7.13 只做了一条，其余待领**（兼容层分区，2026-09-03）：
+**7.13 已合入四部分，其余待领**（兼容层分区，2026-09-03）：
 
-- 已做：**优化器按实现身份识别** — `37c0aed4`，兑现验收判据里的「自定义 Adam 子类可用」。两处 `type(opt).__name__.lower()` 子串匹配改成沿 MRO 按类身份判定。审计记的「自定义子类落到 NotImplementedError」是响亮的一半；**安静的一半是名字含 "adam" 却重写了 `step()` 的子类会被判成 adam，然后跑 fsdp2 自己那套基础 AdamW 数学，用户重写的更新公式完全不被执行且不报错**（`SGDW` 被当成 sgd 同理）。现在这种情况明确拒绝。
-- 未做（**需要真多卡**）：`full_param` 释放与峰值显存（`shard.py:361-366` 明确不释放、`:327` 的 `true_fsdp_flat_full_param` 全仓无清除点、`grad_sync.py:200` 常驻全尺寸梯度）。判据是「FSDP 峰值显存低于未分片」，单卡上 `common._in_true_distributed()` 为 False、真 FSDP 路径根本不初始化，**在单卡上跑绿不构成证据**。
-- 未做（需要真多卡）：`fully_shard(mesh=)` 拒绝未支持的 mesh、`clip_grad_norm_` 跨 rank 归约。前者的拒绝逻辑本身单卡可写，但要确认「哪些 mesh 真的按全局 world 分片而数值错」需要多卡对拍；后者单卡是恒等，判据只在多卡上有意义。
-- 备注：本机 MPI 现已可用（`mpirun -np 2`，CPU 即可），见 skill `jittor-build-time-capabilities`——`has_mpi` 是**构建期**常量，缓存编译时 PATH 里没有 conda 的 `mpicc` 就会整份编成无 MPI，事后改 PATH 无效。NCCL 多卡路径仍需要两张卡。
+- 已做：`37c0aed4` 按实现身份识别优化器；`c0e6e1ae` 修复 Torch 模式下 NCCL preflight；`48da7360` 拒绝未遵守的 mesh 并跨 rank 归约梯度范数；`873dd5cf` 在分片后释放聚合的 `full_param`。
+- 未做：释放后峰值仍未低于未分片，每步仍增长 16 个分片大小的 Var；需继续沿已证实的引用环线索定位。
+- 未做：`optimizer.py` 仍自行实现 SGD/Adam/AdamW 数学，没有做到“复用 Jittor optimizer、只替换梯度来源”。
+- 未做：DeviceMesh 真实分组与多维切片依赖 8.08，当前仍明确拒绝。
 
 | 7.14 | vLLM 边界检查把 `torch` 视作 jittor 别名 | 已合并 | 兼容层分区 | 178be65a |
 | 7.15 | `_rebuild_tensor_v2` 按 stride 还原或报错 | 已合并 | | 7e7877c8 |
@@ -454,7 +453,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 9.18 | `disable_lock=1` 启用时明确告警并纳入缓存指纹 | 待领 | | |
 | 9.19 | 布局收尾 | 待领 | | |
 | 9.20 | asm_tuner 非原子写 .s，并发编译读到截断汇编 | 待领 | | |
-| 9.21 | 拆掉手写预处理器最后一块：process() 双职责分离 + depfile | **部分完成** | 构建 | 9a5f4e7c（前半：`JT_*` 宏发现移到 Python 声明清单，`process()` 不再改写命令行；编译器 depfile、两个 wrapper 回退与 MSVC `/showIncludes` 仍待领） |
+| 9.21 | 拆掉手写预处理器最后一块：process() 双职责分离 + depfile | 待领 | | 9a5f4e7c 已合入前半：`JT_*` 宏发现移到 Python 声明清单，`process()` 不再改写命令行；编译器 depfile、两个 wrapper 回退与 MSVC `/showIncludes` 仍待领 |
 | 9.22 | 并发编译同一个算子读到写了一半的 `.so` | 待领 | | |
 | 9.23 | `run_child_script(timeout=N)` 不收孙进程 | 已合并 | bindings | 17e43c9a（进程组 + `os.killpg` + 有界 drain）。**更正**：任务描述里"`communicate()` 继续等"在 CPython 3.11 上不成立（3.11 的 `subprocess.run` 超时后只 kill+wait，不重新 drain，已实测）；稳定复现的是整棵子孙进程留存，默认 `timeout=600` 的用例因此要等满 10 分钟才失败 |
 | 10.01 | `tools/run_test_suite.py` 拆成 `nox -s full` 周期性调度… | 待领 | | |
