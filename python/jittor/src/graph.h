@@ -7,6 +7,7 @@
 #pragma once
 #include <unordered_map>
 #include "node.h"
+#include "misc/traversal_epoch.h"
 // For Op::flag: the edge test below has to read an *Op* flag, and only an Op*
 // can name one now (NodeFlags in node.h). A forward declaration is no longer
 // enough, which is the type system doing its job.
@@ -67,15 +68,15 @@ inline bool is_requires_grad_disabled_edge(Node* source, Node* target) {
 
 template <typename Func>
 void bfs_backward(vector<Node*>& queue, Func&& func) {
-    auto t = ++tflag_count;
+    TraversalEpoch epoch("bfs_backward");
     size_t i=0;
-    for (Node* node : queue) node->tflag = t;
+    for (Node* node : queue) epoch.mark(node);
     while (i < queue.size()) {
         Node* node = queue[i++];
         for (auto i : node->_inputs)
             if (!is_requires_grad_disabled_edge(i.node, node)
-                    && i.node->tflag != t && func(i.node)) {
-                i.node->tflag = t;
+                    && !epoch.marked(i.node) && func(i.node)) {
+                epoch.mark(i.node);
                 queue.push_back(i.node);
             }
     }
@@ -90,15 +91,15 @@ void bfs_backward(vector<Node*>& seed, vector<Node*>& queue, Func&& func) {
 
 template <typename Func>
 void bfs_forward(vector<Node*>& queue, Func&& func) {
-    auto t = ++tflag_count;
+    TraversalEpoch epoch("bfs_forward");
     size_t i=0;
-    for (Node* node : queue) node->tflag = t;
+    for (Node* node : queue) epoch.mark(node);
     while (i < queue.size()) {
         Node* node = queue[i++];
         for (auto o : node->_outputs)
             if (!is_requires_grad_disabled_edge(node, o.node)
-                    && o.node->tflag != t && func(o.node)) {
-                o.node->tflag = t;
+                    && !epoch.marked(o.node) && func(o.node)) {
+                epoch.mark(o.node);
                 queue.push_back(o.node);
             }
     }
@@ -106,19 +107,19 @@ void bfs_forward(vector<Node*>& queue, Func&& func) {
 
 template <typename Func>
 void bfs_both(vector<Node*>& queue, Func&& func) {
-    auto t = ++tflag_count;
+    TraversalEpoch epoch("bfs_both");
     size_t i=0;
-    for (Node* node : queue) node->tflag = t;
+    for (Node* node : queue) epoch.mark(node);
     while (i < queue.size()) {
         Node* node = queue[i++];
         for (auto o : node->_outputs)
-            if (o.node->tflag != t && func(o.node)) {
-                o.node->tflag = t;
+            if (!epoch.marked(o.node) && func(o.node)) {
+                epoch.mark(o.node);
                 queue.push_back(o.node);
             }
         for (auto i : node->_inputs)
-            if (i.node->tflag != t && func(i.node)) {
-                i.node->tflag = t;
+            if (!epoch.marked(i.node) && func(i.node)) {
+                epoch.mark(i.node);
                 queue.push_back(i.node);
             }
     }
@@ -143,16 +144,16 @@ typedef std::unordered_map<Node*, int> NodeDeps;
 
 template <typename Func>
 void toplogical_sort_forward(vector<Node*>& nodes, vector<Node*>& sorted, Func&& func) {
-    auto t = ++tflag_count;
+    TraversalEpoch epoch("toplogical_sort_forward");
     sorted.reserve(nodes.size());
     NodeDeps deps;
     deps.reserve(nodes.size()*2);
-    for (auto node : nodes) node->tflag = t;
+    for (auto node : nodes) epoch.mark(node);
     for (auto node : nodes) {
         int& d = deps[node];
         d = 0;
         for (auto i : node->_inputs)
-            if (i.node->tflag == t)
+            if (epoch.marked(i.node))
                 d++;
         if (d == 0) sorted.push_back(node);
     }
@@ -160,7 +161,7 @@ void toplogical_sort_forward(vector<Node*>& nodes, vector<Node*>& sorted, Func&&
     while (i < sorted.size()) {
         Node* node = sorted[i++];
         for (auto o : node->_outputs)
-            if (o.node->tflag == t) {
+            if (epoch.marked(o.node)) {
                 if (--deps[o.node] == 0)
                     sorted.push_back(o.node);
             }
@@ -172,17 +173,17 @@ void toplogical_sort_forward(vector<Node*>& nodes, vector<Node*>& sorted, Func&&
 
 template <typename Func>
 void toplogical_sort_backward(vector<Node*>& nodes, vector<Node*>& sorted, Func&& func) {
-    auto t = ++tflag_count;
+    TraversalEpoch epoch("toplogical_sort_backward");
     sorted.reserve(nodes.size());
     NodeDeps deps;
     deps.reserve(nodes.size()*2);
-    for (auto node : nodes) node->tflag = t;
+    for (auto node : nodes) epoch.mark(node);
     for (auto node : nodes) {
         int& d = deps[node];
         d = 0;
         for (auto o : node->_outputs)
             if (!is_requires_grad_disabled_edge(node, o.node)
-                    && o.node->tflag == t)
+                    && epoch.marked(o.node))
                 d++;
         if (d == 0) sorted.push_back(node);
     }
@@ -191,7 +192,7 @@ void toplogical_sort_backward(vector<Node*>& nodes, vector<Node*>& sorted, Func&
         Node* node = sorted[i++];
         for (auto i : node->_inputs)
             if (!is_requires_grad_disabled_edge(i.node, node)
-                    && i.node->tflag == t) {
+                    && epoch.marked(i.node)) {
                 if (--deps[i.node] == 0)
                     sorted.push_back(i.node);
             }

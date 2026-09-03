@@ -6,6 +6,7 @@
 #include "var.h"
 #include "node.h"
 #include "misc/node_index.h"
+#include "misc/traversal_epoch.h"
 
 namespace jittor {
 
@@ -71,6 +72,43 @@ JIT_TEST(node_index_table) {
     // table is reused rather than reallocated.
     index.reset(vars.size());
     for (uint i=0; i<vars.size(); i++) CHECK(!index.has(vars[i].ptr));
+}
+
+
+
+// Node::tflag is the other shared slot: one global counter, and a traversal
+// that starts while another is walking silently takes the outer one's marks
+// away. TraversalEpoch cannot stop that -- giving each traversal its own marks
+// costs too much on this path -- but it makes it *detected*, and precisely: an
+// inner traversal that never touches a node the outer one marked costs it
+// nothing.
+JIT_TEST(traversal_epoch_detects_overwrite) {
+    VarPtr a({4}, "float32");
+    VarPtr b({4}, "float32");
+    {
+        TraversalEpoch outer("outer");
+        outer.mark(a.ptr);
+        CHECK(outer.marked(a.ptr));
+        CHECK(!outer.marked(b.ptr));
+        {
+            TraversalEpoch inner("inner");
+            // A nested traversal over nodes the outer one never reached is
+            // not a problem, and must not be reported as one.
+            inner.mark(b.ptr);
+            CHECK(outer.marked(a.ptr));
+            // ... but this one takes a node the outer traversal had visited.
+            inner.mark(a.ptr);
+            CHECK(inner.marked(a.ptr));
+        }
+        // The outer traversal's answers are no longer true, and saying so is
+        // the whole point: without this it would walk `a` a second time.
+        expect_error([&]() { outer.marked(a.ptr); });
+    }
+    // A later traversal is unaffected by any of that.
+    TraversalEpoch solo("solo");
+    solo.mark(a.ptr);
+    CHECK(solo.marked(a.ptr));
+    CHECK(!solo.marked(b.ptr));
 }
 
 } // jittor

@@ -84,6 +84,14 @@ class TestBatchIndexIsChecked(unittest.TestCase):
     def test_reading_a_batch_index_with_a_stale_stamp_is_an_error(self):
         jt.tests.node_batch_index_is_checked()
 
+    def test_a_nested_traversal_taking_an_outer_one_s_marks_is_detected(self):
+        # The other shared slot: Node::tflag. A traversal that starts while
+        # another is walking overwrites its marks, and the outer one then walks
+        # a graph it has already walked. TraversalEpoch cannot stop that
+        # (per-traversal marks cost too much here, see the [2.02] measurements)
+        # but it reports it, and only when a node was actually taken away.
+        jt.tests.traversal_epoch_detects_overwrite()
+
     def test_the_table_the_other_traversals_use_behaves(self):
         # The same question for NodeIndex: a reference stays valid across
         # further inserts (the topological sorts do `--index[node]`), and a
