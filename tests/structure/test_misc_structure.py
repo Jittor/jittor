@@ -16,8 +16,13 @@ from jittor.misc import concatenation
 from jittor.misc import indexing
 
 
+#: ``jittor.misc`` re-publishes what its submodules define -- and, until the
+#: 5.23 preparation, whatever those submodules had *imported*: ``Iterable``,
+#: ``Sequence``, ``jt``, ``math``, ``np`` and ``time`` were all reachable as
+#: ``jt.misc.<name>``. They are gone on purpose; a name that comes back here
+#: is a submodule leaking its imports again.
 _PUBLIC_NAMES = {
-    "CTCLoss", "Finfo", "Iterable", "Sequence", "all", "all_equal", "any",
+    "CTCLoss", "Finfo", "all", "all_equal", "any",
     "arange", "arctan2", "atan2", "atleast_1d", "atleast_2d", "atleast_3d",
     "amax", "amin",
     "auto_parallel", "bernoulli", "bfloat16_finfo", "block_diag",
@@ -28,13 +33,13 @@ _PUBLIC_NAMES = {
     "from_torch", "gather", "get_max_memory_treemap", "histc", "hypot",
     "iinfo", "index_add", "index_add_", "index_fill", "index_fill_", "indexing",
     "index_select", "isfinite", "isin", "isinf", "isnan", "isneginf",
-    "isposinf", "jt", "knn", "kthvalue", "linspace", "log2", "make_grid",
-    "math", "median", "meshgrid", "multinomial", "ne", "new", "nms",
-    "nonzero", "normalize", "np", "numpy_cumprod", "numpy_cumsum", "peek",
+    "isposinf", "knn", "kthvalue", "linspace", "log2", "make_grid",
+    "median", "meshgrid", "multinomial", "ne", "new", "nms",
+    "nonzero", "normalize", "numpy_cumprod", "numpy_cumsum", "peek",
     "peek_s", "print_tree", "python_pass_wrapper", "rad2deg", "randperm",
     "repeat", "repeat_interleave", "roll", "rsqrt", "safe_log", "save_image",
     "scatter", "scatter_", "scatter_add", "scatter_add_", "scatter_reduce",
-    "searchsorted", "set_global_seed", "sort", "split", "stack", "t", "time",
+    "searchsorted", "set_global_seed", "sort", "split", "stack", "t",
     "tensor_ops", "to", "tolist", "topk", "tril", "triu", "unbind", "unique",
     "unique_consecutive", "view_as",
     "reductions", "shape_composition", "shape_transforms",
@@ -229,7 +234,12 @@ class TestMiscStructure(unittest.TestCase):
             ("concat", ("column-a", "column-b"), 1),
         ])
 
-    def test_repeat_resolves_public_sequence_and_numpy_dependencies(self):
+    def test_repeat_resolves_sequence_and_numpy_through_its_own_imports(self):
+        # ``repeat`` used to read ``jt.misc.Sequence`` and ``jt.misc.np`` --
+        # two names its module never imported, which existed only because the
+        # facade re-published its submodules' imports. The names now come from
+        # ``shape_transforms``' own import block, so that is what a caller
+        # substituting them has to patch, and that is what this pins.
         sequence_lookups = []
         numpy_lookups = []
 
@@ -258,8 +268,10 @@ class TestMiscStructure(unittest.TestCase):
                 return FakeArray(value)
 
         value = jt.array([1, 2])
-        with mock.patch.object(misc, "Sequence", FakeSequence), \
-                mock.patch.object(misc, "np", FakeNumpy):
+        self.assertFalse(hasattr(misc, "Sequence"))
+        self.assertFalse(hasattr(misc, "np"))
+        with mock.patch.object(shape_transforms, "Sequence", FakeSequence), \
+                mock.patch.object(shape_transforms, "np", FakeNumpy):
             result = misc.repeat(value, (2,))
             self.assertEqual(result.shape, [4])
         self.assertEqual(sequence_lookups, [(2,)])
