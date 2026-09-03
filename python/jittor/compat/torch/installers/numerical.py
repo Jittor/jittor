@@ -495,6 +495,55 @@ register_fidelity(
 )
 
 
+_STD_MEAN_FIDELITY_DETAIL = (
+    "matches the current Jittor mean/std values for supported real tensors; "
+    "correction is ignored and dim std does not preserve keepdim, while "
+    "device, layout, and out semantics are omitted"
+)
+
+
+def _std_mean_impl(input, dim=None, unbiased=True, keepdim=False,
+                   correction=None, **kwargs):
+    mean = (input.mean() if dim is None
+            else input.mean(dim, keepdims=keepdim))
+    std = input.std() if dim is None else input.std(dim)
+    return std, mean
+
+
+def std_mean(input, dim=None, unbiased=True, keepdim=False,
+             correction=None, **kwargs):
+    """Return standard deviation and mean using current Jittor semantics."""
+    return _std_mean_impl(
+        input, dim=dim, unbiased=unbiased, keepdim=keepdim,
+        correction=correction, **kwargs)
+
+
+def _var_mean_impl(input, dim=None, unbiased=True, keepdim=False,
+                   correction=None, **kwargs):
+    standard_deviation, mean = _std_mean_impl(
+        input, dim=dim, unbiased=unbiased, keepdim=keepdim,
+        correction=correction, **kwargs)
+    return standard_deviation * standard_deviation, mean
+
+
+def var_mean(input, dim=None, unbiased=True, keepdim=False,
+             correction=None, **kwargs):
+    """Return variance and mean using current Jittor semantics."""
+    return _var_mean_impl(
+        input, dim=dim, unbiased=unbiased, keepdim=keepdim,
+        correction=correction, **kwargs)
+
+
+for _std_mean_name in ("std_mean", "var_mean"):
+    register_fidelity(
+        "torch." + _std_mean_name,
+        globals()[_std_mean_name],
+        Fidelity.APPROXIMATE,
+        _STD_MEAN_FIDELITY_DETAIL,
+    )
+del _std_mean_name
+
+
 _AminMax = _namedtuple("aminmax", ["min", "max"])
 _AMINMAX_FIDELITY_DETAIL = (
     "matches Torch min/max values for supported real tensor inputs but omits "
@@ -948,15 +997,8 @@ def install(ctx):
     _alias("logsumexp", _logsumexp); Var.logsumexp = _logsumexp
     _alias("nansum", nansum); Var.nansum = _nansum_impl
     _alias("nanmean", nanmean); Var.nanmean = _nanmean_impl
-    def _std_mean(input, dim=None, unbiased=True, keepdim=False, correction=None, **k):
-        mean = input.mean() if dim is None else input.mean(dim, keepdims=keepdim)
-        std = input.std() if dim is None else input.std(dim)  # jittor std is unbiased
-        return (std, mean)
-    _alias("std_mean", _std_mean)
-    def _var_mean(input, dim=None, unbiased=True, keepdim=False, correction=None, **k):
-        s, m = _std_mean(input, dim, unbiased, keepdim)
-        return (s * s, m)
-    _alias("var_mean", _var_mean)
+    _alias("std_mean", std_mean)
+    _alias("var_mean", var_mean)
     _alias("aminmax", aminmax); Var.aminmax = _aminmax_impl
     _alias("quantile", quantile)
     _alias("nanquantile", nanquantile)

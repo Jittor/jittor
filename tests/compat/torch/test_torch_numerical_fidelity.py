@@ -642,6 +642,52 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         np.testing.assert_allclose(tensor_q, np.nanquantile(values, 0.5), rtol=1e-6)
         self.assertEqual(str(tensor_q.dtype), "float32")
 
+    def test_std_mean_family_is_stable_module_level_objects(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        for name in ("std_mean", "var_mean"):
+            with self.subTest(name=name):
+                implementation = getattr(numerical, name)
+                self.assertTrue(callable(implementation))
+                self.assertIs(getattr(torch, name), implementation)
+                self.assertEqual(implementation.__module__, numerical.__name__)
+                self.assertEqual(implementation.__name__, name)
+
+    def test_std_mean_family_fidelity_records_current_limitations(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        for name in ("std_mean", "var_mean"):
+            with self.subTest(name=name):
+                record = fidelity.fidelity_of("torch." + name)
+                self.assertIs(record.implementation, getattr(numerical, name))
+                self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+                self.assertIn("correction", record.detail)
+                self.assertIn("keepdim", record.detail)
+
+    def test_std_mean_family_cpu_values_and_tuple_shapes_match_numpy(self):
+        values = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype="float32")
+        with torch.flag_scope(use_cuda=0):
+            tensor = torch.array(values)
+            std_full, mean_full = torch.std_mean(tensor)
+            var_dim, mean_dim = torch.var_mean(tensor, dim=1)
+            std_dim, mean_keep = torch.std_mean(
+                tensor, dim=1, keepdim=True)
+        self.assertEqual(tuple(std_full.shape), ())
+        self.assertEqual(tuple(mean_full.shape), ())
+        np.testing.assert_allclose(
+            std_full.numpy(), np.std(values, ddof=1), rtol=1e-6)
+        np.testing.assert_allclose(
+            mean_full.numpy(), np.mean(values), rtol=1e-6)
+        np.testing.assert_allclose(
+            var_dim.numpy(), np.var(values, axis=1, ddof=1), rtol=1e-6)
+        np.testing.assert_allclose(
+            mean_dim.numpy(), np.mean(values, axis=1), rtol=1e-6)
+        np.testing.assert_allclose(
+            std_dim.numpy(), np.std(values, axis=1, ddof=1), rtol=1e-6)
+        np.testing.assert_allclose(
+            mean_keep.numpy(), np.mean(values, axis=1, keepdims=True), rtol=1e-6)
+
 
 if __name__ == "__main__":
     unittest.main()
