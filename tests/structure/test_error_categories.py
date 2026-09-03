@@ -110,6 +110,10 @@ MIGRATED_CUSPARSE_SPMMCSR_DTYPE_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcsr_op.cc": 2,
 }
 
+MIGRATED_CUSPARSE_SPMMCOO_DTYPE_USER_BOUNDARIES = {
+    "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcoo_op.cc": 2,
+}
+
 MIGRATED_FUSED_ADAMW_CARDINALITY_BOUNDARIES = {
     "python/jittor/src/ops/fused_adamw_op.cc": 4,
 }
@@ -334,6 +338,16 @@ def test_cusparse_spmmcsr_dtype_user_boundary_migration_is_explicit_and_bounded(
     negative = (ROOT / "tests/backends/cuda/test_cusparse_dtype.py").read_text()
     assert "test_csr_rejects_non_float_input" in negative
     assert "test_csr_rejects_mixed_input_dtypes" in negative
+
+
+def test_cusparse_spmmcoo_dtype_user_boundary_migration_is_explicit_and_bounded():
+    source = (ROOT / "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcoo_op.cc").read_text()
+    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    assert actual == MIGRATED_CUSPARSE_SPMMCOO_DTYPE_USER_BOUNDARIES[
+        "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcoo_op.cc"]
+    negative = (ROOT / "tests/backends/cuda/test_cusparse_dtype.py").read_text()
+    assert "test_coo_rejects_non_float_input" in negative
+    assert "test_coo_rejects_mixed_input_dtypes" in negative
 
 
 def test_fused_adamw_cardinality_migration_is_explicit_and_bounded():

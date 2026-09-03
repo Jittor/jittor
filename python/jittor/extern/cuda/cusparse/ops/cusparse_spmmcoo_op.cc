@@ -21,8 +21,8 @@ CusparseSpmmcooOp::CusparseSpmmcooOp(Var* outputVar_, Var* x_, Var* row_indices_
     // The check now says what the message always claimed. jit_run reads the
     // values through ptr<T> with T taken from x, so a value array of another
     // float dtype was reinterpreted rather than converted.
-    ASSERT(x->dtype().is_float()) << "spmm needs a float dtype, got" << x->dtype();
-    ASSERT(x->dtype() == outputVar->dtype() && x->dtype() == value->dtype())
+    USER_CHECK(x->dtype().is_float()) << "spmm needs a float dtype, got" << x->dtype();
+    USER_CHECK(x->dtype() == outputVar->dtype() && x->dtype() == value->dtype())
         << "spmm needs x, values and output of the same dtype, got"
         << x->dtype() << value->dtype() << outputVar->dtype();
     output = create_output(nullptr, x->dtype());

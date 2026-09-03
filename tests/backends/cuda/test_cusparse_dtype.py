@@ -90,6 +90,36 @@ class TestCusparseDtype(unittest.TestCase):
                 match="same dtype",
             )
 
+    def test_coo_rejects_non_float_input(self):
+        with jt.flag_scope(use_cuda=1, lazy_execution=0):
+            output = jt.zeros((2, 2), dtype="int32")
+            x = jt.ones((2, 2), dtype="int32")
+            values = jt.ones((2,), dtype="int32")
+            row_indices = jt.array([0, 1], dtype="int32")
+            col_indices = jt.array([0, 1], dtype="int32")
+            expect_error(
+                lambda: cusparse_ops.cusparse_spmmcoo(
+                    output, x, row_indices, col_indices, values,
+                    2, 2, False, False),
+                exc_type=RuntimeError,
+                match="spmm needs a float dtype",
+            )
+
+    def test_coo_rejects_mixed_input_dtypes(self):
+        with jt.flag_scope(use_cuda=1, lazy_execution=0):
+            output = jt.zeros((2, 2), dtype="float32")
+            x = jt.ones((2, 2), dtype="float32")
+            values = jt.ones((2,), dtype="float64")
+            row_indices = jt.array([0, 1], dtype="int32")
+            col_indices = jt.array([0, 1], dtype="int32")
+            expect_error(
+                lambda: cusparse_ops.cusparse_spmmcoo(
+                    output, x, row_indices, col_indices, values,
+                    2, 2, False, False),
+                exc_type=RuntimeError,
+                match="same dtype",
+            )
+
     def _csr_case(self, dtype, tol):
         rows = cols = 6
         rng = np.random.RandomState(0)
