@@ -15,6 +15,7 @@ FLOOR_SOURCE = ROOT / "python/jittor/extern/acl/aclops/floor_op_acl.cc"
 NANTONUM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/nantonum_op_acl.cc"
 TRIU_SOURCE = ROOT / "python/jittor/extern/acl/aclops/triu_op_acl.cc"
 SIGMOID_SOURCE = ROOT / "python/jittor/extern/acl/aclops/sigmoid_op_acl.cc"
+TRANSPOSE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/transpose_op_acl.cc"
 
 
 def test_acl_launcher_tail_has_one_auditable_contract():
@@ -121,3 +122,13 @@ def test_sigmoid_forward_uses_launcher_and_backward_remains_present():
     assert "mallocWorkSpace(workspaceSize)" not in forward
     assert "syncRun();" not in forward
     assert "void SigmoidBackwardOpRunner::executeOp" in source
+
+
+def test_transpose_family_uses_launcher_and_keeps_dim_cleanup():
+    source = TRANSPOSE_SOURCE.read_text()
+    assert "attr->axes" in source
+    assert "launch(ret, aclnnPermute, true);" in source
+    assert "aclDestroyIntArray(dim);" in source
+    assert "checkRet(ret);" not in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
