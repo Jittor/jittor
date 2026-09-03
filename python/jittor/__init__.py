@@ -142,6 +142,7 @@ with _lock.lock_scope():
 from ._runtime import core_api as _core_api
 from ._runtime.core_api import _core_flags
 _publish(_core_api, _core_api.__all__)
+from .benchmarking import BenchmarkResult, benchmark
 
 # The runtime installs its monkeypatches from here on, in a fixed order that
 # used to exist only as the physical arrangement of the statements below.

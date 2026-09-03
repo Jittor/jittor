@@ -5,6 +5,48 @@ suite deliberately uses the current Python environment (`--python=same`): a
 fresh environment per historical commit would mostly measure Jittor's compile
 and installation cost rather than steady-state runtime performance.
 
+## Reliable local timing
+
+Use `jt.benchmark` for local microbenchmarks instead of placing
+`perf_counter()` directly around a lazy operation:
+
+```python
+import jittor as jt
+
+inputs = [jt.randn(1024, 1024) for _ in range(4)]
+result = jt.benchmark(
+    lambda value: (value * value).sum(),
+    inputs,
+    warmup=2,
+    repeat=10,
+)
+print(result.median, result.samples)  # seconds
+```
+
+The input pool is snapshotted and materialized before timing, then selected in
+round-robin order. Warmup is mandatory and excluded from the returned samples,
+so first-use compilation is outside the timed region. The callable must return
+every output that belongs to the measured work; nested tuples, lists, and
+dictionaries are supported. Each round retains all returned Vars and performs
+one target-specific device synchronization before stopping the clock.
+
+These rules avoid three common false results:
+
+- **CSE:** repeatedly building the same expression while an earlier lazy output
+  is still live can reuse that graph. `jt.benchmark` materializes and releases
+  one round before constructing the next; use multiple resident pool entries
+  when the operation mutates inputs.
+- **Dead-code elimination:** an unreferenced lazy output can be discarded
+  without executing. The API rejects calls that return no `jt.Var` and retains
+  every returned Var through synchronization.
+- **Unmaterialized work:** timing only Python graph submission measures neither
+  CPU execution nor asynchronous device completion. The per-round target sync
+  is included in every sample.
+
+The samples include Python graph construction plus execution. Use the ASV suite
+below for retained cross-commit results, and keep correctness checks separate
+from timing.
+
 ## Cache isolation
 
 ASV and the unit-test suite must never compile into the same Jittor cache. Every

@@ -1,6 +1,7 @@
 import jittor_core as jittor_core
 import jittor_core as core
 from . import autograd as autograd, compile_extern as compile_extern, compiler as compiler, dataset as dataset, distributions as distributions, fft as fft, init as init, linalg as linalg, math_util as math_util, misc as misc, nn as nn, numpy2cupy as numpy2cupy, optim as optim, sparse as sparse
+from .benchmarking import BenchmarkResult as BenchmarkResult, benchmark as benchmark
 from .compat import contrib as contrib
 from .compile_extern import cublas as cublas, cudnn as cudnn, cufft as cufft, curand as curand, cusparse as cusparse, mkl_ops as mkl_ops, mpi as mpi, mpi_ops as mpi_ops
 from .compiler import LOG as LOG, compile_custom_op as compile_custom_op, compile_custom_ops as compile_custom_ops, has_cuda as has_cuda
