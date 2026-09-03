@@ -228,7 +228,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 2.07 | `hold_vars`/`sync_ptr` 析构里 `std::next(end())` 的 … | 已合并 | coreops | 1101f3f5 |
 | 2.08 | `Node` 不再 include `pybind/py_var_tracer.h` | 已合并 | coreops | 6221d4c4。NodeLifecycleObserver 接口由 pybind tracer 注册；无 Python include 的语法编译、CPU/CUDA lifecycle/tracer 聚焦通过 |
 | 2.09 | `th_mode` 从 C++ 核心上移为 autograd 策略对象 | 已合并 | coreops | b55f1acb。核心改为通用 `AutogradPolicyState`，Python autograd 层提供不可变 native/explicit-requires-grad 策略与可恢复 scope；核心 Torch 专属状态名归零。新 CPU 4 passed/1 skipped、GPU2 1 passed，相关结构 7 passed，布局与静态检查通过 |
-| 2.10 | 三套 liveness 计数 | 待领 | | |
+| 2.10 | 三套 liveness 计数 | 已合并 | coreops | 8bd07e51。f/b/p 收进无额外存储的 NodeLiveness；own 防溢出，release 对无匹配 owner 的下溢立即报错，跨零返回值统一传播边界；need_free 与 graph expected-count 由封装提供，release 构建常开。C++ liveness/check_graph 契约与 CPU 生命周期 2 项通过；状态逻辑后端无关，未追加 GPU 编译 |
 | 2.11 | `VarHolder` 不再是执行触发点 | 待领 | | |
 | 2.12 | 打破 `Executor ⇄ VarHolder` include 环 | 待领 | | |
 | 2.13 | 执行相关全局状态 | 待领 | | |
