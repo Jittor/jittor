@@ -113,29 +113,29 @@ void Node::free() {
     if (flags.get(NodeFlags::_queued_for_free)) return;
     // A var that still has an input op and is either alive forward or not yet
     // finished is going to be recomputed or written; it is not garbage.
-    if (is_var() && _inputs.size() && (forward_liveness || !is_finished())) {
+    if (is_var() && _inputs.size() && (liveness.forward.active() || !is_finished())) {
         return;
     }
     flags.set(NodeFlags::_queued_for_free);
     free_buffer.push_back(this);
     for (auto in : _inputs) {
         in.node->erase_output(in.back_index);
-        if (backward_liveness) {
+        if (liveness.backward.active()) {
             liveness_queue.emplace_back(in.node, &Node::release_backward_liveness);
         }
-        if (pending_liveness && !is_finished())
+        if (liveness.pending.active() && !is_finished())
             liveness_queue.emplace_back(in.node, &Node::release_pending_liveness);
     }
     _inputs.clear();
     for (auto out : _outputs) {
         out.node->erase_input(out.back_index);
         if (!is_stop_grad()) {
-            if (forward_liveness)
+            if (liveness.forward.active())
                 liveness_queue.emplace_back(out.node, &Node::release_forward_liveness);
         }
         // an output var that nothing needs backward has just lost its only
         // producer, so it can go with us
-        if (out.node->is_var() && out.node->backward_liveness == 0) out.node->free();
+        if (out.node->is_var() && !out.node->liveness.backward.active()) out.node->free();
     }
     _outputs.clear();
     if (is_var()) free_var((Var*)this);
@@ -160,23 +160,23 @@ void Node::memcheck_all_exist() const {
 
 void Node::own_pending_liveness() {
     CHECK_EXIST;
-    pending_liveness++;
+    bool became_live = liveness.pending.own();
     // p2: an unfinished node with pending liveness keeps its inputs pending
-    if (pending_liveness == 1 && !is_finished())
+    if (became_live && !is_finished())
         for (auto* in : inputs())
             liveness_queue.emplace_back(in, &Node::own_pending_liveness);
 }
 
 void Node::release_pending_liveness() {
     CHECK_EXIST;
-    pending_liveness--;
-    if (!pending_liveness && !is_finished()) {
+    bool became_dead = liveness.pending.release();
+    if (became_dead && !is_finished()) {
         for (auto* in : inputs())
             liveness_queue.emplace_back(in, &Node::release_pending_liveness);
     }
     // Nothing is waiting to compute from this var any more. Its memory can go
     // even though the var itself stays alive, unless backward still needs it.
-    if (pending_liveness == 0 && is_var()) {
+    if (became_dead && is_var()) {
         // _needed_by_backward is a Var flag, so it takes a Var* to read -- the
         // is_var() test above is now what makes the read well typed, not a
         // convention.
@@ -188,8 +188,8 @@ void Node::release_pending_liveness() {
 
 void Node::release_forward_liveness() {
     CHECK_EXIST;
-    forward_liveness--;
-    if (!forward_liveness) {
+    bool became_dead = liveness.forward.release();
+    if (became_dead) {
         // Snapshot the outputs: the propagation below can erase edges, and on
         // the second loop we may enqueue an operation on ourselves.
         int n = outputs().size(), i = 0;
@@ -206,7 +206,7 @@ void Node::release_forward_liveness() {
         }
         // b3: a finished output var can no longer produce a gradient for us,
         // so the backward liveness it contributed goes away too
-        if (backward_liveness) {
+        if (liveness.backward.active()) {
             for (int i = 0; i < n; i++) {
                 auto out = outs[i];
                 if (out->is_var() && out->is_finished()) {
@@ -220,8 +220,8 @@ void Node::release_forward_liveness() {
 
 void Node::own_forward_liveness() {
     CHECK_EXIST;
-    forward_liveness++;
-    if (forward_liveness == 1) {
+    bool became_live = liveness.forward.own();
+    if (became_live) {
         if (!is_stop_grad())
             for (auto* out : outputs())
                 liveness_queue.emplace_back(out, &Node::own_forward_liveness);
@@ -230,8 +230,8 @@ void Node::own_forward_liveness() {
 
 void Node::release_backward_liveness() {
     CHECK_EXIST;
-    backward_liveness--;
-    if (!backward_liveness) {
+    bool became_dead = liveness.backward.release();
+    if (became_dead) {
         int n = inputs().size(), i = 0;
         STACK_ALLOC(Node*, is, n);
         for (auto* in : inputs()) {
@@ -241,7 +241,7 @@ void Node::release_backward_liveness() {
             auto in = is[j];
             // a finished var whose input is already forward-dead cannot be
             // recomputed, so it never contributed backward liveness
-            if (in->forward_liveness == 0 && is_finished() && is_var()) continue;
+            if (!in->liveness.forward.active() && is_finished() && is_var()) continue;
             if (is_finished() && is_stop_grad()) continue;
             liveness_queue.emplace_back(in, &Node::release_backward_liveness);
         }
@@ -252,8 +252,8 @@ void Node::release_backward_liveness() {
 
 void Node::own_backward_liveness() {
     CHECK_EXIST;
-    backward_liveness++;
-    if (backward_liveness == 1) {
+    bool became_live = liveness.backward.own();
+    if (became_live) {
         if (!is_finished() || !is_stop_grad())
             for (auto* in : inputs()) {
                 liveness_queue.emplace_back(in, &Node::own_backward_liveness);
@@ -284,7 +284,7 @@ void Node::finish_pending_liveness() {
     SetupFreeBuffer setup_free_buffer;
     flags.set(NodeFlags::_finished);
     // p1 no longer holds once we are finished
-    if (pending_liveness)
+    if (liveness.pending.active())
         for (auto* in : inputs()) {
             liveness_queue.emplace_back(in, &Node::release_pending_liveness);
         }
@@ -296,7 +296,7 @@ void Node::finish_pending_liveness() {
         }
         for (int j = 0; j < n; j++) {
             auto in = is[j];
-            if (in->forward_liveness == 0 || is_stop_grad()) {
+            if (!in->liveness.forward.active() || is_stop_grad()) {
                 liveness_queue.emplace_back(in, &Node::release_backward_liveness);
             }
         }
@@ -309,13 +309,13 @@ void Node::release_inputs() {
     if (!_inputs.size()) return;
     SetupFreeBuffer setup_free_buffer;
     for (auto in : _inputs) {
-        if (!in.node->is_stop_grad() && in.node->forward_liveness)
+        if (!in.node->is_stop_grad() && in.node->liveness.forward.active())
             liveness_queue.emplace_back(this, &Node::release_forward_liveness);
         in.node->erase_output(in.back_index);
-        if (backward_liveness) {
+        if (liveness.backward.active()) {
             liveness_queue.emplace_back(in.node, &Node::release_backward_liveness);
         }
-        if (pending_liveness)
+        if (liveness.pending.active())
             liveness_queue.emplace_back(in.node, &Node::release_pending_liveness);
     }
     _inputs.clear();
@@ -343,12 +343,12 @@ void Node::set_inputs(list<Node*> nodes) {
     // Take the new liveness before dropping the old edges, so that a node that
     // appears in both the old and the new input list never drops to zero.
     for (Node* node : nodes) {
-        if (!node->is_stop_grad() && node->forward_liveness)
+        if (!node->is_stop_grad() && node->liveness.forward.active())
             liveness_queue.emplace_back(this, &Node::own_forward_liveness);
-        if (backward_liveness) {
+        if (liveness.backward.active()) {
             liveness_queue.emplace_back(node, &Node::own_backward_liveness);
         }
-        if (pending_liveness)
+        if (liveness.pending.active())
             liveness_queue.emplace_back(node, &Node::own_pending_liveness);
     }
     run_liveness_queue("set_inputs");
@@ -371,12 +371,12 @@ void Node::add_inputs(const vector<Node*>& nodes) {
     LOGvvvv << "add inputs" << nodes << "to" << this;
     ASSERT(!is_finished());
     for (Node* node : nodes) {
-        if (!node->is_stop_grad() && node->forward_liveness)
+        if (!node->is_stop_grad() && node->liveness.forward.active())
             liveness_queue.emplace_back(this, &Node::own_forward_liveness);
-        if (backward_liveness) {
+        if (liveness.backward.active()) {
             liveness_queue.emplace_back(node, &Node::own_backward_liveness);
         }
-        if (pending_liveness)
+        if (liveness.pending.active())
             liveness_queue.emplace_back(node, &Node::own_pending_liveness);
     }
     run_liveness_queue("add_inputs");
@@ -401,21 +401,21 @@ void Node::set_stop_grad() {
     if (is_stop_grad()) return;
     SetupFreeBuffer setup_free_buffer;
     flags.set(NodeFlags::_stop_grad, 1);
-    int had_backward_liveness = backward_liveness;
+    int had_backward_liveness = liveness.backward.count();
     int n = inputs().size(), i = 0;
     STACK_ALLOC(Node*, is, n);
     for (auto* in : inputs()) {
         is[i++] = in;
     }
     // f3 stops propagating through a stop_grad node
-    if (forward_liveness)
+    if (liveness.forward.active())
         for (Node* out : outputs()) {
             liveness_queue.emplace_back(out, &Node::release_forward_liveness);
         }
     if (had_backward_liveness) {
         for (int j = 0; j < n; j++) {
             auto in = is[j];
-            if (in->forward_liveness == 0 && is_var() && is_finished()) {
+            if (!in->liveness.forward.active() && is_var() && is_finished()) {
                 continue;
             }
             if (!is_finished()) continue;

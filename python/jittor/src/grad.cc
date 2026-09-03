@@ -338,7 +338,7 @@ vector<VarPtr> grad(
         // backward reaching it can report the released graph instead of
         // returning zeros that look like a legitimate x.stop_grad().
         for (int i=int(gvars.size())-1; i>=0; i--)
-            if (!held_vars.count(gvars[i]) && gvars[i]->backward_liveness) {
+            if (!held_vars.count(gvars[i]) && gvars[i]->liveness.backward.active()) {
                 gvars[i]->set_flag(VarFlags::_graph_freed);
                 gvars[i]->set_stop_grad();
             }

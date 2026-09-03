@@ -45,8 +45,8 @@ int64 do_graph_check() {
     LOGvv << "Check hold_vars size" << queue.size();
     int vhsize = queue.size();
     for (auto* node : queue) {
-        // ASSERTop(node->forward_liveness,>,0);
-        ASSERTop(node->backward_liveness,>,0);
+        // Forward liveness may legitimately be zero for a held, finished var.
+        ASSERTop(node->liveness.backward.count(),>,0);
     }
     for (uint i=0; i<queue.size(); i++) {
         auto* node = queue[i];
@@ -66,23 +66,17 @@ int64 do_graph_check() {
         }
         for (auto* i : node->inputs()) {
             if (i->is_stop_grad()) continue;
-            if (!i->forward_liveness) continue;
+            if (!i->liveness.forward.active()) continue;
             f ++;
         }
         for (auto* o : node->outputs()) {
-            if (o->backward_liveness)
+            if (o->liveness.backward.active())
                 b ++;
-            if (o->pending_liveness && !o->is_finished())
+            if (o->liveness.pending.active() && !o->is_finished())
                 p++;
         }
         // if (f>0 && b>0 && !node->is_finished()) p++;
-        if (f!=node->forward_liveness || b!=node->backward_liveness || p!=node->pending_liveness) {
-            LOGf << "ERROR" << node << '\n' 
-                << f << b << p << i << '\n' 
-                << node->inputs() << '\n' 
-                << node->outputs();
-            continue;
-        }
+        node->liveness.assert_expected(f, b, p, node);
     }
     int64 swept = 0;
     for (auto& kv : lived_nodes) {

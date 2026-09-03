@@ -235,6 +235,60 @@ inline void notify_node_destroyed(Node* node) {
         node_lifecycle_observer->node_destroyed(node);
 }
 
+enum class LivenessKind { forward, backward, pending };
+
+template <LivenessKind Kind>
+class LivenessCounter {
+    int value_ = 0;
+
+    static const char* kind_name() {
+        if (Kind == LivenessKind::forward) return "forward";
+        if (Kind == LivenessKind::backward) return "backward";
+        return "pending";
+    }
+
+public:
+    int count() const { return value_; }
+
+    bool active() const { return count() != 0; }
+
+    // Return true exactly on the transition across zero; propagation belongs
+    // at those boundaries, not at every additional owner.
+    bool own() {
+        ASSERT(value_ >= 0 && value_ < std::numeric_limits<int>::max())
+            << kind_name() << "liveness own overflow";
+        return ++value_ == 1;
+    }
+
+    bool release() {
+        ASSERT(value_ > 0) << kind_name()
+            << "liveness release without a matching owner";
+        return --value_ == 0;
+    }
+
+    void assert_expected(int expected, const void* owner) const {
+        ASSERTop(count(),==,expected) << kind_name()
+            << "liveness mismatch for node" << owner;
+    }
+};
+
+struct NodeLiveness {
+    LivenessCounter<LivenessKind::forward> forward;
+    LivenessCounter<LivenessKind::backward> backward;
+    LivenessCounter<LivenessKind::pending> pending;
+
+    bool need_free() const {
+        return !pending.active() && (!forward.active() || !backward.active());
+    }
+
+    void assert_expected(int expected_forward, int expected_backward,
+            int expected_pending, const void* owner) const {
+        forward.assert_expected(expected_forward, owner);
+        backward.assert_expected(expected_backward, owner);
+        pending.assert_expected(expected_pending, owner);
+    }
+};
+
 struct Node {
     struct input_t;
     struct output_t;
@@ -273,18 +327,15 @@ struct Node {
     // f1. var_holder contrib one forward_liveness
     // f2. var ptr contrib one forward_liveness
     // f3. input(has_grad and f>0) contrib one forward_liveness
-    int forward_liveness = 0;
     // forward_liveness can propergate backward(from output to input)
     // b1. var ptr contrib one backward_liveness
     // b2. var holder contrib one backward_liveness
     // b3. output(b>0) contrib one backward_liveness
-    int backward_liveness = 0;
     // pending liveness can propergate backward(from output to input)
     // p1: pending and f>0 and b>0 contrib pending_liveness
     // p2: output(p>0 and pending) contrib pending_liveness
-    int pending_liveness = 0;
-    inline bool need_free()
-    { return !pending_liveness && (!forward_liveness || !backward_liveness); }
+    NodeLiveness liveness;
+    inline bool need_free() { return liveness.need_free(); }
     
     // Position of this node in the batch Executor::run_sync is currently
     // planning (its index in that run's `ops` or `all_vars`), and the stamp of

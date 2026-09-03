@@ -27,7 +27,7 @@ static void setitem_inplace(SetitemOp* op) {
     // LOGir << "in setitem_inplace";
     auto input = op->inputs().front();
     if (!(input->outputs().size() == 1 && 
-        input->forward_liveness<=1 &&
+        input->liveness.forward.count()<=1 &&
         (op->op == ns_void || op->op == ns_add || op->op == ns_subtract))) {
         return;
     }

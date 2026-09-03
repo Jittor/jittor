@@ -285,7 +285,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
                 for (auto& n : node->_outputs) {
                     // if not in queue and is fetch op
                     if (!batch_epoch->marked(n.node) &&
-                        n.node->pending_liveness &&
+                        n.node->liveness.pending.active() &&
                         !n.node->is_finished() &&
                         (n.node->id <= max_id ||
                             n.node->flags.get(NodeFlags::_fetch))) {
@@ -782,7 +782,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     LOGvv << "All" << op_num << "ops finished, return vars:" << vars;
     // a zero-sized var has no memory to point at (see the size==0 branch in
     // the raw allocators), which is not the same as an unallocated var
-    for (Var* v : vars) ASSERT(v->mem_ptr || v->size == 0 || v->flag(VarFlags::_is_swapped) || !v->backward_liveness) << v;
+    for (Var* v : vars) ASSERT(v->mem_ptr || v->size == 0 || v->flag(VarFlags::_is_swapped) || !v->liveness.backward.active()) << v;
     // clean fetcher free buffer
     fetcher_to_free.clear();
     #ifdef HAS_CUDA

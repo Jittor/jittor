@@ -196,9 +196,9 @@ void VarPtr::set_stop_grad(bool stop_grad) {
 
 std::ostream& operator<<(std::ostream& os, const Var& var) {
     os << "Var" << '(' << var.id
-        << ':' << var.forward_liveness
-        << ':' << var.backward_liveness
-        << ':' << var.pending_liveness
+        << ':' << var.liveness.forward.count()
+        << ':' << var.liveness.backward.count()
+        << ':' << var.liveness.pending.count()
         << ":i" << var._inputs.size()
         << ":o" << var._outputs.size()
         << ":s" << var.is_finished()

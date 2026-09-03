@@ -440,9 +440,9 @@ void Op::statistics(uint64_t& in, uint64_t& out, uint64_t& compute) {
 std::ostream& operator<<(std::ostream& os, const Op* op) {
     if (!op) return os << "Op(0)";
     os << "Op(" << op->id
-        << ':' << op->forward_liveness
-        << ':' << op->backward_liveness
-        << ':' << op->pending_liveness
+        << ':' << op->liveness.forward.count()
+        << ':' << op->liveness.backward.count()
+        << ':' << op->liveness.pending.count()
         << ":i" << op->_inputs.size()
         << ":o" << op->_outputs.size()
         << ":s" << op->is_finished()
