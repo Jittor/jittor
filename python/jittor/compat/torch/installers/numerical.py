@@ -688,6 +688,31 @@ register_fidelity(
 )
 
 
+_MM_FIDELITY_DETAIL = (
+    "matches Torch 2-D matrix multiplication values for supported real tensors "
+    "but omits out, device, layout, and dtype keyword semantics"
+)
+
+
+def _mm_impl(input, mat2, out=None):
+    # Keep the existing compatibility boundary: ``out`` is accepted for API
+    # shape compatibility but is not populated by this approximate fallback.
+    return jt.matmul(input, mat2)
+
+
+def mm(input, mat2, out=None):
+    """Multiply two 2-D tensors using Jittor's matrix multiplication."""
+    return _mm_impl(input, mat2, out=out)
+
+
+register_fidelity(
+    "torch.mm",
+    mm,
+    Fidelity.APPROXIMATE,
+    _MM_FIDELITY_DETAIL,
+)
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
@@ -1069,7 +1094,7 @@ def install(ctx):
     _alias("addmm", addmm)
 
     # ---- torch.* ops used by mmdetection (additive aliases) ----
-    _alias("mm", lambda input, mat2, out=None: jt.matmul(input, mat2))   # 2-D matmul
+    _alias("mm", mm)
     _alias("mv", mv)
     _alias("masked_select", lambda input, mask, out=None: input[mask])   # -> 1-D selected
     _alias("split_with_sizes",

@@ -771,6 +771,37 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         np.testing.assert_allclose(
             actual_method.numpy(), expected_scaled, rtol=1e-6)
 
+    def test_mm_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.mm))
+        self.assertIs(torch.mm, numerical.mm)
+        self.assertEqual(numerical.mm.__module__, numerical.__name__)
+        self.assertEqual(numerical.mm.__name__, "mm")
+
+    def test_mm_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.mm")
+        self.assertIs(record.implementation, numerical.mm)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("out", record.detail)
+        self.assertIn("device", record.detail)
+
+    def test_mm_cpu_value_shape_and_var_delegate_match_numpy(self):
+        left = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype="float32")
+        right = np.array([[2.0, -1.0], [0.5, 3.0], [4.0, 2.0]], dtype="float32")
+        expected = np.matmul(left, right)
+        with torch.flag_scope(use_cuda=0):
+            left_tensor = torch.array(left)
+            right_tensor = torch.array(right)
+            actual = torch.mm(left_tensor, right_tensor)
+            method = left_tensor.mm(right_tensor)
+        self.assertEqual(tuple(actual.shape), expected.shape)
+        np.testing.assert_allclose(actual.numpy(), expected, rtol=1e-6)
+        np.testing.assert_allclose(method.numpy(), expected, rtol=1e-6)
+
 
 if __name__ == "__main__":
     unittest.main()
