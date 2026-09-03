@@ -27,6 +27,7 @@ WHERE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/where_op_acl.cc"
 RANGE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/index_op_acl.cc"
 DROPOUT_SOURCE = ROOT / "python/jittor/extern/acl/aclops/dropout_op_acl.cc"
 RELU_SOURCE = ROOT / "python/jittor/extern/acl/aclops/relu_op_acl.cc"
+ARG_REDUCE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/arg_reduce_op_acl.cc"
 GATHER_SOURCE = ROOT / "python/jittor/extern/acl/aclops/gather_scatter_op_acl.cc"
 
 
@@ -290,6 +291,18 @@ def test_leaky_relu_forward_uses_launcher_and_backward_remains_present():
     assert "mallocWorkSpace(workspaceSize)" not in forward
     assert "syncRun();" not in forward
     assert "void LeakyReLUBackwardOpRunner::executeOp" in source
+
+
+def test_arg_reduce_max_min_use_shared_launcher():
+    source = ARG_REDUCE_SOURCE.read_text()
+    assert "is_max" in source
+    assert "keepdims" in source
+    assert "aclnnMaxDimGetWorkspaceSize" in source
+    assert "aclnnMinDimGetWorkspaceSize" in source
+    assert "AclExecuteLauncher launcher = is_max ? aclnnMaxDim : aclnnMinDim;" in source
+    assert "launch(ret, launcher, true);" in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
 
 
 def test_scatter_uses_launcher_and_keeps_axis_reduction_query():

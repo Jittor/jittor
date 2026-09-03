@@ -74,12 +74,7 @@ namespace jittor
             CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnMinDimGetWorkspaceSize failed. ERROR: %d\n", name.c_str(), ret); return);
         }
 
-        if (workspaceSize > 0)
-            mallocWorkSpace(workspaceSize);
-        ret = is_max
-            ? aclnnMaxDim(workspaceAddr, workspaceSize, executor, aclstream)
-            : aclnnMinDim(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s execution failed. ERROR: %d\n", name.c_str(), ret); return);
-        syncRun();
+        AclExecuteLauncher launcher = is_max ? aclnnMaxDim : aclnnMinDim;
+        launch(ret, launcher, true);
     }
 }
