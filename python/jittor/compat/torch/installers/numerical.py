@@ -463,6 +463,38 @@ register_fidelity(
 )
 
 
+_NANQUANTILE_FIDELITY_DETAIL = (
+    "uses a NumPy CPU fallback for supported real tensors; dtype is returned "
+    "as float32 and device, layout, interpolation, and out semantics are not "
+    "implemented"
+)
+
+
+def _nanquantile_impl(input, q, dim=None, keepdim=False,
+                      interpolation="linear", **kwargs):
+    values = input.numpy()
+    quantile = q.numpy() if isinstance(q, jt.Var) else q
+    result = np.nanquantile(
+        values, quantile, axis=dim, keepdims=keepdim)
+    return jt.array(result.astype("float32"))
+
+
+def nanquantile(input, q, dim=None, keepdim=False,
+                interpolation="linear", **kwargs):
+    """Return a NumPy-backed NaN-ignoring quantile for CPU tensors."""
+    return _nanquantile_impl(
+        input, q, dim=dim, keepdim=keepdim,
+        interpolation=interpolation, **kwargs)
+
+
+register_fidelity(
+    "torch.nanquantile",
+    nanquantile,
+    Fidelity.APPROXIMATE,
+    _NANQUANTILE_FIDELITY_DETAIL,
+)
+
+
 _AminMax = _namedtuple("aminmax", ["min", "max"])
 _AMINMAX_FIDELITY_DETAIL = (
     "matches Torch min/max values for supported real tensor inputs but omits "
@@ -927,13 +959,7 @@ def install(ctx):
     _alias("var_mean", _var_mean)
     _alias("aminmax", aminmax); Var.aminmax = _aminmax_impl
     _alias("quantile", quantile)
-    def _nanquantile(input, q, dim=None, keepdim=False, interpolation="linear", **k):
-        import numpy as _np_q
-        arr = input.numpy()
-        qn = q.numpy() if isinstance(q, Var) else q
-        r = _np_q.nanquantile(arr, qn, axis=dim, keepdims=keepdim)
-        return jt.array(r.astype("float32"))
-    _alias("nanquantile", _nanquantile)
+    _alias("nanquantile", nanquantile)
     _alias("square", lambda x: x * x)   # torch.square (jittor only had jt.sqr); persimmon
     # torch.addmm(input, mat1, mat2, *, beta=1, alpha=1):
     #   out = beta * input + alpha * (mat1 @ mat2)   (gpt2 uses this for its

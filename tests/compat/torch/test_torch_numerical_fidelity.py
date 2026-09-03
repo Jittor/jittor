@@ -606,6 +606,42 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         np.testing.assert_allclose(tensor_q, np.quantile(values, 0.5), rtol=1e-6)
         self.assertEqual(str(tensor_q.dtype), "float32")
 
+    def test_nanquantile_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.nanquantile))
+        self.assertIs(torch.nanquantile, numerical.nanquantile)
+        self.assertEqual(numerical.nanquantile.__module__, numerical.__name__)
+        self.assertEqual(numerical.nanquantile.__name__, "nanquantile")
+
+    def test_nanquantile_fidelity_is_queryable_and_cpu_only(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.nanquantile")
+        self.assertIs(record.implementation, numerical.nanquantile)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("NumPy CPU", record.detail)
+        self.assertIn("device", record.detail)
+
+    def test_nanquantile_cpu_nan_q_values_dim_keepdim_match_numpy(self):
+        values = np.array([[1.0, np.nan, 3.0], [np.nan, 5.0, 6.0]], dtype="float32")
+        with torch.flag_scope(use_cuda=0):
+            tensor = torch.array(values)
+            actual = [torch.nanquantile(tensor, q).numpy()
+                      for q in (0.0, 0.5, 1.0)]
+            dim = torch.nanquantile(tensor, 0.5, dim=1, keepdim=True).numpy()
+            dim_no_keep = torch.nanquantile(tensor, 0.5, dim=0).numpy()
+            tensor_q = torch.nanquantile(tensor, torch.array(0.5)).numpy()
+        for got, q in zip(actual, (0.0, 0.5, 1.0)):
+            np.testing.assert_allclose(got, np.nanquantile(values, q), rtol=1e-6)
+        np.testing.assert_allclose(
+            dim, np.nanquantile(values, 0.5, axis=1, keepdims=True), rtol=1e-6)
+        np.testing.assert_allclose(
+            dim_no_keep, np.nanquantile(values, 0.5, axis=0), rtol=1e-6)
+        np.testing.assert_allclose(tensor_q, np.nanquantile(values, 0.5), rtol=1e-6)
+        self.assertEqual(str(tensor_q.dtype), "float32")
+
 
 if __name__ == "__main__":
     unittest.main()
