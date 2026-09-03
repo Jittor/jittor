@@ -18,7 +18,75 @@ from ..types import (
     _cuda_index_of,
 )
 from ..nested import _torch_register_leaf
+from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed
+
+
+_FACTORY_NAMES = (
+    "arange", "bernoulli", "empty", "full", "full_like", "linspace",
+    "multinomial", "normal", "ones", "ones_like", "rand", "rand_like",
+    "randint", "randn", "randn_like", "randperm", "tril", "triu", "zeros",
+    "zeros_like",
+)
+_FACTORY_FIDELITY_DETAIL = (
+    "supports Jittor-backed tensor construction but approximates or omits "
+    "some Torch layout, pin-memory, out, or generator-state semantics"
+)
+
+
+class _FactoryAPI:
+    """Stable public callable whose internal adapter is bound at install time."""
+
+    def __init__(self, name):
+        self.__name__ = name
+        self.__qualname__ = name
+        self.__module__ = __name__
+        self._implementation = None
+
+    @property
+    def implementation(self):
+        return self._implementation
+
+    def bind(self, implementation):
+        if implementation is self:
+            return self
+        self._implementation = implementation
+        self.__wrapped__ = implementation
+        if getattr(implementation, "__doc__", None):
+            self.__doc__ = implementation.__doc__
+        return self
+
+    def __call__(self, *args, **kwargs):
+        if self._implementation is None:
+            raise RuntimeError("torch.%s is not installed" % self.__name__)
+        return self._implementation(*args, **kwargs)
+
+
+FACTORY_APIS = {name: _FactoryAPI(name) for name in _FACTORY_NAMES}
+globals().update(FACTORY_APIS)
+for _name, _api in FACTORY_APIS.items():
+    register_fidelity(
+        "torch." + _name,
+        _api,
+        Fidelity.APPROXIMATE,
+        _FACTORY_FIDELITY_DETAIL,
+    )
+del _name, _api
+
+
+def _publish_factory(root, name, implementation):
+    api = FACTORY_APIS.get(name)
+    if api is None:
+        setattr(root, name, implementation)
+        return
+    api.bind(implementation)
+    setattr(root, name, api)
+
+
+def _factory_implementation(value):
+    if isinstance(value, _FactoryAPI):
+        return value.implementation
+    return value
 
 
 def _wrap_constructors(g):
@@ -34,6 +102,8 @@ def _wrap_constructors(g):
     def wrap(name):
         orig = getattr(g, name, None)
         if orig is None:
+            return
+        if isinstance(orig, _FactoryAPI):
             return
         # Some jittor factories have no dtype param; cast their result instead.
         try:
@@ -178,7 +248,7 @@ def _wrap_constructors(g):
                 _torch_register_leaf(out)
             return out
         wrapped._torch_wrapped = True
-        setattr(g, name, wrapped)
+        _publish_factory(g, name, wrapped)
 
     for name in ("zeros", "ones", "empty", "full", "arange", "rand", "randn",
                  "randint", "eye", "linspace", "zeros_like", "ones_like",
@@ -198,7 +268,7 @@ def _install_random_and_linspace(g):
 
     # torch.linspace(..., dtype=) -- jittor's linspace has no dtype param. Pop
     # it and cast the result, matching torch (default float32 stays unchanged).
-    _lin = getattr(g, "linspace", None)
+    _lin = _factory_implementation(getattr(g, "linspace", None))
     if _lin is not None:
         @functools.wraps(_lin)
         def linspace(*args, dtype=None, **kwargs):
@@ -215,7 +285,7 @@ def _install_random_and_linspace(g):
             if dtype is not None:
                 r = r.cast(_dtype_to_str(dtype))
             return r
-        g.linspace = linspace
+        _publish_factory(g, "linspace", linspace)
 
     # torch.randn/rand/randint(..., generator=) -- jittor samplers seed off the
     # global RNG and reject `generator`. When a Generator is given, seed the
@@ -241,17 +311,15 @@ def _install_random_and_linspace(g):
             jt.set_global_seed(int(s))
 
     def wrap_gen(name):
-        orig = getattr(g, name, None)
+        orig = _factory_implementation(getattr(g, name, None))
         if orig is None:
             return
         @functools.wraps(orig)
         def wrapped(*args, generator=None, **kwargs):
             _seed_from(generator)
             return orig(*args, **kwargs)
-        setattr(g, name, wrapped)
+        _publish_factory(g, name, wrapped)
 
     for name in ("randn", "rand", "randint", "randperm", "normal",
                  "randn_like", "rand_like", "multinomial", "bernoulli"):
         wrap_gen(name)
-
-
