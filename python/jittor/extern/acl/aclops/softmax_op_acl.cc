@@ -40,17 +40,7 @@ namespace jittor
         auto attr = dynamic_cast<SoftmaxAttr *>(op_attr.get());
         ret = aclnnSoftmaxGetWorkspaceSize(inputTensors[0], aclDataType(attr->dim), outputTensors[0], &workspaceSize, &executor);
 
-        checkRet(ret);
-
-        if (workspaceSize > 0)
-        {
-            mallocWorkSpace(workspaceSize);
-        }
-
-        ret = aclnnSoftmax(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnSoftmax failed. ERROR: %d\n", name.c_str(), ret); return);
-
-        syncRun();
+        launch(ret, aclnnSoftmax, true);
 
         return;
     }

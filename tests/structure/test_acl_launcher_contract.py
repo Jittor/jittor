@@ -16,6 +16,7 @@ NANTONUM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/nantonum_op_acl.cc"
 TRIU_SOURCE = ROOT / "python/jittor/extern/acl/aclops/triu_op_acl.cc"
 SIGMOID_SOURCE = ROOT / "python/jittor/extern/acl/aclops/sigmoid_op_acl.cc"
 TRANSPOSE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/transpose_op_acl.cc"
+SOFTMAX_SOURCE = ROOT / "python/jittor/extern/acl/aclops/softmax_op_acl.cc"
 
 
 def test_acl_launcher_tail_has_one_auditable_contract():
@@ -132,3 +133,14 @@ def test_transpose_family_uses_launcher_and_keeps_dim_cleanup():
     assert "checkRet(ret);" not in source
     assert "mallocWorkSpace(workspaceSize)" not in source
     assert "syncRun();" not in source
+
+
+def test_softmax_forward_uses_launcher_and_backward_remains_present():
+    source = SOFTMAX_SOURCE.read_text()
+    forward = source[source.index("void SoftmaxOpRunner::executeOp"):source.index("SoftmaxBackwardOpRunner::SoftmaxBackwardOpRunner")]
+    assert "attr->dim" in forward
+    assert "launch(ret, aclnnSoftmax, true);" in forward
+    assert "checkRet(ret);" not in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void SoftmaxBackwardOpRunner::executeOp" in source

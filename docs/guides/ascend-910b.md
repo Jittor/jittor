@@ -427,6 +427,10 @@ source-only until the Ascend 910B3 probe is run.
 The ACL Transpose/Permute family uses the shared launcher while retaining axes
 descriptor cleanup and synchronous execution.
 
+The ACL Softmax forward family uses the shared launcher and retains synchronous
+execution. Softmax backward is intentionally outside this slice. This remains
+source-only until the Ascend 910B3 probe is run.
+
 These flags are diagnostic and slow execution. Remove them after locating the
 failing operation. For general JIT and memory diagnostics, see
 {doc}`debugging`.
