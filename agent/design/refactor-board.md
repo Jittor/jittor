@@ -371,7 +371,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 6.B16 | `sync_run` 在 ACL 上实现或删 flag | 待领 | | |
 | 6.B17 | 析构不得抛 | 已合并 | cudabk | 272f00ba |
 | 7.01 | 「看起来支持其实空操作」一律改为实现或抛 `NotImplementedError`，需显式 `… | 已合并 | 兼容层分区 | ff395ecc b7c12ddc 0446217e 47012a27 46bc9ea7 49d41acf 9053a7c0 |
-| 7.02 | DDP 真实梯度同步 | 待领 | | |
+| 7.02 | DDP 真实梯度同步 | 已合并 | 兼容层分区 | b79cc0f9 |
 | 7.03 | 每个 torch API 一个模块级一等对象加保真度标注 | 待领 | | |
 | 7.04 | 激活显式、一次性、可查询 | 待领 | | |
 | 7.05 | install 事务化 | 待领 | | |
@@ -389,7 +389,15 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 7.10 | `torch.compile`/`jit.trace`/`jit.script` 保留 pass… | 进行中 | 兼容层分区 | |
 | 7.11 | autograd 语义 | 进行中 | 兼容层分区 | |
 | 7.12 | 独立 torch 包 | 待领 | | |
-| 7.13 | FSDP2 | 待领 | | |
+| 7.13 | FSDP2 | **部分完成** | 兼容层分区 | 37c0aed4（仅优化器识别一项） |
+
+**7.13 只做了一条，其余待领**（兼容层分区，2026-09-03）：
+
+- 已做：**优化器按实现身份识别** — `37c0aed4`，兑现验收判据里的「自定义 Adam 子类可用」。两处 `type(opt).__name__.lower()` 子串匹配改成沿 MRO 按类身份判定。审计记的「自定义子类落到 NotImplementedError」是响亮的一半；**安静的一半是名字含 "adam" 却重写了 `step()` 的子类会被判成 adam，然后跑 fsdp2 自己那套基础 AdamW 数学，用户重写的更新公式完全不被执行且不报错**（`SGDW` 被当成 sgd 同理）。现在这种情况明确拒绝。
+- 未做（**需要真多卡**）：`full_param` 释放与峰值显存（`shard.py:361-366` 明确不释放、`:327` 的 `true_fsdp_flat_full_param` 全仓无清除点、`grad_sync.py:200` 常驻全尺寸梯度）。判据是「FSDP 峰值显存低于未分片」，单卡上 `common._in_true_distributed()` 为 False、真 FSDP 路径根本不初始化，**在单卡上跑绿不构成证据**。
+- 未做（需要真多卡）：`fully_shard(mesh=)` 拒绝未支持的 mesh、`clip_grad_norm_` 跨 rank 归约。前者的拒绝逻辑本身单卡可写，但要确认「哪些 mesh 真的按全局 world 分片而数值错」需要多卡对拍；后者单卡是恒等，判据只在多卡上有意义。
+- 备注：本机 MPI 现已可用（`mpirun -np 2`，CPU 即可），见 skill `jittor-build-time-capabilities`——`has_mpi` 是**构建期**常量，缓存编译时 PATH 里没有 conda 的 `mpicc` 就会整份编成无 MPI，事后改 PATH 无效。NCCL 多卡路径仍需要两张卡。
+
 | 7.14 | vLLM 边界检查把 `torch` 视作 jittor 别名 | 已合并 | 兼容层分区 | 178be65a |
 | 7.15 | `_rebuild_tensor_v2` 按 stride 还原或报错 | 已合并 | | 7e7877c8 |
 | 7.16 | compat/ 内 129 个 `except: pass` 与 258 个宽泛 except … | 已合并 | 兼容层分区 | 72dbc22d（+ 一次修复：`93b48a8e` [4.02 3/3] rebase 时把 cuda.py/types.py 整段解回 7.16 之前，`swallowed()` 24→0、16→0，全树违规回到 47 条；已用三方合并恢复，见提交说明） |
