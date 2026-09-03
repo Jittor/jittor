@@ -54,6 +54,10 @@ MIGRATED_NUMPY_TYPE_BOUNDARIES = {
     "python/jittor/src/pyjt/numpy.h": 1,
 }
 
+MIGRATED_VAR_SLICES_USER_BOUNDARIES = {
+    "python/jittor/src/var_slices.h": 1,
+}
+
 MIGRATED_FUSED_ADAMW_CARDINALITY_BOUNDARIES = {
     "python/jittor/src/ops/fused_adamw_op.cc": 4,
 }
@@ -156,6 +160,13 @@ def test_numpy_type_boundary_migration_is_explicit_and_bounded():
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_NUMPY_TYPE_BOUNDARIES[
         "python/jittor/src/pyjt/numpy.h"]
+
+
+def test_var_slices_user_boundary_migration_is_explicit_and_bounded():
+    source = (ROOT / "python/jittor/src/var_slices.h").read_text()
+    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    assert actual == MIGRATED_VAR_SLICES_USER_BOUNDARIES[
+        "python/jittor/src/var_slices.h"]
 
 
 def test_fused_adamw_cardinality_migration_is_explicit_and_bounded():

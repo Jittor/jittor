@@ -29,7 +29,7 @@ union VarSlice {
     inline void set_int(int64 v) { slice.mask = -4; i = v; }
     inline void set_str(const string& s) {
         slice.mask = -5;
-        CHECK(s.size() < 16) << "String slice too long" << s;
+        USER_CHECK(s.size() < 16) << "String slice too long" << s;
         auto v = (int64*)s.c_str();
         slice.start = v[0];
         slice.stop = v[1];

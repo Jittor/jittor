@@ -14,6 +14,14 @@ from _helpers.assertions import expect_error
 from _helpers.numerical_grad import ngrad
 
 class TestSlice(unittest.TestCase):
+    def test_string_slice_overflow_is_a_catchable_user_error(self):
+        value = jt.ones((2,))
+        expect_error(
+            lambda: value["a" * 16],
+            exc_type=RuntimeError,
+            match="String slice too long",
+        )
+
     def test_boolean_var_getitem_is_a_catchable_user_error(self):
         value = jt.array([1, 2, 3])
         mask = jt.array(np.array([True, False, True], dtype=np.bool_))
