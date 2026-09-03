@@ -263,7 +263,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 3.19 | `event_queue` 异步基础设施修好并加测试，或删除 | 待领 | | |
 | 3.20 | 执行器提供「提交部分图」显式接口，`jt.grad` 与 `Function` 回调降开销，让反… | 待领 | | |
 | 3.21 | 每算子建图成本 | 待领 | | |
-| 3.22 | CUDA 归约块内树形归约 | 待领 | | |
+| 3.22 | CUDA 归约块内树形归约 | 待领 | | edf70f52 已合入 1/N：level-4 SharedReduce 改为 warp shuffle→每 warp 一个共享值→首 warp shuffle，两次 barrier；修复其对 ParallelPass 子节点位置与 `op` 字符串的旧假设，GPU3 六个生成/数值/梯度节点、CPU pass 契约通过。未改默认：四个 UNet 代表形状 30 次 profiler，新混合 17.21/16.32/16.39/25.53us（合计 75.45us），默认 warp 17.53/16.80/18.00/21.90us（74.23us）；混合总计慢 1.64%，末形状慢 16.6%，未满足无退化与完整 UNet 性能验收 |
 | 3.23 | 融合逐元素 kernel 带宽效率 | 待领 | | |
 | 3.24 | 布局收尾 | 待领 | | |
 | 4.01 | 分配器 id 空间随分配器实例走，不再是进程静态 2M 单例 | 已合并 | device | 4e407447 |
