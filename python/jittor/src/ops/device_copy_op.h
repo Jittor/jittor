@@ -13,6 +13,8 @@ struct DeviceCopyOp : Op {
     int device;
     /**
     Copy a Var onto another CUDA device -- torch's ``tensor.to("cuda:N")``.
+    Device ``-1`` is the internal host-copy path used by ``tensor.cpu()``;
+    the public ``to_device`` wrapper accepts CUDA indices only.
 
     The result lives on ``device`` whatever the input's device is, and later
     ops on it run there. It is differentiable: the gradient is a copy back to

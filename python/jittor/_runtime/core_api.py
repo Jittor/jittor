@@ -568,10 +568,20 @@ def to_device(self, device):
     changes device. '''
     # `from jittor import *` shadows the builtin int with the cast op.
     device = ori_int(getattr(device, "index", device))
-    if device == self.device_id:
+    if device < 0:
+        raise RuntimeError("CUDA device index must be non-negative")
+    # A host-resident Var remembers the CUDA device it belongs to.  Returning
+    # it unchanged merely because the index matches would make ``x.cpu().cuda()``
+    # stay on the host.  DeviceCopyOp has an explicit host-to-device path.
+    if device == self.device_id and self.location() != "cpu":
         return self
     return _core_to_device(self, device)
 Var.to_device = to_device
+
+def _copy_to_cpu(self):
+    '''Return a differentiable, independently allocated host copy.'''
+    return _core_to_device(self, -1)
+Var._copy_to_cpu = _copy_to_cpu
 
 def float_auto(x):
     if jt.flags.amp_reg & amp_flags.prefer16:
@@ -1833,21 +1843,28 @@ class Module:
         self.load_state_dict(state)
 
     def cuda(self, device=None):
-        ''' Enable CUDA. With ``device`` given, also move every parameter
-        onto that device index, in place: the Parameter objects keep their
-        identity -- an optimizer already holding them keeps working -- and
-        only their storage moves. '''
-        flags.use_cuda = 1
-        if device is not None:
-            index = ori_int(getattr(device, "index", device))
-            for p in self.parameters():
-                moved = p.to_device(index)
-                if moved is not p:
-                    p.assign(moved)
-        return self
+        '''Move every parameter and buffer to a CUDA device, in place.'''
+        return self._move_to_accelerator("cuda", device)
 
     def npu(self, device=None):
-        return self.cuda(device)
+        '''Move every parameter and buffer to an NPU device, in place.'''
+        return self._move_to_accelerator("npu", device)
+
+    def _move_to_accelerator(self, method, device):
+        if method == "npu" and not getattr(jt.compiler, "has_acl", False):
+            raise RuntimeError("NPU backend is unavailable")
+        values = self._named_vars("parameters") + self._named_vars("buffers")
+        seen = set()
+        for _, value in values:
+            if id(value) in seen:
+                continue
+            seen.add(id(value))
+            moved = getattr(value, method)(device)
+            if moved is not value:
+                # Module moves are in place: optimizers and state dictionaries
+                # keep referring to the same Var object while its value moves.
+                value.assign(moved)
+        return self
 
     def modules(self) -> List:
         ''' Returns a list of sub-modules in the module recursively.

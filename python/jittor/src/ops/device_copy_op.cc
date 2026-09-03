@@ -9,6 +9,7 @@
 #include "ops/device_copy_op.h"
 #include "ops/op_register.h"
 #include "misc/cuda_flags.h"
+#include "mem/swap.h"
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
@@ -31,10 +32,10 @@ DeviceCopyOp::DeviceCopyOp(Var* x, int device) : x(x), device(device) {
     // Op::init must leave the placement alone.
     set_flag(OpFlags::_manual_device);
     int count = get_device_count();
-    CHECK(device >= 0 && (count == 0 || device < count))
+    CHECK(device >= -1 && (device < 0 || count == 0 || device < count))
         << "Invalid CUDA device index" << device >> ", visible device count is" << count;
     y = create_output(nullptr, x->dtype());
-    y->device_id = device;
+    y->device_id = device < 0 ? x->device_id : device;
     if (x->name.ptr)
         y->name = x->name;
 }
@@ -46,7 +47,7 @@ VarPtr DeviceCopyOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 
 void DeviceCopyOp::infer_shape() {
     y->set_shape(x->shape);
-    y->device_id = device;
+    y->device_id = device < 0 ? x->device_id : device;
 }
 
 void DeviceCopyOp::jit_prepare(JK& jk) {
@@ -71,6 +72,34 @@ static cudaEvent_t device_event(int device) {
 #endif
 
 void DeviceCopyOp::run() {
+    if (device < 0) {
+        if (!y->allocator->is_cuda()) {
+            std::memcpy(y->mem_ptr, x->mem_ptr, x->size);
+            return;
+        }
+        Allocation host(cpu_allocator, y->size);
+        #ifdef HAS_CUDA
+        if (x->allocator->is_cuda())
+            checkCudaErrors(cudaMemcpy(host.ptr, x->mem_ptr, x->size,
+                                       cudaMemcpyDeviceToHost));
+        else
+        #endif
+            std::memcpy(host.ptr, x->mem_ptr, x->size);
+
+        // The executor allocates outputs on the op's device before run(). A
+        // host copy is the exception: replace that temporary device block
+        // with the independently allocated host block after the D2H copy.
+        if (save_mem)
+            free_with_swap(y);
+        else
+            y->allocator->free(y->mem_ptr, y->size, y->allocation);
+        y->mem_ptr = host.ptr;
+        y->allocation = host.allocation;
+        y->allocator = host.allocator;
+        host.ptr = nullptr;
+        if (save_mem) registe_swap(y);
+        return;
+    }
     #ifdef HAS_CUDA
     if (use_cuda) {
         int src = x->allocator ? x->allocator->device() : -1;

@@ -668,7 +668,11 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             }
         } else {
             for (Var* v : op->inputs()) {
-                if (!v->allocator->is_cuda())
+                // device_copy deliberately accepts a host-resident input and
+                // owns its H2D transfer. Migrating it here first would mutate
+                // the source of x.cpu().cuda(), violating copy semantics.
+                if (!v->allocator->is_cuda()
+                        && !op->flag(OpFlags::_manual_device))
                     migrate_to_gpu(v, var_allocator(v, allocator));
             }
             for (Var* v : op->outputs()) {
