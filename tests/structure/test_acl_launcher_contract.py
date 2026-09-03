@@ -14,6 +14,7 @@ EXPAND_SOURCE = ROOT / "python/jittor/extern/acl/aclops/expand_op_acl.cc"
 FLOOR_SOURCE = ROOT / "python/jittor/extern/acl/aclops/floor_op_acl.cc"
 NANTONUM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/nantonum_op_acl.cc"
 TRIU_SOURCE = ROOT / "python/jittor/extern/acl/aclops/triu_op_acl.cc"
+SIGMOID_SOURCE = ROOT / "python/jittor/extern/acl/aclops/sigmoid_op_acl.cc"
 
 
 def test_acl_launcher_tail_has_one_auditable_contract():
@@ -110,3 +111,13 @@ def test_triu_family_uses_launcher_and_keeps_sync_policy():
     assert "checkRet(ret);" not in source
     assert "mallocWorkSpace(workspaceSize)" not in source
     assert "syncRun();" not in source
+
+
+def test_sigmoid_forward_uses_launcher_and_backward_remains_present():
+    source = SIGMOID_SOURCE.read_text()
+    forward = source[source.index("void SigmoidOpRunner::executeOp"):source.index("SigmoidBackwardOpRunner::SigmoidBackwardOpRunner")]
+    assert "launch(ret, aclnnSigmoid, true);" in forward
+    assert "checkRet(ret);" not in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void SigmoidBackwardOpRunner::executeOp" in source

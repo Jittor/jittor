@@ -420,6 +420,10 @@ posinf, and neginf attribute handling and synchronous execution policy.
 The ACL Triu family uses the shared launcher while retaining its diagonal
 attribute and synchronous execution policy.
 
+The ACL Sigmoid forward family uses the shared launcher and retains synchronous
+execution. Sigmoid backward is intentionally outside this slice. This remains
+source-only until the Ascend 910B3 probe is run.
+
 These flags are diagnostic and slow execution. Remove them after locating the
 failing operation. For general JIT and memory diagnostics, see
 {doc}`debugging`.
