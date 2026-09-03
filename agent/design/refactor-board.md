@@ -90,7 +90,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 执行器 | — |  |
 | 代码生成 | — |  |
 | 类型与日志 | coreops (6.C01/05/06/07/09/30) | GPU3 c24-35 |
-| 内存 | mem (6.C10–6.C20) | GPU2 c12-23 |
+| 内存 | mem (6.C10–6.C21，全部已合并) | GPU2 c12-23 |
 | 绑定 | bindings (6.C02/22/23/24/25/27/28/29) | GPU0 c0-11 |
 | Python 核心 | — |  |
 | Python 算子 | — |  |
@@ -317,18 +317,18 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 6.C07 | 缺失梯度默认报错 | 已合并 | | 78c154e4 |
 | 6.C08 | `grad.cc:146-261` 两趟遍历合一趟并快照结构，删无边界游标 | 待领 | | |
 | 6.C09 | `backward()` 可重复 | 已合并 | | 93b6e813 |
-| 6.C10 | CUDA 分配钩子两张 map 用 `find` 加显式错误，释放后 `erase` | 进行中 | mem | |
-| 6.C11 | CPU 分配失败抛异常，返回值必须检查 | 进行中 | mem | |
-| 6.C12 | `cuda_device_allocator.cc:32-37` 的 managed 回退放到 … | 进行中 | mem | |
-| 6.C13 | 零字节分配不返回伪指针 `0x10` | 进行中 | mem | |
-| 6.C14 | SFRL | 进行中 | mem | |
-| 6.C15 | `migrate_to_cpu/gpu` 迁移前检查 share_with 关系，整组迁移或拒绝 | 已合并 | | 7e223483 |
-| 6.C16 | fetch 跨流 | 已合并 | | 9095484b |
-| 6.C17 | `TempAllocator` 删遮蔽基类的 `used_memory`/`unused_mem… | 进行中 | mem | |
-| 6.C18 | CachingBlock 保存底层 allocation 并原样回传，不再传 0 | 进行中 | mem | |
-| 6.C19 | 每个分配器一把锁并覆盖 `gc()` | 进行中 | mem | |
-| 6.C20 | swap | 进行中 | mem | |
-| 6.C21 | 检查 `NODE_MEMCHECK` 外 `check_graph` 静默空转 | 进行中 | mem | 绑定分区已让出（曾误领）。前置核实结论：`do_graph_check()` 前半段（从 hold_vars 反向遍历、重算 f/b/p）在任何构建下都真跑；只有后半段查悬挂节点的那个循环读 `lived_nodes`，而它只在 `-DNODE_MEMCHECK`（`compiler.py:1164`）下填充——所以 `check_graph=1` 在 release 下交付的是它宣称的一半。另：`Node::memcheck_all_exist()` 在出厂 object 里也是空的，它本该断言什么无法从 object 恢复（见 812714d5 还原者说明），不要当成还原时丢的 |
+| 6.C10 | CUDA 分配钩子两张 map 用 `find` 加显式错误，释放后 `erase` | 已合并 | mem | `59c7a9b3` |
+| 6.C11 | CPU 分配失败抛异常，返回值必须检查 | 已合并 | mem | `a683274e` |
+| 6.C12 | `cuda_device_allocator.cc:32-37` 的 managed 回退放到 … | 已合并 | mem | `e48c52c2` |
+| 6.C13 | 零字节分配不返回伪指针 `0x10` | 已合并 | mem | `b8b978e1` |
+| 6.C14 | SFRL | 已合并 | mem | `a0da8374` |
+| 6.C15 | `migrate_to_cpu/gpu` 迁移前检查 share_with 关系，整组迁移或拒绝 | 已合并 | mem | `7e223483`。Var 加共享环（`share_prev/share_next`），migrate 看到环就整组搬走并保持相对偏移。顺带两条：`ArrayOp::run()` 绕过 `free_var_mem` 换内存要自己摘环；裸分配器表达不了共享，新增 `Allocator::can_share()`，为假时退回旧行为**并告警**（不再静默断开） |
+| 6.C16 | fetch 跨流 | 已合并 | mem | `9095484b`。**修法与任务行不同**：不是「记 event 让默认流等」——副流本来就在等默认流，再让默认流等副流等于取消掉异步重叠（`test_memcopy_overlap` 那条性能断言测的正是它）。改成在源块上多持一份引用直到主机回调之后；event 栅栏降级为 `can_share()` 为假时的兜底 |
+| 6.C17 | `TempAllocator` 删遮蔽基类的 `used_memory`/`unused_mem… | 已合并 | mem | `4357c8bb` |
+| 6.C18 | CachingBlock 保存底层 allocation 并原样回传，不再传 0 | 已合并 | mem | `74264dd3` |
+| 6.C19 | 每个分配器一把锁并覆盖 `gc()` | 已合并 | mem | `6a73832b` |
+| 6.C20 | swap | 已合并 | mem | `4b33609d`（文件名用运行期 pid 加随机 token、cudaMemcpy 查错、去静态 8 MB buffer）+ `2940d88d`（后半）。后半的核实结论：`save_mem` **已经**是编译期常量，「未完成特性挂在最热释放路径上」就现状而言不成立；真正坏的是 `export JT_SAVE_MEM=1` 从来没被翻译成 `-DJT_SAVE_MEM=1`，文档教的开法是空操作。已接上，开着时才进构建指纹 |
+| 6.C21 | 检查 `NODE_MEMCHECK` 外 `check_graph` 静默空转 | 已合并 | mem | `2bce371e`。 绑定分区已让出（曾误领）。前置核实结论：`do_graph_check()` 前半段（从 hold_vars 反向遍历、重算 f/b/p）在任何构建下都真跑；只有后半段查悬挂节点的那个循环读 `lived_nodes`，而它只在 `-DNODE_MEMCHECK`（`compiler.py:1164`）下填充——所以 `check_graph=1` 在 release 下交付的是它宣称的一半。另：`Node::memcheck_all_exist()` 在出厂 object 里也是空的，它本该断言什么无法从 object 恢复（见 812714d5 还原者说明），不要当成还原时丢的。**做的是完整版而非最小版**（协调者确认）：登记表改成跟着 `check_graph` 走而不是跟着构建类型走，于是 release 下开 `check_graph=1` 两半都真查；`do_graph_check()` 返回悬垂扫描的节点数，扫到 0 时打一条每进程一次的警告说明为什么——不对称本身也可见了。关着时的开销量过：40 万个 Node 的构造从约 955 ns/个变成约 980 ns（+2.6%），在同进程 ±15% 的波动里 |
 | 6.C22 | pyjt 关键字参数 | 已合并 | bindings | ed148a56 |
 | 6.C23 | `is_type<NanoString>` 收窄 | 已合并 | bindings | f8f9de43 |
 | 6.C24 | 带实例 `__dict__` 的类型加 `Py_TPFLAGS_HAVE_GC` 与 trave… | 已合并 | bindings | 4a30c5e4 |
