@@ -27,9 +27,9 @@ NcclReduceScatterOp::NcclReduceScatterOp(Var* x, int group_id)
 
 void NcclReduceScatterOp::infer_shape() {
     NanoVector yshape;
-    CHECKop(x->shape.size(),>=,1);
+    USER_CHECKop(x->shape.size(),>=,1);
     int group_size = nccl_process_group_size(group_id);
-    CHECKop(x->shape[0] % group_size,==,0)
+    USER_CHECKop(x->shape[0] % group_size,==,0)
         << "nccl_reduce_scatter expects dim0 divisible by process-group size";
     yshape.push_back(x->shape[0] / group_size);
     for (int i=1; i<x->shape.size(); i++)
