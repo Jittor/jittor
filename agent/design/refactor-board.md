@@ -273,7 +273,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 4.05 | Python 分派表 | 待领 | | |
 | 4.06 | `jt.flags.backend_fallback ∈ {error, warn, allow… | 待领 | | |
 | 4.07 | 后端配置改为返回 `BuildConfig` 值 | 待领 | | |
-| 4.08 | 流与事件模型 | 待领 | | |
+| 4.08 | 流与事件模型 | 待领 | | `0dfcb3dd` 已合入前置：每设备 copy/communication stream 与 ready/done event；array H2D、fetch D2H、device_copy、NCCL collective 接入，mixed-device fetch 可用且保留 6.C16 源块持有。剩余：真实双 rank NCCL 验证、稳定 H2D/D2H 与计算重叠计时证据；完成前不得标已合并 |
 | 4.09 | per-device 库句柄 | 待领 | | |
 | 4.10 | CUDA kernel 存放位置统一 | 待领 | | |
 | 4.11 | ACL 改为注册表后端 | 待领 | | |
