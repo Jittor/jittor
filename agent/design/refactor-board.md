@@ -411,7 +411,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 8.04 | cuDNN 9 | 待领 | | |
 | 8.05 | MKL | 待领 | | |
 | 8.06 | ACL 去样板 | 待领 | | |
-| 8.07 | conv 族共享描述符与计划层 | 待领 | | |
+| 8.07 | conv 族共享描述符与计划层 | 已合并 | cudabk | 947f5223（反向只留 C++ 一份）+ 47f91130（计划请求一个构造函数） |
 | 8.08 | `ProcessGroup` 对象替代全局唯一 communicator | 待领 | | |
 | 8.09 | NCCL | 已合并 | dist | f2d9c291, 95a1c956 |
 | 8.10 | `distributed/launch.py:102-107` 改 `wait(timeout)… | 已合并 | dist | 925850b3 |
