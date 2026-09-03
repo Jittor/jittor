@@ -10,7 +10,10 @@
 namespace jittor {
 
 struct SolveConflictDefinePass : Pass {
-    SolveConflictDefinePass() : Pass("solve_conflict_define") {};
+    SolveConflictDefinePass() : Pass("solve_conflict_define") {
+        reads = {kir::lvalue};
+        writes = {kir::lvalue};
+    };
     void run() override;
 };
 

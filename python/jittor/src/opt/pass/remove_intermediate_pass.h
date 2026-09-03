@@ -10,7 +10,10 @@
 namespace jittor {
 
 struct RemoveIntermediatePass : Pass {
-    RemoveIntermediatePass() : Pass("remove_intermediate") {};
+    RemoveIntermediatePass() : Pass("remove_intermediate") {
+        reads = {kir::lvalue, kir::rvalue, kir::code, kir::used};
+        writes = {kir::lvalue, kir::rvalue, kir::dtype, kir::code};
+    };
     void run() override;
 };
 

@@ -45,7 +45,31 @@ DEFINE_FLAG(string, exclude_pass, "", "Don't run certain pass.");
 DEFINE_FLAG(string, log_op_hash, "", "Output compiler pass result of certain hash of op.");
 
 
+// The attributes the KernelIR parser sets, so they are there before any pass
+// runs (see try_parse_define and the attribute table in kernel_ir.h).
+static const char* parsed_attrs[] = {
+    kir::lvalue, kir::rvalue, kir::code, kir::dtype,
+    kir::loop_id, kir::raw, kir::void_discard, kir::has_bc, kir::used,
+};
+
+void PassManager::check_attr_contract(Pass* pass) {
+    // reading what you also write is a pass checking its own marker
+    // (UnrollPass asks whether a loop is already unrolled), not a dependency
+    auto writes_it = [&](const char* a) {
+        for (auto w : pass->writes) if (a == w || string(a) == w) return true;
+        return false;
+    };
+    for (auto r : pass->reads)
+        ASSERT(produced.count(r) || writes_it(r))
+            << "Pass" >> '\'' >> pass->name >> '\''
+            << "reads KernelIR attribute" >> '\'' >> r >> '\''
+            << "but nothing before it in the pipeline produces it."
+            << "\nEither the pass order in PassManager::run_passes is wrong,"
+            << "or the producer's Pass::writes does not mention it.";
+}
+
 PassManager::PassManager(OpCompiler* oc) : oc(oc), all(oc->get_src()) {
+    for (auto a : parsed_attrs) produced.insert(a);
     main_ir = nullptr;
     for (auto& c : all.children)
         if (c->type == KernelIRType::func && c->attrs[kir::lvalue]=="jittor::FusedOp::jit_run") {
@@ -103,12 +127,13 @@ void PassManager::run_passes() {
 
     run_pass<RestridePass>();
     
-    if (cc_type == "icc") {
-        // only icc supports pragma
-        run_pass<VectorizePass>();
-        run_pass<UnrollPass>();
-        run_pass<UnrollPass>();
-    }
+    // only icc supports the pragmas these emit; they are still declared, so
+    // the attributes they produce (vectorized, unrolled, resplited) count as
+    // available to the passes below on every compiler
+    bool has_pragma = cc_type == "icc";
+    run_pass<VectorizePass>(has_pragma);
+    run_pass<UnrollPass>(has_pragma);
+    run_pass<UnrollPass>(has_pragma);
     run_pass<UseMovntPass>();
     run_pass<CheckCachePass>();
     run_pass<LoopToFuncPass>();

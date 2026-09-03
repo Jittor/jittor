@@ -10,7 +10,10 @@
 namespace jittor {
 
 struct ReorderLoopPass : Pass {
-    ReorderLoopPass() : Pass("reorder_loop") {};
+    ReorderLoopPass() : Pass("reorder_loop") {
+        reads = {kir::loop_id};
+        writes = {};
+    };
     void run() override;
     vector<int> search_parse_loop_order();
 };

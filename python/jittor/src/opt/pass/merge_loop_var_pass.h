@@ -10,7 +10,10 @@
 namespace jittor {
 
 struct MergeLoopVarPass : Pass {
-    MergeLoopVarPass() : Pass("merge_loop_var") {};
+    MergeLoopVarPass() : Pass("merge_loop_var") {
+        reads = {kir::rvalue, kir::lvalue, kir::loop_id, kir::dtype};
+        writes = {kir::loop_id, kir::rvalue, kir::dtype};
+    };
     void run() override;
 };
 

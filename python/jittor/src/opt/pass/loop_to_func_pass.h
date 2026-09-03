@@ -10,7 +10,10 @@
 namespace jittor {
 
 struct LoopToFuncPass : Pass {
-    LoopToFuncPass() : Pass("loop_to_func") {};
+    LoopToFuncPass() : Pass("loop_to_func") {
+        reads = {kir::vectorized, kir::unrolled, kir::resplited, kir::lvalue, kir::raw, kir::code, kir::rvalue, kir::dtype};
+        writes = {kir::loop_func, kir::dtype, kir::lvalue, kir::code};
+    };
     void run() override;
 };
 

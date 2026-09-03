@@ -10,7 +10,10 @@
 namespace jittor {
 
 struct ConstVarPass : Pass {
-    ConstVarPass() : Pass("const_var_pass") {};
+    ConstVarPass() : Pass("const_var_pass") {
+        reads = {kir::dtype, kir::rvalue};
+        writes = {kir::dtype, kir::rvalue};
+    };
     void run() override;
 };
 

@@ -10,7 +10,10 @@
 namespace jittor {
 
 struct FakeMainPass : Pass {
-    FakeMainPass() : Pass("fake_main") {};
+    FakeMainPass() : Pass("fake_main") {
+        reads = {kir::lvalue, kir::rvalue};
+        writes = {};
+    };
     void run() override;
 };
 

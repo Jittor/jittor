@@ -13,7 +13,10 @@ struct LoopVarAnalyzePass : Pass {
     // total number of loop ranges
     int number_of_ranges;
 
-    LoopVarAnalyzePass() : Pass("loop_var_analyze"), number_of_ranges(0) {};
+    LoopVarAnalyzePass() : Pass("loop_var_analyze"), number_of_ranges(0)  {
+        reads = {};
+        writes = {};
+    };
     void run() override;
 };
 

@@ -10,7 +10,10 @@
 namespace jittor {
 
 struct ParallelPass : Pass {
-    ParallelPass() : Pass("parallel") {};
+    ParallelPass() : Pass("parallel") {
+        reads = {kir::rvalue, kir::code, kir::lvalue, kir::rvalue2, kir::loop_func, kir::loop_id, kir::dtype};
+        writes = {kir::rely, kir::dtype, kir::code, kir::rvalue};
+    };
     void run() override;
 };
 

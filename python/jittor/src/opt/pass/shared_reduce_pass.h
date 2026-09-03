@@ -10,7 +10,10 @@
 namespace jittor {
 
 struct SharedReducePass : Pass {
-    SharedReducePass() : Pass("shared_reduce") {};
+    SharedReducePass() : Pass("shared_reduce") {
+        reads = {kir::code, kir::dtype, kir::lvalue, kir::rvalue};
+        writes = {kir::code};
+    };
     void run() override;
 };
 

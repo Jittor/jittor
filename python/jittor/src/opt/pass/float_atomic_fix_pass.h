@@ -12,7 +12,10 @@
 namespace jittor {
 
 struct FloatAtomicFixPass : Pass {
-    FloatAtomicFixPass() : Pass("float_atomic_fix") {};
+    FloatAtomicFixPass() : Pass("float_atomic_fix") {
+        reads = {kir::code};
+        writes = {kir::code};
+    };
     void run() override;
 };
 

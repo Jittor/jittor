@@ -19,7 +19,10 @@ namespace jittor {
 // for (T i{d}=0; i{d}<opi_shape{d}; i{d}++)
 //     i = i{d} * opi_xstride{d}
 struct ReplaceForNumPass : Pass {
-    ReplaceForNumPass() : Pass("replace_for_num") {};
+    ReplaceForNumPass() : Pass("replace_for_num") {
+        reads = {kir::lvalue, kir::rvalue};
+        writes = {};
+    };
     void run() override;
 };
 

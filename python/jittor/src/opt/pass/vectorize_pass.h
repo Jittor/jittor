@@ -10,7 +10,10 @@
 namespace jittor {
 
 struct VectorizePass : Pass {
-    VectorizePass() : Pass("vectorize") {};
+    VectorizePass() : Pass("vectorize") {
+        reads = {kir::loop_id, kir::rvalue, kir::split_id};
+        writes = {kir::vectorized};
+    };
     void run() override;
 };
 

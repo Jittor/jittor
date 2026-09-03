@@ -13,7 +13,10 @@
 namespace jittor {
 
 struct CheckCachePass : Pass {
-    CheckCachePass() : Pass("check_cache") {};
+    CheckCachePass() : Pass("check_cache") {
+        reads = {kir::code, kir::rvalue};
+        writes = {};
+    };
     void run() override;
 };
 

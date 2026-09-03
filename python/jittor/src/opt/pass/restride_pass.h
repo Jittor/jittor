@@ -10,7 +10,10 @@
 namespace jittor {
 
 struct RestridePass : Pass {
-    RestridePass() : Pass("restride") {};
+    RestridePass() : Pass("restride") {
+        reads = {kir::loop_id, kir::lvalue, kir::rvalue, kir::split_id};
+        writes = {kir::rvalue};
+    };
     void run() override;
 };
 

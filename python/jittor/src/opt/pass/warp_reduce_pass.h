@@ -9,7 +9,10 @@
 namespace jittor {
 
 struct WarpReducePass : Pass {
-    WarpReducePass() : Pass("warp_reduce") {};
+    WarpReducePass() : Pass("warp_reduce") {
+        reads = {kir::code};
+        writes = {kir::code};
+    };
     void run() override;
 };
 

@@ -10,7 +10,10 @@
 namespace jittor {
 
 struct ExpandEmptyBlockPass : Pass {
-    ExpandEmptyBlockPass() : Pass("expand_empty_block") {};
+    ExpandEmptyBlockPass() : Pass("expand_empty_block") {
+        reads = {kir::loop_id, kir::lvalue, kir::rvalue};
+        writes = {};
+    };
     void run() override;
 };
 

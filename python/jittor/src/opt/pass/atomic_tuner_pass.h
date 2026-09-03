@@ -13,7 +13,10 @@
 namespace jittor {
 
 struct AtomicTunerPass : Pass {
-    AtomicTunerPass() : Pass("atomic") {};
+    AtomicTunerPass() : Pass("atomic") {
+        reads = {kir::rvalue, kir::code, kir::rely, kir::lvalue, kir::loop_func, kir::dtype};
+        writes = {kir::code, kir::rvalue};
+    };
     void run() override;
 };
 

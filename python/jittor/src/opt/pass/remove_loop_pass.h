@@ -11,7 +11,10 @@ namespace jittor {
 
 // this is a debug pass, remove i-th loop, key: removei
 struct RemoveLoopPass : Pass {
-    RemoveLoopPass() : Pass("remove_loop") {};
+    RemoveLoopPass() : Pass("remove_loop") {
+        reads = {};
+        writes = {};
+    };
     void run() override;
 };
 

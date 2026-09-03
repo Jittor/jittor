@@ -10,7 +10,10 @@
 namespace jittor {
 
 struct CpuParallelPass : Pass {
-    CpuParallelPass() : Pass("cpu_parallel") {};
+    CpuParallelPass() : Pass("cpu_parallel") {
+        reads = {kir::code, kir::lvalue, kir::rvalue, kir::rvalue2};
+        writes = {kir::code};
+    };
     void run() override;
 };
 

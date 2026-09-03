@@ -34,10 +34,19 @@ struct PassManager {
     // last run" is the answer a caller would want.
     unordered_map<std::type_index, Pass*> pass_map;
     vector<unique_ptr<Pass>> finished_passes;
+    // KernelIR attributes available at this point in the pipeline: the ones the
+    // parser sets, plus what every pass declared so far says it writes. A pass
+    // that reads something not in here is a pipeline ordering bug, and this is
+    // where it is caught -- see Pass::reads.
+    unordered_set<string> produced;
 
     PassManager(OpCompiler* oc);
-    // run and store a pass
-    template <class T> void run_pass();
+    // run and store a pass. `enabled` false declares the pass's attribute
+    // contract without running it, so a pass that only runs under some
+    // compilers still counts as the producer of what it writes.
+    template <class T> void run_pass(bool enabled=true);
+    // every attribute `pass` declares it reads must already be produced
+    void check_attr_contract(Pass* pass);
     // get a pass that already ran, nullptr if it did not (it may have been
     // excluded); the type is the key, so no downcast is involved
     template <class T> T* get_pass();
@@ -49,8 +58,11 @@ struct PassManager {
 };
 
 template <class T>
-void PassManager::run_pass() {
+void PassManager::run_pass(bool enabled) {
     auto pass = std::make_unique<T>();
+    check_attr_contract(pass.get());
+    for (auto w : pass->writes) produced.insert(w);
+    if (!enabled) return;
     if (!check(pass.get())) {
         LOGvvv << "exclude pass" << pass->name;
         return;

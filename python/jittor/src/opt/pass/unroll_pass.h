@@ -10,7 +10,10 @@
 namespace jittor {
 
 struct UnrollPass : Pass {
-    UnrollPass() : Pass("unroll") {};
+    UnrollPass() : Pass("unroll") {
+        reads = {kir::loop_id, kir::rvalue, kir::rvalue2, kir::split_id, kir::vectorized, kir::unrolled};
+        writes = {kir::unrolled, kir::resplited};
+    };
     void run() override;
 };
 

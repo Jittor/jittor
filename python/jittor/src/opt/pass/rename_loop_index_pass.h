@@ -10,7 +10,10 @@
 namespace jittor {
 
 struct RenameLoopIndexPass : Pass {
-    RenameLoopIndexPass() : Pass("rename_loop_index") {};
+    RenameLoopIndexPass() : Pass("rename_loop_index") {
+        reads = {kir::rvalue, kir::lvalue};
+        writes = {kir::loop_id, kir::lvalue};
+    };
     void run() override;
 };
 

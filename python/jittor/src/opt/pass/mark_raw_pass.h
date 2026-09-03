@@ -10,7 +10,10 @@
 namespace jittor {
 
 struct MarkRawPass : Pass {
-    MarkRawPass() : Pass("mark_raw") {};
+    MarkRawPass() : Pass("mark_raw") {
+        reads = {kir::rvalue, kir::code, kir::lvalue};
+        writes = {kir::raw};
+    };
     void run() override;
 };
 

@@ -10,7 +10,10 @@
 namespace jittor {
 
 struct InsertProfileLoopPass : Pass {
-    InsertProfileLoopPass() : Pass("insert_profile_loop") {};
+    InsertProfileLoopPass() : Pass("insert_profile_loop") {
+        reads = {kir::loop_func};
+        writes = {};
+    };
     void run() override;
 };
 

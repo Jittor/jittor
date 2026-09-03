@@ -10,7 +10,10 @@
 namespace jittor {
 
 struct CompileShapesPass : Pass {
-    CompileShapesPass() : Pass("compile_shapes") {};
+    CompileShapesPass() : Pass("compile_shapes") {
+        reads = {kir::rvalue};
+        writes = {};
+    };
     void run() override;
 };
 

@@ -10,7 +10,10 @@
 namespace jittor {
 
 struct AssumeAlignedPass : Pass {
-    AssumeAlignedPass() : Pass("assume_aligned") {};
+    AssumeAlignedPass() : Pass("assume_aligned") {
+        reads = {kir::lvalue};
+        writes = {};
+    };
     void run() override;
 };
 
