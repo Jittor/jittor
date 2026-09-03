@@ -419,7 +419,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 8.03 | 精度策略收敛 | 已合并 | cudabk | dab0690c |
 | 8.04 | cuDNN 9 | 已合并 | cudabk | 7580b6e7（RNN v8 API）+ 9f2e7b80（版本闸门与 wheel 栈） |
 | 8.05 | MKL | 待领 | | |
-| 8.06 | ACL 去样板 | 待领 | | |
+| 8.06 | ACL 去样板 | 待领 | | 5be5fa15 已合入 1/N launcher 前置：BaseOpRunner 统一 workspace query 检查、临时空间、execute 错误与可选同步尾部，unary family 首先迁入并保留原异步策略；静态合同 2 passed。其余 64 类 executeOp、胖 AclOpFunctions、op_idx_map、属性 data 通道与描述符缓存仍待迁，且需 910B3 实机验证 |
 | 8.07 | conv 族共享描述符与计划层 | 已合并 | cudabk | 947f5223（反向只留 C++ 一份）+ 47f91130（计划请求一个构造函数） |
 | 8.08 | `ProcessGroup` 对象替代全局唯一 communicator | 已合并 | dist | 82410549（NCCL env/file 与 MPI bootstrap 双卡通过；HCCL 对称实现未在 Ascend 真机验证） |
 | 8.09 | NCCL | 已合并 | dist | f2d9c291, 95a1c956 |
