@@ -141,9 +141,10 @@ def test_notebook_sources_are_complete_clean_and_portable():
 
 
 @pytest.mark.structure
-def test_myst_fences_are_explicit_and_balanced():
+@pytest.mark.parametrize("topic", _TOPICS, ids=_TOPICS)
+def test_myst_fences_are_explicit_and_balanced(topic):
     opener = re.compile(r"^```\{(?:code-cell|code-block)\}(?: ipython3| [\w+-]+)$")
-    for topic in _TOPICS:
+    for topic in (topic,):
         path = _topic_path(topic)
         inside_fence = False
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
@@ -158,18 +159,28 @@ def test_myst_fences_are_explicit_and_balanced():
 @pytest.mark.structure
 def test_expensive_and_external_cells_are_tagged():
     all_tags = set()
+    skipped = 0
+    total = 0
+    reason_tags = {"gan", "network", "cuda", "long-running", "interactive"}
     for topic in _TOPICS:
         code_cells = _markdown_cells(_topic_path(topic))
         for cell in code_cells:
             tags = cell["tags"]
             all_tags.update(tags)
+            total += 1
+            if "skip-execution" in tags:
+                skipped += 1
+                assert tags.intersection(reason_tags), \
+                    "{} has skip-execution without a reason tag".format(topic)
             if tags.intersection({"network", "cuda", "long-running"}):
                 assert "skip-execution" in tags
         if topic in {"ConditionGAN", "LSGAN"}:
             assert code_cells
             assert all({"gan", "skip-execution"}.issubset(cell["tags"]) for cell in code_cells)
 
-    assert {"gan", "network", "cuda", "long-running", "skip-execution"}.issubset(all_tags)
+    assert {"gan", "network", "cuda", "long-running", "interactive",
+            "skip-execution"}.issubset(all_tags)
+    assert skipped / float(total) <= 0.35, (skipped, total)
     assert _markdown_cells(_topic_path("basics"))
     assert all(not cell["tags"] for cell in _markdown_cells(_topic_path("basics")))
     for topic in _SMOKE_TOPICS:
@@ -179,9 +190,10 @@ def test_expensive_and_external_cells_are_tagged():
 
 
 @pytest.mark.structure
-def test_jupytext_materializes_clean_notebooks_outside_the_checkout(tmp_path):
+@pytest.mark.parametrize("topic", _TOPICS, ids=_TOPICS)
+def test_jupytext_materializes_clean_notebooks_outside_the_checkout(topic, tmp_path):
     nbformat = pytest.importorskip("nbformat")
-    for topic in _TOPICS:
+    for topic in (topic,):
         generated = _materialize(topic, tmp_path)
         notebook = nbformat.read(generated, as_version=4)
         assert notebook.metadata["jupytext"]["formats"] == "md:myst,ipynb"
@@ -253,11 +265,19 @@ def _warm_the_notebook_cache(attempts=3):
         "have died in cell 0 with SystemExit" % attempts)
 
 
+@pytest.fixture(scope="module")
+def notebook_runtime_root(tmp_path_factory):
+    root = tmp_path_factory.mktemp("notebook-runtime")
+    for relative in ("home", "jittor-cache", "xdg-cache"):
+        (root / relative).mkdir()
+    return root
+
+
 @pytest.mark.cpu
 @pytest.mark.timeout(1800)
-def test_notebook_smokes_execute_offline_on_cpu(tmp_path, monkeypatch):
-    for relative in ("home", "jittor-cache", "xdg-cache"):
-        (tmp_path / relative).mkdir()
+@pytest.mark.parametrize("topic", _SMOKE_TOPICS, ids=_SMOKE_TOPICS)
+def test_notebook_smokes_execute_offline_on_cpu(
+        topic, tmp_path, monkeypatch, notebook_runtime_root):
     python_path = str(_repo_root() / "python")
     if os.environ.get("PYTHONPATH"):
         python_path += os.pathsep + os.environ["PYTHONPATH"]
@@ -275,9 +295,9 @@ def test_notebook_smokes_execute_offline_on_cpu(tmp_path, monkeypatch):
     python_config = shutil.which("python3.{}-config".format(sys.version_info[1]))
     if python_config:
         monkeypatch.setenv("python_config_path", python_config)
-    monkeypatch.setenv("JITTOR_HOME", str(tmp_path / "jittor-cache"))
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg-cache"))
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("JITTOR_HOME", str(notebook_runtime_root / "jittor-cache"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(notebook_runtime_root / "xdg-cache"))
+    monkeypatch.setenv("HOME", str(notebook_runtime_root / "home"))
 
     _warm_the_notebook_cache()
 
@@ -289,8 +309,8 @@ def test_notebook_smokes_execute_offline_on_cpu(tmp_path, monkeypatch):
         nbformat = None
 
     executed_topics = []
-    for topic in _SMOKE_TOPICS:
-        generated = _materialize(topic, tmp_path / "generated")
+    for current_topic in (topic,):
+        generated = _materialize(current_topic, tmp_path / "generated")
         if nbformat is None:
             notebook = json.loads(generated.read_text(encoding="utf-8"))
             namespace = {"__name__": "__main__"}
@@ -330,6 +350,6 @@ def test_notebook_smokes_execute_offline_on_cpu(tmp_path, monkeypatch):
                 for cell in executed.cells
                 if cell.cell_type == "code"
             )
-        executed_topics.append(topic)
+        executed_topics.append(current_topic)
 
-    assert tuple(executed_topics) == _SMOKE_TOPICS
+    assert tuple(executed_topics) == (topic,)

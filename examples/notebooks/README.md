@@ -27,6 +27,7 @@ Notebook cells use these execution tags:
 - `cuda`: requires or explicitly enables CUDA.
 - `gan`: belongs to a GAN workflow.
 - `long-running`: performs training or another expensive operation.
+- `interactive`: produces interactive or help output unsuitable for a smoke run.
 - `skip-execution`: excluded from the repository's curated CPU smoke test.
 
 Generated notebooks must have no saved outputs or execution counts. Keep

@@ -154,7 +154,7 @@ First, let's take a look at the help document of `jt.reindex`.
 首先，让我们看一下`jt.reindex`的帮助文档。
 
 ```{code-cell} ipython3
-:tags: [skip-execution]
+:tags: [interactive, skip-execution]
 
 help(jt.reindex)
 ```
