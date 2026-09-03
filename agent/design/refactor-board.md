@@ -471,7 +471,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 10.13 | marker 真正建立 `-m "not slow"` 快门禁或删除 | 待领 | | |
 | 10.14 | notebook 门禁按 topic 参数化 | 已合并 | gates | 828bc272。fence/materialize/CPU smoke 生成独立 topic nodeid，smoke 共享模块级缓存；33/117 个 skip-execution 单元均带原因标签且低于 35% 上限。50 tests collected，结构/标签 20 passed，单 topic materialize 1 passed |
 | 10.15 | 速度 harness 记录并断言两侧线程数、亲和掩码与精度策略 | 已合并 | gates | 9047897a。runner报告实际线程环境、affinity、runtime线程数与精度，harness要求两侧一致；速度类默认至少10次。纯结构契约3 passed、运行文件语法检查通过，未执行大模型 |
-| 10.16 | 提供计时 API | 待领 | | |
+| 10.16 | 提供计时 API | 已合并 | pyother | f9f3a23d。`jt.benchmark` 冻结并预先物化输入池，至少一次 warmup 不计时，每轮递归保留 tuple/list/dict 全部输出并强同步后采样；无 Var 输出直接拒绝，返回不可变秒级统计。CPU 回归 3 passed，覆盖跨轮输入复用、嵌套输出、CSE/死码与未物化假快 |
 | 10.17 | 异步错误 | 待领 | | |
 | 10.18 | 结构测试预算转向核心 | 待领 | | |
 | 10.19 | 每个带 `grad()` 的后端算子有对 CPU 参考的梯度单测 | 待领 | | |
