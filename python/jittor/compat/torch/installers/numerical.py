@@ -177,6 +177,60 @@ for _shape_helper_name in ("unflatten", "swapaxes", "swapdims", "ravel"):
 del _shape_helper_name
 
 
+_ELEMENTWISE_FIDELITY_DETAIL = (
+    "matches Torch values for supported real tensor inputs but omits Torch "
+    "device, layout, and out keyword semantics"
+)
+
+
+def _copysign_impl(input, other):
+    sign = (other >= 0).float32() * 2 - 1
+    return jt.abs(input) * sign
+
+
+def copysign(input, other):
+    """Copy the sign of ``other`` onto the magnitude of ``input``."""
+    return _copysign_impl(input, other)
+
+
+def _xlogy_impl(input, other):
+    return jt.ternary(
+        input == 0, jt.zeros_like(input), input * jt.log(other))
+
+
+def xlogy(input, other):
+    """Return ``input * log(other)`` with the Torch ``xlogy(0, y) == 0`` rule."""
+    return _xlogy_impl(input, other)
+
+
+def _heaviside_impl(input, values):
+    return (input > 0).float32() + (input == 0).float32() * values
+
+
+def heaviside(input, values):
+    """Return the elementwise Heaviside step function."""
+    return _heaviside_impl(input, values)
+
+
+def _signbit_impl(input):
+    return input < 0
+
+
+def signbit(input):
+    """Return a boolean tensor identifying negative values."""
+    return _signbit_impl(input)
+
+
+for _elementwise_name in ("copysign", "xlogy", "heaviside", "signbit"):
+    register_fidelity(
+        "torch." + _elementwise_name,
+        globals()[_elementwise_name],
+        Fidelity.APPROXIMATE,
+        _ELEMENTWISE_FIDELITY_DETAIL,
+    )
+del _elementwise_name
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
@@ -563,21 +617,14 @@ def install(ctx):
     _alias("dstack", dstack)
     _alias("column_stack", column_stack)
     # element-wise ops: copysign / xlogy / heaviside / float_power / signbit.
-    def _copysign(input, other):
-        s = (other >= 0).float32() * 2 - 1                 # +1 where other>=0 (incl +0), -1 else
-        return jt.abs(input) * s
-    _alias("copysign", _copysign); Var.copysign = _copysign
-    def _xlogy(input, other):
-        return jt.ternary(input == 0, jt.zeros_like(input), input * jt.log(other))  # xlogy(0,y)=0
-    _alias("xlogy", _xlogy); Var.xlogy = _xlogy
-    def _heaviside(input, values):
-        return (input > 0).float32() + (input == 0).float32() * values
-    _alias("heaviside", _heaviside); Var.heaviside = _heaviside
+    _alias("copysign", copysign); Var.copysign = _copysign_impl
+    _alias("xlogy", xlogy); Var.xlogy = _xlogy_impl
+    _alias("heaviside", heaviside); Var.heaviside = _heaviside_impl
     def _float_power(input, exponent):
         b = exponent.float64() if isinstance(exponent, Var) else exponent
         return (input.float64() ** b)
     _alias("float_power", _float_power); Var.float_power = _float_power
-    _alias("signbit", lambda input: input < 0); Var.signbit = lambda self: self < 0
+    _alias("signbit", signbit); Var.signbit = _signbit_impl
     # reductions: logsumexp (attention/MoE/loss/beam), nansum/nanmean, std_mean/var_mean,
     # aminmax, quantile. NaN handling uses nan_to_num plus an explicit isnan mask.
     def _logsumexp(input, dim, keepdim=False):

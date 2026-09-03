@@ -186,6 +186,61 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             tensor.swapdims(0, 2).numpy(), np.swapaxes(values, 0, 2))
         np.testing.assert_array_equal(tensor.ravel().numpy(), values.ravel())
 
+    def test_elementwise_sign_family_is_stable_module_level_objects(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        for name in ("copysign", "xlogy", "heaviside", "signbit"):
+            with self.subTest(name=name):
+                implementation = getattr(numerical, name)
+                self.assertTrue(callable(implementation))
+                self.assertIs(getattr(torch, name), implementation)
+                self.assertEqual(implementation.__module__, numerical.__name__)
+                self.assertEqual(implementation.__name__, name)
+
+    def test_elementwise_sign_family_fidelity_is_queryable(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        for name in ("copysign", "xlogy", "heaviside", "signbit"):
+            with self.subTest(name=name):
+                record = fidelity.fidelity_of("torch." + name)
+                self.assertIs(record.implementation, getattr(numerical, name))
+                self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+                self.assertIn("device", record.detail)
+                self.assertIn("out", record.detail)
+
+    def test_elementwise_sign_family_cpu_copysign_and_xlogy_matches_numpy(self):
+        magnitude = np.array([1.0, 2.0, 3.0], dtype="float32")
+        signs = np.array([-1.0, 0.0, 1.0], dtype="float32")
+        x_values = np.array([1.0, 2.0, 0.0], dtype="float32")
+        y_values = np.array([2.0, 3.0, 0.0], dtype="float32")
+        with torch.flag_scope(use_cuda=0):
+            actual_sign = torch.copysign(
+                torch.array(magnitude), torch.array(signs)).numpy()
+            actual_xlogy = torch.xlogy(
+                torch.array(x_values), torch.array(y_values)).numpy()
+            method_sign = torch.array(magnitude).copysign(torch.array(signs)).numpy()
+        np.testing.assert_array_equal(actual_sign, np.copysign(magnitude, signs))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            expected_xlogy = np.where(
+                x_values == 0, 0.0, x_values * np.log(y_values))
+        np.testing.assert_allclose(actual_xlogy, expected_xlogy, rtol=1e-6)
+        np.testing.assert_array_equal(method_sign, np.copysign(magnitude, signs))
+
+    def test_elementwise_sign_family_cpu_heaviside_and_signbit_matches_numpy(self):
+        values = np.array([-1.0, 0.0, 2.0], dtype="float32")
+        steps = np.array([3.0, 4.0, 5.0], dtype="float32")
+        with torch.flag_scope(use_cuda=0):
+            actual_step = torch.heaviside(
+                torch.array(values), torch.array(steps)).numpy()
+            actual_signbit = torch.signbit(torch.array(values)).numpy()
+            method_step = torch.array(values).heaviside(torch.array(steps)).numpy()
+            method_signbit = torch.array(values).signbit().numpy()
+        np.testing.assert_array_equal(actual_step, np.heaviside(values, steps))
+        np.testing.assert_array_equal(actual_signbit, np.signbit(values))
+        np.testing.assert_array_equal(method_step, np.heaviside(values, steps))
+        np.testing.assert_array_equal(method_signbit, np.signbit(values))
+
 
 if __name__ == "__main__":
     unittest.main()
