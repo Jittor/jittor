@@ -46,6 +46,7 @@ import unittest
 import numpy as np
 import jittor as jt
 
+from _helpers.assertions import expect_error
 from _helpers.common import (
     JittorTestCase, get_all_device_types, use_cuda_for,
 )
@@ -159,6 +160,24 @@ class _SetitemCore(JittorTestCase):
     def _i64(a):
         """np array -> int64 jittor Var (a NON-differentiable index/mask carrier)."""
         return jt.array(np.ascontiguousarray(a))
+
+
+class TestSetitemShapeErrors(unittest.TestCase):
+    def test_data_dimension_mismatch_is_a_catchable_user_error(self):
+        value = jt.zeros((2, 3))
+        expect_error(
+            lambda: value.__setitem__(slice(None), jt.ones((1, 2, 3))),
+            exc_type=RuntimeError,
+            match="Data dimension not match",
+        )
+
+    def test_data_shape_mismatch_is_a_catchable_user_error(self):
+        value = jt.zeros((2, 3))
+        expect_error(
+            lambda: value.__setitem__(slice(None), jt.ones((2, 4))),
+            exc_type=RuntimeError,
+            match="Data shape not match",
+        )
 
 
 # ===========================================================================
