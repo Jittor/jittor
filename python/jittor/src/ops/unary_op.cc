@@ -874,7 +874,7 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
     set_flag(OpFlags::_cuda);
     set_type(OpType::element);
     ns = op;
-    ASSERT(ns.is_unary() | ns.is_dtype());
+    USER_CHECK(ns.is_unary() | ns.is_dtype());
     NanoString dtype;
     if (ns == x->dtype()) {
         forward(x);

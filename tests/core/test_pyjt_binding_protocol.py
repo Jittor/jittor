@@ -23,6 +23,7 @@ import jittor_core
 import numpy as np
 
 from _helpers.child_process import run_python_child
+from _helpers.assertions import expect_error
 
 
 def run_in_subprocess(body):
@@ -322,6 +323,13 @@ class TestNanoStringOverloadMatching(unittest.TestCase):
 
     def setUp(self):
         self.x = jt.array(np.arange(4, dtype="float32"))
+
+    def test_registered_non_unary_name_is_rejected(self):
+        expect_error(
+            lambda: jt.ops.unary(self.x, jt.NanoString("uniform")),
+            exc_type=RuntimeError,
+            match="ns.is_unary",
+        )
 
     def test_function_is_not_a_dtype(self):
         def not_a_dtype():
