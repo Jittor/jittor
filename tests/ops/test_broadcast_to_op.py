@@ -54,6 +54,13 @@ class TestBroadcastToOp(unittest.TestCase):
             exc_type=RuntimeError,
             match="Shape should greater than 0",
         )
+
+    def test_binary_shape_mismatch_is_a_catchable_user_error(self):
+        expect_error(
+            lambda: jt.array([1, 2]) + jt.array([1, 2, 3]),
+            exc_type=RuntimeError,
+            match="Shape not match for binary op",
+        )
         
     def test_binary_op(self):
         if self.use_shape: return

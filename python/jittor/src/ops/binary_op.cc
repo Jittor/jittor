@@ -423,7 +423,7 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
             need_broadcast = true;
             continue;
         }
-        CHECKop(xshape,==,yshape) << "Shape not match for binary op '" >> op.to_cstring()
+        USER_CHECKop(xshape,==,yshape) << "Shape not match for binary op '" >> op.to_cstring()
             >> "', x:" >> x->to_string() << " y:" >> y->to_string()
             << "(broadcasting requires matching dims or one of them to be 1).";
     }
