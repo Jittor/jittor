@@ -10,6 +10,7 @@ implementation) for the forward value and both gradients, across layouts,
 groups, strides, dilations and half precision, with tensor-op numerics both
 allowed and forbidden.
 """
+from pathlib import Path
 import unittest
 
 import numpy as np
@@ -90,6 +91,58 @@ class TestCudnnConvPlan(unittest.TestCase):
         # not accumulate state; this is the cache hit path.
         for _ in range(3):
             self._check(2, 8, 16, 4, 3, padding=1)
+
+
+class TestConvPlanRequestHasOneBuilder(unittest.TestCase):
+    """The request is filled in one place. A rule, and it needs no GPU.
+
+    The three 2-D convolution ops each built the request by hand and differed
+    in exactly one line, `req.kind`. The struct's bytes *are* the cache key
+    (ConvPlanRequestHash hashes it whole), so a field set in two of the three
+    copies and forgotten in the third does not fail loudly: it makes two
+    different configurations share a plan, and the wrong plan still runs and
+    still returns numbers.
+    """
+
+    OPS = ("cudnn_conv_op.cc", "cudnn_conv_backward_x_op.cc",
+           "cudnn_conv_backward_w_op.cc")
+
+    def test_no_op_fills_the_request_field_by_field(self):
+        ops_dir = (Path(__file__).resolve().parents[3]
+                   / "python/jittor/extern/cuda/cudnn/ops")
+        offenders = []
+        for name in self.OPS:
+            text = (ops_dir / name).read_text(encoding="utf-8")
+            for lineno, line in enumerate(text.splitlines(), 1):
+                body = line.strip()
+                if body.startswith("//"):
+                    continue
+                if body.startswith("req.") or "memset(&req" in body:
+                    offenders.append("%s:%d %s" % (name, lineno, body))
+        self.assertEqual(
+            offenders, [],
+            "use conv_plan_request() in cudnn_conv_plan.h:\n"
+            + "\n".join(offenders))
+
+    def test_the_builder_exists_and_zeroes_the_padding(self):
+        """Guards the guard, and pins the one line that is easy to lose.
+
+        Without the existence check, deleting the builder would make the rule
+        above pass vacuously. The memset is not tidiness: the padding between
+        members is hashed with the fields, so an uninitialised gap makes the
+        same configuration miss its own cache entry.
+        """
+        header = (Path(__file__).resolve().parents[3]
+                  / "python/jittor/extern/cuda/cudnn/inc/cudnn_conv_plan.h")
+        text = header.read_text(encoding="utf-8")
+        self.assertIn("ConvPlanRequest conv_plan_request(", text)
+        self.assertIn("memset(&r, 0, sizeof(r));", text)
+        for field in ("kind", "dtype_x", "dtype_w", "dtype_y", "xdim",
+                      "xstride", "ydim", "ystride", "wdim", "wstride",
+                      "pad", "stride", "dilation", "allow_tf32", "benchmark"):
+            self.assertIn("r.%s" % field, text,
+                          "conv_plan_request leaves %s unset; it is part of "
+                          "the cache key" % field)
 
 
 if __name__ == "__main__":

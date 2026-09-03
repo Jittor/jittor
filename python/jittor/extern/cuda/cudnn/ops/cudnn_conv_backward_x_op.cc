@@ -183,20 +183,12 @@ void CudnnConvBackwardXOp::jit_run() {
     {
         // Backend-API plan cache; falls through to the legacy path below when
         // no plan can be built for this configuration.
-        ConvPlanRequest req; memset(&req, 0, sizeof(req));
-        req.kind = CONV_PLAN_BWD_DATA;
-        req.dtype_x = getDataType<Tx>(); req.dtype_w = getDataType<Tw>(); req.dtype_y = getDataType<Ty>();
-        for (int i=0; i<4; i++) {
-            req.xdim[i] = dimX[i]; req.xstride[i] = strideX[i];
-            req.ydim[i] = dimY[i]; req.ystride[i] = strideY[i];
-            req.wdim[i] = dimW[i];
-        }
-        conv_plan_filter_strides(req.wstride, dimW, filterFormat_@WFORMAT == CUDNN_TENSOR_NHWC);
-        req.pad[0] = paddingh; req.pad[1] = paddingw;
-        req.stride[0] = strideh; req.stride[1] = stridew;
-        req.dilation[0] = dilationh; req.dilation[1] = dilationw;
-        req.allow_tf32 = conv_math_type == CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION;
-        req.benchmark = cudnn_benchmark != 0;
+        ConvPlanRequest req = conv_plan_request(
+            CONV_PLAN_BWD_DATA,
+            getDataType<Tx>(), getDataType<Tw>(), getDataType<Ty>(),
+            dimX, strideX, dimW,
+            filterFormat_@WFORMAT == CUDNN_TENSOR_NHWC,
+            dimY, strideY, padA, convstrideA, dilationA, conv_math_type);
         if (cudnn_conv_backend_run(req, x->ptr<Tx>(), w->ptr<Tw>(), y->ptr<Ty>())) {
             return;
         }

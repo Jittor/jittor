@@ -262,6 +262,48 @@ inline void build(const ConvPlanRequest& r, ConvPlanEntry& e, void* x, void* w, 
 
 } // conv_plan_detail
 
+/** Fill a request from the geometry the three 2-D convolution ops all have.
+
+    They differed in exactly one line -- `req.kind` -- and repeated the other
+    fourteen verbatim. The struct's bytes *are* the cache key
+    (ConvPlanRequestHash hashes it whole), so a field left unset in one of the
+    three copies does not misbehave loudly: it makes two different
+    configurations share a plan, and the wrong plan still runs and still
+    produces numbers.
+
+    `memset` before the field writes is not tidiness either -- the padding
+    between members is hashed with everything else, so an uninitialised gap
+    would make the same configuration miss its own cache entry.
+ */
+inline ConvPlanRequest conv_plan_request(
+        int64 kind,
+        cudnnDataType_t dtype_x, cudnnDataType_t dtype_w, cudnnDataType_t dtype_y,
+        const int dimX[4], const int strideX[4],
+        const int dimW[4], bool filter_is_nhwc,
+        const int dimY[4], const int strideY[4],
+        const int pad[2], const int conv_stride[2], const int dilation[2],
+        cudnnMathType_t math_type) {
+    ConvPlanRequest r;
+    memset(&r, 0, sizeof(r));
+    r.kind = kind;
+    r.dtype_x = dtype_x; r.dtype_w = dtype_w; r.dtype_y = dtype_y;
+    for (int i = 0; i < 4; i++) {
+        r.xdim[i] = dimX[i]; r.xstride[i] = strideX[i];
+        r.ydim[i] = dimY[i]; r.ystride[i] = strideY[i];
+        r.wdim[i] = dimW[i];
+    }
+    conv_plan_filter_strides(r.wstride, dimW, filter_is_nhwc);
+    r.pad[0] = pad[0]; r.pad[1] = pad[1];
+    r.stride[0] = conv_stride[0]; r.stride[1] = conv_stride[1];
+    r.dilation[0] = dilation[0]; r.dilation[1] = dilation[1];
+    // Tensor-op numerics for fp32 operands, and whether to time the
+    // candidates: both belong in the key, because both change which plan the
+    // build picks.
+    r.allow_tf32 = math_type == CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION;
+    r.benchmark = cudnn_benchmark != 0;
+    return r;
+}
+
 // Runs the convolution through a cached backend plan. Returns false when the
 // backend declined the request (also cached), and the caller must then use
 // its legacy path.
