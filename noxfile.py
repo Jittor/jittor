@@ -23,7 +23,6 @@ REPO_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 try:
     from _helpers.gate_scope import (  # noqa: E402
-        EXCLUDED as GATE_EXCLUSIONS,
         native_arguments as gate_native_arguments,
         torch_arguments as gate_torch_arguments,
     )
@@ -339,8 +338,90 @@ for name, path in {
 os.environ.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
 
 
+_SESSION_ENV_PASSTHROUGH = (
+    # Tool discovery and dynamic-library roots are properties of the runner.
+    # Test behavior controls are deliberately absent and set below instead.
+    "PATH",
+    "LD_LIBRARY_PATH",
+    "DYLD_LIBRARY_PATH",
+    "LIBRARY_PATH",
+    "CPATH",
+    "C_INCLUDE_PATH",
+    "CPLUS_INCLUDE_PATH",
+    "PKG_CONFIG_PATH",
+    "CUDA_HOME",
+    "CUDA_PATH",
+    "CUDA_VISIBLE_DEVICES",
+    "HIP_PATH",
+    "ROCM_HOME",
+    "ROCM_PATH",
+    # Keep package downloads usable without inheriting unrelated test knobs.
+    "ALL_PROXY",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY",
+    "PIP_EXTRA_INDEX_URL",
+    "PIP_INDEX_URL",
+    "PIP_TRUSTED_HOST",
+    "REQUESTS_CA_BUNDLE",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+    # Required by process creation on Windows.
+    "COMSPEC",
+    "PATHEXT",
+    "SYSTEMROOT",
+)
+
+_THREAD_ENV_NAMES = (
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+    "BLIS_NUM_THREADS",
+)
+
+
+def _available_cpu_ids():
+    get_affinity = getattr(os, "sched_getaffinity", None)
+    if get_affinity is not None:
+        try:
+            return sorted(get_affinity(0))
+        except OSError:
+            pass
+    return list(range(os.cpu_count() or 1))
+
+
+def _physical_cores_in_affinity(cpu_ids):
+    """Count physical cores in the inherited mask without importing Jittor."""
+    cores = set()
+    for cpu_id in cpu_ids:
+        topology = Path("/sys/devices/system/cpu/cpu%d/topology" % cpu_id)
+        try:
+            package = (topology / "physical_package_id").read_text().strip()
+            core = (topology / "core_id").read_text().strip()
+        except OSError:
+            return len(cpu_ids)
+        cores.add((package, core))
+    return len(cores) or len(cpu_ids)
+
+
+def _isolated_outer_environment():
+    """Block Nox's implicit outer-env merge, then admit named runner inputs."""
+    env = {name: None for name in os.environ}
+    for name in _SESSION_ENV_PASSTHROUGH:
+        if name in os.environ:
+            env[name] = os.environ[name]
+    return env
+
+
 _PYTHON_CONFIG_PROBE = (
     "import os, sys; "
+    "expected=set(map(int, os.environ['JITTOR_GATE_CPU_AFFINITY'].split(','))); "
+    "actual=set(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else expected; "
+    "assert actual == expected, 'CPU affinity changed: %r != %r' % (actual, expected); "
+    "assert int(os.environ['OMP_NUM_THREADS']) > 0; "
+    "assert os.environ['OMP_PROC_BIND'] == 'false'; "
     "roots = [os.path.dirname(sys.executable), os.path.join(sys.base_prefix, 'bin')]; "
     "names = ['python3.%d-config' % sys.version_info[1], "
     "sys.executable + '-config', 'python3-config']; "
@@ -353,7 +434,7 @@ _PYTHON_CONFIG_PROBE = (
 def _set_python_config(session, python, env, external=False, required=False):
     """Select the config helper belonging to the interpreter that will run Jittor."""
     if os.name == "nt":
-        env.pop("python_config_path", None)
+        env["python_config_path"] = None
         return
     python_config = session.run(
         python,
@@ -368,7 +449,7 @@ def _set_python_config(session, python, env, external=False, required=False):
     if python_config:
         env["python_config_path"] = python_config
     else:
-        env.pop("python_config_path", None)
+        env["python_config_path"] = None
 
 
 def _shared_jittor_cache():
@@ -399,20 +480,33 @@ def _session_env(session, backend):
     for path in paths.values():
         path.mkdir(parents=True, exist_ok=True)
 
-    env = os.environ.copy()
+    cpu_ids = _available_cpu_ids()
+    thread_count = str(_physical_cores_in_affinity(cpu_ids))
+    env = _isolated_outer_environment()
     env.update({name: str(path) for name, path in paths.items()})
     env.update(
         {
+            "BLIS_NUM_THREADS": thread_count,
+            "JITTOR_GATE_CPU_AFFINITY": ",".join(str(cpu) for cpu in cpu_ids),
+            "LC_ALL": "C",
+            "MKL_DYNAMIC": "false",
+            "MKL_NUM_THREADS": thread_count,
+            "NUMEXPR_NUM_THREADS": thread_count,
+            "OMP_DYNAMIC": "false",
+            "OMP_NUM_THREADS": thread_count,
+            "OMP_PROC_BIND": "false",
+            "OPENBLAS_NUM_THREADS": thread_count,
             "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONIOENCODING": "utf8",
             "PYTHONPATH": str(REPO_ROOT / "python"),
+            "VECLIB_MAXIMUM_THREADS": thread_count,
             "cache_name": "nox_%s" % backend,
         }
     )
     if NOX_JITTOR_ASSETS.is_dir():
         env["JITTOR_OFFLINE_PATH"] = str(NOX_JITTOR_ASSETS)
     if session.python is False:
-        env.pop("python_config_path", None)
+        env["python_config_path"] = None
     else:
         _set_python_config(session, "python", env)
     return root, env
@@ -534,7 +628,8 @@ def _split_threads(env, workers):
     if budget is None:
         return env
     env = env.copy()
-    env["OMP_NUM_THREADS"] = str(budget)
+    for name in _THREAD_ENV_NAMES:
+        env[name] = str(budget)
     return env
 
 
@@ -612,7 +707,7 @@ def _install_docs_wheel(session, root, env):
     session.install("--no-deps", "--force-reinstall", str(wheels[0]))
 
     docs_env = env.copy()
-    docs_env.pop("PYTHONPATH", None)
+    docs_env["PYTHONPATH"] = None
     docs_env["PYTHONNOUSERSITE"] = "1"
     docs_env["nvcc_path"] = ""
     docs_env["cache_name"] = "nox_docs_wheel"
@@ -1920,7 +2015,7 @@ def mpi(session):
     # device-parametrized test in this session generated zero cases and passed.
     # These tests gate themselves on jt.has_cuda and exercise both, so leave the
     # selection unset and let the build decide.
-    env.pop("JITTOR_TEST_DEVICES", None)
+    env["JITTOR_TEST_DEVICES"] = None
     session.run("mpirun", "--version", external=True, env=env)
     session.run(python, "-m", "pytest", "--version", external=True, env=env)
     _run_pytest(session, MPI_TESTS, env, runner=python)

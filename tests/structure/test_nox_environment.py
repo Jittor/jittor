@@ -1,3 +1,4 @@
+import os
 import runpy
 import sys
 import types
@@ -105,7 +106,7 @@ def test_session_env_clears_an_inherited_config_when_the_helper_is_absent(monkey
 
     _root, env = module["_session_env"](session, "py37")
 
-    assert "python_config_path" not in env
+    assert env["python_config_path"] is None
 
 
 def test_hardware_session_uses_the_external_interpreters_python_config(monkeypatch, tmp_path):
@@ -120,3 +121,44 @@ def test_hardware_session_uses_the_external_interpreters_python_config(monkeypat
     args, kwargs = session.calls[0]
     assert args[:2] == ("/opt/hardware-python/bin/python", "-c")
     assert kwargs["external"] is True
+
+
+def test_session_env_blocks_host_test_controls(monkeypatch, tmp_path):
+    monkeypatch.setenv("OMP_NUM_THREADS", "999")
+    monkeypatch.setenv("OMP_PROC_BIND", "close")
+    monkeypatch.setenv("MKL_DYNAMIC", "true")
+    monkeypatch.setenv("HOST_ONLY_TEST_CONTROL", "must-not-leak")
+    module = _load_noxfile(monkeypatch, tmp_path)
+    session = _FakeSession(tmp_path, "/usr/bin/python3-config")
+
+    _root, env = module["_session_env"](session, "cpu")
+
+    assert env["HOST_ONLY_TEST_CONTROL"] is None
+    assert env["OMP_NUM_THREADS"] != "999"
+    assert int(env["OMP_NUM_THREADS"]) > 0
+    assert env["OMP_PROC_BIND"] == "false"
+    assert env["OMP_DYNAMIC"] == "false"
+    assert env["MKL_DYNAMIC"] == "false"
+    assert env["PATH"] == os.environ["PATH"]
+
+
+def test_session_env_records_the_exact_cpu_affinity(monkeypatch, tmp_path):
+    monkeypatch.setattr(os, "sched_getaffinity", lambda _pid: {7, 3, 5})
+    module = _load_noxfile(monkeypatch, tmp_path)
+    session = _FakeSession(tmp_path, "/usr/bin/python3-config")
+
+    _root, env = module["_session_env"](session, "cpu")
+
+    assert env["JITTOR_GATE_CPU_AFFINITY"] == "3,5,7"
+    probe_env = session.calls[0][1]["env"]
+    assert probe_env is env
+
+
+def test_worker_split_updates_every_thread_pool(monkeypatch, tmp_path):
+    module = _load_noxfile(monkeypatch, tmp_path)
+    env = {name: "99" for name in module["_THREAD_ENV_NAMES"]}
+
+    split = module["_split_threads"](env, workers=4)
+
+    expected = str(module["worker_thread_budget"](4))
+    assert {split[name] for name in module["_THREAD_ENV_NAMES"]} == {expected}
