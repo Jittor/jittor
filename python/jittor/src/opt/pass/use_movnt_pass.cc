@@ -20,7 +20,7 @@ void UseMovntPass::run() {
         return;
 
     for (auto& c : ir->children) {
-        if (c->type != "loop") continue;
+        if (c->type != KernelIRType::loop) continue;
         c->push_front("//@begin replace \"vmova(.*,.*\\(.*\\))\" \"vmovnt\\g<1>\"", &c->children, true);
         c->push_back("//@end", &c->children, true);
     }

@@ -276,7 +276,7 @@ void GetitemOp::_compile_optimize(string& src) {
     const char* tname[] = {"threadIdx.x", "threadIdx.y", "threadIdx.z", "blockIdx.x", "blockIdx.y", "blockIdx.z"};
     const char* tname2[] = {"blockDim.x", "blockDim.y", "blockDim.z", "gridDim.x", "gridDim.y", "gridDim.z"};
     for (auto& ir : func->children) {
-        if (ir->type == "define") {
+        if (ir->type == KernelIRType::define) {
             string& rvalue = ir->require_attr(kir::rvalue);
             string& lvalue = ir->require_attr(kir::lvalue);
             string& dtype = ir->require_attr(kir::dtype);

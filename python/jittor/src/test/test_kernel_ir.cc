@@ -169,7 +169,7 @@ a[2]++;
     c.back()->erase();
     CHECKop(c.size(),==,1);
     ir.push_back(ir.clone());
-    CHECK(c.back()->type == "loop");
+    CHECK(c.back()->type == KernelIRType::loop);
     auto& in_loop = *c.back();
     // test replace
     in_loop.replace({{"i", "j"}, {"n", "range0"}}, true, false);

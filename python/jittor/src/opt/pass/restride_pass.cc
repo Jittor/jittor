@@ -42,11 +42,11 @@ void RestridePass::run() {
     vector<KernelIR*> defs;
     for (uint i=0; i<q.size(); i++) {
         KernelIR* ir = q[i];
-        if (ir->type == "define") {
+        if (ir->type == KernelIRType::define) {
             vector<KernelIR*> loops, splits;
             KernelIR* fa = ir->father;
             // find all loop index affect this define
-            while (fa && fa->type=="loop" && fa->has_attr(kir::loop_id)) {
+            while (fa && fa->type == KernelIRType::loop && fa->has_attr(kir::loop_id)) {
                 auto idname = "id"+fa->attrs[kir::loop_id];
                 if (findn(ir->attrs[kir::rvalue], idname) != -1)
                     loops.push_back(fa);

@@ -14,7 +14,7 @@ namespace jittor {
 void check_empty_block(KernelIR* ir) {
     for (uint i=0; i<ir->children.size(); i++) {
         auto loop = ir->children[i].get();
-        if (loop->type != "loop") continue;
+        if (loop->type != KernelIRType::loop) continue;
         if (loop->has_attr(kir::loop_id)) {
             continue;
         }

@@ -15,7 +15,7 @@ void RemoveLoopPass::run() {
     int loop_id=0;
     for (size_t i=0; i<ir->children.size(); i++) {
         auto& c = ir->children[i];
-        if (c->type == "loop") {
+        if (c->type == KernelIRType::loop) {
             auto choice = op->get_loop_option("remove"+S(loop_id));
             if (choice) {
                 c->erase();

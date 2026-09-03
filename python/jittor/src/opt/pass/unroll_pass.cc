@@ -24,13 +24,13 @@ void UnrollPass::run() {
             dont_unroll = true;
         for (auto& c : ir->children) {
             // non vectorized loop
-            if (c->type == "if")
+            if (c->type == KernelIRType::branch)
                 dont_unroll = true;
-            if (c->type == "loop" && !c->has_attr(kir::vectorized) && !c->has_attr(kir::unrolled))
+            if (c->type == KernelIRType::loop && !c->has_attr(kir::vectorized) && !c->has_attr(kir::unrolled))
                 dont_unroll = true;
             q.push_back(c.get());
         }
-        ASSERT(!(ir->type=="loop" && !dont_unroll && !ir->has_attr(kir::loop_id)));
+        ASSERT(!(ir->type == KernelIRType::loop && !dont_unroll && !ir->has_attr(kir::loop_id)));
         if (!dont_unroll && ir->has_attr(kir::loop_id)) {
             loops.push_back(ir);
         }
@@ -68,7 +68,7 @@ void UnrollPass::run() {
                         loop2->attrs[kir::unrolled] = "1";
                     }
                     // partial unrolled loops in if
-                    ASSERT(floop->after.size() && floop->after[0]->type == "if");
+                    ASSERT(floop->after.size() && floop->after[0]->type == KernelIRType::branch);
                     auto loops = floop->after[0]->find_loops(loop_id);
                     ASSERT(loops.size());
                     for (auto loop2 : loops) {

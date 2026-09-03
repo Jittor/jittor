@@ -48,7 +48,7 @@ DEFINE_FLAG(string, log_op_hash, "", "Output compiler pass result of certain has
 PassManager::PassManager(OpCompiler* oc) : oc(oc), all(oc->get_src()) {
     main_ir = nullptr;
     for (auto& c : all.children)
-        if (c->type=="func" && c->attrs[kir::lvalue]=="jittor::FusedOp::jit_run") {
+        if (c->type == KernelIRType::func && c->attrs[kir::lvalue]=="jittor::FusedOp::jit_run") {
             main_ir = c.get();
             break;
         }

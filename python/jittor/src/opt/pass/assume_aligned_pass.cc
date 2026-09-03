@@ -18,12 +18,12 @@ void AssumeAlignedPass::run() {
     if (!op->get_loop_option("compile_shapes")) return;
     ir->push_front("#define assume_aligned(ptr) (void)(__builtin_assume_aligned(ptr, alignment))", &ir->before);
     auto check = [&](KernelIR* func) {
-        if (func->type != "func")
+        if (func->type != KernelIRType::func)
             return;
         vector<unique_ptr<KernelIR>>* ls[] = {&func->inner, &func->children};
         for (auto& l : ls)
             for (auto& c : (*l)) {
-                if (c->type != "define") continue;
+                if (c->type != KernelIRType::define) continue;
                 auto& lvalue = c->get_attr(kir::lvalue);
                 // if is a var pointer
                 if (startswith(lvalue, "op") && endswith(lvalue, "p")) {

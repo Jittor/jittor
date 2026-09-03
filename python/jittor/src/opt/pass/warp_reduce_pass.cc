@@ -69,7 +69,7 @@ void WarpReducePass::run() {
         // dead. Measured on an RTX 4090 with para_opt_level=4, emitting it anyway
         // costs 1.3-1.9us per reduce kernel on the shapes in
         // tests/backends/cuda/test_shared_reduce.py.
-        if (i->father && i->father->type == "if") return;
+        if (i->father && i->father->type == KernelIRType::branch) return;
         auto src = expr::make(code);
         vector<unique_ptr<expr::Expr>> results;
         // The reduction emits &(yp[yid]); accept the unparenthesised form too.

@@ -63,6 +63,31 @@ constexpr const char* void_discard = "void_discard";
 constexpr const char* has_bc = "has_bc";
 } // kir
 
+// What kind of statement a node is. This used to be a string compared against
+// literals in about a hundred places, so `type == "lop"` was a silent false --
+// the same failure mode the attribute names had, and the reason the names now
+// live in namespace kir above.
+enum class KernelIRType {
+    // a plain statement, or a node whose text was not parsed at all
+    none = 0,
+    // "#define ..." / "#include ..."
+    macro,
+    // "// ..."
+    comment,
+    // "dtype lvalue = rvalue;"
+    define,
+    // "for (inner[0]; inner[1]; inner[2])"
+    loop,
+    // "if (inner[0])" -- named branch because `if` is a keyword
+    branch,
+    // "dtype lvalue(*inner)"
+    func,
+};
+
+// the name the node type used to be spelled with, for logs and to_string
+const char* to_string(KernelIRType type);
+std::ostream& operator<<(std::ostream& os, KernelIRType type);
+
 struct KernelIR {
     // if type == define
     //     src is dtype lvalue = rvalue;
@@ -74,7 +99,7 @@ struct KernelIR {
     //     src is dtype lvalue(*inner)
     // else
     //     src is code
-    string type;
+    KernelIRType type = KernelIRType::none;
     KernelIR* father=nullptr;
     vector<unique_ptr<KernelIR>>* flist;
     // available attrs:

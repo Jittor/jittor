@@ -30,7 +30,7 @@ void LoopToFuncPass::run() {
         ir->push_back("#define INLINE_FUNC __attribute__((always_inline)) static void ", &ir->before);
     for (uint i=0; i<ir->children.size(); i++) {
         auto& c = ir->children[i];
-        if (c->type != "loop") continue;
+        if (c->type != KernelIRType::loop) continue;
         if (c->has_attr(kir::vectorized) || c->has_attr(kir::unrolled) || c->has_attr(kir::resplited))
             continue;
         if (c->before.size())
@@ -50,9 +50,9 @@ void LoopToFuncPass::run() {
         vector<KernelIR*> args;
         for (auto& d : ir->children) {
             if (d->has_attr(kir::raw)) continue;
-            if (d->type == "loop") break;
+            if (d->type == KernelIRType::loop) break;
             if (d->has_attr(kir::code) && startswith(d->attrs[kir::code], "func")) break;
-            if (d->type == "define") {
+            if (d->type == KernelIRType::define) {
                 if (d->has_attr(kir::rvalue)) {
                     auto& rvalue = d->attrs[kir::rvalue];
                     auto& dtype = d->attrs[kir::dtype];

@@ -52,13 +52,13 @@ unique_ptr<expr::Expr> expand_offset_expr(KernelIR* ir, expr::Expr* e) {
         if (!node->is_sym()) return;
         auto def = ir->find_define(node->str);
         if (!def) return;
-        ASSERT(def->type == "define");
+        ASSERT(def->type == KernelIRType::define);
         if (!def->has_attr(kir::rvalue)) return;
         auto& rvalue = def->attrs[kir::rvalue];
         // defined in the header of an enclosing statement
         if (def->father && def->flist == &def->father->inner) {
-            if (def->father->type == "func") return;
-            if (def->father->type != "loop") return;
+            if (def->father->type == KernelIRType::func) return;
+            if (def->father->type != KernelIRType::loop) return;
             LOGvvvv << "expand loop expr" << def->father->inner;
             // the loop must look like "for (T i=init; i<range; i+=stride)"
             vector<unique_ptr<expr::Expr>> matches;
@@ -95,7 +95,7 @@ unique_ptr<expr::Expr> expand_offset_expr(KernelIR* ir, expr::Expr* e) {
 // arbitrarily, so its stores are always atomic).
 static void replace_with_atomic(KernelIR* ir, bool is_cuda, int parallel_depth, bool force_atomic) {
     ir->dfs([&](unique_ptr<KernelIR>& stmt) {
-        if (stmt->type != "") return;
+        if (stmt->type != KernelIRType::none) return;
         if (!stmt->has_attr(kir::code)) return;
         auto& code = stmt->attrs[kir::code];
         auto e = expr::make(code.substr(0, code.size() - 1));
@@ -218,9 +218,9 @@ void ParallelPass::run() {
         ASSERT(j < ir->before.size()) << "loop func" << func_name << "not found.";
         auto& func = ir->before[j];
         auto loop = func->children.back().get();
-        ASSERTop(loop->type, ==, "loop");
+        ASSERTop(loop->type, ==, KernelIRType::loop);
         ASSERT(func->children.size() == 1 ||
-               func->children[func->children.size() - 2]->type != "loop");
+               func->children[func->children.size() - 2]->type != KernelIRType::loop);
 
         // Walk down the loop nest, collecting the ranges and strides of the
         // outermost `max_parallel_depth` loops. Stop at the first loop whose
@@ -244,7 +244,7 @@ void ParallelPass::run() {
             loops.push_back(loop);
             LOGvvvv << "Parallel loop dep=" >> d << "range=" >> ranges.back()
                     << "stride=" >> strides.back() << "code:" << loop->inner;
-            if (loop->children.size() == 1 && loop->children[0]->type == "loop") {
+            if (loop->children.size() == 1 && loop->children[0]->type == KernelIRType::loop) {
                 loop = loop->children[0].get();
             } else {
                 break;
@@ -359,7 +359,7 @@ void ParallelPass::run() {
                 new_init = lvalue + "=" + stride + "*tid" + S(d) + ";";
             }
             LOGvvvv << "Parallel loop" << nl->attrs[kir::loop_id] << "with new stride" << new_step;
-            if (nl->inner[0]->type == "define") new_init = nl->inner[0]->attrs[kir::dtype] + " " + new_init;
+            if (nl->inner[0]->type == KernelIRType::define) new_init = nl->inner[0]->attrs[kir::dtype] + " " + new_init;
             step_code = new_step;
             nl->inner[0]->try_parse_define(new_init);
         }

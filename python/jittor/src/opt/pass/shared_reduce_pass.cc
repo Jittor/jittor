@@ -83,7 +83,7 @@ void rewrite_atomics_to_shared_reduce(unique_ptr<KernelIR>& kernel) {
         unique_ptr<KernelIR>* target = nullptr;
         kernel->dfs([&](unique_ptr<KernelIR>& c) {
             string& code = c->attrs[kir::code];
-            if (c->father && c->father->type == "if") return;
+            if (c->father && c->father->type == KernelIRType::branch) return;
             if (code.find("atomic") == 0) {
                 // "atomicAdd(" -> "add"
                 op = code.substr(6, code.find("(") - 6);
@@ -131,7 +131,7 @@ std::tuple<int, vector<int>, tn_range_map> plan_reduce_thread_order(unique_ptr<K
     vector<int> tns;
     tn_range_map tn_ranges;
     for (auto& define : call->children) {
-        if (define->type != "define") continue;
+        if (define->type != KernelIRType::define) continue;
         if (define->get_attr(kir::lvalue).substr(0, 2) != "tn") continue;
         int tn = stoi(define->get_attr(kir::lvalue).substr(2));
         // rvalue is "get_thread_range_log(thread_num_left, range3 * range4)";
@@ -183,7 +183,7 @@ void apply_reduce_thread_order(unique_ptr<KernelIR>& call, unique_ptr<KernelIR>&
     // it statement by statement.
     uint pos = 0;
     for (auto& child : call->children) {
-        if (child->type == "define" && child->get_attr(kir::lvalue).substr(0, 2) == "tn") break;
+        if (child->type == KernelIRType::define && child->get_attr(kir::lvalue).substr(0, 2) == "tn") break;
         ++pos;
     }
     for (int tn : order) {
@@ -211,7 +211,7 @@ void apply_reduce_thread_order(unique_ptr<KernelIR>& call, unique_ptr<KernelIR>&
 
     pos = 0;
     for (auto& child : kernel->children) {
-        if (child->type == "define" && child->get_attr(kir::lvalue).substr(0, 4) == "tnum") break;
+        if (child->type == KernelIRType::define && child->get_attr(kir::lvalue).substr(0, 4) == "tnum") break;
         ++pos;
     }
     for (uint i = 0; i < order.size(); ++i) {
@@ -272,7 +272,7 @@ void SharedReducePass::run() {
     if (!parallel) return;
     for (uint i = 0; i < ir->children.size(); ++i) {
         auto& call = ir->children[i];
-        if (call->type != "loop") continue;
+        if (call->type != KernelIRType::loop) continue;
         auto found = find_atomic_kernel(call, ir->before);
         if (found.second == -1) continue;
         auto& kernel = ir->before[found.second];

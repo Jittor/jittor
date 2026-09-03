@@ -74,10 +74,10 @@ void ReduceAccumulatorPass::run() {
         KernelIR* node = queue[i];
         bool inner_most = true;
         for (auto& c : node->children) {
-            if (c->type == "loop") inner_most = false;
+            if (c->type == KernelIRType::loop) inner_most = false;
             queue.push_back(c.get());
         }
-        if (node->type != "loop" || !inner_most) continue;
+        if (node->type != KernelIRType::loop || !inner_most) continue;
         if (!node->has_attr(kir::lvalue)) continue;
         string index = node->get_attr(kir::lvalue);
         if (index.size() == 0) continue;
@@ -89,13 +89,13 @@ void ReduceAccumulatorPass::run() {
         vector<string> targets, rests;
         bool usable = true;
         for (auto& c : node->children) {
-            if (c->type == "define") continue;
+            if (c->type == KernelIRType::define) continue;
             string t, r;
-            if (c->type.size()
+            if (c->type != KernelIRType::none
                     || !split_assignment(c->get_attr(kir::code), t, r)) {
                 // Anything that is not a plain assignment (a branch, a call,
                 // a nested block) makes the body too unfamiliar to touch.
-                if (c->type.size()) { usable = false; break; }
+                if (c->type != KernelIRType::none) { usable = false; break; }
                 continue;
             }
             if (t.find('[') == string::npos) continue;
@@ -116,7 +116,7 @@ void ReduceAccumulatorPass::run() {
             // location into a local would hide the other access.
             for (auto& c : node->children) {
                 if (c.get() == stores[s]) continue;
-                const string& code = c->type == "define"
+                const string& code = c->type == KernelIRType::define
                     ? c->get_attr(kir::rvalue) : c->get_attr(kir::code);
                 if (mentions(code, pointer)) { ok = false; break; }
             }
@@ -134,7 +134,7 @@ void ReduceAccumulatorPass::run() {
             index_names[s] = targets[s].substr(
                 open + 1, targets[s].rfind(']') - open - 1);
             for (auto& c : node->children)
-                if (c->type == "define"
+                if (c->type == KernelIRType::define
                         && c->get_attr(kir::lvalue) == index_names[s])
                     index_defines[s] = c.get();
             if (index_defines[s]

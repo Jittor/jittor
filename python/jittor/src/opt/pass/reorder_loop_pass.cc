@@ -33,7 +33,7 @@ void ReorderLoopPass::run() {
     vector<KernelIR*> loops;
     for (uint i=0; i<ir->children.size(); i++) {
         KernelIR* loop = ir->children[i].get();
-        if (loop->type != "loop")
+        if (loop->type != KernelIRType::loop)
             continue;
         loops.clear();
         loops.push_back(loop);
@@ -41,7 +41,7 @@ void ReorderLoopPass::run() {
             loop = loops.back();
             KernelIR* loop2 = nullptr;
             for (auto& c : loop->children) {
-                if (c->type != "loop")
+                if (c->type != KernelIRType::loop)
                     continue;
                 ASSERT(loop2 == nullptr);
                 loop2 = c.get();

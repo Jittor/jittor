@@ -58,6 +58,23 @@ bool is_single_range_name(const string& name) {
         parse_loop_id(name.substr(5)).size() == 1;
 }
 
+const char* to_string(KernelIRType type) {
+    switch (type) {
+        case KernelIRType::none:    return "";
+        case KernelIRType::macro:   return "macro";
+        case KernelIRType::comment: return "comment";
+        case KernelIRType::define:  return "define";
+        case KernelIRType::loop:    return "loop";
+        case KernelIRType::branch:  return "if";
+        case KernelIRType::func:    return "func";
+    }
+    return "?";
+}
+
+std::ostream& operator<<(std::ostream& os, KernelIRType type) {
+    return os << to_string(type);
+}
+
 bool isvar(char x) { return isalnum(x) || x == '_' || x == ':'; }
 
 // Is this statement nothing but a list of discarded expressions, i.e.
@@ -108,19 +125,19 @@ std::ostream& operator<<(std::ostream& os, KernelIR& ir) {
 }
 
 void KernelIR::del_scope() {
-    if (father && (type=="define" || type=="func" || type=="macro")) {
+    if (father && (type == KernelIRType::define || type == KernelIRType::func || type == KernelIRType::macro)) {
         father->scope[attrs[kir::lvalue]].remove(this);
     }
 }
 
 void KernelIR::add_scope() {
-    if (father && (type=="define" || type=="func" || type=="macro"))
+    if (father && (type == KernelIRType::define || type == KernelIRType::func || type == KernelIRType::macro))
         father->scope[get_attr(kir::lvalue)].push_back(this);
 }
 
 void KernelIR::clear() {
     del_scope();
-    type.clear();
+    type = KernelIRType::none;
     attrs.clear();
     for (int i=(int)inner.size()-1; i>=0; i--)
         inner[i]->erase();
@@ -177,7 +194,7 @@ void KernelIR::try_parse_define(const string& s) {
             if (!ok)
                 // this is not a definition
                 break;
-            type = "define";
+            type = KernelIRType::define;
             add_scope();
             return;
         }
@@ -204,7 +221,7 @@ void KernelIR::try_parse_define(const string& s) {
                 break;
             }
         if (ok) {
-            type = "define";
+            type = KernelIRType::define;
             return;
         }
     }
@@ -249,7 +266,7 @@ void KernelIR::parse_for_loop(const string& s, bool raw) {
             attrs[kir::loop_id] = rvalue.substr(5);
     } else
         attrs[kir::raw] = "1";
-    type = "loop";
+    type = KernelIRType::loop;
     // find '(' and ')', then split by ';'
     int l=0,r=s.size()-1;
     while (l<(int)s.size() && s[l]!='(') l++;
@@ -324,7 +341,7 @@ void remove_func_call_arg(string& src, int arg_i) {
 void KernelIR::erase() {
     ASSERT(father && flist);
     // if is a function argument
-    if (father->type=="func" && flist==&father->inner) {
+    if (father->type == KernelIRType::func && flist==&father->inner) {
         string& func_name = father->get_attr(kir::lvalue);
         uint i=0;
         while (i<flist->size() && flist->at(i).get() != this) i++;
@@ -332,7 +349,7 @@ void KernelIR::erase() {
         auto used = father->find_used();
         for (auto c : used) {
             string& code = c->get_attr(kir::code);
-            if (c->type=="" && startswith(code, func_name))
+            if (c->type == KernelIRType::none && startswith(code, func_name))
                 remove_func_call_arg(code, i);
         }
     }
@@ -459,13 +476,13 @@ string KernelIR::to_string(int level, bool debug) {
     if (level==0 && debug) {
         check_father();
     }
-    if (level==0 && type=="" && children.size()) {
+    if (level==0 && type == KernelIRType::none && children.size()) {
         level--;
     }
     std::stringstream s;
     //TODO: no level up for before & after
     //bool level_up = (before.size() || after.size()) && level>0;
-    bool level_up = (before.size() || after.size()) && level>0 && (type != "define" && type != "");
+    bool level_up = (before.size() || after.size()) && level>0 && (type != KernelIRType::define && type != KernelIRType::none);
     if (level_up) {
         for (int i=0; i<level*4; i++) s << ' ';
         s << "{\n";
@@ -497,7 +514,7 @@ string KernelIR::to_string(int level, bool debug) {
     for (int i=0; i<level*4; i++) s << ' ';
     int inner_left=0;
     bool has_bc = false;
-    if (type == "loop") {
+    if (type == KernelIRType::loop) {
         if (inner.size()) {
             ASSERT(inner.size()>=3);
             s << "for (";
@@ -513,18 +530,18 @@ string KernelIR::to_string(int level, bool debug) {
             // empty loop
             has_bc = true;
         }
-    } else if (type == "if") {
+    } else if (type == KernelIRType::branch) {
         ASSERT(inner.size()>=1);
         auto src = inner[0]->to_string();
         s << "if (" << src.substr(0, src.size()-2) << ") ";
         inner_left = 1;
         has_bc = true;
-    } else if (type == "define") {
+    } else if (type == KernelIRType::define) {
         s << attrs[kir::dtype] << " " << attrs[kir::lvalue];
         if (has_attr(kir::rvalue))
             s << " = " << attrs[kir::rvalue];
         s << ";\n";
-    } else if (type == "func") {
+    } else if (type == KernelIRType::func) {
         s << attrs[kir::dtype] << ' ' << attrs[kir::lvalue] << '(';
         for (uint i=0; i<inner.size(); i++) {
             if (i) s << ", ";
@@ -618,7 +635,7 @@ KernelIR::KernelIR(const string& src, bool raw) {
     uint start = 0;
     while (end && (src[end-1] == ' ' || src[end-1] == '\n')) end--;
     while (start<end && (src[start]==' ' || src[start]=='\n')) start++;
-    type = "";
+    type = KernelIRType::none;
     for (uint i=start; i<end; i++) {
         int presum=0;
         uint j=i;
@@ -629,7 +646,7 @@ KernelIR::KernelIR(const string& src, bool raw) {
             if (raw) {
                 if (j==start && k==end) {
                     attrs[kir::code] = src;
-                    type = "comment";
+                    type = KernelIRType::comment;
                     return;
                 } else {
                     push_back(src.substr(j, k-j), nullptr, raw);
@@ -643,7 +660,7 @@ KernelIR::KernelIR(const string& src, bool raw) {
             while (k<end && src[k]!='\n') k++;
             if (i==start && k==end) {
                 attrs[kir::code] = src;
-                type = "macro";
+                type = KernelIRType::macro;
                 auto v = split(src, " ", 3);
                 ASSERT(v.size()>1);
                 attrs[kir::lvalue] = v.at(1);
@@ -684,7 +701,7 @@ KernelIR::KernelIR(const string& src, bool raw) {
                 if (startswith(s, "for "))
                     parse_for_loop(s.substr(0, l+1), raw);
                 else {
-                    type = "if";
+                    type = KernelIRType::branch;
                     // remove "if (" prefix
                     push_back(s.substr(4, l-4)+";", &inner, raw);
                 }
@@ -701,7 +718,7 @@ KernelIR::KernelIR(const string& src, bool raw) {
             }
             if (s.size()>=2 && s[0]=='{' && s[s.size()-1]=='}') {
                 // empty loop
-                type = "loop";
+                type = KernelIRType::loop;
                 end--;
                 continue;
             }
@@ -714,7 +731,7 @@ KernelIR::KernelIR(const string& src, bool raw) {
                     //               l
                     attrs[kir::code] = s.substr(0, l);
                     attrs[kir::has_bc] = "1";
-                    type = "";
+                    type = KernelIRType::none;
                     i = j + l;
                     end--;
                     continue;
@@ -724,7 +741,7 @@ KernelIR::KernelIR(const string& src, bool raw) {
                 // if () not found, maybe src like this:
                 // vector<int> a = {...};
                 if (ll<0 && rr<0) {
-                    type = "";
+                    type = KernelIRType::none;
                     attrs[kir::code] = src + ";";
                     return;
                 }
@@ -743,7 +760,7 @@ KernelIR::KernelIR(const string& src, bool raw) {
                     for (auto& arg : args)
                         push_back(arg+";", &inner, raw);
                 }
-                type = "func";
+                type = KernelIRType::func;
                 end--;
                 // j is the start index of s in src, l is the offset of s
                 i = j + l;
@@ -765,10 +782,10 @@ void KernelIR::move_loop_back() {
     vector<uint> cid(children.size());
     uint num=0;
     for (uint i=0; i<children.size(); i++)
-        if (children[i]->type != "loop" || children[i]->has_attr(kir::raw))
+        if (children[i]->type != KernelIRType::loop || children[i]->has_attr(kir::raw))
             num++;
     for (uint i=0,j=0,k=0; i<children.size(); i++) {
-        if (children[i]->type != "loop" || children[i]->has_attr(kir::raw))
+        if (children[i]->type != KernelIRType::loop || children[i]->has_attr(kir::raw))
             cid[i] = j++;
         else
             cid[i] = num + k++;
@@ -792,7 +809,7 @@ void KernelIR::replace(const vector<pair<string,string>>& replace_vars, bool equ
     bool replaced = false;
 
     if (lvalue.size()) {
-        if (type=="loop") {
+        if (type == KernelIRType::loop) {
             for (auto& p : replace_vars)
                 if (p.first != p.second)
                     if (startswith(lvalue, p.first, 0, equal)) {
@@ -801,7 +818,7 @@ void KernelIR::replace(const vector<pair<string,string>>& replace_vars, bool equ
                         break;
                     }
         } else {
-            bool inside_loop = father!=nullptr && (father->type=="loop" || flist==&father->inner);
+            bool inside_loop = father!=nullptr && (father->type == KernelIRType::loop || flist==&father->inner);
             for (auto& p : replace_vars)
                 if (p.first != p.second)
                     if (startswith(lvalue, p.first, 0, equal)) {
@@ -859,7 +876,7 @@ void KernelIR::rename_loop_index() {
         KernelIR* ir = irs[i];
         auto& rvalue = ir->get_attr(kir::rvalue);
         auto& lvalue = ir->get_attr(kir::lvalue);
-        if (ir->type == "loop" && rvalue.size()) {
+        if (ir->type == KernelIRType::loop && rvalue.size()) {
             if (startswith(rvalue, "range")) {
                 auto& loop_id = ir->get_attr(kir::loop_id);
                 loop_id = rvalue.substr(5);
@@ -870,7 +887,7 @@ void KernelIR::rename_loop_index() {
             }
         }
         for (auto& c : ir->children)
-            if (c->type == "loop")
+            if (c->type == KernelIRType::loop)
                 irs.push_back(c.get());
     }
 }
@@ -880,7 +897,7 @@ void KernelIR::merge_loop() {
     unordered_map<string, KernelIR*> loops;
     for (int i=(int)children.size()-1; i>=0; i--) {
         auto& loop = children[i];
-        if (loop->type != "loop")
+        if (loop->type != KernelIRType::loop)
             continue;
         auto& loop_id = loop->get_attr(kir::loop_id);
         if (!loop_id.size()) continue;
@@ -902,7 +919,7 @@ void KernelIR::solve_conflict_define() {
     unordered_set<string> defs;
     for (size_t i=0; i<children.size(); i++) {
         auto& c = children[i];
-        if (c->type == "define") {
+        if (c->type == KernelIRType::define) {
             auto lvalue = c->get_attr(kir::lvalue);
             if (lvalue.size()==0)
                 continue;
@@ -918,7 +935,7 @@ void KernelIR::solve_conflict_define() {
             } else
                 defs.insert(lvalue);
         } else
-        if (c->type == "loop")
+        if (c->type == KernelIRType::loop)
             c->solve_conflict_define();
     }
 }
@@ -926,7 +943,7 @@ void KernelIR::solve_conflict_define() {
 void KernelIR::expand_empty_block() {
     for (uint i=0; i<children.size(); i++) {
         auto& loop = children[i];
-        if (loop->type != "loop") continue;
+        if (loop->type != KernelIRType::loop) continue;
         if (loop->has_attr(kir::loop_id)) {
             loop->expand_empty_block();
             continue;
@@ -1004,7 +1021,7 @@ bool KernelIR::remove_unused() {
     for_each_rev([&](unique_ptr<KernelIR>& c) {
         has_unused |= c->remove_unused();
     });
-    if (type=="define" && check_attr(kir::used, "")) {
+    if (type == KernelIRType::define && check_attr(kir::used, "")) {
         LOGvvvv << "Remove unused value:" << attrs[kir::lvalue];
         erase();
         return true;
@@ -1059,13 +1076,13 @@ void KernelIR::remove_intermediate(const unordered_set<string>& names) {
                 i = k+1;
                 continue;
             } else
-            if (code[k] == 'p' && string(s)=="lvalue" && type=="define") {
+            if (code[k] == 'p' && string(s)=="lvalue" && type == KernelIRType::define) {
                 if (names.count(code.substr(i,k-i))) {
                     erase();
                     return;
                 }
             } else 
-            if (code[k] == 'p' && string(s)=="code" && type=="") {
+            if (code[k] == 'p' && string(s)=="code" && type == KernelIRType::none) {
                 if (names.count(code.substr(i,k-i))) {
                     // xxxp -> 0
                     for (uint l=i; l<j; l++)
@@ -1086,7 +1103,7 @@ void KernelIR::remove_intermediate(const unordered_set<string>& names) {
 
 
 void KernelIR::split_loop(int i, int j) {
-    if (type=="loop" && check_attr(kir::loop_id, S(i))) {
+    if (type == KernelIRType::loop && check_attr(kir::loop_id, S(i))) {
         auto sj = S(j);
         auto si = S(i);
         auto& dtype = get_attr(kir::dtype);
@@ -1121,7 +1138,7 @@ void KernelIR::split_loop(int i, int j) {
 
 void KernelIR::resplit() {
     if (has_attr(kir::resplited)) return;
-    ASSERT(type=="loop");
+    ASSERT(type == KernelIRType::loop);
     attrs[kir::resplited] = "1";
     auto& rvalue2 = get_attr(kir::rvalue2);
     auto& lvalue = get_attr(kir::lvalue);

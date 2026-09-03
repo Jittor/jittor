@@ -16,7 +16,7 @@ static bool remove_empty_loop(KernelIR* i) {
         if (remove_empty_loop(i->children[j].get()))
             j--;
     }
-    if (i->type == "loop" && i->children.size() == 0) {
+    if (i->type == KernelIRType::loop && i->children.size() == 0) {
         i->erase();
         return true;
     }

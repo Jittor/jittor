@@ -82,7 +82,7 @@ void FakeMainPass::run() {
     // fake vars
     map<size_t, string> var_map;
     for (auto& c : ir->children) {
-        if (c->type != "define") continue;
+        if (c->type != KernelIRType::define) continue;
         auto& name = c->attrs[kir::lvalue];
         auto& rvalue = c->attrs[kir::rvalue];
         uint op_id, var_id;

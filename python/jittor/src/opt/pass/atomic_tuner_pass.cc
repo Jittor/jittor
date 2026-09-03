@@ -97,7 +97,7 @@ static void tune_atomic(Pass* pass, KernelIR* func, bool is_cuda,
     int tmp_id = 0;
     for (uint i = 0; i < func->children.size(); i++) {
         auto& child = func->children[i];
-        if (child->type != "loop") continue;
+        if (child->type != KernelIRType::loop) continue;
         loop_lvalues.clear();
         atomic_stmts.clear();
         loops.clear();
@@ -122,7 +122,7 @@ static void tune_atomic(Pass* pass, KernelIR* func, bool is_cuda,
             loop = loops.back();
             KernelIR* inner = nullptr;
             for (auto& c : loop->children) {
-                if (c->type != "loop") continue;
+                if (c->type != KernelIRType::loop) continue;
                 if (inner != nullptr) is_perfect_nest = false;
                 inner = c.get();
             }

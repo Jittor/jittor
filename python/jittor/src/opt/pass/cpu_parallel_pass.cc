@@ -126,23 +126,23 @@ static void scan(KernelIR* node, LoopScan& out,
                  unordered_map<string,string>& defines) {
     for (auto& c : node->children) {
         if (!out.usable) return;
-        if (c->type == "define") {
+        if (c->type == KernelIRType::define) {
             defines[c->get_attr(kir::lvalue)] = c->get_attr(kir::rvalue);
             continue;
         }
-        if (c->type == "loop") {
+        if (c->type == KernelIRType::loop) {
             if (c->has_attr(kir::rvalue))
                 out.inner_bounds.push_back(c->get_attr(kir::rvalue));
             // A split loop keeps its tile-size define in `inner`, not among the
             // children, and that name is only in scope inside the loop.
             for (auto& s : c->inner)
-                if (s->type == "define")
+                if (s->type == KernelIRType::define)
                     defines[s->get_attr(kir::lvalue)] = s->get_attr(kir::rvalue);
             scan(c.get(), out, defines);
             // Anything the accumulator pass parked around the loop counts too.
             for (auto* ls : {&c->before, &c->after})
                 for (auto& s : *ls) {
-                    if (s->type == "define") {
+                    if (s->type == KernelIRType::define) {
                         defines[s->get_attr(kir::lvalue)] = s->get_attr(kir::rvalue);
                         continue;
                     }
@@ -161,8 +161,8 @@ static void scan(KernelIR* node, LoopScan& out,
         // (ordinary stores to non-temporal ones) is a performance choice, so
         // the worst case if outlining moves the code out of their reach is
         // that it does not happen.
-        if (c->type == "comment") continue;
-        if (c->type.size()) { out.usable = false; return; }
+        if (c->type == KernelIRType::comment) continue;
+        if (c->type != KernelIRType::none) { out.usable = false; return; }
         const string& code = c->get_attr(kir::code);
         // A jump would make the loop non-canonical for OpenMP.
         if (mentions(code, "break") || mentions(code, "continue")
@@ -188,7 +188,7 @@ void CpuParallelPass::run() {
 
     vector<KernelIR*> bodies({ir});
     for (auto& c : ir->before)
-        if (c->type == "func") bodies.push_back(c.get());
+        if (c->type == KernelIRType::func) bodies.push_back(c.get());
 
     // Collect first: the transform replaces nodes in the list being walked.
     vector<KernelIR*> targets;
@@ -199,7 +199,7 @@ void CpuParallelPass::run() {
     vector<bool> interchange;
     for (auto* body : bodies) {
         for (auto& loop : body->children) {
-            if (loop->type != "loop") continue;
+            if (loop->type != KernelIRType::loop) continue;
             if (!loop->has_attr(kir::lvalue) || !loop->has_attr(kir::rvalue)) continue;
             string index = loop->get_attr(kir::lvalue);
             string bound = loop->get_attr(kir::rvalue);
@@ -225,7 +225,7 @@ void CpuParallelPass::run() {
             KernelIR* level = loop.get();
             while (!split && indices.size() < 3
                     && level->children.size() == 1
-                    && level->children[0]->type == "loop"
+                    && level->children[0]->type == KernelIRType::loop
                     && level->children[0]->has_attr(kir::lvalue)
                     && level->children[0]->has_attr(kir::rvalue)
                     && is_identifier(level->children[0]->get_attr(kir::rvalue))
@@ -239,7 +239,7 @@ void CpuParallelPass::run() {
             LoopScan info;
             unordered_map<string,string> defines;
             for (auto& s : loop->inner)
-                if (s->type == "define")
+                if (s->type == KernelIRType::define)
                     defines[s->get_attr(kir::lvalue)] = s->get_attr(kir::rvalue);
             scan(loop.get(), info, defines);
             if (!info.usable || info.store_indices.size() == 0) continue;
@@ -342,10 +342,10 @@ void CpuParallelPass::run() {
             // Interchange needs a perfect nest: anything else between the two
             // headers would move relative to the loop it sits in.
             bool perfect = loop->children.size() == 1
-                           && loop->children[0]->type == "loop";
+                           && loop->children[0]->type == KernelIRType::loop;
             {
                 for (auto& c : loop->children) {
-                    if (c->type != "loop") continue;
+                    if (c->type != KernelIRType::loop) continue;
                     if (!c->has_attr(kir::lvalue) || !c->has_attr(kir::rvalue)) break;
                     string iv = c->get_attr(kir::lvalue);
                     string ib = c->get_attr(kir::rvalue);
@@ -416,7 +416,7 @@ void CpuParallelPass::run() {
                                      &inner_par->before);
             else
                 for (auto& c : inner_par->children)
-                    if (c->type == "loop") {
+                    if (c->type == KernelIRType::loop) {
                         c->push_back("#pragma omp parallel for", &c->before);
                         break;
                     }

@@ -31,7 +31,7 @@ static unique_ptr<expr::Expr> trace_and_expand(KernelIR* ir, expr::Expr* e) {
             return;
         auto def = ir->find_define(c->str);
         if (!def) return;
-        if (def->type!="define")
+        if (def->type != KernelIRType::define)
             return;
         if (!def->has_attr(kir::rvalue)) return;
         auto& rvalue = def->attrs[kir::rvalue];
@@ -53,11 +53,11 @@ void MergeLoopVarPass::run() {
     if (!choice) return;
     for (int ci=0; ci<ir->children.size(); ci++) {
         auto& c = ir->children[ci];
-        if (c->type != "loop")
+        if (c->type != KernelIRType::loop)
             continue;
         vector<KernelIR*> to_opt;
         c->dfs([&](unique_ptr<KernelIR>& i) {
-            if (i->type == "loop" && i->father && i->father->type == "loop"
+            if (i->type == KernelIRType::loop && i->father && i->father->type == KernelIRType::loop
                 && i->father->children.size() == 1 &&
                 i->before.size() == 0 && i->after.size() == 0) {
                     to_opt.push_back(i.get());
@@ -71,7 +71,7 @@ void MergeLoopVarPass::run() {
             auto id_b = i->attrs[kir::lvalue];
             auto range_a = fa->attrs[kir::rvalue];
             auto id_a = fa->attrs[kir::lvalue];
-            if (!(i->type == "loop" && i->father && i->father->type == "loop"
+            if (!(i->type == KernelIRType::loop && i->father && i->father->type == KernelIRType::loop
                 && i->father->children.size() == 1 && i->father->inner.size() == 3 &&
                 i->before.size() == 0 && i->after.size() == 0)) {
                 continue;
@@ -103,12 +103,12 @@ void MergeLoopVarPass::run() {
             bool can_opt = true;
             i->dfs([&](unique_ptr<KernelIR>& c) {
                 if (!can_opt) return;
-                if (c->type == "if") {
+                if (c->type == KernelIRType::branch) {
                     // don't optimize reindex like op yet
                     can_opt = false;
                     return;
                 }
-                if (c->type == "define" && c->has_attr(kir::rvalue)) {
+                if (c->type == KernelIRType::define && c->has_attr(kir::rvalue)) {
                     auto& s = c->attrs[kir::rvalue];
                     auto& lv = c->attrs[kir::lvalue];
                     if (!(endswith(lv, "id") || endswith(lv, "_i")))
@@ -156,7 +156,7 @@ void MergeLoopVarPass::run() {
             // simplify 0 * x -> 0
             // ni->dfs([&](unique_ptr<KernelIR>& c) {
             //     if (!can_opt) return;
-            //     if (c->type == "define" && c->has_attr(kir::rvalue)) {
+            //     if (c->type == KernelIRType::define && c->has_attr(kir::rvalue)) {
             //         auto& s = c->attrs[kir::rvalue];
             //         auto se = expr::make(s)->simplify();
             //         s = se->to_string();

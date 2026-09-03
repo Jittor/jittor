@@ -20,7 +20,7 @@ void MergeLoopPass::run() {
         vector<KernelIR*> loops;
         vector<string> loop_keys;
         for (auto& c : ir->children) {
-            if (c->type != "loop")
+            if (c->type != KernelIRType::loop)
                 continue;
             if (!c->has_attr(kir::loop_id))
                 continue;

@@ -15,7 +15,7 @@ namespace jittor {
 void ReplaceForNumPass::run() {
     for (uint fid=0; fid<ir->children.size(); fid++) {
         auto& loop_ir = ir->children[fid];
-        if (loop_ir->type != "loop")
+        if (loop_ir->type != KernelIRType::loop)
             continue;
         auto& rvalue = loop_ir->get_attr(kir::rvalue);
         auto j=rvalue.find("num");
@@ -27,7 +27,7 @@ void ReplaceForNumPass::run() {
         bool found = false;
         // find definition of loop range
         for (;sid>0; sid--) {
-            if (ir->children[sid]->type != "define")
+            if (ir->children[sid]->type != KernelIRType::define)
                 continue;
             if (!ir->children[sid]->check_attr(kir::lvalue, loop_num))
                 continue;
@@ -59,8 +59,8 @@ void ReplaceForNumPass::run() {
         );
         KernelIR new_ir(new_code);
         ASSERT(new_ir.children.size()>=2 &&
-            new_ir.children.back()->type == "loop" &&
-            new_ir.children.front()->type == "define");
+            new_ir.children.back()->type == KernelIRType::loop &&
+            new_ir.children.front()->type == KernelIRType::define);
         auto& new_for = new_ir.children.back();
         auto* inner_for = new_for.get();
         for (uint di=0; di+1<var->shape.size(); di++) {

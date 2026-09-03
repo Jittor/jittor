@@ -16,7 +16,7 @@ void MarkRawPass::run() {
     for (auto& c : ir->children) {
         string* check = nullptr;
         bool found = false;
-        if (c->type == "define") {
+        if (c->type == KernelIRType::define) {
             check = &c->get_attr(kir::rvalue);
         } else if (c->has_attr(kir::code))
             check = &c->get_attr(kir::code);
@@ -28,7 +28,7 @@ void MarkRawPass::run() {
                 }
             if (found) {
                 c->attrs[kir::raw] = "1";
-                if (c->type=="define")
+                if (c->type == KernelIRType::define)
                     raws.push_back(c->get_attr(kir::lvalue));
             }
         }

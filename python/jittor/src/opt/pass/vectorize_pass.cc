@@ -20,7 +20,7 @@ void VectorizePass::run() {
         KernelIR* ir = q[i];
         bool has_loop = false;
         for (auto& c : ir->children) {
-            if (c->type == "loop")
+            if (c->type == KernelIRType::loop)
                 has_loop = true;
             q.push_back(c.get());
         }

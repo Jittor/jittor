@@ -15,7 +15,7 @@ void InsertProfileLoopPass::run() {
     if (!op->get_loop_option("insert_profile_loop")) return;
     int loopend = ir->children.size()-1;
     auto check_loop = [](unique_ptr<KernelIR>& c) -> bool {
-        return c->type == "loop" || c->has_attr(kir::loop_func);
+        return c->type == KernelIRType::loop || c->has_attr(kir::loop_func);
     };
     while (loopend>=0 && !check_loop(ir->children[loopend]))
         loopend--;
