@@ -743,6 +743,31 @@ register_fidelity(
 )
 
 
+_MASKED_SELECT_FIDELITY_DETAIL = (
+    "matches Torch boolean selection values and flattened shape for supported "
+    "real tensors but omits out, device, layout, and dtype keyword semantics"
+)
+
+
+def _masked_select_impl(input, mask, out=None):
+    # Keep the compatibility boundary: ``out`` is accepted for API shape
+    # compatibility but is not populated by this approximate fallback.
+    return input[mask]
+
+
+def masked_select(input, mask, out=None):
+    """Return the flattened elements selected by a boolean mask."""
+    return _masked_select_impl(input, mask, out=out)
+
+
+register_fidelity(
+    "torch.masked_select",
+    masked_select,
+    Fidelity.APPROXIMATE,
+    _MASKED_SELECT_FIDELITY_DETAIL,
+)
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
@@ -1126,7 +1151,7 @@ def install(ctx):
     # ---- torch.* ops used by mmdetection (additive aliases) ----
     _alias("mm", mm)
     _alias("mv", mv)
-    _alias("masked_select", lambda input, mask, out=None: input[mask])   # -> 1-D selected
+    _alias("masked_select", masked_select)
     _alias("split_with_sizes",
            lambda input, split_sizes, dim=0: input.split(split_sizes, dim))
     _alias("_shape_as_tensor",

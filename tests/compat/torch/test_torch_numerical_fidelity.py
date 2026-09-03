@@ -849,6 +849,36 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIs(returned, out)
         np.testing.assert_allclose(out.numpy(), [expected], rtol=1e-6)
 
+    def test_masked_select_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.masked_select))
+        self.assertIs(torch.masked_select, numerical.masked_select)
+        self.assertEqual(numerical.masked_select.__module__, numerical.__name__)
+        self.assertEqual(numerical.masked_select.__name__, "masked_select")
+
+    def test_masked_select_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.masked_select")
+        self.assertIs(record.implementation, numerical.masked_select)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("out", record.detail)
+        self.assertIn("device", record.detail)
+
+    def test_masked_select_cpu_value_and_var_delegate_match_numpy(self):
+        values = np.array([[1.0, -2.0, 3.0], [4.0, 5.0, -6.0]], dtype="float32")
+        mask = np.array([[True, False, True], [False, True, False]])
+        expected = values[mask]
+        with torch.flag_scope(use_cuda=0):
+            values_tensor = torch.array(values)
+            mask_tensor = torch.array(mask)
+            actual = torch.masked_select(values_tensor, mask_tensor)
+            method = values_tensor.masked_select(mask_tensor)
+        np.testing.assert_allclose(actual.numpy(), expected, rtol=1e-6)
+        np.testing.assert_allclose(method.numpy(), expected, rtol=1e-6)
+
 
 if __name__ == "__main__":
     unittest.main()
