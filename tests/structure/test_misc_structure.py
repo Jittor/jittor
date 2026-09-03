@@ -159,6 +159,7 @@ class TestMiscStructure(unittest.TestCase):
         # both devices and reaches it through `_scan_2d`, so that is what the
         # late binding has to carry. `wraps` because the result is reshaped by
         # the caller and a bare marker would not survive it.
+        marker = object()
         value = jt.array([1.0, 2.0])
         with mock.patch.object(misc, "_scan_2d",
                                wraps=misc._scan_2d) as patched:
