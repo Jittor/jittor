@@ -499,5 +499,9 @@ The ACL BatchMatMul owner uses the shared launcher while retaining
 cube_math_type and synchronous execution. This remains source-only until the
 Ascend 910B3 probe is run.
 
+The ACL RotaryPositionEmbedding forward owner uses the shared launcher and
+retains its three input tensors and synchronous execution. Its gradient owner
+is outside this slice.
+
 The ACL UpsampleNearest2d forward owner uses the shared launcher while retaining
 output-size RAII and synchronous execution. Backward is outside this slice.

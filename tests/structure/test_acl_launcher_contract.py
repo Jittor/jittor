@@ -30,6 +30,7 @@ RELU_SOURCE = ROOT / "python/jittor/extern/acl/aclops/relu_op_acl.cc"
 ARG_REDUCE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/arg_reduce_op_acl.cc"
 SILU_SOURCE = ROOT / "python/jittor/extern/acl/aclops/silu_op_acl.cc"
 BMM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/bmm_op_acl.cc"
+ROPE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/rope_op_acl.cc"
 RANDOM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/random_op_acl.cc"
 UPSAMPLE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/upsample_op_acl.cc"
 GATHER_SOURCE = ROOT / "python/jittor/extern/acl/aclops/gather_scatter_op_acl.cc"
@@ -327,6 +328,16 @@ def test_batch_matmul_uses_launcher_and_keeps_cube_math_type():
     assert "launch(ret, aclnnBatchMatMul, true);" in source
     assert "mallocWorkSpace(workspaceSize)" not in source
     assert "syncRun();" not in source
+
+
+def test_rope_forward_uses_launcher_and_backward_remains_present():
+    source = ROPE_SOURCE.read_text()
+    forward = source[source.index("void RotaryPositionEmbeddingOpRunner::executeOp"):source.index("RotaryPositionEmbeddingGradOpRunner::RotaryPositionEmbeddingGradOpRunner")]
+    assert "inputTensors[0]" in forward
+    assert "launch(ret, aclnnRotaryPositionEmbedding, true);" in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void RotaryPositionEmbeddingGradOpRunner::executeOp" in source
 
 
 def test_random_uniform_normal_share_launcher_and_keep_seed_offset():
