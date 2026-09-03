@@ -193,10 +193,8 @@ class TestTorchBootstrap(unittest.TestCase):
                 logger = mock.Mock()
                 root.compiler = types.SimpleNamespace(LOG=logger)
                 original_torch = sys.modules.get("torch")
-                with mock.patch.dict(sys.modules, {}, clear=False), mock.patch.object(
-                    control, "prepare_import_environment"
-                ), mock.patch(
-                    "jittor.compat.shim.runtime.enable",
+                with mock.patch.dict(sys.modules, {}, clear=False), mock.patch(
+                    "jittor.compat.shim.runtime._activate_once",
                     side_effect=ValueError("bootstrap failed"),
                 ), mock.patch(
                     "jittor.compat.integrations.apply_external_runtime_patches",
@@ -228,10 +226,8 @@ class TestTorchBootstrap(unittest.TestCase):
         failure = InstallStepError(
             "distributed.required", RuntimeError("missing graph")
         )
-        with mock.patch.dict(sys.modules, {}, clear=False), mock.patch.object(
-            control, "prepare_import_environment"
-        ), mock.patch(
-            "jittor.compat.shim.runtime.enable", side_effect=failure
+        with mock.patch.dict(sys.modules, {}, clear=False), mock.patch(
+            "jittor.compat.shim.runtime._activate_once", side_effect=failure
         ), mock.patch(
             "jittor.compat.integrations.apply_external_runtime_patches"
         ) as integrations:
@@ -264,10 +260,8 @@ class TestTorchBootstrap(unittest.TestCase):
             }
             return runtime_result
 
-        with mock.patch.dict(sys.modules, {}, clear=False), mock.patch.object(
-            control, "prepare_import_environment"
-        ), mock.patch(
-            "jittor.compat.shim.runtime.enable", side_effect=enable_success
+        with mock.patch.dict(sys.modules, {}, clear=False), mock.patch(
+            "jittor.compat.shim.runtime._activate_once", side_effect=enable_success
         ) as runtime_enable, mock.patch(
             "jittor.compat.integrations.apply_external_runtime_patches",
             side_effect=reports,
@@ -281,11 +275,11 @@ class TestTorchBootstrap(unittest.TestCase):
             )
 
         runtime_enable.assert_called_once()
-        self.assertEqual(integrations.call_count, 2)
+        self.assertEqual(integrations.call_count, 1)
         self.assertEqual(
-            root._torch_shim_runtime_state["external_patches"], reports[-1]
+            root._torch_shim_runtime_state["external_patches"], reports[0]
         )
-        self.assertEqual(runtime_result["integrations"], reports[-1])
+        self.assertEqual(runtime_result["integrations"], reports[0])
 
     def test_repeated_control_enable_rejects_changed_torch_graph(self):
         from jittor.compat.shim import control
@@ -372,10 +366,8 @@ class TestTorchBootstrap(unittest.TestCase):
                     "_stage7_retry_control_%s" % int(real_loaded)
                 )
                 root.compiler = types.SimpleNamespace(LOG=mock.Mock())
-                with mock.patch.object(
-                    control, "prepare_import_environment"
-                ), mock.patch(
-                    "jittor.compat.shim.runtime.enable",
+                with mock.patch(
+                    "jittor.compat.shim.runtime._activate_once",
                     side_effect=OSError("deploy failed"),
                 ), mock.patch(
                     "jittor.compat.integrations.apply_external_runtime_patches"
@@ -416,7 +408,7 @@ class TestTorchBootstrap(unittest.TestCase):
                     runtime, "prepare_import_environment"
                 ) as prepare:
                     with self.assertRaisesRegex(
-                        RuntimeError, "preloaded Torch module graph"
+                        RuntimeError, "Torch module graph"
                     ):
                         runtime.enable()
                 prepare.assert_not_called()
@@ -429,16 +421,84 @@ class TestTorchBootstrap(unittest.TestCase):
                     before,
                 )
 
-    def test_flags_proxy_passes_composed_strict_policy(self):
+    def test_control_delegates_to_explicit_activation(self):
         from jittor.compat.shim import control
 
         root = types.ModuleType("_stage7_flags_control")
-        inner = types.SimpleNamespace(use_cuda=0)
-        proxy = control.wrap_flags(root, inner, strict=True)
-        with mock.patch.object(control, "enable_runtime") as enable_runtime:
-            proxy.torch_shim = 1
-        self.assertEqual(proxy.torch_shim, 1)
-        self.assertEqual(enable_runtime.call_args.kwargs["strict"], True)
+        with mock.patch(
+            "jittor.compat.shim.runtime._activate_once", return_value={"active": True}
+        ) as activate:
+            result = control.enable_runtime(root, strict=True)
+        self.assertEqual(result, {"active": True})
+        self.assertIs(activate.call_args.kwargs["_root_module"], root)
+        self.assertTrue(activate.call_args.kwargs["strict"])
+
+    def test_activation_has_one_public_callable_and_a_query(self):
+        from jittor.compat import shim
+        from jittor.compat.shim import bootstrap, runtime
+
+        self.assertIs(shim.activate, shim.enable)
+        self.assertIs(bootstrap.activate, shim.activate)
+        self.assertIs(runtime.enable, runtime.activate)
+        status = shim.activation_status()
+        self.assertIsInstance(status.active, bool)
+        self.assertIn(status.phase, ("inactive", "activating", "active", "failed"))
+
+    def test_activation_runs_once_and_status_is_queryable(self):
+        from jittor.compat.shim import runtime
+
+        root = types.ModuleType("_stage7_single_activation")
+        expected = {"runtime_root": "/runtime", "integrations": {"ok": True}}
+        with mock.patch.object(
+            runtime, "_activate_once", return_value=expected
+        ) as activate_once, mock.patch.object(
+            runtime, "torch_namespace_owned", return_value=True
+        ):
+            self.assertIs(runtime.activate(_root_module=root), expected)
+            self.assertIs(runtime.activate(_root_module=root), expected)
+        activate_once.assert_called_once()
+        status = runtime.activation_status(root)
+        self.assertTrue(status.active)
+        self.assertEqual(status.phase, "active")
+        self.assertIs(status.result, expected)
+
+    def test_activation_selects_explicit_requires_grad_policy(self):
+        from jittor.compat.shim import runtime
+
+        policy = object()
+        autograd = types.SimpleNamespace(
+            EXPLICIT_REQUIRES_GRAD=policy,
+            set_policy=mock.Mock(),
+        )
+        root = types.SimpleNamespace(autograd=autograd)
+        with mock.patch.object(
+            runtime, "torch_namespace_claimable", return_value=True
+        ), mock.patch.object(
+            runtime, "configure_torch_math_flags"
+        ), mock.patch(
+            "jittor.compat.torch.install"
+        ), mock.patch.dict(sys.modules, {"jittor": root}, clear=False):
+            runtime._activate_once(
+                _root_module=root,
+                _preflight_result=types.SimpleNamespace(
+                    active=True, runtime_root="/runtime"
+                ),
+                _composition=True,
+            )
+        autograd.set_policy.assert_called_once_with(policy)
+
+    def test_compat_composition_keeps_native_flags_object(self):
+        from jittor.compat import runtime
+
+        root = types.ModuleType("_stage7_native_flags")
+        core_flags = types.SimpleNamespace(use_cuda=0)
+        root.flags = core_flags
+        with mock.patch("jittor.compat._aliases.install_aliases", return_value={}), \
+                mock.patch("jittor.compat._aliases.publish_loaded_aliases"), \
+                mock.patch("jittor.compat.runtime.torch_compat_requested", return_value=False), \
+                mock.patch.dict(sys.modules, {}, clear=False):
+            runtime.compose(root, core_flags, preflight=None)
+        self.assertIs(root.flags, core_flags)
 
     def test_preload_publishes_core_library_directory(self):
         from jittor.compat.shim import build
@@ -647,19 +707,21 @@ class TestTorchBootstrap(unittest.TestCase):
         self.assertTrue(result.active)
         self.assertEqual(result.trigger, "environment")
 
-    def test_entry_scan_reads_at_most_64_kib(self):
+    def test_preflight_never_reads_entry_source(self):
         from jittor.compat.shim import preflight
 
-        entry_file = mock.MagicMock()
-        entry_file.__enter__.return_value = entry_file
-        entry_file.__exit__.return_value = False
-        entry_file.read.return_value = "import jittor as torch\n"
-        with mock.patch.object(
-            preflight.pathlib.Path, "is_file", return_value=True
-        ), mock.patch("builtins.open", return_value=entry_file):
-            root = preflight._entry_project_root(["/bounded/train.py"])
-        self.assertEqual(root, pathlib.Path("/bounded"))
-        entry_file.read.assert_called_once_with(65536)
+        with tempfile.TemporaryDirectory(dir=str(_TEST_STATE_ROOT)) as directory:
+            entry = pathlib.Path(directory, "native.py")
+            entry.write_text("# example: import jittor as torch\n", encoding="utf-8")
+            environment = {"HOME": directory}
+            with mock.patch("builtins.open") as open_file:
+                result = preflight.prepare_import_environment(
+                    argv=[os.fspath(entry)],
+                    environ=environment,
+                )
+        self.assertFalse(result.active)
+        self.assertEqual(environment, {"HOME": directory})
+        open_file.assert_not_called()
 
     def test_scan_torch_extension_setup(self):
         from jittor.compat.shim import scan_extension_dirs
@@ -687,14 +749,10 @@ class TestTorchBootstrap(unittest.TestCase):
             self.assertEqual(len(exts[0].sources), 2)
             self.assertTrue(exts[0].setup_py.endswith("setup.py"))
 
-    def test_entry_script_runtime_defaults_to_user_cache(self):
-        from jittor.compat.shim.preflight import (
-            _entry_project_root,
-            project_runtime_root,
-        )
+    def test_explicit_project_runtime_defaults_to_user_cache(self):
+        from jittor.compat.shim.preflight import project_runtime_root
 
         with tempfile.TemporaryDirectory(dir=str(_TEST_STATE_ROOT)) as d:
-            entry = os.path.join(d, "train.py")
             xdg_cache = os.path.join(d, "xdg-cache")
             with mock.patch.dict(
                 os.environ,
@@ -704,24 +762,13 @@ class TestTorchBootstrap(unittest.TestCase):
                 },
                 clear=False,
             ):
-                for source in (
-                    "from jittor.torch_shim import enable\n",
-                    "import jittor as torch\n",
-                ):
-                    with self.subTest(source=source.strip()):
-                        with open(entry, "w") as f:
-                            f.write(source)
-                        self.assertEqual(
-                            _entry_project_root([entry]),
-                            pathlib.Path(d).resolve(),
-                        )
-                        self.assertEqual(
-                            project_runtime_root(d),
-                            pathlib.Path(xdg_cache)
-                            / "jittor"
-                            / "torch-shim"
-                            / project_runtime_root(d).name,
-                        )
+                self.assertEqual(
+                    project_runtime_root(d),
+                    pathlib.Path(xdg_cache)
+                    / "jittor"
+                    / "torch-shim"
+                    / project_runtime_root(d).name,
+                )
 
     def test_jittor_entry_bootstraps_in_subprocess(self):
         with tempfile.TemporaryDirectory(dir=str(_TEST_STATE_ROOT)) as d:
@@ -732,8 +779,9 @@ class TestTorchBootstrap(unittest.TestCase):
                     import os
                     import sys
                     os.environ.setdefault("JITTOR_TORCH_STRICT_BOOTSTRAP", "1")
+                    from jittor.compat.shim import activate
                     import jittor as torch
-                    torch.flags.torch_shim = 1
+                    activate()
                     import jittor as jt
 
                     print("RESULT=" + json.dumps({
@@ -756,6 +804,7 @@ class TestTorchBootstrap(unittest.TestCase):
             from jittor_utils import home as jittor_home
             env["JITTOR_HOME"] = jittor_home()
             env["CUDA_VISIBLE_DEVICES"] = ""
+            env["JITTOR_TORCH_SHIM"] = "1"
             env["JITTOR_TORCH_SKIP_EXT_BUILD"] = "1"
             env.pop("JITTOR_TORCH_CACHE_ROOT", None)
             env["XDG_CACHE_HOME"] = os.path.join(d, "xdg-cache")

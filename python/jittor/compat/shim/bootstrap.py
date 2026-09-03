@@ -2,10 +2,14 @@
 
 from .build import build_extension_dirs
 from .discovery import NativeExtension, scan_extension_dirs
-from .runtime import enable
+from .runtime import activate, activation_status
+
+enable = activate
 
 __all__ = [
     "NativeExtension",
+    "activate",
+    "activation_status",
     "build_extension_dirs",
     "enable",
     "scan_extension_dirs",

@@ -16,12 +16,6 @@ from ..diagnostics import EXPECTED, swallowed
 
 
 _TRUTHY = frozenset(("1", "true", "yes", "on"))
-_ENTRY_MARKERS = (
-    "jittor.compat.shim",
-    "jittor.torch_shim",
-    "torch_shim",
-    "import jittor as torch",
-)
 _DRIVER_LIBRARY_CANDIDATES = (
     "/lib/x86_64-linux-gnu/libcuda.so.1",
     "/usr/lib/x86_64-linux-gnu/libcuda.so.1",
@@ -97,25 +91,6 @@ def project_runtime_root(project_root, environ=None):
     )[:64] or "project"
     digest = hashlib.sha256(os.fsencode(os.fspath(root))).hexdigest()[:16]
     return (base / (safe_name + "-" + digest)).resolve()
-
-
-def _entry_project_root(argv):
-    entry = argv[0] if argv else ""
-    if not entry or entry in ("-c", "-m"):
-        return None
-    entry_path = pathlib.Path(entry).expanduser().resolve()
-    if not entry_path.is_file():
-        return None
-    try:
-        with open(
-            os.fspath(entry_path), "r", encoding="utf-8", errors="ignore"
-        ) as entry_file:
-            head = entry_file.read(65536)
-    except OSError:
-        return None
-    if any(marker in head for marker in _ENTRY_MARKERS):
-        return entry_path.parent
-    return None
 
 
 def _prepend_env_path(environ, name, path):
@@ -415,8 +390,9 @@ def prepare_import_environment(
     """Prepare the shim environment before native compiler/core import."""
 
     env = os.environ if environ is None else environ
-    args = sys.argv if argv is None else argv
-    entry_root = _entry_project_root(args)
+    # ``argv`` remains accepted for source compatibility, but process mode must
+    # never depend on an entry script's text or spelling.
+    del argv
     explicit_project = (
         project_root
         if project_root is not None
@@ -432,7 +408,6 @@ def prepare_import_environment(
         or explicit_project
         or explicit_runtime
         or is_truthy(env.get("JITTOR_TORCH_SHIM"))
-        or entry_root
     )
     if not active:
         return PreflightResult(False)
@@ -446,9 +421,9 @@ def prepare_import_environment(
             or explicit_runtime
             or is_truthy(env.get("JITTOR_TORCH_SHIM"))
         )
-        else "entry"
+        else "explicit"
     )
-    project = project_dir(explicit_project or entry_root or pathlib.Path.cwd())
+    project = project_dir(explicit_project or pathlib.Path.cwd())
     runtime = pathlib.Path(
         os.fspath(explicit_runtime or project_runtime_root(project, env))
     ).expanduser().resolve()

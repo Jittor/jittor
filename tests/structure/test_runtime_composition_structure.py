@@ -41,8 +41,7 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
         # someone adds a wrong one.
         self.assertNotIn("jittor.torch_shim", source)
         self.assertIn("prepare_import_environment as _prepare_compat_import", source)
-        self.assertIn("if _compat_preflight_result.active:", source)
-        self.assertIn("_configure_compat_math_flags(_sys.modules[__name__])", source)
+        self.assertNotIn("_configure_compat_math_flags", source)
         self.assertIn("from ._runtime.core_api import *", source)
         self.assertIn("compose as _compose_compat_runtime", source)
         self.assertIn("JITTOR_TORCH_STRICT_BOOTSTRAP", source)
@@ -50,10 +49,6 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
         self.assertLess(
             source.index("_prepare_compat_import("),
             source.index("from jittor_utils import lock"),
-        )
-        self.assertLess(
-            source.index("_configure_compat_math_flags(_sys.modules[__name__])"),
-            source.index("from ._runtime.core_api import *"),
         )
         self.assertLess(
             source.index("from ._runtime.core_api import *"),
@@ -67,6 +62,7 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
         runtime_source = (self.compat / "runtime.py").read_text(encoding="utf-8")
         self.assertIn("torch_compat_requested(root_module, preflight)", runtime_source)
         self.assertIn("if torch_mode:", runtime_source)
+        self.assertNotIn("wrap_flags", runtime_source)
 
     def test_core_api_identity_and_legacy_pickle_paths_are_stable(self):
         import jittor

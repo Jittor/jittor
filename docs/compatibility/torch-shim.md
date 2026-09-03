@@ -30,13 +30,15 @@ expected by third-party libraries.
 Applications that need a project-local runtime can enable it explicitly:
 
 ```python
-from jittor.compat.shim import enable
+from jittor.compat.shim import activate, activation_status
 
-enable(project_root=__file__)
+activate(project_root=__file__)
+assert activation_status().active
 import torch
 ```
 
-`enable()` creates a runtime below
+`activate()` is process-wide and idempotent; repeated calls return the original
+activation result without rescanning extensions or reapplying patches. It creates a runtime below
 `${XDG_CACHE_HOME:-~/.cache}/jittor/torch-shim/` unless
 `JITTOR_TORCH_RUNTIME_ROOT` is set. It keeps Jittor, torch extension, CUDA,
 Triton, pip, and temporary caches below that runtime and deploys the shim into

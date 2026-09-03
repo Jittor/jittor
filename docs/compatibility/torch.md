@@ -1,22 +1,26 @@
-# Using Jittor as PyTorch (`import jittor as torch`)
+# Using Jittor with PyTorch APIs
 
 Jittor ships a torch-compatibility layer so PyTorch code — including
 **transformers**, **PEFT**, **accelerate**, and **LlamaFactory** — runs
 **unmodified** on Jittor, on both **NVIDIA GPUs (CUDA/NCCL)** and **Huawei Ascend
-NPUs (ACL/HCCL)**. You only change the import:
+NPUs (ACL/HCCL)**. Activate the compatibility process explicitly:
 
 ```python
-import jittor as torch          # or deploy the shim so `import torch` resolves to jittor
+from jittor.compat.shim import activate
+activate()
+import torch
 import torch.nn as nn
 ```
 
 The torch-style API lives in the canonical `jittor.compat.torch` package. It is
-installed only when a Torch entry point is selected: an entry script containing
-`import jittor as torch`, an explicit `JITTOR_TORCH_SHIM=1`, the deployed
-`import torch` package, or the historical `import jittor.torch_compat` path.
+installed only when a Torch entry point is selected: an explicit call to
+`jittor.compat.shim.activate()`, `JITTOR_TORCH_SHIM=1`, the deployed `import
+torch` package, or the historical `import jittor.torch_compat` path.
 Plain `import jittor as jt` keeps native Jittor behavior and does not claim the
-`torch` namespace. `jittor.compat.shim` re-exports the compatibility API as the
-`torch` package so third-party libraries' internal imports work too.
+`torch` namespace. `import jittor as torch` is also only a local Python alias;
+it does not activate compatibility. `jittor.compat.shim` re-exports the
+compatibility API as the `torch` package so third-party libraries' internal
+imports work too.
 
 This separation is observable for APIs whose native and Torch contracts differ.
 In particular, native `Var.data` remains a shared NumPy view, while Torch mode
@@ -32,8 +36,9 @@ jittor-torch-shim --check                    # verify the deployed files
 ## Quickstart
 
 ```python
-import jittor as torch
-import jittor as jt
+from jittor.compat.shim import activate
+activate()
+import torch
 
 lin = torch.nn.Linear(8, 8)
 opt = torch.optim.AdamW(lin.parameters(), lr=1e-3)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import pathlib
 import sys
-from typing import List, Optional, Sequence, Union
+from typing import Any, List, NamedTuple, Optional, Sequence, Union
 
 from .build import (
     _deploy_torch_shim, _extension_from_user_item, _preload_jittor_cores,
@@ -19,10 +19,51 @@ from .preflight import (
     _ensure_dir, append_sys_path, configure_torch_math_flags, is_truthy,
     jittor_python_root, prepare_import_environment, prepend_sys_path,
 )
-from jittor.compat._aliases import torch_namespace_claimable
+from jittor.compat._aliases import torch_namespace_claimable, torch_namespace_owned
 from ..diagnostics import EXPECTED, swallowed
 
-def enable(
+
+class ActivationStatus(NamedTuple):
+    phase: str
+    active: bool
+    result: Optional[dict]
+    error: Optional[str]
+
+
+def _runtime_state(root_module):
+    state = getattr(root_module, "_torch_shim_runtime_state", None)
+    if state is None:
+        state = {
+            "phase": "inactive",
+            "installed": False,
+            "result": None,
+            "external_patches": None,
+            "error": None,
+            "runtime_configured": False,
+        }
+        root_module._torch_shim_runtime_state = state
+    return state
+
+
+def activation_status(root_module=None):
+    """Return an immutable snapshot of process-wide Torch shim activation."""
+
+    root = root_module or sys.modules.get("jittor")
+    state = getattr(root, "_torch_shim_runtime_state", None) if root else None
+    if state is None:
+        return ActivationStatus("inactive", False, None, None)
+    phase = state.get("phase") or (
+        "active" if state.get("installed") else "inactive"
+    )
+    return ActivationStatus(
+        phase,
+        phase == "active" and bool(state.get("installed")),
+        state.get("result"),
+        state.get("error"),
+    )
+
+
+def _activate_once(
     project_root: Optional[Union[str, os.PathLike]] = None,
     runtime_root: Optional[Union[str, os.PathLike]] = None,
     import_paths: Optional[Sequence[Union[str, os.PathLike]]] = None,
@@ -35,6 +76,9 @@ def enable(
     inference: bool = False,
     verbose: Optional[bool] = None,
     strict: Optional[bool] = None,
+    _root_module=None,
+    _preflight_result=None,
+    _composition=False,
 ):
     """Enable Jittor-backed ``import torch`` for the current Python process.
 
@@ -45,8 +89,8 @@ def enable(
 
     Typical use in a torch-oriented project entrypoint::
 
-        from jittor.compat.shim import enable as _enable_torch_shim
-        _enable_torch_shim(project_root=__file__)
+        from jittor.compat.shim import activate
+        activate(project_root=__file__)
         import torch
 
     For pure evaluation/metrics scripts, pass ``inference=True`` to enable
@@ -62,7 +106,7 @@ def enable(
     exists.
     """
 
-    jittor_root = sys.modules.get("jittor")
+    jittor_root = _root_module or sys.modules.get("jittor")
     if not torch_namespace_claimable(jittor_root):
         raise RuntimeError(
             "cannot enable the Jittor Torch shim over a preloaded Torch "
@@ -75,13 +119,36 @@ def enable(
         if strict is None
         else bool(strict)
     )
-    prepared = prepare_import_environment(
-        project_root=project_root or pathlib.Path.cwd(),
-        runtime_root=runtime_root,
-        force=True,
-        local_home=local_home,
-        configure_cuda=configure_cuda,
+    jittor_root.autograd.set_policy(
+        jittor_root.autograd.EXPLICIT_REQUIRES_GRAD
     )
+    if _composition:
+        jt = jittor_root
+        configure_torch_math_flags(jt)
+        from jittor.compat import torch as torch_compat
+
+        torch_compat.install(jt, strict=strict_bootstrap)
+        sys.modules["torch"] = jt
+        return {
+            "torch": jt,
+            "runtime_root": getattr(_preflight_result, "runtime_root", ""),
+            "shim_site": "",
+            "extensions": [],
+            "built": [],
+            "preloaded": [],
+            "module_patches": None,
+            "external_backends": None,
+            "integrations": {},
+        }
+    prepared = _preflight_result
+    if not bool(getattr(prepared, "active", False)):
+        prepared = prepare_import_environment(
+            project_root=project_root or pathlib.Path.cwd(),
+            runtime_root=runtime_root,
+            force=True,
+            local_home=local_home,
+            configure_cuda=configure_cuda,
+        )
     project_dir = pathlib.Path(prepared.project_root)
     runtime = pathlib.Path(prepared.runtime_root)
 
@@ -108,6 +175,8 @@ def enable(
         append_sys_path(pp.resolve())
 
     import jittor as jt
+    if jittor_root is not None and jt is not jittor_root:
+        raise RuntimeError("Torch shim activation changed the Jittor root module")
     configure_torch_math_flags(jt)
     if inference:
         jt.flags.no_grad = 1
@@ -185,3 +254,85 @@ def enable(
         "external_backends": integration_report.get("external_backends"),
         "integrations": integration_report,
     }
+
+
+def activate(
+    project_root: Optional[Union[str, os.PathLike]] = None,
+    runtime_root: Optional[Union[str, os.PathLike]] = None,
+    import_paths: Optional[Sequence[Union[str, os.PathLike]]] = None,
+    extension_dirs: Optional[Sequence[Union[NativeExtension, str, os.PathLike]]] = None,
+    auto_scan_extensions: bool = True,
+    build_extensions: bool = True,
+    max_scan_depth: int = 5,
+    local_home: bool = True,
+    configure_cuda: bool = True,
+    inference: bool = False,
+    verbose: Optional[bool] = None,
+    strict: Optional[bool] = None,
+    _root_module: Any = None,
+    _preflight_result: Any = None,
+    _composition: bool = False,
+):
+    """Activate Torch compatibility exactly once for this process.
+
+    Repeated calls return the original result and never rescan extensions or
+    reapply integration patches. Use :func:`activation_status` for inspection.
+    """
+
+    root = _root_module or sys.modules.get("jittor")
+    if root is None:
+        raise RuntimeError("import jittor before activating Torch compatibility")
+    state = _runtime_state(root)
+    already_installed = bool(state.get("installed"))
+    if state.get("installed"):
+        if not torch_namespace_owned(root):
+            raise RuntimeError(
+                "cannot re-activate the Jittor Torch shim over a changed Torch "
+                "module graph"
+            )
+        if _composition or state.get("runtime_configured"):
+            return state.get("result")
+    if state.get("phase") == "activating":
+        raise RuntimeError("recursive Jittor Torch shim activation")
+
+    state.update(phase="activating", error=None)
+    try:
+        result = _activate_once(
+            project_root=project_root,
+            runtime_root=runtime_root,
+            import_paths=import_paths,
+            extension_dirs=extension_dirs,
+            auto_scan_extensions=auto_scan_extensions,
+            build_extensions=build_extensions,
+            max_scan_depth=max_scan_depth,
+            local_home=local_home,
+            configure_cuda=configure_cuda,
+            inference=inference,
+            verbose=verbose,
+            strict=strict,
+            _root_module=root,
+            _preflight_result=_preflight_result,
+            _composition=_composition,
+        )
+    except EXPECTED as exc:
+        state.update(
+            phase="active" if already_installed else "failed",
+            installed=already_installed,
+            error=str(exc),
+        )
+        raise
+    state.update(
+        phase="active",
+        installed=True,
+        result=result,
+        external_patches=(
+            result.get("integrations") if isinstance(result, dict) else None
+        ),
+        error=None,
+        runtime_configured=not _composition,
+    )
+    return result
+
+
+# Historical spelling; identity makes the canonical implementation observable.
+enable = activate

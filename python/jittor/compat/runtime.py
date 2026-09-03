@@ -2,7 +2,6 @@
 
 from __future__ import absolute_import
 
-import sys
 from dataclasses import dataclass
 
 from ._aliases import (
@@ -38,6 +37,7 @@ def compose(root_module, core_flags, strict=True, preflight=None):
 
     aliases = install_aliases(root_module)
     torch_reports = ()
+    integrations = {}
     torch_mode = torch_compat_requested(root_module, preflight)
     if torch_mode:
         if not torch_namespace_claimable(root_module):
@@ -45,11 +45,19 @@ def compose(root_module, core_flags, strict=True, preflight=None):
                 "cannot install Jittor Torch compatibility over an existing "
                 "Torch module graph"
             )
-        from . import torch as torch_compat
+        from .shim.runtime import activate
 
-        torch_compat.install(root_module, strict=strict)
+        activation = activate(
+            strict=strict,
+            verbose=False,
+            _root_module=root_module,
+            _preflight_result=preflight,
+            _composition=True,
+        )
         context = getattr(root_module, "_torch_compat_install_context")
         torch_reports = tuple(context.reports)
+        if isinstance(activation, dict):
+            integrations = activation.get("integrations") or {}
 
     # Real Triton may import ``torch`` while we probe it. If that name is a
     # deployed Jittor placeholder, it must not re-enter the process-wide Torch
@@ -66,14 +74,11 @@ def compose(root_module, core_flags, strict=True, preflight=None):
         if not torch_mode:
             delattr(root_module, _NATIVE_COMPOSITION_ATTR)
 
-    from .shim.control import wrap_flags
-
-    wrap_flags(root_module, core_flags, strict=strict)
-
-    if torch_mode:
-        sys.modules["torch"] = root_module
+    # Compatibility activation must not wrap the process-global native flags
+    # object merely to smuggle in an activation side effect.
+    root_module.flags = core_flags
     publish_loaded_aliases(root_module)
-    report = CompositionReport(torch_reports, {}, aliases)
+    report = CompositionReport(torch_reports, integrations, aliases)
     root_module._compat_preflight_result = preflight
     root_module._compat_composition_report = report
     return report

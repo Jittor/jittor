@@ -9,7 +9,9 @@ _PUBLIC = {
     "NativeExtension": ("jittor.compat.shim.discovery", "NativeExtension"),
     "scan_extension_dirs": ("jittor.compat.shim.discovery", "scan_extension_dirs"),
     "build_extension_dirs": ("jittor.compat.shim.build", "build_extension_dirs"),
-    "enable": ("jittor.compat.shim.runtime", "enable"),
+    "activate": ("jittor.compat.shim.runtime", "activate"),
+    "activation_status": ("jittor.compat.shim.runtime", "activation_status"),
+    "enable": ("jittor.compat.shim.runtime", "activate"),
 }
 
 __all__ = sorted(_PUBLIC)

@@ -48,10 +48,11 @@ mechanism while leaving each patch outside core.
 
 Plain `import jittor as jt` retains native Jittor contracts and does not publish
 Jittor as the top-level `torch` module. Torch compatibility is activated by an
-explicit shim/deployed entry point, an entry script that selects
-`import jittor as torch`, or the historical `jittor.torch_compat` import. The
-installer is idempotent, but activation is process-wide because the two modes
-necessarily differ on class-level APIs such as `Var.data`.
+explicit `jittor.compat.shim.activate()` call, `JITTOR_TORCH_SHIM=1`, the
+deployed `torch` entry point, or the historical `jittor.torch_compat` import.
+Merely spelling a local alias as `import jittor as torch` does not activate the
+shim. The installer is idempotent, but activation is process-wide because the
+two modes necessarily differ on class-level APIs such as `Var.data`.
 
 Native and compatibility tests therefore run in separate processes. A native
 test must not rely on a Torch wrapper installed by another collected test, and a
