@@ -62,8 +62,6 @@ void SetitemOp::infer_shape() {
     // shape return to use
     StackVector<> out_shape;
     ((GetitemOp*)this)->infer_slices(i_to_vs, i_to_o, out_shape);
-    if (!out_shape.size()) out_shape.push_back(1);
-
     // get broadcast mask of set value
     auto data_shape = data->shape;
     auto data_dim = data_shape.size();
@@ -86,8 +84,8 @@ void SetitemOp::infer_shape() {
     for (int i=0; i<nin; i++) {
         auto& vid = i_to_vs[i];
         auto& oid = i_to_o[i];
-        auto os = out_shape[oid];
         if (oid>=0) {
+            auto os = out_shape[oid];
             if (vid==-1 && i && i_to_vs[i-1]<0 
                 && ((bmask>>oid)&1) == ((bmask>>(oid-1))&1)) 
                 // same broadcast condition with prev dim
@@ -139,7 +137,7 @@ VarPtr SetitemOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     if (op == ns_void) {
         if (v_index == 0) {
             float32 number = 0;
-            VarPtr zero = make_array(&number, 1, ns_float32);
+            VarPtr zero = make_array(&number, {}, ns_float32);
             return make_setitem(dout, VarSlices(vs, true), zero, ns_void);
         } else {
             return make_getitem(dout, VarSlices(vs, true));

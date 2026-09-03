@@ -395,8 +395,8 @@ void GetitemOp::infer_shape() {
     }
     first_oid_of_var = fov;
 
-    if (!out_shape.size()) out_shape.push_back(1);
     out->set_shape(out_shape.to_nano_vector());
+    if (!out_shape.size()) out->set_flag(VarFlags::_is_scalar);
 
     this->i_to_vs = i_to_vs.to_nano_vector();
     this->i_to_o = i_to_o.to_nano_vector();

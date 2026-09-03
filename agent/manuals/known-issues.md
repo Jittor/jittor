@@ -151,19 +151,6 @@ framework defects.
 - Review/expiry condition: pass the remaining dtype matrix on real NPU and the
   complete matrix on real ROCm, then remove this entry
 
-## KI-SHAPE-001: reductions do not produce 0-D scalar tensors
-
-- Severity: Medium
-- Status: Accepted current representation divergence
-- Owner: tensor-shape and compatibility maintainers
-- Evidence: [`test_no_zero_d_scalar`](../../tests/compiler/test_kernel_traps.py)
-- Symptom: a full reduction produces shape `(1,)`, which can introduce an extra
-  dimension when stacked or composed with scalar-oriented code
-- Workaround: use `.item()` for a Python scalar or reshape explicitly when the
-  surrounding tensor contract requires a particular rank
-- Review/expiry condition: keep the regression and compatibility adapters until
-  a separately reviewed core scalar representation exists
-
 ## KI-DTYPE-002: implicit array construction narrows 64-bit NumPy values
 
 - Severity: High

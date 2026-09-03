@@ -55,7 +55,7 @@ ArgsortOp::ArgsortOp(Var* x, int dim, bool descending, NanoString dtype)
                 m *= tranpose1->shape[i];
             }
             int n = tranpose1->shape[dims - 1];
-            auto one = make_array(&n, 1, ns_int32);
+            auto one = make_array(&n, {}, ns_int32);
             auto offsets1 = make_index({m+1}, 0, ns_int32);
             auto offsets = make_binary(one, offsets1, ns_multiply);
             auto var = cub_argsort(tranpose1, indexes, offsets, descending, dtype);

@@ -321,13 +321,8 @@ void ReduceOp::infer_shape() {
         } else
             yshape.push_back(x->shape[i]);
     }
-    if (!yshape.size()) {
-        yshape.push_back(1);
-        // change last bit to 1, last dim should keep dim
-        keepdims_mask |= 1;
-    }
     y->set_shape(yshape);
-    if (yshape.size() == 1 && y->num == 1)
+    if (yshape.size() == 0)
         y->set_flag(VarFlags::_is_scalar);
 }
 

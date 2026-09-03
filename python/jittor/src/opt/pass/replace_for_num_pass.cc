@@ -44,19 +44,32 @@ void ReplaceForNumPass::run() {
         Op* op;
         Var* var;
         pm->oc->get_op_var_by_name(def, op_id, opvar_id, op, var);
-        auto new_code = OpCompiler::precompile(
-            {
-                {"DIM", S(var->shape.size())},
-                {"op_id", S(op_id)},
-                {"def", def},
-                {"loop_index", loop_index},
-            } ,
+        string new_code;
+        if (var->shape.size()) {
+            new_code = OpCompiler::precompile(
+                {
+                    {"DIM", S(var->shape.size())},
+                    {"op_id", S(op_id)},
+                    {"def", def},
+                    {"loop_index", loop_index},
+                },
                 "@for(di,0,DIM, op@op_id@@_index_t @def@@shape@di = @def->shape[@di];)\n"
                 "op@op_id@@_index_t @def@@stride@{DIM-1} = 1;\n"
                 "@for(di,DIM-2,-1,-1, auto @def@@stride@di = @def@@stride@{di+1} * @def@@shape@{di+1};)\n"
                 "@for(di,0,DIM, for (op@op_id@@_index_t @loop_index@di=0; @loop_index@di<@def@@shape@di; @loop_index@di++))\n"
-                "{ op@op_id@@_index_t @loop_index = @for(di,0,DIM, + @loop_index@di * @def@@stride@di); }"
-        );
+                "{ op@op_id@@_index_t @loop_index = @for(di,0,DIM, + @loop_index@di * @def@@stride@di); }");
+        } else {
+            // A scalar still executes once. Give the kernel a synthetic loop
+            // dimension without adding that dimension to the tensor shape.
+            string type = "op"+S(op_id)+"_index_t ";
+            string shape0 = def+"shape0";
+            string stride0 = def+"stride0";
+            string loop0 = loop_index+"0";
+            new_code = type+shape0+" = "+def+"->num;\n"+
+                type+stride0+" = 1;\n"+
+                "for ("+type+loop0+"=0; "+loop0+"<"+shape0+"; "+loop0+"++)\n"+
+                "{ "+type+loop_index+" = "+loop0+"; }";
+        }
         KernelIR new_ir(new_code);
         ASSERT(new_ir.children.size()>=2 &&
             new_ir.children.back()->type == KernelIRType::loop &&

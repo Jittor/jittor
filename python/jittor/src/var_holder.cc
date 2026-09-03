@@ -301,9 +301,6 @@ ArrayArgs VarHolder::fetch_sync() {
         if (save_mem || _HAS_CUDA)
             migrate_to_cpu(var, exe.allocator);
     }
-    // this will casuse save wrong.
-    // if (var->flag(VarFlags::_is_scalar))
-    //     return {var->mem_ptr, {}, var->dtype()};
     return {var->mem_ptr, var->shape, var->dtype()};
 }
 

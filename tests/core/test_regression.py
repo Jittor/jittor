@@ -32,7 +32,7 @@ F = nn.functional
 
 def _scalar(a):
     """python float from a jittor Var / numpy array (jittor has no 0-d scalar, so a
-    reduced value is shape (1,) and ``float()`` of it is rejected by numpy)."""
+    reduced value is a zero-dimensional array accepted by ``float()``)."""
     if isinstance(a, jt.Var):
         a = a.numpy()
     return float(np.asarray(a).reshape(-1)[0])

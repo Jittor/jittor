@@ -92,24 +92,17 @@ ArrayOp::ArrayOp(PyObject* obj) {
     // union can live on this frame -- it must not be shared with any other
     // conversion that might run in between.
     tmp_data_t scalar;
-    // Whether this Var came from a *scalar object* -- a python number or a
-    // zero-dimensional numpy value -- as opposed to merely having one
-    // element. See the _is_scalar assignment below.
-    bool from_scalar_object = false;
     if (PyFloat_CheckExact(obj)) {
         scalar.f32 = PyFloat_AS_DOUBLE(obj);
-        args = {&scalar, 1, ns_float32};
-        from_scalar_object = true;
+        args = {&scalar, {}, ns_float32};
     } else
     if (PyLong_CheckExact(obj)) {
         scalar.i32 = PyLong_AsLong(obj);
-        args = {&scalar, 1, ns_int32};
-        from_scalar_object = true;
+        args = {&scalar, {}, ns_int32};
     } else
     if (PyBool_Check(obj)) {
         scalar.i8 = obj == Py_True;
-        args = {&scalar, 1, ns_bool};
-        from_scalar_object = true;
+        args = {&scalar, {}, ns_bool};
     } else
     if (Py_TYPE(obj) == &PyjtVarHolder.ht_type) {
         auto ptr = GET_RAW_PTR(VarHolder, obj);
@@ -126,12 +119,8 @@ ArrayOp::ArrayOp(PyObject* obj) {
         auto arr = (PyArray_Proxy*)obj;
         if (arr->nd)
             args.shape = NanoVector::make(arr->dimensions, arr->nd);
-        else {
-            // zero-dimensional: np.float32(1e8), np.array(5). A scalar that
-            // happens to carry a numpy dtype, not a one-element tensor.
-            args.shape.push_back(1);
-            from_scalar_object = true;
-        }
+        // A zero-dimensional NumPy value keeps the empty shape it arrived
+        // with; one stored element and one tensor dimension are independent.
         args.dtype = get_type_str(arr);
         if (is_c_style(arr)) {
             args.ptr = arr->data;
@@ -167,7 +156,7 @@ ArrayOp::ArrayOp(PyObject* obj) {
     NanoVector shape = args.shape;
     output = create_output(shape, args.dtype);
     int64 size = output->size;
-    if (shape.size() == 1 && shape[0] == 1) {
+    if (output->num == 1) {
         output->set_flag(VarFlags::_force_fuse);
         // _is_scalar means "a scalar, which does not take part in dtype
         // promotion" (see binary_dtype_infer and tests/core/test_scalar_flag)
@@ -183,14 +172,10 @@ ArrayOp::ArrayOp(PyObject* obj) {
         // decided by the length -- and op.cc's own comment already said a real
         // one-element tensor must not be swept in.
         //
-        // Provenance, then: a python number or a zero-dimensional numpy value
-        // is a scalar; `np.uint8([200])` is a tensor with one element.
-        // _force_fuse stays length-based -- folding a one-element constant
-        // into the kernel is about size, not about where it came from.
-        if (from_scalar_object)
-            output->set_flag(VarFlags::_is_scalar);
         set_type(OpType::element);
     }
+    if (shape.size() == 0)
+        output->set_flag(VarFlags::_is_scalar);
     void* host_ptr = nullptr;
     #ifdef HAS_CUDA
     // Fused scalar values are emitted inside generated kernels on both backends.

@@ -78,11 +78,12 @@ DECLARE_FLAG(int, use_cuda_host_allocator);
 ArrayOp::ArrayOp(ArrayArgs&& args) {
     output = create_output(args.shape, args.dtype);
     NanoVector shape = output->shape;
-    if (shape.size() == 1 && shape[0] == 1) {
+    if (output->num == 1) {
         output->set_flag(VarFlags::_force_fuse);
-        output->set_flag(VarFlags::_is_scalar);
         set_type(OpType::element);
     }
+    if (shape.size() == 0)
+        output->set_flag(VarFlags::_is_scalar);
     #ifdef HAS_CUDA
     // Fused scalar values are emitted inside generated kernels on both backends.
     if (use_cuda && output->flag(VarFlags::_force_fuse))

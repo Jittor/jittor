@@ -354,9 +354,6 @@ struct VarHolder {
             migrate_to_cpu(var, exe.allocator);
             #endif
         }
-        // this will cause state_dict only has one element
-        // if (var->flag(VarFlags::_is_scalar))
-        //     return {this, var->mem_ptr, {}, var->dtype()};
         return {this, var->mem_ptr, var->shape, var->dtype()};
     }
     

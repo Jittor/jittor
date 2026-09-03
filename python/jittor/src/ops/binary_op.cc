@@ -608,7 +608,7 @@ VarPtr BinaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
             auto d = make_binary(dout, y, ns_multiply);
             // auto ones = make_number(1, dout);
             int number = 1;
-            auto ones = make_array(&number, 1, ns_int32);
+            auto ones = make_array(&number, {}, ns_int32);
             auto y_1 = make_binary(y, ones, ns_subtract);
             auto x_y_1 = make_binary(x, y_1, ns_pow);
             return make_binary(d, x_y_1, ns_multiply);

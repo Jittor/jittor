@@ -195,14 +195,14 @@ class TestTwoScalarsPromoteBothWaysTheSame(unittest.TestCase):
         for x, y in ((a, b), (b, a)):
             z = x + y
             self.assertEqual(str(z.dtype), "int16")
-            self.assertEqual(int(z.numpy()[0]), 201)
+            self.assertEqual(int(z.item()), 201)
 
     def test_uint32_and_int32_scalars(self):
         a, b = _scalar("uint32", 2 ** 31), _scalar("int32", 1)
         for x, y in ((a, b), (b, a)):
             z = x + y
             self.assertEqual(str(z.dtype), "int64")
-            self.assertEqual(int(z.numpy()[0]), 2 ** 31 + 1)
+            self.assertEqual(int(z.item()), 2 ** 31 + 1)
 
     def test_same_width_same_signedness_is_unchanged(self):
         a, b = _scalar("int16", 3), _scalar("int16", 4)

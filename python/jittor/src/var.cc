@@ -136,7 +136,6 @@ int64 Var::numel() {
     }
     size = num * dsize();
     if (negtive) num = -num;
-    if (shape.size() == 0) {shape.push_back(1);}
     return num;
 }
 

@@ -34,7 +34,7 @@ Python from the operand dtype names before any kernel runs):
 Pinning dtypes: ``jt.array(x)`` silently narrows int64->int32 and float64->float32,
 so every fixed-width tensor is built with ``jt.array(a, dtype=...)`` (which jittor
 honours via ``auto_convert_64_to_32=0``). Values are read via ``.numpy()`` because
-jittor has no 0-d scalar (a reduced value is shape ``(1,)``).
+jittor scalar tensors are zero-dimensional (a reduced value has shape ``()``).
 
 Run::  python -m pytest tests/core/test_type_system.py
        python tools/run_test_suite.py --session torch -- -k type_system

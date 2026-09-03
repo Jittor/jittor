@@ -104,7 +104,7 @@ Var* Op::create_output(NanoVector shape, NanoString dtype) {
 
 // A pending Var marked _is_scalar is torch's CPU scalar: it has no data
 // anywhere yet, and it is the `2` in `x * 2`, the `1` a gradient starts from,
-// or a broadcast/unary of one (array_op.cc sets the flag on a shape-[1]
+// or a broadcast/unary of one (array_op.cc sets the flag on a rank-zero
 // source; broadcast_to_op.cc and unary_op.cc carry it forward). Such a value
 // follows the operand it meets instead of forcing a device error.
 //

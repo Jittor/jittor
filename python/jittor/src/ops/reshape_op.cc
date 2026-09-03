@@ -21,7 +21,6 @@ ReshapeOp::ReshapeOp(Var* x, NanoVector shape) : x(x), shape(shape) {
     set_flag(OpFlags::_cuda);
     set_flag(OpFlags::_manual_set_vnbb);
     y = create_output(nullptr, x->dtype());
-    ASSERT(shape.size() > 0) << "input target shape of reshape can't be empty.";
 }
 
 VarPtr ReshapeOp::grad(Var* out, Var* dout, Var* v, int v_index) {

@@ -67,7 +67,7 @@ class TestCore(unittest.TestCase):
         for a in data:
             assert sum(jt.array(a).data) == 6
         assert np.all(jt.array(np.int32([1,2,3])[::-1]).data == [3,2,1])
-        assert jt.array(1).data.shape == (1,)
+        assert jt.array(1).data.shape == ()
         
     def test_matmul_op(self):
         a = np.array([[1, 0], [0, 1]]).astype("float32")

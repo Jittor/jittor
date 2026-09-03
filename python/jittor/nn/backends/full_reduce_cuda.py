@@ -86,7 +86,7 @@ def _full_sum_cuda_cls(dtype, divisor):
                 CHECK(0 == cudaGetLastError());
                 """,
             )
-            return out
+            return out.reshape(())
 
         def grad(self, grad_out):
             # d(sum)/dx is one everywhere, so the incoming scalar broadcasts; a
@@ -100,7 +100,7 @@ def _full_sum_cuda_cls(dtype, divisor):
 
 
 def _full_reduce_cuda(x, divisor=None):
-    """Fold ``x`` to a one-element Var, or ``None`` when this path does not apply.
+    """Fold ``x`` to a scalar Var, or ``None`` when this path does not apply.
 
     ``divisor`` turns the sum into a mean; pass the element count.
     """

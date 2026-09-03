@@ -28,7 +28,7 @@ MpiReduceOp::MpiReduceOp(Var* x, NanoString op, int root) : x(x), op(op), root(r
     }
     if (op == ns_mean) {
         auto var = make_mpi_reduce(x, ns_add, root);
-        var = make_binary(var, make_array(&mpi_world_size, 1, ns_int32), ns_divide);
+        var = make_binary(var, make_array(&mpi_world_size, {}, ns_int32), ns_divide);
         forward(var);
         return;
     }

@@ -136,8 +136,11 @@ void LoopVarAnalyzePass::run() {
             loop_vars.reserve(loop_var->shape.size());
             string vname = pm->oc->get_name_by_op_var(op, loop_var);
             ASSERT(vname!="__fill__");
-            for (uint j=0; j<loop_var->shape.size(); j++)
-                loop_vars.emplace_back(vname+"->shape["+S(j)+"]");
+            if (!loop_var->shape.size())
+                loop_vars.emplace_back(vname+"->num");
+            else
+                for (uint j=0; j<loop_var->shape.size(); j++)
+                    loop_vars.emplace_back(vname+"->shape["+S(j)+"]");
             break;
         }
     }
@@ -190,6 +193,9 @@ void LoopVarAnalyzePass::run() {
             for (uint o=0; o<opi->outputs().size(); o++)
                 vnames.push_back(pm->oc->get_name_by_op_output(opi, o));
         }
+        if (!ndim && loop_var_names.size())
+            for (auto& vname : vnames)
+                replace_vars.emplace_back(vname+"shape0", loop_var_names[0]);
         for (uint j=0; j<ndim; j++)
             if (!(mask>>j&1) && j<loop_var_names.size()) {
                 for (auto& vname : vnames) {

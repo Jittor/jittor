@@ -80,15 +80,13 @@ class TestEmptyTensors(_EdgeBase):
         self._for_devices(body)
 
     def test_sum_all_empty_is_zero_scalar(self):
-        # Full reduction of a wholly-empty tensor. numpy gives a 0-d 0.0; jittor has
-        # NO 0-d scalar -> it returns shape (1,). Encode the jittor convention by
-        # atleast_1d-ing the numpy reference (documented divergence, not a bug).
+        # Full reduction of a wholly-empty tensor is a 0-d additive identity.
         x_np = np.zeros((0,), dtype="float32")
 
         def body(dev):
             x = jt.array(x_np)
-            got = x.sum()                        # jittor: shape (1,), value [0.0]
-            ref = np.atleast_1d(x_np.sum())      # numpy 0-d 0.0 -> (1,) for shape parity
+            got = x.sum()
+            ref = x_np.sum()
             self.assertEqual(got, ref, msg=f"sum-all of empty [{dev}]")
         self._for_devices(body)
 
@@ -108,7 +106,7 @@ class TestEmptyTensors(_EdgeBase):
                     self.assertTrue(np.isnan(ref).all(),
                                     f"numpy reference [{dev}/{dtype}]")
                 full = jt.array(np.zeros((0,), dtype=dtype)).mean().numpy()
-                self.assertEqual(full.shape, (1,))
+                self.assertEqual(full.shape, ())
                 self.assertTrue(np.isnan(full).all(), f"mean-all empty [{dev}/{dtype}]")
         self._for_devices(body)
 
@@ -403,14 +401,13 @@ class TestDegenerateRanks(_EdgeBase):
     """
 
     def test_single_element_reduce(self):
-        # A 1-element tensor reduced to a scalar. jittor keeps it (1,) (no 0-d), so
-        # atleast_1d the numpy (1,)->() reduction for shape parity. Value is identity.
+        # A 1-element tensor reduced to a scalar keeps the value and drops rank.
         x_np = np.array([3.5], dtype="float32")
 
         def body(dev):
             x = jt.array(x_np)
             got = x.sum()
-            ref = np.atleast_1d(x_np.sum())    # numpy () 3.5 -> (1,) [3.5]
+            ref = x_np.sum()
             self.assertEqual(got, ref, msg=f"single-element reduce [{dev}]")
         self._for_devices(body)
 

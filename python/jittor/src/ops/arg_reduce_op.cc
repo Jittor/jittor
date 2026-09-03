@@ -54,7 +54,7 @@ ArgReduceOp::ArgReduceOp(Var* x, NanoString op, int dim, bool keepdims)
                 m *= tranpose1->shape[i];
             }
             int n = tranpose1->shape[dims - 1];
-            auto one = make_array(&n, 1, ns_int32);
+            auto one = make_array(&n, {}, ns_int32);
             auto offsets1 = make_index({m+1}, 0, ns_int32);
             auto offsets = make_binary(one, offsets1, ns_multiply);
             auto var = cub_arg_reduce(tranpose1, offsets, op, keepdims);
@@ -153,10 +153,12 @@ void ArgReduceOp::infer_shape() {
             shape.push_back(x->shape[i]);
         }
     }
-    if (shape.size() == 0)
-        shape.push_back(1);
     y->set_shape(shape);
     y_key->set_shape(shape);
+    if (shape.size() == 0) {
+        y->set_flag(VarFlags::_is_scalar);
+        y_key->set_flag(VarFlags::_is_scalar);
+    }
 }
 
 void ArgReduceOp::jit_prepare(JK& jk) {

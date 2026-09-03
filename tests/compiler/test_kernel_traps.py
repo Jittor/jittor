@@ -112,13 +112,11 @@ class TestKernelTraps(JittorTestCase):
                 with self.assertRaises(IndexError):
                     jt.index_select(jt.array(x), dim, indices)
 
-    # -- §4-B#1: jittor has no 0-d scalar -- a full reduce is shape (1,) not () ----
-    def test_no_zero_d_scalar(self):
+    # -- §4-B#1: a full reduction is a true zero-dimensional scalar ----------
+    def test_zero_d_scalar(self):
         x = jt.array(np.random.RandomState(1).randn(3, 4).astype("float32"))
-        # This is an inherent jittor convention; lock it so code relying on it (and
-        # the references that np.atleast_1d to match it) stay consistent.
-        self.assertEqual(tuple(jt.sum(x).shape), (1,), msg="full-reduce sum is (1,)")
-        self.assertEqual(tuple(x.mean().shape), (1,), msg="full-reduce mean is (1,)")
+        self.assertEqual(tuple(jt.sum(x).shape), (), msg="full-reduce sum is scalar")
+        self.assertEqual(tuple(x.mean().shape), (), msg="full-reduce mean is scalar")
 
     # -- the float64 narrowing trap (found while building this suite) --------------
     def test_jt_array_float64_narrowing(self):
