@@ -34,7 +34,7 @@ static inline cudnnRNNMode_t rnn_string_to_rnn_mode(string mode) {
     CUDNN_STATUS_NOT_SUPPORTED with no operand named. Every RNN path (the op,
     shape inference, the weight-offset query) goes through this. */
 static inline cudnnDataType_t cudnn_rnn_dtype(NanoString dtype) {
-    ASSERT(dtype == ns_float32 || dtype == ns_float64 || dtype == ns_float16)
+    USER_CHECK(dtype == ns_float32 || dtype == ns_float64 || dtype == ns_float16)
         << "cudnn rnn supports float16, float32 and float64, got" << dtype;
     return cudnn_dtype(dtype);
 }
