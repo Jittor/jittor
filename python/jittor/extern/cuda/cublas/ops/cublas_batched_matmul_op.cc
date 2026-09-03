@@ -27,12 +27,12 @@ static auto make_cublas_batched_matmul = op_constructor<VarPtr, Var*, Var*, bool
 CublasBatchedMatmulOp::CublasBatchedMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     : a(a), b(b), trans_a(trans_a), trans_b(trans_b) {
     // TODO: support int8 * int8
-    ASSERT(a->dtype().is_float() && b->dtype().is_float())
+    USER_CHECK(a->dtype().is_float() && b->dtype().is_float())
         << "cublas batched matmul requires floating-point inputs (float16/float32/float64),"
            " but got a:" << a->dtype() << "b:" << b->dtype()
         << "(complex64 batched matmul routes through the reindex path in nn.matmul instead).";
     // TODO: support diffrent input type
-    ASSERT(a->dtype().dsize() == b->dtype().dsize())
+    USER_CHECK(a->dtype().dsize() == b->dtype().dsize())
         << "matmul inputs must have the same dtype, but got a:" << a->dtype() << "b:" << b->dtype();
     c = create_output(nullptr, a->dtype());
     set_flag(OpFlags::_cpu, 0);
