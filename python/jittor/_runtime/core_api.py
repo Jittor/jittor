@@ -2516,58 +2516,38 @@ Returns a handle that removes both halves.
                 childs.append((k,v))
         return childs
 
-    def float64(self):
-        '''convert all parameters to float64'''
-        self._amp_level = 0
-        for p in self.parameters():
-            if p.dtype.is_float():
-                p.assign(p.float64())
+    def _convert_float_vars(self, method):
+        '''Convert every floating-point parameter and buffer in this module.'''
+        seen = set()
+        values = self._named_vars("parameters") + self._named_vars("buffers")
+        for _, value in values:
+            if id(value) in seen:
+                continue
+            seen.add(id(value))
+            if value.dtype.is_float():
+                value.assign(getattr(value, method)())
         return self
+
+    def float64(self):
+        '''convert all floating-point parameters and buffers to float64'''
+        self._amp_level = 0
+        return self._convert_float_vars("float64")
 
     def float32(self):
-        '''convert all parameters to float32'''
+        '''convert all floating-point parameters and buffers to float32'''
         self._amp_level = 0
-        for p in self.parameters():
-            if p.dtype.is_float():
-                p.assign(p.float32())
-        return self
+        return self._convert_float_vars("float32")
 
     def float16(self):
-        '''convert all parameters to float16'''
-        # self._amp_level = 3 if flags.th_mode else 4
-        # amp level better set globally
-        self._amp_level = -1
-        if self._amp_level >= 0:
-            cls = self.__class__
-            cls.__call__ = cls.__half_call__
-        for p in self.parameters():
-            if p.dtype.is_float():
-                p.assign(p.float16())
-        return self
+        '''convert all floating-point parameters and buffers to float16'''
+        return self._convert_float_vars("float16")
 
     def bfloat16(self):
-        '''convert all parameters to bfloat16'''
-        # self._amp_level = 3 if flags.th_mode else 4
-        # amp level better set globally
-        self._amp_level = -1
-        if self._amp_level >= 0:
-            cls = self.__class__
-            cls.__call__ = cls.__half_call__
-        for p in self.parameters():
-            if p.dtype.is_float():
-                p.assign(p.bfloat16())
-        return self
-
-    def __half_call__(self, *args, **kw):
-        amp_level = getattr(self, "_amp_level", -1)
-        if amp_level >= 0:
-            with flag_scope(amp_level=amp_level):
-                return self.execute(*args, **kw)
-        else:
-            return self.execute(*args, **kw)
+        '''convert all floating-point parameters and buffers to bfloat16'''
+        return self._convert_float_vars("bfloat16")
 
     def half(self):
-        '''convert all parameters to float16'''
+        '''convert all floating-point parameters and buffers to float16'''
         return self.float16()
 
     def float_auto(self):
