@@ -12,6 +12,7 @@ import jittor as jt
 import numpy as np
 from jittor import compile_extern
 from _helpers.logs import find_log_with_re
+from _helpers.assertions import expect_error
 import copy
 if jt.has_cuda:
     from jittor.compile_extern import cublas_ops, cudnn_ops, cub_ops
@@ -54,6 +55,17 @@ def check_backward(shape, op, dim, keepdims):
     assert np.allclose((gs * x).data, (gs * gs).data)
 
 class TestArgReduceOp(unittest.TestCase):
+    @unittest.skipIf(cub_ops==None, "Not use cub, Skip")
+    @jt.flag_scope(use_cuda=1)
+    def test_cub_rejects_non_int32_offsets(self):
+        x = jt.ones((2, 2), dtype="float32")
+        offsets = jt.array([0, 2, 4], dtype="int64")
+        expect_error(
+            lambda: cub_ops.cub_arg_reduce(x, offsets, "maximum", False),
+            exc_type=RuntimeError,
+            match="offsets->dtype",
+        )
+
     def test_invalid_dimension_is_a_catchable_user_error(self):
         x = jt.array([[1.0, 2.0]])
         with self.assertRaisesRegex(RuntimeError, "Invalid dim for arg_reduce"):

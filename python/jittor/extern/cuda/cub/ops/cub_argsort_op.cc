@@ -24,7 +24,7 @@ CubArgsortOp::CubArgsortOp(Var* x, Var* indexes, Var* offsets, bool descending, 
     : x(x), indexes(indexes), offsets(offsets), descending(descending) {
     set_flag(OpFlags::_cpu, 0);
     set_flag(OpFlags::_cuda, 1);
-    ASSERT(offsets->dtype()==ns_int32);
+    USER_CHECK(offsets->dtype()==ns_int32);
     y = create_output(nullptr, dtype);
     y_key = create_output(nullptr, x->dtype());
     set_flag(OpFlags::_manual_set_vnbb);

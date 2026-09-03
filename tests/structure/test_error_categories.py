@@ -122,6 +122,11 @@ MIGRATED_CUB_CUMSUM_RANK_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cub/ops/cub_cumsum_op.cc": 1,
 }
 
+MIGRATED_CUB_OFFSETS_DTYPE_USER_BOUNDARIES = {
+    "python/jittor/extern/cuda/cub/ops/cub_argsort_op.cc": 1,
+    "python/jittor/extern/cuda/cub/ops/cub_arg_reduce_op.cc": 1,
+}
+
 MIGRATED_FUSED_ADAMW_CARDINALITY_BOUNDARIES = {
     "python/jittor/src/ops/fused_adamw_op.cc": 4,
 }
@@ -373,6 +378,17 @@ def test_cub_cumsum_rank_user_boundary_migration_is_explicit_and_bounded():
         "python/jittor/extern/cuda/cub/ops/cub_cumsum_op.cc"]
     negative = (ROOT / "tests/backends/cuda/test_cub_cumsum.py").read_text()
     assert "test_rank_three_is_rejected_clearly" in negative
+
+
+def test_cub_offsets_dtype_user_boundary_migration_is_explicit_and_bounded():
+    for relative, expected in MIGRATED_CUB_OFFSETS_DTYPE_USER_BOUNDARIES.items():
+        source = (ROOT / relative).read_text()
+        actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+        assert actual == expected, (relative, actual, expected)
+    argsort_negative = (ROOT / "tests/ops/test_argsort_op.py").read_text()
+    arg_reduce_negative = (ROOT / "tests/ops/test_arg_reduce_op.py").read_text()
+    assert "test_cub_rejects_non_int32_offsets" in argsort_negative
+    assert "test_cub_rejects_non_int32_offsets" in arg_reduce_negative
 
 
 def test_fused_adamw_cardinality_migration_is_explicit_and_bounded():

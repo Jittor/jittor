@@ -12,6 +12,7 @@ import jittor as jt
 import numpy as np
 from jittor import compile_extern
 from _helpers.logs import find_log_with_re
+from _helpers.assertions import expect_error
 if jt.has_cuda:
     from jittor.compile_extern import cublas_ops, cudnn_ops, cub_ops
 else:
@@ -73,6 +74,18 @@ def check_backward(shape, dim, descending = False):
     assert np.allclose(x.data*2, gs.data)
 
 class TestArgsortOp(unittest.TestCase):
+    @unittest.skipIf(cub_ops==None, "Not use cub, Skip")
+    @jt.flag_scope(use_cuda=1)
+    def test_cub_rejects_non_int32_offsets(self):
+        x = jt.ones((2, 2), dtype="float32")
+        indexes = jt.zeros((2, 2), dtype="int32")
+        offsets = jt.array([0, 2, 4], dtype="int64")
+        expect_error(
+            lambda: cub_ops.cub_argsort(x, indexes, offsets, False, "int32"),
+            exc_type=RuntimeError,
+            match="offsets->dtype",
+        )
+
     def test(self):
         check_argsort([5,5], 0, False)
         check_argsort([5,5], 0, True)
