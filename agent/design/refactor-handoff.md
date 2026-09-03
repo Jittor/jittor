@@ -27,9 +27,9 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；本波审计基线 `04b16fae`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 审计基线 510 个 |
-| 提交里出现过的任务号 | 213 个 |
+| 分支 | `2.0-refactor`；本波审计基线 `c2930ea9`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 审计基线 516 个 |
+| 提交里出现过的任务号 | 214 个 |
 | 看板 | 已合并 **196** / 进行中 **0** / 待领 **74** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
 
@@ -208,14 +208,25 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `bindings` | 2.19 迁 ternary 两处 shape/dim 用户边界，累计 28 处；结构、C++ 语法与 Python 负向节点通过 |
 | `compat` | 7.03 将 `empty_like` 收回 factory owner 并登记 approximate fidelity；身份、metadata、CPU shape/dtype 5 项通过 |
 
+第十六波新增 1 个严格保持待领的 ACL 前置，并完成 1 个测试门禁任务：
+
+| 分区 | 第十六波结果 |
+| --- | --- |
+| `device` | 8.06 将 ternary/SWhere family 接入统一 launcher，保留原异步策略；静态合同 4 项通过，本机无 NPU，仍待其余 family 与 910B3 |
+| `gates` | 10.19 建立 26 项 backend `grad()` inventory，并补 cuDNN 3D forward/dx/dw CPU 对拍；复核发现 HCCL 四项缺 CPU reference/多卡实机，状态保持待领 |
+| `coreops` | 2.13 只读审计确认 Runtime/Context 与 80 个 flags 的全局状态分散在约 30 个 C++ 文件、309 个 Python 消费者，无法本波安全闭环，未改代码 |
+
 ## 6. 下一波起点
 
-按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第十六波先从剩余任务中选择至少一个可
-完整关闭的轻量项；8.06 只允许按 family 迁移，不铺开 65 个尾巴：
+按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第十七波继续优先可独立验证的
+family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
-- `device`：若续做 8.06，只迁第二个最终 owner 明确的 family，并复用 5be5fa15 的 launcher 合同。
-- `bindings`：2.19 只继续精确、可捕获的用户边界 cohort，内部不变量和旧宏不得机械替换。
-- `compat`：7.03 可继续 `empty_like` 最终 owner，但应优先与一个能完整关闭的非兼容层任务并行。
+- `device`：若续做 8.06，只迁下一个最终 owner 明确的 family，并复用 5be5fa15 的 launcher 合同；无 NPU
+  时只做代码组织/静态合同/上机文档，保持待实机。
+- `gates`：10.19 继续补 HCCL/其他硬件 backend 的 CPU reference 或明确硬件-only 合同，不能把 unsupported
+  误标为 CPU 覆盖。
+- `bindings`/`compat`：继续 2.19 用户边界和 7.03 最终 owner family 的窄 cohort；每项先核对最终 owner，
+  不跨域抢改。
 
 Corex 8.14 的正式前置 4.12 尚未满足；ACL/NPU、ROCm、Corex 等本机缺硬件的后端允许先完成代码组织、
 公共接口和迁移文档，不做性能优化，但看板必须保留待实机状态并写清机型、SDK、命令和禁止 CPU fallback
