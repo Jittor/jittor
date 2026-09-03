@@ -36,6 +36,32 @@ struct FusedOp final : Op {
     loop_options_t& get_loop_options_tuned();
     FusedOpContext* context;
 
+    // The batch's fusion verdict, borrowed from the run_sync frame that built
+    // this group: 1 the var has to stay in memory, 0 it may be fused away,
+    // indexed by Node::batch_index. It used to arrive as bit 0 of the same
+    // Node::custom_data int update_ops() packs its own var indices into, which
+    // meant the executor and this op wrote to one field and neither could say
+    // "not classified".
+    const vector<int>* batch_var_fused = nullptr;
+    // The stamp of that batch; a node's batch_index means something only while
+    // Node::batch_stamp matches it.
+    int64 batch_stamp_wanted = 0;
+
+    // A var the batch classified as fusable may be fused away. A var that is
+    // not in the batch -- a multi-output op only one of whose outputs this
+    // execution needs -- has no verdict, and the only safe answer there is
+    // "keep it": materialising a var that could have been fused away costs
+    // memory, dropping one that could not costs the value. The bit-packed
+    // field had no way to say "not classified"; it returned whatever bit 0
+    // happened to hold from an earlier batch (the commented-out block in
+    // load_fused_op is somebody meeting the same case, with a comment that
+    // contradicts its own code).
+    inline bool var_stays_in_memory(Node* v) const {
+        if (!batch_var_fused) return false;
+        if (v->batch_stamp != batch_stamp_wanted) return true;
+        return (*batch_var_fused)[v->batch_index_at(batch_stamp_wanted)] == 1;
+    }
+
     int get_node_id(Node* node);
     int has(Node* node);
     void update_ops();

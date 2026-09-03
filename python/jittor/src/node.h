@@ -252,6 +252,61 @@ struct Node {
     inline bool need_free()
     { return !pending_liveness && (!forward_liveness || !backward_liveness); }
     
+    // Position of this node in the batch Executor::run_sync is currently
+    // planning (its index in that run's `ops` or `all_vars`), and the stamp of
+    // the batch that wrote it.
+    //
+    // Written with set_batch_index() and read with batch_index_at(stamp): the
+    // reader names the batch it believes it is in, and a mismatch is an
+    // assertion rather than another algorithm's number. It used to be
+    // `custom_data` below, which had no owner at all.
+    //
+    // The stamp is its own field rather than `tflag`, which would have been
+    // free. tflag is a shared counter that any traversal may restamp, and one
+    // does, mid-run: MemoryProfiler::check() is called from inside that very
+    // loop and its bfs restamps every node it reaches. Reusing tflag here made
+    // the check fire in exactly the case it exists to catch (task 2.03 is the
+    // general form of that; this field does not wait for it).
+    int64 batch_stamp = 0;
+    int batch_index = 0;
+    inline void set_batch_index(int64 stamp, int index) {
+        batch_stamp = stamp;
+        batch_index = index;
+    }
+    // Out of line on purpose. Spelled as `ASSERT(...) << "..."` inline, the
+    // failure path's code sits in every one of the executor's tight fusion
+    // loops and costs ~0.09 us per op even though it never runs -- measured,
+    // 2.30 ms -> 2.51 ms on a 2400-op graph. A predicted-not-taken branch to a
+    // cold function is the same check for none of that.
+    void batch_index_mismatch(int64 stamp) const;
+    inline int batch_index_at(int64 stamp) const {
+        if (PREDICT_BRANCH_NOT_TAKEN(batch_stamp != stamp))
+            batch_index_mismatch(stamp);
+        return batch_index;
+    }
+
+    // FUSED-OP ONLY. `(var index << 2) | visited << 1`, built by
+    // FusedOp::update_ops() and read by load_fused_op() and the JIT pipeline
+    // behind it. **No traversal may borrow this field.**
+    //
+    // It used to be a general-purpose scratch int that five unrelated
+    // algorithms wrote to -- the executor's batch numbering, grad()'s gradient
+    // var indices, dump_all_graphs()' node numbering, and the two topological
+    // sorts -- with nothing recording whose turn it was. All five keep their
+    // own storage now (misc/node_index.h, and batch_index above), so the
+    // "any two traversals interleaving corrupt each other" defect is gone even
+    // though the field is not.
+    //
+    // This one is different in kind and is why the field survives: it is not a
+    // traversal marker but a mapping that has to stay valid across the whole
+    // JIT pipeline (do_jit_prepare, get_loop_options, the relay manager), so
+    // removing it means giving FusedOp an explicit var->index map and changing
+    // three readers, one of which is tied to the generated code's struct
+    // offsets. That is task 2.24, sequenced after 3.11 because it lands in the
+    // same code.
+    //
+    // tests/structure/test_node_scratch_state.py holds this to one owner; a
+    // comment on its own is what let the previous five in.
     int custom_data;
     int64 tflag = 0;
     int64 id; 

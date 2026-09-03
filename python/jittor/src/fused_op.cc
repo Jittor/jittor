@@ -57,9 +57,10 @@ void FusedOp::update_ops() {
                         loop_options_merged[kv.first] = kv.second;
                 }
             }
-            // bit0 represents can fuse or not
-            if (o->custom_data&1)
-                // this var can not fuse
+            // A var that has to stay in memory is an output of the fused op.
+            // The verdict comes from the batch now; it used to be bit 0 of
+            // o->custom_data, written there by the executor.
+            if (var_stays_in_memory((Node*)o))
                 _outputs.emplace_back((Node*)o, 0);
         }
     }
@@ -79,19 +80,26 @@ void FusedOp::update_ops() {
     LOGvvvv << "set fused output" << outputs();
     
     // var.custom_data
-    // meaning of custom_data&1(input): 1: cannot fuse, 0 can fuse
     // meaning of custom_data&2: visited or not
     // meaning of custom_data>>2: index of vars
-
     // op.custom_data: opid
+    //
+    // Bit 0 used to be the caller's "cannot fuse" verdict, which is why the
+    // reset below was `&= 1` rather than `= 0`: it had to clear this op's two
+    // bits while preserving a third meaning that belonged to somebody else.
+    // The verdict arrives as batch_var_fused now, so this field carries one
+    // thing again -- FusedOp's own numbering, which unlike the traversal
+    // markers that used to share it has to stay valid across the whole JIT
+    // pipeline. Removing it too is task 2.24 (after 3.11: one of its readers
+    // is tied to the generated code's struct offsets).
     for (uint i=0; i<ops.size(); i++) {
         auto opi = ops[i];
         opi->custom_data = i;
         for (Var* i : opi->inputs()) {
-            i->custom_data &= 1;
+            i->custom_data = 0;
         }
         for (Var* o : opi->outputs()) {
-            o->custom_data &= 1;
+            o->custom_data = 0;
         }
     }
     for (Op* opi : ops) {
@@ -110,7 +118,7 @@ void FusedOp::update_ops() {
             if (!(c&2)) {
                 c += 2 + vars.size()*4;
                 // intermediate(can fuse) or output
-                vars.push_back({o, int((c&1)+1)});
+                vars.push_back({o, var_stays_in_memory((Node*)o) ? 2 : 1});
             }
         }
     }
@@ -132,6 +140,11 @@ FusedOp::FusedOp(const FusedOp& other) {
     loop_options = other.loop_options;
     loop_options_origin = other.loop_options_origin;
     context = other.context;
+    // Deliberately not copied: it borrows a vector owned by the run_sync frame
+    // that made `other`, and the copy is only kept for the compiler threads.
+    // Anything that needed the verdict read it in update_ops(), before this.
+    batch_var_fused = nullptr;
+    batch_stamp_wanted = 0;
 }
 
 FusedOp::~FusedOp() {

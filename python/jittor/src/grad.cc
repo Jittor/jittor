@@ -9,6 +9,7 @@
 #include "var.h"
 #include "op.h"
 #include "graph.h"
+#include "misc/node_index.h"
 #include "ops/op_register.h"
 #include "var_holder.h"
 
@@ -152,10 +153,17 @@ vector<VarPtr> grad(
     nt = tflag_count;
     vector<Var*> gvars;
     gvars.reserve(sorted.size());
+    // Position of each gradient var in `gvars`. This used to be written into
+    // Node::custom_data, the per-node int the executor keeps *its* op and var
+    // indices in -- and building the backward ops below re-enters run_sync
+    // (Op::init does, for a vary-shape op), so the two numberings were live at
+    // the same time on the same nodes.
+    NodeIndex gvar_index;
+    gvar_index.reset(sorted.size());
     for (Node* node : sorted)
         if (node->is_var()) {
             Var* v = node->var();
-            v->custom_data = gvars.size();
+            gvar_index[v] = gvars.size();
             gvars.push_back(v);
         }
     LOGvv << "Size of grad vars:" << gvars.size();
@@ -166,7 +174,7 @@ vector<VarPtr> grad(
     for (int i=0; i<targets.size(); i++) {
         Var* var = targets[i];
         target_id[i] = (var->tflag == nt) ?
-            var->custom_data : -1;
+            gvar_index.get(var) : -1;
     }
 
     if (grads.size()) {
@@ -193,19 +201,19 @@ vector<VarPtr> grad(
                 for (Var* out : op->outputs()) {
                     id_buffer.emplace_back(
                         out, 
-                        out->tflag == nt ? out->custom_data : -1);
+                        out->tflag == nt ? gvar_index.get(out) : -1);
                 }
                 for (Var* in : op->inputs()) {
                     id_buffer.emplace_back(
                         in, 
-                        in->tflag == nt ? in->custom_data : -1);
+                        in->tflag == nt ? gvar_index.get(in) : -1);
                 }
             } else {
                 // single var backward
                 for (Var* out : op->outputs()) {
                     id_buffer.emplace_back(
                         out, 
-                        out->tflag == nt ? out->custom_data : -1);
+                        out->tflag == nt ? gvar_index.get(out) : -1);
                 }
             }
         }

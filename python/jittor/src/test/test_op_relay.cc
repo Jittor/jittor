@@ -30,6 +30,14 @@ JIT_TEST(op_register) {
     CHECK(c->input()->name_ex()=="binary.add");
 }
 
+// Mark vars the batch says have to stay in memory, the way run_sync's
+// var_fused does: by position in the batch, not by a bit on the node.
+static void fop_cannot_fuse(vector<int>& var_fused, int64 batch_stamp,
+                            std::initializer_list<Var*> vars) {
+    for (Var* v : vars)
+        var_fused[((Node*)v)->batch_index_at(batch_stamp)] = 1;
+}
+
 JIT_TEST(fused_op_relay_matmul) {
     JK& jk = get_jk();
     VarPtr a({10,10}, "float32");
@@ -41,10 +49,17 @@ JIT_TEST(fused_op_relay_matmul) {
     vector<Node*> s({d->node()}), q;
     vector<Op*> ops;
     bfs_backward(s, q, [&](Node *node) -> bool {
-        node->custom_data=0;
         if (!node->is_var()) ops.push_back(node->op());
         return true;
     });
+    // "a, b, d have to stay in memory" used to be written as bit 0 of each
+    // node's custom_data -- cleared for the whole batch above, then set for
+    // the three -- into the same field update_ops() packs its own indices
+    // into. It is the batch's verdict vector now, indexed the way the executor
+    // indexes it, so stamp the batch the way run_sync does.
+    int64 batch_stamp = ++tflag_count;
+    for (uint i=0; i<q.size(); i++) q[i]->set_batch_index(batch_stamp, i);
+    vector<int> var_fused(q.size(), 0);
     CHECKop(q.size(),==,10);
     CHECKop(ops.size(),==,4);
     for (auto op : ops) op->do_jit_prepare(jk);
@@ -54,8 +69,9 @@ JIT_TEST(fused_op_relay_matmul) {
     context.vrm.set_fused_op(&fop);
     for (uint i=0; i<ops.size(); i++)
         fop.ops.push_back(ops.at(ops.size()-i-1));
-    // a, b, d can not fuse
-    a->custom_data = b->custom_data = d->custom_data = 1;
+    fop.batch_var_fused = &var_fused;
+    fop.batch_stamp_wanted = batch_stamp;
+    fop_cannot_fuse(var_fused, batch_stamp, {a.ptr, b.ptr, d.ptr});
     fop.update_ops();
     context.setup(&fop);
     if (!has_op("mkl_matmul")) return;
@@ -69,11 +85,10 @@ JIT_TEST(fused_op_relay_matmul) {
     for (auto v : is_op_relayed) CHECK(v.first==0 && v.second==0);
 
     // test2
-    for (Node* node : q) node->custom_data = 0;
-    // a, b, d can not fuse
-    a->custom_data = b->custom_data = d->custom_data = 1;
+    for (uint i=0; i<var_fused.size(); i++) var_fused[i] = 0;
+    fop_cannot_fuse(var_fused, batch_stamp, {a.ptr, b.ptr, d.ptr});
     // broadcast(a) can not fused
-    fop.vars[1].var->custom_data = 1;
+    fop_cannot_fuse(var_fused, batch_stamp, {fop.vars[1].var});
     fop.update_ops();
     context.setup(&fop);
     is_op_relayed = context.vrm.get_op_relay_info({1});

@@ -92,6 +92,15 @@ static void run_liveness_queue(const char* caller) {
     liveness_queue_front = 0;
 }
 
+// The cold half of Node::batch_index_at (node.h): a batch index read while the
+// node carries a different batch's stamp is somebody else's number, which is
+// exactly what the shared `custom_data` used to hand out silently.
+void Node::batch_index_mismatch(int64 stamp) const {
+    LOGf << "batch_index of" << this << "was written by batch" << batch_stamp
+        << "but read as batch" << stamp >> ". A traversal is reading another"
+        << "traversal's numbering.";
+}
+
 void Node::free() {
     CHECK_EXIST;
     // already scheduled for deletion in this free_buffer round

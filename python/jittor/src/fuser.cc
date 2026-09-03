@@ -23,8 +23,11 @@ namespace jittor {
 //   * "this batch"     -- a node belongs to the batch iff node->tflag == tt.
 //                         Nodes outside the batch are boundaries: they neither
 //                         fuse nor propagate.
-//   * op->custom_data  -- index of the op in `ops` (set by the caller).
-//   * var->custom_data -- index of the var in `vars` (set by the caller).
+//   * batch_index_at(tt) -- position of the op in `ops` or of the var in
+//                         `vars`, stamped by the caller with this batch's tt.
+//                         It used to be `node->custom_data`, a per-node int
+//                         shared with every other traversal in the tree, so a
+//                         traversal running in between renumbered the graph.
 //   * "control edge"   -- an edge whose output_t::index is negative. Those are
 //                         created by VarHolder::_add_dependency and by the
 //                         setitem graph optimizer to order two ops without
@@ -66,7 +69,7 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
         if (relation == 1) {
             // vars before start_var_num are the batch's inputs: they already
             // exist in memory and are never fused away
-            if (var->custom_data < start_var_num) return false;
+            if (var->batch_index_at(tt) < start_var_num) return false;
             if (op->type() == OpType::other || other->type() == OpType::other) return false;
             // a single element only pays for a kernel if it feeds a broadcast
             if (var->num <= 1 && op->type() != OpType::broadcast) return false;
@@ -104,7 +107,7 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
                     auto sibling = forward ? std::next(self) : std::prev(self);
                     Op* other = sibling->node->op();
                     if (other && other->tflag == tt &&
-                        other->custom_data != op->custom_data &&
+                        other->batch_index_at(tt) != op->batch_index_at(tt) &&
                         edge_fusable(var, other, op, 0))
                         func(var, other, 0, self->index < 0 || sibling->index < 0);
                 }
@@ -160,7 +163,7 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
             // outputs of a sink op leave the batch, so they must materialize
             for (auto var : op->outputs()) {
                 if (var->tflag != tt) continue;
-                var_fused[var->custom_data] = 1;
+                var_fused[var->batch_index_at(tt)] = 1;
             }
         }
     }
@@ -173,7 +176,7 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
         int oi = queue[head++];
         Op* op = ops[oi];
         for_each_neighbor(op, 0, 0, [&](Var* var, Op* other, int relation, int is_control_dep) {
-            int other_id = other->custom_data;
+            int other_id = other->batch_index_at(tt);
             int cut = 0;
             if (!--unvisited_consumers[other_id]) queue.push_back(other_id);
             if (is_control_dep) return;
@@ -189,7 +192,7 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
         int root = find_father(i);
         for_each_neighbor(op, 1, 1, [&](Var* var, Op* other, int relation, int is_control_dep) {
             if (is_control_dep) return;
-            int other_id = other->custom_data;
+            int other_id = other->batch_index_at(tt);
             if (fuse_level[other_id] == fuse_level[i]) {
                 int other_root = find_father(other_id);
                 father[other_root] = root;
@@ -216,7 +219,7 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
         int all_consumers_fusable = 1;
         int all_consumers_reduce = 1;
         Op* producer = var->input();
-        int root = find_father(producer->custom_data);
+        int root = find_father(producer->batch_index_at(tt));
         for (auto o : var->_outputs) {
             if (o.index < 0) continue;  // control edge, carries no data
             auto consumer = o.node->op();
@@ -226,7 +229,7 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
                 if (consumer->type() != OpType::reduce) all_consumers_reduce = 0;
                 // producer and consumer landed in different fused ops, so the
                 // var has to cross a kernel boundary
-                if (find_father(consumer->custom_data) != root)
+                if (find_father(consumer->batch_index_at(tt)) != root)
                     var_fused[i] = 1;
             }
         }

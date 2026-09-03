@@ -7,6 +7,7 @@
 #include <sstream>
 #include <algorithm>
 #include "graph.h"
+#include "misc/node_index.h"
 #include "var_holder.h"
 #include "var.h"
 
@@ -126,8 +127,14 @@ DumpGraphs dump_all_graphs() {
     bfs_both(queue, [](Node*){return true;});
     std::sort(queue.begin(), queue.end(),
         [](Node* a, Node* b) { return a->id < b->id;});
+    // Position of each node in `queue`, kept here rather than in
+    // Node::custom_data: dump_all_graphs is a debug entry point and can be
+    // called at any moment, including from a breakpoint inside an execution
+    // that is keeping its own numbering in that slot.
+    NodeIndex index;
+    index.reset(queue.size());
     for (uint i=0; i<queue.size(); i++)
-        queue[i]->custom_data = i;
+        index[queue[i]] = i;
     for (Node* node : queue) {
         graphs.nodes_info.emplace_back(ss_convert(node));
         
@@ -135,13 +142,13 @@ DumpGraphs dump_all_graphs() {
         auto& inputs = graphs.inputs.back();
         inputs.reserve(node->_inputs.size());
         for (auto i : node->_inputs)
-            inputs.push_back(i.node->custom_data);
+            inputs.push_back(index.get(i.node));
 
         graphs.outputs.emplace_back();
         auto& outputs = graphs.outputs.back();
         outputs.reserve(node->_outputs.size());
         for (auto o : node->_outputs)
-            outputs.push_back(o.node->custom_data);
+            outputs.push_back(index.get(o.node));
     }
     return graphs;
 }

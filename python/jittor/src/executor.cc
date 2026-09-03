@@ -128,7 +128,7 @@ static inline void propergate_needed_flags(FusedOp& fused_op) {
         auto op = ops[i];
         for (auto o : op->outputs())
             if (o->flag(VarFlags::_needed_by_backward) &&
-                !(o->custom_data&1)) {
+                !fused_op.var_stays_in_memory((Node*)o)) {
                 has_need = 1;
             }
         if (has_need)
@@ -307,13 +307,17 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     vector<Var*> all_vars;
     ops.reserve(op_num);
     all_vars.reserve(bfs_q.size() - op_num);
+    // The batch numbering lives in Node::batch_index, stamped with `tt`. It
+    // used to be written into Node::custom_data -- the same int FusedOp packs
+    // its var indices into and that grad(), dump_all_graphs() and the
+    // topological sorts also used, so a traversal starting while these were
+    // live renumbered the graph under the executor.
     for (Node* node : bfs_q)
         if (!node->is_var()) {
-            node->custom_data = ops.size();
+            node->set_batch_index(tt, ops.size());
             ops.push_back(node->op());
         } else {
-            // set can't fuse flag to false
-            node->custom_data = all_vars.size();
+            node->set_batch_index(tt, all_vars.size());
             all_vars.push_back(node->var());
         }
     int var_num = all_vars.size();
@@ -344,7 +348,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             if (op->type()==OpType::broadcast) st="broadcast";
             if (op->type()==OpType::element) st="element";
 
-            LOGvvv << "id:" << ops[i]->custom_data << " type:" << 
+            LOGvvv << "id:" << ops[i]->batch_index_at(tt) << " type:" << 
             st << " addr:" << op;
             for (Var* v : op->inputs()) {
                 Op* next_op = v->input();
@@ -353,7 +357,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
                     LOGvvv << "input:" << v;
                     continue;
                 }
-                LOGvvv << "input:" << next_op->custom_data << " addr:" << next_op;
+                LOGvvv << "input:" << next_op->batch_index_at(tt) << " addr:" << next_op;
             }
             LOGvvv << "";
         }
@@ -395,7 +399,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
                     if (v->tflag != tt) continue;
                     Op* opi = v->input();
                     // if those two ops are not fused
-                    if (father[opi->custom_data] != root) {
+                    if (father[opi->batch_index_at(tt)] != root) {
                         deps[root]++;
                     }
                 }
@@ -429,7 +433,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
                         for (Op* op2 : v->outputs())
                         {
                             if (op2->tflag != tt) continue;
-                            int op2_id = father[op2->custom_data];
+                            int op2_id = father[op2->batch_index_at(tt)];
                             // continue if those two ops are fused
                             if (op2_id == op_id) continue;
                             deps[op2_id]--;
@@ -476,12 +480,12 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
                     if (v->tflag != tt) continue;
                     Op* opi = v->input();
                     // if those two ops are fused
-                    int opid = opi->custom_data;
+                    int opid = opi->batch_index_at(tt);
                     auto fopid = father[opid];
                     if (fopid == root)
                         deps[i]++;
                     else if (shared_id[opid] != root) {
-                        auto& vf = var_fused[v->custom_data];
+                        auto& vf = var_fused[v->batch_index_at(tt)];
                         // var_fused = 1 cannot share input op
                         // TODO: check this input op's output var all can be shared
                         if (vf == 1)
@@ -504,7 +508,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
                 Op* op = ops[id];
                 for (Var* v : op->inputs()) {
                     if (v->tflag != tt) continue;
-                    int vi = v->custom_data;
+                    int vi = v->batch_index_at(tt);
                     if (var_fused[vi] == 1)
                         continue;
                     // if weak share, cut off
@@ -517,7 +521,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
                         }
                     }
                     Op* opi = v->input();
-                    int opid = opi->custom_data;
+                    int opid = opi->batch_index_at(tt);
                     int& dep = deps[opid];
                     if (shared_id[opid] != root) {
                         shared_id[opid] = root;
@@ -537,11 +541,11 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
                 Op* op = ops[id];
                 for (Var* v : op->inputs()) {
                     if (v->tflag != tt) continue;
-                    int vi = v->custom_data;
+                    int vi = v->batch_index_at(tt);
                     if (var_fused[vi] == 1)
                         continue;
                     Op* opi = v->input();
-                    int opid = opi->custom_data;
+                    int opid = opi->batch_index_at(tt);
                     int& dep = deps[opid];
                     dep --;
                     if (dep == 0)
@@ -559,7 +563,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
                     if (v->tflag == tt)
                         for (Op* op2 : v->outputs()) {
                             if (op2->tflag != tt) continue;
-                            int op2_id = op2->custom_data;
+                            int op2_id = op2->batch_index_at(tt);
                             // continue if those two ops are not fused
                             if (father[op2_id] != root) continue;
                             deps[op2_id]--;
@@ -576,10 +580,12 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             range[rid] = fuse_ops.size();
         }
     }
-    for (int i=0; i<var_num; i++) {
-        all_vars[i]->custom_data = var_fused[i]==1;
-    }
+    // The fusion verdict goes to FusedOp as the vector it already is, instead
+    // of being written into bit 0 of every var's custom_data for update_ops()
+    // to read back out of the field it packs its own indices into.
     FusedOp fused_op;
+    fused_op.batch_var_fused = &var_fused;
+    fused_op.batch_stamp_wanted = tt;
 
     // compile all ops, prevent compiling during running
     parallel_compile_all_ops(queue, range, fused_op, fuse_ops, ops, tt);
