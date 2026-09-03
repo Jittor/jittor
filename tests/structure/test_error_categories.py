@@ -38,6 +38,10 @@ MIGRATED_SETITEM_SHAPE_BOUNDARIES = {
     "python/jittor/src/ops/setitem_op.cc": 2,
 }
 
+MIGRATED_GETITEM_SHAPE_BOUNDARIES = {
+    "python/jittor/src/ops/getitem_op.cc": 3,
+}
+
 MIGRATED_TERNARY_SHAPE_BOUNDARIES = {
     "python/jittor/src/ops/ternary_op.cc": 2,
 }
@@ -108,6 +112,13 @@ def test_setitem_shape_migration_is_explicit_and_bounded():
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_SETITEM_SHAPE_BOUNDARIES[
         "python/jittor/src/ops/setitem_op.cc"]
+
+
+def test_getitem_shape_migration_is_explicit_and_bounded():
+    source = (ROOT / "python/jittor/src/ops/getitem_op.cc").read_text()
+    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    assert actual == MIGRATED_GETITEM_SHAPE_BOUNDARIES[
+        "python/jittor/src/ops/getitem_op.cc"]
 
 
 def test_public_ternary_shape_migration_is_explicit_and_bounded():

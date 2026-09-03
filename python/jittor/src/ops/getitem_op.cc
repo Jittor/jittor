@@ -105,7 +105,7 @@ void GetitemOp::infer_slices(
             for (int j=0; j<niv; j++) {
                 auto iv_shape_j = iv_shape[niv-j-1];
                 auto& out_shape_j = out_shape[first_oid_of_var+var_dim-j-1];
-                CHECK(out_shape_j == iv_shape_j || out_shape_j == 1 || iv_shape_j == 1) << "Shape not match " >> out_shape_j >> "!="
+                USER_CHECK(out_shape_j == iv_shape_j || out_shape_j == 1 || iv_shape_j == 1) << "Shape not match " >> out_shape_j >> "!="
                     >> iv_shape_j << "data shape:" << in_shape <<
                     "slice shape:" << iv_shape;
                 if (out_shape_j == 1)
@@ -140,7 +140,7 @@ void GetitemOp::infer_slices(
             auto in_shape_i = in_shape[i];
             auto& v = s.slice.start;
             if (v<0) v += in_shape_i;
-            CHECK(v>=0 && v<in_shape_i) << "slice overflow, " << v << "not in [0,">>in_shape_i>>")";
+            USER_CHECK(v>=0 && v<in_shape_i) << "slice overflow, " << v << "not in [0,">>in_shape_i>>")";
         } else 
         if (s.is_str()) {
             i_to_vs[i] = vid++;
@@ -179,7 +179,7 @@ void GetitemOp::infer_slices(
         if (s.is_none()) {
             out_shape.push_back(1);
         } else
-            CHECK(s.is_ellipsis()) << "Too many slices" << vs << "shape:" << in->shape;
+            USER_CHECK(s.is_ellipsis()) << "Too many slices" << vs << "shape:" << in->shape;
     }
 }
 
