@@ -461,7 +461,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 10.03 | optional/rocm/mpi/nccl 四个 session 排上 runner 或在文档… | 已合并 | gates | a1668aca。CUDA 可由维护者添加 `ci:cuda` 标签触发 PR 真机门禁；当前 runner 能力不覆盖 optional 依赖、ROCm、MPI 与双卡 NCCL，四项在测试支持矩阵中明确为 Manual，结构规则防文档/调度漂移。相关结构 22 passed |
 | 10.04 | 假绿清理 | 已合并 | gates | 74cace5f。6 个首行 `return` 改严格预期失败并登记，4 个 `skipIf(True)` 清零；两条内存契约用短循环 RSS 上限进入 slow 层，负向自测证明真实保留会失败；AST 全树规则禁止复发。内存 2 passed，规则/负向 9 passed，旧禁用项 3 xfailed、4 prerequisite-skipped |
 | 10.05 | 按 skip 原因分桶统计并在 CI summary 输出，对「本环境应能跑却 skip」设阈值 | 待领 | | |
-| 10.06 | `expect_error` 带 `exc_type` 与 `match` | 待领 | | |
+| 10.06 | `expect_error` 带 `exc_type` 与 `match` | 待领 | | 6753062d 已合入 1/N：helper 支持并校验 `exc_type`/`match`、返回捕获异常，四条负向自测修前全失败、修后 4 passed；仍需迁移 36 个旧调用并增加 OpInfo `error_inputs_func`/覆盖率门禁 |
 | 10.07 | Unary/Binary/Reduction 用 `OpDTypes.supported` | 已合并 | gates | 4af5fbcd。TestCommon 覆盖每个 OpInfo 声明的全部 dtype，BF16 输入保持原生 bfloat16；两条修前契约各失败，修后输入生成 7 passed |
 | 10.08 | 已复现缺陷用 `xfail` 而非 `skip` | 待领 | | |
 | 10.09 | 公开 API 与 OpInfo 差集作为 structure 门禁一项 | 待领 | | |
