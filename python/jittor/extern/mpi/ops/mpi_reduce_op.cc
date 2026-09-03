@@ -82,6 +82,22 @@ void MpiReduceOp::jit_run() {
     index_t num = y->num;
     MPI_CHECK(MPI_Reduce(xp, yp, num,
         mpi_dtype(x->dtype()), mpi_add_op(x->dtype()), root, MPI_COMM_WORLD));
+    // Only `root` receives the reduction; MPI ignores recvbuf everywhere else,
+    // so on any other rank this output holds nothing. It is still allocated at
+    // full size and filled deterministically, on purpose:
+    //
+    // The obvious saving -- give non-root ranks a smaller output, or alias the
+    // input -- would make the graph's shape or alias structure depend on the
+    // rank. That is the defect 8.11's other half removes from mpi_broadcast,
+    // and it is far more expensive than the buffer: ranks that do not share a
+    // graph fuse differently, and the symptom then surfaces nowhere near the
+    // cause. So every rank keeps the same shape and the same allocation, and
+    // "non-root output is meaningless" is a contract stated here and in the
+    // Python docstring rather than a shape you have to notice.
+    //
+    // Zero rather than left-over memory: reading it is a caller bug either
+    // way, but a deterministic value makes that bug reproduce identically
+    // instead of depending on what the allocator handed back.
     if (root != mpi_world_rank)
         for (index_t i=0; i<num; i++) yp[i] = 0;
 }

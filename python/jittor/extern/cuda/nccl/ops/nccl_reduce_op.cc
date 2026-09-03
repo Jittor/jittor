@@ -46,6 +46,10 @@ void NcclReduceOp::jit_run() {
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
     checkCudaErrors(ncclReduce(xp, yp, y->num, nccl_dtype(x->dtype()), ncclSum, root, comm, 0));
+    // See mpi_reduce_op.cc for why the non-root output stays full-size and
+    // deterministic rather than being shrunk or aliased away: every rank must
+    // run the same graph. Its contents are meaningless by definition; zero is
+    // a filler, not a value.
     if (root != mpi_world_rank)
         checkCudaErrors(cudaMemsetAsync(yp, 0, y->size));
 }

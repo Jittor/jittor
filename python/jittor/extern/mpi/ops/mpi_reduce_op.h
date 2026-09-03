@@ -25,6 +25,15 @@ struct MpiReduceOp : Op {
     * x: variable to be reduced.
     * op: 'sum' or 'add' means sum all [x], 'mean' means average all [x]. Default: 'add'.
     * root: ID of MPI node to output. Default: 0.
+
+    **The output is meaningful only on [root].** Reduce sends the result to one
+    rank; MPI ignores the receive buffer on every other one. This operator
+    still returns a full-size output on all ranks, filled with zeros off root,
+    so that every rank runs the same graph -- a shape or an alias that varied
+    by rank would make the ranks fuse differently, and such a defect surfaces
+    nowhere near its cause. Zero is a deterministic filler, not a value: reading
+    a non-root output is a bug in the caller, and it is a bug that reproduces
+    the same way every time rather than depending on the allocator.
      */
     MpiReduceOp(Var* x, NanoString op=ns_add, int root=0);
     void infer_shape() override;

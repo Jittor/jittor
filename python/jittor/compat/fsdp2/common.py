@@ -52,16 +52,51 @@ def _param_numel(v):
     return int(np.prod(tuple(int(x) for x in v.shape)))
 
 
+#: Where "auto" switches flat sharding off, and how to move it.
+#:
+#: Flat sharding removes several tiny NCCL launches and was consistently faster
+#: on 2 ranks; on 4 ranks it helps small models but the extra flatten/slice
+#: work slows medium-size cases. Both numbers come from one set of measurements
+#: on one machine, so they are defaults rather than facts: a different
+#: interconnect or a different model size moves them, and before this they were
+#: literals in the middle of a boolean with no way to try another value short
+#: of editing the source. Overriding either variable does not reach for
+#: JITTOR_FSDP2_FLAT=1/0, which still forces the answer outright.
+_FLAT_MAX_WORLD_SIZE = 2
+_FLAT_MAX_NUMEL = 1_000_000
+
+
+def _flat_threshold(name, default):
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        raise ValueError(
+            "{}={!r} is not an integer. It is the parameter count (or rank "
+            "count) at which FSDP2 stops using flat sharding; leave it unset "
+            "for {}.".format(name, raw, default))
+
+
 def _fsdp2_flat_enabled(world_size, total_numel):
+    """Whether to shard this module flat, and why.
+
+    ``JITTOR_FSDP2_FLAT`` forces the answer (1/0). Left at "auto", the two
+    thresholds above decide, and each is itself overridable -- the point of
+    8.11 is that a policy tuned on one machine should be reachable from the
+    environment on another, not that these particular numbers are right.
+    """
     value = os.environ.get("JITTOR_FSDP2_FLAT", "auto").lower()
     if value in ("0", "false", "no"):
         return False
     if value in ("1", "true", "yes"):
         return True
-    # Flat sharding removes several tiny NCCL launches and is consistently
-    # faster on 2 ranks. On 4 ranks it helps small models but the extra
-    # flatten/slice work slows medium-size cases, so keep the legacy path there.
-    return int(world_size) <= 2 or int(total_numel) <= 1_000_000
+    max_world = _flat_threshold("JITTOR_FSDP2_FLAT_MAX_WORLD_SIZE",
+                                _FLAT_MAX_WORLD_SIZE)
+    max_numel = _flat_threshold("JITTOR_FSDP2_FLAT_MAX_NUMEL",
+                                _FLAT_MAX_NUMEL)
+    return int(world_size) <= max_world or int(total_numel) <= max_numel
 
 
 # The rank/world queries and the two collectives are re-exported above for the

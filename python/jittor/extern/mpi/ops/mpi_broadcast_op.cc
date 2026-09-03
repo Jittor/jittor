@@ -12,6 +12,7 @@
 #include "ops/op_register.h"
 #include "utils/str_utils.h"
 #include "misc/cuda_flags.h"
+#include <cstring>
 
 namespace jittor {
 
@@ -46,8 +47,6 @@ MpiBroadcastOp::MpiBroadcastOp(Var* x, int root) : x(x), root(root) {
 
 void MpiBroadcastOp::infer_shape() {
     y->set_shape(x->shape);
-    if (root == mpi_world_rank)
-        y->share_with(x);
 }
 
 VarPtr MpiBroadcastOp::grad(Var* out, Var* dout, Var* v, int v_index) {
@@ -66,7 +65,23 @@ void MpiBroadcastOp::jit_run() {
     // (see misc/collective_dtype.h); the copy this replaces mapped int64 to
     // the 16-byte MAXLOC pair MPI_DOUBLE_INT, so a broadcast of n int64
     // elements wrote 2n of them.
+    //
+    // The root's copy is what `infer_shape` used to avoid with
+    // `y->share_with(x)`: y reused x's buffer, so MPI_Bcast sent straight out
+    // of it. That saved a memcpy and cost graph isomorphism -- the output was
+    // an alias of the input on one rank and a fresh allocation on every other,
+    // so the ranks were no longer running the same graph, and the aliasing
+    // decision lived in shape inference, which has no business making it. A
+    // graph that differs by rank is the kind of defect whose symptom appears
+    // nowhere near its cause (rank 0 fuses differently from rank 1), and
+    // 8.11's acceptance is that the ranks agree. One host memcpy on the root
+    // is the price; this operator's JIT is CPU-only (CUDA goes to
+    // nccl_broadcast), and the callers are parameter broadcast at startup and
+    // the backward of mpi_reduce.
+    auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
+    if (root == mpi_world_rank)
+        std::memcpy(yp, xp, y->size);
     MPI_CHECK(MPI_Bcast(yp, y->num, mpi_dtype(y->dtype()), root, MPI_COMM_WORLD));
 }
 #endif // JIT_cpu
