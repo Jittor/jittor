@@ -408,6 +408,9 @@ The ACL MatMul family uses the shared launcher while retaining its synchronous
 execution policy. This source-only migration still requires the Ascend 910B3
 probe and is not hardware validation on this host.
 
+The ACL Expand family uses the shared launcher and intentionally retains its
+historical asynchronous execution policy.
+
 These flags are diagnostic and slow execution. Remove them after locating the
 failing operation. For general JIT and memory diagnostics, see
 {doc}`debugging`.

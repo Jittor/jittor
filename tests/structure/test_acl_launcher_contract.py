@@ -10,6 +10,7 @@ TERNARY_SOURCE = ROOT / "python/jittor/extern/acl/aclops/ternary_op_acl.cc"
 REDUCE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/reduce_op_acl.cc"
 CUMSUM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/cumsum_op_acl.cc"
 MATMUL_SOURCE = ROOT / "python/jittor/extern/acl/aclops/matmul_op_acl.cc"
+EXPAND_SOURCE = ROOT / "python/jittor/extern/acl/aclops/expand_op_acl.cc"
 
 
 def test_acl_launcher_tail_has_one_auditable_contract():
@@ -68,5 +69,13 @@ def test_matmul_family_uses_launcher_and_keeps_sync_policy():
     source = MATMUL_SOURCE.read_text()
     assert "cube_math_type" in source
     assert "launch(ret, aclnnMatmul, true);" in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
+
+
+def test_expand_family_uses_launcher_and_keeps_async_policy():
+    source = EXPAND_SOURCE.read_text()
+    assert "launch(ret, aclnnExpand, false);" in source
+    assert "checkRet(ret);" not in source
     assert "mallocWorkSpace(workspaceSize)" not in source
     assert "syncRun();" not in source

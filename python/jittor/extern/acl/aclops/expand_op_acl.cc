@@ -41,15 +41,7 @@ namespace jittor
         size = aclCreateIntArray(&outputShapes[0][0], outputShapes[0].size());
         ret = aclnnExpandGetWorkspaceSize(inputTensors[0], size, outputTensors[0], &workspaceSize, &executor);
 
-        checkRet(ret);
-
-        if (workspaceSize > 0)
-        {
-            mallocWorkSpace(workspaceSize);
-        }
-
-        ret = aclnnExpand(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnExpand failed. ERROR: %d\n", name.c_str(), ret); return);
+        launch(ret, aclnnExpand, false);
 
         aclDestroyIntArray(size);
 
