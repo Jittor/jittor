@@ -5,19 +5,38 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 import os
+from collections import namedtuple
 from jittor_utils import env_or_try_find
 import jittor_utils
 import ctypes
 import glob
-import jittor.compiler as compiler
 
 has_corex = 0
 cc_flags = ""
-compiler.has_corex = has_corex
 
-def install():
+
+CorexDiscovery = namedtuple(
+    "CorexDiscovery", "home compiler_path available reason")
+
+
+def discover(corex_home=None):
+    """Inspect a Corex installation without importing or changing Jittor state."""
+    home = corex_home or os.environ.get("COREX_HOME") or "/usr/local/corex"
+    home = os.path.abspath(os.path.expanduser(home))
+    compiler_path = os.path.join(home, "bin", "clang++")
+    if not os.path.isdir(home):
+        return CorexDiscovery(home, compiler_path, False, "COREX_HOME is absent")
+    if not os.path.isfile(compiler_path):
+        return CorexDiscovery(
+            home, compiler_path, False, "Corex compiler is missing: %s" % compiler_path)
+    return CorexDiscovery(home, compiler_path, True, "ready")
+
+def install(corex_home=None):
     import jittor.compiler as compiler
     global has_corex, cc_flags
+    discovery = discover(corex_home)
+    if not discovery.available:
+        raise RuntimeError(discovery.reason)
     acl_compiler_home = os.path.dirname(__file__)
     cc_files = sorted(glob.glob(acl_compiler_home+"/**/*.cc", recursive=True))
     jittor_utils.LOG.i("COREX detected")
@@ -65,8 +84,7 @@ string process_acl(const string& src, const string& name, const map<string,strin
 
     has_corex = 1
     compiler.has_corex = has_corex
-    corex_home = "/usr/local/corex"
-    compiler.nvcc_path = corex_home + "/bin/clang++"
+    compiler.nvcc_path = discovery.compiler_path
     compiler.cc_path = compiler.nvcc_path
     compiler.cc_flags = compiler.cc_flags.replace("-fopenmp", "")
     # compiler.nvcc_flags = cc_flags_to_corex(compiler.cc_flags)
@@ -82,14 +100,17 @@ def install_extern():
 
 
 def check():
+    import jittor.compiler as compiler
     global has_corex, cc_flags
-    if os.path.isdir("/usr/local/corex"):
+    discovery = discover()
+    if discovery.available:
         try:
-            install()
+            install(discovery.home)
         except Exception as e:
             jittor_utils.LOG.w(f"load COREX failed, exception: {e}")
             has_corex = 0
     if not has_corex: return False
+    compiler.has_corex = has_corex
     return True
 
 def post_process():
