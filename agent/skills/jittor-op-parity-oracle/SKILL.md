@@ -372,3 +372,125 @@ finally:
 `jt.in_mpi` 赋值会在 `jittor.__dict__` 里留下一个条目，**永久遮蔽那个访问器**，
 后面所有读到的都是这个陈旧副本（6.B15 的提交说明写明了这一点）。
 
+
+## 14. 「某个后端上这个算子是错的」——别信注释里的原因，自己按 dtype 扫一遍
+
+多后端算子里最常见的注释是「X 后端只对 Y 支持得对，其余绕开」。这类注释**记录的是当时
+观察到的症状，不是原因**，而绕行代码往往比缺陷本身危害更大（`unique` 的绕行把 float
+输入送进了一个会截断排序键的 CPU 内核）。
+
+**做法：把 Python 层的分派器整段旁路掉，让每个 dtype 都真的走进那个后端内核，扫一遍。**
+
+```python
+import inspect
+src = inspect.getsource(jt.misc.unique)
+head = src.index("    if jt.flags.use_cuda and")     # 分派器开头
+tail = src.index("    temp_shape = None")            # 真正的实现开头
+ns = {"jt": jt}
+exec(compile(src[:head] + src[tail:], "<inner>", "exec"), ns)
+inner = ns["unique"]                                  # 没有分派器的同一个函数
+for dtype in ("int8","int32","int64","float16","float32","float64"):
+    for use_cuda in (0, 1):
+        ...
+```
+
+扫出来的形状本身就是诊断：
+
+| 观察到的形状 | 通常的原因 |
+|---|---|
+| **恰好只有一个 dtype 对**，且那个 dtype 与索引类型相同 | 某个存索引的输出 var 用了 `输入.dtype`，kernel 往里 memcpy 原始 int32 字节；输入是 int32 时重解释是恒等的 |
+| 只有偶数长度对，或只有 4 字节 dtype 对 | 手工在一块内存里切出来的 scratch 缓冲区对不齐（`(T*)(p + n)`）。改成两次独立 `alloc`，让分配器各自对齐 |
+| 大值错、小值对 | 中间量被截断（`int lhs = @in(a,i)`），或计数用了 `int` |
+
+第一行是 2026-09-03 的 `unique` 实测：注释说「cub 只对 32 位整数键排得对」，
+实际 cub 没问题，错的是 `jt.code` 的 `output` 用了 `input_sorted.dtype`。
+
+## 15. CUDA 的异步错误会落在无辜的用例上
+
+`invalid configuration argument`、`misaligned address` 这类错误在**下一个同步点**才报，
+所以 pytest 指的那个用例常常不是肇事者，而且它之后**整个进程的 CUDA 上下文都废了**，
+于是同一次运行里后面所有 CUDA 用例一起变红（2026-09-03 一次 5 文件运行里 19 个失败，
+真正的原因只有一个）。
+
+**定位**：
+1. 看失败用例**前面**那一个（同一个类里按方法名字典序，跨类按文件里的定义顺序）。
+2. 有嫌疑的用例后面加 `jt.sync_all()`，让它在自己那里失败。
+3. 一个文件一个进程重跑（`pytest 单个文件`），级联就消失了，只剩真失败。
+
+**最常见的两个源头**：
+- **零大小张量导致 0 个 block 的启动**。`BlockScanKernel<<<batch_num, ...>>>`，
+  `batch_num` 来自 `shape[0]`；空输入压成 2 维就是 0 行。空输入要在 Python 层挡掉，
+  不要让它进 kernel。
+- **手工切分的 scratch 缓冲区不对齐**（见上一节）。
+
+顺带：`.numpy()` 只同步**那一个** var 的图，不足以把异步错误逼出来；`jt.sync_all()` 才是。
+
+## 16. 依赖 NaN/Inf 语义的表达式不能写成普通 Var 运算
+
+jittor 的融合内核用 `-Ofast` 编译（`compiler.py` 里 `kernel_opt_flags += " -Ofast "`），
+`-Ofast` 蕴含 `-ffast-math`、进而 `-ffinite-math-only`——**编译器可以假设不存在 NaN 和 Inf**，
+于是 `x >= 0 || x <= 0`、`|x| == inf` 这类写法允许被折叠成常量。
+
+所以：
+- 任何 `isnan/isinf/isfinite/nan_to_num` 一类的语义**必须**进一个显式压低优化级别的
+  `jt.code`。`misc/tensor_ops.py` 的 `_simple_for` 就是干这个的
+  （`flag_scope(compile_options={"FLAGS: -O2 ":1})`）；
+- 拿「用原始比较写一遍」当对拍基准也不行——它在 CPU/CUDA 上不可信。
+  能对拍的只有 **dtype 策略**和**普通值上的答案**，把 NaN/±Inf 那几个元素排除掉，
+  并在测试里写明排除的理由（这本身就是「两种写法必须分开」的证据）。
+- CUDA JIT 还带 `--use_fast_math`（`compiler.py` 的 `nvcc_flags`），同样的道理。
+
+## 17. 写 dtype 相关测试时的三个 jittor 陷阱
+
+1. `jt.array(np.zeros(4, "float64"))` **静默变 float32**，int64 变 int32。
+   要 `jt.array(v, dtype="float64")`——否则「1e300 被判成 inf」这类用例根本构造不出来。
+2. `jt.array(v, dtype="bfloat16")` 直接 **TypeError**（numpy 没有 bfloat16）。
+   要 `jt.array(np.zeros(shape, "float32")).cast("bfloat16")`。
+3. **`jt.misc._foo` 不是自动可见的。** `python/jittor/misc/__init__.py` 是个 facade，
+   下划线开头的名字要写进那份**显式再导出清单**才存在；而 `tensor_ops.py` 内部正是靠
+   `jt.misc._foo` 做晚绑定的。新加私有 helper 忘了加清单，报的是
+   `AttributeError: module 'jittor.misc' has no attribute '_foo'`，而且只在真正调用时才炸。
+   `tests/structure/test_misc_structure.py` 只校验**非**下划线的公开面，挡不住这个。
+
+## 18. 索引 dtype 的取证：dtype 本身就是那个错答案
+
+「索引应该是 int64」听起来像形式问题，直到你把它接到算术上。jittor 按**字节宽度**提升，
+所以 `index * scalar` 停在索引自己的 dtype 里：
+
+```python
+idx = mask.nonzero().reshape((-1,))     # 四个元素，值 0..3
+(idx * 1000000000).numpy()
+# int32 索引 -> [0, 1000000000, 2000000000, -1294967296]
+# int64 索引 -> [0, 1000000000, 2000000000,  3000000000]
+```
+
+四个元素就能证明，不需要 2^31 个。**凡是「某个 dtype 应该更宽」的任务，都先找这种
+「小输入 + 大标量」的算术，它比构造大张量便宜几个数量级。**
+
+真需要跨过 2^31 时（比如证明一条 CUDA 快路径的 `int` 索引会回绕）：挑 int8 输出，
+2^31 个元素只要 2.1 GiB，24G 卡上 6.5 秒。这类用例加 `@pytest.mark.manual`
+（`JITTOR_TEST_MANUAL=1` 才跑），并在 docstring 里写清楚显存开销和实测耗时。
+
+## 19. 工作树里混了两个任务时，怎么拆成一个任务一个提交（禁止 stash）
+
+会话中断或者一时手快，很容易在同一个文件里叠了两个任务的改动。`git stash` 是禁止的
+（所有 worktree 共用一个栈）。可行的做法是**按 hunk 建索引**：
+
+```bash
+git diff -- path/to/file.py > all.patch
+python3 split_hunks.py all.patch out          # 按 hunk 内容分类，见下
+git apply --cached out.taskA.patch            # 只把 A 的 hunk 放进索引
+git add <A 的其它文件>
+git commit -m "[A] ..."                       # 工作区仍然是全量，不受影响
+git apply --cached out.taskB.patch
+git commit -m "[B] ..."
+```
+
+分类脚本按 hunk 正文里出现的标识符归类，并且**要求每个 hunk 恰好命中一类**，
+命中 0 类或 2 类就报错退出——这条断言比分类规则本身重要，它挡住「某个 hunk 被悄悄
+漏掉或进错提交」。
+
+最后一步必须校验：`diff <(git show :path/to/file.py) 你实际测过的那份`，
+确认最终索引与跑绿的那份逐字节相同。
+
+预防办法还是 brief 第 9 节那条：**一条任务做完就提交**，别让两个任务的 WIP 同时留在树里。
