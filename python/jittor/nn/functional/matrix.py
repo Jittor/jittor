@@ -29,6 +29,53 @@ def _broadcast_batch_dims(a, b):
     return a, b
 
 
+#: Every accelerated relay a matrix product can be sent to, and what it takes.
+#:
+#: | relay                     | device | dtypes                             |
+#: | ------------------------- | ------ | ---------------------------------- |
+#: | cublas_matmul (2-D)       | CUDA   | both operands the same float dtype |
+#: | cublas_batched_matmul     | CUDA   | both operands the same float dtype |
+#: | mkl_batched_matmul        | CPU    | both operands float32              |
+#: | broadcast * mul + reduce  | any    | everything else, complex included  |
+#:
+#: Four call sites used to spell the cuBLAS row four different ways -- see
+#: ``_cublas_can_take``.
+
+
+def _same_floating_dtype(a, b):
+    """Both operands carry the *same* floating-point dtype.
+
+    This replaces ``"float" in str(dtype)``. The substring is true of bfloat16
+    and float64 as well as float32 -- which happens to be right, cuBLAS takes
+    all three -- but it is a test on how a dtype is *spelled*, so it also made
+    the ``"complex" not in str(dtype)`` tests beside it look load-bearing when
+    they can never fire: ``is_float()`` is already false for complex64.
+    ``is_float()`` is a flag the dtype carries.
+
+    Same dtype, not same width, and that distinction is the reachable one: the
+    C++ relays only assert that the two widths agree, float16 and bfloat16 both
+    being two bytes, while the kernel is instantiated from ``a``'s dtype alone.
+    """
+    return a.dtype == b.dtype and a.dtype.is_float()
+
+
+def _cublas_can_take(a, b):
+    """Whether the cuBLAS relays can compute this product. One predicate.
+
+    The 2-D path tested both operands for complex, the batched path tested only
+    ``a`` (harmless: it had already required the two dtypes equal), and
+    ``bmm_transpose`` tested nothing at all -- so it handed integer and complex
+    operands straight to the relay, which asserts on them, while exactly the
+    same product written as ``matmul(a, b.transpose(...))`` computed fine on the
+    generic path. Same mathematics, two spellings, one of them a crash.
+    """
+    return bool(
+        jt.flags.use_cuda
+        and jt.compile_extern.cublas_ops
+        and _same_floating_dtype(a, b)
+    )
+
+
 def matmul_transpose(a, b):
     """
     returns a * b^T
@@ -39,15 +86,7 @@ def matmul_transpose(a, b):
         cc = jt.nn.matmul_transpose(aa, b)
         return cc.reshape(a.shape[:-1] + (-1,))
     assert len(a.shape) == 2 and len(b.shape) == 2
-    a_dtype, b_dtype = str(a.dtype), str(b.dtype)
-    if (
-        jt.flags.use_cuda
-        and jt.compile_extern.cublas_ops
-        and a_dtype == b_dtype
-        and "float" in a_dtype
-        and "complex" not in a_dtype
-        and "complex" not in b_dtype
-    ):
+    if _cublas_can_take(a, b):
         return jt.compile_extern.cublas_ops.cublas_matmul(a, b, 0, 1)
 
     shape = list(a.shape)[:-1] + list(b.shape)
@@ -62,12 +101,17 @@ def bmm_transpose(a, b):
     """
     returns a * b^T
     """
-    if jt.flags.use_cuda and jt.compile_extern.cublas_ops:
-        a, b = jt.nn._broadcast_batch_dims(a, b)
-        return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 1)
-    t = list(range(b.ndim))
-    t[-1], t[-2] = t[-2], t[-1]
-    return jt.nn.bmm(a, b.transpose(t))
+    # The amp_reg scope is matmul's and matmul_transpose's too. It is what tells
+    # the reduce in the generic path below to keep its input dtype rather than
+    # accumulate in float32, so leaving it off here made the same product depend
+    # on which of the two names the caller reached for.
+    with jt.flag_scope(amp_reg=jt.flags.amp_reg | 36):
+        if _cublas_can_take(a, b):
+            a, b = jt.nn._broadcast_batch_dims(a, b)
+            return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 1)
+        t = list(range(b.ndim))
+        t[-1], t[-2] = t[-2], t[-1]
+        return jt.nn.bmm(a, b.transpose(t))
 
 
 def bmm(a, b):
@@ -101,15 +145,7 @@ def baddbmm(input, batch1, batch2, beta=1, alpha=1):
 
 
 def _matmul_2d_cublas(a, b, trans_a=0, trans_b=0):
-    a_dtype, b_dtype = str(a.dtype), str(b.dtype)
-    if (
-        jt.flags.use_cuda
-        and jt.compile_extern.cublas_ops
-        and a_dtype == b_dtype
-        and "float" in a_dtype
-        and "complex" not in a_dtype
-        and "complex" not in b_dtype
-    ):
+    if _cublas_can_take(a, b):
         return jt.compile_extern.cublas_ops.cublas_matmul(a, b, trans_a, trans_b)
     return None
 
@@ -125,18 +161,17 @@ def _transpose_base_last2(x):
 
 
 def _mkl_batched_matmul_is_available(a, b):
-    """Whether the oneDNN batched relay can take this pair.
+    """The CPU row of the table above: oneDNN's batched relay is float32-only.
 
-    The op is float32-only, so anything else -- float64, float16, and the
-    complex dtypes the native reindex kernels do support -- keeps the generic
-    path.
+    Anything else -- float64, float16, and the complex dtypes the native
+    reindex kernels do support -- keeps the generic path.
     """
     if jt.flags.use_cuda:
         return False
     ops = getattr(jt.compile_extern, "mkl_ops", None)
     if ops is None or not hasattr(ops, "mkl_batched_matmul"):
         return False
-    return str(a.dtype) == "float32" and str(b.dtype) == "float32"
+    return a.dtype == b.dtype == jt.float32
 
 
 def matmul(a, b):
@@ -204,13 +239,7 @@ def matmul(a, b):
             # cublas_batched_matmul only supports float dtypes; complex64 falls through to
             # the reindex path below (broadcast * multiply + sum-reduce), which the native
             # complex kernels support on both CPU and CUDA.
-            if (
-                jt.flags.use_cuda
-                and jt.compile_extern.cublas_ops
-                and str(a.dtype) == str(b.dtype)
-                and "float" in str(a.dtype)
-                and "complex" not in str(a.dtype)
-            ):
+            if _cublas_can_take(a, b):
                 a_base = jt.nn._transpose_base_last2(a)
                 b_base = jt.nn._transpose_base_last2(b)
                 if a_base is not None:
