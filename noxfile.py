@@ -202,13 +202,13 @@ CPU_TORCH_ORACLE_TESTS = (
     "tests/nn/test_relu.py",
     "tests/models/test_network_training_parity.py",
 )
-#: Sharded across workers by itself (0.16); named so the CUDA session can lift
-#: it out of the sequential group without the two lists drifting apart.
-DEVICE_PARITY_TEST = "tests/backends/parity/test_device_parity.py"
 CUDA_TESTS = (
     "tests/backends/cuda",
     "tests/backends/parity/test_dtype_coverage.py",
-    DEVICE_PARITY_TEST,
+    # The longest single entry in this gate by a wide margin: ~227 generated
+    # cases at about a minute each. It stays in one process; the `cuda` session
+    # below carries the measurement that says why.
+    "tests/backends/parity/test_device_parity.py",
     "tests/compat/torch/test_torch_compat_cuda_tf32.py",
     "tests/ops/test_ops.py",
     "tests/models/test_network_training_parity.py",
@@ -1793,29 +1793,30 @@ def cuda(session):
         "assert float(x.item()) == 6.0"
     )
     session.run(python, "-c", probe, env=env, external=True)
-    if session.posargs:
-        _run_pytest(session, (), env, runner=python)
-        return
-    rest = tuple(target for target in CUDA_TESTS if target != DEVICE_PARITY_TEST)
-    _run_pytest(session, rest, env, runner=python)
-    # 0.16. The device-parity battery is one generated case per operator, ~227 of
-    # them, each running the same forward and backward on CPU and on the
-    # accelerator. Every case is independent by construction -- it builds its own
-    # inputs from its own OpInfo sample -- which is what makes `--dist load`
-    # (distribute per test) correct here and wrong for the tree at large.
+    # No sharding here, and 0.16 is the reason rather than an oversight. The
+    # device-parity battery was the obvious candidate -- ~227 generated cases,
+    # one per operator, independent by construction -- and it was measured
+    # before being changed. On the same 26-operator subset, a cold cache each,
+    # one GPU and eight cores:
     #
-    # Sharding is xdist's, not a hand-rolled slice, on purpose: a home-made
-    # "op_db[i::n]" that drops a case shows up as a *faster, greener* gate, which
-    # is the worst possible failure mode for a verifier. xdist checks that every
-    # worker collected the same set and accounts for every test it hands out, so
-    # "an operator stopped being checked" cannot pass silently.
-    _run_pytest_once(
-        session,
-        (DEVICE_PARITY_TEST,) + _xdist(GATE_WORKERS, "load"),
-        _mode_env(env, (DEVICE_PARITY_TEST,)),
-        runner=python,
-        timeout=1800,
-    )
+    #   one process, use_parallel_op_compiler=0 (what this used to force) 1444 s
+    #   one process, parallel op compiler on                              1420 s
+    #   four xdist workers, --dist load                                   1353 s
+    #   one process, cache already warm                                   1405 s
+    #
+    # Sharding buys 6%, and in that run two workers died ("node down: Not
+    # properly terminated") -- one operator reported FAILED for a reason that
+    # was not its own, the replacement worker died too, and xdist ended the
+    # session with an INTERNALERROR: 23 verdicts out of 26. A verifier that
+    # sometimes returns no verdict is worse than a slow one.
+    #
+    # The warm row is what explains the other three: this battery is not
+    # compile-bound, so neither the compiler's thread pool nor a shared cache
+    # moves it. Every case runs its operator's samples forward and backward on
+    # *both* devices, and the CPU half already uses every core through OpenMP --
+    # so four processes on one machine divide the cores they were already using.
+    # More workers cannot help; fewer comparisons or more machines could.
+    _run_pytest(session, CUDA_TESTS, env, runner=python)
 
 
 @nox.session(python=False)
