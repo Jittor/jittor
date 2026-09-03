@@ -3,6 +3,7 @@
 import math
 
 import jittor as jt
+from jittor.misc import _pair
 
 
 class Conv(jt.Module):
@@ -89,10 +90,10 @@ class Conv(jt.Module):
         # torch accepts int OR sequence (list/tuple); _pair normalizes int->2-tuple
         # and passes sequences through, so a *list* kernel_size no longer falls into
         # the scalar branch (which produced nested ([k,k],[k,k]) and crashed init).
-        self.kernel_size = jt.nn._pair(kernel_size)
-        self.stride = jt.nn._pair(stride)
-        self.padding = jt.nn._pair(padding)
-        self.dilation = jt.nn._pair(dilation)
+        self.kernel_size = _pair(kernel_size)
+        self.stride = _pair(stride)
+        self.padding = _pair(padding)
+        self.dilation = _pair(dilation)
         self.groups = groups
         # Descriptive only. The depthwise CUDA kernel is selected per call by
         # jt.nn.conv2d, not decided here: deciding it in __init__ meant a layer

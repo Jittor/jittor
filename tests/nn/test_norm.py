@@ -26,6 +26,14 @@ import unittest
 import numpy as np
 import jittor as jt
 from jittor import nn
+from jittor.nn.backends.batch_norm_training_cuda import (
+    _batch_norm_cuda,
+    _batch_norm_eval_cuda,
+)
+from jittor.nn.backends.channel_bias_cuda import _channel_bias_add_cuda
+from jittor.nn.backends.group_norm_cuda import _group_norm_cuda
+from jittor.nn.backends.layer_norm_training_cuda import _layer_norm_cuda
+from jittor.nn.backends.rms_norm_training_cuda import _rms_norm_training_cuda
 
 from _helpers.common import (
     JittorTestCase, net_scaled_max_err, get_all_device_types, use_cuda_for,
@@ -112,7 +120,7 @@ class TestLayerNorm(_NormBase):
                     weight = jt.array(weight_np)
                     bias = jt.array(bias_np)
                     if use_cuda:
-                        self.assertIsNotNone(jt.nn._layer_norm_cuda(
+                        self.assertIsNotNone(_layer_norm_cuda(
                             x, (shape[-1],), weight, bias, 1e-5
                         ))
                     output = F.layer_norm(
@@ -153,7 +161,7 @@ class TestRMSNorm(_NormBase):
                 x = jt.array(x_np)
                 gamma = jt.array(gamma_np)
                 if use_cuda:
-                    output = jt.nn._rms_norm_training_cuda(
+                    output = _rms_norm_training_cuda(
                         x, gamma, epsilon
                     )
                     self.assertIsNotNone(output)
@@ -193,7 +201,7 @@ class TestGroupNorm(_NormBase):
                 bias = jt.array(bias_np)
                 if use_cuda:
                     self.assertIsNotNone(
-                        jt.nn._group_norm_cuda(x, groups, weight, bias, 1e-5)
+                        _group_norm_cuda(x, groups, weight, bias, 1e-5)
                     )
                 output = F.group_norm(x, groups, weight, bias, 1e-5)
                 grads = jt.grad((output * jt.array(cot_np)).sum(), [x, weight, bias])
@@ -257,7 +265,7 @@ class TestBatchNorm(_NormBase):
                 mean = jt.array(mean_np).stop_grad()
                 variance = jt.array(variance_np).stop_grad()
                 if use_cuda:
-                    output = jt.nn._batch_norm_eval_cuda(
+                    output = _batch_norm_eval_cuda(
                         x, weight, bias, mean, variance, 1e-5
                     )
                     self.assertIsNotNone(output)
@@ -298,7 +306,7 @@ class TestBatchNorm(_NormBase):
                 weight = jt.array(weight_np)
                 bias = jt.array(bias_np)
                 if use_cuda:
-                    output = jt.nn._batch_norm_cuda(
+                    output = _batch_norm_cuda(
                         x, weight, bias, 1e-5
                     )
                     self.assertIsNotNone(output)
@@ -388,7 +396,7 @@ class TestChannelBias(_NormBase):
                 x = jt.array(x_np)
                 bias = jt.array(bias_np)
                 if use_cuda:
-                    output = jt.nn._channel_bias_add_cuda(x, bias)
+                    output = _channel_bias_add_cuda(x, bias)
                     self.assertIsNotNone(output)
                 else:
                     output = x + bias.reshape((1, -1, 1, 1))

@@ -1,6 +1,9 @@
 """One-, two-, and three-dimensional convolution functionals."""
 
 import jittor as jt
+from jittor.misc import _pair, _triple
+
+from ..backends import cudnn as _cudnn
 
 
 def _check_conv2d_output_size(x, oh, ow, kernel_size, stride, padding, dilation):
@@ -56,9 +59,9 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
     >>> w = jt.randn(32, 24, 3, 3)
     >>> y = nn.conv2d(x, w)
     '''
-    padding = jt.nn._pair(padding)
-    stride = jt.nn._pair(stride)
-    dilation = jt.nn._pair(dilation)
+    padding = _pair(padding)
+    stride = _pair(stride)
+    dilation = _pair(dilation)
     out_channels = weight.shape[0]
     if groups <= 0:
         raise ValueError("groups must be a positive integer")
@@ -92,7 +95,8 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
         return y
     # cuDNN path (memory-efficient fwd+bwd); falls back to reindex below on
     # CPU / no-cuDNN / non-float32. See nn/backends/cudnn.py.
-    _y = jt.nn._try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups)
+    _y = _cudnn._try_cudnn_conv2d(
+        x, weight, bias, stride, padding, dilation, groups)
     if _y is not None:
         return _y
     if groups == 1:
@@ -179,14 +183,16 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     >>> w = jt.randn(32, 24, 3, 3, 3)
     >>> y = nn.conv2d(x, w)
     '''
-    padding = jt.nn._triple(padding)
-    stride = jt.nn._triple(stride)
-    dilation = jt.nn._triple(dilation)
+    padding = _triple(padding)
+    stride = _triple(stride)
+    dilation = _triple(dilation)
     out_channels = weight.shape[0]
     if groups <= 0:
         raise ValueError("groups must be a positive integer")
     if jt.flags.use_cuda and jt.cudnn:
-        y = jt.nn._cudnn_conv3d_fp16_safe(jt.cudnn.ops.cudnn_conv3d, x, weight, *stride, *padding, *dilation, groups)
+        y = _cudnn._cudnn_conv3d_fp16_safe(
+            jt.cudnn.ops.cudnn_conv3d, x, weight,
+            *stride, *padding, *dilation, groups)
     elif groups == 1:
         N,C,D,H,W = x.shape
         Kd, Kh, Kw = weight.shape[-3:]

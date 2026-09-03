@@ -12,7 +12,7 @@ import unittest
 from _helpers.logs import find_log_with_re
 from _helpers.torch_runtime import import_torch_modules, modules_available
 import numpy as np
-from jittor import nn
+from jittor.nn.legacy_complex import _fft2
 
 skip_this_test = not modules_available("torch")
 torch = None
@@ -43,7 +43,7 @@ class TestFFTOp(unittest.TestCase):
         #jittor
         x = jt.array(X,dtype=jt.float32)
         x = jt.stack([x, jt.zeros_like(x)], 3)
-        y = nn._fft2(x)
+        y = _fft2(x)
         y_jt_real = y[:, :, :, 0].data
         y_jt_imag = y[:, :, :, 1].data
         assert(np.allclose(y_torch_real, y_jt_real, atol=1))
@@ -68,8 +68,8 @@ class TestFFTOp(unittest.TestCase):
         #jittor
         x = jt.array(X,dtype=jt.float32)
         x = jt.stack([x, jt.zeros_like(x)], 3)
-        y = nn._fft2(x)
-        y_ori = nn._fft2(y, True)
+        y = _fft2(x)
+        y_ori = _fft2(y, True)
         y_jt_real = y[:, :, :, 0].data
         y_jt_imag = y[:, :, :, 1].data
         y_ori_jt_real = y_ori[:, :, :, 0].data
@@ -105,8 +105,8 @@ class TestFFTOp(unittest.TestCase):
         t1 = jt.array(T1,dtype=jt.float32)
         t2 = jt.array(T2,dtype=jt.float32)
         x = jt.stack([x, jt.zeros_like(x)], 3)
-        y_mid = nn._fft2(x)
-        y = nn._fft2(y_mid)
+        y_mid = _fft2(x)
+        y = _fft2(y_mid)
         real = y[:, :, :, 0]
         imag = y[:, :, :, 1]
         loss = (real * t1).sum() + (imag * t2).sum()
@@ -140,8 +140,8 @@ class TestFFTOp(unittest.TestCase):
         t1 = jt.array(T1,dtype=jt.float32)
         t2 = jt.array(T2,dtype=jt.float32)
         x = jt.stack([x, jt.zeros_like(x)], 3)
-        y_mid = nn._fft2(x, True)
-        y = nn._fft2(y_mid, True)
+        y_mid = _fft2(x, True)
+        y = _fft2(y_mid, True)
         real = y[:, :, :, 0]
         imag = y[:, :, :, 1]
         loss = (real * t1).sum() + (imag * t2).sum()
@@ -164,7 +164,7 @@ class TestFFTOp(unittest.TestCase):
         #jittor
         x = jt.array(X).float64()
         x = jt.stack([x, jt.zeros_like(x)], 3)
-        y = nn._fft2(x)
+        y = _fft2(x)
         y_jt_real = y[:, :, :, 0].data
         y_jt_imag = y[:, :, :, 1].data
         assert(np.allclose(y_torch_real, y_jt_real, atol=1))
@@ -189,8 +189,8 @@ class TestFFTOp(unittest.TestCase):
         #jittor
         x = jt.array(X).float64()
         x = jt.stack([x, jt.zeros_like(x)], 3)
-        y = nn._fft2(x)
-        y_ori = nn._fft2(y, True)
+        y = _fft2(x)
+        y_ori = _fft2(y, True)
         y_jt_real = y[:, :, :, 0].data
         y_jt_imag = y[:, :, :, 1].data
         y_ori_jt_real = y_ori[:, :, :, 0].data
@@ -226,8 +226,8 @@ class TestFFTOp(unittest.TestCase):
         t1 = jt.array(T1).float64()
         t2 = jt.array(T2).float64()
         x = jt.stack([x, jt.zeros_like(x)], 3)
-        y_mid = nn._fft2(x)
-        y = nn._fft2(y_mid)
+        y_mid = _fft2(x)
+        y = _fft2(y_mid)
         real = y[:, :, :, 0]
         imag = y[:, :, :, 1]
         loss = (real * t1).sum() + (imag * t2).sum()
@@ -261,8 +261,8 @@ class TestFFTOp(unittest.TestCase):
         t1 = jt.array(T1).float64()
         t2 = jt.array(T2).float64()
         x = jt.stack([x, jt.zeros_like(x)], 3)
-        y_mid = nn._fft2(x, True)
-        y = nn._fft2(y_mid, True)
+        y_mid = _fft2(x, True)
+        y = _fft2(y_mid, True)
         real = y[:, :, :, 0]
         imag = y[:, :, :, 1]
         loss = (real * t1).sum() + (imag * t2).sum()

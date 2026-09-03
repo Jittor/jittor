@@ -3,28 +3,15 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-"""A module must not reach through ``jt.nn`` for its own private names.
+"""The :mod:`jittor.nn` facade only publishes its supported public API.
 
 Task 5.22. ``jittor/nn/__init__.py`` re-exports ~35 underscore-private names,
 and the modules that define them called *back through the facade* to reach
 them -- ``nn/backends/cudnn.py`` read ``jt.nn._CUDNN_3D_HALF_DTYPES`` for a
 constant defined four lines above it.
 
-Late binding through the facade is a real mechanism here: ACL replaces
-``jt.nn._batch_norm_eval_cuda``, ``jt.nn._group_norm_cuda`` and
-``jt.nn._rms_norm_cuda`` at runtime, and ``nn/functional/normalization.py``
-calls them through ``jt.nn`` **on purpose** so the replacement takes effect.
-That is a backend-integration hook, and it is always cross-module: the module
-that defines the default and the module that overrides it are different files.
-
-A module reaching through the facade for a name it defines *itself* is never
-that. It is a self-reference that any unrelated replacement of that attribute
-silently redirects -- so ``_ln_normalize`` could be swapped out from under
-``layer_norm`` by code that meant to affect something else entirely.
-
-Rule: **a private name defined in a module is referenced by its local name in
-that module.** Cross-module facade reads are untouched by this test; they are
-the hook.
+Backend integration still uses late binding, but patches the implementation
+module that owns the hook.  The public facade is not a private registry.
 
 Static only.
 """
@@ -86,6 +73,19 @@ def _self_references():
     return offenders
 
 
+def _private_facade_references():
+    offenders = []
+    for path in sorted(PACKAGE.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if _is_nn_facade_attribute(node) and node.attr.startswith("_"):
+                offenders.append("%s:%d uses jt.nn.%s" % (
+                    path.relative_to(PACKAGE), node.lineno, node.attr))
+    return offenders
+
+
 class TestNoPrivateSelfReferenceThroughTheFacade(unittest.TestCase):
     def test_modules_use_their_own_private_names_directly(self):
         self.assertEqual(
@@ -94,6 +94,16 @@ class TestNoPrivateSelfReferenceThroughTheFacade(unittest.TestCase):
             "name the module defines itself means any replacement of that "
             "facade attribute -- by a backend, a test, or an adapter aiming "
             "at something else -- changes this function's internals.")
+
+    def test_internal_code_never_uses_the_facade_as_a_private_registry(self):
+        self.assertEqual(_private_facade_references(), [])
+
+    def test_facade_has_no_single_underscore_exports(self):
+        private = sorted(
+            name for name in dir(jittor.nn)
+            if name.startswith("_") and not name.startswith("__")
+        )
+        self.assertEqual(private, [])
 
 
 class TestTestsPatchWhereTheNameLives(unittest.TestCase):

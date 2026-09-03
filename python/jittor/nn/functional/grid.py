@@ -3,6 +3,8 @@
 import jittor as jt
 import numpy as np
 
+from .interpolation import _interpolate
+
 
 def grid_sample_v0(input, grid, mode="bilinear", padding_mode="zeros"):
     r"""
@@ -46,7 +48,7 @@ def grid_sample_v0(input, grid, mode="bilinear", padding_mode="zeros"):
     nid, cid, hid, wid = jt.index((Ni, Ci, Ho, Wo))
     x = ((grid[:, :, :, 1].unsqueeze(1).repeat([1, Ci, 1, 1]) + 1) / 2) * (Hi - 1)
     y = ((grid[:, :, :, 0].unsqueeze(1).repeat([1, Ci, 1, 1]) + 1) / 2) * (Wi - 1)
-    return jt.nn._interpolate(input, x, y, (nid, cid), mode)
+    return _interpolate(input, x, y, (nid, cid), mode)
 
 
 def linspace_from_neg_one(grid, num_steps, align_corners):

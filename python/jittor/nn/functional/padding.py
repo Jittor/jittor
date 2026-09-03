@@ -2,6 +2,8 @@
 
 import jittor as jt
 
+from ..backends import hooks as _backend_hooks
+
 
 def pad(x, padding=None, mode="constant", value=0, pad=None):
     # Torch spells the amounts argument ``pad``; Jittor historically used
@@ -18,7 +20,7 @@ def pad(x, padding=None, mode="constant", value=0, pad=None):
     right = [0] * (x.ndim - len(padding) // 2) + padding[1::2][::-1]
 
     if mode == "constant":
-        acl_pad = getattr(jt.nn, "_acl_constant_pad", None)
+        acl_pad = _backend_hooks.acl_constant_pad
         if acl_pad is not None:
             result = acl_pad(x, padding, value)
             if result is not None:

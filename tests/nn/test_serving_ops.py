@@ -7,6 +7,7 @@ import numpy as np
 
 import jittor as jt
 import jittor.nn.serving_ops as serving_ops
+from jittor.nn.backends import hooks as backend_hooks
 
 
 def _rope_cache(max_pos, rotary_dim, dtype="float32"):
@@ -18,9 +19,8 @@ def _rope_cache(max_pos, rotary_dim, dtype="float32"):
 class TestSiluAndMul(unittest.TestCase):
     def test_acl_miss_keeps_cuda_backend_reachable(self):
         marker = object()
-        missing = object()
-        previous = getattr(jt.nn, "_silu_and_mul_acl", missing)
-        jt.nn._silu_and_mul_acl = lambda value: None
+        previous = backend_hooks.acl_silu_and_mul
+        backend_hooks.acl_silu_and_mul = lambda value: None
         try:
             with mock.patch.object(
                 serving_ops, "_silu_and_mul_cuda", return_value=marker
@@ -28,10 +28,7 @@ class TestSiluAndMul(unittest.TestCase):
                 self.assertIs(serving_ops.silu_and_mul(object()), marker)
                 cuda_backend.assert_called_once()
         finally:
-            if previous is missing:
-                del jt.nn._silu_and_mul_acl
-            else:
-                jt.nn._silu_and_mul_acl = previous
+            backend_hooks.acl_silu_and_mul = previous
 
     def test_matches_the_gate_times_value_reference(self):
         raw = np.random.randn(9, 24).astype("float32")

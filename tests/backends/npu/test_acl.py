@@ -9,6 +9,7 @@ import jittor as jt
 from _helpers.assertions import expect_error
 import numpy as np
 from jittor import init, Module
+from jittor.nn.backends import hooks as backend_hooks
 
 
 def _bfloat16_round(values):
@@ -542,7 +543,7 @@ class TestACL(unittest.TestCase):
             x = getattr(jt.array(x_np), dtype)()
             gamma = jt.array(gamma_np)
             with jt.no_grad():
-                actual = jt.nn._rms_norm_cuda(x, gamma, 1e-6)
+                actual = backend_hooks.rms_norm_cuda(x, gamma, 1e-6)
                 self.assertIsNotNone(actual, dtype)
                 self.assertEqual(str(actual.dtype), dtype)
                 actual = actual.float32().numpy()
@@ -551,9 +552,9 @@ class TestACL(unittest.TestCase):
 
         x = jt.array(x_np)
         gamma = jt.array(gamma_np)
-        self.assertIsNone(jt.nn._rms_norm_cuda(x.float16(), gamma, 1e-6))
+        self.assertIsNone(backend_hooks.rms_norm_cuda(x.float16(), gamma, 1e-6))
         with jt.no_grad():
-            self.assertIsNone(jt.nn._rms_norm_cuda(x, gamma, object()))
+            self.assertIsNone(backend_hooks.rms_norm_cuda(x, gamma, object()))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_serving_rms_norm_caches_mixed_dtype_weight(self):
@@ -695,7 +696,7 @@ class TestACL(unittest.TestCase):
         ) as logs:
             x = jt.array(x_np)
             gamma = jt.array(gamma_np)
-            output = jt.nn._rms_norm_cuda(x, gamma, epsilon)
+            output = backend_hooks.rms_norm_cuda(x, gamma, epsilon)
             self.assertIsNotNone(output)
             grad_x, grad_gamma = jt.grad(
                 (output * jt.array(cotangent_np)).sum(), [x, gamma]
@@ -708,7 +709,7 @@ class TestACL(unittest.TestCase):
             cotangent_bf = _bfloat16_round(cotangent_np)
             x_var_bf = jt.array(x_bf).bfloat16()
             gamma_var_bf = jt.array(gamma_bf).bfloat16()
-            output_bf = jt.nn._rms_norm_cuda(
+            output_bf = backend_hooks.rms_norm_cuda(
                 x_var_bf, gamma_var_bf, epsilon)
             self.assertIsNotNone(output_bf)
             grad_x_bf, grad_gamma_bf = jt.grad(
@@ -825,7 +826,7 @@ class TestACL(unittest.TestCase):
         self.assertTrue(any("compile acl op" in message for message in messages))
         self.assertFalse(any("compile cpu" in message for message in messages))
         self.assertFalse(any("fallback cpu" in message for message in messages))
-        self.assertIsNotNone(jt.nn._acl_embedding(
+        self.assertIsNotNone(backend_hooks.acl_embedding(
             jt.array(indices_np), jt.array(weight_np).bfloat16()))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
@@ -1145,11 +1146,11 @@ class TestACL(unittest.TestCase):
         q, k, v = jt.array(q_np), jt.array(k_np), jt.array(v_np)
         with jt.no_grad(), jt.log_capture_scope(
                 log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
-            prefill = jt.nn._acl_scaled_dot_product_attention(
+            prefill = backend_hooks.acl_scaled_dot_product_attention(
                 q, k, v, is_causal=True, enable_gqa=True)
-            decode = jt.nn._acl_scaled_dot_product_attention(
+            decode = backend_hooks.acl_scaled_dot_product_attention(
                 q[:, :, :1, :], k, v, enable_gqa=True)
-            additive = jt.nn._acl_scaled_dot_product_attention(
+            additive = backend_hooks.acl_scaled_dot_product_attention(
                 q, k, v, attn_mask=jt.array(additive_np), enable_gqa=True)
             self.assertIsNotNone(prefill)
             self.assertIsNotNone(decode)
@@ -1160,10 +1161,10 @@ class TestACL(unittest.TestCase):
             q_bf16 = q.bfloat16()
             k_bf16 = k.bfloat16()
             v_bf16 = v.bfloat16()
-            prefill_bf16 = jt.nn._acl_scaled_dot_product_attention(
+            prefill_bf16 = backend_hooks.acl_scaled_dot_product_attention(
                 q_bf16, k_bf16, v_bf16,
                 is_causal=True, enable_gqa=True)
-            decode_bf16 = jt.nn._acl_scaled_dot_product_attention(
+            decode_bf16 = backend_hooks.acl_scaled_dot_product_attention(
                 q_bf16[:, :, :1, :], k_bf16, v_bf16,
                 enable_gqa=True)
             self.assertIsNotNone(prefill_bf16)
@@ -1171,7 +1172,7 @@ class TestACL(unittest.TestCase):
             self.assertEqual(str(prefill_bf16.dtype), "bfloat16")
             self.assertEqual(str(decode_bf16.dtype), "bfloat16")
             self.assertEqual(
-                jt.nn._acl_scaled_dot_product_attention.backend_name,
+                backend_hooks.acl_scaled_dot_product_attention.backend_name,
                 "acl_incre_flash_attention_v4")
             prefill_bf16, decode_bf16 = jt.fetch_sync([
                 prefill_bf16.float32(), decode_bf16.float32()])
@@ -1192,10 +1193,10 @@ class TestACL(unittest.TestCase):
             expected(q_np[:, :, :1, :], k_np, v_np, False),
             atol=2e-3, rtol=2e-2)
 
-        self.assertIsNone(jt.nn._acl_scaled_dot_product_attention(
+        self.assertIsNone(backend_hooks.acl_scaled_dot_product_attention(
             q, k, v, dropout_p=0.1, enable_gqa=True))
         with jt.no_grad():
-            self.assertIsNone(jt.nn._acl_scaled_dot_product_attention(
+            self.assertIsNone(backend_hooks.acl_scaled_dot_product_attention(
                 q.float16(), k.float16(), v.float16(),
                 is_causal=True, enable_gqa=True))
         messages = [entry["msg"].lower() for entry in logs]

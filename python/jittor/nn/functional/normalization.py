@@ -5,6 +5,14 @@ from functools import lru_cache, wraps
 import jittor as jt
 
 from ... import _arg_policy
+from ..backends import hooks as _backend_hooks
+from ..backends.batch_norm_training_cuda import (
+    _batch_norm_cuda,
+    _batch_norm_eval_cuda,
+)
+from ..backends.group_norm_cuda import _group_norm_cuda
+from ..backends.layer_norm_cuda import _layer_norm_no_grad_cuda
+from ..backends.layer_norm_training_cuda import _layer_norm_cuda
 
 
 @lru_cache(maxsize=128)
@@ -99,7 +107,8 @@ def _batch_norm_train(x, dims, weight, bias, eps, sync=False):
         # for this same function, pinned against it by
         # tests/nn/test_norm_unification.py. functional.batch_norm never
         # reached it before -- training=True went down the generic path only.
-        fast = jt.nn._batch_norm_cuda(x, weight, bias, eps)
+        backend = _backend_hooks.batch_norm_cuda or _batch_norm_cuda
+        fast = backend(x, weight, bias, eps)
         if fast is not None:
             return fast, xmean, xvar
     xhat = _bn_normalize(x, xmean, xvar, dims, eps)
@@ -108,7 +117,8 @@ def _batch_norm_train(x, dims, weight, bias, eps, sync=False):
 
 def _batch_norm_eval(x, dims, running_mean, running_var, weight, bias, eps):
     """Eval-mode batch norm: normalize with the tracked statistics."""
-    fast = jt.nn._batch_norm_eval_cuda(
+    backend = _backend_hooks.batch_norm_eval_cuda or _batch_norm_eval_cuda
+    fast = backend(
         x, weight, bias, running_mean, running_var, eps)
     if fast is not None:
         return fast
@@ -235,7 +245,8 @@ def group_norm(x,
     else:
         output_shape = (N, C)
     assert C % num_groups == 0
-    fast = jt.nn._group_norm_cuda(x, num_groups, weight, bias, eps)
+    backend = _backend_hooks.group_norm_cuda or _group_norm_cuda
+    fast = backend(x, num_groups, weight, bias, eps)
     if fast is not None:
         return fast
     xg = x.reshape((N, num_groups, C//num_groups, -1))
@@ -279,12 +290,12 @@ def layer_norm(
     dims = [-i for i in range(len(normalized_shape), 0, -1)]
     weight = 1.0 if weight is None else weight
     bias = 0.0 if bias is None else bias
-    fast = jt.nn._layer_norm_cuda(
+    fast = _layer_norm_cuda(
         x, tuple(normalized_shape), weight, bias, eps
     )
     if fast is not None:
         return fast
-    fast = jt.nn._layer_norm_no_grad_cuda(
+    fast = _layer_norm_no_grad_cuda(
         x, tuple(normalized_shape), weight, bias, eps
     )
     if fast is not None:

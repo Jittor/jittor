@@ -4,6 +4,8 @@ import os
 
 import jittor as jt
 
+from .channel_bias_cuda import _channel_bias_add_cuda
+
 
 # Why cuDNN at all: jittor's default conv (reindex + broadcast + reduce) fuses
 # the *forward* fine, but its *backward* materializes a dense
@@ -38,7 +40,7 @@ def _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups):
     dh, dw = dilation if isinstance(dilation, tuple) else (dilation, dilation)
     y = jt.cudnn.ops.cudnn_conv(x, weight, sh, sw, ph, pw, dh, dw, groups)
     if bias is not None:
-        fast = jt.nn._channel_bias_add_cuda(y, bias)
+        fast = _channel_bias_add_cuda(y, bias)
         y = fast if fast is not None else y + bias.broadcast(y.shape, [0, 2, 3])
     return y
 

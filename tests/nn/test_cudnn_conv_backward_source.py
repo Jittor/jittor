@@ -25,6 +25,10 @@ import unittest
 import numpy as np
 
 import jittor as jt
+from jittor.nn.backends.cudnn import (
+    _try_cudnn_conv2d,
+    _try_cudnn_conv_transpose2d,
+)
 
 
 CUDNN_BACKEND = (Path(__file__).resolve().parents[2]
@@ -98,7 +102,7 @@ class TestCudnnConvMatchesTheCpuReference(unittest.TestCase):
         with jt.flag_scope(use_cuda=1):
             xv = jt.array(x)
             wv = jt.array(w)
-            got = jt.nn._try_cudnn_conv2d(xv, wv, None, stride, padding,
+            got = _try_cudnn_conv2d(xv, wv, None, stride, padding,
                                           dilation, groups)
             self.assertIsNotNone(
                 got, "the cuDNN path declined a plain float32 convolution")
@@ -127,7 +131,7 @@ class TestCudnnConvMatchesTheCpuReference(unittest.TestCase):
                 with jt.flag_scope(use_cuda=1):
                     xv = jt.array(x)
                     wv = jt.array(w)
-                    got = jt.nn._try_cudnn_conv_transpose2d(
+                    got = _try_cudnn_conv_transpose2d(
                         xv, wv, None, stride, padding, output_padding,
                         1, groups)
                     self.assertIsNotNone(got)

@@ -2,6 +2,8 @@
 
 import jittor as jt
 
+from ..backends import cudnn as _cudnn
+
 
 def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
     if groups == 1:
@@ -30,7 +32,8 @@ def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding
         w_out = (W-1) * stride_w + output_padding[1] - 2*padding_w + 1 + (w-1)*dilation_w
         out_shape = (N, o, h_out, w_out)
         # cuDNN path (memory-efficient fwd+bwd); falls back to reindex below.
-        _y = jt.nn._try_cudnn_conv_transpose2d(x, weight, bias, stride, padding, output_padding, dilation, 1)
+        _y = _cudnn._try_cudnn_conv_transpose2d(
+            x, weight, bias, stride, padding, output_padding, dilation, 1)
         if _y is not None:
             return _y
         shape = (N, i, o, H, W, h, w)
@@ -133,7 +136,9 @@ def conv_transpose3d(input, weight, bias=None, stride=1, padding=0, output_paddi
     if jt.flags.use_cuda and jt.cudnn:
         # fp16/bf16 3D transposed-conv hits the same missing-cuDNN-algo wall as
         # the forward conv3d; reuse the fp32-fallback wrapper.
-        return jt.nn._cudnn_conv3d_fp16_safe(jt.cudnn.ops.cudnn_conv3d_backward_x, weight, x, *out_shape[2:], *stride, *padding, *dilation, groups)
+        return _cudnn._cudnn_conv3d_fp16_safe(
+            jt.cudnn.ops.cudnn_conv3d_backward_x, weight, x,
+            *out_shape[2:], *stride, *padding, *dilation, groups)
     shape = (N, i, o, D, H, W, d, h, w)
     xx = x.broadcast(shape, (2, 6, 7, 8)) # i,h,w
     ww = weight.broadcast(shape, (0, 3, 4, 5)) # N,H,W

@@ -10,6 +10,7 @@ import unittest
 import numpy as np
 
 import jittor as jt
+from jittor.nn.legacy_complex import _fft2
 
 
 def _device_count():
@@ -55,7 +56,7 @@ class TestCudaLibraryStreams(unittest.TestCase):
 
             jt.rand((32,)).sync()
             complex_input = jt.zeros((1, 4, 4, 2), "float32")
-            jt.nn._fft2(complex_input).sync()
+            _fft2(complex_input).sync()
 
     def test_every_library_binds_on_both_devices(self):
         before = {

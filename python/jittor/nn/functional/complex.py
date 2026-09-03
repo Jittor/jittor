@@ -18,9 +18,6 @@ def _complex64_imag_unit():
     global _complex64_imag_unit_cache
     if _complex64_imag_unit_cache is None:
         _complex64_imag_unit_cache = jt.array(np.array(1j, dtype="complex64"))
-        # The legacy facade exposed this private cache directly. Keep that
-        # observable alias synchronized while the implementation lives here.
-        jt.nn._complex64_imag_unit_cache = _complex64_imag_unit_cache
     return _complex64_imag_unit_cache
 
 

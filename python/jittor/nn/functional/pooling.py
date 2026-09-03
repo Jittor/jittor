@@ -11,6 +11,7 @@ return different numbers for the same arguments.
 """
 
 import jittor as jt
+from jittor.misc import _pair, _triple
 
 
 def _pool_output_size(size, kernel, stride, padding, ceil_mode):
@@ -62,7 +63,7 @@ def _avg_pool_nd(x, rank, kernel_size, stride, padding, ceil_mode,
             "{}: expected a {}-D input (N, C and {} spatial dims), but got a "
             "{}-D input of shape {}.".format(
                 api, rank + 2, rank, x.ndim, tuple(x.shape)))
-    as_tuple = jt.nn._pair if rank == 2 else jt.nn._triple
+    as_tuple = _pair if rank == 2 else _triple
     kernel = as_tuple(kernel_size)
     strides = kernel if stride is None else as_tuple(stride)
     pads = as_tuple(padding)

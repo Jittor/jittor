@@ -14,6 +14,7 @@ result from ordinary ops, so the same call works on CPU and under autograd.
 
 import jittor as jt
 
+from .backends import hooks as _backend_hooks
 from .rms_norm_cuda import _fused_add_rms_norm_cuda, _rms_norm_cuda
 from .rope_cuda import _rotary_embedding_cuda
 from .swiglu_cuda import _silu_and_mul_cuda
@@ -30,7 +31,7 @@ def silu_and_mul(x):
     The gate and the value arrive interleaved in one tensor because the two
     projections behind them are fused into a single matmul.
     """
-    acl_backend = getattr(jt.nn, "_silu_and_mul_acl", None)
+    acl_backend = _backend_hooks.acl_silu_and_mul
     if acl_backend is not None:
         fused = acl_backend(x)
         if fused is not None:
@@ -44,7 +45,7 @@ def silu_and_mul(x):
 
 def rms_norm(x, weight, eps=1e-6):
     """Root-mean-square normalise ``x`` over its last axis and scale."""
-    backend = getattr(jt.nn, "_rms_norm_cuda", _rms_norm_cuda)
+    backend = _backend_hooks.rms_norm_cuda or _rms_norm_cuda
     backend_weight = weight
     if (
         getattr(jt.compiler, "has_acl", 0)
@@ -69,8 +70,7 @@ def rms_norm(x, weight, eps=1e-6):
 
 def dual_rms_norm(first, second, first_weight, second_weight, eps=1e-6):
     """Apply independent last-axis RMSNorm operations to two tensors."""
-    acl_backend = getattr(
-        jt.nn, "_acl_grouped_dual_bfloat16_rms_norm", None)
+    acl_backend = _backend_hooks.acl_grouped_dual_bfloat16_rms_norm
     if acl_backend is not None:
         grouped = acl_backend(
             first, second, first_weight, second_weight, eps)
@@ -88,7 +88,7 @@ def fused_add_rms_norm(x, residual, weight, eps=1e-6):
     The updated residual is the sum, which the next layer adds onto in turn;
     returning both is what lets the two steps share one pass over the data.
     """
-    acl_backend = getattr(jt.nn, "_acl_grouped_add_rms_norm", None)
+    acl_backend = _backend_hooks.acl_grouped_add_rms_norm
     if acl_backend is not None:
         fused = acl_backend(x, residual, weight, eps)
         if fused is not None:
@@ -190,7 +190,7 @@ def _rotary_embedding_acl(
     flat_positions = positions.reshape((token_count,))
     cache_width = int(cos_sin_cache.shape[-1])
     cache = None
-    acl_embedding = getattr(jt.nn, "_acl_embedding", None)
+    acl_embedding = _backend_hooks.acl_embedding
     if acl_embedding is not None:
         cache = acl_embedding(flat_positions, cos_sin_cache)
     if cache is None:
@@ -199,7 +199,7 @@ def _rotary_embedding_acl(
         cache = jt.gather(cos_sin_cache, 0, cache_index)
     half = rotary_dim // 2
     expanded = None
-    expand_backend = getattr(jt.nn, "_acl_expand_rotary_cache", None)
+    expand_backend = _backend_hooks.acl_expand_rotary_cache
     if expand_backend is not None:
         expanded = expand_backend(cache, rotary_dim)
     if expanded is None:

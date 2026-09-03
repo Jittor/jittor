@@ -4,6 +4,7 @@ import numpy as np
 
 import jittor as torch
 import jittor as jt
+from jittor.nn.backends import hooks as backend_hooks
 
 
 def _bfloat16_round(values):
@@ -255,7 +256,7 @@ class TestACLTorchCompat(unittest.TestCase):
 
         with torch.no_grad(), jt.log_capture_scope(
                 log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
-            actual = jt.nn._acl_grouped_qk_rms_norm_rotary(
+            actual = backend_hooks.acl_grouped_qk_rms_norm_rotary(
                 positions, query, key, query_weight, key_weight,
                 cache, head_size, head_size, True, 1e-6)
             query_view = query.reshape((1, 16, head_size))
@@ -432,14 +433,14 @@ class TestACLTorchCompat(unittest.TestCase):
 
         candidates = []
         native_dispatches = []
-        acl_group_norm = jt.nn._group_norm_cuda
+        acl_group_norm = backend_hooks.group_norm_cuda
 
         def record_group_norm(*args):
             result = acl_group_norm(*args)
             native_dispatches.append(result is not None)
             return result
 
-        jt.nn._group_norm_cuda = record_group_norm
+        backend_hooks.group_norm_cuda = record_group_norm
         try:
             self.assertTrue(jt.flags.use_acl)
             self.assertTrue(jt.flags.use_cuda)
@@ -478,7 +479,7 @@ class TestACLTorchCompat(unittest.TestCase):
                     jt.fetch_sync([functional_output] + list(functional_grads))
                 )
         finally:
-            jt.nn._group_norm_cuda = acl_group_norm
+            backend_hooks.group_norm_cuda = acl_group_norm
 
         self.assertEqual(native_dispatches, [True, True])
         with jt.flag_scope(use_acl=0, use_cuda=0):
@@ -518,14 +519,14 @@ class TestACLTorchCompat(unittest.TestCase):
         loss_weight_np = rng.randn(*source_np.shape).astype("float32")
 
         dispatches = []
-        acl_batch_norm = jt.nn._batch_norm_eval_cuda
+        acl_batch_norm = backend_hooks.batch_norm_eval_cuda
 
         def record_batch_norm(*args):
             result = acl_batch_norm(*args)
             dispatches.append(result is not None)
             return result
 
-        jt.nn._batch_norm_eval_cuda = record_batch_norm
+        backend_hooks.batch_norm_eval_cuda = record_batch_norm
         try:
             module = torch.nn.BatchNorm2d(4)
             module.eval()
@@ -545,7 +546,7 @@ class TestACLTorchCompat(unittest.TestCase):
                 )
                 candidate = jt.fetch_sync([output] + list(gradients))
         finally:
-            jt.nn._batch_norm_eval_cuda = acl_batch_norm
+            backend_hooks.batch_norm_eval_cuda = acl_batch_norm
 
         invstd = 1.0 / np.sqrt(variance_np + 1e-5)
         broadcast = (None, slice(None), None, None)
@@ -800,14 +801,14 @@ class TestACLTorchCompat(unittest.TestCase):
         additive_np = rng.randn(shape[-2], shape[-2]).astype("float32") * 0.05
         candidates = []
         native_dispatches = []
-        acl_attention = jt.nn._acl_scaled_dot_product_attention
+        acl_attention = backend_hooks.acl_scaled_dot_product_attention
 
         def record_attention(*args, **kwargs):
             result = acl_attention(*args, **kwargs)
             native_dispatches.append(result is not None)
             return result
 
-        jt.nn._acl_scaled_dot_product_attention = record_attention
+        backend_hooks.acl_scaled_dot_product_attention = record_attention
         try:
             with jt.log_capture_scope(
                 log_v=0, log_vprefix="acl_op_exec.cc=100"
@@ -837,7 +838,7 @@ class TestACLTorchCompat(unittest.TestCase):
                     )
                     candidates.append(jt.fetch_sync([output] + list(grads)))
         finally:
-            jt.nn._acl_scaled_dot_product_attention = acl_attention
+            backend_hooks.acl_scaled_dot_product_attention = acl_attention
 
         self.assertEqual(native_dispatches, [True, True])
         trainable_mask = torch.tensor(additive_np)
@@ -943,14 +944,14 @@ class TestACLTorchCompat(unittest.TestCase):
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_constant_pad_forward_backward_stays_on_acl(self):
-        acl_pad = jt.nn._acl_constant_pad
+        acl_pad = backend_hooks.acl_constant_pad
         calls = []
 
         def record_acl_pad(x, amounts, value):
             calls.append((tuple(amounts), value))
             return acl_pad(x, amounts, value)
 
-        jt.nn._acl_constant_pad = record_acl_pad
+        backend_hooks.acl_constant_pad = record_acl_pad
         try:
             with jt.log_capture_scope(
                 log_v=0, log_vprefix="acl_op_exec.cc=100"
@@ -980,7 +981,7 @@ class TestACLTorchCompat(unittest.TestCase):
                     [shifted, padded, gradient]
                 )
         finally:
-            jt.nn._acl_constant_pad = acl_pad
+            backend_hooks.acl_constant_pad = acl_pad
 
         np.testing.assert_array_equal(shifted, [[2, 3, -100]])
         np.testing.assert_array_equal(

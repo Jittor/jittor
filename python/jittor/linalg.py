@@ -13,6 +13,7 @@ import numpy as np
 from functools import partial
 from . import _arg_policy
 from .nn import ComplexNumber
+from .nn.functional.complex import _real2_to_complex64
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +60,7 @@ def _complex_to_stack(x):
 # still lives in the ComplexNumber code paths below (complex_inv / complex_eig
 # / complex_qr / complex_svd / complex_eigh / complex_pinv); these helpers only
 # move a *native* complex64 Var across the P1 bridge (jt.nn.view_as_real /
-# jt.nn._real2_to_complex64) so every public entry point can ALSO take a native
+# the private complex bridge) so every public entry point can ALSO take a native
 # complex64 input and return native complex64 output(s). No linear-algebra math
 # is reimplemented here.
 # ---------------------------------------------------------------------------
@@ -76,7 +77,7 @@ def _native_to_cn(z):
 def _cn_to_native(cn):
     # nn.ComplexNumber  ->  native complex64 [...]  (differentiable, via P1 bridge)
     # cn.value is the float32 [..., 2] stack; _real2_to_complex64 rebuilds complex64.
-    return jt.nn._real2_to_complex64(cn.value)
+    return _real2_to_complex64(cn.value)
 
 
 def complex_inv(x:ComplexNumber):

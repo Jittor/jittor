@@ -16,6 +16,7 @@ they do not hold, so a configuration these primitives do not cover still runs.
 """
 
 import jittor as jt
+from jittor.nn.backends import hooks as _backend_hooks
 
 _PATCHED = "_jittor_fused_forward"
 
@@ -135,8 +136,7 @@ def patch_qwen3_attention(module):
         qkv, _ = self.qkv_proj(hidden_states)
         q, k, v = qkv.split(
             [self.q_size, self.kv_size, self.kv_size], dim=-1)
-        grouped_backend = getattr(
-            jt.nn, "_acl_grouped_qk_rms_norm_rotary", None)
+        grouped_backend = _backend_hooks.acl_grouped_qk_rms_norm_rotary
         grouped = None
         if grouped_backend is not None and int(positions.numel()) == 1:
             cache = self.rotary_emb._match_cos_sin_cache_dtype(q)

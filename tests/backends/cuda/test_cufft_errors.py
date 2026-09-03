@@ -16,7 +16,7 @@ import unittest
 import numpy as np
 
 import jittor as jt
-from jittor import nn
+from jittor.nn.legacy_complex import _fft2
 
 
 def _reference_fft2(real):
@@ -37,7 +37,7 @@ class TestCufftErrors(unittest.TestCase):
     def test_forward_matches_numpy(self):
         real = np.random.RandomState(0).rand(2, 8, 8).astype("float32")
         x = jt.array(np.stack([real, np.zeros_like(real)], axis=-1))
-        got = nn._fft2(x).numpy()
+        got = _fft2(x).numpy()
         np.testing.assert_allclose(got, _reference_fft2(real), atol=1e-3,
                                    rtol=1e-3)
 
@@ -46,7 +46,7 @@ class TestCufftErrors(unittest.TestCase):
         # CUFFT_INVALID_SIZE. Nothing usable can come out of that, so the op
         # has to report it.
         with self.assertRaises(RuntimeError):
-            nn._fft2(jt.zeros((1, 0, 4, 2), "float32")).sync()
+            _fft2(jt.zeros((1, 0, 4, 2), "float32")).sync()
 
     def test_invalid_plan_is_not_cached(self):
         # The first failure must not leave an invalid handle in the plan
@@ -54,14 +54,14 @@ class TestCufftErrors(unittest.TestCase):
         # way rather than "succeed" through the cached garbage.
         for _ in range(2):
             with self.assertRaises(RuntimeError):
-                nn._fft2(jt.zeros((1, 4, 0, 2), "float32")).sync()
+                _fft2(jt.zeros((1, 4, 0, 2), "float32")).sync()
 
     def test_valid_transforms_still_work_after_a_failure(self):
         with self.assertRaises(RuntimeError):
-            nn._fft2(jt.zeros((1, 0, 4, 2), "float32")).sync()
+            _fft2(jt.zeros((1, 0, 4, 2), "float32")).sync()
         real = np.random.RandomState(3).rand(1, 4, 4).astype("float32")
         x = jt.array(np.stack([real, np.zeros_like(real)], axis=-1))
-        np.testing.assert_allclose(nn._fft2(x).numpy(), _reference_fft2(real),
+        np.testing.assert_allclose(_fft2(x).numpy(), _reference_fft2(real),
                                    atol=1e-3, rtol=1e-3)
 
 

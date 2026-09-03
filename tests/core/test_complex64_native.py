@@ -8,6 +8,7 @@ Run:  python -m pytest tests/core/test_complex64_native.py
 import unittest
 import numpy as np
 import jittor as jt
+from jittor.nn.functional.complex import _real2_to_complex64
 
 _DEVICES = [("cpu", 0)] + ([("cuda", 1)] if jt.has_cuda else [])
 
@@ -309,13 +310,13 @@ class TestComplex64Native(unittest.TestCase):
                                        np.stack([a.real, a.imag], axis=-1), atol=1e-6,
                                        err_msg=f"view_as_real {dev}")
             # reverse round-trip is exact (bit-identical reinterpret)
-            zc = jt.nn._real2_to_complex64(vr)
+            zc = _real2_to_complex64(vr)
             self.assertEqual(str(zc.dtype), "complex64", f"reverse dtype {dev}")
             np.testing.assert_array_equal(np.asarray(zc.numpy()), a,
                                           err_msg=f"bridge roundtrip {dev}")
             # bridge is autograd-transparent: grad through it == direct grad on |z|.sum()
             zg = jt.array(a)
-            L = jt.nn._real2_to_complex64(jt.nn.view_as_real(zg)).abs().sum()
+            L = _real2_to_complex64(jt.nn.view_as_real(zg)).abs().sum()
             g = jt.grad(L, zg); g = g[0] if isinstance(g, (list, tuple)) else g
             zg2 = jt.array(a); L2 = zg2.abs().sum()
             g2 = jt.grad(L2, zg2); g2 = g2[0] if isinstance(g2, (list, tuple)) else g2

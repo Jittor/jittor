@@ -16,7 +16,7 @@ import unittest
 import numpy as np
 
 import jittor as jt
-from jittor import nn
+from jittor.nn.legacy_complex import _fft2
 
 
 cufft = getattr(jt, "cufft", None)
@@ -53,14 +53,14 @@ class TestCufftPlanCacheBounds(unittest.TestCase):
         cufft.cufft_set_plan_cache_size(8)
         before = cufft.cufft_plan_cache_size()
         for _ in range(4):
-            nn._fft2(_complex_input(2, 12, 12)).sync()
+            _fft2(_complex_input(2, 12, 12)).sync()
         self.assertEqual(cufft.cufft_plan_cache_size(), before + 1)
 
     def test_many_shapes_stay_within_the_limit(self):
         cufft.cufft_set_plan_cache_size(4)
         for n in range(6, 24):
             x = _complex_input(1, n, n)
-            got = nn._fft2(x).numpy()
+            got = _fft2(x).numpy()
             np.testing.assert_allclose(got, _reference_fft2(x), atol=1e-2,
                                        rtol=1e-2)
             self.assertLessEqual(cufft.cufft_plan_cache_size(), 4)
@@ -68,9 +68,9 @@ class TestCufftPlanCacheBounds(unittest.TestCase):
     def test_evicted_shape_is_rebuilt_and_still_correct(self):
         cufft.cufft_set_plan_cache_size(1)
         first = _complex_input(1, 8, 8)
-        nn._fft2(first).sync()
-        nn._fft2(_complex_input(1, 16, 16)).sync()   # evicts the 8x8 plan
-        np.testing.assert_allclose(nn._fft2(first).numpy(),
+        _fft2(first).sync()
+        _fft2(_complex_input(1, 16, 16)).sync()   # evicts the 8x8 plan
+        np.testing.assert_allclose(_fft2(first).numpy(),
                                    _reference_fft2(first), atol=1e-2, rtol=1e-2)
         self.assertEqual(cufft.cufft_plan_cache_size(), 1)
 

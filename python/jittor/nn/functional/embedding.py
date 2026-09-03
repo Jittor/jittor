@@ -2,6 +2,8 @@
 
 import jittor as jt
 
+from ..backends import hooks as _backend_hooks
+
 
 def embedding(
     input,
@@ -12,7 +14,7 @@ def embedding(
     scale_grad_by_freq=False,
     sparse=False,
 ):
-    acl_embedding = getattr(jt.nn, "_acl_embedding", None)
+    acl_embedding = _backend_hooks.acl_embedding
     if acl_embedding is not None:
         result = acl_embedding(
             input,

@@ -3,6 +3,7 @@
 import math
 
 import jittor as jt
+from jittor.misc import _triple
 
 
 class Conv3d(jt.Module):
@@ -49,10 +50,10 @@ class Conv3d(jt.Module):
         # Conv3d patch_embed uses [t,p,p]) into the scalar branch -> nested
         # ([k,k,k],...) -> weight-shape build crashes. _triple normalizes int->3-tuple
         # and passes sequences through (matching torch's _triple).
-        self.kernel_size = jt.nn._triple(kernel_size)
-        self.stride = jt.nn._triple(stride)
-        self.padding = jt.nn._triple(padding)
-        self.dilation = jt.nn._triple(dilation)
+        self.kernel_size = _triple(kernel_size)
+        self.stride = _triple(stride)
+        self.padding = _triple(padding)
+        self.dilation = _triple(dilation)
         self.groups = groups
         if groups <= 0:
             raise ValueError("groups must be a positive integer")

@@ -34,6 +34,8 @@ import numpy as np
 import jittor as torch          # the whole point: jittor IS torch here
 import jittor as jt
 from jittor import nn
+from jittor.nn.backends import hooks as backend_hooks
+from jittor.nn.backends.layer_norm_cuda import _layer_norm_no_grad_cuda
 
 F = nn.functional
 
@@ -281,9 +283,9 @@ class TestLayerNorm(Base):
             x = t(x_np).bfloat16()
             weight = t(weight_np)
             bias = t(bias_np)
-            self.assertIsNone(nn._layer_norm_no_grad_cuda(
+            self.assertIsNone(_layer_norm_no_grad_cuda(
                 x, (1536,), weight, bias, 1e-6))
-            out = nn._layer_norm_no_grad_cuda(
+            out = _layer_norm_no_grad_cuda(
                 x, (1536,), weight, bias, 1e-6,
                 allow_bfloat16=True)
             value = x.float32()
@@ -309,10 +311,10 @@ class TestLayerNorm(Base):
         extreme_np[3, 0] = np.inf
         with jt.flag_scope(use_cuda=1), jt.no_grad():
             extreme = t(extreme_np).bfloat16()
-            out = nn._layer_norm_no_grad_cuda(
+            out = _layer_norm_no_grad_cuda(
                 extreme, (1536,), 1.0, 0.0, 1e-6,
                 allow_bfloat16=True)
-            affine_out = nn._layer_norm_no_grad_cuda(
+            affine_out = _layer_norm_no_grad_cuda(
                 extreme, (1536,), jt.ones(1536), jt.zeros(1536), 1e-6,
                 allow_bfloat16=True)
             out_np, affine_np = jt.fetch_sync([
@@ -431,14 +433,14 @@ class TestRMSNormDispatch(Base):
                 return hidden_states * (1.0 + self.weight)
 
         calls = []
-        original = jt.nn._rms_norm_training_cuda
+        original = backend_hooks.rms_norm_training_cuda
 
         def fake_fast(value, weight, epsilon):
             calls.append((tuple(value.shape), tuple(weight.shape), epsilon))
             return value * 3.0
 
         try:
-            jt.nn._rms_norm_training_cuda = fake_fast
+            backend_hooks.rms_norm_training_cuda = fake_fast
             with jt.flag_scope(use_cuda=1):
                 value = jt.ones((2, 4, 8))
                 standard = FixtureRMSNorm()(value)
@@ -450,7 +452,7 @@ class TestRMSNormDispatch(Base):
                     [standard, offset, overridden]
                 )
         finally:
-            jt.nn._rms_norm_training_cuda = original
+            backend_hooks.rms_norm_training_cuda = original
 
         self.assertEqual(calls, [((2, 4, 8), (8,), 1e-6)])
         np.testing.assert_array_equal(standard_np, np.full((2, 4, 8), 3.0))

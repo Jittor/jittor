@@ -9,6 +9,9 @@ import os
 
 import jittor as jt
 from jittor import nn
+from jittor.nn.backends import hooks as _backend_hooks
+from jittor.nn.backends.rms_norm_training_cuda import _rms_norm_training_cuda
+from jittor.nn.rms_norm_cuda import _rms_norm_cuda
 
 from ..context import registry_for
 from .nn_init import _install_init_aliases
@@ -1256,12 +1259,13 @@ def _install_module_methods(nn, registry=None):
             unit_weight = jt.ones(weight.shape, dtype="bfloat16")
             unit_weight.stop_grad()
             weight.__dict__["_torch_acl_rms_norm_unit_weight"] = unit_weight
-        grouped = getattr(jt.nn, "_acl_grouped_bfloat16_rms_norm", None)
+        grouped = _backend_hooks.acl_grouped_bfloat16_rms_norm
         if grouped is not None:
             result = grouped(value, unit_weight, weight, epsilon)
             if result is not None:
                 return result
-        normalized = jt.nn._rms_norm_cuda(value, unit_weight, epsilon)
+        backend = _backend_hooks.rms_norm_cuda or _rms_norm_cuda
+        normalized = backend(value, unit_weight, epsilon)
         if normalized is None:
             return None
         return weight * normalized
@@ -1284,9 +1288,12 @@ def _install_module_methods(nn, registry=None):
         pytorch_order = _acl_bfloat16_rms_norm(value, weight, epsilon)
         if pytorch_order is not None:
             return pytorch_order
-        fast = jt.nn._rms_norm_training_cuda(value, weight, epsilon)
+        training_backend = (
+            _backend_hooks.rms_norm_training_cuda or _rms_norm_training_cuda)
+        fast = training_backend(value, weight, epsilon)
         if fast is None:
-            fast = jt.nn._rms_norm_cuda(value, weight, epsilon)
+            backend = _backend_hooks.rms_norm_cuda or _rms_norm_cuda
+            fast = backend(value, weight, epsilon)
         return fast
 
     _pipeline_state = {"threshold": _pipelining_from_environment(), "mark": 0}
@@ -2321,8 +2328,7 @@ def install(ctx):
     def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
                                                 dropout_p, is_causal, sf,
                                                 enable_gqa=False):
-        acl_attention = getattr(
-            jt.nn, "_acl_scaled_dot_product_attention", None)
+        acl_attention = _backend_hooks.acl_scaled_dot_product_attention
         if callable(acl_attention):
             acl_output = acl_attention(
                 query,

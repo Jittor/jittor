@@ -18,6 +18,7 @@ from jittor.nn import (
     rope_cuda,
     sparse,
 )
+from jittor.nn.backends.layer_norm_cuda import _layer_norm_no_grad_cuda
 
 
 class TestAttentionCapabilities(unittest.TestCase):
@@ -732,7 +733,7 @@ class TestCudaCapabilities(unittest.TestCase):
                 x, scale, shift, eps
             )
             self.assertIsNotNone(actual)
-            reference = nn._layer_norm_no_grad_cuda(
+            reference = _layer_norm_no_grad_cuda(
                 x, (96,), 1.0, 0.0, eps, allow_bfloat16=True
             )
             reference = reference * (1 + scale) + shift
@@ -1011,7 +1012,7 @@ class TestCudaCapabilities(unittest.TestCase):
         bias_np = rng.randn(96).astype("float32")
         eps = 3e-4
         with jt.flag_scope(use_cuda=1), jt.no_grad():
-            actual = nn._layer_norm_no_grad_cuda(
+            actual = _layer_norm_no_grad_cuda(
                 jt.array(x_np).bfloat16(),
                 (96,),
                 jt.array(weight_np),
