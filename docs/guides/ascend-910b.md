@@ -452,3 +452,7 @@ outside this migration slice.
 These flags are diagnostic and slow execution. Remove them after locating the
 failing operation. For general JIT and memory diagnostics, see
 {doc}`debugging`.
+
+The ACL Flip family uses the shared launcher while retaining axes setup and
+synchronous execution. Its pre-existing aclIntArray lifetime issue is outside
+this migration slice.

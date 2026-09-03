@@ -22,6 +22,7 @@ ROLL_SOURCE = ROOT / "python/jittor/extern/acl/aclops/roll_op_acl.cc"
 GATHER_SOURCE = ROOT / "python/jittor/extern/acl/aclops/gather_scatter_op_acl.cc"
 CLAMP_SOURCE = ROOT / "python/jittor/extern/acl/aclops/clamp_op_acl.cc"
 STACK_SOURCE = ROOT / "python/jittor/extern/acl/aclops/stack_op_acl.cc"
+FLIP_SOURCE = ROOT / "python/jittor/extern/acl/aclops/flip_op_acl.cc"
 
 
 def test_acl_launcher_tail_has_one_auditable_contract():
@@ -199,6 +200,16 @@ def test_stack_uses_launcher_and_keeps_tensor_list_setup():
     assert "aclCreateTensorList" in source
     assert "attr->dim" in source
     assert "launch(ret, aclnnStack, true);" in source
+    assert "checkRet(ret);" not in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
+
+
+def test_flip_uses_launcher_and_keeps_axes_setup():
+    source = FLIP_SOURCE.read_text()
+    assert "ReduceAttr" in source
+    assert "aclCreateIntArray" in source
+    assert "launch(ret, aclnnFlip, true);" in source
     assert "checkRet(ret);" not in source
     assert "mallocWorkSpace(workspaceSize)" not in source
     assert "syncRun();" not in source
