@@ -96,7 +96,11 @@ class TestFunction(unittest.TestCase):
         b = jt.array(4.0)
         func = MyFunc()
         c = func(a, b)
-        expect_error(lambda: jt.grad(c, [a, b]))
+        expect_error(
+            lambda: jt.grad(c, [a, b]),
+            exc_type=RuntimeError,
+            match="returned grad required, but 1 given",
+        )
 
     def test_multi_grads(self):
         class MyFunc(Function):
@@ -259,7 +263,11 @@ class TestFunction(unittest.TestCase):
         b = jt.array(4.0).name('b')
         c,_,d = MyFunc()(a, "a", b)
         c.name('c'), d.name('d')
-        expect_error(lambda : jt.grad(c+d*3, [a, b]))
+        expect_error(
+            lambda : jt.grad(c+d*3, [a, b]),
+            exc_type=AssertionError,
+            match="returned grad should be None",
+        )
 
     def test_zmem_leak(self):
         def test():

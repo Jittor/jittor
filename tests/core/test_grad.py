@@ -27,7 +27,11 @@ class TestGrad(unittest.TestCase):
     def test_check_float(self):
         x = jt.array(1)
         y = x*x
-        expect_error(lambda: jt.grad(y, [x]))
+        expect_error(
+            lambda: jt.grad(y, [x]),
+            exc_type=RuntimeError,
+            match="Loss should be float",
+        )
         
     def test_grad2(self):
         def test(n):
@@ -118,7 +122,11 @@ class TestGrad(unittest.TestCase):
         y1 = jt.int(x)
         y2 = jt.float(x)
         z = x*x*y1*y1*y2
-        expect_error(lambda: jt.grad(z, [y1]))
+        expect_error(
+            lambda: jt.grad(z, [y1]),
+            exc_type=RuntimeError,
+            match="Targets of grad should be float or complex",
+        )
         dx, = jt.grad(z, [x])
         self.assertEqual(dx.data, 48)
 

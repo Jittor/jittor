@@ -91,9 +91,21 @@ class TestCore(unittest.TestCase):
     def test_var_holder(self):
         jt.clean()
         self.assertEqual(jt.number_of_lived_vars(), 0)
-        expect_error(lambda: jt.matmul(1,1))
-        expect_error(lambda: jt.matmul([1],[1]))
-        expect_error(lambda: jt.matmul([[1]],[1]))
+        expect_error(
+            lambda: jt.matmul(1,1),
+            exc_type=AttributeError,
+            match=r"'int' object has no attribute 'shape'",
+        )
+        expect_error(
+            lambda: jt.matmul([1],[1]),
+            exc_type=AttributeError,
+            match=r"'list' object has no attribute 'shape'",
+        )
+        expect_error(
+            lambda: jt.matmul([[1]],[1]),
+            exc_type=AttributeError,
+            match=r"'list' object has no attribute 'shape'",
+        )
         self.assertEqual(jt.number_of_lived_vars(), 0)
         a = jt.matmul(jt.float32([[3]]), jt.float32([[4]])).data
         assert a.shape == (1,1) and a[0,0] == 12

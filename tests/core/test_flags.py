@@ -12,7 +12,11 @@ from _helpers.assertions import expect_error
 class TestFlags(unittest.TestCase):
     def test_error(self):
         def check(): jt.flags.asdasd=1
-        expect_error(check)
+        expect_error(
+            check,
+            exc_type=AttributeError,
+            match=r"no attribute 'asdasd'",
+        )
     
     def test_get_set(self):
         prev = jt.flags.log_v
