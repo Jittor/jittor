@@ -78,7 +78,7 @@ VarPtr ReindexOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void ReindexOp::infer_shape() {
-    CHECKop(x->shape.size(),==,indexes.size()) << "Number of x's shape and indexes should be the same.";
+    USER_CHECKop(x->shape.size(),==,indexes.size()) << "Number of x's shape and indexes should be the same.";
     if (shape.size())
         y->set_shape(shape);
     else {

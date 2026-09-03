@@ -59,8 +59,8 @@ VarPtr ReindexReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void ReindexReduceOp::infer_shape() {
-    CHECKop(shape.size(),==,indexes.size()) << "Number of shape and indexes should be the same.";
-    CHECK(shape.size()) << "Number of shape should greater than 0.";
+    USER_CHECKop(shape.size(),==,indexes.size()) << "Number of shape and indexes should be the same.";
+    USER_CHECK(shape.size()) << "Number of shape should greater than 0.";
     for (auto v : shape)
         CHECKop(v,>=,0u) << "Shape should greater than 0.";
     x->set_shape(shape);

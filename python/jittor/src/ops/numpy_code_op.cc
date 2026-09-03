@@ -37,11 +37,11 @@ NumpyCodeOp::NumpyCodeOp(vector<NanoVector>&& shapes, vector<NanoString>&& dtype
 {
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);
-    CHECKop(shapes.size(),==,dtypes.size()) << "Number of outputs' shapes and dtypes should be the same";
+    USER_CHECKop(shapes.size(),==,dtypes.size()) << "Number of outputs' shapes and dtypes should be the same";
     _outputs.resize(shapes.size());
     CHECKop(_inputs.size(),<=,10);
     CHECKop(_outputs.size(),<=,10);
-    CHECKop(_outputs.size(),>,0);
+    USER_CHECKop(_outputs.size(),>,0);
     for (int i=0; i<shapes.size(); i++) {
         _outputs[i] = create_output(shapes[i], dtypes[i]);
         ASSERT(_outputs[i]->num >= 0);
@@ -66,11 +66,11 @@ NumpyCodeOp::NumpyCodeOp(vector<NanoVector>&& shapes, vector<NanoString>&& dtype
 {
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);
-    CHECKop(shapes.size(),==,dtypes.size()) << "Number of outputs' shapes and dtypes should be the same";
+    USER_CHECKop(shapes.size(),==,dtypes.size()) << "Number of outputs' shapes and dtypes should be the same";
     _outputs.resize(shapes.size());
     CHECKop(_inputs.size(),<=,10);
     CHECKop(_outputs.size(),<=,10);
-    CHECKop(_outputs.size(),>,0);
+    USER_CHECKop(_outputs.size(),>,0);
     for (int i=0; i<shapes.size(); i++) {
         _outputs[i] = create_output(shapes[i], dtypes[i]);
         ASSERT(_outputs[i]->num >= 0);

@@ -50,6 +50,12 @@ def pool_naive(x, size, op):
 ops = ["maximum", "minimum", "multiply", "add"]
 
 class TestReindexReduceOp(unittest.TestCase):
+    def test_shape_count_is_a_catchable_user_error(self):
+        value = jt.random([3])
+        with self.assertRaisesRegex(
+                RuntimeError, "Number of shape and indexes should be the same"):
+            value.reindex_reduce("add", [3], [])
+
     def test_pool(self):
         N,H,W,C = 3,10,10,4
         size=3
