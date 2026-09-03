@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；本波审计基线 `c2930ea9`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 审计基线 516 个 |
+| 分支 | `2.0-refactor`；本波审计基线 `edede951`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 审计基线 522 个 |
 | 提交里出现过的任务号 | 214 个 |
 | 看板 | 已合并 **196** / 进行中 **0** / 待领 **74** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
@@ -216,9 +216,22 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `gates` | 10.19 建立 26 项 backend `grad()` inventory，并补 cuDNN 3D forward/dx/dw CPU 对拍；复核发现 HCCL 四项缺 CPU reference/多卡实机，状态保持待领 |
 | `coreops` | 2.13 只读审计确认 Runtime/Context 与 80 个 flags 的全局状态分散在约 30 个 C++ 文件、309 个 Python 消费者，无法本波安全闭环，未改代码 |
 
+第十七波新增 1 个严格保持待领的 ACL 前置：
+
+| 分区 | 第十七波结果 |
+| --- | --- |
+| `device` | 8.06 将 ReduceSum/Mean/Amax/Amin 四个单步 family 接入共享 launcher，Prod 多轴路径保持原样；静态合同 5 项通过，本机无 NPU |
+
+第十八波新增 2 个严格保持待领的前置：
+
+| 分区 | 第十八波结果 |
+| --- | --- |
+| `bindings` | 2.19 再迁 broadcast_to 三处 shape 边界，累计 31 处；结构计数、TU 语法与两个负向节点通过 |
+| `compat` | 7.03 将 vstack/row_stack/hstack/dstack/column_stack 提升为 numerical 稳定对象并登记 approximate fidelity；7 项 CPU/身份/metadata 对拍通过 |
+
 ## 6. 下一波起点
 
-按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第十七波继续优先可独立验证的
+按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第十九波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
 - `device`：若续做 8.06，只迁下一个最终 owner 明确的 family，并复用 5be5fa15 的 launcher 合同；无 NPU
