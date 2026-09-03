@@ -78,8 +78,8 @@ void ReduceAccumulatorPass::run() {
             queue.push_back(c.get());
         }
         if (node->type != "loop" || !inner_most) continue;
-        if (!node->has_attr("lvalue")) continue;
-        string index = node->get_attr("lvalue");
+        if (!node->has_attr(kir::lvalue)) continue;
+        string index = node->get_attr(kir::lvalue);
         if (index.size() == 0) continue;
 
         // Collect the accumulating statements. There can be several -- a
@@ -92,7 +92,7 @@ void ReduceAccumulatorPass::run() {
             if (c->type == "define") continue;
             string t, r;
             if (c->type.size()
-                    || !split_assignment(c->get_attr("code"), t, r)) {
+                    || !split_assignment(c->get_attr(kir::code), t, r)) {
                 // Anything that is not a plain assignment (a branch, a call,
                 // a nested block) makes the body too unfamiliar to touch.
                 if (c->type.size()) { usable = false; break; }
@@ -117,7 +117,7 @@ void ReduceAccumulatorPass::run() {
             for (auto& c : node->children) {
                 if (c.get() == stores[s]) continue;
                 const string& code = c->type == "define"
-                    ? c->get_attr("rvalue") : c->get_attr("code");
+                    ? c->get_attr(kir::rvalue) : c->get_attr(kir::code);
                 if (mentions(code, pointer)) { ok = false; break; }
             }
             // Two accumulators for the same location would each miss the
@@ -135,10 +135,10 @@ void ReduceAccumulatorPass::run() {
                 open + 1, targets[s].rfind(']') - open - 1);
             for (auto& c : node->children)
                 if (c->type == "define"
-                        && c->get_attr("lvalue") == index_names[s])
+                        && c->get_attr(kir::lvalue) == index_names[s])
                     index_defines[s] = c.get();
             if (index_defines[s]
-                    && mentions(index_defines[s]->get_attr("rvalue"), index))
+                    && mentions(index_defines[s]->get_attr(kir::rvalue), index))
                 ok = false;
         }
         if (!ok) continue;
@@ -149,9 +149,9 @@ void ReduceAccumulatorPass::run() {
             // The index is computed inside the loop, so its definition has to
             // come along; it is loop invariant, which is what was just checked.
             if (index_defines[s]) {
-                node->push_back(index_defines[s]->get_attr("dtype") + " "
+                node->push_back(index_defines[s]->get_attr(kir::dtype) + " "
                                 + index_names[s] + " = "
-                                + index_defines[s]->get_attr("rvalue") + ";",
+                                + index_defines[s]->get_attr(kir::rvalue) + ";",
                                 &node->before);
             }
             node->push_back("auto " + acc + " = " + target + ";",
@@ -161,7 +161,7 @@ void ReduceAccumulatorPass::run() {
                  at = value.find(target, at + acc.size()))
                 value = value.substr(0, at) + acc
                       + value.substr(at + target.size());
-            stores[s]->get_attr("code") = acc + " =" + value;
+            stores[s]->get_attr(kir::code) = acc + " =" + value;
             node->push_back(target + " = " + acc + ";", &node->after);
         }
     }

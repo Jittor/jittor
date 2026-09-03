@@ -30,7 +30,7 @@ static void move_definition_chain(KernelIR* scope, KernelIR* dst, KernelIR* def)
     dst->push_front(def->move_out(), &dst->before);
     // `pending` grows inside the loop, so index rather than iterate
     for (uint i = 0; i < pending.size(); i++) {
-        auto rvalue = expr::make(pending[i]->attrs["rvalue"]);
+        auto rvalue = expr::make(pending[i]->attrs[kir::rvalue]);
         LOGvvvv << "move_rely" << rvalue->to_string();
         rvalue->dfs([&](expr::Expr* sym) {
             if (!sym->is_sym()) return;
@@ -104,8 +104,8 @@ static void tune_atomic(Pass* pass, KernelIR* func, bool is_cuda,
         order.clear();
         order_owner.clear();
         child->dfs([&](unique_ptr<KernelIR>& c) {
-            auto& code = c->attrs["code"];
-            if (code.find("atomic") != string::npos && c->has_attr("rely")) {
+            auto& code = c->attrs[kir::code];
+            if (code.find("atomic") != string::npos && c->has_attr(kir::rely)) {
                 atomic_stmts.push_back(c.get());
             }
         });
@@ -114,7 +114,7 @@ static void tune_atomic(Pass* pass, KernelIR* func, bool is_cuda,
         // collect the loop nest; give up unless it is perfectly nested
         KernelIR* loop = child.get();
         loops.push_back(loop);
-        loop_lvalues.push_back(loop->attrs["lvalue"]);
+        loop_lvalues.push_back(loop->attrs[kir::lvalue]);
         order.push_back(loops.size() - 1);
         order_owner.push_back(-1);
         bool is_perfect_nest = true;
@@ -131,7 +131,7 @@ static void tune_atomic(Pass* pass, KernelIR* func, bool is_cuda,
             if (!is_perfect_nest) break;
             ASSERT(loop->children.size() == 1);
             loops.push_back(inner);
-            loop_lvalues.push_back(inner->attrs["lvalue"]);
+            loop_lvalues.push_back(inner->attrs[kir::lvalue]);
             order.push_back(loops.size() - 1);
             order_owner.push_back(-1);
         }
@@ -142,7 +142,7 @@ static void tune_atomic(Pass* pass, KernelIR* func, bool is_cuda,
         // The last "rely" entry is the trailing empty string of the list.
         for (uint ai = 0; ai < atomic_stmts.size(); ai++) {
             KernelIR* stmt = atomic_stmts[ai];
-            auto rely = split(stmt->get_attr("rely"), ",");
+            auto rely = split(stmt->get_attr(kir::rely), ",");
             for (int ri = (int)rely.size() - 2; ri >= 0; ri--) {
                 if (!rely[ri].size()) continue;
                 int loop_idx = -1;
@@ -173,7 +173,7 @@ static void tune_atomic(Pass* pass, KernelIR* func, bool is_cuda,
         for (int j = (int)split_pos - 1; j >= 0; j--) new_order.push_back(order[j]);
         for (int j = (int)order.size() - 1; j >= (int)split_pos; j--) new_order.push_back(order[j]);
         loop_orders.push_back(new_order);
-        loop_func_names.push_back(func->attrs["lvalue"]);
+        loop_func_names.push_back(func->attrs[kir::lvalue]);
 
         // Interchange the loop headers so that nesting position p holds the
         // loop named loop_lvalues[order[p]].
@@ -181,7 +181,7 @@ static void tune_atomic(Pass* pass, KernelIR* func, bool is_cuda,
         for (auto j : order) {
             uint k;
             for (k = count; k < loops.size(); k++)
-                if (loops[k]->check_attr("lvalue", loop_lvalues[j])) break;
+                if (loops[k]->check_attr(kir::lvalue, loop_lvalues[j])) break;
             if (k < loops.size()) {
                 loops[k]->swap(*loops[count++]);
             }
@@ -189,7 +189,7 @@ static void tune_atomic(Pass* pass, KernelIR* func, bool is_cuda,
 
         for (uint ai = 0; ai < atomic_stmts.size(); ai++) {
             KernelIR* stmt = atomic_stmts[ai];
-            auto rely = split(stmt->get_attr("rely"), ",");
+            auto rely = split(stmt->get_attr(kir::rely), ",");
             // innermost nesting position this atomic's address depends on
             int last_rely_pos = -1;
             for (int ri = (int)rely.size() - 2; ri >= 0; ri--)
@@ -197,7 +197,7 @@ static void tune_atomic(Pass* pass, KernelIR* func, bool is_cuda,
                     if (loop_lvalues[order[k]] == rely[ri] && (int)k > last_rely_pos) last_rely_pos = k;
             vector<unique_ptr<expr::Expr>> matches;
             string tmp_name = "tmp" + std::to_string(tmp_id++);
-            auto& code = stmt->attrs["code"];
+            auto& code = stmt->attrs[kir::code];
             LOGvvvv << "atomic code" << code;
             auto e = expr::make(code.substr(0, code.size() - 1));
 
@@ -298,7 +298,7 @@ void AtomicTunerPass::run() {
     vector<string> loop_func_names;
     for (uint i = 0; i < ir->before.size(); i++) {
         auto& kernel = ir->before[i];
-        if (kernel->get_attr("dtype").find("__global__ void") == string::npos) continue;
+        if (kernel->get_attr(kir::dtype).find("__global__ void") == string::npos) continue;
         tune_atomic(this, kernel.get(), is_cuda, loop_orders, loop_func_names);
     }
     // tune_atomic reordered the loops inside each kernel; the thread range
@@ -310,7 +310,7 @@ void AtomicTunerPass::run() {
             int found = 0;
             for (uint k = 0; k < call->children.size(); k++) {
                 auto& stmt = call->children[k];
-                if (stmt->has_attr("loop_func") && stmt->attrs["loop_func"] == loop_func_names[fi]) {
+                if (stmt->has_attr(kir::loop_func) && stmt->attrs[kir::loop_func] == loop_func_names[fi]) {
                     found = 1;
                     break;
                 }
@@ -321,13 +321,13 @@ void AtomicTunerPass::run() {
             uint pos;
             for (pos = 0; pos < call->children.size(); pos++) {
                 auto& stmt = call->children[pos];
-                if (stmt->has_attr("lvalue") && stmt->attrs["lvalue"].find("tn") == 0) break;
+                if (stmt->has_attr(kir::lvalue) && stmt->attrs[kir::lvalue].find("tn") == 0) break;
             }
             for (uint k = 0; k < loop_orders[fi].size(); k++) {
                 for (uint ci = 0; ci < call->children.size(); ci++) {
                     auto& stmt = call->children[ci];
-                    if (stmt->has_attr("lvalue") &&
-                        stmt->attrs["lvalue"].find("tn" + S(loop_orders[fi][k])) == 0) {
+                    if (stmt->has_attr(kir::lvalue) &&
+                        stmt->attrs[kir::lvalue].find("tn" + S(loop_orders[fi][k])) == 0) {
                         call->children[ci]->swap(*call->children[pos++]);
                         break;
                     }
@@ -350,8 +350,8 @@ void AtomicTunerPass::run() {
                     vector<string> prev_tns;
                     for (uint ci = 0; ci < call->children.size(); ci++) {
                         auto& stmt = call->children[ci];
-                        if (stmt->has_attr("lvalue") && startswith(stmt->attrs["lvalue"], "tn" + S(max_tn))) {
-                            auto& rvalue = stmt->attrs["rvalue"];
+                        if (stmt->has_attr(kir::lvalue) && startswith(stmt->attrs[kir::lvalue], "tn" + S(max_tn))) {
+                            auto& rvalue = stmt->attrs[kir::rvalue];
                             ASSERT(startswith(rvalue, "get_thread_range_log"));
                             LOGvvvv << "change rvalue from" << rvalue;
                             auto range = split(rvalue, ",").at(1);
@@ -371,8 +371,8 @@ void AtomicTunerPass::run() {
                             }
                             break;
                         }
-                        if (stmt->has_attr("lvalue") && startswith(stmt->attrs["lvalue"], "tn")) {
-                            prev_tns.push_back(stmt->attrs["lvalue"]);
+                        if (stmt->has_attr(kir::lvalue) && startswith(stmt->attrs[kir::lvalue], "tn")) {
+                            prev_tns.push_back(stmt->attrs[kir::lvalue]);
                         }
                     }
                     if (para_opt_level >= 3) {
@@ -399,7 +399,7 @@ void AtomicTunerPass::run() {
                         for (auto& prev : prev_tns) {
                             auto* def = call->find_define(prev);
                             ASSERT(def);
-                            auto& rvalue = def->attrs["rvalue"];
+                            auto& rvalue = def->attrs[kir::rvalue];
                             auto range = split(rvalue, ",").at(1);
                             range = split(range, ")").at(0);
                             if (range_product.size()) range_product += '*';
@@ -410,7 +410,7 @@ void AtomicTunerPass::run() {
                         if (range_product.size()) {
                             auto* def = call->find_define("thread_num");
                             ASSERT(def);
-                            auto& rvalue = def->attrs["rvalue"];
+                            auto& rvalue = def->attrs[kir::rvalue];
                             int n_reduce = 0;
                             for (auto o : op->ops)
                                 if (o->type() == OpType::reduce) n_reduce++;

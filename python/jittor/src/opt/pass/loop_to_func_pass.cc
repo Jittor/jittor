@@ -31,15 +31,15 @@ void LoopToFuncPass::run() {
     for (uint i=0; i<ir->children.size(); i++) {
         auto& c = ir->children[i];
         if (c->type != "loop") continue;
-        if (c->has_attr("vectorized") || c->has_attr("unrolled") || c->has_attr("resplited"))
+        if (c->has_attr(kir::vectorized) || c->has_attr(kir::unrolled) || c->has_attr(kir::resplited))
             continue;
         if (c->before.size())
             continue;
         if (c->inner.size() < 3)
             continue;
-        if (!c->has_attr("lvalue"))
+        if (!c->has_attr(kir::lvalue))
             continue;
-        if (c->has_attr("raw"))
+        if (c->has_attr(kir::raw))
             continue;
         
         // func definition
@@ -49,15 +49,15 @@ void LoopToFuncPass::run() {
         // generate function arguments
         vector<KernelIR*> args;
         for (auto& d : ir->children) {
-            if (d->has_attr("raw")) continue;
+            if (d->has_attr(kir::raw)) continue;
             if (d->type == "loop") break;
-            if (d->has_attr("code") && startswith(d->attrs["code"], "func")) break;
+            if (d->has_attr(kir::code) && startswith(d->attrs[kir::code], "func")) break;
             if (d->type == "define") {
-                if (d->has_attr("rvalue")) {
-                    auto& rvalue = d->attrs["rvalue"];
-                    auto& dtype = d->attrs["dtype"];
-                    if (endswith(d->attrs["lvalue"], "_value") ||
-                        endswith(d->attrs["lvalue"], "_outputv")) {
+                if (d->has_attr(kir::rvalue)) {
+                    auto& rvalue = d->attrs[kir::rvalue];
+                    auto& dtype = d->attrs[kir::dtype];
+                    if (endswith(d->attrs[kir::lvalue], "_value") ||
+                        endswith(d->attrs[kir::lvalue], "_outputv")) {
                         args.push_back(d.get());
                         continue;
                     }
@@ -77,13 +77,13 @@ void LoopToFuncPass::run() {
             func->push_back(d->clone());
         }
         func->push_back(c->clone());
-        string func_call = func->attrs["lvalue"]+"(";
+        string func_call = func->attrs[kir::lvalue]+"(";
         for (auto arg : args) {
             if (arg != args.front())
                 func_call += ',';
-            auto dtype = arg->attrs["dtype"];
-            auto& lvalue = arg->attrs["lvalue"];
-            auto& rvalue = arg->attrs["rvalue"];
+            auto dtype = arg->attrs[kir::dtype];
+            auto& lvalue = arg->attrs[kir::lvalue];
+            auto& rvalue = arg->attrs[kir::rvalue];
             if (startswith(dtype, "auto")) {
                     // resolve auto
                 if (rvalue.find("<") == -1 || rvalue.find(">") == -1) {
@@ -94,7 +94,7 @@ void LoopToFuncPass::run() {
                     dtype = split(split(rvalue, "<", 2).at(1), ">", 2).at(0) + dtype.substr(4);
                 }
             }
-            func_call += arg->attrs["lvalue"];
+            func_call += arg->attrs[kir::lvalue];
             func->push_back(dtype+" "+lvalue+";", &func->inner);
         }
         func_call += ");";
@@ -102,7 +102,7 @@ void LoopToFuncPass::run() {
         ir->insert(i, func_call);
         
         auto& fc = ir->children[i];
-        fc->attrs["loop_func"] = func->attrs["lvalue"];
+        fc->attrs[kir::loop_func] = func->attrs[kir::lvalue];
     }
     #ifdef __APPLE__
     ir->remove_all_unused();

@@ -25,7 +25,7 @@ void SplitLoopPass::run() {
             int split_size = std::max(1, choice);
             auto loops = ir->find_loops(S(i));
             ASSERT(loops.size());
-            ir->push_back(loops[0]->attrs["dtype"]+" stride"+S(i)+" = "+S(split_size)+";");
+            ir->push_back(loops[0]->attrs[kir::dtype]+" stride"+S(i)+" = "+S(split_size)+";");
             ir->split_loop(i, j);
         }
     }

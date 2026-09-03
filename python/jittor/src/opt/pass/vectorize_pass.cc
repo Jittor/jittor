@@ -24,7 +24,7 @@ void VectorizePass::run() {
                 has_loop = true;
             q.push_back(c.get());
         }
-        if (!has_loop && ir->has_attr("loop_id"))
+        if (!has_loop && ir->has_attr(kir::loop_id))
             inner_loops.push_back(ir);
     }
     LOGvvvv << "Find" << inner_loops.size() << "inner loops";
@@ -33,16 +33,16 @@ void VectorizePass::run() {
             loop->push_back("#pragma vector", &loop->before);
         } else if (choice > 1) {
             int num=0;
-            if (!loop->get_number(loop->get_attr("rvalue"), num)) {
-                if (loop->has_attr("split_id")) {
-                    string si = loop->attrs["split_id"];
-                    string loop_id = loop->attrs["loop_id"];
+            if (!loop->get_number(loop->get_attr(kir::rvalue), num)) {
+                if (loop->has_attr(kir::split_id)) {
+                    string si = loop->attrs[kir::split_id];
+                    string loop_id = loop->attrs[kir::loop_id];
                     ASSERT(loop->get_number("stride"+si, num));
                     int vectorlength = 64;
                     while (vectorlength && vectorlength/2 >= num)
                         vectorlength /= 2;
                     auto floop = loop->father;
-                    while (floop && !floop->check_attr("loop_id", si))
+                    while (floop && !floop->check_attr(kir::loop_id, si))
                         floop = floop->father;
                     ASSERT(floop);
                     auto loops = floop->find_loops(loop_id);
@@ -50,7 +50,7 @@ void VectorizePass::run() {
                     for (auto loop2 : loops) {
                         loop2->before.clear();
                         loop2->push_back("#pragma vector", &loop2->before);
-                        loop2->attrs["vectorized"] = "1";
+                        loop2->attrs[kir::vectorized] = "1";
                     }
                     floop->resplit();
                     auto loops2 = floop->find_loops(loop_id);
@@ -58,7 +58,7 @@ void VectorizePass::run() {
                     for (auto loop2 : loops2) {
                         loop2->before.clear();
                         loop2->push_back("#pragma vector vectorlength("+S(vectorlength)+")", &loop2->before);
-                        loop2->attrs["vectorized"] = "1";
+                        loop2->attrs[kir::vectorized] = "1";
                     }
                     continue;
                 }
@@ -74,7 +74,7 @@ void VectorizePass::run() {
             }
         }
         loop->push_back("#pragma ivdep", &loop->before);
-        loop->attrs["vectorized"] = "1";
+        loop->attrs[kir::vectorized] = "1";
     }
 }
 

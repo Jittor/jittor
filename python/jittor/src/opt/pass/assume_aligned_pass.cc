@@ -24,7 +24,7 @@ void AssumeAlignedPass::run() {
         for (auto& l : ls)
             for (auto& c : (*l)) {
                 if (c->type != "define") continue;
-                auto& lvalue = c->get_attr("lvalue");
+                auto& lvalue = c->get_attr(kir::lvalue);
                 // if is a var pointer
                 if (startswith(lvalue, "op") && endswith(lvalue, "p")) {
                     string name = lvalue.substr(0, lvalue.size()-1);

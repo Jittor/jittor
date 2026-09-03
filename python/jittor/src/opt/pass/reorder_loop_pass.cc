@@ -55,7 +55,7 @@ void ReorderLoopPass::run() {
         for (auto j : order) {
             uint k;
             for (k=count; k<loops.size(); k++)
-                if (loops[k]->check_attr("loop_id", S(j)))
+                if (loops[k]->check_attr(kir::loop_id, S(j)))
                     break;
             if (k<loops.size())
                 loops[k]->swap(*loops[count++]);

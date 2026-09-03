@@ -46,9 +46,9 @@ void RestridePass::run() {
             vector<KernelIR*> loops, splits;
             KernelIR* fa = ir->father;
             // find all loop index affect this define
-            while (fa && fa->type=="loop" && fa->has_attr("loop_id")) {
-                auto idname = "id"+fa->attrs["loop_id"];
-                if (findn(ir->attrs["rvalue"], idname) != -1)
+            while (fa && fa->type=="loop" && fa->has_attr(kir::loop_id)) {
+                auto idname = "id"+fa->attrs[kir::loop_id];
+                if (findn(ir->attrs[kir::rvalue], idname) != -1)
                     loops.push_back(fa);
                 fa = fa->father;
             }
@@ -56,11 +56,11 @@ void RestridePass::run() {
                 string newid;
                 // create new id which is continuous
                 for (uint i=0; i<loops.size(); i++) {
-                    newid += "+" + loops[i]->get_attr("lvalue");
+                    newid += "+" + loops[i]->get_attr(kir::lvalue);
                     bool found = false;
                     for (auto& split : splits) {
-                        if (split->get_attr("split_id") != loops[i]->get_attr("loop_id"))
-                            newid += "*"+split->get_attr("rvalue");
+                        if (split->get_attr(kir::split_id) != loops[i]->get_attr(kir::loop_id))
+                            newid += "*"+split->get_attr(kir::rvalue);
                         else {
                             split = loops[i];
                             found = true;
@@ -68,8 +68,8 @@ void RestridePass::run() {
                     }
                     if (!found) splits.push_back(loops[i]);
                 }
-                auto& lvalue = ir->get_attr("lvalue");
-                auto& rvalue = ir->get_attr("rvalue");
+                auto& lvalue = ir->get_attr(kir::lvalue);
+                auto& rvalue = ir->get_attr(kir::rvalue);
                 if (replaces.count(lvalue) && (replaces[lvalue] != newid || origin_defs[lvalue] != rvalue)) {
                     // conflict stride, pass
                     replaces[lvalue] = "";
@@ -139,8 +139,8 @@ void RestridePass::run() {
     }
     // replace prev id with new id
     for (auto ir : defs) {
-        auto& lvalue = ir->attrs["lvalue"];
-        auto& rvalue = ir->attrs["rvalue"];
+        auto& lvalue = ir->attrs[kir::lvalue];
+        auto& rvalue = ir->attrs[kir::rvalue];
         if (replaces.count(lvalue) && replaces[lvalue] != "") {
             string name = lvalue.substr(0, lvalue.size()-2);
             rvalue = replaces[lvalue];

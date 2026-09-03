@@ -15,10 +15,10 @@ void check_empty_block(KernelIR* ir) {
     for (uint i=0; i<ir->children.size(); i++) {
         auto loop = ir->children[i].get();
         if (loop->type != "loop") continue;
-        if (loop->has_attr("loop_id")) {
+        if (loop->has_attr(kir::loop_id)) {
             continue;
         }
-        if (loop->has_attr("rvalue"))
+        if (loop->has_attr(kir::rvalue))
             continue;
         ir->insert(i+1, "for (int _=0; _<1; _++) {}");
         ir->children[i+1]->insert(0, loop->children);
@@ -36,9 +36,9 @@ void ExpandEmptyBlockPass::run() {
 JIT_TEST(check_empty_block) {
     KernelIR ir("x=1;{a=1;}y=1;");
     check_empty_block(&ir);
-    ASSERT(ir.children[1]->attrs.at("lvalue")=="_");
+    ASSERT(ir.children[1]->require_attr(kir::lvalue)=="_");
     ir.move_loop_back();
-    ASSERT(ir.children[2]->attrs.at("lvalue")=="_");
+    ASSERT(ir.children[2]->require_attr(kir::lvalue)=="_");
 }
 
 } // jittor

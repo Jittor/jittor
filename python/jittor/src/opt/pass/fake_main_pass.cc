@@ -83,8 +83,8 @@ void FakeMainPass::run() {
     map<size_t, string> var_map;
     for (auto& c : ir->children) {
         if (c->type != "define") continue;
-        auto& name = c->attrs["lvalue"];
-        auto& rvalue = c->attrs["rvalue"];
+        auto& name = c->attrs[kir::lvalue];
+        auto& rvalue = c->attrs[kir::rvalue];
         uint op_id, var_id;
         Op* op;
         Var* var;

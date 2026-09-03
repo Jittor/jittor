@@ -58,8 +58,8 @@ void WarpReducePass::run() {
     if (!op->flag(OpFlags::_cuda)) return;
     if (op->get_loop_option("no_warp_reduce")) return;
     ir->dfs([&](unique_ptr<KernelIR>& i) {
-        if (!i->has_attr("code")) return;
-        auto& code = i->attrs["code"];
+        if (!i->has_attr(kir::code)) return;
+        auto& code = i->attrs[kir::code];
         if (!startswith(code, "atomicAdd")) return;
         // Someone upstream already decided which thread writes. SharedReducePass
         // folds the reduction across the block and leaves

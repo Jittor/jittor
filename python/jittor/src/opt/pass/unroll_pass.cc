@@ -20,32 +20,32 @@ void UnrollPass::run() {
         KernelIR* ir = q[i];
         bool dont_unroll = false;
         // do not unroll if stride != 1
-        if (ir->has_attr("rvalue2"))
+        if (ir->has_attr(kir::rvalue2))
             dont_unroll = true;
         for (auto& c : ir->children) {
             // non vectorized loop
             if (c->type == "if")
                 dont_unroll = true;
-            if (c->type == "loop" && !c->has_attr("vectorized") && !c->has_attr("unrolled"))
+            if (c->type == "loop" && !c->has_attr(kir::vectorized) && !c->has_attr(kir::unrolled))
                 dont_unroll = true;
             q.push_back(c.get());
         }
-        ASSERT(!(ir->type=="loop" && !dont_unroll && !ir->has_attr("loop_id")));
-        if (!dont_unroll && ir->has_attr("loop_id")) {
+        ASSERT(!(ir->type=="loop" && !dont_unroll && !ir->has_attr(kir::loop_id)));
+        if (!dont_unroll && ir->has_attr(kir::loop_id)) {
             loops.push_back(ir);
         }
     }
     for (auto loop : loops) {
-        if (loop->has_attr("vectorized") || loop->has_attr("unrolled"))
+        if (loop->has_attr(kir::vectorized) || loop->has_attr(kir::unrolled))
             continue;
-        loop->attrs["unrolled"] = "1";
+        loop->attrs[kir::unrolled] = "1";
         if (choice==1)
             loop->push_back("#pragma unroll", &loop->before);
         else {
             int num=0;
-            auto& split_id = loop->get_attr("split_id");
-            auto& loop_id = loop->get_attr("loop_id");
-            auto& rvalue = loop->get_attr("rvalue");
+            auto& split_id = loop->get_attr(kir::split_id);
+            auto& loop_id = loop->get_attr(kir::loop_id);
+            auto& rvalue = loop->get_attr(kir::rvalue);
             if (!loop->get_number(rvalue, num)) {
                 if (split_id.size()) {
                     string& si = split_id;
@@ -55,7 +55,7 @@ void UnrollPass::run() {
                         continue;
                     }
                     auto floop = loop->father;
-                    while (floop && !floop->check_attr("loop_id", split_id))
+                    while (floop && !floop->check_attr(kir::loop_id, split_id))
                         floop = floop->father;
                     ASSERT(floop) << loop->to_string();
                     floop->resplit();
@@ -65,7 +65,7 @@ void UnrollPass::run() {
                     for (auto loop2 : loops2) {
                         loop2->before.clear();
                         loop2->push_back("#pragma unroll("+S(num)+")", &loop2->before);
-                        loop2->attrs["unrolled"] = "1";
+                        loop2->attrs[kir::unrolled] = "1";
                     }
                     // partial unrolled loops in if
                     ASSERT(floop->after.size() && floop->after[0]->type == "if");
@@ -74,7 +74,7 @@ void UnrollPass::run() {
                     for (auto loop2 : loops) {
                         loop2->before.clear();
                         loop2->push_back("#pragma unroll", &loop2->before);
-                        loop2->attrs["unrolled"] = "1";
+                        loop2->attrs[kir::unrolled] = "1";
                     }
                     continue;
                 } else {

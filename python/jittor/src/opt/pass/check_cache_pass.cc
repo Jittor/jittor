@@ -117,7 +117,7 @@ void CheckCachePass::run() {
         commands.pop_back();
     }
     vector<KernelIR*> q({ir});
-    vector<string> attrs_to_check{"code", "rvalue"};
+    vector<string> attrs_to_check{kir::code, kir::rvalue};
     for (uint i=0; i<q.size(); i++) {
         KernelIR* ir = q[i];
         ir->for_each([&](unique_ptr<KernelIR>& c) {

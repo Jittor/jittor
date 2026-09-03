@@ -27,7 +27,7 @@ int parse_int_at(const string& str, int pos) {
 std::pair<string, int> find_atomic_kernel(unique_ptr<KernelIR>& call, vector<unique_ptr<KernelIR>>& funcs) {
     string func_name = "";
     for (uint i = 0; i < call->children.size(); ++i) {
-        auto& code = call->children[i]->get_attr("code");
+        auto& code = call->children[i]->get_attr(kir::code);
         if (code.substr(0, 5) == "func_" && code.find("<<<") != string::npos &&
             code.find(">>>") != string::npos) {
             func_name = code.substr(0, code.find("<<<"));
@@ -35,10 +35,10 @@ std::pair<string, int> find_atomic_kernel(unique_ptr<KernelIR>& call, vector<uni
         }
     }
     for (uint i = 0; i < funcs.size(); ++i)
-        if (funcs[i]->get_attr("lvalue") == func_name) {
+        if (funcs[i]->get_attr(kir::lvalue) == func_name) {
             bool has_atomic = false;
             funcs[i]->dfs([&](unique_ptr<KernelIR>& c) {
-                if (c->get_attr("code").find("atomic") != string::npos) has_atomic = true;
+                if (c->get_attr(kir::code).find("atomic") != string::npos) has_atomic = true;
             });
             if (has_atomic) return std::make_pair(func_name, i);
         }
@@ -50,7 +50,7 @@ std::pair<string, int> find_atomic_kernel(unique_ptr<KernelIR>& call, vector<uni
 int find_reduce_op_id(unique_ptr<KernelIR>& kernel, FusedOp* op) {
     std::set<int> reduce_ids;
     kernel->dfs([&](unique_ptr<KernelIR>& c) {
-        auto& code = c->attrs["code"];
+        auto& code = c->attrs[kir::code];
         size_t search_pos = 0;
         while (true) {
             auto pos = code.find("op", search_pos);
@@ -82,7 +82,7 @@ void rewrite_atomics_to_shared_reduce(unique_ptr<KernelIR>& kernel) {
         string op = "";
         unique_ptr<KernelIR>* target = nullptr;
         kernel->dfs([&](unique_ptr<KernelIR>& c) {
-            string& code = c->attrs["code"];
+            string& code = c->attrs[kir::code];
             if (c->father && c->father->type == "if") return;
             if (code.find("atomic") == 0) {
                 // "atomicAdd(" -> "add"
@@ -100,18 +100,18 @@ void rewrite_atomics_to_shared_reduce(unique_ptr<KernelIR>& kernel) {
         });
         if (target == nullptr) break;
         auto& stmt = *target;
-        string code = stmt->attrs["code"];
+        string code = stmt->attrs[kir::code];
         // second argument of the atomic: the per-thread accumulator
         string value = code.substr(code.rfind("),") + 2, code.rfind(");") - (code.rfind("),") + 2));
         if (value.find("(") != string::npos) {
             value = value.substr(value.find("(") + 1, value.find(")") - (value.find("(") + 1));
         }
         auto father = stmt->father;
-        string dtype = stmt->father->find_define(value)->get_attr("dtype");
+        string dtype = stmt->father->find_define(value)->get_attr(kir::dtype);
         uint pos = 0;
         for (; pos < stmt->flist->size() && stmt->flist->at(pos) != stmt; pos++);
         ASSERT(pos < stmt->flist->size());
-        stmt->attrs["code"] =
+        stmt->attrs[kir::code] =
             value + " = shared_reduce<" + dtype + ", shared_reduce_" + op + ">(" + value + ");";
         father->push_back("if (threadIdx.x == 0) " + code, stmt->flist, true);
     }
@@ -132,11 +132,11 @@ std::tuple<int, vector<int>, tn_range_map> plan_reduce_thread_order(unique_ptr<K
     tn_range_map tn_ranges;
     for (auto& define : call->children) {
         if (define->type != "define") continue;
-        if (define->get_attr("lvalue").substr(0, 2) != "tn") continue;
-        int tn = stoi(define->get_attr("lvalue").substr(2));
+        if (define->get_attr(kir::lvalue).substr(0, 2) != "tn") continue;
+        int tn = stoi(define->get_attr(kir::lvalue).substr(2));
         // rvalue is "get_thread_range_log(thread_num_left, range3 * range4)";
         // skip past the first argument and collect every rangeN it mentions
-        string rvalue = define->get_attr("rvalue");
+        string rvalue = define->get_attr(kir::rvalue);
         rvalue = rvalue.substr(rvalue.find(','));
         vector<int> dims;
         while (true) {
@@ -183,35 +183,35 @@ void apply_reduce_thread_order(unique_ptr<KernelIR>& call, unique_ptr<KernelIR>&
     // it statement by statement.
     uint pos = 0;
     for (auto& child : call->children) {
-        if (child->type == "define" && child->get_attr("lvalue").substr(0, 2) == "tn") break;
+        if (child->type == "define" && child->get_attr(kir::lvalue).substr(0, 2) == "tn") break;
         ++pos;
     }
     for (int tn : order) {
         string range_expr = "";
         for (int d : tn_ranges[tn]) range_expr += " * range" + std::to_string(d);
-        call->children[pos]->attrs["lvalue"] = "tn" + std::to_string(tn);
-        call->children[pos]->attrs["rvalue"] =
+        call->children[pos]->attrs[kir::lvalue] = "tn" + std::to_string(tn);
+        call->children[pos]->attrs[kir::rvalue] =
             "get_thread_range_log(thread_num_left, " + range_expr.substr(2) + ")";
         ++pos;
     }
     if (last_reduce == 0) {
         // a single reduced range: give it at least a warp
         string cur = "tn" + std::to_string(order[0]);
-        call->children[pos++]->attrs["code"] = cur + " = std::max(" + cur + ", 5);";
+        call->children[pos++]->attrs[kir::code] = cur + " = std::max(" + cur + ", 5);";
     }
     for (uint i = 0; i + 1 < order.size(); ++i) {
         string cur = "tn" + std::to_string(order[i]);
         string next = "tn" + std::to_string(order[i + 1]);
-        call->children[pos++]->attrs["code"] = next + " = " + cur + " + " + next + ";";
+        call->children[pos++]->attrs[kir::code] = next + " = " + cur + " + " + next + ";";
         if ((int)i + 1 == last_reduce) {
-            call->children[pos++]->attrs["code"] = next + " = std::max(" + next + ", 5);";
+            call->children[pos++]->attrs[kir::code] = next + " = std::max(" + next + ", 5);";
         }
     }
-    call->children[pos]->attrs["code"] = "thread_num=1<<tn" + std::to_string(order.back()) + ";";
+    call->children[pos]->attrs[kir::code] = "thread_num=1<<tn" + std::to_string(order.back()) + ";";
 
     pos = 0;
     for (auto& child : kernel->children) {
-        if (child->type == "define" && child->get_attr("lvalue").substr(0, 4) == "tnum") break;
+        if (child->type == "define" && child->get_attr(kir::lvalue).substr(0, 4) == "tnum") break;
         ++pos;
     }
     for (uint i = 0; i < order.size(); ++i) {
@@ -219,17 +219,17 @@ void apply_reduce_thread_order(unique_ptr<KernelIR>& call, unique_ptr<KernelIR>&
         string prev_tn = "tn" + (i == 0 ? std::to_string(order.size()) : std::to_string(order[i - 1]));
         string tn = "tn" + std::to_string(order[i]);
         string tnum = "tnum" + std::to_string(order[i]);
-        tnum_def->attrs["lvalue"] = tnum;
-        tnum_def->attrs["rvalue"] = "1<<(" + tn + "-" + prev_tn + ")";
+        tnum_def->attrs[kir::lvalue] = tnum;
+        tnum_def->attrs[kir::rvalue] = "1<<(" + tn + "-" + prev_tn + ")";
         auto& tid_def = kernel->children[pos++];
-        tid_def->attrs["lvalue"] = "tid" + std::to_string(order[i]);
-        tid_def->attrs["rvalue"] = "(thread_id>>" + prev_tn + ") & (" + tnum + "-1)";
+        tid_def->attrs[kir::lvalue] = "tid" + std::to_string(order[i]);
+        tid_def->attrs[kir::rvalue] = "(thread_id>>" + prev_tn + ") & (" + tnum + "-1)";
     }
     // block size must cover all reduced dimensions, so it is 1<<tn{last
     // reduced range}, capped at 1024
-    call->find_define("p1")->attrs["rvalue"] =
+    call->find_define("p1")->attrs[kir::rvalue] =
         string("std::max(thread_num / std::min(1 << tn") + std::to_string(order[last_reduce]) + ", 1024), 1)";
-    call->find_define("p2")->attrs["rvalue"] =
+    call->find_define("p2")->attrs[kir::rvalue] =
         string("std::min(1 << tn") + std::to_string(order[last_reduce]) + ", 1024)";
 }
 

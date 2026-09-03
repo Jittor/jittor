@@ -17,9 +17,9 @@ void MarkRawPass::run() {
         string* check = nullptr;
         bool found = false;
         if (c->type == "define") {
-            check = &c->get_attr("rvalue");
-        } else if (c->has_attr("code"))
-            check = &c->get_attr("code");
+            check = &c->get_attr(kir::rvalue);
+        } else if (c->has_attr(kir::code))
+            check = &c->get_attr(kir::code);
         if (check) {
             for (auto& s : raws)
                 if (check->find(s) != string::npos) {
@@ -27,9 +27,9 @@ void MarkRawPass::run() {
                     break;
                 }
             if (found) {
-                c->attrs["raw"] = "1";
+                c->attrs[kir::raw] = "1";
                 if (c->type=="define")
-                    raws.push_back(c->get_attr("lvalue"));
+                    raws.push_back(c->get_attr(kir::lvalue));
             }
         }
     }

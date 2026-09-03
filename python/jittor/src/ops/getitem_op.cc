@@ -269,7 +269,7 @@ void GetitemOp::_compile_optimize(string& src) {
     auto& new_func = func->before.back();
     // auto new_func = func->before.back()->move_out();
 
-    new_func->attrs["dtype"] = "static __global__ void";
+    new_func->attrs[kir::dtype] = "static __global__ void";
     // LOGir << main.to_string();
     src = main.to_string();
     string arg_call = "";
@@ -277,9 +277,9 @@ void GetitemOp::_compile_optimize(string& src) {
     const char* tname2[] = {"blockDim.x", "blockDim.y", "blockDim.z", "gridDim.x", "gridDim.y", "gridDim.z"};
     for (auto& ir : func->children) {
         if (ir->type == "define") {
-            string& rvalue = ir->attrs.at("rvalue");
-            string& lvalue = ir->attrs.at("lvalue");
-            string& dtype = ir->attrs.at("dtype");
+            string& rvalue = ir->require_attr(kir::rvalue);
+            string& lvalue = ir->require_attr(kir::lvalue);
+            string& dtype = ir->require_attr(kir::dtype);
             if (startswith(rvalue, "input")
                 || startswith(rvalue, "output")
                 || startswith(rvalue, "vs.")
@@ -317,7 +317,7 @@ void GetitemOp::_compile_optimize(string& src) {
             ASSERT(l->inner.size() == 3);
             auto lo = l->find_define("LO"+S(i));
             ASSERT(lo);
-            auto loi = std::stoi(lo->attrs.at("rvalue"));
+            auto loi = std::stoi(lo->require_attr(kir::rvalue));
             if (loi>>7) has_zero = 1;
             string tid = "";
             string tnum = "";
@@ -336,8 +336,8 @@ void GetitemOp::_compile_optimize(string& src) {
                 continue;
             }
             if (loi&(1<<6)) {
-                l->inner.at(0)->attrs.at("rvalue") = tid;
-                l->inner.at(2)->attrs.at("code") = "i"+S(i)+"+="+tnum+";";
+                l->inner.at(0)->require_attr(kir::rvalue) = tid;
+                l->inner.at(2)->require_attr(kir::code) = "i"+S(i)+"+="+tnum+";";
             } else {
                 // no need for
                 while (l->inner.size())

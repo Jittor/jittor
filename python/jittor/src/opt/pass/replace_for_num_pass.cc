@@ -17,11 +17,11 @@ void ReplaceForNumPass::run() {
         auto& loop_ir = ir->children[fid];
         if (loop_ir->type != "loop")
             continue;
-        auto& rvalue = loop_ir->get_attr("rvalue");
+        auto& rvalue = loop_ir->get_attr(kir::rvalue);
         auto j=rvalue.find("num");
         if (j == string::npos) continue;
         auto& loop_num = rvalue;
-        auto& loop_index = loop_ir->get_attr("lvalue");
+        auto& loop_index = loop_ir->get_attr(kir::lvalue);
         LOGvvvv << "Find for_num" << loop_num << loop_index;
         uint sid=fid-1;
         bool found = false;
@@ -29,7 +29,7 @@ void ReplaceForNumPass::run() {
         for (;sid>0; sid--) {
             if (ir->children[sid]->type != "define")
                 continue;
-            if (!ir->children[sid]->check_attr("lvalue", loop_num))
+            if (!ir->children[sid]->check_attr(kir::lvalue, loop_num))
                 continue;
             found = true;
             break;
@@ -37,7 +37,7 @@ void ReplaceForNumPass::run() {
         // T xx_num = xxx->num
         // def = xxx
         ASSERT(found);
-        auto& code2 = ir->children[sid]->get_attr("rvalue");
+        auto& code2 = ir->children[sid]->get_attr(kir::rvalue);
         ASSERT(endswith(code2, "->num")) << ir->children[sid]->attrs;
         string def = code2.substr(0, code2.size()-5);
         uint op_id, opvar_id;

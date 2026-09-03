@@ -16,7 +16,7 @@ void CompileShapesPass::run() {
     if (!op->get_loop_option("compile_shapes")) return;
     for (auto& c : ir->children) {
         if (c->type != "define") continue;
-        auto& rvalue = c->get_attr("rvalue");
+        auto& rvalue = c->get_attr(kir::rvalue);
         // T range = op{i}_{vnamr}->shape[j];
         //                        j      i
         if (!startswith(rvalue, "op") || rvalue.back() != ']')

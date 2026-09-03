@@ -127,26 +127,26 @@ static void scan(KernelIR* node, LoopScan& out,
     for (auto& c : node->children) {
         if (!out.usable) return;
         if (c->type == "define") {
-            defines[c->get_attr("lvalue")] = c->get_attr("rvalue");
+            defines[c->get_attr(kir::lvalue)] = c->get_attr(kir::rvalue);
             continue;
         }
         if (c->type == "loop") {
-            if (c->has_attr("rvalue"))
-                out.inner_bounds.push_back(c->get_attr("rvalue"));
+            if (c->has_attr(kir::rvalue))
+                out.inner_bounds.push_back(c->get_attr(kir::rvalue));
             // A split loop keeps its tile-size define in `inner`, not among the
             // children, and that name is only in scope inside the loop.
             for (auto& s : c->inner)
                 if (s->type == "define")
-                    defines[s->get_attr("lvalue")] = s->get_attr("rvalue");
+                    defines[s->get_attr(kir::lvalue)] = s->get_attr(kir::rvalue);
             scan(c.get(), out, defines);
             // Anything the accumulator pass parked around the loop counts too.
             for (auto* ls : {&c->before, &c->after})
                 for (auto& s : *ls) {
                     if (s->type == "define") {
-                        defines[s->get_attr("lvalue")] = s->get_attr("rvalue");
+                        defines[s->get_attr(kir::lvalue)] = s->get_attr(kir::rvalue);
                         continue;
                     }
-                    const string& code = s->get_attr("code");
+                    const string& code = s->get_attr(kir::code);
                     auto eq = code.find('=');
                     auto br = code.find('[');
                     if (eq == string::npos || br == string::npos || br > eq)
@@ -163,7 +163,7 @@ static void scan(KernelIR* node, LoopScan& out,
         // that it does not happen.
         if (c->type == "comment") continue;
         if (c->type.size()) { out.usable = false; return; }
-        const string& code = c->get_attr("code");
+        const string& code = c->get_attr(kir::code);
         // A jump would make the loop non-canonical for OpenMP.
         if (mentions(code, "break") || mentions(code, "continue")
                 || mentions(code, "return") || mentions(code, "goto")) {
@@ -200,18 +200,18 @@ void CpuParallelPass::run() {
     for (auto* body : bodies) {
         for (auto& loop : body->children) {
             if (loop->type != "loop") continue;
-            if (!loop->has_attr("lvalue") || !loop->has_attr("rvalue")) continue;
-            string index = loop->get_attr("lvalue");
-            string bound = loop->get_attr("rvalue");
+            if (!loop->has_attr(kir::lvalue) || !loop->has_attr(kir::rvalue)) continue;
+            string index = loop->get_attr(kir::lvalue);
+            string bound = loop->get_attr(kir::rvalue);
             if (index.size() == 0 || !is_identifier(bound)) continue;
             // A split loop steps by a tile instead of by one, so its trip count
             // is bound/stride and its index reaches the store inside a sum.
-            bool split = loop->has_attr("rvalue2")
-                         && is_identifier(loop->get_attr("rvalue2"));
-            string stride = split ? loop->get_attr("rvalue2") : string();
+            bool split = loop->has_attr(kir::rvalue2)
+                         && is_identifier(loop->get_attr(kir::rvalue2));
+            string stride = split ? loop->get_attr(kir::rvalue2) : string();
             bool already = false;
             for (auto& b : loop->before)
-                if (mentions(b->get_attr("code"), "pragma")) already = true;
+                if (mentions(b->get_attr(kir::code), "pragma")) already = true;
             if (already) continue;
 
             // The outermost loop alone is often not worth threading: on an
@@ -226,21 +226,21 @@ void CpuParallelPass::run() {
             while (!split && indices.size() < 3
                     && level->children.size() == 1
                     && level->children[0]->type == "loop"
-                    && level->children[0]->has_attr("lvalue")
-                    && level->children[0]->has_attr("rvalue")
-                    && is_identifier(level->children[0]->get_attr("rvalue"))
+                    && level->children[0]->has_attr(kir::lvalue)
+                    && level->children[0]->has_attr(kir::rvalue)
+                    && is_identifier(level->children[0]->get_attr(kir::rvalue))
                     && level->children[0]->before.size() == 0
                     && level->children[0]->after.size() == 0) {
                 level = level->children[0].get();
-                indices.push_back(level->get_attr("lvalue"));
-                bounds.push_back(level->get_attr("rvalue"));
+                indices.push_back(level->get_attr(kir::lvalue));
+                bounds.push_back(level->get_attr(kir::rvalue));
             }
 
             LoopScan info;
             unordered_map<string,string> defines;
             for (auto& s : loop->inner)
                 if (s->type == "define")
-                    defines[s->get_attr("lvalue")] = s->get_attr("rvalue");
+                    defines[s->get_attr(kir::lvalue)] = s->get_attr(kir::rvalue);
             scan(loop.get(), info, defines);
             if (!info.usable || info.store_indices.size() == 0) continue;
 
@@ -346,9 +346,9 @@ void CpuParallelPass::run() {
             {
                 for (auto& c : loop->children) {
                     if (c->type != "loop") continue;
-                    if (!c->has_attr("lvalue") || !c->has_attr("rvalue")) break;
-                    string iv = c->get_attr("lvalue");
-                    string ib = c->get_attr("rvalue");
+                    if (!c->has_attr(kir::lvalue) || !c->has_attr(kir::rvalue)) break;
+                    string iv = c->get_attr(kir::lvalue);
+                    string ib = c->get_attr(kir::rvalue);
                     if (!is_identifier(ib) || defines.count(ib)) break;
                     bool ok = true;
                     for (auto& idx : info.store_indices) {

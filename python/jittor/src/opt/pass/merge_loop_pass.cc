@@ -22,19 +22,19 @@ void MergeLoopPass::run() {
         for (auto& c : ir->children) {
             if (c->type != "loop")
                 continue;
-            if (!c->has_attr("loop_id"))
+            if (!c->has_attr(kir::loop_id))
                 continue;
-            if (c->has_attr("raw"))
+            if (c->has_attr(kir::raw))
                 continue;
             auto* cc = c.get();
             // the nest's identity, as the sequence of loop ids down the
             // chain.  Separated, so that the nest (1,2) and a lone loop over
             // range 12 cannot produce the same key and be merged as if they
             // were the same nest.
-            string key = cc->get_attr("loop_id");
-            while (cc->children.size()==1 && cc->children[0]->has_attr("loop_id")) {
+            string key = cc->get_attr(kir::loop_id);
+            while (cc->children.size()==1 && cc->children[0]->has_attr(kir::loop_id)) {
                 cc = cc->children[0].get();
-                key += "_" + cc->get_attr("loop_id");
+                key += "_" + cc->get_attr(kir::loop_id);
             }
             loops.push_back(c.get());
             loop_keys.push_back(key);

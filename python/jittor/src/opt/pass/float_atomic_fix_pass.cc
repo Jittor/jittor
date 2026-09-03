@@ -27,8 +27,8 @@ void FloatAtomicFixPass::run() {
         fixed[name] = 1;
         string namep = name+"p";
         ir->dfs([&](unique_ptr<KernelIR>& i) {
-            if (!i->has_attr("code")) return;
-            auto& code = i->attrs["code"];
+            if (!i->has_attr(kir::code)) return;
+            auto& code = i->attrs[kir::code];
             if (!startswith(code, namep)) return;
             LOGvvvv << "find code" << code;
             auto src = expr::make(code);
@@ -54,8 +54,8 @@ void FloatAtomicFixPass::run() {
     };
 
     ir->dfs([&](unique_ptr<KernelIR>& i) {
-        if (!i->has_attr("code")) return;
-        auto& code = i->attrs["code"];
+        if (!i->has_attr(kir::code)) return;
+        auto& code = i->attrs[kir::code];
         const char* m = nullptr;
         if (startswith(code, "cuda_atomic_min"))
             m = "cuda_atomic_min";

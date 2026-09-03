@@ -10,6 +10,59 @@
 
 namespace jittor {
 
+// The attributes a KernelIR node may carry. The set is closed, and every
+// access goes through one of these names: `attrs` is a map<string,string>
+// reached with a key, and KernelIR::get_attr returns `attrs[s]`, so a
+// mistyped key used to insert an empty value and read back as "this node
+// does not have that attribute" -- no error anywhere, just a pass quietly
+// doing nothing. A name that is not in this namespace is now a compile
+// error, and tests/structure/test_kernel_ir_attr_names.py keeps string
+// literals from coming back.
+namespace kir {
+// the name a node defines: the variable of a `define`, the induction
+//   variable of a `loop`, the function name of a `func`. Set by the parser.
+constexpr const char* lvalue = "lvalue";
+// the initialiser of a `define`, the bound expression of a `loop`
+//   (`range{loop_id}`). Set by the parser.
+constexpr const char* rvalue = "rvalue";
+// a `loop`'s step, when it is not ++. Set by split_loop.
+constexpr const char* rvalue2 = "rvalue2";
+// the raw text of a statement, macro or comment. Set by the parser.
+constexpr const char* code = "code";
+// the declared type of a `define` or `func`. Set by the parser.
+constexpr const char* dtype = "dtype";
+// which ranges a `loop` iterates, as text; see parse_loop_id above.
+//   Set by rename_loop_index, split_loop and MergeLoopVarPass.
+constexpr const char* loop_id = "loop_id";
+// on a loop split out of another, that other loop's loop_id.
+//   Set by split_loop; read by UnrollPass and VectorizePass.
+constexpr const char* split_id = "split_id";
+// the node is text to be emitted as is, not parsed. Set by the parser
+//   and MarkRawPass.
+constexpr const char* raw = "raw";
+// set by check_unused; "" means unused, read by remove_unused.
+constexpr const char* used = "used";
+// set by VectorizePass on the loops it handled.
+constexpr const char* vectorized = "vectorized";
+// set by UnrollPass on the loops it handled.
+constexpr const char* unrolled = "unrolled";
+// set by resplit(), so a loop is not resplit twice.
+constexpr const char* resplited = "resplited";
+// on the call statement of a loop that LoopToFuncPass moved into a
+//   function, that function's name. Read by ParallelPass, AtomicTunerPass,
+//   InsertProfileLoopPass.
+constexpr const char* loop_func = "loop_func";
+// comma separated list of the loop variables a statement depends on.
+//   Set by ParallelPass, read by AtomicTunerPass.
+constexpr const char* rely = "rely";
+// the statement is only "(void)a[, (void)b]*;": it names no live
+//   use and is not emitted. Set by the parser.
+constexpr const char* void_discard = "void_discard";
+// the statement contains a break or continue, so it may not be moved
+//   out of its loop. Set by the parser.
+constexpr const char* has_bc = "has_bc";
+} // kir
+
 struct KernelIR {
     // if type == define
     //     src is dtype lvalue = rvalue;
@@ -47,7 +100,12 @@ struct KernelIR {
     
     KernelIR() {}
     KernelIR(const string& src, bool raw=false);
+    // get_attr creates the attribute if the node does not have it, and returns
+    // a reference to the (empty) value -- that is how attributes are set. When
+    // the attribute is supposed to be there already, use require_attr, which
+    // says which node was missing what instead of handing back "".
     string& get_attr(const string& s);
+    string& require_attr(const string& s);
     bool has_attr(const string& s);
     bool check_attr(const string& k, const string& v);
 
@@ -228,7 +286,7 @@ std::ostream& operator<<(std::ostream& os, KernelIR& ir);
 // integer; MergeLoopVarPass fuses two nested loops into one that covers both,
 // so that loop's id is the concatenation of theirs.
 //
-// The id is carried as text in attrs["loop_id"] because it is also the suffix
+// The id is carried as text in attrs[kir::loop_id] because it is also the suffix
 // of the loop's range and index variables (range{id}, id{id}).  Components are
 // separated by '_' so that the text stays readable in one way only:
 // "range10" is range number 10, "range1_0" is the merge of ranges 1 and 0.

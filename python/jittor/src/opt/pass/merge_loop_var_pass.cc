@@ -33,8 +33,8 @@ static unique_ptr<expr::Expr> trace_and_expand(KernelIR* ir, expr::Expr* e) {
         if (!def) return;
         if (def->type!="define")
             return;
-        if (!def->has_attr("rvalue")) return;
-        auto& rvalue = def->attrs["rvalue"];
+        if (!def->has_attr(kir::rvalue)) return;
+        auto& rvalue = def->attrs[kir::rvalue];
         LOGvvvv << *c << "->" << rvalue;
         if (def->father && def->flist==&def->father->inner) {
             // dont expand loop or func
@@ -66,18 +66,18 @@ void MergeLoopVarPass::run() {
         for (int ii=0; ii<to_opt.size(); ii++) {
             auto i = to_opt[to_opt.size()-1-ii];
             auto fa = i->father;
-            LOGvvvv << "check opt" << i->attrs["rvalue"] << fa->attrs["rvalue"];
-            auto range_b = i->attrs["rvalue"];
-            auto id_b = i->attrs["lvalue"];
-            auto range_a = fa->attrs["rvalue"];
-            auto id_a = fa->attrs["lvalue"];
+            LOGvvvv << "check opt" << i->attrs[kir::rvalue] << fa->attrs[kir::rvalue];
+            auto range_b = i->attrs[kir::rvalue];
+            auto id_b = i->attrs[kir::lvalue];
+            auto range_a = fa->attrs[kir::rvalue];
+            auto id_a = fa->attrs[kir::lvalue];
             if (!(i->type == "loop" && i->father && i->father->type == "loop"
                 && i->father->children.size() == 1 && i->father->inner.size() == 3 &&
                 i->before.size() == 0 && i->after.size() == 0)) {
                 continue;
             }
-            auto aid_ranges = parse_loop_id(fa->attrs["loop_id"]);
-            auto bid_ranges = parse_loop_id(i->attrs["loop_id"]);
+            auto aid_ranges = parse_loop_id(fa->attrs[kir::loop_id]);
+            auto bid_ranges = parse_loop_id(i->attrs[kir::loop_id]);
             if (!aid_ranges.size() || !bid_ranges.size())
                 // not a loop we know how to name; leave it alone
                 continue;
@@ -108,9 +108,9 @@ void MergeLoopVarPass::run() {
                     can_opt = false;
                     return;
                 }
-                if (c->type == "define" && c->has_attr("rvalue")) {
-                    auto& s = c->attrs["rvalue"];
-                    auto& lv = c->attrs["lvalue"];
+                if (c->type == "define" && c->has_attr(kir::rvalue)) {
+                    auto& s = c->attrs[kir::rvalue];
+                    auto& lv = c->attrs[kir::lvalue];
                     if (!(endswith(lv, "id") || endswith(lv, "_i")))
                         return;
                     auto se = expr::make(s);
@@ -133,8 +133,8 @@ void MergeLoopVarPass::run() {
             if (!can_opt)
                 continue;
             auto ni = i->clone();
-            auto aid = fa->attrs["loop_id"];
-            auto bid = i->attrs["loop_id"];
+            auto aid = fa->attrs[kir::loop_id];
+            auto bid = i->attrs[kir::loop_id];
             auto merged_ranges = aid_ranges;
             merged_ranges.insert(merged_ranges.end(),
                 bid_ranges.begin(), bid_ranges.end());
@@ -148,16 +148,16 @@ void MergeLoopVarPass::run() {
                 << "merged loop id" << newid << "reads as a single range";
             auto x = i->find_define(new_range);
             if (!x) {
-                ir->push_back(i->attrs["dtype"]+" "+new_range+" = "+range_b+" * "+range_a+";");
+                ir->push_back(i->attrs[kir::dtype]+" "+new_range+" = "+range_b+" * "+range_a+";");
             }
             ni->replace({{"range"+bid, new_range}, {"id"+aid, "0"}}, true, true);
-            ni->attrs["loop_id"] = newid;
-            ni->attrs["rvalue"] = new_range;
+            ni->attrs[kir::loop_id] = newid;
+            ni->attrs[kir::rvalue] = new_range;
             // simplify 0 * x -> 0
             // ni->dfs([&](unique_ptr<KernelIR>& c) {
             //     if (!can_opt) return;
-            //     if (c->type == "define" && c->has_attr("rvalue")) {
-            //         auto& s = c->attrs["rvalue"];
+            //     if (c->type == "define" && c->has_attr(kir::rvalue)) {
+            //         auto& s = c->attrs[kir::rvalue];
             //         auto se = expr::make(s)->simplify();
             //         s = se->to_string();
             //     }

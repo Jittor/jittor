@@ -175,12 +175,12 @@ a[2]++;
     in_loop.replace({{"i", "j"}, {"n", "range0"}}, true, false);
     // test swap
     ir.swap(in_loop);
-    CHECK(ir.attrs["lvalue"]=="j");
+    CHECK(ir.attrs[kir::lvalue]=="j");
     in_loop.replace({{"n", "range1"}}, true, false);
     // test rename_loop_index
     ir.rename_loop_index();
-    CHECK(ir.attrs["lvalue"]=="id0");
-    CHECK(in_loop.attrs["lvalue"]=="id1");
+    CHECK(ir.attrs[kir::lvalue]=="id0");
+    CHECK(in_loop.attrs[kir::lvalue]=="id1");
     // test find_loops
     auto a = ir.find_loops("1");
     CHECK(a.size()==1 && a[0]==&in_loop);
@@ -213,12 +213,12 @@ a[2]++;
     ir.expand_empty_block();
     ir.solve_conflict_define();
     CHECK(c.size()==6 &&
-        c[0]->attrs["lvalue"] == "xx" &&
-        c[1]->attrs["code"] == "xx++;" &&
-        c[2]->attrs["code"] == "a[xx]=0;" &&
-        c[3]->attrs["lvalue"] == "xx_" &&
-        c[4]->attrs["code"] == "xx_++;" &&
-        c[5]->attrs["code"] == "a[xx_]=0;"
+        c[0]->attrs[kir::lvalue] == "xx" &&
+        c[1]->attrs[kir::code] == "xx++;" &&
+        c[2]->attrs[kir::code] == "a[xx]=0;" &&
+        c[3]->attrs[kir::lvalue] == "xx_" &&
+        c[4]->attrs[kir::code] == "xx_++;" &&
+        c[5]->attrs[kir::code] == "a[xx_]=0;"
     );
     // test remove_unused
     // a <-+- c <-- d (unused)
@@ -231,10 +231,10 @@ a[2]++;
     ir.push_back("T d=c;");
     ir.check_unused();
     CHECK(c.size()==5 &&
-        c[0]->check_attr("used", "1") &&
-        c[1]->check_attr("used", "1") &&
-        c[2]->check_attr("used", "1") &&
-        !c[4]->check_attr("used", "1")
+        c[0]->check_attr(kir::used, "1") &&
+        c[1]->check_attr(kir::used, "1") &&
+        c[2]->check_attr(kir::used, "1") &&
+        !c[4]->check_attr(kir::used, "1")
     );
     ir.remove_all_unused();
     CHECK(c.size()==3);
@@ -314,7 +314,7 @@ JIT_TEST(kernel_ir_func) {
     CHECK(func0->inner.size()==2);
     ir.remove_all_unused();
     CHECK(func0->inner.size()==0);
-    CHECK(func1->children.back()->get_attr("code") == "func0();");
+    CHECK(func1->children.back()->get_attr(kir::code) == "func0();");
     // test remove_func_call_arg
     string s = "func(0,1,2,(1,2),3);";
     expect_error([&]() {remove_func_call_arg(s, 5);});

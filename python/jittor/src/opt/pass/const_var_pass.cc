@@ -41,8 +41,8 @@ void ConstVarPass::run() {
             continue;
         auto def = ir->find_define("op"+S(i)+"_outputd");
         ASSERT(def);
-        def->attrs["dtype"] = v->dtype().to_cstring();
-        def->attrs["rvalue"] = s;
+        def->attrs[kir::dtype] = v->dtype().to_cstring();
+        def->attrs[kir::rvalue] = s;
         changed ++;
         LOGvvvv << def->to_string();
     }

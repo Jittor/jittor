@@ -43,7 +43,7 @@ extern int para_opt_level;
 // iteration number, so that the caller can ask whether the address depends on
 // a given thread dimension.
 //
-// Side effect: ir->attrs["rely"] is set to a comma separated list of the loop
+// Side effect: ir->attrs[kir::rely] is set to a comma separated list of the loop
 // variables the expression turned out to depend on. AtomicTunerPass reads it.
 unique_ptr<expr::Expr> expand_offset_expr(KernelIR* ir, expr::Expr* e) {
     auto ret = e->clone();
@@ -53,8 +53,8 @@ unique_ptr<expr::Expr> expand_offset_expr(KernelIR* ir, expr::Expr* e) {
         auto def = ir->find_define(node->str);
         if (!def) return;
         ASSERT(def->type == "define");
-        if (!def->has_attr("rvalue")) return;
-        auto& rvalue = def->attrs["rvalue"];
+        if (!def->has_attr(kir::rvalue)) return;
+        auto& rvalue = def->attrs[kir::rvalue];
         // defined in the header of an enclosing statement
         if (def->father && def->flist == &def->father->inner) {
             if (def->father->type == "func") return;
@@ -62,15 +62,15 @@ unique_ptr<expr::Expr> expand_offset_expr(KernelIR* ir, expr::Expr* e) {
             LOGvvvv << "expand loop expr" << def->father->inner;
             // the loop must look like "for (T i=init; i<range; i+=stride)"
             vector<unique_ptr<expr::Expr>> matches;
-            if (!expr::match(expr::make(def->father->inner.at(1)->attrs.at("code")).get(),
+            if (!expr::match(expr::make(def->father->inner.at(1)->require_attr(kir::code)).get(),
                              expr::make(node->str + "<range").get(), {"range"}, {}, matches))
                 return;
             rely += node->str + ",";
             vector<unique_ptr<expr::Expr>> stride_match;
-            if (expr::match(expr::make(def->father->inner.at(2)->attrs.at("code")).get(),
+            if (expr::match(expr::make(def->father->inner.at(2)->require_attr(kir::code)).get(),
                             expr::make(node->str + "++").get())) {
                 stride_match.push_back(expr::make("1"));
-            } else if (!expr::match(expr::make(def->father->inner.at(2)->attrs.at("code")).get(),
+            } else if (!expr::match(expr::make(def->father->inner.at(2)->require_attr(kir::code)).get(),
                                     expr::make(node->str + "+=stride").get(), {"stride"}, {}, stride_match))
                 return;
             auto new_expr = expr::make_op("+", expr::make(rvalue),
@@ -83,7 +83,7 @@ unique_ptr<expr::Expr> expand_offset_expr(KernelIR* ir, expr::Expr* e) {
         if (!node->children.size()) func(node);
     };
     ret->dfs(func);
-    ir->attrs["rely"] = rely;
+    ir->attrs[kir::rely] = rely;
     return ret;
 }
 
@@ -96,8 +96,8 @@ unique_ptr<expr::Expr> expand_offset_expr(KernelIR* ir, expr::Expr* e) {
 static void replace_with_atomic(KernelIR* ir, bool is_cuda, int parallel_depth, bool force_atomic) {
     ir->dfs([&](unique_ptr<KernelIR>& stmt) {
         if (stmt->type != "") return;
-        if (!stmt->has_attr("code")) return;
-        auto& code = stmt->attrs["code"];
+        if (!stmt->has_attr(kir::code)) return;
+        auto& code = stmt->attrs[kir::code];
         auto e = expr::make(code.substr(0, code.size() - 1));
         vector<unique_ptr<expr::Expr>> matches;
         auto pattern = expr::make("a=b");
@@ -112,7 +112,7 @@ static void replace_with_atomic(KernelIR* ir, bool is_cuda, int parallel_depth, 
         if (!expr::match(matches[0].get(), expr::make("a[b]").get(), {"a", "b"}, {}, ptr_and_offset)) return;
         LOGvvvv << "ptr_and_offset" << ptr_and_offset;
         auto offset = expand_offset_expr(stmt.get(), ptr_and_offset.at(1).get())->simplify();
-        LOGvvvv << "rely" << stmt->get_attr("rely");
+        LOGvvvv << "rely" << stmt->get_attr(kir::rely);
         LOGvvvv << "full offset expr" << offset->to_string(1);
         bool need_atomic = force_atomic;
         // The offset must look like (tid{d} + tnum{d}*a)*b + c for every
@@ -211,10 +211,10 @@ void ParallelPass::run() {
     ir->push_back(get_thread_range_log_src, &ir->before, true);
     for (uint i = 0; i < ir->children.size(); i++) {
         auto& call = ir->children[i];
-        if (!call->has_attr("loop_func")) continue;
-        auto& func_name = call->attrs["loop_func"];
+        if (!call->has_attr(kir::loop_func)) continue;
+        auto& func_name = call->attrs[kir::loop_func];
         uint j = 0;
-        while (j < ir->before.size() && !ir->before[j]->check_attr("lvalue", func_name)) j++;
+        while (j < ir->before.size() && !ir->before[j]->check_attr(kir::lvalue, func_name)) j++;
         ASSERT(j < ir->before.size()) << "loop func" << func_name << "not found.";
         auto& func = ir->before[j];
         auto loop = func->children.back().get();
@@ -228,19 +228,19 @@ void ParallelPass::run() {
         vector<KernelIR*> loops;
         vector<string> ranges, strides;
         for (int d = 0; d < max_parallel_depth; d++) {
-            if (!loop->has_attr("rvalue")) break;
-            if (!loop->has_attr("lvalue")) break;
-            auto& lvalue = loop->attrs["lvalue"];
-            auto& step_code = loop->inner[2]->attrs["code"];
+            if (!loop->has_attr(kir::rvalue)) break;
+            if (!loop->has_attr(kir::lvalue)) break;
+            auto& lvalue = loop->attrs[kir::lvalue];
+            auto& step_code = loop->inner[2]->attrs[kir::code];
             if (step_code == lvalue + "++;") {
                 strides.push_back("1");
             } else {
-                if (!loop->has_attr("rvalue2")) break;
-                auto& stride = loop->attrs["rvalue2"];
+                if (!loop->has_attr(kir::rvalue2)) break;
+                auto& stride = loop->attrs[kir::rvalue2];
                 if (step_code != lvalue + "+=" + stride + ";") break;
                 strides.push_back(stride);
             }
-            ranges.push_back(loop->attrs["rvalue"]);
+            ranges.push_back(loop->attrs[kir::rvalue]);
             loops.push_back(loop);
             LOGvvvv << "Parallel loop dep=" >> d << "range=" >> ranges.back()
                     << "stride=" >> strides.back() << "code:" << loop->inner;
@@ -263,7 +263,7 @@ void ParallelPass::run() {
             if (loop->children.size() == 0) break;
             loop = loop->children[0].get();
         }
-        auto& call_code = new_call->attrs["code"];
+        auto& call_code = new_call->attrs[kir::code];
         int total_thread_num = is_cuda ? block_num * cuda_thread_num : cpu_thread_num;
         // a range may be a variable; use its definition so the expression is
         // valid at the call site
@@ -272,7 +272,7 @@ void ParallelPass::run() {
             if (!e->is(expr::_number)) {
                 auto def = func->find_define(range);
                 ASSERT(def);
-                if (def->has_attr("rvalue")) range = def->attrs["rvalue"];
+                if (def->has_attr(kir::rvalue)) range = def->attrs[kir::rvalue];
             }
         }
         string total_range = ranges.at(0);
@@ -327,7 +327,7 @@ void ParallelPass::run() {
             tid_def.push_front("int thread_id = omp_get_thread_num();");
             new_call->push_back("#pragma omp parallel num_threads(thread_num)", &new_call->before);
         } else {
-            new_func->get_attr("dtype") =
+            new_func->get_attr(kir::dtype) =
                 "__launch_bounds__(" + S(cuda_thread_num) + ") __global__ void";
             tid_def.push_front("int thread_id = blockIdx.x * blockDim.x + threadIdx.x;");
             auto& code = call_code;
@@ -345,21 +345,21 @@ void ParallelPass::run() {
             tid_def.push_back("int tnum" + S(d) + " = 1<<(tn" + S(d) + "-tn" + S(d + 1) + ");");
             tid_def.push_back("int tid" + S(d) + " = (thread_id>>tn" + S(d + 1) + ") & (tnum" + S(d) + "-1);");
             auto nl = new_loops[d];
-            auto& lvalue = nl->attrs["lvalue"];
-            auto& step_code = nl->inner[2]->attrs["code"];
+            auto& lvalue = nl->attrs[kir::lvalue];
+            auto& step_code = nl->inner[2]->attrs[kir::code];
             string new_step, new_init;
             if (step_code == lvalue + "++;") {
                 new_step = lvalue + "+=tnum" + S(d) + ";";
                 new_init = lvalue + "=tid" + S(d) + ";";
             } else {
-                if (!nl->has_attr("rvalue2")) continue;
-                auto& stride = nl->attrs["rvalue2"];
+                if (!nl->has_attr(kir::rvalue2)) continue;
+                auto& stride = nl->attrs[kir::rvalue2];
                 if (step_code != lvalue + "+=" + stride + ";") continue;
                 new_step = lvalue + "+=" + stride + "*tnum" + S(d) + ";";
                 new_init = lvalue + "=" + stride + "*tid" + S(d) + ";";
             }
-            LOGvvvv << "Parallel loop" << nl->attrs["loop_id"] << "with new stride" << new_step;
-            if (nl->inner[0]->type == "define") new_init = nl->inner[0]->attrs["dtype"] + " " + new_init;
+            LOGvvvv << "Parallel loop" << nl->attrs[kir::loop_id] << "with new stride" << new_step;
+            if (nl->inner[0]->type == "define") new_init = nl->inner[0]->attrs[kir::dtype] + " " + new_init;
             step_code = new_step;
             nl->inner[0]->try_parse_define(new_init);
         }
@@ -392,12 +392,12 @@ void ParallelPass::run() {
                     else if ((int)op->ops.size() <= n_reduce * 3)
                         n_thread = std::max(n_thread / 2, 32);
                 }
-                call->find_define("thread_num")->attrs["rvalue"] = S(n_thread);
+                call->find_define("thread_num")->attrs[kir::rvalue] = S(n_thread);
             } else {
                 if (has_atomic) {
                     total_range += "/16";
                 }
-                call->find_define("thread_num")->attrs["rvalue"] =
+                call->find_define("thread_num")->attrs[kir::rvalue] =
                     "min(max(1<<(NanoVector::get_nbits(" + total_range + ")-2),32)," +
                     S(total_thread_num) + ")";
             }
