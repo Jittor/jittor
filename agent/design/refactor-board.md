@@ -433,7 +433,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 8.17 | 跨机网络与诊断 | 待领 | | |
 | 8.18 | 多机 checkpoint | 待领 | | |
 | 8.19 | 布局收尾 | 待领 | | |
-| 9.01 | `import jittor` 不编译不下载 | 待领 | | 361d59b2 已合入 1/N：native import 不再默认尝试导入 Torch，`FIX_TORCH_ERROR` 仅显式启用，dirty-fix helper 不再改写 `os.RTLD_GLOBAL`；仍缺核心编译与 NCCL/cuTT/MKL setup 惰性化、离线只读及热 import <1 s 验收 |
+| 9.01 | `import jittor` 不编译不下载 | 待领 | | 361d59b2、c4b21762 已合入 2/N：native import 不再探测 Torch 或无条件调用 NCCL/cuTT/MKL setup；显式分布式请求仍 fail-closed，CPU float32 batched matmul 首次按需 MKL，只读 HOME 配合可写 JITTOR_HOME 可离线导入。聚焦 2+1 passed；热缓存 import 实测 1.332 s，冷配置仍编译 174 个核心 TU、约 40.015 s，未达 <1 s 且核心编译未惰性化，保持待领 |
 | 9.02 | `install_cuda.py:113-122` 的 `os.execl` 自重启删除，用 d… | 已合并 | 构建 | 6b45c078 |
 | 9.03 | 构建期失败一律抛带上下文的 `RuntimeError`，不用 LOGf/裸 assert | 已合并 | 构建 | 9197c8c6 |
 | 9.04 | 依赖跟踪改用编译器的 `-MD -MF` | 已合并 | 构建 | 65a2dc12（clean_cache 从一份布局定义生成）、2569fe3b（依赖跟踪、SHA-256、主机名/`-march=native`/git 分支/路径哈希位数，一个提交只让大家重编一次）。依赖跟踪走的是「扫描器认识 `#ifdef`」而不是 `-MD -MF`：`process()` 兼着 JT_XXX 宏发现（必须在编译前）与依赖跟踪（只能在编译后），拆开才可能用 depfile，已登记为 9.21 |
