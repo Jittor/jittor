@@ -1000,6 +1000,38 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         np.testing.assert_allclose(actual.numpy(), expected, rtol=1e-6)
         np.testing.assert_allclose(method.numpy(), expected, rtol=1e-6)
 
+    def test_pairwise_distance_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.pairwise_distance))
+        self.assertIs(torch.pairwise_distance, numerical.pairwise_distance)
+        self.assertEqual(numerical.pairwise_distance.__module__, numerical.__name__)
+        self.assertEqual(numerical.pairwise_distance.__name__, "pairwise_distance")
+
+    def test_pairwise_distance_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.pairwise_distance")
+        self.assertIs(record.implementation, numerical.pairwise_distance)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("keepdim", record.detail)
+        self.assertIn("device", record.detail)
+
+    def test_pairwise_distance_cpu_values_and_keepdim_match_numpy(self):
+        left = np.array([[1.0, 2.0], [3.0, 4.0]], dtype="float32")
+        right = np.array([[0.0, 0.0], [1.0, 2.0]], dtype="float32")
+        expected = np.linalg.norm(left - right, ord=2, axis=1)
+        with torch.flag_scope(use_cuda=0):
+            left_tensor = torch.array(left)
+            right_tensor = torch.array(right)
+            actual = torch.pairwise_distance(left_tensor, right_tensor)
+            keepdim = torch.pairwise_distance(
+                left_tensor, right_tensor, keepdim=True)
+        np.testing.assert_allclose(actual.numpy(), expected, rtol=1e-6)
+        self.assertEqual(tuple(keepdim.shape), (2, 1))
+        np.testing.assert_allclose(keepdim.numpy().reshape(-1), expected, rtol=1e-6)
+
     def test_split_with_sizes_is_a_stable_module_level_object(self):
         numerical = importlib.import_module(
             "jittor.compat.torch.installers.numerical")

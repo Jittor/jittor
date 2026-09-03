@@ -32,6 +32,25 @@ def eye(n, m=None, dtype=None, **kwargs):
     return _init.eye(shape, _dtype_to_str(dtype) or "float32")
 
 
+_PAIRWISE_DISTANCE_FIDELITY_DETAIL = (
+    "matches Torch p-norm distance values and keepdim shape through Jittor's "
+    "native nn implementation but omits device, layout, and dtype keyword semantics"
+)
+
+
+def pairwise_distance(x1, x2, p=2.0, eps=1e-6, keepdim=False):
+    """Compute p-norm distances between corresponding rows of two tensors."""
+    return nn.pairwise_distance(x1, x2, p=p, eps=eps, keepdim=keepdim)
+
+
+register_fidelity(
+    "torch.pairwise_distance",
+    pairwise_distance,
+    Fidelity.APPROXIMATE,
+    _PAIRWISE_DISTANCE_FIDELITY_DETAIL,
+)
+
+
 _STACKING_FIDELITY_DETAIL = (
     "matches Torch values and shapes for tensor inputs but omits Torch "
     "device, dtype, layout, pin-memory, and out keyword semantics"
@@ -929,8 +948,7 @@ def install(ctx):
     _alias("isclose", isclose)
     _alias("allclose", allclose)
     _alias("cosine_similarity", lambda x1, x2, dim=1, eps=1e-8: nn.cosine_similarity(x1, x2, dim=dim, eps=eps))
-    _alias("pairwise_distance", lambda x1, x2, p=2.0, eps=1e-6, keepdim=False:
-           nn.pairwise_distance(x1, x2, p=p, eps=eps, keepdim=keepdim))
+    _alias("pairwise_distance", pairwise_distance)
     # torch.take_along_dim(input, indices, dim): like gather, but torch BROADCASTS
     # indices against input on every dim except `dim` first. transformers' beam search
     # _gather_beams passes indices of shape (batch, k, 1) to gather full sequences of
