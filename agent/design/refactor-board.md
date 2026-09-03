@@ -428,7 +428,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 8.12 | 算子内不再复用全局 jit key 缓冲做缓存键 | 待领 | | |
 | 8.13 | cuTT 计划未命中时的 `cudaDeviceSynchronize` 删除或降流同步 | 待领 | | |
 | 8.14 | Corex | 待领 | | |
-| 8.15 | 多机 rendezvous | 待领 | | |
+| 8.15 | 多机 rendezvous | 待领 | dist（1/N） | 6d3b2ae3：TCPStore/FileStore 已跨进程，`init_process_group` 已接 `env://`/`tcp://`；仍缺 NCCL/HCCL unique id 经 store 交换、真实两机 collective 与错误地址超时验收 |
 | 8.16 | 多机启动器 | 待领 | | |
 | 8.17 | 跨机网络与诊断 | 待领 | | |
 | 8.18 | 多机 checkpoint | 待领 | | |
