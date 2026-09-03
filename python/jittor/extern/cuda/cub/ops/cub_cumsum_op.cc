@@ -32,7 +32,7 @@ CubCumsumOp::CubCumsumOp(Var* x, bool reverse) : x(x),reverse(reverse) {
 }
 
 void CubCumsumOp::infer_shape() {
-    ASSERT(x->shape.size() == 1 || x->shape.size() == 2); //TODO:support batch_cumsum
+    USER_CHECK(x->shape.size() == 1 || x->shape.size() == 2); //TODO:support batch_cumsum
     y->set_shape(x->shape);
 }
 

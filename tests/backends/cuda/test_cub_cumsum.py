@@ -11,6 +11,7 @@ import unittest
 import jittor as jt
 import numpy as np
 from jittor import compile_extern
+from _helpers.assertions import expect_error
 if jt.has_cuda:
     from jittor.compile_extern import cublas_ops, cudnn_ops, cub_ops
 else:
@@ -39,6 +40,15 @@ def check_backward(shape, dim=None):
 class TestCubCumsumOp(unittest.TestCase):
     def setUp(self):
         self.is_reversed = False
+
+    @unittest.skipIf(cub_ops==None, "CUDA cub is unavailable in this build")
+    @jt.flag_scope(use_cuda=1)
+    def test_rank_three_is_rejected_clearly(self):
+        expect_error(
+            lambda: cub_ops.cub_cumsum(jt.ones((2, 2, 2)), False),
+            exc_type=RuntimeError,
+            match="shape.size",
+        )
 
     @unittest.skipIf(cub_ops==None, "CUDA cub is unavailable in this build")
     @jt.flag_scope(use_cuda=1)

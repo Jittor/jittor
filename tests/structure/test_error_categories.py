@@ -118,6 +118,10 @@ MIGRATED_NCCL_REDUCE_SCATTER_SHAPE_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/nccl/ops/nccl_reduce_scatter_op.cc": 2,
 }
 
+MIGRATED_CUB_CUMSUM_RANK_USER_BOUNDARIES = {
+    "python/jittor/extern/cuda/cub/ops/cub_cumsum_op.cc": 1,
+}
+
 MIGRATED_FUSED_ADAMW_CARDINALITY_BOUNDARIES = {
     "python/jittor/src/ops/fused_adamw_op.cc": 4,
 }
@@ -360,6 +364,15 @@ def test_nccl_reduce_scatter_shape_user_boundary_migration_is_explicit_and_bound
     assert actual == MIGRATED_NCCL_REDUCE_SCATTER_SHAPE_USER_BOUNDARIES[
         "python/jittor/extern/cuda/nccl/ops/nccl_reduce_scatter_op.cc"]
     assert "nccl_reduce_scatter expects dim0 divisible by process-group size" in source
+
+
+def test_cub_cumsum_rank_user_boundary_migration_is_explicit_and_bounded():
+    source = (ROOT / "python/jittor/extern/cuda/cub/ops/cub_cumsum_op.cc").read_text()
+    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    assert actual == MIGRATED_CUB_CUMSUM_RANK_USER_BOUNDARIES[
+        "python/jittor/extern/cuda/cub/ops/cub_cumsum_op.cc"]
+    negative = (ROOT / "tests/backends/cuda/test_cub_cumsum.py").read_text()
+    assert "test_rank_three_is_rejected_clearly" in negative
 
 
 def test_fused_adamw_cardinality_migration_is_explicit_and_bounded():
