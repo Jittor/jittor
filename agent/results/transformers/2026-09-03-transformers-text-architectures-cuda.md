@@ -9,6 +9,10 @@
 
 ## 结论
 
+本报告记录首阶段架构锚点；工作日志指定的 17 模型完整文本矩阵已经在后续
+[CUDA 扩展报告](2026-09-03-transformers-text-core-matrix-cuda.md)中收口，包含其余
+8 个 Decoder-only、BART/Pegasus，以及 Mixtral router/expert 梯度与生成验证。
+
 Transformers 4.56.2 的三类文本架构已在真实 NVIDIA A800 CUDA 上完成独立
 PyTorch 2.6.0+cu124 对拍。Encoder-only 以 BERT、RoBERTa、DeBERTa-v2 和 MPNet
 覆盖绝对/相对位置、mask 与分类类任务头；Decoder-only 以 GPT-2 和 Llama 覆盖传统
@@ -132,10 +136,10 @@ False bool 图。原生 C++ `Var.__imul__` 在 CPU 得到有限零值，但真�
 mask 分支，NaN 随后传播到 cached logits 和 generation scores。
 
 Torch 兼容层只在 RHS 为 bool Var、两端 shape 完全一致、lhs 为浮点且不是显式注册的
-Torch leaf 时使用已有 `_ip(self, self * other)`；其他 `__imul__` 调用仍委托原生
-slot。修复不插入 host 同步，并保持该 Tensor 的 Python identity；它不声明 Jittor
-物化 view 具有 PyTorch storage alias 语义。修复后低层 CPU/CUDA 最小例、T5 cache 与
-生成均有限且对拍通过。
+Torch leaf 时先把 RHS 转为 lhs dtype，再调用原生 `__imul__`；其他 `__imul__` 调用
+原样委托原生 slot。修复不插入 host 同步，并保持原生 in-place 路径及 Tensor 的 Python
+identity；它不声明 Jittor 物化 view 具有 PyTorch storage alias 语义。修复后低层
+CPU/CUDA 最小例、T5 cache 与生成均有限且对拍通过。
 
 ## 仓库回归
 

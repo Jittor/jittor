@@ -46,6 +46,8 @@ CFG = {
  'stablelm':  dict(hidden_size=64,intermediate_size=128,num_hidden_layers=2,num_attention_heads=2,num_key_value_heads=2,vocab_size=128,max_position_embeddings=128),
  'starcoder2':dict(hidden_size=64,intermediate_size=128,num_hidden_layers=2,num_attention_heads=2,num_key_value_heads=2,vocab_size=128,max_position_embeddings=128),
  'mpt':       dict(d_model=64,n_heads=2,n_layers=2,vocab_size=128,max_seq_len=128,expansion_ratio=2),
+ 'falcon':    dict(hidden_size=64,intermediate_size=128,num_hidden_layers=2,num_attention_heads=2,vocab_size=128,max_position_embeddings=128,multi_query=True,parallel_attn=True,new_decoder_architecture=False,bias=False,alibi=False,hidden_dropout=0.0,attention_dropout=0.0),
+ 'mixtral':   dict(hidden_size=64,intermediate_size=128,num_hidden_layers=2,num_attention_heads=2,num_key_value_heads=1,vocab_size=128,max_position_embeddings=128,num_local_experts=2,num_experts_per_tok=2,attention_dropout=0.0),
  # encoder
  'bert':  dict(hidden_size=64,num_hidden_layers=2,num_attention_heads=2,intermediate_size=128,vocab_size=128,max_position_embeddings=64,hidden_dropout_prob=0.5,attention_probs_dropout_prob=0.5),
  'roberta':   dict(hidden_size=64,num_hidden_layers=2,num_attention_heads=2,intermediate_size=128,vocab_size=128,max_position_embeddings=64,hidden_dropout_prob=0.5),
@@ -128,13 +130,17 @@ class TestTorchHFModels(unittest.TestCase):
     def test_grad_populated_after_backward(self):
         # Regression for the no-optimizer autograd bridge: enumerating params then
         # loss.backward() must populate param.grad for every trainable param.
-        for a in ('gpt2', 'llama', 'bert', 't5', 'vit', 'bloom', 'falcon', 'mpt'):
+        for a in ('gpt2', 'llama', 'bert', 't5', 'vit', 'bloom', 'falcon', 'mixtral', 'mpt'):
             if a not in CFG:
                 continue
             with self.subTest(model=a):
                 m = _build(a); m.eval()
                 named = list(m.named_parameters())
-                loss = m(**_inp(m)).last_hidden_state.float().pow(2).sum()
+                output = m(**_inp(m))
+                loss = output.last_hidden_state.float().pow(2).sum()
+                pooler_output = getattr(output, 'pooler_output', None)
+                if pooler_output is not None:
+                    loss = loss + pooler_output.float().pow(2).sum()
                 loss.backward()
                 none = [n for n, p in named if p.grad is None]
                 self.assertEqual(none, [], f"{a}: {len(none)} params have None grad after backward")
@@ -238,6 +244,79 @@ class TestTorchHFModels(unittest.TestCase):
         self.assertTrue(cached.logits.is_cuda)
         self.assertTrue(cached.past_key_values.self_attention_cache.layers[0].keys.is_cuda)
         self.assertTrue(np.isfinite(cached.logits.float().numpy()).all())
+        np.testing.assert_allclose(cached.logits[:, -1].float().numpy(),
+                                   full.logits[:, -1].float().numpy(),
+                                   atol=1e-5, rtol=1e-5)
+
+    def test_mixtral_router_grad_cache_and_generate_cuda(self):
+        if not getattr(jt, 'has_cuda', 0):
+            self.skipTest('needs CUDA')
+        jt.flags.use_cuda = 1
+        device = torch.device('cuda')
+        cfg = dict(CFG['mixtral'])
+        cfg.update(num_hidden_layers=1, pad_token_id=0, bos_token_id=1,
+                   eos_token_id=127, use_cache=True)
+        config = AutoConfig.for_model('mixtral', **cfg)
+        config._attn_implementation = 'eager'
+        model = AutoModelForCausalLM.from_config(config).to(device)
+        self.assertTrue(all(parameter.is_cuda for parameter in model.parameters()))
+
+        input_ids = torch.tensor(
+            np.array([[1, 5, 6, 7, 8], [1, 9, 10, 11, 12]], dtype='int64'),
+            device=device,
+        )
+        attention_mask = torch.ones((2, 5), dtype=torch.long, device=device)
+        model.train()
+        output = model(input_ids=input_ids, attention_mask=attention_mask,
+                       labels=input_ids, use_cache=False,
+                       output_router_logits=True, return_dict=True)
+        self.assertTrue(output.loss.is_cuda)
+        self.assertTrue(output.aux_loss.is_cuda)
+        self.assertEqual(len(output.router_logits), 1)
+        self.assertEqual(tuple(output.router_logits[0].shape), (10, 2))
+        self.assertTrue(np.isfinite(output.loss.float().numpy()).all())
+        self.assertTrue(np.isfinite(output.aux_loss.float().numpy()).all())
+        output.loss.backward()
+        trainable = [(name, parameter) for name, parameter in model.named_parameters()
+                     if parameter.requires_grad]
+        missing = [name for name, parameter in trainable if parameter.grad is None]
+        self.assertEqual(missing, [], f'Mixtral parameters without gradients: {missing}')
+        for name, parameter in trainable:
+            self.assertTrue(parameter.grad.is_cuda, f'{name} gradient is not CUDA')
+            self.assertTrue(np.isfinite(parameter.grad.float().numpy()).all(),
+                            f'{name} gradient is non-finite')
+        routed = [(name, parameter.grad.float().numpy()) for name, parameter in trainable
+                  if '.block_sparse_moe.gate.' in name or '.block_sparse_moe.experts.' in name]
+        self.assertEqual(sum('.gate.' in name for name, _ in routed), 1)
+        self.assertEqual(sum('.experts.' in name for name, _ in routed), 6)
+        for name, gradient in routed:
+            self.assertTrue(np.any(np.abs(gradient) > 0), f'{name} gradient is all zero')
+
+        model.zero_grad()
+        model.eval()
+        with torch.no_grad():
+            prefill = model(input_ids=input_ids[:, :4],
+                            attention_mask=attention_mask[:, :4],
+                            use_cache=True, output_router_logits=False,
+                            return_dict=True)
+            prefill_length = int(prefill.past_key_values.get_seq_length())
+            cached = model(input_ids=input_ids[:, 4:], attention_mask=attention_mask,
+                           past_key_values=prefill.past_key_values,
+                           use_cache=True, output_router_logits=False,
+                           return_dict=True)
+            full = model(input_ids=input_ids, attention_mask=attention_mask,
+                         use_cache=False, output_router_logits=False,
+                         return_dict=True)
+            generated = model.generate(
+                input_ids=input_ids[:, :4], attention_mask=attention_mask[:, :4],
+                min_new_tokens=2, max_new_tokens=2, do_sample=False,
+                num_beams=2, use_cache=True,
+            )
+        self.assertEqual(prefill_length, 4)
+        self.assertEqual(int(cached.past_key_values.get_seq_length()), 5)
+        self.assertTrue(cached.logits.is_cuda)
+        self.assertTrue(generated.is_cuda)
+        self.assertEqual(tuple(generated.shape), (2, 6))
         np.testing.assert_allclose(cached.logits[:, -1].float().numpy(),
                                    full.logits[:, -1].float().numpy(),
                                    atol=1e-5, rtol=1e-5)
