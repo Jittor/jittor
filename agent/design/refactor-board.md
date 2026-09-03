@@ -462,7 +462,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 10.04 | 假绿清理 | 已合并 | gates | 74cace5f。6 个首行 `return` 改严格预期失败并登记，4 个 `skipIf(True)` 清零；两条内存契约用短循环 RSS 上限进入 slow 层，负向自测证明真实保留会失败；AST 全树规则禁止复发。内存 2 passed，规则/负向 9 passed，旧禁用项 3 xfailed、4 prerequisite-skipped |
 | 10.05 | 按 skip 原因分桶统计并在 CI summary 输出，对「本环境应能跑却 skip」设阈值 | 待领 | | |
 | 10.06 | `expect_error` 带 `exc_type` 与 `match` | 待领 | | |
-| 10.07 | Unary/Binary/Reduction 用 `OpDTypes.supported` | 待领 | | |
+| 10.07 | Unary/Binary/Reduction 用 `OpDTypes.supported` | 已合并 | gates | 4af5fbcd。TestCommon 覆盖每个 OpInfo 声明的全部 dtype，BF16 输入保持原生 bfloat16；两条修前契约各失败，修后输入生成 7 passed |
 | 10.08 | 已复现缺陷用 `xfail` 而非 `skip` | 待领 | | |
 | 10.09 | 公开 API 与 OpInfo 差集作为 structure 门禁一项 | 待领 | | |
 | 10.10 | gradcheck 加「故意写错导数应当失败」的负向自测 | 已合并 | gates | 3e83594d。故意把平方的 backward 写成 `3*x`，`gradcheck` 必须抛 `Jacobian mismatch`；定向 1 passed，相关结构 15 passed |
