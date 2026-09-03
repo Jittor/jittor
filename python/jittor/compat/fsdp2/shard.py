@@ -26,6 +26,7 @@ _EXPORTS = (
     "_init_true_fsdp_state",
     "_unshard_module_params",
     "_reshard_module_params",
+    "_release_full_params",
     "_execute_with_true_fsdp",
     "_install_true_fsdp_execute",
 )
@@ -371,6 +372,42 @@ def _reshard_module_params(module):
 #: Attribute on the FSDP state counting how deep we are inside this module's
 #: own forward. See :func:`_execute_with_true_fsdp`.
 _EXECUTE_DEPTH_ATTR = "true_fsdp_execute_depth"
+
+
+def _release_full_params(state):
+    """Drop the gathered full parameters once their gradients are sharded.
+
+    This is what makes FSDP save memory. Three things each held a full-size
+    copy after every step, and none of them was ever cleared:
+
+    * ``entry.full_param`` -- the gathered parameter. ``_reshard_module_params``
+      deliberately keeps it, because the backward needs the exact Var that took
+      part in the forward graph. That is true *until the gradients have been
+      reduce-scattered into the shards*; after that nobody needs it, and the
+      next forward gathers a fresh one.
+    * ``entry.full_public_grad`` -- a full-size gradient that
+      ``refresh_visible_full_grads`` re-materialises on every ``zero_grad()``
+      so that ``.grad`` on a full parameter reads correctly. With the full
+      parameter gone it has nothing to attach to, and stops being made.
+    * ``state.true_fsdp_flat_full_param`` -- the flat gathered buffer, written
+      in ``_unshard_module_params`` and cleared nowhere in the tree.
+
+    Measured on 2 ranks, 64 MB of parameters (``nn.Linear(2048, 2048)`` x4):
+    sharding correctly halved the resident parameters (base 129 -> 97 MB) and
+    then drove the steady state to 513 MB, against 209 MB for the same model
+    not sharded. FSDP was not merely failing to save memory, it cost 2.5x.
+
+    Not called while the parameters are legitimately still gathered:
+    ``reshard_after_forward=False`` asks for exactly that, and the module
+    attributes point at the full Vars.
+    """
+    if getattr(state, "true_fsdp_unsharded", False):
+        return state
+    for entry in getattr(state, "true_fsdp_params", ()):
+        entry.full_param = None
+        entry.full_public_grad = None
+    state.true_fsdp_flat_full_param = None
+    return state
 
 
 def _execute_with_true_fsdp(module, orig_execute, *args, **kwargs):

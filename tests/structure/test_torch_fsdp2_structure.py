@@ -91,7 +91,7 @@ _OWNERSHIP = {
         "_fsdp_var_to_local", "_fsdp_var_full_tensor", "_fsdp_var_redistribute",
         "_named_parameters_with_owner", "_iter_modules", "_iter_fsdp_modules",
         "_apply_fsdp_attr", "_init_true_fsdp_state", "_unshard_module_params",
-        "_reshard_module_params", "_execute_with_true_fsdp",
+        "_reshard_module_params", "_release_full_params", "_execute_with_true_fsdp",
         "_install_true_fsdp_execute",
     },
     grad_sync: {

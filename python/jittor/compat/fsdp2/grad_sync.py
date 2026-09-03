@@ -44,8 +44,12 @@ def sync_sharded_grads(module, loss=None, *, divide_by_world_size=True):
         shard._unshard_module_params(module)
     full_params = [entry.full_param for entry in state.true_fsdp_params]
     full_grads = jt.grad(loss, full_params)
-    return _sync_sharded_grads_from_full_grads(
+    sharded = _sync_sharded_grads_from_full_grads(
         state, full_grads, divide_by_world_size=divide_by_world_size)
+    # The gathered parameters have served their purpose; holding them is what
+    # made a sharded model cost more memory than an unsharded one.
+    shard._release_full_params(state)
+    return sharded
 
 
 def _sync_sharded_grads_from_full_grads(state, full_grads, *, divide_by_world_size=True):
@@ -278,6 +282,11 @@ def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
             entry.last_grad = grad if used else None
             if used:
                 entry_grad[(id(state), id(entry))] = grad
+        # Same here: once this state's gradients are reduce-scattered onto the
+        # shards, the full parameters and the full-size gradients hung off them
+        # are dead weight until the next forward gathers them again. See
+        # shard._release_full_params for the three buffers this frees.
+        shard._release_full_params(state)
 
     filled_entries = set()
     for opt in optimizers or ():
