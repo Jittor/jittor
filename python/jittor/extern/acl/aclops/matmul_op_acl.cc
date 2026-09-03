@@ -65,13 +65,6 @@ namespace jittor
     {
 
         ret = aclnnMatmulGetWorkspaceSize(inputTensors[0], inputTensors[1], outputTensors[0], cube_math_type, &workspaceSize, &executor);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnMatmulGetWorkspaceSize failed. ERROR: %d\n", name.c_str(), ret); return);
-        if (workspaceSize > 0)
-        {
-            mallocWorkSpace(workspaceSize);
-        }
-        ret = aclnnMatmul(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnMatmul failed. ERROR: %d\n", name.c_str(), ret); return);
-        syncRun();
+        launch(ret, aclnnMatmul, true);
     }
 }

@@ -404,6 +404,10 @@ export JT_SYNC=1
 export trace_py_var=3
 ```
 
+The ACL MatMul family uses the shared launcher while retaining its synchronous
+execution policy. This source-only migration still requires the Ascend 910B3
+probe and is not hardware validation on this host.
+
 These flags are diagnostic and slow execution. Remove them after locating the
 failing operation. For general JIT and memory diagnostics, see
 {doc}`debugging`.
