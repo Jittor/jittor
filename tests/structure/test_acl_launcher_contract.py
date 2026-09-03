@@ -28,6 +28,7 @@ RANGE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/index_op_acl.cc"
 DROPOUT_SOURCE = ROOT / "python/jittor/extern/acl/aclops/dropout_op_acl.cc"
 RELU_SOURCE = ROOT / "python/jittor/extern/acl/aclops/relu_op_acl.cc"
 ARG_REDUCE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/arg_reduce_op_acl.cc"
+SILU_SOURCE = ROOT / "python/jittor/extern/acl/aclops/silu_op_acl.cc"
 RANDOM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/random_op_acl.cc"
 UPSAMPLE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/upsample_op_acl.cc"
 GATHER_SOURCE = ROOT / "python/jittor/extern/acl/aclops/gather_scatter_op_acl.cc"
@@ -305,6 +306,18 @@ def test_arg_reduce_max_min_use_shared_launcher():
     assert "launch(ret, launcher, true);" in source
     assert "mallocWorkSpace(workspaceSize)" not in source
     assert "syncRun();" not in source
+
+
+def test_silu_forward_uses_launcher_and_other_owners_remain_present():
+    source = SILU_SOURCE.read_text()
+    forward = source[source.index("void SiLUOpRunner::executeOp"):source.index("SiLUBackwardOpRunner::SiLUBackwardOpRunner")]
+    assert "launch(ret, aclnnSilu, true);" in forward
+    assert "checkRet(ret);" not in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void SiLUBackwardOpRunner::executeOp" in source
+    assert "void SwishOpRunner::executeOp" in source
+    assert "void SwiGluOpRunner::executeOp" in source
 
 
 def test_random_uniform_normal_share_launcher_and_keep_seed_offset():

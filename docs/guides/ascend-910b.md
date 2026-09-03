@@ -492,5 +492,8 @@ The ACL Random owner routes uniform and normal execution through the shared
 launcher while retaining seed, offset, unsupported-type diagnostics, and
 synchronous execution.
 
+The ACL SiLU forward owner uses the shared launcher and retains synchronous
+execution. Backward, Swish, and SwiGlu remain outside this slice.
+
 The ACL UpsampleNearest2d forward owner uses the shared launcher while retaining
 output-size RAII and synchronous execution. Backward is outside this slice.
