@@ -31,6 +31,61 @@ def eye(n, m=None, dtype=None, **kwargs):
     return _init.eye(shape, _dtype_to_str(dtype) or "float32")
 
 
+_STACKING_FIDELITY_DETAIL = (
+    "matches Torch values and shapes for tensor inputs but omits Torch "
+    "device, dtype, layout, pin-memory, and out keyword semantics"
+)
+
+
+def _vstack_impl(tensors):
+    tensors = list(tensors)
+    return jt.concat(
+        [t if t.ndim >= 2 else t.reshape((1, -1)) for t in tensors], dim=0)
+
+
+def vstack(tensors):
+    """Stack tensors vertically using the Torch-compatible shape rules."""
+    return _vstack_impl(tensors)
+
+
+def row_stack(tensors):
+    """Alias of :func:`vstack` with Torch's historical spelling."""
+    return _vstack_impl(tensors)
+
+
+def hstack(tensors):
+    """Stack one-dimensional tensors along 0 and higher-rank tensors along 1."""
+    tensors = list(tensors)
+    dim = 0 if all(t.ndim == 1 for t in tensors) else 1
+    return jt.concat(tensors, dim=dim)
+
+
+def dstack(tensors):
+    """Stack tensors along the third dimension."""
+    out = []
+    for t in list(tensors):
+        out.append(t.reshape((1, -1, 1)) if t.ndim == 1
+                   else (t.unsqueeze(-1) if t.ndim == 2 else t))
+    return jt.concat(out, dim=2)
+
+
+def column_stack(tensors):
+    """Stack one-dimensional tensors as columns."""
+    tensors = list(tensors)
+    return jt.concat(
+        [t.reshape((-1, 1)) if t.ndim == 1 else t for t in tensors], dim=1)
+
+
+for _stacking_name in ("vstack", "row_stack", "hstack", "dstack", "column_stack"):
+    register_fidelity(
+        "torch." + _stacking_name,
+        globals()[_stacking_name],
+        Fidelity.APPROXIMATE,
+        _STACKING_FIDELITY_DETAIL,
+    )
+del _stacking_name
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
@@ -427,18 +482,11 @@ def install(ctx):
     _alias("swapaxes", _swapaxes); _alias("swapdims", _swapaxes)
     Var.swapaxes = _swapaxes; Var.swapdims = _swapaxes
     _alias("ravel", lambda input: input.reshape((-1,))); Var.ravel = lambda self: self.reshape((-1,))
-    def _vstack(tensors):
-        return jt.concat([t if t.ndim >= 2 else t.reshape((1, -1)) for t in tensors], dim=0)
-    _alias("vstack", _vstack); _alias("row_stack", _vstack)
-    _alias("hstack", lambda tensors: jt.concat(list(tensors), dim=0) if all(t.ndim == 1 for t in tensors)
-           else jt.concat(list(tensors), dim=1))
-    def _dstack(tensors):
-        out = []
-        for t in tensors:
-            out.append(t.reshape((1, -1, 1)) if t.ndim == 1 else (t.unsqueeze(-1) if t.ndim == 2 else t))
-        return jt.concat(out, dim=2)
-    _alias("dstack", _dstack)
-    _alias("column_stack", lambda tensors: jt.concat([t.reshape((-1, 1)) if t.ndim == 1 else t for t in tensors], dim=1))
+    _alias("vstack", vstack)
+    _alias("row_stack", row_stack)
+    _alias("hstack", hstack)
+    _alias("dstack", dstack)
+    _alias("column_stack", column_stack)
     # element-wise ops: copysign / xlogy / heaviside / float_power / signbit.
     def _copysign(input, other):
         s = (other >= 0).float32() * 2 - 1                 # +1 where other>=0 (incl +0), -1 else
