@@ -271,7 +271,7 @@ class TestRootDomainStructure(unittest.TestCase):
 
     def test_root_type_stub_matches_runtime_legacy_module_aliases(self):
         source = (self.runtime_root / "__init__.pyi").read_text(encoding="utf-8")
-        self.assertIn("from . import autograd as gradfunctional", source)
+        self.assertIn("gradfunctional = autograd", source)
         self.assertIn("from .optim import legacy_schedulers as lr_scheduler", source)
         self.assertIn("from .compat import contrib as contrib", source)
         self.assertNotIn("functional as gradfunctional", source)

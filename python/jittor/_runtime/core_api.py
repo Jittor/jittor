@@ -2940,3 +2940,25 @@ Var.__array_priority__ = 2000
 # __reduce__, __module__ is used for pickle.dump and pickle.load
 Var.__module__ = "jittor"
 Var.__reduce__ = lambda self: (Var, (self.data,))
+
+
+__all__ = (
+    "ExitHooks", "Function", "GradHooker", "Module", "abs_", "add_",
+    "amp_flags", "argmax", "argmin", "array", "array64", "attrs", "cast",
+    "clamp", "clamp_", "clean", "detach", "dfs_to_numpy",
+    "dirty_fix_pytorch_runtime_error", "display_memory_info", "double",
+    "empty", "enable_grad", "erf_", "erfinv_", "fetch", "flag_scope",
+    "flags", "flatten", "float", "float_auto", "format", "full",
+    "full_like", "get_len", "grad", "grad_hooker", "half", "hooks", "int",
+    "is_var", "jittor_exit", "liveness_info", "load", "log_capture_scope",
+    "make_module", "masked_fill", "multiply_", "ne", "new_empty",
+    "new_full", "new_ones", "new_zeros", "no_grad", "norm", "normal",
+    "ones", "ones_like", "origin_reshape", "origin_transpose", "outer",
+    "permute", "pow", "profile_mark", "profile_scope", "rand", "rand_like",
+    "randint", "randint_like", "randn", "randn_like", "random",
+    "register_hook", "reshape", "safepickle", "safeunpickle", "save",
+    "sigmoid_", "single_log_capture", "single_process_scope", "size", "sqr",
+    "sqrt_", "squeeze", "std", "to_bool", "to_device", "to_float",
+    "to_int", "transpose", "type_as", "unsqueeze", "var", "view", "vtos",
+    "zeros", "zeros_like",
+)

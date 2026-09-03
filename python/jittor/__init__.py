@@ -25,8 +25,55 @@ _compat_preflight_result = _prepare_compat_import(
     environ=_os.environ,
 )
 
-from jittor_utils import lock
+from jittor_utils import lock as _lock
 from jittor_utils import limit_openmp_to_physical_cores as _limit_openmp
+
+
+_NATIVE_CORE_EXPORTS = (
+    "DumpGraphs", "Flags", "MemInfo", "NanoString", "NanoVector",
+    "RingBuffer", "Var", "ZipFile", "binary_dtype_infer", "clean_graph",
+    "cleanup", "clear_trace_data", "current_device", "display_max_memory_info",
+    "display_memory_info", "dump_all_graphs", "dump_trace_data", "fetch_sync",
+    "gc", "get_device_count", "get_max_memory_info", "get_mem_info",
+    "get_seed", "grad", "grad_optional", "graph_check", "hash",
+    "jt_init_subprocess", "lock_acquire", "lock_is_held", "lock_release",
+    "migrate_all_to_cpu", "number_of_hold_vars", "number_of_lived_ops",
+    "number_of_lived_vars", "op_compiler", "ops", "print_trace", "profiler",
+    "reuse_np_array", "seed", "set_device", "set_lock_fd", "set_seed",
+    "sync", "sync_all", "tape_together", "ternary_out_hint", "tests",
+    "wrap_var_addr",
+)
+
+_NATIVE_OP_EXPORTS = (
+    "abs", "acos", "acosh", "add", "all_", "any_", "arccos", "arccosh",
+    "arcsin", "arcsinh", "arctan", "arctanh", "arg_reduce", "argsort",
+    "array", "array_", "asin", "asinh", "atan", "atanh", "bfloat16",
+    "binary", "bitwise_and", "bitwise_not", "bitwise_or", "bitwise_xor",
+    "bool", "broadcast", "broadcast_var", "candidate", "cast", "ceil",
+    "ceil_int", "clone", "code", "conj", "copy", "cos", "cosh",
+    "device_copy", "div", "divide", "empty", "equal", "erf", "erfinv",
+    "exp", "fetch", "float16", "float32", "float64", "floor",
+    "floor_divide", "floor_int", "fuse_transpose", "fused_adamw", "getitem",
+    "greater", "greater_equal", "index", "index_var", "int16", "int32",
+    "int64", "int8", "left_shift", "less", "less_equal", "log",
+    "logical_and", "logical_not", "logical_or", "logical_xor", "max",
+    "maximum", "mean", "min", "minimum", "mod", "mul", "multiply",
+    "negative", "not_equal", "numpy_code", "pow", "prod", "product",
+    "random", "reduce", "reduce_add", "reduce_bitwise_and",
+    "reduce_bitwise_or", "reduce_bitwise_xor", "reduce_logical_and",
+    "reduce_logical_or", "reduce_logical_xor", "reduce_maximum",
+    "reduce_minimum", "reduce_multiply", "reindex", "reindex_reduce",
+    "reindex_var", "reinterpret_view", "reshape", "right_shift", "round",
+    "round_int", "safe_clip", "setitem", "sigmoid", "sin", "sinh", "sqrt",
+    "sub", "subtract", "sum", "tan", "tanh", "tape", "ternary",
+    "transpose", "uint16", "uint32", "uint64", "uint8", "unary", "where",
+)
+
+
+def _publish(module, names):
+    namespace = globals()
+    for name in names:
+        namespace[name] = getattr(module, name)
 
 # Must run before anything links OpenMP: the runtime reads OMP_NUM_THREADS when
 # it starts, and the default is one thread per *logical* CPU.
@@ -48,7 +95,7 @@ if _os.environ.get("OMPI_COMM_WORLD_SIZE") and _os.environ.get("use_mpi", "1") !
     except Exception as _e:
         print("jittor: mpi4py pre-init skipped:", _e)
 
-with lock.lock_scope():
+with _lock.lock_scope():
     ori_int = int
     ori_float = float
     ori_bool = bool
@@ -57,8 +104,8 @@ with lock.lock_scope():
     from .compiler import compile_custom_ops, compile_custom_op
     import jittor_core
     import jittor_core as core
-    from jittor_core import *
-    from jittor_core.ops import *
+    _publish(jittor_core, _NATIVE_CORE_EXPORTS)
+    _publish(jittor_core.ops, _NATIVE_OP_EXPORTS)
     _core_profiler = core.profiler
     from . import compile_extern
     from .compile_extern import mkl_ops, mpi, mpi_ops
@@ -98,8 +145,8 @@ if _compat_preflight_result.active:
 
 
 from ._runtime import core_api as _core_api
-from ._runtime.core_api import *
 from ._runtime.core_api import _core_flags
+_publish(_core_api, _core_api.__all__)
 
 # The runtime installs its monkeypatches from here on, in a fixed order that
 # used to exist only as the physical arrangement of the statements below.
@@ -112,6 +159,7 @@ from . import fft
 from .optim import legacy_schedulers as lr_scheduler
 from . import linalg
 from .linalg import einsum
+from .nn import attention as attention
 from .nn import matmul, \
     bmm, bmm_transpose, \
     baddbmm
@@ -132,7 +180,11 @@ _record_install("nn.full_reduce_fast_path")
 del _install_full_reduce
 
 from .compat import contrib as contrib
-from .misc import *
+from . import misc as misc
+_MISC_EXPORTS = tuple(misc.tensor_ops.__all__) + (
+    "amax", "amin", "cat", "concat", "count_nonzero",
+)
+_publish(misc, _MISC_EXPORTS)
 from . import sparse
 from . import optim
 from . import dataset
@@ -183,10 +235,10 @@ for k,v in list(Var.__dict__.items()):
 _record_install("root.inplace_aliases")
 
 from . import math_util
-from .math_util import *
+_publish(math_util, math_util.__all__)
 from . import distributions
 
-if jt.compiler.has_acl:
+if compiler.has_acl:
     from jittor.extern.acl.acl_compiler import change_function
     change_function()
     _record_install("acl.change_function")
@@ -256,3 +308,25 @@ _core_api.flags = flags
 # runtime import cleanly and then behave like a different version of jittor.
 _install_report = _install_order.verify()
 del _record_install
+
+
+_ROOT_EXPORTS = (
+    "LOG", "__version__", "attention", "autograd", "baddbmm", "bmm",
+    "bmm_transpose", "cat", "compile_custom_op", "compile_custom_ops",
+    "compile_extern", "compiler", "concat", "contrib", "core", "cublas",
+    "cudnn", "cufft", "curand", "cusparse", "dataset", "distributions",
+    "dtype", "einsum", "fft", "gradfunctional", "has_cuda", "in_mpi",
+    "init", "jittor_core", "kron", "linalg", "logsumexp", "lr_scheduler",
+    "math_util", "matmul", "misc", "mkl_ops", "mpi", "mpi_ops", "nn",
+    "numpy2cupy", "optim", "ops", "rank", "sparse", "tensordot",
+    "world_size",
+)
+
+__all__ = tuple(sorted(set(
+    _NATIVE_CORE_EXPORTS
+    + _NATIVE_OP_EXPORTS
+    + tuple(_core_api.__all__)
+    + _MISC_EXPORTS
+    + tuple(math_util.__all__)
+    + _ROOT_EXPORTS
+)))

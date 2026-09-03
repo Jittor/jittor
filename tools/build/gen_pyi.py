@@ -26,7 +26,9 @@ and does not belong inside the installed package.
 
 """
 
+import ast
 import os
+import pprint
 import re
 import shutil
 import jittor
@@ -249,6 +251,64 @@ def gen_flags_stub(jittor_path):
     f.write("'''Jittor running time flags instance'''\n")
     f.close()
 
+
+def synchronize_public_exports(jittor_path):
+    """Make the generated stub describe exactly the declared root surface."""
+    stub_path = os.path.join(jittor_path, "__init__.pyi")
+    with open(stub_path, encoding="utf-8") as handle:
+        content = handle.read()
+    content = "\n".join(line.rstrip() for line in content.splitlines()) + "\n"
+    tree = ast.parse(content)
+    declared = set()
+    stub_exports = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if not node.name.startswith("_") or node.name == "__version__":
+                declared.add(node.name)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if any(
+                isinstance(target, ast.Name) and target.id == "__all__"
+                for target in targets
+            ):
+                stub_exports.append(tuple(ast.literal_eval(node.value)))
+            declared.update(
+                target.id for target in targets
+                if isinstance(target, ast.Name)
+                and (not target.id.startswith("_") or target.id == "__version__")
+            )
+        elif isinstance(node, ast.ImportFrom):
+            if node.module in ("typing", "collections", "collections.abc"):
+                continue
+            for alias in node.names:
+                if alias.name != "*":
+                    declared.add(alias.asname or alias.name)
+                elif node.module == "jittor_core":
+                    declared.update(
+                        name for name in dir(jittor.jittor_core)
+                        if not name.startswith("_"))
+                elif node.module == "jittor_core.ops":
+                    declared.update(
+                        name for name in dir(jittor.ops)
+                        if not name.startswith("_"))
+
+    exports = tuple(jittor.__all__)
+    if stub_exports and stub_exports != [exports]:
+        raise RuntimeError("generated stub __all__ does not match jittor.__all__")
+    missing = sorted(set(exports) - declared)
+    manifest = (
+        "__all__ = " + pprint.pformat(exports, width=88) + "\n\n"
+        if not stub_exports else ""
+    )
+    fallback = ""
+    if missing:
+        fallback = "\n# Public names whose precise type is not inferred yet.\n"
+        fallback += "\n".join("{}: Any".format(name) for name in missing) + "\n"
+    with open(stub_path, "w", encoding="utf-8") as handle:
+        handle.write(manifest)
+        handle.write(content)
+        handle.write(fallback)
+
 def get_pyi(jittor_path=None, cache_path=None):
     if jittor_path is None:
         jittor_path = jittor.flags.jittor_path
@@ -259,6 +319,7 @@ def get_pyi(jittor_path=None, cache_path=None):
     run_stubgen(jittor_path, cache_path)
     gen_ops_stub(jittor_path)
     gen_flags_stub(jittor_path)
+    synchronize_public_exports(jittor_path)
 
     print(f"Generated stubfile: {os.path.join(jittor_path, '__init__.pyi')}")
 

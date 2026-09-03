@@ -45,6 +45,11 @@ _PUBLIC_NAMES = {
     "reductions", "shape_composition", "shape_transforms",
 }
 
+_IMPLEMENTATION_MODULES = {
+    "concatenation", "indexing", "reductions", "shape_composition",
+    "shape_transforms", "tensor_ops",
+}
+
 _MOVED = {
     "repeat": shape_transforms.repeat,
     "chunk": shape_transforms.chunk,
@@ -65,7 +70,14 @@ class TestMiscStructure(unittest.TestCase):
             _PUBLIC_NAMES,
         )
         self.assertEqual(
-            [name for name in sorted(_PUBLIC_NAMES) if not hasattr(jt, name)],
+            [
+                name for name in sorted(_PUBLIC_NAMES - _IMPLEMENTATION_MODULES)
+                if not hasattr(jt, name)
+            ],
+            [],
+        )
+        self.assertEqual(
+            [name for name in sorted(_IMPLEMENTATION_MODULES) if hasattr(jt, name)],
             [],
         )
         self.assertFalse(hasattr(jt, "_misc"))
