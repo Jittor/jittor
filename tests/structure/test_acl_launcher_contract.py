@@ -23,6 +23,7 @@ CLAMP_SOURCE = ROOT / "python/jittor/extern/acl/aclops/clamp_op_acl.cc"
 STACK_SOURCE = ROOT / "python/jittor/extern/acl/aclops/stack_op_acl.cc"
 FLIP_SOURCE = ROOT / "python/jittor/extern/acl/aclops/flip_op_acl.cc"
 CONCAT_SOURCE = ROOT / "python/jittor/extern/acl/aclops/concat_op_acl.cc"
+WHERE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/where_op_acl.cc"
 GATHER_SOURCE = ROOT / "python/jittor/extern/acl/aclops/gather_scatter_op_acl.cc"
 
 
@@ -238,6 +239,16 @@ def test_split_with_size_uses_launcher_and_keeps_tensor_list_setup():
     assert "checkRet(ret);" not in split
     assert "mallocWorkSpace(workspaceSize)" not in split
     assert "syncRun();" not in split
+
+
+def test_nonzero_uses_launcher_and_swhere_remains_present():
+    source = WHERE_SOURCE.read_text()
+    nonzero = source[source.index("void NonzeroOpRunner::executeOp"):]
+    assert "launch(ret, aclnnNonzero, true);" in nonzero
+    assert "checkRet(ret);" not in nonzero
+    assert "mallocWorkSpace(workspaceSize)" not in nonzero
+    assert "syncRun();" not in nonzero
+    assert "aclnnSWhere" in source
 
 
 def test_scatter_uses_launcher_and_keeps_axis_reduction_query():

@@ -466,3 +466,6 @@ dimension handling. SplitWithSize is intentionally outside this slice.
 The ACL SplitWithSize family now uses the shared launcher while retaining its
 split-size, tensor-list, and dimension handling. Tensor-list lifetime cleanup
 is outside this migration slice.
+
+The ACL Nonzero owner uses the shared launcher and retains synchronous
+execution. The SWhere owner is outside this slice.
