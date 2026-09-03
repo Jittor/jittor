@@ -20,6 +20,7 @@ SOFTMAX_SOURCE = ROOT / "python/jittor/extern/acl/aclops/softmax_op_acl.cc"
 EMBEDDING_SOURCE = ROOT / "python/jittor/extern/acl/aclops/embedding_op_acl.cc"
 ROLL_SOURCE = ROOT / "python/jittor/extern/acl/aclops/roll_op_acl.cc"
 GATHER_SOURCE = ROOT / "python/jittor/extern/acl/aclops/gather_scatter_op_acl.cc"
+CLAMP_SOURCE = ROOT / "python/jittor/extern/acl/aclops/clamp_op_acl.cc"
 
 
 def test_acl_launcher_tail_has_one_auditable_contract():
@@ -180,3 +181,13 @@ def test_gather_forward_uses_launcher_and_scatter_remains_present():
     assert "mallocWorkSpace(workspaceSize)" not in gather
     assert "syncRun();" not in gather
     assert "void ScatterOpRunner::executeOp" in source
+
+
+def test_clamp_tensor_uses_launcher_and_keeps_three_input_query():
+    source = CLAMP_SOURCE.read_text()
+    assert source.count("inputTensors[") >= 3
+    assert "aclnnClampTensorGetWorkspaceSize" in source
+    assert "launch(ret, aclnnClampTensor, true);" in source
+    assert "checkRet(ret);" not in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
