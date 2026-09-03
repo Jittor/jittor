@@ -141,6 +141,15 @@ def test_opinfo_forward_battery_runs_every_declared_dtype():
     assert "ops(op_db, dtypes=OpDTypes.supported)" in decorators
 
 
+def test_device_parity_has_a_narrow_integer_dtype_axis_and_fails_closed():
+    source = (TEST_ROOT / "backends" / "parity" /
+              "test_device_parity.py").read_text(encoding="utf-8")
+    assert '_PARITY_DTYPES = ("float32", "int8", "int16")' in source
+    assert "np.array_equal(fa, fc)" in source
+    assert "np.sqrt(reduce_size) * np.finfo(fc.dtype).eps" in source
+    assert "cupy is installed but its CUDA linalg probe failed" in source
+
+
 def _automatic_markers(relative, device=None, selected=None):
     module = _load_test_conftest()
 

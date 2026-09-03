@@ -36,6 +36,7 @@ from _helpers.common import (
 from opinfo.database import op_db
 
 _ACCEL = "npu" if HAS_ACL else ("cuda" if HAS_CUDA else None)
+_PARITY_DTYPES = ("float32", "int8", "int16")
 
 def _maybe_np(x):
     return to_numpy(x) if isinstance(x, jt.Var) else x
@@ -88,7 +89,10 @@ def _cuda_linalg_works():
             cupy.asnumpy(cupy.linalg.det(a))
         return True, ""
     except (CompileException, RuntimeError) as e:  # pragma: no cover - environment-specific
-        return False, f"cupy CUDA linalg unavailable: {type(e).__name__}: {str(e)[:120]}"
+        raise RuntimeError(
+            "cupy is installed but its CUDA linalg probe failed; refusing to "
+            "skip device parity: {}: {}".format(type(e).__name__, str(e)[:120])
+        ) from e
 
 
 _KNOWN_DEVICE_ISSUES = {}
@@ -188,7 +192,7 @@ class TestDeviceParity(JittorTestCase):
         # compile or synchronize CUDA kernels.
         cls._linalg_ok, cls._linalg_reason = _cuda_linalg_works()
 
-    def _check(self, op):
+    def _check(self, op, dtype="float32"):
         """One operator's parity check, with its runtime state contained.
 
         A failure here must not travel: see ``setUpClass``. ``clear_frames`` releases
@@ -197,16 +201,17 @@ class TestDeviceParity(JittorTestCase):
         report keeps its message and line numbers; only ``--showlocals`` gets less.
         """
         try:
-            self._compare(op)
+            self._compare(op, dtype)
         except Exception:
             traceback.clear_frames(sys.exc_info()[2])
             gc.collect()
             raise
 
-    def _compare(self, op):
+    def _compare(self, op, dtype="float32"):
         if op.full_name in _LINALG_OPS and not self._linalg_ok:
             self.skipTest(self._linalg_reason)
-        samples = op.sample_inputs("cpu", "float32", requires_grad=True)
+        requires_grad = dtype.startswith("float")
+        samples = op.sample_inputs("cpu", dtype, requires_grad=requires_grad)
         n = 0
         for i, s in enumerate(samples):
             f_cpu, g_cpu = _run(op, s, use_cuda=0)
@@ -216,8 +221,19 @@ class TestDeviceParity(JittorTestCase):
             for j, (fc, fa) in enumerate(zip(f_cpu, f_acc)):
                 self.assertEqual(tuple(fc.shape), tuple(fa.shape),
                                  msg=f"{op.full_name} fwd[{j}] shape cpu vs {_ACCEL} sample#{i}")
+                if not _is_float_np(fc):
+                    self.assertTrue(
+                        np.array_equal(fa, fc),
+                        f"{op.full_name} FORWARD[{j}] differs cpu vs {_ACCEL} "
+                        f"[{dtype}] sample#{i}: {fa!r} != {fc!r}",
+                    )
+                    continue
+                input_size = np.asarray(_maybe_np(s.input)).size
+                reduce_size = max(1, input_size // max(1, fc.size))
+                accumulation_floor = np.sqrt(reduce_size) * np.finfo(fc.dtype).eps
+                fwd_tol = max(self.FWD_TOL, accumulation_floor)
                 ferr = net_scaled_max_err(fa, fc)
-                self.assertLess(ferr, self.FWD_TOL,
+                self.assertLess(ferr, fwd_tol,
                                 f"{op.full_name} FORWARD[{j}] differs cpu vs {_ACCEL} "
                                 f"(net-scaled {ferr:.2e}) sample#{i} -- accelerator kernel suspect")
                 fpe = per_element_max_rel_err(fa, fc, atol=self.PE_ATOL)
@@ -243,21 +259,28 @@ class TestDeviceParity(JittorTestCase):
 
 def _install():
     for op in op_db:
-        def make(o):
+        def make(o, dtype):
             def test(self):
-                self._check(o)
-            test.__doc__ = f"device parity (cpu vs accelerator): {o.full_name}"
+                self._check(o, dtype)
+            test.__doc__ = \
+                f"device parity (cpu vs accelerator): {o.full_name} [{dtype}]"
             return test
-        method = make(op)
-        action_reason = _KNOWN_DEVICE_ISSUES.get(op.full_name)
-        if action_reason is not None:
-            action, reason = action_reason
-            if action == "skip":
-                method = unittest.skip(reason)(method)
-            elif action == "xfail":
-                method = unittest.expectedFailure(method)
-                method.__doc__ = f"KNOWN-BUG (expected failure): {reason}"
-        setattr(TestDeviceParity, f"test_{op.full_name}", method)
+        accel = _ACCEL or "cuda"
+        for dtype in _PARITY_DTYPES:
+            if not (op.supports_dtype(dtype, "cpu") and
+                    op.supports_dtype(dtype, accel)):
+                continue
+            method = make(op, dtype)
+            action_reason = _KNOWN_DEVICE_ISSUES.get(op.full_name)
+            if action_reason is not None:
+                action, reason = action_reason
+                if action == "skip":
+                    method = unittest.skip(reason)(method)
+                elif action == "xfail":
+                    method = unittest.expectedFailure(method)
+                    method.__doc__ = f"KNOWN-BUG (expected failure): {reason}"
+            suffix = "" if dtype == "float32" else "_" + dtype
+            setattr(TestDeviceParity, f"test_{op.full_name}{suffix}", method)
 
 
 _install()
