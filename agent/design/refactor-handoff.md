@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；本波审计基线 `9ce65c37`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 审计基线 572 个 |
+| 分支 | `2.0-refactor`；本波审计基线 `80a342b3`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 审计基线 577 个 |
 | 提交里出现过的任务号 | 214 个 |
 | 看板 | 已合并 **196** / 进行中 **0** / 待领 **74** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
@@ -285,9 +285,17 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `bindings` | 2.19 将 NumPy object dtype 不支持检查改为可捕获用户错误，累计 46 处；结构、TU 语法和 CPU 负向节点通过 |
 | `compat` | 7.03 将 cdist/bucketize 提升为 numerical 稳定对象并登记 approximate fidelity；4 项 CPU/身份/metadata 通过 |
 
+第二十六波新增 2 个严格保持待领的前置；kron 候选因 canonical owner 已存在而取消：
+
+| 分区 | 第二十六波结果 |
+| --- | --- |
+| `device` | 8.06 将 Transpose/Permute family 接入共享 launcher，保留 axes 构造、资源销毁与同步策略；静态合同 13 项通过，本机无 CANN/NPU |
+| `bindings` | 2.19 将 fused_adamw 四处 TensorList cardinality 检查改为 `USER_CHECKop`，累计 50 处；结构、TU 语法和构造期负向节点通过，CPU/ACL kernel 未执行 |
+| `compat` | 7.03 的 kron 经 owner 审计确认 canonical 实现已在 `nn.functional.tensor`，本波未重复包装，临时改动已清理 |
+
 ## 6. 下一波起点
 
-按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第二十六波继续优先可独立验证的
+按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第二十七波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
 - `device`：若续做 8.06，只迁下一个最终 owner 明确的 family，并复用 5be5fa15 的 launcher 合同；无 NPU
