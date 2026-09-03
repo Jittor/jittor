@@ -231,6 +231,52 @@ for _elementwise_name in ("copysign", "xlogy", "heaviside", "signbit"):
 del _elementwise_name
 
 
+_MATRIX_FIDELITY_DETAIL = (
+    "matches Torch values for supported real tensor inputs but omits Torch "
+    "offset, dimension, device, layout, and out keyword semantics"
+)
+
+
+def _trace_impl(input):
+    size = min(int(input.shape[0]), int(input.shape[1]))
+    diagonal = jt.arange(size)
+    return input[diagonal, diagonal].sum()
+
+
+def trace(input):
+    """Return the sum of a tensor's main matrix diagonal."""
+    return _trace_impl(input)
+
+
+def _diag_embed_impl(input, offset=0, dim1=-2, dim2=-1):
+    size = int(input.shape[-1])
+    return input.unsqueeze(-1) * jt.init.eye(size)
+
+
+def diag_embed(input, offset=0, dim1=-2, dim2=-1):
+    """Embed the final dimension of a tensor along a matrix diagonal."""
+    return _diag_embed_impl(input, offset=offset, dim1=dim1, dim2=dim2)
+
+
+def _diagflat_impl(input, offset=0):
+    return _diag_embed_impl(input.reshape((-1,)), offset=offset)
+
+
+def diagflat(input, offset=0):
+    """Flatten an input and embed it along a matrix diagonal."""
+    return _diagflat_impl(input, offset=offset)
+
+
+for _matrix_name in ("trace", "diag_embed", "diagflat"):
+    register_fidelity(
+        "torch." + _matrix_name,
+        globals()[_matrix_name],
+        Fidelity.APPROXIMATE,
+        _MATRIX_FIDELITY_DETAIL,
+    )
+del _matrix_name
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
@@ -559,16 +605,9 @@ def install(ctx):
         return r if out_int32 else r.int64()
     _alias("bucketize", _bucketize)
     # trace / diag_embed / diagflat / kron / logcumsumexp / tensordot / pdist.
-    def _trace(input):
-        k = min(int(input.shape[0]), int(input.shape[1]))
-        ar = jt.arange(k)
-        return input[ar, ar].sum()
-    _alias("trace", _trace); Var.trace = _trace
-    def _diag_embed(input, offset=0, dim1=-2, dim2=-1):
-        N = int(input.shape[-1])
-        return input.unsqueeze(-1) * jt.init.eye(N)
-    _alias("diag_embed", _diag_embed); Var.diag_embed = lambda self, offset=0, dim1=-2, dim2=-1: _diag_embed(self)
-    _alias("diagflat", lambda input, offset=0: _diag_embed(input.reshape((-1,))))
+    _alias("trace", trace); Var.trace = _trace_impl
+    _alias("diag_embed", diag_embed); Var.diag_embed = _diag_embed_impl
+    _alias("diagflat", diagflat)
     def _kron(a, b):
         nd = max(a.ndim, b.ndim)
         a2 = a.reshape((1,) * (nd - a.ndim) + tuple(a.shape))

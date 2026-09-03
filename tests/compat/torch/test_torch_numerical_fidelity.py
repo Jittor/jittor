@@ -241,6 +241,52 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         np.testing.assert_array_equal(method_step, np.heaviside(values, steps))
         np.testing.assert_array_equal(method_signbit, np.signbit(values))
 
+    def test_matrix_family_is_stable_module_level_objects(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        for name in ("trace", "diag_embed", "diagflat"):
+            with self.subTest(name=name):
+                implementation = getattr(numerical, name)
+                self.assertTrue(callable(implementation))
+                self.assertIs(getattr(torch, name), implementation)
+                self.assertEqual(implementation.__module__, numerical.__name__)
+                self.assertEqual(implementation.__name__, name)
+
+    def test_matrix_family_fidelity_is_queryable(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        for name in ("trace", "diag_embed", "diagflat"):
+            with self.subTest(name=name):
+                record = fidelity.fidelity_of("torch." + name)
+                self.assertIs(record.implementation, getattr(numerical, name))
+                self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+                self.assertIn("device", record.detail)
+                self.assertIn("out", record.detail)
+
+    def test_matrix_family_cpu_trace_and_diag_embed_match_numpy(self):
+        matrix = np.arange(9).reshape(3, 3).astype("float32")
+        rows = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype="float32")
+        with torch.flag_scope(use_cuda=0):
+            actual_trace = torch.trace(torch.array(matrix)).numpy()
+            actual_embed = torch.diag_embed(torch.array(rows)).numpy()
+        np.testing.assert_array_equal(actual_trace, np.trace(matrix))
+        np.testing.assert_array_equal(
+            actual_embed, np.stack([np.diag(row) for row in rows]))
+
+    def test_matrix_family_cpu_diagflat_and_var_methods_match_numpy(self):
+        values = np.array([[1.0, 2.0], [3.0, 4.0]], dtype="float32")
+        rows = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype="float32")
+        with torch.flag_scope(use_cuda=0):
+            tensor = torch.array(values)
+            actual_diagflat = torch.diagflat(tensor).numpy()
+            actual_trace = torch.array(values).trace().numpy()
+            actual_embed = torch.array(rows).diag_embed().numpy()
+        np.testing.assert_array_equal(actual_diagflat, np.diagflat(values))
+        np.testing.assert_array_equal(actual_trace, np.trace(values))
+        np.testing.assert_array_equal(
+            actual_embed, np.stack([np.diag(row) for row in rows]))
+
 
 if __name__ == "__main__":
     unittest.main()
