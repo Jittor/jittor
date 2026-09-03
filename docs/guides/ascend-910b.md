@@ -146,6 +146,11 @@ between Ascend and CUDA.
 
 ## Check per-operator ACL synchronization
 
+The ACL binary operator family uses the shared launcher contract for workspace
+allocation, execution errors, and synchronization. This source-only change
+still requires the 910B3 probe below; hosts without CANN and an Ascend device
+must not report hardware validation.
+
 Run this diagnostic on an Ascend 910B3 only after sourcing the CANN environment,
 confirming the device is healthy, and selecting an allocated device:
 
