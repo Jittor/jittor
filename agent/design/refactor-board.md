@@ -254,7 +254,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 3.09 | 死代码消除不再按「语句含 `void` 一词」删除 | 已合并 | codegen | 66e5a153 |
 | 3.10 | 算子内标识符改名走结构化成员表并先做合法性校验，替代三个硬编码白名单与 `op{i}_` 盲目前… | 已合并 | codegen | 864fa52c |
 | 3.11 | 生成源码里的结构体字节偏移改显式 setter，成员表用宏声明 | 已合并 | codegen | f32d3c83 |
-| 3.12 | `float_atomic_fix_pass.cc:76-80`、`fake_main_pass… | 待领 | | |
+| 3.12 | `float_atomic_fix_pass.cc:76-80`、`fake_main_pass… | 已合并 | codegen | `1ea90057`；CPU 定向 9 passed，CUDA 定向 3 passed，结构门禁 310 passed / 2 skipped |
 | 3.13 | 循环维度身份用整数向量，`range10` 不再被拆成 `range1*range0` | 已合并 | codegen | bd5b5a67，用例修正 e1717fe5 |
 | 3.14 | 两个同名 pass | 已合并 | codegen | 6c899325 |
 | 3.15 | 一次编译只解析一遍 | 已合并 | codegen | 97cac22f；“只解析一遍”实测不值得，见下方结论行 |
