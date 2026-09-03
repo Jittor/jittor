@@ -27,9 +27,9 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；本波审计基线 `4a31179c`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 审计基线 705 个 |
-| 提交里出现过的任务号 | 220 个 |
+| 分支 | `2.0-refactor`；本波审计基线 `93cd6a53`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 审计基线 712 个 |
+| 提交里出现过的任务号 | 223 个 |
 | 看板 | 已合并 **196** / 进行中 **0** / 待领 **74** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
 
@@ -429,6 +429,16 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `bindings` | 2.19 将 cuDNN convolution forward 格式边界改为 `USER_CHECK`，累计 80 处；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
 | `compat` | 7.03 将 `cosine_similarity` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；`py_compile`/diff-check 通过，三节点动态测试因首次 JIT 编译过久终止，未宣称通过 |
 
+第四十五波新增 3 个严格保持待领的前置：
+
+| 分区 | 第四十五波结果 |
+| --- | --- |
+| `device` | 8.06 将 BatchMatMul 接入共享 launcher，保留 `cube_math_type` 与同步策略；结构合同 32 passed，本机无 CANN/NPU |
+| `bindings` | 2.19 将 cuDNN convolution backward-x 格式边界改为 `USER_CHECK`，累计 81 处；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `compat` | 7.03 将 `svd` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；`py_compile`/diff-check 通过，动态三节点因首次编译过久终止，未宣称通过 |
+
+本波复核 `tests/structure/test_error_categories.py` 时仍有一项既有计数漂移：`broadcast_to_op.cc` 实际含 5 个 `USER_CHECK`，门禁期望 2 个（1 failed）；未擅自改计数，待后续专门门禁任务处理。
+
 第二十九波新增 3 个严格保持待领的前置：
 
 | 分区 | 第二十九波结果 |
@@ -439,7 +449,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 
 ## 6. 下一波起点
 
-按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第四十五波继续优先可独立验证的
+按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第四十六波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
 - `device`：若续做 8.06，只迁下一个最终 owner 明确的 family，并复用 5be5fa15 的 launcher 合同；无 NPU
