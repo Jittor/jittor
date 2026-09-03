@@ -79,6 +79,13 @@ Raises (LOGf) on a dtype NCCL has no type for, instead of expanding to nothing.
 */
 ncclDataType_t nccl_dtype(NanoString dtype);
 
+// Generate/expose the opaque bootstrap id as bytes. Store transport belongs
+// to Python; the NCCL wrapper only consumes the exact binary payload.
+// @pyjt(nccl_get_unique_id)
+vector<int> nccl_get_unique_id();
+// @pyjt(nccl_init_with_unique_id)
+void nccl_init_with_unique_id(vector<int> unique_id);
+
 /**
 Create and query NCCL process groups.
 

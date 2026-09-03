@@ -55,6 +55,7 @@ ncclDataType_t nccl_dtype(NanoString dtype) {
 
 ncclUniqueId id;
 int nccl_device_id = 0;
+static vector<int> nccl_pending_unique_id;
 #ifdef JT_NCCL_NO_MPI
 // Normally defined by mpi_wrapper.cc; provide them for the MPI-free build (the
 // NCCL env/file rendezvous path / other nccl ops reference these). Only defined
@@ -482,16 +483,30 @@ void nccl_init() {
             LOGf << "NCCL(env): JT_NCCL_RANK=" >> world_rank
                  << "is not a rank of a JT_NCCL_WORLD_SIZE=" >> world_size << "job.";
         rendezvous_require_unlocked(world_size, "NCCL(env)");
-        if (world_size > 1 && (!rf || !rf[0]))
+        bool supplied_unique_id = !nccl_pending_unique_id.empty();
+        if (supplied_unique_id) {
+            if (nccl_pending_unique_id.size() != sizeof(id))
+                LOGf << "NCCL store returned" << nccl_pending_unique_id.size()
+                     << "unique-id bytes; expected" << sizeof(id);
+            for (int i=0; i<(int)nccl_pending_unique_id.size(); ++i) {
+                int value = nccl_pending_unique_id[i];
+                if (value < 0 || value > 255)
+                    LOGf << "NCCL store unique-id byte" << i << "is" << value
+                         << "instead of an unsigned byte";
+                ((unsigned char*)&id)[i] = (unsigned char)value;
+            }
+            nccl_pending_unique_id.clear();
+        }
+        if (!supplied_unique_id && world_size > 1 && (!rf || !rf[0]))
             LOGf << "NCCL(env): JT_NCCL_WORLD_SIZE=" >> world_size
                  << "but JT_NCCL_ROOTINFO_FILE is not set. Every rank needs the"
                     " same path, on a filesystem all of them share, to exchange"
                     " the NCCL unique id.";
-        if (world_rank == 0) {
+        if (!supplied_unique_id && world_rank == 0) {
             checkCudaErrors(ncclGetUniqueId(&id));
             if (rf && rf[0])
                 rendezvous_write(rf, &id, sizeof(id));
-        } else {
+        } else if (!supplied_unique_id) {
             rendezvous_read(rf, &id, sizeof(id), world_rank, "the NCCL unique id");
         }
         use_device_mpi = true;
@@ -532,6 +547,21 @@ void nccl_init() {
         mpi_world_size, mpi_world_rank);
     nccl_watchdog_start(mpi_world_size, mpi_world_rank, nullptr);
 #endif
+}
+
+vector<int> nccl_get_unique_id() {
+    ncclUniqueId generated;
+    checkCudaErrors(ncclGetUniqueId(&generated));
+    vector<int> result(sizeof(generated));
+    for (int i=0; i<(int)result.size(); ++i)
+        result[i] = ((unsigned char*)&generated)[i];
+    return result;
+}
+
+void nccl_init_with_unique_id(vector<int> unique_id) {
+    nccl_pending_unique_id = move(unique_id);
+    nccl_init();
+    nccl_pending_unique_id.clear();
 }
 
 // The communicator is built by nccl_init() now, but something still has to

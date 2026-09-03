@@ -167,7 +167,7 @@ def _backend_matches_active(requested_backend, active_backend):
     return active_device is not None and device_backends.get(active_device) == active
 
 
-def _bootstrap_native_distributed(rank, world_size, backend=None):
+def _bootstrap_native_distributed(rank, world_size, backend=None, store=None):
     if not _is_truthy(os.environ.get("JITTOR_TORCH_DISTRIBUTED_AUTO_INIT")):
         return False
     backend_name = str(backend or "nccl").lower()
@@ -183,7 +183,7 @@ def _bootstrap_native_distributed(rank, world_size, backend=None):
     local_world_size = int(os.environ.get(
         "LOCAL_WORLD_SIZE", os.environ.get("RAY_LOCAL_WORLD_SIZE", world_size)))
     rootinfo = os.environ.get("JT_NCCL_ROOTINFO_FILE", "").strip()
-    if not rootinfo:
+    if not rootinfo and store is None:
         explicit_rendezvous_dir = os.environ.get(
             "JITTOR_DIST_RENDEZVOUS_DIR", "").strip()
         if local_world_size != world_size and not explicit_rendezvous_dir:
@@ -207,12 +207,13 @@ def _bootstrap_native_distributed(rank, world_size, backend=None):
     os.environ["JT_NCCL_WORLD_SIZE"] = str(world_size)
     os.environ["JT_NCCL_RANK"] = str(rank)
     os.environ["JT_NCCL_LOCAL_RANK"] = str(local_rank)
-    os.environ["JT_NCCL_ROOTINFO_FILE"] = rootinfo
+    if rootinfo:
+        os.environ["JT_NCCL_ROOTINFO_FILE"] = rootinfo
     os.environ["use_nccl"] = "1"
     os.environ["use_mpi"] = "0"
 
     jt.flags.use_cuda = 1
-    jt.compile_extern.setup_nccl()
+    jt.compile_extern.setup_nccl(store=store)
     ops = getattr(jt.compile_extern, "nccl_ops", None)
     if ops is None:
         raise RuntimeError("Jittor NCCL setup did not publish collective ops")
@@ -391,7 +392,9 @@ def _install_distributed(g, registry=None):
         backend_name = str(backend).lower() if backend is not None else None
         if requested_world_size > 1 and not _native_distributed_active():
             _bootstrap_native_distributed(
-                requested_rank, requested_world_size, backend=backend)
+                requested_rank, requested_world_size, backend=backend,
+                store=store,
+            )
         if requested_world_size > 1 and not _native_distributed_active():
             raise RuntimeError(
                 "multi-rank torch.distributed requires launching Jittor with "

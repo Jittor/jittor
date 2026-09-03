@@ -640,7 +640,92 @@ def _skip_nccl_p2p_without_peer_access():
         pass
 
 
-def setup_nccl():
+def _nccl_store_timeout():
+    raw = os.environ.get("JT_RENDEZVOUS_TIMEOUT_S", "120")
+    try:
+        timeout = float(raw)
+    except ValueError as error:
+        raise ValueError(
+            "JT_RENDEZVOUS_TIMEOUT_S must be a positive number"
+        ) from error
+    if timeout <= 0:
+        raise ValueError("JT_RENDEZVOUS_TIMEOUT_S must be a positive number")
+    return timeout
+
+
+def _init_nccl_from_store(nccl_module, store=None):
+    """Exchange NCCL's opaque bootstrap id through a real Store."""
+    from jittor.distributed.store import FileStore, Store, TCPStore
+
+    world_size = int(os.environ.get("JT_NCCL_WORLD_SIZE", "1"))
+    world_rank = int(os.environ.get("JT_NCCL_RANK", "0"))
+    if world_size < 1 or world_rank < 0 or world_rank >= world_size:
+        raise RuntimeError(
+            "NCCL(store): JT_NCCL_RANK={} is not a rank of a "
+            "JT_NCCL_WORLD_SIZE={} job".format(world_rank, world_size)
+        )
+    timeout = _nccl_store_timeout()
+    owned = store is None
+    description = "the provided Store"
+    try:
+        if store is None:
+            address = os.environ.get("MASTER_ADDR", "").strip()
+            port = os.environ.get("MASTER_PORT", "").strip()
+            rootinfo = os.environ.get("JT_NCCL_ROOTINFO_FILE", "").strip()
+            if address or port:
+                if not address or not port:
+                    raise RuntimeError(
+                        "NCCL store rendezvous requires both MASTER_ADDR and "
+                        "MASTER_PORT"
+                    )
+                description = "TCPStore at {}:{}".format(address, port)
+                store = TCPStore(
+                    address, int(port), world_size, world_rank == 0,
+                    timeout=timeout,
+                )
+            elif rootinfo:
+                description = "FileStore at {}".format(rootinfo)
+                store = FileStore(rootinfo, world_size, timeout=timeout)
+            elif world_size == 1:
+                store = Store(timeout=timeout)
+                description = "the local singleton Store"
+            else:
+                raise RuntimeError(
+                    "NCCL store rendezvous needs MASTER_ADDR/MASTER_PORT or "
+                    "JT_NCCL_ROOTINFO_FILE"
+                )
+
+        unique_id_key = "jittor/nccl/world/unique_id"
+        if world_rank == 0:
+            store.set(unique_id_key, bytes(nccl_module.nccl_get_unique_id()))
+        unique_id = store.get(unique_id_key)
+        nccl_module.nccl_init_with_unique_id(list(unique_id))
+
+        arrived = "jittor/nccl/world/initialized/{}".format(world_rank)
+        store.set(arrived, b"1")
+        store.wait([
+            "jittor/nccl/world/initialized/{}".format(rank)
+            for rank in range(world_size)
+        ])
+    except TimeoutError as error:
+        raise RuntimeError(
+            "NCCL store rendezvous timeout: rank {} waited {:.6g} s and "
+            "timed out using {}: {}".format(
+                world_rank, timeout, description, error)
+        ) from error
+    except (OSError, RuntimeError, ValueError) as error:
+        raise RuntimeError(
+            "NCCL store rendezvous failed for rank {} using {}: {}".format(
+                world_rank, description, error)
+        ) from error
+    finally:
+        if owned and store is not None:
+            close = getattr(store, "close", None)
+            if callable(close):
+                close()
+
+
+def setup_nccl(store=None):
     global nccl, nccl_ops, use_nccl
     use_nccl = os.environ.get("use_nccl", "1")=="1"
     nccl = None
@@ -738,7 +823,10 @@ def setup_nccl():
     # rank 0 spinning in MPI_Bcast holding the lock, rank 1 waiting for the
     # lock to build its core.
     with lock.unlock_scope():
-        nccl.nccl_init()
+        if _nccl_envfile:
+            _init_nccl_from_store(nccl, store=store)
+        else:
+            nccl.nccl_init()
     LOG.vv("Get nccl_ops: "+str(dir(nccl_ops)))
 
 def setup_hccl(no_mpi=False):

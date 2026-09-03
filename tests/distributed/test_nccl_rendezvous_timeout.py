@@ -55,8 +55,10 @@ any other test that spawns a jittor process:
    leaves via ``os._exit`` rather than letting interpreter shutdown run. That
    the exception can be caught at all is the point of the explicit init.
 """
+import json
 import os
 from pathlib import Path
+import socket
 import tempfile
 import time
 import unittest
@@ -97,6 +99,76 @@ _RUNNER = """
 import subprocess, sys
 p = subprocess.run([sys.executable, "-c", sys.argv[1]])
 sys.exit(p.returncode if p.returncode >= 0 else 128 - p.returncode)
+"""
+
+_TWO_RANK_CHILD = """
+import os
+import jittor as jt
+import torch.distributed as dist
+dist.init_process_group(backend="nccl", init_method="env://")
+jt.flags.use_cuda = 1
+rank = int(os.environ["RANK"])
+value = jt.array([rank + 1.0]).mpi_all_reduce("sum")
+assert float(value.item()) == 3.0, (rank, value.item())
+print("STORE NCCL OK", rank, flush=True)
+"""
+
+_TWO_RANK_CONDUCTOR = r"""
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+
+child_source, port = sys.argv[1:]
+processes = []
+devices = [item.strip() for item in os.environ.get(
+    "CUDA_VISIBLE_DEVICES", "").split(",") if item.strip()]
+for rank in range(2):
+    env = dict(os.environ)
+    env["WORLD_SIZE"] = "2"
+    env["RANK"] = str(rank)
+    if len(devices) >= 2:
+        env["CUDA_VISIBLE_DEVICES"] = devices[rank]
+        env["LOCAL_RANK"] = "0"
+    else:
+        env["LOCAL_RANK"] = str(rank)
+    env["MASTER_ADDR"] = "127.0.0.1"
+    env["MASTER_PORT"] = port
+    env["JITTOR_TORCH_SHIM"] = "1"
+    env["JITTOR_TORCH_DISTRIBUTED_AUTO_INIT"] = "1"
+    env.pop("JT_NCCL_ROOTINFO_FILE", None)
+    env.pop("JT_NCCL_WORLD_SIZE", None)
+    env.pop("JT_NCCL_RANK", None)
+    env.pop("JT_NCCL_LOCAL_RANK", None)
+    processes.append(subprocess.Popen(
+        [sys.executable, "-c", child_source], env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        start_new_session=True,
+    ))
+
+deadline = time.monotonic() + 120
+while any(process.poll() is None for process in processes):
+    if any(process.poll() not in (None, 0) for process in processes):
+        break
+    if time.monotonic() >= deadline:
+        break
+    time.sleep(0.05)
+
+for process in processes:
+    if process.poll() is None:
+        process.terminate()
+for process in processes:
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+outputs = []
+for process in processes:
+    output, _ = process.communicate(timeout=5)
+    outputs.append({"returncode": process.returncode, "output": output})
+print(json.dumps(outputs), flush=True)
 """
 
 
@@ -153,6 +225,59 @@ class TestNcclRendezvousTimeout(unittest.TestCase):
                                  if code > 128 else "",
                                  out[-3000:]))
 
+    @staticmethod
+    def _free_port():
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            return sock.getsockname()[1]
+
+    def test_bad_master_port_times_out_with_endpoint(self):
+        port = self._free_port()
+        env = self._rendezvous_env(1, 2, None)
+        env.update({
+            "MASTER_ADDR": "127.0.0.1",
+            "MASTER_PORT": str(port),
+        })
+        code, out, elapsed = _run_import(env)
+        self._assert_raised(code, out)
+        self.assertIn("127.0.0.1:{}".format(port), out)
+        self.assertIn("timed out", out)
+        self.assertGreater(elapsed, _RENDEZVOUS_TIMEOUT_S)
+        self.assertLess(elapsed, _RENDEZVOUS_TIMEOUT_S + 20)
+
+    @unittest.skipIf(jt.core.get_device_count() < 2, "requires two CUDA devices")
+    def test_two_rank_nccl_uses_tcp_store_without_rootinfo_file(self):
+        # Warm the shared cache before rank 0 enters the blocking store
+        # constructor; otherwise rank 1 can be waiting for rank 0's build lock.
+        warm_root = os.path.join(self.tmp.name, "warm-rootinfo.bin")
+        warm_env = self._rendezvous_env(0, 1, warm_root)
+        warm_env.update({
+            "JITTOR_TORCH_SHIM": "1",
+            "JITTOR_TORCH_DISTRIBUTED_AUTO_INIT": "1",
+        })
+        code, out, _ = _run_import(warm_env)
+        self.assertEqual(code, 0, out[-3000:])
+
+        port = self._free_port()
+        env = dict(os.environ)
+        env["JT_RENDEZVOUS_TIMEOUT_S"] = str(_RENDEZVOUS_TIMEOUT_S)
+        env.pop("JT_NCCL_ROOTINFO_FILE", None)
+        completed = run_python_child(
+            ["-c", _TWO_RANK_CONDUCTOR, _TWO_RANK_CHILD, str(port)],
+            env=env, inherit=False, cwd=_REPO_ROOT, merge_stderr=True,
+            timeout=150,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout[-4000:])
+        records = json.loads(completed.stdout.strip().splitlines()[-1])
+        self.assertTrue(
+            all(record["returncode"] == 0 for record in records),
+            json.dumps(records, indent=2),
+        )
+        for rank, record in enumerate(records):
+            self.assertIn(
+                "STORE NCCL OK {}".format(rank), record["output"]
+            )
+
     def test_single_rank_rendezvous_still_works(self):
         """The happy path: the shared helper must not break the working case.
 
@@ -168,7 +293,7 @@ class TestNcclRendezvousTimeout(unittest.TestCase):
                         "rank 0 did not write the rootinfo file:\n" + out[-3000:])
 
     def test_missing_peer_times_out_instead_of_hanging(self):
-        """Rank 1 of 2, and rank 0 never starts. Nothing writes the file."""
+        """Rank 1 of 2, and rank 0 never publishes the unique-id key."""
         root = os.path.join(self.tmp.name, "never_written.bin")
         code, out, elapsed = _run_import(self._rendezvous_env(1, 2, root))
         self._assert_raised(code, out)
@@ -177,7 +302,10 @@ class TestNcclRendezvousTimeout(unittest.TestCase):
         # guessing which of N ranks is stuck and on which file.
         self.assertIn("rank 1", out)
         self.assertIn(root, out)
-        self.assertFalse(os.path.exists(root))
+        from jittor.distributed.store import FileStore
+        store = FileStore(root, 2, timeout=1)
+        self.addCleanup(store.close)
+        self.assertFalse(store.check(["jittor/nccl/world/unique_id"]))
         # It waited the budget it was given. Asserting the *reported* wait
         # rather than the wall clock keeps this independent of how long the
         # build took, and it is the half the old 6000-iteration loop could not
