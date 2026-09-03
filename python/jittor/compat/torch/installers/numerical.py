@@ -89,6 +89,29 @@ register_fidelity(
 )
 
 
+_SVD_LOWRANK_FIDELITY_DETAIL = (
+    "matches Torch low-rank decomposition outputs through Jittor's native SVD "
+    "for supported real matrices but omits niter, device, and dtype semantics"
+)
+
+
+def svd_lowrank(A, q=6, niter=2, M=None):
+    """Return a rank-``q`` approximation using Jittor's native SVD."""
+    if M is not None:
+        A = A - M
+    u, s, v = jt.linalg.svd(A)
+    q = min(q, s.shape[0])
+    return u[:, :q], s[:q], v[:, :q]
+
+
+register_fidelity(
+    "torch.svd_lowrank",
+    svd_lowrank,
+    Fidelity.APPROXIMATE,
+    _SVD_LOWRANK_FIDELITY_DETAIL,
+)
+
+
 _STACKING_FIDELITY_DETAIL = (
     "matches Torch values and shapes for tensor inputs but omits Torch "
     "device, dtype, layout, pin-memory, and out keyword semantics"
@@ -1391,16 +1414,8 @@ def install(ctx):
 
     # ---- linalg (peft / lora init need svd_lowrank, svd) ----
     _alias("svd", svd)
-    def _svd_lowrank(A, q=6, niter=2, M=None):
-        # torch.svd_lowrank returns (U, S, V) of a rank-q approximation.
-        import jittor.linalg as _la
-        if M is not None:
-            A = A - M
-        u, s, v = _la.svd(A)
-        q = min(q, s.shape[0])
-        return u[:, :q], s[:q], v[:, :q]
-    _alias("svd_lowrank", _svd_lowrank)
-    _alias("pca_lowrank", lambda A, q=6, center=True, niter=2: _svd_lowrank(
+    _alias("svd_lowrank", svd_lowrank)
+    _alias("pca_lowrank", lambda A, q=6, center=True, niter=2: svd_lowrank(
         A - (A.mean(0, keepdims=True) if center else 0), q, niter))
 
 
