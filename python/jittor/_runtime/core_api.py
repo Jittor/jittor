@@ -1505,11 +1505,38 @@ class _WriteThroughDict(dict):
 # that merely happened to run with the shim loaded. torch.ones/zeros cannot be
 # used as the signal either: they ARE jittor's own, so marking them would demote
 # the weights jittor's layers declare by assignment.
-_torch_registration_semantics = False
+# The evidence is carried by the VALUE, not by a process-global mode bit. There
+# used to be one (`_torch_registration_semantics`, set to True at the end of the
+# shim's install), so that the meaning of `module.x = var` depended on whether
+# some other import had run: the same assignment registered a parameter or did
+# not, and nothing in the module tree said which. The marker below is only ever
+# attached by the shim's own `torch.tensor`, so consulting it directly is exactly
+# as narrow and no longer makes the kernel's behaviour a global.
+def _is_plain_tensor(value):
+    return value.__dict__.get("_jt_plain_tensor") is True
 
-def _torch_style_registration(value):
-    return (_torch_registration_semantics
-            and value.__dict__.get("_jt_plain_tensor") is True)
+
+#: What a ``Var`` attribute of a Module is. Five methods -- parameters(),
+#: named_parameters(), state_dict(), named_buffers() and _buffers -- used to
+#: answer this question with five transcriptions of the same DFS, and the
+#: answers had drifted: parameters() de-duplicated by ``id`` while
+#: named_parameters() de-duplicated by NAME, so a model with tied weights told
+#: the optimizer one parameter count and transformers/peft another; and
+#: ``_parameters``/``_buffers`` both returned EVERY Var, so neither said
+#: anything. ``Module._var_roles`` is now the single answer and all five are
+#: views over one traversal (``Module._named_vars``).
+_ROLE_PARAMETER = "parameter"
+_ROLE_BUFFER = "buffer"
+_ROLE_NON_PERSISTENT_BUFFER = "non_persistent_buffer"
+_ROLE_PLAIN = "plain"
+
+#: The roles each view reports. "state" is parameters plus persistent buffers,
+#: which is torch's definition of a module's state.
+_VIEW_ROLES = {
+    "parameters": frozenset((_ROLE_PARAMETER,)),
+    "buffers": frozenset((_ROLE_BUFFER, _ROLE_NON_PERSISTENT_BUFFER)),
+    "state": frozenset((_ROLE_PARAMETER, _ROLE_BUFFER)),
+}
 
 class Module:
     def __init__(self, *args, **kw):
@@ -1583,64 +1610,116 @@ class Module:
         self.dfs([], None, callback, callback_leave)
         return "\n".join(ss)
 
+    def _var_attrs(self):
+        ''' The ``(key, Var)`` attributes this module owns, in declaration order.
+
+        The one place that says where a module keeps its Vars. ``ParameterList``
+        keeps them in ``self.params`` and overrides this; every traversal used to
+        carry its own ``if isinstance(v, ParameterList): dc = v.params``.
+        '''
+        return [(k, v) for k, v in self.__dict__.items()
+                if isinstance(v, Var) and not (type(k) is str and k[:1] == "_")]
+
+    def _var_roles(self):
+        ''' Classify every Var this module owns: ``[(key, var, role)]``.
+
+        The single definition of "is this a parameter, a buffer, or neither".
+
+        Registration is by NAME (``_buffer_names`` / ``_non_persistent_buffer_names``
+        / ``_non_parameter_names``, the sets ``register_buffer`` and ``__setattr__``
+        maintain) because a name survives what a per-Var tag does not: from_pretrained's
+        dtype cast REPLACES the Var behind an attribute, and the fresh one carries no
+        tag. The per-Var ``is_buffer``/``persistent`` tags are still honoured, for
+        modules that set them directly.
+        '''
+        d = self.__dict__
+        buffer_names = d.get("_buffer_names", ())
+        non_persistent = d.get("_non_persistent_buffer_names", ())
+        non_parameters = d.get("_non_parameter_names", ())
+        # A second attribute pointing at a Var that register_buffer() already named
+        # is an ALIAS of that buffer -- not a second buffer, and not a parameter.
+        # torch has no such case at all: only the _buffers entry counts there.
+        registered = ({id(d[n]) for n in buffer_names if isinstance(d.get(n), Var)}
+                      if buffer_names else ())
+        out = []
+        for key, var in self._var_attrs():
+            attrs = var.__dict__
+            if key in buffer_names:
+                role = (_ROLE_NON_PERSISTENT_BUFFER if key in non_persistent
+                        else _ROLE_BUFFER)
+            elif key in non_parameters:
+                role = _ROLE_PLAIN
+            elif attrs.get("is_buffer") is True:
+                if id(var) in registered:
+                    role = _ROLE_PLAIN
+                elif attrs.get("persistent") is False:
+                    role = _ROLE_NON_PERSISTENT_BUFFER
+                else:
+                    role = _ROLE_BUFFER
+            elif attrs.get("persistent") is False:
+                role = _ROLE_NON_PERSISTENT_BUFFER
+            else:
+                role = _ROLE_PARAMETER
+            out.append((key, var, role))
+        return out
+
+    def _named_vars(self, kind="parameters", recurse=True, remove_duplicate=True):
+        ''' One traversal of the module tree; every public view is a filter over it.
+
+        :param kind: which roles to report -- ``"parameters"``, ``"buffers"`` or
+            ``"state"`` (see ``_VIEW_ROLES``).
+        :param remove_duplicate: keep only the FIRST name of a Var reachable under
+            several names. That is torch's rule for parameters()/named_parameters()/
+            named_buffers(), and it has to be by object identity: de-duplicating by
+            name (which ``named_parameters`` did) does not de-duplicate a tied weight
+            at all, since its two names differ. ``state_dict`` passes False, because
+            torch writes a tied weight under every name it is registered as -- and
+            de-duplicating there made the surviving key depend on ``__dict__`` order.
+
+        The name is built from the traversal path and is NOT written back to the Var.
+        parameters() and state_dict() used to call ``p.name(...)`` when the path they
+        happened to be walking was longer than the name already stored, so a query
+        mutated the model and the resulting checkpoint keys depended on which level
+        of the tree someone had called parameters() from first.
+        '''
+        roles = _VIEW_ROLES[kind]
+        out = []
+        stack = []
+        seen = set() if remove_duplicate else None
+        def callback(parents, k, v, n):
+            stack.append(str(k))
+            prefix = ".".join(stack[1:])
+            for key, var, role in v._var_roles():
+                if role not in roles: continue
+                if seen is not None:
+                    if id(var) in seen: continue
+                    seen.add(id(var))
+                leaf = key if type(key) is str else str(key)
+                out.append((prefix + "." + leaf if prefix else leaf, var))
+        def callback_leave(parents, k, v, n):
+            stack.pop()
+        self.dfs([], None, callback, callback_leave, recurse)
+        return out
+
     def parameters(self, recurse=True) -> List:
         ''' Returns a list of module parameters.
+
+        A Var reachable under more than one name (a tied weight) is returned once.
 
         ----------------
 
         Example::
 
             >>> net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 2))
-            >>> for p in net.parameters():
-            ...     print(p.name)
-            ...
-            >>> for p in net.parameters():
-            ...     print(p.name())
+            >>> for name, p in net.named_parameters():
+            ...     print(name)
             ...
             0.weight
             0.bias
             2.weight
             2.bias
         '''
-        ps = []
-        stack = []
-        parameter_list = jt.nn.ParameterList
-        def callback(parents, k, v, n):
-            stack.append(str(k))
-            dc = v.__dict__
-            if isinstance(v, parameter_list):
-                dc = v.params
-            bufnames = v.__dict__.get("_buffer_names", ())
-            nonparams = v.__dict__.get("_non_parameter_names", ())
-            # The prefix is the same for every parameter of this module, so it is
-            # joined once here rather than once per parameter: a training step
-            # walks the tree more than once, and this is its inner loop.
-            prefix = ".".join(stack[1:])
-            base = len(prefix) + 1 if prefix else 0
-            for k2, p in dc.items():
-                if isinstance(k2, str) and k2.startswith("_"): continue
-                if isinstance(p, Var):
-                    # registered buffers are never trainable parameters. Check the
-                    # per-Var tags AND the module's buffer-name set (the tags are
-                    # lost when from_pretrained replaces the Var; the name set is not).
-                    if getattr(p, "is_buffer", False):
-                        continue
-                    if not getattr(p, "persistent", True):
-                        continue
-                    if k2 in bufnames:
-                        continue
-                    if k2 in nonparams:
-                        continue
-                    ps.append(p)
-                    leaf = k2 if type(k2) is str else str(k2)
-                    # Only build the name when it would actually replace a
-                    # shorter one; its length is known without joining.
-                    if base + len(leaf) > len(p.name()):
-                        p.name(prefix + "." + leaf if prefix else leaf)
-        def callback_leave(parents, k, v, n):
-            stack.pop()
-        self.dfs([], None, callback, callback_leave, recurse)
-        return _uniq(ps)
+        return [v for _, v in self._named_vars("parameters", recurse)]
 
     def state_dict(self, to=None, recurse=True, destination=None, prefix="",
                    keep_vars=None):
@@ -1680,38 +1759,10 @@ class Module:
             torch_model.load_state_dict(jittor_model.state_dict(to="torch"))
 
         '''
-        uniq_set = set()
-        ps = {}
-        stack = []
-        def callback(parents, k, v, n):
-            stack.append(str(k))
-            dc = v.__dict__
-            if isinstance(v, jt.nn.ParameterList):
-                dc = v.params
-            non_persistent_buffers = v.__dict__.get(
-                "_non_persistent_buffer_names", ()
-            )
-            nonparams = v.__dict__.get("_non_parameter_names", ())
-            for k2, p in dc.items():
-                if isinstance(k2, str) and k2.startswith("_"): continue
-                if isinstance(p, Var):
-                    if id(p) in uniq_set: continue
-                    if k2 in non_persistent_buffers:
-                        continue
-                    # neither a parameter nor a buffer -- torch keeps a plain
-                    # tensor attribute out of the checkpoint entirely.
-                    if k2 in nonparams:
-                        continue
-                    if not getattr(p, "persistent", True):
-                        continue
-                    uniq_set.add(id(p))
-                    pname = ".".join(stack[1:]+[str(k2)])
-                    ps[pname] = p
-                    if len(pname) > len(p.name()):
-                        p.name(pname)
-        def callback_leave(parents, k, v, n):
-            stack.pop()
-        self.dfs([], None, callback, callback_leave, recurse)
+        # A tied weight is written under EVERY name it is registered as, like
+        # torch. De-duplicating by id kept only whichever name ``__dict__`` order
+        # happened to reach first, so the checkpoint silently lost the other key.
+        ps = dict(self._named_vars("state", recurse, remove_duplicate=False))
         if keep_vars is False:
             for k, v in ps.items():
                 if isinstance(v, Var):
@@ -1744,6 +1795,12 @@ class Module:
     def named_parameters(self, recurse=True) -> List[Tuple[str, Var]]:
         ''' Returns a list of module parameters and their names.
 
+        The same Vars ``parameters()`` returns, in the same order, each under the
+        first name the traversal reaches it by. The two used to disagree: this one
+        de-duplicated by NAME, which does not de-duplicate a tied weight at all,
+        so a model whose embedding and output projection share a weight reported
+        one parameter count to the optimizer and a larger one here.
+
         ----------------
 
         Example::
@@ -1758,36 +1815,7 @@ class Module:
             ('bias', jt.Var([-0.38282675  0.36271113 -0.7063226   0.02899247  0.52210844], dtype=float32))]
 
         '''
-        # Mirror parameters() exactly (dfs with per-module buffer-name exclusion)
-        # so a buffer whose is_buffer/persistent tag was lost to a dtype-cast Var
-        # replacement (e.g. rope inv_freq after from_pretrained) is still excluded
-        # by NAME -- otherwise it leaks into the optimizer and weight-decay drifts it.
-        ps = []
-        stack = []
-        def callback(parents, k, v, n):
-            stack.append(str(k))
-            dc = v.__dict__
-            if isinstance(v, jt.nn.ParameterList):
-                dc = v.params
-            bufnames = v.__dict__.get("_buffer_names", ())
-            nonparams = v.__dict__.get("_non_parameter_names", ())
-            for k2, p in dc.items():
-                if isinstance(k2, str) and k2.startswith("_"): continue
-                if isinstance(p, Var):
-                    if getattr(p, "is_buffer", False): continue
-                    if not getattr(p, "persistent", True): continue
-                    if k2 in bufnames: continue
-                    if k2 in nonparams: continue
-                    name = ".".join(stack[1:] + [str(k2)])
-                    ps.append((name, p))
-        def callback_leave(parents, k, v, n):
-            stack.pop()
-        self.dfs([], None, callback, callback_leave, recurse)
-        seen = set(); out = []
-        for nm, p in ps:
-            if nm in seen: continue
-            seen.add(nm); out.append((nm, p))
-        return out
+        return self._named_vars("parameters", recurse)
 
     def load_state_dict(self, params) -> None:
         '''
@@ -1880,8 +1908,12 @@ class Module:
 
     @property
     def _parameters(self):
-        # write-through so accelerate's `module._parameters[name] = value` persists
-        return _WriteThroughDict(self, { k:v for k,v in self.__dict__.items() if isinstance(v, Var) })
+        # This module's own parameters, keyed by attribute name -- torch's
+        # ``_parameters``. It used to return EVERY Var, exactly like ``_buffers``,
+        # so accelerate's `is_buffer = name in module._buffers` was True for the
+        # weights too. write-through: accelerate's `module._parameters[name] = value`
+        # has to reach the attribute (see _WriteThroughDict).
+        return _WriteThroughDict(self, self._named_vars("parameters", recurse=False))
 
     def requires_grad_(self, requires_grad=True):
         ''' Sets requires_grad for all parameters and sub-modules.
@@ -2403,7 +2435,7 @@ Returns a handle that removes both halves.
                 and value_attrs.get("is_buffer") is not True
                 and value_attrs.get("persistent") is not False
             )
-            if is_parameter and _torch_style_registration(value):
+            if is_parameter and _is_plain_tensor(value):
                 non_params = self.__dict__.get("_non_parameter_names")
                 if getattr(value, "_is_torch_parameter", False):
                     # nn.Parameter marks the Var itself, so re-registering a name
@@ -2461,50 +2493,21 @@ Returns a handle that removes both halves.
 
     @property
     def _buffers(self):
-        buffers = {}
-        for k,v in self.__dict__.items():
-            if isinstance(v, jt.Var):
-                buffers[k] = v
-        # write-through so accelerate's `module._buffers[name] = value` (the is_buffer
-        # branch of set_module_tensor_to_device) persists to the module attribute.
-        return _WriteThroughDict(self, buffers)
+        # This module's own buffers, persistent and not, keyed by attribute name --
+        # torch's ``_buffers``. write-through so accelerate's
+        # `module._buffers[name] = value` (the is_buffer branch of
+        # set_module_tensor_to_device) persists to the module attribute.
+        return _WriteThroughDict(self, self._named_vars("buffers", recurse=False))
 
     def named_buffers(self, recurse=True):
         ''' Returns a list of (name, buffer) for all registered buffers.
 
         Like torch, recurse=True (default) descends into all child modules,
-        prefixing names with the submodule path. Returns every registered
-        buffer regardless of persistence.
+        prefixing names with the submodule path, and returns every registered
+        buffer regardless of persistence. A buffer reachable under more than one
+        name is returned once, under the first.
         '''
-        buffers = []
-        uniq_set = set()
-        stack = []
-        def callback(parents, k, v, n):
-            stack.append(str(k))
-            buffer_names = v.__dict__.get("_buffer_names", ())
-            registered_ids = {
-                id(v.__dict__[name])
-                for name in buffer_names
-                if isinstance(v.__dict__.get(name), jt.Var)
-            }
-            for k2, p in v.__dict__.items():
-                if isinstance(k2, str) and k2.startswith("_"): continue
-                if not isinstance(p, jt.Var):
-                    continue
-                is_named_buffer = k2 in buffer_names
-                is_legacy_buffer = (
-                    getattr(p, "is_buffer", False)
-                    and id(p) not in registered_ids
-                )
-                if is_named_buffer or is_legacy_buffer:
-                    if id(p) in uniq_set: continue
-                    uniq_set.add(id(p))
-                    pname = ".".join(stack[1:]+[str(k2)])
-                    buffers.append((pname, p))
-        def callback_leave(parents, k, v, n):
-            stack.pop()
-        self.dfs([], None, callback, callback_leave, recurse)
-        return buffers
+        return self._named_vars("buffers", recurse)
 
     def named_children(self,):
         childs = []
@@ -2575,7 +2578,6 @@ Returns a handle that removes both halves.
             if p.dtype.is_float():
                 p.assign(p.float_auto())
         return self
-
 
 
 class Function(Module):

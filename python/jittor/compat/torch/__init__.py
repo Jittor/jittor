@@ -234,10 +234,13 @@ def install(torch, strict=True):
         setattr(torch, InstallContext.COMPLETE_ATTR, False)
         raise
     context.state.pop(_NAMESPACE_TRANSACTION, None)
-    # From here on a module tree can contain torch-authored classes, which
-    # register parameters by nn.Parameter rather than by assignment.
-    from jittor._runtime import core_api as _core_api
-    _core_api._torch_registration_semantics = True
+    # A module tree can now contain torch-authored classes, which register
+    # parameters by nn.Parameter rather than by assignment. Nothing has to be
+    # switched on for that: the marker that tells the two apart is attached by
+    # this layer's own ``torch.tensor`` and read off the value. There used to be
+    # a `_core_api._torch_registration_semantics = True` here, which made the
+    # meaning of `module.x = var` in the kernel depend on whether this import had
+    # run (see ``jittor._runtime.core_api._is_plain_tensor``).
     return torch
 
 

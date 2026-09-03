@@ -39,6 +39,15 @@ class ParameterList(jt.Module):
     def execute(self, x):
         raise NotImplementedError("Parameters is not executable")
 
+    def _var_attrs(self):
+        """A ParameterList keeps its Vars in ``self.params``, not in ``__dict__``.
+
+        Overriding the one accessor is what makes the traversals in Module work
+        here; each of them used to carry its own
+        ``if isinstance(v, ParameterList): dc = v.params``.
+        """
+        return [(k, v) for k, v in self.params.items() if isinstance(v, jt.Var)]
+
     def append(self, var):
         assert isinstance(var, jt.Var), f"argument <{type(var)}> is not jittor var"
         var._is_torch_parameter = True

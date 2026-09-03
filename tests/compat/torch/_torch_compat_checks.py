@@ -258,7 +258,10 @@ ok(tuple(_pad.shape) == (3, 3, 2) and _pad.numpy()[1, 1, 0] == 0.0, "rnn.pad_seq
 _wt = torch.nn.Linear(4, 3); _wt.register_buffer("rm", jt.zeros(3))
 _wt._parameters["weight"] = jt.array(np.ones((3, 4), "float32"))
 _wt._buffers["rm"] = jt.ones(3)
-_wtp = [p.name() for p in _wt.parameters()]
+# named_parameters(), not p.name(): a query does not rename its Vars any more
+# (it used to write the traversal path back onto the Var when that path was the
+# longer string, so the name depended on where parameters() was first called).
+_wtp = [n for n, _ in _wt.named_parameters()]
 ok(float(_wt.weight.numpy().sum()) == 12.0, "_parameters[name]=v write-through persists")
 ok(float(_wt.rm.numpy().sum()) == 3.0, "_buffers[name]=v write-through persists")
 ok("rm" not in _wtp and "weight" in _wtp, "write-through preserves buffer/param classification")

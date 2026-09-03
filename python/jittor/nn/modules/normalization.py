@@ -33,16 +33,27 @@ class BatchNorm(Module):
         self.track_running_stats = track_running_stats
         self.weight = init.constant((num_features,), "float32", 1.0) if affine else 1.0
         self.bias = init.constant((num_features,), "float32", 0.0) if affine else 0.0
-        self.running_mean = init.constant((num_features,), "float32", 0.0).stop_grad()
-        self.running_var = init.constant((num_features,), "float32", 1.0).stop_grad()
-        self.num_batches_tracked = init.constant((1,), "int32", 0.0).stop_grad()
-        for buffer in (
-            self.running_mean,
-            self.running_var,
-            self.num_batches_tracked,
-        ):
-            object.__setattr__(buffer, "is_buffer", True)
-        object.__setattr__(self.num_batches_tracked, "persistent", False)
+        # register_buffer, not a tagged assignment. Tagging the Var
+        # (`object.__setattr__(buf, "is_buffer", True)`) records the classification
+        # on the OBJECT, and the object does not survive being replaced: after
+        # `bn.running_mean = jt.zeros(n)` -- which is how a checkpoint load, a dtype
+        # cast or a hand-written reset writes it -- the new Var carries no tag and
+        # running_mean became a trainable parameter, so the optimizer's weight decay
+        # started dragging the running statistics towards zero. register_buffer
+        # records the NAME on the module, which no reassignment can lose. That name
+        # set is exactly the mechanism this bypassed.
+        self.register_buffer(
+            "running_mean",
+            init.constant((num_features,), "float32", 0.0).stop_grad())
+        self.register_buffer(
+            "running_var",
+            init.constant((num_features,), "float32", 1.0).stop_grad())
+        # Kept non-persistent, as it has always been here: jittor's checkpoints do
+        # not carry num_batches_tracked, and load_parameters/load_state_dict both
+        # special-case the key rather than report it missing.
+        self.register_buffer(
+            "num_batches_tracked",
+            init.constant((1,), "int32", 0.0).stop_grad(), persistent=False)
 
     def execute(self, x):
         # Parameters and buffers live here; the arithmetic lives in
