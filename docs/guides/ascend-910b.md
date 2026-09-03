@@ -149,6 +149,12 @@ between Ascend and CUDA.
 Run this diagnostic on an Ascend 910B3 only after sourcing the CANN environment,
 confirming the device is healthy, and selecting an allocated device:
 
+The unary runner is the first family migrated to the shared launcher tail. It
+keeps its historical asynchronous policy, while workspace allocation and ACL
+launch failures now use the same auditable error path as the base runner. When
+validating this migration, include one unary operation and confirm that its log
+contains neither `fallback cpu` nor `execute launcher failed`.
+
 ```bash
 source "$CANN_SET_ENV"
 npu-smi info

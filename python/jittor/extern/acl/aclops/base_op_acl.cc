@@ -127,6 +127,25 @@ namespace jittor
              << (recent_error == nullptr ? "unavailable" : recent_error);
     }
 
+    void BaseOpRunner::launch(aclnnStatus workspace_ret,
+                              const AclExecuteLauncher &launcher,
+                              bool synchronize)
+    {
+        checkRet(workspace_ret);
+        if (!launcher)
+            LOGf << "ACL operator has an empty execute launcher:" << name;
+        if (workspaceSize > 0)
+            mallocWorkSpace(workspaceSize);
+        auto launch_ret = launcher(
+            workspaceAddr, workspaceSize, executor, aclstream);
+        if (launch_ret != ACL_SUCCESS)
+            LOGf << "ACL operator" << name
+                 << ": execute launcher failed, return code" << launch_ret
+                 << acl_error_to_string(launch_ret);
+        if (synchronize)
+            syncRun();
+    }
+
     // Base run method with common operator lookup logic
     void BaseOpRunner::run()
     {

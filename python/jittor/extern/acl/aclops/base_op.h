@@ -5,6 +5,9 @@
 namespace jittor
 {
     extern int sync_run;
+    using AclExecuteLauncher = std::function<aclnnStatus(
+        void *, uint64_t, aclOpExecutor *, aclrtStream)>;
+
     class BaseOpRunner
     {
     protected:
@@ -43,6 +46,13 @@ namespace jittor
         virtual void syncRun();
 
         void checkRet(aclnnStatus ret);
+
+        // Shared tail for registry-backed runners. The caller still owns the
+        // typed workspace query; this method owns allocation, launch errors,
+        // and the optional diagnostic synchronization policy.
+        void launch(aclnnStatus workspace_ret,
+                    const AclExecuteLauncher &launcher,
+                    bool synchronize = true);
 
         // Base run method with common operator lookup logic
         void run();

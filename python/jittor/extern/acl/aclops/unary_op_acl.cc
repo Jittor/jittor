@@ -44,16 +44,8 @@ namespace jittor
         else
             ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
 
-        checkRet(ret);
-
-        if (workspaceSize > 0)
-        {
-            mallocWorkSpace(workspaceSize);
-        }
-
-        ret = it->second.executeFunc(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnxxx failed. ERROR: %d\n", name.c_str(), ret); return);
-        // syncRun();
-        return;
+        // Preserve the historical asynchronous unary path while moving its
+        // workspace/execute/error tail behind the common launcher contract.
+        launch(ret, it->second.executeFunc, false);
     }
 }
