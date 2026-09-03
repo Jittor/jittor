@@ -386,3 +386,81 @@ cp $MYTMP/impl.fixed <改过的实现文件>         # 还原
 - 只在某个后端出现的形状 → 直接构造那段 IR 喂给要测的函数，不要指望端到端跑出来。
 
 写用例时把「为什么不能端到端测」写进 docstring，否则下一个人会以为你偷懒。
+
+## 11. 「这条红是不是我造成的」：把最小复现打到整改基线上
+
+改核心的分区常收到「你那块的某个测试红了」，而失败形状指向的往往不是真凶。
+**别靠读 diff 猜，一次实验就能定性。**
+
+整改基线 `9eb696d9` 有一棵现成的 worktree（`refactor/gatecheck-base`）。
+用**自己的** `JITTOR_HOME` 去跑同一个脚本——只读那棵树，不改它，缓存也不撞：
+
+```bash
+# 1) 先把复现缩成一个不依赖 pytest 的脚本 repro.py（几秒到几十秒）
+# 2) 在自己的分支上确认它必现（跑三次，别信一次）
+for i in 1 2 3; do
+  PYTHONPATH=$WT/python JITTOR_HOME=$HOME_MINE TMPDIR=$TMP_MINE \
+  CUDA_VISIBLE_DEVICES=$N nvcc_path=/usr/local/cuda/bin/nvcc \
+  taskset -c $CORES python repro.py; done
+
+# 3) 同一个脚本打基线（第一次是冷编译，约 10 分钟；缓存目录必须另开一个）
+PYTHONPATH=/home/zy/jittor-lab/refactor/gatecheck-base/python \
+JITTOR_HOME=$HOME_MINE-base TMPDIR=$TMP_MINE/base \
+CUDA_VISIBLE_DEVICES=$N nvcc_path=/usr/local/cuda/bin/nvcc \
+taskset -c $CORES python repro.py
+```
+
+基线绿 + 自己红 = 整改期回归，接着 `git log -- <相关文件>` 逐个提交读**说明**
+（不是 diff）：说明里会写「我把 X 从 A 改成了 B」，而回归通常就是那句 B 的副作用。
+基线也红 = 陈年缺陷，写进看板，别自己扛。
+
+**`PYTHONPATH` 那一行不能省**（见 §1）：少了它你在拿主树的代码打主树的分。
+
+### 判据：两条红可能是同一条——先读 pytest 末尾的 "runtime state left behind"
+
+本仓库的 conftest 会在文件跑完后报「谁改了进程级状态又没放回去」：
+
+```
+=================== runtime state left behind by a test file ===================
+tests/ops/test_matmul.py
+    flags.use_cuda 0 -> 1 (use jt.flag_scope)
+```
+
+**这一段是因果链，不是噪音。** 上面那次：`test_backward_cuda` 的异常从
+`flag_scope.__exit__` 里抛出来，于是 `use_cuda` 停在 1；同一文件里排在它后面的
+`test_backward_once`（CPU 用例，断言日志里有 `mkl_matmul`）就在一个还跑着
+cuBLAS 的进程里找 mkl，报成 `assert 0 == 1`。**两条红、两种形状、一个因。**
+
+所以拿到「同一文件里若干条红」时，顺序是：
+1. 看 runtime-state 报告，把「被上一条污染」的先摘出去；
+2. **单独跑**剩下那条，确认它自己也红；
+3. 只对自己也红的那条做归因。
+
+反过来也要记住：这个报告只在**文件跑完**时打印。用 `-x` 会看不到它。
+
+### 陷阱：后端标志是破坏性的，图在哪个后端建就得在哪个后端编
+
+`Op::do_jit_prepare` 不只是"生成 key"，它还**改算子的标志位**：在 CUDA 下准备过
+的算子被 `set_flag(OpFlags::_cpu, 0)` 永久标成「没有 CPU 版本」，反之清 `_cuda`。
+于是「一张图在哪个后端上建的，就必须在哪个后端上编译」是个**隐含前提**，
+唯一守着它的是 `setter_use_cuda` 里那句 `sync_all(0)`。
+
+**任何改动只要挪动了这句冲刷相对于 `use_cuda` 赋值的位置，就会炸**，而且炸在
+`flag_scope.__exit__` 那一行上——看起来跟写代码的人毫无关系：
+
+```
+Check failed: flag(OpFlags::_cpu)   Op broadcast_to doesn't have cpu version
+```
+
+复现判据：**图必须在开关处还被握着**。
+
+```python
+with jt.flag_scope(use_cuda=1):
+    ...
+    loss_mean.data.sum()          # 逼出一次 CUDA 编译，_cpu 就是在这里被清掉的
+    # x / y / pred_y / loss 故意留到 __exit__ 之后
+```
+
+把这些局部变量先 `del` 掉，**同一段代码无论有没有这个 bug 都是绿的**。
+写这类回归用例时要在 docstring 里写明「这几个变量是故意留着的」，
+否则下一个人"顺手清理"就把用例悄悄变成了永远绿。

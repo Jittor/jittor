@@ -76,11 +76,32 @@ void setter_use_cuda(const int& old_value, const int& requested) {
 #else
     CHECK(value==0) << "No CUDA found.";
 #endif
-    if (old_value != value)
+    if (old_value != value) {
+        // Flush the pending graph while the *old* backend is still in force.
+        //
+        // The lazy graph standing here was built for `old_value`, and
+        // `Op::do_jit_prepare` has already cleared the other backend's flag on
+        // every op it prepared: an op prepared under CUDA has `_cpu` off for
+        // good. Compiling that graph after the flag has dropped to 0 reaches
+        // `Op::do_jit_prepare` again, takes the CPU branch, and dies on
+        // `ASSERT(flag(OpFlags::_cpu))` -- "Op broadcast_to doesn't have cpu
+        // version" -- from inside the parallel compiler, i.e. as a
+        // `RuntimeError` raised by `flag_scope.__exit__` rather than by
+        // anything the user wrote.
+        //
+        // Before [2.21] the macro called the setter *before* the assignment,
+        // so this flush got the old value for free. [2.21] moved the
+        // assignment first (so a setter can see, and correct, the new value)
+        // and silently took that away: `sync_all` is the one thing in here
+        // that must run under the old setting. Restore it around the flush.
+        use_cuda = old_value;
         sync_all(0);
+        // If sync_all throws, `use_cuda` stays at old_value and the macro's
+        // rollback writes the same thing -- flag and side effect still agree.
+    }
     // Not a write-back: the macro already assigned the requested value. This
     // publishes the *correction* made above when CUDA was asked for and no
-    // device answered.
+    // device answered, and re-publishes it after the flush above.
     use_cuda = value;
 }
 

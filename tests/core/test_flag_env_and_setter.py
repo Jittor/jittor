@@ -150,5 +150,72 @@ class TestFlagSetterOrder(unittest.TestCase):
             jt.flags.log_vprefix = before
 
 
+class TestUseCudaLowersOnlyAfterTheFlush(unittest.TestCase):
+    """Leaving ``flag_scope(use_cuda=1)`` must flush the graph it built as CUDA.
+
+    ``setter_use_cuda`` calls ``sync_all(0)`` so that the lazy graph standing
+    at the switch runs on the backend it was *built* for.  That is not a
+    nicety: ``Op::do_jit_prepare`` clears the other backend's flag on every op
+    it prepares, so an op prepared under CUDA has ``OpFlags::_cpu`` off
+    permanently.  Compiling that graph with ``use_cuda`` already at 0 reaches
+    the CPU branch and aborts on ``ASSERT(flag(OpFlags::_cpu))``.
+
+    Before [2.21] the flush got the old value for free, because the macro ran
+    the setter before the assignment.  [2.21] put the assignment first -- which
+    is what lets a setter correct the value it is handed -- and that silently
+    moved this flush to the far side of the switch.  The symptom was a
+    ``RuntimeError`` out of ``flag_scope.__exit__``:
+
+        Op broadcast_to doesn't have cpu version
+
+    blamed on whatever line happened to close the scope.  ``tests/ops/
+    test_matmul.py::test_backward_cuda`` failed exactly this way, and it left
+    ``use_cuda`` at 1 for the rest of the file, so ``test_backward_once`` then
+    looked for ``mkl_matmul`` in a process that was still on cuBLAS.
+
+    The graph has to be *held* at the switch for this to bite: the vars below
+    stay in scope on purpose.  Dropping them first makes the case pass whether
+    or not the bug is present.
+    """
+
+    @unittest.skipIf(not jt.has_cuda, "No cuda found")
+    def test_leaving_a_cuda_scope_does_not_recompile_its_graph_for_cpu(self):
+        import numpy as np
+
+        before = jt.flags.use_cuda
+        with jt.flag_scope(use_cuda=1):
+            model = jt.nn.Sequential(jt.nn.Linear(1, 10), jt.nn.ReLU(),
+                                     jt.nn.Linear(10, 1))
+            sgd = jt.nn.SGD(model.parameters(), 0.05, 0.9, 0)
+            x = jt.float32(np.random.rand(50, 1))
+            y = x * x
+            pred_y = model(x)
+            loss = (pred_y - y).sqr()
+            loss_mean = loss.mean()
+            sgd.step(loss_mean)
+            # Force the CUDA compile: this is what clears `_cpu` on the ops.
+            loss_mean.data.sum()
+            # x/y/pred_y/loss/loss_mean stay alive through __exit__ below --
+            # that unfinished graph is the thing the flush has to handle.
+        self.assertEqual(jt.flags.use_cuda, before)
+
+    @unittest.skipIf(not jt.has_cuda, "No cuda found")
+    def test_the_flushed_graph_still_gives_the_right_answer(self):
+        # The flush is not just "must not raise": it has to actually produce
+        # the values, and produce them once.  A fix that skipped the flush
+        # would pass the case above and lose the graph here.
+        import numpy as np
+
+        a = np.random.rand(32, 16).astype("float32")
+        b = np.random.rand(16, 8).astype("float32")
+        with jt.flag_scope(use_cuda=1):
+            va, vb = jt.array(a), jt.array(b)
+            warm = jt.matmul(va, vb)
+            warm.sync()
+            held = jt.matmul(va, vb) + warm
+        np.testing.assert_allclose(held.data, np.matmul(a, b) * 2,
+                                   rtol=1e-5, atol=1e-5)
+
+
 if __name__ == "__main__":
     unittest.main()
