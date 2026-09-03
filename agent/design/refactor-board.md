@@ -224,7 +224,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 2.03 | `tflag` 全局计数器加魔数改为 epoch 对象或局部集合 | 已合并 | coreops | 6833f96d。嵌套 TraversalEpoch 恢复外层标记，grad/graph/memory profiler 改局部索引或集合；CPU 33 项、CUDA 3 项及结构聚焦通过 |
 | 2.04 | `Var::allocator` 去类型双关 | 已合并 | | 9b3841b7 |
 | 2.05 | 真正的 0 维张量 | 已合并 | coreops | 2cfc5a0d。空 shape 保留，Python/NumPy/C++ 标量来源及 reduce/arg-reduce/getitem/reshape/JIT/CUB 全归约统一 0-D；新 CPU 3 passed、GPU2 4 passed，相关 CPU 52 项与 GPU autograd 8 项通过 |
-| 2.06 | 边表由 list 加反向迭代器改 SmallVector，按下标 O(1) | 待领 | | |
+| 2.06 | 边表由 list 加反向迭代器改 SmallVector，按下标 O(1) | 已合并 | mem | ae2a1b70。输入/输出边使用内联容量 2 的 SmallVector 与反向下标，随机访问 O(1)；保序删除同步修正移位边下标，保留 fuser 依赖的消费者创建顺序。C++ 容器/边契约 2 项、CPU 生命周期 1 项、GPU1 CUDA 节点 1 项通过 |
 | 2.07 | `hold_vars`/`sync_ptr` 析构里 `std::next(end())` 的 … | 已合并 | coreops | 1101f3f5 |
 | 2.08 | `Node` 不再 include `pybind/py_var_tracer.h` | 已合并 | coreops | 6221d4c4。NodeLifecycleObserver 接口由 pybind tracer 注册；无 Python include 的语法编译、CPU/CUDA lifecycle/tracer 聚焦通过 |
 | 2.09 | `th_mode` 从 C++ 核心上移为 autograd 策略对象 | 已合并 | coreops | b55f1acb。核心改为通用 `AutogradPolicyState`，Python autograd 层提供不可变 native/explicit-requires-grad 策略与可恢复 scope；核心 Torch 专属状态名归零。新 CPU 4 passed/1 skipped、GPU2 1 passed，相关结构 7 passed，布局与静态检查通过 |
