@@ -62,17 +62,7 @@ namespace jittor
         auto tensorList = aclCreateTensorList(&outputTensors[0], output_num);
         ret = aclnnSplitWithSizeGetWorkspaceSize(inputTensors[0], splitSize, attr->dim, tensorList, &workspaceSize, &executor);
 
-        checkRet(ret);
-
-        if (workspaceSize > 0)
-        {
-            mallocWorkSpace(workspaceSize);
-        }
-
-        ret = aclnnSplitWithSize(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnSplitWithSize failed. ERROR: %d\n", name.c_str(), ret); return);
-
-        syncRun();
+        launch(ret, aclnnSplitWithSize, true);
         return;
     }
 

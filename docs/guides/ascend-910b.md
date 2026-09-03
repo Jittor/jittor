@@ -462,3 +462,7 @@ handling and synchronous execution. Gather remains outside this slice.
 
 The ACL Concat family uses the shared launcher while retaining tensor-list and
 dimension handling. SplitWithSize is intentionally outside this slice.
+
+The ACL SplitWithSize family now uses the shared launcher while retaining its
+split-size, tensor-list, and dimension handling. Tensor-list lifetime cleanup
+is outside this migration slice.

@@ -228,6 +228,18 @@ def test_concat_forward_uses_launcher_and_split_remains_present():
     assert "void SplitWithSizeOpRunner::executeOp" in source
 
 
+def test_split_with_size_uses_launcher_and_keeps_tensor_list_setup():
+    source = CONCAT_SOURCE.read_text()
+    split = source[source.index("void SplitWithSizeOpRunner::executeOp"):]
+    assert "splitSize" in split
+    assert "aclCreateTensorList" in split
+    assert "attr->dim" in split
+    assert "launch(ret, aclnnSplitWithSize, true);" in split
+    assert "checkRet(ret);" not in split
+    assert "mallocWorkSpace(workspaceSize)" not in split
+    assert "syncRun();" not in split
+
+
 def test_scatter_uses_launcher_and_keeps_axis_reduction_query():
     source = GATHER_SOURCE.read_text()
     scatter = source[source.index("void ScatterOpRunner::executeOp"):]
