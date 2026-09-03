@@ -466,7 +466,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 10.08 | 已复现缺陷用 `xfail` 而非 `skip` | 待领 | | |
 | 10.09 | 公开 API 与 OpInfo 差集作为 structure 门禁一项 | 待领 | | |
 | 10.10 | gradcheck 加「故意写错导数应当失败」的负向自测 | 已合并 | gates | 3e83594d。故意把平方的 backward 写成 `3*x`，`gradcheck` 必须抛 `Jacobian mismatch`；定向 1 passed，相关结构 15 passed |
-| 10.11 | 设备对拍加 dtype 轴 | 已合并 | gates | da4ecb2b。双方支持时生成 float32/int8/int16 轴，整数逐位比较，浮点容差按 `sqrt(reduce_size)*eps` 下限缩放，CuPy linalg 探针失败硬失败；真实 CUDA sum-int8/max-int16 2 passed |
+| 10.11 | 设备对拍加 dtype 轴 | 已合并 | gates | 4bf5830c。双方支持时生成 float32/int8/int16 轴，整数逐位比较，浮点容差按 `sqrt(reduce_size)*eps` 下限缩放，CuPy linalg 探针失败硬失败；真实 CUDA sum-int8/max-int16 2 passed |
 | 10.12 | `retry` 装饰器记录并上报重试次数 | 已合并 | gates | 402d09ef。恢复成功与最终失败均报告准确 retries/attempts，并暴露调用、最近和累计重试计数；保留原异常并支持 kwargs。聚焦结构 8 passed |
 | 10.13 | marker 真正建立 `-m "not slow"` 快门禁或删除 | 待领 | | |
 | 10.14 | notebook 门禁按 topic 参数化 | 待领 | | |
