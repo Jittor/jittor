@@ -22,6 +22,10 @@ MIGRATED_VIEW_SHAPE_BOUNDARIES = {
     "python/jittor/src/ops/reshape_op.cc": 3,
 }
 
+MIGRATED_TERNARY_SHAPE_BOUNDARIES = {
+    "python/jittor/src/ops/ternary_op.cc": 2,
+}
+
 
 def test_typed_error_entry_points_are_distinct():
     source = (ROOT / "python/jittor/src/utils/log.h").read_text()
@@ -60,3 +64,13 @@ def test_public_view_shape_migration_is_explicit_and_bounded():
         counts[relative] = actual
         assert actual == expected, (relative, actual, expected)
     assert sum(counts.values()) == 9
+
+
+def test_public_ternary_shape_migration_is_explicit_and_bounded():
+    counts = {}
+    for relative, expected in MIGRATED_TERNARY_SHAPE_BOUNDARIES.items():
+        source = (ROOT / relative).read_text()
+        actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+        counts[relative] = actual
+        assert actual == expected, (relative, actual, expected)
+    assert sum(counts.values()) == 2

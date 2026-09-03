@@ -12,6 +12,11 @@ from _helpers.devices import cuda_test_case
 from _helpers.numerical_grad import ngrad
 
 class TestTernaryOp(unittest.TestCase):
+    def test_shape_mismatch_is_a_catchable_user_error(self):
+        with self.assertRaisesRegex(RuntimeError, "Shape not match"):
+            jt.ternary(
+                jt.ones((2, 3)), jt.ones((3, 2)), jt.zeros((2, 3)))
+
     def test_with_np(self):
         np.random.seed(0)
         a = np.random.rand(5,10).astype("float32")
