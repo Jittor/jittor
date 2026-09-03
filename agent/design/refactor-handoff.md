@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；本波审计基线 `0505da0d`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 审计基线 654 个 |
+| 分支 | `2.0-refactor`；本波审计基线 `8a0ac061`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 审计基线 661 个 |
 | 提交里出现过的任务号 | 214 个 |
 | 看板 | 已合并 **196** / 进行中 **0** / 待领 **74** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
@@ -373,6 +373,14 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `bindings` | 2.19 将 cuBLAS MatMul 两处公开 dtype 合同改为 `USER_CHECK`，累计 66 处；nvcc TU 语法通过，本机无 CUDA |
 | `compat` | 7.03 将 trapz/trapezoid 提升为 numerical 稳定包装并登记 approximate fidelity；4 项 CPU/身份/metadata 通过 |
 
+第三十八波新增 3 个严格保持待领的前置：
+
+| 分区 | 第三十八波结果 |
+| --- | --- |
+| `device` | 8.06 将 Range family 接入共享 launcher，保留三个 scalar 构造/销毁与同步策略；静态合同 25 项通过，本机无 CANN/NPU |
+| `bindings` | 2.19 将 cuBLAS batched MatMul 两处公开 dtype 合同改为 `USER_CHECK`，累计 68 处；nvcc TU 语法通过，本机无 CUDA |
+| `compat` | 7.03 将 masked_select 提升为 numerical 稳定对象并登记 approximate fidelity，保留 1-D/out 限制；3 项 CPU/身份/metadata 通过 |
+
 第二十九波新增 3 个严格保持待领的前置：
 
 | 分区 | 第二十九波结果 |
@@ -383,7 +391,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 
 ## 6. 下一波起点
 
-按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第三十八波继续优先可独立验证的
+按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第三十九波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
 - `device`：若续做 8.06，只迁下一个最终 owner 明确的 family，并复用 5be5fa15 的 launcher 合同；无 NPU
