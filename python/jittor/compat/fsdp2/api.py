@@ -7,7 +7,7 @@ import types
 import jittor as jt
 from jittor import nn
 
-from . import config, dtensor, grad_sync, optimizer, shard
+from . import common, config, dtensor, grad_sync, optimizer, shard
 from ..diagnostics import EXPECTED, swallowed
 
 
@@ -162,6 +162,63 @@ def _inject_fsdp_methods(module):
     return module
 
 
+def _reject_unsupported_mesh(mesh, dp_mesh_dims):
+    """``fully_shard`` shards across the whole world; refuse a mesh that does not.
+
+    The mesh was stored on the state and then ignored: ``shard.py`` shards by
+    ``common._world_size()`` no matter what was passed. On 8 ranks with a
+    ``(2, 4)`` dp/tp mesh that means all 8 ranks take part in the shard and in
+    the reduce-scatter, so every parameter is split 8 ways and every gradient
+    averaged over 8 ranks, when the caller asked for 2. The model still trains
+    and the numbers are wrong -- there is no error and no warning.
+
+    Jittor has no communicator subgroups yet (task 8.08), so the only mesh this
+    can honour is one that describes the whole world. Anything else is refused
+    rather than silently reinterpreted.
+    """
+    if mesh is None:
+        return
+    world = int(common._world_size())
+    if world <= 1:
+        # Same rule 7.01 applied throughout this layer and that
+        # DeviceMesh.__getitem__ already follows: on one rank every mesh
+        # describes the same single group, so nothing can be silently
+        # reinterpreted and nothing is refused.
+        return
+    shape = tuple(getattr(mesh, "shape", ()) or ())
+    if len(shape) > 1:
+        from ..stub_policy import unimplemented
+        unimplemented(
+            "fully_shard(mesh=%r)" % (mesh,),
+            "shard across ALL %d ranks regardless of the mesh, so a %d-D "
+            "parallel plan collapses onto one axis and every parameter is "
+            "split the wrong number of ways" % (world, len(shape)),
+            "Jittor has no communicator subgroups yet (task 8.08). Pass a "
+            "1-D mesh covering the whole world, or omit mesh=.")
+        return
+    if shape:
+        requested = int(common._prod(shape))
+        if requested != world:
+            from ..stub_policy import unimplemented
+            unimplemented(
+                "fully_shard(mesh=%r) on %d ranks" % (mesh, world),
+                "shard across all %d ranks even though the mesh asks for %d, "
+                "so each shard is the wrong size and the reduce-scatter "
+                "averages over the wrong group" % (world, requested),
+                "Jittor has no communicator subgroups yet (task 8.08). The "
+                "mesh has to cover the whole world.")
+            return
+    names = tuple(getattr(mesh, "mesh_dim_names", None) or ())
+    selected = getattr(dp_mesh_dims, "shard_names", None) if dp_mesh_dims else None
+    if selected and names and set(selected) != set(names):
+        from ..stub_policy import unimplemented
+        unimplemented(
+            "fully_shard(dp_mesh_dims=%r) over mesh dims %r" % (selected, names),
+            "shard across every rank in the mesh rather than only the named "
+            "dimensions",
+            "Jittor has no communicator subgroups yet (task 8.08).")
+
+
 def fully_shard(module, *, mesh=None, reshard_after_forward=True,
                 shard_placement_fn=None, mp_policy=None, offload_policy=None,
                 ignored_params=None, dp_mesh_dims=None, **kwargs):
@@ -175,6 +232,7 @@ def fully_shard(module, *, mesh=None, reshard_after_forward=True,
         return module
     if module is None or not hasattr(module, "parameters"):
         raise TypeError("fully_shard() expects a torch.nn.Module-compatible object")
+    _reject_unsupported_mesh(mesh, dp_mesh_dims)
     st = getattr(module, "_fsdp_state", None)
     if st is None:
         st = types.SimpleNamespace()

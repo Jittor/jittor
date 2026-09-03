@@ -23,7 +23,7 @@ from .diagnostics import EXPECTED, swallowed
 
 __all__ = ["_world_size", "_rank", "_in_true_distributed", "_nccl_ops",
            "_slice_flat", "_all_gather_shards", "_reduce_scatter_padded",
-           "_all_reduce_mean", "_broadcast_from_rank0"]
+           "_all_reduce_mean", "_broadcast_from_rank0", "_reduce_scalar"]
 
 
 def _world_size():
@@ -147,3 +147,22 @@ def _broadcast_from_rank0(var):
     var.assign(var.mpi_broadcast())
     return var
 
+def _reduce_scalar(var, how):
+    """Combine a 0-d/1-element Var across ranks. The identity on one rank.
+
+    Built on ``_all_gather_shards`` rather than ``mpi_all_reduce`` because
+    Jittor's all-reduce implements only ``mean`` and ``add``
+    (``mpi_all_reduce_op.cc`` asserts on anything else), while a p-norm needs
+    ``max`` and ``min`` as well for the infinity norms. The payload is one
+    number per rank, so gathering and reducing locally costs nothing.
+    """
+    if _world_size() <= 1:
+        return var
+    gathered = _all_gather_shards(var.reshape((1,)))
+    if how == "sum":
+        return gathered.sum()
+    if how == "max":
+        return gathered.max()
+    if how == "min":
+        return gathered.min()
+    raise ValueError("unsupported cross-rank reduction %r" % (how,))

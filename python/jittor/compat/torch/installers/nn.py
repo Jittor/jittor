@@ -309,13 +309,37 @@ def _install_nn_extras(nn, registry=None):
                 if gg is not None:
                     out.append(gg)
             return out
+        def _parameters_are_sharded(parameters):
+            """True when these gradients are FSDP *shards*.
+
+            Each rank then holds a different slice of the same logical
+            gradient, so the norm has to be combined across ranks before the
+            root is taken -- otherwise every rank clips by its own slice's
+            norm, which is always too small, and each scales by a different
+            coefficient. For DDP the answer is False and must stay False: its
+            ranks already hold the same averaged gradient, so reducing would
+            count one norm N times.
+
+            Asked through the seam rather than by importing fsdp2, which sits
+            above this file (jittor/compat/fsdp_hooks.py).
+            """
+            fsdp = _fsdp_hooks.provider()
+            if fsdp is None:
+                return False
+            for p in parameters:
+                if isinstance(p, _jt.Var) and fsdp.is_fsdp_managed_param(p):
+                    return True
+            return False
+
         def clip_grad_norm_(parameters, max_norm, norm_type=2.0,
                             error_if_nonfinite=False, **k):
             if isinstance(parameters, _jt.Var):
                 parameters = [parameters]
+            parameters = list(parameters)
             grads = _grads_of(parameters)
             return _clip_grad_norm_device(
-                grads, max_norm, norm_type, error_if_nonfinite)
+                grads, max_norm, norm_type, error_if_nonfinite,
+                shard_reduce=_parameters_are_sharded(parameters))
         def clip_grad_value_(parameters, clip_value, **k):
             if isinstance(parameters, _jt.Var):
                 parameters = [parameters]

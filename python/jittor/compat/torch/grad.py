@@ -2,6 +2,7 @@
 
 import numpy as np
 import jittor as jt
+from .. import collectives as _collectives
 
 
 import functools as _functools
@@ -189,13 +190,30 @@ def _amp_passthrough_decorator(fn=None, **kwargs):
     return lambda f: f
 
 
-def _get_total_norm_device(grads, norm_type=2.0, error_if_nonfinite=False):
-    """Compute the total norm for a list of gradient Vars on device."""
+def _get_total_norm_device(grads, norm_type=2.0, error_if_nonfinite=False,
+                           shard_reduce=False):
+    """Compute the total norm for a list of gradient Vars on device.
+
+    ``shard_reduce`` says these gradients are *shards*: each rank holds a
+    different slice of the same logical gradient, so the norm has to be
+    combined across ranks before the root is taken. Without it every rank
+    clipped by its own slice's norm -- always smaller than the true one -- so
+    each rank scaled by a different, too-large coefficient and the training
+    trajectory silently diverged from torch's.
+
+    It must stay off for DDP, where every rank already holds the *same*
+    averaged gradient: reducing there would count the same norm N times.
+    """
     import math as _math
 
     grads = [g for g in grads if isinstance(g, jt.Var)]
     if not grads:
         return jt.array(0.0)
+
+    def _across(value, how):
+        if not shard_reduce:
+            return value
+        return _collectives._reduce_scalar(value, how)
     p = float(norm_type)
     acc_dtype = "float64" if any(str(g.dtype) == "float64" for g in grads) else "float32"
 
@@ -206,7 +224,7 @@ def _get_total_norm_device(grads, norm_type=2.0, error_if_nonfinite=False):
         for g in grads:
             x = g.abs() if "complex" in str(g.dtype) else g
             nonempty.append((x != 0).sum().reshape((1,)))
-        total = (jt.concat(nonempty) != 0).sum().cast(acc_dtype)
+        total = _across((jt.concat(nonempty) != 0).sum().cast(acc_dtype), "sum")
     else:
         parts = []
         for g in grads:
@@ -215,15 +233,18 @@ def _get_total_norm_device(grads, norm_type=2.0, error_if_nonfinite=False):
         flat = jt.concat(parts)
         ax = flat.abs()
         if p == float("inf"):
-            total = ax.max()
+            total = _across(ax.max(), "max")
         elif p == float("-inf"):
-            total = ax.min()
+            total = _across(ax.min(), "min")
         elif p == 1.0:
-            total = ax.sum()
+            total = _across(ax.sum(), "sum")
         elif p == 2.0:
-            total = jt.sqrt((flat * flat).sum())
+            # The cross-rank sum has to happen on the sum of squares, before
+            # the square root -- combining per-rank norms afterwards would be
+            # a different (and wrong) quantity.
+            total = jt.sqrt(_across((flat * flat).sum(), "sum"))
         else:
-            total = (ax ** p).sum() ** (1.0 / p)
+            total = _across((ax ** p).sum(), "sum") ** (1.0 / p)
 
     if error_if_nonfinite:
         total_value = float(total.item())
@@ -257,7 +278,7 @@ def _clip_grads_with_norm_device(grads, max_norm, total_norm):
 
 
 def _clip_grad_norm_device(grads, max_norm, norm_type=2.0,
-                           error_if_nonfinite=False):
+                           error_if_nonfinite=False, shard_reduce=False):
     """Clip a list of gradient Vars without a host-side coefficient branch.
 
     A per-gradient reduction is mathematically equivalent for finite p-norms,
@@ -267,7 +288,8 @@ def _clip_grad_norm_device(grads, max_norm, norm_type=2.0,
     the per-step D2H sync previously caused by ``total.item()``.
     """
     grads = [g for g in grads if isinstance(g, jt.Var)]
-    total = _get_total_norm_device(grads, norm_type, error_if_nonfinite)
+    total = _get_total_norm_device(grads, norm_type, error_if_nonfinite,
+                                   shard_reduce=shard_reduce)
     _clip_grads_with_norm_device(grads, max_norm, total)
     return total
 
