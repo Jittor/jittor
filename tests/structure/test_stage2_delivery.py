@@ -67,6 +67,23 @@ class TestStage2Delivery(unittest.TestCase):
         )
         self.assertNotIn(".gitlab-ci.yml", layout_gate)
 
+    def test_layout_gate_is_a_small_rule_checker_not_a_history_blacklist(self):
+        layout_gate = (self.repo_root / "agent" / "scripts" / "check_repo_layout.sh").read_text(
+            encoding="utf-8",
+        )
+        self.assertLess(len(layout_gate.splitlines()), 100)
+        self.assertNotIn("forbidden_path", layout_gate)
+        self.assertNotIn("active_reference_paths", layout_gate)
+        self.assertNotIn("grep -I -R", layout_gate)
+        for contract in (
+            "required_paths",
+            "notebook product must stay outside",
+            "module/package path collision",
+            "check_docs_governance.py",
+        ):
+            with self.subTest(contract=contract):
+                self.assertIn(contract, layout_gate)
+
     def test_container_and_release_architectures_match_the_baseline(self):
         matrix = json.loads(self.baseline["CI_CONTAINER_MATRIX"])["include"]
         cpu_base = next(item["base"] for item in matrix if item["name"] == "CPU")

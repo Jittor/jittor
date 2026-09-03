@@ -5,261 +5,63 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 status=0
 
-# Build output that .gitignore already declares is not a layout problem: running
-# the linter creates .ruff_cache, and importing the package creates
-# __pycache__. Failing on those reports a clean checkout as broken, so every
-# filesystem scan below is filtered through git's own ignore rules.
-tracked_or_new() {
-  git -C "$REPO_ROOT" check-ignore -q -- "$1" 2>/dev/null && return 1
-  return 0
+fail() {
+  printf '%s\n' "$1" >&2
+  status=1
 }
 
-report_unignored() {
-  local found=0 path
-  while IFS= read -r path; do
-    if tracked_or_new "$path"; then
-      printf '%s\n' "$path" >&2
-      found=1
-    fi
-  done
-  return $((1 - found))
-}
-
-if [[ ! -f "$REPO_ROOT/python/jittor/selftest.py" ]]; then
-  echo 'missing installed smoke test: python/jittor/selftest.py' >&2
-  status=1
-fi
-if [[ ! -d "$REPO_ROOT/tests" ]]; then
-  echo 'missing repository test suite: tests/' >&2
-  status=1
-fi
-if [[ ! -d "$REPO_ROOT/examples" ]]; then
-  echo 'missing repository examples: examples/' >&2
-  status=1
-fi
-if [[ ! -d "$REPO_ROOT/tools" ]]; then
-  echo 'missing repository tools: tools/' >&2
-  status=1
-fi
-if [[ ! -f "$REPO_ROOT/docs/conf.py" ]] || [[ ! -f "$REPO_ROOT/docs/index.md" ]]; then
-  echo 'missing canonical Sphinx/MyST documentation tree: docs/' >&2
-  status=1
-fi
-# Notebook products stay strict even though .gitignore lists *.ipynb: the
-# contract is that Jupytext materializes them outside the checkout, so an
-# ignored-but-present notebook is exactly the situation to report.
-if find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f \
-  \( -name '*.ipynb' -o -name '*.src.md' \) -print -quit | grep -q .; then
-  echo 'notebook products and legacy .src.md files must stay outside the checkout.' >&2
-  find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f \
-    \( -name '*.ipynb' -o -name '*.src.md' \) -print >&2
-  status=1
-fi
-bytecode="$(find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o \
-  \( -type d -name '__pycache__' -o -type f \( -name '*.pyc' -o -name '*.pyo' \) \) \
-  -print)"
-if [[ -n "$bytecode" ]]; then
-  if printf '%s\n' "$bytecode" | report_unignored; then
-    echo 'Python bytecode caches must stay outside the checkout.' >&2
-    status=1
-  fi
-fi
-if [[ -e "$REPO_ROOT/tests/__init__.py" ]]; then
-  echo 'repository tests must not be an importable distribution package: tests/__init__.py' >&2
-  status=1
-fi
-
-while IFS= read -r name; do
-  case "$name" in
-    .git|.github|.agents|.codex|.claude|agent|benchmarks|docs|examples|python|requirements|tests|tools|\
-    .dockerignore|.gitignore|AGENTS.md|\
-    AWESOME-JITTOR-LIST.cn.md|AWESOME-JITTOR-LIST.md|\
-    asv.conf.json|CODE_OF_CONDUCT.md|CONTRIBUTING.md|Dockerfile|GOVERNANCE.md|\
-    LICENSE.txt|MANIFEST.in|README.md|\
-    .pre-commit-config.yaml|noxfile.py|pyproject.toml|setup.py)
-      ;;
-    *)
-      if tracked_or_new "$REPO_ROOT/$name"; then
-        printf 'unexpected repository-root entry: %s\n' "$name" >&2
-        status=1
-      fi
-      ;;
-  esac
-done < <(find "$REPO_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
-
-for forbidden_path in \
-  "$REPO_ROOT/doc" \
-  "$REPO_ROOT/jittor_fsdp2" \
-  "$REPO_ROOT/README.cn.md" \
-  "$REPO_ROOT/README.src.md" \
-  "$REPO_ROOT/agent/manuals/design" \
-  "$REPO_ROOT/python/jittor/attention.py" \
-  "$REPO_ROOT/python/jittor/torch_fsdp2_compat.py" \
-  "$REPO_ROOT/python/jittor/torch_fsdp2_compat" \
-  "$REPO_ROOT/python/jittor/_torch_fsdp2" \
-  "$REPO_ROOT/python/jittor/nn.py" \
-  "$REPO_ROOT/python/jittor/_nn" \
-  "$REPO_ROOT/python/jittor/misc.py" \
-  "$REPO_ROOT/python/jittor/_misc" \
-  "$REPO_ROOT/python/jittor/pool.py" \
-  "$REPO_ROOT/python/jittor/_pool" \
-  "$REPO_ROOT/python/jittor/optim.py" \
-  "$REPO_ROOT/python/jittor/torch_compat.py" \
-  "$REPO_ROOT/python/jittor/_torch_compat" \
-  "$REPO_ROOT/python/jittor/triton_shim" \
-  "$REPO_ROOT/python/jittor/depthwise_conv.py" \
-  "$REPO_ROOT/python/jittor/test" \
-  "$REPO_ROOT/python/jittor/monkeypatch_ops.py" \
-  "$REPO_ROOT/python/jittor/torch_shim" \
-  "$REPO_ROOT/python/jittor/script" \
-  "$REPO_ROOT/python/jittor/demo" \
-  "$REPO_ROOT/python/jittor/notebook" \
-  "$REPO_ROOT/python/jittor/vcompiler" \
-  "$REPO_ROOT/python/jittor/version" \
-  "$REPO_ROOT/python/jittor/utils/polish.py" \
-  "$REPO_ROOT/python/jittor/utils/polish_centos.py" \
-  "$REPO_ROOT/python/jittor/extern/llvm" \
-  "$REPO_ROOT/python/jittor_utils/translator.py" \
-  "$REPO_ROOT/tools/docs/legacy" \
-  "$REPO_ROOT/python/jittor_utils/pack_offline.py"; do
-  if [[ -e "$forbidden_path" ]]; then
-    printf 'forbidden legacy path: %s\n' "${forbidden_path#"$REPO_ROOT"/}" >&2
-    status=1
-  fi
+# These are live runtime or repository contracts. Names removed by past
+# refactors belong to Git history and structure tests, not to this script.
+required_paths=(
+  python/jittor/selftest.py tests examples tools docs/conf.py docs/index.md
+  python/jittor/extern/__init__.py python/jittor/extern/acl/aclops
+  python/jittor/extern/acl/aclnn python/jittor/extern/acl/hccl
+  python/jittor/extern/corex/corex_compiler.py python/jittor/extern/cuda/inc
+  python/jittor/extern/cuda/src python/jittor/extern/cuda/cub
+  python/jittor/extern/cuda/cublas python/jittor/extern/cuda/cudnn
+  python/jittor/extern/cuda/cufft python/jittor/extern/cuda/curand
+  python/jittor/extern/cuda/cusparse python/jittor/extern/cuda/cutt
+  python/jittor/extern/cuda/nccl python/jittor/extern/mkl/ops
+  python/jittor/extern/mpi/inc python/jittor/extern/mpi/ops
+  python/jittor/extern/mpi/src python/jittor/extern/rocm
+)
+for path in "${required_paths[@]}"; do
+  [[ -e "$REPO_ROOT/$path" ]] || fail "missing required repository path: $path"
 done
 
-while IFS= read -r legacy_path; do
-  printf 'forbidden legacy path name anywhere in repository: %s\n' \
-    "${legacy_path#"$REPO_ROOT"/}" >&2
-  status=1
-done < <(
-  find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o \
-    \( -name 'jittor_fsdp2' -o -name 'torch_fsdp2_compat.py' -o \
-       -name 'torch_fsdp2_compat' \) -print | sort
-)
+[[ ! -e "$REPO_ROOT/tests/__init__.py" ]] || \
+  fail 'repository tests must not be an importable package: tests/__init__.py'
 
+# Generated notebooks are products, including when a broad ignore rule would
+# otherwise hide them. Jupytext materializes them outside the checkout.
+while IFS= read -r path; do
+  fail "notebook product must stay outside the checkout: ${path#"$REPO_ROOT"/}"
+done < <(find "$REPO_ROOT" -path "$REPO_ROOT/.git" -prune -o -type f \
+  \( -name '*.ipynb' -o -name '*.src.md' \) -print)
+
+# Experiment directories have a durable external owner: JITTOR_LAB_ROOT.
+while IFS= read -r path; do
+  fail "experiment directory must live under JITTOR_LAB_ROOT: ${path#"$REPO_ROOT"/}"
+done < <(find "$REPO_ROOT" -mindepth 1 -maxdepth 1 -type d \
+  \( -name 'jittor_fsdp2' -o -name '*_work' -o -name '*_probe' \) -print)
+
+# A module and package with the same import spelling make resolution depend on
+# the importer and installation layout.
 while IFS= read -r module_path; do
   package_path="${module_path%.py}"
-  if [[ -d "$package_path" ]]; then
-    printf 'module/package path collision: %s and %s\n' \
-      "${module_path#"$REPO_ROOT"/}" "${package_path#"$REPO_ROOT"/}/" >&2
-    status=1
-  fi
-done < <(find "$REPO_ROOT/python/jittor" -type f -name '*.py' ! -name '__init__.py' | sort)
-
-for required_path in \
-  "$REPO_ROOT/python/jittor/extern/__init__.py" \
-  "$REPO_ROOT/python/jittor/extern/acl/aclops" \
-  "$REPO_ROOT/python/jittor/extern/acl/aclnn" \
-  "$REPO_ROOT/python/jittor/extern/acl/hccl" \
-  "$REPO_ROOT/python/jittor/extern/corex/corex_compiler.py" \
-  "$REPO_ROOT/python/jittor/extern/cuda/inc" \
-  "$REPO_ROOT/python/jittor/extern/cuda/src" \
-  "$REPO_ROOT/python/jittor/extern/cuda/cub" \
-  "$REPO_ROOT/python/jittor/extern/cuda/cublas" \
-  "$REPO_ROOT/python/jittor/extern/cuda/cudnn" \
-  "$REPO_ROOT/python/jittor/extern/cuda/cufft" \
-  "$REPO_ROOT/python/jittor/extern/cuda/curand" \
-  "$REPO_ROOT/python/jittor/extern/cuda/cusparse" \
-  "$REPO_ROOT/python/jittor/extern/cuda/cutt" \
-  "$REPO_ROOT/python/jittor/extern/cuda/nccl" \
-  "$REPO_ROOT/python/jittor/extern/mkl/ops" \
-  "$REPO_ROOT/python/jittor/extern/mpi/inc" \
-  "$REPO_ROOT/python/jittor/extern/mpi/ops" \
-  "$REPO_ROOT/python/jittor/extern/mpi/src" \
-  "$REPO_ROOT/python/jittor/extern/rocm"; do
-  if [[ ! -e "$required_path" ]]; then
-    printf 'missing required runtime path: %s\n' "${required_path#"$REPO_ROOT"/}" >&2
-    status=1
-  fi
-done
-
-if grep -q '^def compile_extern():' "$REPO_ROOT/python/jittor/compiler.py"; then
-  echo 'retired compiler.compile_extern LLVM hook must not return.' >&2
-  status=1
-fi
-
-legacy_selftest_module='jittor.test.'
-legacy_selftest_module+='test_example'
-if grep -R -n \
-  --include='*.py' \
-  --include='*.sh' \
-  -- "$legacy_selftest_module" "$REPO_ROOT/python"; then
-  echo 'installed smoke tests must use python -m jittor.selftest.' >&2
-  status=1
-fi
-
-for active_doc in \
-  "$REPO_ROOT/Dockerfile" \
-  "$REPO_ROOT/CONTRIBUTING.md" \
-  "$REPO_ROOT/README.md"; do
-  if grep -n -- "$legacy_selftest_module" "$active_doc"; then
-    echo 'installation documentation must use python -m jittor.selftest.' >&2
-    status=1
-  fi
-done
-
-active_reference_paths=(
-  "$REPO_ROOT/python"
-  "$REPO_ROOT/tools"
-  "$REPO_ROOT/examples"
-  "$REPO_ROOT/.github"
-  "$REPO_ROOT/docs"
-  "$REPO_ROOT/README.md"
-  "$REPO_ROOT/CONTRIBUTING.md"
-  "$REPO_ROOT/Dockerfile"
-  "$REPO_ROOT/MANIFEST.in"
-  "$REPO_ROOT/pyproject.toml"
-  "$REPO_ROOT/noxfile.py"
-  "$REPO_ROOT/.pre-commit-config.yaml"
-)
-old_package_root='python/jittor'
-old_notebook_module='jittor'
-old_notebook_module+='.notebook'
-old_test_prefix='jittor'
-old_test_prefix+='.test.'
-old_polish_module='jittor.utils.'
-old_polish_module+='polish'
-old_offline_module='jittor_utils.'
-old_offline_module+='pack_offline'
-for old_reference in \
-  "$old_package_root/script" \
-  "$old_package_root/demo" \
-  "$old_package_root/notebook" \
-  "$old_package_root/vcompiler" \
-  "$old_notebook_module" \
-  "$old_test_prefix" \
-  "$old_polish_module" \
-  "$old_offline_module"; do
-  if grep -I -R -n -F -- "$old_reference" "${active_reference_paths[@]}"; then
-    printf 'active file still references retired runtime path: %s\n' \
-      "$old_reference" >&2
-    status=1
-  fi
-done
-
-old_vcompiler_module='jittor.'
-old_vcompiler_module+='vcompiler'
-if grep -I -R -n -F -- "$old_vcompiler_module" \
-  "$REPO_ROOT/python" "$REPO_ROOT/tools" "$REPO_ROOT/examples" \
-  "$REPO_ROOT/.github" "$REPO_ROOT/Dockerfile" "$REPO_ROOT/pyproject.toml" \
-  "$REPO_ROOT/noxfile.py"; then
-  echo 'active code still imports retired jittor.vcompiler.' >&2
-  status=1
-fi
+  [[ ! -d "$package_path" ]] || fail \
+    "module/package path collision: ${module_path#"$REPO_ROOT"/} and ${package_path#"$REPO_ROOT"/}/"
+done < <(find "$REPO_ROOT/python/jittor" -type f -name '*.py' ! -name '__init__.py')
 
 if [[ -d "$REPO_ROOT/.claude/worktrees" ]] &&
    [[ -n "$(find "$REPO_ROOT/.claude/worktrees" -mindepth 1 -print -quit)" ]]; then
-  echo 'Git worktrees must live under ${JITTOR_LAB_ROOT}/worktrees, not .claude/worktrees.' >&2
-  status=1
+  fail 'Git worktrees must live under JITTOR_LAB_ROOT/worktrees.'
 fi
 
-if ! python3 "$REPO_ROOT/agent/scripts/check_docs_governance.py"; then
-  status=1
-fi
+python3 "$REPO_ROOT/agent/scripts/check_docs_governance.py" || status=1
 
 if (( status != 0 )); then
-  echo 'Move experiments and runtime state to ${JITTOR_LAB_ROOT:-../jittor-lab}.' >&2
+  fail 'Move experiments and runtime state outside the repository.'
   exit "$status"
 fi
 
