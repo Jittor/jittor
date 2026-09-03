@@ -11,12 +11,45 @@ from _helpers.assertions import expect_error
 from jittor_utils import LOG
 import time, os
 
-def check(hv, lv, lo):
+#: Counts at the start of the case being checked, so `check` can assert a
+#: *difference*.
+_BASELINE = (0, 0, 0)
+
+
+def counts():
     import gc
     gc.collect()
     jt.graph_check()
-    a, b, c = jt.number_of_hold_vars(), jt.number_of_lived_vars(), jt.number_of_lived_ops()
-    assert (a,b,c)==(hv,lv,lo), (a, b, c, jt.dump_all_graphs().nodes_info)
+    return (jt.number_of_hold_vars(), jt.number_of_lived_vars(),
+            jt.number_of_lived_ops())
+
+
+def baseline():
+    """Pin what this process already holds; everything below is relative to it."""
+    global _BASELINE
+    _BASELINE = counts()
+    return _BASELINE
+
+
+def check(hv, lv, lo):
+    """How many nodes *this* case created, not how many the process holds.
+
+    The absolute form -- `assert counts() == (0, 0, 0)` after `jt.clean()` --
+    is wrong by construction and only looked right because this file used to
+    run early in a fresh process. Jittor keeps bounded, process-level caches of
+    Vars (`jittor.fft._dft_mat_cache`, `jittor.nn.attention._CU_SEQLENS_CACHE`),
+    so the floor depends on which operators the process has already run, not on
+    this test. It fails as soon as anything runs first -- which is exactly what
+    a parallel gate does, because the worker's file order is not the tree's.
+    Measured: red under `-n 4 --dist loadfile`, green alone.
+
+    The property being tested is unchanged and is the interesting one anyway:
+    this graph creates two arrays, then a product, then two gradients.
+    """
+    a, b, c = counts()
+    got = (a - _BASELINE[0], b - _BASELINE[1], c - _BASELINE[2])
+    assert got == (hv, lv, lo), (got, _BASELINE, (a, b, c),
+                                 jt.dump_all_graphs().nodes_info)
 
 def get_xorshf96(seed=0):
     '''Marsaglia's xorshf generator'''
@@ -40,6 +73,7 @@ def get_xorshf96(seed=0):
 class TestNode(unittest.TestCase):
     def test_lived(self):
         jt.clean()
+        baseline()
         check(0,0,0)
         a = jt.array(1.0).stop_fuse()
         a.name('a')
