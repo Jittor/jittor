@@ -937,6 +937,41 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         np.testing.assert_allclose(actual.numpy(), expected, rtol=1e-6)
         np.testing.assert_allclose(method.numpy(), expected, rtol=1e-6)
 
+    def test_diff_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.diff))
+        self.assertIs(torch.diff, numerical.diff)
+        self.assertEqual(numerical.diff.__module__, numerical.__name__)
+        self.assertEqual(numerical.diff.__name__, "diff")
+
+    def test_diff_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.diff")
+        self.assertIs(record.implementation, numerical.diff)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("prepend", record.detail)
+        self.assertIn("device", record.detail)
+
+    def test_diff_cpu_n_and_prepend_var_delegate_match_numpy(self):
+        values_1d = np.array([1.0, 4.0, 9.0, 16.0], dtype="float32")
+        values_2d = np.array([[1.0, 3.0, 6.0], [2.0, 5.0, 9.0]], dtype="float32")
+        prepend = np.array([[0.0], [1.0]], dtype="float32")
+        expected_1d = np.diff(values_1d, n=2)
+        expected_2d = np.diff(np.concatenate([prepend, values_2d], axis=1), axis=1)
+        with torch.flag_scope(use_cuda=0):
+            v1 = torch.array(values_1d)
+            v2 = torch.array(values_2d)
+            p = torch.array(prepend)
+            actual_1d = torch.diff(v1, n=2)
+            actual_2d = torch.diff(v2, dim=1, prepend=p)
+            method = v2.diff(dim=1, prepend=p)
+        np.testing.assert_allclose(actual_1d.numpy(), expected_1d, rtol=1e-6)
+        np.testing.assert_allclose(actual_2d.numpy(), expected_2d, rtol=1e-6)
+        np.testing.assert_allclose(method.numpy(), expected_2d, rtol=1e-6)
+
 
 if __name__ == "__main__":
     unittest.main()

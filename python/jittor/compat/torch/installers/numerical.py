@@ -814,6 +814,29 @@ register_fidelity(
 )
 
 
+_DIFF_FIDELITY_DETAIL = (
+    "matches Torch finite differences and prepend/append concatenation for "
+    "supported real tensors but omits device, layout, and dtype keyword semantics"
+)
+
+
+def _diff_impl(x, n=1, dim=-1, prepend=None, append=None):
+    return _diff(x, n=n, dim=dim, prepend=prepend, append=append)
+
+
+def diff(x, n=1, dim=-1, prepend=None, append=None):
+    """Compute consecutive differences along a tensor dimension."""
+    return _diff_impl(x, n=n, dim=dim, prepend=prepend, append=append)
+
+
+register_fidelity(
+    "torch.diff",
+    diff,
+    Fidelity.APPROXIMATE,
+    _DIFF_FIDELITY_DETAIL,
+)
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
@@ -1010,8 +1033,7 @@ def install(ctx):
             return False
     g.equal = _torch_equal
     Var.equal = lambda self, other: _torch_equal(self, other)
-    _alias("diff", lambda x, n=1, dim=-1, prepend=None, append=None:
-           _diff(x, n=n, dim=dim, prepend=prepend, append=append))
+    _alias("diff", diff)
     _alias("trapz", trapz)
     _alias("trapezoid", trapezoid)
     _alias("repeat_interleave", _repeat_interleave)
