@@ -1,5 +1,9 @@
 """Tensor repetition, chunking, and broadcast shape transforms."""
 
+from collections.abc import Sequence
+
+import numpy as np
+
 import jittor as jt
 
 
@@ -26,7 +30,7 @@ def repeat(x, *shape):
         >>> x.repeat(4, 2, 1).size()
         [4, 2, 3,]
     '''
-    if len(shape) == 1 and isinstance(shape[0], jt.misc.Sequence):
+    if len(shape) == 1 and isinstance(shape[0], Sequence):
         shape = shape[0]
     len_x_shape = len(x.shape)
     len_shape = len(shape)
@@ -50,7 +54,7 @@ def repeat(x, *shape):
     x = x.reshape(reshape_shape)
     x = x.broadcast(broadcast_shape)
 
-    tar_shape = (jt.misc.np.array(x_shape) * jt.misc.np.array(rep_shape)).tolist()
+    tar_shape = (np.array(x_shape) * np.array(rep_shape)).tolist()
 
     x = x.reshape(tar_shape)
     return x
