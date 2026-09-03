@@ -210,7 +210,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 0.15 | 门禁分两层 | 待领 | | d957e4aa、9329c4f9、9f6a80c7、2fd26522 已合入：按实测慢文件拆出 smoke/full、并行度单点声明、PR smoke job 与 JIT cache 已接入。当前真实 smoke 为 390 s、预算模型为 446 s，均未达到原验收的 5 分钟；还需减少或降低约 90 s 的有效测试工作量，不能靠扩大排除清单假达标 |
 | 0.16 | `test_device_parity.py` 按算子分片并行，不再在 `setUpClass`… | 已合并 | gates | 120b004b。实测结论与原方案相反：4-worker 只快 6% 且 26 项丢 3 个结论，因此保留单进程；只移除错误的串行编译器强制关闭。后续真正压缩时长另见 0.22 |
 | 0.17 | `pyproject.toml` 的 `pythonpath` 改由 conftest 按环境变… | 已合并 | 构建 | b19d098f |
-| 0.18 | 门禁每条目断言至少执行 1 个非 skip 用例 | 已合并 | gates | ee29bee3、d00c17aa。恒 skip 的判据**从路径清单改成规则**：读测试自己写的 skip 理由，全都在说「这台机器缺某样东西」才算解释得通。清单版在这台机器上会是 73 条、换台机器又是另外 73 条，而且每加一个设备测试都要记得报到。规则一上线就抓出四个说不清自己缺什么的文件（`Not use cub, Skip`、`skip_this_test`），都改成说明缺什么，而不是给它们开豁免 |
+| 0.18 | 门禁每条目断言至少执行 1 个非 skip 用例 | 已合并 | gates | ee29bee3、2f3f1aaf。恒 skip 的判据**从路径清单改成规则**：读测试自己写的 skip 理由，全都在说「这台机器缺某样东西」才算解释得通。清单版在这台机器上会是 73 条、换台机器又是另外 73 条，而且每加一个设备测试都要记得报到。规则一上线就抓出四个说不清自己缺什么的文件（`Not use cub, Skip`、`skip_this_test`），都改成说明缺什么，而不是给它们开豁免 |
 | 0.19 | 结构测试从「精确清单」改成「规则」 | 已合并 | gates | c3bcd277 |
 | 0.20 | 布局收尾 | 待领 | | |
 | 0.21 | 测试起的子进程不带 PYTHONPATH，门禁机器上是假绿 | 已合并 | gates | 46dbe946、a5ce7310 |
@@ -221,12 +221,12 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 1.05 | 布局收尾 | 待领 | | |
 | 2.01 | Var 与 Op 各持自己的 flag 类型 | 已合并 | coreops | 5b197cae |
 | 2.02 | 删除 `Node::custom_data` | 已合并 | coreops | 505e9b37（上半：拓扑排序自带入度，内存分析器的手工备份删掉）、77641cc8（下半：grad/dump 各持局部表，执行器与 fuser 的批下标搬到 `Node::batch_index`+`batch_stamp`，写用 `set_batch_index`、读一律 `batch_index_at(stamp)`并当场校验）。**字段本身仍在**：第六个用法是 FusedOp 的跨阶段映射，见 2.24（排在 3.11 之后）。审计描述的危害「任意两个遍历交错就互相破坏」到此消除 |
-| 2.03 | `tflag` 全局计数器加魔数改为 epoch 对象或局部集合 | 待领 | | |
+| 2.03 | `tflag` 全局计数器加魔数改为 epoch 对象或局部集合 | 已合并 | coreops | 6833f96d。嵌套 TraversalEpoch 恢复外层标记，grad/graph/memory profiler 改局部索引或集合；CPU 33 项、CUDA 3 项及结构聚焦通过 |
 | 2.04 | `Var::allocator` 去类型双关 | 已合并 | | 9b3841b7 |
 | 2.05 | 真正的 0 维张量 | 待领 | | |
 | 2.06 | 边表由 list 加反向迭代器改 SmallVector，按下标 O(1) | 待领 | | |
 | 2.07 | `hold_vars`/`sync_ptr` 析构里 `std::next(end())` 的 … | 已合并 | coreops | 1101f3f5 |
-| 2.08 | `Node` 不再 include `pybind/py_var_tracer.h` | 待领 | | |
+| 2.08 | `Node` 不再 include `pybind/py_var_tracer.h` | 已合并 | coreops | 6221d4c4。NodeLifecycleObserver 接口由 pybind tracer 注册；无 Python include 的语法编译、CPU/CUDA lifecycle/tracer 聚焦通过 |
 | 2.09 | `th_mode` 从 C++ 核心上移为 autograd 策略对象 | 待领 | | |
 | 2.10 | 三套 liveness 计数 | 待领 | | |
 | 2.11 | `VarHolder` 不再是执行触发点 | 待领 | | |
@@ -235,7 +235,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 2.14 | `src/misc/` 拆散 | 待领 | | |
 | 2.15 | NanoString | 已合并 | bindings | 9d5ed413（索引位宽 7→8、static_assert 把表与字段绑住、`ns_check_registration` 在注册期查索引与名字长度；"dtype 表改运行期注册"那半未做，见提交说明） |
 | 2.16 | 类型提升表 | 已合并 | bindings | d821c34a（int_dtype_promote 提升格；标量按 `_is_scalar` 标志认，不再按形状；float 标量把整数张量提到默认 float dtype）、a39a2f1c（补：双标量走提升格，交换左右操作数不再改变 dtype 与结果） |
-| 2.17 | 算子身份用注册期整型 id | 待领 | | |
+| 2.17 | 算子身份用注册期整型 id | 已合并 | coreops | 1d792e16。OpInfo 注册分配 OpId，核心/tuner/pass 名字比较归零，fast_strcmp 删除，Tape 用显式 pending flag；CPU 80 项、CUDA 5 项及结构契约通过 |
 | 2.18 | 算子注册表惰性初始化 | 待领 | | |
 | 2.19 | 错误分两档 | 待领 | | ed12fe21 已合入第一半：析构不得抛，生成的 `tp_dealloc` 异常时仍释放实例并保存/恢复解释器异常；486 处 ASSERT/CHECK 与 62 处 LOGf 的用户错误/内部不变量归类仍待领 |
 | 2.20 | 信号处理器只做 `write` 与 `_exit`，符号化交给预建 helper 进程 | 已合并 | bindings | 上半 9b92f38d（去 stdio/LOGf/exit，标志改 volatile sig_atomic_t）；下半 640a4f07（符号化搬进崩溃前 fork 的 helper，经父进程 /proc/<pid>/maps 解析）；d874b01d 修 jit_key 用例（它原先靠信号处理器抛异常） |
@@ -281,7 +281,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 4.13 | 跨后端契约矩阵 | 待领 | | |
 | 4.14 | `Module.cuda(i)`/`npu(i)`/`x.to(...)`/`x.cpu()` … | 已合并 | device | 14e5920e；修前 CPU 2 项、双卡 CUDA 4 项失败；修后新增 CPU 2 项、GPU 0/2 双卡 4 项及 4.02 聚焦回归 4 项通过；无 NPU 硬件，未做真 NPU 验证，无 ACL 时解析设备号后明确报能力错误 |
 | 4.15 | 布局收尾 | 待领 | | |
-| 5.01 | 114 个 `foo_` 就地方法改白名单显式声明 | 待领 | | |
+| 5.01 | 114 个 `foo_` 就地方法改白名单显式声明 | 已合并 | pyops | 9d140c1c。85 个启发式生成别名收敛成显式白名单，错误别名归零，all_/any_ 非就地原语不再伪装；native 聚焦 20 passed/2 skipped |
 | 5.02 | 视图与存储模型 | 待领 | | |
 | 5.03 | 转置隐藏标记 | 待领 | | |
 | 5.04 | 参数模型 | 已合并 | pyops | 3d40fa9e。`parameters`/`named_parameters`/`state_dict`/`named_buffers`/`_buffers` 共用一份角色遍历；绑定权重按对象身份去重而 state_dict 保留全部别名，BatchNorm buffer 按名字注册，查询不再改写 Var 名称。CPU `tests/nn` 182 passed/145 skipped，CUDA 聚焦 23 passed，Torch-shim 入口 1 passed，独立 PyTorch 2.12.1 语义对拍通过 |
@@ -302,8 +302,8 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 5.19 | 被静默忽略的参数改为传非默认值时 warn 或 raise | 已合并 | pyops + pyother | 1710aef1（算子参数：relu/leaky_relu/silu/mish 的 inplace、instance_norm 与 InstanceNorm 的 running stats/momentum/is_train/sync、svd 的 compute_uv/driver、inv_ex 的 check_errors、ctc_loss 的 zero_infinity、sort 的 stable；topk 的 sorted 判为无需处理，见提交说明）。共用基础设施 `python/jittor/_arg_policy.py`。4cf6df28（实现 ResNet `zero_init_residual`）；211339c9（vjp/jvp strict、DataLoader pin_memory/persistent_workers、kaiming generator、fftfreq/rfftfreq dtype/device 与未知 kwargs）。统一回归 44 passed |
 | 5.20 | import 期副作用删除 | 已合并 | pyother | 505a1155 |
 | 5.21 | 六个 monkeypatch 安装器写成显式有序清单并加断言 | 待领 | | |
-| 5.22 | `nn` facade 不导出 39 个下划线名，内部用模块局部名不经 `jt.nn.*` 晚绑… | 待领 | | |
-| 5.23 | 根命名空间显式 `__all__` | 待领 | | |
+| 5.22 | `nn` facade 不导出 39 个下划线名，内部用模块局部名不经 `jt.nn.*` 晚绑… | 已合并 | pyops | 5d67f36b。源码 `jt.nn._*` 使用与 `dir(jt.nn)` 私有导出均为 0，后端私有覆盖迁入 `nn.backends.hooks`；结构 17 passed，CPU 25 passed/8 skipped |
+| 5.23 | 根命名空间显式 `__all__` | 已合并 | pyops | d80d0b99。根星号来源归零，414 名运行时 `__all__` 与生成 pyi 顶层声明一致；namespace 13 passed，结构聚焦 4 passed |
 | 5.24 | 10 个 `jt._*` 跨模块契约 | 待领 | | |
 | 5.25 | `python/jittor/utils/` 拆散 | 待领 | | be2935f0、fdf3b759（部分：translator/server 已迁入 compat，jtune/nvtx 已迁入 jittor.tools，三个仓库脚本已迁入顶层 tools；utils 只剩四个由 C++/编译器硬编码引用的资源，待 3.18 落地后归 compiler 包） |
 | 5.26 | 布局收尾 | 待领 | | |
@@ -363,7 +363,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 6.P23 | eigh 的特征向量梯度在 CUDA 上错约 60% | 已合并 | | d361100e |
 | 6.P24 | Pool3d 的 count_include_pad 读原始参数 | 已合并 | | d221dbde |
 | 6.P25 | Adan 偏差修正仍用全局 n_step；连带第一步 grad_diff 语义 | 已合并 | pyother | 2d5804a4 |
-| 6.P26 | MaxPool3d 的 ceil_mode 输出尺寸比 torch 多一个平面 | 待领 | | |
+| 6.P26 | MaxPool3d 的 ceil_mode 输出尺寸比 torch 多一个平面 | 已合并 | pyops | f982a6b8。修前输出 `(4,4,4)` 对 Torch `(4,4,3)`；修后 CPU 18 passed/15 skipped，真实 CUDA GPU4 尺寸、索引往返和前后向 4 passed |
 | 6.B01 | MPI 的 int64 改 `MPI_INT64_T` | 已合并 | dist | 03518707 |
 | 6.B02 | ACL | 待领 | | |
 | 6.B03 | HCCL 宏错误时抛而非 return | 已合并 | dist | c657ab01 |
@@ -382,7 +382,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 6.B16 | `sync_run` 在 ACL 上实现或删 flag | 待领 | | |
 | 6.B17 | 析构不得抛 | 已合并 | cudabk | 272f00ba |
 | 7.01 | 「看起来支持其实空操作」一律改为实现或抛 `NotImplementedError`，需显式 `… | 已合并 | 兼容层分区 | ff395ecc b7c12ddc 0446217e 47012a27 46bc9ea7 49d41acf 9053a7c0 |
-| 7.02 | DDP 真实梯度同步 | 已合并 | 兼容层分区 | b79cc0f9 |
+| 7.02 | DDP 真实梯度同步 | 已合并 | 兼容层分区 | 4f08f1da |
 | 7.03 | 每个 torch API 一个模块级一等对象加保真度标注 | 待领 | | |
 | 7.04 | 激活显式、一次性、可查询 | 待领 | | |
 | 7.05 | install 事务化 | 待领 | | |
