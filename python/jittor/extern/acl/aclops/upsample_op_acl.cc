@@ -24,15 +24,7 @@ namespace jittor
         if (ret != ACL_SUCCESS)
             return;
 
-        if (workspaceSize > 0)
-            mallocWorkSpace(workspaceSize);
-
-        ret = aclnnUpsampleNearest2d(
-            workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS,
-                  LOG_PRINT("%s: aclnnUpsampleNearest2d failed. ERROR: %d\n",
-                            name.c_str(), ret); return);
-        syncRun();
+        launch(ret, aclnnUpsampleNearest2d, true);
     }
 
     UpsampleNearest2dBackwardOpRunner::UpsampleNearest2dBackwardOpRunner()

@@ -29,6 +29,7 @@ DROPOUT_SOURCE = ROOT / "python/jittor/extern/acl/aclops/dropout_op_acl.cc"
 RELU_SOURCE = ROOT / "python/jittor/extern/acl/aclops/relu_op_acl.cc"
 ARG_REDUCE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/arg_reduce_op_acl.cc"
 RANDOM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/random_op_acl.cc"
+UPSAMPLE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/upsample_op_acl.cc"
 GATHER_SOURCE = ROOT / "python/jittor/extern/acl/aclops/gather_scatter_op_acl.cc"
 
 
@@ -318,6 +319,17 @@ def test_random_uniform_normal_share_launcher_and_keep_seed_offset():
     assert "Not supported random type" in source
     assert "mallocWorkSpace(workspaceSize)" not in source
     assert "syncRun();" not in source
+
+
+def test_upsample_forward_uses_launcher_and_keeps_output_size_raii():
+    source = UPSAMPLE_SOURCE.read_text()
+    forward = source[source.index("void UpsampleNearest2dOpRunner::executeOp"):source.index("UpsampleNearest2dBackwardOpRunner::UpsampleNearest2dBackwardOpRunner")]
+    assert "outputSize" in forward
+    assert "unique_ptr" in forward
+    assert "launch(ret, aclnnUpsampleNearest2d, true);" in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void UpsampleNearest2dBackwardOpRunner::executeOp" in source
 
 
 def test_scatter_uses_launcher_and_keeps_axis_reduction_query():
