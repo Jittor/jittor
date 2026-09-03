@@ -118,13 +118,13 @@ namespace jittor
 
     void BaseOpRunner::checkRet(aclnnStatus ret)
     {
-        if (ret != ACL_SUCCESS)
-        {
-            auto tmp_err_msg = aclGetRecentErrMsg();
-            LOGir << name << ", " << tmp_err_msg;
-        }
-
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnxxxGetWorkspaceSize failed. ERROR: %d\n", name.c_str(), ret); return);
+        if (ret == ACL_SUCCESS)
+            return;
+        const char *recent_error = aclGetRecentErrMsg();
+        LOGf << "ACL operator" << name
+             << ": aclnn workspace-size query failed, return code" << ret
+             << acl_error_to_string(ret) << "recent error:"
+             << (recent_error == nullptr ? "unavailable" : recent_error);
     }
 
     // Base run method with common operator lookup logic
@@ -135,8 +135,7 @@ namespace jittor
             auto it = aclOpFuncMap.find(name);
             if (it == aclOpFuncMap.end())
             {
-                LOGir << "aclOpFuncMap Not supported op: " << name;
-                throw std::runtime_error("Unsupported operation type.");
+                LOGf << "ACL operator has no registered launcher:" << name;
             }
             setupInputDesc();
             setupOutputDesc();
@@ -146,6 +145,10 @@ namespace jittor
         else
         {
             auto it = aclOpFuncMap.find(name);
+            if (it == aclOpFuncMap.end())
+            {
+                LOGf << "ACL operator has no registered launcher:" << name;
+            }
             setupInputDesc();
             setupOutputDesc();
             executeOp(it);

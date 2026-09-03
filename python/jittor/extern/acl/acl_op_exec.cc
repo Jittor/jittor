@@ -270,29 +270,30 @@ namespace jittor
             while (!queue.empty())
             {
                 total++;
-
-                for (auto in : op->inputs())
-                {
-                    ASSERT(in->mem_ptr);
-                }
-                auto op = queue.front();
+                auto *current_op = queue.front();
                 queue.pop();
-                for (auto out : op->outputs())
+                for (auto in : current_op->inputs())
+                {
+                    ASSERT(in->mem_ptr)
+                        << "current fused operator input is not allocated:"
+                        << current_op->name() << in;
+                }
+                for (auto out : current_op->outputs())
                 {
                     if (out->mem_ptr)
                         continue;
                     out->alloc(exe.allocator);
                     new_alloced.insert(out);
                 }
-                for (auto out : out_map[op])
+                for (auto out : out_map[current_op])
                 {
                     --op_indeg[out];
                     if (op_indeg[out] == 0)
                         queue.push(out);
                 }
-                if (op->name() == string("unary"))
+                if (current_op->name() == string("unary"))
                 {
-                    auto uop = (UnaryOp *)op;
+                    auto uop = (UnaryOp *)current_op;
                     UnaryOpRunner op;
                     op.add(uop->x, true);
                     op.add(uop->y, false);
@@ -302,9 +303,9 @@ namespace jittor
                     op.jt_name = uop->name();
                     op.run();
                 }
-                else if (op->name() == string("binary"))
+                else if (current_op->name() == string("binary"))
                 {
-                    auto bop = (BinaryOp *)op;
+                    auto bop = (BinaryOp *)current_op;
                     BinaryOpRunner op;
                     op.add(bop->x, true);
                     op.add(bop->y, true);
@@ -332,9 +333,9 @@ namespace jittor
                     }
                     op.run();
                 }
-                else if (op->name() == string("ternary"))
+                else if (current_op->name() == string("ternary"))
                 {
-                    auto top = (TernaryOp *)op;
+                    auto top = (TernaryOp *)current_op;
                     TernaryOpRunner op;
                     op.add(top->cond, true);
                     op.add(top->x, true);
@@ -342,9 +343,9 @@ namespace jittor
                     op.add(top->z, false);
                     op.run();
                 }
-                else if (op->name() == string("array"))
+                else if (current_op->name() == string("array"))
                 {
-                    auto aop = (ArrayOp *)op;
+                    auto aop = (ArrayOp *)current_op;
                     // The fused allocator can reuse a consumed constant's
                     // buffer before earlier ACL kernels finish. Queue the H2D
                     // copy on aclstream so reuse stays ordered with consumers.
@@ -361,9 +362,9 @@ namespace jittor
                             "aclrtMemcpyAsync failed: " +
                             acl_error_to_string(ret));
                 }
-                else if (op->name() == string("reduce"))
+                else if (current_op->name() == string("reduce"))
                 {
-                    auto rop = (ReduceOp *)op;
+                    auto rop = (ReduceOp *)current_op;
                     ReduceOpRunner op;
                     if (rop->ns == ns_add)
                         op.op_idx = 9;
@@ -396,9 +397,9 @@ namespace jittor
                     // stalled the pipeline on every reduce (LayerNorm/softmax
                     // backward/Adam), which dominated NPU step time.
                 }
-                else if (op->name() == string("broadcast_to"))
+                else if (current_op->name() == string("broadcast_to"))
                 {
-                    auto bop = (BroadcastToOp *)op;
+                    auto bop = (BroadcastToOp *)current_op;
                     ExpandOpRunner op;
                     op.jt_name = "expand";
                     NanoVector xshape, xshape_bk = bop->x->shape;
@@ -426,10 +427,10 @@ namespace jittor
                     // same reason as the reduce case above.
                     bop->x->shape = xshape_bk;
                 }
-                else if (op->name() == string("fuse_transpose"))
+                else if (current_op->name() == string("fuse_transpose"))
                 {
                     // replace fuse_transpose with transpose
-                    auto top = (TransposeOp *)op;
+                    auto top = (TransposeOp *)current_op;
                     TransposeOpRunner op;
                     op.add(top->x, true);
                     op.add(top->y, false);
@@ -444,10 +445,10 @@ namespace jittor
                 }
                 else
                 {
-                    LOGf << "op " << op->name() << " not supported";
+                    LOGf << "op " << current_op->name() << " not supported";
                 }
 
-                for (auto in : op->inputs())
+                for (auto in : current_op->inputs())
                 {
                     --var_outdeg[in];
                     if (var_outdeg[in] == 0)

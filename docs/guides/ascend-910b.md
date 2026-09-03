@@ -245,6 +245,21 @@ and the underlying allocation failure. A later small probe in a fresh process
 must still pass without CPU fallback; otherwise the failed allocation did not
 leave the global workspace in a retryable empty state.
 
+Three runner failures now identify the stage and operator instead of continuing
+with an invalid executor or checking the outer fused graph by mistake:
+
+- `aclnn workspace-size query failed` includes the operator name, return code,
+  decoded ACL status, and CANN's recent error text;
+- `ACL operator has no registered launcher` means the runner name was absent
+  from the ACL function table, for group and non-group runners alike;
+- `current fused operator input is not allocated` names the queue item whose
+  input invariant failed, rather than the enclosing fused operation.
+
+On a 910B3, preserve these lines together with the surrounding `fallback cpu`
+log. The normal matmul and workspace commands above must contain none of them;
+an injected or naturally reproduced failure must stop that ACL runner before an
+execute call uses an invalid executor.
+
 ## Run the maintained NPU gate
 
 The NPU nox session creates isolated state, checks `npu-smi`, runs a real ACL
