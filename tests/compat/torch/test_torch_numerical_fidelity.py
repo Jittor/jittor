@@ -499,6 +499,44 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         np.testing.assert_array_equal(method.min.numpy(), np.min(values, axis=0))
         np.testing.assert_array_equal(method.max.numpy(), np.max(values, axis=0))
 
+    def test_pdist_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.pdist))
+        self.assertIs(torch.pdist, numerical.pdist)
+        self.assertEqual(numerical.pdist.__module__, numerical.__name__)
+        self.assertEqual(numerical.pdist.__name__, "pdist")
+
+    def test_pdist_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.pdist")
+        self.assertIs(record.implementation, numerical.pdist)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("device", record.detail)
+        self.assertIn("out", record.detail)
+
+    def test_pdist_cpu_p1_p2_shape_and_var_method_match_numpy(self):
+        values = np.array(
+            [[0.0, 1.0], [2.0, 3.0], [4.0, 1.0], [1.0, 5.0]],
+            dtype="float32")
+        expected_p1 = np.array([
+            np.abs(values[i] - values[j]).sum()
+            for i in range(len(values)) for j in range(i + 1, len(values))])
+        expected_p2 = np.array([
+            np.linalg.norm(values[i] - values[j])
+            for i in range(len(values)) for j in range(i + 1, len(values))])
+        with torch.flag_scope(use_cuda=0):
+            tensor = torch.array(values)
+            actual_p1 = torch.pdist(tensor, p=1)
+            actual_p2 = torch.pdist(tensor, p=2)
+            actual_method = tensor.pdist(p=2)
+        self.assertEqual(tuple(actual_p1.shape), (6,))
+        np.testing.assert_allclose(actual_p1.numpy(), expected_p1, rtol=1e-6)
+        np.testing.assert_allclose(actual_p2.numpy(), expected_p2, rtol=1e-6)
+        np.testing.assert_allclose(actual_method.numpy(), expected_p2, rtol=1e-6)
+
 
 if __name__ == "__main__":
     unittest.main()

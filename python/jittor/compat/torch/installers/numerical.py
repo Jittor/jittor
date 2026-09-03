@@ -460,6 +460,34 @@ register_fidelity(
 )
 
 
+_PDIST_FIDELITY_DETAIL = (
+    "matches Torch pairwise distances for supported real tensor inputs but "
+    "omits device, layout, and out keyword semantics"
+)
+
+
+def _pdist_impl(input, p=2.0):
+    size = int(input.shape[0])
+    differences = input.unsqueeze(1) - input.unsqueeze(0)
+    distances = ((jt.abs(differences) ** p).sum(-1)) ** (1.0 / p)
+    rows = [i for i in range(size) for _ in range(i + 1, size)]
+    cols = [j for i in range(size) for j in range(i + 1, size)]
+    return distances[jt.array(rows), jt.array(cols)]
+
+
+def pdist(input, p=2.0):
+    """Return pairwise p-norm distances between rows of a tensor."""
+    return _pdist_impl(input, p=p)
+
+
+register_fidelity(
+    "torch.pdist",
+    pdist,
+    Fidelity.APPROXIMATE,
+    _PDIST_FIDELITY_DETAIL,
+)
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
@@ -799,14 +827,7 @@ def install(ctx):
         fin = [int(a.shape[i]) for i in a_free] + [int(b.shape[i]) for i in b_free]
         return out.reshape(fin) if fin else out.reshape((1,))   # full contraction -> scalar (jittor (1,))
     _alias("tensordot", _tensordot)
-    def _pdist(input, p=2.0):
-        N = int(input.shape[0])
-        diff = input.unsqueeze(1) - input.unsqueeze(0)
-        d = ((jt.abs(diff) ** p).sum(-1)) ** (1.0 / p)
-        ii = [i for i in range(N) for j in range(i + 1, N)]
-        jj = [j for i in range(N) for j in range(i + 1, N)]
-        return d[jt.array(ii), jt.array(jj)]
-    _alias("pdist", _pdist)
+    _alias("pdist", pdist); Var.pdist = _pdist_impl
     # shape ops: unflatten / swapaxes / swapdims / ravel + numpy-style stacking helpers.
     _alias("unflatten", unflatten); Var.unflatten = _unflatten_impl
     _alias("swapaxes", swapaxes); _alias("swapdims", swapdims)
