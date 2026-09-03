@@ -322,6 +322,45 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertEqual(str(actual_scalar.dtype), "float64")
         self.assertEqual(str(actual_tensor.dtype), "float64")
 
+    def test_close_family_is_stable_module_level_objects(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        for name in ("isclose", "allclose"):
+            with self.subTest(name=name):
+                implementation = getattr(numerical, name)
+                self.assertTrue(callable(implementation))
+                self.assertIs(getattr(torch, name), implementation)
+                self.assertEqual(implementation.__module__, numerical.__name__)
+                self.assertEqual(implementation.__name__, name)
+
+    def test_close_family_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        for name in ("isclose", "allclose"):
+            with self.subTest(name=name):
+                record = fidelity.fidelity_of("torch." + name)
+                self.assertIs(record.implementation, getattr(numerical, name))
+                self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+                self.assertIn("device", record.detail)
+                self.assertIn("out", record.detail)
+
+    def test_close_family_cpu_values_equal_nan_and_allclose_bool(self):
+        left = np.array([1.0, 2.0, np.nan], dtype="float32")
+        right = np.array([1.0, 2.00001, np.nan], dtype="float32")
+        with torch.flag_scope(use_cuda=0):
+            actual = torch.isclose(
+                torch.array(left), torch.array(right), equal_nan=True).numpy()
+            all_false = torch.allclose(
+                torch.array(left), torch.array(right), equal_nan=False)
+            all_true = torch.allclose(
+                torch.array(left), torch.array(right), equal_nan=True)
+        np.testing.assert_array_equal(actual, np.isclose(left, right, equal_nan=True))
+        self.assertIs(type(all_false), bool)
+        self.assertIs(type(all_true), bool)
+        self.assertEqual(all_false, np.allclose(left, right, equal_nan=False))
+        self.assertEqual(all_true, np.allclose(left, right, equal_nan=True))
+
 
 if __name__ == "__main__":
     unittest.main()

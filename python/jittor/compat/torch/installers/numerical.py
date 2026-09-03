@@ -302,6 +302,47 @@ for _matrix_name in ("trace", "diag_embed", "diagflat"):
 del _matrix_name
 
 
+_CLOSE_FIDELITY_DETAIL = (
+    "matches Torch finite-value comparisons and equal_nan on CPU-backed "
+    "tensors but omits device, layout, and out keyword semantics"
+)
+
+
+def _isclose_impl(a, b, rtol=1e-5, atol=1e-8, equal_nan=False, **kwargs):
+    out = jt.abs(a - b) <= (atol + rtol * jt.abs(b))
+    if equal_nan:
+        out = out | (jt.isnan(a) & jt.isnan(b))
+    return out
+
+
+def isclose(a, b, rtol=1e-5, atol=1e-8, equal_nan=False, **kwargs):
+    """Return an elementwise tensor indicating whether values are close."""
+    return _isclose_impl(
+        a, b, rtol=rtol, atol=atol, equal_nan=equal_nan, **kwargs)
+
+
+def _allclose_impl(a, b, rtol=1e-5, atol=1e-8, equal_nan=False, **kwargs):
+    return bool(_isclose_impl(
+        a, b, rtol=rtol, atol=atol, equal_nan=equal_nan, **kwargs
+    ).all().item())
+
+
+def allclose(a, b, rtol=1e-5, atol=1e-8, equal_nan=False, **kwargs):
+    """Return a Python bool indicating whether all values are close."""
+    return _allclose_impl(
+        a, b, rtol=rtol, atol=atol, equal_nan=equal_nan, **kwargs)
+
+
+for _close_name in ("isclose", "allclose"):
+    register_fidelity(
+        "torch." + _close_name,
+        globals()[_close_name],
+        Fidelity.APPROXIMATE,
+        _CLOSE_FIDELITY_DETAIL,
+    )
+del _close_name
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
@@ -353,15 +394,8 @@ def install(ctx):
     _alias("log1p", lambda x: jt.log(1.0 + x))
     _alias("reciprocal", lambda x: 1.0 / x)
     _alias("lerp", lambda input, end, weight: input + weight * (end - input))
-    def _isclose(a, b, rtol=1e-5, atol=1e-8, equal_nan=False, **k):
-        out = jt.abs(a - b) <= (atol + rtol * jt.abs(b))
-        if equal_nan:
-            out = out | (jt.isnan(a) & jt.isnan(b))
-        return out
-    _alias("isclose", _isclose)
-    def _allclose(a, b, rtol=1e-5, atol=1e-8, equal_nan=False, **k):
-        return bool(_isclose(a, b, rtol=rtol, atol=atol, equal_nan=equal_nan).all().item())
-    _alias("allclose", _allclose)
+    _alias("isclose", isclose)
+    _alias("allclose", allclose)
     _alias("cosine_similarity", lambda x1, x2, dim=1, eps=1e-8: nn.cosine_similarity(x1, x2, dim=dim, eps=eps))
     _alias("pairwise_distance", lambda x1, x2, p=2.0, eps=1e-6, keepdim=False:
            nn.pairwise_distance(x1, x2, p=p, eps=eps, keepdim=keepdim))
