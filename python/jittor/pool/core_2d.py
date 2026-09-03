@@ -78,12 +78,12 @@ class Pool(jt.Module):
             else:
                 forward_body += f'''
                 auto out_value = @expand_op(init_{self.op}, @out_type);
-                int out_index = -1;
+                int64 out_index = -1;
                 for (int p = k2; p < k2_; ++p)
                     for (int q = k3; q < k3_; ++q)\x20
                         if (out_value < @in0(i0, i1, p, q)) {{
                             out_value = @in0(i0, i1, p, q);
-                            out_index = p * in0_shape3 + q;
+                            out_index = (int64)p * in0_shape3 + q;
                         }}
                 @out(i0, i1, i2, i3) = out_value;
                 @out1(i0, i1, i2, i3) = out_index;
@@ -105,8 +105,13 @@ class Pool(jt.Module):
                     }}
             '''
             if self.return_indices:
+                # int64 like torch's return_indices, and the encoding
+                # below is computed in int64 too: it is a *flat* offset
+                # into one (n, c) plane, so `p * W + q` leaves int32 as
+                # soon as a plane has 2**31 elements -- which is where
+                # the index would matter most.
                 return_shapes = [[N,C,h,w]] * 2
-                return_dtypes = [x.dtype, 'int32']
+                return_dtypes = [x.dtype, 'int64']
             else:
                 return_shapes = [N,C,h,w]
                 return_dtypes = x.dtype

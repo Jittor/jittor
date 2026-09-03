@@ -57,16 +57,16 @@ struct NonZeroOp
 };
 
 __global__ static void where_kernel(
-    int n, 
+    int64 n, 
     To* input
     @for(i, 0, NDIM, 1, ,index_t shape_@i, To* out_@i)
 ) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    int tnum = gridDim.x * blockDim.x;
-    for (index_t i=tid; i<n; i+=tnum) {
-        index_t x = input[i];
+    int64 tid = int64(threadIdx.x) + int64(blockIdx.x) * blockDim.x;
+    int64 tnum = int64(gridDim.x) * blockDim.x;
+    for (int64 i=tid; i<n; i+=tnum) {
+        To x = input[i];
         @for(j, NDIM-1, 0, -1, 
-            index_t i@j = x % shape_@j;
+            To i@j = x % shape_@j;
             out_@j[i] = i@j;
             x /= shape_@j;
         )
@@ -76,7 +76,11 @@ __global__ static void where_kernel(
 }
 
 void CubWhereOp::jit_run(){
-    int N = cond->num;
+    // Every count here is int64 because `To` is (an index is int64, like
+    // torch's). It used to be `int`/`index_t`, which was invisible while To was
+    // int32 and would have silently truncated the nonzero count once it was
+    // not -- and `std::min(1024, num_nonzeros_h)` would not even compile.
+    int64 N = cond->num;
     size_t temp_storage_bytes=0;
     size_t num_nonzeros_allocation;
     auto num_nonzeros = exe.temp_allocator->alloc(sizeof(To), num_nonzeros_allocation);
@@ -96,18 +100,24 @@ void CubWhereOp::jit_run(){
 
     To num_nonzeros_h;
     cudaMemcpy(&num_nonzeros_h, num_nonzeros, sizeof(To), cudaMemcpyDeviceToHost);
-    @for(i, 0, NDIM, outs[@i]->set_shape({num_nonzeros_h});)
+    @for(i, 0, NDIM, outs[@i]->set_shape({(int64)num_nonzeros_h});)
 
     if (num_nonzeros_h > 0 && NDIM > 1) {
-        int thread_num = std::min(1024, num_nonzeros_h);
-        int block_num = std::max(1, num_nonzeros_h/1024);
+        int thread_num = (int)std::min((int64)1024, (int64)num_nonzeros_h);
+        // Cap the grid instead of asking for one block per 1024 outputs: the
+        // kernel is a grid-stride loop, and a count that no longer fits an int
+        // would otherwise ask for a grid CUDA cannot launch.
+        int block_num = (int)std::min((int64)65535,
+            std::max((int64)1, (int64)num_nonzeros_h/1024));
         where_kernel<<<block_num, thread_num>>>(
-            num_nonzeros_h, 
+            (int64)num_nonzeros_h, 
             out_temp
             @for(i, 0, NDIM, 1, , cond->shape[@i], outs[@i]->ptr<To>())
         );
     }
-    exe.temp_allocator->free(num_nonzeros, sizeof(int), num_nonzeros_allocation);
+    // sizeof(To), matching the alloc above. It said sizeof(int), which was the
+    // same number only while To was int32.
+    exe.temp_allocator->free(num_nonzeros, sizeof(To), num_nonzeros_allocation);
     
 }
 #endif

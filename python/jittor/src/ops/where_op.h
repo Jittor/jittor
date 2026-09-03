@@ -18,17 +18,20 @@ struct WhereOp : Op {
 
     * [in] cond:    condition for index generation
 
-    * [in] dtype:   type of return indexes
+    * [in] dtype:   type of return indexes; int64 like torch, so an index can
+                    still name an element of a tensor with more than 2**31 of
+                    them, and so it survives arithmetic (Jittor promotes by
+                    byte width, so `index * stride` stays in the index's dtype)
     
     * [out] out:  return an array of indexes, same length with number of dims of cond 
     
     Example::
 
         jt.where([[0,0,1],[1,0,0]])
-        # return [jt.Var([0 1], dtype=int32), jt.Var([2 0], dtype=int32)]
+        # return [jt.Var([0 1], dtype=int64), jt.Var([2 0], dtype=int64)]
      */
     // @attrs(multiple_outputs)
-    WhereOp(Var* cond, NanoString dtype=ns_int32);
+    WhereOp(Var* cond, NanoString dtype=ns_int64);
     /**
      * Condition operator, perform cond ? x : y
      * */

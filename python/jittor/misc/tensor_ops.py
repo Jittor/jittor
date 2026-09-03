@@ -208,10 +208,14 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
         return x.reindex(tar_shape,dims)
 
     if jt.flags.use_cuda and isinstance(repeats, jt.Var) and dim == 0 and output_size is not None:
-        repeats = repeats.reshape(-1).int32()
+        # int64 throughout. This used to cast the counts to int32, prefix-sum
+        # them in int32 and index the output with an `int`, and cover that with
+        # `assert output_size <= 2147483647` -- so the one case the fast path
+        # could not do was refused rather than computed. Counting in int64
+        # costs a wider prefix sum over one small vector and removes the limit.
+        repeats = repeats.reshape(-1).int64()
         n = x.shape[0]
         out0 = int(output_size)
-        assert out0 <= 2147483647, "repeat_interleave: output_size exceeds int32 CUDA fast path limit"
         assert repeats.shape[0] == n, \
             f"repeat_interleave: repeats length {repeats.shape[0]} != dim size {n}"
         if out0 == 0:
@@ -234,15 +238,18 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
                 O* __restrict__ out,
                 int64_t total,
                 int n,
-                int inner) {
-                int64_t linear = blockIdx.x * blockDim.x + threadIdx.x;
+                int64_t inner) {
+                int64_t linear = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
                 int64_t stride = (int64_t)blockDim.x * gridDim.x;
                 for (; linear < total; linear += stride) {
-                    int out_row = linear / inner;
+                    // out_row and the offsets it is compared against are the
+                    // two quantities that count *outputs*, so they are the two
+                    // that leave int32 first.
+                    int64_t out_row = linear / inner;
                     int lo = 0, hi = n - 1;
                     while (lo < hi) {
                         int mid = (lo + hi) >> 1;
-                        if ((int)offsets[mid] > out_row) hi = mid;
+                        if ((int64_t)offsets[mid] > out_row) hi = mid;
                         else lo = mid + 1;
                     }
                     out[linear] = (O)x[(int64_t)lo * inner + (linear % inner)];
@@ -255,7 +262,7 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
             @alias(out, out0)
             const int64_t total = out->num;
             const int n = x_shape0;
-            const int inner = {inner};
+            const int64_t inner = {inner};
             int threads = 256;
             int blocks = (int)((total + threads - 1) / threads);
             if (blocks > 4096) blocks = 4096;
@@ -268,13 +275,13 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
             @alias(out, out0)
             int64_t total = out->num;
             int n = x_shape0;
-            int inner = out->num / out_shape0;
+            int64_t inner = out->num / out_shape0;
             for (int64_t linear = 0; linear < total; ++linear) {
-                int out_row = linear / inner;
+                int64_t out_row = linear / inner;
                 int lo = 0, hi = n - 1;
                 while (lo < hi) {
                     int mid = (lo + hi) >> 1;
-                    if ((int)offsets_p[mid] > out_row) hi = mid;
+                    if ((int64_t)offsets_p[mid] > out_row) hi = mid;
                     else lo = mid + 1;
                 }
                 out_p[linear] = (out_type)x_p[(int64_t)lo * inner + (linear % inner)];
@@ -1308,7 +1315,7 @@ def topk(input, k, dim=None, largest=True, sorted=True):
     ``_arg_policy`` -- see ``tests/ops/test_ignored_arguments.py``.
     '''
     if input.numel()==0:
-        return jt.array([],dtype=input.dtype),jt.array([],dtype='int32')
+        return jt.array([],dtype=input.dtype),jt.array([],dtype='int64')
     if dim is None:
         dim = -1
     if dim<0:
@@ -1316,7 +1323,12 @@ def topk(input, k, dim=None, largest=True, sorted=True):
     
     index,values = jt.argsort(input,dim=dim,descending=largest)
     dims = (slice(None),)*dim+(slice(0,k),)
-    indices = index[dims]
+    # int64 like torch, and the same dtype on both branches: the empty case
+    # builds its own array and used to be the only one anybody looked at.
+    # jt.argsort itself still hands back int32 (a C++ op default with a CUB
+    # path under it, out of scope here), so the cast is what makes topk agree
+    # with itself.
+    indices = index[dims].int64()
     values = values[dims]
     return values,indices
 
@@ -1893,7 +1905,13 @@ def linspace(start, end, steps):
         res = jt.array([start])
     return res
 
-def randperm(n, dtype="int32"):
+def randperm(n, dtype="int64"):
+    ''' A random permutation of ``range(n)``, int64 like ``torch.randperm``.
+
+    int64 because a permutation *is* an index: int32 stops naming an element at
+    2**31, and Jittor promotes by byte width, so an int32 permutation kept any
+    arithmetic done with it (a flat offset, say) in int32 too.
+    '''
     key = jt.random((n,))
     res = jt.argsort(key)
     # jt.argsort may return either the index Var directly or a
