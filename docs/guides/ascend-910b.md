@@ -456,3 +456,6 @@ failing operation. For general JIT and memory diagnostics, see
 The ACL Flip family uses the shared launcher while retaining axes setup and
 synchronous execution. Its pre-existing aclIntArray lifetime issue is outside
 this migration slice.
+
+The ACL Scatter family uses the shared launcher while retaining axis/reduction
+handling and synchronous execution. Gather remains outside this slice.

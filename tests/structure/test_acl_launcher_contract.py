@@ -19,10 +19,10 @@ TRANSPOSE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/transpose_op_acl.cc"
 SOFTMAX_SOURCE = ROOT / "python/jittor/extern/acl/aclops/softmax_op_acl.cc"
 EMBEDDING_SOURCE = ROOT / "python/jittor/extern/acl/aclops/embedding_op_acl.cc"
 ROLL_SOURCE = ROOT / "python/jittor/extern/acl/aclops/roll_op_acl.cc"
-GATHER_SOURCE = ROOT / "python/jittor/extern/acl/aclops/gather_scatter_op_acl.cc"
 CLAMP_SOURCE = ROOT / "python/jittor/extern/acl/aclops/clamp_op_acl.cc"
 STACK_SOURCE = ROOT / "python/jittor/extern/acl/aclops/stack_op_acl.cc"
 FLIP_SOURCE = ROOT / "python/jittor/extern/acl/aclops/flip_op_acl.cc"
+GATHER_SOURCE = ROOT / "python/jittor/extern/acl/aclops/gather_scatter_op_acl.cc"
 
 
 def test_acl_launcher_tail_has_one_auditable_contract():
@@ -213,3 +213,14 @@ def test_flip_uses_launcher_and_keeps_axes_setup():
     assert "checkRet(ret);" not in source
     assert "mallocWorkSpace(workspaceSize)" not in source
     assert "syncRun();" not in source
+
+
+def test_scatter_uses_launcher_and_keeps_axis_reduction_query():
+    source = GATHER_SOURCE.read_text()
+    scatter = source[source.index("void ScatterOpRunner::executeOp"):]
+    assert "attr->axis" in scatter
+    assert "attr->reduction" in scatter
+    assert "launch(ret, aclnnScatter, true);" in scatter
+    assert "checkRet(ret);" not in scatter
+    assert "mallocWorkSpace(workspaceSize)" not in scatter
+    assert "syncRun();" not in scatter
