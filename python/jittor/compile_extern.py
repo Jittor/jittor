@@ -45,6 +45,69 @@ def search_file(dirs, name, prefer_version=()):
         ". Install the package that provides it, or point Jittor at it with "
         "cuda_home/CUDA_HOME.")
 
+
+#: The versioned split libraries a cuDNN installation is made of, by major
+#: version. cuDNN ships the public ``libcudnn.so`` as a thin dispatcher and
+#: puts the kernels in these; the wheels contain no unversioned symlinks and
+#: are not on the loader path, so jittor loads them itself, in dependency
+#: order, before the dispatcher.
+#:
+#: cuDNN 9 renamed every one of them: the six ``<domain>_<infer|train>``
+#: libraries became a graph/ops/cnn/adv split plus the engine and heuristic
+#: libraries. Asking for the 8 names on a 9 install fails at
+#: "libcudnn_ops_infer.so not found", which names something that no longer
+#: exists rather than the version mismatch that caused it.
+CUDNN_SPLIT_LIBRARIES = {
+    8: (
+        "libcudnn_ops_infer.so", "libcudnn_ops_train.so",
+        "libcudnn_cnn_infer.so", "libcudnn_cnn_train.so",
+        "libcudnn_adv_infer.so", "libcudnn_adv_train.so",
+    ),
+    9: (
+        "libcudnn_graph.so",
+        "libcudnn_ops.so",
+        "libcudnn_cnn.so",
+        "libcudnn_adv.so",
+        "libcudnn_heuristic.so",
+        "libcudnn_engines_precompiled.so",
+        "libcudnn_engines_runtime_compiled.so",
+    ),
+}
+
+
+def cudnn_major_version(culib_path, cudnn_header_path=None):
+    """The major version of the cuDNN that `culib_path` is, or None.
+
+    The SONAME carries it (``libcudnn.so.9``); a path that does not, such as a
+    plain ``libcudnn.so``, falls back to ``cudnn_version.h`` next to the header
+    jittor is about to compile against. Returning None means "could not tell",
+    which is a different thing from "old": callers treat it as the current
+    layout rather than guessing a legacy one.
+    """
+    match = re.search(r"\.so\.(\d+)", os.path.basename(os.path.realpath(culib_path)))
+    if match:
+        return int(match.group(1))
+    if not cudnn_header_path:
+        return None
+    version_header = os.path.join(
+        os.path.dirname(cudnn_header_path), "cudnn_version.h")
+    try:
+        with open(version_header, "r", encoding="utf-8") as f:
+            version_text = f.read()
+    except OSError:
+        return None
+    match = re.search(
+        r"^\s*#\s*define\s+CUDNN_MAJOR\s+(\d+)", version_text, re.MULTILINE)
+    return int(match.group(1)) if match else None
+
+
+def cudnn_split_libraries(cudnn_major):
+    """The split libraries to preload for this cuDNN, newest layout by default."""
+    if cudnn_major is None:
+        cudnn_major = max(CUDNN_SPLIT_LIBRARIES)
+    return CUDNN_SPLIT_LIBRARIES.get(
+        cudnn_major, CUDNN_SPLIT_LIBRARIES[max(CUDNN_SPLIT_LIBRARIES)])
+
 def install_mkl(root_folder):
     # origin url is
     # https://github.com/oneapi-src/oneDNN/releases/download/v2.2/
@@ -321,41 +384,19 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
 
 
         if lib_name == "cudnn":
-            match = re.search(
-                r"\.so\.(\d+)", os.path.basename(os.path.realpath(culib_path))
-            )
-            cudnn_major = int(match.group(1)) if match else None
-            if cudnn_major is None:
-                version_header = os.path.join(
-                    os.path.dirname(cuda_include_name), "cudnn_version.h"
-                )
-                try:
-                    with open(version_header, "r", encoding="utf-8") as f:
-                        version_text = f.read()
-                    match = re.search(
-                        r"^\s*#\s*define\s+CUDNN_MAJOR\s+(\d+)",
-                        version_text,
-                        re.MULTILINE,
-                    )
-                    cudnn_major = int(match.group(1)) if match else None
-                except OSError:
-                    pass
-            if cudnn_major and cudnn_major >= 9:
-                raise RuntimeError(
-                    "Jittor currently requires cuDNN 8; cuDNN %s uses removed legacy RNN APIs. "
-                    "Install jittor[cuda12] for cuDNN 8.9.7." % cudnn_major
-                )
-            # cuDNN 8 wheels contain only versioned split libraries.  Load all
-            # six before the public library so RNN and convolution symbols are
+            # cuDNN 9 was refused here, because the RNN ops were written on the
+            # v6 RNN entry points that cuDNN 9 removed. They are on the v8 API
+            # now (8.04), so the only thing the major version still decides is
+            # what the split libraries are called.
+            cudnn_major = cudnn_major_version(culib_path, cuda_include_name)
+            LOG.v(f"found cudnn {cudnn_major} at {culib_path}")
+            # cuDNN wheels contain only versioned split libraries. Load them
+            # before the public library so RNN and convolution symbols are
             # available without relying on LD_LIBRARY_PATH.
             if nvcc_version >= (11,0,0) and not cuda_wheel_stack:
-                libs = [
-                    "libcudnn_ops_infer.so", "libcudnn_ops_train.so",
-                    "libcudnn_cnn_infer.so", "libcudnn_cnn_train.so",
-                    "libcudnn_adv_infer.so", "libcudnn_adv_train.so",
-                ]
-                for l in libs:
-                    ex_cudnn_path = search_file(library_search_dirs, l, ("8",))
+                prefer = (str(cudnn_major),) if cudnn_major else ()
+                for l in cudnn_split_libraries(cudnn_major):
+                    ex_cudnn_path = search_file(library_search_dirs, l, prefer)
                     ctypes.CDLL(ex_cudnn_path, dlopen_flags)
 
         if not cuda_wheel_stack:

@@ -29,20 +29,52 @@ class CudaWheelError(RuntimeError):
     pass
 
 
-# Keep this matrix in sync with setup.py's ``cuda12`` extra.  Exact versions
-# prevent pip from combining a cuDNN wheel with an incompatible CUDA family.
+# Keep this matrix in sync with pyproject.toml's ``cuda12`` extra.  The CUDA
+# components are pinned exactly: mixing component wheels from different CUDA
+# families is the failure this module exists to prevent.
+#
+# cuDNN is the one range, and the reason is outside jittor: every modern torch
+# pins its own exact ``nvidia-cudnn-cu12``, and pip resolves two different
+# exact pins on one distribution as a conflict rather than as a choice. An
+# exact pin here therefore made ``jittor[cuda12]`` and torch uninstallable in
+# the same environment -- which is the whole point of the shim. cuDNN's ABI is
+# stable within a major version, and the majors jittor supports are checked
+# where it matters (the split-library names below, and the load-time version
+# check in compile_extern), so a range is what belongs here.
 CUDA12_COMPONENTS = (
-    ("cuda_runtime", "nvidia-cuda-runtime-cu12", "12.2.140", "nvidia/cuda_runtime"),
-    ("cublas", "nvidia-cublas-cu12", "12.2.5.6", "nvidia/cublas"),
-    ("cuda_nvrtc", "nvidia-cuda-nvrtc-cu12", "12.2.140", "nvidia/cuda_nvrtc"),
-    ("cudnn", "nvidia-cudnn-cu12", "8.9.7.29", "nvidia/cudnn"),
-    ("cufft", "nvidia-cufft-cu12", "11.0.8.103", "nvidia/cufft"),
-    ("curand", "nvidia-curand-cu12", "10.3.3.141", "nvidia/curand"),
-    ("cusparse", "nvidia-cusparse-cu12", "12.1.2.141", "nvidia/cusparse"),
-    ("nvjitlink", "nvidia-nvjitlink-cu12", "12.2.140", "nvidia/nvjitlink"),
-    ("nvtx", "nvidia-nvtx-cu12", "12.2.140", "nvidia/nvtx"),
-    ("nccl", "nvidia-nccl-cu12", "2.18.3", "nvidia/nccl"),
+    ("cuda_runtime", "nvidia-cuda-runtime-cu12", "==12.2.140", "nvidia/cuda_runtime"),
+    ("cublas", "nvidia-cublas-cu12", "==12.2.5.6", "nvidia/cublas"),
+    ("cuda_nvrtc", "nvidia-cuda-nvrtc-cu12", "==12.2.140", "nvidia/cuda_nvrtc"),
+    ("cudnn", "nvidia-cudnn-cu12", ">=8.9.7,<10", "nvidia/cudnn"),
+    ("cufft", "nvidia-cufft-cu12", "==11.0.8.103", "nvidia/cufft"),
+    ("curand", "nvidia-curand-cu12", "==10.3.3.141", "nvidia/curand"),
+    ("cusparse", "nvidia-cusparse-cu12", "==12.1.2.141", "nvidia/cusparse"),
+    ("nvjitlink", "nvidia-nvjitlink-cu12", "==12.2.140", "nvidia/nvjitlink"),
+    ("nvtx", "nvidia-nvtx-cu12", "==12.2.140", "nvidia/nvtx"),
+    ("nccl", "nvidia-nccl-cu12", "==2.18.3", "nvidia/nccl"),
 )
+
+
+#: The versioned split libraries a cuDNN wheel is made of, by major version.
+#: cuDNN 9 renamed every one of them: the six ``<domain>_<infer|train>``
+#: libraries became a graph/ops/cnn/adv split plus the engine and heuristic
+#: libraries. They are listed in dependency order -- each depends on the ones
+#: before it -- because that is the order they have to be loaded in.
+CUDNN_SPLIT_LIBRARIES = {
+    8: (
+        "cudnn_ops_infer", "cudnn_ops_train",
+        "cudnn_cnn_infer", "cudnn_cnn_train",
+        "cudnn_adv_infer", "cudnn_adv_train",
+    ),
+    9: (
+        "cudnn_graph", "cudnn_ops", "cudnn_cnn", "cudnn_adv",
+        "cudnn_heuristic",
+        "cudnn_engines_precompiled", "cudnn_engines_runtime_compiled",
+    ),
+}
+
+#: Supported cuDNN majors, newest last.
+CUDNN_MAJORS = tuple(sorted(CUDNN_SPLIT_LIBRARIES))
 
 
 LIBRARY_COMPONENTS = {
@@ -52,12 +84,6 @@ LIBRARY_COMPONENTS = {
     "nvrtc": "cuda_nvrtc",
     "nvrtc-builtins": "cuda_nvrtc",
     "cudnn": "cudnn",
-    "cudnn_ops_infer": "cudnn",
-    "cudnn_ops_train": "cudnn",
-    "cudnn_cnn_infer": "cudnn",
-    "cudnn_cnn_train": "cudnn",
-    "cudnn_adv_infer": "cudnn",
-    "cudnn_adv_train": "cudnn",
     "cufft": "cufft",
     "curand": "curand",
     "cusparse": "cusparse",
@@ -65,30 +91,87 @@ LIBRARY_COMPONENTS = {
     "nvToolsExt": "nvtx",
     "nccl": "nccl",
 }
+for _names in CUDNN_SPLIT_LIBRARIES.values():
+    for _name in _names:
+        LIBRARY_COMPONENTS[_name] = "cudnn"
+del _names, _name
 
 
+#: What has to be loaded, in order, before the named library. cuDNN's entry
+#: depends on its major version, so it is built per stack by
+#: ``CudaWheelStack.preload_order`` rather than listed here.
 PRELOAD_ORDER = {
     "cudart": ("cudart",),
     "cublas": ("cublasLt", "cublas"),
-    "cudnn": (
-        "cudart",
-        "cublasLt",
-        "cublas",
-        "nvrtc",
-        "cudnn_ops_infer",
-        "cudnn_ops_train",
-        "cudnn_cnn_infer",
-        "cudnn_cnn_train",
-        "cudnn_adv_infer",
-        "cudnn_adv_train",
-        "cudnn",
-    ),
     "cufft": ("cudart", "cufft"),
     "curand": ("cudart", "curand"),
     "cusparse": ("cudart", "nvJitLink", "cusparse"),
     "nvToolsExt": ("nvToolsExt",),
     "nccl": ("cudart", "nccl"),
 }
+
+#: What cuDNN needs loaded before its own split libraries.
+CUDNN_PRELOAD_PREFIX = ("cudart", "cublasLt", "cublas", "nvrtc")
+
+
+def cudnn_preload_order(cudnn_major):
+    """Everything to load before calling into cuDNN `cudnn_major`, in order."""
+    return (CUDNN_PRELOAD_PREFIX
+            + CUDNN_SPLIT_LIBRARIES[cudnn_major]
+            + ("cudnn",))
+
+
+def _specifier_matches(specifier, version):
+    """Whether `version` satisfies a comma-separated version specifier.
+
+    ``==`` compares the version string as written, which is what an exact pin
+    means: 12.2.140 and 12.2.140.1 are different wheels. The ordering
+    operators compare the leading numeric fields, so ``<10`` excludes every
+    9.x and ``>=8.9.7`` admits 8.9.7.29.
+    """
+    actual = _version_tuple(version)
+    for clause in specifier.split(","):
+        clause = clause.strip()
+        for operator in ("==", "!=", ">=", "<=", ">", "<"):
+            if clause.startswith(operator):
+                wanted = clause[len(operator):].strip()
+                break
+        else:
+            raise CudaWheelError("unparsable version specifier %r" % specifier)
+        if operator == "==":
+            if str(version) != wanted:
+                return False
+            continue
+        if operator == "!=":
+            if str(version) == wanted:
+                return False
+            continue
+        bound = _version_tuple(wanted)
+        if operator == ">=" and not actual >= bound:
+            return False
+        if operator == "<=" and not actual <= bound:
+            return False
+        if operator == ">" and not actual > bound:
+            return False
+        if operator == "<" and not actual < bound:
+            return False
+    return True
+
+
+def reference_version(specifier):
+    """A concrete version satisfying `specifier`; the pin itself when exact.
+
+    Only for callers that need *a* version of a component -- fixtures and
+    diagnostics. It is deliberately the lowest accepted version, so a test
+    built on it exercises the oldest thing this jittor claims to support.
+    """
+    for clause in specifier.split(","):
+        clause = clause.strip()
+        if clause.startswith("=="):
+            return clause[2:].strip()
+        if clause.startswith(">="):
+            return clause[2:].strip()
+    raise CudaWheelError("no concrete version in specifier %r" % specifier)
 
 
 def _natural_version_key(path):
@@ -127,6 +210,12 @@ class CudaWheelStack:
         )
         digest = hashlib.sha256(version_text.encode("ascii")).hexdigest()[:12]
         self.fingerprint = "pipcu122_" + digest
+
+    @property
+    def cudnn_major(self):
+        """The cuDNN major version in this stack, which decides its layout."""
+        major = _version_tuple(self.versions.get("cudnn", ""))
+        return major[0] if major else None
 
     def component_dir(self, component):
         return self.components.get(component)
@@ -183,8 +272,14 @@ class CudaWheelStack:
             return '-L"%s" -l%s' % (directory, name)
         return '-L"%s" -l:%s' % (directory, os.path.basename(path))
 
+    def preload_order(self, name):
+        """What to load, in order, before `name`."""
+        if name == "cudnn":
+            return cudnn_preload_order(self.cudnn_major)
+        return PRELOAD_ORDER.get(name, (name,))
+
     def preload_paths(self, name):
-        names = PRELOAD_ORDER.get(name, (name,))
+        names = self.preload_order(name)
         paths = []
         for dependency in names:
             path = self.find_library(dependency)
@@ -219,10 +314,16 @@ def _validate_stack(stack):
             raise CudaWheelError(
                 "%s %s is missing from the NVIDIA wheel" % (component, header)
             )
+    # Which cuDNN split libraries have to be there depends on the major
+    # version: cuDNN 9 renamed all six of cuDNN 8's.
+    if stack.cudnn_major not in CUDNN_SPLIT_LIBRARIES:
+        raise CudaWheelError(
+            "cuDNN %s is not supported; jittor supports cuDNN %s"
+            % (stack.versions.get("cudnn"),
+               " and ".join(str(v) for v in CUDNN_MAJORS)))
     required_libraries = (
         "cudart", "cublas", "cublasLt", "nvrtc", "nvrtc-builtins", "cudnn",
-        "cudnn_ops_infer", "cudnn_ops_train", "cudnn_cnn_infer",
-        "cudnn_cnn_train", "cudnn_adv_infer", "cudnn_adv_train",
+    ) + CUDNN_SPLIT_LIBRARIES[stack.cudnn_major] + (
         "cufft", "curand", "cusparse", "nvJitLink", "nvToolsExt", "nccl",
     )
     for name in required_libraries:
@@ -273,16 +374,16 @@ def inspect_cuda_wheel_stack(nvcc_version=None, distribution=None):
     components = {}
     versions = {}
     reason = None
-    for component, dist_name, expected, relative_path in CUDA12_COMPONENTS:
+    for component, dist_name, specifier, relative_path in CUDA12_COMPONENTS:
         try:
             dist = distribution(dist_name)
         except importlib_metadata.PackageNotFoundError:
             reason = reason or "%s is not installed" % dist_name
             continue
         actual = str(dist.version)
-        if actual != expected:
+        if not _specifier_matches(specifier, actual):
             reason = reason or (
-                "%s==%s is required, found %s" % (dist_name, expected, actual))
+                "%s%s is required, found %s" % (dist_name, specifier, actual))
             continue
         root = os.path.abspath(os.fspath(dist.locate_file(relative_path)))
         if not os.path.isdir(root):

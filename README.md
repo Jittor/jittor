@@ -215,12 +215,15 @@ Jittor 会从那里拷贝而不是下载。`python -m jittor_utils.preflight` �
 
 ### CUDA 12 component wheels / CUDA 12 组件包
 
-On Linux x86_64, the `cuda12` extra installs a pinned CUDA 12.2 and cuDNN 8
-runtime stack. Jittor still needs an `nvcc` compiler, and does not download one
-for you: install a CUDA toolkit and put `nvcc` on PATH, or set `nvcc_path` to it.
+On Linux x86_64, the `cuda12` extra installs a pinned CUDA 12.2 runtime
+stack with cuDNN 8.9.7 or newer (cuDNN 9 included, so the extra can coexist
+with a modern torch, which pins its own cuDNN 9). Jittor still needs an `nvcc`
+compiler, and does not download one for you: install a CUDA toolkit and put
+`nvcc` on PATH, or set `nvcc_path` to it.
 
-Linux x86_64 可使用 `cuda12` extra 安装固定版本的 CUDA 12.2 与 cuDNN 8
-运行时；JIT 编译仍需要 `nvcc`，且 Jittor 不会替你下载：请安装 CUDA 工具链并把
+Linux x86_64 可使用 `cuda12` extra 安装固定版本的 CUDA 12.2 运行时，cuDNN 取
+8.9.7 及以上（含 cuDNN 9，因此可与钉了自己那份 cuDNN 9 的现代 torch 共存）；
+JIT 编译仍需要 `nvcc`，且 Jittor 不会替你下载：请安装 CUDA 工具链并把
 `nvcc` 放进 PATH，或用 `nvcc_path` 指过去。
 
 ```bash

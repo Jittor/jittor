@@ -32,7 +32,11 @@ dependencies = [
 [project.optional-dependencies]
 cuda12 = [
     "cuda-toolkit[cublas,cudart,cufft,curand,cusparse,nvjitlink,nvrtc,nvtx]==12.2.2; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "nvidia-cudnn-cu12==8.9.7.29; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    # A range, not a pin: every modern torch pins its own exact
+    # nvidia-cudnn-cu12, and pip reads two different exact pins on one
+    # distribution as a conflict. Pinning here made jittor[cuda12] and torch
+    # uninstallable together. Keep in sync with jittor_utils/cuda_wheel.py.
+    "nvidia-cudnn-cu12>=8.9.7,<10; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "nvidia-nccl-cu12==2.18.3; sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 perf = [

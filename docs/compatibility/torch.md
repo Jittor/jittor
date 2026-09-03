@@ -314,7 +314,7 @@ Python variable tracing. The package accepts NumPy versions below 3.
 
 In progress (deeper/core): `complex128` and native kernels that remove the
 remaining internal complex bridge, PP/TP,
-memory-manager tuning, cuDNN9 and CUDA 11/13 wheel families (the aligned CUDA
-12.2/cuDNN 8 stack is available through `jittor[cuda12]`), the
+memory-manager tuning, CUDA 11/13 wheel families (the aligned CUDA 12.2 stack,
+with cuDNN 8.9.7 or newer, is available through `jittor[cuda12]`), the
 remaining Lightning surface (DDP/precision/loggers), and triton/tilelang custom-op
 support.
