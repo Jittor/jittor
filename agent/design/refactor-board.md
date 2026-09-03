@@ -259,7 +259,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 3.15 | 一次编译只解析一遍 | 已合并 | codegen | 97cac22f；“只解析一遍”实测不值得，见下方结论行 |
 | 3.16 | `token_replace_all` 不再用 CHECK 抛异常做循环终止 | 待领 | | |
 | 3.17 | 只用于代码生成的 JIT 区段与普通 C++ 分离 | 待领 | | |
-| 3.18 | 删掉 `asm_tuner` 链路 | 待领 | | |
+| 3.18 | 删掉 `asm_tuner` 链路 | 待领 | | 306c8b2e 已合入前置：普通 CPU kernel 不再启动 asm_tuner，只有含 UseMovntPass 指令的 kernel 保留旧路径；仍需把 movnt 改成 intrinsic/编译器方案并删除脚本与 pass 指令 |
 | 3.19 | `event_queue` 异步基础设施修好并加测试，或删除 | 待领 | | |
 | 3.20 | 执行器提供「提交部分图」显式接口，`jt.grad` 与 `Function` 回调降开销，让反… | 待领 | | |
 | 3.21 | 每算子建图成本 | 待领 | | |
