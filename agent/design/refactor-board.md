@@ -474,7 +474,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 10.16 | 提供计时 API | 已合并 | pyother | f9f3a23d。`jt.benchmark` 冻结并预先物化输入池，至少一次 warmup 不计时，每轮递归保留 tuple/list/dict 全部输出并强同步后采样；无 Var 输出直接拒绝，返回不可变秒级统计。CPU 回归 3 passed，覆盖跨轮输入复用、嵌套输出、CSE/死码与未物化假快 |
 | 10.17 | 异步错误 | 待领 | | |
 | 10.18 | 结构测试预算转向核心 | 待领 | | |
-| 10.19 | 每个带 `grad()` 的后端算子有对 CPU 参考的梯度单测 | 已合并 | gates | 26f314fd。新增结构化 manifest 精确覆盖 extern 下全部 26 个 `::grad()` 实现，逐条校验源文件、可收集 nodeid 与 reference kind；CPU/Jittor、CUDA/CPU、NumPy、MPI/NCCL/NPU hardware-only 及 HCCL unsupported 路由均显式归属。补 cuDNN 3D 小形状 forward/dx/dw CPU generic 对拍；manifest 结构 2 passed，node 收集 1 条，GPU5 定向 1 passed（83.58s），未跑整后端目录 |
+| 10.19 | 每个带 `grad()` 的后端算子有对 CPU 参考的梯度单测 | 待领 | | 26f314fd 已建立并保留 26 项 extern `::grad()` inventory，且补齐 cuDNN 3D 小形状 forward/dx/dw CPU generic 对拍（manifest 结构 2 passed，node 收集 1 条，GPU5 定向 1 passed）；复核后撤回完成标记：HCCL 四项仍无 CPU 参考，多卡实机尚未验收，其中 `HcclAllGatherOp::grad()` 仍直接 `LOGf << "not implemented"`，`HcclAllReduceOp`/`HcclBroadcastOp`/`HcclReduceOp` 也需在 Ascend 910B3 多卡上补真实梯度与 CPU 对照。 |
 | 10.20 | 给测试提供受支持的内省 API，替代 283 处 `jt.flags.*`、137 处 `com… | 待领 | | |
 | 10.21 | import 方向做成 lint 规则 | 待领 | | |
 | 10.22 | 多机门禁 | 待领 | | |
