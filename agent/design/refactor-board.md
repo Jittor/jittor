@@ -306,7 +306,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 5.22 | `nn` facade 不导出 39 个下划线名，内部用模块局部名不经 `jt.nn.*` 晚绑… | 待领 | | |
 | 5.23 | 根命名空间显式 `__all__` | 待领 | | |
 | 5.24 | 10 个 `jt._*` 跨模块契约 | 待领 | | |
-| 5.25 | `python/jittor/utils/` 拆散 | 待领 | | |
+| 5.25 | `python/jittor/utils/` 拆散 | 待领 | | be2935f0、fdf3b759（部分：translator/server 已迁入 compat，jtune/nvtx 已迁入 jittor.tools，三个仓库脚本已迁入顶层 tools；utils 只剩四个由 C++/编译器硬编码引用的资源，待 3.18 落地后归 compiler 包） |
 | 5.26 | 布局收尾 | 待领 | | |
 | 6.C01 | `.item()` 对无符号 dtype | 已合并 | | 9b3023b1 |
 | 6.C02 | `PySlice_Unpack` 返回值检查，三个变量初始化 | 已合并 | bindings | 78d08344 |
