@@ -537,6 +537,40 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         np.testing.assert_allclose(actual_p2.numpy(), expected_p2, rtol=1e-6)
         np.testing.assert_allclose(actual_method.numpy(), expected_p2, rtol=1e-6)
 
+    def test_logcumsumexp_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.logcumsumexp))
+        self.assertIs(torch.logcumsumexp, numerical.logcumsumexp)
+        self.assertEqual(
+            numerical.logcumsumexp.__module__, numerical.__name__)
+        self.assertEqual(numerical.logcumsumexp.__name__, "logcumsumexp")
+
+    def test_logcumsumexp_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.logcumsumexp")
+        self.assertIs(record.implementation, numerical.logcumsumexp)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("device", record.detail)
+        self.assertIn("out", record.detail)
+
+    def test_logcumsumexp_cpu_1d_2d_dims_and_var_method_match_numpy(self):
+        values_1d = np.array([-1.0, 0.5, 2.0], dtype="float32")
+        values_2d = np.array(
+            [[-1.0, 0.5, 2.0], [1.5, -0.5, 3.0]], dtype="float32")
+        with torch.flag_scope(use_cuda=0):
+            one_d = torch.logcumsumexp(torch.array(values_1d), 0).numpy()
+            two_d = torch.logcumsumexp(torch.array(values_2d), 1).numpy()
+            method = torch.array(values_2d).logcumsumexp(0).numpy()
+        np.testing.assert_allclose(
+            one_d, np.log(np.cumsum(np.exp(values_1d))), rtol=1e-5)
+        np.testing.assert_allclose(
+            two_d, np.log(np.cumsum(np.exp(values_2d), axis=1)), rtol=1e-5)
+        np.testing.assert_allclose(
+            method, np.log(np.cumsum(np.exp(values_2d), axis=0)), rtol=1e-5)
+
 
 if __name__ == "__main__":
     unittest.main()

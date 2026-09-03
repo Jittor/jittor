@@ -488,6 +488,30 @@ register_fidelity(
 )
 
 
+_LOGCUMSUMEXP_FIDELITY_DETAIL = (
+    "matches Torch cumulative log-sum-exp values for supported real tensors "
+    "but omits device, layout, and out keyword semantics"
+)
+
+
+def _logcumsumexp_impl(input, dim):
+    maximum = input.max(dim, keepdims=True)
+    return maximum + jt.log(jt.cumsum(jt.exp(input - maximum), dim))
+
+
+def logcumsumexp(input, dim):
+    """Return cumulative log-sum-exp values along ``dim``."""
+    return _logcumsumexp_impl(input, dim)
+
+
+register_fidelity(
+    "torch.logcumsumexp",
+    logcumsumexp,
+    Fidelity.APPROXIMATE,
+    _LOGCUMSUMEXP_FIDELITY_DETAIL,
+)
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
@@ -808,10 +832,7 @@ def install(ctx):
             fin.append(int(a2.shape[i]) * int(b2.shape[i]))
         return (a2.reshape(aex) * b2.reshape(bex)).reshape(fin)
     _alias("kron", _kron); Var.kron = _kron
-    def _logcumsumexp(input, dim):
-        m = input.max(dim, keepdims=True)
-        return m + jt.log(jt.cumsum(jt.exp(input - m), dim))
-    _alias("logcumsumexp", _logcumsumexp); Var.logcumsumexp = _logcumsumexp
+    _alias("logcumsumexp", logcumsumexp); Var.logcumsumexp = _logcumsumexp_impl
     def _tensordot(a, b, dims=2):
         if isinstance(dims, int):
             adims, bdims = list(range(a.ndim - dims, a.ndim)), list(range(dims))
