@@ -463,7 +463,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 10.05 | 按 skip 原因分桶统计并在 CI summary 输出，对「本环境应能跑却 skip」设阈值 | 待领 | | |
 | 10.06 | `expect_error` 带 `exc_type` 与 `match` | 已合并 | gates | 6753062d 严格 helper；49503f95 与 01536ba4 为全部 34 处旧调用固定异常类型/消息，AST legacy 计数 0，并修复 CUDA `Var` 误调用导致的假绿；796b5338 增加 OpInfo `ErrorInput`/生成式错误电池与覆盖率门禁，46/227（20.3%）。聚焦 helper 4 passed、六个最终调用节点 6 passed、OpInfo 错误电池 47 passed，真实 CUDA 负向节点 1 passed |
 | 10.07 | Unary/Binary/Reduction 用 `OpDTypes.supported` | 已合并 | gates | 4af5fbcd。TestCommon 覆盖每个 OpInfo 声明的全部 dtype，BF16 输入保持原生 bfloat16；两条修前契约各失败，修后输入生成 7 passed |
-| 10.08 | 已复现缺陷用 `xfail` 而非 `skip` | 待领 | | |
+| 10.08 | 已复现缺陷用 `xfail` 而非 `skip` | 已合并 | gates | d7f87e28。OpInfo `xfail` 改为 `pytest.mark.xfail(strict=True, raises=...)`；fft/ifft/rfft 不再以 `supports_autograd=False` 静默绕过，六个 CPU gradcheck/gradgradcheck 节点稳定复现 float64 输出无法 reinterpret 为 complex64 并全部 xfailed，monkeypatch 修复探针产生 XPASS(strict) 且退出非零。NPU crash/hang 隔离 skip 与数学、数值 harness、环境前置 skip 保持不变 |
 | 10.09 | 公开 API 与 OpInfo 差集作为 structure 门禁一项 | 待领 | | |
 | 10.10 | gradcheck 加「故意写错导数应当失败」的负向自测 | 已合并 | gates | 3e83594d。故意把平方的 backward 写成 `3*x`，`gradcheck` 必须抛 `Jacobian mismatch`；定向 1 passed，相关结构 15 passed |
 | 10.11 | 设备对拍加 dtype 轴 | 已合并 | gates | 4bf5830c。双方支持时生成 float32/int8/int16 轴，整数逐位比较，浮点容差按 `sqrt(reduce_size)*eps` 下限缩放，CuPy linalg 探针失败硬失败；真实 CUDA sum-int8/max-int16 2 passed |
