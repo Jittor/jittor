@@ -37,26 +37,20 @@ import numpy as np
 import jittor as jt
 
 
-class amp_level:
-    """Set ``auto_mixed_precision_level`` and put it back.
+def amp_level(level):
+    """Set ``auto_mixed_precision_level`` for a block and put it back.
 
-    Not ``jt.flag_scope``: the level's setter writes ``amp_reg`` as a side
-    effect, and a test that leaves either behind poisons every later file.
+    ``jt.flag_scope``, not an assignment plus a restore of our own: the backup
+    it keeps is a stack (task 5.08), so nesting and the exception path both
+    compose, and hand-rolling save/restore here would be the manual version of
+    exactly the bug 5.08 fixed. ``tests/structure/test_flag_scope_contract.py``
+    fails any test that assigns ``jt.flags.*`` without restoring it, which is
+    the rule that caught the first version of this helper.
+
+    The level's setter writes ``amp_reg`` as a side effect; restoring the level
+    on exit re-runs that setter, so ``amp_reg`` comes back with it.
     """
-
-    def __init__(self, level):
-        self.level = level
-
-    def __enter__(self):
-        self.old_level = jt.flags.auto_mixed_precision_level
-        self.old_reg = jt.flags.amp_reg
-        jt.flags.auto_mixed_precision_level = self.level
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        jt.flags.auto_mixed_precision_level = self.old_level
-        jt.flags.amp_reg = self.old_reg
-        return False
+    return jt.flag_scope(auto_mixed_precision_level=level)
 
 
 class TestAmpBitNames(unittest.TestCase):
