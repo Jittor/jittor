@@ -555,7 +555,7 @@ namespace jittor
         LOGv << "compile" << op;
         OpCompiler oc(op);
         string *src = &oc.src;
-        for (auto op_type : op_types)
+        for (auto op_type : get_op_types())
             op_type->post_pass(&oc);
         string src_after_passes;
         // if is fused op
@@ -611,24 +611,21 @@ namespace jittor
         return do_compile_inner(op);
     }
 
-    // from op_register.cc
-    extern unordered_map<string, OpInfo> op_info_map;
-
     void init_acl_ops()
     {
         do_compile_hook = acl_do_compile;
         vector<string> to_erase;
-        for (auto &kv : op_info_map)
+        for (const auto &name : registered_op_names())
         {
-            if (startswith(kv.first, "cu") && acl_ops.count(kv.first) == 0)
+            if (startswith(name, "cu") && acl_ops.count(name) == 0)
             {
-                to_erase.push_back(kv.first);
+                to_erase.push_back(name);
             }
         }
         for (auto &k : to_erase)
         {
             LOGv << "op not supported: " << k << ", erase it.";
-            op_info_map.erase(k);
+            unregister_op(k);
         }
     }
 

@@ -5,16 +5,34 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
-#include <typeinfo>
-#include <typeindex>
+#include <type_traits>
 #include <utility>
 #include "common.h"
 
 namespace jittor {
 
+struct OpConstructorEntry {
+    virtual ~OpConstructorEntry() = default;
+};
+
+template<class Func>
+struct TypedOpConstructorEntry : OpConstructorEntry {
+    Func function;
+
+    explicit TypedOpConstructorEntry(Func function) : function(function) {}
+};
+
+template<class Func>
+shared_ptr<OpConstructorEntry> op_constructor_entry(Func function) {
+    static_assert(std::is_pointer<Func>::value &&
+        std::is_function<typename std::remove_pointer<Func>::type>::value,
+        "an op constructor entry must be a function pointer");
+    return std::make_shared<TypedOpConstructorEntry<Func>>(function);
+}
+
 struct OpInfo {
     string name, source_path, extra_flags;
-    vector<pair<const std::type_info*, void*>> constructors;
+    vector<shared_ptr<OpConstructorEntry>> constructors;
     // string: var member name, uint64: var member offset
     vector<pair<string, uint64>> var_members;
     // Zero is reserved for an Op instance that has not resolved its
@@ -23,11 +41,11 @@ struct OpInfo {
 
     template<class To, class ...Ts> auto get_constructor() {
         typedef To (*func_t)(Ts...);
-        const auto& tid = typeid(func_t);
-        for (uint i=0; i<constructors.size(); i++)
-            if (std::type_index(*(constructors[i].first)) == std::type_index(tid))
-                return func_t(constructors[i].second);
-        LOGf << "constructor" << name << tid.name() << "not found.";
+        for (const auto& constructor : constructors) {
+            auto typed = std::dynamic_pointer_cast<TypedOpConstructorEntry<func_t>>(constructor);
+            if (typed) return typed->function;
+        }
+        LOGf << "constructor" << name << "with requested signature not found.";
         return func_t(nullptr);
     }
 };
@@ -36,6 +54,8 @@ void op_registe(const OpInfo& op_info);
 bool has_op(const string& name);
 OpInfo get_op_info(const string& name);
 OpId get_op_id(const string& name);
+vector<string> registered_op_names();
+bool unregister_op(const string& name);
 
 // Canonical ids used by core correctness and optimization decisions. Each
 // function resolves the registry once on first use, after static registration.
@@ -110,7 +130,7 @@ struct OpByType {
     virtual void post_pass(OpCompiler*) = 0;
 };
 
-extern vector<OpByType*> op_types;
+vector<OpByType*>& get_op_types();
 int registe_op_type(OpByType*);
 
 } // jittor

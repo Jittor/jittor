@@ -66,3 +66,30 @@ def test_no_op_is_looked_up_at_namespace_scope():
         "these resolve an op at load time, which depends on an unspecified "
         "static-initialisation order; use op_constructor<...>(\"name\") "
         "instead:\n  " + "\n  ".join(offenders))
+
+
+def test_op_registry_storage_is_lazily_initialized():
+    source = (REPO_ROOT / "python/jittor/src/ops/op_register.cc").read_text(
+        encoding="utf-8")
+    header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
+        encoding="utf-8")
+    acl = (REPO_ROOT / "python/jittor/extern/acl/acl_op_exec.cc").read_text(
+        encoding="utf-8")
+    assert "unordered_map<string, OpInfo> op_info_map;" not in source
+    assert "static OpId next_op_id = 1;" not in source
+    assert "vector<OpByType*> op_types;" not in source
+    assert "extern vector<OpByType*> op_types" not in header
+    assert "extern unordered_map<string, OpInfo> op_info_map" not in acl
+
+
+def test_op_constructors_are_not_erased_through_void_pointer_rtti():
+    header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
+        encoding="utf-8")
+    compiler = (REPO_ROOT / "python/jittor/compiler.py").read_text(
+        encoding="utf-8")
+    utils = (REPO_ROOT / "python/jittor/src/ops/op_utils.cc").read_text(
+        encoding="utf-8")
+    assert "pair<const std::type_info*, void*>" not in header
+    assert "typeid(func_t)" not in header
+    assert "(void*)&{name}" not in compiler
+    assert "(void*)&make_number" not in utils

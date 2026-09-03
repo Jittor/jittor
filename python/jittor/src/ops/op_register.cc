@@ -9,8 +9,15 @@
 
 namespace jittor {
 
-unordered_map<string, OpInfo> op_info_map;
-static OpId next_op_id = 1;
+static unordered_map<string, OpInfo>& op_info_map() {
+    static auto* registry = new unordered_map<string, OpInfo>();
+    return *registry;
+}
+
+static OpId& next_op_id() {
+    static OpId id = 1;
+    return id;
+}
 
 //: The one key the map is read and written by.
 //:
@@ -26,8 +33,8 @@ static inline string op_key(const string& name) {
 void op_registe(const OpInfo& op_info) {
     if (has_op(op_info.name)) {
         string op_file_name = op_key(op_info.name);
-        auto iter = op_info_map.find(op_file_name);
-        if (iter != op_info_map.end() && iter->second.source_path == op_info.source_path) {
+        auto iter = op_info_map().find(op_file_name);
+        if (iter != op_info_map().end() && iter->second.source_path == op_info.source_path) {
             LOGvv << "replace duplicated op registration" << op_info.name
                 << "\nsource_path:" << op_info.source_path
                 << "\nextra_flags:" << op_info.extra_flags
@@ -43,25 +50,36 @@ void op_registe(const OpInfo& op_info) {
     LOGvv << "registe op" << op_info.name
         << "\nsource_path:" << op_info.source_path
         << "\nextra_flags:" << op_info.extra_flags
-        << "\nconstructors:" << op_info.constructors
+        << "\nconstructors:" << op_info.constructors.size()
         << "\nvar_members:" << op_info.var_members;
     OpInfo registered = op_info;
-    registered.id = next_op_id++;
-    op_info_map[op_key(op_info.name)] = move(registered);
+    registered.id = next_op_id()++;
+    op_info_map()[op_key(op_info.name)] = move(registered);
 }
 
 bool has_op(const string& name) {
-    return op_info_map.count(op_key(name));
+    return op_info_map().count(op_key(name));
 }
 
 OpInfo get_op_info(const string& name) {
-    auto iter = op_info_map.find(op_key(name));
-    ASSERT(iter != op_info_map.end()) << "Op" << name << "not found.";
+    auto iter = op_info_map().find(op_key(name));
+    ASSERT(iter != op_info_map().end()) << "Op" << name << "not found.";
     return iter->second;
 }
 
 OpId get_op_id(const string& name) {
     return get_op_info(name).id;
+}
+
+vector<string> registered_op_names() {
+    vector<string> names;
+    names.reserve(op_info_map().size());
+    for (const auto& item : op_info_map()) names.push_back(item.first);
+    return names;
+}
+
+bool unregister_op(const string& name) {
+    return op_info_map().erase(op_key(name));
 }
 
 #define DEFINE_BUILTIN_OP_ID(name) \
@@ -85,10 +103,13 @@ DEFINE_BUILTIN_OP_ID(setitem)
 
 #undef DEFINE_BUILTIN_OP_ID
 
-vector<OpByType*> op_types;
+vector<OpByType*>& get_op_types() {
+    static auto* types = new vector<OpByType*>();
+    return *types;
+}
 
 int registe_op_type(OpByType* op_type) {
-    op_types.push_back(op_type);
+    get_op_types().push_back(op_type);
     return 0;
 }
 

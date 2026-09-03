@@ -33,7 +33,7 @@ VarPtr make_number(float number, Var* x) {
 }
 
 static void init() {
-    op_registe({"number", "", "", {{&typeid(&make_number), (void*)&make_number}}});
+    op_registe({"number", "", "", {op_constructor_entry(&make_number)}});
 }
 static int caller = (init(), 0);
 

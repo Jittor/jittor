@@ -232,7 +232,7 @@ void load_macros(const string& src, unordered_map<string,string>& macros) {
 }
 
 string expand_op_search(const vector<string>& args) {
-    for (auto op_type : op_types) {
+    for (auto op_type : get_op_types()) {
         string ret = op_type->expand_op(args);
         if (ret.size())
             return ret;
@@ -966,7 +966,7 @@ string OpCompiler::__get_fused_src(
     // one of the LOG* macros; everything else is op-local and gets renamed.
     auto not_change = [&](const string& s) -> bool {
         if (jit_reserved_identifiers().count(s)) return true;
-        for (auto op_type : op_types)
+        for (auto op_type : get_op_types())
             if (op_type->types.count(s))
                 return true;
         return (s.find("::") != string::npos) || (s.find("LOG") != string::npos);
@@ -1226,7 +1226,7 @@ jit_op_entry_t (*do_compile_hook)(Op*) = nullptr;
 jit_op_entry_t do_compile_inner(Op* op) {
     OpCompiler oc(op);
     string* src = &oc.src;
-    for (auto op_type : op_types)
+    for (auto op_type : get_op_types())
         op_type->post_pass(&oc);
     string src_after_passes;
     // if is fused op

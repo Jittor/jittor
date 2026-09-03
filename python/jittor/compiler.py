@@ -502,7 +502,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
         constructors = []
         for i in range(len(res)):
             name = 'make_'+func_name+'_'*i
-            constructors.append(f"{{ &typeid(&{name}), (void*)&{name} }}")
+            constructors.append(f"op_constructor_entry(&{name})")
         constructors = ",".join(constructors)
         var_member = parse_var_members(src, header)
         LOG.vv("var_member "+str(var_member))
