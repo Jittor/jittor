@@ -12,6 +12,17 @@ from jittor_utils.misc import download_url_to_local, safe_tar_extractall
 from jittor_utils import manifest
 import jittor_utils as jit_utils
 
+
+# Optional runtimes are initialized by an explicit setup_* call, or by the
+# first operation that needs them.  Keep their public state queryable without
+# doing downloads, compilation, or dynamic loading during a plain import.
+mkl_ops = None
+cutt = cutt_ops = None
+nccl = nccl_ops = None
+use_mkl = os.environ.get("use_mkl", "1") == "1"
+use_cutt = os.environ.get("use_cutt", "1") == "1"
+use_nccl = os.environ.get("use_nccl", "1") == "1"
+
 def search_file(dirs, name, prefer_version=()):
     if os.name == 'nt':
         if name.startswith("lib"):
@@ -234,6 +245,9 @@ def setup_mkl():
     mkl_op_dir = os.path.join(jittor_path, "extern", "mkl", "ops")
     mkl_op_files = [os.path.join(mkl_op_dir, name) for name in os.listdir(mkl_op_dir)]
     mkl_ops = compile_custom_ops(mkl_op_files, extra_flags=extra_flags)
+    root_module = sys.modules.get("jittor")
+    if root_module is not None:
+        root_module.mkl_ops = mkl_ops
     LOG.vv("Get mkl_ops: "+str(dir(mkl_ops)))
 
 
@@ -1232,13 +1246,11 @@ if _want_hccl:
                     distributed_requested())) from e
         LOG.w("HCCL setup failed, multi-card on Ascend disabled, msg:", e)
 
-setup_nccl()
-setup_cutt()
-
-# try:
-setup_mkl()
-# except Exception as e:
-#     LOG.w("MKL install failed, msg:", e)
+# A launcher is an explicit distributed bootstrap request. Preserve the
+# import-time fail-closed contract for that case; ordinary single-process
+# imports leave NCCL for setup_nccl() at distributed initialization.
+if distributed_requested():
+    setup_nccl()
 
 setup_cuda_extern()
 

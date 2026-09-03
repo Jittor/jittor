@@ -30,9 +30,10 @@ import json
 from . import probe
 
 
-def _user_config_file():
+def _user_config_file(create=False):
     src_path = os.path.join(str(Path.home()), ".cache", "jittor")
-    os.makedirs(src_path, exist_ok=True)
+    if create:
+        os.makedirs(src_path, exist_ok=True)
     return os.path.join(src_path, "config.json")
 
 
@@ -56,7 +57,7 @@ def _read_user_config():
 
 def _write_user_config(data):
     """Replace the configuration atomically so readers never see a partial file."""
-    path = _user_config_file()
+    path = _user_config_file(create=True)
     temporary = "%s.%d.tmp" % (path, os.getpid())
     try:
         with open(temporary, "w") as f:

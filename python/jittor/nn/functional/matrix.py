@@ -169,10 +169,17 @@ def _mkl_batched_matmul_is_available(a, b):
     """
     if jt.flags.use_cuda:
         return False
+    if a.dtype != b.dtype or a.dtype != jt.float32:
+        return False
+    if not getattr(jt.compile_extern, "use_mkl", True):
+        return False
     ops = getattr(jt.compile_extern, "mkl_ops", None)
+    if ops is None:
+        jt.compile_extern.setup_mkl()
+        ops = getattr(jt.compile_extern, "mkl_ops", None)
     if ops is None or not hasattr(ops, "mkl_batched_matmul"):
         return False
-    return a.dtype == b.dtype == jt.float32
+    return True
 
 
 def matmul(a, b):
