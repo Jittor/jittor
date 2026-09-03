@@ -183,71 +183,59 @@ vector<VarPtr> grad(
         assign_attrs(grads[0].ptr, loss);
     }
 
-    vector<pair<Node*, int64>> id_buffer;
-    id_buffer.reserve(sorted.size()+10);
     NodeIndex consumed_grouped_ops;
     consumed_grouped_ops.reset(sorted.size());
 
-    // backup id in custum data
+    struct GradOpSnapshot {
+        Op* op;
+        int input_index;
+        vector<pair<Var*, int>> outputs;
+        vector<int> input_grad_ids;
+    };
+
+    // Snapshot one var's outgoing structure immediately before consuming it.
+    // Grad construction may append new consumers to this same list, or add
+    // outputs to an upstream op that has not been visited yet.
     for (int i=1; i<gvars.size(); i++) {
         Var* var = gvars[i];
+        vector<GradOpSnapshot> outgoing;
+        outgoing.reserve(var->outputs().size());
         for (auto it : var->outputs_with_index()) {
             Op* op = it.op;
-            auto index = it.index;
             if (!grad_nodes.has(op)) continue;
             if (op->flag(OpFlags::_grads) && consumed_grouped_ops.has(op))
                 continue;
-            id_buffer.emplace_back(op, index);
-        
-            // backward together
+
+            GradOpSnapshot snapshot{op, it.index, {}, {}};
+            snapshot.outputs.reserve(op->outputs().size());
+            for (Var* out : op->outputs())
+                snapshot.outputs.emplace_back(
+                    out, gvar_index.has(out) ? gvar_index.get(out) : -1);
+
             if (op->flag(OpFlags::_grads)) {
                 consumed_grouped_ops[op] = 1;
-                for (Var* out : op->outputs()) {
-                    id_buffer.emplace_back(
-                        out, 
-                        gvar_index.has(out) ? gvar_index.get(out) : -1);
-                }
-                for (Var* in : op->inputs()) {
-                    id_buffer.emplace_back(
-                        in, 
+                snapshot.input_grad_ids.reserve(op->inputs().size());
+                for (Var* in : op->inputs())
+                    snapshot.input_grad_ids.push_back(
                         gvar_index.has(in) ? gvar_index.get(in) : -1);
-                }
-            } else {
-                // single var backward
-                for (Var* out : op->outputs()) {
-                    id_buffer.emplace_back(
-                        out, 
-                        gvar_index.has(out) ? gvar_index.get(out) : -1);
-                }
             }
+            outgoing.push_back(move(snapshot));
         }
-        // end of var output
-        id_buffer.emplace_back(nullptr, 0);
-    }
-    
-    // real backward construction from prev backuped ids
-    int j=0;
-    for (int i=1; i<gvars.size(); i++,j++) {
-        Var* var = gvars[i];
+
         auto& grad = grads[i];
         #ifdef PREVENT_LARGE_FUSED_OP
         int gsum = 0;
         #endif
-        // dump  "for (auto it : var->outputs_with_index())"
-        while (id_buffer[j].first) {
-            Op* op = id_buffer[j].first->op();
-            auto index = id_buffer[j].second;
-            j++;
-            auto n_o = op->outputs().size();
-        
+        for (const auto& snapshot : outgoing) {
+            Op* op = snapshot.op;
+            int n_o = snapshot.outputs.size();
+
             if (op->flag(OpFlags::_grads)) {
-                // backward together
-                auto n_i = op->inputs().size();
+                int n_i = snapshot.input_grad_ids.size();
                 STACK_ALLOC(Var*, douts, n_o);
                 STACK_ALLOC2(VarPtr, dins, n_i);
-                // dump "for (Var* out : op->outputs())"
-                for (int i=0; i<n_o; i++,j++) {
-                    auto id = id_buffer[j].second;
+                for (int i=0; i<n_o; i++) {
+                    int id = snapshot.outputs[i].second;
                     if (id>=0) {
                         douts[i] = grads[id];
                     } else
@@ -258,9 +246,8 @@ vector<VarPtr> grad(
                     AmpGradGuard agg(op);
                     op->grads(douts, dins);
                 }
-                // dump "for (Var* in : op->inputs())"
-                for (int i=0; i<n_i; i++,j++) {
-                    auto id = id_buffer[j].second;
+                for (int i=0; i<n_i; i++) {
+                    int id = snapshot.input_grad_ids[i];
                     if (id>=0) {
                         auto& din = dins[i];
                         auto& grad = grads[id];
@@ -271,15 +258,14 @@ vector<VarPtr> grad(
                     }
                 }
             } else {
-                // single var backward
-                // dump "for (Var* out : op->outputs())"
-                for (int i=0; i<n_o; i++,j++) {
-                    auto id = id_buffer[j].second;
-                    auto out = id_buffer[j].first->var();
+                for (const auto& output : snapshot.outputs) {
+                    Var* out = output.first;
+                    int id = output.second;
                     if (id<0) continue;
                     Var* dout = grads[id];
                     trace_grad_op = op;
-                    VarPtr dvar = make_grad(op, out, dout, var, index);
+                    VarPtr dvar = make_grad(
+                        op, out, dout, var, snapshot.input_index);
                     if (dvar && dvar->num>=0 && var->num>0)
                         // var->num == 0 represents a any match var
                         ASSERT(dvar->num==var->num && dvar->shape.size()==var->shape.size())
