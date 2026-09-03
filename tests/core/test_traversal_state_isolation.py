@@ -30,9 +30,22 @@ in ``FusedOp::update_ops``: the "cannot fuse" bit the executor left in the field
 comes back as an in-degree, so the fused op decides it has no outputs.  The sort
 keeps its own in-degrees now, so there is nothing left to save.
 
-The case below is the reachable form of that: run a fusable graph with the
-memory profiler on, so a full traversal happens inside every step of another
-one, and check the answer.
+Five of the six users keep their own storage now.  The sixth -- the executor's
+own batch numbering -- stayed on the node, because moving it costs about
+0.075 us per op of planning time (see the ``[2.02 下半]`` commit message).  What
+changed there is the part that was broken: the field has one owner, it is
+written with the stamp of the batch that wrote it, and every read names the
+batch it believes it is in.
+
+So there are two things to hold, and they are different:
+
+* **the behaviour** -- a full traversal running inside ``run_sync``'s op loop
+  does not change the answer.  That is the first case below.
+* **the mechanism** -- when two traversals *do* interleave on that field, the
+  second one's numbering is *detected* rather than silently returned.  That is
+  the second case, and it is the one that keeps holding when somebody writes a
+  new traversal next month.  Asserting only the first would pin today's call
+  order and call it a guarantee.
 
 Run::  python -m pytest tests/core/test_traversal_state_isolation.py
 """
@@ -55,6 +68,27 @@ def expected(x):
     b = x * 2 + 1
     c = b ** 2 - x
     return float((c * b).sum() + (c + b).mean())
+
+
+class TestBatchIndexIsChecked(unittest.TestCase):
+    """The mechanism: a stale reader is caught, not served.
+
+    ``jt.tests`` exposes the C++ unit tests; this one stamps a node as one
+    batch, restamps it as another, and asserts that reading with the first
+    stamp raises. It is the general form of the failure that made the field
+    dangerous -- the reader who was there first keeps reading and gets somebody
+    else's index -- and unlike an interleaving scenario it does not depend on
+    which traversals happen to call each other today.
+    """
+
+    def test_reading_a_batch_index_with_a_stale_stamp_is_an_error(self):
+        jt.tests.node_batch_index_is_checked()
+
+    def test_the_table_the_other_traversals_use_behaves(self):
+        # The same question for NodeIndex: a reference stays valid across
+        # further inserts (the topological sorts do `--index[node]`), and a
+        # node never indexed is distinguishable from one indexed as 0.
+        jt.tests.node_index_table()
 
 
 class TestTraversalStateIsolation(unittest.TestCase):
