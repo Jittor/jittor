@@ -14,6 +14,15 @@ from _helpers.assertions import expect_error
 from _helpers.numerical_grad import ngrad
 
 class TestSlice(unittest.TestCase):
+    def test_boolean_var_getitem_is_a_catchable_user_error(self):
+        value = jt.array([1, 2, 3])
+        mask = jt.array(np.array([True, False, True], dtype=np.bool_))
+        expect_error(
+            lambda: value.getitem(mask),
+            exc_type=RuntimeError,
+            match="Please convert bool slice",
+        )
+
     def test_variable_index_shape_mismatch_is_a_catchable_user_error(self):
         x = jt.ones((4, 4))
         first = jt.array([0, 1])
