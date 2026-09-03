@@ -3,18 +3,11 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-"""What the compile cache records as a source's dependencies, and how.
+"""The compile cache hashes the compiler's own dependency list.
 
-Two long-standing holes, both of which meant editing a header rebuilt nothing:
-
-* `helper_cuda.h` was excluded from the cache key *by name*, and it is included
-  by 47 files. The exclusion was there because the scanner does not understand
-  `#ifdef`, and those includes sit under `#ifdef HAS_CUDA`.
-* `#include <...>` was not tracked at all, so a project header included with
-  angle brackets was invisible.
-
-And the content hash was a linear polynomial -- weaker than the MD5 the same
-repository already used for downloads, and with collisions anyone can construct.
+GCC/Clang depfiles, rather than a partial C++ preprocessor written in the cache,
+decide which quoted, angled, conditional, and macro-expanded includes belong to
+an output. The paths are stored with SHA-256 content hashes in its cache key.
 """
 
 import glob
@@ -72,7 +65,7 @@ class TestCacheDependencies(unittest.TestCase):
         self.assertGreater(checked, 0)
 
     def test_angle_bracket_includes_are_tracked(self):
-        """A project header included as <...> used to change nothing."""
+        """Compiler depfiles include project headers spelled with <...>."""
         seen = set()
         for key in self.keys:
             seen.update(os.path.basename(path) for path in _entries(key))
@@ -83,18 +76,13 @@ class TestCacheDependencies(unittest.TestCase):
 
     @unittest.skipIf(not jt.has_cuda, "helper_cuda.h is only reachable with CUDA")
     def test_helper_cuda_is_a_dependency_again(self):
-        """It is included by 47 files and was excluded from the key by name.
-
-        Editing `extern/cuda/inc/helper_cuda.h` therefore rebuilt nothing and
-        every one of those objects silently stayed stale.
-        """
+        """The real CUDA preprocessor selects this conditional dependency."""
         holders = [key for key in self.keys
                    if any(path.endswith("helper_cuda.h")
                           for path in _entries(key))]
         self.assertTrue(
             holders,
-            "no object records helper_cuda.h as a dependency; the by-name "
-            "exclusion is back or the #ifdef HAS_CUDA branch is not being read")
+            "no CUDA object depfile records helper_cuda.h")
 
     def test_no_dependency_is_recorded_twice_with_different_hashes(self):
         digests = {}

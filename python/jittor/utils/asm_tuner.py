@@ -161,6 +161,13 @@ def replace_output(cmd, output):
     assert pos != -1, "output path not found in command: " + output_path
     return cmd[:pos] + output + cmd[pos+len(output_path):]
 
+def remove_dependency_flags(cmd):
+    # The source-to-assembly stage owns the depfile. Reusing -MD/-MF while
+    # assembling the rewritten .s would replace it with a dependency list that
+    # no longer contains the C++ headers.
+    cmd = re.sub(r"(?:^| )-M(?:M)?D(?= |$)", "", cmd)
+    return re.sub(r"(?:^| )-MF +(?:'[^']*'|\"[^\"]*\"|[^ ]+)", "", cmd)
+
 # remove -Xclang ...
 remove_clang_flag = lambda s: re.sub("-Xclang (('[^']*')|([^ ]*))", "", s)
 
@@ -189,4 +196,4 @@ else:  #cc_to_so
 
     asm_cmd = cmd.replace("_op.cc", "_op.s") \
         .replace(" -g", "")
-    run_cmd(remove_clang_flag(asm_cmd))
+    run_cmd(remove_clang_flag(remove_dependency_flags(asm_cmd)))

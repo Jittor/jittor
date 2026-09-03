@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -58,6 +59,10 @@ def test_wrapped_products_and_keys_are_replaced_atomically(
 import sys
 
 output = sys.argv[sys.argv.index("-o") + 1]
+if "-MF" in sys.argv:
+    dependency = sys.argv[sys.argv.index("-MF") + 1]
+    with open(dependency, "w") as handle:
+        handle.write(output + ": " + sys.argv[1] + "\\n")
 with open(output, "wb") as handle:
     handle.write(b"complete shared library")
 """,
@@ -109,6 +114,13 @@ inputs = [arg for index, arg in enumerate(args)
           if index != output_index + 1 and arg.endswith((".s", ".o"))]
 if inputs and not all(os.path.isfile(path) for path in inputs):
     raise SystemExit("missing input: " + repr(inputs))
+if "-MF" in args:
+    dependency = args[args.index("-MF") + 1]
+    sources = [arg for index, arg in enumerate(args)
+               if index != output_index + 1
+               and arg.endswith((".cc", ".cu", ".s", ".o"))]
+    with open(dependency, "w") as handle:
+        handle.write(output + ": " + " ".join(sources) + "\\n")
 with open(output, "wb") as handle:
     if output.endswith(".post.s"):
         handle.write(b"\\t.text\\n")
@@ -126,6 +138,7 @@ def test_asm_tuner_preserves_a_private_shared_library_output(
     source = tmp_path / "kernel_op.cc"
     source.write_text("int kernel = 1;\n", encoding="utf-8")
     private_output = tmp_path / "kernel_op.so.tmp.123"
+    dependency = tmp_path / "kernel.d.tmp.123"
     result = subprocess.run(
         [
             sys.executable,
@@ -133,6 +146,9 @@ def test_asm_tuner_preserves_a_private_shared_library_output(
             "--cc_path=" + str(fake_compiler),
             str(source),
             "-shared",
+            "-MD",
+            "-MF",
+            str(dependency),
             "-o",
             str(private_output),
         ],
@@ -143,6 +159,8 @@ def test_asm_tuner_preserves_a_private_shared_library_output(
     assert result.returncode == 0, result.stdout
     assert private_output.read_bytes() == b"complete product"
     assert not (tmp_path / "kernel_op.so").exists()
+    assert "kernel_op.cc" in dependency.read_text(encoding="utf-8")
+    assert "kernel_op.s" not in dependency.read_text(encoding="utf-8")
 
 
 def test_dlink_preserves_a_private_shared_library_output(
@@ -150,6 +168,7 @@ def test_dlink_preserves_a_private_shared_library_output(
     source = tmp_path / "kernel_op.cu"
     source.write_text("int kernel = 1;\n", encoding="utf-8")
     private_output = tmp_path / "kernel_op.so.tmp.123"
+    dependency = tmp_path / "kernel.d.tmp.123"
     result = subprocess.run(
         [
             sys.executable,
@@ -157,6 +176,9 @@ def test_dlink_preserves_a_private_shared_library_output(
             str(fake_compiler),
             str(source),
             "-dc",
+            "-MD",
+            "-MF",
+            str(dependency),
             "-o",
             str(private_output),
         ],
@@ -168,3 +190,63 @@ def test_dlink_preserves_a_private_shared_library_output(
     assert (tmp_path / "kernel_op.o").read_bytes() == b"complete product"
     assert private_output.read_bytes() == b"complete product"
     assert not (tmp_path / "kernel_op.so").exists()
+    dep_inputs = dependency.read_text(encoding="utf-8").split(": ", 1)[1]
+    assert "kernel_op.cu" in dep_inputs
+    assert "kernel_op.o" not in dep_inputs
+
+
+def _dependency_entries(key):
+    entries = set()
+    for line in key.read_text(encoding="utf-8").splitlines():
+        match = re.match(r"^# (.*): [0-9a-f]{64}$", line)
+        if match:
+            entries.add(Path(match.group(1)).name)
+    return entries
+
+
+def test_compiler_depfile_owns_the_cache_dependencies(
+        cache_compile_harness, tmp_path):
+    include = tmp_path / "include"
+    include.mkdir()
+    for name in ("quoted.h", "angled.h", "conditional.h", "macro.h",
+                 "inactive.h"):
+        (include / name).write_text("// %s\n" % name, encoding="utf-8")
+    source = tmp_path / "kernel.cc"
+    source.write_text(
+        """
+#include "quoted.h"
+#include <angled.h>
+#if defined(ENABLE_CONDITIONAL)
+#include "conditional.h"
+#endif
+#define MACRO_HEADER "macro.h"
+#include MACRO_HEADER
+#if 0
+#include "inactive.h"
+#endif
+extern "C" int kernel() { return 1; }
+""",
+        encoding="utf-8",
+    )
+    output = tmp_path / "kernel.so"
+    (tmp_path / "obj_files").mkdir()
+    command = "%s -shared -fPIC -DENABLE_CONDITIONAL -I%s %s -o %s" % (
+        os.environ.get("CXX", "g++"), include, source, output)
+    arguments = [
+        str(cache_compile_harness), command, str(tmp_path), str(JITTOR)]
+
+    first = subprocess.run(arguments, text=True, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT)
+    assert first.returncode == 0, first.stdout
+    entries = _dependency_entries(Path(str(output) + ".key"))
+    assert {"quoted.h", "angled.h", "conditional.h", "macro.h"} <= entries
+    assert "inactive.h" not in entries
+    assert Path(str(output) + ".d").is_file()
+
+    cached = subprocess.run(arguments)
+    assert cached.returncode == 65
+    (include / "conditional.h").write_text(
+        "// conditional.h changed\n", encoding="utf-8")
+    rebuilt = subprocess.run(arguments, text=True, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT)
+    assert rebuilt.returncode == 0, rebuilt.stdout

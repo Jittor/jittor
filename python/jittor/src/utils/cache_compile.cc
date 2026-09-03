@@ -149,148 +149,77 @@ void find_names(string cmd, vector<string>& input_names, string& output_name, ma
         << " input_names: " << input_names << "\n" << cmd;
 }
 
-size_t skip_comments(const string& src, size_t i) {
-    if (src[i] == '/' && (i+1<src.size() && src[i+1] == '/')) {
-        size_t j=i+1;
-        while (j<src.size() && src[j] != '\n') j++;
-        if (j<src.size()) j++;
-        return j;
-    } else
-    if (src[i] == '/' && (i+1<src.size() && src[i+1] == '*')) {
-        size_t j=i+1;
-        while (j<src.size() && !(src[j] == '/' && src[j-1] == '*')) j++;
-        if (j<src.size()) j++;
-        return j;
-    }
-    return i;
-}
-
-// Is NAME defined by a -D on this command line?
-//
-// The scanner cannot evaluate the preprocessor, but it can read the one thing
-// that decides most of the conditionals that matter here: what the build is
-// configured with. -DHAS_CUDA is the whole difference between a source's
-// `#include "helper_cuda.h"` being real and being dead text.
-bool macro_defined_on_cmd(const string& cmd, const string& name) {
-    string pattern = "-D" + name;
-    size_t pos = 0;
-    while ((pos = cmd.find(pattern, pos)) != string::npos) {
-        size_t after = pos + pattern.size();
-        bool left = pos == 0 || cmd[pos-1]==' ' || cmd[pos-1]=='"' || cmd[pos-1]=='\'';
-        bool right = after >= cmd.size() || cmd[after]==' ' || cmd[after]=='='
-                  || cmd[after]=='"' || cmd[after]=='\'';
-        if (left && right) return true;
-        pos = after;
-    }
-    return false;
-}
-
-// Scan a source for the headers it includes.
-//
-// It used to do a second, unrelated job as well: find `#ifdef JT_XXX`, look the
-// name up in the environment, and rewrite the compiler command line in place.
-// That coupled "decide the command line", which has to happen before a
-// compile, to "collect dependencies", which the compiler can only report after
-// one -- and while they shared a scanner the compiler's own `-MD -MF` could
-// not be used, because the first cold compile would have gone out without its
-// `-D`. Those flags are now decided in Python from a declared list
-// (`compiler.JT_CONFIG_MACROS`), which is what unblocks replacing the rest of
-// this function with a depfile.
-//
-// `strict` marks each name with whether failing to resolve it is an error.
-// A name is strict only when every enclosing conditional is known to be true
-// -- which in practice means "not inside any conditional" or "inside
-// `#ifdef X` with -DX on the command line". Everything else is best effort:
-// tracked if it can be found, ignored if it cannot.
-//
-// That rule is what replaced two hardcoded exceptions. `helper_cuda.h` and
-// `test.h` were skipped by name because the scanner does not understand
-// `#ifdef`: both are included under conditions that are false in an ordinary
-// build (`#ifdef HAS_CUDA` in 47 files, `#ifdef TEST` here), the include path
-// that would resolve them is only present when those conditions hold, and an
-// unresolvable include was fatal. Skipping them by name also meant that
-// editing `helper_cuda.h` -- included by 47 files -- rebuilt nothing at all.
-//
-// This is still a hand-written approximation of the preprocessor, and asking
-// the compiler for its own dependency list (`-MD -MF`) remains the end state.
-// The coupling that blocked it is gone; what is left is the mechanical work of
-// reading depfiles, plus the wrappers that rewrite the command line by string
-// matching (asm_tuner.py, dlink_compiler.py) and MSVC, which has no -MF.
-void process(string src, vector<string>& input_names, const string& cmd,
-             vector<char>* strict_out) {
-    // 1 = this conditional is known to be true, 0 = we cannot say.
-    vector<char> conds;
-    auto all_known = [&]() {
-        for (char c : conds) if (!c) return false;
-        return true;
-    };
-    for (size_t i=0; i<src.size(); i++) {
-        i = skip_comments(src, i);
-        if (i>=src.size()) break;
-        if (src[i] == '#') {
-            // #include "a.h"
-            // i       jk    l
-            auto j=i+1;
-            while (j<src.size() && (src[j] != ' ' && src[j] != '\"' && src[j] != '\n' && src[j] != '\r')) j++;
-            if (j>=src.size()) return;
-            auto directive = src.substr(i, j-i);
-            // Everything below reads the *argument* of this directive, so it
-            // must not run past the end of the line. `#else` and `#endif` have
-            // no argument: without this bound the scan walked onto the next
-            // line, and `i = l` at the bottom then skipped over whatever
-            // directive was there. An `#endif` immediately followed by
-            // `#ifdef HAS_CUDA` swallowed the `#ifdef`, so the conditional was
-            // never opened and the include inside it looked unconditional.
-            auto eol = j;
-            while (eol < src.size() && src[eol] != '\n') eol++;
-            auto k=src[j] == '\"' ? j : j+1;
-            if (k > eol) k = eol;
-            while (k<eol && src[k] == ' ') k++;
-            auto l=k<eol ? k+1 : eol;
-            while (l<eol && (src[l] != ' ' && src[l] != '\r')) l++;
-            bool has_argument = l > k;
-            if (directive == "#endif") {
-                if (conds.size()) conds.pop_back();
-                i = eol;
-                continue;
-            }
-            if (directive == "#else" || directive == "#elif") {
-                // The branch we are entering is one we did not evaluate.
-                if (conds.size()) conds.back() = 0;
-                i = eol;
-                continue;
-            }
-            if (directive == "#ifdef" || directive == "#ifndef") {
-                auto name = has_argument ? strip(src.substr(k, l-k)) : string();
-                bool defined = macro_defined_on_cmd(cmd, name);
-                // `#ifndef GUARD_H` around a whole header is the common case:
-                // the guard is never on the command line, so the body is
-                // known-live and keeps the error for a missing include.
-                conds.push_back((directive == "#ifdef") == defined ? 1 : 0);
-                i = eol;
-                continue;
-            }
-            if (directive == "#if") {
-                conds.push_back(0);
-                i = eol;
-                continue;
-            }
-            bool quoted = has_argument && src[k] == '"' && src[l-1] == '"';
-            // Angle brackets were not tracked at all, so a project header
-            // included as <...> could be edited without rebuilding anything.
-            // They are resolved against the same search path and simply
-            // ignored when they turn out to be system headers.
-            bool angled = has_argument && src[k] == '<' && src[l-1] == '>';
-            if ((quoted || angled) && directive == "#include") {
-                auto inc = src.substr(k+1, l-k-2);
-                LOGvvvv << "Found include" << inc;
-                input_names.push_back(inc);
-                if (strict_out)
-                    strict_out->push_back(quoted && all_known() ? 1 : 0);
-            }
-            i=eol;
+static vector<string> parse_make_dependencies(const string& source) {
+    size_t colon = string::npos;
+    bool escaped = false;
+    for (size_t i=0; i<source.size(); i++) {
+        if (!escaped && source[i] == ':') {
+            colon = i;
+            break;
         }
+        if (!escaped && source[i] == '\\') escaped = true;
+        else escaped = false;
     }
+    if (colon == string::npos) return {};
+
+    vector<string> dependencies;
+    string token;
+    for (size_t i=colon+1; i<source.size(); i++) {
+        char c = source[i];
+        if (c == '\\' && i+1 < source.size()) {
+            if (source[i+1] == '\n') {
+                i++;
+                continue;
+            }
+            if (source[i+1] == '\r' && i+2 < source.size()
+                    && source[i+2] == '\n') {
+                i += 2;
+                continue;
+            }
+            token += source[++i];
+            continue;
+        }
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+            if (!token.empty()) {
+                dependencies.push_back(token);
+                token.clear();
+            }
+            continue;
+        }
+        token += c;
+    }
+    if (!token.empty()) dependencies.push_back(token);
+    return dependencies;
+}
+
+static vector<string> parse_show_includes(const string& source) {
+    vector<string> dependencies;
+    size_t line_start = 0;
+    while (line_start < source.size()) {
+        size_t line_end = source.find('\n', line_start);
+        if (line_end == string::npos) line_end = source.size();
+        string line = source.substr(line_start, line_end-line_start);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        size_t path_start = string::npos;
+        for (size_t i=0; i+2<line.size(); i++) {
+            bool drive = ((line[i]>='A' && line[i]<='Z') ||
+                          (line[i]>='a' && line[i]<='z')) &&
+                         line[i+1] == ':' &&
+                         (line[i+2] == '\\' || line[i+2] == '/');
+            if (drive) {
+                path_start = i;
+                break;
+            }
+        }
+        if (path_start == string::npos) {
+            auto unc = line.find("\\\\");
+            if (unc != string::npos) path_start = unc;
+        }
+        if (path_start != string::npos)
+            dependencies.push_back(strip(line.substr(path_start)));
+        line_start = line_end + 1;
+    }
+    return dependencies;
 }
 
 static inline void check_win_file(const string& name) {
@@ -315,6 +244,77 @@ static string temporary_name(const string& name) {
     auto pid = getpid();
 #endif
     return name + ".tmp." + std::to_string(pid);
+}
+
+static string add_dependency_flags(const string& cmd, const string& output_name,
+                                   const string& dependency_name, bool msvc) {
+    if (msvc) {
+        // /showIncludes is stdout, not a file option. Keep compiler failures
+        // visible to system_with_check while retaining successful output for
+        // the dependency parser. VSLANG makes the diagnostic text stable, but
+        // parsing below keys on the absolute path rather than the prefix.
+        return "cmd.exe /D /S /C \"set VSLANG=1033&& " + cmd +
+            " /showIncludes > \"" +
+            dependency_name + "\" || (type \"" + dependency_name +
+            "\" & exit /b 1)\"";
+    }
+    auto output_pos = cmd.rfind(output_name);
+    CHECK(output_pos != string::npos) << "Output path not found in command:"
+        << output_name << cmd;
+    auto flag_pos = cmd.rfind(" -o ", output_pos);
+    CHECK(flag_pos != string::npos) << "Output flag not found in command:" << cmd;
+    // Insert before -o. run_and_install deliberately replaces the final
+    // occurrence of output_name; a depfile derived from that name must not
+    // become the occurrence it redirects.
+    return cmd.substr(0, flag_pos) + " -MD -MF \"" + dependency_name +
+        "\"" + cmd.substr(flag_pos);
+}
+
+static vector<string> read_dependencies(const string& dependency_name) {
+    auto source = read_all(dependency_name);
+    if (source.empty()) return {};
+#ifdef _MSC_VER
+    return parse_show_includes(source);
+#else
+    auto dependencies = parse_make_dependencies(source);
+    CHECK(dependencies.size()) << "Could not parse dependency file:"
+        << dependency_name;
+    return dependencies;
+#endif
+}
+
+static string build_cache_key(const string& cmd, vector<string> input_names,
+                              const string& dependency_name) {
+    auto dependencies = read_dependencies(dependency_name);
+    input_names.insert(input_names.end(), dependencies.begin(), dependencies.end());
+    unordered_set<string> processed;
+    string cache_key = cmd + "\n";
+    for (const auto& name : input_names) {
+        if (name.empty() || name == "dynamic_lookup" || processed.count(name))
+            continue;
+        processed.insert(name);
+        // Preserve the historical exclusion for import libraries. Object
+        // files and compiler/wrapper executables remain command inputs and are
+        // hashed even when the compiler does not put them in a depfile.
+        if (name.back() == 'b') continue;
+        cache_key += "# " + name + ": ";
+        if (!file_exist(name)) {
+            cache_key += "missing\n";
+            continue;
+        }
+        cache_key += content_hash(read_all(name)) + "\n";
+    }
+    return cache_key;
+}
+
+static bool expects_dependency_file(const vector<string>& input_names) {
+    for (const auto& name : input_names) {
+        if (endswith(name, ".c") || endswith(name, ".cc") ||
+            endswith(name, ".cpp") || endswith(name, ".cxx") ||
+            endswith(name, ".cu"))
+            return true;
+    }
+    return false;
 }
 
 static void install_file(const string& temporary, const string& destination) {
@@ -366,10 +366,18 @@ static void write_atomically(const string& name, const string& content) {
 // neither can happen: the old inode stays alive for whoever already opened it,
 // and the path flips from one complete product to the next.
 static void run_and_install(const string& cmd, const string& output_name,
-                            const string& tmp_dir) {
+                            const string& tmp_dir,
+                            const string& dependency_temporary,
+                            const string& dependency_name,
+                            bool dependency_required) {
 #ifdef _WIN32
     check_win_file(output_name);
-    system_with_check(cmd.c_str(), tmp_dir.c_str());
+    try {
+        system_with_check(cmd.c_str(), tmp_dir.c_str());
+    } catch (...) {
+        remove(dependency_temporary.c_str());
+        throw;
+    }
 #else
     auto pos = cmd.rfind(output_name);
     if (pos == string::npos) {
@@ -383,6 +391,7 @@ static void run_and_install(const string& cmd, const string& output_name,
         system_with_check(tmp_cmd.c_str(), tmp_dir.c_str());
     } catch (...) {
         remove(tmp_name.c_str());
+        remove(dependency_temporary.c_str());
         throw;
     }
     if (!file_exist(tmp_name)) {
@@ -391,18 +400,21 @@ static void run_and_install(const string& cmd, const string& output_name,
         // system_with_check is a stub and cache_compile writes the output
         // itself. Leave the path exactly as the command left it.
         LOGvv << "no product at" << tmp_name >> ", installed nothing";
-        return;
+    } else {
+        install_file(tmp_name, output_name);
     }
-    install_file(tmp_name, output_name);
 #endif
-}
-
-static inline bool is_full_path(const string& name) {
-#ifdef _WIN32
-    return name.size()>=2 && (name[1]==':' || (name[0]=='\\' && name[1]=='\\'));
-#else
-    return name.size() && name[0]=='/';
+    if (file_exist(dependency_temporary)) {
+        install_file(dependency_temporary, dependency_name);
+#ifndef TEST
+    } else {
+        CHECK(!dependency_required) << "Compiler produced no dependency file:"
+            << dependency_temporary << "\nCommand:" << cmd;
+        // A pure link has no preprocessor input, so GCC legitimately emits no
+        // depfile. Do not retain an older source-compile dependency list.
+        remove(dependency_name.c_str());
 #endif
+    }
 }
 
 bool cache_compile(string cmd, const string& cache_path_, const string& jittor_path_) {
@@ -422,108 +434,29 @@ bool cache_compile(string cmd, const string& cache_path_, const string& jittor_p
     bool ran = false;
     if (file_exist(output_name))
         output_cache_key = read_all(output_name+".key");
-    string cache_key;
-    unordered_set<string> processed;
-    auto src_path = join(jittor_path, "src");
-    const auto& extra_include = extra["I"];
-    string tmp_dir =join(cache_path, "obj_files");
-    for (size_t i=0; i<input_names.size(); i++) {
-        if (processed.count(input_names[i]) != 0)
-            continue;
-        if (input_names[i] == "dynamic_lookup")
-            continue;
-        processed.insert(input_names[i]);
-        auto src = read_all(input_names[i]);
-        #ifdef _WIN32
-        src = _to_winstr(src);
-        #endif
-        auto back = input_names[i].back();
-        // *.lib
-        if (back == 'b') continue;
-        ASSERT(src.size()) << "Source read failed:" << input_names[i] << "cmd:" << cmd;
-        auto hash = content_hash(src);
-        vector<string> new_names;
-        vector<char> new_strict;
-        // Scan only files that belong to this project.
-        //
-        // Now that `<...>` includes are followed, the search reaches system
-        // headers -- `<cuda_fp16.h>` resolves through -I/usr/local/cuda/include.
-        // Those headers include their own private files relative to their own
-        // directory (`#include "detail/__target_macros"`), which this resolver
-        // knows nothing about, so descending into them turned every CUDA
-        // toolkit header into a fatal "include not found". A system header is
-        // still hashed -- upgrading the toolkit should rebuild -- but its
-        // insides are the toolkit's business.
-        // jittor_path, not src_path: extern/ headers are ours too. With
-        // neither root configured there is nothing to be outside of, so scan
-        // everything -- that is the TEST harness and the default arguments.
-        bool in_project = jittor_path.empty() && cache_path.empty();
-        if (!in_project)
-            in_project =
-                (jittor_path.size() &&
-                 input_names[i].compare(0, jittor_path.size(), jittor_path) == 0) ||
-                (cache_path.size() &&
-                 input_names[i].compare(0, cache_path.size(), cache_path) == 0);
-        // *.obj, *.o, *.pyd
-        if (in_project && back != 'j' && back != 'o' && back != 'd')
-            process(src, new_names, cmd, &new_strict);
-        for (size_t n=0; n<new_names.size(); n++) {
-            const auto& name = new_names[n];
-            bool strict = n < new_strict.size() ? new_strict[n] != 0 : true;
-            string full_name;
-            if (name.substr(0, 4) == "jit/" || name.substr(0, 4) == "gen/")
-                full_name = join(cache_path, name);
-            else if (is_full_path(name))
-                full_name = name;
-            else
-                full_name = join(src_path, name);
-            if (!file_exist(full_name)) {
-                bool found = 0;
-                for (const auto& inc : extra_include) {
-                    full_name = join(inc, name);
-                    if (file_exist(full_name)) {
-                        found = 1;
-                        break;
-                    }
-                }
-                if (!found) {
-                    // Not an error unless every enclosing conditional is known
-                    // to hold and the include was quoted. A `<...>` include is
-                    // usually a system header, and a quoted one under an
-                    // `#ifdef` we could not evaluate is text the compiler will
-                    // never see -- `#include "helper_cuda.h"` under
-                    // `#ifdef HAS_CUDA` in a CPU build is exactly that, and
-                    // used to be excluded by name for this reason.
-                    if (!strict) {
-                        LOGvvvv << "Include file" << name
-                            << "not resolved and not required here, skipping";
-                        continue;
-                    }
-                    ASSERT(found) << "Include file" << name << "not found in" << extra_include
-                        >> "\nCommands:" << cmd;
-                }
-                LOGvvvv << "Include file found:" << full_name;
-            }
-            input_names.push_back(full_name);
-        }
-        cache_key += "# ";
-        cache_key += input_names[i];
-        cache_key += ": ";
-        cache_key += hash;
-        cache_key += "\n";
-    }
-    cache_key = cmd + "\n" + cache_key;
-    if (output_cache_key.size() == 0) {
-        LOGvv << "Cache key of" << output_name << "not found.";
-        LOGvvv << "Run cmd:" << cmd;
-        run_and_install(cmd, output_name, tmp_dir);
+    string dependency_name = output_name + ".d";
+    string dependency_temporary = temporary_name(dependency_name);
+    string cache_key = build_cache_key(cmd, input_names, dependency_name);
+    string tmp_dir = join(cache_path, "obj_files");
+    if (output_cache_key != cache_key) {
+        if (output_cache_key.empty())
+            LOGvv << "Cache key of" << output_name << "not found.";
+        else
+            LOGvv << "Cache key of" << output_name << "changed.";
+        remove(dependency_temporary.c_str());
+#ifdef _MSC_VER
+        const bool msvc = true;
+#else
+        const bool msvc = false;
+#endif
+        auto compile_cmd = add_dependency_flags(
+            cmd, output_name, dependency_temporary, msvc);
+        LOGvvv << "Run cmd:" << compile_cmd;
+        run_and_install(compile_cmd, output_name, tmp_dir,
+                        dependency_temporary, dependency_name,
+                        expects_dependency_file(input_names));
         ran = true;
-    }
-    if (output_cache_key.size() != 0 && output_cache_key != cache_key) {
-        LOGvv << "Cache key of" << output_name << "changed.";
-        LOGvvv << "Run cmd:" << cmd;
-        run_and_install(cmd, output_name, tmp_dir);
-        ran = true;
+        cache_key = build_cache_key(cmd, input_names, dependency_name);
     }
     if (output_cache_key != cache_key) {
         LOGvvvv << "Prev cache key" << output_cache_key;
@@ -595,15 +528,6 @@ void test_find_nams_error(string cmd) {
     });
 }
 
-void test_process(string src, vector<string> files) {
-    vector<string> ifiles;
-    string cmd;
-    jittor::jit_compiler::process(src, ifiles, cmd, nullptr);
-    CHECK(files.size() == ifiles.size());
-    for (size_t i=0; i<files.size(); i++)
-        CHECKop(files[i],==,ifiles[i]);
-}
-
 void test_main() {
     using jittor::jit_compiler::cache_compile;
     test_find_names("g++ a.cc b.cc -afdsf -xvs c.o -o asd",
@@ -620,23 +544,32 @@ void test_main() {
     test_find_names("g++ a.cc b.cc -I/a/b -I'/a a/b' -I  'a/ a/' -afdsf -xvs c.o -o asd",
         {"a.cc", "b.cc", "c.o"}, "asd", {{"I",{"/a/b","/a a/b","a/ a/"}}});
     
-    test_process("", {});
-    test_process("#inc <asd>", {});
-    // Angle brackets are tracked now: a project header included as <...> used
-    // to be invisible to the cache. It is resolved against the same search
-    // path and dropped later if it turns out to be a system header.
-    test_process("#include <asd>", {"asd"});
-    test_process("#include \"asd\"", {"asd"});
-    // A conditional whose macro is not on the command line makes what is
-    // inside best-effort rather than fatal -- this is what replaced the
-    // hardcoded "test.h"/"helper_cuda.h" exceptions.
-    test_process("#ifdef HAS_CUDA\n#include \"helper_cuda.h\"\n#endif",
-        {"helper_cuda.h"});
-    test_process("//#include \"asd\"", {});
-    test_process("/*#include \"asd\"*/", {});
-    test_process("#include \"asd\"\n#include \"zxc\"", {"asd", "zxc"});
+    auto deps = jittor::jit_compiler::parse_make_dependencies(
+        "a.o: src/a.cc ex/a\\ b.h \\\n ex/c.h\n");
+    CHECKop(deps.size(),==,3);
+    CHECKop(deps[0],==,"src/a.cc");
+    CHECKop(deps[1],==,"ex/a b.h");
+    CHECKop(deps[2],==,"ex/c.h");
+
+    auto shown = jittor::jit_compiler::parse_show_includes(
+        "Note: including file: C:\\sdk\\a.h\r\n"
+        "prefix \\\\server\\include\\b.h\r\n");
+    CHECKop(shown.size(),==,2);
+    CHECKop(shown[0],==,"C:\\sdk\\a.h");
+    CHECKop(shown[1],==,"\\\\server\\include\\b.h");
+
+    auto dep_cmd = jittor::jit_compiler::add_dependency_flags(
+        "g++ a.cc -o a.o", "a.o", "a.o.d.tmp.1", false);
+    CHECKop(dep_cmd,==,
+        "g++ a.cc -MD -MF \"a.o.d.tmp.1\" -o a.o");
+    auto msvc_cmd = jittor::jit_compiler::add_dependency_flags(
+        "cl a.cc -Fo: a.obj", "a.obj", "a.obj.d.tmp.1", true);
+    CHECK(msvc_cmd.find("cmd.exe /D /S /C \"set VSLANG=1033&& ") == 0);
+    CHECK(msvc_cmd.find(" /showIncludes > \"a.obj.d.tmp.1\"") != string::npos);
     
-    files = {{"src/a.h", "xxx"}, {"src/a.cc", "#include \"a.h\"\nxxx"}};
+    files = {{"src/a.h", "xxx"},
+             {"src/a.cc", "#include \"a.h\"\nxxx"},
+             {"a.o.d", "a.o: src/a.cc src/a.h\n"}};
     CHECK(cache_compile("echo src/a.cc -o a.o"));
     CHECK(files.count("a.o.key"));
     CHECK(!cache_compile("echo src/a.cc -o a.o"));
@@ -647,13 +580,12 @@ void test_main() {
     CHECK(cache_compile("echo src/a.cc -ff -o a.o"));
 
     // test include
-    files = {{"ex/a.h", "xxx"}, {"src/a.cc", "#include \"a.h\"\nxxx"}};
+    files = {{"ex/a.h", "xxx"},
+             {"src/a.cc", "#include \"a.h\"\nxxx"},
+             {"a.o.d", "a.o: src/a.cc ex/a.h\n"}};
     CHECK(cache_compile("echo src/a.cc -Iex -o a.o"));
     CHECK(files.count("a.o.key"));
     CHECK(files["a.o.key"].find("ex/a.h") >= 0);
-    expect_error([&]() {
-        cache_compile("echo src/a.cc -o a.o");
-    });
 }
 
 #endif
