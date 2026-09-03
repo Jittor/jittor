@@ -124,14 +124,11 @@ static void parse_reg(const string& src,
     }
 }
 
-int token_replace(vector<string>& tokens, int i, const string& src, const string& dst, bool match_whitespace) {
-    if (!(src.at(0) != '$' && src.at(src.size()-1) != '$' && 
-        src.at(src.size()-2) != '$')) {
-        LOGe << "illegal src:" << src;
-        LOGf << "illegal src:" << src;
-    }
-    ASSERT(src.at(0) != '$' && src.at(src.size()-1) != '$' && 
-        src.at(src.size()-2) != '$') << "illegal src:" << src;
+static int try_token_replace(vector<string>& tokens, int i, const string& src,
+                             const string& dst, bool match_whitespace) {
+    CHECK(src.size() && src.front() != '$' && src.back() != '$' &&
+          (src.size() < 2 || src[src.size()-2] != '$'))
+        << "illegal src:" << src;
     vector<string> patterns;
     vector<int> arg_id;
     vector<string> patterns2;
@@ -145,24 +142,30 @@ int token_replace(vector<string>& tokens, int i, const string& src, const string
     int match_i, match_pos;
     string c_arg;
 
-    auto next = [&tokens](int &c_i, int &c_pos) {
-        c_pos ++;
-        if (c_pos >= tokens[c_i].size()) {
+    auto normalize = [&tokens](int &c_i, int &c_pos) {
+        while (c_i < tokens.size() && c_pos >= tokens[c_i].size()) {
             c_pos = 0;
             c_i ++;
-            if (c_i >= tokens.size())
-                return false;
         }
-        return true;
+        return c_i < tokens.size();
+    };
+
+    auto next = [&normalize](int &c_i, int &c_pos) {
+        c_pos ++;
+        return normalize(c_i, c_pos);
     };
 
     auto match = [&](int c_i, int c_pos, const string& pat) -> bool {
         for (int i=0; i<pat.size(); i++) {
-            while (!match_whitespace && isspace(tokens[c_i][c_pos])) 
-                next(c_i, c_pos);
+            if (!normalize(c_i, c_pos)) return false;
+            while (!match_whitespace &&
+                   isspace(static_cast<unsigned char>(tokens[c_i][c_pos]))) {
+                if (!next(c_i, c_pos)) return false;
+            }
             if (tokens[c_i][c_pos] != pat[i])
                 return false;
-            next(c_i, c_pos);            
+            if (i + 1 < pat.size() && !next(c_i, c_pos)) return false;
+            if (i + 1 == pat.size()) next(c_i, c_pos);
         }
         match_i = c_i;
         match_pos = c_pos;
@@ -171,7 +174,7 @@ int token_replace(vector<string>& tokens, int i, const string& src, const string
 
     for (int j=0; j<patterns.size(); j++) {
         int ok = 0;
-        while (c_i < tokens.size()) {
+        while (normalize(c_i, c_pos)) {
             while (c_pos < tokens[c_i].size()) {
                 if (match(c_i, c_pos, patterns[j])) {
                     ok = 1;
@@ -184,7 +187,7 @@ int token_replace(vector<string>& tokens, int i, const string& src, const string
             c_i ++;
             c_pos = 0;
         }
-        CHECK(ok) << "Pattern not match:" << patterns[j] << j;
+        if (!ok) return -1;
         if (j == 0) {
             start_i = c_i;
             start_pos = c_pos;
@@ -196,8 +199,13 @@ int token_replace(vector<string>& tokens, int i, const string& src, const string
         c_i = match_i;
         c_pos = match_pos;
         if (j == patterns.size()-1) {
-            end_i = c_i;
-            end_pos = c_pos;
+            if (c_i == tokens.size()) {
+                end_i = tokens.size()-1;
+                end_pos = tokens.back().size();
+            } else {
+                end_i = c_i;
+                end_pos = c_pos;
+            }
         }
     }
     string new_src;
@@ -218,6 +226,12 @@ int token_replace(vector<string>& tokens, int i, const string& src, const string
     return end_i;
 }
 
+int token_replace(vector<string>& tokens, int i, const string& src, const string& dst, bool match_whitespace) {
+    int end_i = try_token_replace(tokens, i, src, dst, match_whitespace);
+    CHECK(end_i >= 0) << "Pattern not match:" << src;
+    return end_i;
+}
+
 string token_replace(const string& s, const string& src, const string& dst, bool match_whitespace) {
     vector<string> ss{s};
     token_replace(ss, 0, src, dst, match_whitespace);
@@ -228,12 +242,9 @@ string token_replace_all(const string& s, const string& src, const string& dst) 
     auto ss = token_split(s);
     int pos = 0;
     while (pos < ss.size()) {
-        try {
-            pos = token_replace(ss, pos, src, dst) + 1;
-        } 
-        catch(const std::exception& e) {
-            return join(ss, "");
-        }
+        int end_i = try_token_replace(ss, pos, src, dst, true);
+        if (end_i < 0) break;
+        pos = end_i + 1;
     }
     return join(ss, "");
 }
