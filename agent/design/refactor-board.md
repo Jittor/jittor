@@ -206,7 +206,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 0.11 | 「jit_utils 已更新请重跑」改非零退出码 | 已合并 | 构建 | 7e8c7c74 |
 | 0.12 | 14 处在用例里裸赋值 `jt.flags.*` 且无 tearDown 的测试改 `flag_… | 已合并 | gates | 26a20905 |
 | 0.13 | conftest 的模式由显式环境变量决定，删除 `sys.argv` 嗅探 | 已合并 | gates | 5c0f2364、a4ebb31a。**日常影响**：手跑 `tests/structure`、`tests/compat/torch`、`tests/ops/test_ops.py` 等 `TORCH_MODE_PATHS` 下的路径要带 `JITTOR_TORCH_SHIM=1`，不带会得到一条指名变量的报错（而不是一次语义不对的绿）。`nox -s structure` 已经自己设了 |
-| 0.14 | `_session_env` 不再 `os.environ.copy()` | 待领 | | |
+| 0.14 | `_session_env` 不再 `os.environ.copy()` | 已合并 | gates | 6b8fb594。未声明宿主变量显式屏蔽，工具链/下载入口按白名单透传；OMP/MKL/OpenBLAS 等线程池固定并随 worker 缩放，子进程 probe 断言线程数与 CPU affinity。聚焦结构 18 passed，真实 nox probe 在受限 affinity 下通过 |
 | 0.15 | 门禁分两层 | 待领 | | d957e4aa、9329c4f9、9f6a80c7、2fd26522 已合入：按实测慢文件拆出 smoke/full、并行度单点声明、PR smoke job 与 JIT cache 已接入。当前真实 smoke 为 390 s、预算模型为 446 s，均未达到原验收的 5 分钟；还需减少或降低约 90 s 的有效测试工作量，不能靠扩大排除清单假达标 |
 | 0.16 | `test_device_parity.py` 按算子分片并行，不再在 `setUpClass`… | 已合并 | gates | 120b004b。实测结论与原方案相反：4-worker 只快 6% 且 26 项丢 3 个结论，因此保留单进程；只移除错误的串行编译器强制关闭。后续真正压缩时长另见 0.22 |
 | 0.17 | `pyproject.toml` 的 `pythonpath` 改由 conftest 按环境变… | 已合并 | 构建 | b19d098f |
@@ -458,16 +458,16 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 9.23 | `run_child_script(timeout=N)` 不收孙进程 | 已合并 | bindings | 17e43c9a（进程组 + `os.killpg` + 有界 drain）。**更正**：任务描述里"`communicate()` 继续等"在 CPython 3.11 上不成立（3.11 的 `subprocess.run` 超时后只 kill+wait，不重新 drain，已实测）；稳定复现的是整棵子孙进程留存，默认 `timeout=600` 的用例因此要等满 10 分钟才失败 |
 | 10.01 | `tools/run_test_suite.py` 拆成 `nox -s full` 周期性调度… | 待领 | | |
 | 10.02 | 默认 `nox` 含 cpu 数值测试，或把默认改名为 static | 待领 | | |
-| 10.03 | optional/rocm/mpi/nccl 四个 session 排上 runner 或在文档… | 待领 | | |
-| 10.04 | 假绿清理 | 待领 | | |
+| 10.03 | optional/rocm/mpi/nccl 四个 session 排上 runner 或在文档… | 已合并 | gates | a1668aca。CUDA 可由维护者添加 `ci:cuda` 标签触发 PR 真机门禁；当前 runner 能力不覆盖 optional 依赖、ROCm、MPI 与双卡 NCCL，四项在测试支持矩阵中明确为 Manual，结构规则防文档/调度漂移。相关结构 22 passed |
+| 10.04 | 假绿清理 | 已合并 | gates | 74cace5f。6 个首行 `return` 改严格预期失败并登记，4 个 `skipIf(True)` 清零；两条内存契约用短循环 RSS 上限进入 slow 层，负向自测证明真实保留会失败；AST 全树规则禁止复发。内存 2 passed，规则/负向 9 passed，旧禁用项 3 xfailed、4 prerequisite-skipped |
 | 10.05 | 按 skip 原因分桶统计并在 CI summary 输出，对「本环境应能跑却 skip」设阈值 | 待领 | | |
 | 10.06 | `expect_error` 带 `exc_type` 与 `match` | 待领 | | |
 | 10.07 | Unary/Binary/Reduction 用 `OpDTypes.supported` | 待领 | | |
 | 10.08 | 已复现缺陷用 `xfail` 而非 `skip` | 待领 | | |
 | 10.09 | 公开 API 与 OpInfo 差集作为 structure 门禁一项 | 待领 | | |
-| 10.10 | gradcheck 加「故意写错导数应当失败」的负向自测 | 待领 | | |
+| 10.10 | gradcheck 加「故意写错导数应当失败」的负向自测 | 已合并 | gates | 3e83594d。故意把平方的 backward 写成 `3*x`，`gradcheck` 必须抛 `Jacobian mismatch`；定向 1 passed，相关结构 15 passed |
 | 10.11 | 设备对拍加 dtype 轴 | 待领 | | |
-| 10.12 | `retry` 装饰器记录并上报重试次数 | 待领 | | |
+| 10.12 | `retry` 装饰器记录并上报重试次数 | 已合并 | gates | 402d09ef。恢复成功与最终失败均报告准确 retries/attempts，并暴露调用、最近和累计重试计数；保留原异常并支持 kwargs。聚焦结构 8 passed |
 | 10.13 | marker 真正建立 `-m "not slow"` 快门禁或删除 | 待领 | | |
 | 10.14 | notebook 门禁按 topic 参数化 | 待领 | | |
 | 10.15 | 速度 harness 记录并断言两侧线程数、亲和掩码与精度策略 | 待领 | | |
