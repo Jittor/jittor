@@ -688,6 +688,47 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         np.testing.assert_allclose(
             mean_keep.numpy(), np.mean(values, axis=1, keepdims=True), rtol=1e-6)
 
+    def test_mv_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.mv))
+        self.assertIs(torch.mv, numerical.mv)
+        self.assertEqual(numerical.mv.__module__, numerical.__name__)
+        self.assertEqual(numerical.mv.__name__, "mv")
+
+    def test_mv_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.mv")
+        self.assertIs(record.implementation, numerical.mv)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("out", record.detail)
+        self.assertIn("device", record.detail)
+
+    def test_mv_cpu_value_out_identity_and_var_delegate_match_numpy(self):
+        matrix = np.array([[1.0, 2.0], [3.0, 4.0]], dtype="float32")
+        vector = np.array([2.0, -1.0], dtype="float32")
+        expected = np.matmul(matrix, vector)
+        with torch.flag_scope(use_cuda=0):
+            matrix_tensor = torch.array(matrix)
+            vector_tensor = torch.array(vector)
+            actual = torch.mv(matrix_tensor, vector_tensor)
+            out = torch.zeros(2)
+            returned = torch.mv(matrix_tensor, vector_tensor, out=out)
+            method = matrix_tensor.mv(vector_tensor)
+        np.testing.assert_allclose(actual.numpy(), expected, rtol=1e-6)
+        self.assertIs(returned, out)
+        np.testing.assert_allclose(out.numpy(), expected, rtol=1e-6)
+        np.testing.assert_allclose(method.numpy(), expected, rtol=1e-6)
+
+    def test_mv_invalid_rank_and_size_raise(self):
+        with torch.flag_scope(use_cuda=0):
+            with self.assertRaisesRegex(RuntimeError, "expected a 2-D"):
+                torch.mv(torch.ones((1, 2, 3)), torch.ones(3))
+            with self.assertRaisesRegex(RuntimeError, "size mismatch"):
+                torch.mv(torch.ones((2, 3)), torch.ones(2))
+
 
 if __name__ == "__main__":
     unittest.main()

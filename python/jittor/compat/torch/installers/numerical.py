@@ -625,6 +625,41 @@ register_fidelity(
 )
 
 
+_MV_FIDELITY_DETAIL = (
+    "matches Torch matrix-vector values, shape checks, and out identity for "
+    "supported real tensors but omits device, layout, and dtype keyword semantics"
+)
+
+
+def _mv_impl(input, vec, out=None):
+    if input.ndim != 2 or vec.ndim != 1:
+        raise RuntimeError(
+            "mv: expected a 2-D matrix and a 1-D vector, got "
+            f"{input.ndim}-D and {vec.ndim}-D tensors")
+    if input.shape[1] != vec.shape[0]:
+        raise RuntimeError(
+            "mv: size mismatch, matrix has %s columns but vector has %s elements"
+            % (input.shape[1], vec.shape[0]))
+    result = jt.matmul(input, vec)
+    if out is not None:
+        out.assign(result)
+        return out
+    return result
+
+
+def mv(input, vec, out=None):
+    """Multiply a matrix by a vector, optionally writing into ``out``."""
+    return _mv_impl(input, vec, out=out)
+
+
+register_fidelity(
+    "torch.mv",
+    mv,
+    Fidelity.APPROXIMATE,
+    _MV_FIDELITY_DETAIL,
+)
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
@@ -1017,21 +1052,7 @@ def install(ctx):
 
     # ---- torch.* ops used by mmdetection (additive aliases) ----
     _alias("mm", lambda input, mat2, out=None: jt.matmul(input, mat2))   # 2-D matmul
-    def _mv(input, vec, out=None):
-        if input.ndim != 2 or vec.ndim != 1:
-            raise RuntimeError(
-                f"mv: expected a 2-D matrix and a 1-D vector, got "
-                f"{input.ndim}-D and {vec.ndim}-D tensors")
-        if input.shape[1] != vec.shape[0]:
-            raise RuntimeError(
-                f"mv: size mismatch, matrix has {input.shape[1]} columns but "
-                f"vector has {vec.shape[0]} elements")
-        result = jt.matmul(input, vec)
-        if out is not None:
-            out.assign(result)
-            return out
-        return result
-    _alias("mv", _mv)
+    _alias("mv", mv)
     _alias("masked_select", lambda input, mask, out=None: input[mask])   # -> 1-D selected
     _alias("split_with_sizes",
            lambda input, split_sizes, dim=0: input.split(split_sizes, dim))
