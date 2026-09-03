@@ -58,6 +58,17 @@ E   SystemExit: 0
 这**不是**你的改动有问题：jittor 重新生成了 `jit_utils` 之后要求换一个新进程。
 **原样重跑同一条命令**即可。不要因为这个去改代码。
 
+同一类的第二种假失败：**rebase 之后 `tests/compiler/test_cache_dependencies.py` 会红
+一次**。它断言同一个头文件在所有缓存条目里记的哈希一致，而 rebase 会带进别人对
+`var.h` 这类头文件的改动，缓存里还留着 rebase 之前记录的条目：
+
+```
+AssertionError: 'a6e2...' != 'e6e1...' : .../python/jittor/src/var.h
+```
+
+看起来像自己的改动破坏了缓存依赖，其实 `rm -rf $JITTOR_HOME/.cache` 重跑就绿。
+**判据**：失败指向的是一个你没碰过的头文件，且你刚 rebase 过。
+
 ## 5. 静默错值的复现判据
 
 C++ 核心里的"静默算错"分两类，各有一个能一眼定性的判据：
@@ -139,6 +150,26 @@ dump 脚本按分区放在自己的 `$TMPDIR` 下，不要提交；把 diff 摘�
 另外：dump 脚本里的数值断言不要只写 `rtol`。`a - mean(a)` 这类结果贴着零，
 `np.allclose(x, y, rtol=1e-4)` 会失败，看起来像"改动把值算错了"，其实是少写了 `atol`。
 
+### 想让代码生成"更快"之前，先量它在首次编译里占多少
+
+代码生成器里的重复工作看起来很刺眼（Jittor 一次编译会把整个 pass pipeline 跑**两遍**，
+每遍都从生成的 C++ 文本重新解析），但它和 g++/nvcc 不在一个量级。动手重构之前先量
+一遍——两句 `std::chrono` 加一条 `LOGvvv` 就够，用
+`log_capture_scope(log_v=0, log_vprefix="tuner_manager=1000")` 取出来，和**首次执行的
+墙钟**一起看。2026-09 在这棵树上实测：
+
+    元素级 CPU   parse 72us   passes 627us   to_string 38us    首次执行 1012ms
+    matmul CPU   parse 366us  passes 3824us  to_string 170us   首次执行 2080ms
+                 （第二遍：parse 169us passes 63us to_string 23us）
+    元素级 CUDA  parse 63us   passes 822us   to_string 61us    首次执行 3871ms
+
+**整条 pipeline 占首次执行的 0.04%–0.22%**，其余全是编译器。结论：「省掉第二次解析」
+这类改法收益是 0.008% 量级，代价却是给 IR 引入一条 father/scope 指针容易出错的复原
+路径——不值得。**把量出来的数写进提交说明**，下一个人看到同一段"明显的浪费"时就不用
+再量一次。
+
+判据：改代码生成器的性能之前，先回答"它占首次编译的百分之几"。答不上来就先去量。
+
 ### 顺带会查出来的东西：「它对，但对的原因是别人恰好不动它」
 
 代码生成器里有大量跨 pass 的隐式约定（谁先跑、谁设了哪个 attr、生成的语句
@@ -151,6 +182,30 @@ dump 脚本按分区放在自己的 `$TMPDIR` 下，不要提交；把 diff 摘�
 
 这类发现**比修复本身值钱**，务必写进提交说明：写清依赖的前提、今天由谁兜底、
 以及你的改动是消除了这个依赖还是只是搬了个位置。
+
+## 7bis. 一次改几百处的机械替换：先逐文件 `-fsyntax-only`，再整体重编
+
+把一个字符串字面量契约换成具名常量或 enum（属性名、节点类型），一次会动几百处、跨
+几十个文件。整体重编要几十秒，而且只报第一批错误；逐个文件做语法检查快得多，一次能
+看到全部问题：
+
+```bash
+CFG=$(ls -d $JITTOR_HOME/.cache/jittor/*/*/*/*/*/*/default/cfg* | head -1)   # 生成的头文件在这里
+for f in $(find python/jittor/src/opt -name '*.cc'); do
+  out=$(g++ $f -std=c++14 -fPIC -march=native \
+        -I python/jittor/src -I python/jittor/extern \
+        -I <python include> -I "$CFG" -O0 -fsyntax-only 2>&1 | grep error)
+  [ -n "$out" ] && { echo "### $f"; echo "$out" | head -4; }
+done
+```
+
+两个会咬人的地方：
+
+- 用正则改构造函数时，**别假设 `Cls() : Base("x") {}` 后面没有别的初始化列表**。
+  `Cls() : Base("x"), n_(0) {};` 会被改成语法错误的 `Base("x"){...}, n_(0) {};`。
+  正则要写成 `Cls\(\)\s*:\s*Base\("[^"]*"\)(?:\s*,[^{;]*)?\s*\{\s*\}`。
+- 替换完之后**必须做一次生成结果的逐字节比对**（见 §7）。纯改名的话 60 份 dump 应当
+  一份不差；差了就说明替换动到了语义。
 
 ## 7. 给 UB 和「只是不该这么写」的改动写修前失败的测试
 
