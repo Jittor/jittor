@@ -9,6 +9,7 @@
 #include "ops/device_copy_op.h"
 #include "ops/op_register.h"
 #include "misc/cuda_flags.h"
+#include "misc/cuda_streams.h"
 #include "mem/swap.h"
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
@@ -54,23 +55,6 @@ void DeviceCopyOp::jit_prepare(JK& jk) {
     // No generated kernel: run() issues the copy itself.
 }
 
-#ifdef HAS_CUDA
-// One reusable event per device, recorded on that device's default stream.
-// An event belongs to the device it was created on, so it is created with
-// that device current.
-static cudaEvent_t device_event(int device) {
-    static vector<cudaEvent_t> events;
-    if ((int)events.size() <= device) events.resize(device+1, nullptr);
-    if (!events[device]) {
-        int prev = current_device();
-        if (prev != device) set_current_device(device);
-        checkCudaErrors(cudaEventCreateWithFlags(&events[device], cudaEventDisableTiming));
-        if (prev >= 0 && prev != device) set_current_device(prev);
-    }
-    return events[device];
-}
-#endif
-
 void DeviceCopyOp::run() {
     if (device < 0) {
         if (!y->allocator->is_cuda()) {
@@ -111,30 +95,24 @@ void DeviceCopyOp::run() {
             return;
         }
         if (src == dst) {
-            checkCudaErrors(cudaMemcpyAsync(y->mem_ptr, x->mem_ptr, x->size, cudaMemcpyDeviceToDevice, 0));
+            auto stream = cuda_side_stream(CUDA_COPY_STREAM, dst);
+            cuda_side_stream_wait_default(CUDA_COPY_STREAM, dst, src);
+            checkCudaErrors(cudaMemcpyAsync(y->mem_ptr, x->mem_ptr, x->size,
+                                           cudaMemcpyDeviceToDevice, stream));
+            cuda_default_stream_wait_side(CUDA_COPY_STREAM, dst, dst);
             return;
         }
         enable_peer_access(src, dst);
-        // Each device drives its own default stream, and the two are not
-        // ordered against each other by anything. So:
-        //   1. record on src, after the kernels that produced x;
-        //   2. have dst's stream wait for that before the copy -- otherwise
-        //      the copy reads x while it is still being written;
-        //   3. record on dst after the copy and have src's stream wait for
-        //      it, so x's block cannot be recycled into another kernel while
-        //      the copy is still reading it.
-        // cudaMemcpyPeer would give the ordering for free by being
-        // synchronous, at the price of draining both pipelines on every move.
-        auto ev_src = device_event(src), ev_dst = device_event(dst);
-        set_current_device(src);
-        checkCudaErrors(cudaEventRecord(ev_src, 0));
+        // The destination copy stream waits for the source's computation;
+        // both default streams then wait for the copy before either side can
+        // consume the result or reuse the source block.
+        auto stream = cuda_side_stream(CUDA_COPY_STREAM, dst);
+        cuda_side_stream_wait_default(CUDA_COPY_STREAM, dst, src);
         set_current_device(dst);
-        checkCudaErrors(cudaStreamWaitEvent(0, ev_src, 0));
-        checkCudaErrors(cudaMemcpyAsync(y->mem_ptr, x->mem_ptr, x->size, cudaMemcpyDefault, 0));
-        checkCudaErrors(cudaEventRecord(ev_dst, 0));
-        set_current_device(src);
-        checkCudaErrors(cudaStreamWaitEvent(0, ev_dst, 0));
-        set_current_device(dst);
+        checkCudaErrors(cudaMemcpyAsync(y->mem_ptr, x->mem_ptr, x->size,
+                                       cudaMemcpyDefault, stream));
+        cuda_default_stream_wait_side(CUDA_COPY_STREAM, dst, dst);
+        cuda_default_stream_wait_side(CUDA_COPY_STREAM, dst, src);
         return;
     }
     #endif

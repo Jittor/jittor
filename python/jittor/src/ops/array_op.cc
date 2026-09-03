@@ -16,12 +16,13 @@
 #include "var.h"
 #include "ops/array_op.h"
 #include "misc/cuda_flags.h"
+#include "misc/cuda_streams.h"
 #include "mem/allocator.h"
 #include "mem/swap.h"
 
 namespace jittor {
 
-#ifdef HAS_CUDA
+#ifdef IS_ACL
 #pragma GCC visibility push(hidden)
 namespace array_local {
 cudaStream_t stream;
@@ -126,14 +127,19 @@ void ArrayOp::run() {
     #ifdef HAS_CUDA
     if (allocation.allocator == &cuda_dual_allocator) {
         auto host_ptr = cuda_dual_allocator.get_dual_allocation(allocation.allocation).host_ptr;
+        #ifdef IS_CUDA
+        int device = output->device_id;
+        auto copy_stream = cuda_side_stream(CUDA_COPY_STREAM, device);
+        checkCudaErrors(cudaMemcpyAsync(
+            allocation.ptr, host_ptr, allocation.size, cudaMemcpyHostToDevice,
+            copy_stream));
+        cuda_default_stream_wait_side(CUDA_COPY_STREAM, device, device);
+        #else
         checkCudaErrors(cudaMemcpyAsync(
             allocation.ptr, host_ptr, allocation.size, cudaMemcpyHostToDevice, stream));
         checkCudaErrors(cudaEventRecord(event, stream));
-        #ifdef IS_ACL
         // ACL kernels run on aclstream rather than CUDA's default stream.
         checkCudaErrors(cudaStreamWaitEvent(aclstream, event, 0));
-        #else
-        checkCudaErrors(cudaStreamWaitEvent(0, event, 0));
         #endif
         // delay free this allocation
         allocation.allocator = &delay_free;

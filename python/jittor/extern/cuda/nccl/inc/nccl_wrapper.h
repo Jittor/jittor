@@ -33,6 +33,8 @@ namespace jittor {
 // nccl_dtype() below takes a NanoString; in the JT_NCCL_NO_MPI build we do not
 // pull in mpi_wrapper.h, so include it here rather than rely on that path.
 #include "misc/nano_string.h"
+#include "misc/cuda_flags.h"
+#include "misc/cuda_streams.h"
 
 // helper_cuda.h guards this overload behind `#ifdef NCCL_H_`, so it only appears
 // when nccl.h was included BEFORE it. Its own include guard makes the include
@@ -49,6 +51,19 @@ namespace jittor {
 void nccl_shutdown();
 EXTERN_LIB ncclUniqueId id;
 EXTERN_LIB int nccl_device_id;
+
+inline cudaStream_t nccl_stream_begin() {
+    int device = current_device();
+    cuda_side_stream_wait_default(
+        CUDA_COMMUNICATION_STREAM, device, device);
+    return cuda_side_stream(CUDA_COMMUNICATION_STREAM, device);
+}
+
+inline void nccl_stream_end() {
+    int device = current_device();
+    cuda_default_stream_wait_side(
+        CUDA_COMMUNICATION_STREAM, device, device);
+}
 
 /**
 Map a jittor dtype to the NCCL datatype used to send it.

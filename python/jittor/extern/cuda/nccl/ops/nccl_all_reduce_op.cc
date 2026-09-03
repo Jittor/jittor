@@ -49,9 +49,11 @@ void NcclAllReduceOp::jit_run() {
     // nccl_wrapper.cc (see misc/collective_dtype.h).
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
+    auto stream = nccl_stream_begin();
     checkCudaErrors(ncclAllReduce(
         xp, yp, y->num, nccl_dtype(x->dtype()), ncclSum,
-        nccl_process_group_comm(group_id), 0));
+        nccl_process_group_comm(group_id), stream));
+    nccl_stream_end();
 }
 
 #endif

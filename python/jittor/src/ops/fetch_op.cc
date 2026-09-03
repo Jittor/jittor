@@ -11,6 +11,7 @@
 #include "helper_cuda.h"
 #include <mutex>
 #include "misc/cuda_flags.h"
+#include "misc/cuda_streams.h"
 #include "mem/allocator/sfrl_allocator.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "event_queue.h"
@@ -25,33 +26,6 @@ namespace jittor {
 
 #pragma GCC visibility push(hidden)
 namespace fetcher_local {
-
-cudaStream_t stream;
-cudaEvent_t event;
-// `event` only orders the fetch stream *after* the default stream. The other
-// direction is missing: the staging copies below read the source vars on the
-// fetch stream, and those vars are released as soon as the next run_sync
-// clears fetcher_to_free -- which it does *before* any device sync. Nothing
-// records that a copy is still in flight, so the blocks come straight back out
-// of the free list and the next kernels overwrite them mid-copy. The fix is to
-// hold a reference on the source blocks (see FetchOp::run); this event is the
-// fallback for allocators that cannot express one block with two owners.
-cudaEvent_t copy_done_event;
-
-// `event` is recorded on the *source* device's default stream, so there has
-// to be one per device: an event belongs to the device it was created on and
-// cannot be recorded on another device's stream. `stream` and
-// copy_done_event stay single -- the staging buffers all come from
-// cuda_dual_device_allocator, which is device 0's pool, and a stream may
-// legally wait on another device's event and copy across devices under UVA.
-static vector<cudaEvent_t> events;
-
-static void fetch_switch_device(int device) {
-    if ((int)events.size() <= device) events.resize(device+1, nullptr);
-    if (!events[device])
-        checkCudaErrors(cudaEventCreate(&events[device], cudaEventDisableTiming));
-    event = events[device];
-}
 
 volatile int64 n_to_fetch;
 std::mutex m;
@@ -69,10 +43,7 @@ static void to_fetch(CUDA_HOST_FUNC_ARGS) {
 struct Init {
 Init() {
     if (!get_device_count()) return;
-    checkCudaErrors(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
-    checkCudaErrors(cudaEventCreate(&copy_done_event, cudaEventDisableTiming));
-    add_device_switch_hook(fetch_switch_device);
-    // stream = aclstream;
+    cuda_side_stream(CUDA_COPY_STREAM, 0);
 }
 ~Init() {
     if (!get_device_count()) return;
@@ -80,12 +51,6 @@ Init() {
     for (auto& f : fetch_tasks)
         f.func.deleter = nullptr;
     peekCudaErrors(cudaDeviceSynchronize());
-    peekCudaErrors(cudaStreamDestroy(stream));
-    for (auto e : events)
-        if (e) peekCudaErrors(cudaEventDestroy(e));
-    events.clear();
-    event = nullptr;
-    peekCudaErrors(cudaEventDestroy(copy_done_event));
 }
 } ;
 
@@ -101,7 +66,7 @@ list<VarPtr> fetcher_to_free;
 FetchOp::FetchOp(vector<Var*>&& inputs, FetchFunc&& func) 
 : fetch_vars(inputs), func(move(func)) {
     #ifdef HAS_CUDA
-    // stream needs to be created after nccl plugin
+    // Side streams are lazy so CUDA is initialized before they are created.
     static Init init_fetch;
     #endif
     VarPtr vp(0, ns_int32);
@@ -117,6 +82,7 @@ FetchOp::FetchOp(vector<Var*>&& inputs, FetchFunc&& func)
         }
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);
+    set_flag(OpFlags::_manual_device);
     flags.set(NodeFlags::_fetch);
     flags.set(NodeFlags::_stop_grad);
     fetcher_iter->ptr->flags.set(NodeFlags::_fetch);
@@ -148,6 +114,8 @@ void FetchOp::run() {
     // Devices this fetch read from, and the device to come back to.
     uint64 src_devices = 0;
     int entry_device = current_device();
+    int copy_device = 0;
+    auto copy_stream = cuda_side_stream(CUDA_COPY_STREAM, copy_device);
     event_queue.flush();
     #endif
     LOGvvvv << "fetch" << fetch_vars.size() << "vars" << fetch_vars;
@@ -166,8 +134,8 @@ void FetchOp::run() {
                 if (src != current_device()) set_current_device(src);
                 if (src < 64) src_devices |= 1ull << src;
             }
-            checkCudaErrors(cudaEventRecord(event, 0));
-            checkCudaErrors(cudaStreamWaitEvent(stream, event, 0));
+            cuda_side_stream_wait_default(
+                CUDA_COPY_STREAM, copy_device, src);
             new (&allocation) Allocation(&cuda_dual_allocator, v->size);
             // mostly device to device
             // This staging copy is the only read of the source var's own
@@ -175,13 +143,13 @@ void FetchOp::run() {
             // which is why the two legs are separate loops now.
             #if IS_CUDA
             checkCudaErrors(cudaMemcpyAsync(
-                allocation.ptr, v->mem_ptr, v->size, cudaMemcpyDefault, stream));
+                allocation.ptr, v->mem_ptr, v->size, cudaMemcpyDefault, copy_stream));
             // checkCudaErrors(cudaMemcpyAsync(
             //     allocation.ptr, v->size, v->mem_ptr, v->size, cudaMemcpyDefault, aclstream));
             // checkCudaErrors(aclrtSynchronizeStream(aclstream));
             #else
             checkCudaErrors(cudaMemcpyAsync(
-                allocation.ptr, v->mem_ptr, v->size, cudaMemcpyDeviceToDevice, stream));
+                allocation.ptr, v->mem_ptr, v->size, cudaMemcpyDeviceToDevice, copy_stream));
             #endif
             // The copy is queued, not done. Keep the source block reserved
             // until this fetch task is destroyed, which happens after the host
@@ -214,13 +182,12 @@ void FetchOp::run() {
             // handed out mid-copy is to hold the default stream back until the
             // staging copies have run. Recorded before the device-to-host leg
             // so at least the PCIe transfers stay off the critical path.
-            checkCudaErrors(cudaEventRecord(copy_done_event, stream));
             // Hold back the default stream of every device the sources came
             // from, not only whichever one happens to be current.
             for (int d = 0; d < 64; d++) {
                 if (!((src_devices >> d) & 1)) continue;
-                if (d != current_device()) set_current_device(d);
-                checkCudaErrors(cudaStreamWaitEvent(0, copy_done_event, 0));
+                cuda_default_stream_wait_side(
+                    CUDA_COPY_STREAM, copy_device, d);
             }
         }
         for (uint j=0; j<allocations.size(); j++) {
@@ -231,7 +198,7 @@ void FetchOp::run() {
                 allocation.allocation).host_ptr;
             // device to host
             checkCudaErrors(cudaMemcpyAsync(host_ptr, allocation.ptr,
-                allocation.size, cudaMemcpyDeviceToHost, stream));
+                allocation.size, cudaMemcpyDeviceToHost, copy_stream));
             // checkCudaErrors(aclrtMemcpyAsync(
             //     host_ptr, v->size, allocation.ptr, v->size, cudaMemcpyDeviceToHost, aclstream));
             // checkCudaErrors(aclrtSynchronizeStream(aclstream));
@@ -242,7 +209,7 @@ void FetchOp::run() {
         for (auto& p : pinned)
             allocations.emplace_back(move(p));
         fetch_tasks.push_back({move(func), move(allocations), move(arrays)});
-        checkCudaErrors(_cudaLaunchHostFunc(stream, &to_fetch, 0));
+        checkCudaErrors(_cudaLaunchHostFunc(copy_stream, &to_fetch, 0));
         if (entry_device >= 0 && entry_device != current_device())
             set_current_device(entry_device);
     } else

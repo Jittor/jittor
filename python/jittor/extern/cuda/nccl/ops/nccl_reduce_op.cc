@@ -47,9 +47,11 @@ void NcclReduceOp::jit_run() {
     // nccl_wrapper.cc (see misc/collective_dtype.h).
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
+    auto stream = nccl_stream_begin();
     checkCudaErrors(ncclReduce(
         xp, yp, y->num, nccl_dtype(x->dtype()), ncclSum, root,
-        nccl_process_group_comm(group_id), 0));
+        nccl_process_group_comm(group_id), stream));
+    nccl_stream_end();
     // See mpi_reduce_op.cc for why the non-root output stays full-size and
     // deterministic rather than being shrunk or aliased away: every rank must
     // run the same graph. Its contents are meaningless by definition; zero is
