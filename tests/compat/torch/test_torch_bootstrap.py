@@ -563,6 +563,74 @@ class TestTorchBootstrap(unittest.TestCase):
         self.assertEqual(environ["JITTOR_TORCH_PROJECT_ROOT"], result.project_root)
         self.assertEqual(environ["JITTOR_TORCH_RUNTIME_ROOT"], result.runtime_root)
 
+    def _preflight_env(self, directory, **extra):
+        environ = {"HOME": directory, "JITTOR_TORCH_SHIM": "1",
+                   "JITTOR_TORCH_KEEP_CUDA": "1"}
+        environ.update(extra)
+        return environ
+
+    def test_a_single_rank_process_leaves_nccl_off(self):
+        from jittor.compat.shim.preflight import prepare_import_environment
+
+        with tempfile.TemporaryDirectory(dir=str(_TEST_STATE_ROOT)) as directory:
+            environ = self._preflight_env(directory)
+            prepare_import_environment(argv=["-c"], environ=environ)
+        self.assertEqual(environ["use_nccl"], "0")
+
+    def test_a_rank_of_a_multi_rank_job_turns_nccl_on(self):
+        from jittor.compat.shim.preflight import prepare_import_environment
+
+        with tempfile.TemporaryDirectory(dir=str(_TEST_STATE_ROOT)) as directory:
+            environ = self._preflight_env(directory, OMPI_COMM_WORLD_SIZE="2")
+            prepare_import_environment(argv=["-c"], environ=environ)
+        self.assertEqual(environ["use_nccl"], "1")
+
+    def test_a_ranks_nccl_is_not_decided_by_the_process_that_launched_it(self):
+        # preflight runs on every `import jittor`, writes into os.environ, and
+        # os.environ is inherited. A single-rank launcher (a pytest session,
+        # say) that defaults use_nccl=0 for itself used to hand its mpirun
+        # ranks an *explicit* "0", so a setdefault in the rank was a no-op and
+        # every FSDP2 shard gather failed -- switched off by a process that was
+        # not part of the job.
+        from jittor.compat.shim.preflight import prepare_import_environment
+
+        with tempfile.TemporaryDirectory(dir=str(_TEST_STATE_ROOT)) as directory:
+            launcher = self._preflight_env(directory)
+            prepare_import_environment(argv=["-c"], environ=launcher)
+            self.assertEqual(launcher["use_nccl"], "0")
+
+            rank = dict(launcher)          # exactly what the child inherits
+            rank["OMPI_COMM_WORLD_SIZE"] = "2"
+            prepare_import_environment(argv=["-c"], environ=rank)
+        self.assertEqual(rank["use_nccl"], "1")
+
+    def test_an_explicit_use_nccl_is_never_overruled(self):
+        # The marker says "preflight wrote this"; a value the user set carries
+        # none, so neither direction may be reconsidered.
+        from jittor.compat.shim.preflight import prepare_import_environment
+
+        with tempfile.TemporaryDirectory(dir=str(_TEST_STATE_ROOT)) as directory:
+            off = self._preflight_env(directory, use_nccl="0",
+                                      OMPI_COMM_WORLD_SIZE="2")
+            prepare_import_environment(argv=["-c"], environ=off)
+            self.assertEqual(off["use_nccl"], "0")
+
+            on = self._preflight_env(directory, use_nccl="1")
+            prepare_import_environment(argv=["-c"], environ=on)
+        self.assertEqual(on["use_nccl"], "1")
+
+    def test_a_rank_variable_is_not_read_as_a_world_size(self):
+        # PMIX_RANK is set by every PMIx launcher including `mpirun -np 1`, and
+        # it carries the rank, not the size: reading it as "more than one rank"
+        # turns NCCL on for single-process runs.
+        from jittor.compat.shim.preflight import prepare_import_environment
+
+        with tempfile.TemporaryDirectory(dir=str(_TEST_STATE_ROOT)) as directory:
+            environ = self._preflight_env(directory, PMIX_RANK="0",
+                                          OMPI_COMM_WORLD_SIZE="1")
+            prepare_import_environment(argv=["-c"], environ=environ)
+        self.assertEqual(environ["use_nccl"], "0")
+
     def test_shim_environment_trigger_is_reported_as_environment(self):
         from jittor.compat.shim.preflight import prepare_import_environment
 

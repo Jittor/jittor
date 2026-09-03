@@ -329,6 +329,80 @@ def configure_runtime_driver_lib(runtime, environ=None):
     env.setdefault("TRITON_LIBCUDA_PATH", os.fspath(lib_dir))
 
 
+#: Environment variables a launcher sets to say how many ranks it started:
+#: Open MPI (``mpirun``), MPICH and Slurm, jittor's own MPI-free rendezvous,
+#: and torchrun. Every one of them carries a *size*; ``PMIX_RANK`` and friends
+#: are deliberately absent because a rank cannot answer "how many are there".
+_WORLD_SIZE_ENV = (
+    "OMPI_COMM_WORLD_SIZE",
+    "PMI_SIZE",
+    "JT_NCCL_WORLD_SIZE",
+    "WORLD_SIZE",
+)
+
+#: Written next to ``use_nccl`` whenever *preflight* chose its value, holding
+#: the value it chose. See :func:`_choose_nccl`.
+_NCCL_CHOSEN_BY_SHIM = "JITTOR_TORCH_SHIM_CHOSE_NCCL"
+
+
+def _launched_with_multiple_ranks(env):
+    """Whether this process is one rank of a multi-rank job.
+
+    Read from the environment because it has to be answered *before* the core
+    is imported -- `use_nccl` is consumed once, by `setup_nccl()`, during that
+    import. `jt.world_size` does not exist yet here.
+    """
+    for name in _WORLD_SIZE_ENV:
+        raw = env.get(name)
+        if raw is None:
+            continue
+        try:
+            if int(str(raw).strip()) > 1:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def _choose_nccl(env):
+    """Decide ``use_nccl`` for *this* process, overruling only our own default.
+
+    NCCL belongs to an explicitly configured distributed run -- and being
+    started by a launcher with more than one rank IS that configuration.
+
+    Two things make this harder than a `setdefault`.
+
+    *It has to be decided here.* ``compile_extern.setup_nccl()`` reads
+    ``use_nccl`` exactly once, during ``import jittor``, and the one place that
+    used to set it back to "1" (``installers/distributed.py``) runs *after*
+    that import. So under ``import jittor as torch`` there was no way to reach
+    NCCL at all: every FSDP2 shard gather raised "Jittor NCCL all_gather is not
+    available", on every rank, always. Turning NCCL on later, from inside a
+    collective, initialises a communicator underneath a graph that is already
+    executing, and the next matmul dies with CUBLAS_STATUS_EXECUTION_FAILED.
+
+    *A default written into ``os.environ`` is inherited by every child.* This
+    function runs on every ``import jittor``, in the launching process as well
+    as in the ranks. A single-rank launcher that writes ``use_nccl=0`` for
+    itself hands the ranks it then starts under ``mpirun`` an *explicit* "0" --
+    at which point a `setdefault` in the rank is a no-op and multi-rank FSDP2
+    is off again, having been switched off by a process that was never part of
+    the job. That is not hypothetical: it is why the FSDP2 multi-rank test
+    failed while the same script run straight under ``mpirun`` passed.
+
+    So the value we write is stamped with the marker below, and we may
+    reconsider a value only when the marker says we are the ones who wrote it.
+    A user's own ``use_nccl=...`` carries no marker and is left exactly alone.
+    """
+    wanted = "1" if _launched_with_multiple_ranks(env) else "0"
+    current = env.get("use_nccl")
+    if current is not None and env.get(_NCCL_CHOSEN_BY_SHIM) != current:
+        return current
+    env["use_nccl"] = wanted
+    env[_NCCL_CHOSEN_BY_SHIM] = wanted
+    return wanted
+
+
 def prepare_import_environment(
     argv=None,
     environ=None,
@@ -384,22 +458,25 @@ def prepare_import_environment(
     env["JITTOR_TORCH_PROJECT_ROOT"] = os.fspath(project)
     env["JITTOR_TORCH_RUNTIME_ROOT"] = os.fspath(runtime)
     # The optional accelerator externs below stay off: measurements on cuDNN and
-    # cuBLAS show no benefit from cuTT or CUTLASS for the shim's workloads, and
-    # NCCL belongs to an explicitly configured distributed run.
+    # cuBLAS show no benefit from cuTT or CUTLASS for the shim's workloads.
     #
     # oneDNN is deliberately NOT in that list. Turning it off removes the
     # `mkl_conv` and `mkl_matmul` relays, so every CPU convolution falls back to
     # the generic reindex kernel: a 4x64x32x32 conv went from 1.4ms to 156ms and
     # a 512x512 matmul from 0.6ms to 11ms. That made ordinary CPU inference under
     # `import torch` unusable, which is the opposite of what the shim is for.
-    for name, value in (
+    defaults = [
         ("JITTOR_TORCH_SHIM", "1"),
         ("FIX_TORCH_ERROR", "0"),
         ("DISABLE_MULTIPROCESSING", "1"),
         ("use_cutt", "0"),
         ("use_cutlass", "0"),
-        ("use_nccl", "0"),
-    ):
+    ]
+    # `use_nccl` is not in that list: unlike the others its right value depends
+    # on how *this* process was launched, so it cannot be inherited from the
+    # process that started us. See _choose_nccl.
+    _choose_nccl(env)
+    for name, value in defaults:
         env.setdefault(name, value)
     for name, subdir in (
         ("JITTOR_HOME", "jittor_cache"),

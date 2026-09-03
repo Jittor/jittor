@@ -49,20 +49,42 @@ def _in_true_distributed():
 
 
 def _nccl_ops():
+    """NCCL, setting it up on demand if this is a real multi-rank CUDA job.
+
+    The shim's preflight used to default ``use_nccl=0`` unconditionally, and
+    ``compile_extern.setup_nccl()`` reads that variable once, during ``import
+    jittor``. The only other place setting it back (installers/distributed.py)
+    runs after that import. So under ``import jittor as torch`` NCCL was always
+    absent and every FSDP2 shard gather raised "Jittor NCCL all_gather is not
+    available": FSDP2 could not run multi-rank in torch mode at all.
+
+    That is fixed where it belongs -- shim/preflight.py now leaves NCCL on when
+    the launcher says there is more than one rank, before the core loads.
+    """
     try:
         ops = getattr(jt.compile_extern, "nccl_ops", None)
         if ops is not None:
             return ops
-        if os.environ.get("JT_NCCL_WORLD_SIZE") is not None:
-            os.environ.setdefault("use_nccl", "1")
-            setup = getattr(jt.compile_extern, "setup_nccl", None)
-            if callable(setup):
-                setup()
-            return getattr(jt.compile_extern, "nccl_ops", None)
+        if os.environ.get("JT_NCCL_WORLD_SIZE") is None:
+            return None
+        # Only the MPI-free rendezvous is set up from here, and only because
+        # that launcher sets its variable after the shim's preflight has run.
+        # NCCL is otherwise decided in shim/preflight.py, *before* the core is
+        # imported, which is the only safe place: `setup_nccl()` reads
+        # `use_nccl` once during that import, and initialising a communicator
+        # any later -- from inside a collective, underneath a graph that is
+        # already executing -- kills the next matmul with
+        # CUBLAS_STATUS_EXECUTION_FAILED.
+        os.environ.setdefault("use_nccl", "1")
+        setup = getattr(jt.compile_extern, "setup_nccl", None)
+        if callable(setup):
+            setup()
+        return getattr(jt.compile_extern, "nccl_ops", None)
     except EXPECTED as exc:
-        swallowed("collectives.py _nccl_ops: ops = getattr(jt.compile_extern, 'nccl_ops', None)", exc)
+        swallowed("collectives.py _nccl_ops: setting NCCL up for a %d-rank "
+                  "CUDA job" % _world_size(), exc,
+                  "the sharded collectives will refuse instead of running")
         return None
-    return None
 
 
 def _slice_flat(flat, start, length):
@@ -124,3 +146,4 @@ def _broadcast_from_rank0(var):
             "broadcast to the %d ranks it was launched with." % _world_size())
     var.assign(var.mpi_broadcast())
     return var
+
