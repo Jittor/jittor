@@ -330,8 +330,7 @@ void SetitemOp::jit_run() {
     if (ns.get(GetitemOp::_inplace) &&
         // array op may move the data allocation, double check
         // affect test_contrib.pu 
-        in->allocator == data->allocator &&
-        in->allocation == data->allocation)
+        in->shares_allocation_with(data))
         return;
 
     // This is a scatter, so unlike getitem the nest cannot simply be collapsed:

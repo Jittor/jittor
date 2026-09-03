@@ -510,8 +510,7 @@ void GetitemOp::jit_run() {
     auto out = outputs().front();
     if (out->num == 0) return;
     if (ns.get(GetitemOp::_inplace) &&
-        in->allocator == out->allocator &&
-        in->allocation == out->allocation)
+        in->shares_allocation_with(out))
         return;
 
     @for(i, 0, ODIM, index_t oshape@i = o_shape[@i];)

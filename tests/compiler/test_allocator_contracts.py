@@ -11,10 +11,14 @@ combination below is needed and how to add a new one.
 """
 import gc
 import unittest
+from pathlib import Path
 
 import numpy as np
 
 import jittor as jt
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Allocator stacks that reach a different alloc() implementation.  The default
 # (SFRL over the raw allocator) hides every bug in the raw allocators because
@@ -28,6 +32,15 @@ ALLOCATOR_FLAGS = (
 
 
 class TestAllocatorContracts(unittest.TestCase):
+
+    def test_inplace_ops_use_the_explicit_share_relation(self):
+        for relative in (
+                "python/jittor/src/ops/getitem_op.cc",
+                "python/jittor/src/ops/setitem_op.cc"):
+            source = (REPO_ROOT / relative).read_text(encoding="utf-8")
+            self.assertIn(
+                "shares_allocation_with", source,
+                f"{relative} still infers aliasing from allocator handles")
 
     def _getitem_roundtrip(self, name, flags):
         with jt.flag_scope(**flags):

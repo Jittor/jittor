@@ -86,6 +86,17 @@ struct Var : Node {
     inline void share_with(Var* x, size_t offset = 0) { CHECK_EXIST; share_src = x; share_offset = offset; }
     // Whether alloc() still owes this var an aliased buffer.
     inline bool is_sharing() const { CHECK_EXIST; return share_src != nullptr; }
+    // Whether two distinct vars are members of the same established share ring.
+    inline bool shares_allocation_with(const Var* other) const {
+        CHECK_EXIST;
+        if (!other || other == this || !share_next) return false;
+        auto* member = share_next;
+        while (member != this) {
+            if (member == other) return true;
+            member = member->share_next;
+        }
+        return false;
+    }
 };
 
 // Maintain the share ring described above. Linking happens once, in

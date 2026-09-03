@@ -9,6 +9,7 @@
 #include "mem/allocator/aligned_allocator.h"
 #include "mem/allocator/nfef_allocator.h"
 #include "mem/allocator/sfrl_allocator.h"
+#include "var.h"
 
 namespace jittor {
 
@@ -44,6 +45,31 @@ JIT_TEST(allocator_alloc_writes_allocation) {
     void* p = nfef.alloc(1024, allocation);
     ASSERTop(allocation, ==, (size_t)p);
     nfef.free(p, 1024, allocation);
+}
+
+JIT_TEST(var_share_relation_is_explicit) {
+    VarPtr a({4}, "float32");
+    VarPtr b({4}, "float32");
+    VarPtr c({4}, "float32");
+
+    // Equal allocator handles do not make independent Var objects aliases.
+    a->allocator = b->allocator = &aligned_allocator;
+    a->allocation = b->allocation = 7;
+    ASSERT(!a->shares_allocation_with(b.ptr));
+
+    // The share ring is authoritative even if allocator metadata differs.
+    share_group_link(a.ptr, b.ptr);
+    b->allocator = nullptr;
+    b->allocation = 99;
+    ASSERT(a->shares_allocation_with(b.ptr));
+    ASSERT(b->shares_allocation_with(a.ptr));
+    ASSERT(!a->shares_allocation_with(a.ptr));
+    ASSERT(!a->shares_allocation_with(c.ptr));
+
+    // Membership is transitive across a ring with more than two vars.
+    share_group_link(b.ptr, c.ptr);
+    ASSERT(a->shares_allocation_with(c.ptr));
+    ASSERT(c->shares_allocation_with(a.ptr));
 }
 
 // The allocation table is a process-wide static that used to be created with
