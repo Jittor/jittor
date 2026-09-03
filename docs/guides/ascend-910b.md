@@ -473,3 +473,7 @@ execution. The SWhere owner is outside this slice.
 The ACL Range owner uses the shared launcher while retaining scalar creation,
 cleanup, and synchronous execution. Scalar cleanup on exceptional exits is
 outside this migration slice.
+
+The ACL Dropout forward owner uses the shared launcher while retaining its
+probability, training, seed, offset, and dual-output handling. Dropout backward
+is intentionally outside this slice.

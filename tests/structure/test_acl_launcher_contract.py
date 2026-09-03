@@ -25,6 +25,7 @@ FLIP_SOURCE = ROOT / "python/jittor/extern/acl/aclops/flip_op_acl.cc"
 CONCAT_SOURCE = ROOT / "python/jittor/extern/acl/aclops/concat_op_acl.cc"
 WHERE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/where_op_acl.cc"
 RANGE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/index_op_acl.cc"
+DROPOUT_SOURCE = ROOT / "python/jittor/extern/acl/aclops/dropout_op_acl.cc"
 GATHER_SOURCE = ROOT / "python/jittor/extern/acl/aclops/gather_scatter_op_acl.cc"
 
 
@@ -263,6 +264,20 @@ def test_range_uses_launcher_and_keeps_scalar_lifecycle():
     assert "checkRet(ret);" not in range_source
     assert "mallocWorkSpace(workspaceSize)" not in range_source
     assert "syncRun();" not in range_source
+
+
+def test_dropout_forward_uses_launcher_and_backward_remains_present():
+    source = DROPOUT_SOURCE.read_text()
+    forward = source[source.index("void DropoutOpRunner::executeOp"):source.index("DropoutBackwardOpRunner::DropoutBackwardOpRunner")]
+    assert "attr->p" in forward
+    assert "attr->train" in forward
+    assert "attr->seed" in forward
+    assert "attr->offset" in forward
+    assert "launch(ret, aclnnDropout, true);" in forward
+    assert "checkRet(ret);" not in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void DropoutBackwardOpRunner::executeOp" in source
 
 
 def test_scatter_uses_launcher_and_keeps_axis_reduction_query():
