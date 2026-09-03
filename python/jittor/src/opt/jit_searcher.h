@@ -10,6 +10,8 @@
 namespace jittor {
 
 DECLARE_FLAG(int, jit_search_kernel);
+DECLARE_FLAG(int, jit_search_timeout);
+DECLARE_FLAG(int, jit_search_max_candidates);
 
 struct Searcher {
     OpCompiler* oc;
