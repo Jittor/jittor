@@ -90,7 +90,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 执行器 | — |  |
 | 代码生成 | — |  |
 | 类型与日志 | coreops (6.C01/05/06/07/09/30) | GPU3 c24-35 |
-| 内存 | mem (6.C10–6.C21，全部已合并) | GPU2 c12-23 |
+| 内存 | — |  |
 | 绑定 | bindings (6.C02/22/23/24/25/27/28/29) | GPU0 c0-11 |
 | Python 核心 | — |  |
 | Python 算子 | — |  |
@@ -321,7 +321,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 6.C11 | CPU 分配失败抛异常，返回值必须检查 | 已合并 | mem | `a683274e` |
 | 6.C12 | `cuda_device_allocator.cc:32-37` 的 managed 回退放到 … | 已合并 | mem | `e48c52c2` |
 | 6.C13 | 零字节分配不返回伪指针 `0x10` | 已合并 | mem | `b8b978e1` |
-| 6.C14 | SFRL | 已合并 | mem | `a0da8374` |
+| 6.C14 | SFRL | 待领 | | `a0da8374` 已合入前两项：SFRL 映射表清零并在 free/share_with 解引用前校验，五个分配器写回 allocation；仍需把 `getitem_op.cc` 与 `setitem_op.cc` 的别名判断改为显式 share 关系 |
 | 6.C15 | `migrate_to_cpu/gpu` 迁移前检查 share_with 关系，整组迁移或拒绝 | 已合并 | mem | `7e223483`。Var 加共享环（`share_prev/share_next`），migrate 看到环就整组搬走并保持相对偏移。顺带两条：`ArrayOp::run()` 绕过 `free_var_mem` 换内存要自己摘环；裸分配器表达不了共享，新增 `Allocator::can_share()`，为假时退回旧行为**并告警**（不再静默断开） |
 | 6.C16 | fetch 跨流 | 已合并 | mem | `9095484b`。**修法与任务行不同**：不是「记 event 让默认流等」——副流本来就在等默认流，再让默认流等副流等于取消掉异步重叠（`test_memcopy_overlap` 那条性能断言测的正是它）。改成在源块上多持一份引用直到主机回调之后；event 栅栏降级为 `can_share()` 为假时的兜底 |
 | 6.C17 | `TempAllocator` 删遮蔽基类的 `used_memory`/`unused_mem… | 已合并 | mem | `4357c8bb` |
