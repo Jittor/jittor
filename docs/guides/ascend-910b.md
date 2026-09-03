@@ -445,6 +445,10 @@ The ACL ClampTensor family uses the shared launcher while retaining its three
 input query and synchronous execution policy. This remains source-only until
 the Ascend 910B3 probe is run.
 
+The ACL Stack family uses the shared launcher while retaining tensor-list setup,
+dimension handling, and synchronous execution. Tensor-list lifetime cleanup is
+outside this migration slice.
+
 These flags are diagnostic and slow execution. Remove them after locating the
 failing operation. For general JIT and memory diagnostics, see
 {doc}`debugging`.
