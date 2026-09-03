@@ -14,7 +14,7 @@
 | 用例 | 症状 |
 | --- | --- |
 | `tests/compat/torch/test_torch_compat.py` | `RandomOp` 子进程段错误 |
-| `tests/data/test_dataset.py::TestDatasetSeed::test_children_died` | **worker 被杀之后 Dataset 不快速退出。** 子脚本 `dataset.workers[0].p.kill()` 之后，父进程应当收到 SIGCHLD 并 quick exit（用例断言 stderr 里有 `SIGCHLD` 与 `quick exit`），实测父进程一直阻塞到子进程超时。单独跑、空闲机器上稳定复现，起点 `9eb696d9` 同样失败（前任两步回退确认）。现已 `xfail(strict=True)`，仍然每轮跑、仍然可见，但不再让门禁整体变红；修好的那天 strict 会把它变红提示删标记 |
+| `tests/data/test_dataset.py::TestDatasetSeed::test_children_died` | **worker 被杀之后 Dataset 不快速退出。** 子脚本 `dataset.workers[0].p.kill()` 之后，父进程应当收到 SIGCHLD 并 quick exit（用例断言 stderr 里有 `SIGCHLD` 与 `quick exit`），实测父进程一直阻塞到子进程超时。单独跑、空闲机器上稳定复现，起点 `9eb696d9` 同样失败（前任两步回退确认）。现已 `xfail(strict=True)`，仍然每轮跑、仍然可见，但不再让门禁整体变红；修好的那天 strict 会把它变红提示删标记。**2026-09-03 补充（bindings，做 507a0f1f 时查清）**：这一条与「worker 抛异常后父进程挂死」是**同一个洞的两半**。抛异常那半已修（worker 写好错误后 `buffer.stop()` 再推 id，父进程两处阻塞都能被叫醒）。这一条是 `p.kill()`：SIGKILL 的 worker 跑不到任何 Python 收尾代码，不写共享槽、不 stop、不推队列，而父进程阻塞在 `RingBuffer::pop` 里**握着 GIL**（`py_ring_buffer.cc` 全文没有 `Py_BEGIN_ALLOW_THREADS`），所以 Python 看门狗线程也跑不了。真正的修法是让这两个阻塞调用释放 GIL 并带超时（核心 C++ 改动，需单独立项）；**不要**退回旧的「SIGCHLD → 父进程 quick exit」，那是 6.C31 拆掉的无声消失 |
 | `tests/core/test_array.py::TestArray::test_memcopy_overlap` | **墙钟阈值型 flake，非回归。** 断言是 `t2-t1 < 0.010`——「重叠版比纯计算版慢不超过 10 毫秒」，一条**绝对**墙钟阈值。机器常驻十几个 agent、负载 24 时它必然超。两个分区各自独立确认：内存分区在**未打补丁的树**上跑两次失败，绑定分区独立得出同一结论。**归责方向和真回归相反**：真回归查代码，这条查负载 |
 | `tests/compiler/test_atomic_tuner.py::TestAtomicTunerClass::test_atomic_tuner` | 第 4 项 `x.sum()+x.sqr().mean()` 期望两条 `atomictuner: move atomicAdd to loop -1`，实得 0 条。根因是 `032ecfe1`（2026-08-28，起点前 202 个提交）把 CUDA 全量归约改走 `nn/backends/full_reduce_cuda.py` 的 cub 两级折叠 code op，整条全归约不再进融合算子 JIT，AtomicTunerPass 根本看不到 atomic 语句。前三项 add/max/min（reindex_reduce）在起点与起点父提交上都通过 |
 
@@ -230,8 +230,8 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 2.12 | 打破 `Executor ⇄ VarHolder` include 环 | 待领 | | |
 | 2.13 | 执行相关全局状态 | 待领 | | |
 | 2.14 | `src/misc/` 拆散 | 待领 | | |
-| 2.15 | NanoString | 待领 | | |
-| 2.16 | 类型提升表 | 待领 | | |
+| 2.15 | NanoString | 已合并 | bindings | 9d5ed413（索引位宽 7→8、static_assert 把表与字段绑住、`ns_check_registration` 在注册期查索引与名字长度；"dtype 表改运行期注册"那半未做，见提交说明） |
+| 2.16 | 类型提升表 | 已合并 | bindings | d821c34a（int_dtype_promote 提升格；标量按 `_is_scalar` 标志认，不再按形状；float 标量把整数张量提到默认 float dtype） |
 | 2.17 | 算子身份用注册期整型 id | 待领 | | |
 | 2.18 | 算子注册表惰性初始化 | 待领 | | |
 | 2.19 | 错误分两档 | 待领 | | |
@@ -451,6 +451,8 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 9.19 | 布局收尾 | 待领 | | |
 | 9.20 | asm_tuner 非原子写 .s，并发编译读到截断汇编 | 待领 | | |
 | 9.21 | 拆掉手写预处理器最后一块：process() 双职责分离 + depfile | 待领 | | |
+| 9.22 | 并发编译同一个算子读到写了一半的 `.so` | 待领 | | |
+| 9.23 | `run_child_script(timeout=N)` 不收孙进程 | 已合并 | bindings | 17e43c9a（进程组 + `os.killpg` + 有界 drain）。**更正**：任务描述里"`communicate()` 继续等"在 CPython 3.11 上不成立（3.11 的 `subprocess.run` 超时后只 kill+wait，不重新 drain，已实测）；稳定复现的是整棵子孙进程留存，默认 `timeout=600` 的用例因此要等满 10 分钟才失败 |
 | 10.01 | `tools/run_test_suite.py` 拆成 `nox -s full` 周期性调度… | 待领 | | |
 | 10.02 | 默认 `nox` 含 cpu 数值测试，或把默认改名为 static | 待领 | | |
 | 10.03 | optional/rocm/mpi/nccl 四个 session 排上 runner 或在文档… | 待领 | | |
