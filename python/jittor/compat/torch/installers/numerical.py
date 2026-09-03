@@ -856,6 +856,25 @@ register_fidelity(
 )
 
 
+_SPLIT_WITH_SIZES_FIDELITY_DETAIL = (
+    "matches Torch split sizes and values for supported real tensors but omits "
+    "device, layout, and dtype keyword semantics"
+)
+
+
+def split_with_sizes(input, split_sizes, dim=0):
+    """Split a tensor into chunks with the requested sizes."""
+    return input.split(split_sizes, dim)
+
+
+register_fidelity(
+    "torch.split_with_sizes",
+    split_with_sizes,
+    Fidelity.APPROXIMATE,
+    _SPLIT_WITH_SIZES_FIDELITY_DETAIL,
+)
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
@@ -1239,8 +1258,7 @@ def install(ctx):
     _alias("mm", mm)
     _alias("mv", mv)
     _alias("masked_select", masked_select)
-    _alias("split_with_sizes",
-           lambda input, split_sizes, dim=0: input.split(split_sizes, dim))
+    _alias("split_with_sizes", split_with_sizes)
     _alias("_shape_as_tensor",
            lambda input: jt.array(np.asarray(input.shape, dtype=np.int64)))
     def _nan_to_num_inplace(input, nan=0.0, posinf=None, neginf=None):

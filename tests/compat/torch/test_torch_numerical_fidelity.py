@@ -1000,6 +1000,39 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         np.testing.assert_allclose(actual.numpy(), expected, rtol=1e-6)
         np.testing.assert_allclose(method.numpy(), expected, rtol=1e-6)
 
+    def test_split_with_sizes_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.split_with_sizes))
+        self.assertIs(torch.split_with_sizes, numerical.split_with_sizes)
+        self.assertEqual(numerical.split_with_sizes.__module__, numerical.__name__)
+        self.assertEqual(numerical.split_with_sizes.__name__, "split_with_sizes")
+
+    def test_split_with_sizes_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.split_with_sizes")
+        self.assertIs(record.implementation, numerical.split_with_sizes)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("device", record.detail)
+        self.assertIn("dtype", record.detail)
+
+    def test_split_with_sizes_cpu_shapes_values_and_var_split_match_numpy(self):
+        values = np.arange(12, dtype="float32").reshape(3, 4)
+        sizes = [1, 3]
+        expected = [values[:, :1], values[:, 1:]]
+        with torch.flag_scope(use_cuda=0):
+            values_tensor = torch.array(values)
+            actual = torch.split_with_sizes(values_tensor, sizes, dim=1)
+            method = values_tensor.split(sizes, dim=1)
+        self.assertEqual(len(actual), 2)
+        self.assertEqual(len(method), 2)
+        for got, got_method, want in zip(actual, method, expected):
+            self.assertEqual(tuple(got.shape), want.shape)
+            np.testing.assert_allclose(got.numpy(), want, rtol=1e-6)
+            np.testing.assert_allclose(got_method.numpy(), want, rtol=1e-6)
+
 
 if __name__ == "__main__":
     unittest.main()
