@@ -3,6 +3,7 @@
 import math
 
 import jittor as jt
+from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
 
 from ._cuda_inference import cached_source, device_index, on_acl
 
@@ -30,7 +31,8 @@ def _rms_norm_contract(x, gamma, epsilon, residual=None):
         return None
     if residual is not None and not isinstance(residual, jt.Var):
         return None
-    if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
+    if not (jt.flags.use_cuda and not _output_requires_grad(
+            x, gamma, residual)):
         return None
     if on_acl():
         return None
@@ -120,7 +122,8 @@ def _rms_norm_cuda(x, gamma, epsilon=1e-6):
         "threads": threads,
         "warps": warps,
     })
-    return jt.code(x.shape, x.dtype, [x, gamma], cuda_src=cuda_src)
+    return _stop_grad_outputs(
+        jt.code(x.shape, x.dtype, [x, gamma], cuda_src=cuda_src))
 
 
 def _fused_add_rms_norm_cuda(x, residual, gamma, epsilon=1e-6):
@@ -180,10 +183,10 @@ def _fused_add_rms_norm_cuda(x, residual, gamma, epsilon=1e-6):
         "threads": threads,
         "warps": warps,
     })
-    return jt.code(
+    return _stop_grad_outputs(jt.code(
         [x.shape, x.shape], [x.dtype, x.dtype], [x, residual, gamma],
         cuda_src=cuda_src,
-    )
+    ))
 
 
 def multihead_rms_norm_cuda(x, gamma, scale=None, min_norm=1e-12):
@@ -197,7 +200,7 @@ def multihead_rms_norm_cuda(x, gamma, scale=None, min_norm=1e-12):
     """
     if not isinstance(x, jt.Var) or not isinstance(gamma, jt.Var):
         return None
-    if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
+    if not (jt.flags.use_cuda and not _output_requires_grad(x, gamma)):
         return None
     if on_acl():
         return None
@@ -279,7 +282,8 @@ def multihead_rms_norm_cuda(x, gamma, scale=None, min_norm=1e-12):
             "rows_per_block": rows_per_block,
             "scale": scale_value,
         })
-        return jt.code(x.shape, x.dtype, [x, gamma], cuda_src=cuda_src)
+        return _stop_grad_outputs(
+            jt.code(x.shape, x.dtype, [x, gamma], cuda_src=cuda_src))
 
     threads = 32
     while threads < min(head_dim, 1024):
@@ -336,7 +340,8 @@ def multihead_rms_norm_cuda(x, gamma, scale=None, min_norm=1e-12):
         "scale": scale_value,
         "threads": threads,
     }
-    return jt.code(x.shape, x.dtype, [x, gamma], cuda_src=cuda_src)
+    return _stop_grad_outputs(
+        jt.code(x.shape, x.dtype, [x, gamma], cuda_src=cuda_src))
 
 
 __all__ = ["multihead_rms_norm_cuda"]

@@ -4,6 +4,7 @@ from functools import lru_cache
 import math
 
 import jittor as jt
+from jittor._runtime.core_api import _output_requires_grad
 
 from ..rms_norm_cuda import _autocast_enabled
 
@@ -140,7 +141,7 @@ def _rms_norm_training_cuda(x, gamma, epsilon=1e-6):
         isinstance(x, jt.Var)
         and isinstance(gamma, jt.Var)
         and jt.flags.use_cuda
-        and not getattr(jt.flags, "no_grad", 0)
+        and _output_requires_grad(x, gamma)
         and not getattr(jt.compiler, "has_acl", 0)
         and not _autocast_enabled()
         and str(x.dtype) == "float32"

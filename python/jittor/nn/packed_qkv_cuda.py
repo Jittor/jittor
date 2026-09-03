@@ -3,6 +3,7 @@
 import math
 
 import jittor as jt
+from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
 
 from ._cuda_inference import cached_source, device_index, on_acl
 
@@ -26,7 +27,7 @@ def packed_qkv_rms_rope_cuda(
     tensors = (qkv, q_gamma, k_gamma, phases)
     if not all(isinstance(value, jt.Var) for value in tensors):
         return None
-    if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
+    if not (jt.flags.use_cuda and not _output_requires_grad(tensors)):
         return None
     if on_acl():
         return None
@@ -175,7 +176,8 @@ def packed_qkv_rms_rope_cuda(
         "scale": scale_value,
         "token_count": token_count,
     })
-    return jt.code(qkv.shape, qkv.dtype, tensors, cuda_src=cuda_src)
+    return _stop_grad_outputs(
+        jt.code(qkv.shape, qkv.dtype, tensors, cuda_src=cuda_src))
 
 
 __all__ = ["packed_qkv_rms_rope_cuda"]

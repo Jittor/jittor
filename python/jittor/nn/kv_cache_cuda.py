@@ -1,6 +1,7 @@
 """Private CUDA inference kernels for paged KV caches."""
 
 import jittor as jt
+from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
 
 from ._cuda_inference import cached_source, device_index, on_acl
 
@@ -10,7 +11,8 @@ def _reshape_and_cache_cuda(key, value, kv_cache, slot_mapping):
     tensors = (key, value, kv_cache, slot_mapping)
     if not all(isinstance(tensor, jt.Var) for tensor in tensors):
         return None
-    if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
+    if not (jt.flags.use_cuda and not _output_requires_grad(
+            key, value, kv_cache, slot_mapping)):
         return None
     if on_acl():
         return None
@@ -72,7 +74,7 @@ def _reshape_and_cache_cuda(key, value, kv_cache, slot_mapping):
         "token_stride": key_shape[1] * key_shape[2],
     })
     jt.code([key, value, slot_mapping], [kv_cache], cuda_src=cuda_src)
-    return kv_cache
+    return _stop_grad_outputs(kv_cache)
 
 
 def _paged_attention_decode_cuda(
@@ -86,7 +88,7 @@ def _paged_attention_decode_cuda(
     tensors = (query, kv_cache, seq_lens, block_table)
     if not all(isinstance(tensor, jt.Var) for tensor in tensors):
         return None
-    if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
+    if not (jt.flags.use_cuda and not _output_requires_grad(tensors)):
         return None
     if on_acl():
         return None
@@ -218,7 +220,8 @@ def _paged_attention_decode_cuda(
         "threads": threads,
         "warps": warps,
     })
-    return jt.code(query.shape, query.dtype, tensors, cuda_src=cuda_src)
+    return _stop_grad_outputs(
+        jt.code(query.shape, query.dtype, tensors, cuda_src=cuda_src))
 
 
 __all__ = []

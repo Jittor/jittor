@@ -1,6 +1,7 @@
 """Dual-grid mesh finalization kernels."""
 
 import jittor as jt
+from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
 
 from ._cuda_inference import device_index
 
@@ -29,7 +30,7 @@ def finalize_dual_grid_mesh_cuda(
         raise TypeError("quad_indices must use int32 or int64")
     if str(valid_rows.dtype) not in ("int32", "int64"):
         raise TypeError("valid_rows must use int32 or int64")
-    if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
+    if not (jt.flags.use_cuda and not _output_requires_grad(tensors)):
         return None
     if getattr(jt.compiler, "has_acl", 0):
         return None
@@ -125,13 +126,13 @@ def finalize_dual_grid_mesh_cuda(
         CHECK(0 == cudaGetLastError());
     }
     """
-    return jt.code(
+    return _stop_grad_outputs(jt.code(
         [[vertex_count, 3], [valid_count * 2, 3]],
         [dual_vertices.dtype, quad_indices.dtype],
         list(tensors),
         cuda_header=cuda_header,
         cuda_src=cuda_src,
-    )
+    ))
 
 
 __all__ = ["finalize_dual_grid_mesh_cuda"]

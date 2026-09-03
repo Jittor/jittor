@@ -4,6 +4,7 @@ from functools import lru_cache
 import math
 
 import jittor as jt
+from jittor._runtime.core_api import _output_requires_grad
 
 
 @lru_cache(maxsize=128)
@@ -176,7 +177,7 @@ def _batch_norm_cuda(x, weight, bias, eps):
     if not (
         jt.flags.use_cuda
         and not getattr(jt.compiler, "has_acl", 0)
-        and not getattr(jt.flags, "no_grad", 0)
+        and _output_requires_grad(x, weight, bias)
         and isinstance(weight, jt.Var)
         and isinstance(bias, jt.Var)
         and str(x.dtype) == "float32"
@@ -299,7 +300,7 @@ def _batch_norm_eval_cuda(x, weight, bias, running_mean, running_var, eps):
     if not (
         jt.flags.use_cuda
         and not getattr(jt.compiler, "has_acl", 0)
-        and not getattr(jt.flags, "no_grad", 0)
+        and _output_requires_grad(values)
         and all(isinstance(value, jt.Var) for value in values)
         and all(str(value.dtype) == "float32" for value in values)
     ):

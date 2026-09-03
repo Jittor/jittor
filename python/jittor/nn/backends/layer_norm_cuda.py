@@ -3,12 +3,13 @@
 import os
 
 import jittor as jt
+from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
 
 
 def _layer_norm_no_grad_cuda(
         x, normalized_shape, weight, bias, eps, *, allow_bfloat16=False):
     if not (jt.flags.use_cuda and not getattr(jt.compiler, "has_acl", 0)
-            and getattr(jt.flags, "no_grad", 0)):
+            and not _output_requires_grad(x, weight, bias)):
         return None
     input_dtype = str(x.dtype)
     supported_dtypes = ("float16", "float32")
@@ -278,4 +279,4 @@ def _layer_norm_no_grad_cuda(
             in0_p, in1_p, in2_p, out0_p, {hidden});
         """,
     )
-    return y
+    return _stop_grad_outputs(y)

@@ -3,6 +3,7 @@
 from functools import lru_cache
 
 import jittor as jt
+from jittor._runtime.core_api import _output_requires_grad
 
 
 @lru_cache(maxsize=128)
@@ -75,7 +76,7 @@ def _channel_bias_add_cuda(x, bias):
     if not (
         jt.flags.use_cuda
         and not getattr(jt.compiler, "has_acl", 0)
-        and not getattr(jt.flags, "no_grad", 0)
+        and _output_requires_grad(x, bias)
         and isinstance(x, jt.Var)
         and isinstance(bias, jt.Var)
         and str(x.dtype) == "float32"

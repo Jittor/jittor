@@ -1,6 +1,7 @@
 """CUDA inference kernels for rotary position embeddings."""
 
 import jittor as jt
+from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
 
 from ._cuda_inference import cached_source, device_index, on_acl
 
@@ -19,7 +20,7 @@ def _rotary_embedding_cuda(
     tensors = (positions, q, k, cos_sin_cache)
     if not all(isinstance(value, jt.Var) for value in tensors):
         return None
-    if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
+    if not (jt.flags.use_cuda and not _output_requires_grad(tensors)):
         return None
     if on_acl() or not is_neox_style:
         return None
@@ -120,10 +121,10 @@ def _rotary_embedding_cuda(
         "q_token_stride": q_shape[1],
         "rotary_dim": rotary_dim,
     })
-    return jt.code(
+    return _stop_grad_outputs(jt.code(
         [q.shape, k.shape], [q.dtype, k.dtype],
         [positions, q, k, cos_sin_cache], cuda_src=cuda_src,
-    )
+    ))
 
 
 def partial_rotary_embedding_cuda(q, k, cos, sin, *, prefix_tokens, rotary_dim=None):
@@ -137,7 +138,7 @@ def partial_rotary_embedding_cuda(q, k, cos, sin, *, prefix_tokens, rotary_dim=N
     tensors = (q, k, cos, sin)
     if not all(isinstance(value, jt.Var) for value in tensors):
         return None
-    if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
+    if not (jt.flags.use_cuda and not _output_requires_grad(tensors)):
         return None
     if on_acl():
         return None
@@ -218,12 +219,12 @@ def partial_rotary_embedding_cuda(q, k, cos, sin, *, prefix_tokens, rotary_dim=N
         "rotate": rotate,
         "table_dim": table_dim,
     })
-    return jt.code(
+    return _stop_grad_outputs(jt.code(
         [q.shape, k.shape],
         [q.dtype, k.dtype],
         [q, k, cos, sin],
         cuda_src=cuda_src,
-    )
+    ))
 
 
 __all__ = ["partial_rotary_embedding_cuda"]

@@ -13,6 +13,7 @@ result from ordinary ops, so the same call works on CPU and under autograd.
 """
 
 import jittor as jt
+from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
 
 from .backends import hooks as _backend_hooks
 from .rms_norm_cuda import _fused_add_rms_norm_cuda, _rms_norm_cuda
@@ -51,7 +52,7 @@ def rms_norm(x, weight, eps=1e-6):
         getattr(jt.compiler, "has_acl", 0)
         and getattr(jt.flags, "use_acl", 0)
         and jt.flags.use_cuda
-        and getattr(jt.flags, "no_grad", 0)
+        and not _output_requires_grad(x, weight)
         and str(x.dtype) == "float32"
         and str(weight.dtype) in ("float16", "bfloat16")
     ):
@@ -173,7 +174,7 @@ def _rotary_embedding_acl(
         getattr(jt.compiler, "has_acl", 0)
         and getattr(jt.flags, "use_acl", 0)
         and jt.flags.use_cuda
-        and getattr(jt.flags, "no_grad", 0)
+        and not _output_requires_grad(positions, query, key, cos_sin_cache)
         and key is not None
         and is_neox
         and rotary_dim == head_size
@@ -233,7 +234,7 @@ def _rotary_embedding_acl(
         return value.reshape((heads, token_count, head_size)).transpose(
             0, 1).reshape(shape)
 
-    return (
+    return _stop_grad_outputs((
         from_bnsd(query_bnsd, query.shape),
         from_bnsd(key_bnsd, key.shape),
-    )
+    ))

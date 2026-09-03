@@ -4,6 +4,7 @@ from functools import lru_cache
 import math
 
 import jittor as jt
+from jittor._runtime.core_api import _output_requires_grad
 
 
 @lru_cache(maxsize=128)
@@ -210,7 +211,7 @@ def _layer_norm_cuda(x, normalized_shape, weight, bias, eps):
     if not (
         jt.flags.use_cuda
         and not getattr(jt.compiler, "has_acl", 0)
-        and not getattr(jt.flags, "no_grad", 0)
+        and _output_requires_grad(x, weight, bias)
         and isinstance(weight, jt.Var)
         and isinstance(bias, jt.Var)
     ):

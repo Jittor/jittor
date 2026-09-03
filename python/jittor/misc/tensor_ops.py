@@ -15,6 +15,7 @@ import builtins as _builtins
 from collections.abc import Sequence,Iterable
 
 from .. import _arg_policy
+from .._runtime.core_api import _output_requires_grad, _stop_grad_outputs
 
 def knn(unknown, known, k):
     ''' find k neighbors for unknown array from known array
@@ -365,7 +366,7 @@ def median(x, dim=None, keepdim=False, keepdims=False):
 jt.Var.median = median
 
 def _stack_no_grad_cuda_fast(xs, dim):
-    if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
+    if not (jt.flags.use_cuda and not _output_requires_grad(xs)):
         return None
     n = len(xs)
     if n not in (2, 3):
@@ -426,10 +427,12 @@ def _stack_no_grad_cuda_fast(xs, dim):
 {write_lines}
     }}
     """
-    return jt.code([input_total * n], base_dtype, flat_inputs, cuda_src=cuda_src, cpu_src=cpu_src).reshape(out_shape)
+    return _stop_grad_outputs(jt.code(
+        [input_total * n], base_dtype, flat_inputs,
+        cuda_src=cuda_src, cpu_src=cpu_src).reshape(out_shape))
 
 def _unbind_no_grad_cuda_fast(x, dim):
-    if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
+    if not (jt.flags.use_cuda and not _output_requires_grad(x)):
         return None
     if not isinstance(x, jt.Var) or getattr(x, "_jittor_torch_force_cpu", False):
         return None
@@ -496,7 +499,7 @@ def _unbind_no_grad_cuda_fast(x, dim):
         cuda_src=cuda_src,
         cpu_src=cpu_src,
     )
-    return [out.reshape(out_shape) for out in outs]
+    return _stop_grad_outputs([out.reshape(out_shape) for out in outs])
 
 def stack(x, dim=0):
     r'''

@@ -3,6 +3,7 @@
 import math
 
 import jittor as jt
+from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
 
 from .._cuda_inference import device_index
 
@@ -14,7 +15,7 @@ def _modulated_layer_norm_no_grad_cuda(x, scale, shift, eps):
     if not (
         jt.flags.use_cuda
         and not getattr(jt.compiler, "has_acl", 0)
-        and getattr(jt.flags, "no_grad", 0)
+        and not _output_requires_grad(x, scale, shift)
     ):
         return None
     autocast_probe = getattr(jt, "is_autocast_enabled", None)
@@ -50,7 +51,7 @@ def _modulated_layer_norm_no_grad_cuda(x, scale, shift, eps):
     if any(str(value.dtype) != "bfloat16" for value in (x, scale, shift)):
         return None
 
-    return jt.code(
+    return _stop_grad_outputs(jt.code(
         x.shape,
         x.dtype,
         [x, scale, shift],
@@ -181,7 +182,7 @@ def _modulated_layer_norm_no_grad_cuda(x, scale, shift, eps):
             "eps_double": eps_value,
             "hidden": hidden,
         },
-    )
+    ))
 
 
 __all__ = ["_modulated_layer_norm_no_grad_cuda"]

@@ -23,17 +23,13 @@ from .channel_bias_cuda import _channel_bias_add_cuda
 
 def _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups):
     ''' Return a cuDNN-backed conv2d result, or None if cuDNN isn't applicable
-    so the caller falls back to the reindex path. Low-precision tensors use
-    cuDNN only for inference; their training backward stays on the established
-    reindex implementation. '''
+    so the caller falls back to the reindex path. '''
     if not (jt.flags.use_cuda and getattr(jt, "cudnn", None)):
         return None
     x_dtype, weight_dtype = str(x.dtype), str(weight.dtype)
     if x_dtype != weight_dtype:
         return None
-    if x_dtype != "float32" and not (
-            x_dtype in ("float16", "bfloat16")
-            and getattr(jt.flags, "no_grad", 0)):
+    if x_dtype not in ("float16", "float32", "bfloat16"):
         return None
     sh, sw = stride   if isinstance(stride, tuple)   else (stride, stride)
     ph, pw = padding  if isinstance(padding, tuple)  else (padding, padding)

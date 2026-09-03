@@ -243,6 +243,46 @@ Example::
         jt_flags["no_grad"] = 0
         super().__init__(**jt_flags)
 
+
+def _output_requires_grad(*values):
+    """Whether an op built from ``values`` must preserve an autograd path.
+
+    Process-wide grad mode is only half of that decision.  Outside a
+    ``no_grad`` scope an operation whose tensor inputs are all stopped still
+    produces a stopped output, so inference-only fused kernels are safe for
+    it.  Containers are accepted because stack/cache dispatchers receive
+    lists and dictionaries of tensors.
+    """
+    if flags.no_grad:
+        return False
+    pending = list(values)
+    while pending:
+        value = pending.pop()
+        if isinstance(value, Var):
+            if value.requires_grad:
+                return True
+        elif isinstance(value, (list, tuple)):
+            pending.extend(value)
+        elif isinstance(value, dict):
+            pending.extend(value.values())
+    return False
+
+
+def _stop_grad_outputs(value):
+    """Mark an inference fusion's returned tensors as non-differentiable."""
+    if isinstance(value, Var):
+        value.stop_grad()
+    elif isinstance(value, list):
+        for item in value:
+            _stop_grad_outputs(item)
+    elif isinstance(value, tuple):
+        for item in value:
+            _stop_grad_outputs(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            _stop_grad_outputs(item)
+    return value
+
 single_log_capture = None
 
 class log_capture_scope(_call_no_record_scope):
