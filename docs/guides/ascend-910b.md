@@ -438,6 +438,9 @@ The ACL Roll family uses the shared launcher while retaining shifts/dims array
 cleanup and synchronous execution. This remains source-only until the Ascend
 910B3 probe is run.
 
+The ACL Gather family uses the shared launcher and retains its dimension
+parameter and synchronous execution policy. Scatter is outside this slice.
+
 These flags are diagnostic and slow execution. Remove them after locating the
 failing operation. For general JIT and memory diagnostics, see
 {doc}`debugging`.

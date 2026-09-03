@@ -19,6 +19,7 @@ TRANSPOSE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/transpose_op_acl.cc"
 SOFTMAX_SOURCE = ROOT / "python/jittor/extern/acl/aclops/softmax_op_acl.cc"
 EMBEDDING_SOURCE = ROOT / "python/jittor/extern/acl/aclops/embedding_op_acl.cc"
 ROLL_SOURCE = ROOT / "python/jittor/extern/acl/aclops/roll_op_acl.cc"
+GATHER_SOURCE = ROOT / "python/jittor/extern/acl/aclops/gather_scatter_op_acl.cc"
 
 
 def test_acl_launcher_tail_has_one_auditable_contract():
@@ -168,3 +169,14 @@ def test_roll_family_uses_launcher_and_keeps_array_cleanup():
     assert "checkRet(ret);" not in source
     assert "mallocWorkSpace(workspaceSize)" not in source
     assert "syncRun();" not in source
+
+
+def test_gather_forward_uses_launcher_and_scatter_remains_present():
+    source = GATHER_SOURCE.read_text()
+    gather = source[source.index("void GatherOpRunner::executeOp"):source.index("ScatterOpRunner::ScatterOpRunner")]
+    assert "attr->dim" in gather
+    assert "launch(ret, aclnnGather, true);" in gather
+    assert "checkRet(ret);" not in gather
+    assert "mallocWorkSpace(workspaceSize)" not in gather
+    assert "syncRun();" not in gather
+    assert "void ScatterOpRunner::executeOp" in source
