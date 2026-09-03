@@ -144,6 +144,56 @@ Jittor uses `use_cuda` as the common accelerator execution flag even when the
 selected backend is ACL. `has_acl` is therefore the required discriminator
 between Ascend and CUDA.
 
+## Check per-operator ACL synchronization
+
+Run this diagnostic on an Ascend 910B3 only after sourcing the CANN environment,
+confirming the device is healthy, and selecting an allocated device:
+
+```bash
+source "$CANN_SET_ENV"
+npu-smi info
+export ASCEND_RT_VISIBLE_DEVICES=<allocated-device>
+
+sync_run=1 python -m pytest -q -s \
+  tests/backends/npu/test_acl.py::TestACL::test_float32_matmul_runs_on_acl \
+  2>&1 | tee "$TMPDIR/acl-sync-run.log"
+```
+
+`sync_run=1` makes every `BaseOpRunner` wait for `aclstream` immediately after
+launch. If synchronization fails, Jittor raises an error containing the
+operator name, numeric return code, and decoded ACL error. Keep the complete
+log and extract the attribution line with:
+
+```bash
+rg "aclrtSynchronizeStream failed" "$TMPDIR/acl-sync-run.log"
+```
+
+The run is valid only when the ACL execution assertion passes and the log has no
+CPU fallback. Treat either spelling below as a failed NPU verification:
+
+```bash
+if rg -i "fallback cpu|cpu fallback" "$TMPDIR/acl-sync-run.log"; then
+  exit 1
+fi
+```
+
+After diagnosis, repeat the same focused node with per-operator synchronization
+disabled to verify the normal asynchronous path still launches on ACL:
+
+```bash
+sync_run=0 python -m pytest -q -s \
+  tests/backends/npu/test_acl.py::TestACL::test_float32_matmul_runs_on_acl \
+  2>&1 | tee "$TMPDIR/acl-async-run.log"
+
+if rg -i "fallback cpu|cpu fallback" "$TMPDIR/acl-async-run.log"; then
+  exit 1
+fi
+```
+
+`JT_SYNC=1` is the separate executor-wide compile-time diagnostic. It is not a
+replacement for the `BaseOpRunner` `sync_run=1` check above and may rebuild the
+JIT cache when toggled.
+
 ## Run the maintained NPU gate
 
 The NPU nox session creates isolated state, checks `npu-smi`, runs a real ACL

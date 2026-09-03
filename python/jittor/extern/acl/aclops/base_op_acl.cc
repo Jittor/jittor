@@ -105,10 +105,14 @@ namespace jittor
 
     void BaseOpRunner::syncRun()
     {
-        if (sync_run)
+        if (!sync_run)
+            return;
+        auto sync_ret = aclrtSynchronizeStream(aclstream);
+        if (sync_ret != ACL_SUCCESS)
         {
-            // ret = aclrtSynchronizeStream(aclstream);
-            // CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclrtSynchronizeStream failed. ERROR: %d\n", name.c_str(), ret); return);
+            LOGf << "ACL operator" << name
+                 << ": aclrtSynchronizeStream failed, return code"
+                 << sync_ret << acl_error_to_string(sync_ret);
         }
     }
 
