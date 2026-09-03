@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；本波审计基线 `e0c1512a`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 审计基线 529 个 |
+| 分支 | `2.0-refactor`；本波审计基线 `71c456ee`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 审计基线 530 个 |
 | 提交里出现过的任务号 | 214 个 |
 | 看板 | 已合并 **196** / 进行中 **0** / 待领 **74** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
@@ -237,9 +237,17 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `bindings` | 2.19 将 `reinterpret_view` 的 6 个用户 dtype/shape 边界改为 `USER_CHECK`，累计 37 处；结构、TU 语法和 4 个负向节点通过 |
 | `compat` | 7.03 将 `movedim/moveaxis` 提升为 numerical 稳定对象并登记 approximate fidelity；5 个身份/metadata/CPU 节点通过 |
 
+第二十波新增 3 个严格保持待领的前置：
+
+| 分区 | 第二十波结果 |
+| --- | --- |
+| `device` | 8.06 将 ACL MatMul 接入共享 launcher，保留 `cube_math_type` 与同步策略；静态合同 7 项通过，本机无 CANN/NPU |
+| `bindings` | 2.19 迁 binary shape mismatch 为 `USER_CHECKop`，累计 38 处；结构、TU 语法和 Python 负向节点通过 |
+| `compat` | 7.03 将 `unflatten/swapaxes/swapdims/ravel` 提升为 numerical 稳定对象并登记 approximate fidelity；定点 3 项通过 |
+
 ## 6. 下一波起点
 
-按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第二十波继续优先可独立验证的
+按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第二十一波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
 - `device`：若续做 8.06，只迁下一个最终 owner 明确的 family，并复用 5be5fa15 的 launcher 合同；无 NPU
