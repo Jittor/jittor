@@ -28,6 +28,7 @@ RANGE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/index_op_acl.cc"
 DROPOUT_SOURCE = ROOT / "python/jittor/extern/acl/aclops/dropout_op_acl.cc"
 RELU_SOURCE = ROOT / "python/jittor/extern/acl/aclops/relu_op_acl.cc"
 ARG_REDUCE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/arg_reduce_op_acl.cc"
+RANDOM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/random_op_acl.cc"
 GATHER_SOURCE = ROOT / "python/jittor/extern/acl/aclops/gather_scatter_op_acl.cc"
 
 
@@ -301,6 +302,20 @@ def test_arg_reduce_max_min_use_shared_launcher():
     assert "aclnnMinDimGetWorkspaceSize" in source
     assert "AclExecuteLauncher launcher = is_max ? aclnnMaxDim : aclnnMinDim;" in source
     assert "launch(ret, launcher, true);" in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
+
+
+def test_random_uniform_normal_share_launcher_and_keep_seed_offset():
+    source = RANDOM_SOURCE.read_text()
+    assert "RandomUniform" in source
+    assert "RandomNormal" in source
+    assert "attr->seed" in source
+    assert "attr->offset" in source
+    assert "launcher = aclnnInplaceUniform;" in source
+    assert "launcher = aclnnInplaceNormal;" in source
+    assert "launch(ret, launcher, true);" in source
+    assert "Not supported random type" in source
     assert "mallocWorkSpace(workspaceSize)" not in source
     assert "syncRun();" not in source
 
