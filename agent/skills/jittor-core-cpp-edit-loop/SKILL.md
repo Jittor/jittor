@@ -162,6 +162,8 @@ dump 脚本按分区放在自己的 `$TMPDIR` 下，不要提交；把 diff 摘�
 | --- | --- | --- |
 | 字段被类型双关（`Var::allocator` 里存 `Var*`） | 对 Var 发虚调用，行为不定 | 双关让 `alloc` **没法**问「源 var 分配过没有」，于是 `x->allocator->share_with(...)` 是空指针虚调用。`b.share_with(a)` 而 a 从没执行过 → 必然段错误，`gdb` 栈顶就是 `Var::alloc` |
 | 迭代器 `std::next(end())` | libstdc++ 绕回 `begin()`，"看起来没事" | `sync_ptr` 变成 `begin()` → `top_weak_sync` 第一行就 break → weak sync 从此静默不工作。判据用 `jt.number_of_lived_ops()`（是函数不是属性），**两个子进程跑同一个探针**（触发/不触发各一次）比大小，比断言绝对值稳 |
+| 共享的 per-node 草稿槽（`Node::custom_data`）、共享的全局 epoch（`tflag`） | 构造两个遍历交错的时序 | **去找代码里已有的那份手工补丁，把它删掉**。补丁的存在就是证据：`memory_profiler.cc` 把整个 `custom_data` 抄出来再抄回去（它从 `run_sync` 的算子循环里被调用），`grad.cc` 把下标抄进 `id_buffer`（构造反向算子会重入 `run_sync`）。删掉 memory_profiler 那六行、别的不动 → `fused_op.cc Check failed: outputs().size()`。失败点离原因隔两个文件，正是这类缺陷的形状 |
+| 编译期不变量只写在注释里（「bit 28 在两套布局里都空着」） | 无法运行期观测 | 两头都要：`static_assert` 把不变量变成编译错误，**加**一条静态用例断言那些 `static_assert` 存在、且位号是枚举生成的而不是手写的数字。允许的名字要从头文件**自己减出来**（共享枚举减去两个私有枚举），手写清单在改动前会**空洞地通过** |
 | setter 在赋值之前跑 | 每个 setter 自己回写，行为看着正确 | 找**旧顺序真的把 setter 的工作抹掉**的那一处：`setter_use_cuda` 无设备时把值回退成 0，紧接着的 `name = value` 又把 1 写回去 |
 | 环境变量解析静默回退 | 有一句 warning | warning 是 'w' 级，`log_silent=1` 时被 `send_log` 吞掉：`log_v="1 " log_silent=1` 下**一个字都不打**，flag 还是 0。断言"什么都没打印" |
 
@@ -200,6 +202,18 @@ CPU-only 缓存小得多。前提是复现路径与 CUDA 无关——`Var::alloc
 
 两种做法都要记得：换过源码之后第一次 pytest 必然吃一个 "jit_utils updated"（见 §4），
 要原样重跑一遍。
+
+### 类型系统能替你找出「靠巧合才对」的读法
+
+把一个「谁都能读」的字段改成「必须先知道种类才能读」之后，**编译错误的清单就是审计
+报告**。2.01 把 Var 与 Op 的 flag 拆成两个枚举、私有位只能经 `Var::flag`/`Op::flag`
+读写，编译器立刻指出 `executor.cc` 的 `run_sync` 在一个同时装 var 和 op 的队列上读
+Op 专用的 `_has_gopt`，随后对**任何答是的节点**调 `n->op()->graph_optimize()`。它今天
+不出事，只因为那个位号在 Var 布局里恰好没人用。
+
+**做法**：改完类型先只跑 `g++ -fsyntax-only`（全树 146 个核心 .cc，`xargs -P 8`，
+十几秒），把错误逐条读成「这里为什么可以不问种类」。比编译整个核心快一个数量级，
+而且这一步的产出（每条错误对应的判断）比改动本身值钱。
 
 ## 8. 构建锁会把你饿死：换一个 `JITTOR_HOME`，不要杀进程
 
