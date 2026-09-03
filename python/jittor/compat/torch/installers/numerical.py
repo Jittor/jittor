@@ -768,6 +768,29 @@ register_fidelity(
 )
 
 
+_NARROW_FIDELITY_DETAIL = (
+    "matches Torch contiguous slice values and shape for supported real tensors "
+    "but omits device, layout, and dtype keyword semantics"
+)
+
+
+def _narrow_impl(input, dim, start, length):
+    return input.narrow(dim, start, length)
+
+
+def narrow(input, dim, start, length):
+    """Return a length-sized slice along ``dim`` starting at ``start``."""
+    return _narrow_impl(input, dim, start, length)
+
+
+register_fidelity(
+    "torch.narrow",
+    narrow,
+    Fidelity.APPROXIMATE,
+    _NARROW_FIDELITY_DETAIL,
+)
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
@@ -944,7 +967,7 @@ def install(ctx):
         "arguments are not implemented.")
     # torch.narrow(input, dim, start, length) / torch.tile(input, dims) --
     # function forms mirroring the Var methods (added in _install_tensor_methods).
-    _alias("narrow", lambda input, dim, start, length: input.narrow(dim, start, length))
+    _alias("narrow", narrow)
     _alias("tile", lambda input, *dims: input.tile(*dims))
     # torch.equal returns a Python bool (True iff same shape & all elements
     # equal). jittor's native `equal` is elementwise, so force-override.

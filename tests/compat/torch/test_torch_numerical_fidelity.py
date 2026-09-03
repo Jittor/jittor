@@ -879,6 +879,35 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         np.testing.assert_allclose(actual.numpy(), expected, rtol=1e-6)
         np.testing.assert_allclose(method.numpy(), expected, rtol=1e-6)
 
+    def test_narrow_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.narrow))
+        self.assertIs(torch.narrow, numerical.narrow)
+        self.assertEqual(numerical.narrow.__module__, numerical.__name__)
+        self.assertEqual(numerical.narrow.__name__, "narrow")
+
+    def test_narrow_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.narrow")
+        self.assertIs(record.implementation, numerical.narrow)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("device", record.detail)
+        self.assertIn("layout", record.detail)
+
+    def test_narrow_cpu_positive_negative_axes_and_var_delegate_match_numpy(self):
+        values = np.arange(12, dtype="float32").reshape(3, 4)
+        with torch.flag_scope(use_cuda=0):
+            values_tensor = torch.array(values)
+            actual = torch.narrow(values_tensor, 1, 1, 2)
+            actual_negative = torch.narrow(values_tensor, -1, -3, 2)
+            method = values_tensor.narrow(0, -2, 2)
+        np.testing.assert_allclose(actual.numpy(), values[:, 1:3], rtol=1e-6)
+        np.testing.assert_allclose(actual_negative.numpy(), values[:, 1:3], rtol=1e-6)
+        np.testing.assert_allclose(method.numpy(), values[1:3, :], rtol=1e-6)
+
 
 if __name__ == "__main__":
     unittest.main()
