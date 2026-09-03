@@ -131,6 +131,6 @@ setUp/tearDown。检查（`tests/structure/test_flag_scope_contract.py`）接受
 ## 耗时分布
 | 问题 | 证据 | 后果 | 修改方向 | 严重度 |
 | --- | --- | --- | --- | --- |
-| CUDA 门禁 80% 时间花在一个文件上 | CUDA backend 目录 23:51、dtype coverage 7:33、**device parity 2:39:10**、TF32 3s、strict OpInfo 9:50 | parity 221 用例平均 43 秒每个，而同样 221 用例的 OpInfo 只要 2.7 秒每个，16 倍差距 | 根因是 `test_device_parity.py:172` 在 setUpClass 把 use_parallel_op_compiler 设为 0 导致约 450 个算子变体串行编译；改按算子分片加并行进程 | 主要 |
+| CUDA 门禁 80% 时间花在一个文件上（**2026-09-03 实测推翻本行的归因**：本行说「根因是 `setUpClass` 把 `use_parallel_op_compiler` 设为 0 导致约 450 个算子变体串行编译」。实测同一组 26 个算子、各自冷缓存：单进程串行编译 **1444s**、单进程并行编译 **1420s**、**缓存全热 1405s**。**热缓存与全冷一样慢，所以它根本不是编译瓶颈**——并行编译器动不了它，分片也动不了它。4 个 xdist worker 只快 6%（1353s），因为每条用例在 CPU 与 GPU 两边各跑一遍前向反向、CPU 那半已通过 OpenMP 吃满全部核，加 worker 只是把同一批核分成四份；而且 C 配置**赔上了可信度**：两个 worker 死于 `node down`，`test_atan2` 被报成 FAILED 而原因不在它自己，会话以 INTERNALERROR 结束，26 条只拿到 23 个结论） | CUDA backend 目录 23:51、dtype coverage 7:33、**device parity 2:39:10**、TF32 3s、strict OpInfo 9:50 | parity 221 用例平均 43 秒每个，而同样 221 用例的 OpInfo 只要 2.7 秒每个，16 倍差距 | 根因是 `test_device_parity.py:172` 在 setUpClass 把 use_parallel_op_compiler 设为 0 导致约 450 个算子变体串行编译；改按算子分片加并行进程 | 主要 |
 | 全量 CPU 套件 4 小时且不分层 | native 1:45:28、torch 2:21:51、structure 2:31 | 没有人会在改一行代码后跑它，退化成每月一次的人工快照 | 建 smoke（<5 分钟进 PR）与 full（nightly）两层 | 主要 |
 | 门禁每个条目起一个独立 pytest 进程 | `noxfile.py:404-423`，CPU 门禁因此起 28 个进程 | 每个进程重付 import 成本；进程隔离的收益本应由测试自身的 flag_scope 纪律提供 | 修好 flag 泄漏后合并 | 次要 |
