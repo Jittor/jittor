@@ -110,6 +110,39 @@ struct DropoutDescriptor {
     reproduces a run exactly. */
 cudnnDropoutDescriptor_t cudnn_rnn_dropout_descriptor(cudnnHandle_t handle, float dropout);
 
+/** Math type for an RNN of this data type.
+
+    float32 follows `float32_matmul_precision` like every other cuDNN op
+    (misc/float32_precision.h). It used to follow nothing: the descriptor set
+    a math type only for reduced precision, so an fp32 RNN got cuDNN's default,
+    and cuDNN's default for RNN on Ampere and later *allows tf32*. An fp32
+    LSTM therefore ran at tf32 whatever `cuda_allow_cudnn_tf32` said, and no
+    setting could turn it off.
+
+    It is worth being precise about the size of that: against a float64
+    reference on a 5-step LSTM, jittor's own CPU recurrence lands 1.2e-07 out
+    and the cuDNN path landed 2.3e-04 out -- three orders of magnitude, on the
+    weight gradients, silently, at the default setting. With CUDNN_FMA_MATH the
+    cuDNN path lands 1.1e-07 out, i.e. on top of the CPU one.
+
+    float16 keeps CUDNN_TENSOR_OP_MATH unconditionally: reduced-precision
+    operands have nothing to lose to a tensor core, and cuDNN refuses the
+    half descriptor without it on several architectures.
+ */
+static inline cudnnMathType_t rnn_math_type(cudnnDataType_t dataType) {
+    if (dataType == CUDNN_DATA_DOUBLE)
+        return CUDNN_DEFAULT_MATH;
+    if (dataType != CUDNN_DATA_FLOAT)
+        return CUDNN_TENSOR_OP_MATH;
+    if (float32_cudnn_tier() != F32_HIGHEST)
+        return CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION;
+#if CUDNN_VERSION >= 8000
+    return CUDNN_FMA_MATH;
+#else
+    return CUDNN_DEFAULT_MATH;
+#endif
+}
+
 /** A wrapper for CUDNN RNN descriptor
  */
 struct RnnDescriptor {
@@ -138,11 +171,7 @@ struct RnnDescriptor {
             CUDNN_RNN_ALGO_STANDARD,
             dataType
         ));
-        if (dataType != CUDNN_DATA_FLOAT && dataType != CUDNN_DATA_DOUBLE)
-            // A half/bfloat16 RNN accumulates in fp32 unless the math type
-            // says otherwise; without this cuDNN refuses the reduced-precision
-            // descriptor on several architectures.
-            checkCudaErrors(cudnnSetRNNMatrixMathType(desc, CUDNN_TENSOR_OP_MATH));
+        checkCudaErrors(cudnnSetRNNMatrixMathType(desc, rnn_math_type(dataType)));
     }
 
     RnnDescriptor(const RnnDescriptor&) = delete;

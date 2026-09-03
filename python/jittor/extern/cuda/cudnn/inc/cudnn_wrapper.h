@@ -100,7 +100,7 @@ static inline cudnnMathType_t cudnn_conv_math_type(
         return CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION;
     if (!fp32_conv)
         return CUDNN_DEFAULT_MATH;
-    if (float32_conv_tier() != F32_HIGHEST)
+    if (float32_cudnn_tier() != F32_HIGHEST)
         return CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION;
 #if CUDNN_VERSION >= 8000
     return CUDNN_FMA_MATH;

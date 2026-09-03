@@ -167,7 +167,7 @@ void CudnnConv3dBackwardXOp::jit_run() {
     conv_math_key = static_cast<int>(conv_math_type);
 #endif
     LOGvvv << "cudnn_conv3d_backward_x precision select:"
-        << "precision=" >> float32_precision_tier_name(float32_conv_tier())
+        << "precision=" >> float32_precision_tier_name(float32_cudnn_tier())
         << "computeType=" >> cudnn_data_type_name(conv_compute_type)
         << "mathType=" >> cudnn_math_type_name(conv_math_key);
 

@@ -91,8 +91,15 @@ inline int float32_matmul_tier() {
     return tier;
 }
 
-/// Effective tier for a float32 convolution.
-inline int float32_conv_tier() {
+/// Effective tier for float32 math on cuDNN: convolution and RNN alike.
+///
+/// The RNN used to reach none of this. It never set a math type for float32,
+/// and cuDNN's default for RNN on Ampere and later allows tf32 -- so an fp32
+/// LSTM ran at tf32 precision no matter what `cuda_allow_cudnn_tf32` said,
+/// and there was no setting that turned it off. Measured against a float64
+/// reference: the gradients were 2.3e-04 out where jittor's own CPU
+/// recurrence was 1.2e-07.
+inline int float32_cudnn_tier() {
     int tier = raise_tier(float32_matmul_precision_tier, legacy_tensorcore_tier());
     if (cuda_allow_cudnn_tf32) tier = raise_tier(tier, F32_HIGH);
     return tier;
