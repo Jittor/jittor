@@ -93,6 +93,54 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 torch.vstack([one_d, a]).numpy(),
                 np.vstack([np_one_d, np_a]))
 
+    def test_movedim_and_moveaxis_are_stable_module_level_objects(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        for name in ("movedim", "moveaxis"):
+            with self.subTest(name=name):
+                implementation = getattr(numerical, name)
+                self.assertTrue(callable(implementation))
+                self.assertIs(getattr(torch, name), implementation)
+                self.assertEqual(implementation.__module__, numerical.__name__)
+                self.assertEqual(implementation.__name__, name)
+
+    def test_movedim_and_moveaxis_fidelity_is_queryable(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        for name in ("movedim", "moveaxis"):
+            with self.subTest(name=name):
+                record = fidelity.fidelity_of("torch." + name)
+                self.assertIs(record.implementation, getattr(numerical, name))
+                self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+                self.assertIn("device", record.detail)
+                self.assertIn("out", record.detail)
+
+    def test_movedim_cpu_positive_and_negative_single_axis_matches_numpy(self):
+        values = np.arange(24).reshape(2, 3, 4).astype("float32")
+        with torch.flag_scope(use_cuda=0):
+            actual = torch.movedim(torch.array(values), 0, 2).numpy()
+            negative = torch.movedim(torch.array(values), -1, 0).numpy()
+        np.testing.assert_array_equal(actual, np.moveaxis(values, 0, 2))
+        np.testing.assert_array_equal(negative, np.moveaxis(values, -1, 0))
+
+    def test_moveaxis_cpu_multi_axis_matches_numpy(self):
+        values = np.arange(24).reshape(2, 3, 4).astype("float32")
+        with torch.flag_scope(use_cuda=0):
+            actual = torch.moveaxis(
+                torch.array(values), (0, 1), (2, 0)).numpy()
+        np.testing.assert_array_equal(
+            actual, np.moveaxis(values, (0, 1), (2, 0)))
+
+    def test_movedim_var_methods_use_the_family_internal_implementation(self):
+        values = np.arange(24).reshape(2, 3, 4).astype("float32")
+        with torch.flag_scope(use_cuda=0):
+            tensor = torch.array(values)
+            actual = tensor.movedim(0, 2).numpy()
+            negative = tensor.moveaxis(-1, 0).numpy()
+        np.testing.assert_array_equal(actual, np.moveaxis(values, 0, 2))
+        np.testing.assert_array_equal(negative, np.moveaxis(values, -1, 0))
+
 
 if __name__ == "__main__":
     unittest.main()

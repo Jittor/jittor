@@ -86,6 +86,44 @@ for _stacking_name in ("vstack", "row_stack", "hstack", "dstack", "column_stack"
 del _stacking_name
 
 
+_MOVEDIM_FIDELITY_DETAIL = (
+    "matches Torch axis permutation for valid tensor inputs but omits Torch "
+    "layout, device, out, and named-dimension semantics"
+)
+
+
+def _movedim_impl(x, source, destination):
+    nd = x.ndim
+    src = [s % nd for s in (
+        source if isinstance(source, (list, tuple)) else [source])]
+    dst = [d % nd for d in (
+        destination if isinstance(destination, (list, tuple)) else [destination])]
+    order = [d for d in range(nd) if d not in src]
+    for d, s in sorted(zip(dst, src)):
+        order.insert(d, s)
+    return x.permute(order)
+
+
+def movedim(x, source, destination):
+    """Move tensor dimensions using Torch-compatible axis numbering."""
+    return _movedim_impl(x, source, destination)
+
+
+def moveaxis(x, source, destination):
+    """Alias of :func:`movedim` with NumPy-compatible naming."""
+    return _movedim_impl(x, source, destination)
+
+
+for _movedim_name in ("movedim", "moveaxis"):
+    register_fidelity(
+        "torch." + _movedim_name,
+        globals()[_movedim_name],
+        Fidelity.APPROXIMATE,
+        _MOVEDIM_FIDELITY_DETAIL,
+    )
+del _movedim_name
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
@@ -190,20 +228,12 @@ def install(ctx):
         g.all = _reduce_alias(_orig_all)
     if callable(_orig_any):
         g.any = _reduce_alias(_orig_any)
-    def _movedim(x, source, destination):
-        nd = x.ndim
-        src = [s % nd for s in (source if isinstance(source, (list, tuple)) else [source])]
-        dst = [d % nd for d in (destination if isinstance(destination, (list, tuple)) else [destination])]
-        order = [d for d in range(nd) if d not in src]
-        for d, s in sorted(zip(dst, src)):
-            order.insert(d, s)
-        return x.permute(order)
-    _alias("movedim", _movedim)
-    _alias("moveaxis", _movedim)
+    _alias("movedim", movedim)
+    _alias("moveaxis", moveaxis)
     # Var.movedim/moveaxis (the functions exist but weren't bound as methods), plus
     # index_put_/index_put (scatter-style assignment), tensor_split (uneven split), take.
-    Var.movedim = lambda self, source, destination: _movedim(self, source, destination)
-    Var.moveaxis = lambda self, source, destination: _movedim(self, source, destination)
+    Var.movedim = lambda self, source, destination: _movedim_impl(self, source, destination)
+    Var.moveaxis = lambda self, source, destination: _movedim_impl(self, source, destination)
     def _index_put_(self, indices, values, accumulate=False):
         idx = tuple(indices) if isinstance(indices, (tuple, list)) else (indices,)
         if not accumulate:
