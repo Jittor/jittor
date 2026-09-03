@@ -384,7 +384,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 7.01 | 「看起来支持其实空操作」一律改为实现或抛 `NotImplementedError`，需显式 `… | 已合并 | 兼容层分区 | ff395ecc b7c12ddc 0446217e 47012a27 46bc9ea7 49d41acf 9053a7c0 |
 | 7.02 | DDP 真实梯度同步 | 已合并 | 兼容层分区 | 4f08f1da |
 | 7.03 | 每个 torch API 一个模块级一等对象加保真度标注 | 待领 | | |
-| 7.04 | 激活显式、一次性、可查询 | 待领 | | |
+| 7.04 | 激活显式、一次性、可查询 | 已合并 | compat | `f704b9d4`：删除 argv 源码嗅探与 `jt.flags` 代理，部署/运行时入口统一为幂等 `activate()`（`enable` 仅同对象别名），公开不可变 `activation_status()`；HOME/TMPDIR/NCCL/严格数学环境只在显式 preflight 中准备，并接入 `EXPLICIT_REQUIRES_GRAD` 策略。聚焦 bootstrap 41 passed，策略接线 1 passed，部署静态测试 15 passed；结构实算单例仍命中既有 JIT IR 重复行号失败，非本项激活回归。 |
 | 7.05 | install 事务化 | 待领 | | |
 | 7.06 | 依赖单向化 core→tensor→nn/optim→distributed→fsdp→适配器 | 已合并 | 兼容层分区 | 27c4bdeb |
 | 7.07 | 第三方库补丁搬出 compat/ | 待领 | | |
