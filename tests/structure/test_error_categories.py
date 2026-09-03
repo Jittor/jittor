@@ -22,6 +22,10 @@ MIGRATED_VIEW_SHAPE_BOUNDARIES = {
     "python/jittor/src/ops/reshape_op.cc": 3,
 }
 
+MIGRATED_BROADCAST_SHAPE_BOUNDARIES = {
+    "python/jittor/src/ops/broadcast_to_op.cc": 5,
+}
+
 MIGRATED_TERNARY_SHAPE_BOUNDARIES = {
     "python/jittor/src/ops/ternary_op.cc": 2,
 }
@@ -64,6 +68,13 @@ def test_public_view_shape_migration_is_explicit_and_bounded():
         counts[relative] = actual
         assert actual == expected, (relative, actual, expected)
     assert sum(counts.values()) == 9
+
+
+def test_broadcast_shape_migration_is_explicit_and_bounded():
+    source = (ROOT / "python/jittor/src/ops/broadcast_to_op.cc").read_text()
+    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    assert actual == MIGRATED_BROADCAST_SHAPE_BOUNDARIES[
+        "python/jittor/src/ops/broadcast_to_op.cc"]
 
 
 def test_public_ternary_shape_migration_is_explicit_and_bounded():

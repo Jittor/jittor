@@ -41,6 +41,19 @@ class TestBroadcastToOp(unittest.TestCase):
             exc_type=RuntimeError,
             match="Shape not match in broadcast_to",
         )
+
+    def test_invalid_target_shape_is_a_catchable_user_error(self):
+        value = jt.array([1, 2, 3])
+        expect_error(
+            lambda: jt.ops.broadcast(value, [], [0]),
+            exc_type=RuntimeError,
+            match="Number of shape should greater than 0",
+        )
+        expect_error(
+            lambda: jt.ops.broadcast(value, [-1]),
+            exc_type=RuntimeError,
+            match="Shape should greater than 0",
+        )
         
     def test_binary_op(self):
         if self.use_shape: return

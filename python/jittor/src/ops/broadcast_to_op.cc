@@ -78,9 +78,9 @@ BroadcastToOp::BroadcastToOp(Var* x, NanoVector shape, NanoVector dims) : x(x), 
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);
     set_type(OpType::broadcast);
-    CHECKop(shape.size(),>,0u) << "Number of shape should greater than 0.";
+    USER_CHECKop(shape.size(),>,0u) << "Number of shape should greater than 0.";
     for (auto v : shape)
-        CHECKop(v,>=,0u) << "Shape should greater than 0.";
+        USER_CHECKop(v,>=,0u) << "Shape should greater than 0.";
     z = create_output(nullptr, x->dtype());
     bcast_mask = 0;
     keepdims_mask = 0;
@@ -150,7 +150,7 @@ void BroadcastToOp::infer_shape() {
         if ((xshape == 1 || yshape == 1) && (xshape != yshape)) {
             zs = xshape * yshape;
         } else {
-            CHECKop(xshape,==,yshape) << "Shape not match in broadcast_to at output dim " >> i
+            USER_CHECKop(xshape,==,yshape) << "Shape not match in broadcast_to at output dim " >> i
                 >> ": cannot broadcast x" << x->shape << "to" << yshapes
                 << "(conflicting sizes " >> xshape >> " vs " >> yshape
                 >> "; bcast_mask=" >> bcast_mask >> ").";
