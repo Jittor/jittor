@@ -179,6 +179,21 @@ unordered_map<string, NanoString> __string_to_ns;
 char __ns_to_string[ns_max_size*ns_max_len];
 int __ns_len[ns_max_size];
 
+void ns_check_registration(uint32 index, const char* name) {
+    ASSERTop(index,<,(uint32)ns_max_size)
+        << "too many NanoString entries: the index field holds"
+        << ns_max_size << "and this is entry" << index << name
+        << "-- widen NanoString::_index_nbits (and ns_max_size with it)"
+           " rather than letting the index wrap into an existing entry";
+    size_t len = 0;
+    while (name[len]) len++;
+    ASSERTop(len,<,(size_t)ns_max_len)
+        << "NanoString name too long:" << name << "is" << len
+        << "characters and each name gets a" << ns_max_len
+        << "byte slot (one of them the terminator). Writing it would overwrite"
+           " the name of the next entry, silently, at static-init time.";
+}
+
 static void init_ns() {
     dsize_map["float16"] = 1;
     is_float_map["float16"] = 1;
@@ -191,6 +206,9 @@ static void init_ns() {
     is_unsigned["complex64"] = 0;
     NanoString::ns_t i=0;
     auto func = [&](const char* name, NanoString& ns) {
+        // Before anything is written: both tables below are indexed without a
+        // bounds check of their own.
+        ns_check_registration(i, name);
         ns.set(NanoString::_index, i++, NanoString::_index_nbits);
         if (dsize_map.count(name)) {
             bool is_cplx = strstr(name, "complex") != nullptr;
@@ -224,11 +242,14 @@ static void init_ns() {
             name2[len] = name[len];
             if (!name[len]) break;
         }
+        ASSERTop(len,<,ns_max_len);  // ns_check_registration already said so
         __ns_len[i-1] = len;
     };
     #define INIT_NS(T) func(#T, ns_##T);
     FOR_ALL_NS(INIT_NS);
-    ASSERT(i<=(1<<NanoString::_index_nbits));
+    // ns_check_registration() has already refused every entry that would not
+    // fit; this only restates the total for a reader.
+    ASSERTop(i,<=,(NanoString::ns_t)ns_max_size);
     __string_to_ns["sum"] = ns_add;
     __string_to_ns["min"] = ns_minimum;
     __string_to_ns["max"] = ns_maximum;

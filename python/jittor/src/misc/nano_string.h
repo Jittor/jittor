@@ -9,6 +9,14 @@
 
 namespace jittor {
 
+//: How many NanoString entries exist, and how many bytes each name gets.
+//:
+//: Both are hard limits on a table that is written by index with no bounds
+//: check of its own, so they are asserted at registration time
+//: (`ns_check_registration`) rather than trusted. `ns_max_size` must stay equal
+//: to `1 << NanoString::_index_nbits`; a static_assert below holds the two
+//: together, because they disagreed for years -- the table had room for 256
+//: entries and the index field could only address 128 of them.
 constexpr int ns_max_size = 256;
 constexpr int ns_max_len = 16;
 
@@ -104,7 +112,14 @@ struct NanoString {
     typedef uint32 ns_t;
     enum Flags {
         // bit0~7: index
-        _index=0, _index_nbits=7,
+        //
+        // 8 bits, not 7. `set()` masks the value it is given, so an index the
+        // field cannot hold does not overflow into the next field -- it wraps,
+        // and entry 128 silently becomes an alias of entry 0. The table it
+        // indexes (`__ns_to_string`, `__ns_len`) has always been 256 entries
+        // long, so the two disagreed by a factor of two with 71 of the 128
+        // slots already spent. See `ns_check_registration`.
+        _index=0, _index_nbits=8,
         _n=_index_nbits,
 
         // bit0-1: type
@@ -185,6 +200,27 @@ struct NanoString {
         { return __ns_to_string+index()*ns_max_len; }
     operator uint32() const { return data; }
 };
+
+static_assert(ns_max_size == (1 << NanoString::_index_nbits),
+    "the name table and the index field must address the same number of "
+    "entries: a table larger than the field wraps silently, a field larger "
+    "than the table writes past it");
+
+/** Reject a NanoString registration that the tables cannot hold.
+ *
+ * Both limits used to be unchecked at the point where they are exceeded. An
+ * index past the end of the field wrapped (see `_index_nbits`); a name of
+ * `ns_max_len` characters or more ran off the end of its 16-byte slot and
+ * overwrote the *next* entry's name, which reads as "some unrelated operator
+ * is suddenly called something else". The longest name in the table today is
+ * 13 characters, so the second one is two characters of headroom away, and
+ * whoever spends it will be adding an operator or a dtype and looking
+ * somewhere else entirely.
+ *
+ * Throws (via ASSERT) rather than returning a code: it runs during static
+ * initialisation, where there is nobody to return to.
+ */
+void ns_check_registration(uint32 index, const char* name);
 
 /** Does `s` name a NanoString -- a dtype or an operator name?
  *
