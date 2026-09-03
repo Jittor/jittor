@@ -218,7 +218,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 1.02 | `op_compiler.cc:30-69` 用正则给 `ParallelPass` 输出打补丁… | 已合并 | codegen | 3eb34e6a |
 | 1.03 | 查明 `SharedReducePass` 在约 4900 个归约 kernel 里零命中的触发… | 已合并 | codegen | 3eb34e6a |
 | 1.04 | `ReduceTuner::run` 不再对 CUDA 直接返回 | 已合并 | codegen | aebb1d73 |
-| 1.05 | 布局收尾 | 待领 | | |
+| 1.05 | 布局收尾 | 待领 | | 5ac222bb 已合入 1/N：`python/jittor/src/test` 的 20 个 C++ 单元测试原样迁至 `src/tests`，构建递归发现、两项结构引用和 Python bridge/JIT_TEST 继续工作；活跃注释、allocator skill 与目标布局同步。结构引用 2 passed，bridge 发现与 `test_expr` 2 passed。其余 39 个根文件、三个 pass 与 `data.gz`/`vdp` 未做，保持待领 |
 | 2.01 | Var 与 Op 各持自己的 flag 类型 | 已合并 | coreops | 5b197cae |
 | 2.02 | 删除 `Node::custom_data` | 已合并 | coreops | 505e9b37（上半：拓扑排序自带入度，内存分析器的手工备份删掉）、77641cc8（下半：grad/dump 各持局部表，执行器与 fuser 的批下标搬到 `Node::batch_index`+`batch_stamp`，写用 `set_batch_index`、读一律 `batch_index_at(stamp)`并当场校验）。**字段本身仍在**：第六个用法是 FusedOp 的跨阶段映射，见 2.24（排在 3.11 之后）。审计描述的危害「任意两个遍历交错就互相破坏」到此消除 |
 | 2.03 | `tflag` 全局计数器加魔数改为 epoch 对象或局部集合 | 已合并 | coreops | 6833f96d。嵌套 TraversalEpoch 恢复外层标记，grad/graph/memory profiler 改局部索引或集合；CPU 33 项、CUDA 3 项及结构聚焦通过 |
