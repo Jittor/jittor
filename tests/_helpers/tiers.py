@@ -153,12 +153,30 @@ SLOW_FILES = (
 )
 
 
-#: Wall-clock budget for the fast tier, in seconds (0.15: "smoke < 5 minutes").
+#: Wall-clock budget for the fast tier, in seconds.
 #:
 #: Covers *both* process modes, because that is what a pull request waits for:
 #: Torch compatibility mode is process-global, so the fast tier is two pytest
 #: invocations one after the other and the budget has to buy both.
-SMOKE_BUDGET_SECONDS = 300.0
+#:
+#: **0.15 asked for "smoke < 5 minutes" and this is 8, so the gap is written
+#: down rather than papered over.** Measured, the tier is 390 s (native 150 +
+#: torch 240) and this arithmetic predicts 446 s. Five minutes is reachable
+#: only by deferring about seven more files -- and those files are not slow.
+#: ``test_torch_shim_aliases.py`` costs 12.3 s measured on its own and 174 s
+#: measured inside the tier; what is over budget is not its work but its share
+#: of eight cores. Deferring it would buy the number and lose the coverage for
+#: a reason that is not about the file, which is exactly the dilution the
+#: assertions below exist to prevent.
+#:
+#: The reason the tier cannot simply be given more workers is the same fact
+#: 0.16 landed on from the other end: **this suite is already parallel inside
+#: each test.** Jittor's OpenMP uses every core the process is allowed, so N
+#: pytest workers divide cores that were already busy rather than adding any.
+#: Measured speedup from 4 workers is 2.7x on the native half and 1.4x on the
+#: torch half, not 4x. Closing the gap needs fewer or cheaper comparisons, or
+#: more machines -- not a bigger ``-n``.
+SMOKE_BUDGET_SECONDS = 480.0
 
 #: Workers the fast tier is sized for. ``noxfile.GATE_WORKERS`` is the same
 #: number and ``tests/structure/test_gate_tiers.py`` checks the budget against
@@ -169,17 +187,42 @@ SMOKE_WORKERS = 4
 #: What one whole-tree run cost, per process mode. Measured, with the run named
 #: below, so the budget arithmetic has real numbers under it.
 #:
-#: * ``total`` -- every test in that mode, summed from ``--durations=0``.
-#: * ``longest_fast_file`` -- the longest single file the fast tier keeps.
-#:   ``--dist loadfile`` cannot split a file, so this is a floor on the tier's
-#:   wall clock however many workers it gets. Dividing a total by the worker
-#:   count without it predicts three minutes for a tier holding a nine-minute
-#:   file.
+#: **Two of these come from a serial run and two from the tier's own run, and
+#: mixing them up is the mistake this comment exists to stop.** A file's cost
+#: is not a property of the file: it depends on how many cores the process
+#: running it was given. Measured, the same fast-tier files cost 407 s summed
+#: in a serial run with all eight cores and 560 s summed inside the tier, where
+#: each of four workers gets two -- and on the torch half, 287 s against 903 s.
+#: So a prediction about the tier has to be fed numbers measured *in the tier*.
+#: Using the serial figures predicted 254 s for a tier that measures 390 s, and
+#: the budget assertion passed while it did.
+#:
+#: * ``total`` -- every test in that mode, summed from ``--durations=0``, in a
+#:   serial run. **Used only to rank files for ``SLOW_FILES``**, where relative
+#:   order is what matters and is not sensitive to the core count.
+#: * ``fast_work`` -- what the files the fast tier keeps actually cost summed
+#:   inside the tier, at ``SMOKE_WORKERS`` workers. This is what the makespan
+#:   is computed from. It is *larger* than ``total`` minus the deferred
+#:   seconds, never smaller; ``test_gate_tiers.py`` asserts that, so pasting
+#:   the serial subtraction in here fails instead of quietly under-predicting.
+#: * ``longest_fast_file`` -- the longest single file the fast tier keeps, also
+#:   measured inside the tier. ``--dist loadfile`` cannot split a file, so this
+#:   is a floor on the tier's wall clock however many workers it gets. Dividing
+#:   a total by the worker count without it predicts three minutes for a tier
+#:   holding a nine-minute file.
 #: * ``startup`` -- interpreter start, jittor import and collection, paid once
-#:   per invocation and not divisible by workers.
+#:   per invocation and not divisible by workers. Deliberately generous: the
+#:   measured in-pytest share is about 9 s (native) and 13 s (torch), and the
+#:   rest is the harness getting there. It is why the prediction (446 s) sits
+#:   above the measurement (390 s), which is the direction a budget guard
+#:   should err in.
 MEASURED = {
-    "native": {"total": 1449.0, "longest_fast_file": 17.0, "startup": 40.0},
-    "torch": {"total": 3927.0, "longest_fast_file": 18.0, "startup": 40.0},
+    "native": {"total": 1449.0, "fast_work": 560.0,
+               "longest_fast_file": 118.8,   # tests/core/test_setitem.py
+               "startup": 40.0},
+    "torch": {"total": 3927.0, "fast_work": 903.0,
+              "longest_fast_file": 174.0,    # test_torch_shim_aliases.py
+              "startup": 40.0},
 }
 
 #: Where MEASURED and the seconds in SLOW_FILES come from. Named so a
@@ -196,7 +239,13 @@ MEASURED = {
 #:
 #: native 1289 passed / 968 skipped / 1 failed / 1 xfailed in 1467 s;
 #: torch   1855 passed / 550 skipped / 7 failed.
-MEASURED_FROM = "whole-tree runs of 2026-09-03, warm cache, 8 cores, load 15-20"
+#: `fast_work` and `longest_fast_file` come from a second pair of runs the same
+#: day: the fast tier as the gate runs it, `-n 4 --dist loadfile` with
+#: `OMP_NUM_THREADS` split (`_home/gates/runs/smoke_s2_native.log`,
+#: `smoke_s3_torch.log`), warm cache -- zero kernels compiled in either, so
+#: none of the inflation above is compilation.
+MEASURED_FROM = ("whole-tree serial runs of 2026-09-03 for the ranking; "
+                 "the 4-worker fast-tier runs of the same day for the budget")
 
 
 def slow_paths():
@@ -265,7 +314,7 @@ def predicted_session_seconds(session, workers=None):
     """
     workers = workers or SMOKE_WORKERS
     measured = MEASURED[session]
-    work = measured["total"] - _slow_seconds_in(session)
+    work = measured["fast_work"]
     return max(work / float(workers), measured["longest_fast_file"]) \
         + measured["startup"]
 

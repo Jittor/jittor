@@ -107,6 +107,34 @@ class TestBudget(unittest.TestCase):
                     measured["longest_fast_file"],
                     session)
 
+    def test_the_fast_tier_cost_was_measured_inside_the_fast_tier(self):
+        """``fast_work`` has to come from a run at ``SMOKE_WORKERS`` workers.
+
+        The tempting way to fill it in is ``total - deferred seconds``, and
+        that number is always too small: the serial run gave every test all
+        eight cores, while a worker in the tier gets two, so the same files
+        cost more inside it. Measured, 407 s serial against 560 s in the tier
+        on the native half and 287 s against 903 s on the torch half. The
+        arithmetic ran on the serial figures once and predicted 254 s for a
+        tier that measures 390 s -- passing the budget check while doing it.
+
+        So the one property that distinguishes a real measurement from the
+        subtraction is asserted: a parallel run cannot be cheaper.
+        """
+        for session, measured in sorted(tiers.MEASURED.items()):
+            with self.subTest(session=session):
+                serial = measured["total"] - tiers._slow_seconds_in(session)
+                # Strictly greater, not >=: the value someone would paste in
+                # is `total - deferred`, which is *equal* to `serial`. Equality
+                # is the bug, so equality has to fail.
+                self.assertGreater(
+                    measured["fast_work"], serial,
+                    "%s fast_work=%.0fs is not above the serial figure %.0fs, so "
+                    "it was not measured in the tier's own configuration -- a "
+                    "worker holding a quarter of the cores cannot be as fast as "
+                    "the serial run. Re-measure with -n %d."
+                    % (session, measured["fast_work"], serial, tiers.SMOKE_WORKERS))
+
     def test_every_measured_session_is_a_session_the_gate_runs(self):
         self.assertEqual(set(tiers.MEASURED), {"native", "torch"})
 

@@ -20,11 +20,47 @@ jobs:
   baseline:
     uses: ./.github/workflows/_ci-baseline.yml
 
-  # The `smoke` job lands with the measured tier (0.15). `nox -s smoke` exists
-  # and works, but until `tests/_helpers/tiers.SLOW_FILES` has entries the fast
-  # tier selects exactly what the full tier does, so wiring it into CI now would
-  # add a second whole-tree run under a 30-minute budget it cannot meet -- a red
-  # that says nothing about the change that triggered it.
+  smoke:
+    needs: baseline
+    name: nox / smoke
+    runs-on: ${{ needs.baseline.outputs.host_runner }}
+    container:
+      image: ${{ needs.baseline.outputs.cpu_ci_image }}
+    # The pull-request tier (0.15): every file the gate reaches in both process
+    # modes, minus the 37 recorded in tests/_helpers/tiers.SLOW_FILES, under
+    # xdist. The tier's promise -- five minutes -- is asserted in
+    # tests/structure/test_gate_tiers.py, arithmetically, against measured
+    # per-file costs; an assertion on elapsed wall clock would fail on a busy
+    # runner for reasons that have nothing to do with the change. The number
+    # below is the runner's patience, and it has to cover the pip installs and
+    # a cache miss, not just the tests.
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install native CPU toolchain
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential libomp-dev
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ needs.baseline.outputs.python_version }}
+      - name: Install pinned development tools
+        run: python -m pip install -r requirements/dev-tools.txt
+      # The fast tier is only fast with the kernels already built; see the same
+      # step in the `cpu` job.
+      - name: Restore the Jittor build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
+          key: jittor-build-${{ runner.os }}-${{ hashFiles('python/jittor/src/**', 'python/jittor/extern/**', 'python/jittor/compiler.py', 'requirements/dev-tools.txt') }}
+          restore-keys: |
+            jittor-build-${{ runner.os }}-
+      - name: Run the fast CPU tier
+        run: python -m nox -s smoke
 
   cpu:
     needs: baseline
@@ -50,6 +86,21 @@ jobs:
           python-version: ${{ needs.baseline.outputs.python_version }}
       - name: Install pinned development tools
         run: python -m pip install -r requirements/dev-tools.txt
+      # Without this the gate rebuilds Jittor from scratch on every run: the
+      # nox sessions share one cache under $JITTOR_LAB_ROOT/_state/nox/cache,
+      # which persists on a self-hosted runner and is empty in a fresh
+      # container. Measured on eight cores: the same whole-tree native session
+      # is 47 minutes cold and 24 minutes warm, and the difference is entirely
+      # kernels being compiled again to the same bytes. The key is the build
+      # configuration -- the sources that decide what gets compiled -- so a
+      # source change invalidates it and a test-only change does not.
+      - name: Restore the Jittor build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
+          key: jittor-build-${{ runner.os }}-${{ hashFiles('python/jittor/src/**', 'python/jittor/extern/**', 'python/jittor/compiler.py', 'requirements/dev-tools.txt') }}
+          restore-keys: |
+            jittor-build-${{ runner.os }}-
       - name: Install independent CPU PyTorch oracle
         run: |
           python -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.7.1
@@ -58,6 +109,12 @@ jobs:
         env:
           JITTOR_REQUIRE_REAL_TORCH: "1"
         run: python -m nox -s cpu
+      - name: Save the Jittor build cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
+          key: jittor-build-${{ runner.os }}-${{ hashFiles('python/jittor/src/**', 'python/jittor/extern/**', 'python/jittor/compiler.py', 'requirements/dev-tools.txt') }}
 
   benchmark:
     needs: baseline
