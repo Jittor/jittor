@@ -14,9 +14,7 @@
 namespace jittor {
 
 // Read the decimal number that starts at str[pos].
-// NOTE: throws std::invalid_argument when str[pos] is not a digit. Every
-// caller below only reaches it after matching a token that is always followed
-// by digits ("tn", "range", "op"), which is why it has no guard.
+// Callers first verify that the matched token is followed by a digit.
 int parse_int_at(const string& str, int pos) {
     string digits = "";
     for (; pos < (int)str.size() && str[pos] >= '0' && str[pos] <= '9'; pos++) digits += str[pos];
@@ -56,6 +54,10 @@ int find_reduce_op_id(unique_ptr<KernelIR>& kernel, FusedOp* op) {
         while (true) {
             auto pos = code.find("op", search_pos);
             if (pos == string::npos) break;
+            if (pos + 2 >= code.size() || !isdigit(code[pos + 2])) {
+                search_pos = pos + 2;
+                continue;
+            }
             int op_id = parse_int_at(code, pos + 2);
             ASSERT(op_id >= 0 && op_id < (int)op->ops.size());
             if (op->ops[op_id]->is_op(op_ids::reduce())) reduce_ids.insert(op_id);
@@ -169,101 +171,90 @@ std::tuple<int, vector<int>, tn_range_map> plan_reduce_thread_order(unique_ptr<K
     return std::make_tuple((int)reduce_tns.size() - 1, order, tn_ranges);
 }
 
-// Rewrite the thread range setup at the call site and the tid/tnum decoding
-// inside the kernel so that the reduced dimensions occupy the low bits of the
-// thread id, i.e. one CUDA block covers a whole reduction. That is what makes
-// the shared-memory reduction emitted above legal.
+// Put reduced dimensions in the low thread-id bits and cap their combined
+// width at one CUDA block. ParallelPass may insert balancing branches between
+// its tn definitions, so this pass must update named definitions rather than
+// assuming those nodes are contiguous.
 void apply_reduce_thread_order(unique_ptr<KernelIR>& call, unique_ptr<KernelIR>& kernel, ReduceOp* rop) {
     auto plan = plan_reduce_thread_order(call, rop);
     int last_reduce = std::get<0>(plan);
     auto order = std::get<1>(plan);
-    auto tn_ranges = std::get<2>(plan);
+    ASSERT(last_reduce >= 0);
+    int ndim = order.size();
+    for (int d = 0; d < ndim; ++d)
+        ASSERT(std::find(order.begin(), order.end(), d) != order.end());
 
-    // ParallelPass emitted the tn defines, the accumulation statements and the
-    // final "thread_num=..." in a fixed order; walk that block and overwrite
-    // it statement by statement.
-    uint pos = 0;
-    for (auto& child : call->children) {
-        if (child->type == KernelIRType::define && child->get_attr(kir::lvalue).substr(0, 2) == "tn") break;
-        ++pos;
+    uint thread_num_pos = 0;
+    for (; thread_num_pos < call->children.size(); ++thread_num_pos) {
+        auto& child = call->children[thread_num_pos];
+        if (child->has_attr(kir::code) &&
+            startswith(child->attrs[kir::code], "thread_num=1<<tn"))
+            break;
     }
-    for (int tn : order) {
-        string range_expr = "";
-        for (int d : tn_ranges[tn]) range_expr += " * range" + std::to_string(d);
-        call->children[pos]->attrs[kir::lvalue] = "tn" + std::to_string(tn);
-        call->children[pos]->attrs[kir::rvalue] =
-            "get_thread_range_log(thread_num_left, " + range_expr.substr(2) + ")";
-        ++pos;
-    }
-    if (last_reduce == 0) {
-        // a single reduced range: give it at least a warp
-        string cur = "tn" + std::to_string(order[0]);
-        call->children[pos++]->attrs[kir::code] = cur + " = std::max(" + cur + ", 5);";
-    }
-    for (uint i = 0; i + 1 < order.size(); ++i) {
-        string cur = "tn" + std::to_string(order[i]);
-        string next = "tn" + std::to_string(order[i + 1]);
-        call->children[pos++]->attrs[kir::code] = next + " = " + cur + " + " + next + ";";
-        if ((int)i + 1 == last_reduce) {
-            call->children[pos++]->attrs[kir::code] = next + " = std::max(" + next + ", 5);";
-        }
-    }
-    call->children[pos]->attrs[kir::code] = "thread_num=1<<tn" + std::to_string(order.back()) + ";";
+    ASSERT(thread_num_pos < call->children.size());
 
-    pos = 0;
-    for (auto& child : kernel->children) {
-        if (child->type == KernelIRType::define && child->get_attr(kir::lvalue).substr(0, 4) == "tnum") break;
-        ++pos;
+    // Snapshot ParallelPass's cumulative tn boundaries, then retain at most ten
+    // reduced bits (1024 threads). Removed bits become serial loop iterations.
+    for (int d = 0; d < ndim; ++d) {
+        string next = d + 1 < ndim ? "tn" + std::to_string(d + 1) : "0";
+        call->insert(thread_num_pos++, "int _srw" + std::to_string(d) +
+            "=tn" + std::to_string(d) + "-" + next + ";");
     }
+    call->insert(thread_num_pos++, "int _sr_left=10;");
+    for (int i = 0; i <= last_reduce; ++i) {
+        string width = "_srw" + std::to_string(order[i]);
+        call->insert(thread_num_pos++, width + "=std::min(" + width + ",_sr_left);");
+        call->insert(thread_num_pos++, "_sr_left-=" + width + ";");
+    }
+    for (int d = ndim - 1; d >= 0; --d) {
+        string next = d + 1 < ndim ? "+tn" + std::to_string(d + 1) : "";
+        call->insert(thread_num_pos++, "tn" + std::to_string(d) +
+            "=_srw" + std::to_string(d) + next + ";");
+    }
+
+    string offset = "0";
+    string reduce_bits = "";
     for (uint i = 0; i < order.size(); ++i) {
-        auto& tnum_def = kernel->children[pos++];
-        string prev_tn = "tn" + (i == 0 ? std::to_string(order.size()) : std::to_string(order[i - 1]));
-        string tn = "tn" + std::to_string(order[i]);
-        string tnum = "tnum" + std::to_string(order[i]);
-        tnum_def->attrs[kir::lvalue] = tnum;
-        tnum_def->attrs[kir::rvalue] = "1<<(" + tn + "-" + prev_tn + ")";
-        auto& tid_def = kernel->children[pos++];
-        tid_def->attrs[kir::lvalue] = "tid" + std::to_string(order[i]);
-        tid_def->attrs[kir::rvalue] = "(thread_id>>" + prev_tn + ") & (" + tnum + "-1)";
+        int d = order[i];
+        string width = "(tn" + std::to_string(d) + "-" +
+            (d + 1 < ndim ? "tn" + std::to_string(d + 1) : "0") + ")";
+        string tnum = "tnum" + std::to_string(d);
+        auto* tnum_def = kernel->find_define(tnum);
+        auto* tid_def = kernel->find_define("tid" + std::to_string(d));
+        ASSERT(tnum_def && tid_def);
+        tnum_def->attrs[kir::rvalue] = "1<<" + width;
+        tid_def->attrs[kir::rvalue] =
+            "(thread_id>>(" + offset + ")) & (" + tnum + "-1)";
+        offset += "+" + width;
+        if ((int)i <= last_reduce)
+            reduce_bits += (reduce_bits.empty() ? "" : "+") + width;
     }
-    // block size must cover all reduced dimensions, so it is 1<<tn{last
-    // reduced range}, capped at 1024
+
+    // Low bits now cover all parallel reduction lanes, so each block owns an
+    // output and the shared helper emits one global atomic for it.
     call->find_define("p1")->attrs[kir::rvalue] =
-        string("std::max(thread_num / std::min(1 << tn") + std::to_string(order[last_reduce]) + ", 1024), 1)";
+        "std::max(thread_num / std::min(1 << (" + reduce_bits + "), 1024), 1)";
     call->find_define("p2")->attrs[kir::rvalue] =
-        string("std::min(1 << tn") + std::to_string(order[last_reduce]) + ", 1024)";
+        "std::min(1 << (" + reduce_bits + "), 1024)";
 }
 
 extern int para_opt_level;
 
-// Off by default: para_opt_level's default is 3 (loop_var_analyze_pass.cc), so
-// the guard below returns before anything happens and no generated kernel in a
-// stock build contains shared_reduce. That is deliberate, not an oversight.
+// The experimental level-4 CUDA path. apply_reduce_thread_order makes one block
+// own one output, then shared_reduce performs a two-level fold: warp shuffle,
+// one shared value per warp, and a final first-warp shuffle. That leaves one
+// global atomic per block without the old 1024-value shared tree and its six
+// barriers.
 //
-// Measured on an RTX 4090, float32, four-dimensional reductions over (0,2,3) --
-// the shapes a diffusers UNet backward produces -- as average device time per
-// kernel:
-//
-//     shape           atomics only   + WarpReducePass   + this pass
-//     8x384x32x32        157.0us          15.7us          25.3us
-//     8x128x64x64         92.1us          14.0us          31.3us
-//     16x192x32x32       159.2us          15.0us          25.3us
-//     32x64x56x56        171.0us          18.1us          34.8us
-//
-// Both strategies remove the atomic contention (6-10x over plain atomics), but
-// the warp shuffle in WarpReducePass is 1.6-2.0x faster than folding through
-// shared memory: shared_reduce needs a 1024-entry __shared__ array, six
-// __syncthreads(), and a volatile-memory warp tail, against five register-only
-// __shfl_down_sync. What this pass still has over it is the summation order --
-// relative error 2.3e-7 against 3.5e-7 -- and independence from whether a warp
-// happens to share an output address.
-//
-// Raising the default would need a block-level fold built on the shuffle
-// (warp reduce -> one value per warp -> shared memory -> one atomic), not this
-// one. tests/backends/cuda/test_shared_reduce.py pins that the pass still
-// produces correct code when switched on;
-// agent/skills/cuda-reduction-strategy-comparison/ has the measurement method.
+// The default remains WarpReducePass: the four-shape A/B recorded in the
+// reduction strategy skill found this path 1.64% slower in aggregate and 16.6%
+// slower on one representative shape. use_shared_reduce=0 also provides an
+// explicit warp-only comparison at level 4. ROCm retains its prior atomics
+// because its 64-lane wavefront needs a separate shuffle implementation.
 void SharedReducePass::run() {
+#ifdef IS_ROCM
+    return;
+#else
     auto parallel = op->get_loop_option("parallel");
     auto use_shared_reduce = op->get_loop_option("use_shared_reduce", 1);
     if (use_shared_reduce == 0) return;
@@ -282,6 +273,7 @@ void SharedReducePass::run() {
         apply_reduce_thread_order(call, kernel, dynamic_cast<ReduceOp*>(op->ops[reduce_op_id]));
         rewrite_atomics_to_shared_reduce(kernel);
     }
+#endif
 }
 
 } // jittor

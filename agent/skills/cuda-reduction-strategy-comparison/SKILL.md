@@ -13,7 +13,7 @@ description: 比较 Jittor CUDA 归约的三条策略（每线程原子、warp s
 | 顺序 | pass | 做什么 | 开关 |
 | --- | --- | --- | --- |
 | 117 | `AtomicTunerPass` | 把累加提到循环外，每个输出地址一次原子而不是每次迭代一次 | 总是开 |
-| 118 | `SharedReducePass` | 重排线程范围让一个 block 覆盖整个归约，再 `shared_reduce<T,op>` 块内折叠，`if (threadIdx.x==0)` 写一次 | **`para_opt_level >= 4`，默认 3，即默认关** |
+| 118 | `SharedReducePass` | 重排线程范围让一个 block 覆盖整个归约，再以 warp shuffle → 每 warp 一个共享值 → 首 warp shuffle 折叠，`if (threadIdx.x==0)` 写一次 | **`para_opt_level >= 4`，默认 3，即默认关** |
 | 120 | `WarpReducePass` | warp 内 `__shfl_down_sync` 折叠，每 warp 一次原子 | 默认开，`no_warp_reduce` 关 |
 
 **先确认你以为在跑的那条真的在跑**——这三条的开关条件都不写在一起：
@@ -52,6 +52,24 @@ jt.flags.compile_options = {"no_warp_reduce": 1}   # 关 WarpReducePass
    shuffle。运行期 `__activemask() != 0xffffffff` 会走回退，**结果对但全是死代码**，
    实测每 kernel 多花 1.3–1.9us。判据：lvl 4 的源码里同时出现 `shared_reduce<`
    与 `_wr_mask` 就是踩上了。
+
+## 3.22 两级混合路径复测（2026-09-03）
+
+把旧的 1024 项共享树改成“两级 warp shuffle，中间只交换每 warp 一个值”后，level 4
+路径从六次 `__syncthreads()` 降到两次。GPU profiler、30 次、同一输入的直接 A/B 为：
+
+| 形状 | 默认 warp-only | 两级混合 level 4 | 混合 / warp |
+| --- | ---: | ---: | ---: |
+| 8×384×32×32 | 17.53us | 17.21us | 0.982 |
+| 8×128×64×64 | 16.80us | 16.32us | 0.972 |
+| 16×192×32×32 | 18.00us | 16.39us | 0.910 |
+| 32×64×56×56 | 21.90us | 25.53us | 1.166 |
+| 合计 | **74.23us** | 75.45us | **1.016** |
+
+两边相对 NumPy 误差均不超过 `3.7e-7`，生成源码分别命中 `_wr_mask` 与
+`shared_reduce<`/`if (threadIdx.x == 0)`。混合路径前三形状略快，但第四形状退化
+16.6%，合计慢 1.64%，所以**不得改成默认**；它保留在 `para_opt_level >= 4` 供继续实验。
+3.22 只有在代表形状不退化并满足完整 UNet 归约性能终点后才能关闭。
 
 ## 怎么量：不要写 wall-clock 微基准
 

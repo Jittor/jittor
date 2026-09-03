@@ -3,7 +3,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-"""SharedReducePass: block-wide shared-memory reduction, off by default.
+"""SharedReducePass: optional block-wide warp/shared-memory hybrid reduction.
 
 The pass rewrites the per-thread ``atomicAdd`` that ends a CUDA reduction into
 
@@ -14,13 +14,12 @@ so one block writes its output once instead of once per thread. It first
 re-plans the thread ranges (``apply_reduce_thread_order``) so that a block
 covers whole reduced dimensions, which is what makes the block-wide fold legal.
 
-``SharedReducePass::run`` returns immediately unless ``para_opt_level >= 4`` and
-the default is 3, so it never runs in a stock build -- that is why no generated
-kernel in a normal workload contains ``shared_reduce``. The tests below pin both
-halves of that: it stays off by default, and it still produces correct code when
-turned on. Measurements that say why the default is 3 live in
+Level 4 uses warp shuffles for local folds and shared memory only for one partial
+per warp. Tests pin the default warp path, the opt-in block path, and its
+one-global-write contract. Measurements live in
 agent/skills/cuda-reduction-strategy-comparison/.
 """
+import os
 import unittest
 
 import numpy as np
@@ -39,7 +38,7 @@ class TestSharedReduce(unittest.TestCase):
         jt.flags.para_opt_level = self._level
         jt.flags.use_cuda = self._use_cuda
 
-    def _reduce(self, shape, dims, tag):
+    def _reduce(self, shape, dims, tag, **options):
         """Run one reduction and return (generated source, relative error)."""
         value = np.random.RandomState(abs(hash((shape, dims))) % 2**31)
         value = value.randn(*shape).astype("float32")
@@ -48,7 +47,9 @@ class TestSharedReduce(unittest.TestCase):
         # a compile option nothing reads, so that each case gets its own kernel
         # instead of the one an earlier case with another para_opt_level left in
         # the cache
-        with jt.profile_scope(compile_options={"test_shared_reduce": tag}) as rep:
+        compile_options = {"test_shared_reduce": tag}
+        compile_options.update(options)
+        with jt.profile_scope(compile_options=compile_options) as rep:
             got = jt.reduce(x, "add", dims).data
         expected = value.sum(axis=tuple(dims))
         scale = max(1.0, float(np.abs(expected).max()))
@@ -61,14 +62,25 @@ class TestSharedReduce(unittest.TestCase):
         source, error = self._reduce((8, 96, 32, 32), (0, 2, 3), 1)
         self.assertLess(error, 1e-5)
         self.assertNotIn("shared_reduce<", source)
+        self.assertIn("_wr_mask", source)
 
-    def test_on_at_level_4(self):
+    def test_level_4_uses_one_block_write(self):
         jt.flags.para_opt_level = 4
         source, error = self._reduce((8, 96, 32, 32), (0, 2, 3), 2)
         self.assertLess(error, 1e-5)
         self.assertIn("shared_reduce<", source)
-        # one write per block, not one per thread
         self.assertIn("if (threadIdx.x == 0)", source)
+        self.assertNotIn("_wr_mask", source)
+
+    def test_shared_reduce_helper_is_two_stage(self):
+        path = os.path.join(jt.compiler.jittor_path, "src", "misc", "cuda_atomic.h")
+        source = open(path).read()
+        body = source.split("inline static T shared_reduce(T u)", 1)[1]
+        body = body.split("\n}\n", 1)[0]
+        cuda_body = body.split("#else", 1)[1].split("#endif", 1)[0]
+        self.assertIn("__shfl_down_sync", cuda_body)
+        self.assertIn("warp_values[32]", cuda_body)
+        self.assertEqual(cuda_body.count("__syncthreads()"), 2)
 
     def test_warp_pass_leaves_the_guarded_atomic_alone(self):
         # WarpReducePass runs after SharedReducePass and matches the same

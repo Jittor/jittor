@@ -587,6 +587,7 @@ __device__ inline void warpReduce(volatile T* sdata, int tid) {
 
 template<typename T, T(*op)(T, T)>
 __device__ inline static T shared_reduce(T u) {
+#ifdef IS_ROCM
     __shared__ T sdata[1024];
 
     int tid = threadIdx.x;
@@ -618,6 +619,44 @@ __device__ inline static T shared_reduce(T u) {
         warpReduce<T, op>(sdata, tid);
 
     return sdata[0];
+#else
+    // Fold in registers within each warp, exchange one value per warp through
+    // shared memory, then let the first warp finish the block. SharedReducePass
+    // launches a power-of-two block of 32..1024 threads for this helper.
+    __shared__ T warp_values[32];
+    int tid = threadIdx.x;
+    int lane = tid & 31;
+    int warp = tid >> 5;
+    unsigned mask = __activemask();
+
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        T other = __shfl_down_sync(mask, u, offset);
+        int source_lane = lane + offset;
+        if (source_lane < 32 && (mask & (1u << source_lane)))
+            u = op(u, other);
+    }
+    if (lane == 0)
+        warp_values[warp] = u;
+    __syncthreads();
+
+    int warp_count = (blockDim.x + 31) >> 5;
+    if (warp == 0) {
+        bool valid = lane < warp_count;
+        unsigned warp_mask = __ballot_sync(__activemask(), valid);
+        T block_value = valid ? warp_values[lane] : u;
+        if (valid) {
+            for (int offset = 16; offset > 0; offset >>= 1) {
+                T other = __shfl_down_sync(warp_mask, block_value, offset);
+                if (lane + offset < warp_count)
+                    block_value = op(block_value, other);
+            }
+            if (lane == 0)
+                warp_values[0] = block_value;
+        }
+    }
+    __syncthreads();
+    return warp_values[0];
+#endif
 }
 
 } // jittor

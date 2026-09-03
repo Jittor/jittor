@@ -11,7 +11,9 @@
 
 namespace jittor {
 
-// A CUDA reduction ends with every thread adding its private partial sum
+// This is the default CUDA path below para_opt_level 4, and the fallback when
+// SharedReducePass cannot rewrite a kernel or use_shared_reduce=0 asks for it.
+// A reduction then ends with every thread adding its private partial sum
 // straight into the output element:
 //
 //     float tmp0 = 0;
