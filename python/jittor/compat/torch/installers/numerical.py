@@ -837,6 +837,25 @@ register_fidelity(
 )
 
 
+_SQUARE_FIDELITY_DETAIL = (
+    "matches Torch elementwise square values for supported real tensors but "
+    "omits device, layout, and dtype keyword semantics"
+)
+
+
+def square(x):
+    """Return the elementwise square of a tensor."""
+    return x * x
+
+
+register_fidelity(
+    "torch.square",
+    square,
+    Fidelity.APPROXIMATE,
+    _SQUARE_FIDELITY_DETAIL,
+)
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
@@ -1213,7 +1232,7 @@ def install(ctx):
     _alias("aminmax", aminmax); Var.aminmax = _aminmax_impl
     _alias("quantile", quantile)
     _alias("nanquantile", nanquantile)
-    _alias("square", lambda x: x * x)   # torch.square (jittor only had jt.sqr); persimmon
+    _alias("square", square)
     _alias("addmm", addmm)
 
     # ---- torch.* ops used by mmdetection (additive aliases) ----

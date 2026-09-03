@@ -972,6 +972,34 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         np.testing.assert_allclose(actual_2d.numpy(), expected_2d, rtol=1e-6)
         np.testing.assert_allclose(method.numpy(), expected_2d, rtol=1e-6)
 
+    def test_square_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.square))
+        self.assertIs(torch.square, numerical.square)
+        self.assertEqual(numerical.square.__module__, numerical.__name__)
+        self.assertEqual(numerical.square.__name__, "square")
+
+    def test_square_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.square")
+        self.assertIs(record.implementation, numerical.square)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("device", record.detail)
+        self.assertIn("layout", record.detail)
+
+    def test_square_cpu_values_and_var_delegate_match_numpy(self):
+        values = np.array([[-2.0, -0.5], [1.5, 3.0]], dtype="float32")
+        expected = np.square(values)
+        with torch.flag_scope(use_cuda=0):
+            values_tensor = torch.array(values)
+            actual = torch.square(values_tensor)
+            method = values_tensor.square()
+        np.testing.assert_allclose(actual.numpy(), expected, rtol=1e-6)
+        np.testing.assert_allclose(method.numpy(), expected, rtol=1e-6)
+
 
 if __name__ == "__main__":
     unittest.main()
