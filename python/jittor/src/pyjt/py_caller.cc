@@ -60,7 +60,7 @@ string py_caller(const string& mod_func, const vector<string>& args, const map<s
     PyObjHolder py_args(to_py_tuple(args));
     PyObjHolder py_kw(to_py_object(kw));
     PyObjHolder ret(PyObject_CallFunctionObjArgs(func.obj, py_name.obj, py_args.obj, py_kw.obj, nullptr));
-    CHECK(is_type<string>(ret.obj)) << "expect return type string.";
+    USER_CHECK(is_type<string>(ret.obj)) << "expect return type string.";
     return from_py_object<string>(ret.obj);
 }
 

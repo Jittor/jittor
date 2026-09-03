@@ -14,6 +14,25 @@ jit_eval = jt.core.op_compiler.eval
 jit_precompile = jt.core.op_compiler.precompile
 
 class TestOpCompiler(unittest.TestCase):
+    def test_python_directive_requires_string_result(self):
+        import jittor.misc.tensor_ops as tensor_ops
+
+        sentinel = getattr(tensor_ops, "_returns_non_string", None)
+        tensor_ops._returns_non_string = lambda _unused, **kw: 1
+        try:
+            expect_error(
+                lambda: jit_precompile(
+                    {}, "@python.jittor.misc.tensor_ops._returns_non_string(0);"
+                ),
+                exc_type=RuntimeError,
+                match="expect return type string",
+            )
+        finally:
+            if sentinel is None:
+                del tensor_ops._returns_non_string
+            else:
+                tensor_ops._returns_non_string = sentinel
+
     def test_eval(self):
         def check(expr, vars={}):
             for k,v in vars.items():
