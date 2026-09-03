@@ -379,7 +379,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 6.B13 | cuFFT `cufftCreate` 后被 `cufftPlanMany` 覆盖的句柄泄漏 | 已合并 | cudabk | 11697758 |
 | 6.B14 | conv3d 三算子迁到 backend plan 缓存 | 已合并 | cudabk | 8432a181 |
 | 6.B15 | MPI 同时识别 PMI_/SLURM_ 环境变量或要求显式声明 | 已合并 | dist | 956c4b23 |
-| 6.B16 | `sync_run` 在 ACL 上实现或删 flag | 待领 | | |
+| 6.B16 | `sync_run` 在 ACL 上实现或删 flag | 待领 | | 15bccb92 已合入 1/N 代码组织阶段：`BaseOpRunner::syncRun` 在 `sync_run=1` 时同步 `aclstream`，检查返回码并以算子名、数值码和 ACL 文本报错；静态合同修前 1 failed、修后 1 passed。Ascend 910B3 文档已给出 CANN/`npu-smi` 前置、`sync_run=1/0` 精确节点与禁止 CPU fallback 检查。本机无 NPU，仍需 910B3 实机验证同步/异步两条路径和失败归因后才能完成 |
 | 6.B17 | 析构不得抛 | 已合并 | cudabk | 272f00ba |
 | 7.01 | 「看起来支持其实空操作」一律改为实现或抛 `NotImplementedError`，需显式 `… | 已合并 | 兼容层分区 | ff395ecc b7c12ddc 0446217e 47012a27 46bc9ea7 49d41acf 9053a7c0 |
 | 7.02 | DDP 真实梯度同步 | 已合并 | 兼容层分区 | 4f08f1da |
