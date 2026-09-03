@@ -88,11 +88,12 @@ void FakeMainPass::run() {
         uint op_id, var_id;
         Op* op;
         Var* var;
-        try {
-            pm->oc->get_op_var_by_name(name, op_id, var_id, op, var);
-        } catch (...) {
+        // Most defines in the kernel are not op vars (range0, op0_zstride1,
+        // thread_num, ...), so this is a question, not an error -- it used to
+        // be asked by catching the exception, which also swallowed any real
+        // failure raised underneath.
+        if (!pm->oc->try_get_op_var_by_name(name, op_id, var_id, op, var))
             continue;
-        }
         // build fake var
         auto vec_to_str = [](const NanoVector& v) -> string {
             std::stringstream ss;

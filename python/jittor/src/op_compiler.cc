@@ -27,14 +27,14 @@ using namespace jit_compiler;
 
 static bool isvar(char x) { return isalnum(x) || x == '_' || x == ':'; }
 
-void OpCompiler::get_op_var_by_name(const string& name, uint& op_id, uint& opvar_id, Op*& op, Var*& var) {
+bool OpCompiler::try_get_op_var_by_name(const string& name, uint& op_id, uint& opvar_id, Op*& op, Var*& var) {
     // name: op{id}_{varname}
-    ASSERT(name.size()>3 && name[0]=='o' && name[1]=='p');
+    if (!(name.size()>3 && name[0]=='o' && name[1]=='p')) return false;
     uint j=2;
     while (j<name.size() && isdigit(name[j])) j++;
-    ASSERT(j>2);
+    if (j<=2) return false;
     op_id = std::stoi(name.substr(2, j-2));
-    ASSERT(op_members.size() > op_id);
+    if (op_members.size() <= op_id) return false;
     bool found = false;
     for (opvar_id=0 ;opvar_id < op_members[op_id].size(); opvar_id++) {
         if (op_members[op_id][opvar_id] == name) {
@@ -42,8 +42,10 @@ void OpCompiler::get_op_var_by_name(const string& name, uint& op_id, uint& opvar
             break;
         }
     }
+    if (!this->op || op_id >= this->op->ops.size()) return false;
     op = this->op->ops[op_id];
-    ASSERT(found && opvar_id < op->inputs().size() + op->outputs().size());
+    if (!(found && opvar_id < op->inputs().size() + op->outputs().size()))
+        return false;
     if (opvar_id >= op->inputs().size()) {
         auto iter = op->outputs().begin();
         for (uint t=op->inputs().size(); t<opvar_id; t++)
@@ -55,6 +57,12 @@ void OpCompiler::get_op_var_by_name(const string& name, uint& op_id, uint& opvar
             iter++;
         var = *iter;
     }
+    return true;
+}
+
+void OpCompiler::get_op_var_by_name(const string& name, uint& op_id, uint& opvar_id, Op*& op, Var*& var) {
+    ASSERT(try_get_op_var_by_name(name, op_id, opvar_id, op, var))
+        << "not a var member of this fused op:" << name;
 }
 
 string OpCompiler::get_name_by_op_var(Op* op, Var* var) {

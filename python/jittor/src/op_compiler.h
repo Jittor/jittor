@@ -24,7 +24,11 @@ struct OpCompiler {
 
     OpCompiler(Op*);
     string get_src();
+    // Resolve "op{i}_{member}" to the op and var it names. Fails if the name
+    // is not one; use try_get_op_var_by_name when "is this an op var?" is the
+    // question being asked, rather than catching the failure.
     void get_op_var_by_name(const string& name, uint& op_id, uint& opvar_id, Op*& op, Var*& var);
+    bool try_get_op_var_by_name(const string& name, uint& op_id, uint& opvar_id, Op*& op, Var*& var);
     string get_name_by_op_var(Op* op, Var* var);
     string get_name_by_op_input(Op* op, uint i);
     string get_name_by_op_output(Op* op, uint i);
