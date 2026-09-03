@@ -361,6 +361,59 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertEqual(all_false, np.allclose(left, right, equal_nan=False))
         self.assertEqual(all_true, np.allclose(left, right, equal_nan=True))
 
+    def test_pairwise_search_family_is_stable_module_level_objects(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        for name in ("cdist", "bucketize"):
+            with self.subTest(name=name):
+                implementation = getattr(numerical, name)
+                self.assertTrue(callable(implementation))
+                self.assertIs(getattr(torch, name), implementation)
+                self.assertEqual(implementation.__module__, numerical.__name__)
+                self.assertEqual(implementation.__name__, name)
+
+    def test_pairwise_search_family_fidelity_is_queryable(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        for name in ("cdist", "bucketize"):
+            with self.subTest(name=name):
+                record = fidelity.fidelity_of("torch." + name)
+                self.assertIs(record.implementation, getattr(numerical, name))
+                self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+                self.assertIn("device", record.detail)
+                self.assertIn("out", record.detail)
+
+    def test_pairwise_search_family_cpu_cdist_p1_p2_matches_numpy(self):
+        left = np.array([[0.0, 1.0], [2.0, 3.0]], dtype="float32")
+        right = np.array([[1.0, 1.0], [4.0, 5.0], [-1.0, 2.0]], dtype="float32")
+        delta = left[:, None, :] - right[None, :, :]
+        with torch.flag_scope(use_cuda=0):
+            actual_p1 = torch.cdist(
+                torch.array(left), torch.array(right), p=1).numpy()
+            actual_p2 = torch.cdist(
+                torch.array(left), torch.array(right), p=2).numpy()
+        np.testing.assert_allclose(
+            actual_p1, np.abs(delta).sum(axis=-1), rtol=1e-6)
+        np.testing.assert_allclose(
+            actual_p2, np.sqrt((delta * delta).sum(axis=-1)), rtol=1e-6)
+
+    def test_pairwise_search_family_cpu_bucketize_sides_match_numpy(self):
+        values = np.array([0.0, 1.0, 3.0, 5.0], dtype="float32")
+        boundaries = np.array([1.0, 3.0, 4.0], dtype="float32")
+        with torch.flag_scope(use_cuda=0):
+            actual_left = torch.bucketize(
+                torch.array(values), torch.array(boundaries), right=False)
+            actual_right = torch.bucketize(
+                torch.array(values), torch.array(boundaries), right=True,
+                out_int32=True)
+        np.testing.assert_array_equal(
+            actual_left.numpy(), np.searchsorted(boundaries, values, side="left"))
+        np.testing.assert_array_equal(
+            actual_right.numpy(), np.searchsorted(boundaries, values, side="right"))
+        self.assertEqual(str(actual_left.dtype), "int64")
+        self.assertEqual(str(actual_right.dtype), "int32")
+
 
 if __name__ == "__main__":
     unittest.main()

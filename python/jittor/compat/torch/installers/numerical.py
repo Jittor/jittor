@@ -343,6 +343,52 @@ for _close_name in ("isclose", "allclose"):
 del _close_name
 
 
+_PAIRWISE_SEARCH_FIDELITY_DETAIL = (
+    "matches Torch values for supported tensor inputs but omits compute-mode, "
+    "device, layout, and out keyword semantics"
+)
+
+
+def _cdist_impl(x1, x2, p=2.0, compute_mode=None, **kwargs):
+    diff = x1.unsqueeze(-2) - x2.unsqueeze(-3)
+    if p == 2:
+        return jt.sqrt((diff * diff).sum(-1))
+    if p == 1:
+        return jt.abs(diff).sum(-1)
+    return (jt.abs(diff) ** p).sum(-1) ** (1.0 / p)
+
+
+def cdist(x1, x2, p=2.0, compute_mode=None, **kwargs):
+    """Return pairwise distances between the rows of two tensors."""
+    return _cdist_impl(
+        x1, x2, p=p, compute_mode=compute_mode, **kwargs)
+
+
+def _bucketize_impl(
+        input, boundaries, out_int32=False, right=False, **kwargs):
+    flattened = boundaries.reshape((-1,))
+    comparison = ((input.unsqueeze(-1) >= flattened)
+                  if right else (input.unsqueeze(-1) > flattened))
+    result = comparison.int32().sum(-1)
+    return result if out_int32 else result.int64()
+
+
+def bucketize(input, boundaries, out_int32=False, right=False, **kwargs):
+    """Return insertion indices for values in sorted boundaries."""
+    return _bucketize_impl(
+        input, boundaries, out_int32=out_int32, right=right, **kwargs)
+
+
+for _pairwise_search_name in ("cdist", "bucketize"):
+    register_fidelity(
+        "torch." + _pairwise_search_name,
+        globals()[_pairwise_search_name],
+        Fidelity.APPROXIMATE,
+        _PAIRWISE_SEARCH_FIDELITY_DETAIL,
+    )
+del _pairwise_search_name
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
@@ -646,23 +692,9 @@ def install(ctx):
     _alias("vmap", _vmap)
     _alias("outer", lambda a, b: jt.matmul(a.reshape(-1, 1), b.reshape(1, -1)))
     _alias("isin", _isin)
-    # torch.cdist(x1,x2,p): pairwise p-distances (...,P,M),(...,R,M)->(...,P,R). Used by
-    # contrastive/clustering/retrieval. torch.bucketize: indices to insert into sorted
-    # boundaries (samplers / piecewise schedules).
-    def _cdist(x1, x2, p=2.0, compute_mode=None, **k):
-        diff = x1.unsqueeze(-2) - x2.unsqueeze(-3)          # (...,P,R,M)
-        if p == 2:
-            return jt.sqrt((diff * diff).sum(-1))
-        if p == 1:
-            return jt.abs(diff).sum(-1)
-        return (jt.abs(diff) ** p).sum(-1) ** (1.0 / p)
-    _alias("cdist", _cdist)
-    def _bucketize(input, boundaries, out_int32=False, right=False, **k):
-        b = boundaries.reshape((-1,))
-        cmp = (input.unsqueeze(-1) >= b) if right else (input.unsqueeze(-1) > b)
-        r = cmp.int32().sum(-1)
-        return r if out_int32 else r.int64()
-    _alias("bucketize", _bucketize)
+    # Pairwise distances and sorted-boundary insertion indices.
+    _alias("cdist", cdist)
+    _alias("bucketize", bucketize)
     # trace / diag_embed / diagflat / kron / logcumsumexp / tensordot / pdist.
     _alias("trace", trace); Var.trace = _trace_impl
     _alias("diag_embed", diag_embed); Var.diag_embed = _diag_embed_impl
