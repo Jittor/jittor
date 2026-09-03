@@ -99,12 +99,12 @@ uint64 VarHolder::raw_ptr() {
 
 void VarHolder::set_data(ArrayArgs&& array) {
     sync(true);
-    CHECK(array.dtype.dsize() == var->dtype().dsize()
+    USER_CHECK(array.dtype.dsize() == var->dtype().dsize()
         && array.dtype.is_int() == var->dtype().is_int());
     int64 size = array.dtype.dsize();
     for (int i=0; i<array.shape.size(); i++)
         size *= array.shape[i];
-    CHECK(size==var->size);
+    USER_CHECK(size==var->size);
 #ifdef HAS_CUDA
     migrate_to_cpu(var, exe.allocator);
 #endif

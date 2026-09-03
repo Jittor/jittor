@@ -35,6 +35,22 @@ class TestArray(unittest.TestCase):
         a.data = jt.array([7,8,9])
         assert (a.fetch_sync()==[7,8,9]).all()
 
+    def test_set_data_dtype_mismatch_is_a_catchable_user_error(self):
+        value = jt.array([1.0, 2.0, 3.0], dtype="float32")
+        expect_error(
+            lambda: setattr(value, "data", np.array([1, 2, 3], dtype="int32")),
+            exc_type=RuntimeError,
+            match="array.dtype",
+        )
+
+    def test_set_data_size_mismatch_is_a_catchable_user_error(self):
+        value = jt.array([1.0, 2.0, 3.0], dtype="float32")
+        expect_error(
+            lambda: setattr(value, "data", np.array([1.0, 2.0], dtype="float32")),
+            exc_type=RuntimeError,
+            match="size==var->size",
+        )
+
     def _memcopy_overlap_timings(self):
         """Ten forward passes with and without a concurrent fetch.
 
