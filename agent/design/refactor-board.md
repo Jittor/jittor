@@ -223,7 +223,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 2.02 | 删除 `Node::custom_data` | 已合并 | coreops | 505e9b37（上半：拓扑排序自带入度，内存分析器的手工备份删掉）、77641cc8（下半：grad/dump 各持局部表，执行器与 fuser 的批下标搬到 `Node::batch_index`+`batch_stamp`，写用 `set_batch_index`、读一律 `batch_index_at(stamp)`并当场校验）。**字段本身仍在**：第六个用法是 FusedOp 的跨阶段映射，见 2.24（排在 3.11 之后）。审计描述的危害「任意两个遍历交错就互相破坏」到此消除 |
 | 2.03 | `tflag` 全局计数器加魔数改为 epoch 对象或局部集合 | 已合并 | coreops | 6833f96d。嵌套 TraversalEpoch 恢复外层标记，grad/graph/memory profiler 改局部索引或集合；CPU 33 项、CUDA 3 项及结构聚焦通过 |
 | 2.04 | `Var::allocator` 去类型双关 | 已合并 | | 9b3841b7 |
-| 2.05 | 真正的 0 维张量 | 待领 | | |
+| 2.05 | 真正的 0 维张量 | 已合并 | coreops | 2cfc5a0d。空 shape 保留，Python/NumPy/C++ 标量来源及 reduce/arg-reduce/getitem/reshape/JIT/CUB 全归约统一 0-D；新 CPU 3 passed、GPU2 4 passed，相关 CPU 52 项与 GPU autograd 8 项通过 |
 | 2.06 | 边表由 list 加反向迭代器改 SmallVector，按下标 O(1) | 待领 | | |
 | 2.07 | `hold_vars`/`sync_ptr` 析构里 `std::next(end())` 的 … | 已合并 | coreops | 1101f3f5 |
 | 2.08 | `Node` 不再 include `pybind/py_var_tracer.h` | 已合并 | coreops | 6221d4c4。NodeLifecycleObserver 接口由 pybind tracer 注册；无 Python include 的语法编译、CPU/CUDA lifecycle/tracer 聚焦通过 |
@@ -236,7 +236,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 2.15 | NanoString | 已合并 | bindings | 9d5ed413（索引位宽 7→8、static_assert 把表与字段绑住、`ns_check_registration` 在注册期查索引与名字长度；"dtype 表改运行期注册"那半未做，见提交说明） |
 | 2.16 | 类型提升表 | 已合并 | bindings | d821c34a（int_dtype_promote 提升格；标量按 `_is_scalar` 标志认，不再按形状；float 标量把整数张量提到默认 float dtype）、a39a2f1c（补：双标量走提升格，交换左右操作数不再改变 dtype 与结果） |
 | 2.17 | 算子身份用注册期整型 id | 已合并 | coreops | 1d792e16。OpInfo 注册分配 OpId，核心/tuner/pass 名字比较归零，fast_strcmp 删除，Tape 用显式 pending flag；CPU 80 项、CUDA 5 项及结构契约通过 |
-| 2.18 | 算子注册表惰性初始化 | 待领 | | |
+| 2.18 | 算子注册表惰性初始化 | 已合并 | coreops | bca71d1f。注册表函数内惰性构造，typed polymorphic constructor 取代 `type_info + void*` 手工分派，ACL API/op_types 同步惰性；结构 3、C++ 注册 3、custom-op 2、GPU2 跨 so 1 项通过 |
 | 2.19 | 错误分两档 | 待领 | | ed12fe21 已合入第一半：析构不得抛，生成的 `tp_dealloc` 异常时仍释放实例并保存/恢复解释器异常；486 处 ASSERT/CHECK 与 62 处 LOGf 的用户错误/内部不变量归类仍待领 |
 | 2.20 | 信号处理器只做 `write` 与 `_exit`，符号化交给预建 helper 进程 | 已合并 | bindings | 上半 9b92f38d（去 stdio/LOGf/exit，标志改 volatile sig_atomic_t）；下半 640a4f07（符号化搬进崩溃前 fork 的 helper，经父进程 /proc/<pid>/maps 解析）；d874b01d 修 jit_key 用例（它原先靠信号处理器抛异常） |
 | 2.21 | `DEFINE_FLAG_WITH_SETTER` 先赋值再调 setter，签名收新旧两值 | 已合并 | coreops | 14336afd |
@@ -289,7 +289,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 5.06 | hook 存实例级有序字典，多 hook、prepend/always_call 生效、可移除 … | 已合并 | pyother | 9117b843（含 `Var.register_hook` 返回 handle、`_dispatch_call` 接缝、weight_norm 的单 hook workaround 一并删掉） |
 | 5.07 | `jt.Function` 每次调用创建一次性上下文对象，实例无状态 | 已合并 | pyother | 5c4e624b；0f639e5b（收尾：torch 兼容层的 ctx 记账跟着挪到一次性上下文上，`materialize_grads` 原本静默失效） |
 | 5.08 | `flag_scope` 的备份改局部栈，`__call__` 每次新建 scope | 已合并 | | 5720e7e8 |
-| 5.09 | 29 处融合 kernel 的启用条件由全局 `no_grad` 改为「输出不需要梯度」 | 待领 | | |
+| 5.09 | 29 处融合 kernel 的启用条件由全局 `no_grad` 改为「输出不需要梯度」 | 已合并 | pyops | 11200c4f。native nn/misc 29 处统一按 grad mode 与递归输入 requires_grad 判定，无反向融合输出显式 stop_grad，fp16/bf16 cuDNN backward 放开；CPU/GPU契约 5、GPU norm 5、capability 7、CPU serving 9 项通过 |
 | 5.10 | 索引与计数统一 int64 | 已合并 | pyops | 3e4d8a0b（`where_op.h` 的默认 dtype、randperm、topk 的空/非空两条分支、MaxPool2d/3d 与 AdaptiveMaxPool2d/3d 的 return_indices 全部 int64；顺带 `cub_where_op` 的计数与 free 大小、池化索引编码 `p*W+q`、repeat_interleave CUDA 快路径改 64 位并删掉 2^31 断言——该断言在 `misc/tensor_ops.py` 而不是审计写的 `pool/core_2d.py:198`。`jt.argsort`/`argmax`/`arange` 仍是 int32，理由见提交说明） |
 | 5.11 | `amp_reg` 位常量命名导出，一律 `\ | 已合并 | pyother | 24a334cf；fc9244c4（收尾：用例的 level 切换改走 flag_scope，撞上 0.15 新加的 flag 泄漏规则） |
 | 5.12 | matmul 四条路径共用能力表，dtype 用枚举不用子串 | 已合并 | pyops | 9d987034（`_cublas_can_take` 一个谓词供四处使用，判据是 `a.dtype == b.dtype and a.dtype.is_float()`；`bmm_transpose` 补上 dtype 守卫与 amp_reg。审计两处更正：「`"float" in dtype` 匹配 bfloat16/float64」属实但 cuBLAS 都支持、不是缺陷；「batched 只查 a 的 complex」属实但不可达。真正可达的是 `bmm_transpose` 完全没有守卫，整数/复数操作数在 CUDA 上撞 C++ 断言而同一乘积写成 matmul 就能算） |
@@ -314,7 +314,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 6.C05 | 融合边号 ≥256 回绕 | 已合并 | | 21a4f4fc |
 | 6.C06 | `grad.cc:65-68` 判空对象改为 `dx` | 已合并 | | 4875a7aa |
 | 6.C07 | 缺失梯度默认报错 | 已合并 | | 78c154e4 |
-| 6.C08 | `grad.cc:146-261` 两趟遍历合一趟并快照结构，删无边界游标 | 待领 | | |
+| 6.C08 | `grad.cc:146-261` 两趟遍历合一趟并快照结构，删无边界游标 | 已合并 | coreops | 096804a9。每个 gvar 局部快照 outgoing 与 op 输入输出后立即消费，删除 id_buffer 和无边界游标；动态新增输出回归修前进程终止，修后 CPU/GPU2 各1项及 autograd 各8项通过 |
 | 6.C09 | `backward()` 可重复 | 已合并 | | 93b6e813 |
 | 6.C10 | CUDA 分配钩子两张 map 用 `find` 加显式错误，释放后 `erase` | 已合并 | mem | `59c7a9b3` |
 | 6.C11 | CPU 分配失败抛异常，返回值必须检查 | 已合并 | mem | `a683274e` |
