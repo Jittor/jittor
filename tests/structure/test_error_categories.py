@@ -50,6 +50,10 @@ MIGRATED_DEVICE_COPY_USER_BOUNDARIES = {
     "python/jittor/src/ops/device_copy_op.cc": 1,
 }
 
+MIGRATED_NUMPY_TYPE_BOUNDARIES = {
+    "python/jittor/src/pyjt/numpy.h": 1,
+}
+
 MIGRATED_TERNARY_SHAPE_BOUNDARIES = {
     "python/jittor/src/ops/ternary_op.cc": 2,
 }
@@ -141,6 +145,13 @@ def test_device_copy_user_boundary_migration_is_explicit_and_bounded():
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_DEVICE_COPY_USER_BOUNDARIES[
         "python/jittor/src/ops/device_copy_op.cc"]
+
+
+def test_numpy_type_boundary_migration_is_explicit_and_bounded():
+    source = (ROOT / "python/jittor/src/pyjt/numpy.h").read_text()
+    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    assert actual == MIGRATED_NUMPY_TYPE_BOUNDARIES[
+        "python/jittor/src/pyjt/numpy.h"]
 
 
 def test_public_ternary_shape_migration_is_explicit_and_bounded():

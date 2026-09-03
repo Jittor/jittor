@@ -177,6 +177,14 @@ class TestArray(unittest.TestCase):
         b = np.array(a)
         assert (b==[1,2,3]).all()
 
+    def test_unsupported_numpy_dtype_is_a_catchable_user_error(self):
+        value = np.array([object()], dtype=object)
+        expect_error(
+            lambda: jt.array(value),
+            exc_type=RuntimeError,
+            match="Numpy type not support",
+        )
+
     def test_pickle(self):
         import pickle
         a = jt.Var([1,2,3,4])

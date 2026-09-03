@@ -64,7 +64,7 @@ inline NanoString get_type_str(PyArray_Proxy* obj) {
     NanoString type = ns_void;
     if (obj->descr->type_num < NPY_END)
         type = npy2ns[obj->descr->type_num];
-    CHECK(type != ns_void) << "Numpy type not support, type_num:"
+    USER_CHECK(type != ns_void) << "Numpy type not support, type_num:"
         << obj->descr->type_num 
         << "type_char:" << obj->descr->type << NPY_END << npy2ns[obj->descr->type_num];
     return type;
