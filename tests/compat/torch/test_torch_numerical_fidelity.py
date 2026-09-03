@@ -1094,6 +1094,31 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             actual = torch.cosine_similarity(left_tensor, right_tensor, dim=1)
         np.testing.assert_allclose(actual.numpy(), expected, rtol=1e-6)
 
+    def test_svd_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.svd))
+        self.assertIs(torch.svd, numerical.svd)
+        self.assertEqual(numerical.svd.__module__, numerical.__name__)
+        self.assertEqual(numerical.svd.__name__, "svd")
+
+    def test_svd_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.svd")
+        self.assertIs(record.implementation, numerical.svd)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("compute_uv", record.detail)
+        self.assertIn("device", record.detail)
+
+    def test_svd_cpu_singular_values_match_numpy(self):
+        values = np.array([[3.0, 0.0], [0.0, 2.0]], dtype="float32")
+        expected = np.linalg.svd(values, full_matrices=False, compute_uv=True)[1]
+        with torch.flag_scope(use_cuda=0):
+            actual = torch.svd(torch.array(values))
+        np.testing.assert_allclose(actual[1].numpy(), expected, rtol=1e-5)
+
 
 if __name__ == "__main__":
     unittest.main()
