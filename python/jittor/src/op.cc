@@ -425,7 +425,7 @@ void Op::statistics(uint64_t& in, uint64_t& out, uint64_t& compute) {
     in = out = compute = 0;
     for (auto& e : _inputs) {
         auto var = e.node->var();
-        if (e.back->index<0) continue;
+        if (e.reverse().index<0) continue;
         in += var->size;
         compute = std::max(compute, (uint64_t)var->num);
     }

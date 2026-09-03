@@ -19,10 +19,8 @@ static inline void add_dependency(Node* a, Node* b) {
         if (na == b) return;
     }
     a->add_inputs({b});
-    auto edge = a->_inputs.end();
-    edge = std::prev(edge);
     // set -1 mean this is a control dependency edge
-    edge->back->index = -1;
+    a->_inputs.back().reverse().index = -1;
 }
 
 static void setitem_inplace(SetitemOp* op) {

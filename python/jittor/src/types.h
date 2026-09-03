@@ -12,6 +12,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <memory>
+#include <new>
+#include <type_traits>
 
 namespace jittor {
 
@@ -39,6 +41,156 @@ template <class T> using unordered_set = std::unordered_set<T>;
 template <class Ta, class Tb> using pair = std::pair<Ta,Tb>;
 template <class Ta, class Tb> using map = std::map<Ta,Tb>;
 template <class Ta, class Tb> using unordered_map = std::unordered_map<Ta,Tb>;
+
+// A vector with room for the common case inside its owner. Node edge tables
+// usually contain one producer or a handful of consumers, so allocating a
+// separate list node for every edge is disproportionately expensive.
+template <class T, size_t InlineCapacity>
+class SmallVector {
+    static_assert(InlineCapacity > 0, "SmallVector needs inline storage");
+    typedef typename std::aligned_storage<sizeof(T), alignof(T)>::type Storage;
+
+    size_t size_ = 0;
+    size_t capacity_ = InlineCapacity;
+    Storage inline_storage_[InlineCapacity];
+    T* data_ = inline_data();
+
+    T* inline_data() { return reinterpret_cast<T*>(inline_storage_); }
+    const T* inline_data() const { return reinterpret_cast<const T*>(inline_storage_); }
+
+    void destroy_elements() {
+        for (size_t i = 0; i < size_; ++i) data_[i].~T();
+        size_ = 0;
+    }
+
+    void release_storage() {
+        if (data_ != inline_data()) ::operator delete(data_);
+        data_ = inline_data();
+        capacity_ = InlineCapacity;
+    }
+
+    void grow(size_t minimum) {
+        size_t next_capacity = capacity_ * 2;
+        if (next_capacity < minimum) next_capacity = minimum;
+        T* next = static_cast<T*>(::operator new(sizeof(T) * next_capacity));
+        size_t moved = 0;
+        try {
+            for (; moved < size_; ++moved)
+                new (next + moved) T(std::move_if_noexcept(data_[moved]));
+        } catch (...) {
+            while (moved) next[--moved].~T();
+            ::operator delete(next);
+            throw;
+        }
+        size_t old_size = size_;
+        destroy_elements();
+        if (data_ != inline_data()) ::operator delete(data_);
+        data_ = next;
+        size_ = old_size;
+        capacity_ = next_capacity;
+    }
+
+    void move_from(SmallVector&& other) {
+        if (!other.using_inline_storage()) {
+            data_ = other.data_;
+            size_ = other.size_;
+            capacity_ = other.capacity_;
+            other.data_ = other.inline_data();
+            other.size_ = 0;
+            other.capacity_ = InlineCapacity;
+            return;
+        }
+        reserve(other.size_);
+        for (T& value : other) emplace_back(std::move(value));
+        other.clear();
+    }
+
+public:
+    typedef T* iterator;
+    typedef const T* const_iterator;
+
+    SmallVector() = default;
+
+    SmallVector(const SmallVector& other) {
+        reserve(other.size_);
+        for (const T& value : other) emplace_back(value);
+    }
+
+    SmallVector(SmallVector&& other) noexcept(std::is_nothrow_move_constructible<T>::value) {
+        move_from(std::move(other));
+    }
+
+    ~SmallVector() {
+        destroy_elements();
+        release_storage();
+    }
+
+    SmallVector& operator=(const SmallVector& other) {
+        if (this == &other) return *this;
+        clear();
+        reserve(other.size_);
+        for (const T& value : other) emplace_back(value);
+        return *this;
+    }
+
+    SmallVector& operator=(SmallVector&& other) noexcept(std::is_nothrow_move_constructible<T>::value) {
+        if (this == &other) return *this;
+        destroy_elements();
+        release_storage();
+        move_from(std::move(other));
+        return *this;
+    }
+
+    iterator begin() { return data_; }
+    const_iterator begin() const { return data_; }
+    iterator end() { return data_ + size_; }
+    const_iterator end() const { return data_ + size_; }
+    size_t size() const { return size_; }
+    size_t capacity() const { return capacity_; }
+    bool empty() const { return size_ == 0; }
+    bool using_inline_storage() const { return data_ == inline_data(); }
+
+    T& operator[](size_t index) { return data_[index]; }
+    const T& operator[](size_t index) const { return data_[index]; }
+    T& front() { return data_[0]; }
+    const T& front() const { return data_[0]; }
+    T& back() { return data_[size_ - 1]; }
+    const T& back() const { return data_[size_ - 1]; }
+
+    void reserve(size_t requested) {
+        if (requested > capacity_) grow(requested);
+    }
+
+    template <class... Args>
+    void emplace_back(Args&&... args) {
+        if (size_ == capacity_) grow(size_ + 1);
+        new (data_ + size_) T(std::forward<Args>(args)...);
+        ++size_;
+    }
+
+    void push_back(const T& value) { emplace_back(value); }
+    void push_back(T&& value) { emplace_back(std::move(value)); }
+
+    void pop_back() { data_[--size_].~T(); }
+    void clear() { destroy_elements(); }
+
+    void resize(size_t requested) {
+        if (requested < size_) {
+            while (size_ > requested) pop_back();
+            return;
+        }
+        reserve(requested);
+        while (size_ < requested) emplace_back();
+    }
+
+    iterator erase(iterator position) {
+        size_t index = static_cast<size_t>(position - data_);
+        for (size_t i = index; i + 1 < size_; ++i)
+            data_[i] = std::move(data_[i + 1]);
+        pop_back();
+        return data_ + index;
+    }
+};
 
 struct Node;
 struct Var;
@@ -215,14 +367,13 @@ std::ostream& operator<<(std::ostream& os, const unordered_set<T>& input) {
 
 template <typename T, typename To>
 struct Caster {
-    list<To> *ptr;
-    Caster(list<To>* ptr) : ptr(ptr) {};
+    SmallVector<To, 2> *ptr;
+    Caster(SmallVector<To, 2>* ptr) : ptr(ptr) {};
     struct Iter {
-        typename list<To>::iterator iter, next;
-        Iter(typename list<To>::iterator iter)
-            : iter(iter), next(std::next(iter)) {}
+        typename SmallVector<To, 2>::iterator iter;
+        Iter(typename SmallVector<To, 2>::iterator iter) : iter(iter) {}
         T operator*() { return iter->operator T(); }
-        Iter& operator++() { iter = next++; return *this; }
+        Iter& operator++() { ++iter; return *this; }
         Iter operator++(int) { auto tmp = *this; ++(*this); return tmp; }
         bool operator!=(Iter& other) { return iter != other.iter; }
     };

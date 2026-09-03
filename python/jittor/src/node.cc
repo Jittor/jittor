@@ -119,7 +119,7 @@ void Node::free() {
     flags.set(NodeFlags::_queued_for_free);
     free_buffer.push_back(this);
     for (auto in : _inputs) {
-        in.node->_outputs.erase(in.back);
+        in.node->erase_output(in.back_index);
         if (backward_liveness) {
             liveness_queue.emplace_back(in.node, &Node::release_backward_liveness);
         }
@@ -128,7 +128,7 @@ void Node::free() {
     }
     _inputs.clear();
     for (auto out : _outputs) {
-        out.node->_inputs.erase(out.back);
+        out.node->erase_input(out.back_index);
         if (!is_stop_grad()) {
             if (forward_liveness)
                 liveness_queue.emplace_back(out.node, &Node::release_forward_liveness);
@@ -311,7 +311,7 @@ void Node::release_inputs() {
     for (auto in : _inputs) {
         if (!in.node->is_stop_grad() && in.node->forward_liveness)
             liveness_queue.emplace_back(this, &Node::release_forward_liveness);
-        in.node->_outputs.erase(in.back);
+        in.node->erase_output(in.back_index);
         if (backward_liveness) {
             liveness_queue.emplace_back(in.node, &Node::release_backward_liveness);
         }
@@ -320,6 +320,20 @@ void Node::release_inputs() {
     }
     _inputs.clear();
     run_liveness_queue("release_inputs");
+}
+
+void Node::erase_input(uint index) {
+    ASSERT(index < _inputs.size());
+    _inputs.erase(_inputs.begin() + index);
+    for (uint i = index; i < _inputs.size(); ++i)
+        _inputs[i].reverse().back_index = i;
+}
+
+void Node::erase_output(uint index) {
+    ASSERT(index < _outputs.size());
+    _outputs.erase(_outputs.begin() + index);
+    for (uint i = index; i < _outputs.size(); ++i)
+        _outputs[i].reverse().back_index = i;
 }
 
 void Node::set_inputs(list<Node*> nodes) {
@@ -343,12 +357,12 @@ void Node::set_inputs(list<Node*> nodes) {
     auto iter = nodes.begin();
     for (size_t i = 0; i < nodes.size(); i++, iter++) {
         Node* node = *iter;
-        _inputs.emplace_back(node);
+        uint output_index = node->_outputs.size();
+        _inputs.emplace_back(node, output_index);
         // For an op the output index is the argument position; for a var it is
         // the position in the producer's output list.
-        node->_outputs.emplace_back(this, is_var ? node->_outputs.size() : i);
-        _inputs.back().back = std::prev(node->_outputs.end());
-        node->_outputs.back().back = std::prev(_inputs.end());
+        node->_outputs.emplace_back(this,
+            is_var ? output_index : i, _inputs.size() - 1);
     }
 }
 
@@ -371,10 +385,10 @@ void Node::add_inputs(const vector<Node*>& nodes) {
     uint n_old_inputs = _inputs.size();
     for (size_t i = 0; i < nodes.size(); i++, iter++) {
         Node* node = *iter;
-        _inputs.emplace_back(node);
-        node->_outputs.emplace_back(this, is_var ? node->_outputs.size() : i + n_old_inputs);
-        _inputs.back().back = std::prev(node->_outputs.end());
-        node->_outputs.back().back = std::prev(_inputs.end());
+        uint output_index = node->_outputs.size();
+        _inputs.emplace_back(node, output_index);
+        node->_outputs.emplace_back(this,
+            is_var ? output_index : i + n_old_inputs, _inputs.size() - 1);
     }
 }
 

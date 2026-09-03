@@ -244,17 +244,21 @@ struct Node {
     };
     struct input_t {
         Node* node;
-        list<output_t>::iterator back;
-        input_t(Node* n) : node(n) {}
+        uint32 back_index;
+        input_t(Node* n=nullptr, uint32 back_index=0)
+            : node(n), back_index(back_index) {}
+        output_t& reverse();
         operator Node*() { return node; }
         operator Op*() { return (Op*)node; }
         operator Var*() { return (Var*)node; }
     };
     struct output_t {
         Node* node;
-        list<input_t>::iterator back;
+        uint32 back_index;
         int index;
-        output_t(Node* n, int i) : node(n), index(i) {}
+        output_t(Node* n=nullptr, int i=0, uint32 back_index=0)
+            : node(n), back_index(back_index), index(i) {}
+        input_t& reverse();
         operator Node*() { return node; }
         operator Op*() { return (Op*)node; }
         operator Var*() { return (Var*)node; }
@@ -340,8 +344,8 @@ struct Node {
     int custom_data;
     int64 tflag = 0;
     int64 id; 
-    list<input_t> _inputs;
-    list<output_t> _outputs;
+    SmallVector<input_t, 2> _inputs;
+    SmallVector<output_t, 2> _outputs;
 
     int64 order() {
         if (flags.get(NodeFlags::_node_order_low)) return 0;
@@ -398,18 +402,16 @@ struct Node {
     inline Caster<Node*, Node::output_t> outputs() { CHECK_EXIST; return &_outputs; }
     inline Node* input(uint i) {
         CHECK_EXIST;
-        auto iter = _inputs.begin();
-        while (i--) iter++;
-        return iter->node;
+        return _inputs[i].node;
     }
     inline Node* output(uint i) {
         CHECK_EXIST;
-        auto iter = _outputs.begin();
-        while (i--) iter++;
-        return iter->node;
+        return _outputs[i].node;
     }
     
     void release_inputs();
+    void erase_input(uint index);
+    void erase_output(uint index);
     void set_inputs(list<Node*> nodes);
     void add_inputs(const vector<Node*>& nodes);
     void add_inputs(const vector<Var*>& nodes);
@@ -424,6 +426,14 @@ struct Node {
     void finish_pending_liveness();
     void set_stop_grad();
 };
+
+inline Node::output_t& Node::input_t::reverse() {
+    return node->_outputs[back_index];
+}
+
+inline Node::input_t& Node::output_t::reverse() {
+    return node->_inputs[back_index];
+}
 
 struct SetupFreeBuffer {
 

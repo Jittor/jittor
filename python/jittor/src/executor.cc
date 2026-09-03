@@ -84,7 +84,7 @@ void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, i
         int iid = 0;
         for (auto ve : op->_inputs) {
             // this is a control dependency edge, dont used
-            if (ve.back->index<0) continue;
+            if (ve.reverse().index<0) continue;
             auto v = ve.node->var();
             iid++;
             int iop_id;
@@ -92,7 +92,7 @@ void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, i
             if (v->_inputs.size() && fused_epoch.marked(v->input())) {
                 auto e = v->_inputs.front();
                 iop_id = e.node->custom_data;
-                iv_id = e.back->index;
+                iv_id = e.reverse().index;
             } else {
                 iv_id = v->custom_data >> 2;
                 // add iv_id, prevent iv_id jit key overflow

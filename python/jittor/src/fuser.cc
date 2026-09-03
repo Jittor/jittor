@@ -94,22 +94,23 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
     //   forward == 0  -- walk to the producers of op's inputs
     //   with_siblings -- additionally visit the ops that read the same input
     //                    var as `op` and sit next to `op` in that var's
-    //                    consumer list (list order mirrors creation order,
+    //                    consumer table (edge order mirrors creation order,
     //                    which is a topological order for this batch)
     // func(var, other, relation, is_control_dep), `relation` as in edge_fusable.
     auto for_each_neighbor = [&](Op* op, int forward, int with_siblings, auto&& func) {
         if (with_siblings) {
             for (auto e : op->_inputs) {
                 auto var = e.node->var();
-                auto self = e.back;
-                if ((forward && self != std::prev(var->_outputs.end())) ||
-                    (!forward && self != var->_outputs.begin())) {
-                    auto sibling = forward ? std::next(self) : std::prev(self);
-                    Op* other = sibling->node->op();
+                uint self_index = e.back_index;
+                if ((forward && self_index + 1 < var->_outputs.size()) ||
+                    (!forward && self_index > 0)) {
+                    auto& self = var->_outputs[self_index];
+                    auto& sibling = var->_outputs[forward ? self_index + 1 : self_index - 1];
+                    Op* other = sibling.node->op();
                     if (other && other->tflag == tt &&
                         other->batch_index_at(tt) != op->batch_index_at(tt) &&
                         edge_fusable(var, other, op, 0))
-                        func(var, other, 0, self->index < 0 || sibling->index < 0);
+                        func(var, other, 0, self.index < 0 || sibling.index < 0);
                 }
             }
         }
@@ -127,7 +128,7 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
             for (auto e : op->_inputs) {
                 auto var = e.node->var();
                 if (var && var->tflag == tt)
-                    func(var, var->input(), 1, e.back->index < 0);
+                    func(var, var->input(), 1, e.reverse().index < 0);
             }
         }
     };

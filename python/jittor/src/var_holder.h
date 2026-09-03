@@ -458,7 +458,7 @@ struct VarHolder {
         for (int i=0; i<b.size(); i++) {
             edge = std::prev(edge);
             // set -1 mean this is a control dependency edge
-            edge->back->index = -1;
+            edge->reverse().index = -1;
         }
         return this;
     }
