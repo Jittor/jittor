@@ -1,8 +1,8 @@
 # Test System
 
 - Status: Accepted
-- Last reviewed: 2026-08-22
-- Baseline: `866914d4`
+- Last reviewed: 2026-09-03
+- Baseline: `6b8fb594` plus task 10.03
 - Owner: test infrastructure maintainers
 - Review when: collection roots, process-mode ownership, markers, OpInfo
   contracts, or backend gates change
@@ -173,6 +173,25 @@ python -m nox -s nccl
 The nox sessions create isolated state and caches. Direct concurrent runs must
 also use distinct `JITTOR_HOME` or `cache_name` values. The first build of a new
 JIT operation or extension should run serially.
+
+## CI support matrix
+
+The workflow status is explicit because a working Nox session is not evidence
+that CI owns the required hardware or dependencies. "Manual" means maintainers
+must run the named fail-closed session on a provisioned machine before claiming
+that surface as verified; it must not be described as an automated check.
+
+| Session | CI status | Runner and trigger |
+| --- | --- | --- |
+| `cuda` | Automated | Pushes and the weekly schedule use the declared RTX 4090 / CUDA 12.2 runner. A maintainer can add the `ci:cuda` label to a pull request; labeled, reopened, and subsequent synchronize events then run the same gate. |
+| `optional` | Manual | No dependency-complete CUDA runner is declared. Run `python -m nox -s optional` in the pre-provisioned environment described below. |
+| `rocm` | Manual | No AMD/ROCm runner is declared. Run `python -m nox -s rocm` on a real supported AMD GPU. |
+| `mpi` | Manual | No multi-process MPI runner is declared. Run `python -m nox -s mpi` with a working launcher and compiler wrapper. |
+| `nccl` | Manual | The declared CUDA runner guarantees one RTX 4090, not the two visible GPUs this gate requires. Run `python -m nox -s nccl` on a multi-GPU host. |
+
+The matrix describes current scheduling, not backend support. A manual result
+must record the tested commit, toolchain, device topology, command, and pytest
+outcome in `agent/results/`; an unavailable runner is not a passing result.
 
 The maintained CUDA session runs the complete CUDA backend directory, dtype
 coverage, CPU/CUDA device parity, Torch TF32 controls, and the strict CUDA

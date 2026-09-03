@@ -1,6 +1,8 @@
 name: CUDA
 
 on:
+  pull_request:
+    types: [labeled, reopened, synchronize]
   push:
   schedule:
     - cron: "0 3 * * 0"
@@ -15,6 +17,7 @@ concurrency:
 
 jobs:
   baseline:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:cuda')
     uses: ./.github/workflows/_ci-baseline.yml
 
   cuda:
