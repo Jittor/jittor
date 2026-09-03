@@ -28,6 +28,18 @@ class TestNcclOps(unittest.TestCase):
         jt.seed(3)
 
     @jt.flag_scope(use_cuda=1)
+    def test_communication_stream_dependency(self):
+        device = jt.current_device()
+        before = jt.core._cuda_stream_dependency_count(1, device)
+        value = jt.array(
+            np.full(32, mpi.world_rank() + 1, dtype="float32"))
+        reduced = nccl_ops.nccl_all_reduce(value)
+        np.testing.assert_array_equal(
+            reduced.numpy(), np.full(32, 3, dtype="float32"))
+        after = jt.core._cuda_stream_dependency_count(1, device)
+        self.assertEqual(after - before, 2)
+
+    @jt.flag_scope(use_cuda=1)
     def test_all_reduce(self):
         with jt.log_capture_scope(enable_tuner=1, log_silent=1,
             log_v=1, log_vprefix="op.cc=100,exe=1000"

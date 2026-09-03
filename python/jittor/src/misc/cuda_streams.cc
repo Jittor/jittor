@@ -20,6 +20,7 @@ struct SideStreams {
     cudaStream_t streams[2] = {nullptr, nullptr};
     cudaEvent_t ready[2] = {nullptr, nullptr};
     cudaEvent_t done[2] = {nullptr, nullptr};
+    uint64 dependencies[2] = {0, 0};
 };
 
 vector<unique_ptr<SideStreams>> resources;
@@ -88,6 +89,11 @@ uint64 cuda_stream_handle(int kind, int device) {
     return (uint64)cuda_side_stream((CudaSideStreamKind)kind, device);
 }
 
+uint64 cuda_stream_dependency_count(int kind, int device) {
+    validate_kind(kind);
+    return get_resources(device).dependencies[kind];
+}
+
 void cuda_side_stream_wait_default(
         CudaSideStreamKind kind, int stream_device, int default_device) {
     int previous = current_device();
@@ -97,6 +103,7 @@ void cuda_side_stream_wait_default(
     auto stream = cuda_side_stream(kind, stream_device);
     if (current_device() != stream_device) set_current_device(stream_device);
     checkCudaErrors(cudaStreamWaitEvent(stream, event, 0));
+    get_resources(stream_device).dependencies[kind]++;
     if (previous >= 0 && current_device() != previous) set_current_device(previous);
 }
 
@@ -108,6 +115,7 @@ void cuda_default_stream_wait_side(
     checkCudaErrors(cudaEventRecord(item.done[kind], item.streams[kind]));
     if (current_device() != default_device) set_current_device(default_device);
     checkCudaErrors(cudaStreamWaitEvent(0, item.done[kind], 0));
+    item.dependencies[kind]++;
     if (previous >= 0 && current_device() != previous) set_current_device(previous);
 }
 
@@ -117,6 +125,10 @@ void cuda_default_stream_wait_side(
 
 namespace jittor {
 uint64 cuda_stream_handle(int, int) {
+    LOGf << "CUDA streams are unavailable in this build";
+    return 0;
+}
+uint64 cuda_stream_dependency_count(int, int) {
     LOGf << "CUDA streams are unavailable in this build";
     return 0;
 }
