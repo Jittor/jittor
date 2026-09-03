@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；本波审计基线 `a8674268`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 审计基线 599 个 |
+| 分支 | `2.0-refactor`；本波审计基线 `b767452e`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 审计基线 606 个 |
 | 提交里出现过的任务号 | 214 个 |
 | 看板 | 已合并 **196** / 进行中 **0** / 待领 **74** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
@@ -317,6 +317,14 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `bindings` | 2.19 将 random 的公开 `type` 合同改为可捕获用户错误，累计 56 处；结构、TU 语法和负向节点通过 |
 | `compat` | 7.03 将 logcumsumexp 提升为 numerical 稳定对象并登记 approximate fidelity；3 项 CPU/身份/metadata 通过 |
 
+第三十一波新增 3 个严格保持待领的前置：
+
+| 分区 | 第三十一波结果 |
+| --- | --- |
+| `device` | 8.06 将 ClampTensor family 接入共享 launcher，保留三输入查询和同步策略；静态合同 18 项通过，本机无 CANN/NPU |
+| `bindings` | 2.19 将 py_caller 非字符串返回值检查改为可捕获用户错误，累计 57 处；结构、TU 语法和负向节点通过 |
+| `compat` | 7.03 将 quantile 提升为 numerical 稳定对象并登记 approximate fidelity，明确 NumPy CPU fallback；3 项定点通过 |
+
 第二十九波新增 3 个严格保持待领的前置：
 
 | 分区 | 第二十九波结果 |
@@ -327,7 +335,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 
 ## 6. 下一波起点
 
-按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第三十一波继续优先可独立验证的
+按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第三十二波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
 - `device`：若续做 8.06，只迁下一个最终 owner 明确的 family，并复用 5be5fa15 的 launcher 合同；无 NPU
