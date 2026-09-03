@@ -55,7 +55,7 @@ CUSTOM_DATA_OWNERS = {
     "python/jittor/src/node.h": "declares it, and names its owner",
     "python/jittor/src/fused_op.cc": "FusedOp::update_ops builds the packing",
     "python/jittor/src/executor.cc": "load_fused_op reads the packing back",
-    "python/jittor/src/test/test_op_relay.cc": "drives FusedOp directly",
+    "python/jittor/src/tests/test_op_relay.cc": "drives FusedOp directly",
 }
 
 

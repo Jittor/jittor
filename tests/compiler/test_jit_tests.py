@@ -16,7 +16,7 @@ from _helpers.child_process import run_child_script
 
 #: C++ unit tests whose assertion is a wall-clock budget.
 #:
-#: ``src/test/test_sfrl_allocator.cc`` asserts ``time_limit`` of 400 ms. With
+#: ``src/tests/test_sfrl_allocator.cc`` asserts ``time_limit`` of 400 ms. With
 #: nine agents on the box it measured 1775 ms and 10919 ms -- 4x and 27x over,
 #: which is not "a bit slow", it is a different question being answered. What
 #: they guard (the allocator must not degrade) is worth keeping, so they are
@@ -70,7 +70,7 @@ def _run_crashing_test(case, name, expected):
 
 
 class TestJitTests(unittest.TestCase):
-    """Bridge to the C++ unit tests registered in ``src/test/*.cc``.
+    """Bridge to the C++ unit tests registered in ``src/tests/*.cc``.
 
     Every case in this class is generated from ``jt.tests``. When that registry is
     empty -- a wheel that strips ``src/``, or a scan that failed -- the class used
@@ -107,7 +107,7 @@ def _install_jit_tests():
     names = sorted(name for name in dir(jt.tests) if not name.startswith("__"))
     if not names:
         raise RuntimeError(
-            "jt.tests exposes no C++ unit tests. src/test/*.cc (expr, kernel_ir, "
+            "jt.tests exposes no C++ unit tests. src/tests/*.cc (expr, kernel_ir, "
             "op_compiler, op_relay, sfrl_allocator, setitem_op, jit_key, "
             "nano_vector, fast_shared_ptr) is either absent from this build or was "
             "not scanned. Installing zero generated methods would leave this file "

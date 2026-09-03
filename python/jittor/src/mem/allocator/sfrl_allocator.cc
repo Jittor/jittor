@@ -309,7 +309,7 @@ void SFRLAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
     std::unique_lock<std::recursive_mutex> lock(mutex);
     // free() only trusts `allocation`, so validate it before dereferencing:
     // range, registered, and still occupied. Callers are allowed to pass 0 for
-    // mem_ptr (see src/test/test_sfrl_allocator.cc), but when they do pass one
+    // mem_ptr (see src/tests/test_sfrl_allocator.cc), but when they do pass one
     // it has to point inside the block the allocation names -- a shared child
     // var passes its own offset pointer with its parent's allocation.
     auto* block = id_space.get_occupied(allocation);
@@ -353,4 +353,3 @@ bool SFRLAllocator::share_with(size_t size, size_t allocation) {
 }
 
 } // jittor
-

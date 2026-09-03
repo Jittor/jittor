@@ -18,7 +18,7 @@ must not be emitted.
 KernelIR decides that by matching the shape of the statement at parse time. The
 counterpart, that a statement which merely mentions ``void`` is left alone, is
 covered by the C++ unit tests ``kernel_ir_void_discard`` and
-``kernel_ir_void_discard_shapes`` (``src/test/test_kernel_ir.cc``, reachable
+``kernel_ir_void_discard_shapes`` (``src/tests/test_kernel_ir.cc``, reachable
 from ``test_jit_tests.py``): no op in the tree emits a void cast into a fused
 kernel today, which is exactly why deleting those statements went unnoticed.
 """

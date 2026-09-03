@@ -71,7 +71,7 @@ pytest 不需要（`tests/conftest.py` 已经处理）。
   所以测试的数据源要用 `jt.array(np.…)`，不要用 `jt.arange`。
 - CUDA 上的归约（`x.sum()`）在 `use_sfrl_allocator=0` 与 `use_nfef_allocator=1` 下结果错误
   （只累加了一小部分）。CPU 正常。
-- `src/test/test_sfrl_allocator.cc` 的两个计时用例（400 ms 硬上限，一次分配 20 GB）
+- `src/tests/test_sfrl_allocator.cc` 的两个计时用例（400 ms 硬上限，一次分配 20 GB）
   在有 CUDA 设备的机器上走 pinned 内存，本身就远超时限，且对机器负载极其敏感；
   它不在门禁里，不要把它当性能基准。
 

@@ -40,7 +40,7 @@ AWESOME 列表、asv 配置在根目录。
 │   ├── runtime/              # init、flags、profiler、lock
 │   ├── bindings/             # pyjt + pybind
 │   ├── third_party/          # miniz 及其它 vendored 源码
-│   └── tests/                # 今天的 src/test
+│   └── tests/                # C++ 单元测试
 ├── backends/                 # 每个后端同一形状：build 片段 + kernels/ + 注册项
 │   ├── cpu/                  # mkl / oneDNN
 │   ├── cuda/                 # cublas cudnn cufft curand cusparse cutt cub

@@ -35,7 +35,7 @@ SOURCE_ROOTS = (
 ALLOWED = {
     Path("python/jittor/src/ops/op_register.cc"),
     Path("python/jittor/src/ops/op_register.h"),
-    Path("python/jittor/src/test/test_op_register.cc"),
+    Path("python/jittor/src/tests/test_op_register.cc"),
 }
 
 
