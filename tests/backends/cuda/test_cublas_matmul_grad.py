@@ -9,6 +9,28 @@ from _helpers.assertions import expect_error
 
 @unittest.skipIf(not jt.has_cuda, "CUDA is required")
 class TestCublasMatmulGrad(unittest.TestCase):
+    def test_acc_non_float_inputs_are_rejected_clearly(self):
+        with jt.flag_scope(use_cuda=1):
+            a = jt.array([[1, 2]], dtype="int32")
+            b = jt.array([[1], [2]], dtype="int32")
+            expect_error(
+                lambda: jt.compile_extern.cublas_ops.cublas_acc_matmul(
+                    a, b, 0, 0, -1, -1, 0, 0),
+                exc_type=RuntimeError,
+                match="floating-point inputs",
+            )
+
+    def test_acc_mixed_input_dtypes_are_rejected_clearly(self):
+        with jt.flag_scope(use_cuda=1):
+            a = jt.array([[1.0, 2.0]], dtype="float32")
+            b = jt.array([[1.0], [2.0]], dtype="float64")
+            expect_error(
+                lambda: jt.compile_extern.cublas_ops.cublas_acc_matmul(
+                    a, b, 0, 0, -1, -1, 0, 0),
+                exc_type=RuntimeError,
+                match="same dtype",
+            )
+
     def test_batched_non_float_inputs_are_rejected_clearly(self):
         with jt.flag_scope(use_cuda=1):
             a = jt.array([[[1, 2]]], dtype="int32")
