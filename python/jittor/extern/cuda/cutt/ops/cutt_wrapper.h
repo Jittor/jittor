@@ -70,4 +70,7 @@ void cutt_set_plan_cache_size(int size);
 // @pyjt(cutt_plan_cache_size)
 int cutt_plan_cache_size();
 
+// @pyjt(cutt_plan_build_count)
+uint64 cutt_plan_build_count();
+
 } // jittor

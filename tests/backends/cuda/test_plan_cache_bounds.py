@@ -11,6 +11,7 @@ growing.  The cuFFT op leaked a second plan on top of that: ``cufftCreate``
 produced a handle that the following ``cufftPlanMany`` immediately overwrote
 and nothing ever destroyed.
 """
+import ctypes
 import unittest
 
 import numpy as np
@@ -105,6 +106,44 @@ class TestCuttPlanCacheBounds(unittest.TestCase):
             jt.transpose(jt.array(a), (2, 0, 1)).numpy(),
             np.transpose(a, (2, 0, 1)))
         self.assertEqual(cutt.cutt_plan_cache_size(), 1)
+
+    def test_plan_miss_does_not_drain_an_unrelated_stream(self):
+        # Compile the transpose kernel before the timeline starts. The shape is
+        # different from the measured miss, so only the JIT binary is warmed.
+        jt.transpose(jt.ones((2, 3, 5), "float32"), (2, 0, 1)).sync()
+        jt.sync_all(True)
+
+        # This kernel runs for long enough on Jittor's non-blocking
+        # communication stream to remain pending while a cuTT plan is built on
+        # the compute stream. A device-wide sync in the miss path drains it.
+        delay = jt.code(
+            (1,),
+            "int32",
+            cuda_header='''
+#include "misc/cuda_streams.h"
+__global__ void cutt_plan_miss_delay(unsigned long long clocks) {
+    unsigned long long start = clock64();
+    while (clock64() - start < clocks) {}
+}
+''',
+            cuda_src='''
+    auto stream = cuda_side_stream(CUDA_COMMUNICATION_STREAM, 0);
+    cutt_plan_miss_delay<<<1, 1, 0, stream>>>(700000000ull);
+    cudaMemsetAsync(out0_p, 0, sizeof(int32), 0);
+''',
+        )
+        delay.sync()
+
+        runtime = ctypes.CDLL(None)
+        runtime.cudaStreamQuery.argtypes = [ctypes.c_void_p]
+        runtime.cudaStreamQuery.restype = ctypes.c_int
+        stream = ctypes.c_void_p(jt.core._cuda_stream_handle(1, 0))
+        self.assertEqual(runtime.cudaStreamQuery(stream), 600)  # cudaErrorNotReady
+
+        before = cutt.cutt_plan_build_count()
+        jt.transpose(jt.ones((37, 41, 43), "float32"), (2, 0, 1)).sync()
+        self.assertEqual(cutt.cutt_plan_build_count(), before + 1)
+        self.assertEqual(runtime.cudaStreamQuery(stream), 600)
 
 
 if __name__ == "__main__":

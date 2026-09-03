@@ -9,6 +9,7 @@
 #include <list>
 #include <unordered_map>
 #include "cutt_wrapper.h"
+#include "misc/cuda_streams.h"
 #include "utils/log.h"
 
 
@@ -40,6 +41,7 @@ int cutt_max_cache_size = 64;
 
 static std::unordered_map<CuttPlanKey, cuttHandle, CuttPlanKeyHash, CuttPlanKeyEq>
     cutt_plan_cache_;
+static uint64 cutt_plan_build_count_ = 0;
 // Creation order, oldest first; the eviction victim comes off the front.
 static std::list<CuttPlanKey> cutt_plan_order_;
 
@@ -56,6 +58,8 @@ static void evict_oldest_plan() {
 }
 
 int cutt_plan_cache_size() { return (int)cutt_plan_cache_.size(); }
+
+uint64 cutt_plan_build_count() { return cutt_plan_build_count_; }
 
 void cutt_set_plan_cache_size(int size) {
     // A plan is handed out by reference and executed after this call returns,
@@ -76,10 +80,15 @@ cuttHandle cutt_get_plan(const CuttPlanKey& key) {
         permutation[i] = (int)key.permutation[i];
     }
     cuttHandle plan;
-    checkCudaErrors(cudaDeviceSynchronize());
-    auto ret = cuttPlan(&plan, rank, shape, permutation, (size_t)key.dsize, 0);
+    // cuttPlan uploads the plan metadata asynchronously. Keep that upload and
+    // cuttExecute on Jittor's compute stream so stream ordering is sufficient;
+    // unrelated copy/communication streams must remain in flight.
+    auto stream = cuda_compute_stream((int)key.device);
+    auto ret = cuttPlan(
+        &plan, rank, shape, permutation, (size_t)key.dsize, stream);
     CHECK(ret == CUTT_SUCCESS) << "cuttPlan failed with" << (int)ret
         << "rank" << rank << "dsize" << key.dsize;
+    cutt_plan_build_count_++;
 
     while ((int)cutt_plan_cache_.size() >= cutt_max_cache_size)
         evict_oldest_plan();
