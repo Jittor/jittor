@@ -35,7 +35,7 @@
 
 （`test_runtime_composition_structure.py::test_moved_scope_state_stays_synchronized_with_the_root`
 已由 `90fc2f0b` 修复并移出本表：2026-09-03 复测 `JITTOR_TORCH_SHIM=1` 下该文件 13 passed。）
-| 并发编译读到写了一半的 `.s`：原生 `tests/data/test_dataset.py::TestDataset2::test_dataset_use_jittor`（`.so` 里 `undefined symbol: SetitemOp::jit_run`）+ CPU torch 536 条散布失败（`op.s` 报 `unknown pseudo-op .lasf10` / `invalid operands (*UND* and *UND*) for -` / `junk at end of line`） | `70d97137..a12d81c0` 之间的构建改动 | **已由 `1919b035`「asm_tuner 写 .s 改成临时文件加改名」修掉**，待复跑确认 |
+| 并发编译读到写了一半的 `.s`：原生 `tests/data/test_dataset.py::TestDataset2::test_dataset_use_jittor`（`.so` 里 `undefined symbol: SetitemOp::jit_run`）+ CPU torch 536 条散布失败（`op.s` 报 `unknown pseudo-op .lasf10` / `invalid operands (*UND* and *UND*) for -` / `junk at end of line`） | `70d97137..a12d81c0` 之间的构建改动 | **已由 `1919b035` 修复并复验**：原子替换专用回归与原四 worker Dataset 用例均通过 |
 | `tests/structure/test_nn_structure.py::TestModuleBoundaries::test_first_import_paths_are_cycle_free_in_fresh_processes` | `46dbe946` [0.21] | gates，**已修**：收编子进程调用时把调用点原来的 `env.pop` 丢了。旧写法自己 pop 掉四个 `JITTOR_TORCH_*` / `REAL_TORCH_SITE`；改走 helper 后 `env=` 是**叠加**在 `os.environ` 上的，叠加无法删除，于是四个变量原样回来了——而 `tests/structure` 自己就在 `TORCH_MODE_PATHS` 里，父进程带着 `JITTOR_TORCH_SHIM=1`。子进程先塞了个假 `torch` 模块再 import jittor，于是报 `cannot install Jittor Torch compatibility over an existing Torch module graph`。修法不止是加 `inherit=False`：helper 现在**拒绝**「完整环境 + inherit=True」这种有歧义的调用（认 `PATH` 在不在里面），并提供 `without_torch_mode=True` 把这四个变量的清理写进 helper，不再让每个调用方自己记得 |
 | `tests/structure/test_stage2_delivery.py::TestStage2Delivery::test_nox_keeps_fast_structure_and_packaging_separate` | `6adbf488` [0.04] | gates，**已修**：断言 noxfile **源码文本**里出现 `tests/optim/test_optimizer.py` 等具体路径，而清单已搬进 `gate_scope.py`。这两条改成从 `gate_scope` 求门禁选择集再判断；仍是清单的那六条 oracle 路径继续按文本断言（"要跟真 PyTorch 对拍"是测试的属性，不是树的属性） |
 
@@ -452,7 +452,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 9.17 | 死代码 | 已合并 | 构建 | f99250bb |
 | 9.18 | `disable_lock=1` 启用时明确告警并纳入缓存指纹 | 待领 | | |
 | 9.19 | 布局收尾 | 待领 | | |
-| 9.20 | asm_tuner 非原子写 .s，并发编译读到截断汇编 | 待领 | | |
+| 9.20 | asm_tuner 非原子写 .s，并发编译读到截断汇编 | 已合并 | build | 1919b035。`pass_asm()` 写进带 pid 的临时文件后 `os.replace`；inode 回归 1 passed，原四 worker Dataset 复现用例 1 passed |
 | 9.21 | 拆掉手写预处理器最后一块：process() 双职责分离 + depfile | 待领 | | 9a5f4e7c 已合入前半：`JT_*` 宏发现移到 Python 声明清单，`process()` 不再改写命令行；编译器 depfile、两个 wrapper 回退与 MSVC `/showIncludes` 仍待领 |
 | 9.22 | 并发编译同一个算子读到写了一半的 `.so` | 待领 | | |
 | 9.23 | `run_child_script(timeout=N)` 不收孙进程 | 已合并 | bindings | 17e43c9a（进程组 + `os.killpg` + 有界 drain）。**更正**：任务描述里"`communicate()` 继续等"在 CPython 3.11 上不成立（3.11 的 `subprocess.run` 超时后只 kill+wait，不重新 drain，已实测）；稳定复现的是整棵子孙进程留存，默认 `timeout=600` 的用例因此要等满 10 分钟才失败 |
