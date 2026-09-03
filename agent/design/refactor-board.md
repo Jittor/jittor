@@ -426,7 +426,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 8.10 | `distributed/launch.py:102-107` 改 `wait(timeout)… | 已合并 | dist | 925850b3 |
 | 8.11 | 图同构优先：reduce 保留全尺寸输出，broadcast 去 rank 相关别名，flat 策略可配置 | 已合并 | dist | a1e769d5 |
 | 8.12 | 算子内不再复用全局 jit key 缓冲做缓存键 | 待领 | | |
-| 8.13 | cuTT 计划未命中时的 `cudaDeviceSynchronize` 删除或降流同步 | 待领 | | |
+| 8.13 | cuTT 计划未命中时的 `cudaDeviceSynchronize` 删除或降流同步 | 已合并 | cudabk | c0d2cc5c |
 | 8.14 | Corex | 待领 | | |
 | 8.15 | 多机 rendezvous | 待领 | dist（2/N） | 6d3b2ae3：TCPStore/FileStore 与 `env://`/`tcp://`；120174a6：NCCL WORLD unique id 经 Store 交换、错误 endpoint 有界超时。仍缺 HCCL、NCCL 子组 unique id、真实两机 collective 与跨机失败验收 |
 | 8.16 | 多机启动器 | 待领 | | |
