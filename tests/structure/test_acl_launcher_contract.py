@@ -17,6 +17,7 @@ TRIU_SOURCE = ROOT / "python/jittor/extern/acl/aclops/triu_op_acl.cc"
 SIGMOID_SOURCE = ROOT / "python/jittor/extern/acl/aclops/sigmoid_op_acl.cc"
 TRANSPOSE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/transpose_op_acl.cc"
 SOFTMAX_SOURCE = ROOT / "python/jittor/extern/acl/aclops/softmax_op_acl.cc"
+EMBEDDING_SOURCE = ROOT / "python/jittor/extern/acl/aclops/embedding_op_acl.cc"
 
 
 def test_acl_launcher_tail_has_one_auditable_contract():
@@ -144,3 +145,13 @@ def test_softmax_forward_uses_launcher_and_backward_remains_present():
     assert "mallocWorkSpace(workspaceSize)" not in forward
     assert "syncRun();" not in forward
     assert "void SoftmaxBackwardOpRunner::executeOp" in source
+
+
+def test_embedding_forward_uses_launcher_and_backward_remains_present():
+    source = EMBEDDING_SOURCE.read_text()
+    forward = source[source.index("void EmbeddingOpRunner::executeOp"):source.index("EmbeddingBackwardOpRunner::EmbeddingBackwardOpRunner")]
+    assert "launch(ret, aclnnEmbedding, true);" in forward
+    assert "checkRet(ret);" not in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void EmbeddingBackwardOpRunner::executeOp" in source

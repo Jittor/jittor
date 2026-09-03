@@ -431,6 +431,9 @@ The ACL Softmax forward family uses the shared launcher and retains synchronous
 execution. Softmax backward is intentionally outside this slice. This remains
 source-only until the Ascend 910B3 probe is run.
 
+The ACL Embedding forward family uses the shared launcher and retains
+synchronous execution. Embedding backward is intentionally outside this slice.
+
 These flags are diagnostic and slow execution. Remove them after locating the
 failing operation. For general JIT and memory diagnostics, see
 {doc}`debugging`.
