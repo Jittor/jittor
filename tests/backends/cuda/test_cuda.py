@@ -16,7 +16,6 @@ class TestCuda(unittest.TestCase):
         a = jt.random((10, 10))
         a.sync()
 
-    @jt.flag_scope(use_cuda=2)
     def test_no_cuda_op(self):
         no_cuda_op = jt.compile_custom_op("""
         struct NoCudaOp : Op {
@@ -42,9 +41,22 @@ class TestCuda(unittest.TestCase):
         #endif // JIT
         """,
         "no_cuda")
-        # force use cuda
-        a = no_cuda_op([3,4,5], 'float')
-        expect_error(lambda: a())
+
+        def run_without_cuda_implementation():
+            with jt.flag_scope(use_cuda=2):
+                no_cuda_op([3,4,5], 'float').sync()
+
+        previous_use_cuda = jt.flags.use_cuda
+        try:
+            expect_error(
+                run_without_cuda_implementation,
+                exc_type=RuntimeError,
+                match="doesn't have cuda version",
+            )
+        finally:
+            # The failed lazy graph must not be retried while restoring flags.
+            jt.clean()
+            jt.flags.use_cuda = previous_use_cuda
 
     @jt.flag_scope(use_cuda=1)
     def test_cuda_custom_op(self):
@@ -125,7 +137,11 @@ class TestCuda(unittest.TestCase):
 @unittest.skipIf(jt.compiler.has_cuda, "Only test without CUDA")
 class TestNoCuda(unittest.TestCase):
     def test_cuda_flags(self):
-        expect_error(lambda: setattr(jt.flags, "use_cuda",1))
+        expect_error(
+            lambda: setattr(jt.flags, "use_cuda",1),
+            exc_type=RuntimeError,
+            match="No CUDA found",
+        )
 
 if __name__ == "__main__":
     unittest.main()

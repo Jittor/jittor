@@ -83,7 +83,11 @@ def test_ring_buffer():
     bbox = BBox(jt.array(np.random.rand(10,10)))
     test_send_recv(bbox)
 
-    expect_error(lambda: test_send_recv(np.random.rand(10,1000)))
+    expect_error(
+        lambda: test_send_recv(np.random.rand(10,1000)),
+        exc_type=RuntimeError,
+        match="Buffer size too small",
+    )
 
 
 class TestRingBuffer(unittest.TestCase):

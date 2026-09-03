@@ -46,7 +46,11 @@ class ReduceOpCases:
             check(ia[0], op, idims[0])
         for dims in idims:
             check(ia[0], iop[0], dims)
-        expect_error(lambda: jt.reduce_add([1,2,3], 2))
+        expect_error(
+            lambda: jt.reduce_add([1,2,3], 2),
+            exc_type=RuntimeError,
+            match="Reduce dim out of range",
+        )
 
     def test_bool_reduce(self):
         x = (jt.bool([1,0,1]) | jt.bool([0,1,0])).all().item()
@@ -87,4 +91,8 @@ class ReduceOpCases:
             check(ia[0], op, idims[1])
         for dims in idims:
             check(ia[0], iop[0], dims)
-        expect_error(lambda: jt.reduce_add([1,2,3], 2))
+        expect_error(
+            lambda: jt.reduce_add([1,2,3], 2),
+            exc_type=RuntimeError,
+            match="Reduce dim out of range",
+        )

@@ -91,10 +91,26 @@ class TestReindexReduceOp(unittest.TestCase):
         
     def test_error(self):
         jt.random([3]).reindex_reduce("add", [3], ["i0"])
-        expect_error(lambda: jt.random([3]).reindex_reduce("add", [3], []))
-        expect_error(lambda: jt.random([3]).reindex_reduce("add", [3], ["i0","i0"]))
-        expect_error(lambda: jt.random([3]).reindex_reduce("???", [3], ["i0"]))
-        expect_error(lambda: jt.random([3]).reindex_reduce("add", [-1], ["i0"]))
+        expect_error(
+            lambda: jt.random([3]).reindex_reduce("add", [3], []),
+            exc_type=RuntimeError,
+            match="Number of shape and indexes should be the same",
+        )
+        expect_error(
+            lambda: jt.random([3]).reindex_reduce("add", [3], ["i0","i0"]),
+            exc_type=RuntimeError,
+            match="Number of shape and indexes should be the same",
+        )
+        expect_error(
+            lambda: jt.random([3]).reindex_reduce("???", [3], ["i0"]),
+            exc_type=RuntimeError,
+            match="Not a valid call",
+        )
+        expect_error(
+            lambda: jt.random([3]).reindex_reduce("add", [-1], ["i0"]),
+            exc_type=RuntimeError,
+            match="Shape should greater than 0",
+        )
 
 @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
 class TestReindexReduceOpCuda(TestReindexReduceOp):

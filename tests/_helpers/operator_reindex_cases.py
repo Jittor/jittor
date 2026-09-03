@@ -306,7 +306,11 @@ class ReindexOpCases:
         a = jt.zeros([10,10])
         b = jt.array([1])
         c = a.reindex([8,8], ["@e0(0) // 1", "@e0(0)"], extras=[b, b])
-        expect_error(lambda: c.sync())
+        expect_error(
+            lambda: c.sync(),
+            exc_type=RuntimeError,
+            match=r"should not contain '//' operation",
+        )
 
     def test_reindex_memopt(self):
         a = jt.zeros([10,10])

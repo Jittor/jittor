@@ -36,7 +36,11 @@ class TestBroadcastToOp(unittest.TestCase):
         check([2,3], [2,3,1,1])
         check([2,1,3,1,4], [1,3,4])
         
-        expect_error(lambda: jt.ops.broadcast_var([1,2],[1,2,3]))
+        expect_error(
+            lambda: jt.ops.broadcast_var([1,2],[1,2,3]),
+            exc_type=RuntimeError,
+            match="Shape not match in broadcast_to",
+        )
         
     def test_binary_op(self):
         if self.use_shape: return

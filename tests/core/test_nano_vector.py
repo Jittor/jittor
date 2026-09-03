@@ -20,7 +20,8 @@ class TestNanoVector(unittest.TestCase):
         assert nv[3] == (1<<40)
         assert str(nv) == "[1,2,3,1099511627776,]"
         assert nv == [1,2,3,1099511627776,]
-        expect_error(lambda : nv.append(1<<40))
+        expect_error(lambda : nv.append(1<<40), exc_type=RuntimeError,
+                     match="next_offset<=64")
         assert len(nv)==4, nv
         s = 0
         for a in nv:

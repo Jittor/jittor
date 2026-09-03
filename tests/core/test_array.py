@@ -187,9 +187,12 @@ class TestArray(unittest.TestCase):
 
     def test_tuple_array(self):
         a = jt.array((4,5))
-        expect_error(lambda : jt.array({}))
-        expect_error(lambda : jt.array("asdasd"))
-        expect_error(lambda : jt.array(jt))
+        expect_error(lambda : jt.array({}), exc_type=RuntimeError,
+                     match="type <dict> not support")
+        expect_error(lambda : jt.array("asdasd"), exc_type=RuntimeError,
+                     match="type <str> not support")
+        expect_error(lambda : jt.array(jt), exc_type=RuntimeError,
+                     match="type <module> not support")
 
     def test_64_bit(self):
         a = np.random.rand(10)

@@ -111,17 +111,31 @@ class TestOpCompiler(unittest.TestCase):
         check("@{a^b == 7}", "2")
         check("@{(a^b) == 7}", "1")
         check("@{b<<a == 5*4}", "1")
-        expect_error(lambda: jit_precompile(vars, "@{a"))
-        expect_error(lambda: jit_precompile(vars, "@for(a"))
-        expect_error(lambda: jit_precompile(vars, "@for(i,l,r)"))
-        expect_error(lambda: jit_precompile(vars, "@for(i,l,(@i,,,,))"))
-        expect_error(lambda: jit_precompile(vars, "@for(i,0,10000,@i)"))
-        expect_error(lambda: jit_precompile(vars, "@for(i,0,-1,@i)"))
-        expect_error(lambda: jit_precompile(vars, "@asd"))
-        expect_error(lambda: jit_precompile(vars, "@if"))
-        expect_error(lambda: jit_precompile(vars, "@if(1,1,1,1)"))
-        expect_error(lambda: jit_precompile(vars, "@if(1)"))
-        expect_error(lambda: jit_precompile(vars, "#define OP1(a,b) a+b\n@expand_macro(OP1,1)"))
+        expect_error(lambda: jit_precompile(vars, "@{a"),
+                     exc_type=RuntimeError, match="braces are not matched")
+        expect_error(lambda: jit_precompile(vars, "@for(a"),
+                     exc_type=RuntimeError, match="braces are not matched")
+        expect_error(lambda: jit_precompile(vars, "@for(i,l,r)"),
+                     exc_type=RuntimeError, match="for missing arguments")
+        expect_error(lambda: jit_precompile(vars, "@for(i,l,(@i,,,,))"),
+                     exc_type=RuntimeError, match="for missing arguments")
+        expect_error(lambda: jit_precompile(vars, "@for(i,0,10000,@i)"),
+                     exc_type=RuntimeError, match="Too much step")
+        expect_error(lambda: jit_precompile(vars, "@for(i,0,-1,@i)"),
+                     exc_type=RuntimeError, match="Too much step")
+        expect_error(lambda: jit_precompile(vars, "@asd"),
+                     exc_type=RuntimeError, match=r"Jit var\s+asd\s+not found")
+        expect_error(lambda: jit_precompile(vars, "@if"),
+                     exc_type=RuntimeError, match=r"Jit compiler error:\n@if$")
+        expect_error(lambda: jit_precompile(vars, "@if(1,1,1,1)"),
+                     exc_type=RuntimeError, match="if wrong arguments")
+        expect_error(lambda: jit_precompile(vars, "@if(1)"),
+                     exc_type=RuntimeError, match="if wrong arguments")
+        expect_error(
+            lambda: jit_precompile(vars, "#define OP1(a,b) a+b\n@expand_macro(OP1,1)"),
+            exc_type=RuntimeError,
+            match="Number of macro args not match",
+        )
 
     def test_strcmp(self):
         vars = {"Tx":"float"}
