@@ -20,7 +20,16 @@ from ..nested import (
 from ..types import (
     _dtype_to_str,
 )
+from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed
+
+
+def eye(n, m=None, dtype=None, **kwargs):
+    """Create a square or rectangular identity matrix."""
+    shape = (int(n), int(n)) if m is None else (int(n), int(m))
+    import jittor.init as _init
+    return _init.eye(shape, _dtype_to_str(dtype) or "float32")
+
 
 def install(ctx):
     _modules = ctx.registry.module_map
@@ -206,16 +215,11 @@ def install(ctx):
     g.tensor_split = lambda input, indices_or_sections, dim=0: _tensor_split(input, indices_or_sections, dim)
     Var.take = lambda self, index: self.reshape((-1,))[index]
     g.take = lambda input, index: input.reshape((-1,))[index]
-    # torch.eye(n, m=None, *, dtype=, ...): identity / rectangular-identity
-    # matrix. jittor has no top-level eye (only jt.init.eye), so add one.
-    def _eye(n, m=None, dtype=None, **k):
-        # torch.eye(n) is the n x n identity; torch.eye(n, m) is n x m.
-        # jittor's init.eye requires a 2-element shape (a bare (n,) asserts),
-        # so always pass (n, n) / (n, m).
-        shape = (int(n), int(n)) if m is None else (int(n), int(m))
-        import jittor.init as _init
-        return _init.eye(shape, _dtype_to_str(dtype) or "float32")
-    _alias("eye", _eye)
+    _alias("eye", eye)
+    register_fidelity(
+        "torch.eye", eye, Fidelity.APPROXIMATE,
+        "Values and dtype are supported; layout, device, out, and pin_memory "
+        "arguments are not implemented.")
     # torch.narrow(input, dim, start, length) / torch.tile(input, dims) --
     # function forms mirroring the Var methods (added in _install_tensor_methods).
     _alias("narrow", lambda input, dim, start, length: input.narrow(dim, start, length))
