@@ -45,6 +45,16 @@ def _all_pass_keys(x, w):
     return find_log_with_re(raw_log, _KEY_RE)
 
 
+def _forward_and_gradients(x_np, w_np, use_cuda):
+    with jt.flag_scope(use_cuda=use_cuda):
+        x = jt.array(x_np)
+        w = jt.array(w_np)
+        y = jt.nn.conv3d(x, w)
+        seed = jt.array(np.random.RandomState(4).randn(*y.shape).astype("float32"))
+        gx, gw = jt.grad((y * seed).sum(), [x, w])
+        return y.numpy(), gx.numpy(), gw.numpy()
+
+
 @unittest.skipIf(not jt.has_cuda, "No CUDA found")
 @unittest.skipIf(not jt.cudnn, "No cuDNN found")
 class TestCudnnConv3dAlgoCache(unittest.TestCase):
@@ -100,6 +110,17 @@ class TestCudnnConv3dAlgoCache(unittest.TestCase):
                                jt.array(w_np).cast(dtype)).float32().numpy()
             np.testing.assert_allclose(got, want, atol=tol,
                                        rtol=tol, err_msg=dtype)
+
+    def test_forward_and_gradients_match_cpu_reference(self):
+        """The 3-D forward and both backend backward ops share one CPU oracle."""
+        rng = np.random.RandomState(11)
+        x_np = rng.randn(1, 2, 4, 4, 4).astype("float32")
+        w_np = rng.randn(3, 2, 2, 2, 2).astype("float32")
+        reference = _forward_and_gradients(x_np, w_np, use_cuda=0)
+        actual = _forward_and_gradients(x_np, w_np, use_cuda=1)
+        for name, got, expected in zip(("forward", "dx", "dw"), actual, reference):
+            np.testing.assert_allclose(got, expected, atol=2e-3, rtol=2e-3,
+                                       err_msg=name)
 
 
 if __name__ == "__main__":
