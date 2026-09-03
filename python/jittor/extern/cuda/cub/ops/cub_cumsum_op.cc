@@ -23,8 +23,7 @@ namespace jittor {
 
 #ifndef JIT
 
-static auto make_cub_cumsum = get_op_info("cub_cumsum")
-    .get_constructor<VarPtr, Var*, bool>();
+static auto make_cub_cumsum = op_constructor<VarPtr, Var*, bool>("cub_cumsum");
 
 CubCumsumOp::CubCumsumOp(Var* x, bool reverse) : x(x),reverse(reverse) {
     set_flag(OpFlags::_cpu, 0);

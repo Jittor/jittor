@@ -15,12 +15,9 @@
 
 namespace jittor {
 
-static auto make_binary_op = get_op_info("binary")
-    .get_constructor<VarPtr, Var*, Var*, NanoString>();
-static auto make_broadcast_to_op = get_op_info("broadcast_to")
-    .get_constructor<VarPtr, Var*, NanoVector, NanoVector>();
-static auto make_reduce = get_op_info("reduce")
-    .get_constructor<VarPtr, Var*, NanoString, NanoVector, bool>();
+static auto make_binary_op = op_constructor<VarPtr, Var*, Var*, NanoString>("binary");
+static auto make_broadcast_to_op = op_constructor<VarPtr, Var*, NanoVector, NanoVector>("broadcast_to");
+static auto make_reduce = op_constructor<VarPtr, Var*, NanoString, NanoVector, bool>("reduce");
 
 JIT_TEST(op_register) {
     VarPtr a({10,10,1}, "float32");

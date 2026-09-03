@@ -51,8 +51,7 @@ void MpiBroadcastOp::infer_shape() {
 }
 
 VarPtr MpiBroadcastOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-    static auto mpi_reduce = 
-        get_op_info("mpi_reduce").get_constructor<VarPtr, Var*, NanoString, int>();
+    static auto mpi_reduce = op_constructor<VarPtr, Var*, NanoString, int>("mpi_reduce");
     return mpi_reduce(dout, ns_add, root);
 }
 

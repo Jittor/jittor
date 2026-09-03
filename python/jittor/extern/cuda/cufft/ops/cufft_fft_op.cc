@@ -28,8 +28,7 @@
 namespace jittor {
 
 #ifndef JIT
-static auto make_cufft_fft = get_op_info("cufft_fft")
-    .get_constructor<VarPtr, Var*, bool>();
+static auto make_cufft_fft = op_constructor<VarPtr, Var*, bool>("cufft_fft");
 CufftFftOp::CufftFftOp(Var* x, bool inverse) : x(x), inverse(inverse) {
     set_flag(OpFlags::_cuda, 1);
     y = create_output(x->shape, x->dtype());

@@ -171,10 +171,8 @@ void VarHolder::release_from_holders() {
     }
 }
 
-static auto make_array_from_pyobj = get_op_info("array")
-    .get_constructor<VarPtr, PyObject*>();
-static auto make_unary = get_op_info("unary")
-    .get_constructor<VarPtr, Var*, NanoString>();
+static auto make_array_from_pyobj = op_constructor<VarPtr, PyObject*>("array");
+static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
 
 VarHolder::VarHolder(PyObject* obj, NanoString dtype) {
     auto vp = make_array_from_pyobj(obj);
@@ -435,8 +433,7 @@ your code as below::
 }
 
 
-static auto make_ternary = get_op_info("ternary")
-    .get_constructor<VarPtr, Var*, Var*, Var*>();
+static auto make_ternary = op_constructor<VarPtr, Var*, Var*, Var*>("ternary");
 
 extern bool no_grad;
 
@@ -457,8 +454,7 @@ void migrate_all_to_cpu() {
         }
 }
 
-static auto make_setitem = get_op_info("setitem")
-    .get_constructor<VarPtr, Var*, VarSlices&&, Var*, NanoString>();
+static auto make_setitem = op_constructor<VarPtr, Var*, VarSlices&&, Var*, NanoString>("setitem");
 
 inline static bool fast_strcmp(const char* a, const char* b) {
     return ((const uint64*)a)[0] == ((const uint64*)b)[0];

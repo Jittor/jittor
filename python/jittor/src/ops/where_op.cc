@@ -39,8 +39,7 @@ WhereOp::WhereOp(Var* cond, NanoString dtype) : cond(cond) {
     for (uint i=0; i<ndim; i++)
         outs[i] = create_output(nullptr, dtype);
 }
-static auto make_ternary = get_op_info("ternary")
-    .get_constructor<VarPtr, Var*, Var*, Var*>();
+static auto make_ternary = op_constructor<VarPtr, Var*, Var*, Var*>("ternary");
 WhereOp::WhereOp(Var* cond, Var* x, Var* y) {
     forward(make_ternary(cond, x, y));
     return;

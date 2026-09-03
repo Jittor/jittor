@@ -12,8 +12,7 @@
 namespace jittor {
 
 #ifndef JIT
-static auto make_transpose = get_op_info("fuse_transpose")
-    .get_constructor<VarPtr, Var*, NanoVector>();
+static auto make_transpose = op_constructor<VarPtr, Var*, NanoVector>("fuse_transpose");
 
 static inline NanoVector get_reverse(NanoVector axes) {
     NanoVector reverse;

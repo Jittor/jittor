@@ -11,9 +11,20 @@ namespace jittor {
 
 unordered_map<string, OpInfo> op_info_map;
 
+//: The one key the map is read and written by.
+//:
+//: `op_registe` used to insert under `op_info.name` while `has_op` and
+//: `get_op_info` looked up `op_name_to_file_name(name)`, which truncates at the
+//: first '.'. For every name without a dot the two agree and nothing showed;
+//: register a name *with* a dot and it went in under the full name and could
+//: never be found again, by any spelling. One key, computed in one place.
+static inline string op_key(const string& name) {
+    return Op::op_name_to_file_name(name);
+}
+
 void op_registe(const OpInfo& op_info) {
     if (has_op(op_info.name)) {
-        string op_file_name = Op::op_name_to_file_name(op_info.name);
+        string op_file_name = op_key(op_info.name);
         auto iter = op_info_map.find(op_file_name);
         if (iter != op_info_map.end() && iter->second.source_path == op_info.source_path) {
             LOGvv << "replace duplicated op registration" << op_info.name
@@ -31,18 +42,17 @@ void op_registe(const OpInfo& op_info) {
         << "\nextra_flags:" << op_info.extra_flags
         << "\nconstructors:" << op_info.constructors
         << "\nvar_members:" << op_info.var_members;
-    op_info_map[op_info.name] = op_info;
+    op_info_map[op_key(op_info.name)] = op_info;
 }
 
 bool has_op(const string& name) {
-    string op_file_name = Op::op_name_to_file_name(name);
-    return op_info_map.count(op_file_name);
+    return op_info_map.count(op_key(name));
 }
 
 OpInfo get_op_info(const string& name) {
-    string op_file_name = Op::op_name_to_file_name(name);
-    ASSERT(has_op(op_file_name)) << "Op" << name << "not found.";
-    return op_info_map.at(op_file_name);
+    auto iter = op_info_map.find(op_key(name));
+    ASSERT(iter != op_info_map.end()) << "Op" << name << "not found.";
+    return iter->second;
 }
 
 vector<OpByType*> op_types;

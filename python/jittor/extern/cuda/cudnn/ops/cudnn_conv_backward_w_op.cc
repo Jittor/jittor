@@ -80,10 +80,8 @@ void CudnnConvBackwardWOp::jit_prepare(JK& jk) {
     jk << "«YFORMAT:" << yformat;
 }
 
-static auto make_conv = get_op_info("cudnn_conv")
-    .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, string, string, string>();
-static auto make_backwardx = get_op_info("cudnn_conv_backward_x")
-    .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>();
+static auto make_conv = op_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, string, string, string>("cudnn_conv");
+static auto make_backwardx = op_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>("cudnn_conv_backward_x");
 
 VarPtr CudnnConvBackwardWOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     int xn, xc, xh, xw;

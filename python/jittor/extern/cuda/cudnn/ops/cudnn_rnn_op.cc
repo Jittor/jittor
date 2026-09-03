@@ -112,12 +112,9 @@ void CudnnRnnOp::jit_prepare(JK& jk) {
     jk << "«Tw:" << w->dtype();
 }
 
-static auto make_backwardx_with_cx = get_op_info("cudnn_rnn_backward_x")
-    .get_constructor<vector<VarPtr>, Var*, Var*, Var*, Var*, Var*, Var*, Var*, Var*, Var*, string, int, int, int, int, double, bool, bool>();
-static auto make_backwardx_without_cx = get_op_info("cudnn_rnn_backward_x")
-    .get_constructor<vector<VarPtr>, Var*, Var*, Var*, Var*, Var*, Var*, Var*, string, int, int, int, int, double, bool, bool>();
-static auto make_number = get_op_info("number")
-    .get_constructor<VarPtr, float, Var*>();
+static auto make_backwardx_with_cx = op_constructor<vector<VarPtr>, Var*, Var*, Var*, Var*, Var*, Var*, Var*, Var*, Var*, string, int, int, int, int, double, bool, bool>("cudnn_rnn_backward_x");
+static auto make_backwardx_without_cx = op_constructor<vector<VarPtr>, Var*, Var*, Var*, Var*, Var*, Var*, Var*, string, int, int, int, int, double, bool, bool>("cudnn_rnn_backward_x");
+static auto make_number = op_constructor<VarPtr, float, Var*>("number");
 
 void CudnnRnnOp::grads(Var** dout, VarPtr* dins) {
     VarPtr dy = dout[0];

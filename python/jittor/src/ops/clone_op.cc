@@ -13,8 +13,7 @@
 
 namespace jittor {
 
-static auto make_clone = get_op_info("clone")
-    .get_constructor<VarPtr, Var*>();
+static auto make_clone = op_constructor<VarPtr, Var*>("clone");
 
 CloneOp::CloneOp(Var* x) : x(x) {
     set_flag(OpFlags::_cpu);

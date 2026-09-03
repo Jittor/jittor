@@ -14,8 +14,7 @@
 
 namespace jittor {
 
-static auto make_reshape = get_op_info("reshape")
-    .get_constructor<VarPtr, Var*, NanoVector>();
+static auto make_reshape = op_constructor<VarPtr, Var*, NanoVector>("reshape");
 
 ReshapeOp::ReshapeOp(Var* x, NanoVector shape) : x(x), shape(shape) {
     set_flag(OpFlags::_cpu);

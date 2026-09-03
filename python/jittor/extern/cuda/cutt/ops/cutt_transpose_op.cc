@@ -14,8 +14,7 @@
 namespace jittor {
 
 #ifndef JIT
-static auto make_transpose = get_op_info("cutt_transpose")
-    .get_constructor<VarPtr, Var*, NanoVector>();
+static auto make_transpose = op_constructor<VarPtr, Var*, NanoVector>("cutt_transpose");
 
 CuttTransposeOp::CuttTransposeOp(Var* x, NanoVector axes) : x(x), axes(axes) {
     set_flag(OpFlags::_cpu, 0);

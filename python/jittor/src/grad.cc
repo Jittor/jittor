@@ -19,12 +19,9 @@ namespace jittor {
 
 DECLARE_FLAG(int, auto_mixed_precision_level);
 
-static auto make_binary = get_op_info("binary")
-    .get_constructor<VarPtr, Var*, Var*, NanoString>();
-static auto make_unary = get_op_info("unary")
-    .get_constructor<VarPtr, Var*, NanoString>();
-static auto make_number = get_op_info("number")
-    .get_constructor<VarPtr, float, Var*>();
+static auto make_binary = op_constructor<VarPtr, Var*, Var*, NanoString>("binary");
+static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
+static auto make_number = op_constructor<VarPtr, float, Var*>("number");
 
 #ifdef _WIN32
 template<class T> struct StackIniter {

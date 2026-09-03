@@ -19,8 +19,7 @@ namespace jittor {
 
 #ifndef JIT
 
-static auto nccl_all_reduce = 
-    get_op_info("nccl_all_reduce").get_constructor<VarPtr, Var*>();
+static auto nccl_all_reduce = op_constructor<VarPtr, Var*>("nccl_all_reduce");
 
 NcclAllReduceOp::NcclAllReduceOp(Var* x) : x(x) {
     set_flag(OpFlags::_cpu, 0);

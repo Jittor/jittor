@@ -15,8 +15,7 @@
 namespace jittor {
 
 #ifndef JIT
-static auto make_transpose = get_op_info("transpose")
-    .get_constructor<VarPtr, Var*, NanoVector>();
+static auto make_transpose = op_constructor<VarPtr, Var*, NanoVector>("transpose");
 
 TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     int i=0;

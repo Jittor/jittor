@@ -80,10 +80,8 @@ void CudnnConvOp::jit_prepare(JK& jk) {
     jk << "«WFORMAT:" << wformat;
     jk << "«YFORMAT:" << yformat;
 }
-static auto make_backwardx = get_op_info("cudnn_conv_backward_x")
-    .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>();
-static auto make_backwardw = get_op_info("cudnn_conv_backward_w")
-    .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>();
+static auto make_backwardx = op_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>("cudnn_conv_backward_x");
+static auto make_backwardw = op_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>("cudnn_conv_backward_w");
 VarPtr CudnnConvOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     int xn, xc, xh, xw, wh, ww, wci, wco;
     // Read the spatial sizes through the layout strings ("abcd" is NCHW,

@@ -13,12 +13,9 @@
 namespace jittor {
 
 #ifndef JIT
-static auto make_reduce = get_op_info("reduce")
-    .get_constructor<VarPtr, Var*, NanoString, uint, uint>();
-static auto make_broadcast = get_op_info("broadcast_to")
-    .get_constructor<VarPtr, Var*, Var*, uint, uint>();
-static auto make_broadcast2 = get_op_info("broadcast_to")
-    .get_constructor<VarPtr, Var*, NanoVector, uint, uint>();
+static auto make_reduce = op_constructor<VarPtr, Var*, NanoString, uint, uint>("reduce");
+static auto make_broadcast = op_constructor<VarPtr, Var*, Var*, uint, uint>("broadcast_to");
+static auto make_broadcast2 = op_constructor<VarPtr, Var*, NanoVector, uint, uint>("broadcast_to");
     
 BroadcastToOp::BroadcastToOp(Var* x, Var* y, NanoVector dims) : x(x), y(y) {
     auto count = dims.size();

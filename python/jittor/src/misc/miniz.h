@@ -1392,8 +1392,7 @@ struct ZipFile {
         auto use_cuda_bk = use_cuda;
         use_cuda = 0;
         #endif
-        static auto make_empty = get_op_info("empty")
-            .get_constructor<VarPtr, NanoVector, NanoString>();
+        static auto make_empty = op_constructor<VarPtr, NanoVector, NanoString>("empty");
         size_t key = mz_zip_reader_locate_file(zip_archive.get(), filename.c_str(), nullptr, 0);
         mz_zip_archive_file_stat stat;
         CHECK(mz_zip_reader_file_stat(zip_archive.get(), key, &stat));

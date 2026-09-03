@@ -18,8 +18,7 @@ namespace jittor {
 
 #ifndef JIT
 
-static auto hccl_all_gather = 
-    get_op_info("hccl_all_gather").get_constructor<VarPtr, Var*>();
+static auto hccl_all_gather = op_constructor<VarPtr, Var*>("hccl_all_gather");
 
 HcclAllGatherOp::HcclAllGatherOp(Var* x) : x(x) {
     set_flag(OpFlags::_cpu, 0);

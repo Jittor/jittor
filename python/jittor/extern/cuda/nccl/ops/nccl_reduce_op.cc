@@ -29,8 +29,7 @@ void NcclReduceOp::infer_shape() {
 }
 
 VarPtr NcclReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-    static auto nccl_broadcast = 
-        get_op_info("nccl_broadcast").get_constructor<VarPtr, Var*, int>();
+    static auto nccl_broadcast = op_constructor<VarPtr, Var*, int>("nccl_broadcast");
     return nccl_broadcast(dout,root);
 }
 

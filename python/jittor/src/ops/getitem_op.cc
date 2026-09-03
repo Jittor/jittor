@@ -26,12 +26,9 @@ namespace jittor {
 #ifndef JIT
 
 
-static auto make_number = get_op_info("number")
-    .get_constructor<VarPtr, float, Var*>();
-static auto make_empty = get_op_info("empty")
-    .get_constructor<VarPtr, NanoVector, NanoString>();
-static auto make_setitem = get_op_info("setitem")
-    .get_constructor<VarPtr, Var*, VarSlices&&, Var*, NanoString>();
+static auto make_number = op_constructor<VarPtr, float, Var*>("number");
+static auto make_empty = op_constructor<VarPtr, NanoVector, NanoString>("empty");
+static auto make_setitem = op_constructor<VarPtr, Var*, VarSlices&&, Var*, NanoString>("setitem");
 
 GetitemOp::GetitemOp(Var* x, VarSlices&& slices)
     : vs(move(slices)) {

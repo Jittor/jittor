@@ -58,10 +58,8 @@ void CudnnConv3dOp::jit_prepare(JK& jk) {
     jk << "«Tw:" << w->dtype();
 }
 
-static auto make_backwardx = get_op_info("cudnn_conv3d_backward_x")
-    .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, int, int, int, int, string>();
-static auto make_backwardw = get_op_info("cudnn_conv3d_backward_w")
-    .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, int, int, int, int, string>();
+static auto make_backwardx = op_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, int, int, int, int, string>("cudnn_conv3d_backward_x");
+static auto make_backwardw = op_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, int, int, int, int, string>("cudnn_conv3d_backward_w");
 
 VarPtr CudnnConv3dOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     int xn, xc, xd, xh, xw, wd, wh, ww, wci, wco, yn, yc, yd, yh, yw;

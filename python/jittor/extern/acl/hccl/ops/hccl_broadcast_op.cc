@@ -9,8 +9,7 @@ namespace jittor {
 
 #ifndef JIT
 
-static auto hccl_broadcast = 
-    get_op_info("hccl_broadcast").get_constructor<VarPtr, Var*, int>();
+static auto hccl_broadcast = op_constructor<VarPtr, Var*, int>("hccl_broadcast");
 
 HcclBroadcastOp::HcclBroadcastOp(Var* x, int root) : x(x), root(root) {
     set_flag(OpFlags::_cpu, 0);

@@ -11,14 +11,10 @@
 namespace jittor {
 
 #ifndef JIT
-static auto make_ternary = get_op_info("ternary")
-    .get_constructor<VarPtr, Var*, Var*, Var*>();
-static auto make_broadcast = get_op_info("broadcast_to")
-    .get_constructor<VarPtr, Var*, Var*, NanoVector>();
-static auto make_unary = get_op_info("unary")
-    .get_constructor<VarPtr, Var*, NanoString>();
-static auto make_number = get_op_info("number")
-    .get_constructor<VarPtr, float, Var*>();
+static auto make_ternary = op_constructor<VarPtr, Var*, Var*, Var*>("ternary");
+static auto make_broadcast = op_constructor<VarPtr, Var*, Var*, NanoVector>("broadcast_to");
+static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
+static auto make_number = op_constructor<VarPtr, float, Var*>("number");
 
 TernaryOp::TernaryOp(Var* cond, Var* x, Var* y) : cond(cond), x(x), y(y) {
     bool bx = cond->shape.size() > x->shape.size() || cond->num > x->num;

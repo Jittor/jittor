@@ -17,12 +17,9 @@ namespace jittor {
 
 #ifndef JIT
 
-static auto make_array = get_op_info("array")
-    .get_constructor<VarPtr, const void*, NanoVector, NanoString>();
-static auto make_binary = get_op_info("binary")
-    .get_constructor<VarPtr, Var*, Var*, NanoString>();
-static auto make_mpi_reduce = get_op_info("mpi_reduce")
-    .get_constructor<VarPtr, Var*, NanoString, int>();
+static auto make_array = op_constructor<VarPtr, const void*, NanoVector, NanoString>("array");
+static auto make_binary = op_constructor<VarPtr, Var*, Var*, NanoString>("binary");
+static auto make_mpi_reduce = op_constructor<VarPtr, Var*, NanoString, int>("mpi_reduce");
 
 MpiReduceOp::MpiReduceOp(Var* x, NanoString op, int root) : x(x), op(op), root(root) {
     if (!mpi_enabled) {

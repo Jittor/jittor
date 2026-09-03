@@ -31,8 +31,7 @@ DECLARE_FLAG(int, use_cuda);
 DECLARE_FLAG(int, use_cuda_host_allocator);
 
 
-static auto make_array = get_op_info("array")
-    .get_constructor<VarPtr, const void*, NanoVector, NanoString>();
+static auto make_array = op_constructor<VarPtr, const void*, NanoVector, NanoString>("array");
 
 PyObject* make_pyjt_array(const vector<int64>& shape, const string& dtype, const void* data) {
     // return nullptr;

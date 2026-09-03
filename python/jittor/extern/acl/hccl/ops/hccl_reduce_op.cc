@@ -19,8 +19,7 @@ void HcclReduceOp::infer_shape() {
 }
 
 VarPtr HcclReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-    static auto hccl_broadcast = 
-        get_op_info("hccl_broadcast").get_constructor<VarPtr, Var*, int>();
+    static auto hccl_broadcast = op_constructor<VarPtr, Var*, int>("hccl_broadcast");
     return hccl_broadcast(dout, root);
 }
 

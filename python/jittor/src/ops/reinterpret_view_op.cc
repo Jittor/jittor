@@ -9,8 +9,7 @@
 
 namespace jittor {
 
-static auto make_reinterpret_view = get_op_info("reinterpret_view")
-    .get_constructor<VarPtr, Var*, NanoVector, NanoString>();
+static auto make_reinterpret_view = op_constructor<VarPtr, Var*, NanoVector, NanoString>("reinterpret_view");
 
 ReinterpretViewOp::ReinterpretViewOp(Var* x, NanoVector shape, NanoString dtype)
     : x(x), shape(shape), dtype(dtype) {

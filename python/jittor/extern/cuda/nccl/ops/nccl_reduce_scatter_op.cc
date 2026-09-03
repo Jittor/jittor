@@ -15,8 +15,7 @@ namespace jittor {
 
 #ifndef JIT
 
-static auto nccl_all_gather =
-    get_op_info("nccl_all_gather").get_constructor<VarPtr, Var*>();
+static auto nccl_all_gather = op_constructor<VarPtr, Var*>("nccl_all_gather");
 
 NcclReduceScatterOp::NcclReduceScatterOp(Var* x) : x(x) {
     set_flag(OpFlags::_cpu, 0);

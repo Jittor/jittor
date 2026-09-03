@@ -18,8 +18,7 @@ namespace jittor {
 
 #ifndef JIT
 
-static auto make_mkl_batched_matmul = get_op_info("mkl_batched_matmul")
-    .get_constructor<VarPtr, Var*, Var*, bool, bool>();
+static auto make_mkl_batched_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool>("mkl_batched_matmul");
 
 MklBatchedMatmulOp::MklBatchedMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     : a(a), b(b), trans_a(trans_a), trans_b(trans_b) {

@@ -19,8 +19,7 @@ namespace jittor {
 // Resolved on first use rather than at static-init time: the order in which
 // the op registry is filled across translation units is not defined.
 static VarPtr make_device_copy(Var* x, int device) {
-    static auto ctor = get_op_info("device_copy")
-        .get_constructor<VarPtr, Var*, int>();
+    static auto ctor = op_constructor<VarPtr, Var*, int>("device_copy");
     return ctor(x, device);
 }
 

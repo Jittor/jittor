@@ -13,14 +13,10 @@
 namespace jittor {
 
 #ifndef JIT
-static auto make_reindex = get_op_info("reindex")
-    .get_constructor<VarPtr, Var*, NanoVector, vector<string>&&, float64, vector<string>&&, vector<Var*>&&>();
-static auto make_binary = get_op_info("binary")
-    .get_constructor<VarPtr, Var*, Var*, NanoString>();
-static auto make_ternary = get_op_info("ternary")
-    .get_constructor<VarPtr, Var*, Var*, Var*>();
-static auto make_number = get_op_info("number")
-    .get_constructor<VarPtr, float, Var*>();
+static auto make_reindex = op_constructor<VarPtr, Var*, NanoVector, vector<string>&&, float64, vector<string>&&, vector<Var*>&&>("reindex");
+static auto make_binary = op_constructor<VarPtr, Var*, Var*, NanoString>("binary");
+static auto make_ternary = op_constructor<VarPtr, Var*, Var*, Var*>("ternary");
+static auto make_number = op_constructor<VarPtr, float, Var*>("number");
 
 
 ReindexReduceOp::ReindexReduceOp(Var* y, NanoString op, NanoVector shape, vector<string>&& indexes, vector<string>&& overflow_conditions, vector<Var*>&& extras)

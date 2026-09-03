@@ -9,12 +9,9 @@
 
 namespace jittor {
 
-static auto make_array = get_op_info("array")
-    .get_constructor<VarPtr, const void*, NanoVector, NanoString>();
-static auto make_unary = get_op_info("unary")
-    .get_constructor<VarPtr, Var*, NanoString>();
-static auto make_broadcast_to = get_op_info("broadcast_to")
-    .get_constructor<VarPtr, Var*, Var*, NanoVector>();
+static auto make_array = op_constructor<VarPtr, const void*, NanoVector, NanoString>("array");
+static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
+static auto make_broadcast_to = op_constructor<VarPtr, Var*, Var*, NanoVector>("broadcast_to");
 
 VarPtr make_number(float number, Var* x) {
     union Number {

@@ -17,8 +17,7 @@
 
 namespace jittor {
     
-static auto make_numpy_code = get_op_info("numpy_code")
-    .get_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, NumpyFunc, NumpyResult&&>();
+static auto make_numpy_code = op_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, NumpyFunc, NumpyResult&&>("numpy_code");
 
 NumpyCodeOp::NumpyCodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs, NumpyFunc&& forward, vector<NumpyFunc>&& sbackward)
     : _inputs(inputs), forward(move(forward))

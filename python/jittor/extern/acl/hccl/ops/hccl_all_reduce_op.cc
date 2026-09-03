@@ -8,8 +8,7 @@ namespace jittor {
 
 #ifndef JIT
 
-static auto hccl_all_reduce = 
-    get_op_info("hccl_all_reduce").get_constructor<VarPtr, Var*, string>();
+static auto hccl_all_reduce = op_constructor<VarPtr, Var*, string>("hccl_all_reduce");
 
 HcclAllReduceOp::HcclAllReduceOp(Var* x, string reduce_op) : x(x), reduce_op(reduce_op) {
     set_flag(OpFlags::_cpu, 0);

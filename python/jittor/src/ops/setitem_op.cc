@@ -25,18 +25,12 @@ namespace jittor {
 
 #ifndef JIT
 
-static auto make_array = get_op_info("array")
-    .get_constructor<VarPtr, const void*, NanoVector, NanoString>();
-static auto make_getitem = get_op_info("getitem")
-    .get_constructor<VarPtr, Var*, VarSlices&&>();
-static auto make_getitem2 = get_op_info("getitem")
-    .get_constructor<vector<VarPtr>, Var*, VarSlices&&, int>();
-static auto make_setitem = get_op_info("setitem")
-    .get_constructor<VarPtr, Var*, VarSlices&&, Var*, NanoString>();
-static auto make_binary = get_op_info("binary")
-    .get_constructor<VarPtr, Var*, Var*, NanoString>();
-static auto make_unary = get_op_info("unary")
-    .get_constructor<VarPtr, Var*, NanoString>();
+static auto make_array = op_constructor<VarPtr, const void*, NanoVector, NanoString>("array");
+static auto make_getitem = op_constructor<VarPtr, Var*, VarSlices&&>("getitem");
+static auto make_getitem2 = op_constructor<vector<VarPtr>, Var*, VarSlices&&, int>("getitem");
+static auto make_setitem = op_constructor<VarPtr, Var*, VarSlices&&, Var*, NanoString>("setitem");
+static auto make_binary = op_constructor<VarPtr, Var*, Var*, NanoString>("binary");
+static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
 
 SetitemOp::SetitemOp(Var* x, VarSlices&& slices, Var* y, NanoString op)
     : vs(move(slices)), op(op) {

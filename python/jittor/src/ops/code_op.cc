@@ -18,11 +18,9 @@
 
 namespace jittor {
 
-static auto make_code = get_op_info("code")
-    .get_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, string&&, vector<string>&&, string&&, string&&, vector<string>&&, string&&, DataMap&&>();
+static auto make_code = op_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, string&&, vector<string>&&, string&&, string&&, vector<string>&&, string&&, DataMap&&>("code");
 
-static auto make_code_multi = get_op_info("code")
-    .get_constructor<vector<VarPtr>, vector<NanoVector>&&, vector<NanoString>&&, vector<Var*>&&, string&&, vector<string>&&, string&&, string&&, vector<string>&&, string&&, DataMap&&>();
+static auto make_code_multi = op_constructor<vector<VarPtr>, vector<NanoVector>&&, vector<NanoString>&&, vector<Var*>&&, string&&, vector<string>&&, string&&, string&&, vector<string>&&, string&&, DataMap&&>("code");
     
 static inline void check_vary_shape(NanoVector v) {
     ASSERT(v.size()) << "Vary shape should not be zero dimension";

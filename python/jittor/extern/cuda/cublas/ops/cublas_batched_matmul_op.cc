@@ -22,8 +22,7 @@ namespace jittor {
 
 #ifndef JIT
 
-static auto make_cublas_batched_matmul = get_op_info("cublas_batched_matmul")
-    .get_constructor<VarPtr, Var*, Var*, bool, bool>();
+static auto make_cublas_batched_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool>("cublas_batched_matmul");
 
 CublasBatchedMatmulOp::CublasBatchedMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     : a(a), b(b), trans_a(trans_a), trans_b(trans_b) {

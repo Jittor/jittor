@@ -20,20 +20,14 @@ namespace jittor {
 #ifndef JIT
 
 #ifdef HAS_CUDA
-static auto make_array = get_op_info("array")
-    .get_constructor<VarPtr, const void*, NanoVector, NanoString>();
-static auto make_binary = get_op_info("binary")
-    .get_constructor<VarPtr, Var*, Var*, NanoString>();
-static auto make_transpose = get_op_info("transpose")
-    .get_constructor<VarPtr, Var*, NanoVector>();
+static auto make_array = op_constructor<VarPtr, const void*, NanoVector, NanoString>("array");
+static auto make_binary = op_constructor<VarPtr, Var*, Var*, NanoString>("binary");
+static auto make_transpose = op_constructor<VarPtr, Var*, NanoVector>("transpose");
 #endif
 
-static auto make_index = get_op_info("index")
-    .get_constructor<VarPtr, NanoVector, int64, NanoString>();
-static auto make_reshape = get_op_info("reshape")
-    .get_constructor<VarPtr, Var*, NanoVector>();
-static auto make_reindex_reduce = get_op_info("reindex_reduce")
-    .get_constructor<VarPtr, Var*, NanoString, NanoVector, vector<string>&&, vector<string>&&, vector<Var*>&&>();
+static auto make_index = op_constructor<VarPtr, NanoVector, int64, NanoString>("index");
+static auto make_reshape = op_constructor<VarPtr, Var*, NanoVector>("reshape");
+static auto make_reindex_reduce = op_constructor<VarPtr, Var*, NanoString, NanoVector, vector<string>&&, vector<string>&&, vector<Var*>&&>("reindex_reduce");
 
 ArgReduceOp::ArgReduceOp(Var* x, NanoString op, int dim, bool keepdims)
     : x(x), op(op), dim(dim), keepdims(keepdims) {
