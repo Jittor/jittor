@@ -8,7 +8,6 @@
 #include "common.h"
 #include "var.h"
 #include "ops/array_op.h"
-#include "executor.h"
 #include "mem/allocator.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 
@@ -149,13 +148,7 @@ struct VarHolder {
 
     // @pyjt(migrate_to_cpu)
     // @attrs(return_self)
-    inline VarHolder* migrate_to_cpu_() {
-        sync(true, false);
-        #ifdef HAS_CUDA
-        migrate_to_cpu(var, exe.allocator);
-        #endif
-        return this;
-    }
+    VarHolder* migrate_to_cpu_();
 
     // @pyjt(migrate_to_gpu)
     // @attrs(return_self)
@@ -346,24 +339,10 @@ struct VarHolder {
      * get a numpy array which shares the data with the Var. 
      */
     // @pyjt(__get__data)
-    inline DataView data() {
-        if (!(var->mem_ptr && !var->allocator->is_cuda())) {
-            sync(true, false);
-            #ifdef HAS_CUDA
-            migrate_to_cpu(var, exe.allocator);
-            #endif
-        }
-        return {this, var->mem_ptr, var->shape, var->dtype()};
-    }
+    DataView data();
     
     // @pyjt(__get__raw_ptr)
-    inline uint64 raw_ptr() {
-        sync(true, false);
-        #ifdef HAS_CUDA
-        migrate_to_cpu(var, exe.allocator);
-        #endif
-        return (uint64)var->mem_ptr;
-    }
+    uint64 raw_ptr();
 
     // @pyjt(__get__device_raw_ptr)
     inline uint64 device_raw_ptr() {
@@ -391,19 +370,7 @@ struct VarHolder {
     }
 
     // @pyjt(__set__data)
-    inline void set_data(ArrayArgs&& array) {
-        sync(true);
-        CHECK(array.dtype.dsize() == var->dtype().dsize()
-            && array.dtype.is_int() == var->dtype().is_int());
-        int64 size = array.dtype.dsize();
-        for (int i=0; i<array.shape.size(); i++)
-            size *= array.shape[i];
-        CHECK(size==var->size);
-        #ifdef HAS_CUDA
-        migrate_to_cpu(var, exe.allocator);
-        #endif
-        std::memcpy(var->mem_ptr, array.ptr, size);
-    }
+    void set_data(ArrayArgs&& array);
 
     // @pyjt(share_with)
     // @attrs(return_self)

@@ -71,6 +71,46 @@ void submit_pending(VarHolder* holder) {
     exe.submit_pending(holder->var, true);
 }
 
+VarHolder* VarHolder::migrate_to_cpu_() {
+    sync(true, false);
+#ifdef HAS_CUDA
+    migrate_to_cpu(var, exe.allocator);
+#endif
+    return this;
+}
+
+DataView VarHolder::data() {
+    if (!(var->mem_ptr && !var->allocator->is_cuda())) {
+        sync(true, false);
+#ifdef HAS_CUDA
+        migrate_to_cpu(var, exe.allocator);
+#endif
+    }
+    return {this, var->mem_ptr, var->shape, var->dtype()};
+}
+
+uint64 VarHolder::raw_ptr() {
+    sync(true, false);
+#ifdef HAS_CUDA
+    migrate_to_cpu(var, exe.allocator);
+#endif
+    return (uint64)var->mem_ptr;
+}
+
+void VarHolder::set_data(ArrayArgs&& array) {
+    sync(true);
+    CHECK(array.dtype.dsize() == var->dtype().dsize()
+        && array.dtype.is_int() == var->dtype().is_int());
+    int64 size = array.dtype.dsize();
+    for (int i=0; i<array.shape.size(); i++)
+        size *= array.shape[i];
+    CHECK(size==var->size);
+#ifdef HAS_CUDA
+    migrate_to_cpu(var, exe.allocator);
+#endif
+    std::memcpy(var->mem_ptr, array.ptr, size);
+}
+
 VarHolder::VarHolder(Var* v) : var(v) {
     // Var holder has both forward and backward liveness
     own_holder();
