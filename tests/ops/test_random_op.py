@@ -16,6 +16,7 @@ import random
 import math
 import unittest
 from _helpers.logs import find_log_with_re
+from _helpers.assertions import expect_error
 from _helpers.torch_runtime import import_torch_modules, modules_available
 from _helpers.tuner_parser import simple_parser
 
@@ -30,6 +31,13 @@ def setUpModule():
 
 
 class TestRandomOp(unittest.TestCase):
+    def test_invalid_type_is_a_catchable_user_error(self):
+        expect_error(
+            lambda: jt.random((2,), type="invalid"),
+            exc_type=RuntimeError,
+            match="ns_uniform",
+        )
+
     @unittest.skipIf(not jt.has_cuda, "Cuda not found")
     @jt.flag_scope(use_cuda=1)
     def test(self):

@@ -35,7 +35,7 @@ RandomOp::RandomOp(NanoVector shape, NanoString dtype, NanoString type) {
     #endif
     output = create_output(shape, dtype);
     this->type = type;
-    ASSERT(type == ns_normal || type == ns_uniform);
+    USER_CHECK(type == ns_normal || type == ns_uniform);
 }
 
 void RandomOp::jit_prepare(JK& jk) {
