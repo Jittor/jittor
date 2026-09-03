@@ -660,6 +660,34 @@ register_fidelity(
 )
 
 
+_ADDMM_FIDELITY_DETAIL = (
+    "matches Torch alpha/beta matrix addition for supported real tensors but "
+    "omits device, layout, dtype, and out keyword semantics"
+)
+
+
+def _addmm_impl(input, mat1, mat2, *, beta=1, alpha=1):
+    result = jt.matmul(mat1, mat2)
+    if alpha != 1:
+        result = result * alpha
+    if beta == 0:
+        return result
+    return beta * input + result
+
+
+def addmm(input, mat1, mat2, *, beta=1, alpha=1):
+    """Compute ``beta * input + alpha * (mat1 @ mat2)``."""
+    return _addmm_impl(input, mat1, mat2, beta=beta, alpha=alpha)
+
+
+register_fidelity(
+    "torch.addmm",
+    addmm,
+    Fidelity.APPROXIMATE,
+    _ADDMM_FIDELITY_DETAIL,
+)
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
@@ -1038,17 +1066,7 @@ def install(ctx):
     _alias("quantile", quantile)
     _alias("nanquantile", nanquantile)
     _alias("square", lambda x: x * x)   # torch.square (jittor only had jt.sqr); persimmon
-    # torch.addmm(input, mat1, mat2, *, beta=1, alpha=1):
-    #   out = beta * input + alpha * (mat1 @ mat2)   (gpt2 uses this for its
-    #   Conv1D linear). jittor has no top-level addmm, so add one.
-    def _addmm(input, mat1, mat2, *, beta=1, alpha=1):
-        res = jt.matmul(mat1, mat2)
-        if alpha != 1:
-            res = res * alpha
-        if beta == 0:
-            return res
-        return beta * input + res
-    _alias("addmm", _addmm)
+    _alias("addmm", addmm)
 
     # ---- torch.* ops used by mmdetection (additive aliases) ----
     _alias("mm", lambda input, mat2, out=None: jt.matmul(input, mat2))   # 2-D matmul

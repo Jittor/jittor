@@ -729,6 +729,48 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "size mismatch"):
                 torch.mv(torch.ones((2, 3)), torch.ones(2))
 
+    def test_addmm_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.addmm))
+        self.assertIs(torch.addmm, numerical.addmm)
+        self.assertEqual(numerical.addmm.__module__, numerical.__name__)
+        self.assertEqual(numerical.addmm.__name__, "addmm")
+
+    def test_addmm_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.addmm")
+        self.assertIs(record.implementation, numerical.addmm)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("alpha", record.detail)
+        self.assertIn("device", record.detail)
+
+    def test_addmm_cpu_alpha_beta_and_var_method_match_numpy(self):
+        bias = np.array([[1.0, 2.0], [3.0, 4.0]], dtype="float32")
+        mat1 = np.array([[1.0, 2.0], [0.0, 1.0]], dtype="float32")
+        mat2 = np.array([[2.0, 1.0], [3.0, 4.0]], dtype="float32")
+        expected_default = bias + np.matmul(mat1, mat2)
+        expected_scaled = 0.5 * bias + 2.0 * np.matmul(mat1, mat2)
+        with torch.flag_scope(use_cuda=0):
+            bias_tensor = torch.array(bias)
+            mat1_tensor = torch.array(mat1)
+            mat2_tensor = torch.array(mat2)
+            actual_default = torch.addmm(
+                bias_tensor, mat1_tensor, mat2_tensor)
+            actual_scaled = torch.addmm(
+                bias_tensor, mat1_tensor, mat2_tensor,
+                beta=0.5, alpha=2.0)
+            actual_method = bias_tensor.addmm(
+                mat1_tensor, mat2_tensor, beta=0.5, alpha=2.0)
+        np.testing.assert_allclose(
+            actual_default.numpy(), expected_default, rtol=1e-6)
+        np.testing.assert_allclose(
+            actual_scaled.numpy(), expected_scaled, rtol=1e-6)
+        np.testing.assert_allclose(
+            actual_method.numpy(), expected_scaled, rtol=1e-6)
+
 
 if __name__ == "__main__":
     unittest.main()
