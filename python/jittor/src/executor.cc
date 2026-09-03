@@ -52,11 +52,67 @@ static inline bool has_gopt(Node* node) {
 
 Executor exe;
 EXTERN_LIB MemoryProfiler memory_profiler;
+DEFINE_FLAG(int, lazy_execution, 1, "Default enabled, if disable, use immediately eager execution rather than lazy execution, This flag makes error message and traceback infomation better. But this flag will raise memory consumption and lower the performance.");
+DEFINE_FLAG(int, auto_flush_ops, 128, "Pipeline graph construction with device execution on CUDA. Once this many operators have been created since the executor last ran, launch everything pending without waiting for the device, so the device computes while Python keeps building the rest of the step. 0 keeps fully lazy execution. Fusion and dead-code elimination still apply within each launched segment; CPU execution is synchronous and never flushes early.");
 DECLARE_FLAG(int, profile_memory_enable);
 DEFINE_FLAG(int, gopt_disable, 0, "Disable graph optimizer.");
 DEFINE_FLAG(int, use_threading, 0, "Allow to use python threading with jittor.");
 
 DEFINE_FLAG(int, exec_called, 0, "exec sync called");
+
+struct PendingSubmissionScope {
+    Executor* executor;
+    explicit PendingSubmissionScope(Executor* executor) : executor(executor) {
+        executor->flush_active = true;
+    }
+    ~PendingSubmissionScope() { executor->flush_active = false; }
+};
+
+void Executor::submit_pending(Var* target, bool force) {
+    if (!target || flush_active || target->is_finished()) return;
+
+    if (force) {
+        PendingSubmissionScope scope(this);
+        run_sync({target}, false, false);
+        return;
+    }
+
+#ifdef IS_CUDA
+    if (auto_flush_ops > 0 && use_cuda
+            && Op::number_of_created_ops - last_run_ops >= auto_flush_ops) {
+        vector<Var*> vars;
+        for (auto holder : hold_vars) {
+            auto var = holder->var;
+            if (var->_outputs.size() || var->is_finished()) continue;
+            auto op = var->input();
+            if (op && op->flag(OpFlags::_must_stay_pending)) continue;
+            vars.push_back(var);
+        }
+        if (vars.size()) {
+            PendingSubmissionScope scope(this);
+            run_sync(vars, false, false);
+        } else {
+            last_run_ops = Op::number_of_created_ops;
+        }
+    }
+#endif
+
+    if (target->is_finished()
+            || (lazy_execution && Op::number_of_lived_ops < 100000)) return;
+    auto eager_target = target;
+    for (int i=0; i<5; i++) {
+        auto op = eager_target->input();
+        if (!op) break;
+        if (i==0 && op->flag(OpFlags::_must_stay_pending)) return;
+        if (op->type() == OpType::other || op->type() == OpType::reduce
+                || op->inputs().size() == 0)
+            break;
+        if (op->type() == OpType::broadcast) return;
+        eager_target = op->inputs().front();
+    }
+    PendingSubmissionScope scope(this);
+    run_sync({target}, true);
+}
 
 // from fetch_op.cc
 EXTERN_LIB list<VarPtr> fetcher_to_free;
@@ -806,7 +862,6 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     LOGvv << "cudaDeviceSynchronize times:" << sync_times << "/" <<queue.size() << "device_sync:" << device_sync;
     #endif
     last_run_ops = Op::number_of_created_ops;
-    if (!flush_active) flush_suspended = false;
 }
 
 // Allocations handed to foreign libraries (cupy, cutt) through the hooks

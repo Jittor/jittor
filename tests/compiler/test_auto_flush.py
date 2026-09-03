@@ -32,8 +32,6 @@ class TestAutoFlush(unittest.TestCase):
     def setUp(self):
         self._saved = (jt.flags.auto_flush_ops, jt.flags.use_cuda)
         jt.flags.use_cuda = 1
-        # A failed flush suspends the pipeline until a sync succeeds; start
-        # every case from a clean, unsuspended executor.
         jt.sync_all()
 
     def tearDown(self):
@@ -152,6 +150,23 @@ class TestAutoFlushBackendBoundary(unittest.TestCase):
             self.assertEqual(len(seen), 20)
             np.testing.assert_array_equal(
                 outputs[-1].numpy(), np.full(4, 2.0, dtype="float32"))
+
+
+class TestExplicitSubmission(unittest.TestCase):
+
+    def test_submit_pending_executes_without_fetching(self):
+        with jt.flag_scope(use_cuda=0, lazy_execution=1, auto_flush_ops=0):
+            value = jt.array([1.0, 2.0, 3.0]) * 2
+            self.assertEqual(value.location(), "none")
+            jt.core.submit_pending(value)
+            self.assertEqual(value.location(), "cpu")
+            np.testing.assert_array_equal(value.numpy(), [2.0, 4.0, 6.0])
+
+    def test_eager_error_is_raised_at_the_python_call_boundary(self):
+        with jt.flag_scope(use_cuda=0, lazy_execution=0, auto_flush_ops=0):
+            source = 'throw std::runtime_error("submission boundary");'
+            with self.assertRaisesRegex(RuntimeError, "submission boundary"):
+                jt.code([1], "float32", cpu_src=source)
 
 
 if __name__ == "__main__":

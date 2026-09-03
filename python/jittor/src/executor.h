@@ -27,13 +27,13 @@ struct Executor {
     // steps -- drifting points would cut the graph differently every step
     // and compile a new fused-kernel variant each time.
     int64 last_run_ops = 0;
-    // The auto-flush pipeline is re-entered from VarHolder construction. It
-    // must neither nest nor let an execution error escape a constructor: a
-    // failed flush leaves the failing operators pending and suspends
-    // flushing until the caller's own sync reports the error and succeeds.
+    // Python callbacks may return Vars while a submitted graph is executing;
+    // submission must not nest through that conversion boundary.
     bool flush_active = false;
-    bool flush_suspended = false;
     void run_sync(vector<Var*> vars, bool device_sync, bool weak_sync=true);
+    // Submit from a Python return boundary. `force` is the explicit API;
+    // otherwise lazy/eager/auto-flush flags retain their scheduling policy.
+    void submit_pending(Var* target, bool force=false);
 
     inline Allocation alloc_temp(size_t size) {
         return Allocation(temp_allocator, size);

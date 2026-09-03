@@ -55,69 +55,20 @@ PyObject* new_var_data_owner(VarHolder* vh) {
     return capsule;
 }
 
-DEFINE_FLAG(int, lazy_execution, 1, "Default enabled, if disable, use immediately eager execution rather than lazy execution, This flag makes error message and traceback infomation better. But this flag will raise memory consumption and lower the performance.");
-
-DEFINE_FLAG(int, auto_flush_ops, 128, "Pipeline graph construction with device execution on CUDA. Once this many operators have been created since the executor last ran, launch everything pending without waiting for the device, so the device computes while Python keeps building the rest of the step. 0 keeps fully lazy execution. Fusion and dead-code elimination still apply within each launched segment; CPU execution is synchronous and never flushes early.");
-
 list<VarHolder*> hold_vars;
 list<VarHolder*>::iterator sync_ptr = hold_vars.end();
-
-// Launch whatever the held graph still owes, without a device sync. Only
-// held leaves are targets, so an intermediate nobody kept is still computed
-// only if a held value needs it: the segment keeps lazy semantics, it is
-// merely started earlier. An execution error is not raised here -- this runs
-// inside a VarHolder constructor -- the failing operators stay pending and
-// the caller's own sync raises it, exactly as lazy execution would.
-#ifdef IS_CUDA
-static void auto_flush() {
-    exe.flush_active = true;
-    vector<Var*> vars;
-    for (auto v : hold_vars) {
-        auto var = v->var;
-        if (var->_outputs.size() || var->is_finished()) continue;
-        // A tape output must stay pending until tape_together has wired it
-        // into its Tapes node, the same rule eager execution applies below.
-        auto op = var->input();
-        if (op && op->flag(OpFlags::_must_stay_pending)) continue;
-        vars.push_back(var);
-    }
-    if (vars.size()) {
-        try {
-            exe.run_sync(vars, false, false);
-        } catch (const std::exception& e) {
-            exe.flush_suspended = true;
-            LOGv << "auto flush suspended until the next sync:" << e.what();
-        }
-    } else
-        exe.last_run_ops = Op::number_of_created_ops;
-    exe.flush_active = false;
-}
-#endif
 
 void add_hold_vars(VarHolder* self) {
     hold_vars.push_front(self);
     self->iter = hold_vars.begin();
-#ifdef IS_CUDA
-    if (auto_flush_ops > 0 && use_cuda && !exe.flush_active
-        && !exe.flush_suspended
-        && Op::number_of_created_ops - exe.last_run_ops >= auto_flush_ops)
-        auto_flush();
-#endif
-    if (lazy_execution && Op::number_of_lived_ops < 100000) return;
-    auto v = self->var;
-    for (int i=0; i<5; i++) {
-        auto op = v->input();
-        if (!op) break;
-        if (i==0 && op->flag(OpFlags::_must_stay_pending)) return;
-        if (op->type() == OpType::other) break;
-        if (op->type() == OpType::reduce) break;
-        if (op->inputs().size() == 0)
-            break;
-        if (op->type() == OpType::broadcast)
-            return;
-        v = op->inputs().front();
-    }
-    self->sync(true);
+}
+
+void schedule_pending_from_python(VarHolder* holder) {
+    exe.submit_pending(holder->var);
+}
+
+void submit_pending(VarHolder* holder) {
+    exe.submit_pending(holder->var, true);
 }
 
 VarHolder::VarHolder(Var* v) : var(v) {

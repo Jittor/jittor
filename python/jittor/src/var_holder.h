@@ -478,6 +478,13 @@ vector<ArrayArgs> fetch_sync(const vector<VarHolder*>& vh);
 // @pyjt(sync_all)
 void sync_all(bool device_sync=false);
 
+// Called after a complete VarHolder has crossed into a Python object.
+void schedule_pending_from_python(VarHolder* holder);
+
+// Start this Var's pending subgraph without a device synchronization.
+// @pyjt(submit_pending)
+void submit_pending(VarHolder* holder);
+
 inline vector<Var*> convert(const vector<VarHolder*>& vhs) {
     vector<Var*> v;
     v.reserve(vhs.size());

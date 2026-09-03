@@ -563,6 +563,7 @@ DEF_IS(ArrayArgs, T) from_py_object(PyObject* obj) {
 // VarHolder
 struct VarHolder;
 EXTERN_LIB PyHeapTypeObject PyjtVarHolder;
+void schedule_pending_from_python(VarHolder* holder);
 namespace jit_op_maker { 
 EXTERN_LIB VarHolder* array_(ArrayArgs&&);
 EXTERN_LIB VarHolder* array__(PyObject* obj);
@@ -586,6 +587,8 @@ DEF_IS(VarHolder*, PyObject*) to_py_object(T a) {
     // will move and delete a
     new (ptr) typename std::remove_pointer<T>::type (a);
     GET_INITED_FLAG(typename std::remove_pointer<T>::type, 1, obj.obj) = 1;
+    schedule_pending_from_python(
+        reinterpret_cast<typename std::remove_pointer<T>::type*>(ptr));
     return obj.release();
 }
 
