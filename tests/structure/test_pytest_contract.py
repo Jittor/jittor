@@ -129,6 +129,18 @@ def _load_test_suite_runner():
     return module
 
 
+def test_opinfo_forward_battery_runs_every_declared_dtype():
+    source = (TEST_ROOT / "ops" / "test_ops.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    common = next(node for node in tree.body
+                  if isinstance(node, ast.ClassDef) and node.name == "TestCommon")
+    reference = next(node for node in common.body
+                     if isinstance(node, ast.FunctionDef)
+                     and node.name == "test_reference")
+    decorators = [ast.unparse(node) for node in reference.decorator_list]
+    assert "ops(op_db, dtypes=OpDTypes.supported)" in decorators
+
+
 def _automatic_markers(relative, device=None, selected=None):
     module = _load_test_conftest()
 

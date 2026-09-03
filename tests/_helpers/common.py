@@ -314,7 +314,7 @@ def make_tensor(*shape, dtype=float32, low=None, high=None, requires_grad=False,
     a = np.ascontiguousarray(a)
     v = jt.array(a, dtype=str(a.dtype))
     if dtype == bfloat16:
-        v = v.float16()  # closest jittor low-precision; bf16 path validated separately
+        v = v.bfloat16()
     elif str(v.dtype) != dtype:
         v = v.cast(dtype)
     if requires_grad:

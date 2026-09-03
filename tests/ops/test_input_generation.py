@@ -80,3 +80,9 @@ def test_an_explicit_seed_still_wins():
     cu.begin_test_inputs("tests/ops/test_x.py::TestX::test_b")
     again = to_numpy(make_tensor(3, 3, dtype=cu.float32, seed=1234))
     np.testing.assert_array_equal(pinned, again)
+
+
+def test_bfloat16_inputs_keep_the_declared_dtype():
+    cu.begin_test_inputs("tests/ops/test_input_generation.py::test_bfloat16")
+    value = make_tensor(4, dtype=cu.bfloat16)
+    assert str(value.dtype) == cu.bfloat16

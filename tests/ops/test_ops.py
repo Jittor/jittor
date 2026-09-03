@@ -56,7 +56,7 @@ def _diff_plan(sample):
 class TestCommon(JittorTestCase):
     """Forward output equals the op's numpy reference, on every device."""
 
-    @ops(op_db, dtypes=OpDTypes.any_one)
+    @ops(op_db, dtypes=OpDTypes.supported)
     def test_reference(self, device, dtype, op):
         if op.ref is None:
             self.skipTest(f"{op.full_name}: no numpy reference")
