@@ -58,6 +58,21 @@ _CPU_DISPATCH_ORDER = (
 _FAKE_ONLY_KEYS = ("Meta", "FakeTensor", "SparseCPU", "SparseCUDA")
 
 
+def _dispatch_order(residency):
+    order = _CUDA_DISPATCH_ORDER if residency == "cuda" else _CPU_DISPATCH_ORDER
+
+    # Autocast is a thread-local dtype policy and its dispatch key outranks the
+    # ordinary backend key in torch.  Query the policy for the tensor's actual
+    # residency: a CPU autocast context must not affect a CUDA registration (or
+    # vice versa), and an enabled=False nested context returns None here.
+    from .grad import autocast_dtype
+
+    if autocast_dtype(residency) is None:
+        return order
+    key = "AutocastCUDA" if residency == "cuda" else "AutocastCPU"
+    return (key,) + order
+
+
 def _argument_residency(args, kwargs):
     """"cuda" or "cpu", from the first tensor argument -- as torch dispatches."""
     import jittor as jt
@@ -186,8 +201,7 @@ class _RegisteredOp:
                 "operator %s::%s has no Jittor implementation"
                 % (self.namespace, self.name))
         residency = _argument_residency(args, kwargs)
-        order = _CUDA_DISPATCH_ORDER if residency == "cuda" else _CPU_DISPATCH_ORDER
-        for key in order:
+        for key in _dispatch_order(residency):
             if key in impls:
                 return impls[key]
         registered = sorted(k or "<default>" for k in impls)

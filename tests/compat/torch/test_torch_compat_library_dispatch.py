@@ -96,6 +96,21 @@ class TestDispatchKeySelection(unittest.TestCase):
                        ("CPU", lambda x: x + 1)])
         self.assertEqual(op(jt.zeros(2)).numpy().tolist(), [1.0, 1.0])
 
+    def test_cpu_autocast_dtype_selects_the_autocast_kernel(self):
+        op = self._op([
+            ("CPU", lambda x: x + 1),
+            ("AutocastCPU", lambda x: x + 100),
+        ])
+        x = jt.zeros(2)
+
+        self.assertEqual(op(x).numpy().tolist(), [1.0, 1.0])
+        with torch.autocast("cpu", dtype=torch.bfloat16):
+            self.assertEqual(op(x).numpy().tolist(), [100.0, 100.0])
+            with torch.autocast("cpu", dtype=torch.bfloat16, enabled=False):
+                self.assertEqual(op(x).numpy().tolist(), [1.0, 1.0])
+            self.assertEqual(op(x).numpy().tolist(), [100.0, 100.0])
+        self.assertEqual(op(x).numpy().tolist(), [1.0, 1.0])
+
     def test_operator_with_no_usable_kernel_names_the_registered_keys(self):
         op = self._op([("XLA", lambda x: x)])
         with self.assertRaises(NotImplementedError) as cm:
