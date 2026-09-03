@@ -50,6 +50,12 @@ import jittor_utils
 from jittor_utils import cache_path, LOG
 
 disable_lock = os.environ.get("disable_lock", "0") == "1"
+if disable_lock:
+    LOG.w(
+        "disable_lock=1: Jittor build locking is disabled; concurrent writers "
+        "can corrupt this cache. Use an isolated JITTOR_HOME and never share "
+        "this cache with another process."
+    )
 
 
 def _env_seconds(name, default):

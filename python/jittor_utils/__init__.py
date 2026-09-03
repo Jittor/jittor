@@ -547,6 +547,11 @@ def get_build_config():
     configuration from one set to the empty string.
     """
     config = {name: os.environ.get(name) for name in BUILD_CONFIG_VARS}
+    # Keep the normal cache name stable, but isolate the explicitly unsafe
+    # opt-in: an unlocked writer must not leave partial state in the cache used
+    # by ordinary locked processes.
+    if os.environ.get("disable_lock", "0") == "1":
+        config["disable_lock"] = "1"
     # A build that swaps shares no object code with one that does not, so it
     # needs its own directory. Recorded only when it is switched on: "off" is
     # the configuration every existing cache directory was built with, and

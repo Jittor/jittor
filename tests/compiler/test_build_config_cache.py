@@ -140,6 +140,14 @@ class TestBuildConfigFingerprint(unittest.TestCase):
         # ...but they still share one build lock, and so one download area.
         self.assertEqual(with_nvcc[1], without[1])
 
+    def test_disabling_the_lock_gets_its_own_directory(self):
+        locked = _cache_path_for({"disable_lock": "0"})
+        unlocked = _cache_path_for({"disable_lock": "1", "log_silent": "1"})
+        self.assertNotEqual(locked[0], unlocked[0])
+        # The file location remains stable; the disabled process simply does
+        # not acquire it. Shared downloads still have one canonical owner.
+        self.assertEqual(locked[1], unlocked[1])
+
     def test_a_swapping_build_gets_its_own_directory(self):
         """`JT_SAVE_MEM` decides whether the swap code is compiled in at all.
 

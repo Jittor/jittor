@@ -15,6 +15,20 @@ from jittor_utils import lock as jit_lock
 
 from _helpers.child_process import PYTHON, child_env, run_python_child, shell_status
 
+
+class TestDisableLockOptIn(unittest.TestCase):
+    def test_disabling_the_lock_warns_in_a_fresh_process(self):
+        result = run_python_child(
+            ["-c", "import jittor_utils.lock"],
+            env={"disable_lock": "1"},
+            text=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertIn(
+            "disable_lock=1: Jittor build locking is disabled",
+            result.stdout.decode(),
+        )
+
 class TestLock(unittest.TestCase):
     def test(self):
         if os.environ.get('lock_full_test', '0') == '1':
