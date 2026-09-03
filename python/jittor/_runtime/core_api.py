@@ -10,6 +10,7 @@ import functools as _functools
 import contextlib
 import numpy as np
 import numbers
+import itertools
 from collections import OrderedDict
 from collections.abc import Sequence, Mapping
 import types
@@ -1521,6 +1522,20 @@ class Module:
         raise NotImplementedError("Please implement 'execute' method of "+str(type(self)))
 
     def __call__(self, *args, **kw):
+        # Hooks are per-INSTANCE and are consulted here, so registering one no
+        # longer rewrites the class. See ``_hooks``.
+        if self._has_hooks():
+            return self.__hooked_call__(*args, **kw)
+        return self._dispatch_call(*args, **kw)
+
+    def _dispatch_call(self, *args, **kw):
+        """What ``__call__`` runs once the hooks have had their say.
+
+        This, not ``__call__``, is the seam the torch compatibility layer
+        replaces, so its dispatch (an instance-level ``forward``, fsdp,
+        execution pipelining) keeps running INSIDE the hooks -- which is where
+        it ran when a hook was installed by swapping ``cls.__call__``.
+        """
         return self.execute(*args, **kw)
     def __repr__(self):
         return self.__str__()
@@ -1883,74 +1898,142 @@ class Module:
                 pass
         return self
 
+    #: Hook ids come from one counter, so a handle names exactly one hook even
+    #: after everything around it has been removed.
+    _hook_serial = itertools.count()
+
+    def _hooks(self, name, create=False):
+        """This INSTANCE's ordered hook table for ``name``.
+
+        Hooks used to be single attributes (``self.__fhook__ = func``), and
+        installing one called ``_place_hooker``, which swapped ``__call__`` and
+        ``__hooked_call__`` **on the class**. Four things followed, none of them
+        announced:
+
+        * a second ``register_forward_hook`` **replaced** the first. accelerate,
+          peft and transformers all register several hooks on one module and
+          rely on torch's ordered dict; the earlier ones simply stopped
+          existing.
+        * ``prepend`` and ``always_call`` were accepted and ignored, so a caller
+          who asked for ordering got registration order, silently.
+        * the swap was **class-level and permanent**: hooking one ``Linear``
+          put every ``Linear`` in the process on the hook path forever, and
+          ``handle.remove()`` could not undo it because it only deleted the
+          attribute the wrapper looks for.
+        * the guard was ``hasattr(cls, "__hooked__")``, which walks the MRO, so
+          whether a subclass installed its own wrapper depended on whether some
+          base had been hooked first.
+
+        The table lives in ``__dict__`` directly: ``Module.__setattr__``
+        classifies assignments into parameters and buffers, and a hook table is
+        neither.
+        """
+        d = self.__dict__.get(name)
+        if d is None and create:
+            d = OrderedDict()
+            self.__dict__[name] = d
+        return d
+
+    def _has_hooks(self):
+        # NB: no bool() -- ``from jittor import *`` at the top of this module
+        # rebinds the name to jittor's `bool` CAST OP, which raises on a dict.
+        # The `or` chain already returns something falsy when every table is
+        # missing or empty, which is all `__call__` asks.
+        d = self.__dict__
+        return (d.get("_forward_pre_hooks") or d.get("_forward_hooks")
+                or d.get("_input_backward_hooks")
+                or d.get("_output_backward_hooks"))
+
+    def _add_hook(self, name, func, prepend=False, **info):
+        """Append (or prepend) one hook and return the handle that removes it."""
+        hooks = self._hooks(name, create=True)
+        key = next(Module._hook_serial)
+        hooks[key] = (func, info)
+        if prepend:
+            hooks.move_to_end(key, last=False)
+        return _RemovableHandle(lambda: hooks.pop(key, None))
+
+    def _run_forward_hooks(self, hooks, args, kw, ret):
+        for func, info in hooks:
+            if info.get("with_kwargs"):
+                res = func(self, args, kw, ret)
+            else:
+                res = func(self, args, ret)
+            if res is not None:
+                ret = res
+        return ret
+
     def __hooked_call__(self, *args, **kw):
-        if hasattr(self, "__fhook2__"):
+        pre = self._hooks("_forward_pre_hooks")
+        for func, info in list(pre.values()) if pre else ():
             # torch's forward_pre_hook convention:
             #   default:          hook(module, args) -> None | new_args
             #   with_kwargs=True: hook(module, args, kwargs) -> None | (new_args, new_kwargs)
             # When the hook was registered with_kwargs it must ALWAYS get the kwargs
             # arg (even if empty) -- ms-swift's VL pre_forward_hook has a 3-arg
             # signature and injects inputs_embeds via the kwargs dict.
-            if getattr(self, "__fhook2_with_kwargs__", False) or len(kw):
-                args_kw_result = self.__fhook2__(self, args, kw)
+            if info.get("with_kwargs") or len(kw):
+                args_kw_result = func(self, args, kw)
             else:
-                args_kw_result = self.__fhook2__(self, args)
-            if args_kw_result is not None:
-                if getattr(self, "__fhook2_with_kwargs__", False):
-                    # with_kwargs: torch requires a (new_args, new_kwargs) pair.
-                    if isinstance(args_kw_result, tuple) and len(args_kw_result) == 2:
-                        args, kw = args_kw_result
-                    else:
-                        raise RuntimeError(
-                            "forward pre-hook with kwargs must return None or a tuple "
-                            f"of (new_args, new_kwargs), but got {args_kw_result}."
-                        )
+                args_kw_result = func(self, args)
+            if args_kw_result is None:
+                continue
+            if info.get("with_kwargs"):
+                # with_kwargs: torch requires a (new_args, new_kwargs) pair.
+                if isinstance(args_kw_result, tuple) and len(args_kw_result) == 2:
+                    args, kw = args_kw_result
                 else:
-                    # no kwargs: torch replaces args with the return value, wrapping a
-                    # single non-tuple return in a 1-tuple.
-                    if not isinstance(args_kw_result, tuple):
-                        args_kw_result = (args_kw_result,)
-                    args = args_kw_result
-        if hasattr(self, "__bihook__"):
+                    raise RuntimeError(
+                        "forward pre-hook with kwargs must return None or a tuple "
+                        f"of (new_args, new_kwargs), but got {args_kw_result}."
+                    )
+            else:
+                # no kwargs: torch replaces args with the return value, wrapping a
+                # single non-tuple return in a 1-tuple.
+                if not isinstance(args_kw_result, tuple):
+                    args_kw_result = (args_kw_result,)
+                args = args_kw_result
+        bihooks = self._hooks("_input_backward_hooks")
+        if bihooks:
             if len(kw):
                 LOG.w("backward hook not support kw")
-            args = grad_hooker(args, self.__bihook__)
+            for func, _info in list(bihooks.values()):
+                args = grad_hooker(args, func)
         # NB: do NOT wrap the forward in no_grad when `_requires_grad` is False.
         # torch's requires_grad_(False) freezes parameters, it does not stop the
         # forward from building the autograd graph; gating here severs grad for
         # re-enabled sub-params (LoRA adapters) and upstream trainables. Freezing is
         # enforced at the parameter level (see Module.requires_grad_).
-        ret = self.__hooked_call__(*args, **kw)
-        if hasattr(self, "__bohook__"):
+        fhooks = self._hooks("_forward_hooks")
+        fhooks = list(fhooks.values()) if fhooks else []
+        try:
+            ret = self._dispatch_call(*args, **kw)
+        except BaseException:
+            # torch's always_call=True: the hook runs even when the forward
+            # raised. It gets None for the output there -- there is none.
+            # accelerate's offload hooks use this to move weights back off the
+            # GPU, so skipping it leaks device memory on every failed step.
+            always = [(f, i) for f, i in fhooks if i.get("always_call")]
+            if always:
+                self._run_forward_hooks(always, args, kw, None)
+            raise
+        bohooks = self._hooks("_output_backward_hooks")
+        if bohooks:
             if len(kw):
                 LOG.w("backward hook not support kw")
-            if isinstance(ret, Var):
-                ret = grad_hooker((ret,), self.__bohook__)[0]
-            else:
-                ret = grad_hooker(ret, self.__bohook__)
-        if hasattr(self, "__fhook__"):
-            # Match torch's forward-hook calling convention:
-            #   default:            hook(module, args, output)
-            #   with_kwargs=True:   hook(module, args, kwargs, output)
-            # (torch passes kwargs *before* output). Older jittor code called
-            # the hook with 4 positional args whenever kwargs were present,
-            # which breaks every plain 3-arg torch hook -- e.g. transformers'
-            # output_hidden_states / output_attentions paths.
-            if getattr(self, "__fhook_with_kwargs__", False):
-                res = self.__fhook__(self, args, kw, ret)
-            else:
-                res = self.__fhook__(self, args, ret)
-            if res is not None:
-                ret = res
-        return ret
-
-    def _place_hooker(self):
-        cls = self.__class__
-        if hasattr(cls, "__hooked__"):
-            return
-        cls.__hooked__ = True
-        cls.__call__, cls.__hooked_call__ = \
-            cls.__hooked_call__, cls.__call__
+            for func, _info in list(bohooks.values()):
+                if isinstance(ret, Var):
+                    ret = grad_hooker((ret,), func)[0]
+                else:
+                    ret = grad_hooker(ret, func)
+        # Match torch's forward-hook calling convention:
+        #   default:            hook(module, args, output)
+        #   with_kwargs=True:   hook(module, args, kwargs, output)
+        # (torch passes kwargs *before* output). Older jittor code called
+        # the hook with 4 positional args whenever kwargs were present,
+        # which breaks every plain 3-arg torch hook -- e.g. transformers'
+        # output_hidden_states / output_attentions paths.
+        return self._run_forward_hooks(fhooks, args, kw, ret)
 
     def register_forward_hook(self, func, *, prepend=False, with_kwargs=False, always_call=False):
         ''' Register a forward function hook that will be called after Module.execute.
@@ -1964,22 +2047,27 @@ class Module:
 
             hook(module, input_args, input_kwargs, output)
 
-        If the hook returns a value it replaces the module output. Returns a
-        handle with a ``.remove()`` method (torch-compatible).
+        If the hook returns a value it replaces the module output -- and the
+        next hook sees the replacement. Any number of hooks may be registered;
+        they run in registration order, or first if ``prepend=True``. With
+        ``always_call=True`` the hook also runs when the forward raises (with
+        ``None`` for the output). Returns a handle whose ``.remove()`` detaches
+        this hook and only this hook.
         '''
-        self.__fhook__ = func
         # NB: don't call bool() here -- the torch-compat layer rebinds the name
         # ``bool`` in this module's globals to a dtype object; use truthiness.
-        self.__fhook_with_kwargs__ = True if with_kwargs else False
-        self._place_hooker()
-        return _RemovableHandle(self.remove_forward_hook)
+        return self._add_hook(
+            "_forward_hooks", func, prepend=prepend,
+            with_kwargs=True if with_kwargs else False,
+            always_call=True if always_call else False)
 
     def remove_forward_hook(self):
-        ''' Removes the current forward hook. '''
-        if hasattr(self,"__fhook__"):
-            delattr(self,"__fhook__")
-        if hasattr(self,"__fhook_with_kwargs__"):
-            delattr(self,"__fhook_with_kwargs__")
+        ''' Removes EVERY forward hook on this module.
+
+        jittor's documented spelling, kept as-is. To drop one hook, use the
+        handle its ``register_forward_hook`` returned.
+        '''
+        self.__dict__.pop("_forward_hooks", None)
 
     def register_pre_forward_hook(self, func):
         ''' Register a forward function hook that will be called before Module.execute.
@@ -1990,10 +2078,9 @@ class Module:
         or::
             hook(module, input_args, input_kwargs)
 
+        Returns a removable handle, like ``register_forward_pre_hook``.
         '''
-        self.__fhook2__ = func
-        self.__fhook2_with_kwargs__ = False
-        self._place_hooker()
+        return self._add_hook("_forward_pre_hooks", func, with_kwargs=False)
 
     def register_forward_pre_hook(self, func, *, prepend=False, with_kwargs=False):
         ''' torch-compatible alias of the pre-forward hook.
@@ -2004,35 +2091,29 @@ class Module:
         forward. Mirrors torch's signature and returns a ``.remove()``-able handle.
         With ``with_kwargs=True`` the hook is called as ``hook(module, args, kwargs)``
         and may return ``(new_args, new_kwargs)``; otherwise ``hook(module, args)``
-        returning ``None`` or replacement args.
+        returning ``None`` or replacement args. Several may be registered; each
+        sees the arguments the one before it returned.
         '''
-        self.__fhook2__ = func
-        self.__fhook2_with_kwargs__ = True if with_kwargs else False
-        self._place_hooker()
-        return _RemovableHandle(self.remove_pre_forward_hook)
+        return self._add_hook("_forward_pre_hooks", func, prepend=prepend,
+                              with_kwargs=True if with_kwargs else False)
 
     def remove_pre_forward_hook(self):
-        ''' Removes the current pre-forward hook. '''
-        if hasattr(self,"__fhook2__"):
-            delattr(self,"__fhook2__")
-        if hasattr(self,"__fhook2_with_kwargs__"):
-            delattr(self,"__fhook2_with_kwargs__")
+        ''' Removes EVERY pre-forward hook on this module. '''
+        self.__dict__.pop("_forward_pre_hooks", None)
 
     def register_input_backward_hook(self, func):
-        self.__bihook__ = func
-        self._place_hooker()
+        ''' Hook the gradients flowing into this module. Returns a handle. '''
+        return self._add_hook("_input_backward_hooks", func)
 
     def remove_input_backward_hook(self):
-        if hasattr(self,"__bihook__"):
-            delattr(self,"__bihook__")
+        self.__dict__.pop("_input_backward_hooks", None)
 
     def register_output_backward_hook(self, func):
-        self.__bohook__ = func
-        self._place_hooker()
+        ''' Hook the gradients flowing out of this module. Returns a handle. '''
+        return self._add_hook("_output_backward_hooks", func)
 
     def remove_output_backward_hook(self):
-        if hasattr(self,"__bohook__"):
-            delattr(self,"__bohook__")
+        self.__dict__.pop("_output_backward_hooks", None)
 
     def register_backward_hook(self, func):
         ''' hook both input and output on backpropergation of this module.
@@ -2042,6 +2123,8 @@ Arguments of hook are defined as::
     hook(module, grad_input:tuple(jt.Var), grad_output:tuple(jt.Var)) -> tuple(jt.Var) or None
 
 `grad_input` is the origin gradients of input of this module, `grad_input` is the  gradients of output of this module, return value is used to replace the gradient of input.
+
+Returns a handle that removes both halves.
         '''
         _grad_output = None
         def bohook(grad_output):
@@ -2049,14 +2132,27 @@ Arguments of hook are defined as::
             _grad_output = grad_output
         def bihook(grad_input):
             return func(self, grad_input, _grad_output)
-        self.register_input_backward_hook(bihook)
-        self.register_output_backward_hook(bohook)
+        bi = self.register_input_backward_hook(bihook)
+        bo = self.register_output_backward_hook(bohook)
+        def _remove_both():
+            bi.remove()
+            bo.remove()
+        return _RemovableHandle(_remove_both)
 
     def remove_backward_hook(self):
         ''' Removes the backward input and output hooks.
         '''
         self.remove_input_backward_hook()
         self.remove_output_backward_hook()
+
+    def _place_hooker(self):
+        """No longer needed; kept so out-of-tree callers do not break.
+
+        This used to swap ``__call__`` and ``__hooked_call__`` on the class,
+        which is what made hook installation class-wide and irreversible.
+        ``__call__`` consults the instance's hook tables itself now, so there
+        is nothing to place.
+        """
 
     def children(self) -> List:
         ''' Returns an List of the children modules. '''
@@ -2681,15 +2777,27 @@ the gradient of this variable will be alter,
         print(dx)
         # will be [2, 4]
 
+    Returns a handle whose ``.remove()`` detaches the hook, like torch's
+    ``Tensor.register_hook``. It used to return the Var and offer no way to
+    remove the hook at all -- while this same file already had
+    ``_RemovableHandle`` for exactly this, used by every Module hook.
+
+    The in-place ``swap`` stays: the hook has to BE a node in the graph, and
+    the Var the caller is holding has to be the hooked one. So what
+    ``remove()`` undoes is the hook *running*; the (now identity) node stays
+    where it is, which is what keeps a graph already built on it intact.
     """
+    live = [True]
     def _hook(grads):
+        if not live[0]:
+            return None
         g = hook(grads[0])
         if g is not None:
             return (g,)
         return None
     hooker = GradHooker(_hook)
     v.swap(hooker(v)[0])
-    return v
+    return _RemovableHandle(lambda: live.__setitem__(0, False))
 
 Var.register_hook = register_hook
 

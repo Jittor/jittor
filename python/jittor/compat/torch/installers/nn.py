@@ -1213,7 +1213,11 @@ def _install_module_methods(nn, registry=None):
         _dispatch_cache[cls] = result
         return result
 
-    _orig_call = M.__call__
+    # Replace the DISPATCH, not ``__call__``: jittor's ``Module.__call__``
+    # now runs the instance's hooks and then calls ``_dispatch_call``, so
+    # patching here keeps this dispatch inside the hooks -- where it was when
+    # a hook was installed by swapping ``cls.__call__`` (see Module._hooks).
+    _orig_call = M._dispatch_call
     def _acl_bfloat16_rms_norm(value, weight, epsilon):
         if not (
             getattr(jt.compiler, "has_acl", 0)
@@ -1361,7 +1365,7 @@ def _install_module_methods(nn, registry=None):
                 return _maybe_pipeline(_fsdp._execute_with_true_fsdp(
                     self, dispatch, *args, **kwargs))
         return _maybe_pipeline(dispatch(*args, **kwargs))
-    M.__call__ = _call
+    M._dispatch_call = _call
     M.set_execution_pipelining = staticmethod(set_execution_pipelining)
     M.get_execution_pipelining = staticmethod(get_execution_pipelining)
 

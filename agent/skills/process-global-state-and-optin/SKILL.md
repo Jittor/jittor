@@ -124,7 +124,25 @@ def _run_call(self, *args, **kw):   # self 就是那个一次性上下文
 包装层于是自己建 ctx、往 ctx 上记账、再 `ctx._run_call(*args)`，forward 和 backward
 读到的是同一个对象。
 
-## 6. 判据
+## 6. 在 `python/jittor/_runtime/core_api.py` 里写代码的一个地雷
+
+这个文件顶上有 `from jittor import *`，**它把好几个内建名字重新绑定成了 jittor 的
+算子**：`bool`、`int`、`float`、`abs`、`max`、`min` 都不再是 Python 内建。所以
+
+```python
+return bool(d.get("_forward_hooks"))     # RuntimeError: Wrong inputs arguments,
+                                         # Please refer to examples(help(jt.ops.bool))
+```
+
+报错信息完全不提"你以为在调内建"，只说某个算子的重载都不匹配。写这个文件时：
+
+- 需要真值就直接把表达式交给 `if` / `or` 链，不要 `bool(...)`；
+- 需要真正的内建，用文件里已有的别名（例如 `ori_int`），或者 `import builtins`。
+
+文件里已经有注释警告过 `bool`，但只在一处；改这个文件之前先
+`grep -n "ori_int\|rebinds the name" python/jittor/_runtime/core_api.py`。
+
+## 7. 判据
 
 - 子进程里 import 之前设的第三方随机种子，import 之后仍然复现。
 - 被猴补丁的属性在作用域外 `is` 原对象，且 `signature`/`pickle` 与原对象一致。

@@ -35,41 +35,28 @@ def _ensure_reparam_hook(module):
 
     functions = []
     module._reparam_fns = functions
-    previous = getattr(module, "__fhook2__", None)
-    previous_with_kwargs = getattr(module, "__fhook2_with_kwargs__", False)
-    module._reparam_previous_hook = previous
-    module._reparam_previous_hook_with_kwargs = previous_with_kwargs
 
+    # A module used to hold ONE pre-forward hook, so this had to read whatever
+    # hook was already there, save it, and call it itself -- and then put it
+    # back on removal. Modules now keep an ordered table of hooks, so just add
+    # one and keep the handle.
     def dispatch(owner, *args):
-        if previous is not None:
-            previous(owner, *args)
         for function in tuple(owner._reparam_fns):
             function(owner)
 
     dispatch._jittor_reparam_dispatch = True
-    module.register_forward_pre_hook(
-        dispatch,
-        with_kwargs=previous_with_kwargs,
-    )
+    module._reparam_handle = module.register_forward_pre_hook(dispatch)
     return functions
 
 
 def _restore_previous_hook(module):
-    previous = getattr(module, "_reparam_previous_hook", None)
-    previous_with_kwargs = getattr(
-        module, "_reparam_previous_hook_with_kwargs", False
-    )
-    module.remove_pre_forward_hook()
-    if previous is not None:
-        module.register_forward_pre_hook(
-            previous,
-            with_kwargs=previous_with_kwargs,
-        )
-    for name in (
-        "_reparam_fns",
-        "_reparam_previous_hook",
-        "_reparam_previous_hook_with_kwargs",
-    ):
+    # Remove OUR hook by handle. It used to call remove_pre_forward_hook(),
+    # which drops every pre-forward hook on the module -- including hooks that
+    # belong to somebody else.
+    handle = getattr(module, "_reparam_handle", None)
+    if handle is not None:
+        handle.remove()
+    for name in ("_reparam_fns", "_reparam_handle"):
         if hasattr(module, name):
             delattr(module, name)
 
