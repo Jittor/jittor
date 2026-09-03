@@ -279,7 +279,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 4.11 | ACL 改为注册表后端 | 待领 | | |
 | 4.12 | 删除 `process_jittor_source` 与 `process_acl` | 待领 | | |
 | 4.13 | 跨后端契约矩阵 | 待领 | | |
-| 4.14 | `Module.cuda(i)`/`npu(i)`/`x.to(...)`/`x.cpu()` … | 待领 | | |
+| 4.14 | `Module.cuda(i)`/`npu(i)`/`x.to(...)`/`x.cpu()` … | 已合并 | device | 14e5920e；修前 CPU 2 项、双卡 CUDA 4 项失败；修后新增 CPU 2 项、GPU 0/2 双卡 4 项及 4.02 聚焦回归 4 项通过；无 NPU 硬件，未做真 NPU 验证，无 ACL 时解析设备号后明确报能力错误 |
 | 4.15 | 布局收尾 | 待领 | | |
 | 5.01 | 114 个 `foo_` 就地方法改白名单显式声明 | 待领 | | |
 | 5.02 | 视图与存储模型 | 待领 | | |
