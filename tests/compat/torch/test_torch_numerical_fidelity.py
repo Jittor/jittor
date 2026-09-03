@@ -908,6 +908,35 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         np.testing.assert_allclose(actual_negative.numpy(), values[:, 1:3], rtol=1e-6)
         np.testing.assert_allclose(method.numpy(), values[1:3, :], rtol=1e-6)
 
+    def test_tile_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.tile))
+        self.assertIs(torch.tile, numerical.tile)
+        self.assertEqual(numerical.tile.__module__, numerical.__name__)
+        self.assertEqual(numerical.tile.__name__, "tile")
+
+    def test_tile_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.tile")
+        self.assertIs(record.implementation, numerical.tile)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("device", record.detail)
+        self.assertIn("layout", record.detail)
+
+    def test_tile_cpu_tuple_dims_and_var_delegate_match_numpy(self):
+        values = np.array([[1.0, 2.0], [3.0, 4.0]], dtype="float32")
+        expected = np.tile(values, (2, 3))
+        with torch.flag_scope(use_cuda=0):
+            values_tensor = torch.array(values)
+            actual = torch.tile(values_tensor, (2, 3))
+            method = values_tensor.tile(2, 3)
+        self.assertEqual(tuple(actual.shape), expected.shape)
+        np.testing.assert_allclose(actual.numpy(), expected, rtol=1e-6)
+        np.testing.assert_allclose(method.numpy(), expected, rtol=1e-6)
+
 
 if __name__ == "__main__":
     unittest.main()

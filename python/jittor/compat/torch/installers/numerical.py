@@ -791,6 +791,29 @@ register_fidelity(
 )
 
 
+_TILE_FIDELITY_DETAIL = (
+    "matches Torch repetition values and shape for supported real tensors but "
+    "omits device, layout, and dtype keyword semantics"
+)
+
+
+def _tile_impl(input, *dims):
+    return input.tile(*dims)
+
+
+def tile(input, *dims):
+    """Repeat tensor dimensions using Torch-compatible tile semantics."""
+    return _tile_impl(input, *dims)
+
+
+register_fidelity(
+    "torch.tile",
+    tile,
+    Fidelity.APPROXIMATE,
+    _TILE_FIDELITY_DETAIL,
+)
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
@@ -968,7 +991,7 @@ def install(ctx):
     # torch.narrow(input, dim, start, length) / torch.tile(input, dims) --
     # function forms mirroring the Var methods (added in _install_tensor_methods).
     _alias("narrow", narrow)
-    _alias("tile", lambda input, *dims: input.tile(*dims))
+    _alias("tile", tile)
     # torch.equal returns a Python bool (True iff same shape & all elements
     # equal). jittor's native `equal` is elementwise, so force-override.
     def _torch_equal(a, b):
