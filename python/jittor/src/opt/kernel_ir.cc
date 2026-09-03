@@ -173,14 +173,22 @@ std::ostream& operator<<(std::ostream& os, KernelIR& ir) {
     return os << ir.to_string();
 }
 
+static bool defines_scope_name(const KernelIR& ir) {
+    if (ir.type == KernelIRType::define || ir.type == KernelIRType::func)
+        return true;
+    if (ir.type != KernelIRType::macro) return false;
+    auto iter = ir.attrs.find(kir::code);
+    return iter != ir.attrs.end() && !startswith(iter->second, "#line ");
+}
+
 void KernelIR::del_scope() {
-    if (father && (type == KernelIRType::define || type == KernelIRType::func || type == KernelIRType::macro)) {
+    if (father && defines_scope_name(*this)) {
         father->scope[attrs[kir::lvalue]].remove(this);
     }
 }
 
 void KernelIR::add_scope() {
-    if (father && (type == KernelIRType::define || type == KernelIRType::func || type == KernelIRType::macro))
+    if (father && defines_scope_name(*this))
         father->scope[get_attr(kir::lvalue)].push_back(this);
 }
 

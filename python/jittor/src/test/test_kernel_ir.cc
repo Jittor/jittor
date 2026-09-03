@@ -454,4 +454,21 @@ JIT_TEST(kernel_ir_pragma_error_has_line) {
     CHECK(caught) << "malformed _Pragma must fail";
 }
 
+JIT_TEST(kernel_ir_line_directives_do_not_define_symbols) {
+    KernelIR ir(R"(
+void func() {
+#line 177 "broadcast_to_op.cc"
+    int a = 1;
+#line 177 "broadcast_to_op.cc"
+    int b = a;
+}
+)");
+    CHECK(ir.scope.count("177") == 0) << ir.to_string(0, true);
+    string source = ir.to_string();
+    string directive = "#line 177 \"broadcast_to_op.cc\"";
+    auto first = source.find(directive);
+    CHECK(first != string::npos) << source;
+    CHECK(source.find(directive, first+1) != string::npos) << source;
+}
+
 } // jittor
