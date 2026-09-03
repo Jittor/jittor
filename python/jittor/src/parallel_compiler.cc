@@ -6,21 +6,25 @@
 // ***************************************************************
 #include <Python.h>
 #include <atomic>
-#include <chrono>
+#include <cerrno>
+#include <cstdlib>
+#include <fstream>
+#include <future>
+#include <limits>
 #include <thread>
-#include <tuple>
 #include <mutex>
-#include <condition_variable>
-#include <iomanip>
 
 #include <csignal>
+#ifdef __linux__
+#include <sched.h>
+#include <unistd.h>
+#endif
 #include "parallel_compiler.h"
 #include "op_compiler.h"
 #include "executor.h"
 #include "lock.h"
 #include "opt/jit_searcher.h"
 #include "fused_op.h"
-#include "mem/mem_info.h"
 
 
 namespace jittor {
@@ -34,8 +38,8 @@ EXTERN_LIB volatile sig_atomic_t segfault_happen;
 // compiler runs, and reacquire it on scope exit (incl. exception unwind).
 //
 // The main thread reaches parallel_compile_all_ops from a pybind call and
-// therefore holds the GIL. It then spin-waits for the compile worker
-// threads to finish. Those workers may call py_caller() (the `@python`
+// therefore holds the GIL. It then waits on the compile worker futures.
+// Those workers may call py_caller() (the `@python`
 // JIT pass), which now takes the GIL via PyGILState_Ensure. If the main
 // thread kept the GIL during its spin-wait, the workers could never
 // acquire it -> deadlock. Dropping the GIL here lets the workers take it
@@ -54,94 +58,77 @@ struct GILReleaseScope {
     }
 };
 
-// simple thread used for parallel compilation
-struct SimpleThread {
-    int id;
-    typedef std::function<void(int)> Func;
-    Func func;
-    std::mutex mtx;
-    std::condition_variable cv;
-    std::thread thread;
-    void run() {
-        get_thread_name() = "C"+S(id);
-        try {
-            std::unique_lock<std::mutex> lck(mtx);
-            if (func)
-                func(id);
-            while (true) {
-                cv.wait(lck);
-                if (func) {
-                    func(id);
-                } else
-                    return;
-            }
-        } catch (const std::exception& e) {
-            LOGe << e.what();
+int parse_parallel_compile_cpu_max(const string& value) {
+    std::istringstream stream(value);
+    string quota_text;
+    int64 period = 0;
+    stream >> quota_text >> period;
+    if (!stream || quota_text == "max") return std::numeric_limits<int>::max();
+    errno = 0;
+    char* end = nullptr;
+    int64 quota = std::strtoll(quota_text.c_str(), &end, 10);
+    if (errno || end != quota_text.c_str() + quota_text.size())
+        return std::numeric_limits<int>::max();
+    if (quota <= 0 || period <= 0) return std::numeric_limits<int>::max();
+    int64 rounded = std::max<int64>(1, (quota + period - 1) / period);
+    return std::min<int64>(rounded, std::numeric_limits<int>::max());
+}
+
+static int cgroup_cpu_limit() {
+#ifdef __linux__
+    string cgroup_path;
+    std::ifstream cgroup("/proc/self/cgroup");
+    for (string line; std::getline(cgroup, line);) {
+        auto marker = line.find("::");
+        if (marker != string::npos) {
+            cgroup_path = line.substr(marker + 2);
+            break;
         }
     }
-    void launch_one(Func func) {
-        std::unique_lock<std::mutex> lck(mtx);
-        this->func = func;
-        cv.notify_all();
+    int limit = std::numeric_limits<int>::max();
+    string current = "/sys/fs/cgroup" + cgroup_path;
+    while (current.size() >= string("/sys/fs/cgroup").size()) {
+        std::ifstream cpu_max(current + "/cpu.max");
+        string value;
+        if (cpu_max && std::getline(cpu_max, value))
+            limit = std::min(limit, parse_parallel_compile_cpu_max(value));
+        if (current == "/sys/fs/cgroup") break;
+        auto slash = current.find_last_of('/');
+        if (slash == string::npos) break;
+        current.resize(slash);
     }
-    SimpleThread(int id) : id(id), func(nullptr), thread(&SimpleThread::run, this) {}
-    ~SimpleThread() {
-        join();
-    }
-    void join() {
-        if (thread.joinable()) {
-            launch_one(nullptr);
-            thread.join();
-        }
-    }
+    return limit;
+#else
+    return std::numeric_limits<int>::max();
+#endif
+}
+
+int parallel_compile_worker_count(int requested) {
+    int available = std::max(requested, 1);
+#ifdef __linux__
+    cpu_set_t affinity;
+    CPU_ZERO(&affinity);
+    if (sched_getaffinity(0, sizeof(affinity), &affinity) == 0)
+        available = std::min(available, std::max(CPU_COUNT(&affinity), 1));
+#else
+    unsigned int hardware = std::thread::hardware_concurrency();
+    if (hardware) available = std::min(available, (int)hardware);
+#endif
+    available = std::min(available, cgroup_cpu_limit());
+    return std::max(available, 1);
+}
+
+struct CompileTask {
+    int rid;
+    string previous_jit_key;
 };
 
-struct SimpleThreads;
-EXTERN_LIB SimpleThreads threads;
-EXTERN_LIB vector<void(*)()> cleanup_callback;
-
-struct SimpleThreads {
-    list<SimpleThread> threads;
-    static void stop() {
-        jittor::threads.threads.clear();
-    }
-    void create_threads(int n) {
-        if (threads.size()) return;
-        for (int i=0; i<n; i++)
-            threads.emplace_back(i);
-        cleanup_callback.push_back(&stop);
-    }
-    void wait_all() {
-        for (auto& t : threads) {
-            auto start = clock();
-            int ok = 0;
-            while (clock()<start+5*CLOCKS_PER_SEC) {
-                if (t.mtx.try_lock()) {
-                    t.mtx.unlock();
-                    ok = 1;
-                    break;
-                }
-                using namespace std::chrono_literals;
-                std::this_thread::sleep_for(1ms);
-            }
-            if (!ok) {
-                LOGw << "Compile thread timeout, ignored.";
-            }
-        }
-    }
-    void launch_all(int active_thread, SimpleThread::Func func) {
-        if (active_thread == 1) {
-            func(0);
-            return;
-        }
-        for (auto& t : threads) {
-            t.launch_one(func);
-            active_thread--;
-            if (!active_thread)
-                return;
-        }
-    }
-} threads;
+struct CompileResult {
+    string previous_jit_key;
+    jit_op_entry_t op_entry = nullptr;
+    unique_ptr<FusedOpContext> fused_context;
+    string new_jit_key;
+};
 
 static int last_compiled_op_num = 0;
 static int not_compile_window = 0;
@@ -161,8 +148,8 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
     }
     
 
-    vector<int> op_needs_compile;
-    string_view_map<int> map;
+    vector<CompileTask> tasks;
+    unordered_set<string> seen_jit_keys;
     vector<unique_ptr<FusedOp>> fop_needs_compile;
     auto& jkl = get_jk();
     
@@ -186,24 +173,27 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
         auto iter = jit_key_mapper.find(jit_key);
         if (iter != jit_key_mapper.end()) continue;
 
-        auto iter2 = map.find(jit_key);
-        if (iter2 != map.end()) continue;
+        if (!seen_jit_keys.emplace(jit_key).second) continue;
 
-        map[jit_key] = 1;
+        int task_rid;
         if (is_fused_op) {
-            op_needs_compile.push_back(-1-(int)fop_needs_compile.size());
+            task_rid = -1-(int)fop_needs_compile.size();
             fop_needs_compile.emplace_back(std::make_unique<FusedOp>(fused_op));
         } else {
-            op_needs_compile.push_back(rid);
+            task_rid = rid;
         }
+        tasks.push_back({task_rid, string(jit_key)});
 
 
         LOGvv << "Op needs compile:" << op;
         } catch (const std::exception& e) {
-            // log jit_key and file location
-            op->do_prepare(jkl);
-            string jit_src_path = Op::get_filename_from_jit_key(jkl.to_cstring(), ".cc");
-            LOGe << "[Error] source file location:" << jit_src_path;
+            // do_prepare itself can be the throwing operation. Re-running it
+            // here used to replace the original exception or repeat a
+            // side-effect; the partial key is the only honest diagnostic.
+            string prepared_key = jkl.to_string();
+            if (prepared_key.size())
+                LOGe << "[Error] source file location:"
+                    << Op::get_filename_from_jit_key(prepared_key, ".cc");
             if (is_fused_op) {
                 LOGf << "Compile fused operator(" >> rid >> '/' >> queue.size() >> ")"
                     << "failed:" << fused_op.ops << "\n\nReason: " >> e.what();
@@ -212,43 +202,34 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                     << "failed:" << op << "\n\nReason: " >> e.what();
         }
     }
-    // if too less op needs compile, don't use parallel compiler
-    // if (op_needs_compile.size() < 3) return;
-    if (op_needs_compile.size() == 0) return;
-    
-    static int thread_num = std::max(1, std::min(use_parallel_op_compiler,
-        int(mem_info.total_cpu_ram/(1024ll*1024*1024*3))));
+    if (tasks.empty()) return;
+
+    int thread_num = parallel_compile_worker_count(use_parallel_op_compiler);
     #ifdef NODE_MEMCHECK
     // only use one thread in debug mode
     // because global id map has no lock
     thread_num = 1;
     #endif
-    static std::atomic<int> ai;
-    static volatile int has_error;
-    static string error_msg;
-    static vector<vector<std::tuple<int,int,void*,string>>> op_entrys(thread_num);
-    // <int,int,void*,string> represents: task id, is_fused_op, entry or context, new_jit_key
-    threads.create_threads(thread_num);
-    static std::mutex entry_lock;
-    ai = 0;
-    has_error = 0;
-    error_msg = "";
-    int n = op_needs_compile.size();
-    LOGvv << "Total number of op needs compile" << op_needs_compile.size()
+    int n = tasks.size();
+    int active_threads = std::min(thread_num, n);
+    LOGvv << "Total number of op needs compile" << tasks.size()
         << "thread_num:" << thread_num;
 
-    // backup number
-    auto bk_var = Var::number_of_lived_vars, bk_op = Op::number_of_lived_ops;
     jittor::lock_guard lg;
-    auto func = [&](int tid) {
-        auto& entrys = op_entrys.at(tid);
-        entrys.clear();
+    std::atomic<int> next_task(0);
+    std::atomic<bool> cancelled(false);
+    std::mutex entry_lock;
+    unordered_set<string> relay_keys_compiling;
+    auto func = [&](int tid) -> vector<CompileResult> {
+        get_thread_name() = "C"+S(tid);
+        vector<CompileResult> entries;
         auto& jkl = get_jk();
-        while (!has_error && !segfault_happen) {
-            int i = ai++;
+        while (!cancelled.load(std::memory_order_acquire) && !segfault_happen) {
+            int i = next_task.fetch_add(1, std::memory_order_relaxed);
             if (i >= n) break;
-            int rid = op_needs_compile[i];
-            Op* op;
+            const CompileTask& task = tasks[i];
+            int rid = task.rid;
+            Op* op = nullptr;
             bool is_fused_op = rid<0;
             try {
             if (!is_fused_op) {
@@ -257,48 +238,56 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                 LOGvv << "Compile Op:" << op;
                 op->do_prepare(jkl);
                 auto op_entry = OpCompiler::do_compile(op);
-                entrys.emplace_back(std::make_tuple(i, 0, (void*)op_entry, op->get_jit_key(jkl)));
+                CompileResult result;
+                result.previous_jit_key = task.previous_jit_key;
+                result.op_entry = op_entry;
+                result.new_jit_key = op->get_jit_key(jkl);
+                entries.emplace_back(std::move(result));
             } else {
                 FusedOp& fused_op = *fop_needs_compile[-rid-1];
                 op = &fused_op;
                 LOGvv << "Compile FusedOp:" << op;
                 LOGV(11) << "FusedOps:" << fused_op.ops;
-                fused_op.context = new FusedOpContext();
-                fused_op.context->setup(&fused_op);
+                unique_ptr<FusedOpContext> context(new FusedOpContext());
+                context->setup(&fused_op);
+                fused_op.context = context.get();
                 fused_op.do_prepare(jkl);
                 auto op_entry = OpCompiler::do_compile(op);
-                fused_op.context->entry = op_entry;
-                entrys.emplace_back(std::make_tuple(i, 1, (void*)fused_op.context, op->get_jit_key(jkl)));
+                context->entry = op_entry;
+                string new_jit_key = op->get_jit_key(jkl);
 
                 // compile relay operators
-                for (auto& vrg : fused_op.context->vrm.relay_groups) {
+                for (auto& vrg : context->vrm.relay_groups) {
                     for (auto& orc : vrg.oprcs) {
                         orc.op->do_prepare(jkl);
+                        string relay_jit_key = jkl.to_string();
                         bool needs_compile;
                         {
                             std::lock_guard<std::mutex> lock(entry_lock);
-                            auto iter = jit_ops.find(jkl.to_cstring());
-                            needs_compile = (iter == jit_ops.end());
-                            if (needs_compile) {
-                                jit_ops[jkl.to_cstring()] = nullptr;
-                            }
+                            needs_compile = jit_ops.find(relay_jit_key) == jit_ops.end()
+                                && relay_keys_compiling.emplace(relay_jit_key).second;
                         }
                         if (!needs_compile) continue;
-                        string s = jkl.to_string();
                         auto op_entry = OpCompiler::do_compile(orc.op);
                         {
                             std::lock_guard<std::mutex> lock(entry_lock);
-                            jit_ops[s] = op_entry;
+                            jit_ops[relay_jit_key] = op_entry;
                         }
                     }
                 }
+                CompileResult result;
+                result.previous_jit_key = task.previous_jit_key;
+                result.fused_context = std::move(context);
+                result.new_jit_key = std::move(new_jit_key);
+                entries.emplace_back(std::move(result));
             }
             } catch (const std::exception& e) {
-                // log jit_key and file location
-                op->do_prepare(jkl);
-                string jit_src_path = Op::get_filename_from_jit_key(jkl.to_cstring(), ".cc");
+                cancelled.store(true, std::memory_order_release);
                 std::stringstream ss;
-                ss << "[Error] source file location:" << jit_src_path << '\n';
+                string prepared_key = jkl.to_string();
+                if (prepared_key.size())
+                    ss << "[Error] source file location:"
+                        << Op::get_filename_from_jit_key(prepared_key, ".cc") << '\n';
 
                 if (is_fused_op) {
                     ss << "Compile fused operator(" << i << '/' << n << ")"
@@ -306,75 +295,55 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                 } else
                     ss << "Compile operator(" << i << '/' << n << ")"
                         << "failed:" << op << "\n\nReason: " << e.what() << '\n';
-                error_msg = ss.str();
-                has_error = 1;
-                break;
+                throw std::runtime_error(ss.str());
+            } catch (...) {
+                cancelled.store(true, std::memory_order_release);
+                throw;
             }
         }
-    }; // end of threads.launch_all
+        return entries;
+    };
 
-    typedef std::chrono::high_resolution_clock Time;
-    auto start = Time::now();
-    int active_threads = std::min(thread_num, (int)op_needs_compile.size());
+    vector<vector<CompileResult>> worker_results(active_threads);
+    std::exception_ptr worker_error;
     // Drop the GIL so compile workers can take it inside py_caller (see
-    // GILReleaseScope). Reacquired when this block exits, including the
-    // LOGf-throw / exception-unwind path below.
+    // GILReleaseScope). Every future is consumed before leaving this block, so
+    // no worker can retain references to this stack frame.
     {
-    GILReleaseScope gil_release;
-    threads.launch_all(active_threads, func);
-    int prev_i = 0;
-    bool change_line = false;
-    int sleep_us = 10;
-    while (prev_i < n && !has_error && !segfault_happen) {
-        int i = std::max(std::min(ai-active_threads, n), 0);
-        if (i == prev_i) {
-            // std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
-            sleep_us = std::min(sleep_us*2, 1000000); // max 0.1s
-            continue;
-        }
-        prev_i = i;
-        auto diff = (Time::now() - start).count();
-        if (diff > 2e9) {
-            if (!change_line) {
-                std::cerr << "\n";
-                change_line = true;
+        GILReleaseScope gil_release;
+        vector<std::future<vector<CompileResult>>> futures;
+        futures.reserve(active_threads);
+        for (int tid = 0; tid < active_threads; ++tid)
+            futures.emplace_back(std::async(std::launch::async, func, tid));
+        for (int tid = 0; tid < active_threads; ++tid) {
+            try {
+                worker_results[tid] = futures[tid].get();
+            } catch (...) {
+                cancelled.store(true, std::memory_order_release);
+                if (!worker_error) worker_error = std::current_exception();
             }
-            // delay output progress in 2s
-            float eta = diff / 1e9 / i * (n-i);
-            std::cerr << "Compiling Operators(" << i << '/' << n << ")"
-                << " used: " << std::setprecision(3) << std::setw(4) << diff/1e9 << "s eta: "
-                << std::setprecision(3) << std::setw(4) << eta << "s \r";
         }
-    }
-    if (change_line)
-        std::cerr << std::endl;
-    Var::number_of_lived_vars = bk_var; Op::number_of_lived_ops = bk_op;
-
-    if (segfault_happen) {
-        LOGe << "Segfault happen, main thread exit";
-        threads.wait_all();
-        exit(1);
-    }
-
-    if (has_error) {
-        threads.wait_all();
-        LOGf << "Error happend during compilation:\n" << error_msg;
-    }
     } // end GILReleaseScope: GIL reacquired on the main thread here
 
+    if (worker_error) {
+        try {
+            std::rethrow_exception(worker_error);
+        } catch (const std::exception& e) {
+            LOGf << "Error happened during compilation:\n" << e.what();
+        }
+    }
+
     // fill all op entry
-    for (int i=0; i<active_threads; i++) {
-        auto& v = op_entrys[i];
-        for (auto& t : v) {
-            auto& prev_jit_key = map.holder.at(std::get<0>(t));
-            int is_fused_op = std::get<1>(t);
-            auto& new_jit_key = std::get<3>(t);
-            if (is_fused_op)
-                jit_fused_ops[new_jit_key] = jit_fused_ops[prev_jit_key] = (FusedOpContext*)std::get<2>(t);
+    for (auto& entries : worker_results) {
+        for (auto& result : entries) {
+            if (result.fused_context)
+                jit_fused_ops[result.new_jit_key] =
+                    jit_fused_ops[result.previous_jit_key] =
+                        result.fused_context.release();
             else
-                jit_ops[new_jit_key] = jit_ops[prev_jit_key] = (jit_op_entry_t)std::get<2>(t);
-            jit_key_mapper[prev_jit_key] = new_jit_key;
+                jit_ops[result.new_jit_key] = jit_ops[result.previous_jit_key] =
+                    result.op_entry;
+            jit_key_mapper[result.previous_jit_key] = result.new_jit_key;
         }
     }
 } 

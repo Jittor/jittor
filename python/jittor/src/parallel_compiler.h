@@ -9,6 +9,8 @@
 
 namespace jittor {
 
+int parse_parallel_compile_cpu_max(const string& value);
+int parallel_compile_worker_count(int requested);
 void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int64 tt, int force_compile=0);
     
 } // jittor

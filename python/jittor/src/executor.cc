@@ -607,6 +607,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         int root = queue[rid];
         Op* op = ops[root];
         bool is_fused_op = false;
+        string prepared_jit_key;
         try {
         if (op->type() != OpType::other) {
             op = &fused_op;
@@ -654,6 +655,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             memory_profiler.check();
         LOGvvv << "Run" << op << "inputs:" << op->inputs() << "outputs:" << op->outputs();
         op->do_prepare(jkl);
+        prepared_jit_key = jkl.to_string();
         bool is_cuda = op->flag(OpFlags::_cuda);
         #ifdef HAS_CUDA
         if (!is_cuda) {
@@ -761,14 +763,19 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         } catch (const std::exception& e) {
             // log memory info
             display_memory_info(__FILELINE__, false, true);
-            // log jit_key and file location
-            op->do_prepare(jkl);
-            string jit_src_path = Op::get_filename_from_jit_key(jkl.to_cstring(), ".cc");
+            // do_prepare may itself be the throwing operation. Preserve its
+            // first exception and whatever key it produced instead of running
+            // the failing, potentially stateful preparation a second time.
+            if (prepared_jit_key.empty()) prepared_jit_key = jkl.to_string();
             jittor::Log logf(__FILELINE__, 'f', 0);
             logf << "\nExecute fused operator(" >> rid >> '/' >> queue.size() >> ")"
                 << "failed.";
-            if (jit_compiler::file_exist(jit_src_path))
-                logf << "\n[JIT Source]:" << jit_src_path << "\n";
+            if (prepared_jit_key.size()) {
+                string jit_src_path = Op::get_filename_from_jit_key(
+                    prepared_jit_key, ".cc");
+                if (jit_compiler::file_exist(jit_src_path))
+                    logf << "\n[JIT Source]:" << jit_src_path << "\n";
+            }
             check_op_async_error(op, is_fused_op, e, logf);
         }
     }

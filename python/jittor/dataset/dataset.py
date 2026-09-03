@@ -346,11 +346,6 @@ class Dataset(object):
         worker_init_fn = getattr(self, "worker_init_fn", None)
         if worker_init_fn is not None:
             worker_init_fn(worker_id)
-        # parallel_op_compiler still problematic,
-        # it is not work on ubuntu 16.04. but worked on ubuntu 20.04
-        # it seems like the static value of parallel compiler
-        # is not correctly init.
-        jt.flags.use_parallel_op_compiler = 0
         import time
         try:
             # Time PIL.Image.open in THIS process only. A worker is jittor's

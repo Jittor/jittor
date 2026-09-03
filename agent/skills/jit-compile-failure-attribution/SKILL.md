@@ -81,6 +81,21 @@ except Exception:
 
 ## 5. 现成的实现
 
-`tests/compiler/test_parallel_compile_attribution.py`（4 条，CPU，27 秒）。
+`tests/compiler/test_parallel_compile_attribution.py`（CPU）。
 要改电池组的并行策略之前，先跑它一遍；要新增一种「编译失败该怎么报」的契约，
 加在那里而不是新开一个文件。
+
+## 6. 怎么复现 fork 后的幽灵编译线程
+
+只在子进程里直接 fork 不够：如果父进程从未提交过并行编译，旧实现尚未创建线程池，
+缺陷不会出现。有效口径是：
+
+1. 父进程用至少两个不同 JIT key 完成一次并行编译；
+2. `fork()` 后调用 `jt_init_subprocess()`；
+3. 子进程用带 pid 的 `compile_options` 生成全新 key，再次并行编译；
+4. 子进程另起 watchdog，超时用固定退出码结束，父进程断言状态。
+
+旧的持久池在子进程里只剩 `std::thread` 对象，没有对应线程：提交任务无人消费，最终得到
+watchdog 状态。per-call future 实现应在子进程重新建线程，并在返回前逐个 `get()`；测试必须同时
+看到子进程成功标记与退出码 0。现成节点是
+`test_parallel_compiler_has_no_ghost_workers_after_fork`。

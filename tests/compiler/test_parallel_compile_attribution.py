@@ -25,6 +25,7 @@ Everything runs in a child process: the point of the exercise is a deliberately
 poisoned runtime, and the assertions in step 2 say it does not stay local.
 """
 
+import os
 import unittest
 
 from _helpers.child_process import run_child_script
@@ -72,7 +73,99 @@ def _run(body, threads=16):
     return result.stdout.decode() + result.stderr.decode()
 
 
+_FORK_SCRIPT = r"""
+import os
+import threading
+import time
+
+import jittor as jt
+
+jt.flags.use_parallel_op_compiler = 2
+
+def compile_batch(label):
+    outputs = []
+    for index in range(4):
+        option = "FLAGS: -DPC_FORK_%s_%d=1 " % (label, index)
+        with jt.flag_scope(compile_options={option: 1}):
+            value = jt.array([1.0, 2.0, 3.0])
+            outputs.append((value * (index + 2)).sqr())
+    jt.sync_all(True)
+    return outputs
+
+# Force the parent to construct and use the parallel compiler workers. The
+# child needs different keys, or the inherited JIT map would make compilation
+# unnecessary and leave the post-fork worker state untested.
+parent_outputs = compile_batch("PARENT_%d" % os.getpid())
+child_pid = os.fork()
+if child_pid == 0:
+    jt.jt_init_subprocess()
+
+    def watchdog():
+        time.sleep(8)
+        os._exit(124)
+
+    threading.Thread(target=watchdog, daemon=True).start()
+    child_outputs = compile_batch("CHILD_%d" % os.getpid())
+    print("CHILD_PARALLEL_COMPILE_OK", flush=True)
+    os._exit(0)
+
+_, status = os.waitpid(child_pid, 0)
+exit_code = os.WEXITSTATUS(status) if os.WIFEXITED(status) else 128 + os.WTERMSIG(status)
+print("CHILD_STATUS", exit_code, flush=True)
+"""
+
+
+_PREPARE_FAILURE_SCRIPT = r"""
+import jittor as jt
+
+jt.flags.use_parallel_op_compiler = 0
+prepare_once = jt.compile_custom_op(r'''
+struct PrepareOnceOp : Op {
+    Var* output;
+    PrepareOnceOp();
+    const char* name() const override { return "prepare_once"; }
+    DECLARE_jit_run;
+};
+''', r'''
+#ifndef JIT
+PrepareOnceOp::PrepareOnceOp() {
+    set_flag(OpFlags::_cpu);
+    output = create_output({1}, ns_float32);
+}
+void PrepareOnceOp::jit_prepare(JK&) {
+    static int calls = 0;
+    ++calls;
+    if (calls == 1) LOGf << "PREPARE_CALL_ONE";
+    LOGf << "PREPARE_CALL_TWO";
+}
+#else
+void PrepareOnceOp::jit_run() {}
+#endif
+''', "prepare_once")
+
+try:
+    prepare_once().sync()
+except Exception as error:
+    print(str(error), flush=True)
+"""
+
+
 class TestCompileFailureAttribution(unittest.TestCase):
+
+    @unittest.skipUnless(hasattr(os, "fork"), "requires POSIX fork")
+    def test_parallel_compiler_has_no_ghost_workers_after_fork(self):
+        result = run_child_script(_FORK_SCRIPT, timeout=180,
+                                  name="parallel_compile_after_fork")
+        output = result.stdout.decode() + result.stderr.decode()
+        self.assertIn("CHILD_PARALLEL_COMPILE_OK", output, output[-3000:])
+        self.assertIn("CHILD_STATUS 0", output, output[-3000:])
+
+    def test_prepare_failure_is_not_repeated_by_error_reporting(self):
+        result = run_child_script(_PREPARE_FAILURE_SCRIPT, timeout=180,
+                                  name="prepare_failure_once")
+        output = result.stdout.decode() + result.stderr.decode()
+        self.assertIn("PREPARE_CALL_ONE", output, output[-3000:])
+        self.assertNotIn("PREPARE_CALL_TWO", output, output[-3000:])
 
     def test_the_failure_names_its_own_cause_under_the_parallel_compiler(self):
         """Threads do not lose the reason; step 1."""
