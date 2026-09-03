@@ -713,6 +713,36 @@ register_fidelity(
 )
 
 
+_TRAPZ_FIDELITY_DETAIL = (
+    "matches Torch composite trapezoidal integration values and out identity "
+    "for supported real tensors but omits device, layout, and dtype keyword semantics"
+)
+
+
+def trapz(y, x=None, dx=1, dim=-1, *, out=None):
+    """Integrate along a tensor dimension with the trapezoidal rule."""
+    return _trapz(y, x=x, dx=dx, dim=dim, out=out)
+
+
+def trapezoid(y, x=None, dx=1, dim=-1, *, out=None):
+    """Alias of :func:`trapz` using Torch's newer spelling."""
+    return _trapz(y, x=x, dx=dx, dim=dim, out=out)
+
+
+register_fidelity(
+    "torch.trapz",
+    trapz,
+    Fidelity.APPROXIMATE,
+    _TRAPZ_FIDELITY_DETAIL,
+)
+register_fidelity(
+    "torch.trapezoid",
+    trapezoid,
+    Fidelity.APPROXIMATE,
+    _TRAPZ_FIDELITY_DETAIL,
+)
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
@@ -911,8 +941,8 @@ def install(ctx):
     Var.equal = lambda self, other: _torch_equal(self, other)
     _alias("diff", lambda x, n=1, dim=-1, prepend=None, append=None:
            _diff(x, n=n, dim=dim, prepend=prepend, append=append))
-    _alias("trapz", _trapz)
-    _alias("trapezoid", _trapz)
+    _alias("trapz", trapz)
+    _alias("trapezoid", trapezoid)
     _alias("repeat_interleave", _repeat_interleave)
     _alias("autocast", _AutocastContext)
     # Real loop-based torch.vmap. The old no-op stub (`lambda fn,*a,**k: fn`)

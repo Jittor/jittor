@@ -802,6 +802,53 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         np.testing.assert_allclose(actual.numpy(), expected, rtol=1e-6)
         np.testing.assert_allclose(method.numpy(), expected, rtol=1e-6)
 
+    def test_trapz_and_trapezoid_are_stable_module_level_objects(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.trapz))
+        self.assertTrue(callable(numerical.trapezoid))
+        self.assertIs(torch.trapz, numerical.trapz)
+        self.assertIs(torch.trapezoid, numerical.trapezoid)
+        self.assertEqual(numerical.trapz.__module__, numerical.__name__)
+        self.assertEqual(numerical.trapezoid.__module__, numerical.__name__)
+
+    def test_trapz_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        for name, implementation in (("torch.trapz", numerical.trapz),
+                                     ("torch.trapezoid", numerical.trapezoid)):
+            record = fidelity.fidelity_of(name)
+            self.assertIs(record.implementation, implementation)
+            self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+            self.assertIn("out", record.detail)
+            self.assertIn("device", record.detail)
+
+    def test_trapz_cpu_dx_coordinate_and_var_delegate_match_numpy(self):
+        values = np.array([[0.0, 1.0, 4.0], [2.0, 3.0, 8.0]], dtype="float32")
+        coord = np.array([0.0, 0.5, 2.0], dtype="float32")
+        expected_dx = np.trapz(values, dx=2.0, axis=1)
+        expected_x = np.trapz(values, coord, axis=1)
+        with torch.flag_scope(use_cuda=0):
+            values_tensor = torch.array(values)
+            coord_tensor = torch.array(coord)
+            actual_dx = torch.trapz(values_tensor, dx=2.0, dim=1)
+            actual_x = torch.trapezoid(values_tensor, coord_tensor, dim=1)
+            method = values_tensor.trapz(coord_tensor, dim=1)
+        np.testing.assert_allclose(actual_dx.numpy(), expected_dx, rtol=1e-6)
+        np.testing.assert_allclose(actual_x.numpy(), expected_x, rtol=1e-6)
+        np.testing.assert_allclose(method.numpy(), expected_x, rtol=1e-6)
+
+    def test_trapz_cpu_out_identity(self):
+        values = np.array([1.0, 2.0, 5.0], dtype="float32")
+        expected = np.trapz(values, dx=0.5)
+        with torch.flag_scope(use_cuda=0):
+            values_tensor = torch.array(values)
+            out = torch.zeros(1)
+            returned = torch.trapezoid(values_tensor, dx=0.5, out=out)
+        self.assertIs(returned, out)
+        np.testing.assert_allclose(out.numpy(), [expected], rtol=1e-6)
+
 
 if __name__ == "__main__":
     unittest.main()
