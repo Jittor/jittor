@@ -97,71 +97,64 @@ template <typename T_ELEM> __inline__  cudnnDataType_t getDataType();
 
 void CudnnRnnBackwardXOp::jit_run() {
     int num_directions = 1 + bidirectional;
-
-    int in_dims[3] = {batch_size, input_size, 1};
-    int out_dims[3] = {batch_size, hidden_size * num_directions, 1};
-    int in_strides[3] = {in_dims[1] * in_dims[2], in_dims[2], 1};
-    int out_strides[3] = {out_dims[1] * out_dims[2], out_dims[2], 1};
     int hidden_dims[3] = {num_layers * num_directions, batch_size, hidden_size};
     int hidden_strides[3] = {hidden_dims[1] * hidden_dims[2], hidden_dims[2], 1};
 
-    // Owned: 4*seq_length + 6 descriptors; see the forward op.
-    CudnnTensorDescriptorArray xDesc(seq_length), dxDesc(seq_length);
-    CudnnTensorDescriptorArray yDesc(seq_length), dyDesc(seq_length);
+    // Two sequence-data descriptors where v6 took four arrays of `seq_length`
+    // tensor descriptors: x and dx share one, y and dy share the other,
+    // because they have the same shape and layout and always did.
+    CudnnRnnSeqLengths seq(batch_size, seq_length);
+    CudnnRnnDataDescriptor xDesc, yDesc;
+    xDesc.set(getDataType<Ty>(), seq_length, batch_size, input_size, seq.host_data());
+    yDesc.set(getDataType<Ty>(), seq_length, batch_size,
+        hidden_size * num_directions, seq.host_data());
 
-    for (int i = 0; i < seq_length; ++i) {
-        checkCudaErrors(cudnnSetTensorNdDescriptor(xDesc[i], getDataType<Ty>(), 3, in_dims, in_strides));
-        checkCudaErrors(cudnnSetTensorNdDescriptor(dxDesc[i], getDataType<Ty>(), 3, in_dims, in_strides));
-        checkCudaErrors(cudnnSetTensorNdDescriptor(yDesc[i], getDataType<Ty>(), 3, out_dims, out_strides));
-        checkCudaErrors(cudnnSetTensorNdDescriptor(dyDesc[i], getDataType<Ty>(), 3, out_dims, out_strides));
-    }
+    CudnnTensorDescriptor hDesc, cDesc;
+    checkCudaErrors(cudnnSetTensorNdDescriptor(hDesc, getDataType<Tx>(), 3, hidden_dims, hidden_strides));
+    checkCudaErrors(cudnnSetTensorNdDescriptor(cDesc, getDataType<Tx>(), 3, hidden_dims, hidden_strides));
 
-    CudnnTensorDescriptor dhyDesc, dcyDesc;
-    CudnnTensorDescriptor hxDesc, cxDesc, dhxDesc, dcxDesc;
-    checkCudaErrors(cudnnSetTensorNdDescriptor(hxDesc, getDataType<Tx>(), 3, hidden_dims, hidden_strides));
-    checkCudaErrors(cudnnSetTensorNdDescriptor(cxDesc, getDataType<Tx>(), 3, hidden_dims, hidden_strides));
-    checkCudaErrors(cudnnSetTensorNdDescriptor(dhxDesc, getDataType<Tx>(), 3, hidden_dims, hidden_strides));
-    checkCudaErrors(cudnnSetTensorNdDescriptor(dcxDesc, getDataType<Tx>(), 3, hidden_dims, hidden_strides));
-    checkCudaErrors(cudnnSetTensorNdDescriptor(dhyDesc, getDataType<Tx>(), 3, hidden_dims, hidden_strides));
-    checkCudaErrors(cudnnSetTensorNdDescriptor(dcyDesc, getDataType<Tx>(), 3, hidden_dims, hidden_strides));
+    RnnDescriptor rnn_desc(cudnn_handle, mode, input_size, hidden_size,
+        num_layers, dropout, bidirectional, getDataType<Tx>());
 
-    RnnWeightDescriptor w_desc(w->size, getDataType<Tw>(), sizeof(Tw));
-    RnnDescriptor rnn_desc(cudnn_handle, mode, hidden_size, num_layers, dropout,
-        bidirectional, getDataType<Tx>());
+    // The backward reads back what the forward wrote, so it has to size its
+    // spaces for the mode the forward ran in -- training, always, or there
+    // would be no reserve to read.
+    size_t work_space_size = 0, reserve_space_size = 0;
+    rnn_desc.temp_space_sizes(CUDNN_FWD_MODE_TRAINING, xDesc,
+        &work_space_size, &reserve_space_size);
+    CudnnWorkspace work_space(work_space_size);
 
-    // Was a bare `void*` left uninitialized when the size came back zero.
-    CudnnWorkspace work_space(rnn_desc.work_space_size(dxDesc.data(), seq_length));
-
-    size_t reserveSpaceSize = reservation->size;
-
-    checkCudaErrors(cudnnRNNBackwardData(
+    checkCudaErrors(cudnnRNNBackwardData_v8(
         cudnn_handle, rnn_desc.desc,
-        seq_length,
-        yDesc.data(), y->ptr<Ty>(),
-        dyDesc.data(), dy->ptr<Ty>(),
-        dhyDesc, dhy->ptr<Ty>(),
-        dcyDesc, mode == "lstm" ? dcy->ptr<Ty>(): nullptr,
-        w_desc.desc, w->ptr<Tw>(),
-        hxDesc, hx->ptr<Tx>(),
-        cxDesc, mode == "lstm" ? cx->ptr<Tx>() : nullptr,
-        dxDesc.data(), dx->ptr<Tx>(),
-        dhxDesc, dhx->ptr<Tx>(),
-        dcxDesc, mode == "lstm" ? dcx->ptr<Tx>() : nullptr,
-        work_space.ptr, work_space.size,
-        reservation->ptr<Tx>(), reservation->size
+        seq.dev(),
+        yDesc, y->ptr<Ty>(), dy->ptr<Ty>(),
+        xDesc, dx->ptr<Tx>(),
+        hDesc, hx->ptr<Tx>(), dhy->ptr<Ty>(), dhx->ptr<Tx>(),
+        cDesc,
+        mode == "lstm" ? cx->ptr<Tx>() : nullptr,
+        mode == "lstm" ? dcy->ptr<Ty>() : nullptr,
+        mode == "lstm" ? dcx->ptr<Tx>() : nullptr,
+        w->size, w->ptr<Tw>(),
+        work_space.size, work_space.ptr,
+        reservation->size, reservation->ptr<Tx>()
     ));
 
+    // CUDNN_WGRAD_MODE_ADD accumulates into dw, so dw starts at zero. (v6's
+    // cudnnRNNBackwardWeights had the same contract and the same memset.)
     checkCudaErrors(cudaMemset(dw->ptr<Tw>(), 0, dw->size));
 
-    checkCudaErrors(cudnnRNNBackwardWeights(
+    // Must follow BackwardData: they share the reserve space, and cuDNN
+    // documents this order.
+    checkCudaErrors(cudnnRNNBackwardWeights_v8(
         cudnn_handle, rnn_desc.desc,
-        seq_length,
-        xDesc.data(), x->ptr<Tx>(),
-        hxDesc, hx->ptr<Tx>(),
-        yDesc.data(), y->ptr<Ty>(),
-        work_space.ptr, work_space.size,
-        w_desc.desc, dw->ptr<Tw>(),
-        reservation->ptr<Tx>(), reservation->size
+        CUDNN_WGRAD_MODE_ADD,
+        seq.dev(),
+        xDesc, x->ptr<Tx>(),
+        hDesc, hx->ptr<Tx>(),
+        yDesc, y->ptr<Ty>(),
+        dw->size, dw->ptr<Tw>(),
+        work_space.size, work_space.ptr,
+        reservation->size, reservation->ptr<Tx>()
     ));
 
 }

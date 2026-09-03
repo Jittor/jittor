@@ -155,23 +155,38 @@ struct RnnDescriptor {
     // space was sized as if the weights were fp32.
     cudnnDataType_t dataType;
 
-    RnnDescriptor(cudnnHandle_t handle, string mode, int hidden_size, int num_layers, 
-        float dropout, bool bidirectional, cudnnDataType_t dataType)
+    RnnDescriptor(cudnnHandle_t handle, string mode, int input_size, int hidden_size,
+        int num_layers, float dropout, bool bidirectional, cudnnDataType_t dataType)
         : handle(handle), dataType(dataType) {
         checkCudaErrors(cudnnCreateRNNDescriptor(&desc));
-        checkCudaErrors(cudnnSetRNNDescriptor_v6(
-            handle,
+        checkCudaErrors(cudnnSetRNNDescriptor_v8(
             desc,
+            CUDNN_RNN_ALGO_STANDARD,
+            rnn_string_to_rnn_mode(mode),
+            // The v6 descriptor had no bias mode and always laid out two bias
+            // vectors per linear layer. The flat weight jittor builds from
+            // cudnn_rnn_weight_offset() is that layout, so saying anything
+            // else here would silently move every weight.
+            CUDNN_RNN_DOUBLE_BIAS,
+            bidirectional ? CUDNN_BIDIRECTIONAL : CUDNN_UNIDIRECTIONAL,
+            CUDNN_LINEAR_INPUT,
+            dataType,
+            // v6 took one type and used it as both; keep that.
+            dataType,
+            // v6 needed a second call (cudnnSetRNNMatrixMathType, gone in
+            // cuDNN 9); v8 takes it here.
+            rnn_math_type(dataType),
+            input_size,
+            hidden_size,
+            // projSize == hiddenSize is "no projection". jittor asserts
+            // proj_size == 0 at construction, so there is never one.
             hidden_size,
             num_layers,
             cudnn_rnn_dropout_descriptor(handle, dropout),
-            CUDNN_LINEAR_INPUT,
-            bidirectional ? CUDNN_BIDIRECTIONAL : CUDNN_UNIDIRECTIONAL,
-            rnn_string_to_rnn_mode(mode),
-            CUDNN_RNN_ALGO_STANDARD,
-            dataType
+            // Every sequence in the batch is the full length; nothing is
+            // padded, so cuDNN need not look for padding.
+            CUDNN_RNN_PADDED_IO_DISABLED
         ));
-        checkCudaErrors(cudnnSetRNNMatrixMathType(desc, rnn_math_type(dataType)));
     }
 
     RnnDescriptor(const RnnDescriptor&) = delete;
@@ -182,50 +197,83 @@ struct RnnDescriptor {
         peekCudaErrorsAlways(cudnnDestroyRNNDescriptor(desc));
     }
 
-    size_t weight_space_size(const cudnnTensorDescriptor_t &xDesc) {
+    /// Bytes of weight space. v6 needed an x descriptor to answer this; v8
+    /// knows the shape from the descriptor itself.
+    size_t weight_space_size() {
         size_t size;
-        checkCudaErrors(cudnnGetRNNParamsSize(
-            handle, desc, xDesc, &size, dataType
-        ));
+        checkCudaErrors(cudnnGetRNNWeightSpaceSize(handle, desc, &size));
         return size;
     }
 
-    size_t work_space_size(const cudnnTensorDescriptor_t *xDesc, int seq_length) {
-        size_t size;
-        checkCudaErrors(cudnnGetRNNWorkspaceSize(
-            handle, desc, seq_length, xDesc, &size
-        ));
-        return size;
-    }
+    /** Workspace and reserve space, which v8 reports together.
 
-    size_t reserve_space_size(const cudnnTensorDescriptor_t *xDesc, int seq_length) {
-        size_t size;
-        checkCudaErrors(cudnnGetRNNTrainingReserveSize(
-            handle, desc, seq_length, xDesc, &size
-        ));
-        return size;
+        The reserve is what the backward pass reads back, and it is non-zero
+        only for CUDNN_FWD_MODE_TRAINING -- v6 had a separate entry point per
+        question and a separate one per mode, so the two could disagree about
+        which mode they were sizing for. */
+    void temp_space_sizes(cudnnForwardMode_t fwd_mode,
+            cudnnRNNDataDescriptor_t xDesc, size_t *work, size_t *reserve) {
+        checkCudaErrors(cudnnGetRNNTempSpaceSizes(
+            handle, desc, fwd_mode, xDesc, work, reserve));
     }
 };
 
-/** 
+/** cuDNN's v8 sequence-data descriptor.
+
+    It replaces the array of `seq_length` tensor descriptors that every RNN
+    call used to build and destroy -- 2*seq_length of them in the forward,
+    4*seq_length in the backward, for a batch whose sequences are all the same
+    length and whose layout never varied.
  */
-struct RnnWeightDescriptor {
-    // Ownership comes from CudnnFilterDescriptor; this type only adds the
-    // shape. `desc` stays a public member so call sites read unchanged.
-    CudnnFilterDescriptor filter;
-    cudnnFilterDescriptor_t desc;
-    size_t size;
-    // `size` is in bytes; the filter's extent is in elements, so it depends on
-    // the weight dtype. Both were fixed at fp32, which described a half weight
-    // buffer as twice as many fp32 values as it holds.
-    RnnWeightDescriptor(size_t size, cudnnDataType_t dataType, int elem_size)
-        : desc(filter.desc), size(size) {
-        int dimW[3] = {(int) (size / elem_size), 1, 1};
-        checkCudaErrors(cudnnSetFilterNdDescriptor(desc, dataType, CUDNN_TENSOR_NCHW, 3, dimW));
+struct CudnnRnnDataDescriptor {
+    cudnnRNNDataDescriptor_t desc = nullptr;
+
+    CudnnRnnDataDescriptor() {
+        checkCudaErrors(cudnnCreateRNNDataDescriptor(&desc));
+    }
+    ~CudnnRnnDataDescriptor() {
+        // Destructors report and never raise (6.B17).
+        if (desc) peekCudaErrorsAlways(cudnnDestroyRNNDataDescriptor(desc));
+    }
+    CudnnRnnDataDescriptor(const CudnnRnnDataDescriptor&) = delete;
+    CudnnRnnDataDescriptor& operator=(const CudnnRnnDataDescriptor&) = delete;
+    operator cudnnRNNDataDescriptor_t() const { return desc; }
+
+    void set(cudnnDataType_t dtype, int seq_length, int batch_size,
+             int vector_size, const int *seq_lengths) {
+        // SEQ_MAJOR_UNPACKED is [seq, batch, vector] contiguous, which is
+        // exactly what the per-timestep descriptors described: dims
+        // {batch, vector, 1} with strides {vector, 1, 1}, one per step.
+        checkCudaErrors(cudnnSetRNNDataDescriptor(
+            desc, dtype, CUDNN_RNN_DATA_LAYOUT_SEQ_MAJOR_UNPACKED,
+            seq_length, batch_size, vector_size, seq_lengths, nullptr));
+    }
+};
+
+/** The per-sequence lengths, which v8 wants in two memories at once.
+
+    `cudnnSetRNNDataDescriptor` reads them from the host; `cudnnRNNForward`
+    and `cudnnRNNBackwardData_v8` read them from the device. jittor pads
+    nothing -- every sequence in the batch is the full length -- so both are
+    `batch_size` copies of one number.
+ */
+struct CudnnRnnSeqLengths {
+    vector<int32_t> host;
+    CudnnWorkspace device;
+
+    CudnnRnnSeqLengths(int batch_size, int seq_length)
+        : host(batch_size, seq_length),
+          device(sizeof(int32_t) * (size_t)batch_size) {
+        // Async on the null stream, which is the stream every cuDNN call
+        // below runs on, so the copy is ordered before them. The source is
+        // pageable, so the runtime has staged it by the time this returns and
+        // `host` may die whenever.
+        checkCudaErrors(cudaMemcpyAsync(device.ptr, host.data(),
+            sizeof(int32_t) * (size_t)batch_size, cudaMemcpyHostToDevice, 0));
     }
 
-    RnnWeightDescriptor(const RnnWeightDescriptor&) = delete;
-    RnnWeightDescriptor& operator=(const RnnWeightDescriptor&) = delete;
+    const int* host_data() const { return host.data(); }
+    const int32_t* dev() const { return (const int32_t*)device.ptr; }
 };
 
 /** Training reserve-space size for an RNN of this shape, cached per

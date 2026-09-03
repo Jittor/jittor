@@ -146,69 +146,54 @@ template <typename T_ELEM> __inline__  cudnnDataType_t getDataType();
 
 void CudnnRnnOp::jit_run() {
     int num_directions = bidirectional + 1;
-    int num_linear_layers = rnn_string_to_num_linear_layers(mode);
-
-    int in_dims[3] = {batch_size, input_size, 1};
-    int out_dims[3] = {batch_size, hidden_size * num_directions, 1};
-    int in_strides[3] = {in_dims[1] * in_dims[2], in_dims[2], 1};
-    int out_strides[3] = {out_dims[1] * out_dims[2], out_dims[2], 1};
     int hidden_dims[3] = {num_layers * num_directions, batch_size, hidden_size};
     int hidden_strides[3] = {hidden_dims[1] * hidden_dims[2], hidden_dims[2], 1};
 
-    // Owned: 2*seq_length + 4 descriptors, and every cuDNN call below throws
-    // on failure. Hand-written Destroys at the bottom of the function meant an
-    // error released none of them.
-    CudnnTensorDescriptorArray xDesc(seq_length), yDesc(seq_length);
-    CudnnTensorDescriptor hxDesc, cxDesc, hyDesc, cyDesc;
+    // One sequence-data descriptor each for x and y, where the v6 API took an
+    // array of `seq_length` tensor descriptors per operand -- 2*seq_length
+    // objects created and destroyed per call, all describing the same shape.
+    CudnnRnnSeqLengths seq(batch_size, seq_length);
+    CudnnRnnDataDescriptor xDesc, yDesc;
+    xDesc.set(getDataType<Tx>(), seq_length, batch_size, input_size, seq.host_data());
+    yDesc.set(getDataType<Ty>(), seq_length, batch_size,
+        hidden_size * num_directions, seq.host_data());
 
-    for (int i = 0; i < seq_length; ++i) {
-        checkCudaErrors(cudnnSetTensorNdDescriptor(xDesc[i], getDataType<Tx>(), 3, in_dims, in_strides));
-        checkCudaErrors(cudnnSetTensorNdDescriptor(yDesc[i], getDataType<Ty>(), 3, out_dims, out_strides));
-    }
+    // v8 describes h and c with one tensor descriptor each, not one per end:
+    // the same descriptor covers hx and hy.
+    CudnnTensorDescriptor hDesc, cDesc;
+    checkCudaErrors(cudnnSetTensorNdDescriptor(hDesc, getDataType<Tx>(), 3, hidden_dims, hidden_strides));
+    checkCudaErrors(cudnnSetTensorNdDescriptor(cDesc, getDataType<Tx>(), 3, hidden_dims, hidden_strides));
 
-    checkCudaErrors(cudnnSetTensorNdDescriptor(hxDesc, getDataType<Tx>(), 3, hidden_dims, hidden_strides));
-    checkCudaErrors(cudnnSetTensorNdDescriptor(cxDesc, getDataType<Tx>(), 3, hidden_dims, hidden_strides));
+    RnnDescriptor rnn_desc(cudnn_handle, mode, input_size, hidden_size,
+        num_layers, dropout, bidirectional, getDataType<Tx>());
 
-    checkCudaErrors(cudnnSetTensorNdDescriptor(hyDesc, getDataType<Tx>(), 3, hidden_dims, hidden_strides));
-    checkCudaErrors(cudnnSetTensorNdDescriptor(cyDesc, getDataType<Tx>(), 3, hidden_dims, hidden_strides));
+    cudnnForwardMode_t fwd_mode = is_train
+        ? CUDNN_FWD_MODE_TRAINING : CUDNN_FWD_MODE_INFERENCE;
+    size_t work_space_size = 0, reserve_space_size = 0;
+    rnn_desc.temp_space_sizes(fwd_mode, xDesc, &work_space_size, &reserve_space_size);
+    CudnnWorkspace work_space(work_space_size);
 
-    RnnDescriptor rnn_desc(cudnn_handle, mode, hidden_size, num_layers, dropout,
-        bidirectional, getDataType<Tx>());
+    // Inference asks for no reserve at all, and cuDNN wants the pair to agree:
+    // a size of zero must come with a null pointer. `reservation` is still
+    // allocated (shape inference sizes it for training either way), it just is
+    // not handed over.
+    void *reserve = is_train ? (void *)reservation->ptr<Tx>() : nullptr;
+    size_t reserve_size = is_train ? reservation->size : 0;
 
-    // Was a bare `void*` left uninitialized when the size came back zero, and
-    // freed unconditionally at the bottom.
-    CudnnWorkspace work_space(rnn_desc.work_space_size(xDesc.data(), seq_length));
-
-    RnnWeightDescriptor w_desc(w->size, getDataType<Tw>(), sizeof(Tw));
-
-    if (is_train) {
-        checkCudaErrors(cudnnRNNForwardTraining(
-            cudnn_handle, rnn_desc.desc,
-            seq_length,
-            xDesc.data(), x->ptr<Tx>(),
-            hxDesc, hx->ptr<Tx>(),
-            cxDesc, mode == "lstm" ? cx->ptr<Tx>() : nullptr,
-            w_desc.desc, w->ptr<Tw>(),
-            yDesc.data(), y->ptr<Ty>(),
-            hyDesc, hy->ptr<Ty>(),
-            cyDesc, mode == "lstm" ? cy->ptr<Ty>() : nullptr,
-            work_space.ptr, work_space.size,
-            reservation->ptr<Tx>(), reservation->size
-        ));
-    } else {
-        checkCudaErrors(cudnnRNNForwardInference(
-            cudnn_handle, rnn_desc.desc,
-            seq_length,
-            xDesc.data(), x->ptr<Tx>(),
-            hxDesc, hx->ptr<Tx>(),
-            cxDesc, mode == "lstm" ? cx->ptr<Tx>() : nullptr,
-            w_desc.desc, w->ptr<Tw>(),
-            yDesc.data(), y->ptr<Ty>(),
-            hyDesc, hy->ptr<Ty>(),
-            cyDesc, mode == "lstm" ? cy->ptr<Ty>() : nullptr,
-            work_space.ptr, work_space.size
-        ));
-    }
+    checkCudaErrors(cudnnRNNForward(
+        cudnn_handle, rnn_desc.desc,
+        fwd_mode,
+        seq.dev(),
+        xDesc, x->ptr<Tx>(),
+        yDesc, y->ptr<Ty>(),
+        hDesc, hx->ptr<Tx>(), hy->ptr<Ty>(),
+        cDesc,
+        mode == "lstm" ? cx->ptr<Tx>() : nullptr,
+        mode == "lstm" ? cy->ptr<Ty>() : nullptr,
+        w->size, w->ptr<Tw>(),
+        work_space.size, work_space.ptr,
+        reserve_size, reserve
+    ));
 
 }
 
