@@ -6,6 +6,7 @@ BASE_HEADER = ROOT / "python/jittor/extern/acl/aclops/base_op.h"
 BASE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/base_op_acl.cc"
 UNARY_SOURCE = ROOT / "python/jittor/extern/acl/aclops/unary_op_acl.cc"
 BINARY_SOURCE = ROOT / "python/jittor/extern/acl/aclops/binary_op_acl.cc"
+TERNARY_SOURCE = ROOT / "python/jittor/extern/acl/aclops/ternary_op_acl.cc"
 
 
 def test_acl_launcher_tail_has_one_auditable_contract():
@@ -28,6 +29,14 @@ def test_unary_family_uses_launcher_without_changing_sync_policy():
 def test_binary_family_uses_shared_launcher_without_tail_copy():
     source = BINARY_SOURCE.read_text()
     assert "launch(ret, it->second.executeFunc, true);" in source
+    assert "checkRet(ret);" not in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
+
+
+def test_ternary_family_uses_launcher_and_keeps_async_policy():
+    source = TERNARY_SOURCE.read_text()
+    assert "launch(ret, aclnnSWhere, false);" in source
     assert "checkRet(ret);" not in source
     assert "mallocWorkSpace(workspaceSize)" not in source
     assert "syncRun();" not in source

@@ -151,6 +151,9 @@ allocation, execution errors, and synchronization. This source-only change
 still requires the 910B3 probe below; hosts without CANN and an Ascend device
 must not report hardware validation.
 
+The ternary SWhere family uses the same contract and intentionally retains its
+historical asynchronous execution policy.
+
 Run this diagnostic on an Ascend 910B3 only after sourcing the CANN environment,
 confirming the device is healthy, and selecting an allocated device:
 
