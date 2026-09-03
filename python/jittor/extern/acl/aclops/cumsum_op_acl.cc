@@ -40,17 +40,7 @@ namespace jittor
         auto attr = dynamic_cast<GatherAttr *>(op_attr.get());
         ret = aclnnCumsumGetWorkspaceSize(inputTensors[0], attr->dim, get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
 
-        checkRet(ret);
-
-        if (workspaceSize > 0)
-        {
-            mallocWorkSpace(workspaceSize);
-        }
-
-        ret = aclnnCumsum(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnCumsum failed. ERROR: %d\n", name.c_str(), ret); return);
-
-        syncRun();
+        launch(ret, aclnnCumsum, true);
         return;
     }
 

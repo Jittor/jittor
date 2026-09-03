@@ -186,6 +186,9 @@ log and extract the attribution line with:
 rg "aclrtSynchronizeStream failed" "$TMPDIR/acl-sync-run.log"
 ```
 
+The ACL Cumsum family uses the shared launcher and retains synchronous
+execution. This remains source-only until the Ascend 910B3 probe is run.
+
 The run is valid only when the ACL execution assertion passes and the log has no
 CPU fallback. Treat either spelling below as a failed NPU verification:
 
