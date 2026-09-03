@@ -16,7 +16,7 @@ ReinterpretViewOp::ReinterpretViewOp(Var* x, NanoVector shape, NanoString dtype)
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);
     set_flag(OpFlags::_manual_set_vnbb);
-    CHECK(dtype.is_dtype()) << "reinterpret_view expects dtype, got" << dtype;
+    USER_CHECK(dtype.is_dtype()) << "reinterpret_view expects dtype, got" << dtype;
     y = create_output(nullptr, dtype);
 }
 
@@ -33,7 +33,7 @@ void ReinterpretViewOp::infer_shape() {
     NanoVector yshape = shape;
     for (uint i=0; i<shape.size(); i++) {
         if (shape[i] < 0) {
-            CHECK(infer_dim < 0) << "reinterpret_view allows at most one -1 dimension";
+            USER_CHECK(infer_dim < 0) << "reinterpret_view allows at most one -1 dimension";
             infer_dim = i;
         } else {
             known_items *= shape[i];
@@ -45,19 +45,19 @@ void ReinterpretViewOp::infer_shape() {
     int64 ydsize = dtype.dsize();
     CHECK(ydsize > 0);
     if (infer_dim >= 0) {
-        CHECK(known_items > 0 && x_bytes % (known_items * ydsize) == 0)
+        USER_CHECK(known_items > 0 && x_bytes % (known_items * ydsize) == 0)
             << "reinterpret_view cannot infer shape" << shape << "for byte size" << x_bytes;
         yshape.set_data(infer_dim, x_bytes / (known_items * ydsize));
     }
     y->set_shape(yshape);
-    CHECKop(y->size,==,x_bytes)
+    USER_CHECKop(y->size,==,x_bytes)
         << "reinterpret_view byte size mismatch, input" << x->shape << x->dtype()
         << "target" << yshape << dtype;
     if (x->dtype() == ns_complex64) {
-        CHECK(dtype == ns_float32 && yshape.size() && yshape[yshape.size()-1] == 2)
+        USER_CHECK(dtype == ns_float32 && yshape.size() && yshape[yshape.size()-1] == 2)
             << "complex64 -> float32 reinterpret_view requires target shape [..., 2]";
     } else if (dtype == ns_complex64) {
-        CHECK(x->dtype() == ns_float32 && x->shape.size() && x->shape[x->shape.size()-1] == 2)
+        USER_CHECK(x->dtype() == ns_float32 && x->shape.size() && x->shape[x->shape.size()-1] == 2)
             << "float32 -> complex64 reinterpret_view requires input shape [..., 2]";
     }
     y->share_with(x);
