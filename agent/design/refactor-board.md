@@ -89,7 +89,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 内存 | mem (6.C10–6.C20) | GPU2 c12-23 |
 | 绑定 | bindings (6.C02/22/23/24/25/27/28/29) | GPU0 c0-11 |
 | Python 核心 | — |  |
-| Python 算子 | pyops (5.10、5.12、5.13) | GPU5 c36-47 |
+| Python 算子 | — |  |
 | Python 其他 | pyother (5.18、5.19、6.P25) | GPU6 c64-75 |
 | 兼容层 | compat (7.01) | CPU c96-103 |
 | CUDA 后端 | cudabk (6.B07/08/17、8.01、8.03) | GPU7 c76-87 |
@@ -281,10 +281,10 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 5.07 | `jt.Function` 每次调用创建一次性上下文对象，实例无状态 | 已合并 | pyother | 5c4e624b；0f639e5b（收尾：torch 兼容层的 ctx 记账跟着挪到一次性上下文上，`materialize_grads` 原本静默失效） |
 | 5.08 | `flag_scope` 的备份改局部栈，`__call__` 每次新建 scope | 已合并 | | 5720e7e8 |
 | 5.09 | 29 处融合 kernel 的启用条件由全局 `no_grad` 改为「输出不需要梯度」 | 待领 | | |
-| 5.10 | 索引与计数统一 int64 | 进行中 | pyops | |
+| 5.10 | 索引与计数统一 int64 | 已合并 | pyops | 3e4d8a0b（`where_op.h` 的默认 dtype、randperm、topk 的空/非空两条分支、MaxPool2d/3d 与 AdaptiveMaxPool2d/3d 的 return_indices 全部 int64；顺带 `cub_where_op` 的计数与 free 大小、池化索引编码 `p*W+q`、repeat_interleave CUDA 快路径改 64 位并删掉 2^31 断言——该断言在 `misc/tensor_ops.py` 而不是审计写的 `pool/core_2d.py:198`。`jt.argsort`/`argmax`/`arange` 仍是 int32，理由见提交说明） |
 | 5.11 | `amp_reg` 位常量命名导出，一律 `\ | 已合并 | pyother | 24a334cf；fc9244c4（收尾：用例的 level 切换改走 flag_scope，撞上 0.15 新加的 flag 泄漏规则） |
-| 5.12 | matmul 四条路径共用能力表，dtype 用枚举不用子串 | 进行中 | pyops | |
-| 5.13 | `unique` | 进行中 | pyops | |
+| 5.12 | matmul 四条路径共用能力表，dtype 用枚举不用子串 | 已合并 | pyops | 9d987034（`_cublas_can_take` 一个谓词供四处使用，判据是 `a.dtype == b.dtype and a.dtype.is_float()`；`bmm_transpose` 补上 dtype 守卫与 amp_reg。审计两处更正：「`"float" in dtype` 匹配 bfloat16/float64」属实但 cuBLAS 都支持、不是缺陷；「batched 只查 a 的 complex」属实但不可达。真正可达的是 `bmm_transpose` 完全没有守卫，整数/复数操作数在 CUDA 上撞 C++ 断言而同一乘积写成 matmul 就能算） |
+| 5.13 | `unique` | 已合并 | pyops | 9c24a433（unique：四条路径合一，CPU 比较器不再把排序键截断成 int；根因不是注释说的「cub 只支持 int32」，而是存索引的输出 var 用了输入的 dtype，外加手工切分的 scratch 对不齐）43985e2c（isnan/isinf/isfinite 不再窄化成 float，float64 的 1e300 在所有后端都不是 inf）c8b4b206 + d6f08532（cumsum 一份实现、一条求导规则、一个 dim 契约，CPU 不再走 numpy 主机回调） |
 | 5.14 | `Var.scatter` 改非就地 | 已合并 | | 0b75e187 |
 | 5.15 | `.half()`/`.float16()` 删死的 amp 分支 | 待领 | | |
 | 5.16 | `state_dict(to="torch")` 用 `from_numpy`，不强制 floa… | 待领 | | |
