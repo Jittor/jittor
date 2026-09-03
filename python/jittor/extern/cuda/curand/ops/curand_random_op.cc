@@ -24,12 +24,12 @@ CurandRandomOp::CurandRandomOp(NanoVector shape, NanoString dtype, NanoString ty
     // curandGenerate*Double against a pointer of the wrong type and fail deep
     // inside nvcc; say so here instead. jt.random() already lowers float16 and
     // bfloat16 to a float32 draw plus a cast.
-    ASSERT(dtype == ns_float32 || dtype == ns_float64)
+    USER_CHECK(dtype == ns_float32 || dtype == ns_float64)
         << "curand_random supports float32 and float64 only, got" << dtype
         << "\n  Draw float32 and cast if another dtype is needed.";
     output = create_output(shape, dtype);
     this->type = type;
-    ASSERT(type == ns_normal || type == ns_uniform);
+    USER_CHECK(type == ns_normal || type == ns_uniform);
 }
 
 void CurandRandomOp::jit_prepare(JK& jk) {
