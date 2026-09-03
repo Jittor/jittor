@@ -258,6 +258,34 @@ CPU-only 缓存小得多。前提是复现路径与 CUDA 无关——`Var::alloc
 两种做法都要记得：换过源码之后第一次 pytest 必然吃一个 "jit_utils updated"（见 §4），
 要原样重跑一遍。
 
+### C++ 源码不只在 `.cc` 里：改核心接口要一并 grep `.py`
+
+这个仓库有 **54 个 `.py` 文件内嵌 `cuda_src` / `cpu_src` / `cpu_header` 字符串，约 15000 行
+C++**，由 JIT 在运行期编译。**`grep -r 'XXX' --include=*.cc` 看不见它们。**
+
+2.01 改 flag 枚举时就漏了三处（`tests/backends/cuda/test_cuda.py` 两处、
+`tests/backends/rocm/test_rocm.py` 一处），只在跑到那些用例时才以
+`'_cpu' is not a member of 'jittor::NodeFlags'` 的形式冒出来。
+
+```bash
+# 改任何核心 C++ 名字（类型、枚举、成员、宏）之后，两条都要跑
+grep -rn "OldName" --include=*.cc --include=*.h python/ 
+grep -rn "OldName" --include=*.py .          # 内嵌源码在这里
+```
+
+**而且这类失败的表现比「两条红」严重得多。** CUDA 后端分区实测：
+
+| 跑法 | 结果 |
+| --- | --- |
+| `tests/backends/cuda` 单跑 | 2 failed / 183 passed，不崩 |
+| `tests/nn` 单跑 | 232 passed |
+| 两个一起跑 | **退出码 139（SIGSEGV）**，日志只剩四行进度点，summary 全丢 |
+| 两个一起 + deselect 那两条 | 415 passed / 0 failed |
+
+一次算子编译失败会挂到后面毫不相干的用例上，最后整个 pytest 进程段错误——
+**看起来像「整套回归炸了」，实际是一行内嵌源码没跟着改**。所以：
+拿到「大面积红 + 段错误 + 没有 summary」时，**先单独跑每个目录**，再对 A 表。
+
 ### 类型系统能替你找出「靠巧合才对」的读法
 
 把一个「谁都能读」的字段改成「必须先知道种类才能读」之后，**编译错误的清单就是审计

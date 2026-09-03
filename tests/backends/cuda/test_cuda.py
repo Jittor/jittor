@@ -29,7 +29,7 @@ class TestCuda(unittest.TestCase):
         """, """
         #ifndef JIT
         NoCudaOp::NoCudaOp(NanoVector shape, string dtype) {
-            flags.set(NodeFlags::_cpu);
+            set_flag(OpFlags::_cpu);
             output = create_output(shape, dtype);
         }
 
@@ -59,7 +59,7 @@ class TestCuda(unittest.TestCase):
         """, """
         #ifndef JIT
         MyCudaOp::MyCudaOp(NanoVector shape, string dtype) {
-            flags.set(NodeFlags::_cuda);
+            set_flag(OpFlags::_cuda);
             output = create_output(shape, dtype);
         }
 

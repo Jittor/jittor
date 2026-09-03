@@ -47,7 +47,23 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 NODE_H = REPO_ROOT / "python" / "jittor" / "src" / "node.h"
-SOURCE_ROOT = REPO_ROOT / "python" / "jittor"
+
+#: Where C++ that names these flags lives.
+#:
+#: ``tests/`` is in the list because **C++ source is not only in .cc files**.
+#: 54 Python files in this repository embed ``cuda_src``/``cpu_src``/``cpu_header``
+#: strings -- about 15k lines of C++ that the JIT compiles at run time and that
+#: a grep for ``NodeFlags::`` over ``*.cc`` does not see. ``[2.01]`` renamed the
+#: Op-only bits and missed three such strings (``tests/backends/cuda/test_cuda.py``
+#: twice, ``tests/backends/rocm/test_rocm.py`` once); they only surfaced as
+#: ``'_cpu' is not a member of 'jittor::NodeFlags'`` when those tests ran.
+SOURCE_ROOTS = (REPO_ROOT / "python" / "jittor", REPO_ROOT / "tests")
+
+#: Files that quote the *old* spelling on purpose, to explain the rule.
+QUOTES_THE_OLD_SPELLING = {
+    "tests/structure/test_node_flag_kinds.py",
+    "tests/core/test_node_flag_layout.py",
+}
 
 #: ``flags.flags`` hands out the whole word with no kind attached, so every use
 #: is an escape from the rule this file exists to keep. These two are allowed
@@ -164,12 +180,27 @@ def _shared_flag_names():
     return shared - private
 
 
+def _scanned_files():
+    for root in SOURCE_ROOTS:
+        for path in sorted(root.rglob("*")):
+            if path.suffix not in (".cc", ".h", ".py") or path == NODE_H:
+                continue
+            if path.relative_to(REPO_ROOT).as_posix() in QUOTES_THE_OLD_SPELLING:
+                continue
+            yield path
+
+
 def test_no_source_names_a_kind_private_bit_through_nodeflags():
+    """Including the C++ that lives inside Python strings.
+
+    A ``cuda_src`` string is compiled by the JIT exactly like a file in
+    ``src/``, and it is invisible to a grep over ``*.cc``. That is how
+    ``[2.01]`` left three of them behind, and how a rename of a core C++ name
+    will do it again unless the rule looks where the source actually is.
+    """
     shared = _shared_flag_names()
     offenders = []
-    for path in sorted(SOURCE_ROOT.rglob("*")):
-        if path.suffix not in (".cc", ".h", ".py") or path == NODE_H:
-            continue
+    for path in _scanned_files():
         for number, line in enumerate(
                 path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
             for name in re.findall(r"NodeFlags::(_[a-z_0-9]+)", line):
@@ -184,8 +215,8 @@ def test_no_source_names_a_kind_private_bit_through_nodeflags():
 
 def test_the_raw_flag_word_stays_out_of_reach():
     offenders = []
-    for path in sorted(SOURCE_ROOT.rglob("*")):
-        if path.suffix not in (".cc", ".h") or path == NODE_H:
+    for path in _scanned_files():
+        if path.suffix == ".py":
             continue
         relative = path.relative_to(REPO_ROOT).as_posix()
         if relative in RAW_WORD_ALLOWED:

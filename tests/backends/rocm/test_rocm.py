@@ -80,7 +80,7 @@ class TestROCm(unittest.TestCase):
         """, """
         #ifndef JIT
         MyCudaOp::MyCudaOp(NanoVector shape, string dtype) {
-            flags.set(NodeFlags::_cuda);
+            set_flag(OpFlags::_cuda);
             output = create_output(shape, dtype);
         }
 
