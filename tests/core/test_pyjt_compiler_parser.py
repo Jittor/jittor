@@ -214,6 +214,81 @@ class TestGeneratedExceptionHandling(unittest.TestCase):
             code.count("} catch (const std::exception& e)"))
 
 
+DEALLOC_CLASS = """
+// @pyjt(Thing)
+struct Thing {
+    // @pyjt(__init__)
+    Thing(int a);
+    // @pyjt(__dealloc__)
+    ~Thing();
+};
+"""
+
+
+def balanced_block(text, start_marker):
+    """The ``{...}`` that follows ``start_marker``, braces matched."""
+    i = text.index(start_marker)
+    open_at = text.index("{", i)
+    depth = 0
+    for j in range(open_at, len(text)):
+        if text[j] == "{":
+            depth += 1
+        elif text[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[open_at:j + 1]
+    raise AssertionError("unbalanced block after " + start_marker)
+
+
+class TestGeneratedDealloc(unittest.TestCase):
+    """``tp_dealloc`` has two obligations no other slot has.
+
+    It must free the instance's storage *whatever happens*, and it must not
+    change the interpreter's exception state.  CPython calls it from arbitrary
+    points -- including while another exception is propagating -- and there is
+    no caller to report to.
+
+    The generated body used to meet neither.  ``tp_free`` was emitted only on
+    the success path (``~T(); tp_free(self); return;``), so a destructor that
+    threw -- ``~VarHolder`` reaches the allocator, whose ``free`` asserts --
+    landed in the shared catch, which called ``PyErr_Format`` and returned.
+    The instance's memory (and, for a type with an instance dict, the dict)
+    was never released, and a ``RuntimeError`` was left set to surface at
+    whatever unrelated bytecode ran next.
+    """
+
+    def dealloc_body(self):
+        code = generator().compile_src(DEALLOC_CLASS, "test.h", "test")
+        return balanced_block(code, "tp.tp_dealloc")
+
+    def test_storage_is_freed_on_the_exception_path(self):
+        body = self.dealloc_body()
+        tail = body[body.index("catch (...)"):]
+        tail = tail[len(balanced_block(tail, "catch (...)")):]
+        self.assertIn(
+            "tp_free", tail,
+            "the catch-all falls through to a plain `return`: an instance "
+            "whose destructor threw is never freed")
+
+    def test_the_ambient_exception_is_preserved(self):
+        body = self.dealloc_body()
+        self.assertIn("PyErr_Fetch", body)
+        self.assertIn("PyErr_Restore", body)
+
+    def test_a_failed_destructor_is_reported_unraisably(self):
+        # Not silently swallowed: a destructor that threw is still a defect,
+        # and sys.unraisablehook is where CPython reports what cannot be
+        # raised.  It just may not become the exception of an unrelated frame.
+        self.assertIn("PyErr_WriteUnraisable", self.dealloc_body())
+
+    def test_other_slots_are_untouched(self):
+        # The exception-state parking is specific to deallocation; a normal
+        # method must still raise into its caller.
+        code = render("void f(int a);\n")
+        self.assertNotIn("PyErr_Fetch", code)
+        self.assertNotIn("PyErr_WriteUnraisable", code)
+
+
 class TestRealHeadersStillParse(unittest.TestCase):
     """The hardening must not change how today's headers are read."""
 

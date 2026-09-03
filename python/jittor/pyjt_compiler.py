@@ -882,7 +882,12 @@ def compile_src(src, h, basename):
                 else:
                     assert "-> void" in func_head, func_head
                     arr_func_return.append(f"{func_call};{before_return}return")
-                    func_return_failed = "return"
+                    # `before_return` releases the instance (and its dict, if
+                    # it has one).  It has to run on the *failure* path too:
+                    # tp_dealloc is the only chance the storage ever gets, and
+                    # a destructor that throws used to fall through to a bare
+                    # `return`, leaking the object for the life of the process.
+                    func_return_failed = f"{before_return}return"
         # generate error msg when not a valid call
         error_log_code = generate_error_code_from_func_header(func_head, target_scope_name, name, dfs, basename ,h, class_info)
         func = f"""
@@ -972,6 +977,26 @@ def compile_src(src, h, basename):
                     "doc": ""
                 }
                 continue
+            if slot_name == "tp_dealloc":
+                # A deallocator may not change the interpreter's exception
+                # state.  CPython calls it from arbitrary points -- including
+                # while another exception is propagating -- and there is no
+                # caller to report to, so an error set here surfaces at
+                # whatever unrelated bytecode runs next.  Park what was in
+                # flight, run the body, put it back.
+                func = f"""
+            [](PyObject* self) -> void {{
+                PyObject *_dealloc_type, *_dealloc_value, *_dealloc_tb;
+                PyErr_Fetch(&_dealloc_type, &_dealloc_value, &_dealloc_tb);
+                ({func})(self);
+                // A destructor that failed is still a defect, so it is
+                // reported rather than swallowed -- sys.unraisablehook is
+                // where CPython puts what cannot be raised.  `self` has been
+                // freed by now, so nothing may look at it: pass nullptr.
+                if (PyErr_Occurred()) PyErr_WriteUnraisable(nullptr);
+                PyErr_Restore(_dealloc_type, _dealloc_value, _dealloc_tb);
+            }}
+            """
             class_slots_code.append(f"""
             tp.{slot_name} = {func};
             """)

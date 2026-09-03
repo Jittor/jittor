@@ -134,6 +134,18 @@ namespace jittor
 
 #define CHECK_ACL(x) ASSERTop(x, ==, 0)
 
+// Shutdown-only variant. ASSERTop throws, and a throw that leaves a destructor
+// is std::terminate -- so during teardown we report and carry on. Same shape as
+// HCCLCHECK_PEEK (hccl/inc/hccl_wrapper.h) and peekCudaErrorsAlways
+// (cuda/inc/helper_cuda.h).
+#define CHECK_ACL_PEEK(x)                                                   \
+    do {                                                                    \
+        auto _acl_r = (x);                                                  \
+        if (_acl_r != 0)                                                    \
+            LOGe << "acl error during shutdown, ignored:" << #x             \
+                 << "retcode:" << _acl_r;                                   \
+    } while (0)
+
     void mallocWorkSpace(uint64_t size)
     {
         uint64_t alloc_size = size + 32;
@@ -206,7 +218,7 @@ namespace jittor
             // CHECK_ACL(aclrtUnSubscribeReport(acl_jittor_tid, 0));
             aclrtDestroyStream(aclstream);
             aclrtResetDevice(deviceId);
-            CHECK_ACL(aclFinalize());
+            CHECK_ACL_PEEK(aclFinalize());
             if (nowWorkSpaceSize > 0)
             {
                 aclrtFree(workspaceAddr);
