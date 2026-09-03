@@ -470,7 +470,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 10.12 | `retry` 装饰器记录并上报重试次数 | 已合并 | gates | 402d09ef。恢复成功与最终失败均报告准确 retries/attempts，并暴露调用、最近和累计重试计数；保留原异常并支持 kwargs。聚焦结构 8 passed |
 | 10.13 | marker 真正建立 `-m "not slow"` 快门禁或删除 | 待领 | | |
 | 10.14 | notebook 门禁按 topic 参数化 | 已合并 | gates | 828bc272。fence/materialize/CPU smoke 生成独立 topic nodeid，smoke 共享模块级缓存；33/117 个 skip-execution 单元均带原因标签且低于 35% 上限。50 tests collected，结构/标签 20 passed，单 topic materialize 1 passed |
-| 10.15 | 速度 harness 记录并断言两侧线程数、亲和掩码与精度策略 | 待领 | | |
+| 10.15 | 速度 harness 记录并断言两侧线程数、亲和掩码与精度策略 | 已合并 | gates | 9047897a。runner报告实际线程环境、affinity、runtime线程数与精度，harness要求两侧一致；速度类默认至少10次。纯结构契约3 passed、运行文件语法检查通过，未执行大模型 |
 | 10.16 | 提供计时 API | 待领 | | |
 | 10.17 | 异步错误 | 待领 | | |
 | 10.18 | 结构测试预算转向核心 | 待领 | | |
