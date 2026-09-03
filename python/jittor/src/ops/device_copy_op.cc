@@ -33,7 +33,7 @@ DeviceCopyOp::DeviceCopyOp(Var* x, int device) : x(x), device(device) {
     // Op::init must leave the placement alone.
     set_flag(OpFlags::_manual_device);
     int count = get_device_count();
-    CHECK(device >= -1 && (device < 0 || count == 0 || device < count))
+    USER_CHECK(device >= -1 && (device < 0 || count == 0 || device < count))
         << "Invalid CUDA device index" << device >> ", visible device count is" << count;
     y = create_output(nullptr, x->dtype());
     y->device_id = device < 0 ? x->device_id : device;

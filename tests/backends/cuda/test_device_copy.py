@@ -113,7 +113,7 @@ class TestDeviceCopy(_DeviceCase):
 
     def test_invalid_device_is_rejected(self):
         x = jt.array(np.ones(4, "float32"))
-        with self.assertRaises(Exception):
+        with self.assertRaisesRegex(RuntimeError, "Invalid CUDA device index"):
             x.to_device(_device_count() + 3)
 
     def test_copy_from_a_pending_source(self):
