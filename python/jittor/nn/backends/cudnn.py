@@ -73,7 +73,7 @@ _CUDNN_3D_HALF_DTYPES = ("float16", "bfloat16")
 
 def _cudnn_conv3d_fp16_safe(op, x, weight, *args):
     xd, wd = str(x.dtype), str(weight.dtype)
-    half = xd if xd in jt.nn._CUDNN_3D_HALF_DTYPES else (wd if wd in jt.nn._CUDNN_3D_HALF_DTYPES else None)
+    half = xd if xd in _CUDNN_3D_HALF_DTYPES else (wd if wd in _CUDNN_3D_HALF_DTYPES else None)
     if half is None:
         return op(x, weight, *args)
     if os.environ.get("JITTOR_CUDNN3D_HALF_NATIVE", "1") != "0":

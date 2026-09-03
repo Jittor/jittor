@@ -181,7 +181,7 @@ def instance_norm(x,
             "stay at their initial values and eval-mode normalisation silently "
             "uses per-sample statistics instead of the tracked ones")
     dims = list(range(2,x.ndim))
-    xhat = jt.nn._ln_normalize(x, dims, eps)   # stable custom backward, see _ln_normalize
+    xhat = _ln_normalize(x, dims, eps)   # stable custom backward, see _ln_normalize
     weight = 1.0 if weight is None else weight
     bias = 0.0 if bias is None else bias
     return _affine(xhat, weight, bias, x.shape[1], x.ndim)
@@ -217,7 +217,7 @@ def _ln_function_cls(dims, eps):
 def _ln_normalize(x, dims, eps):
     # Cache the immutable Function class by reduction axes and epsilon. A fresh
     # Function instance/tape is still created by apply() for every invocation.
-    cls = jt.nn._ln_function_cls(tuple(dims), float(eps))
+    cls = _ln_function_cls(tuple(dims), float(eps))
     return cls.apply(x)
 
 
@@ -239,7 +239,7 @@ def group_norm(x,
     if fast is not None:
         return fast
     xg = x.reshape((N, num_groups, C//num_groups, -1))
-    xhat = jt.nn._ln_normalize(xg, [2,3], eps).reshape(output_shape)  # stable custom backward
+    xhat = _ln_normalize(xg, [2,3], eps).reshape(output_shape)  # stable custom backward
     return _affine(xhat, weight, bias, C, len(output_shape))
 
 
@@ -289,5 +289,5 @@ def layer_norm(
     )
     if fast is not None:
         return fast
-    xhat = jt.nn._ln_normalize(x, dims, eps)
+    xhat = _ln_normalize(x, dims, eps)
     return xhat * weight + bias

@@ -332,13 +332,18 @@ class TestLayerNorm(Base):
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     def test_ln_no_grad_cuda_fast_path_float32_and_float16(self):
         rng = np.random.RandomState(218)
-        original = nn._ln_normalize
+        # Patch the module that DEFINES the composite path, not the jt.nn
+        # facade that re-exports it. layer_norm() calls its own module-local
+        # name (task 5.22), so a facade-level patch would no longer intercept
+        # anything -- and this test would keep passing while measuring nothing.
+        from jittor.nn.functional import normalization as _normalization
+        original = _normalization._ln_normalize
 
         def reject_composite(*args, **kwargs):
             raise AssertionError("CUDA no-grad LayerNorm missed its fused path")
 
         try:
-            nn._ln_normalize = reject_composite
+            _normalization._ln_normalize = reject_composite
             with jt.flag_scope(use_cuda=1), jt.no_grad():
                 x = rng.randn(2, 8, 32).astype("float32")
                 w = rng.randn(32).astype("float32")
@@ -381,7 +386,7 @@ class TestLayerNorm(Base):
                             np.linalg.norm(ref.ravel()), 1e-30)
                         self.assertLessEqual(rel_l2, 5e-4, label)
         finally:
-            nn._ln_normalize = original
+            _normalization._ln_normalize = original
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     def test_ln_no_grad_cuda_scalar_affine_fast(self):

@@ -16,7 +16,7 @@ def softmax(x, dim=None, log=False):
     # ``_get_softmax_dim`` (NOT a reduction over all elements). Passing an
     # explicit ``dim`` keeps the previous behavior unchanged.
     if dim is None:
-        dim = jt.nn._get_softmax_dim(x.ndim)
+        dim = _get_softmax_dim(x.ndim)
     from jittor.nn.backends import softmax_cuda
 
     if softmax_cuda.can_softmax_v1(x, dim) and jt.compiler.is_cuda:

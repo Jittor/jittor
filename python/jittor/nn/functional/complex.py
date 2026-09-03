@@ -86,40 +86,40 @@ def _real2_to_complex64_raw(x):
 
 class _Complex64ToReal2(jt.Function):
     def execute(self, z):
-        return jt.nn._complex64_to_real2_raw(z)
+        return _complex64_to_real2_raw(z)
 
     def grad(self, g):  # adjoint of view_as_real is view_as_complex
-        return jt.nn._real2_to_complex64_raw(g)
+        return _real2_to_complex64_raw(g)
 
 
 class _Real2ToComplex64(jt.Function):
     def execute(self, x):
-        return jt.nn._real2_to_complex64_raw(x)
+        return _real2_to_complex64_raw(x)
 
     def grad(self, g):  # adjoint of view_as_complex is view_as_real
-        return jt.nn._complex64_to_real2_raw(g)
+        return _complex64_to_real2_raw(g)
 
 
 def _complex64_to_real2(z):
-    return jt.nn._Complex64ToReal2.apply(z)
+    return _Complex64ToReal2.apply(z)
 
 
 def _real2_to_complex64(x):
-    return jt.nn._Real2ToComplex64.apply(x)
+    return _Real2ToComplex64.apply(x)
 
 
 def polar(abs: jt.Var, angle: jt.Var) -> jt.Var:
     # torch.polar: magnitude `abs`, phase `angle` -> native complex64 (Phase 6 migration off
     # ComplexNumber). Differentiable through the P1 bridge.
     assert abs.shape == angle.shape
-    return jt.nn._real2_to_complex64(jt.stack([abs * angle.cos(), abs * angle.sin()], dim=-1))
+    return _real2_to_complex64(jt.stack([abs * angle.cos(), abs * angle.sin()], dim=-1))
 
 
 def view_as_complex(x: jt.Var) -> jt.Var:
     # torch.view_as_complex: real [..., 2] -> native complex64 (Phase 6 migration). Callers that
     # still need the legacy pair use nn.ComplexNumber(...) directly.
     assert x.shape[-1] == 2, f"view_as_complex expects last dim 2, got shape {x.shape}"
-    return jt.nn._real2_to_complex64(x)
+    return _real2_to_complex64(x)
 
 
 def view_as_real(x) -> jt.Var:
@@ -130,7 +130,7 @@ def view_as_real(x) -> jt.Var:
     assert "complex" in str(x.dtype), (
         f"view_as_real expects a complex64 Var or ComplexNumber, got dtype {x.dtype}"
     )
-    return jt.nn._complex64_to_real2(x)
+    return _complex64_to_real2(x)
 
 
 def _var_real(self):

@@ -105,9 +105,10 @@ def bmm_transpose(a, b):
     # the reduce in the generic path below to keep its input dtype rather than
     # accumulate in float32, so leaving it off here made the same product depend
     # on which of the two names the caller reached for.
-    with jt.flag_scope(amp_reg=jt.flags.amp_reg | 36):
+    with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce
+                      | jt.amp_flags.reduce16_no_fp32_acc):
         if _cublas_can_take(a, b):
-            a, b = jt.nn._broadcast_batch_dims(a, b)
+            a, b = _broadcast_batch_dims(a, b)
             return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 1)
         t = list(range(b.ndim))
         t[-1], t[-2] = t[-2], t[-1]
@@ -221,11 +222,11 @@ def matmul(a, b):
             return (a.broadcast(b, [-1]) * b).sum(0)
         if len_a == 2 and len_b == 2:
             # a: [n, m], b: [m, k], c: [n, k]
-            a_base = jt.nn._transpose_base_last2(a)
-            b_base = jt.nn._transpose_base_last2(b)
+            a_base = _transpose_base_last2(a)
+            b_base = _transpose_base_last2(b)
             aa = a_base if a_base is not None else a
             bb = b_base if b_base is not None else b
-            fast = jt.nn._matmul_2d_cublas(
+            fast = _matmul_2d_cublas(
                 aa,
                 bb,
                 1 if a_base is not None else 0,
@@ -240,13 +241,13 @@ def matmul(a, b):
             # the reindex path below (broadcast * multiply + sum-reduce), which the native
             # complex kernels support on both CPU and CUDA.
             if _cublas_can_take(a, b):
-                a_base = jt.nn._transpose_base_last2(a)
-                b_base = jt.nn._transpose_base_last2(b)
+                a_base = _transpose_base_last2(a)
+                b_base = _transpose_base_last2(b)
                 if a_base is not None:
                     a = a_base
                 if b_base is not None:
                     b = b_base
-                a, b = jt.nn._broadcast_batch_dims(a, b)
+                a, b = _broadcast_batch_dims(a, b)
                 return jt.compile_extern.cublas_ops.cublas_batched_matmul(
                     a, b, 1 if a_base is not None else 0, 1 if b_base is not None else 0
                 )
@@ -257,13 +258,13 @@ def matmul(a, b):
             # every transformer -- ran as that generic kernel at roughly a
             # fortieth of oneDNN's throughput.
             if _mkl_batched_matmul_is_available(a, b):
-                a_base = jt.nn._transpose_base_last2(a)
-                b_base = jt.nn._transpose_base_last2(b)
+                a_base = _transpose_base_last2(a)
+                b_base = _transpose_base_last2(b)
                 if a_base is not None:
                     a = a_base
                 if b_base is not None:
                     b = b_base
-                a, b = jt.nn._broadcast_batch_dims(a, b)
+                a, b = _broadcast_batch_dims(a, b)
                 return jt.compile_extern.mkl_ops.mkl_batched_matmul(
                     a, b, 1 if a_base is not None else 0, 1 if b_base is not None else 0
                 )

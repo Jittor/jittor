@@ -31,10 +31,10 @@ def _interpolate(img, x, y, ids, mode):
         n, c, h, w = img.shape
         fx, fy = x.floor_int(), y.floor_int()
         dix, diy = x - fx, y - fy
-        ax, ay = jt.nn._bicubic(dix + 1, -0.75, 2), jt.nn._bicubic(diy + 1, -0.75, 2)
-        bx, by = jt.nn._bicubic(dix, -0.75, 1), jt.nn._bicubic(diy, -0.75, 1)
-        cx, cy = jt.nn._bicubic(1 - dix, -0.75, 1), jt.nn._bicubic(1 - diy, -0.75, 1)
-        dx, dy = jt.nn._bicubic(2 - dix, -0.75, 2), jt.nn._bicubic(2 - diy, -0.75, 2)
+        ax, ay = _bicubic(dix + 1, -0.75, 2), _bicubic(diy + 1, -0.75, 2)
+        bx, by = _bicubic(dix, -0.75, 1), _bicubic(diy, -0.75, 1)
+        cx, cy = _bicubic(1 - dix, -0.75, 1), _bicubic(1 - diy, -0.75, 1)
+        dx, dy = _bicubic(2 - dix, -0.75, 2), _bicubic(2 - diy, -0.75, 2)
         afx = jt.maximum(jt.minimum(fx - 1, h - 1), 0)
         afy = jt.maximum(jt.minimum(fy - 1, w - 1), 0)
         bfx = jt.maximum(jt.minimum(fx, h - 1), 0)
@@ -132,7 +132,7 @@ def resize(img, size, mode="nearest", align_corners=False, tf_mode=False):
             y = wid * (w / W) + (w / W * 0.5 - 0.5)
             if W > w:
                 y = y.clamp(0, w - 1)
-    return jt.nn._interpolate(img, x, y, (nid, cid), mode)
+    return _interpolate(img, x, y, (nid, cid), mode)
 
 
 def interpolate(
