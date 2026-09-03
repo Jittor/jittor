@@ -106,10 +106,11 @@ def skip(test_name=None, *, device_type=None, dtypes=None, reason="skipped"):
                         device_type=device_type, dtypes=dtypes)
 
 
-def xfail(test_name=None, *, device_type=None, dtypes=None, reason="expected failure"):
-    """A DecorateInfo that marks matching tests as expected-to-fail."""
-    import unittest
-    return DecorateInfo(unittest.expectedFailure, test_name,
+def xfail(test_name=None, *, device_type=None, dtypes=None, reason, raises):
+    """A strict xfail: fixing the defect produces XPASS and fails the gate."""
+    import pytest
+    return DecorateInfo(pytest.mark.xfail(
+        reason=reason, raises=raises, strict=True), test_name,
                         device_type=device_type, dtypes=dtypes)
 
 

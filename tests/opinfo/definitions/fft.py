@@ -28,14 +28,12 @@ unscaled (matches ``np.fft.fft``/``rfft``); ifft/irfft carry the 1/N (matches nu
 
 Complex output and the float64 gradcheck harness
 -------------------------------------------------
-``fft``/``ifft``/``rfft`` return a NATIVE complex64 Var. The generic gradcheck
-(``tests/_helpers/gradcheck.py``) keeps only outputs whose ``numpy().dtype.kind == "f"`` and
-raises "produced no floating-point output" otherwise -- it cannot differentiate a
-complex-valued forward, and the registry's ``_diff_plan`` also never selects a
-complex64 *input* as a differentiable leaf (``is_floating`` is False for complex). So
-these three are registered ``supports_autograd=False``: the FORWARD-vs-numpy check
-(the part the audit found missing) still runs and is the valuable coverage; the
-backward is left to the dedicated CUDA test until the harness grows complex gradcheck.
+``fft``/``ifft``/``rfft`` are differentiable and therefore enter the generic
+gradient batteries. They currently fail before the complex-output limitation is
+reached: gradcheck supplies float64 inputs, while the FFT path always assembles a
+complex64 result, so ``reinterpret_view`` rejects the doubled byte size. The six
+CPU gradcheck/gradgradcheck nodes are strict xfails below. They keep executing and
+will become gate-failing XPASS results when the dtype path is corrected.
 
 ``irfft`` is the exception that CAN be gradchecked here: it returns a *real* Var. To
 make the differentiated leaves real (and so the whole chain real-in/real-out), the op
@@ -48,7 +46,7 @@ numpy refs are adapted from the validated ``test_torch_compat_fft_einsum.py`` (w
 compares jittor's fft/ifft/rfft/irfft against ``np.fft.*``) and ``test_fft_op.py``.
 """
 from ._refs import *  # noqa: F401,F403  (make_tensor, SampleInput, refs, np, jt, nn, F)
-from ..core import OpInfo, UnaryUfuncInfo, BinaryUfuncInfo, ReductionOpInfo, skip
+from ..core import OpInfo, UnaryUfuncInfo, BinaryUfuncInfo, ReductionOpInfo, skip, xfail
 
 
 # ------------------------------------------------------------------- numpy refs
@@ -154,17 +152,34 @@ def sample_irfft(op_info, device, dtype, requires_grad):
 
 # --------------------------------------------------------------------- op_db
 
+def _complex_fft_grad_xfails(name):
+    root = "tests/ops/test_ops.py::TestGradientsCPU::"
+    failure = "float64 FFT output cannot reinterpret_view as complex64"
+    return (
+        xfail(
+            "test_gradcheck",
+            reason="{}test_gradcheck_{}: {}".format(root, name, failure),
+            raises=RuntimeError,
+        ),
+        xfail(
+            "test_gradgradcheck",
+            reason="{}test_gradgradcheck_{}: {}".format(root, name, failure),
+            raises=RuntimeError,
+        ),
+    )
+
+
 op_db = [
-    # ---- forward (complex output): pinned to numpy; backward not gradcheckable here ----
-    # supports_autograd=False -> the float64 gradcheck harness cannot differentiate a
-    # complex-valued forward (it keeps only kind=="f" outputs). The FORWARD-vs-np.fft
-    # check -- the audit's missing piece -- runs and is the coverage these add.
+    # ---- forward pinned to numpy; strict xfail keeps the known backward gap visible ----
     OpInfo("fft", op=jt.fft.fft, ref=fft_ref,
-           sample_inputs_func=sample_fft, supports_autograd=False),
+           sample_inputs_func=sample_fft,
+           decorators=_complex_fft_grad_xfails("fft")),
     OpInfo("ifft", op=jt.fft.ifft, ref=ifft_ref,
-           sample_inputs_func=sample_fft, supports_autograd=False),
+           sample_inputs_func=sample_fft,
+           decorators=_complex_fft_grad_xfails("ifft")),
     OpInfo("rfft", op=jt.fft.rfft, ref=rfft_ref,
-           sample_inputs_func=sample_rfft, supports_autograd=False),
+           sample_inputs_func=sample_rfft,
+           decorators=_complex_fft_grad_xfails("rfft")),
 
     # ---- irfft: real output, real differentiated leaves -> FULL backward coverage ----
     # The op is wrapped so its differentiated inputs are the two real halves of the

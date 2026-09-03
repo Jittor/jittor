@@ -161,6 +161,27 @@ def test_opinfo_error_battery_is_generated_only_for_declared_error_inputs():
     assert "coverage > 0.15" in ast.unparse(coverage)
 
 
+def test_opinfo_known_defects_use_strict_xfail_and_fft_gradients_stay_visible():
+    core_source = (TEST_ROOT / "opinfo" / "core.py").read_text(encoding="utf-8")
+    core_tree = ast.parse(core_source)
+    helper = next(node for node in core_tree.body
+                  if isinstance(node, ast.FunctionDef) and node.name == "xfail")
+    helper_source = ast.unparse(helper)
+    assert "pytest.mark.xfail(reason=reason, raises=raises, strict=True)" in helper_source
+    assert "reason, raises" in helper_source
+
+    fft_source = (TEST_ROOT / "opinfo" / "definitions" / "fft.py").read_text(
+        encoding="utf-8")
+    fft_entries = fft_source.split("op_db =", 1)[1].split(
+        'OpInfo(\n        "irfft"', 1)[0]
+    assert "supports_autograd=False" not in fft_entries
+    assert 'xfail(\n            "test_gradcheck"' in fft_source
+    assert 'xfail(\n            "test_gradgradcheck"' in fft_source
+    assert 'root = "tests/ops/test_ops.py::TestGradientsCPU::"' in fft_source
+    for name in ("fft", "ifft", "rfft"):
+        assert '_complex_fft_grad_xfails("{}")'.format(name) in fft_source
+
+
 def test_device_parity_has_a_narrow_integer_dtype_axis_and_fails_closed():
     source = (TEST_ROOT / "backends" / "parity" /
               "test_device_parity.py").read_text(encoding="utf-8")
