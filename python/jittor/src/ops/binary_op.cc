@@ -452,6 +452,27 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
     }
     #endif
 
+    if (!op.is_float() && x->dtype().is_int() && y->dtype().is_int()) {
+        auto ztype = binary_dtype_infer(op, x->ns, y->ns,
+            x->flag(VarFlags::_is_scalar), y->flag(VarFlags::_is_scalar));
+        if (ztype.is_float()) {
+            // The only way an integer pair promotes out of the integer types
+            // is the uint64-with-signed fallback (see int_dtype_promote), and
+            // then the kernel has to actually compute in float64. `add` and
+            // friends expand to a bare C++ `x + y` on the *operands'* types,
+            // so uint64 arithmetic would wrap first and only the wrapped
+            // result would be converted -- `uint64(1) + int64(-2)` would read
+            // 1.8e19 instead of -1. Cast the inputs, rather than teaching
+            // every expansion in type/common_op_type.cc to cast, which would
+            // rewrite the generated source of every binary op in the tree.
+            auto xp = make_unary(x, ztype);
+            auto yp = make_unary(y, ztype);
+            auto zp = make_binary(xp, yp, op);
+            forward(zp);
+            return;
+        }
+    }
+
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);
     set_type(OpType::element);

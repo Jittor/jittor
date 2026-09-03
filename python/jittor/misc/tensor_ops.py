@@ -1099,13 +1099,24 @@ jt.Var.unique_consecutive = unique_consecutive
 def hypot(a,b):
     return jt.sqrt(a.sqr()+b.sqr())
 
+#: One float multiply, not "int scalar times x, then divide".
+#:
+#: `180 * x` promotes by the *scalar* rule, which keeps x's dtype: on an
+#: integer input the multiply happens in that integer type and wraps
+#: (`180 * uint8(200)` is 88) before the division ever sees it. Folding the
+#: constant makes the single operation a float one, so an integer input lifts
+#: to the default float in one step -- which is also what torch's rad2deg
+#: returns for an integer tensor.
+_DEGREES_PER_RADIAN = 180.0 / np.pi
+_RADIANS_PER_DEGREE = np.pi / 180.0
+
 def rad2deg(x):
-    return 180 * x / np.pi
+    return x * _DEGREES_PER_RADIAN
 
 jt.Var.rad2deg = rad2deg
 
 def deg2rad(x):
-    return x * np.pi / 180.
+    return x * _RADIANS_PER_DEGREE
 
 jt.Var.deg2rad = deg2rad
 

@@ -290,6 +290,96 @@ inline NanoString int_dtype(int dsize_, bool is_unsigned=false) {
         (dsize_ == 1) ? ns_int16 : ns_int8;
 }
 
+//: `dsize_` of the widest integer that exists: 3, i.e. 2^3 = 8 bytes.
+constexpr int ns_max_int_dsize = 3;
+
+/** Promote two integer dtypes the way NumPy and Torch do.
+ *
+ * The rule this replaces was "widest byte count wins, and the result is
+ * unsigned only if both operands are": not a lattice, and it drops the sign of
+ * the signed operand whenever the unsigned one is at least as wide. So
+ * `uint8 + int8` came out `int8`, and `uint8(200) + int8(1)` -- which needs 201
+ * -- came out **-55**, with nothing said. `uint32 + int32` came out `int32`,
+ * losing the top half of the uint32 range the same way.
+ *
+ * The lattice: within one signedness the wider type wins. Across signedness the
+ * result must hold every value of *both*, and a signed type only covers an
+ * unsigned one that is strictly narrower -- so it takes one extra doubling
+ * beyond the unsigned operand. When that runs past int64 (any signed type mixed
+ * with uint64) no integer type is wide enough and the common type is float64,
+ * which is what NumPy does too.
+ *
+ * bool is a kind, not a width: it does not force a widening, it adopts the
+ * other operand's type. (`is_unsigned` is true for bool -- `std::is_unsigned`
+ * says so -- which is exactly why it has to be handled before the signedness
+ * test rather than falling into it.)
+ */
+inline NanoString int_dtype_promote(NanoString x, NanoString y) {
+    if (x.is_bool()) return y;
+    if (y.is_bool()) return x;
+    bool xu = x.is_unsigned(), yu = y.is_unsigned();
+    if (xu == yu)
+        return int_dtype(std::max(x.dsize_(), y.dsize_()), xu);
+    int unsigned_size = (int)(xu ? x.dsize_() : y.dsize_());
+    int signed_size = (int)(xu ? y.dsize_() : x.dsize_());
+    int size = std::max(signed_size, unsigned_size + 1);
+    if (size > ns_max_int_dsize) return ns_float64;
+    return int_dtype(size, false);
+}
+
+/** Does `op` refuse floating-point operands outright?
+ *
+ * The uint64 fallback above would hand these a float64 output, and the
+ * generated kernel (`x & y`, `x << y`) does not compile for doubles. They keep
+ * the older widest-type answer instead: there is no float meaning to fall back
+ * to, and `BinaryOp` already rejects float operands for them with a message.
+ */
+inline bool ns_is_integral_only(NanoString op) {
+    return op==ns_bitwise_and || op==ns_bitwise_or || op==ns_bitwise_xor ||
+        op==ns_left_shift || op==ns_right_shift;
+}
+
+/** The integer half of binary promotion, scalars included.
+ *
+ * A Python scalar is a "wrapped number": it never widens the tensor, it adopts
+ * the tensor's dtype. That is what the callers' `xscalar`/`yscalar` flags mean,
+ * and it is why the promotion lattice is only consulted when both sides are
+ * real operands.
+ */
+inline NanoString int_binary_dtype(NanoString op, NanoString x, NanoString y,
+                                   bool xscalar, bool yscalar) {
+    if (xscalar) return int_dtype(y.dsize_(), y.is_unsigned());
+    if (yscalar) return int_dtype(x.dsize_(), x.is_unsigned());
+    auto promoted = int_dtype_promote(x, y);
+    if (promoted.is_float() && ns_is_integral_only(op))
+        return int_dtype(std::max(x.dsize_(), y.dsize_()),
+                         x.is_unsigned() && y.is_unsigned());
+    return promoted;
+}
+
+/** The float half: what a python float scalar does to an integer operand.
+ *
+ * `float_dtype(dsize_, ...)` picks the float type by *byte width*, and with a
+ * scalar involved `dsize_` is the tensor's. For a float tensor that is right --
+ * float16 stays float16. For an *integer* tensor it is not: the scalar carries
+ * no width to promote to, so `uint8 * (1/255.)` became float16 (one byte ->
+ * float16) and `int64 * 2.0` became float64. Both are the default float dtype
+ * in Torch, which is what a wrapped number lifts an integer to.
+ */
+inline bool ns_scalar_lifts_int_to_default_float(
+        NanoString x, NanoString y, bool xscalar, bool yscalar) {
+    // The scalar must itself be a float -- that is what lifts the category --
+    // and the tensor must be an integer or a bool, i.e. carry no float width
+    // for the result to inherit. `int64 / 2` is deliberately not this case:
+    // there the float comes from the *operator*, and jittor follows numpy in
+    // giving it float64.
+    if (xscalar && !yscalar)
+        return x.is_float() && !y.is_float() && !y.is_complex();
+    if (yscalar && !xscalar)
+        return y.is_float() && !x.is_float() && !x.is_complex();
+    return false;
+}
+
 inline  NanoString dtype_infer(NanoString x, NanoString y, bool xscalar=false, bool yscalar=false) {
     if (x.is_complex() || y.is_complex()) return ns_complex64;  // complex propagates
     if (x.is_bool() && y.is_bool()) return ns_bool;
@@ -298,14 +388,12 @@ inline  NanoString dtype_infer(NanoString x, NanoString y, bool xscalar=false, b
     if (yscalar) dsize_ = x.dsize_();
     bool is_float = x.is_float() || y.is_float();
     bool has_bf16 = x==ns_bfloat16 || y==ns_bfloat16;
-    if (is_float)
+    if (is_float) {
+        if (ns_scalar_lifts_int_to_default_float(x, y, xscalar, yscalar))
+            return ns_float32;
         return float_dtype(dsize_, xscalar||yscalar, has_bf16);
-    else {
-        bool is_unsigned = x.is_unsigned() && y.is_unsigned();
-        if (xscalar) is_unsigned = y.is_unsigned();
-        if (yscalar) is_unsigned = x.is_unsigned();
-        return int_dtype(dsize_, is_unsigned);
     }
+    return int_binary_dtype(ns_add, x, y, xscalar, yscalar);
 }
 
 // @pyjt(binary_dtype_infer)
@@ -321,13 +409,12 @@ inline NanoString binary_dtype_infer(NanoString op, NanoString x, NanoString y, 
     if (is_float) {
         if (op.is_white() && !(amp_reg & amp_keep_white))
             return (dsize_ == 3) ? ns_float64 : ns_float32;
+        if (ns_scalar_lifts_int_to_default_float(x, y, xscalar, yscalar))
+            return ns_float32;
         return float_dtype(dsize_, xscalar||yscalar, has_bf16);
     } else {
         if (x.is_bool() && y.is_bool()) return ns_bool;
-        bool is_unsigned = x.is_unsigned() && y.is_unsigned();
-        if (xscalar) is_unsigned = y.is_unsigned();
-        if (yscalar) is_unsigned = x.is_unsigned();
-        return int_dtype(dsize_, is_unsigned);
+        return int_binary_dtype(op, x, y, xscalar, yscalar);
     }
 }
 

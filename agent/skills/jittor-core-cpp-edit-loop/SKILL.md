@@ -88,6 +88,34 @@ assert [first] * 8 == [var.item() for _ in range(8)]   # 修前会差最后一�
 **dtype 相关的测试必须钉死 dtype**：`jt.array(np.ones(4, "float64"))` 会静默变 float32，
 int64 变 int32。一律写 `jt.array(v, dtype="float64")`。
 
+**而且不能只有一个元素。** `_is_scalar` 这个 flag 曾经**按形状**设置：
+`py_array_op.cc` 里凡是 shape 为 `(1,)` 的 Var 都被标成"标量"，而标量在
+`binary_dtype_infer` 里**不参与类型提升**（它取另一边的 dtype）。后果是同一对
+dtype、同一组值，长度 1 与长度 2 走两条完全不同的代码路径：
+
+```python
+u1 = jt.array(np.array([200], "uint8"),   dtype="uint8")
+i1 = jt.array(np.array([1],   "int8"),    dtype="int8")
+u2 = jt.array(np.array([200,200], "uint8"), dtype="uint8")
+i2 = jt.array(np.array([1,1],     "int8"),  dtype="int8")
+(u1+i1).dtype, (u1+i1).numpy()   # 修前: int8,  [-55]     ← 标量路径
+(u2+i2).dtype, (u2+i2).numpy()   #        int16, [201 201] ← 提升格路径
+```
+
+所以：**测提升格用长度 ≥2 的数组；测标量规则用真正的 Python 数字**
+（`x * 2`、`x * 2.0`）。用长度 1 的数组写的"提升测试"证明的是标量规则，
+反过来也一样——两边都要写，否则改了一半会绿。
+
+## 5b. 别在别人跑着测试的时候动 `python/jittor/src/**`
+
+正在跑的测试会起子进程，子进程 `import jittor` 时发现源码变了就**重编核心**。
+这时候树里如果有一个还编不过的半成品 `.cc`，那些子进程全部编译失败，
+表现是**一批与你的改动毫无关系的用例失败**（上一次是 `test_signal_and_teardown`
+的 5 条加 `test_var_share_src` 1 条，全都在报 g++ 错误）。
+
+判据：失败输出里出现 `Run cmd failed: "/usr/bin/g++" ".../src/..."` 就是这一类，
+不要去查那些用例。把新文件挪出树、重跑那几条确认，再继续。
+
 ## 6. 一轮完整验证
 
 ```bash

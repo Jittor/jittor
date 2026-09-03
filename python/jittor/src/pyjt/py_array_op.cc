@@ -93,17 +93,24 @@ ArrayOp::ArrayOp(PyObject* obj) {
     // union can live on this frame -- it must not be shared with any other
     // conversion that might run in between.
     tmp_data_t scalar;
+    // Whether this Var came from a *scalar object* -- a python number or a
+    // zero-dimensional numpy value -- as opposed to merely having one
+    // element. See the _is_scalar assignment below.
+    bool from_scalar_object = false;
     if (PyFloat_CheckExact(obj)) {
         scalar.f32 = PyFloat_AS_DOUBLE(obj);
         args = {&scalar, 1, ns_float32};
+        from_scalar_object = true;
     } else
     if (PyLong_CheckExact(obj)) {
         scalar.i32 = PyLong_AsLong(obj);
         args = {&scalar, 1, ns_int32};
+        from_scalar_object = true;
     } else
     if (PyBool_Check(obj)) {
         scalar.i8 = obj == Py_True;
         args = {&scalar, 1, ns_bool};
+        from_scalar_object = true;
     } else
     if (Py_TYPE(obj) == &PyjtVarHolder.ht_type) {
         auto ptr = GET_RAW_PTR(VarHolder, obj);
@@ -120,8 +127,12 @@ ArrayOp::ArrayOp(PyObject* obj) {
         auto arr = (PyArray_Proxy*)obj;
         if (arr->nd)
             args.shape = NanoVector::make(arr->dimensions, arr->nd);
-        else
+        else {
+            // zero-dimensional: np.float32(1e8), np.array(5). A scalar that
+            // happens to carry a numpy dtype, not a one-element tensor.
             args.shape.push_back(1);
+            from_scalar_object = true;
+        }
         args.dtype = get_type_str(arr);
         if (is_c_style(arr)) {
             args.ptr = arr->data;
@@ -159,7 +170,26 @@ ArrayOp::ArrayOp(PyObject* obj) {
     int64 size = output->size;
     if (shape.size() == 1 && shape[0] == 1) {
         output->set_flag(VarFlags::_force_fuse);
-        output->set_flag(VarFlags::_is_scalar);
+        // _is_scalar means "a scalar, which does not take part in dtype
+        // promotion" (see binary_dtype_infer and tests/core/test_scalar_flag)
+        // -- and it also selects strict-IEEE codegen for scalar float32
+        // add/subtract (binary_op.cc) and lets a pending value follow the
+        // device of the operand it meets (op.cc).
+        //
+        // It used to be set for *any* one-element Var, which made a genuine
+        // one-element tensor stop carrying its own dtype: `jt.array(
+        // np.uint8([200])) + jt.array(np.int8([1]))` took the int8 side's type
+        // and answered -55, while the same pair with two elements promoted to
+        // int16 and answered 201. Same values, same dtypes, different answer,
+        // decided by the length -- and op.cc's own comment already said a real
+        // one-element tensor must not be swept in.
+        //
+        // Provenance, then: a python number or a zero-dimensional numpy value
+        // is a scalar; `np.uint8([200])` is a tensor with one element.
+        // _force_fuse stays length-based -- folding a one-element constant
+        // into the kernel is about size, not about where it came from.
+        if (from_scalar_object)
+            output->set_flag(VarFlags::_is_scalar);
         set_type(OpType::element);
     }
     void* host_ptr = nullptr;
