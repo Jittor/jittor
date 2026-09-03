@@ -489,3 +489,9 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `8.06`：`1e8e90c6` 为 `aclnn.h` 增加 `#pragma once`，新增重复包含静态合同，1 passed；本机无 CANN/NPU，仍待 Ascend 910B3 实机。
 - `2.19`：`45f77257`/`f76e3b90` 将 CUB argsort/arg_reduce 的 offsets dtype 边界改为 `USER_CHECK` 并记录 int64 负向与双 nvcc TU 语法通过；本机无 CUDA，仍待设备负向运行。
 - `7.03`：`8647dc4d` 将 `pairwise_distance` 提升为模块级稳定对象并登记 conservative approximate fidelity；身份、metadata、CPU p=2/keepdim 三节点通过。
+
+### 2026-09-04 第四十四波补充证据
+
+- `8.06`：`553b5ec1` 将 SiLU forward owner 接入共享 launcher，backward/Swish/SwiGlu 保持原路径；结构合同 31 passed，本机无 CANN/NPU，仍待 Ascend 910B3 实机。
+- `2.19`：`a3890dd9`/`b8e1f592` 将 cuDNN convolution forward 格式边界改为 `USER_CHECK`；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向，累计 80 处。
+- `7.03`：`4a31179c` 将 `cosine_similarity` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；`py_compile`/diff-check 通过，三节点动态测试因首次 JIT 编译过久终止，未宣称通过。
