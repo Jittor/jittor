@@ -25,7 +25,7 @@ class nvtx_scope:
 
     Example::
 
-        from jittor.utils.nvtx import nvtx_scope
+        from jittor.tools.nvtx import nvtx_scope
         with nvtx_scope("model"):
             ...
 

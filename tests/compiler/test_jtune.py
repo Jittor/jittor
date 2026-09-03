@@ -27,10 +27,11 @@ class TestJtune(unittest.TestCase):
             c.sync()
         assert len(rep) == 2
         self.fname = rep[1][1]
-        self.jtune_path = os.path.join(jt.flags.jittor_path, "utils/jtune.py")
+        self.jtune_path = os.path.join(jt.flags.jittor_path, "tools/jtune.py")
 
     def run_cmd(self, cmd):
-        # jtune.py imports jittor, so the child has to reach *this* checkout.
+        # jtune.py is run out of the package under test, so the child has to
+        # reach *this* checkout.
         cmd = f"warmup=0 rerun=0 {PYTHON} {self.jtune_path} {self.fname} {cmd}"
         return shell(cmd, merge_stderr=True, check=True).stdout
 

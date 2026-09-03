@@ -1,15 +1,28 @@
-# how to run:
-# docker run -v "${HOME}/Documents/jittor-blog":/srv/jittor-blog -v /home/jittor/Documents/site:/mnt/jittor-blog -e LC_ALL=C.UTF-8 --rm jittor-blog-compiler bash -c "jekyll build --baseurl=JITTOR_BASEURL -d /mnt/jittor-blog/ && chmod -R 777 /mnt/jittor-blog"
-# python /home/jittor/Documents/jittor-blog/local_doc_builder.py
+"""Rewrite an already-built jittor-blog site for offline, file:// browsing.
+
+This does not build anything in this repository. It post-processes the output
+of the separate jittor-blog Jekyll site, which is built with the placeholder
+``JITTOR_BASEURL`` as its base URL, and turns every occurrence of that
+placeholder into a relative path ending in ``index.html`` -- plus protocol
+relative ``//`` links into ``http://`` -- so the tree opens without a server.
+
+It came out of ``python/jittor/utils/`` (task 5.25), where it was shipped
+inside the wheel and chdir'd into one machine's home directory on import. The
+site directory is now an argument.
+
+    # build the site with the placeholder base URL, then:
+    python tools/docs/local_doc_builder.py <site-output-dir>
+"""
 
 import os
+import sys
 
-os.chdir("/home/jittor/Documents/site")
+BASE_URL_PLACEHOLDER = "JITTOR_BASEURL"
 
 def check(dirname, fname):
     with open(os.path.join(dirname, fname), 'r') as f:
         src = f.read()
-    ac = "JITTOR_BASEURL"
+    ac = BASE_URL_PLACEHOLDER
     rep = (
         ("href=\"//", "href=\"http://"), 
         ("src=\"//", "src=\"http://"),
@@ -62,11 +75,21 @@ def check(dirname, fname):
     with open(os.path.join(dirname, fname), 'w') as f:
         f.write(new_src)
 
-for r, _, f in os.walk('.'):
-    for fname in f:
-        ext = fname.split('.')[-1]
-        if ext not in ['html', 'css', 'js']:
-            continue
-        # print(r, fname)
-        check(r, fname)
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if len(argv) != 1:
+        print(__doc__, file=sys.stderr)
+        return 2
+    os.chdir(argv[0])
+    for r, _, f in os.walk('.'):
+        for fname in f:
+            ext = fname.split('.')[-1]
+            if ext not in ['html', 'css', 'js']:
+                continue
+            check(r, fname)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
 

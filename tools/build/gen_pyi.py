@@ -18,7 +18,11 @@ In detail, autocompletion of the following functions are supported.
 Prerequisite:
 - mypy for automatic stub generation, installation: pip install mypy
 
-Usage: python3 -m jittor.utils.gen_pyi
+Usage: python3 tools/build/gen_pyi.py
+
+This is a repository tool: it regenerates a file that is committed and
+shipped (``python/jittor/__init__.pyi``), so it runs against a checkout
+and does not belong inside the installed package.
 
 """
 
