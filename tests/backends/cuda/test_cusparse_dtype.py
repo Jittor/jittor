@@ -25,6 +25,7 @@ import numpy as np
 import jittor as jt
 
 from _helpers.logs import find_log_with_re
+from _helpers.assertions import expect_error
 
 
 cusparse_ops = None
@@ -58,6 +59,36 @@ class TestCusparseDtype(unittest.TestCase):
     after the cast, so a dtype the array layer narrows on the way in cannot be
     mistaken for a backend error.
     """
+
+    def test_csr_rejects_non_float_input(self):
+        with jt.flag_scope(use_cuda=1, lazy_execution=0):
+            output = jt.zeros((2, 2), dtype="int32")
+            x = jt.ones((2, 2), dtype="int32")
+            values = jt.ones((2,), dtype="int32")
+            indices = jt.array([0, 1], dtype="int32")
+            offsets = jt.array([0, 1, 2], dtype="int32")
+            expect_error(
+                lambda: cusparse_ops.cusparse_spmmcsr(
+                    output, x, indices, values, offsets,
+                    2, 2, False, False),
+                exc_type=RuntimeError,
+                match="spmm needs a float dtype",
+            )
+
+    def test_csr_rejects_mixed_input_dtypes(self):
+        with jt.flag_scope(use_cuda=1, lazy_execution=0):
+            output = jt.zeros((2, 2), dtype="float32")
+            x = jt.ones((2, 2), dtype="float32")
+            values = jt.ones((2,), dtype="float64")
+            indices = jt.array([0, 1], dtype="int32")
+            offsets = jt.array([0, 1, 2], dtype="int32")
+            expect_error(
+                lambda: cusparse_ops.cusparse_spmmcsr(
+                    output, x, indices, values, offsets,
+                    2, 2, False, False),
+                exc_type=RuntimeError,
+                match="same dtype",
+            )
 
     def _csr_case(self, dtype, tol):
         rows = cols = 6

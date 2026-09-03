@@ -20,8 +20,8 @@ CusparseSpmmcsrOp::CusparseSpmmcsrOp(Var* outputVar_, Var* x_, Var* col_indices_
     set_flag(OpFlags::_cpu, 0); 
     set_flag(OpFlags::_manual_set_vnbb);
     // The check now says what the message always claimed; see the COO variant.
-    ASSERT(x->dtype().is_float()) << "spmm needs a float dtype, got" << x->dtype();
-    ASSERT(x->dtype() == outputVar->dtype() && x->dtype() == value->dtype())
+    USER_CHECK(x->dtype().is_float()) << "spmm needs a float dtype, got" << x->dtype();
+    USER_CHECK(x->dtype() == outputVar->dtype() && x->dtype() == value->dtype())
         << "spmm needs x, values and output of the same dtype, got"
         << x->dtype() << value->dtype() << outputVar->dtype();
     output = create_output(nullptr, x->dtype());
