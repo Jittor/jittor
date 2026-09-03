@@ -118,10 +118,10 @@ VarPtr ArgsortOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void ArgsortOp::infer_shape() {
-    CHECKop(dim,>=,0) << "Invalid dim for argsort op: dim out of range, expected dim in ["
+    USER_CHECKop(dim,>=,0) << "Invalid dim for argsort op: dim out of range, expected dim in ["
         >> -(int)x->shape.size() >> ", " >> (int)x->shape.size()-1
         >> "] for input with shape" << x->shape >> ".";
-    CHECKop(dim,<,(int)x->shape.size()) << "Invalid dim for argsort op: dim out of range, expected dim in ["
+    USER_CHECKop(dim,<,(int)x->shape.size()) << "Invalid dim for argsort op: dim out of range, expected dim in ["
         >> -(int)x->shape.size() >> ", " >> (int)x->shape.size()-1
         >> "] for input with shape" << x->shape >> ".";
     y->set_shape(x->shape);

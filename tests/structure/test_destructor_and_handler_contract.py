@@ -38,7 +38,8 @@ SOURCE_ROOTS = (
 #: `peek...Always` spellings deliberately do not appear: they are the answer.
 THROWING = re.compile(
     r"\b(LOGf|ASSERTop|ASSERT|CHECKop|CHECK|CHECK_ACL|HCCLCHECK"
-    r"|checkCudaErrors|throw)\b")
+    r"|USER_ERROR|USER_CHECKop|USER_CHECK|INTERNAL_ERROR"
+    r"|INTERNAL_ASSERTop|INTERNAL_ASSERT|checkCudaErrors|throw)\b")
 
 #: `~name(args) {` -- with or without a `Class::` prefix.  A declaration
 #: (`~Foo();`) has no body and is not matched.
@@ -124,6 +125,8 @@ def test_no_destructor_reports_by_throwing():
 #: interrupted the allocator.  `sig_write*` and `_exit` are what remains.
 UNSAFE_IN_HANDLER = re.compile(
     r"\b(LOGf|LOGe|LOGw|LOGi|LOGv|ASSERT|ASSERTop|CHECK|CHECKop"
+    r"|USER_ERROR|USER_CHECKop|USER_CHECK|INTERNAL_ERROR"
+    r"|INTERNAL_ASSERTop|INTERNAL_ASSERT"
     r"|std::cerr|std::cout|ostringstream|printf|fprintf|malloc|free"
     r"|dladdr|backtrace_symbols|system)\s*(?:\(|<<)")
 

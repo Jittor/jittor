@@ -159,6 +159,27 @@ struct LogVoidify {
     inline void operator&&(Log& log) { log.end(); }
 };
 
+struct JittorError : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
+struct UserError : JittorError {
+    using JittorError::JittorError;
+};
+
+struct InternalInvariantError : JittorError {
+    using JittorError::JittorError;
+};
+
+template <class Error>
+struct LogErrorVoidify {
+    inline void operator&&(Log& log) {
+        log.flush();
+        if (g_supports_color) log.out << log.color_end;
+        throw Error(log.out.str());
+    }
+};
+
 struct LogFatalVoidify {
     inline void operator&&(Log& log) {
         log.flush();
@@ -175,6 +196,40 @@ struct LogFatalVoidify {
 #define LOGw _LOGw(0)
 #define LOGe _LOGe(0)
 #define LOGf _LOGf(0)
+
+#define _TYPED_ERROR_IF(error_type, cond) \
+    !(cond) ? (void) 0 : \
+        jittor::LogErrorVoidify<error_type>() && \
+        jittor::Log(__FILELINE__, 'f', 0)
+
+// A caller supplied an unsupported value, shape, dtype, or index. This path
+// is part of the public API and is expected to be caught by the caller.
+#define USER_ERROR \
+    jittor::LogErrorVoidify<jittor::UserError>() && \
+        jittor::Log(__FILELINE__, 'f', 0)
+#define USER_CHECK(cond) \
+    _TYPED_ERROR_IF(jittor::UserError, PREDICT_BRANCH_NOT_TAKEN(!(cond))) \
+        << "User check failed: " #cond " "
+#define USER_CHECKop(a, op, b) \
+    _TYPED_ERROR_IF(jittor::UserError, !((a) op (b))) \
+        << "User check failed" \
+        << #a "(" >> a >> ") " #op " " #b "(" >> b >> ")"
+
+// The framework reached a state its own implementation says is impossible.
+// This remains a distinct exception while the legacy call sites are migrated,
+// so existing top-level diagnostics keep working without confusing it with a
+// recoverable user input error.
+#define INTERNAL_ERROR \
+    jittor::LogErrorVoidify<jittor::InternalInvariantError>() && \
+        jittor::Log(__FILELINE__, 'f', 0)
+#define INTERNAL_ASSERT(cond) \
+    _TYPED_ERROR_IF(jittor::InternalInvariantError, \
+        PREDICT_BRANCH_NOT_TAKEN(!(cond))) \
+        << "Internal invariant failed: " #cond " "
+#define INTERNAL_ASSERTop(a, op, b) \
+    _TYPED_ERROR_IF(jittor::InternalInvariantError, !((a) op (b))) \
+        << "Internal invariant failed" \
+        << #a "(" >> a >> ") " #op " " #b "(" >> b >> ")"
 
 #define _LOG(level, v) _LOG ## level(v)
 #define LOG(level) _LOG(level, 0)

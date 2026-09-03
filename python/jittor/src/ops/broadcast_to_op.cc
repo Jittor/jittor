@@ -34,7 +34,7 @@ BroadcastToOp::BroadcastToOp(Var* x, Var* y, NanoVector dims) : x(x), y(y) {
     auto ydim = std::max(x->shape.size(), y->shape.size()-count)+count;
     for (auto dim : dims) {
         if (dim<0) dim += ydim;
-        CHECK(dim>=0 && dim<ydim) << "Wrong dims number:" << dims;
+        USER_CHECK(dim>=0 && dim<ydim) << "Wrong dims number:" << dims;
         bcast_mask |= 1 << dim; 
     }
 }
@@ -87,7 +87,7 @@ BroadcastToOp::BroadcastToOp(Var* x, NanoVector shape, NanoVector dims) : x(x), 
     auto ydim = std::max(x->shape.size(), shape.size()-count)+count;
     for (auto dim : dims) {
         if (dim<0) dim += ydim;
-        CHECK(dim>=0 && dim<ydim) << "Wrong dims number:" << dims;
+        USER_CHECK(dim>=0 && dim<ydim) << "Wrong dims number:" << dims;
         bcast_mask |= 1 << dim;
     }
 }

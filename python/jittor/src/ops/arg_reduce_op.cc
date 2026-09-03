@@ -138,10 +138,10 @@ VarPtr ArgReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void ArgReduceOp::infer_shape() {
-    CHECKop(dim,>=,0) << "Invalid dim for arg_reduce op '" >> op.to_cstring()
+    USER_CHECKop(dim,>=,0) << "Invalid dim for arg_reduce op '" >> op.to_cstring()
         >> "': dim out of range, expected dim in [" >> -(int)x->shape.size()
         >> ", " >> (int)x->shape.size()-1 >> "] for input with shape" << x->shape >> ".";
-    CHECKop(dim,<,(int)x->shape.size()) << "Invalid dim for arg_reduce op '" >> op.to_cstring()
+    USER_CHECKop(dim,<,(int)x->shape.size()) << "Invalid dim for arg_reduce op '" >> op.to_cstring()
         >> "': dim out of range, expected dim in [" >> -(int)x->shape.size()
         >> ", " >> (int)x->shape.size()-1 >> "] for input with shape" << x->shape >> ".";
     NanoVector shape;

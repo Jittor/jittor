@@ -54,6 +54,11 @@ def check_backward(shape, op, dim, keepdims):
     assert np.allclose((gs * x).data, (gs * gs).data)
 
 class TestArgReduceOp(unittest.TestCase):
+    def test_invalid_dimension_is_a_catchable_user_error(self):
+        x = jt.array([[1.0, 2.0]])
+        with self.assertRaisesRegex(RuntimeError, "Invalid dim for arg_reduce"):
+            jt.arg_reduce(x, "max", 2, False)
+
     def test_backward(self):
         check_backward([5,5,5], 'min', 0, True)
         check_backward([5,5,5], 'min', 2, True)
