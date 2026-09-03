@@ -8,7 +8,6 @@
 #include "common.h"
 #include "misc/nano_string.h"
 #include "misc/nano_vector.h"
-#include "pybind/py_var_tracer.h"
 
 namespace jittor {
 
@@ -205,6 +204,28 @@ static_assert((int)NodeFlags::_node_order_high == (int)NodeFlags::_node_order_lo
 
 EXTERN_LIB int64 tflag_count;
 
+// Binding and diagnostic layers may observe node lifetime without making the
+// graph data structure depend on either of them. The observer is non-owning;
+// the registering layer must unregister it before the observer is destroyed.
+struct NodeLifecycleObserver {
+    virtual void node_created(Node*) = 0;
+    virtual void node_destroyed(Node*) = 0;
+    virtual ~NodeLifecycleObserver() = default;
+};
+
+EXTERN_LIB NodeLifecycleObserver* node_lifecycle_observer;
+NodeLifecycleObserver* set_node_lifecycle_observer(NodeLifecycleObserver* observer);
+
+inline void notify_node_created(Node* node) {
+    if (PREDICT_BRANCH_NOT_TAKEN(node_lifecycle_observer != nullptr))
+        node_lifecycle_observer->node_created(node);
+}
+
+inline void notify_node_destroyed(Node* node) {
+    if (PREDICT_BRANCH_NOT_TAKEN(node_lifecycle_observer != nullptr))
+        node_lifecycle_observer->node_destroyed(node);
+}
+
 struct Node {
     struct input_t;
     struct output_t;
@@ -338,7 +359,7 @@ struct Node {
             lived_nodes_id.erase(id);
             lived_nodes.erase((void*)this);
         }
-        if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var)) trace_data.release_node(this);
+        notify_node_destroyed(this);
     }
 
     inline Var* var() { return (Var*)this; }

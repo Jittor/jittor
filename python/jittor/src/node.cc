@@ -4,7 +4,6 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include "pybind/py_var_tracer.h"
 #include "mem/allocator.h"
 #include "node.h"
 #include "op.h"
@@ -23,6 +22,13 @@ unordered_map<void*, int64> lived_nodes;
 unordered_map<int64, Node*> lived_nodes_id;
 int64 total_node = 0;
 vector<Node*> free_buffer;
+NodeLifecycleObserver* node_lifecycle_observer = nullptr;
+
+NodeLifecycleObserver* set_node_lifecycle_observer(NodeLifecycleObserver* observer) {
+    NodeLifecycleObserver* previous = node_lifecycle_observer;
+    node_lifecycle_observer = observer;
+    return previous;
+}
 
 extern void free_var(Var* v);
 extern void free_var_mem(Var* v);

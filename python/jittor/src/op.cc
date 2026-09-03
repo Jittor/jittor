@@ -61,7 +61,7 @@ Op::Op() {
         OpFlags::_amp_nbits);
     number_of_lived_ops++;
     number_of_created_ops++;
-    if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var)) trace_data.record_node(this);
+    notify_node_created(this);
 }
 
 Op::~Op() {

@@ -33,6 +33,7 @@
 #include "utils/cache_compile.h"
 #include "var_holder.h"
 #include "mem/swap.h"
+#include "pybind/py_var_tracer.h"
 #include "mem/mem_info.h"
 
 namespace jittor {

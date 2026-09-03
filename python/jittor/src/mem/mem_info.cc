@@ -31,6 +31,7 @@
 #include "mem/mem_info.h"
 #include "mem/swap.h"
 #include "executor.h"
+#include "pybind/py_var_tracer.h"
 
 namespace jittor {
 

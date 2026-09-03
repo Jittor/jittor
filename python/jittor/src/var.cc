@@ -114,7 +114,7 @@ Var::Var(NanoVector shape, NanoString dtype)
     ASSERT(ns.is_dtype());
     number_of_lived_vars++;
     numel();
-    if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var)) trace_data.record_node(this);
+    notify_node_created(this);
 }
     
 string Var::to_string() {

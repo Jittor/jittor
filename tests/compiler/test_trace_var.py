@@ -61,6 +61,17 @@ class Linear(Module):
 
 
 class TestTraceVar(unittest.TestCase):
+    def test_lifecycle_observer_is_registered_by_trace_flag(self):
+        jt.clear_trace_data()
+        with jt.flag_scope(trace_py_var=2):
+            value = (jt.array([1.0]) + 2.0).sum()
+            value.sync()
+            data = jt.dump_trace_data()
+        jt.clear_trace_data()
+
+        self.assertTrue(data["node_data"])
+        self.assertTrue(data["execute_op_info"])
+
     def test_simple_model(self):
         with jt.flag_scope(trace_py_var=2):
 

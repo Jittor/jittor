@@ -19,11 +19,31 @@
 
 namespace jittor {
 
-DEFINE_FLAG(int, trace_py_var, 0, "Trace py stack max depth for debug.");
-DEFINE_FLAG(int, trace_var_data, 0, "Trace py stack max depth for debug.");
 Op* trace_grad_op = nullptr;
-
 TraceData trace_data;
+
+struct PyVarTraceLifecycleObserver final : NodeLifecycleObserver {
+    void node_created(Node* node) override { trace_data.record_node(node); }
+    void node_destroyed(Node* node) override { trace_data.release_node(node); }
+};
+
+static PyVarTraceLifecycleObserver py_var_trace_lifecycle_observer;
+
+DEFINE_FLAG_WITH_SETTER(int, trace_py_var, 0, "Trace py stack max depth for debug.");
+DEFINE_FLAG(int, trace_var_data, 0, "Trace py stack max depth for debug.");
+
+void setter_trace_py_var(const int&, const int& value) {
+    set_node_lifecycle_observer(value ? &py_var_trace_lifecycle_observer : nullptr);
+}
+
+struct PyVarTraceLifecycleCleanup {
+    ~PyVarTraceLifecycleCleanup() {
+        if (node_lifecycle_observer == &py_var_trace_lifecycle_observer)
+            set_node_lifecycle_observer(nullptr);
+    }
+};
+
+static PyVarTraceLifecycleCleanup py_var_trace_lifecycle_cleanup;
 int64 cnt = 0;
 
 static PyObject* my_import(const char* module_name, const char* attr) {

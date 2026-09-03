@@ -25,6 +25,7 @@
 #include "misc/deleter.h"
 #include "executor.h"
 #include "utils/str_utils.h"
+#include "pybind/py_var_tracer.h"
 
 namespace jittor {
 
