@@ -22,6 +22,7 @@ ROLL_SOURCE = ROOT / "python/jittor/extern/acl/aclops/roll_op_acl.cc"
 CLAMP_SOURCE = ROOT / "python/jittor/extern/acl/aclops/clamp_op_acl.cc"
 STACK_SOURCE = ROOT / "python/jittor/extern/acl/aclops/stack_op_acl.cc"
 FLIP_SOURCE = ROOT / "python/jittor/extern/acl/aclops/flip_op_acl.cc"
+CONCAT_SOURCE = ROOT / "python/jittor/extern/acl/aclops/concat_op_acl.cc"
 GATHER_SOURCE = ROOT / "python/jittor/extern/acl/aclops/gather_scatter_op_acl.cc"
 
 
@@ -213,6 +214,18 @@ def test_flip_uses_launcher_and_keeps_axes_setup():
     assert "checkRet(ret);" not in source
     assert "mallocWorkSpace(workspaceSize)" not in source
     assert "syncRun();" not in source
+
+
+def test_concat_forward_uses_launcher_and_split_remains_present():
+    source = CONCAT_SOURCE.read_text()
+    concat = source[source.index("void ConcatOpRunner::executeOp"):source.index("SplitWithSizeOpRunner::SplitWithSizeOpRunner")]
+    assert "aclCreateTensorList" in concat
+    assert "attr->dim" in concat
+    assert "launch(ret, aclnnCat, true);" in concat
+    assert "checkRet(ret);" not in concat
+    assert "mallocWorkSpace(workspaceSize)" not in concat
+    assert "syncRun();" not in concat
+    assert "void SplitWithSizeOpRunner::executeOp" in source
 
 
 def test_scatter_uses_launcher_and_keeps_axis_reduction_query():

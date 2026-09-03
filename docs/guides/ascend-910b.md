@@ -459,3 +459,6 @@ this migration slice.
 
 The ACL Scatter family uses the shared launcher while retaining axis/reduction
 handling and synchronous execution. Gather remains outside this slice.
+
+The ACL Concat family uses the shared launcher while retaining tensor-list and
+dimension handling. SplitWithSize is intentionally outside this slice.

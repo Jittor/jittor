@@ -46,17 +46,7 @@ namespace jittor
         auto concatTensorListInput = aclCreateTensorList(&concatTensorList[0], input_num);
         auto attr = dynamic_cast<ConcatAttr *>(op_attr.get());
         ret = aclnnCatGetWorkspaceSize(concatTensorListInput, attr->dim, outputTensors[0], &workspaceSize, &executor);
-        checkRet(ret);
-
-        if (workspaceSize > 0)
-        {
-            mallocWorkSpace(workspaceSize);
-        }
-
-        ret = aclnnCat(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnCat failed. ERROR: %d\n", name.c_str(), ret); return);
-
-        syncRun();
+        launch(ret, aclnnCat, true);
         return;
     }
 
