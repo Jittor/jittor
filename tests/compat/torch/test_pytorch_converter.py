@@ -19,7 +19,7 @@ def setUpModule():
     global torch, convert
     if not skip_this_test:
         (torch,) = import_torch_modules("torch")
-        from jittor.utils.pytorch_converter import convert as converter
+        from jittor.compat.pytorch_converter import convert as converter
         convert = converter
 
 code="""

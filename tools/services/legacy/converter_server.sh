@@ -59,7 +59,7 @@ while true; do
         --publish "0.0.0.0:${HOST_PORT}:5000" \
         --volume "$TLS_DIR:/https:ro" \
         "$IMAGE" \
-        bash -lc 'python -m pip install --no-cache-dir --upgrade jittor && python -m jittor.selftest && FLASK_APP=jittor.utils.converter_server python -m flask run --cert=/https/live/randonl.me/fullchain.pem --key=/https/live/randonl.me/privkey.pem --host=0.0.0.0'
+        bash -lc 'python -m pip install --no-cache-dir --upgrade jittor && python -m jittor.selftest && FLASK_APP=jittor.compat.converter_server python -m flask run --cert=/https/live/randonl.me/fullchain.pem --key=/https/live/randonl.me/privkey.pem --host=0.0.0.0'
     status=$?
     set -e
     if [[ "$status" -ne 0 && "$status" -ne 124 ]]; then

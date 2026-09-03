@@ -392,7 +392,7 @@ def pjmap_append(pytorch_func_name, pytorch_args, jittor_func_module, jittor_fun
         * `delete`: delete parameters
 
     example:
-        from jittor.utils.pytorch_converter import pjmap_append
+        from jittor.compat.pytorch_converter import pjmap_append
         pjmap_append(pytorch_func_name='AvgPool2d', 
                     pytorch_args='kernel_size, stride=None, padding=0, dilation=1, return_indices=False',
                     jittor_func_module='nn',
@@ -684,7 +684,7 @@ class Converter:
 def convert(code, ex_pjmaps=None):
     ''' Model code converter, example:
 
-    from jittor.utils.pytorch_converter import convert
+    from jittor.compat.pytorch_converter import convert
     pytorch_code = """
     class Model(nn.Module):
         def __init__(self):
