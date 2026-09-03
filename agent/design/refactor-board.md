@@ -78,12 +78,12 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | `70d97137` | **822 passed / 816 skipped / 0 failed**（50 分） | 未完成（运行中断） | 未开始 | 原生绿；收集总数 1540 → 1638，是有人加了测试 |
 | `a12d81c0` | 1039 passed / 866 skipped / **1 failed**（51 分） | 1207 passed / 536 skipped / **536 failed**（59 分） | 未跑 | 两套的失败**同一个根因**：并发编译读到写了一半的 `.s`（详见下方一行）。`passed` 两套都在涨，判据里下降的那一半没触发 |
 
-## 热点文件占有
+## 热点文件占有（历史）
 
 第一波（2026-09-02 21:xx 派出）：九个 agent 并行，各自独占一张卡/一段核/一个 worktree
 （`/home/zy/jittor-lab/refactor/<分区>`，分支 `wk/<分区>`，推送到 `2.0-refactor`）。
 
-| 分区 | 当前占有者 | 任务 |
+| 分区 | 第一波占有者（历史） | 任务 |
 | --- | --- | --- |
 | 核心节点 | coreops (2.01/2.02/2.03) | GPU3 c24-35 |
 | 执行器 | — |  |
@@ -257,8 +257,8 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 3.13 | 循环维度身份用整数向量，`range10` 不再被拆成 `range1*range0` | 已合并 | codegen | bd5b5a67，用例修正 e1717fe5 |
 | 3.14 | 两个同名 pass | 已合并 | codegen | 6c899325 |
 | 3.15 | 一次编译只解析一遍 | 已合并 | codegen | 97cac22f；“只解析一遍”实测不值得，见下方结论行 |
-| 3.16 | `token_replace_all` 不再用 CHECK 抛异常做循环终止 | 待领 | | |
-| 3.17 | 只用于代码生成的 JIT 区段与普通 C++ 分离 | 待领 | | |
+| 3.16 | `token_replace_all` 不再用 CHECK 抛异常做循环终止 | 已合并 | codegen | 9aa683c4。显式终止批量替换，非法模板不再被正常路径异常吞掉；新增 2、C++ TEST 46、CPU op_compiler 5、真实 CUDA GPU3 1 项通过 |
+| 3.17 | 只用于代码生成的 JIT 区段与普通 C++ 分离 | 已合并 | codegen | 2aa190af。KernelIR 逃逸 `_Pragma`，字符串/格式串保持原样，生成源码用 `#line` 指回原算子；C++ TEST 48、CPU/GPU3 自定义融合 op 各1项通过，未改 `jit_compiler.cc` |
 | 3.18 | 删掉 `asm_tuner` 链路 | 待领 | | cb853074、acfed956 已合入前置：普通 CPU kernel 先绕过旧包装，随后 clang 输出 store 改为 `__builtin_nontemporal_store`，删除 `asm_tuner.py`、文本指令和专属测试；真实 broadcast 数值/生成代码通过，clang 汇编有 `movntss`。但同一 broadcast 冷编译只从约 1.00s 降至 0.80s，普通小 kernel 也仅从 0.89s 降至 0.69s，均约 20-22%，未达到 ≥50% 验收，仍需继续降低 CPU kernel 冷编译成本 |
 | 3.19 | `event_queue` 异步基础设施修好并加测试，或删除 | 待领 | | |
 | 3.20 | 执行器提供「提交部分图」显式接口，`jt.grad` 与 `Function` 回调降开销，让反… | 待领 | | |
