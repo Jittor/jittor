@@ -15,10 +15,9 @@ Junk accumulated on the inside of the gate.
 
 What is left has one responsibility, and this file states it as a rule rather
 than a list: **a file may stay in ``utils/`` only while something outside
-Python reaches it by a hard-coded path or module name.** Four do. Each such
+Python reaches it by a hard-coded path or module name.** Three do. Each such
 test asserts both halves -- the file is there *and* the reference that pins it
-is there -- so when task 3.18 deletes the asm_tuner/dlink chain, this goes red
-and says the file may now move.
+is there, so removing a caller makes this go red and says the file may now move.
 
 Static only.
 """
@@ -168,15 +167,6 @@ class TestWhatStaysAndTheReferenceThatPinsIt(unittest.TestCase):
                     "(task 3.18), and this rule needs rewriting"
                     % (relative, needle, name))
 
-    def test_asm_tuner_is_pinned_by_the_jit_compiler_command_line(self):
-        self._pinned_by(
-            "asm_tuner.py",
-            ("src/jit_compiler.cc", 'jittor_path+"/utils/asm_tuner.py'))
-        source = _text(PACKAGE / "src" / "jit_compiler.cc")
-        guard = 'if (src.find("//@begin") != string::npos)'
-        self.assertIn(guard, source)
-        self.assertLess(source.index(guard), source.index("asm_tuner.py"))
-
     def test_dlink_compiler_is_pinned_by_the_jit_compiler_command_line(self):
         self._pinned_by(
             "dlink_compiler.py",
@@ -206,7 +196,7 @@ class TestWhatStaysAndTheReferenceThatPinsIt(unittest.TestCase):
         # home belongs in a package that states one.
         self.assertEqual(
             sorted(path.name for path in DRAWER.glob("*.py")),
-            ["asm_tuner.py", "dlink_compiler.py", "dumpdef.py", "tracer.py"],
+            ["dlink_compiler.py", "dumpdef.py", "tracer.py"],
             "python/jittor/utils holds only files something outside Python "
             "reaches by hard-coded path (task 5.25). Put new code in a package "
             "whose name says what it is for.")
@@ -214,7 +204,7 @@ class TestWhatStaysAndTheReferenceThatPinsIt(unittest.TestCase):
     def test_the_layout_document_still_pins_the_compiler_resources(self):
         doc = _text(REPO_ROOT / "docs" / "architecture" / "repository-layout.md")
         self.assertIn(
-            "python/jittor/utils/{asm_tuner.py,dlink_compiler.py,dumpdef.py}",
+            "python/jittor/utils/{dlink_compiler.py,dumpdef.py}",
             doc,
             "if the contract moved, this test and 5.25's remaining half both "
             "need rewriting")

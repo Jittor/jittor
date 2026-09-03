@@ -156,11 +156,7 @@ static void scan(KernelIR* node, LoopScan& out,
                 }
             continue;
         }
-        // A comment emits nothing. The asm tuner's `//@begin replace` markers
-        // ride along in the parallel copy too; the substitution they drive
-        // (ordinary stores to non-temporal ones) is a performance choice, so
-        // the worst case if outlining moves the code out of their reach is
-        // that it does not happen.
+        // Comments emit nothing and do not affect the loop proof.
         if (c->type == KernelIRType::comment) continue;
         if (c->type != KernelIRType::none) { out.usable = false; return; }
         const string& code = c->get_attr(kir::code);

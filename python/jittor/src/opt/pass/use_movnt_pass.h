@@ -14,8 +14,8 @@ namespace jittor {
 
 struct UseMovntPass : Pass {
     UseMovntPass() : Pass("use_movnt") {
-        reads = {};
-        writes = {};
+        reads = {kir::code};
+        writes = {kir::code};
     };
     void run() override;
 };

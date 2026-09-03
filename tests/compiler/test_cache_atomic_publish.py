@@ -49,10 +49,10 @@ int main(int argc, char** argv) {
     return executable
 
 
-@pytest.mark.parametrize("wrapper_name", ["asm_tuner.py", "dlink_compiler.py"])
-def test_wrapped_products_and_keys_are_replaced_atomically(
-        cache_compile_harness, tmp_path, wrapper_name):
+def test_dlink_products_and_keys_are_replaced_atomically(
+        cache_compile_harness, tmp_path):
     """Readers must never observe a truncated wrapper product or cache key."""
+    wrapper_name = "dlink_compiler.py"
     wrapper = tmp_path / wrapper_name
     wrapper.write_text(
         """#!/usr/bin/env python3
@@ -131,36 +131,6 @@ with open(output, "wb") as handle:
     )
     compiler.chmod(0o755)
     return compiler
-
-
-def test_asm_tuner_preserves_a_private_shared_library_output(
-        tmp_path, fake_compiler):
-    source = tmp_path / "kernel_op.cc"
-    source.write_text("int kernel = 1;\n", encoding="utf-8")
-    private_output = tmp_path / "kernel_op.so.tmp.123"
-    dependency = tmp_path / "kernel.d.tmp.123"
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(JITTOR / "utils" / "asm_tuner.py"),
-            "--cc_path=" + str(fake_compiler),
-            str(source),
-            "-shared",
-            "-MD",
-            "-MF",
-            str(dependency),
-            "-o",
-            str(private_output),
-        ],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-    assert result.returncode == 0, result.stdout
-    assert private_output.read_bytes() == b"complete product"
-    assert not (tmp_path / "kernel_op.so").exists()
-    assert "kernel_op.cc" in dependency.read_text(encoding="utf-8")
-    assert "kernel_op.s" not in dependency.read_text(encoding="utf-8")
 
 
 def test_dlink_preserves_a_private_shared_library_output(

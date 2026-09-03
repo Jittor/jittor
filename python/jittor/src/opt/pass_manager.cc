@@ -135,7 +135,6 @@ void PassManager::run_passes() {
     run_pass<VectorizePass>(has_pragma);
     run_pass<UnrollPass>(has_pragma);
     run_pass<UnrollPass>(has_pragma);
-    run_pass<UseMovntPass>();
     run_pass<CheckCachePass>();
     run_pass<LoopToFuncPass>();
     run_pass<AssumeAlignedPass>();
@@ -150,6 +149,9 @@ void PassManager::run_passes() {
     // Needs the accumulators above to already be in place: they are what makes
     // a reduction's iterations independent of one another.
     run_pass<CpuParallelPass>();
+    // Rewrite the final output stores after outlining/parallelization has used
+    // their ordinary assignment form to prove loop bounds.
+    run_pass<UseMovntPass>();
     
     run_pass<InsertProfileLoopPass>();
     

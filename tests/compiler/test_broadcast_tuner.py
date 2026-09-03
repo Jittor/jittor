@@ -45,5 +45,29 @@ class TestBroadcastTuner(unittest.TestCase):
     def test_broadcast_tuner(self):
         self.check(8192,8192, 0, 0, 0, 5, 0)
 
+    def test_use_movnt_is_emitted_as_a_compiler_intrinsic(self):
+        values = np.arange(4096, dtype=np.float32)
+        lhs = jt.array(values)
+        rhs = jt.ones((32, 4096), dtype="float32")
+        with jt.log_capture_scope(
+                log_v=0,
+                log_vprefix="jit_compiler.cc=1000",
+                compile_options={"test_movnt_intrinsic": 1}) as logs:
+            result = (rhs-lhs.broadcast_var(rhs)).numpy()
+
+        np.testing.assert_array_equal(result[7], 1-values)
+        generated = [
+            entry["msg"] for entry in logs
+            if "#define op2_OP subtract" in entry["msg"]
+            and "op2_zp[op2_i]" in entry["msg"]
+        ]
+        self.assertEqual(len(generated), 1, generated)
+        self.assertNotIn("//@begin", generated[0])
+        self.assertNotIn("//@end", generated[0])
+        if jt.flags.cc_type == "clang":
+            self.assertIn("__builtin_nontemporal_store", generated[0])
+        else:
+            self.assertIn("op2_zp[op2_i] =", generated[0])
+
 if __name__ == "__main__":
     unittest.main()
