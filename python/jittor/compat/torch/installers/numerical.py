@@ -7,6 +7,7 @@ changing the compatibility semantics.
 import jittor as jt
 from jittor import nn
 import numpy as np
+from collections import namedtuple as _namedtuple
 
 from ..functional import (
     _diff, _isin, _repeat_interleave, _trapz,
@@ -430,6 +431,35 @@ for _nan_reduction_name in ("nansum", "nanmean"):
 del _nan_reduction_name
 
 
+_AminMax = _namedtuple("aminmax", ["min", "max"])
+_AMINMAX_FIDELITY_DETAIL = (
+    "matches Torch min/max values for supported real tensor inputs but omits "
+    "device, layout, and out keyword semantics"
+)
+
+
+def _aminmax_impl(input, dim=None, keepdim=False):
+    if dim is None:
+        return _AminMax(input.min(), input.max())
+    return _AminMax(
+        input.min(dim, keepdims=keepdim),
+        input.max(dim, keepdims=keepdim),
+    )
+
+
+def aminmax(input, dim=None, keepdim=False):
+    """Return named minimum and maximum reductions."""
+    return _aminmax_impl(input, dim=dim, keepdim=keepdim)
+
+
+register_fidelity(
+    "torch.aminmax",
+    aminmax,
+    Fidelity.APPROXIMATE,
+    _AMINMAX_FIDELITY_DETAIL,
+)
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
@@ -821,12 +851,7 @@ def install(ctx):
         s, m = _std_mean(input, dim, unbiased, keepdim)
         return (s * s, m)
     _alias("var_mean", _var_mean)
-    _AMinMax = _collections.namedtuple("aminmax", ["min", "max"])
-    def _aminmax(input, dim=None, keepdim=False):
-        if dim is None:
-            return _AMinMax(input.min(), input.max())
-        return _AMinMax(input.min(dim, keepdims=keepdim), input.max(dim, keepdims=keepdim))
-    _alias("aminmax", _aminmax); Var.aminmax = _aminmax
+    _alias("aminmax", aminmax); Var.aminmax = _aminmax_impl
     def _quantile(input, q, dim=None, keepdim=False, interpolation="linear", **k):
         import numpy as _np_q
         arr = input.numpy()

@@ -463,6 +463,42 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         np.testing.assert_allclose(
             actual_mean, np.nanmean(values, axis=1, keepdims=True), rtol=1e-6)
 
+    def test_aminmax_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.aminmax))
+        self.assertIs(torch.aminmax, numerical.aminmax)
+        self.assertEqual(numerical.aminmax.__module__, numerical.__name__)
+        self.assertEqual(numerical.aminmax.__name__, "aminmax")
+
+    def test_aminmax_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.aminmax")
+        self.assertIs(record.implementation, numerical.aminmax)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("device", record.detail)
+        self.assertIn("out", record.detail)
+
+    def test_aminmax_cpu_full_dim_keepdim_and_var_match_numpy(self):
+        values = np.array([[1.0, 5.0, 3.0], [4.0, 2.0, 6.0]], dtype="float32")
+        with torch.flag_scope(use_cuda=0):
+            tensor = torch.array(values)
+            full = torch.aminmax(tensor)
+            dim = torch.aminmax(tensor, dim=1, keepdim=True)
+            method = tensor.aminmax(dim=0)
+        self.assertEqual(tuple(full.min.shape), ())
+        self.assertEqual(tuple(full.max.shape), ())
+        np.testing.assert_array_equal(full.min.numpy(), np.asarray(values.min()))
+        np.testing.assert_array_equal(full.max.numpy(), np.asarray(values.max()))
+        np.testing.assert_array_equal(
+            dim.min.numpy(), np.min(values, axis=1, keepdims=True))
+        np.testing.assert_array_equal(
+            dim.max.numpy(), np.max(values, axis=1, keepdims=True))
+        np.testing.assert_array_equal(method.min.numpy(), np.min(values, axis=0))
+        np.testing.assert_array_equal(method.max.numpy(), np.max(values, axis=0))
+
 
 if __name__ == "__main__":
     unittest.main()
