@@ -15,6 +15,13 @@ from ..context import registry_for
 from ...diagnostics import EXPECTED, swallowed
 from ... import collectives as _collectives
 from ... import fsdp_hooks as _fsdp_hooks
+from jittor.distributed.store import (
+    FileStore,
+    PrefixStore,
+    Store,
+    TCPStore,
+    rendezvous as _store_rendezvous,
+)
 
 
 class _JittorWork:
@@ -352,14 +359,34 @@ def _install_distributed(g, registry=None):
     if dist is None:
         dist = _types.ModuleType("torch.distributed")
         _modules["torch.distributed"] = dist
-    state = {"initialized": _native_distributed_active()}
+    state = {"initialized": _native_distributed_active(), "store": None}
     world_group = _JittorProcessGroup(name="world")
     pg_map = {world_group: (world_group._get_backend_name(),)}
 
     def _init_process_group(*args, **kwargs):
-        requested_world_size = int(
-            kwargs.get("world_size", os.environ.get("WORLD_SIZE", 1)))
-        requested_rank = int(kwargs.get("rank", os.environ.get("RANK", 0)))
+        rank_arg = kwargs.get("rank", -1)
+        world_arg = kwargs.get("world_size", -1)
+        init_method = kwargs.get(
+            "init_method", args[1] if len(args) > 1 else None
+        )
+        store = kwargs.get("store")
+        if store is not None and init_method is not None:
+            raise ValueError("init_process_group accepts store or init_method, not both")
+        if init_method is not None:
+            store, requested_rank, requested_world_size = next(
+                _store_rendezvous(
+                    init_method, rank=rank_arg, world_size=world_arg,
+                    timeout=kwargs.get("timeout"),
+                )
+            )
+        else:
+            requested_world_size = int(
+                os.environ.get("WORLD_SIZE", 1)
+                if int(world_arg) < 0 else world_arg
+            )
+            requested_rank = int(
+                os.environ.get("RANK", 0) if int(rank_arg) < 0 else rank_arg
+            )
         backend = kwargs.get("backend", args[0] if args else None)
         backend_name = str(backend).lower() if backend is not None else None
         if requested_world_size > 1 and not _native_distributed_active():
@@ -384,9 +411,15 @@ def _install_distributed(g, registry=None):
             if "rank" in kwargs and requested_rank != _distributed_rank():
                 raise RuntimeError("torch/Jittor distributed rank mismatch")
         state["initialized"] = True
+        state["store"] = store
         return None
 
     def _destroy_process_group(*args, **kwargs):
+        store = state.get("store")
+        close = getattr(store, "close", None)
+        if callable(close):
+            close()
+        state["store"] = None
         state["initialized"] = False
         return None
 
@@ -734,7 +767,7 @@ def _install_distributed(g, registry=None):
     c10d.is_ucc_available = dist.is_ucc_available
     c10d.ProcessGroup = dist.ProcessGroup
     c10d._get_default_group = lambda *a, **k: world_group
-    c10d._get_default_store = lambda *a, **k: None
+    c10d._get_default_store = lambda *a, **k: state["store"]
     c10d.Work = getattr(c10d, "Work", type("Work", (), {}))
     c10d.default_pg_timeout = getattr(c10d, "default_pg_timeout", None)
     import datetime as _datetime_c10d
@@ -931,93 +964,6 @@ def _install_distributed(g, registry=None):
         _m.ShardedTensor = ShardedTensor
         _modules[_m.__name__] = _m
 
-    def _require_single_rank_store(api, world_size=None):
-        """A store is a rendezvous point; this one is a per-process dict.
-
-        On one rank that IS a correct store -- there is nobody to meet -- so
-        single-process use stays exact. On more than one rank the old behaviour
-        was that every rank "found" the others instantly without exchanging a
-        byte and then proceeded as if the rendezvous had succeeded.
-        """
-        size = world_size if world_size is not None else _distributed_world_size()
-        try:
-            size = int(size)
-        except (TypeError, ValueError):
-            size = 1
-        if size <= 1:
-            return
-        from ...stub_policy import unimplemented
-        unimplemented(
-            api,
-            "back a %d-rank rendezvous with a per-process dictionary, so every "
-            "rank meets nobody and immediately reports success" % size,
-            "Cross-process rendezvous is task 8.15.")
-
-    class Store:
-        def __init__(self, *a, **k):
-            self._data = {}
-        def set(self, key, value):
-            self._data[str(key)] = value
-        def get(self, key):
-            return self._data.get(str(key), b"")
-        def add(self, key, num):
-            v = int(self._data.get(str(key), 0)) + int(num)
-            self._data[str(key)] = v
-            return v
-        def wait(self, keys, *a, **k):
-            return None
-        def delete_key(self, key):
-            self._data.pop(str(key), None)
-            return True
-
-    class TCPStore(Store):
-        """A TCP rendezvous store -- refused, because this one is a dict.
-
-        Store subclasses used to share `Store`'s in-PROCESS dictionary. A
-        rendezvous built on TCPStore therefore "succeeded" instantly on every
-        rank without any of them ever exchanging a byte, and each rank then
-        proceeded believing it had met the others.
-        """
-
-        def __init__(self, host_name=None, port=None, world_size=None,
-                     is_master=False, timeout=None, wait_for_workers=True,
-                     *a, **k):
-            _require_single_rank_store("torch.distributed.TCPStore", world_size)
-            Store.__init__(self)
-            self.host = host_name
-            self.port = port
-
-    class FileStore(Store):
-        """A file-backed rendezvous store -- refused, because this one is a dict."""
-
-        def __init__(self, file_name=None, world_size=None, *a, **k):
-            _require_single_rank_store("torch.distributed.FileStore", world_size)
-            Store.__init__(self)
-            self.path = file_name
-
-    class PrefixStore(Store):
-        def __init__(self, prefix, store):
-            self.prefix = str(prefix)
-            self.store = store
-
-        def _key(self, key):
-            return self.prefix + str(key)
-
-        def set(self, key, value):
-            return self.store.set(self._key(key), value)
-
-        def get(self, key):
-            return self.store.get(self._key(key))
-
-        def add(self, key, num):
-            return self.store.add(self._key(key), num)
-
-        def wait(self, keys, *a, **k):
-            return self.store.wait([self._key(key) for key in keys], *a, **k)
-
-        def delete_key(self, key):
-            return self.store.delete_key(self._key(key))
-
     dist.Store = Store
     dist.TCPStore = TCPStore
     dist.FileStore = FileStore
@@ -1038,12 +984,10 @@ def _install_distributed(g, registry=None):
         rendezvous_mod.__class__ = _RendezvousModule
 
     def _rendezvous(url, rank=-1, world_size=-1, **kwargs):
-        resolved_rank = _distributed_rank() if int(rank) < 0 else int(rank)
-        resolved_world = (
-            _distributed_world_size()
-            if int(world_size) < 0 else int(world_size)
+        yield from _store_rendezvous(
+            url, rank=rank, world_size=world_size,
+            timeout=kwargs.get("timeout"),
         )
-        yield TCPStore(), resolved_rank, resolved_world
 
     rendezvous_mod.rendezvous = _rendezvous
     dist.rendezvous = rendezvous_mod

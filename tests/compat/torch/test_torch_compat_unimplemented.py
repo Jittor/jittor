@@ -729,16 +729,15 @@ class TestDistributedStubs(StubPolicyBase):
         store.set("step", b"1")
         self.assertEqual(store.get("step"), b"1")
 
-    def test_multi_rank_tcp_store_is_refused(self):
+    def test_multi_rank_tcp_store_requires_endpoint(self):
         dist = self._dist()
-        self.assertRefuses(
-            lambda: dist.TCPStore("127.0.0.1", 29500, 2, True),
-            "TCPStore", "dictionary")
+        with self.assertRaisesRegex(ValueError, "host_name and port"):
+            dist.TCPStore(world_size=2, is_master=True)
 
-    def test_multi_rank_file_store_is_refused(self):
+    def test_file_store_requires_path(self):
         dist = self._dist()
-        self.assertRefuses(lambda: dist.FileStore("/tmp/jt-store", 2),
-                           "FileStore")
+        with self.assertRaisesRegex(ValueError, "file_name"):
+            dist.FileStore()
 
     def test_whole_world_subgroup_enumeration_is_allowed(self):
         dist = self._dist()

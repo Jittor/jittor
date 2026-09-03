@@ -229,6 +229,20 @@ SIGCHLD 处理器，所以孙进程被信号打死打不到 pytest。
 的 root-info 文件，后者覆盖以组首 rank 为 root 的 MPI 广播。只跑其中一条不能证明另一条
 不会在建组时挂住。
 
+## TCPStore/FileStore：用两个普通进程验，不要用两份字典自证
+
+store 的跨进程契约不需要 GPU 或 mpirun。父进程启动两个普通 Python 子进程，rank 0 写一个
+非空 payload、rank 1 读取后写 ack；两边再对同一个计数键各 `add(1)`，等两个到达键后断言
+最终值为 2。这样同时抓住「每个进程各有一份字典」、阻塞 `get/wait` 无效和 `add` 非原子。
+
+两个子进程共享同一份 JIT 缓存时，**必须先顺序预热一次 import**。否则 master 进程可能持着
+`jittor.lock` 进入 TCPStore 构造并等待 client，client 却在等这把锁完成 import，表象是 store
+挂死，实质仍是编译锁死锁。预热输出还要断言 `jittor.__file__` 属于目标 worktree。
+
+`init_process_group(init_method=...)` 不能只测 URL parser 的返回值：初始化之后从
+`distributed_c10d._get_default_store()` 取回默认 store，再做同一轮跨进程 payload/ack，才能
+证明 `env://` / `tcp://` 真进入了 store 机制而不是解析后丢弃。
+
 ## 「等别的 rank」和「拿着编译锁」不能同时发生
 
 `jittor.lock` 是**整个缓存目录一把 flock**，而 `import jittor` 从头到尾都握着它
