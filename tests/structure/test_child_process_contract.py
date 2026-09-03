@@ -185,10 +185,13 @@ def test_the_helper_and_conftest_agree_on_the_source_tree():
     the child's ``PYTHONPATH`` separately, the two would drift and the drift
     would be silent -- the child would simply test another checkout.
     """
-    import conftest
+    from _helpers.root_conftest import root_conftest_imports_from_the_helper
 
-    child_process = _child_process_module()
-    assert conftest.source_python_dir is child_process.source_python_dir
+    # Asserted on the file, not on a module object. `import conftest` picks
+    # whichever of this tree's two conftest modules pytest loaded first, so the
+    # object form passed under `pytest tests/structure` and failed in the whole
+    # Torch-mode session -- see tests/_helpers/root_conftest.py.
+    assert root_conftest_imports_from_the_helper("source_python_dir")
 
 
 def test_the_default_child_timeout_is_generous_and_configurable():

@@ -12,10 +12,15 @@ from pathlib import Path
 import sys
 import unittest
 
-import conftest
+from _helpers import child_process
+from _helpers.root_conftest import root_conftest_imports_from_the_helper
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# The implementation, not the conftest module object. `import conftest` is
+# ambiguous in this tree -- see tests/_helpers/root_conftest.py -- and these
+# assertions are about what `source_python_dir` *does*, which lives here.
+conftest = child_process
 
 
 class TestSourceRootSelection(unittest.TestCase):
@@ -52,3 +57,20 @@ class TestSourceRootSelection(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestOneImplementation(unittest.TestCase):
+    """The root conftest must take the function, not write a second one.
+
+    If ``tests/conftest.py`` computed the parent's ``sys.path`` and
+    ``_helpers.child_process`` computed the child's ``PYTHONPATH`` separately,
+    the two would drift and the drift would be silent: the child would test
+    another checkout and every assertion would still pass.
+    """
+
+    def test_the_root_conftest_imports_it_from_the_helper(self):
+        self.assertTrue(
+            root_conftest_imports_from_the_helper("source_python_dir"),
+            "tests/conftest.py must take source_python_dir from "
+            "_helpers.child_process, not define its own",
+        )

@@ -20,7 +20,18 @@ from _helpers.torch_runtime import import_torch_modules, modules_available
 from _helpers.tuner_parser import simple_parser
 
 model_test = os.environ.get("model_test", "") == "1"
-skip_model_test = not model_test or not modules_available("torch", "torchvision")
+_missing = []
+if not model_test:
+    _missing.append("model_test=1 (this comparison downloads and runs a full ResNet)")
+if not modules_available("torch", "torchvision"):
+    _missing.append("an independent torch + torchvision")
+skip_model_test = bool(_missing)
+# The reason has to name what is missing. "Skip model test" is exactly the
+# unfalsifiable form 0.18 rejects: a file whose every case skips for a reason
+# that names nothing cannot be told apart from a file that quietly stopped
+# testing, and this one was the single entry blocking
+# JITTOR_TEST_REQUIRE_EXECUTION=1 on the Torch-mode half of the gate.
+SKIP_REASON = "needs " + " and ".join(_missing) if _missing else ""
 torch = None
 tv = None
 
@@ -30,7 +41,7 @@ def setUpModule():
     if not skip_model_test:
         torch, tv = import_torch_modules("torch", "torchvision")
 
-@unittest.skipIf(skip_model_test, "Skip model test")
+@unittest.skipIf(skip_model_test, SKIP_REASON)
 class TestLoadPth(unittest.TestCase):
     def test_load_pth(self):
         # TODO: load torch model params

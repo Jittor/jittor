@@ -198,6 +198,9 @@ class TestDeviceParity(JittorTestCase):
         """
         try:
             self._compare(op)
+        except unittest.SkipTest:
+            # A skip built no graph and holds nothing; let it through untouched.
+            raise
         except Exception:
             traceback.clear_frames(sys.exc_info()[2])
             gc.collect()
