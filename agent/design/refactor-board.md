@@ -419,7 +419,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 8.03 | 精度策略收敛 | 已合并 | cudabk | dab0690c |
 | 8.04 | cuDNN 9 | 已合并 | cudabk | 7580b6e7（RNN v8 API）+ 9f2e7b80（版本闸门与 wheel 栈） |
 | 8.05 | MKL | 待领 | | |
-| 8.06 | ACL 去样板 | 待领 | device | 5be5fa15 建立 BaseOpRunner 统一 workspace/execute/error/可选同步尾部并迁 unary；86b31e14 再迁 binary family 的 Add/Sub 与普通 binary，均保留原同步策略；静态合同 3 passed，补 Ascend 910B3 上机说明。本机无 CANN/NPU，仍待实机验证，未铺其余 family、胖 AclOpFunctions、op_idx_map、属性 data 通道与描述符缓存 |
+| 8.06 | ACL 去样板 | 待领 | device | 5be5fa15 建立 BaseOpRunner 统一 workspace/execute/error/可选同步尾部并迁 unary；86b31e14 再迁 binary；b7c763bd 迁 ternary SWhere family，保留原异步策略；静态合同 4 passed，补 Ascend 910B3 上机说明。本机无 CANN/NPU，仍待实机验证，未铺其余 family、胖 AclOpFunctions、op_idx_map、属性 data 通道与描述符缓存 |
 | 8.07 | conv 族共享描述符与计划层 | 已合并 | cudabk | 947f5223（反向只留 C++ 一份）+ 47f91130（计划请求一个构造函数） |
 | 8.08 | `ProcessGroup` 对象替代全局唯一 communicator | 已合并 | dist | 82410549（NCCL env/file 与 MPI bootstrap 双卡通过；HCCL 对称实现未在 Ascend 真机验证） |
 | 8.09 | NCCL | 已合并 | dist | f2d9c291, 95a1c956 |
