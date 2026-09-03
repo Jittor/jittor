@@ -29,6 +29,7 @@ DROPOUT_SOURCE = ROOT / "python/jittor/extern/acl/aclops/dropout_op_acl.cc"
 RELU_SOURCE = ROOT / "python/jittor/extern/acl/aclops/relu_op_acl.cc"
 ARG_REDUCE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/arg_reduce_op_acl.cc"
 SILU_SOURCE = ROOT / "python/jittor/extern/acl/aclops/silu_op_acl.cc"
+BMM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/bmm_op_acl.cc"
 RANDOM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/random_op_acl.cc"
 UPSAMPLE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/upsample_op_acl.cc"
 GATHER_SOURCE = ROOT / "python/jittor/extern/acl/aclops/gather_scatter_op_acl.cc"
@@ -318,6 +319,14 @@ def test_silu_forward_uses_launcher_and_other_owners_remain_present():
     assert "void SiLUBackwardOpRunner::executeOp" in source
     assert "void SwishOpRunner::executeOp" in source
     assert "void SwiGluOpRunner::executeOp" in source
+
+
+def test_batch_matmul_uses_launcher_and_keeps_cube_math_type():
+    source = BMM_SOURCE.read_text()
+    assert "cube_math_type" in source
+    assert "launch(ret, aclnnBatchMatMul, true);" in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
 
 
 def test_random_uniform_normal_share_launcher_and_keep_seed_offset():

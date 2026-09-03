@@ -495,5 +495,9 @@ synchronous execution.
 The ACL SiLU forward owner uses the shared launcher and retains synchronous
 execution. Backward, Swish, and SwiGlu remain outside this slice.
 
+The ACL BatchMatMul owner uses the shared launcher while retaining
+cube_math_type and synchronous execution. This remains source-only until the
+Ascend 910B3 probe is run.
+
 The ACL UpsampleNearest2d forward owner uses the shared launcher while retaining
 output-size RAII and synchronous execution. Backward is outside this slice.
