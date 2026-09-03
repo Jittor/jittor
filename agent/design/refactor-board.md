@@ -450,7 +450,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 9.15 | noxfile | 已合并 | 构建 | 84c7f766 |
 | 9.16 | `agent/scripts/check_repo_layout.sh` 收缩为少数真会复发的检… | 待领 | | |
 | 9.17 | 死代码 | 已合并 | 构建 | f99250bb |
-| 9.18 | `disable_lock=1` 启用时明确告警并纳入缓存指纹 | 待领 | | |
+| 9.18 | `disable_lock=1` 启用时明确告警并纳入缓存指纹 | 已合并 | build | 801dd80d。启用时打印并发损坏警告并进入独立构建配置指纹；默认锁定配置保持原缓存名。相关两文件 28 passed |
 | 9.19 | 布局收尾 | 待领 | | |
 | 9.20 | asm_tuner 非原子写 .s，并发编译读到截断汇编 | 已合并 | build | 1919b035。`pass_asm()` 写进带 pid 的临时文件后 `os.replace`；inode 回归 1 passed，原四 worker Dataset 复现用例 1 passed |
 | 9.21 | 拆掉手写预处理器最后一块：process() 双职责分离 + depfile | 待领 | | 9a5f4e7c 已合入前半：`JT_*` 宏发现移到 Python 声明清单，`process()` 不再改写命令行；编译器 depfile、两个 wrapper 回退与 MSVC `/showIncludes` 仍待领 |
