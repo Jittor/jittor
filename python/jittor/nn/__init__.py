@@ -97,7 +97,11 @@ from jittor.sparse.convolution import (
 )
 from .utils import skip_init
 from ._bindings import install_var_bindings as _install_var_bindings
+from .._install_order import record as _record_install
 
 
 _install_var_bindings()
+# See jittor/_install_order.py: the order these patches run in is the contract.
+_record_install("nn.var_bindings")
 del _install_var_bindings
+del _record_install

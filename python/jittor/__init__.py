@@ -101,6 +101,12 @@ from ._runtime import core_api as _core_api
 from ._runtime.core_api import *
 from ._runtime.core_api import _core_flags
 
+# The runtime installs its monkeypatches from here on, in a fixed order that
+# used to exist only as the physical arrangement of the statements below.
+# jittor/_install_order.py declares that order and checks it.
+from . import _install_order as _install_order
+from ._install_order import record as _record_install
+
 from . import nn
 from . import fft
 from .optim import legacy_schedulers as lr_scheduler
@@ -119,8 +125,10 @@ from .nn.backends.full_reduce_cuda import (
 )
 
 _install_var_indexing()
+_record_install("misc.var_indexing")
 del _install_var_indexing
 _install_full_reduce()
+_record_install("nn.full_reduce_fast_path")
 del _install_full_reduce
 
 from .compat import contrib as contrib
@@ -140,9 +148,14 @@ dtype = NanoString
 
 import jittor_utils
 
+_ran_post_process = False
 for backend in jittor_utils.backends:
     if hasattr(backend, "post_process"):
         backend.post_process()
+        _ran_post_process = True
+if _ran_post_process:
+    _record_install("backends.post_process")
+del _ran_post_process
 
 # impl x.func(...) -> func_(...)
 args = {"x", "input", "self"}
@@ -164,6 +177,10 @@ for k,v in list(Var.__dict__.items()):
     def inplace_wrapper(new_k, prev_func):
         setattr(Var, new_k, lambda x, *args, **kw: x.assign(prev_func(x, *args, **kw)))
     inplace_wrapper(new_k, v)
+# Aliases are generated from Var.__dict__ as it stands RIGHT NOW: a method
+# installed later gets no alias, and a method replaced later leaves its alias
+# bound to the old implementation. See jittor/_install_order.py.
+_record_install("root.inplace_aliases")
 
 from . import math_util
 from .math_util import *
@@ -172,6 +189,7 @@ from . import distributions
 if jt.compiler.has_acl:
     from jittor.extern.acl.acl_compiler import change_function
     change_function()
+    _record_install("acl.change_function")
 
 # MPI-free Ascend multi-card: the optimizer/users call Var.mpi_all_reduce /
 # Var.mpi_broadcast, normally provided by the MPI op module. In the env/file
@@ -189,6 +207,7 @@ if compile_extern.hccl_ops is not None and not compile_extern.has_mpi:
         return _hops.hccl_broadcast(self, root)
     core.Var.mpi_all_reduce = _hccl_all_reduce
     core.Var.mpi_broadcast = _hccl_broadcast
+    _record_install("collectives.hccl")
 
 # MPI-free NVIDIA multi-card: same env/file rendezvous as HCCL, route the
 # collectives to NCCL ops so DDP works without mpirun on NVIDIA too. NCCL
@@ -207,6 +226,7 @@ if compile_extern.nccl_ops is not None and not hasattr(core.Var, "mpi_all_reduce
         return _nops.nccl_broadcast(self, root)
     core.Var.mpi_all_reduce = _nccl_all_reduce
     core.Var.mpi_broadcast = _nccl_broadcast
+    _record_install("collectives.nccl")
 
 
 
@@ -220,12 +240,19 @@ _compat_composition_report = _compose_compat_runtime(
     ),
     preflight=_compat_preflight_result,
 )
+_record_install("compat.runtime_composition")
 
 # Torch compatibility adds optimizer classes and module aliases after ``nn``
 # consumed the native facade. Refresh explicit star exports to match the
 # historical module behavior without exporting implementation modules.
 optim._refresh_public_exports()
+_record_install("optim.public_exports")
 
 # ``flags`` is replaced by the compatibility proxy during composition. Moved
 # core API functions resolve globals in ``core_api``, so share that proxy.
 _core_api.flags = flags
+
+# Every installer has run. Fail loudly here rather than let a half-patched
+# runtime import cleanly and then behave like a different version of jittor.
+_install_report = _install_order.verify()
+del _record_install

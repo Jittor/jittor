@@ -144,36 +144,62 @@ def _is_full_reduction(args, kwargs):
     return not (kwargs.get("keepdims") or kwargs.get("keepdim"))
 
 
+def _route(native, mean):
+    """Wrap one reduction entry point so a whole-Var call takes the fast path.
+
+    ``mean=True`` divides by the element count. Both entry points for a
+    reduction -- the method and the root function -- get a wrapper built here,
+    so the decision to take the fast path is made in exactly one place.
+    """
+
+    def reduce_entry(x, *args, **kwargs):
+        if _is_full_reduction(args, kwargs):
+            divisor = int(x.numel()) if mean and isinstance(x, jt.Var) else None
+            if mean and divisor is None:
+                return native(x, *args, **kwargs)
+            fast = _full_reduce_cuda(x, divisor=divisor)
+            if fast is not None:
+                return fast
+        return native(x, *args, **kwargs)
+
+    reduce_entry.__doc__ = getattr(native, "__doc__", None)
+    reduce_entry.__name__ = getattr(native, "__name__", "reduce_entry")
+    reduce_entry._full_reduce_native = native
+    return reduce_entry
+
+
 def install_full_reduce_fast_path():
     """Route whole-Var ``sum``/``mean`` through the two-stage CUDA reduction.
 
     Installed before the backend and Torch wrappers, like the indexing layer, so
     that anything layered on top inherits it. Every call that the fast path
     declines falls through to the original binding unchanged.
+
+    **Both** spellings are routed. This used to replace only ``Var.sum`` and
+    ``Var.mean``, while ``jt.sum`` / ``jt.mean`` -- the same operation, bound
+    straight from ``jittor_core.ops`` -- kept going to the generated kernel. So
+    one semantic had two numerics:
+
+        x.sum()      two-stage CUB fold, float32 accumulator, reproducible
+        jt.sum(x)    a quarter-million atomicAdds into one address, and the
+                     summation order (hence the last bits of the result)
+                     differs between runs
+
+    Nothing said which one a caller got; it depended on how they spelled it,
+    and the two disagree in the last ulps of a large float32 sum. Routing both
+    through the same wrapper makes the spelling a matter of taste again.
     """
     if getattr(jt.Var, "_full_reduce_fast_path", False):
         return
-    native_sum = jt.Var.sum
-    native_mean = jt.Var.mean
-
-    def sum(x, *args, **kwargs):
-        if _is_full_reduction(args, kwargs):
-            fast = _full_reduce_cuda(x)
-            if fast is not None:
-                return fast
-        return native_sum(x, *args, **kwargs)
-
-    def mean(x, *args, **kwargs):
-        if _is_full_reduction(args, kwargs):
-            fast = _full_reduce_cuda(x, divisor=int(x.numel()))
-            if fast is not None:
-                return fast
-        return native_mean(x, *args, **kwargs)
-
-    sum.__doc__ = native_sum.__doc__
-    mean.__doc__ = native_mean.__doc__
-    jt.Var.sum = sum
-    jt.Var.mean = mean
+    jt.Var.sum = _route(jt.Var.sum, mean=False)
+    jt.Var.mean = _route(jt.Var.mean, mean=True)
+    # The root functions are separate bindings of the same op, not aliases of
+    # the methods, so they need routing of their own.
+    for name, is_mean in (("sum", False), ("mean", True)):
+        native = getattr(jt, name, None)
+        if native is None:
+            continue
+        setattr(jt, name, _route(native, mean=is_mean))
     jt.Var._full_reduce_fast_path = True
 
 
