@@ -141,6 +141,51 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         np.testing.assert_array_equal(actual, np.moveaxis(values, 0, 2))
         np.testing.assert_array_equal(negative, np.moveaxis(values, -1, 0))
 
+    def test_shape_helpers_are_stable_module_level_objects(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        for name in ("unflatten", "swapaxes", "swapdims", "ravel"):
+            with self.subTest(name=name):
+                implementation = getattr(numerical, name)
+                self.assertTrue(callable(implementation))
+                self.assertIs(getattr(torch, name), implementation)
+                self.assertEqual(implementation.__module__, numerical.__name__)
+                self.assertEqual(implementation.__name__, name)
+
+    def test_shape_helpers_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        for name in ("unflatten", "swapaxes", "swapdims", "ravel"):
+            with self.subTest(name=name):
+                record = fidelity.fidelity_of("torch." + name)
+                self.assertIs(record.implementation, getattr(numerical, name))
+                self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+                self.assertIn("device", record.detail)
+                self.assertIn("out", record.detail)
+
+    def test_shape_helpers_cpu_match_numpy(self):
+        values = np.arange(24).reshape(2, 3, 4).astype("float32")
+        with torch.flag_scope(use_cuda=0):
+            tensor = torch.array(values)
+            flat_tensor = tensor.reshape(2, 12)
+            unflattened = torch.unflatten(flat_tensor, 1, (3, 4))
+            swapped = torch.swapaxes(tensor, 0, -1)
+            swapdim_alias = torch.swapdims(tensor, 0, 2)
+            flattened = torch.ravel(tensor)
+        np.testing.assert_array_equal(
+            unflattened.numpy(), values.reshape(2, 3, 4))
+        np.testing.assert_array_equal(
+            swapped.numpy(), np.swapaxes(values, 0, -1))
+        np.testing.assert_array_equal(
+            swapdim_alias.numpy(), np.swapaxes(values, 0, 2))
+        np.testing.assert_array_equal(flattened.numpy(), values.ravel())
+        np.testing.assert_array_equal(
+            flat_tensor.unflatten(1, (3, 4)).numpy(), values)
+        np.testing.assert_array_equal(
+            tensor.swapdims(0, 2).numpy(), np.swapaxes(values, 0, 2))
+        np.testing.assert_array_equal(tensor.ravel().numpy(), values.ravel())
+
 
 if __name__ == "__main__":
     unittest.main()

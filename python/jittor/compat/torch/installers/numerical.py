@@ -124,6 +124,59 @@ for _movedim_name in ("movedim", "moveaxis"):
 del _movedim_name
 
 
+_SHAPE_HELPER_FIDELITY_DETAIL = (
+    "matches Torch values and shapes for valid tensor inputs but omits Torch "
+    "device, layout, named-dimension, and out keyword semantics"
+)
+
+
+def _unflatten_impl(input, dim, sizes):
+    d = dim % input.ndim
+    return input.reshape(
+        list(input.shape[:d]) + list(sizes) + list(input.shape[d + 1:]))
+
+
+def unflatten(input, dim, sizes):
+    """Unflatten one tensor dimension according to Torch shape rules."""
+    return _unflatten_impl(input, dim, sizes)
+
+
+def _swapaxes_impl(input, axis0, axis1):
+    perm = list(range(input.ndim))
+    a, b = axis0 % input.ndim, axis1 % input.ndim
+    perm[a], perm[b] = perm[b], perm[a]
+    return input.permute(perm)
+
+
+def swapaxes(input, axis0, axis1):
+    """Swap two tensor dimensions."""
+    return _swapaxes_impl(input, axis0, axis1)
+
+
+def swapdims(input, axis0, axis1):
+    """Alias of :func:`swapaxes`."""
+    return _swapaxes_impl(input, axis0, axis1)
+
+
+def _ravel_impl(input):
+    return input.reshape((-1,))
+
+
+def ravel(input):
+    """Flatten a tensor to one dimension."""
+    return _ravel_impl(input)
+
+
+for _shape_helper_name in ("unflatten", "swapaxes", "swapdims", "ravel"):
+    register_fidelity(
+        "torch." + _shape_helper_name,
+        globals()[_shape_helper_name],
+        Fidelity.APPROXIMATE,
+        _SHAPE_HELPER_FIDELITY_DETAIL,
+    )
+del _shape_helper_name
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
@@ -500,18 +553,10 @@ def install(ctx):
         return d[jt.array(ii), jt.array(jj)]
     _alias("pdist", _pdist)
     # shape ops: unflatten / swapaxes / swapdims / ravel + numpy-style stacking helpers.
-    def _unflatten(input, dim, sizes):
-        d = dim % input.ndim
-        return input.reshape(list(input.shape[:d]) + list(sizes) + list(input.shape[d + 1:]))
-    _alias("unflatten", _unflatten); Var.unflatten = _unflatten
-    def _swapaxes(input, axis0, axis1):
-        perm = list(range(input.ndim))
-        a, b = axis0 % input.ndim, axis1 % input.ndim
-        perm[a], perm[b] = perm[b], perm[a]
-        return input.permute(perm)
-    _alias("swapaxes", _swapaxes); _alias("swapdims", _swapaxes)
-    Var.swapaxes = _swapaxes; Var.swapdims = _swapaxes
-    _alias("ravel", lambda input: input.reshape((-1,))); Var.ravel = lambda self: self.reshape((-1,))
+    _alias("unflatten", unflatten); Var.unflatten = _unflatten_impl
+    _alias("swapaxes", swapaxes); _alias("swapdims", swapdims)
+    Var.swapaxes = _swapaxes_impl; Var.swapdims = _swapaxes_impl
+    _alias("ravel", ravel); Var.ravel = _ravel_impl
     _alias("vstack", vstack)
     _alias("row_stack", row_stack)
     _alias("hstack", hstack)
