@@ -348,8 +348,12 @@ inline bool ns_is_integral_only(NanoString op) {
  */
 inline NanoString int_binary_dtype(NanoString op, NanoString x, NanoString y,
                                    bool xscalar, bool yscalar) {
-    if (xscalar) return int_dtype(y.dsize_(), y.is_unsigned());
-    if (yscalar) return int_dtype(x.dsize_(), x.is_unsigned());
+    // Exactly one scalar: the tensor decides. Two scalars: neither is "the
+    // tensor", so fall through to the lattice -- overriding on one of them
+    // would make the answer depend on which side it was written, and `a+b`
+    // must agree with `b+a`.
+    if (xscalar && !yscalar) return int_dtype(y.dsize_(), y.is_unsigned());
+    if (yscalar && !xscalar) return int_dtype(x.dsize_(), x.is_unsigned());
     auto promoted = int_dtype_promote(x, y);
     if (promoted.is_float() && ns_is_integral_only(op))
         return int_dtype(std::max(x.dsize_(), y.dsize_()),

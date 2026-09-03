@@ -152,6 +152,63 @@ class TestScalarPromotion(unittest.TestCase):
             self.assertEqual(str((x * 2).dtype), name, msg=name)
 
 
+def _scalar(dtype, value):
+    """A Var carrying ``_is_scalar``: a zero-dimensional numpy value.
+
+    ``jt.array(np.uint8(200))`` takes the scalar path in ``ArrayOp`` (see
+    ``from_scalar_object`` in ``pyjt/py_array_op.cc``) and the resulting Var is
+    flagged as a wrapped number, exactly like ``jt.array(3)``.  It keeps its own
+    dtype, which is what makes a *pair* of them interesting.
+    """
+    return jt.array(np.dtype(dtype).type(value))
+
+
+class TestTwoScalarsPromoteBothWaysTheSame(unittest.TestCase):
+    """``a + b`` and ``b + a`` must agree when *both* sides are scalars.
+
+    The scalar rule is "a wrapped number adopts the tensor's dtype", and it was
+    written as two unconditional early returns::
+
+        if (xscalar) return int_dtype(y.dsize_(), y.is_unsigned());
+        if (yscalar) return int_dtype(x.dsize_(), x.is_unsigned());
+
+    With one scalar that is right.  With *two* the first branch always wins, so
+    the answer is whichever dtype was written second -- and swapping the
+    operands changes it.  There is no "the tensor" to adopt here, so neither
+    early return applies and the promotion lattice has to decide, which is both
+    commutative and wide enough to hold the value.
+    """
+
+    def test_premise_a_zero_dim_numpy_value_is_a_scalar(self):
+        # If this stops holding, the cases below stop testing what they say:
+        # a scalar adopts the dtype of the tensor it meets, so meeting an
+        # int8 *tensor* must give int8 and not promote to int64.
+        s = _scalar("int64", 3)
+        t = _var("int8", [1, 2])
+        self.assertEqual(str((s + t).dtype), "int8")
+        self.assertEqual(str((t + s).dtype), "int8")
+
+    def test_uint8_and_int8_scalars(self):
+        # uint8(200) + int8(1): the lattice says int16/201 either way.  Before,
+        # one order gave int8 and the value -55, the other uint8 and 201.
+        a, b = _scalar("uint8", 200), _scalar("int8", 1)
+        for x, y in ((a, b), (b, a)):
+            z = x + y
+            self.assertEqual(str(z.dtype), "int16")
+            self.assertEqual(int(z.numpy()[0]), 201)
+
+    def test_uint32_and_int32_scalars(self):
+        a, b = _scalar("uint32", 2 ** 31), _scalar("int32", 1)
+        for x, y in ((a, b), (b, a)):
+            z = x + y
+            self.assertEqual(str(z.dtype), "int64")
+            self.assertEqual(int(z.numpy()[0]), 2 ** 31 + 1)
+
+    def test_same_width_same_signedness_is_unchanged(self):
+        a, b = _scalar("int16", 3), _scalar("int16", 4)
+        self.assertEqual(str((a + b).dtype), "int16")
+
+
 class TestAngleConverters(unittest.TestCase):
     """``rad2deg``/``deg2rad`` are where the promotion rule reaches a user.
 
