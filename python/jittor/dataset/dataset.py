@@ -380,8 +380,6 @@ class Dataset(object):
                         min(self.real_len, (cid+1)*self.real_batch_size)
                     ].copy()
                     gid_obj.value += 1
-                with self.idqueue_lock:
-                    self.idqueue.push(worker_id)
                 now = time.time()
                 other_time = now - start
                 start = now
@@ -406,6 +404,21 @@ class Dataset(object):
                     if buffer.is_stop():
                         continue
                     raise
+                # Announce the batch only now that it is committed.
+                #
+                # This used to be pushed right after the batch id was claimed,
+                # i.e. before the data existed. That made the queue a promise
+                # rather than a fact, and a worker that died while loading
+                # broke it: the parent had already popped the id, found no
+                # error stored yet (the worker was still running), and gone
+                # into `buffer.recv()` on a buffer nothing would ever fill --
+                # a wait no later error report could interrupt, because the
+                # parent was no longer looking at the queue. Pushing after the
+                # send makes the invariant "an id in the queue means a whole
+                # batch is readable, or an error is stored" hold, which is what
+                # `_check_worker_error` needs to be reachable at all.
+                with self.idqueue_lock:
+                    self.idqueue.push(worker_id)
                 now = time.time()
                 send_time = now - start
                 start = now
@@ -426,7 +439,18 @@ class Dataset(object):
             try:
                 error.value = line.encode("utf-8", "replace")[
                     :WORKER_ERROR_CAPACITY - 1]
-                # wake the parent: it blocks on idqueue.pop()
+                # Store first, wake second: whichever way the parent is
+                # waiting, it must find the message already there.
+                #
+                # Two wake-ups, because there are two places to be blocked.
+                # `stop()` releases a parent already inside `recv()` on this
+                # worker's buffer -- the ring buffer's flag and condvar live in
+                # the shared mapping, so a dying child can reach the waiter in
+                # the parent. The queue push releases a parent waiting for the
+                # next batch id. Neither is a signal: the parent's own SIGCHLD
+                # handler stays out of this (6.C31), and a plain bug in
+                # __getitem__ must not look like Ctrl-C.
+                buffer.stop()
                 with self.idqueue_lock:
                     self.idqueue.push(worker_id)
             except Exception:
@@ -502,6 +526,37 @@ Example::
         self._abort_workers()
         raise RuntimeError(
             "exception in dataset worker %d:\n%s" % (worker_id, message))
+
+    def _raise_worker_death(self, cause):
+        """Explain a blocking read that came back stopped, and re-raise.
+
+        A worker that fails stores its traceback and then stops its buffer, so
+        a parent asleep in ``recv()`` wakes with a bare ``RuntimeError("stop")``
+        that says nothing about what happened. This turns that into the real
+        exception. Every worker is examined rather than the one whose id was
+        popped: the wake-up says "someone died", not who.
+
+        Always raises.
+        """
+        deaths = []
+        for other_id, worker in enumerate(getattr(self, "workers", ())):
+            message = worker.take_error()
+            if message is not None:
+                self._abort_workers()
+                raise RuntimeError(
+                    "exception in dataset worker %d:\n%s"
+                    % (other_id, message))
+            if worker.p.exitcode is not None:
+                deaths.append((other_id, worker.p.exitcode))
+        if deaths:
+            self._abort_workers()
+            raise RuntimeError(
+                "dataset worker(s) %s left before sending a batch and stored "
+                "no traceback -- killed from outside (OOM killer, SIGKILL) or "
+                "crashed in native code, so nothing ran to report it"
+                % ", ".join("%d (exit code %s)" % pair for pair in deaths)
+            ) from cause
+        raise cause
 
     def _abort_workers(self):
         """Drop the worker pool without waiting for it to go idle.
@@ -738,7 +793,10 @@ Example::
                                 self.gidc.notify_all()
 
                     # get which worker has this batch
-                    worker_id = self.idqueue.pop()
+                    try:
+                        worker_id = self.idqueue.pop()
+                    except Exception as stopped:
+                        self._raise_worker_death(stopped)
 
                     now = time.time()
                     self.wait_time = now - start
@@ -750,7 +808,10 @@ Example::
                     self._check_worker_error(worker_id, w)
                     if mp_log_v:
                         print(f"#{worker_id} {os.getpid()} recv buffer", w.buffer)
-                    batch = w.buffer.recv()
+                    try:
+                        batch = w.buffer.recv()
+                    except Exception as stopped:
+                        self._raise_worker_death(stopped)
 
                     now = time.time()
                     self.recv_time = now - start

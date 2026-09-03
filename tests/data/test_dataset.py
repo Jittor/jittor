@@ -562,5 +562,73 @@ if __name__ == "__main__":
         assert "Caught SIGINT" not in err, err[-2000:]
 
 
+class TestWorkerDeathWakesTheParent(unittest.TestCase):
+    """The wake-up must not depend on the parent being lucky.
+
+    ``TestWorkerExceptionPropagation`` above only fails when the parent happens
+    to still be at ``idqueue.pop()`` when the worker dies. It usually is,
+    because a worker that raises on its first batch raises almost immediately.
+    Make the worker take a moment and the parent is somewhere else -- inside
+    ``buffer.recv()``, waiting for a batch the dead worker had already promised
+    by pushing its id before loading it. Nothing interrupts that wait: the
+    error report goes to a queue the parent is no longer reading, and the
+    process hangs until something outside kills it.
+
+    So the ordering is forced here rather than left to chance.
+    """
+
+    #: 60 s after the workers start, not after ``import jittor``: a cold child
+    #: compiles the core first and must not be charged for it. The watchdog is
+    #: ``faulthandler``'s, which runs in its own C thread and does not need the
+    #: GIL -- the point being that the hang holds the GIL, so a Python timer
+    #: would never fire, and neither would a ``signal`` handler.
+    SRC = """
+import faulthandler
+import numpy as np
+import jittor as jt
+from jittor.dataset import Dataset
+
+class SlowBoom(Dataset):
+    def __init__(self):
+        super().__init__()
+        self.set_attrs(total_len=8, batch_size=4, shuffle=False, num_workers=2)
+    def __getitem__(self, k):
+        if k >= 4:
+            # long enough that the parent is inside recv() by the time this
+            # worker fails, rather than still waiting for a batch id
+            import time
+            time.sleep(2.0)
+            raise ValueError("boom after the parent started waiting")
+        return np.array([k], dtype="float32")
+
+if __name__ == "__main__":
+    ds = SlowBoom()
+    faulthandler.dump_traceback_later(60, exit=True)
+    try:
+        for batch in ds:
+            pass
+    except Exception as e:
+        print("RAISED=%s" % type(e).__name__)
+        print("HAS_MESSAGE=%s" % ("boom after the parent started waiting" in str(e)))
+    else:
+        print("NO_EXCEPTION")
+    faulthandler.cancel_dump_traceback_later()
+    print("STILL_ALIVE")
+"""
+
+    def test_a_worker_that_dies_mid_batch_still_wakes_the_parent(self):
+        r = run_child_script(self.SRC)
+        out = r.stdout.decode()
+        err = r.stderr.decode()
+        assert r.returncode == 0, (
+            "the parent did not come back (returncode %s). A non-zero code "
+            "here is the faulthandler watchdog: the stack below says where it "
+            "was stuck.\n%s\n%s" % (r.returncode, out[-2000:], err[-4000:]))
+        assert "STILL_ALIVE" in out, out[-2000:] + err[-2000:]
+        assert "NO_EXCEPTION" not in out, out[-2000:]
+        assert "RAISED=RuntimeError" in out, out[-2000:]
+        assert "HAS_MESSAGE=True" in out, out[-2000:]
+
+
 if __name__ == "__main__":
     unittest.main()
