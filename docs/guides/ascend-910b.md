@@ -154,6 +154,10 @@ must not report hardware validation.
 The ternary SWhere family uses the same contract and intentionally retains its
 historical asynchronous execution policy.
 
+The single-step ACL reduce owners (ReduceSum, Mean, Amax, and Amin) also use
+the shared launcher and retain synchronous execution. Product reductions with
+multiple axes remain on their dedicated intermediate-buffer path.
+
 Run this diagnostic on an Ascend 910B3 only after sourcing the CANN environment,
 confirming the device is healthy, and selecting an allocated device:
 

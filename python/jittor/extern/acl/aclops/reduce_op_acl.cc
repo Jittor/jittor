@@ -122,45 +122,25 @@ namespace jittor
         case 9:
         {
             ret = aclnnReduceSumGetWorkspaceSize(inputTensors[0], dim, keepdims, get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
-            CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnReduceSumGetWorkspaceSize failed. ERROR: %d\n", name.c_str(), ret); return);
-            if (workspaceSize > 0)
-            {
-                mallocWorkSpace(workspaceSize);
-            }
-            ret = aclnnReduceSum(workspaceAddr, workspaceSize, executor, aclstream);
+            launch(ret, aclnnReduceSum, true);
             break;
         }
         case 10:
         {
             ret = aclnnMeanGetWorkspaceSize(inputTensors[0], dim, keepdims, get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
-            CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnMeanGetWorkspaceSize failed. ERROR: %d\n", name.c_str(), ret); return);
-            if (workspaceSize > 0)
-            {
-                mallocWorkSpace(workspaceSize);
-            }
-            ret = aclnnMean(workspaceAddr, workspaceSize, executor, aclstream);
+            launch(ret, aclnnMean, true);
             break;
         }
         case 11:
         {
             ret = aclnnAmaxGetWorkspaceSize(inputTensors[0], dim, keepdims, outputTensors[0], &workspaceSize, &executor);
-            CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnAmaxGetWorkspaceSize failed. ERROR: %d\n", name.c_str(), ret); return);
-            if (workspaceSize > 0)
-            {
-                mallocWorkSpace(workspaceSize);
-            }
-            ret = aclnnAmax(workspaceAddr, workspaceSize, executor, aclstream);
+            launch(ret, aclnnAmax, true);
             break;
         }
         case 12:
         {
             ret = aclnnAminGetWorkspaceSize(inputTensors[0], dim, keepdims, outputTensors[0], &workspaceSize, &executor);
-            CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnAminGetWorkspaceSize failed. ERROR: %d\n", name.c_str(), ret); return);
-            if (workspaceSize > 0)
-            {
-                mallocWorkSpace(workspaceSize);
-            }
-            ret = aclnnAmin(workspaceAddr, workspaceSize, executor, aclstream);
+            launch(ret, aclnnAmin, true);
             break;
         }
         case 13:
