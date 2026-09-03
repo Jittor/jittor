@@ -287,6 +287,41 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         np.testing.assert_array_equal(
             actual_embed, np.stack([np.diag(row) for row in rows]))
 
+    def test_float_power_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.float_power))
+        self.assertIs(torch.float_power, numerical.float_power)
+        self.assertEqual(numerical.float_power.__module__, numerical.__name__)
+        self.assertEqual(numerical.float_power.__name__, "float_power")
+
+    def test_float_power_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.float_power")
+        self.assertIs(record.implementation, numerical.float_power)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("device", record.detail)
+        self.assertIn("out", record.detail)
+
+    def test_float_power_cpu_matches_numpy_values_and_float64_dtype(self):
+        base = np.array([1.5, 2.0, 3.0], dtype="float32")
+        exponent = np.array([2.0, 0.5, 3.0], dtype="float32")
+        with torch.flag_scope(use_cuda=0):
+            actual_scalar = torch.float_power(torch.array(base), 2.0)
+            actual_tensor = torch.float_power(
+                torch.array(base), torch.array(exponent))
+            actual_method = torch.array(base).float_power(2.0)
+        np.testing.assert_allclose(
+            actual_scalar.numpy(), np.float_power(base, 2.0), rtol=1e-6)
+        np.testing.assert_allclose(
+            actual_tensor.numpy(), np.float_power(base, exponent), rtol=1e-6)
+        np.testing.assert_allclose(
+            actual_method.numpy(), np.float_power(base, 2.0), rtol=1e-6)
+        self.assertEqual(str(actual_scalar.dtype), "float64")
+        self.assertEqual(str(actual_tensor.dtype), "float64")
+
 
 if __name__ == "__main__":
     unittest.main()

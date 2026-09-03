@@ -231,6 +231,31 @@ for _elementwise_name in ("copysign", "xlogy", "heaviside", "signbit"):
 del _elementwise_name
 
 
+_FLOAT_POWER_FIDELITY_DETAIL = (
+    "computes supported real inputs in float64 like Torch float_power but "
+    "omits device, layout, and out keyword semantics"
+)
+
+
+def _float_power_impl(input, exponent):
+    if isinstance(exponent, jt.Var):
+        exponent = exponent.float64()
+    return input.float64() ** exponent
+
+
+def float_power(input, exponent):
+    """Raise tensors to a power using Torch's float64 computation policy."""
+    return _float_power_impl(input, exponent)
+
+
+register_fidelity(
+    "torch.float_power",
+    float_power,
+    Fidelity.APPROXIMATE,
+    _FLOAT_POWER_FIDELITY_DETAIL,
+)
+
+
 _MATRIX_FIDELITY_DETAIL = (
     "matches Torch values for supported real tensor inputs but omits Torch "
     "offset, dimension, device, layout, and out keyword semantics"
@@ -659,10 +684,7 @@ def install(ctx):
     _alias("copysign", copysign); Var.copysign = _copysign_impl
     _alias("xlogy", xlogy); Var.xlogy = _xlogy_impl
     _alias("heaviside", heaviside); Var.heaviside = _heaviside_impl
-    def _float_power(input, exponent):
-        b = exponent.float64() if isinstance(exponent, Var) else exponent
-        return (input.float64() ** b)
-    _alias("float_power", _float_power); Var.float_power = _float_power
+    _alias("float_power", float_power); Var.float_power = _float_power_impl
     _alias("signbit", signbit); Var.signbit = _signbit_impl
     # reductions: logsumexp (attention/MoE/loss/beam), nansum/nanmean, std_mean/var_mean,
     # aminmax, quantile. NaN handling uses nan_to_num plus an explicit isnan mask.
