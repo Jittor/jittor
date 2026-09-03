@@ -144,6 +144,18 @@ def _tier_arguments(tier):
     return ["-m", "not slow"]
 
 
+def _split_threads(environment, jobs):
+    """Each worker gets its share of the cores; see tiers.worker_thread_budget."""
+    sys.path.insert(0, str(REPO_ROOT / "tests"))
+    try:
+        from _helpers.tiers import worker_thread_budget
+    finally:
+        sys.path.remove(str(REPO_ROOT / "tests"))
+    budget = worker_thread_budget(jobs)
+    if budget is not None:
+        environment["OMP_NUM_THREADS"] = str(budget)
+
+
 def _parallel_arguments(jobs):
     """xdist, per file. ``noxfile._xdist`` explains why not per test."""
     if not jobs or jobs <= 1:
@@ -160,6 +172,7 @@ def _parallel_arguments(jobs):
 
 def _run(session, extra, quiet, tier="full", jobs=0, serial_compile=False):
     environment = _session_environment(session, serial_compile=serial_compile)
+    _split_threads(environment, jobs)
     command = [PYTHON, "-m", "pytest"]
     command += _session_arguments(session)
     command += ["-p", "no:cacheprovider", "--timeout=900"]

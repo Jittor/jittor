@@ -27,6 +27,7 @@ try:
         native_arguments as gate_native_arguments,
         torch_arguments as gate_torch_arguments,
     )
+    from _helpers.tiers import worker_thread_budget  # noqa: E402
     from _helpers.process_modes import TORCH_MODE_PATHS  # noqa: E402
 finally:
     sys.path.remove(str(REPO_ROOT / "tests"))
@@ -520,6 +521,21 @@ def _xdist(workers, distribution="loadfile"):
     if not workers or workers <= 1:
         return ()
     return ("-n", str(workers), "--dist", distribution)
+
+
+def _split_threads(env, workers):
+    """Give each worker its share of the cores, once, at the top.
+
+    Without this every worker starts one OpenMP thread per core it can see --
+    all of them -- so N workers oversubscribe the machine N-fold. See
+    ``tests/_helpers/tiers.worker_thread_budget``.
+    """
+    budget = worker_thread_budget(workers)
+    if budget is None:
+        return env
+    env = env.copy()
+    env["OMP_NUM_THREADS"] = str(budget)
+    return env
 
 
 def _run_pytest(session, defaults, env, runner=None):
@@ -1484,6 +1500,22 @@ def _cpu_gate_env(session):
     return env
 
 
+def _require_execution(env):
+    """0.18, enforced rather than only reported.
+
+    ``tests/conftest.py`` says "the gates do" set this; until now only the
+    nightly ecosystem session did, so the CPU gate printed the per-file
+    accounting and then passed regardless. Measured before switching it on: a
+    whole-tree native run reports 81 files that executed nothing and **all 81
+    are explained** by a skip reason naming something this machine lacks (no
+    CUDA, no ACL, no independent PyTorch). Zero unexplained, so the flag costs
+    nothing today and catches the next entry that quietly stops testing.
+    """
+    env = env.copy()
+    env["JITTOR_TEST_REQUIRE_EXECUTION"] = "1"
+    return env
+
+
 @nox.session(python="3.11", venv_backend="venv")
 def smoke(session):
     """The pull-request tier: the whole tree minus the recorded slow files.
@@ -1504,6 +1536,7 @@ def smoke(session):
         _run_pytest(session, (), env)
         return
     fast = ("-m", "not slow") + _xdist(GATE_WORKERS)
+    env = _split_threads(env, GATE_WORKERS)
     _run_pytest_once(session, gate_native_arguments() + fast, env)
     torch_env = env.copy()
     torch_env["JITTOR_TORCH_SHIM"] = "1"
@@ -1534,8 +1567,9 @@ def cpu(session):
     # single `pytest tests` run cannot assert both. Each session still selects
     # by exclusion, so a new test file is gated the moment it is written.
     parallel = _xdist(GATE_WORKERS)
-    _run_pytest_once(session, gate_native_arguments() + parallel, env)
-    torch_env = env.copy()
+    full_env = _require_execution(_split_threads(env, GATE_WORKERS))
+    _run_pytest_once(session, gate_native_arguments() + parallel, full_env)
+    torch_env = full_env.copy()
     torch_env["JITTOR_TORCH_SHIM"] = "1"
     _run_pytest_once(session, gate_torch_arguments() + parallel, torch_env)
     # The manual probes get their own process, which is the whole reason they

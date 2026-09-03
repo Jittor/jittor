@@ -186,18 +186,42 @@ def test_pytest_owns_collection_and_strict_xfail_policy():
     }
 
 
+#: Markers the conftest attaches that are not about *which device* runs a test.
+#: `slow` is the tier's (0.15), read from tests/_helpers/tiers.SLOW_FILES; it is
+#: attached to whole files and says nothing about backends, so the device
+#: assertions below subtract it rather than growing a second meaning.
+_NON_DEVICE_MARKERS = {"slow"}
+
+
+def _device_markers(*arguments, **keywords):
+    return _automatic_markers(*arguments, **keywords) - _NON_DEVICE_MARKERS
+
+
 def test_automatic_backend_markers_follow_device_sessions():
     dynamic = "ops/test_ops.py"
-    assert _automatic_markers(dynamic, "cpu", "cpu") == {"cpu"}
-    assert _automatic_markers(dynamic, "cuda", "cuda") == {"cuda"}
-    assert _automatic_markers(dynamic, "npu", "npu") == {"npu"}
-    assert _automatic_markers(dynamic, "cuda", "cpu,cuda") == {"cuda"}
+    assert _device_markers(dynamic, "cpu", "cpu") == {"cpu"}
+    assert _device_markers(dynamic, "cuda", "cuda") == {"cuda"}
+    assert _device_markers(dynamic, "npu", "npu") == {"npu"}
+    assert _device_markers(dynamic, "cuda", "cpu,cuda") == {"cuda"}
 
-    parity = _automatic_markers("backends/parity/test_device_parity.py")
-    triton = _automatic_markers("backends/triton/test_triton_backend.py")
+    parity = _device_markers("backends/parity/test_device_parity.py")
+    triton = _device_markers("backends/triton/test_triton_backend.py")
     assert parity == {"cuda", "npu"}
     assert triton == {"cuda"}
     assert "cpu" not in parity | triton
+
+
+def test_the_tier_marker_is_attached_from_the_recorded_list():
+    """`slow` is data, not a decorator: one list decides, and it is auditable.
+
+    Asserted here because the device test above now has to subtract it -- if
+    that subtraction were silently hiding a marker nobody attaches any more,
+    the tier would have stopped working with nothing to show for it.
+    """
+    listed = "ops/test_ops.py"          # in tiers.SLOW_FILES
+    unlisted = "ops/test_broadcast_to_op.py"
+    assert "slow" in _automatic_markers(listed, "cpu", "cpu")
+    assert "slow" not in _automatic_markers(unlisted, "cpu", "cpu")
 
     external = REPO_ROOT / "agent" / "scripts" / "test_check_wheel_contents.py"
     assert _automatic_markers(external) == set()
