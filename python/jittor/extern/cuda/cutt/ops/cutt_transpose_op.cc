@@ -37,10 +37,10 @@ void CuttTransposeOp::infer_shape() {
         for (int i=0; i<(int)xdim; i++)
             axes.push_back(xdim-1-i);
     } else {
-        CHECKop(axes.size(),==,xdim);
+        USER_CHECKop(axes.size(),==,xdim);
         int64_t mask=0;
         for (auto i : axes) mask |= 1<<i;
-        CHECK(mask==((1ll<<xdim)-1)) << "Invalid axes" << axes;
+        USER_CHECK(mask==((1ll<<xdim)-1)) << "Invalid axes" << axes;
     }
     NanoVector shape;
     for (uint i=0; i<xdim; i++)

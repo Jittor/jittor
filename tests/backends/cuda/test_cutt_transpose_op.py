@@ -24,6 +24,26 @@ def gen_data(shape):
 class TestCuttTransposeOp(unittest.TestCase):
     @unittest.skipIf(cutt_ops==None, "Not use cutt, Skip")
     @jt.flag_scope(use_cuda=1)
+    def test_axes_length_is_a_catchable_user_error(self):
+        x = jt.array(np.zeros((2, 3), dtype="float32"))
+        expect_error(
+            lambda: cutt_ops.cutt_transpose(x, [0]),
+            exc_type=RuntimeError,
+            match="axes.size",
+        )
+
+    @unittest.skipIf(cutt_ops==None, "Not use cutt, Skip")
+    @jt.flag_scope(use_cuda=1)
+    def test_duplicate_axes_are_a_catchable_user_error(self):
+        x = jt.array(np.zeros((2, 3), dtype="float32"))
+        expect_error(
+            lambda: cutt_ops.cutt_transpose(x, [0, 0]),
+            exc_type=RuntimeError,
+            match="Invalid axes",
+        )
+
+    @unittest.skipIf(cutt_ops==None, "Not use cutt, Skip")
+    @jt.flag_scope(use_cuda=1)
     def test_with_np(self):
         def check(a):
             perms = list(permutations(range(a.ndim))) + [None]
