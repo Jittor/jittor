@@ -22,7 +22,7 @@ import pkgutil
 
 from . import definitions as _definitions_pkg
 from .core import (  # re-exported for convenience
-    OpInfo, UnaryUfuncInfo, BinaryUfuncInfo, ReductionOpInfo, SampleInput,
+    OpInfo, UnaryUfuncInfo, BinaryUfuncInfo, ReductionOpInfo, SampleInput, ErrorInput,
     DecorateInfo, skip, xfail,
 )
 
@@ -66,6 +66,7 @@ _check_unique_names()
 unary_ufuncs = [o for o in op_db if isinstance(o, UnaryUfuncInfo)]
 binary_ufuncs = [o for o in op_db if isinstance(o, BinaryUfuncInfo)]
 reduction_ops = [o for o in op_db if isinstance(o, ReductionOpInfo)]
+error_op_db = [o for o in op_db if o.error_inputs_func is not None]
 
 
 def op_names():

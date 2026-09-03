@@ -34,7 +34,7 @@ from _helpers.common import JittorTestCase, to_numpy, float64
 from _helpers.device_types import (
     instantiate_device_type_tests, ops, OpDTypes,
 )
-from opinfo.database import op_db
+from opinfo.database import error_op_db, op_db
 from _helpers.gradcheck import gradcheck, gradgradcheck, GradcheckError
 
 
@@ -143,6 +143,31 @@ class TestGradients(JittorTestCase):
             self.skipTest(f"{op.full_name}: no differentiable samples")
 
 
+class TestErrorInputs(JittorTestCase):
+    """Invalid calls raise the exception type and message declared by OpInfo."""
+
+    @ops(error_op_db, dtypes=OpDTypes.any_one)
+    def test_errors(self, device, dtype, op):
+        cases = op.error_inputs(device, dtype)
+        self.assertGreater(len(cases), 0, f"{op.full_name}: no error inputs produced")
+        for index, error_input in enumerate(cases):
+            sample = error_input.sample_input
+            with self.assertRaisesRegex(
+                    error_input.error_type, error_input.error_regex,
+                    msg=f"{op.full_name} error sample#{index}"):
+                result = op.op(sample.input, *sample.args, **sample.kwargs)
+                if isinstance(result, jt.Var):
+                    result.sync()
+
+
+def test_opinfo_error_input_coverage_exceeds_fifteen_percent():
+    coverage = len(error_op_db) / len(op_db)
+    assert coverage > 0.15, (
+        f"OpInfo error-input coverage is {coverage:.1%}; expected >15% "
+        f"({len(error_op_db)}/{len(op_db)})"
+    )
+
+
 instantiate_device_type_tests(TestCommon, globals())
 # gradcheck compares a float64 numerical Jacobian against the analytical one; the
 # derivative formula it checks is device-independent, and float64 is the only
@@ -150,6 +175,7 @@ instantiate_device_type_tests(TestCommon, globals())
 # than per method) is what makes it survive an accelerator session's device
 # selection instead of vanishing into an empty class.
 instantiate_device_type_tests(TestGradients, globals(), only_for=("cpu",))
+instantiate_device_type_tests(TestErrorInputs, globals(), only_for=("cpu",))
 
 
 if __name__ == "__main__":

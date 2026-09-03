@@ -141,6 +141,26 @@ def test_opinfo_forward_battery_runs_every_declared_dtype():
     assert "ops(op_db, dtypes=OpDTypes.supported)" in decorators
 
 
+def test_opinfo_error_battery_is_generated_only_for_declared_error_inputs():
+    source = (TEST_ROOT / "ops" / "test_ops.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    error_class = next(node for node in tree.body
+                       if isinstance(node, ast.ClassDef)
+                       and node.name == "TestErrorInputs")
+    errors = next(node for node in error_class.body
+                  if isinstance(node, ast.FunctionDef)
+                  and node.name == "test_errors")
+    decorators = [ast.unparse(node) for node in errors.decorator_list]
+    assert "ops(error_op_db, dtypes=OpDTypes.any_one)" in decorators
+    assert "assertRaisesRegex" in ast.unparse(errors)
+
+    coverage = next(node for node in tree.body
+                    if isinstance(node, ast.FunctionDef)
+                    and node.name ==
+                    "test_opinfo_error_input_coverage_exceeds_fifteen_percent")
+    assert "coverage > 0.15" in ast.unparse(coverage)
+
+
 def test_device_parity_has_a_narrow_integer_dtype_axis_and_fails_closed():
     source = (TEST_ROOT / "backends" / "parity" /
               "test_device_parity.py").read_text(encoding="utf-8")

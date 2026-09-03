@@ -5,6 +5,6 @@
 # ***************************************************************
 """OpInfo metadata objects for jittor's operator test database."""
 from .core import (  # noqa: F401
-    SampleInput, OpInfo, UnaryUfuncInfo, BinaryUfuncInfo, ReductionOpInfo,
+    SampleInput, ErrorInput, OpInfo, UnaryUfuncInfo, BinaryUfuncInfo, ReductionOpInfo,
     DecorateInfo, skip, xfail,
 )

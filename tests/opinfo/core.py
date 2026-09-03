@@ -18,6 +18,8 @@ metadata row means adding an op (or a missing dtype/backward) is a few lines, an
 every op automatically gets the full battery -- closing the "forward-only" holes by
 construction rather than by remembering to write a backward test.
 """
+import types
+
 from _helpers import common as cu
 
 
@@ -50,6 +52,17 @@ class SampleInput:
 
     def __repr__(self):
         return f"SampleInput(input={_shape_of(self.input)}, args={self.args}, kwargs={self.kwargs})"
+
+
+class ErrorInput:
+    """One invalid operator call and the exact failure contract it must satisfy."""
+
+    __slots__ = ["sample_input", "error_type", "error_regex"]
+
+    def __init__(self, sample_input, *, error_type, error_regex):
+        self.sample_input = sample_input
+        self.error_type = error_type
+        self.error_regex = error_regex
 
 
 def _shape_of(x):
@@ -111,6 +124,7 @@ class OpInfo:
       ref:                  numpy reference forward, ``ref(*np_inputs, **kwargs)``. The
                             INDEPENDENT oracle that makes a green forward meaningful.
       sample_inputs_func:   ``f(opinfo, device, dtype, requires_grad) -> [SampleInput]``.
+      error_inputs_func:    ``f(opinfo, device, dtype) -> [ErrorInput]``.
       dtypes / dtypesIfCUDA: supported dtype sets (``cu.floating_types()`` etc.).
       supports_autograd:    whether to run gradcheck (default True).
       supports_gradgrad:    whether to run gradgradcheck (default = supports_autograd).
@@ -122,6 +136,7 @@ class OpInfo:
     """
 
     def __init__(self, name, *, op=None, ref=None, sample_inputs_func=None,
+                 error_inputs_func=None,
                  dtypes=None, dtypesIfCUDA=None,
                  supports_autograd=True, supports_gradgrad=None,
                  gradcheck_nondet_tol=0.0, gradcheck_wrapper=None,
@@ -138,6 +153,7 @@ class OpInfo:
         # the per-dtype default. None -> use the default dtype tolerance.
         self.reference_tol = reference_tol
         self.sample_inputs_func = sample_inputs_func
+        self.error_inputs_func = error_inputs_func
         self.dtypes = tuple(dtypes) if dtypes is not None else cu.floating_types()
         self.dtypesIfCUDA = tuple(dtypesIfCUDA) if dtypesIfCUDA is not None else self.dtypes
         self.supports_autograd = supports_autograd
@@ -179,6 +195,11 @@ class OpInfo:
         out = self.sample_inputs_func(self, device, dtype, requires_grad)
         return list(out)
 
+    def error_inputs(self, device, dtype):
+        assert self.error_inputs_func is not None, \
+            f"OpInfo '{self.name}' has no error_inputs_func"
+        return list(self.error_inputs_func(self, device, dtype))
+
     @property
     def full_name(self):
         return self.name + (("_" + self.variant_test_name) if self.variant_test_name else "")
@@ -200,6 +221,7 @@ class UnaryUfuncInfo(OpInfo):
     def __init__(self, name, *, ref=None, domain=(None, None), **kwargs):
         self.domain = domain
         kwargs.setdefault("sample_inputs_func", sample_inputs_unary)
+        kwargs.setdefault("error_inputs_func", error_inputs_unary)
         super().__init__(name, ref=ref, **kwargs)
 
 
@@ -232,6 +254,17 @@ def sample_inputs_unary(op_info, device, dtype, requires_grad):
     return [SampleInput(cu.make_tensor(*s, dtype=dtype, low=lo, high=hi,
                                        requires_grad=requires_grad, seed=100 + i))
             for i, s in enumerate(shapes)]
+
+
+def error_inputs_unary(op_info, device, dtype):
+    value = cu.make_tensor(2, dtype=dtype, requires_grad=False, seed=1900)
+    builtin_binding = isinstance(op_info.op, types.BuiltinFunctionType)
+    return [ErrorInput(
+        SampleInput(value, __opinfo_invalid_keyword__=True),
+        error_type=RuntimeError if builtin_binding else TypeError,
+        error_regex=(r"Wrong inputs arguments" if builtin_binding
+                     else r"unexpected keyword argument"),
+    )]
 
 
 def sample_inputs_binary(op_info, device, dtype, requires_grad):

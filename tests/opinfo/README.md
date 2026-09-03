@@ -13,13 +13,15 @@ oracle for analytical gradients.
 | `../_helpers/common.py` | `JittorTestCase` (`assertEqual`, tolerance policy), `make_tensor`, dtype groups, `parametrize` | `common_utils.py` |
 | `../_helpers/device_types.py` | `instantiate_device_type_tests`, `@ops`/`@dtypes`/`@onlyCPU`/`@onlyCUDA`/`@onlyNPU`/`@skipCUDAIf` | `common_device_type.py` |
 | `../_helpers/gradcheck.py` | `gradcheck` / `gradgradcheck` / `numerical_vjp` — the **backward oracle** (numerical vs analytical Jacobian, float64) | `torch.autograd.gradcheck` |
-| `core.py` | `OpInfo`, `SampleInput`, `UnaryUfuncInfo`, `BinaryUfuncInfo`, `ReductionOpInfo`, `DecorateInfo`/`skip`/`xfail` | `opinfo/core.py` |
+| `core.py` | `OpInfo`, `SampleInput`, `ErrorInput`, specialized OpInfos, `DecorateInfo`/`skip`/`xfail` | `opinfo/core.py` |
 | `definitions/*.py` | per-domain `OpInfo` lists (auto-discovered); `_refs.py` shared numpy refs | `opinfo/definitions/` |
 | `database.py` | `op_db` — aggregate of all definitions | same |
-| `report.py` | coverage matrix (op × {fwd, bwd, gradgrad}) + SKIP reporting | — |
+| `report.py` | coverage matrix (op × {fwd, bwd, gradgrad, errors}) + SKIP reporting | — |
 
 The generic drivers live in `../ops/test_ops.py` (`TestCommon` forward-vs-ref,
-`TestGradients` gradcheck), generated over `op_db × device × dtype`.
+`TestGradients` gradcheck, `TestErrorInputs` strict invalid-call contracts), generated
+from the applicable OpInfo metadata. A gate keeps error-input metadata on more than
+15% of the registry.
 
 ## Why a green test means something
 
@@ -46,6 +48,10 @@ op_db = [
            supports_autograd=False),                             # non-differentiable
 ]
 ```
+
+Invalid calls use `ErrorInput(SampleInput(...), error_type=..., error_regex=...)`
+from an `error_inputs_func`. Both the exception type and a stable semantic fragment
+of the message are required; an unrelated setup exception must not satisfy the test.
 
 Rules of thumb:
 - A `SampleInput`'s `input` and any **float-Var positional args** are differentiated by
