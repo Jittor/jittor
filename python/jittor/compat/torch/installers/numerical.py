@@ -431,6 +431,38 @@ for _nan_reduction_name in ("nansum", "nanmean"):
 del _nan_reduction_name
 
 
+_QUANTILE_FIDELITY_DETAIL = (
+    "uses a NumPy CPU fallback for supported real tensors; dtype is returned "
+    "as float32 and device, layout, interpolation, and out semantics are not "
+    "implemented"
+)
+
+
+def _quantile_impl(input, q, dim=None, keepdim=False,
+                   interpolation="linear", **kwargs):
+    values = input.numpy()
+    quantile = q.numpy() if isinstance(q, jt.Var) else q
+    result = np.quantile(
+        values, quantile, axis=dim, keepdims=keepdim)
+    return jt.array(result.astype("float32"))
+
+
+def quantile(input, q, dim=None, keepdim=False,
+             interpolation="linear", **kwargs):
+    """Return a NumPy-backed quantile result for CPU-compatible tensors."""
+    return _quantile_impl(
+        input, q, dim=dim, keepdim=keepdim,
+        interpolation=interpolation, **kwargs)
+
+
+register_fidelity(
+    "torch.quantile",
+    quantile,
+    Fidelity.APPROXIMATE,
+    _QUANTILE_FIDELITY_DETAIL,
+)
+
+
 _AminMax = _namedtuple("aminmax", ["min", "max"])
 _AMINMAX_FIDELITY_DETAIL = (
     "matches Torch min/max values for supported real tensor inputs but omits "
@@ -894,13 +926,7 @@ def install(ctx):
         return (s * s, m)
     _alias("var_mean", _var_mean)
     _alias("aminmax", aminmax); Var.aminmax = _aminmax_impl
-    def _quantile(input, q, dim=None, keepdim=False, interpolation="linear", **k):
-        import numpy as _np_q
-        arr = input.numpy()
-        qn = q.numpy() if isinstance(q, Var) else q
-        r = _np_q.quantile(arr, qn, axis=dim, keepdims=keepdim)
-        return jt.array(r.astype("float32"))
-    _alias("quantile", _quantile)
+    _alias("quantile", quantile)
     def _nanquantile(input, q, dim=None, keepdim=False, interpolation="linear", **k):
         import numpy as _np_q
         arr = input.numpy()
