@@ -1724,7 +1724,16 @@ class Module:
             import torch
             for k,v in ps.items():
                 if isinstance(v, Var):
-                    ps[k] = torch.Tensor(v.numpy())
+                    # from_numpy, not torch.Tensor(...): the latter is
+                    # torch.FloatTensor, so it casts EVERY entry to float32.
+                    # A state dict carries integer and bool buffers as well as
+                    # float weights -- num_batches_tracked, attention masks,
+                    # quantisation zero-points -- and load_state_dict on the
+                    # torch side then either rejects them or silently keeps the
+                    # float copy. from_numpy preserves the dtype, and the array
+                    # v.numpy() returns is already a fresh copy, so sharing its
+                    # storage costs nothing.
+                    ps[k] = torch.from_numpy(v.numpy())
         if prefix:
             ps = {prefix + k: v for k, v in ps.items()}
         if destination is not None:
