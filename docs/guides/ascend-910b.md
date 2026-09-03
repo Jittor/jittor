@@ -477,3 +477,7 @@ outside this migration slice.
 The ACL Dropout forward owner uses the shared launcher while retaining its
 probability, training, seed, offset, and dual-output handling. Dropout backward
 is intentionally outside this slice.
+
+The ACL LeakyReLU forward owner uses the shared launcher while retaining its
+negativeSlope scalar and synchronous execution. LeakyReLU backward is outside
+this slice; scalar exceptional cleanup is unchanged.

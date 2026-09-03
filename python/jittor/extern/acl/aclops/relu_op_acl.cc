@@ -43,17 +43,7 @@ namespace jittor
         negativeSlope = aclCreateScalar(&attr->negativeSlope, aclDataType::ACL_FLOAT);
         ret = aclnnLeakyReluGetWorkspaceSize(inputTensors[0], negativeSlope, outputTensors[0], &workspaceSize, &executor);
 
-        checkRet(ret);
-
-        if (workspaceSize > 0)
-        {
-            mallocWorkSpace(workspaceSize);
-        }
-
-        ret = aclnnLeakyRelu(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnLeakyRelu failed. ERROR: %d\n", name.c_str(), ret); return);
-
-        syncRun();
+        launch(ret, aclnnLeakyRelu, true);
 
         aclDestroyScalar(negativeSlope);
         return;

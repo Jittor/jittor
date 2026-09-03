@@ -26,6 +26,7 @@ CONCAT_SOURCE = ROOT / "python/jittor/extern/acl/aclops/concat_op_acl.cc"
 WHERE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/where_op_acl.cc"
 RANGE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/index_op_acl.cc"
 DROPOUT_SOURCE = ROOT / "python/jittor/extern/acl/aclops/dropout_op_acl.cc"
+RELU_SOURCE = ROOT / "python/jittor/extern/acl/aclops/relu_op_acl.cc"
 GATHER_SOURCE = ROOT / "python/jittor/extern/acl/aclops/gather_scatter_op_acl.cc"
 
 
@@ -278,6 +279,17 @@ def test_dropout_forward_uses_launcher_and_backward_remains_present():
     assert "mallocWorkSpace(workspaceSize)" not in forward
     assert "syncRun();" not in forward
     assert "void DropoutBackwardOpRunner::executeOp" in source
+
+
+def test_leaky_relu_forward_uses_launcher_and_backward_remains_present():
+    source = RELU_SOURCE.read_text()
+    forward = source[source.index("void LeakyReLUOpRunner::executeOp"):source.index("LeakyReLUBackwardOpRunner::LeakyReLUBackwardOpRunner")]
+    assert "negativeSlope" in forward
+    assert "launch(ret, aclnnLeakyRelu, true);" in forward
+    assert "checkRet(ret);" not in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void LeakyReLUBackwardOpRunner::executeOp" in source
 
 
 def test_scatter_uses_launcher_and_keeps_axis_reduction_query():
