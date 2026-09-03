@@ -40,17 +40,7 @@ namespace jittor
         auto attr = dynamic_cast<TriuAttr *>(op_attr.get());
         ret = aclnnTriuGetWorkspaceSize(inputTensors[0], aclDataType(attr->diagonal), outputTensors[0], &workspaceSize, &executor);
 
-        checkRet(ret);
-
-        if (workspaceSize > 0)
-        {
-            mallocWorkSpace(workspaceSize);
-        }
-
-        ret = aclnnTriu(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnTriu failed. ERROR: %d\n", name.c_str(), ret); return);
-
-        syncRun();
+        launch(ret, aclnnTriu, true);
 
         return;
     }
