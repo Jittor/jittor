@@ -109,6 +109,10 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | `UnrollPass` 与 `ExpandEmptyBlockPass` 同名 | 已修（3.14，`6c899325`）。`exclude_pass` 与 `pass_map` 都按名字索引，`emplace` 不覆盖，后跑的那个根本没进表；`get_pass` 还会把它 C 风格强转成另一个类型。g++ 构建上 UnrollPass 根本不跑，所以运行期校验抓不到，用例改成实例化 30 个 pass 比名字 | — |
 | 3.13 前置核实：`range10` 今天真的会出现，且 `loop_id` 在合并后已经与循环变量对不上 | 实测（CPU，8 维加 3 次 split、9 维加 2 次 split 起）生成源码里确实出现 `range10`；我试过的 20 组（元素级/归约/广播 × 7–10 维 × 0–4 次 split）**数值都还是对的**，所以这条今天是潜伏的，不是已经在算错。两条具体机制：(1) `merge_loop_var_pass.cc` 用 `size()==6` 判断「是单个 range」、用逐字符拆分把 `range23` 展开成 `range2*range3`，对基础的 `range10` 会拆成 `range1*range0`；更危险的是合并出的新 id 是 `aid+bid` 字符串拼接，合并 1 和 0 得到的 `range10` 与基础 `range10` **同名**，而代码里 `if (!find_define(new_range)) push_back(定义)` 恰好会跳过定义、直接复用那个基础 range —— 循环上界完全错误且能编译。(2) 合并后 `loop_id` 变成拼接串，但循环的归纳变量仍是 `id{bid}`，而 `restride_pass.cc:50` 用 `"id"+fa->attrs["loop_id"]` 去找它 —— 合并后这两者已经对不上了。所以 3.13 不是改一个函数，确实需要计划里说的「loop id 用整数向量、名字只在输出时生成」 | 代码生成分区，3.13 |
 | 3.10 前置核实：改名的默认动作是「白名单之外一律加 `op{i}_` 前缀」 | `op_compiler.cc` 的 `unchanged` 只有 24 项（`for/const/auto/int/float/bool/void/if/true/false/...`），`return`、`else`、`while`、`static`、`unsigned`、`char`、`long`、`double`、`size_t`、`int64`、`uint`、`nullptr` 全都不在里面，会变成 `op0_return` 这种。因为这些写法今天写了就编不过，**现有算子里一个都没有**，所以把它们加进「不改名」集合对现存代码是行为不变的（只会让新写法能用）。建议的形状：完整的 C++ 关键字集合 + 运行期已知类型（`op_type->types` 已有）作为不改名集合，再加一条改名后的合法性校验 —— 两个相邻的被改名标识符（`op0_A op0_B`）几乎只能是「把类型名改了名」，直接报一条指名道姓的错误，而不是把 `op0_size_t 不是类型` 丢给 C++ 编译器 | 代码生成分区，3.10 |
+| 3.13 结论：合并 range 的命名冲突今天**不可达**，两条别处的巧合各兜着一半 | 3.13 已合并（`bd5b5a67`）。前置核实那条说的命名冲突（合并 1 和 0 得到 `range10`，撞上基础/split 的 `range10`）**构造不出来**：我用 10 维 + `split9` + `order1=1`/`order{i}=2` 把循环 1、0 排到最内层，合并 id 恰为 "10"、`range10` 也确实存在——但 reorder 之后 1 与 0 在**内存序**上不再相邻，`expr::match` 直接失配，合并根本不发生。也就是说合并 id 永远是按嵌套序递增拼接，而嵌套序就是内存序。另外两条兜底：`NanoVector::push_back_check_overflow` 断言 `s<10`（张量最多 10 维，基础 range 只到 `range9`），以及 **split 出来的循环永远进不了合并**（父循环 `inner` 里多一条 range 定义，过不了 `inner.size()==3`），所以所有合并 id 的每一段都是一位数、逐字符拆分恰好是对的。这三条都是别处代码的巧合，不是这里声明的前提——已改成 `parse_loop_id`/`format_loop_id`，段间用 `_` 隔开 | 代码生成分区，3.13 |
+| 3.15 结论：pass pipeline 跑两遍是真的，但只占首次执行的 0.04%–0.22%，不值得改 | 3.15 已合并（`97cac22f`）。加 `LOGvvv` 计时后实测：元素级 CPU parse 72us / passes 627us / to_string 38us，而首次执行 1012ms；matmul CPU 两遍合计 4.6ms，首次执行 2080ms；CUDA 元素级 pipeline 0.95ms、首次执行 3871ms。**其余全是 g++/nvcc**。计划提的「一次解析后 clone IR」只省得到第二次的 parse（~170us），而 clone 与 parse 是同一量级、没有 tuner 自信时那一份 clone 纯属白做——最好情况省 0.008%，代价是给 KernelIR 引入一条 father/scope 指针容易出错的复原路径。**真正做了的两件**：ReorderTuner 的候选从 N!（10 维 + 3 次 split 实测 order0..order12、乘积 **3,628,800,000**）改成按 `jit_search_max_candidates`（默认 1024）截断；`Searcher::timeout` 从「声明了没人读」改成由 `jit_search_timeout` 设置并真正生效 | 代码生成分区，3.15 |
+| 3.11 结论：relay kernel 里的字节偏移，主路径上被 `cache_compile` 的内容哈希兜着，但 `rewrite_op=0` 时真可达 | 3.11 已合并（`f32d3c83`）。`get_relay_src` 生成 `GET_VAR_MEMBER(rop_0_0, 120) = vars[2].var;`，120/128/136 是算子结构体的字节偏移，写进 JIT 缓存复用而 jit key 里没有布局信息。主路径上 `cache_compile` 把生成源码的内容哈希算进缓存键，偏移一变就重编；但 `rewrite_op` 是个 flag，设成 0 时已存在的 `.cc` 不重写，旧偏移与自己的哈希一致、不重编——这条路真可达。已改成按名字 `set_var_member("a", ...)`。另外审计说「偏移由 compiler.py 用正则扫头文件得出」**不准确**：正则只扫**名字**，偏移是 `offsetof` 在 C++ 编译期算的；但那个正则确实有一种哑失败（`jittor::Var* x;` / `const Var* x;` 扫不到，成员不进注册表、relay 时永不绑定），已抽成 `compiler.parse_var_members` 并让读不懂的写法**构建失败** | 代码生成分区，3.11 |
+| 3.10 结论：扩充「不改名」集合对现存代码逐字节不变 | 3.10 已合并（`864fa52c`）。58 组生成源码（元素级 1..8 维 / 五种 dtype / 一元链 / 六种归约 / broadcast / ternary / index / transpose 融合 / 六组 loop option，CPU 与 CUDA 各一遍）改前改后逐字节相同。新增的合法性校验（两个相邻的被改名标识符只可能是「类型名被改名了」）要放过算子自己 `#define` 出来的宏——`index_t`、`Tx`、`T` 都是宏，`op0_index_t op0_i` 是**正常**生成结果 | 代码生成分区，3.10 |
 | `split{i}` 与 `parallel` 不兼容 | 同时设这两个 loop option，`ParallelPass` 在 `ASSERT(def)` 上失败（`Check failed: def`）。`SplitLoopPass` 给内层循环的 range 是 `::min(range{i}-id{i}, stride{i})`，定义在外层循环里且随它变化，`ParallelPass` 在调用点 `func->find_define` 找不到、也无法在调用点求值。CUDA 恒走 `ParallelPass`，所以 CUDA 上任何 split 候选都必然编译失败。用例已钉住：`tests/compiler/test_reduce_tuner.py::test_a_split_candidate_would_not_compile_under_parallel` | 代码生成分区，1.04 的前置 |
 | CUDA 归约需要的是线程分解候选，不是 CPU 那套 | `orderN` 候选实测五种形状全部不优于默认（最差 2.1 倍，破坏访存合并），`split{i}` 被上一条挡着，L1 分块尺寸对 GPU 无意义。真正有用的候选是 `ParallelPass` 里的线程分解，属于新工作 | 代码生成分区，待 1.04 前置解决后 |
 | `para_opt_level=4` 的块内共享内存归约比默认慢 1.6–2.0 倍 | 实测四种 UNet 形状：默认（warp shuffle）15.7/14.0/15.0/18.1us，lvl 4（`SharedReducePass`）25.3/31.3/25.3/34.8us，不优化 157/92/159/171us。默认值保持 3。要提升需要「warp shuffle → 每 warp 一个值 → 共享内存 → 每输出一次原子」的混合实现，并且要有生态 harness 的端到端数据；数据与方法在 `agent/skills/cuda-reduction-strategy-comparison/` | 代码生成分区，新任务待派 |
@@ -240,14 +244,14 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 3.05 | 删除算子构造期回调执行器 | 待领 | | |
 | 3.06 | 并行编译器修到可信 | 待领 | | |
 | 3.07 | 执行器在设备等待段释放 GIL | 待领 | | |
-| 3.08 | KernelIR 结构化 | 待领 | | |
+| 3.08 | KernelIR 结构化 | 已合并 | codegen | 属性名 `62cdee84`、节点类型 enum `78410930`、pass 契约 `c3557a1c` |
 | 3.09 | 死代码消除不再按「语句含 `void` 一词」删除 | 已合并 | codegen | 66e5a153 |
-| 3.10 | 算子内标识符改名走结构化成员表并先做合法性校验，替代三个硬编码白名单与 `op{i}_` 盲目前… | 待领 | | |
-| 3.11 | 生成源码里的结构体字节偏移改显式 setter，成员表用宏声明 | 待领 | | |
+| 3.10 | 算子内标识符改名走结构化成员表并先做合法性校验，替代三个硬编码白名单与 `op{i}_` 盲目前… | 已合并 | codegen | 864fa52c |
+| 3.11 | 生成源码里的结构体字节偏移改显式 setter，成员表用宏声明 | 已合并 | codegen | f32d3c83 |
 | 3.12 | `float_atomic_fix_pass.cc:76-80`、`fake_main_pass… | 待领 | | |
-| 3.13 | 循环维度身份用整数向量，`range10` 不再被拆成 `range1*range0` | 待领 | | |
+| 3.13 | 循环维度身份用整数向量，`range10` 不再被拆成 `range1*range0` | 已合并 | codegen | bd5b5a67，用例修正 e1717fe5 |
 | 3.14 | 两个同名 pass | 已合并 | codegen | 6c899325 |
-| 3.15 | 一次编译只解析一遍 | 待领 | | |
+| 3.15 | 一次编译只解析一遍 | 已合并 | codegen | 97cac22f；“只解析一遍”实测不值得，见下方结论行 |
 | 3.16 | `token_replace_all` 不再用 CHECK 抛异常做循环终止 | 待领 | | |
 | 3.17 | 只用于代码生成的 JIT 区段与普通 C++ 分离 | 待领 | | |
 | 3.18 | 删掉 `asm_tuner` 链路 | 待领 | | |
