@@ -485,6 +485,9 @@ this slice; scalar exceptional cleanup is unchanged.
 The ACL ArgReduce owner routes both max and min execution through the shared
 launcher while retaining is_max, dim, keepdims, and dual-output handling.
 
+The ACLNN declaration header has an explicit include guard. This is a source
+organization contract and does not constitute Ascend hardware validation.
+
 The ACL Random owner routes uniform and normal execution through the shared
 launcher while retaining seed, offset, unsupported-type diagnostics, and
 synchronous execution.
