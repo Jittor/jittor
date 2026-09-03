@@ -501,3 +501,9 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `8.06`：`600ee169` 将 BatchMatMul 接入共享 launcher，保留 `cube_math_type` 与同步策略；结构合同 32 passed，本机无 CANN/NPU，仍待实机。
 - `2.19`：`67e710b7`/`aae33e6a` 将 cuDNN convolution backward-x 格式边界改为 `USER_CHECK`；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向，累计 81 处。
 - `7.03`：`93cd6a53` 将 `svd` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；`py_compile`/diff-check 通过，动态三节点因首次编译过久终止，未宣称通过。
+
+### 2026-09-04 第四十六波补充证据
+
+- `8.06`：`8251d29d` 将 RotaryPositionEmbedding forward 接入共享 launcher，保留三输入与同步策略；结构合同 33 passed，本机无 CANN/NPU，仍待实机。
+- `2.19`：`0a0e820e`/`aad3ba0c` 将 cuDNN convolution backward-w 格式边界改为 `USER_CHECK`；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向，累计 82 处。
+- `7.03`：`dc8cdfcb` 将 `svd_lowrank` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；`py_compile`/diff-check 通过，动态 JIT 未运行。
