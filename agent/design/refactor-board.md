@@ -448,7 +448,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 9.13 | README 加「首次运行会发生什么」 | 已合并 | 构建 | dad3cd26 |
 | 9.14 | 一次性的构建前置条件检查 | 已合并 | 构建 | b2bd11fd（审计那 17 个失败点：4 个可操作 → 15 个「是」、2 个「部分」、0 个「否」） |
 | 9.15 | noxfile | 已合并 | 构建 | 84c7f766 |
-| 9.16 | `agent/scripts/check_repo_layout.sh` 收缩为少数真会复发的检… | 待领 | | |
+| 9.16 | `agent/scripts/check_repo_layout.sh` 收缩为少数真会复发的检… | 已合并 | build | c62baab7。266 行降到 68 行，删除历史路径/根目录清单与全树 grep，保留运行时资源、生成物污染、实验目录、模块包冲突和文档治理；0.18 s，相关结构测试 20 passed |
 | 9.17 | 死代码 | 已合并 | 构建 | f99250bb |
 | 9.18 | `disable_lock=1` 启用时明确告警并纳入缓存指纹 | 已合并 | build | 801dd80d。启用时打印并发损坏警告并进入独立构建配置指纹；默认锁定配置保持原缓存名。相关两文件 28 passed |
 | 9.19 | 布局收尾 | 待领 | | |
