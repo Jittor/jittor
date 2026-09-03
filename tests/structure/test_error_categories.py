@@ -135,6 +135,10 @@ MIGRATED_CUDNN_CONV_BWD_X_FORMAT_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_x_op.cc": 1,
 }
 
+MIGRATED_CUDNN_CONV_BWD_W_FORMAT_USER_BOUNDARIES = {
+    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_w_op.cc": 1,
+}
+
 MIGRATED_FUSED_ADAMW_CARDINALITY_BOUNDARIES = {
     "python/jittor/src/ops/fused_adamw_op.cc": 4,
 }
@@ -412,6 +416,14 @@ def test_cudnn_conv_bwd_x_format_user_boundary_migration_is_explicit_and_bounded
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_CUDNN_CONV_BWD_X_FORMAT_USER_BOUNDARIES[
         "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_x_op.cc"]
+    assert "Not a valid format" in source
+
+
+def test_cudnn_conv_bwd_w_format_user_boundary_migration_is_explicit_and_bounded():
+    source = (ROOT / "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_w_op.cc").read_text()
+    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    assert actual == MIGRATED_CUDNN_CONV_BWD_W_FORMAT_USER_BOUNDARIES[
+        "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_w_op.cc"]
     assert "Not a valid format" in source
 
 
