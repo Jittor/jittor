@@ -2836,9 +2836,10 @@ def dirty_fix_pytorch_runtime_error():
     import os, platform
 
     if platform.system() == 'Linux':
-        os.RTLD_GLOBAL = os.RTLD_GLOBAL | os.RTLD_DEEPBIND
         import jittor_utils
-        with jittor_utils.import_scope(os.RTLD_GLOBAL | os.RTLD_NOW):
+        flags = os.RTLD_GLOBAL | os.RTLD_NOW | \
+            getattr(os, "RTLD_DEEPBIND", 0)
+        with jittor_utils.import_scope(flags):
             import torch
 
 

@@ -1026,18 +1026,12 @@ def setup_mpi():
         setattr(core.Var, k, wrapper(mpi_ops.__dict__[k]))
 
 in_mpi = inside_mpi()
-FIX_TORCH_ERROR = 0
-if os.name != 'nt' and not in_mpi:
-    FIX_TORCH_ERROR = 1
-if "FIX_TORCH_ERROR" in os.environ:
-    FIX_TORCH_ERROR = os.environ["FIX_TORCH_ERROR"] != "0"
+# Importing Jittor must not probe/import Torch as a side effect. Keep the old
+# loader workaround as an explicit opt-in for applications that need it.
+FIX_TORCH_ERROR = os.environ.get("FIX_TORCH_ERROR", "0") == "1"
 if FIX_TORCH_ERROR:
-    try:
-        import torch
-        from jittor_utils import dirty_fix_pytorch_runtime_error
-        dirty_fix_pytorch_runtime_error()
-    except:
-        pass
+    from jittor_utils import dirty_fix_pytorch_runtime_error
+    dirty_fix_pytorch_runtime_error()
 
 cudnn = cublas = curand = cufft = cusparse = cutt = None
 

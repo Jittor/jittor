@@ -149,6 +149,38 @@ assert PIL.Image.open is original
 print("DONE")
 '''
 
+TORCH_IMPORT_IS_LAZY = '''
+import importlib.abc
+import sys
+
+attempts = []
+class TorchProbe(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "torch":
+            attempts.append(fullname)
+        return None
+
+sys.meta_path.insert(0, TorchProbe())
+import jittor
+assert attempts == [], "import jittor attempted to import torch: %r" % attempts
+print("DONE")
+'''
+
+DIRTY_FIX_PRESERVES_OS_CONSTANTS = '''
+import os
+import sys
+import types
+import jittor as jt
+import jittor_utils
+
+sys.modules["torch"] = types.ModuleType("torch")
+before = os.RTLD_GLOBAL
+jt.dirty_fix_pytorch_runtime_error()
+jittor_utils.dirty_fix_pytorch_runtime_error()
+assert os.RTLD_GLOBAL == before, (before, os.RTLD_GLOBAL)
+print("DONE")
+'''
+
 
 class TestImportDoesNotReseedForeignRngs(unittest.TestCase):
     def _ok(self, source):
@@ -183,6 +215,19 @@ class TestImportDoesNotPatchPil(unittest.TestCase):
 
     def test_nested_timer_scopes_do_not_unhook_early(self):
         self._ok(PIL_HOOK_NESTS)
+
+
+class TestImportDoesNotLoadTorch(unittest.TestCase):
+    def _ok(self, source):
+        code, out = run_probe(source)
+        self.assertEqual(code, 0, out)
+        self.assertIn("DONE", out)
+
+    def test_native_import_does_not_attempt_to_import_torch(self):
+        self._ok(TORCH_IMPORT_IS_LAZY)
+
+    def test_explicit_dirty_fix_does_not_rewrite_os_constants(self):
+        self._ok(DIRTY_FIX_PRESERVES_OS_CONSTANTS)
 
 
 if __name__ == "__main__":
