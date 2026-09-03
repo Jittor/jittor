@@ -36,16 +36,16 @@ void ReshapeOp::infer_shape() {
         } else
             y_items *= shape[i];
     }
-    CHECK(uncertain_dim <= 1) << "max number of -1 is 1, but get" << uncertain_dim << ".";
+    USER_CHECK(uncertain_dim <= 1) << "max number of -1 is 1, but get" << uncertain_dim << ".";
     int64_t x_items = x->num;
     auto yshape = shape;
     if (uncertain_dim == 0) {
-        CHECKop(x_items,==,y_items) << "reshape shape is invalid for input of size";
+        USER_CHECKop(x_items,==,y_items) << "reshape shape is invalid for input of size";
     } else {
         if (x_items == 0) {
             uncertain_dim = 0;
         } else {
-            CHECK(y_items != 0 && x_items % y_items == 0) << "reshape shape is invalid for input of size " << x_items;
+            USER_CHECK(y_items != 0 && x_items % y_items == 0) << "reshape shape is invalid for input of size " << x_items;
             uncertain_dim = x_items / y_items;
         }        
         yshape.clear();

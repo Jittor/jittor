@@ -17,6 +17,10 @@ def gen_data(shape):
     return a.reshape(shape)
 
 class TestTransposeOp(unittest.TestCase):
+    def test_invalid_axes_is_a_catchable_user_error(self):
+        with self.assertRaisesRegex(RuntimeError, "Invalid axes"):
+            jt.transpose(jt.ones((2, 3)), (0, 0))
+
     def test_with_np(self):
         def check(a):
             perms = list(permutations(range(a.ndim))) + [None]
