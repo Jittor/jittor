@@ -23,14 +23,18 @@ from ...diagnostics import EXPECTED, swallowed
 
 
 _FACTORY_NAMES = (
-    "arange", "bernoulli", "empty", "full", "full_like", "linspace",
-    "multinomial", "normal", "ones", "ones_like", "rand", "rand_like",
-    "randint", "randn", "randn_like", "randperm", "tril", "triu", "zeros",
-    "zeros_like",
+    "arange", "bernoulli", "empty", "empty_like", "full", "full_like",
+    "linspace", "multinomial", "normal", "ones", "ones_like", "rand",
+    "rand_like", "randint", "randn", "randn_like", "randperm", "tril",
+    "triu", "zeros", "zeros_like",
 )
 _FACTORY_FIDELITY_DETAIL = (
     "supports Jittor-backed tensor construction but approximates or omits "
     "some Torch layout, pin-memory, out, or generator-state semantics"
+)
+_EMPTY_LIKE_FIDELITY_DETAIL = (
+    "preserves the input shape and dtype through Jittor allocation but omits "
+    "Torch layout, device, requires_grad, pin-memory, and memory-format semantics"
 )
 
 
@@ -69,7 +73,8 @@ for _name, _api in FACTORY_APIS.items():
         "torch." + _name,
         _api,
         Fidelity.APPROXIMATE,
-        _FACTORY_FIDELITY_DETAIL,
+        (_EMPTY_LIKE_FIDELITY_DETAIL
+         if _name == "empty_like" else _FACTORY_FIDELITY_DETAIL),
     )
 del _name, _api
 
@@ -87,6 +92,17 @@ def _factory_implementation(value):
     if isinstance(value, _FactoryAPI):
         return value.implementation
     return value
+
+
+def _empty_like_implementation(input, **kwargs):
+    """Preserve the historical compiler fallback for ``torch.empty_like``."""
+    return jt.empty(input.shape, input.dtype)
+
+
+def _install_empty_like(root):
+    """Publish the family-owned stable object at the legacy install step."""
+    if not hasattr(root, "empty_like"):
+        _publish_factory(root, "empty_like", _empty_like_implementation)
 
 
 def _wrap_constructors(g):

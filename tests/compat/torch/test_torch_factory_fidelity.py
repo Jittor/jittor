@@ -7,10 +7,10 @@ import jittor as torch
 
 
 FACTORY_NAMES = (
-    "arange", "bernoulli", "empty", "full", "full_like", "linspace",
-    "multinomial", "normal", "ones", "ones_like", "rand", "rand_like",
-    "randint", "randn", "randn_like", "randperm", "tril", "triu", "zeros",
-    "zeros_like",
+    "arange", "bernoulli", "empty", "empty_like", "full", "full_like",
+    "linspace", "multinomial", "normal", "ones", "ones_like", "rand",
+    "rand_like", "randint", "randn", "randn_like", "randperm", "tril",
+    "triu", "zeros", "zeros_like",
 )
 
 
@@ -51,6 +51,20 @@ class TestTorchFactoryFidelity(unittest.TestCase):
         with torch.flag_scope(use_cuda=0):
             value = factories.zeros((2, 3), dtype=torch.float32)
         np.testing.assert_array_equal(value.numpy(), np.zeros((2, 3)))
+
+    def test_empty_like_implementation_is_family_owned_and_runs_on_cpu(self):
+        factories = importlib.import_module(
+            "jittor.compat.torch.installers.factories")
+        self.assertEqual(
+            factories.empty_like.implementation.__module__, factories.__name__)
+        record = importlib.import_module(
+            "jittor.compat.torch.fidelity").fidelity_of("torch.empty_like")
+        self.assertIn("device", record.detail)
+        with torch.flag_scope(use_cuda=0):
+            source = torch.ones((2, 3), dtype=torch.float64)
+            value = factories.empty_like(source)
+        self.assertEqual(tuple(value.shape), (2, 3))
+        self.assertEqual(value.dtype, source.dtype)
 
 
 if __name__ == "__main__":

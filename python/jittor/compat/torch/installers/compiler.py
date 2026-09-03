@@ -11,6 +11,7 @@ import jittor as jt
 from ...permissive import install_permissive_package
 from ..fidelity import Fidelity, register_fidelity
 from ..library import install_torch_library
+from .factories import _install_empty_like
 
 
 _COMPILE_DEFAULT_BACKENDS = (None, "", "inductor", "eager", "aot_eager")
@@ -69,7 +70,7 @@ def install(ctx):
         if not hasattr(g, name):
             setattr(g, name, fn)
     _alias("rsqrt", lambda x: 1.0 / jt.sqrt(x))
-    _alias("empty_like", lambda x, **k: jt.empty(x.shape, x.dtype))
+    _install_empty_like(g)
     # module-level comparison ops (torch.gt(a,b) etc.); .gt methods already exist.
     _alias("gt", lambda a, b: a > b)
     _alias("lt", lambda a, b: a < b)
