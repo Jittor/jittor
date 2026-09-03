@@ -52,8 +52,6 @@ from .serving_ops import (dual_rms_norm, fused_add_rms_norm, rms_norm,
                           rotary_embedding, silu_and_mul)
 from .backends.cudnn import (
     _CUDNN_3D_HALF_DTYPES,
-    _CudnnConv2d,
-    _CudnnConvT2d,
     _cudnn_conv3d_fp16_safe,
     _try_cudnn_conv2d,
     _try_cudnn_conv_transpose2d,

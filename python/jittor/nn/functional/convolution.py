@@ -91,7 +91,7 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
             y = y + bias.broadcast(y.shape, [0, 2, 3])
         return y
     # cuDNN path (memory-efficient fwd+bwd); falls back to reindex below on
-    # CPU / no-cuDNN / non-float32. See _CudnnConv2d.
+    # CPU / no-cuDNN / non-float32. See nn/backends/cudnn.py.
     _y = jt.nn._try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups)
     if _y is not None:
         return _y
