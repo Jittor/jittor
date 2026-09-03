@@ -107,6 +107,17 @@ class TestCudnnRnnDtype(unittest.TestCase):
             self.assertIn("cudnn rnn supports float16, float32 and float64",
                           str(caught.exception))
 
+    def test_mixed_input_weight_dtype_is_rejected_clearly(self):
+        with jt.flag_scope(use_cuda=1):
+            module = jt.nn.LSTM(8, 8, num_layers=2)
+            module.eval()
+            _load(module, self.w, "float32")
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "cudnn_rnn needs input and weight of the same dtype",
+            ):
+                module(jt.array(self.x).cast("float16"))[0].sync()
+
 
 if __name__ == "__main__":
     unittest.main()

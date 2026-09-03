@@ -56,7 +56,7 @@ void CudnnRnnOp::init_rnn() {
     // have to agree. Saying so here turns a mixed-dtype call into a readable
     // error at construction instead of CUDNN_STATUS_BAD_PARAM from inside
     // cudnnRNNForward*, which names neither operand.
-    ASSERT(x->ns == w->ns) << "cudnn_rnn needs input and weight of the same dtype,"
+    USER_CHECK(x->ns == w->ns) << "cudnn_rnn needs input and weight of the same dtype,"
         << "got" << x->ns << "and" << w->ns;
     cudnn_rnn_dtype(x->ns);   // refuse an unsupported dtype here, by name
 
