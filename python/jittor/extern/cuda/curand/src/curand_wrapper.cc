@@ -10,6 +10,7 @@
 #include "curand_wrapper.h"
 #include "init.h"
 #include "misc/cuda_flags.h"
+#include "misc/cuda_streams.h"
 
 namespace jittor {
 
@@ -18,6 +19,7 @@ curandGenerator_t gen;
 // draws from the device it was created on, so a single global one would make
 // jt.rand() on device 1 either fail or fill device-0 memory.
 static vector<curandGenerator_t> gens;
+static vector<uint64> curand_stream_binds;
 // The last seed, replayed onto a generator created after set_seed so every
 // device answers the same seed the same way.
 static int curand_last_seed = -1;
@@ -30,6 +32,20 @@ static void curand_seed_generator(curandGenerator_t g, int seed) {
     // reproduce. set_seed() resets the CPU side's offset for the same
     // reason; this is the CUDA half of it.
     checkCudaErrors( curandSetGeneratorOffset(g, 0) );
+}
+
+curandGenerator_t curand_bind_stream() {
+    int device = current_device();
+    checkCudaErrors(curandSetStream(gen, cuda_compute_stream(device)));
+    if ((int)curand_stream_binds.size() <= device)
+        curand_stream_binds.resize(device + 1);
+    curand_stream_binds[device]++;
+    return gen;
+}
+
+uint64 curand_stream_bind_count(int device) {
+    return device >= 0 && device < (int)curand_stream_binds.size()
+        ? curand_stream_binds[device] : 0;
 }
 
 static void curand_switch_device(int device) {
@@ -47,6 +63,7 @@ void curand_shutdown() {
     for (auto g : gens)
         if (g) peekCudaErrorsAlways( curandDestroyGenerator(g) );
     gens.clear();
+    curand_stream_binds.clear();
     gen = nullptr;
     LOGv << "curandDestroy finished";
 }

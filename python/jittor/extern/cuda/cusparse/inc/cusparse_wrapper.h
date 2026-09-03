@@ -18,6 +18,9 @@
 namespace jittor {
 
 EXTERN_LIB cusparseHandle_t cusparse_handle;
+cusparseHandle_t cusparse_bind_stream();
+// @pyjt(cusparse_stream_bind_count)
+uint64 cusparse_stream_bind_count(int device);
 
 // Destroys cusparse_handle, reporting a failure instead of raising. Idempotent.
 void cusparse_shutdown();

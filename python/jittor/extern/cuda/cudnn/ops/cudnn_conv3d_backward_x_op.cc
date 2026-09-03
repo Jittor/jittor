@@ -89,7 +89,7 @@ template <typename T_ELEM> __inline__  cudnnDataType_t getDataType();
 void CudnnConv3dBackwardXOp::jit_run() {
     auto x = dx;
     auto y = dy;        
-    cudnnHandle_t& handle_ = cudnn_handle;
+    cudnnHandle_t handle_ = cudnn_bind_stream();
 
     // Owned, so a throw anywhere below releases them. There is no backend
     // fast path for 3-D yet (6.B14 left these on the legacy API), so unlike

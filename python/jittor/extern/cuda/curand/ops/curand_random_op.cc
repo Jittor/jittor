@@ -46,6 +46,7 @@ void CurandRandomOp::jit_run() {
     @define(TT,@if(@strcmp(@T,float32)==0,,Double))
 
     auto* __restrict__ x = output->ptr<T>();
+    auto generator = curand_bind_stream();
     index_t num = output->num;
     if (num == 0) return;
     // curandGenerateUniform has no parity requirement; curandGenerateNormal
@@ -61,19 +62,19 @@ void CurandRandomOp::jit_run() {
     // is written outside the output. An odd-length normal draw still consumes
     // num+1 values; that is inherent to the even-count requirement.
     @if(@strcmp(@R,uniform)==0,
-        checkCudaErrors(curandGenerateUniform@TT (gen, x, num));
+        checkCudaErrors(curandGenerateUniform@TT (generator, x, num));
     ,
         if (num & 1) {
             if (num > 1)
-                checkCudaErrors(curandGenerateNormal@TT (gen, x, num-1, 0, 1));
+                checkCudaErrors(curandGenerateNormal@TT (generator, x, num-1, 0, 1));
             size_t tail_allocation;
             T* tail = (T*)exe.temp_allocator->alloc(2*sizeof(T), tail_allocation);
-            checkCudaErrors(curandGenerateNormal@TT (gen, tail, 2, 0, 1));
+            checkCudaErrors(curandGenerateNormal@TT (generator, tail, 2, 0, 1));
             checkCudaErrors(cudaMemcpyAsync(x+num-1, tail, sizeof(T),
                 cudaMemcpyDeviceToDevice, 0));
             exe.temp_allocator->free(tail, 2*sizeof(T), tail_allocation);
         } else {
-            checkCudaErrors(curandGenerateNormal@TT (gen, x, num, 0, 1));
+            checkCudaErrors(curandGenerateNormal@TT (generator, x, num, 0, 1));
         }
     )
 }

@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include "cufft_wrapper.h"
 #include "misc/cuda_flags.h"
+#include "misc/cuda_streams.h"
 
 namespace jittor {
 
@@ -23,6 +24,7 @@ static std::unordered_map<CufftPlanKey, cufftHandle, CufftPlanKeyHash, CufftPlan
     cufft_plan_cache_;
 // Creation order, oldest first; the eviction victim comes off the front.
 static std::list<CufftPlanKey> cufft_plan_order_;
+static vector<uint64> cufft_stream_binds;
 
 static void evict_oldest_plan() {
     if (cufft_plan_order_.empty()) return;
@@ -47,7 +49,14 @@ void cufft_set_plan_cache_size(int size) {
 
 cufftHandle cufft_get_plan(const CufftPlanKey& key) {
     auto iter = cufft_plan_cache_.find(key);
-    if (iter != cufft_plan_cache_.end()) return iter->second;
+    if (iter != cufft_plan_cache_.end()) {
+        CUFFT_CALL(cufftSetStream(
+            iter->second, cuda_compute_stream((int)key.device)));
+        if ((int)cufft_stream_binds.size() <= key.device)
+            cufft_stream_binds.resize(key.device + 1);
+        cufft_stream_binds[key.device]++;
+        return iter->second;
+    }
 
     int n[2] = {(int)key.n0, (int)key.n1};
     cufftHandle plan;
@@ -58,13 +67,22 @@ cufftHandle cufft_get_plan(const CufftPlanKey& key) {
                              nullptr, 1, n[0] * n[1],   // *inembed, istride, idist
                              nullptr, 1, n[0] * n[1],   // *onembed, ostride, odist
                              (cufftType)key.type, (int)key.batch));
-    CUFFT_CALL(cufftSetStream(plan, 0));
+    CUFFT_CALL(cufftSetStream(
+        plan, cuda_compute_stream((int)key.device)));
+    if ((int)cufft_stream_binds.size() <= key.device)
+        cufft_stream_binds.resize(key.device + 1);
+    cufft_stream_binds[key.device]++;
 
     while ((int)cufft_plan_cache_.size() >= cufft_max_cache_size)
         evict_oldest_plan();
     cufft_plan_cache_[key] = plan;
     cufft_plan_order_.push_back(key);
     return plan;
+}
+
+uint64 cufft_stream_bind_count(int device) {
+    return device >= 0 && device < (int)cufft_stream_binds.size()
+        ? cufft_stream_binds[device] : 0;
 }
 
 void cufft_clear_plan_cache() {
@@ -76,6 +94,7 @@ void cufft_clear_plan_cache() {
         peekCudaErrorsAlways(cufftDestroy(entry.second));
     cufft_plan_cache_.clear();
     cufft_plan_order_.clear();
+    cufft_stream_binds.clear();
 }
 
 // See cublas_shutdown. Naturally idempotent: the second call has an empty

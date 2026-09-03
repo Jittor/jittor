@@ -18,6 +18,9 @@
 namespace jittor {
 
 EXTERN_LIB curandGenerator_t gen;
+curandGenerator_t curand_bind_stream();
+// @pyjt(curand_stream_bind_count)
+uint64 curand_stream_bind_count(int device);
 
 // Destroys the generator, reporting a failure instead of raising. Idempotent.
 void curand_shutdown();

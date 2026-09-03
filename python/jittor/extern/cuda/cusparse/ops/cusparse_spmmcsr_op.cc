@@ -40,7 +40,7 @@ void CusparseSpmmcsrOp::jit_run() {
     void*                dBuffer    = nullptr;
     size_t               bufferSize = 0;
     size_t               dBufferAllocation = 0;
-    cusparseHandle_t &handle_ = cusparse_handle;
+    cusparseHandle_t handle_ = cusparse_bind_stream();
     const auto& xs = x->shape; 
     const auto& vs = value->shape; 
     const auto& os = outputVar->shape;

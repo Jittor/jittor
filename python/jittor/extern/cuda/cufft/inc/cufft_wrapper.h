@@ -56,6 +56,8 @@ EXTERN_LIB int cufft_max_cache_size;
     ``cufft_max_cache_size`` the least recently created plan is destroyed.
  */
 cufftHandle cufft_get_plan(const CufftPlanKey& key);
+// @pyjt(cufft_stream_bind_count)
+uint64 cufft_stream_bind_count(int device);
 
 /** Destroy every cached plan. Reporting-only on failure: also runs at teardown. */
 void cufft_clear_plan_cache();

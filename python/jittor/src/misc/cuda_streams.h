@@ -24,6 +24,7 @@ uint64 cuda_stream_dependency_count(int kind, int device);
 
 #ifdef HAS_CUDA
 cudaStream_t cuda_side_stream(CudaSideStreamKind kind, int device);
+cudaStream_t cuda_compute_stream(int device);
 void cuda_side_stream_wait_default(
     CudaSideStreamKind kind, int stream_device, int default_device);
 void cuda_default_stream_wait_side(

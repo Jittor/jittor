@@ -96,6 +96,7 @@ template <typename T_ELEM> __inline__  cudnnDataType_t getDataType();
 // template <> __inline__ cudnnDataType_t getDataType<float>() { return CUDNN_DATA_FLOAT;  }
 
 void CudnnRnnBackwardXOp::jit_run() {
+    cudnn_bind_stream();
     int num_directions = 1 + bidirectional;
     int hidden_dims[3] = {num_layers * num_directions, batch_size, hidden_size};
     int hidden_strides[3] = {hidden_dims[1] * hidden_dims[2], hidden_dims[2], 1};

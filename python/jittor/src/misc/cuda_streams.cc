@@ -84,6 +84,12 @@ cudaStream_t cuda_side_stream(CudaSideStreamKind kind, int device) {
     return get_resources(device).streams[kind];
 }
 
+cudaStream_t cuda_compute_stream(int device) {
+    CHECK(device >= 0 && device < get_device_count())
+        << "Invalid CUDA compute-stream device" << device;
+    return 0;
+}
+
 uint64 cuda_stream_handle(int kind, int device) {
     validate_kind(kind);
     return (uint64)cuda_side_stream((CudaSideStreamKind)kind, device);

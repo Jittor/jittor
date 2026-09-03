@@ -108,7 +108,7 @@ EXTERN_LIB unordered_map<string, cudnnConvolutionFwdAlgo_t> fwd_algo_cache;
 EXTERN_LIB int cudnn_benchmark;
 
 void CudnnConvOp::jit_run() {
-    cudnnHandle_t& handle_ = cudnn_handle;
+    cudnnHandle_t handle_ = cudnn_bind_stream();
 
     // Everything down to the backend fast path below is integer arithmetic on
     // Var shapes. The four legacy descriptors used to be created up here and

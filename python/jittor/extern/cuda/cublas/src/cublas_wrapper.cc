@@ -9,6 +9,7 @@
 // ***************************************************************
 #include "cublas_wrapper.h"
 #include "misc/cuda_flags.h"
+#include "misc/cuda_streams.h"
 
 namespace jittor {
 
@@ -19,6 +20,7 @@ cublasHandle_t cublas_handle;
 // keeps that true: every op reads `cublas_handle` without knowing about any
 // of this.
 static vector<cublasHandle_t> cublas_handles;
+static vector<uint64> cublas_stream_binds;
 
 static void cublas_switch_device(int device) {
     if ((int)cublas_handles.size() <= device) cublas_handles.resize(device+1, nullptr);
@@ -27,6 +29,21 @@ static void cublas_switch_device(int device) {
         LOGv << "cublasCreate finished for device" << device << (void*)cublas_handles[device];
     }
     cublas_handle = cublas_handles[device];
+}
+
+cublasHandle_t cublas_bind_stream() {
+    int device = current_device();
+    checkCudaErrors(cublasSetStream(
+        cublas_handle, cuda_compute_stream(device)));
+    if ((int)cublas_stream_binds.size() <= device)
+        cublas_stream_binds.resize(device + 1);
+    cublas_stream_binds[device]++;
+    return cublas_handle;
+}
+
+uint64 cublas_stream_bind_count(int device) {
+    return device >= 0 && device < (int)cublas_stream_binds.size()
+        ? cublas_stream_binds[device] : 0;
 }
 
 // Handle teardown is its own named step rather than an implicit consequence of
@@ -44,6 +61,7 @@ void cublas_shutdown() {
         peekCudaErrorsAlways(cublasDestroy(h));
     }
     cublas_handles.clear();
+    cublas_stream_binds.clear();
     cublas_handle = nullptr;
     LOGv << "cublasDestroy finished";
 }

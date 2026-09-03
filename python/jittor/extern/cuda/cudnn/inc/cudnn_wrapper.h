@@ -21,6 +21,9 @@
 namespace jittor {
 
 EXTERN_LIB cudnnHandle_t cudnn_handle;
+cudnnHandle_t cudnn_bind_stream();
+// @pyjt(cudnn_stream_bind_count)
+uint64 cudnn_stream_bind_count(int device);
 
 // Destroys cudnn_handle, reporting a failure instead of raising. Idempotent.
 void cudnn_shutdown();

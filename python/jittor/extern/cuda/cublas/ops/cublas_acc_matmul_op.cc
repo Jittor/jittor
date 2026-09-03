@@ -66,7 +66,7 @@ void CublasAccMatmulOp::jit_prepare(JK& jk) {
 #pragma clang diagnostic ignored "-Wtautological-compare"
 
 void CublasAccMatmulOp::jit_run() {
-    cublasHandle_t& handle_ = cublas_handle;
+    cublasHandle_t handle_ = cublas_bind_stream();
     const T alpha = 1.0f;
     const T beta  = 0.0f;
     const float alpha_f = 1.0f;

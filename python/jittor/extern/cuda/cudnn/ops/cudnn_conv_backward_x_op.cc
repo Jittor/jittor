@@ -104,7 +104,7 @@ EXTERN_LIB unordered_map<string, cudnnConvolutionBwdDataAlgo_t> bwdx_algo_cache;
 void CudnnConvBackwardXOp::jit_run() {
     auto x = dx;
     auto y = dy;        
-    cudnnHandle_t& handle_ = cudnn_handle;
+    cudnnHandle_t handle_ = cudnn_bind_stream();
 
     // Integer arithmetic on Var shapes down to the backend fast path; the
     // legacy descriptors are built below, only if the fallback needs them.

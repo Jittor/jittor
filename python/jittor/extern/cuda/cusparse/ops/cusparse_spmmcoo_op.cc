@@ -38,7 +38,7 @@ void CusparseSpmmcooOp::jit_prepare(JK& jk) {
 void CusparseSpmmcooOp::jit_run() {
     cusparseSpMatDescr_t matA;
     cusparseDnMatDescr_t matB, matC;
-    cusparseHandle_t &handle_ = cusparse_handle;
+    cusparseHandle_t handle_ = cusparse_bind_stream();
     const auto& xs = x->shape;
     const auto& vs = value->shape; 
     const auto& os = outputVar->shape;

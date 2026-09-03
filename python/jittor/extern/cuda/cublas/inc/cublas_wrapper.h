@@ -20,6 +20,9 @@
 namespace jittor {
 
 EXTERN_LIB cublasHandle_t cublas_handle;
+cublasHandle_t cublas_bind_stream();
+// @pyjt(cublas_stream_bind_count)
+uint64 cublas_stream_bind_count(int device);
 
 // Destroys cublas_handle, reporting a failure instead of raising. Idempotent.
 void cublas_shutdown();

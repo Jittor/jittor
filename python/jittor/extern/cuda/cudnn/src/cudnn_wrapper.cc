@@ -6,6 +6,7 @@
 // ***************************************************************
 #include "cudnn_wrapper.h"
 #include "misc/cuda_flags.h"
+#include "misc/cuda_streams.h"
 
 namespace jittor {
 
@@ -13,6 +14,7 @@ cudnnHandle_t cudnn_handle;
 // One handle per device; the global is the current device's. See
 // cublas_wrapper.cc for why.
 static vector<cudnnHandle_t> cudnn_handles;
+static vector<uint64> cudnn_stream_binds;
 
 static void cudnn_switch_device(int device) {
     if ((int)cudnn_handles.size() <= device) cudnn_handles.resize(device+1, nullptr);
@@ -21,6 +23,21 @@ static void cudnn_switch_device(int device) {
         LOGv << "cudnnCreate finished for device" << device;
     }
     cudnn_handle = cudnn_handles[device];
+}
+
+cudnnHandle_t cudnn_bind_stream() {
+    int device = current_device();
+    checkCudaErrors(cudnnSetStream(
+        cudnn_handle, cuda_compute_stream(device)));
+    if ((int)cudnn_stream_binds.size() <= device)
+        cudnn_stream_binds.resize(device + 1);
+    cudnn_stream_binds[device]++;
+    return cudnn_handle;
+}
+
+uint64 cudnn_stream_bind_count(int device) {
+    return device >= 0 && device < (int)cudnn_stream_binds.size()
+        ? cudnn_stream_binds[device] : 0;
 }
 
 int max_cache_size = 100;
@@ -53,6 +70,7 @@ void cudnn_shutdown() {
     for (auto h : cudnn_handles)
         if (h) peekCudaErrorsAlways(cudnnDestroy(h));
     cudnn_handles.clear();
+    cudnn_stream_binds.clear();
     cudnn_handle = nullptr;
     LOGv << "cudnnDestroy finished";
 }
