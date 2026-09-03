@@ -12,6 +12,7 @@ CUMSUM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/cumsum_op_acl.cc"
 MATMUL_SOURCE = ROOT / "python/jittor/extern/acl/aclops/matmul_op_acl.cc"
 EXPAND_SOURCE = ROOT / "python/jittor/extern/acl/aclops/expand_op_acl.cc"
 FLOOR_SOURCE = ROOT / "python/jittor/extern/acl/aclops/floor_op_acl.cc"
+NANTONUM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/nantonum_op_acl.cc"
 
 
 def test_acl_launcher_tail_has_one_auditable_contract():
@@ -85,6 +86,17 @@ def test_expand_family_uses_launcher_and_keeps_async_policy():
 def test_floor_family_uses_launcher_and_keeps_sync_policy():
     source = FLOOR_SOURCE.read_text()
     assert "launch(ret, aclnnFloor, true);" in source
+    assert "checkRet(ret);" not in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
+
+
+def test_nantonum_family_uses_launcher_and_keeps_sync_policy():
+    source = NANTONUM_SOURCE.read_text()
+    assert "attr->nan" in source
+    assert "attr->posinf" in source
+    assert "attr->neginf" in source
+    assert "launch(ret, aclnnNanToNum, true);" in source
     assert "checkRet(ret);" not in source
     assert "mallocWorkSpace(workspaceSize)" not in source
     assert "syncRun();" not in source

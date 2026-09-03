@@ -414,6 +414,9 @@ historical asynchronous execution policy.
 The ACL Floor family uses the shared launcher and retains synchronous
 execution. This source-only migration still requires the Ascend 910B3 probe.
 
+The ACL NanToNum family uses the shared launcher while retaining its nan,
+posinf, and neginf attribute handling and synchronous execution policy.
+
 These flags are diagnostic and slow execution. Remove them after locating the
 failing operation. For general JIT and memory diagnostics, see
 {doc}`debugging`.

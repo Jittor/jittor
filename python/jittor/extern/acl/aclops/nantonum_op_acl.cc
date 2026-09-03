@@ -40,17 +40,7 @@ namespace jittor
         auto attr = dynamic_cast<NanToNumAttr *>(op_attr.get());
         ret = aclnnNanToNumGetWorkspaceSize(inputTensors[0], attr->nan, attr->posinf, attr->neginf, outputTensors[0], &workspaceSize, &executor);
 
-        checkRet(ret);
-
-        if (workspaceSize > 0)
-        {
-            mallocWorkSpace(workspaceSize);
-        }
-
-        ret = aclnnNanToNum(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnNanToNum failed. ERROR: %d\n", name.c_str(), ret); return);
-
-        syncRun();
+        launch(ret, aclnnNanToNum, true);
 
         return;
     }
