@@ -365,7 +365,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 6.P25 | Adan 偏差修正仍用全局 n_step；连带第一步 grad_diff 语义 | 已合并 | pyother | 2d5804a4 |
 | 6.P26 | MaxPool3d 的 ceil_mode 输出尺寸比 torch 多一个平面 | 已合并 | pyops | f982a6b8。修前输出 `(4,4,4)` 对 Torch `(4,4,3)`；修后 CPU 18 passed/15 skipped，真实 CUDA GPU4 尺寸、索引往返和前后向 4 passed |
 | 6.B01 | MPI 的 int64 改 `MPI_INT64_T` | 已合并 | dist | 03518707 |
-| 6.B02 | ACL | 待领 | | 03daccfb 已合入 1/N tensor/workspace 前置：CreateAclTensor 两个入口按非空描述符返回 ACL_SUCCESS/ACL_ERROR_FAILURE；共享 workspace 改由 `exe.temp_allocator` 分配并成对保存 owner/allocation handle，增长与退出先清全局状态再按原句柄释放，分配失败带请求大小/allocator 抛错。静态合同修前 3 failed、修后 3 passed；910B3 文档补正常算子无 CPU fallback、自然故障归因及进程退出前后 `npu-smi` 释放检查。本机无 CANN/NPU；仍需完成 `checkRet` 抛错、非 group 查表、`acl_op_exec.cc` 同名遮蔽并做 910B3 实机验证 |
+| 6.B02 | ACL | 待领 | | 03daccfb 完成 tensor/workspace 前置：CreateAclTensor 返回真实状态；workspace 由 `exe.temp_allocator` 成对保存 owner/handle，失败前清空并抛。5388864c 完成第二代码切片：65 处 executeOp 共用的 `checkRet` 硬失败并带算子/CANN 状态，group/非 group 均检查注册表，fused 调度用 `current_op` 检查当前输入而不再被外层形参遮蔽。两组静态合同均修前 3 failed、修后各 3 passed；910B3 文档覆盖正常无 CPU fallback、三类故障归因和 workspace 进程退出释放。本机无 CANN/NPU；代码阶段完成，仍需 910B3 实机编译并验证正常路径、失败传播和释放后才能完成 |
 | 6.B03 | HCCL 宏错误时抛而非 return | 已合并 | dist | c657ab01 |
 | 6.B04 | 分布式一旦被请求，初始化失败硬失败 | 已合并 | dist | 8ae65e24 |
 | 6.B05 | cuBLAS `use_tensorcore` 三目判断写反 | 已合并 | cudabk | 9f5c3e90 |
