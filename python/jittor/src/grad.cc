@@ -17,6 +17,23 @@ namespace jittor {
 
 #define PREVENT_LARGE_FUSED_OP 16
 
+AutogradPolicyState autograd_policy;
+
+void set_autograd_policy(
+    bool stop_outputs_when_inputs_stopped,
+    bool preserve_requires_grad_on_assignment
+) {
+    autograd_policy.stop_outputs_when_inputs_stopped =
+        stop_outputs_when_inputs_stopped;
+    autograd_policy.preserve_requires_grad_on_assignment =
+        preserve_requires_grad_on_assignment;
+}
+
+int get_autograd_policy() {
+    return int(autograd_policy.stop_outputs_when_inputs_stopped)
+        | (int(autograd_policy.preserve_requires_grad_on_assignment) << 1);
+}
+
 DECLARE_FLAG(int, auto_mixed_precision_level);
 
 static auto make_binary = op_constructor<VarPtr, Var*, Var*, NanoString>("binary");

@@ -39,7 +39,6 @@ WATCHED_FLAGS = (
     "amp_reg",
     "use_parallel_op_compiler",
     "exclude_pass",
-    "th_mode",
 )
 
 _COUNTERS = (
@@ -165,6 +164,7 @@ def snapshot(collect=True):
     return {
         "counters": counters,
         "flags": flags,
+        "autograd_policy": _autograd_policy(jittor),
         "caches": _bounded_cache_sizes(),
         "modules": {name: id(module) for name, module in list(sys.modules.items())},
     }
@@ -193,6 +193,11 @@ def differences(before, after):
         previous = before["flags"].get(name)
         if previous is not None and previous != value:
             report.append("flags.%s %r -> %r (use jt.flag_scope)" % (name, previous, value))
+    if before.get("autograd_policy") != after.get("autograd_policy"):
+        report.append(
+            "autograd policy %r -> %r (use jt.autograd.policy_scope)"
+            % (before.get("autograd_policy"), after.get("autograd_policy"))
+        )
     for name, identity in sorted(after["modules"].items()):
         previous = before["modules"].get(name)
         if previous is not None and previous != identity:
@@ -200,6 +205,22 @@ def differences(before, after):
             # imported module and did not put the original back.
             report.append("sys.modules[%r] was replaced and not restored" % name)
     return report
+
+
+def _autograd_policy(jittor):
+    autograd = getattr(jittor, "autograd", None)
+    get_policy = getattr(autograd, "get_policy", None)
+    if not callable(get_policy):
+        return None
+    try:
+        policy = get_policy()
+    except Exception:
+        return None
+    return (
+        policy.name,
+        policy.stop_outputs_when_inputs_stopped,
+        policy.preserve_requires_grad_on_assignment,
+    )
 
 
 def _cache_growth(before, after):

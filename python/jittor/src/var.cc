@@ -8,6 +8,7 @@
 
 #include "var.h"
 #include "op.h"
+#include "grad.h"
 #include "mem/allocator.h"
 #include "pybind/py_var_tracer.h"
 #include "mem/swap.h"
@@ -24,7 +25,6 @@ DEFINE_FLAG(bool, no_grad, 0,
 DEFINE_FLAG(bool, no_fuse, 0, 
     "No fusion optimization for all jittor Var creation");
 DEFINE_FLAG(uint8, node_order, 0, "id prior");
-DEFINE_FLAG(uint8, th_mode, 0, "th mode");
 // TODO: fuse multiple flags
 DEFINE_FLAG(int, amp_reg, 0, "Auto mixed-precision control registers, bit 0: prefer 32; bit 1: prefer 16; bit 2: keep reduce type; bit 3 keep white list type; bit 4: array like op prefer too; bit 5, reduce16 intermediate not use 32");
 
@@ -187,12 +187,10 @@ void VarPtr::set_stop_grad(bool stop_grad) {
         ptr->set_stop_grad();
     else {
         bool no_grad_bk = no_grad;
-        auto th_mode_bk = th_mode;
+        AutogradPolicyOverride policy_guard({});
         no_grad = 0;
-        th_mode = 0;
         *this = clone(ptr);
         no_grad = no_grad_bk;
-        th_mode = th_mode_bk;
     }
 }
 

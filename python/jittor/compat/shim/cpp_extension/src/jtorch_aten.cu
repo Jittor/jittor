@@ -577,8 +577,8 @@ void commit_tensor_to_pyvar(void* obj, const Tensor& t) {
         new_var->set_stop_grad();
     if (old_var->flags.get(jittor::NodeFlags::_stop_fuse))
         new_var->flags.set(jittor::NodeFlags::_stop_fuse);
-    if (old_var->flags.get(jittor::NodeFlags::_th_require_grad))
-        new_var->flags.set(jittor::NodeFlags::_th_require_grad);
+    if (old_var->flag(jittor::VarFlags::_explicit_requires_grad))
+        new_var->set_flag(jittor::VarFlags::_explicit_requires_grad);
 
     src->release_from_holders();  // remove temp holder from hold_vars; keep liveness
     src->var = nullptr;           // transfer the temp holder's liveness to dst

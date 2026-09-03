@@ -80,7 +80,7 @@ class TestNodeFlagLayoutAtRuntime(unittest.TestCase):
     def test_requires_grad_does_not_make_a_var_a_scalar(self):
         """The bug that started this: two meanings on one bit.
 
-        ``_th_require_grad`` and ``_is_scalar`` were the same bit for a while,
+        ``_explicit_requires_grad`` and ``_is_scalar`` shared a bit for a while,
         so a ``requires_grad`` parameter looked like a Python scalar to
         ``binary_dtype_infer``: it dropped out of dtype promotion (float64 ->
         float32) and ``float_dtype``'s has_scalar branch skipped the amp

@@ -9,6 +9,35 @@
 
 namespace jittor {
 
+struct AutogradPolicyState {
+    bool stop_outputs_when_inputs_stopped = false;
+    bool preserve_requires_grad_on_assignment = false;
+};
+
+EXTERN_LIB AutogradPolicyState autograd_policy;
+
+struct AutogradPolicyOverride {
+    AutogradPolicyState backup;
+
+    explicit AutogradPolicyOverride(AutogradPolicyState replacement)
+        : backup(autograd_policy) {
+        autograd_policy = replacement;
+    }
+
+    ~AutogradPolicyOverride() {
+        autograd_policy = backup;
+    }
+};
+
+// @pyjt(_set_autograd_policy)
+void set_autograd_policy(
+    bool stop_outputs_when_inputs_stopped,
+    bool preserve_requires_grad_on_assignment
+);
+
+// @pyjt(_get_autograd_policy)
+int get_autograd_policy();
+
 vector<VarPtr> grad(
     Var* loss,
     vector<Var*> targets,

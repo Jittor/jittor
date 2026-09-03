@@ -53,7 +53,6 @@ typedef struct _object PyObject;
 
 EXTERN_LIB list<VarHolder*> hold_vars;
 EXTERN_LIB list<VarHolder*>::iterator sync_ptr;
-extern uint8 th_mode;
 
 // @pyjt(Var)
 // @attrs(heaptype)

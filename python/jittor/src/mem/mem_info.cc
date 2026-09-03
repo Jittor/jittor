@@ -71,7 +71,7 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
         << "lived_vars:" << Var::number_of_lived_vars
         << "lived_ops:" << Op::number_of_lived_ops >> '\n';
     if (_grad_backup_ptr)
-        log << "jtorch_grad_vars:" << _grad_backup_ptr->size() >> '\n';
+        log << "autograd_backup_vars:" << _grad_backup_ptr->size() >> '\n';
 
     // get the oldest var
     if (trace_py_var) {

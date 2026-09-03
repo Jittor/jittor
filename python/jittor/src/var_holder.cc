@@ -14,6 +14,7 @@
 #include "executor.h"
 #include "misc/cuda_flags.h"
 #include "graph.h"
+#include "grad.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "ops/op_register.h"
 #include "ops/getitem_op.h"
@@ -199,19 +200,18 @@ static inline void assign_var(Var* a, Var* b) {
         a->set_stop_grad();
     if (b->flag(VarFlags::_stop_fuse))
         a->set_flag(VarFlags::_stop_fuse);
-    if (b->flag(VarFlags::_th_require_grad))
-        a->set_flag(VarFlags::_th_require_grad);
+    if (b->flag(VarFlags::_explicit_requires_grad))
+        a->set_flag(VarFlags::_explicit_requires_grad);
     a->set_flag(VarFlags::_requires_grad_disabled,
         b->flag(VarFlags::_requires_grad_disabled));
 }
 
-extern uint8 th_mode;
 void VarHolder::operator=(VarPtr&& v) {
-    if (th_mode) {
+    if (autograd_policy.preserve_requires_grad_on_assignment) {
         if (var->is_stop_grad() != v->is_stop_grad())
             v.set_stop_grad(var->is_stop_grad());
-        if (var->flag(VarFlags::_th_require_grad))
-            v.ptr->set_flag(VarFlags::_th_require_grad);
+        if (var->flag(VarFlags::_explicit_requires_grad))
+            v.ptr->set_flag(VarFlags::_explicit_requires_grad);
     }
     assign_var(v.ptr, var);
     release_holder();
@@ -244,14 +244,12 @@ VarHolder* VarHolder::start_grad() {
     if (!var->dtype().is_float() && !var->dtype().is_complex())
         LOGw << "cannot enable grad of a non-float value:" << var;
     bool no_grad_bk = no_grad;
-    auto th_mode_bk = th_mode;
+    AutogradPolicyOverride policy_guard({});
     no_grad = 0;
-    th_mode = 0;
     auto dvar = jittor::detach(var);
     std::swap(dvar.ptr, var);
     no_grad = no_grad_bk;
-    th_mode = th_mode_bk;
-    var->set_flag(VarFlags::_th_require_grad);
+    var->set_flag(VarFlags::_explicit_requires_grad);
     var->set_flag(VarFlags::_requires_grad_disabled, 0);
     return this;
 }
@@ -261,7 +259,7 @@ string VarHolder::to_string() {
 }
 
 VarHolder* VarHolder::assign(VarHolder* v) {
-    if (th_mode) {
+    if (autograd_policy.preserve_requires_grad_on_assignment) {
         v->set_requires_grad(get_requires_grad());
     }
     assign_var(v->var, var);

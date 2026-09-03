@@ -18,13 +18,12 @@
 #include "var_holder.h"
 #include "fused_op.h"
 #include "graph.h"
+#include "grad.h"
 #include "ops/op_register.h"
 
 namespace jittor {
 
 DECLARE_FLAG(string, cache_path);
-// DECLARE_FLAG(uint8, th_mode);
-extern uint8 th_mode;
 
 DEFINE_FLAG(int, try_use_32bit_index, 0,
     "If not overflow, try to use 32 bit type as index type.");
@@ -238,7 +237,8 @@ void Op::init() {
         if (all_inputs_stopped && has_disabled_input) {
             for (Var* v : outputs())
                 v->set_flag(VarFlags::_requires_grad_disabled);
-        } else if (all_inputs_stopped && th_mode) {
+        } else if (all_inputs_stopped
+                && autograd_policy.stop_outputs_when_inputs_stopped) {
             for (Var* v : outputs()) {
                 v->set_stop_grad();
             }

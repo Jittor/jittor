@@ -8560,7 +8560,6 @@ class Flags:
 	'''Number of alloc function call. Default: 0'''
 	sync_run: int
 	'''Enable per-op-sync or not. Default: 1'''
-	th_mode: int
 	'''th mode. Default: 0'''
 	trace_depth: int
 	'''trace depth for GDB. Default: 10'''

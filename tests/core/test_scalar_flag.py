@@ -3,7 +3,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-"""``_is_scalar`` and ``_th_require_grad`` must be independent Var flags.
+"""``_is_scalar`` and explicit-requires-grad must be independent Var flags.
 
 They shared one bit, so ``requires_grad_(True)`` made a parameter look like a
 Python scalar to type inference: its own dtype stopped taking part in

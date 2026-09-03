@@ -12,7 +12,7 @@ was written down: both meanings lived in a single enum of hand-picked numbers,
 with the disjointness recorded in comments ("bit 23 is free in both layouts",
 "bits 6..22 are shared").  A comment cannot fail.
 
-It had already failed once: ``_th_require_grad`` and ``_is_scalar`` were both
+It had already failed once: explicit-requires-grad and ``_is_scalar`` were both
 bit 11, so every ``requires_grad_(True)`` parameter read back as a Python
 scalar -- it dropped out of dtype promotion and mixed precision skipped every
 operator that touched it.  That was fixed by moving one of them to a number
@@ -74,6 +74,8 @@ RAW_WORD_ALLOWED = {
     "python/jittor/src/opt/pass/fake_main_pass.cc": "round-trips the whole word into generated source",
 }
 
+TORCH_AUTOGRAD_NAMES = ("th_mode", "_th_require_grad", "jtorch_grad_vars")
+
 
 def _enum_body(source, struct_name):
     """The text between ``struct <name> {`` and its closing brace."""
@@ -108,6 +110,23 @@ def _enumerators(body):
         name, _, value = entry.partition("=")
         found.append((name.strip(), value.strip() or None))
     return found
+
+
+def test_core_does_not_name_torch_autograd_state():
+    """The core exposes generic mechanisms; compatibility selects a policy."""
+    core_root = REPO_ROOT / "python" / "jittor" / "src"
+    offenders = []
+    for path in core_root.rglob("*"):
+        if not path.is_file():
+            continue
+        try:
+            source = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        for name in TORCH_AUTOGRAD_NAMES:
+            if name in source:
+                offenders.append("%s: %s" % (path.relative_to(REPO_ROOT), name))
+    assert not offenders, "Torch autograd state leaked into core:\n" + "\n".join(offenders)
 
 
 def test_kind_private_bits_are_generated_not_numbered():
