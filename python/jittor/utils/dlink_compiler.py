@@ -16,8 +16,11 @@ def remove(cmds, ss):
             rets.append(cmd)
     return rets
 
+output_path = cmds[cmds.index("-o") + 1]
+cuda_path = next(cmd for cmd in cmds if cmd.endswith(".cu"))
+object_path = cuda_path[:-3] + ".o"
 cmds1 = remove(cmds, [".o"])
-cmds1 = replace(cmds1, ".so", ".o")
+cmds1 = replace(cmds1, output_path, object_path)
 cmds2 = replace(cmds, "-dc", "")
 cmds2 = replace(cmds2, ".cu", ".o")
 ret = os.system(" ".join(cmds1).replace("-x cu", ""))

@@ -8,6 +8,8 @@
 #include <streambuf>
 #ifdef _WIN32
 #include <filesystem>
+#include <process.h>
+#include <windows.h>
 #endif
 #include <stdio.h>
 #include <string.h>
@@ -306,6 +308,53 @@ static inline void check_win_file(const string& name) {
 #endif
 }
 
+static string temporary_name(const string& name) {
+#ifdef _WIN32
+    auto pid = _getpid();
+#else
+    auto pid = getpid();
+#endif
+    return name + ".tmp." + std::to_string(pid);
+}
+
+static void install_file(const string& temporary, const string& destination) {
+#ifdef _WIN32
+    if (!MoveFileExA(temporary.c_str(), destination.c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        auto reason = GetLastError();
+        remove(temporary.c_str());
+        LOGf << "could not install" << temporary << "as" << destination
+             << ": win32 error" << reason;
+    }
+#else
+    if (rename(temporary.c_str(), destination.c_str()) != 0) {
+        string reason = strerror(errno);
+        remove(temporary.c_str());
+        LOGf << "could not install" << temporary << "as" << destination
+             << ":" << reason;
+    }
+#endif
+}
+
+static void write_atomically(const string& name, const string& content) {
+#ifdef TEST
+    write(name, content);
+#else
+    string temporary = temporary_name(name);
+    try {
+        std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+        CHECK(output) << "Could not open temporary file:" << temporary;
+        output.write(content.data(), content.size());
+        output.close();
+        CHECK(output) << "Could not write temporary file:" << temporary;
+        install_file(temporary, name);
+    } catch (...) {
+        remove(temporary.c_str());
+        throw;
+    }
+#endif
+}
+
 // Build the product under a private name and rename it into place, rather
 // than letting the compiler write the final path directly.
 //
@@ -316,16 +365,6 @@ static inline void check_win_file(const string& name) {
 // file rather than either version. rename() within a directory is atomic, so
 // neither can happen: the old inode stays alive for whoever already opened it,
 // and the path flips from one complete product to the next.
-static bool can_install_atomically(const string& cmd) {
-    // These wrappers rewrite the command line by string-matching the output
-    // name (asm_tuner.py keys on "_op.so" and "_op.cc" to derive its
-    // intermediate .s files), so a renamed output sends them down the wrong
-    // branch. They keep the old in-place behaviour.
-    if (cmd.find("asm_tuner.py") != string::npos) return false;
-    if (cmd.find("dlink_compiler.py") != string::npos) return false;
-    return true;
-}
-
 static void run_and_install(const string& cmd, const string& output_name,
                             const string& tmp_dir) {
 #ifdef _WIN32
@@ -333,11 +372,11 @@ static void run_and_install(const string& cmd, const string& output_name,
     system_with_check(cmd.c_str(), tmp_dir.c_str());
 #else
     auto pos = cmd.rfind(output_name);
-    if (!can_install_atomically(cmd) || pos == string::npos) {
+    if (pos == string::npos) {
         system_with_check(cmd.c_str(), tmp_dir.c_str());
         return;
     }
-    string tmp_name = output_name + ".tmp." + std::to_string(getpid());
+    string tmp_name = temporary_name(output_name);
     string tmp_cmd = cmd.substr(0, pos) + tmp_name
         + cmd.substr(pos + output_name.size());
     try {
@@ -354,12 +393,7 @@ static void run_and_install(const string& cmd, const string& output_name,
         LOGvv << "no product at" << tmp_name >> ", installed nothing";
         return;
     }
-    if (rename(tmp_name.c_str(), output_name.c_str()) != 0) {
-        string reason = strerror(errno);
-        remove(tmp_name.c_str());
-        LOGf << "could not install" << tmp_name << "as" << output_name
-             << ":" << reason;
-    }
+    install_file(tmp_name, output_name);
 #endif
 }
 
@@ -494,7 +528,7 @@ bool cache_compile(string cmd, const string& cache_path_, const string& jittor_p
     if (output_cache_key != cache_key) {
         LOGvvvv << "Prev cache key" << output_cache_key;
         LOGvvvv << "Write cache key" << output_name+".key:\n" >> cache_key;
-        write(output_name+".key", cache_key);
+        write_atomically(output_name+".key", cache_key);
     }
     if (!ran)
         LOGvvvv << "Command cached:" << cmd;

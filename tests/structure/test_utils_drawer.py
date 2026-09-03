@@ -169,18 +169,14 @@ class TestWhatStaysAndTheReferenceThatPinsIt(unittest.TestCase):
                     % (relative, needle, name))
 
     def test_asm_tuner_is_pinned_by_the_jit_compiler_command_line(self):
-        # cache_compile.cc recognises the same script by name to decide the
-        # command is not cacheable, so the filename is load-bearing twice.
         self._pinned_by(
             "asm_tuner.py",
-            ("src/jit_compiler.cc", 'jittor_path+"/utils/asm_tuner.py'),
-            ("src/utils/cache_compile.cc", 'cmd.find("asm_tuner.py")'))
+            ("src/jit_compiler.cc", 'jittor_path+"/utils/asm_tuner.py'))
 
     def test_dlink_compiler_is_pinned_by_the_jit_compiler_command_line(self):
         self._pinned_by(
             "dlink_compiler.py",
-            ("src/jit_compiler.cc", 'jittor_path+"/utils/dlink_compiler.py'),
-            ("src/utils/cache_compile.cc", 'cmd.find("dlink_compiler.py")'))
+            ("src/jit_compiler.cc", 'jittor_path+"/utils/dlink_compiler.py'))
 
     def test_dumpdef_is_reached_from_the_installed_package_not_the_checkout(self):
         # `agent/design/target-layout.md` lists dumpdef.py under the repository

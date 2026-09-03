@@ -146,6 +146,7 @@ args=sys.argv
 args[1]=args[1][args[1].find("=")+1:]
 compiler_path = sys.argv[1]
 cc_path = sys.argv[2]
+output_path = args[args.index("-o") + 1]
 
 for i in range(len(args)):
     if args[i].find(" ")!=-1:
@@ -155,13 +156,18 @@ cmd = " ".join(args[1:])
 cc_pos=cmd.find("_op.cc")
 so_pos=cmd.find("_op.so")
 
+def replace_output(cmd, output):
+    pos = cmd.rfind(output_path)
+    assert pos != -1, "output path not found in command: " + output_path
+    return cmd[:pos] + output + cmd[pos+len(output_path):]
+
 # remove -Xclang ...
 remove_clang_flag = lambda s: re.sub("-Xclang (('[^']*')|([^ ]*))", "", s)
 
 if cc_pos==-1:  #s_to_so
     run_cmd(remove_clang_flag(cmd))
 elif so_pos==-1:  #cc_to_s
-    asm_cmd=cmd.replace("_op.s", "_op.post.s") \
+    asm_cmd=replace_output(cmd, cc_path.replace("_op.cc", "_op.post.s")) \
         .replace(" -o ", " -g -o ")
     run_cmd(asm_cmd)
 
@@ -169,7 +175,7 @@ elif so_pos==-1:  #cc_to_s
     init(cc_path,s_path)
     pass_asm(cc_path,s_path)
 else:  #cc_to_so
-    asm_cmd=cmd.replace("_op.so", "_op.post.s") \
+    asm_cmd=replace_output(cmd, cc_path.replace("_op.cc", "_op.post.s")) \
         .replace("-lstdc++", "") \
         .replace("-ldl", "") \
         .replace("-shared", "-S") \
