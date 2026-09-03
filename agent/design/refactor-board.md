@@ -235,10 +235,10 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 2.13 | 执行相关全局状态 | 待领 | | |
 | 2.14 | `src/misc/` 拆散 | 待领 | | |
 | 2.15 | NanoString | 已合并 | bindings | 9d5ed413（索引位宽 7→8、static_assert 把表与字段绑住、`ns_check_registration` 在注册期查索引与名字长度；"dtype 表改运行期注册"那半未做，见提交说明） |
-| 2.16 | 类型提升表 | 已合并 | bindings | d821c34a（int_dtype_promote 提升格；标量按 `_is_scalar` 标志认，不再按形状；float 标量把整数张量提到默认 float dtype） |
+| 2.16 | 类型提升表 | 已合并 | bindings | d821c34a（int_dtype_promote 提升格；标量按 `_is_scalar` 标志认，不再按形状；float 标量把整数张量提到默认 float dtype）、a39a2f1c（补：双标量走提升格，交换左右操作数不再改变 dtype 与结果） |
 | 2.17 | 算子身份用注册期整型 id | 待领 | | |
 | 2.18 | 算子注册表惰性初始化 | 待领 | | |
-| 2.19 | 错误分两档 | 待领 | | |
+| 2.19 | 错误分两档 | 待领 | | ed12fe21 已合入第一半：析构不得抛，生成的 `tp_dealloc` 异常时仍释放实例并保存/恢复解释器异常；486 处 ASSERT/CHECK 与 62 处 LOGf 的用户错误/内部不变量归类仍待领 |
 | 2.20 | 信号处理器只做 `write` 与 `_exit`，符号化交给预建 helper 进程 | 已合并 | bindings | 上半 9b92f38d（去 stdio/LOGf/exit，标志改 volatile sig_atomic_t）；下半 640a4f07（符号化搬进崩溃前 fork 的 helper，经父进程 /proc/<pid>/maps 解析）；d874b01d 修 jit_key 用例（它原先靠信号处理器抛异常） |
 | 2.21 | `DEFINE_FLAG_WITH_SETTER` 先赋值再调 setter，签名收新旧两值 | 已合并 | coreops | 14336afd |
 | 2.22 | 环境变量统一 `JT_` 前缀 | 待领 | | |
