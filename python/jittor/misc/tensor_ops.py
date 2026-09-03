@@ -789,43 +789,20 @@ def unique(
             jt.Var([[1 3]], dtype=int32)
     '''
 
-    # jittor's CUDA unique kernel (cub::DeviceRadixSort::SortPairs +
-    # thrust::unique) only sorts correctly for 32-bit int keys; for int64 /
-    # float / int8 etc. it silently returns wrong indices (e.g. int64 [0,1,...]
-    # -> [0,0]), which surfaced as a CUDA illegal-address downstream in
-    # Sparse R-CNN's `rois[:,0].long().unique()`. Route the broken dtypes around
-    # it: integer keys that fit int32 are computed via the (correct) int32 CUDA
-    # path; anything else falls back to the (correct) CPU implementation. int32
-    # itself keeps the native fast CUDA path unchanged.
-    if jt.flags.use_cuda and str(input.dtype) != "int32":
-        dt = str(input.dtype)
-        is_int = ("int" in dt)
-        if is_int:
-            # safe to use the int32 CUDA path iff every value fits int32
-            try:
-                fits = bool(((input <= 2147483647).logical_and(input >= -2147483648)).all())
-            except Exception:
-                fits = False
-            if fits:
-                res = jt.misc.unique(
-                    input.int32(), sorted=sorted,
-                    return_inverse=return_inverse,
-                    return_counts=return_counts, dim=dim,
-                )
-                if isinstance(res, tuple):
-                    return (res[0].cast(dt),) + tuple(res[1:])
-                return res.cast(dt)
-        # float keys, or ints out of int32 range: compute on CPU, move back.
-        with jt.flag_scope(use_cuda=0):
-            res = jt.misc.unique(
-                input.clone(), sorted=sorted,
-                return_inverse=return_inverse,
-                return_counts=return_counts, dim=dim,
-            )
-        if isinstance(res, tuple):
-            return tuple(r for r in res)
-        return res
-
+    # One implementation, every dtype, both devices. There used to be four
+    # arms here: the native int32 CUDA kernel; "cast to int32 and recurse" for
+    # integers that fit; `flag_scope(use_cuda=0)` -- compute the whole thing on
+    # the CPU and move it back -- for everything else; and the CPU path itself.
+    # Choosing between them read a reduction back to the host with a Python
+    # truth test, once per call, in the middle of a lazy graph.
+    #
+    # The reason given for the detour was that the CUDA kernel "only sorts
+    # correctly for 32-bit int keys". cub sorts any key type; what was wrong was
+    # the *index* var the kernels write their answer into -- see the second
+    # jt.code below -- plus a hand-carved scratch buffer that misaligned 64-bit
+    # keys. Both are fixed here, so the arms that worked around them are gone,
+    # along with the CPU detour they sent float inputs down -- whose comparator
+    # truncated the sort key to int.
     temp_shape = None
     if dim == None:
         temp_shape = list(input.shape)
@@ -849,9 +826,13 @@ def unique(
 
             int dimlen = input_flatten_shape0, dimsize = input_flatten_shape1;
             for(int i = 0; i < dimlen; ++i) @indice(i) = i;
+            // input_flatten_type, not int. Truncating the key made 1.5 and 1.2
+            // compare equal, so the duplicate-dropping pass -- which only
+            // merges *neighbours* -- left both in the output, unsorted.
             std::sort(&@indice(0), &@indice(dimlen), [&](int a, int b){
                 for(int i = 0; i < dimsize; ++i) {
-                    int lhs = @input_flatten(a, i), rhs = @input_flatten(b, i);
+                    input_flatten_type lhs = @input_flatten(a, i),
+                                       rhs = @input_flatten(b, i);
                     if (lhs != rhs) return lhs < rhs;
                 }
                 return false;
@@ -881,18 +862,30 @@ def unique(
                 if (dimsize == 1) {
                     size_t raw_allocation, d_allocation, temp_storage_bytes = 0;
                     void *d_temp_storage = NULL;
-                    int32_t* raw_ptr = (int32_t*)exe.allocator->alloc(dimlen * (sizeof(int32_t) + sizeof(input_flatten_type)), raw_allocation);
+                    // Two allocations, not one block carved by hand. The old
+                    // code put the sorted keys at `raw_ptr + dimlen` -- 4*dimlen
+                    // bytes in, which is 8-byte aligned only when dimlen is
+                    // even, so an int64 or float64 input of odd length handed
+                    // cub a misaligned buffer. Carving the other way round
+                    // misaligns the int32 iota for 1- and 2-byte keys. Let the
+                    // allocator align each.
+                    size_t keys_bytes = dimlen * sizeof(input_flatten_type);
+                    size_t iota_bytes = dimlen * sizeof(int32_t);
+                    input_flatten_type* keys_out = (input_flatten_type*)exe.allocator->alloc(keys_bytes, raw_allocation);
+                    size_t iota_allocation;
+                    int32_t* raw_ptr = (int32_t*)exe.allocator->alloc(iota_bytes, iota_allocation);
 
                     thrust::device_ptr<int32_t> arange_ptr = thrust::device_pointer_cast(raw_ptr);
                     thrust::sequence(arange_ptr, arange_ptr + dimlen);
 
                     cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, input_flatten_p, 
-                                                    (input_flatten_type*)(raw_ptr + dimlen), thrust::raw_pointer_cast(arange_ptr), indice_p, dimlen);
+                                                    keys_out, thrust::raw_pointer_cast(arange_ptr), indice_p, dimlen);
                     d_temp_storage = exe.allocator->alloc(temp_storage_bytes, d_allocation);
                     cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, input_flatten_p,
-                                                    (input_flatten_type*)(raw_ptr + dimlen), thrust::raw_pointer_cast(arange_ptr), indice_p, dimlen);
+                                                    keys_out, thrust::raw_pointer_cast(arange_ptr), indice_p, dimlen);
 
-                    exe.allocator->free(raw_ptr, dimlen * (sizeof(int) + sizeof(input_flatten_type)), raw_allocation);
+                    exe.allocator->free(raw_ptr, iota_bytes, iota_allocation);
+                    exe.allocator->free(keys_out, keys_bytes, raw_allocation);
                     exe.allocator->free(d_temp_storage, temp_storage_bytes, d_allocation);
                 } else {
                     thrust::device_ptr<input_flatten_type> input_ptr = thrust::device_pointer_cast(input_flatten_p);
@@ -924,9 +917,16 @@ def unique(
     diff = jt.array(diff, dtype = jt.int32)
   
     with jt.flag_scope(compile_options = {"FLAGS:  --extended-lambda ": 1} if jt.flags.use_cuda else {}):
+        # `output` holds *positions* in input_sorted, so it is an index var --
+        # both kernels below write indices into it and the caller immediately
+        # gathers with it. It used to be created with `input_sorted.dtype`, and
+        # the CUDA body memcpy's raw int32 indices into it: with an int32 input
+        # that reinterpretation is a no-op and everything worked, with any other
+        # dtype the indices came back as garbage. That, not cub, is what "the
+        # CUDA unique kernel only sorts correctly for 32-bit int keys" was.
         output, inverse = jt.code(
             [(-input_sorted.shape[0], ), (indice.shape)],
-            [input_sorted.dtype, indice.dtype],
+            [indice.dtype, indice.dtype],
             [input_sorted, diff, indice],
             cpu_header='''
                 #include <algorithm>
