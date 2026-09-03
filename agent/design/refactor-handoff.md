@@ -1,6 +1,6 @@
 # 交接：`2.0-refactor` 的当前状态
 
-2026-09-03。上一轮中断留下的 WIP 分支和工作树残留已经全部收尾。本文写给接手的人，只回答三个问题：
+2026-09-04。上一轮中断留下的 WIP 分支和工作树残留已经全部收尾。本文写给接手的人，只回答三个问题：
 **分支停在哪、交接是否干净、下一步从哪开始**。任务本身在 [整改计划](refactor-plan.md)，进度在
 [看板](refactor-board.md)，目录终点在 [目标布局](target-layout.md)，本文不重复它们。
 
@@ -27,9 +27,9 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；本波审计基线 `4da233d6`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 审计基线 689 个 |
-| 提交里出现过的任务号 | 214 个 |
+| 分支 | `2.0-refactor`；本波审计基线 `a7e8781a`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 审计基线 696 个 |
+| 提交里出现过的任务号 | 217 个 |
 | 看板 | 已合并 **196** / 进行中 **0** / 待领 **74** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
 
@@ -413,6 +413,14 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `bindings` | 2.19 将 NCCL reduce_scatter 两处公开 shape 合同改为 `USER_CHECKop`，累计 76 处；nvcc TU 语法通过，本机无 NCCL |
 | `compat` | 7.03 将 square 提升为 numerical 稳定对象并登记 approximate fidelity；3 项 CPU/身份/metadata 通过 |
 
+第四十三波新增 3 个严格保持待领的前置：
+
+| 分区 | 第四十三波结果 |
+| --- | --- |
+| `device` | 8.06 为 `aclnn.h` 增加 `#pragma once`，补重复包含静态合同；1 passed，本机无 CANN/NPU，仍待 Ascend 910B3 实机 |
+| `bindings` | 2.19 将 CUB argsort/arg_reduce 的 offsets dtype 边界改为 `USER_CHECK`，累计 79 处；结构与双 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `compat` | 7.03 将 `pairwise_distance` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份、metadata、CPU p=2/keepdim 三节点通过 |
+
 第二十九波新增 3 个严格保持待领的前置：
 
 | 分区 | 第二十九波结果 |
@@ -423,7 +431,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 
 ## 6. 下一波起点
 
-按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第四十三波继续优先可独立验证的
+按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第四十四波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
 - `device`：若续做 8.06，只迁下一个最终 owner 明确的 family，并复用 5be5fa15 的 launcher 合同；无 NPU

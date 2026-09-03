@@ -483,3 +483,9 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 11.02 | 已提前为 0.20 | 并入 0.20 | | |
 | 11.03 | 单文件异常拆分 | 待领 | | |
 | 11.04 | 关键接口写成显式契约 | 待领 | | |
+
+### 2026-09-04 第四十三波补充证据
+
+- `8.06`：`1e8e90c6` 为 `aclnn.h` 增加 `#pragma once`，新增重复包含静态合同，1 passed；本机无 CANN/NPU，仍待 Ascend 910B3 实机。
+- `2.19`：`45f77257`/`f76e3b90` 将 CUB argsort/arg_reduce 的 offsets dtype 边界改为 `USER_CHECK` 并记录 int64 负向与双 nvcc TU 语法通过；本机无 CUDA，仍待设备负向运行。
+- `7.03`：`8647dc4d` 将 `pairwise_distance` 提升为模块级稳定对象并登记 conservative approximate fidelity；身份、metadata、CPU p=2/keepdim 三节点通过。
