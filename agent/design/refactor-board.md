@@ -247,7 +247,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 3.03 | 三张 kernel 缓存表键改 `string` | 待领 | | |
 | 3.04 | 求 jit key 改纯函数 | 待领 | | |
 | 3.05 | 删除算子构造期回调执行器 | 待领 | | |
-| 3.06 | 并行编译器修到可信 | 待领 | | |
+| 3.06 | 并行编译器修到可信 | 已合并 | coreops | e46ba4ec。持久线程池改 per-call future 并完整 get，异常以 exception_ptr 回主线程；任务显式携带原 JIT key，relay 成功后才发布；worker 数受 affinity/cgroup v2 限制，fork 后不再遗留幽灵线程，catch 不二次 prepare。fork 用例修前稳定退出 124；worker 上限、fork、prepare-once、失败归因 4 个 CPU 聚焦节点通过。长期 sanitizer/共享缓存压力仍按 KI-COMPILER-001 复查 |
 | 3.07 | 执行器在设备等待段释放 GIL | 待领 | | |
 | 3.08 | KernelIR 结构化 | 已合并 | codegen | 属性名 `62cdee84`、节点类型 enum `78410930`、pass 契约 `c3557a1c` |
 | 3.09 | 死代码消除不再按「语句含 `void` 一词」删除 | 已合并 | codegen | 66e5a153 |
