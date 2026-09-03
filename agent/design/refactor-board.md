@@ -276,12 +276,12 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 5.03 | 转置隐藏标记 | 待领 | | |
 | 5.04 | 参数模型 | 待领 | | |
 | 5.05 | `eval()`/`train()` 只切 `is_train`，冻结统一由 `requires… | 已合并 | pyother | 4a8c4145 |
-| 5.06 | hook 存实例级有序字典，多 hook、prepend/always_call 生效、可移除 … | 待领 | | |
+| 5.06 | hook 存实例级有序字典，多 hook、prepend/always_call 生效、可移除 … | 已合并 | pyother | 9117b843（含 `Var.register_hook` 返回 handle、`_dispatch_call` 接缝、weight_norm 的单 hook workaround 一并删掉） |
 | 5.07 | `jt.Function` 每次调用创建一次性上下文对象，实例无状态 | 已合并 | pyother | 5c4e624b；0f639e5b（收尾：torch 兼容层的 ctx 记账跟着挪到一次性上下文上，`materialize_grads` 原本静默失效） |
 | 5.08 | `flag_scope` 的备份改局部栈，`__call__` 每次新建 scope | 已合并 | | 5720e7e8 |
 | 5.09 | 29 处融合 kernel 的启用条件由全局 `no_grad` 改为「输出不需要梯度」 | 待领 | | |
 | 5.10 | 索引与计数统一 int64 | 进行中 | pyops | |
-| 5.11 | `amp_reg` 位常量命名导出，一律 `\ | 已合并 | pyother | 24a334cf |
+| 5.11 | `amp_reg` 位常量命名导出，一律 `\ | 已合并 | pyother | 24a334cf；fc9244c4（收尾：用例的 level 切换改走 flag_scope，撞上 0.15 新加的 flag 泄漏规则） |
 | 5.12 | matmul 四条路径共用能力表，dtype 用枚举不用子串 | 进行中 | pyops | |
 | 5.13 | `unique` | 进行中 | pyops | |
 | 5.14 | `Var.scatter` 改非就地 | 已合并 | | 0b75e187 |
