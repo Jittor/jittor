@@ -285,7 +285,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 5.01 | 114 个 `foo_` 就地方法改白名单显式声明 | 待领 | | |
 | 5.02 | 视图与存储模型 | 待领 | | |
 | 5.03 | 转置隐藏标记 | 待领 | | |
-| 5.04 | 参数模型 | 待领 | | |
+| 5.04 | 参数模型 | 已合并 | pyops | 3d40fa9e。`parameters`/`named_parameters`/`state_dict`/`named_buffers`/`_buffers` 共用一份角色遍历；绑定权重按对象身份去重而 state_dict 保留全部别名，BatchNorm buffer 按名字注册，查询不再改写 Var 名称。CPU `tests/nn` 182 passed/145 skipped，CUDA 聚焦 23 passed，Torch-shim 入口 1 passed，独立 PyTorch 2.12.1 语义对拍通过 |
 | 5.05 | `eval()`/`train()` 只切 `is_train`，冻结统一由 `requires… | 已合并 | pyother | 4a8c4145 |
 | 5.06 | hook 存实例级有序字典，多 hook、prepend/always_call 生效、可移除 … | 已合并 | pyother | 9117b843（含 `Var.register_hook` 返回 handle、`_dispatch_call` 接缝、weight_norm 的单 hook workaround 一并删掉） |
 | 5.07 | `jt.Function` 每次调用创建一次性上下文对象，实例无状态 | 已合并 | pyother | 5c4e624b；0f639e5b（收尾：torch 兼容层的 ctx 记账跟着挪到一次性上下文上，`materialize_grads` 原本静默失效） |
@@ -296,11 +296,11 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 5.12 | matmul 四条路径共用能力表，dtype 用枚举不用子串 | 已合并 | pyops | 9d987034（`_cublas_can_take` 一个谓词供四处使用，判据是 `a.dtype == b.dtype and a.dtype.is_float()`；`bmm_transpose` 补上 dtype 守卫与 amp_reg。审计两处更正：「`"float" in dtype` 匹配 bfloat16/float64」属实但 cuBLAS 都支持、不是缺陷；「batched 只查 a 的 complex」属实但不可达。真正可达的是 `bmm_transpose` 完全没有守卫，整数/复数操作数在 CUDA 上撞 C++ 断言而同一乘积写成 matmul 就能算） |
 | 5.13 | `unique` | 已合并 | pyops | 9c24a433（unique：四条路径合一，CPU 比较器不再把排序键截断成 int；根因不是注释说的「cub 只支持 int32」，而是存索引的输出 var 用了输入的 dtype，外加手工切分的 scratch 对不齐）43985e2c（isnan/isinf/isfinite 不再窄化成 float，float64 的 1e300 在所有后端都不是 inf）c8b4b206 + d6f08532（cumsum 一份实现、一条求导规则、一个 dim 契约，CPU 不再走 numpy 主机回调） |
 | 5.14 | `Var.scatter` 改非就地 | 已合并 | | 0b75e187 |
-| 5.15 | `.half()`/`.float16()` 删死的 amp 分支 | 待领 | | |
+| 5.15 | `.half()`/`.float16()` 删死的 amp 分支 | 已合并 | pyops | bf0317af。四种显式浮点 dtype 转换共用一条路径并覆盖持久/非持久 buffer，整数与 bool buffer 保持原 dtype；删除恒假且会改写整个类 `__call__` 的 amp 分支。新测试修前 5 failed/2 passed、修后 CPU/CUDA 各 7 passed |
 | 5.16 | `state_dict(to="torch")` 用 `from_numpy`，不强制 floa… | 待领 | | |
 | 5.17 | 同一概念合并 | 已合并 | pyops | 1793f08f（平均池化：删 `pool/layers.py` 旧 AvgPool2d 并转发，2D/3D 同一套 `count_include_pad` 语义）3344cb40（`nn.Conv2d.execute` 委托 `functional.conv2d`，编译选项与输出尺寸校验合一）cd7ce682（BatchNorm/LayerNorm/GroupNorm 模块只做参数管理；`batch_norm(training=True)` 走融合 kernel；BN 的 sync 与非 sync 合并成一套数学——含审计 2026-09-03 补充的第三处：sync 分支的 `E[x²]-E[x]²` 只在 MPI 下跑，均值远大于标准差时相对误差约 7e-2） |
 | 5.18 | 同一概念合并 | 已合并 | pyother | 40fa8695（efficientnet 投影层）37ac0ac5（models/_utils）4179c899（loss 的 _reduce）d5892775（分布类）d569f22d（旧式 scheduler）dd1cbe30（init 的 gain 表与 fan）96cb9b1c（linalg helper）f23dc9b8（normalize 合并到 torch 语义） |
-| 5.19 | 被静默忽略的参数改为传非默认值时 warn 或 raise | 进行中 | pyops（算子参数）+ pyother（其余） | 1710aef1（算子参数：relu/leaky_relu/silu/mish 的 inplace、instance_norm 与 InstanceNorm 的 running stats/momentum/is_train/sync、svd 的 compute_uv/driver、inv_ex 的 check_errors、ctc_loss 的 zero_infinity、sort 的 stable；topk 的 sorted 判为无需处理，见提交说明）。共用基础设施 `python/jittor/_arg_policy.py`，pyother 直接复用，不要另起近义模块。其余（pyother）：4cf6df28（resnet 的 zero_init_residual——判为该实现而不是 warn，按 torchvision 清零残差分支末端 BN 的 gamma）、211339c9（vjp/jvp 的 strict 归 unsupported、DataLoader 的 pin_memory/persistent_workers 归 ignored 且 persistent_workers 用哨兵默认值只在显式传 False 时 warn、kaiming 的 generator 归 unsupported、fftfreq/rfftfreq 的 dtype 直接实现且未知 kwargs 抛 TypeError） |
+| 5.19 | 被静默忽略的参数改为传非默认值时 warn 或 raise | 已合并 | pyops + pyother | 1710aef1（算子参数：relu/leaky_relu/silu/mish 的 inplace、instance_norm 与 InstanceNorm 的 running stats/momentum/is_train/sync、svd 的 compute_uv/driver、inv_ex 的 check_errors、ctc_loss 的 zero_infinity、sort 的 stable；topk 的 sorted 判为无需处理，见提交说明）。共用基础设施 `python/jittor/_arg_policy.py`。4cf6df28（实现 ResNet `zero_init_residual`）；211339c9（vjp/jvp strict、DataLoader pin_memory/persistent_workers、kaiming generator、fftfreq/rfftfreq dtype/device 与未知 kwargs）。统一回归 44 passed |
 | 5.20 | import 期副作用删除 | 已合并 | pyother | 505a1155 |
 | 5.21 | 六个 monkeypatch 安装器写成显式有序清单并加断言 | 待领 | | |
 | 5.22 | `nn` facade 不导出 39 个下划线名，内部用模块局部名不经 `jt.nn.*` 晚绑… | 待领 | | |
