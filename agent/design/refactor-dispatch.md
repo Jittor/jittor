@@ -7,6 +7,21 @@
 
 下文 `$LAB` 指 `$JITTOR_LAB_ROOT/refactor`。
 
+## 0. 一句话的 goal
+
+要它自己一直推到底，用这句：
+
+```
+在 2.0-refactor 分支上干活（工作目录 $LAB/coord，不要在主树里改代码），按
+agent/design/refactor-handoff.md 与 agent/design/refactor-dispatch.md 的次序推进
+agent/design/refactor-plan.md：先补验证合入五个 wip/* 分支并收尾六处未提交残留，
+之后每波最多四个分区、每分区最多 5 条任务，一个任务一个提交、做完就推，每波结束前把
+看板与交接文档更新到反映真实状态，直到 refactor-board.md 上不再有「待领」与「进行中」。
+```
+
+**终点写成「看板上不再有待领与进行中」而不是「完成所有任务」**，因为前者 `grep -c 待领` 一条命令
+就有答案，后者只能反复问「做完了吗」。分支与工作目录必须写进去，理由见交接说明第 0 节。
+
 ## 1. 第一次会话：只收尾，不领新活
 
 ```
