@@ -82,7 +82,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 
 | 分区 | 当前占有者 | 任务 |
 | --- | --- | --- |
-| 核心节点 | — |  |
+| 核心节点 | coreops (2.01/2.02/2.03) | GPU3 c24-35 |
 | 执行器 | — |  |
 | 代码生成 | — |  |
 | 类型与日志 | coreops (6.C01/05/06/07/09/30) | GPU3 c24-35 |
@@ -119,6 +119,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | `test_atomic_tuner` 抓不到日志 | **已修**：根因确认为 `032ecfe1` 的 `full_reduce_cuda.py` 快路径猴补 `Var.sum`/`Var.mean`，全归约不再进 JIT；第 4 条用例改走 `jt.reduce` | codegen，`72f020b3` |
 | `asm_tuner.py` 非原子写 `.s`，并发编译读到截断的汇编 | **已修**：`pass_asm()` 改成写 `<路径>.tmp.<pid>` 再 `os.replace`。判据是 inode——改名换 inode，原地重写不换，也就不会消掉那个窗口；用例 `test_asm_tuner.py::TestAsmTunerWritesAtomically` 钉住。缓存里已经存在的坏 `.s` 不会自动修复，删掉再跑 | 构建，`1919b035` |
 | `tests/backends/cuda/test_backend_teardown.py` 过不了 0.21 的静态门禁 | **已修**：gates 在 `a5ce7310` 里已改成 `run_python_child(..., crash_isolated=True)`。cudabk 复核了改后的文件保留全部断言（无 terminate / 退出码 0 / 有 teardown 记录 / 真错误 `cudaErrorIllegalAddress` 仍可见）加那条干净退出的对照，并把 `cuda-backend-choice-proof` 里「子进程 abort 会带走 pytest」那段从只描述现象改成指向 helper 的 `crash_isolated`（`1b117a91`） | 门禁 gates，`a5ce7310` |
+| `tests/compat/torch` 的 17 条失败与核心分区无关 | 2026-09-03 在 `77641cc8` 上跑 `test_torch_compat_optim/rnn/unimplemented/linalg` 四个文件：17 failed / 104 passed。逐条看过失败原因，**没有一条落在 flag、节点、遍历或执行器上**：AdamW 八条全是 `fused_adamw is only available through a mapped backend`（`ops/fused_adamw_op.cc` 在 CUDA 上拒绝执行）；RNN 五条全是 `cudnn_rnn_descriptor.cc Check failed: is_type<string>(_slots[7])`；`set_default_device` 两条是设备选择；`test_det_slogdet` 是 cupy 的 `NVRTC_ERROR_COMPILATION`；`test_autocast_actually_lowers_op_dtype` 是 shim 的 autocast 没接上 amp——**这条专门核过**：同一个 amp 探针（level 5 下 `a*b`、`matmul` 的 dtype，以及 AmpGradGuard 把六位 amp 字段读回来后的梯度）在 2.01 前后逐字一致（`float16/float16`、`GRAD float32 128.0`），2.01 的重新编号没有动 amp。同一批失败在 rebase 前的树上也是同一份名单 | 依次为 pyops/compat、cudabk（8.01 一带）、device（4.02 一带）、环境、compat |
 | 下一次 rebase 会全量重编一次 | 9.04（`2569fe3b`）同时改了缓存路径与缓存键格式，**这是预期的，不是缓存坏了，不要删自己的 `JITTOR_HOME`**（本机冷构建约 63s）。另外 `cache_name` 的语义从「不设 = 当前 git 分支」变成「不设 = `default`」——靠分支自动分开缓存来隔离并行任务的，改成显式设 `cache_name` 或不同 `JITTOR_HOME`；反过来切分支不再触发全量重编 | 全体，已由协调者广播 |
 | 8.03 的前期分析（未实现，交接用） | **已落地**，见 8.03 与 `agent/design/float32-precision-policy.md`（三档映射表、默认值为何不变、两条实质行为变化各自的证据）。 | 已完成 |
 | 7.08 的 tf32 映射可以再进一步（8.03 之后） | 9aaedba9 把 high/medium 的细分记在 Python 侧（`_torch_float32_matmul_refinement`），理由是「Jittor 表达不了」。8.03 之后 `jt.flags.float32_matmul_precision` 是真的三档 C++ 状态，`medium` 会真的走 bf16 累加，**表达得了了**。但接上去之前要先决定：Jittor 这个策略是 matmul 与卷积**共用**的，torch 的 `set_float32_matmul_precision` 不动 cuDNN；直接接到共用策略上会让下游一句 `set_float32_matmul_precision("high")` 把卷积也降到 tf32。要么 shim 只写 per-domain 覆盖（现状，medium 仍然只到 tf32），要么核心再分出 matmul-only 一档。cudabk 没有替 7.08 做这个决定 | 7.08 接手人 |
@@ -208,13 +209,13 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 1.03 | 查明 `SharedReducePass` 在约 4900 个归约 kernel 里零命中的触发… | 已合并 | codegen | 3eb34e6a |
 | 1.04 | `ReduceTuner::run` 不再对 CUDA 直接返回 | 已合并 | codegen | aebb1d73 |
 | 1.05 | 布局收尾 | 待领 | | |
-| 2.01 | Var 与 Op 各持自己的 flag 类型 | 待领 | | |
-| 2.02 | 删除 `Node::custom_data` | 待领 | | |
+| 2.01 | Var 与 Op 各持自己的 flag 类型 | 已合并 | coreops | 5b197cae |
+| 2.02 | 删除 `Node::custom_data` | 已合并 | coreops | 505e9b37（上半：拓扑排序自带入度，内存分析器的手工备份删掉）、77641cc8（下半：grad/dump 各持局部表，执行器与 fuser 的批下标搬到 `Node::batch_index`+`batch_stamp`，写用 `set_batch_index`、读一律 `batch_index_at(stamp)`并当场校验）。**字段本身仍在**：第六个用法是 FusedOp 的跨阶段映射，见 2.24（排在 3.11 之后）。审计描述的危害「任意两个遍历交错就互相破坏」到此消除 |
 | 2.03 | `tflag` 全局计数器加魔数改为 epoch 对象或局部集合 | 待领 | | |
 | 2.04 | `Var::allocator` 去类型双关 | 已合并 | | 9b3841b7 |
 | 2.05 | 真正的 0 维张量 | 待领 | | |
 | 2.06 | 边表由 list 加反向迭代器改 SmallVector，按下标 O(1) | 待领 | | |
-| 2.07 | `hold_vars`/`sync_ptr` 析构里 `std::next(end())` 的 … | 待领 | | |
+| 2.07 | `hold_vars`/`sync_ptr` 析构里 `std::next(end())` 的 … | 已合并 | coreops | 1101f3f5 |
 | 2.08 | `Node` 不再 include `pybind/py_var_tracer.h` | 待领 | | |
 | 2.09 | `th_mode` 从 C++ 核心上移为 autograd 策略对象 | 待领 | | |
 | 2.10 | 三套 liveness 计数 | 待领 | | |
@@ -228,7 +229,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 2.18 | 算子注册表惰性初始化 | 待领 | | |
 | 2.19 | 错误分两档 | 待领 | | |
 | 2.20 | 信号处理器只做 `write` 与 `_exit`，符号化交给预建 helper 进程 | 已合并 | bindings | 上半 9b92f38d（去 stdio/LOGf/exit，标志改 volatile sig_atomic_t）；下半 640a4f07（符号化搬进崩溃前 fork 的 helper，经父进程 /proc/<pid>/maps 解析）；d874b01d 修 jit_key 用例（它原先靠信号处理器抛异常） |
-| 2.21 | `DEFINE_FLAG_WITH_SETTER` 先赋值再调 setter，签名收新旧两值 | 待领 | | |
+| 2.21 | `DEFINE_FLAG_WITH_SETTER` 先赋值再调 setter，签名收新旧两值 | 已合并 | coreops | 14336afd |
 | 2.22 | 环境变量统一 `JT_` 前缀 | 待领 | | |
 | 2.23 | 布局收尾 | 待领 | | |
 | 3.01 | `Executor::run_sync` | 待领 | | |
@@ -325,7 +326,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 6.C27 | `Var.data` 返回的 numpy 视图 base 指向包裹该次 allocation 的… | 已合并 | bindings | 9504e520 |
 | 6.C28 | 生成带「已构造」标志的 `tp_new` 或 `tp_dealloc` 先检查 | 已合并 | bindings | 8bd40d02 |
 | 6.C29 | 标量转数组的全局 `tmp_data` 改自带 buffer | 已合并 | bindings | b57c31a1 |
-| 6.C30 | `helper_cuda.h` 的 `peek` 去掉进程级闩 `peek_logged` | 待领 | | |
+| 6.C30 | `helper_cuda.h` 的 `peek` 去掉进程级闩 `peek_logged` | 已合并 | coreops | bcdf1593 |
 | 6.C31 | 失败的 import jittor 在退出期 abort，父进程无声消失 | 已合并 | bindings | 64350894 |
 | 6.P01 | 转置标记陈旧 | 并入 5.03 | | |
 | 6.P02 | Function 实例复用、no_grad 泄漏、tied weight 参数集合 | 并入 5.07、5.08、5.04 | | |
