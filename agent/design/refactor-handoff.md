@@ -27,9 +27,9 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；本波审计基线 `5be5fa15`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 审计基线 503 个 |
-| 提交里出现过的任务号 | 212 个 |
+| 分支 | `2.0-refactor`；本波审计基线 `04b16fae`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 审计基线 510 个 |
+| 提交里出现过的任务号 | 213 个 |
 | 看板 | 已合并 **196** / 进行中 **0** / 待领 **74** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
 
@@ -200,9 +200,17 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | --- | --- |
 | `device` | 8.06 在 BaseOpRunner 建立统一 launcher 尾部，先迁 unary family 并保留异步策略；静态 2 项通过，本机无 NPU |
 
+第十五波合入 3 个严格保持待领的前置：
+
+| 分区 | 第十五波结果 |
+| --- | --- |
+| `device` | 8.06 复用统一 launcher 迁 binary family，保留原同步策略；静态 3 项通过，仍待其余 family 与 910B3 |
+| `bindings` | 2.19 迁 ternary 两处 shape/dim 用户边界，累计 28 处；结构、C++ 语法与 Python 负向节点通过 |
+| `compat` | 7.03 将 `empty_like` 收回 factory owner 并登记 approximate fidelity；身份、metadata、CPU shape/dtype 5 项通过 |
+
 ## 6. 下一波起点
 
-按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。下一波先从剩余任务中选择至少一个可
+按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第十六波先从剩余任务中选择至少一个可
 完整关闭的轻量项；8.06 只允许按 family 迁移，不铺开 65 个尾巴：
 
 - `device`：若续做 8.06，只迁第二个最终 owner 明确的 family，并复用 5be5fa15 的 launcher 合同。
