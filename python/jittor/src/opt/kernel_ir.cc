@@ -9,6 +9,55 @@
 
 namespace jittor {
 
+static uint source_line_at(const string& src, uint pos) {
+    uint line = 1;
+    for (uint i=0; i<pos && i<src.size(); i++)
+        if (src[i] == '\n') line++;
+    return line;
+}
+
+static uint quoted_literal_end(const string& src, uint pos, uint end) {
+    char quote = src[pos++];
+    while (pos < end) {
+        if (src[pos] == '\\') {
+            pos += 2;
+            continue;
+        }
+        if (src[pos++] == quote) return pos;
+    }
+    CHECK(0) << "KernelIR parse error at line" << source_line_at(src, pos)
+        << ": unterminated C++ quoted literal";
+    return end;
+}
+
+static bool is_pragma_at(const string& src, uint pos, uint end) {
+    return startswith(src, "_Pragma", pos, false, end) &&
+        (pos+7 == end || src[pos+7]=='(' || src[pos+7]==' ' ||
+         src[pos+7]=='\t');
+}
+
+static uint pragma_end(const string& src, uint pos, uint end) {
+    uint start = pos;
+    pos += 7;
+    while (pos<end && (src[pos]==' ' || src[pos]=='\t')) pos++;
+    CHECK(pos<end && src[pos]=='(')
+        << "KernelIR parse error at line" << source_line_at(src, start)
+        << ": _Pragma must be followed by a parenthesized string";
+    int depth = 0;
+    while (pos<end) {
+        if (src[pos]=='\'' || src[pos]=='\"') {
+            pos = quoted_literal_end(src, pos, end);
+            continue;
+        }
+        if (src[pos]=='(') depth++;
+        if (src[pos]==')' && --depth==0) return pos+1;
+        pos++;
+    }
+    CHECK(0) << "KernelIR parse error at line" << source_line_at(src, start)
+        << ": unmatched _Pragma parentheses";
+    return end;
+}
+
 template<class T>
 vector<typename unordered_map<string,T>::iterator> sort(unordered_map<string,T>& m) {
     vector<typename unordered_map<string,T>::iterator> v;
@@ -636,6 +685,12 @@ KernelIR::KernelIR(const string& src, bool raw) {
     while (end && (src[end-1] == ' ' || src[end-1] == '\n')) end--;
     while (start<end && (src[start]==' ' || src[start]=='\n')) start++;
     type = KernelIRType::none;
+    vector<unique_ptr<KernelIR>> pending_pragmas;
+    auto attach_pending_pragmas = [&](KernelIR* target) {
+        for (auto& pragma : pending_pragmas)
+            target->push_back(move(pragma), &target->before);
+        pending_pragmas.clear();
+    };
     for (uint i=start; i<end; i++) {
         int presum=0;
         uint j=i;
@@ -653,6 +708,24 @@ KernelIR::KernelIR(const string& src, bool raw) {
                 }
             }
             i = k;
+            continue;
+        }
+        if (is_pragma_at(src, j, end)) {
+            uint k = pragma_end(src, j, end);
+            string pragma = src.substr(j, k-j);
+            uint rest = k;
+            while (rest<end && (src[rest]==' ' || src[rest]=='\t' || src[rest]=='\n'))
+                rest++;
+            if (j==start && rest==end) {
+                attrs[kir::code] = pragma;
+                attrs[kir::raw] = "1";
+                return;
+            }
+            auto pragma_ir = std::make_unique<KernelIR>();
+            pragma_ir->attrs[kir::code] = pragma;
+            pragma_ir->attrs[kir::raw] = "1";
+            pending_pragmas.push_back(move(pragma_ir));
+            i = k-1;
             continue;
         }
         if (src[j]=='#') {
@@ -675,6 +748,14 @@ KernelIR::KernelIR(const string& src, bool raw) {
         if (j==end) return;
         uint k=j;
         while (k<end) {
+            if (is_pragma_at(src, k, end)) {
+                k = pragma_end(src, k, end);
+                continue;
+            }
+            if (src[k]=='\'' || src[k]=='\"') {
+                k = quoted_literal_end(src, k, end);
+                continue;
+            }
             if (src[k] == '{' || src[k] == '(') presum++;
             if (src[k] == '}' || src[k] == ')') presum--;
             if (!presum && (src[k]==';' || src[k]=='}')) {
@@ -684,7 +765,9 @@ KernelIR::KernelIR(const string& src, bool raw) {
             }
             k++;
         }
-        ASSERT(presum == -1) << src << i << j << k << end;
+        ASSERT(presum == -1)
+            << "KernelIR parse error at line" << source_line_at(src, j)
+            << src << i << j << k << end;
         string s = src.substr(j, k-j);
         if (k==end && i==start) {
             if (startswith(s, "for ") || startswith(s, "if ")) {
@@ -697,7 +780,9 @@ KernelIR::KernelIR(const string& src, bool raw) {
                     if (presum==0 && s[l] == ')') break;
                     l++;
                 }
-                ASSERT(l<s.size() && presum==0) << s;
+                ASSERT(l<s.size() && presum==0)
+                    << "KernelIR parse error at line" << source_line_at(src, j)
+                    << s;
                 if (startswith(s, "for "))
                     parse_for_loop(s.substr(0, l+1), raw);
                 else {
@@ -745,14 +830,18 @@ KernelIR::KernelIR(const string& src, bool raw) {
                     attrs[kir::code] = src + ";";
                     return;
                 }
-                ASSERT(l>=0 && ll>=0 && rr>=0 && ll<rr && rr<l) << src;
+                ASSERT(l>=0 && ll>=0 && rr>=0 && ll<rr && rr<l)
+                    << "KernelIR parse error at line" << source_line_at(src, j)
+                    << src;
                 // dtype func_name(args...)  {  }
                 //     y x        ll      rr l  end
                 int x = ll;
                 while (x>0 && s[x-1]!=' ') x--;
                 int y = x-1;
                 while (y>0 && s[y]==' ') y--;
-                ASSERT(0<y && y<x && x<ll) << s << y << x << ll << rr << l;
+                ASSERT(0<y && y<x && x<ll)
+                    << "KernelIR parse error at line" << source_line_at(src, j)
+                    << s << y << x << ll << rr << l;
                 attrs[kir::dtype] = s.substr(0, y+1);
                 attrs[kir::lvalue] = s.substr(x, ll-x);
                 if (ll+1<rr) {
@@ -771,10 +860,13 @@ KernelIR::KernelIR(const string& src, bool raw) {
             return;
         } else {
             push_back(s, nullptr, raw);
+            attach_pending_pragmas(children.back().get());
             i = k-1;
             continue;
         }
     }
+    CHECK(pending_pragmas.empty())
+        << "KernelIR parse error: _Pragma has no following statement";
 }
 
 

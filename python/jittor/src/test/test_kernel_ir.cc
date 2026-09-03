@@ -428,4 +428,30 @@ JIT_TEST(kernel_ir_void_discard_shapes) {
     }
 }
 
+JIT_TEST(kernel_ir_pragma_escape) {
+    KernelIR ir(R"(
+void func(float* x) {
+    _Pragma("omp simd")
+    for (int i=0; i<range0; i++) {
+        x[i] += 1;
+    }
+}
+)");
+    string source = ir.to_string();
+    CHECK(source.find("_Pragma(\"omp simd\")") != string::npos) << source;
+    CHECK(source.find("for (int i = 0; i<range0; i++)") != string::npos)
+        << source;
+}
+
+JIT_TEST(kernel_ir_pragma_error_has_line) {
+    bool caught = false;
+    try {
+        KernelIR ir("void func() {\nint x = 1;\n_Pragma(\"unterminated\"\n}");
+    } catch (const std::exception& e) {
+        caught = true;
+        CHECK(string(e.what()).find("line 3") != string::npos) << e.what();
+    }
+    CHECK(caught) << "malformed _Pragma must fail";
+}
+
 } // jittor

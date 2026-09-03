@@ -21,6 +21,56 @@
 
 namespace jittor {
 
+static uint source_line_at(const string& src, uint pos) {
+    uint line = 1;
+    for (uint i=0; i<pos && i<src.size(); i++)
+        if (src[i] == '\n') line++;
+    return line;
+}
+
+static uint quoted_literal_end(const string& src, uint pos, uint end) {
+    char quote = src[pos++];
+    while (pos < end) {
+        if (src[pos] == '\\') {
+            pos += 2;
+            continue;
+        }
+        if (src[pos++] == quote) return pos;
+    }
+    CHECK(0) << "Jit source error at line" << source_line_at(src, pos)
+        << ": unterminated C++ quoted literal";
+    return end;
+}
+
+static string line_directive_path(const string& path) {
+    string escaped;
+    escaped.reserve(path.size());
+    for (char c : path) {
+        if (c=='\\' || c=='\"') escaped += '\\';
+        escaped += c;
+    }
+    return escaped;
+}
+
+static string annotate_jit_run_lines(const string& src, const string& path) {
+    string annotated;
+    size_t line = 1;
+    size_t start = 0;
+    while (start < src.size()) {
+        size_t end = src.find('\n', start);
+        if (end == string::npos) end = src.size();
+        string source_line = src.substr(start, end-start);
+        if (source_line.find("::jit_run() {") != string::npos)
+            annotated += "#line " + S(line) + " \"" +
+                line_directive_path(path) + "\"\n";
+        annotated += source_line;
+        if (end < src.size()) annotated += '\n';
+        start = end+1;
+        line++;
+    }
+    return annotated;
+}
+
 DECLARE_FLAG(string, jittor_path);
 
 using namespace jit_compiler;
@@ -318,7 +368,9 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
             while (j<src.size() && !(src[j] == '/' && src[j-1] == '*')) j++;
             if (j<src.size()) j++;
             // remove comment
-            // for (size_t k=i; k<j; k++) new_src += src[k];
+            // Preserve its newlines so diagnostics still name source lines.
+            for (size_t k=i; k<j; k++)
+                if (src[k] == '\n') new_src += '\n';
             i = j-1;
             continue;
         } else
@@ -787,6 +839,7 @@ string OpCompiler::get_jit_src(Op* op) {
     LOGvvv << "Read from" << src_path; 
     string src = read_all(_to_winstr(src_path));
     ASSERT(src.size()) << "Source read failed:" << src_path;
+    src = annotate_jit_run_lines(src, src_path);
 
     unordered_map<string,string> defs(jit_define.begin(), jit_define.end());
     LOGvvv << "Precompile with key:" << defs;
@@ -934,6 +987,7 @@ static const unordered_set<string>& jit_reserved_identifiers() {
         // --- compiler / CUDA builtins -------------------------------------
         "__restrict__", "__restrict", "__inline__", "__forceinline__",
         "__global__", "__device__", "__host__", "__shared__", "__constant__",
+        "_Pragma",
         "threadIdx", "blockIdx", "blockDim", "gridDim", "warpSize",
         "__syncthreads", "atomicAdd", "atomicCAS",
         // --- jittor runtime names -----------------------------------------
@@ -1011,6 +1065,7 @@ string OpCompiler::__get_fused_src(
         std::regex_match(src, cm, e);
         ASSERT(cm.size()>=2) << src;
         string name3 = cm[1];
+        const string& source_path = get_op_info(ops[oi]->name()).source_path;
         // macros this op defines, and the last identifier we renamed, both used
         // by check_rename_conflict below
         unordered_set<string> op_defines;
@@ -1027,7 +1082,8 @@ string OpCompiler::__get_fused_src(
             for (uint p=prev_renamed_end; p<pos; p++)
                 if (!(src[p]==' ' || src[p]=='\t' || src[p]=='\n' || src[p]=='\r'))
                     return;
-            LOGf << "Jit error: op" >> oi >> " (" >> ops[oi]->name() >> ") uses"
+            LOGf << source_path >> ':' >> source_line_at(src, pos)
+                << ": Jit error: op" >> oi >> " (" >> ops[oi]->name() >> ") uses"
                 << "identifier" >> '\'' >> prev_renamed >> '\''
                 << "where C++ expects a type, but jittor does not know that name,"
                 << "so it renamed it to" >> '\'' >> ("op"+S(oi)+"_"+prev_renamed) >> "'."
@@ -1103,14 +1159,37 @@ string OpCompiler::__get_fused_src(
             uint k = j;
             int presum = 1;
             while (k<src.size() && presum) {
+                if (src[k]=='\'' || src[k]=='\"') {
+                    k = quoted_literal_end(src, k, src.size());
+                    continue;
+                }
                 if (src[k] == '}')
                     presum--;
                 else if (src[k] == '{')
                     presum++;
                 k++;
             }
-            CHECK(presum==0) << "Jit error: braces are not matched.";
+            CHECK(presum==0) << source_path >> ':' >> source_line_at(src, j)
+                << ": Jit error: braces are not matched.";
+            uint body_line = source_line_at(src, j);
+            auto marker = src.rfind("#line ", i);
+            if (marker != string::npos) {
+                uint number = marker+6;
+                uint number_end = number;
+                while (number_end<src.size() && isdigit(src[number_end]))
+                    number_end++;
+                if (number_end > number)
+                    body_line = std::stoi(src.substr(number, number_end-number));
+            }
+            fused_kernel += "\n#line " + S(body_line) + " \"" +
+                line_directive_path(source_path) + "\"\n";
             for (;j < k-2; j++) {
+                if (src[j]=='\'' || src[j]=='\"') {
+                    uint end = quoted_literal_end(src, j, k-1);
+                    fused_kernel += src.substr(j, end-j);
+                    j = end-1;
+                    continue;
+                }
                 if (isvar(src[j])) {
                     uint l=j;
                     while (l<src.size() && isvar(src[l])) l++;
