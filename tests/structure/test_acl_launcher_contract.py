@@ -24,6 +24,7 @@ STACK_SOURCE = ROOT / "python/jittor/extern/acl/aclops/stack_op_acl.cc"
 FLIP_SOURCE = ROOT / "python/jittor/extern/acl/aclops/flip_op_acl.cc"
 CONCAT_SOURCE = ROOT / "python/jittor/extern/acl/aclops/concat_op_acl.cc"
 WHERE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/where_op_acl.cc"
+RANGE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/index_op_acl.cc"
 GATHER_SOURCE = ROOT / "python/jittor/extern/acl/aclops/gather_scatter_op_acl.cc"
 
 
@@ -249,6 +250,19 @@ def test_nonzero_uses_launcher_and_swhere_remains_present():
     assert "mallocWorkSpace(workspaceSize)" not in nonzero
     assert "syncRun();" not in nonzero
     assert "aclnnSWhere" in source
+
+
+def test_range_uses_launcher_and_keeps_scalar_lifecycle():
+    source = RANGE_SOURCE.read_text()
+    range_source = source[source.index("void RangeOpRunner::executeOp"):source.index("void IndexOpRunner::") if "void IndexOpRunner::" in source else len(source)]
+    assert "aclCreateScalar" in range_source
+    assert "launch(ret, aclnnRange, true);" in range_source
+    assert "aclDestroyScalar(start);" in range_source
+    assert "aclDestroyScalar(end);" in range_source
+    assert "aclDestroyScalar(step);" in range_source
+    assert "checkRet(ret);" not in range_source
+    assert "mallocWorkSpace(workspaceSize)" not in range_source
+    assert "syncRun();" not in range_source
 
 
 def test_scatter_uses_launcher_and_keeps_axis_reduction_query():

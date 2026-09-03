@@ -469,3 +469,7 @@ is outside this migration slice.
 
 The ACL Nonzero owner uses the shared launcher and retains synchronous
 execution. The SWhere owner is outside this slice.
+
+The ACL Range owner uses the shared launcher while retaining scalar creation,
+cleanup, and synchronous execution. Scalar cleanup on exceptional exits is
+outside this migration slice.
