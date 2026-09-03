@@ -453,7 +453,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 9.18 | `disable_lock=1` 启用时明确告警并纳入缓存指纹 | 已合并 | build | 801dd80d。启用时打印并发损坏警告并进入独立构建配置指纹；默认锁定配置保持原缓存名。相关两文件 28 passed |
 | 9.19 | 布局收尾 | 待领 | | |
 | 9.20 | asm_tuner 非原子写 .s，并发编译读到截断汇编 | 已合并 | build | 1919b035。`pass_asm()` 写进带 pid 的临时文件后 `os.replace`；inode 回归 1 passed，原四 worker Dataset 复现用例 1 passed |
-| 9.21 | 拆掉手写预处理器最后一块：process() 双职责分离 + depfile | 待领 | | 9a5f4e7c 已合入前半：`JT_*` 宏发现移到 Python 声明清单，`process()` 不再改写命令行；编译器 depfile、两个 wrapper 回退与 MSVC `/showIncludes` 仍待领 |
+| 9.21 | 拆掉手写预处理器最后一块：process() 双职责分离 + depfile | 已合并 | build | 9a5f4e7c 拆出 `JT_*` 宏声明；237d6460 删除手写 include scanner，GCC/Clang 用原子发布的 `-MD/-MF` depfile，asm/dlink 仅首段编译保留依赖参数，MSVC 走独立 `/showIncludes` 构造与解析（单元契约覆盖，未做 Windows 实机）。宏展开/失活条件修前 1 failed，修后定向 5 passed、C++ TEST 通过、CPU 9 passed/1 skipped、实机 CUDA `-dc` dlink 通过 |
 | 9.22 | 并发编译同一个算子读到写了一半的 `.so` | 已合并 | build | c4bbdd72。`cache_compile` 对 asm/dlink wrapper 的最终产物也用私有临时名加 rename，`.key` 同样原子替换；修前两个 wrapper inode 契约均失败，修后 4 passed，冷 CPU 聚焦 6 passed，实机 CUDA 普通 JIT 与 `-dc` dlink 均通过 |
 | 9.23 | `run_child_script(timeout=N)` 不收孙进程 | 已合并 | bindings | 17e43c9a（进程组 + `os.killpg` + 有界 drain）。**更正**：任务描述里"`communicate()` 继续等"在 CPython 3.11 上不成立（3.11 的 `subprocess.run` 超时后只 kill+wait，不重新 drain，已实测）；稳定复现的是整棵子孙进程留存，默认 `timeout=600` 的用例因此要等满 10 分钟才失败 |
 | 10.01 | `tools/run_test_suite.py` 拆成 `nox -s full` 周期性调度… | 待领 | | |
