@@ -425,7 +425,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 8.08 | `ProcessGroup` 对象替代全局唯一 communicator | 待领 | | |
 | 8.09 | NCCL | 已合并 | dist | f2d9c291, 95a1c956 |
 | 8.10 | `distributed/launch.py:102-107` 改 `wait(timeout)… | 已合并 | dist | 925850b3 |
-| 8.11 | `nccl_reduce`/`mpi_reduce` 非 root 不分配输出 | 待领 | | |
+| 8.11 | 图同构优先：reduce 保留全尺寸输出，broadcast 去 rank 相关别名，flat 策略可配置 | 已合并 | dist | a1e769d5 |
 | 8.12 | 算子内不再复用全局 jit key 缓冲做缓存键 | 待领 | | |
 | 8.13 | cuTT 计划未命中时的 `cudaDeviceSynchronize` 删除或降流同步 | 待领 | | |
 | 8.14 | Corex | 待领 | | |

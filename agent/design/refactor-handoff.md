@@ -61,7 +61,7 @@
 
 | worktree | 文件数 | 是什么 |
 | --- | --- | --- |
-| `$LAB/dist` | 8 | MPI/NCCL reduce 算子（`mpi_reduce_op.{cc,h}`、`mpi_broadcast_op.cc`、`nccl_reduce_op.cc`）、`compat/fsdp2/common.py`，外加两个新测试：`tests/distributed/test_fsdp2_flat_policy.py`、`test_mpi_graph_isomorphism.py` |
+| `$LAB/dist` | 0（已收尾） | 8.11 已以 `a1e769d5` 合入：reduce 保留全尺寸确定性输出，MPI broadcast 去掉 rank 相关别名，FSDP2 flat 阈值可配置；修后通过三 rank MPI 图同构、既有 MPI reduce/broadcast、5/6 号卡双卡 NCCL 与结构门禁 |
 | `$LAB/pyother` | 9 | 5.25 拆 `utils/`：`jtune`/`nvtx` 迁入 `python/jittor/tools/`，`gen_pyi`/`local_doc_builder`/`bench_klo` 迁入顶层 `tools/`，配套结构测试同步 |
 | `$LAB/cudabk` | 6 | wheel 与 `compile_extern` 一线（`cuda_wheel.py`、`compile_extern.py`、`pyproject.toml`、`tests/structure/test_cuda_wheel.py`、README 与 torch 兼容文档） |
 | `$LAB/gates` | 3 | `.github/workflows/cpu.yml`、`tests/_helpers/tiers.py`、`tests/structure/test_gate_tiers.py`（0.15 的收尾） |
@@ -69,9 +69,9 @@
 | `$LAB/bindings` | 1 | `optim_test.tar`，是调试产物，删掉即可 |
 | `$LAB/mem` | 1 | 只有看板的一行状态改动 |
 
-`compat`、`coreops`、`device`、`gatecheck`、`coord` 五个 worktree 干净，无残留。
+`compat`、`coreops`、`device`、`dist`、`gatecheck`、`coord` 六个 worktree 干净，无残留。
 
-**注意 `cudabk` 与 `dist` 有已 `git add` 进索引的文件**（`git status` 的第一列是 `M`）。这是 `git apply --3way`
+**注意 `cudabk` 有已 `git add` 进索引的文件**（`git status` 的第一列是 `M`）。这是 `git apply --3way`
 留下的，直接 `git commit` 会把不相干的东西一起带进去。提交前先看 `git diff --cached --stat`。
 
 ## 4. 停在半路的线索
