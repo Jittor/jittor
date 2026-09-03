@@ -1065,6 +1065,35 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             np.testing.assert_allclose(got.numpy(), want, rtol=1e-6)
             np.testing.assert_allclose(got_method.numpy(), want, rtol=1e-6)
 
+    def test_cosine_similarity_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.cosine_similarity))
+        self.assertIs(torch.cosine_similarity, numerical.cosine_similarity)
+        self.assertEqual(numerical.cosine_similarity.__module__, numerical.__name__)
+        self.assertEqual(numerical.cosine_similarity.__name__, "cosine_similarity")
+
+    def test_cosine_similarity_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.cosine_similarity")
+        self.assertIs(record.implementation, numerical.cosine_similarity)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("eps", record.detail)
+        self.assertIn("device", record.detail)
+
+    def test_cosine_similarity_cpu_values_and_dim_match_numpy(self):
+        left = np.array([[1.0, 0.0], [1.0, 1.0]], dtype="float32")
+        right = np.array([[0.0, 1.0], [1.0, -1.0]], dtype="float32")
+        expected = np.sum(left * right, axis=1) / (
+            np.linalg.norm(left, axis=1) * np.linalg.norm(right, axis=1))
+        with torch.flag_scope(use_cuda=0):
+            left_tensor = torch.array(left)
+            right_tensor = torch.array(right)
+            actual = torch.cosine_similarity(left_tensor, right_tensor, dim=1)
+        np.testing.assert_allclose(actual.numpy(), expected, rtol=1e-6)
+
 
 if __name__ == "__main__":
     unittest.main()

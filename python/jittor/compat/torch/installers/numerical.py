@@ -51,6 +51,25 @@ register_fidelity(
 )
 
 
+_COSINE_SIMILARITY_FIDELITY_DETAIL = (
+    "matches Torch cosine similarity values and reduction shape through Jittor's "
+    "native nn implementation but omits device, layout, and dtype keyword semantics"
+)
+
+
+def cosine_similarity(x1, x2, dim=1, eps=1e-8):
+    """Compute cosine similarity along a tensor dimension."""
+    return nn.cosine_similarity(x1, x2, dim=dim, eps=eps)
+
+
+register_fidelity(
+    "torch.cosine_similarity",
+    cosine_similarity,
+    Fidelity.APPROXIMATE,
+    _COSINE_SIMILARITY_FIDELITY_DETAIL,
+)
+
+
 _STACKING_FIDELITY_DETAIL = (
     "matches Torch values and shapes for tensor inputs but omits Torch "
     "device, dtype, layout, pin-memory, and out keyword semantics"
@@ -947,7 +966,7 @@ def install(ctx):
     _alias("lerp", lambda input, end, weight: input + weight * (end - input))
     _alias("isclose", isclose)
     _alias("allclose", allclose)
-    _alias("cosine_similarity", lambda x1, x2, dim=1, eps=1e-8: nn.cosine_similarity(x1, x2, dim=dim, eps=eps))
+    _alias("cosine_similarity", cosine_similarity)
     _alias("pairwise_distance", pairwise_distance)
     # torch.take_along_dim(input, indices, dim): like gather, but torch BROADCASTS
     # indices against input on every dim except `dim` first. transformers' beam search
