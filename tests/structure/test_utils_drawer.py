@@ -172,6 +172,10 @@ class TestWhatStaysAndTheReferenceThatPinsIt(unittest.TestCase):
         self._pinned_by(
             "asm_tuner.py",
             ("src/jit_compiler.cc", 'jittor_path+"/utils/asm_tuner.py'))
+        source = _text(PACKAGE / "src" / "jit_compiler.cc")
+        guard = 'if (src.find("//@begin") != string::npos)'
+        self.assertIn(guard, source)
+        self.assertLess(source.index(guard), source.index("asm_tuner.py"))
 
     def test_dlink_compiler_is_pinned_by_the_jit_compiler_command_line(self):
         self._pinned_by(

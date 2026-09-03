@@ -251,8 +251,12 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
             + fix_cl_flags(cc_flags + extra_flags, is_cuda_op)
             + " -o \"" + jit_lib_path + "\"";
 #ifdef __linux__
-        cmd = python_path+" "+jittor_path+"/utils/asm_tuner.py "
-            "--cc_path=" + cmd;
+        // The Python/assembly round trip only serves UseMovntPass directives.
+        // Ordinary kernels used to pay for a second compiler invocation and a
+        // fresh Python process even though pass_asm had nothing to rewrite.
+        if (src.find("//@begin") != string::npos)
+            cmd = python_path+" "+jittor_path+"/utils/asm_tuner.py "
+                "--cc_path=" + cmd;
 #endif
     }
 #else // Windows _MSC_VER
