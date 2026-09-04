@@ -191,6 +191,10 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 
 > 8.06 补充证据：`ba8e2621` TruthReduce all/any 统一共享 launcher，静态合同 36 passed；本机无 CANN/NPU，仍待实机验证。
 
+### 2026-09-04 第六十五波补充证据
+
+- `8.06`：`3f0b8c7d` 将 GroupNorm forward 接入共享 launcher，保留 group/eps/三输出 query；静态合同 53 passed，本机无 CANN/NPU，仍待实机。
+
 ## 任务
 
 | 编号 | 任务 | 状态 | 负责 | 提交 |
