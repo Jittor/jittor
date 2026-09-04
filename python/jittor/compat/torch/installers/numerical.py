@@ -183,6 +183,29 @@ register_fidelity(
 )
 
 
+_RANDINT_LIKE_FIDELITY_DETAIL = (
+    "matches Torch integer bounds and shape, with optional dtype casting, for "
+    "supported tensors but omits device and requires_grad keyword semantics"
+)
+
+
+def randint_like(input, low, high=None, dtype=None, device=None,
+                 requires_grad=False, **kwargs):
+    """Sample integer values with the shape of ``input``."""
+    if high is None:
+        low, high = 0, low
+    result = jt.randint(int(low), int(high), tuple(int(s) for s in input.shape))
+    return result.cast(_dtype_to_str(dtype)) if dtype is not None else result
+
+
+register_fidelity(
+    "torch.randint_like",
+    randint_like,
+    Fidelity.APPROXIMATE,
+    _RANDINT_LIKE_FIDELITY_DETAIL,
+)
+
+
 _NAN_TO_NUM_INPLACE_FIDELITY_DETAIL = (
     "matches Torch in-place NaN/Inf replacement and return identity for supported "
     "real tensors but omits device, layout, dtype, and narrow custom-bound semantics"
@@ -1442,13 +1465,7 @@ def install(ctx):
     _alias("nan_to_num_", nan_to_num_)
     # torch.randint_like(input, low, high=None, *, dtype=...): jittor's native lacks
     # the dtype kwarg (DINO's denoising uses it). Force-override with torch semantics.
-    def _randint_like(input, low, high=None, dtype=None, device=None,
-                      requires_grad=False, **kw):
-        if high is None:
-            low, high = 0, low
-        r = jt.randint(int(low), int(high), tuple(int(s) for s in input.shape))
-        return r.cast(_dtype_to_str(dtype)) if dtype is not None else r
-    g.randint_like = _randint_like
+    g.randint_like = randint_like
 
     _alias("sparse_coo_tensor", sparse_coo_tensor)
     import jittor.sparse as _jt_sparse
