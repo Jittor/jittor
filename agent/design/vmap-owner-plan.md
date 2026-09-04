@@ -479,3 +479,19 @@ Before publishing the owner extraction, verify:
 
 These checks are release hygiene, not evidence of numerical correctness; the
 CPU and unsupported behavior nodes remain mandatory for closing 7.03.
+
+## Change control and sign-off
+
+Keep the owner extraction isolated from unrelated numerical or backend changes:
+
+- one code commit may move the owner, remove the install closure, and add its
+  focused tests; optimization or behavior changes require a separate task;
+- one documentation/board commit records the static evidence and deferred
+  dynamic nodes, with the 7.03 status left `待领` until exit criteria pass;
+- reviewers should sign off separately on owner identity, context lifetime, and
+  unsupported behavior coverage;
+- any conflict with another backend/runtime refactor must pause the extraction
+  and be recorded as a blocker instead of resolving by broadening this change.
+
+This keeps the eventual merge auditable and allows the owner to be reverted
+without undoing unrelated compatibility work.
