@@ -573,6 +573,12 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `2.19`：`166010a8`（CUB argsort offsets rank）已进入主线，结构/TU 证据已记录，累计 91 处、四十四组证据；本机无 CUDA 未运行负向。
 - `7.03`：`ccbc6132` 将 `reciprocal` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；静态身份/metadata、`py_compile`/diff-check 通过，动态 JIT 未运行。
 
+### 2026-09-04 第五十六波补充证据
+
+- `8.06`：`4f414054`/`14c30c38` 将 RotaryPositionEmbedding gradient 接入共享 launcher，保留四输入、三输出 query 与同步策略；静态合同 43 passed，本机无 CANN/NPU，仍待实机。
+- `2.19`：`36502b8e`/`fcaa6cce` 将 CUB argsort offsets 长度边界改为 `USER_CHECKop`，并补齐此前 `166010a8` 漏记；累计 92 处、四十五组证据，结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `7.03`：`742f1595` 将 `lerp` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
+
 ### 2026-09-04 第五十五波补充证据
 
 - `8.06`：`0b149241` 将 Dropout backward 接入共享 launcher，保留 `scale` query 与同步策略；静态合同 42 passed，本机无 CANN/NPU，仍待实机。
