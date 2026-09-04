@@ -23,6 +23,7 @@ from .swiglu_cuda import _silu_and_mul_cuda
 __all__ = [
     "silu_and_mul", "rms_norm", "dual_rms_norm",
     "fused_add_rms_norm", "rotary_embedding",
+    "has_qk_rms_norm_rotary", "qk_rms_norm_rotary",
 ]
 
 
@@ -99,6 +100,38 @@ def fused_add_rms_norm(x, residual, weight, eps=1e-6):
         return fused
     total = x + residual
     return rms_norm(total, weight, eps), total
+
+
+def has_qk_rms_norm_rotary():
+    """Whether a backend offers the fused query/key norm-and-rotate pass.
+
+    Separate from the call because the fused form needs an input the unfused
+    path does not -- a position-indexed cosine/sine cache in a matching dtype --
+    and preparing one costs a cast the caller should not pay to find out the
+    answer is no.
+    """
+    return _backend_hooks.acl_grouped_qk_rms_norm_rotary is not None
+
+
+def qk_rms_norm_rotary(positions, query, key, query_weight, key_weight,
+                       cos_sin_cache, head_size, rotary_dim, is_neox, eps):
+    """Normalise the query and key heads and rotate them in one backend pass.
+
+    A decoder layer runs these two steps back to back over the same data, so a
+    backend that fuses them saves a round trip per layer.
+
+    Returns the rotated ``(query, key)``, or ``None`` when no backend offers the
+    fused form or declines these inputs. ``None`` rather than a local fallback
+    on purpose: unpacking ``[..., heads * head_size]`` into heads and applying
+    the caller's own rotary module is the caller's layout, not this layer's, so
+    those steps belong to whoever owns that layout -- via ``dual_rms_norm`` and
+    ``rotary_embedding``.
+    """
+    acl_backend = _backend_hooks.acl_grouped_qk_rms_norm_rotary
+    if acl_backend is None:
+        return None
+    return acl_backend(positions, query, key, query_weight, key_weight,
+                       cos_sin_cache, head_size, rotary_dim, is_neox, eps)
 
 
 def rotary_embedding(positions, query, key, cos_sin_cache, head_size=None,

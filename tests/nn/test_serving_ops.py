@@ -144,5 +144,38 @@ class TestRotaryEmbedding(unittest.TestCase):
             rtol=1e-4, atol=1e-4)
 
 
+class TestQkRmsNormRotary(unittest.TestCase):
+    """The fused query/key norm-and-rotate pass a serving stack asks for.
+
+    It has no portable fallback -- unpacking heads is the caller's layout -- so
+    what the public entry point owes the caller is an honest answer about
+    whether a backend has one, and delegation with the arguments unchanged.
+    """
+
+    def _with_hook(self, hook):
+        previous = backend_hooks.acl_grouped_qk_rms_norm_rotary
+        backend_hooks.acl_grouped_qk_rms_norm_rotary = hook
+        self.addCleanup(
+            setattr, backend_hooks, "acl_grouped_qk_rms_norm_rotary", previous)
+
+    def test_absent_backend_is_reported_and_returns_none(self):
+        self._with_hook(None)
+        self.assertFalse(jt.nn.has_qk_rms_norm_rotary())
+        self.assertIsNone(jt.nn.qk_rms_norm_rotary(*([None] * 10)))
+
+    def test_present_backend_receives_every_argument_in_order(self):
+        seen = []
+        self._with_hook(lambda *args: seen.append(args) or ("q", "k"))
+        self.assertTrue(jt.nn.has_qk_rms_norm_rotary())
+        arguments = tuple(range(10))
+        self.assertEqual(jt.nn.qk_rms_norm_rotary(*arguments), ("q", "k"))
+        self.assertEqual(seen, [arguments])
+
+    def test_a_backend_that_declines_these_inputs_returns_none(self):
+        self._with_hook(lambda *args: None)
+        self.assertTrue(jt.nn.has_qk_rms_norm_rotary())
+        self.assertIsNone(jt.nn.qk_rms_norm_rotary(*([None] * 10)))
+
+
 if __name__ == "__main__":
     unittest.main()
