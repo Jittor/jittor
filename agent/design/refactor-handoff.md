@@ -27,9 +27,9 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；本波审计基线 `2dc68144`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 审计基线 892 个 |
-| 提交里出现过的任务号 | 312 个 |
+| 分支 | `2.0-refactor`；本波审计基线 `7f7c9bbc`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 审计基线 898 个 |
+| 提交里出现过的任务号 | 315 个 |
 | 看板 | 已合并 **196** / 进行中 **0** / 待领 **74** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
 
@@ -683,7 +683,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `bindings` | 2.19 将 cuDNN conv backward-w dy rank 边界改为 `USER_CHECKop`，累计 110 处、六十三组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
 | `compat` | 补充 vmap unsupported 行为矩阵，覆盖 extent/nested dim/非 bool/depth callback/out_dims；仅设计前置，未修改 runtime |
 
-按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第七十五波继续优先可独立验证的
+第七十五波新增 3 个严格保持待领的前置：
+
+| 分区 | 第七十五波结果 |
+| --- | --- |
+| `device` | 8.06 将 IndexPutImpl accumulate 接入共享 launcher，保留 tracked output memset 与 index tensor-list dependency；静态合同 63 passed，本机无 CANN/NPU |
+| `bindings` | 2.19 将 cuDNN RNN 推理阶段输入 rank 边界改为 `USER_CHECKop`，累计 111 处、六十四组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `compat` | 明确 vmap 仅做组织重构，不新增 kernel/设备传输/优化，并定义 CPU/CUDA/ACL 分层验收与 skip 归因；仅设计前置 |
+
+按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第七十六波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
 - `device`：若续做 8.06，只迁下一个最终 owner 明确的 family，并复用 5be5fa15 的 launcher 合同；无 NPU
