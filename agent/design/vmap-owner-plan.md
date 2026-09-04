@@ -547,3 +547,19 @@ The corresponding result shape should expose the outer batch axis before the
 inner batch axis unless an explicit `out_dims` requests another placement. A
 table-driven node should assert both metadata tuples and shape rank without
 constructing large tensors, using the deterministic fixture from this plan.
+
+## Keyword compatibility matrix
+
+The owner should expose only the supported Torch keywords and reject unknown
+ones explicitly:
+
+| Keyword | Handling | Static evidence |
+| --- | --- | --- |
+| `in_dims` | normalize int/None/tuple/list | signature + normalization branch |
+| `out_dims` | normalize int/tuple/list once | stack-axis branch |
+| `randomness`/`chunk_size` | typed `NotImplementedError` until specified | rejection node |
+| arbitrary keyword | typed `TypeError` naming the key | unknown-key guard |
+
+Do not retain a catch-all `**kwargs` that silently discards values. The static
+gate should inspect the signature and assert that each rejected keyword maps to a
+documented exception path, keeping fidelity detail and error behavior aligned.
