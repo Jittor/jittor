@@ -311,6 +311,15 @@ def test_dropout_forward_uses_launcher_and_backward_remains_present():
     assert "void DropoutBackwardOpRunner::executeOp" in source
 
 
+def test_dropout_backward_uses_launcher_and_keeps_scale_query():
+    source = DROPOUT_SOURCE.read_text()
+    backward = source[source.index("void DropoutBackwardOpRunner::executeOp"):]
+    assert "attr->scale" in backward
+    assert "launch(ret, aclnnDropoutBackward, true);" in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+
+
 def test_leaky_relu_forward_uses_launcher_and_backward_remains_present():
     source = RELU_SOURCE.read_text()
     forward = source[source.index("void LeakyReLUOpRunner::executeOp"):source.index("LeakyReLUBackwardOpRunner::LeakyReLUBackwardOpRunner")]
