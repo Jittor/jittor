@@ -324,6 +324,7 @@ nox.options.sessions = [
     "format",
     "typing",
     "structure",
+    "cpu",
     "packaging",
     "py37",
     "py312",

@@ -110,6 +110,23 @@ def test_the_local_runner_and_the_gate_select_the_same_files():
     assert module._session_arguments("torch") == list(gate_scope.torch_arguments())
 
 
+def test_default_nox_sessions_include_the_cpu_numeric_gate():
+    """A default green nox run must exercise numerical CPU behavior (10.02)."""
+    source = (REPO_ROOT / "noxfile.py").read_text(encoding="utf-8")
+    tree = ast.parse(source, filename="noxfile.py")
+    sessions = None
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if any(getattr(target, "id", None) == "sessions"
+               or getattr(target, "attr", None) == "sessions"
+               for target in node.targets):
+            sessions = ast.literal_eval(node.value)
+            break
+    assert sessions is not None
+    assert "cpu" in sessions
+
+
 def test_skip_reason_buckets_are_stable_and_other_is_counted(monkeypatch):
     """10.05: accepted environment reasons are separated from unexplained ones."""
     import conftest as policy
