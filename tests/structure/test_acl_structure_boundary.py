@@ -20,5 +20,10 @@ def test_acl_structure_boundary_names_atomic_migrations_and_hardware_gate():
         "flip.axes",
         "data-channel",
         "schema",
+        "Migration order",
+        "softmax.dim",
+        "triu.diagonal",
+        "npu-smi info",
+        "fallback cpu",
     ):
         assert required in text
