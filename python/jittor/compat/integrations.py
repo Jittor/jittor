@@ -72,7 +72,10 @@ def apply_external_runtime_patches(logger=None):
     try:
         from jittor.compat.external_backend import load_external_backend_entry_points
 
-        backend_results = load_external_backend_entry_points()
+        transaction = getattr(
+            getattr(jt, "_torch_compat_install_context", None),
+            "state", {}).get("_install_transaction")
+        backend_results = load_external_backend_entry_points(transaction=transaction)
         results = [
             {
                 "name": item.name,

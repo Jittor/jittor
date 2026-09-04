@@ -18,6 +18,7 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ._entry_points import entry_points as _entry_points
 from .diagnostics import EXPECTED, swallowed
+from .transaction import TransactionConflict
 
 
 EXTERNAL_BACKEND_ENTRY_POINT = "jittor.external_backends"
@@ -650,7 +651,7 @@ class ExternalBackend:
             self._cache.clear()
 
 
-def register_external_backend(backend) -> ExternalBackend:
+def register_external_backend(backend, transaction=None) -> ExternalBackend:
     """Register an ``ExternalBackend`` or ``ExternalBackendSpec`` by name."""
 
     if isinstance(backend, ExternalBackendSpec):
@@ -667,7 +668,10 @@ def register_external_backend(backend) -> ExternalBackend:
             if existing_policy != backend_policy:
                 raise ValueError("external backend %r is already registered" % backend.spec.name)
             return existing
+        old = _BACKENDS.get(backend.spec.name, None)
         _BACKENDS[backend.spec.name] = backend
+        if transaction is not None and old is not backend:
+            transaction.record(_BACKENDS, backend.spec.name, old, backend)
         hints = _BACKEND_HINTS.get(backend.spec.name, {})
         if hints:
             backend.extend_discovery(**hints)
@@ -680,7 +684,7 @@ def register_external_backend_hint(
     source_envs: Sequence[str] = (),
     project_root_envs: Sequence[str] = (),
     relative_source_dirs: Sequence[str] = (),
-    environment_names: Sequence[str] = (),
+    environment_names: Sequence[str] = (), transaction=None,
 ) -> None:
     """Extend a resolver's discovery policy, including before it is registered."""
 
@@ -693,12 +697,22 @@ def register_external_backend_hint(
         "environment_names": _names(environment_names),
     }
     with _REGISTRY_LOCK:
+        old_hints = dict(_BACKEND_HINTS.get(name, {}))
         current = _BACKEND_HINTS.setdefault(name, {})
         for key, values in additions.items():
             current[key] = tuple(dict.fromkeys(tuple(current.get(key, ())) + values))
         backend = _BACKENDS.get(name)
         if backend is not None:
             backend.extend_discovery(**additions)
+        if transaction is not None:
+            def restore_hints(old=old_hints, key=name):
+                if _BACKEND_HINTS.get(key, {}) != current:
+                    raise TransactionConflict("external backend hints changed externally")
+                if old:
+                    _BACKEND_HINTS[key] = old
+                else:
+                    _BACKEND_HINTS.pop(key, None)
+            transaction.record_undo(restore_hints)
 
 
 def registered_external_backends() -> Mapping[str, ExternalBackend]:
@@ -719,10 +733,11 @@ def external_backend_for_source_root(root) -> Optional[ExternalBackend]:
     return None
 
 
-def load_external_backend_entry_points() -> Tuple[BackendEntryPointResult, ...]:
+def load_external_backend_entry_points(transaction=None) -> Tuple[BackendEntryPointResult, ...]:
     """Load installed backend providers independently and exactly once."""
 
     results = []
+    old_loaded = set(_ENTRY_POINTS_LOADED)
     try:
         entry_points = _entry_points(EXTERNAL_BACKEND_ENTRY_POINT)
     except EXPECTED as exc:
@@ -741,10 +756,10 @@ def load_external_backend_entry_points() -> Tuple[BackendEntryPointResult, ...]:
                 if value is None:
                     pass
                 elif isinstance(value, (ExternalBackend, ExternalBackendSpec)):
-                    register_external_backend(value)
+                    register_external_backend(value, transaction=transaction)
                 elif isinstance(value, (tuple, list)):
                     for backend in value:
-                        register_external_backend(backend)
+                        register_external_backend(backend, transaction=transaction)
                 else:
                     raise TypeError("entry point did not return an external backend")
             except EXPECTED as exc:
@@ -753,6 +768,13 @@ def load_external_backend_entry_points() -> Tuple[BackendEntryPointResult, ...]:
                 continue
             _ENTRY_POINTS_LOADED.add(key)
             results.append(BackendEntryPointResult(key[0], key[1], "loaded"))
+    if transaction is not None:
+        loaded_after = set(_ENTRY_POINTS_LOADED)
+        def restore_loaded():
+            if set(_ENTRY_POINTS_LOADED) != loaded_after:
+                raise TransactionConflict("external backend entry points changed externally")
+            _ENTRY_POINTS_LOADED.clear(); _ENTRY_POINTS_LOADED.update(old_loaded)
+        transaction.record_undo(restore_loaded)
     return tuple(results)
 
 
