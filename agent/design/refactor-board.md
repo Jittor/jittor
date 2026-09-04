@@ -747,3 +747,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `2.19`：`a29e0f81`/`c9866b48` 新增后端内部断言分类文档与结构门禁，1 passed；用户边界累计保持 112 处、65 组，不改运行时错误语义。
 - `7.03`：`d90a716a`、`9ee118a0`、`05e9f37f`、`41236df4`、`5a8b0115`、`ba76983c`、`f6d3a435`、`9bd71961`、`ed9b2010`、`d316a706`、`abaa242a`、`afa756bc` 逐步补充 vmap owner、context、unsupported、后端分层与 AST 评审契约；未修改 runtime，未宣称实现完成。
 - `8.06`：本波暂未新增 ACL family；上一波 FlashAttention backward 已在前面 canonical 记录中，保持无 CANN/NPU 实机验证声明。
+
+### 2026-09-04 第七十九波补充证据
+
+- `8.06`：`e1470830` 将 IncrementalFlashAttention 接入共享 launcher，保留 block-table、actual-sequence、cache-view cleanup 与同步策略；KVCacheMemcpy 未迁；静态合同 67 passed，本机无 CANN/NPU，仍待实机。
