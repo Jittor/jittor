@@ -23,7 +23,7 @@ static inline int findc(const char* format, const char& c) {
     if (c==format[0]) return 0;
     if (c==format[1]) return 1;
     if (c==format[2]) return 2;
-    USER_CHECK(c==format[3]) << "Not a valid format" << format << c;
+    USER_CHECKop(c,==,format[3]) << "Not a valid format" << format << c;
     return 3;
 }
 
