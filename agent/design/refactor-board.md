@@ -694,6 +694,12 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `2.19`：`ceabd84c`/`3096b2f0` 将 cuDNN conv 权重 rank 边界改为 `USER_CHECKop`，累计 105 处、五十八组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
 - `7.03`：`30cd207f`、`27866dc2` 细化 `vmap` owner 的可验证契约与验收节点；仅设计前置，未修改 runtime，未宣称实现完成。
 
+### 2026-09-04 第七十波补充证据
+
+- `8.06`：`18fca063`/`029795fa` 将 Index 接入共享 launcher，保留 index query 与同步策略，SliceV2 未改；静态合同 58 passed，本机无 CANN/NPU，仍待实机。
+- `2.19`：`44a80c8a`/`3259631f` 将 cuDNN conv 分组通道 shape 边界改为 `USER_CHECKop`，累计 106 处、五十九组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `7.03`：`ed9b2010` 补充 `vmap` owner 提取协议、AST 完成门禁与 `VmapContext` 约束；仅设计前置，未修改 runtime。
+
 ### 2026-09-04 第六十七波补充证据
 
 - `8.06`：`230658fb`/`c4f0447c` 将 Avgpool backward 接入共享 launcher，保留 countIncludePad/divisorOverride、descriptor cleanup 与同步策略；静态合同 55 passed，本机无 CANN/NPU，仍待实机。

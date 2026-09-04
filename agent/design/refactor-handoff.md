@@ -27,9 +27,9 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；本波审计基线 `3096b2f0`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 审计基线 860 个 |
-| 提交里出现过的任务号 | 297 个 |
+| 分支 | `2.0-refactor`；本波审计基线 `029795fa`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 审计基线 866 个 |
+| 提交里出现过的任务号 | 300 个 |
 | 看板 | 已合并 **196** / 进行中 **0** / 待领 **74** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
 
@@ -643,7 +643,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `bindings` | 2.19 将 cuDNN conv 权重 rank 边界改为 `USER_CHECKop`，累计 105 处、五十八组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
 | `compat` | 7.03 细化 `vmap` owner 的可验证契约与验收节点；仅设计前置，未修改 runtime |
 
-按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第七十波继续优先可独立验证的
+第七十波新增 3 个严格保持待领的前置：
+
+| 分区 | 第七十波结果 |
+| --- | --- |
+| `device` | 8.06 将 Index 接入共享 launcher，保留 index query 与同步策略，SliceV2 未改；静态合同 58 passed，本机无 CANN/NPU |
+| `bindings` | 2.19 将 cuDNN conv 分组通道 shape 边界改为 `USER_CHECKop`，累计 106 处、五十九组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `compat` | 7.03 补充 `vmap` owner 提取协议、AST 完成门禁与 `VmapContext` 约束；仅设计前置，未修改 runtime |
+
+按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第七十一波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
 - `device`：若续做 8.06，只迁下一个最终 owner 明确的 family，并复用 5be5fa15 的 launcher 合同；无 NPU
