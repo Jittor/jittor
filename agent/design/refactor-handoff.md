@@ -952,6 +952,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | `15c86886` 新增 ACL 结构迁移边界文档与静态合同（1 passed），明确类型擦除、属性 data、descriptor cache 的协同范围和 910B3 验收边界；未改运行时。 |
 | `gates` | 10.19 backend grad manifest 静态合同 2 passed；HCCL 仍需 Ascend 910B3 多卡 CPU 对照，0.15 smoke 仍约 390 s，任务保持待领。 |
 
+### 2026-09-04 第一百零七波
+
+| 分区 | 结果 |
+| --- | --- |
+| `bindings` | `a831fbd6` 将 cuSPARSE COO 两项 shape 边界改为可捕获 `USER_CHECKop`，补独立 ledger；定向 3 passed。2.19 聚合任务仍待完整审计。 |
+| `compat` | `f20bb4ff` 将 `all`/`any` reduction wrapper 提升为 numerical 模块级稳定对象，固定 builtins 引用并登记 approximate fidelity；axis/keepdims CPU 对拍 2 passed。7.03 其余 family 仍待领。 |
+| `device` | `7a35e8e7` 记录 ACL 属性 data 通道候选（`triu.diagonal`、`softmax.dim`、`flip.axes`）的协同迁移边界；静态合同 1 passed，未改运行时，NPU 实机仍待。 |
+| `gates` | 本波未扩大 `SLOW_FILES`；0.15 worker 聚焦测试通过但完整 smoke 仍约 390 s，10.19 HCCL route 仍缺 910B3 多卡 CPU 对照。 |
+
 按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第一百波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
