@@ -211,15 +211,7 @@ namespace jittor
         if (ret != ACL_SUCCESS)
             return;
 
-        if (workspaceSize > 0)
-        {
-            mallocWorkSpace(workspaceSize);
-        }
-
-        ret = aclnnGroupNormBackward(
-            workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnGroupNormBackward failed. ERROR: %d\n", name.c_str(), ret); return);
-        syncRun();
+        launch(ret, aclnnGroupNormBackward, true);
     }
 
     RmsNormOpRunner::RmsNormOpRunner() : BaseOpRunner("RmsNorm")

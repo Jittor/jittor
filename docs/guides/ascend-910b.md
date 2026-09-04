@@ -543,6 +543,9 @@ The ACL GroupNorm forward owner uses the shared launcher while retaining its
 group, epsilon, and three-output query. GroupNorm backward remains outside this
 slice.
 
+The ACL GroupNorm backward owner uses the shared launcher while retaining its
+output-mask descriptor, group attributes, three-output query, and cleanup.
+
 The ACL Dropout backward owner uses the shared launcher while retaining its
 scale query and synchronous execution policy.
 
