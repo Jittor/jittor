@@ -1128,6 +1128,21 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | `sys.meta_path` permissive finder 需同时恢复 finder 身份、插入索引和 allowlist 增量，暂不做半改；本波无 device 提交。 |
 | `gates` | `py_compile`/`diff-check` 通过，未改变整卡状态。 |
 
+### 2026-09-04 第一百三十六波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `88795374` 让 permissive finder 新增和既有 allowlist 增量通过 `InstallTransaction` 记录/回滚，compiler installer 三处调用已接线；未覆盖 module_patcher finder 与并发外部替换，7.05 仍待领。 |
+| `device` | child process 不继承父进程内存中的 finder；现有 child-env 合同足够，本波无 device 代码。 |
+| `gates` | `py_compile`/`diff-check` 通过；完整 meta_path owner 冲突测试仍待。 |
+
+### 2026-09-04 第一百三十七波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `9c6a7e92` 修正 compile refusal 测试中的过时错误文案；transaction/permissive 定向测试共 27 passed。此为测试合同修复，7.05 仍待完整 mutation 接入。 |
+| `gates` | `py_compile`/`git diff --check` 通过；未改变整卡状态。 |
+
 ### 2026-09-04 第一百一十九波
 
 | 分区 | 结果 |
