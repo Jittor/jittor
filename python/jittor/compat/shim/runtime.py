@@ -80,6 +80,7 @@ def _activate_once(
     _root_module=None,
     _preflight_result=None,
     _composition=False,
+    _transaction=None,
 ):
     """Enable Jittor-backed ``import torch`` for the current Python process.
 
@@ -174,14 +175,21 @@ def _activate_once(
     # `types.py` or a `copy.py` shadowed the stdlib for the whole process,
     # Jittor's own imports included, from the moment enable() ran. A project
     # only needs to be importable; it goes on the end.
-    prepend_sys_path(shim_site)
-    prepend_sys_path(jt_python)
-    append_sys_path(project_dir)
+    if _transaction is None:
+        prepend_sys_path(shim_site); prepend_sys_path(jt_python)
+        append_sys_path(project_dir)
+    else:
+        _transaction.mutate_path(sys.path, os.fspath(shim_site), prepend=True)
+        _transaction.mutate_path(sys.path, os.fspath(jt_python), prepend=True)
+        _transaction.mutate_path(sys.path, os.fspath(project_dir), prepend=False)
     for p in import_paths or ():
         pp = pathlib.Path(p)
         if not pp.is_absolute():
             pp = project_dir / pp
-        append_sys_path(pp.resolve())
+        if _transaction is None:
+            append_sys_path(pp.resolve())
+        else:
+            _transaction.mutate_path(sys.path, os.fspath(pp.resolve()), prepend=False)
 
     import jittor as jt
     if jittor_root is not None and jt is not jittor_root:
@@ -305,6 +313,8 @@ def activate(
         raise RuntimeError("recursive Jittor Torch shim activation")
 
     state.update(phase="activating", error=None)
+    transaction = ActivationTransaction("shim.activate")
+    transaction.acquire()
     try:
         result = _activate_once(
             project_root=project_root,
@@ -322,14 +332,19 @@ def activate(
             _root_module=root,
             _preflight_result=_preflight_result,
             _composition=_composition,
+            _transaction=transaction,
         )
     except EXPECTED as exc:
+        transaction.rollback()
+        transaction.release()
         state.update(
             phase="active" if already_installed else "failed",
             installed=already_installed,
             error=str(exc),
         )
         raise
+    transaction.commit()
+    transaction.release()
     state.update(
         phase="active",
         installed=True,
