@@ -185,3 +185,24 @@ sentinel objects and force collection; the owner must remain callable, proving
 that no context instance was retained in a closure or module global. A separate
 AST check should reject any default argument or closure cell whose value is an
 `InstallContext`, `jittor_module`, or `Var` object.
+
+## Concrete extraction order
+
+Use this order when implementation work is scheduled:
+
+1. Copy the two nested helpers to module scope without changing their loop,
+   stack, or broadcast expressions. Add a private `_VmapRuntime` protocol that
+   exposes only `transform_depth()` and pass it explicitly to the helpers.
+2. Add the public `vmap` wrapper and fidelity registration beside the other
+   numerical owners. Its defaults and metadata attributes must match the
+   current install-local callable byte-for-byte at the API boundary.
+3. In `install(ctx)`, construct one `_VmapRuntime` adapter around
+   `ctx.jittor_module` and bind `g.vmap` to the module-level owner. Do not store
+   that adapter in a module global; repeated installs should replace the binding
+   with the same function object.
+4. Delete the old nested helper definitions and `_alias("vmap", _vmap)` in the
+   same commit. Run the AST owner/unsupported gate before any numerical test.
+
+Rollback is mechanical: restore the single install-local binding and remove the
+module-level adapter while preserving the new focused tests. No backend-specific
+code should be needed for this owner extraction.
