@@ -244,6 +244,32 @@ register_fidelity(
 )
 
 
+_TAKE_ALONG_DIM_FIDELITY_DETAIL = (
+    "matches Torch gather values and broadcasted index shape for supported "
+    "integer indices but omits out, device, layout, and dtype keyword semantics"
+)
+
+
+def take_along_dim(input, indices, dim=None):
+    """Gather values after broadcasting indices outside the gather dimension."""
+    if dim is None:
+        return jt.gather(input.reshape(-1), 0, indices.reshape(-1))
+    d = dim % input.ndim
+    target = list(input.shape)
+    target[d] = indices.shape[d]
+    if list(indices.shape) != target:
+        indices = jt.broadcast(indices, target)
+    return jt.gather(input, d, indices)
+
+
+register_fidelity(
+    "torch.take_along_dim",
+    take_along_dim,
+    Fidelity.APPROXIMATE,
+    _TAKE_ALONG_DIM_FIDELITY_DETAIL,
+)
+
+
 _NAN_TO_NUM_INPLACE_FIDELITY_DETAIL = (
     "matches Torch in-place NaN/Inf replacement and return identity for supported "
     "real tensors but omits device, layout, dtype, and narrow custom-bound semantics"
@@ -1176,17 +1202,7 @@ def install(ctx):
     # shape (batch, beams, seq_len) along dim=1 -> expects (batch, k, seq_len). A plain
     # jt.gather returns the index's shape (batch, k, 1), collapsing seq_len -> beam
     # search crashed on the next `seq[:, :, cur_len] = ...` setitem. Broadcast first.
-    def _take_along_dim(input, indices, dim=None):
-        if dim is None:
-            return jt.gather(input.reshape(-1), 0, indices.reshape(-1))
-        nd = input.ndim
-        d = dim % nd
-        target = list(input.shape)
-        target[d] = indices.shape[d]            # keep index extent along the gather dim
-        if list(indices.shape) != target:
-            indices = jt.broadcast(indices, target)   # broadcast size-1 dims to input
-        return jt.gather(input, d, indices)
-    _alias("take_along_dim", _take_along_dim)
+    _alias("take_along_dim", take_along_dim)
     # torch.all/any accept numpy-style axis=/keepdims= aliases (transformers' beam
     # search _update_finished_beams: torch.all(x, axis=-1, keepdims=True)). jittor's
     # native all/any take only `dim` and have no keepdims. Wrap to accept both spellings

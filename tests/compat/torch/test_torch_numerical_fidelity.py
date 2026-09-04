@@ -1245,6 +1245,24 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIn("square", record.detail)
         self.assertIn("device", record.detail)
 
+    def test_take_along_dim_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.take_along_dim))
+        self.assertIs(torch.take_along_dim, numerical.take_along_dim)
+        self.assertEqual(numerical.take_along_dim.__module__, numerical.__name__)
+        self.assertEqual(numerical.take_along_dim.__name__, "take_along_dim")
+
+    def test_take_along_dim_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.take_along_dim")
+        self.assertIs(record.implementation, numerical.take_along_dim)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("broadcast", record.detail)
+        self.assertIn("device", record.detail)
+
 
 if __name__ == "__main__":
     unittest.main()
