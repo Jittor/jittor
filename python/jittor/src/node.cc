@@ -85,6 +85,18 @@ static const char* liveness_op_name(liveness_op_t func) {
 // append. `caller` only names the entry point in the log.
 static void run_liveness_queue(const char* caller) {
     LOGvvvv << "run liveness queue from" << caller << "size" << liveness_queue.size();
+    // A step can throw: the counters assert their own invariants and `free`
+    // reaches the allocator. Leaving the queue half-drained would make the
+    // *next* drain resume at a stale front index, over entries naming nodes
+    // that the unwinding caller has already let go -- a use-after-free
+    // attributed to whoever drains next. The drain owns the queue, so it
+    // hands it back empty on either path.
+    struct Reset {
+        ~Reset() {
+            liveness_queue.clear();
+            liveness_queue_front = 0;
+        }
+    } reset;
     for (; liveness_queue_front < liveness_queue.size();) {
         // Copy the entry out before calling: the call may append to the
         // queue and reallocate it, invalidating any reference into it.
@@ -94,8 +106,6 @@ static void run_liveness_queue(const char* caller) {
         LOGvvvv << "liveness" << liveness_op_name(op) << (void*)node;
         (node->*op)();
     }
-    liveness_queue.clear();
-    liveness_queue_front = 0;
 }
 
 // The cold half of Node::batch_index_at (node.h): a batch index read while the

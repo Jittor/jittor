@@ -107,6 +107,24 @@ C++ 头文件。第三，错误处理只有一档：ASSERT/CHECK/LOGf 全部抛 
 | 已知损坏的机制留在代码里 | `executor.cc:704-707` 把 event_queue.run_sync 注释掉写着 "TODO: run_sync cause hang"；`event_queue.h:26` 用 volatile 当同步原语。`ops/tape_op.cc:38-44` 注释 "this is still not enough… please find a better solution" | 异步执行的基础设施存在但不可用；执行器异步化没有可复用的底座 | 修好并加测试或删除 | 次要 |
 | 算子注册表的键不对称且 73 处依赖静态初始化顺序 | `ops/op_register.cc:34` 按 op_info.name 存，而 `:15,38,43` 按截断到第一个点之前的名字查——注册带点的名字后永远查不到。`op_register.h:20-28` 用 RTTI 在 void* 上分派。全仓 73 处命名空间作用域的 `static auto make_xxx = get_op_info(...)` 而注册本身也是静态初始化 | 两组静态初始化的相对顺序未定义；若查询先于注册，ASSERT 在 main 之前抛出即 terminate 且无诊断。跨 .so 的 type_info 比较也可能静默不匹配 | 注册表改惰性初始化；查询延迟到首次使用；构造函数签名用编译期校验 | 主要 |
 
+**已修（部分）：`33bec7ce`（2.19）。** 「析构不得抛」这一条此前只做了一半，而做掉的那一半
+**在 C++ 里不可能生效**：`ed12fe21` 把生成的 `tp_dealloc` 包了一层 `try { ~T(); ... } catch`，但
+**析构函数自 C++11 起隐式 `noexcept`**——异常离开析构的那一刻就是 `std::terminate`，而 terminate 发生在
+**析构自己的栈帧上**，调用方的 catch 在它下面，永远轮不到。真机上的表现：CUDA 上跑 LSTM 反向时
+`~VarHolder` → `release_both_liveness` → liveness 计数的 `ASSERT` 抛出 → SIGABRT，整个
+`tests/backends/cuda` 跑到第 12 个文件就没了，pytest 连汇总行都不打（gdb 栈：`~VarHolder` 上方是
+`__cxa_call_terminate`）。修法是把 catch 放进析构自己（报 `LOGe`，teardown 的既定做法），并让
+`run_liveness_queue` 用 RAII 复位队列——错误能从半路传出去之后，被打断的全局状态不复位，下一次 drain
+会从陈旧的 front 下标继续走已经释放掉的节点。
+
+**这一条同时是「结构门禁抓不到什么」的样本。**
+`tests/structure/test_destructor_and_handler_contract.py` 扫的是析构体里**字面出现**的
+`ASSERT`/`CHECK`/`LOGf`；这里的抛出经过一次函数调用（`~VarHolder` → `release_both_liveness` → `ASSERT`），
+它看不见，于是**门禁全绿而进程 abort**。判据：**析构里只要调用了非 `noexcept` 的东西，静态扫描就已经
+不作数，必须有运行时用例**（`tests/backends/cuda/test_var_holder_teardown.py`）。
+
+**尚未做的**：486 处 ASSERT/62 处 LOGf 的分档仍在进行（看板 2.19），信号处理器那条见本表下一行。
+
 ## 补充：代码生成与优化 pass（文本当作 IR）
 
 第二轮审计在同一层补出的发现，均已单独核实其中三条。

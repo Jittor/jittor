@@ -338,7 +338,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第三十三波结果 |
 | --- | --- |
 | `device` | 8.06 将 Flip family 接入共享 launcher，保留 axes 构造与同步策略；静态合同 20 项通过，本机无 CANN/NPU，既有 intarray 生命周期问题未改 |
-| `bindings` | 2.19 将 CUDA curand dtype/type 两处公开合同改为 `USER_CHECK`，累计 60 处；结构、nvcc TU 语法通过，本机无 CUDA，负向运行待硬件 |
+| `bindings` | 2.19 将 CUDA curand dtype/type 两处公开合同改为 `USER_CHECK`，累计 60 处；结构、nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 std_mean/var_mean 提升为 numerical 稳定对象并登记 approximate fidelity，明确 correction/keepdim 限制；3 项 CPU/身份/metadata 通过 |
 
 第三十四波新增 3 个严格保持待领的前置：
@@ -346,7 +346,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第三十四波结果 |
 | --- | --- |
 | `device` | 8.06 将 Scatter forward family 接入共享 launcher，Gather 保持原路径；静态合同 21 项通过，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN RNN descriptor dtype 合同改为 `USER_CHECK`，累计 61 处；结构与头语法通过，本机无 CUDA |
+| `bindings` | 2.19 将 cuDNN RNN descriptor dtype 合同改为 `USER_CHECK`，累计 61 处；结构与头语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 mv 提升为 numerical 稳定对象并登记 approximate fidelity，保留 out/错误语义；4 项 CPU/身份/metadata 通过 |
 
 第三十五波新增 3 个严格保持待领的前置：
@@ -354,7 +354,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第三十五波结果 |
 | --- | --- |
 | `device` | 8.06 将 Concat forward family 接入共享 launcher，SplitWithSize 保持原路径；静态合同 22 项通过，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN RNN 输入/权重 dtype 一致性改为 `USER_CHECK`，累计 62 处；结构与 TU 语法通过，本机无 CUDA |
+| `bindings` | 2.19 将 cuDNN RNN 输入/权重 dtype 一致性改为 `USER_CHECK`，累计 62 处；结构与 TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 addmm 提升为 numerical 稳定对象并登记 approximate fidelity，保留 alpha/beta；3 项 CPU/身份/metadata 通过 |
 
 第三十六波新增 2 个严格保持待领的前置：
@@ -362,7 +362,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第三十六波结果 |
 | --- | --- |
 | `device` | 8.06 将 SplitWithSize 接入共享 launcher，保留 splitSize/tensor-list/dim 与同步策略；静态合同 23 项通过，本机无 CANN/NPU |
-| `bindings` | 2.19 将 Cutt transpose axes 长度/掩码两处检查改为 `USER_CHECK`，累计 64 处；nvcc TU 语法和结构通过，本机无 CUDA |
+| `bindings` | 2.19 将 Cutt transpose axes 长度/掩码两处检查改为 `USER_CHECK`，累计 64 处；nvcc TU 语法和结构通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 mm 提升为 numerical 稳定对象并登记 approximate fidelity，保留 2-D/out 限制；3 项 CPU/身份/metadata 通过 |
 
 第三十七波新增 3 个严格保持待领的前置：
@@ -370,7 +370,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第三十七波结果 |
 | --- | --- |
 | `device` | 8.06 将 Nonzero owner 接入共享 launcher，SWhere 保持原路径；静态合同 24 项通过，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuBLAS MatMul 两处公开 dtype 合同改为 `USER_CHECK`，累计 66 处；nvcc TU 语法通过，本机无 CUDA |
+| `bindings` | 2.19 将 cuBLAS MatMul 两处公开 dtype 合同改为 `USER_CHECK`，累计 66 处；nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 trapz/trapezoid 提升为 numerical 稳定包装并登记 approximate fidelity；4 项 CPU/身份/metadata 通过 |
 
 第三十八波新增 3 个严格保持待领的前置：
@@ -378,7 +378,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第三十八波结果 |
 | --- | --- |
 | `device` | 8.06 将 Range family 接入共享 launcher，保留三个 scalar 构造/销毁与同步策略；静态合同 25 项通过，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuBLAS batched MatMul 两处公开 dtype 合同改为 `USER_CHECK`，累计 68 处；nvcc TU 语法通过，本机无 CUDA |
+| `bindings` | 2.19 将 cuBLAS batched MatMul 两处公开 dtype 合同改为 `USER_CHECK`，累计 68 处；nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 masked_select 提升为 numerical 稳定对象并登记 approximate fidelity，保留 1-D/out 限制；3 项 CPU/身份/metadata 通过 |
 
 第三十九波新增 3 个严格保持待领的前置：
@@ -386,7 +386,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第三十九波结果 |
 | --- | --- |
 | `device` | 8.06 将 Dropout forward family 接入共享 launcher，backward 保持原路径；静态合同 26 项通过，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuBLAS acc MatMul 两处公开 dtype 合同改为 `USER_CHECK`，累计 70 处；nvcc TU 语法通过，本机无 CUDA |
+| `bindings` | 2.19 将 cuBLAS acc MatMul 两处公开 dtype 合同改为 `USER_CHECK`，累计 70 处；nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 narrow 提升为 numerical 稳定对象并登记 approximate fidelity；3 项 CPU/身份/metadata 通过 |
 
 第四十波新增 3 个严格保持待领的前置：
@@ -394,7 +394,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第四十波结果 |
 | --- | --- |
 | `device` | 8.06 将 LeakyReLU forward family 接入共享 launcher，backward 保持原路径；静态合同 27 项通过，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuSPARSE CSR 两处公开 dtype 合同改为 `USER_CHECK`，累计 72 处；nvcc TU 语法通过，本机无 CUDA |
+| `bindings` | 2.19 将 cuSPARSE CSR 两处公开 dtype 合同改为 `USER_CHECK`，累计 72 处；nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 tile 提升为 numerical 稳定对象并登记 approximate fidelity，保留 tuple/list dims；3 项 CPU/身份/metadata 通过 |
 
 第四十一波新增 3 个严格保持待领的前置：
@@ -402,7 +402,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第四十一波结果 |
 | --- | --- |
 | `device` | 8.06 将 ArgReduce max/min 两路径统一接入共享 launcher，保留双输出和同步策略；静态合同 28 项通过，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuSPARSE COO 两处公开 dtype 合同改为 `USER_CHECK`，累计 74 处；nvcc TU 语法通过，本机无 CUDA |
+| `bindings` | 2.19 将 cuSPARSE COO 两处公开 dtype 合同改为 `USER_CHECK`，累计 74 处；nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 diff 提升为 numerical 稳定对象并登记 approximate fidelity，保留 n/dim/prepend/append；3 项 CPU/身份/metadata 通过 |
 
 第四十二波新增 3 个严格保持待领的前置：
@@ -410,7 +410,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第四十二波结果 |
 | --- | --- |
 | `device` | 8.06 将 Random uniform/normal 两分支统一接入共享 launcher，保留 seed/offset 与同步策略；静态合同 29 项通过，本机无 CANN/NPU |
-| `bindings` | 2.19 将 NCCL reduce_scatter 两处公开 shape 合同改为 `USER_CHECKop`，累计 76 处；nvcc TU 语法通过，本机无 NCCL |
+| `bindings` | 2.19 将 NCCL reduce_scatter 两处公开 shape 合同改为 `USER_CHECKop`，累计 76 处；nvcc TU 语法通过；本分区只分到一张卡，NCCL 负向仍未运行 |
 | `compat` | 7.03 将 square 提升为 numerical 稳定对象并登记 approximate fidelity；3 项 CPU/身份/metadata 通过 |
 
 第四十三波新增 3 个严格保持待领的前置：
@@ -418,7 +418,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第四十三波结果 |
 | --- | --- |
 | `device` | 8.06 为 `aclnn.h` 增加 `#pragma once`，补重复包含静态合同；1 passed，本机无 CANN/NPU，仍待 Ascend 910B3 实机 |
-| `bindings` | 2.19 将 CUB argsort/arg_reduce 的 offsets dtype 边界改为 `USER_CHECK`，累计 79 处；结构与双 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 CUB argsort/arg_reduce 的 offsets dtype 边界改为 `USER_CHECK`，累计 79 处；结构与双 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 `pairwise_distance` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份、metadata、CPU p=2/keepdim 三节点通过 |
 
 第四十四波新增 3 个严格保持待领的前置：
@@ -426,7 +426,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第四十四波结果 |
 | --- | --- |
 | `device` | 8.06 将 SiLU forward 接入共享 launcher，backward/Swish/SwiGlu 保持原路径；结构合同 31 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN convolution forward 格式边界改为 `USER_CHECK`，累计 80 处；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN convolution forward 格式边界改为 `USER_CHECK`，累计 80 处；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 `cosine_similarity` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；`py_compile`/diff-check 通过，三节点动态测试因首次 JIT 编译过久终止，未宣称通过 |
 
 第四十五波新增 3 个严格保持待领的前置：
@@ -434,7 +434,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第四十五波结果 |
 | --- | --- |
 | `device` | 8.06 将 BatchMatMul 接入共享 launcher，保留 `cube_math_type` 与同步策略；结构合同 32 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN convolution backward-x 格式边界改为 `USER_CHECK`，累计 81 处；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN convolution backward-x 格式边界改为 `USER_CHECK`，累计 81 处；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 `svd` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；`py_compile`/diff-check 通过，动态三节点因首次编译过久终止，未宣称通过 |
 
 第四十六波新增 3 个严格保持待领的前置：
@@ -442,7 +442,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第四十六波结果 |
 | --- | --- |
 | `device` | 8.06 将 RotaryPositionEmbedding forward 接入共享 launcher，保留三输入与同步策略；结构合同 33 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN convolution backward-w 格式边界改为 `USER_CHECK`，累计 82 处；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN convolution backward-w 格式边界改为 `USER_CHECK`，累计 82 处；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 `svd_lowrank` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；`py_compile`/diff-check 通过，动态 JIT 未运行 |
 
 第四十七波新增 3 个严格保持待领的前置：
@@ -450,7 +450,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第四十七波结果 |
 | --- | --- |
 | `device` | 8.06 将 Maxpool forward 接入共享 launcher，保留 descriptors、`poolCeil`、同步策略及 Avgpool/backward 原路径；静态合同 34 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN conv3d 输入 rank 边界改为 `USER_CHECKop`，累计 83 处；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向；`broadcast_to` 计数已同步为实际 5 |
+| `bindings` | 2.19 将 cuDNN conv3d 输入 rank 边界改为 `USER_CHECKop`，累计 83 处；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录；`broadcast_to` 计数已同步为实际 5 |
 | `compat` | 7.03 将 `pca_lowrank` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；`py_compile`/diff-check 通过，动态 JIT 未运行 |
 
 第四十八波新增 3 个严格保持待领的前置：
@@ -458,7 +458,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第四十八波结果 |
 | --- | --- |
 | `device` | 8.06 将 Avgpool forward 接入共享 launcher，保留 descriptors、`poolCeil/divisor`、同步策略及 backward/其他 pool owner；静态合同 35 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN conv3d backward-x 权重 rank 边界改为 `USER_CHECKop`，累计 84 处；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN conv3d backward-x 权重 rank 边界改为 `USER_CHECKop`，累计 84 处；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 `nan_to_num_` 提升为 numerical 稳定 in-place 对象并登记 conservative approximate fidelity；`py_compile`/diff-check 通过，因既有 NaN/Inf JIT abort 风险未运行动态测试 |
 
 第四十九波新增 3 个严格保持待领的前置：
@@ -466,7 +466,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第四十九波结果 |
 | --- | --- |
 | `device` | 8.06 将 TruthReduce all/any 接入共享 launcher，保留双路径异常处理与同步策略；静态合同 36 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN conv3d backward-w 输入 rank 边界改为 `USER_CHECKop`，累计 85 处；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN conv3d backward-w 输入 rank 边界改为 `USER_CHECKop`，累计 85 处；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 `sparse_coo_tensor` factory 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态测试未运行 |
 
 第五十波新增 3 个严格保持待领的前置：
@@ -474,7 +474,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第五十波结果 |
 | --- | --- |
 | `device` | 8.06 将 Conv2d forward 接入共享 launcher，保留 group/bias/descriptor 与同步策略，backward 不变；静态合同 37 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN conv3d backward-x dy rank 边界改为 `USER_CHECKop`，累计 86 处；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN conv3d backward-x dy rank 边界改为 `USER_CHECKop`，累计 86 处；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 `randint_like` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行 |
 
 第五十一波新增 3 个严格保持待领的前置：
@@ -482,7 +482,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第五十一波结果 |
 | --- | --- |
 | `device` | 8.06 将 RmsNorm forward 接入共享 launcher，保留 `eps`、双输出与同步策略，gradient owner 不变；静态合同 38 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN conv3d backward-w 的 dy rank 边界改为 `USER_CHECKop`，累计 87 处；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN conv3d backward-w 的 dy rank 边界改为 `USER_CHECKop`，累计 87 处；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 `det` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行 |
 
 第五十二波新增 3 个严格保持待领的前置：
@@ -490,7 +490,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第五十二波结果 |
 | --- | --- |
 | `device` | 8.06 将 RmsNormGrad 接入共享 launcher，保留多输入、双输出与同步策略，gradient owner 不变；静态合同 39 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN conv3d 权重 rank 边界改为 `USER_CHECKop`，累计 88 处、四十一组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN conv3d 权重 rank 边界改为 `USER_CHECKop`，累计 88 处、四十一组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 `inverse` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行 |
 
 第五十三波新增 3 个严格保持待领的前置：
@@ -498,7 +498,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第五十三波结果 |
 | --- | --- |
 | `device` | 8.06 将 Softmax backward 接入共享 launcher，保留 `dim` query 与同步策略；静态合同 40 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 CUB argsort 的 x/indexes rank 边界改为 `USER_CHECK`，累计 89 处、四十二组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 CUB argsort 的 x/indexes rank 边界改为 `USER_CHECK`，累计 89 处、四十二组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 `take_along_dim` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行 |
 
 第五十四波新增 3 个严格保持待领的前置：
@@ -506,7 +506,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第五十四波结果 |
 | --- | --- |
 | `device` | 8.06 将 Embedding backward 接入共享 launcher，保留 `numEmbeddings`、`paddingIdx`、`scaleGradByFreq` 与同步策略；静态合同 41 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 CUB argsort 循环内 x/indexes shape 边界改为 `USER_CHECK`，累计 90 处、四十三组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 CUB argsort 循环内 x/indexes shape 边界改为 `USER_CHECK`，累计 90 处、四十三组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 `log1p` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行 |
 
 本次看板一致性修复：计划与看板任务 ID 均为 279 个，缺失 0、重复 0；7.14 之后的正式任务行统一为五列，补回 `0.22`、`2.24`、`7.19`、`7.20`，移除 8.06 的两列 `8.06 note` 伪行。主线并发补充 `166010a8`（CUB argsort offsets rank）与 `ccbc6132`（`reciprocal`）已记录；第五十五波已将 Dropout backward 的 WIP `c2821634` 收束为主线 `0b149241`/`a12a2fbe`。新增结构门禁 `tests/structure/test_refactor_board_contract.py`，定向 2 passed。
@@ -528,7 +528,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第五十五波结果 |
 | --- | --- |
 | `device` | 8.06 将 Dropout backward 接入共享 launcher，保留 `scale` query 与同步策略；静态合同 42 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 CUB argsort offsets rank 边界改为 `USER_CHECK`，累计 91 处、四十四组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 CUB argsort offsets rank 边界改为 `USER_CHECK`，累计 91 处、四十四组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 `reciprocal` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行 |
 
 第五十六波新增 3 个严格保持待领的前置：
@@ -536,7 +536,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第五十六波结果 |
 | --- | --- |
 | `device` | 8.06 将 RotaryPositionEmbedding gradient 接入共享 launcher，保留四输入、三输出 query 与同步策略；静态合同 43 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 CUB argsort offsets 长度边界改为 `USER_CHECKop`，累计 92 处、四十五组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 CUB argsort offsets 长度边界改为 `USER_CHECKop`，累计 92 处、四十五组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 `lerp` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行 |
 
 第五十七波新增 3 个严格保持待领的前置：
@@ -544,7 +544,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第五十七波结果 |
 | --- | --- |
 | `device` | 8.06 将 Conv2d backward 接入共享 launcher，保留三输出 gradient query、descriptor cleanup 与同步策略；静态合同 44 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 CUB arg-reduce offsets rank 边界改为 `USER_CHECKop`，累计 93 处、四十六组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 CUB arg-reduce offsets rank 边界改为 `USER_CHECKop`，累计 93 处、四十六组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 `softmax` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行 |
 
 第五十八波新增 3 个严格保持待领的前置：
@@ -552,7 +552,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第五十八波结果 |
 | --- | --- |
 | `device` | 8.06 将 UpsampleNearest2d backward 接入共享 launcher，保留 output/input-size RAII descriptor 与同步策略；静态合同 45 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 CUB arg-reduce offsets 长度边界改为 `USER_CHECKop`，累计 94 处、四十七组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 CUB arg-reduce offsets 长度边界改为 `USER_CHECKop`，累计 94 处、四十七组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 `log_softmax` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行 |
 
 第五十九波新增 4 个严格保持待领的前置：
@@ -560,7 +560,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第五十九波结果 |
 | --- | --- |
 | `device` | 8.06 将 LeakyReLU backward、SiLU backward 分别接入共享 launcher；静态合同 46/47 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN RNN LSTM mode 边界改为 `USER_CHECKop`，累计 95 处、四十八组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN RNN LSTM mode 边界改为 `USER_CHECKop`，累计 95 处、四十八组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 `relu` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行 |
 
 第六十波新增 3 个严格保持待领的前置：
@@ -568,7 +568,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第六十波结果 |
 | --- | --- |
 | `device` | 8.06 将 Swish forward 接入共享 launcher，保留同步策略；静态合同 48 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN RNN 非 LSTM mode 边界改为 `USER_CHECKop`，累计 96 处、四十九组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN RNN 非 LSTM mode 边界改为 `USER_CHECKop`，累计 96 处、四十九组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 `torch._shape_as_tensor` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行 |
 
 第六十一波新增 2 个严格保持待领的前置；compat 复核未找到安全的第三项：
@@ -576,7 +576,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第六十一波结果 |
 | --- | --- |
 | `device` | 8.06 将 Swish backward 接入共享 launcher，保留同步策略，SwiGlu 未迁；静态合同 49 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN RNN `proj_size==0` 边界改为 `USER_CHECKop`，累计 97 处、五十组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN RNN `proj_size==0` 边界改为 `USER_CHECKop`，累计 97 处、五十组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 复核剩余 API 后仅 `vmap` 是复杂闭包，其余为已有原生 owner，未产生安全代码提交 |
 
 第六十二波新增 3 个严格保持待领的前置：
@@ -584,7 +584,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第六十二波结果 |
 | --- | --- |
 | `device` | 8.06 将 SwiGlu 接入共享 launcher，保留同步策略；静态合同 50 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN RNN 第二处 `proj_size==0` 边界改为 `USER_CHECKop`，累计 98 处、五十一组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN RNN 第二处 `proj_size==0` 边界改为 `USER_CHECKop`，累计 98 处、五十一组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 `outer` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行 |
 
 第六十三波新增 3 个严格保持待领的前置：
@@ -592,7 +592,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第六十三波结果 |
 | --- | --- |
 | `device` | 8.06 将 LayerNorm forward 接入共享 launcher，保留 `normalizedShape`、`eps`、三输出与 descriptor cleanup；静态合同 51 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN conv3d 分组通道 shape 边界改为 `USER_CHECKop`，累计 99 处、五十二组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN conv3d 分组通道 shape 边界改为 `USER_CHECKop`，累计 99 处、五十二组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 `isin` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行 |
 
 第六十四波新增 3 个严格保持待领的前置：
@@ -600,7 +600,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第六十四波结果 |
 | --- | --- |
 | `device` | 8.06 将 LayerNorm backward 接入共享 launcher，保留 `normalizedShape`、`outMask`、三输出 query 与 descriptor cleanup；静态合同 52 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN RNN backward-x LSTM mode 边界改为 `USER_CHECKop`，累计 100 处、五十三组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN RNN backward-x LSTM mode 边界改为 `USER_CHECKop`，累计 100 处、五十三组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 `tensordot` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行 |
 
 第六十五波新增 3 个严格保持待领的前置：
@@ -608,7 +608,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第六十五波结果 |
 | --- | --- |
 | `device` | 8.06 将 GroupNorm forward 接入共享 launcher，保留 group/eps、三输出 query 与同步策略；静态合同 53 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN RNN backward-x `proj_size==0` 边界改为 `USER_CHECKop`，累计 101 处、五十四组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN RNN backward-x `proj_size==0` 边界改为 `USER_CHECKop`，累计 101 处、五十四组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 将 `repeat_interleave` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行 |
 
 第六十六波新增 2 个严格保持待领的前置；compat 复核未找到安全小切片：
@@ -616,7 +616,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第六十六波结果 |
 | --- | --- |
 | `device` | 8.06 将 GroupNorm backward 接入共享 launcher，保留 output-mask、group 属性、三输出 query 与 cleanup；静态合同 54 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN RNN backward-x 非 LSTM mode 边界改为 `USER_CHECKop`，累计 102 处、五十五组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN RNN backward-x 非 LSTM mode 边界改为 `USER_CHECKop`，累计 102 处、五十五组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 复核剩余候选仅有复杂 `vmap` 闭包，未强行拆分 |
 
 第六十七波新增 2 个严格保持待领的前置；compat 复核仍未找到安全小切片：
@@ -624,7 +624,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第六十七波结果 |
 | --- | --- |
 | `device` | 8.06 将 Avgpool backward 接入共享 launcher，保留 `countIncludePad/divisorOverride`、descriptor cleanup 与同步策略；静态合同 55 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN RNN backward-x 第二处 `proj_size==0` 边界改为 `USER_CHECKop`，累计 103 处、五十六组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN RNN backward-x 第二处 `proj_size==0` 边界改为 `USER_CHECKop`，累计 103 处、五十六组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 复核剩余 API 后仅 `vmap` 为复杂闭包，本波无安全小切片提交 |
 
 第六十八波新增 3 个严格保持待领的前置：
@@ -632,7 +632,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第六十八波结果 |
 | --- | --- |
 | `device` | 8.06 将 Maxpool backward 接入共享 launcher，保留 pool descriptors、`poolCeil`、输出处理、cleanup 与同步策略；静态合同 56 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN conv 输入 rank 边界改为 `USER_CHECKop`，累计 104 处、五十七组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN conv 输入 rank 边界改为 `USER_CHECKop`，累计 104 处、五十七组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 新增 `vmap` owner 迁移设计前置，记录 Runtime 依赖与后续 CPU 验收；未宣称实现完成 |
 
 第六十九波新增 3 个严格保持待领的前置：
@@ -640,7 +640,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第六十九波结果 |
 | --- | --- |
 | `device` | 8.06 将 MaskedSelect 接入共享 launcher，保留双输入 mask query 与同步策略；静态合同 57 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN conv 权重 rank 边界改为 `USER_CHECKop`，累计 105 处、五十八组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN conv 权重 rank 边界改为 `USER_CHECKop`，累计 105 处、五十八组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 细化 `vmap` owner 的可验证契约与验收节点；仅设计前置，未修改 runtime |
 
 第七十波新增 3 个严格保持待领的前置：
@@ -648,7 +648,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第七十波结果 |
 | --- | --- |
 | `device` | 8.06 将 Index 接入共享 launcher，保留 index query 与同步策略，SliceV2 未改；静态合同 58 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN conv 分组通道 shape 边界改为 `USER_CHECKop`，累计 106 处、五十九组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN conv 分组通道 shape 边界改为 `USER_CHECKop`，累计 106 处、五十九组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 补充 `vmap` owner 提取协议、AST 完成门禁与 `VmapContext` 约束；仅设计前置，未修改 runtime |
 
 第七十一波新增 3 个严格保持待领的前置：
@@ -656,7 +656,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第七十一波结果 |
 | --- | --- |
 | `device` | 8.06 将 SliceV2 接入共享 launcher，保留 begins/ends/steps/axes descriptors 与同步策略，Index/其他 owner 未改；静态合同 59 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN conv backward-x 权重 rank 边界改为 `USER_CHECKop`，累计 107 处、六十组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN conv backward-x 权重 rank 边界改为 `USER_CHECKop`，累计 107 处、六十组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 连续补充 vmap 设计契约与 unsupported AST 静态门禁；仅设计/门禁前置，未修改 runtime，未宣称实现完成 |
 
 第七十二波新增 3 个严格保持待领的前置：
@@ -664,7 +664,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第七十二波结果 |
 | --- | --- |
 | `device` | 8.06 将 StridedSliceAssignV2 接入共享 launcher，保留 gradient memset 分支与 slice descriptor handling；静态合同 60 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN conv backward-x dy rank 边界改为 `USER_CHECKop`，累计 108 处、六十一组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN conv backward-x dy rank 边界改为 `USER_CHECKop`，累计 108 处、六十一组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 补充 vmap context 夹具契约、提取顺序、绑定与回滚步骤；仅设计前置，未修改 runtime |
 
 第七十三波新增 3 个严格保持待领的前置：
@@ -672,7 +672,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第七十三波结果 |
 | --- | --- |
 | `device` | 8.06 将 InplaceMaskedScatter 接入共享 launcher，保留 tracked base-to-output memcpy 依赖与同步策略；静态合同 61 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN conv backward-w 输入 rank 边界改为 `USER_CHECKop`，累计 109 处、六十二组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN conv backward-w 输入 rank 边界改为 `USER_CHECKop`，累计 109 处、六十二组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 7.03 补充 vmap 评审证据清单，覆盖 AST、closure/global、fidelity、聚焦节点与 skip 归因；仅设计前置，未修改 runtime |
 
 第七十四波新增 3 个严格保持待领的前置：
@@ -680,7 +680,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第七十四波结果 |
 | --- | --- |
 | `device` | 8.06 将 IndexPutImpl 接入共享 launcher，保留 index tensor-list handling 与同步策略，IndexPutImplAccumulate 未改；静态合同 62 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN conv backward-w dy rank 边界改为 `USER_CHECKop`，累计 110 处、六十三组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN conv backward-w dy rank 边界改为 `USER_CHECKop`，累计 110 处、六十三组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 补充 vmap unsupported 行为矩阵，覆盖 extent/nested dim/非 bool/depth callback/out_dims；仅设计前置，未修改 runtime |
 
 第七十五波新增 3 个严格保持待领的前置：
@@ -688,7 +688,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第七十五波结果 |
 | --- | --- |
 | `device` | 8.06 将 IndexPutImpl accumulate 接入共享 launcher，保留 tracked output memset 与 index tensor-list dependency；静态合同 63 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN RNN 推理阶段输入 rank 边界改为 `USER_CHECKop`，累计 111 处、六十四组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN RNN 推理阶段输入 rank 边界改为 `USER_CHECKop`，累计 111 处、六十四组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 明确 vmap 仅做组织重构，不新增 kernel/设备传输/优化，并定义 CPU/CUDA/ACL 分层验收与 skip 归因；仅设计前置 |
 
 第七十六波新增 3 个严格保持待领的前置：
@@ -696,7 +696,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第七十六波结果 |
 | --- | --- |
 | `device` | 8.06 将 AdamWList 各项更新接入共享 launcher，保留 fused D2D copy checks 与唯一同步点；静态合同 64 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuDNN RNN 输入通道 shape 边界改为 `USER_CHECKop`，累计 112 处、六十五组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuDNN RNN 输入通道 shape 边界改为 `USER_CHECKop`，累计 112 处、六十五组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 明确 vmap 稳定签名、内部 callback 注入和 unsupported kwargs 拒绝；仅设计前置，未修改 runtime |
 
 第七十七波新增 2 个严格保持待领的前置；2.19 复核未找到安全用户边界：
@@ -720,7 +720,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第七十九波结果 |
 | --- | --- |
 | `device` | 8.06 将 IncrementalFlashAttention 接入共享 launcher，保留 block-table、actual-sequence、cache-view cleanup 与同步策略；静态合同 67 passed，本机无 CANN/NPU |
-| `bindings` | 2.19 将 cuFFT jit_prepare unsupported dtype 边界改为 `USER_CHECK`，累计 113 处、六十六组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 cuFFT jit_prepare unsupported dtype 边界改为 `USER_CHECK`，累计 113 处、六十六组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 明确 vmap 版本兼容、kwargs 策略与退出标准；仅设计前置，未修改 runtime |
 
 第八十波新增 2 个严格保持待领的前置；device 复核确认 KVCacheMemcpy 不适合通用 launcher：
@@ -728,7 +728,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | 分区 | 第八十波结果 |
 | --- | --- |
 | `device` | 8.06 复核确认标准 workspace/query/execute/sync owner 已迁移完毕；剩余 KVCacheMemcpy 为逐 token 专用 memcpy 路径，本波不改代码 |
-| `bindings` | 2.19 将 CUBLAS matmul 输入 rank 边界改为 `USER_CHECK`，累计 114 处、六十七组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `bindings` | 2.19 将 CUBLAS matmul 输入 rank 边界改为 `USER_CHECK`，累计 114 处、六十七组证据；结构合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见看板 2.19 行末运行记录 |
 | `compat` | 补充 vmap 无可变全局、幂等 install、失败回滚与资源释放门禁；仅设计/门禁前置 |
 
 第八十一波新增 2 个严格保持待领的前置；device 复核无安全标准 owner：
@@ -1211,6 +1211,13 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `build` | 复核 9.20/9.22 已由 `1919b035`/`c4bbdd72` 合入：asm、`.so`、`.key` 和 wrapper 产物均采用私有临时文件后原子发布；9.22 聚焦测试 3 passed。9.20 的 inode/四 worker 证据已记录在看板。 |
 | `bindings` | 复核 9.23 已由 `17e43c9a` 合入：POSIX 进程组终止与有界 drain 覆盖孙进程留存；grandchildren 聚焦测试 1 passed。 |
 | `gates` | 本波无新代码提交；只确认已有提交、测试证据与当前主线一致，未宣称 Windows/真实 CUDA/NPU 全平台验证。 |
+
+### 2026-09-04 第一百五十二波
+
+| 分区 | 结果 |
+| --- | --- |
+| `bindings` | 2.19 首次在真实 CUDA 上跑验收，推翻此前 82 处「本机无 CUDA」的说法（本机 nvcc 12.2.140、`cuda_archs=[89]`；那个结论来自读 `has_cuda` 时带了 `nvcc_path=""`）。**找到一处迁移是错的，也就是第一百五十七波没归因出来的那个 SIGABRT**：`~VarHolder` 让异常逃出析构，而析构隐式 `noexcept`，`std::terminate` 就发生在析构自己的栈帧上，`ed12fe21` 给生成 `tp_dealloc` 包的 catch 永远轮不到——所以 faulthandler 看不到 Python 异常，栈要用 gdb 抓（`__cxa_call_terminate` 上面就是 `~VarHolder`）。真实后果是 `tests/backends/cuda` 跑到 36% 就 SIGABRT、后面 21 个文件一个没跑、pytest 无汇总行；结构门禁看不见它，因为抛出是经由一次函数调用传递的。已修并补 `test_var_holder_teardown.py`（修前 rc=134，修后 2 passed）。新增 `test_cuda_user_error_boundaries.py` 21 passed，覆盖 cuDNN conv/conv3d/RNN、CUB argsort/arg_reduce、curand、cuFFT 此前只有静态证据的边界。修正 `test_backend_teardown.py` 的探针（`Var.sync` 不做 device sync，原断言在真机上一直是假的），2 passed。全目录 `tests/backends/cuda` 180 passed / 23 failed / 37 skipped / 1 xfailed，23 条红与 2.19 无关且已逐条记入看板杂项（21 条是 0 维 `code` 算子代码生成死循环的级联）。方法写成 skill `cuda-negative-path-verification`。2.19 仍待领：cuTT 后端不可达、NCCL 与双卡用例本分区跑不了。 |
+| `gates` | **`tests/core` 的原生 CPU 门禁此前一直是 SIGABRT，不是绿也不是红。** 在 `98f698fd` 之前的树上 `JITTOR_TEST_DEVICES=cpu pytest tests/core` 跑到 65%（`test_function.py::TestFunctionWithEagerExecution::test_multi_grads_multi_out_stop_grad_1`）就 EXIT=134、没有汇总行——同一个 backward liveness 账不平，CPU 上也可达，2.10 合入至今没人看出来。修后整轮跑完：**579 passed / 20 failed / 67 skipped / 2 xfailed**。逐条比对过：**修前能跑到的用例，修前修后逐条一致**（`test_core.py` 两边都是同样 3 条红）；20 条里 3 条是那个账不平换了个落点（`test_zmem_leak{,2,3}` 报 `lived_vars 2 != 0`，见看板杂项），其余 17 条修前根本跑不到，需要各归属分区认领。`tests/structure` 的 17 条红全部落在 compat/shim/ACL/`tests/compiler`，与本波无关，已核对本波文件不在其中。 |
 
 ### 2026-09-04 第一百五十三波
 

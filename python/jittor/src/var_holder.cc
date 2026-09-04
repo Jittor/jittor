@@ -181,7 +181,19 @@ VarHolder::~VarHolder() {
     if (PREDICT_BRANCH_NOT_TAKEN(!var)) return;
     unlink_from_hold_vars(iter);
     release_holder();
-    var->release_both_liveness();
+    // Dropping the last holder runs the liveness propagation, which frees
+    // nodes, which reaches the allocator: every one of those steps reports by
+    // throwing. A destructor is implicitly noexcept, so an escaping error is
+    // std::terminate *at this frame* -- the generated tp_dealloc wraps the
+    // call in a try, but that catch is downstream of the terminate and never
+    // runs. Report and carry on, which is the teardown rule for the rest of
+    // the tree (CHECK_ACL_PEEK, peekCudaErrorsAlways).
+    try {
+        var->release_both_liveness();
+    } catch (const std::exception& e) {
+        LOGe << "error while releasing a Var, ignored during teardown:"
+            << e.what();
+    }
 }
 
 // assign attributes of b to a
