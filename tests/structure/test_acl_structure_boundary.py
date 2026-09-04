@@ -15,5 +15,10 @@ def test_acl_structure_boundary_names_atomic_migrations_and_hardware_gate():
         "BaseOpRunner::launch",
         "Ascend 910B3/CANN",
         "no CPU fallback",
+        "triu.diagonal",
+        "softmax.dim",
+        "flip.axes",
+        "data-channel",
+        "schema",
     ):
         assert required in text
