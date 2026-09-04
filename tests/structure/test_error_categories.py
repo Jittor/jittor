@@ -481,6 +481,8 @@ def test_backend_internal_assertion_classification_is_explicit():
         assert marker in source, (relative, marker)
     descriptor = (ROOT / "python/jittor/extern/cuda/cudnn/src/cudnn_rnn_descriptor.cc").read_text()
     assert "ASSERT(linLayerBias)" in descriptor
+    cub_test = (ROOT / "python/jittor/extern/cuda/cub/ops/cub_test_op.cc").read_text()
+    assert "ASSERT(status == cudaSuccess)" in cub_test
 
 
 def test_cudnn_conv3d_x_rank_user_boundary_migration_is_explicit_and_bounded():
