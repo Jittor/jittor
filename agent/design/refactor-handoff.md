@@ -1113,6 +1113,13 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `compat` | `c49efb80` 更新 `test_install_context.py`，移除已被显式 activation API 取代的 `wrap_flags` patch；完整安装上下文测试 `20 passed`。这是测试兼容修复，7.05 仍待全量 mutation 接入。 |
 | `gates` | `test_torch_install_state_boundary.py` 等结构合同通过；组合结构长测受 30s 轻量超时截断，不作为成功或失败证据。 |
 
+### 2026-09-04 第一百三十四波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `60197b81` 将 factories/tensor installer 的 `jt.flags.use_cuda` 写入接入 transaction helper；`d9d063a5` 将 core installer 安装期 `use_cuda` 写入接入 ledger 并补失败回滚测试（事务定向 5 passed）。nn 的 `.to()` 写入确认是运行时用户语义，不纳入 install transaction。7.05 仍待全部 installer 写入口。 |
+| `gates` | 相关 `py_compile`/`diff-check` 通过；本波未改变整卡状态。 |
+
 ### 2026-09-04 第一百一十九波
 
 | 分区 | 结果 |

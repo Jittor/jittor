@@ -63,6 +63,8 @@
 > 第132波 7.05 修正：`1eb7ec07` 让 `mutate_env` 先规范化字符串再记录 owner 值，修复整数环境变量回滚误报 `TransactionConflict`；事务定向 6 passed。7.05 仍需覆盖全部 installer 写入口。
 >
 > 第133波 7.05 测试修正：`c49efb80` 删除两个已被显式 activation API 取代的 `wrap_flags` 旧 patch，完整 `test_install_context.py` 从 2 个夹具错误恢复为 20 passed；事务/状态结构合同保持通过。7.05 仍待全量 mutation 接入。
+>
+> 第134波 7.05 子项：`60197b81` 将 factories/tensor installer 的 `jt.flags.use_cuda` 写入接入 transaction helper；`d9d063a5` 将 core installer 的安装期 `use_cuda` 写入接入 ledger 并补失败回滚测试。nn 的 `.to()` 写入确认属于运行时用户语义，不纳入安装事务；7.05 仍待全部 installer 写入口。
 
 一行一个任务，与 [refactor-plan.md](refactor-plan.md) 的编号对应。领任务把状态改成「进行中」并写名字，
 完成改成「已合并」并填提交号；推送冲突说明别人先领了。状态只有四种：待领 / 进行中 / 已合并 / 并入 X。
