@@ -1064,6 +1064,13 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `compat` | `fa2027e4` 将 `InstallTransaction` 的进程级 RLock 与 namespace undo 接入 `compat.torch.install`；`4f66701e` 明确 flags/env/import/meta_path/module-patcher 尚未纳入回滚，并补边界合同 1 passed。7.05 仍待领。 |
 | `gates` | 事务前置测试保持通过；完整 installer mutation ledger 仍缺，未关闭 7.05。 |
 
+### 2026-09-04 第一百二十七波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `ec720cd8` 的整表 global snapshot 实现因会覆盖外部 env/finder 且 flags 不完整，已由 `9a674001` 撤回；`1aa640cf` 补充显式 flags/env allowlist、owner-aware restore 要求。7.05 仍待领。 |
+| `gates` | 本波没有新增运行时代码；事务回滚仍需逐写 mutation ledger、冲突硬失败和全流程失败注入测试。 |
+
 ### 2026-09-04 第一百一十九波
 
 | 分区 | 结果 |
