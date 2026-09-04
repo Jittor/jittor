@@ -38,6 +38,27 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             np.testing.assert_array_equal(
                 torch.view_as_real(rebuilt).numpy(), expected)
 
+    def test_polar_is_a_stable_module_level_object_and_registered(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        self.assertIs(torch.polar, numerical.polar)
+        self.assertEqual(numerical.polar.__module__, numerical.__name__)
+        record = fidelity.fidelity_of("torch.polar")
+        self.assertIs(record.implementation, numerical.polar)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("device", record.detail)
+
+    def test_polar_cpu_values_match_numpy(self):
+        with torch.flag_scope(use_cuda=0):
+            magnitude = torch.array([1.0, 2.0, 0.5])
+            phase = torch.array([0.0, np.pi / 2, np.pi])
+            actual = torch.view_as_real(torch.polar(magnitude, phase)).numpy()
+            expected = np.stack(
+                (magnitude.numpy() * np.cos(phase.numpy()),
+                 magnitude.numpy() * np.sin(phase.numpy())), axis=-1)
+            np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
+
     def test_eye_is_a_stable_module_level_object(self):
         numerical = importlib.import_module(
             "jittor.compat.torch.installers.numerical")

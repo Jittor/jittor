@@ -61,6 +61,20 @@ for _complex_name, _complex_impl in (
 del _complex_name, _complex_impl
 
 
+def polar(abs, angle, **kwargs):
+    """Construct a native complex tensor from magnitude and phase."""
+    return jt.nn.polar(abs, angle)
+
+
+register_fidelity(
+    "torch.polar",
+    polar,
+    Fidelity.APPROXIMATE,
+    "matches Torch magnitude/phase values for CPU real tensors; device, "
+    "layout, out, and dtype keyword semantics are not implemented",
+)
+
+
 def eye(n, m=None, dtype=None, **kwargs):
     """Create a square or rectangular identity matrix."""
     shape = (int(n), int(n)) if m is None else (int(n), int(m))
@@ -1419,7 +1433,7 @@ def install(ctx):
     g.is_complex = lambda x: _is_cplx(x)
     g.real = lambda x: x.real if isinstance(x, (_CN, Var)) else x
     g.imag = lambda x: x.imag if isinstance(x, (_CN, Var)) else jt.zeros_like(x)
-    g.polar = lambda abs, angle, **k: jt.nn.polar(abs, angle)       # -> native complex64
+    _alias("polar", polar)                                        # -> native complex64
     g.conj = lambda x: x.conj() if isinstance(x, (_CN, Var)) else x
     g.angle = lambda x: x.angle() if isinstance(x, (_CN, Var)) else jt.zeros_like(x)
     # torch.abs of a complex tensor is its magnitude; jittor's abs only takes real Vars.
