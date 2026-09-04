@@ -228,6 +228,24 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 actual.numpy(), np.array([[10, 20], [3, 4], [30, 40]]))
             np.testing.assert_array_equal(base.numpy(), np.array([[1, 2], [3, 4], [5, 6]]))
 
+    def test_index_put_is_stable_and_registered(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        self.assertIs(torch.index_put, numerical.index_put)
+        record = fidelity.fidelity_of("torch.index_put")
+        self.assertIs(record.implementation, numerical.index_put)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+
+    def test_index_put_cpu_values_and_non_inplace_behavior(self):
+        with torch.flag_scope(use_cuda=0):
+            base = torch.array([1, 2, 3, 4])
+            index = torch.array([1, 3], dtype=torch.int32)
+            values = torch.array([20, 40])
+            actual = torch.index_put(base, (index,), values)
+            np.testing.assert_array_equal(actual.numpy(), np.array([1, 20, 3, 40]))
+            np.testing.assert_array_equal(base.numpy(), np.array([1, 2, 3, 4]))
+
     def test_eye_is_a_stable_module_level_object(self):
         numerical = importlib.import_module(
             "jittor.compat.torch.installers.numerical")
