@@ -18,3 +18,9 @@ three dependent migrations:
 The ACL structure migrations require a real Ascend 910B3/CANN run before being
 marked complete. The host-only contract is source/static validation and must
 not be reported as NPU validation; every real run must prove no CPU fallback.
+
+Candidate attribute owners reviewed for an isolated slice were `triu.diagonal`,
+`softmax.dim`, and `flip.axes`. None is safe to move alone: each currently
+serializes an `OpAttr` assignment in generated C++ while the corresponding
+Python call also determines the JIT key. Move them only after the data-channel
+schema and cache-key contract are defined for every owner.
