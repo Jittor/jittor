@@ -132,6 +132,34 @@ register_fidelity(
 )
 
 
+_NAN_TO_NUM_INPLACE_FIDELITY_DETAIL = (
+    "matches Torch in-place NaN/Inf replacement and return identity for supported "
+    "real tensors but omits device, layout, dtype, and narrow custom-bound semantics"
+)
+
+
+def nan_to_num_(input, nan=0.0, posinf=None, neginf=None):
+    """Replace non-finite values in-place and return the input tensor."""
+    result = input.nan_to_num(nan=nan, posinf=posinf, neginf=neginf)
+    try:
+        input.assign(result)
+        return input
+    except EXPECTED as exc:
+        swallowed(
+            "torch/installers/numerical.py nan_to_num_: input.assign(result); return input",
+            exc,
+        )
+        return result
+
+
+register_fidelity(
+    "torch.nan_to_num_",
+    nan_to_num_,
+    Fidelity.APPROXIMATE,
+    _NAN_TO_NUM_INPLACE_FIDELITY_DETAIL,
+)
+
+
 _STACKING_FIDELITY_DETAIL = (
     "matches Torch values and shapes for tensor inputs but omits Torch "
     "device, dtype, layout, pin-memory, and out keyword semantics"
@@ -1360,14 +1388,7 @@ def install(ctx):
     _alias("split_with_sizes", split_with_sizes)
     _alias("_shape_as_tensor",
            lambda input: jt.array(np.asarray(input.shape, dtype=np.int64)))
-    def _nan_to_num_inplace(input, nan=0.0, posinf=None, neginf=None):
-        r = g.nan_to_num(input, nan=nan, posinf=posinf, neginf=neginf)
-        try:
-            input.assign(r); return input          # honour in-place semantics
-        except EXPECTED as exc:
-            swallowed("torch/installers/numerical.py _nan_to_num_inplace: input.assign(r); return input # honour in-place semantics", exc)
-            return r
-    _alias("nan_to_num_", _nan_to_num_inplace)
+    _alias("nan_to_num_", nan_to_num_)
     # torch.randint_like(input, low, high=None, *, dtype=...): jittor's native lacks
     # the dtype kwarg (DINO's denoising uses it). Force-override with torch semantics.
     def _randint_like(input, low, high=None, dtype=None, device=None,
