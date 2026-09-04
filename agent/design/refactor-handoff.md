@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；本波审计基线 `f7f33f5b`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 审计基线 999 个 |
+| 分支 | `2.0-refactor`；本波审计基线 `43a3d19d`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 审计基线 1000 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **198** / 进行中 **0** / 待领 **76** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
@@ -860,7 +860,16 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 
 0.15 仍未完成：smoke 实测约 390s、预算模型约 446s，计划要求 `<300s`；RingBuffer GIL/timeout 修复及两模式 nodeid/makespan 重测仍待专项处理。
 
-按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第九十七波继续优先可独立验证的
+第九十七波完成 0.15 可行性审计但未提交代码：
+
+| 分区 | 第九十七波结果 |
+| --- | --- |
+| `gates` | 两个长 compat 文件无法在保持 nodeid/import 语义与 `loadfile` 覆盖的前提下安全拆分降时；现有双模式与 worker 配置保持不变 |
+| `bindings` | RingBuffer 需要 timed-wait、GIL 安全拆分、pyjt 参数和 Dataset 轮询联动，不能预先加不完整门禁 |
+| `device` | 未参与代码修改 |
+
+
+按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第九十八波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
 - `device`：若续做 8.06，只迁下一个最终 owner 明确的 family，并复用 5be5fa15 的 launcher 合同；无 NPU

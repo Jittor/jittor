@@ -850,6 +850,10 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `2.19`：`903b8d3f`/`2a55244b` 精确约束 CUDNN backward-x `best_algo_idx!=-1` 内部断言计数；结构门禁 1 passed，不改变用户边界累计。
 - `7.03`：`17a15406` 补充 vmap 资源边界/取消契约，覆盖 footprint 上限、超大 extent、异常清理和 hold-vars/fidelity 泄漏；仅设计前置。
 
+### 2026-09-04 第九十七波补充证据
+
+- `0.15`：只读核对 RingBuffer GIL/有界等待与长文件拆分方案。当前 `test_children_died` 需要 Linux timed-wait/GIL 安全实现；两个长 compat 文件无法在保持 nodeid/import 语义与 `loadfile` 覆盖的前提下安全拆分降时。smoke 仍约 390s、预算约 446s，未提交代码，任务保持待领。
+
 ### 2026-09-04 第九十六波补充证据
 
 - `10.05`：`1a423a16`/`f7f33f5b` 固定 skip reason bucket 优先级、CI summary 和 `other>0` fail-closed；合成结构测试 2 passed，任务已完整关闭。
