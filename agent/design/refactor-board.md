@@ -783,3 +783,9 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `2.19`：`24848098`/`0bfb854e` 将 CUBLAS 测试入口返回码内部断言纳入分类门禁；1 passed，不改变运行语义或用户边界累计。
 - `7.03`：`30f5e2de` 细化 vmap context 泄漏 AST 门禁，覆盖默认参数、注解、decorator、closure 白名单与模块全局扫描；仅设计/门禁前置。
 - `8.06`：只读确认标准 workspace/query/execute/sync owner 已全部迁移，KVCacheMemcpy 等专用路径不纳入通用 launcher，本波无代码提交。
+
+### 2026-09-04 第八十五波补充证据
+
+- `2.19`：`54e8d545`/`4229cba5` 将 CUDNN 测试入口返回码内部断言纳入分类门禁；1 passed，不改变运行语义或用户边界累计。
+- `7.03`：`40aed528` 补充 vmap fidelity registry 静态门禁，校验 implementation identity、approximate level、context/backend detail 与重复 install；仅设计/门禁前置。
+- `8.06`：只读确认标准 ACL launcher owner 已穷尽，KVCacheMemcpy 等专用路径不纳入通用 launcher；本波无代码提交。
