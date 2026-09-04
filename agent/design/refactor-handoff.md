@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；本波审计基线 `d3f4853e`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 审计基线 1006 个 |
+| 分支 | `2.0-refactor`；本波审计基线 `48b807cd`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 审计基线 1008 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **198** / 进行中 **0** / 待领 **76** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
@@ -884,6 +884,13 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | `d3f4853e` 固定 `wait_pop_for` 单次绝对 deadline，处理 EINTR/非零状态，并在恢复 GIL 后保留原异常；`ring_buffer.cc` 与 `py_ring_buffer.cc` TU 语法检查通过 |
 | `bindings` | 审查确认固定 timeout 仍需收敛为 Dataset 专用轮询/兼容 API，并补 stop、延迟 producer、正常收发测试 |
 | `gates` | `SLOW_FILES`、smoke `<300s` 与 native/torch nodeid 集合尚未重测，0.15 继续待领 |
+
+第九十九波修正版补充：
+
+| 分区 | 修正版结果 |
+| --- | --- |
+| `device` | `876ec09c` 恢复通用 `pop()` 无限等待/兼容行为，新增 Dataset 专用 `pop_for(timeout_ms)`；单次 deadline、伪唤醒/EINTR/stop/其他异常与 GIL 边界已修正 |
+| `gates` | 协议合同与 killed-worker 聚焦节点各 1 passed（killed-worker 19.72s）；`SLOW_FILES` 和 smoke `<300s` 尚未重测，0.15 继续待领 |
 
 按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第一百波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
