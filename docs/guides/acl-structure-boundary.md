@@ -25,6 +25,23 @@ serializes an `OpAttr` assignment in generated C++ while the corresponding
 Python call also determines the JIT key. Move them only after the data-channel
 schema and cache-key contract are defined for every owner.
 
+## Schema draft
+
+The proposed wire schema is a versioned, operator-scoped map:
+
+- `schema_version`: integer, currently `1`, required;
+- `op`: immutable string matching the registered ACL owner, required;
+- scalar fields: typed `int64`, `float64`, or `bool`; absent fields use the
+  operator's documented default, never an implicit zero;
+- vector fields: typed homogeneous `int64[]`/`float64[]`/`bool[]`; absent vectors
+  use an explicit empty/default value;
+- `cache_key`: sorted `(field_name, type_tag, value)` tuples plus schema version;
+  pointer addresses and Python object ids are forbidden.
+
+The C++ decode entry should be one `BaseOpRunner` helper that validates the
+operator name, schema version, type tag, and required fields before constructing
+an `OpAttr`. This is a design target only; no such shared decoder exists yet.
+
 ## Migration order
 
 1. Define the data-channel schema and its cache-key representation for one

@@ -25,5 +25,9 @@ def test_acl_structure_boundary_names_atomic_migrations_and_hardware_gate():
         "triu.diagonal",
         "npu-smi info",
         "fallback cpu",
+        "schema_version",
+        "cache_key",
+        "type_tag",
+        "BaseOpRunner` helper",
     ):
         assert required in text
