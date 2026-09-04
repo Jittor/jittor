@@ -1144,6 +1144,14 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | source candidate 失败恢复仍是整 resolver 快照，不能覆盖并发外部增量；需子进程隔离或 owner-aware 增量记录。 |
 | `gates` | `py_compile`/`diff-check` 通过，尚未补 backend object 内部 mutation 和外部 registry 失败注入。 |
 
+### 2026-09-04 第一百四十三波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `shim.runtime.activate` 的 sys.path、sys.modules、flags、递归 compat install 和 extension build 不在同一 InstallTransaction 生命周期；不能安全半接入，需先设计独立 ActivationTransaction。 |
+| `device` | child_env 只隔离扩展子进程，不能回滚父进程路径/模块状态；source candidate 继续使用局部锁和快照。 |
+| `gates` | 本波无代码提交，明确 path/module/flag owner token、冲突硬失败和 child/retry 验收要求。 |
+
 ### 2026-09-04 第一百四十波
 
 | 分区 | 结果 |
