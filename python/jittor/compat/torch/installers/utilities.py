@@ -20,6 +20,15 @@ from ..nested import (
 from ...diagnostics import EXPECTED, swallowed
 
 
+def _mutate_import(new_import, builtins_module):
+    context = getattr(jt, "_torch_compat_install_context", None)
+    transaction = getattr(context, "state", {}).get("_install_transaction")
+    if transaction is None:
+        builtins_module.__import__ = new_import
+    else:
+        transaction.mutate_attr(builtins_module, "__import__", new_import)
+
+
 def _patch_transformers_npu_probe(module, modules):
     """Keep PyTorch accelerator extensions out of the Jittor Torch runtime."""
     if module is None:
@@ -73,7 +82,7 @@ def _install_transformers_runtime_guard(g, registry=None):
 
     _import._jittor_transformers_runtime_guard = True
     _import._jittor_original_import = original_import
-    builtins.__import__ = _import
+    _mutate_import(_import, builtins)
     g._transformers_runtime_guard_installed = True
 
 def _install_torchmetrics_fastpaths(g, registry=None):
@@ -207,7 +216,7 @@ def _install_torchmetrics_fastpaths(g, registry=None):
         return mod
 
     _import._jittor_torchmetrics_fastpaths = True
-    _builtins.__import__ = _import
+    _mutate_import(_import, _builtins)
 
 
 def _install_flash_attn_shim(registry=None):

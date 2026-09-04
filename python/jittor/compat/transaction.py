@@ -36,6 +36,11 @@ class InstallTransaction:
         self.record(flags, name, old, value)
         setattr(flags, name, value)
 
+    def mutate_attr(self, target, name, value):
+        old = getattr(target, name, _MISSING)
+        self.record(target, name, old, value)
+        setattr(target, name, value)
+
     def acquire(self):
         self._lock.acquire()
 
