@@ -289,6 +289,25 @@ register_fidelity(
 )
 
 
+_RECIPROCAL_FIDELITY_DETAIL = (
+    "matches Torch elementwise reciprocal values for supported real tensors but "
+    "omits device, layout, and dtype keyword semantics"
+)
+
+
+def reciprocal(x):
+    """Compute the elementwise multiplicative reciprocal."""
+    return 1.0 / x
+
+
+register_fidelity(
+    "torch.reciprocal",
+    reciprocal,
+    Fidelity.APPROXIMATE,
+    _RECIPROCAL_FIDELITY_DETAIL,
+)
+
+
 _NAN_TO_NUM_INPLACE_FIDELITY_DETAIL = (
     "matches Torch in-place NaN/Inf replacement and return identity for supported "
     "real tensors but omits device, layout, dtype, and narrow custom-bound semantics"
@@ -1209,7 +1228,7 @@ def install(ctx):
     _alias("relu", lambda input, **k: jt.nn.relu(input))
     # elementwise / functional top-level forms missing from jittor's top level
     _alias("log1p", log1p)
-    _alias("reciprocal", lambda x: 1.0 / x)
+    _alias("reciprocal", reciprocal)
     _alias("lerp", lambda input, end, weight: input + weight * (end - input))
     _alias("isclose", isclose)
     _alias("allclose", allclose)

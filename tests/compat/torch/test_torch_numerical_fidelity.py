@@ -1281,6 +1281,24 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIn("device", record.detail)
         self.assertIn("dtype", record.detail)
 
+    def test_reciprocal_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.reciprocal))
+        self.assertIs(torch.reciprocal, numerical.reciprocal)
+        self.assertEqual(numerical.reciprocal.__module__, numerical.__name__)
+        self.assertEqual(numerical.reciprocal.__name__, "reciprocal")
+
+    def test_reciprocal_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.reciprocal")
+        self.assertIs(record.implementation, numerical.reciprocal)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("device", record.detail)
+        self.assertIn("dtype", record.detail)
+
 
 if __name__ == "__main__":
     unittest.main()
