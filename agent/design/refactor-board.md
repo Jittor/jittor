@@ -85,6 +85,8 @@
 > 第142波 7.05 子项：`367716a7` 将 external backend 的 `_BACKENDS`、`_BACKEND_HINTS`、`_ENTRY_POINTS_LOADED` 注册状态接入 transaction，并由 integrations 传递 active tx；source import 的 sys.path/sys.modules 仍需 owner-aware 或子进程隔离，7.05 保持待领。
 >
 > 第143波整卡边界：shim runtime activation 的 sys.path、sys.modules、flags、递归安装和扩展构建跨越现有 InstallTransaction 生命周期，不能半接入；需先建立独立 ActivationTransaction（path/module/flag owner token、冲突硬失败、child/retry 测试）。7.05 保持待领。
+>
+> 第144波 7.05 前置：`c204f4e9` 扩展 InstallTransaction 为 ActivationTransaction，新增 owner-aware `mutate_path`/`publish_module` 和 activation path/module 回滚合同；事务定向 11 passed。尚未接入 shim.runtime.activate，7.05 保持待领。
 
 一行一个任务，与 [refactor-plan.md](refactor-plan.md) 的编号对应。领任务把状态改成「进行中」并写名字，
 完成改成「已合并」并填提交号；推送冲突说明别人先领了。状态只有四种：待领 / 进行中 / 已合并 / 并入 X。
