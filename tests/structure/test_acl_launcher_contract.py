@@ -167,6 +167,15 @@ def test_softmax_forward_uses_launcher_and_backward_remains_present():
     assert "void SoftmaxBackwardOpRunner::executeOp" in source
 
 
+def test_softmax_backward_uses_launcher_and_keeps_dim_query():
+    source = SOFTMAX_SOURCE.read_text()
+    backward = source[source.index("void SoftmaxBackwardOpRunner::executeOp"):]
+    assert "attr->dim" in backward
+    assert "launch(ret, aclnnSoftmaxBackward, true);" in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+
+
 def test_embedding_forward_uses_launcher_and_backward_remains_present():
     source = EMBEDDING_SOURCE.read_text()
     forward = source[source.index("void EmbeddingOpRunner::executeOp"):source.index("EmbeddingBackwardOpRunner::EmbeddingBackwardOpRunner")]
