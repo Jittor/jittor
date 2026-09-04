@@ -310,3 +310,23 @@ Install order is `tensor.base` -> `tensor.methods` -> `numerical`; the numerical
 step may read the transform-depth probe but must not rebind tensor methods. Any
 future `torch.linalg` or backend namespace re-export should point at the same
 object and be recorded as an identity assertion, not a second implementation.
+
+## Version compatibility and exit criteria
+
+Keep the extracted owner compatible with the currently supported Torch shim
+signature (`in_dims`, `out_dims`, and mapped callable metadata). New Torch
+keywords should be rejected with a typed error until a corresponding contract
+is documented; do not silently absorb them in `**kwargs`.
+
+The 7.03 `vmap` item may leave `待领` only when all of the following evidence is
+present in one handoff update:
+
+- AST gate record shows one module-level owner, one install binding, and no
+  forbidden captures;
+- fidelity report is queryable and names the context/backend limitation;
+- simple and nested CPU nodes pass, including explicit `out_dims`;
+- unsupported mapping node observes the matrix in this plan;
+- any CUDA/ACL run is either passing or separately marked environment-skipped.
+
+Until then, keep the board status unchanged and link this plan from the partial
+handoff rather than inferring completion from static checks alone.
