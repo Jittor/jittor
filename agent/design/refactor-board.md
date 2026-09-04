@@ -579,6 +579,12 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `2.19`：`36502b8e`/`fcaa6cce` 将 CUB argsort offsets 长度边界改为 `USER_CHECKop`，并补齐此前 `166010a8` 漏记；累计 92 处、四十五组证据，结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
 - `7.03`：`742f1595` 将 `lerp` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
 
+### 2026-09-04 第五十七波补充证据
+
+- `8.06`：`f34ecce4`/`393a5f70` 将 Conv2d backward 接入共享 launcher，保留三输出 gradient query、descriptor cleanup 与同步策略；静态合同 44 passed，本机无 CANN/NPU，仍待实机。
+- `2.19`：`193d5171`/`22ccddc5` 将 CUB arg-reduce offsets rank 边界改为 `USER_CHECKop`，累计 93 处、四十六组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `7.03`：`25142db7` 将 `softmax` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
+
 ### 2026-09-04 第五十五波补充证据
 
 - `8.06`：`0b149241` 将 Dropout backward 接入共享 launcher，保留 `scale` query 与同步策略；静态合同 42 passed，本机无 CANN/NPU，仍待实机。
