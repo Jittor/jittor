@@ -546,6 +546,9 @@ slice.
 The ACL GroupNorm backward owner uses the shared launcher while retaining its
 output-mask descriptor, group attributes, three-output query, and cleanup.
 
+The ACL MaskedSelect owner uses the shared launcher while retaining its
+two-input mask query and synchronous execution.
+
 The ACL Dropout backward owner uses the shared launcher while retaining its
 scale query and synchronous execution policy.
 

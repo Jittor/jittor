@@ -512,6 +512,15 @@ def test_group_norm_backward_uses_launcher_and_keeps_output_mask():
     assert "syncRun();" not in backward
 
 
+def test_masked_select_uses_launcher_and_keeps_two_inputs():
+    source = (ROOT / "python/jittor/extern/acl/aclops/getitem_op_acl.cc").read_text()
+    masked = source[source.index("void MaskedSelectOpRunner::executeOp"):source.index("IndexOpRunner::IndexOpRunner")]
+    assert masked.count("inputTensors[") >= 2
+    assert "launch(ret, aclnnMaskedSelect, true);" in masked
+    assert "mallocWorkSpace(workspaceSize)" not in masked
+    assert "syncRun();" not in masked
+
+
 def test_rope_forward_uses_launcher_and_backward_remains_present():
     source = ROPE_SOURCE.read_text()
     forward = source[source.index("void RotaryPositionEmbeddingOpRunner::executeOp"):source.index("RotaryPositionEmbeddingGradOpRunner::RotaryPositionEmbeddingGradOpRunner")]
