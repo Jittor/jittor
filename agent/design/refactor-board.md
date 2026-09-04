@@ -59,6 +59,8 @@
 > 第130波 7.05 子项：`75793c04` 将 distributed installer 的 JT_NCCL_*、`use_nccl/use_mpi` 和 `jt.flags.use_cuda` 写入纳入 mutation ledger；`783699cd` 补 child-env 隔离合同 2 passed。仍有其他 installer 写入口未迁移，7.05 保持待领。
 >
 > 第131波 7.05 测试修正：`f8f838b2` 将 distributed 环境结构合同改为断言 `tx.mutate_env/mutate_flag`，避免旧 direct-write 断言误报；结构 2 passed、事务相关 5 passed。7.05 仍待领。
+>
+> 第132波 7.05 修正：`1eb7ec07` 让 `mutate_env` 先规范化字符串再记录 owner 值，修复整数环境变量回滚误报 `TransactionConflict`；事务定向 6 passed。7.05 仍需覆盖全部 installer 写入口。
 
 一行一个任务，与 [refactor-plan.md](refactor-plan.md) 的编号对应。领任务把状态改成「进行中」并写名字，
 完成改成「已合并」并填提交号；推送冲突说明别人先领了。状态只有四种：待领 / 进行中 / 已合并 / 并入 X。
