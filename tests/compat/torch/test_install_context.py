@@ -14,6 +14,7 @@ from jittor.compat.torch.context import (
     InstallStepError,
     ModuleRegistry,
 )
+from jittor.compat.transaction import InstallTransaction
 from jittor.compat.torch.installers import utilities
 
 from _helpers.child_process import run_python_child
@@ -69,6 +70,20 @@ class TestInstallContext(unittest.TestCase):
         )
         self.assertEqual([report.step for report in context.optional_failures()],
                          ["optional.backend"])
+
+    def test_completed_install_conflict_does_not_leak_global_lock(self):
+        root = types.ModuleType("_stage7_completed_lock_conflict")
+        context = InstallContext.for_module(root)
+        context.mark_complete()
+        with mock.patch(
+            "jittor.compat._aliases.torch_namespace_owned", return_value=False
+        ):
+            with self.assertRaisesRegex(RuntimeError, "changed after install"):
+                compat.install(root)
+        acquired = InstallTransaction._lock.acquire(blocking=False)
+        self.assertTrue(acquired)
+        if acquired:
+            InstallTransaction._lock.release()
 
     def test_transformers_npu_probe_rejects_real_pytorch_extension(self):
         def original(check_device=False):

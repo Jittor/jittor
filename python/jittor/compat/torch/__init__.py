@@ -196,7 +196,6 @@ def install(torch, strict=True):
         )
 
     transaction = InstallTransaction("torch.install")
-    transaction.acquire()
     context = InstallContext.for_module(torch, strict=strict)
     if context.complete:
         from .._aliases import torch_namespace_owned
@@ -205,8 +204,9 @@ def install(torch, strict=True):
             raise RuntimeError(
                 "completed Torch compatibility graph was changed after install"
             )
-        transaction.release()
         return torch
+
+    transaction.acquire()
 
     pending = context.state.pop(_NAMESPACE_TRANSACTION, None)
     if pending is not None:
