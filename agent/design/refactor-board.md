@@ -189,6 +189,8 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 （`lived_vars < 50000`）、`test_resnet.py:136/138`（`< 8100` / `< 7000`）。
 余量是实测污染量（33）的两个数量级，暂不动；真要动就同样改成比循环前的基线。
 
+> 8.06 补充证据：`ba8e2621` TruthReduce all/any 统一共享 launcher，静态合同 36 passed；本机无 CANN/NPU，仍待实机验证。
+
 ## 任务
 
 | 编号 | 任务 | 状态 | 负责 | 提交 |
