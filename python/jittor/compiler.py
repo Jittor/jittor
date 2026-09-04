@@ -5,6 +5,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 import subprocess as sp
+import json
 import os
 import re
 import sys
@@ -1616,65 +1617,276 @@ else:
     is_cuda = os.path.basename(nvcc_path) == "nvcc.exe"
 
 # build core
-gen_jit_flags()
-gen_jit_tests()
-op_headers = glob.glob(jittor_path+"/src/ops/**/*op.h", recursive=True)
-jit_src = gen_jit_op_maker(op_headers)
-LOG.vvvv(jit_src)
-with open(os.path.join(cache_path, "gen", "jit_op_maker.h"), 'w', encoding='utf8') as f:
-    f.write(jit_src)
+core_output_name = 'jittor_core' + extension_suffix
+core_output_path = os.path.join(cache_path, core_output_name)
 cc_flags += f' -I\"{cache_path}\" -L\"{cache_path}\" -L\"{jit_utils.cache_path}\" '
-# gen pyjt
-pyjt_gen_src = pyjt_compiler.compile(cache_path, jittor_path)
+cc_flags += f" -l\"jit_utils_core{lib_suffix}\" "
 
-# initialize order:
-# 1. registers
-# 2. generate source
-# 3. op_utils
-# 4. other
-files2 = pyjt_gen_src
-ext_args = 'c[cu]' if has_cuda or has_rocm else 'cc'
-files4 = glob.glob(jittor_path+"/src/**/*."+ext_args, recursive=True)
-files4 = [ f[len(jittor_path)+1:] for f in files4 ]
-# files4 = run_cmd('find -L src | grep '+grep_args, jittor_path).splitlines()
-at_beginning = [
-    "src/ops/op_utils.cc",
-    "src/ops/op_register.cc",
-    "src/init.cc",
-    "src/event_queue.cc",
-    "src/mem/allocator/sfrl_allocator.cc",
-    "src/mem/allocator.cc",
-    "src/misc/nano_string.cc",
-]
-at_last = [
-    "src/profiler/profiler.cc",
-    "src/executor.cc",
-]
-if os.name == 'nt':
-    at_beginning = [ x.replace('/','\\') for x in at_beginning ]
-    at_last = [ x.replace('/','\\') for x in at_last ]
-for i in range(len(at_beginning)):
-    files4.remove(at_beginning[i])
-    files4.insert(i, at_beginning[i])
-for v in at_last:
-    files4.remove(v)
-    files4.append(v)
-registers = [ name for name in files4 if "register" in name ]
-for name in registers: files4.remove(name)
-files = registers + files2 + files4
-files += extra_core_files
-for file in jit_utils_core_files:
-    files.remove(file)
-LOG.vv("compile order:", files)
+#: The flags the core itself is compiled with, frozen here.
+#:
+#: ``cc_flags`` keeps growing after this point -- ``-ljittor_core`` goes on as
+#: soon as the core is linked, and it is what JIT ops are compiled with. So it
+#: cannot be what the stamp records: read again after the import it no longer
+#: matches what the build used, every check reports "stale", and the whole
+#: point of the stamp is lost. That is not a hypothetical; it is what the
+#: first version of this did.
+core_cc_flags = cc_flags
 
-# Everything a build needs, checked once and reported together -- but only
-# when there is actually a build to do. These preconditions used to be checked
-# in whatever order the module-level code ran in, so a user missing three of
-# them found out one `pip install` at a time, paying a cold build between each.
-if not os.path.isfile(os.path.join(cache_path,
-                                   'jittor_core'+extension_suffix)):
-    from jittor_utils import preflight as _preflight
-    _preflight.assert_ready()
+#: Source files the core was built from, in compile order. Filled in by
+#: :func:`build_core` -- from the build itself, or from the stamp it left
+#: behind when there was nothing to build.
+files = []
+
+#: Stamp version. Bump it when the meaning of a recorded field changes, so an
+#: older stamp is treated as "no stamp" instead of being misread as current.
+CORE_BUILD_STAMP_VERSION = 1
+
+
+def core_build_stamp_path():
+    return core_output_path + ".build_stamp.json"
+
+
+def core_source_signature():
+    """``{relative path: [mtime_ns, size]}`` for every core source file.
+
+    A walk of ``src/`` and ``extern/`` rather than the individual globs the
+    generators use, so that a source or header that did not exist at the last
+    build shows up too -- a dependency list recorded from that build can only
+    name files that were already there.
+
+    External headers (the toolkit's, Python's, the standard library's) are
+    deliberately absent. ``cache_path`` is already partitioned by compiler
+    version, Python version and cuda key, so a toolchain change lands in a
+    different cache directory and gets a cold build rather than a stale one.
+    Costs about 3 ms for ~600 files, which is what makes it affordable on
+    every import.
+    """
+    signature = {}
+    for top in ("src", "extern"):
+        root_dir = os.path.join(jittor_path, top)
+        for directory, _, names in os.walk(root_dir):
+            for name in names:
+                path = os.path.join(directory, name)
+                try:
+                    info = os.stat(path)
+                except OSError:
+                    continue
+                signature[os.path.relpath(path, jittor_path)] = \
+                    [info.st_mtime_ns, info.st_size]
+    return signature
+
+
+def core_build_ingredients():
+    """Everything besides the sources that the core's compile commands use.
+
+    Kept as the ingredients rather than the assembled command lines because
+    assembling those needs the generated pyjt sources, which is one of the
+    steps a current build gets to skip.
+    """
+    return {
+        "version": __version__,
+        "cc_path": cc_path,
+        "cc_type": cc_type,
+        "cc_flags": core_cc_flags,
+        "opt_flags": opt_flags,
+        "lto_flags": lto_flags,
+        "nvcc_path": nvcc_path,
+        "nvcc_flags": os.environ.get("nvcc_flags", ""),
+        "extension_suffix": extension_suffix,
+        "lib_suffix": lib_suffix,
+        "has_cuda": int(bool(has_cuda)),
+        "has_rocm": int(bool(has_rocm)),
+        "is_cuda": int(bool(is_cuda)),
+        "extra_core_files": list(extra_core_files),
+        "jit_utils_core_files": list(jit_utils_core_files),
+        "os_name": os.name,
+    }
+
+
+def _core_output_signature():
+    try:
+        info = os.stat(core_output_path)
+    except OSError:
+        return None
+    return [info.st_mtime_ns, info.st_size]
+
+
+def core_build_is_current(signature=None, ingredients=None):
+    """True when ``jittor_core`` is already built from exactly these inputs.
+
+    The point of asking is that finding out the expensive way costs about
+    0.9 s of every warm import: regenerating headers that come out
+    byte-identical, then handing all ~180 compile commands to a 16-process
+    pool so each worker can hash a dependency closure and report that there
+    is nothing to do.
+
+    Deliberately conservative in one direction only. A mismatch means "build",
+    and building re-runs the full per-file check that was always there, so a
+    stamp that is wrong about being stale costs time and nothing else. The one
+    way to be wrong in the other direction is to edit a file without changing
+    either its size or its nanosecond mtime, which no editor, compiler or
+    ``git checkout`` does.
+    """
+    stamp = None
+    try:
+        with open(core_build_stamp_path(), "r", encoding="utf8") as handle:
+            stamp = json.load(handle)
+    except (OSError, ValueError):
+        return False
+    if not isinstance(stamp, dict):
+        return False
+    if stamp.get("stamp_version") != CORE_BUILD_STAMP_VERSION:
+        return False
+    if stamp.get("output") != _core_output_signature():
+        return False
+    if stamp.get("ingredients") != (ingredients or core_build_ingredients()):
+        return False
+    if stamp.get("sources") != (signature or core_source_signature()):
+        return False
+    if not isinstance(stamp.get("files"), list):
+        return False
+    return stamp
+
+
+def _write_core_build_stamp(signature, ingredients, compile_order):
+    """Record what the core was just built from.
+
+    Written to a temporary name and renamed into place: a reader that arrives
+    mid-write must see either the old stamp or the new one, never a truncated
+    file that json would reject and that would silently cost the next import
+    a full rebuild.
+    """
+    stamp = {
+        "stamp_version": CORE_BUILD_STAMP_VERSION,
+        "output": _core_output_signature(),
+        "ingredients": ingredients,
+        "sources": signature,
+        "files": list(compile_order),
+    }
+    if stamp["output"] is None:
+        return
+    temporary = core_build_stamp_path() + ".tmp." + str(os.getpid())
+    try:
+        with open(temporary, "w", encoding="utf8") as handle:
+            json.dump(stamp, handle)
+        os.replace(temporary, core_build_stamp_path())
+    except OSError as error:
+        # A read-only or full cache directory must not stop an import that
+        # otherwise succeeded; the cost is that the next import checks the
+        # expensive way again.
+        LOG.v("could not write core build stamp: %s" % error)
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+
+
+def build_core(force=False):
+    """Generate the core's sources and compile ``jittor_core``.
+
+    The single entry point for turning ``src/**`` into the core extension:
+    the flag and test scanners, the op-maker header, the pyjt bindings, the
+    compile order, and the compile itself. It used to be nine hundred lines
+    of module body with no name, which is why "does importing jittor build
+    anything" had no answer short of reading all of it.
+
+    Returns True if it built, False if the stamp said the build was already
+    current -- in which case nothing was generated, no compiler ran, and the
+    only cost was stat()ing the source tree.
+    """
+    global files
+    signature = core_source_signature()
+    ingredients = core_build_ingredients()
+
+    if not force:
+        stamp = core_build_is_current(signature, ingredients)
+        if stamp:
+            files = stamp["files"]
+            LOG.v("core build is current, skipping generation and compile")
+            return False
+
+    gen_jit_flags()
+    gen_jit_tests()
+    op_headers = glob.glob(jittor_path+"/src/ops/**/*op.h", recursive=True)
+    jit_src = gen_jit_op_maker(op_headers)
+    LOG.vvvv(jit_src)
+    with open(os.path.join(cache_path, "gen", "jit_op_maker.h"), 'w', encoding='utf8') as f:
+        f.write(jit_src)
+    # gen pyjt
+    pyjt_gen_src = pyjt_compiler.compile(cache_path, jittor_path)
+
+    # initialize order:
+    # 1. registers
+    # 2. generate source
+    # 3. op_utils
+    # 4. other
+    files2 = pyjt_gen_src
+    ext_args = 'c[cu]' if has_cuda or has_rocm else 'cc'
+    files4 = glob.glob(jittor_path+"/src/**/*."+ext_args, recursive=True)
+    files4 = [ f[len(jittor_path)+1:] for f in files4 ]
+    at_beginning = [
+        "src/ops/op_utils.cc",
+        "src/ops/op_register.cc",
+        "src/init.cc",
+        "src/event_queue.cc",
+        "src/mem/allocator/sfrl_allocator.cc",
+        "src/mem/allocator.cc",
+        "src/misc/nano_string.cc",
+    ]
+    at_last = [
+        "src/profiler/profiler.cc",
+        "src/executor.cc",
+    ]
+    if os.name == 'nt':
+        at_beginning = [ x.replace('/','\\') for x in at_beginning ]
+        at_last = [ x.replace('/','\\') for x in at_last ]
+    for i in range(len(at_beginning)):
+        files4.remove(at_beginning[i])
+        files4.insert(i, at_beginning[i])
+    for v in at_last:
+        files4.remove(v)
+        files4.append(v)
+    registers = [ name for name in files4 if "register" in name ]
+    for name in registers: files4.remove(name)
+    files = registers + files2 + files4
+    files += extra_core_files
+    for file in jit_utils_core_files:
+        files.remove(file)
+    LOG.vv("compile order:", files)
+
+    # Everything a build needs, checked once and reported together -- but only
+    # when there is actually a build to do. These preconditions used to be
+    # checked in whatever order the module-level code ran in, so a user
+    # missing three of them found out one `pip install` at a time, paying a
+    # cold build between each.
+    if not os.path.isfile(core_output_path):
+        from jittor_utils import preflight as _preflight
+        _preflight.assert_ready()
+
+    try:
+        compile(cc_path, core_cc_flags+opt_flags, files, core_output_name)
+    except RuntimeError as error:
+        # A build that fails here usually fails for a reason the preconditions
+        # above can name. Say all of them, rather than leaving the user with a
+        # compiler diagnostic and nothing to act on.
+        from jittor_utils import preflight as _preflight
+        try:
+            _report = _preflight.format_report(_preflight.run_all(),
+                                               only_problems=True)
+        except Exception:
+            raise error
+        if _report and _report != "all build preconditions satisfied":
+            raise RuntimeError("%s\n\nBuild preconditions on this machine:\n%s"
+                               % (error, _report))
+        raise
+
+    # After the compile, so the stamp records the product that exists now. The
+    # signature is the pre-build one on purpose: it is the state the sources
+    # were in when this build was decided on, and a source edited *during* the
+    # build must leave the stamp stale rather than claim to cover the edit.
+    _write_core_build_stamp(signature, ingredients, files)
+    return True
+
 
 if platform.system() == 'Linux':
     libname = {"clang":"omp", "icc":"iomp5", "g++":"gomp"}[cc_type]
@@ -1693,23 +1905,7 @@ if platform.system() == 'Linux':
 # certifi instead; nothing jittor does justifies turning it off for the
 # application it is imported into.
 
-cc_flags += f" -l\"jit_utils_core{lib_suffix}\" "
-try:
-    compile(cc_path, cc_flags+opt_flags, files, 'jittor_core'+extension_suffix)
-except RuntimeError as error:
-    # A build that fails here usually fails for a reason the preconditions
-    # above can name. Say all of them, rather than leaving the user with a
-    # compiler diagnostic and nothing to act on.
-    from jittor_utils import preflight as _preflight
-    try:
-        _report = _preflight.format_report(_preflight.run_all(),
-                                           only_problems=True)
-    except Exception:
-        raise error
-    if _report and _report != "all build preconditions satisfied":
-        raise RuntimeError("%s\n\nBuild preconditions on this machine:\n%s"
-                           % (error, _report))
-    raise
+build_core()
 cc_flags += f" -l\"jittor_core{lib_suffix}\" "
 
 with jit_utils.import_scope(import_flags):

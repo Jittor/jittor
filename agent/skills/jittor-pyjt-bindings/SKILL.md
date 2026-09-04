@@ -75,7 +75,13 @@ env["PYTHONPATH"] = os.pathsep.join(
 
 ## 2. 找到当前生效的 gen/ 目录
 
-`pyjt_compiler.compile()` 每次 import 都无条件重写 `gen/*.cc`，所以不用手工删缓存；
+`pyjt_compiler.compile()` 会重写 `gen/*.cc`，所以改了带 `@pyjt` 的头之后不用手工删缓存
+——**但从 9.01 起它不再是每次 import 都跑**：`compiler.build_core()` 先看构建戳
+（`<jittor_core...>.build_stamp.json`），源码树的 mtime/size 与编译要素都没变就整步跳过，
+包括 pyjt 生成。改了源码它必然重跑（戳会失配）；**手工删掉 `gen/` 里的文件却不动源码，
+它不会重新生成**——戳只看源码与产物，不看中间产物。这种情况下用
+`jt.compiler.build_core(force=True)` 或者删掉那个 `.build_stamp.json`。
+
 真正的坑是缓存里同时存在多个 `gen/`，很容易 grep 到过期的那个。路径形如：
 
 ```
