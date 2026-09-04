@@ -120,6 +120,74 @@ python <你的脚本>.py
 `bfloat16` 不能用 numpy 造（`np.dtype("bfloat16")` 不存在）：
 用 `jt.array(x.astype("float32")).cast("bfloat16")`，读回来前先 `.float32()`。
 
+## 把集合通信挪到侧流之后：跑绿一次不算数
+
+把 NCCL 调用的 stream 实参从 `0` 换成 communication side stream，是**把一个正确性问题
+换成一个竞态**。竞态在小规模、低负载、单次运行下大概率不复现——**一次全绿是这类改动
+最常见的假通过**。要三条一起才算验收，缺任何一条这次验证都不成立。
+
+### 1. 先证明它真的不在默认流上
+
+```python
+handle = jt.core._cuda_stream_handle(1, jt.current_device())   # 1 = communication
+assert handle != 0
+```
+
+**为什么这条必须写在最前面**：如果算子其实还在流 0 上，下面所有顺序断言都会**免费通过**
+（同一条流天然有序）。少了这条，后两条断言证明不了任何东西。
+
+### 2. 证明 event 依赖真的建立了，而不是靠时序侥幸
+
+`cuda_side_stream_wait_default` / `cuda_default_stream_wait_side` 各自会把
+`_cuda_stream_dependency_count(kind, device)` 加一，所以**一次集合通信的增量必须正好是 2**
+（进去一条 compute→comm，出来一条 comm→compute）。
+
+```python
+before = jt.core._cuda_stream_dependency_count(1, jt.current_device())
+y = nccl_ops.nccl_all_reduce(x); y.numpy()
+assert jt.core._cuda_stream_dependency_count(1, jt.current_device()) - before == 2
+```
+
+一个仍然硬编码流 0 的算子会让这个增量是 **0**。这条抓的是「事件压根没记」，
+数值断言抓不到它——数值可能因为负载轻而恰好对。
+
+### 3. 用「立刻生产、立刻消费」的循环压竞态
+
+判据是**默认流算出输入 → 集合通信 → 默认流立刻消费输出**，跑几百次。三个细节都不能省：
+
+- **输入要现算**，不能是提前 `jt.array` 好的常量。常量在通信前早就写完了，
+  漏掉 compute→comm 那条依赖也测不出来。
+- **不要每次迭代读回结果**。每次 `.numpy()` 都是一次主机同步，把窗口关掉了；而且
+  buffer 不被释放，就测不到「块被还给分配器又发出去，而通信流还在用它」这半个竞态。
+  做法：每次迭代归约成一个标量误差存起来，最后 `jt.sync_all(True)` 再一起查。
+  200 次迭代的常驻内存只有几百字节，窗口却是全开的。
+- **期望值同时依赖 rank 和迭代号**。只依赖 rank 的话，读到上一轮的残留数据照样是对的数。
+
+```python
+seed = jt.array((np.arange(N) % 97).astype("float32"))
+errors = []
+for step in range(200):
+    produced = (seed + step) * (rank + 1)          # 默认流现算
+    reduced = nccl_ops.nccl_all_reduce(produced)
+    expected = (seed + step) * (world * (world + 1) // 2)
+    errors.append((reduced - expected).abs().max())  # 默认流立刻消费
+jt.sync_all(True)
+assert max(float(e.numpy()) for e in errors) == 0.0
+```
+
+### 4. 反证：把依赖删掉，它必须变红
+
+**这一步不能跳。** 上面三条写完之后，临时把 `nccl_stream_begin`/`nccl_stream_end`
+（`nccl/inc/nccl_wrapper.h`）里的两次 event 调用删掉，**算子仍留在 side stream 上**，
+重跑第 3 条。
+
+**判据**：第 3 条报出一个非零的 `worst`（实测 4 MB × 200 次、两张 4090 上是 `885.0`），
+且**两个 rank 都红**。如果它还是绿的，说明你的窗口不够宽（张量太小、迭代太少、
+或者你每轮都同步了），断言等于没写。改完记得把 header 还原并确认 `git diff` 干净。
+
+注意「修前」不等于「删掉 event」：改动前的状态是 stream 0，那是**有序的**，
+所以拿改动前的代码跑第 3 条会绿。这类改动的诚实反证是「侧流 + 无事件」。
+
 ## 单卡就能复现「一个 rank 起不来，其余全挂」
 
 多卡失败模式里最贵的一类不需要多卡去复现：**等一个永远不会到的 peer**。

@@ -83,6 +83,15 @@
 | FSDP2 分片策略由硬编码经验常数决定 | `fsdp2/common.py:114-123`：`world_size<=2 or total_numel<=1_000_000` | 在 3 卡或 1.1M 参数处行为突变，常数来自一次特定实验 | 变成可配置策略 | 次要 |
 | 每个 rank 用独立 JIT 缓存目录 | `distributed/launch.py:90` `env["cache_name"] = f"{backend}{rank}"` | N 卡任务把整套 kernel 编译 N 次，磁盘与首步时间乘 N | 共享缓存加文件锁，或 rank 0 预热 | 主要 |
 
+已修：8.02「所有集合通信硬编码默认流（最后一个参数 0）」这一条。改流本身由 4.08 的
+`0dfcb3dd` 落地（五个算子的 stream 实参从字面量 0 换成
+`nccl_stream_begin()`/`nccl_stream_end()`，即每设备 communication side stream 加进出两条
+event 依赖）；本任务补上它缺的那一半——两卡实测。`tests/distributed/test_nccl_comm_stream.py`
+对五个集合通信各做一次 rank 相关数值对拍并断言 event 依赖计数各 +2，再用 200 次
+「默认流算出输入 → 集合通信 → 默认流立刻消费输出」的循环覆盖竞态。**反证做过**：把两条
+event 依赖临时删掉（算子仍在 side stream 上）时该循环报 `worst=885.0 != 0.0`，两个 rank
+都红，所以这条断言不是恒绿的。GroupStart/End 桶化仍待做，本条只覆盖「不再是默认流」。
+
 ## ACL 三件套：样板量化
 一个 ACL 算子由三部分组成：`*_op_acl.cc` 的 OpRunner、`*_op.py` 的 jt.Function、
 以及 `_code.py` 在**每次调用时**用 Python f-string 拼出的一段 C++ 源码（`aclops/_code.py:47-59`）。
