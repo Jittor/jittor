@@ -9,6 +9,8 @@ package object through the central compatibility alias registry.
 from __future__ import absolute_import
 
 import sys
+import os
+import builtins
 
 from .._aliases import _torch_namespace as _torch_namespace_snapshot
 from .context import InstallContext, InstallReport, InstallStepError, ModuleRegistry
@@ -186,6 +188,36 @@ def _restore_namespace(snapshot):
     sys.modules.update(snapshot)
 
 
+_FLAG_SNAPSHOT_NAMES = ("amp_reg", "use_cuda", "device_id", "no_grad",
+                        "cuda_allow_tf32", "cuda_allow_cudnn_tf32")
+
+
+def _global_snapshot(torch):
+    flags = getattr(torch, "flags", None)
+    flag_values = {
+        name: getattr(flags, name)
+        for name in _FLAG_SNAPSHOT_NAMES
+        if flags is not None and hasattr(flags, name)
+    }
+    return {
+        "environ": dict(os.environ),
+        "meta_path": list(sys.meta_path),
+        "import": builtins.__import__,
+        "flags": flag_values,
+    }
+
+
+def _restore_global_snapshot(torch, snapshot):
+    os.environ.clear()
+    os.environ.update(snapshot["environ"])
+    sys.meta_path[:] = snapshot["meta_path"]
+    builtins.__import__ = snapshot["import"]
+    flags = getattr(torch, "flags", None)
+    if flags is not None:
+        for name, value in snapshot["flags"].items():
+            setattr(flags, name, value)
+
+
 def install(torch, strict=True):
     """Install the Torch surface once and return the canonical Jittor module."""
 
@@ -223,6 +255,8 @@ def install(torch, strict=True):
         before = _torch_namespace_snapshot()
 
     transaction.record_undo(lambda: _restore_namespace(before))
+    global_before = _global_snapshot(torch)
+    transaction.record_undo(lambda: _restore_global_snapshot(torch, global_before))
 
     try:
         for step, installer in _REQUIRED_STEPS:
