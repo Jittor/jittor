@@ -371,3 +371,28 @@ nested bool mask expected shape = (2, 3, 2)
 The test should record the seed and fixture name in its evidence line. A change
 to these values requires updating the expected NumPy loop output and reviewing
 the unsupported matrix; do not silently regenerate fixtures.
+
+## CI/static invocation
+
+The fast gate can run without JIT using the repository's structural test runner:
+
+```text
+python -m pytest -q tests/structure/test_vmap_owner_contract.py
+```
+
+That node should emit the evidence schema below and exit non-zero on any unknown
+field or failed assertion:
+
+```text
+{
+  "owner": "jittor.compat.torch.installers.numerical.vmap",
+  "module_identity": true,
+  "install_bindings": 1,
+  "forbidden_captures": false,
+  "unsupported_guards": true,
+  "dynamic_nodes": "deferred"
+}
+```
+
+The dynamic CPU nodes remain a separate invocation after a compatible cache is
+available; their results must reference the same owner commit and fixture seed.
