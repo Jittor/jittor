@@ -1901,12 +1901,42 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIn("int64", record.detail)
         self.assertIn("device", record.detail)
 
+    def test_native_owner_family_is_re_exported_not_wrapped(self):
+        """These three keep the *native* object as the stable one.
+
+        Wrapping them produced a second function object for the same API, so
+        ``torch.repeat_interleave is jittor.repeat_interleave`` stopped holding
+        and the object no longer pickled back to its ``jittor.misc`` owner --
+        two structure gates were red on exactly that.
+        """
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        owners = {
+            "outer": "jittor._runtime.core_api",
+            "tensordot": "jittor.nn.functional.tensor",
+            "repeat_interleave": "jittor.misc.tensor_ops",
+        }
+        for name, owner_module in owners.items():
+            with self.subTest(name=name):
+                implementation = getattr(numerical, name)
+                self.assertTrue(callable(implementation))
+                self.assertIs(getattr(torch, name), implementation)
+                self.assertEqual(implementation.__name__, name)
+                self.assertEqual(implementation.__module__, owner_module)
+                self.assertIs(
+                    getattr(importlib.import_module(owner_module), name),
+                    implementation)
+
+    def test_repeat_interleave_stays_the_misc_owner_under_torch_mode(self):
+        misc = importlib.import_module("jittor.misc")
+        self.assertIs(torch.repeat_interleave, misc.repeat_interleave)
+        self.assertIs(torch.Var.repeat_interleave, misc.repeat_interleave)
+
     def test_outer_is_a_stable_module_level_object(self):
         numerical = importlib.import_module(
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.outer))
         self.assertIs(torch.outer, numerical.outer)
-        self.assertEqual(numerical.outer.__module__, numerical.__name__)
         self.assertEqual(numerical.outer.__name__, "outer")
 
     def test_outer_fidelity_is_queryable_and_conservative(self):
@@ -1942,7 +1972,6 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.tensordot))
         self.assertIs(torch.tensordot, numerical.tensordot)
-        self.assertEqual(numerical.tensordot.__module__, numerical.__name__)
         self.assertEqual(numerical.tensordot.__name__, "tensordot")
 
     def test_tensordot_fidelity_is_queryable_and_conservative(self):
@@ -1960,7 +1989,6 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             "jittor.compat.torch.installers.numerical")
         self.assertTrue(callable(numerical.repeat_interleave))
         self.assertIs(torch.repeat_interleave, numerical.repeat_interleave)
-        self.assertEqual(numerical.repeat_interleave.__module__, numerical.__name__)
         self.assertEqual(numerical.repeat_interleave.__name__, "repeat_interleave")
 
     def test_repeat_interleave_fidelity_is_queryable_and_conservative(self):
