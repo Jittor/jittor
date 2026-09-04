@@ -118,6 +118,10 @@ MIGRATED_CUBLAS_ACC_MATMUL_DTYPE_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cublas/ops/cublas_acc_matmul_op.cc": 2,
 }
 
+MIGRATED_CUBLAS_ACC_MATMUL_RANK_USER_BOUNDARIES = {
+    "python/jittor/extern/cuda/cublas/ops/cublas_acc_matmul_op.cc": 2,
+}
+
 MIGRATED_CUSPARSE_SPMMCSR_DTYPE_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcsr_op.cc": 2,
 }
@@ -434,12 +438,26 @@ def test_cublas_batched_matmul_rank_is_a_catchable_user_error():
 
 def test_cublas_acc_matmul_dtype_user_boundary_migration_is_explicit_and_bounded():
     source = (ROOT / "python/jittor/extern/cuda/cublas/ops/cublas_acc_matmul_op.cc").read_text()
-    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    actual = source.count("USER_CHECK(")
     assert actual == MIGRATED_CUBLAS_ACC_MATMUL_DTYPE_USER_BOUNDARIES[
         "python/jittor/extern/cuda/cublas/ops/cublas_acc_matmul_op.cc"]
     negative = (ROOT / "tests/backends/cuda/test_cublas_matmul_grad.py").read_text()
     assert "test_acc_non_float_inputs_are_rejected_clearly" in negative
     assert "test_acc_mixed_input_dtypes_are_rejected_clearly" in negative
+
+
+def test_cublas_acc_matmul_rank_is_a_catchable_user_error():
+    source = (ROOT / "python/jittor/extern/cuda/cublas/ops/cublas_acc_matmul_op.cc").read_text()
+    markers = (
+        "USER_CHECKop(a->shape.size(),==,2)",
+        "USER_CHECKop(b->shape.size(),==,2)",
+    )
+    assert all(marker in source for marker in markers)
+    assert "ASSERTop(a->shape.size(),==,2)" not in source
+    assert "ASSERTop(b->shape.size(),==,2)" not in source
+    actual = sum(source.count(marker) for marker in markers)
+    assert actual == MIGRATED_CUBLAS_ACC_MATMUL_RANK_USER_BOUNDARIES[
+        "python/jittor/extern/cuda/cublas/ops/cublas_acc_matmul_op.cc"]
 
 
 def test_cusparse_spmmcsr_dtype_user_boundary_migration_is_explicit_and_bounded():

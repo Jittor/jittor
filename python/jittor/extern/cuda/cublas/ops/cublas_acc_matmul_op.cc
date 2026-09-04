@@ -37,8 +37,10 @@ CublasAccMatmulOp::CublasAccMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b,
 }
 
 void CublasAccMatmulOp::infer_shape() {
-    ASSERTop(a->shape.size(),==,2);
-    ASSERTop(b->shape.size(),==,2);
+    USER_CHECKop(a->shape.size(),==,2)
+        << "cublas acc matmul requires rank-2 input a, got rank " << a->shape.size();
+    USER_CHECKop(b->shape.size(),==,2)
+        << "cublas acc matmul requires rank-2 input b, got rank " << b->shape.size();
     int n = a->shape[0], m = a->shape[1];
     int m_ = b->shape[0], k = b->shape[1];
     if (trans_a) {
