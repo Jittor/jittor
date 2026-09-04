@@ -610,3 +610,4 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 ### 2026-09-04 第五十九波补充证据
 
 - `8.06`：`2d8f415b` 将 LeakyReLU backward 接入共享 launcher，保留 negativeSlope、selfIsResult、scalar cleanup 与同步策略；静态合同 46 passed，本机无 CANN/NPU，仍待实机。
+- `8.06`：`c33196b3` 将 SiLU backward 接入共享 launcher，保留同步策略；静态合同 47 passed，本机无 CANN/NPU，仍待实机。
