@@ -64,9 +64,13 @@ VarPtr CublasBatchedMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 void CublasBatchedMatmulOp::infer_shape(){
     auto adim = a->shape.size();
     auto bdim = b->shape.size();
-    ASSERTop(adim,>=,3);
-    ASSERTop(bdim,>=,3);
-    ASSERTop(adim,==,bdim);
+    USER_CHECKop(adim,>=,3)
+        << "cublas batched matmul requires rank >= 3 for input a, got " << adim;
+    USER_CHECKop(bdim,>=,3)
+        << "cublas batched matmul requires rank >= 3 for input b, got " << bdim;
+    USER_CHECKop(adim,==,bdim)
+        << "cublas batched matmul inputs must have the same rank, got " << adim
+        << " and " << bdim;
 
     auto n = a->shape[adim-2], m = a->shape[adim-1];
     auto m_ = b->shape[adim-2], k = b->shape[adim-1];

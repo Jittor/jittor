@@ -110,6 +110,10 @@ MIGRATED_CUBLAS_BATCHED_MATMUL_DTYPE_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cublas/ops/cublas_batched_matmul_op.cc": 2,
 }
 
+MIGRATED_CUBLAS_BATCHED_MATMUL_RANK_USER_BOUNDARIES = {
+    "python/jittor/extern/cuda/cublas/ops/cublas_batched_matmul_op.cc": 3,
+}
+
 MIGRATED_CUBLAS_ACC_MATMUL_DTYPE_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cublas/ops/cublas_acc_matmul_op.cc": 2,
 }
@@ -400,12 +404,32 @@ def test_cublas_matmul_inner_dimension_is_a_catchable_user_error():
 
 def test_cublas_batched_matmul_dtype_user_boundary_migration_is_explicit_and_bounded():
     source = (ROOT / "python/jittor/extern/cuda/cublas/ops/cublas_batched_matmul_op.cc").read_text()
-    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    # Rank checks have a separate ledger below; count only the two constructor
+    # dtype checks here to keep the cohorts independent.
+    actual = source.count("USER_CHECK(")
     assert actual == MIGRATED_CUBLAS_BATCHED_MATMUL_DTYPE_USER_BOUNDARIES[
         "python/jittor/extern/cuda/cublas/ops/cublas_batched_matmul_op.cc"]
     negative = (ROOT / "tests/backends/cuda/test_cublas_matmul_grad.py").read_text()
     assert "test_batched_non_float_inputs_are_rejected_clearly" in negative
     assert "test_batched_mixed_input_dtypes_are_rejected_clearly" in negative
+
+
+def test_cublas_batched_matmul_rank_is_a_catchable_user_error():
+    source = (ROOT / "python/jittor/extern/cuda/cublas/ops/cublas_batched_matmul_op.cc").read_text()
+    actual = source.count("USER_CHECKop(adim,>=,3)")
+    actual += source.count("USER_CHECKop(bdim,>=,3)")
+    actual += source.count("USER_CHECKop(adim,==,bdim)")
+    assert actual == MIGRATED_CUBLAS_BATCHED_MATMUL_RANK_USER_BOUNDARIES[
+        "python/jittor/extern/cuda/cublas/ops/cublas_batched_matmul_op.cc"]
+    markers = (
+        "USER_CHECKop(adim,>=,3)",
+        "USER_CHECKop(bdim,>=,3)",
+        "USER_CHECKop(adim,==,bdim)",
+    )
+    assert all(marker in source for marker in markers)
+    assert "ASSERTop(adim,>=,3)" not in source
+    assert "ASSERTop(bdim,>=,3)" not in source
+    assert "ASSERTop(adim,==,bdim)" not in source
 
 
 def test_cublas_acc_matmul_dtype_user_boundary_migration_is_explicit_and_bounded():
