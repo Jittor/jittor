@@ -201,3 +201,24 @@ CUDA 全量归约的 CUB 快路径把 `Var.sum`/`Var.mean` 猴补成两级 CUB �
 这两条合起来解释了 UNet 剩余差距里 kernel 侧的大部分：卷积改走 backend 计划缓存后
 Jittor 的卷积与 GEMM 已比 PyTorch 快 2.57ms，而逐元素与归约合计慢 3.44ms。
 
+**上面这段的角色分解已过期（2026-09-04 重测，`c0f3420a`）。** 同一个负载
+（`large_diffusers_unet2d` 一步前向加反向，RTX 4090、TF32、独占卡）用 nsys 与 Jittor
+profiler 两法互校，整步 Jittor 23.02 / 22.03 ms、同机 PyTorch 2.12.1 为 22.41 ms，
+两边总量已经在 3% 以内，方向也与原文相反：
+
+| 角色 | Jittor（nsys / profiler） | PyTorch 对应 |
+| --- | --- | --- |
+| 卷积与 GEMM | 11.65 + 3.05 / 11.86 + 2.10 ms | 18.17 ms（Jittor 仍快，但**快 3.5 ms 不是 2.57 ms**） |
+| 逐元素（代码生成的融合 kernel） | 3.37 / 3.29 ms | 2.20 + 0.84 = 3.04 ms（慢 0.3 ms） |
+| **归约** | **0.57 / 0.59 ms** | **1.20 ms（Jittor 已快一倍以上）** |
+| 手写 CUDA（`nn/backends` 的 GroupNorm 等） | 4.13 / 3.58 ms | 计入上面两栏 |
+
+即「逐元素与归约合计慢 3.44ms」今天变成「逐元素慢 0.3ms、归约快 0.6ms」。
+归约那一侧是 `WarpReducePass`（`9eb696d9`）之后的结果，本节上文的判断因此闭合。
+逐元素那一侧的剩余差距**不在代码生成里**：实测可达 copy 带宽 916.7 GB/s，逐元素类
+跑到 1086 GB/s、屋顶线 ratio 0.84（超出部分由 72 MB L2 承担），49 种融合 kernel 的
+正向超出合计只有约 0.59 ms，其中 0.55 ms 是 torch shim 对「float32 张量 ÷ Python float」
+故意加宽到 float64 造成的双精度除法（sm_89 上 FP64 是 FP32 的 1/64）。
+量法、屋顶线口径与两个会让数字差两倍的坑，都在
+`agent/skills/cuda-elementwise-bandwidth-roofline/`。
+
