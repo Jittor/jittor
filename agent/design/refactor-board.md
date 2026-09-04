@@ -706,6 +706,12 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `2.19`：`6727dd57`/`eb4db9b4` 将 cuDNN conv backward-x 权重 rank 边界改为 `USER_CHECKop`，累计 107 处、六十组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
 - `7.03`：`abaa242a`、`afa756bc` 连续补充 vmap 设计契约与 unsupported AST 静态门禁；仅设计/门禁前置，未修改 runtime，未宣称实现完成。
 
+### 2026-09-04 第七十二波补充证据
+
+- `8.06`：`ff26ab02`/`7457382d` 将 StridedSliceAssignV2 接入共享 launcher，保留 gradient memset 分支与 slice descriptor handling；静态合同 60 passed，本机无 CANN/NPU，仍待实机。
+- `2.19`：`92a66390`/`5e720411` 将 cuDNN conv backward-x dy rank 边界改为 `USER_CHECKop`，累计 108 处、六十一组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `7.03`：`41236df4`、`5a8b0115` 补充 vmap context 夹具契约、提取顺序、绑定与回滚步骤；仅设计前置，未修改 runtime。
+
 ### 2026-09-04 第六十七波补充证据
 
 - `8.06`：`230658fb`/`c4f0447c` 将 Avgpool backward 接入共享 launcher，保留 countIncludePad/divisorOverride、descriptor cleanup 与同步策略；静态合同 55 passed，本机无 CANN/NPU，仍待实机。
