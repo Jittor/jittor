@@ -15,6 +15,8 @@
 > 第108波增量：`55a1f481` 完成 cuBLAS matmul 输入 b rank 用户错误 cohort（结构 4 passed）；`9954b4ed` 完成 `tensor_split`/`take` numerical owner cohort（CPU 2 passed）；`296e0837` 补充 ACL 属性 data/descriptor/type-erasure 迁移顺序与 910B3 验收合同（静态合同 1 passed）。聚合任务和硬件验收状态不变。
 >
 > 第109波增量：`354ec6f1` 完成 cuTT transpose 标量输入用户错误 cohort（结构 3 passed）；`aa3ca532` 完成 `index_copy` numerical owner cohort（CPU 2 passed）。ACL `softmax.dim`/`triu.diagonal` data-channel 迁移仍需统一 schema、C++ 解码和 cache-key 协同，未做半改。
+>
+> 第110波增量：`26ee6bee` 完成 cuDNN RNN descriptor mode 用户错误 cohort（结构 3 passed）；`d3e33b0e` 完成 `index_put` numerical owner cohort（CPU 2 passed）。ACL data-channel C++ 解码入口仍缺统一实现，未做半改；0.15/10.19 验收状态不变。
 
 一行一个任务，与 [refactor-plan.md](refactor-plan.md) 的编号对应。领任务把状态改成「进行中」并写名字，
 完成改成「已合并」并填提交号；推送冲突说明别人先领了。状态只有四种：待领 / 进行中 / 已合并 / 并入 X。
