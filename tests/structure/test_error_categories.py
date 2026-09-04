@@ -143,6 +143,17 @@ MIGRATED_CUDNN_CONV_BWD_W_FORMAT_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_w_op.cc": 3,
 }
 
+INTERNAL_BACKEND_ASSERTION_CONTRACTS = {
+    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_op.cc": "ASSERT(best_algo_idx!=-1)",
+    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_op.cc": "ASSERT(best_algo_idx!=-1)",
+    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_x_op.cc": "ASSERT(best_algo_idx!=-1)",
+    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_w_op.cc": "ASSERT(best_algo_idx!=-1)",
+    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_backward_x_op.cc": "ASSERT(best_algo_idx!=-1)",
+    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_backward_w_op.cc": "ASSERT(best_algo_idx!=-1)",
+    "python/jittor/extern/cuda/cutt/ops/cutt_wrapper.cc": "CHECK(ret == CUTT_SUCCESS)",
+    "python/jittor/extern/cuda/cub/ops/cub_test_op.cc": "ASSERT(cub_test_entry",
+}
+
 MIGRATED_CUDNN_CONV3D_X_RANK_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_op.cc": 3,
 }
@@ -448,6 +459,12 @@ def test_cudnn_conv_bwd_w_format_user_boundary_migration_is_explicit_and_bounded
     assert actual == MIGRATED_CUDNN_CONV_BWD_W_FORMAT_USER_BOUNDARIES[
         "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_w_op.cc"]
     assert "Not a valid format" in source
+
+
+def test_backend_internal_assertion_classification_is_explicit():
+    for relative, marker in INTERNAL_BACKEND_ASSERTION_CONTRACTS.items():
+        source = (ROOT / relative).read_text()
+        assert marker in source, (relative, marker)
 
 
 def test_cudnn_conv3d_x_rank_user_boundary_migration_is_explicit_and_bounded():
