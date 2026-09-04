@@ -221,3 +221,17 @@ The implementation review should attach one compact evidence block containing:
 
 This block is sufficient for the board/handoff update; do not paste full JIT
 logs. A missing field is a contract gap and should keep 7.03 marked `待领`.
+
+## Unsupported behavior matrix
+
+| Condition | Required behavior | Evidence |
+| --- | --- | --- |
+| mapped arguments have different extents | fall back to ordinary loop or raise a typed `RuntimeError` | node id plus exception/fallback marker |
+| nested helper uses a non-zero mapped dimension | skip vectorized helper; preserve `in_dims`/`out_dims` metadata | AST branch and focused node |
+| vectorized result is not boolean | skip vectorized helper; ordinary path remains authoritative | dtype guard assertion |
+| transform-depth callback absent | treat depth as zero; no context access error | sentinel `DepthZero` node |
+| `out_dims` is a tuple/list | normalize once and stack at the requested axis | shape/value assertion |
+
+The matrix is normative for both CPU and future backend implementations. Any
+backend-specific deviation must be documented as a separate fidelity limitation,
+not hidden in the generic owner.
