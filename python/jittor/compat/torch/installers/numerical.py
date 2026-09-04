@@ -1592,6 +1592,32 @@ register_fidelity(
 )
 
 
+def index_put(input, indices, values, accumulate=False):
+    """Return a clone with indexed values assigned using Torch semantics."""
+    result = input.clone()
+    idx = tuple(indices) if isinstance(indices, (tuple, list)) else (indices,)
+    if not accumulate:
+        result[idx if len(idx) > 1 else idx[0]] = values
+        return result
+    vals = values if isinstance(values, jt.Var) else jt.array(values)
+    if len(idx) == 1:
+        index = idx[0] if isinstance(idx[0], jt.Var) else jt.array(idx[0])
+        result.assign(result.index_add(0, index.int64().reshape((-1,)), vals))
+        return result
+    raise NotImplementedError(
+        "index_put(accumulate=True) with a partial multi-dim index")
+
+
+register_fidelity(
+    "torch.index_put",
+    index_put,
+    Fidelity.APPROXIMATE,
+    "matches Torch non-inplace indexed assignment for CPU tensors; duplicate "
+    "multi-dimensional accumulation, device, layout, and out semantics are "
+    "not implemented",
+)
+
+
 def kron(a, b):
     """Compute the Kronecker product through broadcasted Jittor views."""
     nd = max(a.ndim, b.ndim)
@@ -1802,7 +1828,8 @@ def install(ctx):
             return self
         raise NotImplementedError("index_put_(accumulate=True) with a partial multi-dim index")
     Var.index_put_ = _index_put_
-    Var.index_put = lambda self, indices, values, accumulate=False: _index_put_(self.clone(), indices, values, accumulate)
+    Var.index_put = lambda self, indices, values, accumulate=False: index_put(
+        self, indices, values, accumulate)
     # index_copy_(dim, index, source): self[..,index[i],..] = source[i,..] along dim
     # (overwrite, NOT accumulate -- cf. index_add).
     def _index_copy_(self, dim, index, source):
@@ -1818,7 +1845,7 @@ def install(ctx):
     Var.index_copy = lambda self, dim, index, source: index_copy(
         self, dim, index, source)
     g.index_copy = index_copy
-    g.index_put = lambda input, indices, values, accumulate=False: _index_put_(input.clone(), indices, values, accumulate)
+    g.index_put = index_put
     Var.tensor_split = lambda self, indices_or_sections, dim=0: tensor_split(
         self, indices_or_sections, dim)
     g.tensor_split = tensor_split
