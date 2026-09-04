@@ -136,18 +136,7 @@ namespace jittor
             blockTable, nullptr, attr->headNum, attr->scale, layout,
             attr->keyValueHeadNum, attr->blockSize, attr->innerPrecise, outputTensors[0],
             &workspaceSize, &executor);
-        checkRet(ret);
-
-        if (workspaceSize > 0)
-        {
-            mallocWorkSpace(workspaceSize);
-        }
-
-        ret = aclnnIncreFlashAttentionV4(
-            workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnIncreFlashAttentionV4 failed. ERROR: %d\n", name.c_str(), ret); return);
-
-        syncRun();
+        launch(ret, aclnnIncreFlashAttentionV4, true);
         if (actualSeqLengths != nullptr)
             aclDestroyIntArray(actualSeqLengths);
         if (keyView != nullptr)

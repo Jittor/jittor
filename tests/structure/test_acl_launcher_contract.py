@@ -599,6 +599,17 @@ def test_flash_attention_backward_uses_launcher_and_keeps_gradient_outputs():
     assert "syncRun();" not in backward
 
 
+def test_incremental_flash_attention_uses_launcher_and_keeps_cache_cleanup():
+    source = (ROOT / "python/jittor/extern/acl/aclops/flashattention_op_acl.cc").read_text()
+    forward = source[source.index("void IncreFlashAttentionOpRunner::executeOp"):source.index("KVCacheMemcpyOpRunner::KVCacheMemcpyOpRunner")]
+    assert "actualSeqLengths" in forward
+    assert "blockTable" in forward
+    assert "launch(ret, aclnnIncreFlashAttentionV4, true);" in forward
+    assert "aclDestroyTensor(keyView);" in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+
+
 def test_adamw_list_uses_async_launcher_and_keeps_loop_sync_point():
     source = (ROOT / "python/jittor/extern/acl/aclops/adamw_op_acl.cc").read_text()
     assert "aclnnApplyAdamWV2GetWorkspaceSize" in source
