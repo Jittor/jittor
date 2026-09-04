@@ -88,3 +88,36 @@ The eventual test file should keep each contract independently runnable:
 The first two nodes are static/metadata-only and should stay in the fast gate;
 the remaining three may be marked CPU numerical and run with an isolated Jittor
 cache when the owner extraction lands.
+
+## Owner extraction checklist
+
+Implement the migration in one commit so the binding and its dependencies stay
+consistent:
+
+1. Introduce a module-level `vmap` owner plus a private helper for the nested
+   boolean fast path. Pass a `transform_depth()` callback into the owner rather
+   than importing `InstallContext` or retaining `g`.
+2. Move the wrapper metadata (`_jittor_vmap_base`, `_jittor_vmap_specs`) into the
+   module-level implementation and preserve their tuple/list shapes exactly.
+3. Replace `_alias("vmap", _vmap)` with a single binding to the stable owner;
+   remove the install-local definitions in the same change.
+4. Register `torch.vmap` fidelity before installation so metadata queries work
+   even in static-only environments.
+
+The extraction is complete only when the AST gate sees one public `vmap`
+definition, no nested `def _vmap` under `install`, and no module-global closure
+cell containing `ctx`, `g`, or `Var` instances.
+
+## Context protocol sketch
+
+Use a minimal callable protocol instead of a concrete context type:
+
+```text
+VmapContext:
+    transform_depth() -> int
+```
+
+`transform_depth()` may return zero when the transform hook is unavailable. The
+owner must then use the ordinary loop/stack path. This keeps CPU-only tests and
+future ACL/NPU backends independent of the current torch installer object while
+preserving the specialized transformer mask path when the hook is present.
