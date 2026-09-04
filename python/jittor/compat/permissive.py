@@ -125,7 +125,7 @@ __all__ = ["PermissiveModule", "install_permissive_package",
            "fabricated_modules", "refused_modules"]
 
 
-def install_permissive_package(prefix, meta_path, allow=()):
+def install_permissive_package(prefix, meta_path, allow=(), transaction=None):
     """Answer a KNOWN list of unresolved imports under ``prefix`` with a stub.
 
     ``allow`` is the list of module names that libraries reference at import
@@ -144,6 +144,16 @@ def install_permissive_package(prefix, meta_path, allow=()):
     """
     for finder in meta_path:
         if isinstance(finder, _PermissiveFinder) and finder.prefix == prefix:
+            old_allow = set(finder.allow)
             finder.add_allowed(allow)
+            if transaction is not None:
+                def restore_allow(f=finder, old=old_allow):
+                    f.allow.clear()
+                    f.allow.update(old)
+                transaction.record_undo(restore_allow)
             return
-    meta_path.insert(0, _PermissiveFinder(prefix, allow))
+    finder = _PermissiveFinder(prefix, allow)
+    meta_path.insert(0, finder)
+    if transaction is not None:
+        transaction.record_undo(
+            lambda f=finder: meta_path.remove(f) if f in meta_path else None)

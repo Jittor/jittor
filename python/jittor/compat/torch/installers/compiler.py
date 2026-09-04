@@ -63,6 +63,7 @@ def trace(func=None, example_inputs=None, *args, **kwargs):
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
+    transaction = ctx.state.get("_install_transaction")
     Var = ctx.state["Var"]
     _DTYPE_OBJS = ctx.state["dtypes"]
     # ---- elementwise / reduction helpers that may be missing ----
@@ -178,6 +179,7 @@ def install(ctx):
     # are recorded in refused_modules() the same way.
     install_permissive_package(
         "torch._inductor", _sys.meta_path,
+        transaction=transaction,
         allow=(
             # named by serving stacks at module scope, gated on a compilation
             # mode this backend never enters
@@ -203,6 +205,7 @@ def install(ctx):
                       "torch._guards", "torch._logging", "torch._dynamo",
                       "torch._dispatch"):
         install_permissive_package(_internal, _sys.meta_path,
+                                   transaction=transaction,
                                    allow=(_internal + ".*",))
     # torch.fx is NOT one of them. Underneath it live real graph analyses and
     # rewrite passes (shape propagation, partitioning, the pass manager); a
@@ -211,6 +214,7 @@ def install(ctx):
     # module a definition site needs is answered.
     install_permissive_package(
         "torch.fx", _sys.meta_path,
+        transaction=transaction,
         allow=("torch.fx.immutable_collections", "torch.fx.proxy",
                "torch.fx.node", "torch.fx.graph", "torch.fx.graph_module"))
     # torch 2.11 introduced opaque value types: an object an operator takes as
