@@ -434,6 +434,9 @@ source-only until the Ascend 910B3 probe is run.
 The ACL Embedding forward family uses the shared launcher and retains
 synchronous execution. Embedding backward is intentionally outside this slice.
 
+The ACL Embedding backward owner uses the shared launcher while retaining
+numEmbeddings, paddingIdx, scaleGradByFreq, and synchronous execution.
+
 The ACL Roll family uses the shared launcher while retaining shifts/dims array
 cleanup and synchronous execution. This remains source-only until the Ascend
 910B3 probe is run.

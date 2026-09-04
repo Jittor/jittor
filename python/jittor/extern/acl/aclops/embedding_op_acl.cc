@@ -58,17 +58,7 @@ namespace jittor
             inputTensors[0], inputTensors[1], numEmbeddings, paddingIdx,
             scaleGradByFreq, outputTensors[0], &workspaceSize, &executor);
 
-        checkRet(ret);
-
-        if (workspaceSize > 0)
-        {
-            mallocWorkSpace(workspaceSize);
-        }
-
-        ret = aclnnEmbeddingDenseBackward(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnEmbeddingDenseBackward failed. ERROR: %d\n", name.c_str(), ret); return);
-
-        syncRun();
+        launch(ret, aclnnEmbeddingDenseBackward, true);
 
         return;
     }

@@ -186,6 +186,17 @@ def test_embedding_forward_uses_launcher_and_backward_remains_present():
     assert "void EmbeddingBackwardOpRunner::executeOp" in source
 
 
+def test_embedding_backward_uses_launcher_and_keeps_attribute_query():
+    source = EMBEDDING_SOURCE.read_text()
+    backward = source[source.index("void EmbeddingBackwardOpRunner::executeOp"):]
+    assert "numEmbeddings" in backward
+    assert "paddingIdx" in backward
+    assert "scaleGradByFreq" in backward
+    assert "launch(ret, aclnnEmbeddingDenseBackward, true);" in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+
+
 def test_roll_family_uses_launcher_and_keeps_array_cleanup():
     source = ROLL_SOURCE.read_text()
     assert "shifts_array" in source
