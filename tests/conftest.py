@@ -435,6 +435,7 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
         _snapshot_selected_files(config)
     _report_files_that_executed_nothing(terminalreporter, config)
     _report_skip_reason_buckets(terminalreporter)
+    _report_reference_caches(terminalreporter)
     if _MISSING_REAL_TORCH:
         terminalreporter.write_sep(
             "=", "skipped for want of the PyTorch this session declared it has")
@@ -741,6 +742,28 @@ def _report_skip_reason_buckets(terminalreporter):
     for bucket, count in buckets:
         terminalreporter.write_line("%d skipped: %s" % (count, bucket))
     terminalreporter.write_line("other skipped: %d" % _other_skip_count())
+
+
+def _report_reference_caches(terminalreporter):
+    """Say how many reference values this session reused instead of computing.
+
+    A cache in front of an oracle is invisible in a pass/fail line: the run
+    looks identical whether it derived the expected values or read them from
+    disk. It is a legitimate optimisation (the values are device-independent and
+    keyed by a content hash of the implementation, see
+    ``_helpers/reference_cache.py``) and it still has to be *stated*, for the
+    same reason 0.18 counts what each file executed -- a number nobody prints is
+    a number nobody checks.
+    """
+    from _helpers import reference_cache
+
+    used = [cache for cache in reference_cache.registry()
+            if cache.hits or cache.misses or cache.writes]
+    if not used:
+        return
+    terminalreporter.write_sep("=", "reference values reused from cache")
+    for cache in used:
+        terminalreporter.write_line(cache.summary())
 
 
 def pytest_sessionfinish(session, exitstatus):

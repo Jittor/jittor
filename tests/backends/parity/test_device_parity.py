@@ -33,6 +33,7 @@ from _helpers.common import (
     JittorTestCase, to_numpy, net_scaled_max_err, per_element_max_rel_err,
     HAS_CUDA, HAS_ACL,
 )
+from _helpers import reference_cache
 from opinfo.database import op_db
 
 _ACCEL = "npu" if HAS_ACL else ("cuda" if HAS_CUDA else None)
@@ -160,6 +161,60 @@ def _run(op, sample, use_cuda):
         return fwds, grads
 
 
+# The CPU side of every comparison, kept between runs (0.22).
+#
+# Measured on this battery: the CPU half is 18% of a cold run's wall clock and
+# 26% of a warm one, so it is a fraction rather than the "half" the task
+# assumed -- the dominant term is kernel compilation, and most of that is on
+# the accelerator side. What makes the fraction worth taking is that a cached
+# value skips the CPU-side *compiles* too, not just the microseconds of
+# execution.
+#
+# What keeps it honest is in reference_cache: the key carries a content hash of
+# ``python/jittor`` and of the materialized inputs, so an entry can only have
+# been produced by byte-identical code answering a byte-identical question, and
+# every reuse is counted and printed in the terminal summary.
+# ``JITTOR_REFERENCE_CACHE=0`` recomputes everything, which is what a release
+# gate should set when it wants the oracle re-derived from scratch.
+_REFERENCE_CACHE = reference_cache.ReferenceCache("device-parity")
+
+#: Part of the cache key: how ``_run`` draws its cotangent. Changing the
+#: projection changes every gradient, so an entry from before such a change has
+#: to miss rather than be compared against the new one.
+_COTANGENT_SCHEME = "standard_normal(RandomState(1234+j))-v1"
+
+
+def _oracle_material(op, sample, index, dtype):
+    return reference_cache.key_material(
+        "device-parity-cpu-oracle", op.full_name, dtype, index,
+        _maybe_np(sample.input),
+        [_maybe_np(a) for a in sample.args],
+        sample.kwargs,
+        _COTANGENT_SCHEME,
+    )
+
+
+def _cpu_oracle(op, sample, index, dtype):
+    """``_run(..., use_cuda=0)``, from the cache when it holds this exact answer.
+
+    A failure is never cached: an operator that raised on the CPU has no oracle,
+    and storing the exception would turn one broken run into a permanent one.
+    """
+    material = _oracle_material(op, sample, index, dtype)
+    stored = _REFERENCE_CACHE.load(material)
+    if stored is not None:
+        values, extras = stored
+        count = int(extras["forward_count"])
+        grads = values[count:] if extras["has_grads"] else None
+        return values[:count], grads
+    fwds, grads = _run(op, sample, use_cuda=0)
+    _REFERENCE_CACHE.store(
+        material, list(fwds) + list(grads or []),
+        {"forward_count": len(fwds), "has_grads": grads is not None,
+         "operator": op.full_name, "dtype": dtype, "sample": index})
+    return fwds, grads
+
+
 @unittest.skipUnless(_ACCEL is not None, "device parity needs an accelerator (CUDA/NPU)")
 class TestDeviceParity(JittorTestCase):
     """One generated test per op: CPU forward/backward == accelerator forward/backward."""
@@ -237,7 +292,7 @@ class TestDeviceParity(JittorTestCase):
         samples = op.sample_inputs("cpu", dtype, requires_grad=requires_grad)
         n = 0
         for i, s in enumerate(samples):
-            f_cpu, g_cpu = _run(op, s, use_cuda=0)
+            f_cpu, g_cpu = _cpu_oracle(op, s, i, dtype)
             f_acc, g_acc = _run(op, s, use_cuda=1)
             self.assertEqual(len(f_cpu), len(f_acc),
                              msg=f"{op.full_name} output count cpu vs {_ACCEL} sample#{i}")

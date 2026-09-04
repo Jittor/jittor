@@ -348,7 +348,9 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `7.03`：`94df46f7` 将 `complex`、`view_as_complex`、`view_as_real` 提升为 numerical 模块级稳定对象，登记 approximate fidelity；CPU identity/metadata/value 定向 2 passed。其余 tensor/nn/module family 仍待领。
 - `0.15`：RingBuffer 修复后，独立 Dataset worker 监管两个 nodeid 在临时缓存下 2 passed/65.68 s；完整 smoke 仍约 390 s，任务保持待领。
 | 0.21 | 测试起的子进程不带 PYTHONPATH，门禁机器上是假绿 | 已合并 | gates | 46dbe946、a5ce7310 |
-| 0.22 | 压缩设备对拍时长（保留与单进程相同的 nodeid 集合） | 待领 | | |
+| 0.22 | 压缩设备对拍时长（保留与单进程相同的 nodeid 集合） | 待领 | gates | `dcc335d6`、`f9c26111`、本次提交。**判据已落地并通过，但原验收（压到可接受时长）没达到，所以保持待领。** 方向 (a) 缓存 CPU 侧参考结果做完了：同一批 26 个 nodeid、两轮都是冷算子缓存，**848.5s → 711.1s（−16.2%）**，`tools/gate_conclusion_diff.py compare` 报 `IDENTICAL: every collected nodeid concluded the same way`（26/26 收集、26/26 有结论，逐条比对，不是数个数）。按 253/26 外推：约 2h18m → 1h55m。**计划里「它是最直接的一半」不成立——实测 CPU 那半只占冷缓存墙钟 18%、热缓存 26%。** 更要紧的是 **0.16 的归因反了**：它记「热缓存 1405s ≈ 冷 1444s，所以不是编译瓶颈」，复测（同一批 nodeid、同一 `JITTOR_HOME`、背靠背）**冷 848.5s、热 23.6s，36 倍**——它就是编译瓶颈。所以下一步不该走 (b) 减样本 或 (c) 多卡多进程，而是 **0.23**：CUDA workflow 没有像 `cpu.yml` 那样 restore/save JIT 缓存，每次都从冷开始 |
+| 0.23 | CUDA workflow 持久化 JIT 缓存 | 待领 | | 0.22 实测派生。`cuda.yml` 只缓存 ASV 结果（`:101`、`:114`），JIT 缓存一次都没存过；`cpu.yml:55-61,97-117` 早就 restore/save `_state/nox/cache` 并在注释里记了「全树原生 47 分钟冷、24 分钟热」。设备对拍冷/热实测差 36 倍（848.5s / 23.6s，同一批 26 个 nodeid） |
+| 0.24 | 没有任何东西检查「CUDA 门禁真的跑过 CUDA」 | 待领 | | 2026-09-05 由 coord 与 0.22 的执行者共同核实：看板与交接里 82 处「本机无 CUDA」，`bindings` 连续 114 次，而同期别的分区在 GPU3/GPU5 上跑出真实结果 |
 | 1.01 | 把 `utils/data.gz` 解出的 `data.cc` 还原为可读的五个翻译单元 | 已合并 | codegen | ecb6a112（+72f020b3 用例） |
 | 1.02 | `op_compiler.cc:30-69` 用正则给 `ParallelPass` 输出打补丁… | 已合并 | codegen | 3eb34e6a |
 | 1.03 | 查明 `SharedReducePass` 在约 4900 个归约 kernel 里零命中的触发… | 已合并 | codegen | 3eb34e6a |

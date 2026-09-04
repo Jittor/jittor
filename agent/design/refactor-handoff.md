@@ -1261,6 +1261,12 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | `8.06` 收口标准 ACL launcher owner：迁 SWhere、SigmoidBackward、BatchNorm 前反向到 `BaseOpRunner::launch`，各自保留同步策略、BatchNorm 属性与 outMask 释放顺序。**此前十波看板记的「标准 owner 已穷尽」不成立**——这四个仍自己驱动 aclnn execute 并保留审计列为「关键」的 `LOG_PRINT` 后 return。同时把 `checkRet == 65` 计数断言（自 `5be5fa15` 被自己的迁移作废、红穿约四十个提交）换成闭集不变量，豁免仅 reduce prod 与 KVCacheMemcpy。ACL 静态合同 81 passed + 1 failed → 88 passed。新增 skill `acl-host-syntax-check`（桩 CANN + `g++ -fsyntax-only`，全树 43 源文件与 68 个 launcher ABI 断言通过，两次反向对照确认能真的报红）。**未做**：data-channel C++ 解码入口、胖 `AclOpFunctions` 类型擦除、属性 data 通道、描述符缓存。**本机无 CANN/NPU，不宣称硬件验证**；910B3 nodeid 与禁止 CPU fallback 检查写在 `docs/guides/ascend-910b.md`。 |
 | `gates` | `tests/structure` 单目录 498 passed / 14 failed，14 条全部落在 `test_runtime_composition_structure.py`、`test_torch_compat_structure.py`、`test_torch_shim_structure.py`、`test_vllm_compat_structure.py`，属 `compat`/shim 分区在飞的改动；本波未触碰 `python/jittor/compat/**`，与本波改动无关。 |
 
+### 2026-09-05 第一百五十九波
+
+| 分区 | 结果 |
+| --- | --- |
+| `gates` | `0.22` 三个提交：`dcc335d6` 修设备对拍的 0 维余切投影——`randn(*shape)` 在 0 维输出上是 `randn()`，返回 python float，`.astype` 抛 `AttributeError`，于是 `sum`/`trace`/全部 loss **从来没走到反向比较**（修后这 10 条第一次真做完 CPU↔CUDA 反向比对，数值一致）；`f9c26111` 落地判据工具 `tools/gate_conclusion_diff.py`（分开记 collected 与 conclusions，差集就是丢结论的形状，skip 原因变化也算变化，墙钟只报告不判据），并给 `verifying-a-gate-actually-ran` 补第九节；本次提交落地方向 (a) 的 CPU 参考值缓存（键含 `python/jittor/**` 内容哈希与物化输入字节，条目自述键、写用 `os.replace`、命中数进摘要）。**A/B（26 个 nodeid、两轮都冷算子缓存）848.5s → 711.1s（−16.2%），`compare` 报 IDENTICAL、26/26 逐条相同。** `0.22` 保持「待领」：原验收未达到。**两处纠正**：计划里「CPU 那半是最直接的一半」不成立（实测 18%/26%）；`0.16` 的「热缓存≈冷缓存所以不是编译瓶颈」复测不成立（同一批 nodeid 背靠背：冷 848.5s、热 23.6s，36 倍）。派生 `0.23`（`cuda.yml` 从没 restore/save JIT 缓存，`cpu.yml` 早就在做）与 `0.24`（没有任何东西检查「CUDA 门禁真跑过 CUDA」，82 处「本机无 CUDA」是错的）。`tests/structure` 单目录 502 passed / 10 failed，10 条全在 compat/shim 分区在飞的文件里，与本波无关。 |
+
 ### 2026-09-04 第一百四十波
 
 | 分区 | 结果 |
