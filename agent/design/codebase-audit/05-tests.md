@@ -97,6 +97,18 @@ nothing about」，分「collected 0 tests」（连 skip 都不会出现，正�
 setUp/tearDown。检查（`tests/structure/test_flag_scope_contract.py`）接受三种还原方式：
 `flag_scope`、setUp/tearDown 配对（含 `addCleanup` 注册的方法）、`try/finally`。
 
+**已修：`dcc335d6`（0.22 派生）。** 审计名单外新发现一条同类问题，而且是这一节最严重的形态：
+设备对拍的余切投影写成 `RandomState(seed).randn(*output.shape)`，输出是 **0 维**时它就是
+`randn()` 无参调用，返回 python float，紧接着的 `.astype` 抛 `AttributeError`。于是每一个前向
+收敛成单个数的算子——`sum`、`trace` 与全部 loss——**从来没走到反向比较**。它报 FAILED 不是
+静默通过，但整个电池组 `skipUnless(有加速器)`，而看板连续 114 次记着「本机无 CUDA」（实测这台
+机器 8 张 4090、nvcc 12.2、sm_89），所以没有人看见过。修法是把投影抽成 `_cotangent(shape, index)`
+并用 `standard_normal(shape)`（与 `randn(*shape)` 是同一次抽样，所以非标量输出的余切逐位不变）；
+0 维时另一个坑随即出现——`(0维 Var * 0维 Var).sum()` 会让 `reduce.add` 在 `float32[]` 上超过
+`op_compiler` 的 `total_step<1000` 限制而 abort，所以 0 维改成用标量 `float(cot)` 缩放。
+修后这 10 条（4 个算子 × 样本）第一次真的做完 CPU 与 CUDA 的反向比较，数值一致。
+契约在 `tests/backends/parity/test_parity_harness.py`（CPU 上就能跑，所以 CPU-only 机器也覆盖）。
+
 | conftest 用 sys.argv 嗅探决定进程语义 | `tests/conftest.py:24-60`，`:43 SELECTION_IS_BROAD`；`:174 pytest_ignore_collect` 在 native 会话整体忽略 TORCH_MODE_PATHS | 语义随调用方式改变；用 -k、xdist worker 或 IDE runner 时行为不可预期。CPU 门禁的 --collect-only 因此**连 62 个 Torch-mode 文件的可导入性都没检查** | 模式由显式环境变量决定 | 主要 |
 
 **已修：`5c0f2364`（0.13）。** `SELECTION_IS_BROAD` 不止决定模式，还决定 manual 探针跑不跑，

@@ -227,3 +227,90 @@ if inherit and extra and "PATH" in extra:
   并确认它要观察的行为没变。
 
 做不到就不要收编——一份能跑但语义被削掉的 helper，比五处重复代码贵得多。
+
+## 九、给门禁提速：结论集合是判据，快不是
+
+一次门禁优化的失败形态**不是变慢，是少给一个结论**，而少给一个结论不会改变
+「N passed」那一行的可信度。0.16 实测过一次：设备对拍加 `-n 4`，快 6%，
+**26 条里丢了 3 个结论**，退出码是绿的、摘要行看起来正常。
+
+> **一个有时不给结论的验证器比一个慢的更糟。**
+
+所以口径是两条，不是一条：（1）更快；（2）**两轮对每一个 nodeid 给出同一个结论**。
+「数量相同」不等于「集合相同」——0.16 那次丢结论时数量看着也合理。
+
+### 怎么做：记下来，再逐条比
+
+`tools/gate_conclusion_diff.py`（配 `tools/gate_conclusion_plugin.py`）就是这件事：
+
+```bash
+# 1. 改之前
+python tools/gate_conclusion_diff.py record --out $RUNS/base.json --label before -- \
+    tests/backends/parity/test_device_parity.py -q
+# 2. 改之后（或者换配置：--env 会连同环境一起记进产物）
+python tools/gate_conclusion_diff.py record --out $RUNS/cand.json --label after \
+    --env JITTOR_REFERENCE_CACHE=1 -- \
+    tests/backends/parity/test_device_parity.py -q
+# 3. 判据：有任何一条不同就非零退出
+python tools/gate_conclusion_diff.py compare $RUNS/base.json $RUNS/cand.json
+```
+
+产物里**分开记两件事**，差集就是判据：
+
+- `collected`：这次会话决定要跑的 nodeid；
+- `conclusions`：真的报出了结论的 nodeid（含 `passed/failed/error/skipped/xfailed`
+  与 skip 原因）。
+
+**两者之差正是丢结论的形状**：worker 死掉、崩溃带走会话、分发模式漏掉一条，都会留下
+一个「收集了但没有结论」的 nodeid，而没有一个会让退出码显眼地变。
+
+`record` **不要求跑绿**：结论是「这六条红」的基线一样能用，否则判据恰好在最需要它的
+时候不可用。只有 `compare` 判成败。
+
+三条容易漏的：
+
+- **skip 原因变了也算结论变了。** 「从 passed 变成 skipped」和「skip 的理由换了一个」
+  都是靠扩大排除清单假达标的形状（0.15 的红线）。
+- **墙钟只报告，不做判据。** 有负载的机器上墙钟能差两倍（见 `gate-tier-budget`）。
+- **两轮要选同一批测试**，变的是配置。选择集不同时 `compare` 会把两边的
+  `pytest_arguments` 一起打出来，别把它当成通过。
+
+### 报「快了多少」之前，先说清缓存是冷是热
+
+这条让 0.16 的归因整个反了。它记录「热缓存 1405s ≈ 冷缓存串行 1444s，**所以这条电池组
+不是编译瓶颈**」，0.22 的三个方向都是从这句推出来的。**2026-09-05 复测（同一批 26 个
+nodeid、同一个 `JITTOR_HOME`、背靠背两轮）：冷 623s，热 25s——25 倍。它就是编译瓶颈。**
+
+所以任何「快了 N%」都必须写明这一轮是冷是热，两轮之间对缓存做了什么。否则下一个人会
+拿着一个不成立的归因去选方案。
+
+**怎么造一个「算子冷、核心热」的对照组**（不用重编 10 分钟的 C++ 核心）：
+
+```bash
+CACHE=$(python -c "import jittor;print(jittor.compiler.cache_path)")   # 带 PYTHONPATH
+mv "$CACHE/jit" "$CACHE/jit.aside" && mkdir -p "$CACHE/jit"   # 只丢算子 kernel
+```
+
+`jit/` 之外的东西（`jittor_core*.so`、`obj_files/`、`gen/`）都留着。**mv 而不是 rm**：
+恢复是免费的，而且量完了还能对照。另外，Torch shim 模式与原生模式的 `cache_path`
+**不是同一个目录**（0.07 的配置指纹里有 shim 数学开关），所以「我刚跑过一遍所以是热的」
+在换了模式之后不成立——这也是 0.16 那个 1405s 最可能的来源。
+
+### 如果你的提速手段是「缓存期望值」
+
+缓存 oracle 是唯一一种能让门禁**在绿着的时候说谎**的优化：它回答的是产出那条缓存的
+代码，不是被测的代码。要做就把三件事一起做（`tests/_helpers/reference_cache.py` 是
+实现，`tests/backends/parity/test_reference_cache.py` 是它必须满足的性质）：
+
+1. **键里带实现的内容哈希**（`python/jittor/**` 的 `.py`/`.cc`/`.cu`/`.h`）。用内容不用
+   mtime：checkout 和 rebase 会重写 mtime 而不改任何数字。代价是任何一次源码改动都
+   全部 miss——这是故意的。
+2. **键里带物化之后的输入字节**，不是产生输入的种子。样本生成逻辑一改就 miss，
+   而不是拿旧答案去比新输入。
+3. **每条缓存复述自己的键**，读的时候不匹配就当没有；**写用临时文件加 `os.replace`**；
+   **命中数要在摘要里打出来**（本仓库放在 `pytest_terminal_summary`）。一个没人打印的
+   数字就是一个没人检查的数字。
+
+还有一条不写在代码里的：`0` 维数组会被 `np.ascontiguousarray` 悄悄变成形状 `(1,)`。
+全归约的 oracle 就是 0 维，于是它会被存成一元向量、读回来形状是错的，而与 0 维结果
+比较时**广播掉了**——照样通过。存之前按 `ndim == 0` 分支处理。

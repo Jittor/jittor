@@ -46,7 +46,12 @@ _INTERPRETER_NAMES = {"PYTHON", "python_executable"}
 #: got this wrong in the way that matters: its warm-up compiled the main tree
 #: into the session's cache, so every pytest run that followed compiled the
 #: branch a second time.
-_ALSO_SCANNED = (REPO_ROOT / "tools" / "run_test_suite.py",)
+_ALSO_SCANNED = (
+    REPO_ROOT / "tools" / "run_test_suite.py",
+    # Starts the same pytest children to record what a gate concluded (0.22); a
+    # child that imported another tree would record that tree's conclusions.
+    REPO_ROOT / "tools" / "gate_conclusion_diff.py",
+)
 
 
 def _python_files():
