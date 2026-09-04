@@ -273,3 +273,25 @@ Register fidelity with a detail string that names the supported mapping paths,
 the context callback limitation, and backend scope. This keeps reports stable
 across releases and lets static tests assert that context-dependent behavior is
 documented instead of inferred from implementation details.
+
+## AST gate output contract
+
+Implement the static gate as a small AST walker so it remains backend-agnostic:
+
+```text
+module_defs = functions named `vmap` at module scope
+install_defs = functions named `_vmap` nested under `install`
+bindings = assignments to `g.vmap` or `_alias("vmap", ...)`
+captures = names `g`, `ctx`, `Var`, `InstallContext` in module-level defaults/closures
+```
+
+Emit one JSON-like record with integer counts and boolean results:
+
+```text
+{"module_vmap": 1, "nested_vmap": 0, "install_bindings": 1,
+ "forbidden_captures": false, "unsupported_guards": true}
+```
+
+The node should fail closed when a field cannot be determined (for example,
+dynamic `setattr` binding) and report the source line rather than guessing. This
+record is the canonical static evidence attached to the 7.03 handoff.
