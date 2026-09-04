@@ -20,5 +20,13 @@ def test_install_boundary_distinguishes_namespace_and_process_isolation():
         "hard-failure contract",
         "must",
         "not claim full install rollback",
+        "flags.__dict__",
+        "JT_NCCL_WORLD_SIZE",
+        "JT_NCCL_RANK",
+        "JT_NCCL_LOCAL_RANK",
+        "JT_NCCL_ROOTINFO_FILE",
+        "use_nccl",
+        "use_mpi",
+        "explicit allowlist",
     ):
         assert token in text
