@@ -48,7 +48,8 @@ from .attention import (
 )
 from .fused_moe import fused_moe
 from .paged_attention import paged_attention, reshape_and_cache
-from .serving_ops import (dual_rms_norm, fused_add_rms_norm, rms_norm,
+from .serving_ops import (dual_rms_norm, fused_add_rms_norm,
+                          has_qk_rms_norm_rotary, qk_rms_norm_rotary, rms_norm,
                           rotary_embedding, silu_and_mul)
 from .dual_grid import finalize_dual_grid_mesh_cuda
 from .functional import *
