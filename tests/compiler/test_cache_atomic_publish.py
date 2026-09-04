@@ -1,10 +1,11 @@
 import os
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
+
+from _helpers.child_process import run_python_child
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -139,22 +140,19 @@ def test_dlink_preserves_a_private_shared_library_output(
     source.write_text("int kernel = 1;\n", encoding="utf-8")
     private_output = tmp_path / "kernel_op.so.tmp.123"
     dependency = tmp_path / "kernel.d.tmp.123"
-    result = subprocess.run(
+    result = run_python_child(
         [
-            sys.executable,
-            str(JITTOR / "utils" / "dlink_compiler.py"),
-            str(fake_compiler),
-            str(source),
+            JITTOR / "utils" / "dlink_compiler.py",
+            fake_compiler,
+            source,
             "-dc",
             "-MD",
             "-MF",
-            str(dependency),
+            dependency,
             "-o",
-            str(private_output),
+            private_output,
         ],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        merge_stderr=True,
     )
     assert result.returncode == 0, result.stdout
     assert (tmp_path / "kernel_op.o").read_bytes() == b"complete product"
