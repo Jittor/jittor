@@ -1120,6 +1120,14 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `compat` | `60197b81` 将 factories/tensor installer 的 `jt.flags.use_cuda` 写入接入 transaction helper；`d9d063a5` 将 core installer 安装期 `use_cuda` 写入接入 ledger 并补失败回滚测试（事务定向 5 passed）。nn 的 `.to()` 写入确认是运行时用户语义，不纳入 install transaction。7.05 仍待全部 installer 写入口。 |
 | `gates` | 相关 `py_compile`/`diff-check` 通过；本波未改变整卡状态。 |
 
+### 2026-09-04 第一百三十五波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `87ca0a82` 新增 owner-aware `InstallTransaction.mutate_attr`，将 transformers runtime guard 与 torchmetrics fastpath 两处 `builtins.__import__` 写入接入 ledger；无事务时保持直写。7.05 仍待其他 installer mutation。 |
+| `device` | `sys.meta_path` permissive finder 需同时恢复 finder 身份、插入索引和 allowlist 增量，暂不做半改；本波无 device 提交。 |
+| `gates` | `py_compile`/`diff-check` 通过，未改变整卡状态。 |
+
 ### 2026-09-04 第一百一十九波
 
 | 分区 | 结果 |
