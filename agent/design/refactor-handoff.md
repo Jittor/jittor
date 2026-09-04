@@ -970,6 +970,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | `296e0837` 补充 ACL 属性 data、descriptor cache、type-erasure 候选排序与 910B3/CANN 上机验收合同；静态合同 1 passed，未改运行时。 |
 | `gates` | 本波未扩大 `SLOW_FILES`；0.15 smoke 仍约 390 s，10.19 HCCL route 仍缺 910B3 多卡 CPU 对照。 |
 
+### 2026-09-04 第一百零九波
+
+| 分区 | 结果 |
+| --- | --- |
+| `bindings` | `354ec6f1` 将 cuTT transpose 0-D 输入检查改为可捕获 `USER_CHECK`，补独立 rank ledger；定向 3 passed。2.19 聚合任务仍待完整审计。 |
+| `compat` | `aa3ca532` 将 `index_copy` 提升为 numerical 模块级稳定 owner，保留 `Var.index_copy_` 原地语义并登记 approximate fidelity；CPU 对拍 2 passed。7.03 其余 family 仍待领。 |
+| `device` | `softmax.dim`/`triu.diagonal` 均依赖统一 data-channel schema、C++ attr 解码和 cache-key 契约，无法安全独立迁移；本波无代码提交。 |
+| `gates` | 本波未扩大 `SLOW_FILES`；0.15 完整 smoke 仍约 390 s，10.19 HCCL route 仍缺 Ascend 910B3 多卡 CPU 对照。 |
+
 按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第一百波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
