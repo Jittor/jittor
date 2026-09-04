@@ -185,6 +185,30 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             np.testing.assert_array_equal(all_rows, np.array([[True], [False]]))
             np.testing.assert_array_equal(any_rows, np.array([[True], [True]]))
 
+    def test_tensor_split_take_are_stable_and_registered(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        for name in ("tensor_split", "take"):
+            with self.subTest(name=name):
+                implementation = getattr(numerical, name)
+                self.assertIs(getattr(torch, name), implementation)
+                record = fidelity.fidelity_of("torch." + name)
+                self.assertIs(record.implementation, implementation)
+                self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+
+    def test_tensor_split_take_cpu_values(self):
+        with torch.flag_scope(use_cuda=0):
+            values = np.arange(10, dtype=np.float32).reshape(2, 5)
+            tensor = torch.array(values)
+            parts = torch.tensor_split(tensor, 3, dim=1)
+            expected = np.array_split(values, 3, axis=1)
+            for actual, reference in zip(parts, expected):
+                np.testing.assert_array_equal(actual.numpy(), reference)
+            index = torch.array([0, 4, 7], dtype=torch.int32)
+            np.testing.assert_array_equal(
+                torch.take(tensor, index).numpy(), values.reshape(-1)[[0, 4, 7]])
+
     def test_eye_is_a_stable_module_level_object(self):
         numerical = importlib.import_module(
             "jittor.compat.torch.installers.numerical")

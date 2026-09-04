@@ -1520,6 +1520,55 @@ register_fidelity(
 )
 
 
+def tensor_split(input, indices_or_sections, dim=0):
+    """Split a tensor into uneven chunks using view slices."""
+    d = dim % input.ndim
+    length = int(input.shape[d])
+
+    def _slice(start, stop):
+        index = [slice(None)] * input.ndim
+        index[d] = slice(start, stop)
+        return input[tuple(index)]
+
+    if isinstance(indices_or_sections, int):
+        n = indices_or_sections
+        base, rem = divmod(length, n)
+        sizes = [base + 1] * rem + [base] * (n - rem)
+        result, start = [], 0
+        for size in sizes:
+            result.append(_slice(start, start + size))
+            start += size
+        return result
+    points, result, previous = list(indices_or_sections), [], 0
+    for point in points + [length]:
+        result.append(_slice(previous, point))
+        previous = point
+    return result
+
+
+register_fidelity(
+    "torch.tensor_split",
+    tensor_split,
+    Fidelity.APPROXIMATE,
+    "matches Torch split shapes and values for CPU tensors; device, layout, "
+    "named-dimension, and out semantics are not implemented",
+)
+
+
+def take(input, index):
+    """Select flattened elements using Torch's ``take`` semantics."""
+    return input.reshape((-1,))[index]
+
+
+register_fidelity(
+    "torch.take",
+    take,
+    Fidelity.APPROXIMATE,
+    "matches Torch flattened indexing values for CPU tensors; device, layout, "
+    "dtype, and out semantics are not implemented",
+)
+
+
 def kron(a, b):
     """Compute the Kronecker product through broadcasted Jittor views."""
     nd = max(a.ndim, b.ndim)
@@ -1746,28 +1795,11 @@ def install(ctx):
     Var.index_copy = lambda self, dim, index, source: _index_copy_(self.clone(), dim, index, source)
     g.index_copy = lambda input, dim, index, source: _index_copy_(input.clone(), dim, index, source)
     g.index_put = lambda input, indices, values, accumulate=False: _index_put_(input.clone(), indices, values, accumulate)
-    def _tensor_split(self, indices_or_sections, dim=0):
-        d = dim % self.ndim
-        L = int(self.shape[d])
-        def _slice(a, b):
-            ix = [slice(None)] * self.ndim; ix[d] = slice(a, b)
-            return self[tuple(ix)]
-        if isinstance(indices_or_sections, int):
-            n = indices_or_sections
-            base, rem = L // n, L % n
-            sizes = [base + 1] * rem + [base] * (n - rem)
-            out, start = [], 0
-            for s in sizes:
-                out.append(_slice(start, start + s)); start += s
-            return out
-        pts, out, prev = list(indices_or_sections), [], 0
-        for p in pts + [L]:
-            out.append(_slice(prev, p)); prev = p
-        return out
-    Var.tensor_split = _tensor_split
-    g.tensor_split = lambda input, indices_or_sections, dim=0: _tensor_split(input, indices_or_sections, dim)
-    Var.take = lambda self, index: self.reshape((-1,))[index]
-    g.take = lambda input, index: input.reshape((-1,))[index]
+    Var.tensor_split = lambda self, indices_or_sections, dim=0: tensor_split(
+        self, indices_or_sections, dim)
+    g.tensor_split = tensor_split
+    Var.take = lambda self, index: take(self, index)
+    g.take = take
     _alias("eye", eye)
     register_fidelity(
         "torch.eye", eye, Fidelity.APPROXIMATE,
