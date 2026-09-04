@@ -711,3 +711,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 ### 2026-09-04 第七十波补充证据
 
 - `8.06`：`18fca063` 将 Index 接入共享 launcher，保留 index query 与同步策略，SliceV2 未迁；静态合同 58 passed，本机无 CANN/NPU，仍待实机。
+
+### 2026-09-04 第七十一波补充证据
+
+- `8.06`：`2e27d71b` 将 SliceV2 接入共享 launcher，保留 begins/ends/steps/axes descriptors 与同步策略；静态合同 59 passed，本机无 CANN/NPU，仍待实机。
