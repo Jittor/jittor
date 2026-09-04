@@ -41,7 +41,7 @@ void CudnnConv3dOp::infer_shape() {
     else
         x->shape.unpack(xn, xd, xh, xw, xc);
     w->shape.unpack(wco, wci, wd, wh, ww);
-    ASSERTop(wci * groups,==,xc);
+    USER_CHECKop(wci * groups,==,xc);
     yn = xn, yc = wco;
     yd = (xd+paddingd*2-wd*dilationd+dilationd-1)/strided+1;
     yh = (xh+paddingh*2-wh*dilationh+dilationh-1)/strideh+1;

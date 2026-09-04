@@ -140,7 +140,7 @@ MIGRATED_CUDNN_CONV_BWD_W_FORMAT_USER_BOUNDARIES = {
 }
 
 MIGRATED_CUDNN_CONV3D_X_RANK_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_op.cc": 2,
+    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_op.cc": 3,
 }
 
 MIGRATED_CUDNN_CONV3D_BWD_X_W_RANK_USER_BOUNDARIES = {
