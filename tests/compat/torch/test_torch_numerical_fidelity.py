@@ -1173,6 +1173,24 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIn("identity", record.detail)
         self.assertIn("device", record.detail)
 
+    def test_sparse_coo_tensor_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.sparse_coo_tensor))
+        self.assertIs(torch.sparse_coo_tensor, numerical.sparse_coo_tensor)
+        self.assertEqual(numerical.sparse_coo_tensor.__module__, numerical.__name__)
+        self.assertEqual(numerical.sparse_coo_tensor.__name__, "sparse_coo_tensor")
+
+    def test_sparse_coo_tensor_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.sparse_coo_tensor")
+        self.assertIs(record.implementation, numerical.sparse_coo_tensor)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("sparse", record.detail)
+        self.assertIn("device", record.detail)
+
 
 if __name__ == "__main__":
     unittest.main()
