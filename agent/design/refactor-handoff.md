@@ -1212,6 +1212,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `bindings` | 复核 9.23 已由 `17e43c9a` 合入：POSIX 进程组终止与有界 drain 覆盖孙进程留存；grandchildren 聚焦测试 1 passed。 |
 | `gates` | 本波无新代码提交；只确认已有提交、测试证据与当前主线一致，未宣称 Windows/真实 CUDA/NPU 全平台验证。 |
 
+### 2026-09-04 第一百五十三波
+
+| 分区 | 结果 |
+| --- | --- |
+| `bindings` | 8.12 修前核对确认 cuDNN 2D/3D forward、backward-x、backward-w 共六条 legacy cache 仍用全局 `JK/to_string()`；需要统一 `LegacyConvAlgoKey`、跨 TU 声明、per-device 生命周期和 CUDA 验收，本机无 CUDA，未做半迁移。 |
+| `device` | 4.13 现有 ACL/CUDA/external capability 接口彼此独立，没有统一 `(op, backend, dtype, layout)` 矩阵 owner 或跨后端 runner；ACL/ROCm/Corex 硬件也不可用，未伪造契约完成。 |
+| `compat` | 5.24 的十个 `jt._*` 跨模块契约未找到可独立闭环的安全切片；本波无代码提交。 |
+| `gates` | 上述三项均保持 `待领`，原因与证据已写入对应看板行；未新增进行中任务。 |
+
 ### 2026-09-04 第一百四十波
 
 | 分区 | 结果 |
