@@ -162,6 +162,29 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             expected = np.log(np.exp(values).sum(axis=1))
             np.testing.assert_allclose(actual, expected, rtol=1e-6)
 
+    def test_all_any_are_stable_module_level_objects_and_registered(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        for name in ("all", "any"):
+            with self.subTest(name=name):
+                implementation = getattr(numerical, name)
+                self.assertIs(getattr(torch, name), implementation)
+                record = fidelity.fidelity_of("torch." + name)
+                self.assertIs(record.implementation, implementation)
+                self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+                self.assertIn("keepdims", record.detail)
+
+    def test_all_any_cpu_values_and_keepdims(self):
+        with torch.flag_scope(use_cuda=0):
+            values = torch.array([[1, 1], [1, 0]])
+            self.assertTrue(bool(torch.all(torch.array([[1, 1]])).item()))
+            self.assertFalse(bool(torch.all(values == 0).item()))
+            all_rows = torch.all(values, axis=1, keepdims=True).numpy()
+            any_rows = torch.any(values, dim=1, keepdim=True).numpy()
+            np.testing.assert_array_equal(all_rows, np.array([[True], [False]]))
+            np.testing.assert_array_equal(any_rows, np.array([[True], [True]]))
+
     def test_eye_is_a_stable_module_level_object(self):
         numerical = importlib.import_module(
             "jittor.compat.torch.installers.numerical")

@@ -7,6 +7,7 @@ changing the compatibility semantics.
 import jittor as jt
 from jittor import nn
 import numpy as np
+from builtins import all as _py_all, any as _py_any
 from collections import namedtuple as _namedtuple
 
 from ..functional import (
@@ -23,6 +24,45 @@ from ..types import (
 )
 from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed
+
+_native_all = jt.all
+_native_any = jt.any
+
+
+def _reduce_alias(native, input, dim=None, keepdim=False, *, axis=None,
+                  keepdims=None, out=None):
+    d = axis if axis is not None else dim
+    kd = keepdims if keepdims is not None else keepdim
+    if d is None or d == ():
+        return native(input)
+    result = native(input, d)
+    if kd:
+        dims = (d,) if isinstance(d, int) else tuple(d)
+        for dd in sorted(x % input.ndim for x in dims):
+            result = result.unsqueeze(dd)
+    return result
+
+
+def all(input, dim=None, keepdim=False, *, axis=None, keepdims=None, out=None):
+    return _reduce_alias(_native_all, input, dim, keepdim,
+                         axis=axis, keepdims=keepdims, out=out)
+
+
+def any(input, dim=None, keepdim=False, *, axis=None, keepdims=None, out=None):
+    return _reduce_alias(_native_any, input, dim, keepdim,
+                         axis=axis, keepdims=keepdims, out=out)
+
+
+for _reduce_name, _reduce_impl in (("all", all), ("any", any)):
+    register_fidelity(
+        "torch." + _reduce_name,
+        _reduce_impl,
+        Fidelity.APPROXIMATE,
+        "matches Torch boolean reduction values and keepdims/axis shape for "
+        "CPU tensors; device, dtype, named-dimension, and out semantics are "
+        "not implemented",
+    )
+del _reduce_name, _reduce_impl
 
 
 _COMPLEX_FIDELITY_DETAIL = (
@@ -636,7 +676,7 @@ def row_stack(tensors):
 def hstack(tensors):
     """Stack one-dimensional tensors along 0 and higher-rank tensors along 1."""
     tensors = list(tensors)
-    dim = 0 if all(t.ndim == 1 for t in tensors) else 1
+    dim = 0 if _py_all(t.ndim == 1 for t in tensors) else 1
     return jt.concat(tensors, dim=dim)
 
 
@@ -1650,30 +1690,12 @@ def install(ctx):
     # jt.gather returns the index's shape (batch, k, 1), collapsing seq_len -> beam
     # search crashed on the next `seq[:, :, cur_len] = ...` setitem. Broadcast first.
     _alias("take_along_dim", take_along_dim)
-    # torch.all/any accept numpy-style axis=/keepdims= aliases (transformers' beam
-    # search _update_finished_beams: torch.all(x, axis=-1, keepdims=True)). jittor's
-    # native all/any take only `dim` and have no keepdims. Wrap to accept both spellings
-    # (dim/axis, keepdim/keepdims) while staying backward-compatible with all(x)/all(x,d).
-    def _reduce_alias(orig):
-        def f(input, dim=None, keepdim=False, *, axis=None, keepdims=None, out=None):
-            d = axis if axis is not None else dim
-            kd = keepdims if keepdims is not None else keepdim
-            if d is None or d == ():
-                return orig(input)
-            r = orig(input, d)
-            if kd:
-                dims = (d,) if isinstance(d, int) else tuple(d)
-                nd = input.ndim
-                for dd in sorted(x % nd for x in dims):
-                    r = r.unsqueeze(dd)
-            return r
-        return f
     _orig_all = getattr(g, "all", None)
     _orig_any = getattr(g, "any", None)
     if callable(_orig_all):
-        g.all = _reduce_alias(_orig_all)
+        g.all = all
     if callable(_orig_any):
-        g.any = _reduce_alias(_orig_any)
+        g.any = any
     _alias("movedim", movedim)
     _alias("moveaxis", moveaxis)
     # Var.movedim/moveaxis (the functions exist but weren't bound as methods), plus
@@ -1776,7 +1798,7 @@ def install(ctx):
         # Transformers builds attention masks under TransformGetItemToIndex
         # using nested pointwise vmaps. Materialize their Cartesian batch axes
         # through broadcasting instead of creating one graph per scalar pair.
-        if len(specs) < 2 or any(out_dims != 0 for _, out_dims in specs):
+        if len(specs) < 2 or _py_any(out_dims != 0 for _, out_dims in specs):
             return None
         mapped_by_arg = [[] for _ in args]
         level_sizes = []
@@ -1793,11 +1815,11 @@ def install(ctx):
                         return None
                     mapped_by_arg[arg_index].append(level)
                     mapped_sizes.append(int(args[arg_index].shape[dim]))
-            if not mapped_sizes or any(size != mapped_sizes[0]
+            if not mapped_sizes or _py_any(size != mapped_sizes[0]
                                        for size in mapped_sizes[1:]):
                 return None
             level_sizes.append(mapped_sizes[0])
-        if any(len(levels) > 1 for levels in mapped_by_arg):
+        if _py_any(len(levels) > 1 for levels in mapped_by_arg):
             return None
 
         level_count = len(specs)
@@ -1855,7 +1877,7 @@ def install(ctx):
                 if not isinstance(r, jt.Var):
                     r = jt.array(r)
                 outs.append(r)
-            if all(o.ndim >= 1 and o.shape[-1] == 1 for o in outs) and all(o.ndim == outs[0].ndim for o in outs):
+            if _py_all(o.ndim >= 1 and o.shape[-1] == 1 for o in outs) and _py_all(o.ndim == outs[0].ndim for o in outs):
                 outs = [o.reshape(o.shape[:-1]) if o.ndim > 1 else o for o in outs]
             od = out_dims if isinstance(out_dims, int) else (out_dims[0] if out_dims else 0)
             return jt.stack(outs, dim=od)
