@@ -1353,6 +1353,24 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIn("dtype", record.detail)
         self.assertIn("device", record.detail)
 
+    def test_relu_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.relu))
+        self.assertIs(torch.relu, numerical.relu)
+        self.assertEqual(numerical.relu.__module__, numerical.__name__)
+        self.assertEqual(numerical.relu.__name__, "relu")
+
+    def test_relu_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.relu")
+        self.assertIs(record.implementation, numerical.relu)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("inplace", record.detail)
+        self.assertIn("device", record.detail)
+
 
 if __name__ == "__main__":
     unittest.main()

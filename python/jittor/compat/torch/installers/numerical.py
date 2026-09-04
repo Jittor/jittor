@@ -365,6 +365,25 @@ register_fidelity(
 )
 
 
+_RELU_FIDELITY_DETAIL = (
+    "matches Torch elementwise ReLU values through Jittor's native nn owner but "
+    "omits inplace, device, layout, and dtype keyword semantics"
+)
+
+
+def relu(input, **kwargs):
+    """Compute elementwise rectified linear activation."""
+    return jt.nn.relu(input)
+
+
+register_fidelity(
+    "torch.relu",
+    relu,
+    Fidelity.APPROXIMATE,
+    _RELU_FIDELITY_DETAIL,
+)
+
+
 _NAN_TO_NUM_INPLACE_FIDELITY_DETAIL = (
     "matches Torch in-place NaN/Inf replacement and return identity for supported "
     "real tensors but omits device, layout, dtype, and narrow custom-bound semantics"
@@ -1282,7 +1301,7 @@ def install(ctx):
     # torch.softmax(x, dim=...)). jittor exposes these via nn, not the top level.
     _alias("softmax", softmax)
     _alias("log_softmax", log_softmax)
-    _alias("relu", lambda input, **k: jt.nn.relu(input))
+    _alias("relu", relu)
     # elementwise / functional top-level forms missing from jittor's top level
     _alias("log1p", log1p)
     _alias("reciprocal", reciprocal)
