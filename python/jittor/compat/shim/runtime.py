@@ -266,7 +266,8 @@ def _activate_once(
     from jittor.compat.integrations import apply_external_runtime_patches
 
     integration_report = apply_external_runtime_patches(
-        logger=getattr(getattr(jt, "compiler", None), "LOG", None)
+        logger=getattr(getattr(jt, "compiler", None), "LOG", None),
+        transaction=_transaction,
     )
 
     return {
