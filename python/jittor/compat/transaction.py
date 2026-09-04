@@ -50,6 +50,23 @@ class InstallTransaction:
         self.record(target, name, old, value)
         setattr(target, name, value)
 
+    def mutate_path(self, paths, value, prepend=False):
+        """Insert an owned path once and remove only that insertion on rollback."""
+        if value in paths:
+            return False
+        index = 0 if prepend else len(paths)
+        paths.insert(index, value)
+        self.record_undo(lambda: paths.pop(index) if len(paths) > index and paths[index] == value
+                         else (_raise_conflict("path entry changed externally")))
+        return True
+
+    def publish_module(self, modules, name, module):
+        old = modules.get(name, _MISSING)
+        if old is not _MISSING and old is not module:
+            raise TransactionConflict("module %r already owned externally" % name)
+        modules[name] = module
+        self.record(modules, name, old, module)
+
     def acquire(self):
         self._lock.acquire()
 
@@ -104,8 +121,18 @@ class _Missing:
 _MISSING = _Missing()
 
 
+def _raise_conflict(message):
+    raise TransactionConflict(message)
+
+
 class TransactionConflict(RuntimeError):
     """Raised when rollback would overwrite a value owned by another actor."""
+
+
+class ActivationTransaction(InstallTransaction):
+    """Transaction protocol for shim activation path/module/flag mutations."""
+
+    pass
 
 
 def _read(target, name):
@@ -129,4 +156,4 @@ def _matches(current, expected):
         return False
 
 
-__all__ = ["InstallTransaction", "TransactionConflict"]
+__all__ = ["InstallTransaction", "ActivationTransaction", "TransactionConflict"]
