@@ -5,6 +5,9 @@ ROOT = Path(__file__).resolve().parents[2]
 GUIDE = ROOT / "docs/testing/torch-install-state-boundary.md"
 HELPER = ROOT / "tests/_helpers/child_process.py"
 DIST_INSTALLER = ROOT / "python/jittor/compat/torch/installers/distributed.py"
+RUNTIME = ROOT / "python/jittor/compat/shim/runtime.py"
+INTEGRATIONS = ROOT / "python/jittor/compat/integrations.py"
+TORCH_INSTALL = ROOT / "python/jittor/compat/torch/__init__.py"
 
 
 def test_install_boundary_distinguishes_namespace_and_process_isolation():
@@ -48,3 +51,14 @@ def test_distributed_env_writes_are_explicit_and_child_helper_is_pure():
     ):
         assert 'set_env("%s"' % name in installer
     assert "JITTOR_TORCH_SHIM" in helper
+
+
+def test_activation_passes_outer_transaction_and_clears_inner_install_state():
+    runtime = RUNTIME.read_text(encoding="utf-8")
+    integrations = INTEGRATIONS.read_text(encoding="utf-8")
+    torch_install = TORCH_INSTALL.read_text(encoding="utf-8")
+    assert "def apply_external_runtime_patches(logger=None, transaction=None):" in integrations
+    assert "apply_external_runtime_patches(\n        logger=" in runtime
+    assert "transaction=_transaction" in runtime
+    assert "transaction=transaction" in integrations
+    assert "context.state.pop(\"_install_transaction\", None)" in torch_install
