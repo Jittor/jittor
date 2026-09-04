@@ -95,6 +95,8 @@
 > 第147波 7.05 修正：`065b71f9` 将 outer ActivationTransaction 显式传给 integrations，并在 inner torch install commit/rollback 后清理 state，修复 nested committed-tx 被误用的问题；`45a1283c` 补结构合同，安装上下文/事务定向 31 passed。7.05 仍待完整 activation 验收。
 >
 > 第148波回归：`45a1283c` 的 activation transaction handoff 合同独立验证 outer transaction 传递和 inner state 清理，避免后续 refactor 回退；不改变 7.05 待领状态。
+>
+> 第149波测试修正：`a08d5c15` 更新 activation bootstrap 的两个旧夹具以匹配 `publish_module`/`mutate_path` 新协议；完整 `test_torch_bootstrap.py` 现为 42 passed。7.05 仍待扩展构建和全量运行态验收。
 
 一行一个任务，与 [refactor-plan.md](refactor-plan.md) 的编号对应。领任务把状态改成「进行中」并写名字，
 完成改成「已合并」并填提交号；推送冲突说明别人先领了。状态只有四种：待领 / 进行中 / 已合并 / 并入 X。
