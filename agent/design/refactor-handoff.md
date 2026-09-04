@@ -1135,6 +1135,13 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `compat` | `1a37b895` 让 `module_patcher.install_module_patches` 接收 transaction，记录 `_FINDER` 插入及 `_REGISTRY`/`_ENTRY_POINTS_LOADED` undo，integrations 传递 active transaction；外部 finder/allowlist owner 冲突测试仍缺，7.05 不关闭。 |
 | `gates` | `py_compile`/`diff-check` 通过；失败 patch 与已加载模块属性的完整回滚仍待。 |
 
+### 2026-09-04 第一百三十九波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `ee1317c2` 让 permissive finder 新增/索引与既有 allowlist 增量回滚做 owner-aware 校验；外部 allowlist/finder 重排负向测试纳入事务合同，事务测试 9 passed。module_patcher/其他 installer 全流程仍待，7.05 不关闭。 |
+| `gates` | `py_compile`/`diff-check` 通过，未改变整卡状态。 |
+
 ### 2026-09-04 第一百三十六波
 
 | 分区 | 结果 |
