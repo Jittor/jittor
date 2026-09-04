@@ -3,7 +3,7 @@ import types
 
 import pytest
 
-from jittor.compat.transaction import InstallTransaction, TransactionConflict
+from jittor.compat.transaction import ActivationTransaction, InstallTransaction, TransactionConflict
 from jittor.compat.torch.installers.core import _set_install_flag
 from jittor.compat.torch.installers.utilities import _mutate_import
 
@@ -98,6 +98,17 @@ def test_environment_mutation_records_the_normalized_string_value():
     assert env["RANK"] == "1"
     tx.rollback()
     assert "RANK" not in env
+
+
+def test_activation_transaction_path_and_module_owner_conflicts():
+    paths = ["stdlib"]
+    modules = {}
+    tx = ActivationTransaction("shim.activate")
+    tx.mutate_path(paths, "shim", prepend=True)
+    tx.publish_module(modules, "torch", object())
+    tx.rollback()
+    assert paths == ["stdlib"]
+    assert modules == {}
 
 
 def test_module_patch_finder_rollback_is_owner_aware():
