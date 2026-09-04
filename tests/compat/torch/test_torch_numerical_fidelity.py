@@ -209,6 +209,25 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             np.testing.assert_array_equal(
                 torch.take(tensor, index).numpy(), values.reshape(-1)[[0, 4, 7]])
 
+    def test_index_copy_is_stable_and_registered(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        self.assertIs(torch.index_copy, numerical.index_copy)
+        record = fidelity.fidelity_of("torch.index_copy")
+        self.assertIs(record.implementation, numerical.index_copy)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+
+    def test_index_copy_cpu_values_and_non_inplace_behavior(self):
+        with torch.flag_scope(use_cuda=0):
+            base = torch.array([[1, 2], [3, 4], [5, 6]])
+            source = torch.array([[10, 20], [30, 40]])
+            index = torch.array([0, 2], dtype=torch.int32)
+            actual = torch.index_copy(base, 0, index, source)
+            np.testing.assert_array_equal(
+                actual.numpy(), np.array([[10, 20], [3, 4], [30, 40]]))
+            np.testing.assert_array_equal(base.numpy(), np.array([[1, 2], [3, 4], [5, 6]]))
+
     def test_eye_is_a_stable_module_level_object(self):
         numerical = importlib.import_module(
             "jittor.compat.torch.installers.numerical")
