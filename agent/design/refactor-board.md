@@ -822,4 +822,10 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 
 ### 2026-09-04 第九十一波补充证据
 
+- `2.19`：`bf5fef1e`/`a7bc9595` 收紧 CUBLAS/CUDNN 测试入口内部断言精确计数门禁；结构门禁 1 passed，不改变运行语义或用户边界累计。
+- `7.03`：`ac38772d` 补充 vmap kwargs 兼容矩阵，明确 in/out_dims 归一化、randomness/chunk_size unsupported、未知 kwargs TypeError 与静态门禁；仅设计前置。
+- `8.06`：只读确认标准 ACL launcher owner 已全部处理，KVCacheMemcpy 保持专用路径，本波无代码提交。
+
+### 2026-09-04 第九十一波补充证据
+
 - `2.19`：`bf5fef1e` 补充 CUBLAS/CUDNN 测试入口内部断言精确计数门禁；结构门禁 1 passed，不改变运行语义或用户边界累计。
