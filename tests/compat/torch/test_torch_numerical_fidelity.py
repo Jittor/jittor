@@ -314,6 +314,16 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 torch.corrcoef(torch.array(values)).numpy(),
                 np.corrcoef(values), rtol=1e-6, atol=1e-6)
 
+    def test_broadcast_shapes_is_stable_and_registered(self):
+        tensor_owner = importlib.import_module("jittor.compat.torch.installers.tensor")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        self.assertIs(torch.broadcast_shapes, tensor_owner.broadcast_shapes)
+        record = fidelity.fidelity_of("torch.broadcast_shapes")
+        self.assertIs(record.implementation, tensor_owner.broadcast_shapes)
+
+    def test_broadcast_shapes_matches_numpy(self):
+        self.assertEqual(tuple(torch.broadcast_shapes((2, 1), (1, 3))), (2, 3))
+
     def test_autocast_is_a_stable_module_level_object_and_registered(self):
         numerical = importlib.import_module(
             "jittor.compat.torch.installers.numerical")

@@ -49,6 +49,23 @@ register_fidelity(
 )
 
 
+def broadcast_shapes(*shapes):
+    """Return Torch-compatible broadcasted shape metadata."""
+    norm = [
+        (int(shape),) if isinstance(shape, (int, np.integer))
+        else tuple(int(dim) for dim in shape)
+        for shape in shapes
+    ]
+    return _TorchSize(np.broadcast_shapes(*norm)) if norm else _TorchSize(())
+
+
+register_fidelity(
+    "torch.broadcast_shapes", broadcast_shapes, Fidelity.APPROXIMATE,
+    "matches Torch broadcasted shape tuples through NumPy; symbolic, named "
+    "dimensions, and device semantics are not implemented",
+)
+
+
 def _ddp_all_reduce_grads(leaves):
     """Average DDP-managed gradients across ranks, in a rank-stable order.
 
@@ -2102,12 +2119,6 @@ def install(ctx):
     Size = _TorchSize
     g.Size = Size
 
-    # torch.broadcast_shapes(*shapes) -> Size : broadcasted shape of the inputs
-    # (used by verl's advantage/reward broadcasting). numpy implements the same rule.
-    def broadcast_shapes(*shapes):
-        import numpy as _npb
-        norm = [(int(s),) if isinstance(s, (int, np.integer)) else tuple(int(d) for d in s) for s in shapes]
-        return Size(_npb.broadcast_shapes(*norm)) if norm else Size(())
     g.broadcast_shapes = broadcast_shapes
 
     g.corrcoef = corrcoef
