@@ -558,6 +558,9 @@ steps, and axes descriptor handling with synchronous execution.
 The ACL StridedSliceAssignV2 owner uses the shared launcher while retaining its
 gradient memset branch and slice descriptor handling.
 
+The ACL InplaceMaskedScatter owner uses the shared launcher while retaining its
+tracked base-to-output device copy dependency and synchronous execution.
+
 The ACL Dropout backward owner uses the shared launcher while retaining its
 scale query and synchronous execution policy.
 

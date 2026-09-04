@@ -47,17 +47,7 @@ namespace jittor
                          ACL_MEMCPY_DEVICE_TO_DEVICE, aclstream);
         ret = aclnnInplaceMaskedScatterGetWorkspaceSize(outputTensors[0], inputTensors[1], inputTensors[2], &workspaceSize, &executor);
 
-        checkRet(ret);
-
-        if (workspaceSize > 0)
-        {
-            mallocWorkSpace(workspaceSize);
-        }
-
-        ret = aclnnInplaceMaskedScatter(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnInplaceMaskedScatter failed. ERROR: %d\n", name.c_str(), ret); return);
-
-        syncRun();
+        launch(ret, aclnnInplaceMaskedScatter, true);
         return;
     }
 
