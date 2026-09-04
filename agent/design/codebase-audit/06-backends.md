@@ -90,7 +90,21 @@ event 依赖）；本任务补上它缺的那一半——两卡实测。`tests/d
 对五个集合通信各做一次 rank 相关数值对拍并断言 event 依赖计数各 +2，再用 200 次
 「默认流算出输入 → 集合通信 → 默认流立刻消费输出」的循环覆盖竞态。**反证做过**：把两条
 event 依赖临时删掉（算子仍在 side stream 上）时该循环报 `worst=885.0 != 0.0`，两个 rank
-都红，所以这条断言不是恒绿的。GroupStart/End 桶化仍待做，本条只覆盖「不再是默认流」。
+都红，所以这条断言不是恒绿的。
+
+已修：同一条的后半截「也无 GroupStart/End，梯度不能分桶」与「通信与计算不可能重叠」。
+新增 `nccl_bucket_begin/end` 与 `nccl_comm_wait`（`nccl_wrapper.cc`）、
+`cuda_side_stream_defer_join` / `_hold_block` / `_resolve_join`（`misc/cuda_streams.cc`），
+Python 侧入口 `jittor.distributed.bucket_scope`。一桶内的集合通信合并成一次
+`ncclGroupEnd()` 提交（事件依赖从 2N 降到 N+1），`defer_join` 让默认流跑在集合通信前面，
+由 `nccl_comm_wait()` 补上 comm→compute 那条依赖。分桶期间输入与输出的块必须扣在
+分配器之外（`share_with` 加持有 `Allocation`，与 `fetch_op` 同一手法），否则默认流跑在
+前面时分配器会把它们发出去。
+重叠证据是 nsys timeline 而不是墙钟（取证方法与实测数字见
+`agent/skills/jittor-distributed-verification/SKILL.md`）：同进程同负载 A/B，延迟 join 时
+集合通信 12.2 ms 窗口内有 5 个 matmul kernel 并发、覆盖 57%–63%，立刻 join 时并发数 0。
+**本机墙钟没有收益**——无 P2P 时 NCCL 走共享内存传输、kernel 自旋抢 SM，窗口内的
+matmul 从 0.31 ms 被拖慢到 0.83–4.28 ms。重叠是真的，加速不是；不要拿墙钟做验收。
 
 ## ACL 三件套：样板量化
 一个 ACL 算子由三部分组成：`*_op_acl.cc` 的 OpRunner、`*_op.py` 的 jt.Function、

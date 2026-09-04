@@ -51,13 +51,18 @@ void NcclReduceOp::jit_run() {
     checkCudaErrors(ncclReduce(
         xp, yp, y->num, nccl_dtype(x->dtype()), ncclSum, root,
         nccl_process_group_comm(group_id), stream));
-    nccl_stream_end();
     // See mpi_reduce_op.cc for why the non-root output stays full-size and
     // deterministic rather than being shrunk or aliased away: every rank must
     // run the same graph. Its contents are meaningless by definition; zero is
     // a filler, not a value.
+    //
+    // Zeroed on the communication stream rather than the default one so it
+    // stays ordered with the collective under either join policy. On the
+    // default stream it was only ordered because nccl_stream_end() happened to
+    // join right above it, which stops being true inside a deferred bucket.
     if (root != nccl_process_group_rank(group_id))
-        checkCudaErrors(cudaMemsetAsync(yp, 0, y->size));
+        checkCudaErrors(cudaMemsetAsync(yp, 0, y->size, stream));
+    nccl_stream_end(x, y);
 }
 
 #endif

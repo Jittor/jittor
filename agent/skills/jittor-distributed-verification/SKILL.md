@@ -188,6 +188,77 @@ assert max(float(e.numpy()) for e in errors) == 0.0
 注意「修前」不等于「删掉 event」：改动前的状态是 stream 0，那是**有序的**，
 所以拿改动前的代码跑第 3 条会绿。这类改动的诚实反证是「侧流 + 无事件」。
 
+## 怎么证明通信真的和计算重叠了（不要用墙钟）
+
+**墙钟证明不了重叠。** 变快可能来自缓存、来自别的分区腾出了卡、来自你换了张量大小；
+而在**没有 P2P 的机器上重叠了也不会变快**（见下面「本机的实测结论」）。所以判据是
+**profiler timeline 上两条流的 kernel 时间区间真的相交**，墙钟只能当补充。
+
+### 取证：nsys + 同一进程内的 A/B
+
+只 profile rank 0（两个 rank 都 profile 会互相拖慢，且看一个就够）：
+
+```bash
+mpirun --allow-run-as-root -np 2 \
+  -x PYTHONPATH -x JITTOR_HOME -x TMPDIR -x CUDA_VISIBLE_DEVICES -x nvcc_path -x PATH \
+  bash -c 'if [ "$OMPI_COMM_WORLD_RANK" = "0" ]; then
+             exec nsys profile -o tl --force-overwrite true --trace=cuda -s none \
+               python probe.py
+           else exec python probe.py; fi'
+
+nsys export --type sqlite --force-overwrite true -o tl.sqlite tl.nsys-rep
+python agent/skills/jittor-distributed-verification/nccl_overlap_report.py tl.sqlite
+```
+
+`-s none` 关掉采样（否则 nsys 自己会改变时序）。`nsys` 在
+`$(dirname $(which nvcc))` 下，不在默认 PATH 里。
+
+**probe 脚本必须在同一个进程里跑 A/B 两种模式**：先 N 轮「立刻 join」，再 N 轮
+「延迟 join」，工作负载逐字相同。同进程同负载，才排除得掉「换了配置所以数不一样」。
+
+### 判据（两条都要）
+
+| 模式 | 每个集合通信的并发 kernel 数 |
+| --- | --- |
+| 立刻 join（改动前的语义） | **必须是 0** |
+| 延迟 join | **必须 > 0**，并给出覆盖百分比 |
+
+**「立刻 join」那一档是这次取证的关键**，不是对照摆设：它一旦不是 0，说明你的 join
+记在了一个什么都排不了序的位置，你看到的「重叠」其实是竞态。真实踩到过——
+`ncclGroupStart` 打开期间 NCCL 调用还没提交到流上，此时 `cudaEventRecord` 记的 done
+事件是空的，于是 `defer_join=False` 也「重叠」了 61%。**这就是那个 bug 的样子。**
+group 语义下 join 必须放在 `ncclGroupEnd()` **之后**。
+
+### 本机的实测结论：重叠是真的，但墙钟不会变好
+
+8 卡 RTX 4090、`nvidia-smi topo -p2p r` 全 CNS（任何一对卡都没有 peer access），
+于是 NCCL 走共享内存传输，集合通信 kernel 在卡上**自旋等对端**。实测（4×1 MB
+all_reduce 一桶，对照负载是 35 个 2048² matmul 链）：
+
+- timeline：延迟 join 时集合通信窗口 12.2 ms 内有 5 个 matmul kernel 并发执行，
+  覆盖窗口的 **57%–63%**；立刻 join 时并发数 **0**。**重叠是真的。**
+- 墙钟：串行 21.0 ms vs 重叠 21.0 ms，**没有收益**。原因是自旋的 NCCL kernel 和
+  matmul 抢 SM——窗口内那几个 matmul 从 0.31 ms 被拖慢到 0.83–4.28 ms。
+
+**结论：在这台机器上不要用墙钟给通信/计算重叠做验收，也不要因为墙钟没变好就以为
+重叠没发生。** 换成会饱和 SM 的负载（matmul）收益是 0；换成轻负载（1024² matmul 链）
+只有约 5%。有 NVLink / P2P 的机器上才该期待真实加速——那里 NCCL 不必自旋。
+
+### 自动化测试里能断言什么
+
+profiler 进不了 pytest，所以测试断言**让重叠成为可能的结构**，加上它带来的竞态：
+
+- `_cuda_stream_join_pending(1, device)`：延迟 join 之后必须为 True，
+  `nccl_comm_wait()` 之后必须为 False。**少了这条，「重叠」可能是一个零长度窗口**，
+  数值当然对，但什么也没证明。
+- `_cuda_stream_dependency_count(1, device)` 的增量区分三种形状：
+  N 个集合通信不分桶是 **2N**，分桶（无论哪种 join）是 **N+1**。
+- 缓冲区必须真的被扣住：延迟 join 期间默认流会跑在前面，**包括分配器把这些块发给
+  下一个算子**。测法是每轮 `del` 掉输入的所有引用，紧接着分配同样大小的缓冲区并
+  填毒值（`-12345`），最后 `nccl_comm_wait()` 再对拍。
+  **反证**：把「扣住块」那一步改成「假装成功、其实不扣」，这条必须变红
+  （实测报 `26310.0 != 0.0`，毒值漏进了结果）。
+
 ## 单卡就能复现「一个 rank 起不来，其余全挂」
 
 多卡失败模式里最贵的一类不需要多卡去复现：**等一个永远不会到的 peer**。
