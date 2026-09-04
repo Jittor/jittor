@@ -194,3 +194,40 @@ def test_transaction_records_module_attribute_diffs_for_failure_rollback():
     tx.record_object_diffs(module, before)
     tx.rollback()
     assert vars(module) == {"existing": "old"}
+
+
+class _RaisesOnCompare:
+    """A recorded value whose ``__eq__`` fails, as a Var's can."""
+
+    def __init__(self, error):
+        self._error = error
+
+    def __eq__(self, other):
+        raise self._error
+
+
+def _rollback_over_a_failing_comparison(error):
+    """Roll back a mutation whose owner check has to compare two of these."""
+    module = types.SimpleNamespace(value="old")
+    tx = InstallTransaction("owner")
+    tx.record(module, "value", "old", _RaisesOnCompare(error))
+    # A distinct instance, so the identity fast path cannot answer and the
+    # owner check reaches the comparison.
+    module.value = _RaisesOnCompare(error)
+    tx.rollback()
+
+
+def test_owner_check_treats_a_declared_comparison_failure_as_an_external_change():
+    with pytest.raises(TransactionConflict, match="owner lost"):
+        _rollback_over_a_failing_comparison(TypeError("no ordering"))
+
+
+def test_owner_check_lets_this_layers_own_bugs_surface():
+    """A NameError here is a typo in the ledger, not evidence of a foreign write.
+
+    The handler used to be ``except Exception``, which turned any bug inside the
+    comparison into "the value no longer matches" and reported it as a
+    TransactionConflict -- pointing the reader at an imaginary external writer.
+    """
+    with pytest.raises(NameError):
+        _rollback_over_a_failing_comparison(NameError("typo in the ledger"))

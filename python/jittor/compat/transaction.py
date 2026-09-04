@@ -3,6 +3,8 @@ from __future__ import absolute_import
 
 import threading
 
+from .diagnostics import EXPECTED, swallowed
+
 
 class InstallTransaction:
     """Record reversible mutations and publish them atomically under a process lock."""
@@ -152,7 +154,10 @@ def _matches(current, expected):
     try:
         result = current == expected
         return bool(result) if isinstance(result, bool) else False
-    except Exception:
+    except EXPECTED as exc:
+        swallowed("transaction.py _matches: result = current == expected", exc,
+                  "the recorded value is treated as changed by someone else, so "
+                  "rollback raises TransactionConflict instead of restoring it")
         return False
 
 
