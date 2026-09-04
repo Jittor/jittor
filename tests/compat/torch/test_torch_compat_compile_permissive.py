@@ -57,7 +57,7 @@ class TestCompileArguments(_PolicyBase):
         with self.assertRaises(NotImplementedError) as cm:
             torch.compile(torch.nn.Linear(3, 2), fullgraph=True)
         self.assertIn("fullgraph", str(cm.exception))
-        self.assertIn("never checked", str(cm.exception))
+        self.assertIn("unchecked", str(cm.exception))
 
     def test_fullgraph_false_is_accepted(self):
         model = torch.nn.Linear(3, 2)
