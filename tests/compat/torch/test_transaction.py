@@ -172,3 +172,14 @@ def test_permissive_finder_rollback_rejects_external_reordering():
     meta_path[:] = ["sentinel", finder]
     with pytest.raises(TransactionConflict, match="moved or replaced"):
         tx.rollback()
+
+
+def test_transaction_records_module_attribute_diffs_for_failure_rollback():
+    module = types.SimpleNamespace(existing="old")
+    before = dict(vars(module))
+    tx = InstallTransaction("module-owner")
+    module.existing = "new"
+    module.added = 7
+    tx.record_object_diffs(module, before)
+    tx.rollback()
+    assert vars(module) == {"existing": "old"}
