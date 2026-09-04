@@ -1137,6 +1137,24 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIn("niter", record.detail)
         self.assertIn("device", record.detail)
 
+    def test_pca_lowrank_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.pca_lowrank))
+        self.assertIs(torch.pca_lowrank, numerical.pca_lowrank)
+        self.assertEqual(numerical.pca_lowrank.__module__, numerical.__name__)
+        self.assertEqual(numerical.pca_lowrank.__name__, "pca_lowrank")
+
+    def test_pca_lowrank_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.pca_lowrank")
+        self.assertIs(record.implementation, numerical.pca_lowrank)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("center", record.detail)
+        self.assertIn("device", record.detail)
+
 
 if __name__ == "__main__":
     unittest.main()

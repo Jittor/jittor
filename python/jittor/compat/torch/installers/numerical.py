@@ -112,6 +112,26 @@ register_fidelity(
 )
 
 
+_PCA_LOWRANK_FIDELITY_DETAIL = (
+    "matches Torch centered low-rank decomposition through the compatibility "
+    "SVD owner for supported real matrices but omits niter, device, and dtype semantics"
+)
+
+
+def pca_lowrank(A, q=6, center=True, niter=2):
+    """Compute a low-rank decomposition after optional feature centering."""
+    centered = A - (A.mean(0, keepdims=True) if center else 0)
+    return svd_lowrank(centered, q=q, niter=niter)
+
+
+register_fidelity(
+    "torch.pca_lowrank",
+    pca_lowrank,
+    Fidelity.APPROXIMATE,
+    _PCA_LOWRANK_FIDELITY_DETAIL,
+)
+
+
 _STACKING_FIDELITY_DETAIL = (
     "matches Torch values and shapes for tensor inputs but omits Torch "
     "device, dtype, layout, pin-memory, and out keyword semantics"
@@ -1415,8 +1435,7 @@ def install(ctx):
     # ---- linalg (peft / lora init need svd_lowrank, svd) ----
     _alias("svd", svd)
     _alias("svd_lowrank", svd_lowrank)
-    _alias("pca_lowrank", lambda A, q=6, center=True, niter=2: svd_lowrank(
-        A - (A.mean(0, keepdims=True) if center else 0), q, niter))
+    _alias("pca_lowrank", pca_lowrank)
 
 
 def install_parity(ctx):
