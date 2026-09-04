@@ -10,6 +10,8 @@
 #include "misc/cuda_flags.h"
 #include "nccl_wrapper.h"
 #include "event_queue.h"
+#include "var.h"
+#include "mem/allocator.h"
 #include "misc/collective_dtype.h"
 #include "misc/file_rendezvous.h"
 #include <atomic>
@@ -56,6 +58,132 @@ ncclDataType_t nccl_dtype(NanoString dtype) {
 ncclUniqueId id;
 int nccl_device_id = 0;
 static vector<int> nccl_pending_unique_id;
+
+// ---------------------------------------------------------------- 8.02
+// Bucket scope state. All of it is per-process and only touched from the
+// executor thread and the Python calls that bracket a bucket, in that order.
+
+// Between nccl_bucket_begin() and nccl_bucket_end().
+static bool nccl_bucket_open = false;
+// ncclGroupStart() was issued and still needs its ncclGroupEnd().
+static bool nccl_group_opened = false;
+// This bucket is allowed to leave the join outstanding. Cleared the moment any
+// block cannot be pinned, because holding the block is what makes running
+// ahead of the collective safe.
+static bool nccl_bucket_defer = false;
+// Device the collectives in this bucket ran on. nccl_bucket_end() records the
+// done event there, and it is not necessarily whatever device is current when
+// Python closes the scope.
+static int nccl_bucket_device = -1;
+
+static bool nccl_hold(int device, Var* v) {
+    if (!v || !v->mem_ptr || !v->allocator) return false;
+    if (!v->allocator->can_share()) return false;
+    // Take the extra reference first; cuda_side_stream_hold_block owns it and
+    // drops it when the join resolves.
+    v->allocator->share_with(v->size, v->allocation);
+    return cuda_side_stream_hold_block(
+        CUDA_COMMUNICATION_STREAM, device,
+        v->mem_ptr, v->allocation, v->size, v->allocator);
+}
+
+cudaStream_t nccl_stream_begin() {
+    int device = current_device();
+    cuda_side_stream_wait_default(
+        CUDA_COMMUNICATION_STREAM, device, device);
+    if (nccl_bucket_open) {
+        nccl_bucket_device = device;
+        if (!nccl_group_opened) {
+            checkCudaErrors(ncclGroupStart());
+            nccl_group_opened = true;
+        }
+    }
+    return cuda_side_stream(CUDA_COMMUNICATION_STREAM, device);
+}
+
+void nccl_stream_end(Var* x, Var* y) {
+    int device = current_device();
+    if (!nccl_bucket_open) {
+        cuda_default_stream_wait_side(
+            CUDA_COMMUNICATION_STREAM, device, device);
+        return;
+    }
+    // Inside a bucket the join belongs to nccl_bucket_end(), for both join
+    // policies. Joining here would record a done event on a communication
+    // stream that has nothing on it yet -- ncclGroupEnd() has not run, so none
+    // of the collectives are submitted -- and order nothing at all. That is
+    // not a missed optimisation but a silent race, and it is exactly what the
+    // first version of this did: the profiler showed compute overlapping the
+    // collective even with defer_join=False, which should be impossible.
+    //
+    // Grouping also means both buffers have to stay reserved until
+    // ncclGroupEnd(), whatever the join policy: NCCL captured the pointers,
+    // and the default stream is free to run ahead and have the allocator hand
+    // those blocks to something else in the meantime.
+    if (nccl_hold(device, x) && nccl_hold(device, y))
+        return;
+    // An allocator that cannot hand one block to two owners leaves no way to
+    // keep the default stream off it. Submit what the group has so far and
+    // order it now, rather than keep grouping over a buffer that may be
+    // recycled underneath us. Correctness over both grouping and overlap --
+    // the same trade fetch_op makes.
+    LOGw << "nccl bucket cannot reserve its buffers; submitting this"
+         << "collective without grouping or overlap";
+    if (nccl_group_opened) {
+        checkCudaErrors(ncclGroupEnd());
+        nccl_group_opened = false;
+    }
+    nccl_bucket_defer = false;
+    // Joins and releases whatever the bucket had already reserved; the join
+    // covers them because the communication stream runs in order.
+    cuda_side_stream_resolve_join(CUDA_COMMUNICATION_STREAM);
+    cuda_default_stream_wait_side(
+        CUDA_COMMUNICATION_STREAM, device, device);
+}
+
+void nccl_bucket_begin(bool defer_join) {
+    if (nccl_bucket_open)
+        LOGf << "nccl_bucket_begin inside another bucket";
+    if (cuda_side_stream_any_join_pending(CUDA_COMMUNICATION_STREAM))
+        LOGf << "nccl_bucket_begin with a join still outstanding:"
+             << "call nccl_comm_wait() before opening the next bucket";
+    nccl_bucket_open = true;
+    nccl_bucket_defer = defer_join;
+    nccl_bucket_device = -1;
+    // ncclGroupStart is issued lazily, at the first collective, so a bucket
+    // that ends up containing none (the graph was already synced, say) does
+    // not leave a group open.
+    nccl_group_opened = false;
+}
+
+void nccl_bucket_end() {
+    if (!nccl_bucket_open)
+        LOGf << "nccl_bucket_end without nccl_bucket_begin";
+    nccl_bucket_open = false;
+    if (nccl_group_opened) {
+        // Everything the bucket recorded is submitted to the communication
+        // stream here, as one group. Only after this is there anything on the
+        // stream for a join to order against.
+        checkCudaErrors(ncclGroupEnd());
+        nccl_group_opened = false;
+    }
+    bool defer = nccl_bucket_defer;
+    nccl_bucket_defer = false;
+    if (nccl_bucket_device < 0) return;   // the bucket held no collectives
+    if (defer) {
+        cuda_side_stream_defer_join(
+            CUDA_COMMUNICATION_STREAM, nccl_bucket_device);
+        return;
+    }
+    // Synchronous bucket: group the launches but keep the old ordering, so the
+    // default stream is behind the collectives when the scope closes. Also
+    // releases the blocks the grouping had to reserve.
+    cuda_side_stream_resolve_join(CUDA_COMMUNICATION_STREAM);
+}
+
+bool nccl_comm_wait() {
+    return cuda_side_stream_resolve_join(CUDA_COMMUNICATION_STREAM) > 0;
+}
 #ifdef JT_NCCL_NO_MPI
 // Normally defined by mpi_wrapper.cc; provide them for the MPI-free build (the
 // NCCL env/file rendezvous path / other nccl ops reference these). Only defined

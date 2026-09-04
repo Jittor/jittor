@@ -52,18 +52,70 @@ void nccl_shutdown();
 EXTERN_LIB ncclUniqueId id;
 EXTERN_LIB int nccl_device_id;
 
-inline cudaStream_t nccl_stream_begin() {
-    int device = current_device();
-    cuda_side_stream_wait_default(
-        CUDA_COMMUNICATION_STREAM, device, device);
-    return cuda_side_stream(CUDA_COMMUNICATION_STREAM, device);
-}
+struct Var;
 
-inline void nccl_stream_end() {
-    int device = current_device();
-    cuda_default_stream_wait_side(
-        CUDA_COMMUNICATION_STREAM, device, device);
-}
+/**
+Put the collective on this device's communication stream, ordered after the
+default-stream work that produced its input.
+
+Inside a bucket scope this is also where `ncclGroupStart()` is issued, on the
+first collective of the bucket: a group has to be open around the NCCL calls
+themselves, and the calls happen here, during graph execution, not while the
+Python-level scope object is being constructed.
+*/
+cudaStream_t nccl_stream_begin();
+
+/**
+Close out one collective. Takes the operator's input and output because the
+deferred-join path has to keep both blocks reserved -- see
+`cuda_side_stream_defer_join`.
+
+Outside a bucket scope (and inside a synchronous one) this joins the default
+stream back immediately, which is the conservative behaviour every collective
+had before 8.02: correct, but it also means nothing can overlap with the
+collective.
+*/
+void nccl_stream_end(Var* x, Var* y);
+
+/**
+Bucket several collectives into one NCCL group, and optionally let the default
+stream run ahead of them.
+
+Two independent things, deliberately behind one scope because they are only
+useful together:
+
+* **Grouping** (`ncclGroupStart`/`ncclGroupEnd`) submits the whole bucket in
+  one go instead of one launch per tensor. This is what makes gradient
+  bucketing worth doing: N small all-reduces cost N launches otherwise.
+* **`defer_join`** leaves the comm->compute event unwaited when the bucket
+  closes, so default-stream compute enqueued afterwards overlaps with the
+  collectives. `nccl_comm_wait()` is what orders the default stream behind
+  them again, and it must be called before the results are read.
+
+**Contract, because violating it is silent.** A group defers the NCCL calls
+until `ncclGroupEnd()`, so nothing executed inside the scope may consume a
+collective's output -- it has not run yet. In practice that means the scope
+should contain the collectives and a single `jt.sync` of exactly those
+collective outputs, so the collectives are the sinks of the graph being
+executed. Producers of the inputs are fine; they run on the default stream and
+touch none of the outputs.
+
+`nccl_bucket_begin` refuses to open a second bucket while a previous deferred
+join is still outstanding, rather than quietly stacking held blocks.
+*/
+// @pyjt(nccl_bucket_begin)
+void nccl_bucket_begin(bool defer_join=true);
+// @pyjt(nccl_bucket_end)
+void nccl_bucket_end();
+
+/**
+Order the default stream behind every outstanding collective and release the
+blocks the deferred join was holding. No-op when nothing is outstanding.
+Returns whether it actually joined anything, so a test can prove the overlap
+window existed rather than assuming it.
+*/
+// @pyjt(nccl_comm_wait)
+bool nccl_comm_wait();
 
 /**
 Map a jittor dtype to the NCCL datatype used to send it.

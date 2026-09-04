@@ -57,7 +57,7 @@ void NcclAllGatherOp::jit_run() {
     checkCudaErrors(ncclAllGather(
         xp, yp, x->num, nccl_dtype(x->dtype()),
         nccl_process_group_comm(group_id), stream));
-    nccl_stream_end();
+    nccl_stream_end(x, y);
 }
 
 #endif

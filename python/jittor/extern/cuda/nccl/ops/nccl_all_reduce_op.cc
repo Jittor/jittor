@@ -53,7 +53,7 @@ void NcclAllReduceOp::jit_run() {
     checkCudaErrors(ncclAllReduce(
         xp, yp, y->num, nccl_dtype(x->dtype()), ncclSum,
         nccl_process_group_comm(group_id), stream));
-    nccl_stream_end();
+    nccl_stream_end(x, y);
 }
 
 #endif

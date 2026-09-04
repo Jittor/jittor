@@ -51,7 +51,7 @@ void NcclBroadcastOp::jit_run() {
     checkCudaErrors(ncclBroadcast(
         xp, yp, y->num, nccl_dtype(x->dtype()), root,
         nccl_process_group_comm(group_id), stream));
-    nccl_stream_end();
+    nccl_stream_end(x, y);
 }
 
 #endif
