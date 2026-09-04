@@ -510,6 +510,8 @@ execution. Swish backward and SwiGlu remain outside this slice.
 The ACL Swish backward owner uses the shared launcher and retains synchronous
 execution. SwiGlu remains outside this slice.
 
+The ACL SwiGlu owner uses the shared launcher and retains synchronous execution.
+
 The ACL BatchMatMul owner uses the shared launcher while retaining
 cube_math_type and synchronous execution. This remains source-only until the
 Ascend 910B3 probe is run.
