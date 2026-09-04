@@ -898,6 +898,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | --- | --- |
 | `pyother` | 5.21 已由 `3cd1a614` 完整实现并关闭：`_install_order.SEQUENCE` 声明十步 monkeypatch 安装顺序，`record/verify` 在运行时拒绝乱序、重复和缺失；`jt.sum` 与 `Var.sum`/`mean` 共用 full-reduce 路径。提交内 `tests/core/test_install_order.py` 17 项、`tests/structure/test_install_order.py` 6 项通过。 |
 
+### 2026-09-04 第一百零一波
+
+| 分区 | 结果 |
+| --- | --- |
+| `bindings` | `ba2f4077` 将 cuBLAS matmul 内维不匹配改为可捕获的 `USER_CHECKop`，新增负向结构合同；定向 3 passed。2.19 聚合任务仍待完整审计。 |
+| `compat` | `94df46f7` 将 `complex`、`view_as_complex`、`view_as_real` 提升为 numerical 模块级稳定对象并登记 approximate fidelity；CPU identity/metadata/value 定向 2 passed。7.03 其余 family 仍待领。 |
+| `device` | 只读确认 ACL 标准 launcher owner 已穷尽；KVCacheMemcpy 是逐 token `aclrtMemcpyAsync` 专用路径，不安全套用通用 launcher，本波无代码提交。 |
+| `gates` | `876ec09c` 后独立 Dataset worker 监管两个 nodeid 在临时缓存下 2 passed/65.68 s；完整 smoke 仍约 390 s，0.15 保持待领。 |
+
 按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第一百波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
