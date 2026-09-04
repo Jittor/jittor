@@ -414,3 +414,23 @@ blocker: <none or precise unsupported/backend reason>
 reason is a cold-cache or unavailable-backend condition. A semantic mismatch,
 identity failure, or context leak must be recorded as `static_contract=fail`
 and keep 7.03 marked `待领`.
+
+## AST implementation sketch
+
+The structural test can stay small and deterministic:
+
+```text
+tree = ast.parse(Path("installers/numerical.py").read_text())
+module_vmap = [n for n in tree.body if isinstance(n, FunctionDef)
+               and n.name == "vmap"]
+install = next(n for n in tree.body if isinstance(n, FunctionDef)
+               and n.name == "install")
+nested_vmap = [n for n in ast.walk(install)
+               if isinstance(n, FunctionDef) and n.name in {"_vmap", "vmap"}]
+bindings = [n for n in ast.walk(install) if is_vmap_binding(n)]
+```
+
+`is_vmap_binding` should recognize both `g.vmap = ...` and
+`_alias("vmap", ...)`, returning the source line for each match. The test emits
+counts plus a sorted list of binding lines, so a duplicate or dynamic binding is
+visible in review without importing Jittor.
