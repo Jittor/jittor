@@ -39,6 +39,8 @@
 > 第120波增量：`a0d3be31` 完成 `broadcast_shapes` numerical owner（CPU 2 passed）；10.17 仍缺 per-thread ring/stream 关联和 CUDA 异步注入，8.12 仍缺 cuDNN POD key 全套。待领保持 73。
 >
 > 第121波整卡审计：8.12 的 cuDNN 2D/3D forward/backward 六条 legacy cache 路径仍需共享 `LegacyConvAlgoKey`、per-device cache 与 CUDA 验收，当前无可安全半改；10.17 同样缺 runtime ring/stream 真实链路。本波无代码提交，待领保持 73。
+>
+> 第122波整卡审计：2.22/4.06/8.12/9.07 仍缺统一配置、fallback 三态、cuDNN POD key 或 import 环境隔离；7.05/7.07/10.18/10.20/10.21 仍缺事务锁、patch 边界、核心属性测试、内省 API 或 import lint；布局/多机/ACL 任务也有明确前置。本波无代码提交，待领保持 73。
 
 一行一个任务，与 [refactor-plan.md](refactor-plan.md) 的编号对应。领任务把状态改成「进行中」并写名字，
 完成改成「已合并」并填提交号；推送冲突说明别人先领了。状态只有四种：待领 / 进行中 / 已合并 / 并入 X。
