@@ -378,7 +378,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 2.22 | 环境变量统一 `JT_` 前缀 | 待领 | | |
 | 2.23 | 布局收尾 | 待领 | | |
 | 2.24 | `custom_data` 的最后一个用户：FusedOp 跨阶段 var 索引 | 待领 | | 依赖 3.11，需显式 `var→index` 映射并保持 relay/融合生成代码不变 |
-| 2.25 | 反向可达叶子查询（`is_leaf`/`grad_fn` 的内核答案） | 进行中 | coreops | 2026-09-04 由 `7.11`／`7.12` 的共同前置派生（`7.11` 的「前置」列原文就是「需要内核的反向可达叶子查询」）。内核给一条查询 `backward_grad_fn(Var*)` 与四种拼写；**不引入进程级 id 键字典、不做图遍历、不加缓存**。`7.11` 的接线属兼容层分区，本任务不做 |
+| 2.25 | 反向可达叶子查询（`is_leaf`/`grad_fn` 的内核答案） | 已合并 | coreops | `c6e62ba1`（查询与内核用例）、`781d4188`（与真 PyTorch 的逐例对拍）。2026-09-04 由 `7.11`／`7.12` 的共同前置派生。一条查询 `backward_grad_fn(Var*)`（`grad.h`）四种拼写（`Var.is_backward_leaf`、`grad_fn_node_id`、`grad_fn_op_id` 用 2.17 的注册期 id、`grad_fn_name` 仅诊断）；语义是 requires_grad 与「生产者有一条能带梯度的入边」的合取，四条过滤器与 `grad()` 的 `bfs_backward` 同源（两个 requires_grad 标志、生产者自身 stop_grad、控制依赖边、`Op::init` 冻结的 disabled 边）。**O(生产者入度)，不遍历、不缓存、不引入进程级 id 键字典**；查询前后 `tflag_count` 不变的用例把「没有遍历」钉住，另一条在未结束的 `TraversalEpoch` 里查询证明 2.03 的机制没被动。修前 20 failed → 修后 20 passed；定向 CPU 208 passed 对基线 188 passed（同 4 条既有失败，零回归），CUDA 73 passed；与真 PyTorch 2.12.1 的 19 个用例 16 个三元组全等、2 个只差 `requires_grad`、1 个的形状差异由 `requires_grad` 传导（在 `EXPLICIT_REQUIRES_GRAD` 策略下同样全等）。**`7.11` 的接线未做**，`compat/**` 属兼容层分区 |
 | 3.01 | `Executor::run_sync` | 待领 | | |
 | 3.02 | jit key 结构化 | 待领 | | |
 | 3.03 | 三张 kernel 缓存表键改 `string` | 待领 | | |
@@ -536,8 +536,8 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 
 | 7.09 | `torch.library` | 已合并 | compat | 99901e6c、d0a782a0。按张量真实驻留选择 CPU/CUDA 并排除 Meta，`register_autograd` 真正接入且模型特判移出通用注册层；线程局部 autocast dtype policy 进一步选择 AutocastCPU/CUDA，嵌套禁用与退出恢复普通路由。独立 PyTorch oracle 一致，CPU dispatch 8 passed、1 个未分配 CUDA 节点 skipped |
 | 7.10 | `torch.compile`/`jit.trace`/`jit.script` 保留 pass… | 已合并 | 兼容层分区 | 3d898ece。语义参数拒绝、permissive allowlist/audit 与 ShapeProp ImportError 验收均有测试 |
-| 7.11 | autograd 语义 | 待领 | | 7cc3fa71 已合入 create/retain、隐式输出、sum warn、saved version 等大部分语义；`is_leaf` 仍恒 True、`grad_fn` 仍恒 None，等待内核提供反向可达叶子查询 |
-| 7.12 | 独立 torch 包 | 待领 | | |
+| 7.11 | autograd 语义 | 待领 | | 7cc3fa71 已合入 create/retain、隐式输出、sum warn、saved version 等大部分语义。**内核前置 `2.25` 已就位（提交 `c6e62ba1`、`781d4188`）**：`Var.is_backward_leaf` 与 `grad_fn_node_id`／`grad_fn_op_id`／`grad_fn_name` 由内核按图真实回答，与真 PyTorch 逐例对过。剩下的接线只在 `compat/torch/installers/tensor.py:1401-1411`：把 `Var.is_leaf` 的常量 `True` 改成转发 `is_backward_leaf`，把 `Var.grad_fn` 的常量 `None` 改成「`grad_fn_node_id == -1` 时 None，否则一个以 node id 为身份、`grad_fn_name` 为显示名的代理」。requires_grad 侧的三条与 torch 的差异见 `tests/core/test_backward_leaf_torch_parity.py` 的分组，归 7.12 |
+| 7.12 | 独立 torch 包 | 待领 | | **内核前置 `2.25` 已就位（提交 `c6e62ba1`、`781d4188`）**：「反向叶子由 requires_grad 加图连通性决定，不再是三个进程级 id 键字典」所需的连通性那一半由 `backward_grad_fn(Var*)` 提供，实现里没有任何进程级 id 键字典、没有图遍历、没有缓存。剩下的是 requires_grad 那一半：对拍量到 Jittor 与 torch 只在 requires_grad 上分歧三处（float var 默认可导、`detach()` 停算子不停 var、native 策略下 stop_grad 输入的输出仍可导），而在 2.09 的 `EXPLICIT_REQUIRES_GRAD` 策略下这些图与 torch 三元组全等 |
 | 7.13 | FSDP2 | 待领 | | 已合入 37c0aed4、c0e6e1ae、48da7360、873dd5cf；仍缺峰值显存达标、复用原生 optimizer 更新逻辑与 DeviceMesh 真实分组 |
 
 **7.13 已合入四部分，其余待领**（兼容层分区，2026-09-03）：
