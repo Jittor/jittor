@@ -39,7 +39,7 @@ void CubArgsortOp::infer_shape() {
     USER_CHECK(x->shape.size() == indexes->shape.size());
     int n = 1;
     for (int i = 0; i < x->shape.size(); ++i) {
-        ASSERT(x->shape[i] == indexes->shape[i]);
+        USER_CHECK(x->shape[i] == indexes->shape[i]);
         if (i < x->shape.size() - 1) {
             n *= x->shape[i];
         }
