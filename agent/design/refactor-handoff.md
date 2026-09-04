@@ -925,6 +925,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | `448aa10a` 删除 ACL `utils` 中无消费者的 `op_idx_map` 定义/声明，保留显式 reduce dispatch；ACL 静态合同 68 passed，未做 NPU 实机验证。 |
 | `gates` | 10.19 backend grad manifest 静态合同 2 passed；HCCL 四项仍明确为 NPU/unsupported hardware route，缺 Ascend 910B3 多卡实测，任务保持待领。 |
 
+### 2026-09-04 第一百零四波
+
+| 分区 | 结果 |
+| --- | --- |
+| `bindings` | `0e275f14` 将 cuBLAS batched matmul 内维 `m == m_` 检查改为可捕获的 `USER_CHECKop`，补独立 inner-dim ledger；定向 4 passed。2.19 聚合任务仍待完整审计。 |
+| `compat` | `84f29d9b` 将 `hann_window`/`stft` 提升为 numerical 模块级稳定对象并登记 approximate fidelity；signal family 定向 3 passed。7.03 其余 family 仍待领。 |
+| `device` | `aclnn.h` 的 `#pragma once` 已由 `1e8e90c6` 完成；ACL 标准 launcher 与 `op_idx_map` 子项已有证据，本波无新代码，NPU 实机仍待。 |
+| `gates` | 本波复核 0.15 未改 `SLOW_FILES`；Dataset worker 聚焦测试通过但完整 smoke 仍约 390 s，任务保持待领。 |
+
 按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第一百波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
