@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；本波审计基线 `9b8ed7cd`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 审计基线 1001 个 |
+| 分支 | `2.0-refactor`；本波审计基线 `23814b9a`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 审计基线 1003 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **198** / 进行中 **0** / 待领 **76** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
@@ -869,7 +869,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | 未参与代码修改 |
 
 
-按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第九十八波继续优先可独立验证的
+第九十八波完成 0.15 第一阶段代码，但任务仍待完整验收：
+
+| 分区 | 第九十八波结果 |
+| --- | --- |
+| `device` | `23814b9a` 增加 Linux `RingBuffer::wait_pop_for`，仅在纯等待阶段释放 GIL，并将 `test_children_died` 改为有界 timeout；worker-death 聚焦节点 1 passed（约 106s） |
+| `bindings` | 审查确认共享 condvar/pyjt ABI、GIL 异常边界和 Dataset worker 轮询要求；未新增代码 |
+| `gates` | 确认 `SLOW_FILES` 未移除，smoke 仍约 390s/预测 446s，必须重测 `<300s` 和 nodeid 集合后才能关闭 0.15 |
+
+按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第九十九波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
 - `device`：若续做 8.06，只迁下一个最终 owner 明确的 family，并复用 5be5fa15 的 launcher 合同；无 NPU

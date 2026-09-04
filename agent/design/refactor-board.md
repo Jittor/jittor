@@ -854,6 +854,10 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 
 - `0.15`：只读核对 RingBuffer GIL/有界等待与长文件拆分方案。当前 `test_children_died` 需要 Linux timed-wait/GIL 安全实现；两个长 compat 文件无法在保持 nodeid/import 语义与 `loadfile` 覆盖的前提下安全拆分降时。smoke 仍约 390s、预算约 446s，未提交代码，任务保持待领。
 
+### 2026-09-04 第九十八波补充证据
+
+- `0.15`：`23814b9a` 已实现 Linux `RingBuffer::wait_pop_for`、等待阶段 GIL 安全拆分，并将 `test_children_died` 改为有界 timeout；worker-death 聚焦节点 1 passed（约 106s，含核心重编）。`SLOW_FILES` 尚未移除，smoke `<300s` 尚未重测，任务继续保持待领。
+
 ### 2026-09-04 第九十六波补充证据
 
 - `10.05`：`1a423a16`/`f7f33f5b` 固定 skip reason bucket 优先级、CI summary 和 `other>0` fail-closed；合成结构测试 2 passed，任务已完整关闭。
