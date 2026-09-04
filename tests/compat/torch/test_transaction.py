@@ -5,6 +5,7 @@ import pytest
 
 from jittor.compat.transaction import InstallTransaction, TransactionConflict
 from jittor.compat.torch.installers.core import _set_install_flag
+from jittor.compat.torch.installers.utilities import _mutate_import
 
 
 def test_transaction_rolls_back_module_env_flags_and_meta_path_in_reverse_order():
@@ -54,6 +55,40 @@ def test_core_install_flag_mutation_rolls_back_on_failure():
         assert original.use_cuda == 0
     finally:
         original.use_cuda = saved
+
+
+def test_utilities_import_hook_rolls_back_and_detects_external_replacement():
+    import builtins
+    import jittor
+
+    tx = InstallTransaction("utilities.install")
+    context = types.SimpleNamespace(state={"_install_transaction": tx})
+    previous_context = getattr(jittor, "_torch_compat_install_context", None)
+    original_import = builtins.__import__
+
+    def replacement(*args, **kwargs):
+        return original_import(*args, **kwargs)
+
+    try:
+        jittor._torch_compat_install_context = context
+        _mutate_import(replacement, builtins)
+        assert builtins.__import__ is replacement
+        tx.rollback()
+        assert builtins.__import__ is original_import
+
+        tx = InstallTransaction("utilities.install.conflict")
+        context.state["_install_transaction"] = tx
+        _mutate_import(replacement, builtins)
+        builtins.__import__ = original_import
+        with pytest.raises(TransactionConflict, match="owner lost"):
+            tx.rollback()
+        assert builtins.__import__ is original_import
+    finally:
+        builtins.__import__ = original_import
+        if previous_context is None:
+            delattr(jittor, "_torch_compat_install_context")
+        else:
+            jittor._torch_compat_install_context = previous_context
 
 
 def test_environment_mutation_records_the_normalized_string_value():
