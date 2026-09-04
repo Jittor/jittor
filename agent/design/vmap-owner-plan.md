@@ -148,3 +148,20 @@ commit, static identity result, and each CPU node id. Keep the vmap row marked
 `待领` until the nested boolean path and unsupported-combination node pass; do
 not infer completion from the identity-only gate. The handoff should link this
 plan so a future backend-specific run can reuse the same contract.
+
+## Static unsupported gate
+
+Add a no-JIT AST node that parses `numerical.py` and checks the vmap boundary:
+
+```text
+assert one module-level `def vmap`
+assert no nested `def _vmap` below `def install`
+assert install has exactly one vmap binding
+assert no module-level assignment references a name `g`, `ctx`, or `Var`
+```
+
+The same node should inspect the documented unsupported cases and require an
+explicit branch or `RuntimeError` for each: mismatched mapped extents, a nested
+helper with a non-zero mapped dimension, and a vectorized result whose dtype is
+not boolean. This keeps unsupported behavior observable without constructing a
+Jittor graph or requiring a backend.
