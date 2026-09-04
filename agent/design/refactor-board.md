@@ -606,3 +606,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 ### 2026-09-04 第五十八波补充证据
 
 - `8.06`：`1874f7ed` 将 UpsampleNearest2d backward 接入共享 launcher，保留 output/input-size RAII descriptor 与同步策略；静态合同 45 passed，本机无 CANN/NPU，仍待实机。
+
+### 2026-09-04 第五十九波补充证据
+
+- `8.06`：`2d8f415b` 将 LeakyReLU backward 接入共享 launcher，保留 negativeSlope、selfIsResult、scalar cleanup 与同步策略；静态合同 46 passed，本机无 CANN/NPU，仍待实机。
