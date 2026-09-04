@@ -49,7 +49,9 @@ void CublasAccMatmulOp::infer_shape() {
     if (trans_b) {
         swap(m_, k);
     }
-    ASSERTop(m,==,m_);
+    USER_CHECKop(m,==,m_)
+        << "cublas acc matmul inner dimensions must match, but got " << m
+        << " and " << m_;
     if(stride_a != -1)
         n = stride_a;
     if(stride_b != -1)
