@@ -531,3 +531,19 @@ normalized values in `_jittor_vmap_specs`:
 The static contract should include one table-driven node covering each row. It
 must assert that normalization happens before the runtime callback is consulted,
 so missing transform context cannot alter public dimension semantics.
+
+## Nested metadata depth
+
+Nested `vmap` calls must append, not overwrite, mapping metadata. For a two-level
+wrapper the static contract is:
+
+```text
+outer._jittor_vmap_specs == ((outer_in, outer_out),)
+inner._jittor_vmap_specs == ((outer_in, outer_out), (inner_in, inner_out))
+inner._jittor_vmap_base is original
+```
+
+The corresponding result shape should expose the outer batch axis before the
+inner batch axis unless an explicit `out_dims` requests another placement. A
+table-driven node should assert both metadata tuples and shape rank without
+constructing large tensors, using the deterministic fixture from this plan.
