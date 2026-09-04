@@ -611,5 +611,9 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 
 - `8.06`：`2d8f415b` 将 LeakyReLU backward 接入共享 launcher，保留 negativeSlope、selfIsResult、scalar cleanup 与同步策略；静态合同 46 passed，本机无 CANN/NPU，仍待实机。
 - `8.06`：`c33196b3` 将 SiLU backward 接入共享 launcher，保留同步策略；静态合同 47 passed，本机无 CANN/NPU，仍待实机。
+
+### 2026-09-04 第六十波补充证据
+
+- `8.06`：`d87bbd09` 将 Swish forward 接入共享 launcher，保留同步策略；静态合同 48 passed，本机无 CANN/NPU，仍待实机。
 - `2.19`：`fbc69232`/`a4adb24b` 将 cuDNN RNN LSTM mode 用户边界改为 `USER_CHECKop`，累计 95 处、四十八组证据；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向。
 - `7.03`：`b98cde25` 将 `relu` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
