@@ -565,6 +565,9 @@ The ACL IndexPutImpl owner uses the shared launcher while retaining its
 index-tensor-list handling and synchronous execution. Accumulate remains
 outside this slice.
 
+The ACL IndexPutImpl accumulate owner uses the shared launcher while retaining
+its tracked output memset and index tensor-list dependency.
+
 The ACL Dropout backward owner uses the shared launcher while retaining its
 scale query and synchronous execution policy.
 
