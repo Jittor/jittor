@@ -562,6 +562,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 7.16 | compat/ 内 129 个 `except: pass` 与 258 个宽泛 except … | 已合并 | 兼容层分区 | 72dbc22d（+ 一次修复：`93b48a8e` [4.02 3/3] rebase 时把 cuda.py/types.py 整段解回 7.16 之前，`swallowed()` 24→0、16→0，全树违规回到 47 条；已用三方合并恢复，见提交说明） |
 | 7.17 | `runtime.enable()` 只把 shim 的 site 目录加进 sys.path … | 已合并 | 兼容层分区 | d5c769fb |
 | 7.18 | 布局收尾 | 待领 | | |
+| 7.21 | `compat/vllm` 只经公开入口使用 jittor | 已合并 | gatecheck | `71adc134`。新增 `jt.nn.qk_rms_norm_rotary` 与 `jt.nn.has_qk_rms_norm_rotary`，`compat/vllm/layers.py` 不再 import `jittor.nn.backends.hooks`。拆成两个入口是为了让非融合路径不必为「问一句有没有」先付一次 cos/sin cache 的 cast。`tests/nn/test_serving_ops.py` 12 passed（新增 3 条覆盖无后端／后端按序收到全部实参／后端拒绝输入）、vllm 与 nn 结构合计 29 passed。本机无 CANN/NPU，ACL 融合分支未实机执行，行为与改前一致（两处都在 hook 为 None 时短路） |
 | 7.19 | 精度策略接线：Jittor 一档、torch 两档，底层 matmul/conv 分字段 | 待领 | | 依赖 8.03、7.08；需保持 shim 的卷积与 matmul 语义分离 |
 | 7.20 | fp32 RNN 默认精度与 torch `cudnn.allow_tf32` 映射 | 待领 | | 依赖 8.03、7.19；需 CPU 递推与真实 CUDA 对拍 |
 | 8.01 | 描述符与 workspace 一律 RAII | 已合并 | cudabk | afb08e88 |
@@ -629,6 +630,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 10.21 | import 方向做成 lint 规则 | 待领 | | |
 | 10.22 | 多机门禁 | 待领 | | |
 | 10.23 | 布局收尾 | 待领 | | |
+| 10.24 | fixture 契约按真实来源解析 | 已合并 | gatecheck | `c8ce8760`。原判据拿函数参数与一份只含 pytest 内置 fixture 的冻结清单比较，7 处使用自有 fixture 的合法测试全被误判成「命名成 test 的 helper」；改为按真实来源解析（内置 + 本模块声明 + 沿树 conftest + 该函数的 parametrize argname）。修前 27 passed 1 failed、修后 28 passed；另造反例（参数无人提供的 `test_*` helper）确认判据未被放宽 |
 | 11.01 | 删已被取代的绕过与死路径 | 待领 | | |
 | 11.02 | 已提前为 0.20 | 并入 0.20 | | |
 | 11.03 | 单文件异常拆分 | 待领 | | |
