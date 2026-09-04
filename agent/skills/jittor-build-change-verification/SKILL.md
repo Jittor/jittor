@@ -1,6 +1,6 @@
 ---
 name: jittor-build-change-verification
-description: 改了 Jittor 构建系统（jittor_utils、compiler.py、compile_extern.py、cache_compile.cc、lock.cc、pyproject 的 pytest 配置）之后，怎么确认没把别人的构建弄坏。给出冷缓存 / 热缓存 / 并发 / 切 flag 四种情形各自的验证命令与判据，以及多 worktree 并行时哪些状态是全局共享的。凡是会改变缓存路径、锁、编译命令行或探测流程的改动都要按这个走一遍再推。
+description: 改了 Jittor 构建系统（jittor_utils、compiler.py、compile_extern.py、cache_compile.cc、lock.cc、pyproject 的 pytest 配置）之后，怎么确认没把别人的构建弄坏。给出冷缓存 / 热缓存 / 并发 / 切 flag 四种情形各自的验证命令与判据，以及多 worktree 并行时哪些状态是全局共享的。另含 §2.5「怎么可复现地量 import jittor 的耗时并归因到具体一步」（三种造冷缓存的办法、为什么不能用 profiler 得结论、配套脚本 measure_import_cost.py）。凡是会改变缓存路径、锁、编译命令行、探测流程或 import 耗时的改动都要按这个走一遍再推。
 ---
 
 # 改了构建系统之后怎么确认没弄坏别人
@@ -109,6 +109,71 @@ env $E python -c "import time;t=time.time();import jittor;print('WARM_OK',round(
   改了 `src/utils/{cache_compile,log,tracer,jit_utils,str_utils}.cc` 之后第一次必然出现
   一次（这是设计如此，见 `jittor-core-cpp-edit-loop`），但**第二次还出现就是 bug**：
   说明缓存键不收敛。
+
+## 2.5 量 import 耗时，并把它归因到具体一步
+
+「热缓存 import 变慢了 0.3 s」这句话没法行动。同目录下的 `measure_import_cost.py`
+把总时间拆成能改的项：
+
+```bash
+EXPECT_JITTOR_SRC=$WT/python env $E \
+  python agent/skills/jittor-build-change-verification/measure_import_cost.py \
+      --json $TD/before.json
+```
+
+`EXPECT_JITTOR_SRC` 不是可选的：不设它，你量到的可能是**装好的那份** jittor，而
+事后没有任何办法分辨。脚本自己会断言。改完代码再跑一次 `--json $TD/after.json`，
+两份 JSON 直接对比。
+
+### 三个层次，各看得见不同的东西
+
+| 层 | 机制 | 粒度 | 盲区 |
+| --- | --- | --- | --- |
+| 1 | 子进程 `-X importtime` | 一个模块的 self / cumulative | `compiler.py` 的模块体是一个 1.4 s 的整块 |
+| 2 | import **之前**替换 `jittor_utils.run_cmds` / `run_cmd` | 每次构建扇出的命令条数与耗时 | 只覆盖走 `jit_utils` 的调用 |
+| 3 | import **之后**再调一次生成器 | `gen_jit_flags` / `gen_jit_tests` / `pyjt_compiler.compile` | 只对幂等的东西成立 |
+
+第 2 层为什么必须从外面打：要量的东西在 `compiler.py` 的**模块体**里，等到
+`jittor.compiler` 这个模块对象存在时它已经跑完了，没有可以事后包的函数。
+`jittor_utils` 是另一个包、且 `compiler.py` 是按属性查找调用它的
+（`jit_utils.run_cmds(...)`），所以在 `import jittor` 之前替换 `jittor_utils` 上的
+名字能生效。**这条手法对任何「模块体里的副作用」都适用**：找它调用的、位于别的
+模块里的那个函数，从外面包。
+
+### 不要用 profiler 得结论
+
+`cProfile` 在这条路径上加约 40%（2.5 s → 3.7 s），而且**会改变各项的排序**：
+`strip_cxx_comments` 有 2.3 M 次 `str.startswith`，profiler 对调用次数敏感，于是它
+被放大得比实际严重。profiler 用来**找**候选（`sort_stats('cumulative')` 一眼就能看到
+`compile` / `run_cmds` / `gen_jit_flags`），墙钟用来**定价**。
+
+### 冷缓存怎么可复现地造
+
+「冷」有三种，代价与覆盖面不同，报数字时必须说清是哪一种：
+
+| 造法 | 命令 | 会重编 | 用来验什么 |
+| --- | --- | --- | --- |
+| 全新缓存 | `rm -rf $JH.cold` 再用它做 `JITTOR_HOME` | jit_utils_core + 核心 + 全部 extern op | 首次安装体验；探测失败有没有兜底 |
+| 换配置 | 同一个 `JITTOR_HOME`，把 `nvcc_path` 在 `""` 与真路径之间切 | 核心（另一个 `cfg*` 目录）| **切门禁的真实代价**；这是最容易被忽略的一种 |
+| 碰源文件 | `touch python/jittor/src/executor.cc` | 该 TU + 链接 | 依赖跟踪对不对 |
+
+第二种是本机实测 40 s 的那一种，注意它**不是空缓存**：CUDA 配置与 CPU-only 配置的
+`cfg*` 指纹不同，各自要一份完整核心，所以在三套门禁之间来回切每次都付一次全量
+核心编译。报「冷编译 40 s」而不说是哪一种，下一个人会以为是空缓存。
+
+`touch` 那种要注意：**改注释验证不了重编**（见 §5），要 `touch` 或改符号。
+
+### 判据
+
+- 热缓存 import 的数字**必须报配置**。本机同一棵树：CPU-only 1.33 s、CUDA 2.46 s。
+  只报一个数、不说 `nvcc_path` 是什么，等于没报。
+- 连续跑三次取后两次。第一次可能撞上 jit_utils 重建（`§2`）或别的 agent 刚推的改动。
+- 空转的构建扇出成本**与核心 TU 数成正比**（本机约 6-8 ms/条墙钟，16 路并行）。
+  所以增加 TU 的改动要报「+N 个 TU」，比报「+0.1 s」有用——后者换台机器就不成立。
+- 归因表的各项之和应当接近总时间。差得多说明漏了一层，别把差额记成「Python 启动开销」
+  就算了。
+
+一份写完的归因表见 `agent/results/2026-09-04-import-jittor-cost-attribution.md`。
 
 ## 3. 并发两个进程
 
