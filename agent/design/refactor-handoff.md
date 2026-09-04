@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；当前状态基线 `8843ccb7`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 当前 1185 个 |
+| 分支 | `2.0-refactor`；当前状态基线 `6c2db802`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 当前 1188 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **201** / 进行中 **0** / 待领 **73** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
@@ -1203,6 +1203,14 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | --- | --- |
 | `compat` | `e05064b9` 新增普通 activation 失败注入回归：owner path/module 回滚、failed 状态和 ActivationTransaction 锁释放均验证；完整 `test_torch_bootstrap.py` 43 passed。扩展构建副作用与 child/build 全流程仍待。 |
 | `gates` | 本波只增加 mock failure coverage，不宣称真实扩展构建或 child process 已通过。 |
+
+### 2026-09-04 第一百五十一波
+
+| 分区 | 结果 |
+| --- | --- |
+| `build` | 复核 9.20/9.22 已由 `1919b035`/`c4bbdd72` 合入：asm、`.so`、`.key` 和 wrapper 产物均采用私有临时文件后原子发布；9.22 聚焦测试 3 passed。9.20 的 inode/四 worker 证据已记录在看板。 |
+| `bindings` | 复核 9.23 已由 `17e43c9a` 合入：POSIX 进程组终止与有界 drain 覆盖孙进程留存；grandchildren 聚焦测试 1 passed。 |
+| `gates` | 本波无新代码提交；只确认已有提交、测试证据与当前主线一致，未宣称 Windows/真实 CUDA/NPU 全平台验证。 |
 
 ### 2026-09-04 第一百四十波
 
