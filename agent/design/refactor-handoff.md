@@ -1380,19 +1380,21 @@ Corex 8.14 的正式前置 4.12 尚未满足；ACL/NPU、ROCm、Corex 等本机�
 要防的失败模式（「期间没有任何东西跑过它」）。**在清单归零之前，判据是「你的失败是否在下表之外」，
 而不是「是否全绿」。**
 
-已修 3 条：`c8ce8760`（10.24，fixture 契约改按真实来源解析——原判据拿参数与一份只含 pytest 内置
+已修 5 条：`d1535282`（7.03，`repeat_interleave` 身份，一次修掉 2 条）、`c8ce8760`（10.24，fixture 契约改按真实来源解析——原判据拿参数与一份只含 pytest 内置
 fixture 的冻结清单比较，于是 7 处使用自有 fixture 的合法测试全被误判）、`6dd80916`（0.21，
 `test_cache_atomic_publish.py` 的 dlink 子进程改走 `child_process` helper，一次修掉 2 条）。
 
-**剩余 12 条，按成因分类：**
+**2026-09-04（compat 分区，第 159 波）实测更新**：在当天的 `2.0-refactor` 上跑同一条命令是 `4 failed, 508 passed, 2 skipped in 136s`——不是 7 分钟，也不再是 15 条。本波修掉的是 `test_misc_structure` 那 2 条；`test_acl_runner_failure_contract`、`test_child_process_contract` 2 条、`test_pytest_contract` 1 条、`test_torch_shim_structure` 3 条、`test_vllm_compat_structure` 1 条在这几小时里被别的分区修掉了。另外 `test_compat_exception_policy::..._catches_exception_at_large` **单独跑是 9 passed**，只有整目录跑时才红，属顺序/状态依赖，不要按「真违规」去追。**判据仍然是「与改前逐条同集合」，不是「全绿」；所以改之前先跑一次留基线。**
+
+**下表按第 155 波的 15 条记录，剩余 12 条，按成因分类：**
 
 | 失败 | 成因 | 归属 |
 | --- | --- | --- |
 | `test_acl_runner_failure_contract::..._fail_loudly` | `assert 8 == 65`。8.06 把 family 迁进 `BaseOpRunner` 共享 launcher 后，尾巴不再直接出现 `checkRet`，6.B02 的计数法失效 | 契约与实现脱节，8.06 owner |
 | `test_cleanup_structure::..._duplicate_implementations_are_reviewed` | `_set_use_cuda` 在 `installers/factories.py` 与 `installers/tensor.py` 各一份（7.05 第 134 波 `60197b81`） | **真重复**，7.05 owner |
 | `test_compat_exception_policy::..._catches_exception_at_large` | `compat/transaction.py:155` 宽泛 `except Exception`（7.05 引入） | **真违规**，7.16 要求 compat 内归零 |
-| `test_misc_structure::..._use_real_paths_and_legacy_pickle_aliases` | `repeat_interleave` 是两个不同的函数对象 | 7.03 身份问题，compat owner |
-| `test_misc_structure::..._do_not_invent_inplace_aliases` | 同上 | 同上 |
+| ~~`test_misc_structure::..._use_real_paths_and_legacy_pickle_aliases`~~ | `repeat_interleave` 是两个不同的函数对象 | **已修 `d1535282`**（7.03 把转发 wrapper 改为再导出原生 owner） |
+| ~~`test_misc_structure::..._do_not_invent_inplace_aliases`~~ | 同上 | **已修 `d1535282`** |
 | `test_runtime_composition_structure::..._only_preflight_and_post_core_composition` | 根部多出 `_publish`、`_make_inplace_alias` | 待判 |
 | `test_runtime_composition_structure::..._is_orchestration_only` | 期望 `['enable']`，实际是 7.04 把三条入口收敛成 `activate()` 之后的形状 | **陈旧期望**，改测试 |
 | `test_torch_compat_structure::..._has_an_exact_owner_whitelist` | 白名单缺 `runtime.py compose 'torch'` 等 2 项 | **陈旧清单**，属 0.19 精神 |
@@ -1434,6 +1436,58 @@ ratio 0.84——**整体已经贴着屋顶**，超出部分由 72 MB L2 承担�
 一项现在跑不到时间），以及归约类今天已比 PyTorch 快一倍以上、3.22 的验收口径需复核。
 量法与四个脚本在 `agent/skills/cuda-elementwise-bandwidth-roofline/`；**先读它的第 3 节**
 （profiler 的 rerun 因子按 `-2` 推会让每一个每步数字正好差两倍，而报告内部自洽）。
+
+### 第 159 波（`compat`，7.03 六个 cohort）
+
+| 项 | 结果 |
+| --- | --- |
+| `16333333` | `amax`/`amin`/`count_nonzero` 收回 `jittor/misc/reductions.py` 原生 owner，提升为薄转发的模块级稳定对象并登记 approximate fidelity；给 `_axis_to_dim` 适配器加 `_torch_accepts_axis` 跳过标记；顺带修 `cosine_similarity` fidelity 文案与断言长期对不上的红。CPU 4 passed |
+| `9cba7d68` | `cumsum`/`cumprod`；`out=` 的 retained-view 写回器由 install 通过模块级句柄交接。**CPU 15 passed、CUDA 15 passed** |
+| `50876abf` | `sort`/`argsort`/`topk`/`median`。**CPU 13 passed、CUDA 13 passed** |
+| `d94c5cbd` | `sign`/`trunc`/`frac`/`exp2`/`log10` 归一到 `installers/core.py` 单一 owner，修掉 `torch.sign` 的静默错 dtype。修前 3 failed → 修后 5 passed |
+| `a7dcae1c` | `nan_to_num`/`logaddexp`。CPU 7 passed |
+| `d1535282` | `outer`/`tensordot`/`repeat_interleave` 改为再导出原生 owner，`tests/structure/test_misc_structure.py` 2 failed → 9 passed |
+| skill | 新增 `agent/skills/torch-api-cohort-promotion/` |
+| 7.03 状态 | **仍待领**。AST 实测剩余：`_install_tensor_methods` 76、`_install_reductions` 14、`_install_nn_extras` 135、`_install_module_methods` 40、`_install_cuda` 80、data 的 install 64、`core.install_misc` 34 |
+
+**这一波真正的产出是 CUDA 那一层。** 计划 §0 完成定义第 2 条要求三套门禁，而 7.03 前面约三十个
+cohort 的证据全是「CPU N passed」——并行路径从不交叉验证正是审计的核心发现，7.03 自己却一直踩着它。
+本波两个 cohort 用 `_helpers.device_types.instantiate_device_type_tests` 做设备参数化（不写
+`if jt.has_cuda` 分支，`JITTOR_TEST_DEVICES` 直接驱动两侧），跑出两处真实差异：
+
+- **`cumsum`**：4096 元素 float32、正负交替、部分和量级 ~2e3。CPU 与 float64 参考差 3.7e-03，
+  CUDA 与 float64 参考差 2.1e-03，两者互差 2.7e-03（相对 1.4e-06）。**CUDA 更准**——顺序扫描误差
+  随 n 线性累积，并行前缀和是 log n。12 元素的小数组两侧逐位相同，整数/bool 路径永远逐位相同。
+- **`argsort`**：8×512、取值 `arange % 97`（每键约 5 个重复）。**indices 两侧不同、values 逐位相同。**
+  4 元素的小 ties 用例两侧一致，规模上去才分开。
+
+两者都判为后端固有（真 torch 的 sort 默认 `stable=False`，CPU/CUDA 也不同序），因此按要求登记进
+fidelity detail 而不是改实现。测试相应写成**有界不一致 + 整数路径逐位相等**、以及
+**values 跨设备逐位相等 + indices 能取回自己的 values**，而不是 `assert_array_equal`——
+否则换台机器或换个 CUDA 版本就是假红。
+
+**另一条产出是「一个 API 只能有一个对象」。** 核 owner 时撞见两处同一 API 两份实现：
+
+- `sign`/`trunc` 在 `installers/core.py` 与 `installers/tensor.py` 各一份，安装顺序
+  （`tensor.install` 在前、`core.install_misc` 在后）让 `Var.sign` 用 tensor 那份、`torch.sign`
+  用 core 那份，于是 `torch.sign(int32).dtype == float32` 而 `x.sign().dtype == int32`。
+  真 PyTorch 2.12.1（jt312b 实测）两者都是 int32——**值对、dtype 静默错**。
+- `outer`/`tensordot`/`repeat_interleave` 被 7.03 早期 cohort 各套了一层转发 wrapper，
+  于是 `torch.repeat_interleave is jittor.repeat_interleave` 不成立、也不再 pickle 回 misc owner，
+  两条结构门禁长期红。
+
+**给下一个做 7.03 的人**：先读 `agent/skills/torch-api-cohort-promotion/SKILL.md`。三条最省时间的：
+(1) 每个 cohort 先跑 owner 探针，`hasattr(jt, name)` 加读原生定义，有原生 owner 就再导出/薄转发，
+不要写第二份；(2) `install_methods` 的 `_axis_to_dim` 会重新包 `max/min/argmax/argmin/amax/amin/
+cumsum/norm/std/var` 十个 Var 方法，让模块级身份断言失败——稳定对象自己接 `axis=` 并带
+`_torch_accepts_axis`；(3) 归约/累加/排序类的 cohort 一定要跑 CUDA，跑之前用三路比对
+（CPU vs float64、CUDA vs float64、CPU vs CUDA）判断是舍入还是缺陷。
+
+本波顺手记了两条与 7.03 无关、已写进看板「需要认领的杂项」的既存问题：
+`torch.split_with_sizes` + `Var.split` 之后退出时 `node.h:264 backward liveness release without a
+matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件只能 `--deselect` 它，已附最小复现），
+以及 opinfo 全量归约参考电池仍把标量提成 `(1,)` 导致 `amax`/`amin`/`count_nonzero` 9 条红
+（改前改后同集合，是参考电池自身过期）。
 
 ## 7. 接手怎么开始
 

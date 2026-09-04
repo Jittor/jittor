@@ -139,6 +139,28 @@
 | 结构测试钉死实现细节而非契约 | `tests/structure/` 8071 行 23 文件；`test_torch_compat_structure.py:37-100` 用 AST 校验 sys.modules 赋值写法；`test_vllm_compat_structure.py:66-68` 断言每文件不超过 300 行、`:57-62` 断言文件名集合 | 改文件名、拆超过 300 行的文件都会红；同时那 14 条静默空操作无一被覆盖 | 保留边界类断言，删除行数与文件名断言，预算移到与真 PyTorch 的行为对拍 | 主要 |
 | 真正缺失的测试类别 | `tests/compat/torch/` 20k 行里没有针对空操作的负向测试：无 autocast 生效性、无 `load_state_dict(strict=True)` 报错、无 `backward(gradient=)` 数值、无 dispatch key 路由测试 | 已修复的缺陷（vmap 曾是空操作，`numerical.py:245-246` 有记录）说明这类缺陷反复发生 | 每个未实现 API 都要有断言它抛异常的测试 | 关键 |
 
+已修（7.03，逐 cohort 推进，任务未完）：`16333333` amax/amin/count_nonzero 收回
+`jittor/misc/reductions.py` 原生 owner；`9cba7d68` cumsum/cumprod；`50876abf`
+sort/argsort/topk/median；`d94c5cbd` sign/trunc/frac/exp2/log10 归一到单一 owner；
+`a7dcae1c` nan_to_num/logaddexp；`d1535282` outer/tensordot/repeat_interleave 改为
+再导出原生 owner。
+
+这一波补上了两件此前每个 cohort 都缺的东西，都写进了
+`agent/skills/torch-api-cohort-promotion/`：
+
+1. **CUDA 交叉验证**。此前约三十个 cohort 的证据全是「CPU N passed」。新测试用
+   `_helpers.device_types.instantiate_device_type_tests` 做设备参数化，两条 cohort
+   实测出真实的 CPU/CUDA 差异：4096 元素 float32 `cumsum` 两侧相对差 1.4e-06（并行
+   前缀和比顺序扫描更接近 float64 参考），512 元素重复键 `argsort` 的 **indices** 两侧
+   不同而 **values** 逐位相同。两者都判为后端固有、登记进 fidelity detail。
+2. **一个 API 只能有一个对象**。核 owner 时发现两处「同一 API 两份实现」：`sign`/`trunc`
+   在 `installers/core.py` 与 `installers/tensor.py` 各一份，安装顺序让
+   `torch.sign(int32)` 返回 float32 而 `Tensor.sign()` 返回 int32（真 PyTorch 2.12
+   两者都是 int32，这是静默错 dtype）；`outer`/`tensordot`/`repeat_interleave` 的转发
+   wrapper 让 `torch.repeat_interleave is jittor.repeat_interleave` 不成立，两条结构
+   门禁因此长期红。fidelity 元数据本身也出过一次与测试对不上的红
+   （`cosine_similarity` 的 detail 不含 `eps`），一并修正。
+
 ## 架构判断
 **不可持续，但不是因为 monkeypatch 本身。** 用 monkeypatch 装配命名空间是可行的工程
 手段；不可持续的是**把 torch 定义成 jittor 本体**（`torch_init.py:16`）。这一个决定
