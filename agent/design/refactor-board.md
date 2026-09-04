@@ -838,6 +838,12 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `7.03`：`aa882756` 补充 vmap autograd 契约，明确 loop/stack 梯度、bool fast path 非微分边界与 CPU gradient 节点草案；仅设计前置。
 - `8.06`：只读确认标准 ACL launcher owner 已穷尽，KVCacheMemcpy 保持专用路径，本波无代码提交。
 
+### 2026-09-04 第九十四波补充证据
+
+- `2.19`：`9d2752e2`/`9ad1a807` 精确约束 cuDNN 3D convolution `best_algo_idx!=-1` 内部断言计数并纳入门禁；1 passed，不改变用户边界或运行语义。
+- `7.03`：`ae5623e8` 补充 vmap 并发契约，明确 re-entrant 调用、context 生命周期隔离及线程安全 probe；仅设计前置，未修改 runtime。
+- `8.06`：只读确认标准 ACL launcher owner 已穷尽，KVCacheMemcpy 保持专用路径，本波无代码提交。
+
 ### 2026-09-04 第九十三波补充证据
 
 - `2.19`：`66fd400d` 补充 CUDNN convolution `ASSERT(best_algo_idx!=-1)` 精确计数门禁；结构门禁 1 passed，不改变运行语义或用户边界累计。
