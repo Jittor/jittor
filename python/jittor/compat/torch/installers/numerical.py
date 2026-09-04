@@ -1650,6 +1650,43 @@ register_fidelity(
 )
 
 
+def index_put_(input, indices, values, accumulate=False):
+    """Assign indexed values in place using Torch's duplicate-safe path."""
+    idx = tuple(indices) if isinstance(indices, (tuple, list)) else (indices,)
+    if not accumulate:
+        input[idx if len(idx) > 1 else idx[0]] = values
+        return input
+    vals = values if isinstance(values, jt.Var) else jt.array(values)
+    if len(idx) == input.ndim:
+        shape = input.shape
+        strides = [1] * input.ndim
+        for k in range(input.ndim - 2, -1, -1):
+            strides[k] = strides[k + 1] * int(shape[k + 1])
+        linear = None
+        for k, ind in enumerate(idx):
+            term = (ind if isinstance(ind, jt.Var) else jt.array(ind)).int64().reshape((-1,)) * strides[k]
+            linear = term if linear is None else linear + term
+        flat_values = vals.reshape((-1,))
+        if int(flat_values.shape[0]) == 1 and int(linear.shape[0]) > 1:
+            flat_values = flat_values.broadcast(linear.shape)
+        input.assign(input.reshape((-1,)).index_add(0, linear, flat_values).reshape(shape))
+        return input
+    if len(idx) == 1:
+        index = idx[0] if isinstance(idx[0], jt.Var) else jt.array(idx[0])
+        input.assign(input.index_add(0, index.int64().reshape((-1,)), vals))
+        return input
+    raise NotImplementedError("index_put_(accumulate=True) with a partial multi-dim index")
+
+
+register_fidelity(
+    "torch.index_put_",
+    index_put_,
+    Fidelity.APPROXIMATE,
+    "matches Torch in-place indexed assignment and duplicate accumulation for "
+    "CPU tensors; device, layout, dtype, and out semantics are not implemented",
+)
+
+
 def kron(a, b):
     """Compute the Kronecker product through broadcasted Jittor views."""
     nd = max(a.ndim, b.ndim)
@@ -1832,34 +1869,7 @@ def install(ctx):
     # index_put_/index_put (scatter-style assignment), tensor_split (uneven split), take.
     Var.movedim = lambda self, source, destination: _movedim_impl(self, source, destination)
     Var.moveaxis = lambda self, source, destination: _movedim_impl(self, source, destination)
-    def _index_put_(self, indices, values, accumulate=False):
-        idx = tuple(indices) if isinstance(indices, (tuple, list)) else (indices,)
-        if not accumulate:
-            self[idx if len(idx) > 1 else idx[0]] = values
-            return self
-        # accumulate=True must add ALL contributions at duplicate indices (a plain
-        # read-add-write keeps only the last). Route through index_add (dup-correct).
-        vals = values if isinstance(values, Var) else jt.array(values)
-        if len(idx) == self.ndim:                          # full advanced index -> linearize
-            shape = self.shape
-            strides = [1] * self.ndim
-            for k in range(self.ndim - 2, -1, -1):
-                strides[k] = strides[k + 1] * int(shape[k + 1])
-            lin = None
-            for k, ind in enumerate(idx):
-                term = (ind if isinstance(ind, Var) else jt.array(ind)).int64().reshape((-1,)) * strides[k]
-                lin = term if lin is None else lin + term
-            vflat = vals.reshape((-1,))
-            if int(vflat.shape[0]) == 1 and int(lin.shape[0]) > 1:
-                vflat = vflat.broadcast(lin.shape)
-            self.assign(self.reshape((-1,)).index_add(0, lin, vflat).reshape(shape))
-            return self
-        if len(idx) == 1:                                  # index along dim 0
-            i0 = (idx[0] if isinstance(idx[0], Var) else jt.array(idx[0])).int64().reshape((-1,))
-            self.assign(self.index_add(0, i0, vals))
-            return self
-        raise NotImplementedError("index_put_(accumulate=True) with a partial multi-dim index")
-    Var.index_put_ = _index_put_
+    Var.index_put_ = index_put_
     Var.index_put = lambda self, indices, values, accumulate=False: index_put(
         self, indices, values, accumulate)
     # index_copy_(dim, index, source): self[..,index[i],..] = source[i,..] along dim
@@ -1870,6 +1880,7 @@ def install(ctx):
     g.index_copy = index_copy
     g.index_copy_ = index_copy_
     g.index_put = index_put
+    g.index_put_ = index_put_
     Var.tensor_split = lambda self, indices_or_sections, dim=0: tensor_split(
         self, indices_or_sections, dim)
     g.tensor_split = tensor_split
