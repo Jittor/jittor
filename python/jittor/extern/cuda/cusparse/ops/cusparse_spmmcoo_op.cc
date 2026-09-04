@@ -42,8 +42,11 @@ void CusparseSpmmcooOp::jit_run() {
     const auto& xs = x->shape;
     const auto& vs = value->shape; 
     const auto& os = outputVar->shape;
-    ASSERT(xs==os)<<"matrix A and matrix C size not match";
-    ASSERT(A_col==xs[0])<<"matrix A and matrix B size not match";
+    USER_CHECKop(xs,==,os)
+        << "cuSPARSE COO matrix A and matrix C sizes must match, got " << xs << " and " << os;
+    USER_CHECKop(A_col,==,xs[0])
+        << "cuSPARSE COO matrix A columns must match matrix B rows, got " << A_col
+        << " and " << xs[0];
     auto dtype_A = get_dtype(value->dtype());
     auto dtype_B = get_dtype(x->dtype());
     auto dtype_C = get_dtype(outputVar->dtype());
