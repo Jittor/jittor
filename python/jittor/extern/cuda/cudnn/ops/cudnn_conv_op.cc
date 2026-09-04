@@ -60,7 +60,7 @@ CudnnConvOp::CudnnConvOp(Var* x, Var* w, int strideh, int stridew, int paddingh,
 }
 
 void CudnnConvOp::infer_shape() {
-    ASSERTop(x->shape.size(),==,4);
+    USER_CHECKop(x->shape.size(),==,4);
     ASSERTop(w->shape.size(),==,4);
     int xn, xc, xh, xw, wh, ww, wci, wco, yn, yc, yh, yw;
     get_shape(x, "abcd", xformat, xn, xc, xh, xw);
