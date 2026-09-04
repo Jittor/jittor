@@ -826,10 +826,8 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `7.03`：`ac38772d` 补充 vmap kwargs 兼容矩阵，明确 in/out_dims 归一化、randomness/chunk_size unsupported、未知 kwargs TypeError 与静态门禁；仅设计前置。
 - `8.06`：只读确认标准 ACL launcher owner 已全部处理，KVCacheMemcpy 保持专用路径，本波无代码提交。
 
-### 2026-09-04 第九十一波补充证据
-
-- `2.19`：`bf5fef1e` 补充 CUBLAS/CUDNN 测试入口内部断言精确计数门禁；结构门禁 1 passed，不改变运行语义或用户边界累计。
-
 ### 2026-09-04 第九十二波补充证据
 
-- `2.19`：`8c2ebaa8` 将 CUB 测试 CUDA 状态断言收紧为精确计数门禁；结构门禁 1 passed，不改变运行语义或用户边界累计。
+- `2.19`：`8c2ebaa8`/`92216275` 将 CUB 测试 CUDA 状态断言收紧为精确计数门禁；结构门禁 1 passed，不改变运行语义或用户边界累计。
+- `7.03`：`b233cf6a` 补充 vmap 标量/zero-dim 输出契约，固定 singleton 归一化、nested batch 轴与 `out_dims` 形状；仅设计前置，未修改 runtime。
+- `8.06`：只读确认标准 ACL launcher owner 已穷尽，KVCacheMemcpy 保持专用路径，本波无代码提交。
