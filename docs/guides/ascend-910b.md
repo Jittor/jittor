@@ -509,6 +509,9 @@ The ACL Conv2d forward owner uses the shared launcher while retaining its
 group, bias, and convolution descriptor handling. Conv2d backward is outside
 this slice.
 
+The ACL Conv2d backward owner uses the shared launcher while retaining its
+three-output gradient query and descriptor cleanup.
+
 The ACL RmsNorm forward owner uses the shared launcher while retaining eps and
 dual-output handling. Its gradient owner is outside this slice.
 

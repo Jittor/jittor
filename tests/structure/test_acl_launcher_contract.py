@@ -387,6 +387,15 @@ def test_conv_forward_uses_launcher_and_backward_remains_present():
     assert "void Conv2dBackwardOpRunner::executeOp" in source
 
 
+def test_conv_backward_uses_launcher_and_keeps_three_outputs():
+    source = CONV_SOURCE.read_text()
+    backward = source[source.index("void Conv2dBackwardOpRunner::executeOp"):]
+    assert "outputTensors[2]" in backward
+    assert "launch(ret, aclnnConvolutionBackward, true);" in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+
+
 def test_rms_norm_forward_uses_launcher_and_grad_remains_present():
     source = NORMS_SOURCE.read_text()
     forward = source[source.index("void RmsNormOpRunner::executeOp"):source.index("RmsNormGradOpRunner::RmsNormGradOpRunner")]
