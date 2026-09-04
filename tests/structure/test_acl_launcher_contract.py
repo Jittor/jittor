@@ -418,6 +418,16 @@ def test_rope_forward_uses_launcher_and_backward_remains_present():
     assert "void RotaryPositionEmbeddingGradOpRunner::executeOp" in source
 
 
+def test_rope_gradient_uses_launcher_and_keeps_io_query():
+    source = ROPE_SOURCE.read_text()
+    gradient = source[source.index("void RotaryPositionEmbeddingGradOpRunner::executeOp"):]
+    assert "inputTensors[3]" in gradient
+    assert "outputTensors[2]" in gradient
+    assert "launch(ret, aclnnRotaryPositionEmbeddingGrad, true);" in gradient
+    assert "mallocWorkSpace(workspaceSize)" not in gradient
+    assert "syncRun();" not in gradient
+
+
 def test_maxpool_forward_uses_launcher_and_keeps_descriptors():
     source = POOL_SOURCE.read_text()
     forward = source[source.index("void MaxpoolOpRunner::executeOp"):source.index("void AvgpoolOpRunner::executeOp")]

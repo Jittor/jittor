@@ -525,6 +525,9 @@ The ACL RotaryPositionEmbedding forward owner uses the shared launcher and
 retains its three input tensors and synchronous execution. Its gradient owner
 is outside this slice.
 
+The ACL RotaryPositionEmbedding gradient owner uses the shared launcher while
+retaining its four-input, three-output query and synchronous execution.
+
 The ACL Maxpool forward owner uses the shared launcher while retaining its
 kernel, stride, padding, dilation, and ceil-mode descriptors. Avgpool and
 backward owners remain outside this slice.

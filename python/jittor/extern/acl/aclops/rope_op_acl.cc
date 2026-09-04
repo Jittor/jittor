@@ -58,17 +58,7 @@ namespace jittor
             inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3],
             0, outputTensors[0], outputTensors[1], outputTensors[2],
             &workspaceSize, &executor);
-        checkRet(ret);
-
-        if (workspaceSize > 0)
-            mallocWorkSpace(workspaceSize);
-
-        ret = aclnnRotaryPositionEmbeddingGrad(
-            workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS,
-                  LOG_PRINT("%s: aclnnRotaryPositionEmbeddingGrad failed. ERROR: %d\n", name.c_str(), ret); return);
-
-        syncRun();
+        launch(ret, aclnnRotaryPositionEmbeddingGrad, true);
     }
 
 }
