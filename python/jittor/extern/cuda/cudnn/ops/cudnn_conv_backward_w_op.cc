@@ -61,7 +61,7 @@ CudnnConvBackwardWOp::CudnnConvBackwardWOp(Var* x, Var* dy, int kh, int kw, int 
 
 void CudnnConvBackwardWOp::infer_shape() {
     USER_CHECKop(x->shape.size(),==,4);
-    ASSERTop(dy->shape.size(),==,4);
+    USER_CHECKop(dy->shape.size(),==,4);
     int xn, xc, xh, xw, wh, ww, wci, wco, yn, yc, yh, yw;
     get_shape(x, "abcd", xformat, xn, xc, xh, xw);
     get_shape(dy, "abcd", yformat, yn, yc, yh, yw);
