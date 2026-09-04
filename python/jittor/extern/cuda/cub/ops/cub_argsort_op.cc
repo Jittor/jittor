@@ -44,7 +44,7 @@ void CubArgsortOp::infer_shape() {
             n *= x->shape[i];
         }
     }
-    ASSERT(offsets->shape.size() == 1);
+    USER_CHECKop(offsets->shape.size(),==,1);
     ASSERT(offsets->shape[0] == n + 1);
     y->set_shape(x->shape);
     y_key->set_shape(x->shape);
