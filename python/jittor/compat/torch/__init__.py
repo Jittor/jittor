@@ -255,10 +255,12 @@ def install(torch, strict=True):
         setattr(torch, InstallContext.COMPLETE_ATTR, False)
         transaction.rollback()
         transaction.release()
+        context.state.pop("_install_transaction", None)
         raise
     context.state.pop(_NAMESPACE_TRANSACTION, None)
     transaction.commit()
     transaction.release()
+    context.state.pop("_install_transaction", None)
     # A module tree can now contain torch-authored classes, which register
     # parameters by nn.Parameter rather than by assignment. Nothing has to be
     # switched on for that: the marker that tells the two apart is attached by

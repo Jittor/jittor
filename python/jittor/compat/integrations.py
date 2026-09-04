@@ -9,7 +9,7 @@ def _warning(logger, message):
         logger.w(message)
 
 
-def apply_external_runtime_patches(logger=None):
+def apply_external_runtime_patches(logger=None, transaction=None):
     report = {}
     import jittor as jt
 
@@ -40,7 +40,7 @@ def apply_external_runtime_patches(logger=None):
     try:
         from jittor.compat.module_patcher import install_module_patches
 
-        transaction = getattr(
+        transaction = transaction or getattr(
             getattr(jt, "_torch_compat_install_context", None),
             "state", {}).get("_install_transaction")
         patch_report = install_module_patches(transaction=transaction)
@@ -72,7 +72,7 @@ def apply_external_runtime_patches(logger=None):
     try:
         from jittor.compat.external_backend import load_external_backend_entry_points
 
-        transaction = getattr(
+        transaction = transaction or getattr(
             getattr(jt, "_torch_compat_install_context", None),
             "state", {}).get("_install_transaction")
         backend_results = load_external_backend_entry_points(transaction=transaction)
