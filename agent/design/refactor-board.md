@@ -542,3 +542,9 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `8.06`：`e86ccd11` 将 RmsNorm forward 接入共享 launcher，保留 `eps`、双输出与同步策略，gradient owner 不变；静态合同 38 passed，本机无 CANN/NPU，仍待实机。
 - `2.19`：`f07cb966`/`54a88b42` 将 cuDNN conv3d backward-w 的 dy rank 边界改为 `USER_CHECKop`；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向，累计 87 处。
 - `7.03`：`d9c7c6a2` 将 `det` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
+
+### 2026-09-04 第五十二波补充证据
+
+- `8.06`：`faf6745e` 将 RmsNormGrad 接入共享 launcher，保留多输入、双输出与同步策略，gradient owner 不变；静态合同 39 passed，本机无 CANN/NPU，仍待实机。
+- `2.19`：`85ae0688`/`b5e00107` 将 cuDNN conv3d 权重 rank 边界改为 `USER_CHECKop`；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向，累计 88 处、四十一组证据。
+- `7.03`：`9c469b37` 将 `inverse` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
