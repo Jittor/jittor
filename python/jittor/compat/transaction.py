@@ -23,6 +23,18 @@ class InstallTransaction:
         """Register a whole-snapshot undo callback."""
         self.record({}, "__snapshot__", _MISSING, _MISSING, undo=undo)
 
+    def mutate_env(self, key, value, environ=None):
+        import os
+        env = os.environ if environ is None else environ
+        old = env.get(key, _MISSING)
+        self.record(env, key, old, value)
+        env[key] = str(value)
+
+    def mutate_flag(self, flags, name, value):
+        old = getattr(flags, name, _MISSING)
+        self.record(flags, name, old, value)
+        setattr(flags, name, value)
+
     def acquire(self):
         self._lock.acquire()
 
