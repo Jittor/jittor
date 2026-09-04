@@ -29,6 +29,12 @@ def test_acl_structure_boundary_names_atomic_migrations_and_hardware_gate():
         "cache_key",
         "type_tag",
         "BaseOpRunner` helper",
+        "AclDecodedData decode_acl_data",
+        "DataMap& data",
+        "UserError",
+        "InternalInvariantError",
+        "canonical_cache_key",
+        "non-canonical vector",
     ):
         assert required in text
 
