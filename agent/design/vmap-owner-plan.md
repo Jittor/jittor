@@ -563,3 +563,22 @@ ones explicitly:
 Do not retain a catch-all `**kwargs` that silently discards values. The static
 gate should inspect the signature and assert that each rejected keyword maps to a
 documented exception path, keeping fidelity detail and error behavior aligned.
+
+## Scalar and zero-dim outputs
+
+Jittor represents scalar leaves as a singleton dimension while Torch `vmap`
+returns zero-dimensional tensors for scalar function results. The owner must
+retain the current normalization rule: stack mapped scalar leaves, then remove
+only the artificial trailing singleton when it is introduced by the mapping
+level. Do not squeeze user-provided size-1 dimensions.
+
+Add a static/CPU node using a scalar-returning mapped function and assert:
+
+```text
+result.ndim == 1                 # one mapped batch axis
+result.shape == (batch_size,)
+```
+
+For nested scalar maps, assert one axis per mapping level and verify that
+`out_dims` relocates only the requested batch axis. Any deviation is a shape
+contract failure, not a backend-specific tolerance.
