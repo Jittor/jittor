@@ -119,6 +119,72 @@ for _reduction_extra in (amax, amin, count_nonzero):
 del _reduction_extra
 
 
+_NATIVE_CUMSUM = jt.cumsum
+_NATIVE_CUMPROD = getattr(jt, "cumprod", None)
+_CUMULATIVE_FIDELITY_DETAIL = (
+    "matches Torch cumulative values, the bool/uint8 -> int64 promotion, the "
+    "dtype cast, and out identity for supported tensors on CPU and CUDA; the "
+    "summation order is the backend's, so a float32 scan is reproducible per "
+    "device but CPU and CUDA agree only to float32 rounding (~1e-6 relative "
+    "over a few thousand elements, with the parallel scan the more accurate "
+    "of the two), while device, layout, and named-dimension semantics are not "
+    "implemented"
+)
+
+# ``out=`` has to reach the parent of a retained view, and the walk that does
+# that can only be built at install time (it needs the pre-patch
+# ``Var.__setitem__``). ``_install_tensor_methods`` hands it over here so the
+# stable objects above can stay module-level instead of being install closures.
+_index_parent_writer = None
+
+
+def _assign_out(out, value):
+    """Write ``value`` into ``out`` and propagate through retained views."""
+    out.assign(value)
+    if _index_parent_writer is not None:
+        _index_parent_writer(out, out)
+    return out
+
+
+def _cumulative(native, input, dim, dtype, out):
+    # ACL's aclnnCumsum SEGFAULTs on bool input (transformers builds position_ids
+    # via mask.cumsum(-1)); Torch promotes bool/uint8 to int64 anyway, so casting
+    # first matches Torch and dodges the crash.
+    if isinstance(input, jt.Var) and str(input.dtype) in ("bool", "uint8"):
+        input = input.cast("int64")
+    result = native(input, dim)
+    if dtype is not None:
+        result = result.cast(_dtype_to_str(dtype))
+    if out is not None:
+        return _assign_out(out, result)
+    return result
+
+
+def cumsum(input, dim=-1, dtype=None, out=None, axis=None, **kwargs):
+    """Return a cumulative sum along ``dim`` with Torch's dtype promotion."""
+    return _cumulative(
+        _NATIVE_CUMSUM, input, dim if axis is None else axis, dtype, out)
+
+
+def cumprod(input, dim=-1, dtype=None, out=None, axis=None, **kwargs):
+    """Return a cumulative product along ``dim`` with Torch's dtype promotion."""
+    if _NATIVE_CUMPROD is None:
+        raise RuntimeError("torch.cumprod has no native Jittor owner here")
+    return _cumulative(
+        _NATIVE_CUMPROD, input, dim if axis is None else axis, dtype, out)
+
+
+for _cumulative_name in (cumsum, cumprod):
+    _cumulative_name._torch_accepts_axis = True
+    register_fidelity(
+        "torch." + _cumulative_name.__name__,
+        _cumulative_name,
+        Fidelity.APPROXIMATE,
+        _CUMULATIVE_FIDELITY_DETAIL,
+    )
+del _cumulative_name
+
+
 def _ddp_all_reduce_grads(leaves):
     """Average DDP-managed gradients across ranks, in a rank-stable order.
 
@@ -910,15 +976,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     if not hasattr(Var, "is_contiguous"):
         Var.is_contiguous = lambda self, *a, **k: True
 
-    # cumsum: ACL's aclnnCumsum SEGFAULTS on bool input (transformers builds
-    # position_ids via mask.cumsum(-1)). torch.cumsum promotes bool/uint8 to
-    # int64 anyway, so cast before the native op to match torch AND avoid the
-    # crash. Override both torch.cumsum and Var.cumsum (g IS the jittor module).
-    _native_cumsum = jt.cumsum
-    def _assign_out(out, value):
-        out.assign(value)
-        _write_index_parent(out, out)
-        return out
+    global _index_parent_writer
+    _index_parent_writer = _write_index_parent
 
     _native_add = g.add
     def _add(input, other, *, alpha=1, out=None):
@@ -930,31 +989,12 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         return result
     g.add = _add
 
-    def _cumsum(x, dim=-1, dtype=None, out=None, **kw):
-        if isinstance(x, jt.Var) and str(x.dtype) in ("bool", "uint8"):
-            x = x.cast("int64")
-        r = _native_cumsum(x, dim)
-        if dtype is not None:
-            r = r.cast(_dtype_to_str(dtype))
-        if out is not None:
-            return _assign_out(out, r)
-        return r
-    g.cumsum = _cumsum
-    Var.cumsum = lambda self, dim=-1, dtype=None, out=None, **kw: _cumsum(self, dim, dtype, out=out)
-    # cumprod has the same ACL fragility; guard it the same way if present.
-    if hasattr(jt, "cumprod"):
-        _native_cumprod = jt.cumprod
-        def _cumprod(x, dim=-1, dtype=None, out=None, **kw):
-            if isinstance(x, jt.Var) and str(x.dtype) in ("bool", "uint8"):
-                x = x.cast("int64")
-            r = _native_cumprod(x, dim)
-            if dtype is not None:
-                r = r.cast(_dtype_to_str(dtype))
-            if out is not None:
-                return _assign_out(out, r)
-            return r
-        g.cumprod = _cumprod
-        Var.cumprod = lambda self, dim=-1, dtype=None, out=None, **kw: _cumprod(self, dim, dtype, out=out)
+    g.cumsum = cumsum
+    Var.cumsum = cumsum
+    # cumprod has the same ACL fragility; keep the presence guard.
+    if _NATIVE_CUMPROD is not None:
+        g.cumprod = cumprod
+        Var.cumprod = cumprod
 
     # bitwise/logical operators torch supports on tensors
     if not hasattr(Var, "__invert__"):
