@@ -108,3 +108,33 @@ def test_the_local_runner_and_the_gate_select_the_same_files():
         sys.path.remove(str(REPO_ROOT / "tools"))
     assert module._session_arguments("native") == list(gate_scope.native_arguments())
     assert module._session_arguments("torch") == list(gate_scope.torch_arguments())
+
+
+def test_skip_reason_buckets_are_stable_and_other_is_counted(monkeypatch):
+    """10.05: accepted environment reasons are separated from unexplained ones."""
+    import conftest as policy
+
+    previous = policy._SKIP_REASON_BUCKETS.copy()
+    try:
+        policy._SKIP_REASON_BUCKETS.clear()
+        policy._SKIP_REASON_BUCKETS.update({
+            policy.classify_skip_reason_bucket("CUDA backend missing"): 2,
+            policy.classify_skip_reason_bucket("mystery skip"): 1,
+        })
+        buckets = dict(policy._skip_reason_buckets())
+        assert buckets["accelerator"] == 2
+        assert buckets["other"] == 1
+        assert policy.classify_skip_reason_bucket("torch download") == "torch"
+        assert policy.classify_skip_reason_bucket("manual backend") == "backend"
+        assert policy._other_skip_count() == 1
+    finally:
+        policy._SKIP_REASON_BUCKETS.clear()
+        policy._SKIP_REASON_BUCKETS.update(previous)
+
+
+def test_skip_reason_summary_and_threshold_are_wired():
+    """10.05: CI summary prints buckets and the execution gate rejects other>0."""
+    source = (REPO_ROOT / "tests" / "conftest.py").read_text(encoding="utf-8")
+    assert "_report_skip_reason_buckets(terminalreporter)" in source
+    assert "other skipped:" in source
+    assert "_other_skip_count() > 0" in source

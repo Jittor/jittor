@@ -2,6 +2,7 @@
 
 import importlib
 import os
+from collections import Counter
 from pathlib import Path
 import sys
 
@@ -433,6 +434,7 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
         # "no file collected nothing" because nothing was ever recorded.
         _snapshot_selected_files(config)
     _report_files_that_executed_nothing(terminalreporter, config)
+    _report_skip_reason_buckets(terminalreporter)
     if _MISSING_REAL_TORCH:
         terminalreporter.write_sep(
             "=", "skipped for want of the PyTorch this session declared it has")
@@ -504,6 +506,19 @@ def pytest_sessionfinish(session, exitstatus):
 #: {relative path: {"executed": n, "skipped": n}} for this session.
 _FILE_OUTCOMES = {}
 _FILES_WITH_ITEMS = set()
+_SKIP_REASON_BUCKETS = Counter()
+_SKIP_BUCKET_ORDER = (
+    "accelerator", "backend", "mpi", "torch", "network", "manual", "other")
+_SKIP_BUCKET_PATTERNS = {
+    "accelerator": ("cuda", "cudnn", "cublas", "cutt", "cusparse", "cufft",
+                    "curand", "gpu", "rocm", "hip", "acl", "npu",
+                    "ascend", "cann", "triton", "accelerator"),
+    "backend": ("backend", "driver", "device library"),
+    "mpi": ("mpi", "nccl", "hccl", "world size", "multi-rank"),
+    "torch": ("torch",),
+    "network": ("download", "dataset", "network", "internet"),
+    "manual": ("manual",),
+}
 
 
 def _relative_to_repo(path):
@@ -544,6 +559,7 @@ def pytest_runtest_logreport(report):
         record["skipped"] += 1
         reason = _skip_reason(report)
         record["reasons"].add(reason)
+        _SKIP_REASON_BUCKETS[classify_skip_reason_bucket(reason)] += 1
         if _real_torch_is_required() and _blames_missing_torch(reason):
             _MISSING_REAL_TORCH.append((report.nodeid, reason))
 
@@ -696,6 +712,37 @@ def _exemption_note(path, exemptions):
     return ""
 
 
+def _skip_reason_buckets():
+    """Return stable bucket counts in the documented priority order."""
+    return tuple((bucket, _SKIP_REASON_BUCKETS.get(bucket, 0))
+                 for bucket in _SKIP_BUCKET_ORDER)
+
+
+def classify_skip_reason_bucket(reason):
+    """Classify a skip reason using fixed, overlap-safe priority."""
+    text = str(reason or "").lower()
+    for bucket in _SKIP_BUCKET_ORDER[:-1]:
+        if any(pattern in text for pattern in _SKIP_BUCKET_PATTERNS[bucket]):
+            return bucket
+    return "other"
+
+
+def _other_skip_count():
+    """Count skips classified as ``other`` for the execution threshold."""
+    return _SKIP_REASON_BUCKETS.get("other", 0)
+
+
+def _report_skip_reason_buckets(terminalreporter):
+    """Print deterministic skip buckets for CI and local diagnostics."""
+    buckets = _skip_reason_buckets()
+    if not buckets:
+        return
+    terminalreporter.write_sep("=", "skip reasons")
+    for bucket, count in buckets:
+        terminalreporter.write_line("%d skipped: %s" % (count, bucket))
+    terminalreporter.write_line("other skipped: %d" % _other_skip_count())
+
+
 def pytest_sessionfinish(session, exitstatus):
     """Fail a gate that proved nothing, in either of the two ways it can.
 
@@ -724,5 +771,5 @@ def pytest_sessionfinish(session, exitstatus):
     # it -- that is exactly the shape 0.01 had.
     unexplained += [path for path in _files_that_collected_nothing()
                     if path not in exemptions]
-    if unexplained:
+    if unexplained or _other_skip_count() > 0:
         session.exitstatus = 1
