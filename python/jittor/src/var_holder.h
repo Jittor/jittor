@@ -312,6 +312,49 @@ struct VarHolder {
     // @attrs(return_self)
     VarHolder* start_grad();
 
+    /**
+     * Whether this Var is a leaf of the backward graph: it requires gradient
+     * and no differentiable predecessor can send it one. Always equal to
+     * ``grad_fn_node_id == -1``.
+     *
+     * This is the graph fact ``torch.Tensor.is_leaf`` reports; the
+     * compatibility layer is what maps torch's spelling onto it. See
+     * ``jittor::backward_grad_fn`` in grad.h for the exact rule and for why
+     * this costs the producer's arity rather than a graph walk.
+     */
+    // @pyjt(__get__is_backward_leaf)
+    bool is_backward_leaf();
+
+    /**
+     * Identity of the op a gradient would flow into on its way to this Var, as
+     * a ``Node`` id, or -1 when this Var is a backward leaf. Two Vars produced
+     * by the same op share it; it is what a ``grad_fn`` object's identity
+     * would be built on.
+     */
+    // @pyjt(__get__grad_fn_node_id)
+    int64 grad_fn_node_id();
+
+    /**
+     * Which *kind* of op that is, as the registration-time operator id (see
+     * ``Op::type_id``), or -1 when this Var is a backward leaf. 0 means the op
+     * never reached the registry -- an out-of-tree op, or one a C++ unit test
+     * built -- because a query must answer rather than raise.
+     *
+     * Callers deciding on operator identity compare this, never a name. 2.17
+     * took the last string comparison of an operator's name out of the core and
+     * this must not bring one back.
+     */
+    // @pyjt(__get__grad_fn_op_id)
+    int64 grad_fn_op_id();
+
+    /**
+     * That op's name, for diagnostics only -- the fused spelling
+     * (``binary.multiply``), and the empty string for a backward leaf.
+     * Identity decisions belong to ``grad_fn_op_id``.
+     */
+    // @pyjt(__get__grad_fn_name)
+    string grad_fn_name();
+
     // @pyjt(__get__uncertain_shape)
     inline NanoVector uncertain_shape() {
         return var->shape;

@@ -245,6 +245,30 @@ VarHolder* VarHolder::start_grad() {
     return this;
 }
 
+bool VarHolder::is_backward_leaf() {
+    return jittor::is_backward_leaf(var);
+}
+
+int64 VarHolder::grad_fn_node_id() {
+    Op* op = backward_grad_fn(var);
+    return op ? op->id : -1;
+}
+
+int64 VarHolder::grad_fn_op_id() {
+    Op* op = backward_grad_fn(var);
+    if (!op) return -1;
+    // Op::type_id() resolves through get_op_info, which raises for a name that
+    // was never registered. A query behind an attribute read must not raise, so
+    // an unregistered op answers with the id OpInfo reserves for "unresolved".
+    if (!op->registered_op_id && !has_op(op->name())) return 0;
+    return op->type_id();
+}
+
+string VarHolder::grad_fn_name() {
+    Op* op = backward_grad_fn(var);
+    return op ? op->name_ex() : string();
+}
+
 string VarHolder::to_string() {
     return var->to_string();
 }
