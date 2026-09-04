@@ -31,6 +31,7 @@ ARG_REDUCE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/arg_reduce_op_acl.cc
 SILU_SOURCE = ROOT / "python/jittor/extern/acl/aclops/silu_op_acl.cc"
 BMM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/bmm_op_acl.cc"
 TRUTH_REDUCE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/truth_reduce_op_acl.cc"
+CONV_SOURCE = ROOT / "python/jittor/extern/acl/aclops/conv_op_acl.cc"
 ROPE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/rope_op_acl.cc"
 POOL_SOURCE = ROOT / "python/jittor/extern/acl/aclops/pool_op_acl.cc"
 RANDOM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/random_op_acl.cc"
@@ -342,6 +343,18 @@ def test_truth_reduce_all_any_use_shared_launcher_and_keep_raii_axes():
     assert "unique_ptr<aclIntArray" in source
     assert "mallocWorkSpace(workspaceSize)" not in source
     assert "syncRun();" not in source
+
+
+def test_conv_forward_uses_launcher_and_backward_remains_present():
+    source = CONV_SOURCE.read_text()
+    forward = source[source.index("void Conv2dOpRunner::executeOp"):source.index("void Conv2dBackwardOpRunner::executeOp")]
+    assert "attr->group" in forward
+    assert "launch(ret, aclnnConvolution, true);" in forward
+    assert "aclDestroyIntArray(strides);" in forward
+    assert "aclDestroyIntArray(dilations);" in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void Conv2dBackwardOpRunner::executeOp" in source
 
 
 def test_rope_forward_uses_launcher_and_backward_remains_present():

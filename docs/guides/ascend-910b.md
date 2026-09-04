@@ -502,6 +502,10 @@ Ascend 910B3 probe is run.
 The ACL TruthReduce owner routes both all and any through the shared launcher
 while retaining reduce_all selection, keepdims, and RAII axes descriptors.
 
+The ACL Conv2d forward owner uses the shared launcher while retaining its
+group, bias, and convolution descriptor handling. Conv2d backward is outside
+this slice.
+
 The ACL RotaryPositionEmbedding forward owner uses the shared launcher and
 retains its three input tensors and synchronous execution. Its gradient owner
 is outside this slice.
