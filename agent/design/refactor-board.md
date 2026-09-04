@@ -684,3 +684,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 ### 2026-09-04 第六十七波补充证据
 
 - `8.06`：`230658fb`/`c4f0447c` 将 Avgpool backward 接入共享 launcher，保留 countIncludePad/divisorOverride、descriptor cleanup 与同步策略；静态合同 55 passed，本机无 CANN/NPU，仍待实机。
+
+### 2026-09-04 第六十八波补充证据
+
+- `8.06`：`a9d73aae` 将 Maxpool backward 接入共享 launcher，保留 pool descriptors、poolCeil、输出处理与 cleanup；静态合同 56 passed，本机无 CANN/NPU，仍待实机。
