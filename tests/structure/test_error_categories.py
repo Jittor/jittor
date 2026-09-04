@@ -87,7 +87,7 @@ MIGRATED_CUDNN_RNN_DTYPE_USER_BOUNDARIES = {
 }
 
 MIGRATED_CUDNN_RNN_OP_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cudnn/ops/cudnn_rnn_op.cc": 5,
+    "python/jittor/extern/cuda/cudnn/ops/cudnn_rnn_op.cc": 6,
 }
 
 MIGRATED_CUDNN_RNN_BWD_X_MODE_USER_BOUNDARIES = {
