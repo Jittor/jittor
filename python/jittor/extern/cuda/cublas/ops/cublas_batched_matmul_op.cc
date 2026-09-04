@@ -78,7 +78,9 @@ void CublasBatchedMatmulOp::infer_shape(){
     NanoVector c_shape;
 
     for (int i=0; i<adim-2; i++) {
-        ASSERTop(a->shape[i],==,b->shape[i]);
+        USER_CHECKop(a->shape[i],==,b->shape[i])
+            << "cublas batched matmul batch dimensions must match at axis " << i
+            << ", got " << a->shape[i] << " and " << b->shape[i];
         c_shape.push_back(a->shape[i]);
     }
     if (trans_a) {
