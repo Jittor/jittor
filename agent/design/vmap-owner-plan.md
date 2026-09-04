@@ -254,3 +254,22 @@ Record backend evidence independently:
 
 No backend skip may downgrade an owner/identity or unsupported-behavior failure
 to a pass.
+
+## Stable API and fidelity template
+
+The extracted owner should expose this minimal signature at module scope:
+
+```text
+vmap(func, in_dims=0, out_dims=0, *, runtime=None, **kwargs)
+```
+
+`runtime` is an internal-only keyword used by `install(ctx)` to provide the
+`transform_depth()` callback; it must not appear in the public Torch shim
+signature. If the callback is omitted, behavior is identical to
+`transform_depth() == 0`. Preserve any additional Torch kwargs by rejecting
+unsupported values explicitly rather than silently dropping them.
+
+Register fidelity with a detail string that names the supported mapping paths,
+the context callback limitation, and backend scope. This keeps reports stable
+across releases and lets static tests assert that context-dependent behavior is
+documented instead of inferred from implementation details.
