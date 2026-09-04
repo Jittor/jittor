@@ -718,6 +718,12 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `2.19`：`1e3bab6e`/`f112976b` 将 cuDNN conv backward-w 输入 rank 边界改为 `USER_CHECKop`，累计 109 处、六十二组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
 - `7.03`：`05e9f37f` 补充 vmap 评审证据清单，覆盖 AST、closure/global、fidelity、聚焦节点与 skip 归因；仅设计前置，未修改 runtime。
 
+### 2026-09-04 第七十四波补充证据
+
+- `8.06`：`4eb360d7`/`2dc68144` 将 IndexPutImpl 接入共享 launcher，保留 index tensor-list handling 与同步策略，IndexPutImplAccumulate 未改；静态合同 62 passed，本机无 CANN/NPU，仍待实机。
+- `2.19`：`5596563f`/`2702f7c6` 将 cuDNN conv backward-w dy rank 边界改为 `USER_CHECKop`，累计 110 处、六十三组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `7.03`：`9ee118a0` 补充 vmap unsupported 行为矩阵，覆盖 extent/nested dim/非 bool/depth callback/out_dims；仅设计前置，未修改 runtime。
+
 ### 2026-09-04 第六十七波补充证据
 
 - `8.06`：`230658fb`/`c4f0447c` 将 Avgpool backward 接入共享 launcher，保留 countIncludePad/divisorOverride、descriptor cleanup 与同步策略；静态合同 55 passed，本机无 CANN/NPU，仍待实机。
