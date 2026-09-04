@@ -107,7 +107,7 @@ C++ 头文件。第三，错误处理只有一档：ASSERT/CHECK/LOGf 全部抛 
 | 已知损坏的机制留在代码里 | `executor.cc:704-707` 把 event_queue.run_sync 注释掉写着 "TODO: run_sync cause hang"；`event_queue.h:26` 用 volatile 当同步原语。`ops/tape_op.cc:38-44` 注释 "this is still not enough… please find a better solution" | 异步执行的基础设施存在但不可用；执行器异步化没有可复用的底座 | 修好并加测试或删除 | 次要 |
 | 算子注册表的键不对称且 73 处依赖静态初始化顺序 | `ops/op_register.cc:34` 按 op_info.name 存，而 `:15,38,43` 按截断到第一个点之前的名字查——注册带点的名字后永远查不到。`op_register.h:20-28` 用 RTTI 在 void* 上分派。全仓 73 处命名空间作用域的 `static auto make_xxx = get_op_info(...)` 而注册本身也是静态初始化 | 两组静态初始化的相对顺序未定义；若查询先于注册，ASSERT 在 main 之前抛出即 terminate 且无诊断。跨 .so 的 type_info 比较也可能静默不匹配 | 注册表改惰性初始化；查询延迟到首次使用；构造函数签名用编译期校验 | 主要 |
 
-**已修（部分）：`5f36be55`（2.19）。** 「析构不得抛」这一条此前只做了一半，而做掉的那一半
+**已修（部分）：`4b5eaaa9`（2.19）。** 「析构不得抛」这一条此前只做了一半，而做掉的那一半
 **在 C++ 里不可能生效**：`ed12fe21` 把生成的 `tp_dealloc` 包了一层 `try { ~T(); ... } catch`，但
 **析构函数自 C++11 起隐式 `noexcept`**——异常离开析构的那一刻就是 `std::terminate`，而 terminate 发生在
 **析构自己的栈帧上**，调用方的 catch 在它下面，永远轮不到。真机上的表现：CUDA 上跑 LSTM 反向时
