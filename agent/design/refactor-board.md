@@ -479,7 +479,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 10.10 | gradcheck 加「故意写错导数应当失败」的负向自测 | 已合并 | gates | 3e83594d。故意把平方的 backward 写成 `3*x`，`gradcheck` 必须抛 `Jacobian mismatch`；定向 1 passed，相关结构 15 passed |
 | 10.11 | 设备对拍加 dtype 轴 | 已合并 | gates | 4bf5830c。双方支持时生成 float32/int8/int16 轴，整数逐位比较，浮点容差按 `sqrt(reduce_size)*eps` 下限缩放，CuPy linalg 探针失败硬失败；真实 CUDA sum-int8/max-int16 2 passed |
 | 10.12 | `retry` 装饰器记录并上报重试次数 | 已合并 | gates | 402d09ef。恢复成功与最终失败均报告准确 retries/attempts，并暴露调用、最近和累计重试计数；保留原异常并支持 kwargs。聚焦结构 8 passed |
-| 10.13 | marker 真正建立 `-m "not slow"` 快门禁或删除 | 待领 | | |
+| 10.13 | marker 真正建立 `-m "not slow"` 快门禁或删除 | 已合并 | gates | 821bb6ba。新增 AST 合同确认 smoke 的 native/torch 两次 `_run_pytest_once` 均传入 `-m not slow`，且 `SLOW_FILES` 仍被 gate 覆盖；定点结构节点 1 passed |
 | 10.14 | notebook 门禁按 topic 参数化 | 已合并 | gates | 828bc272。fence/materialize/CPU smoke 生成独立 topic nodeid，smoke 共享模块级缓存；33/117 个 skip-execution 单元均带原因标签且低于 35% 上限。50 tests collected，结构/标签 20 passed，单 topic materialize 1 passed |
 | 10.15 | 速度 harness 记录并断言两侧线程数、亲和掩码与精度策略 | 已合并 | gates | 9047897a。runner报告实际线程环境、affinity、runtime线程数与精度，harness要求两侧一致；速度类默认至少10次。纯结构契约3 passed、运行文件语法检查通过，未执行大模型 |
 | 10.16 | 提供计时 API | 已合并 | pyother | f9f3a23d。`jt.benchmark` 冻结并预先物化输入池，至少一次 warmup 不计时，每轮递归保留 tuple/list/dict 全部输出并强同步后采样；无 Var 输出直接拒绝，返回不可变秒级统计。CPU 回归 3 passed，覆盖跨轮输入复用、嵌套输出、CSE/死码与未物化假快 |
@@ -843,6 +843,12 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `2.19`：`9d2752e2`/`9ad1a807` 精确约束 cuDNN 3D convolution `best_algo_idx!=-1` 内部断言计数并纳入门禁；1 passed，不改变用户边界或运行语义。
 - `7.03`：`ae5623e8` 补充 vmap 并发契约，明确 re-entrant 调用、context 生命周期隔离及线程安全 probe；仅设计前置，未修改 runtime。
 - `8.06`：只读确认标准 ACL launcher owner 已穷尽，KVCacheMemcpy 保持专用路径，本波无代码提交。
+
+### 2026-09-04 第九十五波补充证据
+
+- `10.13`：`821bb6ba` 新增 smoke AST 快门禁，确认 native/torch 两次运行均传入 `-m not slow` 且 `SLOW_FILES` 仍被 gate 覆盖；定点结构节点 1 passed，任务已完整关闭。
+- `2.19`：`903b8d3f`/`2a55244b` 精确约束 CUDNN backward-x `best_algo_idx!=-1` 内部断言计数；结构门禁 1 passed，不改变用户边界累计。
+- `7.03`：`17a15406` 补充 vmap 资源边界/取消契约，覆盖 footprint 上限、超大 extent、异常清理和 hold-vars/fidelity 泄漏；仅设计前置。
 
 ### 2026-09-04 第九十三波补充证据
 

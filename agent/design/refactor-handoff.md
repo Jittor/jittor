@@ -27,10 +27,10 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；本波审计基线 `ae5623e8`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 审计基线 990 个 |
+| 分支 | `2.0-refactor`；本波审计基线 `17a15406`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 审计基线 994 个 |
 | 提交里出现过的任务号 | 329 个 |
-| 看板 | 已合并 **196** / 进行中 **0** / 待领 **78** / 并入其它任务 **5** |
+| 看板 | 已合并 **197** / 进行中 **0** / 待领 **77** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
 
 **交接清理完成不等于整改完成。** 看板仍有 74 条待领；当前只是把中断留下的易失状态全部转成了主线提交、
@@ -843,7 +843,17 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `compat` | 7.03 补充 vmap 并发契约，明确 re-entrant 调用、context 生命周期隔离及线程安全 probe；仅设计前置 |
 | `device` | 8.06 只读确认标准 ACL launcher owner 已穷尽，KVCacheMemcpy 保持专用路径 |
 
-按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第九十五波继续优先可独立验证的
+第九十五波新增 2 个严格保持待领的前置，并完整关闭 10.13：
+
+| 分区 | 第九十五波结果 |
+| --- | --- |
+| `gates` | 10.13 `-m not slow` 快门禁由 `821bb6ba` 完整关闭；AST 节点 1 passed，native/torch smoke 调用与 `SLOW_FILES` 覆盖均有断言 |
+| `bindings` | 2.19 将 CUDNN backward-x `best_algo_idx!=-1` 内部断言纳入精确计数门禁；结构门禁 1 passed，不改变用户边界 |
+| `compat` | 7.03 补充 vmap 资源边界/取消契约，未修改 runtime，仍待整体实现 |
+
+0.15 仍未完成：smoke 实测约 390s、预算模型约 446s，计划要求 `<300s`；RingBuffer GIL/timeout 修复及两模式 nodeid/makespan 重测仍待专项处理。
+
+按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第九十六波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
 - `device`：若续做 8.06，只迁下一个最终 owner 明确的 family，并复用 5be5fa15 的 launcher 合同；无 NPU
