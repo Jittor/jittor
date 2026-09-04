@@ -39,3 +39,29 @@ Before broad tests, add CPU-only nodes covering:
 
 Run these nodes with an isolated Jittor cache. GPU/NPU behavior remains deferred
 until a backend with the required transform integration is available.
+
+## Verifiable contract
+
+The module-level owner should satisfy these static/runtime checks before any
+behavioral optimization:
+
+- `torch.vmap is numerical.vmap`, with `__module__` and `__name__` identifying
+  the stable owner; fidelity is registered as `approximate` and documents the
+  injected context dependency.
+- `install(ctx)` performs binding only. It must not create a new closure per
+  install or retain the context in a process-global variable. Repeated installs
+  must leave the same callable identity in place.
+- The context callback exposes only the transform-depth probe. The callable
+  must remain usable when that probe is false or absent, taking the ordinary
+  loop/stack path.
+- For every mapped argument, `in_dims=None` leaves the argument unchanged;
+  mapped dimensions preserve their extent, and `out_dims` is applied exactly
+  once. Nested calls append one mapping spec and retain the existing metadata
+  attributes.
+- Unsupported combinations (mismatched mapped extents, non-zero nested helper
+  dimensions, or non-bool vectorized results) return to the ordinary path or
+  raise a documented `RuntimeError`; they must never silently become a no-op.
+
+Static checks should assert that no `g`/`ctx` object is captured by a module
+global and that install contains only the stable binding. These checks are
+independent of backend availability and can run without JIT compilation.
