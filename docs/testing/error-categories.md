@@ -18,3 +18,7 @@ validation and therefore remain `ASSERT` checks.
 Hardware-only negative tests may be registered as static contracts when the
 host has no matching CUDA, CUDNN, CUB, or NCCL device. Static evidence does not
 claim that the hardware path ran.
+
+The current backend manifest has no additional safe user-input assertions;
+future entries should first demonstrate a direct public-argument path before
+changing an `ASSERT` to `USER_CHECK`.
