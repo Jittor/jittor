@@ -127,11 +127,14 @@ def _install_optional_vllm(context):
     from ..module_patcher import install_module_patches
     from ..vllm import register
 
-    register()
+    register(transaction=context.state.get("_install_transaction"))
     # Registering fills the patch table; the finder that consults it has to be
     # live before vLLM is imported. Entry points stay out of it -- scanning
     # them here would drag unrelated adapters into every import of the shim.
-    install_module_patches(load_entry_points=False)
+    install_module_patches(
+        load_entry_points=False,
+        transaction=context.state.get("_install_transaction"),
+    )
 
 
 _REQUIRED_STEPS = (
