@@ -1,7 +1,9 @@
 import threading
 import types
 
-from jittor.compat.transaction import InstallTransaction
+import pytest
+
+from jittor.compat.transaction import InstallTransaction, TransactionConflict
 
 
 def test_transaction_rolls_back_module_env_flags_and_meta_path_in_reverse_order():
@@ -25,3 +27,13 @@ def test_transaction_commit_and_process_lock_are_serializable():
     tx.commit()
     assert tx.state == "committed"
     assert isinstance(InstallTransaction._lock, type(threading.RLock()))
+
+
+def test_transaction_refuses_to_overwrite_an_external_attribute_change():
+    module = types.SimpleNamespace(value="old")
+    tx = InstallTransaction("owner")
+    tx.record(module, "value", "old", "transaction")
+    module.value = "external"
+    with pytest.raises(TransactionConflict, match="owner lost"):
+        tx.rollback()
+    assert module.value == "external"

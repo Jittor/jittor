@@ -17,7 +17,7 @@ class InstallTransaction:
     def record(self, target, name, old, new, undo=None):
         if self.state != "open":
             raise RuntimeError("transaction is %s" % self.state)
-        self._entries.append((target, name, old, new, undo))
+        self._entries.append((target, name, old, new, undo, self.token))
 
     def record_undo(self, undo):
         """Register a whole-snapshot undo callback."""
@@ -33,19 +33,30 @@ class InstallTransaction:
         if self.state == "committed":
             raise RuntimeError("committed transaction cannot rollback")
         with self._lock:
-            for target, name, old, _new, undo in reversed(self._entries):
+            for target, name, old, new, undo, owner in reversed(self._entries):
                 if undo is not None:
                     undo()
-                elif isinstance(target, dict):
-                    if old is _MISSING:
-                        target.pop(name, None)
-                    else:
-                        target[name] = old
                 else:
-                    if old is _MISSING:
-                        delattr(target, name)
+                    current = _read(target, name)
+                    if not _matches(current, new):
+                        raise TransactionConflict(
+                            "transaction owner lost %r during rollback" % name
+                        )
+                    if isinstance(target, (dict, list)):
+                        if old is _MISSING:
+                            if isinstance(target, dict):
+                                target.pop(name, None)
+                            else:
+                                raise TransactionConflict(
+                                    "list entry %r cannot be removed safely" % name
+                                )
+                        else:
+                            target[name] = old
                     else:
-                        setattr(target, name, old)
+                        if old is _MISSING:
+                            delattr(target, name)
+                        else:
+                            setattr(target, name, old)
             self.state = "rolled_back"
 
     def commit(self):
@@ -66,4 +77,29 @@ class _Missing:
 _MISSING = _Missing()
 
 
-__all__ = ["InstallTransaction"]
+class TransactionConflict(RuntimeError):
+    """Raised when rollback would overwrite a value owned by another actor."""
+
+
+def _read(target, name):
+    if isinstance(target, (dict, list)):
+        try:
+            return target[name]
+        except (KeyError, IndexError):
+            return _MISSING
+    return getattr(target, name, _MISSING)
+
+
+def _matches(current, expected):
+    if current is expected:
+        return True
+    if current is _MISSING or expected is _MISSING:
+        return False
+    try:
+        result = current == expected
+        return bool(result) if isinstance(result, bool) else False
+    except Exception:
+        return False
+
+
+__all__ = ["InstallTransaction", "TransactionConflict"]
