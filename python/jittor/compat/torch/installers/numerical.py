@@ -61,6 +61,54 @@ for _complex_name, _complex_impl in (
 del _complex_name, _complex_impl
 
 
+def _is_complex_value(value):
+    complex_type = jt.nn.ComplexNumber
+    return isinstance(value, complex_type) or (
+        isinstance(value, jt.Var) and "complex" in str(value.dtype)
+    )
+
+
+def is_complex(input):
+    return _is_complex_value(input)
+
+
+def real(input):
+    return input.real if isinstance(input, (jt.nn.ComplexNumber, jt.Var)) else input
+
+
+def imag(input):
+    return input.imag if isinstance(input, (jt.nn.ComplexNumber, jt.Var)) else jt.zeros_like(input)
+
+
+def conj(input):
+    return input.conj() if isinstance(input, (jt.nn.ComplexNumber, jt.Var)) else input
+
+
+def angle(input):
+    return input.angle() if isinstance(input, (jt.nn.ComplexNumber, jt.Var)) else jt.zeros_like(input)
+
+
+_native_abs = jt.abs
+
+
+def abs(input):
+    return input.abs() if isinstance(input, jt.nn.ComplexNumber) else _native_abs(input)
+
+
+for _accessor_name, _accessor_impl in (
+    ("is_complex", is_complex), ("real", real), ("imag", imag),
+    ("conj", conj), ("angle", angle), ("abs", abs),
+):
+    register_fidelity(
+        "torch." + _accessor_name,
+        _accessor_impl,
+        Fidelity.APPROXIMATE,
+        "matches Torch complex accessor values for CPU tensors; device, "
+        "layout, out, and complex128 semantics are not implemented",
+    )
+del _accessor_name, _accessor_impl
+
+
 def polar(abs, angle, **kwargs):
     """Construct a native complex tensor from magnitude and phase."""
     return jt.nn.polar(abs, angle)
@@ -1425,23 +1473,18 @@ def install(ctx):
     # accessors below handle both; Var.real/imag/angle are patched in jittor.nn. We force-set
     # (not _alias) the accessors because _alias skips names that already exist as native ops --
     # that is why torch.conj(ComplexNumber) used to fall through to the native conj op and crash.
-    def _is_cplx(x):
-        return isinstance(x, _CN) or (isinstance(x, Var) and "complex" in str(x.dtype))
     _alias("complex", complex)  # native complex64
     _alias("view_as_complex", view_as_complex)   # -> native complex64
     _alias("view_as_real", view_as_real)         # polymorphic
-    g.is_complex = lambda x: _is_cplx(x)
-    g.real = lambda x: x.real if isinstance(x, (_CN, Var)) else x
-    g.imag = lambda x: x.imag if isinstance(x, (_CN, Var)) else jt.zeros_like(x)
+    g.is_complex = is_complex
+    g.real = real
+    g.imag = imag
     _alias("polar", polar)                                        # -> native complex64
-    g.conj = lambda x: x.conj() if isinstance(x, (_CN, Var)) else x
-    g.angle = lambda x: x.angle() if isinstance(x, (_CN, Var)) else jt.zeros_like(x)
+    g.conj = conj
+    g.angle = angle
     # torch.abs of a complex tensor is its magnitude; jittor's abs only takes real Vars.
-    _jt_abs = jt.abs
-    def _abs(x):
-        return x.abs() if isinstance(x, _CN) else _jt_abs(x)
-    g.abs = _abs
-    Var.abs = lambda self: _jt_abs(self)
+    g.abs = abs
+    Var.abs = lambda self: _native_abs(self)
 
     # ``jittor.fft`` is the native owner. Torch mode publishes that same module
     # object under its historical namespace instead of carrying a duplicate DFT.

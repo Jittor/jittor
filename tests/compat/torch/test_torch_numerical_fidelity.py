@@ -59,6 +59,34 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                  magnitude.numpy() * np.sin(phase.numpy())), axis=-1)
             np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
 
+    def test_complex_accessors_are_stable_and_registered(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        for name in ("real", "imag", "conj", "angle", "is_complex", "abs"):
+            with self.subTest(name=name):
+                implementation = getattr(numerical, name)
+                self.assertIs(getattr(torch, name), implementation)
+                record = fidelity.fidelity_of("torch." + name)
+                self.assertIs(record.implementation, implementation)
+                self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+                self.assertIn("device", record.detail)
+
+    def test_complex_accessors_cpu_values(self):
+        with torch.flag_scope(use_cuda=0):
+            real = torch.array([1.0, -2.0])
+            imag = torch.array([0.5, 3.0])
+            value = torch.complex(real, imag)
+            np.testing.assert_array_equal(torch.real(value).numpy(), real.numpy())
+            np.testing.assert_array_equal(torch.imag(value).numpy(), imag.numpy())
+            np.testing.assert_array_equal(
+                torch.view_as_real(torch.conj(value)).numpy()[..., 1],
+                -imag.numpy())
+            np.testing.assert_allclose(
+                torch.abs(value).numpy(), np.hypot(real.numpy(), imag.numpy()))
+            self.assertTrue(torch.is_complex(value))
+            self.assertFalse(torch.is_complex(real))
+
     def test_eye_is_a_stable_module_level_object(self):
         numerical = importlib.import_module(
             "jittor.compat.torch.installers.numerical")
