@@ -1489,6 +1489,24 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 以及 opinfo 全量归约参考电池仍把标量提成 `(1,)` 导致 `amax`/`amin`/`count_nonzero` 9 条红
 （改前改后同集合，是参考电池自身过期）。
 
+本波 `coreops` 的结果（2026-09-04，派生任务 `2.25`）：
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | **`2.25`（新登记，`7.11` 与 `7.12` 的共同前置）已合并**：`100c7c5d` 登记，`c6e62ba1` 查询与内核用例，`781d4188` 与真 PyTorch 的逐例对拍。内核给出 `backward_grad_fn(Var*)` 与 `Var.is_backward_leaf`／`grad_fn_node_id`／`grad_fn_op_id`／`grad_fn_name`；requires_grad 与「生产者有一条能带梯度的入边」的合取，四条过滤器与 `grad()` 的 `bfs_backward` 同源，O(生产者入度)、不遍历、不缓存、不引入进程级 id 键字典。修前 20 failed → 修后 20 passed；定向 CPU 208 passed 对基线 188 passed（同 4 条既有失败），CUDA 73 passed，真 torch 2.12.1 的 19 个用例逐例分组一致。**故意不叫 `is_leaf`／`grad_fn`**，否则就等于替兼容层分区把 `7.11` 接了线；`7.11` 只差 `compat/torch/installers/tensor.py:1401-1411` 两个常量属性改成转发。顺手登记 `6.C32` |
+
+**给下一个碰 `tests/core` 的人**，本波量到两件与任务无关但会浪费时间的事：
+
+1. **把整个 `tests/core` 当一条 pytest 命令跑不是有效的门禁口径。** `test_regression.py` 与
+   `test_type_system.py` 在 `tests/_helpers/process_modes.py` 的 `TORCH_MODE_PATHS` 里，会把
+   **整个进程**翻成 shim 模式，于是同一条命令里的原生用例成片假失败。门禁自己是按
+   `gate_scope.native_arguments()`／`torch_arguments()` 分两次跑的，本地要复现就得照做。
+2. **CPU-only 下 `tests/core` 跑不到 summary。** 至少四处 abort 会带走整个 session（其中
+   `test_complex64_linalg.py::TestComplex64LinalgCPU::test_svdvals` 单选也复现，已登记
+   `6.C32`）。**abort 之后 pytest 一行 summary 都不打**，所以「日志没红」在这里不等于通过。
+   归因的正确做法是把改动 `git checkout` 回 HEAD、用**同一条命令**再跑一遍比对——本波
+   两侧都是 4 failed，只有 passed 数差 20（就是新用例），零回归的结论是这么得出来的。
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。

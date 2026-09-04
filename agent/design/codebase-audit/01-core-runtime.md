@@ -60,6 +60,7 @@ C++ 头文件。第三，错误处理只有一档：ASSERT/CHECK/LOGf 全部抛 
 | 缺失梯度只是一条按 var 名去重的全局警告 | `op.cc:78`；`grad.cc:76-82` 以 `v->name.c_str()` 为键的进程级 map，永不清空 | 无名 var 的名字都是空串，第一条警告之后**所有后续缺失梯度静默无声**，训练照常收敛到错误结果 | 缺失梯度默认应报错 | 主要 |
 | 两趟遍历用一个无边界检查的游标同步 | `grad.cc:146-183` 与 `:187-261`；而 `n_o = op->outputs().size()`（`:198`）读的是第二趟时刻的出边数，第一趟写入时用的是当时的 | 两趟之间出边数一变（grad 会建新算子、Op::forward 会加输出）游标即错位，越界读 | 两趟合成一趟并快照结构 | 主要 |
 | backward() 不可重复：反向会永久摧毁前向图的可导性 | `grad.cc:281-294` retain_graph=false 时对 gvars 调 set_stop_grad；而 `var_holder.cc:183-186` 注释明写 stop_grad 是 intentionally permanent | 第二次对同一张图反向不报错，只静默得到零梯度 | 图释放与停止求导分开 | 主要 |
+| 「这个 Var 是不是反向图的叶子」内核答不了（**2026-09-04 补记，已修：`c6e62ba1`（查询与内核用例）、`781d4188`（与真 PyTorch 的对拍）**） | `grad()` 的 `bfs_backward` 每次反向都在算这件事——两个 requires_grad 标志、生产者算子自身的 stop_grad（`detach()` 标在算子上，见 `ops/clone_op.cc`）、控制依赖边、`Op::init` 冻结的 disabled 边——但没有任何接口把它暴露出去，于是 `compat/torch/installers/tensor.py` 把 `Var.is_leaf` 猴补成常量 `True`、`Var.grad_fn` 猴补成常量 `None` | 常量 `True` 让 `if param.is_leaf:` 对程序里**每一个**张量都通过，而这类判断正是 peft 与 optimizer 用来把「自己拥有的参数」和「中间激活」分开的；错的方向恰好读作成功。`7.11` 与 `7.12` 两条大任务同时卡在这一个缺失的能力上 | 内核提供 `backward_grad_fn(Var*)`（`grad.h`）：requires_grad 与「生产者有一条能带梯度的入边」的合取，四条过滤器与 `bfs_backward` 同源，所以「不是叶子」等价于「`grad()` 真的会走进那个算子」。O(生产者入度)，不遍历、不缓存、不引入进程级字典；`tflag_count` 不变的用例把「没有遍历」钉住 | 主要 |
 
 ## 类型系统
 | 问题 | 证据 | 后果 | 修改方向 | 严重度 |
