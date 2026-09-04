@@ -916,6 +916,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | `6.B16` 已有 `BaseOpRunner::syncRun`、静态合同与 Ascend 910B3 上机文档；本机无 NPU，实机同步/异步与失败归因仍待验证，本波无新提交。 |
 | `gates` | Dataset worker 监管两个 nodeid 独立缓存下 2 passed/65.68 s；完整 smoke 仍约 390 s，0.15 保持待领。 |
 
+### 2026-09-04 第一百零三波
+
+| 分区 | 结果 |
+| --- | --- |
+| `bindings` | `e38cce97` 将 cuBLAS acc matmul 两项输入 rank-2 检查改为可捕获的 `USER_CHECKop`，补独立 rank ledger；定向 3 passed。2.19 聚合任务仍待完整审计。 |
+| `compat` | `6fdb6120` 将 `real`/`imag`/`conj`/`angle`/`is_complex`/`abs` 提升为 numerical 模块级稳定对象并登记 approximate fidelity；complex accessor 定向 2 passed。7.03 其余 family 仍待领。 |
+| `device` | `448aa10a` 删除 ACL `utils` 中无消费者的 `op_idx_map` 定义/声明，保留显式 reduce dispatch；ACL 静态合同 68 passed，未做 NPU 实机验证。 |
+| `gates` | 10.19 backend grad manifest 静态合同 2 passed；HCCL 四项仍明确为 NPU/unsupported hardware route，缺 Ascend 910B3 多卡实测，任务保持待领。 |
+
 按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第一百波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 

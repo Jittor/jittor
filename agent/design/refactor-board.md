@@ -1,6 +1,8 @@
 # 整改看板
 
 > 第102波增量：`cb0a4e77` 完成 cuBLAS batched matmul rank 用户错误 cohort（结构 3 passed）；`dbe72f0f` 完成 torch.polar numerical owner cohort（CPU 2 passed）。2.19/7.03 聚合任务仍按剩余范围保持「待领」；`6.B16` 仍待 Ascend 910B3 实机。
+>
+> 第103波增量：`e38cce97` 完成 cuBLAS acc matmul rank 用户错误 cohort（结构 3 passed）；`6fdb6120` 完成 complex accessor numerical owner cohort（CPU 2 passed）；`448aa10a` 删除 ACL 无消费者 `op_idx_map`（静态合同 68 passed）。2.19/7.03 聚合任务仍待完整审计，ACL 仍待硬件验证。
 
 一行一个任务，与 [refactor-plan.md](refactor-plan.md) 的编号对应。领任务把状态改成「进行中」并写名字，
 完成改成「已合并」并填提交号；推送冲突说明别人先领了。状态只有四种：待领 / 进行中 / 已合并 / 并入 X。
