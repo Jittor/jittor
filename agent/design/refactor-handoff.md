@@ -1152,6 +1152,14 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | child_env 只隔离扩展子进程，不能回滚父进程路径/模块状态；source candidate 继续使用局部锁和快照。 |
 | `gates` | 本波无代码提交，明确 path/module/flag owner token、冲突硬失败和 child/retry 验收要求。 |
 
+### 2026-09-04 第一百四十四波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `c204f4e9` 扩展 InstallTransaction 为 ActivationTransaction，加入 owner-aware `mutate_path` 与 `publish_module`，并补 path/module 回滚合同；事务定向 11 passed。尚未接入 `shim.runtime.activate`，7.05 不关闭。 |
+| `device` | runtime activation 仍跨扩展构建/递归安装，需外层事务统一生命周期；child build 继续使用显式环境隔离。 |
+| `gates` | 本波协议和合同通过，未改变完整 activation 验收状态。 |
+
 ### 2026-09-04 第一百四十波
 
 | 分区 | 结果 |
