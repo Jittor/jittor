@@ -44,19 +44,7 @@ namespace jittor
                 inputTensors[count * 3 + index], inputTensors[count * 4],
                 attr->lr, attr->beta1, attr->beta2, attr->weightDecay,
                 attr->eps, false, false, &workspaceSize, &executor);
-            checkRet(ret);
-            if (ret != ACL_SUCCESS)
-                return;
-            if (workspaceSize > 0)
-                mallocWorkSpace(workspaceSize);
-
-            ret = aclnnApplyAdamWV2(
-                workspaceAddr, workspaceSize, executor, aclstream);
-            if (ret != ACL_SUCCESS)
-            {
-                throw std::runtime_error(
-                    "aclnnApplyAdamWV2 failed: " + acl_error_to_string(ret));
-            }
+            launch(ret, aclnnApplyAdamWV2, false);
         }
         syncRun();
     }

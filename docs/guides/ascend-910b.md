@@ -568,6 +568,10 @@ outside this slice.
 The ACL IndexPutImpl accumulate owner uses the shared launcher while retaining
 its tracked output memset and index tensor-list dependency.
 
+The ACL AdamWList owner uses the shared launcher for each tensor update while
+retaining its fused device-copy checks and single synchronization point after
+the update loop.
+
 The ACL Dropout backward owner uses the shared launcher while retaining its
 scale query and synchronous execution policy.
 

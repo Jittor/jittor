@@ -578,6 +578,15 @@ def test_index_put_accumulate_uses_launcher_and_keeps_zero_dependency():
     assert "syncRun();" not in owner
 
 
+def test_adamw_list_uses_async_launcher_and_keeps_loop_sync_point():
+    source = (ROOT / "python/jittor/extern/acl/aclops/adamw_op_acl.cc").read_text()
+    assert "aclnnApplyAdamWV2GetWorkspaceSize" in source
+    assert "launch(ret, aclnnApplyAdamWV2, false);" in source
+    assert source.count("syncRun();") == 1
+    assert "aclrtMemcpyAsync" in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+
+
 def test_rope_forward_uses_launcher_and_backward_remains_present():
     source = ROPE_SOURCE.read_text()
     forward = source[source.index("void RotaryPositionEmbeddingOpRunner::executeOp"):source.index("RotaryPositionEmbeddingGradOpRunner::RotaryPositionEmbeddingGradOpRunner")]
