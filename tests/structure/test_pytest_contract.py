@@ -516,11 +516,60 @@ def test_private_test_method_holders_are_plain_mixins():
     assert offenders == []
 
 
-#: Module-level ``test_*`` functions whose parameters are genuine pytest
-#: fixtures rather than caller-supplied arguments.
-_PYTEST_FIXTURE_PARAMETERS = frozenset(
+#: Fixtures pytest itself supplies. Everything else has to be resolved from the
+#: tree, because a frozen list rejects every locally declared fixture.
+_BUILTIN_FIXTURES = frozenset(
     ("tmp_path", "tmp_path_factory", "monkeypatch", "capsys", "capfd", "caplog", "request")
 )
+
+
+def _fixtures_declared_in(tree):
+    names = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for decorator in node.decorator_list:
+            target = decorator.func if isinstance(decorator, ast.Call) else decorator
+            if (getattr(target, "attr", None) or getattr(target, "id", None)) == "fixture":
+                names.add(node.name)
+    return names
+
+
+def _fixtures_from_conftests(path):
+    names = set()
+    directory = path.parent
+    while True:
+        conftest = directory / "conftest.py"
+        if conftest.is_file():
+            try:
+                names |= _fixtures_declared_in(
+                    ast.parse(conftest.read_text(encoding="utf-8"), filename=str(conftest)))
+            except SyntaxError:
+                pass
+        if directory == REPO_ROOT:
+            return names
+        directory = directory.parent
+
+
+def _parametrized_arguments(node):
+    """Argument names ``@pytest.mark.parametrize`` supplies to this function."""
+    names = set()
+    for decorator in node.decorator_list:
+        if not isinstance(decorator, ast.Call) or not decorator.args:
+            continue
+        target = decorator.func
+        if (getattr(target, "attr", None) or getattr(target, "id", None)) != "parametrize":
+            continue
+        argnames = decorator.args[0]
+        if isinstance(argnames, ast.Constant) and isinstance(argnames.value, str):
+            names |= {name.strip() for name in argnames.value.split(",")}
+        elif isinstance(argnames, (ast.List, ast.Tuple)):
+            names |= {
+                element.value.strip()
+                for element in argnames.elts
+                if isinstance(element, ast.Constant) and isinstance(element.value, str)
+            }
+    return names
 
 
 def test_module_level_helpers_are_not_named_like_tests():
@@ -530,10 +579,18 @@ def test_module_level_helpers_are_not_named_like_tests():
     is really a helper called from a TestCase method, pytest still collects it,
     fails to find fixtures for its parameters, and reports an error that looks
     like a broken test. Helpers belong under a ``check_*`` name.
+
+    A parameter is satisfied when something actually supplies it: a pytest
+    builtin, a fixture declared in the module or in a ``conftest.py`` above it,
+    or a ``parametrize`` argname on that function. Comparing against a frozen
+    list of builtins instead flagged every test that used a fixture of its own
+    -- seven of them, all legitimate -- which is what kept this gate red.
     """
     offenders = []
     for path in sorted(TEST_ROOT.rglob("test_*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        available = (_BUILTIN_FIXTURES | _fixtures_declared_in(tree)
+                     | _fixtures_from_conftests(path))
         for node in tree.body:
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
@@ -541,10 +598,9 @@ def test_module_level_helpers_are_not_named_like_tests():
                 continue
             arguments = node.args
             required = arguments.args[: len(arguments.args) - len(arguments.defaults)]
+            supplied = available | _parametrized_arguments(node)
             unsatisfied = [
-                argument.arg
-                for argument in required
-                if argument.arg not in _PYTEST_FIXTURE_PARAMETERS
+                argument.arg for argument in required if argument.arg not in supplied
             ]
             if unsatisfied:
                 offenders.append(
