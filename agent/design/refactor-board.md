@@ -644,3 +644,9 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `8.06`：`8e772a5b`/`012dddf4` 将 SwiGlu 接入共享 launcher，保留同步策略；静态合同 50 passed，本机无 CANN/NPU，仍待实机。
 - `2.19`：`57c6cd92`/`53895c66` 将 cuDNN RNN 第二处 `proj_size==0` 边界改为 `USER_CHECKop`，累计 98 处、五十一组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
 - `7.03`：`7a7ae622` 将 `outer` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
+
+### 2026-09-04 第六十三波补充证据
+
+- `8.06`：`1f1ffec3`/`f74043b9` 将 LayerNorm forward 接入共享 launcher，保留 `normalizedShape`、`eps`、三输出与 descriptor cleanup；静态合同 51 passed，本机无 CANN/NPU，仍待实机。
+- `2.19`：`aae2f5bc`/`79269b83` 将 cuDNN conv3d 分组通道 shape 边界改为 `USER_CHECKop`，累计 99 处、五十二组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `7.03`：`9a9011ce` 将 `isin` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
