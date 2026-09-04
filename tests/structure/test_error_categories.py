@@ -132,7 +132,7 @@ MIGRATED_CUB_OP_USER_BOUNDARIES = {
 }
 
 MIGRATED_CUDNN_CONV_FORMAT_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_op.cc": 3,
+    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_op.cc": 4,
 }
 
 MIGRATED_CUDNN_CONV_BWD_X_FORMAT_USER_BOUNDARIES = {

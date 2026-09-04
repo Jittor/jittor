@@ -65,7 +65,7 @@ void CudnnConvOp::infer_shape() {
     int xn, xc, xh, xw, wh, ww, wci, wco, yn, yc, yh, yw;
     get_shape(x, "abcd", xformat, xn, xc, xh, xw);
     get_shape(w, "oihw", wformat, wco, wci, wh, ww);
-    ASSERTop(wci * groups,==,xc);
+    USER_CHECKop(wci * groups,==,xc);
     yn = xn, yc = wco;
     yh = (xh+paddingh*2-wh*dilationh+dilationh-1)/strideh+1;
     yw = (xw+paddingw*2-ww*dilationw+dilationw-1)/stridew+1;
