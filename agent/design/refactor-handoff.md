@@ -1190,6 +1190,13 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `compat` | `45a1283c` 增加结构合同，锁定 outer transaction 传递与 inner state 清理；合同/事务测试通过，防止 nested activation 回归。 |
 | `gates` | 本波仅补回归合同，普通 activation 的 child/build/no_grad 全流程仍待。 |
 
+### 2026-09-04 第一百四十九波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `a08d5c15` 更新 activation bootstrap 的旧测试夹具以匹配 `publish_module`/`mutate_path` 协议；完整 `test_torch_bootstrap.py` 42 passed。7.05 仍待扩展构建与全量运行态验收。 |
+| `gates` | 本波仅修正回归测试选择/夹具，未放宽冲突保护或宣称硬件验证。 |
+
 ### 2026-09-04 第一百四十波
 
 | 分区 | 结果 |
