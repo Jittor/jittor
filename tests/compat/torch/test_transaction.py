@@ -37,3 +37,12 @@ def test_transaction_refuses_to_overwrite_an_external_attribute_change():
     with pytest.raises(TransactionConflict, match="owner lost"):
         tx.rollback()
     assert module.value == "external"
+
+
+def test_environment_mutation_records_the_normalized_string_value():
+    env = {}
+    tx = InstallTransaction("env-owner")
+    tx.mutate_env("RANK", 1, environ=env)
+    assert env["RANK"] == "1"
+    tx.rollback()
+    assert "RANK" not in env

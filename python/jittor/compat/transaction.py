@@ -27,8 +27,9 @@ class InstallTransaction:
         import os
         env = os.environ if environ is None else environ
         old = env.get(key, _MISSING)
-        self.record(env, key, old, value)
-        env[key] = str(value)
+        normalized = str(value)
+        self.record(env, key, old, normalized)
+        env[key] = normalized
 
     def mutate_flag(self, flags, name, value):
         old = getattr(flags, name, _MISSING)
