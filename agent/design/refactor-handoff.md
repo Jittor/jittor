@@ -1136,6 +1136,14 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | external backend source import 有局部 sys.path/sys.modules 回滚，但 registry/hints/entry-point 状态未接入 InstallTransaction；本波无代码。 |
 | `gates` | finder/registry 现有结构合同通过，整卡 7.05 仍待完整 mutation 覆盖。 |
 
+### 2026-09-04 第一百四十二波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `367716a7` 将 external backend 的 `_BACKENDS`、`_BACKEND_HINTS`、`_ENTRY_POINTS_LOADED` 注册状态接入 transaction，integrations 传递 active tx；source import 的 sys.path/sys.modules 仍由 resolver 局部管理，7.05 不关闭。 |
+| `device` | source candidate 失败恢复仍是整 resolver 快照，不能覆盖并发外部增量；需子进程隔离或 owner-aware 增量记录。 |
+| `gates` | `py_compile`/`diff-check` 通过，尚未补 backend object 内部 mutation 和外部 registry 失败注入。 |
+
 ### 2026-09-04 第一百四十波
 
 | 分区 | 结果 |
