@@ -23,6 +23,8 @@
 > 第112波增量：`d2532ac2` 完成 cuDNN convolution format 用户错误 cohort（结构 3 passed）；`dbdfb6d7` 完成 `index_copy_` 原地 numerical owner（CPU 2 passed）；`a768cc9b` 锁定 ACL data schema 静态合同（2 passed）。聚合任务和硬件验收状态不变。
 >
 > 第113波增量：`de5188ab` 完成 cuDNN backward-x format 用户错误 cohort（结构 3 passed）；`11e9b456` 完成 `index_put_` 原地 numerical owner（CPU 2 passed）；`4b22f6d9` 增加 ACL data schema Python validator（静态合同 6 passed）。聚合任务和硬件验收状态不变。
+>
+> 第114波关闭 `10.02`：`151c5856` 将 `cpu` 加入 `nox.options.sessions` 默认列表，新增 AST 合同确认默认数值门禁；定向 1 passed。看板已合并 200、待领 74。
 
 一行一个任务，与 [refactor-plan.md](refactor-plan.md) 的编号对应。领任务把状态改成「进行中」并写名字，
 完成改成「已合并」并填提交号；推送冲突说明别人先领了。状态只有四种：待领 / 进行中 / 已合并 / 并入 X。
@@ -498,7 +500,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 9.22 | 并发编译同一个算子读到写了一半的 `.so` | 已合并 | build | c4bbdd72。`cache_compile` 对 asm/dlink wrapper 的最终产物也用私有临时名加 rename，`.key` 同样原子替换；修前两个 wrapper inode 契约均失败，修后 4 passed，冷 CPU 聚焦 6 passed，实机 CUDA 普通 JIT 与 `-dc` dlink 均通过 |
 | 9.23 | `run_child_script(timeout=N)` 不收孙进程 | 已合并 | bindings | 17e43c9a（进程组 + `os.killpg` + 有界 drain）。**更正**：任务描述里"`communicate()` 继续等"在 CPython 3.11 上不成立（3.11 的 `subprocess.run` 超时后只 kill+wait，不重新 drain，已实测）；稳定复现的是整棵子孙进程留存，默认 `timeout=600` 的用例因此要等满 10 分钟才失败 |
 | 10.01 | `tools/run_test_suite.py` 拆成 `nox -s full` 周期性调度… | 待领 | | |
-| 10.02 | 默认 `nox` 含 cpu 数值测试，或把默认改名为 static | 待领 | | |
+| 10.02 | 默认 `nox` 含 cpu 数值测试，或把默认改名为 static | 已合并 | gates | `151c5856`：`nox.options.sessions` 默认列表加入 `cpu`；新增 AST 结构合同确认默认数值门禁存在，定向 1 passed |
 | 10.03 | optional/rocm/mpi/nccl 四个 session 排上 runner 或在文档… | 已合并 | gates | a1668aca。CUDA 可由维护者添加 `ci:cuda` 标签触发 PR 真机门禁；当前 runner 能力不覆盖 optional 依赖、ROCm、MPI 与双卡 NCCL，四项在测试支持矩阵中明确为 Manual，结构规则防文档/调度漂移。相关结构 22 passed |
 | 10.04 | 假绿清理 | 已合并 | gates | 74cace5f。6 个首行 `return` 改严格预期失败并登记，4 个 `skipIf(True)` 清零；两条内存契约用短循环 RSS 上限进入 slow 层，负向自测证明真实保留会失败；AST 全树规则禁止复发。内存 2 passed，规则/负向 9 passed，旧禁用项 3 xfailed、4 prerequisite-skipped |
 | 10.05 | 按 skip 原因分桶统计并在 CI summary 输出，对「本环境应能跑却 skip」设阈值 | 已合并 | gates | `1a423a16`：`tests/conftest.py` 按固定优先级（accelerator/backend/mpi/torch/network/manual/other）汇总 skip reason，CI summary 输出稳定 bucket；`JITTOR_TEST_REQUIRE_EXECUTION=1` 下 `other>0` fail-closed。`tests/structure/test_gate_scope.py` 合成重叠/unknown/阈值节点 2 passed。 |
