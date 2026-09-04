@@ -330,3 +330,20 @@ present in one handoff update:
 
 Until then, keep the board status unchanged and link this plan from the partial
 handoff rather than inferring completion from static checks alone.
+
+## State and resource non-regression
+
+The owner extraction must not introduce process-wide mutable state or retain
+per-install resources. The static gate should additionally assert:
+
+- no module-level list/dict/cache is mutated by `vmap` calls;
+- repeated `install(ctx)` calls do not increase the number of registered
+  callables or closures;
+- a failed install leaves the previous `torch.vmap` binding and fidelity record
+  intact (transactional patcher or explicit hard failure);
+- temporary mapped outputs are released after each wrapped call and do not add
+  persistent entries to Jittor's hold-var registry.
+
+These checks are metadata/resource checks only and may run without constructing
+large tensors. Any resource leak is a blocker for owner completion even when all
+numerical nodes pass.
