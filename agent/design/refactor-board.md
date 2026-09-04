@@ -566,3 +566,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 
 - 修复 7.14 之后任务表的结构：补回计划中遗漏的 `0.22`、`2.24`、`7.19`、`7.20` 四行，移除 8.06 下只有两列的 `8.06 note` 伪行；增量证据继续集中在本文件末尾的波次小节。
 - 主线已包含的并发提交：`166010a8`（CUB argsort offsets rank，2.19）与 `ccbc6132`（`reciprocal` 稳定对象，7.03）；两项保持原任务“待领”状态，作为前置证据记录。
+
+### 2026-09-04 第五十五波补充证据
+
+- `8.06`：`0b149241` 将 Dropout backward 接入共享 launcher，保留 `scale` query 与同步策略；静态合同 42 passed，本机无 CANN/NPU，仍待实机。
