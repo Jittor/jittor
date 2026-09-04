@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；本波审计基线 `20225dca`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 审计基线 970 个 |
+| 分支 | `2.0-refactor`；本波审计基线 `143cb8e3`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 审计基线 974 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **196** / 进行中 **0** / 待领 **78** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
@@ -803,7 +803,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `compat` | 7.03 补充 vmap `in_dims/out_dims` 的 int、None、tuple/list、负轴归一化矩阵；仅设计/门禁前置 |
 | `device` | 8.06 复核确认标准 ACL launcher owner 已穷尽，KVCacheMemcpy 保持专用路径 |
 
-按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第九十波继续优先可独立验证的
+第九十波新增 2 个严格保持待领的前置；device 继续保持无安全 owner：
+
+| 分区 | 第九十波结果 |
+| --- | --- |
+| `bindings` | 2.19 补充 CUB 测试入口内部断言精确计数门禁；结构门禁 1 passed，不改变运行语义或用户边界累计 |
+| `compat` | 7.03 补充 vmap 嵌套 metadata 深度契约，固定 specs 追加、base identity 与 batch shape 顺序；仅设计前置 |
+| `device` | 8.06 复核确认标准 ACL launcher owner 已穷尽，KVCacheMemcpy 保持专用路径 |
+
+按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第九十一波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
 - `device`：若续做 8.06，只迁下一个最终 owner 明确的 family，并复用 5be5fa15 的 launcher 合同；无 NPU
