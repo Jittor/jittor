@@ -216,6 +216,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 0.19 | 结构测试从「精确清单」改成「规则」 | 已合并 | gates | c3bcd277 |
 | 0.20 | 布局收尾 | 待领 | | ef31a0d6 已合入 1/N：删除 `tools/services/legacy` 的 converter launcher 与说明，清除 tools 活跃导航和 compat converter 对旧部署脚本的引用；converter 模块保留，HTTP 服务部署由应用负责。不存在结构节点 1 passed，仓库布局通过。`agent/design`/`agent/results` 权威树迁移、`tests/system` 删除及 AWESOME/ASV 归位均未做，保持待领 |
 | 0.21 | 测试起的子进程不带 PYTHONPATH，门禁机器上是假绿 | 已合并 | gates | 46dbe946、a5ce7310 |
+| 0.22 | 压缩设备对拍时长（保留与单进程相同的 nodeid 集合） | 待领 | | |
 | 1.01 | 把 `utils/data.gz` 解出的 `data.cc` 还原为可读的五个翻译单元 | 已合并 | codegen | ecb6a112（+72f020b3 用例） |
 | 1.02 | `op_compiler.cc:30-69` 用正则给 `ParallelPass` 输出打补丁… | 已合并 | codegen | 3eb34e6a |
 | 1.03 | 查明 `SharedReducePass` 在约 4900 个归约 kernel 里零命中的触发… | 已合并 | codegen | 3eb34e6a |
@@ -244,6 +245,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 2.21 | `DEFINE_FLAG_WITH_SETTER` 先赋值再调 setter，签名收新旧两值 | 已合并 | coreops | 14336afd |
 | 2.22 | 环境变量统一 `JT_` 前缀 | 待领 | | |
 | 2.23 | 布局收尾 | 待领 | | |
+| 2.24 | `custom_data` 的最后一个用户：FusedOp 跨阶段 var 索引 | 待领 | | 依赖 3.11，需显式 `var→index` 映射并保持 relay/融合生成代码不变 |
 | 3.01 | `Executor::run_sync` | 待领 | | |
 | 3.02 | jit key 结构化 | 待领 | | |
 | 3.03 | 三张 kernel 缓存表键改 `string` | 待领 | | |
@@ -416,17 +418,14 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 7.16 | compat/ 内 129 个 `except: pass` 与 258 个宽泛 except … | 已合并 | 兼容层分区 | 72dbc22d（+ 一次修复：`93b48a8e` [4.02 3/3] rebase 时把 cuda.py/types.py 整段解回 7.16 之前，`swallowed()` 24→0、16→0，全树违规回到 47 条；已用三方合并恢复，见提交说明） |
 | 7.17 | `runtime.enable()` 只把 shim 的 site 目录加进 sys.path … | 已合并 | 兼容层分区 | d5c769fb |
 | 7.18 | 布局收尾 | 待领 | | |
+| 7.19 | 精度策略接线：Jittor 一档、torch 两档，底层 matmul/conv 分字段 | 待领 | | 依赖 8.03、7.08；需保持 shim 的卷积与 matmul 语义分离 |
+| 7.20 | fp32 RNN 默认精度与 torch `cudnn.allow_tf32` 映射 | 待领 | | 依赖 8.03、7.19；需 CPU 递推与真实 CUDA 对拍 |
 | 8.01 | 描述符与 workspace 一律 RAII | 已合并 | cudabk | afb08e88 |
 | 8.02 | 集合通信走通信流加事件依赖，支持 `GroupStart/End` 桶化 | 待领 | | |
 | 8.03 | 精度策略收敛 | 已合并 | cudabk | dab0690c |
 | 8.04 | cuDNN 9 | 已合并 | cudabk | 7580b6e7（RNN v8 API）+ 9f2e7b80（版本闸门与 wheel 栈） |
 | 8.05 | MKL | 待领 | | |
 | 8.06 | ACL 去样板 | 待领 | device | 5be5fa15 建立 BaseOpRunner 统一 workspace/execute/error/可选同步尾部并迁 unary；86b31e14 迁 binary；b7c763bd 迁 ternary SWhere；b1d7bd5 迁四个单步 reduce owner；251e3e96 迁 Cumsum；c59e3948 迁 MatMul；90050ccb 迁 Expand；51103861 迁 Floor；9a5a8ac4 迁 NanToNum；5e831df1 迁 Triu；88d4d35f 迁 Sigmoid forward；b76f1b16 迁 Transpose/Permute；a180c691 迁 Softmax forward；072e05b9 迁 Embedding forward；15668ea3 迁 Roll；11481922 迁 Gather forward；80c5e565 迁 ClampTensor；6e1d462c 迁 Stack；9c348801 迁 Flip；9db57798 迁 Scatter；530bbc8f 迁 Concat；1c4b32d9 迁 SplitWithSize；69e5974a 迁 Nonzero；11fe7012 迁 Range；faac2700 迁 Dropout forward；910e2c49 迁 LeakyReLU forward；830907ff 迁 ArgReduce max/min；a293b615 统一 Random uniform/normal launcher；055cb64b 迁 UpsampleNearest2d forward；553b5ec1 迁 SiLU forward；600ee169 迁 BatchMatMul；8251d29d 迁 RotaryPositionEmbedding forward；71bab738 迁 Maxpool forward；16a89606 迁 Avgpool forward，保留 descriptors/poolCeil/divisor 与同步策略且 backward 不动；静态合同 35 passed，补 Ascend 910B3 上机说明。本机无 CANN/NPU，仍待实机验证，未铺其余 family、胖 AclOpFunctions、op_idx_map、属性 data 通道与描述符缓存 |
-| 8.06 note | `230c0b69` Conv2d forward launcher 前置已完成；静态合同 37 passed；本机无 CANN/NPU，仍待实机验证 |
-| 8.06 note | `faf6745e` RmsNormGrad launcher 前置已完成；静态合同 39 passed；本机无 CANN/NPU，仍待实机验证 |
-| 8.06 note | `e86ccd11` RmsNorm forward launcher 前置；静态合同 38 passed；本机无 CANN/NPU，仍待实机 |
-| 8.06 note | `3581db5d` Softmax backward launcher 前置已完成；静态合同 40 passed；本机无 CANN/NPU，仍待实机验证 |
-| 8.06 note | `5697f619` Embedding backward launcher 前置已完成；静态合同 41 passed；本机无 CANN/NPU，仍待实机验证 |
 | 8.07 | conv 族共享描述符与计划层 | 已合并 | cudabk | 947f5223（反向只留 C++ 一份）+ 47f91130（计划请求一个构造函数） |
 | 8.08 | `ProcessGroup` 对象替代全局唯一 communicator | 已合并 | dist | 82410549（NCCL env/file 与 MPI bootstrap 双卡通过；HCCL 对称实现未在 Ascend 真机验证） |
 | 8.09 | NCCL | 已合并 | dist | f2d9c291, 95a1c956 |
