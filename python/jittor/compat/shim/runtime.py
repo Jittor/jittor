@@ -196,10 +196,16 @@ def _activate_once(
         raise RuntimeError("Torch shim activation changed the Jittor root module")
     configure_torch_math_flags(jt)
     if inference:
-        jt.flags.no_grad = 1
+        if _transaction is None:
+            jt.flags.no_grad = 1
+        else:
+            _transaction.mutate_flag(jt.flags, "no_grad", 1)
     from jittor.compat import torch as torch_compat
     torch_compat.install(jt, strict=strict_bootstrap)
-    sys.modules["torch"] = jt
+    if _transaction is None:
+        sys.modules["torch"] = jt
+    else:
+        _transaction.publish_module(sys.modules, "torch", jt)
     try:
         from jittor.compat.shim.cpp_extension.torch_utils import install_cpp_extension
         install_cpp_extension(
@@ -230,7 +236,10 @@ def _activate_once(
     scanned = _dedupe_extensions(scanned)
 
     for ext in scanned:
-        append_sys_path(ext.root)
+        if _transaction is None:
+            append_sys_path(ext.root)
+        else:
+            _transaction.mutate_path(sys.path, os.fspath(ext.root), prepend=False)
 
     child_paths: List[Union[str, os.PathLike]] = [shim_site, jt_python, project_dir]
     child_paths += [ext.root for ext in scanned]
