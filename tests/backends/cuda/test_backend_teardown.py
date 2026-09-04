@@ -60,7 +60,16 @@ _TOUCH_BACKENDS = """
 # sticky-error state every later CUDA call inherits -- including the Destroys
 # in the static destructors. This is the shape of the real thing (an async
 # error surfacing late), made deterministic.
+#
+# `sync_all(True)` rather than `y.sync()`: `Var.sync` only waits for the op to
+# be issued, so on hardware it returns cleanly and the fault is still in
+# flight. This probe used to stop there and swallow the exception it assumed
+# it would get, which left it asserting that a message it never produced
+# outlived the teardown noise -- the assertion passed nowhere and was only
+# reasoned about. `sync_all(True)` device-synchronizes, which is where jittor
+# checks and reports, so the fault the test is about is now really raised.
 _POISON_CONTEXT = """
+    import sys
     x = jt.zeros((1,), "float32")
     y = jt.code(x.shape, x.dtype, [x], cuda_src=\"\"\"
         __global__ void jt_out_of_bounds_write(float* p) { p[1<<28] = 1.0f; }
@@ -68,8 +77,11 @@ _POISON_CONTEXT = """
     \"\"\")
     try:
         y.sync()
-    except Exception:
-        pass
+        jt.sync_all(True)
+    except Exception as fault:
+        print("THE-FAULT: %s" % fault, file=sys.stderr, flush=True)
+    else:
+        raise AssertionError("the out-of-bounds write was never reported")
     assert ctypes.CDLL(None).cudaDeviceSynchronize() == 700  # cudaErrorIllegalAddress
     print("POISONED", flush=True)
 """
@@ -106,8 +118,12 @@ class TestBackendTeardown(unittest.TestCase):
 
         # ... and the point of the whole exercise: the fault that actually
         # broke the run outlives the cleanup noise instead of being replaced
-        # by it.
+        # by it. Both orderings are on the record -- the fault while the
+        # process was still running, the teardown error after it.
         self.assertIn("cudaErrorIllegalAddress", proc.stderr)
+        self.assertLess(proc.stderr.index("cudaErrorIllegalAddress"),
+                        proc.stderr.index("CUDA teardown error"),
+                        tail)
 
 
 if __name__ == "__main__":

@@ -258,6 +258,12 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | `torch.split_with_sizes` + `Var.split` 之后进程退出时 abort | `node.h:264 Check failed: value_ > 0 ... backward liveness release without a matching owner`，整个 pytest 进程被带走（零 summary）。**最小复现**（shim 模式、CPU、显式 PYTHONPATH 指向本 worktree）：`with torch.flag_scope(use_cuda=0): t = torch.array(np.arange(12,dtype='float32').reshape(3,4)); a = torch.split_with_sizes(t,[1,3],dim=1); m = t.split([1,3],dim=1)` 然后在 flag_scope **之外**对两组结果各调 `.numpy()`——打印完 OK 之后在解释器退出时 abort。只做其中一次 split、或不出 scope取 numpy，都复现不了。后果是 `tests/compat/torch/test_torch_numerical_fidelity.py::TestTorchNumericalFidelity::test_split_with_sizes_cpu_shapes_values_and_var_split_match_numpy` 会带走整个文件的运行，7.03 期间只能 `--deselect` 它 | 核心节点分区（`node.h` 的 liveness 计数），新任务待派 |
 | opinfo 全量归约的参考电池仍把标量提成 `(1,)` | `tests/ops/test_ops.py` 里 `amax`/`amin`/`count_nonzero` 的 `test_reference_*` 共 9 条红（float32/float64/int8/int16/int32/int64/uint8），报的都是 `shape () != (1,)`。成因是 `tests/opinfo/definitions/reductions_extra.py` 的 `_atleast1d` 注释说「jittor 没有 0-d 标量，全量归约得到 (1,)」，而今天全量归约返回的就是 shape ()。**改前改后同为 9 failed / 2 passed / 4 skipped**，与 7.03 的 owner 迁移无关，是参考电池自身过期 | 测试分区（opinfo 参考），新任务待派 |
 | 全树跑时 `test_notebooks.py` 没有被当成 manual 跳过 | **已修**：`pytest_collection_modifyitems` 里 `test_notebooks.py` 的 `pytest.mark.manual` 加在跳过判断**之后**，所以全树跑时它照跑不误——2026-09-03 的全树原生一遍里实测 537 秒，是全树最慢的一项（第二名 289 秒）。现在所有标记先挂完再统一判断，manual 探针改由 `JITTOR_TEST_MANUAL=1` 或 `-m manual` 显式打开。**这是「筛选逻辑的顺序决定筛选结果」的第三例**（另两例：按 `sys.argv` 选 shim 模式、`@onlyCPU` 被设备过滤全部跳过） | 门禁 gates，`5c0f2364`（0.13） |
+| backward liveness 在 cuDNN RNN 反向上多释放一次 | CUDA 上 `jt.nn.LSTM` 训练 + `jt.grad`，退出期 `LivenessCounter<backward>::release()` 的 `ASSERT(value_ > 0)` 触发（`node.h`「backward liveness release without a matching owner」）。**2.10 之前这是 `int backward_liveness--`，下溢到 -1 后 `if (!backward_liveness)` 恒假，于是节点永不释放——静默泄漏而不是报错**，所以这是上游一直存在、被 2.10 的断言照出来的。2.10 的验收只跑了 CPU（看板原话「状态逻辑后端无关，未追加 GPU 编译」），而 CPU 上同一段 LSTM 反向不触发。**可疑点**：`node.cc` 的 `release_forward_liveness` 里 b3 那段在循环**外**判一次 `liveness.backward.active()`，循环**内**对每个满足条件的输出各 enqueue 一次对 `this` 的 release——backward 计数是 1 而合格输出有两个时就会多释放。这一条要么修计数、要么说明为什么该多释放，**不要用「放宽断言」了事**。2.19 已让析构不再因此 abort（`~VarHolder` catch + LOGe），所以现在的表现是一条 `[e] error while releasing a Var` 加 16 个泄漏的 var，不再是整个进程 SIGABRT；`test_var_holder_teardown.py` 就是靠它触发的，修好之后要给那条用例换触发点 | 核心 coreops，2.10 接手人 |
+| `jt.bfloat16(math.inf)` 让 `code` 算子的代码生成死循环 | `tests/backends/cuda/test_bf16.py::test_safe_clip` 与 `test_fp16.py::test_safe_clip`：0 维输入使 `@for(j, in@i@@_dim-2, -1, -1, ...)` 展开成 `@for(j, -2, -1, -1, ...)`，`op_compiler.cc:589` 的 `Check failed: total_step < 1000  Too much step` 触发。**真正贵的是级联**：这一条失败之后同一进程里 `test_bf16.py` 剩下的 18 条、`test_fp16.py` 的 1 条全部报同一个编译错误，单独跑却全绿——所以 CUDA 目录 23 条红里有 21 条是这一个根因。修的时候两件事：0 维的 `@for` 边界，以及一次编译失败为什么会毒化后续无关算子 | 代码生成分区 |
+| `setup_cutt()` 全树没有调用点，cuTT 后端不可达 | `compile_extern.py` 里 `setup_mkl` 由 `nn/functional/matrix.py:178` 惰性调用、`setup_nccl` 由 `compat/collectives.py` 调用，**只有 `setup_cutt` 没有任何调用点**（9.01 把三个 setup 改成惰性时漏了它）。后果：`cutt_ops` 恒为 `None`，`tests/backends/cuda/test_cutt.py` 与 `test_cutt_transpose_op.py` 共 6 条用例（含 3 条 `expect_error` 负向）**从来没跑过一次**，2.19 的 `6375a852`（cutt transpose axes 用户边界）没有任何运行时证据。恒 skip 的条目等于没有条目 | 构建 build，9.01 接手人 |
+| CUDA 异步故障不 sync 就永远不报 | 一个越界写的 kernel 之后 `Var.sync()` 干净返回、进程一路正常跑到退出，`cudaDeviceSynchronize()` 此时返回 700，但 jittor 从头到尾没说过一个字；只有显式 `jt.sync_all(True)` 才会在 `cuda_flags.cc:194` 报出 `cudaErrorIllegalAddress`。也就是说**一次真实的非法访存可以完全无声地走完整个训练**，而进程退出时唯一的输出是库句柄销毁失败的 teardown 噪音。`test_backend_teardown.py` 原来的探针就是踩在这上面（它 `except: pass` 了一个根本没抛的异常，于是「真错误盖过清理噪音」这条断言在真机上一直是假的，2.19 已改用 `sync_all(True)`） | 后端 cudabk |
+| `test_cudnn_op.py::TestCudnnConvOp::test_backward_nhwc` 在本机 cuDNN 上 `Unexpected success` | 标着 `expectedFailure` 但在 cuDNN 8.x + sm_89 上真的通过了。要么这条限制已经不存在（那就去掉标记并说明从哪个版本起成立），要么标记的条件写得太宽 | 后端 cudabk |
+| `test_shared_reduce.py::test_shared_reduce_helper_is_two_stage` 按 locale 编码读生成源码 | 整目录跑时 `UnicodeDecodeError: 'ascii' codec can't decode byte 0xe2`，单独跑通过。jittor 生成的 JIT 源码里有非 ASCII（op key 用 U+00AB 分隔），读文件时没给 `encoding="utf-8"`，是否报错取决于当轮生成了哪个算子——**这类按环境编码解码的读法全树要扫一遍** | 代码生成分区 |
 
 ## 跨用例状态泄漏清单（0.15 的前置，2026-09-03 全树实测）
 
@@ -376,7 +382,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 2.16 | 类型提升表 | 已合并 | bindings | d821c34a（int_dtype_promote 提升格；标量按 `_is_scalar` 标志认，不再按形状；float 标量把整数张量提到默认 float dtype）、a39a2f1c（补：双标量走提升格，交换左右操作数不再改变 dtype 与结果） |
 | 2.17 | 算子身份用注册期整型 id | 已合并 | coreops | 1d792e16。OpInfo 注册分配 OpId，核心/tuner/pass 名字比较归零，fast_strcmp 删除，Tape 用显式 pending flag；CPU 80 项、CUDA 5 项及结构契约通过 |
 | 2.18 | 算子注册表惰性初始化 | 已合并 | coreops | bca71d1f。注册表函数内惰性构造，typed polymorphic constructor 取代 `type_info + void*` 手工分派，ACL API/op_types 同步惰性；结构 3、C++ 注册 3、custom-op 2、GPU2 跨 so 1 项通过 |
-| 2.19 | 错误分两档 | 待领 | | ed12fe21 已合入析构半项；c119f3bf 迁 7 处公开维度边界；83754995 迁 code/numpy/reindex 共 10 处 shape/数量边界；7c018c86 迁 transpose/fuse_transpose/reshape 共 9 处视图形状边界；b32cd6df 迁 ternary 两处 shape/dim；32758304 迁 broadcast_to 三处用户 shape 边界；37a626bc 迁 reinterpret_view 六处 dtype/shape 用户边界；8a2aebab 迁 binary 一处 shape 用户边界；8e427d2c 迁 setitem 两处 data dim/shape 用户边界；97cf5e0e 迁 getitem 三处索引/shape 用户边界；c7e5306b 迁 py_converter bool slice 一处用户输入边界；7bab54f6 迁 device_copy 一处非法设备号用户边界；83c46ffc 迁 NumPy object dtype 一处用户输入边界；a6ad6585 迁 fused_adamw 四处 TensorList cardinality 用户边界；be7ef67a 迁 var_slices 一处字符串切片长度用户边界；02795d51 迁 set_data 两处 dtype/size 用户边界；a0dd9c44 迁 reuse_np_array 两处类型/C-contiguous 用户边界；58df26d0 迁 random 一处 type 用户边界；28cba3b9 迁 py_caller 一处返回字符串用户边界；6d816bcc 迁 unary 一处 op 语义用户边界；0e2a8483 迁 CUDA curand 两处 dtype/type 用户边界（静态前置）；3ee7669e 迁 CUDNN RNN descriptor 一处 dtype 用户边界（静态前置）；3d943240 迁 CUDNN RNN x/weight dtype 一处用户边界（静态前置）；6375a852 迁 Cutt transpose axes 两处用户边界（静态前置）；0bee930e 迁 CUBLAS matmul 两处 dtype 用户边界（静态前置）；1a4f0b27 迁 CUBLAS batched matmul 两处 dtype 用户边界（静态前置）；c3c437b5 迁 CUBLAS acc matmul 两处 dtype 用户边界（静态前置）；595dac8d 迁 cuSPARSE CSR 两处 dtype 用户边界（静态前置）；c1176841 迁 cuSPARSE COO 两处 dtype 用户边界（静态前置）；f98e5b80 迁 NCCL reduce-scatter 两处 shape 用户边界（静态前置）；ec2ee53c 迁 CUB cumsum 一处 rank 用户边界（静态前置）；45f77257 迁 CUB argsort/arg_reduce 两处 offsets dtype 用户边界（静态前置）；a3890dd9 迁 CUDNN conv forward 一处 format 用户边界（静态前置）；67e710b7 迁 CUDNN conv backward-x 一处 format 用户边界（静态前置）；0a0e820e 迁 CUDNN conv backward-w 一处 format 用户边界（静态前置）；37004fe0 迁 CUDNN conv3d 输入 rank 一处用户边界（静态前置）；85ae0688 迁 CUDNN conv3d 权重 rank 一处用户边界（静态前置）；9d77a5a7 迁 CUDNN conv3d backward-x 权重 rank 一处用户边界（静态前置）；496dd510 迁 CUDNN conv3d backward-x dy rank 一处用户边界（静态前置）；e81ef514 迁 CUDNN conv3d backward-w 输入 rank 一处用户边界（静态前置）；f07cb966 迁 CUDNN conv3d backward-w dy rank 一处用户边界（静态前置）；1910f343 迁 CUB argsort x/indexes rank 一处用户边界（静态前置）；4fe6f687 迁 CUB argsort indexes 维度 shape 一处用户边界（静态前置）；166010a8 迁 CUB argsort offsets rank 一处用户边界（静态前置）；36502b8e 迁 CUB argsort offsets 长度一处用户边界（静态前置）；193d5171 迁 CUB arg_reduce offsets rank 一处用户边界（静态前置）；4c64067e 迁 CUB arg_reduce offsets 长度一处用户边界（静态前置）；fbc69232 迁 CUDNN RNN LSTM mode 一处用户边界（静态前置）；b1c604af 迁 CUDNN RNN 非 LSTM mode 一处用户边界（静态前置）；6afd44df 迁 CUDNN RNN proj_size 一处用户边界（静态前置）；57c6cd92 迁 CUDNN RNN 第二处 proj_size 一处用户边界（静态前置）；aae2f5bc 迁 CUDNN conv3d 分组通道一处用户边界（静态前置）；935bb1a9 迁 CUDNN RNN backward-x LSTM mode 一处用户边界（静态前置）；b3826005 迁 CUDNN RNN backward-x proj_size 一处用户边界（静态前置）；35664df5 迁 CUDNN RNN backward-x 非 LSTM mode 一处用户边界（静态前置）；76dc9dc3 迁 CUDNN RNN backward-x 第二处 proj_size 一处用户边界（静态前置）；408b4832 迁 CUDNN conv 输入 rank 一处用户边界（静态前置）；ceabd84c 迁 CUDNN conv 权重 rank 一处用户边界（静态前置）；44a80c8a 迁 CUDNN conv 分组通道一处用户边界（静态前置）；92a66390 迁 CUDNN conv backward-x dy rank 一处用户边界（静态前置）；1e3bab6e 迁 CUDNN conv backward-w 输入 rank 一处用户边界（静态前置）；5596563f 迁 CUDNN conv backward-w dy rank 一处用户边界（静态前置）；241ab528 迁 CUDNN RNN 输入 rank 一处用户边界（静态前置）；4858b0a2 迁 CUDNN RNN 输入通道 shape 一处用户边界（静态前置）；7a24ca0b 迁 cuFFT dtype 一处用户边界（静态前置）；040e44a0 迁 CUBLAS matmul 输入 rank 一处用户边界（静态前置），累计 114 处。C++ 具体类型、Python 跨 pyjt 可捕获、析构/信号防绕过和六十七组结构计数均有聚焦证据；fused AdamW 构造期长度负向与其结构/TU 证据已记录；var_slices 本批结构计数、`getitem_op.cc` TU 语法与字符串 slice 负向节点通过；set_data 本批结构计数、`var_holder.cc` TU 语法与两个负向节点通过；reuse_np_array 本批结构计数、`py_array_op.cc` TU 语法与两个负向节点通过；random 本批结构计数、`random_op.cc` TU 语法与无效 type 负向节点通过；py_caller 本批结构计数、`py_caller.cc` TU 语法与非字符串返回负向节点通过；unary 本批结构计数、`unary_op.cc` TU 语法与非法 op 负向节点通过；curand 本批结构计数与现有 dtype 负向静态合同通过，`nvcc -c` TU 语法通过，本机无 CUDA 未运行负向；CUDNN RNN dtype 本批结构计数、现有 bfloat16 负向静态合同与 descriptor 头 TU 语法通过，本机无 CUDA 未运行负向；CUDNN RNN x/weight dtype 本批结构计数、混合 dtype 负向静态合同与 `cudnn_rnn_op.cc` TU 语法通过，本机无 CUDA 未运行负向；Cutt transpose axes 本批结构计数、两个 axes 负向静态合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向；CUBLAS matmul 本批结构计数、两个 dtype 负向静态合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向；CUBLAS batched matmul 本批结构计数、两个 dtype 负向静态合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向；CUBLAS acc matmul 本批结构计数、两个 dtype 负向静态合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向；cuSPARSE CSR 本批结构计数、两个 dtype 负向静态合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向；cuSPARSE COO 本批结构计数、两个 dtype 负向静态合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向；NCCL reduce-scatter 本批结构计数与 shape 静态合同、nvcc TU 语法通过，本机无 NCCL 设备未运行负向；CUB cumsum 本批结构计数、rank-3 负向静态合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向；CUB argsort/arg_reduce offsets dtype 本批结构计数、两个 int64 offsets 负向静态合同与双 nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN conv format 本批结构计数、`Not a valid format` 静态合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN conv backward-x format 本批结构计数、`Not a valid format` 静态合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN conv backward-w format 本批结构计数、`Not a valid format` 静态合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN conv3d input rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN conv3d weight rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN conv3d backward-x weight rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN conv3d backward-x dy rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN conv3d backward-w input rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN conv3d backward-w dy rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUB argsort x/indexes rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUB argsort indexes shape 本批结构计数与 shape 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUB argsort offsets rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUB argsort offsets length 本批结构计数与长度静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUB arg_reduce offsets rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUB arg_reduce offsets length 本批结构计数与长度静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN RNN LSTM mode 本批结构计数与 mode 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN RNN non-LSTM mode 本批结构计数与 mode 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN RNN proj_size 本批结构计数与 proj_size 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN RNN 第二处 proj_size 本批结构计数与 proj_size 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN conv3d 分组通道本批结构计数与通道 shape 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN RNN backward-x LSTM mode 本批结构计数与 mode 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN RNN backward-x proj_size 本批结构计数与 proj_size 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN RNN backward-x non-LSTM mode 本批结构计数与 mode 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN RNN backward-x 第二处 proj_size 本批结构计数与 proj_size 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN conv input rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN conv weight rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN conv 分组通道本批结构计数与通道 shape 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN conv backward-x weight rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN conv backward-x dy rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN conv backward-w input rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN conv backward-w dy rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN RNN input rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUDNN RNN input channel shape 本批结构计数与 shape 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；cuFFT dtype 本批结构计数与不支持 dtype 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向；CUBLAS matmul input rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机无 CUDA 未运行负向，未迁调用点分类仍待领；a29e0f81 记录 CUDA 后端内部断言分类文档与结构门禁；b2308f41 扩展计划失败断言清单；91718e98 补充 CUDNN RNN 权重查询断言；be526722 补充 CUDNN RNN bias 查询断言；27cc72f2 补充 CUB CUDA 状态断言门禁；6ef94518 补充 CUBLAS 测试入口状态断言清单；54e8d545 补充 CUDNN 测试入口状态断言清单；8595e479 收束无新增安全用户边界说明；8af5fd8d 精确约束 CUTT 返回码内断言；30bfdb6e 精确约束 CUDNN RNN descriptor 内断言；46ab1e17 精确约束 CUDNN 计划 ASSERT(ok) 计数；9f6afe17 精确约束 CUB 测试入口 ASSERT 计数；23d70b26 追加分类文档，剩余断言不作用户错误迁移 |
+| 2.19 | 错误分两档 | 待领 | | ed12fe21 已合入析构半项；c119f3bf 迁 7 处公开维度边界；83754995 迁 code/numpy/reindex 共 10 处 shape/数量边界；7c018c86 迁 transpose/fuse_transpose/reshape 共 9 处视图形状边界；b32cd6df 迁 ternary 两处 shape/dim；32758304 迁 broadcast_to 三处用户 shape 边界；37a626bc 迁 reinterpret_view 六处 dtype/shape 用户边界；8a2aebab 迁 binary 一处 shape 用户边界；8e427d2c 迁 setitem 两处 data dim/shape 用户边界；97cf5e0e 迁 getitem 三处索引/shape 用户边界；c7e5306b 迁 py_converter bool slice 一处用户输入边界；7bab54f6 迁 device_copy 一处非法设备号用户边界；83c46ffc 迁 NumPy object dtype 一处用户输入边界；a6ad6585 迁 fused_adamw 四处 TensorList cardinality 用户边界；be7ef67a 迁 var_slices 一处字符串切片长度用户边界；02795d51 迁 set_data 两处 dtype/size 用户边界；a0dd9c44 迁 reuse_np_array 两处类型/C-contiguous 用户边界；58df26d0 迁 random 一处 type 用户边界；28cba3b9 迁 py_caller 一处返回字符串用户边界；6d816bcc 迁 unary 一处 op 语义用户边界；0e2a8483 迁 CUDA curand 两处 dtype/type 用户边界（静态前置）；3ee7669e 迁 CUDNN RNN descriptor 一处 dtype 用户边界（静态前置）；3d943240 迁 CUDNN RNN x/weight dtype 一处用户边界（静态前置）；6375a852 迁 Cutt transpose axes 两处用户边界（静态前置）；0bee930e 迁 CUBLAS matmul 两处 dtype 用户边界（静态前置）；1a4f0b27 迁 CUBLAS batched matmul 两处 dtype 用户边界（静态前置）；c3c437b5 迁 CUBLAS acc matmul 两处 dtype 用户边界（静态前置）；595dac8d 迁 cuSPARSE CSR 两处 dtype 用户边界（静态前置）；c1176841 迁 cuSPARSE COO 两处 dtype 用户边界（静态前置）；f98e5b80 迁 NCCL reduce-scatter 两处 shape 用户边界（静态前置）；ec2ee53c 迁 CUB cumsum 一处 rank 用户边界（静态前置）；45f77257 迁 CUB argsort/arg_reduce 两处 offsets dtype 用户边界（静态前置）；a3890dd9 迁 CUDNN conv forward 一处 format 用户边界（静态前置）；67e710b7 迁 CUDNN conv backward-x 一处 format 用户边界（静态前置）；0a0e820e 迁 CUDNN conv backward-w 一处 format 用户边界（静态前置）；37004fe0 迁 CUDNN conv3d 输入 rank 一处用户边界（静态前置）；85ae0688 迁 CUDNN conv3d 权重 rank 一处用户边界（静态前置）；9d77a5a7 迁 CUDNN conv3d backward-x 权重 rank 一处用户边界（静态前置）；496dd510 迁 CUDNN conv3d backward-x dy rank 一处用户边界（静态前置）；e81ef514 迁 CUDNN conv3d backward-w 输入 rank 一处用户边界（静态前置）；f07cb966 迁 CUDNN conv3d backward-w dy rank 一处用户边界（静态前置）；1910f343 迁 CUB argsort x/indexes rank 一处用户边界（静态前置）；4fe6f687 迁 CUB argsort indexes 维度 shape 一处用户边界（静态前置）；166010a8 迁 CUB argsort offsets rank 一处用户边界（静态前置）；36502b8e 迁 CUB argsort offsets 长度一处用户边界（静态前置）；193d5171 迁 CUB arg_reduce offsets rank 一处用户边界（静态前置）；4c64067e 迁 CUB arg_reduce offsets 长度一处用户边界（静态前置）；fbc69232 迁 CUDNN RNN LSTM mode 一处用户边界（静态前置）；b1c604af 迁 CUDNN RNN 非 LSTM mode 一处用户边界（静态前置）；6afd44df 迁 CUDNN RNN proj_size 一处用户边界（静态前置）；57c6cd92 迁 CUDNN RNN 第二处 proj_size 一处用户边界（静态前置）；aae2f5bc 迁 CUDNN conv3d 分组通道一处用户边界（静态前置）；935bb1a9 迁 CUDNN RNN backward-x LSTM mode 一处用户边界（静态前置）；b3826005 迁 CUDNN RNN backward-x proj_size 一处用户边界（静态前置）；35664df5 迁 CUDNN RNN backward-x 非 LSTM mode 一处用户边界（静态前置）；76dc9dc3 迁 CUDNN RNN backward-x 第二处 proj_size 一处用户边界（静态前置）；408b4832 迁 CUDNN conv 输入 rank 一处用户边界（静态前置）；ceabd84c 迁 CUDNN conv 权重 rank 一处用户边界（静态前置）；44a80c8a 迁 CUDNN conv 分组通道一处用户边界（静态前置）；92a66390 迁 CUDNN conv backward-x dy rank 一处用户边界（静态前置）；1e3bab6e 迁 CUDNN conv backward-w 输入 rank 一处用户边界（静态前置）；5596563f 迁 CUDNN conv backward-w dy rank 一处用户边界（静态前置）；241ab528 迁 CUDNN RNN 输入 rank 一处用户边界（静态前置）；4858b0a2 迁 CUDNN RNN 输入通道 shape 一处用户边界（静态前置）；7a24ca0b 迁 cuFFT dtype 一处用户边界（静态前置）；040e44a0 迁 CUBLAS matmul 输入 rank 一处用户边界（静态前置），累计 114 处。C++ 具体类型、Python 跨 pyjt 可捕获、析构/信号防绕过和六十七组结构计数均有聚焦证据；fused AdamW 构造期长度负向与其结构/TU 证据已记录；var_slices 本批结构计数、`getitem_op.cc` TU 语法与字符串 slice 负向节点通过；set_data 本批结构计数、`var_holder.cc` TU 语法与两个负向节点通过；reuse_np_array 本批结构计数、`py_array_op.cc` TU 语法与两个负向节点通过；random 本批结构计数、`random_op.cc` TU 语法与无效 type 负向节点通过；py_caller 本批结构计数、`py_caller.cc` TU 语法与非字符串返回负向节点通过；unary 本批结构计数、`unary_op.cc` TU 语法与非法 op 负向节点通过；curand 本批结构计数与现有 dtype 负向静态合同通过，`nvcc -c` TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN RNN dtype 本批结构计数、现有 bfloat16 负向静态合同与 descriptor 头 TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN RNN x/weight dtype 本批结构计数、混合 dtype 负向静态合同与 `cudnn_rnn_op.cc` TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；Cutt transpose axes 本批结构计数、两个 axes 负向静态合同与 nvcc TU 语法通过，但 **cuTT 后端在本树里不可达**（`setup_cutt()` 全树无调用点，`cutt_ops` 恒为 None，`tests/backends/cuda/test_cutt*.py` 六条恒 skip），该处负向至今一次也没跑过；CUBLAS matmul 本批结构计数、两个 dtype 负向静态合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUBLAS batched matmul 本批结构计数、两个 dtype 负向静态合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUBLAS acc matmul 本批结构计数、两个 dtype 负向静态合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；cuSPARSE CSR 本批结构计数、两个 dtype 负向静态合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；cuSPARSE COO 本批结构计数、两个 dtype 负向静态合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；NCCL reduce-scatter 本批结构计数与 shape 静态合同、nvcc TU 语法通过，本分区只分到一张卡，NCCL 负向仍未运行；CUB cumsum 本批结构计数、rank-3 负向静态合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUB argsort/arg_reduce offsets dtype 本批结构计数、两个 int64 offsets 负向静态合同与双 nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN conv format 本批结构计数、`Not a valid format` 静态合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN conv backward-x format 本批结构计数、`Not a valid format` 静态合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN conv backward-w format 本批结构计数、`Not a valid format` 静态合同与 nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN conv3d input rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN conv3d weight rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN conv3d backward-x weight rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN conv3d backward-x dy rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN conv3d backward-w input rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN conv3d backward-w dy rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUB argsort x/indexes rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUB argsort indexes shape 本批结构计数与 shape 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUB argsort offsets rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUB argsort offsets length 本批结构计数与长度静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUB arg_reduce offsets rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUB arg_reduce offsets length 本批结构计数与长度静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN RNN LSTM mode 本批结构计数与 mode 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN RNN non-LSTM mode 本批结构计数与 mode 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN RNN proj_size 本批结构计数与 proj_size 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN RNN 第二处 proj_size 本批结构计数与 proj_size 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN conv3d 分组通道本批结构计数与通道 shape 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN RNN backward-x LSTM mode 本批结构计数与 mode 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN RNN backward-x proj_size 本批结构计数与 proj_size 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN RNN backward-x non-LSTM mode 本批结构计数与 mode 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN RNN backward-x 第二处 proj_size 本批结构计数与 proj_size 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN conv input rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN conv weight rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN conv 分组通道本批结构计数与通道 shape 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN conv backward-x weight rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN conv backward-x dy rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN conv backward-w input rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN conv backward-w dy rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN RNN input rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUDNN RNN input channel shape 本批结构计数与 shape 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；cuFFT dtype 本批结构计数与不支持 dtype 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录；CUBLAS matmul input rank 本批结构计数与 rank 静态合同、nvcc TU 语法通过，本机 CUDA 可用，负向见 2.19 行末运行记录，未迁调用点分类仍待领；a29e0f81 记录 CUDA 后端内部断言分类文档与结构门禁；b2308f41 扩展计划失败断言清单；91718e98 补充 CUDNN RNN 权重查询断言；be526722 补充 CUDNN RNN bias 查询断言；27cc72f2 补充 CUB CUDA 状态断言门禁；6ef94518 补充 CUBLAS 测试入口状态断言清单；54e8d545 补充 CUDNN 测试入口状态断言清单；8595e479 收束无新增安全用户边界说明；8af5fd8d 精确约束 CUTT 返回码内断言；30bfdb6e 精确约束 CUDNN RNN descriptor 内断言；46ab1e17 精确约束 CUDNN 计划 ASSERT(ok) 计数；9f6afe17 精确约束 CUB 测试入口 ASSERT 计数；23d70b26 追加分类文档，剩余断言不作用户错误迁移。**2026-09-04 运行记录（首次在真实 CUDA 上跑 2.19 的验收，此前全部证据都是静态的）**：本机 nvcc 12.2.140、`cuda_archs=[89]`、`has_cuda=1`，此前 82 处「本机无 CUDA」的说法不成立，成因是读 `has_cuda` 时带了 `nvcc_path=""`（写法与判据见 skill `cuda-negative-path-verification`）。`pytest tests/backends/cuda -v -rs` 全目录：**180 passed / 23 failed / 37 skipped / 1 xfailed**（首轮跑到 36% 就 SIGABRT 退出，见下）。新增 `test_cuda_user_error_boundaries.py` **21 passed**，逐条覆盖此前只有静态证据的边界：cuDNN conv 输入/权重 rank、分组通道、非法 format；conv3d 输入/权重 rank、分组通道；RNN 输入 rank、输入通道 shape、proj_size；CUB argsort offsets dtype/indexes rank/indexes shape/offsets rank/offsets 长度；CUB arg_reduce offsets dtype/rank/长度；curand type 与 dtype；cuFFT dtype——每条都断言异常跨 pyjt 可被 Python 捕获、消息指名操作数，**且抛完之后运行时仍可算**。**发现一处迁移是错的**：`~VarHolder` 让异常逃出析构，因为析构隐式 `noexcept`，`std::terminate` 发生在析构自己的栈帧上，ed12fe21 给生成的 `tp_dealloc` 包的那层 catch 在它下面、永远轮不到；真实后果是整个 `tests/backends/cuda` 跑到 `test_cudnn_rnn_dtype.py` 就 SIGABRT，后面 21 个文件一个没跑而 pytest 连汇总行都没有。结构门禁 `test_destructor_and_handler_contract.py` 抓不到，因为它只扫析构体里**字面出现**的抛出宏，这里是经由 `release_both_liveness` 传递抛出的。已修（见本行提交），并补 `test_var_holder_teardown.py` 2 passed（修前 1 failed/rc=134）。另更正 `test_backend_teardown.py` 的探针：它用 `y.sync()` 后 `except: pass`，而 `Var.sync` 不做 device sync，故障根本没被报出来，「真实故障盖过清理噪音」这条断言在真机上一直是假的——改用 `jt.sync_all(True)` 之后 `cudaErrorIllegalAddress` 真的先于 teardown 错误出现，2 passed。**仍缺**：cuTT 六条恒 skip（后端不可达）；NCCL reduce-scatter 负向要多卡；`test_device_copy.py` 7 条、`test_device_methods.py` 4 条等 27 条要两张卡，本分区只分到一张 |
 | 2.20 | 信号处理器只做 `write` 与 `_exit`，符号化交给预建 helper 进程 | 已合并 | bindings | 上半 9b92f38d（去 stdio/LOGf/exit，标志改 volatile sig_atomic_t）；下半 640a4f07（符号化搬进崩溃前 fork 的 helper，经父进程 /proc/<pid>/maps 解析）；d874b01d 修 jit_key 用例（它原先靠信号处理器抛异常） |
 | 2.21 | `DEFINE_FLAG_WITH_SETTER` 先赋值再调 setter，签名收新旧两值 | 已合并 | coreops | 14336afd |
 | 2.22 | 环境变量统一 `JT_` 前缀 | 待领 | | |
@@ -631,73 +637,73 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 ### 2026-09-04 第四十三波补充证据
 
 - `8.06`：`1e8e90c6` 为 `aclnn.h` 增加 `#pragma once`，新增重复包含静态合同，1 passed；本机无 CANN/NPU，仍待 Ascend 910B3 实机。
-- `2.19`：`45f77257`/`f76e3b90` 将 CUB argsort/arg_reduce 的 offsets dtype 边界改为 `USER_CHECK` 并记录 int64 负向与双 nvcc TU 语法通过；本机无 CUDA，仍待设备负向运行。
+- `2.19`：`45f77257`/`f76e3b90` 将 CUB argsort/arg_reduce 的 offsets dtype 边界改为 `USER_CHECK` 并记录 int64 负向与双 nvcc TU 语法通过；本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`8647dc4d` 将 `pairwise_distance` 提升为模块级稳定对象并登记 conservative approximate fidelity；身份、metadata、CPU p=2/keepdim 三节点通过。
 
 ### 2026-09-04 第四十四波补充证据
 
 - `8.06`：`553b5ec1` 将 SiLU forward owner 接入共享 launcher，backward/Swish/SwiGlu 保持原路径；结构合同 31 passed，本机无 CANN/NPU，仍待 Ascend 910B3 实机。
-- `2.19`：`a3890dd9`/`b8e1f592` 将 cuDNN convolution forward 格式边界改为 `USER_CHECK`；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向，累计 80 处。
+- `2.19`：`a3890dd9`/`b8e1f592` 将 cuDNN convolution forward 格式边界改为 `USER_CHECK`；结构合同与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录，累计 80 处。
 - `7.03`：`4a31179c` 将 `cosine_similarity` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；`py_compile`/diff-check 通过，三节点动态测试因首次 JIT 编译过久终止，未宣称通过。
 
 ### 2026-09-04 第四十五波补充证据
 
 - `8.06`：`600ee169` 将 BatchMatMul 接入共享 launcher，保留 `cube_math_type` 与同步策略；结构合同 32 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`67e710b7`/`aae33e6a` 将 cuDNN convolution backward-x 格式边界改为 `USER_CHECK`；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向，累计 81 处。
+- `2.19`：`67e710b7`/`aae33e6a` 将 cuDNN convolution backward-x 格式边界改为 `USER_CHECK`；结构合同与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录，累计 81 处。
 - `7.03`：`93cd6a53` 将 `svd` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；`py_compile`/diff-check 通过，动态三节点因首次编译过久终止，未宣称通过。
 
 ### 2026-09-04 第四十六波补充证据
 
 - `8.06`：`8251d29d` 将 RotaryPositionEmbedding forward 接入共享 launcher，保留三输入与同步策略；结构合同 33 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`0a0e820e`/`aad3ba0c` 将 cuDNN convolution backward-w 格式边界改为 `USER_CHECK`；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向，累计 82 处。
+- `2.19`：`0a0e820e`/`aad3ba0c` 将 cuDNN convolution backward-w 格式边界改为 `USER_CHECK`；结构合同与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录，累计 82 处。
 - `7.03`：`dc8cdfcb` 将 `svd_lowrank` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；`py_compile`/diff-check 通过，动态 JIT 未运行。
 
 ### 2026-09-04 第四十七波补充证据
 
 - `8.06`：`71bab738` 将 Maxpool forward 接入共享 launcher，保留 descriptors、`poolCeil`、同步策略及 Avgpool/backward 原路径；静态合同 34 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`37004fe0`/`b48f8af7` 将 cuDNN conv3d 输入 rank 边界改为 `USER_CHECKop`；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向，累计 83 处。另：`broadcast_to` 源码实际 5 个检查，但 dimension map 仍期望 2（shape map 期望 5），相关门禁仍 1 failed，待专门修复。
+- `2.19`：`37004fe0`/`b48f8af7` 将 cuDNN conv3d 输入 rank 边界改为 `USER_CHECKop`；结构合同与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录，累计 83 处。另：`broadcast_to` 源码实际 5 个检查，但 dimension map 仍期望 2（shape map 期望 5），相关门禁仍 1 failed，待专门修复。
 - `7.03`：`cfe67a7e` 将 `pca_lowrank` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；`py_compile`/diff-check 通过，动态 JIT 未运行。
 
 ### 2026-09-04 第四十八波补充证据
 
 - `8.06`：`16a89606` 将 Avgpool forward 接入共享 launcher，保留 descriptors、`poolCeil/divisor`、同步策略及 backward/其他 pool owner；静态合同 35 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`9d77a5a7`/`cf177243` 将 cuDNN conv3d backward-x 权重 rank 边界改为 `USER_CHECKop`；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向，累计 84 处。
+- `2.19`：`9d77a5a7`/`cf177243` 将 cuDNN conv3d backward-x 权重 rank 边界改为 `USER_CHECKop`；结构合同与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录，累计 84 处。
 - `7.03`：`727b440a` 将 `nan_to_num_` 提升为 numerical 稳定 in-place 对象并登记 conservative approximate fidelity；`py_compile`/diff-check 通过，因既有 NaN/Inf JIT abort 风险未运行动态测试。
 
 ### 2026-09-04 第四十九波补充证据
 
 - `8.06`：`ba8e2621` 将 TruthReduce all/any 接入共享 launcher，保留双路径异常处理与同步策略；静态合同 36 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`e81ef514`/`a7f45f1f` 将 cuDNN conv3d backward-w 输入 rank 边界改为 `USER_CHECKop`；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向，累计 85 处。
+- `2.19`：`e81ef514`/`a7f45f1f` 将 cuDNN conv3d backward-w 输入 rank 边界改为 `USER_CHECKop`；结构合同与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录，累计 85 处。
 - `7.03`：`602a813f` 将 `sparse_coo_tensor` factory 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态测试未运行。
 
 ### 2026-09-04 第五十波补充证据
 
 - `8.06`：`230c0b69` 将 Conv2d forward 接入共享 launcher，保留 group/bias/descriptor 与同步策略，backward 不变；静态合同 37 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`496dd510`/`e7b10858` 将 cuDNN conv3d backward-x dy rank 边界改为 `USER_CHECKop`；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向，累计 86 处。
+- `2.19`：`496dd510`/`e7b10858` 将 cuDNN conv3d backward-x dy rank 边界改为 `USER_CHECKop`；结构合同与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录，累计 86 处。
 - `7.03`：`32064314` 将 `randint_like` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
 
 ### 2026-09-04 第五十一波补充证据
 
 - `8.06`：`e86ccd11` 将 RmsNorm forward 接入共享 launcher，保留 `eps`、双输出与同步策略，gradient owner 不变；静态合同 38 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`f07cb966`/`54a88b42` 将 cuDNN conv3d backward-w 的 dy rank 边界改为 `USER_CHECKop`；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向，累计 87 处。
+- `2.19`：`f07cb966`/`54a88b42` 将 cuDNN conv3d backward-w 的 dy rank 边界改为 `USER_CHECKop`；结构合同与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录，累计 87 处。
 - `7.03`：`d9c7c6a2` 将 `det` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
 
 ### 2026-09-04 第五十二波补充证据
 
 - `8.06`：`faf6745e` 将 RmsNormGrad 接入共享 launcher，保留多输入、双输出与同步策略，gradient owner 不变；静态合同 39 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`85ae0688`/`b5e00107` 将 cuDNN conv3d 权重 rank 边界改为 `USER_CHECKop`；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向，累计 88 处、四十一组证据。
+- `2.19`：`85ae0688`/`b5e00107` 将 cuDNN conv3d 权重 rank 边界改为 `USER_CHECKop`；结构合同与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录，累计 88 处、四十一组证据。
 - `7.03`：`9c469b37` 将 `inverse` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
 
 ### 2026-09-04 第五十三波补充证据
 
 - `8.06`：`3581db5d` 将 Softmax backward 接入共享 launcher，保留 `dim` query 与同步策略；静态合同 40 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`1910f343`/`53db0066` 将 CUB argsort 的 x/indexes rank 边界改为 `USER_CHECK`，累计 89 处、四十二组证据；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`1910f343`/`53db0066` 将 CUB argsort 的 x/indexes rank 边界改为 `USER_CHECK`，累计 89 处、四十二组证据；结构合同与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`8bc2791e` 将 `take_along_dim` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
 
 ### 2026-09-04 第五十四波补充证据
 
 - `8.06`：`5697f619` 将 Embedding backward 接入共享 launcher，保留 `numEmbeddings`、`paddingIdx`、`scaleGradByFreq` 与同步策略；静态合同 41 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`4fe6f687`/`4f605d00` 将 CUB argsort 循环内 x/indexes shape 边界改为 `USER_CHECK`，累计 90 处、四十三组证据；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`4fe6f687`/`4f605d00` 将 CUB argsort 循环内 x/indexes shape 边界改为 `USER_CHECK`，累计 90 处、四十三组证据；结构合同与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`48c6fd73` 将 `log1p` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
 
 ### 2026-09-04 看板一致性修复与并发补充
@@ -708,25 +714,25 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 ### 2026-09-04 第五十五波补充证据
 
 - `8.06`：`0b149241`/`a12a2fbe` 将 Dropout backward 接入共享 launcher，保留 `scale` query 与同步策略；静态合同 42 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`166010a8`（CUB argsort offsets rank）已进入主线，结构/TU 证据已记录，累计 91 处、四十四组证据；本机无 CUDA 未运行负向。
+- `2.19`：`166010a8`（CUB argsort offsets rank）已进入主线，结构/TU 证据已记录，累计 91 处、四十四组证据；本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`ccbc6132` 将 `reciprocal` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；静态身份/metadata、`py_compile`/diff-check 通过，动态 JIT 未运行。
 
 ### 2026-09-04 第五十六波补充证据
 
 - `8.06`：`4f414054`/`14c30c38` 将 RotaryPositionEmbedding gradient 接入共享 launcher，保留四输入、三输出 query 与同步策略；静态合同 43 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`36502b8e`/`fcaa6cce` 将 CUB argsort offsets 长度边界改为 `USER_CHECKop`，并补齐此前 `166010a8` 漏记；累计 92 处、四十五组证据，结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`36502b8e`/`fcaa6cce` 将 CUB argsort offsets 长度边界改为 `USER_CHECKop`，并补齐此前 `166010a8` 漏记；累计 92 处、四十五组证据，结构与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`742f1595` 将 `lerp` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
 
 ### 2026-09-04 第五十七波补充证据
 
 - `8.06`：`f34ecce4`/`393a5f70` 将 Conv2d backward 接入共享 launcher，保留三输出 gradient query、descriptor cleanup 与同步策略；静态合同 44 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`193d5171`/`22ccddc5` 将 CUB arg-reduce offsets rank 边界改为 `USER_CHECKop`，累计 93 处、四十六组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`193d5171`/`22ccddc5` 将 CUB arg-reduce offsets rank 边界改为 `USER_CHECKop`，累计 93 处、四十六组证据；结构与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`25142db7` 将 `softmax` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
 
 ### 2026-09-04 第五十八波补充证据
 
 - `8.06`：`1874f7ed`/`f92d4ffd` 将 UpsampleNearest2d backward 接入共享 launcher，保留 output/input-size RAII descriptor 与同步策略；静态合同 45 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`4c64067e`/`050da89a` 将 CUB arg-reduce offsets 长度边界改为 `USER_CHECKop`，累计 94 处、四十七组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`4c64067e`/`050da89a` 将 CUB arg-reduce offsets 长度边界改为 `USER_CHECKop`，累计 94 处、四十七组证据；结构与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`d6bd24f1` 将 `log_softmax` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
 
 ### 2026-09-04 第五十五波补充证据
@@ -763,110 +769,110 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `8.06`：`1f1ffec3` 将 LayerNorm forward 接入共享 launcher，保留 normalizedShape、eps、三输出与 descriptor cleanup；静态合同 51 passed，本机无 CANN/NPU，仍待实机。
 - `8.06`：`ca40d0d6` 将 LayerNorm backward 接入共享 launcher，保留 normalizedShape/outMask、三输出 query 与 descriptor cleanup；静态合同 52 passed，本机无 CANN/NPU，仍待实机。
 - `8.06`：`8e772a5b` 将 SwiGlu 接入共享 launcher，保留同步策略；静态合同 50 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`fbc69232`/`a4adb24b` 将 cuDNN RNN LSTM mode 用户边界改为 `USER_CHECKop`，累计 95 处、四十八组证据；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`fbc69232`/`a4adb24b` 将 cuDNN RNN LSTM mode 用户边界改为 `USER_CHECKop`，累计 95 处、四十八组证据；结构合同与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`b98cde25` 将 `relu` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
 
 ### 2026-09-04 第六十波补充证据
 
 - `8.06`：`d87bbd09`/`55a81e8e` 将 Swish forward 接入共享 launcher，保留同步策略；静态合同 48 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`b1c604af`/`7c6420d3` 将 cuDNN RNN 非 LSTM mode 边界改为 `USER_CHECKop`，累计 96 处、四十九组证据；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`b1c604af`/`7c6420d3` 将 cuDNN RNN 非 LSTM mode 边界改为 `USER_CHECKop`，累计 96 处、四十九组证据；结构合同与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`2bdc68a0` 将 `torch._shape_as_tensor` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
 
 ### 2026-09-04 第六十一波补充证据
 
 - `8.06`：`744f6c6d` 将 Swish backward 接入共享 launcher，保留同步策略，SwiGlu 未迁；静态合同 49 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`6afd44df`/`b20ea9e2` 将 cuDNN RNN `proj_size==0` 用户边界改为 `USER_CHECKop`，累计 97 处、五十组证据；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`6afd44df`/`b20ea9e2` 将 cuDNN RNN `proj_size==0` 用户边界改为 `USER_CHECKop`，累计 97 处、五十组证据；结构合同与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：本波复核剩余 API 后仅 `vmap` 仍是复杂闭包，已有原生 owner 的 API 不重复包装；未产生安全代码提交。
 
 ### 2026-09-04 第六十二波补充证据
 
 - `8.06`：`8e772a5b`/`012dddf4` 将 SwiGlu 接入共享 launcher，保留同步策略；静态合同 50 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`57c6cd92`/`53895c66` 将 cuDNN RNN 第二处 `proj_size==0` 边界改为 `USER_CHECKop`，累计 98 处、五十一组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`57c6cd92`/`53895c66` 将 cuDNN RNN 第二处 `proj_size==0` 边界改为 `USER_CHECKop`，累计 98 处、五十一组证据；结构与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`7a7ae622` 将 `outer` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
 
 ### 2026-09-04 第六十三波补充证据
 
 - `8.06`：`1f1ffec3`/`f74043b9` 将 LayerNorm forward 接入共享 launcher，保留 `normalizedShape`、`eps`、三输出与 descriptor cleanup；静态合同 51 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`aae2f5bc`/`79269b83` 将 cuDNN conv3d 分组通道 shape 边界改为 `USER_CHECKop`，累计 99 处、五十二组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`aae2f5bc`/`79269b83` 将 cuDNN conv3d 分组通道 shape 边界改为 `USER_CHECKop`，累计 99 处、五十二组证据；结构与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`9a9011ce` 将 `isin` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
 
 ### 2026-09-04 第六十四波补充证据
 
 - `8.06`：`ca40d0d6`/`2e92d162` 将 LayerNorm backward 接入共享 launcher，保留 `normalizedShape`、`outMask`、三输出 query 与 descriptor cleanup；静态合同 52 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`935bb1a9`/`bae4711f` 将 cuDNN RNN backward-x LSTM mode 边界改为 `USER_CHECKop`，累计 100 处、五十三组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`935bb1a9`/`bae4711f` 将 cuDNN RNN backward-x LSTM mode 边界改为 `USER_CHECKop`，累计 100 处、五十三组证据；结构与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`b5dc26d7` 将 `tensordot` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
 
 ### 2026-09-04 第六十五波补充证据
 
 - `8.06`：`3f0b8c7d`/`3c0f2115` 将 GroupNorm forward 接入共享 launcher，保留 group/eps、三输出 query 与同步策略；静态合同 53 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`b3826005`/`ae78d185` 将 cuDNN RNN backward-x `proj_size==0` 边界改为 `USER_CHECKop`，累计 101 处、五十四组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`b3826005`/`ae78d185` 将 cuDNN RNN backward-x `proj_size==0` 边界改为 `USER_CHECKop`，累计 101 处、五十四组证据；结构与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`e0bc5294` 将 `repeat_interleave` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
 
 ### 2026-09-04 第六十六波补充证据
 
 - `8.06`：`016fc62d`/`eb1e89cd` 将 GroupNorm backward 接入共享 launcher，保留 output-mask、group 属性、三输出 query 与 cleanup；静态合同 54 passed，本机无 CANN/NPU，仍待实机。
 - `8.06`：`fc849c10` 将 MaskedSelect 接入共享 launcher，保留双输入 mask query 与同步策略；静态合同 57 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`35664df5`/`d3e786e2` 将 cuDNN RNN backward-x 非 LSTM mode 边界改为 `USER_CHECKop`，累计 102 处、五十五组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`35664df5`/`d3e786e2` 将 cuDNN RNN backward-x 非 LSTM mode 边界改为 `USER_CHECKop`，累计 102 处、五十五组证据；结构与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：本波复核剩余候选仅有复杂 `vmap` 闭包，未强行拆分，保持无新增代码提交。
 
 ### 2026-09-04 第六十七波补充证据
 
 - `8.06`：`c4f0447c`/`fca8451c` 将 Avgpool backward 接入共享 launcher，保留 `countIncludePad/divisorOverride`、descriptor cleanup 与同步策略；静态合同 55 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`76dc9dc3`/`6baf9dd5` 将 cuDNN RNN backward-x 第二处 `proj_size==0` 边界改为 `USER_CHECKop`，累计 103 处、五十六组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`76dc9dc3`/`6baf9dd5` 将 cuDNN RNN backward-x 第二处 `proj_size==0` 边界改为 `USER_CHECKop`，累计 103 处、五十六组证据；结构与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：复核剩余 API 后仅 `vmap` 为复杂闭包，本波无安全小切片提交。
 
 ### 2026-09-04 第六十八波补充证据
 
 - `8.06`：`a9d73aae`/`efb1b758` 将 Maxpool backward 接入共享 launcher，保留 pool descriptors、`poolCeil`、输出处理、cleanup 与同步策略；静态合同 56 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`408b4832`/`1de5551e` 将 cuDNN conv 输入 rank 边界改为 `USER_CHECKop`，累计 104 处、五十七组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`408b4832`/`1de5551e` 将 cuDNN conv 输入 rank 边界改为 `USER_CHECKop`，累计 104 处、五十七组证据；结构与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`9bd71961` 新增 `agent/design/vmap-owner-plan.md`，记录复杂 vmap 的 owner、Runtime 依赖、迁移边界与后续 CPU 验收节点；本波仅设计前置，未宣称实现完成。
 
 ### 2026-09-04 第六十九波补充证据
 
 - `8.06`：`fc849c10`/`77e1d30d` 将 MaskedSelect 接入共享 launcher，保留双输入 mask query 与同步策略；静态合同 57 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`ceabd84c`/`3096b2f0` 将 cuDNN conv 权重 rank 边界改为 `USER_CHECKop`，累计 105 处、五十八组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`ceabd84c`/`3096b2f0` 将 cuDNN conv 权重 rank 边界改为 `USER_CHECKop`，累计 105 处、五十八组证据；结构与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`30cd207f`、`27866dc2` 细化 `vmap` owner 的可验证契约与验收节点；仅设计前置，未修改 runtime，未宣称实现完成。
 
 ### 2026-09-04 第七十波补充证据
 
 - `8.06`：`18fca063`/`029795fa` 将 Index 接入共享 launcher，保留 index query 与同步策略，SliceV2 未改；静态合同 58 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`44a80c8a`/`3259631f` 将 cuDNN conv 分组通道 shape 边界改为 `USER_CHECKop`，累计 106 处、五十九组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`44a80c8a`/`3259631f` 将 cuDNN conv 分组通道 shape 边界改为 `USER_CHECKop`，累计 106 处、五十九组证据；结构与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`ed9b2010` 补充 `vmap` owner 提取协议、AST 完成门禁与 `VmapContext` 约束；仅设计前置，未修改 runtime。
 
 ### 2026-09-04 第七十一波补充证据
 
 - `8.06`：`2e27d71b`/`e2b6e3f0` 将 SliceV2 接入共享 launcher，保留 begins/ends/steps/axes descriptors 与同步策略，Index/其他 owner 未改；静态合同 59 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`6727dd57`/`eb4db9b4` 将 cuDNN conv backward-x 权重 rank 边界改为 `USER_CHECKop`，累计 107 处、六十组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`6727dd57`/`eb4db9b4` 将 cuDNN conv backward-x 权重 rank 边界改为 `USER_CHECKop`，累计 107 处、六十组证据；结构与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`abaa242a`、`afa756bc` 连续补充 vmap 设计契约与 unsupported AST 静态门禁；仅设计/门禁前置，未修改 runtime，未宣称实现完成。
 
 ### 2026-09-04 第七十二波补充证据
 
 - `8.06`：`ff26ab02`/`7457382d` 将 StridedSliceAssignV2 接入共享 launcher，保留 gradient memset 分支与 slice descriptor handling；静态合同 60 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`92a66390`/`5e720411` 将 cuDNN conv backward-x dy rank 边界改为 `USER_CHECKop`，累计 108 处、六十一组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`92a66390`/`5e720411` 将 cuDNN conv backward-x dy rank 边界改为 `USER_CHECKop`，累计 108 处、六十一组证据；结构与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`41236df4`、`5a8b0115` 补充 vmap context 夹具契约、提取顺序、绑定与回滚步骤；仅设计前置，未修改 runtime。
 
 ### 2026-09-04 第七十三波补充证据
 
 - `8.06`：`73b71c7d`/`b124efbf` 将 InplaceMaskedScatter 接入共享 launcher，保留 tracked base-to-output memcpy 依赖与同步策略；静态合同 61 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`1e3bab6e`/`f112976b` 将 cuDNN conv backward-w 输入 rank 边界改为 `USER_CHECKop`，累计 109 处、六十二组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`1e3bab6e`/`f112976b` 将 cuDNN conv backward-w 输入 rank 边界改为 `USER_CHECKop`，累计 109 处、六十二组证据；结构与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`05e9f37f` 补充 vmap 评审证据清单，覆盖 AST、closure/global、fidelity、聚焦节点与 skip 归因；仅设计前置，未修改 runtime。
 
 ### 2026-09-04 第七十四波补充证据
 
 - `8.06`：`4eb360d7`/`2dc68144` 将 IndexPutImpl 接入共享 launcher，保留 index tensor-list handling 与同步策略，IndexPutImplAccumulate 未改；静态合同 62 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`5596563f`/`2702f7c6` 将 cuDNN conv backward-w dy rank 边界改为 `USER_CHECKop`，累计 110 处、六十三组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`5596563f`/`2702f7c6` 将 cuDNN conv backward-w dy rank 边界改为 `USER_CHECKop`，累计 110 处、六十三组证据；结构与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`9ee118a0` 补充 vmap unsupported 行为矩阵，覆盖 extent/nested dim/非 bool/depth callback/out_dims；仅设计前置，未修改 runtime。
 
 ### 2026-09-04 第七十五波补充证据
 
 - `8.06`：`f353076a`/`1cc7aa53` 将 IndexPutImpl accumulate 接入共享 launcher，保留 tracked output memset 与 index tensor-list dependency；静态合同 63 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`241ab528`/`7f7c9bbc` 将 cuDNN RNN 推理阶段输入 rank 边界改为 `USER_CHECKop`，累计 111 处、六十四组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`241ab528`/`7f7c9bbc` 将 cuDNN RNN 推理阶段输入 rank 边界改为 `USER_CHECKop`，累计 111 处、六十四组证据；结构与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`ba76983c` 明确 vmap 仅做组织重构，不新增 kernel/设备传输/优化，并定义 CPU/CUDA/ACL 分层验收与 skip 归因；仅设计前置。
 
 ### 2026-09-04 第七十六波补充证据
 
 - `8.06`：`3dd89256`/`90d73767` 将 AdamWList 各项更新接入共享 launcher，保留 fused D2D copy checks 与唯一同步点；静态合同 64 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`4858b0a2`/`1a9acf32` 将 cuDNN RNN 输入通道 shape 边界改为 `USER_CHECKop`，累计 112 处、六十五组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`4858b0a2`/`1a9acf32` 将 cuDNN RNN 输入通道 shape 边界改为 `USER_CHECKop`，累计 112 处、六十五组证据；结构与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`f6d3a435` 明确 vmap 稳定签名、内部 callback 注入和 unsupported kwargs 拒绝；仅设计前置，未修改 runtime。
 
 ### 2026-09-04 第七十七波补充证据
@@ -884,13 +890,13 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 ### 2026-09-04 第七十九波补充证据
 
 - `8.06`：`e1470830`/`4e1f6ba0` 将 IncrementalFlashAttention 接入共享 launcher，保留 block-table、actual-sequence、cache-view cleanup 与同步策略，KVCacheMemcpy 未迁；静态合同 67 passed，本机无 CANN/NPU，仍待实机。
-- `2.19`：`7a24ca0b`/`7c1565d2` 将 cuFFT jit_prepare unsupported dtype 边界改为 `USER_CHECK`，累计 113 处、六十六组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`7a24ca0b`/`7c1565d2` 将 cuFFT jit_prepare unsupported dtype 边界改为 `USER_CHECK`，累计 113 处、六十六组证据；结构与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`e8260779` 明确 vmap 版本兼容、kwargs 策略与退出标准；仅设计前置，未修改 runtime。
 
 ### 2026-09-04 第八十波补充证据
 
 - `8.06`：本波复核确认标准 workspace/query/execute/sync owner 已全部迁移；剩余 KVCacheMemcpy 为逐 token `aclrtMemcpyAsync` 专用路径，不纳入通用 launcher。
-- `2.19`：`040e44a0`/`d251d738` 将 CUBLAS matmul 输入 rank 边界改为 `USER_CHECK`，累计 114 处、六十七组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `2.19`：`040e44a0`/`d251d738` 将 CUBLAS matmul 输入 rank 边界改为 `USER_CHECK`，累计 114 处、六十七组证据；结构与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`7d8fdd37` 补充 vmap 无可变全局、幂等 install、失败回滚与资源释放门禁；仅设计/门禁前置。
 
 ### 2026-09-04 第八十一波补充证据
