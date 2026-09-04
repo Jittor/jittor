@@ -395,6 +395,7 @@
 | 7.16 | compat/ 内 129 个 `except: pass` 与 258 个宽泛 except 限定异常类型并至少 debug 打点 | 7.03 | [兼容](codebase-audit/03-compat-shim.md)§代码结构与测试 | `grep "except: pass"` 于 compat 为 0 |
 | 7.17 | `runtime.enable()` 只把 shim 的 site 目录加进 sys.path 不插项目目录（`runtime.py:95-97`）；`_ensure_dir` 的 PermissionError 改明确诊断（`preflight.py:142`） | 7.04 | [兼容](codebase-audit/03-compat-shim.md)§vLLM / shim | 只读 HOME 下 import 给出可操作错误 |
 | 7.18 | 布局收尾：`python/jittor/compat/` 搬到顶层 `compat/` 成独立 distribution `jittor-torch`（含 torch/shim/fsdp2/triton；vllm 适配器按既定方向分到自己的仓库）；`compat/shim/cpp_extension/src` 的打包随之迁移 | 7.12、0.19 | [布局](target-layout.md)§3；vLLM 适配器边界（路线图） | `pip install jittor` 不带 compat；`jittor-torch` 单独可装 |
+| 7.21 | **`compat/vllm` 只经公开入口使用 jittor**。`layers.py:19` 直接 `from jittor.nn.backends import hooks`，伸进 `nn` 的私有 backend 注册表，`test_vllm_compat_structure.py::test_it_imports_jittor_only_through_its_public_entry_points` 因此为红。该规则的意思是这个包必须能搬出仓库——仓库外的插件导不到那个模块。按 `serving_ops` 自己的范式修：`nn` 实现读 hook，调用者用公开入口 | 7.14 | 2026-09-04 由清理 `tests/structure` 既存失败的执行者派生 | `compat/vllm` 内对 jittor 的 import 只出现在允许清单里；融合快路径的「有没有」与「调用」分成两个公开入口，使非融合路径不必为问一句而先付一次 cos/sin cache 的 cast |
 
 ## 11. 阶段 8 · 后端库与分布式（结构性）
 
@@ -474,7 +475,8 @@
 | 10.20 | 给测试提供受支持的内省 API，替代 283 处 `jt.flags.*`、137 处 `compile_extern`/`jt.compiler.*`、127 个文件触碰下划线名 | 2.13、4.05 | [架构](codebase-audit/07-architecture.md)§公共 API | 内部重构不再牵动大面积测试 |
 | 10.21 | import 方向做成 lint 规则（import-linter 或 ruff 插件）；mypy 覆盖从 7 个文件扩到核心包（`pyproject.toml:70-91`） | 4.07、7.06 | [架构](codebase-audit/07-architecture.md)§代码规模 | 三个真环在 lint 里报错 |
 | 10.22 | 多机门禁：两节点 smoke（需两台带 GPU 的 runner）跑 DDP 与 FSDP 各一个小模型并对拍单机结果；无硬件时单机多进程模拟 `world_size > 本机卡数` 的 rendezvous、超时与失败传播路径 | 8.15、8.16、8.17 | [测试](codebase-audit/05-tests.md)§门禁范围 | nightly 有多机条目；掉线用例在超时内结束 |
-| 10.23 | 布局收尾：`tests/` 内部镜像源码目录（`tests/core` ↔ `src/core`，`tests/codegen` ↔ `src/codegen`，`tests/backends/<name>` ↔ `backends/<name>`，`tests/compat` 随 `compat/` 分出去）；`tests/system/` 删除 | 0.19、4.15、7.18 | [布局](target-layout.md)§2 | 每个源码目录有同名测试目录 |
+| 10.23 | 布局收尾：`tests/` 内部镜像源码目录（`tests/core` ↔ `src/core`，`tests/codegen` ↔ `src/codegen`，`tests/backends/<name>` ↔ `backends/<name>`，`tests/compat` 随 `compat/` 分出去）；`tests/system/` 删除 | 0.19、4.15、7.18 | [布局](target-layout.md)§2 |
+| 10.24 | **fixture 契约按真实来源解析**（0.19 的精神，清 `tests/structure` 既存失败时派生）。`test_pytest_contract.py::test_module_level_helpers_are_not_named_like_tests` 把函数参数与一份**只含 pytest 内置 fixture 的冻结清单**比较，于是每个使用自己声明的 fixture 的测试都被判成「命名成 test 的 helper」——7 处 offender 全部合法（`test_cache_atomic_publish` 3、`test_notebooks` 3、`test_acl_data_schema_contract` 1），这条门禁因此长期为红。判据改为按真实来源解析：pytest 内置、本模块声明的 fixture、沿目录树向上每层 `conftest.py` 声明的 fixture，以及该函数自己的 `parametrize` argname | 0.19 | 2026-09-04 由清理 `tests/structure` 既存失败的执行者派生 | offender 归零；且造反例——一个参数无人提供的 `test_*` helper——仍被报红 | 每个源码目录有同名测试目录 |
 
 ## 14. 阶段 11 · 清理与删除（相关重构合并之后）
 

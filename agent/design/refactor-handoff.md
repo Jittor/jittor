@@ -1427,6 +1427,12 @@ fixture 的冻结清单比较，于是 7 处使用自有 fixture 的合法测试
 不要靠放宽断言了事**——0.19 的要求是「从精确清单改成规则」，改成规则才算修；`10.24` 是一个示范：
 它同时验证了修正后的判据仍能抓住原本要抓的东西（临时反例仍被报出），而不是把门禁改松。
 
+**本波收尾实测：`2 failed, 510 passed, 2 skipped in 327s`。** 剩下的两条就是下表里归属别人的那两条
+（`test_cleanup_structure` 的 `_set_use_cuda` 双份、`test_torch_compat_structure` 的 `sys.modules`
+白名单缺 2 项）。**清单归零之前，判据仍然是「你的失败是否在下表之外」。** 顺带一条：
+`test_state_leak_helper::..._rejects_an_intentional_retained_allocation` 曾在整目录跑时红一次、
+单跑连续两次绿，属抖动，不在下表里也不必追。
+
 上表其余各行的落点（按提交）：`6d7df2dd`（7.16）收窄 `compat/transaction.py` 的宽泛 handler；
 `71adc134`（7.21）把 vllm 的融合 QK 快路径改走 `jt.nn` 公开入口；`f094dcd3`（0.19）与
 `b33e3b3d`（0.19）把 torch shim 三条、runtime composition 两条精确清单改成规则，其中
@@ -1449,12 +1455,21 @@ JITTOR_TEST_DEVICES=cpu nvcc_path="" pytest tests/core -q      # 5:54
 用例本身是通过的——abort 发生在**进程退出期**，单选时 pytest 已经打完汇总，容易读成"这条失败"。
 含 `4b5eaaa9` 的树上该文件 11 passed / 11 skipped、连跑 6 次零 abort。
 
-17 条里 **10 条是同一个主题：存活 Var 与内存记账**——`test_function` 的
+**两个配置的数字不一样，引用时要带配置**。上面那行是 CPU-only（`nvcc_path=""`）；同一棵树在
+有 CUDA 的配置下是 `579 passed / 20 failed / 67 skipped`（见 2.19 的记录）。差的 39 个 skip 就是
+CUDA 门控的用例，它们在 CPU-only 下不跑——**所以「17 条」和「20 条」不是矛盾，是两个口径**。
+
+17 条里 **10 条同属「存活 Var 与内存记账」一簇**——`test_function` 的
 `test_zmem_leak{,2,3}` ×2 个类共 6 条、`test_misc_issue::test_argmax_memleak`、
 `test_core::test_number_of_hold_vars`、`test_core::test_var_holder`、`test_core::test_fuse_memopt`。
 pytest 自己的「runtime state left behind」报告也在指同一处（跑完
-`test_complex64_linalg` 后 `number_of_lived_vars 0 -> 1`）。**当成一簇去查，不要一条一条修**：
-它们的前置嫌疑是 2.02／2.03／2.10 这批刚落地的节点与 liveness 改动。
+`test_complex64_linalg` 后 `number_of_lived_vars 0 -> 1`）。
+
+**这一簇里的 `test_zmem_leak{,2,3}` 已经有归因，不要当谜题重查**：2.19 的执行者查明它们报的
+`lived_vars 2 != 0` 中泄漏的那 2 个 var，正是那次失败释放留下来的——也就是说这是底下那个
+**backward liveness 多释放**的正确落点，而不是新问题。那个账不平属 2.10 的范围（2.10 之前它是
+`int` 下溢到 -1、节点永不释放、静默泄漏），已单列在本文档的已知问题表里。**先修账不平，再回来看
+这一簇还剩几条**；剩下几条与 `hold_vars`／`fuse_memopt` 相关的再单独归因。
 
 其余 7 条各自独立：`test_core::test_node_order`、`test_grad::test_no_grad`（`assert 5 == 2`）、
 `test_grad_missing::test_every_missing_gradient_is_reported`、
