@@ -634,3 +634,9 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `8.06`：`744f6c6d` 将 Swish backward 接入共享 launcher，保留同步策略，SwiGlu 未迁；静态合同 49 passed，本机无 CANN/NPU，仍待实机。
 - `2.19`：`6afd44df`/`b20ea9e2` 将 cuDNN RNN `proj_size==0` 用户边界改为 `USER_CHECKop`，累计 97 处、五十组证据；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向。
 - `7.03`：本波复核剩余 API 后仅 `vmap` 仍是复杂闭包，已有原生 owner 的 API 不重复包装；未产生安全代码提交。
+
+### 2026-09-04 第六十二波补充证据
+
+- `8.06`：`8e772a5b`/`012dddf4` 将 SwiGlu 接入共享 launcher，保留同步策略；静态合同 50 passed，本机无 CANN/NPU，仍待实机。
+- `2.19`：`57c6cd92`/`53895c66` 将 cuDNN RNN 第二处 `proj_size==0` 边界改为 `USER_CHECKop`，累计 98 处、五十一组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `7.03`：`7a7ae622` 将 `outer` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
