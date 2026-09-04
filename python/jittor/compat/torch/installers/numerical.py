@@ -444,6 +444,26 @@ register_fidelity(
 )
 
 
+_NATIVE_TENSORDOT = jt.tensordot
+_TENSORDOT_FIDELITY_DETAIL = (
+    "re-exports Jittor's native generalized contraction for supported tensors "
+    "but omits device, layout, and dtype keyword semantics"
+)
+
+
+def tensordot(a, b, dims=2):
+    """Compute a generalized tensor contraction via the native owner."""
+    return _NATIVE_TENSORDOT(a, b, dims=dims)
+
+
+register_fidelity(
+    "torch.tensordot",
+    tensordot,
+    Fidelity.APPROXIMATE,
+    _TENSORDOT_FIDELITY_DETAIL,
+)
+
+
 _NAN_TO_NUM_INPLACE_FIDELITY_DETAIL = (
     "matches Torch in-place NaN/Inf replacement and return identity for supported "
     "real tensors but omits device, layout, dtype, and narrow custom-bound semantics"
@@ -1624,21 +1644,7 @@ def install(ctx):
         return (a2.reshape(aex) * b2.reshape(bex)).reshape(fin)
     _alias("kron", _kron); Var.kron = _kron
     _alias("logcumsumexp", logcumsumexp); Var.logcumsumexp = _logcumsumexp_impl
-    def _tensordot(a, b, dims=2):
-        if isinstance(dims, int):
-            adims, bdims = list(range(a.ndim - dims, a.ndim)), list(range(dims))
-        else:
-            adims, bdims = list(dims[0]), list(dims[1])
-        a_free = [i for i in range(a.ndim) if i not in adims]
-        b_free = [i for i in range(b.ndim) if i not in bdims]
-        import numpy as _np_td
-        af = int(_np_td.prod([int(a.shape[i]) for i in a_free])) if a_free else 1
-        cs = int(_np_td.prod([int(a.shape[i]) for i in adims])) if adims else 1
-        bf = int(_np_td.prod([int(b.shape[i]) for i in b_free])) if b_free else 1
-        out = jt.matmul(a.permute(a_free + adims).reshape((af, cs)), b.permute(bdims + b_free).reshape((cs, bf)))
-        fin = [int(a.shape[i]) for i in a_free] + [int(b.shape[i]) for i in b_free]
-        return out.reshape(fin) if fin else out.reshape((1,))   # full contraction -> scalar (jittor (1,))
-    _alias("tensordot", _tensordot)
+    g.tensordot = tensordot
     _alias("pdist", pdist); Var.pdist = _pdist_impl
     # shape ops: unflatten / swapaxes / swapdims / ravel + numpy-style stacking helpers.
     _alias("unflatten", unflatten); Var.unflatten = _unflatten_impl

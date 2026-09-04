@@ -1425,6 +1425,24 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIn("native", record.detail)
         self.assertIn("device", record.detail)
 
+    def test_tensordot_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.tensordot))
+        self.assertIs(torch.tensordot, numerical.tensordot)
+        self.assertEqual(numerical.tensordot.__module__, numerical.__name__)
+        self.assertEqual(numerical.tensordot.__name__, "tensordot")
+
+    def test_tensordot_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.tensordot")
+        self.assertIs(record.implementation, numerical.tensordot)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("native", record.detail)
+        self.assertIn("device", record.detail)
+
 
 if __name__ == "__main__":
     unittest.main()
