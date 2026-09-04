@@ -27,9 +27,9 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；本波审计基线 `4e1f6ba0`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 审计基线 920 个 |
-| 提交里出现过的任务号 | 327 个 |
+| 分支 | `2.0-refactor`；本波审计基线 `d251d738`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 审计基线 924 个 |
+| 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **196** / 进行中 **0** / 待领 **74** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
 
@@ -723,7 +723,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `bindings` | 2.19 将 cuFFT jit_prepare unsupported dtype 边界改为 `USER_CHECK`，累计 113 处、六十六组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
 | `compat` | 明确 vmap 版本兼容、kwargs 策略与退出标准；仅设计前置，未修改 runtime |
 
-按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第八十波继续优先可独立验证的
+第八十波新增 2 个严格保持待领的前置；device 复核确认 KVCacheMemcpy 不适合通用 launcher：
+
+| 分区 | 第八十波结果 |
+| --- | --- |
+| `device` | 8.06 复核确认标准 workspace/query/execute/sync owner 已迁移完毕；剩余 KVCacheMemcpy 为逐 token 专用 memcpy 路径，本波不改代码 |
+| `bindings` | 2.19 将 CUBLAS matmul 输入 rank 边界改为 `USER_CHECK`，累计 114 处、六十七组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `compat` | 补充 vmap 无可变全局、幂等 install、失败回滚与资源释放门禁；仅设计/门禁前置 |
+
+按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第八十一波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
 - `device`：若续做 8.06，只迁下一个最终 owner 明确的 family，并复用 5be5fa15 的 launcher 合同；无 NPU

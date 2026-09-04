@@ -754,6 +754,12 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `2.19`：`7a24ca0b`/`7c1565d2` 将 cuFFT jit_prepare unsupported dtype 边界改为 `USER_CHECK`，累计 113 处、六十六组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
 - `7.03`：`e8260779` 明确 vmap 版本兼容、kwargs 策略与退出标准；仅设计前置，未修改 runtime。
 
+### 2026-09-04 第八十波补充证据
+
+- `8.06`：本波复核确认标准 workspace/query/execute/sync owner 已全部迁移；剩余 KVCacheMemcpy 为逐 token `aclrtMemcpyAsync` 专用路径，不纳入通用 launcher。
+- `2.19`：`040e44a0`/`d251d738` 将 CUBLAS matmul 输入 rank 边界改为 `USER_CHECK`，累计 114 处、六十七组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `7.03`：`7d8fdd37` 补充 vmap 无可变全局、幂等 install、失败回滚与资源释放门禁；仅设计/门禁前置。
+
 ### 2026-09-04 第七十九波补充证据
 
 - `8.06`：`e1470830` 将 IncrementalFlashAttention 接入共享 launcher，保留 block-table、actual-sequence、cache-view cleanup 与同步策略；KVCacheMemcpy 未迁；静态合同 67 passed，本机无 CANN/NPU，仍待实机。
