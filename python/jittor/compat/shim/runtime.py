@@ -21,6 +21,7 @@ from .preflight import (
 )
 from jittor.compat._aliases import torch_namespace_claimable, torch_namespace_owned
 from ..diagnostics import EXPECTED, swallowed
+from ..transaction import ActivationTransaction
 
 
 class ActivationStatus(NamedTuple):
@@ -126,9 +127,17 @@ def _activate_once(
         jt = jittor_root
         configure_torch_math_flags(jt)
         from jittor.compat import torch as torch_compat
-
-        torch_compat.install(jt, strict=strict_bootstrap)
-        sys.modules["torch"] = jt
+        transaction = ActivationTransaction("shim.composition")
+        transaction.acquire()
+        try:
+            torch_compat.install(jt, strict=strict_bootstrap)
+            transaction.publish_module(sys.modules, "torch", jt)
+            transaction.commit()
+        except EXPECTED:
+            transaction.rollback()
+            raise
+        finally:
+            transaction.release()
         return {
             "torch": jt,
             "runtime_root": getattr(_preflight_result, "runtime_root", ""),
