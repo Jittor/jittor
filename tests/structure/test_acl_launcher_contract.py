@@ -530,6 +530,16 @@ def test_index_uses_launcher_and_slice_remains_present():
     assert "void SliceV2OpRunner::executeOp" in source
 
 
+def test_slice_v2_uses_launcher_and_keeps_four_descriptors():
+    source = (ROOT / "python/jittor/extern/acl/aclops/getitem_op_acl.cc").read_text()
+    slice_source = source[source.index("void SliceV2OpRunner::executeOp"):source.index("IndexPutImplAccumulateOpRunner::IndexPutImplAccumulateOpRunner")]
+    for name in ("begins", "ends", "steps", "axes"):
+        assert name in slice_source
+    assert "launch(ret, aclnnSliceV2, true);" in slice_source
+    assert "mallocWorkSpace(workspaceSize)" not in slice_source
+    assert "syncRun();" not in slice_source
+
+
 def test_rope_forward_uses_launcher_and_backward_remains_present():
     source = ROPE_SOURCE.read_text()
     forward = source[source.index("void RotaryPositionEmbeddingOpRunner::executeOp"):source.index("RotaryPositionEmbeddingGradOpRunner::RotaryPositionEmbeddingGradOpRunner")]

@@ -70,17 +70,7 @@ namespace jittor
         auto axes = aclCreateIntArray(attr->axes.data(), attr->axes.size());
         ret = aclnnSliceV2GetWorkspaceSize(inputTensors[0], begins, ends, axes, steps, outputTensors[0], &workspaceSize, &executor);
 
-        checkRet(ret);
-
-        if (workspaceSize > 0)
-        {
-            mallocWorkSpace(workspaceSize);
-        }
-
-        ret = aclnnSliceV2(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnSliceV2 failed. ERROR: %d\n", name.c_str(), ret); return);
-
-        syncRun();
+        launch(ret, aclnnSliceV2, true);
 
         return;
     }

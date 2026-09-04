@@ -552,6 +552,9 @@ two-input mask query and synchronous execution.
 The ACL Index owner uses the shared launcher while retaining its index query
 and synchronous execution. SliceV2 remains outside this slice.
 
+The ACL SliceV2 owner uses the shared launcher while retaining begins, ends,
+steps, and axes descriptor handling with synchronous execution.
+
 The ACL Dropout backward owner uses the shared launcher while retaining its
 scale query and synchronous execution policy.
 
