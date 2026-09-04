@@ -403,6 +403,26 @@ register_fidelity(
 )
 
 
+_NATIVE_OUTER = jt.outer
+_OUTER_FIDELITY_DETAIL = (
+    "re-exports Jittor's native outer-product implementation for supported real "
+    "tensors but omits device, layout, and dtype keyword semantics"
+)
+
+
+def outer(a, b):
+    """Compute the outer product using the captured native owner."""
+    return _NATIVE_OUTER(a, b)
+
+
+register_fidelity(
+    "torch.outer",
+    outer,
+    Fidelity.APPROXIMATE,
+    _OUTER_FIDELITY_DETAIL,
+)
+
+
 _NAN_TO_NUM_INPLACE_FIDELITY_DETAIL = (
     "matches Torch in-place NaN/Inf replacement and return identity for supported "
     "real tensors but omits device, layout, dtype, and narrow custom-bound semantics"
@@ -1563,7 +1583,7 @@ def install(ctx):
         wrapped._jittor_vmap_specs = specs
         return wrapped
     _alias("vmap", _vmap)
-    _alias("outer", lambda a, b: jt.matmul(a.reshape(-1, 1), b.reshape(1, -1)))
+    g.outer = outer
     _alias("isin", _isin)
     # Pairwise distances and sorted-boundary insertion indices.
     _alias("cdist", cdist)
