@@ -789,3 +789,9 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `2.19`：`54e8d545`/`4229cba5` 将 CUDNN 测试入口返回码内部断言纳入分类门禁；1 passed，不改变运行语义或用户边界累计。
 - `7.03`：`40aed528` 补充 vmap fidelity registry 静态门禁，校验 implementation identity、approximate level、context/backend detail 与重复 install；仅设计/门禁前置。
 - `8.06`：只读确认标准 ACL launcher owner 已穷尽，KVCacheMemcpy 等专用路径不纳入通用 launcher；本波无代码提交。
+
+### 2026-09-04 第八十六波补充证据
+
+- `2.19`：`d269a52a`/`8595e479` 收束后端内部断言分类说明与门禁，覆盖 CUDNN/CUBLAS/CUB 状态路径；不改变运行语义或用户边界累计。
+- `7.03`：`d97d5620` 补充 vmap 发布检查清单，覆盖 clean import、重复 install identity、board/handoff 链接、回滚与无缓存产物；仅设计/门禁前置。
+- `8.06`：只读确认标准 ACL launcher owner 已穷尽，KVCacheMemcpy 等专用路径不纳入通用 launcher，本波无代码提交。
