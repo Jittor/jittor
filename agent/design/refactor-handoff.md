@@ -1036,6 +1036,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | 0.20/0.22/9.01/9.07/9.19 分别受跨目录布局、CUDA 多卡、冷启动、2.22 前置和整体打包布局阻塞。 |
 | `gates` | 本波无可在 CPU/静态环境完整关闭的新卡；0.15 仍约 390 s，ACL/HCCL 仍待 910B3 实机。 |
 
+### 2026-09-04 第一百一十九波
+
+| 分区 | 结果 |
+| --- | --- |
+| `bindings` | 8.12/10.17 整卡仍不能关闭：cuDNN cache key 仍用全局 `JK`，异步诊断仍缺 runtime ring/CUDA 行号路径；本波无 bindings 代码。 |
+| `compat` | `bb5f72f1` 将 tensor installer `corrcoef` 提升为模块级 numerical owner，登记 approximate fidelity；CPU identity/NumPy 对拍 2 passed。7.03 聚合仍待领。 |
+| `device` | `80e0f1b4` 增加 10.17 异步错误诊断契约，规定 per-thread bounded launch ring、allocation-free/not-found 行为及 CUDA 验收命令；静态合同 1 passed，未改 runtime。 |
+| `gates` | 本波没有可完整关闭的新卡；0.15 仍约 390 s，HCCL/ACL 仍待实机。 |
+
 ### 2026-09-04 第一百一十二波
 
 | 分区 | 结果 |
