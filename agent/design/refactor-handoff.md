@@ -1230,6 +1230,14 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | 8.06 的 `AclOpFunctions`、attribute data channel、descriptor cache 需协同迁移并依赖 910B3/CANN；已有结构合同足够，未重复造 facade。 |
 | `gates` | 本波无新代码提交、无新增进行中任务；三项保持 `待领`，硬件限制和下一步边界已记录。 |
 
+### 2026-09-04 第一百五十五波
+
+| 分区 | 结果 |
+| --- | --- |
+| `gates` | 新增 `agent/results/2026-09-04-cuda-availability-verification.md`：只读核验 `nvidia-smi` 与分区 `probe.json` 均确认开发机有 8 张 RTX 4090、CUDA 12.2.140、sm_89。此前“本机无 CUDA”只能解释为 CPU-only 进程配置，不再作为跳过 CUDA 实机验证的理由。 |
+| `bindings` | 2.19 的历史静态证据没有被自动升级为运行时证据；后续应在独立缓存和 GPU 分区重新跑负向用例，再决定是否关闭聚合任务。 |
+| `device` | ACL/ROCm/Corex/NPU 与多机限制不变；CUDA 可用性报告不代表这些后端可用。 |
+
 ### 2026-09-04 第一百四十波
 
 | 分区 | 结果 |
