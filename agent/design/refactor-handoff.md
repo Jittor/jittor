@@ -1405,6 +1405,36 @@ fixture 的冻结清单比较，于是 7 处使用自有 fixture 的合法测试
 不要靠放宽断言了事**——0.19 的要求是「从精确清单改成规则」，改成规则才算修；`10.24` 是一个示范：
 它同时验证了修正后的判据仍能抓住原本要抓的东西（临时反例仍被报出），而不是把门禁改松。
 
+### 3.23 逐元素带宽：口径已建立，前提已推翻，验收卡在兼容层（`c0f3420a`）
+
+任务描述里的「UNet 61 种融合 kernel 合计 4.47 ms、约 475 GB/s（峰值一半）」在今天的树上
+**不成立**。`large_diffusers_unet2d` 一步前向加反向（RTX 4090、TF32、独占卡），nsys 与
+Jittor profiler 两法互校：
+
+| 角色 | nsys | profiler | | PyTorch 2.12.1 |
+| --- | ---: | ---: | --- | ---: |
+| `library:cudnn` | 11.65 ms | 11.86 ms | conv/gemm | 18.17 ms |
+| `handwritten:code` | 4.13 ms | 3.58 ms | | |
+| **`elementwise`** | **3.37 ms** | **3.29 ms** | elementwise + other | **3.04 ms** |
+| `library:cublas` | 3.05 ms | 2.10 ms | | |
+| `reduce` | 0.57 ms | 0.59 ms | reduce/norm | 1.20 ms |
+| `indexing` | 0.25 ms | 0.62 ms | | |
+| 合计 | 23.02 ms | 22.03 ms | | 22.41 ms |
+
+实测可达 copy 带宽 916.7 GB/s（标称 1008 的 91%）。逐元素类跑到 1086 GB/s、屋顶线
+ratio 0.84——**整体已经贴着屋顶**，超出部分由 72 MB L2 承担。所以这一类要更快只能
+**少搬字节**（更好的融合、不物化中间量），不是把 kernel 写快。49 种融合 kernel 的
+正向超出合计只有约 0.59 ms，三个来源没有一个在代码生成里：float64 标量除法 0.55 ms
+（兼容层 `_make_truediv` 故意加宽）、裸 `transpose` 0.10 ms、约 60 次几乎不搬数据的
+小 kernel 0.23 ms（纯 launch 延迟）。
+
+**验收「≤ PyTorch 的 3.07 ms」未达到（3.37 / 3.29 对 3.04），3.23 保持待领。** 把兼容层那条
+加宽临时关掉实测可到 2.73 ms，即这条验收的钥匙在兼容层分区手里，看板上已单列。
+顺带两条：shim 的 `Tensor.backward()` 在这张 CUDA 图上直接 abort（速度门禁的 CUDA UNet
+一项现在跑不到时间），以及归约类今天已比 PyTorch 快一倍以上、3.22 的验收口径需复核。
+量法与四个脚本在 `agent/skills/cuda-elementwise-bandwidth-roofline/`；**先读它的第 3 节**
+（profiler 的 rerun 因子按 `-2` 推会让每一个每步数字正好差两倍，而报告内部自洽）。
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
