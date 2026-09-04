@@ -28,11 +28,25 @@ from ..types import (
     _var_has_cpu_residency_hint, _var_is_cpu_resident, device, dtype,
     _cuda_index_of, _move_to_cuda_index,
 )
+from ..fidelity import Fidelity, register_fidelity
 
 import collections as _collections
 from ...diagnostics import EXPECTED, swallowed
 from ... import fsdp_hooks as _fsdp_hooks
 from ... import collectives as _collectives
+
+
+def corrcoef(x, *args, **kwargs):
+    """Return a CPU NumPy correlation matrix as a Jittor tensor."""
+    result = np.corrcoef(x.float32().numpy())
+    return jt.array(np.ascontiguousarray(result))
+
+
+register_fidelity(
+    "torch.corrcoef", corrcoef, Fidelity.APPROXIMATE,
+    "matches Torch correlation values for CPU tensors through NumPy; device, "
+    "dtype, gradient, and keyword semantics are not implemented",
+)
 
 
 def _ddp_all_reduce_grads(leaves):
@@ -2096,12 +2110,6 @@ def install(ctx):
         return Size(_npb.broadcast_shapes(*norm)) if norm else Size(())
     g.broadcast_shapes = broadcast_shapes
 
-    # torch.corrcoef(input) -> correlation-coefficient matrix (verl logs the
-    # rollout-vs-recompute logprob correlation as a diagnostic). numpy matches.
-    def corrcoef(x, *a, **k):
-        import numpy as _npc
-        r = _npc.corrcoef(x.float32().numpy())
-        return jt.array(_npc.ascontiguousarray(r))
     g.corrcoef = corrcoef
 
     # torch.Generator (RNG handle) -- jittor uses a global seed; provide a

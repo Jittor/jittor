@@ -299,6 +299,21 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             mapped = torch.vmap(lambda x: x + 1)(value)
             np.testing.assert_array_equal(mapped.numpy(), np.array([2., 3., 4.]))
 
+    def test_corrcoef_is_stable_and_registered(self):
+        tensor_owner = importlib.import_module("jittor.compat.torch.installers.tensor")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        self.assertIs(torch.corrcoef, tensor_owner.corrcoef)
+        record = fidelity.fidelity_of("torch.corrcoef")
+        self.assertIs(record.implementation, tensor_owner.corrcoef)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+
+    def test_corrcoef_cpu_values_match_numpy(self):
+        with torch.flag_scope(use_cuda=0):
+            values = np.array([[1., 2., 3.], [2., 4., 8.]], dtype=np.float32)
+            np.testing.assert_allclose(
+                torch.corrcoef(torch.array(values)).numpy(),
+                np.corrcoef(values), rtol=1e-6, atol=1e-6)
+
     def test_autocast_is_a_stable_module_level_object_and_registered(self):
         numerical = importlib.import_module(
             "jittor.compat.torch.installers.numerical")
