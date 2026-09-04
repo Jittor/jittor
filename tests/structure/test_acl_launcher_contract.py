@@ -490,6 +490,17 @@ def test_layer_norm_backward_uses_launcher_and_keeps_descriptor_cleanup():
     assert "syncRun();" not in backward
 
 
+def test_group_norm_forward_uses_launcher_and_backward_remains_present():
+    source = NORMS_SOURCE.read_text()
+    forward = source[source.index("void GroupNormOpRunner::executeOp"):source.index("GroupNormBackwardOpRunner::GroupNormBackwardOpRunner")]
+    assert "attr->groups" in forward
+    assert "outputTensors[2]" in forward
+    assert "launch(ret, aclnnGroupNorm, true);" in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void GroupNormBackwardOpRunner::executeOp" in source
+
+
 def test_rope_forward_uses_launcher_and_backward_remains_present():
     source = ROPE_SOURCE.read_text()
     forward = source[source.index("void RotaryPositionEmbeddingOpRunner::executeOp"):source.index("RotaryPositionEmbeddingGradOpRunner::RotaryPositionEmbeddingGradOpRunner")]

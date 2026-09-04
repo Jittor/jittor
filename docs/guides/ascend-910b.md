@@ -539,6 +539,10 @@ outside this slice.
 The ACL LayerNorm backward owner uses the shared launcher while retaining its
 normalizedShape/outMask descriptors, three-output gradient query, and cleanup.
 
+The ACL GroupNorm forward owner uses the shared launcher while retaining its
+group, epsilon, and three-output query. GroupNorm backward remains outside this
+slice.
+
 The ACL Dropout backward owner uses the shared launcher while retaining its
 scale query and synchronous execution policy.
 
