@@ -40,8 +40,7 @@ VarPtr CufftFftOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 
 void CufftFftOp::jit_prepare(JK& jk) {
     if ((y->dtype() != "float32") && (y->dtype() != "float64")){
-        printf("not supported fft dtype: %s\n", y->dtype().to_cstring());
-        ASSERT(false);
+        USER_CHECK(false) << "not supported fft dtype:" << y->dtype();
     }
     jk << "«T:" << y->dtype();
     jk << "«I:" << inverse;

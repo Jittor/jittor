@@ -82,6 +82,10 @@ MIGRATED_CURAND_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/curand/ops/curand_random_op.cc": 2,
 }
 
+MIGRATED_CUFFT_DTYPE_USER_BOUNDARIES = {
+    "python/jittor/extern/cuda/cufft/ops/cufft_fft_op.cc": 1,
+}
+
 MIGRATED_CUDNN_RNN_DTYPE_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cudnn/inc/cudnn_rnn_descriptor.h": 1,
 }
@@ -321,6 +325,14 @@ def test_curand_user_boundary_migration_is_explicit_and_bounded():
     assert "type == ns_normal || type == ns_uniform" in source
     negative = (ROOT / "tests/backends/cuda/test_curand_odd_length.py").read_text()
     assert "test_unsupported_dtype_is_rejected_clearly" in negative
+
+
+def test_cufft_dtype_user_boundary_migration_is_explicit_and_bounded():
+    source = (ROOT / "python/jittor/extern/cuda/cufft/ops/cufft_fft_op.cc").read_text()
+    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    assert actual == MIGRATED_CUFFT_DTYPE_USER_BOUNDARIES[
+        "python/jittor/extern/cuda/cufft/ops/cufft_fft_op.cc"]
+    assert "not supported fft dtype" in source
 
 
 def test_cudnn_rnn_dtype_user_boundary_migration_is_explicit_and_bounded():
