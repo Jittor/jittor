@@ -736,6 +736,12 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `2.19`：`4858b0a2`/`1a9acf32` 将 cuDNN RNN 输入通道 shape 边界改为 `USER_CHECKop`，累计 112 处、六十五组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
 - `7.03`：`f6d3a435` 明确 vmap 稳定签名、内部 callback 注入和 unsupported kwargs 拒绝；仅设计前置，未修改 runtime。
 
+### 2026-09-04 第七十七波补充证据
+
+- `8.06`：`5f989f16`/`24a9e438` 将 FlashAttention forward 接入共享 launcher，保留 prefix/qstart/kvstart RAII descriptors 与同步策略，backward/KV-cache 未改；静态合同 65 passed，本机无 CANN/NPU，仍待实机。
+- `2.19`：本波复核剩余 CUDA/CUDNN/CUB/NCCL 断言均属内部不变量或后端运行失败，没有新增安全用户边界迁移。
+- `7.03`：`d316a706` 补充 vmap AST 门禁输出契约，定义计数、禁止捕获、unsupported guard 与 fail-closed 证据格式；仅设计前置。
+
 ### 2026-09-04 第六十七波补充证据
 
 - `8.06`：`230658fb`/`c4f0447c` 将 Avgpool backward 接入共享 launcher，保留 countIncludePad/divisorOverride、descriptor cleanup 与同步策略；静态合同 55 passed，本机无 CANN/NPU，仍待实机。
