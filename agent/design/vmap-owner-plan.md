@@ -495,3 +495,22 @@ Keep the owner extraction isolated from unrelated numerical or backend changes:
 
 This keeps the eventual merge auditable and allows the owner to be reverted
 without undoing unrelated compatibility work.
+
+## Metadata compatibility
+
+The wrapped callable metadata is part of the public compatibility contract. The
+extraction must preserve `_jittor_vmap_base` as the original function object and
+append exactly one `(in_dims, out_dims)` pair to `_jittor_vmap_specs` per nesting
+level. Metadata values should remain plain tuples/ints so they are inspectable,
+serializable, and safe to compare across installs.
+
+The static gate should construct one nested wrapper and assert:
+
+```text
+wrapped._jittor_vmap_base is original
+len(wrapped._jittor_vmap_specs) == 1
+wrapped._jittor_vmap_specs[0] == (in_dims, out_dims)
+```
+
+Any metadata shape change is a compatibility break even if numerical outputs are
+unchanged; record it as a blocker requiring an explicit versioned exception.
