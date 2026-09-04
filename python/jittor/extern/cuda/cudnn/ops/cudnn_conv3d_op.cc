@@ -33,7 +33,7 @@ CudnnConv3dOp::CudnnConv3dOp(Var* x, Var* w, int strided, int strideh, int strid
 }
 
 void CudnnConv3dOp::infer_shape() {
-    ASSERTop(x->shape.size(),==,5);
+    USER_CHECKop(x->shape.size(),==,5);
     ASSERTop(w->shape.size(),==,5);
     int xn, xc, xd, xh, xw, wd, wh, ww, wci, wco, yn, yc, yd, yh, yw;
     if (xformat == "ncdhw")
