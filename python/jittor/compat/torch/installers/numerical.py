@@ -1602,6 +1602,28 @@ register_fidelity(
 )
 
 
+def index_copy_(input, dim, index, source):
+    """Copy rows/slices into ``input`` in place and return it."""
+    d = dim % input.ndim
+    idx = index if isinstance(index, jt.Var) else jt.array(index)
+    if d == 0:
+        input[idx] = source
+    else:
+        slices = [slice(None)] * input.ndim
+        slices[d] = idx
+        input[tuple(slices)] = source
+    return input
+
+
+register_fidelity(
+    "torch.index_copy_",
+    index_copy_,
+    Fidelity.APPROXIMATE,
+    "matches Torch in-place indexed assignment for CPU tensors; device, "
+    "layout, dtype, and out semantics are not implemented",
+)
+
+
 def index_put(input, indices, values, accumulate=False):
     """Return a clone with indexed values assigned using Torch semantics."""
     result = input.clone()
@@ -1842,19 +1864,11 @@ def install(ctx):
         self, indices, values, accumulate)
     # index_copy_(dim, index, source): self[..,index[i],..] = source[i,..] along dim
     # (overwrite, NOT accumulate -- cf. index_add).
-    def _index_copy_(self, dim, index, source):
-        d = dim % self.ndim
-        idx = index if isinstance(index, Var) else jt.array(index)
-        if d == 0:
-            self[idx] = source
-        else:
-            sl = [slice(None)] * self.ndim; sl[d] = idx
-            self[tuple(sl)] = source
-        return self
-    Var.index_copy_ = _index_copy_
+    Var.index_copy_ = index_copy_
     Var.index_copy = lambda self, dim, index, source: index_copy(
         self, dim, index, source)
     g.index_copy = index_copy
+    g.index_copy_ = index_copy_
     g.index_put = index_put
     Var.tensor_split = lambda self, indices_or_sections, dim=0: tensor_split(
         self, indices_or_sections, dim)

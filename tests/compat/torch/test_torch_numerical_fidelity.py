@@ -218,6 +218,15 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIs(record.implementation, numerical.index_copy)
         self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
 
+    def test_index_copy_inplace_is_stable_and_registered(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        self.assertIs(torch.index_copy_, numerical.index_copy_)
+        record = fidelity.fidelity_of("torch.index_copy_")
+        self.assertIs(record.implementation, numerical.index_copy_)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+
     def test_index_copy_cpu_values_and_non_inplace_behavior(self):
         with torch.flag_scope(use_cuda=0):
             base = torch.array([[1, 2], [3, 4], [5, 6]])
@@ -227,6 +236,16 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             np.testing.assert_array_equal(
                 actual.numpy(), np.array([[10, 20], [3, 4], [30, 40]]))
             np.testing.assert_array_equal(base.numpy(), np.array([[1, 2], [3, 4], [5, 6]]))
+
+    def test_index_copy_inplace_cpu_values(self):
+        with torch.flag_scope(use_cuda=0):
+            base = torch.array([[1, 2], [3, 4], [5, 6]])
+            source = torch.array([[10, 20], [30, 40]])
+            index = torch.array([0, 2], dtype=torch.int32)
+            result = torch.index_copy_(base, 0, index, source)
+            self.assertIs(result, base)
+            np.testing.assert_array_equal(
+                base.numpy(), np.array([[10, 20], [3, 4], [30, 40]]))
 
     def test_index_put_is_stable_and_registered(self):
         numerical = importlib.import_module(
