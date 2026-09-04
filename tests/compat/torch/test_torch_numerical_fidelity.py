@@ -87,6 +87,36 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             self.assertTrue(torch.is_complex(value))
             self.assertFalse(torch.is_complex(real))
 
+    def test_signal_family_is_stable_and_registered(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        for name in ("hann_window", "stft"):
+            with self.subTest(name=name):
+                implementation = getattr(numerical, name)
+                self.assertIs(getattr(torch, name), implementation)
+                record = fidelity.fidelity_of("torch." + name)
+                self.assertIs(record.implementation, implementation)
+                self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+                self.assertIn("CPU", record.detail)
+
+    def test_hann_window_cpu_values_match_numpy(self):
+        with torch.flag_scope(use_cuda=0):
+            actual = torch.hann_window(5, periodic=False).numpy()
+            expected = np.hanning(5).astype(np.float32)
+            np.testing.assert_allclose(actual, expected, rtol=0, atol=1e-7)
+
+    def test_stft_cpu_shape_and_values(self):
+        with torch.flag_scope(use_cuda=0):
+            wave = torch.array(np.arange(8, dtype=np.float32))
+            actual = torch.stft(
+                wave, n_fft=4, hop_length=2, center=False,
+                return_complex=True).numpy()
+            expected = np.stack(
+                [np.fft.rfft(np.arange(i, i + 4, dtype=np.float32))
+                 for i in (0, 2, 4)], axis=1)
+            np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
+
     def test_eye_is_a_stable_module_level_object(self):
         numerical = importlib.import_module(
             "jittor.compat.torch.installers.numerical")
