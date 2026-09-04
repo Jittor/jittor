@@ -378,6 +378,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 2.22 | 环境变量统一 `JT_` 前缀 | 待领 | | |
 | 2.23 | 布局收尾 | 待领 | | |
 | 2.24 | `custom_data` 的最后一个用户：FusedOp 跨阶段 var 索引 | 待领 | | 依赖 3.11，需显式 `var→index` 映射并保持 relay/融合生成代码不变 |
+| 2.25 | 反向可达叶子查询（`is_leaf`/`grad_fn` 的内核答案） | 进行中 | coreops | 2026-09-04 由 `7.11`／`7.12` 的共同前置派生（`7.11` 的「前置」列原文就是「需要内核的反向可达叶子查询」）。内核给一条查询 `backward_grad_fn(Var*)` 与四种拼写；**不引入进程级 id 键字典、不做图遍历、不加缓存**。`7.11` 的接线属兼容层分区，本任务不做 |
 | 3.01 | `Executor::run_sync` | 待领 | | |
 | 3.02 | jit key 结构化 | 待领 | | |
 | 3.03 | 三张 kernel 缓存表键改 `string` | 待领 | | |
@@ -474,6 +475,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 6.C29 | 标量转数组的全局 `tmp_data` 改自带 buffer | 已合并 | bindings | b57c31a1 |
 | 6.C30 | `helper_cuda.h` 的 `peek` 去掉进程级闩 `peek_logged` | 已合并 | coreops | bcdf1593 |
 | 6.C31 | 失败的 import jittor 在退出期 abort，父进程无声消失 | 已合并 | bindings | 64350894 |
+| 6.C32 | `test_complex64_linalg.py::TestComplex64LinalgCPU::test_svdvals` 在 CPU-only 下 abort 且无诊断，带走整个 session | 待领 | | 2026-09-04 由 2.25 的执行者发现。单选这一条也复现，在整改基线 `bf702127` 上同样复现（与 2.25 无关）。后果是 `tests/core` 在 CPU-only 下跑不到 summary，它后面的文件全部拿不到结论 |
 | 6.P01 | 转置标记陈旧 | 并入 5.03 | | |
 | 6.P02 | Function 实例复用、no_grad 泄漏、tied weight 参数集合 | 并入 5.07、5.08、5.04 | | |
 | 6.P03 | H1 分组 conv3d 的 ww reindex 形状顺序 | 已合并 | pyops | a50c5678 |
