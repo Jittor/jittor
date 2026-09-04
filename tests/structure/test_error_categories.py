@@ -102,6 +102,10 @@ MIGRATED_CUTT_TRANSPOSE_AXES_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cutt/ops/cutt_transpose_op.cc": 2,
 }
 
+MIGRATED_CUTT_TRANSPOSE_RANK_USER_BOUNDARIES = {
+    "python/jittor/extern/cuda/cutt/ops/cutt_transpose_op.cc": 1,
+}
+
 MIGRATED_CUBLAS_MATMUL_DTYPE_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cublas/ops/cublas_matmul_op.cc": 4,
 }
@@ -402,11 +406,20 @@ def test_cudnn_rnn_bwd_x_mode_user_boundary_migration_is_explicit_and_bounded():
 def test_cutt_transpose_axes_user_boundary_migration_is_explicit_and_bounded():
     source = (ROOT / "python/jittor/extern/cuda/cutt/ops/cutt_transpose_op.cc").read_text()
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    actual -= source.count("USER_CHECK(xdim)")
     assert actual == MIGRATED_CUTT_TRANSPOSE_AXES_USER_BOUNDARIES[
         "python/jittor/extern/cuda/cutt/ops/cutt_transpose_op.cc"]
     negative = (ROOT / "tests/backends/cuda/test_cutt_transpose_op.py").read_text()
     assert "test_axes_length_is_a_catchable_user_error" in negative
     assert "test_duplicate_axes_are_a_catchable_user_error" in negative
+
+
+def test_cutt_transpose_scalar_rank_is_a_catchable_user_error():
+    source = (ROOT / "python/jittor/extern/cuda/cutt/ops/cutt_transpose_op.cc").read_text()
+    assert 'USER_CHECK(xdim) << "cutt transpose requires a non-scalar input"' in source
+    assert "CHECK(xdim);" not in source
+    assert source.count("USER_CHECK(xdim)") == MIGRATED_CUTT_TRANSPOSE_RANK_USER_BOUNDARIES[
+        "python/jittor/extern/cuda/cutt/ops/cutt_transpose_op.cc"]
 
 
 def test_cublas_matmul_dtype_user_boundary_migration_is_explicit_and_bounded():
