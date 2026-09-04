@@ -196,7 +196,13 @@ def test_public_dimension_boundary_migration_is_explicit_and_bounded():
     counts = {}
     for relative, expected in MIGRATED_DIMENSION_BOUNDARIES.items():
         source = (ROOT / relative).read_text()
-        actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+        # ``broadcast_to_op.cc`` also owns the five shape checks asserted by
+        # ``MIGRATED_BROADCAST_SHAPE_BOUNDARIES``.  Count its two dimension
+        # checks by their diagnostic so the independent ledgers do not overlap.
+        if relative == "python/jittor/src/ops/broadcast_to_op.cc":
+            actual = source.count('USER_CHECK(dim>=0 && dim<ydim)')
+        else:
+            actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
         counts[relative] = actual
         assert actual == expected, (relative, actual, expected)
     assert sum(counts.values()) == 7
