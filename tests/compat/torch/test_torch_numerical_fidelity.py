@@ -314,6 +314,58 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 torch.corrcoef(torch.array(values)).numpy(),
                 np.corrcoef(values), rtol=1e-6, atol=1e-6)
 
+    def test_reduction_extras_are_stable_module_level_objects(self):
+        tensor_owner = importlib.import_module("jittor.compat.torch.installers.tensor")
+        for name in ("amax", "amin", "count_nonzero"):
+            with self.subTest(name=name):
+                implementation = getattr(tensor_owner, name)
+                self.assertTrue(callable(implementation))
+                self.assertIs(getattr(torch, name), implementation)
+                self.assertIs(getattr(torch.Var, name), implementation)
+                self.assertEqual(implementation.__module__, tensor_owner.__name__)
+                self.assertEqual(implementation.__name__, name)
+
+    def test_reduction_extras_fidelity_is_queryable_and_conservative(self):
+        tensor_owner = importlib.import_module("jittor.compat.torch.installers.tensor")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        for name in ("amax", "amin", "count_nonzero"):
+            with self.subTest(name=name):
+                record = fidelity.fidelity_of("torch." + name)
+                self.assertIs(record.implementation, getattr(tensor_owner, name))
+                self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+                self.assertIn("native", record.detail)
+                self.assertIn("device", record.detail)
+                self.assertIn("out", record.detail)
+
+    def test_reduction_extras_cpu_values_and_var_delegates_match_numpy(self):
+        values = np.array(
+            [[1.0, -5.0, 0.0], [4.0, 2.0, 6.0]], dtype="float32")
+        with torch.flag_scope(use_cuda=0):
+            tensor = torch.array(values)
+            full_max = torch.amax(tensor)
+            dim_max = torch.amax(tensor, 1, keepdim=True)
+            tuple_min = torch.amin(tensor, (0, 1))
+            method_min = tensor.amin(0)
+            nonzero = torch.count_nonzero(tensor)
+            nonzero_dim = tensor.count_nonzero(1)
+        np.testing.assert_array_equal(full_max.numpy(), values.max())
+        np.testing.assert_array_equal(
+            dim_max.numpy(), values.max(axis=1, keepdims=True))
+        np.testing.assert_array_equal(tuple_min.numpy(), values.min())
+        np.testing.assert_array_equal(method_min.numpy(), values.min(axis=0))
+        np.testing.assert_array_equal(
+            nonzero.numpy(), np.count_nonzero(values))
+        np.testing.assert_array_equal(
+            nonzero_dim.numpy(), np.count_nonzero(values, axis=1))
+
+    def test_reduction_extras_keepdims_alias_matches_keepdim(self):
+        values = np.arange(12, dtype="float32").reshape(3, 4)
+        with torch.flag_scope(use_cuda=0):
+            tensor = torch.array(values)
+            alias = torch.amax(tensor, 0, keepdims=True)
+        np.testing.assert_array_equal(
+            alias.numpy(), values.max(axis=0, keepdims=True))
+
     def test_broadcast_shapes_is_stable_and_registered(self):
         tensor_owner = importlib.import_module("jittor.compat.torch.installers.tensor")
         fidelity = importlib.import_module("jittor.compat.torch.fidelity")

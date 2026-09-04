@@ -215,8 +215,9 @@ register_fidelity(
 
 
 _COSINE_SIMILARITY_FIDELITY_DETAIL = (
-    "matches Torch cosine similarity values and reduction shape through Jittor's "
-    "native nn implementation but omits device, layout, and dtype keyword semantics"
+    "matches Torch cosine similarity values, dim reduction shape, and the eps "
+    "denominator floor through Jittor's native nn implementation but omits "
+    "device, layout, and dtype keyword semantics"
 )
 
 

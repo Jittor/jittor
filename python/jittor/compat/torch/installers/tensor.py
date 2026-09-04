@@ -75,6 +75,50 @@ register_fidelity(
 )
 
 
+_NATIVE_AMAX = jt.amax
+_NATIVE_AMIN = jt.amin
+_NATIVE_COUNT_NONZERO = jt.count_nonzero
+_REDUCTION_EXTRAS_FIDELITY_DETAIL = (
+    "re-exports Jittor's native values-only reduction owner, which matches "
+    "Torch values and keepdim shape for int/tuple dims on supported real "
+    "tensors; device, layout, dtype, and out keyword semantics are not "
+    "implemented"
+)
+
+
+def amax(input, dim=None, keepdim=False, keepdims=None, axis=None):
+    """Return a values-only maximum reduction through the native owner."""
+    return _NATIVE_AMAX(
+        input, dim if axis is None else axis,
+        keepdim=keepdim, keepdims=keepdims)
+
+
+def amin(input, dim=None, keepdim=False, keepdims=None, axis=None):
+    """Return a values-only minimum reduction through the native owner."""
+    return _NATIVE_AMIN(
+        input, dim if axis is None else axis,
+        keepdim=keepdim, keepdims=keepdims)
+
+
+def count_nonzero(input, dim=None):
+    """Count non-zero entries through the native owner."""
+    return _NATIVE_COUNT_NONZERO(input, dim)
+
+
+for _reduction_extra in (amax, amin, count_nonzero):
+    # ``install_methods`` retrofits an axis->dim adapter onto the Var reduction
+    # methods; the stable objects take ``axis`` themselves, so the adapter has to
+    # leave them alone or the module-level object and the method stop being one.
+    _reduction_extra._torch_accepts_axis = True
+    register_fidelity(
+        "torch." + _reduction_extra.__name__,
+        _reduction_extra,
+        Fidelity.APPROXIMATE,
+        _REDUCTION_EXTRAS_FIDELITY_DETAIL,
+    )
+del _reduction_extra
+
+
 def _ddp_all_reduce_grads(leaves):
     """Average DDP-managed gradients across ranks, in a rank-stable order.
 
@@ -419,23 +463,17 @@ def _install_reductions(g):
             return out.minimum(pi).maximum(ni)
         Var.nan_to_num = _nan_to_num
         g.nan_to_num = lambda x, nan=0.0, posinf=None, neginf=None: _nan_to_num(x, nan, posinf, neginf)
+    # amax/amin/count_nonzero already have a native owner (jittor.misc.reductions)
+    # whose contract is the Torch one; bind the stable compat objects that wrap it
+    # rather than carrying a second copy of the reduction here.
     if not hasattr(Var, "amax"):
-        def _amax(self, dim=None, keepdim=False):
-            d = list(dim) if isinstance(dim, (tuple, list)) else dim
-            return _jt_max(self, d, keepdims=keepdim) if d is not None else self.max()
-        def _amin(self, dim=None, keepdim=False):
-            d = list(dim) if isinstance(dim, (tuple, list)) else dim
-            return _jt_min(self, d, keepdims=keepdim) if d is not None else self.min()
-        Var.amax = _amax
-        Var.amin = _amin
-        g.amax = lambda x, dim=None, keepdim=False: _amax(x, dim, keepdim)
-        g.amin = lambda x, dim=None, keepdim=False: _amin(x, dim, keepdim)
+        Var.amax = amax
+        Var.amin = amin
+        g.amax = amax
+        g.amin = amin
     if not hasattr(Var, "count_nonzero"):
-        def _count_nonzero(self, dim=None):
-            nz = (self != 0).int32()
-            return nz.sum(dim) if dim is not None else nz.sum()
-        Var.count_nonzero = _count_nonzero
-        g.count_nonzero = lambda x, dim=None: _count_nonzero(x, dim)
+        Var.count_nonzero = count_nonzero
+        g.count_nonzero = count_nonzero
     if not hasattr(g, "logaddexp"):
         def _logaddexp(a, b):
             m = _jt.maximum(a, b)                       # numerically stable
@@ -2500,6 +2538,8 @@ def install_methods(ctx):
     # with custom torch-return semantics (value+index tuples, etc.); only translate
     # torch's `axis` alias for them so we don't disturb that handling.
     def _axis_to_dim(orig):
+        if getattr(orig, "_torch_accepts_axis", False):
+            return orig
         def _w(self, *a, **k):
             if "axis" in k:
                 k["dim"] = k.pop("axis")
