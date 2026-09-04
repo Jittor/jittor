@@ -159,6 +159,7 @@ INTERNAL_BACKEND_ASSERTION_CONTRACTS = {
     "python/jittor/extern/cuda/cutt/ops/cutt_wrapper.cc": "CHECK(ret == CUTT_SUCCESS)",
     "python/jittor/extern/cuda/cub/ops/cub_test_op.cc": "ASSERT(cub_test_entry",
     "python/jittor/extern/cuda/cublas/ops/cublas_test_op.cc": "ASSERT(cublas_test_entry",
+    "python/jittor/extern/cuda/cudnn/ops/cudnn_test_op.cc": "ASSERT(cudnn_test_entry",
 }
 
 MIGRATED_CUDNN_CONV3D_X_RANK_USER_BOUNDARIES = {
