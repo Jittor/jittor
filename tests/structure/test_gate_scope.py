@@ -127,6 +127,26 @@ def test_default_nox_sessions_include_the_cpu_numeric_gate():
     assert "cpu" in sessions
 
 
+def test_full_nox_session_is_the_periodic_complete_gate():
+    """The scheduled CI entry point must target the full CPU session (10.01)."""
+    source = (REPO_ROOT / "noxfile.py").read_text(encoding="utf-8")
+    tree = ast.parse(source, filename="noxfile.py")
+    full = next(
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "full"
+    )
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "cpu"
+        for node in ast.walk(full)
+    )
+    workflow = (REPO_ROOT / ".github" / "workflows" / "cpu.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "python -m nox -s full" in workflow
+
+
 def test_skip_reason_buckets_are_stable_and_other_is_counted(monkeypatch):
     """10.05: accepted environment reasons are separated from unexplained ones."""
     import conftest as policy

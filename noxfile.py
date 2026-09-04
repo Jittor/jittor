@@ -1688,6 +1688,12 @@ def cpu(session):
     _run_pytest(session, CPU_TORCH_ORACLE_TESTS, oracle_env)
 
 
+@nox.session(python="3.11", venv_backend="venv")
+def full(session):
+    """Stable name for the complete CPU/nightly gate (10.01)."""
+    cpu(session)
+
+
 #: The ecosystem comparison: numbers first, then wall clock.
 ECOSYSTEM_TESTS = (
     "tests/compat/torch/test_ecosystem_parity.py",

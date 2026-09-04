@@ -108,7 +108,7 @@ jobs:
       - name: Run CPU pytest gates
         env:
           JITTOR_REQUIRE_REAL_TORCH: "1"
-        run: python -m nox -s cpu
+        run: python -m nox -s full
       - name: Save the Jittor build cache
         if: always()
         uses: actions/cache/save@v4
