@@ -32,7 +32,7 @@ CuttTransposeOp::CuttTransposeOp(Var* x, NanoVector axes) : x(x), axes(axes) {
 
 void CuttTransposeOp::infer_shape() {
     auto xdim = x->shape.size();
-    CHECK(xdim);
+    USER_CHECK(xdim) << "cutt transpose requires a non-scalar input";
     if (!axes.size()) {
         for (int i=0; i<(int)xdim; i++)
             axes.push_back(xdim-1-i);
