@@ -801,3 +801,9 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `2.19`：`8af5fd8d` 精确约束 Cutt 返回码内部断言并纳入分类门禁；不改变运行语义或用户边界累计。
 - `7.03`：`2b7b64ca` 补充 vmap 变更控制与 reviewer sign-off，明确 code/doc 分离、owner/context/unsupported 审阅与冲突规则；仅设计前置。
 - `8.06`：只读确认标准 ACL launcher owner 已穷尽，KVCacheMemcpy 等专用路径不纳入通用 launcher，本波无代码提交。
+
+### 2026-09-04 第八十八波补充证据
+
+- `2.19`：`30bfdb6e`/`e853b873` 将 CUDNN RNN descriptor 内部断言纳入分类门禁；1 passed，不改变运行语义，用户边界累计保持 113 处。
+- `7.03`：`ce1cbb5c` 补充 vmap metadata 兼容契约，固定 `_jittor_vmap_base`/`_jittor_vmap_specs` 身份、形状与嵌套层级；仅设计前置，未修改 runtime。
+- `8.06`：只读确认标准 ACL launcher owner 已穷尽，KVCacheMemcpy 等专用路径不纳入通用 launcher，本波无代码提交。
