@@ -907,6 +907,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | 只读确认 ACL 标准 launcher owner 已穷尽；KVCacheMemcpy 是逐 token `aclrtMemcpyAsync` 专用路径，不安全套用通用 launcher，本波无代码提交。 |
 | `gates` | `876ec09c` 后独立 Dataset worker 监管两个 nodeid 在临时缓存下 2 passed/65.68 s；完整 smoke 仍约 390 s，0.15 保持待领。 |
 
+### 2026-09-04 第一百零二波
+
+| 分区 | 结果 |
+| --- | --- |
+| `bindings` | `cb0a4e77` 将 cuBLAS batched matmul 三项输入 rank 检查改为可捕获的 `USER_CHECKop`，补独立 rank ledger；定向 3 passed。2.19 聚合任务仍待完整审计。 |
+| `compat` | `dbe72f0f` 将 `torch.polar` 提升为 numerical 模块级稳定对象并登记 approximate fidelity；identity/metadata 与 CPU NumPy 对拍 2 passed。7.03 其余 family 仍待领。 |
+| `device` | `6.B16` 已有 `BaseOpRunner::syncRun`、静态合同与 Ascend 910B3 上机文档；本机无 NPU，实机同步/异步与失败归因仍待验证，本波无新提交。 |
+| `gates` | Dataset worker 监管两个 nodeid 独立缓存下 2 passed/65.68 s；完整 smoke 仍约 390 s，0.15 保持待领。 |
+
 按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第一百波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
