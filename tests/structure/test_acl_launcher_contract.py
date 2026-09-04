@@ -558,6 +558,17 @@ def test_avgpool_forward_uses_launcher_and_maxpool_remains_present():
     assert "void MaxpoolOpRunner::executeOp" in source
 
 
+def test_avgpool_backward_uses_launcher_and_keeps_descriptor_cleanup():
+    source = POOL_SOURCE.read_text()
+    backward = source[source.index("void AvgpoolBackwardOpRunner::executeOp"):]
+    assert "countIncludePad" in backward
+    assert "divisorOverride" in backward
+    assert "launch(ret, aclnnAvgPool2dBackward, true);" in backward
+    assert "aclDestroyIntArray(strides);" in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+
+
 def test_random_uniform_normal_share_launcher_and_keep_seed_offset():
     source = RANDOM_SOURCE.read_text()
     assert "RandomUniform" in source

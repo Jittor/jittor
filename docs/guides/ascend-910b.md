@@ -567,6 +567,9 @@ The ACL Avgpool forward owner uses the shared launcher while retaining its
 pool descriptors, ceil mode, divisor, and padding semantics. Maxpool and
 backward owners remain outside this slice.
 
+The ACL Avgpool backward owner uses the shared launcher while retaining its
+countIncludePad/divisorOverride semantics and descriptor cleanup.
+
 The ACL UpsampleNearest2d forward owner uses the shared launcher while retaining
 output-size RAII and synchronous execution. Backward is outside this slice.
 

@@ -145,17 +145,7 @@ namespace jittor
         pads = aclCreateIntArray(attr->poolPads.data(), 2);
         ret = aclnnAvgPool2dBackwardGetWorkspaceSize(inputTensors[0], inputTensors[1], kernel_size, strides, pads, attr->countIncludePad, attr->divisorOverride, attr->divisorOverride, attr->poolCeil, outputTensors[0], &workspaceSize, &executor);
 
-        checkRet(ret);
-
-        if (workspaceSize > 0)
-        {
-            mallocWorkSpace(workspaceSize);
-        }
-
-        ret = aclnnAvgPool2dBackward(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnAvgPool2dBackward failed. ERROR: %d\n", name.c_str(), ret); return);
-
-        syncRun();
+        launch(ret, aclnnAvgPool2dBackward, true);
 
         aclDestroyIntArray(strides);
         aclDestroyIntArray(pads);
