@@ -540,6 +540,16 @@ def test_slice_v2_uses_launcher_and_keeps_four_descriptors():
     assert "syncRun();" not in slice_source
 
 
+def test_strided_slice_assign_uses_launcher_and_keeps_gradient_memset():
+    source = (ROOT / "python/jittor/extern/acl/aclops/getitem_op_acl.cc").read_text()
+    owner = source[source.index("void StridedSliceAssignV2OpRunner::executeOp"):]
+    assert "jt_name == \"stridedsliceassignv2_grad\"" in owner
+    assert "aclrtMemsetAsync" in owner
+    assert "launch(ret, aclnnStridedSliceAssignV2, true);" in owner
+    assert "mallocWorkSpace(workspaceSize)" not in owner
+    assert "syncRun();" not in owner
+
+
 def test_rope_forward_uses_launcher_and_backward_remains_present():
     source = ROPE_SOURCE.read_text()
     forward = source[source.index("void RotaryPositionEmbeddingOpRunner::executeOp"):source.index("RotaryPositionEmbeddingGradOpRunner::RotaryPositionEmbeddingGradOpRunner")]

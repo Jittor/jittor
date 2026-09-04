@@ -131,17 +131,7 @@ namespace jittor
         auto axes = aclCreateIntArray(attr->axes.data(), attr->axes.size());
         ret = aclnnStridedSliceAssignV2GetWorkspaceSize(outputTensors[0], inputTensors[0], begins, ends, steps, axes, &workspaceSize, &executor);
 
-        checkRet(ret);
-
-        if (workspaceSize > 0)
-        {
-            mallocWorkSpace(workspaceSize);
-        }
-
-        ret = aclnnStridedSliceAssignV2(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnStridedSliceAssignV2 failed. ERROR: %d\n", name.c_str(), ret); return);
-
-        syncRun();
+        launch(ret, aclnnStridedSliceAssignV2, true);
 
         return;
     }
