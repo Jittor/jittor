@@ -585,6 +585,12 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `2.19`：`193d5171`/`22ccddc5` 将 CUB arg-reduce offsets rank 边界改为 `USER_CHECKop`，累计 93 处、四十六组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
 - `7.03`：`25142db7` 将 `softmax` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
 
+### 2026-09-04 第五十八波补充证据
+
+- `8.06`：`1874f7ed`/`f92d4ffd` 将 UpsampleNearest2d backward 接入共享 launcher，保留 output/input-size RAII descriptor 与同步策略；静态合同 45 passed，本机无 CANN/NPU，仍待实机。
+- `2.19`：`4c64067e`/`050da89a` 将 CUB arg-reduce offsets 长度边界改为 `USER_CHECKop`，累计 94 处、四十七组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `7.03`：`d6bd24f1` 将 `log_softmax` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
+
 ### 2026-09-04 第五十五波补充证据
 
 - `8.06`：`0b149241` 将 Dropout backward 接入共享 launcher，保留 `scale` query 与同步策略；静态合同 42 passed，本机无 CANN/NPU，仍待实机。
