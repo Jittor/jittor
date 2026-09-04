@@ -22,7 +22,8 @@ static inline cudnnRNNMode_t rnn_string_to_rnn_mode(string mode) {
         return CUDNN_RNN_TANH;
     if (mode == "lstm")
         return CUDNN_LSTM;
-    ASSERT(mode == "gru") << "rnn mode must be relu, tanh, lstm, or gru, but got " << mode;
+    USER_CHECKop(mode,==,"gru")
+        << "rnn mode must be relu, tanh, lstm, or gru, but got " << mode;
     return CUDNN_GRU;
 }
 
@@ -46,7 +47,8 @@ static inline int rnn_string_to_num_linear_layers(string mode) {
         return 2;
     if (mode == "lstm")
         return 8;
-    ASSERT(mode == "gru") << "mode must be relu, tanh, lstm, or gru, but got " << mode;
+    USER_CHECKop(mode,==,"gru")
+        << "mode must be relu, tanh, lstm, or gru, but got " << mode;
     return 6;
 }
 

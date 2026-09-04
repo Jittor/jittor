@@ -90,6 +90,10 @@ MIGRATED_CUDNN_RNN_DTYPE_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cudnn/inc/cudnn_rnn_descriptor.h": 1,
 }
 
+MIGRATED_CUDNN_RNN_DESCRIPTOR_MODE_USER_BOUNDARIES = {
+    "python/jittor/extern/cuda/cudnn/inc/cudnn_rnn_descriptor.h": 2,
+}
+
 MIGRATED_CUDNN_RNN_OP_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cudnn/ops/cudnn_rnn_op.cc": 7,
 }
@@ -379,12 +383,21 @@ def test_cufft_dtype_user_boundary_migration_is_explicit_and_bounded():
 
 def test_cudnn_rnn_dtype_user_boundary_migration_is_explicit_and_bounded():
     source = (ROOT / "python/jittor/extern/cuda/cudnn/inc/cudnn_rnn_descriptor.h").read_text()
-    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    actual = source.count("USER_CHECK(")
     assert actual == MIGRATED_CUDNN_RNN_DTYPE_USER_BOUNDARIES[
         "python/jittor/extern/cuda/cudnn/inc/cudnn_rnn_descriptor.h"]
     assert "cudnn rnn supports float16, float32 and float64" in source
     negative = (ROOT / "tests/backends/cuda/test_cudnn_rnn_dtype.py").read_text()
     assert "test_unsupported_dtype_names_itself" in negative
+
+
+def test_cudnn_rnn_descriptor_mode_is_a_catchable_user_error():
+    source = (ROOT / "python/jittor/extern/cuda/cudnn/inc/cudnn_rnn_descriptor.h").read_text()
+    marker = 'USER_CHECKop(mode,==,"gru")'
+    assert source.count(marker) == MIGRATED_CUDNN_RNN_DESCRIPTOR_MODE_USER_BOUNDARIES[
+        "python/jittor/extern/cuda/cudnn/inc/cudnn_rnn_descriptor.h"]
+    assert 'ASSERT(mode == "gru")' not in source
+    assert "mode must be relu, tanh, lstm, or gru" in source
 
 
 def test_cudnn_rnn_op_user_boundary_migration_is_explicit_and_bounded():
