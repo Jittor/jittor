@@ -103,7 +103,7 @@ MIGRATED_CUTT_TRANSPOSE_AXES_USER_BOUNDARIES = {
 }
 
 MIGRATED_CUBLAS_MATMUL_DTYPE_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cublas/ops/cublas_matmul_op.cc": 3,
+    "python/jittor/extern/cuda/cublas/ops/cublas_matmul_op.cc": 4,
 }
 
 MIGRATED_CUBLAS_BATCHED_MATMUL_DTYPE_USER_BOUNDARIES = {
@@ -389,6 +389,13 @@ def test_cublas_matmul_dtype_user_boundary_migration_is_explicit_and_bounded():
     negative = (ROOT / "tests/backends/cuda/test_cublas_matmul_grad.py").read_text()
     assert "test_non_float_inputs_are_rejected_clearly" in negative
     assert "test_mixed_input_dtypes_are_rejected_clearly" in negative
+
+
+def test_cublas_matmul_inner_dimension_is_a_catchable_user_error():
+    source = (ROOT / "python/jittor/extern/cuda/cublas/ops/cublas_matmul_op.cc").read_text()
+    assert "USER_CHECKop(m,==,m_)" in source
+    assert "ASSERTop(m,==,m_)" not in source
+    assert "inner dimensions must match" in source
 
 
 def test_cublas_batched_matmul_dtype_user_boundary_migration_is_explicit_and_bounded():
