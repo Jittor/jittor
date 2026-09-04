@@ -109,6 +109,8 @@
 > 第155波环境核验：`b13b4fe6` 记录 `nvidia-smi`/`probe.json` 确认开发机有 8 张 RTX 4090、CUDA 12.2.140、sm_89。历史“本机无 CUDA”只适用于曾设置 `nvcc_path=""` 的 CPU 进程，不能继续作为跳过真实 CUDA 负向验收的理由；未自动改任务完成状态。
 >
 > 第156波 CUDA 抽验：2.19 的 cuBLAS 3、cuSPARSE 10、CUB cumsum 1、curand 6、cuFFT 4 个负向/错误节点真实通过；cuTT 5 个因未启用 cutt 跳过。cuDNN RNN 两个 invalid 节点通过，但 4 个 dtype 正向节点进程 abort，不能计为通过，2.19 继续待领。
+>
+> 第157波 cuDNN 诊断：单独的 `test_float32_matches_reference` 仍 SIGABRT（退出 134），abort 发生在 `_cudnn_forward` 执行阶段；冷缓存还暴露过未预创建 TMPDIR 导致 nvcc 临时文件失败。根因未归因，2.19 继续待领。
 
 一行一个任务，与 [refactor-plan.md](refactor-plan.md) 的编号对应。领任务把状态改成「进行中」并写名字，
 完成改成「已合并」并填提交号；推送冲突说明别人先领了。状态只有四种：待领 / 进行中 / 已合并 / 并入 X。
