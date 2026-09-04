@@ -246,6 +246,21 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             np.testing.assert_array_equal(actual.numpy(), np.array([1, 20, 3, 40]))
             np.testing.assert_array_equal(base.numpy(), np.array([1, 2, 3, 4]))
 
+    def test_autocast_is_a_stable_module_level_object_and_registered(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        self.assertIs(torch.autocast, numerical.autocast)
+        record = fidelity.fidelity_of("torch.autocast")
+        self.assertIs(record.implementation, numerical.autocast)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+
+    def test_autocast_cpu_context_restores_state(self):
+        self.assertFalse(torch.is_autocast_enabled())
+        with torch.autocast("cpu", dtype=torch.bfloat16):
+            self.assertTrue(torch.is_autocast_enabled())
+        self.assertFalse(torch.is_autocast_enabled())
+
     def test_eye_is_a_stable_module_level_object(self):
         numerical = importlib.import_module(
             "jittor.compat.torch.installers.numerical")

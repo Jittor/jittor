@@ -25,6 +25,16 @@ from ..types import (
 from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed
 
+autocast = _AutocastContext
+register_fidelity(
+    "torch.autocast",
+    autocast,
+    Fidelity.APPROXIMATE,
+    "matches Torch context/decorator enable semantics on supported CPU/CUDA "
+    "paths; cache, device-specific dtype, and unsupported dtype diagnostics "
+    "remain compatibility-layer limitations",
+)
+
 _native_all = jt.all
 _native_any = jt.any
 
@@ -1868,7 +1878,7 @@ def install(ctx):
     _alias("trapz", trapz)
     _alias("trapezoid", trapezoid)
     g.repeat_interleave = repeat_interleave
-    _alias("autocast", _AutocastContext)
+    _alias("autocast", autocast)
     # Real loop-based torch.vmap. The old no-op stub (`lambda fn,*a,**k: fn`)
     # ignored in_dims/out_dims, so transformers' vmap-based causal-mask builder
     # (taken when a model passes and_mask/or_mask -- e.g. falcon) collapsed to a
