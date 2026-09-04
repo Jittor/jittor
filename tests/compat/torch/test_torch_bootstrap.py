@@ -489,6 +489,32 @@ class TestTorchBootstrap(unittest.TestCase):
             )
         autograd.set_policy.assert_called_once_with(policy)
 
+    def test_activation_failure_rolls_back_outer_path_and_module_mutations(self):
+        from jittor.compat.shim import runtime
+        from jittor.compat.transaction import ActivationTransaction
+
+        root = types.SimpleNamespace()
+        paths = []
+        modules = {}
+
+        def fail(**kwargs):
+            transaction = kwargs["_transaction"]
+            transaction.mutate_path(paths, "owned-path")
+            transaction.publish_module(modules, "torch", root)
+            raise RuntimeError("injected activation failure")
+
+        with mock.patch.object(runtime, "_activate_once", side_effect=fail):
+            with self.assertRaisesRegex(RuntimeError, "injected activation failure"):
+                runtime.activate(_root_module=root)
+
+        self.assertEqual(paths, [])
+        self.assertEqual(modules, {})
+        self.assertEqual(runtime.activation_status(root).phase, "failed")
+        acquired = ActivationTransaction._lock.acquire(blocking=False)
+        self.assertTrue(acquired)
+        if acquired:
+            ActivationTransaction._lock.release()
+
     def test_compat_composition_keeps_native_flags_object(self):
         from jittor.compat import runtime
 
