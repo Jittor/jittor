@@ -122,8 +122,8 @@ MIGRATED_CUB_CUMSUM_RANK_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cub/ops/cub_cumsum_op.cc": 1,
 }
 
-MIGRATED_CUB_OFFSETS_DTYPE_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cub/ops/cub_argsort_op.cc": 1,
+MIGRATED_CUB_OP_USER_BOUNDARIES = {
+    "python/jittor/extern/cuda/cub/ops/cub_argsort_op.cc": 2,
     "python/jittor/extern/cuda/cub/ops/cub_arg_reduce_op.cc": 1,
 }
 
@@ -404,8 +404,8 @@ def test_cub_cumsum_rank_user_boundary_migration_is_explicit_and_bounded():
     assert "test_rank_three_is_rejected_clearly" in negative
 
 
-def test_cub_offsets_dtype_user_boundary_migration_is_explicit_and_bounded():
-    for relative, expected in MIGRATED_CUB_OFFSETS_DTYPE_USER_BOUNDARIES.items():
+def test_cub_op_user_boundary_migration_is_explicit_and_bounded():
+    for relative, expected in MIGRATED_CUB_OP_USER_BOUNDARIES.items():
         source = (ROOT / relative).read_text()
         actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
         assert actual == expected, (relative, actual, expected)

@@ -36,7 +36,7 @@ VarPtr CubArgsortOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void CubArgsortOp::infer_shape() {
-    ASSERT(x->shape.size() == indexes->shape.size());
+    USER_CHECK(x->shape.size() == indexes->shape.size());
     int n = 1;
     for (int i = 0; i < x->shape.size(); ++i) {
         ASSERT(x->shape[i] == indexes->shape[i]);
