@@ -1569,6 +1569,29 @@ register_fidelity(
 )
 
 
+def index_copy(input, dim, index, source):
+    """Copy rows/slices into a clone along ``dim`` (Torch non-inplace form)."""
+    result = input.clone()
+    d = dim % result.ndim
+    idx = index if isinstance(index, jt.Var) else jt.array(index)
+    if d == 0:
+        result[idx] = source
+    else:
+        slices = [slice(None)] * result.ndim
+        slices[d] = idx
+        result[tuple(slices)] = source
+    return result
+
+
+register_fidelity(
+    "torch.index_copy",
+    index_copy,
+    Fidelity.APPROXIMATE,
+    "matches Torch non-inplace index-copy values for CPU tensors; device, "
+    "layout, dtype, and out semantics are not implemented",
+)
+
+
 def kron(a, b):
     """Compute the Kronecker product through broadcasted Jittor views."""
     nd = max(a.ndim, b.ndim)
@@ -1792,8 +1815,9 @@ def install(ctx):
             self[tuple(sl)] = source
         return self
     Var.index_copy_ = _index_copy_
-    Var.index_copy = lambda self, dim, index, source: _index_copy_(self.clone(), dim, index, source)
-    g.index_copy = lambda input, dim, index, source: _index_copy_(input.clone(), dim, index, source)
+    Var.index_copy = lambda self, dim, index, source: index_copy(
+        self, dim, index, source)
+    g.index_copy = index_copy
     g.index_put = lambda input, indices, values, accumulate=False: _index_put_(input.clone(), indices, values, accumulate)
     Var.tensor_split = lambda self, indices_or_sections, dim=0: tensor_split(
         self, indices_or_sections, dim)
