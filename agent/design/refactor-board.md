@@ -79,6 +79,8 @@
 > 第139波 7.05 安全修正：`ee1317c2` 让 permissive finder 新增/索引和既有 allowlist 增量回滚做 owner-aware 校验；外部 allowlist/finder 重排测试纳入事务合同，9 passed。module_patcher/其他 installer 全流程仍待，7.05 保持待领。
 >
 > 第140波 7.05 子项：`02b1733b` 将已加载 module 属性差异纳入 transaction ledger，`6e0f838a` 增加 module-patcher finder/registry 冲突保护；`test_compat_mechanisms.py` 20 passed，事务测试 9 passed。可变对象内部 mutation 和全部 installer 汇总仍待，7.05 保持待领。
+>
+> 第141波 7.05 子项：`9f154035` 将 vLLM `_ArmOnFirstImport` finder 插入和 active transaction 传递接入 ledger；external backend registry、vLLM callbacks/extension modules 和 shim runtime 全局写入仍未覆盖，7.05 保持待领。
 
 一行一个任务，与 [refactor-plan.md](refactor-plan.md) 的编号对应。领任务把状态改成「进行中」并写名字，
 完成改成「已合并」并填提交号；推送冲突说明别人先领了。状态只有四种：待领 / 进行中 / 已合并 / 并入 X。

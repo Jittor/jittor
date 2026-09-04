@@ -1128,6 +1128,14 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | `sys.meta_path` permissive finder 需同时恢复 finder 身份、插入索引和 allowlist 增量，暂不做半改；本波无 device 提交。 |
 | `gates` | `py_compile`/`diff-check` 通过，未改变整卡状态。 |
 
+### 2026-09-04 第一百四十一波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `9f154035` 将 vLLM `_ArmOnFirstImport` finder 插入登记进 transaction，并让 `_install_optional_vllm` 传递 active transaction；vLLM registry callback/extension module 发布和 shim runtime 全局写入仍待。 |
+| `device` | external backend source import 有局部 sys.path/sys.modules 回滚，但 registry/hints/entry-point 状态未接入 InstallTransaction；本波无代码。 |
+| `gates` | finder/registry 现有结构合同通过，整卡 7.05 仍待完整 mutation 覆盖。 |
+
 ### 2026-09-04 第一百四十波
 
 | 分区 | 结果 |
