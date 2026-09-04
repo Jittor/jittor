@@ -1160,6 +1160,14 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | runtime activation 仍跨扩展构建/递归安装，需外层事务统一生命周期；child build 继续使用显式环境隔离。 |
 | `gates` | 本波协议和合同通过，未改变完整 activation 验收状态。 |
 
+### 2026-09-04 第一百四十五波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `4d5b8e61` 将 `shim.runtime._activate_once(_composition=True)` 的 Torch install 与 `sys.modules["torch"]` 发布包入 ActivationTransaction，异常 rollback、成功 commit；普通 activation 的 path/build/no_grad 仍未覆盖，7.05 不关闭。 |
+| `device` | composition-only 不启动 child build，普通 activation 仍需独立 path/module owner 生命周期测试。 |
+| `gates` | 本波 `py_compile`/`diff-check` 通过，未宣称普通 activation 已验证。 |
+
 ### 2026-09-04 第一百四十波
 
 | 分区 | 结果 |
