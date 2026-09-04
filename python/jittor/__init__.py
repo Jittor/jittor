@@ -27,6 +27,12 @@ _compat_preflight_result = _prepare_compat_import(
 from jittor_utils import lock as _lock
 from jittor_utils import limit_openmp_to_physical_cores as _limit_openmp
 
+# The root composes; it does not define. Both helpers below used to be written
+# out here, which put them on ``jittor.`` as public-by-accident names and is
+# what tests/structure/test_runtime_composition_structure.py forbids.
+from ._composition import make_inplace_alias as _make_inplace_alias
+from ._composition import publish as _publish
+
 
 _NATIVE_CORE_EXPORTS = (
     "DumpGraphs", "Flags", "MemInfo", "NanoString", "NanoVector",
@@ -69,11 +75,6 @@ _NATIVE_OP_EXPORTS = (
 )
 
 
-def _publish(module, names):
-    namespace = globals()
-    for name in names:
-        namespace[name] = getattr(module, name)
-
 # Must run before anything links OpenMP: the runtime reads OMP_NUM_THREADS when
 # it starts, and the default is one thread per *logical* CPU.
 _limit_openmp(_os.environ)
@@ -103,8 +104,8 @@ with _lock.lock_scope():
     from .compiler import compile_custom_ops, compile_custom_op
     import jittor_core
     import jittor_core as core
-    _publish(jittor_core, _NATIVE_CORE_EXPORTS)
-    _publish(jittor_core.ops, _NATIVE_OP_EXPORTS)
+    _publish(globals(), jittor_core, _NATIVE_CORE_EXPORTS)
+    _publish(globals(), jittor_core.ops, _NATIVE_OP_EXPORTS)
     _core_profiler = core.profiler
     from . import compile_extern
     from .compile_extern import mkl_ops, mpi, mpi_ops
@@ -141,7 +142,7 @@ with _lock.lock_scope():
 
 from ._runtime import core_api as _core_api
 from ._runtime.core_api import _core_flags
-_publish(_core_api, _core_api.__all__)
+_publish(globals(), _core_api, _core_api.__all__)
 from .benchmarking import BenchmarkResult, benchmark
 
 # The runtime installs its monkeypatches from here on, in a fixed order that
@@ -180,7 +181,7 @@ from . import misc as misc
 _MISC_EXPORTS = tuple(misc.tensor_ops.__all__) + (
     "amax", "amin", "cat", "concat", "count_nonzero",
 )
-_publish(misc, _MISC_EXPORTS)
+_publish(globals(), misc, _MISC_EXPORTS)
 from . import sparse
 from . import optim
 from . import dataset
@@ -230,13 +231,6 @@ _INPLACE_ALIASES = {
 }
 
 
-def _make_inplace_alias(name, operation):
-    def inplace(self, *args, **kwargs):
-        return self.assign(operation(self, *args, **kwargs))
-    inplace.__name__ = name
-    return inplace
-
-
 for _alias_name, _operation in _INPLACE_ALIASES.items():
     if not hasattr(Var, _alias_name):
         setattr(Var, _alias_name, _make_inplace_alias(_alias_name, _operation))
@@ -245,7 +239,7 @@ del _operation
 _record_install("root.inplace_aliases")
 
 from . import math_util
-_publish(math_util, math_util.__all__)
+_publish(globals(), math_util, math_util.__all__)
 from . import distributions
 
 if compiler.has_acl:
