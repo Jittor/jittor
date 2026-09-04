@@ -11,6 +11,7 @@ def _warning(logger, message):
 
 def apply_external_runtime_patches(logger=None):
     report = {}
+    import jittor as jt
 
     try:
         from jittor.compat import triton as _triton_compat  # noqa: F401
@@ -39,7 +40,10 @@ def apply_external_runtime_patches(logger=None):
     try:
         from jittor.compat.module_patcher import install_module_patches
 
-        patch_report = install_module_patches()
+        transaction = getattr(
+            getattr(jt, "_torch_compat_install_context", None),
+            "state", {}).get("_install_transaction")
+        patch_report = install_module_patches(transaction=transaction)
         results = [
             {
                 "kind": item.kind,

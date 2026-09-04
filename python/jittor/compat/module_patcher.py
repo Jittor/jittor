@@ -240,11 +240,14 @@ class _ModulePatchFinder(importlib.abc.MetaPathFinder):
         return spec
 
 
-def install_module_patches(load_entry_points: bool = True) -> PatchReport:
+def install_module_patches(load_entry_points: bool = True, transaction=None) -> PatchReport:
     """Load adapter registrations, patch loaded modules, and install one finder."""
 
     global _FINDER, _LAST_REPORT
     with _LOCK:
+        old_registry = {path: list(callbacks) for path, callbacks in _REGISTRY.items()}
+        old_loaded = set(_ENTRY_POINTS_LOADED)
+        old_finder = _FINDER
         results = _load_entry_point_patches() if load_entry_points else []
         for path in tuple(_REGISTRY):
             module = sys.modules.get(path)
@@ -253,6 +256,20 @@ def install_module_patches(load_entry_points: bool = True) -> PatchReport:
         if _FINDER is None or _FINDER not in sys.meta_path:
             _FINDER = _ModulePatchFinder()
             sys.meta_path.insert(0, _FINDER)
+            if transaction is not None:
+                finder = _FINDER
+                transaction.record_undo(
+                    lambda f=finder: sys.meta_path.remove(f)
+                    if f in sys.meta_path else None)
+        if transaction is not None:
+            def restore_registry():
+                _REGISTRY.clear()
+                _REGISTRY.update({path: list(callbacks)
+                                  for path, callbacks in old_registry.items()})
+                _ENTRY_POINTS_LOADED.clear()
+                _ENTRY_POINTS_LOADED.update(old_loaded)
+                globals()['_FINDER'] = old_finder
+            transaction.record_undo(restore_registry)
         report = PatchReport(tuple(results), True)
         _LAST_REPORT = report
         return report
