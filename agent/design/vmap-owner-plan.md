@@ -462,3 +462,20 @@ dry-run install and assert:
 Serialize the record's `api`, `level`, and `detail` into the evidence block. Any
 identity or duplicate-registration drift is a static failure, independent of
 whether numerical JIT nodes were deferred.
+
+## Release checklist
+
+Before publishing the owner extraction, verify:
+
+- `import jittor.compat.torch.installers.numerical as numerical` succeeds in a
+  clean Python process and exposes `numerical.vmap` without running install;
+- the Torch shim publishes the same object at `torch.vmap` after one install and
+  after a repeated install;
+- this plan is linked from the 7.03 board/handoff entry, with the static
+  evidence block and any deferred-node reasons;
+- rollback instructions remain valid for the previous release branch;
+- no generated cache, backend binary, or local environment path is included in
+  the commit.
+
+These checks are release hygiene, not evidence of numerical correctness; the
+CPU and unsupported behavior nodes remain mandatory for closing 7.03.
