@@ -721,3 +721,4 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 ### 2026-09-04 第七十一波补充证据
 
 - `8.06`：`2e27d71b` 将 SliceV2 接入共享 launcher，保留 begins/ends/steps/axes descriptors 与同步策略；静态合同 59 passed，本机无 CANN/NPU，仍待实机。
+- `8.06`：`ff26ab02` 将 StridedSliceAssignV2 接入共享 launcher，保留 gradient memset 分支与 slice descriptor handling；静态合同 60 passed，本机无 CANN/NPU，仍待实机。
