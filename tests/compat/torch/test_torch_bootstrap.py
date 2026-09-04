@@ -477,7 +477,9 @@ class TestTorchBootstrap(unittest.TestCase):
             runtime, "configure_torch_math_flags"
         ), mock.patch(
             "jittor.compat.torch.install"
-        ), mock.patch.dict(sys.modules, {"jittor": root}, clear=False):
+        ), mock.patch.dict(
+            sys.modules, {"jittor": root, "torch": root}, clear=False
+        ):
             runtime._activate_once(
                 _root_module=root,
                 _preflight_result=types.SimpleNamespace(
@@ -958,9 +960,17 @@ class TestShimSysPathOwnership(unittest.TestCase):
             calls.append(("append", os.fspath(path)))
 
         from jittor.compat.shim import runtime as shim_runtime
+        from jittor.compat.transaction import ActivationTransaction
 
-        with mock.patch.object(shim_runtime, "prepend_sys_path", record_prepend), \
-                mock.patch.object(shim_runtime, "append_sys_path", record_append), \
+        def record_path(_transaction, paths, path, prepend=False):
+            calls.append(("prepend" if prepend else "append", os.fspath(path)))
+            if path in paths:
+                return False
+            paths.insert(0 if prepend else len(paths), path)
+            return True
+
+        with mock.patch.object(
+                ActivationTransaction, "mutate_path", record_path), \
                 mock.patch.object(shim_runtime, "prepare_import_environment") as prepare, \
                 mock.patch.object(shim_runtime, "_deploy_torch_shim"), \
                 mock.patch.object(shim_runtime, "_write_build_sitecustomize"), \
