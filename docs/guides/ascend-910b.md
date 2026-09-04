@@ -509,6 +509,9 @@ this slice.
 The ACL RmsNorm forward owner uses the shared launcher while retaining eps and
 dual-output handling. Its gradient owner is outside this slice.
 
+The ACL RmsNorm gradient owner now uses the shared launcher and retains its
+multi-input, dual-output, and synchronous execution handling.
+
 The ACL RotaryPositionEmbedding forward owner uses the shared launcher and
 retains its three input tensors and synchronous execution. Its gradient owner
 is outside this slice.

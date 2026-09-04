@@ -369,6 +369,16 @@ def test_rms_norm_forward_uses_launcher_and_grad_remains_present():
     assert "void RmsNormGradOpRunner::executeOp" in source
 
 
+def test_rms_norm_grad_uses_launcher_and_forward_remains_present():
+    source = NORMS_SOURCE.read_text()
+    grad = source[source.index("void RmsNormGradOpRunner::executeOp"):]
+    assert "aclnnRmsNormGradGetWorkspaceSize" in grad
+    assert "launch(ret, aclnnRmsNormGrad, true);" in grad
+    assert "mallocWorkSpace(workspaceSize)" not in grad
+    assert "syncRun();" not in grad
+    assert "launch(ret, aclnnRmsNorm, true);" in source
+
+
 def test_rope_forward_uses_launcher_and_backward_remains_present():
     source = ROPE_SOURCE.read_text()
     forward = source[source.index("void RotaryPositionEmbeddingOpRunner::executeOp"):source.index("RotaryPositionEmbeddingGradOpRunner::RotaryPositionEmbeddingGradOpRunner")]
