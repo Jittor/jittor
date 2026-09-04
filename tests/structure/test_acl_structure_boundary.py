@@ -31,3 +31,13 @@ def test_acl_structure_boundary_names_atomic_migrations_and_hardware_gate():
         "BaseOpRunner` helper",
     ):
         assert required in text
+
+
+def test_acl_data_schema_contract_for_future_decoder():
+    text = GUIDE.read_text(encoding="utf-8")
+    assert "currently `1`, required" in text
+    assert "typed `int64`, `float64`, or `bool`" in text
+    assert "typed homogeneous `int64[]`/`float64[]`/`bool[]`" in text
+    assert "pointer addresses and Python object ids are forbidden" in text
+    assert "validates the\noperator name, schema version, type tag, and required fields" in text
+    assert "no such shared decoder exists yet" in text
