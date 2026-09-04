@@ -21,6 +21,8 @@
 > 第111波增量：`038819e6` 完成 cuBLAS acc matmul inner-dim 用户错误 cohort（结构 4 passed）；`64f4ecfa` 建立 `torch.autocast` numerical owner（CPU 2 passed）；`3cb0da4e` 形成 ACL data-channel schema 草案与 910B3 验收边界（静态合同 1 passed）。聚合任务和硬件验收状态不变。
 >
 > 第112波增量：`d2532ac2` 完成 cuDNN convolution format 用户错误 cohort（结构 3 passed）；`dbdfb6d7` 完成 `index_copy_` 原地 numerical owner（CPU 2 passed）；`a768cc9b` 锁定 ACL data schema 静态合同（2 passed）。聚合任务和硬件验收状态不变。
+>
+> 第113波增量：`de5188ab` 完成 cuDNN backward-x format 用户错误 cohort（结构 3 passed）；`11e9b456` 完成 `index_put_` 原地 numerical owner（CPU 2 passed）；`4b22f6d9` 增加 ACL data schema Python validator（静态合同 6 passed）。聚合任务和硬件验收状态不变。
 
 一行一个任务，与 [refactor-plan.md](refactor-plan.md) 的编号对应。领任务把状态改成「进行中」并写名字，
 完成改成「已合并」并填提交号；推送冲突说明别人先领了。状态只有四种：待领 / 进行中 / 已合并 / 并入 X。
