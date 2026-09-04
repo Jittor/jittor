@@ -586,3 +586,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 ### 2026-09-04 第五十六波补充证据
 
 - `8.06`：`4f414054` 将 RotaryPositionEmbedding gradient 接入共享 launcher，保留四输入、三输出 query 与同步策略；静态合同 43 passed，本机无 CANN/NPU，仍待实机。
+
+### 2026-09-04 第五十七波补充证据
+
+- `8.06`：`f34ecce4` 将 Conv2d backward 接入共享 launcher，保留三输出 gradient query 与 descriptor cleanup；静态合同 44 passed，本机无 CANN/NPU，仍待实机。
