@@ -36,7 +36,7 @@ CudnnConv3dBackwardXOp::CudnnConv3dBackwardXOp(Var* w, Var* dy, int depth, int h
 }
 
 void CudnnConv3dBackwardXOp::infer_shape() {
-    ASSERTop(w->shape.size(),==,5);
+    USER_CHECKop(w->shape.size(),==,5);
     ASSERTop(dy->shape.size(),==,5);
     int xn, xc, wd, wh, ww, wci, wco, yn, yc, yd, yh, yw;
     w->shape.unpack(wco, wci, wd, wh, ww);
