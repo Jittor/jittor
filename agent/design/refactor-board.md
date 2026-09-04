@@ -53,6 +53,8 @@
 > 第127波 7.05 安全修正：有风险的整表 global snapshot 提交 `ec720cd8` 已由 `9a674001` 撤回；`1aa640cf` 补充 flags/env 写入清单与显式 allowlist/owner-aware restore 要求。7.05 仍待领。
 >
 > 第128波 7.05 子项：`9949fa10` 修复 completed-install namespace 冲突异常路径的 RLock 泄漏，新增回归测试；`test_install_context.py -k 'completed_install_conflict or optional_failure'` 2 passed。完整 installer mutation ledger 仍待接入，7.05 保持待领。
+>
+> 第129波 7.05 子项：`c8b993b4` 让 transaction rollback 做 owner-aware 值校验，外部改写时抛 `TransactionConflict`；事务合成测试 3 passed。仍需将所有 installer 写入口纳入 ledger，7.05 保持待领。
 
 一行一个任务，与 [refactor-plan.md](refactor-plan.md) 的编号对应。领任务把状态改成「进行中」并写名字，
 完成改成「已合并」并填提交号；推送冲突说明别人先领了。状态只有四种：待领 / 进行中 / 已合并 / 并入 X。
