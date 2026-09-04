@@ -384,6 +384,25 @@ register_fidelity(
 )
 
 
+_SHAPE_AS_TENSOR_FIDELITY_DETAIL = (
+    "matches Torch int64 shape materialization for supported tensors but omits "
+    "device, layout, and dynamic-shape keyword semantics"
+)
+
+
+def _shape_as_tensor(input):
+    """Return the static tensor shape as an int64 Jittor array."""
+    return jt.array(np.asarray(input.shape, dtype=np.int64))
+
+
+register_fidelity(
+    "torch._shape_as_tensor",
+    _shape_as_tensor,
+    Fidelity.APPROXIMATE,
+    _SHAPE_AS_TENSOR_FIDELITY_DETAIL,
+)
+
+
 _NAN_TO_NUM_INPLACE_FIDELITY_DETAIL = (
     "matches Torch in-place NaN/Inf replacement and return identity for supported "
     "real tensors but omits device, layout, dtype, and narrow custom-bound semantics"
@@ -1628,8 +1647,7 @@ def install(ctx):
     _alias("mv", mv)
     _alias("masked_select", masked_select)
     _alias("split_with_sizes", split_with_sizes)
-    _alias("_shape_as_tensor",
-           lambda input: jt.array(np.asarray(input.shape, dtype=np.int64)))
+    _alias("_shape_as_tensor", _shape_as_tensor)
     _alias("nan_to_num_", nan_to_num_)
     # torch.randint_like(input, low, high=None, *, dtype=...): jittor's native lacks
     # the dtype kwarg (DINO's denoising uses it). Force-override with torch semantics.

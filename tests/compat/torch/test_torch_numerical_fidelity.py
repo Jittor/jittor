@@ -1371,6 +1371,24 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIn("inplace", record.detail)
         self.assertIn("device", record.detail)
 
+    def test_shape_as_tensor_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical._shape_as_tensor))
+        self.assertIs(torch._shape_as_tensor, numerical._shape_as_tensor)
+        self.assertEqual(numerical._shape_as_tensor.__module__, numerical.__name__)
+        self.assertEqual(numerical._shape_as_tensor.__name__, "_shape_as_tensor")
+
+    def test_shape_as_tensor_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch._shape_as_tensor")
+        self.assertIs(record.implementation, numerical._shape_as_tensor)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("int64", record.detail)
+        self.assertIn("device", record.detail)
+
 
 if __name__ == "__main__":
     unittest.main()
