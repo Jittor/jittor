@@ -39,9 +39,12 @@ def test_distributed_env_writes_are_explicit_and_child_helper_is_pure():
     installer = DIST_INSTALLER.read_text(encoding="utf-8")
     assert "def child_env(" in helper
     assert "env = dict(os.environ) if inherit else {}" in helper
+    assert "def set_env(name, value):" in installer
+    assert "tx.mutate_env(name, value)" in installer
+    assert "tx.mutate_flag(jt.flags, \"use_cuda\", 1)" in installer
     for name in (
         "JT_NCCL_WORLD_SIZE", "JT_NCCL_RANK", "JT_NCCL_LOCAL_RANK",
         "JT_NCCL_ROOTINFO_FILE", "use_nccl", "use_mpi",
     ):
-        assert 'os.environ["%s"]' % name in installer
+        assert 'set_env("%s"' % name in installer
     assert "JITTOR_TORCH_SHIM" in helper
