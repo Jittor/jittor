@@ -106,6 +106,23 @@ if _ACCEL == "npu":
         for name in ("all_bool_reduce", "any_bool_reduce")
     })
 
+def _cotangent(shape, index):
+    """The fixed random direction output ``index`` is projected onto.
+
+    ``standard_normal(shape)`` rather than ``randn(*shape)``: they are the same
+    draw from the same seeded generator for every non-empty shape, but
+    ``randn()`` with no arguments -- a **0-d output** -- returns a python float
+    instead of an array, and the ``.astype`` that followed raised
+    ``AttributeError``. Every operator whose forward is a single number (``sum``,
+    ``trace``, and every loss) therefore never reached its backward comparison,
+    which is the one thing this battery exists to do. See
+    ``tests/backends/parity/test_parity_harness.py``.
+    """
+    return np.asarray(
+        np.random.RandomState(1234 + index).standard_normal(tuple(shape)),
+        dtype="float32")
+
+
 def _run(op, sample, use_cuda):
     """Run op forward+backward on one device from the sample's materialized numpy.
 
@@ -130,8 +147,14 @@ def _run(op, sample, use_cuda):
             if diff and float_outs:
                 loss = None
                 for j, o in enumerate(float_outs):
-                    cot = np.random.RandomState(1234 + j).randn(*to_numpy(o).shape).astype("float32")
-                    term = (o * jt.array(cot)).sum()
+                    cot = _cotangent(np.asarray(to_numpy(o)).shape, j)
+                    # A 0-d output already *is* the scalar the projection
+                    # produces, so scale it rather than building a 0-d Var and
+                    # reducing that: jittor's codegen cannot reduce a 0-d Var
+                    # (``reduce.add`` on ``float32[]`` fails the op compiler's
+                    # step limit), and the two are the same number.
+                    term = (o * float(cot) if cot.ndim == 0
+                            else (o * jt.array(cot)).sum())
                     loss = term if loss is None else loss + term
                 grads = [to_numpy(g) for g in jt.grad(loss, diff)]
         return fwds, grads
