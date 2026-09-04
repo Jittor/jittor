@@ -270,6 +270,25 @@ register_fidelity(
 )
 
 
+_LOG1P_FIDELITY_DETAIL = (
+    "matches Torch elementwise log1p values for supported real tensors but "
+    "omits device, layout, and dtype keyword semantics"
+)
+
+
+def log1p(x):
+    """Compute ``log(1 + x)`` elementwise."""
+    return jt.log(1.0 + x)
+
+
+register_fidelity(
+    "torch.log1p",
+    log1p,
+    Fidelity.APPROXIMATE,
+    _LOG1P_FIDELITY_DETAIL,
+)
+
+
 _NAN_TO_NUM_INPLACE_FIDELITY_DETAIL = (
     "matches Torch in-place NaN/Inf replacement and return identity for supported "
     "real tensors but omits device, layout, dtype, and narrow custom-bound semantics"
@@ -1189,7 +1208,7 @@ def install(ctx):
     _alias("log_softmax", lambda input, dim=None, **k: jt.nn.log_softmax(input, dim=dim))
     _alias("relu", lambda input, **k: jt.nn.relu(input))
     # elementwise / functional top-level forms missing from jittor's top level
-    _alias("log1p", lambda x: jt.log(1.0 + x))
+    _alias("log1p", log1p)
     _alias("reciprocal", lambda x: 1.0 / x)
     _alias("lerp", lambda input, end, weight: input + weight * (end - input))
     _alias("isclose", isclose)
