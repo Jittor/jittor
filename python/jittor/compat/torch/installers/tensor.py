@@ -119,6 +119,75 @@ for _reduction_extra in (amax, amin, count_nonzero):
 del _reduction_extra
 
 
+_NATIVE_ARGSORT = jt.argsort
+_NATIVE_GATHER = jt.gather
+_NATIVE_MEDIAN = jt.median
+_TopK = _collections.namedtuple("topk", ["values", "indices"])
+_Sort = _collections.namedtuple("sort", ["values", "indices"])
+_Median = _collections.namedtuple("median", ["values", "indices"])
+_ORDERING_FIDELITY_DETAIL = (
+    "matches Torch sorted values, the lower-median position, and the int64 "
+    "index dtype for supported real tensors, and CPU and CUDA agree exactly on "
+    "the values; the underlying sort is not stable, so with duplicate keys the "
+    "returned indices are whichever the backend picked and are measurably "
+    "different on CPU and CUDA, while stable, out, device, layout, and "
+    "named-dimension semantics are not implemented"
+)
+
+
+def sort(input, dim=-1, descending=False, **kwargs):
+    """Return Torch's ``(values, indices)`` pair for a sort along ``dim``."""
+    indices, values = _NATIVE_ARGSORT(input, dim=dim, descending=descending)
+    return _Sort(values, indices.int64())
+
+
+def argsort(input, dim=-1, descending=False, **kwargs):
+    """Return only the sorting indices, as Torch's ``argsort`` does."""
+    return _NATIVE_ARGSORT(input, dim=dim, descending=descending)[0].int64()
+
+
+def topk(input, k, dim=-1, largest=True, sorted=True):
+    """Return the ``k`` largest (or smallest) values and their indices.
+
+    Built on argsort rather than the native topk: the latter is unreliable on
+    the ACL backend (an internal getitem "too many slices").
+    """
+    indices, _ = _NATIVE_ARGSORT(input, dim=dim, descending=largest)
+    rank = input.ndim
+    axis = dim if dim >= 0 else dim + rank
+    window = [slice(None)] * rank
+    window[axis] = slice(0, k)
+    indices = indices[tuple(window)]
+    return _TopK(_NATIVE_GATHER(input, axis, indices), indices.int64())
+
+
+def median(input, dim=None, keepdim=False):
+    """Return Torch's lower median, with indices when ``dim`` is given."""
+    if dim is None:
+        return _NATIVE_MEDIAN(input, keepdim=keepdim)
+    axis = dim if dim >= 0 else dim + input.ndim
+    if axis < 0 or axis >= input.ndim:
+        raise IndexError(
+            f"Dimension out of range (expected to be in range of "
+            f"[-{input.ndim}, {input.ndim - 1}], but got {dim})")
+    indices, values = _NATIVE_ARGSORT(input, dim=axis)
+    lower = (input.shape[axis] - 1) // 2
+    window = [slice(None)] * input.ndim
+    window[axis] = slice(lower, lower + 1) if keepdim else lower
+    window = tuple(window)
+    return _Median(values[window], indices[window].int64())
+
+
+for _ordering_impl in (sort, argsort, topk, median):
+    register_fidelity(
+        "torch." + _ordering_impl.__name__,
+        _ordering_impl,
+        Fidelity.APPROXIMATE,
+        _ORDERING_FIDELITY_DETAIL,
+    )
+del _ordering_impl
+
+
 _NATIVE_CUMSUM = jt.cumsum
 _NATIVE_CUMPROD = getattr(jt, "cumprod", None)
 _CUMULATIVE_FIDELITY_DETAIL = (
@@ -236,9 +305,6 @@ def _ddp_all_reduce_grads(leaves):
 
 
 _MinMax = _collections.namedtuple("torch_return_types", ["values", "indices"])
-_TopK = _collections.namedtuple("topk", ["values", "indices"])
-_Sort = _collections.namedtuple("sort", ["values", "indices"])
-_Median = _collections.namedtuple("median", ["values", "indices"])
 
 
 def _install_reductions(g):
@@ -249,16 +315,12 @@ def _install_reductions(g):
     import jittor as _jt
     _argmax = _jt.argmax
     _argmin = _jt.argmin
-    _argsort = _jt.argsort
     _maximum = _jt.maximum
     _minimum = _jt.minimum
     _jt_max = _jt.max          # jittor-native reductions (values only)
     _jt_min = _jt.min
     _jt_var_max = _jt.Var.max  # native METHODS (0-dim scalar for full reduction)
     _jt_var_min = _jt.Var.min
-    _topk = getattr(_jt, "topk", None)
-    _gather = _jt.gather
-    _median = _jt.median
 
     def _reduce_index(result):
         if isinstance(result, (tuple, list)):
@@ -327,41 +389,11 @@ def _install_reductions(g):
     g.max = lambda x, *a, **k: _maxmin("max", x, *a, **k)
     g.min = lambda x, *a, **k: _maxmin("min", x, *a, **k)
 
-    def topk(x, k, dim=-1, largest=True, sorted=True):
-        # jittor's native topk is unreliable on the ACL backend (internal
-        # getitem "too many slices"); use an argsort-based gather instead.
-        idx, _ = _argsort(x, dim=dim, descending=largest)
-        nd = x.ndim
-        d = dim if dim >= 0 else dim + nd
-        sl = [slice(None)] * nd
-        sl[d] = slice(0, k)
-        idx = idx[tuple(sl)]
-        val = _gather(x, d, idx)
-        return _TopK(val, idx.int64())
+    # The ordering family lives at module level (stable objects with registered
+    # fidelity); install only binds it.
     g.topk = topk
-
-    def sort(x, dim=-1, descending=False, **kw):
-        idx, val = _argsort(x, dim=dim, descending=descending)
-        return _Sort(val, idx.int64())
     g.sort = sort
-    g.argsort = lambda x, dim=-1, descending=False, **kw: _argsort(x, dim=dim, descending=descending)[0].int64()
-
-    def median(x, dim=None, keepdim=False):
-        if dim is None:
-            return _median(x, keepdim=keepdim)
-        d = dim if dim >= 0 else dim + x.ndim
-        if d < 0 or d >= x.ndim:
-            raise IndexError(
-                f"Dimension out of range (expected to be in range of "
-                f"[-{x.ndim}, {x.ndim - 1}], but got {dim})"
-            )
-        idx, values = _argsort(x, dim=d)
-        k = (x.shape[d] - 1) // 2
-        slices = [slice(None)] * x.ndim
-        slices[d] = slice(k, k + 1) if keepdim else k
-        slices = tuple(slices)
-        return _Median(values[slices], idx[slices].int64())
-
+    g.argsort = argsort
     g.median = median
 
     # --- Tensor METHOD forms. jittor-core uses none of these as Var methods (only
@@ -369,12 +401,10 @@ def _install_reductions(g):
     # it was verified that .max/.min methods ARE used internally, so those stay
     # native (values-only) and are intentionally NOT overridden. ---
     Var = _jt.Var
-    Var.sort = lambda self, dim=-1, descending=False, **kw: sort(self, dim=dim, descending=descending)
-    Var.argsort = lambda self, dim=-1, descending=False, **kw: g.argsort(self, dim=dim, descending=descending)
-    Var.topk = lambda self, k, dim=-1, largest=True, sorted=True: topk(self, k, dim=dim, largest=largest, sorted=sorted)
-    Var.median = lambda self, dim=None, keepdim=False: median(
-        self, dim=dim, keepdim=keepdim
-    )
+    Var.sort = sort
+    Var.argsort = argsort
+    Var.topk = topk
+    Var.median = median
     # Tensor.softmax/log_softmax accept a `dtype=` (cast before the op) which
     # jittor's native method rejects (vLLM's sampler: logits.softmax(dim=-1,
     # dtype=torch.float32)).
