@@ -16,6 +16,7 @@ _MIGRATED_TEST_PATHS = {
     "test_mpi_graph_isomorphism": "tests/distributed/test_mpi_graph_isomorphism.py",
     "test_mpi_op": "tests/distributed/test_mpi_op.py",
     "test_mpi_var_ops": "tests/distributed/test_mpi_var_ops.py",
+    "test_nccl_comm_stream": "tests/distributed/test_nccl_comm_stream.py",
     "test_nccl_ops": "tests/distributed/test_nccl_ops.py",
     "test_resnet": "tests/models/test_resnet.py",
     "test_single_process_scope": "tests/distributed/test_single_process_scope.py",
