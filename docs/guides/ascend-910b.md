@@ -561,6 +561,10 @@ gradient memset branch and slice descriptor handling.
 The ACL InplaceMaskedScatter owner uses the shared launcher while retaining its
 tracked base-to-output device copy dependency and synchronous execution.
 
+The ACL IndexPutImpl owner uses the shared launcher while retaining its
+index-tensor-list handling and synchronous execution. Accumulate remains
+outside this slice.
+
 The ACL Dropout backward owner uses the shared launcher while retaining its
 scale query and synchronous execution policy.
 
