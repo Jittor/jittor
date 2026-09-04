@@ -32,6 +32,7 @@ SILU_SOURCE = ROOT / "python/jittor/extern/acl/aclops/silu_op_acl.cc"
 BMM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/bmm_op_acl.cc"
 TRUTH_REDUCE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/truth_reduce_op_acl.cc"
 CONV_SOURCE = ROOT / "python/jittor/extern/acl/aclops/conv_op_acl.cc"
+NORMS_SOURCE = ROOT / "python/jittor/extern/acl/aclops/norms_op_acl.cc"
 ROPE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/rope_op_acl.cc"
 POOL_SOURCE = ROOT / "python/jittor/extern/acl/aclops/pool_op_acl.cc"
 RANDOM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/random_op_acl.cc"
@@ -355,6 +356,17 @@ def test_conv_forward_uses_launcher_and_backward_remains_present():
     assert "mallocWorkSpace(workspaceSize)" not in forward
     assert "syncRun();" not in forward
     assert "void Conv2dBackwardOpRunner::executeOp" in source
+
+
+def test_rms_norm_forward_uses_launcher_and_grad_remains_present():
+    source = NORMS_SOURCE.read_text()
+    forward = source[source.index("void RmsNormOpRunner::executeOp"):source.index("RmsNormGradOpRunner::RmsNormGradOpRunner")]
+    assert "attr->eps" in forward
+    assert "outputTensors[1]" in forward
+    assert "launch(ret, aclnnRmsNorm, true);" in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void RmsNormGradOpRunner::executeOp" in source
 
 
 def test_rope_forward_uses_launcher_and_backward_remains_present():
