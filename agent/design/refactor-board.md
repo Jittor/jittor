@@ -513,3 +513,9 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `8.06`：`71bab738` 将 Maxpool forward 接入共享 launcher，保留 descriptors、`poolCeil`、同步策略及 Avgpool/backward 原路径；静态合同 34 passed，本机无 CANN/NPU，仍待实机。
 - `2.19`：`37004fe0`/`b48f8af7` 将 cuDNN conv3d 输入 rank 边界改为 `USER_CHECKop`；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向，累计 83 处。另：`broadcast_to` 源码实际 5 个检查，但 dimension map 仍期望 2（shape map 期望 5），相关门禁仍 1 failed，待专门修复。
 - `7.03`：`cfe67a7e` 将 `pca_lowrank` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；`py_compile`/diff-check 通过，动态 JIT 未运行。
+
+### 2026-09-04 第四十八波补充证据
+
+- `8.06`：`16a89606` 将 Avgpool forward 接入共享 launcher，保留 descriptors、`poolCeil/divisor`、同步策略及 backward/其他 pool owner；静态合同 35 passed，本机无 CANN/NPU，仍待实机。
+- `2.19`：`9d77a5a7`/`cf177243` 将 cuDNN conv3d backward-x 权重 rank 边界改为 `USER_CHECKop`；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向，累计 84 处。
+- `7.03`：`727b440a` 将 `nan_to_num_` 提升为 numerical 稳定 in-place 对象并登记 conservative approximate fidelity；`py_compile`/diff-check 通过，因既有 NaN/Inf JIT abort 风险未运行动态测试。
