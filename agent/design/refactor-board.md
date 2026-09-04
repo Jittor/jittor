@@ -55,6 +55,10 @@
 > 第128波 7.05 子项：`9949fa10` 修复 completed-install namespace 冲突异常路径的 RLock 泄漏，新增回归测试；`test_install_context.py -k 'completed_install_conflict or optional_failure'` 2 passed。完整 installer mutation ledger 仍待接入，7.05 保持待领。
 >
 > 第129波 7.05 子项：`c8b993b4` 让 transaction rollback 做 owner-aware 值校验，外部改写时抛 `TransactionConflict`；事务合成测试 3 passed。仍需将所有 installer 写入口纳入 ledger，7.05 保持待领。
+>
+> 第130波 7.05 子项：`75793c04` 将 distributed installer 的 JT_NCCL_*、`use_nccl/use_mpi` 和 `jt.flags.use_cuda` 写入纳入 mutation ledger；`783699cd` 补 child-env 隔离合同 2 passed。仍有其他 installer 写入口未迁移，7.05 保持待领。
+>
+> 第131波 7.05 测试修正：`f8f838b2` 将 distributed 环境结构合同改为断言 `tx.mutate_env/mutate_flag`，避免旧 direct-write 断言误报；结构 2 passed、事务相关 5 passed。7.05 仍待领。
 
 一行一个任务，与 [refactor-plan.md](refactor-plan.md) 的编号对应。领任务把状态改成「进行中」并写名字，
 完成改成「已合并」并填提交号；推送冲突说明别人先领了。状态只有四种：待领 / 进行中 / 已合并 / 并入 X。
