@@ -177,6 +177,18 @@ struct RingBuffer {
 
     inline void wait_pop_for(uint64 offset, uint64 timeout_ms) {
         MutexScope _(m);
+        timespec deadline;
+#ifndef _MSC_VER
+        if (timeout_ms) {
+            clock_gettime(CLOCK_REALTIME, &deadline);
+            deadline.tv_sec += timeout_ms / 1000;
+            deadline.tv_nsec += (timeout_ms % 1000) * 1000000;
+            if (deadline.tv_nsec >= 1000000000) {
+                ++deadline.tv_sec;
+                deadline.tv_nsec -= 1000000000;
+            }
+        }
+#endif
         while (true) {
             is_pop_wait.store(true, std::memory_order_seq_cst);
             auto current_r = r.load(std::memory_order_seq_cst);
@@ -190,20 +202,20 @@ struct RingBuffer {
 #ifdef _MSC_VER
             pop_cv.wait(_);
 #else
-            timespec deadline;
-            clock_gettime(CLOCK_REALTIME, &deadline);
-            deadline.tv_sec += timeout_ms / 1000;
-            deadline.tv_nsec += (timeout_ms % 1000) * 1000000;
-            if (deadline.tv_nsec >= 1000000000) {
-                ++deadline.tv_sec;
-                deadline.tv_nsec -= 1000000000;
+            if (!timeout_ms) {
+                pop_cv.wait(_);
+                continue;
             }
             auto status = pthread_cond_timedwait(
                 &pop_cv.cv, &m.m, &deadline);
+            if (status == EINTR)
+                continue;
             if (status == ETIMEDOUT) {
                 is_pop_wait.store(false, std::memory_order_seq_cst);
                 throw std::runtime_error("ring buffer pop timed out");
             }
+            if (status != 0)
+                throw std::runtime_error("ring buffer pop wait failed");
 #endif
         }
         is_pop_wait.store(false, std::memory_order_seq_cst);
