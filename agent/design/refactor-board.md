@@ -426,6 +426,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 8.06 note | `faf6745e` RmsNormGrad launcher 前置已完成；静态合同 39 passed；本机无 CANN/NPU，仍待实机验证 |
 | 8.06 note | `e86ccd11` RmsNorm forward launcher 前置；静态合同 38 passed；本机无 CANN/NPU，仍待实机 |
 | 8.06 note | `3581db5d` Softmax backward launcher 前置已完成；静态合同 40 passed；本机无 CANN/NPU，仍待实机验证 |
+| 8.06 note | `5697f619` Embedding backward launcher 前置已完成；静态合同 41 passed；本机无 CANN/NPU，仍待实机验证 |
 | 8.07 | conv 族共享描述符与计划层 | 已合并 | cudabk | 947f5223（反向只留 C++ 一份）+ 47f91130（计划请求一个构造函数） |
 | 8.08 | `ProcessGroup` 对象替代全局唯一 communicator | 已合并 | dist | 82410549（NCCL env/file 与 MPI bootstrap 双卡通过；HCCL 对称实现未在 Ascend 真机验证） |
 | 8.09 | NCCL | 已合并 | dist | f2d9c291, 95a1c956 |
