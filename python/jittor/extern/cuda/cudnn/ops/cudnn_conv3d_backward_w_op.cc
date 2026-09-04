@@ -37,7 +37,7 @@ CudnnConv3dBackwardWOp::CudnnConv3dBackwardWOp(Var* x, Var* dy, int kd, int kh, 
 
 void CudnnConv3dBackwardWOp::infer_shape() {
     USER_CHECKop(x->shape.size(),==,5);
-    ASSERTop(dy->shape.size(),==,5);
+    USER_CHECKop(dy->shape.size(),==,5);
     int xn, xc, xd, xh, xw, wd, wh, ww, wci, wco, yn, yc, yd, yh, yw;
 
     if (xformat == "ncdhw") {
