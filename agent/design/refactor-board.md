@@ -766,6 +766,8 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `7.03`：`79455300` 固定 vmap 首门禁夹具（seed=17、简单映射与 nested bool shape），要求记录 fixture/NumPy 期望/unsupported 矩阵；仅设计前置，未修改 runtime。
 - `8.06`：复核确认标准 launcher owner 已穷尽，剩余 KVCacheMemcpy 等专用路径不纳入通用 launcher，本波无代码提交。
 
-### 2026-09-04 第七十九波补充证据
+### 2026-09-04 第八十二波补充证据
 
-- `8.06`：`e1470830` 将 IncrementalFlashAttention 接入共享 launcher，保留 block-table、actual-sequence、cache-view cleanup 与同步策略；KVCacheMemcpy 未迁；静态合同 67 passed，本机无 CANN/NPU，仍待实机。
+- `8.06`：`6905864a` 明确标准 workspace/query/execute/sync owner 已迁移完毕，剩余 KVCacheMemcpy 为逐 token 专用 memcpy 路径，不纳入通用 launcher；本波无代码提交。
+- `2.19`：`a29e0f81`/`be526722`/`8382497d` 新增后端内部断言分类文档与 CUDNN RNN bias/descriptor 门禁，结构门禁 1 passed；不改变用户错误语义，用户边界累计保持 114 处。
+- `7.03`：`1abf0d75`、`d6626bd0`、`41236df4`、`5a8b0115` 补充 vmap 固定数据、context 夹具、handoff 证据模板等设计契约；未修改 runtime，未宣称实现完成。
