@@ -384,6 +384,15 @@ def test_swish_forward_uses_launcher_and_other_owners_remain_present():
     assert "void SwishBackwardOpRunner::executeOp" in source
 
 
+def test_swish_backward_uses_launcher_and_forward_remains_present():
+    source = SILU_SOURCE.read_text()
+    backward = source[source.index("void SwishBackwardOpRunner::executeOp"):source.index("SwiGluOpRunner::SwiGluOpRunner")]
+    assert "launch(ret, aclnnSwishBackward, true);" in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+    assert "launch(ret, aclnnSwish, true);" in source
+
+
 def test_batch_matmul_uses_launcher_and_keeps_cube_math_type():
     source = BMM_SOURCE.read_text()
     assert "cube_math_type" in source
