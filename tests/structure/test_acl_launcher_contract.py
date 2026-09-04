@@ -331,6 +331,17 @@ def test_leaky_relu_forward_uses_launcher_and_backward_remains_present():
     assert "void LeakyReLUBackwardOpRunner::executeOp" in source
 
 
+def test_leaky_relu_backward_uses_launcher_and_keeps_scalar_cleanup():
+    source = RELU_SOURCE.read_text()
+    backward = source[source.index("void LeakyReLUBackwardOpRunner::executeOp"):]
+    assert "negativeSlope" in backward
+    assert "selfIsResult" in backward
+    assert "launch(ret, aclnnLeakyReluBackward, true);" in backward
+    assert "aclDestroyScalar(negativeSlope);" in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+
+
 def test_arg_reduce_max_min_use_shared_launcher():
     source = ARG_REDUCE_SOURCE.read_text()
     assert "is_max" in source

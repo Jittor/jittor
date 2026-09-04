@@ -485,6 +485,9 @@ The ACL LeakyReLU forward owner uses the shared launcher while retaining its
 negativeSlope scalar and synchronous execution. LeakyReLU backward is outside
 this slice; scalar exceptional cleanup is unchanged.
 
+The ACL LeakyReLU backward owner uses the shared launcher while retaining its
+negativeSlope, selfIsResult, scalar cleanup, and synchronous execution.
+
 The ACL ArgReduce owner routes both max and min execution through the shared
 launcher while retaining is_max, dim, keepdims, and dual-output handling.
 
