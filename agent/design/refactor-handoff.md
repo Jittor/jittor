@@ -1221,6 +1221,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `compat` | 5.24 的十个 `jt._*` 跨模块契约未找到可独立闭环的安全切片；本波无代码提交。 |
 | `gates` | 上述三项均保持 `待领`，原因与证据已写入对应看板行；未新增进行中任务。 |
 
+### 2026-09-04 第一百五十四波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | 7.03 本波未找到可在不拆散 owner/fidelity/Var 委托合同的前提下独立关闭的 tensor API，未提交半成品。 |
+| `bindings` | 2.19 剩余 pyjt 断言均为内部不变量（pickle bytes、内部 NumPy copy、ABI 版本），不应改成用户错误；本波无代码提交。 |
+| `device` | 8.06 的 `AclOpFunctions`、attribute data channel、descriptor cache 需协同迁移并依赖 910B3/CANN；已有结构合同足够，未重复造 facade。 |
+| `gates` | 本波无新代码提交、无新增进行中任务；三项保持 `待领`，硬件限制和下一步边界已记录。 |
+
 ### 2026-09-04 第一百四十波
 
 | 分区 | 结果 |
