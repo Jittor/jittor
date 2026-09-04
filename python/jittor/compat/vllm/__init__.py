@@ -109,7 +109,7 @@ class _ArmOnFirstImport(importlib.abc.MetaPathFinder):
         return None
 
 
-def register():
+def register(transaction=None):
     """Arm vLLM compatibility. Nothing runs until vLLM is actually imported.
 
     Two mechanisms, because the work happens at two different moments. The
@@ -124,7 +124,12 @@ def register():
     """
 
     if not any(isinstance(finder, _ArmOnFirstImport) for finder in sys.meta_path):
-        sys.meta_path.insert(0, _ArmOnFirstImport())
+        finder = _ArmOnFirstImport()
+        sys.meta_path.insert(0, finder)
+        if transaction is not None:
+            transaction.record_undo(
+                lambda f=finder: sys.meta_path.remove(f)
+                if f in sys.meta_path else None)
     for patches in (backend.PATCHES, layers.PATCHES, flash_attn.PATCHES):
         for path, patch in patches.items():
             register_module_patch(path, patch)
