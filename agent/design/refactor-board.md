@@ -561,3 +561,8 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `8.06`：`5697f619` 将 Embedding backward 接入共享 launcher，保留 `numEmbeddings`、`paddingIdx`、`scaleGradByFreq` 与同步策略；静态合同 41 passed，本机无 CANN/NPU，仍待实机。
 - `2.19`：`4fe6f687`/`4f605d00` 将 CUB argsort 循环内 x/indexes shape 边界改为 `USER_CHECK`，累计 90 处、四十三组证据；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向。
 - `7.03`：`48c6fd73` 将 `log1p` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
+
+### 2026-09-04 看板一致性修复与并发补充
+
+- 修复 7.14 之后任务表的结构：补回计划中遗漏的 `0.22`、`2.24`、`7.19`、`7.20` 四行，移除 8.06 下只有两列的 `8.06 note` 伪行；增量证据继续集中在本文件末尾的波次小节。
+- 主线已包含的并发提交：`166010a8`（CUB argsort offsets rank，2.19）与 `ccbc6132`（`reciprocal` 稳定对象，7.03）；两项保持原任务“待领”状态，作为前置证据记录。
