@@ -1176,6 +1176,20 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | child `PYTHONPATH` 是独立字符串快照，不纳入父事务；需后续 child/path failure 专测验证。 |
 | `gates` | `py_compile`/`diff-check` 通过，本波无完整 activation 运行测试。 |
 
+### 2026-09-04 第一百四十七波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `065b71f9` 将 outer ActivationTransaction 显式传给 integrations，并在 inner `torch_compat.install` commit/rollback 后清理 state，修复 committed inner tx 被后续 mutation 误用；普通 activation 仍需更完整运行验收。 |
+| `gates` | 相关事务/安装上下文定向测试 31 passed，未改变 7.05 整卡状态。 |
+
+### 2026-09-04 第一百四十八波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `45a1283c` 增加结构合同，锁定 outer transaction 传递与 inner state 清理；合同/事务测试通过，防止 nested activation 回归。 |
+| `gates` | 本波仅补回归合同，普通 activation 的 child/build/no_grad 全流程仍待。 |
+
 ### 2026-09-04 第一百四十波
 
 | 分区 | 结果 |

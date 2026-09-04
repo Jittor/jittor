@@ -91,6 +91,10 @@
 > 第145波 7.05 子项：`4d5b8e61` 将 shim runtime 的 `_composition=True` 分支接入 ActivationTransaction，包住 torch install 与 module publish；普通 activation 的 path/build/no_grad 仍未覆盖，7.05 保持待领。
 >
 > 第146波 7.05 子项：`e0885bf7` 将普通 shim activation 的父进程 sys.path 增量接入 `ActivationTransaction.mutate_path`，异常回滚、成功提交；child `PYTHONPATH` 保持独立。sys.modules/no_grad/build 和 child/path 专项测试仍待，7.05 保持待领。
+>
+> 第147波 7.05 修正：`065b71f9` 将 outer ActivationTransaction 显式传给 integrations，并在 inner torch install commit/rollback 后清理 state，修复 nested committed-tx 被误用的问题；`45a1283c` 补结构合同，安装上下文/事务定向 31 passed。7.05 仍待完整 activation 验收。
+>
+> 第148波回归：`45a1283c` 的 activation transaction handoff 合同独立验证 outer transaction 传递和 inner state 清理，避免后续 refactor 回退；不改变 7.05 待领状态。
 
 一行一个任务，与 [refactor-plan.md](refactor-plan.md) 的编号对应。领任务把状态改成「进行中」并写名字，
 完成改成「已合并」并填提交号；推送冲突说明别人先领了。状态只有四种：待领 / 进行中 / 已合并 / 并入 X。
