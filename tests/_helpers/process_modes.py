@@ -16,6 +16,9 @@ TORCH_MODE_PATHS = (
     # The harness cases import test_device_parity and run its CPU side, so they
     # belong in the session that owns that module's semantics.
     "tests/backends/parity/test_parity_harness.py",
+    # Its oracle cache is checked against the same battery: the reproducibility
+    # cases import test_device_parity and run its CPU side.
+    "tests/backends/parity/test_reference_cache.py",
     "tests/backends/npu/test_acl_torch_compat.py",
     # These suites intentionally lock Torch defaults and dtype semantics.
     "tests/core/test_regression.py",
