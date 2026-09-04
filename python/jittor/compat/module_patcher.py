@@ -192,12 +192,13 @@ def _load_entry_point_patches() -> List[PatchResult]:
     return results
 
 
-def _apply_module_patches(module: ModuleType) -> List[PatchResult]:
+def _apply_module_patches(module: ModuleType, transaction=None) -> List[PatchResult]:
     with _LOCK:
         callbacks = tuple(_REGISTRY.get(module.__name__, ()))
     results = []
     for callback in callbacks:
         callback_name = _callback_name(callback)
+        before = dict(module.__dict__) if transaction is not None else None
         try:
             changed = callback(module)
         except EXPECTED as exc:
@@ -206,6 +207,13 @@ def _apply_module_patches(module: ModuleType) -> List[PatchResult]:
             continue
         status = "patched" if changed is not False else "unchanged"
         results.append(PatchResult("module", module.__name__, callback_name, status))
+        if transaction is not None:
+            after = module.__dict__
+            for name in set(before) | set(after):
+                old = before.get(name, _MISSING)
+                new = after.get(name, _MISSING)
+                if old is not new:
+                    transaction.record(module, name, old, new)
     return results
 
 
@@ -253,7 +261,7 @@ def install_module_patches(load_entry_points: bool = True, transaction=None) -> 
         for path in tuple(_REGISTRY):
             module = sys.modules.get(path)
             if isinstance(module, ModuleType):
-                results.extend(_apply_module_patches(module))
+                results.extend(_apply_module_patches(module, transaction=transaction))
         if _FINDER is None or _FINDER not in sys.meta_path:
             _FINDER = _ModulePatchFinder()
             sys.meta_path.insert(0, _FINDER)
