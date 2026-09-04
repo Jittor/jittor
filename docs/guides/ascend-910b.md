@@ -507,5 +507,9 @@ The ACL Maxpool forward owner uses the shared launcher while retaining its
 kernel, stride, padding, dilation, and ceil-mode descriptors. Avgpool and
 backward owners remain outside this slice.
 
+The ACL Avgpool forward owner uses the shared launcher while retaining its
+pool descriptors, ceil mode, divisor, and padding semantics. Maxpool and
+backward owners remain outside this slice.
+
 The ACL UpsampleNearest2d forward owner uses the shared launcher while retaining
 output-size RAII and synchronous execution. Backward is outside this slice.

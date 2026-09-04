@@ -355,6 +355,18 @@ def test_maxpool_forward_uses_launcher_and_keeps_descriptors():
     assert "void AvgpoolOpRunner::executeOp" in source
 
 
+def test_avgpool_forward_uses_launcher_and_maxpool_remains_present():
+    source = POOL_SOURCE.read_text()
+    forward = source[source.index("void AvgpoolOpRunner::executeOp"):source.index("MaxpoolBackwardOpRunner::MaxpoolBackwardOpRunner")]
+    assert "kernel_size" in forward
+    assert "poolCeil" in forward
+    assert "countIncludePad" in forward
+    assert "launch(ret, aclnnAvgPool2d, true);" in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void MaxpoolOpRunner::executeOp" in source
+
+
 def test_random_uniform_normal_share_launcher_and_keep_seed_offset():
     source = RANDOM_SOURCE.read_text()
     assert "RandomUniform" in source
