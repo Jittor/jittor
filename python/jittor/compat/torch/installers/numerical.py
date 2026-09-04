@@ -308,6 +308,25 @@ register_fidelity(
 )
 
 
+_LERP_FIDELITY_DETAIL = (
+    "matches Torch linear interpolation values for supported real tensors but "
+    "omits device, layout, and dtype keyword semantics"
+)
+
+
+def lerp(input, end, weight):
+    """Linearly interpolate between ``input`` and ``end``."""
+    return input + weight * (end - input)
+
+
+register_fidelity(
+    "torch.lerp",
+    lerp,
+    Fidelity.APPROXIMATE,
+    _LERP_FIDELITY_DETAIL,
+)
+
+
 _NAN_TO_NUM_INPLACE_FIDELITY_DETAIL = (
     "matches Torch in-place NaN/Inf replacement and return identity for supported "
     "real tensors but omits device, layout, dtype, and narrow custom-bound semantics"
@@ -1229,7 +1248,7 @@ def install(ctx):
     # elementwise / functional top-level forms missing from jittor's top level
     _alias("log1p", log1p)
     _alias("reciprocal", reciprocal)
-    _alias("lerp", lambda input, end, weight: input + weight * (end - input))
+    _alias("lerp", lerp)
     _alias("isclose", isclose)
     _alias("allclose", allclose)
     _alias("cosine_similarity", cosine_similarity)
