@@ -73,6 +73,8 @@
 > 第136波 7.05 子项：`88795374` 让 permissive finder 新增和既有 allowlist 增量进入 transaction ledger，compiler installer 三处调用已接线；尚未覆盖 module_patcher finder 和并发外部替换，7.05 仍待领。
 >
 > 第137波测试修正：`9c6a7e92` 将 compile refusal 测试从过时的 `never checked` 文案更新为当前 `unchecked` 合同；transaction/permissive 定向共 27 passed。7.05 仍待完整 mutation 接入。
+>
+> 第138波 7.05 子项：`1a37b895` 将 module_patcher finder、registry、entry-point 状态接入 transaction undo，并由 integrations 传递 active transaction；外部 finder/allowlist owner 冲突测试仍待，7.05 保持待领。
 
 一行一个任务，与 [refactor-plan.md](refactor-plan.md) 的编号对应。领任务把状态改成「进行中」并写名字，
 完成改成「已合并」并填提交号；推送冲突说明别人先领了。状态只有四种：待领 / 进行中 / 已合并 / 并入 X。
