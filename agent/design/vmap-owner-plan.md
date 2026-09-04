@@ -357,3 +357,17 @@ loop with an absolute tolerance appropriate to the input dtype. Avoid randomized
 property tests in the first gate; they make cold-cache failures and backend
 differences harder to classify. A later stress suite may widen shapes only after
 the owner/identity and unsupported gates are green.
+
+For reproducibility, use this first-gate fixture (all values are CPU float32 or
+bool):
+
+```text
+seed = 17
+x = [[1, 2], [3, 4], [5, 6]]
+simple in_dims=0 -> [[2, 4], [6, 8], [10, 12]]
+nested bool mask expected shape = (2, 3, 2)
+```
+
+The test should record the seed and fixture name in its evidence line. A change
+to these values requires updating the expected NumPy loop output and reviewing
+the unsupported matrix; do not silently regenerate fixtures.
