@@ -1045,6 +1045,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | `80e0f1b4` 增加 10.17 异步错误诊断契约，规定 per-thread bounded launch ring、allocation-free/not-found 行为及 CUDA 验收命令；静态合同 1 passed，未改 runtime。 |
 | `gates` | 本波没有可完整关闭的新卡；0.15 仍约 390 s，HCCL/ACL 仍待实机。 |
 
+### 2026-09-04 第一百二十波
+
+| 分区 | 结果 |
+| --- | --- |
+| `bindings` | 8.12/10.17 整卡复核未发现可在 CPU/静态环境完整关闭的子卡；cuDNN POD key 与异步 runtime ring 均缺关键实现/实机证据。 |
+| `compat` | `a0d3be31` 将 `broadcast_shapes` 提升为 tensor installer 模块级稳定 owner，登记 approximate fidelity；identity/metadata/NumPy shape 对拍 2 passed。10.20 introspection 仍缺完整迁移。 |
+| `device` | 10.17 运行时 ring 不能安全独立实现：涉及 executor 并发、fused/stream 归属与节点生命周期；保留 `80e0f1b4` 设计契约，等待 CUDA 验证。 |
+| `gates` | 本波未改变 0.15 性能门槛或硬件路线；待领保持 73。 |
+
 ### 2026-09-04 第一百一十二波
 
 | 分区 | 结果 |
