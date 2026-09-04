@@ -841,3 +841,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 ### 2026-09-04 第九十三波补充证据
 
 - `2.19`：`66fd400d` 补充 CUDNN convolution `ASSERT(best_algo_idx!=-1)` 精确计数门禁；结构门禁 1 passed，不改变运行语义或用户边界累计。
+
+### 2026-09-04 第九十四波补充证据
+
+- `2.19`：`9d2752e2` 补充 CUDNN 3D convolution `ASSERT(best_algo_idx!=-1)` 精确计数门禁；结构门禁 1 passed，不改变运行语义或用户边界累计。
