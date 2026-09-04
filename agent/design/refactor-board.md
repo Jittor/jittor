@@ -623,6 +623,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 ### 2026-09-04 第六十二波补充证据
 
 - `8.06`：`1f1ffec3` 将 LayerNorm forward 接入共享 launcher，保留 normalizedShape、eps、三输出与 descriptor cleanup；静态合同 51 passed，本机无 CANN/NPU，仍待实机。
+- `8.06`：`ca40d0d6` 将 LayerNorm backward 接入共享 launcher，保留 normalizedShape/outMask、三输出 query 与 descriptor cleanup；静态合同 52 passed，本机无 CANN/NPU，仍待实机。
 - `8.06`：`8e772a5b` 将 SwiGlu 接入共享 launcher，保留同步策略；静态合同 50 passed，本机无 CANN/NPU，仍待实机。
 - `2.19`：`fbc69232`/`a4adb24b` 将 cuDNN RNN LSTM mode 用户边界改为 `USER_CHECKop`，累计 95 处、四十八组证据；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向。
 - `7.03`：`b98cde25` 将 `relu` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
