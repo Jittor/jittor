@@ -27,9 +27,9 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；本波审计基线 `ae78d185`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 审计基线 837 个 |
-| 提交里出现过的任务号 | 287 个 |
+| 分支 | `2.0-refactor`；本波审计基线 `d3e786e2`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 审计基线 842 个 |
+| 提交里出现过的任务号 | 289 个 |
 | 看板 | 已合并 **196** / 进行中 **0** / 待领 **74** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
 
@@ -611,7 +611,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `bindings` | 2.19 将 cuDNN RNN backward-x `proj_size==0` 边界改为 `USER_CHECKop`，累计 101 处、五十四组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
 | `compat` | 7.03 将 `repeat_interleave` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行 |
 
-按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第六十六波继续优先可独立验证的
+第六十六波新增 2 个严格保持待领的前置；compat 复核未找到安全小切片：
+
+| 分区 | 第六十六波结果 |
+| --- | --- |
+| `device` | 8.06 将 GroupNorm backward 接入共享 launcher，保留 output-mask、group 属性、三输出 query 与 cleanup；静态合同 54 passed，本机无 CANN/NPU |
+| `bindings` | 2.19 将 cuDNN RNN backward-x 非 LSTM mode 边界改为 `USER_CHECKop`，累计 102 处、五十五组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `compat` | 7.03 复核剩余候选仅有复杂 `vmap` 闭包，未强行拆分 |
+
+按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第六十七波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
 - `device`：若续做 8.06，只迁下一个最终 owner 明确的 family，并复用 5be5fa15 的 launcher 合同；无 NPU

@@ -668,3 +668,9 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `8.06`：`3f0b8c7d`/`3c0f2115` 将 GroupNorm forward 接入共享 launcher，保留 group/eps、三输出 query 与同步策略；静态合同 53 passed，本机无 CANN/NPU，仍待实机。
 - `2.19`：`b3826005`/`ae78d185` 将 cuDNN RNN backward-x `proj_size==0` 边界改为 `USER_CHECKop`，累计 101 处、五十四组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
 - `7.03`：`e0bc5294` 将 `repeat_interleave` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
+
+### 2026-09-04 第六十六波补充证据
+
+- `8.06`：`016fc62d`/`eb1e89cd` 将 GroupNorm backward 接入共享 launcher，保留 output-mask、group 属性、三输出 query 与 cleanup；静态合同 54 passed，本机无 CANN/NPU，仍待实机。
+- `2.19`：`35664df5`/`d3e786e2` 将 cuDNN RNN backward-x 非 LSTM mode 边界改为 `USER_CHECKop`，累计 102 处、五十五组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `7.03`：本波复核剩余候选仅有复杂 `vmap` 闭包，未强行拆分，保持无新增代码提交。
