@@ -1362,6 +1362,42 @@ Corex 8.14 的正式前置 4.12 尚未满足；ACL/NPU、ROCm、Corex 等本机�
 不做性能优化；必须在看板写清待跑机型与命令，真实设备验收前不得宣称硬件验证完成。3.18 与 3.22 的
 剩余是性能终点，继续留给性能波复查。
 
+### ⚠ `tests/structure` 当前是红的，共 15 条既存失败，跑一遍约 7 分钟
+
+`AGENT-BRIEF.md` 第 11 节说「推之前跑一次 `tests/structure`，只要 3 秒」，并把它当成一道绿的门禁
+用来挡跨分区违规。**实测不是这样**：在 `59ee6553` 的干净 `gatecheck` worktree 上
+`JITTOR_TORCH_SHIM=1 pytest tests/structure -q` 得到 `15 failed, 491 passed, 2 skipped in 410s`，
+在 `coord` 上逐条复现同一份清单。
+
+**后果**：门禁整体为红时，agent 无法把自己新引入的违规从这 15 条噪声里分出来——这正是第 11 节
+要防的失败模式（「期间没有任何东西跑过它」）。**在清单归零之前，判据是「你的失败是否在下表之外」，
+而不是「是否全绿」。**
+
+已修 3 条：`c8ce8760`（10.24，fixture 契约改按真实来源解析——原判据拿参数与一份只含 pytest 内置
+fixture 的冻结清单比较，于是 7 处使用自有 fixture 的合法测试全被误判）、`6dd80916`（0.21，
+`test_cache_atomic_publish.py` 的 dlink 子进程改走 `child_process` helper，一次修掉 2 条）。
+
+**剩余 12 条，按成因分类：**
+
+| 失败 | 成因 | 归属 |
+| --- | --- | --- |
+| `test_acl_runner_failure_contract::..._fail_loudly` | `assert 8 == 65`。8.06 把 family 迁进 `BaseOpRunner` 共享 launcher 后，尾巴不再直接出现 `checkRet`，6.B02 的计数法失效 | 契约与实现脱节，8.06 owner |
+| `test_cleanup_structure::..._duplicate_implementations_are_reviewed` | `_set_use_cuda` 在 `installers/factories.py` 与 `installers/tensor.py` 各一份（7.05 第 134 波 `60197b81`） | **真重复**，7.05 owner |
+| `test_compat_exception_policy::..._catches_exception_at_large` | `compat/transaction.py:155` 宽泛 `except Exception`（7.05 引入） | **真违规**，7.16 要求 compat 内归零 |
+| `test_misc_structure::..._use_real_paths_and_legacy_pickle_aliases` | `repeat_interleave` 是两个不同的函数对象 | 7.03 身份问题，compat owner |
+| `test_misc_structure::..._do_not_invent_inplace_aliases` | 同上 | 同上 |
+| `test_runtime_composition_structure::..._only_preflight_and_post_core_composition` | 根部多出 `_publish`、`_make_inplace_alias` | 待判 |
+| `test_runtime_composition_structure::..._is_orchestration_only` | 期望 `['enable']`，实际是 7.04 把三条入口收敛成 `activate()` 之后的形状 | **陈旧期望**，改测试 |
+| `test_torch_compat_structure::..._has_an_exact_owner_whitelist` | 白名单缺 `runtime.py compose 'torch'` 等 2 项 | **陈旧清单**，属 0.19 精神 |
+| `test_torch_shim_structure::..._is_a_runtime_facade` | 期望 `from .runtime import enable`，实际是 `activate, activation_status` 加 `enable = activate` | **陈旧期望**（7.04） |
+| `test_torch_shim_structure::..._36_file_manifest_matches_bytes` | 整树字节 manifest 哈希不匹配 | **0.19 明确要求删除的那类精确清单**，本该随 0.19 一起删 |
+| `test_torch_shim_structure::..._is_an_identity_only_entrypoint` | 期望 `_torch_compat.install(_jittor)`，实际改成 `shim.activate()` | **陈旧期望**（7.04） |
+| `test_vllm_compat_structure::..._through_its_public_entry_points` | `layers.py:19` 导入 `jittor.nn.backends.hooks`，非公开入口 | **真违规** |
+
+即 6 条是陈旧期望（其中 2 条本该在 0.19 里删掉）、4 条是真违规或真重复、2 条待判。**陈旧期望那批
+不要靠放宽断言了事**——0.19 的要求是「从精确清单改成规则」，改成规则才算修；`10.24` 是一个示范：
+它同时验证了修正后的判据仍能抓住原本要抓的东西（临时反例仍被报出），而不是把门禁改松。
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
