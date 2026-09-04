@@ -434,3 +434,15 @@ bindings = [n for n in ast.walk(install) if is_vmap_binding(n)]
 `_alias("vmap", ...)`, returning the source line for each match. The test emits
 counts plus a sorted list of binding lines, so a duplicate or dynamic binding is
 visible in review without importing Jittor.
+
+## Context-leak static checks
+
+The AST gate should inspect all `FunctionDef` and `Lambda` nodes at module scope
+and reject defaults, annotations, or decorators that reference installer
+objects. For the owner function, inspect `__code__.co_freevars` and closure
+cells after a dry-run construction with a sentinel runtime; accepted freevars
+are limited to immutable helpers and the injected `transform_depth` callback.
+
+The gate should also scan module-level `Assign`/`AnnAssign` nodes for values
+whose names contain `ctx`, `g`, `Var`, or `InstallContext`. Report each finding
+with `path`, `line`, and `symbol`, and fail closed when source cannot be parsed.
