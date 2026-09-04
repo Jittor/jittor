@@ -25,6 +25,21 @@ from ..types import (
 from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed
 
+_vmap_runtime_impl = None
+
+
+def vmap(func, in_dims=0, out_dims=0, *args, **kwargs):
+    if _vmap_runtime_impl is None:
+        raise RuntimeError("torch.vmap runtime owner is not installed")
+    return _vmap_runtime_impl(func, in_dims, out_dims, *args, **kwargs)
+
+
+register_fidelity(
+    "torch.vmap", vmap, Fidelity.APPROXIMATE,
+    "delegates Torch vmap batching to the compatibility runtime; device, "
+    "randomness, and unsupported kwargs follow the installed backend policy",
+)
+
 autocast = _AutocastContext
 register_fidelity(
     "torch.autocast",
@@ -2002,7 +2017,9 @@ def install(ctx):
         wrapped._jittor_vmap_base = base_func
         wrapped._jittor_vmap_specs = specs
         return wrapped
-    _alias("vmap", _vmap)
+    global _vmap_runtime_impl
+    _vmap_runtime_impl = _vmap
+    g.vmap = vmap
     g.outer = outer
     g.isin = isin
     # Pairwise distances and sorted-boundary insertion indices.

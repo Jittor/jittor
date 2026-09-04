@@ -285,6 +285,20 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             torch.index_put_(base, (dup,), torch.array([1, 2]), accumulate=True)
             np.testing.assert_array_equal(base.numpy(), np.array([4, 20, 3, 40]))
 
+    def test_vmap_is_stable_and_registered(self):
+        numerical = importlib.import_module("jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        self.assertIs(torch.vmap, numerical.vmap)
+        record = fidelity.fidelity_of("torch.vmap")
+        self.assertIs(record.implementation, numerical.vmap)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+
+    def test_vmap_cpu_values(self):
+        with torch.flag_scope(use_cuda=0):
+            value = torch.array([1.0, 2.0, 3.0])
+            mapped = torch.vmap(lambda x: x + 1)(value)
+            np.testing.assert_array_equal(mapped.numpy(), np.array([2., 3., 4.]))
+
     def test_autocast_is_a_stable_module_level_object_and_registered(self):
         numerical = importlib.import_module(
             "jittor.compat.torch.installers.numerical")
