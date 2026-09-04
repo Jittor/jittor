@@ -396,3 +396,21 @@ field or failed assertion:
 
 The dynamic CPU nodes remain a separate invocation after a compatible cache is
 available; their results must reference the same owner commit and fixture seed.
+
+## Handoff evidence template
+
+Use one compact record when reporting a vmap wave:
+
+```text
+wave: <number>
+owner_commit: <hash>
+static_contract: pass|fail
+dynamic_cpu: pass|deferred|environment-skip
+fixture: seed=17/<name>
+blocker: <none or precise unsupported/backend reason>
+```
+
+`dynamic_cpu=deferred` is valid only when the static contract passes and the
+reason is a cold-cache or unavailable-backend condition. A semantic mismatch,
+identity failure, or context leak must be recorded as `static_contract=fail`
+and keep 7.03 marked `待领`.
