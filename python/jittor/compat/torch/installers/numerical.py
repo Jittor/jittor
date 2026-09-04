@@ -1454,6 +1454,32 @@ register_fidelity(
 )
 
 
+def equal(a, b):
+    """Return a Python bool for Torch's same-shape, elementwise equality."""
+    try:
+        if isinstance(a, _NestedTensor) or isinstance(b, _NestedTensor):
+            return bool(a.equal(b)) if isinstance(a, _NestedTensor) else False
+        if not isinstance(a, jt.Var) or not isinstance(b, jt.Var):
+            return bool(a == b)
+        if tuple(a.shape) != tuple(b.shape):
+            return False
+        if a.numel() == 0:
+            return True
+        return bool((a == b).all().item())
+    except EXPECTED as exc:
+        swallowed("torch/installers/numerical.py equal", exc)
+        return False
+
+
+register_fidelity(
+    "torch.equal",
+    equal,
+    Fidelity.APPROXIMATE,
+    "matches Torch Python-bool shape/value equality for CPU tensors; device, "
+    "layout, and named-dimension semantics are not implemented",
+)
+
+
 def hann_window(window_length, periodic=True, *, dtype=None, device=None,
                 requires_grad=False, **kwargs):
     """Create a Hann window through the CPU NumPy signal owner."""
@@ -1687,22 +1713,8 @@ def install(ctx):
     _alias("tile", tile)
     # torch.equal returns a Python bool (True iff same shape & all elements
     # equal). jittor's native `equal` is elementwise, so force-override.
-    def _torch_equal(a, b):
-        try:
-            if isinstance(a, _NestedTensor) or isinstance(b, _NestedTensor):
-                return bool(a.equal(b)) if isinstance(a, _NestedTensor) else False
-            if not isinstance(a, jt.Var) or not isinstance(b, jt.Var):
-                return bool(a == b)
-            if tuple(a.shape) != tuple(b.shape):
-                return False
-            if a.numel() == 0:
-                return True
-            return bool((a == b).all().item())
-        except EXPECTED as exc:
-            swallowed("torch/installers/numerical.py _torch_equal: if isinstance(a, _NestedTensor) or isinstance(b, _Neste...", exc)
-            return False
-    g.equal = _torch_equal
-    Var.equal = lambda self, other: _torch_equal(self, other)
+    g.equal = equal
+    Var.equal = lambda self, other: equal(self, other)
     _alias("diff", diff)
     _alias("trapz", trapz)
     _alias("trapezoid", trapezoid)

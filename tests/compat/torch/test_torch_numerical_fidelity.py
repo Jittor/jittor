@@ -117,6 +117,27 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                  for i in (0, 2, 4)], axis=1)
             np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
 
+    def test_equal_is_a_stable_module_level_object_and_registered(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        self.assertIs(torch.equal, numerical.equal)
+        self.assertEqual(numerical.equal.__module__, numerical.__name__)
+        record = fidelity.fidelity_of("torch.equal")
+        self.assertIs(record.implementation, numerical.equal)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("shape", record.detail)
+
+    def test_equal_cpu_shape_and_values(self):
+        with torch.flag_scope(use_cuda=0):
+            a = torch.array([[1, 2], [3, 4]])
+            b = torch.array([[1, 2], [3, 4]])
+            c = torch.array([[1, 2, 3], [4, 5, 6]])
+            self.assertIs(torch.equal(a, b), True)
+            self.assertIs(torch.equal(a, a + 1), False)
+            self.assertIs(torch.equal(a, c), False)
+            self.assertIs(torch.equal(torch.array([]), torch.array([])), True)
+
     def test_eye_is_a_stable_module_level_object(self):
         numerical = importlib.import_module(
             "jittor.compat.torch.installers.numerical")
