@@ -21,7 +21,62 @@ from ..types import (
     _make_dtypes, device, dtype, make_torch_types_module,
     SymBool, SymFloat, SymInt,
 )
+from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed
+
+
+_LN2 = 0.6931471805599453
+_INV_LN10 = 0.4342944819032518
+_UNARY_MATH_FIDELITY_DETAIL = (
+    "matches Torch elementwise values and preserves the input dtype for "
+    "supported real tensors, including sign(NaN) == 0 as Torch 2.x returns; "
+    "device, layout, dtype-keyword, and out semantics are not implemented"
+)
+
+
+def sign(input):
+    """Return -1/0/+1 elementwise, in the input's own dtype.
+
+    Casting each comparison back to ``input.dtype`` is what keeps
+    ``torch.sign(int_tensor)`` integral, the way Torch does it. The float-valued
+    ``(x > 0) * 1.0 - (x < 0) * 1.0`` form this replaced returned float32 for
+    every input, so the module-level function and ``Tensor.sign`` -- which came
+    from a second copy in installers/tensor.py -- disagreed on integer tensors.
+    """
+    return (input > 0).cast(input.dtype) - (input < 0).cast(input.dtype)
+
+
+def trunc(input):
+    """Round toward zero elementwise."""
+    return jt.ternary(input >= 0, jt.floor(input), jt.ceil(input))
+
+
+def frac(input):
+    """Return the fractional part, carrying the sign of ``input``."""
+    return input - trunc(input)
+
+
+def exp2(input):
+    """Return ``2 ** input`` elementwise."""
+    return jt.exp(input * _LN2)
+
+
+def log10(input):
+    """Return the base-10 logarithm elementwise."""
+    return jt.log(input) * _INV_LN10
+
+
+for _unary_api, _unary_impl in (
+    ("torch.sign", sign),
+    ("torch.trunc", trunc),
+    ("torch.Tensor.frac", frac),
+    ("torch.exp2", exp2),
+    ("torch.log10", log10),
+):
+    register_fidelity(
+        _unary_api, _unary_impl, Fidelity.APPROXIMATE,
+        _UNARY_MATH_FIDELITY_DETAIL)
+del _unary_api, _unary_impl
 
 
 def _set_install_flag(ctx, name, value):
@@ -416,18 +471,19 @@ def install_misc(ctx):
             return jt.concat(segs, dim=0)
         g.segment_reduce = segment_reduce
 
-    # torch unary math jittor lacks at top level (it has log2 but not exp2/log10/trunc/sign)
-    import math as _math_la
-    _LN2 = _math_la.log(2.0); _INV_LN10 = 1.0 / _math_la.log(10.0)
-    def _sign(x): return (x > 0) * 1.0 - (x < 0) * 1.0   # jittor has no jt.sign
-    g.exp2 = lambda x: jt.exp(x * _LN2)
-    g.log10 = lambda x: jt.log(x) * _INV_LN10
-    g.sign = _sign
-    g.trunc = lambda x: _sign(x) * jt.floor(jt.abs(x))
-    Var.exp2 = lambda self: jt.exp(self * _LN2)
-    Var.log10 = lambda self: jt.log(self) * _INV_LN10
-    if not hasattr(Var, "sign"): Var.sign = lambda self: _sign(self)
-    Var.trunc = lambda self: _sign(self) * jt.floor(jt.abs(self))
+    # torch unary math jittor lacks at top level (it has log2 but not exp2/log10/
+    # trunc/sign/frac). These are module-level stable objects with registered
+    # fidelity; the function and the method are the same object on purpose --
+    # they used to be two copies that disagreed on integer dtypes.
+    g.exp2 = exp2
+    g.log10 = log10
+    g.sign = sign
+    g.trunc = trunc
+    Var.exp2 = exp2
+    Var.log10 = log10
+    Var.sign = sign
+    Var.trunc = trunc
+    Var.frac = frac
 
 
     # ---- finfo / iinfo ----

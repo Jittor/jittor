@@ -366,6 +366,81 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         np.testing.assert_array_equal(
             alias.numpy(), values.max(axis=0, keepdims=True))
 
+    def test_unary_math_family_is_one_stable_module_level_object_each(self):
+        core = importlib.import_module("jittor.compat.torch.installers.core")
+        for name in ("sign", "trunc", "exp2", "log10"):
+            with self.subTest(name=name):
+                implementation = getattr(core, name)
+                self.assertTrue(callable(implementation))
+                self.assertIs(getattr(torch, name), implementation)
+                self.assertIs(getattr(torch.Var, name), implementation)
+                self.assertEqual(implementation.__module__, core.__name__)
+                self.assertEqual(implementation.__name__, name)
+        # frac is a Tensor method only; Torch's module-level torch.frac is not
+        # published by this layer, so it is registered under torch.Tensor.frac.
+        self.assertIs(torch.Var.frac, core.frac)
+
+    def test_unary_math_family_fidelity_is_queryable_and_conservative(self):
+        core = importlib.import_module("jittor.compat.torch.installers.core")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        registered = {
+            "torch.sign": core.sign,
+            "torch.trunc": core.trunc,
+            "torch.Tensor.frac": core.frac,
+            "torch.exp2": core.exp2,
+            "torch.log10": core.log10,
+        }
+        for api, implementation in registered.items():
+            with self.subTest(api=api):
+                record = fidelity.fidelity_of(api)
+                self.assertIs(record.implementation, implementation)
+                self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+                self.assertIn("dtype", record.detail)
+                self.assertIn("device", record.detail)
+                self.assertIn("out", record.detail)
+
+    def test_sign_preserves_the_integer_dtype_like_torch(self):
+        """The function form used to return float32 while the method kept int32.
+
+        Real Torch 2.12 returns int32 for both, and ``torch.sign`` and
+        ``Tensor.sign`` are the same computation there. Two copies of this op
+        lived in installers/core.py and installers/tensor.py, so the value was
+        right and the dtype was silently wrong depending on which spelling the
+        caller used.
+        """
+        values = np.array([-3, 0, 5], dtype="int32")
+        with torch.flag_scope(use_cuda=0):
+            tensor = torch.array(values)
+            functional = torch.sign(tensor)
+            method = tensor.sign()
+        self.assertEqual(str(functional.dtype), "int32")
+        self.assertEqual(str(method.dtype), "int32")
+        np.testing.assert_array_equal(functional.numpy(), np.sign(values))
+        np.testing.assert_array_equal(method.numpy(), np.sign(values))
+
+    def test_unary_math_family_cpu_values_match_numpy(self):
+        values = np.array([-2.5, -0.5, 0.0, 0.5, 3.25], dtype="float32")
+        positive = np.array([0.5, 1.0, 100.0], dtype="float32")
+        with torch.flag_scope(use_cuda=0):
+            tensor = torch.array(values)
+            actual_sign = torch.sign(tensor).numpy()
+            actual_trunc = torch.trunc(tensor).numpy()
+            actual_frac = tensor.frac().numpy()
+            actual_exp2 = torch.exp2(tensor).numpy()
+            actual_log10 = torch.log10(torch.array(positive)).numpy()
+        np.testing.assert_array_equal(actual_sign, np.sign(values))
+        np.testing.assert_array_equal(actual_trunc, np.trunc(values))
+        np.testing.assert_allclose(
+            actual_frac, values - np.trunc(values), rtol=0, atol=1e-7)
+        np.testing.assert_allclose(actual_exp2, np.exp2(values), rtol=1e-6)
+        np.testing.assert_allclose(
+            actual_log10, np.log10(positive), rtol=1e-6)
+
+    def test_sign_maps_nan_to_zero_like_torch(self):
+        with torch.flag_scope(use_cuda=0):
+            actual = torch.sign(torch.array([np.nan, -1.0, 1.0])).numpy()
+        np.testing.assert_array_equal(actual, np.array([0.0, -1.0, 1.0]))
+
     def test_broadcast_shapes_is_stable_and_registered(self):
         tensor_owner = importlib.import_module("jittor.compat.torch.installers.tensor")
         fidelity = importlib.import_module("jittor.compat.torch.fidelity")

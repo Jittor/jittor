@@ -537,13 +537,10 @@ def _install_reductions(g):
     Var.diagonal = _diagonal
 
     # --- elementwise / reduction ops missing as torch methods (all additive) ---
-    if not hasattr(Var, "sign"):
-        # torch sign: -1/0/+1 (nan->nan in torch; this gives 0 for nan, an accepted edge)
-        Var.sign = lambda self: (self > 0).cast(self.dtype) - (self < 0).cast(self.dtype)
-    if not hasattr(Var, "trunc"):
-        Var.trunc = lambda self: _jt.ternary(self >= 0, _jt.floor(self), _jt.ceil(self))
-    if not hasattr(Var, "frac"):
-        Var.frac = lambda self: self - _jt.ternary(self >= 0, _jt.floor(self), _jt.ceil(self))
+    # sign/trunc/frac used to be installed here too, guarded by hasattr, while
+    # core.install_misc -- which runs later -- owns torch.sign/torch.trunc and
+    # overwrites Var.trunc unconditionally. The two copies did not agree, so the
+    # family now has exactly one owner in installers/core.py.
     if not hasattr(Var, "nan_to_num"):
         def _nan_to_num(self, nan=0.0, posinf=None, neginf=None):
             # Replace nan with one ternary, then clamp to the ±inf replacement bounds.
