@@ -204,15 +204,25 @@ def _bootstrap_native_distributed(rank, world_size, backend=None, store=None):
     visible = [item for item in os.environ.get(
         "CUDA_VISIBLE_DEVICES", "").split(",") if item.strip()]
     local_rank = 0 if len(visible) == 1 else int(os.environ.get("LOCAL_RANK", rank))
-    os.environ["JT_NCCL_WORLD_SIZE"] = str(world_size)
-    os.environ["JT_NCCL_RANK"] = str(rank)
-    os.environ["JT_NCCL_LOCAL_RANK"] = str(local_rank)
+    tx = getattr(getattr(jt, "_torch_compat_install_context", None),
+                 "state", {}).get("_install_transaction")
+    def set_env(name, value):
+        if tx is not None:
+            tx.mutate_env(name, value)
+        else:
+            os.environ[name] = str(value)
+    set_env("JT_NCCL_WORLD_SIZE", world_size)
+    set_env("JT_NCCL_RANK", rank)
+    set_env("JT_NCCL_LOCAL_RANK", local_rank)
     if rootinfo:
-        os.environ["JT_NCCL_ROOTINFO_FILE"] = rootinfo
-    os.environ["use_nccl"] = "1"
-    os.environ["use_mpi"] = "0"
+        set_env("JT_NCCL_ROOTINFO_FILE", rootinfo)
+    set_env("use_nccl", "1")
+    set_env("use_mpi", "0")
 
-    jt.flags.use_cuda = 1
+    if tx is not None:
+        tx.mutate_flag(jt.flags, "use_cuda", 1)
+    else:
+        jt.flags.use_cuda = 1
     jt.compile_extern.setup_nccl(store=store)
     ops = getattr(jt.compile_extern, "nccl_ops", None)
     if ops is None:

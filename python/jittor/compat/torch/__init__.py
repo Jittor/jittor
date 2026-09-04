@@ -207,6 +207,7 @@ def install(torch, strict=True):
         return torch
 
     transaction.acquire()
+    context.state["_install_transaction"] = transaction
 
     pending = context.state.pop(_NAMESPACE_TRANSACTION, None)
     if pending is not None:
