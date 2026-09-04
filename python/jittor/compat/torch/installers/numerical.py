@@ -25,6 +25,42 @@ from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed
 
 
+_COMPLEX_FIDELITY_DETAIL = (
+    "matches Torch complex construction and real/imag round-trips for CPU "
+    "real tensors; device, layout, out, and complex128 semantics are not "
+    "implemented by the Jittor complex owner"
+)
+
+
+def complex(real, imag, **kwargs):
+    """Construct a native complex tensor from real and imaginary parts."""
+    return jt.nn.view_as_complex(jt.stack([real, imag], dim=-1))
+
+
+def view_as_complex(input):
+    """Interpret the trailing size-two dimension as a complex tensor."""
+    return jt.nn.view_as_complex(input)
+
+
+def view_as_real(input):
+    """Expose native complex values as a trailing size-two real dimension."""
+    return jt.nn.view_as_real(input)
+
+
+for _complex_name, _complex_impl in (
+    ("complex", complex),
+    ("view_as_complex", view_as_complex),
+    ("view_as_real", view_as_real),
+):
+    register_fidelity(
+        "torch." + _complex_name,
+        _complex_impl,
+        Fidelity.APPROXIMATE,
+        _COMPLEX_FIDELITY_DETAIL,
+    )
+del _complex_name, _complex_impl
+
+
 def eye(n, m=None, dtype=None, **kwargs):
     """Create a square or rectangular identity matrix."""
     shape = (int(n), int(n)) if m is None else (int(n), int(m))
@@ -1377,9 +1413,9 @@ def install(ctx):
     # that is why torch.conj(ComplexNumber) used to fall through to the native conj op and crash.
     def _is_cplx(x):
         return isinstance(x, _CN) or (isinstance(x, Var) and "complex" in str(x.dtype))
-    _alias("complex", lambda real, imag, **k: jt.nn.view_as_complex(jt.stack([real, imag], dim=-1)))  # native complex64
-    _alias("view_as_complex", lambda x: jt.nn.view_as_complex(x))   # -> native complex64
-    _alias("view_as_real", lambda x: jt.nn.view_as_real(x))         # polymorphic
+    _alias("complex", complex)  # native complex64
+    _alias("view_as_complex", view_as_complex)   # -> native complex64
+    _alias("view_as_real", view_as_real)         # polymorphic
     g.is_complex = lambda x: _is_cplx(x)
     g.real = lambda x: x.real if isinstance(x, (_CN, Var)) else x
     g.imag = lambda x: x.imag if isinstance(x, (_CN, Var)) else jt.zeros_like(x)

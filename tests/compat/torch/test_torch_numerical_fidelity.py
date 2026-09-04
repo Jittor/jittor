@@ -8,9 +8,36 @@ import jittor as torch
 STACKING_NAMES = (
     "vstack", "row_stack", "hstack", "dstack", "column_stack",
 )
+COMPLEX_NAMES = ("complex", "view_as_complex", "view_as_real")
 
 
 class TestTorchNumericalFidelity(unittest.TestCase):
+    def test_complex_family_is_stable_module_level_and_registered(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        for name in COMPLEX_NAMES:
+            with self.subTest(name=name):
+                implementation = getattr(numerical, name)
+                self.assertIs(getattr(torch, name), implementation)
+                self.assertEqual(implementation.__module__, numerical.__name__)
+                record = fidelity.fidelity_of("torch." + name)
+                self.assertIs(record.implementation, implementation)
+                self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+                self.assertIn("device", record.detail)
+
+    def test_complex_family_cpu_round_trip_matches_numpy(self):
+        with torch.flag_scope(use_cuda=0):
+            real = torch.array([[1.0, -2.0], [3.5, 4.0]])
+            imag = torch.array([[0.5, 2.0], [-1.5, 0.0]])
+            value = torch.complex(real, imag)
+            actual = torch.view_as_real(value).numpy()
+            expected = np.stack((real.numpy(), imag.numpy()), axis=-1)
+            np.testing.assert_array_equal(actual, expected)
+            rebuilt = torch.view_as_complex(torch.array(expected))
+            np.testing.assert_array_equal(
+                torch.view_as_real(rebuilt).numpy(), expected)
+
     def test_eye_is_a_stable_module_level_object(self):
         numerical = importlib.import_module(
             "jittor.compat.torch.installers.numerical")
