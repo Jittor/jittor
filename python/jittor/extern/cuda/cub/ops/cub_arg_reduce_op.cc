@@ -43,7 +43,7 @@ void CubArgReduceOp::infer_shape() {
             n *= x->shape[i];
         }
     }
-    ASSERT(offsets->shape.size() == 1);
+    USER_CHECKop(offsets->shape.size(),==,1);
     ASSERT(offsets->shape[0] == n + 1);
     NanoVector shape;
     for (int i = 0; i < x->shape.size() - 1; ++i) {

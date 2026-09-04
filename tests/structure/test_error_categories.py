@@ -124,7 +124,7 @@ MIGRATED_CUB_CUMSUM_RANK_USER_BOUNDARIES = {
 
 MIGRATED_CUB_OP_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cub/ops/cub_argsort_op.cc": 5,
-    "python/jittor/extern/cuda/cub/ops/cub_arg_reduce_op.cc": 1,
+    "python/jittor/extern/cuda/cub/ops/cub_arg_reduce_op.cc": 2,
 }
 
 MIGRATED_CUDNN_CONV_FORMAT_USER_BOUNDARIES = {
