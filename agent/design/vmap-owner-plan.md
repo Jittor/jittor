@@ -65,3 +65,26 @@ behavioral optimization:
 Static checks should assert that no `g`/`ctx` object is captured by a module
 global and that install contains only the stable binding. These checks are
 independent of backend availability and can run without JIT compilation.
+
+## Acceptance node sketch
+
+The eventual test file should keep each contract independently runnable:
+
+- `test_vmap_module_identity_and_fidelity`: import the numerical module, assert
+  callable identity and the `approximate` report detail.
+- `test_vmap_install_is_idempotent_and_context_free`: install two fresh contexts
+  and assert the published function object is identical; inspect its closure and
+  module globals to ensure no `InstallContext`/`jittor_module` instance is held.
+- `test_vmap_simple_in_dims_out_dims_cpu`: map a pure elementwise function over
+  axis 0, then over a non-zero output axis, comparing shape and values to a
+  NumPy loop without invoking CUDA or NPU paths.
+- `test_vmap_nested_boolean_fast_path_cpu`: exercise nested maps with boolean
+  output and assert the broadcasted batch shape; this is the regression guard
+  for transformer mask construction.
+- `test_vmap_unsupported_mapping_falls_back_or_raises`: feed mismatched mapped
+  extents and non-zero nested helper dimensions, asserting a documented
+  fallback/`RuntimeError` rather than a silent direct call.
+
+The first two nodes are static/metadata-only and should stay in the fast gate;
+the remaining three may be marked CPU numerical and run with an isolated Jittor
+cache when the owner extraction lands.
