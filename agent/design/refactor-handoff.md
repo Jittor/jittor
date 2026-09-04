@@ -1106,6 +1106,13 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `compat` | `1eb7ec07` 修复 `mutate_env` 的规范化值记录：整数/布尔等输入先转字符串再登记，失败回滚不再误报 owner 冲突；事务定向 6 passed。7.05 仍待全部 installer mutation 接入。 |
 | `gates` | 本波发现并修复一个真实回滚边界 bug；未改变整卡状态。 |
 
+### 2026-09-04 第一百三十三波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `c49efb80` 更新 `test_install_context.py`，移除已被显式 activation API 取代的 `wrap_flags` patch；完整安装上下文测试 `20 passed`。这是测试兼容修复，7.05 仍待全量 mutation 接入。 |
+| `gates` | `test_torch_install_state_boundary.py` 等结构合同通过；组合结构长测受 30s 轻量超时截断，不作为成功或失败证据。 |
+
 ### 2026-09-04 第一百一十九波
 
 | 分区 | 结果 |
