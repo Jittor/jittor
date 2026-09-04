@@ -90,6 +90,10 @@ MIGRATED_CUDNN_RNN_OP_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cudnn/ops/cudnn_rnn_op.cc": 5,
 }
 
+MIGRATED_CUDNN_RNN_BWD_X_MODE_USER_BOUNDARIES = {
+    "python/jittor/extern/cuda/cudnn/ops/cudnn_rnn_backward_x_op.cc": 1,
+}
+
 MIGRATED_CUTT_TRANSPOSE_AXES_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cutt/ops/cutt_transpose_op.cc": 2,
 }
@@ -325,6 +329,13 @@ def test_cudnn_rnn_op_user_boundary_migration_is_explicit_and_bounded():
         "python/jittor/extern/cuda/cudnn/ops/cudnn_rnn_op.cc"]
     negative = (ROOT / "tests/backends/cuda/test_cudnn_rnn_dtype.py").read_text()
     assert "test_mixed_input_weight_dtype_is_rejected_clearly" in negative
+
+
+def test_cudnn_rnn_bwd_x_mode_user_boundary_migration_is_explicit_and_bounded():
+    source = (ROOT / "python/jittor/extern/cuda/cudnn/ops/cudnn_rnn_backward_x_op.cc").read_text()
+    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    assert actual == MIGRATED_CUDNN_RNN_BWD_X_MODE_USER_BOUNDARIES[
+        "python/jittor/extern/cuda/cudnn/ops/cudnn_rnn_backward_x_op.cc"]
 
 
 def test_cutt_transpose_axes_user_boundary_migration_is_explicit_and_bounded():

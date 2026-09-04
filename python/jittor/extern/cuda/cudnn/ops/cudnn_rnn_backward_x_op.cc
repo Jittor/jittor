@@ -29,7 +29,7 @@ CudnnRnnBackwardXOp::CudnnRnnBackwardXOp(Var *x, Var* hx, Var* cx, Var* y, Var* 
     set_flag(OpFlags::_cuda, 1);
     set_flag(OpFlags::_cpu, 0);
 
-    ASSERTop(mode,==,"lstm");
+    USER_CHECKop(mode,==,"lstm");
     ASSERTop(proj_size,==,0);
     init_rnn();
 }
