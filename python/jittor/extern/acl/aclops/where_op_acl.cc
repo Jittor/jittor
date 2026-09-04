@@ -39,17 +39,7 @@ namespace jittor
     {
         ret = aclnnSWhereGetWorkspaceSize(inputTensors[0], inputTensors[1], inputTensors[2], outputTensors[0], &workspaceSize, &executor);
 
-        checkRet(ret);
-
-        if (workspaceSize > 0)
-        {
-            mallocWorkSpace(workspaceSize);
-        }
-
-        ret = aclnnSWhere(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnSWhere failed. ERROR: %d\n", name.c_str(), ret); return);
-
-        syncRun();
+        launch(ret, aclnnSWhere, true);
         return;
     }
 

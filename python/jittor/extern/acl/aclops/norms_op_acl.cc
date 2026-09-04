@@ -75,17 +75,7 @@ namespace jittor
         auto attr = dynamic_cast<BatchNormAttr *>(op_attr.get());
         ret = aclnnBatchNormGetWorkspaceSize(inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3], inputTensors[4], attr->is_train, attr->momentum, attr->eps, outputTensors[0], outputTensors[1], outputTensors[2], &workspaceSize, &executor);
 
-        checkRet(ret);
-
-        if (workspaceSize > 0)
-        {
-            mallocWorkSpace(workspaceSize);
-        }
-
-        ret = aclnnBatchNorm(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnBatchNorm failed. ERROR: %d\n", name.c_str(), ret); return);
-
-        syncRun();
+        launch(ret, aclnnBatchNorm, true);
 
         return;
     }
@@ -111,17 +101,7 @@ namespace jittor
         aclBoolArray *outMask = aclCreateBoolArray(outputMask, 3);
         ret = aclnnBatchNormBackwardGetWorkspaceSize(inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3], inputTensors[4], inputTensors[5], inputTensors[6], attr->is_train, attr->eps, outMask, outputTensors[0], outputTensors[1], outputTensors[2], &workspaceSize, &executor);
 
-        checkRet(ret);
-
-        if (workspaceSize > 0)
-        {
-            mallocWorkSpace(workspaceSize);
-        }
-
-        ret = aclnnBatchNormBackward(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnBatchNormBackward failed. ERROR: %d\n", name.c_str(), ret); return);
-
-        syncRun();
+        launch(ret, aclnnBatchNormBackward, true);
         aclDestroyBoolArray(outMask);
 
         return;
