@@ -52,7 +52,7 @@ VarPtr CublasMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void CublasMatmulOp::infer_shape() {
-    ASSERTop(a->shape.size(),==,2);
+    USER_CHECKop(a->shape.size(),==,2);
     ASSERTop(b->shape.size(),==,2);
     int n = a->shape[0], m = a->shape[1];
     int m_ = b->shape[0], k = b->shape[1];

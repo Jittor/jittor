@@ -103,7 +103,7 @@ MIGRATED_CUTT_TRANSPOSE_AXES_USER_BOUNDARIES = {
 }
 
 MIGRATED_CUBLAS_MATMUL_DTYPE_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cublas/ops/cublas_matmul_op.cc": 2,
+    "python/jittor/extern/cuda/cublas/ops/cublas_matmul_op.cc": 3,
 }
 
 MIGRATED_CUBLAS_BATCHED_MATMUL_DTYPE_USER_BOUNDARIES = {
