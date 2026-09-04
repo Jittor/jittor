@@ -1050,6 +1050,13 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `compat` | `7.05` 复核确认 namespace snapshot 不能替代全局安装锁、失败状态 API 或 `os.environ`/flags 全量回滚；本波无代码提交。 |
 | `gates` | 没有新增可完整关闭的任务，待领保持 73；下一步需实现完整事务边界后再验收。 |
 
+### 2026-09-04 第一百二十五波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `3c8b46f3` 使 optional install 失败 warn-once、可查询、可重试；`44272e89` 新增带 RLock 的 reversible `InstallTransaction` 和合成 module/env/flags/meta_path 测试 2 passed。尚未接入所有 installers，7.05 仍待领。 |
+| `gates` | 本波代码前置已推送，但整卡验收仍缺全量 installer mutation ledger；待领保持 73。 |
+
 ### 2026-09-04 第一百一十九波
 
 | 分区 | 结果 |
