@@ -24,6 +24,8 @@ struct PyMultiprocessRingBuffer {
     void push(PyObject* obj);
     // @pyjt(pop,recv)
     PyObject* pop();
+    // @pyjt(pop_for)
+    PyObject* pop_for(uint64 timeout_ms);
     // @pyjt(clear)
     inline void clear() { rb->clear(); }
     // @pyjt(keep_numpy_array)

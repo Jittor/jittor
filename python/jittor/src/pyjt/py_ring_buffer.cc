@@ -9,7 +9,6 @@
 #include "pyjt/py_converter.h"
 #include "ops/array_op.h"
 #include "var_holder.h"
-#include <exception>
 
 namespace jittor {
 
@@ -223,16 +222,23 @@ void PyMultiprocessRingBuffer::push(PyObject* obj) {
 
 PyObject* PyMultiprocessRingBuffer::pop() {
     auto offset = rb->l.load(std::memory_order_relaxed);
-    std::exception_ptr wait_error;
+    auto obj = pop_py_object(rb, offset, _keep_numpy_array);
+    rb->commit_pop(offset);
+    return obj;
+}
+
+PyObject* PyMultiprocessRingBuffer::pop_for(uint64 timeout_ms) {
+    auto offset = rb->l.load(std::memory_order_relaxed);
+    std::exception_ptr wait_exception;
     Py_BEGIN_ALLOW_THREADS
     try {
-        rb->wait_pop_for(offset + 1, 5000);
+        rb->wait_pop_for(offset + 1, timeout_ms);
     } catch (...) {
-        wait_error = std::current_exception();
+        wait_exception = std::current_exception();
     }
     Py_END_ALLOW_THREADS
-    if (wait_error)
-        std::rethrow_exception(wait_error);
+    if (wait_exception)
+        std::rethrow_exception(wait_exception);
     auto obj = pop_py_object(rb, offset, _keep_numpy_array);
     rb->commit_pop(offset);
     return obj;

@@ -789,7 +789,7 @@ Example::
 
                     # get which worker has this batch
                     try:
-                        worker_id = self.idqueue.pop()
+                        worker_id = self.idqueue.pop_for(5000)
                     except Exception as stopped:
                         self._raise_worker_death(stopped)
 

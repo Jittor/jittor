@@ -179,14 +179,12 @@ struct RingBuffer {
         MutexScope _(m);
         timespec deadline;
 #ifndef _MSC_VER
-        if (timeout_ms) {
-            clock_gettime(CLOCK_REALTIME, &deadline);
-            deadline.tv_sec += timeout_ms / 1000;
-            deadline.tv_nsec += (timeout_ms % 1000) * 1000000;
-            if (deadline.tv_nsec >= 1000000000) {
-                ++deadline.tv_sec;
-                deadline.tv_nsec -= 1000000000;
-            }
+        clock_gettime(CLOCK_REALTIME, &deadline);
+        deadline.tv_sec += timeout_ms / 1000;
+        deadline.tv_nsec += (timeout_ms % 1000) * 1000000;
+        if (deadline.tv_nsec >= 1000000000) {
+            ++deadline.tv_sec;
+            deadline.tv_nsec -= 1000000000;
         }
 #endif
         while (true) {
@@ -200,21 +198,17 @@ struct RingBuffer {
                 throw std::runtime_error("stop");
             }
 #ifdef _MSC_VER
+            // Windows keeps the legacy condition-variable path; the bounded
+            // worker-death diagnostic is currently Linux-only.
             pop_cv.wait(_);
 #else
-            if (!timeout_ms) {
-                pop_cv.wait(_);
-                continue;
-            }
             auto status = pthread_cond_timedwait(
                 &pop_cv.cv, &m.m, &deadline);
-            if (status == EINTR)
-                continue;
             if (status == ETIMEDOUT) {
                 is_pop_wait.store(false, std::memory_order_seq_cst);
                 throw std::runtime_error("ring buffer pop timed out");
             }
-            if (status != 0)
+            if (status != 0 && status != EINTR)
                 throw std::runtime_error("ring buffer pop wait failed");
 #endif
         }
