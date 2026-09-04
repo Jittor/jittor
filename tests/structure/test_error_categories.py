@@ -91,7 +91,7 @@ MIGRATED_CUDNN_RNN_OP_USER_BOUNDARIES = {
 }
 
 MIGRATED_CUDNN_RNN_BWD_X_MODE_USER_BOUNDARIES = {
-    "python/jittor/extern/cuda/cudnn/ops/cudnn_rnn_backward_x_op.cc": 3,
+    "python/jittor/extern/cuda/cudnn/ops/cudnn_rnn_backward_x_op.cc": 4,
 }
 
 MIGRATED_CUTT_TRANSPOSE_AXES_USER_BOUNDARIES = {

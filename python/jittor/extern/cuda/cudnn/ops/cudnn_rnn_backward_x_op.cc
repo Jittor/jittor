@@ -45,7 +45,7 @@ CudnnRnnBackwardXOp::CudnnRnnBackwardXOp(Var* x, Var* hx, Var* y, Var* dy, Var* 
     set_flag(OpFlags::_cpu, 0);
 
     USER_CHECKop(mode,!=,"lstm");
-    ASSERTop(proj_size,==,0);
+    USER_CHECKop(proj_size,==,0);
     init_rnn();
 }
 
