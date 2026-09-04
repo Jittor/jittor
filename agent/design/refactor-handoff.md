@@ -27,9 +27,9 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；本波审计基线 `7cc724b3`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 审计基线 772 个 |
-| 提交里出现过的任务号 | 254 个 |
+| 分支 | `2.0-refactor`；本波审计基线 `a12a2fbe`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 审计基线 775 个 |
+| 提交里出现过的任务号 | 257 个 |
 | 看板 | 已合并 **196** / 进行中 **0** / 待领 **74** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
 
@@ -509,7 +509,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `bindings` | 2.19 将 CUB argsort 循环内 x/indexes shape 边界改为 `USER_CHECK`，累计 90 处、四十三组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
 | `compat` | 7.03 将 `log1p` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行 |
 
-本次看板一致性修复：计划与看板任务 ID 均为 279 个，缺失 0、重复 0；7.14 之后的正式任务行统一为五列，补回 `0.22`、`2.24`、`7.19`、`7.20`，移除 8.06 的两列 `8.06 note` 伪行。主线并发补充 `166010a8`（CUB argsort offsets rank）与 `ccbc6132`（`reciprocal`）已记录；device worktree 的 `c2821634`（Dropout backward）尚未推送，不计入主线状态。
+本次看板一致性修复：计划与看板任务 ID 均为 279 个，缺失 0、重复 0；7.14 之后的正式任务行统一为五列，补回 `0.22`、`2.24`、`7.19`、`7.20`，移除 8.06 的两列 `8.06 note` 伪行。主线并发补充 `166010a8`（CUB argsort offsets rank）与 `ccbc6132`（`reciprocal`）已记录；第五十五波已将 Dropout backward 的 WIP `c2821634` 收束为主线 `0b149241`/`a12a2fbe`。新增结构门禁 `tests/structure/test_refactor_board_contract.py`，定向 2 passed。
 
 `broadcast_to_op.cc` 当前源码含 5 个 `USER_CHECK`，但 `MIGRATED_DIMENSION_BOUNDARIES` 仍期望 2（另一个 shape map 期望 5），因此 `test_error_categories.py` 仍为 1 failed；待专门门禁任务统一分类/计数，不能在本波掩盖。
 
@@ -523,7 +523,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 
 ## 6. 下一波起点
 
-按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第五十五波继续优先可独立验证的
+第五十五波新增 3 个严格保持待领的前置：
+
+| 分区 | 第五十五波结果 |
+| --- | --- |
+| `device` | 8.06 将 Dropout backward 接入共享 launcher，保留 `scale` query 与同步策略；静态合同 42 passed，本机无 CANN/NPU |
+| `bindings` | 2.19 将 CUB argsort offsets rank 边界改为 `USER_CHECK`，累计 91 处、四十四组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `compat` | 7.03 将 `reciprocal` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行 |
+
+按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第五十六波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
 - `device`：若续做 8.06，只迁下一个最终 owner 明确的 family，并复用 5be5fa15 的 launcher 合同；无 NPU
