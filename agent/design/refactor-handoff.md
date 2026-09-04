@@ -1085,6 +1085,20 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `compat` | `c8b993b4` 让 transaction rollback 校验事务写入的 owner 值；外部改写时抛 `TransactionConflict`，合成事务测试 3 passed。完整 installer mutation ledger 仍待接入，7.05 保持待领。 |
 | `gates` | 本波完成 owner-aware 回滚安全子项，未改变整卡状态。 |
 
+### 2026-09-04 第一百三十波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `75793c04` 将 distributed installer 的 JT_NCCL_*、`use_nccl/use_mpi` 和 `jt.flags.use_cuda` 写入纳入 mutation ledger；`py_compile`/`diff-check` 通过。其他 installer 写入口仍待迁移，7.05 不关闭。 |
+| `gates` | `783699cd` 补 child-env 隔离和 distributed 环境写入静态合同 2 passed；不替代父进程回滚验收。 |
+
+### 2026-09-04 第一百三十一波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `f8f838b2` 将 distributed 环境结构合同同步到 `tx.mutate_env/mutate_flag` 新协议，避免 direct-write 旧断言误报；结构 2 passed，事务相关定向 5 passed。7.05 仍待领。 |
+| `gates` | 本波仅修正测试合同，未扩大回滚覆盖范围或改变整卡状态。 |
+
 ### 2026-09-04 第一百一十九波
 
 | 分区 | 结果 |
