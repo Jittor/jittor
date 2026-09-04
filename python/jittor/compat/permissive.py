@@ -21,6 +21,8 @@ import importlib.machinery
 import os
 import types
 
+from .transaction import TransactionConflict
+
 
 class _FabricatedMeta(type):
     """Metaclass giving a fabricated class no-op callables for any attribute."""
@@ -147,13 +149,24 @@ def install_permissive_package(prefix, meta_path, allow=(), transaction=None):
             old_allow = set(finder.allow)
             finder.add_allowed(allow)
             if transaction is not None:
-                def restore_allow(f=finder, old=old_allow):
+                committed_allow = set(finder.allow)
+                def restore_allow(f=finder, old=old_allow, committed=committed_allow):
+                    if f.allow != committed:
+                        raise TransactionConflict(
+                            "permissive finder allowlist changed externally"
+                        )
                     f.allow.clear()
                     f.allow.update(old)
                 transaction.record_undo(restore_allow)
             return
     finder = _PermissiveFinder(prefix, allow)
-    meta_path.insert(0, finder)
+    insert_index = 0
+    meta_path.insert(insert_index, finder)
     if transaction is not None:
-        transaction.record_undo(
-            lambda f=finder: meta_path.remove(f) if f in meta_path else None)
+        def restore_finder(f=finder, index=insert_index):
+            if index >= len(meta_path) or meta_path[index] is not f:
+                raise TransactionConflict(
+                    "permissive finder moved or replaced externally"
+                )
+            meta_path.pop(index)
+        transaction.record_undo(restore_finder)
