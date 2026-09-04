@@ -621,3 +621,7 @@ per-token aclrtMemcpyAsync path, not a workspace/query executor owner, and must
 remain outside BaseOpRunner::launch. The remaining 8.06 work is module-level
 registration, attribute data plumbing, descriptor caching, and process_acl
 removal with their stated prerequisites.
+
+The obsolete ACL `op_idx_map` has no runtime consumers. Reduce dispatch keeps
+its explicit operator ids in `acl_op_exec.cc`; the map definition and extern
+were removed without changing dispatch semantics.

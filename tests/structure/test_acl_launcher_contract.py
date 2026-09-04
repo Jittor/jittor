@@ -51,6 +51,16 @@ def test_acl_launcher_tail_has_one_auditable_contract():
         assert token in source
 
 
+def test_acl_op_idx_map_is_removed_without_touching_reduce_dispatch():
+    utils = (ROOT / "python/jittor/extern/acl/aclops/utils.cc").read_text()
+    header = (ROOT / "python/jittor/extern/acl/aclops/utils.h").read_text()
+    dispatch = (ROOT / "python/jittor/extern/acl/acl_op_exec.cc").read_text()
+    assert "op_idx_map" not in utils
+    assert "op_idx_map" not in header
+    assert "op.op_idx = 9" in dispatch
+    assert "op.op_idx = 13" in dispatch
+
+
 def test_unary_family_uses_launcher_without_changing_sync_policy():
     source = UNARY_SOURCE.read_text()
     assert "launch(ret, it->second.executeFunc, false);" in source

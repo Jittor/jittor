@@ -12,7 +12,6 @@ namespace jittor
 {
     aclDataType get_dtype(NanoString s);
 
-    extern std::unordered_map<string, int> op_idx_map;
     aclError CreateAclTensor(const std::vector<int64_t> &shape, void *deviceAddr, int64_t size,
                              aclDataType dataType, aclTensor **tensor, bool use_nchw = false);
 
