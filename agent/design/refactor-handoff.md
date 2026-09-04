@@ -1427,6 +1427,47 @@ fixture 的冻结清单比较，于是 7 处使用自有 fixture 的合法测试
 不要靠放宽断言了事**——0.19 的要求是「从精确清单改成规则」，改成规则才算修；`10.24` 是一个示范：
 它同时验证了修正后的判据仍能抓住原本要抓的东西（临时反例仍被报出），而不是把门禁改松。
 
+上表其余各行的落点（按提交）：`6d7df2dd`（7.16）收窄 `compat/transaction.py` 的宽泛 handler；
+`71adc134`（7.21）把 vllm 的融合 QK 快路径改走 `jt.nn` 公开入口；`f094dcd3`（0.19）与
+`b33e3b3d`（0.19）把 torch shim 三条、runtime composition 两条精确清单改成规则，其中
+`b33e3b3d` 还带一个**真违规**：根 `__init__.py` 定义了 `_publish` 与 `_make_inplace_alias`，
+违反它自己声明的「根只组合、不定义」，已搬进 `python/jittor/_composition.py`。
+剩 `test_cleanup_structure`（`_set_use_cuda` 双份，7.05 owner）与
+`test_torch_compat_structure`（`sys.modules` 白名单缺 2 项，陈旧清单）两行。
+
+### `tests/core` 原生 CPU：第一次跑到真实汇总，`17 failed / 570 passed / 106 skipped`
+
+这道门禁此前**既不是绿也不是红**：进程在中途 `EXIT=134` 没有汇总行。`4b5eaaa9`（2.19，
+`~VarHolder` 自己接住、liveness 队列排空改 RAII）之后它能跑完了，于是有了第一份真实清单：
+
+```
+JITTOR_TEST_DEVICES=cpu nvcc_path="" pytest tests/core -q      # 5:54
+17 failed, 570 passed, 106 skipped, 1 xfailed
+```
+
+**`6.C32` 因此改判为已合并**：它把 abort 归因给 `test_complex64_linalg::test_svdvals`，但那条
+用例本身是通过的——abort 发生在**进程退出期**，单选时 pytest 已经打完汇总，容易读成"这条失败"。
+含 `4b5eaaa9` 的树上该文件 11 passed / 11 skipped、连跑 6 次零 abort。
+
+17 条里 **10 条是同一个主题：存活 Var 与内存记账**——`test_function` 的
+`test_zmem_leak{,2,3}` ×2 个类共 6 条、`test_misc_issue::test_argmax_memleak`、
+`test_core::test_number_of_hold_vars`、`test_core::test_var_holder`、`test_core::test_fuse_memopt`。
+pytest 自己的「runtime state left behind」报告也在指同一处（跑完
+`test_complex64_linalg` 后 `number_of_lived_vars 0 -> 1`）。**当成一簇去查，不要一条一条修**：
+它们的前置嫌疑是 2.02／2.03／2.10 这批刚落地的节点与 liveness 改动。
+
+其余 7 条各自独立：`test_core::test_node_order`、`test_grad::test_no_grad`（`assert 5 == 2`）、
+`test_grad_missing::test_every_missing_gradient_is_reported`、
+`test_complex64_native::test_python_complex_scalar_setitem`、
+`test_namespace_exports::..._stub_top_level_names_match_the_export_surface`（`.pyi` 缺
+`benchmark`／`BenchmarkResult`，属 5.23）、
+`test_rootcause_semantics::..._canonical_installer_owns_the_parameter_marker`、
+`test_setitem::test_getitem`（该文件属别人，不要提交）。
+
+**一条方法上的提醒**：我一度以为这些 abort 与机器负载相关（前两次全量跑在 load≈13 时 abort、
+后来空闲时不 abort），核对提交祖先后发现是 `4b5eaaa9` 落地与否的差别，负载是巧合。**"环境
+还是回归"这个问题要用祖先关系回答，不要用相关性**——尤其在一天里有八个分区在推送的时候。
+
 ### 3.23 逐元素带宽：口径已建立，前提已推翻，验收卡在兼容层（`c0f3420a`）
 
 任务描述里的「UNet 61 种融合 kernel 合计 4.47 ms、约 475 GB/s（峰值一半）」在今天的树上
