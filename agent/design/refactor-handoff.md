@@ -961,6 +961,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | `7a35e8e7` 记录 ACL 属性 data 通道候选（`triu.diagonal`、`softmax.dim`、`flip.axes`）的协同迁移边界；静态合同 1 passed，未改运行时，NPU 实机仍待。 |
 | `gates` | 本波未扩大 `SLOW_FILES`；0.15 worker 聚焦测试通过但完整 smoke 仍约 390 s，10.19 HCCL route 仍缺 910B3 多卡 CPU 对照。 |
 
+### 2026-09-04 第一百零八波
+
+| 分区 | 结果 |
+| --- | --- |
+| `bindings` | `55a1f481` 将 cuBLAS matmul 输入 b 的 rank-2 检查改为可捕获 `USER_CHECKop`，补独立 ledger；定向 4 passed。2.19 聚合任务仍待完整审计。 |
+| `compat` | `9954b4ed` 将 `tensor_split`/`take` 提升为 numerical 模块级稳定对象并登记 approximate fidelity；split/take CPU 对拍 2 passed。7.03 其余 family 仍待领。 |
+| `device` | `296e0837` 补充 ACL 属性 data、descriptor cache、type-erasure 候选排序与 910B3/CANN 上机验收合同；静态合同 1 passed，未改运行时。 |
+| `gates` | 本波未扩大 `SLOW_FILES`；0.15 smoke 仍约 390 s，10.19 HCCL route 仍缺 910B3 多卡 CPU 对照。 |
+
 按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第一百波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 

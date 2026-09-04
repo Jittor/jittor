@@ -11,6 +11,8 @@
 > 第106波增量：`cc9ed2bc` 完成 cuSPARSE CSR shape 用户错误 cohort（结构 3 passed）；`258be343` 完成 `kron`/`logsumexp` numerical owner cohort（CPU 2 passed）；`15c86886` 记录 ACL 类型擦除/属性 data/descriptor cache 的原子迁移边界（静态合同 1 passed）。2.19/7.03/8.06 聚合任务仍按剩余范围保持「待领」。
 >
 > 第107波增量：`a831fbd6` 完成 cuSPARSE COO shape 用户错误 cohort（结构 3 passed）；`f20bb4ff` 完成 `all`/`any` reduction numerical owner cohort（CPU 2 passed）；`7a35e8e7` 记录 ACL 属性 data 通道候选的协同边界（静态合同 1 passed）。聚合任务和硬件验收状态不变。
+>
+> 第108波增量：`55a1f481` 完成 cuBLAS matmul 输入 b rank 用户错误 cohort（结构 4 passed）；`9954b4ed` 完成 `tensor_split`/`take` numerical owner cohort（CPU 2 passed）；`296e0837` 补充 ACL 属性 data/descriptor/type-erasure 迁移顺序与 910B3 验收合同（静态合同 1 passed）。聚合任务和硬件验收状态不变。
 
 一行一个任务，与 [refactor-plan.md](refactor-plan.md) 的编号对应。领任务把状态改成「进行中」并写名字，
 完成改成「已合并」并填提交号；推送冲突说明别人先领了。状态只有四种：待领 / 进行中 / 已合并 / 并入 X。
