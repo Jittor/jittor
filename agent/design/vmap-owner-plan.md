@@ -235,3 +235,22 @@ logs. A missing field is a contract gap and should keep 7.03 marked `待领`.
 The matrix is normative for both CPU and future backend implementations. Any
 backend-specific deviation must be documented as a separate fidelity limitation,
 not hidden in the generic owner.
+
+## Backend portability boundary
+
+This task is an organization refactor, not a vectorization optimization. The
+owner extraction must keep the existing loop/stack implementation and avoid new
+backend kernels, device transfers, or scheduling flags. CPU is the reference
+backend; CUDA, ACL, and other backends consume the same callable and may only
+provide their own `transform_depth()` probe when available.
+
+Record backend evidence independently:
+
+- CPU: run the five focused nodes from the acceptance sketch;
+- CUDA/ACL: first run the identity/context-free AST nodes, then opt into the
+  numerical nodes only on hardware with a working transform hook;
+- unavailable hardware: mark the numerical nodes as environment-skipped and
+  retain the static contract results.
+
+No backend skip may downgrade an owner/identity or unsupported-behavior failure
+to a pass.
