@@ -568,6 +568,10 @@ outside this slice.
 The ACL IndexPutImpl accumulate owner uses the shared launcher while retaining
 its tracked output memset and index tensor-list dependency.
 
+The ACL FlashAttention forward owner uses the shared launcher while retaining
+prefix/qstart/kvstart RAII descriptors and synchronous execution. Backward,
+incremental, and KV-cache owners remain outside this slice.
+
 The ACL AdamWList owner uses the shared launcher for each tensor update while
 retaining its fused device-copy checks and single synchronization point after
 the update loop.

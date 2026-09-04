@@ -578,6 +578,17 @@ def test_index_put_accumulate_uses_launcher_and_keeps_zero_dependency():
     assert "syncRun();" not in owner
 
 
+def test_flash_attention_forward_uses_launcher_and_keeps_raii_descriptors():
+    source = (ROOT / "python/jittor/extern/acl/aclops/flashattention_op_acl.cc").read_text()
+    forward = source[source.index("void FlashAttentionOpRunner::executeOp"):source.index("FlashAttentionBackwardOpRunner::FlashAttentionBackwardOpRunner")]
+    for name in ("prefix", "qstart", "kvstart"):
+        assert name in forward
+    assert "launch(ret, aclnnFlashAttentionScoreV2, true);" in forward
+    assert "unique_ptr<aclIntArray" in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+
+
 def test_adamw_list_uses_async_launcher_and_keeps_loop_sync_point():
     source = (ROOT / "python/jittor/extern/acl/aclops/adamw_op_acl.cc").read_text()
     assert "aclnnApplyAdamWV2GetWorkspaceSize" in source
