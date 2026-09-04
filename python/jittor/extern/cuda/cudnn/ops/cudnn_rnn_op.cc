@@ -78,7 +78,7 @@ void CudnnRnnOp::init_rnn() {
 
 void CudnnRnnOp::infer_shape() {
     USER_CHECKop(x->shape.size(),==,3);
-    ASSERTop(x->shape[2],==,input_size);
+    USER_CHECKop(x->shape[2],==,input_size);
     
     int num_directions = 1 + bidirectional;
 
