@@ -43,6 +43,7 @@
 | CUFFT_CALL 只 fprintf 然后继续 | `cufft/inc/cufft_utils.h:71-85`；CUDA_RT_CALL 同（`:53-68`） | cufftPlanMany 失败后仍把无效句柄写进缓存（`cufft_fft_op.cc:85`）并继续 Exec，结果是未定义输出而非报错 | 统一用 checkCudaErrors | 主要 |
 | cudaGetLastError() 被显式用来清错误 | `cutt_transpose_op.cc:77` | 前面任何 kernel 的异步错误在这里被吞掉，之后归因到无关算子 | 删除；确需清理时记录被丢弃的错误码 | 主要 |
 | ACL 的 checkRet 打完日志就返回，调用方无条件继续 | `aclops/base_op_acl.cc:115-124`（`CHECK_RET(..., return)` 在 void 函数里等于什么都没做）；消费点 `binary_op_acl.cc:125-132`：checkRet 后立刻用可能是垃圾的 workspaceSize 与 executor 调 executeFunc | GetWorkspaceSize 失败到用未初始化 executor 执行到输出未定义，且不抛异常故 fallback 也接不住。65 处同一模式 | checkRet 改为抛；executeOp 骨架收进基类 | 关键 |
+| 已修：checkRet 改为抛见 `5388864c`；executeOp 骨架收进 `BaseOpRunner::launch` 见 `5be5fa15` 起的 family 迁移，最后四个标准 owner（BatchNorm 前反向、SigmoidBackward、SWhere）见本次提交。剩余两处 hand-rolled 尾部是**有意保留**的：reduce prod 需要中间张量两步归约与步间同步，KVCacheMemcpy 没有 aclnn workspace executor。 | | | | |
 | run() 的非 group 分支不检查 find() 是否命中 | `aclops/base_op_acl.cc:142-149` 直接 executeOp(it)，而 group 分支（`:131-136`）检查了 | 名字拼错或算子未注册则解引用 end() 迭代器，UB | 两条分支合并统一检查 | 关键 |
 | CreateAclTensor 恒返回 0，所有错误检查都是死代码 | `aclops/utils.cc:124,151` 恒 return 0；检查点 `base_op_acl.cc:66,102` | aclCreateTensor 返回 nullptr 从不被发现；且 setupInputDesc 提前 return 时 inputTensors 短于 in_.size()，cleanupDesc（`:74-77`）会越界读 | 返回真实状态 | 主要 |
 | HCCL 算子的宏在错误时 return，算子静默不写输出 | `hccl/inc/hccl_wrapper.h:33-47`（LOGe 加 return），用在 `hccl_all_reduce_op.cc:53-57` 的 jit_run 里 | 一次集合通信失败到输出保持未初始化到训练继续跑出 NaN，其它 rank 挂死 | 集合通信失败必须抛并让所有 rank 快速失败 | 关键 |

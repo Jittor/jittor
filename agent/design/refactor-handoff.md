@@ -1254,6 +1254,13 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `build` | 诊断发现冷缓存并发 nvcc 对临时目录可写性敏感；一次未预创建的 TMPDIR 直接导致 `nvcc fatal: Could not open output file`，后续复现均使用独立、预创建目录。 |
 | `gates` | 本波无代码提交；abort 根因待进一步取得 C++/CUDA 运行库日志，2.19 保持 `待领`，不把未归因失败标成环境无关或通过。 |
 
+### 2026-09-05 第一百五十八波
+
+| 分区 | 结果 |
+| --- | --- |
+| `device` | `8.06` 收口标准 ACL launcher owner：迁 SWhere、SigmoidBackward、BatchNorm 前反向到 `BaseOpRunner::launch`，各自保留同步策略、BatchNorm 属性与 outMask 释放顺序。**此前十波看板记的「标准 owner 已穷尽」不成立**——这四个仍自己驱动 aclnn execute 并保留审计列为「关键」的 `LOG_PRINT` 后 return。同时把 `checkRet == 65` 计数断言（自 `5be5fa15` 被自己的迁移作废、红穿约四十个提交）换成闭集不变量，豁免仅 reduce prod 与 KVCacheMemcpy。ACL 静态合同 81 passed + 1 failed → 88 passed。新增 skill `acl-host-syntax-check`（桩 CANN + `g++ -fsyntax-only`，全树 43 源文件与 68 个 launcher ABI 断言通过，两次反向对照确认能真的报红）。**未做**：data-channel C++ 解码入口、胖 `AclOpFunctions` 类型擦除、属性 data 通道、描述符缓存。**本机无 CANN/NPU，不宣称硬件验证**；910B3 nodeid 与禁止 CPU fallback 检查写在 `docs/guides/ascend-910b.md`。 |
+| `gates` | `tests/structure` 单目录 498 passed / 14 failed，14 条全部落在 `test_runtime_composition_structure.py`、`test_torch_compat_structure.py`、`test_torch_shim_structure.py`、`test_vllm_compat_structure.py`，属 `compat`/shim 分区在飞的改动；本波未触碰 `python/jittor/compat/**`，与本波改动无关。 |
+
 ### 2026-09-04 第一百四十波
 
 | 分区 | 结果 |

@@ -625,3 +625,60 @@ removal with their stated prerequisites.
 The obsolete ACL `op_idx_map` has no runtime consumers. Reduce dispatch keeps
 its explicit operator ids in `acl_op_exec.cc`; the map definition and extern
 were removed without changing dispatch semantics.
+
+## Shared launcher migration is closed for the standard owners
+
+The last four standard owners that still drove the aclnn execute call
+themselves now use `BaseOpRunner::launch`: SWhere, Sigmoid backward, BatchNorm
+forward, and BatchNorm backward. Each kept its synchronous execution policy,
+BatchNorm kept its training/momentum/epsilon attributes and three outputs, and
+BatchNorm backward still frees its output mask after the launch has
+synchronised.
+
+This matters beyond tidiness. Those four were the last places where a failed
+`aclnn` execute only printed a line and returned, leaving the output var
+undefined while the graph continued. Routing them through `launch` makes the
+failure raise with the operator name and decoded ACL status.
+
+Exactly two hand-rolled tails remain, both deliberately: reduce prod runs a
+two-step reduction over an intermediate tensor with its own synchronisation
+between steps, and KVCacheMemcpy is a per-token `aclrtMemcpyAsync` path with no
+aclnn workspace executor.
+
+Validate on an Ascend 910B3 after sourcing CANN and confirming the device:
+
+```bash
+source "$CANN_SET_ENV"
+npu-smi info
+export ASCEND_RT_VISIBLE_DEVICES=<allocated-device>
+
+sync_run=1 python -m pytest -q -s \
+  tests/backends/npu/test_acl.py \
+  tests/backends/test_acl_dtype_preservation.py \
+  2>&1 | tee "$TMPDIR/acl-launcher-close.log"
+```
+
+The run counts only if all four owners actually executed on the NPU. Prove
+there was no CPU fallback before reading the result as a pass:
+
+```bash
+if rg -i "fallback cpu|cpu fallback" "$TMPDIR/acl-launcher-close.log"; then
+  echo "CPU fallback detected: this is NOT an NPU validation"; exit 1
+fi
+rg -i "execute launcher failed|aclrtSynchronizeStream failed" \
+  "$TMPDIR/acl-launcher-close.log" && exit 1
+```
+
+Then repeat with `sync_run=0` to confirm the asynchronous path still launches
+on ACL, applying the same fallback check to its log.
+
+Until that run exists, this is a source-only change. Hosts without CANN and an
+Ascend device must not report hardware validation for it.
+
+## Syntax-checking ACL sources without CANN
+
+A host without CANN can still parse these sources against a generated stub SDK;
+see `agent/skills/acl-host-syntax-check`. That check catches parse errors,
+unknown identifiers, and a workspace query passed where a launcher belongs. It
+cannot check the arguments of an `aclnnXxxGetWorkspaceSize` call, because those
+signatures are not knowable without the SDK. It is not hardware validation.

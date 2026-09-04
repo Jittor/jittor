@@ -733,6 +733,58 @@ def test_upsample_backward_uses_launcher_and_keeps_descriptor_raii():
     assert "syncRun();" not in backward
 
 
+def test_swhere_owner_uses_launcher_and_nonzero_remains_present():
+    source = WHERE_SOURCE.read_text()
+    where = source[source.index("void WhereOpRunner::executeOp"):source.index("NonzeroOpRunner::NonzeroOpRunner")]
+    assert where.count("inputTensors[") >= 3
+    assert "aclnnSWhereGetWorkspaceSize" in where
+    assert "launch(ret, aclnnSWhere, true);" in where
+    assert "checkRet(ret);" not in where
+    assert "mallocWorkSpace(workspaceSize)" not in where
+    assert "syncRun();" not in where
+    assert "void NonzeroOpRunner::executeOp" in source
+
+
+def test_sigmoid_backward_uses_launcher_and_forward_remains_present():
+    source = SIGMOID_SOURCE.read_text()
+    backward = source[source.index("void SigmoidBackwardOpRunner::executeOp"):]
+    assert "launch(ret, aclnnSigmoidBackward, true);" in backward
+    assert "checkRet(ret);" not in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+    assert "launch(ret, aclnnSigmoid, true);" in source
+
+
+def test_batch_norm_forward_uses_launcher_and_keeps_training_attributes():
+    source = NORMS_SOURCE.read_text()
+    forward = source[source.index("void BatchNormOpRunner::executeOp"):source.index("BatchNormBackwardOpRunner::BatchNormBackwardOpRunner")]
+    assert "attr->is_train" in forward
+    assert "attr->momentum" in forward
+    assert "attr->eps" in forward
+    assert "outputTensors[2]" in forward
+    assert "launch(ret, aclnnBatchNorm, true);" in forward
+    assert "checkRet(ret);" not in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void BatchNormBackwardOpRunner::executeOp" in source
+
+
+def test_batch_norm_backward_uses_launcher_and_frees_the_mask_after_launch():
+    source = NORMS_SOURCE.read_text()
+    backward = source[source.index("void BatchNormBackwardOpRunner::executeOp"):source.index("LayerNormOpRunner::LayerNormOpRunner")]
+    assert "outMask" in backward
+    assert "attr->is_train" in backward
+    assert "outputTensors[2]" in backward
+    assert "launch(ret, aclnnBatchNormBackward, true);" in backward
+    # The mask outlives the launch: the shared tail synchronises before it is
+    # destroyed, which is the order the hand-rolled tail had.
+    assert backward.index("launch(ret, aclnnBatchNormBackward, true);") < backward.index(
+        "aclDestroyBoolArray(outMask);")
+    assert "checkRet(ret);" not in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+
+
 def test_scatter_uses_launcher_and_keeps_axis_reduction_query():
     source = GATHER_SOURCE.read_text()
     scatter = source[source.index("void ScatterOpRunner::executeOp"):]
