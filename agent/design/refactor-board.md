@@ -760,6 +760,12 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `2.19`：`040e44a0`/`d251d738` 将 CUBLAS matmul 输入 rank 边界改为 `USER_CHECK`，累计 114 处、六十七组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
 - `7.03`：`7d8fdd37` 补充 vmap 无可变全局、幂等 install、失败回滚与资源释放门禁；仅设计/门禁前置。
 
+### 2026-09-04 第八十一波补充证据
+
+- `2.19`：`91718e98`/`c041b0a7` 将 cuDNN RNN 权重查询内部断言纳入分类文档与结构门禁；1 passed，不改变用户错误语义或累计数。
+- `7.03`：`79455300` 固定 vmap 首门禁夹具（seed=17、简单映射与 nested bool shape），要求记录 fixture/NumPy 期望/unsupported 矩阵；仅设计前置，未修改 runtime。
+- `8.06`：复核确认标准 launcher owner 已穷尽，剩余 KVCacheMemcpy 等专用路径不纳入通用 launcher，本波无代码提交。
+
 ### 2026-09-04 第七十九波补充证据
 
 - `8.06`：`e1470830` 将 IncrementalFlashAttention 接入共享 launcher，保留 block-table、actual-sequence、cache-view cleanup 与同步策略；KVCacheMemcpy 未迁；静态合同 67 passed，本机无 CANN/NPU，仍待实机。
