@@ -1335,6 +1335,24 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIn("dtype", record.detail)
         self.assertIn("device", record.detail)
 
+    def test_log_softmax_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.log_softmax))
+        self.assertIs(torch.log_softmax, numerical.log_softmax)
+        self.assertEqual(numerical.log_softmax.__module__, numerical.__name__)
+        self.assertEqual(numerical.log_softmax.__name__, "log_softmax")
+
+    def test_log_softmax_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.log_softmax")
+        self.assertIs(record.implementation, numerical.log_softmax)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("dtype", record.detail)
+        self.assertIn("device", record.detail)
+
 
 if __name__ == "__main__":
     unittest.main()

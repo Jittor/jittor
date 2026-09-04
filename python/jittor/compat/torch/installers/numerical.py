@@ -346,6 +346,25 @@ register_fidelity(
 )
 
 
+_LOG_SOFTMAX_FIDELITY_DETAIL = (
+    "matches Torch log-softmax values along an explicit dimension through Jittor's "
+    "native nn owner but omits dtype, device, and layout keyword semantics"
+)
+
+
+def log_softmax(input, dim=None, **kwargs):
+    """Compute log-softmax values through Jittor's native nn owner."""
+    return jt.nn.log_softmax(input, dim=dim)
+
+
+register_fidelity(
+    "torch.log_softmax",
+    log_softmax,
+    Fidelity.APPROXIMATE,
+    _LOG_SOFTMAX_FIDELITY_DETAIL,
+)
+
+
 _NAN_TO_NUM_INPLACE_FIDELITY_DETAIL = (
     "matches Torch in-place NaN/Inf replacement and return identity for supported "
     "real tensors but omits device, layout, dtype, and narrow custom-bound semantics"
@@ -1262,7 +1281,7 @@ def install(ctx):
     # torch.softmax / log_softmax / relu top-level function forms (convbert calls
     # torch.softmax(x, dim=...)). jittor exposes these via nn, not the top level.
     _alias("softmax", softmax)
-    _alias("log_softmax", lambda input, dim=None, **k: jt.nn.log_softmax(input, dim=dim))
+    _alias("log_softmax", log_softmax)
     _alias("relu", lambda input, **k: jt.nn.relu(input))
     # elementwise / functional top-level forms missing from jittor's top level
     _alias("log1p", log1p)
