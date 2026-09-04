@@ -745,3 +745,4 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 
 - `8.06`：`73b71c7d` 将 InplaceMaskedScatter 接入共享 launcher，保留 tracked base-to-output device copy dependency 与同步策略；静态合同 61 passed，本机无 CANN/NPU，仍待实机。
 - `8.06`：`4eb360d7` 将 IndexPutImpl 接入共享 launcher，保留 index tensor-list handling 与同步策略；IndexPutImplAccumulate 未改；静态合同 62 passed，本机无 CANN/NPU，仍待实机。
+- `8.06`：`f353076a` 将 IndexPutImpl accumulate 接入共享 launcher，保留 tracked output memset 与 index tensor-list dependency；静态合同 63 passed，本机无 CANN/NPU，仍待实机。
