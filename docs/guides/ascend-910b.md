@@ -541,3 +541,6 @@ backward owners remain outside this slice.
 
 The ACL UpsampleNearest2d forward owner uses the shared launcher while retaining
 output-size RAII and synchronous execution. Backward is outside this slice.
+
+The ACL UpsampleNearest2d backward owner uses the shared launcher while
+retaining output/input-size RAII descriptors and synchronous execution.

@@ -488,6 +488,17 @@ def test_upsample_forward_uses_launcher_and_keeps_output_size_raii():
     assert "void UpsampleNearest2dBackwardOpRunner::executeOp" in source
 
 
+def test_upsample_backward_uses_launcher_and_keeps_descriptor_raii():
+    source = UPSAMPLE_SOURCE.read_text()
+    backward = source[source.index("void UpsampleNearest2dBackwardOpRunner::executeOp"):]
+    assert "outputSize" in backward
+    assert "inputSize" in backward
+    assert "unique_ptr" in backward
+    assert "launch(ret, aclnnUpsampleNearest2dBackward, true);" in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+
+
 def test_scatter_uses_launcher_and_keeps_axis_reduction_query():
     source = GATHER_SOURCE.read_text()
     scatter = source[source.index("void ScatterOpRunner::executeOp"):]
