@@ -4,6 +4,7 @@ import types
 import pytest
 
 from jittor.compat.transaction import InstallTransaction, TransactionConflict
+from jittor.compat.torch.installers.core import _set_install_flag
 
 
 def test_transaction_rolls_back_module_env_flags_and_meta_path_in_reverse_order():
@@ -37,6 +38,22 @@ def test_transaction_refuses_to_overwrite_an_external_attribute_change():
     with pytest.raises(TransactionConflict, match="owner lost"):
         tx.rollback()
     assert module.value == "external"
+
+
+def test_core_install_flag_mutation_rolls_back_on_failure():
+    flags = types.SimpleNamespace(use_cuda=0)
+    tx = InstallTransaction("core.install")
+    ctx = types.SimpleNamespace(state={"_install_transaction": tx})
+    original = __import__("jittor").flags
+    saved = original.use_cuda
+    try:
+        original.use_cuda = flags.use_cuda
+        _set_install_flag(ctx, "use_cuda", 1)
+        assert original.use_cuda == 1
+        tx.rollback()
+        assert original.use_cuda == 0
+    finally:
+        original.use_cuda = saved
 
 
 def test_environment_mutation_records_the_normalized_string_value():

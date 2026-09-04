@@ -23,6 +23,16 @@ from ..types import (
 )
 from ...diagnostics import EXPECTED, swallowed
 
+
+def _set_install_flag(ctx, name, value):
+    """Record install-time flag mutations when a transaction is active."""
+    transaction = getattr(ctx, "state", {}).get("_install_transaction")
+    if transaction is not None and getattr(transaction, "state", None) == "open":
+        transaction.mutate_flag(jt.flags, name, value)
+    else:
+        setattr(jt.flags, name, value)
+
+
 def install(ctx):
     g = ctx.jittor_module
     ctx.registry.publish("torch", g)
@@ -145,7 +155,7 @@ def install(ctx):
         _cvd = _os.environ.get("CUDA_VISIBLE_DEVICES", None)
         _no_gpu = _cvd is not None and _cvd.strip() == ""
         if (getattr(jt.compiler, "has_acl", 0) or getattr(jt, "has_cuda", 0)) and not _no_gpu:
-            jt.flags.use_cuda = 1
+            _set_install_flag(ctx, "use_cuda", 1)
     except EXPECTED as exc:
         swallowed("torch/installers/core.py install: import os as _os", exc)
     _DTYPE_OBJS = _make_dtypes(g)
@@ -588,7 +598,7 @@ def install_misc(ctx):
         Jittor's default residency is the global use_cuda flag, so this sets it.
         """
         if device is None:
-            jt.flags.use_cuda = 0
+            _set_install_flag(ctx, "use_cuda", 0)
             return None
         # Strings first: `str.index` is a method, so getattr(dev, "index")
         # on "cuda:1" hands back a bound method rather than None, and the
@@ -606,14 +616,14 @@ def install_misc(ctx):
                 index = int(raw_index) if raw_index.isdigit() else None
         name = str(name).split(":")[0]
         if name == "cpu":
-            jt.flags.use_cuda = 0
+            _set_install_flag(ctx, "use_cuda", 0)
             return None
         if name in ("cuda", "gpu", "npu"):
             if not jt.has_cuda:
                 raise RuntimeError(
                     "torch.set_default_device(%r): this build has no CUDA/NPU "
                     "device available." % (device,))
-            jt.flags.use_cuda = 1
+            _set_install_flag(ctx, "use_cuda", 1)
             # An index is honoured now: it becomes the current device, which
             # is where new tensors are placed. This used to refuse anything
             # but 0, because there was nothing to switch.
