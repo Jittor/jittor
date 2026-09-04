@@ -23,6 +23,15 @@ class InstallTransaction:
         """Register a whole-snapshot undo callback."""
         self.record({}, "__snapshot__", _MISSING, _MISSING, undo=undo)
 
+    def record_object_diffs(self, target, before):
+        """Record shallow attribute changes on an object for failure rollback."""
+        after = vars(target)
+        for name in set(before) | set(after):
+            old = before.get(name, _MISSING)
+            new = after.get(name, _MISSING)
+            if old is not new:
+                self.record(target, name, old, new)
+
     def mutate_env(self, key, value, environ=None):
         import os
         env = os.environ if environ is None else environ

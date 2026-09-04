@@ -223,6 +223,13 @@ def install(torch, strict=True):
     else:
         before = _torch_namespace_snapshot()
 
+    root_attrs_before = dict(vars(torch))
+    var_type = getattr(torch, "Var", None)
+    var_attrs_before = (
+        dict(vars(var_type))
+        if var_type is not None and hasattr(var_type, "__dict__")
+        else None
+    )
     transaction.record_undo(lambda: _restore_namespace(before))
 
     try:
@@ -233,6 +240,9 @@ def install(torch, strict=True):
         context.mark_complete()
     except EXPECTED as exc:
         swallowed("torch/__init__.py install: for step, installer in _REQUIRED_STEPS:", exc)
+        transaction.record_object_diffs(torch, root_attrs_before)
+        if var_attrs_before is not None:
+            transaction.record_object_diffs(var_type, var_attrs_before)
         staged = _torch_namespace_snapshot()
         _restore_namespace(before)
         context.state[_NAMESPACE_TRANSACTION] = {
