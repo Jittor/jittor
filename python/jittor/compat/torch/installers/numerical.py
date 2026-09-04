@@ -225,6 +225,25 @@ register_fidelity(
 )
 
 
+_INVERSE_FIDELITY_DETAIL = (
+    "matches Torch matrix inverse values through Jittor's native linalg owner for "
+    "supported square real tensors but omits device, layout, and dtype semantics"
+)
+
+
+def inverse(input):
+    """Compute a matrix inverse via Jittor's native linalg owner."""
+    return jt.linalg.inv(input)
+
+
+register_fidelity(
+    "torch.inverse",
+    inverse,
+    Fidelity.APPROXIMATE,
+    _INVERSE_FIDELITY_DETAIL,
+)
+
+
 _NAN_TO_NUM_INPLACE_FIDELITY_DETAIL = (
     "matches Torch in-place NaN/Inf replacement and return identity for supported "
     "real tensors but omits device, layout, dtype, and narrow custom-bound semantics"
@@ -1502,7 +1521,7 @@ def install(ctx):
     if not hasattr(Var, "det"):       Var.det = _vdet
     if not hasattr(Var, "inverse"):   Var.inverse = _vinv
     g.det = det
-    g.inverse = lambda x: _vinv(x)
+    g.inverse = inverse
 
     # ---- linalg (peft / lora init need svd_lowrank, svd) ----
     _alias("svd", svd)
