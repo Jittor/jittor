@@ -850,6 +850,11 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `2.19`：`903b8d3f`/`2a55244b` 精确约束 CUDNN backward-x `best_algo_idx!=-1` 内部断言计数；结构门禁 1 passed，不改变用户边界累计。
 - `7.03`：`17a15406` 补充 vmap 资源边界/取消契约，覆盖 footprint 上限、超大 extent、异常清理和 hold-vars/fidelity 泄漏；仅设计前置。
 
+### 2026-09-04 第九十六波补充证据
+
+- `10.05`：`1a423a16`/`f7f33f5b` 固定 skip reason bucket 优先级、CI summary 和 `other>0` fail-closed；合成结构测试 2 passed，任务已完整关闭。
+- `0.15`：RingBuffer GIL/有界等待方案完成只读审计，当前未提交代码；仍需 Linux timed-wait/GIL 安全实现、worker death 聚焦节点与 smoke 重新测量，不能标完成。
+
 ### 2026-09-04 第九十三波补充证据
 
 - `2.19`：`66fd400d` 补充 CUDNN convolution `ASSERT(best_algo_idx!=-1)` 精确计数门禁；结构门禁 1 passed，不改变运行语义或用户边界累计。
