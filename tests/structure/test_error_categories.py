@@ -496,6 +496,8 @@ def test_backend_internal_assertion_classification_is_explicit():
     assert cudnn_test.count("ASSERT(cudnn_test_entry") == 1
     cudnn_conv = (ROOT / "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_op.cc").read_text()
     assert cudnn_conv.count("ASSERT(best_algo_idx!=-1)") == 1
+    cudnn_conv3d = (ROOT / "python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_op.cc").read_text()
+    assert cudnn_conv3d.count("ASSERT(best_algo_idx!=-1)") == 1
     cutt_wrapper = (ROOT / "python/jittor/extern/cuda/cutt/ops/cutt_wrapper.cc").read_text()
     assert cutt_wrapper.count("CHECK(ret == CUTT_SUCCESS)") == 2
 
