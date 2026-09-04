@@ -176,19 +176,30 @@ class InstallContext:
         return result
 
     def run_optional(self, step, installer):
-        if self.markers.get(step) in ("complete", "failed"):
+        if self.markers.get(step) == "complete":
             self._record(step, False, "skipped")
             return None
         try:
             result = installer(self)
         except EXPECTED as error:
-            swallowed("torch/context.py run_optional: result = installer(self)", error)
+            warned = self.state.setdefault("_optional_warned_steps", set())
+            if step not in warned:
+                swallowed("torch/context.py run_optional: result = installer(self)", error)
+                warned.add(step)
             self.markers[step] = "failed"
             self._record(step, False, "failed", repr(error))
             return None
         self.markers[step] = "complete"
         self._record(step, False, "complete")
         return result
+
+    def optional_failures(self):
+        """Return the latest failure report for each optional step, if any."""
+        latest = {}
+        for report in self.reports:
+            if not report.required and report.status == "failed":
+                latest[report.step] = report
+        return tuple(latest[name] for name in sorted(latest))
 
     def mark_complete(self):
         setattr(self.jittor_module, self.COMPLETE_ATTR, True)
