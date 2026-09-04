@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；本波审计基线 `253543bb`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 审计基线 1004 个 |
+| 分支 | `2.0-refactor`；本波审计基线 `d3f4853e`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 审计基线 1006 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **198** / 进行中 **0** / 待领 **76** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
@@ -877,7 +877,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `bindings` | 审查确认共享 condvar/pyjt ABI、GIL 异常边界和 Dataset worker 轮询要求；未新增代码 |
 | `gates` | 确认 `SLOW_FILES` 未移除，smoke 仍约 390s/预测 446s，必须重测 `<300s` 和 nodeid 集合后才能关闭 0.15 |
 
-按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第九十九波继续优先可独立验证的
+第九十九波完成 0.15 RingBuffer 语义修正，但任务仍待完整验收：
+
+| 分区 | 第九十九波结果 |
+| --- | --- |
+| `device` | `d3f4853e` 固定 `wait_pop_for` 单次绝对 deadline，处理 EINTR/非零状态，并在恢复 GIL 后保留原异常；`ring_buffer.cc` 与 `py_ring_buffer.cc` TU 语法检查通过 |
+| `bindings` | 审查确认固定 timeout 仍需收敛为 Dataset 专用轮询/兼容 API，并补 stop、延迟 producer、正常收发测试 |
+| `gates` | `SLOW_FILES`、smoke `<300s` 与 native/torch nodeid 集合尚未重测，0.15 继续待领 |
+
+按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第一百波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
 - `device`：若续做 8.06，只迁下一个最终 owner 明确的 family，并复用 5be5fa15 的 launcher 合同；无 NPU

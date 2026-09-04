@@ -858,6 +858,10 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 
 - `0.15`：`23814b9a` 已实现 Linux `RingBuffer::wait_pop_for`、等待阶段 GIL 安全拆分，并将 `test_children_died` 改为有界 timeout；worker-death 聚焦节点 1 passed（约 106s，含核心重编）。`SLOW_FILES` 尚未移除，smoke `<300s` 尚未重测，任务继续保持待领。
 
+### 2026-09-04 第九十九波补充证据
+
+- `0.15`：`d3f4853e` 修正 `wait_pop_for` 的单次绝对 deadline、EINTR/非零状态处理，并在恢复 GIL 后保留原异常（不再把 stop/其他错误统一改写为 timeout）；`ring_buffer.cc` 与 `py_ring_buffer.cc` TU 语法检查通过。固定 timeout 作用范围、Dataset 专用轮询、`SLOW_FILES` 与 smoke `<300s` 仍待专项验收，任务保持待领。
+
 ### 2026-09-04 第九十六波补充证据
 
 - `10.05`：`1a423a16`/`f7f33f5b` 固定 skip reason bucket 优先级、CI summary 和 `other>0` fail-closed；合成结构测试 2 passed，任务已完整关闭。
