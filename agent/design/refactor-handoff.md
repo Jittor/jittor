@@ -1128,6 +1128,13 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | `sys.meta_path` permissive finder 需同时恢复 finder 身份、插入索引和 allowlist 增量，暂不做半改；本波无 device 提交。 |
 | `gates` | `py_compile`/`diff-check` 通过，未改变整卡状态。 |
 
+### 2026-09-04 第一百三十八波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `1a37b895` 让 `module_patcher.install_module_patches` 接收 transaction，记录 `_FINDER` 插入及 `_REGISTRY`/`_ENTRY_POINTS_LOADED` undo，integrations 传递 active transaction；外部 finder/allowlist owner 冲突测试仍缺，7.05 不关闭。 |
+| `gates` | `py_compile`/`diff-check` 通过；失败 patch 与已加载模块属性的完整回滚仍待。 |
+
 ### 2026-09-04 第一百三十六波
 
 | 分区 | 结果 |
