@@ -1197,6 +1197,13 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `compat` | `a08d5c15` 更新 activation bootstrap 的旧测试夹具以匹配 `publish_module`/`mutate_path` 协议；完整 `test_torch_bootstrap.py` 42 passed。7.05 仍待扩展构建与全量运行态验收。 |
 | `gates` | 本波仅修正回归测试选择/夹具，未放宽冲突保护或宣称硬件验证。 |
 
+### 2026-09-04 第一百五十波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `e05064b9` 新增普通 activation 失败注入回归：owner path/module 回滚、failed 状态和 ActivationTransaction 锁释放均验证；完整 `test_torch_bootstrap.py` 43 passed。扩展构建副作用与 child/build 全流程仍待。 |
+| `gates` | 本波只增加 mock failure coverage，不宣称真实扩展构建或 child process 已通过。 |
+
 ### 2026-09-04 第一百四十波
 
 | 分区 | 结果 |
