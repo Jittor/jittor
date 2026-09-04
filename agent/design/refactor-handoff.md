@@ -1099,6 +1099,13 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `compat` | `f8f838b2` 将 distributed 环境结构合同同步到 `tx.mutate_env/mutate_flag` 新协议，避免 direct-write 旧断言误报；结构 2 passed，事务相关定向 5 passed。7.05 仍待领。 |
 | `gates` | 本波仅修正测试合同，未扩大回滚覆盖范围或改变整卡状态。 |
 
+### 2026-09-04 第一百三十二波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `1eb7ec07` 修复 `mutate_env` 的规范化值记录：整数/布尔等输入先转字符串再登记，失败回滚不再误报 owner 冲突；事务定向 6 passed。7.05 仍待全部 installer mutation 接入。 |
+| `gates` | 本波发现并修复一个真实回滚边界 bug；未改变整卡状态。 |
+
 ### 2026-09-04 第一百一十九波
 
 | 分区 | 结果 |
