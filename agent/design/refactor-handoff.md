@@ -1018,6 +1018,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | ACL 8.06 的 data-channel 仍缺统一 C++ decoder；0.15 仍约 390 s，0.22 需 CUDA 多卡，6.B02/6.B16/10.19 需 910B3/HCCL 实机。本波无代码提交。 |
 | `gates` | 没有可在当前 CPU/静态环境完整关闭的新卡；看板待领保持 73，未伪造状态。 |
 
+### 2026-09-04 第一百一十七波
+
+| 分区 | 结果 |
+| --- | --- |
+| `bindings` | `c329a822` 将 cuDNN backward-w format 用户边界统一为可捕获 `USER_CHECKop`，补独立 format ledger；定向 3 passed。2.19 聚合任务仍待完整审计。 |
+| `compat` | `24637c96` 将 `vmap` 暴露为 numerical 模块级稳定 wrapper，保留 specialized runtime 转发并登记 approximate fidelity；CPU 对拍 2 passed。7.03 其余 family 仍待领。 |
+| `device` | `25c5ffed` 明确 ACL C++ `decode_acl_data` 接口草案、User/Internal 错误映射及 canonical cache key 规则；静态合同 2 passed，未改运行时。 |
+| `gates` | 本波没有可完整关闭的新卡；0.15 仍约 390 s，HCCL/ACL 仍待硬件验收。 |
+
 ### 2026-09-04 第一百一十二波
 
 | 分区 | 结果 |
