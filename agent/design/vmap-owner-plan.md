@@ -347,3 +347,13 @@ per-install resources. The static gate should additionally assert:
 These checks are metadata/resource checks only and may run without constructing
 large tensors. Any resource leak is a blocker for owner completion even when all
 numerical nodes pass.
+
+## Deterministic test data
+
+Keep the CPU numerical nodes deterministic and small: seed NumPy and Jittor with
+a fixed value, use integer/boolean inputs for the nested mask case, and limit
+mapped extents to at most four elements. Compare against a pure Python or NumPy
+loop with an absolute tolerance appropriate to the input dtype. Avoid randomized
+property tests in the first gate; they make cold-cache failures and backend
+differences harder to classify. A later stress suite may widen shapes only after
+the owner/identity and unsupported gates are green.
