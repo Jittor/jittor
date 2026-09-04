@@ -672,6 +672,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 ### 2026-09-04 第六十六波补充证据
 
 - `8.06`：`016fc62d`/`eb1e89cd` 将 GroupNorm backward 接入共享 launcher，保留 output-mask、group 属性、三输出 query 与 cleanup；静态合同 54 passed，本机无 CANN/NPU，仍待实机。
+- `8.06`：`fc849c10` 将 MaskedSelect 接入共享 launcher，保留双输入 mask query 与同步策略；静态合同 57 passed，本机无 CANN/NPU，仍待实机。
 - `2.19`：`35664df5`/`d3e786e2` 将 cuDNN RNN backward-x 非 LSTM mode 边界改为 `USER_CHECKop`，累计 102 处、五十五组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
 - `7.03`：本波复核剩余候选仅有复杂 `vmap` 闭包，未强行拆分，保持无新增代码提交。
 
