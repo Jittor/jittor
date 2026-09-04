@@ -1246,6 +1246,14 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | cohort C 的 curand 6、cuFFT 4 个 CUDA 节点通过；cuTT transpose 5 个因 `not use cutt` 跳过，未误报为通过。 |
 | `gates` | 本波只补真实 CUDA 证据，无代码提交；2.19 仍需处理 cuDNN abort、未运行的 CUDA family 和剩余用户边界，保持 `待领`。 |
 
+### 2026-09-05 第一百五十七波
+
+| 分区 | 结果 |
+| --- | --- |
+| `bindings` | 单独运行 `TestCudnnRnnDtype::test_float32_matches_reference` 仍在 `_cudnn_forward` 执行阶段触发 SIGABRT（退出 134），faulthandler 无 Python 异常汇总；不能计为通过，也不能仅凭现象归因到 RNN 断言回归。 |
+| `build` | 诊断发现冷缓存并发 nvcc 对临时目录可写性敏感；一次未预创建的 TMPDIR 直接导致 `nvcc fatal: Could not open output file`，后续复现均使用独立、预创建目录。 |
+| `gates` | 本波无代码提交；abort 根因待进一步取得 C++/CUDA 运行库日志，2.19 保持 `待领`，不把未归因失败标成环境无关或通过。 |
+
 ### 2026-09-04 第一百四十波
 
 | 分区 | 结果 |
