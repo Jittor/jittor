@@ -569,6 +569,17 @@ def test_avgpool_backward_uses_launcher_and_keeps_descriptor_cleanup():
     assert "syncRun();" not in backward
 
 
+def test_maxpool_backward_uses_launcher_and_keeps_descriptors():
+    source = POOL_SOURCE.read_text()
+    backward = source[source.index("void MaxpoolBackwardOpRunner::executeOp"):source.index("AvgpoolBackwardOpRunner::AvgpoolBackwardOpRunner")]
+    assert "poolCeil" in backward
+    assert "outputTensors[0]" in backward
+    assert "launch(ret, aclnnMaxPool2dWithIndicesBackward, true);" in backward
+    assert "aclDestroyIntArray(kernel_size);" in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+
+
 def test_random_uniform_normal_share_launcher_and_keep_seed_offset():
     source = RANDOM_SOURCE.read_text()
     assert "RandomUniform" in source
