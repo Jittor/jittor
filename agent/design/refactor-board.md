@@ -29,6 +29,8 @@
 > 第115波关闭 `10.01`：`5501d0b6` 增加稳定 `nox -s full` 完整 CPU/nightly 入口并切换 CPU workflow；调度 AST 合同 2 passed。看板已合并 201、待领 73。
 >
 > 第116波整卡审计：未发现可在当前环境完整关闭的新任务。`0.15` 仍约 390 s，`2.19`/`7.03`/`8.06` 仍有聚合剩余，ACL/HCCL 仍待 910B3 实机；本波无代码提交，待领保持 73。
+>
+> 第117波增量：`c329a822` 完成 cuDNN backward-w format 用户错误 cohort（结构 3 passed）；`24637c96` 完成 vmap numerical owner wrapper（CPU 2 passed）；`25c5ffed` 明确 ACL C++ decoder 接口、错误映射和 canonical cache key 合同（静态合同 2 passed）。聚合任务和硬件验收状态不变。
 
 一行一个任务，与 [refactor-plan.md](refactor-plan.md) 的编号对应。领任务把状态改成「进行中」并写名字，
 完成改成「已合并」并填提交号；推送冲突说明别人先领了。状态只有四种：待领 / 进行中 / 已合并 / 并入 X。
