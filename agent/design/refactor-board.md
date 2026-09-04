@@ -681,6 +681,12 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `2.19`：`76dc9dc3`/`6baf9dd5` 将 cuDNN RNN backward-x 第二处 `proj_size==0` 边界改为 `USER_CHECKop`，累计 103 处、五十六组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
 - `7.03`：复核剩余 API 后仅 `vmap` 为复杂闭包，本波无安全小切片提交。
 
+### 2026-09-04 第六十八波补充证据
+
+- `8.06`：`a9d73aae`/`efb1b758` 将 Maxpool backward 接入共享 launcher，保留 pool descriptors、`poolCeil`、输出处理、cleanup 与同步策略；静态合同 56 passed，本机无 CANN/NPU，仍待实机。
+- `2.19`：`408b4832`/`1de5551e` 将 cuDNN conv 输入 rank 边界改为 `USER_CHECKop`，累计 104 处、五十七组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `7.03`：`9bd71961` 新增 `agent/design/vmap-owner-plan.md`，记录复杂 vmap 的 owner、Runtime 依赖、迁移边界与后续 CPU 验收节点；本波仅设计前置，未宣称实现完成。
+
 ### 2026-09-04 第六十七波补充证据
 
 - `8.06`：`230658fb`/`c4f0447c` 将 Avgpool backward 接入共享 launcher，保留 countIncludePad/divisorOverride、descriptor cleanup 与同步策略；静态合同 55 passed，本机无 CANN/NPU，仍待实机。

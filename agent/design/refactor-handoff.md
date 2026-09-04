@@ -27,9 +27,9 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；本波审计基线 `6baf9dd5`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 审计基线 847 个 |
-| 提交里出现过的任务号 | 291 个 |
+| 分支 | `2.0-refactor`；本波审计基线 `1de5551e`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 审计基线 853 个 |
+| 提交里出现过的任务号 | 294 个 |
 | 看板 | 已合并 **196** / 进行中 **0** / 待领 **74** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
 
@@ -627,7 +627,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `bindings` | 2.19 将 cuDNN RNN backward-x 第二处 `proj_size==0` 边界改为 `USER_CHECKop`，累计 103 处、五十六组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
 | `compat` | 复核剩余 API 后仅 `vmap` 为复杂闭包，本波无安全小切片提交 |
 
-按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第六十八波继续优先可独立验证的
+第六十八波新增 3 个严格保持待领的前置：
+
+| 分区 | 第六十八波结果 |
+| --- | --- |
+| `device` | 8.06 将 Maxpool backward 接入共享 launcher，保留 pool descriptors、`poolCeil`、输出处理、cleanup 与同步策略；静态合同 56 passed，本机无 CANN/NPU |
+| `bindings` | 2.19 将 cuDNN conv 输入 rank 边界改为 `USER_CHECKop`，累计 104 处、五十七组证据；结构合同与 nvcc TU 语法通过，本机无 CUDA 未运行负向 |
+| `compat` | 7.03 新增 `vmap` owner 迁移设计前置，记录 Runtime 依赖与后续 CPU 验收；未宣称实现完成 |
+
+按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第六十九波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
 - `device`：若续做 8.06，只迁下一个最终 owner 明确的 family，并复用 5be5fa15 的 launcher 合同；无 NPU
