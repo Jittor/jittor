@@ -892,6 +892,12 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | `876ec09c` 恢复通用 `pop()` 无限等待/兼容行为，新增 Dataset 专用 `pop_for(timeout_ms)`；单次 deadline、伪唤醒/EINTR/stop/其他异常与 GIL 边界已修正 |
 | `gates` | 协议合同与 killed-worker 聚焦节点各 1 passed（killed-worker 19.72s）；`SLOW_FILES` 和 smoke `<300s` 尚未重测，0.15 继续待领 |
 
+第一百波补充关闭 5.21：
+
+| 分区 | 第一百波结果 |
+| --- | --- |
+| `pyother` | 5.21 已由 `3cd1a614` 完整实现并关闭：`_install_order.SEQUENCE` 声明十步 monkeypatch 安装顺序，`record/verify` 在运行时拒绝乱序、重复和缺失；`jt.sum` 与 `Var.sum`/`mean` 共用 full-reduce 路径。提交内 `tests/core/test_install_order.py` 17 项、`tests/structure/test_install_order.py` 6 项通过。 |
+
 按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第一百波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 

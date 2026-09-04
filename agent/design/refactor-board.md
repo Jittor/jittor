@@ -310,7 +310,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 5.18 | 同一概念合并 | 已合并 | pyother | 40fa8695（efficientnet 投影层）37ac0ac5（models/_utils）4179c899（loss 的 _reduce）d5892775（分布类）d569f22d（旧式 scheduler）dd1cbe30（init 的 gain 表与 fan）96cb9b1c（linalg helper）f23dc9b8（normalize 合并到 torch 语义） |
 | 5.19 | 被静默忽略的参数改为传非默认值时 warn 或 raise | 已合并 | pyops + pyother | 1710aef1（算子参数：relu/leaky_relu/silu/mish 的 inplace、instance_norm 与 InstanceNorm 的 running stats/momentum/is_train/sync、svd 的 compute_uv/driver、inv_ex 的 check_errors、ctc_loss 的 zero_infinity、sort 的 stable；topk 的 sorted 判为无需处理，见提交说明）。共用基础设施 `python/jittor/_arg_policy.py`。4cf6df28（实现 ResNet `zero_init_residual`）；211339c9（vjp/jvp strict、DataLoader pin_memory/persistent_workers、kaiming generator、fftfreq/rfftfreq dtype/device 与未知 kwargs）。统一回归 44 passed |
 | 5.20 | import 期副作用删除 | 已合并 | pyother | 505a1155 |
-| 5.21 | 六个 monkeypatch 安装器写成显式有序清单并加断言 | 待领 | | |
+| 5.21 | 六个 monkeypatch 安装器写成显式有序清单并加断言 | 已合并 | pyother | `3cd1a614`：新增 `_install_order.SEQUENCE` 显式声明十步安装顺序与 `record/verify` 运行时校验；`jt.sum`/`Var.sum` 共用 full-reduce 路径。`tests/core/test_install_order.py` 17 项、`tests/structure/test_install_order.py` 6 项在提交中通过 |
 | 5.22 | `nn` facade 不导出 39 个下划线名，内部用模块局部名不经 `jt.nn.*` 晚绑… | 已合并 | pyops | 5d67f36b。源码 `jt.nn._*` 使用与 `dir(jt.nn)` 私有导出均为 0，后端私有覆盖迁入 `nn.backends.hooks`；结构 17 passed，CPU 25 passed/8 skipped |
 | 5.23 | 根命名空间显式 `__all__` | 已合并 | pyops | d80d0b99。根星号来源归零，414 名运行时 `__all__` 与生成 pyi 顶层声明一致；namespace 13 passed，结构聚焦 4 passed |
 | 5.24 | 10 个 `jt._*` 跨模块契约 | 待领 | | |
