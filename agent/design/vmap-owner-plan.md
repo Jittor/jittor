@@ -617,3 +617,16 @@ mark the owner exact.
 The static gate should at least inspect for module-level mutable state and run a
 threaded identity-only probe with sentinel callbacks. Numerical concurrency
 stress is deferred until the owner extraction and ordinary CPU nodes are green.
+
+## Resource bounds and cancellation
+
+The ordinary loop path creates one output per mapped index before stacking. The
+owner must bound this temporary footprint by the mapped extent and release each
+intermediate after stacking; it must not append outputs to a module-global cache.
+Document an upper bound for the first CPU gate (the deterministic fixture uses
+at most four elements) and add a guard that rejects unreasonably large extents
+with a typed error before allocation.
+
+If a wrapped call is interrupted or raises from `func`, discard already-created
+intermediates and propagate the original exception. A focused static/CPU probe
+should verify that a failed map leaves no new hold-vars or fidelity entries.
