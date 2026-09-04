@@ -165,3 +165,23 @@ explicit branch or `RuntimeError` for each: mismatched mapped extents, a nested
 helper with a non-zero mapped dimension, and a vectorized result whose dtype is
 not boolean. This keeps unsupported behavior observable without constructing a
 Jittor graph or requiring a backend.
+
+## Context fixture
+
+The static/runtime boundary can be exercised without a real installer by using
+two sentinel contexts:
+
+```text
+class DepthZero:
+    transform_depth() -> 0
+
+class DepthTwo:
+    transform_depth() -> 2
+```
+
+Construct the module-level owner with each callback and assert that both produce
+the same ordinary loop result for a simple mapped function. Then delete the
+sentinel objects and force collection; the owner must remain callable, proving
+that no context instance was retained in a closure or module global. A separate
+AST check should reject any default argument or closure cell whose value is an
+`InstallContext`, `jittor_module`, or `Var` object.
