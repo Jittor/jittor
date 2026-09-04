@@ -24,3 +24,28 @@ Candidate attribute owners reviewed for an isolated slice were `triu.diagonal`,
 serializes an `OpAttr` assignment in generated C++ while the corresponding
 Python call also determines the JIT key. Move them only after the data-channel
 schema and cache-key contract are defined for every owner.
+
+## Migration order
+
+1. Define the data-channel schema and its cache-key representation for one
+   non-pooled owner, with a static generated-code contract.
+2. Migrate `softmax.dim` or `triu.diagonal` as the first attribute owner; keep
+   `pool_op.py` out of this step because pooled descriptors have a separate
+   lifetime/cache contract.
+3. Define descriptor address rebinding and invalidation, then add shape-keyed
+   caching. A shape cache must never reuse a descriptor with a stale address.
+4. Migrate `AclOpFunctions` type erasure only after all query signatures and
+   registry entries have a single launcher representation.
+
+The real-device acceptance command is intentionally explicit and must run on
+an Ascend 910B3 after sourcing CANN:
+
+```bash
+source "$ASCEND_HOME/set_env.sh"
+npu-smi info
+JITTOR_TEST_DEVICES=npu sync_run=1 \
+  python -m pytest -q -s tests/backends/npu/test_acl.py
+```
+
+The run is accepted only when the intended ACL operator executes, the log has
+no `fallback cpu`/`cpu fallback`, and `npu-smi info` confirms the target card.
