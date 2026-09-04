@@ -589,6 +589,16 @@ def test_flash_attention_forward_uses_launcher_and_keeps_raii_descriptors():
     assert "syncRun();" not in forward
 
 
+def test_flash_attention_backward_uses_launcher_and_keeps_gradient_outputs():
+    source = (ROOT / "python/jittor/extern/acl/aclops/flashattention_op_acl.cc").read_text()
+    backward = source[source.index("void FlashAttentionBackwardOpRunner::executeOp"):source.index("IncreFlashAttentionOpRunner::IncreFlashAttentionOpRunner")]
+    assert "prefix" in backward
+    assert "outputTensors[2]" in backward
+    assert "launch(ret, aclnnFlashAttentionScoreGradV2, true);" in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+
+
 def test_adamw_list_uses_async_launcher_and_keeps_loop_sync_point():
     source = (ROOT / "python/jittor/extern/acl/aclops/adamw_op_acl.cc").read_text()
     assert "aclnnApplyAdamWV2GetWorkspaceSize" in source

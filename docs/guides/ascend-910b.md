@@ -572,6 +572,9 @@ The ACL FlashAttention forward owner uses the shared launcher while retaining
 prefix/qstart/kvstart RAII descriptors and synchronous execution. Backward,
 incremental, and KV-cache owners remain outside this slice.
 
+The ACL FlashAttention backward owner uses the shared launcher while retaining
+its RAII descriptors, three gradient outputs, and synchronous execution.
+
 The ACL AdamWList owner uses the shared launcher for each tensor update while
 retaining its fused device-copy checks and single synchronization point after
 the update loop.
