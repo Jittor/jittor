@@ -106,6 +106,10 @@ MIGRATED_CUBLAS_MATMUL_DTYPE_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cublas/ops/cublas_matmul_op.cc": 4,
 }
 
+MIGRATED_CUBLAS_MATMUL_RANK_USER_BOUNDARIES = {
+    "python/jittor/extern/cuda/cublas/ops/cublas_matmul_op.cc": 1,
+}
+
 MIGRATED_CUBLAS_BATCHED_MATMUL_DTYPE_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cublas/ops/cublas_batched_matmul_op.cc": 2,
 }
@@ -407,12 +411,26 @@ def test_cutt_transpose_axes_user_boundary_migration_is_explicit_and_bounded():
 
 def test_cublas_matmul_dtype_user_boundary_migration_is_explicit_and_bounded():
     source = (ROOT / "python/jittor/extern/cuda/cublas/ops/cublas_matmul_op.cc").read_text()
-    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    # Keep the new b-rank cohort independent from the existing dtype/rank/inner
+    # ledger represented by this historical count.
+    actual = source.count("USER_CHECK(")
+    actual += source.count("USER_CHECKop(a->shape.size(),==,2)")
+    actual += source.count("USER_CHECKop(m,==,m_)")
     assert actual == MIGRATED_CUBLAS_MATMUL_DTYPE_USER_BOUNDARIES[
         "python/jittor/extern/cuda/cublas/ops/cublas_matmul_op.cc"]
     negative = (ROOT / "tests/backends/cuda/test_cublas_matmul_grad.py").read_text()
     assert "test_non_float_inputs_are_rejected_clearly" in negative
     assert "test_mixed_input_dtypes_are_rejected_clearly" in negative
+
+
+def test_cublas_matmul_b_rank_is_a_catchable_user_error():
+    source = (ROOT / "python/jittor/extern/cuda/cublas/ops/cublas_matmul_op.cc").read_text()
+    marker = "USER_CHECKop(b->shape.size(),==,2)"
+    assert marker in source
+    assert "ASSERTop(b->shape.size(),==,2)" not in source
+    assert "rank-2 input b" in source
+    assert source.count(marker) == MIGRATED_CUBLAS_MATMUL_RANK_USER_BOUNDARIES[
+        "python/jittor/extern/cuda/cublas/ops/cublas_matmul_op.cc"]
 
 
 def test_cublas_matmul_inner_dimension_is_a_catchable_user_error():
