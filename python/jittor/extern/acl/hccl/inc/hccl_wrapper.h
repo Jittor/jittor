@@ -97,4 +97,48 @@ nothing (which used to be a confusing compile error inside generated code).
     // @pyjt(hccl_init)
     void hccl_init();
 
+/**
+Whether a collective still brackets itself with a full device+stream sync.
+
+`JT_HCCL_COLLECTIVE_SYNC=full` (the default) keeps the historical behaviour;
+`stream-order` drops the syncs and relies on stream ordering instead. Read once
+and cached.
+
+**Why this is a switch and not a deletion.** Every HCCL collective used to
+issue `aclrtSynchronizeDevice()` + `aclrtSynchronizeStream(aclstream)` both
+before and after the call -- four full synchronisations per collective, which
+serialises the whole NPU pipeline around every gradient exchange (8.02, audit
+06-backends §distributed, severity: critical). They are redundant *by reading*:
+there is one global `aclstream` (`acl_jittor.h`) and every ACL operator
+enqueues onto it, so the collective is already ordered after the work that
+produced its input and before the work that consumes its output.
+
+But "redundant by reading" is not "verified", and this repository has no Ascend
+hardware, so the removal cannot be run even once here. Deleting the syncs
+outright would ship an unverified change to the one code path whose failure
+mode is a silently wrong gradient on someone else's cluster. Behind a switch,
+the on-machine step is one environment variable and an A/B comparison rather
+than a code edit -- see `agent/manuals/hccl-on-device-verification.md`.
+
+Flip the default to `stream-order` once that document's checklist passes on a
+real multi-card Ascend node; the switch (and this comment) can go with it.
+*/
+bool hccl_collective_full_sync();
+
+// Bracket one collective. The four operators call these instead of writing the
+// synchronisations out, so there is one place to change and one place to read.
+inline void hccl_collective_begin() {
+    if (hccl_collective_full_sync()) {
+        ACLCHECK(aclrtSynchronizeDevice());
+        ACLCHECK(aclrtSynchronizeStream(aclstream));
+    }
+}
+
+inline void hccl_collective_end() {
+    if (hccl_collective_full_sync()) {
+        ACLCHECK(aclrtSynchronizeDevice());
+        ACLCHECK(aclrtSynchronizeStream(aclstream));
+    }
+}
+
 } // jittor

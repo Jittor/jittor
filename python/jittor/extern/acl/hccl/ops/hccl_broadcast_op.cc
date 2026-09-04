@@ -42,8 +42,7 @@ void HcclBroadcastOp::jit_run() {
     auto* __restrict__ yp = y->ptr<Tx>();
     //LOGir << "HcclBroadcastOp::jit_run " << @Root << " " << hccl_device_id << " " << xp << " " << yp;
     //ACLCHECK(aclrtSynchronizeStream(aclstream));
-    ACLCHECK(aclrtSynchronizeDevice());
-    ACLCHECK(aclrtSynchronizeStream(aclstream));
+    hccl_collective_begin();
     int group_rank = hccl_process_group_rank(group_id);
     HCCLCHECK(HcclBroadcast(
         @Root == group_rank ? xp : yp, (uint64_t)x->num,
@@ -53,8 +52,7 @@ void HcclBroadcastOp::jit_run() {
         ACLCHECK(aclrtMemcpy(yp, x->num * sizeof(Tx), xp, x->num * sizeof(Tx), ACL_MEMCPY_DEVICE_TO_DEVICE));
         ACLCHECK(aclrtSynchronizeDevice());
     }
-    ACLCHECK(aclrtSynchronizeDevice());
-    ACLCHECK(aclrtSynchronizeStream(aclstream));
+    hccl_collective_end();
 }
 
 #endif // JIT

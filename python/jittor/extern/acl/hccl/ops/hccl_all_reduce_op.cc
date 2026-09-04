@@ -45,13 +45,11 @@ void HcclAllReduceOp::jit_run() {
     )
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
-    ACLCHECK(aclrtSynchronizeDevice());
-    ACLCHECK(aclrtSynchronizeStream(aclstream));
+    hccl_collective_begin();
     HCCLCHECK(HcclAllReduce(
         xp, yp, (uint64_t)x->num, hccl_dtype(x->dtype()), @REDUCE_OP,
         hccl_process_group_comm(group_id), aclstream));
-    ACLCHECK(aclrtSynchronizeDevice());
-    ACLCHECK(aclrtSynchronizeStream(aclstream));
+    hccl_collective_end();
 }
 
 #endif // JIT

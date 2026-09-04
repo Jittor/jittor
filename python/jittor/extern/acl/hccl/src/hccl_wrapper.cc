@@ -50,6 +50,21 @@ HcclDataType hccl_dtype(NanoString dtype) {
     return hccl_dtype_unsupported(dtype);
 }
 
+bool hccl_collective_full_sync() {
+    // Read once: this sits in every collective's jit_run, and the answer
+    // cannot change mid-run without making the ordering incoherent.
+    static const bool full = []() {
+        const char* mode = getenv("JT_HCCL_COLLECTIVE_SYNC");
+        if (!mode || !*mode) return true;
+        if (!strcmp(mode, "stream-order")) return false;
+        if (!strcmp(mode, "full")) return true;
+        LOGf << "JT_HCCL_COLLECTIVE_SYNC must be 'full' or 'stream-order',"
+             << "got" << mode;
+        return true;
+    }();
+    return full;
+}
+
 HcclRootInfo root_info;
 static HcclComm world_comm;
 uint32_t hccl_device_id = 0;
