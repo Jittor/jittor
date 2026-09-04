@@ -979,6 +979,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | `softmax.dim`/`triu.diagonal` 均依赖统一 data-channel schema、C++ attr 解码和 cache-key 契约，无法安全独立迁移；本波无代码提交。 |
 | `gates` | 本波未扩大 `SLOW_FILES`；0.15 完整 smoke 仍约 390 s，10.19 HCCL route 仍缺 Ascend 910B3 多卡 CPU 对照。 |
 
+### 2026-09-04 第一百一十波
+
+| 分区 | 结果 |
+| --- | --- |
+| `bindings` | `26ee6bee` 将 cuDNN RNN descriptor 两处 GRU mode 检查改为可捕获 `USER_CHECKop`，补独立 mode ledger；定向 3 passed。2.19 聚合任务仍待完整审计。 |
+| `compat` | `d3e33b0e` 将非原地 `index_put` 提升为 numerical 模块级稳定 owner，保留 `index_put_` 原地语义并登记 approximate fidelity；CPU 对拍 2 passed。7.03 其余 family 仍待领。 |
+| `device` | ACL 仍缺统一 data-channel C++ 解码入口；`_code.py`、Python attr、C++ `OpAttr` 与 cache-key 需协同迁移，本波无运行时代码提交。 |
+| `gates` | 本波未改变 0.15 `SLOW_FILES` 或 10.19 HCCL hardware-only 状态；现有聚焦合同继续通过，完整硬件/性能验收仍待。 |
+
 按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第一百波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
