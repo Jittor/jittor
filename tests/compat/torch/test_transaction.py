@@ -98,3 +98,77 @@ def test_environment_mutation_records_the_normalized_string_value():
     assert env["RANK"] == "1"
     tx.rollback()
     assert "RANK" not in env
+
+
+def test_module_patch_finder_rollback_is_owner_aware():
+    from jittor.compat import module_patcher
+
+    original_path = list(module_patcher.sys.meta_path)
+    original_finder = module_patcher._FINDER
+    original_registry = {
+        path: list(callbacks)
+        for path, callbacks in module_patcher._REGISTRY.items()
+    }
+    original_loaded = set(module_patcher._ENTRY_POINTS_LOADED)
+    try:
+        module_patcher._FINDER = None
+        module_patcher._REGISTRY.clear()
+        module_patcher._ENTRY_POINTS_LOADED.clear()
+        tx = InstallTransaction("module-patcher")
+        module_patcher.install_module_patches(
+            load_entry_points=False, transaction=tx
+        )
+        created = module_patcher._FINDER
+        assert created in module_patcher.sys.meta_path
+        tx.rollback()
+        assert created not in module_patcher.sys.meta_path
+
+        tx = InstallTransaction("module-patcher-conflict")
+        module_patcher.install_module_patches(
+            load_entry_points=False, transaction=tx
+        )
+        created = module_patcher._FINDER
+        external = object()
+        index = module_patcher.sys.meta_path.index(created)
+        module_patcher.sys.meta_path[index] = external
+        with pytest.raises(TransactionConflict, match="finder replaced"):
+            tx.rollback()
+        assert module_patcher.sys.meta_path[index] is external
+    finally:
+        module_patcher.sys.meta_path[:] = original_path
+        module_patcher._FINDER = original_finder
+        module_patcher._REGISTRY.clear()
+        module_patcher._REGISTRY.update(
+            {path: list(callbacks) for path, callbacks in original_registry.items()}
+        )
+        module_patcher._ENTRY_POINTS_LOADED.clear()
+        module_patcher._ENTRY_POINTS_LOADED.update(original_loaded)
+
+
+def test_permissive_finder_rollback_preserves_external_allowlist_changes():
+    from jittor.compat import permissive
+
+    finder = permissive._PermissiveFinder("torch._test", ("torch._test.keep",))
+    meta_path = [finder]
+    tx = InstallTransaction("permissive")
+    permissive.install_permissive_package(
+        "torch._test", meta_path, allow=("torch._test.added",), transaction=tx
+    )
+    finder.allow.add("torch._test.external")
+    with pytest.raises(TransactionConflict, match="allowlist changed"):
+        tx.rollback()
+    assert "torch._test.external" in finder.allow
+
+
+def test_permissive_finder_rollback_rejects_external_reordering():
+    from jittor.compat import permissive
+
+    meta_path = ["sentinel"]
+    tx = InstallTransaction("permissive")
+    permissive.install_permissive_package(
+        "torch._test2", meta_path, allow=(), transaction=tx
+    )
+    finder = meta_path[0]
+    meta_path[:] = ["sentinel", finder]
+    with pytest.raises(TransactionConflict, match="moved or replaced"):
+        tx.rollback()
