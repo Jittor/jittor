@@ -988,6 +988,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | ACL 仍缺统一 data-channel C++ 解码入口；`_code.py`、Python attr、C++ `OpAttr` 与 cache-key 需协同迁移，本波无运行时代码提交。 |
 | `gates` | 本波未改变 0.15 `SLOW_FILES` 或 10.19 HCCL hardware-only 状态；现有聚焦合同继续通过，完整硬件/性能验收仍待。 |
 
+### 2026-09-04 第一百一十一波
+
+| 分区 | 结果 |
+| --- | --- |
+| `bindings` | `038819e6` 将 cuBLAS acc matmul 内维 `m == m_` 检查改为可捕获 `USER_CHECKop`，补独立 ledger；定向 4 passed。2.19 聚合任务仍待完整审计。 |
+| `compat` | `64f4ecfa` 建立 `torch.autocast` numerical installer 模块级 owner alias，登记 approximate fidelity；CPU context enable/restore 对拍 2 passed。7.03 其余 family 仍待领。 |
+| `device` | `3cb0da4e` 形成 ACL data-channel schema 草案（版本、operator scope、标量/向量类型、确定性 cache key、统一解码入口目标）和 910B3 验收边界；静态合同 1 passed。 |
+| `gates` | 本波未改变 0.15 性能门槛或 10.19 HCCL hardware-only 路线；相关完整验收仍待。 |
+
 按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第一百波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
