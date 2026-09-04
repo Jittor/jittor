@@ -1124,7 +1124,7 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 
 | 分区 | 结果 |
 | --- | --- |
-| `compat` | `87ca0a82` 新增 owner-aware `InstallTransaction.mutate_attr`，将 transformers runtime guard 与 torchmetrics fastpath 两处 `builtins.__import__` 写入接入 ledger；无事务时保持直写。7.05 仍待其他 installer mutation。 |
+| `compat` | `87ca0a82` 新增 owner-aware `InstallTransaction.mutate_attr`，将 transformers runtime guard 与 torchmetrics fastpath 两处 `builtins.__import__` 写入接入 ledger；`7af13605` 补 utilities import-hook 回滚/外部替换冲突测试（6 passed）。无事务时保持直写，7.05 仍待其他 installer mutation。 |
 | `device` | `sys.meta_path` permissive finder 需同时恢复 finder 身份、插入索引和 allowlist 增量，暂不做半改；本波无 device 提交。 |
 | `gates` | `py_compile`/`diff-check` 通过，未改变整卡状态。 |
 
