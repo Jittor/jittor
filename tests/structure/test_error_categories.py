@@ -142,6 +142,10 @@ MIGRATED_CUBLAS_ACC_MATMUL_RANK_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cublas/ops/cublas_acc_matmul_op.cc": 2,
 }
 
+MIGRATED_CUBLAS_ACC_MATMUL_INNER_DIM_USER_BOUNDARIES = {
+    "python/jittor/extern/cuda/cublas/ops/cublas_acc_matmul_op.cc": 1,
+}
+
 MIGRATED_CUSPARSE_SPMMCSR_DTYPE_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcsr_op.cc": 2,
 }
@@ -536,6 +540,16 @@ def test_cublas_acc_matmul_rank_is_a_catchable_user_error():
     assert "ASSERTop(b->shape.size(),==,2)" not in source
     actual = sum(source.count(marker) for marker in markers)
     assert actual == MIGRATED_CUBLAS_ACC_MATMUL_RANK_USER_BOUNDARIES[
+        "python/jittor/extern/cuda/cublas/ops/cublas_acc_matmul_op.cc"]
+
+
+def test_cublas_acc_matmul_inner_dimension_is_a_catchable_user_error():
+    source = (ROOT / "python/jittor/extern/cuda/cublas/ops/cublas_acc_matmul_op.cc").read_text()
+    marker = "USER_CHECKop(m,==,m_)"
+    assert marker in source
+    assert "ASSERTop(m,==,m_)" not in source
+    assert "inner dimensions must match" in source
+    assert source.count(marker) == MIGRATED_CUBLAS_ACC_MATMUL_INNER_DIM_USER_BOUNDARIES[
         "python/jittor/extern/cuda/cublas/ops/cublas_acc_matmul_op.cc"]
 
 
