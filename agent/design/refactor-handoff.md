@@ -997,6 +997,12 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | `3cb0da4e` 形成 ACL data-channel schema 草案（版本、operator scope、标量/向量类型、确定性 cache key、统一解码入口目标）和 910B3 验收边界；静态合同 1 passed。 |
 | `gates` | 本波未改变 0.15 性能门槛或 10.19 HCCL hardware-only 路线；相关完整验收仍待。 |
 
+### 2026-09-04 第一百一十四波
+
+| 分区 | 结果 |
+| --- | --- |
+| `gates` | `151c5856` 将 `cpu` 加入 `nox.options.sessions` 默认列表，新增 AST 合同确认默认数值门禁；定向 1 passed。`10.02` 已完整关闭，待领数减少一条。 |
+
 ### 2026-09-04 第一百一十二波
 
 | 分区 | 结果 |
