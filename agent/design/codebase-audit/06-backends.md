@@ -106,6 +106,17 @@ Python 侧入口 `jittor.distributed.bucket_scope`。一桶内的集合通信合
 **本机墙钟没有收益**——无 P2P 时 NCCL 走共享内存传输、kernel 自旋抢 SM，窗口内的
 matmul 从 0.31 ms 被拖慢到 0.83–4.28 ms。重叠是真的，加速不是；不要拿墙钟做验收。
 
+**未修，待实机**：「HCCL 每次集合通信前后各做两次全设备/流同步」这一条（严重度关键）。
+本机无昇腾硬件，这段代码连编译都做不到，删除**无法跑一次验证**，硬删等于把未验证的改动
+送到别人的集群上静默算错梯度。8.02 只做了代码组织：四个算子里各写一遍的四次同步收进
+`hccl_collective_begin()` / `hccl_collective_end()`（`hccl_wrapper.h`），行为由
+`JT_HCCL_COLLECTIVE_SYNC` 控制，**默认 `full` 与改动前逐字等价**，`stream-order` 才不做同步。
+于是上机那一步是改一个环境变量做 A/B，而不是改代码。清单（Ascend 910B3、≥2 卡、CANN、
+env/file rendezvous、以及四条「不许静默回落到 CPU / 不许把 skip 当 pass」的判据）在
+`agent/manuals/hccl-on-device-verification.md`；真机全绿之后才可以把默认改成 `stream-order`
+并把开关删掉。`hccl_broadcast_op.cc` 里 root 分支在同步版 `aclrtMemcpy` 之后那次单独的
+`aclrtSynchronizeDevice()` 也同样多余、同样没动。
+
 ## ACL 三件套：样板量化
 一个 ACL 算子由三部分组成：`*_op_acl.cc` 的 OpRunner、`*_op.py` 的 jt.Function、
 以及 `_code.py` 在**每次调用时**用 Python f-string 拼出的一段 C++ 源码（`aclops/_code.py:47-59`）。

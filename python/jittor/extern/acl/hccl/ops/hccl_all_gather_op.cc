@@ -53,13 +53,11 @@ void HcclAllGatherOp::jit_run() {
     // hccl_wrapper.cc (see misc/collective_dtype.h).
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
-    ACLCHECK(aclrtSynchronizeDevice());
-    ACLCHECK(aclrtSynchronizeStream(aclstream));
+    hccl_collective_begin();
     HCCLCHECK(HcclAllGather(
         xp, yp, (uint64_t)x->num, hccl_dtype(x->dtype()),
         hccl_process_group_comm(group_id), aclstream));
-    ACLCHECK(aclrtSynchronizeDevice());
-    ACLCHECK(aclrtSynchronizeStream(aclstream));
+    hccl_collective_end();
 }
 
 #endif // JIT

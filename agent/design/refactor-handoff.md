@@ -1513,6 +1513,16 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
    归因的正确做法是把改动 `git checkout` 回 HEAD、用**同一条命令**再跑一遍比对——本波
    两侧都是 4 failed，只有 passed 数差 20（就是新用例），零回归的结论是这么得出来的。
 
+第一〇〇波完成 8.02 的 NCCL 两截，HCCL 那截保持待实机：
+
+| 分区 | 第一〇〇波结果 |
+| --- | --- |
+| `dist` | 8.02 前半：五个 NCCL 集合通信「改流」由 4.08 的 `0dfcb3dd` 落地，本波补两卡实测（`bd737c65`）。五个集合通信各一次 rank 相关数值对拍 + event 依赖计数各 +2 + 200 轮「现算输入 → 通信 → 立刻消费」竞态循环；两 rank 各 8 passed。**反证**：临时删掉两条 event（算子仍在侧流）报 `worst=885.0`，两 rank 都红 |
+| `dist` | 8.02 后半：新增 `nccl_bucket_begin/end`、`nccl_comm_wait` 与 `cuda_side_stream_defer_join/_hold_block/_resolve_join`，Python 入口 `jittor.distributed.bucket_scope`。一桶合并成一次 `ncclGroupEnd()` 提交（event 依赖 2N → N+1），`defer_join` 给出真实重叠窗口；两 rank 各 7 passed。**反证**：把「扣住块」改成假装成功报 `26310.0`（毒值漏进结果） |
+| `dist` | **重叠证据是 nsys timeline，不是墙钟**：同进程同负载 A/B，延迟 join 时集合通信 12.2 ms 窗口内 5 个 matmul kernel 并发、覆盖 57%–63%；立刻 join 时并发数 0。**本机墙钟无收益**——`nvidia-smi topo -p2p r` 全 CNS，NCCL 走共享内存传输、kernel 自旋抢 SM，窗口内 matmul 从 0.31 ms 被拖到 0.83–4.28 ms。取证脚本与判据在 `agent/skills/jittor-distributed-verification/SKILL.md` 加 `nccl_overlap_report.py` |
+| `dist` | 开发中自己踩到并修掉一个真 bug：group 打开期间 NCCL 调用尚未提交到流上，此时记 done 事件是空的，于是 `defer_join=False` 也「重叠」了 61%——**那是竞态不是优化**。group 语义下 join 必须放在 `ncclGroupEnd()` 之后。测试里 `test_bucket_submits_once_and_joins_once` 的 `join_pending()` 断言专门挡这个 |
+| `dist` | 8.02 的 HCCL 截（「每次集合通信 4 次全设备/流同步」，严重度关键）**没有删除**，只做代码组织：四个算子里重复四遍的同步收进 `hccl_collective_begin/end`，行为由 `JT_HCCL_COLLECTIVE_SYNC` 控制，**默认 `full` 与改动前逐字等价**。本机无 NPU，删除无法跑一次验证，硬删等于把未验证改动送到别人集群上静默算错梯度。上机清单见 `agent/manuals/hccl-on-device-verification.md`（Ascend 910B3、≥2 卡、CANN、env/file rendezvous、禁止 CPU fallback 的四条判据）。清单在真机全绿后才可把默认改成 `stream-order` |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
