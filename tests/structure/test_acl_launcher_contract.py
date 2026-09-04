@@ -31,6 +31,7 @@ ARG_REDUCE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/arg_reduce_op_acl.cc
 SILU_SOURCE = ROOT / "python/jittor/extern/acl/aclops/silu_op_acl.cc"
 BMM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/bmm_op_acl.cc"
 ROPE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/rope_op_acl.cc"
+POOL_SOURCE = ROOT / "python/jittor/extern/acl/aclops/pool_op_acl.cc"
 RANDOM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/random_op_acl.cc"
 UPSAMPLE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/upsample_op_acl.cc"
 GATHER_SOURCE = ROOT / "python/jittor/extern/acl/aclops/gather_scatter_op_acl.cc"
@@ -338,6 +339,20 @@ def test_rope_forward_uses_launcher_and_backward_remains_present():
     assert "mallocWorkSpace(workspaceSize)" not in forward
     assert "syncRun();" not in forward
     assert "void RotaryPositionEmbeddingGradOpRunner::executeOp" in source
+
+
+def test_maxpool_forward_uses_launcher_and_keeps_descriptors():
+    source = POOL_SOURCE.read_text()
+    forward = source[source.index("void MaxpoolOpRunner::executeOp"):source.index("void AvgpoolOpRunner::executeOp")]
+    assert "kernel_size" in forward
+    assert "strides" in forward
+    assert "pads" in forward
+    assert "dilations" in forward
+    assert "poolCeil" in forward
+    assert "launch(ret, aclnnMaxPool2dWithIndices, true);" in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void AvgpoolOpRunner::executeOp" in source
 
 
 def test_random_uniform_normal_share_launcher_and_keep_seed_offset():

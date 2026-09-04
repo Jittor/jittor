@@ -51,17 +51,7 @@ namespace jittor
         dilations = aclCreateIntArray(attr->poolDilations.data(), 2);
         ret = aclnnMaxPool2dWithIndicesGetWorkspaceSize(inputTensors[0], kernel_size, strides, pads, dilations, attr->poolCeil, outputTensors[0], outputTensors[1], &workspaceSize, &executor);
 
-        checkRet(ret);
-
-        if (workspaceSize > 0)
-        {
-            mallocWorkSpace(workspaceSize);
-        }
-
-        ret = aclnnMaxPool2dWithIndices(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnMaxPool2dWithIndices failed. ERROR: %d\n", name.c_str(), ret); return);
-
-        syncRun();
+        launch(ret, aclnnMaxPool2dWithIndices, true);
 
         aclDestroyIntArray(strides);
         aclDestroyIntArray(pads);
