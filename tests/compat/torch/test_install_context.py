@@ -316,7 +316,6 @@ class TestInstallContext(unittest.TestCase):
                 mock.patch("jittor.compat.torch.install", side_effect=install), \
                 mock.patch.object(runtime, "install_aliases", return_value={}), \
                 mock.patch.object(runtime, "publish_loaded_aliases"), \
-                mock.patch("jittor.compat.shim.control.wrap_flags"), \
                 mock.patch(
                     "jittor.compat.integrations.apply_external_runtime_patches"
                 ) as integrations:
@@ -336,8 +335,7 @@ class TestInstallContext(unittest.TestCase):
             sys.modules["torch.nn"] = child
             with mock.patch("jittor.compat.torch.install") as install, \
                     mock.patch.object(runtime, "install_aliases", return_value={}), \
-                    mock.patch.object(runtime, "publish_loaded_aliases"), \
-                    mock.patch("jittor.compat.shim.control.wrap_flags"):
+                    mock.patch.object(runtime, "publish_loaded_aliases"):
                 runtime.compose(root, object(), strict=False)
             install.assert_not_called()
             self.assertNotIn("torch", sys.modules)
