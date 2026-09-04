@@ -42,6 +42,20 @@ The C++ decode entry should be one `BaseOpRunner` helper that validates the
 operator name, schema version, type tag, and required fields before constructing
 an `OpAttr`. This is a design target only; no such shared decoder exists yet.
 
+The proposed interface is:
+
+```cpp
+AclDecodedData decode_acl_data(
+    const DataMap& data, string_view expected_op,
+    const AttrSchema& schema, string& canonical_cache_key);
+```
+
+Malformed user data (unknown field, wrong type, missing required value, or
+non-canonical vector) must raise `UserError`; a violated internal schema must
+raise `InternalInvariantError`. The helper must produce the canonical cache key
+from sorted typed values before the owner constructs its `OpAttr`. It must not
+read pointer addresses, process-global state, or Python object identity.
+
 ## Migration order
 
 1. Define the data-channel schema and its cache-key representation for one
