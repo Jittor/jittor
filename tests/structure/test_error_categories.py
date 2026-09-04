@@ -479,6 +479,8 @@ def test_backend_internal_assertion_classification_is_explicit():
     for relative, marker in INTERNAL_BACKEND_ASSERTION_CONTRACTS.items():
         source = (ROOT / relative).read_text()
         assert marker in source, (relative, marker)
+    descriptor = (ROOT / "python/jittor/extern/cuda/cudnn/src/cudnn_rnn_descriptor.cc").read_text()
+    assert "ASSERT(linLayerBias)" in descriptor
 
 
 def test_cudnn_conv3d_x_rank_user_boundary_migration_is_explicit_and_bounded():
