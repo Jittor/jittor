@@ -1480,6 +1480,50 @@ register_fidelity(
 )
 
 
+def kron(a, b):
+    """Compute the Kronecker product through broadcasted Jittor views."""
+    nd = max(a.ndim, b.ndim)
+    a2 = a.reshape((1,) * (nd - a.ndim) + tuple(a.shape))
+    b2 = b.reshape((1,) * (nd - b.ndim) + tuple(b.shape))
+    aex, bex, fin = [], [], []
+    for i in range(nd):
+        aex += [int(a2.shape[i]), 1]
+        bex += [1, int(b2.shape[i])]
+        fin.append(int(a2.shape[i]) * int(b2.shape[i]))
+    return (a2.reshape(aex) * b2.reshape(bex)).reshape(fin)
+
+
+register_fidelity(
+    "torch.kron",
+    kron,
+    Fidelity.APPROXIMATE,
+    "matches Torch Kronecker shape and values for CPU tensors; device, "
+    "layout, dtype, and out semantics are not implemented",
+)
+
+
+def logsumexp(input, dim, keepdim=False):
+    """Compute a numerically stable log-sum-exp reduction."""
+    m = input.max(dim, keepdims=True)
+    out = m + jt.log(jt.exp(input - m).sum(dim, keepdims=True))
+    if keepdim:
+        return out
+    dims = [dim] if isinstance(dim, int) else list(dim)
+    nd = input.ndim
+    dims = [d % nd for d in dims]
+    target = [s for i, s in enumerate(input.shape) if i not in dims]
+    return out.reshape(target) if target else out.reshape(-1)
+
+
+register_fidelity(
+    "torch.logsumexp",
+    logsumexp,
+    Fidelity.APPROXIMATE,
+    "matches Torch reduction values and keepdim shape for CPU tensors; device, "
+    "dtype, named-dimension, and out semantics are not implemented",
+)
+
+
 def hann_window(window_length, periodic=True, *, dtype=None, device=None,
                 requires_grad=False, **kwargs):
     """Create a Hann window through the CPU NumPy signal owner."""
@@ -1828,16 +1872,7 @@ def install(ctx):
     _alias("trace", trace); Var.trace = _trace_impl
     _alias("diag_embed", diag_embed); Var.diag_embed = _diag_embed_impl
     _alias("diagflat", diagflat)
-    def _kron(a, b):
-        nd = max(a.ndim, b.ndim)
-        a2 = a.reshape((1,) * (nd - a.ndim) + tuple(a.shape))
-        b2 = b.reshape((1,) * (nd - b.ndim) + tuple(b.shape))
-        aex, bex, fin = [], [], []
-        for i in range(nd):
-            aex += [int(a2.shape[i]), 1]; bex += [1, int(b2.shape[i])]
-            fin.append(int(a2.shape[i]) * int(b2.shape[i]))
-        return (a2.reshape(aex) * b2.reshape(bex)).reshape(fin)
-    _alias("kron", _kron); Var.kron = _kron
+    g.kron = kron; Var.kron = kron
     _alias("logcumsumexp", logcumsumexp); Var.logcumsumexp = _logcumsumexp_impl
     g.tensordot = tensordot
     _alias("pdist", pdist); Var.pdist = _pdist_impl
@@ -1859,21 +1894,7 @@ def install(ctx):
     _alias("signbit", signbit); Var.signbit = _signbit_impl
     # reductions: logsumexp (attention/MoE/loss/beam), nansum/nanmean, std_mean/var_mean,
     # aminmax, quantile. NaN handling uses nan_to_num plus an explicit isnan mask.
-    def _logsumexp(input, dim, keepdim=False):
-        m = input.max(dim, keepdims=True)
-        out = m + jt.log(jt.exp(input - m).sum(dim, keepdims=True))
-        if keepdim:
-            return out
-        # torch removes the reduced dim(s) entirely (1D -> 0-dim scalar). jittor's
-        # squeeze keeps a trailing (1,) for the last remaining dim, so reshape to
-        # the explicit reduced shape instead.
-        dims = [dim] if isinstance(dim, int) else list(dim)
-        nd = input.ndim
-        dims = [d % nd for d in dims]
-        target = [s for i, s in enumerate(input.shape) if i not in dims]
-        # jittor has no 0-dim tensors; a full reduction stays (1,).
-        return out.reshape(target) if target else out.reshape(-1)
-    _alias("logsumexp", _logsumexp); Var.logsumexp = _logsumexp
+    g.logsumexp = logsumexp; Var.logsumexp = logsumexp
     _alias("nansum", nansum); Var.nansum = _nansum_impl
     _alias("nanmean", nanmean); Var.nanmean = _nanmean_impl
     _alias("std_mean", std_mean)
