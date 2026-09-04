@@ -138,6 +138,30 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             self.assertIs(torch.equal(a, c), False)
             self.assertIs(torch.equal(torch.array([]), torch.array([])), True)
 
+    def test_kron_logsumexp_are_stable_module_level_objects(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        for name in ("kron", "logsumexp"):
+            with self.subTest(name=name):
+                implementation = getattr(numerical, name)
+                self.assertIs(getattr(torch, name), implementation)
+                record = fidelity.fidelity_of("torch." + name)
+                self.assertIs(record.implementation, implementation)
+                self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+                self.assertIn("CPU", record.detail)
+
+    def test_kron_logsumexp_cpu_values_match_numpy(self):
+        with torch.flag_scope(use_cuda=0):
+            a = torch.array([[1.0, 2.0]])
+            b = torch.array([[3.0], [4.0]])
+            np.testing.assert_array_equal(
+                torch.kron(a, b).numpy(), np.kron(a.numpy(), b.numpy()))
+            values = np.array([[0.0, 1.0], [2.0, 3.0]], dtype=np.float32)
+            actual = torch.logsumexp(torch.array(values), dim=1).numpy()
+            expected = np.log(np.exp(values).sum(axis=1))
+            np.testing.assert_allclose(actual, expected, rtol=1e-6)
+
     def test_eye_is_a_stable_module_level_object(self):
         numerical = importlib.import_module(
             "jittor.compat.torch.installers.numerical")
