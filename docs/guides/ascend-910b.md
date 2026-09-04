@@ -532,6 +532,10 @@ dual-output handling. Its gradient owner is outside this slice.
 The ACL RmsNorm gradient owner now uses the shared launcher and retains its
 multi-input, dual-output, and synchronous execution handling.
 
+The ACL LayerNorm forward owner uses the shared launcher while retaining
+normalizedShape, eps, three outputs, and descriptor cleanup. Backward remains
+outside this slice.
+
 The ACL Dropout backward owner uses the shared launcher while retaining its
 scale query and synchronous execution policy.
 

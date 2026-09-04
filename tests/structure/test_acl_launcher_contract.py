@@ -464,6 +464,19 @@ def test_rms_norm_grad_uses_launcher_and_forward_remains_present():
     assert "launch(ret, aclnnRmsNorm, true);" in source
 
 
+def test_layer_norm_forward_uses_launcher_and_backward_remains_present():
+    source = NORMS_SOURCE.read_text()
+    forward = source[source.index("void LayerNormOpRunner::executeOp"):source.index("LayerNormBackwardOpRunner::LayerNormBackwardOpRunner")]
+    assert "normalizedShape" in forward
+    assert "attr->eps" in forward
+    assert "outputTensors[2]" in forward
+    assert "launch(ret, aclnnLayerNorm, true);" in forward
+    assert "aclDestroyIntArray(normalizedShape);" in forward
+    assert "mallocWorkSpace(workspaceSize)" not in forward
+    assert "syncRun();" not in forward
+    assert "void LayerNormBackwardOpRunner::executeOp" in source
+
+
 def test_rope_forward_uses_launcher_and_backward_remains_present():
     source = ROPE_SOURCE.read_text()
     forward = source[source.index("void RotaryPositionEmbeddingOpRunner::executeOp"):source.index("RotaryPositionEmbeddingGradOpRunner::RotaryPositionEmbeddingGradOpRunner")]
