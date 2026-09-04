@@ -446,3 +446,19 @@ are limited to immutable helpers and the injected `transform_depth` callback.
 The gate should also scan module-level `Assign`/`AnnAssign` nodes for values
 whose names contain `ctx`, `g`, `Var`, or `InstallContext`. Report each finding
 with `path`, `line`, and `symbol`, and fail closed when source cannot be parsed.
+
+## Fidelity registry gate
+
+The static contract should query `fidelity.fidelity_of("torch.vmap")` after a
+dry-run install and assert:
+
+- `record.implementation` is the exact module-level owner object;
+- `record.level` is `Fidelity.APPROXIMATE` until all CPU and unsupported nodes
+  pass;
+- `record.detail` mentions the injected context callback and backend scope;
+- a second install does not replace the implementation object or register a
+  duplicate fidelity entry.
+
+Serialize the record's `api`, `level`, and `detail` into the evidence block. Any
+identity or duplicate-registration drift is a static failure, independent of
+whether numerical JIT nodes were deferred.
