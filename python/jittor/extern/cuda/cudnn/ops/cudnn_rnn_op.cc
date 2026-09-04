@@ -32,7 +32,7 @@ CudnnRnnOp::CudnnRnnOp(Var* x, Var* hx, Var* cx, Var* w,
     set_flag(OpFlags::_grads, 1);
 
     USER_CHECKop(mode,==,"lstm");
-    ASSERTop(proj_size,==,0);
+    USER_CHECKop(proj_size,==,0);
     init_rnn();
 }
 
