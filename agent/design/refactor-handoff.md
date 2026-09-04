@@ -1078,6 +1078,13 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `compat` | `9949fa10` 修复 completed-install namespace 冲突异常路径的 RLock 泄漏；回归 `test_install_context.py` 定向 2 passed。完整 installer mutation ledger 仍未接入，7.05 保持待领。 |
 | `gates` | 本波修复只涉及锁生命周期和失败测试，不改变 0.15/硬件验收状态。 |
 
+### 2026-09-04 第一百二十九波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `c8b993b4` 让 transaction rollback 校验事务写入的 owner 值；外部改写时抛 `TransactionConflict`，合成事务测试 3 passed。完整 installer mutation ledger 仍待接入，7.05 保持待领。 |
+| `gates` | 本波完成 owner-aware 回滚安全子项，未改变整卡状态。 |
+
 ### 2026-09-04 第一百一十九波
 
 | 分区 | 结果 |
