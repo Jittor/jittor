@@ -155,6 +155,7 @@ INTERNAL_BACKEND_ASSERTION_CONTRACTS = {
     "python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_backward_x_op.cc": "ASSERT(best_algo_idx!=-1)",
     "python/jittor/extern/cuda/cudnn/ops/cudnn_conv3d_backward_w_op.cc": "ASSERT(best_algo_idx!=-1)",
     "python/jittor/extern/cuda/cudnn/inc/cudnn_conv_plan.h": "ASSERT(ok)",
+    "python/jittor/extern/cuda/cudnn/src/cudnn_rnn_descriptor.cc": "ASSERT(linLayerMat)",
     "python/jittor/extern/cuda/cutt/ops/cutt_wrapper.cc": "CHECK(ret == CUTT_SUCCESS)",
     "python/jittor/extern/cuda/cub/ops/cub_test_op.cc": "ASSERT(cub_test_entry",
 }
