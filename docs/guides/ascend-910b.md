@@ -615,3 +615,9 @@ output-size RAII and synchronous execution. Backward is outside this slice.
 
 The ACL UpsampleNearest2d backward owner uses the shared launcher while
 retaining output/input-size RAII descriptors and synchronous execution.
+
+The ACL launcher migration boundary is now explicit: KVCacheMemcpy is a
+per-token aclrtMemcpyAsync path, not a workspace/query executor owner, and must
+remain outside BaseOpRunner::launch. The remaining 8.06 work is module-level
+registration, attribute data plumbing, descriptor caching, and process_acl
+removal with their stated prerequisites.
