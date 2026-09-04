@@ -490,6 +490,10 @@ def test_backend_internal_assertion_classification_is_explicit():
     cub_test = (ROOT / "python/jittor/extern/cuda/cub/ops/cub_test_op.cc").read_text()
     assert cub_test.count("ASSERT(cub_test_entry") == 1
     assert "ASSERT(status == cudaSuccess)" in cub_test
+    cublas_test = (ROOT / "python/jittor/extern/cuda/cublas/ops/cublas_test_op.cc").read_text()
+    assert cublas_test.count("ASSERT(cublas_test_entry") == 1
+    cudnn_test = (ROOT / "python/jittor/extern/cuda/cudnn/ops/cudnn_test_op.cc").read_text()
+    assert cudnn_test.count("ASSERT(cudnn_test_entry") == 1
     cutt_wrapper = (ROOT / "python/jittor/extern/cuda/cutt/ops/cutt_wrapper.cc").read_text()
     assert cutt_wrapper.count("CHECK(ret == CUTT_SUCCESS)") == 2
 
