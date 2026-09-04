@@ -90,6 +90,38 @@ VarPtr make_grad(Op* op, Var* out, Var* dout, Var* x, int x_index) {
     return dx;
 }
 
+// Whether autograd is willing to send a gradient into `v` at all. The two
+// flags are the pair VarHolder::get_requires_grad reads and the pair
+// grad()'s bfs_backward stops on, which is why they are one predicate here.
+inline static bool requires_grad(Var* v) {
+    return !v->is_stop_grad()
+        && !v->flag(VarFlags::_requires_grad_disabled);
+}
+
+Op* backward_grad_fn(Var* v) {
+    ASSERT(v != nullptr);
+    if (!requires_grad(v)) return nullptr;
+    Op* op = v->input();
+    // No producer: a graph source, or a producer that has already been freed --
+    // and it can only have been freed if nothing needed it for backward, which
+    // is the same answer.
+    if (!op) return nullptr;
+    // detach() stops the *op*, not the var it produced (ops/clone_op.cc), so a
+    // detached var requires grad and is still a leaf. Reading the var's own
+    // flag would have missed this and called it a non-leaf.
+    if (op->is_stop_grad()) return nullptr;
+    for (auto& e : op->_inputs) {
+        // Control dependency: make_grad refuses a negative index, so this edge
+        // exists for ordering only.
+        if (e.reverse().index < 0) continue;
+        Var* in = e.node->var();
+        if (!requires_grad(in)) continue;
+        if (is_requires_grad_disabled_edge(in, op)) continue;
+        return op;
+    }
+    return nullptr;
+}
+
 inline static void assign_attrs(Var* a, Var* b) {
     if (b->flag(VarFlags::_stop_fuse))
         a->set_flag(VarFlags::_stop_fuse);
