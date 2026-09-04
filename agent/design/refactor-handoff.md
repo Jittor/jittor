@@ -27,9 +27,9 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；本波审计基线 `24a9e438`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 审计基线 908 个 |
-| 提交里出现过的任务号 | 321 个 |
+| 分支 | `2.0-refactor`；本波审计基线 `c9866b48`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 审计基线 914 个 |
+| 提交里出现过的任务号 | 324 个 |
 | 看板 | 已合并 **196** / 进行中 **0** / 待领 **74** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
 
@@ -707,7 +707,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `bindings` | 复核剩余 CUDA/CUDNN/CUB/NCCL 断言均属内部不变量或后端运行失败，本波无新增安全用户边界迁移 |
 | `compat` | 补充 vmap AST 门禁输出契约，定义计数、禁止捕获、unsupported guard 与 fail-closed 证据格式；仅设计前置，未修改 runtime |
 
-按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第七十八波继续优先可独立验证的
+第七十八波新增 3 个严格保持待领的前置：
+
+| 分区 | 第七十八波结果 |
+| --- | --- |
+| `device` | 8.06 本波未新增 ACL family；上一波 FlashAttention backward 的 canonical 记录保持有效，本机无 CANN/NPU |
+| `bindings` | 2.19 新增后端内部断言分类文档与结构门禁，1 passed；用户边界累计保持 112 处、65 组，不改运行时错误语义 |
+| `compat` | 补充 vmap context/namespace/行为矩阵/提取流程等设计契约，未修改 runtime，未宣称实现完成 |
+
+按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第七十九波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
 - `device`：若续做 8.06，只迁下一个最终 owner 明确的 family，并复用 5be5fa15 的 launcher 合同；无 NPU

@@ -742,28 +742,8 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `2.19`：本波复核剩余 CUDA/CUDNN/CUB/NCCL 断言均属内部不变量或后端运行失败，没有新增安全用户边界迁移。
 - `7.03`：`d316a706` 补充 vmap AST 门禁输出契约，定义计数、禁止捕获、unsupported guard 与 fail-closed 证据格式；仅设计前置。
 
-### 2026-09-04 第六十七波补充证据
+### 2026-09-04 第七十八波补充证据
 
-- `8.06`：`230658fb`/`c4f0447c` 将 Avgpool backward 接入共享 launcher，保留 countIncludePad/divisorOverride、descriptor cleanup 与同步策略；静态合同 55 passed，本机无 CANN/NPU，仍待实机。
-
-### 2026-09-04 第六十八波补充证据
-
-- `8.06`：`a9d73aae` 将 Maxpool backward 接入共享 launcher，保留 pool descriptors、poolCeil、输出处理与 cleanup；静态合同 56 passed，本机无 CANN/NPU，仍待实机。
-
-### 2026-09-04 第七十波补充证据
-
-- `8.06`：`18fca063` 将 Index 接入共享 launcher，保留 index query 与同步策略，SliceV2 未迁；静态合同 58 passed，本机无 CANN/NPU，仍待实机。
-
-### 2026-09-04 第七十一波补充证据
-
-- `8.06`：`2e27d71b` 将 SliceV2 接入共享 launcher，保留 begins/ends/steps/axes descriptors 与同步策略；静态合同 59 passed，本机无 CANN/NPU，仍待实机。
-- `8.06`：`ff26ab02` 将 StridedSliceAssignV2 接入共享 launcher，保留 gradient memset 分支与 slice descriptor handling；静态合同 60 passed，本机无 CANN/NPU，仍待实机。
-
-### 2026-09-04 第七十三波补充证据
-
-- `8.06`：`73b71c7d` 将 InplaceMaskedScatter 接入共享 launcher，保留 tracked base-to-output device copy dependency 与同步策略；静态合同 61 passed，本机无 CANN/NPU，仍待实机。
-- `8.06`：`5f989f16` 将 FlashAttention forward 接入共享 launcher，保留 prefix/qstart/kvstart RAII descriptors 与同步策略；静态合同 65 passed，本机无 CANN/NPU，仍待实机。
-- `8.06`：`79694cbd` 将 FlashAttention backward 接入共享 launcher，保留 RAII descriptors、三梯度输出与同步策略；incremental/KV-cache 未迁；静态合同 66 passed，本机无 CANN/NPU，仍待实机。
-- `8.06`：`4eb360d7` 将 IndexPutImpl 接入共享 launcher，保留 index tensor-list handling 与同步策略；IndexPutImplAccumulate 未改；静态合同 62 passed，本机无 CANN/NPU，仍待实机。
-- `8.06`：`3dd89256` 将 AdamWList 每项更新接入共享 launcher，保留 fused D2D copy checks 与 loop 末尾单一同步点；静态合同 64 passed，本机无 CANN/NPU，仍待实机。
-- `8.06`：`f353076a` 将 IndexPutImpl accumulate 接入共享 launcher，保留 tracked output memset 与 index tensor-list dependency；静态合同 63 passed，本机无 CANN/NPU，仍待实机。
+- `2.19`：`a29e0f81`/`c9866b48` 新增后端内部断言分类文档与结构门禁，1 passed；用户边界累计保持 112 处、65 组，不改运行时错误语义。
+- `7.03`：`d90a716a`、`9ee118a0`、`05e9f37f`、`41236df4`、`5a8b0115`、`ba76983c`、`f6d3a435`、`9bd71961`、`ed9b2010`、`d316a706`、`abaa242a`、`afa756bc` 逐步补充 vmap owner、context、unsupported、后端分层与 AST 评审契约；未修改 runtime，未宣称实现完成。
+- `8.06`：本波暂未新增 ACL family；上一波 FlashAttention backward 已在前面 canonical 记录中，保持无 CANN/NPU 实机验证声明。
