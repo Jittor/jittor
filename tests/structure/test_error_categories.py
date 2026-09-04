@@ -179,6 +179,10 @@ MIGRATED_CUDNN_CONV_FORMAT_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_op.cc": 4,
 }
 
+MIGRATED_CUDNN_CONV_FORMAT_COMPARE_USER_BOUNDARIES = {
+    "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_op.cc": 1,
+}
+
 MIGRATED_CUDNN_CONV_BWD_X_FORMAT_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_backward_x_op.cc": 3,
 }
@@ -637,6 +641,15 @@ def test_cudnn_conv_format_user_boundary_migration_is_explicit_and_bounded():
     assert actual == MIGRATED_CUDNN_CONV_FORMAT_USER_BOUNDARIES[
         "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_op.cc"]
     assert "Not a valid format" in source
+
+
+def test_cudnn_conv_format_compare_is_a_catchable_user_error():
+    source = (ROOT / "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_op.cc").read_text()
+    marker = "USER_CHECKop(c,==,format[3])"
+    assert marker in source
+    assert "USER_CHECK(c==format[3])" not in source
+    assert source.count(marker) == MIGRATED_CUDNN_CONV_FORMAT_COMPARE_USER_BOUNDARIES[
+        "python/jittor/extern/cuda/cudnn/ops/cudnn_conv_op.cc"]
 
 
 def test_cudnn_conv_bwd_x_format_user_boundary_migration_is_explicit_and_bounded():
