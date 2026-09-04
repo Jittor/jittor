@@ -67,6 +67,8 @@
 > 第134波 7.05 子项：`60197b81` 将 factories/tensor installer 的 `jt.flags.use_cuda` 写入接入 transaction helper；`d9d063a5` 将 core installer 的安装期 `use_cuda` 写入接入 ledger 并补失败回滚测试。nn 的 `.to()` 写入确认属于运行时用户语义，不纳入安装事务；7.05 仍待全部 installer 写入口。
 >
 > 第135波 7.05 子项：`87ca0a82` 新增 owner-aware `mutate_attr`，将 transformers runtime guard 与 torchmetrics fastpath 的 `builtins.__import__` hook 接入 ledger；`sys.meta_path` permissive finder 因 allowlist/身份耦合暂不迁移。7.05 仍待领。
+>
+> 第135波 companion：`7af13605` 新增 utilities import-hook 回滚/外部替换冲突测试，定向 6 passed；不改变 7.05 整卡待领状态。
 
 一行一个任务，与 [refactor-plan.md](refactor-plan.md) 的编号对应。领任务把状态改成「进行中」并写名字，
 完成改成「已合并」并填提交号；推送冲突说明别人先领了。状态只有四种：待领 / 进行中 / 已合并 / 并入 X。
