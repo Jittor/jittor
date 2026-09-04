@@ -18,6 +18,7 @@ from typing import Callable, Dict, List, Mapping, Optional, Tuple
 
 from ._entry_points import entry_points as _entry_points
 from .diagnostics import EXPECTED, swallowed
+from .transaction import TransactionConflict
 
 
 MODULE_PATCH_ENTRY_POINT = "jittor.module_patches"
@@ -258,11 +259,20 @@ def install_module_patches(load_entry_points: bool = True, transaction=None) -> 
             sys.meta_path.insert(0, _FINDER)
             if transaction is not None:
                 finder = _FINDER
-                transaction.record_undo(
-                    lambda f=finder: sys.meta_path.remove(f)
-                    if f in sys.meta_path else None)
+                def restore_finder(f=finder):
+                    if f not in sys.meta_path:
+                        raise TransactionConflict("module patch finder replaced externally")
+                    sys.meta_path.remove(f)
+                transaction.record_undo(restore_finder)
         if transaction is not None:
+            committed_registry = {path: tuple(callbacks)
+                                   for path, callbacks in _REGISTRY.items()}
+            committed_loaded = set(_ENTRY_POINTS_LOADED)
             def restore_registry():
+                current = {path: tuple(callbacks)
+                           for path, callbacks in _REGISTRY.items()}
+                if current != committed_registry or set(_ENTRY_POINTS_LOADED) != committed_loaded:
+                    raise TransactionConflict("module patch registry changed externally")
                 _REGISTRY.clear()
                 _REGISTRY.update({path: list(callbacks)
                                   for path, callbacks in old_registry.items()})
