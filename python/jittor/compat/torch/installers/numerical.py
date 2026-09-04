@@ -464,6 +464,27 @@ register_fidelity(
 )
 
 
+_NATIVE_REPEAT_INTERLEAVE = jt.repeat_interleave
+_REPEAT_INTERLEAVE_FIDELITY_DETAIL = (
+    "re-exports Jittor's native repeat_interleave for supported tensors but "
+    "omits device, layout, and dtype keyword semantics"
+ )
+
+
+def repeat_interleave(x, repeats, dim=None, *, output_size=None):
+    """Repeat elements along a dimension through the captured native owner."""
+    return _NATIVE_REPEAT_INTERLEAVE(
+        x, repeats, dim=dim, output_size=output_size)
+
+
+register_fidelity(
+    "torch.repeat_interleave",
+    repeat_interleave,
+    Fidelity.APPROXIMATE,
+    _REPEAT_INTERLEAVE_FIDELITY_DETAIL,
+)
+
+
 _NAN_TO_NUM_INPLACE_FIDELITY_DETAIL = (
     "matches Torch in-place NaN/Inf replacement and return identity for supported "
     "real tensors but omits device, layout, dtype, and narrow custom-bound semantics"
@@ -1523,7 +1544,7 @@ def install(ctx):
     _alias("diff", diff)
     _alias("trapz", trapz)
     _alias("trapezoid", trapezoid)
-    _alias("repeat_interleave", _repeat_interleave)
+    g.repeat_interleave = repeat_interleave
     _alias("autocast", _AutocastContext)
     # Real loop-based torch.vmap. The old no-op stub (`lambda fn,*a,**k: fn`)
     # ignored in_dims/out_dims, so transformers' vmap-based causal-mask builder

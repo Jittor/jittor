@@ -1443,6 +1443,24 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIn("native", record.detail)
         self.assertIn("device", record.detail)
 
+    def test_repeat_interleave_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.repeat_interleave))
+        self.assertIs(torch.repeat_interleave, numerical.repeat_interleave)
+        self.assertEqual(numerical.repeat_interleave.__module__, numerical.__name__)
+        self.assertEqual(numerical.repeat_interleave.__name__, "repeat_interleave")
+
+    def test_repeat_interleave_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.repeat_interleave")
+        self.assertIs(record.implementation, numerical.repeat_interleave)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("native", record.detail)
+        self.assertIn("device", record.detail)
+
 
 if __name__ == "__main__":
     unittest.main()
