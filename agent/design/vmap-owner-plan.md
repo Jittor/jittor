@@ -582,3 +582,23 @@ result.shape == (batch_size,)
 For nested scalar maps, assert one axis per mapping level and verify that
 `out_dims` relocates only the requested batch axis. Any deviation is a shape
 contract failure, not a backend-specific tolerance.
+
+## Autograd contract
+
+The ordinary loop/stack path must preserve gradients exactly as repeated direct
+calls to `func`; the owner must not detach mapped arguments or outputs. The
+vectorized boolean fast path is used for mask construction and is
+non-differentiable only when its inputs are boolean.
+
+Add a CPU-only gradient node after the static gate:
+
+```text
+x.requires_grad = True
+y = vmap(lambda row: (row * row).sum(), in_dims=0)(x)
+y.sum().backward()
+assert x.grad == 2 * x
+```
+
+If a backend cannot provide this gradient path, record an explicit
+`supports_autograd` limitation in fidelity detail; do not silently detach or
+mark the owner exact.
