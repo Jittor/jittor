@@ -81,6 +81,44 @@ class TestFastTierIsStillWorthRunning(unittest.TestCase):
             "fast by deferring the tree rather than by deferring what is slow"
             % (len(gated) - len(deferred), len(gated), 100 * share))
 
+    def test_smoke_passes_not_slow_to_both_process_modes(self):
+        """The PR smoke tier must defer only the measured slow files."""
+        import ast
+
+        source = (REPO_ROOT / "noxfile.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        smoke = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "smoke")
+        fast_assignments = [
+            node for node in smoke.body
+            if isinstance(node, ast.Assign)
+            and any(getattr(target, "id", None) == "fast"
+                    for target in node.targets)
+        ]
+        self.assertEqual(len(fast_assignments), 1,
+                         "smoke must define one fast marker argument")
+        fast_constants = {
+            node.value for node in ast.walk(fast_assignments[0].value)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        }
+        self.assertIn("-m", fast_constants)
+        self.assertIn("not slow", fast_constants)
+
+        smoke_calls = [
+            node for node in ast.walk(smoke)
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "id", None) == "_run_pytest_once"
+        ]
+        self.assertEqual(len(smoke_calls), 2,
+                         "smoke must run native and torch process modes")
+        for call in smoke_calls:
+            self.assertGreaterEqual(len(call.args), 2)
+            self.assertTrue(
+                any(isinstance(node, ast.Name) and node.id == "fast"
+                    for node in ast.walk(call.args[1])),
+                "both smoke process modes must receive the fast marker args")
+
 
 class TestBudget(unittest.TestCase):
 
