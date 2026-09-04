@@ -477,6 +477,19 @@ def test_layer_norm_forward_uses_launcher_and_backward_remains_present():
     assert "void LayerNormBackwardOpRunner::executeOp" in source
 
 
+def test_layer_norm_backward_uses_launcher_and_keeps_descriptor_cleanup():
+    source = NORMS_SOURCE.read_text()
+    backward = source[source.index("void LayerNormBackwardOpRunner::executeOp"):source.index("GroupNormOpRunner::GroupNormOpRunner")]
+    assert "normalizedShape" in backward
+    assert "outMask" in backward
+    assert "outputTensors[2]" in backward
+    assert "launch(ret, aclnnLayerNormBackward, true);" in backward
+    assert "aclDestroyIntArray(normalizedShape);" in backward
+    assert "aclDestroyBoolArray(outMask);" in backward
+    assert "mallocWorkSpace(workspaceSize)" not in backward
+    assert "syncRun();" not in backward
+
+
 def test_rope_forward_uses_launcher_and_backward_remains_present():
     source = ROPE_SOURCE.read_text()
     forward = source[source.index("void RotaryPositionEmbeddingOpRunner::executeOp"):source.index("RotaryPositionEmbeddingGradOpRunner::RotaryPositionEmbeddingGradOpRunner")]

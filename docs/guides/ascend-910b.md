@@ -536,6 +536,9 @@ The ACL LayerNorm forward owner uses the shared launcher while retaining
 normalizedShape, eps, three outputs, and descriptor cleanup. Backward remains
 outside this slice.
 
+The ACL LayerNorm backward owner uses the shared launcher while retaining its
+normalizedShape/outMask descriptors, three-output gradient query, and cleanup.
+
 The ACL Dropout backward owner uses the shared launcher while retaining its
 scale query and synchronous execution policy.
 

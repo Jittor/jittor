@@ -163,17 +163,7 @@ namespace jittor
             outputTensors[0], outputTensors[1], outputTensors[2],
             &workspaceSize, &executor);
 
-        checkRet(ret);
-
-        if (workspaceSize > 0)
-        {
-            mallocWorkSpace(workspaceSize);
-        }
-
-        ret = aclnnLayerNormBackward(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnLayerNormBackward failed. ERROR: %d\n", name.c_str(), ret); return);
-
-        syncRun();
+        launch(ret, aclnnLayerNormBackward, true);
         aclDestroyIntArray(normalizedShape);
         aclDestroyBoolArray(outMask);
 
