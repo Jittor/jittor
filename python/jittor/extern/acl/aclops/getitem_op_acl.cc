@@ -53,17 +53,7 @@ namespace jittor
         auto indexTensorList = aclCreateTensorList(&inputTensors[1], input_num - 1);
         ret = aclnnIndexGetWorkspaceSize(inputTensors[0], indexTensorList, outputTensors[0], &workspaceSize, &executor);
 
-        checkRet(ret);
-
-        if (workspaceSize > 0)
-        {
-            mallocWorkSpace(workspaceSize);
-        }
-
-        ret = aclnnIndex(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnIndex failed. ERROR: %d\n", name.c_str(), ret); return);
-
-        syncRun();
+        launch(ret, aclnnIndex, true);
         return;
     }
 

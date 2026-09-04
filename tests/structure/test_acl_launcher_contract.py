@@ -521,6 +521,15 @@ def test_masked_select_uses_launcher_and_keeps_two_inputs():
     assert "syncRun();" not in masked
 
 
+def test_index_uses_launcher_and_slice_remains_present():
+    source = (ROOT / "python/jittor/extern/acl/aclops/getitem_op_acl.cc").read_text()
+    index = source[source.index("void IndexOpRunner::executeOp"):source.index("SliceV2OpRunner::SliceV2OpRunner")]
+    assert "launch(ret, aclnnIndex, true);" in index
+    assert "mallocWorkSpace(workspaceSize)" not in index
+    assert "syncRun();" not in index
+    assert "void SliceV2OpRunner::executeOp" in source
+
+
 def test_rope_forward_uses_launcher_and_backward_remains_present():
     source = ROPE_SOURCE.read_text()
     forward = source[source.index("void RotaryPositionEmbeddingOpRunner::executeOp"):source.index("RotaryPositionEmbeddingGradOpRunner::RotaryPositionEmbeddingGradOpRunner")]
