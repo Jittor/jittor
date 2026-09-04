@@ -997,6 +997,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | `3cb0da4e` 形成 ACL data-channel schema 草案（版本、operator scope、标量/向量类型、确定性 cache key、统一解码入口目标）和 910B3 验收边界；静态合同 1 passed。 |
 | `gates` | 本波未改变 0.15 性能门槛或 10.19 HCCL hardware-only 路线；相关完整验收仍待。 |
 
+### 2026-09-04 第一百一十二波
+
+| 分区 | 结果 |
+| --- | --- |
+| `bindings` | `d2532ac2` 将 cuDNN convolution format 用户边界统一为可捕获 `USER_CHECKop`，补独立 format ledger；定向 3 passed。2.19 聚合任务仍待完整审计。 |
+| `compat` | `dbdfb6d7` 将 `index_copy_` 提升为 numerical 模块级原地 owner，统一 Var/顶层绑定并登记 approximate fidelity；mutation/return-self CPU 对拍 2 passed。7.03 其余 family 仍待领。 |
+| `device` | `a768cc9b` 锁定 ACL data schema 静态合同（schema/version/type/cache-key/decoder 必检字段），2 passed；未改运行时，NPU 实机仍待。 |
+| `gates` | 本波未改变 0.15 性能门槛或 10.19 HCCL hardware-only 路线；相关完整验收仍待。 |
+
 按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第一百波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
