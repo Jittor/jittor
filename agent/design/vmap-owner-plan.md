@@ -121,3 +121,30 @@ VmapContext:
 owner must then use the ordinary loop/stack path. This keeps CPU-only tests and
 future ACL/NPU backends independent of the current torch installer object while
 preserving the specialized transformer mask path when the hook is present.
+
+## Test fixture and failure triage
+
+The focused CPU nodes should run in a child process with isolated
+`HOME`/`JITTOR_HOME`/`TMPDIR` and `JITTOR_TORCH_SHIM=1`. They must pin
+`use_cuda=0` and avoid importing optional backend modules. A static-only run is
+valid when no compatible JIT cache is available.
+
+Record failures in one of three buckets:
+
+- **owner/identity**: module function is not the object published at
+  `torch.vmap`, or fidelity metadata is missing/stale;
+- **context leak**: the function closure or module globals retain an installer
+  context, `g`, or `Var` instance after installation;
+- **mapping semantics**: shape/value mismatch, nested metadata loss, or an
+  unsupported combination silently taking the direct-call path.
+
+Do not classify a cold-cache compile timeout or an unavailable accelerator as a
+semantic failure. Keep those as environment evidence beside the node result.
+
+## Documentation handoff
+
+When the owner extraction lands, update the 7.03 board entry with the code
+commit, static identity result, and each CPU node id. Keep the vmap row marked
+`待领` until the nested boolean path and unsupported-combination node pass; do
+not infer completion from the identity-only gate. The handoff should link this
+plan so a future backend-specific run can reuse the same contract.
