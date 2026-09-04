@@ -829,3 +829,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 ### 2026-09-04 第九十一波补充证据
 
 - `2.19`：`bf5fef1e` 补充 CUBLAS/CUDNN 测试入口内部断言精确计数门禁；结构门禁 1 passed，不改变运行语义或用户边界累计。
+
+### 2026-09-04 第九十二波补充证据
+
+- `2.19`：`8c2ebaa8` 将 CUB 测试 CUDA 状态断言收紧为精确计数门禁；结构门禁 1 passed，不改变运行语义或用户边界累计。
