@@ -1128,6 +1128,13 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | `sys.meta_path` permissive finder 需同时恢复 finder 身份、插入索引和 allowlist 增量，暂不做半改；本波无 device 提交。 |
 | `gates` | `py_compile`/`diff-check` 通过，未改变整卡状态。 |
 
+### 2026-09-04 第一百四十波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `02b1733b` 将已加载 module 属性前后差异登记进 transaction；`6e0f838a` 对 module-patcher finder/registry/entry-point 回滚增加外部冲突硬失败。`test_compat_mechanisms.py` 20 passed，事务测试 9 passed。可变对象内部 mutation 与全部 installer 汇总仍待，7.05 不关闭。 |
+| `gates` | 相关 Python 编译、diff 检查和结构合同通过；未改变整卡状态。 |
+
 ### 2026-09-04 第一百三十八波
 
 | 分区 | 结果 |
