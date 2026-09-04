@@ -295,3 +295,18 @@ Emit one JSON-like record with integer counts and boolean results:
 The node should fail closed when a field cannot be determined (for example,
 dynamic `setattr` binding) and report the source line rather than guessing. This
 record is the canonical static evidence attached to the 7.03 handoff.
+
+## Namespace and install order
+
+The owner mapping must remain explicit across compatibility namespaces:
+
+| Namespace | Owner after extraction | Install action |
+| --- | --- | --- |
+| `torch.vmap` | `installers.numerical.vmap` | bind the stable callable once |
+| `torch.compat.torch` re-export | same object | publish by identity, no wrapper |
+| `Var` methods | no new method owner | keep existing call sites routed through root `torch.vmap` |
+
+Install order is `tensor.base` -> `tensor.methods` -> `numerical`; the numerical
+step may read the transform-depth probe but must not rebind tensor methods. Any
+future `torch.linalg` or backend namespace re-export should point at the same
+object and be recorded as an identity assertion, not a second implementation.
