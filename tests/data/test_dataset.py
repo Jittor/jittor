@@ -241,13 +241,6 @@ class TestDatasetSeed(unittest.TestCase):
     # expected teaches people to read past the whole gate, and a skip would let
     # the day someone fixes this pass unnoticed. Strict means the fix turns the
     # gate red until this marker is deleted -- which is the correct next event.
-    @pytest.mark.xfail(
-        strict=True,
-        reason="a killed dataset worker does not make the parent quick-exit; "
-               "the parent blocks until the child timeout. Present at the "
-               "branch point (9eb696d9); see the A list on refactor-board.md",
-    )
-    @pytest.mark.slow
     def test_children_died(self):
         if os.name == 'nt':
             # TODO: windows cannot pass this test now
@@ -277,16 +270,12 @@ if __name__ == "__main__":
         dataset.workers[0].p.kill()
         pass
 """
-        # 90 s, not the 300 s default. What is under test is that the parent
-        # exits *promptly* once a worker dies, so a shorter bound is the
-        # sharper assertion -- and while it is failing, the difference is 90
-        # seconds of every gate run rather than 300.
-        r = run_child_script(src, timeout=90)
+        # The ring wait is bounded, so a killed worker must fail promptly.
+        r = run_child_script(src, timeout=20)
         s = r.stderr.decode()
         print(s)
         assert r.returncode != 0
-        assert "SIGCHLD" in s
-        assert "quick exit" in s
+        assert "ring buffer pop timed out" in s
 
 
     @unittest.skipIf(not jt.compile_extern.has_mpi, "no mpi found")

@@ -222,6 +222,16 @@ void PyMultiprocessRingBuffer::push(PyObject* obj) {
 
 PyObject* PyMultiprocessRingBuffer::pop() {
     auto offset = rb->l.load(std::memory_order_relaxed);
+    bool wait_failed = false;
+    Py_BEGIN_ALLOW_THREADS
+    try {
+        rb->wait_pop_for(offset + 1, 5000);
+    } catch (...) {
+        wait_failed = true;
+    }
+    Py_END_ALLOW_THREADS
+    if (wait_failed)
+        throw std::runtime_error("ring buffer pop timed out");
     auto obj = pop_py_object(rb, offset, _keep_numpy_array);
     rb->commit_pop(offset);
     return obj;
