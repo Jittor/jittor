@@ -576,3 +576,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 ### 2026-09-04 第五十五波补充证据
 
 - `8.06`：`0b149241` 将 Dropout backward 接入共享 launcher，保留 `scale` query 与同步策略；静态合同 42 passed，本机无 CANN/NPU，仍待实机。
+
+### 2026-09-04 第五十六波补充证据
+
+- `8.06`：`4f414054` 将 RotaryPositionEmbedding gradient 接入共享 launcher，保留四输入、三输出 query 与同步策略；静态合同 43 passed，本机无 CANN/NPU，仍待实机。
