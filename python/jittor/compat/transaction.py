@@ -19,6 +19,16 @@ class InstallTransaction:
             raise RuntimeError("transaction is %s" % self.state)
         self._entries.append((target, name, old, new, undo))
 
+    def record_undo(self, undo):
+        """Register a whole-snapshot undo callback."""
+        self.record({}, "__snapshot__", _MISSING, _MISSING, undo=undo)
+
+    def acquire(self):
+        self._lock.acquire()
+
+    def release(self):
+        self._lock.release()
+
     def rollback(self):
         if self.state == "committed":
             raise RuntimeError("committed transaction cannot rollback")

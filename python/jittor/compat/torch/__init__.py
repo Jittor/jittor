@@ -12,6 +12,7 @@ import sys
 
 from .._aliases import _torch_namespace as _torch_namespace_snapshot
 from .context import InstallContext, InstallReport, InstallStepError, ModuleRegistry
+from ..transaction import InstallTransaction
 from .functional import (
     _diff,
     _isin,
@@ -194,6 +195,8 @@ def install(torch, strict=True):
             "composition is in progress"
         )
 
+    transaction = InstallTransaction("torch.install")
+    transaction.acquire()
     context = InstallContext.for_module(torch, strict=strict)
     if context.complete:
         from .._aliases import torch_namespace_owned
@@ -202,6 +205,7 @@ def install(torch, strict=True):
             raise RuntimeError(
                 "completed Torch compatibility graph was changed after install"
             )
+        transaction.release()
         return torch
 
     pending = context.state.pop(_NAMESPACE_TRANSACTION, None)
@@ -209,6 +213,7 @@ def install(torch, strict=True):
         current = _torch_namespace_snapshot()
         if not _same_namespace(current, pending["before"]):
             context.state[_NAMESPACE_TRANSACTION] = pending
+            transaction.release()
             raise RuntimeError(
                 "torch namespace changed after a failed compatibility install"
             )
@@ -216,6 +221,8 @@ def install(torch, strict=True):
         before = pending["before"]
     else:
         before = _torch_namespace_snapshot()
+
+    transaction.record_undo(lambda: _restore_namespace(before))
 
     try:
         for step, installer in _REQUIRED_STEPS:
@@ -232,8 +239,12 @@ def install(torch, strict=True):
             "staged": staged,
         }
         setattr(torch, InstallContext.COMPLETE_ATTR, False)
+        transaction.rollback()
+        transaction.release()
         raise
     context.state.pop(_NAMESPACE_TRANSACTION, None)
+    transaction.commit()
+    transaction.release()
     # A module tree can now contain torch-authored classes, which register
     # parameters by nn.Parameter rather than by assignment. Nothing has to be
     # switched on for that: the marker that tells the two apart is attached by
