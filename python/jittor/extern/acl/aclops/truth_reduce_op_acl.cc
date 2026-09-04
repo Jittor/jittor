@@ -67,15 +67,7 @@ namespace jittor
                 reduce_all ? "aclnnAllGetWorkspaceSize failed"
                            : "aclnnAnyGetWorkspaceSize failed");
 
-        if (workspaceSize > 0)
-            mallocWorkSpace(workspaceSize);
-        ret = reduce_all
-            ? aclnnAll(workspaceAddr, workspaceSize, executor, aclstream)
-            : aclnnAny(workspaceAddr, workspaceSize, executor, aclstream);
-        if (ret != ACL_SUCCESS)
-            throw std::runtime_error(
-                reduce_all ? "aclnnAll execution failed"
-                           : "aclnnAny execution failed");
-        syncRun();
+        AclExecuteLauncher launcher = reduce_all ? aclnnAll : aclnnAny;
+        launch(ret, launcher, true);
     }
 }

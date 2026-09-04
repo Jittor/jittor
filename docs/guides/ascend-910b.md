@@ -499,6 +499,9 @@ The ACL BatchMatMul owner uses the shared launcher while retaining
 cube_math_type and synchronous execution. This remains source-only until the
 Ascend 910B3 probe is run.
 
+The ACL TruthReduce owner routes both all and any through the shared launcher
+while retaining reduce_all selection, keepdims, and RAII axes descriptors.
+
 The ACL RotaryPositionEmbedding forward owner uses the shared launcher and
 retains its three input tensors and synchronous execution. Its gradient owner
 is outside this slice.

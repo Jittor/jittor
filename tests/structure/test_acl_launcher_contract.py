@@ -30,6 +30,7 @@ RELU_SOURCE = ROOT / "python/jittor/extern/acl/aclops/relu_op_acl.cc"
 ARG_REDUCE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/arg_reduce_op_acl.cc"
 SILU_SOURCE = ROOT / "python/jittor/extern/acl/aclops/silu_op_acl.cc"
 BMM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/bmm_op_acl.cc"
+TRUTH_REDUCE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/truth_reduce_op_acl.cc"
 ROPE_SOURCE = ROOT / "python/jittor/extern/acl/aclops/rope_op_acl.cc"
 POOL_SOURCE = ROOT / "python/jittor/extern/acl/aclops/pool_op_acl.cc"
 RANDOM_SOURCE = ROOT / "python/jittor/extern/acl/aclops/random_op_acl.cc"
@@ -327,6 +328,18 @@ def test_batch_matmul_uses_launcher_and_keeps_cube_math_type():
     source = BMM_SOURCE.read_text()
     assert "cube_math_type" in source
     assert "launch(ret, aclnnBatchMatMul, true);" in source
+    assert "mallocWorkSpace(workspaceSize)" not in source
+    assert "syncRun();" not in source
+
+
+def test_truth_reduce_all_any_use_shared_launcher_and_keep_raii_axes():
+    source = TRUTH_REDUCE_SOURCE.read_text()
+    assert "reduce_all" in source
+    assert "aclnnAllGetWorkspaceSize" in source
+    assert "aclnnAnyGetWorkspaceSize" in source
+    assert "AclExecuteLauncher launcher = reduce_all ? aclnnAll : aclnnAny;" in source
+    assert "launch(ret, launcher, true);" in source
+    assert "unique_ptr<aclIntArray" in source
     assert "mallocWorkSpace(workspaceSize)" not in source
     assert "syncRun();" not in source
 
