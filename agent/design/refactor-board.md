@@ -596,3 +596,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 ### 2026-09-04 第五十七波补充证据
 
 - `8.06`：`f34ecce4` 将 Conv2d backward 接入共享 launcher，保留三输出 gradient query 与 descriptor cleanup；静态合同 44 passed，本机无 CANN/NPU，仍待实机。
+
+### 2026-09-04 第五十八波补充证据
+
+- `8.06`：`1874f7ed` 将 UpsampleNearest2d backward 接入共享 launcher，保留 output/input-size RAII descriptor 与同步策略；静态合同 45 passed，本机无 CANN/NPU，仍待实机。
