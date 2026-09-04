@@ -514,3 +514,20 @@ wrapped._jittor_vmap_specs[0] == (in_dims, out_dims)
 
 Any metadata shape change is a compatibility break even if numerical outputs are
 unchanged; record it as a blocker requiring an explicit versioned exception.
+
+## Dimension normalization matrix
+
+Normalize mapping dimensions once at the owner boundary and preserve the
+normalized values in `_jittor_vmap_specs`:
+
+| Input form | Normalized form | Required check |
+| --- | --- | --- |
+| `in_dims=int`, `out_dims=int` | one pair per argument/output | mapped extents agree |
+| `in_dims=None` | `None` for every argument | argument is passed unchanged |
+| `in_dims=tuple/list` | tuple of explicit dimensions | length equals argument count |
+| `out_dims=tuple/list` | tuple retained for stack placement | applied exactly once |
+| negative dimension | `dim % ndim` for indexing | resulting axis is in range |
+
+The static contract should include one table-driven node covering each row. It
+must assert that normalization happens before the runtime callback is consulted,
+so missing transform context cannot alter public dimension semantics.
