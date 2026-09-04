@@ -934,6 +934,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | `aclnn.h` 的 `#pragma once` 已由 `1e8e90c6` 完成；ACL 标准 launcher 与 `op_idx_map` 子项已有证据，本波无新代码，NPU 实机仍待。 |
 | `gates` | 本波复核 0.15 未改 `SLOW_FILES`；Dataset worker 聚焦测试通过但完整 smoke 仍约 390 s，任务保持待领。 |
 
+### 2026-09-04 第一百零五波
+
+| 分区 | 结果 |
+| --- | --- |
+| `bindings` | `7d366087` 将 cuBLAS batched matmul batch 维逐轴 shape 检查改为可捕获的 `USER_CHECKop`，补 axis/shape 错误信息与独立 ledger；定向 5 passed。2.19 聚合任务仍待完整审计。 |
+| `compat` | `f848a6a7` 将 `torch.equal` 提升为 numerical 模块级稳定对象并登记 approximate fidelity；shape/value/empty CPU 对拍 3 passed。7.03 其余 family 仍待领。 |
+| `device` | ACL `AclOpFunctions` 40 个 typed `std::function` 字段与构造/注册/owner 消费点耦合，类型擦除必须协同迁移；本波无代码提交，避免半改 dispatch。 |
+| `gates` | 10.19 manifest 静态合同仍 2 passed；HCCL 四项缺 Ascend 910B3 多卡与 CPU 对照，0.15 smoke 也未达 300 s，相关任务保持待领。 |
+
 按 [派活说明](refactor-dispatch.md) 每波最多四分区、每分区最多五项。第一百波继续优先可独立验证的
 family/cohort；8.06 只按 family 迁移，不铺开 65 个尾巴：
 
