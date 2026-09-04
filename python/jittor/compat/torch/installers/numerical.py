@@ -567,23 +567,27 @@ register_fidelity(
 )
 
 
-_NATIVE_OUTER = jt.outer
-_OUTER_FIDELITY_DETAIL = (
-    "re-exports Jittor's native outer-product implementation for supported real "
-    "tensors but omits device, layout, and dtype keyword semantics"
+# outer / tensordot / repeat_interleave are natively owned by jittor.misc, and
+# their native signature already is the Torch one. A forwarding wrapper here
+# would be a second function object for the same API: `torch.repeat_interleave
+# is jittor.repeat_interleave` then stops holding, which is exactly what
+# tests/structure/test_misc_structure.py pins (it also pins that the object
+# still pickles back to the misc owner, which a compat wrapper cannot do).
+# So these three are re-exported, not wrapped, and the fidelity record points at
+# the native implementation.
+_NATIVE_OWNER_FIDELITY_DETAIL = (
+    "re-exports Jittor's native implementation, whose signature and values "
+    "already match Torch for supported real tensors; device, layout, and dtype "
+    "keyword semantics are not implemented, and out is not accepted"
 )
 
-
-def outer(a, b):
-    """Compute the outer product using the captured native owner."""
-    return _NATIVE_OUTER(a, b)
-
+outer = jt.outer
 
 register_fidelity(
     "torch.outer",
     outer,
     Fidelity.APPROXIMATE,
-    _OUTER_FIDELITY_DETAIL,
+    _NATIVE_OWNER_FIDELITY_DETAIL,
 )
 
 
@@ -608,44 +612,23 @@ register_fidelity(
 )
 
 
-_NATIVE_TENSORDOT = jt.tensordot
-_TENSORDOT_FIDELITY_DETAIL = (
-    "re-exports Jittor's native generalized contraction for supported tensors "
-    "but omits device, layout, and dtype keyword semantics"
-)
-
-
-def tensordot(a, b, dims=2):
-    """Compute a generalized tensor contraction via the native owner."""
-    return _NATIVE_TENSORDOT(a, b, dims=dims)
-
+tensordot = jt.tensordot
 
 register_fidelity(
     "torch.tensordot",
     tensordot,
     Fidelity.APPROXIMATE,
-    _TENSORDOT_FIDELITY_DETAIL,
+    _NATIVE_OWNER_FIDELITY_DETAIL,
 )
 
 
-_NATIVE_REPEAT_INTERLEAVE = jt.repeat_interleave
-_REPEAT_INTERLEAVE_FIDELITY_DETAIL = (
-    "re-exports Jittor's native repeat_interleave for supported tensors but "
-    "omits device, layout, and dtype keyword semantics"
- )
-
-
-def repeat_interleave(x, repeats, dim=None, *, output_size=None):
-    """Repeat elements along a dimension through the captured native owner."""
-    return _NATIVE_REPEAT_INTERLEAVE(
-        x, repeats, dim=dim, output_size=output_size)
-
+repeat_interleave = jt.repeat_interleave
 
 register_fidelity(
     "torch.repeat_interleave",
     repeat_interleave,
     Fidelity.APPROXIMATE,
-    _REPEAT_INTERLEAVE_FIDELITY_DETAIL,
+    _NATIVE_OWNER_FIDELITY_DETAIL,
 )
 
 
