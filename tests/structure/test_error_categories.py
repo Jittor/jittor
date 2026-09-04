@@ -134,6 +134,10 @@ MIGRATED_CUSPARSE_SPMMCSR_DTYPE_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcsr_op.cc": 2,
 }
 
+MIGRATED_CUSPARSE_SPMMCSR_SHAPE_USER_BOUNDARIES = {
+    "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcsr_op.cc": 2,
+}
+
 MIGRATED_CUSPARSE_SPMMCOO_DTYPE_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcoo_op.cc": 2,
 }
@@ -489,12 +493,27 @@ def test_cublas_acc_matmul_rank_is_a_catchable_user_error():
 
 def test_cusparse_spmmcsr_dtype_user_boundary_migration_is_explicit_and_bounded():
     source = (ROOT / "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcsr_op.cc").read_text()
-    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    actual = source.count("USER_CHECK(")
     assert actual == MIGRATED_CUSPARSE_SPMMCSR_DTYPE_USER_BOUNDARIES[
         "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcsr_op.cc"]
     negative = (ROOT / "tests/backends/cuda/test_cusparse_dtype.py").read_text()
     assert "test_csr_rejects_non_float_input" in negative
     assert "test_csr_rejects_mixed_input_dtypes" in negative
+
+
+def test_cusparse_spmmcsr_shape_is_a_catchable_user_error():
+    source = (ROOT / "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcsr_op.cc").read_text()
+    markers = (
+        "USER_CHECKop(xs,==,os)",
+        "USER_CHECKop(A_col,==,xs[0])",
+    )
+    assert all(marker in source for marker in markers)
+    assert "ASSERT(xs==os)" not in source
+    assert "ASSERT(A_col==xs[0])" not in source
+    assert "sizes must match" in source
+    assert "columns must match" in source
+    assert sum(source.count(marker) for marker in markers) == MIGRATED_CUSPARSE_SPMMCSR_SHAPE_USER_BOUNDARIES[
+        "python/jittor/extern/cuda/cusparse/ops/cusparse_spmmcsr_op.cc"]
 
 
 def test_cusparse_spmmcoo_dtype_user_boundary_migration_is_explicit_and_bounded():
