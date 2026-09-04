@@ -528,3 +528,9 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `8.06`：`ba8e2621` 将 TruthReduce all/any 接入共享 launcher，保留双路径异常处理与同步策略；静态合同 36 passed，本机无 CANN/NPU，仍待实机。
 - `2.19`：`e81ef514`/`a7f45f1f` 将 cuDNN conv3d backward-w 输入 rank 边界改为 `USER_CHECKop`；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向，累计 85 处。
 - `7.03`：`602a813f` 将 `sparse_coo_tensor` factory 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态测试未运行。
+
+### 2026-09-04 第五十波补充证据
+
+- `8.06`：`230c0b69` 将 Conv2d forward 接入共享 launcher，保留 group/bias/descriptor 与同步策略，backward 不变；静态合同 37 passed，本机无 CANN/NPU，仍待实机。
+- `2.19`：`496dd510`/`e7b10858` 将 cuDNN conv3d backward-x dy rank 边界改为 `USER_CHECKop`；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向，累计 86 处。
+- `7.03`：`32064314` 将 `randint_like` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
