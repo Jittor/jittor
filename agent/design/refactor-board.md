@@ -777,3 +777,9 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `2.19`：`27cc72f2`/`23d70b26` 补充 CUB 状态内部断言分类门禁与说明文档；不改变运行时语义，用户边界累计保持 114 处。
 - `7.03`：`de512c43` 补充 vmap AST 实现草案，定义 module/install/nested 计数与 binding 行号提取伪代码；仅设计前置，未修改 runtime。
 - `8.06`：只读确认标准 launcher owner 已穷尽，KVCacheMemcpy 等专用 memcpy 路径不纳入通用 launcher，本波无代码提交。
+
+### 2026-09-04 第八十四波补充证据
+
+- `2.19`：`24848098`/`0bfb854e` 将 CUBLAS 测试入口返回码内部断言纳入分类门禁；1 passed，不改变运行语义或用户边界累计。
+- `7.03`：`30f5e2de` 细化 vmap context 泄漏 AST 门禁，覆盖默认参数、注解、decorator、closure 白名单与模块全局扫描；仅设计/门禁前置。
+- `8.06`：只读确认标准 workspace/query/execute/sync owner 已全部迁移，KVCacheMemcpy 等专用路径不纳入通用 launcher，本波无代码提交。
