@@ -819,3 +819,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `2.19`：`9f6afe17`/`143cb8e3` 补充 CUB 测试入口内部断言精确计数门禁；结构门禁 1 passed，不改变运行语义或用户边界累计。
 - `7.03`：`9ad2c132` 补充 vmap 嵌套 metadata 深度契约，固定 specs 追加、base identity 与 batch shape 顺序；仅设计前置，未修改 runtime。
 - `8.06`：只读确认标准 ACL launcher owner 已穷尽，KVCacheMemcpy 保持专用路径，本波无代码提交。
+
+### 2026-09-04 第九十一波补充证据
+
+- `2.19`：`bf5fef1e` 补充 CUBLAS/CUDNN 测试入口内部断言精确计数门禁；结构门禁 1 passed，不改变运行语义或用户边界累计。
