@@ -750,4 +750,10 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 
 ### 2026-09-04 第七十九波补充证据
 
+- `8.06`：`e1470830`/`4e1f6ba0` 将 IncrementalFlashAttention 接入共享 launcher，保留 block-table、actual-sequence、cache-view cleanup 与同步策略，KVCacheMemcpy 未迁；静态合同 67 passed，本机无 CANN/NPU，仍待实机。
+- `2.19`：`7a24ca0b`/`7c1565d2` 将 cuFFT jit_prepare unsupported dtype 边界改为 `USER_CHECK`，累计 113 处、六十六组证据；结构与 nvcc TU 通过，本机无 CUDA 未运行负向。
+- `7.03`：`e8260779` 明确 vmap 版本兼容、kwargs 策略与退出标准；仅设计前置，未修改 runtime。
+
+### 2026-09-04 第七十九波补充证据
+
 - `8.06`：`e1470830` 将 IncrementalFlashAttention 接入共享 launcher，保留 block-table、actual-sequence、cache-view cleanup 与同步策略；KVCacheMemcpy 未迁；静态合同 67 passed，本机无 CANN/NPU，仍待实机。
