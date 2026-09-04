@@ -206,6 +206,25 @@ register_fidelity(
 )
 
 
+_DET_FIDELITY_DETAIL = (
+    "matches Torch determinant values through Jittor's native linalg owner for "
+    "supported square real tensors but omits device, layout, and dtype semantics"
+)
+
+
+def det(input):
+    """Compute a matrix determinant via Jittor's native linalg owner."""
+    return jt.linalg.det(input)
+
+
+register_fidelity(
+    "torch.det",
+    det,
+    Fidelity.APPROXIMATE,
+    _DET_FIDELITY_DETAIL,
+)
+
+
 _NAN_TO_NUM_INPLACE_FIDELITY_DETAIL = (
     "matches Torch in-place NaN/Inf replacement and return identity for supported "
     "real tensors but omits device, layout, dtype, and narrow custom-bound semantics"
@@ -1482,7 +1501,7 @@ def install(ctx):
         import jittor.linalg as _la; return _la.inv(self)
     if not hasattr(Var, "det"):       Var.det = _vdet
     if not hasattr(Var, "inverse"):   Var.inverse = _vinv
-    g.det = lambda x: _vdet(x)
+    g.det = det
     g.inverse = lambda x: _vinv(x)
 
     # ---- linalg (peft / lora init need svd_lowrank, svd) ----
