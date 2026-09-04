@@ -36,6 +36,15 @@ from ... import fsdp_hooks as _fsdp_hooks
 from ... import collectives as _collectives
 
 
+def _set_use_cuda():
+    context = getattr(jt, "_torch_compat_install_context", None)
+    transaction = getattr(context, "state", {}).get("_install_transaction")
+    if transaction is None:
+        jt.flags.use_cuda = 1
+    else:
+        transaction.mutate_flag(jt.flags, "use_cuda", 1)
+
+
 def corrcoef(x, *args, **kwargs):
     """Return a CPU NumPy correlation matrix as a Jittor tensor."""
     result = np.corrcoef(x.float32().numpy())
@@ -671,7 +680,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         if _device_is_cpu(device):
             v = _make_cpu_resident(v)
         elif _device_is_cuda(device):
-            jt.flags.use_cuda = 1
+            _set_use_cuda()
             v = _make_cuda_resident(v, force=True)
         if requires_grad:
             v.requires_grad_(True)
@@ -1499,7 +1508,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         return out
     Var.cpu = _var_cpu
     def _var_cuda(self, device=None, *a, **k):
-        jt.flags.use_cuda = 1
+        _set_use_cuda()
         src_index = getattr(self, "device_id", -1)
         out = _make_cuda_resident(self, force=True)
         # .cuda(N) is .to("cuda:N"); .cuda() keeps the tensor where it is.
@@ -2059,7 +2068,7 @@ def install(ctx):
         if _device_is_cpu(device):
             v = _make_cpu_resident(v)
         elif _device_is_cuda(device):
-            jt.flags.use_cuda = 1
+            _set_use_cuda()
             v = _make_cuda_resident(v, force=True)
         if requires_grad:
             v.requires_grad_(True)
@@ -2074,7 +2083,7 @@ def install(ctx):
             if _device_is_cpu(device):
                 return _make_cpu_resident(r)
             if _device_is_cuda(device):
-                jt.flags.use_cuda = 1
+                _set_use_cuda()
                 return _make_cuda_resident(r, force=True)
             return r
         return tensor(data, dtype=dtype, device=device)
@@ -2085,7 +2094,7 @@ def install(ctx):
         if _device_is_cpu(device):
             return _make_cpu_resident(v)
         if _device_is_cuda(device):
-            jt.flags.use_cuda = 1
+            _set_use_cuda()
             return _make_cuda_resident(v, force=True)
         return v
     g.from_numpy = from_numpy

@@ -22,6 +22,15 @@ from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed
 
 
+def _set_use_cuda():
+    context = getattr(jt, "_torch_compat_install_context", None)
+    transaction = getattr(context, "state", {}).get("_install_transaction")
+    if transaction is None:
+        jt.flags.use_cuda = 1
+    else:
+        transaction.mutate_flag(jt.flags, "use_cuda", 1)
+
+
 _FACTORY_NAMES = (
     "arange", "bernoulli", "empty", "empty_like", "full", "full_like",
     "linspace", "multinomial", "normal", "ones", "ones_like", "rand",
@@ -174,7 +183,7 @@ def _wrap_constructors(g):
             _want_cuda = _device_is_cuda(_requested_device)
             _cuda_index = None
             if _want_cuda:
-                jt.flags.use_cuda = 1
+                _set_use_cuda()
                 # device="cuda:N" means "create it on N", not "create it here
                 # and copy it there": the copy would be a wasted transfer and,
                 # for a big weight, twice the peak memory.
