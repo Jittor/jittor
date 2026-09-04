@@ -101,6 +101,8 @@
 > 第150波 7.05 回归：`e05064b9` 新增普通 activation 失败注入测试，验证 owner path/module 回滚、failed 状态和锁释放；完整 `test_torch_bootstrap.py` 43 passed。扩展构建副作用与 child/build 专项仍待，7.05 保持待领。
 >
 > 第151波轻量复核：9.20/9.22/9.23 已分别由 `1919b035`、`c4bbdd72`、`17e43c9a` 合入；原子产物聚焦 3 passed，孙进程 timeout 聚焦 1 passed。无新代码提交，未宣称未具备机器上的平台验证。
+>
+> 第153波审计：8.12 的六条 cuDNN legacy cache 仍需一次性 POD key/per-device 迁移；4.13 缺统一跨后端矩阵 owner 与 runner；5.24 未形成安全独立切片。本波无代码提交，三项保持待领，未新增进行中。
 
 一行一个任务，与 [refactor-plan.md](refactor-plan.md) 的编号对应。领任务把状态改成「进行中」并写名字，
 完成改成「已合并」并填提交号；推送冲突说明别人先领了。状态只有四种：待领 / 进行中 / 已合并 / 并入 X。
