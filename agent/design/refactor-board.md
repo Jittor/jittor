@@ -507,3 +507,9 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `8.06`：`8251d29d` 将 RotaryPositionEmbedding forward 接入共享 launcher，保留三输入与同步策略；结构合同 33 passed，本机无 CANN/NPU，仍待实机。
 - `2.19`：`0a0e820e`/`aad3ba0c` 将 cuDNN convolution backward-w 格式边界改为 `USER_CHECK`；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向，累计 82 处。
 - `7.03`：`dc8cdfcb` 将 `svd_lowrank` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；`py_compile`/diff-check 通过，动态 JIT 未运行。
+
+### 2026-09-04 第四十七波补充证据
+
+- `8.06`：`71bab738` 将 Maxpool forward 接入共享 launcher，保留 descriptors、`poolCeil`、同步策略及 Avgpool/backward 原路径；静态合同 34 passed，本机无 CANN/NPU，仍待实机。
+- `2.19`：`37004fe0`/`b48f8af7` 将 cuDNN conv3d 输入 rank 边界改为 `USER_CHECKop`；结构合同与 nvcc TU 通过，本机无 CUDA 未运行负向，累计 83 处。另：`broadcast_to` 源码实际 5 个检查，但 dimension map 仍期望 2（shape map 期望 5），相关门禁仍 1 failed，待专门修复。
+- `7.03`：`cfe67a7e` 将 `pca_lowrank` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；`py_compile`/diff-check 通过，动态 JIT 未运行。
