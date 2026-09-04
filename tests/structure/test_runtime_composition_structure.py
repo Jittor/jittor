@@ -34,30 +34,40 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
         }
         self.assertFalse(definitions & forbidden)
         self.assertFalse(any(name.startswith("_jt_torch_") for name in definitions))
-        self.assertFalse(definitions)
-        # No line budget here. "The root defines nothing" (above) and the import
-        # ordering (below) are the architecture contract; a line count is a proxy
+        self.assertFalse(definitions, "the root composes; it does not define")
+        # No line budget here. "The root defines nothing" (above) and the step
+        # order (below) are the architecture contract; a line count is a proxy
         # that goes red when someone adds a necessary comment and stays green when
         # someone adds a wrong one.
         self.assertNotIn("jittor.torch_shim", source)
-        self.assertIn("prepare_import_environment as _prepare_compat_import", source)
         self.assertNotIn("_configure_compat_math_flags", source)
-        self.assertIn("from ._runtime.core_api import *", source)
-        self.assertIn("compose as _compose_compat_runtime", source)
         self.assertIn("JITTOR_TORCH_STRICT_BOOTSTRAP", source)
-        self.assertIn("strict=_compat_is_truthy(", source)
-        self.assertLess(
-            source.index("_prepare_compat_import("),
-            source.index("from jittor_utils import lock"),
-        )
-        self.assertLess(
-            source.index("from ._runtime.core_api import *"),
-            source.index("from . import nn"),
-        )
-        self.assertLess(
-            source.index("from . import nn"),
-            source.index("_compose_compat_runtime("),
-        )
+
+        # Order is checked over parsed statements, not raw offsets: the previous
+        # version searched for ``from ._runtime.core_api import *``, which 5.23
+        # replaced with an explicit publication, so the ordering assertions
+        # stopped being evaluated at all.
+        statements = [ast.unparse(node) for node in tree.body]
+
+        def step(needle, what):
+            for index, text in enumerate(statements):
+                if needle in text:
+                    return index
+            self.fail("the root no longer %s (looked for %r)" % (what, needle))
+
+        preflight = step("_prepare_compat_import(argv=", "runs the compat preflight")
+        build_lock = step("from jittor_utils import lock", "takes the build lock")
+        core_api = step("_runtime import core_api", "publishes the core API")
+        facade = step("from . import nn", "imports the nn facade")
+        compose = step("_compose_compat_runtime(", "composes the compat runtime")
+
+        self.assertLess(preflight, build_lock,
+                        "the preflight decides the environment the lock and "
+                        "the core build then run in")
+        self.assertLess(core_api, facade,
+                        "nn consumes the published core API at import time")
+        self.assertLess(facade, compose,
+                        "compat composition rewrites what nn has installed")
 
         runtime_source = (self.compat / "runtime.py").read_text(encoding="utf-8")
         self.assertIn("torch_compat_requested(root_module, preflight)", runtime_source)
@@ -402,16 +412,48 @@ print("RESULT=" + json.dumps({
                 self.assertTrue(imports.issubset(allowed), imports - allowed)
 
     def test_shim_runtime_is_orchestration_only(self):
+        """It sequences the activation steps; each step is owned elsewhere.
+
+        The definition list used to be frozen at ``["enable"]``, which went
+        stale the moment 7.04 collapsed the three entry points into
+        ``activate()`` with a queryable status. A name list cannot express "it
+        orchestrates" anyway -- delegation and a bounded public surface can, so
+        that is what this checks.
+        """
         runtime = self.compat / "shim" / "runtime.py"
         tree = ast.parse(runtime.read_text(encoding="utf-8"), filename=str(runtime))
-        definitions = [
-            node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))
-        ]
-        self.assertEqual(definitions, ["enable"])
-        composition = (self.compat / "runtime.py").read_text(encoding="utf-8")
-        self.assertNotIn("apply_external_runtime_patches", composition)
+
         for name in ("preflight.py", "discovery.py", "build.py", "control.py"):
             self.assertTrue((runtime.parent / name).is_file())
+        delegated_to = {
+            (node.module or "").rsplit(".", 1)[-1]
+            for node in tree.body if isinstance(node, ast.ImportFrom)
+        }
+        self.assertEqual(
+            sorted({"preflight", "discovery", "build"} - delegated_to), [],
+            "the steps are owned by sibling modules; import them rather than "
+            "reimplementing a step here")
+
+        facade = ast.parse(
+            (runtime.parent / "bootstrap.py").read_text(encoding="utf-8"))
+        advertised = {
+            alias.asname or alias.name
+            for node in facade.body
+            if isinstance(node, ast.ImportFrom)
+            and (node.module or "").endswith("runtime")
+            for alias in node.names
+        }
+        entry_points = {
+            node.name for node in tree.body
+            if isinstance(node, ast.FunctionDef) and not node.name.startswith("_")
+        }
+        self.assertEqual(
+            sorted(entry_points - advertised), [],
+            "a public function here is an activation entry point, so the "
+            "facade has to re-export it; anything else belongs under _")
+
+        composition = (self.compat / "runtime.py").read_text(encoding="utf-8")
+        self.assertNotIn("apply_external_runtime_patches", composition)
 
     def test_alias_ownership_is_central(self):
         aliases = (self.compat / "_aliases.py").read_text(encoding="utf-8")
