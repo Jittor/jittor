@@ -1238,6 +1238,14 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `bindings` | 2.19 的历史静态证据没有被自动升级为运行时证据；后续应在独立缓存和 GPU 分区重新跑负向用例，再决定是否关闭聚合任务。 |
 | `device` | ACL/ROCm/Corex/NPU 与多机限制不变；CUDA 可用性报告不代表这些后端可用。 |
 
+### 2026-09-05 第一百五十六波
+
+| 分区 | 结果 |
+| --- | --- |
+| `bindings` | 2.19 CUDA cohort A 在独立 GPU/缓存下通过 cuBLAS 3、cuSPARSE 10、CUB cumsum 1 个负向节点；cohort B 的 cuDNN RNN 两个 invalid 节点通过，但 4 个 dtype 正向节点进程 abort，不能计为通过。 |
+| `device` | cohort C 的 curand 6、cuFFT 4 个 CUDA 节点通过；cuTT transpose 5 个因 `not use cutt` 跳过，未误报为通过。 |
+| `gates` | 本波只补真实 CUDA 证据，无代码提交；2.19 仍需处理 cuDNN abort、未运行的 CUDA family 和剩余用户边界，保持 `待领`。 |
+
 ### 2026-09-04 第一百四十波
 
 | 分区 | 结果 |
