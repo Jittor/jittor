@@ -47,6 +47,8 @@
 > 第124波整卡审计：7.05 复核确认上述缺口仍未改变，不能用现有 namespace snapshot 代替安装锁、失败状态 API 或环境/flags 回滚；本波无代码提交，待领保持 73。
 >
 > 第125波 7.05 前置：`3c8b46f3` 使 optional install 失败 warn-once、可查询、可重试；`44272e89` 新增 reversible `InstallTransaction`（RLock、逆序 rollback/commit/retry）及 module/env/flags/meta_path 合成测试 2 passed。尚未接入全部 installers，7.05 仍待领。
+>
+> 第126波 7.05 前置：`fa2027e4` 将 InstallTransaction 锁和 namespace undo 接入 `compat.torch.install`；`4f66701e` 明确 flags/env/import/meta_path/module-patcher 尚未纳入回滚，并补状态边界合同 1 passed。7.05 仍待领。
 
 一行一个任务，与 [refactor-plan.md](refactor-plan.md) 的编号对应。领任务把状态改成「进行中」并写名字，
 完成改成「已合并」并填提交号；推送冲突说明别人先领了。状态只有四种：待领 / 进行中 / 已合并 / 并入 X。

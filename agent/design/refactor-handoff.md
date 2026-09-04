@@ -1057,6 +1057,13 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `compat` | `3c8b46f3` 使 optional install 失败 warn-once、可查询、可重试；`44272e89` 新增带 RLock 的 reversible `InstallTransaction` 和合成 module/env/flags/meta_path 测试 2 passed。尚未接入所有 installers，7.05 仍待领。 |
 | `gates` | 本波代码前置已推送，但整卡验收仍缺全量 installer mutation ledger；待领保持 73。 |
 
+### 2026-09-04 第一百二十六波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `fa2027e4` 将 `InstallTransaction` 的进程级 RLock 与 namespace undo 接入 `compat.torch.install`；`4f66701e` 明确 flags/env/import/meta_path/module-patcher 尚未纳入回滚，并补边界合同 1 passed。7.05 仍待领。 |
+| `gates` | 事务前置测试保持通过；完整 installer mutation ledger 仍缺，未关闭 7.05。 |
+
 ### 2026-09-04 第一百一十九波
 
 | 分区 | 结果 |
