@@ -114,6 +114,10 @@ MIGRATED_CUBLAS_BATCHED_MATMUL_RANK_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cublas/ops/cublas_batched_matmul_op.cc": 3,
 }
 
+MIGRATED_CUBLAS_BATCHED_MATMUL_INNER_DIM_USER_BOUNDARIES = {
+    "python/jittor/extern/cuda/cublas/ops/cublas_batched_matmul_op.cc": 1,
+}
+
 MIGRATED_CUBLAS_ACC_MATMUL_DTYPE_USER_BOUNDARIES = {
     "python/jittor/extern/cuda/cublas/ops/cublas_acc_matmul_op.cc": 2,
 }
@@ -434,6 +438,15 @@ def test_cublas_batched_matmul_rank_is_a_catchable_user_error():
     assert "ASSERTop(adim,>=,3)" not in source
     assert "ASSERTop(bdim,>=,3)" not in source
     assert "ASSERTop(adim,==,bdim)" not in source
+
+
+def test_cublas_batched_matmul_inner_dimension_is_a_catchable_user_error():
+    source = (ROOT / "python/jittor/extern/cuda/cublas/ops/cublas_batched_matmul_op.cc").read_text()
+    assert "USER_CHECKop(m,==,m_)" in source
+    assert "ASSERTop(m,==,m_)" not in source
+    assert "inner dimensions must match" in source
+    assert source.count("USER_CHECKop(m,==,m_)") == MIGRATED_CUBLAS_BATCHED_MATMUL_INNER_DIM_USER_BOUNDARIES[
+        "python/jittor/extern/cuda/cublas/ops/cublas_batched_matmul_op.cc"]
 
 
 def test_cublas_acc_matmul_dtype_user_boundary_migration_is_explicit_and_bounded():
