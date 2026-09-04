@@ -1407,6 +1407,24 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIn("native", record.detail)
         self.assertIn("device", record.detail)
 
+    def test_isin_is_a_stable_module_level_object(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        self.assertTrue(callable(numerical.isin))
+        self.assertIs(torch.isin, numerical.isin)
+        self.assertEqual(numerical.isin.__module__, numerical.__name__)
+        self.assertEqual(numerical.isin.__name__, "isin")
+
+    def test_isin_fidelity_is_queryable_and_conservative(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch.isin")
+        self.assertIs(record.implementation, numerical.isin)
+        self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+        self.assertIn("native", record.detail)
+        self.assertIn("device", record.detail)
+
 
 if __name__ == "__main__":
     unittest.main()

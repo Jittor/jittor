@@ -423,6 +423,27 @@ register_fidelity(
 )
 
 
+_NATIVE_ISIN = jt.isin
+_ISIN_FIDELITY_DETAIL = (
+    "re-exports Jittor's native isin implementation for supported tensors but "
+    "omits device, layout, and dtype keyword semantics"
+)
+
+
+def isin(elements, test_elements, assume_unique=False, invert=False, **kwargs):
+    """Test element membership using the captured native owner."""
+    return _NATIVE_ISIN(
+        elements, test_elements, assume_unique=assume_unique, invert=invert)
+
+
+register_fidelity(
+    "torch.isin",
+    isin,
+    Fidelity.APPROXIMATE,
+    _ISIN_FIDELITY_DETAIL,
+)
+
+
 _NAN_TO_NUM_INPLACE_FIDELITY_DETAIL = (
     "matches Torch in-place NaN/Inf replacement and return identity for supported "
     "real tensors but omits device, layout, dtype, and narrow custom-bound semantics"
@@ -1584,7 +1605,7 @@ def install(ctx):
         return wrapped
     _alias("vmap", _vmap)
     g.outer = outer
-    _alias("isin", _isin)
+    g.isin = isin
     # Pairwise distances and sorted-boundary insertion indices.
     _alias("cdist", cdist)
     _alias("bucketize", bucketize)
