@@ -119,6 +119,45 @@ for _reduction_extra in (amax, amin, count_nonzero):
 del _reduction_extra
 
 
+# Spelled out so nan_to_num's default bounds are exactly the float32 maximum
+# Torch documents, not a rounded literal.
+_FLOAT32_MAX = 3.4028234663852886e38
+_NAN_TO_NUM_FIDELITY_DETAIL = (
+    "matches Torch NaN and +-inf replacement exactly for the default "
+    "float32-max bounds; it is a clamp rather than an isinf ternary because "
+    "the latter segfaults in JIT codegen over a tensor holding inf/nan, so a "
+    "narrow custom posinf/neginf also clamps finite values past that bound, "
+    "and device, layout, dtype, and out keyword semantics are not implemented"
+)
+_LOGADDEXP_FIDELITY_DETAIL = (
+    "matches Torch log(exp(a) + exp(b)) through the max-shifted stable form, "
+    "so inputs that would overflow exp() individually still resolve; device, "
+    "layout, dtype, and out keyword semantics are not implemented"
+)
+
+
+def nan_to_num(input, nan=0.0, posinf=None, neginf=None):
+    """Replace NaN with ``nan`` and clamp to the +-inf replacement bounds."""
+    upper = _FLOAT32_MAX if posinf is None else posinf
+    lower = -_FLOAT32_MAX if neginf is None else neginf
+    replaced = jt.ternary(jt.isnan(input), jt.full_like(input, nan), input)
+    return replaced.minimum(upper).maximum(lower)
+
+
+def logaddexp(input, other):
+    """Return ``log(exp(input) + exp(other))`` without overflowing exp()."""
+    shift = jt.maximum(input, other)
+    return shift + jt.log(jt.exp(input - shift) + jt.exp(other - shift))
+
+
+register_fidelity(
+    "torch.nan_to_num", nan_to_num, Fidelity.APPROXIMATE,
+    _NAN_TO_NUM_FIDELITY_DETAIL)
+register_fidelity(
+    "torch.logaddexp", logaddexp, Fidelity.APPROXIMATE,
+    _LOGADDEXP_FIDELITY_DETAIL)
+
+
 _NATIVE_ARGSORT = jt.argsort
 _NATIVE_GATHER = jt.gather
 _NATIVE_MEDIAN = jt.median
@@ -542,20 +581,8 @@ def _install_reductions(g):
     # overwrites Var.trunc unconditionally. The two copies did not agree, so the
     # family now has exactly one owner in installers/core.py.
     if not hasattr(Var, "nan_to_num"):
-        def _nan_to_num(self, nan=0.0, posinf=None, neginf=None):
-            # Replace nan with one ternary, then clamp to the ±inf replacement bounds.
-            # NB: a jittor JIT codegen bug SEGFAULTS on chained isinf+ternary over a
-            # tensor holding inf/nan (tracked, #11), so we deliberately avoid that and
-            # use a clamp. This is EXACT for the default (float32-max) bounds -- finite
-            # values are untouched and ±inf map to ±max. For *narrow custom* posinf/
-            # neginf it also clamps finite values past them (a rare, documented
-            # deviation accepted to avoid the core segfault).
-            pi = 3.4028234663852886e38 if posinf is None else posinf   # exact float32 max
-            ni = -3.4028234663852886e38 if neginf is None else neginf
-            out = _jt.ternary(_jt.isnan(self), _jt.full_like(self, nan), self)
-            return out.minimum(pi).maximum(ni)
-        Var.nan_to_num = _nan_to_num
-        g.nan_to_num = lambda x, nan=0.0, posinf=None, neginf=None: _nan_to_num(x, nan, posinf, neginf)
+        Var.nan_to_num = nan_to_num
+        g.nan_to_num = nan_to_num
     # amax/amin/count_nonzero already have a native owner (jittor.misc.reductions)
     # whose contract is the Torch one; bind the stable compat objects that wrap it
     # rather than carrying a second copy of the reduction here.
@@ -568,11 +595,8 @@ def _install_reductions(g):
         Var.count_nonzero = count_nonzero
         g.count_nonzero = count_nonzero
     if not hasattr(g, "logaddexp"):
-        def _logaddexp(a, b):
-            m = _jt.maximum(a, b)                       # numerically stable
-            return m + _jt.log(_jt.exp(a - m) + _jt.exp(b - m))
-        g.logaddexp = _logaddexp
-        Var.logaddexp = _logaddexp
+        g.logaddexp = logaddexp
+        Var.logaddexp = logaddexp
 
     # argmax/argmin METHOD forms: torch returns just the indices; jittor's native
     # Var.argmax returns (idx, val). Core uses these only in docstrings, so override.

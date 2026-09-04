@@ -366,6 +366,63 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         np.testing.assert_array_equal(
             alias.numpy(), values.max(axis=0, keepdims=True))
 
+    def test_nan_family_is_stable_module_level_objects(self):
+        tensor_owner = importlib.import_module("jittor.compat.torch.installers.tensor")
+        for name in ("nan_to_num", "logaddexp"):
+            with self.subTest(name=name):
+                implementation = getattr(tensor_owner, name)
+                self.assertTrue(callable(implementation))
+                self.assertIs(getattr(torch, name), implementation)
+                self.assertIs(getattr(torch.Var, name), implementation)
+                self.assertEqual(implementation.__module__, tensor_owner.__name__)
+                self.assertEqual(implementation.__name__, name)
+
+    def test_nan_family_fidelity_is_queryable_and_conservative(self):
+        tensor_owner = importlib.import_module("jittor.compat.torch.installers.tensor")
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        for name in ("nan_to_num", "logaddexp"):
+            with self.subTest(name=name):
+                record = fidelity.fidelity_of("torch." + name)
+                self.assertIs(record.implementation, getattr(tensor_owner, name))
+                self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
+                self.assertIn("device", record.detail)
+                self.assertIn("out", record.detail)
+        self.assertIn(
+            "clamp", fidelity.fidelity_of("torch.nan_to_num").detail)
+
+    def test_nan_to_num_default_bounds_match_numpy(self):
+        values = np.array(
+            [1.5, np.nan, np.inf, -np.inf, -2.0], dtype="float32")
+        with torch.flag_scope(use_cuda=0):
+            actual = torch.nan_to_num(torch.array(values)).numpy()
+            method = torch.array(values).nan_to_num(nan=7.0).numpy()
+        np.testing.assert_array_equal(actual, np.nan_to_num(values))
+        np.testing.assert_array_equal(method, np.nan_to_num(values, nan=7.0))
+
+    def test_nan_to_num_custom_bounds_clamp_as_the_detail_records(self):
+        # The documented deviation: a narrow posinf also pulls finite values
+        # down to it, because the implementation is a clamp.
+        values = np.array([np.inf, 500.0, 1.0], dtype="float32")
+        with torch.flag_scope(use_cuda=0):
+            actual = torch.nan_to_num(torch.array(values), posinf=100.0).numpy()
+        np.testing.assert_array_equal(
+            actual, np.array([100.0, 100.0, 1.0], dtype="float32"))
+
+    def test_logaddexp_matches_numpy_and_survives_overflow(self):
+        left = np.array([-3.0, 0.0, 700.0], dtype="float32")
+        right = np.array([2.0, 0.0, 701.0], dtype="float32")
+        with torch.flag_scope(use_cuda=0):
+            actual = torch.logaddexp(
+                torch.array(left), torch.array(right)).numpy()
+            method = torch.array(left).logaddexp(torch.array(right)).numpy()
+            # exp(700) overflows float32; the max-shifted form is the point.
+            overflowing = torch.logaddexp(
+                torch.array([700.0]), torch.array([700.0])).numpy()
+        np.testing.assert_allclose(actual, np.logaddexp(left, right), rtol=1e-6)
+        np.testing.assert_allclose(method, np.logaddexp(left, right), rtol=1e-6)
+        np.testing.assert_allclose(
+            overflowing, [700.0 + np.log(2.0)], rtol=1e-6)
+
     def test_unary_math_family_is_one_stable_module_level_object_each(self):
         core = importlib.import_module("jittor.compat.torch.installers.core")
         for name in ("sign", "trunc", "exp2", "log10"):
