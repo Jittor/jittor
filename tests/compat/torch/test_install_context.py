@@ -48,17 +48,27 @@ class TestInstallContext(unittest.TestCase):
         self.assertEqual(context.markers["core"], "complete")
         self.assertEqual(context.reports[-1].status, "skipped")
 
-    def test_optional_failure_is_reported_independently(self):
+    def test_optional_failure_is_reported_once_and_can_retry(self):
         context = self.context()
+        calls = []
+
+        def fail_once(_context):
+            calls.append("failed")
+            if len(calls) == 1:
+                raise RuntimeError("unavailable")
+            calls.append("complete")
+
         context.run_optional(
             "optional.backend",
-            lambda _context: (_ for _ in ()).throw(RuntimeError("unavailable")),
+            fail_once,
         )
-        context.run_optional("optional.backend", lambda _context: None)
-        self.assertEqual(context.markers["optional.backend"], "failed")
+        context.run_optional("optional.backend", fail_once)
+        self.assertEqual(context.markers["optional.backend"], "complete")
         self.assertEqual(
-            [report.status for report in context.reports], ["failed", "skipped"]
+            [report.status for report in context.reports], ["failed", "complete"]
         )
+        self.assertEqual([report.step for report in context.optional_failures()],
+                         ["optional.backend"])
 
     def test_transformers_npu_probe_rejects_real_pytorch_extension(self):
         def original(check_device=False):
