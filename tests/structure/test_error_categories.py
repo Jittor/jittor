@@ -485,6 +485,8 @@ def test_backend_internal_assertion_classification_is_explicit():
     assert descriptor.count("ASSERT(linLayerMat)") == 1
     assert "ASSERT(linLayerBias)" in descriptor
     assert descriptor.count("ASSERT(linLayerBias)") == 1
+    plan = (ROOT / "python/jittor/extern/cuda/cudnn/inc/cudnn_conv_plan.h").read_text()
+    assert plan.count("ASSERT(ok)") == 1
     cub_test = (ROOT / "python/jittor/extern/cuda/cub/ops/cub_test_op.cc").read_text()
     assert "ASSERT(status == cudaSuccess)" in cub_test
     cutt_wrapper = (ROOT / "python/jittor/extern/cuda/cutt/ops/cutt_wrapper.cc").read_text()
