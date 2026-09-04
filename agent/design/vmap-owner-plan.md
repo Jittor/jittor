@@ -602,3 +602,18 @@ assert x.grad == 2 * x
 If a backend cannot provide this gradient path, record an explicit
 `supports_autograd` limitation in fidelity detail; do not silently detach or
 mark the owner exact.
+
+## Concurrency contract
+
+`vmap` calls must be re-entrant and independent of installer context lifetime:
+
+- two wrapped functions may execute concurrently without mutating shared
+  mapping specs or transform-depth state;
+- concurrent calls with different `in_dims`/`out_dims` retain their own wrapper
+  metadata and output axes;
+- installing a second context while a first wrapper is running must not alter
+  the first call's callback or results.
+
+The static gate should at least inspect for module-level mutable state and run a
+threaded identity-only probe with sentinel callbacks. Numerical concurrency
+stress is deferred until the owner extraction and ordinary CPU nodes are green.
