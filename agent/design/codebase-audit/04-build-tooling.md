@@ -21,6 +21,26 @@ CPU 型号、git 分支），**内容**按命令行加源码哈希判定，中�
 | "请重新运行你的命令"用退出码 0 | `compiler.py:926-928` LOG.e 后 `sys.exit(0)` | 改了 `src/utils/*.cc` 后 `python train.py` 什么都没做就成功退出，CI 看到的是成功 | 非零退出码 | 主要 |
 | 依赖缺失一律 LOGf 中止进程而非抛异常 | `compile_extern.py:263`、`:42` search_file 找不到即 LOG.f；`compiler.py:942` 用裸 assert | 用户拿到 abort 加栈而不是可捕获异常；`python -O` 下裸 assert 直接消失 | 构建期失败一律抛带上下文的 RuntimeError | 主要 |
 
+**已修（部分）：`361d59b2`、`c4b21762`、`cf3835ee`、`51d0439f`（9.01）。** 本节开头「探测编译器
+与驱动、拉取第三方二进制、生成代码、编译整个 C++ 内核」这条链上，导入期无条件
+`import torch` 与无条件 `setup_nccl/cutt/mkl` 已经去掉；探测结果落盘（0.09）之后
+`probe.json` 单次读取不到 0.2 ms，探测已不是热路径的成本项。
+
+新补的一条事实是**「编译整个 C++ 内核」这一步在无事可做时也不便宜**：它每次 import 都
+重新生成一遍 `gen/jit_flags.h`、`gen/jit_tests.h`、`gen/jit_op_maker.h` 与 pyjt 绑定
+（输出逐字节相同），再把全部约 180 条编译命令发进一个 16 进程 `Pool`，让每个 worker 读
+一遍依赖闭包、算内容哈希、报告「没事可做」。本机实测这占热缓存 import 的
+**0.906 s / 1.325 s（CPU-only 配置，68%）**、**0.916 s / 2.457 s（CUDA 配置）**。归因表见
+`agent/results/2026-09-04-import-jittor-cost-attribution.md`。
+
+现在这一步收进了 `compiler.build_core()` 这一个入口，并带一份构建戳
+（`<jittor_core>.build_stamp.json`：源码树 `src/`+`extern/` 每个文件的 mtime_ns 与
+size、编译要素、产物 stat、编译顺序）。戳一致就整步跳过；不一致就走原来那条完整
+逐文件校验，所以判错只会多花时间不会用旧产物。热缓存 import：CPU-only
+1.332 → 0.413 s，CUDA 2.457 → 1.545 s。**冷缓存与「换配置」两种情形不变，仍会编译整个
+核心**（空缓存 68 s / CUDA、切配置 40 s），也就是说 9.01「核心编译移到显式 bootstrap
+或首次算子调用」只完成了「收进显式入口」这一半。
+
 ## 缓存键与缓存布局
 | 问题 | 证据 | 后果 | 修改方向 | 严重度 |
 | --- | --- | --- | --- | --- |
