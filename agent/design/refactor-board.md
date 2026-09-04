@@ -89,6 +89,8 @@
 > 第144波 7.05 前置：`c204f4e9` 扩展 InstallTransaction 为 ActivationTransaction，新增 owner-aware `mutate_path`/`publish_module` 和 activation path/module 回滚合同；事务定向 11 passed。尚未接入 shim.runtime.activate，7.05 保持待领。
 >
 > 第145波 7.05 子项：`4d5b8e61` 将 shim runtime 的 `_composition=True` 分支接入 ActivationTransaction，包住 torch install 与 module publish；普通 activation 的 path/build/no_grad 仍未覆盖，7.05 保持待领。
+>
+> 第146波 7.05 子项：`e0885bf7` 将普通 shim activation 的父进程 sys.path 增量接入 `ActivationTransaction.mutate_path`，异常回滚、成功提交；child `PYTHONPATH` 保持独立。sys.modules/no_grad/build 和 child/path 专项测试仍待，7.05 保持待领。
 
 一行一个任务，与 [refactor-plan.md](refactor-plan.md) 的编号对应。领任务把状态改成「进行中」并写名字，
 完成改成「已合并」并填提交号；推送冲突说明别人先领了。状态只有四种：待领 / 进行中 / 已合并 / 并入 X。

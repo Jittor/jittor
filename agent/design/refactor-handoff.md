@@ -1168,6 +1168,14 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | composition-only 不启动 child build，普通 activation 仍需独立 path/module owner 生命周期测试。 |
 | `gates` | 本波 `py_compile`/`diff-check` 通过，未宣称普通 activation 已验证。 |
 
+### 2026-09-04 第一百四十六波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `e0885bf7` 为普通 `shim.runtime.activate` 创建外层 ActivationTransaction，将 shim/Jittor/project/import/extension root 的父进程 sys.path 增量改走 `mutate_path`；异常 rollback、成功 commit/release。sys.modules/no_grad/build 未接入，7.05 不关闭。 |
+| `device` | child `PYTHONPATH` 是独立字符串快照，不纳入父事务；需后续 child/path failure 专测验证。 |
+| `gates` | `py_compile`/`diff-check` 通过，本波无完整 activation 运行测试。 |
+
 ### 2026-09-04 第一百四十波
 
 | 分区 | 结果 |
