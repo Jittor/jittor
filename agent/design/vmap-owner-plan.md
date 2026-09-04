@@ -206,3 +206,18 @@ Use this order when implementation work is scheduled:
 Rollback is mechanical: restore the single install-local binding and remove the
 module-level adapter while preserving the new focused tests. No backend-specific
 code should be needed for this owner extraction.
+
+## Review checklist and evidence
+
+The implementation review should attach one compact evidence block containing:
+
+- the AST node count for module-level `vmap`, nested `_vmap`, and install
+  bindings;
+- the closure/global scan result (zero captured `InstallContext`, `g`, `ctx`,
+  or `Var` instances);
+- the fidelity record (`api`, `level`, and context limitation detail);
+- the five focused node ids and their pass/skip reason, with cold-cache or
+  unavailable-backend skips kept separate from semantic failures.
+
+This block is sufficient for the board/handoff update; do not paste full JIT
+logs. A missing field is a contract gap and should keep 7.03 marked `待领`.
