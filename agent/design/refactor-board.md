@@ -97,6 +97,8 @@
 > 第148波回归：`45a1283c` 的 activation transaction handoff 合同独立验证 outer transaction 传递和 inner state 清理，避免后续 refactor 回退；不改变 7.05 待领状态。
 >
 > 第149波测试修正：`a08d5c15` 更新 activation bootstrap 的两个旧夹具以匹配 `publish_module`/`mutate_path` 新协议；完整 `test_torch_bootstrap.py` 现为 42 passed。7.05 仍待扩展构建和全量运行态验收。
+>
+> 第150波 7.05 回归：`e05064b9` 新增普通 activation 失败注入测试，验证 owner path/module 回滚、failed 状态和锁释放；完整 `test_torch_bootstrap.py` 43 passed。扩展构建副作用与 child/build 专项仍待，7.05 保持待领。
 
 一行一个任务，与 [refactor-plan.md](refactor-plan.md) 的编号对应。领任务把状态改成「进行中」并写名字，
 完成改成「已合并」并填提交号；推送冲突说明别人先领了。状态只有四种：待领 / 进行中 / 已合并 / 并入 X。
