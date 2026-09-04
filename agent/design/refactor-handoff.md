@@ -1054,6 +1054,15 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 | `device` | 10.17 运行时 ring 不能安全独立实现：涉及 executor 并发、fused/stream 归属与节点生命周期；保留 `80e0f1b4` 设计契约，等待 CUDA 验证。 |
 | `gates` | 本波未改变 0.15 性能门槛或硬件路线；待领保持 73。 |
 
+### 2026-09-04 第一百二十一波
+
+| 分区 | 结果 |
+| --- | --- |
+| `bindings` | 8.12 审计确认 cuDNN 2D/3D forward/backward 六条 legacy cache 路径仍需共享 `LegacyConvAlgoKey`、per-device cache 和 CUDA 验收；当前无安全半改。 |
+| `compat` | companion 审计确认现有 CUDA cache 测试未禁止 legacy `JK`，必须在主实现后补结构门禁；本波无代码提交。 |
+| `device` | cuFFT/cuTT 已有 POD key；cuDNN key 字段/容器/设备隔离不对称，需一次协同迁移，当前无 CUDA 实机。 |
+| `gates` | 本波整卡未关闭任何任务，待领保持 73；阻塞证据已记录。 |
+
 ### 2026-09-04 第一百一十二波
 
 | 分区 | 结果 |
