@@ -1759,6 +1759,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `db0f2a27` 修正真实 CPU `Var.location() == "none"` 的 backend 识别，并补 outer/clamp registry 数值回归；定向 7 passed，4.03/4.04 整项仍待领。 |
 | `gates` | `faad4898` 将 smoke 独立组切换到 loadgroup，结论对比 11/11 IDENTICAL；0.15 最终时长目标仍待领。 |
 
+### 2026-09-05 第一百八十二波
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `f37da269` 为 RuntimeContext 增加只读 `device_id`，CPU fallback 为 -1；snapshot/pyi/结构测试 4 passed。2.13 其余 flags 仍待领。 |
+| `device` | `f37da269` 将 CPU `flatten` 接入 Backend/OpRegistry，补真实 shape/value 与 registry 合同；合同 8 passed。4.03/4.04 完整 native 接线仍待领。 |
+| `gates` | 0.15 loadgroup 进一步审计确认共享状态组不可再拆，扩 worker 收益递减；本波无新代码提交，最终 300s 目标仍待领。 |
+| `compat` | 本波未形成安全的独立 torch 发布边界提交，保留 7.12 当前状态。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。

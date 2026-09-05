@@ -1,5 +1,8 @@
 # 整改看板
 
+> 第182波增量：`f37da269` 在 RuntimeContext owner 中增加只读 `device_id`（结构 4 passed），并将 CPU `flatten` 接入 Backend/OpRegistry（registry 合同 8 passed，shape/value 回归通过）。2.13 与 4.03/4.04 仍是聚合任务，继续待领；0.15 的 loadgroup 已实测为安全调度上限。
+
+
 > 第181波增量：`409de4ea` 将 `jt.runtime.sync_run` 纳入 RuntimeContext owner（结构 3 passed）；`756a0fb6` 让 Torch stop_grad 清理 requires_grad owner（Torch state/autograd 定向 37 passed）；`db0f2a27` 补齐真实 CPU location 与 outer/clamp registry 回归（7 passed）；`faad4898` 将 smoke 独立组改用 loadgroup，11 个 nodeid 结论逐条 IDENTICAL。2.13/7.12/4.03/4.04/0.15 均仍是聚合任务，保持「待领」。
 
 
@@ -411,7 +414,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 2.10 | 三套 liveness 计数 | 已合并 | coreops | 8bd07e51。f/b/p 收进无额外存储的 NodeLiveness；own 防溢出，release 对无匹配 owner 的下溢立即报错，跨零返回值统一传播边界；need_free 与 graph expected-count 由封装提供，release 构建常开。C++ liveness/check_graph 契约与 CPU 生命周期 2 项通过；状态逻辑后端无关，未追加 GPU 编译 |
 | 2.11 | `VarHolder` 不再是执行触发点 | 已合并 | coreops | 0f709cff。VarHolder 构造只登记持有关系；lazy/eager/auto-flush 策略迁入 Executor::submit_pending，Var 完成 Python 对象转换后才提交，显式 core.submit_pending 可无设备同步启动目标子图；删除 flush_suspended 与构造期吞错。构造/边界结构 2 项、CPU 显式提交/错误边界 2 项、GPU1 auto-flush 等价 1 项通过 |
 | 2.12 | 打破 `Executor ⇄ VarHolder` include 环 | 已合并 | coreops | 318a688e。依赖 exe.allocator 的 migrate_to_cpu/data/raw_ptr/set_data 四个 inline 实现移到 var_holder.cc，var_holder.h 不再包含 executor.h 或引用全局 exe；executor.cc -> var_holder.h 保持单向，方法签名与行为不变。无 Python include 的独立头语法编译、依赖方向结构节点、CPU submit_pending 节点通过 |
-| 2.13 | 执行相关全局状态 | 待领 | coreops | `409de4ea` 已建立 RuntimeContext owner 与只读 Python view，`sync_run` owner/snapshot/flag_scope 结构 3 passed；其余 flags/device hooks 仍待迁移。 |
+| 2.13 | 执行相关全局状态 | 待领 | coreops | `409de4ea`/`f37da269` 已建立 RuntimeContext owner 与只读 Python view，迁移 `sync_run`/`device_id` owner、snapshot、flag_scope，结构 4 passed；其余 flags/device hooks 仍待迁移。 |
 | 2.14 | `src/misc/` 拆散 | 待领 | | |
 | 2.15 | NanoString | 已合并 | bindings | 9d5ed413（索引位宽 7→8、static_assert 把表与字段绑住、`ns_check_registration` 在注册期查索引与名字长度；"dtype 表改运行期注册"那半未做，见提交说明） |
 | 2.16 | 类型提升表 | 已合并 | bindings | d821c34a（int_dtype_promote 提升格；标量按 `_is_scalar` 标志认，不再按形状；float 标量把整数张量提到默认 float dtype）、a39a2f1c（补：双标量走提升格，交换左右操作数不再改变 dtype 与结果） |
@@ -450,8 +453,8 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 3.24 | 布局收尾 | 待领 | | |
 | 4.01 | 分配器 id 空间随分配器实例走，不再是进程静态 2M 单例 | 已合并 | device | 4e407447 |
 | 4.02 | 合并多卡 | 已合并 | device | `ad9aab3a`（Var 带设备、算子在自己设备上跑、逐设备分配器与库句柄）、`c97b707a`（跨卡拷贝算子）、`93b48a8e`（torch facade）。选了什么、为什么，改写进 `device-placement.md` §5。**一处未达成**：跨卡拷贝的定序在本机不是回归网——8 张卡两两 `cudaDeviceCanAccessPeer` 全 0，驱动把跨卡拷贝经主机中转并自行与源卡串行，把 event 对整对删掉测试仍全过（实测）。测试写好了并会打印当前处于哪种情形，换到能 peer 的机器上才成为守卫。方法沉淀在 `agent/skills/multi-device-verification` |
-| 4.03 | `BackendRegistry` | 待领 | | |
-| 4.04 | `OpRegistry` | 待领 | | |
+| 4.03 | `BackendRegistry` | 待领 | device | `fcce48e3`、`baff79f8`、`6e5c2d5c`、`db0f2a27`、`f37da269` 已完成注册/CPU provider/CPU clamp+outer+flatten 接线与 8 项合同；CUDA/ACL provider 和完整后端生命周期仍待领 |
+| 4.04 | `OpRegistry` | 待领 | device | `f37da269` 将 CPU flatten 纳入真实 dispatch，registry 合同 8 passed；C++ OpInfo/native 全量接线仍待领 |
 | 4.05 | Python 分派表 | 待领 | | |
 | 4.06 | `jt.flags.backend_fallback ∈ {error, warn, allow… | 待领 | device | `8fb44816`：`BackendFallbackPolicy` 独立核心切片，校验 `error/warn/allow`、默认 `warn`、结构化决策与 fail-closed 异常；与 registry 合同合计 7 passed。尚未接入 native flags/BackendRegistry/OpRegistry，整卡继续待领 |
 | 4.07 | 后端配置改为返回 `BuildConfig` 值 | 待领 | | |
