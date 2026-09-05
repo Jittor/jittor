@@ -1,5 +1,8 @@
 # 整改看板
 
+> 第207波：异机前置继续：`bb0e9897` 迁移 enable_tuner Runtime owner（runtime/root结构合同通过）；`280762dd` 增加 Native observer scope RAII identity restore（结构 8/JIT 2 passed）；`9c7a457a` 增加 ACL descriptor per-device generation/stale-handle guard（host-only 19 passed）；`3079d012` 收紧 standalone torch alias schema validator（namespace 35 passed）。未声称 CUDA/NPU 实机。
+
+
 > 第206波：异机前置继续：`5b2c7d08` 迁移 node_order Runtime owner（结构 32 passed）；`8ab9591f` 原子发布 Native consumer metadata+dispatch snapshot（结构 7 passed）；`ad41509a` ACL DescriptorCache 增加 erase_device 生命周期失效（C++/Python 19 passed）；`23d2f648` 增加 standalone torch bootstrap surface validator（namespace/structure 37 passed）。未声称 CUDA/NPU 实机。
 
 

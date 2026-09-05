@@ -1994,6 +1994,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `ad41509a` 增加 ACL DescriptorCache `erase_device` 批量失效，C++/Python 19 passed；CANN/NPU runner仍待。 |
 | `compat` | `23d2f648` 增加 standalone torch bootstrap surface validator，namespace/structure 37 passed；独立 distribution 完整发布仍待。 |
 
+### 2026-09-05 第二百零七波：异机 lifecycle/alias 前置
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `bb0e9897` 将 `enable_tuner` 纳入 RuntimeContext owner，root/runtime 结构合同通过；全局状态仍待迁移。 |
+| `device` | `280762dd` 增加 Native observer scope RAII identity restore，结构 8、JIT 2 passed；真实 provider 仍待。 |
+| `device` | `9c7a457a` 增加 ACL descriptor per-device generation 与 stale-handle guard，host-only 19 passed；CANN/NPU runner仍待。 |
+| `compat` | `3079d012` 收紧 standalone torch alias schema，namespace 35 passed；独立 distribution 完整发布仍待。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
