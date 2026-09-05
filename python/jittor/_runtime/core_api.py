@@ -894,6 +894,11 @@ class RuntimeContext:
         """Whether graph liveness checks are enabled for execution."""
         return self._flags.check_graph
 
+    @property
+    def missing_grad_error(self):
+        """Whether a missing target gradient is reported as an error."""
+        return self._flags.missing_grad_error
+
     def snapshot(self):
         """Return an immutable snapshot of the fields owned by this context."""
         return {
@@ -917,6 +922,7 @@ class RuntimeContext:
             "profiler_record_shape": int(self.profiler_record_shape),
             "profiler_hide_relay": int(self.profiler_hide_relay),
             "check_graph": int(self.check_graph),
+            "missing_grad_error": int(self.missing_grad_error),
         }
 
 
@@ -1011,6 +1017,10 @@ class RuntimeState:
     @property
     def check_graph(self):
         return self._context.check_graph
+
+    @property
+    def missing_grad_error(self):
+        return self._context.missing_grad_error
 
     @property
     def context(self):

@@ -46,6 +46,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "profiler_record_shape": jt.flags.profiler_record_shape,
         "profiler_hide_relay": jt.flags.profiler_hide_relay,
         "check_graph": jt.flags.check_graph,
+        "missing_grad_error": jt.flags.missing_grad_error,
     }
     assert jt.runtime.device_id == getattr(jt.flags, "device_id", -1)
     assert jt.runtime.use_cuda == jt.flags.use_cuda
@@ -376,3 +377,21 @@ def test_runtime_check_graph_is_a_live_read_only_view_and_cpu_execution_survives
             jt.runtime.context.check_graph = 0
     finally:
         jt.flags.check_graph = original
+
+
+def test_runtime_missing_grad_error_is_a_live_read_only_view():
+    import jittor as jt
+
+    original = jt.flags.missing_grad_error
+    try:
+        assert jt.runtime.missing_grad_error == original
+        with jt.flag_scope(missing_grad_error=1):
+            assert jt.runtime.missing_grad_error == 1
+            assert jt.runtime.context.snapshot()["missing_grad_error"] == 1
+        assert jt.runtime.missing_grad_error == original
+        with pytest.raises(AttributeError):
+            jt.runtime.missing_grad_error = 0
+        with pytest.raises(AttributeError):
+            jt.runtime.context.missing_grad_error = 0
+    finally:
+        jt.flags.missing_grad_error = original
