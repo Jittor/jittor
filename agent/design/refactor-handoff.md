@@ -1601,6 +1601,14 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `gates` | `e4682406` 为 CUDA 与 benchmark-CUDA workflow 增加按 CUDA 配置隔离的 JIT cache restore/save；`13d314ec` 让 CUDA 门禁对真实 `has_cuda` 和 accelerator 非 skip 执行数量 fail-closed；相关结构合同 4 passed。 |
 | `gates` | 本波没有宣称全 CUDA 门禁已全绿；0.22、9.01 和现有 CUDA abort/跨卡缺口继续保持待领。 |
 
+### 2026-09-05 第一百六十二波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `f5461d6f` 完成 quantile/nanquantile Var owner cohort，定向 7 passed；7.03 聚合任务仍待完整 family。 |
+| `bindings` | `45d9ed15` 在独立单卡 CUDA 上补 cuBLAS rank/inner-dimension 3 条真实负向，3 passed，异常后 4x4 计算继续通过；2.19 聚合任务仍待。 |
+| `device` | `27bbca46` 将 ACL 按 `cu` 前缀删除外部算子的逻辑改为显式 registry，结构合同 2 passed；本机无 CANN/NPU，未宣称硬件验证。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
