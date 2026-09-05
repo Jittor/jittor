@@ -452,6 +452,7 @@ bool NativeOpRegistry::unregister_provider_if_current(
     NativeProviderRegistration registration;
     uint32 provider_instance = 0;
     vector<NativeOpDispatchKey> unbound;
+    vector<NativeProviderLifecycleEvent> lifecycle_events;
     bool removed = false;
     {
     std::lock_guard<std::recursive_mutex> guard(mutex);
@@ -469,8 +470,15 @@ bool NativeOpRegistry::unregister_provider_if_current(
     for (const auto& op_name : bindings->second) {
         auto op_iter = entries.find(op_name);
         if (op_iter != entries.end())
-            unbound.push_back({op_iter->second.id, provider, provider_instance,
-                               registration.abi_version});
+            {
+            NativeOpDispatchKey dispatch_key = {
+                op_iter->second.id, provider, provider_instance,
+                registration.abi_version};
+            unbound.push_back(dispatch_key);
+            lifecycle_events.push_back(NativeProviderLifecycleEvent::op_unbound(
+                NativeProviderMetadata(registration, provider_instance),
+                dispatch_key));
+            }
     }
     provider_bindings.erase(bindings);
     provider_ids.erase(ids);
@@ -479,9 +487,15 @@ bool NativeOpRegistry::unregister_provider_if_current(
     removed = true;
     }
     if (removed && observer) {
-        for (const auto& key : unbound)
+        for (size_t i = 0; i < unbound.size(); ++i) {
+            const auto& key = unbound[i];
             observer->on_provider_op_unbound(key);
+            observer->on_provider_lifecycle_event(lifecycle_events[i]);
+        }
         observer->on_provider_unregistered(registration, provider_instance);
+        observer->on_provider_lifecycle_event(
+            NativeProviderLifecycleEvent::provider_unregistered(
+                registration, provider_instance));
     }
     return removed;
 }

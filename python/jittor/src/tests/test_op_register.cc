@@ -344,8 +344,9 @@ JIT_TEST(native_op_registry_lifecycle_consumer_boundary) {
     ASSERT(registry.unregister_provider("cuda"));
     ASSERT(probe.events.size() == 8);
     ASSERT(probe.events[7] == "unregistered:cuda");
-    ASSERT(probe.lifecycle_kinds.size() == 8);
+    ASSERT(probe.lifecycle_kinds.size() == 9);
     ASSERT(probe.lifecycle_kinds[7] == NATIVE_PROVIDER_EVENT_UNREGISTERED);
+    ASSERT(probe.lifecycle_kinds[8] == NATIVE_PROVIDER_EVENT_UNREGISTERED);
     ASSERT(registry.clear_lifecycle_observer(&probe));
     ASSERT(!registry.clear_lifecycle_observer(&probe));
 }
