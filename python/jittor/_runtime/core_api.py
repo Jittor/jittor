@@ -909,6 +909,11 @@ class RuntimeContext:
         """Whether a missing target gradient is reported as an error."""
         return self._flags.missing_grad_error
 
+    @property
+    def disable_lock(self):
+        """Whether the build cache file lock is disabled."""
+        return self._flags.disable_lock
+
     def snapshot(self):
         """Return an immutable snapshot of the fields owned by this context."""
         return {
@@ -935,6 +940,7 @@ class RuntimeContext:
             "profiler_hide_relay": int(self.profiler_hide_relay),
             "check_graph": int(self.check_graph),
             "missing_grad_error": int(self.missing_grad_error),
+            "disable_lock": int(self.disable_lock),
         }
 
 
@@ -1041,6 +1047,10 @@ class RuntimeState:
     @property
     def missing_grad_error(self):
         return self._context.missing_grad_error
+
+    @property
+    def disable_lock(self):
+        return self._context.disable_lock
 
     @property
     def context(self):

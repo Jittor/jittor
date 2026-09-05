@@ -49,6 +49,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "profiler_hide_relay": jt.flags.profiler_hide_relay,
         "check_graph": jt.flags.check_graph,
         "missing_grad_error": jt.flags.missing_grad_error,
+        "disable_lock": jt.flags.disable_lock,
     }
     assert jt.runtime.device_id == getattr(jt.flags, "device_id", -1)
     assert jt.runtime.use_cuda == jt.flags.use_cuda
@@ -438,3 +439,22 @@ def test_runtime_missing_grad_error_is_a_live_read_only_view():
             jt.runtime.context.missing_grad_error = 0
     finally:
         jt.flags.missing_grad_error = original
+
+
+def test_runtime_disable_lock_is_a_live_read_only_view():
+    import jittor as jt
+
+    original = jt.flags.disable_lock
+    try:
+        assert jt.runtime.disable_lock == original
+        with jt.flag_scope(disable_lock=not bool(original)):
+            expected = int(not bool(original))
+            assert jt.runtime.disable_lock == expected
+            assert jt.runtime.context.snapshot()["disable_lock"] == expected
+        assert jt.runtime.disable_lock == original
+        with pytest.raises(AttributeError):
+            jt.runtime.disable_lock = 0
+        with pytest.raises(AttributeError):
+            jt.runtime.context.disable_lock = 0
+    finally:
+        jt.flags.disable_lock = original
