@@ -819,6 +819,11 @@ class RuntimeContext:
         """CUDA pipeline threshold for automatically submitting pending ops."""
         return self._flags.auto_flush_ops
 
+    @property
+    def no_grad(self):
+        """Whether newly created operations are excluded from autograd."""
+        return self._flags.no_grad
+
     def snapshot(self):
         """Return an immutable snapshot of the fields owned by this context."""
         return {
@@ -827,6 +832,7 @@ class RuntimeContext:
             "use_cuda": int(self.use_cuda),
             "lazy_execution": int(self.lazy_execution),
             "auto_flush_ops": int(self.auto_flush_ops),
+            "no_grad": int(self.no_grad),
         }
 
 
@@ -861,6 +867,10 @@ class RuntimeState:
     @property
     def auto_flush_ops(self):
         return self._context.auto_flush_ops
+
+    @property
+    def no_grad(self):
+        return self._context.no_grad
 
     @property
     def context(self):

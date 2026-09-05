@@ -31,6 +31,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "use_cuda": jt.flags.use_cuda,
         "lazy_execution": jt.flags.lazy_execution,
         "auto_flush_ops": jt.flags.auto_flush_ops,
+        "no_grad": jt.flags.no_grad,
     }
     assert jt.runtime.device_id == getattr(jt.flags, "device_id", -1)
     assert jt.runtime.use_cuda == jt.flags.use_cuda
@@ -110,3 +111,21 @@ def test_runtime_auto_flush_ops_is_a_live_read_only_view():
             jt.runtime.context.auto_flush_ops = 0
     finally:
         jt.flags.auto_flush_ops = original
+
+
+def test_runtime_no_grad_is_a_live_read_only_view():
+    import jittor as jt
+
+    original = jt.flags.no_grad
+    try:
+        assert jt.runtime.no_grad == original
+        with jt.flag_scope(no_grad=1):
+            assert jt.runtime.no_grad == 1
+            assert jt.runtime.context.snapshot()["no_grad"] == 1
+        assert jt.runtime.no_grad == original
+        with pytest.raises(AttributeError):
+            jt.runtime.no_grad = 0
+        with pytest.raises(AttributeError):
+            jt.runtime.context.no_grad = 0
+    finally:
+        jt.flags.no_grad = original
