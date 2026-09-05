@@ -28,7 +28,7 @@
 | | |
 | --- | --- |
 | 分支 | `2.0-refactor`；当前状态基线 `054e666f`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 当前 1631 个 |
+| 相对 `2.0` 的提交 | 当前 1636 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **211** / 进行中 **0** / 待领 **61** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
@@ -1776,6 +1776,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `32e8517b` 增加 OpRegistry `has_kernel`/`unregister` 生命周期与 MissingKernel 错误，结构 9 passed；4.03/4.04 native 全量接线仍待领。 |
 | `compat` | `41eb41c2` 建立独立 TorchNamespace seam，2 passed；默认 `torch is jittor` 兼容路径保留，7.12 完整模块迁移仍待领。 |
 | `gates` | `f239e2ed` 增加可执行 smoke budget/bottleneck 报告，结构 13 passed，预测 445.75/480s；最终真实性能验收仍待领。 |
+
+### 2026-09-05 第一百八十四波
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `ac641485` 将 `lazy_execution` 纳入 RuntimeContext owner，嵌套 flag_scope/只读约束结构 6 passed；2.13 其余状态仍待领。 |
+| `device` | `86b9c1cd` 支持 `cuda`/`cuda:<id>` location，未知 backend 明确 `UnknownBackend`，结构 10 passed；4.03/4.04 完整 native 接线仍待领。 |
+| `compat` | `330d0a4c` 让显式 activation 发布独立 TorchNamespace，默认 shim 身份保持不变；py_compile/diff-check 通过，完整 7.12 仍待领。 |
+| `gates` | `5c6876cd` 将 cgroup v1/v2 CPU quota 纳入 worker budget，结构 22 passed；0.15 最终时长仍需真实全量验收。 |
 
 ## 7. 接手怎么开始
 

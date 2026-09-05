@@ -47,6 +47,17 @@ def _runtime_state(root_module):
     return state
 
 
+def _publish_torch_module(transaction, module, owner):
+    """Publish an opt-in namespace while retaining transaction rollback."""
+
+    current = sys.modules.get("torch")
+    if current is owner and module is not owner:
+        sys.modules["torch"] = module
+        transaction.record(sys.modules, "torch", owner, module)
+        return
+    transaction.publish_module(sys.modules, "torch", module)
+
+
 def activation_status(root_module=None):
     """Return an immutable snapshot of process-wide Torch shim activation."""
 
@@ -137,7 +148,7 @@ def _activate_once(
             published = independent_torch_namespace(jt) if independent_namespace else jt
             if independent_namespace:
                 jt._torch_compat_install_context.registry._published["torch"] = published
-            transaction.publish_module(sys.modules, "torch", published)
+            _publish_torch_module(transaction, published, jt)
             transaction.commit()
         except EXPECTED:
             transaction.rollback()
@@ -213,7 +224,7 @@ def _activate_once(
     if _transaction is None:
         sys.modules["torch"] = published
     else:
-        _transaction.publish_module(sys.modules, "torch", published)
+        _publish_torch_module(_transaction, published, jt)
     try:
         from jittor.compat.shim.cpp_extension.torch_utils import install_cpp_extension
         install_cpp_extension(

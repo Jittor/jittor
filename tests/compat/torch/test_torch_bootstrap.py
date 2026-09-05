@@ -540,10 +540,10 @@ class TestTorchBootstrap(unittest.TestCase):
                 independent_namespace=True,
             )
 
-        assert isinstance(result["torch"], TorchNamespace)
-        assert result["torch"] is sys.modules["torch"]
-        assert result["torch"].owner is root
-        install.assert_called_once()
+            assert isinstance(result["torch"], TorchNamespace)
+            assert result["torch"] is sys.modules["torch"]
+            assert result["torch"].owner is root
+            install.assert_called_once()
 
     def test_activation_failure_rolls_back_outer_path_and_module_mutations(self):
         from jittor.compat.shim import runtime
