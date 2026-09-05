@@ -39,6 +39,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "no_grad": jt.flags.no_grad,
         "amp_reg": jt.flags.amp_reg,
         "float32_matmul_precision": jt.flags.float32_matmul_precision,
+        "use_tensorcore": jt.flags.use_tensorcore,
         "auto_mixed_precision_level": jt.flags.auto_mixed_precision_level,
         "try_use_32bit_index": jt.flags.try_use_32bit_index,
         "no_fuse": jt.flags.no_fuse,
@@ -741,3 +742,20 @@ def test_runtime_rewrite_op_is_a_live_read_only_view():
             jt.runtime.context.rewrite_op = 0
     finally:
         jt.flags.rewrite_op = original
+
+
+def test_runtime_use_tensorcore_is_a_live_read_only_view():
+    import jittor as jt
+
+    original = jt.flags.use_tensorcore
+    try:
+        assert jt.runtime.use_tensorcore == original
+        wanted = 0 if original else 1
+        with jt.flag_scope(use_tensorcore=wanted):
+            assert jt.runtime.use_tensorcore == wanted
+            assert jt.runtime.context.snapshot()["use_tensorcore"] == wanted
+        assert jt.runtime.use_tensorcore == original
+        with pytest.raises(AttributeError):
+            jt.runtime.use_tensorcore = wanted
+    finally:
+        jt.flags.use_tensorcore = original
