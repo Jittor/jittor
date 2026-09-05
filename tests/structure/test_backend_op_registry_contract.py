@@ -2,6 +2,7 @@ from jittor._runtime.registry import (
     BackendRegistry,
     BackendSpec,
     DuplicateRegistration,
+    MissingCapability,
     MissingKernel,
     OpRegistry,
     UnknownBackend,
@@ -85,6 +86,50 @@ def test_dispatch_value_accepts_backend_level_cuda_location_and_rejects_unknown(
         assert "metal:0" in str(exc)
     else:
         raise AssertionError("unknown runtime location was silently dispatched")
+
+
+def test_capability_gated_dispatch_fails_closed_and_preserves_kernel_contract():
+    backends = BackendRegistry((
+        BackendSpec("cpu", capabilities={"stream": True}),
+        BackendSpec("cuda"),
+    ))
+    ops = OpRegistry(backends)
+    ops.register("copy", "cpu", lambda value, suffix: (value, suffix))
+    assert ops.dispatch_capability("copy", "cpu", "stream", "x", 1) == ("x", 1)
+    try:
+        ops.dispatch_capability("copy", "cpu", "allocator", "x", 1)
+    except MissingCapability as exc:
+        assert "allocator" in str(exc)
+    else:
+        raise AssertionError("dispatch ignored a missing backend capability")
+    try:
+        ops.dispatch_capability("copy", "cuda", "stream", "x", 1)
+    except MissingKernel:
+        raise AssertionError("capability check should precede kernel lookup only for supported providers")
+    except MissingCapability:
+        pass
+    else:
+        raise AssertionError("unsupported capability was silently accepted")
+
+
+def test_capability_gated_value_dispatch_uses_runtime_backend():
+    class CpuValue:
+        def location(self):
+            return "none"
+
+    backends = BackendRegistry((
+        BackendSpec("cpu", capabilities={"synchronize": True}),
+    ))
+    ops = OpRegistry(backends)
+    ops.register("sync", "cpu", lambda value: value)
+    value = CpuValue()
+    assert ops.dispatch_value_capability("sync", value, "synchronize") is value
+    try:
+        ops.dispatch_value_capability("sync", value, "stream")
+    except MissingCapability:
+        pass
+    else:
+        raise AssertionError("value dispatch ignored missing capability")
 
 
 def test_native_cpu_location_none_resolves_to_cpu():

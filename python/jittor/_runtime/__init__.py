@@ -4,6 +4,7 @@ from .registry import (
     BackendRegistry,
     BackendSpec,
     DuplicateRegistration,
+    MissingCapability,
     MissingKernel,
     OpRegistry,
     RegistryError,
@@ -13,6 +14,6 @@ from .fallback import BackendFallbackPolicy, FallbackDecision, FallbackError, Fa
 
 __all__ = [
     "BackendRegistry", "BackendSpec", "DuplicateRegistration",
-    "MissingKernel", "OpRegistry", "RegistryError", "UnknownBackend",
+    "MissingCapability", "MissingKernel", "OpRegistry", "RegistryError", "UnknownBackend",
     "BackendFallbackPolicy", "FallbackDecision", "FallbackError", "FallbackMode",
 ]

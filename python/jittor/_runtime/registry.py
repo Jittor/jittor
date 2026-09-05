@@ -47,6 +47,10 @@ class MissingKernel(RegistryError, LookupError):
     """Raised when a backend has no implementation for an operation."""
 
 
+class MissingCapability(RegistryError, LookupError):
+    """Raised when a backend cannot provide a requested dispatch capability."""
+
+
 @dataclass(frozen=True)
 class BackendSpec:
     """Capabilities and hooks owned by one backend.
@@ -66,6 +70,21 @@ class BackendSpec:
 
     def supports(self, capability: str) -> bool:
         return bool(self.capabilities.get(capability, False))
+
+    def require(self, capability: str) -> "BackendSpec":
+        """Return this provider when it advertises ``capability``.
+
+        Capability checks are deliberately explicit instead of being folded
+        into generic kernel lookup: a backend may own a kernel while lacking a
+        required allocator/stream/synchronization contract for a call site.
+        """
+        if not isinstance(capability, str) or not capability:
+            raise ValueError("capability name must be a non-empty string")
+        if not self.supports(capability):
+            raise MissingCapability(
+                "backend %s does not support capability %s"
+                % (self.name, capability))
+        return self
 
 
 class BackendRegistry:
@@ -120,6 +139,10 @@ class BackendRegistry:
                 return self._specs[name]
             except KeyError as exc:
                 raise UnknownBackend(name) from exc
+
+    def require(self, name: str, capability: str) -> BackendSpec:
+        """Resolve a backend and fail closed when it lacks a capability."""
+        return self.get(name).require(capability)
 
     def names(self) -> Tuple[str, ...]:
         with self._lock:
@@ -270,10 +293,23 @@ class OpRegistry:
     def dispatch(self, op: str, backend: str, *args: Any, **kwargs: Any) -> Any:
         return self.resolve(op, backend)(*args, **kwargs)
 
+    def dispatch_capability(self, op: str, backend: str, capability: str,
+                            *args: Any, **kwargs: Any) -> Any:
+        """Dispatch only after the provider's capability contract passes."""
+        self.backends.require(backend, capability)
+        return self.dispatch(op, backend, *args, **kwargs)
+
     def dispatch_value(self, op: str, value: Any, *args: Any, **kwargs: Any) -> Any:
         """Dispatch using the backend selected from the first runtime value."""
         backend = self.backends.backend_for(value)
         return self.dispatch(op, backend, value, *args, **kwargs)
+
+    def dispatch_value_capability(self, op: str, value: Any, capability: str,
+                                  *args: Any, **kwargs: Any) -> Any:
+        """Resolve a value's backend, enforce capability, then dispatch."""
+        backend = self.backends.backend_for(value)
+        return self.dispatch_capability(
+            op, backend, capability, value, *args, **kwargs)
 
     def supported_ops(self, backend: str) -> Tuple[str, ...]:
         self.backends.get(backend)
