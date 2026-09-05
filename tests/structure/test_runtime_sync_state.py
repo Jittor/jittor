@@ -59,6 +59,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "disable_lock": jt.flags.disable_lock,
         "rewrite_op": jt.flags.rewrite_op,
         "trace_var_data": jt.flags.trace_var_data,
+        "trace_py_var": jt.flags.trace_py_var,
         "log_silent": jt.flags.log_silent,
         "log_sync": jt.flags.log_sync,
         "log_v": jt.flags.log_v,
@@ -109,6 +110,25 @@ def test_runtime_use_cuda_is_a_live_read_only_view():
             jt.runtime.use_cuda = 0
     finally:
         jt.flags.use_cuda = original
+
+
+def test_runtime_trace_py_var_is_a_live_read_only_view():
+    import jittor as jt
+
+    original = jt.flags.trace_py_var
+    try:
+        assert jt.runtime.trace_py_var == original
+        with jt.flag_scope(trace_py_var=0 if original else 1):
+            wanted = 0 if original else 1
+            assert jt.runtime.trace_py_var == wanted
+            assert jt.runtime.context.snapshot()["trace_py_var"] == wanted
+        assert jt.runtime.trace_py_var == original
+        with pytest.raises(AttributeError):
+            jt.runtime.trace_py_var = original
+        with pytest.raises(AttributeError):
+            jt.runtime.context.trace_py_var = original
+    finally:
+        jt.flags.trace_py_var = original
 
 
 def test_runtime_allocator_policies_are_live_read_only_views_and_cpu_safe():

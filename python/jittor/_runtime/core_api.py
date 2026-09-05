@@ -955,6 +955,11 @@ class RuntimeContext:
         return self._flags.trace_var_data
 
     @property
+    def trace_py_var(self):
+        """Whether Python variable stack tracing is enabled."""
+        return self._flags.trace_py_var
+
+    @property
     def rewrite_op(self):
         """Whether generated JIT operator sources may be rewritten."""
         return self._flags.rewrite_op
@@ -1030,6 +1035,7 @@ class RuntimeContext:
             "disable_lock": int(self.disable_lock),
             "rewrite_op": int(self.rewrite_op),
             "trace_var_data": int(self.trace_var_data),
+            "trace_py_var": int(self.trace_py_var),
             "log_silent": int(self.log_silent),
             "log_sync": int(self.log_sync),
             "log_v": int(self.log_v),
@@ -1179,6 +1185,10 @@ class RuntimeState:
     @property
     def trace_var_data(self):
         return self._context.trace_var_data
+
+    @property
+    def trace_py_var(self):
+        return self._context.trace_py_var
 
     @property
     def rewrite_op(self):
