@@ -1,5 +1,7 @@
 # 整改看板
 
+> 第180波增量：`696e5088` 将 7.12 requires_grad 状态收归 `TorchTensorState` owner（生命周期 6 passed）；`6e5c2d5c` 将 CPU `clamp` 接入 BackendRegistry/OpRegistry 真实分派（registry 合同 5 passed、CPU 数值通过）；`adf96b02` 完成 2.19 `reindex_reduce` 负 shape 用户边界。三项均为聚合任务的真实前置，完整任务继续保持「待领」。
+
 > 第180波增量：2.19 `reindex_reduce` shape-value 用户边界完成迁移。`reindex_reduce_op.cc` 将负 shape 检查从 `CHECKop` 改为可跨 pyjt 捕获的 `USER_CHECKop`；现有 `[-1]` 负向用例与结构分类门禁通过（`tests/structure/test_error_categories.py`、`tests/ops/test_reindex_reduce_op.py` 共通过）。2.19 聚合任务仍保持「待领」，其余调用点与 CUDA 多卡/不可达 cuTT 证据未被此切片覆盖。
 
 > 第102波增量：`cb0a4e77` 完成 cuBLAS batched matmul rank 用户错误 cohort（结构 3 passed）；`dbe72f0f` 完成 torch.polar numerical owner cohort（CPU 2 passed）。2.19/7.03 聚合任务仍按剩余范围保持「待领」；`6.B16` 仍待 Ascend 910B3 实机。

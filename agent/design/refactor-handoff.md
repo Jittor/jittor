@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；当前状态基线 `e90f6c5d`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 当前 1606 个 |
+| 分支 | `2.0-refactor`；当前状态基线 `6e5c2d5c`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 当前 1615 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **211** / 进行中 **0** / 待领 **61** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
@@ -1740,6 +1740,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `cudabk` | `988fd825`、`0f7046c8` 将串行/并行 JIT cache lookup 从线程局部 JK 缓冲改为自有字符串键，静态合同通过；8.12 的 cuDNN POD key/per-device cache 仍待领。 |
 | `coreops` | `b1cef650` 将 `VarHolder::item` 多元素边界改为用户错误，`41878a9e` 将 `grad` loss/target dtype 边界改为用户错误，`953462c7` 将 `code` vary-shape 边界分类为用户错误，`e90f6c5d` 将 `reindex` 空 shape 边界分类为用户错误；item 结构/负向 14 passed，grad 定向 11 passed，code 定向 2 passed，reindex 定向 23 passed；2.19 聚合其余调用点仍待领。 |
 | `compat` | `ad46690d` 为 7.12 引入显式 `TorchTensorState` owner，保留旧 leaf/retained/optimizer 别名，状态迁移测试 4 passed；7.12 requires_grad/模块边界与独立包验收仍待领。 |
+
+### 2026-09-05 第一百八十波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `696e5088` 让 7.12 的 requires_grad 状态由 `TorchTensorState` owner 持有，setter/FSDP peer 更新统一走 owner；生命周期定向 6 passed。独立 torch 包边界与完整 requires_grad 语义仍待领。 |
+| `coreops` | `adf96b02` 将 `reindex_reduce` 负 shape 边界改为用户错误，已有负向与结构门禁通过；2.19 聚合仍待领。 |
+| `device` | `6e5c2d5c` 将 CPU `clamp` 路径接入 BackendRegistry/OpRegistry 真实分派，registry 合同 5 passed 且 CPU 数值通过；CUDA/ACL 路由与完整 4.03/4.04 仍待领。 |
+| `gates` | 本波未形成新的 0.15 性能提交，真实性能目标保持待领。 |
 
 ## 7. 接手怎么开始
 
