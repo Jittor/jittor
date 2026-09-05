@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；当前状态基线 `3cbdf4d8`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 当前 1598 个 |
+| 分支 | `2.0-refactor`；当前状态基线 `38a9821a`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 当前 1605 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **211** / 进行中 **0** / 待领 **61** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
@@ -1731,6 +1731,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | 分区 | 结果 |
 | --- | --- |
 | `device` | 4.06 增加独立 `BackendFallbackPolicy`，统一校验 `error/warn/allow`、默认 `warn`、结构化 fallback 决策与 fail-closed 异常；定向结构测试 3 passed。尚未接入 native flags/BackendRegistry/OpRegistry，4.06 整卡保持待领。 |
+
+### 2026-09-05 第一百七十九波
+
+| 分区 | 结果 |
+| --- | --- |
+| `gates` | `d6f17450` 增加 10.18 的 native CPU gate 核心属性测试覆盖合同，定向 11 passed；10.18 整卡仍待领。 |
+| `cudabk` | `988fd825`、`0f7046c8` 将串行/并行 JIT cache lookup 从线程局部 JK 缓冲改为自有字符串键，静态合同通过；8.12 的 cuDNN POD key/per-device cache 仍待领。 |
+| `coreops` | `b1cef650` 将 `VarHolder::item` 多元素边界改为用户错误，`41878a9e` 将 `grad` loss/target dtype 边界改为用户错误；item 结构/负向 14 passed，grad 定向 11 passed；2.19 聚合其余调用点仍待领。 |
+| `compat` | 7.05 事务回滚探针与 7.12 requires_grad 复核未形成安全提交；保留前置状态，不伪报聚合任务完成。 |
 
 ## 7. 接手怎么开始
 
