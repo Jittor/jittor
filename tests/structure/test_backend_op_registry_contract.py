@@ -73,6 +73,37 @@ def test_registry_snapshot_normalizes_mutable_constructor_inputs():
     assert snapshot.kernels == (("add", "cpu"),)
 
 
+def test_registry_snapshot_exposes_read_only_lifecycle_queries():
+    snapshot = RegistrySnapshot(
+        [BackendSpec("cpu"), BackendSpec("cuda")],
+        [["add", "cpu"], ["add", "cuda"], ["copy", "cuda"]],
+    )
+    assert snapshot.backend("cuda").name == "cuda"
+    assert snapshot.supported_ops("cuda") == ("add", "copy")
+    assert snapshot.has_kernel("add", "cpu")
+    assert not snapshot.has_kernel("missing", "cpu")
+    try:
+        snapshot.backend("metal")
+    except UnknownBackend:
+        pass
+    else:
+        raise AssertionError("snapshot lookup accepted an unknown backend")
+
+
+def test_registry_snapshot_rejects_duplicate_or_dangling_ownership():
+    cpu = BackendSpec("cpu")
+    for backends, kernels in (
+            ([cpu, cpu], []),
+            ([cpu], [["add", "cpu"], ["add", "cpu"]]),
+            ([cpu], [["add", "cuda"]])):
+        try:
+            RegistrySnapshot(backends, kernels)
+        except (ValueError, TypeError):
+            pass
+        else:
+            raise AssertionError("invalid snapshot ownership was accepted")
+
+
 def test_cpu_provider_rejects_invalid_allocation_sizes():
     allocator = BackendRegistry.default().get("cpu").allocator
     try:

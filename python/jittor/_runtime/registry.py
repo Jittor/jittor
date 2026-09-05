@@ -125,11 +125,35 @@ class RegistrySnapshot:
         kernels = tuple(tuple(key) for key in self.kernels)
         if any(not isinstance(spec, BackendSpec) for spec in backends):
             raise TypeError("registry snapshot backends must be BackendSpec values")
+        backend_names = tuple(spec.name for spec in backends)
+        if len(set(backend_names)) != len(backend_names):
+            raise ValueError("registry snapshot backends must be unique")
         if any(len(key) != 2 or any(not isinstance(part, str) or not part for part in key)
                for key in kernels):
             raise ValueError("registry snapshot kernels must be (op, backend) names")
+        if len(set(kernels)) != len(kernels):
+            raise ValueError("registry snapshot kernels must be unique")
+        if any(key[1] not in backend_names for key in kernels):
+            raise ValueError("registry snapshot kernel references unknown backend")
         object.__setattr__(self, "backends", backends)
         object.__setattr__(self, "kernels", kernels)
+
+    def backend(self, name: str) -> BackendSpec:
+        """Resolve a provider from this immutable diagnostic view."""
+        for spec in self.backends:
+            if spec.name == name:
+                return spec
+        raise UnknownBackend(name)
+
+    def supported_ops(self, backend: str) -> Tuple[str, ...]:
+        """Return the operators owned by ``backend`` in this snapshot."""
+        self.backend(backend)
+        return tuple(sorted(op for op, owner in self.kernels if owner == backend))
+
+    def has_kernel(self, op: str, backend: str) -> bool:
+        """Check kernel ownership without consulting a live registry."""
+        self.backend(backend)
+        return (op, backend) in self.kernels
 
 
 class BackendRegistry:
