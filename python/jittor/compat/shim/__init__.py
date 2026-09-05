@@ -16,6 +16,21 @@ _PUBLIC = {
     "independent_torch_namespace": (
         "jittor.compat.torch.publication", "independent_torch_namespace"
     ),
+    "DISTRIBUTION_MODULES": (
+        "jittor.compat.torch.distribution", "DISTRIBUTION_MODULES"
+    ),
+    "DISTRIBUTION_PACKAGE_ALIASES": (
+        "jittor.compat.torch.distribution", "DISTRIBUTION_PACKAGE_ALIASES"
+    ),
+    "distribution_module_names": (
+        "jittor.compat.torch.distribution", "distribution_module_names"
+    ),
+    "distribution_package_names": (
+        "jittor.compat.torch.distribution", "distribution_package_names"
+    ),
+    "validate_distribution_graph": (
+        "jittor.compat.torch.distribution", "validate_distribution_graph"
+    ),
 }
 
 __all__ = sorted(_PUBLIC)

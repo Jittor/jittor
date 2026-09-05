@@ -104,6 +104,14 @@ class TestTorchShimAliases(unittest.TestCase):
                 "jittor.compat.torch.publication",
                 "jittor.torch_shim.publication",
             ),
+            (
+                "jittor.compat.torch.distribution",
+                "jittor.torch_compat.distribution",
+            ),
+            (
+                "jittor.compat.torch.distribution",
+                "jittor.torch_shim.distribution",
+            ),
             ("jittor.compat.shim.deploy", "jittor.torch_shim.deploy"),
             ("jittor.compat.shim.cpp_extension", "jittor.torch_shim.cpp_extension"),
             (

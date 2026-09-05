@@ -29,6 +29,33 @@ def test_publication_boundary_is_importable_without_runtime_or_installer():
     assert publication.__name__ == "jittor.compat.torch.publication"
 
 
+def test_distribution_manifest_is_importable_and_parent_complete():
+    """Standalone package metadata must not depend on a selected backend."""
+    from jittor.compat.torch.distribution import (
+        DISTRIBUTION_MODULES, DISTRIBUTION_PACKAGE_ALIASES,
+        distribution_package_names, validate_distribution_graph,
+    )
+
+    assert DISTRIBUTION_MODULES[0] == "torch.distributed"
+    assert "torch.distributed.fsdp" in distribution_package_names()
+    assert validate_distribution_graph(DISTRIBUTION_MODULES)
+    assert all(left in DISTRIBUTION_MODULES for left, _ in DISTRIBUTION_PACKAGE_ALIASES)
+
+
+def test_distribution_manifest_has_no_backend_import_dependency():
+    import ast
+    import pathlib
+
+    source = pathlib.Path(__file__).resolve().parents[3] / "python/jittor/compat/torch/distribution.py"
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    imports = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        or (isinstance(node, ast.ImportFrom) and node.module != "__future__")
+    ]
+    assert not imports
+
+
 def test_namespace_has_importable_package_spec():
     """A published detached root must remain a valid importlib package."""
     import importlib.util

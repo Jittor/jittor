@@ -6,6 +6,11 @@ from .runtime import activate, activation_status
 from jittor.compat.torch.publication import (
     TorchNamespace, independent_torch_namespace, namespace_owner,
 )
+from jittor.compat.torch.distribution import (
+    DISTRIBUTION_MODULES, DISTRIBUTION_PACKAGE_ALIASES,
+    distribution_module_names, distribution_package_names,
+    validate_distribution_graph,
+)
 
 enable = activate
 
@@ -19,4 +24,9 @@ __all__ = [
     "TorchNamespace",
     "independent_torch_namespace",
     "namespace_owner",
+    "DISTRIBUTION_MODULES",
+    "DISTRIBUTION_PACKAGE_ALIASES",
+    "distribution_module_names",
+    "distribution_package_names",
+    "validate_distribution_graph",
 ]
