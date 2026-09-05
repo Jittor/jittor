@@ -25,6 +25,7 @@ import unittest
 import numpy as np
 import jittor as torch          # the whole point: jittor IS torch here
 import jittor as jt
+from jittor.autograd import EXPLICIT_REQUIRES_GRAD, policy_scope
 from jittor.compat.torch.installers.autograd import _install_autograd_function
 
 # Exercise CPU always; add CUDA when the build has it. NPU(ACL) reports has_cuda too.
@@ -326,6 +327,19 @@ class TestStopNoGrad(Base):
                 z = x * 2
             self.assertFalse(bool(getattr(z, "requires_grad", False)),
                              f"no_grad detaches {dev}")
+        both_devices(body)
+
+    def test_detach_clears_requires_grad_in_torch_policy(self):
+        x0 = np.random.RandomState(150).randn(3).astype("float32")
+        def body(dev):
+            with policy_scope(EXPLICIT_REQUIRES_GRAD):
+                x = jt.array(x0)
+                x.requires_grad = True
+                detached = (x * 2).detach()
+                self.assertFalse(bool(detached.requires_grad),
+                                 f"detach requires_grad {dev}")
+                self.assertTrue(bool(detached.is_stop_grad()),
+                                f"detach stop_grad {dev}")
         both_devices(body)
 
     def test_is_stop_grad(self):
