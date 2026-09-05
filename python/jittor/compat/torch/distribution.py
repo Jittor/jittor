@@ -136,7 +136,7 @@ def validate_distribution_metadata(metadata=None):
             "root": spec["root"],
             "modules": spec["modules"],
             "packages": spec["packages"],
-            "aliases": spec.get("aliases", ()),
+            "aliases": spec["aliases"],
         }
     except (AttributeError, KeyError, TypeError) as exc:
         raise TypeError(
@@ -217,9 +217,11 @@ def validate_distribution_manifest(manifest=None):
         root = spec["root"]
         modules = tuple(spec["modules"])
         packages = tuple(spec["packages"])
-        aliases = tuple(spec.get("aliases", ()))
+        aliases = tuple(spec["aliases"])
     except (AttributeError, KeyError, TypeError) as exc:
-        raise TypeError("distribution manifest must provide root/modules/packages") from exc
+        raise TypeError(
+            "distribution manifest must provide root/modules/packages/aliases"
+        ) from exc
 
     if not isinstance(root, str) or not root:
         raise ValueError("distribution manifest root must be a non-empty string")
@@ -335,7 +337,7 @@ def validate_distribution_publication(published, manifest=None):
     validate_distribution_manifest(spec)
     try:
         modules = tuple(spec["modules"])
-        aliases = tuple(spec.get("aliases", ()))
+        aliases = tuple(spec["aliases"])
         packages = set(spec.get("packages", ()))
     except (AttributeError, KeyError, TypeError) as exc:
         raise TypeError("distribution manifest must provide modules/packages/aliases") from exc

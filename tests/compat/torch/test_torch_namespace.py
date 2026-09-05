@@ -223,6 +223,37 @@ def test_distribution_manifest_validation_rejects_missing_alias_endpoints():
         raise AssertionError("missing alias endpoint was accepted")
 
 
+def test_distribution_manifest_validation_requires_explicit_alias_field():
+    from jittor.compat.torch.distribution import validate_distribution_manifest
+
+    malformed = {
+        "root": "torch.distributed",
+        "modules": ("torch.distributed",),
+        "packages": ("torch.distributed",),
+    }
+    try:
+        validate_distribution_manifest(malformed)
+    except TypeError as error:
+        assert "root/modules/packages/aliases" in str(error)
+    else:
+        raise AssertionError("manifest without aliases was accepted")
+
+
+def test_distribution_metadata_validation_requires_explicit_alias_field():
+    from jittor.compat.torch.distribution import (
+        distribution_metadata, validate_distribution_metadata,
+    )
+
+    malformed = dict(distribution_metadata())
+    malformed.pop("aliases")
+    try:
+        validate_distribution_metadata(malformed)
+    except TypeError as error:
+        assert "project/schema_version/import_root/manifest" in str(error)
+    else:
+        raise AssertionError("metadata without aliases was accepted")
+
+
 def test_distribution_manifest_validation_rejects_invalid_or_unordered_packages():
     from jittor.compat.torch.distribution import validate_distribution_manifest
 
