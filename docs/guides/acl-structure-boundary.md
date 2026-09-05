@@ -141,6 +141,34 @@ must not read pointer addresses, process-global state, or Python object identity
 The host-only compile and runtime contract is covered by
 `tests/structure/test_acl_data_channel_contract.py`.
 
+## Descriptor identity and cache shell
+
+The descriptor cache key is a second boundary after attribute decoding.  It
+must include the decoded attribute key, the complete shape (an empty shape is
+the valid zero-dimensional case), dtype, layout, and device identity.  The
+canonical form is length-prefixed for strings and uses a fixed key version;
+negative dimensions, empty metadata, pointer values, and Python object ids are
+rejected before a cache lookup.  Consequently a descriptor prepared for
+`npu:0`, a different layout, or a different shape cannot be reused merely
+because its operator and attributes match.
+
+`AclDescriptorKey`, `canonical_descriptor_key()`, and
+`make_descriptor_key()` in `acl_data_channel.h` implement this validation
+without including CANN.  `AclDescriptorCache<T>` is only a lifecycle shell:
+the caller supplies `T` (a test value on a host, or a future owned ACL
+descriptor on 910B3) and a builder; the shell never creates, aliases, or
+retains a raw `aclTensor` pointer.  A repeated key invokes the builder once,
+while a shape/layout/device change creates an independent entry.  This is a
+host-only prerequisite, not evidence that ACL descriptors are already cached
+or that addresses are correctly rebound on device.
+
+The Python mirror is `descriptor_cache_key()` plus `DescriptorCache` in
+`acl_data.py`.  It returns an immutable tuple derived from the normalized
+schema key and metadata, and has the same build-once semantics.  Both halves
+are intentionally separate from the generated `OpAttr` path until one
+attribute owner can migrate decode, attribute construction, descriptor
+address rebinding, and invalidation atomically.
+
 ## Migration order
 
 1. **Done on the host:** define the data-channel schema and its cache-key
@@ -149,8 +177,10 @@ The host-only compile and runtime contract is covered by
 2. Migrate `softmax.dim` or `triu.diagonal` as the first attribute owner; keep
    `pool_op.py` out of this step because pooled descriptors have a separate
    lifetime/cache contract.
-3. Define descriptor address rebinding and invalidation, then add shape-keyed
-   caching. A shape cache must never reuse a descriptor with a stale address.
+3. **Host-only prerequisite now defined:** validate the descriptor identity
+   key and cache ownership shell above. Define device-side descriptor address
+   rebinding and invalidation next, then add the shell to a real ACL runner. A
+   shape cache must never reuse a descriptor with a stale address.
 4. Migrate `AclOpFunctions` type erasure only after all query signatures and
    registry entries have a single launcher representation.
 

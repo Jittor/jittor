@@ -118,6 +118,58 @@ int main() {
         subprocess.run([str(binary)], check=True)
 
 
+def test_acl_descriptor_key_separates_shape_layout_and_device_without_cann():
+    source = r'''
+#include "python/jittor/extern/acl/aclops/acl_data_channel.h"
+#include <string>
+int main() {
+    using namespace jittor::acl_data;
+    AclAttrSchema schema;
+    AclAttrField dim;
+    dim.type = AclDataType::int64;
+    schema.emplace("dim", dim);
+    AclDataRecord record;
+    record.op = "Softmax";
+    record.fields.emplace("dim", AclDataValue::int64_value(-1));
+    std::string attribute_key;
+    auto decoded = decode_acl_data(record, "Softmax", schema, attribute_key);
+    auto first = make_descriptor_key(decoded, {2, 4}, "float32", "contiguous", "npu:0");
+    auto same = make_descriptor_key(decoded, {2, 4}, "float32", "contiguous", "npu:0");
+    auto other_shape = make_descriptor_key(decoded, {4, 2}, "float32", "contiguous", "npu:0");
+    auto other_device = make_descriptor_key(decoded, {2, 4}, "float32", "contiguous", "npu:1");
+    if (canonical_descriptor_key(first) != canonical_descriptor_key(same)) return 1;
+    if (canonical_descriptor_key(first) == canonical_descriptor_key(other_shape)) return 2;
+    if (canonical_descriptor_key(first) == canonical_descriptor_key(other_device)) return 3;
+    AclDescriptorCache<std::string> cache;
+    int builds = 0;
+    auto& a = cache.get_or_create(first, [&](const AclDescriptorKey&) {
+        ++builds;
+        return std::string("descriptor-0");
+    });
+    auto& b = cache.get_or_create(same, [&](const AclDescriptorKey&) {
+        ++builds;
+        return std::string("wrong");
+    });
+    if (&a != &b || a != "descriptor-0" || builds != 1 || cache.size() != 1) return 4;
+    cache.get_or_create(other_shape, [&](const AclDescriptorKey&) {
+        ++builds;
+        return std::string("descriptor-1");
+    });
+    if (builds != 2 || !cache.contains(other_shape)) return 5;
+    try {
+        make_descriptor_key(decoded, {-1}, "float32", "contiguous", "npu:0");
+        return 6;
+    } catch (const jittor::UserError&) {
+        return 0;
+    }
+}
+'''
+    with tempfile.TemporaryDirectory(prefix="jittor-acl-descriptor-run-") as directory:
+        binary = Path(directory) / "probe"
+        _compile(source, binary)
+        subprocess.run([str(binary)], check=True)
+
+
 def test_acl_data_owner_binds_identity_and_schema_for_future_registry():
     source = r'''
 #include "python/jittor/extern/acl/aclops/acl_data_channel.h"

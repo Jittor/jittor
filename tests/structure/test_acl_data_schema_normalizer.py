@@ -74,3 +74,53 @@ def test_invalid_integration_schema_is_internal_error():
             {"schema_version": 1, "op": "Softmax"},
             schema={"dim": {"type": "pointer", "required": True}},
         )
+
+
+def test_descriptor_key_includes_shape_layout_dtype_and_device():
+    record = ACL_DATA.validate_acl_data({
+        "schema_version": 1,
+        "op": "Softmax",
+        "fields": {"dim": {"type": "int64", "value": -1}},
+    })
+    first = ACL_DATA.descriptor_cache_key(
+        record, shape=(2, 4), dtype="float32", layout="contiguous", device="npu:0"
+    )
+    same = ACL_DATA.descriptor_cache_key(
+        record, shape=[2, 4], dtype="float32", layout="contiguous", device="npu:0"
+    )
+    other = ACL_DATA.descriptor_cache_key(
+        record, shape=(4, 2), dtype="float32", layout="contiguous", device="npu:0"
+    )
+    assert first == same
+    assert first != other
+    assert "0x" not in repr(first)
+
+
+def test_descriptor_cache_builds_once_and_keeps_device_entries_separate():
+    record = {"schema_version": 1, "op": "Scale", "fields": {}}
+    key0 = ACL_DATA.descriptor_cache_key(
+        record, shape=(), dtype="float32", layout="contiguous", device="npu:0"
+    )
+    key1 = ACL_DATA.descriptor_cache_key(
+        record, shape=(), dtype="float32", layout="contiguous", device="npu:1"
+    )
+    cache = ACL_DATA.DescriptorCache()
+    builds = []
+    assert cache.get_or_create(key0, lambda key: builds.append(key) or "descriptor-0") == "descriptor-0"
+    assert cache.get_or_create(key0, lambda key: builds.append(key) or "wrong") == "descriptor-0"
+    assert cache.get_or_create(key1, lambda key: builds.append(key) or "descriptor-1") == "descriptor-1"
+    assert len(cache) == 2
+    assert len(builds) == 2
+    cache.clear()
+    assert len(cache) == 0
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"shape": (-1,), "dtype": "float32", "layout": "contiguous", "device": "npu:0"},
+    {"shape": (1,), "dtype": "", "layout": "contiguous", "device": "npu:0"},
+    {"shape": (1,), "dtype": "float32", "layout": "contiguous", "device": ""},
+])
+def test_descriptor_key_rejects_invalid_identity_metadata(kwargs):
+    record = {"schema_version": 1, "op": "Scale", "fields": {}}
+    with pytest.raises((ACL_DATA.AclDataUserError, ACL_DATA.AclDataInternalError)):
+        ACL_DATA.descriptor_cache_key(record, **kwargs)

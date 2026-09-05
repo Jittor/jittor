@@ -165,3 +165,61 @@ def entry_default(entry):
     """Copy a schema default so callers cannot mutate the schema in-place."""
     value = entry["default"]
     return list(value) if isinstance(value, (list, tuple)) else value
+
+
+def descriptor_cache_key(record, *, shape, dtype, layout, device="npu"):
+    """Build a descriptor identity without exposing runtime addresses.
+
+    Attribute values alone do not identify an ACL tensor descriptor: shape,
+    dtype, layout, and device placement are part of the descriptor contract.
+    The returned tuple is immutable and therefore safe for a future C++/ACL
+    cache boundary.  This helper remains CANN-free; it only validates identity
+    metadata and never creates an ``aclTensor``.
+    """
+    normalized = validate_acl_data(record)
+    if not isinstance(shape, (list, tuple)):
+        raise AclDataUserError("ACL descriptor shape must be a list or tuple")
+    normalized_shape = []
+    for dimension in shape:
+        if not _is_int(dimension) or dimension < 0:
+            raise AclDataUserError("ACL descriptor shape dimensions must be non-negative integers")
+        normalized_shape.append(dimension)
+    for name, value in (("dtype", dtype), ("layout", layout), ("device", device)):
+        if not isinstance(value, str) or not value:
+            raise AclDataInternalError("ACL descriptor {} must be a non-empty string".format(name))
+    return (
+        SCHEMA_VERSION,
+        normalized["cache_key"],
+        tuple(normalized_shape),
+        dtype,
+        layout,
+        device,
+    )
+
+
+class DescriptorCache:
+    """Small host-only cache shell for a future ACL descriptor owner.
+
+    Values are supplied by the caller, so this class cannot accidentally
+    manufacture or retain a CANN handle.  A real runner can use the same key
+    and replace the value with an ``aclTensor`` owner once CANN is available.
+    """
+
+    def __init__(self):
+        self._entries = OrderedDict()
+
+    def get_or_create(self, key, builder):
+        if key in self._entries:
+            return self._entries[key]
+        value = builder(key)
+        self._entries[key] = value
+        return value
+
+    def __contains__(self, key):
+        return key in self._entries
+
+    def __len__(self):
+        return len(self._entries)
+
+    def clear(self):
+        self._entries.clear()

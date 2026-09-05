@@ -127,6 +127,21 @@ struct AclDecodedData {
     std::string cache_key;
 };
 
+// Descriptor identity is deliberately separate from the attribute record.
+// ACL descriptors are shape/layout/device specific; reusing one by operator
+// or attribute key alone can silently attach a tensor to the wrong device.
+// This value object is CANN-free so the registry can validate cache identity
+// before an eventual runner creates an aclTensor descriptor.
+constexpr uint32_t kDescriptorKeyVersion = 1;
+
+struct AclDescriptorKey {
+    std::string attribute_key;
+    std::vector<int64_t> shape;
+    std::string dtype;
+    std::string layout;
+    std::string device;
+};
+
 inline void internal_error(const std::string& message);
 
 // Read-only view passed to a future OpAttr/ACL consumer.  Keeping field
@@ -335,6 +350,83 @@ inline std::string canonical_cache_key(uint32_t schema_version,
     }
     return key.str();
 }
+
+inline void validate_descriptor_key(const AclDescriptorKey& descriptor) {
+    if (descriptor.attribute_key.empty())
+        internal_error("ACL descriptor key requires an attribute cache key");
+    if (descriptor.dtype.empty() || descriptor.layout.empty() || descriptor.device.empty())
+        internal_error("ACL descriptor key requires dtype, layout, and device");
+    for (int64_t dimension : descriptor.shape) {
+        if (dimension < 0)
+            user_error("ACL descriptor shape dimensions must be non-negative");
+    }
+}
+
+inline std::string canonical_descriptor_key(const AclDescriptorKey& descriptor) {
+    validate_descriptor_key(descriptor);
+    std::ostringstream key;
+    key.imbue(std::locale::classic());
+    key << "v" << kDescriptorKeyVersion << "|attrs=";
+    append_length_prefixed(key, descriptor.attribute_key);
+    key << "|shape=" << descriptor.shape.size() << ':';
+    for (size_t i = 0; i < descriptor.shape.size(); ++i)
+        key << (i ? "," : "") << descriptor.shape[i];
+    key << "|dtype=";
+    append_length_prefixed(key, descriptor.dtype);
+    key << "|layout=";
+    append_length_prefixed(key, descriptor.layout);
+    key << "|device=";
+    append_length_prefixed(key, descriptor.device);
+    return key.str();
+}
+
+inline AclDescriptorKey make_descriptor_key(const AclDecodedData& decoded,
+                                            std::vector<int64_t> shape,
+                                            std::string dtype,
+                                            std::string layout,
+                                            std::string device) {
+    AclDescriptorKey result;
+    result.attribute_key = decoded.cache_key;
+    result.shape = std::move(shape);
+    result.dtype = std::move(dtype);
+    result.layout = std::move(layout);
+    result.device = std::move(device);
+    validate_descriptor_key(result);
+    return result;
+}
+
+// Host-only cache shell.  The value is intentionally a template: a CANN
+// runner can later provide its descriptor handle, while CPU tests use a
+// trivial value.  The cache never manufactures or aliases runtime handles.
+template <typename Descriptor>
+class AclDescriptorCache {
+public:
+    template <typename Builder>
+    Descriptor& get_or_create(const AclDescriptorKey& key, Builder&& builder) {
+        const std::string canonical = canonical_descriptor_key(key);
+        auto found = entries_.find(canonical);
+        if (found != entries_.end())
+            return found->second;
+        auto inserted = entries_.emplace(
+            canonical, builder(key));
+        return inserted.first->second;
+    }
+
+    bool contains(const AclDescriptorKey& key) const {
+        return entries_.find(canonical_descriptor_key(key)) != entries_.end();
+    }
+
+    size_t size() const {
+        return entries_.size();
+    }
+
+    void clear() {
+        entries_.clear();
+    }
+
+private:
+    std::map<std::string, Descriptor> entries_;
+};
 
 // Shared host-side decoder contract.  It is intentionally not wired into an
 // ACL runner yet: the first attribute owner must migrate schema, generated
