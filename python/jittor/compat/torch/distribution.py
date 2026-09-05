@@ -404,15 +404,20 @@ def validate_distribution_bootstrap(bootstrap):
         raise TypeError("distribution bootstrap must be a module-like object")
     constants = (
         "DISTRIBUTION_ROOT",
+        "DISTRIBUTION_PROJECT",
+        "DISTRIBUTION_SCHEMA_VERSION",
+        "DISTRIBUTION_IMPORT_ROOT",
         "DISTRIBUTION_MODULES",
         "DISTRIBUTION_PACKAGE_ALIASES",
     )
     functions = (
         "distribution_manifest",
+        "distribution_metadata",
         "distribution_module_names",
         "distribution_package_names",
         "validate_distribution_aliases",
         "validate_distribution_manifest",
+        "validate_distribution_metadata",
         "validate_distribution_graph",
         "validate_distribution_publication",
         "validate_distribution_boundary",
