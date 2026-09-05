@@ -8599,6 +8599,13 @@ class Flags:
 flags: Flags
 '''Jittor running time flags instance'''
 
+class RuntimeState:
+	@property
+	def sync_run(self) -> int: ...
+
+runtime: RuntimeState
+'''Read-only view of execution state owned by the native runtime.'''
+
 # Public names whose precise type is not inferred yet.
 CTCLoss: Any
 DumpGraphs: Any

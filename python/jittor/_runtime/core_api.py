@@ -777,6 +777,28 @@ def zeros_like(x, dtype=None) -> Var:
 _core_flags = core.Flags()
 flags = _core_flags
 
+
+class RuntimeState:
+    """Read-only view of execution state owned by the native runtime.
+
+    This is intentionally a view rather than a second storage location.  In
+    particular, ``flag_scope(sync_run=...)`` continues to update the native
+    flag and this property observes the current value immediately.  Runtime
+    state migration can add fields here without exposing the native ``Flags``
+    object as the long-term public contract.
+    """
+
+    __slots__ = ()
+
+    @property
+    def sync_run(self):
+        """Whether backend operators should synchronize after each launch."""
+        return flags.sync_run
+
+
+runtime = RuntimeState()
+
+
 def var(x, dim=None, dims=None, unbiased=False, keepdims=False):
     """ return the sample variance. If unbiased is True, Bessel's correction will be used.
 
@@ -2999,5 +3021,5 @@ __all__ = (
     "sigmoid_", "single_log_capture", "single_process_scope", "size", "sqr",
     "sqrt_", "squeeze", "std", "to_bool", "to_device", "to_float",
     "to_int", "transpose", "type_as", "unsqueeze", "var", "view", "vtos",
-    "zeros", "zeros_like",
+    "zeros", "zeros_like", "runtime",
 )
