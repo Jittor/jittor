@@ -1631,6 +1631,18 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     _native_detach = Var.detach
     def _var_detach(self):
         out = _native_detach(self)
+        # Jittor's native detach marks the producing clone op as stopped while
+        # leaving the returned Var's requires_grad bit set.  Torch's detached
+        # tensor is a stopped leaf.  The torch-facing runtime selects
+        # EXPLICIT_REQUIRES_GRAD, so apply that policy at this API boundary;
+        # native Jittor callers retain the native behavior.
+        policy = getattr(getattr(jt, "autograd", None), "get_policy", None)
+        if policy is not None:
+            try:
+                if policy().stop_outputs_when_inputs_stopped:
+                    out.stop_grad()
+            except (AttributeError, TypeError):
+                pass
         if getattr(self, "_torch_0d", False):
             out._torch_0d = True
         return out
