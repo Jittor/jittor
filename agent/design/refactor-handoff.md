@@ -1704,6 +1704,13 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `bindings` | 复核 2.19 历史 broadcast_to 计数已修正（结构 57 passed），但 cuTT 不可达和多卡缺口仍阻塞整卡。 |
 | `device` | 复核 8.12 六路 legacy cache 仍需统一 POD/per-device 迁移；本波无代码提交。 |
 
+### 2026-09-05 第一百七十五波
+
+| 分区 | 结果 |
+| --- | --- |
+| `dist` | 8.15 TCPStore 失败在当前环境卡于 Jittor import/编译锁；绕过 import 的双 rank 直接 Store 脚本多次成功，未复现 ConnectionReset。没有提交未经复现的生命周期修复，任务继续待领。 |
+| `gates` | 本波没有代码提交，保留现有多机/两节点硬件验收缺口。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
