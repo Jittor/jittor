@@ -1,5 +1,8 @@
 # 整改看板
 
+> 第205波：异机前置继续：`e4399f28` 迁移 log_silent/log_sync/log_v Runtime owner（结构 31 passed）；`838ad234` 增加 NativeProviderConsumerContract ABI/provider一致性（结构 6 passed）；`b37ec5c1` ACL descriptor cache 单键失效（ACL 26 passed）；`3e2e9633` 统一 standalone torch distribution facade（namespace 30 passed）。未声称 CUDA/NPU 实机。
+
+
 > 第204波：异机前置继续：`5656f81a` 迁移 trace_var_data Runtime owner（结构 28 passed）；`6c073efa` 增加 NativeProviderMetadata value snapshot（结构 5 passed）；`d328bb5a` 建立 ACL descriptor key/cache host-only boundary（ACL 26 passed）；`165f9a0e` 增加 standalone torch distribution manifest validator（namespace 27 passed，既有 install-context 计数失败未归因本切片）。未声称 CUDA/NPU 实机。
 
 

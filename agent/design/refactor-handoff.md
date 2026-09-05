@@ -1976,6 +1976,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `d328bb5a` 建立 ACL descriptor key/cache host-only shell，descriptor 合同 26 passed；不创建 CANN 对象，NPU 实机仍待。 |
 | `compat` | `165f9a0e` 增加 standalone torch distribution manifest validator，namespace 27 passed；独立 distribution 完整发布仍待。 |
 
+### 2026-09-05 第二百零五波：异机日志/descriptor/distribution 前置
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `e4399f28` 将 log_silent/log_sync/log_v 纳入 RuntimeContext owner，结构 31 passed；全局状态仍待迁移。 |
+| `device` | `838ad234` 增加 NativeProviderConsumerContract，校验 provider/provider_id/ABI 一致性，结构 6 passed；真实 provider 仍待硬件。 |
+| `device` | `b37ec5c1` 增加 ACL descriptor 单键失效，ACL 合同 26 passed；CANN/NPU runner仍待。 |
+| `compat` | `3e2e9633` 统一 standalone torch distribution facade，namespace 30 passed；独立 distribution 完整发布仍待。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
