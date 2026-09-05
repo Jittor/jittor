@@ -820,6 +820,11 @@ class RuntimeContext:
         return self._flags.auto_flush_ops
 
     @property
+    def auto_convert_64_to_32(self):
+        """Whether NumPy 64-bit scalar arrays are narrowed on import."""
+        return self._flags.auto_convert_64_to_32
+
+    @property
     def no_grad(self):
         """Whether newly created operations are excluded from autograd."""
         return self._flags.no_grad
@@ -907,6 +912,7 @@ class RuntimeContext:
             "use_cuda": int(self.use_cuda),
             "lazy_execution": int(self.lazy_execution),
             "auto_flush_ops": int(self.auto_flush_ops),
+            "auto_convert_64_to_32": int(self.auto_convert_64_to_32),
             "no_grad": int(self.no_grad),
             "amp_reg": int(self.amp_reg),
             "auto_mixed_precision_level": int(self.auto_mixed_precision_level),
@@ -957,6 +963,10 @@ class RuntimeState:
     @property
     def auto_flush_ops(self):
         return self._context.auto_flush_ops
+
+    @property
+    def auto_convert_64_to_32(self):
+        return self._context.auto_convert_64_to_32
 
     @property
     def no_grad(self):

@@ -31,6 +31,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "use_cuda": jt.flags.use_cuda,
         "lazy_execution": jt.flags.lazy_execution,
         "auto_flush_ops": jt.flags.auto_flush_ops,
+        "auto_convert_64_to_32": jt.flags.auto_convert_64_to_32,
         "no_grad": jt.flags.no_grad,
         "amp_reg": jt.flags.amp_reg,
         "auto_mixed_precision_level": jt.flags.auto_mixed_precision_level,
@@ -126,6 +127,29 @@ def test_runtime_auto_flush_ops_is_a_live_read_only_view():
             jt.runtime.context.auto_flush_ops = 0
     finally:
         jt.flags.auto_flush_ops = original
+
+
+def test_runtime_auto_convert_64_to_32_is_a_live_view_and_controls_cpu_array_dtype():
+    import numpy as np
+    import jittor as jt
+
+    original = jt.flags.auto_convert_64_to_32
+    try:
+        assert jt.runtime.auto_convert_64_to_32 == original
+        with jt.flag_scope(auto_convert_64_to_32=0):
+            assert jt.runtime.auto_convert_64_to_32 == 0
+            assert jt.runtime.context.snapshot()["auto_convert_64_to_32"] == 0
+            assert jt.array(np.array([1.5], dtype=np.float64)).dtype == "float64"
+        with jt.flag_scope(auto_convert_64_to_32=1):
+            assert jt.runtime.auto_convert_64_to_32 == 1
+            assert jt.array(np.array([1.5], dtype=np.float64)).dtype == "float32"
+        assert jt.runtime.auto_convert_64_to_32 == original
+        with pytest.raises(AttributeError):
+            jt.runtime.auto_convert_64_to_32 = 0
+        with pytest.raises(AttributeError):
+            jt.runtime.context.auto_convert_64_to_32 = 0
+    finally:
+        jt.flags.auto_convert_64_to_32 = original
 
 
 def test_runtime_no_grad_is_a_live_read_only_view():
