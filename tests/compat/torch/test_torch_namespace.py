@@ -206,3 +206,25 @@ def test_missing_later_parent_fails_closed_without_transaction():
 
     assert not hasattr(namespace, "nn")
     assert not hasattr(owner, "nn")
+
+
+def test_missing_parent_does_not_leave_root_alias_rebound():
+    """Preflight failure must not mutate the published root alias."""
+    owner = types.ModuleType("jittor")
+    namespace = independent_torch_namespace(owner)
+    orphan = types.ModuleType("torch.optim.sgd")
+    published = {
+        "torch": owner,
+        "torch.torch": owner,
+        "torch.optim.sgd": orphan,
+    }
+
+    try:
+        bind_published_namespace(namespace, published)
+    except RuntimeError as error:
+        assert "parent 'torch.optim' is not published" in str(error)
+    else:
+        raise AssertionError("missing parent was accepted")
+
+    assert published["torch.torch"] is owner
+    assert not hasattr(namespace, "optim")

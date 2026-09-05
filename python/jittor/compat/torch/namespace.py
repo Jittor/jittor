@@ -81,12 +81,6 @@ def bind_published_namespace(namespace, published, transaction=None):
     # only this explicit root alias; other published modules may legitimately
     # be shared implementation objects.
     owner_alias = "torch.torch"
-    if modules.get(owner_alias) is namespace.owner:
-        modules[owner_alias] = namespace
-        old = published.get(owner_alias)
-        published[owner_alias] = namespace
-        if transaction is not None:
-            transaction.record(published, owner_alias, old, namespace)
     # Validate the complete parent closure before mutating the namespace.  A
     # caller outside activation may not provide a transaction; discovering a
     # missing parent after binding an earlier sibling would otherwise leave a
@@ -102,6 +96,14 @@ def bind_published_namespace(namespace, published, transaction=None):
             "cannot bind published module %r: parent %r is not published"
             % (name, parent_name)
         )
+    # Apply the root alias only after the complete closure has passed.  This
+    # keeps the no-transaction failure path side-effect free as well.
+    if modules.get(owner_alias) is namespace.owner:
+        modules[owner_alias] = namespace
+        old = published.get(owner_alias)
+        published[owner_alias] = namespace
+        if transaction is not None:
+            transaction.record(published, owner_alias, old, namespace)
     parents = {"torch": namespace}
     for name in sorted(modules, key=lambda item: (item.count("."), item)):
         # The registry includes its root entry as well as children.  The root
