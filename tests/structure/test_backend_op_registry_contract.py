@@ -82,6 +82,13 @@ def test_registry_snapshot_exposes_read_only_lifecycle_queries():
     assert snapshot.supported_ops("cuda") == ("add", "copy")
     assert snapshot.has_kernel("add", "cpu")
     assert not snapshot.has_kernel("missing", "cpu")
+    assert snapshot.provider_for("copy", "cuda").name == "cuda"
+    try:
+        snapshot.provider_for("missing", "cuda")
+    except MissingKernel:
+        pass
+    else:
+        raise AssertionError("snapshot provider query accepted a missing kernel")
     try:
         snapshot.backend("metal")
     except UnknownBackend:
@@ -425,6 +432,25 @@ def test_registry_snapshot_is_coherent_across_provider_replacement():
     # earlier diagnostic view.
     assert before.backends[1].capabilities == {}
     assert before.kernels == (("add", "cuda"),)
+
+
+def test_snapshot_provider_query_survives_provider_teardown():
+    """A captured provider/kernel pair remains queryable after teardown."""
+    backends = BackendRegistry((BackendSpec("cpu"), BackendSpec("cuda")))
+    ops = OpRegistry(backends)
+    ops.register("copy", "cuda", lambda value: value)
+    snapshot = ops.snapshot_state()
+
+    ops.unregister_backend("cuda")
+    provider = snapshot.provider_for("copy", "cuda")
+    assert provider.name == "cuda"
+    assert provider is snapshot.backend("cuda")
+    try:
+        ops.dispatch("copy", "cuda", 1)
+    except UnknownBackend:
+        pass
+    else:
+        raise AssertionError("live dispatch remained available after teardown")
 
 
 def test_provider_registration_is_fail_closed_without_replacement():

@@ -165,6 +165,19 @@ class RegistrySnapshot:
         self.backend(backend)
         return (op, backend) in self.kernels
 
+    def provider_for(self, op: str, backend: str) -> BackendSpec:
+        """Return the provider that owns ``op`` in this snapshot.
+
+        This combines the provider and kernel queries so lifecycle consumers
+        cannot resolve a provider from one snapshot and then accidentally
+        consult a newer live registry for kernel ownership.  The returned
+        ``BackendSpec`` is the immutable value captured by this snapshot.
+        """
+        provider = self.backend(backend)
+        if (op, backend) not in self.kernels:
+            raise MissingKernel("no kernel registered for %s/%s" % (op, backend))
+        return provider
+
 
 class BackendRegistry:
     """Thread-safe registry keyed by backend name.
