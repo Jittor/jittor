@@ -161,6 +161,10 @@ public:
     void bind_provider(const string& name, const string& provider);
     NativeOpDispatchKey resolve_provider(const string& name,
                                          const string& provider) const;
+    // Consumer-side stale-key guard.  A key becomes invalid after provider
+    // replacement, unbinding, or operator removal; this query never throws
+    // and does not expose registry-owned storage to backend code.
+    bool is_current(const NativeOpDispatchKey& dispatch_key) const;
     bool unregister_provider(const string& provider);
 
 private:

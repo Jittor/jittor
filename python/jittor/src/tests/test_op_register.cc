@@ -65,6 +65,7 @@ JIT_TEST(native_op_registry_provider_dispatch_boundary) {
     ASSERT(key.valid());
     ASSERT(key.provider_id == registry.provider_id("cpu"));
     ASSERT(key.abi_version == NATIVE_PROVIDER_ABI_VERSION);
+    ASSERT(registry.is_current(key));
     auto published = registry.provider_registration("cpu");
     ASSERT(published.name == cpu_registration.name);
     ASSERT(published.abi_version == cpu_registration.abi_version);
@@ -77,9 +78,15 @@ JIT_TEST(native_op_registry_provider_dispatch_boundary) {
     ASSERT(registry.has_provider("cpu"));
     auto replacement = registry.provider_id("cpu");
     ASSERT(replacement != key.provider_id);
+    ASSERT(!registry.is_current(key));
+    registry.bind_provider("jit_test_provider_dispatch", "cpu");
+    auto replacement_key = registry.resolve_provider(
+        "jit_test_provider_dispatch", "cpu");
+    ASSERT(registry.is_current(replacement_key));
     ASSERT(!registry.unregister_provider("missing"));
     ASSERT(registry.unregister_provider("cpu"));
     ASSERT(!registry.has_provider("cpu"));
+    ASSERT(!registry.is_current(replacement_key));
     ASSERT(registry.unregister("jit_test_provider_dispatch"));
 }
 

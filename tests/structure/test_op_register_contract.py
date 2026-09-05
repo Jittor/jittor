@@ -111,6 +111,8 @@ def test_native_provider_lifecycle_consumer_is_value_only_and_non_owning():
         assert method in jit_test
     assert "NativeProviderLifecycleObserver* lifecycle_observer" in header
     assert "set_lifecycle_observer" in header
+    assert "bool is_current(const NativeOpDispatchKey& dispatch_key) const" in header
+    assert "NativeOpRegistry::is_current" in source
     # The lifecycle seam may not own a backend object or expose one through
     # the ABI header.  Providers retain their handles on their own side.
     assert "shared_ptr<NativeProviderLifecycleObserver>" not in header

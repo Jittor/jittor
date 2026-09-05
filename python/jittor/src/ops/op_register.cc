@@ -254,6 +254,29 @@ NativeOpDispatchKey NativeOpRegistry::resolve_provider(
             registration_iter->second.abi_version};
 }
 
+bool NativeOpRegistry::is_current(
+        const NativeOpDispatchKey& dispatch_key) const {
+    if (!dispatch_key.valid())
+        return false;
+    std::lock_guard<std::recursive_mutex> guard(mutex);
+    auto provider_iter = provider_bindings.find(dispatch_key.provider);
+    if (provider_iter == provider_bindings.end() ||
+            !provider_iter->second.size())
+        return false;
+    auto id_iter = provider_ids.find(dispatch_key.provider);
+    auto registration_iter = provider_registrations.find(dispatch_key.provider);
+    if (id_iter == provider_ids.end() || registration_iter == provider_registrations.end() ||
+            id_iter->second != dispatch_key.provider_id ||
+            registration_iter->second.abi_version != dispatch_key.abi_version)
+        return false;
+    for (const auto& op_name : provider_iter->second) {
+        auto op_iter = entries.find(op_name);
+        if (op_iter != entries.end() && op_iter->second.id == dispatch_key.op_id)
+            return true;
+    }
+    return false;
+}
+
 bool NativeOpRegistry::unregister_provider(const string& provider) {
     NativeProviderLifecycleObserver* observer = nullptr;
     NativeProviderRegistration registration;
