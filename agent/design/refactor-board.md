@@ -1,5 +1,8 @@
 # 整改看板
 
+> 第181波增量：`409de4ea` 将 `jt.runtime.sync_run` 纳入 RuntimeContext owner（结构 3 passed）；`756a0fb6` 让 Torch stop_grad 清理 requires_grad owner（Torch state/autograd 定向 37 passed）；`db0f2a27` 补齐真实 CPU location 与 outer/clamp registry 回归（7 passed）；`faad4898` 将 smoke 独立组改用 loadgroup，11 个 nodeid 结论逐条 IDENTICAL。2.13/7.12/4.03/4.04/0.15 均仍是聚合任务，保持「待领」。
+
+
 > 第180波增量：`696e5088` 将 7.12 requires_grad 状态收归 `TorchTensorState` owner（生命周期 6 passed）；`6e5c2d5c` 将 CPU `clamp` 接入 BackendRegistry/OpRegistry 真实分派（registry 合同 5 passed、CPU 数值通过）；`adf96b02` 完成 2.19 `reindex_reduce` 负 shape 用户边界。三项均为聚合任务的真实前置，完整任务继续保持「待领」。
 
 > 第180波增量：2.19 `reindex_reduce` shape-value 用户边界完成迁移。`reindex_reduce_op.cc` 将负 shape 检查从 `CHECKop` 改为可跨 pyjt 捕获的 `USER_CHECKop`；现有 `[-1]` 负向用例与结构分类门禁通过（`tests/structure/test_error_categories.py`、`tests/ops/test_reindex_reduce_op.py` 共通过）。2.19 聚合任务仍保持「待领」，其余调用点与 CUDA 多卡/不可达 cuTT 证据未被此切片覆盖。
@@ -381,7 +384,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 0.12 | 14 处在用例里裸赋值 `jt.flags.*` 且无 tearDown 的测试改 `flag_… | 已合并 | gates | 26a20905 |
 | 0.13 | conftest 的模式由显式环境变量决定，删除 `sys.argv` 嗅探 | 已合并 | gates | 5c0f2364、a4ebb31a。**日常影响**：手跑 `tests/structure`、`tests/compat/torch`、`tests/ops/test_ops.py` 等 `TORCH_MODE_PATHS` 下的路径要带 `JITTOR_TORCH_SHIM=1`，不带会得到一条指名变量的报错（而不是一次语义不对的绿）。`nox -s structure` 已经自己设了 |
 | 0.14 | `_session_env` 不再 `os.environ.copy()` | 已合并 | gates | 6b8fb594。未声明宿主变量显式屏蔽，工具链/下载入口按白名单透传；OMP/MKL/OpenBLAS 等线程池固定并随 worker 缩放，子进程 probe 断言线程数与 CPU affinity。聚焦结构 18 passed，真实 nox probe 在受限 affinity 下通过 |
-| 0.15 | 门禁分两层 | 待领 | | d957e4aa、9329c4f9、9f6a80c7、2fd26522 已合入：按实测慢文件拆出 smoke/full、并行度单点声明、PR smoke job 与 JIT cache 已接入。`876ec09c` 修正 RingBuffer worker-death 等待；独立 Dataset 两个 worker 监管 nodeid 在临时缓存下 2 passed/65.68 s，但完整 smoke 仍约 390 s、预算模型约 446 s，尚未达到原验收的 5 分钟；还需减少或降低有效测试工作量，不能靠扩大排除清单假达标 |
+| 0.15 | 门禁分两层 | 待领 | gates | `faad4898` 将 smoke 独立组切到 xdist loadgroup，11 个 nodeid 与 loadfile 结论逐条 IDENTICAL；完整 smoke 仍未达到 300s 目标。d957e4aa、9329c4f9、9f6a80c7、2fd26522 已合入：按实测慢文件拆出 smoke/full、并行度单点声明、PR smoke job 与 JIT cache 已接入。`876ec09c` 修正 RingBuffer worker-death 等待；独立 Dataset 两个 worker 监管 nodeid 在临时缓存下 2 passed/65.68 s，但完整 smoke 仍约 390 s、预算模型约 446 s，尚未达到原验收的 5 分钟；还需减少或降低有效测试工作量，不能靠扩大排除清单假达标 |
 | 0.16 | `test_device_parity.py` 按算子分片并行，不再在 `setUpClass`… | 已合并 | gates | 120b004b。实测结论与原方案相反：4-worker 只快 6% 且 26 项丢 3 个结论，因此保留单进程；只移除错误的串行编译器强制关闭。后续真正压缩时长另见 0.22 |
 | 0.17 | `pyproject.toml` 的 `pythonpath` 改由 conftest 按环境变… | 已合并 | 构建 | b19d098f |
 | 0.18 | 门禁每条目断言至少执行 1 个非 skip 用例 | 已合并 | gates | ee29bee3、2f3f1aaf。恒 skip 的判据**从路径清单改成规则**：读测试自己写的 skip 理由，全都在说「这台机器缺某样东西」才算解释得通。清单版在这台机器上会是 73 条、换台机器又是另外 73 条，而且每加一个设备测试都要记得报到。规则一上线就抓出四个说不清自己缺什么的文件（`Not use cub, Skip`、`skip_this_test`），都改成说明缺什么，而不是给它们开豁免 |
@@ -408,7 +411,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 2.10 | 三套 liveness 计数 | 已合并 | coreops | 8bd07e51。f/b/p 收进无额外存储的 NodeLiveness；own 防溢出，release 对无匹配 owner 的下溢立即报错，跨零返回值统一传播边界；need_free 与 graph expected-count 由封装提供，release 构建常开。C++ liveness/check_graph 契约与 CPU 生命周期 2 项通过；状态逻辑后端无关，未追加 GPU 编译 |
 | 2.11 | `VarHolder` 不再是执行触发点 | 已合并 | coreops | 0f709cff。VarHolder 构造只登记持有关系；lazy/eager/auto-flush 策略迁入 Executor::submit_pending，Var 完成 Python 对象转换后才提交，显式 core.submit_pending 可无设备同步启动目标子图；删除 flush_suspended 与构造期吞错。构造/边界结构 2 项、CPU 显式提交/错误边界 2 项、GPU1 auto-flush 等价 1 项通过 |
 | 2.12 | 打破 `Executor ⇄ VarHolder` include 环 | 已合并 | coreops | 318a688e。依赖 exe.allocator 的 migrate_to_cpu/data/raw_ptr/set_data 四个 inline 实现移到 var_holder.cc，var_holder.h 不再包含 executor.h 或引用全局 exe；executor.cc -> var_holder.h 保持单向，方法签名与行为不变。无 Python include 的独立头语法编译、依赖方向结构节点、CPU submit_pending 节点通过 |
-| 2.13 | 执行相关全局状态 | 待领 | | |
+| 2.13 | 执行相关全局状态 | 待领 | coreops | `409de4ea` 已建立 RuntimeContext owner 与只读 Python view，`sync_run` owner/snapshot/flag_scope 结构 3 passed；其余 flags/device hooks 仍待迁移。 |
 | 2.14 | `src/misc/` 拆散 | 待领 | | |
 | 2.15 | NanoString | 已合并 | bindings | 9d5ed413（索引位宽 7→8、static_assert 把表与字段绑住、`ns_check_registration` 在注册期查索引与名字长度；"dtype 表改运行期注册"那半未做，见提交说明） |
 | 2.16 | 类型提升表 | 已合并 | bindings | d821c34a（int_dtype_promote 提升格；标量按 `_is_scalar` 标志认，不再按形状；float 标量把整数张量提到默认 float dtype）、a39a2f1c（补：双标量走提升格，交换左右操作数不再改变 dtype 与结果） |
@@ -572,7 +575,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 7.09 | `torch.library` | 已合并 | compat | 99901e6c、d0a782a0。按张量真实驻留选择 CPU/CUDA 并排除 Meta，`register_autograd` 真正接入且模型特判移出通用注册层；线程局部 autocast dtype policy 进一步选择 AutocastCPU/CUDA，嵌套禁用与退出恢复普通路由。独立 PyTorch oracle 一致，CPU dispatch 8 passed、1 个未分配 CUDA 节点 skipped |
 | 7.10 | `torch.compile`/`jit.trace`/`jit.script` 保留 pass… | 已合并 | 兼容层分区 | 3d898ece。语义参数拒绝、permissive allowlist/audit 与 ShapeProp ImportError 验收均有测试 |
 | 7.11 | autograd 语义 | 已合并 | compat | `2ec34693`：`Var.is_leaf` 转发内核 `is_backward_leaf`，`Var.grad_fn` 对叶子返回 None、对非叶子返回 node/op/name 代理；shim autograd 语义 20 passed，core backward-leaf 查询 20 passed。requires_grad 策略差异仍归 7.12。 |
-| 7.12 | 独立 torch 包 | 待领 | | **内核前置 `2.25` 已就位（提交 `c6e62ba1`、`781d4188`）**；`b2782315`/`06eba9aa`/`219c5b44`/`b3225844`/`ad46690d` 已将 leaf、retained、optimizer 注册表收进显式 `TorchTensorState` owner，保留旧别名并修复旧进程 retained 条目迁移；状态迁移定向测试 4 passed。这仍只是状态所有权前置，独立 torch 包的完整 requires_grad/模块边界与聚合验收继续待领。 |
+| 7.12 | 独立 torch 包 | 待领 | | **内核前置 `2.25` 已就位（提交 `c6e62ba1`、`781d4188`）**；`b2782315`/`06eba9aa`/`219c5b44`/`b3225844`/`ad46690d`/`696e5088`/`756a0fb6` 已将 leaf、retained、optimizer、requires_grad 状态收进显式 `TorchTensorState` owner，stop_grad 会清理 owner 强引用；状态/autograd 定向 37 passed。这仍只是状态所有权前置，独立 torch 包的完整 requires_grad/模块边界与聚合验收继续待领。 |
 | 7.13 | FSDP2 | 待领 | | 已合入 37c0aed4、c0e6e1ae、48da7360、873dd5cf；仍缺峰值显存达标、复用原生 optimizer 更新逻辑与 DeviceMesh 真实分组 |
 | 7.14 | vLLM 边界检查把 `torch` 视作 jittor 别名 | 已合并 | 兼容层分区 | 178be65a |
 | 7.15 | `_rebuild_tensor_v2` 按 stride 还原或报错 | 已合并 | | 7e7877c8 |

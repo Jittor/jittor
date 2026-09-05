@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；当前状态基线 `eabe9c02`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 当前 1616 个 |
+| 分支 | `2.0-refactor`；当前状态基线 `a98d17c6`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 当前 1621 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **211** / 进行中 **0** / 待领 **61** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
@@ -1748,7 +1748,16 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `compat` | `696e5088` 让 7.12 的 requires_grad 状态由 `TorchTensorState` owner 持有，setter/FSDP peer 更新统一走 owner；生命周期定向 6 passed。独立 torch 包边界与完整 requires_grad 语义仍待领。 |
 | `coreops` | `adf96b02` 将 `reindex_reduce` 负 shape 边界改为用户错误，已有负向与结构门禁通过；2.19 聚合仍待领。 |
 | `device` | `6e5c2d5c` 将 CPU `clamp` 路径接入 BackendRegistry/OpRegistry 真实分派，registry 合同 5 passed 且 CPU 数值通过；CUDA/ACL 路由与完整 4.03/4.04 仍待领。 |
-| `gates` | 本波未形成新的 0.15 性能提交，真实性能目标保持待领。 |
+| `gates` | `faad4898` 将 smoke 独立组切到 xdist loadgroup，11 个 nodeid 与 loadfile 结论逐条 IDENTICAL；完整 smoke 仍未达到 300s 目标。 |
+
+### 2026-09-05 第一百八十一波
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `409de4ea` 建立 RuntimeContext owner 与只读 RuntimeState view，`sync_run` owner/snapshot/flag_scope 结构 3 passed；2.13 其余 flags 仍待领。 |
+| `compat` | `756a0fb6` 让 `stop_grad` 清理 TorchTensorState requires_grad owner，修复 detached requires_grad 残留；Torch state/autograd 定向 37 passed，7.12 整项仍待领。 |
+| `device` | `db0f2a27` 修正真实 CPU `Var.location() == "none"` 的 backend 识别，并补 outer/clamp registry 数值回归；定向 7 passed，4.03/4.04 整项仍待领。 |
+| `gates` | `faad4898` 将 smoke 独立组切换到 loadgroup，结论对比 11/11 IDENTICAL；0.15 最终时长目标仍待领。 |
 
 ## 7. 接手怎么开始
 
