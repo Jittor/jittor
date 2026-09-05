@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；当前状态基线 `e4197027`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 当前 1641 个 |
+| 分支 | `2.0-refactor`；当前状态基线 `4f45c95a`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 当前 1646 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **211** / 进行中 **0** / 待领 **61** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
@@ -1785,6 +1785,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `86b9c1cd` 支持 `cuda`/`cuda:<id>` location，未知 backend 明确 `UnknownBackend`，结构 10 passed；4.03/4.04 完整 native 接线仍待领。 |
 | `compat` | `330d0a4c`/`9bbf87aa` 让显式 activation 发布独立 TorchNamespace 并接通事务替换；namespace 2 passed、bootstrap 1 passed，默认 shim 身份保持不变，完整 7.12 仍待领。 |
 | `gates` | `5c6876cd` 将 cgroup v1/v2 CPU quota 纳入 worker budget，结构 22 passed；0.15 最终时长仍需真实全量验收。 |
+
+### 2026-09-05 第一百八十五波
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `8b1c2707` 将 `auto_flush_ops` 纳入 RuntimeContext owner，snapshot/类型声明/flag_scope 结构 7 passed；2.13 其余状态仍待领。 |
+| `device` | `ba2c88e5` 增加 `unregister_backend` 的 kernel 原子 teardown，重复/未知注销 fail-closed；结构/行为 11 passed。4.03/4.04 native 全量接线仍待领。 |
+| `compat` | `d52f02ac` 锁定 activation 后的 native/independent namespace 模式，冲突切换硬失败；bootstrap/namespace 11 passed。7.12 完整模块迁移仍待领。 |
+| `gates` | `cab14f53` 将实际 cgroup v1/v2 quota 纳入 xdist worker 上限，结构/环境 24 passed；0.15 完整时长仍待最终验收。 |
 
 ## 7. 接手怎么开始
 
