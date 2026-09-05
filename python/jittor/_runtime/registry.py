@@ -12,6 +12,25 @@ import threading
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Tuple
 
 
+def _cpu_device_count() -> int:
+    """Return the logical host-device count used by the CPU provider."""
+    return 1
+
+
+def _cpu_allocator(size: int) -> bytearray:
+    """Allocate zeroed host storage for the registry's CPU provider.
+
+    This deliberately returns a Python-owned buffer: the registry remains
+    importable without loading the native runtime while still exposing a real
+    allocator hook that callers can exercise.
+    """
+    if isinstance(size, bool) or not isinstance(size, int):
+        raise TypeError("CPU allocation size must be an integer")
+    if size < 0:
+        raise ValueError("CPU allocation size must be non-negative")
+    return bytearray(size)
+
+
 class RegistryError(RuntimeError):
     """Base class for registry failures."""
 
@@ -74,7 +93,8 @@ class BackendRegistry:
                 if cls._default is None:
                     cls._default = cls((
                         BackendSpec(
-                            "cpu", device_count=lambda: 1,
+                            "cpu", device_count=_cpu_device_count,
+                            allocator=_cpu_allocator,
                             capabilities={"allocator": True, "memcpy": True,
                                           "synchronize": True}),
                         BackendSpec(
@@ -147,4 +167,3 @@ class OpRegistry:
         self.backends.get(backend)
         with self._lock:
             return tuple(sorted(op for op, bk in self._kernels if bk == backend))
-
