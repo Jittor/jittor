@@ -7,7 +7,7 @@
 #pragma once
 #include <unordered_map>
 #include "node.h"
-#include "misc/traversal_epoch.h"
+#include "runtime/traversal_epoch.h"
 // For Op::flag: the edge test below has to read an *Op* flag, and only an Op*
 // can name one now (NodeFlags in node.h). A forward declaration is no longer
 // enough, which is the type system doing its job.

@@ -28,6 +28,10 @@ int main() {
     assert(&runtime_holder_state() == &native_runtime().holders());
     assert(&isolated.executor() != &runtime_executor());
     assert(&isolated.holders() != &runtime_holder_state());
+    assert(&runtime_traversal_state() == &native_runtime().traversals());
+    assert(&isolated.traversals() != &runtime_traversal_state());
+    assert(isolated.traversals().stamp_count() == 0);
+    assert(isolated.traversals().active_epochs() == 0);
     static_assert(!std::is_copy_constructible<RuntimeHolderState>::value, "owner");
     static_assert(!std::is_move_constructible<RuntimeHolderState>::value, "cursor");
     RuntimeHolderState roots;
@@ -88,3 +92,13 @@ def test_executor_instance_is_owned_by_native_runtime():
     assert "EXTERN_LIB Executor exe;" not in executor_header
     assert "Executor exe;" not in executor_source
     assert "EXTERN_LIB Executor& runtime_executor();" in executor_header
+
+
+def test_traversal_storage_and_implementation_belong_to_runtime():
+    assert not (SRC / "misc/traversal_epoch.h").exists()
+    assert not (SRC / "misc/traversal_epoch.cc").exists()
+    node = (SRC / "node.h").read_text(encoding="utf-8")
+    epoch = (SRC / "runtime/traversal_epoch.cc").read_text(encoding="utf-8")
+    assert "EXTERN_LIB int64 tflag_count" not in node
+    assert "TraversalEpoch::live_count" not in epoch
+    assert "runtime_traversal_state()" in epoch

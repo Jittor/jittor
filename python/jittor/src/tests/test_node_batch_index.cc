@@ -6,9 +6,42 @@
 #include "var.h"
 #include "node.h"
 #include "misc/node_index.h"
-#include "misc/traversal_epoch.h"
+#include "runtime/traversal_epoch.h"
+#include "runtime/runtime.h"
 
 namespace jittor {
+
+JIT_TEST(runtime_traversal_state_restores_after_exception) {
+    VarPtr value({4}, "float32");
+    auto& state = runtime_traversal_state();
+    CHECK(&state == &native_runtime().traversals());
+    const auto before = state.stamp_count();
+    const auto active = state.active_epochs();
+    {
+        TraversalEpoch outer("runtime_outer");
+        CHECKop(outer.stamp,==,before + 1);
+        CHECKop(state.active_epochs(),==,active + 1);
+        outer.mark(value.ptr);
+        if (active == 0) CHECK(outer.displaced.empty());
+        try {
+            TraversalEpoch inner("runtime_inner");
+            inner.mark(value.ptr);
+            {
+                TraversalEpoch nested("runtime_nested");
+                nested.mark(value.ptr);
+                CHECKop(state.active_epochs(),==,active + 3);
+                CHECK(nested.marked(value.ptr));
+            }
+            CHECK(inner.marked(value.ptr));
+            throw std::runtime_error("unwind traversal");
+        } catch (const std::runtime_error&) {
+            CHECKop(state.active_epochs(),==,active + 1);
+            CHECK(outer.marked(value.ptr));
+        }
+    }
+    CHECKop(state.active_epochs(),==,active);
+    CHECKop(state.stamp_count(),==,before + 3);
+}
 
 // Node::batch_index is the one per-node scratch slot left after 2.02. It is
 // allowed to stay on the node only because reading it is *checked*: the reader

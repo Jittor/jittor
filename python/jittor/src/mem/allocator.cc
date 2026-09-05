@@ -19,7 +19,7 @@
 #include "mem/allocator/nfef_allocator.h"
 #include "mem/allocator/temp_allocator.h"
 #include "mem/swap.h"
-#include "misc/traversal_epoch.h"
+#include "runtime/traversal_epoch.h"
 #include "var.h"
 
 namespace jittor {

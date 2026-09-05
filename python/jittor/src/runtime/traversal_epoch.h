@@ -6,13 +6,14 @@
 #pragma once
 #include "common.h"
 #include "node.h"
+#include "runtime/traversal_state.h"
 
 namespace jittor {
 
 /**
  * One traversal's claim on `Node::tflag`.
  *
- * A stamp from `tflag_count` keeps the common membership test to one integer
+ * A stamp from the runtime traversal state keeps membership to one integer
  * comparison. The object owns that stamp and, unlike the old bare integer,
  * also owns the work needed to preserve it across nesting.
  *
@@ -34,6 +35,10 @@ namespace jittor {
  * to stay alive for the duration of the walk.
  */
 struct TraversalEpoch {
+private:
+    RuntimeTraversalState& state_;
+
+public:
     int64 stamp;
     const char* name;
     vector<pair<Node*, int64>> displaced;
@@ -48,8 +53,8 @@ struct TraversalEpoch {
     inline void mark(Node* node) {
         if (node->tflag == stamp) return;
         // Only a nested traversal needs a restoration log. The branch is cold
-        // in ordinary execution, where live_count is exactly one.
-        if (PREDICT_BRANCH_NOT_TAKEN(live_count > 1))
+        // in ordinary execution, where one epoch is active.
+        if (PREDICT_BRANCH_NOT_TAKEN(state_.active_epochs() > 1))
             displaced.emplace_back(node, node->tflag);
         node->tflag = stamp;
     }
@@ -59,8 +64,6 @@ struct TraversalEpoch {
         return node->tflag == stamp;
     }
 
-    /// Number of epochs alive right now; 1 is the allocation-free fast path.
-    static int live_count;
 };
 
 } // jittor

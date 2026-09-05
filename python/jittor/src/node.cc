@@ -13,7 +13,6 @@
 
 namespace jittor {
 
-int64 tflag_count = 0;
 int free_buffer_depth = 0;
 // See graph.cc: check_graph turns this on so that the dangling-node half of
 // do_graph_check has something to sweep in a build without NODE_MEMCHECK.

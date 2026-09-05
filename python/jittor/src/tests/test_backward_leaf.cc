@@ -8,7 +8,7 @@
 #include "node.h"
 #include "op.h"
 #include "var.h"
-#include "misc/traversal_epoch.h"
+#include "runtime/traversal_epoch.h"
 
 namespace jittor {
 
@@ -115,18 +115,18 @@ JIT_TEST(backward_leaf_query_ignores_control_dependencies) {
 
 // The cost claim, asserted rather than described: the query opens no traversal.
 // Every graph walk in this tree takes a TraversalEpoch, and every epoch bumps
-// tflag_count -- so an unchanged counter is proof that no walk happened, and
+// the runtime stamp counter -- so no change proves no walk happened, and
 // therefore that the answer is independent of how large the graph is.
 JIT_TEST(backward_leaf_query_opens_no_traversal) {
     VarPtr v({4}, ns_float32);
     for (int i=0; i<64; i++) v = make_test_op({v.ptr});
 
-    int64 before = tflag_count;
+    int64 before = runtime_traversal_state().stamp_count();
     for (int i=0; i<64; i++) {
         CHECK(!is_backward_leaf(v.ptr));
         CHECK(backward_grad_fn(v.ptr) != nullptr);
     }
-    CHECKop(tflag_count,==,before);
+    CHECKop(runtime_traversal_state().stamp_count(),==,before);
 }
 
 // 2.03 made traversal marks an epoch object so that a walk starting inside

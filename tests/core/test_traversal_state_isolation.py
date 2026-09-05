@@ -88,6 +88,9 @@ class TestBatchIndexIsChecked(unittest.TestCase):
         # only those nested writes and restores them before the outer resumes.
         jt.tests.traversal_epoch_restores_outer_marks()
 
+    def test_runtime_traversal_state_restores_after_exception(self):
+        jt.tests.runtime_traversal_state_restores_after_exception()
+
     def test_the_table_the_other_traversals_use_behaves(self):
         # The same question for NodeIndex: a reference stays valid across
         # further inserts (the topological sorts do `--index[node]`), and a

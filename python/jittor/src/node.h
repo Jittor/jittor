@@ -211,7 +211,6 @@ static_assert((int)OpFlags::_op_type_high == (int)OpFlags::_op_type + 1,
 static_assert((int)NodeFlags::_node_order_high == (int)NodeFlags::_node_order_low + 1,
     "node_order is read as two bits and they are no longer adjacent");
 
-EXTERN_LIB int64 tflag_count;
 
 // Binding and diagnostic layers may observe node lifetime without making the
 // graph data structure depend on either of them. The observer is non-owning;

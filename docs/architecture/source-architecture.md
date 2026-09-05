@@ -131,17 +131,23 @@ This preserves the existing serialized mutation requirement, not a new
 thread-safety guarantee.
 
 `src/runtime/runtime.{h,cc}` owns the process-lifetime `NativeRuntime`, containing
-the executor and held-root state. `runtime_executor()` and `runtime_holder_state()`
+the executor, held-root state and traversal state. `runtime_executor()` and `runtime_holder_state()`
 resolve to that same owner from the core, JIT operators and backend libraries.
 The executor starts with null allocator pointers; construction does not select
 a device or initialize a backend. Fork initialization resets its existing device
-state without recreating inherited holders. Traversal counters and native flags
-remain separate pending migrations.
+state without recreating inherited holders. `runtime_traversal_state()` shares
+the stamp counter and active-epoch count across core and JIT libraries.
+`TraversalEpoch` lives in `src/runtime/`; nested traversal marks are restored
+before leaving the epoch, including exception unwinding. Fork preserves the
+counter to avoid colliding with inherited node stamps. Native flags remain a
+pending ownership migration.
 
 The former exported `Executor exe` data symbol is removed. In-tree CUDA/ACL
 consumers and embedded CUDA templates use `runtime_executor()` from `executor.h`.
 Out-of-tree C++ extensions must update that access and rebuild against the new
 headers/core library; old precompiled extensions are not binary compatible.
+The former `tflag_count` symbol and `misc/traversal_epoch.h` path are also removed;
+extensions using traversal internals must use the runtime header and rebuild.
 `compiler.py`, `compile_extern.py`,
 `pyjt_compiler.py`, and `init_cupy.py` are compiler or device bootstrap
 boundaries; `distributions.py`, `init.py`, and `linalg.py` are public native

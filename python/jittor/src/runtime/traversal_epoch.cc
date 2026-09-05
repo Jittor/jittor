@@ -3,22 +3,18 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include "misc/traversal_epoch.h"
+#include "runtime/traversal_epoch.h"
 
 namespace jittor {
 
-int TraversalEpoch::live_count = 0;
-
 TraversalEpoch::TraversalEpoch(const char* name)
-    : stamp(++tflag_count), name(name) {
-    live_count++;
-}
+    : state_(runtime_traversal_state()), stamp(state_.enter()), name(name) {}
 
 TraversalEpoch::~TraversalEpoch() {
     for (auto i=displaced.rbegin(); i!=displaced.rend(); ++i)
         if (i->first->tflag == stamp)
             i->first->tflag = i->second;
-    live_count--;
+    state_.leave();
 }
 
 } // jittor

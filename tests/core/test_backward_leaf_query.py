@@ -198,7 +198,7 @@ class TestBackwardLeafQueryCostAndTraversal(unittest.TestCase):
 
     def test_the_query_opens_no_traversal(self):
         # Asserted, not described: every graph walk takes a TraversalEpoch and
-        # every epoch bumps tflag_count, so an unchanged counter across 64
+        # every epoch advances the runtime stamp, so an unchanged counter across 64
         # queries on a 64-deep chain proves the answer is not a walk. That is
         # the whole cost story -- there is no cache, so nothing to go stale.
         jt.tests.backward_leaf_query_opens_no_traversal()

@@ -13,4 +13,8 @@ Executor& runtime_executor() {
     return native_runtime().executor();
 }
 
+RuntimeTraversalState& runtime_traversal_state() {
+    return native_runtime().traversals();
+}
+
 } // namespace jittor

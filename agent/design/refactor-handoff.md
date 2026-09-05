@@ -552,7 +552,13 @@ CPU/结构/弱同步/显式提交定向 14 passed；真实 CUDA 自动提交/梯
 1 passed（先验证 device 驻留，再检查 values/inverse/counts）。未做完整后端门禁或 NPU 实机。
 使用旧 `exe` 符号的外部预编译扩展必须改源码并重编；不能将源码迁移说成二进制兼容。
 
-下一实现重点是遍历状态与 native flags 的所有权；不要再逐字段添加只读包装。
+遍历状态也已收归同一 NativeRuntime：删除 `tflag_count` 与 `TraversalEpoch::live_count`，
+epoch 实现从 `misc/` 搬到 `runtime/`，核心与 JIT 通过导出函数共享计数与嵌套状态。
+fork 不重置计数，避免撞上继承节点的 stamp；嵌套标记在异常退出时仍逐层恢复。
+CPU/结构/JIT 嵌套执行与 backward-leaf 定向 37 passed（3.54s），无 skip；
+本次未追加 CUDA/NPU 实机测试。旧 traversal 头路径和数据符号的外部消费者需改源码并重编。
+
+下一实现重点是 native flags 的实际存储所有权与 config/runtime 分层；不要再逐字段添加只读包装。
 下文波次表保留为历史证据，不应作为当前已完成范围。
 
 第五十五波新增 3 个严格保持待领的前置：
