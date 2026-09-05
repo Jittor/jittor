@@ -293,6 +293,44 @@ void NativeOpRegistry::bind_provider(const string& name, const string& provider)
         observer->on_provider_op_bound(dispatch_key);
 }
 
+bool NativeOpRegistry::unbind_provider_if_current(
+        const NativeOpDispatchKey& dispatch_key) {
+    NativeProviderLifecycleObserver* observer = nullptr;
+    bool removed = false;
+    {
+    std::lock_guard<std::recursive_mutex> guard(mutex);
+    if (!dispatch_key.valid())
+        return false;
+    auto provider_iter = provider_bindings.find(dispatch_key.provider);
+    auto id_iter = provider_ids.find(dispatch_key.provider);
+    auto registration_iter = provider_registrations.find(dispatch_key.provider);
+    if (provider_iter == provider_bindings.end() ||
+            id_iter == provider_ids.end() ||
+            registration_iter == provider_registrations.end() ||
+            id_iter->second != dispatch_key.provider_id ||
+            registration_iter->second.abi_version != dispatch_key.abi_version)
+        return false;
+    string op_file_name;
+    for (const auto& item : entries) {
+        if (item.second.id == dispatch_key.op_id) {
+            op_file_name = item.first;
+            break;
+        }
+    }
+    if (op_file_name.empty())
+        return false;
+    auto binding = provider_iter->second.find(op_file_name);
+    if (binding == provider_iter->second.end())
+        return false;
+    provider_iter->second.erase(binding);
+    observer = lifecycle_observer;
+    removed = true;
+    }
+    if (removed && observer)
+        observer->on_provider_op_unbound(dispatch_key);
+    return removed;
+}
+
 NativeOpDispatchKey NativeOpRegistry::resolve_provider(
         const string& name, const string& provider) const {
     std::lock_guard<std::recursive_mutex> guard(mutex);

@@ -266,6 +266,10 @@ public:
     // provider consumer must not detach a replacement observer during teardown.
     bool clear_lifecycle_observer(NativeProviderLifecycleObserver* observer);
     void bind_provider(const string& name, const string& provider);
+    // Remove one operator binding only when the caller still owns the
+    // provider generation represented by the dispatch key.  A stale backend
+    // teardown must not remove a binding installed by a replacement.
+    bool unbind_provider_if_current(const NativeOpDispatchKey& dispatch_key);
     NativeOpDispatchKey resolve_provider(const string& name,
                                          const string& provider) const;
     // Consumer-side stale-key guard.  A key becomes invalid after provider

@@ -115,6 +115,8 @@ def test_native_provider_lifecycle_consumer_is_value_only_and_non_owning():
     assert "NativeOpRegistry::clear_lifecycle_observer" in source
     assert "bool is_current(const NativeOpDispatchKey& dispatch_key) const" in header
     assert "NativeOpRegistry::is_current" in source
+    assert "unbind_provider_if_current" in header
+    assert "NativeOpRegistry::unbind_provider_if_current" in source
     # The lifecycle seam may not own a backend object or expose one through
     # the ABI header.  Providers retain their handles on their own side.
     assert "shared_ptr<NativeProviderLifecycleObserver>" not in header

@@ -219,6 +219,21 @@ JIT_TEST(native_op_registry_lifecycle_consumer_boundary) {
     ASSERT(probe.events[5] == "bound:cuda");
     ASSERT(probe.events[6] == "unbound:cuda");
 
+    // Single-op teardown is generation checked: an old provider key cannot
+    // remove a binding created by a replacement instance.
+    registry.register_op({"jit_test_provider_unbind", "test", ""});
+    registry.bind_provider("jit_test_provider_unbind", "cuda");
+    auto unbind_key = registry.resolve_provider(
+        "jit_test_provider_unbind", "cuda");
+    ASSERT(registry.unbind_provider_if_current(unbind_key));
+    ASSERT(!registry.is_current(unbind_key));
+    ASSERT(!registry.unbind_provider_if_current(unbind_key));
+    registry.bind_provider("jit_test_provider_unbind", "cuda");
+    auto replacement_key = registry.resolve_provider(
+        "jit_test_provider_unbind", "cuda");
+    ASSERT(!registry.unbind_provider_if_current(unbind_key));
+    ASSERT(registry.unbind_provider_if_current(replacement_key));
+
     ASSERT(registry.unregister_provider("cuda"));
     ASSERT(probe.events.size() == 8);
     ASSERT(probe.events[7] == "unregistered:cuda");
