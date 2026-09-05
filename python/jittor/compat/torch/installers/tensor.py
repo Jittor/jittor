@@ -21,6 +21,7 @@ from ..nested import (
     _TorchSize, _torch_prune_leaf_registry,
     _torch_register_leaf,
 )
+from ..tensor_state import get_tensor_state
 from .factories import _install_random_and_linspace, _wrap_constructors
 from ..types import (
     _DEVICE_CTX_STACK, _device_is_cpu, _device_is_cuda, _dtype_to_str,
@@ -1180,8 +1181,6 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # API (requires_grad=True / requires_grad_()). Keyed by id() to dedupe;
     # jittor Vars are not weak-referenceable, so we hold strong refs (leaf
     # params are long-lived anyway) and prune entries that drop stop-grad.
-    if not hasattr(jt, "_torch_leaf_params"):
-        jt._torch_leaf_params = {}
     def _register_leaf(v):
         _torch_register_leaf(v)
 
@@ -1381,7 +1380,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 if isinstance(p, Var) and p.requires_grad:
                     leaf_map.setdefault(id(p), p)
                     opt_ids.add(id(p))
-        retained = getattr(jt, "_torch_retained", None)
+        tensor_state = get_tensor_state(jt)
+        retained = tensor_state.retained
         retained_ids = set()
         if retained:
             for v in list(retained.values()):
@@ -1396,12 +1396,12 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 opt_ids | retained_ids,
                 keep_non_parameters=True,
             )
-            for v in list(jt._torch_leaf_params.values()):
+            for v in list(tensor_state.leaf_params.values()):
                 if isinstance(v, Var) and v.requires_grad:
                     leaf_map.setdefault(id(v), v)
         else:
             _torch_prune_leaf_registry()
-            for v in list(jt._torch_leaf_params.values()):
+            for v in list(tensor_state.leaf_params.values()):
                 if isinstance(v, Var) and v.requires_grad:
                     leaf_map.setdefault(id(v), v)
         if not leaf_map:
@@ -1415,7 +1415,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         for p, gr in zip(leaves, grads):
             if gr is None:
                 if id(p) not in opt_ids and id(p) not in retained_ids:
-                    jt._torch_leaf_params.pop(id(p), None)
+                    tensor_state.leaf_params.pop(id(p), None)
                 continue
             grad_by_id[id(p)] = gr
             if id(p) not in opt_ids:
@@ -1570,11 +1570,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # _backward pass includes as a grad target; cleared each backward so the
     # next iteration's fresh tensor doesn't accumulate (jittor Vars can't be
     # weak-ref'd, so a persistent dict would leak one Var per iteration).
-    if not hasattr(jt, "_torch_retained"):
-        jt._torch_retained = {}
     def _retain_grad(self):
         try:
-            jt._torch_retained[id(self)] = self
+            get_tensor_state(jt).retained[id(self)] = self
         except EXPECTED as exc:
             swallowed("torch/installers/tensor.py _retain_grad: jt._torch_retained[id(self)] = self", exc)
         return self

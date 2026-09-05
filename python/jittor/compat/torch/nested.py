@@ -3,6 +3,7 @@
 import numpy as np
 import jittor as jt
 from ..diagnostics import EXPECTED, swallowed
+from .tensor_state import get_tensor_state
 
 
 class _TorchSize(tuple):
@@ -254,18 +255,14 @@ def _torch_register_leaf(v):
     """
     try:
         if isinstance(v, jt.Var) and v.requires_grad:
-            if not hasattr(jt, "_torch_leaf_params"):
-                jt._torch_leaf_params = {}
-            jt._torch_leaf_params[id(v)] = v
+            get_tensor_state(jt).leaf_params[id(v)] = v
     except EXPECTED as exc:
         swallowed("torch/nested.py _torch_register_leaf: if isinstance(v, jt.Var) and v.requires_grad:", exc)
 
 def _torch_prune_leaf_registry(keep_ids=None, keep_non_parameters=False):
     """Drop stale torch-facing leaves from the global backward registry."""
     try:
-        reg = getattr(jt, "_torch_leaf_params", None)
-        if not isinstance(reg, dict):
-            return
+        reg = get_tensor_state(jt).leaf_params
         keep = None if keep_ids is None else set(keep_ids)
         for k, v in list(reg.items()):
             if (
