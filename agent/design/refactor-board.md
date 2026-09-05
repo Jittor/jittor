@@ -771,22 +771,6 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 - `2.19`：`4c64067e`/`050da89a` 将 CUB arg-reduce offsets 长度边界改为 `USER_CHECKop`，累计 94 处、四十七组证据；结构与 nvcc TU 通过，本机 CUDA 可用，负向见 2.19 行末运行记录。
 - `7.03`：`d6bd24f1` 将 `log_softmax` 提升为 numerical 稳定对象并登记 conservative approximate fidelity；身份/metadata 静态测试、`py_compile`/diff-check 通过，动态 JIT 未运行。
 
-### 2026-09-04 第五十五波补充证据
-
-- `8.06`：`0b149241` 将 Dropout backward 接入共享 launcher，保留 `scale` query 与同步策略；静态合同 42 passed，本机无 CANN/NPU，仍待实机。
-
-### 2026-09-04 第五十六波补充证据
-
-- `8.06`：`4f414054` 将 RotaryPositionEmbedding gradient 接入共享 launcher，保留四输入、三输出 query 与同步策略；静态合同 43 passed，本机无 CANN/NPU，仍待实机。
-
-### 2026-09-04 第五十七波补充证据
-
-- `8.06`：`f34ecce4` 将 Conv2d backward 接入共享 launcher，保留三输出 gradient query 与 descriptor cleanup；静态合同 44 passed，本机无 CANN/NPU，仍待实机。
-
-### 2026-09-04 第五十八波补充证据
-
-- `8.06`：`1874f7ed` 将 UpsampleNearest2d backward 接入共享 launcher，保留 output/input-size RAII descriptor 与同步策略；静态合同 45 passed，本机无 CANN/NPU，仍待实机。
-
 ### 2026-09-04 第五十九波补充证据
 
 - `8.06`：`2d8f415b` 将 LeakyReLU backward 接入共享 launcher，保留 negativeSlope、selfIsResult、scalar cleanup 与同步策略；静态合同 46 passed，本机无 CANN/NPU，仍待实机。
@@ -1045,15 +1029,3 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 
 - `10.05`：`1a423a16`/`f7f33f5b` 固定 skip reason bucket 优先级、CI summary 和 `other>0` fail-closed；合成结构测试 2 passed，任务已完整关闭。
 - `0.15`：RingBuffer GIL/有界等待方案完成只读审计，当前未提交代码；仍需 Linux timed-wait/GIL 安全实现、worker death 聚焦节点与 smoke 重新测量，不能标完成。
-
-### 2026-09-04 第九十三波补充证据
-
-- `2.19`：`66fd400d` 补充 CUDNN convolution `ASSERT(best_algo_idx!=-1)` 精确计数门禁；结构门禁 1 passed，不改变运行语义或用户边界累计。
-
-### 2026-09-04 第九十四波补充证据
-
-- `2.19`：`9d2752e2` 补充 CUDNN 3D convolution `ASSERT(best_algo_idx!=-1)` 精确计数门禁；结构门禁 1 passed，不改变运行语义或用户边界累计。
-
-### 2026-09-04 第九十五波补充证据
-
-- `2.19`：`903b8d3f` 补充 CUDNN backward-x `ASSERT(best_algo_idx!=-1)` 精确计数门禁；结构门禁 1 passed，不改变运行语义或用户边界累计。
