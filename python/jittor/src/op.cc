@@ -403,11 +403,13 @@ string Op::file_name_to_class_name(const string& s) {
 }
 
 void Op::jit_run(JK& jk) {
-    const char* jit_key = jk.to_cstring();
-    auto iter = jit_ops.find(jit_key);
+    // Own the lookup key before any subsequent preparation can reuse JK's
+    // thread-local scratch buffer.  Cache keys must not borrow that storage.
+    string jit_key = jk.to_string();
+    auto iter = jit_ops.find(string_view(jit_key.data(), jit_key.size()));
     if (iter != jit_ops.end()) {
         LOGvvv <<  "Jit op key found:" << jit_key << "jit op entry:" << (void*)iter->second;
-        Profiler::record_and_run(iter->second, this, jit_key);
+        Profiler::record_and_run(iter->second, this, jit_key.c_str());
         return;
     }
     LOGvv << "Jit op key not found:" << jit_key;

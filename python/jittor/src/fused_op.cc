@@ -227,13 +227,15 @@ void FusedOp::do_prepare(JK& jk) {
 }
 
 void FusedOp::do_run_after_prepare(JK& jk) {
-    const char* jit_key = jk.to_cstring();
-    auto iter = jit_fused_ops.find(string_view(jit_key, jk.size));
+    // Keep the cache lookup independent from JK's reusable thread-local
+    // buffer; preparation of the next op may overwrite it immediately.
+    string jit_key = jk.to_string();
+    auto iter = jit_fused_ops.find(string_view(jit_key.data(), jit_key.size()));
     if (iter != jit_fused_ops.end()) {
         LOGvvv <<  "Jit fused op key found:" << jit_key << "jit op entry:" << (void*)iter->second;
         context = iter->second;
         iter->second->vrm.fop = this;
-        Profiler::record_and_run(iter->second->entry, this, jit_key);
+        Profiler::record_and_run(iter->second->entry, this, jit_key.c_str());
         return;
     }
     LOGvv << "Jit op key not found:" << jit_key;
