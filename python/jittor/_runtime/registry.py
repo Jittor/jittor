@@ -101,6 +101,19 @@ class BackendSpec:
         return self
 
 
+@dataclass(frozen=True)
+class RegistrySnapshot:
+    """Point-in-time provider and kernel ownership view.
+
+    A backend replacement removes its kernels as one lifecycle operation.  A
+    combined snapshot lets diagnostics and gate code inspect that operation
+    without stitching together two independently-timed snapshots.
+    """
+
+    backends: Tuple[BackendSpec, ...]
+    kernels: Tuple[Tuple[str, str], ...]
+
+
 class BackendRegistry:
     """Thread-safe registry keyed by backend name.
 
@@ -381,3 +394,14 @@ class OpRegistry:
         """Return the registered operator/backend ownership pairs."""
         with self._lock:
             return tuple(sorted(self._kernels))
+
+    def snapshot_state(self) -> RegistrySnapshot:
+        """Return one coherent snapshot of providers and kernel ownership."""
+        with self._lock:
+            # All registry lifecycle mutations take the operator lock before
+            # touching the backend registry, so this lock order is stable.
+            with self.backends._lock:
+                return RegistrySnapshot(
+                    tuple(self.backends._specs.values()),
+                    tuple(sorted(self._kernels)),
+                )

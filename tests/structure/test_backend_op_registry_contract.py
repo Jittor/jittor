@@ -5,6 +5,7 @@ from jittor._runtime.registry import (
     MissingCapability,
     MissingKernel,
     OpRegistry,
+    RegistrySnapshot,
     UnknownBackend,
 )
 
@@ -321,6 +322,27 @@ def test_provider_replacement_clears_old_kernel_ownership():
         pass
     else:
         raise AssertionError("provider replacement retained an old kernel")
+
+
+def test_registry_snapshot_is_coherent_across_provider_replacement():
+    backends = BackendRegistry((BackendSpec("cpu"), BackendSpec("cuda")))
+    ops = OpRegistry(backends)
+    ops.register("add", "cuda", lambda value: value + 1)
+    before = ops.snapshot_state()
+    assert isinstance(before, RegistrySnapshot)
+    assert tuple(spec.name for spec in before.backends) == ("cpu", "cuda")
+    assert before.kernels == (("add", "cuda"),)
+
+    ops.register_backend(BackendSpec("cuda", capabilities={"stream": True}),
+                         replace=True)
+    after = ops.snapshot_state()
+    assert tuple(spec.name for spec in after.backends) == ("cpu", "cuda")
+    assert after.backends[1].supports("stream")
+    assert after.kernels == ()
+    # Snapshots are values, so a later lifecycle transition cannot rewrite the
+    # earlier diagnostic view.
+    assert before.backends[1].capabilities == {}
+    assert before.kernels == (("add", "cuda"),)
 
 
 def test_provider_registration_is_fail_closed_without_replacement():
