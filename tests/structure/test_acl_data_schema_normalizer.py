@@ -177,3 +177,22 @@ def test_descriptor_key_rejects_invalid_identity_metadata(kwargs):
     record = {"schema_version": 1, "op": "Scale", "fields": {}}
     with pytest.raises((ACL_DATA.AclDataUserError, ACL_DATA.AclDataInternalError)):
         ACL_DATA.descriptor_cache_key(record, **kwargs)
+
+
+def test_descriptor_cache_rejects_noncanonical_keys_before_insertion():
+    cache = ACL_DATA.DescriptorCache()
+    malformed = [
+        ("not-a-key",),
+        (1, (2, "Scale", ()), (2,), "float32", "contiguous", "npu:0"),
+        (1, (1, "Scale", (("dim", "pointer", 0),)), (2,),
+         "float32", "contiguous", "npu:0"),
+        (1, (1, "Scale", (("dim", "int64", object()),)), (2,),
+         "float32", "contiguous", "npu:0"),
+        (1, (1, "Scale", (("axes", "int64[]", [1, 2]),)), (2,),
+         "float32", "contiguous", "npu:0"),
+        (1, (1, "Scale", ()), [2], "float32", "contiguous", "npu:0"),
+    ]
+    for key in malformed:
+        with pytest.raises(ACL_DATA.AclDataInternalError):
+            cache.get_or_create(key, lambda _: "must-not-build")
+        assert len(cache) == 0

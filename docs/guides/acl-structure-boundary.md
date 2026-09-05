@@ -176,6 +176,13 @@ are intentionally separate from the generated `OpAttr` path until one
 attribute owner can migrate decode, attribute construction, descriptor
 address rebinding, and invalidation atomically.
 
+The Python cache validates the complete canonical key before every mutating
+or lookup entry point (`get_or_create`, `acquire`, `erase`, and membership).
+Malformed tuples therefore fail before a value can enter the cache, matching
+the C++ `canonical_descriptor_key()` boundary. This is important for a future
+device owner: an invalid key must not be inserted and only rejected later
+during lease acquisition or teardown.
+
 ## Migration order
 
 1. **Done on the host:** define the data-channel schema and its cache-key

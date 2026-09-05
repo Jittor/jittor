@@ -214,6 +214,47 @@ class DescriptorHandle:
         self.entry_generation = entry_generation
 
 
+def _validate_descriptor_key(key):
+    """Validate the immutable key shape before touching cache state.
+
+    The C++ cache validates ``AclDescriptorKey`` on every cache entry point.
+    Keep the Python mirror fail-closed as well: accepting an arbitrary tuple
+    into ``_entries`` would make a later ``acquire``/teardown failure happen
+    after an invalid value had already polluted the cache.
+    """
+    if not isinstance(key, tuple) or len(key) != 6:
+        raise AclDataInternalError("ACL descriptor cache requires a canonical descriptor key")
+    version, attribute_key, shape, dtype, layout, device = key
+    if version != SCHEMA_VERSION or not isinstance(attribute_key, tuple):
+        raise AclDataInternalError("ACL descriptor cache requires a canonical descriptor key")
+    if (len(attribute_key) != 3 or attribute_key[0] != SCHEMA_VERSION or
+            not isinstance(attribute_key[1], str) or not attribute_key[1] or
+            not isinstance(attribute_key[2], tuple)):
+        raise AclDataInternalError("ACL descriptor cache requires a canonical descriptor key")
+    for field in attribute_key[2]:
+        if (not isinstance(field, tuple) or len(field) != 3 or
+                not isinstance(field[0], str) or not field[0] or
+                field[1] not in _TYPES):
+            raise AclDataInternalError("ACL descriptor cache requires a canonical descriptor key")
+        try:
+            _validate_value(field[1], field[2], field[0])
+        except AclDataUserError as error:
+            raise AclDataInternalError(
+                "ACL descriptor cache requires typed attribute values"
+            ) from error
+        if field[1] in _VECTOR_TYPES and not isinstance(field[2], tuple):
+            raise AclDataInternalError("ACL descriptor cache requires immutable vector values")
+    if not isinstance(shape, tuple):
+        raise AclDataInternalError("ACL descriptor shape must be an immutable tuple")
+    for dimension in shape:
+        if not _is_int(dimension) or dimension < 0:
+            raise AclDataUserError("ACL descriptor shape dimensions must be non-negative integers")
+    for name, value in (("dtype", dtype), ("layout", layout), ("device", device)):
+        if not isinstance(value, str) or not value:
+            raise AclDataInternalError("ACL descriptor {} must be a non-empty string".format(name))
+    return key
+
+
 class DescriptorCache:
     """Small host-only cache shell for a future ACL descriptor owner.
 
@@ -233,6 +274,7 @@ class DescriptorCache:
         self._entry_generations = defaultdict(int)
 
     def get_or_create(self, key, builder):
+        _validate_descriptor_key(key)
         if key in self._entries:
             return self._entries[key]
         value = builder(key)
@@ -243,6 +285,7 @@ class DescriptorCache:
         return value
 
     def __contains__(self, key):
+        _validate_descriptor_key(key)
         return key in self._entries
 
     def __len__(self):
@@ -250,6 +293,7 @@ class DescriptorCache:
 
     def acquire(self, key):
         """Acquire a value-only lease for an existing descriptor entry."""
+        _validate_descriptor_key(key)
         if key not in self._entries:
             raise AclDataInternalError("ACL descriptor handle acquired for missing key")
         if not isinstance(key, tuple) or len(key) != 6 or not isinstance(key[-1], str):
@@ -279,6 +323,7 @@ class DescriptorCache:
 
     def erase(self, key):
         """Invalidate one descriptor identity without touching other devices."""
+        _validate_descriptor_key(key)
         removed = self._entries.pop(key, None) is not None
         self._entry_generations[key] += 1
         return removed
