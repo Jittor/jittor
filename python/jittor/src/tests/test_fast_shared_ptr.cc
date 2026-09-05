@@ -4,7 +4,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include "misc/fast_shared_ptr.h"
+#include "utils/fast_shared_ptr.h"
 
 namespace jittor {
 

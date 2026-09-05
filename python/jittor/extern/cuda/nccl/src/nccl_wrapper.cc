@@ -11,8 +11,8 @@
 #include "nccl_wrapper.h"
 #include "var.h"
 #include "mem/allocator.h"
-#include "misc/collective_dtype.h"
-#include "misc/file_rendezvous.h"
+#include "runtime/collective_dtype.h"
+#include "runtime/file_rendezvous.h"
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -31,7 +31,7 @@ const char *_cudaGetErrorEnum(ncclResult_t error) {
 namespace jittor {
 
 // The one NCCL dtype table, expanded from the canonical list in
-// misc/collective_dtype.h. NCCL has no 16-bit integer type, so int16 is
+// runtime/collective_dtype.h. NCCL has no 16-bit integer type, so int16 is
 // declared as a hole rather than quietly missing from the table.
 static ncclDataType_t nccl_dtype_unsupported(NanoString dtype) {
     LOGf << "NCCL collectives do not support dtype" << dtype;
@@ -594,7 +594,7 @@ void nccl_init() {
         // device this rank is on.
         set_current_device(nccl_device_id);
         checkCudaErrors(cudaSetDevice(nccl_device_id));
-        // Rendezvous through the shared helper (misc/file_rendezvous.h), which
+        // Rendezvous through the shared helper (runtime/file_rendezvous.h), which
         // fails loudly on timeout. What this replaces did not: non-zero ranks
         // polled for a hardcoded 121 s and then fell through WITHOUT CHECKING
         // WHETHER THEY HAD READ ANYTHING, handing the still-zero id to

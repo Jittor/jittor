@@ -22,7 +22,7 @@ the problem -- the failure lands in a third file, long after the two traversals
 that collided.
 
 Five of the six are gone (``[2.02]``): each keeps its own storage, either a
-local table (``misc/node_index.h``) or ``Node::batch_index``, which is stamped
+local table (``runtime/node_index.h``) or ``Node::batch_index``, which is stamped
 with the batch that wrote it and read through ``batch_index_at(stamp)`` so a
 reader that names the wrong batch gets an assertion instead of somebody else's
 number.

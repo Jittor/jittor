@@ -192,7 +192,7 @@ void ParallelPass::run() {
     int cpu_thread_num = round_down_pow2(op->get_loop_option("cpu_thread_num", omp_get_max_threads()));
     int max_parallel_depth;
     if (!is_cuda) {
-        ir->push_front("#include \"misc/cpu_atomic.h\"", &ir->before);
+        ir->push_front("#include \"type/cpu_atomic.h\"", &ir->before);
         ir->push_front("#include <omp.h>", &ir->before);
         max_parallel_depth = op->get_loop_option("max_parallel_depth", 2);
         auto* lva = pm->get_pass<LoopVarAnalyzePass>();
@@ -204,8 +204,8 @@ void ParallelPass::run() {
         if (max_parallel_depth <= 0) return;
     } else {
         ir->push_front("#include \"helper_cuda.h\"", &ir->before);
-        ir->push_front("#include \"misc/cuda_limits.h\"", &ir->before);
-        ir->push_front("#include \"misc/cuda_atomic.h\"", &ir->before);
+        ir->push_front("#include \"type/cuda_limits.h\"", &ir->before);
+        ir->push_front("#include \"type/cuda_atomic.h\"", &ir->before);
         max_parallel_depth = op->get_loop_option("max_parallel_depth", 4);
     }
     ir->push_back("#pragma GCC diagnostic ignored \"-Wunused-function\"", &ir->before, true);

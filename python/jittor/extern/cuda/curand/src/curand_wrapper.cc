@@ -10,7 +10,7 @@
 #include "curand_wrapper.h"
 #include "init.h"
 #include "runtime/device.h"
-#include "misc/cuda_streams.h"
+#include "runtime/cuda_streams.h"
 
 namespace jittor {
 

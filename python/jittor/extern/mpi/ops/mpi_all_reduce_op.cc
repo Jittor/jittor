@@ -75,7 +75,7 @@ void MpiAllReduceOp::jit_prepare(JK& jk) {
 #ifdef JIT_cpu
 void MpiAllReduceOp::jit_run() {
     // dtype -> MPI type/op goes through the single table in mpi_wrapper.cc
-    // (see misc/collective_dtype.h). The per-operator table this replaces
+    // (see runtime/collective_dtype.h). The per-operator table this replaces
     // mapped int64 to MPI_DOUBLE_INT, a 16-byte MAXLOC pair, so `num`
     // elements of it read 2x past the end of x and returned garbage.
     auto* __restrict__ xp = x->ptr<Tx>();

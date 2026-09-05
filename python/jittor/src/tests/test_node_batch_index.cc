@@ -5,7 +5,7 @@
 // ***************************************************************
 #include "var.h"
 #include "node.h"
-#include "misc/node_index.h"
+#include "runtime/node_index.h"
 #include "runtime/traversal_epoch.h"
 #include "runtime/runtime.h"
 

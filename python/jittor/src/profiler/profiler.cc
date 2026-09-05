@@ -22,7 +22,7 @@
 #include "op.h"
 #include "fused_op.h"
 #include "profiler/memory_checker.h"
-#include "misc/deleter.h"
+#include "utils/deleter.h"
 #include "executor.h"
 #include "utils/str_utils.h"
 #include "pybind/py_var_tracer.h"

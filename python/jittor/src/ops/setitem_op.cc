@@ -12,7 +12,7 @@
 #ifdef JIT_cuda
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
-#include "misc/cuda_atomic.h"
+#include "type/cuda_atomic.h"
 #endif
 #else
 #include "ops/op_register.h"
@@ -374,7 +374,7 @@ void SetitemOp::jit_run() {
         // CUDA reduce writes must be atomic: many output-loop threads alias the
         // same iid via the scatter index, so a non-atomic RMW silently drops
         // colliding contributions. cuda_atomic_*_rmw use raw-IEEE atomics (see
-        // misc/cuda_atomic.h) because setitem's output is a raw memcpy copy with
+        // type/cuda_atomic.h) because setitem's output is a raw memcpy copy with
         // no fix_float/ordered-int pass.
         @if(@is_def(JIT_cpu),
             @if(@strcmp(@OP,void)==0,

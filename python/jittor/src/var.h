@@ -7,8 +7,8 @@
 #pragma once
 #include "common.h"
 #include "node.h"
-#include "misc/cstr.h"
-#include "misc/fast_shared_ptr.h"
+#include "utils/cstr.h"
+#include "utils/fast_shared_ptr.h"
 
 namespace jittor {
 

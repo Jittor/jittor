@@ -120,7 +120,7 @@ class TestCuttPlanCacheBounds(unittest.TestCase):
             (1,),
             "int32",
             cuda_header='''
-#include "misc/cuda_streams.h"
+#include "runtime/cuda_streams.h"
 __global__ void cutt_plan_miss_delay(unsigned long long clocks) {
     unsigned long long start = clock64();
     while (clock64() - start < clocks) {}

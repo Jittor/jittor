@@ -23,7 +23,7 @@
 #include "mpi_wrapper.h"
 #include "common.h"
 #include "ops/array_op.h"
-#include "misc/collective_dtype.h"
+#include "runtime/collective_dtype.h"
 
 char jt_mpi_err_buffer[MPI_MAX_ERROR_STRING];
 
@@ -200,7 +200,7 @@ bool mpi_enabled = false;
 bool use_device_mpi = false;
 
 // The one MPI dtype table. Expanded from the canonical list in
-// misc/collective_dtype.h so it cannot drift from NCCL's and HCCL's.
+// runtime/collective_dtype.h so it cannot drift from NCCL's and HCCL's.
 // MPI_HALF is created in mpi_initer below (a contiguous 1 x MPI_SHORT), so
 // this must not be called before MPI init.
 static MPI_Datatype mpi_dtype_unsupported(NanoString dtype) {

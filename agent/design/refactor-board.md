@@ -1,7 +1,7 @@
 # 整改看板
 
-当前进度以任务表为准。2026-09-06：2.13 已完成计划点名的原生状态归属与 config/runtime 分层；
-下一步优先推进依赖它的布局与 Backend 迁移。下方旧波次中的 Python 字段视图不等于原生存储迁移。
+当前进度以任务表为准。2026-09-06：2.13 已完成原生状态归属与 config/runtime 分层，2.14 已清空原生 misc 目录；
+下一步优先推进实际 Backend 执行链。下方旧波次中的 Python 字段视图不等于原生存储迁移。
 
 > 第217波：`98c8ee94` 迁移 cuda_allow_tf32 Runtime owner（结构 43 passed）；`b8398291` 修正 Native provider teardown 统一 lifecycle events（结构 12 passed）；`9d49c70c` ACL device_size Python/C++ 对齐（ACL 14 passed）；`d44782d4` Torch bootstrap 非字符串/非法 __all__ fail-closed。未声称 CUDA/NPU 实机。
 
@@ -523,7 +523,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 2.11 | `VarHolder` 不再是执行触发点 | 已合并 | coreops | 0f709cff。VarHolder 构造只登记持有关系；lazy/eager/auto-flush 策略迁入 Executor::submit_pending，Var 完成 Python 对象转换后才提交，显式 core.submit_pending 可无设备同步启动目标子图；删除 flush_suspended 与构造期吞错。构造/边界结构 2 项、CPU 显式提交/错误边界 2 项、GPU1 auto-flush 等价 1 项通过 |
 | 2.12 | 打破 `Executor ⇄ VarHolder` include 环 | 已合并 | coreops | 318a688e。依赖 exe.allocator 的 migrate_to_cpu/data/raw_ptr/set_data 四个 inline 实现移到 var_holder.cc，var_holder.h 不再包含 executor.h 或引用全局 exe；executor.cc -> var_holder.h 保持单向，方法签名与行为不变。无 Python include 的独立头语法编译、依赖方向结构节点、CPU submit_pending 节点通过 |
 | 2.13 | 执行相关全局状态 | 已合并 | coreops | 计划点名的 hold_vars/exe/sync_ptr/tflag_count/use_cuda/device_id/sync_run 已归 NativeRuntime，旧 cuda_flags 文件消失；遍历/设备迁移见 b6eb6dc0、dfa047b3。本提交完成启动配置 10 项、运行策略 66 项、只读计数 5 项的统一分类，jt.config 深只读、jt.runtime 可写且提供可恢复 scope；原生所有 Flags 实例和 Python compiler 旧入口均拒绝晚写启动配置。Torch 严格数学改为捕获到普通/融合 JIT key 的运行策略，不改启动 nvcc_flags；分类清单纳入构建指纹。CPU/CUDA/结构最终 109 passed，含真实 CUDA 舍入与缓存隔离；Torch bootstrap 47 passed；CPU-only/自定义扩展 23 passed、1 个 CUDA 架构字段按能力跳过。旧扩展需重编；NPU/ROCm 仍需异机实测，本项不声称完成其他 Backend 或独立 torch 任务。 |
-| 2.14 | `src/misc/` 拆散 | 待领 | | `e2fbafd6` 完成 Nano 类型路径/引用迁移与结构合同 14 passed；其余 misc 拆散仍待。 |
+| 2.14 | `src/misc/` 拆散 | 已合并 | coreops | Nano 类型与 miniz 前置已就位；本提交将剩余 24 个文件按诊断、运行时、数值类型和通用容器归入 debug/runtime/type/utils，src/misc 不再存在。核心、JIT 生成 include、Python 内嵌 C++、CUDA/ACL/HCCL/MPI 消费者和活跃路径测试均同步，算法不变。转换缓存会把过期原生源归档到编译树外，防止搬迁后同时编译新旧实现；回归修前失败、修后通过。CPU/CUDA/双卡定向 41 passed，收尾 12 passed；CPU-only 4 passed/1 个 CUDA 节点跳过。实际执行 NaN checker、CPU erfinv、RingBuffer 与双卡流/拷贝。ACL 两 TU 主机语法及负向对照通过；ROCm 两 ABI blob/Corex basename 审计通过，未做 NPU/ROCm 实机。 |
 | 2.15 | NanoString | 已合并 | bindings | 9d5ed413（索引位宽 7→8、static_assert 把表与字段绑住、`ns_check_registration` 在注册期查索引与名字长度；"dtype 表改运行期注册"那半未做，见提交说明） |
 | 2.16 | 类型提升表 | 已合并 | bindings | d821c34a（int_dtype_promote 提升格；标量按 `_is_scalar` 标志认，不再按形状；float 标量把整数张量提到默认 float dtype）、a39a2f1c（补：双标量走提升格，交换左右操作数不再改变 dtype 与结果） |
 | 2.17 | 算子身份用注册期整型 id | 已合并 | coreops | 1d792e16。OpInfo 注册分配 OpId，核心/tuner/pass 名字比较归零，fast_strcmp 删除，Tape 用显式 pending flag；CPU 80 项、CUDA 5 项及结构契约通过 |
@@ -532,7 +532,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 2.20 | 信号处理器只做 `write` 与 `_exit`，符号化交给预建 helper 进程 | 已合并 | bindings | 上半 9b92f38d（去 stdio/LOGf/exit，标志改 volatile sig_atomic_t）；下半 640a4f07（符号化搬进崩溃前 fork 的 helper，经父进程 /proc/<pid>/maps 解析）；d874b01d 修 jit_key 用例（它原先靠信号处理器抛异常） |
 | 2.21 | `DEFINE_FLAG_WITH_SETTER` 先赋值再调 setter，签名收新旧两值 | 已合并 | coreops | 14336afd |
 | 2.22 | 环境变量统一 `JT_` 前缀 | 待领 | | |
-| 2.23 | 布局收尾 | 待领 | | |
+| 2.23 | 布局收尾 | 待领 | | 2.13/2.14 已完成 runtime 状态与 misc 支持文件归位，src/misc 已消失；init/profiler/lock 和 pyjt/pybind 合并到 bindings 尚未完成，不能仅凭 misc 消失关闭本项。 |
 | 2.24 | `custom_data` 的最后一个用户：FusedOp 跨阶段 var 索引 | 已合并 | coreops | `83c26d42`：FusedOp 建立显式 `Op*`/`Var*` index map，update/load/relay 共用映射；移除 Node::custom_data。结构 4 passed，fused 聚焦 2 passed。 |
 | 2.25 | 反向可达叶子查询（`is_leaf`/`grad_fn` 的内核答案） | 已合并 | coreops | `c6e62ba1`（查询与内核用例）、`781d4188`（与真 PyTorch 的逐例对拍）。2026-09-04 由 `7.11`／`7.12` 的共同前置派生。一条查询 `backward_grad_fn(Var*)`（`grad.h`）四种拼写（`Var.is_backward_leaf`、`grad_fn_node_id`、`grad_fn_op_id` 用 2.17 的注册期 id、`grad_fn_name` 仅诊断）；语义是 requires_grad 与「生产者有一条能带梯度的入边」的合取，四条过滤器与 `grad()` 的 `bfs_backward` 同源（两个 requires_grad 标志、生产者自身 stop_grad、控制依赖边、`Op::init` 冻结的 disabled 边）。**O(生产者入度)，不遍历、不缓存、不引入进程级 id 键字典**；查询前后 `tflag_count` 不变的用例把「没有遍历」钉住，另一条在未结束的 `TraversalEpoch` 里查询证明 2.03 的机制没被动。修前 20 failed → 修后 20 passed；定向 CPU 208 passed 对基线 188 passed（同 4 条既有失败，零回归），CUDA 73 passed；与真 PyTorch 2.12.1 的 19 个用例 16 个三元组全等、2 个只差 `requires_grad`、1 个的形状差异由 `requires_grad` 传导（在 `EXPLICIT_REQUIRES_GRAD` 策略下同样全等）。**`7.11` 的接线未做**，`compat/**` 属兼容层分区 |
 | 3.01 | `Executor::run_sync` | 待领 | | |

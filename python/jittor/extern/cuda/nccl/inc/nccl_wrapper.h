@@ -34,7 +34,7 @@ namespace jittor {
 // pull in mpi_wrapper.h, so include it here rather than rely on that path.
 #include "type/nano_string.h"
 #include "runtime/device.h"
-#include "misc/cuda_streams.h"
+#include "runtime/cuda_streams.h"
 
 // helper_cuda.h guards this overload behind `#ifdef NCCL_H_`, so it only appears
 // when nccl.h was included BEFORE it. Its own include guard makes the include
@@ -122,7 +122,7 @@ Map a jittor dtype to the NCCL datatype used to send it.
 
 This is the only NCCL dtype table; the five collective operators all go
 through it. It is expanded from the same canonical dtype list as MPI's and
-HCCL's tables (misc/collective_dtype.h), so the three cannot drift apart --
+HCCL's tables (runtime/collective_dtype.h), so the three cannot drift apart --
 they already had: before this, nccl_all_reduce_op.cc was the one operator of
 the five whose table had no bfloat16 entry, so a bf16 all-reduce failed to
 compile while bf16 broadcast/reduce/all_gather/reduce_scatter worked.

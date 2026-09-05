@@ -16,9 +16,9 @@
 //
 // Now: fp64 accumulates in fp64, float16/bfloat16 accumulate in float32
 // (torch's rule, and what two of the three already did by default), and
-// float32 follows `float32_matmul_precision` -- see misc/float32_precision.h.
+// float32 follows `float32_matmul_precision` -- see runtime/float32_precision.h.
 #include "cublas_wrapper.h"
-#include "misc/float32_precision.h"
+#include "runtime/float32_precision.h"
 
 namespace jittor {
 

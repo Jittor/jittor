@@ -7,7 +7,7 @@
 #pragma once
 #include "op.h"
 #include "var_slices.h"
-#include "misc/stack_vector.h"
+#include "utils/stack_vector.h"
 
 namespace jittor {
 

@@ -115,7 +115,7 @@ cudnnDropoutDescriptor_t cudnn_rnn_dropout_descriptor(cudnnHandle_t handle, floa
 /** Math type for an RNN of this data type.
 
     float32 follows `float32_matmul_precision` like every other cuDNN op
-    (misc/float32_precision.h). It used to follow nothing: the descriptor set
+    (runtime/float32_precision.h). It used to follow nothing: the descriptor set
     a math type only for reduced precision, so an fp32 RNN got cuDNN's default,
     and cuDNN's default for RNN on Ampere and later *allows tf32*. An fp32
     LSTM therefore ran at tf32 whatever `cuda_allow_cudnn_tf32` said, and no

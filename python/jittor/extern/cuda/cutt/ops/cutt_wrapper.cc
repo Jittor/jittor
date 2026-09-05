@@ -9,7 +9,7 @@
 #include <list>
 #include <unordered_map>
 #include "cutt_wrapper.h"
-#include "misc/cuda_streams.h"
+#include "runtime/cuda_streams.h"
 #include "utils/log.h"
 
 

@@ -5,7 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <cmath>
-#include "misc/cpu_math.h"
+#include "type/cpu_math.h"
 #include "var.h"
 #include "ops/unary_op.h"
 #include "ops/op_register.h"

@@ -11,9 +11,9 @@
 #include "pyjt/py_obj_holder.h"
 #include "pyjt/numpy.h"
 #include "common.h"
-#include "misc/hash.h"
+#include "utils/hash.h"
 #include "type/nano_string.h"
-#include "misc/fast_shared_ptr.h"
+#include "utils/fast_shared_ptr.h"
 #include "profiler/simple_profiler.h"
 #ifdef IS_CUDA
 #include "runtime/device.h"

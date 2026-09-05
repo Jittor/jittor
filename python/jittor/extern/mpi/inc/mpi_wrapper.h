@@ -60,7 +60,7 @@ Map a jittor dtype to the MPI datatype used to send it, and to the MPI
 reduction operator that implements `add` for it.
 
 These are the only mapping tables for MPI; the operator files and the
-`var_*` helpers below all go through them. See `misc/collective_dtype.h`
+`var_*` helpers below all go through them. See `runtime/collective_dtype.h`
 for why the per-operator copies were removed. Both raise (LOGf) on a dtype
 MPI cannot carry, instead of expanding to nothing.
 */

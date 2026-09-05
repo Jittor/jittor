@@ -1272,6 +1272,7 @@ PYJT_MODULE_INIT({hash});
 def process_jittor_source(device_type, callback):
     import jittor.compiler as compiler
     import shutil
+    import tempfile
     djittor = device_type + "_jittor"
     djittor_path = os.path.join(compiler.cache_path, djittor)
     os.makedirs(djittor_path, exist_ok=True)
@@ -1290,6 +1291,29 @@ def process_jittor_source(device_type, callback):
                     f.write(src)
             else:
                 shutil.copy(fname, fname2)
+    # The compiler recursively discovers native sources. A renamed source
+    # must not coexist with its old converted copy in a reused backend cache.
+    archive = None
+    for domain in ("src", "extern"):
+        native_root = os.path.join(djittor_path, domain)
+        for directory, _, names in os.walk(native_root, topdown=False):
+            for name in names:
+                if not name.endswith((".h", ".cc", ".cu")):
+                    continue
+                generated = os.path.join(directory, name)
+                relative = os.path.relpath(generated, djittor_path)
+                if os.path.isfile(os.path.join(compiler.jittor_path, relative)):
+                    continue
+                if archive is None:
+                    archive = tempfile.mkdtemp(
+                        prefix=device_type + "_source_stale_", dir=compiler.cache_path)
+                archived = os.path.join(archive, relative)
+                os.makedirs(os.path.dirname(archived), exist_ok=True)
+                shutil.move(generated, archived)
+            if directory != native_root and not os.listdir(directory):
+                os.rmdir(directory)
+    if archive is not None:
+        LOG.i("Archived obsolete backend-generated native sources in " + archive)
     compiler.cc_flags = compiler.cc_flags.replace(compiler.jittor_path, djittor_path) + f" -I\"{djittor_path}/extern/cuda/inc\" "
     compiler.jittor_path = djittor_path
 

@@ -73,7 +73,7 @@ Map a jittor dtype to the HCCL datatype used to send it.
 
 This is the only HCCL dtype table; the four collective operators all go
 through it. It is expanded from the same canonical dtype list as MPI's and
-NCCL's tables (misc/collective_dtype.h) so the three cannot drift apart.
+NCCL's tables (runtime/collective_dtype.h) so the three cannot drift apart.
 
 Raises (LOGf) on a dtype this table has no entry for, instead of expanding to
 nothing (which used to be a confusing compile error inside generated code).

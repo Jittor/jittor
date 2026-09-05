@@ -7,7 +7,7 @@
 #include <sstream>
 #include <algorithm>
 #include "graph.h"
-#include "misc/node_index.h"
+#include "runtime/node_index.h"
 #include "var_holder.h"
 #include "var.h"
 

@@ -343,7 +343,7 @@ class TestNcclRendezvousTimeout(unittest.TestCase):
         ``setup_nccl()`` to bring up rank 1 of 2. It must get as far as the
         rendezvous -- proving the lock was released around the call -- and fail
         there on the timeout. If the release is ever removed, the C++ guard in
-        misc/file_rendezvous.h fires instead and the message names the lock,
+        runtime/file_rendezvous.h fires instead and the message names the lock,
         which is what the last assertion checks for.
 
         This is also the path the torch shim's NCCL installer takes: it sets

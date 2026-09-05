@@ -8,7 +8,7 @@
 #include "var.h"
 #include "op_compiler.h"
 #include "profiler/profiler.h"
-#include "misc/fast_shared_ptr.h"
+#include "utils/fast_shared_ptr.h"
 #include "runtime/device.h"
 #include "runtime/jit_policy.h"
 

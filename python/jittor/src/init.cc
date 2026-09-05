@@ -17,14 +17,14 @@
 #include "var.h"
 #include "op.h"
 #include "executor.h"
-#include "misc/float32_precision.h"
+#include "runtime/float32_precision.h"
 
 namespace jittor {
 
 DEFINE_FLAG(vector<int>, cuda_archs, {}, "Cuda arch");
 // How precisely a float32 product is accumulated, on the same three-name
 // scale torch uses, shared by matmul and convolution. See
-// misc/float32_precision.h for the full mapping and for why the three flags
+// runtime/float32_precision.h for the full mapping and for why the three flags
 // below are now overrides on top of it rather than four separate encodings.
 int float32_matmul_precision_tier = F32_HIGHEST;
 

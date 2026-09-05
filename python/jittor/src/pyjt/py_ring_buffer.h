@@ -6,7 +6,7 @@
 // ***************************************************************
 #pragma once
 #include <Python.h>
-#include "misc/ring_buffer.h"
+#include "runtime/ring_buffer.h"
 
 namespace jittor {
 

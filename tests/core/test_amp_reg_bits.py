@@ -56,7 +56,7 @@ def amp_level(level):
 class TestAmpBitNames(unittest.TestCase):
     def test_the_python_names_match_the_cpp_constants(self):
         header = (Path(jt.__file__).resolve().parent
-                  / "src" / "misc" / "nano_string.h").read_text(encoding="utf-8")
+                  / "src" / "type" / "nano_string.h").read_text(encoding="utf-8")
         found = dict(
             (name, int(value)) for name, value in
             re.findall(r"constexpr\s+int\s+(amp_\w+)\s*=\s*(\d+)\s*;", header))

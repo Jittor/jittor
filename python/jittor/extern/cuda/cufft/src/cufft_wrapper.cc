@@ -11,7 +11,7 @@
 #include <unordered_map>
 #include "cufft_wrapper.h"
 #include "runtime/device.h"
-#include "misc/cuda_streams.h"
+#include "runtime/cuda_streams.h"
 
 namespace jittor {
 

@@ -27,7 +27,7 @@
 #include "profiler/profiler_guard.h"
 #include "parallel_compiler.h"
 #include "memory_profiler.h"
-#include "misc/nan_checker.h"
+#include "debug/nan_checker.h"
 #include "memory_profiler.h"
 #include "utils/seh.h"
 #include "utils/cache_compile.h"

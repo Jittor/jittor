@@ -453,8 +453,8 @@ namespace jittor
         if (!is_acl)
             return;
         string new_src = process_acl(src, "", {});
-        new_src = replace(new_src, R"(#include "misc/cuda_atomic.h")", "");
-        new_src = replace(new_src, R"(#include "misc/cuda_limits.h")", "");
+        new_src = replace(new_src, R"(#include "type/cuda_atomic.h")", "");
+        new_src = replace(new_src, R"(#include "type/cuda_limits.h")", "");
         new_src = replace(new_src, "__global__", "__ai_device_entry__");
         new_src = token_replace_all(new_src, "__launch_bounds__($1)", "");
         new_src = token_replace_all(new_src, "int thread_num = $1;", "int thread_num = 1;");

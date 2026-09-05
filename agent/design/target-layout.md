@@ -38,6 +38,8 @@ AWESOME 列表、asv 配置在根目录。
 │   ├── codegen/              # opt/ 全部 + op_compiler + jit_key + jit_compiler + kernel_ir
 │   ├── ops/                  # 七个元算子与少数基础算子；composite 算子另立子目录
 │   ├── runtime/              # init、flags、profiler、lock
+│   ├── debug/                # NaN 检查与诊断
+│   ├── utils/                # 通用字符串、哈希、容器与清理辅助
 │   ├── bindings/             # pyjt + pybind
 │   ├── third_party/          # miniz 及其它 vendored 源码
 │   └── tests/                # C++ 单元测试
@@ -76,6 +78,7 @@ AWESOME 列表、asv 配置在根目录。
 | `src/` 根下 39 个文件 | `src/core/` | 最重要的代码应当有名字 | 1.01（还原的五个文件一起放进去） |
 | `src/misc/nano_*`、`src/type/` | `src/type/` | 类型系统只有一处 | 2.15 |
 | `src/misc/miniz*` | `src/third_party/` | vendored 代码不与核心混排 | — |
+| `src/misc/` 其余辅助文件 | `src/debug/`、`runtime/`、`type/`、`utils/` | 已按诊断、运行状态、数值类型与通用容器归位；核心和生成代码不再 include misc | 2.14 |
 | `src/misc/cuda_flags.cc`、`init.cc`、`profiler/` | `src/runtime/` | cuda_flags 已迁为 runtime/device，设备状态由 NativeRuntime 持有；init/profiler 其余状态仍待迁移 | 2.13 |
 | `src/opt/`、`op_compiler.*`、`jit_key.*`、`jit_compiler.*` | `src/codegen/` | 代码生成是一个子系统 | 3.08 |
 | `src/ops/` 里非元算子（getitem/setitem/argsort/candidate/where/fused_adamw…） | `src/ops/composite/` | 「元算子」成为代码里的边界而非宣传语 | 4.04 |

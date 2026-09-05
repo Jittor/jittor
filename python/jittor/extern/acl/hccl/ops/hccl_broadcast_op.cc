@@ -37,7 +37,7 @@ void HcclBroadcastOp::jit_prepare(JK& jk) {
 void HcclBroadcastOp::jit_run() {
     //LOGir << "HcclBroadcastOp::jit_run";
     // dtype -> HcclDataType goes through the single table in
-    // hccl_wrapper.cc (see misc/collective_dtype.h).
+    // hccl_wrapper.cc (see runtime/collective_dtype.h).
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
     //LOGir << "HcclBroadcastOp::jit_run " << @Root << " " << hccl_device_id << " " << xp << " " << yp;

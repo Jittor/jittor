@@ -50,7 +50,7 @@ void NcclReduceScatterOp::jit_prepare(JK& jk) {
 
 void NcclReduceScatterOp::jit_run() {
     // dtype -> ncclDataType_t goes through the single table in
-    // nccl_wrapper.cc (see misc/collective_dtype.h).
+    // nccl_wrapper.cc (see runtime/collective_dtype.h).
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
     auto stream = nccl_stream_begin();

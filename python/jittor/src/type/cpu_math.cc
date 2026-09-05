@@ -7,7 +7,7 @@
 #define _USE_MATH_DEFINES
 #include <cmath>
 #include <limits>
-#include "misc/cpu_math.h"
+#include "type/cpu_math.h"
 
 namespace jittor {
 
@@ -55,4 +55,3 @@ float _erfinv(float y) { return calc_erfinv(y); };
 double _erfinv(double y) { return calc_erfinv(y); };
 
 }
-

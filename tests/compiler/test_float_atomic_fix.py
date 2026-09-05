@@ -7,7 +7,7 @@
 
 CUDA has no atomicMax for float, so ``cuda_atomic_max(float*)`` runs an integer
 atomicMax over the buffer reinterpreted as *ordered ints*
-(``misc/cuda_atomic.h``).  That is only correct if the buffer is in that
+(``type/cuda_atomic.h``).  That is only correct if the buffer is in that
 representation, which is this pass's job: it rewrites the initialisation into
 ``__int_as_float(floatToOrderedInt(...))`` and appends ``fix_float()`` to
 convert back at the end.

@@ -6,7 +6,7 @@
 #include <cfloat>
 #include <cmath>
 #include <fstream>
-#include "misc/nan_checker.h"
+#include "debug/nan_checker.h"
 #include "ops/op_register.h"
 #ifdef IS_CUDA
 #include "runtime/device.h"

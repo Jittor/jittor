@@ -3,7 +3,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include "misc/nan_checker.h"
+#include "debug/nan_checker.h"
 #include "runtime/device.h"
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>

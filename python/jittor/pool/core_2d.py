@@ -117,7 +117,7 @@ class Pool(jt.Module):
                 return_dtypes = x.dtype
             out = jt.code(return_shapes, return_dtypes, [x],
                 cuda_header="""
-                    #include <misc/cuda_limits.h>
+                    #include <type/cuda_limits.h>
                 """,
                 cuda_src=f'''
                     __global__ static void kernel1(@ARGS_DEF) {{

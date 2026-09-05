@@ -14,7 +14,7 @@
 #include "helper_cuda.h"
 #endif
 #ifndef JIT
-#include "misc/stack_vector.h"
+#include "utils/stack_vector.h"
 #include "opt/kernel_ir.h"
 #ifdef HAS_CUDA
 #include "runtime/device.h"

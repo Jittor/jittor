@@ -17,7 +17,7 @@
 #ifndef _WIN32
 #include <unistd.h>
 #endif
-#include "misc/hash.h"
+#include "utils/hash.h"
 #include "utils/cache_compile.h"
 #include "utils/str_utils.h"
 

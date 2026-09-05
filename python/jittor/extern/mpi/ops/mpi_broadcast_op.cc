@@ -62,7 +62,7 @@ void MpiBroadcastOp::jit_prepare(JK& jk) {
 #ifdef JIT_cpu
 void MpiBroadcastOp::jit_run() {
     // dtype -> MPI type goes through the single table in mpi_wrapper.cc
-    // (see misc/collective_dtype.h); the copy this replaces mapped int64 to
+    // (see runtime/collective_dtype.h); the copy this replaces mapped int64 to
     // the 16-byte MAXLOC pair MPI_DOUBLE_INT, so a broadcast of n int64
     // elements wrote 2n of them.
     //

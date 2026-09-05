@@ -73,7 +73,7 @@ class TestSharedReduce(unittest.TestCase):
         self.assertNotIn("_wr_mask", source)
 
     def test_shared_reduce_helper_is_two_stage(self):
-        path = os.path.join(jt.compiler.jittor_path, "src", "misc", "cuda_atomic.h")
+        path = os.path.join(jt.compiler.jittor_path, "src", "type", "cuda_atomic.h")
         source = open(path).read()
         body = source.split("inline static T shared_reduce(T u)", 1)[1]
         body = body.split("\n}\n", 1)[0]

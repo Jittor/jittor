@@ -11,7 +11,7 @@
 #include "helper_cuda.h"
 #include <mutex>
 #include "runtime/device.h"
-#include "misc/cuda_streams.h"
+#include "runtime/cuda_streams.h"
 #include "mem/allocator/sfrl_allocator.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "event_queue.h"

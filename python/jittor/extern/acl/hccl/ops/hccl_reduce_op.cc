@@ -36,7 +36,7 @@ void HcclReduceOp::jit_prepare(JK& jk) {
 void HcclReduceOp::jit_run() {
     LOGir << "HcclReduceOp::jit_run";
     // dtype -> HcclDataType goes through the single table in
-    // hccl_wrapper.cc (see misc/collective_dtype.h).
+    // hccl_wrapper.cc (see runtime/collective_dtype.h).
     @define(REDUCE_OP,
         @if(@strcmp(@Op,sum)==0, HcclReduceOp::HCCL_REDUCE_SUM)
         @if(@strcmp(@Op,prod)==0, HcclReduceOp::HCCL_REDUCE_PROD)

@@ -16,7 +16,7 @@
 #include "var.h"
 #include "ops/array_op.h"
 #include "runtime/device.h"
-#include "misc/cuda_streams.h"
+#include "runtime/cuda_streams.h"
 #include "mem/allocator.h"
 #include "mem/swap.h"
 

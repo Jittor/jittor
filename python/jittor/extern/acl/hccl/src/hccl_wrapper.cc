@@ -11,8 +11,8 @@
 #include "hccl_wrapper.h"
 #include "event_queue.h"
 #include "acl_jittor.h"
-#include "misc/collective_dtype.h"
-#include "misc/file_rendezvous.h"
+#include "runtime/collective_dtype.h"
+#include "runtime/file_rendezvous.h"
 #include <acl/acl.h>
 #include <cstdio>
 #include <cstdlib>
@@ -24,7 +24,7 @@
 namespace jittor {
 
 // The one HCCL dtype table, expanded from the canonical list in
-// misc/collective_dtype.h. bfloat16 and int16 are declared as holes: CANN does
+// runtime/collective_dtype.h. bfloat16 and int16 are declared as holes: CANN does
 // define HCCL_DATA_TYPE_BFP16 / HCCL_DATA_TYPE_INT16, but no Ascend hardware
 // was available to compile against, and naming an enum this build has never
 // referenced is exactly the kind of unverified change this table exists to
@@ -160,7 +160,7 @@ static bool hccl_init_envfile() {
     hccl_device_id = local_rank % device_count;
     ACLCHECK(aclrtSetDevice(hccl_device_id));
 
-    // Shared rendezvous helper (misc/file_rendezvous.h), which throws on a
+    // Shared rendezvous helper (runtime/file_rendezvous.h), which throws on a
     // failed write or a timeout. What it replaces logged at LOGe and returned
     // false for both, and this function's caller reads false as "env mode not
     // in use": a rank whose peers never appeared went on to a silent

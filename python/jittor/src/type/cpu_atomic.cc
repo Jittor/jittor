@@ -4,13 +4,10 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#pragma once
-#include "common.h"
+#include "type/cpu_atomic.h"
 
 namespace jittor {
 
-float _erfinv(float y);
-double _erfinv(double y);
+std::atomic_flag lock = ATOMIC_FLAG_INIT;;
 
-}
-
+} // jittor

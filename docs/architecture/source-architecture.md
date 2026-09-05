@@ -192,6 +192,32 @@ boundaries; `distributions.py`, `init.py`, and `linalg.py` are public native
 domains; `selftest.py` is the installed smoke-test entry point. New root files
 require an ownership review and a corresponding structure-gate update.
 
+### Native Support Layout
+
+The C++ `src/misc/` directory no longer exists. Support code is grouped by its
+actual role; this is a source-layout change, not a change to helper algorithms
+or a claim that the backend registry migration is complete.
+
+| Owner | Support Code |
+| --- | --- |
+| `src/debug/` | CPU/CUDA NaN checking and diagnostics |
+| `src/runtime/` | Device streams, float32 precision policy, traversal indexing, RingBuffer, collective dtype and rendezvous helpers |
+| `src/type/` | Nano types and scalar math, atomic, intrinsic and numeric-limit helpers used by generated kernels |
+| `src/utils/` | Generic strings, hashes, containers, shared pointers and cleanup helpers |
+| `src/third_party/` | Vendored miniz |
+
+Both generated includes and backend source transformations use these paths.
+Source extensions that included `misc/...` must update their includes before
+rebuilding. Basenames are unchanged so existing ROCm/Corex conversion rules
+retain their dispatch identity. Moving these support files does not complete
+the separate `init`/profiler/lock or Python-binding layout migrations.
+
+On a reused transformed-source cache, native files absent from the original
+source tree are moved out of `src/` and `extern/` before compilation. They are
+preserved under `<backend>_source_stale_*` in the cache directory, not deleted.
+This prevents old and new translation units from being compiled together after
+a source move. Non-native cache artifacts are left alone.
+
 ### Compatibility APIs
 
 The canonical Torch-style implementation is `jittor.compat.torch`. The legacy

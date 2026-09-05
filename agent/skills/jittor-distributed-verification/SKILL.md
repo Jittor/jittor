@@ -395,7 +395,7 @@ store 的跨进程契约不需要 GPU 或 mpirun。父进程启动两个普通 P
 所以正好落在锁外。**把它改成显式调用就同时把它挪回了锁内**，2 卡冷缓存 MPI 跑立刻死锁。
 
 现在 `setup_nccl()` / `setup_hccl()` 都用 `lock.unlock_scope()` 包住 init 调用，
-`misc/file_rendezvous.h` 里的 `rendezvous_require_unlocked()` 在真去等之前检查一次，
+`runtime/file_rendezvous.h` 里的 `rendezvous_require_unlocked()` 在真去等之前检查一次，
 拿着锁就直接报错而不是挂死。
 
 ### 认出它（症状是「什么都没有」）

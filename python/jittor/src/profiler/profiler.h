@@ -8,7 +8,7 @@
 #include "common.h"
 #include "profiler/cache_info.h"
 #include "op_compiler.h"
-#include "misc/cstr.h"
+#include "utils/cstr.h"
 #include "type/nano_vector.h"
 
 namespace jittor {

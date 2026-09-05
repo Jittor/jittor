@@ -8,7 +8,7 @@
 #include "ops/op_register.h"
 #include "cutt.h"
 #include "cutt_wrapper.h"
-#include "misc/stack_vector.h"
+#include "utils/stack_vector.h"
 #include "helper_cuda.h"
 
 namespace jittor {

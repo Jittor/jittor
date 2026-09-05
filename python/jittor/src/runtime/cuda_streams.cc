@@ -3,7 +3,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include "misc/cuda_streams.h"
+#include "runtime/cuda_streams.h"
 
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>

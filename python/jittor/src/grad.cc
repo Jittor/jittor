@@ -9,7 +9,7 @@
 #include "var.h"
 #include "op.h"
 #include "graph.h"
-#include "misc/node_index.h"
+#include "runtime/node_index.h"
 #include "ops/op_register.h"
 #include "var_holder.h"
 

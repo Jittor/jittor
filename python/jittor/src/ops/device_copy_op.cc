@@ -9,7 +9,7 @@
 #include "ops/device_copy_op.h"
 #include "ops/op_register.h"
 #include "runtime/device.h"
-#include "misc/cuda_streams.h"
+#include "runtime/cuda_streams.h"
 #include "mem/swap.h"
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>

@@ -30,10 +30,10 @@
 | 分支 | `2.0-refactor`；本批迁移起点 `2328ce4f`，后续提交见 Git 历史 |
 | 相对 `2.0` 的提交 | 迁移起点共 1853 个；提交数不代表任务完成量 |
 | 提交里出现过的任务号 | 329 个 |
-| 看板 | 已合并 **213** / 进行中 **0** / 待领 **59** / 并入其它任务 **13** |
+| 看板 | 已合并 **214** / 进行中 **0** / 待领 **58** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
 
-**交接清理完成不等于整改完成。** 看板仍有 59 条待领；当前只是把中断留下的易失状态全部转成了主线提交、
+**交接清理完成不等于整改完成。** 看板仍有 58 条待领；当前只是把中断留下的易失状态全部转成了主线提交、
 明确待领项或已验证的不采用结论。这个分支不是终态。
 
 看板的「已合并」是权威。提交里的任务号更多，是因为一个任务常有补充提交、改判提交与「更正前一个提交」
@@ -546,8 +546,21 @@ CPU-only 与自定义扩展 23 passed/1 skipped（仅不存在的 cuda_archs 字
 真实 CUDA 覆盖默认/严格舍入差异、普通/融合 kernel 缓存分离与策略回退。
 没有执行完整后端门禁，NPU/ROCm 仍需异机实测；既有 ACL 主机桩不代替 CANN ABI 验证。
 
-下一波优先推进 2.14 的 misc 归位、4.03/4.04 的 Backend/Op 注册调用链；
-不要因为 2.13 关闭就转去追低价值计数。独立 torch 包和后端架构仍是未完成的大需求。
+2.14 也已完成：原生 misc 剩余 24 文件归入 debug/runtime/type/utils，目录消失，
+核心、生成代码、内嵌 CUDA 与通信后端 include 全部同步，未优化算法。
+修复转换缓存只覆盖不清理旧路径的问题：过期原生源移到缓存内的独立备份目录，
+不再同时编译新旧实现；原始源码和非原生缓存不删除，迁移回归有修前失败证据。
+CPU/CUDA/双卡定向 41 passed；CPU-only 4 passed/1 个 CUDA 节点跳过；
+ACL 两 TU 主机语法和负向对照通过，ROCm 两 ABI blob/Corex 目录特判复核通过。
+这不代表 2.23 已完成：init/profiler/lock 与 pyjt/pybind 的布局仍未迁移。
+
+下一块直接做 4.03 的原生 Backend 执行链：CPU/CUDA 版本化函数表与真实 allocator、
+device、copy、stream、synchronize 接线。现有 NativeProviderRegistration 只有元数据，
+其调用者仍主要是测试；Python CPU allocator 的 bytearray 也不参与 Var 分配。
+不要继续为这两套原型堆校验器。公共 allocator 保留 SFRL/NFEF/Temp/Stat 组合，
+provider 返回原始池，避免递归调用 get_allocator；跨卡拷贝的双向流依赖必须保留。
+之后 4.04 整块连接 OpDef/Kernel/Codegen，而非套一次查询后仍盲调旧 run()。
+独立 torch 包和后端架构仍是未完成的大需求，不要为追低价值计数改变优先级。
 异机 CUDA 先跑 `tests/core/test_startup_config.py`、`tests/backends/cuda/test_cuda_kernel_math_policy.py`
 及 `tests/backends/cuda/test_multi_device.py`；NPU 依 `docs/guides/ascend-910b.md` 做真实构建/执行验收。
 下文波次表保留为历史证据，不应作为当前已完成范围。

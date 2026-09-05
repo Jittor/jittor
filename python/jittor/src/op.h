@@ -8,7 +8,7 @@
 #include "common.h"
 #include "node.h"
 #include "jit_key.h"
-#include "misc/string_view_map.h"
+#include "utils/string_view_map.h"
 
 namespace jittor {
 

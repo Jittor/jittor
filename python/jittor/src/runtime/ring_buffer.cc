@@ -12,7 +12,7 @@
 #include <sys/mman.h>
 #endif
 #include "common.h"
-#include "misc/ring_buffer.h"
+#include "runtime/ring_buffer.h"
 
 namespace jittor {
 

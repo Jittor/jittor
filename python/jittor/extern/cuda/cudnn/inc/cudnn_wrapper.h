@@ -16,7 +16,7 @@
 #include "fp16_emu.h"
 #include "common.h"
 #include "type/nano_string.h"
-#include "misc/float32_precision.h"
+#include "runtime/float32_precision.h"
 
 namespace jittor {
 
@@ -91,7 +91,7 @@ static inline cudnnDataType_t cudnn_conv_compute_type(
 /** Math mode for the convolution descriptor.
 
     float32 operands follow `float32_matmul_precision` (see
-    misc/float32_precision.h): `highest` keeps true float32 FMA, `high` and
+    runtime/float32_precision.h): `highest` keeps true float32 FMA, `high` and
     `medium` allow the tensor-op path. Reduced-precision operands always take
     the tensor-op path -- for float16/bfloat16 data ALLOW_CONVERSION has
     nothing left to convert, so it costs no accuracy and is the only way the

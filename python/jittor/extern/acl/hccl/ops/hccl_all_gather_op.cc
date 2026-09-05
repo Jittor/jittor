@@ -50,7 +50,7 @@ void HcclAllGatherOp::jit_prepare(JK& jk) {
 void HcclAllGatherOp::jit_run() {
     LOGir << "HcclAllGatherOp::jit_run";
     // dtype -> HcclDataType goes through the single table in
-    // hccl_wrapper.cc (see misc/collective_dtype.h).
+    // hccl_wrapper.cc (see runtime/collective_dtype.h).
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
     hccl_collective_begin();
