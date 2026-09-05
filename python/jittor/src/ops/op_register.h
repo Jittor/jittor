@@ -311,6 +311,56 @@ private:
 };
 
 /**
+ * Non-owning, generation-checked view for a host-side provider consumer.
+ *
+ * A backend must not treat a structurally valid dispatch value as a live
+ * handle: provider replacement, operator unbinding, and operator removal all
+ * invalidate the generation represented by its key.  This view keeps the
+ * value snapshot together with the registry used to validate it, so C++ and
+ * generated/JIT consumers have one small fail-closed boundary.  It owns no
+ * registry or backend object and has no teardown side effects.
+ */
+class NativeProviderConsumerLease {
+public:
+    NativeProviderConsumerLease() : registry(nullptr), dispatch() {}
+
+    NativeProviderConsumerLease(
+            const NativeOpRegistry& registry,
+            const NativeProviderConsumerDispatch& dispatch)
+        : registry(&registry), dispatch(dispatch) {}
+
+    bool valid() const {
+        return registry && dispatch.valid() &&
+            registry->is_current(dispatch.dispatch_key);
+    }
+
+    explicit operator bool() const { return valid(); }
+
+    // Throwing access is useful for required kernels; optional consumers can
+    // use try_get() to preserve their own fallback policy.
+    const NativeProviderConsumerDispatch& get() const {
+        ASSERT(valid()) << "native provider consumer lease is stale";
+        return dispatch;
+    }
+
+    bool try_get(NativeProviderConsumerDispatch& result) const {
+        if (!valid())
+            return false;
+        result = dispatch;
+        return true;
+    }
+
+    void reset() {
+        registry = nullptr;
+        dispatch = NativeProviderConsumerDispatch();
+    }
+
+private:
+    const NativeOpRegistry* registry;
+    NativeProviderConsumerDispatch dispatch;
+};
+
+/**
  * Scoped, non-owning installation of a provider lifecycle observer.
  *
  * Provider consumers commonly install their observer while constructing a

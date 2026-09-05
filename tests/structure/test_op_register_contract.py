@@ -228,6 +228,25 @@ def test_native_provider_consumer_dispatch_is_atomic_and_value_only():
     assert "!registry.is_current(consumer_dispatch.dispatch_key)" in jit_test
 
 
+def test_native_provider_consumer_lease_is_generation_checked_and_non_owning():
+    header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
+        encoding="utf-8")
+    jit_test = (REPO_ROOT / "python/jittor/src/tests/test_op_register.cc").read_text(
+        encoding="utf-8")
+    view = header[header.index("class NativeProviderConsumerLease"):
+                  header.index("class NativeProviderLifecycleObserverScope")]
+    assert "class NativeProviderConsumerLease" in header
+    assert "registry->is_current(dispatch.dispatch_key)" in view
+    assert "bool try_get(NativeProviderConsumerDispatch& result) const" in view
+    assert "void reset()" in view
+    assert "shared_ptr" not in view
+    assert "unique_ptr" not in view
+    assert "void*" not in view
+    assert "NativeProviderConsumerLease lease(registry, dispatch)" in jit_test
+    assert "!lease.valid()" in jit_test
+    assert "!lease.try_get(copied)" in jit_test
+
+
 def test_native_provider_abi_admission_has_one_host_contract():
     header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
         encoding="utf-8")

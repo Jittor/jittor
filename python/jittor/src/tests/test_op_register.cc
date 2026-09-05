@@ -144,6 +144,38 @@ JIT_TEST(native_op_registry_provider_dispatch_boundary) {
     ASSERT(registry.unregister("jit_test_provider_dispatch"));
 }
 
+// A host consumer keeps a value snapshot, but liveness is checked against the
+// provider generation before a backend handle is used.  This is deliberately
+// non-owning: replacement and teardown only invalidate the view.
+JIT_TEST(native_op_registry_consumer_lease_is_generation_checked) {
+    NativeOpRegistry registry;
+    registry.register_op({"jit_test_provider_lease", "test", ""});
+    registry.register_provider("cuda");
+    registry.bind_provider("jit_test_provider_lease", "cuda");
+    auto dispatch = registry.provider_consumer_dispatch(
+        "jit_test_provider_lease", "cuda");
+    NativeProviderConsumerLease lease(registry, dispatch);
+    ASSERT(lease.valid());
+    ASSERT((bool)lease);
+    ASSERT(lease.get().dispatch_key.op_id == dispatch.dispatch_key.op_id);
+    NativeProviderConsumerDispatch copied;
+    ASSERT(lease.try_get(copied));
+    ASSERT(copied.valid());
+
+    // A replacement invalidates the old generation even though the value
+    // snapshot remains well-formed and safe to retain.
+    registry.register_provider("cuda", true);
+    ASSERT(!lease.valid());
+    ASSERT(!lease.try_get(copied));
+    expect_error([&]() { lease.get(); });
+
+    lease.reset();
+    ASSERT(!lease.valid());
+    ASSERT(!lease.try_get(copied));
+    ASSERT(registry.unregister_provider("cuda"));
+    ASSERT(registry.unregister("jit_test_provider_lease"));
+}
+
 JIT_TEST(native_op_registry_rejects_incompatible_provider_abi) {
     ASSERT(NativeProviderAbiContract::version_matches(
         NATIVE_PROVIDER_ABI_VERSION));
