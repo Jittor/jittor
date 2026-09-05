@@ -22,6 +22,7 @@ from .preflight import (
 from jittor.compat._aliases import torch_namespace_claimable, torch_namespace_owned
 from jittor.compat.torch.publication import (
     bind_published_namespace, independent_torch_namespace,
+    publish_independent_namespace,
 )
 from ..diagnostics import EXPECTED, swallowed
 from ..transaction import ActivationTransaction, _MISSING
@@ -166,15 +167,9 @@ def _activate_once(
             torch_compat.install(jt, strict=strict_bootstrap)
             published = independent_torch_namespace(jt) if independent_namespace else jt
             if independent_namespace:
-                bind_published_namespace(
-                    published,
-                    jt._torch_compat_install_context.registry._published,
+                publish_independent_namespace(
+                    published, jt._torch_compat_install_context.registry,
                     transaction=transaction,
-                )
-                _publish_registry_root(
-                    transaction,
-                    jt._torch_compat_install_context.registry,
-                    published,
                 )
             _publish_torch_module(transaction, published, jt)
             transaction.commit()
@@ -248,19 +243,10 @@ def _activate_once(
     torch_compat.install(jt, strict=strict_bootstrap)
     published = independent_torch_namespace(jt) if independent_namespace else jt
     if independent_namespace:
-        bind_published_namespace(
-            published,
-            jt._torch_compat_install_context.registry._published,
+        publish_independent_namespace(
+            published, jt._torch_compat_install_context.registry,
             transaction=_transaction,
         )
-        if _transaction is not None:
-            _publish_registry_root(
-                _transaction,
-                jt._torch_compat_install_context.registry,
-                published,
-            )
-        else:
-            jt._torch_compat_install_context.registry._published["torch"] = published
     if _transaction is None:
         sys.modules["torch"] = published
     else:

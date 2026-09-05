@@ -330,6 +330,28 @@ def test_independent_root_registry_binding_rolls_back_with_import_identity():
     assert registry._published["torch"] is owner
 
 
+def test_publication_helper_binds_registry_and_root_as_one_operation():
+    from jittor.compat.torch.publication import publish_independent_namespace
+    from jittor.compat.transaction import ActivationTransaction
+
+    owner = types.ModuleType("jittor")
+    namespace = independent_torch_namespace(owner)
+    child = types.ModuleType("torch.nn")
+    registry = types.SimpleNamespace(_published={"torch": owner, "torch.nn": child})
+    transaction = ActivationTransaction("namespace-publication-boundary")
+    transaction.acquire()
+    try:
+        publish_independent_namespace(namespace, registry, transaction=transaction)
+        assert registry._published["torch"] is namespace
+        assert namespace.nn is child
+        transaction.rollback()
+    finally:
+        transaction.release()
+
+    assert registry._published["torch"] is owner
+    assert not hasattr(namespace, "nn")
+
+
 def test_independent_root_and_children_restore_import_identity_on_rollback():
     from jittor.compat.shim.runtime import _publish_registry_root
     from jittor.compat.transaction import ActivationTransaction

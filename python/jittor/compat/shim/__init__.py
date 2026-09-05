@@ -16,6 +16,9 @@ _PUBLIC = {
     "independent_torch_namespace": (
         "jittor.compat.torch.publication", "independent_torch_namespace"
     ),
+    "publish_independent_namespace": (
+        "jittor.compat.torch.publication", "publish_independent_namespace"
+    ),
     "DISTRIBUTION_MODULES": (
         "jittor.compat.torch.distribution", "DISTRIBUTION_MODULES"
     ),

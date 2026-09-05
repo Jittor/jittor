@@ -9,6 +9,7 @@ distribution import the view without pulling in the native shim installer.
 from __future__ import annotations
 
 from .namespace import TorchNamespace
+from ..transaction import _MISSING
 
 
 def independent_torch_namespace(owner):
@@ -89,7 +90,31 @@ def bind_published_namespace(namespace, published, transaction=None):
     return namespace
 
 
+def publish_independent_namespace(namespace, registry, transaction=None):
+    """Publish an independent namespace through one registry boundary.
+
+    The runtime registry is the source of truth for the compatibility module
+    graph.  Keeping the child binding and root replacement together prevents
+    callers from publishing a detached ``torch`` root while leaving the
+    registry's children attached to the native owner.  Every mutation is
+    recorded in the caller's activation transaction when one is supplied.
+    """
+
+    if not isinstance(namespace, TorchNamespace):
+        raise TypeError("namespace must be a TorchNamespace")
+    published = getattr(registry, "_published", None)
+    if published is None or not hasattr(published, "get"):
+        raise TypeError("registry must expose a published module mapping")
+
+    bind_published_namespace(namespace, published, transaction=transaction)
+    old = published.get("torch", _MISSING)
+    if transaction is not None:
+        transaction.record(published, "torch", old, namespace)
+    published["torch"] = namespace
+    return namespace
+
+
 __all__ = [
     "TorchNamespace", "independent_torch_namespace", "namespace_owner",
-    "bind_published_namespace",
+    "bind_published_namespace", "publish_independent_namespace",
 ]

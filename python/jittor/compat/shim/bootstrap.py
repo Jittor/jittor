@@ -5,6 +5,7 @@ from .discovery import NativeExtension, scan_extension_dirs
 from .runtime import activate, activation_status
 from jittor.compat.torch.publication import (
     TorchNamespace, independent_torch_namespace, namespace_owner,
+    publish_independent_namespace,
 )
 from jittor.compat.torch.distribution import (
     DISTRIBUTION_MODULES, DISTRIBUTION_PACKAGE_ALIASES,
@@ -25,6 +26,7 @@ __all__ = [
     "TorchNamespace",
     "independent_torch_namespace",
     "namespace_owner",
+    "publish_independent_namespace",
     "DISTRIBUTION_MODULES",
     "DISTRIBUTION_PACKAGE_ALIASES",
     "distribution_manifest",
