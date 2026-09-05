@@ -85,6 +85,19 @@ JIT_TEST(native_op_registry_provider_dispatch_boundary) {
     ASSERT(consumer_dispatch.dispatch_key.op_id == key.op_id);
     ASSERT(consumer_dispatch.dispatch_key.provider_id == key.provider_id);
     ASSERT(registry.is_current(consumer_dispatch.dispatch_key));
+    // Generated/JIT consumers already hold the registered OpId.  The ID
+    // boundary must publish the same coherent value pair without a name
+    // lookup, and unknown ids must fail closed.
+    auto id_dispatch = registry.provider_consumer_dispatch(
+        get_op_id("jit_test_provider_dispatch"), "cpu");
+    ASSERT(id_dispatch.valid());
+    ASSERT(id_dispatch.metadata.provider_id == consumer_dispatch.metadata.provider_id);
+    ASSERT(id_dispatch.dispatch_key.op_id == consumer_dispatch.dispatch_key.op_id);
+    NativeProviderConsumerDispatch missing_id_dispatch;
+    ASSERT(!registry.try_provider_consumer_dispatch(
+        (OpId)0x7fffffff, "cpu", missing_id_dispatch));
+    ASSERT(!registry.try_provider_consumer_dispatch(
+        consumer_dispatch.dispatch_key.op_id, "missing_provider", missing_id_dispatch));
     NativeProviderConsumerDispatch optional_dispatch;
     ASSERT(registry.try_provider_consumer_dispatch(
         "jit_test_provider_dispatch", "cpu", optional_dispatch));

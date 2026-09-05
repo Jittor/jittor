@@ -251,11 +251,20 @@ public:
     // closes the replacement race between separate metadata/key lookups.
     NativeProviderConsumerDispatch provider_consumer_dispatch(
         const string& name, const string& provider) const;
+    // ID-based variant for generated/JIT consumers.  Once an Op has been
+    // registered, consumers should not repeat a string lookup on the hot
+    // dispatch path; an unknown or stale id fails closed just like the
+    // name-based API.
+    NativeProviderConsumerDispatch provider_consumer_dispatch(
+        OpId op_id, const string& provider) const;
     // Non-throwing consumer boundary for optional/backend probing.  On
     // failure ``dispatch`` is left untouched; successful publication writes
     // both metadata and dispatch key as one value snapshot.
     bool try_provider_consumer_dispatch(
         const string& name, const string& provider,
+        NativeProviderConsumerDispatch& dispatch) const;
+    bool try_provider_consumer_dispatch(
+        OpId op_id, const string& provider,
         NativeProviderConsumerDispatch& dispatch) const;
     // The observer is non-owning and receives future transitions only.  The
     // returned pointer is the previous observer, mirroring the node lifecycle
@@ -284,9 +293,15 @@ public:
 
 private:
     static string key(const string& name);
+    bool try_provider_consumer_dispatch_locked(
+        OpId op_id, const string& provider,
+        NativeProviderConsumerDispatch& dispatch) const;
 
     mutable std::recursive_mutex mutex;
     unordered_map<string, OpInfo> entries;
+    // JIT/native consumers resolve the stable OpId directly; retaining the
+    // canonical key here avoids a string scan on the provider dispatch path.
+    unordered_map<OpId, string> op_keys_by_id;
     unordered_map<string, unordered_set<string>> provider_bindings;
     unordered_map<string, uint32> provider_ids;
     unordered_map<string, NativeProviderRegistration> provider_registrations;

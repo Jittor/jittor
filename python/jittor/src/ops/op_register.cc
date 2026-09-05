@@ -54,7 +54,9 @@ void NativeOpRegistry::register_op(const OpInfo& op_info) {
         << "\nvar_members:" << op_info.var_members;
     OpInfo registered = op_info;
     registered.id = next_id++;
+    const auto registered_id = registered.id;
     entries[op_file_name] = move(registered);
+    op_keys_by_id.emplace(registered_id, op_file_name);
 }
 
 bool NativeOpRegistry::has(const string& name) const {
@@ -101,6 +103,7 @@ bool NativeOpRegistry::unregister(const string& name) {
         unbound.push_back({op_iter->second.id, item.first, id_iter->second,
                            registration_iter->second.abi_version});
     }
+    op_keys_by_id.erase(op_iter->second.id);
     entries.erase(op_iter);
     observer = lifecycle_observer;
     removed = true;
@@ -221,17 +224,48 @@ NativeProviderConsumerDispatch NativeOpRegistry::provider_consumer_dispatch(
     return result;
 }
 
+NativeProviderConsumerDispatch NativeOpRegistry::provider_consumer_dispatch(
+        OpId op_id, const string& provider) const {
+    NativeProviderConsumerDispatch result;
+    ASSERT(try_provider_consumer_dispatch(op_id, provider, result))
+        << "Op id" << op_id << "has no current provider dispatch for"
+        << provider;
+    return result;
+}
+
 bool NativeOpRegistry::try_provider_consumer_dispatch(
         const string& name, const string& provider,
         NativeProviderConsumerDispatch& dispatch) const {
     std::lock_guard<std::recursive_mutex> guard(mutex);
     string op_file_name = key(name);
-    auto provider_iter = provider_bindings.find(provider);
-    if (provider_iter == provider_bindings.end() ||
-            !provider_iter->second.count(op_file_name))
-        return false;
     auto op_iter = entries.find(op_file_name);
     if (op_iter == entries.end())
+        return false;
+    return try_provider_consumer_dispatch_locked(
+        op_iter->second.id, provider, dispatch);
+}
+
+bool NativeOpRegistry::try_provider_consumer_dispatch(
+        OpId op_id, const string& provider,
+        NativeProviderConsumerDispatch& dispatch) const {
+    std::lock_guard<std::recursive_mutex> guard(mutex);
+    return try_provider_consumer_dispatch_locked(op_id, provider, dispatch);
+}
+
+bool NativeOpRegistry::try_provider_consumer_dispatch_locked(
+        OpId op_id, const string& provider,
+        NativeProviderConsumerDispatch& dispatch) const {
+    if (!op_id)
+        return false;
+    auto provider_iter = provider_bindings.find(provider);
+    if (provider_iter == provider_bindings.end())
+        return false;
+    auto op_key_iter = op_keys_by_id.find(op_id);
+    if (op_key_iter == op_keys_by_id.end())
+        return false;
+    auto op_iter = entries.find(op_key_iter->second);
+    if (op_iter == entries.end() ||
+            !provider_iter->second.count(op_iter->first))
         return false;
     auto id_iter = provider_ids.find(provider);
     if (id_iter == provider_ids.end())
@@ -242,7 +276,7 @@ bool NativeOpRegistry::try_provider_consumer_dispatch(
     NativeProviderConsumerDispatch result;
     result.metadata = NativeProviderMetadata(registration_iter->second,
                                              id_iter->second);
-    result.dispatch_key = {op_iter->second.id, provider, id_iter->second,
+    result.dispatch_key = {op_id, provider, id_iter->second,
                            registration_iter->second.abi_version};
     if (!result.valid())
         return false;
