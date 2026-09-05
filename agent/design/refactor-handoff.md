@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；当前状态基线 `78a326c4`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 当前 1695 个 |
+| 分支 | `2.0-refactor`；当前状态基线 `f7770109`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 当前 1700 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **211** / 进行中 **0** / 待领 **61** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
@@ -1866,6 +1866,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `6db5a349` 增加 RegistrySnapshot 所有权不变量，registry 合同 25 passed；4.03/4.04 native 全量接线仍待领。 |
 | `compat` | `b77217e8` 为独立 TorchNamespace 根补标准 ModuleSpec，namespace 13 passed；7.12 完整模块迁移仍待领。 |
 | `gates` | `863f013f` 统一 standalone runner 与 nox 执行策略，结构/环境 26 passed；0.15 完整时长仍待最终验收。 |
+
+### 2026-09-05 第一百九十四波
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `e59adcdf` 将 `profiler_enable` 纳入 RuntimeContext owner，snapshot/只读/flag_scope 结构 16 passed；2.13 其余状态仍待领。 |
+| `device` | `f46fa787` 收紧 RegistrySnapshot ownership 输入并补独立快照合同，registry 27 passed；4.03/4.04 native 全量接线仍待领。 |
+| `compat` | `3eca5513` 隔离 TorchNamespace `__spec__`/`__file__` 等元数据，namespace 14 passed；7.12 完整模块迁移仍待领。 |
+| `gates` | `f7770109` 对齐 standalone runner 的 worker/quota policy，结构 15 passed；0.15 完整时长仍待最终验收。 |
 
 ## 7. 接手怎么开始
 
