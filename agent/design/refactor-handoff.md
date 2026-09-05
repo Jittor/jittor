@@ -28,7 +28,7 @@
 | | |
 | --- | --- |
 | 分支 | `2.0-refactor`；当前状态基线 `39759689`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 当前 1701 个 |
+| 相对 `2.0` 的提交 | 当前 1706 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **211** / 进行中 **0** / 待领 **61** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
@@ -1875,6 +1875,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `f46fa787` 收紧 RegistrySnapshot ownership 输入并补独立快照合同，registry 27 passed；4.03/4.04 native 全量接线仍待领。 |
 | `compat` | `3eca5513` 隔离 TorchNamespace `__spec__`/`__file__` 等元数据，namespace 14 passed；7.12 完整模块迁移仍待领。 |
 | `gates` | `f7770109` 对齐 standalone runner 的 worker/quota policy，结构 15 passed；0.15 完整时长仍待最终验收。 |
+
+### 2026-09-05 第一百九十五波
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `a13b9cf6` 将 `profiler_rerun` 纳入 RuntimeContext owner，snapshot/只读/flag_scope 结构 17 passed；2.13 其余状态仍待领。 |
+| `device` | `148ea645` 增加 RegistrySnapshot provider 查询与 teardown 隔离，registry 合同 28 passed；4.03/4.04 native 全量接线仍待领。 |
+| `compat` | `2831a09e` 对称化 TorchNamespace `__delattr__` ownership，namespace 16 passed；7.12 完整模块迁移仍待领。 |
+| `gates` | `4dc47dae` 统一 standalone runner 六类线程池 policy，结构 8 passed；0.15 完整时长仍待最终验收。 |
 
 ## 7. 接手怎么开始
 
