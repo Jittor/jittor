@@ -1922,6 +1922,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `compat` | `8fcdc20f` 拆 Torch publication boundary，namespace 17 passed；独立 distribution/alias 清理仍待。 |
 | `build/layout` | `09c7665c` 完成 miniz third_party 路径收尾，结构 1 passed。 |
 
+### 2026-09-05 第一百九十九波：跨硬件组织前置
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `2276d09f` 将 `missing_grad_error` 纳入 RuntimeContext owner，结构 23 passed；全局 flags 仍待迁移。 |
+| `device` | `d8edc265` 为 NativeOpDispatchKey 增加 provider generation identity，避免 CUDA/NPU provider 重注册误命中旧 kernel；registry/C++/JIT 定向通过。 |
+| `device` | `e00054b0` 增加 ACL `AclDataOwner` host-only C++ seam，5 passed；CANN decoder接线与 910B3 实机仍待。 |
+| `compat` | `195544aa` 将 Torch publication aliases 统一走 publication boundary，namespace/alias/bootstrap 合同通过；独立 distribution 仍待。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。

@@ -1,5 +1,8 @@
 # 整改看板
 
+> 第199波：跨硬件组织前置继续：`2276d09f` 迁移 missing_grad_error Runtime owner（结构 23 passed）；`d8edc265` 为 native provider dispatch 增加 generation/provider_id（registry 29 + C++ 3 + JIT 2 passed）；`e00054b0` 增加 ACL AclDataOwner host-only seam（5 passed）；`195544aa` 将 Torch publication aliases 统一走 publication boundary（namespace 18、alias 1、bootstrap 1 passed）。均未声称硬件实测或聚合任务完成。
+
+
 > 第198波：异机测试代码组织前置完成：`2d772ef4`/`8d70ae4a` 迁移 AMP 与 profiler metadata owner（结构 22/20 passed）；`c1a67c91`/`b4b7c990` 集中并 provider-aware 化 native OpRegistry（C++14 syntax/contract 通过）；`e2731c0f`/`2dcc3448`/`7a03fa48` 建立 ACL host-only data schema + C++ decoder boundary（host-only 15 passed）；`8fcdc20f` 拆 Torch publication，`09c7665c` 完成 miniz third-party 布局。均未声称 CUDA/NPU 硬件验证。
 
 
