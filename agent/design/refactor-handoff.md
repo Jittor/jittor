@@ -28,7 +28,7 @@
 | | |
 | --- | --- |
 | 分支 | `2.0-refactor`；当前状态基线 `62358151`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 当前 1761 个 |
+| 相对 `2.0` 的提交 | 当前 1766 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **211** / 进行中 **0** / 待领 **61** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
@@ -1966,6 +1966,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `a2f44691` 增加非 owning Native observer teardown identity guard，C++/结构合同通过；provider 实机仍待。 |
 | `device` | `782c7663` 固定 ACL canonical cache key locale，host-only 13 passed；CANN/NPU runner仍待。 |
 | `compat` | `3ac67208` 集中 independent Torch publication 的 child+registry root 原子边界，namespace 25 passed；独立 distribution 完整发布仍待。 |
+
+### 2026-09-05 第二百零四波：异机 cache/distribution 前置
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `5656f81a` 将 `trace_var_data` 纳入 RuntimeContext owner，结构 28 passed；全局状态仍待迁移。 |
+| `device` | `6c073efa` 增加值型 NativeProviderMetadata snapshot，provider replacement/teardown 后旧快照安全，结构 5 passed。 |
+| `device` | `d328bb5a` 建立 ACL descriptor key/cache host-only shell，descriptor 合同 26 passed；不创建 CANN 对象，NPU 实机仍待。 |
+| `compat` | `165f9a0e` 增加 standalone torch distribution manifest validator，namespace 27 passed；独立 distribution 完整发布仍待。 |
 
 ## 7. 接手怎么开始
 

@@ -1,5 +1,8 @@
 # 整改看板
 
+> 第204波：异机前置继续：`5656f81a` 迁移 trace_var_data Runtime owner（结构 28 passed）；`6c073efa` 增加 NativeProviderMetadata value snapshot（结构 5 passed）；`d328bb5a` 建立 ACL descriptor key/cache host-only boundary（ACL 26 passed）；`165f9a0e` 增加 standalone torch distribution manifest validator（namespace 27 passed，既有 install-context 计数失败未归因本切片）。未声称 CUDA/NPU 实机。
+
+
 > 第203波：异机前置继续：`32ad37ef` 迁移 try_use_32bit_index Runtime owner（结构 27 passed）；`a2f44691` 增加 Native observer teardown identity guard（C++/结构 4 passed）；`782c7663` 固定 ACL cache key 使用 classic locale（host-only 13 passed）；`3ac67208` 集中 Torch independent publication 原子边界（namespace 25 passed）。未声称 CUDA/NPU 实机。
 
 
