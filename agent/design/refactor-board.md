@@ -1,5 +1,8 @@
 # 整改看板
 
+> 第217波：`98c8ee94` 迁移 cuda_allow_tf32 Runtime owner（结构 43 passed）；`b8398291` 修正 Native provider teardown 统一 lifecycle events（结构 12 passed）；`9d49c70c` ACL device_size Python/C++ 对齐（ACL 14 passed）；`d44782d4` Torch bootstrap 非字符串/非法 __all__ fail-closed。未声称 CUDA/NPU 实机。
+
+
 > 第216波：`68b4d443` 迁移 use_tensorcore Runtime owner（结构通过）；`32f1ea99` 统一 Native provider lifecycle value events（结构 12 passed）；`56231caa` ACL DescriptorCache generation-safe release（host-only 25 passed）；`645649b3` Torch publication graph 拒绝未声明额外模块（namespace 41 passed）。未声称 CUDA/NPU 实机。
 
 

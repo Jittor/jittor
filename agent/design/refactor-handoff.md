@@ -28,7 +28,7 @@
 | | |
 | --- | --- |
 | 分支 | `2.0-refactor`；当前状态基线 `9cd28e28`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 当前 1846 个 |
+| 相对 `2.0` 的提交 | 当前 1851 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **211** / 进行中 **0** / 待领 **61** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
@@ -2083,6 +2083,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `32f1ea99` 统一 Native provider lifecycle value events，结构 12 passed。 |
 | `device` | `56231caa` 增加 ACL DescriptorCache generation-safe release，host-only 25 passed；CANN/NPU runner仍待。 |
 | `compat` | `645649b3` 拒绝 Torch publication graph 未声明额外模块，namespace 41 passed；独立 distribution 完整发布仍待。 |
+
+### 2026-09-05 第二百一十七波：TF32/lifecycle/device diagnostics/bootstrap 前置
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `98c8ee94` 将 cuda_allow_tf32 纳入 RuntimeContext owner，结构 43 passed；全局状态仍待迁移。 |
+| `device` | `b8398291` 修正 provider teardown 同时发布 OP_UNBOUND/PROVIDER_UNREGISTERED events，结构 12 passed。 |
+| `device` | `9d49c70c` 对齐 ACL device_size Python/C++ teardown 语义，ACL 14 passed；CANN/NPU runner仍待。 |
+| `compat` | `d44782d4` 拒绝 Torch bootstrap 非字符串/非法 `__all__`，负向合同通过；独立 distribution 完整发布仍待。 |
 
 ## 7. 接手怎么开始
 
