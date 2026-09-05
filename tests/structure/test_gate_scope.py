@@ -46,6 +46,25 @@ def test_the_cpu_gate_reaches_every_test_file_it_does_not_exclude():
     )
 
 
+def test_core_property_tests_are_owned_by_the_cpu_gate():
+    """10.18: graph, liveness, and executor properties stay in both modes.
+
+    The CPU gate is intentionally tree-based, so a future exclusion or mode
+    split must not silently remove the tests that protect the core runtime.
+    Keep this contract focused on representative property suites rather than
+    freezing the entire ``tests/core`` directory.
+    """
+    required = {
+        "tests/core/test_traversal_state_isolation.py",
+        "tests/core/test_pyjt_binding_protocol.py",
+        "tests/core/test_autograd_engine.py",
+    }
+    native = gate_scope.selected_files(REPO_ROOT, gate_scope.native_arguments())
+    torch = gate_scope.selected_files(REPO_ROOT, gate_scope.torch_arguments())
+    assert required <= native, "native CPU gate lost core property tests"
+    assert required <= (native | torch), "CPU gate lost core property tests"
+
+
 def test_the_two_sessions_do_not_run_the_same_file_twice():
     """Torch mode is a split, not an overlap: each file has exactly one owner."""
     native = gate_scope.selected_files(REPO_ROOT, gate_scope.native_arguments())
