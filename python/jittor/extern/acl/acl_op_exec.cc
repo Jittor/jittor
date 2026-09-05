@@ -537,6 +537,19 @@ namespace jittor
          }},
     };
 
+    // CUDA external operators are disabled on ACL by an explicit registry.
+    // Keep this list in sync with python/jittor/extern/cuda/*/ops/*.h; using
+    // a name prefix here also catches unrelated operators and hides omissions.
+    static const set<string> acl_cuda_external_ops = {
+        "cub_arg_reduce", "cub_argsort", "cub_cumsum", "cub_test", "cub_where",
+        "cublas_acc_matmul", "cublas_batched_matmul", "cublas_matmul", "cublas_test",
+        "cudnn_conv", "cudnn_conv3d", "cudnn_conv3d_backward_w",
+        "cudnn_conv3d_backward_x", "cudnn_conv_backward_w", "cudnn_conv_backward_x",
+        "cudnn_rnn", "cudnn_rnn_backward_x", "cudnn_test",
+        "cufft_fft", "curand_random", "cusparse_spmmcoo", "cusparse_spmmcsr",
+        "cutt_test", "cutt_transpose",
+    };
+
     static void exec_mapped_acl_ops(Op *op)
     {
         auto iter = acl_ops.find(op->name());
@@ -618,7 +631,7 @@ namespace jittor
         vector<string> to_erase;
         for (const auto &name : registered_op_names())
         {
-            if (startswith(name, "cu") && acl_ops.count(name) == 0)
+            if (acl_cuda_external_ops.count(name) != 0 && acl_ops.count(name) == 0)
             {
                 to_erase.push_back(name);
             }
