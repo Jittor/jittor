@@ -86,6 +86,24 @@ class TestNeedsInputGrad(unittest.TestCase):
         self.assertIn("no keyword arguments", str(cm.exception))
 
 
+class TestBackwardLeafAndGradFn(unittest.TestCase):
+    """The shim forwards leaf and producer identity to the core graph query."""
+
+    def test_leaf_and_intermediate_report_torch_shape(self):
+        x = torch.ones(3)
+        x.requires_grad = True
+        y = x * 2
+
+        self.assertTrue(x.is_leaf)
+        self.assertIsNone(x.grad_fn)
+        self.assertFalse(y.is_leaf)
+        self.assertIsNotNone(y.grad_fn)
+        self.assertEqual(y.grad_fn.node_id, y.grad_fn_node_id)
+        self.assertEqual(y.grad_fn.op_id, y.grad_fn_op_id)
+        self.assertEqual(y.grad_fn.name, y.grad_fn_name)
+        self.assertEqual(y.grad_fn, y.grad_fn)
+
+
 class TestCreateGraphVersusRetainGraph(unittest.TestCase):
     """The two were folded into one, so create_graph=False stayed differentiable."""
 

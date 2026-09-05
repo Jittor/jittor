@@ -1527,17 +1527,42 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                     swallowed("torch/installers/tensor.py _grad_set: object.__setattr__(o, '_grad_map', {})", exc)
     Var.grad = property(_grad_get, _grad_set)
 
-    # torch's `is_leaf`: True for tensors not produced by a grad-tracked op
-    # (user-created params/inputs). jittor has no autograd-graph leaf concept;
-    # treat every Var as a leaf so peft's `if param.is_leaf:` guards pass.
-    if not hasattr(Var, "is_leaf"):
-        Var.is_leaf = property(lambda self: True)
+    # The core query is the source of truth for torch's backward-graph view.
+    # Keep the compatibility spelling on Var so it follows the graph instead
+    # of silently calling every intermediate a leaf.
+    Var.is_leaf = property(lambda self: bool(self.is_backward_leaf))
     # torch's nested-tensor flag; jittor has no nested tensors -> always False.
     if not hasattr(Var, "is_nested"):
         Var.is_nested = property(lambda self: False)
-    # torch's `grad_fn` is None for leaves; libs check `t.grad_fn is None`.
-    if not hasattr(Var, "grad_fn"):
-        Var.grad_fn = property(lambda self: None)
+    # torch exposes an opaque node object here.  The shim cannot expose a
+    # torch autograd Node, but the core supplies a stable node id and a
+    # diagnostic name.  Equality/hash use the node id so repeated reads on
+    # tensors from the same producing op have the expected identity semantics.
+    class _TorchGradFn:
+        __slots__ = ("node_id", "op_id", "name")
+
+        def __init__(self, node_id, op_id, name):
+            self.node_id = int(node_id)
+            self.op_id = int(op_id)
+            self.name = str(name)
+
+        def __repr__(self):
+            return self.name or "<grad_fn>"
+
+        def __eq__(self, other):
+            return (isinstance(other, _TorchGradFn)
+                    and self.node_id == other.node_id)
+
+        def __hash__(self):
+            return hash(self.node_id)
+
+    def _grad_fn(self):
+        node_id = int(self.grad_fn_node_id)
+        if node_id == -1:
+            return None
+        return _TorchGradFn(node_id, self.grad_fn_op_id, self.grad_fn_name)
+
+    Var.grad_fn = property(_grad_fn)
     # torch's retain_grad() marks a NON-leaf tensor so its .grad is populated
     # after backward (normally only leaves keep .grad). 3DGS relies on this for
     # the screenspace `means2D` tensor (`zeros_like(xyz)+0` then retain_grad()),
