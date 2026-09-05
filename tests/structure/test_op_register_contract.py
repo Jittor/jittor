@@ -93,3 +93,27 @@ def test_op_constructors_are_not_erased_through_void_pointer_rtti():
     assert "typeid(func_t)" not in header
     assert "(void*)&{name}" not in compiler
     assert "(void*)&make_number" not in utils
+
+
+def test_native_provider_lifecycle_consumer_is_value_only_and_non_owning():
+    header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
+        encoding="utf-8")
+    source = (REPO_ROOT / "python/jittor/src/ops/op_register.cc").read_text(
+        encoding="utf-8")
+    jit_test = (REPO_ROOT / "python/jittor/src/tests/test_op_register.cc").read_text(
+        encoding="utf-8")
+    assert "struct NativeProviderLifecycleObserver" in header
+    for method in (
+            "on_provider_registered", "on_provider_unregistered",
+            "on_provider_op_bound", "on_provider_op_unbound"):
+        assert method in header
+        assert method in source
+        assert method in jit_test
+    assert "NativeProviderLifecycleObserver* lifecycle_observer" in header
+    assert "set_lifecycle_observer" in header
+    # The lifecycle seam may not own a backend object or expose one through
+    # the ABI header.  Providers retain their handles on their own side.
+    assert "shared_ptr<NativeProviderLifecycleObserver>" not in header
+    assert "unique_ptr<NativeProviderLifecycleObserver>" not in header
+    assert "void*" not in header[header.index("struct NativeProviderLifecycleObserver"):
+                                  header.index("class NativeOpRegistry")]

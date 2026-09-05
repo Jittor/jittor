@@ -98,6 +98,68 @@ JIT_TEST(native_op_registry_rejects_incompatible_provider_abi) {
     ASSERT(!registry.has_provider("truncated"));
 }
 
+// Provider implementations consume lifecycle events instead of reaching
+// into registry storage.  The observer is deliberately non-owning and keys
+// remain value objects, so replacement/unregister can invalidate stale device
+// handles before a new provider instance is published.
+struct NativeProviderLifecycleProbe : NativeProviderLifecycleObserver {
+    vector<string> events;
+    vector<NativeOpDispatchKey> keys;
+
+    void on_provider_registered(const NativeProviderRegistration& registration,
+                                uint32 provider_id) override {
+        events.push_back("registered:" + registration.name);
+        ASSERT(provider_id != 0);
+    }
+    void on_provider_unregistered(const NativeProviderRegistration& registration,
+                                  uint32 provider_id) override {
+        events.push_back("unregistered:" + registration.name);
+        ASSERT(provider_id != 0);
+    }
+    void on_provider_op_bound(const NativeOpDispatchKey& key) override {
+        events.push_back("bound:" + key.provider);
+        ASSERT(key.valid());
+        keys.push_back(key);
+    }
+    void on_provider_op_unbound(const NativeOpDispatchKey& key) override {
+        events.push_back("unbound:" + key.provider);
+        ASSERT(key.valid());
+        keys.push_back(key);
+    }
+};
+
+JIT_TEST(native_op_registry_lifecycle_consumer_boundary) {
+    NativeOpRegistry registry;
+    NativeProviderLifecycleProbe probe;
+    registry.register_op({"jit_test_provider_consumer", "test", ""});
+    ASSERT(registry.set_lifecycle_observer(&probe) == nullptr);
+    registry.register_provider("cuda");
+    registry.bind_provider("jit_test_provider_consumer", "cuda");
+    // Binding the same operator twice is idempotent and must not publish a
+    // duplicate consumer event.
+    registry.bind_provider("jit_test_provider_consumer", "cuda");
+    ASSERT(probe.events.size() == 2);
+    ASSERT(probe.events[0] == "registered:cuda");
+    ASSERT(probe.events[1] == "bound:cuda");
+
+    registry.register_provider("cuda", true);
+    ASSERT(probe.events.size() == 5);
+    ASSERT(probe.events[2] == "unbound:cuda");
+    ASSERT(probe.events[3] == "unregistered:cuda");
+    ASSERT(probe.events[4] == "registered:cuda");
+
+    registry.bind_provider("jit_test_provider_consumer", "cuda");
+    ASSERT(registry.unregister("jit_test_provider_consumer"));
+    ASSERT(probe.events.size() == 7);
+    ASSERT(probe.events[5] == "bound:cuda");
+    ASSERT(probe.events[6] == "unbound:cuda");
+
+    ASSERT(registry.unregister_provider("cuda"));
+    ASSERT(probe.events.size() == 8);
+    ASSERT(probe.events[7] == "unregistered:cuda");
+    ASSERT(registry.set_lifecycle_observer(nullptr) == &probe);
+}
+
 // A constructor resolved on first call, not at load time. The point is what
 // does NOT happen at construction: no registry lookup, so no dependency on
 // this translation unit's static initialiser running after the registry's.

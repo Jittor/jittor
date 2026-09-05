@@ -82,13 +82,32 @@ vector<string> NativeOpRegistry::names() const {
 }
 
 bool NativeOpRegistry::unregister(const string& name) {
+    vector<NativeOpDispatchKey> unbound;
+    NativeProviderLifecycleObserver* observer = nullptr;
+    bool removed = false;
+    {
     std::lock_guard<std::recursive_mutex> guard(mutex);
     string op_file_name = key(name);
-    bool removed = entries.erase(op_file_name);
-    if (removed) {
-        for (auto& item : provider_bindings)
-            item.second.erase(op_file_name);
+    auto op_iter = entries.find(op_file_name);
+    if (op_iter == entries.end())
+        return false;
+    for (auto& item : provider_bindings) {
+        if (!item.second.erase(op_file_name))
+            continue;
+        auto id_iter = provider_ids.find(item.first);
+        auto registration_iter = provider_registrations.find(item.first);
+        ASSERT(id_iter != provider_ids.end());
+        ASSERT(registration_iter != provider_registrations.end());
+        unbound.push_back({op_iter->second.id, item.first, id_iter->second,
+                           registration_iter->second.abi_version});
     }
+    entries.erase(op_iter);
+    observer = lifecycle_observer;
+    removed = true;
+    }
+    if (observer)
+        for (const auto& key : unbound)
+            observer->on_provider_op_unbound(key);
     return removed;
 }
 
@@ -99,21 +118,50 @@ void NativeOpRegistry::register_provider(
         << "abi_version:" << registration.abi_version
         << "struct_size:" << registration.struct_size;
     const string& provider = registration.name;
+    NativeProviderLifecycleObserver* observer = nullptr;
+    uint32 provider_instance = 0;
+    uint32 old_provider_instance = 0;
+    NativeProviderRegistration old_registration;
+    vector<NativeOpDispatchKey> unbound;
+    bool replaced = false;
+    {
     std::lock_guard<std::recursive_mutex> guard(mutex);
     auto iter = provider_bindings.find(provider);
     if (iter != provider_bindings.end()) {
         if (!replace)
             ASSERT(false) << "provider" << provider << "is already registered";
+        auto old_id = provider_ids.at(provider);
+        old_provider_instance = old_id;
+        old_registration = provider_registrations.at(provider);
+        for (const auto& op_name : iter->second) {
+            auto op_iter = entries.find(op_name);
+            if (op_iter == entries.end())
+                continue;
+            unbound.push_back({op_iter->second.id, provider, old_id,
+                               old_registration.abi_version});
+        }
         iter->second.clear();
         // A replacement is a new provider instance.  Never let a cached
         // backend handle accidentally address the new instance.
         provider_ids[provider] = next_provider_id++;
         provider_registrations[provider] = registration;
-        return;
+        replaced = true;
+    } else {
+        provider_bindings.emplace(provider, unordered_set<string>());
+        provider_ids.emplace(provider, next_provider_id++);
+        provider_registrations.emplace(provider, registration);
     }
-    provider_bindings.emplace(provider, unordered_set<string>());
-    provider_ids.emplace(provider, next_provider_id++);
-    provider_registrations.emplace(provider, registration);
+    provider_instance = provider_ids.at(provider);
+    observer = lifecycle_observer;
+    }
+    if (observer) {
+        for (const auto& key : unbound)
+            observer->on_provider_op_unbound(key);
+        if (replaced)
+            observer->on_provider_unregistered(old_registration,
+                                               old_provider_instance);
+        observer->on_provider_registered(registration, provider_instance);
+    }
 }
 
 void NativeOpRegistry::register_provider(const string& provider, bool replace) {
@@ -151,14 +199,38 @@ NativeProviderRegistration NativeOpRegistry::provider_registration(
     return iter->second;
 }
 
+NativeProviderLifecycleObserver* NativeOpRegistry::set_lifecycle_observer(
+        NativeProviderLifecycleObserver* observer) {
+    std::lock_guard<std::recursive_mutex> guard(mutex);
+    auto previous = lifecycle_observer;
+    lifecycle_observer = observer;
+    return previous;
+}
+
 void NativeOpRegistry::bind_provider(const string& name, const string& provider) {
+    NativeOpDispatchKey dispatch_key;
+    NativeProviderLifecycleObserver* observer = nullptr;
+    {
     std::lock_guard<std::recursive_mutex> guard(mutex);
     string op_file_name = key(name);
     ASSERT(entries.count(op_file_name)) << "Op" << name << "not found.";
     auto iter = provider_bindings.find(provider);
     ASSERT(iter != provider_bindings.end())
         << "provider" << provider << "is not registered";
-    iter->second.insert(op_file_name);
+    auto inserted = iter->second.insert(op_file_name);
+    if (!inserted.second)
+        return;
+    auto op_iter = entries.find(op_file_name);
+    auto provider_iter = provider_ids.find(provider);
+    auto registration_iter = provider_registrations.find(provider);
+    ASSERT(provider_iter != provider_ids.end());
+    ASSERT(registration_iter != provider_registrations.end());
+    dispatch_key = {op_iter->second.id, provider, provider_iter->second,
+                    registration_iter->second.abi_version};
+    observer = lifecycle_observer;
+    }
+    if (observer)
+        observer->on_provider_op_bound(dispatch_key);
 }
 
 NativeOpDispatchKey NativeOpRegistry::resolve_provider(
@@ -183,11 +255,38 @@ NativeOpDispatchKey NativeOpRegistry::resolve_provider(
 }
 
 bool NativeOpRegistry::unregister_provider(const string& provider) {
+    NativeProviderLifecycleObserver* observer = nullptr;
+    NativeProviderRegistration registration;
+    uint32 provider_instance = 0;
+    vector<NativeOpDispatchKey> unbound;
+    bool removed = false;
+    {
     std::lock_guard<std::recursive_mutex> guard(mutex);
-    bool removed = provider_bindings.erase(provider) != 0;
-    if (removed) {
-        provider_ids.erase(provider);
-        provider_registrations.erase(provider);
+    auto bindings = provider_bindings.find(provider);
+    if (bindings == provider_bindings.end())
+        return false;
+    auto ids = provider_ids.find(provider);
+    auto registrations = provider_registrations.find(provider);
+    ASSERT(ids != provider_ids.end());
+    ASSERT(registrations != provider_registrations.end());
+    provider_instance = ids->second;
+    registration = registrations->second;
+    for (const auto& op_name : bindings->second) {
+        auto op_iter = entries.find(op_name);
+        if (op_iter != entries.end())
+            unbound.push_back({op_iter->second.id, provider, provider_instance,
+                               registration.abi_version});
+    }
+    provider_bindings.erase(bindings);
+    provider_ids.erase(ids);
+    provider_registrations.erase(registrations);
+    observer = lifecycle_observer;
+    removed = true;
+    }
+    if (removed && observer) {
+        for (const auto& key : unbound)
+            observer->on_provider_op_unbound(key);
+        observer->on_provider_unregistered(registration, provider_instance);
     }
     return removed;
 }

@@ -104,6 +104,27 @@ struct NativeOpDispatchKey {
 };
 
 /**
+ * Non-owning lifecycle sink for a native provider.
+ *
+ * Providers keep their device handles and kernel callables on their side of
+ * this boundary.  The registry only publishes value objects (registration
+ * metadata and dispatch keys), so a CUDA/ACL consumer can invalidate its
+ * handles when a provider is replaced or removed without depending on the
+ * registry's private containers.  Notifications are delivered after the
+ * corresponding registry mutation; consumers must not retain references to
+ * the callback arguments and must unregister before destruction.
+ */
+struct NativeProviderLifecycleObserver {
+    virtual ~NativeProviderLifecycleObserver() = default;
+    virtual void on_provider_registered(
+        const NativeProviderRegistration& registration, uint32 provider_id) = 0;
+    virtual void on_provider_unregistered(
+        const NativeProviderRegistration& registration, uint32 provider_id) = 0;
+    virtual void on_provider_op_bound(const NativeOpDispatchKey& key) = 0;
+    virtual void on_provider_op_unbound(const NativeOpDispatchKey& key) = 0;
+};
+
+/**
  * Native owner for operator registration state.
  *
  * The public free functions below are kept as a compatibility boundary for
@@ -132,6 +153,11 @@ public:
     vector<string> providers() const;
     uint32 provider_id(const string& provider) const;
     NativeProviderRegistration provider_registration(const string& provider) const;
+    // The observer is non-owning and receives future transitions only.  The
+    // returned pointer is the previous observer, mirroring the node lifecycle
+    // observer API and making scoped installation straightforward.
+    NativeProviderLifecycleObserver* set_lifecycle_observer(
+        NativeProviderLifecycleObserver* observer);
     void bind_provider(const string& name, const string& provider);
     NativeOpDispatchKey resolve_provider(const string& name,
                                          const string& provider) const;
@@ -145,6 +171,7 @@ private:
     unordered_map<string, unordered_set<string>> provider_bindings;
     unordered_map<string, uint32> provider_ids;
     unordered_map<string, NativeProviderRegistration> provider_registrations;
+    NativeProviderLifecycleObserver* lifecycle_observer = nullptr;
     OpId next_id = 1;
     uint32 next_provider_id = 1;
 };
