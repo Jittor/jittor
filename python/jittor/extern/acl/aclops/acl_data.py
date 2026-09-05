@@ -165,4 +165,3 @@ def entry_default(entry):
     """Copy a schema default so callers cannot mutate the schema in-place."""
     value = entry["default"]
     return list(value) if isinstance(value, (list, tuple)) else value
-

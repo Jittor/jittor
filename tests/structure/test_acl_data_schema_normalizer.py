@@ -74,4 +74,3 @@ def test_invalid_integration_schema_is_internal_error():
             {"schema_version": 1, "op": "Softmax"},
             schema={"dim": {"type": "pointer", "required": True}},
         )
-
