@@ -84,13 +84,25 @@ def test_namespace_deletes_public_values_from_explicit_owner_only():
 
 def test_namespace_deletes_metadata_locally_without_touching_owner():
     owner = types.ModuleType("jittor")
+    owner.__file__ = "owner-jittor"
     namespace = TorchNamespace(owner)
     namespace.__file__ = "detached-torch"
 
     del namespace.__file__
 
     assert not hasattr(namespace, "__file__")
-    assert not hasattr(owner, "__file__")
+    assert owner.__file__ == "owner-jittor"
+
+
+def test_namespace_deleted_metadata_does_not_fall_back_to_owner_identity():
+    owner = types.ModuleType("jittor")
+    owner.__name__ = "jittor-owner"
+    namespace = TorchNamespace(owner)
+
+    del namespace.__name__
+
+    assert not hasattr(namespace, "__name__")
+    assert owner.__name__ == "jittor-owner"
 
 
 def test_namespace_owner_is_explicit_and_does_not_misidentify_plain_modules():

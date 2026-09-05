@@ -53,6 +53,11 @@ class TorchNamespace(types.ModuleType):
         return object.__getattribute__(self, "_torch_owner")
 
     def __getattr__(self, name):
+        # Import metadata is owned by this detached module.  Once a caller
+        # removes a local metadata field, do not resurrect the owner's value
+        # through the public delegation path (e.g. ``owner.__file__``).
+        if name in self._LOCAL_METADATA:
+            raise AttributeError(name)
         return getattr(self.owner, name)
 
     def __setattr__(self, name, value):
