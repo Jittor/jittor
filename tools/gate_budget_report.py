@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -21,7 +22,18 @@ def main(argv=None):
         help="workers requested by the gate before runtime cgroup capping")
     parser.add_argument("--json", action="store_true")
     options = parser.parse_args(argv)
-    report = budget_report(options.workers, options.configured_workers)
+    configured_workers = options.configured_workers
+    if configured_workers is None:
+        configured_text = os.environ.get("JITTOR_GATE_WORKERS")
+        if configured_text is not None:
+            try:
+                configured_workers = int(configured_text)
+            except ValueError:
+                parser.error("JITTOR_GATE_WORKERS must be a positive integer")
+    try:
+        report = budget_report(options.workers, configured_workers)
+    except ValueError as exc:
+        parser.error(str(exc))
     if options.json:
         print(json.dumps(report, sort_keys=True, indent=2))
     else:

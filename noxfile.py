@@ -610,7 +610,10 @@ def _runtime_gate_workers():
     one-core container it runs one worker instead of four workers competing
     for the same quota.
     """
-    return runtime_workers(GATE_WORKERS)
+    # Pass the same CPU probe used by this module explicitly.  Besides making
+    # the policy auditable, this keeps nox and the standalone budget report
+    # aligned when the probe is replaced by a runner-specific implementation.
+    return runtime_workers(GATE_WORKERS, available=effective_cpu_count())
 
 
 def _xdist(workers, distribution="loadfile"):
