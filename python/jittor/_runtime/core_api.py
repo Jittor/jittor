@@ -18,6 +18,7 @@ import pickle
 import hashlib
 import sys, os
 import traceback
+from .acl_clamp import dispatch_acl_clamp
 
 if "SKEY" in os.environ:
     import jittor_utils.student_queue
@@ -1004,11 +1005,9 @@ def clamp(x, min_v=None, max_v=None):
         x, max_v = prepare_bound(x, max_v)
 
     if scalar_bounds:
-        backend = getattr(jt, "_acl_clamp", None)
-        if backend is not None:
-            result = backend(x, min_v, max_v)
-            if result is not None:
-                return result
+        result = dispatch_acl_clamp(x, min_v, max_v)
+        if result is not None:
+            return result
 
     def select_bound(value, bound, lower):
         keep = value >= bound if lower else value <= bound

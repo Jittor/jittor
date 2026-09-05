@@ -222,7 +222,8 @@ def change_function():
         ):
             return ClampACL()(input, min_value, max_value)
         return None
-    jt._acl_clamp = _clamp_acl
+    from jittor._runtime.acl_clamp import register_acl_clamp
+    register_acl_clamp(_clamp_acl)
 
     def triu_acl(x, diagonal=0):
         return TriuACL()(x, diagonal)
