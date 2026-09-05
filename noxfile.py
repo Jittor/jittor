@@ -1917,6 +1917,8 @@ def cuda(session):
         session.error("CUDA session requires nvcc_path or nvcc on PATH")
     env["nvcc_path"] = nvcc
     env["JITTOR_TEST_DEVICES"] = "cuda"
+    env["JITTOR_TEST_REQUIRE_CUDA"] = "1"
+    env["JITTOR_TEST_ACCELERATOR_MIN_EXECUTED"] = "1"
     session.run("nvidia-smi", external=True, env=env)
     session.run(nvcc, "--version", external=True, env=env)
     session.run(python, "-m", "pytest", "--version", external=True, env=env)
