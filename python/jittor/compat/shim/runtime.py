@@ -42,6 +42,10 @@ def _runtime_state(root_module):
             "external_patches": None,
             "error": None,
             "runtime_configured": False,
+            # The published torch root is part of activation identity.  Do
+            # not silently reuse an independent namespace for a later native
+            # activation (or the reverse).
+            "independent_namespace": False,
         }
         root_module._torch_shim_runtime_state = state
     return state
@@ -337,6 +341,13 @@ def activate(
                 "cannot re-activate the Jittor Torch shim over a changed Torch "
                 "module graph"
             )
+        if bool(state.get("independent_namespace")) != bool(independent_namespace):
+            previous = "independent" if state.get("independent_namespace") else "native"
+            requested = "independent" if independent_namespace else "native"
+            raise RuntimeError(
+                "cannot change Torch namespace mode after activation "
+                "(active=%s, requested=%s)" % (previous, requested)
+            )
         if _composition or state.get("runtime_configured"):
             return state.get("result")
     if state.get("phase") == "activating":
@@ -385,6 +396,7 @@ def activate(
         ),
         error=None,
         runtime_configured=not _composition,
+        independent_namespace=bool(independent_namespace),
     )
     return result
 

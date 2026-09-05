@@ -491,6 +491,31 @@ class TestTorchBootstrap(unittest.TestCase):
         self.assertEqual(status.phase, "active")
         self.assertIs(status.result, expected)
 
+    def test_activation_rejects_switching_from_native_to_independent_namespace(self):
+        from jittor.compat.shim import runtime
+
+        root = types.ModuleType("_stage7_namespace_mode_native")
+        expected = {"torch": root}
+        with mock.patch.object(runtime, "_activate_once", return_value=expected), \
+                mock.patch.object(runtime, "torch_namespace_owned", return_value=True):
+            self.assertIs(runtime.activate(_root_module=root), expected)
+            with self.assertRaisesRegex(RuntimeError, "namespace mode"):
+                runtime.activate(_root_module=root, independent_namespace=True)
+
+    def test_activation_rejects_switching_from_independent_to_native_namespace(self):
+        from jittor.compat.shim import runtime
+
+        root = types.ModuleType("_stage7_namespace_mode_independent")
+        expected = {"torch": object()}
+        with mock.patch.object(runtime, "_activate_once", return_value=expected), \
+                mock.patch.object(runtime, "torch_namespace_owned", return_value=True):
+            self.assertIs(
+                runtime.activate(_root_module=root, independent_namespace=True),
+                expected,
+            )
+            with self.assertRaisesRegex(RuntimeError, "namespace mode"):
+                runtime.activate(_root_module=root)
+
     def test_activation_selects_explicit_requires_grad_policy(self):
         from jittor.compat.shim import runtime
 
