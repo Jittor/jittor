@@ -113,6 +113,24 @@ class RegistrySnapshot:
     backends: Tuple[BackendSpec, ...]
     kernels: Tuple[Tuple[str, str], ...]
 
+    def __post_init__(self):
+        """Normalize snapshot containers at the value-object boundary.
+
+        ``frozen`` protects the attributes after construction, but callers
+        can still pass mutable lists to the constructor.  Copying both
+        collections here makes snapshots isolated even when a diagnostic
+        producer hands us a temporary list.
+        """
+        backends = tuple(self.backends)
+        kernels = tuple(tuple(key) for key in self.kernels)
+        if any(not isinstance(spec, BackendSpec) for spec in backends):
+            raise TypeError("registry snapshot backends must be BackendSpec values")
+        if any(len(key) != 2 or any(not isinstance(part, str) or not part for part in key)
+               for key in kernels):
+            raise ValueError("registry snapshot kernels must be (op, backend) names")
+        object.__setattr__(self, "backends", backends)
+        object.__setattr__(self, "kernels", kernels)
+
 
 class BackendRegistry:
     """Thread-safe registry keyed by backend name.
@@ -221,6 +239,17 @@ class BackendRegistry:
         """Return an immutable point-in-time view of provider contracts."""
         with self._lock:
             return tuple(self._specs.values())
+
+    def snapshot_state(self) -> RegistrySnapshot:
+        """Return provider state as an isolated registry value snapshot.
+
+        ``OpRegistry.snapshot_state`` adds kernel ownership to this same
+        value type.  Keeping the provider-only form here gives lifecycle and
+        diagnostics code a coherent API without exposing the live ``_specs``
+        mapping or requiring an operator registry.
+        """
+        with self._lock:
+            return RegistrySnapshot(tuple(self._specs.values()), ())
 
     def unregister(self, name: str) -> BackendSpec:
         """Remove one provider during backend teardown.

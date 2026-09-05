@@ -45,6 +45,34 @@ def test_backend_snapshot_freezes_nested_capabilities_and_preserves_order():
     assert not registry.get("cpu").supports("allocator")
 
 
+def test_backend_state_snapshot_is_isolated_across_provider_lifecycle():
+    registry = BackendRegistry((BackendSpec("cpu"), BackendSpec("cuda")))
+    before = registry.snapshot_state()
+    assert isinstance(before, RegistrySnapshot)
+    assert tuple(spec.name for spec in before.backends) == ("cpu", "cuda")
+    assert before.kernels == ()
+
+    replacement = registry.set_capability("cuda", "stream")
+    assert replacement.supports("stream")
+    after = registry.snapshot_state()
+    assert after.backends[1].supports("stream")
+    assert not before.backends[1].supports("stream")
+
+    registry.unregister("cuda")
+    assert tuple(spec.name for spec in before.backends) == ("cpu", "cuda")
+    assert tuple(spec.name for spec in after.backends) == ("cpu", "cuda")
+
+
+def test_registry_snapshot_normalizes_mutable_constructor_inputs():
+    backends = [BackendSpec("cpu")]
+    kernels = [["add", "cpu"]]
+    snapshot = RegistrySnapshot(backends, kernels)
+    backends.clear()
+    kernels[0][0] = "mutated"
+    assert tuple(spec.name for spec in snapshot.backends) == ("cpu",)
+    assert snapshot.kernels == (("add", "cpu"),)
+
+
 def test_cpu_provider_rejects_invalid_allocation_sizes():
     allocator = BackendRegistry.default().get("cpu").allocator
     try:
