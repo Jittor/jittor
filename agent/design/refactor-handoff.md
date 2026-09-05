@@ -2048,6 +2048,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `91147566` 增加 ACL DescriptorCache lease/tombstone/generation 生命周期，host-only 21 passed；CANN/NPU runner仍待。 |
 | `compat` | `234d7dc8` 强化 Torch distribution metadata canonical identity，namespace 36 passed；独立 distribution 完整发布仍待。 |
 
+### 2026-09-05 第二百一十三波：Runtime/生命周期/descriptor/distribution 前置
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `1f67af34` 将 `trace_py_var` 纳入 RuntimeContext owner，结构 39 passed；全局状态仍待迁移。 |
+| `device` | `8c38c342` 增加 Native provider scopes move-only RAII，结构 10/JIT 合同通过。 |
+| `device` | `a8e4b743` 收紧 ACL DescriptorCache malformed canonical key，host-only 22 passed；CANN/NPU runner仍待。 |
+| `compat` | `5f97723f` 要求 Torch distribution 显式 aliases，namespace 38 passed；独立 distribution 完整发布仍待。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
