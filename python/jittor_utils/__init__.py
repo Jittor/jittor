@@ -1153,7 +1153,9 @@ elif platform.system() == "Darwin":
     cc_path = env_or_find('cc_path', 'clang++', silent=True)
 else:
     cc_path = env_or_find('cc_path', 'g++', silent=True)
-os.environ["cc_path"] = cc_path
+# Keep the resolved compiler in this module's configuration.  Importing
+# jittor_utils must not alter the caller's environment; callers that spawn
+# tools should construct an explicit environment from ``cc_path``.
 cc_type = get_cc_type(cc_path)
 cache_path = find_cache_path()
 
