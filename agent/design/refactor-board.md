@@ -134,6 +134,8 @@
 >
 > 第171波：`83c26d42` 完成 2.24 FusedOp 显式 `op_index/var_index` 映射，移除 `Node::custom_data` 最后用户；结构合同 4 passed，fused 聚焦 2 passed。2.24 正式关闭。
 >
+> 第172波：`5248870d` 删除不可达 EventQueue `run_sync`/Worker dead设施，清理 executor 注释并将 NCCL 两处调用改为直接 CUDA 检查；结构合同 2 passed，event_queue C++ syntax check 通过。3.19 正式关闭。
+>
 > 第159波增量（7.03，六个 cohort）：`16333333` amax/amin/count_nonzero 收回原生 owner；`9cba7d68` cumsum/cumprod；`50876abf` sort/argsort/topk/median；`d94c5cbd` sign/trunc/frac/exp2/log10 归一到单一 owner；`a7dcae1c` nan_to_num/logaddexp；`d1535282` outer/tensordot/repeat_interleave 改为再导出原生 owner。**这一波补上了 7.03 一直缺的 CUDA 那一层**：此前约三十个 cohort 的证据全是「CPU N passed」，本波两个 cohort 用 `instantiate_device_type_tests` 在 CPU 与 CUDA 各跑一遍（各 15 passed / 13 passed），并跑出两处真实差异——4096 元素 float32 `cumsum` 两侧相对差 1.4e-06（并行前缀和比顺序扫描更准），512 元素重复键 `argsort` 的 indices 两侧不同而 values 逐位相同；两者都判为后端固有并登记进 fidelity，测试改为钉有界不一致与整数路径逐位相等。**同时修掉两处「一个 API 两个对象」**：`torch.sign(int32)` 返回 float32 而 `Tensor.sign()` 返回 int32（真 PyTorch 2.12 两者都是 int32，属静默错 dtype，修前失败/修后通过的用例已随提交落地）；`repeat_interleave` 的转发 wrapper 让`torch.repeat_interleave is jittor.repeat_interleave` 不成立，两条结构门禁因此长期红，现已转绿（`tests/structure` 由本波开始时的 15 failed 降到 4 failed，其中 2 条是本波修的、其余为别的分区）。新增 skill `agent/skills/torch-api-cohort-promotion/`。7.03 仍按剩余范围保持「待领」。
 >
 > 第160波增量（9.01 import 耗时）：`cf3835ee` 把热缓存 `import jittor` 归因到具体一步（核心编译在无事可做时占 CPU-only 配置的 68%），`51d0439f` 把核心编译收进 `compiler.build_core()` 并加构建戳。热缓存 import CPU-only 1.332→0.413 s **达标**、CUDA 2.457→1.545 s **未达标**；冷缓存与换配置仍全量编译核心，9.01 保持待领。另核实三条**既有**阻塞（基线 `534d375d`，均非 9.01 引入、改前改后位置一致）：`tests/core/test_device_methods.py` 与 `tests/backends/cuda/test_device_methods.py` 同名，pytest 收集期报 import file mismatch 并整体中止 native 门禁，需 `--continue-on-collection-errors` 才跑得完；native 门禁在 `test_complex64_linalg::test_svdvals` 进程 abort；torch 门禁在 `test_torch_compat_autograd::test_a_second_call_does_not_steal_the_first_calls_context` 进程 abort。
@@ -427,7 +429,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 3.16 | `token_replace_all` 不再用 CHECK 抛异常做循环终止 | 已合并 | codegen | 9aa683c4。显式终止批量替换，非法模板不再被正常路径异常吞掉；新增 2、C++ TEST 46、CPU op_compiler 5、真实 CUDA GPU3 1 项通过 |
 | 3.17 | 只用于代码生成的 JIT 区段与普通 C++ 分离 | 已合并 | codegen | 2aa190af。KernelIR 逃逸 `_Pragma`，字符串/格式串保持原样，生成源码用 `#line` 指回原算子；968ae198 修复重复 `#line` 行号被登记成同名 IR scope 符号的回归，C++ TEST 11、scalar gradient 与 compiler contract 聚焦通过；未改 `jit_compiler.cc` |
 | 3.18 | 删掉 `asm_tuner` 链路 | 待领 | | cb853074、acfed956 已合入前置：普通 CPU kernel 先绕过旧包装，随后 clang 输出 store 改为 `__builtin_nontemporal_store`，删除 `asm_tuner.py`、文本指令和专属测试；真实 broadcast 数值/生成代码通过，clang 汇编有 `movntss`。但同一 broadcast 冷编译只从约 1.00s 降至 0.80s，普通小 kernel 也仅从 0.89s 降至 0.69s，均约 20-22%，未达到 ≥50% 验收，仍需继续降低 CPU kernel 冷编译成本 |
-| 3.19 | `event_queue` 异步基础设施修好并加测试，或删除 | 待领 | | |
+| 3.19 | `event_queue` 异步基础设施修好并加测试，或删除 | 已合并 | coreops | `5248870d` 删除不可达 `run_sync`、状态常量、volatile 状态、worker_caller 和无用条件变量；executor/NCCL 调用清理。结构合同 2 passed，C++14 CUDA TU syntax check 通过。 |
 | 3.20 | 执行器提供「提交部分图」显式接口，`jt.grad` 与 `Function` 回调降开销，让反… | 待领 | | |
 | 3.21 | 每算子建图成本 | 待领 | | |
 | 3.22 | CUDA 归约块内树形归约 | 待领 | | edf70f52 已合入 1/N：level-4 SharedReduce 改为 warp shuffle→每 warp 一个共享值→首 warp shuffle，两次 barrier；修复其对 ParallelPass 子节点位置与 `op` 字符串的旧假设，GPU3 六个生成/数值/梯度节点、CPU pass 契约通过。未改默认：四个 UNet 代表形状 30 次 profiler，新混合 17.21/16.32/16.39/25.53us（合计 75.45us），默认 warp 17.53/16.80/18.00/21.90us（74.23us）；混合总计慢 1.64%，末形状慢 16.6%，未满足无退化与完整 UNet 性能验收 |

@@ -1679,6 +1679,13 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | --- | --- |
 | `coreops` | `83c26d42` 完成 2.24：FusedOp 用显式 `Op*`/`Var*` index map 替代 `Node::custom_data`，update/load/relay 顺序保持不变；结构合同 4 passed，fused 聚焦 2 passed。 |
 
+### 2026-09-05 第一百七十二波
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `5248870d` 删除不可达 EventQueue `run_sync`/Worker dead设施、清理 executor 旧注释，NCCL 两处切换为直接 CUDA 检查；结构合同 2 passed，C++14 CUDA syntax check 通过。3.19 已关闭。 |
+| `gates` | CPU smoke 未执行，原因是当前环境 CUDA 核心缓存/依赖前置失败；该环境失败未计入本任务通过或失败。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
