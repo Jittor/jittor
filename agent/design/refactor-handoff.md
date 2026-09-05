@@ -1912,6 +1912,16 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `compat` | `8fcdc20f` 将独立 Torch publication 拆到显式边界，namespace 17 passed；独立 distribution、默认发布身份和 alias 清理仍待。 |
 | `device` | `e2731c0f`/`2dcc3448` 建立无 CANN ACL data schema/normalizer，host-only 合同 11 passed；C++ decoder、属性 owner、descriptor cache、910B3 实机仍待。 |
 
+### 2026-09-05 第一百九十八波：跨 CUDA/NPU 异机测试前置
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `2d772ef4`/`8d70ae4a` 将 AMP、profiler metadata 等硬件无关状态接入 RuntimeContext，结构 22/20 passed；全局 flags 仍待迁移。 |
+| `device` | `c1a67c91`/`b4b7c990` 集中 native OpRegistry ownership 并加入 provider-aware dispatch boundary，主机 C++14 syntax/contract 通过；真实 CUDA/NPU provider 仍待硬件机。 |
+| `device` | `e2731c0f`/`2dcc3448`/`7a03fa48` 建立 ACL host-only schema/decoder boundary，15 passed；CANN decoder接线、属性 owner、descriptor cache、910B3 实机仍待。 |
+| `compat` | `8fcdc20f` 拆 Torch publication boundary，namespace 17 passed；独立 distribution/alias 清理仍待。 |
+| `build/layout` | `09c7665c` 完成 miniz third_party 路径收尾，结构 1 passed。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。

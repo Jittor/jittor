@@ -1,5 +1,8 @@
 # 整改看板
 
+> 第198波：异机测试代码组织前置完成：`2d772ef4`/`8d70ae4a` 迁移 AMP 与 profiler metadata owner（结构 22/20 passed）；`c1a67c91`/`b4b7c990` 集中并 provider-aware 化 native OpRegistry（C++14 syntax/contract 通过）；`e2731c0f`/`2dcc3448`/`7a03fa48` 建立 ACL host-only data schema + C++ decoder boundary（host-only 15 passed）；`8fcdc20f` 拆 Torch publication，`09c7665c` 完成 miniz third-party 布局。均未声称 CUDA/NPU 硬件验证。
+
+
 > 第197波迁移前置：`8d70ae4a` 增加 Runtime profiler metadata owner（结构 20 passed）；`c1a67c91` 集中 native C++ OpRegistry ownership（C++14 syntax + contract 3 passed）；`e2731c0f`/`2dcc3448` 建立无 CANN ACL data schema/normalizer（host-only 11 passed）；`8fcdc20f` 拆出独立 Torch publication boundary（namespace 17 passed，既有 unknown-submodule timing 失败未归因本切片）。这些都是 CUDA/NPU 异机测试前置，整项仍待领。
 
 
