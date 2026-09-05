@@ -184,6 +184,7 @@ class TestStage2Delivery(unittest.TestCase):
         self.assertIn("gate_native_arguments()", smoke)
         self.assertIn("gate_torch_arguments()", smoke)
         self.assertIn('"-m", "not slow"', smoke)
+        self.assertIn("_require_execution", smoke)
         development_requirements = (self.repo_root / "requirements" / "dev-tools.txt").read_text(
             encoding="utf-8"
         )

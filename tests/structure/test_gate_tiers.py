@@ -119,6 +119,42 @@ class TestFastTierIsStillWorthRunning(unittest.TestCase):
                     for node in ast.walk(call.args[1])),
                 "both smoke process modes must receive the fast marker args")
 
+    def test_smoke_requires_execution_for_both_process_modes(self):
+        """The fast tier must fail on an unexplained non-executing file."""
+        import ast
+
+        source = (REPO_ROOT / "noxfile.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        smoke = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "smoke")
+        required_calls = [
+            node for node in ast.walk(smoke)
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "id", None) == "_require_execution"
+        ]
+        self.assertEqual(len(required_calls), 1,
+                         "smoke must require execution through its shared env")
+        env_assignment = next(
+            node for node in smoke.body
+            if isinstance(node, ast.Assign)
+            and any(getattr(target, "id", None) == "env"
+                    for target in node.targets))
+        self.assertIsInstance(env_assignment.value, ast.Call)
+        self.assertEqual(getattr(env_assignment.value.func, "id", None),
+                         "_require_execution")
+        smoke_calls = [
+            node for node in ast.walk(smoke)
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "id", None) == "_run_pytest_once"
+        ]
+        self.assertEqual(len(smoke_calls), 2)
+        for call in smoke_calls:
+            self.assertTrue(
+                any(isinstance(node, ast.Name) and node.id in {"env", "torch_env"}
+                    for node in ast.walk(call)),
+                "native and torch smoke runs must receive required env")
+
 
 class TestBudget(unittest.TestCase):
 
