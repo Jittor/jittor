@@ -192,6 +192,17 @@ boundaries; `distributions.py`, `init.py`, and `linalg.py` are public native
 domains; `selftest.py` is the installed smoke-test entry point. New root files
 require an ownership review and a corresponding structure-gate update.
 
+Backend configuration is now a frozen `BuildConfig` returned by the selected
+provider, with explicit services in `BuildContext`. Providers do not mutate
+compiler globals or append to its source list; bootstrap publishes compatibility
+attributes centrally. Entry points are loaded only for the selected backend,
+and explicit CPU selection bypasses CUDA discovery. The build utilities receive
+their binding/compiler services by injection and no longer import Jittor.
+Tensor checkpoint algorithms live in `jittor.serialization`; legacy utility
+paths query runtime-injected loaders after bootstrap. See
+[backend build configuration](backend-build-configuration.md) for the service
+protocol, cache compatibility and pre-bootstrap/hardware limits.
+
 ### Native Support Layout
 
 The native `BackendRegistry` in `runtime/backend*` is owned by `NativeRuntime`.

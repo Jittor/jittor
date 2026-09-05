@@ -6,13 +6,9 @@
 # ***************************************************************
 import os
 from collections import namedtuple
-from jittor_utils import env_or_try_find
 import jittor_utils
-import ctypes
+from jittor_utils.compiler_flags import remove_flags
 import glob
-
-has_corex = 0
-cc_flags = ""
 
 
 CorexDiscovery = namedtuple(
@@ -31,17 +27,15 @@ def discover(corex_home=None):
             home, compiler_path, False, "Corex compiler is missing: %s" % compiler_path)
     return CorexDiscovery(home, compiler_path, True, "ready")
 
-def install(corex_home=None):
-    import jittor.compiler as compiler
-    global has_corex, cc_flags
+def configure(context, corex_home=None):
     discovery = discover(corex_home)
     if not discovery.available:
         raise RuntimeError(discovery.reason)
-    acl_compiler_home = os.path.dirname(__file__)
-    cc_files = sorted(glob.glob(acl_compiler_home+"/**/*.cc", recursive=True))
+    corex_compiler_home = os.path.dirname(__file__)
+    cc_files = sorted(glob.glob(corex_compiler_home+"/**/*.cc", recursive=True))
     jittor_utils.LOG.i("COREX detected")
 
-    mod = jittor_utils.compile_module('''
+    mod = context.compile_module('''
 #include "common.h"
 #include "utils/str_utils.h"
 
@@ -76,44 +70,30 @@ string process_acl(const string& src, const string& name, const map<string,strin
     }
     return new_src;
 }
-}''', compiler.cc_flags + " " + " ".join(cc_files) + cc_flags)
-    jittor_utils.process_jittor_source("corex", mod.process)
-    # def nvcc_flags_to_corex(nvcc_flags):
-    #     nvcc_flags = nvcc_flags.replace("--cudart=shared", "")
-    #     nvcc_flags = nvcc_flags.replace("--cudart=shared", "")
-
-    has_corex = 1
-    compiler.has_corex = has_corex
-    compiler.nvcc_path = discovery.compiler_path
-    compiler.cc_path = compiler.nvcc_path
-    compiler.cc_flags = compiler.cc_flags.replace("-fopenmp", "")
-    # compiler.nvcc_flags = cc_flags_to_corex(compiler.cc_flags)
-    compiler.nvcc_flags = compiler.cc_flags + " -x cu -Ofast -DNO_ATOMIC64 -Wno-c++11-narrowing "
-    compiler.convert_nvcc_flags = lambda x:x
-    compiler.is_cuda = 0
-    os.environ["use_cutt"] = "0"
-    compiler.cc_type = "clang"
+}''', context.config.cc_flags + " " + " ".join(cc_files))
+    config = context.transform_sources(context.config, "corex", mod.process)
+    cc_flags = remove_flags(config.cc_flags, ["-fopenmp", "-DIS_CUDA", "-DHAS_CUDA"])
+    cc_flags += " -DHAS_CUDA "
+    return config.evolve(
+        backend="corex", has_corex=True, has_cuda=True, is_cuda=False,
+        cc_path=discovery.compiler_path, nvcc_path=discovery.compiler_path,
+        cc_type="clang", cc_flags=cc_flags,
+        kernel_flags=config.kernel_flags.replace("-fopenmp", ""),
+        nvcc_flags=cc_flags + " -x cu -Ofast -DNO_ATOMIC64 -Wno-c++11-narrowing ",
+        convert_nvcc_flags=convert_nvcc_flags,
+        environment=dict(config.environment, use_cutt="0"),
+        resources=dict(config.resources, corex_home=discovery.home,
+                       corex_converter=mod),
+    )
 
 
-def install_extern():
+def convert_nvcc_flags(flags):
+    return flags
+
+
+def install_extern(context):
     return False
 
 
-def check():
-    import jittor.compiler as compiler
-    global has_corex, cc_flags
-    discovery = discover()
-    if discovery.available:
-        try:
-            install(discovery.home)
-        except Exception as e:
-            jittor_utils.LOG.w(f"load COREX failed, exception: {e}")
-            has_corex = 0
-    if not has_corex: return False
-    compiler.has_corex = has_corex
-    return True
-
-def post_process():
-    if not has_corex: return
-    import jittor.compiler as compiler
-    compiler.flags.cc_flags = compiler.flags.cc_flags.replace("-fopenmp", "")
+def post_process(context):
+    return context.config

@@ -277,6 +277,8 @@ def install_cub(root_folder):
     return dirname
 
 def setup_cub():
+    if not has_cuda or not (is_cuda or has_corex):
+        return
     cub_home = ""
     cub_path = os.path.join(jit_utils.home(), ".cache", "jittor", "cub")
     cuda_version = int(get_version(nvcc_path)[1:-1].split('.')[0])
@@ -289,7 +291,7 @@ def setup_cub():
     register_library_resources("cub", home=cub_home)
 
 def setup_cuda_extern():
-    if not has_cuda: return
+    if not has_cuda or not (is_cuda or has_corex): return
     def split(a): return a.replace(";",":").split(":")
     check_ld_path = split(os.environ.get("LD_LIBRARY_PATH", "")) + \
         split(os.environ.get("PATH", ""))
@@ -355,7 +357,7 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
     arch_key = "x86_64"
     if platform.machine() not in ["x86_64", "AMD64"]:
         arch_key = "aarch64"
-    if not has_cuda: return
+    if not has_cuda or not (is_cuda or has_corex): return
     LOG.v(f"setup {lib_name}...")
 
     culib_path = os.path.join(cuda_lib, f"lib{lib_name}.so")
@@ -531,7 +533,7 @@ def install_cutt(root_folder):
 
 def setup_cutt():
     global use_cutt
-    if not has_cuda:
+    if not has_cuda or not (is_cuda or has_corex):
         use_cutt = False
         return
     use_cutt = os.environ.get("use_cutt", "1")=="1"
@@ -745,7 +747,7 @@ def setup_nccl(store=None):
     # env/file rendezvous (JT_NCCL_WORLD_SIZE set by the torchrun-style launcher),
     # so NVIDIA multi-card DDP works without mpirun (mirrors the Ascend HCCL path).
     _jt_nccl_envfile = os.environ.get("JT_NCCL_WORLD_SIZE") is not None
-    if not has_cuda or (not has_mpi and not _jt_nccl_envfile):
+    if not has_cuda or not is_cuda or (not has_mpi and not _jt_nccl_envfile):
         use_nccl = False
         return
     if not use_nccl: return
@@ -1255,8 +1257,10 @@ if distributed_requested():
 setup_cuda_extern()
 
 # install backend extern library
-for mod in jit_utils.backends:
-    if mod.install_extern():
+for mod in compiler.backend_modules:
+    if mod.install_extern(compiler.make_backend_context(
+            publish_library=register_library,
+            mpi_compile_flags=globals().get("mpi_compile_flags", ""))):
         break
 
 # Last gate: distributed was requested -> a collective backend must exist.
@@ -1267,7 +1271,7 @@ def _load_cuda_library(name):
     if setup_fake_cuda_lib:
         _setup_fake_cuda_lib(name)
         return
-    if not has_cuda:
+    if not has_cuda or not (is_cuda or has_corex):
         return
     link_flags = library_resource("cuda_extern", "link_flags")
     if link_flags is None:
@@ -1281,7 +1285,7 @@ def _load_cuda_library(name):
 for _library_name in ("cublas", "cudnn", "curand", "cufft", "cusparse"):
     register_library_loader(
         _library_name, lambda name=_library_name: _load_cuda_library(name))
-register_library_loader("cub", lambda: setup_cub() if has_cuda else None)
+register_library_loader("cub", lambda: setup_cub() if has_cuda and (is_cuda or has_corex) else None)
 register_library_loader("cutt", lambda: setup_cutt())
 register_library_loader("mkl", lambda: setup_mkl(), enabled=_mkl_library_enabled)
 register_library_loader("mpi", lambda: setup_mpi())

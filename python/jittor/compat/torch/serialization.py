@@ -518,7 +518,7 @@ def install(ctx):
             return _apply_map_location(
                 _load_torch_pt(f, weights_only=weights_only), map_location)
         if path is not None and path.lower().endswith((".pth", ".pt", ".bin")) and _is_legacy_torch_pickle(path):
-            from jittor_utils.load_pytorch import load_pytorch as _load_pytorch
+            from jittor.serialization.load_pytorch import load_pytorch as _load_pytorch
             return _apply_map_location(_load_pytorch(path), map_location)
         try:
             if hasattr(f, "read"):

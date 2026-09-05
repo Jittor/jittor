@@ -30,10 +30,10 @@
 | 分支 | `2.0-refactor`；本批迁移起点 `2328ce4f`，后续提交见 Git 历史 |
 | 相对 `2.0` 的提交 | 迁移起点共 1853 个；提交数不代表任务完成量 |
 | 提交里出现过的任务号 | 329 个 |
-| 看板 | 已合并 **218** / 进行中 **1** / 待领 **53** / 并入其它任务 **13** |
+| 看板 | 已合并 **219** / 进行中 **0** / 待领 **53** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
 
-**交接清理完成不等于整改完成。** 看板仍有 53 条待领、1 条进行中；当前只是把中断留下的易失状态全部转成了主线提交、
+**交接清理完成不等于整改完成。** 看板仍有 53 条待领；当前只是把中断留下的易失状态全部转成了主线提交、
 明确待领项或已验证的不采用结论。这个分支不是终态。
 
 看板的「已合并」是权威。提交里的任务号更多，是因为一个任务常有补充提交、改判提交与「更正前一个提交」
@@ -611,7 +611,21 @@ ACL 82 个 host/结构节点、4 个 TU、5 个 launcher ABI 和两次语法反�
 本波完整 structure 为 740 passed/9 failed/2 skipped；新增 setter 探针已补显式恢复，
 其余九类与前次记录一致，未重跑完整改前 A/B，不称全门禁通过。
 
-4.07 正在本波独立提交收尾；随后推进 4.10/4.15 后端物理布局以及 4.11/4.12 移除源转换。
+4.07 已完成：三个后端返回冻结 BuildConfig，BuildContext 注入编译/转换/库发布服务；
+compiler 只在集中边界发布兼容字段，extra_core_files 是值内 tuple，后端不再修改 compiler。
+entry point 发现只导入选中模块，多 SDK 冲突要求显式 JT_BACKEND；普通 CPU/CUDA 缓存键保持，
+显式 CPU 在任何 CUDA 探测/安装服务前返回，已用冲突 nvcc_path 和禁止探测探针实际验证。
+可选后端成功配置的通用 accelerator 编译标记不依赖本机是否有 NVIDIA 编译器，
+Corex 兼容库路径保留；已选可选后端的初始工具链旧耦合仍明确列出，未猜测 vendor SDK 链接目录。
+utils 反向 import 清零；真实序列化实现迁 jittor.serialization，旧 utility 模块由已注入服务查询。
+jt.save/load、旧 GLOBAL 名与 stride 往返有实际测试；独立 pre-bootstrap 旧 utility API 现在明确报错，
+不声称所有未 import Jittor 的独立旧 pickle 场景兼容，详见 backend-build-configuration.md。
+构建/扩展依赖/序列化/CPU CUDA 分派组合 50 passed，strict CUDA/显式 CPU 组合 28 passed；
+CPU-only 联合 82 passed，offline provider/分支 39 passed。测试文件重名已改为 native 前缀，
+序列化新测试恢复 flags，未删除或重写用户缓存；完整 structure 仍为上述九类已记录失败。
+
+下一轮以 4.10/4.15 后端物理布局和 4.11/4.12 移除 legacy 源转换为主线，
+独立 torch 包仍要推进实际所有权迁移，不能再回到只写 metadata/validator 的旧波次。
 NativeProviderRegistration 的旧元数据不能当作上述执行/构建迁移已完成的证据。
 独立 torch 包和后端架构仍是未完成的大需求，不要为追低价值计数改变优先级。
 异机 CUDA 先跑 `tests/core/test_startup_config.py`、`tests/backends/cuda/test_cuda_kernel_math_policy.py`

@@ -3,8 +3,7 @@
 import ast
 import os
 from pathlib import Path
-import sys
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -22,25 +21,21 @@ def test_transformed_source_cache_archives_obsolete_native_paths(tmp_path, monke
     original.parent.mkdir(parents=True)
     original.write_text("int helper() { return 1; }\n")
     cache.mkdir()
-    compiler = ModuleType("jittor.compiler")
-    compiler.jittor_path = str(source)
-    compiler.cache_path = str(cache)
-    compiler.cc_flags = ""
-    root = ModuleType("jittor")
-    root.compiler = compiler
-    monkeypatch.setitem(sys.modules, "jittor", root)
-    monkeypatch.setitem(sys.modules, "jittor.compiler", compiler)
+    class Config(SimpleNamespace):
+        def evolve(self, **changes):
+            return Config(**dict(vars(self), **changes))
+    config = Config(jittor_path=str(source), cache_path=str(cache), cc_flags="")
     transform = namespace["process_jittor_source"]
-    transform("probe", lambda text, name, kwargs: text)
-    cached = Path(compiler.jittor_path)
+    transformed = transform(config, "probe", lambda text, name, kwargs: text)
+    assert config.jittor_path == str(source)
+    cached = Path(transformed.jittor_path)
     assert (cached / "src/misc/helper.cc").is_file()
 
     moved = source / "src/runtime/helper.cc"
     moved.parent.mkdir()
     original.rename(moved)
     original.parent.rmdir()
-    compiler.jittor_path = str(source)
-    transform("probe", lambda text, name, kwargs: text)
+    transform(config, "probe", lambda text, name, kwargs: text)
     assert (cached / "src/runtime/helper.cc").is_file()
     assert not (cached / "src/misc").exists()
     assert list(cached.glob("src/**/*.cc")) == [cached / "src/runtime/helper.cc"]
@@ -48,6 +43,5 @@ def test_transformed_source_cache_archives_obsolete_native_paths(tmp_path, monke
     assert len(archives) == 1
     assert archives[0].read_text() == moved.read_text()
 
-    compiler.jittor_path = str(source)
-    transform("probe", lambda text, name, kwargs: text)
+    transform(config, "probe", lambda text, name, kwargs: text)
     assert len(list(cache.glob("probe_source_stale_*"))) == 1

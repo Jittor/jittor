@@ -37,7 +37,7 @@ class TestCorexDiscovery(unittest.TestCase):
             result = corex_compiler.discover(root)
             self.assertFalse(result.available)
             self.assertIn("compiler", result.reason)
-            self.assertEqual(corex_compiler.has_corex, 0)
+            self.assertFalse(hasattr(corex_compiler, "has_corex"))
 
 
 if __name__ == "__main__":

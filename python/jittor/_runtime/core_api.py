@@ -38,7 +38,7 @@ def dfs_to_numpy(x):
 
 def safepickle(obj, path):
     if path.endswith(".pth") or path.endswith(".pt") or path.endswith(".bin"):
-        from jittor_utils.save_pytorch import save_pytorch
+        from jittor.serialization.save_pytorch import save_pytorch
         save_pytorch(path, obj)
         return
     # Protocol version 4 was added in Python 3.4. It adds support for very large objects, pickling more kinds of objects, and some data format optimizations.
@@ -92,7 +92,7 @@ def safeunpickle(path):
         if not (path.endswith(".pth") or path.endswith(".pkl") or path.endswith(".pt")):
             return path
     if path.endswith(".pth") or path.endswith(".pt") or path.endswith(".bin") :
-        from jittor_utils.load_pytorch import load_pytorch
+        from jittor.serialization.load_pytorch import load_pytorch
         model_dict = load_pytorch(path)
         return model_dict
     with open(path, "rb") as f:

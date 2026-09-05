@@ -229,7 +229,7 @@ class TestACL(unittest.TestCase):
         self.assertEqual(repeated.shape, (0, 3))
 
     def test_source_converter_ignores_cuda_names_in_comments(self):
-        from jittor.extern.acl import acl_compiler
+        from jittor.compiler import build_config
 
         source = (
             "// cudaMemcpyAsync copy of the input\n"
@@ -238,31 +238,31 @@ class TestACL(unittest.TestCase):
             "const char* url = R\"tag(https://example.test/cudaGetLastError)tag\";\n"
             "int value = 1;\n"
         )
-        converted = acl_compiler.mod.process(source, "comment_probe.cc", {})
+        converted = build_config.resources["acl_converter"].process(source, "comment_probe.cc", {})
         self.assertEqual(converted, source)
 
     def test_source_converter_maps_every_device_count_call(self):
-        from jittor.extern.acl import acl_compiler
+        from jittor.compiler import build_config
 
         source = (
             "if (cudaGetDeviceCount(&count) != cudaSuccess) count = 0;\n"
             "cudaGetDeviceCount(&count);\n"
             "cudaGetDeviceCount(&count);\n"
         )
-        converted = acl_compiler.mod.process(source, "device_count_probe.cc", {})
+        converted = build_config.resources["acl_converter"].process(source, "device_count_probe.cc", {})
         self.assertEqual(converted.count("acl_jittor_get_device_count"), 3)
         self.assertIn("ACL_SUCCESS", converted)
         self.assertNotIn("cudaGetDeviceCount", converted)
 
     def test_source_converter_maps_cuda_error_type(self):
-        from jittor.extern.acl import acl_compiler
+        from jittor.compiler import build_config
 
         source = (
             "cudaError_t err = cudaMalloc(&ptr, size);\n"
             "if (err == cudaSuccess) return ptr;\n"
             "#define CALLBACK_ARGS cudaStream_t stream, cudaError_t status, void*\n"
         )
-        converted = acl_compiler.mod.process(source, "error_type_probe.cc", {})
+        converted = build_config.resources["acl_converter"].process(source, "error_type_probe.cc", {})
         self.assertEqual(converted.count("aclError"), 2)
         self.assertNotIn("aclrtError", converted)
         self.assertIn("ACL_SUCCESS", converted)

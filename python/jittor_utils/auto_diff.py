@@ -63,8 +63,7 @@ def hook_pt_normal(mean, std):
     np.random.seed(0)
     return torch.from_numpy(np.random.normal(size=shape).astype("float32")).to(std.device) * std + mean
 
-def hook_jt_rand(shape, dtype="float32", rtype="uniform"):
-    import jittor
+def hook_jt_rand(jittor, shape, dtype="float32", rtype="uniform"):
     np.random.seed(0)
     if rtype == "normal":
         return jittor.array(np.random.normal(size=shape).astype(str(dtype)))
@@ -85,7 +84,8 @@ def hook_rand():
     if "jittor" in sys.modules:
         jittor = sys.modules["jittor"]
         LOG.i("Hook jittor.random")
-        jittor.random = hook_jt_rand
+        from functools import partial
+        jittor.random = partial(hook_jt_rand, jittor)
         jittor.seed(0)
 
 

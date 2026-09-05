@@ -38,6 +38,29 @@ from jittor_utils import lock
 from jittor_utils import install_cuda
 from jittor import __version__
 import hashlib
+from functools import partial
+from jittor_utils import backend_discovery as _backend_discovery
+from jittor_utils import build_config as _build_config_api
+from jittor_utils.build_config import BuildConfig, BuildContext, ModuleBuildServices
+
+
+def _module_build_services(config):
+    return ModuleBuildServices(
+        pyjt_compiler.compile_single, fix_cl_flags, config.cc_path,
+        jit_utils.cache_path, config.jittor_path,
+    )
+
+
+def make_backend_context(config=None, *, publish_library=None, mpi_compile_flags=""):
+    config = build_config if config is None else config
+    return BuildContext(
+        config=config,
+        compile_module=partial(jit_utils.compile_module, services=_module_build_services(config)),
+        transform_sources=jit_utils.process_jittor_source,
+        compile=compile, compile_custom_ops=compile_custom_ops,
+        publish_library=publish_library, make_cache_dir=make_cache_dir,
+        load_library=ctypes.CDLL, mpi_compile_flags=mpi_compile_flags, so=so,
+    )
 
 def find_jittor_path():
     return os.path.dirname(__file__)
@@ -1296,27 +1319,28 @@ ex_python_path = python_path + '.' + str(sys.version_info.minor)
 if os.path.isfile(ex_python_path):
     python_path = ex_python_path
 
-# if jtcuda is already installed
-nvcc_path = None
-if install_cuda.has_installation() or os.name == 'nt':
-    nvcc_path = install_cuda.install_cuda()
-    if nvcc_path:
-        nvcc_path = try_find_exe(nvcc_path)
-# check system installed cuda
-if not nvcc_path:
-    nvcc_path = env_or_try_find('nvcc_path', 'nvcc') or \
-        try_find_exe('/usr/local/cuda/bin/nvcc') or \
-        try_find_exe('/usr/bin/nvcc') or \
-        try_find_exe('/opt/cuda/bin/nvcc')
-# if system has no cuda, install jtcuda
-if not nvcc_path:
-    nvcc_path = install_cuda.install_cuda()
-    if nvcc_path:
-        nvcc_path = try_find_exe(nvcc_path)
-if nvcc_path is None:
-    nvcc_path = ""
-if "nvcc_path" in os.environ:
-    nvcc_path = os.environ["nvcc_path"]
+def _discover_cuda_compiler(requested_backend):
+    if requested_backend == "cpu":
+        return ""
+    nvcc = None
+    if install_cuda.has_installation() or os.name == 'nt':
+        nvcc = install_cuda.install_cuda()
+        if nvcc:
+            nvcc = try_find_exe(nvcc)
+    if not nvcc:
+        nvcc = env_or_try_find('nvcc_path', 'nvcc') or \
+            try_find_exe('/usr/local/cuda/bin/nvcc') or \
+            try_find_exe('/usr/bin/nvcc') or \
+            try_find_exe('/opt/cuda/bin/nvcc')
+    if not nvcc:
+        nvcc = install_cuda.install_cuda()
+        if nvcc:
+            nvcc = try_find_exe(nvcc)
+    return os.environ.get("nvcc_path", nvcc or "")
+
+
+_requested_backend = _backend_discovery.requested_backend()
+nvcc_path = _discover_cuda_compiler(_requested_backend)
 gdb_path = env_or_try_find('gdb_path', 'gdb')
 addr2line_path = try_find_exe('addr2line')
 has_pybt = check_pybt(gdb_path, python_path)
@@ -1595,9 +1619,13 @@ check_cache_compile()
 LOG.v(f"Get cache_compile: {jit_utils.cc}")
 
 # check cuda
-is_cuda = has_cuda = 0
+is_cuda = has_cuda = has_acl = has_rocm = has_corex = 0
 check_cuda()
+if _requested_backend == "cuda" and not has_cuda:
+    raise RuntimeError("JT_BACKEND=cuda requires a usable CUDA compiler; set nvcc_path")
 nvcc_flags = os.environ.get("nvcc_flags", "")
+def convert_nvcc_flags(value):
+    return value
 if has_cuda:
     nvcc_flags += cc_flags
     def convert_nvcc_flags(nvcc_flags):
@@ -1642,24 +1670,37 @@ if has_cuda:
         return nvcc_flags
     nvcc_flags = convert_nvcc_flags(nvcc_flags)
 
-extra_core_files = []
-setup_fake_cuda_lib = False
-# from .acl_compiler import check_acl
-from .extern.acl import acl_compiler
-jit_utils.add_backend(acl_compiler)
-from .extern.rocm import rocm_compiler
-jit_utils.add_backend(rocm_compiler)
-from .extern.corex import corex_compiler
-jit_utils.add_backend(corex_compiler)
+build_config = BuildConfig(
+    backend="cuda" if has_cuda else "cpu", cc_path=cc_path, cc_type=cc_type,
+    cc_flags=cc_flags, nvcc_path=nvcc_path, nvcc_flags=nvcc_flags,
+    kernel_flags=kernel_opt_flags, cache_path=cache_path, jittor_path=jittor_path,
+    has_cuda=bool(has_cuda), is_cuda=bool(is_cuda),
+    convert_nvcc_flags=convert_nvcc_flags,
+)
+_backend_provider = _backend_discovery.load_backend_provider(_requested_backend)
+backend_modules = () if _backend_provider is None else (_backend_provider,)
+if _backend_provider is not None:
+    configured = _backend_provider.configure(make_backend_context(build_config))
+    if not isinstance(configured, BuildConfig):
+        raise TypeError("backend configure(context) must return BuildConfig")
+    build_config = configured
+for _env_name, _env_value in build_config.environment.items():
+    os.environ[_env_name] = _env_value
 
-for mod in jit_utils.backends:
-    if mod.check():
-        break
+# Only the bootstrap publishes compatibility names. Providers return values;
+# they never mutate this module or append into its core source inventory.
+cc_path, cc_type, cc_flags = build_config.cc_path, build_config.cc_type, build_config.cc_flags
+nvcc_path, nvcc_flags = build_config.nvcc_path, build_config.nvcc_flags
+kernel_opt_flags = build_config.kernel_flags
+jittor_path, cache_path = build_config.jittor_path, build_config.cache_path
+has_cuda, has_acl = build_config.has_cuda, build_config.has_acl
+has_rocm, has_corex = build_config.has_rocm, build_config.has_corex
+hipcc_path, tikcc_path = build_config.hipcc_path, build_config.tikcc_path
+setup_fake_cuda_lib = build_config.setup_fake_cuda_lib
+extra_core_files = build_config.extra_core_files
+convert_nvcc_flags = build_config.convert_nvcc_flags or convert_nvcc_flags
 
-if not os.name == 'nt':
-    is_cuda = os.path.basename(nvcc_path) == "nvcc"
-else:
-    is_cuda = os.path.basename(nvcc_path) == "nvcc.exe"
+is_cuda = build_config.is_cuda
 
 # build core
 core_output_name = 'jittor_core' + extension_suffix
@@ -1735,6 +1776,8 @@ def core_generator_signature():
     paths = [
         os.path.abspath(__file__),
         os.path.abspath(pyjt_compiler.__file__),
+        os.path.abspath(_build_config_api.__file__),
+        os.path.abspath(_backend_discovery.__file__),
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "_runtime", "flag_policy.py"),
     ]
     records = {}
@@ -2052,6 +2095,12 @@ flags.jittor_path = jittor_path
 flags.gdb_path = gdb_path
 flags.addr2line_path = addr2line_path
 flags.has_pybt = has_pybt
+
+build_config = build_config.evolve(
+    cc_flags=cc_flags, nvcc_flags=nvcc_flags, is_cuda=bool(is_cuda),
+    kernel_flags=kernel_opt_flags,
+)
+jit_utils.configure_module_build(_module_build_services(build_config))
 
 # Hand the one lock descriptor over to C++. Both sides now take flock() on
 # this single open file description; before this line the C++ side took a

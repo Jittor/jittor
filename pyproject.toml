@@ -51,6 +51,11 @@ Homepage = "http://jittor.org"
 jittor-triton-shim = "jittor.compat.triton.deploy:main"
 jittor-torch-shim = "jittor.compat.shim.deploy:main"
 
+[project.entry-points."jittor.backends"]
+acl = "jittor.extern.acl.acl_compiler"
+rocm = "jittor.extern.rocm.rocm_compiler"
+corex = "jittor.extern.corex.corex_compiler"
+
 [tool.setuptools]
 package-dir = { "" = "python" }
 include-package-data = true

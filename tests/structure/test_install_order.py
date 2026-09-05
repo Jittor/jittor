@@ -19,10 +19,7 @@ import re
 import unittest
 from pathlib import Path
 
-import jittor
-
-
-PACKAGE = Path(jittor.__file__).resolve().parent
+PACKAGE = Path(__file__).resolve().parents[2] / "python/jittor"
 _ORDER_MODULE = PACKAGE / "_install_order.py"
 
 

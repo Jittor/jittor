@@ -77,7 +77,7 @@ SEQUENCE = (
         "wrappers, so every Var method provider settles first."),
     Step(
         "backends.post_process", False,
-        "jittor_utils.backends[*].post_process(). Hardware backends adjust "
+        "compiler.backend_modules[*].post_process(context). Hardware backends adjust "
         "flags (ACL sets amp_reg here). After the Python-side Var surface is "
         "complete, before anything reads those flags."),
     Step(

@@ -581,6 +581,12 @@ def get_build_config():
     configuration from one set to the empty string.
     """
     config = {name: os.environ.get(name) for name in BUILD_CONFIG_VARS}
+    # Optional SDK selection is part of the produced binary, but absent
+    # settings must not invalidate ordinary CPU/CUDA cache directories.
+    for name in ("JT_BACKEND", "ASCEND_TOOLKIT_HOME", "ASCEND_HOME_PATH", "tikcc_path",
+                 "ROCM_HOME", "ROCM_PATH", "HIP_PATH", "hipcc_path", "COREX_HOME"):
+        if os.environ.get(name):
+            config[name] = os.environ[name]
     # Keep the normal cache name stable, but isolate the explicitly unsafe
     # opt-in: an unlocked writer must not leave partial state in the cache used
     # by ordinary locked processes.
@@ -1197,13 +1203,16 @@ if os.name == 'nt':
         if hasattr(os, "add_dll_directory"):
             os.add_dll_directory(path)
 
-backends = []
-def add_backend(mod):
-    backends.append(mod)
+_module_build_services = None
+
+
+def configure_module_build(services):
+    global _module_build_services
+    _module_build_services = services
 
 from . import lock
 @lock.lock_scope()
-def compile_module(source, flags):
+def compile_module(source, flags, *, services=None):
     """
     quick c extension:
     Example:
@@ -1226,7 +1235,13 @@ def compile_module(source, flags):
         mod.hello("aaa")
 
     """
-    tmp_path = os.path.join(cache_path, "tmp")
+    services = services or _module_build_services
+    if services is None:
+        raise RuntimeError(
+            "compile_module requires explicit ModuleBuildServices; import jittor "
+            "first to install its binding generator and compiler configuration")
+    module_cache_path = services.cache_path
+    tmp_path = os.path.join(module_cache_path, "tmp")
     os.makedirs(tmp_path, exist_ok=True)
     hash = "hash_" + get_str_hash(source)
     so = get_py3_extension_suffix()
@@ -1235,8 +1250,7 @@ def compile_module(source, flags):
     lib_name = hash+so
     with open(header_name, "w", encoding="utf8") as f:
         f.write(source)
-    from jittor.pyjt_compiler import compile_single
-    ok = compile_single(header_name, source_name)
+    ok = services.compile_single(header_name, source_name)
     assert ok, "no pyjt interface found"
     
     entry_src = f'''
@@ -1253,11 +1267,10 @@ PYJT_MODULE_INIT({hash});
         src = f.read()
     with open(source_name, "w", encoding="utf8") as f:
         f.write(src + entry_src)
-    jittor_path = os.path.join(os.path.dirname(__file__), "..", "jittor")
-    jittor_path = os.path.abspath(jittor_path)
-    from jittor.compiler import fix_cl_flags
-    do_compile([fix_cl_flags(f"\"{cc_path}\" \"{source_name}\" {flags} -o \"{cache_path+'/'+lib_name}\" "),
-        cache_path, jittor_path])
+    do_compile([services.fix_flags(
+        f"\"{services.cc_path}\" \"{source_name}\" {flags} "
+        f"-o \"{module_cache_path+'/'+lib_name}\" "),
+        module_cache_path, services.jittor_path])
     # use __import__ (returns the module object) rather than
     # `exec("import X"); locals()["X"]`: since Python 3.13 (PEP 667) exec() no
     # longer leaks names into an optimized function's locals(), so the old
@@ -1272,16 +1285,15 @@ PYJT_MODULE_INIT({hash});
 
     return mod
 
-def process_jittor_source(device_type, callback):
-    import jittor.compiler as compiler
+def process_jittor_source(config, device_type, callback):
     import shutil
     import tempfile
     djittor = device_type + "_jittor"
-    djittor_path = os.path.join(compiler.cache_path, djittor)
+    djittor_path = os.path.join(config.cache_path, djittor)
     os.makedirs(djittor_path, exist_ok=True)
 
-    for root, dir, files in os.walk(compiler.jittor_path):
-        root2 = root.replace(compiler.jittor_path, djittor_path)
+    for root, dir, files in os.walk(config.jittor_path):
+        root2 = root.replace(config.jittor_path, djittor_path)
         os.makedirs(root2, exist_ok=True)
         for name in files:
             fname = os.path.join(root, name)
@@ -1305,11 +1317,11 @@ def process_jittor_source(device_type, callback):
                     continue
                 generated = os.path.join(directory, name)
                 relative = os.path.relpath(generated, djittor_path)
-                if os.path.isfile(os.path.join(compiler.jittor_path, relative)):
+                if os.path.isfile(os.path.join(config.jittor_path, relative)):
                     continue
                 if archive is None:
                     archive = tempfile.mkdtemp(
-                        prefix=device_type + "_source_stale_", dir=compiler.cache_path)
+                        prefix=device_type + "_source_stale_", dir=config.cache_path)
                 archived = os.path.join(archive, relative)
                 os.makedirs(os.path.dirname(archived), exist_ok=True)
                 shutil.move(generated, archived)
@@ -1317,8 +1329,11 @@ def process_jittor_source(device_type, callback):
                 os.rmdir(directory)
     if archive is not None:
         LOG.i("Archived obsolete backend-generated native sources in " + archive)
-    compiler.cc_flags = compiler.cc_flags.replace(compiler.jittor_path, djittor_path) + f" -I\"{djittor_path}/extern/cuda/inc\" "
-    compiler.jittor_path = djittor_path
+    return config.evolve(
+        cc_flags=config.cc_flags.replace(config.jittor_path, djittor_path)
+                 + f" -I\"{djittor_path}/extern/cuda/inc\" ",
+        jittor_path=djittor_path,
+    )
 
 import time
 class time_scope:

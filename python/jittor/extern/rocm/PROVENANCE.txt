@@ -15,8 +15,9 @@ Two ELF relocatable objects, one per libstdc++ ABI:
 
 archive SHA-256: 77c52dc063b71d23b508f70f9cd30649d7aa8ff040dc480848883579608a6999
 
-`rocm_compiler.py:install_rocm_jittor_core` picks one of the two by reading
-`gcc -v` for `--with-default-libstdcxx-abi`, extracts it next to this file, and
+`rocm_compiler.py:configure` picks one of the two by reading
+`gcc -v` for `--with-default-libstdcxx-abi`, extracts it under the build
+configuration's `cache_path/rocm` (not into the source checkout), and
 links it into a module that is then loaded into the running process. Between
 them the objects define, among ~620 symbols:
 

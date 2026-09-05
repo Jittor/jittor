@@ -200,9 +200,9 @@ dtype = NanoString
 import jittor_utils
 
 _ran_post_process = False
-for backend in jittor_utils.backends:
+for backend in compiler.backend_modules:
     if hasattr(backend, "post_process"):
-        backend.post_process()
+        backend.post_process(compiler.make_backend_context())
         _ran_post_process = True
 if _ran_post_process:
     _record_install("backends.post_process")
@@ -343,3 +343,6 @@ __all__ = tuple(sorted(set(
     + tuple(math_util.__all__)
     + _ROOT_EXPORTS
 )))
+
+from .serialization import register_compatibility_services as _register_serialization_services
+_register_serialization_services()

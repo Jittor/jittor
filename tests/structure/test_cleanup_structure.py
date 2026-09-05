@@ -248,8 +248,8 @@ class TestCleanupStructure(unittest.TestCase):
             if (
                 paths
                 == {
-                    "python/jittor_utils/load_pytorch.py",
-                    "python/jittor_utils/load_pytorch_old.py",
+                    "python/jittor/serialization/load_pytorch.py",
+                    "python/jittor/serialization/load_pytorch_old.py",
                 }
                 and names <= legacy_loader_names
             ):

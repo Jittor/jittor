@@ -5,12 +5,8 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 import os
-from jittor_utils import env_or_try_find
-import jittor_utils
-import ctypes
 import glob
-import jittor.compiler as compiler
-import jittor as jt
+import shutil
 import math
 import numpy as np
 
@@ -30,12 +26,6 @@ def _ntuple(n):
 
 
 _pair = _ntuple(2)
-
-has_acl = 0
-cc_flags = ""
-tikcc_path = env_or_try_find('tikcc_path', 'ccec')
-dlopen_flags = os.RTLD_NOW | os.RTLD_GLOBAL
-compiler.has_acl = has_acl
 
 # export LD_LIBRARY_PATH=/usr/local/Ascend/ascend-toolkit/latest/tools/aoe/lib64:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64/plugin/opskernel:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64/plugin/nnengine:/usr/local/Ascend/ascend-toolkit/latest/runtime/lib64:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64/stub:/usr/local/Ascend/ascend-toolkit/latest/tools/tikicpulib/lib/Ascend910A:/usr/local/Ascend/ascend-toolkit/latest/toolkit/tools/simulator/Ascend910A/lib:/opt/AXESMI/lib64:/usr/local/Ascend/driver/lib64/driver/
 # export PYTHONPATH=/home/cjld/new_jittor/jittor/python
@@ -60,28 +50,39 @@ compiler.has_acl = has_acl
 # python3 ./mm_bench_pt_npu.py
 
 
-def install():
-    import jittor.compiler as compiler
-    global has_acl, cc_flags
+def configure(context):
+    """Return ACL build inputs without mutating the compiler or environment."""
+    config = context.config
+    requested_compiler = os.environ.get("tikcc_path", "ccec")
+    tikcc_path = shutil.which(requested_compiler) if requested_compiler else None
+    if not tikcc_path:
+        raise RuntimeError(
+            "ACL was selected but its compiler was not found; set tikcc_path "
+            "or put ccec on PATH"
+        )
+    ascend_toolkit_home = os.environ.get("ASCEND_TOOLKIT_HOME", "")
+    if not ascend_toolkit_home or not os.path.isdir(ascend_toolkit_home):
+        raise RuntimeError(
+            "ACL requires ASCEND_TOOLKIT_HOME to name an existing CANN toolkit directory"
+        )
+    if context.load_library is None:
+        raise RuntimeError("ACL configuration requires a load_library service")
     acl_compiler_home = os.path.dirname(__file__)
     cc_files = sorted(glob.glob(acl_compiler_home + "/**/*.cc",
                                 recursive=True))
     cc_files2 = []
+    extra_core_files = list(config.extra_core_files)
     for name in cc_files:
         # Skip files in hccl directory
         if "hccl" in name:
             continue
         # if "acl_op_exec" in name or "_op_acl.cc" in name:
         if "acl_op_exec" in name or "_op_acl.cc" in name or "utils.cc" in name:
-            compiler.extra_core_files.append(name)
+            extra_core_files.append(name)
         else:
             cc_files2.append(name)
     cc_files = cc_files2
-    ascend_toolkit_home = os.getenv('ASCEND_TOOLKIT_HOME')
-
-    #print(ascend_toolkit_home)
-    #print(acl_compiler_home)
-    cc_flags += f" -MD -DHAS_CUDA -DIS_ACL  \
+    cc_flags = f" -MD -DHAS_CUDA -DIS_ACL  \
     -I{ascend_toolkit_home}/include/ \
     -I{ascend_toolkit_home}/include/acl/ \
     -I{ascend_toolkit_home}/include/aclnn/ \
@@ -95,18 +96,8 @@ def install():
     cc_flags += " -llibnnopbase "
     cc_flags += " -llibopapi "
 
-    #pdb.set_trace()
-    ctypes.CDLL("libascendcl.so", dlopen_flags)
-    f'''
-    -ltikc_runtime
-    -I/usr/local/Ascend/driver/include/ \
-    -L{ascend_toolkit_home}/compiler/lib64/ \
-    -L{ascend_toolkit_home}/runtime/lib64/ \
-    '''
-    jittor_utils.LOG.i("ACL detected")
-
-    global mod
-    mod = jittor_utils.compile_module(
+    library = context.load_library("libascendcl.so", os.RTLD_NOW | os.RTLD_GLOBAL)
+    mod = context.compile_module(
         '''
 #include "common.h"
 namespace jittor {
@@ -114,34 +105,30 @@ namespace jittor {
 string process_acl(const string& src, const string& name, const map<string,string>& kargs);
 // @pyjt(init_acl_ops)
 void init_acl_ops();
-}''', compiler.cc_flags + " " + " ".join(cc_files) + cc_flags)
-    jittor_utils.process_jittor_source("acl", mod.process)
+}''', config.cc_flags + " " + " ".join(cc_files) + cc_flags)
+    config = context.transform_sources(config, "acl", mod.process)
+    final_flags = config.cc_flags + cc_flags
+    return config.evolve(
+        backend="acl", has_acl=True, has_cuda=True, is_cuda=False,
+        has_rocm=False, has_corex=False,
+        tikcc_path=tikcc_path, nvcc_path=tikcc_path,
+        cc_flags=final_flags, nvcc_flags=final_flags.replace("-std=c++14", ""),
+        setup_fake_cuda_lib=True, extra_core_files=tuple(extra_core_files),
+        environment={**config.environment, "use_mkl": "0"},
+        resources={**config.resources, "acl_converter": mod, "acl_library": library},
+    )
 
-    has_acl = 1
-    os.environ["use_mkl"] = "0"
-    compiler.setup_fake_cuda_lib = True
+
+def install(context):
+    return configure(context)
 
 
-def install_extern():
+def install_extern(context):
     return False
 
 
-def check():
-    import jittor.compiler as compiler
-    global has_acl, cc_flags
-    if tikcc_path:
-        install()
-    compiler.has_acl = has_acl
-    compiler.tikcc_path = tikcc_path
-    if not has_acl: return False
-    compiler.cc_flags += cc_flags
-    compiler.nvcc_path = tikcc_path
-    compiler.nvcc_flags = compiler.cc_flags.replace("-std=c++14", "")
-    return True
-
-
-def post_process():
-    if has_acl:
+def post_process(context):
+    if context.config.has_acl:
         from jittor import pool
         pool.pool_use_code_op = False
         import jittor as jt
@@ -149,7 +136,7 @@ def post_process():
         jt.flags.use_parallel_op_compiler = 0
         jt.flags.amp_reg |= (jt.amp_flags.reduce16_no_fp32_acc
                              | jt.amp_flags.keep_reduce)
-        mod.init_acl_ops()
+        context.config.resources["acl_converter"].init_acl_ops()
 
 def change_function():
     import jittor as jt

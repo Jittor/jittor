@@ -1,7 +1,7 @@
 # 整改看板
 
 当前进度以任务表为准。2026-09-06：2.13 完成原生状态与配置分层，2.14 清空原生 misc，4.03/4.04 接通原生设备与算子执行链，4.05 完成 Python 真实分派迁移；
-4.06 已接通实际回退策略；4.07 BuildConfig 在本波集成收尾，随后推进后端布局和移除 legacy 源转换。下方旧波次中的 Python 字段视图不等于原生存储迁移。
+4.06 实际回退策略与 4.07 BuildConfig 已接通，下一步推进后端布局和移除 legacy 源转换。下方旧波次中的 Python 字段视图不等于原生存储迁移。
 
 > 第217波：`98c8ee94` 迁移 cuda_allow_tf32 Runtime owner（结构 43 passed）；`b8398291` 修正 Native provider teardown 统一 lifecycle events（结构 12 passed）；`9d49c70c` ACL device_size Python/C++ 对齐（ACL 14 passed）；`d44782d4` Torch bootstrap 非字符串/非法 __all__ fail-closed。未声称 CUDA/NPU 实机。
 
@@ -565,7 +565,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 4.04 | `OpRegistry` | 已合并 | device | 原生 OpDef 按 backend 组合具体 Kernel/Codegen，执行器、并行编译器、tracer 与 fused relay 走注册入口；旧图固定定义，替换和注销重注册隔离 JIT 身份。CUDA 库登记 accelerator 实现，MKL 登记 CPU 实现；核心五处替换及 matmul/conv tuner 改 typed capability，库名移入库自有 TU。真实 CUDA 检查 cuRAND/CUB 执行与 NumPy 对照、cuBLAS/cuDNN 元算子图 relay；CPU-only 自定义扩展通过。修复双源码 CodeOp 缓存错用、fused 首次后端选择及 replacement 缓存身份问题。相关 CPU/CUDA 回归通过，ACL 改动 TU 主机语法通过；按轻量验收未跑完整模型与 NPU/ROCm 实机。Python 分派与 legacy 源转换仍归 4.05/4.11/4.12。 |
 | 4.05 | Python 分派表 | 已合并 | device/pyops/build | 统一表按原生运行目标、输入设备、全部 Tensor dtype、shape/grad predicate 与优先级选择真实 callable；矩阵/卷积/RNN、归一化/推理、KV/RoPE、scan/indexing/gamma/FFT/AdamW 已接线。核心提供无同步 dispatch_context，拒绝真实混卡并保留 pending scalar 跟随规则；FFT/attention 缓存区分设备。删除 Python 假 BackendRegistry/bytearray 原型；库与资源单一登记，旧 globals 和 hook 改只读查询，MKL 显式禁用不加载且可恢复。算子域直接读取旧后端 flag 归零，显式设备命令/启动配置保留；legacy FFT mode 限制归表。CPU/CUDA 最终 54 passed，CPU-only 52 passed/8 个 accelerator skip，原 matmul/推理能力及相关合同 61 passed/8 个未加载 MKL skip，额外卷积/RNN 2 passed。完整结构 678 passed/10 failed/2 skipped，其中新增 softmax 签名问题已修复且定向通过，其余九类见交接，不称全门禁通过。保留原 ROCm/Corex 可达注册及 ACL 代码，未做 NPU/ROCm/Corex 实机或完整模型门禁。 |
 | 4.06 | `jt.flags.backend_fallback ∈ {error, warn, allow… | 已合并 | device/gates | NativeRuntime 真实持有三态策略和尝试计数，默认 warn；executor 在 CPU 执行与输入迁移前检查，array staging/fetch/显式拷贝不误报。ACL 先完整预检，仅支持缺口请求回退，执行异常清理后原样传播；CPU 回退用 RAII 恢复 mode/flags/fused context。门禁设 error，scope 计数还能抓被吞拒绝，不再 grep 日志。CUDA 修前 error 仍执行 CPU，修后 marker/指针/数值/三态与原生策略 9 passed；严格模式常规 CUDA 与构建组合 28 passed。ACL 82 host/结构、4 TU/5 launcher ABI 与两次反向对照通过；无 NPU 实机，不声称 SDK 资源全量 RAII 完成。完整结构仍有既有失败，见交接。 |
-| 4.07 | 后端配置改为返回 `BuildConfig` 值 | 进行中 | build | 本波值对象、惰性发现、utils 依赖拆除与序列化迁移已接通并有 CPU/CUDA 定向证据，正在分离提交；未声称 ACL/ROCm/Corex 实机。 |
+| 4.07 | 后端配置改为返回 `BuildConfig` 值 | 已合并 | build | 三个 provider 返回冻结 BuildConfig，显式 BuildContext 注入服务，compiler 统一发布兼容字段，不再由后端改 globals/追加源文件；entry point 仅加载选中后端，CPU 选择不触碰 CUDA 探测/安装，普通 CPU/CUDA cache 指纹保持。utils 整树反向 import 清零，compile_module 服务注入，序列化实现迁 jittor.serialization，旧路径在 bootstrap 后解析同一对象。CPU/CUDA 构建/扩展依赖/序列化/分派组合 50 passed，strict CUDA 与 CPU选择组合 28 passed，CPU-only 联合 82 passed；离线 provider/SDK 分支 39 passed。完整结构 740 passed/9 failed/2 skipped，旧失败不掩盖。保留 Corex 兼容库与 legacy 源转换；旧 utility pre-bootstrap 使用边界、可选后端初始工具链旧耦合及无 CANN/ROCm/Corex 实机证据写入构建文档。 |
 | 4.08 | 流与事件模型 | 已合并 | device | `0dfcb3dd` 每设备 copy/communication stream 与 ready/done event，接入 array H2D、fetch D2H、device_copy、NCCL collective；`78235157` 双 rank NCCL 用 rank 相关输入验证数值且 communication 双向依赖计数精确 +2。GPU 0/2：两 rank 各 1 passed，mixed-device H2D/fetch 2 passed，6.C16 下毒 1 passed，device_copy/multi-device 6 passed，既有 overlap 正确性 1 passed；未用负载敏感绝对墙钟阈值 |
 | 4.09 | per-device 库句柄 | 已合并 | device | `13c28084`；4.02 已有五库 per-device 资源，本提交补齐每次执行前 SetStream。GPU 0/2 新增测试实际执行 cuBLAS/cuDNN/cuSPARSE/cuRAND/cuFFT 各两次并断言两卡逐库 bind 计数均 +2，1 passed；各库现有 wrapper 聚焦 5 passed；CPU 聚焦 1 passed |
 | 4.10 | CUDA kernel 存放位置统一 | 待领 | | |
