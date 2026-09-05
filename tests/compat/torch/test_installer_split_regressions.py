@@ -3,6 +3,7 @@
 from __future__ import print_function
 
 import unittest
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -10,6 +11,26 @@ import jittor as jt
 
 
 class TestInstallerSplitRegressions(unittest.TestCase):
+    def test_transform_getitem_context_is_nested_and_owner_scoped(self):
+        from jittor.compat.torch.context import (
+            TransformGetItemToIndex,
+            getitem_transform_active,
+        )
+
+        owner = SimpleNamespace(_transform_getitem_to_index_depth=4)
+        self.assertTrue(getitem_transform_active(owner))
+        with TransformGetItemToIndex(owner):
+            self.assertEqual(owner._transform_getitem_to_index_depth, 5)
+            with TransformGetItemToIndex(owner):
+                self.assertEqual(owner._transform_getitem_to_index_depth, 6)
+            self.assertEqual(owner._transform_getitem_to_index_depth, 5)
+        self.assertEqual(owner._transform_getitem_to_index_depth, 4)
+
+        with self.assertRaisesRegex(RuntimeError, "expected"):
+            with TransformGetItemToIndex(owner):
+                raise RuntimeError("expected")
+        self.assertEqual(owner._transform_getitem_to_index_depth, 4)
+
     def test_integer_getitem_remains_a_basic_index(self):
         value = jt.array([10, 20, 30])[1]
         self.assertEqual(int(value.item()), 20)
