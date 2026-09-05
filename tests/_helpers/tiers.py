@@ -368,6 +368,9 @@ def predicted_smoke_seconds(workers=None):
 def budget_report(workers=None):
     """Return an actionable, serialisable breakdown of the smoke budget."""
     workers = workers or SMOKE_WORKERS
+    effective_cpus = effective_cpu_count()
+    configured_workers = workers
+    threads_per_worker = worker_thread_budget(workers, effective_cpus)
     sessions = {}
     for name, measured in sorted(MEASURED.items()):
         work_bound = measured["fast_work"] / float(workers)
@@ -383,7 +386,10 @@ def budget_report(workers=None):
         }
     predicted = sum(item["predicted_seconds"] for item in sessions.values())
     return {
+        "configured_workers": configured_workers,
         "workers": workers,
+        "effective_cpus": effective_cpus,
+        "threads_per_worker": threads_per_worker or effective_cpus,
         "budget_seconds": SMOKE_BUDGET_SECONDS,
         "predicted_seconds": predicted,
         "headroom_seconds": SMOKE_BUDGET_SECONDS - predicted,

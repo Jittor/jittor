@@ -659,9 +659,12 @@ def _enforce_smoke_budget(session, workers):
     report = budget_report(workers)
     if report["headroom_seconds"] < 0:
         session.error(
-            "smoke budget exceeded: predicted %.0fs / %.0fs with %d workers; "
-            "run the full tier or provide a runner with more CPU quota"
-            % (report["predicted_seconds"], report["budget_seconds"], workers))
+            "smoke budget exceeded: predicted %.0fs / %.0fs with %d workers "
+            "(%d configured, %d CPU quota, %d threads/worker); run the full "
+            "tier or provide a runner with more CPU quota"
+            % (report["predicted_seconds"], report["budget_seconds"],
+               report["workers"], report["configured_workers"],
+               report["effective_cpus"], report["threads_per_worker"]))
     return report
 
 

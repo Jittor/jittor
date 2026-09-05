@@ -187,11 +187,21 @@ class TestBudget(unittest.TestCase):
         report = tiers.budget_report()
         self.assertEqual(set(report["sessions"]), {"native", "torch"})
         self.assertEqual(report["workers"], tiers.SMOKE_WORKERS)
+        self.assertEqual(report["configured_workers"], tiers.SMOKE_WORKERS)
+        self.assertGreaterEqual(report["effective_cpus"], 1)
+        self.assertGreaterEqual(report["threads_per_worker"], 1)
         self.assertAlmostEqual(
             report["predicted_seconds"], tiers.predicted_smoke_seconds())
         for item in report["sessions"].values():
             self.assertIn(item["bottleneck"], {"worker_work", "longest_file"})
             self.assertGreater(item["startup_seconds"], 0)
+
+    def test_budget_report_caps_workers_to_runtime_cpu_quota(self):
+        report = tiers.budget_report(workers=tiers.SMOKE_WORKERS + 100)
+        self.assertEqual(report["configured_workers"], tiers.SMOKE_WORKERS + 100)
+        self.assertEqual(report["workers"], tiers.SMOKE_WORKERS + 100)
+        self.assertEqual(report["threads_per_worker"],
+                         max(1, report["effective_cpus"] // report["workers"]))
 
     def test_the_predicted_fast_tier_fits_the_budget(self):
         predicted = tiers.predicted_smoke_seconds()
