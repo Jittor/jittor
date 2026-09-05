@@ -46,6 +46,20 @@ def test_cuda_session_requires_real_device_and_an_executed_accelerator_case():
     assert "_ACCELERATOR_EXECUTED < required_accelerator" in policy
 
 
+def test_npu_session_requires_real_acl_and_an_executed_accelerator_case():
+    source = (REPO_ROOT / "noxfile.py").read_text(encoding="utf-8")
+    npu_start = source.index("def npu(session):")
+    npu_end = source.index("\n\n@nox.session", npu_start)
+    npu = source[npu_start:npu_end]
+    assert 'env["JITTOR_TEST_REQUIRE_ACL"] = "1"' in npu
+    assert 'env["JITTOR_TEST_ACCELERATOR_MIN_EXECUTED"] = "1"' in npu
+
+    policy = (REPO_ROOT / "tests" / "conftest.py").read_text(encoding="utf-8")
+    assert "JITTOR_TEST_REQUIRE_ACL" in policy
+    assert "has_acl is false" in policy
+    assert "_ACCELERATOR_EXECUTED < required_accelerator" in policy
+
+
 def test_accelerator_execution_counter_uses_cuda_nodeids(monkeypatch):
     import conftest as policy
 

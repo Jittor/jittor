@@ -1969,6 +1969,11 @@ def npu(session):
     env["CANN_SET_ENV"] = cann_set_env
     env["JITTOR_CI_PYTHON"] = python
     env["JITTOR_TEST_DEVICES"] = "npu"
+    # Keep the pytest gate fail-closed as well as the process probe below:
+    # without this, an isolated NPU pytest invocation could skip every ACL
+    # case and still report success.
+    env["JITTOR_TEST_REQUIRE_ACL"] = "1"
+    env["JITTOR_TEST_ACCELERATOR_MIN_EXECUTED"] = "1"
     session.run("npu-smi", "info", external=True, env=env)
     _run_with_cann(session, python, ("-m", "pytest", "--version"), env)
     probe = (
