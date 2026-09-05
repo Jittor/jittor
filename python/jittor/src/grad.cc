@@ -153,12 +153,12 @@ vector<VarPtr> grad(
     bool materialize_grads
 ) {
     LOGvv << "loss:" >> loss << "targets:" >> targets;
-    CHECK(loss->is_float()) << "Loss should be float";
+    USER_CHECK(loss->is_float()) << "Loss should be float";
     CHECK(!loss->flag(VarFlags::_first_order_only))
         << "Higher-order gradients are not supported because this loss "
         << "depends on a first-order-only gradient result.";
     for (Var* var : targets)
-        CHECK(var->is_float() || var->dtype().is_complex())
+        USER_CHECK(var->is_float() || var->dtype().is_complex())
             << "Targets of grad should be float or complex";
     // A var whose differentiability an earlier backward gave up (see the
     // retain_graph branch at the end of this function). Reaching one means the

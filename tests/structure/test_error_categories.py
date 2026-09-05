@@ -238,6 +238,10 @@ MIGRATED_ITEM_USER_BOUNDARIES = {
     "python/jittor/src/var_holder.cc": 1,
 }
 
+MIGRATED_GRAD_DTYPE_USER_BOUNDARIES = {
+    "python/jittor/src/grad.cc": 2,
+}
+
 
 def test_typed_error_entry_points_are_distinct():
     source = (ROOT / "python/jittor/src/utils/log.h").read_text()
@@ -255,6 +259,17 @@ def test_item_size_boundary_is_a_user_error():
     actual = source.count("USER_CHECK(var->num==1)")
     assert actual == MIGRATED_ITEM_USER_BOUNDARIES[
         "python/jittor/src/var_holder.cc"]
+
+
+def test_grad_dtype_boundaries_are_user_errors():
+    source = (ROOT / "python/jittor/src/grad.cc").read_text()
+    assert 'USER_CHECK(loss->is_float())' in source
+    assert 'USER_CHECK(var->is_float() || var->dtype().is_complex())' in source
+    assert '\n    CHECK(loss->is_float())' not in source
+    assert '\n        CHECK(var->is_float() || var->dtype().is_complex())' not in source
+    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    assert actual == MIGRATED_GRAD_DTYPE_USER_BOUNDARIES[
+        "python/jittor/src/grad.cc"]
 
 
 def test_public_dimension_boundary_migration_is_explicit_and_bounded():
