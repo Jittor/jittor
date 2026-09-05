@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；当前状态基线 `2947758b`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 当前 1248 个 |
+| 分支 | `2.0-refactor`；当前状态基线 `8b44ca6d`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 当前 1251 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **208** / 进行中 **0** / 待领 **72** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
@@ -1608,6 +1608,14 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `compat` | `f5461d6f` 完成 quantile/nanquantile Var owner cohort，定向 7 passed；7.03 聚合任务仍待完整 family。 |
 | `bindings` | `45d9ed15` 在独立单卡 CUDA 上补 cuBLAS rank/inner-dimension 3 条真实负向，3 passed，异常后 4x4 计算继续通过；2.19 聚合任务仍待。 |
 | `device` | `27bbca46` 将 ACL 按 `cu` 前缀删除外部算子的逻辑改为显式 registry，结构合同 2 passed；本机无 CANN/NPU，未宣称硬件验证。 |
+
+### 2026-09-05 第一百六十三波
+
+| 分区 | 结果 |
+| --- | --- |
+| `bindings` | `8b44ca6d` 补 cuBLAS batched/acc 非法输入后继续计算的真实 CUDA 回归；新增场景 1 passed，`test_cublas_matmul_grad.py` 整文件 10 passed。 |
+| `device` | `8c5ef55b` 补 ACL 属性 data-channel 原子迁移门禁、cache-key/失败路径约束与 910B3/CANN 命令，相关静态合同 6 passed；无 NPU 硬件验证。 |
+| `compat` | 审计确认简单 numerical owner 已基本完成；剩余 vmap 是复杂 runtime 闭包，sum/mean/std/var/prod 的 owner 在 tensor installer，未做重复迁移。 |
 
 ## 7. 接手怎么开始
 
