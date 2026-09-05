@@ -79,6 +79,37 @@ struct NativeProviderRegistration {
 };
 
 /**
+ * Value-only metadata published to a native provider consumer.
+ *
+ * A consumer must not retain a reference into NativeOpRegistry: provider
+ * replacement can invalidate the registry entry while a device backend is
+ * still draining work.  This snapshot is therefore deliberately composed of
+ * strings and scalar ABI fields.  Consumers may cache it for diagnostics and
+ * compare ``provider_id`` before using a backend handle.
+ */
+struct NativeProviderMetadata {
+    string name;
+    uint32 provider_id;
+    uint32 abi_version;
+    uint32 struct_size;
+
+    NativeProviderMetadata()
+        : provider_id(0), abi_version(0), struct_size(0) {}
+
+    NativeProviderMetadata(const NativeProviderRegistration& registration,
+                           uint32 provider_id)
+        : name(registration.name), provider_id(provider_id),
+          abi_version(registration.abi_version),
+          struct_size(registration.struct_size) {}
+
+    bool valid() const {
+        return !name.empty() && provider_id != 0 &&
+            abi_version == NATIVE_PROVIDER_ABI_VERSION &&
+            struct_size >= sizeof(NativeProviderRegistration);
+    }
+};
+
+/**
  * ABI-neutral identity of one provider-backed operator implementation.
  *
  * The native registry owns operator metadata, while a backend owns the
@@ -153,6 +184,9 @@ public:
     vector<string> providers() const;
     uint32 provider_id(const string& provider) const;
     NativeProviderRegistration provider_registration(const string& provider) const;
+    // Return a value snapshot for host-side provider consumers.  No registry
+    // storage or backend handle is exposed through this API.
+    NativeProviderMetadata provider_metadata(const string& provider) const;
     // The observer is non-owning and receives future transitions only.  The
     // returned pointer is the previous observer, mirroring the node lifecycle
     // observer API and making scoped installation straightforward.

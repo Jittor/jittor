@@ -121,3 +121,24 @@ def test_native_provider_lifecycle_consumer_is_value_only_and_non_owning():
     assert "unique_ptr<NativeProviderLifecycleObserver>" not in header
     assert "void*" not in header[header.index("struct NativeProviderLifecycleObserver"):
                                   header.index("class NativeOpRegistry")]
+
+
+def test_native_provider_metadata_is_a_value_only_host_consumer_contract():
+    header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
+        encoding="utf-8")
+    source = (REPO_ROOT / "python/jittor/src/ops/op_register.cc").read_text(
+        encoding="utf-8")
+    jit_test = (REPO_ROOT / "python/jittor/src/tests/test_op_register.cc").read_text(
+        encoding="utf-8")
+    assert "struct NativeProviderMetadata" in header
+    assert "NativeProviderMetadata provider_metadata(const string& provider) const" in header
+    assert "NativeOpRegistry::provider_metadata" in source
+    assert "auto metadata = registry.provider_metadata" in jit_test
+    metadata = header[header.index("struct NativeProviderMetadata"):
+                     header.index("struct NativeOpDispatchKey")]
+    assert "shared_ptr" not in metadata
+    assert "unique_ptr" not in metadata
+    assert "void*" not in metadata
+    assert "provider_id" in metadata
+    assert "abi_version" in metadata
+    assert "struct_size" in metadata

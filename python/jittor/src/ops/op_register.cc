@@ -199,6 +199,20 @@ NativeProviderRegistration NativeOpRegistry::provider_registration(
     return iter->second;
 }
 
+NativeProviderMetadata NativeOpRegistry::provider_metadata(
+        const string& provider) const {
+    std::lock_guard<std::recursive_mutex> guard(mutex);
+    auto registration_iter = provider_registrations.find(provider);
+    auto id_iter = provider_ids.find(provider);
+    ASSERT(registration_iter != provider_registrations.end())
+        << "provider" << provider << "is not registered";
+    ASSERT(id_iter != provider_ids.end())
+        << "provider" << provider << "has no identity";
+    // Construct a value while holding the registry lock.  The returned
+    // object remains valid after replacement or teardown of this provider.
+    return NativeProviderMetadata(registration_iter->second, id_iter->second);
+}
+
 NativeProviderLifecycleObserver* NativeOpRegistry::set_lifecycle_observer(
         NativeProviderLifecycleObserver* observer) {
     std::lock_guard<std::recursive_mutex> guard(mutex);

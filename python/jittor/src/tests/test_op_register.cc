@@ -70,6 +70,12 @@ JIT_TEST(native_op_registry_provider_dispatch_boundary) {
     ASSERT(published.name == cpu_registration.name);
     ASSERT(published.abi_version == cpu_registration.abi_version);
     ASSERT(published.struct_size == cpu_registration.struct_size);
+    auto metadata = registry.provider_metadata("cpu");
+    ASSERT(metadata.valid());
+    ASSERT(metadata.name == "cpu");
+    ASSERT(metadata.provider_id == key.provider_id);
+    ASSERT(metadata.abi_version == key.abi_version);
+    ASSERT(metadata.struct_size == sizeof(NativeProviderRegistration));
     ASSERT(registry.providers().size() == 2);
 
     // Replacing a provider is a teardown boundary; stale bindings cannot
@@ -79,6 +85,13 @@ JIT_TEST(native_op_registry_provider_dispatch_boundary) {
     auto replacement = registry.provider_id("cpu");
     ASSERT(replacement != key.provider_id);
     ASSERT(!registry.is_current(key));
+    // The old value snapshot is safe to retain while the provider is
+    // replaced; it must never alias registry-owned storage.
+    ASSERT(metadata.provider_id != replacement);
+    auto replacement_metadata = registry.provider_metadata("cpu");
+    ASSERT(replacement_metadata.valid());
+    ASSERT(replacement_metadata.provider_id == replacement);
+    ASSERT(replacement_metadata.name == metadata.name);
     registry.bind_provider("jit_test_provider_dispatch", "cpu");
     auto replacement_key = registry.resolve_provider(
         "jit_test_provider_dispatch", "cpu");
