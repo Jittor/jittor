@@ -23,6 +23,7 @@ from ..grad import (
 from ..nested import (
     _torch_make_parameter, _torch_register_leaf,
 )
+from ..tensor_state import get_tensor_state
 from ..nn_modules import install_module_namespace
 from ..types import (
     _device_is_cpu, _device_is_cuda, _dtype_to_str,
@@ -1376,9 +1377,7 @@ def _install_module_methods(nn, registry=None):
             except TypeError as exc:
                 swallowed("torch/installers/nn.py _call: _leaves_published.add(self)", exc)
             try:
-                registry = getattr(jt, "_torch_leaf_params", None)
-                if registry is None:
-                    registry = jt._torch_leaf_params = {}
+                registry = get_tensor_state(jt).leaf_params
                 for _leaf in _orig_named_parameters(self, recurse=False):
                     _leaf = _leaf[1] if isinstance(_leaf, tuple) else _leaf
                     if isinstance(_leaf, jt.Var) and _leaf.requires_grad:
@@ -1409,9 +1408,7 @@ def _install_module_methods(nn, registry=None):
     _orig_named_modules = M.named_modules
 
     def _named_parameters(self, prefix="", recurse=True, remove_duplicate=True):
-        reg = getattr(jt, "_torch_leaf_params", None)
-        if reg is None:
-            reg = jt._torch_leaf_params = {}
+        reg = get_tensor_state(jt).leaf_params
         seen = set()
         for name, v in _orig_named_parameters(self, recurse=recurse):
             if remove_duplicate and id(v) in seen:
@@ -1616,9 +1613,7 @@ def _install_module_methods(nn, registry=None):
     # their .grad stays None like torch.
     def _register_leaf_params(params):
         try:
-            reg = getattr(jt, "_torch_leaf_params", None)
-            if reg is None:
-                reg = jt._torch_leaf_params = {}
+            reg = get_tensor_state(jt).leaf_params
             for p in params:
                 if isinstance(p, jt.Var) and p.requires_grad:
                     reg[id(p)] = p
@@ -1766,8 +1761,8 @@ def _install_module_methods(nn, registry=None):
                                 except EXPECTED as exc:
                                     swallowed("torch/installers/nn.py _module_replace_vars: if value.is_stop_grad() and not new_value.is_stop_grad():", exc)
                                 try:
-                                    reg = getattr(jt, "_torch_leaf_params", None)
-                                    if isinstance(reg, dict) and vid in reg:
+                                    reg = get_tensor_state(jt).leaf_params
+                                    if vid in reg:
                                         reg.pop(vid, None)
                                         if not new_value.is_stop_grad():
                                             reg[id(new_value)] = new_value
