@@ -164,7 +164,20 @@ JIT_TEST(native_op_registry_lifecycle_consumer_boundary) {
     ASSERT(registry.unregister_provider("cuda"));
     ASSERT(probe.events.size() == 8);
     ASSERT(probe.events[7] == "unregistered:cuda");
-    ASSERT(registry.set_lifecycle_observer(nullptr) == &probe);
+    ASSERT(registry.clear_lifecycle_observer(&probe));
+    ASSERT(!registry.clear_lifecycle_observer(&probe));
+}
+
+JIT_TEST(native_op_registry_observer_teardown_is_identity_checked) {
+    NativeOpRegistry registry;
+    NativeProviderLifecycleProbe first;
+    NativeProviderLifecycleProbe replacement;
+    ASSERT(registry.set_lifecycle_observer(&first) == nullptr);
+    ASSERT(registry.set_lifecycle_observer(&replacement) == &first);
+    // A stale consumer must not detach the observer that replaced it.
+    ASSERT(!registry.clear_lifecycle_observer(&first));
+    ASSERT(registry.clear_lifecycle_observer(&replacement));
+    ASSERT(registry.set_lifecycle_observer(nullptr) == nullptr);
 }
 
 // A constructor resolved on first call, not at load time. The point is what

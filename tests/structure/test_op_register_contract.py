@@ -111,6 +111,8 @@ def test_native_provider_lifecycle_consumer_is_value_only_and_non_owning():
         assert method in jit_test
     assert "NativeProviderLifecycleObserver* lifecycle_observer" in header
     assert "set_lifecycle_observer" in header
+    assert "clear_lifecycle_observer" in header
+    assert "NativeOpRegistry::clear_lifecycle_observer" in source
     assert "bool is_current(const NativeOpDispatchKey& dispatch_key) const" in header
     assert "NativeOpRegistry::is_current" in source
     # The lifecycle seam may not own a backend object or expose one through

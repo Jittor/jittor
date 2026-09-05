@@ -207,6 +207,15 @@ NativeProviderLifecycleObserver* NativeOpRegistry::set_lifecycle_observer(
     return previous;
 }
 
+bool NativeOpRegistry::clear_lifecycle_observer(
+        NativeProviderLifecycleObserver* observer) {
+    std::lock_guard<std::recursive_mutex> guard(mutex);
+    if (lifecycle_observer != observer)
+        return false;
+    lifecycle_observer = nullptr;
+    return true;
+}
+
 void NativeOpRegistry::bind_provider(const string& name, const string& provider) {
     NativeOpDispatchKey dispatch_key;
     NativeProviderLifecycleObserver* observer = nullptr;

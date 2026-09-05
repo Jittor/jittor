@@ -158,6 +158,9 @@ public:
     // observer API and making scoped installation straightforward.
     NativeProviderLifecycleObserver* set_lifecycle_observer(
         NativeProviderLifecycleObserver* observer);
+    // Clear only the observer that the caller previously installed. A stale
+    // provider consumer must not detach a replacement observer during teardown.
+    bool clear_lifecycle_observer(NativeProviderLifecycleObserver* observer);
     void bind_provider(const string& name, const string& provider);
     NativeOpDispatchKey resolve_provider(const string& name,
                                          const string& provider) const;
