@@ -208,6 +208,51 @@ JIT_TEST(native_op_registry_rejects_incompatible_provider_abi) {
     ASSERT(!registry.has_provider("truncated"));
 }
 
+JIT_TEST(native_provider_lifecycle_event_is_value_only_and_fail_closed) {
+    NativeProviderRegistration registration("jit_test_event_provider");
+    const uint32 provider_id = 17;
+    const NativeProviderMetadata metadata(registration, provider_id);
+    const NativeOpDispatchKey key = {42, registration.name, provider_id,
+                                     registration.abi_version};
+
+    auto registered = NativeProviderLifecycleEvent::provider_registered(
+        registration, provider_id);
+    ASSERT(registered.valid());
+    ASSERT(registered.kind == NATIVE_PROVIDER_EVENT_REGISTERED);
+    ASSERT(registered.metadata.provider_id == provider_id);
+    ASSERT(!registered.dispatch_key.valid());
+
+    auto unregistered = NativeProviderLifecycleEvent::provider_unregistered(
+        registration, provider_id);
+    ASSERT(unregistered.valid());
+    ASSERT(unregistered.kind == NATIVE_PROVIDER_EVENT_UNREGISTERED);
+
+    auto bound = NativeProviderLifecycleEvent::op_bound(metadata, key);
+    ASSERT(bound.valid());
+    ASSERT(bound.kind == NATIVE_PROVIDER_EVENT_OP_BOUND);
+    ASSERT(bound.dispatch_key.op_id == key.op_id);
+    ASSERT(bound.metadata.provider_id == key.provider_id);
+
+    auto unbound = NativeProviderLifecycleEvent::op_unbound(metadata, key);
+    ASSERT(unbound.valid());
+    ASSERT(unbound.kind == NATIVE_PROVIDER_EVENT_OP_UNBOUND);
+
+    // A value can retain well-formed fields but must fail closed when its
+    // event kind or generation payload is inconsistent.
+    auto mixed = bound;
+    mixed.kind = NATIVE_PROVIDER_EVENT_REGISTERED;
+    ASSERT(!mixed.valid());
+    mixed = bound;
+    mixed.metadata.provider_id += 1;
+    ASSERT(!mixed.valid());
+    mixed = bound;
+    mixed.abi_version = NATIVE_PROVIDER_LIFECYCLE_ABI_VERSION + 1;
+    ASSERT(!mixed.valid());
+    mixed = bound;
+    mixed.struct_size = sizeof(NativeProviderLifecycleEvent) - 1;
+    ASSERT(!mixed.valid());
+}
+
 // Provider implementations consume lifecycle events instead of reaching
 // into registry storage.  The observer is deliberately non-owning and keys
 // remain value objects, so replacement/unregister can invalidate stale device

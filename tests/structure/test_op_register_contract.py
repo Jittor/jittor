@@ -261,3 +261,25 @@ def test_native_provider_abi_admission_has_one_host_contract():
     assert "NativeProviderAbiContract::accepts" in header
     assert "NativeProviderAbiContract::version_matches" in header
     assert "NativeProviderAbiContract::accepts" in jit_test
+
+
+def test_native_provider_lifecycle_event_descriptor_is_host_jit_compatible():
+    header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
+        encoding="utf-8")
+    jit_test = (REPO_ROOT / "python/jittor/src/tests/test_op_register.cc").read_text(
+        encoding="utf-8")
+    event = header[header.index("enum NativeProviderLifecycleEventKind"):
+                   header.index("struct NativeProviderLifecycleObserver")]
+    assert "NATIVE_PROVIDER_LIFECYCLE_ABI_VERSION" in event
+    assert "struct NativeProviderLifecycleAbiContract" in event
+    assert "struct NativeProviderLifecycleEvent" in event
+    assert "provider_registered" in event
+    assert "provider_unregistered" in event
+    assert "op_bound" in event
+    assert "op_unbound" in event
+    assert "NativeProviderConsumerContract::accepts" in event
+    assert "event.metadata.valid() && !event.dispatch_key.valid()" in event
+    assert "native_provider_lifecycle_event_is_value_only_and_fail_closed" in jit_test
+    assert "NATIVE_PROVIDER_EVENT_REGISTERED" in jit_test
+    assert "NATIVE_PROVIDER_EVENT_OP_BOUND" in jit_test
+    assert "mixed.metadata.provider_id += 1" in jit_test

@@ -194,6 +194,115 @@ struct NativeProviderConsumerDispatch {
     }
 };
 
+// Value-only lifecycle event kinds shared by host C++ and generated/JIT
+// consumers.  The existing observer callbacks remain source-compatible; a
+// consumer can use this descriptor when it needs one ABI-neutral payload
+// instead of depending on a registry-owned object or a callback-specific
+// argument convention.
+enum NativeProviderLifecycleEventKind {
+    NATIVE_PROVIDER_EVENT_INVALID = 0,
+    NATIVE_PROVIDER_EVENT_REGISTERED = 1,
+    NATIVE_PROVIDER_EVENT_UNREGISTERED = 2,
+    NATIVE_PROVIDER_EVENT_OP_BOUND = 3,
+    NATIVE_PROVIDER_EVENT_OP_UNBOUND = 4,
+};
+
+static const uint32 NATIVE_PROVIDER_LIFECYCLE_ABI_VERSION = 1;
+
+struct NativeProviderLifecycleEvent;
+
+// The contract is deliberately declared before the value so Event::valid()
+// can be used by both C++ and generated code without a registry dependency.
+struct NativeProviderLifecycleAbiContract {
+    static bool version_matches(uint32 abi_version) {
+        return abi_version == NATIVE_PROVIDER_LIFECYCLE_ABI_VERSION;
+    }
+
+    static bool accepts(const NativeProviderLifecycleEvent& event);
+};
+
+/**
+ * Self-contained lifecycle notification payload.
+ *
+ * Provider replacement and teardown can invalidate registry storage while a
+ * backend is draining work.  This descriptor therefore copies metadata and
+ * dispatch identity by value.  A REGISTERED/UNREGISTERED event carries only
+ * metadata; an OP_BOUND/OP_UNBOUND event carries a matching metadata/key
+ * pair.  Consumers must reject malformed or mixed-generation values before
+ * touching a backend handle table.
+ */
+struct NativeProviderLifecycleEvent {
+    uint32 abi_version;
+    uint32 struct_size;
+    NativeProviderLifecycleEventKind kind;
+    NativeProviderMetadata metadata;
+    NativeOpDispatchKey dispatch_key;
+
+    NativeProviderLifecycleEvent()
+        : abi_version(NATIVE_PROVIDER_LIFECYCLE_ABI_VERSION),
+          struct_size(sizeof(NativeProviderLifecycleEvent)),
+          kind(NATIVE_PROVIDER_EVENT_INVALID), metadata(), dispatch_key() {}
+
+    static NativeProviderLifecycleEvent provider_registered(
+            const NativeProviderRegistration& registration,
+            uint32 provider_id) {
+        NativeProviderLifecycleEvent event;
+        event.kind = NATIVE_PROVIDER_EVENT_REGISTERED;
+        event.metadata = NativeProviderMetadata(registration, provider_id);
+        return event;
+    }
+
+    static NativeProviderLifecycleEvent provider_unregistered(
+            const NativeProviderRegistration& registration,
+            uint32 provider_id) {
+        NativeProviderLifecycleEvent event = provider_registered(
+            registration, provider_id);
+        event.kind = NATIVE_PROVIDER_EVENT_UNREGISTERED;
+        return event;
+    }
+
+    static NativeProviderLifecycleEvent op_bound(
+            const NativeProviderMetadata& metadata,
+            const NativeOpDispatchKey& dispatch_key) {
+        NativeProviderLifecycleEvent event;
+        event.kind = NATIVE_PROVIDER_EVENT_OP_BOUND;
+        event.metadata = metadata;
+        event.dispatch_key = dispatch_key;
+        return event;
+    }
+
+    static NativeProviderLifecycleEvent op_unbound(
+            const NativeProviderMetadata& metadata,
+            const NativeOpDispatchKey& dispatch_key) {
+        NativeProviderLifecycleEvent event = op_bound(metadata, dispatch_key);
+        event.kind = NATIVE_PROVIDER_EVENT_OP_UNBOUND;
+        return event;
+    }
+
+    bool valid() const {
+        return NativeProviderLifecycleAbiContract::accepts(*this);
+    }
+};
+
+inline bool NativeProviderLifecycleAbiContract::accepts(
+        const NativeProviderLifecycleEvent& event) {
+    if (!version_matches(event.abi_version) ||
+            event.struct_size < sizeof(NativeProviderLifecycleEvent))
+        return false;
+    switch (event.kind) {
+    case NATIVE_PROVIDER_EVENT_REGISTERED:
+    case NATIVE_PROVIDER_EVENT_UNREGISTERED:
+        // Provider-level notifications have no operator identity.
+        return event.metadata.valid() && !event.dispatch_key.valid();
+    case NATIVE_PROVIDER_EVENT_OP_BOUND:
+    case NATIVE_PROVIDER_EVENT_OP_UNBOUND:
+        return NativeProviderConsumerContract::accepts(
+            event.metadata, event.dispatch_key);
+    default:
+        return false;
+    }
+}
+
 /**
  * Non-owning lifecycle sink for a native provider.
  *
