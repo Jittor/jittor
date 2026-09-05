@@ -43,6 +43,19 @@ def test_acl_data_channel_header_is_cann_free_and_compilable():
     _compile('#include "python/jittor/extern/acl/aclops/acl_data_channel.h"\n')
 
 
+def test_acl_data_view_is_borrowed_and_noncopyable():
+    source = r'''
+#include "python/jittor/extern/acl/aclops/acl_data_channel.h"
+#include <type_traits>
+static_assert(!std::is_copy_constructible<jittor::acl_data::AclDataView>::value,
+              "ACL consumer views must not escape their consume callback");
+static_assert(!std::is_move_constructible<jittor::acl_data::AclDataView>::value,
+              "ACL consumer views must not be moved out of their callback");
+int main() { return 0; }
+'''
+    _compile(source)
+
+
 def test_acl_data_channel_decodes_defaults_and_has_stable_key():
     source = r'''
 #include "python/jittor/extern/acl/aclops/acl_data_channel.h"

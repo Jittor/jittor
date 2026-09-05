@@ -51,6 +51,17 @@ the canonical descriptor key, so recreating an equivalent descriptor after
 teardown yields the same identity while an external owner can still detect a
 stale handle.
 
+## Consumer view lifetime
+
+`AclDataOwner::consume()` and `AclAttrRunnerContract::consume()` decode into
+storage owned by the call, then pass an `AclDataView` to the consumer callback.
+The view is intentionally borrowed and is non-copyable/non-movable at the C++
+boundary. A future launcher must copy scalar/vector values into its own ACL
+attribute object while the callback is active; it must not retain the view or a
+reference to it. This keeps the host-only contract aligned with the eventual
+RAII runner and makes an accidental use-after-consume a compile-time error for
+the common copy/move paths.
+
 ## CANN handoff
 
 The next ACL implementation step may replace the cache value with an RAII

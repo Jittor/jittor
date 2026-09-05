@@ -12,6 +12,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -165,6 +166,14 @@ inline void internal_error(const std::string& message);
 // record and therefore must not outlive the consume() call below.
 class AclDataView {
 public:
+    // The view borrows AclDecodedData owned by consume().  Prevent copying or
+    // moving it so a consumer cannot accidentally retain a view past the
+    // callback and dereference the borrowed storage after it is destroyed.
+    AclDataView(const AclDataView&) = delete;
+    AclDataView& operator=(const AclDataView&) = delete;
+    AclDataView(AclDataView&&) = delete;
+    AclDataView& operator=(AclDataView&&) = delete;
+
     const std::string& op() const {
         return decoded_->op;
     }
