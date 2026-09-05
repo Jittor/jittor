@@ -1154,6 +1154,25 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         np.testing.assert_allclose(tensor_q, np.nanquantile(values, 0.5), rtol=1e-6)
         self.assertEqual(str(tensor_q.dtype), "float32")
 
+    def test_quantile_family_var_methods_share_module_owners(self):
+        numerical = importlib.import_module(
+            "jittor.compat.torch.installers.numerical")
+        values = np.array([[1.0, 5.0, 3.0], [4.0, np.nan, 6.0]], dtype="float32")
+        with torch.flag_scope(use_cuda=0):
+            tensor = torch.array(values)
+            quantile = tensor.quantile(0.5, dim=1, keepdim=True)
+            nanquantile = tensor.nanquantile(0.5, dim=1, keepdim=True)
+        np.testing.assert_allclose(
+            quantile.numpy(), np.quantile(values, 0.5, axis=1, keepdims=True),
+            equal_nan=True, rtol=1e-6)
+        np.testing.assert_allclose(
+            nanquantile.numpy(),
+            np.nanquantile(values, 0.5, axis=1, keepdims=True), rtol=1e-6)
+        self.assertEqual(numerical.quantile.__module__, numerical.__name__)
+        self.assertEqual(numerical.nanquantile.__module__, numerical.__name__)
+        self.assertIs(torch.quantile, numerical.quantile)
+        self.assertIs(torch.nanquantile, numerical.nanquantile)
+
     def test_std_mean_family_is_stable_module_level_objects(self):
         numerical = importlib.import_module(
             "jittor.compat.torch.installers.numerical")
