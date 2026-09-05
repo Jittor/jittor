@@ -1657,6 +1657,14 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | 4.06 审计确认 backend_fallback 三态不存在，需与 BackendRegistry/OpRegistry 联动；静态 ACL 失败合同 7 passed，不代表三态完成。 |
 | `gates` | 10.21 审计确认三条 import/include 真环尚未有 allowlist，直接加 lint 会误报；本波无安全 lint 提交。 |
 
+### 2026-09-05 第一百六十九波
+
+| 分区 | 结果 |
+| --- | --- |
+| `gates` | `f63856f8` 修 smoke fail-open，`41dfb254` 修 NPU gate fail-open，`c02b1481` 修 NCCL 全 skip 假绿；hardware/gate tier 结构合同 17 passed。 |
+| `build` | `515ebf71` 将 compiler.py/pyjt_compiler.py 生成器签名纳入 build_core stamp，laziness 回归 9 passed。 |
+| `compat` | `e9b966e7` 修 FSDP2 共享参数重复梯度查找；`b468afcf` 抽 getitem transform context，`5e2667f6` 抽 ACL clamp runtime facade，分别有定向合同通过。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
