@@ -20,7 +20,9 @@ from .preflight import (
     jittor_python_root, prepare_import_environment, prepend_sys_path,
 )
 from jittor.compat._aliases import torch_namespace_claimable, torch_namespace_owned
-from jittor.compat.torch.namespace import independent_torch_namespace
+from jittor.compat.torch.namespace import (
+    bind_published_namespace, independent_torch_namespace,
+)
 from ..diagnostics import EXPECTED, swallowed
 from ..transaction import ActivationTransaction
 
@@ -151,6 +153,11 @@ def _activate_once(
             torch_compat.install(jt, strict=strict_bootstrap)
             published = independent_torch_namespace(jt) if independent_namespace else jt
             if independent_namespace:
+                bind_published_namespace(
+                    published,
+                    jt._torch_compat_install_context.registry._published,
+                    transaction=transaction,
+                )
                 jt._torch_compat_install_context.registry._published["torch"] = published
             _publish_torch_module(transaction, published, jt)
             transaction.commit()
@@ -224,6 +231,11 @@ def _activate_once(
     torch_compat.install(jt, strict=strict_bootstrap)
     published = independent_torch_namespace(jt) if independent_namespace else jt
     if independent_namespace:
+        bind_published_namespace(
+            published,
+            jt._torch_compat_install_context.registry._published,
+            transaction=_transaction,
+        )
         jt._torch_compat_install_context.registry._published["torch"] = published
     if _transaction is None:
         sys.modules["torch"] = published

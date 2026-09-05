@@ -60,4 +60,45 @@ def namespace_owner(module):
     return None
 
 
-__all__ = ["TorchNamespace", "independent_torch_namespace", "namespace_owner"]
+def bind_published_namespace(namespace, published, transaction=None):
+    """Bind published ``torch.*`` children to an independent root.
+
+    Installers publish children while the compatibility owner is still the
+    ``torch`` root.  Once that root is replaced by :class:`TorchNamespace`,
+    parent attributes must be rebound to the independent module tree as well.
+    ``transaction`` records every attribute mutation so a failed activation
+    restores the owner's original bindings.
+    """
+    if not isinstance(namespace, TorchNamespace):
+        raise TypeError("namespace must be a TorchNamespace")
+    modules = {
+        name: module for name, module in published.items()
+        if name.startswith("torch.") and module is not None
+    }
+    parents = {"torch": namespace}
+    for name in sorted(modules, key=lambda item: (item.count("."), item)):
+        parent_name, attr = name.rsplit(".", 1)
+        parent = parents.get(parent_name)
+        if parent is None:
+            continue
+        had_attr = hasattr(parent, attr)
+        old = getattr(parent, attr, None)
+        if transaction is not None:
+            def undo(parent=parent, attr=attr, had_attr=had_attr, old=old):
+                if had_attr:
+                    object.__setattr__(parent, attr, old)
+                else:
+                    try:
+                        object.__delattr__(parent, attr)
+                    except AttributeError:
+                        pass
+            transaction.record_undo(undo)
+        object.__setattr__(parent, attr, modules[name])
+        parents[name] = modules[name]
+    return namespace
+
+
+__all__ = [
+    "TorchNamespace", "independent_torch_namespace", "namespace_owner",
+    "bind_published_namespace",
+]

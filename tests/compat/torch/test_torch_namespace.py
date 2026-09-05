@@ -3,7 +3,8 @@
 import types
 
 from jittor.compat.torch.namespace import (
-    TorchNamespace, independent_torch_namespace, namespace_owner,
+    TorchNamespace, bind_published_namespace, independent_torch_namespace,
+    namespace_owner,
 )
 
 
@@ -38,3 +39,45 @@ def test_namespace_owner_is_explicit_and_does_not_misidentify_plain_modules():
 
     assert namespace_owner(namespace) is owner
     assert namespace_owner(owner) is None
+
+
+def test_published_children_bind_to_independent_root_and_nested_parent():
+    owner = types.ModuleType("jittor")
+    namespace = independent_torch_namespace(owner)
+    nn = types.ModuleType("torch.nn")
+    functional = types.ModuleType("torch.nn.functional")
+
+    bind_published_namespace(namespace, {
+        "torch.nn": nn,
+        "torch.nn.functional": functional,
+    })
+
+    assert namespace.nn is nn
+    assert nn.functional is functional
+    assert not hasattr(owner, "functional")
+
+
+def test_published_children_rollback_restores_owner_bindings():
+    owner = types.ModuleType("jittor")
+    owner.nn = types.SimpleNamespace(functional="old")
+    namespace = independent_torch_namespace(owner)
+    nn = types.ModuleType("torch.nn")
+    functional = types.ModuleType("torch.nn.functional")
+
+    from jittor.compat.transaction import ActivationTransaction
+    transaction = ActivationTransaction("namespace-test")
+    transaction.acquire()
+    try:
+        bind_published_namespace(namespace, {
+            "torch.nn": nn,
+            "torch.nn.functional": functional,
+        }, transaction=transaction)
+        assert namespace.nn is nn
+        assert nn.functional is functional
+        transaction.rollback()
+    finally:
+        transaction.release()
+
+    assert owner.nn is not None
+    assert owner.nn.functional == "old"
+    assert namespace.nn is owner.nn
