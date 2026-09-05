@@ -322,3 +322,29 @@ def predicted_session_seconds(session, workers=None):
 def predicted_smoke_seconds(workers=None):
     """Both modes, one after the other -- that is what a pull request waits."""
     return sum(predicted_session_seconds(session, workers) for session in MEASURED)
+
+
+def budget_report(workers=None):
+    """Return an actionable, serialisable breakdown of the smoke budget."""
+    workers = workers or SMOKE_WORKERS
+    sessions = {}
+    for name, measured in sorted(MEASURED.items()):
+        work_bound = measured["fast_work"] / float(workers)
+        floor = measured["longest_fast_file"]
+        predicted = max(work_bound, floor) + measured["startup"]
+        sessions[name] = {
+            "fast_work_seconds": measured["fast_work"],
+            "work_bound_seconds": work_bound,
+            "longest_file_seconds": floor,
+            "startup_seconds": measured["startup"],
+            "predicted_seconds": predicted,
+            "bottleneck": "longest_file" if floor >= work_bound else "worker_work",
+        }
+    predicted = sum(item["predicted_seconds"] for item in sessions.values())
+    return {
+        "workers": workers,
+        "budget_seconds": SMOKE_BUDGET_SECONDS,
+        "predicted_seconds": predicted,
+        "headroom_seconds": SMOKE_BUDGET_SECONDS - predicted,
+        "sessions": sessions,
+    }

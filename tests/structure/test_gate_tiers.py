@@ -183,6 +183,16 @@ class TestFastTierIsStillWorthRunning(unittest.TestCase):
 
 class TestBudget(unittest.TestCase):
 
+    def test_budget_report_exposes_each_non_divisible_cost(self):
+        report = tiers.budget_report()
+        self.assertEqual(set(report["sessions"]), {"native", "torch"})
+        self.assertEqual(report["workers"], tiers.SMOKE_WORKERS)
+        self.assertAlmostEqual(
+            report["predicted_seconds"], tiers.predicted_smoke_seconds())
+        for item in report["sessions"].values():
+            self.assertIn(item["bottleneck"], {"worker_work", "longest_file"})
+            self.assertGreater(item["startup_seconds"], 0)
+
     def test_the_predicted_fast_tier_fits_the_budget(self):
         predicted = tiers.predicted_smoke_seconds()
         self.assertLessEqual(
