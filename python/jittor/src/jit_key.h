@@ -7,8 +7,8 @@
 #pragma once
 #include <cstring>
 #include "common.h"
-#include "misc/nano_string.h"
-#include "misc/nano_vector.h"
+#include "type/nano_string.h"
+#include "type/nano_vector.h"
 
 namespace jittor {
 

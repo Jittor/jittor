@@ -5,7 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include "common.h"
-#include "misc/nano_vector.h"
+#include "type/nano_vector.h"
 
 namespace jittor {
 

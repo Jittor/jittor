@@ -64,7 +64,7 @@ namespace jittor {
 #include <hccl.h>
 // hccl_dtype() below takes a NanoString; in the JT_HCCL_NO_MPI build we do not
 // pull in mpi_wrapper.h, so include it here rather than rely on that path.
-#include "misc/nano_string.h"
+#include "type/nano_string.h"
 
 namespace jittor {
 

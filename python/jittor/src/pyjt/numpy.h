@@ -7,7 +7,7 @@
 #pragma once
 #include "pyjt/py_obj_holder.h"
 #include "common.h"
-#include "misc/nano_string.h"
+#include "type/nano_string.h"
 #include "ops/array_op.h"
 
 namespace jittor {

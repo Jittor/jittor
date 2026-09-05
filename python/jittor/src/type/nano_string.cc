@@ -5,7 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <cstring>
-#include "misc/nano_string.h"
+#include "type/nano_string.h"
 
 namespace jittor {
 

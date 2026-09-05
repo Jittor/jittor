@@ -5,7 +5,7 @@
 #include <acl/acl_op_compiler.h>
 #include <Python.h>
 #include <pystate.h>
-#include "misc/nano_string.h"
+#include "type/nano_string.h"
 #include "aclnn/aclnn.h"
 
 namespace jittor

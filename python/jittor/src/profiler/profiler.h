@@ -9,7 +9,7 @@
 #include "profiler/cache_info.h"
 #include "op_compiler.h"
 #include "misc/cstr.h"
-#include "misc/nano_vector.h"
+#include "type/nano_vector.h"
 
 namespace jittor {
 

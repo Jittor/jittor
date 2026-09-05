@@ -52,7 +52,7 @@ class _GradDecoratorCtx:
         return self._scope.__exit__(*exc)
 
 
-# Jittor's auto-mixed-precision control registers (src/misc/nano_string.h).
+# Jittor's auto-mixed-precision control registers (src/type/nano_string.h).
 # amp_reg drives dtype inference for every op created while it is set.
 _AMP_PREFER32 = 1
 _AMP_PREFER16 = 2

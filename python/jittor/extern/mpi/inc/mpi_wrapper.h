@@ -12,7 +12,7 @@
 #include <common.h>
 #include <mpi.h>
 #include "var_holder.h"
-#include "misc/nano_string.h"
+#include "type/nano_string.h"
 
 extern void throw_mpi_error(int result, 
     char const *const func, const char *const file, int const line);

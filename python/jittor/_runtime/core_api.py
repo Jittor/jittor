@@ -518,7 +518,7 @@ class amp_flags:
     array_prefer``; you had to know that.
 
     These MUST match ``amp_prefer32`` .. ``amp_array_prefer`` in
-    ``src/misc/nano_string.h`` and the ``auto_mixed_precision_level`` setter in
+    ``src/type/nano_string.h`` and the ``auto_mixed_precision_level`` setter in
     ``src/var.cc``; ``tests/core/test_amp_reg_bits.py`` reads the header and
     fails if they drift.
     """

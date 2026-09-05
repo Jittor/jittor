@@ -13,7 +13,7 @@
 #include "helper_cuda.h"
 #include "fp16_emu.h"
 #include "common.h"
-#include "misc/nano_string.h"
+#include "type/nano_string.h"
 
 namespace jittor {
 

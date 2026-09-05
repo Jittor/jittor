@@ -12,7 +12,7 @@
 #include "pyjt/numpy.h"
 #include "common.h"
 #include "misc/hash.h"
-#include "misc/nano_string.h"
+#include "type/nano_string.h"
 #include "misc/fast_shared_ptr.h"
 #include "profiler/simple_profiler.h"
 #ifdef IS_CUDA
