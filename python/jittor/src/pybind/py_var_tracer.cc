@@ -178,7 +178,7 @@ static vector<Stack> get_stack_info() {
     static auto getframe = my_import("sys", "_getframe");
     static auto jt_module = my_import("jittor", "Module");
     static auto jt_optimizer = my_import("jittor.optim", "Optimizer");
-    static auto fill_module_name = my_import("jittor.utils.tracer", "fill_module_name");
+    static auto fill_module_name = my_import("jittor.tools.tracer", "fill_module_name");
     static auto _trace_name = PyUnicode_FromString("_trace_name");
 
     PyObjHolder ret(PyObject_CallFunctionObjArgs(getframe, nullptr));

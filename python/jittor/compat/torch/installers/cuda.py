@@ -611,7 +611,7 @@ def _install_cuda(g, registry=None):
         if _native_nvtx[0] is None:
             previous_utils = getattr(g, "utils", None)
             try:
-                from jittor.utils import nvtx as native_nvtx
+                from jittor.tools import nvtx as native_nvtx
                 _native_nvtx[0] = native_nvtx
             except (ImportError, OSError, RuntimeError):
                 _native_nvtx[0] = False

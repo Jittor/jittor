@@ -50,6 +50,9 @@ class TestWhatLeftTheDrawer(unittest.TestCase):
         # Things a user runs against their own model.
         "nvtx.py": PACKAGE / "tools" / "nvtx.py",
         "jtune.py": PACKAGE / "tools" / "jtune.py",
+        # The binding-layer tracer is a user-facing tool, not a drawer
+        # exception. Its C++ module name moves with the file.
+        "tracer.py": PACKAGE / "tools" / "tracer.py",
         # Things a maintainer runs against the checkout. These regenerate or
         # post-process repository content and must not ship in the wheel.
         "gen_pyi.py": REPO_ROOT / "tools" / "build" / "gen_pyi.py",
@@ -179,18 +182,19 @@ class TestWhatStaysAndTheReferenceThatPinsIt(unittest.TestCase):
 
     def test_tracer_is_pinned_by_a_module_name_baked_into_the_core(self):
         # Not a path but an import: the core calls my_import with this dotted
-        # name, so moving tracer.py is a C++ change like the other three.
+        # name, so the binding-layer reference moves with tracer.py.
         self._pinned_by(
             "tracer.py",
             ("src/pybind/py_var_tracer.cc",
-             'my_import("jittor.utils.tracer", "fill_module_name")'))
+             'my_import("jittor.tools.tracer", "fill_module_name")'),
+            source=PACKAGE / "tools" / "tracer.py")
 
     def test_the_drawer_holds_nothing_else(self):
         # Whatever is still in there, nothing NEW may be added: a file with no
         # home belongs in a package that states one.
         self.assertEqual(
             sorted(path.name for path in DRAWER.glob("*.py")),
-            ["tracer.py"],
+            [],
             "python/jittor/utils holds only files something outside Python "
             "reaches by hard-coded path (task 5.25). Put new code in a package "
             "whose name says what it is for.")
@@ -198,7 +202,7 @@ class TestWhatStaysAndTheReferenceThatPinsIt(unittest.TestCase):
     def test_the_layout_document_still_pins_the_compiler_resources(self):
         doc = _text(REPO_ROOT / "docs" / "architecture" / "repository-layout.md")
         self.assertIn("python/jittor/build/{dlink_compiler.py,dumpdef.py}", doc)
-        self.assertIn("python/jittor/utils/tracer.py", doc)
+        self.assertIn("python/jittor/tools/tracer.py", doc)
 
     def test_dlink_compiler_lives_with_build_resources(self):
         path = REPO_ROOT / "python" / "jittor" / "build" / "dlink_compiler.py"

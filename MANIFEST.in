@@ -8,7 +8,7 @@ recursive-include python/jittor/compat/shim/resources *
 recursive-include python/jittor/extern *
 recursive-include python/jittor/math_util/src *
 recursive-include python/jittor/src *
-recursive-include python/jittor/utils *.py
+recursive-include python/jittor/tools *.py
 recursive-include python/jittor_utils/class *
 
 # Repository examples and tools ship in the sdist, but package discovery remains under python/.

@@ -77,8 +77,8 @@ changed and independently validated:
 - `python/jittor/extern/**`, including the `<backend>/{inc,ops,src}` layout and
   ACL filename dispatch conventions;
 - `python/jittor/build/{dlink_compiler.py,dumpdef.py}` and
-  `python/jittor/utils/tracer.py` (the latter remains pinned by the C++ import
-  name until the binding-layer move).
+  `python/jittor/tools/tracer.py` (the tracer is reached by the binding layer
+  through its explicit module name).
 - `python/jittor/math_util/src/*.h`;
 - `python/jittor/compat/shim/cpp_extension/{include,src}/**` as the canonical
   installed ABI resource boundary for extension builds;
