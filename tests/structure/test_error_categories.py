@@ -234,6 +234,10 @@ MIGRATED_TERNARY_SHAPE_BOUNDARIES = {
     "python/jittor/src/ops/ternary_op.cc": 2,
 }
 
+MIGRATED_ITEM_USER_BOUNDARIES = {
+    "python/jittor/src/var_holder.cc": 1,
+}
+
 
 def test_typed_error_entry_points_are_distinct():
     source = (ROOT / "python/jittor/src/utils/log.h").read_text()
@@ -242,6 +246,15 @@ def test_typed_error_entry_points_are_distinct():
     for entry in ("USER_CHECK", "USER_CHECKop", "INTERNAL_ASSERT",
                   "INTERNAL_ASSERTop"):
         assert "#define " + entry in source
+
+
+def test_item_size_boundary_is_a_user_error():
+    source = (ROOT / "python/jittor/src/var_holder.cc").read_text()
+    assert "USER_CHECK(var->num==1)" in source
+    assert "\n    CHECK(var->num==1)" not in source
+    actual = source.count("USER_CHECK(var->num==1)")
+    assert actual == MIGRATED_ITEM_USER_BOUNDARIES[
+        "python/jittor/src/var_holder.cc"]
 
 
 def test_public_dimension_boundary_migration_is_explicit_and_bounded():
@@ -345,7 +358,10 @@ def test_var_slices_user_boundary_migration_is_explicit_and_bounded():
 
 def test_set_data_user_boundary_migration_is_explicit_and_bounded():
     source = (ROOT / "python/jittor/src/var_holder.cc").read_text()
-    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    # ``item()`` has an independent user boundary in the same translation
+    # unit; count only the two set_data predicates here.
+    actual = source.count("USER_CHECK(array.dtype.dsize()")
+    actual += source.count("USER_CHECK(size==var->size)")
     assert actual == MIGRATED_SET_DATA_USER_BOUNDARIES[
         "python/jittor/src/var_holder.cc"]
 

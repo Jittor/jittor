@@ -28,6 +28,7 @@ import unittest
 import numpy as np
 
 import jittor as jt
+from _helpers.assertions import expect_error
 
 
 #: dtype -> values that must survive a round trip through ``item()``.
@@ -52,6 +53,13 @@ FLOAT_CASES = {
 
 
 class TestItem(unittest.TestCase):
+    def test_item_rejects_non_scalar_with_catchable_error(self):
+        expect_error(
+            lambda: jt.array([1, 2]).item(),
+            exc_type=RuntimeError,
+            match=r"Item var size should be 1, but got 2",
+        )
+
     def test_integer_dtypes_round_trip(self):
         for dtype, values in INTEGER_CASES.items():
             for value in values:
