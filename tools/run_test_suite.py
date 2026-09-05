@@ -70,6 +70,11 @@ def _session_environment(session, serial_compile=False):
     environment["JITTOR_TEST_DEVICES"] = "cpu"
     environment["REAL_TORCH_SITE"] = ""
     environment["JITTOR_TORCH_SHIM"] = "1" if session == "torch" else "0"
+    # Keep the standalone runner fail-closed like both nox gate sessions.  A
+    # skip without an explicit environment reason is otherwise reported but
+    # still counted as a successful suite, making the CLI a weaker gate than
+    # the command it is meant to reproduce.
+    environment["JITTOR_TEST_REQUIRE_EXECUTION"] = "1"
     # Set, never inherited -- like every other name in this function. On by
     # default, like the gate: it used to be forced off here with no reason
     # recorded, which made this script measure something `nox -s cpu` does not
@@ -156,8 +161,8 @@ def _split_threads(environment, jobs):
         environment["OMP_NUM_THREADS"] = str(budget)
 
 
-def _parallel_arguments(jobs):
-    """xdist, per file. ``noxfile._xdist`` explains why not per test."""
+def _parallel_arguments(jobs, distribution="loadfile"):
+    """xdist arguments using the same distribution policy as nox."""
     if not jobs or jobs <= 1:
         return []
     try:
@@ -167,7 +172,7 @@ def _parallel_arguments(jobs):
             "--jobs %d needs pytest-xdist (requirements/dev-tools.txt); "
             "running serially instead would report a wall clock for a gate "
             "nobody runs" % jobs)
-    return ["-n", str(jobs), "--dist", "loadfile"]
+    return ["-n", str(jobs), "--dist", distribution]
 
 
 def _run(session, extra, quiet, tier="full", jobs=0, serial_compile=False):
@@ -177,7 +182,8 @@ def _run(session, extra, quiet, tier="full", jobs=0, serial_compile=False):
     command += _session_arguments(session)
     command += ["-p", "no:cacheprovider", "--timeout=900"]
     command += _tier_arguments(tier)
-    command += _parallel_arguments(jobs)
+    distribution = "loadgroup" if tier == "smoke" else "loadfile"
+    command += _parallel_arguments(jobs, distribution=distribution)
     command += ["-q"] if quiet else []
     command += extra
     print("=== {} session ===".format(session), flush=True)

@@ -129,6 +129,25 @@ def test_the_local_runner_and_the_gate_select_the_same_files():
     assert module._session_arguments("torch") == list(gate_scope.torch_arguments())
 
 
+def test_local_runner_matches_gate_execution_contract():
+    """The CLI must fail closed and use nox's smoke distribution policy."""
+    sys.path.insert(0, str(REPO_ROOT / "tools"))
+    try:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "jittor_run_test_suite_execution_contract",
+            REPO_ROOT / "tools" / "run_test_suite.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(REPO_ROOT / "tools"))
+    assert module._session_environment("native")[
+        "JITTOR_TEST_REQUIRE_EXECUTION"] == "1"
+    assert module._parallel_arguments(2, distribution="loadgroup") == [
+        "-n", "2", "--dist", "loadgroup"]
+
+
 def test_default_nox_sessions_include_the_cpu_numeric_gate():
     """A default green nox run must exercise numerical CPU behavior (10.02)."""
     source = (REPO_ROOT / "noxfile.py").read_text(encoding="utf-8")
