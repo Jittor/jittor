@@ -1711,6 +1711,13 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `dist` | 8.15 TCPStore 失败在当前环境卡于 Jittor import/编译锁；绕过 import 的双 rank 直接 Store 脚本多次成功，未复现 ConnectionReset。没有提交未经复现的生命周期修复，任务继续待领。 |
 | `gates` | 本波没有代码提交，保留现有多机/两节点硬件验收缺口。 |
 
+### 2026-09-05 第一百七十六波
+
+| 分区 | 结果 |
+| --- | --- |
+| `cudabk` | 8.12 六路 legacy cache（2D/3D forward、backward-x、backward-w）均为字符串 JK key + process-global map；统一迁移需新 POD key、六处 EXTERN_LIB ABI、per-device storage/device-switch cleanup 和 CUDA 回归，不能安全半改。 |
+| `gates` | 本波无代码提交；8.12 保持待领，未把静态审计当作完成。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
