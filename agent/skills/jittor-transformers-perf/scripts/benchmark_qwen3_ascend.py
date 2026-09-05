@@ -2,6 +2,7 @@
 
 import argparse
 import cProfile
+from contextlib import nullcontext
 import gc
 import json
 import os
@@ -44,6 +45,11 @@ def main():
             raise RuntimeError("set JITTOR_TORCH_SHIM=1 before starting Jittor")
 
         import jittor as jt
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+
+        jt.runtime.backend_fallback = "error"
+        fallback_scope = forbid_backend_fallbacks
+        fallback_before = jt.core.backend_fallback_count()
 
         if not getattr(jt.compiler, "has_acl", 0):
             raise RuntimeError(
@@ -62,6 +68,9 @@ def main():
     else:
         import torch
         import torch_npu
+
+        fallback_scope = nullcontext
+        fallback_before = None
 
         if "site-packages/torch/" not in torch.__file__:
             raise RuntimeError("native PyTorch does not own the torch namespace")
@@ -118,31 +127,33 @@ def main():
         return generated_ids[prompt_tokens:]
 
     def run_prefill():
-        build_started = time.perf_counter()
-        with torch.no_grad():
-            output = model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                use_cache=True,
-                return_dict=True,
-            )
-        build_seconds = time.perf_counter() - build_started
-        sync_started = time.perf_counter()
-        synchronize()
-        sync_seconds = time.perf_counter() - sync_started
-        return output, build_seconds, sync_seconds
+        with fallback_scope():
+            build_started = time.perf_counter()
+            with torch.no_grad():
+                output = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    use_cache=True,
+                    return_dict=True,
+                )
+            build_seconds = time.perf_counter() - build_started
+            sync_started = time.perf_counter()
+            synchronize()
+            sync_seconds = time.perf_counter() - sync_started
+            return output, build_seconds, sync_seconds
 
     def run_generate():
-        with torch.no_grad():
-            output = model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=args.new_tokens,
-                do_sample=False,
-                use_cache=True,
-            )
-        synchronize()
-        return output
+        with fallback_scope():
+            with torch.no_grad():
+                output = model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    max_new_tokens=args.new_tokens,
+                    do_sample=False,
+                    use_cache=True,
+                )
+            synchronize()
+            return output
 
     print("BENCHMARK_PHASE first_prefill", flush=True)
     started = time.perf_counter()
@@ -188,28 +199,18 @@ def main():
         generate_samples.append(time.perf_counter() - started)
         generation_token_samples.append(generated_new_ids(generated))
 
-    fallback_count = 0
     sdpa_flash_stats = {}
     if args.backend == "jittor":
-        with jt.log_capture_scope(
-            log_v=0, log_vprefix="acl_op_exec.cc=100"
-        ) as logs:
-            output, _, _ = run_prefill()
-            validation_generated = run_generate()
+        output, _, _ = run_prefill()
+        validation_generated = run_generate()
         generation_token_samples.append(
             generated_new_ids(validation_generated))
         del output, validation_generated
-        fallback_messages = [
-            entry["msg"] for entry in logs
-            if "fallback cpu" in entry["msg"].lower()
-        ]
-        fallback_count = len(fallback_messages)
         sdpa_flash_stats = dict(getattr(jt, "_torch_sdpa_flash_stats", {}))
-        if fallback_messages:
-            raise RuntimeError(
-                "CPU fallback detected during inference: " +
-                fallback_messages[0] +
-                "; SDPA flash stats: " + repr(sdpa_flash_stats))
+    fallback_count = (jt.core.backend_fallback_count() - fallback_before
+                      if fallback_before is not None else 0)
+    if fallback_count:
+        raise RuntimeError("backend fallback attempted during inference: %d" % fallback_count)
 
     new_ids = generated_new_ids(generated)
     if any(ids != new_ids for ids in generation_token_samples):
@@ -222,6 +223,7 @@ def main():
         "attn_implementation": args.attn_implementation,
         "dtype": str(first_parameter.dtype),
         "fallback_count": fallback_count,
+        "fallback_policy": "error" if args.backend == "jittor" else None,
         "first_generate_seconds": first_generate_seconds,
         "first_prefill_seconds": first_prefill_seconds,
         "generate_median_seconds": statistics.median(generate_samples),

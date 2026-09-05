@@ -709,6 +709,7 @@ def _hardware_python():
 
 def _set_hardware_python_config(session, python, env):
     """Use the config helper belonging to an external hardware interpreter."""
+    env["backend_fallback"] = "error"
     _set_python_config(session, python, env, external=True, required=True)
 
 

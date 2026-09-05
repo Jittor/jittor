@@ -12,6 +12,7 @@ for parity *and* for no speed regression.
 """
 
 import argparse
+from contextlib import nullcontext
 import importlib
 import json
 import os
@@ -272,155 +273,149 @@ def main():
     tf32 = _configure_tf32(torch, options.device)
     runtime_conditions = _runtime_conditions(torch, tf32)
 
-    torch.manual_seed(options.seed)
-    builder, requirements = _ecosystem_cases.CASES[options.case]
-    model, input_spec = builder(torch)
-    dependencies = _dependency_report(requirements)
-    model.eval()
-    if options.runtime == "torch" and options.device != "cpu":
-        model.to(options.device)
-
-    # ``state_dict`` is not always complete: ms-swift's tuner deliberately
-    # reports only its adapter, so transferring it would leave the two runtimes
-    # with independently initialized backbones and a meaningless comparison.
-    # Enumerating parameters and buffers is complete by construction.
-    def transferable():
-        entries = list(model.named_parameters())
-        named_buffers = getattr(model, "named_buffers", None)
-        if callable(named_buffers):
-            entries += list(named_buffers())
-        return entries
-
-    if options.weights:
-        loaded = np.load(options.weights)
-        available = dict(transferable())
-        missing = sorted(key for key in loaded.files if key not in available)
-        if missing:
-            raise SystemExit("no counterpart for saved weights: %s" % missing[:5])
-        unset = sorted(key for key in available if key not in loaded.files)
-        if unset:
-            raise SystemExit("no saved weight for: %s" % unset[:5])
-        for name, value in available.items():
-            source = to_device(torch.from_numpy(loaded[name]))
-            with_no_grad = getattr(torch, "no_grad", None)
-            if with_no_grad is not None:
-                with with_no_grad():
-                    value.copy_(source)
-            else:
-                value.copy_(source)
-    else:
-        weights_path = os.path.splitext(options.output)[0] + ".weights.npz"
-        np.savez(
-            weights_path,
-            **{
-                name: value.detach().cpu().numpy()
-                for name, value in transferable()
-            },
-        )
-
-    # ``eval()`` in Jittor also stops gradients on every parameter; PyTorch's
-    # does not.  Re-enable them so both runtimes differentiate the same graph.
-    for parameter in model.parameters():
-        start_grad = getattr(parameter, "start_grad", None)
-        if callable(start_grad):
-            start_grad()
-        else:
-            parameter.requires_grad_(True)
-
-    capture_scope = None
-    execution_logs = []
-    if options.runtime == "jittor" and options.device == "npu":
+    fallback_scope = nullcontext()
+    fallback_before = None
+    if options.runtime == "jittor":
         import jittor as jt
+        from jittor._runtime.fallback import forbid_backend_fallbacks
 
-        capture_scope = jt.log_capture_scope(
-            log_v=0, log_vprefix="acl_op_exec.cc=100"
-        )
-        execution_logs = capture_scope.__enter__()
+        jt.runtime.backend_fallback = "error"
+        fallback_before = jt.core.backend_fallback_count()
+        fallback_scope = forbid_backend_fallbacks()
 
-    inputs = _make_inputs(torch, input_spec, options.seed + 1, to_device)
-    output = _primary_output(model(**inputs))
+    with fallback_scope:
+        torch.manual_seed(options.seed)
+        builder, requirements = _ecosystem_cases.CASES[options.case]
+        model, input_spec = builder(torch)
+        dependencies = _dependency_report(requirements)
+        model.eval()
+        if options.runtime == "torch" and options.device != "cpu":
+            model.to(options.device)
 
-    weights = np.random.RandomState(options.seed + 2)
-    loss_weights = weights.randn(*tuple(output.shape)).astype("float32")
-    loss = (output * to_device(torch.from_numpy(loss_weights))).sum()
-    loss.backward()
+        # ``state_dict`` is not always complete: ms-swift's tuner deliberately
+        # reports only its adapter, so transferring it would leave the two runtimes
+        # with independently initialized backbones and a meaningless comparison.
+        # Enumerating parameters and buffers is complete by construction.
+        def transferable():
+            entries = list(model.named_parameters())
+            named_buffers = getattr(model, "named_buffers", None)
+            if callable(named_buffers):
+                entries += list(named_buffers())
+            return entries
 
-    _synchronize(torch, options.runtime, options.device)
-    arrays = {"__output__": _numpy_snapshot(output)}
-    for name, parameter in model.named_parameters():
-        grad = getattr(parameter, "grad", None)
-        if grad is None:
-            continue
-        arrays["grad::" + name] = _numpy_snapshot(grad)
-    for name, tensor in inputs.items():
-        grad = getattr(tensor, "grad", None)
-        if grad is not None:
-            arrays["ingrad::" + name] = _numpy_snapshot(grad)
+        if options.weights:
+            loaded = np.load(options.weights)
+            available = dict(transferable())
+            missing = sorted(key for key in loaded.files if key not in available)
+            if missing:
+                raise SystemExit("no counterpart for saved weights: %s" % missing[:5])
+            unset = sorted(key for key in available if key not in loaded.files)
+            if unset:
+                raise SystemExit("no saved weight for: %s" % unset[:5])
+            for name, value in available.items():
+                source = to_device(torch.from_numpy(loaded[name]))
+                with_no_grad = getattr(torch, "no_grad", None)
+                if with_no_grad is not None:
+                    with with_no_grad():
+                        value.copy_(source)
+                else:
+                    value.copy_(source)
+        else:
+            weights_path = os.path.splitext(options.output)[0] + ".weights.npz"
+            np.savez(
+                weights_path,
+                **{
+                    name: value.detach().cpu().numpy()
+                    for name, value in transferable()
+                },
+            )
 
-    # Timing runs after correctness capture. Inputs and loss weights are already
-    # resident on the requested device, so the number excludes allocation/H2D.
-    timing_slots = [
-        _make_inputs(torch, input_spec, options.seed + 10 + index, to_device)
-        for index in range(4)
-    ]
-    timing_loss_weights = to_device(torch.from_numpy(loss_weights))
-
-    def one_step(step_inputs):
-        step_output = _primary_output(model(**step_inputs))
-        step_loss = (step_output * timing_loss_weights).sum()
-        model.zero_grad(set_to_none=False)
-        step_loss.backward()
-        gradients = []
+        # ``eval()`` in Jittor also stops gradients on every parameter; PyTorch's
+        # does not.  Re-enable them so both runtimes differentiate the same graph.
         for parameter in model.parameters():
+            start_grad = getattr(parameter, "start_grad", None)
+            if callable(start_grad):
+                start_grad()
+            else:
+                parameter.requires_grad_(True)
+
+        inputs = _make_inputs(torch, input_spec, options.seed + 1, to_device)
+        output = _primary_output(model(**inputs))
+
+        weights = np.random.RandomState(options.seed + 2)
+        loss_weights = weights.randn(*tuple(output.shape)).astype("float32")
+        loss = (output * to_device(torch.from_numpy(loss_weights))).sum()
+        loss.backward()
+
+        _synchronize(torch, options.runtime, options.device)
+        arrays = {"__output__": _numpy_snapshot(output)}
+        for name, parameter in model.named_parameters():
             grad = getattr(parameter, "grad", None)
-            if grad is not None:
-                gradients.append(grad)
-        for tensor in step_inputs.values():
+            if grad is None:
+                continue
+            arrays["grad::" + name] = _numpy_snapshot(grad)
+        for name, tensor in inputs.items():
             grad = getattr(tensor, "grad", None)
             if grad is not None:
-                gradients.append(grad)
+                arrays["ingrad::" + name] = _numpy_snapshot(grad)
+
+        # Timing runs after correctness capture. Inputs and loss weights are already
+        # resident on the requested device, so the number excludes allocation/H2D.
+        timing_slots = [
+            _make_inputs(torch, input_spec, options.seed + 10 + index, to_device)
+            for index in range(4)
+        ]
+        timing_loss_weights = to_device(torch.from_numpy(loss_weights))
+
+        def one_step(step_inputs):
+            step_output = _primary_output(model(**step_inputs))
+            step_loss = (step_output * timing_loss_weights).sum()
+            model.zero_grad(set_to_none=False)
+            step_loss.backward()
+            gradients = []
+            for parameter in model.parameters():
+                grad = getattr(parameter, "grad", None)
+                if grad is not None:
+                    gradients.append(grad)
+            for tensor in step_inputs.values():
+                grad = getattr(tensor, "grad", None)
+                if grad is not None:
+                    gradients.append(grad)
+            if options.runtime == "jittor":
+                import jittor as jt
+
+                # Explicit targets force every lazy gradient without introducing
+                # hundreds of per-tensor D2H copies into the training measurement.
+                # Submit exactly the observed training graph and wait for its
+                # device work here. A following sync_all() would traverse every
+                # live Var a second time even though these targets already cover
+                # the complete forward/backward step.
+                jt.sync(
+                    [step_loss] + gradients,
+                    device_sync=options.device != "cpu",
+                )
+            return step_loss, gradients
+
+        resident_values = [timing_loss_weights]
+        for slot in timing_slots:
+            resident_values.extend(slot.values())
         if options.runtime == "jittor":
             import jittor as jt
 
-            # Explicit targets force every lazy gradient without introducing
-            # hundreds of per-tensor D2H copies into the training measurement.
-            # Submit exactly the observed training graph and wait for its
-            # device work here. A following sync_all() would traverse every
-            # live Var a second time even though these targets already cover
-            # the complete forward/backward step.
-            jt.sync(
-                [step_loss] + gradients,
-                device_sync=options.device != "cpu",
-            )
-        return step_loss, gradients
+            jt.sync(resident_values)
+        warm_values = [one_step(slot) for slot in timing_slots]
+        _synchronize(torch, options.runtime, options.device)
+        durations = []
+        for index in range(max(1, options.repeats)):
+            started = time.perf_counter()
+            values = one_step(timing_slots[index % len(timing_slots)])
+            if options.runtime != "jittor":
+                _synchronize(torch, options.runtime, options.device)
+            durations.append(time.perf_counter() - started)
+        del warm_values, values
 
-    resident_values = [timing_loss_weights]
-    for slot in timing_slots:
-        resident_values.extend(slot.values())
-    if options.runtime == "jittor":
-        import jittor as jt
-
-        jt.sync(resident_values)
-    warm_values = [one_step(slot) for slot in timing_slots]
-    _synchronize(torch, options.runtime, options.device)
-    durations = []
-    for index in range(max(1, options.repeats)):
-        started = time.perf_counter()
-        values = one_step(timing_slots[index % len(timing_slots)])
-        if options.runtime != "jittor":
-            _synchronize(torch, options.runtime, options.device)
-        durations.append(time.perf_counter() - started)
-    del warm_values, values
-
-    if capture_scope is not None:
-        capture_scope.__exit__(None, None, None)
-    messages = [entry["msg"].lower() for entry in execution_logs]
-    fallbacks = [message for message in messages if "fallback cpu" in message]
-    cpu_compiles = [message for message in messages if "compile cpu" in message]
-    if fallbacks:
-        raise SystemExit("CPU fallback detected: {}".format(fallbacks[0]))
-    if cpu_compiles:
-        raise SystemExit("CPU-compiled operation detected: {}".format(cpu_compiles[0]))
+    fallback_count = (jt.core.backend_fallback_count() - fallback_before
+                      if fallback_before is not None else 0)
 
     np.savez(options.output, **arrays)
     print(
@@ -433,8 +428,8 @@ def main():
                 "loss": float(loss.detach().cpu().numpy().reshape(-1)[0]),
                 "device": _device_in_use(torch, options.runtime, options.device),
                 "backend": _backend_report(options.runtime),
-                "fallback_count": len(fallbacks),
-                "cpu_compile_count": len(cpu_compiles),
+                "fallback_count": fallback_count,
+                "fallback_policy": "error" if options.runtime == "jittor" else None,
                 "package_site": os.environ.get("JITTOR_ECOSYSTEM_PACKAGE_SITE", ""),
                 "dependencies": dependencies,
                 "tf32": tf32,

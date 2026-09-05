@@ -47,8 +47,6 @@ class TestACL(unittest.TestCase):
         np.testing.assert_array_equal(actual_grad, expected_grad)
         messages = [entry["msg"].lower() for entry in logs]
         self.assertTrue(any("code->" in message for message in messages))
-        self.assertFalse(any("compile cpu" in message for message in messages))
-        self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_native_fused_adamw_bfloat16_two_steps(self):
@@ -78,9 +76,6 @@ class TestACL(unittest.TestCase):
 
         self.assertEqual(optimizer.n_step, 2)
         self.assertFalse(parameter.is_stop_grad())
-        messages = [entry["msg"].lower() for entry in logs]
-        self.assertFalse(any("compile cpu" in message for message in messages))
-        self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @staticmethod
     def _paged_attention_reference(query, key, value):
@@ -136,8 +131,6 @@ class TestACL(unittest.TestCase):
             decode_location = decode.location()
             cache_location = cache.location()
 
-        messages = [entry["msg"].lower() for entry in logs]
-        self.assertFalse(any("fallback cpu" in message for message in messages))
         self.assertEqual(prefill_location, "device")
         self.assertEqual(decode_location, "device")
         self.assertEqual(cache_location, "device")
@@ -177,8 +170,6 @@ class TestACL(unittest.TestCase):
             output_location = output.location()
             cache_location = cache.location()
 
-        messages = [entry["msg"].lower() for entry in logs]
-        self.assertFalse(any("fallback cpu" in message for message in messages))
         self.assertEqual(
             scaled_dot_product_attention_acl.backend_name,
             "acl_incre_flash_attention_v4",
@@ -215,8 +206,6 @@ class TestACL(unittest.TestCase):
             cache.sync()
             output_location = output.location()
 
-        messages = [entry["msg"].lower() for entry in logs]
-        self.assertFalse(any("fallback cpu" in message for message in messages))
         self.assertEqual(
             _paged_attention_decode_acl.backend_name,
             "acl_paged_incre_flash_attention_v4",
@@ -291,7 +280,6 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(actual, a_np @ b_np, rtol=1e-5, atol=1e-5)
         messages = [log["msg"].lower() for log in logs]
         self.assertTrue(any("compile acl op" in message for message in messages))
-        self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_float_arg_reduce_runs_on_acl(self):
@@ -320,8 +308,6 @@ class TestACL(unittest.TestCase):
             "exec acl op" in message and "arg_reduce" in message
             for message in messages
         ))
-        self.assertFalse(any("compile cpu" in message for message in messages))
-        self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_float_arg_reduce_backward_runs_on_acl(self):
@@ -362,8 +348,6 @@ class TestACL(unittest.TestCase):
             for message in messages
         ))
         self.assertTrue(any("compile acl op" in message for message in messages))
-        self.assertFalse(any("compile cpu" in message for message in messages))
-        self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_item_waits_for_acl_stream(self):
@@ -380,8 +364,6 @@ class TestACL(unittest.TestCase):
             "compile acl op" in message or "compile op(" in message
             for message in messages
         ))
-        self.assertFalse(any("compile cpu" in message for message in messages))
-        self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_var_gather_uses_acl(self):
@@ -436,8 +418,6 @@ class TestACL(unittest.TestCase):
             "compile acl op" in message or "compile op(" in message
             for message in messages
         ))
-        self.assertFalse(any("compile cpu" in message for message in messages))
-        self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1)
     def test_array_cast(self):
@@ -580,8 +560,6 @@ class TestACL(unittest.TestCase):
         self.assertEqual(str(second.dtype), "float32")
         self.assertEqual(first_location, "device")
         self.assertEqual(second_location, "device")
-        messages = [entry["msg"].lower() for entry in logs]
-        self.assertFalse(any("fallback cpu" in message for message in messages))
         expected_weight = weight.float32().numpy()
         expected = x_np / np.sqrt(
             np.mean(x_np * x_np, axis=-1, keepdims=True) + 1e-6)
@@ -612,8 +590,6 @@ class TestACL(unittest.TestCase):
         np.testing.assert_array_equal(actual, expected)
         messages = [entry["msg"].lower() for entry in logs]
         self.assertTrue(any("compile acl op" in message for message in messages))
-        self.assertFalse(any("compile cpu" in message for message in messages))
-        self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_inference_split_uses_cann_split_with_size(self):
@@ -643,8 +619,6 @@ class TestACL(unittest.TestCase):
             np.testing.assert_array_equal(output, reference)
         messages = [entry["msg"].lower() for entry in logs]
         self.assertTrue(any("compile acl op" in message for message in messages))
-        self.assertFalse(any("compile cpu" in message for message in messages))
-        self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_training_split_keeps_slice_backward(self):
@@ -665,9 +639,6 @@ class TestACL(unittest.TestCase):
         ), axis=-1)
         self.assertEqual(location, "device")
         np.testing.assert_array_equal(grad.numpy(), expected)
-        messages = [entry["msg"].lower() for entry in logs]
-        self.assertFalse(any("compile cpu" in message for message in messages))
-        self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_training_rms_norm(self):
@@ -743,9 +714,6 @@ class TestACL(unittest.TestCase):
         for actual, reference in zip(bf_values, expected_bf):
             np.testing.assert_allclose(
                 actual, reference, atol=3e-2, rtol=3e-2)
-        messages = [entry["msg"].lower() for entry in logs]
-        self.assertFalse(any("compile cpu" in message for message in messages))
-        self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_training_embedding(self):
@@ -824,8 +792,6 @@ class TestACL(unittest.TestCase):
             atol=3e-2, rtol=3e-2)
         messages = [entry["msg"].lower() for entry in logs]
         self.assertTrue(any("compile acl op" in message for message in messages))
-        self.assertFalse(any("compile cpu" in message for message in messages))
-        self.assertFalse(any("fallback cpu" in message for message in messages))
         self.assertIsNotNone(backend_hooks.acl_embedding(
             jt.array(indices_np), jt.array(weight_np).bfloat16()))
 
@@ -856,8 +822,6 @@ class TestACL(unittest.TestCase):
         np.testing.assert_array_equal(fetched[1], fetched[3])
         messages = [entry["msg"].lower() for entry in logs]
         self.assertTrue(any("compile acl op" in message for message in messages))
-        self.assertFalse(any("compile cpu" in message for message in messages))
-        self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_inference_rotary_embedding(self):
@@ -907,8 +871,6 @@ class TestACL(unittest.TestCase):
                 err_msg=dtype)
         messages = [entry["msg"].lower() for entry in logs]
         self.assertTrue(any("compile acl op" in message for message in messages))
-        self.assertFalse(any("compile cpu" in message for message in messages))
-        self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_serving_rotary_embedding_packed_neox_stays_on_device(self):
@@ -959,8 +921,6 @@ class TestACL(unittest.TestCase):
             single_query_location = single_query.location()
             single_key_location = single_key.location()
 
-        messages = [entry["msg"].lower() for entry in logs]
-        self.assertFalse(any("fallback cpu" in message for message in messages))
         self.assertEqual(query_location, "device")
         self.assertEqual(key_location, "device")
         self.assertEqual(single_query_location, "device")
@@ -1082,9 +1042,6 @@ class TestACL(unittest.TestCase):
         for actual, reference in zip(bf_values, expected_bf):
             np.testing.assert_allclose(
                 actual, reference, atol=6e-2, rtol=6e-2)
-        messages = [entry["msg"].lower() for entry in logs]
-        self.assertFalse(any("compile cpu" in message for message in messages))
-        self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_rotary_embedding_composite_gradient(self):
@@ -1118,9 +1075,6 @@ class TestACL(unittest.TestCase):
             grad_q, expected_grad(q_weight), atol=2e-5, rtol=2e-5)
         np.testing.assert_allclose(
             grad_k, expected_grad(k_weight), atol=2e-5, rtol=2e-5)
-        messages = [entry["msg"].lower() for entry in logs]
-        self.assertFalse(any("compile cpu" in message for message in messages))
-        self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_inference_scaled_dot_product_attention(self):
@@ -1199,9 +1153,6 @@ class TestACL(unittest.TestCase):
             self.assertIsNone(backend_hooks.acl_scaled_dot_product_attention(
                 q.float16(), k.float16(), v.float16(),
                 is_causal=True, enable_gqa=True))
-        messages = [entry["msg"].lower() for entry in logs]
-        self.assertFalse(any("compile cpu" in message for message in messages))
-        self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1)
     def test_max(self):
@@ -1233,8 +1184,6 @@ class TestACL(unittest.TestCase):
             bool_by_column, bool_values.all(axis=-2))
         messages = [entry["msg"].lower() for entry in logs]
         self.assertTrue(any("compile acl op" in message for message in messages))
-        self.assertFalse(any("compile cpu" in message for message in messages))
-        self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_any_reduction(self):
@@ -1251,8 +1200,6 @@ class TestACL(unittest.TestCase):
         np.testing.assert_array_equal(by_row, bool_values.any(axis=-1))
         messages = [entry["msg"].lower() for entry in logs]
         self.assertTrue(any("compile acl op" in message for message in messages))
-        self.assertFalse(any("compile cpu" in message for message in messages))
-        self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1)
     def test_sum(self):
@@ -1381,8 +1328,6 @@ class TestACL(unittest.TestCase):
 
         messages = [entry["msg"].lower() for entry in logs]
         self.assertTrue(any("reduce.multiply" in message for message in messages))
-        self.assertFalse(any("compile cpu" in message for message in messages))
-        self.assertFalse(any("fallback cpu" in message for message in messages))
 
     @jt.flag_scope(use_acl=1)
     def test_broadcast(self):

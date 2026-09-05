@@ -102,7 +102,9 @@ def test_ascend_guide_records_runner_failure_attribution():
         "current fused operator input",
         "return code",
         "operator name",
-        "fallback cpu",
+        "forbid_backend_fallbacks()",
+        "backend_fallback_count()",
+        "backend_fallback=error",
     ):
         assert required in guide
 
@@ -121,7 +123,7 @@ def test_ascend_guide_states_the_launcher_migration_is_closed():
         "reduce prod runs a\ntwo-step reduction",
         "KVCacheMemcpy is a per-token",
         "npu-smi info",
-        "CPU fallback detected: this is NOT an NPU validation",
+        "Fallback attempts are NOT NPU validation",
         "must not report hardware validation",
         "acl-host-syntax-check",
         "It is not hardware validation.",

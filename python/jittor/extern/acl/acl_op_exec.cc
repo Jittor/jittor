@@ -10,6 +10,8 @@
 #include <pystate.h>
 #include <algorithm>
 #include <cstring>
+#include <cstdio>
+#include <exception>
 #include <mutex>
 #include <queue>
 #include <set>
@@ -30,6 +32,7 @@
 #include "ops/ternary_op.h"
 #include "executor.h"
 #include "runtime/device.h"
+#include "runtime/backend_fallback.h"
 #include "mem/allocator.h"
 #include "op_compiler.h"
 #include "ops/op_register.h"
@@ -170,10 +173,125 @@ namespace jittor
         {ns_bitwise_xor, "BitwiseXor"},
     };
 
-    void fallback_cpu(Op *op)
+    class AclCpuFallbackScope
     {
-        LOGy << "!!! fallback_cpu " << op;
-        runtime_device_state().use_cuda = 0;
+        int previous_mode;
+        vector<std::pair<Op *, std::pair<int, int>>> flags;
+        FusedOp *fused = nullptr;
+        FusedOpContext *context = nullptr;
+        loop_options_t tuned;
+        loop_options_t *options = nullptr;
+
+    public:
+        AclCpuFallbackScope(const AclCpuFallbackScope &) = delete;
+        AclCpuFallbackScope &operator=(const AclCpuFallbackScope &) = delete;
+
+        explicit AclCpuFallbackScope(Op *op)
+            : previous_mode(runtime_device_state().use_cuda)
+        {
+            vector<Op *> operators{op};
+            if (op->name() == string("fused"))
+            {
+                fused = static_cast<FusedOp *>(op);
+                operators.insert(operators.end(), fused->ops.begin(), fused->ops.end());
+                context = fused->context;
+                tuned = fused->loop_options_tuned;
+                options = fused->loop_options;
+            }
+            for (auto *item : operators)
+                flags.push_back({item, {item->flag(OpFlags::_cpu), item->flag(OpFlags::_cuda)}});
+            runtime_device_state().use_cuda = 0;
+            for (const auto &saved : flags)
+            {
+                saved.first->set_flag(OpFlags::_cpu);
+                saved.first->set_flag(OpFlags::_cuda, 0);
+            }
+        }
+
+        ~AclCpuFallbackScope()
+        {
+            for (const auto &saved : flags)
+            {
+                saved.first->set_flag(OpFlags::_cpu, saved.second.first);
+                saved.first->set_flag(OpFlags::_cuda, saved.second.second);
+            }
+            if (fused)
+            {
+                fused->context = context;
+                fused->loop_options_tuned.swap(tuned);
+                fused->loop_options = options;
+            }
+            runtime_device_state().use_cuda = previous_mode;
+        }
+    };
+
+    template<class Execute, class Fallback, class Cleanup>
+    static void dispatch_acl_checked(const string &unsupported,
+                                     Execute execute, Fallback fallback, Cleanup cleanup)
+    {
+        if (!unsupported.empty())
+        {
+            fallback(unsupported);
+            return;
+        }
+        try
+        {
+            execute();
+        }
+        catch (...)
+        {
+            const auto original = std::current_exception();
+            try { cleanup(); }
+            catch (...) { std::fprintf(stderr, "ACL cleanup failed; preserving execution error\n"); }
+            std::rethrow_exception(original);
+        }
+    }
+
+    template<class Runner, bool UsesRegistry = true>
+    class AclExecutionRunner : public Runner
+    {
+    public:
+        using Runner::Runner;
+
+        void run()
+        {
+            auto entry = aclOpFuncMap.end();
+            if (UsesRegistry)
+            {
+                entry = aclOpFuncMap.find(this->name);
+                INTERNAL_ASSERT(entry != aclOpFuncMap.end())
+                    << "ACL launcher disappeared after preflight:" << this->name;
+            }
+            try
+            {
+                this->setupInputDesc();
+                this->setupOutputDesc();
+                this->executeOp(entry);
+                this->cleanupDesc();
+            }
+            catch (...)
+            {
+                // setup may have constructed only some descriptors; cleanupDesc
+                // assumes complete vectors, so use the actual constructed set.
+                aclrtSynchronizeStream(aclstream);
+                for (auto *tensor : this->inputTensors)
+                    if (tensor) aclDestroyTensor(tensor);
+                for (auto *tensor : this->outputTensors)
+                    if (tensor) aclDestroyTensor(tensor);
+                throw;
+            }
+        }
+    };
+
+    void fallback_cpu(Op *op, const string &reason)
+    {
+        check_backend_fallback(op->name(), accelerator_backend_id(), BackendId::Cpu, reason);
+        USER_CHECK(op->definition().implementations.count(BackendId::Cpu))
+            << "No CPU implementation for fallback of" << op->name();
+        if (op->name() == string("code"))
+            USER_CHECK(!static_cast<CodeOp *>(op)->cpu_src.empty())
+                << "No CPU source for unsupported ACL code operator";
+        AclCpuFallbackScope restore(op);
         for (auto v : op->inputs())
         {
             if (v->mem_ptr && v->allocator->is_cuda())
@@ -188,39 +306,86 @@ namespace jittor
                 migrate_to_cpu(v, runtime_executor().allocator);
             }
         }
-        op->set_flag(OpFlags::_cpu);
-        op->set_flag(OpFlags::_cuda, 0);
-        if (op->name() == string("fused"))
-        {
-            auto fop = (FusedOp *)op;
-            for (auto op : fop->ops)
-            {
-                op->set_flag(OpFlags::_cpu);
-                op->set_flag(OpFlags::_cuda, 0);
-            }
-        }
         op->do_run();
-        runtime_device_state().use_cuda = 1;
     }
 
-    /*
-        check compile
-        if compiled: exec
-        else: compile
-            check is fused
-                check is relay
-                else
-                    compile func = try exec
-                        if failed: fallback_cpu
-            else
-                try compile
-                if failed: fallback_cpu
-    */
+    static string binary_acl_name(BinaryOp *op)
+    {
+        auto found = opname_map.find(op->ns);
+        if (found == opname_map.end()) return {};
+        if (op->x->dtype() == ns_bool && op->y->dtype() == ns_bool)
+        {
+            if (op->ns == ns_bitwise_or) return "LogicalOr";
+            if (op->ns == ns_bitwise_and) return "LogicalAnd";
+            if (op->ns == ns_bitwise_xor) return "LogicalXor";
+        }
+        return found->second;
+    }
+
+    static string fused_acl_name(Op *op)
+    {
+        const string name = op->name();
+        if (name == "unary")
+        {
+            auto found = opname_map.find(op->ns);
+            return found == opname_map.end() ? string() : found->second;
+        }
+        if (name == "binary") return binary_acl_name(static_cast<BinaryOp *>(op));
+        if (name == "ternary") return "Select";
+        if (name == "broadcast_to") return "Expand";
+        if (name == "fuse_transpose") return "Transpose";
+        if (name == "reduce")
+        {
+            if (op->ns == ns_add) return "ReduceSum";
+            if (op->ns == ns_mean) return "ReduceMean";
+            if (op->ns == ns_maximum) return "ReduceMax";
+            if (op->ns == ns_minimum) return "ReduceMin";
+            if (op->ns == ns_multiply) return "ReduceProd";
+        }
+        return {};
+    }
+
+    static bool acl_has_dtype(NanoString dtype)
+    {
+        return dtype == ns_bfloat16 || dtype == ns_float32 || dtype == ns_float16
+            || dtype == ns_int64 || dtype == ns_int32 || dtype == ns_int8
+            || dtype == ns_int16 || dtype == ns_uint8 || dtype == ns_uint16
+            || dtype == ns_uint32 || dtype == ns_bool || dtype == ns_complex64;
+    }
+
+    static string fused_acl_unsupported(FusedOp *fused)
+    {
+        for (auto *op : fused->ops)
+        {
+            if (op->name() == string("array")) continue;
+            const auto name = fused_acl_name(op);
+            if (name.empty()) return string("unregistered fused operator variant: ") + op->name() + "/" + S(op->ns);
+            auto found = aclOpFuncMap.find(name);
+            if (found == aclOpFuncMap.end()) return "unregistered ACL launcher: " + name;
+            INTERNAL_ASSERT(found->second.executeFunc) << "Empty registered ACL launcher:" << name;
+            if (op->name() == string("unary"))
+                INTERNAL_ASSERT(name == "Cast" ? bool(found->second.getWorkspaceSizeFuncCast)
+                                               : bool(found->second.getWorkspaceSizeFuncUnaryNonzero))
+                    << "Wrong registered unary launcher signature:" << name;
+            if (op->name() == string("binary"))
+                INTERNAL_ASSERT(name == "Add" || name == "Sub"
+                    ? bool(found->second.getWorkspaceSizeFuncAdd)
+                    : bool(found->second.getWorkspaceSizeFuncBinary))
+                    << "Wrong registered binary launcher signature:" << name;
+            for (auto *input : op->inputs())
+                if (!acl_has_dtype(input->dtype())) return name + " does not support input dtype " + S(input->dtype());
+            for (auto *output : op->outputs())
+                if (!acl_has_dtype(output->dtype())) return name + " does not support output dtype " + S(output->dtype());
+            if ((name == "Add" || name == "Sub") && op->input(0)->dtype() == ns_complex64)
+                return name + " has no complex alpha-scalar implementation";
+        }
+        return {};
+    }
 
     extern jit_op_entry_t (*do_compile_hook)(Op *);
     jit_op_entry_t do_compile_inner(Op *op);
 
-    void try_exec_and_fallback_cpu(Op *op)
+    void exec_fused_acl(Op *op)
     {
         auto fop = (FusedOp *)op;
 
@@ -264,8 +429,7 @@ namespace jittor
         }
 
         int total = 0;
-        int fallback = 0;
-        try
+        dispatch_acl_checked(fused_acl_unsupported(fop), [&]
         {
             while (!queue.empty())
             {
@@ -282,8 +446,9 @@ namespace jittor
                 {
                     if (out->mem_ptr)
                         continue;
-                    out->alloc(runtime_executor().allocator);
                     new_alloced.insert(out);
+                    INTERNAL_ASSERT(out->alloc(runtime_executor().allocator))
+                        << "ACL fused output allocation returned no storage";
                 }
                 for (auto out : out_map[current_op])
                 {
@@ -294,49 +459,29 @@ namespace jittor
                 if (current_op->name() == string("unary"))
                 {
                     auto uop = (UnaryOp *)current_op;
-                    UnaryOpRunner op;
+                    AclExecutionRunner<UnaryOpRunner> op;
                     op.add(uop->x, true);
                     op.add(uop->y, false);
-                    auto iter = opname_map.find(uop->ns);
-                    ASSERT(iter != opname_map.end()) << "op " << uop->ns << " not found";
-                    op.name = iter->second;
+                    op.name = fused_acl_name(current_op);
                     op.jt_name = uop->name();
                     op.run();
                 }
                 else if (current_op->name() == string("binary"))
                 {
                     auto bop = (BinaryOp *)current_op;
-                    BinaryOpRunner op;
+                    AclExecutionRunner<BinaryOpRunner> op;
                     op.add(bop->x, true);
                     op.add(bop->y, true);
                     op.add(bop->z, false);
-                    auto iter = opname_map.find(bop->ns);
-                    ASSERT(iter != opname_map.end()) << "op " << bop->ns << " not found";
-                    op.name = iter->second;
+                    op.name = fused_acl_name(current_op);
                     op.jt_name = bop->name();
-
-                    if (bop->x->dtype() == ns_bool and bop->y->dtype() == ns_bool)
-                    {
-                        // BitwiseOr, BitwiseAnd, BitwiseXor -> LogicalOr, LogicalAnd, LogicalXor
-                        if (bop->ns == ns_bitwise_or)
-                        {
-                            op.name = "LogicalOr";
-                        }
-                        else if (bop->ns == ns_bitwise_and)
-                        {
-                            op.name = "LogicalAnd";
-                        }
-                        else if (bop->ns == ns_bitwise_xor)
-                        {
-                            op.name = "LogicalXor";
-                        }
-                    }
                     op.run();
                 }
                 else if (current_op->name() == string("ternary"))
                 {
                     auto top = (TernaryOp *)current_op;
-                    TernaryOpRunner op;
+                    AclExecutionRunner<TernaryOpRunner> op;
+                    op.name = fused_acl_name(current_op);
                     op.add(top->cond, true);
                     op.add(top->x, true);
                     op.add(top->y, true);
@@ -365,7 +510,8 @@ namespace jittor
                 else if (current_op->name() == string("reduce"))
                 {
                     auto rop = (ReduceOp *)current_op;
-                    ReduceOpRunner op;
+                    AclExecutionRunner<ReduceOpRunner> op;
+                    op.name = fused_acl_name(current_op);
                     if (rop->ns == ns_add)
                         op.op_idx = 9;
                     else if (rop->ns == ns_multiply)
@@ -400,10 +546,16 @@ namespace jittor
                 else if (current_op->name() == string("broadcast_to"))
                 {
                     auto bop = (BroadcastToOp *)current_op;
-                    ExpandOpRunner op;
+                    AclExecutionRunner<ExpandOpRunner> op;
+                    op.name = fused_acl_name(current_op);
                     op.jt_name = "expand";
                     NanoVector xshape, xshape_bk = bop->x->shape;
                     NanoVector zshape = bop->z->shape;
+                    struct RestoreShape {
+                        Var *value;
+                        NanoVector shape;
+                        ~RestoreShape() { value->shape = shape; }
+                    } restore_shape{bop->x, xshape_bk};
 
                     for (int i = 0; i < zshape.size(); i++)
                     {
@@ -418,7 +570,6 @@ namespace jittor
                     }
                     bop->x->shape = xshape;
                     op.add(bop->x, true);
-                    // bop->x->shape = xshape_bk;
                     op.add(bop->z, false);
                     op.run();
                     // shape is copied into the aclTensor synchronously during
@@ -431,7 +582,8 @@ namespace jittor
                 {
                     // replace fuse_transpose with transpose
                     auto top = (TransposeOp *)current_op;
-                    TransposeOpRunner op;
+                    AclExecutionRunner<TransposeOpRunner> op;
+                    op.name = fused_acl_name(current_op);
                     op.add(top->x, true);
                     op.add(top->y, false);
                     op.jt_name = "transpose";
@@ -455,31 +607,35 @@ namespace jittor
                     {
                         if (new_alloced.find(in) != new_alloced.end())
                         {
-                            free_var_mem(in);
                             new_alloced.erase(in);
+                            free_var_mem(in);
                         }
                     }
                 }
             }
-        }
-        catch (std::exception &e)
+            INTERNAL_ASSERT(total == len) << "ACL fused graph has unresolved dependencies";
+            while (!new_alloced.empty())
+            {
+                auto *value = *new_alloced.begin();
+                new_alloced.erase(new_alloced.begin());
+                free_var_mem(value);
+            }
+        }, [&](const string &reason)
         {
-            // Successful ACL launches are ordered on aclstream and must stay
-            // asynchronous. Drain only before abandoning a partially queued
-            // fused graph, so its temporary buffers are no longer in use when
-            // fallback_cpu migrates or releases them.
-            aclrtSynchronizeStream(aclstream);
-            fallback = 1;
-            LOGir << "fallback cpu" << e.what();
-        }
-        for (auto v : new_alloced)
+            fallback_cpu(op, reason);
+        }, [&]
         {
-            free_var_mem(v);
-        }
-        if (fallback)
-        {
-            fallback_cpu(op);
-        }
+            // Only an abandoned execution is drained. No SDK/kernel exception
+            // is interpreted as permission to run a different backend.
+            auto status = aclrtSynchronizeStream(aclstream);
+            if (status != ACL_SUCCESS)
+                std::fprintf(stderr, "ACL failure cleanup drain returned %d\n", int(status));
+            for (auto *value : new_alloced)
+            {
+                try { if (value->allocator) free_var_mem(value); }
+                catch (...) { std::fprintf(stderr, "ACL temporary cleanup failed\n"); }
+            }
+        });
     }
 
     extern int current_seed;
@@ -489,7 +645,7 @@ namespace jittor
         {"fused_adamw", [](Op *op)
          {
              auto _op = (FusedAdamwOp *)op;
-             AdamWListOpRunner runner;
+             AclExecutionRunner<AdamWListOpRunner, false> runner;
              AdamWAttr *attr = new AdamWAttr();
              attr->tensorCount = _op->parameters.size();
              attr->lr = _op->lr;
@@ -512,7 +668,7 @@ namespace jittor
         {"arg_reduce", [](Op *op)
          {
              auto _op = (ArgReduceOp *)op;
-             ArgReduceOpRunner runner(
+             AclExecutionRunner<ArgReduceOpRunner, false> runner(
                  _op->op == ns_maximum, _op->dim, _op->keepdims);
              runner.jt_name = "arg_reduce";
              runner.add(_op->x, true);
@@ -523,7 +679,7 @@ namespace jittor
         {"curand_random", [&current_seed, &current_offset](Op *op)
          {
              auto _op = (RandomOp *)op;
-             RandomOpRunner runner(_op->type == ns_uniform ? "RandomUniform" : "RandomNormal");
+             AclExecutionRunner<RandomOpRunner> runner(_op->type == ns_uniform ? "RandomUniform" : "RandomNormal");
              auto out = op->output(0);
              RandomAttr *attr = new RandomAttr();
              attr->seed = current_seed;
@@ -553,15 +709,44 @@ namespace jittor
     static void exec_mapped_acl_ops(Op *op)
     {
         auto iter = acl_ops.find(op->name());
-        if (iter != acl_ops.end())
+        string unsupported;
+        if (iter == acl_ops.end())
+            unsupported = string("no registered ACL implementation for ") + op->name();
+        else
+        {
+            INTERNAL_ASSERT(iter->second) << "Empty ACL implementation for" << op->name();
+            for (auto *input : op->inputs())
+                if (!acl_has_dtype(input->dtype()))
+                    unsupported = string(op->name()) + " does not support input dtype " + S(input->dtype());
+            for (auto *output : op->outputs())
+                if (!acl_has_dtype(output->dtype()))
+                    unsupported = string(op->name()) + " does not support output dtype " + S(output->dtype());
+            if (op->name() == string("arg_reduce"))
+            {
+                auto *reduce = static_cast<ArgReduceOp *>(op);
+                USER_CHECK(reduce->op == ns_maximum || reduce->op == ns_minimum)
+                    << "arg_reduce requires min or max";
+            }
+            if (op->name() == string("curand_random"))
+            {
+                auto *random = static_cast<RandomOp *>(op);
+                USER_CHECK(random->type == ns_uniform || random->type == ns_normal)
+                    << "random requires uniform or normal";
+                const string name = random->type == ns_uniform ? "RandomUniform" : "RandomNormal";
+                if (!aclOpFuncMap.count(name)) unsupported = "unregistered ACL launcher: " + name;
+            }
+        }
+        dispatch_acl_checked(unsupported, [&]
         {
             LOGv << "exec acl op " << op->name() << op;
             iter->second(op);
-        }
-        else
+        }, [&](const string &reason)
         {
-            LOGf << "op " << op->name() << " not supported";
-        }
+            fallback_cpu(op, reason);
+        }, [&]
+        {
+            aclrtSynchronizeStream(aclstream);
+        });
     }
 
     static jit_op_entry_t acl_do_compile(Op *op)
@@ -596,7 +781,7 @@ namespace jittor
             }
             else
             {
-                return &try_exec_and_fallback_cpu;
+                return &exec_fused_acl;
             }
         }
         else if (op->name() == string("code"))

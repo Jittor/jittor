@@ -18,6 +18,9 @@ string& runtime_flag_cuda_kernel_math() { return runtime_jit_policy().cuda_kerne
 
 StartupConfigState& runtime_startup_config() { return native_runtime().startup_config(); }
 
+BackendFallbackState& runtime_backend_fallback() { return native_runtime().fallbacks(); }
+string& runtime_flag_backend_fallback() { return runtime_backend_fallback().policy; }
+
 NativeRuntime& native_runtime() {
     // Backends and static holders may access state during late teardown.
     // Keep this core-owned instance alive until the process exits.

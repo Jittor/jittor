@@ -30,10 +30,10 @@
 | 分支 | `2.0-refactor`；本批迁移起点 `2328ce4f`，后续提交见 Git 历史 |
 | 相对 `2.0` 的提交 | 迁移起点共 1853 个；提交数不代表任务完成量 |
 | 提交里出现过的任务号 | 329 个 |
-| 看板 | 已合并 **217** / 进行中 **0** / 待领 **55** / 并入其它任务 **13** |
+| 看板 | 已合并 **218** / 进行中 **1** / 待领 **53** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
 
-**交接清理完成不等于整改完成。** 看板仍有 55 条待领；当前只是把中断留下的易失状态全部转成了主线提交、
+**交接清理完成不等于整改完成。** 看板仍有 53 条待领、1 条进行中；当前只是把中断留下的易失状态全部转成了主线提交、
 明确待领项或已验证的不采用结论。这个分支不是终态。
 
 看板的「已合并」是权威。提交里的任务号更多，是因为一个任务常有补充提交、改判提交与「更正前一个提交」
@@ -598,8 +598,20 @@ CPU shim 公共签名与模块组合 14 passed；MKL 禁用/恢复的真实输�
 只读 HOME 导入通过；同文件旧 TestCoreBuildStamp 仍试图改 immutable jittor_path，属于既有测试适配缺口。
 未做完整模型门禁或 NPU/ROCm/Corex 实机。新接口及异机验收入口见 source-architecture 和 Ascend guide。
 
-下一轮优先并行做 4.06 的真实回退策略和 4.07 的 BuildConfig 值对象/惰性后端发现，
-不要只完善现有 `_runtime.fallback` 原型。随后推进 4.10/4.15 后端物理布局以及 4.11/4.12 移除源转换。
+4.06 已接真实执行：NativeRuntime 的三态旗标默认 warn，非法赋值回滚；
+executor 在 CPU kernel/输入迁移前决定，显式拷贝和 Array staging 不算回退。
+ACL 完整预检后才执行，只有明确 unsupported 才请求 CPU；SDK/kernel/shape 执行失败清理后传播，
+允许回退的 mode、op flags 和 fused context 用 RAII 恢复。修复已实现 runner 的映射键/直接入口，
+没有借此复制 kernel 数学。Nox/生态/NPU scope 使用真实策略和尝试计数，删除日志文字验收；
+被内部吞掉的拒绝仍会使验证失败，主异常不被 teardown 计数错误替换。
+真实 CUDA 三态的 CPU marker、迁移前指针和恢复检查修前失败、修后连原生策略 9 passed；
+严格 error 模式的常规 CUDA/BuildConfig/序列化组合 28 passed。
+ACL 82 个 host/结构节点、4 个 TU、5 个 launcher ABI 和两次语法反向对照通过，未做 NPU 实机；
+各 family 自持局部 SDK 资源的既有异常清理缺口仍归 8.06。
+本波完整 structure 为 740 passed/9 failed/2 skipped；新增 setter 探针已补显式恢复，
+其余九类与前次记录一致，未重跑完整改前 A/B，不称全门禁通过。
+
+4.07 正在本波独立提交收尾；随后推进 4.10/4.15 后端物理布局以及 4.11/4.12 移除源转换。
 NativeProviderRegistration 的旧元数据不能当作上述执行/构建迁移已完成的证据。
 独立 torch 包和后端架构仍是未完成的大需求，不要为追低价值计数改变优先级。
 异机 CUDA 先跑 `tests/core/test_startup_config.py`、`tests/backends/cuda/test_cuda_kernel_math_policy.py`

@@ -8616,6 +8616,7 @@ class Flags:
 	def cuda_archs(self) -> List[int]: ...
 	cuda_device_allocator_managed_fallback: int
 	cuda_kernel_math: str
+	backend_fallback: str
 	use_cuda_managed_allocator: int
 flags: Flags
 '''Compatibility access to startup configuration and live runtime flags.'''
@@ -8674,6 +8675,8 @@ class RuntimeContext:
 	def cuda_device_allocator_managed_fallback(self) -> int: ...
 	@property
 	def cuda_kernel_math(self) -> str: ...
+	@property
+	def backend_fallback(self) -> str: ...
 	@property
 	def device_id(self) -> int: ...
 	@property
@@ -8818,6 +8821,7 @@ class RuntimeState:
 	cuda_allow_tf32: int
 	cuda_device_allocator_managed_fallback: int
 	cuda_kernel_math: str
+	backend_fallback: str
 	device_id: int
 	device_mem_limit: int
 	enable_tuner: int

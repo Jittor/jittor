@@ -45,7 +45,9 @@ def test_acl_sync_run_checks_the_stream_and_documents_the_910b3_probe():
         "sync_run=1",
         "sync_run=0",
         "aclrtSynchronizeStream",
-        "fallback cpu",
+        "forbid_backend_fallbacks()",
+        "backend_fallback_count()",
+        "backend_fallback=error",
         "return code",
         "operator name",
     ):

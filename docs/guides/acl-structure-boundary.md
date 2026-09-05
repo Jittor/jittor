@@ -204,12 +204,39 @@ an Ascend 910B3 after sourcing CANN:
 ```bash
 source "$ASCEND_HOME/set_env.sh"
 npu-smi info
-JITTOR_TEST_DEVICES=npu sync_run=1 \
+JITTOR_TEST_DEVICES=npu backend_fallback=error sync_run=1 \
   python -m pytest -q -s tests/backends/npu/test_acl.py
 ```
 
-The run is accepted only when the intended ACL operator executes, the log has
-no `fallback cpu`/`cpu fallback`, and `npu-smi info` confirms the target card.
+The run is accepted only when the intended ACL operator executes, independent
+values/gradients and residency pass, the native `backend_fallback_count()` delta
+is zero, and `npu-smi info` confirms the target card. The NPU directory's autouse
+fixture applies `forbid_backend_fallbacks()` when Jittor is already loaded;
+each test must synchronize or fetch inside that scope. Standalone probes and
+tests outside that directory must import the scope explicitly:
+
+```python
+import jittor as jt
+from jittor._runtime.fallback import forbid_backend_fallbacks
+
+before = jt.core.backend_fallback_count()
+with forbid_backend_fallbacks():
+    result = run_owner()
+    jt.sync_all(True)
+    actual = result.numpy()
+assert jt.core.backend_fallback_count() == before
+```
+
+Here `run_owner()` is the owner-specific operation under validation; construct
+its device inputs inside the scope as well. The scope performs no implicit
+synchronization. `jt.runtime.backend_fallback` accepts `error`, `warn`, and
+`allow`; only `error` is an acceptance policy. The counter includes rejected
+attempts, so catching an unsupported-operation exception does not make a test
+pass. Only preflight unsupported decisions may request fallback. Execution
+exceptions propagate after cleanup; they must not retry on CPU. `warn` and
+`allow` are explicit debugging policies. SDK/launcher logs remain useful for
+failure attribution, but absence of CPU-compilation or fallback log messages
+is not evidence of no CPU fallback.
 
 For an attribute owner, the device gate must additionally use its exact test
 node (replace the example with the owner-specific node after the slice lands):
@@ -217,9 +244,10 @@ node (replace the example with the owner-specific node after the slice lands):
 ```bash
 source "$ASCEND_HOME/set_env.sh"
 npu-smi info
-JITTOR_TEST_DEVICES=npu sync_run=1 \
+JITTOR_TEST_DEVICES=npu backend_fallback=error sync_run=1 \
   python -m pytest -q -s tests/backends/npu/test_acl_torch_compat.py -k 'softmax or triu'
 ```
 
-Record the card model, CANN version, selected node, and the absence of CPU
-fallback in the handoff. A host-only/static pass never closes the ACL task.
+Record the card model, CANN version, selected node, device residency, and zero
+native fallback-attempt delta in the handoff. A host-only/static pass never
+closes the ACL task.

@@ -6,6 +6,7 @@
 #include "runtime/jit_policy.h"
 #include "runtime/configuration.h"
 #include "runtime/backend.h"
+#include "runtime/backend_fallback.h"
 
 namespace jittor {
 
@@ -24,6 +25,7 @@ public:
     RuntimeJitPolicy& jit_policy() { return jit_policy_; }
     StartupConfigState& startup_config() { return startup_config_; }
     BackendRegistry& backends() { return backends_; }
+    BackendFallbackState& fallbacks() { return fallbacks_; }
 
 private:
     Executor executor_;
@@ -33,6 +35,7 @@ private:
     RuntimeJitPolicy jit_policy_;
     StartupConfigState startup_config_;
     BackendRegistry backends_;
+    BackendFallbackState fallbacks_;
 };
 
 EXTERN_LIB NativeRuntime& native_runtime();

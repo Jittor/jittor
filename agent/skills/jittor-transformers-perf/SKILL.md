@@ -53,8 +53,9 @@ Transformers 版本和相同本地 checkpoint。运行 Jittor 一侧前设置
 `JITTOR_TORCH_SHIM=1`，并在加载权重后显式迁移到 NPU；两侧都通过
 `ASCEND_RT_VISIBLE_DEVICES` 选择已分配设备。首次 JIT 单列，稳态 prefill 和
 generation 在每次样本后同步；单 token 与多 token decode 都要测，不能用一次
-generation 成功推断 KV-cache 后续步可用。Jittor 计时结束后还会在日志捕获范围内
-各执行一次 prefill 和 generation，发现 CPU fallback 时直接失败。可用
+generation 成功推断 KV-cache 后续步可用。Jittor 每次 prefill 和 generation 都在
+`forbid_backend_fallbacks()` 中执行并同步；原生策略设为 `error`，退出时核对尝试计数，
+即使内部吞掉回退异常也会失败，不再依赖日志文字。计时结束后另外各执行一次验证。可用
 `--logits-output` 保存末 token logits，再在进程外比较 argmax、Top-K 和全量误差。
 Jittor 侧可用 `--profile-output /path/to/report.json` 在所有计时结束后额外执行一次
 generation，并保存聚合 profiler row；该次运行不进入稳态样本。profile 不能在

@@ -12,11 +12,11 @@ from .dispatch import (
     try_dispatch,
     unregister_kernel,
 )
-from .fallback import BackendFallbackPolicy, FallbackDecision, FallbackError, FallbackMode
+from .fallback import forbid_backend_fallbacks
 
 __all__ = [
     "DispatchContext", "KernelRegistration", "dispatch_context", "optional_kernel",
     "override_kernel", "register_kernel", "registered_kernel", "select_kernel",
     "try_dispatch", "unregister_kernel",
-    "BackendFallbackPolicy", "FallbackDecision", "FallbackError", "FallbackMode",
+    "forbid_backend_fallbacks",
 ]

@@ -376,13 +376,13 @@ class EcosystemComparison(unittest.TestCase):
                 "{} timed the runtimes with different thread counts, affinity, "
                 "or precision policy".format(case),
             )
+            self.assertEqual(jittor_report.get("fallback_policy"), "error")
+            self.assertEqual(jittor_report.get("fallback_count"), 0)
             if self.device == "npu":
                 backend = jittor_report.get("backend") or {}
                 self.assertTrue(backend.get("has_acl"), "ACL was not detected")
                 self.assertTrue(backend.get("use_acl"), "ACL dispatch was not enabled")
                 self.assertTrue(backend.get("use_cuda"), "device dispatch was not enabled")
-                self.assertEqual(jittor_report.get("fallback_count"), 0)
-                self.assertEqual(jittor_report.get("cpu_compile_count"), 0)
 
             reference = np.load(torch_output)
             candidate = np.load(jittor_output)

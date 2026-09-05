@@ -24,7 +24,9 @@ def test_acl_structure_boundary_names_atomic_migrations_and_hardware_gate():
         "softmax.dim",
         "triu.diagonal",
         "npu-smi info",
-        "fallback cpu",
+        "forbid_backend_fallbacks()",
+        "backend_fallback_count()",
+        "backend_fallback=error",
         "schema_version",
         "cache_key",
         "type_tag",
@@ -47,3 +49,17 @@ def test_acl_data_schema_contract_for_future_decoder():
     assert "pointer addresses and Python object ids are forbidden" in text
     assert "validates the\noperator name, schema version, type tag, and required fields" in text
     assert "host-only C++ decoder boundary" in text
+
+
+def test_acl_guides_use_runtime_fallback_evidence_not_log_matching():
+    for path in (GUIDE, ROOT / "docs/guides/ascend-910b.md"):
+        text = path.read_text(encoding="utf-8")
+        assert "from jittor._runtime.fallback import forbid_backend_fallbacks" in text
+        assert "with forbid_backend_fallbacks():" in text
+        assert "jt.sync_all(True)" in text
+        assert "jt.runtime.backend_fallback" in text
+        assert "rejected" in text
+        assert "preflight unsupported" in text
+        assert "debugging policies" in text
+        assert 'if rg -i "fallback cpu|cpu fallback"' not in text
+        assert '"compile cpu"' not in text

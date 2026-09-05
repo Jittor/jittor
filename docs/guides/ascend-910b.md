@@ -110,11 +110,12 @@ that is already occupied by another workload.
 
 An import-only check cannot prove NPU support. The following probe requires ACL,
 enables the accelerator flags, performs float32 matrix multiplication, and
-checks both its independent result and the ACL compilation log:
+checks its independent result, device residency, and native fallback counter:
 
 ```python
 import numpy as np
 import jittor as jt
+from jittor._runtime.fallback import forbid_backend_fallbacks
 
 assert getattr(jt.compiler, "has_acl", 0), "ACL was not detected"
 jt.flags.use_acl = 1
@@ -123,13 +124,15 @@ jt.flags.use_cuda = 1
 a_np = np.arange(12, dtype=np.float32).reshape(3, 4)
 b_np = np.arange(20, dtype=np.float32).reshape(4, 5)
 
-with jt.log_capture_scope(log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
-    actual = jt.matmul(jt.array(a_np), jt.array(b_np)).numpy()
+fallback_before = jt.core.backend_fallback_count()
+with forbid_backend_fallbacks():
+    result = jt.matmul(jt.array(a_np), jt.array(b_np))
+    jt.sync_all(True)
+    assert result.location() == "device"
+    actual = result.numpy()
 
 np.testing.assert_allclose(actual, a_np @ b_np, rtol=1e-5, atol=1e-5)
-messages = [entry["msg"].lower() for entry in logs]
-assert any("compile acl op" in message for message in messages)
-assert not any("fallback cpu" in message for message in messages)
+assert jt.core.backend_fallback_count() == fallback_before
 print("ACL matmul passed")
 ```
 
@@ -137,12 +140,45 @@ Save the probe as `probe_acl.py` outside the checkout and run it only after
 sourcing CANN:
 
 ```bash
-python probe_acl.py
+backend_fallback=error python probe_acl.py
 ```
 
 Jittor uses `use_cuda` as the common accelerator execution flag even when the
 selected backend is ACL. `has_acl` is therefore the required discriminator
 between Ascend and CUDA.
+
+### Runtime fallback policy
+
+`jt.runtime.backend_fallback` accepts `error`, `warn`, or `allow`. Use
+`backend_fallback=error` in the environment before starting every validation
+process. `warn` and `allow` are explicit debugging policies, not NPU acceptance
+modes. Only a preflight unsupported decision may request fallback; a launcher,
+allocation, compilation, or execution exception must propagate after cleanup,
+never be retried as CPU execution.
+
+`jt.core.backend_fallback_count()` counts fallback attempts, including requests
+rejected by `error`. Compare its value before and after the work in the same
+process. `forbid_backend_fallbacks()` temporarily selects `error` and also
+rejects a nonzero counter delta on normal exit, including when an inner caller
+caught the rejection. An exception from the body propagates unchanged.
+Materialization (`numpy()`/fetch) or `jt.sync_all(True)` must occur inside the
+scope: it does not synchronize automatically. A lazy tensor created inside and
+executed after leaving the scope is not covered.
+
+Focused test nodes must use that scope around the operation and synchronization
+and assert NPU execution/residency plus independent values or gradients. A
+successful collection, skip, or absent log message is not this evidence. Keep
+SDK and launcher logs for diagnosis only; do not grep CPU compilation or
+fallback messages to decide whether validation passed. CPU reference/checkpoint
+work outside the device computation is not itself a backend fallback.
+
+`tests/backends/npu/conftest.py` installs this guard automatically for each
+test when Jittor is already loaded at fixture entry. It preserves the original
+setup/call exception instead of replacing it with a counter error. Tests must
+still synchronize or fetch before returning: the fixture does not flush pending
+work. Standalone scripts and tests outside `tests/backends/npu/` do not inherit
+this fixture and must enter `forbid_backend_fallbacks()` explicitly. If Jittor
+is first imported after fixture entry, the test also needs an explicit scope.
 
 ## Check per-operator ACL synchronization
 
@@ -164,15 +200,18 @@ confirming the device is healthy, and selecting an allocated device:
 The unary runner is the first family migrated to the shared launcher tail. It
 keeps its historical asynchronous policy, while workspace allocation and ACL
 launch failures now use the same auditable error path as the base runner. When
-validating this migration, include one unary operation and confirm that its log
-contains neither `fallback cpu` nor `execute launcher failed`.
+validating this migration, include one unary operation under
+`forbid_backend_fallbacks()` and materialize its result inside the scope.
+An `execute launcher failed` message is failure-attribution evidence, not a
+replacement for the runtime counter check.
 
 ```bash
 source "$CANN_SET_ENV"
 npu-smi info
 export ASCEND_RT_VISIBLE_DEVICES=<allocated-device>
 
-sync_run=1 python -m pytest -q -s \
+set -o pipefail
+backend_fallback=error sync_run=1 python -m pytest -q -s \
   tests/backends/npu/test_acl.py::TestACL::test_float32_matmul_runs_on_acl \
   2>&1 | tee "$TMPDIR/acl-sync-run.log"
 ```
@@ -189,26 +228,18 @@ rg "aclrtSynchronizeStream failed" "$TMPDIR/acl-sync-run.log"
 The ACL Cumsum family uses the shared launcher and retains synchronous
 execution. This remains source-only until the Ascend 910B3 probe is run.
 
-The run is valid only when the ACL execution assertion passes and the log has no
-CPU fallback. Treat either spelling below as a failed NPU verification:
-
-```bash
-if rg -i "fallback cpu|cpu fallback" "$TMPDIR/acl-sync-run.log"; then
-  exit 1
-fi
-```
+The run is valid only when the ACL execution assertion passes and the
+`backend_fallback_count()` delta is zero under `forbid_backend_fallbacks()`.
+The test must synchronize inside the scope; the log is diagnostic only.
 
 After diagnosis, repeat the same focused node with per-operator synchronization
 disabled to verify the normal asynchronous path still launches on ACL:
 
 ```bash
-sync_run=0 python -m pytest -q -s \
+set -o pipefail
+backend_fallback=error sync_run=0 python -m pytest -q -s \
   tests/backends/npu/test_acl.py::TestACL::test_float32_matmul_runs_on_acl \
   2>&1 | tee "$TMPDIR/acl-async-run.log"
-
-if rg -i "fallback cpu|cpu fallback" "$TMPDIR/acl-async-run.log"; then
-  exit 1
-fi
 ```
 
 `JT_SYNC=1` is the separate executor-wide compile-time diagnostic. It is not a
@@ -227,28 +258,33 @@ source "$CANN_SET_ENV"
 export ASCEND_RT_VISIBLE_DEVICES=<allocated-device>
 npu-smi info | tee "$TMPDIR/before-workspace.txt"
 
-sync_run=1 python - <<'PY' 2>&1 | tee "$TMPDIR/workspace-normal.log"
+set -o pipefail
+backend_fallback=error sync_run=1 python - <<'PY' 2>&1 | tee "$TMPDIR/workspace-normal.log"
 import numpy as np
 import jittor as jt
+from jittor._runtime.fallback import forbid_backend_fallbacks
 
 assert getattr(jt.compiler, "has_acl", 0), "ACL was not detected"
 jt.flags.use_acl = 1
 jt.flags.use_cuda = 1
-for width in (64, 128, 256):
-    value = np.arange(width * width, dtype=np.float32).reshape(width, width)
-    actual = jt.matmul(jt.array(value), jt.array(value)).numpy()
-    np.testing.assert_allclose(actual, value @ value, rtol=2e-4, atol=2e-2)
+fallback_before = jt.core.backend_fallback_count()
+with forbid_backend_fallbacks():
+    for width in (64, 128, 256):
+        value = np.arange(width * width, dtype=np.float32).reshape(width, width)
+        result = jt.matmul(jt.array(value), jt.array(value))
+        jt.sync_all(True)
+        assert result.location() == "device"
+        actual = result.numpy()
+        np.testing.assert_allclose(actual, value @ value, rtol=2e-4, atol=2e-2)
+assert jt.core.backend_fallback_count() == fallback_before
 print("ACL workspace normal path passed")
 PY
-
-if rg -i "fallback cpu|cpu fallback" "$TMPDIR/workspace-normal.log"; then
-  exit 1
-fi
 
 npu-smi info | tee "$TMPDIR/after-workspace.txt"
 ```
 
-The normal run is accepted only with correct values and no CPU fallback. After
+The normal run is accepted only with correct values, device residency, and a
+zero native fallback-attempt delta. After
 the Python process exit, it must no longer appear in `npu-smi`; compare
 `before-workspace.txt` and `after-workspace.txt` to confirm its workspace was
 released rather than retained by an orphan process.
@@ -276,8 +312,9 @@ with an invalid executor or checking the outer fused graph by mistake:
 - `current fused operator input is not allocated` names the queue item whose
   input invariant failed, rather than the enclosing fused operation.
 
-On a 910B3, preserve these lines together with the surrounding `fallback cpu`
-log. The normal matmul and workspace commands above must contain none of them;
+On a 910B3, preserve these lines together with the surrounding SDK/launcher
+log and the native fallback-attempt delta. The normal matmul and workspace
+commands above must contain none of these failure diagnostics;
 an injected or naturally reproduced failure must stop that ACL runner before an
 execute call uses an invalid executor.
 
@@ -294,7 +331,7 @@ python -m pip install -r requirements/dev-tools.txt
 export CANN_SET_ENV=/path/to/Ascend/cann-9.0.0/set_env.sh
 export JITTOR_CI_PYTHON=/path/to/ascend-python/bin/python
 export ASCEND_RT_VISIBLE_DEVICES=<allocated-device>
-python -m nox -s npu
+backend_fallback=error python -m nox -s npu
 ```
 
 The session resolves `python_config_path` from `JITTOR_CI_PYTHON` rather than
@@ -306,6 +343,7 @@ To run the same core tests directly:
 
 ```bash
 export JITTOR_TEST_DEVICES=npu
+export backend_fallback=error
 "$JITTOR_CI_PYTHON" -m pytest -v --timeout=600 \
   tests/backends/npu/test_acl.py \
   tests/backends/npu/test_aclop.py \
@@ -328,7 +366,7 @@ python -m pip install "transformers==4.56.2" "jinja2==3.1.6"
 export QWEN3_MODEL=/path/to/Qwen3-8B
 export JITTOR_TORCH_SHIM=1
 
-python tests/backends/npu/manual/run_qwen3_transformers.py \
+backend_fallback=error python tests/backends/npu/manual/run_qwen3_transformers.py \
   --model "$QWEN3_MODEL" \
   --dtype bfloat16 \
   --max-new-tokens 8 \
@@ -338,14 +376,15 @@ python tests/backends/npu/manual/run_qwen3_transformers.py \
 Run this command only after the CANN, device-selection, and isolated-cache setup
 above. The probe loads weights on CPU, explicitly migrates the model to the
 visible NPU, prints `npu-smi` while the model is resident, performs greedy eager
-attention generation with KV cache, and fails if generation logs an ACL backend
-fallback or an unexpected CPU-compiled operation. CPU checkpoint
+attention generation with KV cache under `forbid_backend_fallbacks()`, and
+rejects any native fallback attempt during generation. CPU checkpoint
 deserialization is expected and is not used as evidence for the model forward.
 
 The validated Qwen3-8B checkpoint has 8,190,735,360 parameters. Float32 uses
 32,376 MB of device memory on one 64 GB 910B3. Both float32 and bfloat16 report
-accelerator-resident parameters, `has_acl=use_acl=use_cuda=1`, zero fallback,
-and zero CPU-compiled operations. The maintained bfloat16 eight-token request
+accelerator-resident parameters and `has_acl=use_acl=use_cuda=1`. Historical
+zero-fallback log reports must be revalidated with the native counter and scope
+on the current branch. The maintained bfloat16 eight-token request
 stops after `[19, 13, 151645]` and decodes to `4.` in every repeated run. Use
 `--dtype float32` for the original one-token probe. These are correctness probes,
 not throughput benchmarks.
@@ -376,14 +415,15 @@ allowing them to abort or stall the process:
 
 Float16/float32 `arg_reduce` forward and value-output backward are maintained
 ACL capabilities. Forward uses CANN MaxDim/MinDim and backward scatters the
-upstream gradient to the selected first index; the real-device regression rejects
-CPU compilation and fallback. See the
+upstream gradient to the selected first index; current real-device validation
+must reject fallback attempts through the native policy and counter. See the
 [focused verification report](../../agent/results/2026-08-30-npu-arg-reduce-backward.md).
 
 Full, single-axis, and multi-axis `prod` use CANN `aclnnProd`/`aclnnProdDim`.
 Multi-axis reductions are lowered to ordered single-axis device reductions.
 Float32 forward/backward and uint8/int8/int16/int32/int64 forward match
-independent NumPy references on a real NPU without CPU compilation or fallback. See the
+independent NumPy references on a real NPU. Revalidation requires device
+residency and zero fallback attempts within the guarded computation. See the
 [product verification report](../../agent/results/2026-08-30-npu-product-reduction.md).
 
 See the [active known-issues ledger](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)
@@ -652,25 +692,23 @@ source "$CANN_SET_ENV"
 npu-smi info
 export ASCEND_RT_VISIBLE_DEVICES=<allocated-device>
 
-sync_run=1 python -m pytest -q -s \
+set -o pipefail
+backend_fallback=error sync_run=1 python -m pytest -q -s \
   tests/backends/npu/test_acl.py \
   tests/backends/test_acl_dtype_preservation.py \
   2>&1 | tee "$TMPDIR/acl-launcher-close.log"
 ```
 
-The run counts only if all four owners actually executed on the NPU. Prove
-there was no CPU fallback before reading the result as a pass:
-
-```bash
-if rg -i "fallback cpu|cpu fallback" "$TMPDIR/acl-launcher-close.log"; then
-  echo "CPU fallback detected: this is NOT an NPU validation"; exit 1
-fi
-rg -i "execute launcher failed|aclrtSynchronizeStream failed" \
-  "$TMPDIR/acl-launcher-close.log" && exit 1
-```
+The run counts only if all four owners actually executed on the NPU with
+independent result/gradient checks. Each owner must synchronize inside
+`forbid_backend_fallbacks()` and record a zero `backend_fallback_count()` delta.
+Fallback attempts are NOT NPU validation, even if the request was rejected and
+caught by the test. Preserve `execute launcher failed` and
+`aclrtSynchronizeStream failed` diagnostics to attribute failures; log matching
+is not the fallback acceptance gate.
 
 Then repeat with `sync_run=0` to confirm the asynchronous path still launches
-on ACL, applying the same fallback check to its log.
+on ACL, applying the same runtime scope/counter checks.
 
 Until that run exists, this is a source-only change. Hosts without CANN and an
 Ascend device must not report hardware validation for it.
@@ -696,7 +734,7 @@ After the CANN and device preflight above, run the existing RMSNorm, rotary,
 SiLU and attention nodes with NPU selection, for example:
 
 ```bash
-PYTHONPATH=python JITTOR_TORCH_SHIM=1 JITTOR_TEST_DEVICES=npu sync_run=1 \
+PYTHONPATH=python JITTOR_TORCH_SHIM=1 JITTOR_TEST_DEVICES=npu backend_fallback=error sync_run=1 \
 python -m pytest -q -s tests/backends/npu/test_acl_torch_compat.py \
   -k 'rms_norm or rotary or silu or sdpa'
 ```
@@ -756,14 +794,14 @@ cohort):
 source "$CANN_SET_ENV"
 npu-smi info
 export ASCEND_RT_VISIBLE_DEVICES=<allocated-device>
-JITTOR_TEST_DEVICES=npu sync_run=1 python -m pytest -q -s \
+set -o pipefail
+JITTOR_TEST_DEVICES=npu backend_fallback=error sync_run=1 python -m pytest -q -s \
   tests/backends/npu/test_acl_torch_compat.py -k 'softmax or triu' \
   2>&1 | tee "$TMPDIR/acl-attribute-data.log"
-if rg -i "fallback cpu|cpu fallback" "$TMPDIR/acl-attribute-data.log"; then
-  echo "CPU fallback detected: this is NOT an attribute-channel validation"; exit 1
-fi
 ```
 
 Record the 910B3 model, CANN version, selected device, exact node ids, and the
-absence of CPU fallback in the handoff. A host-only decoder pass does not close
+zero native fallback-attempt delta in the handoff. The owner-specific node must
+enclose device execution and synchronization in `forbid_backend_fallbacks()`.
+A host-only decoder pass does not close
 8.06 and must not be reported as NPU hardware validation.

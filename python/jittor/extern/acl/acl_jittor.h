@@ -403,7 +403,7 @@ namespace jittor
         {"Conv2d", AclOpFunctions(aclnnConvolutionGetWorkspaceSize, aclnnConvolution)},
         {"Conv2dBackward", AclOpFunctions(aclnnConvolutionBackwardGetWorkspaceSize, aclnnConvolutionBackward)},
         {"ReduceMean", AclOpFunctions(aclnnMeanGetWorkspaceSize, aclnnMean)},
-        // {"ReduceProd", AclOpFunctions(aclnnProdDimGetWorkspaceSize, aclnnProdDim)},
+        {"ReduceProd", AclOpFunctions(aclnnProdGetWorkspaceSize, aclnnProd)},
         {"Select", AclOpFunctions(aclnnSWhereGetWorkspaceSize, aclnnSWhere)},
         {"RandomUniform", AclOpFunctions(aclnnInplaceUniformGetWorkspaceSize, aclnnInplaceUniform)},
         {"RandomNormal", AclOpFunctions(aclnnInplaceNormalGetWorkspaceSize, aclnnInplaceNormal)},

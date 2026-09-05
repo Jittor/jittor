@@ -18,6 +18,8 @@
 #endif
 #include "runtime/device.h"
 #include "runtime/backend.h"
+#include "runtime/backend_fallback.h"
+#include "ops/op_register.h"
 #include "executor.h"
 #include "var.h"
 #include "op.h"
@@ -711,6 +713,14 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         op->prepare_execution(jkl);
         prepared_jit_key = jkl.to_string();
         bool is_cuda = op->flag(OpFlags::_cuda);
+        // Array staging and explicit transfers are not CPU implementations of
+        // a requested accelerator computation. Reject a real fallback before
+        // moving its inputs or executing any CPU kernel.
+        if (runtime_use_cuda() && !is_cuda && !op->flag(OpFlags::_manual_device)
+                && op->type_id() != op_ids::array()) {
+            check_backend_fallback(op->name_ex(), accelerator_backend_id(), BackendId::Cpu,
+                "operator has no accelerator execution path for this invocation");
+        }
         #ifdef HAS_CUDA
         if (!is_cuda) {
             if (last_is_cuda) {

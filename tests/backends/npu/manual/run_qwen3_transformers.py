@@ -8,6 +8,7 @@ import time
 
 import numpy as np
 import jittor as jt
+from jittor._runtime.fallback import forbid_backend_fallbacks
 
 
 def main():
@@ -45,35 +46,37 @@ def main():
         attn_implementation="eager",
         local_files_only=True,
     )
+    jt.runtime.backend_fallback = "error"
     jt.flags.use_cuda = 1
     jt.flags.use_acl = 1
-    model.to(device=torch.device("cuda"))
-    model.eval()
-    jt.sync_all(True)
-    load_seconds = time.monotonic() - started
+    fallback_before = jt.core.backend_fallback_count()
+    with forbid_backend_fallbacks():
+        model.to(device=torch.device("cuda"))
+        model.eval()
+        jt.sync_all(True)
+        load_seconds = time.monotonic() - started
 
-    parameter_count = sum(parameter.numel() for parameter in model.parameters())
-    first_parameter = next(iter(model.parameters()))
-    if not first_parameter.is_cuda:
-        raise RuntimeError("model parameters are not resident on the accelerator")
+        parameter_count = sum(parameter.numel() for parameter in model.parameters())
+        first_parameter = next(iter(model.parameters()))
+        if not first_parameter.is_cuda:
+            raise RuntimeError("model parameters are not resident on the accelerator")
 
-    print("NPU_SMI_AFTER_LOAD_BEGIN", flush=True)
-    subprocess.run(["npu-smi", "info"], check=True)
-    print("NPU_SMI_AFTER_LOAD_END", flush=True)
+        print("NPU_SMI_AFTER_LOAD_BEGIN", flush=True)
+        subprocess.run(["npu-smi", "info"], check=True)
+        print("NPU_SMI_AFTER_LOAD_END", flush=True)
 
-    prompt = tokenizer.apply_chat_template(
-        [{"role": "user", "content": "What is 2+2? Answer briefly."}],
-        tokenize=False,
-        add_generation_prompt=True,
-        enable_thinking=False,
-    )
-    encoded = tokenizer(prompt, return_tensors="np")
-    input_ids = torch.from_numpy(encoded["input_ids"].astype(np.int64))
-    attention_mask = torch.from_numpy(encoded["attention_mask"].astype(np.int64))
+        prompt = tokenizer.apply_chat_template(
+            [{"role": "user", "content": "What is 2+2? Answer briefly."}],
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
+        )
+        encoded = tokenizer(prompt, return_tensors="np")
+        input_ids = torch.from_numpy(encoded["input_ids"].astype(np.int64))
+        attention_mask = torch.from_numpy(encoded["attention_mask"].astype(np.int64))
 
-    generated_token_samples = []
-    generate_samples = []
-    with jt.log_capture_scope(log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+        generated_token_samples = []
+        generate_samples = []
         for _ in range(args.runs):
             started = time.monotonic()
             with torch.no_grad():
@@ -91,14 +94,7 @@ def main():
                 generated_ids[int(input_ids.shape[1]):])
             del generated
 
-    messages = [entry["msg"].lower() for entry in logs]
-    fallbacks = [message for message in messages if "fallback cpu" in message]
-    if fallbacks:
-        raise RuntimeError("CPU fallback detected during generation: " + fallbacks[0])
-
-    cpu_compile_ops = [message for message in messages if "compile cpu" in message]
-    if cpu_compile_ops:
-        raise RuntimeError("CPU-compiled operation during generation: " + cpu_compile_ops[0])
+    fallback_count = jt.core.backend_fallback_count() - fallback_before
 
     new_ids = generated_token_samples[-1]
     if any(ids != new_ids for ids in generated_token_samples):
@@ -106,10 +102,9 @@ def main():
             "non-deterministic greedy generation: " +
             repr(generated_token_samples))
     result = {
-        "cpu_compile_count": len(cpu_compile_ops),
-        "cpu_compile_ops": cpu_compile_ops,
         "dtype": str(first_parameter.dtype),
-        "fallback_count": len(fallbacks),
+        "fallback_count": fallback_count,
+        "fallback_policy": "error",
         "generate_seconds": statistics.median(generate_samples),
         "generate_median_seconds": statistics.median(generate_samples),
         "generate_samples": generate_samples,

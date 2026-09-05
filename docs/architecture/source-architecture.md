@@ -303,6 +303,32 @@ and restore the prior registration on exit. Direct legacy hook/library attribute
 assignment is rejected. None of this removes the remaining ACL source converter
 or its broader Python replacements, which belong to the legacy-backend migration.
 
+### Backend Fallback Policy
+
+`NativeRuntime` owns `backend_fallback`, exposed through both `jt.flags` and
+`jt.runtime`. The default is `warn`; `error` rejects an automatic cross-backend
+computation, and `allow` permits it without warning. Invalid assignments leave
+the previous policy intact. The executor checks CPU-only execution before
+migrating inputs; array staging, fetch and explicit device transfers are not
+computational fallback. A generic kernel on the requested device is not a
+cross-backend fallback either.
+
+The legacy ACL executor preflights the complete fused group or standalone
+operation before execution. Only an explicitly unsupported operation/variant
+can request CPU fallback. SDK, shape and kernel execution failures clean up and
+propagate their original exception; they are not routing signals. A permitted
+fallback restores the prior execution mode, operator flags and fused context
+even if CPU execution fails. Family-internal SDK resource cleanup still has
+separately tracked work; host-only tests do not establish NPU hardware support.
+
+`core.backend_fallback_count()` counts cross-backend decisions, including denied
+attempts, not completed CPU computations. Hardware gates use `error`.
+`_runtime.fallback.forbid_backend_fallbacks()` also checks a count delta after a
+normal return, detecting attempts whose exceptions were swallowed by a caller.
+It preserves a primary exception and does not synchronize implicitly: the caller
+must execute and synchronize the work inside the scope. NPU pytest fixtures and
+standalone ecosystem runners use this interface instead of parsing log wording.
+
 The C++ `src/misc/` directory no longer exists. Support code is grouped by its
 actual role; this is a source-layout change, not a change to helper algorithms
 or a claim that the backend registry migration is complete.

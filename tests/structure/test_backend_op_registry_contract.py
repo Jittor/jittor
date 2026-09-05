@@ -63,9 +63,7 @@ def test_python_backend_prototype_is_retired_from_runtime_exports():
         "override_kernel", "register_kernel", "registered_kernel", "select_kernel",
         "try_dispatch", "unregister_kernel",
     }
-    assert imports["fallback"] == {
-        "BackendFallbackPolicy", "FallbackDecision", "FallbackError", "FallbackMode",
-    }
+    assert imports["fallback"] == {"forbid_backend_fallbacks"}
 
 
 def test_python_dispatch_queries_native_placement_without_fake_backend_capabilities():
