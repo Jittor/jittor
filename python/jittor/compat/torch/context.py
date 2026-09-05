@@ -3,6 +3,7 @@
 from __future__ import absolute_import
 
 import importlib
+import importlib.machinery
 import sys
 import types
 from collections.abc import MutableMapping
@@ -104,6 +105,32 @@ class ModuleRegistry:
         self._published = {}
         self.module_map = _RegistryModuleMap(self)
 
+    @staticmethod
+    def _ensure_import_metadata(name, module):
+        """Give synthetic modules the metadata a real distribution provides.
+
+        Installers build most ``torch.*`` nodes with ``ModuleType``.  Such
+        nodes normally have an empty ``__package__`` and no ``ModuleSpec``;
+        that is enough for direct attribute access but not for importlib's
+        package discovery on a standalone wheel.  Preserve metadata from
+        genuinely imported modules and fill only the missing synthetic
+        fields.
+        """
+
+        if not isinstance(name, str) or not hasattr(module, "__name__"):
+            return module
+        parent = name.rsplit(".", 1)[0] if "." in name else ""
+        if not getattr(module, "__package__", None):
+            module.__package__ = name if hasattr(module, "__path__") else parent
+        if getattr(module, "__spec__", None) is None:
+            is_package = hasattr(module, "__path__")
+            module.__spec__ = importlib.machinery.ModuleSpec(
+                name, loader=None, is_package=is_package
+            )
+            if is_package and getattr(module, "__path__", None) is None:
+                module.__path__ = []
+        return module
+
     def get(self, name):
         return self._modules.get(name)
 
@@ -112,13 +139,16 @@ class ModuleRegistry:
         if module is not None:
             if package and not hasattr(module, "__path__"):
                 module.__path__ = []
+            self._ensure_import_metadata(name, module)
             return self.publish(name, module)
         module = factory(name) if factory is not None else types.ModuleType(name)
         if package and not hasattr(module, "__path__"):
             module.__path__ = []
+        self._ensure_import_metadata(name, module)
         return self.publish(name, module)
 
     def publish(self, name, module, bind_parent=True, replace=False):
+        self._ensure_import_metadata(name, module)
         current = self._modules.get(name)
         if current is not None and current is not module:
             root_replacement = name == "torch" and (

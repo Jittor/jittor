@@ -125,6 +125,22 @@ class TestInstallContext(unittest.TestCase):
         self.assertIs(context.registry.alias("legacy.example", child), child)
         self.assertIs(legacy.example, child)
 
+    def test_registry_synthetic_modules_have_importlib_package_metadata(self):
+        """Standalone distribution nodes must be discoverable without a backend."""
+        context = self.context()
+        package = context.registry.ensure("torch.distributed", package=True)
+        child = context.registry.ensure("torch.distributed.tensor")
+
+        self.assertEqual(package.__package__, "torch.distributed")
+        self.assertEqual(child.__package__, "torch.distributed")
+        self.assertIsNotNone(package.__spec__)
+        self.assertIsNotNone(child.__spec__)
+        self.assertEqual(package.__spec__.name, "torch.distributed")
+        self.assertEqual(child.__spec__.name, "torch.distributed.tensor")
+        self.assertEqual(package.__spec__.submodule_search_locations, [])
+        self.assertIsNone(child.__spec__.submodule_search_locations)
+        self.assertIs(package.tensor, child)
+
     def test_registry_rejects_conflicting_publication(self):
         context = self.context()
         first = types.ModuleType("torch.example")
