@@ -829,6 +829,11 @@ class RuntimeContext:
         """Whether graph optimization is disabled for execution."""
         return self._flags.gopt_disable
 
+    @property
+    def exec_called(self):
+        """Number of executor synchronizations started by the runtime."""
+        return self._flags.exec_called
+
     def snapshot(self):
         """Return an immutable snapshot of the fields owned by this context."""
         return {
@@ -839,6 +844,7 @@ class RuntimeContext:
             "auto_flush_ops": int(self.auto_flush_ops),
             "no_grad": int(self.no_grad),
             "gopt_disable": int(self.gopt_disable),
+            "exec_called": int(self.exec_called),
         }
 
 
@@ -881,6 +887,10 @@ class RuntimeState:
     @property
     def gopt_disable(self):
         return self._context.gopt_disable
+
+    @property
+    def exec_called(self):
+        return self._context.exec_called
 
     @property
     def context(self):
