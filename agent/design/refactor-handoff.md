@@ -1955,7 +1955,7 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | --- | --- |
 | `coreops` | `97d5ce9a` 将 `disable_lock` 纳入 RuntimeContext owner，结构 26 passed；全局状态仍待迁移。 |
 | `device` | `3a617079` 增加 Native provider stale dispatch key freshness guard，C++ syntax/结构合同通过；真实 provider 仍待硬件机。 |
-| `device` | `d3f95d4a` 收紧 ACL invalid schema 类型 fail-closed，ACL 12 passed；CANN/NPU runner 接线仍待。 |
+| `device` | `d3f95d4a`/`4fc52287` 收紧 ACL invalid schema 类型与 consumer registration fail-closed，ACL 17 passed；CANN/NPU runner 接线仍待。 |
 | `compat` | `53e92aba` 增加 standalone torch publication graph validator/alias identity 合同，namespace 24 passed；独立 distribution 完整发布仍待。 |
 
 ## 7. 接手怎么开始

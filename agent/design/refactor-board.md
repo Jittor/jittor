@@ -1,6 +1,6 @@
 # 整改看板
 
-> 第202波：异机前置继续：`97d5ce9a` 迁移 disable_lock Runtime owner（结构 26 passed）；`3a617079` 增加 Native provider stale dispatch key freshness guard（结构 4 passed）；`d3f95d4a` 收紧 ACL invalid schema type fail-closed（ACL 12 passed）；`53e92aba` 增加 standalone torch publication graph validator（namespace 24 passed）。未声称 CUDA/NPU 实机。
+> 第202波：异机前置继续：`97d5ce9a` 迁移 disable_lock Runtime owner（结构 26 passed）；`3a617079` 增加 Native provider stale dispatch key freshness guard（结构 4 passed）；`d3f95d4a`/`4fc52287` 收紧 ACL invalid schema type 与 consumer registration fail-closed（ACL 17 passed）；`53e92aba` 增加 standalone torch publication graph validator（namespace 24 passed）。未声称 CUDA/NPU 实机。
 
 
 > 第201波：异机分发/ABI 前置继续：`b3034f92`/`97d5ce9a` 迁移 reuse_array Runtime owner（结构 25 passed）；`27ab42a0` 增加 NativeProviderLifecycleObserver lifecycle sink（C++/JIT contract 通过）；`34ab1d99` 增加 ACL AclAttrRunnerContract host-only binding/consume（ACL 13 passed）；`046d20c4` 完善 standalone torch distribution boundary（namespace 22 + structure 27 passed）。未声称 CUDA/NPU 硬件。
