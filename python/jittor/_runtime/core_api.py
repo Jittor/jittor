@@ -809,12 +809,18 @@ class RuntimeContext:
         """Whether the native runtime is configured to use CUDA."""
         return self._flags.use_cuda
 
+    @property
+    def lazy_execution(self):
+        """Whether graph execution is deferred until an explicit flush."""
+        return self._flags.lazy_execution
+
     def snapshot(self):
         """Return an immutable snapshot of the fields owned by this context."""
         return {
             "sync_run": int(self.sync_run),
             "device_id": int(self.device_id),
             "use_cuda": int(self.use_cuda),
+            "lazy_execution": int(self.lazy_execution),
         }
 
 
@@ -841,6 +847,10 @@ class RuntimeState:
     @property
     def use_cuda(self):
         return self._context.use_cuda
+
+    @property
+    def lazy_execution(self):
+        return self._context.lazy_execution
 
     @property
     def context(self):

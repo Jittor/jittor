@@ -29,6 +29,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "sync_run": jt.flags.sync_run,
         "device_id": getattr(jt.flags, "device_id", -1),
         "use_cuda": jt.flags.use_cuda,
+        "lazy_execution": jt.flags.lazy_execution,
     }
     assert jt.runtime.device_id == getattr(jt.flags, "device_id", -1)
     assert jt.runtime.use_cuda == jt.flags.use_cuda
@@ -72,3 +73,21 @@ def test_runtime_use_cuda_is_a_live_read_only_view():
             jt.runtime.use_cuda = 0
     finally:
         jt.flags.use_cuda = original
+
+
+def test_runtime_lazy_execution_is_a_live_read_only_view():
+    import jittor as jt
+
+    original = jt.flags.lazy_execution
+    try:
+        assert jt.runtime.lazy_execution == original
+        with jt.flag_scope(lazy_execution=0):
+            assert jt.runtime.lazy_execution == 0
+            assert jt.runtime.context.snapshot()["lazy_execution"] == 0
+        assert jt.runtime.lazy_execution == original
+        with pytest.raises(AttributeError):
+            jt.runtime.lazy_execution = 0
+        with pytest.raises(AttributeError):
+            jt.runtime.context.lazy_execution = 0
+    finally:
+        jt.flags.lazy_execution = original
