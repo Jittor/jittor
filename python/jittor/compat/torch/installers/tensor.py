@@ -1335,7 +1335,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         # Collect EVERY live optimizer (torch allows several at once — 3DGS uses a
         # Gaussian Adam + an exposure Adam; routing to just _current_optimizer
         # left the other's params with .grad=None -> KeyError 'grads' in step()).
-        reg = getattr(jt, "_active_optimizers", None)
+        reg = get_tensor_state(jt).active_optimizers
         opts = []
         if reg:
             alive = []
@@ -1459,7 +1459,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         g = getattr(self, "_torch_grad", None)
         if g is not None:
             return g
-        for r in getattr(jt, "_active_optimizers", None) or []:
+        for r in get_tensor_state(jt).active_optimizers:
             o = r() if callable(r) else r
             if o is None:
                 continue
@@ -1490,7 +1490,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 swallowed("torch/installers/tensor.py _grad_set: if value is None:", exc)
         # Write through by identity so step() sees manual grad assignment and,
         # critically, p.grad=None cannot leave an old optimizer slot behind.
-        for r in getattr(jt, "_active_optimizers", None) or []:
+        for r in get_tensor_state(jt).active_optimizers:
             o = r() if callable(r) else r
             if o is None:
                 continue

@@ -10,6 +10,7 @@ from .types import _dtype_to_str
 from ..diagnostics import EXPECTED, swallowed
 from .. import fsdp_hooks as _fsdp_hooks
 from .. import optimizer_kinds as _optimizer_kinds
+from .tensor_state import get_tensor_state
 
 
 def _install_optimizers(g, registry=None):
@@ -43,9 +44,7 @@ def _install_optimizers(g, registry=None):
         # supports several optimizers active at once (3DGS has a Gaussian Adam +
         # an exposure Adam); loss.backward() must fill grads for every one. Hold
         # weakrefs, pruned of dead entries + this same object.
-        reg = getattr(jt, "_active_optimizers", None)
-        if reg is None:
-            reg = jt._active_optimizers = []
+        reg = get_tensor_state(jt).active_optimizers
         reg[:] = [r for r in reg if r() is not None and r() is not self]
         reg.append(_weakref.ref(self))
         try:
