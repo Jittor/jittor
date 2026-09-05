@@ -174,6 +174,35 @@ def test_provider_capability_registration_rejects_bad_updates():
             raise AssertionError("invalid capability update was accepted")
 
 
+def test_provider_capability_removal_is_atomic_and_preserves_other_contracts():
+    backends = BackendRegistry((BackendSpec(
+        "cpu", capabilities={"stream": True, "allocator": True}),))
+    ops = OpRegistry(backends)
+    kernel = lambda value: value
+    ops.register("copy", "cpu", kernel)
+
+    updated = backends.remove_capability("cpu", "stream")
+    assert "stream" not in updated.capabilities
+    assert updated.supports("allocator")
+    assert ops.has_kernel("copy", "cpu")
+    try:
+        ops.dispatch_capability("copy", "cpu", "stream", object())
+    except MissingCapability:
+        pass
+    else:
+        raise AssertionError("removed capability remained dispatchable")
+
+    # Idempotent removal is useful during provider teardown and must not
+    # replace the provider object when there is no declaration to withdraw.
+    assert backends.remove_capability("cpu", "stream") is updated
+    try:
+        backends.remove_capability("missing", "stream")
+    except UnknownBackend:
+        pass
+    else:
+        raise AssertionError("capability removal accepted an unknown backend")
+
+
 def test_native_cpu_location_none_resolves_to_cpu():
     class NativeCpuValue:
         def location(self):

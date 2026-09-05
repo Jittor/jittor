@@ -165,6 +165,27 @@ class BackendRegistry:
             self._specs[name] = updated
             return updated
 
+    def remove_capability(self, name: str, capability: str) -> BackendSpec:
+        """Atomically withdraw a provider capability declaration.
+
+        Removing a capability is distinct from publishing ``False``: callers
+        can use the absence of a key to tell an unadvertised contract from a
+        provider that explicitly knows it cannot support that capability.
+        The immutable spec replacement keeps concurrent dispatch from seeing
+        a partially updated mapping.
+        """
+        if not isinstance(capability, str) or not capability:
+            raise ValueError("capability name must be a non-empty string")
+        with self._lock:
+            current = self.get(name)
+            if capability not in current.capabilities:
+                return current
+            capabilities = dict(current.capabilities)
+            del capabilities[capability]
+            updated = replace(current, capabilities=capabilities)
+            self._specs[name] = updated
+            return updated
+
     def names(self) -> Tuple[str, ...]:
         with self._lock:
             return tuple(self._specs)
