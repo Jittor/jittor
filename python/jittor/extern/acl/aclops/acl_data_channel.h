@@ -142,6 +142,21 @@ struct AclDescriptorKey {
     std::string device;
 };
 
+// A lease is an opaque, value-only identity for a cached descriptor.  It does
+// not own an aclTensor (and deliberately cannot be dereferenced by itself),
+// but lets a future runner check that its external handle survived cache and
+// device teardown before submitting work.
+struct AclDescriptorHandle {
+    std::string canonical;
+    std::string device;
+    uint64_t generation = 0;
+    uint64_t entry_generation = 0;
+
+    bool empty() const {
+        return canonical.empty();
+    }
+};
+
 inline void internal_error(const std::string& message);
 
 // Read-only view passed to a future OpAttr/ACL consumer.  Keeping field
@@ -411,11 +426,54 @@ public:
             canonical, builder(key));
         devices_.emplace(canonical, key.device);
         device_generations_.emplace(key.device, 0);
+        entry_generations_.emplace(canonical, 0);
         return inserted.first->second;
     }
 
     bool contains(const AclDescriptorKey& key) const {
         return entries_.find(canonical_descriptor_key(key)) != entries_.end();
+    }
+
+    // Acquire a value-only lease after the descriptor has been built.  The
+    // lease is intentionally separate from Descriptor so a CANN runner can
+    // keep its RAII object private while sharing this invalidation contract.
+    AclDescriptorHandle acquire(const AclDescriptorKey& key) const {
+        const std::string canonical = canonical_descriptor_key(key);
+        if (entries_.find(canonical) == entries_.end())
+            internal_error("ACL descriptor handle acquired for missing key");
+        AclDescriptorHandle handle;
+        handle.canonical = canonical;
+        handle.device = key.device;
+        handle.generation = device_generation(key.device);
+        handle.entry_generation = entry_generations_.find(canonical)->second;
+        return handle;
+    }
+
+    bool is_current(const AclDescriptorHandle& handle) const {
+        if (handle.empty() || handle.device.empty())
+            return false;
+        auto entry = entries_.find(handle.canonical);
+        if (entry == entries_.end())
+            return false;
+        auto owner = devices_.find(handle.canonical);
+        if (owner == devices_.end() || owner->second != handle.device)
+            return false;
+        auto epoch = entry_generations_.find(handle.canonical);
+        return device_generation(handle.device) == handle.generation &&
+               epoch != entry_generations_.end() &&
+               epoch->second == handle.entry_generation;
+    }
+
+    Descriptor& get(const AclDescriptorHandle& handle) {
+        if (!is_current(handle))
+            internal_error("stale ACL descriptor handle");
+        return entries_.at(handle.canonical);
+    }
+
+    const Descriptor& get(const AclDescriptorHandle& handle) const {
+        if (!is_current(handle))
+            internal_error("stale ACL descriptor handle");
+        return entries_.at(handle.canonical);
     }
 
     size_t size() const {
@@ -429,6 +487,7 @@ public:
         const std::string canonical = canonical_descriptor_key(key);
         const bool removed = entries_.erase(canonical) != 0;
         devices_.erase(canonical);
+        ++entry_generations_[canonical];
         return removed;
     }
 
@@ -448,6 +507,7 @@ public:
                 continue;
             }
             entries_.erase(it->first);
+            ++entry_generations_[it->first];
             it = devices_.erase(it);
             ++removed;
         }
@@ -465,6 +525,8 @@ public:
         // Treat a global cache clear as teardown for every observed device.
         for (auto& item : device_generations_)
             ++item.second;
+        for (auto& item : entry_generations_)
+            ++item.second;
         entries_.clear();
         devices_.clear();
     }
@@ -473,6 +535,7 @@ private:
     std::map<std::string, Descriptor> entries_;
     std::map<std::string, std::string> devices_;
     std::map<std::string, uint64_t> device_generations_;
+    std::map<std::string, uint64_t> entry_generations_;
 };
 
 // Shared host-side decoder contract.  It is intentionally not wired into an

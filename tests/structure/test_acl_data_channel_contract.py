@@ -188,6 +188,56 @@ int main() {
         subprocess.run([str(binary)], check=True)
 
 
+def test_acl_descriptor_handle_lifecycle_rejects_stale_entries_without_cann():
+    source = r'''
+#include "python/jittor/extern/acl/aclops/acl_data_channel.h"
+#include <string>
+int main() {
+    using namespace jittor::acl_data;
+    AclDescriptorKey key;
+    key.attribute_key = "v1|op=5:Scale";
+    key.shape = {2};
+    key.dtype = "float32";
+    key.layout = "contiguous";
+    key.device = "npu:0";
+    AclDescriptorCache<std::string> cache;
+    cache.get_or_create(key, [](const AclDescriptorKey&) {
+        return std::string("descriptor");
+    });
+    auto handle = cache.acquire(key);
+    if (!cache.is_current(handle) || cache.get(handle) != "descriptor") return 1;
+    if (!cache.erase(key) || cache.is_current(handle)) return 2;
+    try {
+        cache.get(handle);
+        return 3;
+    } catch (const jittor::InternalInvariantError&) {
+    }
+    cache.get_or_create(key, [](const AclDescriptorKey&) {
+        return std::string("descriptor-2");
+    });
+    if (cache.is_current(handle)) return 6;
+    try {
+        cache.get(handle);
+        return 7;
+    } catch (const jittor::InternalInvariantError&) {
+    }
+    auto fresh = cache.acquire(key);
+    cache.erase_device("npu:0");
+    if (cache.is_current(fresh)) return 8;
+    try {
+        cache.get(fresh);
+        return 9;
+    } catch (const jittor::InternalInvariantError&) {
+        return 0;
+    }
+}
+'''
+    with tempfile.TemporaryDirectory(prefix="jittor-acl-handle-run-") as directory:
+        binary = Path(directory) / "probe"
+        _compile(source, binary)
+        subprocess.run([str(binary)], check=True)
+
+
 def test_acl_data_owner_binds_identity_and_schema_for_future_registry():
     source = r'''
 #include "python/jittor/extern/acl/aclops/acl_data_channel.h"

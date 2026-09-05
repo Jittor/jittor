@@ -137,6 +137,37 @@ def test_descriptor_cache_builds_once_and_keeps_device_entries_separate():
     assert cache.device_generation("npu:1") == 3
 
 
+def test_descriptor_handle_rejects_single_and_device_teardown_staleness():
+    record = ACL_DATA.validate_acl_data({
+        "schema_version": 1,
+        "op": "Scale",
+        "fields": {},
+    })
+    key = ACL_DATA.descriptor_cache_key(
+        record, shape=(2,), dtype="float32", layout="contiguous", device="npu:0"
+    )
+    cache = ACL_DATA.DescriptorCache()
+    cache.get_or_create(key, lambda _: "descriptor")
+    handle = cache.acquire(key)
+    assert cache.is_current(handle)
+    assert cache.get(handle) == "descriptor"
+    assert cache.erase(key)
+    assert not cache.is_current(handle)
+    with pytest.raises(ACL_DATA.AclDataInternalError, match="stale"):
+        cache.get(handle)
+    cache.get_or_create(key, lambda _: "descriptor-2")
+    assert not cache.is_current(handle)
+    with pytest.raises(ACL_DATA.AclDataInternalError, match="stale"):
+        cache.get(handle)
+    fresh = cache.acquire(key)
+    cache.erase_device("npu:0")
+    assert not cache.is_current(fresh)
+    with pytest.raises(ACL_DATA.AclDataInternalError, match="stale"):
+        cache.get(fresh)
+    with pytest.raises(ACL_DATA.AclDataInternalError, match="missing"):
+        cache.acquire(key)
+
+
 @pytest.mark.parametrize("kwargs", [
     {"shape": (-1,), "dtype": "float32", "layout": "contiguous", "device": "npu:0"},
     {"shape": (1,), "dtype": "", "layout": "contiguous", "device": "npu:0"},

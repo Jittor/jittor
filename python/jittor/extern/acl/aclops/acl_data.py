@@ -197,6 +197,23 @@ def descriptor_cache_key(record, *, shape, dtype, layout, device="npu"):
     )
 
 
+class DescriptorHandle:
+    """Value-only lease for a host-side descriptor cache entry.
+
+    The handle never owns an ACL object.  It records the canonical key and
+    device generation so a future CANN consumer can reject work submitted
+    with a descriptor invalidated by ``erase`` or device teardown.
+    """
+
+    __slots__ = ("key", "device", "generation", "entry_generation")
+
+    def __init__(self, key, device, generation, entry_generation):
+        self.key = key
+        self.device = device
+        self.generation = generation
+        self.entry_generation = entry_generation
+
+
 class DescriptorCache:
     """Small host-only cache shell for a future ACL descriptor owner.
 
@@ -211,6 +228,9 @@ class DescriptorCache:
         # exists. A future CANN owner can reject stale handles without
         # exposing runtime pointers through the cache key.
         self._device_generations = defaultdict(int)
+        # Keep per-key tombstone epochs so an old lease stays stale even
+        # after an equivalent descriptor is rebuilt.
+        self._entry_generations = defaultdict(int)
 
     def get_or_create(self, key, builder):
         if key in self._entries:
@@ -219,6 +239,7 @@ class DescriptorCache:
         self._entries[key] = value
         if isinstance(key, tuple) and len(key) == 6 and isinstance(key[-1], str):
             self._device_generations.setdefault(key[-1], 0)
+            self._entry_generations.setdefault(key, 0)
         return value
 
     def __contains__(self, key):
@@ -227,9 +248,40 @@ class DescriptorCache:
     def __len__(self):
         return len(self._entries)
 
+    def acquire(self, key):
+        """Acquire a value-only lease for an existing descriptor entry."""
+        if key not in self._entries:
+            raise AclDataInternalError("ACL descriptor handle acquired for missing key")
+        if not isinstance(key, tuple) or len(key) != 6 or not isinstance(key[-1], str):
+            raise AclDataInternalError("ACL descriptor handle requires a canonical descriptor key")
+        return DescriptorHandle(
+            key, key[-1], self.device_generation(key[-1]), self._entry_generations[key]
+        )
+
+    def is_current(self, handle):
+        """Return whether a lease still names a live entry and generation."""
+        if not isinstance(handle, DescriptorHandle):
+            return False
+        return (
+            handle.key in self._entries
+            and isinstance(handle.key, tuple)
+            and len(handle.key) == 6
+            and handle.key[-1] == handle.device
+            and self.device_generation(handle.device) == handle.generation
+            and self._entry_generations.get(handle.key) == handle.entry_generation
+        )
+
+    def get(self, handle):
+        """Resolve a lease, rejecting stale handles before a backend call."""
+        if not self.is_current(handle):
+            raise AclDataInternalError("stale ACL descriptor handle")
+        return self._entries[handle.key]
+
     def erase(self, key):
         """Invalidate one descriptor identity without touching other devices."""
-        return self._entries.pop(key, None) is not None
+        removed = self._entries.pop(key, None) is not None
+        self._entry_generations[key] += 1
+        return removed
 
     def erase_device(self, device):
         """Invalidate every descriptor identity belonging to ``device``.
@@ -245,6 +297,7 @@ class DescriptorCache:
         for key in list(self._entries):
             if isinstance(key, tuple) and len(key) == 6 and key[-1] == device:
                 del self._entries[key]
+                self._entry_generations[key] += 1
                 removed += 1
         return removed
 
@@ -258,4 +311,6 @@ class DescriptorCache:
         # A global teardown invalidates descriptors on every known device.
         for device in list(self._device_generations):
             self._device_generations[device] += 1
+        for key in list(self._entry_generations):
+            self._entry_generations[key] += 1
         self._entries.clear()

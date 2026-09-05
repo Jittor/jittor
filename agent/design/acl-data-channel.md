@@ -31,6 +31,21 @@ holding a descriptor handle records the generation at creation and rejects it
 when the current generation differs. `clear()` is global teardown and advances
 all generations observed by the cache.
 
+The host-only cache exposes this lifecycle as a value-only handle contract:
+`acquire(key)` may only lease an existing entry, `is_current(handle)` checks
+both key presence and the device generation, and `get(handle)` fails closed
+with an internal error for a stale or malformed lease. A single-key `erase`
+invalidates the lease by removing its entry; device/global teardown also
+advances generations so an external owner cannot accidentally reuse a handle
+after recreating an equivalent descriptor. The handle contains no pointer,
+allocator, or CANN type and is therefore safe to carry across the future
+decoder/runner boundary.
+
+The cache also keeps a host-only per-key tombstone epoch. This means a handle
+from before `erase(key)` remains stale even if the same canonical key is built
+again immediately; checking only the device generation would incorrectly make
+that old handle appear live.
+
 The generation is lifecycle bookkeeping only. It is deliberately absent from
 the canonical descriptor key, so recreating an equivalent descriptor after
 teardown yields the same identity while an external owner can still detect a
