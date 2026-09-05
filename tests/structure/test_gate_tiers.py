@@ -209,6 +209,13 @@ class TestBudget(unittest.TestCase):
         self.assertEqual(report["workers"], 1)
         self.assertEqual(report["configured_workers"], 4)
 
+    def test_budget_report_rejects_non_positive_worker_counts(self):
+        for kwargs in ({"workers": 0}, {"workers": -1},
+                       {"workers": 1, "configured_workers": 0}):
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaises(ValueError):
+                    tiers.budget_report(**kwargs)
+
     def test_the_predicted_fast_tier_fits_the_budget(self):
         predicted = tiers.predicted_smoke_seconds()
         self.assertLessEqual(

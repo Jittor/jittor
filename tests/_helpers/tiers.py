@@ -373,7 +373,15 @@ def budget_report(workers=None, configured_workers=None):
     one-CPU container running a four-worker gate must say ``4 configured, 1
     actual`` rather than silently relabelling the run as a one-worker gate.
     """
-    workers = workers or SMOKE_WORKERS
+    if workers is None:
+        workers = SMOKE_WORKERS
+    if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
+        raise ValueError("workers must be a positive integer")
+    if configured_workers is not None and (
+            isinstance(configured_workers, bool)
+            or not isinstance(configured_workers, int)
+            or configured_workers < 1):
+        raise ValueError("configured_workers must be a positive integer")
     configured_workers = (workers if configured_workers is None
                           else configured_workers)
     effective_cpus = effective_cpu_count()
