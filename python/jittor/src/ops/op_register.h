@@ -62,6 +62,12 @@ struct OpInfo {
 struct NativeOpDispatchKey {
     OpId op_id = 0;
     string provider;
+    // Registry-owned identity for the provider instance.  The spelling is
+    // retained for diagnostics; native backend handles should cache this
+    // numeric field so a provider replacement cannot reuse an old key.
+    uint32 provider_id = 0;
+
+    bool valid() const { return op_id != 0 && provider_id != 0 && !provider.empty(); }
 };
 
 /**
@@ -89,6 +95,7 @@ public:
     void register_provider(const string& provider, bool replace = false);
     bool has_provider(const string& provider) const;
     vector<string> providers() const;
+    uint32 provider_id(const string& provider) const;
     void bind_provider(const string& name, const string& provider);
     NativeOpDispatchKey resolve_provider(const string& name,
                                          const string& provider) const;
@@ -100,7 +107,9 @@ private:
     mutable std::recursive_mutex mutex;
     unordered_map<string, OpInfo> entries;
     unordered_map<string, unordered_set<string>> provider_bindings;
+    unordered_map<string, uint32> provider_ids;
     OpId next_id = 1;
+    uint32 next_provider_id = 1;
 };
 
 // Intentionally process-lived: registration may happen from static

@@ -100,9 +100,13 @@ void NativeOpRegistry::register_provider(const string& provider, bool replace) {
         if (!replace)
             ASSERT(false) << "provider" << provider << "is already registered";
         iter->second.clear();
+        // A replacement is a new provider instance.  Never let a cached
+        // backend handle accidentally address the new instance.
+        provider_ids[provider] = next_provider_id++;
         return;
     }
     provider_bindings.emplace(provider, unordered_set<string>());
+    provider_ids.emplace(provider, next_provider_id++);
 }
 
 bool NativeOpRegistry::has_provider(const string& provider) const {
@@ -117,6 +121,14 @@ vector<string> NativeOpRegistry::providers() const {
     for (const auto& item : provider_bindings)
         result.push_back(item.first);
     return result;
+}
+
+uint32 NativeOpRegistry::provider_id(const string& provider) const {
+    std::lock_guard<std::recursive_mutex> guard(mutex);
+    auto iter = provider_ids.find(provider);
+    ASSERT(iter != provider_ids.end())
+        << "provider" << provider << "is not registered";
+    return iter->second;
 }
 
 void NativeOpRegistry::bind_provider(const string& name, const string& provider) {
@@ -140,12 +152,18 @@ NativeOpDispatchKey NativeOpRegistry::resolve_provider(
         << "Op" << name << "has no provider binding for" << provider;
     auto op_iter = entries.find(op_file_name);
     ASSERT(op_iter != entries.end()) << "Op" << name << "not found.";
-    return {op_iter->second.id, provider};
+    auto id_iter = provider_ids.find(provider);
+    ASSERT(id_iter != provider_ids.end())
+        << "provider" << provider << "has no identity";
+    return {op_iter->second.id, provider, id_iter->second};
 }
 
 bool NativeOpRegistry::unregister_provider(const string& provider) {
     std::lock_guard<std::recursive_mutex> guard(mutex);
-    return provider_bindings.erase(provider) != 0;
+    bool removed = provider_bindings.erase(provider) != 0;
+    if (removed)
+        provider_ids.erase(provider);
+    return removed;
 }
 
 void op_registe(const OpInfo& op_info) {

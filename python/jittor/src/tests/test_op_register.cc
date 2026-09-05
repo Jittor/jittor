@@ -61,12 +61,16 @@ JIT_TEST(native_op_registry_provider_dispatch_boundary) {
     auto key = registry.resolve_provider("jit_test_provider_dispatch", "cpu");
     ASSERT(key.op_id != (OpId)0);
     ASSERT(key.provider == "cpu");
+    ASSERT(key.valid());
+    ASSERT(key.provider_id == registry.provider_id("cpu"));
     ASSERT(registry.providers().size() == 2);
 
     // Replacing a provider is a teardown boundary; stale bindings cannot
     // survive into a new provider instance.
     registry.register_provider("cpu", true);
     ASSERT(registry.has_provider("cpu"));
+    auto replacement = registry.provider_id("cpu");
+    ASSERT(replacement != key.provider_id);
     ASSERT(!registry.unregister_provider("missing"));
     ASSERT(registry.unregister_provider("cpu"));
     ASSERT(!registry.has_provider("cpu"));
