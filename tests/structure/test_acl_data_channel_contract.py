@@ -165,6 +165,7 @@ int main() {
     });
     if (&a != &b || a != "descriptor-0" || builds != 1 || cache.size() != 1) return 4;
     if (cache.device_generation("npu:0") != 0) return 5;
+    if (cache.device_size("npu:0") != 1 || cache.device_size("npu:1") != 0) return 5;
     cache.get_or_create(other_shape, [&](const AclDescriptorKey&) {
         ++builds;
         return std::string("descriptor-1");
@@ -179,9 +180,11 @@ int main() {
         return std::string("descriptor-2");
     });
     if (cache.size() != 2 || cache.erase_device("npu:1") != 1) return 9;
+    if (cache.device_size("npu:1") != 0 || cache.device_size("npu:0") != 1) return 9;
     if (cache.device_generation("npu:1") != 1) return 10;
     if (cache.contains(device_one) || !cache.contains(other_shape)) return 11;
     if (cache.erase_device("npu:1") != 0 || cache.device_generation("npu:1") != 2) return 12;
+    if (cache.device_size("npu:1") != 0) return 12;
     try {
         make_descriptor_key(decoded, {-1}, "float32", "contiguous", "npu:0");
         return 13;

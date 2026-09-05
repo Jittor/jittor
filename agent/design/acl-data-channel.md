@@ -41,6 +41,13 @@ after recreating an equivalent descriptor. The handle contains no pointer,
 allocator, or CANN type and is therefore safe to carry across the future
 decoder/runner boundary.
 
+`device_size(device)` is a read-only teardown diagnostic. It counts only live
+descriptor entries owned by the named device, so a future CANN runner can
+assert that device-local release drained its own entries without inspecting
+descriptor values or relying on the global cache size. Empty device names are
+internal contract errors, just as they are for `erase_device()` and
+`device_generation()`.
+
 The cache also keeps a host-only per-key tombstone epoch. This means a handle
 from before `erase(key)` remains stale even if the same canonical key is built
 again immediately; checking only the device generation would incorrectly make

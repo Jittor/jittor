@@ -489,6 +489,20 @@ public:
         return entries_.size();
     }
 
+    // Expose only the number of live descriptors for one device.  A CANN
+    // teardown owner can use this to assert that its device-local release
+    // drained the expected entries without inspecting descriptor values.
+    size_t device_size(const std::string& device) const {
+        if (device.empty())
+            internal_error("ACL descriptor device must be non-empty");
+        size_t count = 0;
+        for (const auto& item : devices_) {
+            if (item.second == device)
+                ++count;
+        }
+        return count;
+    }
+
     // Invalidate exactly one descriptor before a device allocation or
     // descriptor owner is released.  This keeps a shape-equivalent entry
     // from retaining a stale runtime address while preserving other devices.
