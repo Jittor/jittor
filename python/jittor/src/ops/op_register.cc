@@ -9,16 +9,6 @@
 
 namespace jittor {
 
-static unordered_map<string, OpInfo>& op_info_map() {
-    static auto* registry = new unordered_map<string, OpInfo>();
-    return *registry;
-}
-
-static OpId& next_op_id() {
-    static OpId id = 1;
-    return id;
-}
-
 //: The one key the map is read and written by.
 //:
 //: `op_registe` used to insert under `op_info.name` while `has_op` and
@@ -30,11 +20,21 @@ static inline string op_key(const string& name) {
     return Op::op_name_to_file_name(name);
 }
 
-void op_registe(const OpInfo& op_info) {
-    if (has_op(op_info.name)) {
-        string op_file_name = op_key(op_info.name);
-        auto iter = op_info_map().find(op_file_name);
-        if (iter != op_info_map().end() && iter->second.source_path == op_info.source_path) {
+string NativeOpRegistry::key(const string& name) {
+    return op_key(name);
+}
+
+NativeOpRegistry& op_registry() {
+    static auto* registry = new NativeOpRegistry();
+    return *registry;
+}
+
+void NativeOpRegistry::register_op(const OpInfo& op_info) {
+    std::lock_guard<std::recursive_mutex> guard(mutex);
+    string op_file_name = key(op_info.name);
+    auto iter = entries.find(op_file_name);
+    if (iter != entries.end()) {
+        if (iter->second.source_path == op_info.source_path) {
             LOGvv << "replace duplicated op registration" << op_info.name
                 << "\nsource_path:" << op_info.source_path
                 << "\nextra_flags:" << op_info.extra_flags
@@ -53,33 +53,61 @@ void op_registe(const OpInfo& op_info) {
         << "\nconstructors:" << op_info.constructors.size()
         << "\nvar_members:" << op_info.var_members;
     OpInfo registered = op_info;
-    registered.id = next_op_id()++;
-    op_info_map()[op_key(op_info.name)] = move(registered);
+    registered.id = next_id++;
+    entries[op_file_name] = move(registered);
 }
 
-bool has_op(const string& name) {
-    return op_info_map().count(op_key(name));
+bool NativeOpRegistry::has(const string& name) const {
+    std::lock_guard<std::recursive_mutex> guard(mutex);
+    return entries.count(key(name));
 }
 
-OpInfo get_op_info(const string& name) {
-    auto iter = op_info_map().find(op_key(name));
-    ASSERT(iter != op_info_map().end()) << "Op" << name << "not found.";
+OpInfo NativeOpRegistry::get(const string& name) const {
+    std::lock_guard<std::recursive_mutex> guard(mutex);
+    auto iter = entries.find(key(name));
+    ASSERT(iter != entries.end()) << "Op" << name << "not found.";
     return iter->second;
 }
 
-OpId get_op_id(const string& name) {
-    return get_op_info(name).id;
+OpId NativeOpRegistry::id(const string& name) const {
+    return get(name).id;
 }
 
-vector<string> registered_op_names() {
+vector<string> NativeOpRegistry::names() const {
+    std::lock_guard<std::recursive_mutex> guard(mutex);
     vector<string> names;
-    names.reserve(op_info_map().size());
-    for (const auto& item : op_info_map()) names.push_back(item.first);
+    names.reserve(entries.size());
+    for (const auto& item : entries) names.push_back(item.first);
     return names;
 }
 
+bool NativeOpRegistry::unregister(const string& name) {
+    std::lock_guard<std::recursive_mutex> guard(mutex);
+    return entries.erase(key(name));
+}
+
+void op_registe(const OpInfo& op_info) {
+    op_registry().register_op(op_info);
+}
+
+bool has_op(const string& name) {
+    return op_registry().has(name);
+}
+
+OpInfo get_op_info(const string& name) {
+    return op_registry().get(name);
+}
+
+OpId get_op_id(const string& name) {
+    return op_registry().id(name);
+}
+
+vector<string> registered_op_names() {
+    return op_registry().names();
+}
+
 bool unregister_op(const string& name) {
-    return op_info_map().erase(op_key(name));
+    return op_registry().unregister(name);
 }
 
 #define DEFINE_BUILTIN_OP_ID(name) \

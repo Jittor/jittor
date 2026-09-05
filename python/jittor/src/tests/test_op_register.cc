@@ -33,6 +33,21 @@ JIT_TEST(op_register_reads_and_writes_the_same_key) {
     CHECKop(op_ids::binary(),!=,op_ids::array());
 }
 
+// NativeOpRegistry is the ownership boundary for storage and lifecycle.  A
+// local instance is useful in tests and for a future backend provider: it can
+// publish and tear down its registrations without touching the process-wide
+// compatibility facade above.
+JIT_TEST(native_op_registry_owns_lifecycle) {
+    NativeOpRegistry registry;
+    registry.register_op({"jit_test_native_registry", "test", ""});
+    ASSERT(registry.has("jit_test_native_registry"));
+    ASSERT(registry.get("jit_test_native_registry").id != (OpId)0);
+    ASSERT(registry.names().size() == 1);
+    ASSERT(registry.unregister("jit_test_native_registry"));
+    ASSERT(!registry.has("jit_test_native_registry"));
+    ASSERT(!registry.unregister("jit_test_native_registry"));
+}
+
 // A constructor resolved on first call, not at load time. The point is what
 // does NOT happen at construction: no registry lookup, so no dependency on
 // this translation unit's static initialiser running after the registry's.

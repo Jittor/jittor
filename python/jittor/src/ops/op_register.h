@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
+#include <mutex>
 #include <type_traits>
 #include <utility>
 #include "common.h"
@@ -49,6 +50,38 @@ struct OpInfo {
         return func_t(nullptr);
     }
 };
+
+/**
+ * Native owner for operator registration state.
+ *
+ * The public free functions below are kept as a compatibility boundary for
+ * generated operators and old callers.  Storage and lifecycle now have one
+ * owner, however: a lazily-created registry object owns the name map, id
+ * allocator, and lock together.  This is the native counterpart of the
+ * Python Backend/OpRegistry seam and gives future backend providers one
+ * explicit place to attach registration teardown.
+ */
+class NativeOpRegistry {
+public:
+    void register_op(const OpInfo& op_info);
+    bool has(const string& name) const;
+    OpInfo get(const string& name) const;
+    OpId id(const string& name) const;
+    vector<string> names() const;
+    bool unregister(const string& name);
+
+private:
+    static string key(const string& name);
+
+    mutable std::recursive_mutex mutex;
+    unordered_map<string, OpInfo> entries;
+    OpId next_id = 1;
+};
+
+// Intentionally process-lived: registration may happen from static
+// initializers in many translation units, while destruction order is not
+// specified across those units.
+NativeOpRegistry& op_registry();
 
 void op_registe(const OpInfo& op_info);
 bool has_op(const string& name);
