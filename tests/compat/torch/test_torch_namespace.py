@@ -41,6 +41,23 @@ def test_namespace_has_importable_package_spec():
     assert spec.submodule_search_locations == []
 
 
+def test_namespace_keeps_import_metadata_off_the_owner():
+    owner = types.ModuleType("jittor")
+    namespace = independent_torch_namespace(owner)
+    marker = object()
+
+    namespace.__spec__ = marker
+    namespace.__loader__ = marker
+    namespace.__file__ = "detached-torch"
+
+    assert namespace.__spec__ is marker
+    assert namespace.__loader__ is marker
+    assert namespace.__file__ == "detached-torch"
+    assert owner.__spec__ is None
+    assert owner.__loader__ is None
+    assert not hasattr(owner, "__file__")
+
+
 def test_namespace_writes_public_values_to_explicit_owner_only():
     owner = types.ModuleType("jittor")
     namespace = TorchNamespace(owner)

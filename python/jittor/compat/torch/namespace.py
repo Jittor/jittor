@@ -23,21 +23,30 @@ class TorchNamespace(types.ModuleType):
     leaking its install markers into the native Jittor namespace.
     """
 
+    _LOCAL_METADATA = frozenset({
+        "__name__", "__loader__", "__package__", "__spec__", "__path__",
+        "__file__", "__cached__", "__builtins__", "__doc__",
+    })
+
     def __init__(self, owner):
         if owner is None:
             raise TypeError("TorchNamespace requires an owner module")
         super().__init__("torch")
         object.__setattr__(self, "_torch_owner", owner)
-        self.__package__ = "torch"
+        # Import metadata belongs to this detached module.  In particular,
+        # assigning ``__spec__`` through the public delegation path would
+        # silently write it onto the Jittor owner and make the package look
+        # importable only by accident through ``__getattr__``.
+        object.__setattr__(self, "__package__", "torch")
         # A detached module is not created by the import machinery, so it
         # otherwise has ``__spec__ = None``.  That makes importlib treat the
         # published root as a broken module even though its children are
         # already registered in sys.modules.
-        self.__loader__ = None
-        self.__spec__ = importlib.machinery.ModuleSpec(
+        object.__setattr__(self, "__loader__", None)
+        object.__setattr__(self, "__spec__", importlib.machinery.ModuleSpec(
             "torch", loader=None, is_package=True
-        )
-        self.__path__ = []
+        ))
+        object.__setattr__(self, "__path__", [])
 
     @property
     def owner(self):
@@ -47,7 +56,7 @@ class TorchNamespace(types.ModuleType):
         return getattr(self.owner, name)
 
     def __setattr__(self, name, value):
-        if name.startswith("_") or name in {"__name__", "__package__", "__path__"}:
+        if name.startswith("_") or name in self._LOCAL_METADATA:
             return super().__setattr__(name, value)
         setattr(self.owner, name, value)
 
