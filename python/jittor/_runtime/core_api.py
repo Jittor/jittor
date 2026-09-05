@@ -960,6 +960,11 @@ class RuntimeContext:
         return self._flags.trace_py_var
 
     @property
+    def trace_depth(self):
+        """Maximum native debugger backtrace depth."""
+        return self._flags.trace_depth
+
+    @property
     def rewrite_op(self):
         """Whether generated JIT operator sources may be rewritten."""
         return self._flags.rewrite_op
@@ -1036,6 +1041,7 @@ class RuntimeContext:
             "rewrite_op": int(self.rewrite_op),
             "trace_var_data": int(self.trace_var_data),
             "trace_py_var": int(self.trace_py_var),
+            "trace_depth": int(self.trace_depth),
             "log_silent": int(self.log_silent),
             "log_sync": int(self.log_sync),
             "log_v": int(self.log_v),
@@ -1189,6 +1195,10 @@ class RuntimeState:
     @property
     def trace_py_var(self):
         return self._context.trace_py_var
+
+    @property
+    def trace_depth(self):
+        return self._context.trace_depth
 
     @property
     def rewrite_op(self):

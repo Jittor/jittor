@@ -60,6 +60,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "rewrite_op": jt.flags.rewrite_op,
         "trace_var_data": jt.flags.trace_var_data,
         "trace_py_var": jt.flags.trace_py_var,
+        "trace_depth": jt.flags.trace_depth,
         "log_silent": jt.flags.log_silent,
         "log_sync": jt.flags.log_sync,
         "log_v": jt.flags.log_v,
@@ -681,6 +682,24 @@ def test_runtime_trace_var_data_is_a_live_read_only_view():
             jt.runtime.context.trace_var_data = 0
     finally:
         jt.flags.trace_var_data = original
+
+
+def test_runtime_trace_depth_is_a_live_read_only_view():
+    import jittor as jt
+
+    original = jt.flags.trace_depth
+    try:
+        assert jt.runtime.trace_depth == original
+        with jt.flag_scope(trace_depth=3):
+            assert jt.runtime.trace_depth == 3
+            assert jt.runtime.context.snapshot()["trace_depth"] == 3
+        assert jt.runtime.trace_depth == original
+        with pytest.raises(AttributeError):
+            jt.runtime.trace_depth = 0
+        with pytest.raises(AttributeError):
+            jt.runtime.context.trace_depth = 0
+    finally:
+        jt.flags.trace_depth = original
 
 
 def test_runtime_rewrite_op_is_a_live_read_only_view():
