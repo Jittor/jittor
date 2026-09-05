@@ -37,6 +37,9 @@ _PUBLIC = {
     "validate_distribution_graph": (
         "jittor.compat.torch.distribution", "validate_distribution_graph"
     ),
+    "validate_distribution_publication": (
+        "jittor.compat.torch.distribution", "validate_distribution_publication"
+    ),
 }
 
 __all__ = sorted(_PUBLIC)

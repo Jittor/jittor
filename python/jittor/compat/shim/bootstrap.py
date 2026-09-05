@@ -10,6 +10,7 @@ from jittor.compat.torch.distribution import (
     DISTRIBUTION_MODULES, DISTRIBUTION_PACKAGE_ALIASES,
     distribution_manifest, distribution_module_names, distribution_package_names,
     validate_distribution_aliases, validate_distribution_graph,
+    validate_distribution_publication,
 )
 
 enable = activate
@@ -31,4 +32,5 @@ __all__ = [
     "distribution_package_names",
     "validate_distribution_aliases",
     "validate_distribution_graph",
+    "validate_distribution_publication",
 ]

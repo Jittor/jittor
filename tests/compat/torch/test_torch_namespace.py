@@ -69,6 +69,64 @@ def test_distribution_alias_validation_rejects_missing_or_duplicate_endpoints():
         raise AssertionError("duplicate alias source was accepted")
 
 
+def _small_distribution_fixture():
+    """Build a backend-free live publication graph for validator tests."""
+    import types
+
+    names = (
+        "torch.distributed",
+        "torch.distributed.tensor",
+        "torch.distributed.tensor._api",
+        "torch.distributed._tensor",
+    )
+    packages = ("torch.distributed", "torch.distributed.tensor")
+    aliases = (("torch.distributed._tensor", "torch.distributed.tensor"),)
+    modules = {name: types.ModuleType(name) for name in names}
+    for name in packages:
+        modules[name].__path__ = []
+    modules["torch.distributed"].tensor = modules["torch.distributed.tensor"]
+    modules["torch.distributed.tensor"]._api = modules[
+        "torch.distributed.tensor._api"
+    ]
+    modules["torch.distributed"]._tensor = modules["torch.distributed._tensor"]
+    manifest = {
+        "root": "torch.distributed",
+        "modules": names,
+        "packages": packages,
+        "aliases": aliases,
+    }
+    return modules, manifest
+
+
+def test_distribution_publication_validator_checks_live_parent_bindings():
+    from jittor.compat.torch.distribution import validate_distribution_publication
+
+    published, manifest = _small_distribution_fixture()
+    assert validate_distribution_publication(published, manifest)
+
+
+def test_distribution_publication_validator_rejects_unbound_or_malformed_nodes():
+    from jittor.compat.torch.distribution import validate_distribution_publication
+
+    published, manifest = _small_distribution_fixture()
+    del published["torch.distributed"].tensor
+    try:
+        validate_distribution_publication(published, manifest)
+    except ValueError as error:
+        assert "does not bind child" in str(error)
+    else:
+        raise AssertionError("unbound publication child was accepted")
+
+    published, manifest = _small_distribution_fixture()
+    published["torch.distributed.tensor"].__path__ = None
+    try:
+        validate_distribution_publication(published, manifest)
+    except ValueError as error:
+        assert "has no __path__" in str(error)
+    else:
+        raise AssertionError("malformed package node was accepted")
+
+
 def test_distribution_manifest_has_no_backend_import_dependency():
     import ast
     import pathlib

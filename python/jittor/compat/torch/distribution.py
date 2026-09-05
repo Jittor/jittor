@@ -132,7 +132,9 @@ def distribution_package_names():
     return tuple(sorted(packages, key=lambda item: (item.count("."), item)))
 
 
-def validate_distribution_graph(names):
+def validate_distribution_graph(
+    names, modules=DISTRIBUTION_MODULES, aliases=DISTRIBUTION_PACKAGE_ALIASES
+):
     """Validate that a published module-name set has complete parent closure.
 
     The function deliberately accepts names only, so it is safe to run while
@@ -140,11 +142,11 @@ def validate_distribution_graph(names):
     """
 
     present = set(names)
-    expected = set(DISTRIBUTION_MODULES)
+    expected = set(modules)
     missing = tuple(sorted(expected - present))
     if missing:
         raise ValueError("distribution graph is missing: %s" % ", ".join(missing))
-    validate_distribution_aliases(present)
+    validate_distribution_aliases(present, aliases)
     for name in expected:
         if name == "torch":
             continue
@@ -160,6 +162,60 @@ def validate_distribution_graph(names):
     return True
 
 
+def validate_distribution_publication(published, manifest=None):
+    """Validate the object graph emitted by an installer or bootstrap.
+
+    ``validate_distribution_graph`` only deals with names, which is enough for
+    a wheel manifest but not for a live installer registry.  This validator
+    stays import-neutral and checks the four invariants a publisher must keep:
+    every manifest node has the right module identity, package nodes expose a
+    path, every child is attached to its published parent, and aliases point
+    at published objects.  It deliberately never imports a backend or looks
+    at ``sys.modules``.
+    """
+
+    if not hasattr(published, "__getitem__") or not hasattr(published, "keys"):
+        raise TypeError("published distribution must be a mapping")
+    spec = distribution_manifest() if manifest is None else manifest
+    try:
+        modules = tuple(spec["modules"])
+        aliases = tuple(spec.get("aliases", ()))
+        packages = set(spec.get("packages", ()))
+    except (AttributeError, KeyError, TypeError) as exc:
+        raise TypeError("distribution manifest must provide modules/packages/aliases") from exc
+
+    validate_distribution_graph(published.keys(), modules=modules, aliases=aliases)
+    for name in modules:
+        try:
+            module = published[name]
+        except KeyError as exc:
+            raise ValueError("published distribution is missing %r" % name) from exc
+        if getattr(module, "__name__", None) != name:
+            raise ValueError(
+                "published module %r has wrong __name__ %r"
+                % (name, getattr(module, "__name__", None))
+            )
+        if name in packages and getattr(module, "__path__", None) is None:
+            raise ValueError("published package %r has no __path__" % name)
+        if name == "torch.distributed":
+            continue
+        parent_name, attr = name.rsplit(".", 1)
+        parent = published.get(parent_name)
+        if parent is None:
+            raise ValueError("published parent %r is missing for %r" % (parent_name, name))
+        if getattr(parent, attr, None) is not module:
+            raise ValueError(
+                "published parent %r does not bind child %r" % (parent_name, name)
+            )
+    for source, target in aliases:
+        if published[source] is published[target]:
+            raise ValueError(
+                "distribution alias %r and %r unexpectedly share an object"
+                % (source, target)
+            )
+    return True
+
+
 __all__ = [
     "DISTRIBUTION_ROOT",
     "DISTRIBUTION_MODULES",
@@ -169,4 +225,5 @@ __all__ = [
     "distribution_manifest",
     "validate_distribution_aliases",
     "validate_distribution_graph",
+    "validate_distribution_publication",
 ]
