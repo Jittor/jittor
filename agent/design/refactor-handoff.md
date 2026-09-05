@@ -2075,6 +2075,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `e4393dc3` 增加 ACL descriptor device_size lifecycle count，ACL 10 passed；CANN/NPU runner仍待。 |
 | `compat` | `db84f2d0` 强制 Torch bootstrap `__all__` canonical contract，namespace 40 passed；独立 distribution 完整发布仍待。 |
 
+### 2026-09-05 第二百一十六波：Runtime/lifecycle/lease/publication 前置
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `68b4d443` 将 `use_tensorcore` 纳入 RuntimeContext owner，结构通过；全局状态仍待迁移。 |
+| `device` | `32f1ea99` 统一 Native provider lifecycle value events，结构 12 passed。 |
+| `device` | `56231caa` 增加 ACL DescriptorCache generation-safe release，host-only 25 passed；CANN/NPU runner仍待。 |
+| `compat` | `645649b3` 拒绝 Torch publication graph 未声明额外模块，namespace 41 passed；独立 distribution 完整发布仍待。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。

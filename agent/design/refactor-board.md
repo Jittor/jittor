@@ -1,5 +1,8 @@
 # 整改看板
 
+> 第216波：`68b4d443` 迁移 use_tensorcore Runtime owner（结构通过）；`32f1ea99` 统一 Native provider lifecycle value events（结构 12 passed）；`56231caa` ACL DescriptorCache generation-safe release（host-only 25 passed）；`645649b3` Torch publication graph 拒绝未声明额外模块（namespace 41 passed）。未声称 CUDA/NPU 实机。
+
+
 > 第215波：`2999cce2` 迁移 use_cuda_host_allocator Runtime owner（结构 41 passed）；`97224dbb` Native provider lifecycle event ABI contract（结构 12/JIT通过）；`e4393dc3` ACL descriptor device_size lifecycle count（ACL 10 passed）；`db84f2d0` Torch bootstrap __all__ canonical contract（namespace 40 passed）。未声称 CUDA/NPU 实机。
 
 
