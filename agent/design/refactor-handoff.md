@@ -2030,6 +2030,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `build/layout` | `01374b45` 完成 tracer/NVTX/MANIFEST 脱离 utils drawer，打包/结构 17 passed；5.25 该尾项已闭环。 |
 | `compat` | `afc58e5f` 收紧 Torch distribution manifest canonical order/type，namespace 34 passed；独立 distribution 完整发布仍待。 |
 
+### 2026-09-05 第二百一十一波：Runtime/类型布局/分发前置
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `85d2279e` 将 cpu/device memory limits 纳入 RuntimeContext owner，结构/CPU 回归通过；全局状态仍待迁移。 |
+| `device` | `7b5bda2e` 增加 provider generation-safe unbind，registry 合同 10 passed。 |
+| `build/layout` | `e2fbafd6` canonicalize Nano types 到 `src/type`，结构 14 passed；2.14 其余 misc 拆散仍待。 |
+| `compat` | `69709bdc` 增加 standalone torch distribution metadata，namespace 36 passed；完整 distribution 仍待。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。

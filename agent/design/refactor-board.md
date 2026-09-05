@@ -1,5 +1,8 @@
 # 整改看板
 
+> 第211波：`85d2279e` 迁移 cpu/device memory limits Runtime owner（结构/CPU 通过）；`7b5bda2e` provider generation-safe unbind（结构 10 passed）；`e2fbafd6` canonicalize Nano types 到 `src/type`（结构 14 passed，2.14 子切片）；`69709bdc` standalone torch distribution metadata（namespace 36 passed）。未声称 CUDA/NPU 实机。
+
+
 > 第210波：`1b2ec5a9` 迁移 rewrite_op Runtime owner（结构 36 passed）；`1c042033` 统一 NativeProvider ABI admission（结构 10/JIT 1 passed）；`01374b45` 完成 5.25 tracer/NVTX/MANIFEST 脱离 utils drawer（打包/结构 17 passed，尾项已闭环）；`afc58e5f` 收紧 Torch distribution manifest canonical order/type（namespace 34 passed）。未声称 CUDA/NPU 实机。
 
 
@@ -499,7 +502,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 2.11 | `VarHolder` 不再是执行触发点 | 已合并 | coreops | 0f709cff。VarHolder 构造只登记持有关系；lazy/eager/auto-flush 策略迁入 Executor::submit_pending，Var 完成 Python 对象转换后才提交，显式 core.submit_pending 可无设备同步启动目标子图；删除 flush_suspended 与构造期吞错。构造/边界结构 2 项、CPU 显式提交/错误边界 2 项、GPU1 auto-flush 等价 1 项通过 |
 | 2.12 | 打破 `Executor ⇄ VarHolder` include 环 | 已合并 | coreops | 318a688e。依赖 exe.allocator 的 migrate_to_cpu/data/raw_ptr/set_data 四个 inline 实现移到 var_holder.cc，var_holder.h 不再包含 executor.h 或引用全局 exe；executor.cc -> var_holder.h 保持单向，方法签名与行为不变。无 Python include 的独立头语法编译、依赖方向结构节点、CPU submit_pending 节点通过 |
 | 2.13 | 执行相关全局状态 | 待领 | coreops | `409de4ea`/`f37da269`/`1c57b2a0`/`ac641485`/`8b1c2707`/`78fec631`/`04aae3a5`/`8eb8b7b2`/`61ae6160`/`7352b82d`/`ce1b9276`/`e8608976`/`a2f29c02` 已建立 RuntimeContext owner 与只读 Python view，迁移 `sync_run`/`device_id`/`use_cuda`/`lazy_execution`/`auto_flush_ops`/`no_grad`/`gopt_disable`/`exec_called`/`use_threading`/`profile_memory_enable`/`profiler_warmup`/`no_fuse`/`check_graph` owner、snapshot、flag_scope，结构 15 passed；其余 flags/device hooks 仍待迁移。 迁移 `8d70ae4a` 补 profiler_record_shape/hide_relay，结构 20 passed；仍是前置。 |
-| 2.14 | `src/misc/` 拆散 | 待领 | | |
+| 2.14 | `src/misc/` 拆散 | 待领 | | | `e2fbafd6` 完成 Nano 类型路径/引用迁移与结构合同 14 passed；其余 misc 拆散仍待。
 | 2.15 | NanoString | 已合并 | bindings | 9d5ed413（索引位宽 7→8、static_assert 把表与字段绑住、`ns_check_registration` 在注册期查索引与名字长度；"dtype 表改运行期注册"那半未做，见提交说明） |
 | 2.16 | 类型提升表 | 已合并 | bindings | d821c34a（int_dtype_promote 提升格；标量按 `_is_scalar` 标志认，不再按形状；float 标量把整数张量提到默认 float dtype）、a39a2f1c（补：双标量走提升格，交换左右操作数不再改变 dtype 与结果） |
 | 2.17 | 算子身份用注册期整型 id | 已合并 | coreops | 1d792e16。OpInfo 注册分配 OpId，核心/tuner/pass 名字比较归零，fast_strcmp 删除，Tape 用显式 pending flag；CPU 80 项、CUDA 5 项及结构契约通过 |
