@@ -1665,6 +1665,14 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `build` | `515ebf71` 将 compiler.py/pyjt_compiler.py 生成器签名纳入 build_core stamp，laziness 回归 9 passed。 |
 | `compat` | `e9b966e7` 修 FSDP2 共享参数重复梯度查找；`b468afcf` 抽 getitem transform context，`5e2667f6` 抽 ACL clamp runtime facade，分别有定向合同通过。 |
 
+### 2026-09-05 第一百七十波
+
+| 分区 | 结果 |
+| --- | --- |
+| `build` | `6c86fb20` 将可选 CuPy 从 `import jittor` 热路径移出，CPU/导入回归 2 passed，独立探针确认未加载 CuPy。 |
+| `compat` | `7eedcbd8` 将 SDPA flash stats 统一到 diagnostics facade，保留根属性兼容别名，定向 2 passed。 |
+| `codegen` | `b6de9642` 新增单 kernel 冷编译分段 profiling skill，区分源码生成、cache_compile、编译、链接、加载；clang 全流程实测通过，未宣称 3.18 性能目标完成。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
