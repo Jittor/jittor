@@ -94,6 +94,23 @@ empty operator as `InternalInvariantError`; decoding still classifies caller
 data as `UserError` before any ACL call. This owner boundary is host-only and
 does not claim that an ACL launcher consumes the channel yet.
 
+The owner also exposes `consume(record, canonical_cache_key, consumer)`. The
+callback receives an `AclDataView`, a short-lived read-only view with typed
+accessors (`int64`, `float64`, `boolean`, and the three vector forms),
+`has(name)`, and the validated operator/schema/cache-key metadata. The view
+checks the declaration again before returning a value and classifies a
+consumer asking for a wrong type or absent field as
+`InternalInvariantError`. This is the C++ decoder-to-attribute-consumer
+interface: an eventual `OpAttr` adapter can consume typed values without
+parsing generated source text or touching the decoder's map. It deliberately
+creates no ACL/CANN object, and the view cannot outlive the callback.
+
+`tests/structure/test_acl_data_channel_contract.py` compiles and executes a
+consumer probe on a CPU-only host. That probe checks defaults, vector order,
+cache-key identity, and the wrong-type failure path. Passing this contract is
+not evidence that an ACL operator has been migrated or that an Ascend device
+executed anything.
+
 Malformed user data (unknown field, wrong type, missing required value, a
 non-canonical vector representation, or an unsupported schema version) raises
 `UserError`; a violated internal schema

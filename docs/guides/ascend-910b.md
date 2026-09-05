@@ -699,6 +699,14 @@ python -m pytest -q \
   tests/structure/test_acl_data_schema_normalizer.py
 ```
 
+For the future generated-attribute consumer, `AclDataOwner::consume` supplies
+a bounded `AclDataView` with typed scalar/vector accessors. This view is only
+valid during the callback, so an eventual ACL adapter must copy values into its
+`OpAttr`/descriptor arguments before returning. The host contract exercises
+that callback and its wrong-type failure path; it does not construct an
+`aclTensor`, invoke `aclnn`, or imply that the attribute channel is wired into
+an existing NPU operator.
+
 On an Ascend 910B3, the first attribute owner must be validated only after its
 Python caller, generated `OpAttr` construction, and JIT key are migrated in the
 same change. Source the CANN environment, select the allocated card, and run

@@ -124,6 +124,97 @@ struct AclDecodedData {
     std::string cache_key;
 };
 
+inline void internal_error(const std::string& message);
+
+// Read-only view passed to a future OpAttr/ACL consumer.  Keeping field
+// lookup here prevents each launcher from reimplementing type checks or
+// reaching into the decoder's mutable map.  The view borrows the decoded
+// record and therefore must not outlive the consume() call below.
+class AclDataView {
+public:
+    const std::string& op() const {
+        return decoded_->op;
+    }
+
+    uint32_t schema_version() const {
+        return decoded_->schema_version;
+    }
+
+    const std::string& cache_key() const {
+        return decoded_->cache_key;
+    }
+
+    bool has(const std::string& name) const {
+        return decoded_->fields.find(name) != decoded_->fields.end();
+    }
+
+    const AclDataValue& value(const std::string& name) const {
+        auto field = decoded_->fields.find(name);
+        if (field == decoded_->fields.end())
+            internal_error("ACL attribute consumer requested absent field: " + name);
+        auto declaration = schema_->find(name);
+        if (declaration == schema_->end())
+            internal_error("ACL attribute consumer requested undeclared field: " + name);
+        if (field->second.type != declaration->second.type)
+            internal_error("ACL decoded field type disagrees with schema: " + name);
+        return field->second;
+    }
+
+    int64_t int64(const std::string& name) const {
+        const auto& item = value(name);
+        require_type(name, item, AclDataType::int64);
+        return item.int_value;
+    }
+
+    double float64(const std::string& name) const {
+        const auto& item = value(name);
+        require_type(name, item, AclDataType::float64);
+        return item.float_value;
+    }
+
+    bool boolean(const std::string& name) const {
+        const auto& item = value(name);
+        require_type(name, item, AclDataType::boolean);
+        return item.bool_value;
+    }
+
+    const std::vector<int64_t>& int64_vector(const std::string& name) const {
+        const auto& item = value(name);
+        require_type(name, item, AclDataType::int64_vector);
+        return item.int_values;
+    }
+
+    const std::vector<double>& float64_vector(const std::string& name) const {
+        const auto& item = value(name);
+        require_type(name, item, AclDataType::float64_vector);
+        return item.float_values;
+    }
+
+    const std::vector<bool>& bool_vector(const std::string& name) const {
+        const auto& item = value(name);
+        require_type(name, item, AclDataType::bool_vector);
+        return item.bool_values;
+    }
+
+private:
+    friend class AclDataOwner;
+
+    AclDataView(const AclDecodedData& decoded, const AclAttrSchema& schema)
+        : decoded_(&decoded), schema_(&schema) {}
+
+    static void require_type(const std::string& name,
+                             const AclDataValue& value,
+                             AclDataType expected) {
+        if (value.type != expected)
+            internal_error("ACL attribute consumer requested " +
+                           std::string(type_name(expected)) + " field " + name +
+                           ", got " + type_name(value.type));
+    }
+
+    const AclDecodedData* decoded_;
+    const AclAttrSchema* schema_;
+};
+
 inline void user_error(const std::string& message) {
     throw UserError(message);
 }
@@ -291,6 +382,18 @@ public:
     AclDecodedData decode(const AclDataRecord& record,
                           std::string& canonical_key) const {
         return decode_acl_data(record, op_, schema_, canonical_key);
+    }
+
+    // Decode once and expose only a validated, read-only view to the consumer.
+    // A future ACL owner can use this to construct OpAttr values without
+    // parsing generated source text.  No ACL/CANN object is created here.
+    template <typename Consumer>
+    void consume(const AclDataRecord& record,
+                 std::string& canonical_key,
+                 Consumer&& consumer) const {
+        AclDecodedData decoded = decode(record, canonical_key);
+        AclDataView view(decoded, schema_);
+        consumer(view);
     }
 
 private:

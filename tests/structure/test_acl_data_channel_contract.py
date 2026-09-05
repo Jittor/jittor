@@ -34,6 +34,8 @@ def test_acl_data_channel_header_is_cann_free_and_compilable():
     assert "AclDataRecord" in text
     assert "AclDecodedData decode_acl_data" in text
     assert "class AclDataOwner" in text
+    assert "class AclDataView" in text
+    assert "void consume(const AclDataRecord& record" in text
     assert "const AclAttrSchema& schema() const" in text
     assert "ACL data owner name must be non-empty" in text
     _compile('#include "python/jittor/extern/acl/aclops/acl_data_channel.h"\n')
@@ -117,6 +119,55 @@ int main() {
 }
 '''
     with tempfile.TemporaryDirectory(prefix="jittor-acl-owner-run-") as directory:
+        binary = Path(directory) / "probe"
+        _compile(source, binary)
+        subprocess.run([str(binary)], check=True)
+
+
+def test_acl_data_owner_exposes_validated_read_only_consumer_view():
+    source = r'''
+#include "python/jittor/extern/acl/aclops/acl_data_channel.h"
+#include <vector>
+int main() {
+    using namespace jittor::acl_data;
+    AclAttrSchema schema;
+    AclAttrField dim;
+    dim.type = AclDataType::int64;
+    schema.emplace("dim", dim);
+    AclAttrField axes;
+    axes.type = AclDataType::int64_vector;
+    schema.emplace("axes", axes);
+    AclAttrField keep;
+    keep.type = AclDataType::boolean;
+    keep.required = false;
+    keep.has_default = true;
+    keep.default_value = AclDataValue::bool_value_of(false);
+    schema.emplace("keepdim", keep);
+    AclDataOwner owner("Softmax", schema);
+    AclDataRecord record;
+    record.op = "Softmax";
+    record.fields.emplace("dim", AclDataValue::int64_value(-1));
+    record.fields.emplace("axes", AclDataValue::int64_vector({1, 3}));
+    std::string key;
+    int callback_count = 0;
+    owner.consume(record, key, [&](const AclDataView& attrs) {
+        ++callback_count;
+        if (attrs.op() != "Softmax" || attrs.schema_version() != 1) return;
+        if (attrs.int64("dim") != -1) return;
+        if (attrs.int64_vector("axes") != std::vector<int64_t>({1, 3})) return;
+        if (!attrs.has("keepdim") || attrs.boolean("keepdim")) return;
+        if (attrs.cache_key() != key || key.find("0x") != std::string::npos) return;
+        try {
+            attrs.float64("dim");
+            return;
+        } catch (const jittor::InternalInvariantError&) {
+            ++callback_count;
+        }
+    });
+    return callback_count == 2 ? 0 : 1;
+}
+'''
+    with tempfile.TemporaryDirectory(prefix="jittor-acl-consumer-run-") as directory:
         binary = Path(directory) / "probe"
         _compile(source, binary)
         subprocess.run([str(binary)], check=True)
