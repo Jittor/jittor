@@ -266,5 +266,37 @@ inline AclDecodedData decode_acl_data(const AclDataRecord& record,
     return result;
 }
 
+// The owner is the C++ boundary that a future ACL registry entry will hold.
+// It owns the operator identity and schema, so callers cannot accidentally
+// decode one operator with another operator's fields or a temporary schema.
+// Keeping this object ACL-free lets registry and attribute tests run without
+// CANN while preserving the same decode/key contract used on device.
+class AclDataOwner {
+public:
+    AclDataOwner(std::string op, AclAttrSchema schema)
+        : op_(std::move(op)), schema_(std::move(schema)) {
+        if (op_.empty())
+            internal_error("ACL data owner name must be non-empty");
+        validate_schema(schema_);
+    }
+
+    const std::string& op() const {
+        return op_;
+    }
+
+    const AclAttrSchema& schema() const {
+        return schema_;
+    }
+
+    AclDecodedData decode(const AclDataRecord& record,
+                          std::string& canonical_key) const {
+        return decode_acl_data(record, op_, schema_, canonical_key);
+    }
+
+private:
+    std::string op_;
+    AclAttrSchema schema_;
+};
+
 } // namespace acl_data
 } // namespace jittor

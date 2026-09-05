@@ -85,6 +85,15 @@ AclDecodedData decode_acl_data(
     const AclAttrSchema& schema, std::string& canonical_cache_key);
 ```
 
+The registry-facing owner wrapper is `AclDataOwner`. It owns an immutable
+operator name and schema copy and exposes `op()`, `schema()`, and
+`decode(record, canonical_cache_key)`. A future ACL registry entry should hold
+one owner rather than pass an operator string and a temporary schema through
+each launcher call. Constructing an owner validates its schema and rejects an
+empty operator as `InternalInvariantError`; decoding still classifies caller
+data as `UserError` before any ACL call. This owner boundary is host-only and
+does not claim that an ACL launcher consumes the channel yet.
+
 Malformed user data (unknown field, wrong type, missing required value, a
 non-canonical vector representation, or an unsupported schema version) raises
 `UserError`; a violated internal schema

@@ -33,6 +33,9 @@ def test_acl_data_channel_header_is_cann_free_and_compilable():
     assert "#include <acl/" not in text
     assert "AclDataRecord" in text
     assert "AclDecodedData decode_acl_data" in text
+    assert "class AclDataOwner" in text
+    assert "const AclAttrSchema& schema() const" in text
+    assert "ACL data owner name must be non-empty" in text
     _compile('#include "python/jittor/extern/acl/aclops/acl_data_channel.h"\n')
 
 
@@ -74,3 +77,46 @@ int main() {
         _compile(source, binary)
         subprocess.run([str(binary)], check=True)
 
+
+def test_acl_data_owner_binds_identity_and_schema_for_future_registry():
+    source = r'''
+#include "python/jittor/extern/acl/aclops/acl_data_channel.h"
+int main() {
+    using namespace jittor::acl_data;
+    AclAttrSchema schema;
+    AclAttrField axis;
+    axis.type = AclDataType::int64;
+    schema.emplace("axis", axis);
+    AclAttrField keep;
+    keep.type = AclDataType::boolean;
+    keep.required = false;
+    keep.has_default = true;
+    keep.default_value = AclDataValue::bool_value_of(true);
+    schema.emplace("keepdim", keep);
+    AclDataOwner owner("Softmax", schema);
+    if (owner.op() != "Softmax" || owner.schema().size() != 2) return 1;
+    AclDataRecord record;
+    record.op = "Softmax";
+    record.fields.emplace("axis", AclDataValue::int64_value(-1));
+    std::string key;
+    auto decoded = owner.decode(record, key);
+    if (!decoded.fields.at("keepdim").bool_value) return 2;
+    if (key != decoded.cache_key || key.find("0x") != std::string::npos) return 3;
+    record.op = "Triu";
+    try {
+        owner.decode(record, key);
+        return 4;
+    } catch (const jittor::UserError&) {
+    }
+    try {
+        AclDataOwner invalid("", AclAttrSchema());
+        return 5;
+    } catch (const jittor::InternalInvariantError&) {
+        return 0;
+    }
+}
+'''
+    with tempfile.TemporaryDirectory(prefix="jittor-acl-owner-run-") as directory:
+        binary = Path(directory) / "probe"
+        _compile(source, binary)
+        subprocess.run([str(binary)], check=True)
