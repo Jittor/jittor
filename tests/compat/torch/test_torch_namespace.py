@@ -497,6 +497,34 @@ def test_distribution_bootstrap_requires_complete_unique_all_surface():
         raise AssertionError("duplicate bootstrap __all__ was accepted")
 
 
+def test_distribution_bootstrap_rejects_non_string_all_entries():
+    """A wheel facade must expose a conventional, deterministic __all__."""
+    from jittor.compat.shim import bootstrap
+    from jittor.compat.torch.distribution import validate_distribution_bootstrap
+
+    class Wrapper:
+        pass
+
+    wrapper = Wrapper()
+    for name in bootstrap.__all__:
+        setattr(wrapper, name, getattr(bootstrap, name))
+    wrapper.__all__ = tuple(bootstrap.__all__[:-1]) + (object(),)
+    try:
+        validate_distribution_bootstrap(wrapper)
+    except ValueError as error:
+        assert "only strings" in str(error)
+    else:
+        raise AssertionError("non-string bootstrap __all__ entry was accepted")
+
+    wrapper.__all__ = None
+    try:
+        validate_distribution_bootstrap(wrapper)
+    except ValueError as error:
+        assert "must define a string __all__" in str(error)
+    else:
+        raise AssertionError("invalid bootstrap __all__ container was accepted")
+
+
 def test_namespace_has_importable_package_spec():
     """A published detached root must remain a valid importlib package."""
     import importlib.util
