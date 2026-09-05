@@ -1,5 +1,8 @@
 # 整改看板
 
+> 第214波：`22f0889c`/`a09ca82f` 迁移 trace_depth Runtime owner/pyi（结构 40 passed）；`fbbc69d7` Native generation-checked consumer lease（结构 11/JIT 2 passed）；`faca96ac` ACL consumer view 生命周期约束（ACL 20 passed）；`c7393df6` Torch distribution graph 输入 fail-closed（namespace 39 passed）。未声称 CUDA/NPU 实机。
+
+
 > 第213波：`1f67af34` 迁移 trace_py_var Runtime owner（结构 39 passed）；`8c38c342` Native provider scopes move-only RAII（结构 10/JIT通过）；`a8e4b743` ACL DescriptorCache malformed canonical key fail-closed（host-only 22 passed）；`5f97723f` Torch distribution 显式 aliases fail-closed（namespace 38 passed）。未声称 CUDA/NPU 实机。
 
 
