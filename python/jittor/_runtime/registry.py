@@ -139,7 +139,13 @@ class BackendRegistry:
         # implicit), while lightweight callers commonly use ``cpu``/``host``.
         if location in (None, "none", "cpu", "host"):
             return "cpu"
-        if isinstance(location, str) and location.startswith("cuda"):
+        # Providers may expose either a concrete device (``cuda:0``) or the
+        # backend-level location (``cuda``) while selecting a device later.
+        # Both names identify the same dispatch backend; malformed/unknown
+        # locations must continue to fail closed below.
+        if location == "cuda" or (
+            isinstance(location, str) and location.startswith("cuda:")
+        ):
             return "cuda"
         raise UnknownBackend("cannot resolve backend for location: %r" % (location,))
 

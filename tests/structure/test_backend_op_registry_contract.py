@@ -66,6 +66,27 @@ def test_dispatch_value_selects_backend_from_runtime_location():
     assert ops.dispatch_value("where", CudaValue(), 2) == ("cuda", 2)
 
 
+def test_dispatch_value_accepts_backend_level_cuda_location_and_rejects_unknown():
+    class BackendCudaValue:
+        def location(self):
+            return "cuda"
+
+    class UnknownValue:
+        def location(self):
+            return "metal:0"
+
+    backends = BackendRegistry((BackendSpec("cpu"), BackendSpec("cuda")))
+    ops = OpRegistry(backends)
+    ops.register("identity", "cuda", lambda value, suffix: ("cuda", suffix))
+    assert ops.dispatch_value("identity", BackendCudaValue(), 7) == ("cuda", 7)
+    try:
+        ops.dispatch_value("identity", UnknownValue(), 7)
+    except UnknownBackend as exc:
+        assert "metal:0" in str(exc)
+    else:
+        raise AssertionError("unknown runtime location was silently dispatched")
+
+
 def test_native_cpu_location_none_resolves_to_cpu():
     class NativeCpuValue:
         def location(self):
