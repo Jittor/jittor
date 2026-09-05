@@ -92,8 +92,13 @@ bool NativeOpRegistry::unregister(const string& name) {
     return removed;
 }
 
-void NativeOpRegistry::register_provider(const string& provider, bool replace) {
-    ASSERT(!provider.empty()) << "provider name must not be empty";
+void NativeOpRegistry::register_provider(
+        const NativeProviderRegistration& registration, bool replace) {
+    ASSERT(registration.valid())
+        << "invalid native provider registration for" << registration.name
+        << "abi_version:" << registration.abi_version
+        << "struct_size:" << registration.struct_size;
+    const string& provider = registration.name;
     std::lock_guard<std::recursive_mutex> guard(mutex);
     auto iter = provider_bindings.find(provider);
     if (iter != provider_bindings.end()) {
@@ -103,10 +108,16 @@ void NativeOpRegistry::register_provider(const string& provider, bool replace) {
         // A replacement is a new provider instance.  Never let a cached
         // backend handle accidentally address the new instance.
         provider_ids[provider] = next_provider_id++;
+        provider_registrations[provider] = registration;
         return;
     }
     provider_bindings.emplace(provider, unordered_set<string>());
     provider_ids.emplace(provider, next_provider_id++);
+    provider_registrations.emplace(provider, registration);
+}
+
+void NativeOpRegistry::register_provider(const string& provider, bool replace) {
+    register_provider(NativeProviderRegistration(provider), replace);
 }
 
 bool NativeOpRegistry::has_provider(const string& provider) const {
@@ -127,6 +138,15 @@ uint32 NativeOpRegistry::provider_id(const string& provider) const {
     std::lock_guard<std::recursive_mutex> guard(mutex);
     auto iter = provider_ids.find(provider);
     ASSERT(iter != provider_ids.end())
+        << "provider" << provider << "is not registered";
+    return iter->second;
+}
+
+NativeProviderRegistration NativeOpRegistry::provider_registration(
+        const string& provider) const {
+    std::lock_guard<std::recursive_mutex> guard(mutex);
+    auto iter = provider_registrations.find(provider);
+    ASSERT(iter != provider_registrations.end())
         << "provider" << provider << "is not registered";
     return iter->second;
 }
@@ -155,14 +175,20 @@ NativeOpDispatchKey NativeOpRegistry::resolve_provider(
     auto id_iter = provider_ids.find(provider);
     ASSERT(id_iter != provider_ids.end())
         << "provider" << provider << "has no identity";
-    return {op_iter->second.id, provider, id_iter->second};
+    auto registration_iter = provider_registrations.find(provider);
+    ASSERT(registration_iter != provider_registrations.end())
+        << "provider" << provider << "has no ABI registration";
+    return {op_iter->second.id, provider, id_iter->second,
+            registration_iter->second.abi_version};
 }
 
 bool NativeOpRegistry::unregister_provider(const string& provider) {
     std::lock_guard<std::recursive_mutex> guard(mutex);
     bool removed = provider_bindings.erase(provider) != 0;
-    if (removed)
+    if (removed) {
         provider_ids.erase(provider);
+        provider_registrations.erase(provider);
+    }
     return removed;
 }
 

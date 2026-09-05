@@ -54,7 +54,8 @@ JIT_TEST(native_op_registry_owns_lifecycle) {
 JIT_TEST(native_op_registry_provider_dispatch_boundary) {
     NativeOpRegistry registry;
     registry.register_op({"jit_test_provider_dispatch", "test", ""});
-    registry.register_provider("cpu");
+    NativeProviderRegistration cpu_registration("cpu");
+    registry.register_provider(cpu_registration);
     registry.register_provider("cuda");
     registry.bind_provider("jit_test_provider_dispatch", "cpu");
 
@@ -63,6 +64,11 @@ JIT_TEST(native_op_registry_provider_dispatch_boundary) {
     ASSERT(key.provider == "cpu");
     ASSERT(key.valid());
     ASSERT(key.provider_id == registry.provider_id("cpu"));
+    ASSERT(key.abi_version == NATIVE_PROVIDER_ABI_VERSION);
+    auto published = registry.provider_registration("cpu");
+    ASSERT(published.name == cpu_registration.name);
+    ASSERT(published.abi_version == cpu_registration.abi_version);
+    ASSERT(published.struct_size == cpu_registration.struct_size);
     ASSERT(registry.providers().size() == 2);
 
     // Replacing a provider is a teardown boundary; stale bindings cannot
@@ -75,6 +81,21 @@ JIT_TEST(native_op_registry_provider_dispatch_boundary) {
     ASSERT(registry.unregister_provider("cpu"));
     ASSERT(!registry.has_provider("cpu"));
     ASSERT(registry.unregister("jit_test_provider_dispatch"));
+}
+
+JIT_TEST(native_op_registry_rejects_incompatible_provider_abi) {
+    NativeOpRegistry registry;
+    expect_error([&]() {
+        registry.register_provider(NativeProviderRegistration(
+            "bad_abi", NATIVE_PROVIDER_ABI_VERSION + 1));
+    });
+    expect_error([&]() {
+        registry.register_provider(NativeProviderRegistration(
+            "truncated", NATIVE_PROVIDER_ABI_VERSION,
+            sizeof(NativeProviderRegistration) - 1));
+    });
+    ASSERT(!registry.has_provider("bad_abi"));
+    ASSERT(!registry.has_provider("truncated"));
 }
 
 // A constructor resolved on first call, not at load time. The point is what

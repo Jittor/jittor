@@ -51,6 +51,33 @@ struct OpInfo {
     }
 };
 
+// Versioned, backend-neutral registration record. Backend libraries may be
+// built independently of the core, so registration carries an explicit ABI
+// contract instead of relying on a backend-specific object layout.
+static const uint32 NATIVE_PROVIDER_ABI_VERSION = 1;
+
+struct NativeProviderRegistration {
+    string name;
+    uint32 abi_version;
+    uint32 struct_size;
+
+    NativeProviderRegistration()
+        : abi_version(NATIVE_PROVIDER_ABI_VERSION),
+          struct_size(sizeof(NativeProviderRegistration)) {}
+
+    explicit NativeProviderRegistration(const string& name,
+                                        uint32 abi_version = NATIVE_PROVIDER_ABI_VERSION,
+                                        uint32 struct_size = 0)
+        : name(name), abi_version(abi_version),
+          struct_size(struct_size ? struct_size : sizeof(NativeProviderRegistration)) {}
+
+    bool valid() const {
+        return !name.empty() &&
+            abi_version == NATIVE_PROVIDER_ABI_VERSION &&
+            struct_size >= sizeof(NativeProviderRegistration);
+    }
+};
+
 /**
  * ABI-neutral identity of one provider-backed operator implementation.
  *
@@ -66,8 +93,14 @@ struct NativeOpDispatchKey {
     // retained for diagnostics; native backend handles should cache this
     // numeric field so a provider replacement cannot reuse an old key.
     uint32 provider_id = 0;
+    // Contract version used to create this key. Callers can reject stale
+    // keys before handing them to a backend ABI.
+    uint32 abi_version = 0;
 
-    bool valid() const { return op_id != 0 && provider_id != 0 && !provider.empty(); }
+    bool valid() const {
+        return op_id != 0 && provider_id != 0 && !provider.empty() &&
+            abi_version == NATIVE_PROVIDER_ABI_VERSION;
+    }
 };
 
 /**
@@ -92,10 +125,13 @@ public:
     // Provider lifecycle and dispatch ownership are intentionally separate
     // from OpInfo registration.  A provider may bind several operators and
     // teardown removes all of its bindings atomically with its identity.
+    void register_provider(const NativeProviderRegistration& registration,
+                           bool replace = false);
     void register_provider(const string& provider, bool replace = false);
     bool has_provider(const string& provider) const;
     vector<string> providers() const;
     uint32 provider_id(const string& provider) const;
+    NativeProviderRegistration provider_registration(const string& provider) const;
     void bind_provider(const string& name, const string& provider);
     NativeOpDispatchKey resolve_provider(const string& name,
                                          const string& provider) const;
@@ -108,6 +144,7 @@ private:
     unordered_map<string, OpInfo> entries;
     unordered_map<string, unordered_set<string>> provider_bindings;
     unordered_map<string, uint32> provider_ids;
+    unordered_map<string, NativeProviderRegistration> provider_registrations;
     OpId next_id = 1;
     uint32 next_provider_id = 1;
 };
