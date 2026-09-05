@@ -452,6 +452,36 @@ def test_distribution_bootstrap_rejects_copied_or_wrapped_exports():
         raise AssertionError("incomplete bootstrap surface was accepted")
 
 
+def test_distribution_bootstrap_requires_complete_unique_all_surface():
+    from jittor.compat.shim import bootstrap
+    from jittor.compat.torch.distribution import validate_distribution_bootstrap
+
+    class Wrapper:
+        pass
+
+    wrapper = Wrapper()
+    for name in bootstrap.__all__:
+        setattr(wrapper, name, getattr(bootstrap, name))
+
+    wrapper.__all__ = tuple(
+        name for name in bootstrap.__all__ if name != "distribution_manifest"
+    )
+    try:
+        validate_distribution_bootstrap(wrapper)
+    except ValueError as error:
+        assert "__all__ is missing" in str(error)
+    else:
+        raise AssertionError("incomplete bootstrap __all__ was accepted")
+
+    wrapper.__all__ = tuple(bootstrap.__all__) + ("distribution_manifest",)
+    try:
+        validate_distribution_bootstrap(wrapper)
+    except ValueError as error:
+        assert "duplicate names" in str(error)
+    else:
+        raise AssertionError("duplicate bootstrap __all__ was accepted")
+
+
 def test_namespace_has_importable_package_spec():
     """A published detached root must remain a valid importlib package."""
     import importlib.util

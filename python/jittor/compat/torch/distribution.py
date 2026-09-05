@@ -445,6 +445,27 @@ def validate_distribution_bootstrap(bootstrap):
             raise ValueError(
                 "distribution bootstrap export %r is not the canonical object" % name
             )
+    try:
+        public_names = tuple(bootstrap.__all__)
+    except (AttributeError, TypeError) as exc:
+        raise ValueError(
+            "distribution bootstrap must define a string __all__"
+        ) from exc
+    if any(not isinstance(name, str) for name in public_names):
+        raise ValueError(
+            "distribution bootstrap __all__ must contain only strings"
+        )
+    if len(set(public_names)) != len(public_names):
+        raise ValueError(
+            "distribution bootstrap __all__ contains duplicate names"
+        )
+    missing_public = tuple(
+        name for name in constants + functions if name not in public_names
+    )
+    if missing_public:
+        raise ValueError(
+            "distribution bootstrap __all__ is missing %r" % (missing_public,)
+        )
     validate_distribution_boundary()
     return True
 
