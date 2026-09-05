@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；当前状态基线 `cc135c7d`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 当前 1625 个 |
+| 分支 | `2.0-refactor`；当前状态基线 `f239e2ed`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 当前 1630 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **211** / 进行中 **0** / 待领 **61** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
@@ -1767,6 +1767,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `f37da269` 将 CPU `flatten` 接入 Backend/OpRegistry，补真实 shape/value 与 registry 合同；合同 8 passed。4.03/4.04 完整 native 接线仍待领。 |
 | `gates` | 0.15 loadgroup 进一步审计确认共享状态组不可再拆，扩 worker 收益递减；本波无新代码提交，最终 300s 目标仍待领。 |
 | `compat` | 本波未形成安全的独立 torch 发布边界提交，保留 7.12 当前状态。 |
+
+### 2026-09-05 第一百八十三波
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `1c57b2a0` 将 `use_cuda` 纳入 RuntimeContext owner，结构回归 5 passed；2.13 其余执行状态仍待领。 |
+| `device` | `32e8517b` 增加 OpRegistry `has_kernel`/`unregister` 生命周期与 MissingKernel 错误，结构 9 passed；4.03/4.04 native 全量接线仍待领。 |
+| `compat` | `41eb41c2` 建立独立 TorchNamespace seam，2 passed；默认 `torch is jittor` 兼容路径保留，7.12 完整模块迁移仍待领。 |
+| `gates` | `f239e2ed` 增加可执行 smoke budget/bottleneck 报告，结构 13 passed，预测 445.75/480s；最终真实性能验收仍待领。 |
 
 ## 7. 接手怎么开始
 
