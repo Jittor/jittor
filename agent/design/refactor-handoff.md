@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；当前状态基线 `4f3317c8`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 当前 1715 个 |
+| 分支 | `2.0-refactor`；当前状态基线 `8fcdc20f`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 当前 1721 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **211** / 进行中 **0** / 待领 **61** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
@@ -1902,6 +1902,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `coreops` | 2.13 仍有约 80 个 C++ flag 及 `exe`/`tflag_count`/`hold_vars`/`sync_ptr` 等全局状态未统一，现有 RuntimeContext 字段迁移不能关闭整项。 |
 | `device` | 4.03/4.04 native C++ OpInfo、按 `(op id, backend)` kernel 分派、CUDA/ACL provider 生命周期仍缺，Python registry 只能算前置。 |
 | `compat` | 7.12 仍有 `sys.modules[__name__] = _jittor`、`_torch_*` 别名和独立 distribution 缺口，TorchNamespace 阶段不能关闭整项。 |
+
+### 2026-09-05 第一百九十七波：异机测试前置迁移
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `8d70ae4a` 增加 profiler_record_shape/hide_relay RuntimeContext owner，结构 20 passed；2.13 仍有大量全局 flags 未迁移。 |
+| `device` | `c1a67c91` 集中 native C++ OpRegistry ownership，保留旧 API，C++14 syntax/contract 通过；provider-aware dispatch 仍待。 |
+| `compat` | `8fcdc20f` 将独立 Torch publication 拆到显式边界，namespace 17 passed；独立 distribution、默认发布身份和 alias 清理仍待。 |
+| `device` | `e2731c0f`/`2dcc3448` 建立无 CANN ACL data schema/normalizer，host-only 合同 11 passed；C++ decoder、属性 owner、descriptor cache、910B3 实机仍待。 |
 
 ## 7. 接手怎么开始
 
