@@ -157,6 +157,24 @@ struct NativeProviderConsumerContract {
 };
 
 /**
+ * Coherent value-only input for a native provider consumer.
+ *
+ * A consumer that reads provider metadata and an operator dispatch key in
+ * separate calls can observe two different provider generations.  The
+ * registry publishes this pair while holding one lock, so a CUDA/ACL
+ * consumer can validate the pair first and only then consult its own handle
+ * table.  The values remain safe to retain after registry teardown.
+ */
+struct NativeProviderConsumerDispatch {
+    NativeProviderMetadata metadata;
+    NativeOpDispatchKey dispatch_key;
+
+    bool valid() const {
+        return NativeProviderConsumerContract::accepts(metadata, dispatch_key);
+    }
+};
+
+/**
  * Non-owning lifecycle sink for a native provider.
  *
  * Providers keep their device handles and kernel callables on their side of
@@ -209,6 +227,10 @@ public:
     // Return a value snapshot for host-side provider consumers.  No registry
     // storage or backend handle is exposed through this API.
     NativeProviderMetadata provider_metadata(const string& provider) const;
+    // Atomically publish provider metadata and one bound operator key.  This
+    // closes the replacement race between separate metadata/key lookups.
+    NativeProviderConsumerDispatch provider_consumer_dispatch(
+        const string& name, const string& provider) const;
     // The observer is non-owning and receives future transitions only.  The
     // returned pointer is the previous observer, mirroring the node lifecycle
     // observer API and making scoped installation straightforward.

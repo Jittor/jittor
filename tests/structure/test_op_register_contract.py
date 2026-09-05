@@ -161,3 +161,25 @@ def test_native_provider_consumer_contract_is_value_only_and_fail_closed():
     assert "void*" not in contract
     assert "NativeProviderConsumerContract::accepts(metadata, key)" in jit_test
     assert "!NativeProviderConsumerContract::accepts(metadata, replacement_key)" in jit_test
+
+
+def test_native_provider_consumer_dispatch_is_atomic_and_value_only():
+    header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
+        encoding="utf-8")
+    source = (REPO_ROOT / "python/jittor/src/ops/op_register.cc").read_text(
+        encoding="utf-8")
+    jit_test = (REPO_ROOT / "python/jittor/src/tests/test_op_register.cc").read_text(
+        encoding="utf-8")
+    assert "struct NativeProviderConsumerDispatch" in header
+    assert "NativeProviderConsumerDispatch provider_consumer_dispatch(" in header
+    assert "NativeOpRegistry::provider_consumer_dispatch" in source
+    contract = header[header.index("struct NativeProviderConsumerDispatch"):
+                      header.index("struct NativeProviderLifecycleObserver")]
+    assert "NativeProviderMetadata metadata" in contract
+    assert "NativeOpDispatchKey dispatch_key" in contract
+    assert "NativeProviderConsumerContract::accepts(metadata, dispatch_key)" in contract
+    assert "shared_ptr" not in contract
+    assert "unique_ptr" not in contract
+    assert "void*" not in contract
+    assert "registry.provider_consumer_dispatch" in jit_test
+    assert "!registry.is_current(consumer_dispatch.dispatch_key)" in jit_test

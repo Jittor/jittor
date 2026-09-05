@@ -78,6 +78,13 @@ JIT_TEST(native_op_registry_provider_dispatch_boundary) {
     ASSERT(metadata.struct_size == sizeof(NativeProviderRegistration));
     ASSERT(NativeProviderConsumerContract::accepts(metadata));
     ASSERT(NativeProviderConsumerContract::accepts(metadata, key));
+    auto consumer_dispatch = registry.provider_consumer_dispatch(
+        "jit_test_provider_dispatch", "cpu");
+    ASSERT(consumer_dispatch.valid());
+    ASSERT(consumer_dispatch.metadata.provider_id == key.provider_id);
+    ASSERT(consumer_dispatch.dispatch_key.op_id == key.op_id);
+    ASSERT(consumer_dispatch.dispatch_key.provider_id == key.provider_id);
+    ASSERT(registry.is_current(consumer_dispatch.dispatch_key));
     ASSERT(registry.providers().size() == 2);
 
     // Replacing a provider is a teardown boundary; stale bindings cannot
@@ -87,6 +94,10 @@ JIT_TEST(native_op_registry_provider_dispatch_boundary) {
     auto replacement = registry.provider_id("cpu");
     ASSERT(replacement != key.provider_id);
     ASSERT(!registry.is_current(key));
+    ASSERT(!registry.is_current(consumer_dispatch.dispatch_key));
+    // The value remains structurally valid, but its key is stale after
+    // replacement and must be rejected before a backend handle lookup.
+    ASSERT(consumer_dispatch.valid());
     // The old value snapshot is safe to retain while the provider is
     // replaced; it must never alias registry-owned storage.
     ASSERT(metadata.provider_id != replacement);

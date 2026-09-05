@@ -213,6 +213,31 @@ NativeProviderMetadata NativeOpRegistry::provider_metadata(
     return NativeProviderMetadata(registration_iter->second, id_iter->second);
 }
 
+NativeProviderConsumerDispatch NativeOpRegistry::provider_consumer_dispatch(
+        const string& name, const string& provider) const {
+    std::lock_guard<std::recursive_mutex> guard(mutex);
+    string op_file_name = key(name);
+    auto provider_iter = provider_bindings.find(provider);
+    ASSERT(provider_iter != provider_bindings.end())
+        << "provider" << provider << "is not registered";
+    ASSERT(provider_iter->second.count(op_file_name))
+        << "Op" << name << "has no provider binding for" << provider;
+    auto op_iter = entries.find(op_file_name);
+    ASSERT(op_iter != entries.end()) << "Op" << name << "not found.";
+    auto id_iter = provider_ids.find(provider);
+    ASSERT(id_iter != provider_ids.end())
+        << "provider" << provider << "has no identity";
+    auto registration_iter = provider_registrations.find(provider);
+    ASSERT(registration_iter != provider_registrations.end())
+        << "provider" << provider << "has no ABI registration";
+    NativeProviderConsumerDispatch result;
+    result.metadata = NativeProviderMetadata(registration_iter->second,
+                                             id_iter->second);
+    result.dispatch_key = {op_iter->second.id, provider, id_iter->second,
+                           registration_iter->second.abi_version};
+    return result;
+}
+
 NativeProviderLifecycleObserver* NativeOpRegistry::set_lifecycle_observer(
         NativeProviderLifecycleObserver* observer) {
     std::lock_guard<std::recursive_mutex> guard(mutex);
