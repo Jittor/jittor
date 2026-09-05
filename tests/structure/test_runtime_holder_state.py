@@ -12,12 +12,22 @@ SRC = ROOT / "python/jittor/src"
 def test_native_holder_state_cursor_lifecycle(tmp_path):
     source = tmp_path / "holder_state.cc"
     source.write_text(r'''
-#include "runtime/holder_state.h"
+#include "runtime/runtime.h"
 #include <cassert>
 #include <type_traits>
 namespace jittor { struct VarHolder { int id; }; }
 using namespace jittor;
 int main() {
+    NativeRuntime isolated;
+    assert(isolated.executor().allocator == nullptr);
+    assert(isolated.executor().temp_allocator == nullptr);
+    assert(!isolated.executor().flush_active);
+    assert(!isolated.executor().last_is_cuda);
+    assert(isolated.executor().last_run_ops == 0);
+    assert(&runtime_executor() == &native_runtime().executor());
+    assert(&runtime_holder_state() == &native_runtime().holders());
+    assert(&isolated.executor() != &runtime_executor());
+    assert(&isolated.holders() != &runtime_holder_state());
     static_assert(!std::is_copy_constructible<RuntimeHolderState>::value, "owner");
     static_assert(!std::is_move_constructible<RuntimeHolderState>::value, "cursor");
     RuntimeHolderState roots;
@@ -55,6 +65,7 @@ int main() {
     result = subprocess.run(
         [os.environ.get("CXX", "g++"), "-std=c++14", "-D_GLIBCXX_DEBUG",
          "-I", str(SRC), str(source), str(SRC / "runtime/holder_state.cc"),
+         str(SRC / "runtime/runtime.cc"),
          "-o", str(executable)],
         capture_output=True, text=True, timeout=60,
     )
@@ -69,3 +80,11 @@ def test_holder_globals_are_no_longer_exported():
     assert "EXTERN_LIB list<VarHolder*>::iterator sync_ptr" not in header
     assert "list<VarHolder*> hold_vars;" not in source
     assert "runtime_holder_state().add(self)" in source
+
+
+def test_executor_instance_is_owned_by_native_runtime():
+    executor_header = (SRC / "executor.h").read_text(encoding="utf-8")
+    executor_source = (SRC / "executor.cc").read_text(encoding="utf-8")
+    assert "EXTERN_LIB Executor exe;" not in executor_header
+    assert "Executor exe;" not in executor_source
+    assert "EXTERN_LIB Executor& runtime_executor();" in executor_header

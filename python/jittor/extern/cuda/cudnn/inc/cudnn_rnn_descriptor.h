@@ -69,7 +69,7 @@ struct DropoutDescriptor {
     float dropout;
     void *stateSpace;
     // Freed through the allocator that served it: this outlives the call, and
-    // `exe.allocator` is not necessarily the same object by then.
+    // `runtime_executor().allocator` is not necessarily the same object by then.
     Allocator *stateAllocator;
 
     DropoutDescriptor(cudnnHandle_t handle, float dropout, int seed)
@@ -77,7 +77,7 @@ struct DropoutDescriptor {
         checkCudaErrors(cudnnCreateDropoutDescriptor(&desc));
         if (dropout > 0) {
             checkCudaErrors(cudnnDropoutGetStatesSize(handle, &stateSize));
-            stateAllocator = exe.allocator;
+            stateAllocator = runtime_executor().allocator;
             stateSpace = stateAllocator->alloc(stateSize, stateAllocation);
             checkCudaErrors(cudnnSetDropoutDescriptor(
                 desc,

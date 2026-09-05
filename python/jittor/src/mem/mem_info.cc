@@ -180,7 +180,7 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
 
             log << "total:" << FloatOutput{(double)total, " KMG", 1024, "B"} >> "\n";
     }
-    if (use_temp_allocator && exe.temp_allocator) {
+    if (use_temp_allocator && runtime_executor().temp_allocator) {
         for (auto& a : TempAllocator::temp_allocators) {
             auto total = a->used_memory + a->unused_memory;
             all_total += total;

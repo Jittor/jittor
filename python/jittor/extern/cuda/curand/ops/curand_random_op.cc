@@ -68,11 +68,11 @@ void CurandRandomOp::jit_run() {
             if (num > 1)
                 checkCudaErrors(curandGenerateNormal@TT (generator, x, num-1, 0, 1));
             size_t tail_allocation;
-            T* tail = (T*)exe.temp_allocator->alloc(2*sizeof(T), tail_allocation);
+            T* tail = (T*)runtime_executor().temp_allocator->alloc(2*sizeof(T), tail_allocation);
             checkCudaErrors(curandGenerateNormal@TT (generator, tail, 2, 0, 1));
             checkCudaErrors(cudaMemcpyAsync(x+num-1, tail, sizeof(T),
                 cudaMemcpyDeviceToDevice, 0));
-            exe.temp_allocator->free(tail, 2*sizeof(T), tail_allocation);
+            runtime_executor().temp_allocator->free(tail, 2*sizeof(T), tail_allocation);
         } else {
             checkCudaErrors(curandGenerateNormal@TT (generator, x, num, 0, 1));
         }

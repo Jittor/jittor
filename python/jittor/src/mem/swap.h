@@ -46,7 +46,7 @@ Building with -DJT_SAVE_MEM=1 (set JT_SAVE_MEM=1, which is a *build* switch and
 gets its own cache directory) opts into an incomplete feature.
 
 TODO:
-    change exe.allocator->alloc to exe.temp_allocator->alloc
+    change runtime_executor().allocator->alloc to runtime_executor().temp_allocator->alloc
     handle cutt jt_alloc
     handle cupy jittor_cuda_malloc
     search share_with

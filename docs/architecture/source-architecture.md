@@ -128,8 +128,20 @@ check. Removal repairs the cursor before liveness release can re-enter the
 runtime. The owner is non-copyable and has process lifetime to support late
 extension/static holder destruction; it does not own the pointed-to holders.
 This preserves the existing serialized mutation requirement, not a new
-thread-safety guarantee. `exe`, traversal counters and native flags remain
-separate pending migrations.
+thread-safety guarantee.
+
+`src/runtime/runtime.{h,cc}` owns the process-lifetime `NativeRuntime`, containing
+the executor and held-root state. `runtime_executor()` and `runtime_holder_state()`
+resolve to that same owner from the core, JIT operators and backend libraries.
+The executor starts with null allocator pointers; construction does not select
+a device or initialize a backend. Fork initialization resets its existing device
+state without recreating inherited holders. Traversal counters and native flags
+remain separate pending migrations.
+
+The former exported `Executor exe` data symbol is removed. In-tree CUDA/ACL
+consumers and embedded CUDA templates use `runtime_executor()` from `executor.h`.
+Out-of-tree C++ extensions must update that access and rebuild against the new
+headers/core library; old precompiled extensions are not binary compatible.
 `compiler.py`, `compile_extern.py`,
 `pyjt_compiler.py`, and `init_cupy.py` are compiler or device bootstrap
 boundaries; `distributions.py`, `init.py`, and `linalg.py` are public native

@@ -235,7 +235,7 @@ inline void build(const ConvPlanRequest& r, ConvPlanEntry& e, void* x, void* w, 
         float best_ms = 1e30f;
         for (size_t i = 0; i < candidates.size(); i++) {
             size_t allocation; void* ws = nullptr;
-            if (candidates[i].ws) ws = exe.temp_allocator->alloc(candidates[i].ws, allocation);
+            if (candidates[i].ws) ws = runtime_executor().temp_allocator->alloc(candidates[i].ws, allocation);
             float ms = 1e30f;
             if (execute(candidates[i].plan, x, w, y, ws)) {
                 cudaEventRecord(start);
@@ -243,7 +243,7 @@ inline void build(const ConvPlanRequest& r, ConvPlanEntry& e, void* x, void* w, 
                 cudaEventRecord(stop); cudaEventSynchronize(stop);
                 if (ok) cudaEventElapsedTime(&ms, start, stop);
             }
-            if (ws) exe.temp_allocator->free(ws, candidates[i].ws, allocation);
+            if (ws) runtime_executor().temp_allocator->free(ws, candidates[i].ws, allocation);
             if (ms < best_ms) { best_ms = ms; best = (int)i; }
         }
         cudaEventDestroy(start); cudaEventDestroy(stop);
@@ -320,9 +320,9 @@ inline bool cudnn_conv_backend_run(const ConvPlanRequest& r, void* x, void* w, v
     auto& e = it->second;
     if (!e.valid) return false;
     size_t allocation; void* ws = nullptr;
-    if (e.workspace) ws = exe.temp_allocator->alloc(e.workspace, allocation);
+    if (e.workspace) ws = runtime_executor().temp_allocator->alloc(e.workspace, allocation);
     bool ok = conv_plan_detail::execute(e.plan, x, w, y, ws);
-    if (ws) exe.temp_allocator->free(ws, e.workspace, allocation);
+    if (ws) runtime_executor().temp_allocator->free(ws, e.workspace, allocation);
     ASSERT(ok) << "cuDNN backend convolution execution failed for kind" << r.kind;
     return true;
 }

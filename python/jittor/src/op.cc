@@ -230,7 +230,7 @@ void Op::init() {
             need_sync = v;
     }
     if (need_sync) {
-        exe.run_sync(vector<Var*>({need_sync}), false);
+        runtime_executor().run_sync(vector<Var*>({need_sync}), false);
         CHECK(need_sync->num >= 0) << need_sync << "'s shape is error";
     }
     if (first_init && _inputs.size()) {

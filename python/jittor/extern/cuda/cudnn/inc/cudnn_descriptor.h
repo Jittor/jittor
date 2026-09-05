@@ -85,7 +85,7 @@ struct CudnnWorkspace {
     CudnnWorkspace() = default;
     explicit CudnnWorkspace(size_t bytes) : size(bytes) {
         if (!size) return;
-        allocator = exe.temp_allocator;
+        allocator = runtime_executor().temp_allocator;
         ptr = allocator->alloc(size, allocation);
     }
     ~CudnnWorkspace() {

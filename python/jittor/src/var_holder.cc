@@ -60,17 +60,17 @@ void add_hold_vars(VarHolder* self) {
 }
 
 void schedule_pending_from_python(VarHolder* holder) {
-    exe.submit_pending(holder->var);
+    runtime_executor().submit_pending(holder->var);
 }
 
 void submit_pending(VarHolder* holder) {
-    exe.submit_pending(holder->var, true);
+    runtime_executor().submit_pending(holder->var, true);
 }
 
 VarHolder* VarHolder::migrate_to_cpu_() {
     sync(true, false);
 #ifdef HAS_CUDA
-    migrate_to_cpu(var, exe.allocator);
+    migrate_to_cpu(var, runtime_executor().allocator);
 #endif
     return this;
 }
@@ -79,7 +79,7 @@ DataView VarHolder::data() {
     if (!(var->mem_ptr && !var->allocator->is_cuda())) {
         sync(true, false);
 #ifdef HAS_CUDA
-        migrate_to_cpu(var, exe.allocator);
+        migrate_to_cpu(var, runtime_executor().allocator);
 #endif
     }
     return {this, var->mem_ptr, var->shape, var->dtype()};
@@ -88,7 +88,7 @@ DataView VarHolder::data() {
 uint64 VarHolder::raw_ptr() {
     sync(true, false);
 #ifdef HAS_CUDA
-    migrate_to_cpu(var, exe.allocator);
+    migrate_to_cpu(var, runtime_executor().allocator);
 #endif
     return (uint64)var->mem_ptr;
 }
@@ -102,7 +102,7 @@ void VarHolder::set_data(ArrayArgs&& array) {
         size *= array.shape[i];
     USER_CHECK(size==var->size);
 #ifdef HAS_CUDA
-    migrate_to_cpu(var, exe.allocator);
+    migrate_to_cpu(var, runtime_executor().allocator);
 #endif
     std::memcpy(var->mem_ptr, array.ptr, size);
 }
@@ -293,7 +293,6 @@ VarHolder* VarHolder::_update(VarHolder* v) {
     return this;
 }
 
-EXTERN_LIB Executor exe;
 
 VarHolder* VarHolder::sync(bool device_sync, bool weak_sync) {
     jittor::sync({this}, device_sync, weak_sync);
@@ -304,7 +303,7 @@ ArrayArgs VarHolder::fetch_sync() {
     if (!(var->mem_ptr && !var->allocator->is_cuda())) {
         sync(true);
         if (save_mem || _HAS_CUDA)
-            migrate_to_cpu(var, exe.allocator);
+            migrate_to_cpu(var, runtime_executor().allocator);
     }
     return {var->mem_ptr, var->shape, var->dtype()};
 }
@@ -355,7 +354,7 @@ ItemData VarHolder::item() {
         sync();
         #endif
         if (save_mem || _HAS_CUDA)
-            migrate_to_cpu(var, exe.allocator);
+            migrate_to_cpu(var, runtime_executor().allocator);
     }
     #ifdef HAS_CUDA
     if (var->allocator->is_cuda()) {
@@ -383,7 +382,7 @@ void sync_all(bool device_sync) {
     for (auto& v :fetcher)
         vars.push_back(v.ptr);
     graph_check();
-    exe.run_sync(vars, device_sync); //need sync at last
+    runtime_executor().run_sync(vars, device_sync); //need sync at last
     graph_check();
 }
 
@@ -392,7 +391,7 @@ void sync(const vector<VarHolder*>& vh, bool device_sync, bool weak_sync) {
     vars.reserve(vh.size());
     for (auto v : vh) vars.push_back(v->var);
     graph_check();
-    exe.run_sync(vars, device_sync, weak_sync); //need sync at last
+    runtime_executor().run_sync(vars, device_sync, weak_sync); //need sync at last
     graph_check();
 }
 
@@ -401,7 +400,7 @@ vector<ArrayArgs> fetch_sync(const vector<VarHolder*>& vh) {
     sync(vh, true);
     for (uint i=0; i<vh.size(); i++) {
         if (save_mem || _HAS_CUDA)
-            migrate_to_cpu(vh[i]->var, exe.allocator);
+            migrate_to_cpu(vh[i]->var, runtime_executor().allocator);
         ret[i].ptr = vh[i]->var->mem_ptr;
         ret[i].shape = vh[i]->var->shape;
         ret[i].dtype = vh[i]->var->dtype();

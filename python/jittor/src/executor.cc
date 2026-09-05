@@ -50,7 +50,6 @@ static inline bool has_gopt(Node* node) {
     return !node->is_var() && node->op()->flag(OpFlags::_has_gopt);
 }
 
-Executor exe;
 EXTERN_LIB MemoryProfiler memory_profiler;
 DEFINE_FLAG(int, lazy_execution, 1, "Default enabled, if disable, use immediately eager execution rather than lazy execution, This flag makes error message and traceback infomation better. But this flag will raise memory consumption and lower the performance.");
 DEFINE_FLAG(int, auto_flush_ops, 128, "Pipeline graph construction with device execution on CUDA. Once this many operators have been created since the executor last ran, launch everything pending without waiting for the device, so the device computes while Python keeps building the rest of the step. 0 keeps fully lazy execution. Fusion and dead-code elimination still apply within each launched segment; CPU execution is synchronous and never flushes early.");
@@ -864,7 +863,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
 // unknown pointer silently inserted a zero size and a zero allocation and then
 // released *that* -- and nothing was ever erased, so the maps only grew.
 //
-// The allocator is recorded too: `exe.allocator` is now the pool of the
+// The allocator is recorded too: `runtime_executor().allocator` is now the pool of the
 // device the executor is on, so it is not the same object at free time as it
 // was at alloc time. Freeing into the wrong pool hands it an id it never
 // issued, which is a lost block at best and someone else's block at worst.
@@ -873,7 +872,7 @@ static unordered_map<void*, ForeignCudaAllocation> foreign_cuda_allocations;
 
 extern "C" void* jittor_cuda_malloc(void*, size_t size, int device_id) {
     size_t allocation;
-    auto* allocator = exe.allocator;
+    auto* allocator = runtime_executor().allocator;
     void* ptr=allocator->alloc(size, allocation);
     if (ptr) foreign_cuda_allocations[ptr] = {size, allocation, allocator};
     return ptr;

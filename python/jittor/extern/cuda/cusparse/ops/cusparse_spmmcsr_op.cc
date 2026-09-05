@@ -72,18 +72,18 @@ void CusparseSpmmcsrOp::jit_run() {
     // Was cudaMalloc/cudaFree per call, and cudaFree synchronizes the whole
     // device: one full sync per SpMM, on top of the allocation itself.
     if (bufferSize > 0)
-        dBuffer = exe.temp_allocator->alloc(bufferSize, dBufferAllocation);
+        dBuffer = runtime_executor().temp_allocator->alloc(bufferSize, dBufferAllocation);
 
     // The choice this op made, readable from a test: which compute type, and
     // where the external buffer came from. Both were invisible before, and
     // both were wrong (fp32 compute for fp64; a NULL buffer for COO).
     LOGvvv << "cusparse_spmmcsr select: compute=" >> cusparse_compute_type_name(compute_type)
         << "buffer_bytes=" >> bufferSize
-        << "buffer_from=" >> (dBuffer ? exe.temp_allocator->name() : "none");
+        << "buffer_from=" >> (dBuffer ? runtime_executor().temp_allocator->name() : "none");
 
     checkCudaErrors(cusparseSpMM(handle_, get_trans_type(trans_A), get_trans_type(trans_B), &alpha, matA, matB, &beta, matC, compute_type, CUSPARSE_SPMM_CSR_ALG2 , dBuffer));
     if (dBuffer)
-        exe.temp_allocator->free(dBuffer, bufferSize, dBufferAllocation);
+        runtime_executor().temp_allocator->free(dBuffer, bufferSize, dBufferAllocation);
     checkCudaErrors( cusparseDestroySpMat(matA) );
     checkCudaErrors( cusparseDestroyDnMat(matB) );
     checkCudaErrors( cusparseDestroyDnMat(matC) );

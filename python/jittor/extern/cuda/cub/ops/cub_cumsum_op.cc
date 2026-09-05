@@ -106,7 +106,7 @@ void CubCumsumOp::jit_run() {
         void     *d_temp_storage = NULL;
         size_t   temp_storage_bytes = 0, temp_storage_allocation;
         cub::DeviceScan::InclusiveSum(NULL, temp_storage_bytes, xp, yp, num_items);
-        d_temp_storage = exe.temp_allocator->alloc(temp_storage_bytes, temp_storage_allocation);
+        d_temp_storage = runtime_executor().temp_allocator->alloc(temp_storage_bytes, temp_storage_allocation);
         // Allocate temporary storage for inclusive prefix sum
         // cudaMalloc(&d_temp_storage, temp_storage_bytes);
         // Run inclusive prefix sum
@@ -118,7 +118,7 @@ void CubCumsumOp::jit_run() {
             cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes, xp, yp, num_items);
         }
         // yp <-- [8, 14, 21, 26, 29, 29, 38]
-        exe.temp_allocator->free(d_temp_storage, temp_storage_bytes, temp_storage_allocation);
+        runtime_executor().temp_allocator->free(d_temp_storage, temp_storage_bytes, temp_storage_allocation);
     } else {
         int batch_num = x->shape[0];
         int num_items = x->shape[1];

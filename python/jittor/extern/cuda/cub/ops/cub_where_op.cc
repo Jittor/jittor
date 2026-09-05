@@ -83,7 +83,7 @@ void CubWhereOp::jit_run(){
     int64 N = cond->num;
     size_t temp_storage_bytes=0;
     size_t num_nonzeros_allocation;
-    auto num_nonzeros = exe.temp_allocator->alloc(sizeof(To), num_nonzeros_allocation);
+    auto num_nonzeros = runtime_executor().temp_allocator->alloc(sizeof(To), num_nonzeros_allocation);
 
     size_t temp_storage_allocation;
     void* temp_storage;
@@ -94,9 +94,9 @@ void CubWhereOp::jit_run(){
     cub::TransformInputIterator<bool, NonZeroOp<Ti>, Ti*> itr(cond->ptr<Ti>(), NonZeroOp<Ti>());
     temp_storage_bytes = 0;
     checkCudaErrors(cub::DeviceSelect::Flagged(nullptr, temp_storage_bytes, counting_itr, itr, out_temp, (To*)num_nonzeros, N));
-    temp_storage = exe.temp_allocator->alloc(temp_storage_bytes, temp_storage_allocation);
+    temp_storage = runtime_executor().temp_allocator->alloc(temp_storage_bytes, temp_storage_allocation);
     checkCudaErrors(cub::DeviceSelect::Flagged(temp_storage, temp_storage_bytes, counting_itr, itr,out_temp, (To*)num_nonzeros, N));
-    exe.temp_allocator->free(temp_storage, temp_storage_bytes, temp_storage_allocation);
+    runtime_executor().temp_allocator->free(temp_storage, temp_storage_bytes, temp_storage_allocation);
 
     To num_nonzeros_h;
     cudaMemcpy(&num_nonzeros_h, num_nonzeros, sizeof(To), cudaMemcpyDeviceToHost);
@@ -117,7 +117,7 @@ void CubWhereOp::jit_run(){
     }
     // sizeof(To), matching the alloc above. It said sizeof(int), which was the
     // same number only while To was int32.
-    exe.temp_allocator->free(num_nonzeros, sizeof(To), num_nonzeros_allocation);
+    runtime_executor().temp_allocator->free(num_nonzeros, sizeof(To), num_nonzeros_allocation);
     
 }
 #endif

@@ -199,7 +199,7 @@ void WhereOp::jit_run() {
     @for(i, 0, NDIM,  auto* __restrict__ outs@i@@p = outs[@i]->ptr<To>();)
     
     size_t n_allocation;
-    int* np = (int*)exe.temp_allocator->alloc(4, n_allocation);
+    int* np = (int*)runtime_executor().temp_allocator->alloc(4, n_allocation);
 
     // one block kernel, result maybe unstable
     // int tnum = condshape@{NDIM-1};
@@ -235,7 +235,7 @@ void WhereOp::jit_run() {
     // checkCudaErrors(cudaDeviceSynchronize());
     checkCudaErrors(cudaMemcpy(&n, np, 4, cudaMemcpyDeviceToHost));
     @for(i, 0, NDIM, outs[@i]->set_shape({n});)
-    exe.temp_allocator->free(np, 4, n_allocation);
+    runtime_executor().temp_allocator->free(np, 4, n_allocation);
 }
 #else
 

@@ -190,7 +190,7 @@ namespace jittor
         }
         releaseWorkSpace();
 
-        Allocator *new_allocator = exe.temp_allocator;
+        Allocator *new_allocator = runtime_executor().temp_allocator;
         if (new_allocator == nullptr)
             LOGf << "ACL workspace allocation failed: workspace allocator is null;"
                  << "workspace requested bytes" << alloc_size;

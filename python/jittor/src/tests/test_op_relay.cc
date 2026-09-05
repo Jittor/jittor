@@ -42,7 +42,7 @@ JIT_TEST(nested_run_sync_restores_outer_epoch) {
     TraversalEpoch outer("outer_around_run_sync");
     for (Node* node : graph) outer.mark(node);
 
-    exe.run_sync({c.ptr}, false);
+    runtime_executor().run_sync({c.ptr}, false);
     for (Node* node : graph) CHECK(outer.marked(node));
 }
 

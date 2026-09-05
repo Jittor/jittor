@@ -95,7 +95,7 @@ FetchOp::FetchOp(vector<Var*>&& inputs, FetchFunc&& func)
     while (fetcher.size() > 20) {
         LOGvvvv << "too many fetchers(">>fetcher.size() >> 
             ") are bufferd, force flush";
-        exe.run_sync({fetcher.back().ptr}, false);
+        runtime_executor().run_sync({fetcher.back().ptr}, false);
     }
 }
 

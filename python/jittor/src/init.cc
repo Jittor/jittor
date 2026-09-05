@@ -135,7 +135,7 @@ bool no_cuda_error_when_free = 0;
 void jt_init_subprocess() {
     #ifdef HAS_CUDA
     use_cuda = 0;
-    exe.last_is_cuda = false;
+    runtime_executor().last_is_cuda = false;
     no_cuda_error_when_free = 1;
     #endif
     callbacks.clear();

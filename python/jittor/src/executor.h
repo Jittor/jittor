@@ -18,8 +18,8 @@
 namespace jittor {
 
 struct Executor {
-    Allocator* allocator;
-    Allocator* temp_allocator;
+    Allocator* allocator = nullptr;
+    Allocator* temp_allocator = nullptr;
     bool last_is_cuda = false;
     // Op::number_of_created_ops as of the most recent run_sync. The
     // auto-flush pipeline counts newly built operators from here, so its
@@ -40,7 +40,7 @@ struct Executor {
     }
 };
 
-EXTERN_LIB Executor exe;
+EXTERN_LIB Executor& runtime_executor();
 
 void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int ll, int rr, int64 tt);
     

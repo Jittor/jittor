@@ -332,7 +332,7 @@ static jittor::VarHolder* make_var(const jittor::NanoVector& shape, ScalarType s
     if (cpu) {
         sync_for_storage(vh);
 #ifdef HAS_CUDA
-        jittor::migrate_to_cpu(vh->var, jittor::exe.allocator);
+        jittor::migrate_to_cpu(vh->var, jittor::runtime_executor().allocator);
 #endif
     }
     return vh;
@@ -367,7 +367,7 @@ static Tensor var_from_host_dev(const void* host, const jittor::NanoVector& shap
         jittor::migrate_to_gpu(t._vh()->var, jittor::get_allocator());
     } else {
         sync_for_storage(t._vh());
-        jittor::migrate_to_cpu(t._vh()->var, jittor::exe.allocator);
+        jittor::migrate_to_cpu(t._vh()->var, jittor::runtime_executor().allocator);
     }
 #endif
     return t;
@@ -415,7 +415,7 @@ void data_ptrs(std::initializer_list<Tensor> tensors, void** out) {
             out[index] = vh->var->mem_ptr;
         } else {
 #ifdef HAS_CUDA
-            jittor::migrate_to_cpu(vh->var, jittor::exe.allocator);
+            jittor::migrate_to_cpu(vh->var, jittor::runtime_executor().allocator);
 #endif
             out[index] = vh->var->mem_ptr;
         }
@@ -452,7 +452,7 @@ void* vh_device_ptr(jittor::VarHolder* vh) {
     if (vh->var->allocator && vh->var->allocator->is_cuda())
         return vh->var->mem_ptr;
 #ifdef HAS_CUDA
-    jittor::migrate_to_cpu(vh->var, jittor::exe.allocator);
+    jittor::migrate_to_cpu(vh->var, jittor::runtime_executor().allocator);
 #endif
     return vh->var->mem_ptr;
 }

@@ -47,7 +47,7 @@ MpiReduceOp::MpiReduceOp(Var* x, NanoString op, int root) : x(x), op(op), root(r
             return;
         } else if (hccl_reduce) {
             auto var = hccl_reduce(x, "sum", root, 0);
-            //exe.run_sync({var}, true);
+            //runtime_executor().run_sync({var}, true);
             forward(var);
             return;
         }

@@ -44,7 +44,7 @@ def test_acl_workspace_uses_one_retryable_temp_allocation_contract():
     source = ACL_CC.read_text(encoding="utf-8")
     assert "void *mallocWorkSpace(uint64_t size);" in header
     body = _function_body(source, "void *mallocWorkSpace(uint64_t size)")
-    assert "exe.temp_allocator" in body
+    assert "runtime_executor().temp_allocator" in body
     assert "workspaceAllocator" in body
     assert "workspaceAllocation" in body
     assert "aclrtMalloc" not in body

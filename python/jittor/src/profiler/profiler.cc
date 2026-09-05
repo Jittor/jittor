@@ -152,8 +152,8 @@ static void stat_peek_bandwidth(uint64 in, uint64 out, uint64 loop, uint64& peek
     // memcpy in some not aligned case will drop performance
     size &= ~((1 << 12)-1);
     // size = 7680000*4;
-    auto temp1 = exe.alloc_temp(size);
-    auto temp2 = exe.alloc_temp(size);
+    auto temp1 = runtime_executor().alloc_temp(size);
+    auto temp2 = runtime_executor().alloc_temp(size);
     loop = 1 << loop;
     int warmup = std::max(loop/8, (uint64)1);
     for (int i=0; i<warmup; i++)

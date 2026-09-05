@@ -36,7 +36,7 @@ MpiBroadcastOp::MpiBroadcastOp(Var* x, int root) : x(x), root(root) {
             return;
         } else if (hccl_broadcast) {
             auto var = hccl_broadcast(x, root, 0);
-            //exe.run_sync({var}, true);
+            //runtime_executor().run_sync({var}, true);
             forward(var);
             return;
         }

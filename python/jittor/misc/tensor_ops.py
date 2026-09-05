@@ -875,22 +875,22 @@ def unique(
                     // allocator align each.
                     size_t keys_bytes = dimlen * sizeof(input_flatten_type);
                     size_t iota_bytes = dimlen * sizeof(int32_t);
-                    input_flatten_type* keys_out = (input_flatten_type*)exe.allocator->alloc(keys_bytes, raw_allocation);
+                    input_flatten_type* keys_out = (input_flatten_type*)runtime_executor().allocator->alloc(keys_bytes, raw_allocation);
                     size_t iota_allocation;
-                    int32_t* raw_ptr = (int32_t*)exe.allocator->alloc(iota_bytes, iota_allocation);
+                    int32_t* raw_ptr = (int32_t*)runtime_executor().allocator->alloc(iota_bytes, iota_allocation);
 
                     thrust::device_ptr<int32_t> arange_ptr = thrust::device_pointer_cast(raw_ptr);
                     thrust::sequence(arange_ptr, arange_ptr + dimlen);
 
                     cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, input_flatten_p, 
                                                     keys_out, thrust::raw_pointer_cast(arange_ptr), indice_p, dimlen);
-                    d_temp_storage = exe.allocator->alloc(temp_storage_bytes, d_allocation);
+                    d_temp_storage = runtime_executor().allocator->alloc(temp_storage_bytes, d_allocation);
                     cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, input_flatten_p,
                                                     keys_out, thrust::raw_pointer_cast(arange_ptr), indice_p, dimlen);
 
-                    exe.allocator->free(raw_ptr, iota_bytes, iota_allocation);
-                    exe.allocator->free(keys_out, keys_bytes, raw_allocation);
-                    exe.allocator->free(d_temp_storage, temp_storage_bytes, d_allocation);
+                    runtime_executor().allocator->free(raw_ptr, iota_bytes, iota_allocation);
+                    runtime_executor().allocator->free(keys_out, keys_bytes, raw_allocation);
+                    runtime_executor().allocator->free(d_temp_storage, temp_storage_bytes, d_allocation);
                 } else {
                     thrust::device_ptr<input_flatten_type> input_ptr = thrust::device_pointer_cast(input_flatten_p);
                     thrust::device_ptr<int32_t> indice_ptr = thrust::device_pointer_cast(indice_p);
@@ -978,7 +978,7 @@ def unique(
             '''
                 int dimlen = input_sorted_shape0, dimsize = input_sorted_shape1;
                 size_t raw_allocation;
-                int32_t* raw_ptr = (int32_t*)exe.allocator->alloc(2 * dimlen * sizeof(int), raw_allocation);
+                int32_t* raw_ptr = (int32_t*)runtime_executor().allocator->alloc(2 * dimlen * sizeof(int), raw_allocation);
 
                 thrust::device_ptr<int32_t> diff_ptr = thrust::device_pointer_cast(diff_p),
                                             inverse_ptr = thrust::device_pointer_cast(inverse_p),
@@ -1004,7 +1004,7 @@ def unique(
                     }) - array_ptr;
 
                 cudaMemcpy(output_p, raw_ptr, sizeof(int32_t) * num, cudaMemcpyDeviceToDevice);
-                exe.allocator->free(raw_ptr, 2 * dimlen * sizeof(int32_t), raw_allocation);
+                runtime_executor().allocator->free(raw_ptr, 2 * dimlen * sizeof(int32_t), raw_allocation);
                 output->set_shape({ num });
             '''
         )

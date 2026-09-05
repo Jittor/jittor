@@ -544,7 +544,15 @@ mem_info 与 core 计数入口全部使用同一个 owner。该对象不持有 V
 27 passed（15.32s）；另两项下载数据的 memory profiler 测试未执行，以不联网的
 小图 profiler/graph/memory diagnostics 回归覆盖本次消费者迁移。未跑完整 CUDA/NPU 门禁。
 
-下一实现重点是 global executor/遍历状态与 native flags 的所有权；不要再逐字段添加只读包装。
+后续原生迁移：`NativeRuntime` 现同时持有 Executor 与 RuntimeHolderState；删除全局
+`exe` 数据符号，以核心导出的 `runtime_executor()` 供所有核心、CUDA/ACL、Python 内嵌
+CUDA 与 Torch C++ 扩展消费者访问。构造保持空 allocator、不启动设备；fork 重置保留原行为。
+CPU/结构/弱同步/显式提交定向 14 passed；真实 CUDA 自动提交/梯度/CUB/退出与 fetch
+定向 5 passed；旧 unique oracle 测试因缺独立 Torch 跳过，新增 NumPy 对照 CUDA unique
+1 passed（先验证 device 驻留，再检查 values/inverse/counts）。未做完整后端门禁或 NPU 实机。
+使用旧 `exe` 符号的外部预编译扩展必须改源码并重编；不能将源码迁移说成二进制兼容。
+
+下一实现重点是遍历状态与 native flags 的所有权；不要再逐字段添加只读包装。
 下文波次表保留为历史证据，不应作为当前已完成范围。
 
 第五十五波新增 3 个严格保持待领的前置：

@@ -178,14 +178,14 @@ namespace jittor
         {
             if (v->mem_ptr && v->allocator->is_cuda())
             {
-                migrate_to_cpu(v, exe.allocator);
+                migrate_to_cpu(v, runtime_executor().allocator);
             }
         }
         for (auto v : op->outputs())
         {
             if (v->mem_ptr && v->allocator->is_cuda())
             {
-                migrate_to_cpu(v, exe.allocator);
+                migrate_to_cpu(v, runtime_executor().allocator);
             }
         }
         op->set_flag(OpFlags::_cpu);
@@ -282,7 +282,7 @@ namespace jittor
                 {
                     if (out->mem_ptr)
                         continue;
-                    out->alloc(exe.allocator);
+                    out->alloc(runtime_executor().allocator);
                     new_alloced.insert(out);
                 }
                 for (auto out : out_map[current_op])
