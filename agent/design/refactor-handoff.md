@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；当前状态基线 `00f24c7b`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 当前 1659 个 |
+| 分支 | `2.0-refactor`；当前状态基线 `6ac1fe8c`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 当前 1664 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **211** / 进行中 **0** / 待领 **61** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
@@ -1812,6 +1812,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `6ac1fe8c` 增加 capability dispatch 与 MissingCapability fail-closed，registry 合同 15 passed；4.03/4.04 native 全量接线仍待领。 |
 | `compat` | `040b39cf` 修复 TorchNamespace registry root 的事务回滚，定向 namespace/transaction 19 passed；7.12 完整模块迁移仍待领。 |
 | `gates` | `de78f9ae` 暴露 runtime worker/quota/线程诊断，结构/环境 25 passed；0.15 完整时长仍待最终验收。 |
+
+### 2026-09-05 第一百八十八波
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `8eb8b7b2` 将 `exec_called` 纳入 RuntimeContext owner，snapshot/只读/flag_scope 结构 10 passed；2.13 其余状态仍待领。 |
+| `device` | `a1f5e649` 原子发布/撤销 backend capability，保留 hooks/kernels，registry 合同 17 passed；4.03/4.04 native 全量接线仍待领。 |
+| `compat` | `20cea34c` 修复 TorchNamespace 根条目绑定和回滚，namespace 定向 8 passed；7.12 完整模块迁移仍待领。 |
+| `gates` | `1ecb35ff` 区分 configured workers 与 quota 截断后的 runtime workers，结构/环境 26 passed；0.15 完整时长仍待最终验收。 |
 
 ## 7. 接手怎么开始
 
