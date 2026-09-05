@@ -844,6 +844,11 @@ class RuntimeContext:
         """Whether execution records memory-profiler state."""
         return self._flags.profile_memory_enable
 
+    @property
+    def profiler_warmup(self):
+        """Number of profiler warmup rounds configured for execution."""
+        return self._flags.profiler_warmup
+
     def snapshot(self):
         """Return an immutable snapshot of the fields owned by this context."""
         return {
@@ -857,6 +862,7 @@ class RuntimeContext:
             "exec_called": int(self.exec_called),
             "use_threading": int(self.use_threading),
             "profile_memory_enable": int(self.profile_memory_enable),
+            "profiler_warmup": int(self.profiler_warmup),
         }
 
 
@@ -911,6 +917,10 @@ class RuntimeState:
     @property
     def profile_memory_enable(self):
         return self._context.profile_memory_enable
+
+    @property
+    def profiler_warmup(self):
+        return self._context.profiler_warmup
 
     @property
     def context(self):

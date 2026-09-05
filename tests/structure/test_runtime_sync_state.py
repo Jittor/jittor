@@ -36,6 +36,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "exec_called": jt.flags.exec_called,
         "use_threading": jt.flags.use_threading,
         "profile_memory_enable": jt.flags.profile_memory_enable,
+        "profiler_warmup": jt.flags.profiler_warmup,
     }
     assert jt.runtime.device_id == getattr(jt.flags, "device_id", -1)
     assert jt.runtime.use_cuda == jt.flags.use_cuda
@@ -210,3 +211,24 @@ def test_runtime_profile_memory_enable_is_a_live_read_only_view_and_cpu_executio
             jt.runtime.context.profile_memory_enable = 0
     finally:
         jt.flags.profile_memory_enable = original
+
+
+def test_runtime_profiler_warmup_is_a_live_read_only_view_and_cpu_execution_survives():
+    import numpy as np
+    import jittor as jt
+
+    original = jt.flags.profiler_warmup
+    try:
+        assert jt.runtime.profiler_warmup == original
+        with jt.flag_scope(profiler_warmup=2):
+            assert jt.runtime.profiler_warmup == 2
+            assert jt.runtime.context.snapshot()["profiler_warmup"] == 2
+            value = (jt.array(np.arange(4, dtype="float32")) + 3).numpy()
+            np.testing.assert_array_equal(value, np.arange(3, 7, dtype="float32"))
+        assert jt.runtime.profiler_warmup == original
+        with pytest.raises(AttributeError):
+            jt.runtime.profiler_warmup = 0
+        with pytest.raises(AttributeError):
+            jt.runtime.context.profiler_warmup = 0
+    finally:
+        jt.flags.profiler_warmup = original
