@@ -28,7 +28,7 @@
 | | |
 | --- | --- |
 | 分支 | `2.0-refactor`；当前状态基线 `ae6840cc`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 当前 1671 个 |
+| 相对 `2.0` 的提交 | 当前 1676 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **211** / 进行中 **0** / 待领 **61** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
@@ -1830,6 +1830,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `df1743ff` 增加 capability 原子撤销，dispatch 继续 fail-closed，registry 合同 18 passed；4.03/4.04 native 全量接线仍待领。 |
 | `compat` | `fda7501c` 对不完整 TorchNamespace 子模块发布 fail-closed，namespace 定向 9 passed；7.12 完整模块迁移仍待领。 |
 | `gates` | `bee0263e` 对齐 configured/runtime workers 并校验预算参数，结构/环境 27 passed；0.15 完整时长仍待最终验收。 |
+
+### 2026-09-05 第一百九十波
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `7352b82d` 将 `profile_memory_enable` 纳入 RuntimeContext owner，snapshot/只读/flag_scope 结构 12 passed；2.13 其余状态仍待领。 |
+| `device` | `6f1a9f35` 深冻结 capability snapshot，增加 BackendRegistry/OpRegistry snapshot，registry 合同 20 passed；4.03/4.04 native 全量接线仍待领。 |
+| `compat` | `49906c5b` 预检 TorchNamespace 完整父级闭包，避免无事务半发布，namespace 10 passed；7.12 完整模块迁移仍待领。 |
+| `gates` | `895f69a9` 在 pytest 前输出 effective smoke budget，结构/环境 28 passed；0.15 完整时长仍待最终验收。 |
 
 ## 7. 接手怎么开始
 
