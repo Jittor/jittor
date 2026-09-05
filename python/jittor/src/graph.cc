@@ -38,7 +38,7 @@ string ss_convert(T x) {
 int64 do_graph_check() {
     vector<Node*> queue;
     unordered_map<Node*,int> visited;
-    for (auto& vh : hold_vars) {
+    for (auto& vh : runtime_holder_state().holders()) {
         if (0==visited[vh->var]++)
             queue.push_back(vh->var);
     }
@@ -112,7 +112,7 @@ DumpGraphs dump_all_graphs() {
     DumpGraphs graphs;
     vector<Node*> queue;
     unordered_set<Node*> seeds;
-    for (auto& vh : hold_vars)
+    for (auto& vh : runtime_holder_state().holders())
         if (seeds.insert(vh->var).second) {
             queue.push_back(vh->var);
             graphs.hold_vars.emplace_back(ss_convert(vh->var));
@@ -149,14 +149,14 @@ DumpGraphs dump_all_graphs() {
 void clean_graph() {
     vector<Node*> queue;
     unordered_set<Node*> seeds;
-    for (auto& vh : hold_vars)
+    for (auto& vh : runtime_holder_state().holders())
         if (seeds.insert(vh->var).second) {
             queue.push_back(vh->var);
         }
     bfs_both(queue, [](Node*){return true;});
     unordered_set<Node*> held;
-    held.reserve(hold_vars.size());
-    for (auto& vh : hold_vars)
+    held.reserve(runtime_holder_state().holders().size());
+    for (auto& vh : runtime_holder_state().holders())
         held.insert(vh->var);
     SetupFreeBuffer setup_free_buffer;
     for (auto node : queue) {

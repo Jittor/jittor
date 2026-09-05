@@ -78,6 +78,50 @@ def run_probe(mode):
 
 
 class TestHoldVarsSyncPtr(unittest.TestCase):
+    def test_graph_and_memory_diagnostics_use_the_runtime_roots(self):
+        probe = r'''
+import jittor as jt
+import numpy as np
+with jt.flag_scope(use_cuda=0, lazy_execution=1, auto_flush_ops=0,
+                   profile_memory_enable=1, trace_py_var=1):
+    x = jt.array([1., 2., 3.]).name("runtime_root_input")
+    y = (x * x).sum()
+    gradient = jt.grad(y, x)
+    np.testing.assert_allclose(gradient.numpy(), [2., 4., 6.])
+    assert jt.liveness_info()["hold_vars"] >= 3
+    assert any("runtime_root_input" in name for name in jt.dump_all_graphs().hold_vars)
+    assert "root()" in jt.get_max_memory_treemap()[1]
+    jt.core.display_memory_info("runtime-root-test", True)
+print("ROOT_DIAGNOSTICS_OK")
+'''
+        done = run_child_script(probe, text=True, merge_stderr=True,
+                                name="runtime_root_diagnostics")
+        self.assertEqual(done.returncode, 0, done.stdout[-4000:])
+        self.assertIn("ROOT_DIAGNOSTICS_OK", done.stdout)
+
+    def test_sync_cutoff_does_not_consume_newer_pending_holders(self):
+        probe = r'''
+import jittor as jt
+with jt.flag_scope(use_cuda=0, lazy_execution=1, auto_flush_ops=0, use_threading=0):
+    def pending(label):
+        return jt.code([1], "float32", [], cpu_header="#include <stdio.h>",
+                       cpu_src='@out0(0)=1; printf("%s\\n"); fflush(stdout);' % label)
+    oldest = pending("OLDEST_EXECUTED")
+    middle = pending("MIDDLE_EXECUTED")
+    newest = pending("NEWEST_EXECUTED")
+    oldest.sync()
+    print("OLD_SYNC_DONE", flush=True)
+    newest.sync()
+    print("NEW_SYNC_DONE", flush=True)
+'''
+        done = run_child_script(probe, text=True, merge_stderr=True,
+                                name="holder_sync_cutoff")
+        self.assertEqual(done.returncode, 0, done.stdout[-4000:])
+        output = done.stdout
+        self.assertEqual(output.count("MIDDLE_EXECUTED"), 1, output[-4000:])
+        self.assertLess(output.index("OLD_SYNC_DONE"), output.index("MIDDLE_EXECUTED"))
+        self.assertLess(output.index("MIDDLE_EXECUTED"), output.index("NEW_SYNC_DONE"))
+
     def test_weak_sync_sweeps_older_pending_vars(self):
         before, after, output = run_probe("keep")
         # Guards the comparison in the next case against being vacuously true.

@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；当前状态基线 `545f0dfb`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 当前 1852 个 |
+| 分支 | `2.0-refactor`；本批迁移起点 `2328ce4f`，后续提交见 Git 历史 |
+| 相对 `2.0` 的提交 | 迁移起点共 1853 个；提交数不代表任务完成量 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **212** / 进行中 **0** / 待领 **60** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
@@ -531,11 +531,20 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 
 Runtime 最新组织变更：`RuntimeContext`/`RuntimeState` 与 45 个字段视图整体移到
 `python/jittor/_runtime/state.py`，`core_api.py` 仅再导出与注入 native Flags；这是 Python
-模块迁移，底层 C++ 全局状态仍未搬迁。旧 `snapshot()` 的 `int` 实际绑定 `int32`，会创建
+模块迁移，不表示所有 native flags 已迁移。旧 `snapshot()` 的 `int` 实际绑定 `int32`，会创建
 张量；迁移后返回 Python 标量，回归检查无张量增持。Runtime state/module/root-domain
 定向 59 passed（3.96s），未执行完整 CUDA/NPU 门禁。
 
-下一实现重点是 native runtime 状态与 provider 的实际消费者接线；不要再逐字段添加只读包装。
+2026-09-06 原生迁移：`hold_vars` 容器与 `sync_ptr` 游标已一起收归
+`src/runtime/holder_state.{h,cc}` 的 RuntimeHolderState，删除两个导出全局变量。
+VarHolder 登记/释放、Executor 弱同步/auto-flush、grad、graph、memory profiler、
+mem_info 与 core 计数入口全部使用同一个 owner。该对象不持有 VarHolder 所有权，
+进程期存活以覆盖退出期 late holder 析构；保留原有串行修改契约，不增加线程安全声称。
+原生弱同步 cutoff/重复 unlink、节点、梯度、遍历与主机 C++ debug-iterator 合同共
+27 passed（15.32s）；另两项下载数据的 memory profiler 测试未执行，以不联网的
+小图 profiler/graph/memory diagnostics 回归覆盖本次消费者迁移。未跑完整 CUDA/NPU 门禁。
+
+下一实现重点是 global executor/遍历状态与 native flags 的所有权；不要再逐字段添加只读包装。
 下文波次表保留为历史证据，不应作为当前已完成范围。
 
 第五十五波新增 3 个严格保持待领的前置：

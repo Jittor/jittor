@@ -79,7 +79,7 @@ void MemoryProfiler::check() {
         vector<Node*> queue, queue2;
 
         unordered_set<Node*> seeds;
-        for (auto& vh : hold_vars)
+        for (auto& vh : runtime_holder_state().holders())
             if (seeds.insert(vh->var).second) {
                 queue.push_back(vh->var);
             }

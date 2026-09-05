@@ -360,8 +360,8 @@ vector<VarPtr> grad(
     }
     if (!retain_graph) {
         unordered_set<Var*> held_vars;
-        held_vars.reserve(hold_vars.size());
-        for (auto& vh : hold_vars)
+        held_vars.reserve(runtime_holder_state().holders().size());
+        for (auto& vh : runtime_holder_state().holders())
             held_vars.insert(vh->var);
         SetupFreeBuffer setup_free_buffer;
         // Mark before releasing: set_stop_grad drops backward liveness and can

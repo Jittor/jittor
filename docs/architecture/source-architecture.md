@@ -118,6 +118,18 @@ the same classes and constructs the live `jt.runtime` view after native bootstra
 The classes read the injected native `Flags` object without copying live state.
 Their snapshot returns detached Python values, not tensors. This is a Python
 module boundary, not a migration of C++ global-state ownership.
+
+Native held-root storage lives in `src/runtime/holder_state.{h,cc}`.
+`RuntimeHolderState` owns both the holder list and the weak-sync cursor; the
+executor, autograd, graph inspection and memory diagnostics share its exported
+core accessor. It never runs a graph when registering or removing a holder.
+Weak sync peeks before checking the target cutoff and advances only after that
+check. Removal repairs the cursor before liveness release can re-enter the
+runtime. The owner is non-copyable and has process lifetime to support late
+extension/static holder destruction; it does not own the pointed-to holders.
+This preserves the existing serialized mutation requirement, not a new
+thread-safety guarantee. `exe`, traversal counters and native flags remain
+separate pending migrations.
 `compiler.py`, `compile_extern.py`,
 `pyjt_compiler.py`, and `init_cupy.py` are compiler or device bootstrap
 boundaries; `distributions.py`, `init.py`, and `linalg.py` are public native

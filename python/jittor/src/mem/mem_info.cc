@@ -67,7 +67,7 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
         FloatOutput{(double)mem_info.total_cpu_ram, " KMG", 1024, "B"};
     log << "total_device_ram:" << 
         FloatOutput{(double)mem_info.total_cuda_ram, " KMG", 1024, "B"} >> "\n";
-    log << "hold_vars:" << hold_vars.size()
+    log << "hold_vars:" << runtime_holder_state().holders().size()
         << "lived_vars:" << Var::number_of_lived_vars
         << "lived_ops:" << Op::number_of_lived_ops >> '\n';
     if (_grad_backup_ptr)
@@ -77,7 +77,7 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     if (trace_py_var) {
         vector<Node*> queue;
         unordered_set<Node*> seeds;
-        for (auto& vh : hold_vars)
+        for (auto& vh : runtime_holder_state().holders())
             if (seeds.insert(vh->var).second) {
                 queue.push_back(vh->var);
             }
@@ -223,7 +223,7 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     if (dump_var) {
         vector<Node*> queue;
         unordered_set<Node*> visited;
-        for (auto& vh : hold_vars)
+        for (auto& vh : runtime_holder_state().holders())
             if (!visited.count(vh->var)) {
                 queue.push_back(vh->var);
                 visited.insert(vh->var);

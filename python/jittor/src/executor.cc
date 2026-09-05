@@ -81,7 +81,7 @@ void Executor::submit_pending(Var* target, bool force) {
     if (auto_flush_ops > 0 && use_cuda
             && Op::number_of_created_ops - last_run_ops >= auto_flush_ops) {
         vector<Var*> vars;
-        for (auto holder : hold_vars) {
+        for (auto holder : runtime_holder_state().holders()) {
             auto var = holder->var;
             if (var->_outputs.size() || var->is_finished()) continue;
             auto op = var->input();
@@ -251,12 +251,12 @@ static void top_weak_sync(vector<Var*>& vars) {
         epoch.mark(v);
     }
     while (true) {
-        if (sync_ptr == hold_vars.begin())
-            break;
-        auto next_ptr = std::prev(sync_ptr);
-        auto v = (*next_ptr)->var;
+        auto& roots = runtime_holder_state();
+        auto holder = roots.peek_pending();
+        if (!holder) break;
+        auto v = holder->var;
         if (v->id > max_id) break;
-        sync_ptr = next_ptr;
+        roots.consume_pending();
         if (epoch.marked(v)) continue;
         if (v->_outputs.size()) continue;
         if (v->is_finished()) continue;

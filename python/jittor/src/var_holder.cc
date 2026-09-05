@@ -55,12 +55,8 @@ PyObject* new_var_data_owner(VarHolder* vh) {
     return capsule;
 }
 
-list<VarHolder*> hold_vars;
-list<VarHolder*>::iterator sync_ptr = hold_vars.end();
-
 void add_hold_vars(VarHolder* self) {
-    hold_vars.push_front(self);
-    self->iter = hold_vars.begin();
+    self->iter = runtime_holder_state().add(self);
 }
 
 void schedule_pending_from_python(VarHolder* holder) {
@@ -133,31 +129,15 @@ VarHolder::VarHolder(VarHolder* v) : var(v->var) {
     operator delete(v);
 }
 
-// Take a holder out of hold_vars, keeping sync_ptr valid.
-//
-// sync_ptr is how far top_weak_sync (executor.cc) has already walked: it and
-// everything after it towards end() has been consumed. When the holder it
-// points at leaves the list the boundary must move on to the next one -- but
-// only when the holder is actually *in* the list.
-//
-// Both callers used to advance it unconditionally, and release_from_holders()
-// leaves iter == end(), so a destructor running after it evaluated
-// std::next(end()) whenever sync_ptr was end() too. That is UB; in libstdc++
-// the list is circular, so it quietly returns begin(). top_weak_sync then
-// breaks on its very first line -- `if (sync_ptr == hold_vars.begin()) break;`
-// -- for the rest of the process, and weak sync stops working with no error,
-// no warning and no wrong value to notice.
+// The runtime owner maintains the weak-sync cursor and makes repeated unlink
+// safe, including destruction after release_from_holders().
 static inline void unlink_from_hold_vars(list<VarHolder*>::iterator& iter) {
-    if (iter == hold_vars.end()) return;
-    if (iter == sync_ptr)
-        sync_ptr = std::next(sync_ptr);
-    hold_vars.erase(iter);
-    iter = hold_vars.end();
+    runtime_holder_state().erase(iter);
 }
 
 void VarHolder::release_from_holders() {
     if (PREDICT_BRANCH_NOT_TAKEN(!var)) return;
-    if (iter != hold_vars.end()) {
+    if (runtime_holder_state().contains(iter)) {
         unlink_from_hold_vars(iter);
         release_holder();
     }
@@ -395,8 +375,8 @@ EXTERN_LIB list<VarPtr> fetcher;
 
 void sync_all(bool device_sync) {
     vector<Var*> vars;
-    vars.reserve(hold_vars.size());
-    for (auto v : hold_vars) {
+    vars.reserve(runtime_holder_state().holders().size());
+    for (auto v : runtime_holder_state().holders()) {
         if (!v->var->_outputs.size())
             vars.push_back(v->var);
     }
@@ -468,7 +448,7 @@ VarHolder* ternary_out_hint(VarHolder* cond, VarHolder* x, VarHolder* y) {
 void migrate_all_to_cpu() {
     sync_all(true);
     if (save_mem || _HAS_CUDA)
-        for (auto vh : hold_vars) {
+        for (auto vh : runtime_holder_state().holders()) {
             auto v = vh->var;
             // if (v->_outputs.size()) continue;
             if (v->allocator && v->mem_ptr && !v->allocator->is_cuda())

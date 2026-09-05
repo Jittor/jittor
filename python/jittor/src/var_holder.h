@@ -10,6 +10,7 @@
 #include "ops/array_op.h"
 #include "mem/allocator.h"
 #include "mem/allocator/cuda_dual_allocator.h"
+#include "runtime/holder_state.h"
 
 namespace jittor {
 
@@ -49,9 +50,6 @@ struct ItemData {
 };
 
 typedef struct _object PyObject;
-
-EXTERN_LIB list<VarHolder*> hold_vars;
-EXTERN_LIB list<VarHolder*>::iterator sync_ptr;
 
 // @pyjt(Var)
 // @attrs(heaptype)
