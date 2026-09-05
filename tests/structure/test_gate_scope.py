@@ -148,6 +148,26 @@ def test_local_runner_matches_gate_execution_contract():
         "-n", "2", "--dist", "loadgroup"]
 
 
+def test_standalone_runner_uses_runtime_worker_policy_when_jobs_omitted(monkeypatch):
+    """The local command and nox must start the same effective worker count."""
+    sys.path.insert(0, str(REPO_ROOT / "tools"))
+    try:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "jittor_run_test_suite_worker_policy",
+            REPO_ROOT / "tools" / "run_test_suite.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(REPO_ROOT / "tools"))
+    monkeypatch.setenv("JITTOR_GATE_WORKERS", "4")
+    from _helpers.tiers import effective_cpu_count, runtime_workers
+    assert module._runtime_jobs(None) == runtime_workers(
+        4, available=effective_cpu_count())
+    assert module._runtime_jobs(0) == 0
+
+
 def test_default_nox_sessions_include_the_cpu_numeric_gate():
     """A default green nox run must exercise numerical CPU behavior (10.02)."""
     source = (REPO_ROOT / "noxfile.py").read_text(encoding="utf-8")

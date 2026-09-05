@@ -175,7 +175,34 @@ def _parallel_arguments(jobs, distribution="loadfile"):
     return ["-n", str(jobs), "--dist", distribution]
 
 
-def _run(session, extra, quiet, tier="full", jobs=0, serial_compile=False):
+def _runtime_jobs(requested):
+    """Resolve the omitted ``--jobs`` value exactly like the nox gates.
+
+    ``None`` means the caller wants the gate policy: use the configured worker
+    count and cap it to the CPU quota.  Zero remains an explicit serial
+    diagnostic mode, which is useful when bisecting a failure and must not be
+    confused with the normal runner default.
+    """
+    if requested is not None:
+        if isinstance(requested, bool) or not isinstance(requested, int):
+            raise SystemExit("--jobs must be a non-negative integer")
+        if requested < 0:
+            raise SystemExit("--jobs must be a non-negative integer")
+        return requested
+    sys.path.insert(0, str(REPO_ROOT / "tests"))
+    try:
+        from _helpers.tiers import effective_cpu_count, runtime_workers
+    finally:
+        sys.path.remove(str(REPO_ROOT / "tests"))
+    raw = os.environ.get("JITTOR_GATE_WORKERS", "4")
+    try:
+        configured = int(raw)
+    except ValueError:
+        raise SystemExit("JITTOR_GATE_WORKERS must be a positive integer")
+    return runtime_workers(configured, available=effective_cpu_count())
+
+
+def _run(session, extra, quiet, tier="full", jobs=None, serial_compile=False):
     environment = _session_environment(session, serial_compile=serial_compile)
     _split_threads(environment, jobs)
     command = [PYTHON, "-m", "pytest"]
@@ -208,8 +235,9 @@ def main():
     parser.add_argument("--tier", choices=("smoke", "full"), default="full",
                         help="smoke drops the files recorded in "
                              "tests/_helpers/tiers.SLOW_FILES")
-    parser.add_argument("--jobs", type=int, default=0,
-                        help="xdist workers per session (default: one process)")
+    parser.add_argument("--jobs", type=int, default=None,
+                        help="xdist workers per session (default: runtime gate "
+                             "policy; use 0 for explicit serial mode)")
     parser.add_argument("--serial-compile", action="store_true",
                         help="use_parallel_op_compiler=0; for bisecting a "
                              "compile failure, not for timing a gate")
@@ -220,10 +248,14 @@ def main():
     sessions = options.session or list(SESSIONS)
     results = {}
     failures = []
+    jobs = _runtime_jobs(options.jobs)
+    print("runtime workers: %d%s" % (
+        jobs, " (explicit)" if options.jobs is not None else " (policy)"),
+          flush=True)
     for session in sessions:
         code, counts, output = _run(
             session, options.extra, not options.verbose,
-            tier=options.tier, jobs=options.jobs,
+            tier=options.tier, jobs=jobs,
             serial_compile=options.serial_compile)
         results[session] = (code, counts)
         for line in output.splitlines():
