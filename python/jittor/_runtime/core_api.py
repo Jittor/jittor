@@ -974,6 +974,26 @@ class RuntimeContext:
         """Current verbose logging level."""
         return self._flags.log_v
 
+    @property
+    def use_stat_allocator(self):
+        """Allocator policy that records allocation statistics."""
+        return self._flags.use_stat_allocator
+
+    @property
+    def use_nfef_allocator(self):
+        """Whether the never-free exact-fit allocator is enabled."""
+        return self._flags.use_nfef_allocator
+
+    @property
+    def use_temp_allocator(self):
+        """Whether the temporary allocator is enabled."""
+        return self._flags.use_temp_allocator
+
+    @property
+    def use_sfrl_allocator(self):
+        """Whether the SFRL allocator is enabled."""
+        return self._flags.use_sfrl_allocator
+
     def snapshot(self):
         """Return an immutable snapshot of the fields owned by this context."""
         return {
@@ -1013,6 +1033,10 @@ class RuntimeContext:
             "log_silent": int(self.log_silent),
             "log_sync": int(self.log_sync),
             "log_v": int(self.log_v),
+            "use_stat_allocator": int(self.use_stat_allocator),
+            "use_nfef_allocator": int(self.use_nfef_allocator),
+            "use_temp_allocator": int(self.use_temp_allocator),
+            "use_sfrl_allocator": int(self.use_sfrl_allocator),
         }
 
 
@@ -1171,6 +1195,22 @@ class RuntimeState:
     @property
     def log_v(self):
         return self._context.log_v
+
+    @property
+    def use_stat_allocator(self):
+        return self._context.use_stat_allocator
+
+    @property
+    def use_nfef_allocator(self):
+        return self._context.use_nfef_allocator
+
+    @property
+    def use_temp_allocator(self):
+        return self._context.use_temp_allocator
+
+    @property
+    def use_sfrl_allocator(self):
+        return self._context.use_sfrl_allocator
 
     @property
     def context(self):

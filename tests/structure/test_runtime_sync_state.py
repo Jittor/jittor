@@ -62,6 +62,10 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "log_silent": jt.flags.log_silent,
         "log_sync": jt.flags.log_sync,
         "log_v": jt.flags.log_v,
+        "use_stat_allocator": jt.flags.use_stat_allocator,
+        "use_nfef_allocator": jt.flags.use_nfef_allocator,
+        "use_temp_allocator": jt.flags.use_temp_allocator,
+        "use_sfrl_allocator": jt.flags.use_sfrl_allocator,
     }
     assert jt.runtime.device_id == getattr(jt.flags, "device_id", -1)
     assert jt.runtime.use_cuda == jt.flags.use_cuda
@@ -105,6 +109,32 @@ def test_runtime_use_cuda_is_a_live_read_only_view():
             jt.runtime.use_cuda = 0
     finally:
         jt.flags.use_cuda = original
+
+
+def test_runtime_allocator_policies_are_live_read_only_views_and_cpu_safe():
+    import numpy as np
+    import jittor as jt
+
+    names = ("use_stat_allocator", "use_nfef_allocator", "use_temp_allocator", "use_sfrl_allocator")
+    originals = {name: getattr(jt.flags, name) for name in names}
+    try:
+        for name in names:
+            original = originals[name]
+            assert getattr(jt.runtime, name) == original
+            with jt.flag_scope(**{name: 0 if original else 1}):
+                wanted = 0 if original else 1
+                assert getattr(jt.runtime, name) == wanted
+                assert jt.runtime.context.snapshot()[name] == wanted
+                value = (jt.array(np.arange(2, dtype="float32")) + 1).numpy()
+                np.testing.assert_array_equal(value, np.array([1, 2], dtype="float32"))
+            assert getattr(jt.runtime, name) == original
+            with pytest.raises(AttributeError):
+                setattr(jt.runtime, name, original)
+            with pytest.raises(AttributeError):
+                setattr(jt.runtime.context, name, original)
+    finally:
+        for name, value in originals.items():
+            setattr(jt.flags, name, value)
 
 
 def test_runtime_memory_limits_are_live_read_only_views_and_cpu_execution_survives():
