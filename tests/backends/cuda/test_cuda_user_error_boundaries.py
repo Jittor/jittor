@@ -280,5 +280,38 @@ class TestCufftBoundaries(CudaBoundaryCase):
             r"not supported fft dtype")
 
 
+class TestCublasMatmulBoundaries(CudaBoundaryCase):
+    """The direct cuBLAS relay must reject malformed matrix shapes in Python.
+
+    The higher-level ``jt.matmul`` wrapper normally routes these cases through
+    the generic implementation, so exercising the relay is necessary to
+    prove that its C++ ``USER_CHECK`` survives the pyjt boundary.
+    """
+
+    def setUp(self):
+        self.cublas = _ops("cublas_ops")
+
+    @jt.flag_scope(use_cuda=1)
+    def test_matrix_a_rank(self):
+        self.rejects(
+            lambda: self.cublas.cublas_matmul(
+                jt.random((1, 2, 3)), jt.random((3, 4)), False, False),
+            r"a->shape\.size\(\)\(3\) == 2")
+
+    @jt.flag_scope(use_cuda=1)
+    def test_matrix_b_rank(self):
+        self.rejects(
+            lambda: self.cublas.cublas_matmul(
+                jt.random((2, 3)), jt.random((1, 3, 4)), False, False),
+            r"cublas matmul requires rank-2 input b")
+
+    @jt.flag_scope(use_cuda=1)
+    def test_inner_dimensions(self):
+        self.rejects(
+            lambda: self.cublas.cublas_matmul(
+                jt.random((2, 3)), jt.random((4, 5)), False, False),
+            r"inner dimensions must match")
+
+
 if __name__ == "__main__":
     unittest.main()
