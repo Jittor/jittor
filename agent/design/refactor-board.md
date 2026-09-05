@@ -1,5 +1,8 @@
 # 整改看板
 
+> 第203波：异机前置继续：`32ad37ef` 迁移 try_use_32bit_index Runtime owner（结构 27 passed）；`a2f44691` 增加 Native observer teardown identity guard（C++/结构 4 passed）；`782c7663` 固定 ACL cache key 使用 classic locale（host-only 13 passed）；`3ac67208` 集中 Torch independent publication 原子边界（namespace 25 passed）。未声称 CUDA/NPU 实机。
+
+
 > 第202波：异机前置继续：`97d5ce9a` 迁移 disable_lock Runtime owner（结构 26 passed）；`3a617079` 增加 Native provider stale dispatch key freshness guard（结构 4 passed）；`d3f95d4a`/`4fc52287` 收紧 ACL invalid schema type 与 consumer registration fail-closed（ACL 17 passed）；`53e92aba` 增加 standalone torch publication graph validator（namespace 24 passed）。未声称 CUDA/NPU 实机。
 
 

@@ -1958,6 +1958,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `d3f95d4a`/`4fc52287` 收紧 ACL invalid schema 类型与 consumer registration fail-closed，ACL 17 passed；CANN/NPU runner 接线仍待。 |
 | `compat` | `53e92aba` 增加 standalone torch publication graph validator/alias identity 合同，namespace 24 passed；独立 distribution 完整发布仍待。 |
 
+### 2026-09-05 第二百零三波：跨硬件 publication/cache 前置
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `32ad37ef` 将 `try_use_32bit_index` 纳入 RuntimeContext owner，结构 27 passed；全局 flags 仍待迁移。 |
+| `device` | `a2f44691` 增加非 owning Native observer teardown identity guard，C++/结构合同通过；provider 实机仍待。 |
+| `device` | `782c7663` 固定 ACL canonical cache key locale，host-only 13 passed；CANN/NPU runner仍待。 |
+| `compat` | `3ac67208` 集中 independent Torch publication 的 child+registry root 原子边界，namespace 25 passed；独立 distribution 完整发布仍待。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
