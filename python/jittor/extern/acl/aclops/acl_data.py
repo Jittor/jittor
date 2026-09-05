@@ -221,5 +221,9 @@ class DescriptorCache:
     def __len__(self):
         return len(self._entries)
 
+    def erase(self, key):
+        """Invalidate one descriptor identity without touching other devices."""
+        return self._entries.pop(key, None) is not None
+
     def clear(self):
         self._entries.clear()

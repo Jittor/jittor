@@ -156,9 +156,11 @@ int main() {
         return std::string("descriptor-1");
     });
     if (builds != 2 || !cache.contains(other_shape)) return 5;
+    if (!cache.erase(first) || cache.erase(first) || cache.size() != 1) return 6;
+    if (!cache.contains(other_shape)) return 7;
     try {
         make_descriptor_key(decoded, {-1}, "float32", "contiguous", "npu:0");
-        return 6;
+        return 8;
     } catch (const jittor::UserError&) {
         return 0;
     }

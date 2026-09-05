@@ -111,6 +111,9 @@ def test_descriptor_cache_builds_once_and_keeps_device_entries_separate():
     assert cache.get_or_create(key1, lambda key: builds.append(key) or "descriptor-1") == "descriptor-1"
     assert len(cache) == 2
     assert len(builds) == 2
+    assert cache.erase(key0) is True
+    assert cache.erase(key0) is False
+    assert len(cache) == 1
     cache.clear()
     assert len(cache) == 0
 

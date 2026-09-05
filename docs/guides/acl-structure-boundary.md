@@ -158,13 +158,17 @@ without including CANN.  `AclDescriptorCache<T>` is only a lifecycle shell:
 the caller supplies `T` (a test value on a host, or a future owned ACL
 descriptor on 910B3) and a builder; the shell never creates, aliases, or
 retains a raw `aclTensor` pointer.  A repeated key invokes the builder once,
-while a shape/layout/device change creates an independent entry.  This is a
-host-only prerequisite, not evidence that ACL descriptors are already cached
-or that addresses are correctly rebound on device.
+while a shape/layout/device change creates an independent entry.  The owner
+must call `erase(key)` before releasing or replacing a device allocation; this
+invalidates only that identity and prevents a shape-equivalent descriptor from
+retaining a stale address.  `clear()` remains the teardown escape hatch.  This
+is a host-only prerequisite, not evidence that ACL descriptors are already
+cached or that addresses are correctly rebound on device.
 
 The Python mirror is `descriptor_cache_key()` plus `DescriptorCache` in
 `acl_data.py`.  It returns an immutable tuple derived from the normalized
 schema key and metadata, and has the same build-once semantics.  Both halves
+expose single-key invalidation (`erase`) as well as full teardown.  Both halves
 are intentionally separate from the generated `OpAttr` path until one
 attribute owner can migrate decode, attribute construction, descriptor
 address rebinding, and invalidation atomically.

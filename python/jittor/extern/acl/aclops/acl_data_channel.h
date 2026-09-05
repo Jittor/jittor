@@ -420,6 +420,13 @@ public:
         return entries_.size();
     }
 
+    // Invalidate exactly one descriptor before a device allocation or
+    // descriptor owner is released.  This keeps a shape-equivalent entry
+    // from retaining a stale runtime address while preserving other devices.
+    bool erase(const AclDescriptorKey& key) {
+        return entries_.erase(canonical_descriptor_key(key)) != 0;
+    }
+
     void clear() {
         entries_.clear();
     }
