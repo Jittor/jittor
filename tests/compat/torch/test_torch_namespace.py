@@ -57,6 +57,20 @@ def test_published_children_bind_to_independent_root_and_nested_parent():
     assert not hasattr(owner, "functional")
 
 
+def test_published_root_entry_is_ignored_when_binding_children():
+    owner = types.ModuleType("jittor")
+    namespace = independent_torch_namespace(owner)
+    nn = types.ModuleType("torch.nn")
+
+    bind_published_namespace(namespace, {
+        "torch": owner,
+        "torch.nn": nn,
+    })
+
+    assert namespace.nn is nn
+    assert namespace is not owner
+
+
 def test_published_children_rollback_restores_owner_bindings():
     owner = types.ModuleType("jittor")
     owner.nn = types.SimpleNamespace(functional="old")
@@ -100,3 +114,36 @@ def test_independent_root_registry_binding_rolls_back_with_import_identity():
         transaction.release()
 
     assert registry._published["torch"] is owner
+
+
+def test_independent_root_and_children_restore_import_identity_on_rollback():
+    from jittor.compat.shim.runtime import _publish_registry_root
+    from jittor.compat.transaction import ActivationTransaction
+
+    owner = types.ModuleType("jittor")
+    old_root = types.ModuleType("torch")
+    old_nn = types.ModuleType("torch.nn")
+    old_root.nn = old_nn
+    namespace = independent_torch_namespace(owner)
+    new_nn = types.ModuleType("torch.nn")
+    registry = types.SimpleNamespace(
+        _published={"torch": owner, "torch.nn": new_nn}
+    )
+    modules = {"torch": old_root, "torch.nn": old_nn}
+    transaction = ActivationTransaction("namespace-import-identity")
+    transaction.acquire()
+    try:
+        bind_published_namespace(namespace, registry._published, transaction=transaction)
+        _publish_registry_root(transaction, registry, namespace)
+        transaction.record(modules, "torch", old_root, namespace)
+        modules["torch"] = namespace
+        assert modules["torch"] is namespace
+        assert modules["torch.nn"] is old_nn
+        assert namespace.nn is new_nn
+        transaction.rollback()
+    finally:
+        transaction.release()
+
+    assert modules == {"torch": old_root, "torch.nn": old_nn}
+    assert registry._published == {"torch": owner, "torch.nn": new_nn}
+    assert old_root.nn is old_nn

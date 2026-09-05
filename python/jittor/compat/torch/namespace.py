@@ -77,6 +77,11 @@ def bind_published_namespace(namespace, published, transaction=None):
     }
     parents = {"torch": namespace}
     for name in sorted(modules, key=lambda item: (item.count("."), item)):
+        # The registry includes its root entry as well as children.  The root
+        # is published by the activation transaction; only dotted entries
+        # need a parent attribute binding here.
+        if name == "torch":
+            continue
         parent_name, attr = name.rsplit(".", 1)
         parent = parents.get(parent_name)
         if parent is None:
