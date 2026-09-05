@@ -52,6 +52,19 @@ struct OpInfo {
 };
 
 /**
+ * ABI-neutral identity of one provider-backed operator implementation.
+ *
+ * The native registry owns operator metadata, while a backend owns the
+ * callable kernel and any device-specific handle.  Keeping this boundary to
+ * an OpId and provider name lets CUDA/ACL providers evolve independently of
+ * the core ABI; no backend library type crosses this header.
+ */
+struct NativeOpDispatchKey {
+    OpId op_id = 0;
+    string provider;
+};
+
+/**
  * Native owner for operator registration state.
  *
  * The public free functions below are kept as a compatibility boundary for
@@ -70,11 +83,23 @@ public:
     vector<string> names() const;
     bool unregister(const string& name);
 
+    // Provider lifecycle and dispatch ownership are intentionally separate
+    // from OpInfo registration.  A provider may bind several operators and
+    // teardown removes all of its bindings atomically with its identity.
+    void register_provider(const string& provider, bool replace = false);
+    bool has_provider(const string& provider) const;
+    vector<string> providers() const;
+    void bind_provider(const string& name, const string& provider);
+    NativeOpDispatchKey resolve_provider(const string& name,
+                                         const string& provider) const;
+    bool unregister_provider(const string& provider);
+
 private:
     static string key(const string& name);
 
     mutable std::recursive_mutex mutex;
     unordered_map<string, OpInfo> entries;
+    unordered_map<string, unordered_set<string>> provider_bindings;
     OpId next_id = 1;
 };
 

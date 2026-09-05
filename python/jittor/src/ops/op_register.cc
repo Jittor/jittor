@@ -83,7 +83,69 @@ vector<string> NativeOpRegistry::names() const {
 
 bool NativeOpRegistry::unregister(const string& name) {
     std::lock_guard<std::recursive_mutex> guard(mutex);
-    return entries.erase(key(name));
+    string op_file_name = key(name);
+    bool removed = entries.erase(op_file_name);
+    if (removed) {
+        for (auto& item : provider_bindings)
+            item.second.erase(op_file_name);
+    }
+    return removed;
+}
+
+void NativeOpRegistry::register_provider(const string& provider, bool replace) {
+    ASSERT(!provider.empty()) << "provider name must not be empty";
+    std::lock_guard<std::recursive_mutex> guard(mutex);
+    auto iter = provider_bindings.find(provider);
+    if (iter != provider_bindings.end()) {
+        if (!replace)
+            ASSERT(false) << "provider" << provider << "is already registered";
+        iter->second.clear();
+        return;
+    }
+    provider_bindings.emplace(provider, unordered_set<string>());
+}
+
+bool NativeOpRegistry::has_provider(const string& provider) const {
+    std::lock_guard<std::recursive_mutex> guard(mutex);
+    return provider_bindings.count(provider) != 0;
+}
+
+vector<string> NativeOpRegistry::providers() const {
+    std::lock_guard<std::recursive_mutex> guard(mutex);
+    vector<string> result;
+    result.reserve(provider_bindings.size());
+    for (const auto& item : provider_bindings)
+        result.push_back(item.first);
+    return result;
+}
+
+void NativeOpRegistry::bind_provider(const string& name, const string& provider) {
+    std::lock_guard<std::recursive_mutex> guard(mutex);
+    string op_file_name = key(name);
+    ASSERT(entries.count(op_file_name)) << "Op" << name << "not found.";
+    auto iter = provider_bindings.find(provider);
+    ASSERT(iter != provider_bindings.end())
+        << "provider" << provider << "is not registered";
+    iter->second.insert(op_file_name);
+}
+
+NativeOpDispatchKey NativeOpRegistry::resolve_provider(
+        const string& name, const string& provider) const {
+    std::lock_guard<std::recursive_mutex> guard(mutex);
+    string op_file_name = key(name);
+    auto provider_iter = provider_bindings.find(provider);
+    ASSERT(provider_iter != provider_bindings.end())
+        << "provider" << provider << "is not registered";
+    ASSERT(provider_iter->second.count(op_file_name))
+        << "Op" << name << "has no provider binding for" << provider;
+    auto op_iter = entries.find(op_file_name);
+    ASSERT(op_iter != entries.end()) << "Op" << name << "not found.";
+    return {op_iter->second.id, provider};
+}
+
+bool NativeOpRegistry::unregister_provider(const string& provider) {
+    std::lock_guard<std::recursive_mutex> guard(mutex);
+    return provider_bindings.erase(provider) != 0;
 }
 
 void op_registe(const OpInfo& op_info) {

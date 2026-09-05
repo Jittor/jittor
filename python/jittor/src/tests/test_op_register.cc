@@ -48,6 +48,31 @@ JIT_TEST(native_op_registry_owns_lifecycle) {
     ASSERT(!registry.unregister("jit_test_native_registry"));
 }
 
+// Provider bindings carry only the process-local OpId and provider spelling.
+// This is the native ABI seam: backend-specific kernel handles stay owned by
+// the provider and do not leak into op_register.h.
+JIT_TEST(native_op_registry_provider_dispatch_boundary) {
+    NativeOpRegistry registry;
+    registry.register_op({"jit_test_provider_dispatch", "test", ""});
+    registry.register_provider("cpu");
+    registry.register_provider("cuda");
+    registry.bind_provider("jit_test_provider_dispatch", "cpu");
+
+    auto key = registry.resolve_provider("jit_test_provider_dispatch", "cpu");
+    ASSERT(key.op_id != (OpId)0);
+    ASSERT(key.provider == "cpu");
+    ASSERT(registry.providers().size() == 2);
+
+    // Replacing a provider is a teardown boundary; stale bindings cannot
+    // survive into a new provider instance.
+    registry.register_provider("cpu", true);
+    ASSERT(registry.has_provider("cpu"));
+    ASSERT(!registry.unregister_provider("missing"));
+    ASSERT(registry.unregister_provider("cpu"));
+    ASSERT(!registry.has_provider("cpu"));
+    ASSERT(registry.unregister("jit_test_provider_dispatch"));
+}
+
 // A constructor resolved on first call, not at load time. The point is what
 // does NOT happen at construction: no registry lookup, so no dependency on
 // this translation unit's static initialiser running after the registry's.
