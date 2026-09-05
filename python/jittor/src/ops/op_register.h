@@ -253,6 +253,10 @@ public:
     // and does not expose registry-owned storage to backend code.
     bool is_current(const NativeOpDispatchKey& dispatch_key) const;
     bool unregister_provider(const string& provider);
+    // Identity-checked teardown for a provider owner.  A stale owner must
+    // never remove a replacement that reused the same provider spelling.
+    bool unregister_provider_if_current(const string& provider,
+                                        uint32 provider_id);
 
 private:
     static string key(const string& name);
@@ -300,6 +304,43 @@ private:
     NativeOpRegistry* registry;
     NativeProviderLifecycleObserver* observer;
     NativeProviderLifecycleObserver* previous;
+};
+
+/**
+ * Own one provider registration for the lifetime of a backend object.
+ *
+ * The registry still owns the registration record; this scope only carries
+ * the provider spelling and instance id needed for safe teardown.  Its
+ * destructor is intentionally non-throwing and leaves a newer replacement
+ * untouched when the original provider was already superseded.
+ */
+class NativeProviderRegistrationScope {
+public:
+    NativeProviderRegistrationScope(
+            NativeOpRegistry& registry,
+            const NativeProviderRegistration& registration,
+            bool replace = false)
+        : registry(&registry), provider(registration.name), provider_id(0) {
+        registry.register_provider(registration, replace);
+        provider_id = registry.provider_id(provider);
+    }
+
+    ~NativeProviderRegistrationScope() {
+        if (registry && provider_id)
+            registry->unregister_provider_if_current(provider, provider_id);
+    }
+
+    NativeProviderRegistrationScope(
+            const NativeProviderRegistrationScope&) = delete;
+    NativeProviderRegistrationScope& operator=(
+            const NativeProviderRegistrationScope&) = delete;
+
+    uint32 id() const { return provider_id; }
+
+private:
+    NativeOpRegistry* registry;
+    string provider;
+    uint32 provider_id;
 };
 
 // Intentionally process-lived: registration may happen from static

@@ -243,6 +243,35 @@ JIT_TEST(native_op_registry_observer_scope_restores_identity) {
     ASSERT(registry.set_lifecycle_observer(nullptr) == &replacement);
 }
 
+JIT_TEST(native_op_registry_registration_scope_is_identity_checked) {
+    NativeOpRegistry registry;
+    {
+        NativeProviderRegistrationScope scope(
+            registry, NativeProviderRegistration("jit_test_scoped_provider"));
+        ASSERT(scope.id() != 0);
+        ASSERT(registry.has_provider("jit_test_scoped_provider"));
+        ASSERT(registry.provider_id("jit_test_scoped_provider") == scope.id());
+    }
+    ASSERT(!registry.has_provider("jit_test_scoped_provider"));
+
+    // Replacing the provider invalidates the old scope's owner token.  Its
+    // destructor must leave the replacement alive rather than unregistering
+    // by spelling alone.
+    {
+        NativeProviderRegistrationScope scope(
+            registry, NativeProviderRegistration("jit_test_scoped_provider"));
+        const auto old_id = scope.id();
+        registry.register_provider("jit_test_scoped_provider", true);
+        const auto replacement_id = registry.provider_id(
+            "jit_test_scoped_provider");
+        ASSERT(replacement_id != old_id);
+        ASSERT(!registry.unregister_provider_if_current(
+            "jit_test_scoped_provider", old_id));
+        ASSERT(registry.has_provider("jit_test_scoped_provider"));
+    }
+    ASSERT(!registry.has_provider("jit_test_scoped_provider"));
+}
+
 // A constructor resolved on first call, not at load time. The point is what
 // does NOT happen at construction: no registry lookup, so no dependency on
 // this translation unit's static initialiser running after the registry's.

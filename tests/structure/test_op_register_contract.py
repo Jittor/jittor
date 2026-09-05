@@ -140,6 +140,23 @@ def test_native_provider_observer_scope_is_identity_checked_and_non_owning():
     assert "set_lifecycle_observer(&replacement)" in jit_test
 
 
+def test_native_provider_registration_scope_teardown_is_identity_checked():
+    header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
+        encoding="utf-8")
+    source = (REPO_ROOT / "python/jittor/src/ops/op_register.cc").read_text(
+        encoding="utf-8")
+    jit_test = (REPO_ROOT / "python/jittor/src/tests/test_op_register.cc").read_text(
+        encoding="utf-8")
+    assert "class NativeProviderRegistrationScope" in header
+    assert "unregister_provider_if_current" in header
+    assert "NativeOpRegistry::unregister_provider_if_current" in source
+    scope = header[header.index("class NativeProviderRegistrationScope"):
+                  header.index("// Intentionally process-lived")]
+    assert "registry->unregister_provider_if_current(provider, provider_id)" in scope
+    assert "NativeProviderRegistrationScope scope" in jit_test
+    assert "!registry.unregister_provider_if_current" in jit_test
+
+
 def test_native_provider_metadata_is_a_value_only_host_consumer_contract():
     header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
         encoding="utf-8")

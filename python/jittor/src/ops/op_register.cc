@@ -338,6 +338,11 @@ bool NativeOpRegistry::is_current(
 }
 
 bool NativeOpRegistry::unregister_provider(const string& provider) {
+    return unregister_provider_if_current(provider, 0);
+}
+
+bool NativeOpRegistry::unregister_provider_if_current(
+        const string& provider, uint32 expected_provider_id) {
     NativeProviderLifecycleObserver* observer = nullptr;
     NativeProviderRegistration registration;
     uint32 provider_instance = 0;
@@ -352,6 +357,8 @@ bool NativeOpRegistry::unregister_provider(const string& provider) {
     auto registrations = provider_registrations.find(provider);
     ASSERT(ids != provider_ids.end());
     ASSERT(registrations != provider_registrations.end());
+    if (expected_provider_id && ids->second != expected_provider_id)
+        return false;
     provider_instance = ids->second;
     registration = registrations->second;
     for (const auto& op_name : bindings->second) {

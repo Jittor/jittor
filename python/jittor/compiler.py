@@ -140,7 +140,10 @@ def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="",
     jit_utils.run_cmds(cmds, cache_path, jittor_path, "Compiling "+base_output)
     obj_files += ex_obj_files
     if os.name == 'nt':
-        dumpdef_path = os.path.join(jittor_path, "utils", "dumpdef.py")
+        # dumpdef is a Windows build resource and ships with the build package.
+        # Keep the lookup relative to the installed package so wheel builds do
+        # not depend on repository-only tools/ files.
+        dumpdef_path = os.path.join(jittor_path, "build", "dumpdef.py")
         cmd = f"\"{sys.executable}\" \"{dumpdef_path}\" {' '.join(cms(obj_files))} -Fo: \"{output}.def\""
         do_compile(fix_cl_flags(cmd))
     cmd = f"\"{compiler}\" {' '.join(cms(obj_files))} -o {cm(output)} {flags} {lto_flags}"

@@ -149,13 +149,14 @@ class TestWhatLeftTheDrawer(unittest.TestCase):
 class TestWhatStaysAndTheReferenceThatPinsIt(unittest.TestCase):
     """A file may stay only while something outside Python names its path."""
 
-    def _pinned_by(self, name, *references):
-        """``name`` stays in the drawer, and every reference still names it.
+    def _pinned_by(self, name, *references, source=None):
+        """A resource stays at ``source`` and every reference names it.
 
         ``assertIn`` on a whole C++ file dumps the file into the failure, so
         the containment check is done separately and reported by location.
         """
-        self.assertTrue((DRAWER / name).is_file(), name)
+        resource = source or (DRAWER / name)
+        self.assertTrue(resource.is_file(), resource)
         for relative, needle in references:
             path = (PACKAGE / relative) if relative != "compiler.py" \
                 else (PACKAGE / "compiler.py")
@@ -166,16 +167,15 @@ class TestWhatStaysAndTheReferenceThatPinsIt(unittest.TestCase):
                     "(task 3.18), and this rule needs rewriting"
                     % (relative, needle, name))
 
-    def test_dumpdef_is_reached_from_the_installed_package_not_the_checkout(self):
-        # `agent/design/target-layout.md` lists dumpdef.py under the repository
-        # `tools/`. It cannot go there: compiler.py builds the .def file during
-        # an *extension build on Windows*, from `jittor_path` -- the installed
-        # package. The repository tools/ tree is sdist-only and absent from a
-        # wheel, so that move would break Windows builds and nothing else.
+    def test_dumpdef_is_reached_from_the_installed_build_package(self):
+        # compiler.py builds the .def file during an *extension build on
+        # Windows*, from jittor_path. Keep this resource in the wheel's build
+        # package rather than the repository-only tools tree or utils drawer.
         self._pinned_by(
             "dumpdef.py",
             ("compiler.py",
-             'os.path.join(jittor_path, "utils", "dumpdef.py")'))
+             'os.path.join(jittor_path, "build", "dumpdef.py")'),
+            source=PACKAGE / "build" / "dumpdef.py")
 
     def test_tracer_is_pinned_by_a_module_name_baked_into_the_core(self):
         # Not a path but an import: the core calls my_import with this dotted
@@ -190,18 +190,15 @@ class TestWhatStaysAndTheReferenceThatPinsIt(unittest.TestCase):
         # home belongs in a package that states one.
         self.assertEqual(
             sorted(path.name for path in DRAWER.glob("*.py")),
-            ["dumpdef.py", "tracer.py"],
+            ["tracer.py"],
             "python/jittor/utils holds only files something outside Python "
             "reaches by hard-coded path (task 5.25). Put new code in a package "
             "whose name says what it is for.")
 
     def test_the_layout_document_still_pins_the_compiler_resources(self):
         doc = _text(REPO_ROOT / "docs" / "architecture" / "repository-layout.md")
-        self.assertIn(
-            "python/jittor/utils/{dumpdef.py,tracer.py}",
-            doc,
-            "if the contract moved, this test and 5.25's remaining half both "
-            "need rewriting")
+        self.assertIn("python/jittor/build/{dlink_compiler.py,dumpdef.py}", doc)
+        self.assertIn("python/jittor/utils/tracer.py", doc)
 
     def test_dlink_compiler_lives_with_build_resources(self):
         path = REPO_ROOT / "python" / "jittor" / "build" / "dlink_compiler.py"

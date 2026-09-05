@@ -197,7 +197,7 @@ msgstr ""
 
 #: 1d8d0f3f2654462c9a40a5750eb391ad
 #, python-brace-format
-msgid "`python/jittor/utils/{dlink_compiler.py,dumpdef.py}`;"
+msgid "`python/jittor/build/{dlink_compiler.py,dumpdef.py}`;"
 msgstr ""
 
 #: 01410ede03f740efade5f4eb1076f19c
