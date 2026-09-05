@@ -41,6 +41,17 @@ _COUNT = re.compile(r"(\d+) (passed|failed|skipped|error|errors|xfailed|xpassed)
 _WARMUP_MARKER = "JITTOR_TEST_SUITE_CPU_READY"
 _WARMUP_ATTEMPTS = 3
 
+# Keep the standalone runner's worker split identical to nox.  Limiting only
+# OpenMP leaves BLAS/NumExpr pools free to multiply each xdist worker.
+_THREAD_ENV_NAMES = (
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+    "BLIS_NUM_THREADS",
+)
+
 #: ``compiler.JIT_UTILS_UPDATED_EXIT_CODE``. A cold or stale cache rebuilds
 #: ``jit_utils`` and the process cannot reload it, so it exits and asks to be
 #: re-run -- which is what the warm-up loop is for.
@@ -158,7 +169,8 @@ def _split_threads(environment, jobs):
         sys.path.remove(str(REPO_ROOT / "tests"))
     budget = worker_thread_budget(jobs)
     if budget is not None:
-        environment["OMP_NUM_THREADS"] = str(budget)
+        for name in _THREAD_ENV_NAMES:
+            environment[name] = str(budget)
 
 
 def _parallel_arguments(jobs, distribution="loadfile"):

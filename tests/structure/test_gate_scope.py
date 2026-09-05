@@ -168,6 +168,26 @@ def test_standalone_runner_uses_runtime_worker_policy_when_jobs_omitted(monkeypa
     assert module._runtime_jobs(0) == 0
 
 
+def test_standalone_runner_splits_all_thread_pools_like_nox(monkeypatch):
+    """Every worker-visible thread pool must obey the shared worker budget."""
+    sys.path.insert(0, str(REPO_ROOT / "tools"))
+    try:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "jittor_run_test_suite_thread_policy",
+            REPO_ROOT / "tools" / "run_test_suite.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(REPO_ROOT / "tools"))
+    import _helpers.tiers as tiers
+    monkeypatch.setattr(tiers, "worker_thread_budget", lambda jobs: 3)
+    environment = {name: "99" for name in module._THREAD_ENV_NAMES}
+    module._split_threads(environment, jobs=4)
+    assert {environment[name] for name in module._THREAD_ENV_NAMES} == {"3"}
+
+
 def test_default_nox_sessions_include_the_cpu_numeric_gate():
     """A default green nox run must exercise numerical CPU behavior (10.02)."""
     source = (REPO_ROOT / "noxfile.py").read_text(encoding="utf-8")
