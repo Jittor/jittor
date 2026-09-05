@@ -870,6 +870,16 @@ class RuntimeContext:
         return self._flags.profiler_record_peek
 
     @property
+    def profiler_record_shape(self):
+        """Whether the profiler records per-operator shape metadata."""
+        return self._flags.profiler_record_shape
+
+    @property
+    def profiler_hide_relay(self):
+        """Whether relayed profiler operators are hidden from reports."""
+        return self._flags.profiler_hide_relay
+
+    @property
     def check_graph(self):
         """Whether graph liveness checks are enabled for execution."""
         return self._flags.check_graph
@@ -892,6 +902,8 @@ class RuntimeContext:
             "profiler_enable": int(self.profiler_enable),
             "profiler_rerun": int(self.profiler_rerun),
             "profiler_record_peek": int(self.profiler_record_peek),
+            "profiler_record_shape": int(self.profiler_record_shape),
+            "profiler_hide_relay": int(self.profiler_hide_relay),
             "check_graph": int(self.check_graph),
         }
 
@@ -967,6 +979,14 @@ class RuntimeState:
     @property
     def profiler_record_peek(self):
         return self._context.profiler_record_peek
+
+    @property
+    def profiler_record_shape(self):
+        return self._context.profiler_record_shape
+
+    @property
+    def profiler_hide_relay(self):
+        return self._context.profiler_hide_relay
 
     @property
     def check_graph(self):
