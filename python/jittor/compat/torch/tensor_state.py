@@ -35,7 +35,12 @@ def get_tensor_state(jittor_module):
     the compatibility package: repeated installs and legacy imports therefore
     observe the same state object without changing module identity.
     """
-    state = getattr(jittor_module, "_torch_leaf_params", None)
+    # The explicit owner is the migration seam for an eventual independent
+    # torch package.  Legacy aliases remain published below for callers that
+    # still inspect the old private names.
+    state = getattr(jittor_module, "_torch_tensor_state", None)
+    if not isinstance(state, TorchTensorState):
+        state = getattr(jittor_module, "_torch_leaf_params", None)
     legacy_retained = getattr(jittor_module, "_torch_retained", None)
     if not isinstance(state, TorchTensorState):
         previous = state if isinstance(state, dict) else None
@@ -47,6 +52,8 @@ def get_tensor_state(jittor_module):
         # the registry behind the state owner.
         if isinstance(legacy_retained, dict):
             state.retained.update(legacy_retained)
+    setattr(jittor_module, "_torch_tensor_state", state)
+    if getattr(jittor_module, "_torch_leaf_params", None) is not state:
         setattr(jittor_module, "_torch_leaf_params", state)
     # Older installs published the optimizer registry independently.  Adopt it
     # once when upgrading an existing process, then keep the old name as an
