@@ -29,6 +29,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "sync_run": jt.flags.sync_run,
         "device_id": getattr(jt.flags, "device_id", -1),
         "use_cuda": jt.flags.use_cuda,
+        "node_order": jt.flags.node_order,
         "lazy_execution": jt.flags.lazy_execution,
         "auto_flush_ops": jt.flags.auto_flush_ops,
         "auto_convert_64_to_32": jt.flags.auto_convert_64_to_32,
@@ -98,6 +99,24 @@ def test_runtime_use_cuda_is_a_live_read_only_view():
             jt.runtime.use_cuda = 0
     finally:
         jt.flags.use_cuda = original
+
+
+def test_runtime_node_order_is_a_live_read_only_view():
+    import jittor as jt
+
+    original = jt.flags.node_order
+    try:
+        assert jt.runtime.node_order == original
+        with jt.flag_scope(node_order=1):
+            assert jt.runtime.node_order == 1
+            assert jt.runtime.context.snapshot()["node_order"] == 1
+        assert jt.runtime.node_order == original
+        with pytest.raises(AttributeError):
+            jt.runtime.node_order = 0
+        with pytest.raises(AttributeError):
+            jt.runtime.context.node_order = 0
+    finally:
+        jt.flags.node_order = original
 
 
 def test_runtime_lazy_execution_is_a_live_read_only_view():

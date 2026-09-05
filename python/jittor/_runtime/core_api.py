@@ -810,6 +810,11 @@ class RuntimeContext:
         return self._flags.use_cuda
 
     @property
+    def node_order(self):
+        """Ordering policy used when assigning graph node priorities."""
+        return self._flags.node_order
+
+    @property
     def lazy_execution(self):
         """Whether graph execution is deferred until an explicit flush."""
         return self._flags.lazy_execution
@@ -945,6 +950,7 @@ class RuntimeContext:
             "sync_run": int(self.sync_run),
             "device_id": int(self.device_id),
             "use_cuda": int(self.use_cuda),
+            "node_order": int(self.node_order),
             "lazy_execution": int(self.lazy_execution),
             "auto_flush_ops": int(self.auto_flush_ops),
             "auto_convert_64_to_32": int(self.auto_convert_64_to_32),
@@ -997,6 +1003,10 @@ class RuntimeState:
     @property
     def use_cuda(self):
         return self._context.use_cuda
+
+    @property
+    def node_order(self):
+        return self._context.node_order
 
     @property
     def lazy_execution(self):
