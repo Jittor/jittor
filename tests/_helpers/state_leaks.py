@@ -37,6 +37,7 @@ WATCHED_FLAGS = (
     "use_cuda",
     "no_grad",
     "amp_reg",
+    "cuda_kernel_math",
     "use_parallel_op_compiler",
     "exclude_pass",
 )

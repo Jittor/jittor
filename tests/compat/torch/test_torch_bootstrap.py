@@ -57,13 +57,14 @@ class TestTorchBootstrap(unittest.TestCase):
         self.assertEqual(payload["after"], "g++")
         self.assertTrue(payload["resolved"])
 
-    def test_preflight_nvcc_flags_keep_command_separators(self):
+    def test_preflight_math_policy_does_not_change_core_build_flags(self):
         from jittor.compat.shim import preflight
 
         runtime_flags = types.SimpleNamespace(
             nvcc_flags=" -lineinfo --use_fast_math "
         )
         root = types.SimpleNamespace(
+            flags=runtime_flags,
             compiler=types.SimpleNamespace(flags=runtime_flags)
         )
         with mock.patch.dict(
@@ -76,16 +77,11 @@ class TestTorchBootstrap(unittest.TestCase):
         ):
             preflight.configure_torch_math_flags(root)
             environment_flags = os.environ["nvcc_flags"]
+            self.assertEqual(os.environ["cuda_kernel_math"], "strict")
 
-        for value in (environment_flags, runtime_flags.nvcc_flags):
-            with self.subTest(value=value):
-                self.assertTrue(value.startswith(" "), repr(value))
-                self.assertTrue(value.endswith(" "), repr(value))
-                self.assertIn("--fmad=false", value)
-                self.assertIn("--prec-div=true", value)
-                self.assertIn("--prec-sqrt=true", value)
-                self.assertIn('kernel.cu" ', 'kernel.cu"' + value)
-        self.assertNotIn("--use_fast_math", runtime_flags.nvcc_flags)
+        self.assertEqual(environment_flags, "-lineinfo")
+        self.assertEqual(runtime_flags.cuda_kernel_math, "strict")
+        self.assertEqual(runtime_flags.nvcc_flags, " -lineinfo --use_fast_math ")
 
     def test_preflight_does_not_pass_cuda_math_flags_to_acl(self):
         from jittor.compat.shim import preflight
@@ -94,6 +90,7 @@ class TestTorchBootstrap(unittest.TestCase):
             nvcc_flags=" -lineinfo --fmad=false --prec-div=true --prec-sqrt=true "
         )
         root = types.SimpleNamespace(
+            flags=runtime_flags,
             compiler=types.SimpleNamespace(has_acl=True, flags=runtime_flags)
         )
         with mock.patch.dict(
@@ -109,11 +106,13 @@ class TestTorchBootstrap(unittest.TestCase):
             preflight.configure_torch_math_flags(root)
             environment_flags = os.environ["nvcc_flags"]
 
-        for value in (environment_flags, runtime_flags.nvcc_flags):
+        for value in (environment_flags,):
             self.assertIn("-lineinfo", value)
             self.assertNotIn("--fmad=false", value)
             self.assertNotIn("--prec-div=true", value)
             self.assertNotIn("--prec-sqrt=true", value)
+        self.assertEqual(runtime_flags.cuda_kernel_math, "backend")
+        self.assertIn("--fmad=false", runtime_flags.nvcc_flags)
 
     def test_preflight_detects_acl_before_jittor_import(self):
         from jittor.compat.shim import preflight

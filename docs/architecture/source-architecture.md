@@ -113,11 +113,25 @@ The entries directly under `python/jittor/` are an exact reviewed set.
 large native Python API implementation loaded after the compiled core. Public
 root exports retain object identity with that implementation, and legacy root
 pickle paths remain loadable. `__init__.pyi` owns the public root typing surface.
-`_runtime.state` owns `RuntimeContext` and `RuntimeState`; `core_api` re-exports
-the same classes and constructs the live `jt.runtime` view after native bootstrap.
-The classes read the injected native `Flags` object without copying live state.
-Their snapshot returns detached Python values, not tensors. This is a Python
-module boundary, not a migration of C++ global-state ownership.
+`_runtime.flag_policy` classifies native flags for both binding generation and
+the Python API. `_runtime.state` provides immutable `jt.config`, writable
+`jt.runtime` switches and read-only `jt.runtime.context` diagnostics. Runtime
+writes call the original native setters, preserving their side effects;
+`jt.runtime.scope(...)` uses the existing reentrant flag-scope implementation.
+Snapshots contain detached Python values, including copies of mapping values.
+Execution and allocator counters are read-only through both runtime and legacy
+Flags objects.
+
+Startup configuration includes compiler/tool paths, compiler flags, cache/source
+paths, CUDA architectures and the cache-lock policy. After backend post-processing
+and compatibility composition, a one-way native seal rejects writes through
+every `Flags` instance, including `jt.flags`, `compiler.flags` and `core.Flags()`.
+The compiler module also rejects late public assignments to these fields.
+`jt.config` captures a detached immutable snapshot; architecture lists become
+tuples. Set startup options in the environment before importing Jittor.
+New operators still accept local `extra_flags` and per-op `compile_options`;
+loading an extension does not reopen startup configuration. The classification
+file participates in the binding-generator build fingerprint.
 
 Native held-root storage lives in `src/runtime/holder_state.{h,cc}`.
 `RuntimeHolderState` owns both the holder list and the weak-sync cursor; the
@@ -150,8 +164,18 @@ initialized global references. Setter correction, rollback and backend-switch
 flushing retain their previous ordering. CPU-only operator routing stays
 constant CPU, while flag bindings still read the real runtime state.
 ROCm callback selection is explicit in the header, no longer dependent on the
-legacy binary converter recognizing the old filename. Other native flags and
-the startup-config/runtime-policy split remain unfinished.
+legacy binary converter recognizing the old filename. Domain-specific native
+flags not listed as runtime-owned storage above remain in their owning modules;
+the Python lifecycle partition does not claim to move all C++ storage.
+
+`runtime/jit_policy` owns CUDA kernel math policy (`default`, `strict`, `backend`).
+Ordinary and fused CUDA keys capture the policy before compilation, and the
+compiler transforms startup flags according to that captured value. Switching
+policy submits pending graphs under their previous policy. Explicit per-op
+flags remain local overrides. Torch preflight selects this runtime policy,
+rather than rewriting startup NVCC flags or creating a different core-build
+configuration just to change kernel math. The ACL preflight still removes
+legacy CUDA-specific strict flags from its startup environment.
 
 The former exported `Executor exe` data symbol is removed. In-tree CUDA/ACL
 consumers and embedded CUDA templates use `runtime_executor()` from `executor.h`.

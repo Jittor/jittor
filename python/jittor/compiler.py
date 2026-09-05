@@ -33,6 +33,7 @@ from jittor_utils import (
 )
 from jittor_utils.compiler_flags import remove_flags, shsplit
 from . import pyjt_compiler
+from ._runtime.flag_policy import flag_category
 from jittor_utils import lock
 from jittor_utils import install_cuda
 from jittor import __version__
@@ -247,7 +248,7 @@ def gen_jit_flags():
             args = args.split(",")
             type = args[0].strip()
             name = args[1].strip()
-            if not has_cuda and "cuda" in name and name!="use_cuda":
+            if not has_cuda and "cuda" in name and name not in ("use_cuda", "cuda_kernel_math"):
                 if name != "use_cuda_host_allocator":
                     continue
             default = args[2].strip()
@@ -257,6 +258,7 @@ def gen_jit_flags():
             if name in visit:
                 continue
             visit[name] = 1
+            category = flag_category(name)
             declaration = "DECLARE_RUNTIME_FLAG" if runtime else "DECLARE_FLAG"
             getter = f"runtime_flag_{name}()" if runtime else name
             jit_declares.append(f"{declaration}({type}, {name});")
@@ -267,20 +269,26 @@ def gen_jit_flags():
                 alias = ["amp_level"]
             get_names = ",".join(["__get__"+a for a in [name]+alias])
             set_names = ",".join(["__set__"+a for a in [name]+alias])
+            guard = f'check_startup_config_write("{name}"); ' if category == "startup" else ""
+            setter = f"{guard}set_{name}(v);"
+            if category == "counter":
+                setter = f'throw std::runtime_error("{name} is a read-only runtime counter");'
             flags_defs.append(f"""
                 /* {name}(type:{type}, default:{default}): {doc} */
                 // @pyjt({get_names})
                 {type} _get_{name}() {{ return {getter}; }}
                 // @pyjt({set_names})
-                void _set_{name}({type} v) {{ set_{name}(v); }}
+                void _set_{name}({type} v) {{ {setter} }}
                 {f'''// @pyjt({set_names})
-                void _set_{name}(bool v) {{ set_{name}(v); }}
+                void _set_{name}(bool v) {{ {setter} }}
                 ''' if type=="int" else ""}
             """)
     
     jit_declares = "\n    ".join(jit_declares)
     jit_src = f"""
     #include "utils/flags.h"
+    #include "runtime/configuration.h"
+    #include <stdexcept>
 
     namespace jittor {{
     
@@ -1695,6 +1703,7 @@ def core_generator_signature():
     paths = [
         os.path.abspath(__file__),
         os.path.abspath(pyjt_compiler.__file__),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "_runtime", "flag_policy.py"),
     ]
     records = {}
     for path in paths:

@@ -15,6 +15,7 @@
 #include <mutex>
 
 #include "jit_compiler.h"
+#include "runtime/jit_policy.h"
 #include "op.h"
 #include "utils/cache_compile.h"
 #include "utils/flags.h"
@@ -234,13 +235,17 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
     if (rewrite_op || !file_exist(jit_src_path2))
         write(jit_src_path2, src);
     string cmd;
+    // The preparation key captures policy before asynchronous compilation.
+    // Extension-local flags remain explicit per-op overrides.
+    const string kernel_nvcc_flags = is_cuda_op
+        ? cuda_math_flags_for_key(nvcc_flags, jit_key) : string();
     
     auto symbol_name = get_symbol_name(jit_key);
 #ifndef _MSC_VER
     if (is_cuda_op) {
         cmd = "\"" + nvcc_path + "\""
             + " \"" + jit_src_path + "\"" + other_src
-            + fix_cl_flags(nvcc_flags + extra_flags, is_cuda_op)
+            + fix_cl_flags(kernel_nvcc_flags + extra_flags, is_cuda_op)
             + " -o \"" + jit_lib_path + "\"";
         if (cmd.find("-dc") != string::npos) {
             cmd = python_path+" "+jittor_path+"/build/dlink_compiler.py " + cmd;
@@ -255,7 +260,7 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
     if (is_cuda_op) {
         cmd = "\"" + nvcc_path + "\""
             + " \"" + jit_src_path + "\"" + other_src
-            + nvcc_flags + extra_flags
+            + kernel_nvcc_flags + extra_flags
             + " -o \"" + jit_lib_path + "\""
             +  " -Xlinker -EXPORT:\""
             + symbol_name + "\"";

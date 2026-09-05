@@ -178,18 +178,6 @@ def _set_env_dir(environ, name, path, override=False):
     _ensure_dir(environ[name], "the directory $%s points at" % name)
 
 
-def _strict_math_nvcc_flags(value, remove_fast_math=False):
-    tokens = str(value or "").split()
-    if remove_fast_math:
-        tokens = [token for token in tokens if token != "--use_fast_math"]
-    for token in ("--fmad=false", "--prec-div=true", "--prec-sqrt=true"):
-        if token not in tokens:
-            tokens.append(token)
-    # jit_compiler.cc concatenates nvcc_flags directly after quoted source
-    # paths. Keep explicit separators instead of relying on every caller.
-    return " " + " ".join(tokens) + " "
-
-
 def _remove_strict_math_nvcc_flags(value):
     strict_tokens = {"--fmad=false", "--prec-div=true", "--prec-sqrt=true"}
     tokens = [token for token in str(value or "").split()
@@ -205,41 +193,32 @@ def _acl_environment(environ):
     )
 
 
-def _add_nvcc_flags(environ):
+def _prepare_kernel_math(environ):
     if _acl_environment(environ):
         environ["nvcc_flags"] = _remove_strict_math_nvcc_flags(
             environ.get("nvcc_flags", "")
         )
+        environ["cuda_kernel_math"] = "backend"
         return
     if is_truthy(environ.get("JITTOR_TORCH_KEEP_FAST_MATH")):
         return
-    environ["nvcc_flags"] = _strict_math_nvcc_flags(
-        environ.get("nvcc_flags", "")
-    )
+    # Kernel policy belongs in operator keys, not in the core build fingerprint.
+    environ["cuda_kernel_math"] = "strict"
 
 
 def configure_torch_math_flags(jittor_module):
     compiler = getattr(jittor_module, "compiler", None)
-    flags = getattr(compiler, "flags", None)
+    flags = jittor_module.flags
     if getattr(compiler, "has_acl", False):
         os.environ["nvcc_flags"] = _remove_strict_math_nvcc_flags(
             os.environ.get("nvcc_flags", "")
         )
-        current = getattr(flags, "nvcc_flags", None)
-        if isinstance(current, str):
-            flags.nvcc_flags = _remove_strict_math_nvcc_flags(current)
+        flags.cuda_kernel_math = "backend"
         return
-    _add_nvcc_flags(os.environ)
+    _prepare_kernel_math(os.environ)
     if is_truthy(os.environ.get("JITTOR_TORCH_KEEP_FAST_MATH")):
         return
-    try:
-        current = getattr(flags, "nvcc_flags", None)
-        if isinstance(current, str):
-            flags.nvcc_flags = _strict_math_nvcc_flags(
-                current, remove_fast_math=True
-            )
-    except EXPECTED as exc:
-        swallowed("shim/preflight.py configure_torch_math_flags: current = getattr(flags, 'nvcc_flags', None)", exc)
+    flags.cuda_kernel_math = "strict"
 
 
 def _best_jtcuda(environ, real_home):
@@ -477,7 +456,7 @@ def prepare_import_environment(
         runtime / "tmp",
         override=not is_truthy(env.get("JITTOR_TORCH_KEEP_TMPDIR")),
     )
-    _add_nvcc_flags(env)
+    _prepare_kernel_math(env)
     jtcuda = _configure_cuda(env, real_home) if configure_cuda else None
     configure_runtime_driver_lib(runtime, env)
     return PreflightResult(

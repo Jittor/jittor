@@ -313,6 +313,13 @@ _core_api.flags = flags
 _install_report = _install_order.verify()
 del _record_install
 
+# All backend bootstrapping is complete. Every native Flags instance shares
+# this one-way seal; neither a new Flags object nor the legacy alias bypasses it.
+core.seal_startup_config()
+from ._runtime.state import StartupConfig as _StartupConfig, freeze_compiler_config as _freeze_compiler_config
+config = _StartupConfig(flags)
+_freeze_compiler_config(compiler)
+
 
 _ROOT_EXPORTS = (
     "LOG", "__version__", "attention", "autograd", "baddbmm", "bmm",
@@ -323,7 +330,7 @@ _ROOT_EXPORTS = (
     "init", "jittor_core", "kron", "linalg", "logsumexp", "lr_scheduler",
     "math_util", "matmul", "misc", "mkl_ops", "mpi", "mpi_ops", "nn",
     "numpy2cupy", "optim", "ops", "rank", "sparse", "tensordot",
-    "world_size",
+    "world_size", "config",
 )
 
 __all__ = tuple(sorted(set(

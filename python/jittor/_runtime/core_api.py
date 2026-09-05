@@ -783,7 +783,7 @@ flags = _core_flags
 
 
 _runtime_context = RuntimeContext(flags)
-runtime = RuntimeState(_runtime_context)
+runtime = RuntimeState(_runtime_context, flag_scope)
 
 
 def var(x, dim=None, dims=None, unbiased=False, keepdims=False):

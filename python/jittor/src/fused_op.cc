@@ -10,6 +10,7 @@
 #include "profiler/profiler.h"
 #include "misc/fast_shared_ptr.h"
 #include "runtime/device.h"
+#include "runtime/jit_policy.h"
 
 namespace jittor {
 
@@ -163,6 +164,7 @@ void FusedOp::do_jit_prepare(JK& jk) {
         this->set_flag(OpFlags::_cpu, 1);
     } else {
         jk << "«JIT_cuda:1";
+        add_cuda_math_jit_define(jk);
         this->set_flag(OpFlags::_cpu, 0);
         this->set_flag(OpFlags::_cuda, 1);
     }

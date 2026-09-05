@@ -1,4 +1,4 @@
-"""Runtime-backed device flag setters preserve rollback and alias behavior."""
+"""CUDA runtime-backed flag setters preserve rollback and alias behavior."""
 
 import numpy as np
 import pytest

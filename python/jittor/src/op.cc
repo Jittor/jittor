@@ -13,6 +13,7 @@
 #include "profiler/profiler.h"
 #include "mem/allocator.h"
 #include "runtime/device.h"
+#include "runtime/jit_policy.h"
 #include "pybind/py_var_tracer.h"
 #include "executor.h"
 #include "var_holder.h"
@@ -311,6 +312,7 @@ void Op::do_jit_prepare(JK& jk) {
         jk << "«JIT:1";
         if (use_cuda_op && flag(OpFlags::_cuda)) {
             jk << "«JIT_cuda:1";
+            add_cuda_math_jit_define(jk);
             set_flag(OpFlags::_cpu, 0);
             // TODO: 64bit index in CUDA
             // use_int64_t = false;

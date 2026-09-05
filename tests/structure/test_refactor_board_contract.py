@@ -27,7 +27,9 @@ def test_board_task_ids_match_plan_without_duplicates():
 
     for line in board_path.read_text().splitlines():
         if TASK_ROW.match(line):
-            assert line.count("|") >= 6, line
+            cells = re.split(r"(?<!\\)\|", line)
+            assert len(cells) == 7, line
+            assert not cells[0].strip() and not cells[-1].strip(), line
 
 
 def test_board_has_no_two_column_acl_note_rows():

@@ -12,6 +12,7 @@ import ast
 import glob
 import os
 import re
+import runpy
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -33,6 +34,8 @@ def _flag_functions(**environment):
                      LOG=SimpleNamespace(vv=lambda *args: None,
                                          vvvv=lambda *args: None))
     namespace.update(environment)
+    namespace["flag_category"] = runpy.run_path(
+        str(REPO / "python/jittor/_runtime/flag_policy.py"))["flag_category"]
     exec(compile(tree, str(source), "exec"), namespace)
     return namespace
 

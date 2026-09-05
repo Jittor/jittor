@@ -1,5 +1,8 @@
 # 整改看板
 
+当前进度以任务表为准。2026-09-06：2.13 已完成计划点名的原生状态归属与 config/runtime 分层；
+下一步优先推进依赖它的布局与 Backend 迁移。下方旧波次中的 Python 字段视图不等于原生存储迁移。
+
 > 第217波：`98c8ee94` 迁移 cuda_allow_tf32 Runtime owner（结构 43 passed）；`b8398291` 修正 Native provider teardown 统一 lifecycle events（结构 12 passed）；`9d49c70c` ACL device_size Python/C++ 对齐（ACL 14 passed）；`d44782d4` Torch bootstrap 非字符串/非法 __all__ fail-closed。未声称 CUDA/NPU 实机。
 
 
@@ -519,8 +522,8 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 2.10 | 三套 liveness 计数 | 已合并 | coreops | 8bd07e51。f/b/p 收进无额外存储的 NodeLiveness；own 防溢出，release 对无匹配 owner 的下溢立即报错，跨零返回值统一传播边界；need_free 与 graph expected-count 由封装提供，release 构建常开。C++ liveness/check_graph 契约与 CPU 生命周期 2 项通过；状态逻辑后端无关，未追加 GPU 编译 |
 | 2.11 | `VarHolder` 不再是执行触发点 | 已合并 | coreops | 0f709cff。VarHolder 构造只登记持有关系；lazy/eager/auto-flush 策略迁入 Executor::submit_pending，Var 完成 Python 对象转换后才提交，显式 core.submit_pending 可无设备同步启动目标子图；删除 flush_suspended 与构造期吞错。构造/边界结构 2 项、CPU 显式提交/错误边界 2 项、GPU1 auto-flush 等价 1 项通过 |
 | 2.12 | 打破 `Executor ⇄ VarHolder` include 环 | 已合并 | coreops | 318a688e。依赖 exe.allocator 的 migrate_to_cpu/data/raw_ptr/set_data 四个 inline 实现移到 var_holder.cc，var_holder.h 不再包含 executor.h 或引用全局 exe；executor.cc -> var_holder.h 保持单向，方法签名与行为不变。无 Python include 的独立头语法编译、依赖方向结构节点、CPU submit_pending 节点通过 |
-| 2.13 | 执行相关全局状态 | 待领 | coreops | 原生持有根、Executor、遍历状态，以及 use_cuda/device_id/sync_run 和设备缓存/切换钩子/peer 记录现同属 NativeRuntime；删除对应数据全局，epoch 与 cuda_flags 实现迁入 src/runtime，Python flags/JIT/后端接入真实存储。Python 状态视图已拆出且 snapshot 不增持张量。遍历定向 37 passed；设备迁移 CPU/CUDA/双卡定向 32 passed，setter/切换追加 8 passed，新 flag 负向与别名 2 passed；最终主机/生成器合同 12 passed。ACL 三 TU 与两 launcher ABI、CPU-only TU 语法通过；修复 ROCm 旧转换器按文件名选 callback 的迁移回归，真实 blob 主机探针确认。外部扩展需改头路径/数据访问并重编。未做 NPU/ROCm 实机与完整后端门禁；其余 native flags 和 config/runtime 分层仍待完成。 |
-| 2.14 | `src/misc/` 拆散 | 待领 | | | `e2fbafd6` 完成 Nano 类型路径/引用迁移与结构合同 14 passed；其余 misc 拆散仍待。
+| 2.13 | 执行相关全局状态 | 已合并 | coreops | 计划点名的 hold_vars/exe/sync_ptr/tflag_count/use_cuda/device_id/sync_run 已归 NativeRuntime，旧 cuda_flags 文件消失；遍历/设备迁移见 b6eb6dc0、dfa047b3。本提交完成启动配置 10 项、运行策略 66 项、只读计数 5 项的统一分类，jt.config 深只读、jt.runtime 可写且提供可恢复 scope；原生所有 Flags 实例和 Python compiler 旧入口均拒绝晚写启动配置。Torch 严格数学改为捕获到普通/融合 JIT key 的运行策略，不改启动 nvcc_flags；分类清单纳入构建指纹。CPU/CUDA/结构最终 109 passed，含真实 CUDA 舍入与缓存隔离；Torch bootstrap 47 passed；CPU-only/自定义扩展 23 passed、1 个 CUDA 架构字段按能力跳过。旧扩展需重编；NPU/ROCm 仍需异机实测，本项不声称完成其他 Backend 或独立 torch 任务。 |
+| 2.14 | `src/misc/` 拆散 | 待领 | | `e2fbafd6` 完成 Nano 类型路径/引用迁移与结构合同 14 passed；其余 misc 拆散仍待。 |
 | 2.15 | NanoString | 已合并 | bindings | 9d5ed413（索引位宽 7→8、static_assert 把表与字段绑住、`ns_check_registration` 在注册期查索引与名字长度；"dtype 表改运行期注册"那半未做，见提交说明） |
 | 2.16 | 类型提升表 | 已合并 | bindings | d821c34a（int_dtype_promote 提升格；标量按 `_is_scalar` 标志认，不再按形状；float 标量把整数张量提到默认 float dtype）、a39a2f1c（补：双标量走提升格，交换左右操作数不再改变 dtype 与结果） |
 | 2.17 | 算子身份用注册期整型 id | 已合并 | coreops | 1d792e16。OpInfo 注册分配 OpId，核心/tuner/pass 名字比较归零，fast_strcmp 删除，Tape 用显式 pending flag；CPU 80 项、CUDA 5 项及结构契约通过 |
@@ -595,7 +598,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 5.22 | `nn` facade 不导出 39 个下划线名，内部用模块局部名不经 `jt.nn.*` 晚绑… | 已合并 | pyops | 5d67f36b。源码 `jt.nn._*` 使用与 `dir(jt.nn)` 私有导出均为 0，后端私有覆盖迁入 `nn.backends.hooks`；结构 17 passed，CPU 25 passed/8 skipped |
 | 5.23 | 根命名空间显式 `__all__` | 已合并 | pyops | d80d0b99。根星号来源归零，414 名运行时 `__all__` 与生成 pyi 顶层声明一致；namespace 13 passed，结构聚焦 4 passed |
 | 5.24 | 10 个 `jt._*` 跨模块契约 | 待领 | | |
-| 5.25 | `python/jittor/utils/` 拆散 | 已合并 | compat | `be2935f0`、`fdf3b759`（translator/server 迁入 compat，jtune/nvtx 迁入 jittor.tools，仓库脚本迁入顶层 tools）；`b70afbce`/`416a7fe4`/`02a6b5ee` 将 dlink compiler/dumpdef 迁入 build；本提交将 C++ tracer 迁入 `jittor.tools.tracer` 并改掉兼容层旧 nvtx 引用，utils 抽屉清空。结构/打包合同通过。
+| 5.25 | `python/jittor/utils/` 拆散 | 已合并 | compat | `be2935f0`、`fdf3b759`（translator/server 迁入 compat，jtune/nvtx 迁入 jittor.tools，仓库脚本迁入顶层 tools）；`b70afbce`/`416a7fe4`/`02a6b5ee` 将 dlink compiler/dumpdef 迁入 build；本提交将 C++ tracer 迁入 `jittor.tools.tracer` 并改掉兼容层旧 nvtx 引用，utils 抽屉清空。结构/打包合同通过。 |
 | 5.26 | 布局收尾 | 待领 | | |
 | 6.C01 | `.item()` 对无符号 dtype | 已合并 | | 9b3023b1 |
 | 6.C02 | `PySlice_Unpack` 返回值检查，三个变量初始化 | 已合并 | bindings | 78d08344 |

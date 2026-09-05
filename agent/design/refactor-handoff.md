@@ -30,10 +30,10 @@
 | 分支 | `2.0-refactor`；本批迁移起点 `2328ce4f`，后续提交见 Git 历史 |
 | 相对 `2.0` 的提交 | 迁移起点共 1853 个；提交数不代表任务完成量 |
 | 提交里出现过的任务号 | 329 个 |
-| 看板 | 已合并 **212** / 进行中 **0** / 待领 **60** / 并入其它任务 **13** |
+| 看板 | 已合并 **213** / 进行中 **0** / 待领 **59** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
 
-**交接清理完成不等于整改完成。** 看板仍有 60 条待领；当前只是把中断留下的易失状态全部转成了主线提交、
+**交接清理完成不等于整改完成。** 看板仍有 59 条待领；当前只是把中断留下的易失状态全部转成了主线提交、
 明确待领项或已验证的不采用结论。这个分支不是终态。
 
 看板的「已合并」是权威。提交里的任务号更多，是因为一个任务常有补充提交、改判提交与「更正前一个提交」
@@ -523,55 +523,33 @@ build 的 patch-id 差异来自验证后补入的 `JT_SAVE_MEM` 上游适配，�
 
 ## 6. 下一波起点
 
-### 当前执行优先级（2026-09-05）
+### 当前执行优先级（2026-09-06）
 
 优先完成可供 CUDA/NPU 异机测试的模块迁移与调用链接线，不以提交数或新增校验器数量表示完成进度。
 并行代理限定文件范围，只修改和验证；主协调者串行审查、暂存、提交、推送，禁止共享暂存区并发提交。
 每批一次更新看板与交接，不再为追赶 HEAD 单独追加基准刷新提交。
 
-Runtime 最新组织变更：`RuntimeContext`/`RuntimeState` 与 45 个字段视图整体移到
-`python/jittor/_runtime/state.py`，`core_api.py` 仅再导出与注入 native Flags；这是 Python
-模块迁移，不表示所有 native flags 已迁移。旧 `snapshot()` 的 `int` 实际绑定 `int32`，会创建
-张量；迁移后返回 Python 标量，回归检查无张量增持。Runtime state/module/root-domain
-定向 59 passed（3.96s），未执行完整 CUDA/NPU 门禁。
+2.13 已完成：计划点名的七项原生全局状态现归 NativeRuntime，核心/JIT/后端共用导出访问器。
+弱同步游标、嵌套遍历恢复、fork 保留遍历编号及退出期 holder 生命周期保留原契约；
+旧 `exe`/`tflag_count`/设备 flag 数据符号与 `misc/cuda_flags.*` 均已移除，外部扩展需要重编。
+这些是真实原生存储迁移，不是前面旧波次逐字段添加的 Python 只读视图。
 
-2026-09-06 原生迁移：`hold_vars` 容器与 `sync_ptr` 游标已一起收归
-`src/runtime/holder_state.{h,cc}` 的 RuntimeHolderState，删除两个导出全局变量。
-VarHolder 登记/释放、Executor 弱同步/auto-flush、grad、graph、memory profiler、
-mem_info 与 core 计数入口全部使用同一个 owner。该对象不持有 VarHolder 所有权，
-进程期存活以覆盖退出期 late holder 析构；保留原有串行修改契约，不增加线程安全声称。
-原生弱同步 cutoff/重复 unlink、节点、梯度、遍历与主机 C++ debug-iterator 合同共
-27 passed（15.32s）；另两项下载数据的 memory profiler 测试未执行，以不联网的
-小图 profiler/graph/memory diagnostics 回归覆盖本次消费者迁移。未跑完整 CUDA/NPU 门禁。
+本次补齐 config/runtime 分层：启动配置 10 项在后端初始化与兼容层 composition 完成后冻结，
+所有 native Flags 实例以及 Python compiler 公开旧字段均拒绝晚写；`jt.config` 深只读，
+`jt.runtime` 的 66 项策略可写、5 项计数只读，scope 复用原有恢复机制，snapshot 不创建张量。
+`cuda_kernel_math` 作为 NativeRuntime 策略进入普通/融合 JIT key，切换前提交旧策略下的图；
+Torch 激活不再改 startup nvcc_flags，启动 preflight 也不再因此构建另一份核心。
+分类文件纳入构建指纹；类型声明、旧入口约束和两个看板格式残留均已同步。
 
-后续原生迁移：`NativeRuntime` 现同时持有 Executor 与 RuntimeHolderState；删除全局
-`exe` 数据符号，以核心导出的 `runtime_executor()` 供所有核心、CUDA/ACL、Python 内嵌
-CUDA 与 Torch C++ 扩展消费者访问。构造保持空 allocator、不启动设备；fork 重置保留原行为。
-CPU/结构/弱同步/显式提交定向 14 passed；真实 CUDA 自动提交/梯度/CUB/退出与 fetch
-定向 5 passed；旧 unique oracle 测试因缺独立 Torch 跳过，新增 NumPy 对照 CUDA unique
-1 passed（先验证 device 驻留，再检查 values/inverse/counts）。未做完整后端门禁或 NPU 实机。
-使用旧 `exe` 符号的外部预编译扩展必须改源码并重编；不能将源码迁移说成二进制兼容。
+验证：CPU/CUDA/结构最终 109 passed（7.35s）；Torch bootstrap 47 passed（8.49s）；
+CPU-only 与自定义扩展 23 passed/1 skipped（仅不存在的 cuda_archs 字段）。
+真实 CUDA 覆盖默认/严格舍入差异、普通/融合 kernel 缓存分离与策略回退。
+没有执行完整后端门禁，NPU/ROCm 仍需异机实测；既有 ACL 主机桩不代替 CANN ABI 验证。
 
-遍历状态也已收归同一 NativeRuntime：删除 `tflag_count` 与 `TraversalEpoch::live_count`，
-epoch 实现从 `misc/` 搬到 `runtime/`，核心与 JIT 通过导出函数共享计数与嵌套状态。
-fork 不重置计数，避免撞上继承节点的 stamp；嵌套标记在异常退出时仍逐层恢复。
-CPU/结构/JIT 嵌套执行与 backward-leaf 定向 37 passed（3.54s），无 skip；
-本次未追加 CUDA/NPU 实机测试。旧 traversal 头路径和数据符号的外部消费者需改源码并重编。
-
-设备模块已整体迁入 `runtime/device.{h,cc}`：`use_cuda/device_id/sync_run` 三个数据全局
-及设备计数/current-device 缓存、切换 hooks、peer 记录均由 NativeRuntime 的设备状态持有。
-flag 宏与生成器通过函数访问真实存储，保留别名、初始化、异常回滚与旧后端 flush 顺序；
-核心、CUDA、ACL、MPI 消费者已接线，旧 `misc/cuda_flags.*` 删除。ROCm 旧转换器存在
-文件名特判，已改为头内显式 IS_ROCM 条件；真实旧 blob 主机探针证明恢复原转换结果。
-设备定向 CPU/CUDA/双卡 32 passed，setter/切换追加 8 passed，新负向/别名 2 passed；
-最终主机/生成器合同 12 passed。CPU-only device.cc 语法与 ACL 三 TU/两 launcher ABI 通过，
-ACL 检查另有未定义符号反向对照。未跑完整门禁或 NPU/ROCm 实机，外部 C++ 扩展必须重编。
-异机 CUDA 可先跑 `tests/core/test_runtime_device_state.py`、
-`tests/backends/cuda/test_runtime_device_state.py` 与 `tests/backends/cuda/test_multi_device.py`；
-NPU 按 `docs/guides/ascend-910b.md` 做真实构建/执行验收，主机桩检查不替代 CANN ABI 验证。
-
-下一实现重点是其余 native flags 与 config/runtime 分层，以及依赖它的后端组织迁移；
-不要再逐字段添加只读包装。
+下一波优先推进 2.14 的 misc 归位、4.03/4.04 的 Backend/Op 注册调用链；
+不要因为 2.13 关闭就转去追低价值计数。独立 torch 包和后端架构仍是未完成的大需求。
+异机 CUDA 先跑 `tests/core/test_startup_config.py`、`tests/backends/cuda/test_cuda_kernel_math_policy.py`
+及 `tests/backends/cuda/test_multi_device.py`；NPU 依 `docs/guides/ascend-910b.md` 做真实构建/执行验收。
 下文波次表保留为历史证据，不应作为当前已完成范围。
 
 第五十五波新增 3 个严格保持待领的前置：
