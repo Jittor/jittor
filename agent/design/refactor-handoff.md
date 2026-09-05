@@ -1695,6 +1695,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `build` | 9.01 剩余冷启动主成本仍在 compiler import/核心编译，setup_cutt 无生产调用点，无法安全窄延迟。 |
 | `device` | 4.06 缺 BackendRegistry/OpRegistry，ACL fallback 三态不能孤立增加；保持待领。 |
 
+### 2026-09-05 第一百七十四波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | 复核 5.24、10.20、10.21，剩余状态和 import/include layering 均跨模块，近期 facade 修复未形成新的独立闭环。 |
+| `build` | 复核 9.01 冷启动仍在 import 路径编译整核，CUDA/冷启动目标未满足。 |
+| `bindings` | 复核 2.19 历史 broadcast_to 计数已修正（结构 57 passed），但 cuTT 不可达和多卡缺口仍阻塞整卡。 |
+| `device` | 复核 8.12 六路 legacy cache 仍需统一 POD/per-device 迁移；本波无代码提交。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
