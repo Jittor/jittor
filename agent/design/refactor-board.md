@@ -1,5 +1,8 @@
 # 整改看板
 
+> 第212波：`3d73ab52` 迁移四项 allocator policy Runtime owner（结构 38 passed）；`058a6572` 增加 Native OpId consumer dispatch/index（结构/JIT 合同通过）；`91147566` ACL DescriptorCache acquire/lease/tombstone/generation 生命周期（host-only 21 passed）；`234d7dc8` Torch distribution metadata canonical identity（namespace 36 passed）。未声称 CUDA/NPU 实机。
+
+
 > 第211波：`85d2279e` 迁移 cpu/device memory limits Runtime owner（结构/CPU 通过）；`7b5bda2e` provider generation-safe unbind（结构 10 passed）；`e2fbafd6` canonicalize Nano types 到 `src/type`（结构 14 passed，2.14 子切片）；`69709bdc` standalone torch distribution metadata（namespace 36 passed）。未声称 CUDA/NPU 实机。
 
 
