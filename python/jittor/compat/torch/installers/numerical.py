@@ -23,6 +23,7 @@ from ..types import (
     _dtype_to_str,
 )
 from ..fidelity import Fidelity, register_fidelity
+from ..context import getitem_transform_active
 from ...diagnostics import EXPECTED, swallowed
 
 _vmap_runtime_impl = None
@@ -1970,7 +1971,7 @@ def install(ctx):
         specs = getattr(func, "_jittor_vmap_specs", ()) + ((in_dims, out_dims),)
 
         def wrapped(*args):
-            if getattr(g, "_transform_getitem_to_index_depth", 0):
+            if getitem_transform_active(g):
                 vectorized = _vectorized_getitem_vmap(base_func, specs, args)
                 if vectorized is not None:
                     return vectorized

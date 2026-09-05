@@ -11,6 +11,7 @@ import jittor as jt
 from ...permissive import install_permissive_package
 from ..fidelity import Fidelity, register_fidelity
 from ..library import install_torch_library
+from ..context import TransformGetItemToIndex as _TransformGetItemToIndex
 from .factories import _install_empty_like
 
 
@@ -325,15 +326,10 @@ def install(ctx):
     _dynamo.eval_frame = _eval_frame
     _modules["torch._dynamo.eval_frame"] = _eval_frame
     _twh = _types2.ModuleType("torch._dynamo._trace_wrapped_higher_order_op")
-    class TransformGetItemToIndex:
-        def __enter__(self):
-            self._previous_depth = getattr(
-                g, "_transform_getitem_to_index_depth", 0)
-            g._transform_getitem_to_index_depth = self._previous_depth + 1
-            return self
-        def __exit__(self, *exc):
-            g._transform_getitem_to_index_depth = self._previous_depth
-            return False
+    class TransformGetItemToIndex(_TransformGetItemToIndex):
+        def __init__(self):
+            super().__init__(g)
+
     _twh.TransformGetItemToIndex = TransformGetItemToIndex
     _modules["torch._dynamo._trace_wrapped_higher_order_op"] = _twh
     _functorch_pkg = _types2.ModuleType("torch._functorch")

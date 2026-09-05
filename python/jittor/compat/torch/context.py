@@ -12,6 +12,39 @@ from .._aliases import _is_deployed_torch_placeholder
 from ..diagnostics import EXPECTED, swallowed
 
 
+class TransformGetItemToIndex:
+    """Scope the vmap getitem lowering hint for one Jittor owner.
+
+    The compatibility surface historically exposed the depth as a private
+    attribute on ``jittor``.  Keeping the owner explicit here prevents the
+    compiler installer and numerical runtime from growing separate state
+    machines, while the attribute remains observable for old callers.
+    """
+
+    DEPTH_ATTR = "_transform_getitem_to_index_depth"
+
+    def __init__(self, owner):
+        self.owner = owner
+        self._previous_depth = 0
+
+    def __enter__(self):
+        self._previous_depth = int(getattr(self.owner, self.DEPTH_ATTR, 0))
+        setattr(self.owner, self.DEPTH_ATTR, self._previous_depth + 1)
+        return self
+
+    def __exit__(self, *exc):
+        # Always restore the exact entry value, including when the body raises
+        # or when contexts are nested.
+        setattr(self.owner, self.DEPTH_ATTR, self._previous_depth)
+        return False
+
+
+def getitem_transform_active(owner):
+    """Return whether getitem-to-index lowering is active for ``owner``."""
+
+    return bool(getattr(owner, TransformGetItemToIndex.DEPTH_ATTR, 0))
+
+
 class InstallStepError(RuntimeError):
     """A required compatibility installer failed."""
 
