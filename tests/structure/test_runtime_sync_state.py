@@ -29,6 +29,8 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "sync_run": jt.flags.sync_run,
         "device_id": getattr(jt.flags, "device_id", -1),
         "use_cuda": jt.flags.use_cuda,
+        "cpu_mem_limit": jt.flags.cpu_mem_limit,
+        "device_mem_limit": jt.flags.device_mem_limit,
         "node_order": jt.flags.node_order,
         "lazy_execution": jt.flags.lazy_execution,
         "auto_flush_ops": jt.flags.auto_flush_ops,
@@ -103,6 +105,33 @@ def test_runtime_use_cuda_is_a_live_read_only_view():
             jt.runtime.use_cuda = 0
     finally:
         jt.flags.use_cuda = original
+
+
+def test_runtime_memory_limits_are_live_read_only_views_and_cpu_execution_survives():
+    import numpy as np
+    import jittor as jt
+
+    originals = (jt.flags.cpu_mem_limit, jt.flags.device_mem_limit)
+    try:
+        assert jt.runtime.cpu_mem_limit == originals[0]
+        assert jt.runtime.device_mem_limit == originals[1]
+        with jt.flag_scope(cpu_mem_limit=64 * 1024 * 1024, device_mem_limit=128 * 1024 * 1024):
+            assert jt.runtime.cpu_mem_limit == 64 * 1024 * 1024
+            assert jt.runtime.device_mem_limit == 128 * 1024 * 1024
+            snapshot = jt.runtime.context.snapshot()
+            assert snapshot["cpu_mem_limit"] == 64 * 1024 * 1024
+            assert snapshot["device_mem_limit"] == 128 * 1024 * 1024
+            value = (jt.array(np.arange(4, dtype="float32")) + 1).numpy()
+            np.testing.assert_array_equal(value, np.arange(1, 5, dtype="float32"))
+        assert jt.runtime.cpu_mem_limit == originals[0]
+        assert jt.runtime.device_mem_limit == originals[1]
+        with pytest.raises(AttributeError):
+            jt.runtime.cpu_mem_limit = 0
+        with pytest.raises(AttributeError):
+            jt.runtime.context.device_mem_limit = 0
+    finally:
+        jt.flags.cpu_mem_limit = originals[0]
+        jt.flags.device_mem_limit = originals[1]
 
 
 def test_runtime_parallel_op_compiler_workers_are_a_live_read_only_view():

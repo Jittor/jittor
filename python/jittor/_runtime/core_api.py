@@ -810,6 +810,16 @@ class RuntimeContext:
         return self._flags.use_cuda
 
     @property
+    def cpu_mem_limit(self):
+        """Maximum CPU allocation budget in bytes, or ``-1`` when unlimited."""
+        return self._flags.cpu_mem_limit
+
+    @property
+    def device_mem_limit(self):
+        """Maximum device allocation budget in bytes, or ``-1`` when unlimited."""
+        return self._flags.device_mem_limit
+
+    @property
     def node_order(self):
         """Ordering policy used when assigning graph node priorities."""
         return self._flags.node_order
@@ -970,6 +980,8 @@ class RuntimeContext:
             "sync_run": int(self.sync_run),
             "device_id": int(self.device_id),
             "use_cuda": int(self.use_cuda),
+            "cpu_mem_limit": int(self.cpu_mem_limit),
+            "device_mem_limit": int(self.device_mem_limit),
             "node_order": int(self.node_order),
             "lazy_execution": int(self.lazy_execution),
             "auto_flush_ops": int(self.auto_flush_ops),
@@ -1027,6 +1039,14 @@ class RuntimeState:
     @property
     def use_cuda(self):
         return self._context.use_cuda
+
+    @property
+    def cpu_mem_limit(self):
+        return self._context.cpu_mem_limit
+
+    @property
+    def device_mem_limit(self):
+        return self._context.device_mem_limit
 
     @property
     def node_order(self):
