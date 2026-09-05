@@ -855,6 +855,11 @@ class RuntimeContext:
         return self._flags.profiler_warmup
 
     @property
+    def profiler_enable(self):
+        """Whether the runtime profiler is collecting execution records."""
+        return self._flags.profiler_enable
+
+    @property
     def check_graph(self):
         """Whether graph liveness checks are enabled for execution."""
         return self._flags.check_graph
@@ -874,6 +879,7 @@ class RuntimeContext:
             "use_threading": int(self.use_threading),
             "profile_memory_enable": int(self.profile_memory_enable),
             "profiler_warmup": int(self.profiler_warmup),
+            "profiler_enable": int(self.profiler_enable),
             "check_graph": int(self.check_graph),
         }
 
@@ -937,6 +943,10 @@ class RuntimeState:
     @property
     def profiler_warmup(self):
         return self._context.profiler_warmup
+
+    @property
+    def profiler_enable(self):
+        return self._context.profiler_enable
 
     @property
     def check_graph(self):
