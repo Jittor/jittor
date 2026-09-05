@@ -35,6 +35,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "gopt_disable": jt.flags.gopt_disable,
         "exec_called": jt.flags.exec_called,
         "use_threading": jt.flags.use_threading,
+        "profile_memory_enable": jt.flags.profile_memory_enable,
     }
     assert jt.runtime.device_id == getattr(jt.flags, "device_id", -1)
     assert jt.runtime.use_cuda == jt.flags.use_cuda
@@ -188,3 +189,24 @@ def test_runtime_use_threading_is_a_live_read_only_view():
             jt.runtime.context.use_threading = 0
     finally:
         jt.flags.use_threading = original
+
+
+def test_runtime_profile_memory_enable_is_a_live_read_only_view_and_cpu_execution_survives():
+    import numpy as np
+    import jittor as jt
+
+    original = jt.flags.profile_memory_enable
+    try:
+        assert jt.runtime.profile_memory_enable == original
+        with jt.flag_scope(profile_memory_enable=1):
+            assert jt.runtime.profile_memory_enable == 1
+            assert jt.runtime.context.snapshot()["profile_memory_enable"] == 1
+            value = (jt.array(np.arange(4, dtype="float32")) * 2).numpy()
+            np.testing.assert_array_equal(value, np.arange(0, 8, 2, dtype="float32"))
+        assert jt.runtime.profile_memory_enable == original
+        with pytest.raises(AttributeError):
+            jt.runtime.profile_memory_enable = 0
+        with pytest.raises(AttributeError):
+            jt.runtime.context.profile_memory_enable = 0
+    finally:
+        jt.flags.profile_memory_enable = original

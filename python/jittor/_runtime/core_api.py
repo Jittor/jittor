@@ -839,6 +839,11 @@ class RuntimeContext:
         """Whether executor synchronization may use Python threading."""
         return self._flags.use_threading
 
+    @property
+    def profile_memory_enable(self):
+        """Whether execution records memory-profiler state."""
+        return self._flags.profile_memory_enable
+
     def snapshot(self):
         """Return an immutable snapshot of the fields owned by this context."""
         return {
@@ -851,6 +856,7 @@ class RuntimeContext:
             "gopt_disable": int(self.gopt_disable),
             "exec_called": int(self.exec_called),
             "use_threading": int(self.use_threading),
+            "profile_memory_enable": int(self.profile_memory_enable),
         }
 
 
@@ -901,6 +907,10 @@ class RuntimeState:
     @property
     def use_threading(self):
         return self._context.use_threading
+
+    @property
+    def profile_memory_enable(self):
+        return self._context.profile_memory_enable
 
     @property
     def context(self):
