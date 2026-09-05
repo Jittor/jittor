@@ -19,6 +19,8 @@ its assumptions do not hold.
 from functools import lru_cache
 
 import jittor as jt
+from jittor._runtime.backend_libraries import library_resource
+from jittor._runtime.dispatch import optional_kernel
 
 
 # One partial per block, folded by a single block in stage two, so the block
@@ -31,7 +33,7 @@ _THREADS = 256
 
 @lru_cache(maxsize=8)
 def _full_sum_cuda_cls(dtype, divisor):
-    header = f"#include <{jt.compile_extern.cub_home}cub/cub.cuh>"
+    header = f"#include <{library_resource('cub', 'home')}cub/cub.cuh>"
     # repr keeps the decimal point that a plain %g drops for round values;
     # "32768f" is not a float literal, "32768.0f" is.
     scale = "" if divisor is None else " / %rf" % float(divisor)
@@ -99,35 +101,27 @@ def _full_sum_cuda_cls(dtype, divisor):
     return FullSumCUDA
 
 
-def _full_reduce_cuda(x, divisor=None):
-    """Fold ``x`` to a scalar Var, or ``None`` when this path does not apply.
-
-    ``divisor`` turns the sum into a mean; pass the element count.
-    """
-    if not (
-        jt.flags.use_cuda
-        and not getattr(jt.compiler, "has_acl", 0)
-        and not getattr(jt.compiler, "has_rocm", 0)
-        and isinstance(x, jt.Var)
-    ):
-        return None
-    dtype = str(x.dtype)
-    # float32 only: the accumulator is float32, so widening float64 here would
-    # silently lose precision, and the low-precision types have their own
-    # accumulation rules that this kernel does not reproduce.
-    if dtype != "float32":
-        return None
+def _supports_full_reduce(x, divisor=None):
+    if not isinstance(x, jt.Var):
+        return False
     shape = tuple(int(size) for size in x.shape)
     if not shape or any(size <= 0 for size in shape):
-        return None
+        return False
     total = 1
     for size in shape:
         total *= size
     # Below roughly a block's worth of work the generated kernel is not
     # contended and a two-kernel launch is the slower choice.
     if total < 1 << 14:
-        return None
-    return _full_sum_cuda_cls(dtype, divisor).apply(x)
+        return False
+    return True
+
+
+@optional_kernel("nn.full_reduce", ("cuda", "corex_legacy"), dtypes=("float32",),
+                 supports=_supports_full_reduce)
+def _full_reduce_cuda(x, divisor=None):
+    """Fold ``x`` to a scalar; ``divisor`` turns the sum into a mean."""
+    return _full_sum_cuda_cls(str(x.dtype), divisor).apply(x)
 
 
 def _is_full_reduction(args, kwargs):

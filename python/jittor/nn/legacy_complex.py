@@ -1,17 +1,34 @@
 """Legacy real/imag-pair complex helper used by internal kernels."""
 
 import jittor as jt
+from .._runtime.dispatch import register_kernel, select_kernel
+from .._runtime.backend_libraries import get_library_ops
 
 
 # TODO: support FFT2D only now.
 def _fft2(x, inverse=False):
-    assert jt.flags.use_cuda == 1
     assert len(x.shape) == 4
     assert x.shape[3] == 2
-    y = jt.compile_extern.cufft_ops.cufft_fft(x, inverse)
+    kernel = select_kernel("nn.legacy_fft2", x, inverse)
+    if kernel is None:
+        raise NotImplementedError("legacy FFT2 requires an accelerator with use_cuda=1")
+    return kernel(x, inverse)
+
+
+def _fft2_cuda(x, inverse=False):
+    operations = get_library_ops("cufft", load=True)
+    if operations is None:
+        raise RuntimeError("cuFFT is unavailable for legacy FFT2")
+    y = operations.cufft_fft(x, inverse)
     if inverse:
         y /= x.shape[1] * x.shape[2]
     return y
+
+
+for _backend in ("cuda", "rocm_legacy", "corex_legacy"):
+    register_kernel("nn.legacy_fft2", _backend, _fft2_cuda,
+                    runtime_modes=(1,))
+del _backend
 
 
 class ComplexNumber:

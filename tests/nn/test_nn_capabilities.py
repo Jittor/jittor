@@ -5,6 +5,8 @@ import inspect
 import math
 import pickle
 import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -1030,7 +1032,7 @@ class TestCudaCapabilities(unittest.TestCase):
 
 
 class TestCapabilityStructure(unittest.TestCase):
-    def test_lazy_cuda_device_index_uses_location_fallback(self):
+    def test_lazy_cuda_device_index_uses_dispatch_placement(self):
         from jittor.nn._cuda_inference import device_index
 
         class LazyCudaValue:
@@ -1040,7 +1042,21 @@ class TestCapabilityStructure(unittest.TestCase):
             def location(self):
                 return "device"
 
-        self.assertEqual(device_index(LazyCudaValue()), 0)
+        value = LazyCudaValue()
+        with patch("jittor.nn._cuda_inference.dispatch_context",
+                   return_value=SimpleNamespace(backend="cuda", device_id=3)) as resolve:
+            self.assertEqual(device_index(value), 3)
+            resolve.assert_called_once_with(value)
+
+    def test_attention_cache_key_includes_backend_and_device_index(self):
+        with patch.object(attention, "dispatch_context") as resolve:
+            resolve.return_value = SimpleNamespace(backend="cuda", device_id=1)
+            cuda_one = attention._active_device_key()
+            resolve.return_value = SimpleNamespace(backend="cuda", device_id=2)
+            cuda_two = attention._active_device_key()
+            resolve.return_value = SimpleNamespace(backend="acl_legacy", device_id=1)
+            acl_one = attention._active_device_key()
+        self.assertEqual(len({cuda_one, cuda_two, acl_one}), 3)
 
     def test_facade_exports_physical_capabilities(self):
         expected = {

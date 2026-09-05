@@ -5,6 +5,8 @@ import math
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad
+from jittor._runtime.backend_libraries import library_resource
+from jittor._runtime.dispatch import optional_kernel
 
 
 @lru_cache(maxsize=128)
@@ -17,7 +19,7 @@ def _layer_norm_cuda_cls(hidden, eps):
     # stays within one block and the shared buffers stay small.
     tile_x = 32
     tile_y = 32 if hidden >= 32 else 8
-    header = f"#include <{jt.compile_extern.cub_home}cub/cub.cuh>"
+    header = f"#include <{library_resource('cub', 'home')}cub/cub.cuh>"
 
     class LayerNormCUDA(jt.Function):
         def execute(self, x, weight, bias):
@@ -207,21 +209,13 @@ def _layer_norm_cuda_cls(hidden, eps):
     return LayerNormCUDA
 
 
-def _layer_norm_cuda(x, normalized_shape, weight, bias, eps):
+def _supports_layer_norm_training(x, normalized_shape, weight, bias, eps):
     if not (
-        jt.flags.use_cuda
-        and not getattr(jt.compiler, "has_acl", 0)
-        and _output_requires_grad(x, weight, bias)
+        _output_requires_grad(x, weight, bias)
         and isinstance(weight, jt.Var)
         and isinstance(bias, jt.Var)
     ):
-        return None
-    if not (
-        str(x.dtype) == "float32"
-        and str(weight.dtype) == "float32"
-        and str(bias.dtype) == "float32"
-    ):
-        return None
+        return False
     shape = tuple(int(size) for size in x.shape)
     normalized_shape = tuple(int(size) for size in normalized_shape)
     if (
@@ -234,6 +228,13 @@ def _layer_norm_cuda(x, normalized_shape, weight, bias, eps):
         or not math.isfinite(float(eps))
         or float(eps) <= 0.0
     ):
-        return None
-    cls = _layer_norm_cuda_cls(shape[-1], float(eps))
+        return False
+    return True
+
+
+@optional_kernel("nn.layer_norm.training", ("cuda", "rocm_legacy", "corex_legacy"),
+                 dtypes=("float32",),
+                 supports=_supports_layer_norm_training)
+def _layer_norm_cuda(x, normalized_shape, weight, bias, eps):
+    cls = _layer_norm_cuda_cls(int(x.shape[-1]), float(eps))
     return cls.apply(x, weight, bias)

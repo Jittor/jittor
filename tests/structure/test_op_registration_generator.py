@@ -89,7 +89,7 @@ def test_custom_library_forwards_backend_into_registration_generator():
 
 
 @pytest.mark.parametrize("relative,expected", [
-    ("compile_extern.py", {"mkl_ops": "cpu", "culib": "accelerator", "cutt": "accelerator",
+    ("compile_extern.py", {"mkl": "cpu", "culib": "accelerator", "cutt": "accelerator",
                            "nccl": "accelerator", "hccl": "accelerator", "mpi": None}),
     ("extern/rocm/rocm_compiler.py", {"rocmlib": "accelerator"}),
 ])

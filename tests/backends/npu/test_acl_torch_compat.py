@@ -5,6 +5,7 @@ import numpy as np
 import jittor as torch
 import jittor as jt
 from jittor.nn.backends import hooks as backend_hooks
+from jittor._runtime.dispatch import override_kernel, registered_kernel
 
 
 def _bfloat16_round(values):
@@ -433,15 +434,15 @@ class TestACLTorchCompat(unittest.TestCase):
 
         candidates = []
         native_dispatches = []
-        acl_group_norm = backend_hooks.group_norm_cuda
+        acl_group_norm = registered_kernel("nn.group_norm", "acl_legacy")
+        self.assertIsNotNone(acl_group_norm)
 
         def record_group_norm(*args):
             result = acl_group_norm(*args)
             native_dispatches.append(result is not None)
             return result
 
-        backend_hooks.group_norm_cuda = record_group_norm
-        try:
+        with override_kernel("nn.group_norm", "acl_legacy", record_group_norm):
             self.assertTrue(jt.flags.use_acl)
             self.assertTrue(jt.flags.use_cuda)
             with jt.log_capture_scope(
@@ -478,8 +479,6 @@ class TestACLTorchCompat(unittest.TestCase):
                 candidates.append(
                     jt.fetch_sync([functional_output] + list(functional_grads))
                 )
-        finally:
-            backend_hooks.group_norm_cuda = acl_group_norm
 
         self.assertEqual(native_dispatches, [True, True])
         with jt.flag_scope(use_acl=0, use_cuda=0):
@@ -519,15 +518,15 @@ class TestACLTorchCompat(unittest.TestCase):
         loss_weight_np = rng.randn(*source_np.shape).astype("float32")
 
         dispatches = []
-        acl_batch_norm = backend_hooks.batch_norm_eval_cuda
+        acl_batch_norm = registered_kernel("nn.batch_norm.eval", "acl_legacy")
+        self.assertIsNotNone(acl_batch_norm)
 
         def record_batch_norm(*args):
             result = acl_batch_norm(*args)
             dispatches.append(result is not None)
             return result
 
-        backend_hooks.batch_norm_eval_cuda = record_batch_norm
-        try:
+        with override_kernel("nn.batch_norm.eval", "acl_legacy", record_batch_norm):
             module = torch.nn.BatchNorm2d(4)
             module.eval()
             module.weight.assign(weight_np).start_grad()
@@ -545,8 +544,6 @@ class TestACLTorchCompat(unittest.TestCase):
                     (source, module.weight, module.bias),
                 )
                 candidate = jt.fetch_sync([output] + list(gradients))
-        finally:
-            backend_hooks.batch_norm_eval_cuda = acl_batch_norm
 
         invstd = 1.0 / np.sqrt(variance_np + 1e-5)
         broadcast = (None, slice(None), None, None)
@@ -801,15 +798,15 @@ class TestACLTorchCompat(unittest.TestCase):
         additive_np = rng.randn(shape[-2], shape[-2]).astype("float32") * 0.05
         candidates = []
         native_dispatches = []
-        acl_attention = backend_hooks.acl_scaled_dot_product_attention
+        acl_attention = registered_kernel("nn.scaled_dot_product_attention", "acl_legacy")
+        self.assertIsNotNone(acl_attention)
 
         def record_attention(*args, **kwargs):
             result = acl_attention(*args, **kwargs)
             native_dispatches.append(result is not None)
             return result
 
-        backend_hooks.acl_scaled_dot_product_attention = record_attention
-        try:
+        with override_kernel("nn.scaled_dot_product_attention", "acl_legacy", record_attention):
             with jt.log_capture_scope(
                 log_v=0, log_vprefix="acl_op_exec.cc=100"
             ) as logs:
@@ -837,8 +834,6 @@ class TestACLTorchCompat(unittest.TestCase):
                         (output * torch.tensor(loss_weight_np)).sum(), inputs
                     )
                     candidates.append(jt.fetch_sync([output] + list(grads)))
-        finally:
-            backend_hooks.acl_scaled_dot_product_attention = acl_attention
 
         self.assertEqual(native_dispatches, [True, True])
         trainable_mask = torch.tensor(additive_np)
@@ -944,15 +939,15 @@ class TestACLTorchCompat(unittest.TestCase):
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_constant_pad_forward_backward_stays_on_acl(self):
-        acl_pad = backend_hooks.acl_constant_pad
+        acl_pad = registered_kernel("nn.constant_pad", "acl_legacy")
+        self.assertIsNotNone(acl_pad)
         calls = []
 
         def record_acl_pad(x, amounts, value):
             calls.append((tuple(amounts), value))
             return acl_pad(x, amounts, value)
 
-        backend_hooks.acl_constant_pad = record_acl_pad
-        try:
+        with override_kernel("nn.constant_pad", "acl_legacy", record_acl_pad):
             with jt.log_capture_scope(
                 log_v=0, log_vprefix="acl_op_exec.cc=100"
             ) as logs:
@@ -980,8 +975,6 @@ class TestACLTorchCompat(unittest.TestCase):
                 shifted, padded, gradient = jt.fetch_sync(
                     [shifted, padded, gradient]
                 )
-        finally:
-            backend_hooks.acl_constant_pad = acl_pad
 
         np.testing.assert_array_equal(shifted, [[2, 3, -100]])
         np.testing.assert_array_equal(

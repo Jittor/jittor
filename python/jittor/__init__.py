@@ -108,7 +108,6 @@ with _lock.lock_scope():
     _publish(globals(), jittor_core.ops, _NATIVE_OP_EXPORTS)
     _core_profiler = core.profiler
     from . import compile_extern
-    from .compile_extern import mkl_ops, mpi, mpi_ops
     # in_mpi / rank / world_size are deliberately NOT imported here. Importing
     # them bound a snapshot of compile_extern.rank taken at import time, and
     # anything that later corrected compile_extern.rank -- the torch NCCL
@@ -120,17 +119,20 @@ with _lock.lock_scope():
     # Assigning jt.rank / jt.world_size / jt.in_mpi anywhere would put an entry
     # in this module's __dict__, which shadows __getattr__ permanently and
     # brings the stale copy straight back. Write to compile_extern. 6.B15.
-    from .compile_extern import distributed_state_getattr as __getattr__
+    from .compile_extern import runtime_state_getattr as __getattr__
+    from ._runtime.backend_libraries import (
+        protect_library_attributes as _protect_library_attributes,
+        ROOT_LIBRARY_NAMES as _root_library_names,
+    )
+    _protect_library_attributes(_sys.modules[__name__], _root_library_names)
     if core.get_device_count() == 0:
         has_cuda = compile_extern.has_cuda = compiler.has_cuda = False
     if has_cuda:
-        from .compile_extern import cudnn, curand, cublas, cufft, cusparse
         from .init_cupy import numpy2cupy
     else:
         # No CUDA device visible (e.g. CUDA_VISIBLE_DEVICES="" in a CPU-only Ray
         # orchestrator). Skip CUDA-library / cupy init (they call into the CUDA
         # runtime and would raise cudaErrorNoDevice); run CPU-only.
-        cudnn = curand = cublas = cufft = cusparse = None
         numpy2cupy = None
         # CPU arrays default to the CUDA pinned-host allocator (cudaMallocHost),
         # which also fails with no device -- switch to the plain host allocator.

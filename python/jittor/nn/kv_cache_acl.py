@@ -2,12 +2,7 @@
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
-
-
-def _on_acl():
-    return bool(
-        getattr(jt.compiler, "has_acl", 0) and getattr(jt.flags, "use_acl", 0) and jt.flags.use_cuda
-    )
+from jittor._runtime.dispatch import optional_kernel
 
 
 def _gather_rows(value, row_ids):
@@ -17,11 +12,13 @@ def _gather_rows(value, row_ids):
     return jt.gather(value, 0, index)
 
 
+@optional_kernel("nn.reshape_and_cache_acl", "acl_legacy",
+                 dtypes={"float16", "bfloat16", "float32", "int32", "int64"})
 def _reshape_and_cache_acl(key, value, kv_cache, slot_mapping, slots=None):
     tensors = (key, value, kv_cache, slot_mapping)
     if not all(isinstance(tensor, jt.Var) for tensor in tensors):
         return None
-    if not (_on_acl() and not _output_requires_grad(tensors)):
+    if _output_requires_grad(tensors):
         return None
 
     key_shape = tuple(int(size) for size in key.shape)
@@ -77,10 +74,11 @@ def _reshape_and_cache_acl(key, value, kv_cache, slot_mapping, slots=None):
     return _stop_grad_outputs(kv_cache)
 
 
+@optional_kernel("nn.gather_cache_blocks_acl", "acl_legacy")
 def _gather_cache_blocks_acl(kv_cache, block_ids):
     if not all(isinstance(tensor, jt.Var) for tensor in (kv_cache, block_ids)):
         return None
-    if not (_on_acl() and not _output_requires_grad(kv_cache, block_ids)):
+    if _output_requires_grad(kv_cache, block_ids):
         return None
     cache_shape = tuple(int(size) for size in kv_cache.shape)
     if len(cache_shape) != 5 or cache_shape[1] != 2:
@@ -95,10 +93,11 @@ def _gather_cache_blocks_acl(kv_cache, block_ids):
     return _stop_grad_outputs(jt.gather(kv_cache, 0, gather_index))
 
 
+@optional_kernel("nn.gather_block_table_acl", "acl_legacy", dtypes={"int32", "int64"})
 def _gather_block_table_acl(block_table, request_count, block_count, request=None):
     if not isinstance(block_table, jt.Var):
         return None
-    if not (_on_acl() and not _output_requires_grad(block_table)):
+    if _output_requires_grad(block_table):
         return None
     if block_table.ndim != 2 or str(block_table.dtype) not in ("int32", "int64"):
         return None
@@ -109,10 +108,11 @@ def _gather_block_table_acl(block_table, request_count, block_count, request=Non
     return _stop_grad_outputs(jt.gather(block_table, 0, row_ids))
 
 
+@optional_kernel("nn.split_cache_kv_acl", "acl_legacy")
 def _split_cache_kv_acl(cache, dim):
     if not isinstance(cache, jt.Var):
         return None
-    if not (_on_acl() and not _output_requires_grad(cache)):
+    if _output_requires_grad(cache):
         return None
     shape = list(int(size) for size in cache.shape)
     if dim < 0:
@@ -128,10 +128,11 @@ def _split_cache_kv_acl(cache, dim):
     return _stop_grad_outputs((key, value))
 
 
+@optional_kernel("nn.slice_dim_acl", "acl_legacy")
 def _slice_dim_acl(value, dim, start, length):
     if not isinstance(value, jt.Var):
         return None
-    if not (_on_acl() and not _output_requires_grad(value)):
+    if _output_requires_grad(value):
         return None
     shape = list(int(size) for size in value.shape)
     if dim < 0:
@@ -149,10 +150,11 @@ def _slice_dim_acl(value, dim, start, length):
     return _stop_grad_outputs(jt.gather(value, dim, index))
 
 
+@optional_kernel("nn.repeat_interleave_dim_acl", "acl_legacy")
 def _repeat_interleave_dim_acl(value, dim, repeats):
     if not isinstance(value, jt.Var):
         return None
-    if not (_on_acl() and not _output_requires_grad(value)):
+    if _output_requires_grad(value):
         return None
     shape = list(int(size) for size in value.shape)
     if dim < 0:
@@ -168,10 +170,11 @@ def _repeat_interleave_dim_acl(value, dim, repeats):
         value.reshape(reshaped).broadcast(expanded).reshape(result))
 
 
+@optional_kernel("nn.decode_attention_acl", "acl_legacy")
 def _decode_attention_acl(query, key, value, scale):
     if not all(isinstance(tensor, jt.Var) for tensor in (query, key, value)):
         return None
-    if not (_on_acl() and not _output_requires_grad(query, key, value)):
+    if _output_requires_grad(query, key, value):
         return None
     query_shape = tuple(int(size) for size in query.shape)
     key_shape = tuple(int(size) for size in key.shape)
@@ -220,12 +223,13 @@ def _decode_attention_acl(query, key, value, scale):
             query_shape).cast(output_dtype))
 
 
+@optional_kernel("nn.paged_attention_decode_acl", "acl_legacy")
 def _paged_attention_decode_acl(query, kv_cache, block_table, scale,
                                 key_lengths=None):
     tensors = (query, kv_cache, block_table)
     if not all(isinstance(tensor, jt.Var) for tensor in tensors):
         return None
-    if not (_on_acl() and not _output_requires_grad(tensors)):
+    if _output_requires_grad(tensors):
         return None
     if key_lengths is None:
         return None

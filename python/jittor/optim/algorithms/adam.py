@@ -1,6 +1,7 @@
 """Adam-family optimizers."""
 
 import jittor as jt
+from ..._runtime.dispatch import register_kernel, select_kernel
 
 from ..base import (
     Optimizer, _grad_matches_param, _param_requires_grad,
@@ -25,6 +26,10 @@ def _acl_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
             results[item[0]] = tuple(
                 values[output_index] for values in updated)
     return results
+
+
+register_kernel("optim.adamw_fused", "acl_legacy", _acl_fused_adamw_updates)
+
 
 class Adam(Optimizer):
     """ Adam Optimizer.
@@ -122,12 +127,15 @@ class AdamW(Optimizer):
             eps = pg.get("eps", self.eps)
             weight_decay = pg.get("weight_decay", self.weight_decay)
             b0, b1 = pg.get("betas", self.betas)
-            fused = pg.get("fused", self.fused) is True and jt.flags.use_acl
-            if fused:
+            fused = None
+            if pg.get("fused", self.fused) is True:
                 active = [(p, m, v, g, n - 1) for p, g, v, m in zip(
                     pg["params"], pg["grads"], pg["values"], pg["m"])
                     if _param_requires_grad(p) and _grad_matches_param(p, g)]
-                updates = _acl_fused_adamw_updates(
+                if active:
+                    fused = select_kernel("optim.adamw_fused", active)
+            if fused is not None:
+                updates = fused(
                     active, lr, b0, b1, weight_decay, eps)
                 for (p, m, v, _, _), (new_p, new_m, new_v) in zip(
                         active, updates):

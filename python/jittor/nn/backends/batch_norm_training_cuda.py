@@ -5,6 +5,8 @@ import math
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad
+from jittor._runtime.backend_libraries import library_resource
+from jittor._runtime.dispatch import optional_kernel
 
 
 @lru_cache(maxsize=128)
@@ -16,7 +18,7 @@ def _batch_norm_cuda_cls(channels, spatial, eps, count):
     # faster than 256 at 64x112x112 and 37% faster at 64x224x224, but twice as
     # slow at 256x28x28 and 512x14x14, where the tree is most of the work.
     threads = 1024 if count >= 65536 else 256
-    header = f"#include <{jt.compile_extern.cub_home}cub/cub.cuh>"
+    header = f"#include <{library_resource('cub', 'home')}cub/cub.cuh>"
 
     class BatchNormCUDA(jt.Function):
         def execute(self, x, weight, bias):
@@ -173,18 +175,13 @@ def _batch_norm_cuda_cls(channels, spatial, eps, count):
     return BatchNormCUDA
 
 
-def _batch_norm_cuda(x, weight, bias, eps):
+def _supports_batch_norm_training(x, weight, bias, eps):
     if not (
-        jt.flags.use_cuda
-        and not getattr(jt.compiler, "has_acl", 0)
-        and _output_requires_grad(x, weight, bias)
+        _output_requires_grad(x, weight, bias)
         and isinstance(weight, jt.Var)
         and isinstance(bias, jt.Var)
-        and str(x.dtype) == "float32"
-        and str(weight.dtype) == "float32"
-        and str(bias.dtype) == "float32"
     ):
-        return None
+        return False
     shape = tuple(int(size) for size in x.shape)
     if (
         len(shape) != 4
@@ -194,7 +191,15 @@ def _batch_norm_cuda(x, weight, bias, eps):
         or not math.isfinite(float(eps))
         or float(eps) <= 0.0
     ):
-        return None
+        return False
+    return True
+
+
+@optional_kernel("nn.batch_norm.training", ("cuda", "rocm_legacy", "corex_legacy"),
+                 dtypes=("float32",),
+                 supports=_supports_batch_norm_training)
+def _batch_norm_cuda(x, weight, bias, eps):
+    shape = tuple(int(size) for size in x.shape)
     spatial = shape[2] * shape[3]
     cls = _batch_norm_cuda_cls(shape[1], spatial, float(eps), shape[0] * spatial)
     return cls.apply(x, weight, bias)
@@ -203,7 +208,7 @@ def _batch_norm_cuda(x, weight, bias, eps):
 @lru_cache(maxsize=128)
 def _batch_norm_eval_cuda_cls(channels, spatial, eps):
     threads = 256
-    header = f"#include <{jt.compile_extern.cub_home}cub/cub.cuh>"
+    header = f"#include <{library_resource('cub', 'home')}cub/cub.cuh>"
 
     class BatchNormEvalCUDA(jt.Function):
         def execute(self, x, weight, bias, running_mean, running_var):
@@ -295,16 +300,13 @@ def _batch_norm_eval_cuda_cls(channels, spatial, eps):
     return BatchNormEvalCUDA
 
 
-def _batch_norm_eval_cuda(x, weight, bias, running_mean, running_var, eps):
+def _supports_batch_norm_eval(x, weight, bias, running_mean, running_var, eps):
     values = (x, weight, bias, running_mean, running_var)
     if not (
-        jt.flags.use_cuda
-        and not getattr(jt.compiler, "has_acl", 0)
-        and _output_requires_grad(values)
+        _output_requires_grad(values)
         and all(isinstance(value, jt.Var) for value in values)
-        and all(str(value.dtype) == "float32" for value in values)
     ):
-        return None
+        return False
     shape = tuple(int(size) for size in x.shape)
     if (
         len(shape) != 4
@@ -313,7 +315,15 @@ def _batch_norm_eval_cuda(x, weight, bias, running_mean, running_var, eps):
         or not math.isfinite(float(eps))
         or float(eps) <= 0.0
     ):
-        return None
+        return False
+    return True
+
+
+@optional_kernel("nn.batch_norm.eval", ("cuda", "rocm_legacy", "corex_legacy"),
+                 dtypes=("float32",),
+                 supports=_supports_batch_norm_eval)
+def _batch_norm_eval_cuda(x, weight, bias, running_mean, running_var, eps):
+    shape = tuple(int(size) for size in x.shape)
     spatial = shape[2] * shape[3]
     cls = _batch_norm_eval_cuda_cls(shape[1], spatial, float(eps))
     return cls.apply(x, weight, bias, running_mean, running_var)

@@ -4,6 +4,7 @@ from collections import OrderedDict
 from threading import RLock
 
 import jittor as jt
+from jittor._runtime.dispatch import dispatch_context
 
 
 _CU_SEQLENS_CACHE = OrderedDict()
@@ -70,7 +71,8 @@ def cumulative_sequence_lengths(lengths, device=None, tensor_factory=None):
     normalized = tuple(int(length) for length in lengths)
     if any(length < 0 for length in normalized):
         raise ValueError("sequence lengths must be non-negative")
-    device_key = str(device if device is not None else _active_device_key())
+    device_key = (_active_device_key() if tensor_factory is None else
+                  (str(device), _active_device_key() if device is None else None))
     factory_key = None if tensor_factory is None else _FactoryIdentity(tensor_factory)
     key = (device_key, normalized, factory_key)
     with _CU_SEQLENS_CACHE_LOCK:
@@ -98,17 +100,21 @@ def cumulative_sequence_lengths(lengths, device=None, tensor_factory=None):
 
 
 def _active_device_key():
-    return "cuda" if jt.flags.use_cuda else "cpu"
+    context = dispatch_context()
+    return context.backend, context.device_id
 
 
 def _tensor_device(value):
-    try:
-        return value.device
-    except Exception:
-        try:
-            return int(value.get_device())
-        except Exception:
-            return _active_device_key()
+    device = getattr(value, "device", None)
+    if device is not None:
+        return device
+    if isinstance(value, jt.Var):
+        context = dispatch_context(value)
+        if context.backend == "cpu":
+            return "cpu"
+        family = "npu" if context.backend == "acl_legacy" else "cuda"
+        return "{}:{}".format(family, context.device_id)
+    raise TypeError("attention tensor must expose its device")
 
 
 def _prepare_varlen(value, lengths, tail_rank, tensor_factory):
@@ -129,9 +135,15 @@ def _prepare_varlen(value, lengths, tail_rank, tensor_factory):
         flat = value
         restore_shape = None
     maximum = max(normalized) if normalized else 0
-    cu = cumulative_sequence_lengths(
-        normalized, device=_tensor_device(value), tensor_factory=tensor_factory
-    )
+    if tensor_factory is None:
+        context = dispatch_context(value)
+        with jt.flag_scope(use_cuda=int(context.backend != "cpu"),
+                           device_id=context.device_id):
+            cu = cumulative_sequence_lengths(normalized)
+    else:
+        cu = cumulative_sequence_lengths(
+            normalized, device=_tensor_device(value), tensor_factory=tensor_factory
+        )
     return flat, normalized, maximum, cu, restore_shape
 
 

@@ -4,6 +4,8 @@ from abc import abstractmethod
 import math
 
 import jittor as jt
+from jittor._runtime.dispatch import register_kernel, select_kernel
+from jittor._runtime.backend_libraries import get_library, get_library_ops
 
 
 class RNNBase(jt.Module):
@@ -82,47 +84,39 @@ class RNNBase(jt.Module):
                     copy_to('weight' + param_name, offset_idx + idx, idx)
                 return num_gates
 
-        if jt.flags.use_cuda and jt.cudnn and jt.compiler.is_cuda:
-            # cuDNN describes the whole RNN with one data type, so the flat
-            # weight has to be in the parameters' dtype -- and the offsets
-            # cuDNN reports are element indices into a buffer of that dtype,
-            # so the query depends on it too. Both were pinned to float32,
-            # which is why a half RNN could not be built at all.
-            # str(): NanoString does not compare against None, and the flat
-            # layout only depends on the dtype's name.
-            dtype = str(self.weight_ih_l0.dtype)
-            if getattr(self, '_cudnn_weight_dtype', None) != dtype:
-                offset_array = jt.cudnn.cudnn_rnn_weight_offset(
-                    cudnn_mode,
-                    self.input_size,
-                    self.hidden_size,
-                    self.num_layers,
-                    self.proj_size,
-                    self.bias,
-                    self.bidirectional,
-                    dtype
-                )
-                self._cudnn_weight_size = offset_array[0]
-                self._cudnn_weight_offset = offset_array[1:]
-                self._cudnn_weight_dtype = dtype
+        library = get_library("cudnn")
+        if library is None:
+            raise RuntimeError("Not Cudnn found")
+        # Offsets are element indices in the parameters' dtype, not bytes or
+        # indices into an unconditional float32 buffer.
+        dtype = str(self.weight_ih_l0.dtype)
+        if getattr(self, '_cudnn_weight_dtype', None) != dtype:
+            offset_array = library.cudnn_rnn_weight_offset(
+                cudnn_mode,
+                self.input_size,
+                self.hidden_size,
+                self.num_layers,
+                self.proj_size,
+                self.bias,
+                self.bidirectional,
+                dtype
+            )
+            self._cudnn_weight_size = offset_array[0]
+            self._cudnn_weight_offset = offset_array[1:]
+            self._cudnn_weight_dtype = dtype
 
-            num_gates = {
-                "RNN": 1, "LSTM": 4, "GRU": 3
-            }[self.mode]
-            ft_weight = jt.zeros(self._cudnn_weight_size, dtype=dtype)
-
-            cnt = 0
-            for layer in range(self.num_layers):
-                suffix = ''
+        num_gates = {"RNN": 1, "LSTM": 4, "GRU": 3}[self.mode]
+        ft_weight = jt.zeros(self._cudnn_weight_size, dtype=dtype)
+        cnt = 0
+        for layer in range(self.num_layers):
+            suffix = ''
+            cnt += copy_to_flatten_weight(f'_ih_l{layer}' + suffix, cnt, num_gates)
+            cnt += copy_to_flatten_weight(f'_hh_l{layer}' + suffix, cnt, num_gates)
+            if self.bidirectional:
+                suffix = '_reverse'
                 cnt += copy_to_flatten_weight(f'_ih_l{layer}' + suffix, cnt, num_gates)
                 cnt += copy_to_flatten_weight(f'_hh_l{layer}' + suffix, cnt, num_gates)
-                if self.bidirectional:
-                    suffix = '_reverse'
-                    cnt += copy_to_flatten_weight(f'_ih_l{layer}' + suffix, cnt, num_gates)
-                    cnt += copy_to_flatten_weight(f'_hh_l{layer}' + suffix, cnt, num_gates)
-            return ft_weight
-        else:
-            raise RuntimeError("Not Cudnn found")
+        return ft_weight
 
     @abstractmethod
     def call_rnn_cell(self, input, hidden, suffix):
@@ -153,13 +147,13 @@ class RNNBase(jt.Module):
         ft_weight = self._cudnn_flatten_weights(cudnn_mode)
 
         if self.mode == 'LSTM':
-            ret = jt.cudnn.ops.cudnn_rnn(input, hx[0], hx[1], ft_weight,
+            ret = get_library_ops("cudnn").cudnn_rnn(input, hx[0], hx[1], ft_weight,
                 cudnn_mode, self.input_size, self.hidden_size, self.num_layers, 0,
                 self.dropout, self.bias, self.bidirectional, self.is_training()
             )
             return ret[0], (ret[1], ret[2])
         else:
-            ret = jt.cudnn.ops.cudnn_rnn(input, hx, ft_weight,
+            ret = get_library_ops("cudnn").cudnn_rnn(input, hx, ft_weight,
                 cudnn_mode, self.input_size, self.hidden_size, self.num_layers, 0,
                 self.dropout, self.bias, self.bidirectional, self.is_training()
             )
@@ -178,8 +172,10 @@ class RNNBase(jt.Module):
                 hx = (jt.zeros((num_directions * self.num_layers, input.shape[1], self.hidden_size), dtype=input.dtype),
                       jt.zeros((num_directions * self.num_layers, input.shape[1], self.hidden_size), dtype=input.dtype))
 
-        if jt.flags.use_cuda and jt.cudnn and self.proj_size == 0 and jt.compiler.is_cuda:
-            output, hidden_n = self._execute_cudnn_rnn(input, hx)
+        parameters = tuple(self.parameters())
+        kernel = select_kernel("rnn", input, hx, self, parameters)
+        if kernel is not None:
+            output, hidden_n = kernel(input, hx, self, parameters)
             # batch_first: the input was permuted to (seq,batch,feat) above; permute the
             # output back to (batch,seq,feat) to match torch (and jittor's own docstring).
             if self.batch_first:
@@ -225,3 +221,14 @@ class RNNBase(jt.Module):
             if self.batch_first:
                 output = output.permute(1, 0, 2)
             return output, hidden_n
+
+
+def _supports_cudnn_rnn(input, hx, model, parameters):
+    return model.proj_size == 0 and get_library("cudnn") is not None
+
+
+def _cudnn_rnn(input, hx, model, parameters):
+    return model._execute_cudnn_rnn(input, hx)
+
+
+register_kernel("rnn", "cuda", _cudnn_rnn, supports=_supports_cudnn_rnn)

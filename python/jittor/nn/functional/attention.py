@@ -37,7 +37,7 @@ def scaled_dot_product_attention(
     from jittor.nn.backends import softmax_cuda
 
     cuda_mask_softmax = (
-        softmax_cuda.can_softmax_v1(scores, -1) and jt.compiler.is_cuda
+        softmax_cuda.can_softmax_v1(scores, -1)
     )
     zero_fully_masked = cuda_mask_softmax and attn_mask is not None
     skip_row_valid = cuda_mask_softmax and (

@@ -11,14 +11,19 @@ from jittor_utils import run_cmd, get_version, get_int_version
 from jittor_utils.misc import download_url_to_local, safe_tar_extractall
 from jittor_utils import manifest
 import jittor_utils as jit_utils
+from ._runtime.backend_libraries import (
+    get_library, get_library_ops, library_resource, register_library,
+    register_library_loader, register_library_resources, library_attribute,
+    protect_library_attributes, ROOT_LIBRARY_NAMES,
+)
+
+__getattr__ = library_attribute
+register_library_resources("cub", home="")
 
 
 # Optional runtimes are initialized by an explicit setup_* call, or by the
 # first operation that needs them.  Keep their public state queryable without
 # doing downloads, compilation, or dynamic loading during a plain import.
-mkl_ops = None
-cutt = cutt_ops = None
-nccl = nccl_ops = None
 use_mkl = os.environ.get("use_mkl", "1") == "1"
 use_cutt = os.environ.get("use_cutt", "1") == "1"
 use_nccl = os.environ.get("use_nccl", "1") == "1"
@@ -187,11 +192,12 @@ def check_mkl_usable(dirname):
             f"{dirname} and its archive to download it again.")
     LOG.v(f"mkl usable: {lib_path}")
 
+def _mkl_library_enabled():
+    return bool(use_mkl) and os.environ.get("use_mkl", "1") == "1"
+
+
 def setup_mkl():
-    global mkl_ops, use_mkl
-    use_mkl = os.environ.get("use_mkl", "1")=="1"
-    mkl_ops = None
-    if not use_mkl: return
+    if not _mkl_library_enabled(): return
 
     # pytorch mkl is conflict with jittor mkl
     # yield error "free: invalide size" or
@@ -244,11 +250,10 @@ def setup_mkl():
 
     mkl_op_dir = os.path.join(jittor_path, "extern", "mkl", "ops")
     mkl_op_files = [os.path.join(mkl_op_dir, name) for name in os.listdir(mkl_op_dir)]
-    mkl_ops = compile_custom_ops(mkl_op_files, extra_flags=extra_flags, backend="cpu")
-    root_module = sys.modules.get("jittor")
-    if root_module is not None:
-        root_module.mkl_ops = mkl_ops
-    LOG.vv("Get mkl_ops: "+str(dir(mkl_ops)))
+    mkl = compile_custom_ops(mkl_op_files, extra_flags=extra_flags,
+                             backend="cpu", return_module=True)
+    register_library("mkl", mkl)
+    LOG.vv("Get mkl_ops: "+str(dir(mkl.ops)))
 
 
 def install_cub(root_folder):
@@ -272,7 +277,6 @@ def install_cub(root_folder):
     return dirname
 
 def setup_cub():
-    global cub_home
     cub_home = ""
     cub_path = os.path.join(jit_utils.home(), ".cache", "jittor", "cub")
     cuda_version = int(get_version(nvcc_path)[1:-1].split('.')[0])
@@ -282,6 +286,7 @@ def setup_cub():
         extra_flags = f"-I{cub_home}"
         cub_home += "/"
     setup_cuda_lib("cub", link=False, extra_flags=extra_flags)
+    register_library_resources("cub", home=cub_home)
 
 def setup_cuda_extern():
     if not has_cuda: return
@@ -311,6 +316,7 @@ def setup_cuda_extern():
     compile(cc_path, cc_flags+f" -I\"{cuda_include}\" ", cuda_extern_files, so_name)
     link_cuda_extern = f" -L\"{cache_path_cuda}\" -llibcuda_extern "
     ctypes.CDLL(so_name, dlopen_flags)
+    register_library_resources("cuda_extern", link_flags=link_cuda_extern)
 
     try:
         setup_cub()
@@ -349,8 +355,6 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
     arch_key = "x86_64"
     if platform.machine() not in ["x86_64", "AMD64"]:
         arch_key = "aarch64"
-    globals()[lib_name+"_ops"] = None
-    globals()[lib_name] = None
     if not has_cuda: return
     LOG.v(f"setup {lib_name}...")
 
@@ -438,8 +442,7 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
     culib = compile_custom_ops(culib_src_files, return_module=True, backend="accelerator",
         extra_flags=f" -I\"{jt_cuda_include}\" -I\"{jt_culib_include}\" {link_flags} {extra_flags} ")
     culib_ops = culib.ops
-    globals()[lib_name+"_ops"] = culib_ops
-    globals()[lib_name] = culib
+    register_library(lib_name, culib)
     LOG.vv(f"Get {lib_name}_ops: "+str(dir(culib_ops)))
 
 
@@ -452,8 +455,6 @@ def _setup_fake_cuda_lib(lib_name=None, link=True, extra_flags=""):
     arch_key = "x86_64"
     if platform.machine() not in ["x86_64", "AMD64"]:
         arch_key = "aarch64"
-    globals()[lib_name+"_ops"] = None
-    globals()[lib_name] = None
     LOG.v(f"setup {lib_name}...")
 
     jt_cuda_include = os.path.join(jittor_path, "extern", "cuda", "inc")
@@ -473,8 +474,7 @@ def _setup_fake_cuda_lib(lib_name=None, link=True, extra_flags=""):
     culib = compile_custom_ops(culib_src_files, return_module=True, backend="accelerator",
         extra_flags=f" -I\"{jt_cuda_include}\" -I\"{jt_culib_include}\" {extra_flags} ")
     culib_ops = culib.ops
-    globals()[lib_name+"_ops"] = culib_ops
-    globals()[lib_name] = culib
+    register_library(lib_name, culib)
     LOG.vv(f"Get {lib_name}_ops: "+str(dir(culib_ops)))
 
 if setup_fake_cuda_lib:
@@ -530,13 +530,11 @@ def install_cutt(root_folder):
     return dirname
 
 def setup_cutt():
-    global cutt_ops, cutt, use_cutt
+    global use_cutt
     if not has_cuda:
         use_cutt = False
         return
     use_cutt = os.environ.get("use_cutt", "1")=="1"
-    cutt_ops = None
-    cutt = None
     if not use_cutt: return
     cutt_include_path = os.environ.get("cutt_include_path")
     cutt_lib_path = os.environ.get("cutt_lib_path")
@@ -569,6 +567,7 @@ def setup_cutt():
     cutt = compile_custom_ops(cutt_op_files, return_module=True, backend="accelerator",
         extra_flags=f" -I\"{cutt_include_path}\" -L\"{cutt_lib_path}\" -llibcutt ")
     cutt_ops = cutt.ops
+    register_library("cutt", cutt)
     LOG.vv("Get cutt_ops: "+str(dir(cutt_ops)))
 
 def install_nccl(root_folder):
@@ -740,10 +739,8 @@ def _init_nccl_from_store(nccl_module, store=None):
 
 
 def setup_nccl(store=None):
-    global nccl, nccl_ops, use_nccl
+    global use_nccl
     use_nccl = os.environ.get("use_nccl", "1")=="1"
-    nccl = None
-    nccl_ops = None
     # NCCL is normally only built under MPI; also build it for the MPI-free
     # env/file rendezvous (JT_NCCL_WORLD_SIZE set by the torchrun-style launcher),
     # so NVIDIA multi-card DDP works without mpirun (mirrors the Ascend HCCL path).
@@ -841,6 +838,7 @@ def setup_nccl(store=None):
             _init_nccl_from_store(nccl, store=store)
         else:
             nccl.nccl_init()
+    register_library("nccl", nccl)
     LOG.vv("Get nccl_ops: "+str(dir(nccl_ops)))
 
 def setup_hccl(no_mpi=False):
@@ -856,7 +854,6 @@ def setup_hccl(no_mpi=False):
         with CANN. Built as a separate module so it never collides with the
         MPI build's cache/symbols.
     '''
-    global hccl_ops, hccl_mod
 
     hccl_src_dir = os.path.join(jittor_path, "extern", "acl", "hccl")
     hccl_src_files = []
@@ -912,7 +909,7 @@ def setup_hccl(no_mpi=False):
         gen_name_=gen_name)
     LOG.i("setup_hccl: hccl ops compiled+loaded")
     hccl_ops = hccl.ops
-    hccl_mod = hccl
+    register_library("hccl", hccl)
     LOG.vv("Get hccl_ops: "+str(dir(hccl_ops)))
 
 def manual_link(flags):
@@ -972,11 +969,9 @@ def inside_mpi():
     return False
 
 def setup_mpi():
-    global mpi_ops, mpi, use_mpi
+    global use_mpi
     global mpicc_path, has_mpi
     use_mpi = os.environ.get("use_mpi", "1")=="1"
-    mpi_ops = None
-    mpi = None
     has_mpi = False
     if not use_mpi: return
     mpicc_path = env_or_try_find('mpicc_path', 'mpicc')
@@ -1027,6 +1022,7 @@ def setup_mpi():
         extra_flags=f" {mpi_flags} ", return_module=True,
         dlopen_flags=mpi_dlopen_flags, gen_name_="jittor_mpi_core")
     mpi_ops = mpi.ops
+    register_library("mpi", mpi)
     LOG.vv("Get mpi: "+str(mpi.__dict__.keys()))
     LOG.vv("Get mpi_ops: "+str(mpi_ops.__dict__.keys()))
     def wrapper(func):
@@ -1047,7 +1043,6 @@ if FIX_TORCH_ERROR:
     from jittor_utils import dirty_fix_pytorch_runtime_error
     dirty_fix_pytorch_runtime_error()
 
-cudnn = cublas = curand = cufft = cusparse = cutt = None
 
 # Env/file-based distributed mode (MPI-free) for Ascend. The launcher sets
 # JT_HCCL_* and spawns one plain process per rank. We use this because the
@@ -1089,6 +1084,7 @@ def _resolve_distributed_state():
     if _jt_nccl_no_mpi:
         return True, int(os.environ.get("JT_NCCL_RANK", "0")), int(_jt_nccl_ws)
     if in_mpi:
+        mpi = get_library("mpi")
         return True, mpi.world_rank(), mpi.world_size()
     return False, 0, 1
 
@@ -1118,6 +1114,12 @@ def distributed_state_getattr(name):
     if name in _DISTRIBUTED_STATE_NAMES:
         return globals()[name]
     raise AttributeError(name)
+
+
+def runtime_state_getattr(name):
+    if name in ROOT_LIBRARY_NAMES:
+        return library_attribute(name)
+    return distributed_state_getattr(name)
 
 
 def distributed_requested():
@@ -1155,6 +1157,7 @@ def check_rank_agrees_with_cxx():
     rendezvous the C++ globals are filled from the same launcher variables this
     module reads, inside nccl_wrapper.cc / hccl_wrapper.cc.
     """
+    mpi = get_library("mpi")
     if mpi is None or _jt_hccl_no_mpi or _jt_nccl_no_mpi:
         return
     # First: did both sides recognize the launcher? This is where the two
@@ -1191,9 +1194,8 @@ def check_distributed_backend_ready():
     reason = distributed_requested()
     if reason is None:
         return
-    backends = [name for name, ops in (("hccl", hccl_ops),
-                                       ("nccl", nccl_ops),
-                                       ("mpi", mpi_ops)) if ops is not None]
+    backends = [name for name in ("hccl", "nccl", "mpi")
+                if get_library_ops(name) is not None]
     if backends:
         LOG.v("distributed requested ({}), collective backends: {}".format(
             reason, ", ".join(backends)))
@@ -1218,8 +1220,6 @@ def check_distributed_backend_ready():
 # -- the device IPs are available via `hccn_tool -i N -ip -g`). For now they are
 # kept as distinct, separately-compiled modules so neither can regress the
 # other. The MPI path's behavior is unchanged when JT_HCCL_WORLD_SIZE is unset.
-hccl_ops = None
-hccl_mod = None
 import jittor.compiler as compiler
 _want_hccl = (getattr(compiler, "has_acl", 0) and
               (_jt_hccl_no_mpi or (in_mpi and has_mpi)))
@@ -1232,7 +1232,7 @@ if _want_hccl:
         # Outside the build lock, for the same reason as nccl_init above: this
         # waits for the other ranks, and they need the lock to get here.
         with lock.unlock_scope():
-            hccl_mod.hccl_init()
+            get_library("hccl").hccl_init()
         LOG.i("setup_hccl: HCCL communicator ready")
     except Exception as e:
         if distributed_requested():
@@ -1261,3 +1261,32 @@ for mod in jit_utils.backends:
 
 # Last gate: distributed was requested -> a collective backend must exist.
 check_distributed_backend_ready()
+
+
+def _load_cuda_library(name):
+    if setup_fake_cuda_lib:
+        _setup_fake_cuda_lib(name)
+        return
+    if not has_cuda:
+        return
+    link_flags = library_resource("cuda_extern", "link_flags")
+    if link_flags is None:
+        setup_cuda_extern()
+        if get_library(name) is not None:
+            return
+        link_flags = library_resource("cuda_extern", "link_flags") or ""
+    setup_cuda_lib(name, extra_flags=link_flags)
+
+
+for _library_name in ("cublas", "cudnn", "curand", "cufft", "cusparse"):
+    register_library_loader(
+        _library_name, lambda name=_library_name: _load_cuda_library(name))
+register_library_loader("cub", lambda: setup_cub() if has_cuda else None)
+register_library_loader("cutt", lambda: setup_cutt())
+register_library_loader("mkl", lambda: setup_mkl(), enabled=_mkl_library_enabled)
+register_library_loader("mpi", lambda: setup_mpi())
+register_library_loader("nccl", lambda: setup_nccl())
+register_library_loader(
+    "hccl", lambda: setup_hccl(no_mpi=_jt_hccl_no_mpi) if _want_hccl else None)
+del _library_name
+protect_library_attributes(sys.modules[__name__])

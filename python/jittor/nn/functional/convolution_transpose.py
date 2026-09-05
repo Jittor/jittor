@@ -1,9 +1,7 @@
 """Transposed convolution functional implementations."""
 
 import jittor as jt
-
-from ..backends import cudnn as _cudnn
-
+from jittor._runtime.dispatch import select_kernel
 
 def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
     if groups == 1:
@@ -31,11 +29,10 @@ def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding
         h_out = (H-1) * stride_h + output_padding[0] - 2*padding_h + 1 + (h-1)*dilation_h
         w_out = (W-1) * stride_w + output_padding[1] - 2*padding_w + 1 + (w-1)*dilation_w
         out_shape = (N, o, h_out, w_out)
-        # cuDNN path (memory-efficient fwd+bwd); falls back to reindex below.
-        _y = _cudnn._try_cudnn_conv_transpose2d(
-            x, weight, bias, stride, padding, output_padding, dilation, 1)
-        if _y is not None:
-            return _y
+        kernel = select_kernel("conv_transpose2d", x, weight, bias, stride,
+                               padding, output_padding, dilation, 1)
+        if kernel is not None:
+            return kernel(x, weight, bias, stride, padding, output_padding, dilation, 1)
         shape = (N, i, o, H, W, h, w)
         xx = x.broadcast(shape, (2, 5, 6)) # i,h,w
         ww = weight.broadcast(shape, (0, 3, 4)) # N,H,W
@@ -133,12 +130,10 @@ def conv_transpose3d(input, weight, bias=None, stride=1, padding=0, output_paddi
     h_out = (H-1) * stride_h + output_padding[1] - 2*padding_h + 1 + (h-1)*dilation_h
     w_out = (W-1) * stride_w + output_padding[2] - 2*padding_w + 1 + (w-1)*dilation_w
     out_shape = (N, o, d_out, h_out, w_out)
-    if jt.flags.use_cuda and jt.cudnn:
-        # fp16/bf16 3D transposed-conv hits the same missing-cuDNN-algo wall as
-        # the forward conv3d; reuse the fp32-fallback wrapper.
-        return _cudnn._cudnn_conv3d_fp16_safe(
-            jt.cudnn.ops.cudnn_conv3d_backward_x, weight, x,
-            *out_shape[2:], *stride, *padding, *dilation, groups)
+    kernel = select_kernel("conv_transpose3d", x, weight, out_shape[2:], stride,
+                           padding, dilation, groups)
+    if kernel is not None:
+        return kernel(x, weight, out_shape[2:], stride, padding, dilation, groups)
     shape = (N, i, o, D, H, W, d, h, w)
     xx = x.broadcast(shape, (2, 6, 7, 8)) # i,h,w
     ww = weight.broadcast(shape, (0, 3, 4, 5)) # N,H,W

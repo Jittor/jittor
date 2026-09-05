@@ -30,10 +30,10 @@
 | 分支 | `2.0-refactor`；本批迁移起点 `2328ce4f`，后续提交见 Git 历史 |
 | 相对 `2.0` 的提交 | 迁移起点共 1853 个；提交数不代表任务完成量 |
 | 提交里出现过的任务号 | 329 个 |
-| 看板 | 已合并 **216** / 进行中 **0** / 待领 **56** / 并入其它任务 **13** |
+| 看板 | 已合并 **217** / 进行中 **0** / 待领 **55** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
 
-**交接清理完成不等于整改完成。** 看板仍有 56 条待领；当前只是把中断留下的易失状态全部转成了主线提交、
+**交接清理完成不等于整改完成。** 看板仍有 55 条待领；当前只是把中断留下的易失状态全部转成了主线提交、
 明确待领项或已验证的不采用结论。这个分支不是终态。
 
 看板的「已合并」是权威。提交里的任务号更多，是因为一个任务常有补充提交、改判提交与「更正前一个提交」
@@ -577,19 +577,30 @@ CPU-only 的分派/身份/自定义扩展与相关结构检查 40 passed；ACL �
 本轮新增的两个跨测试文件 import 已移入 `_helpers`，该规则剩余的是此前 backend-registry 测试的 import。
 其余失败涉及 compat 重复/吞错/publication、旧 flag-scope 识别、进程模式与 CPU 缺少 CUDA 字段，
 未做整目录改前 A/B，不称全门禁通过；也没有执行完整模型门禁或 NPU/ROCm 实机验证。
-旧 NativeProviderRegistration 及 Python `_runtime.registry` 仍有元数据/少量 CPU 包装原型，
-其 bytearray 不是 Var 的 allocator；不要将它们描述为新的执行所有者。
+4.05 已完成真实 Python 分派迁移：`_runtime.dispatch` 消费 native 无同步设备上下文，
+按 backend、全部输入 dtype、shape/grad predicate 与优先级选择原始实现；错误不作为转路信号。
+矩阵/卷积/RNN、归一化/推理、KV/RoPE、scan/indexing/gamma/FFT/AdamW 全部接表。
+`_runtime.registry` 的假后端与 bytearray 原型已删除，27 个仅测原型的节点随原型退役，
+真实 outer/clamp/flatten 数值节点保留并改查真正的表，新增真实 CPU/CUDA 分派回归。
+库 module、ops 和资源由一个 owner 提供，旧 globals/hook 成为只读查询；ACL 直接发布真实 callback。
+MKL 禁用在查询已加载模块及启动 loader 前统一检查，恢复启用可复用模块；不再隐式覆盖显式禁用。
+旧 ROCm/Corex 允许的转换实现仍显式登记，不因此声称设备验证。原生算子域不再直接判旧设备 flag，
+显式设备迁移/启动配置不混入这个计数，legacy FFT 的 mode 1 限制放入注册项。
 
-下一块 4.05 整体收拢 Python 分派表，按以下边界并行推进，不再逐函数增加空壳注册：
+最终 CPU/CUDA 专项 54 passed（5.93s），CPU-only 52 passed/8 个 accelerator skip；
+原 matmul/推理能力及相关合同 61 passed/8 个未加载 MKL skip，额外卷积/RNN 对拍 2 passed。
+补实际 MKL 小形状 batched matmul：选中真实库、profiler 记录该 kernel 且 NumPy 数值通过；
+上述 8 skip 来自旧测试在惰性装载前固定判断，不能据此称本机无 MKL。Torch-CUDA RMS 路由 1 passed，
+CPU shim 公共签名与模块组合 14 passed；MKL 禁用/恢复的真实输入控制及库合同 11 passed。
+双卡 RNN 的自动 hx 和临时权重已由既有 pending scalar 跟随机制正确定位，无需增加 scope/helper。
+完整 structure 实跑 678 passed/10 failed/2 skipped；本轮新增 softmax 签名变化已恢复原公开签名，
+定向签名/身份节点通过。其余九类与上一轮记录相同，未重跑全量改前 A/B，不称全门禁通过。
+只读 HOME 导入通过；同文件旧 TestCoreBuildStamp 仍试图改 immutable jittor_path，属于既有测试适配缺口。
+未做完整模型门禁或 NPU/ROCm/Corex 实机。新接口及异机验收入口见 source-architecture 和 Ascend guide。
 
-- 注册与装载：以 native 运行目标/设备查询为真值，替换原型硬编码 backend 和 compile_extern globals 注入。
-- 矩阵与卷积：cuBLAS/MKL、cuDNN/depthwise、conv3d/transposed/RNN 的真实 callable 按设备、dtype 和能力选择。
-- 归一化与推理：nn/backends 的身份守卫归注册项，保留 grad/shape/layout 约束，库异常不触发静默转路。
-- 其余原生域：scan/indexing/gamma/FFT/optimizer 等选择归表；ACL hook 赋值同步变为登记。
-
-pending Var 的 location 为 none，已物化 CUDA 为 device；不能照旧 Python 原型仅按 location 判 CPU/CUDA。
-Conv 已在执行时选 depthwise，不要重做构造期迁移。后端源码整体搬迁仍归 4.10/4.15，
-4.11/4.12 才移除 legacy 源转换；本轮没有声称这些已完成。
+下一轮优先并行做 4.06 的真实回退策略和 4.07 的 BuildConfig 值对象/惰性后端发现，
+不要只完善现有 `_runtime.fallback` 原型。随后推进 4.10/4.15 后端物理布局以及 4.11/4.12 移除源转换。
+NativeProviderRegistration 的旧元数据不能当作上述执行/构建迁移已完成的证据。
 独立 torch 包和后端架构仍是未完成的大需求，不要为追低价值计数改变优先级。
 异机 CUDA 先跑 `tests/core/test_startup_config.py`、`tests/backends/cuda/test_cuda_kernel_math_policy.py`
 及 `tests/backends/cuda/test_multi_device.py`；NPU 依 `docs/guides/ascend-910b.md` 做真实构建/执行验收。

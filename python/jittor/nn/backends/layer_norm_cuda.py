@@ -4,27 +4,39 @@ import os
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
+from jittor._runtime.dispatch import optional_kernel
 
 
-def _layer_norm_no_grad_cuda(
+def _supports_layer_norm_inference(
         x, normalized_shape, weight, bias, eps, *, allow_bfloat16=False):
-    if not (jt.flags.use_cuda and not getattr(jt.compiler, "has_acl", 0)
-            and not _output_requires_grad(x, weight, bias)):
-        return None
+    if _output_requires_grad(x, weight, bias):
+        return False
     input_dtype = str(x.dtype)
     supported_dtypes = ("float16", "float32")
     if allow_bfloat16:
         supported_dtypes += ("bfloat16",)
     if len(normalized_shape) != 1 or input_dtype not in supported_dtypes:
-        return None
+        return False
     hidden = int(normalized_shape[0])
     var_affine = isinstance(weight, jt.Var) and isinstance(bias, jt.Var)
     scalar_affine = not isinstance(weight, jt.Var) and not isinstance(bias, jt.Var)
     if not var_affine:
         if not scalar_affine or os.environ.get("JITTOR_LAYERNORM_SCALAR_FAST", "1") == "0":
-            return None
+            return False
     if int(x.shape[-1]) != hidden:
-        return None
+        return False
+    if var_affine and (int(weight.numel()) != hidden or int(bias.numel()) != hidden):
+        return False
+    return True
+
+
+@optional_kernel("nn.layer_norm.inference", ("cuda", "rocm_legacy", "corex_legacy"),
+                 dtypes=("float16", "bfloat16", "float32"),
+                 supports=_supports_layer_norm_inference)
+def _layer_norm_no_grad_cuda(
+        x, normalized_shape, weight, bias, eps, *, allow_bfloat16=False):
+    hidden = int(normalized_shape[0])
+    scalar_affine = not isinstance(weight, jt.Var) and not isinstance(bias, jt.Var)
     eps_value = float(eps)
     if scalar_affine:
         scale_value = float(weight)
@@ -151,8 +163,6 @@ def _layer_norm_no_grad_cuda(
             """,
         )
         return y
-    if int(weight.numel()) != hidden or int(bias.numel()) != hidden:
-        return None
     y = jt.code(
         x.shape,
         x.dtype,

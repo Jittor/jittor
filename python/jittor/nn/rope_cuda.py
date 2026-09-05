@@ -2,11 +2,12 @@
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
+from jittor._runtime.dispatch import optional_kernel
 
-from ._cuda_inference import cached_source, device_index, on_acl
+from ._cuda_inference import cached_source
 
 
-def _rotary_embedding_cuda(
+def _rotary_embedding_contract(
     positions,
     q,
     k,
@@ -16,13 +17,12 @@ def _rotary_embedding_cuda(
     rotary_dim,
     is_neox_style,
 ):
-    """Inference-only CUDA RoPE for GQA query/key shapes."""
     tensors = (positions, q, k, cos_sin_cache)
     if not all(isinstance(value, jt.Var) for value in tensors):
         return None
-    if not (jt.flags.use_cuda and not _output_requires_grad(tensors)):
+    if _output_requires_grad(tensors):
         return None
-    if on_acl() or not is_neox_style:
+    if not is_neox_style:
         return None
     try:
         q_shape = tuple(int(size) for size in q.shape)
@@ -31,10 +31,7 @@ def _rotary_embedding_cuda(
         token_count = int(positions.numel())
         head_size = int(head_size)
         rotary_dim = int(rotary_dim)
-        devices = tuple(device_index(value) for value in tensors)
     except Exception:
-        return None
-    if any(device < 0 for device in devices) or len(set(devices)) != 1:
         return None
     if len(q_shape) != 2 or len(k_shape) != 2 or len(cache_shape) != 2:
         return None
@@ -53,6 +50,22 @@ def _rotary_embedding_cuda(
         return None
     if str(positions.dtype) not in ("int32", "int64"):
         return None
+    return q_shape, k_shape, cache_shape, head_size, rotary_dim
+
+
+def _rotary_embedding_supported(*args, **kwargs):
+    return _rotary_embedding_contract(*args, **kwargs) is not None
+
+
+@optional_kernel("nn.rotary_embedding.inference", ("cuda", "rocm_legacy", "corex_legacy"),
+                 supports=_rotary_embedding_supported)
+def _rotary_embedding_cuda(
+    positions, q, k, cos_sin_cache, *, head_size, rotary_dim, is_neox_style,
+):
+    """Inference-only CUDA RoPE for GQA query/key shapes."""
+    q_shape, k_shape, cache_shape, head_size, rotary_dim = _rotary_embedding_contract(
+        positions, q, k, cos_sin_cache, head_size=head_size,
+        rotary_dim=rotary_dim, is_neox_style=is_neox_style)
 
     cuda_src = cached_source(r"""
     __global__ static void rotary_embedding(
@@ -127,34 +140,22 @@ def _rotary_embedding_cuda(
     ))
 
 
-def partial_rotary_embedding_cuda(q, k, cos, sin, *, prefix_tokens, rotary_dim=None):
-    """Rotate the final tokens in ``q`` and ``k`` after an explicit prefix.
-
-    The token and channel axes are the final two axes. ``cos`` and ``sin`` are
-    shaped ``(rotated_tokens, rotary_dim)``. Channels after ``rotary_dim`` are
-    copied unchanged. The inference-only kernel returns ``None`` when the input
-    contract is not supported.
-    """
+def _partial_rotary_embedding_contract(q, k, cos, sin, *, prefix_tokens, rotary_dim=None):
     tensors = (q, k, cos, sin)
     if not all(isinstance(value, jt.Var) for value in tensors):
         return None
-    if not (jt.flags.use_cuda and not _output_requires_grad(tensors)):
-        return None
-    if on_acl():
+    if _output_requires_grad(tensors):
         return None
     dtypes = tuple(str(value.dtype) for value in tensors)
     if len(set(dtypes)) != 1 or dtypes[0] != "float32":
         return None
     try:
-        devices = tuple(device_index(value) for value in tensors)
         q_shape = tuple(int(size) for size in q.shape)
         k_shape = tuple(int(size) for size in k.shape)
         cos_shape = tuple(int(size) for size in cos.shape)
         sin_shape = tuple(int(size) for size in sin.shape)
         prefix_count = int(prefix_tokens)
     except Exception:
-        return None
-    if any(device < 0 for device in devices) or len(set(devices)) != 1:
         return None
     if q_shape != k_shape or len(q_shape) < 2 or cos_shape != sin_shape:
         return None
@@ -174,6 +175,23 @@ def partial_rotary_embedding_cuda(q, k, cos, sin, *, prefix_tokens, rotary_dim=N
         or int(cos.numel()) != rotated_tokens * table_dim
     ):
         return None
+    return head_dim, token_count, prefix_count, rotate, table_dim
+
+
+def _partial_rotary_embedding_supported(*args, **kwargs):
+    return _partial_rotary_embedding_contract(*args, **kwargs) is not None
+
+
+@optional_kernel("nn.partial_rotary_embedding.inference", ("cuda", "rocm_legacy", "corex_legacy"),
+                 supports=_partial_rotary_embedding_supported)
+def partial_rotary_embedding_cuda(q, k, cos, sin, *, prefix_tokens, rotary_dim=None):
+    """Rotate final q/k tokens after a prefix, preserving remaining channels.
+
+    Token and channel axes are the final two axes; cos/sin contain the rotated
+    tokens. Unsupported inference contracts return None.
+    """
+    head_dim, token_count, prefix_count, rotate, table_dim = _partial_rotary_embedding_contract(
+        q, k, cos, sin, prefix_tokens=prefix_tokens, rotary_dim=rotary_dim)
 
     cuda_src = cached_source(r"""
     __global__ static void partial_rope(

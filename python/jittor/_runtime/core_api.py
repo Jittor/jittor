@@ -19,10 +19,8 @@ import hashlib
 import sys, os
 import traceback
 from .acl_clamp import dispatch_acl_clamp
-from .registry import OpRegistry
+from .dispatch import register_kernel as _register_kernel, try_dispatch as _try_dispatch
 from .state import RuntimeContext, RuntimeState
-
-_runtime_op_registry = OpRegistry.default()
 
 if "SKEY" in os.environ:
     import jittor_utils.student_queue
@@ -415,6 +413,7 @@ class __single_process_scope:
         # alongside, so a later correction to compile_extern.in_mpi left this
         # copy stale and mpi_param_broadcast() below silently did nothing. 6.B15.
         self.bk_in_mpi = compile_extern.in_mpi
+        mpi = self._mpi = compile_extern.get_library("mpi")
         if mpi:
             self.bk_mpi_state = mpi.get_state()
         if not self.bk_in_mpi:
@@ -427,6 +426,7 @@ class __single_process_scope:
 
     def __exit__(self, *exc):
         compile_extern.in_mpi = self.bk_in_mpi
+        mpi = self._mpi
         if mpi:
             mpi.set_state(self.bk_mpi_state)
 
@@ -946,15 +946,10 @@ def _flatten_cpu(input, start_dim=0, end_dim=-1):
     for i in range(end_dim+1,len(in_shape),1): out_shape.append(in_shape[i])
     return input.reshape(out_shape)
 
-_runtime_op_registry.register("flatten", "cpu", _flatten_cpu)
+_register_kernel("flatten", "*", _flatten_cpu)
 
 def flatten(input, start_dim=0, end_dim=-1):
-    # CPU operations use the registry seam; CUDA keeps the pre-migration
-    # implementation until its native provider is registered.
-    if _runtime_op_registry.backends.backend_for(input) == "cpu":
-        return _runtime_op_registry.dispatch_value(
-            "flatten", input, start_dim, end_dim)
-    return _flatten_cpu(input, start_dim, end_dim)
+    return _try_dispatch("flatten", input, start_dim, end_dim)
 
 Var.flatten = flatten
 
@@ -1043,14 +1038,10 @@ def _clamp_cpu(x, min_v=None, max_v=None):
         x = select_bound(x, max_v, False)
     return x
 
-_runtime_op_registry.register("clamp", "cpu", _clamp_cpu)
+_register_kernel("clamp", "*", _clamp_cpu)
 
 def clamp(x, min_v=None, max_v=None):
-    # CPU operations now use the backend/op registry seam.  CUDA keeps the
-    # existing implementation until its native provider is migrated.
-    if _runtime_op_registry.backends.backend_for(x) == "cpu":
-        return _runtime_op_registry.dispatch_value("clamp", x, min_v, max_v)
-    return _clamp_cpu(x, min_v, max_v)
+    return _try_dispatch("clamp", x, min_v, max_v)
 
 Var.clamp = clamp
 
@@ -1096,15 +1087,11 @@ def _outer_cpu(x, y):
     return jt.multiply(x.unsqueeze(1), y.unsqueeze(0))
 
 
-_runtime_op_registry.register("outer", "cpu", _outer_cpu)
+_register_kernel("outer", "*", _outer_cpu)
 
 
 def outer(x, y):
-    # CPU operations use the registry seam; CUDA keeps the pre-migration
-    # implementation until its native provider is registered.
-    if _runtime_op_registry.backends.backend_for(x) == "cpu":
-        return _runtime_op_registry.dispatch_value("outer", x, y)
-    return _outer_cpu(x, y)
+    return _try_dispatch("outer", x, y)
 
 
 Var.outer = outer

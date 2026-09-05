@@ -7,7 +7,7 @@ import numpy as np
 
 import jittor as jt
 import jittor.nn.serving_ops as serving_ops
-from jittor.nn.backends import hooks as backend_hooks
+from jittor._runtime.dispatch import dispatch_context, override_kernel
 
 
 def _rope_cache(max_pos, rotary_dim, dtype="float32"):
@@ -19,16 +19,14 @@ def _rope_cache(max_pos, rotary_dim, dtype="float32"):
 class TestSiluAndMul(unittest.TestCase):
     def test_acl_miss_keeps_cuda_backend_reachable(self):
         marker = object()
-        previous = backend_hooks.acl_silu_and_mul
-        backend_hooks.acl_silu_and_mul = lambda value: None
-        try:
+        with override_kernel(
+            "nn.silu_and_mul", dispatch_context().backend, lambda value: None,
+        ):
             with mock.patch.object(
                 serving_ops, "_silu_and_mul_cuda", return_value=marker
             ) as cuda_backend:
                 self.assertIs(serving_ops.silu_and_mul(object()), marker)
                 cuda_backend.assert_called_once()
-        finally:
-            backend_hooks.acl_silu_and_mul = previous
 
     def test_matches_the_gate_times_value_reference(self):
         raw = np.random.randn(9, 24).astype("float32")
@@ -153,10 +151,10 @@ class TestQkRmsNormRotary(unittest.TestCase):
     """
 
     def _with_hook(self, hook):
-        previous = backend_hooks.acl_grouped_qk_rms_norm_rotary
-        backend_hooks.acl_grouped_qk_rms_norm_rotary = hook
-        self.addCleanup(
-            setattr, backend_hooks, "acl_grouped_qk_rms_norm_rotary", previous)
+        scope = override_kernel(
+            "nn.grouped_qk_rms_norm_rotary", dispatch_context().backend, hook)
+        scope.__enter__()
+        self.addCleanup(scope.__exit__, None, None, None)
 
     def test_absent_backend_is_reported_and_returns_none(self):
         self._with_hook(None)

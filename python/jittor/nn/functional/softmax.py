@@ -19,8 +19,9 @@ def softmax(x, dim=None, log=False):
         dim = _get_softmax_dim(x.ndim)
     from jittor.nn.backends import softmax_cuda
 
-    if softmax_cuda.can_softmax_v1(x, dim) and jt.compiler.is_cuda:
-        return softmax_cuda.softmax_v1(x, log)
+    fused = softmax_cuda._softmax_v1(x, log=log, dim=dim)
+    if fused is not None:
+        return fused
     dtype, x = x.dtype, x._to_float()
     if log:
         a = x - jt.max(x, dim, keepdims=True)

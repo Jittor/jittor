@@ -215,9 +215,9 @@ their implementation now lives in `runtime/backends/cuda_streams.cc`.
 native registry. The four legacy accelerator-mode aliases in `jt.flags` emit
 `DeprecationWarning` but retain their setter behavior. Converted ACL/ROCm/Corex
 builds are explicitly named `*_legacy`; this is not a claim that their source
-transformation has been removed. The Python operator-registry prototype is not
-the owner of native allocations and remains to be consolidated with native
-operator dispatch in task 4.05.
+transformation has been removed. Python selection consumes the native device
+context; there is no separate Python allocator or hard-coded backend-capability
+prototype.
 
 ### Native Operator Dispatch
 
@@ -261,6 +261,47 @@ single depfile, omitting extension headers and silently reusing obsolete ABI
 layouts. The changed command invalidates those old cache entries automatically;
 subsequent header changes are tracked without renaming the extension or deleting
 the cache. Already loaded extension modules still require a fresh process.
+
+### Python Kernel Dispatch
+
+`_runtime.dispatch` owns Python kernel registrations. Each entry declares its
+operator, backend, accepted tensor dtypes, shape/gradient predicate and priority.
+`select_kernel` returns the actual implementation; `try_dispatch` and the
+`optional_kernel` adapter use the same selection. A miss permits an explicit
+same-device generic implementation, not an implicit move to the CPU. Predicate
+and implementation errors propagate without trying another kernel. Legacy
+mode-specific restrictions are registration qualifiers rather than separate
+backend guards at call sites.
+
+`core.dispatch_context(inputs)` returns the runtime target and input-selected
+device without materializing tensors or probing a driver. Python recursively
+collects Vars in positional and keyword containers and records all their dtypes.
+The native query checks mixed device inputs, preserving the bounded pending
+scalar retargeting rule. Storage residency alone is not execution policy:
+pending and host-staged inputs can still target the accelerator. Device-keyed
+FFT and attention caches use this context, including non-default device ids.
+
+CUDA/legacy library adapters, matrix/conv/RNN selection, normalization/inference,
+indexing/scan and other native domains use this table. Non-ACL converted CUDA
+implementations keep their explicitly declared ROCm/Corex registrations where
+the old guards allowed them; this does not certify those devices. The old
+`_runtime.registry` prototype and its bytearray allocator are removed. Root
+flatten/clamp/outer now register portable implementations in the same table.
+
+`_runtime.backend_libraries` owns loaded modules, their derived `.ops`, resources,
+loader callbacks and availability policies. Missing queries are not permanently
+cached; explicit loading propagates errors. MKL disablement is checked before
+both cached-module lookup and loading, and reenabling can reuse the loaded
+module. `compile_extern.*` and root library attributes remain dynamic read-only
+queries, not mutable snapshots. Existing bootstrap ordering is retained; fully
+lazy core import remains a separate task.
+
+`nn.backends.hooks` is a read-only compatibility view into this table. ACL
+providers publish implementations directly; the view never stores an independent
+callback. Internal tests use `override_kernel` for scoped replacement or absence,
+and restore the prior registration on exit. Direct legacy hook/library attribute
+assignment is rejected. None of this removes the remaining ACL source converter
+or its broader Python replacements, which belong to the legacy-backend migration.
 
 The C++ `src/misc/` directory no longer exists. Support code is grouped by its
 actual role; this is a source-layout change, not a change to helper algorithms

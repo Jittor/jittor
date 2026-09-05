@@ -2,6 +2,7 @@ import math
 import numpy as np
 import jittor as jt
 from jittor import nn
+from jittor._runtime.dispatch import register_kernel, select_kernel
 
 # ---------------------------------------------------------------------------
 # Device-agnostic (CPU/CUDA/NPU) composite implementations of the special
@@ -11,7 +12,7 @@ from jittor import nn
 # backend a `code` op raises "op code not supported" (acl_op_exec.cc). Composing
 # from primitives lets these run on the NPU too, and (bonus) stay autodiff-able.
 # Numerics mirror PyTorch's lgamma/digamma so parity holds (target <=1e-5).
-# Used only when jt.flags.use_acl is set; CPU/CUDA keep their kernels.
+# Selected for ACL tensors; CPU/CUDA keep their native kernels.
 # ---------------------------------------------------------------------------
 _HALF_LOG_2PI = 0.5 * math.log(2.0 * math.pi)
 _PI = math.pi
@@ -80,6 +81,85 @@ def _trigamma_acl(x):
     return acc + asy
 
 
+def _gamma_cpu(owner, x):
+    return jt.code(x.shape, x.dtype, [x],
+                   cpu_header=getattr(owner, "cpu_header", ""), cpu_src=owner.cpu_src)
+
+
+def _gamma_cuda(owner, x):
+    return jt.code(x.shape, x.dtype, [x],
+                   cuda_header=owner.cuda_header, cuda_src=owner.cuda_src)
+
+
+def _digamma_cuda(owner, x):
+    result = _gamma_cuda(owner, x)
+    result.compile_options = {"FLAGS: --expt-relaxed-constexpr": 1}
+    return result
+
+
+def _lgamma_composite(owner, x):
+    return _lgamma_acl(x)
+
+
+def _digamma_composite(owner, x):
+    return _digamma_acl(x)
+
+
+def _polygamma_composite(owner, x, n):
+    if n == 1:
+        return _trigamma_acl(x)
+    raise NotImplementedError(
+        f"polygamma(n={n}) not implemented on ACL/NPU; only n=1 (trigamma). "
+        "Add the corresponding composite series in gamma.py:_trigamma_acl.")
+
+
+def _polygamma_cuda(owner, x, n):
+    source = f'''
+        @alias(x, in0)
+        @alias(px ,out0)
+        int batch_size = x_stride0 == 1 ? 1 : x_shape0;
+        int batch_shape = x_shape0 * x_stride0 / batch_size;
+        polygamma_cuda<<<batch_size, 16>>>(x_p, px_p, {n}, batch_shape);
+    '''
+    return jt.code(x.shape, x.dtype, [x], cuda_header=owner.cuda_header, cuda_src=source)
+
+
+def _polygamma_cpu(owner, x, n):
+    source = f'''
+        @alias(x, in0)
+        @alias(px, out0)
+        int numel = x_shape0 * x_stride0;
+        for(int i=0;i<numel;i++) {{
+        px_p[i] = (({n} % 2) ? 1.0 : -1.0) * ::exp(::lgamma(static_cast<scalar_t>({n}) + 1.0)) *
+        zeta<scalar_t>(static_cast<scalar_t>({n} + 1), x_p[i]);
+        }}
+    '''
+    return jt.code(x.shape, x.dtype, [x], cpu_header=owner.cpu_header, cpu_src=source)
+
+
+register_kernel("math.lgamma", "cpu", _gamma_cpu)
+register_kernel("math.lgamma", "acl_legacy", _lgamma_composite)
+register_kernel("math.lgamma", "*", _lgamma_composite)
+register_kernel("math.digamma", "cpu", _gamma_cpu)
+register_kernel("math.digamma", "acl_legacy", _digamma_composite)
+register_kernel("math.digamma", "*", _digamma_composite)
+register_kernel("math.polygamma", "cpu", _polygamma_cpu)
+register_kernel("math.polygamma", "acl_legacy", _polygamma_composite)
+register_kernel("math.polygamma", "*", _polygamma_composite)
+for _backend in ("cuda", "rocm_legacy", "corex_legacy"):
+    register_kernel("math.lgamma", _backend, _gamma_cuda, dtypes={"float32"})
+    register_kernel("math.digamma", _backend, _digamma_cuda, dtypes={"float32"})
+    register_kernel("math.polygamma", _backend, _polygamma_cuda, dtypes={"float32"})
+del _backend
+
+
+def _special_function_kernel(operation, x):
+    kernel = select_kernel(operation, x)
+    if kernel is None:
+        raise NotImplementedError(operation + " has no kernel for this device")
+    return kernel
+
+
 class lgamma(jt.Function):
     def __init__(self):
         self.cpu_src = '''
@@ -112,12 +192,7 @@ class lgamma(jt.Function):
 
     def execute(self, x):
         self.x = x
-        if jt.flags.use_acl:                      # ACL has no `code` op -> composite
-            return _lgamma_acl(x)
-        elif jt.flags.use_cuda:
-            return jt.code(x.shape, x.dtype, [x], cuda_header=self.cuda_header, cuda_src=self.cuda_src)
-        else:
-            return jt.code(x.shape, x.dtype, [x], cpu_src=self.cpu_src)
+        return _special_function_kernel("math.lgamma", x)(self, x)
 
     def grad(self, grad_output):
         # d/dx lgamma(x) = digamma(x). (torch's lgamma is differentiable; this gives
@@ -230,32 +305,7 @@ class polygamma(jt.Function):
         '''
 
     def execute(self, x, n):
-        if jt.flags.use_acl:                      # ACL has no `code` op -> composite
-            if n == 1:
-                return _trigamma_acl(x)
-            raise NotImplementedError(
-                f"polygamma(n={n}) not implemented on ACL/NPU; only n=1 (trigamma). "
-                "Add the corresponding composite series in gamma.py:_trigamma_acl.")
-        if jt.flags.use_cuda:
-            self.cuda_src = f'''
-                @alias(x, in0)
-                @alias(px ,out0)
-                int batch_size = x_stride0 == 1 ? 1 : x_shape0;
-                int batch_shape = x_shape0 * x_stride0 / batch_size;
-                polygamma_cuda<<<batch_size, 16>>>(x_p, px_p, {n}, batch_shape);
-            '''
-            return jt.code(x.shape, x.dtype, [x], cuda_header=self.cuda_header, cuda_src=self.cuda_src)
-        else:
-            self.cpu_src = f'''
-                @alias(x, in0)
-                @alias(px, out0)
-                int numel = x_shape0 * x_stride0;
-                for(int i=0;i<numel;i++) {{
-                px_p[i] = (({n} % 2) ? 1.0 : -1.0) * ::exp(::lgamma(static_cast<scalar_t>({n}) + 1.0)) *
-                zeta<scalar_t>(static_cast<scalar_t>({n} + 1), x_p[i]);
-                }}
-            '''
-            return jt.code(x.shape, x.dtype, [x], cpu_header=self.cpu_header, cpu_src=self.cpu_src)
+        return _special_function_kernel("math.polygamma", x)(self, x, n)
 
 class digamma(jt.Function):
     '''
@@ -425,14 +475,7 @@ class digamma(jt.Function):
     
     def execute(self, x):
         self.input = x
-        if jt.flags.use_acl:                      # ACL has no `code` op -> composite
-            return _digamma_acl(x)
-        elif jt.flags.use_cuda:
-            dx = jt.code(x.shape, x.dtype, [x], cuda_header=self.cuda_header, cuda_src=self.cuda_src)
-            dx.compile_options = {"FLAGS: --expt-relaxed-constexpr":1}
-            return dx
-        else:
-            return jt.code(x.shape, x.dtype, [x], cpu_header=self.cpu_header, cpu_src=self.cpu_src)
+        return _special_function_kernel("math.digamma", x)(self, x)
     
     def grad(self, grad_d):
         return grad_d * polygamma.apply(self.input, 1)

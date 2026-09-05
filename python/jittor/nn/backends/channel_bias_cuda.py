@@ -4,12 +4,14 @@ from functools import lru_cache
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad
+from jittor._runtime.backend_libraries import library_resource
+from jittor._runtime.dispatch import optional_kernel
 
 
 @lru_cache(maxsize=128)
 def _channel_bias_cuda_cls(channels, spatial):
     threads = 256
-    header = f"#include <{jt.compile_extern.cub_home}cub/cub.cuh>"
+    header = f"#include <{library_resource('cub', 'home')}cub/cub.cuh>"
 
     class ChannelBiasCUDA(jt.Function):
         def execute(self, x, bias):
@@ -72,19 +74,23 @@ def _channel_bias_cuda_cls(channels, spatial):
     return ChannelBiasCUDA
 
 
-def _channel_bias_add_cuda(x, bias):
+def _supports_channel_bias(x, bias):
     if not (
-        jt.flags.use_cuda
-        and not getattr(jt.compiler, "has_acl", 0)
-        and _output_requires_grad(x, bias)
+        _output_requires_grad(x, bias)
         and isinstance(x, jt.Var)
         and isinstance(bias, jt.Var)
-        and str(x.dtype) == "float32"
-        and str(bias.dtype) == "float32"
     ):
-        return None
+        return False
     shape = tuple(int(size) for size in x.shape)
     if len(shape) != 4 or any(size <= 0 for size in shape) or int(bias.numel()) != shape[1]:
-        return None
+        return False
+    return True
+
+
+@optional_kernel("nn.channel_bias", ("cuda", "rocm_legacy", "corex_legacy"),
+                 dtypes=("float32",),
+                 supports=_supports_channel_bias)
+def _channel_bias_add_cuda(x, bias):
+    shape = tuple(int(size) for size in x.shape)
     cls = _channel_bias_cuda_cls(shape[1], shape[2] * shape[3])
     return cls.apply(x, bias)

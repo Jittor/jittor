@@ -631,18 +631,19 @@ class TestRNN(unittest.TestCase):
         jt.sync_all(True)
         print('jittor Cudnn time = ', time() - start_time)
 
-        jt_cudnn, jt.cudnn = jt.cudnn, None
-        j_rnn = nn.RNN(128, 256, nonlinearity='relu')
-        j_rnn.load_state_dict(t_rnn.state_dict())
-        j_optim = nn.SGD(j_rnn.parameters(), lr=1e-3, momentum=0.9)
-        start_time = time()
-        for i in range(iters):
-            j_output, jh = j_rnn(j_input, j_h0)
-            j_loss = (j_output ** 2).sum() + (jh ** 2).sum()
-            j_optim.step(j_loss)
-        jt.sync_all(True)
-        print('jittor native time = ', time() - start_time)
-        jt.cudnn = jt_cudnn
+        from jittor._runtime.dispatch import override_kernel
+        with override_kernel("rnn", "cuda", lambda *args: None,
+                             supports=lambda *args: False):
+            j_rnn = nn.RNN(128, 256, nonlinearity='relu')
+            j_rnn.load_state_dict(t_rnn.state_dict())
+            j_optim = nn.SGD(j_rnn.parameters(), lr=1e-3, momentum=0.9)
+            start_time = time()
+            for i in range(iters):
+                j_output, jh = j_rnn(j_input, j_h0)
+                j_loss = (j_output ** 2).sum() + (jh ** 2).sum()
+                j_optim.step(j_loss)
+            jt.sync_all(True)
+            print('jittor native time = ', time() - start_time)
 
 
 if __name__ == "__main__":

@@ -4,10 +4,13 @@ import math
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
+from jittor._runtime.dispatch import optional_kernel
 
-from ._cuda_inference import cached_source, device_index, on_acl
+from ._cuda_inference import cached_source
 
 
+@optional_kernel("nn.packed_qkv_rms_rope_cuda", ("cuda", "rocm_legacy", "corex_legacy"),
+                 dtypes={"bfloat16", "float32"})
 def packed_qkv_rms_rope_cuda(
     qkv,
     q_gamma,
@@ -27,9 +30,7 @@ def packed_qkv_rms_rope_cuda(
     tensors = (qkv, q_gamma, k_gamma, phases)
     if not all(isinstance(value, jt.Var) for value in tensors):
         return None
-    if not (jt.flags.use_cuda and not _output_requires_grad(tensors)):
-        return None
-    if on_acl():
+    if _output_requires_grad(tensors):
         return None
     autocast_probe = getattr(jt, "is_autocast_enabled", None)
     if callable(autocast_probe):
@@ -40,7 +41,6 @@ def packed_qkv_rms_rope_cuda(
             return None
 
     try:
-        devices = tuple(device_index(value) for value in tensors)
         qkv_shape = tuple(int(size) for size in qkv.shape)
         q_gamma_shape = tuple(int(size) for size in q_gamma.shape)
         k_gamma_shape = tuple(int(size) for size in k_gamma.shape)
@@ -50,8 +50,6 @@ def packed_qkv_rms_rope_cuda(
         )
         min_norm_value = float(min_norm)
     except Exception:
-        return None
-    if any(device < 0 for device in devices) or len(set(devices)) != 1:
         return None
     if len(qkv_shape) < 4 or qkv_shape[-3] != 3:
         return None

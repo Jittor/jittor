@@ -15,6 +15,7 @@
 #include "type/nano_string.h"
 #include "utils/fast_shared_ptr.h"
 #include "profiler/simple_profiler.h"
+#include "runtime/dispatch_context.h"
 #ifdef IS_CUDA
 #include "runtime/device.h"
 #endif
@@ -33,6 +34,10 @@ struct vector_to_tuple {
     typename std::enable_if<std::is_same<T, check_type>::value, return_type>::type
 
 #define GET_PY_NONE(code) ((code), Py_INCREF(Py_None), Py_None)
+
+DEF_IS(DispatchContext, PyObject*) to_py_object(const T& value) {
+    return Py_BuildValue("(si)", value.backend.c_str(), value.device_id);
+}
 
 // string
 DEF_IS(string, bool) is_type(PyObject* obj) {

@@ -118,8 +118,7 @@ def install_rocm_library(lib_name, cuda_name, link=True):
 
     rocmlib = compiler.compile_custom_ops(culib_src_files, return_module=True,
                                          extra_flags=extra_flags, backend="accelerator")
-    setattr(compile_extern, cuda_name, rocmlib)
-    setattr(compile_extern, cuda_name + "_ops", rocmlib.ops)
+    compile_extern.register_library(cuda_name, rocmlib)
 
 
 def install_extern():

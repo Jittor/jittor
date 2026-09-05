@@ -5,6 +5,8 @@ import math
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad
+from jittor._runtime.backend_libraries import library_resource
+from jittor._runtime.dispatch import optional_kernel
 
 from ..rms_norm_cuda import _autocast_enabled
 
@@ -14,7 +16,7 @@ def _rms_norm_training_cuda_cls(hidden_size, epsilon):
     threads = 32
     while threads < min(hidden_size, 256):
         threads *= 2
-    header = f"#include <{jt.compile_extern.cub_home}cub/cub.cuh>"
+    header = f"#include <{library_resource('cub', 'home')}cub/cub.cuh>"
 
     class RMSNormTrainingCUDA(jt.Function):
         def execute(self, x, gamma):
@@ -136,26 +138,22 @@ def _rms_norm_training_cuda_cls(hidden_size, epsilon):
     return RMSNormTrainingCUDA
 
 
-def _rms_norm_training_cuda(x, gamma, epsilon=1e-6):
+def _supports_rms_norm_training(x, gamma, epsilon=1e-6):
     if not (
         isinstance(x, jt.Var)
         and isinstance(gamma, jt.Var)
-        and jt.flags.use_cuda
         and _output_requires_grad(x, gamma)
-        and not getattr(jt.compiler, "has_acl", 0)
         and not _autocast_enabled()
-        and str(x.dtype) == "float32"
-        and str(gamma.dtype) == "float32"
     ):
-        return None
+        return False
     try:
         x_shape = tuple(int(size) for size in x.shape)
         gamma_shape = tuple(int(size) for size in gamma.shape)
         epsilon_value = float(epsilon)
-    except Exception:
-        return None
+    except (TypeError, ValueError, OverflowError):
+        return False
     if not x_shape or any(size <= 0 for size in x_shape):
-        return None
+        return False
     hidden_size = x_shape[-1]
     if (
         hidden_size > 4096
@@ -163,6 +161,13 @@ def _rms_norm_training_cuda(x, gamma, epsilon=1e-6):
         or not math.isfinite(epsilon_value)
         or epsilon_value <= 0.0
     ):
-        return None
-    cls = _rms_norm_training_cuda_cls(hidden_size, epsilon_value)
+        return False
+    return True
+
+
+@optional_kernel("nn.rms_norm.training", ("cuda", "rocm_legacy", "corex_legacy"),
+                 dtypes=("float32",),
+                 supports=_supports_rms_norm_training)
+def _rms_norm_training_cuda(x, gamma, epsilon=1e-6):
+    cls = _rms_norm_training_cuda_cls(int(x.shape[-1]), float(epsilon))
     return cls.apply(x, gamma)

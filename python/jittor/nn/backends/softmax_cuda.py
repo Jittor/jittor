@@ -3,17 +3,21 @@
 import jittor as jt
 from jittor import nn
 from functools import lru_cache
+from jittor._runtime.backend_libraries import library_resource
+from jittor._runtime.dispatch import optional_kernel, select_kernel
 
-def can_softmax_v1(a, dim):
-    if not jt.flags.use_cuda:
+def _supports_softmax(a, log=False, zero_all_neg_inf=False, dim=-1):
+    if not a.shape:
         return False
     if dim != -1 and dim != len(a.shape)-1:
         return False
     if int(a.shape[-1]) <= 0:
         return False
-    if str(a.dtype) not in ("float16", "bfloat16", "float32"):
-        return False
     return True
+
+
+def can_softmax_v1(a, dim):
+    return select_kernel("nn.softmax", a, dim=dim) is not None
 
 
 def _softmax_schedule(length):
@@ -32,7 +36,7 @@ def _softmax_streaming_grad(x, grad_x, threads, log=False):
         x.dtype,
         [x, grad_x],
         cuda_header=f'''
-#include <{jt.compile_extern.cub_home}cub/cub.cuh>
+#include <{library_resource('cub', 'home')}cub/cub.cuh>
 #include <type/fp16_compute.h>
 ''',
         cuda_src=f'''
@@ -92,7 +96,7 @@ def _softmax_v1_cls(length, log=False, zero_all_neg_inf=False):
     class CodeSoftmax(jt.Function):
         def execute(self, x):
             self.save_vars = jt.code(x.shape, x.dtype, [x], cuda_header=f'''
-#include <{jt.compile_extern.cub_home}cub/cub.cuh>
+#include <{library_resource('cub', 'home')}cub/cub.cuh>
 #include <type/fp16_compute.h>
 ''', cuda_src=f'''
 __global__ void kernel(in0_type* x, out0_type* y, int len) {{
@@ -170,7 +174,7 @@ CHECK(0 == cudaGetLastError());
             if length > 49152 and ILP == 1:
                 return _softmax_streaming_grad(x, grad_x, 512, log)
             return jt.code(x.shape, x.dtype, [x, grad_x], cuda_header=f'''
-#include <{jt.compile_extern.cub_home}cub/cub.cuh>
+#include <{library_resource('cub', 'home')}cub/cub.cuh>
 #include <type/fp16_compute.h>
 ''', 
                 cuda_src=f"""
@@ -230,7 +234,7 @@ def _softmax_streaming_cls(threads, log=False, zero_all_neg_inf=False):
                 x.dtype,
                 [x],
                 cuda_header=f'''
-#include <{jt.compile_extern.cub_home}cub/cub.cuh>
+#include <{library_resource('cub', 'home')}cub/cub.cuh>
 #include <type/fp16_compute.h>
 ''',
                 cuda_src=f'''
@@ -279,11 +283,16 @@ CHECK(0 == cudaGetLastError());
     return CodeSoftmaxStreaming
 
 
-def softmax_v1(a, log=False, zero_all_neg_inf=False):
-    assert can_softmax_v1(a, -1)
+@optional_kernel("nn.softmax", "cuda", dtypes=("float16", "bfloat16", "float32"),
+                 supports=_supports_softmax)
+def _softmax_v1(a, log=False, zero_all_neg_inf=False, dim=-1):
     length = int(a.shape[-1])
     kind, threads = _softmax_schedule(length)
     cls = (_softmax_v1_cls(length, bool(log), bool(zero_all_neg_inf))
            if kind == "register" else
            _softmax_streaming_cls(threads, bool(log), bool(zero_all_neg_inf)))
     return cls()(a)
+
+
+def softmax_v1(a, log=False, zero_all_neg_inf=False):
+    return _softmax_v1(a, log=log, zero_all_neg_inf=zero_all_neg_inf)

@@ -4,8 +4,9 @@ import math
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
+from jittor._runtime.dispatch import optional_kernel
 
-from ._cuda_inference import cached_source, device_index, on_acl
+from ._cuda_inference import cached_source
 
 
 _autocast_probe = None
@@ -31,29 +32,20 @@ def _rms_norm_contract(x, gamma, epsilon, residual=None):
         return None
     if residual is not None and not isinstance(residual, jt.Var):
         return None
-    if not (jt.flags.use_cuda and not _output_requires_grad(
-            x, gamma, residual)):
-        return None
-    if on_acl():
+    if _output_requires_grad(x, gamma, residual):
         return None
     try:
         if _autocast_enabled():
             return None
         x_shape = tuple(int(size) for size in x.shape)
         gamma_shape = tuple(int(size) for size in gamma.shape)
-        x_device = device_index(x)
-        gamma_device = device_index(gamma)
         epsilon_value = float(epsilon)
-        residual_device = (
-            x_device if residual is None else device_index(residual))
     except Exception:
         return None
     if not x_shape or any(size <= 0 for size in x_shape):
         return None
     hidden_size = x_shape[-1]
     if hidden_size > 4096 or gamma_shape != (hidden_size,):
-        return None
-    if x_device < 0 or gamma_device != x_device or residual_device != x_device:
         return None
     if residual is not None and tuple(int(size) for size in residual.shape) != x_shape:
         return None
@@ -72,6 +64,12 @@ def _rms_norm_contract(x, gamma, epsilon, residual=None):
     return hidden_size, threads, threads // 32, epsilon_value
 
 
+def _rms_norm_supported(x, gamma, epsilon=1e-6):
+    return _rms_norm_contract(x, gamma, epsilon) is not None
+
+
+@optional_kernel("nn.rms_norm.inference", ("cuda", "rocm_legacy", "corex_legacy"),
+                 supports=_rms_norm_supported)
 def _rms_norm_cuda(x, gamma, epsilon=1e-6):
     """Inference-only fused CUDA RMSNorm, or ``None`` when unsupported."""
     contract = _rms_norm_contract(x, gamma, epsilon)
@@ -126,6 +124,12 @@ def _rms_norm_cuda(x, gamma, epsilon=1e-6):
         jt.code(x.shape, x.dtype, [x, gamma], cuda_src=cuda_src))
 
 
+def _add_rms_norm_supported(x, residual, gamma, epsilon=1e-6):
+    return _rms_norm_contract(x, gamma, epsilon, residual=residual) is not None
+
+
+@optional_kernel("nn.add_rms_norm.inference", ("cuda", "rocm_legacy", "corex_legacy"),
+                 supports=_add_rms_norm_supported)
 def _fused_add_rms_norm_cuda(x, residual, gamma, epsilon=1e-6):
     """Inference-only fused residual add and CUDA RMSNorm."""
     contract = _rms_norm_contract(x, gamma, epsilon, residual=residual)
@@ -189,20 +193,10 @@ def _fused_add_rms_norm_cuda(x, residual, gamma, epsilon=1e-6):
     ))
 
 
-def multihead_rms_norm_cuda(x, gamma, scale=None, min_norm=1e-12):
-    """Return a fused multi-head RMS normalization result when supported.
-
-    ``x`` must end in ``(num_heads, head_dim)`` and ``gamma`` must have that
-    exact shape.  The default scale is ``sqrt(head_dim)``, which turns the L2
-    denominator into the usual root-mean-square denominator.  The kernel is an
-    inference fast path and returns ``None`` when its CUDA/no-grad contract is
-    not met, allowing callers to retain a differentiable fallback.
-    """
+def _multihead_rms_norm_contract(x, gamma, scale=None, min_norm=1e-12):
     if not isinstance(x, jt.Var) or not isinstance(gamma, jt.Var):
         return None
-    if not (jt.flags.use_cuda and not _output_requires_grad(x, gamma)):
-        return None
-    if on_acl():
+    if _output_requires_grad(x, gamma):
         return None
     if _autocast_enabled():
         return None
@@ -210,15 +204,13 @@ def multihead_rms_norm_cuda(x, gamma, scale=None, min_norm=1e-12):
         return None
 
     try:
-        x_device = device_index(x)
-        gamma_device = device_index(gamma)
         x_shape = tuple(int(size) for size in x.shape)
         gamma_shape = tuple(int(size) for size in gamma.shape)
         scale_value = math.sqrt(float(x_shape[-1])) if scale is None else float(scale)
         min_norm_value = float(min_norm)
     except Exception:
         return None
-    if x_device < 0 or gamma_device != x_device or len(x_shape) < 2:
+    if len(x_shape) < 2:
         return None
     num_heads, head_dim = x_shape[-2:]
     if (
@@ -231,6 +223,22 @@ def multihead_rms_norm_cuda(x, gamma, scale=None, min_norm=1e-12):
         return None
     if not math.isfinite(scale_value) or not math.isfinite(min_norm_value) or min_norm_value <= 0:
         return None
+    return num_heads, head_dim, scale_value, min_norm_value
+
+
+def _multihead_rms_norm_supported(x, gamma, scale=None, min_norm=1e-12):
+    return _multihead_rms_norm_contract(x, gamma, scale, min_norm) is not None
+
+
+@optional_kernel("nn.multihead_rms_norm.inference", ("cuda", "rocm_legacy", "corex_legacy"),
+                 supports=_multihead_rms_norm_supported)
+def multihead_rms_norm_cuda(x, gamma, scale=None, min_norm=1e-12):
+    """Fused inference normalization for matching (..., heads, dim) / (heads, dim).
+
+    The default scale is sqrt(head_dim); unsupported contracts return None.
+    """
+    num_heads, head_dim, scale_value, min_norm_value = _multihead_rms_norm_contract(
+        x, gamma, scale, min_norm)
 
     if head_dim <= 256:
         rows_per_block = 8

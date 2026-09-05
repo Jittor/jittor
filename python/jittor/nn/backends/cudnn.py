@@ -3,6 +3,8 @@
 import os
 
 import jittor as jt
+from jittor._runtime.dispatch import optional_kernel, register_kernel
+from jittor._runtime.backend_libraries import get_library_ops
 
 from .channel_bias_cuda import _channel_bias_add_cuda
 
@@ -21,20 +23,21 @@ from .channel_bias_cuda import _channel_bias_add_cuda
 # stayed, and being a copy it kept winning, so the fix had no effect on
 # anything that went through ``conv2d``. One definition now.
 
-def _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups):
+def _supports_conv2d(x, weight, bias, stride, padding, dilation, groups,
+                     *, _depthwise_fast_path=True):
+    return x.dtype == weight.dtype and get_library_ops("cudnn") is not None
+
+
+@optional_kernel("conv2d", "cuda", dtypes={"float16", "float32", "bfloat16"},
+                 supports=_supports_conv2d, priority=10)
+def _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups,
+                      *, _depthwise_fast_path=True):
     ''' Return a cuDNN-backed conv2d result, or None if cuDNN isn't applicable
     so the caller falls back to the reindex path. '''
-    if not (jt.flags.use_cuda and getattr(jt, "cudnn", None)):
-        return None
-    x_dtype, weight_dtype = str(x.dtype), str(weight.dtype)
-    if x_dtype != weight_dtype:
-        return None
-    if x_dtype not in ("float16", "float32", "bfloat16"):
-        return None
     sh, sw = stride   if isinstance(stride, tuple)   else (stride, stride)
     ph, pw = padding  if isinstance(padding, tuple)  else (padding, padding)
     dh, dw = dilation if isinstance(dilation, tuple) else (dilation, dilation)
-    y = jt.cudnn.ops.cudnn_conv(x, weight, sh, sw, ph, pw, dh, dw, groups)
+    y = get_library_ops("cudnn").cudnn_conv(x, weight, sh, sw, ph, pw, dh, dw, groups)
     if bias is not None:
         fast = _channel_bias_add_cuda(y, bias)
         y = fast if fast is not None else y + bias.broadcast(y.shape, [0, 2, 3])
@@ -44,12 +47,14 @@ def _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups):
 # ``CudnnConvBackwardXOp::grad`` defines its backward. This layer only has to
 # work out the output size cuDNN needs told.
 
+def _supports_conv_transpose2d(x, weight, bias, stride, padding, output_padding, dilation, groups):
+    return get_library_ops("cudnn") is not None
+
+
+@optional_kernel("conv_transpose2d", "cuda", dtypes={"float32"},
+                 supports=_supports_conv_transpose2d)
 def _try_cudnn_conv_transpose2d(x, weight, bias, stride, padding, output_padding, dilation, groups):
     ''' cuDNN-backed conv_transpose2d, or None to fall back to the reindex path. '''
-    if not (jt.flags.use_cuda and getattr(jt, "cudnn", None)):
-        return None
-    if str(x.dtype) != "float32" or str(weight.dtype) != "float32":
-        return None
     sh, sw = stride         if isinstance(stride, tuple)         else (stride, stride)
     ph, pw = padding        if isinstance(padding, tuple)        else (padding, padding)
     oph, opw = output_padding if isinstance(output_padding, tuple) else (output_padding, output_padding)
@@ -58,7 +63,7 @@ def _try_cudnn_conv_transpose2d(x, weight, bias, stride, padding, output_padding
     Kh, Kw = weight.shape[2], weight.shape[3]
     oH = (H - 1) * sh - 2 * ph + dh * (Kh - 1) + oph + 1
     oW = (W - 1) * sw - 2 * pw + dw * (Kw - 1) + opw + 1
-    y = jt.cudnn.ops.cudnn_conv_backward_x(
+    y = get_library_ops("cudnn").cudnn_conv_backward_x(
         weight, x, oH, oW, sh, sw, ph, pw, dh, dw, groups)
     if isinstance(bias, jt.Var):
         y = y + bias.broadcast(y.shape, [0, 2, 3])
@@ -79,3 +84,36 @@ def _cudnn_conv3d_fp16_safe(op, x, weight, *args):
     # Run in fp32 (cuDNN has a working fp32 3D-conv algo), then cast back.
     y = op(x.float32(), weight.float32(), *args)
     return y.cast(half)
+
+
+def _supports_conv3d(x, weight, stride, padding, dilation, groups):
+    return get_library_ops("cudnn") is not None
+
+
+@optional_kernel("conv3d", "cuda", supports=_supports_conv3d)
+def _try_cudnn_conv3d(x, weight, stride, padding, dilation, groups):
+    return _cudnn_conv3d_fp16_safe(get_library_ops("cudnn").cudnn_conv3d,
+                                  x, weight, *stride, *padding, *dilation, groups)
+
+
+def _supports_conv_transpose3d(x, weight, output_shape, stride, padding, dilation, groups):
+    return get_library_ops("cudnn") is not None
+
+
+@optional_kernel("conv_transpose3d", "cuda", supports=_supports_conv_transpose3d)
+def _try_cudnn_conv_transpose3d(x, weight, output_shape, stride, padding, dilation, groups):
+    return _cudnn_conv3d_fp16_safe(get_library_ops("cudnn").cudnn_conv3d_backward_x,
+                                  weight, x, *output_shape, *stride, *padding, *dilation, groups)
+
+
+for _backend in ("rocm_legacy", "corex_legacy"):
+    register_kernel("conv2d", _backend, _try_cudnn_conv2d.__wrapped__,
+                    dtypes={"float16", "float32", "bfloat16"},
+                    supports=_supports_conv2d, priority=10)
+    register_kernel("conv_transpose2d", _backend, _try_cudnn_conv_transpose2d.__wrapped__,
+                    dtypes={"float32"}, supports=_supports_conv_transpose2d)
+    register_kernel("conv3d", _backend, _try_cudnn_conv3d.__wrapped__,
+                    supports=_supports_conv3d)
+    register_kernel("conv_transpose3d", _backend, _try_cudnn_conv_transpose3d.__wrapped__,
+                    supports=_supports_conv_transpose3d)
+del _backend

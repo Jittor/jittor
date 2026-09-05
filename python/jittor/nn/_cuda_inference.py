@@ -1,6 +1,6 @@
 """Shared contracts for private CUDA inference capabilities."""
 
-import jittor as jt
+from jittor._runtime.dispatch import dispatch_context
 
 _SOURCE_CACHE = {}
 
@@ -21,30 +21,11 @@ def cached_source(template, params):
     return source
 
 
-_has_acl = None
-
-
 def on_acl():
-    """Whether this build targets Ascend. Fixed once the compiler is loaded, but
-    the fused-kernel guards were re-reading it through getattr on every call."""
-    global _has_acl
-    if _has_acl is None:
-        _has_acl = bool(getattr(jt.compiler, "has_acl", 0))
-    return _has_acl
+    """Whether the native runtime currently selects the legacy ACL backend."""
+    return dispatch_context().backend == "acl_legacy"
 
 
 def device_index(value):
-    get_device = getattr(value, "get_device", None)
-    if callable(get_device):
-        try:
-            device = int(get_device())
-        except (TypeError, ValueError):
-            device = -1
-        if device >= 0:
-            return device
-    location = value.location()
-    if location == "device":
-        return 0
-    if location == "cpu":
-        return -1
-    return 0 if jt.flags.use_cuda else -1
+    """Resolve placement through the same context as registered kernels."""
+    return dispatch_context(value).device_id

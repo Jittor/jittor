@@ -2,8 +2,7 @@
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
-
-from ._cuda_inference import device_index
+from jittor._runtime.dispatch import optional_kernel, try_dispatch
 
 
 def finalize_dual_grid_mesh_cuda(
@@ -30,18 +29,22 @@ def finalize_dual_grid_mesh_cuda(
         raise TypeError("quad_indices must use int32 or int64")
     if str(valid_rows.dtype) not in ("int32", "int64"):
         raise TypeError("valid_rows must use int32 or int64")
-    if not (jt.flags.use_cuda and not _output_requires_grad(tensors)):
-        return None
-    if getattr(jt.compiler, "has_acl", 0):
+    return try_dispatch("nn.finalize_dual_grid_mesh_cuda", *tensors)
+
+
+@optional_kernel("nn.finalize_dual_grid_mesh_cuda", ("cuda", "rocm_legacy", "corex_legacy"))
+def _finalize_dual_grid_mesh_cuda(
+    coords, dual_vertices, quad_indices, valid_rows, split_weight, voxel_size, aabb_min
+):
+    tensors = (coords, dual_vertices, quad_indices, valid_rows,
+               split_weight, voxel_size, aabb_min)
+    if _output_requires_grad(tensors):
         return None
     try:
-        devices = tuple(device_index(value) for value in tensors)
         vertex_count = int(coords.shape[0])
         valid_count = int(valid_rows.shape[0])
         shapes = tuple(tuple(int(size) for size in value.shape) for value in tensors)
     except Exception:
-        return None
-    if any(device < 0 for device in devices) or len(set(devices)) != 1:
         return None
     if not (
         shapes[0] == (vertex_count, 3)

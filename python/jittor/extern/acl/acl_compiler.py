@@ -62,10 +62,6 @@ compiler.has_acl = has_acl
 
 def install():
     import jittor.compiler as compiler
-    from jittor.nn import rms_norm_cuda as _rms_norm_backend
-    from jittor.nn.backends import batch_norm_training_cuda as _batch_norm_backend
-    from jittor.nn.backends import group_norm_cuda as _group_norm_backend
-    from jittor.nn.backends import hooks as _nn_backend_hooks
     global has_acl, cc_flags
     acl_compiler_home = os.path.dirname(__file__)
     cc_files = sorted(glob.glob(acl_compiler_home + "/**/*.cc",
@@ -158,6 +154,7 @@ def post_process():
 def change_function():
     import jittor as jt
     from jittor import Function
+    from jittor._runtime.dispatch import register_kernel
     from .aclops.flashattention_op import (
         FlashAttentionACL,
         scaled_dot_product_attention_acl,
@@ -870,9 +867,6 @@ def change_function():
         return _orig_layernorm_execute(self, x)
     jt.nn.LayerNorm.execute = _layernorm_execute_acl
 
-    _orig_batch_norm_eval_cuda = (
-        _nn_backend_hooks.batch_norm_eval_cuda
-        or _batch_norm_backend._batch_norm_eval_cuda)
     def _batch_norm_eval_cuda_acl(
             x, weight, bias, running_mean, running_var, eps):
         values = (x, weight, bias, running_mean, running_var)
@@ -895,12 +889,9 @@ def change_function():
             ):
                 return BatchNormACL(epsilon)(
                     x, weight, bias, running_mean, running_var)
-        return _orig_batch_norm_eval_cuda(
-            x, weight, bias, running_mean, running_var, eps)
-    _nn_backend_hooks.batch_norm_eval_cuda = _batch_norm_eval_cuda_acl
+        return None
+    register_kernel("nn.batch_norm.eval", "acl_legacy", _batch_norm_eval_cuda_acl)
 
-    _orig_group_norm_cuda = (
-        _nn_backend_hooks.group_norm_cuda or _group_norm_backend._group_norm_cuda)
     def _group_norm_cuda_acl(x, num_groups, weight, bias, eps):
         if (
             jt.flags.use_acl
@@ -927,13 +918,11 @@ def change_function():
                 and epsilon > 0.0
             ):
                 return GroupNormACL(groups, epsilon)(x, weight, bias)
-        return _orig_group_norm_cuda(x, num_groups, weight, bias, eps)
-    _nn_backend_hooks.group_norm_cuda = _group_norm_cuda_acl
+        return None
+    register_kernel("nn.group_norm", "acl_legacy", _group_norm_cuda_acl)
 
     # Hugging Face RMSNorm modules already route through this hook. CANN provides
     # both aclnnRmsNorm and aclnnRmsNormGrad for the supported dtype matrix.
-    _orig_rms_norm_cuda = (
-        _nn_backend_hooks.rms_norm_cuda or _rms_norm_backend._rms_norm_cuda)
     def _rms_norm_cuda_acl(x, gamma, epsilon=1e-6):
         if (
             jt.flags.use_acl
@@ -963,8 +952,8 @@ def change_function():
                 and epsilon_value > 0
             ):
                 return RmsNormACL()(x, gamma, epsilon_value)
-        return _orig_rms_norm_cuda(x, gamma, epsilon)
-    _nn_backend_hooks.rms_norm_cuda = _rms_norm_cuda_acl
+        return None
+    register_kernel("nn.rms_norm.inference", "acl_legacy", _rms_norm_cuda_acl)
 
     def _grouped_add_rms_norm_acl(x, residual, weight, eps):
         if not (
@@ -991,7 +980,7 @@ def change_function():
         ):
             return None
         return GroupedAddRmsNormACL()(x, residual, weight, epsilon)
-    _nn_backend_hooks.acl_grouped_add_rms_norm = _grouped_add_rms_norm_acl
+    register_kernel("nn.grouped_add_rms_norm", "acl_legacy", _grouped_add_rms_norm_acl)
 
     def _grouped_bfloat16_rms_norm_acl(
             x, unit_weight, weight, eps):
@@ -1018,8 +1007,7 @@ def change_function():
             return None
         return GroupedBFloat16RmsNormACL()(
             x, unit_weight, weight, epsilon)
-    _nn_backend_hooks.acl_grouped_bfloat16_rms_norm = \
-        _grouped_bfloat16_rms_norm_acl
+    register_kernel("nn.grouped_bfloat16_rms_norm", "acl_legacy", _grouped_bfloat16_rms_norm_acl)
 
     def _grouped_dual_bfloat16_rms_norm_acl(
             first, second, first_weight, second_weight, eps):
@@ -1065,8 +1053,7 @@ def change_function():
             second_weight,
             epsilon,
         )
-    _nn_backend_hooks.acl_grouped_dual_bfloat16_rms_norm = \
-        _grouped_dual_bfloat16_rms_norm_acl
+    register_kernel("nn.grouped_dual_bfloat16_rms_norm", "acl_legacy", _grouped_dual_bfloat16_rms_norm_acl)
 
     def _expand_rotary_cache_acl(cache, rotary_dim):
         if (
@@ -1082,7 +1069,7 @@ def change_function():
         ):
             return ExpandRotaryCacheACL()(cache)
         return None
-    _nn_backend_hooks.acl_expand_rotary_cache = _expand_rotary_cache_acl
+    register_kernel("nn.expand_rotary_cache", "acl_legacy", _expand_rotary_cache_acl)
 
     def _grouped_qk_rms_norm_rotary_acl(
             positions, query, key, query_weight, key_weight,
@@ -1153,8 +1140,7 @@ def change_function():
             epsilon,
         )
         return query_out.reshape(query_shape), key_out.reshape(key_shape)
-    _nn_backend_hooks.acl_grouped_qk_rms_norm_rotary = \
-        _grouped_qk_rms_norm_rotary_acl
+    register_kernel("nn.grouped_qk_rms_norm_rotary", "acl_legacy", _grouped_qk_rms_norm_rotary_acl)
 
     jt.flip = warp(jt.flip, flip_acl)
     jt.Var.flip = lambda x, dim_vector=0: jt.flip(x, dim_vector)
@@ -1239,8 +1225,8 @@ def change_function():
     jt.misc.split = _split_acl
     jt.Var.split = lambda x, split_size, dim=0: _split_acl(
         x, split_size, dim)
-    _nn_backend_hooks.acl_constant_pad = constant_pad_acl
-    _nn_backend_hooks.acl_embedding = embedding_acl
+    register_kernel("nn.constant_pad", "acl_legacy", constant_pad_acl)
+    register_kernel("nn.embedding", "acl_legacy", embedding_acl)
 
     # NPU matmul/bmm precision: default to full fp32 (cubeMathType=0) to match torch's
     # default (TF32/HF32 off) for numerical parity (G3). Set jt.acl_allow_hf32=True to
@@ -1377,7 +1363,7 @@ def change_function():
         ):
             return SwiGluACL()(x, -1)
         return None
-    _nn_backend_hooks.acl_silu_and_mul = _silu_and_mul_acl
+    register_kernel("nn.silu_and_mul", "acl_legacy", _silu_and_mul_acl)
 
     jt.sigmoid = warp(jt.sigmoid, sigmoid_acl)
     jt.nn.Sigmoid = warp(jt.nn.Sigmoid, Sigmoid)
@@ -1398,8 +1384,7 @@ def change_function():
     # jt.nn.LayerNorm = warp(jt.nn.LayerNorm, LayerNormACL)
 
     # jt.nn.FlashAttention = warp(jt.nn.FlashAttention, FlashAttentionACL)
-    _nn_backend_hooks.acl_scaled_dot_product_attention = \
-        scaled_dot_product_attention_acl
+    register_kernel("nn.scaled_dot_product_attention", "acl_legacy", scaled_dot_product_attention_acl)
     jt.isnan = warp(jt.isnan, isnan_acl)
     jt.isinf = warp(jt.isinf, isinf_acl)
     jt.Var.isnan = jt.isnan

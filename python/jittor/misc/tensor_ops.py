@@ -16,6 +16,10 @@ from collections.abc import Sequence,Iterable
 
 from .. import _arg_policy
 from .._runtime.core_api import _output_requires_grad, _stop_grad_outputs
+from .._runtime.dispatch import dispatch_context, optional_kernel, register_kernel, select_kernel
+from .._runtime.backend_libraries import get_library_ops
+
+_CUDA_CODE_BACKENDS = ("cuda", "rocm_legacy", "corex_legacy")
 
 def knn(unknown, known, k):
     ''' find k neighbors for unknown array from known array
@@ -187,6 +191,93 @@ jt.Var.repeat = repeat
 # tile = jt.Var.tile = repeat
 ne = jt.Var.ne = jt.Var.not_equal
 
+@optional_kernel("misc.repeat_interleave_dim0", _CUDA_CODE_BACKENDS,
+                 supports=lambda x, repeats, dim, output_size: (
+                     isinstance(repeats, jt.Var) and dim == 0 and output_size is not None))
+def _repeat_interleave_dim0_cuda(x, repeats, dim, output_size):
+    # int64 throughout. This used to cast the counts to int32, prefix-sum
+    # them in int32 and index the output with an `int`, and cover that with
+    # `assert output_size <= 2147483647` -- so the one case the fast path
+    # could not do was refused rather than computed. Counting in int64
+    # costs a wider prefix sum over one small vector and removes the limit.
+    repeats = repeats.reshape(-1).int64()
+    n = x.shape[0]
+    out0 = int(output_size)
+    assert repeats.shape[0] == n, \
+        f"repeat_interleave: repeats length {repeats.shape[0]} != dim size {n}"
+    if out0 == 0:
+        new_shape = list(x.shape); new_shape[0] = 0
+        return jt.zeros(new_shape, x.dtype)
+    offsets = repeats.cumsum(0)
+    inner = int(np.prod(x.shape[1:])) if x.ndim > 1 else 1
+    out_shape = list(x.shape)
+    out_shape[0] = out0
+    return jt.code(
+        out_shape,
+        x.dtype,
+        [x, offsets],
+        cuda_header='''
+        #include <stdint.h>
+        template <typename X, typename R, typename O>
+        __global__ void repeat_interleave_dim0_kernel(
+            const X* __restrict__ x,
+            const R* __restrict__ offsets,
+            O* __restrict__ out,
+            int64_t total,
+            int n,
+            int64_t inner) {
+            int64_t linear = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+            int64_t stride = (int64_t)blockDim.x * gridDim.x;
+            for (; linear < total; linear += stride) {
+                // out_row and the offsets it is compared against are the
+                // two quantities that count *outputs*, so they are the two
+                // that leave int32 first.
+                int64_t out_row = linear / inner;
+                int lo = 0, hi = n - 1;
+                while (lo < hi) {
+                    int mid = (lo + hi) >> 1;
+                    if ((int64_t)offsets[mid] > out_row) hi = mid;
+                    else lo = mid + 1;
+                }
+                out[linear] = (O)x[(int64_t)lo * inner + (linear % inner)];
+            }
+        }
+        ''',
+        cuda_src=f'''
+        @alias(x, in0)
+        @alias(offsets, in1)
+        @alias(out, out0)
+        const int64_t total = out->num;
+        const int n = x_shape0;
+        const int64_t inner = {inner};
+        int threads = 256;
+        int blocks = (int)((total + threads - 1) / threads);
+        if (blocks > 4096) blocks = 4096;
+        repeat_interleave_dim0_kernel<x_type, offsets_type, out_type>
+            <<<blocks, threads>>>(x_p, offsets_p, out_p, total, n, inner);
+        ''',
+        cpu_src='''
+        @alias(x, in0)
+        @alias(offsets, in1)
+        @alias(out, out0)
+        int64_t total = out->num;
+        int n = x_shape0;
+        int64_t inner = out->num / out_shape0;
+        for (int64_t linear = 0; linear < total; ++linear) {
+            int64_t out_row = linear / inner;
+            int lo = 0, hi = n - 1;
+            while (lo < hi) {
+                int mid = (lo + hi) >> 1;
+                if ((int64_t)offsets_p[mid] > out_row) hi = mid;
+                else lo = mid + 1;
+            }
+            out_p[linear] = (out_type)x_p[(int64_t)lo * inner + (linear % inner)];
+        }
+        '''
+    )
+
+
+
 def repeat_interleave(x,repeats,dim=None,output_size=None):
     # torch-compatible: `repeats` may be a python int (every element repeated the
     # same number of times) OR a 1-D Var/list giving a per-element repeat count
@@ -209,87 +300,9 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
                 dims.append(f"i{i}")
         return x.reindex(tar_shape,dims)
 
-    if jt.flags.use_cuda and isinstance(repeats, jt.Var) and dim == 0 and output_size is not None:
-        # int64 throughout. This used to cast the counts to int32, prefix-sum
-        # them in int32 and index the output with an `int`, and cover that with
-        # `assert output_size <= 2147483647` -- so the one case the fast path
-        # could not do was refused rather than computed. Counting in int64
-        # costs a wider prefix sum over one small vector and removes the limit.
-        repeats = repeats.reshape(-1).int64()
-        n = x.shape[0]
-        out0 = int(output_size)
-        assert repeats.shape[0] == n, \
-            f"repeat_interleave: repeats length {repeats.shape[0]} != dim size {n}"
-        if out0 == 0:
-            new_shape = list(x.shape); new_shape[0] = 0
-            return jt.zeros(new_shape, x.dtype)
-        offsets = repeats.cumsum(0)
-        inner = int(np.prod(x.shape[1:])) if x.ndim > 1 else 1
-        out_shape = list(x.shape)
-        out_shape[0] = out0
-        return jt.code(
-            out_shape,
-            x.dtype,
-            [x, offsets],
-            cuda_header='''
-            #include <stdint.h>
-            template <typename X, typename R, typename O>
-            __global__ void repeat_interleave_dim0_kernel(
-                const X* __restrict__ x,
-                const R* __restrict__ offsets,
-                O* __restrict__ out,
-                int64_t total,
-                int n,
-                int64_t inner) {
-                int64_t linear = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
-                int64_t stride = (int64_t)blockDim.x * gridDim.x;
-                for (; linear < total; linear += stride) {
-                    // out_row and the offsets it is compared against are the
-                    // two quantities that count *outputs*, so they are the two
-                    // that leave int32 first.
-                    int64_t out_row = linear / inner;
-                    int lo = 0, hi = n - 1;
-                    while (lo < hi) {
-                        int mid = (lo + hi) >> 1;
-                        if ((int64_t)offsets[mid] > out_row) hi = mid;
-                        else lo = mid + 1;
-                    }
-                    out[linear] = (O)x[(int64_t)lo * inner + (linear % inner)];
-                }
-            }
-            ''',
-            cuda_src=f'''
-            @alias(x, in0)
-            @alias(offsets, in1)
-            @alias(out, out0)
-            const int64_t total = out->num;
-            const int n = x_shape0;
-            const int64_t inner = {inner};
-            int threads = 256;
-            int blocks = (int)((total + threads - 1) / threads);
-            if (blocks > 4096) blocks = 4096;
-            repeat_interleave_dim0_kernel<x_type, offsets_type, out_type>
-                <<<blocks, threads>>>(x_p, offsets_p, out_p, total, n, inner);
-            ''',
-            cpu_src='''
-            @alias(x, in0)
-            @alias(offsets, in1)
-            @alias(out, out0)
-            int64_t total = out->num;
-            int n = x_shape0;
-            int64_t inner = out->num / out_shape0;
-            for (int64_t linear = 0; linear < total; ++linear) {
-                int64_t out_row = linear / inner;
-                int lo = 0, hi = n - 1;
-                while (lo < hi) {
-                    int mid = (lo + hi) >> 1;
-                    if ((int64_t)offsets_p[mid] > out_row) hi = mid;
-                    else lo = mid + 1;
-                }
-                out_p[linear] = (out_type)x_p[(int64_t)lo * inner + (linear % inner)];
-            }
-            '''
-        )
+    result = _repeat_interleave_dim0_cuda(x, repeats, dim, output_size)
+    if result is not None:
+        return result
 
     # per-element repeats: build a gather index along `dim` then index_select.
     if isinstance(repeats, jt.Var):
@@ -365,8 +378,9 @@ def median(x, dim=None, keepdim=False, keepdims=False):
 
 jt.Var.median = median
 
+@optional_kernel("misc.stack_no_grad", _CUDA_CODE_BACKENDS)
 def _stack_no_grad_cuda_fast(xs, dim):
-    if not (jt.flags.use_cuda and not _output_requires_grad(xs)):
+    if _output_requires_grad(xs):
         return None
     n = len(xs)
     if n not in (2, 3):
@@ -431,8 +445,9 @@ def _stack_no_grad_cuda_fast(xs, dim):
         [input_total * n], base_dtype, flat_inputs,
         cuda_src=cuda_src, cpu_src=cpu_src).reshape(out_shape))
 
+@optional_kernel("misc.unbind_no_grad", _CUDA_CODE_BACKENDS)
 def _unbind_no_grad_cuda_fast(x, dim):
-    if not (jt.flags.use_cuda and not _output_requires_grad(x)):
+    if _output_requires_grad(x):
         return None
     if not isinstance(x, jt.Var) or getattr(x, "_jittor_torch_force_cpu", False):
         return None
@@ -757,6 +772,22 @@ _triple = _ntuple(3)
 _quadruple = _ntuple(4)
 
 
+def _unique_code_cuda(*args, **kwargs):
+    with jt.flag_scope(compile_options={"FLAGS:  --extended-lambda ": 1}):
+        return jt.code(*args, **kwargs)
+
+
+def _unique_code_generic(*args, **kwargs):
+    with jt.flag_scope(compile_options={}):
+        return jt.code(*args, **kwargs)
+
+
+register_kernel("misc.unique_code", "*", _unique_code_generic)
+for _backend in _CUDA_CODE_BACKENDS:
+    register_kernel("misc.unique_code", _backend, _unique_code_cuda)
+del _backend
+
+
 def unique(
     input: jt.Var,
     sorted: bool=True,          # torch kwarg; jittor's unique is always sorted
@@ -819,95 +850,95 @@ def unique(
     orig_shape = input_flatten.shape
     input_flatten = input_flatten.view(orig_shape[0], -1)
     
-    with jt.flag_scope(compile_options = {"FLAGS:  --extended-lambda ": 1} if jt.flags.use_cuda else {}):
-        indice = jt.code((input_flatten.shape[0], ), 'int32', [input_flatten],
-            cpu_header='''
-            #include <algorithm>
-            ''',
-            cpu_src='''
+    code = select_kernel("misc.unique_code", input_flatten)
+    indice = code((input_flatten.shape[0], ), 'int32', [input_flatten],
+        cpu_header='''
+        #include <algorithm>
+        ''',
+        cpu_src='''
+        @alias(input_flatten, in0)
+        @alias(indice, out)
+
+        int dimlen = input_flatten_shape0, dimsize = input_flatten_shape1;
+        for(int i = 0; i < dimlen; ++i) @indice(i) = i;
+        // input_flatten_type, not int. Truncating the key made 1.5 and 1.2
+        // compare equal, so the duplicate-dropping pass -- which only
+        // merges *neighbours* -- left both in the output, unsorted.
+        std::sort(&@indice(0), &@indice(dimlen), [&](int a, int b){
+            for(int i = 0; i < dimsize; ++i) {
+                input_flatten_type lhs = @input_flatten(a, i),
+                                   rhs = @input_flatten(b, i);
+                if (lhs != rhs) return lhs < rhs;
+            }
+            return false;
+        });
+        ''',
+        cuda_header='''
+        #undef out
+        #include <thrust/extrema.h>
+        #include <thrust/device_ptr.h>
+        #include <thrust/execution_policy.h>
+        #include <thrust/device_vector.h>
+        #include <thrust/sequence.h>
+
+        #include <thrust/sequence.h>
+        #include <thrust/sort.h>
+        #include <thrust/unique.h>
+
+        #include <cub/cub.cuh>
+        #include <executor.h>
+        ''',
+        cuda_src=
+        '''
             @alias(input_flatten, in0)
             @alias(indice, out)
+            int dimlen = indice_shape0, dimsize = input_flatten_shape1;
 
-            int dimlen = input_flatten_shape0, dimsize = input_flatten_shape1;
-            for(int i = 0; i < dimlen; ++i) @indice(i) = i;
-            // input_flatten_type, not int. Truncating the key made 1.5 and 1.2
-            // compare equal, so the duplicate-dropping pass -- which only
-            // merges *neighbours* -- left both in the output, unsorted.
-            std::sort(&@indice(0), &@indice(dimlen), [&](int a, int b){
-                for(int i = 0; i < dimsize; ++i) {
-                    input_flatten_type lhs = @input_flatten(a, i),
-                                       rhs = @input_flatten(b, i);
-                    if (lhs != rhs) return lhs < rhs;
-                }
-                return false;
-            });
-            ''',
-            cuda_header='''
-            #undef out
-            #include <thrust/extrema.h>
-            #include <thrust/device_ptr.h>
-            #include <thrust/execution_policy.h>
-            #include <thrust/device_vector.h>
-            #include <thrust/sequence.h>
-    
-            #include <thrust/sequence.h>
-            #include <thrust/sort.h>
-            #include <thrust/unique.h>
+            if (dimsize == 1) {
+                size_t raw_allocation, d_allocation, temp_storage_bytes = 0;
+                void *d_temp_storage = NULL;
+                // Two allocations, not one block carved by hand. The old
+                // code put the sorted keys at `raw_ptr + dimlen` -- 4*dimlen
+                // bytes in, which is 8-byte aligned only when dimlen is
+                // even, so an int64 or float64 input of odd length handed
+                // cub a misaligned buffer. Carving the other way round
+                // misaligns the int32 iota for 1- and 2-byte keys. Let the
+                // allocator align each.
+                size_t keys_bytes = dimlen * sizeof(input_flatten_type);
+                size_t iota_bytes = dimlen * sizeof(int32_t);
+                input_flatten_type* keys_out = (input_flatten_type*)runtime_executor().allocator->alloc(keys_bytes, raw_allocation);
+                size_t iota_allocation;
+                int32_t* raw_ptr = (int32_t*)runtime_executor().allocator->alloc(iota_bytes, iota_allocation);
 
-            #include <cub/cub.cuh> 
-            #include <executor.h>
-            ''',
-            cuda_src=
-            '''
-                @alias(input_flatten, in0)
-                @alias(indice, out)
-                int dimlen = indice_shape0, dimsize = input_flatten_shape1;
+                thrust::device_ptr<int32_t> arange_ptr = thrust::device_pointer_cast(raw_ptr);
+                thrust::sequence(arange_ptr, arange_ptr + dimlen);
 
-                if (dimsize == 1) {
-                    size_t raw_allocation, d_allocation, temp_storage_bytes = 0;
-                    void *d_temp_storage = NULL;
-                    // Two allocations, not one block carved by hand. The old
-                    // code put the sorted keys at `raw_ptr + dimlen` -- 4*dimlen
-                    // bytes in, which is 8-byte aligned only when dimlen is
-                    // even, so an int64 or float64 input of odd length handed
-                    // cub a misaligned buffer. Carving the other way round
-                    // misaligns the int32 iota for 1- and 2-byte keys. Let the
-                    // allocator align each.
-                    size_t keys_bytes = dimlen * sizeof(input_flatten_type);
-                    size_t iota_bytes = dimlen * sizeof(int32_t);
-                    input_flatten_type* keys_out = (input_flatten_type*)runtime_executor().allocator->alloc(keys_bytes, raw_allocation);
-                    size_t iota_allocation;
-                    int32_t* raw_ptr = (int32_t*)runtime_executor().allocator->alloc(iota_bytes, iota_allocation);
+                cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, input_flatten_p,
+                                                keys_out, thrust::raw_pointer_cast(arange_ptr), indice_p, dimlen);
+                d_temp_storage = runtime_executor().allocator->alloc(temp_storage_bytes, d_allocation);
+                cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, input_flatten_p,
+                                                keys_out, thrust::raw_pointer_cast(arange_ptr), indice_p, dimlen);
 
-                    thrust::device_ptr<int32_t> arange_ptr = thrust::device_pointer_cast(raw_ptr);
-                    thrust::sequence(arange_ptr, arange_ptr + dimlen);
+                runtime_executor().allocator->free(raw_ptr, iota_bytes, iota_allocation);
+                runtime_executor().allocator->free(keys_out, keys_bytes, raw_allocation);
+                runtime_executor().allocator->free(d_temp_storage, temp_storage_bytes, d_allocation);
+            } else {
+                thrust::device_ptr<input_flatten_type> input_ptr = thrust::device_pointer_cast(input_flatten_p);
+                thrust::device_ptr<int32_t> indice_ptr = thrust::device_pointer_cast(indice_p);
 
-                    cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, input_flatten_p, 
-                                                    keys_out, thrust::raw_pointer_cast(arange_ptr), indice_p, dimlen);
-                    d_temp_storage = runtime_executor().allocator->alloc(temp_storage_bytes, d_allocation);
-                    cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, input_flatten_p,
-                                                    keys_out, thrust::raw_pointer_cast(arange_ptr), indice_p, dimlen);
-
-                    runtime_executor().allocator->free(raw_ptr, iota_bytes, iota_allocation);
-                    runtime_executor().allocator->free(keys_out, keys_bytes, raw_allocation);
-                    runtime_executor().allocator->free(d_temp_storage, temp_storage_bytes, d_allocation);
-                } else {
-                    thrust::device_ptr<input_flatten_type> input_ptr = thrust::device_pointer_cast(input_flatten_p);
-                    thrust::device_ptr<int32_t> indice_ptr = thrust::device_pointer_cast(indice_p);
-
-                    thrust::sequence(indice_ptr, indice_ptr + dimlen);
-                    thrust::sort(thrust::device, indice_ptr, indice_ptr + dimlen,
-                        [=] __device__ (int32_t a, int32_t b)->bool {
-                            for(int i = 0; i < dimsize; ++i) {
-                                input_flatten_type lhs = input_ptr[i + a * dimsize],
-                                                rhs = input_ptr[i + b * dimsize];
-                                if (lhs != rhs) return lhs < rhs;
-                            }
-                            return false;
-                        });
-                }
-            '''
-        )
+                thrust::sequence(indice_ptr, indice_ptr + dimlen);
+                thrust::sort(thrust::device, indice_ptr, indice_ptr + dimlen,
+                    [=] __device__ (int32_t a, int32_t b)->bool {
+                        for(int i = 0; i < dimsize; ++i) {
+                            input_flatten_type lhs = input_ptr[i + a * dimsize],
+                                            rhs = input_ptr[i + b * dimsize];
+                            if (lhs != rhs) return lhs < rhs;
+                        }
+                        return false;
+                    });
+            }
+        '''
+    )
     input_sorted = input_flatten[indice][:]
     
     dimlen = indice.shape[0]
@@ -920,94 +951,93 @@ def unique(
     diff = jt.concat([jt.Var([False]), diff], 0)
     diff = jt.array(diff, dtype = jt.int32)
   
-    with jt.flag_scope(compile_options = {"FLAGS:  --extended-lambda ": 1} if jt.flags.use_cuda else {}):
-        # `output` holds *positions* in input_sorted, so it is an index var --
-        # both kernels below write indices into it and the caller immediately
-        # gathers with it. It used to be created with `input_sorted.dtype`, and
-        # the CUDA body memcpy's raw int32 indices into it: with an int32 input
-        # that reinterpretation is a no-op and everything worked, with any other
-        # dtype the indices came back as garbage. That, not cub, is what "the
-        # CUDA unique kernel only sorts correctly for 32-bit int keys" was.
-        output, inverse = jt.code(
-            [(-input_sorted.shape[0], ), (indice.shape)],
-            [indice.dtype, indice.dtype],
-            [input_sorted, diff, indice],
-            cpu_header='''
-                #include <algorithm>
-                @alias(input_sorted, in0)
-                @alias(diff, in1)
-                @alias(indice, in2)
-                @alias(output, out0)
-                @alias(inverse, out1)
-            ''',
-            cpu_src=
-            f"bool return_inverse = {int(need_inverse)};" +
-            '''
-                int tot = -1;
-                for (int i = 0; i < input_sorted_shape0; ++i) {
-                    if (i == 0 || @diff(i)) {
-                        ++tot; @output(tot) = i;
+    # `output` holds *positions* in input_sorted, so it is an index var --
+    # both kernels below write indices into it and the caller immediately
+    # gathers with it. It used to be created with `input_sorted.dtype`, and
+    # the CUDA body memcpy's raw int32 indices into it: with an int32 input
+    # that reinterpretation is a no-op and everything worked, with any other
+    # dtype the indices came back as garbage. That, not cub, is what "the
+    # CUDA unique kernel only sorts correctly for 32-bit int keys" was.
+    output, inverse = code(
+        [(-input_sorted.shape[0], ), (indice.shape)],
+        [indice.dtype, indice.dtype],
+        [input_sorted, diff, indice],
+        cpu_header='''
+            #include <algorithm>
+            @alias(input_sorted, in0)
+            @alias(diff, in1)
+            @alias(indice, in2)
+            @alias(output, out0)
+            @alias(inverse, out1)
+        ''',
+        cpu_src=
+        f"bool return_inverse = {int(need_inverse)};" +
+        '''
+            int tot = -1;
+            for (int i = 0; i < input_sorted_shape0; ++i) {
+                if (i == 0 || @diff(i)) {
+                    ++tot; @output(tot) = i;
+                }
+                if (return_inverse)
+                    @inverse(@indice(i)) = tot;
+            }
+            output->set_shape({tot + 1});
+        ''',
+        cuda_header='''
+            #undef out
+
+            #include <thrust/extrema.h>
+            #include <thrust/device_ptr.h>
+            #include <thrust/execution_policy.h>
+
+            #include <thrust/sequence.h>
+            #include <thrust/unique.h>
+            #include <thrust/sort.h>
+
+            #include <thrust/scan.h>
+            #include <executor.h>
+
+            @alias(input_sorted, in0)
+            @alias(diff, in1)
+            @alias(indice, in2)
+            @alias(output, out0)
+            @alias(inverse, out1)
+        ''',
+        cuda_src=
+        f"bool return_inverse = {int(need_inverse)};" +
+        '''
+            int dimlen = input_sorted_shape0, dimsize = input_sorted_shape1;
+            size_t raw_allocation;
+            int32_t* raw_ptr = (int32_t*)runtime_executor().allocator->alloc(2 * dimlen * sizeof(int), raw_allocation);
+
+            thrust::device_ptr<int32_t> diff_ptr = thrust::device_pointer_cast(diff_p),
+                                        inverse_ptr = thrust::device_pointer_cast(inverse_p),
+                                        array_ptr = thrust::device_pointer_cast(raw_ptr),
+                                        sum_ptr = thrust::device_pointer_cast(raw_ptr + dimlen),
+                                        indice_ptr = thrust::device_pointer_cast(indice_p);
+            thrust::device_ptr<input_sorted_type> input_ptr = thrust::device_pointer_cast(input_sorted_p);
+
+            if (return_inverse) {
+                thrust::inclusive_scan(diff_ptr, diff_ptr + dimlen, sum_ptr);
+                thrust::scatter(sum_ptr, sum_ptr + dimlen, indice_ptr, inverse_ptr);
+            }
+
+            thrust::sequence(array_ptr, array_ptr + dimlen);
+            int32_t num = thrust::unique(array_ptr, array_ptr + dimlen,
+                [=] __device__ (int32_t a, int32_t b)->bool {
+                    for(int i = 0; i < dimsize; ++i) {
+                        input_sorted_type lhs = input_ptr[i + a * dimsize],
+                                        rhs = input_ptr[i + b * dimsize];
+                        if (lhs != rhs) return false;
                     }
-                    if (return_inverse)
-                        @inverse(@indice(i)) = tot;
-                }
-                output->set_shape({tot + 1});
-            ''',
-            cuda_header='''
-                #undef out
+                    return true;
+                }) - array_ptr;
 
-                #include <thrust/extrema.h>
-                #include <thrust/device_ptr.h>
-                #include <thrust/execution_policy.h>
-
-                #include <thrust/sequence.h>
-                #include <thrust/unique.h>
-                #include <thrust/sort.h>
-
-                #include <thrust/scan.h>
-                #include <executor.h>
-
-                @alias(input_sorted, in0)
-                @alias(diff, in1)
-                @alias(indice, in2)
-                @alias(output, out0)
-                @alias(inverse, out1)
-            ''',
-            cuda_src=
-            f"bool return_inverse = {int(need_inverse)};" +
-            '''
-                int dimlen = input_sorted_shape0, dimsize = input_sorted_shape1;
-                size_t raw_allocation;
-                int32_t* raw_ptr = (int32_t*)runtime_executor().allocator->alloc(2 * dimlen * sizeof(int), raw_allocation);
-
-                thrust::device_ptr<int32_t> diff_ptr = thrust::device_pointer_cast(diff_p),
-                                            inverse_ptr = thrust::device_pointer_cast(inverse_p),
-                                            array_ptr = thrust::device_pointer_cast(raw_ptr),
-                                            sum_ptr = thrust::device_pointer_cast(raw_ptr + dimlen),
-                                            indice_ptr = thrust::device_pointer_cast(indice_p);
-                thrust::device_ptr<input_sorted_type> input_ptr = thrust::device_pointer_cast(input_sorted_p);
-
-                if (return_inverse) {
-                    thrust::inclusive_scan(diff_ptr, diff_ptr + dimlen, sum_ptr);
-                    thrust::scatter(sum_ptr, sum_ptr + dimlen, indice_ptr, inverse_ptr);
-                }
-
-                thrust::sequence(array_ptr, array_ptr + dimlen);
-                int32_t num = thrust::unique(array_ptr, array_ptr + dimlen,
-                    [=] __device__ (int32_t a, int32_t b)->bool {
-                        for(int i = 0; i < dimsize; ++i) {
-                            input_sorted_type lhs = input_ptr[i + a * dimsize],
-                                            rhs = input_ptr[i + b * dimsize];
-                            if (lhs != rhs) return false;
-                        }
-                        return true;
-                    }) - array_ptr;
-
-                cudaMemcpy(output_p, raw_ptr, sizeof(int32_t) * num, cudaMemcpyDeviceToDevice);
-                runtime_executor().allocator->free(raw_ptr, 2 * dimlen * sizeof(int32_t), raw_allocation);
-                output->set_shape({ num });
-            '''
-        )
+            cudaMemcpy(output_p, raw_ptr, sizeof(int32_t) * num, cudaMemcpyDeviceToDevice);
+            runtime_executor().allocator->free(raw_ptr, 2 * dimlen * sizeof(int32_t), raw_allocation);
+            output->set_shape({ num });
+        '''
+    )
     indice_shape = (output.shape[0], )
     output = input_sorted[output][:]
 
@@ -1203,6 +1233,20 @@ def meshgrid(*tensors, indexing=None):
     return grids
 
 
+def _split_slice(d, selection, is_last, gopt_disable):
+    if gopt_disable:
+        return d.getitem(selection), d
+    return d.getitem(selection, int(is_last))
+
+
+def _split_slice_acl(d, selection, is_last, gopt_disable):
+    return d.getitem(selection), d
+
+
+register_kernel("misc.split_slice", "*", _split_slice)
+register_kernel("misc.split_slice", "acl_legacy", _split_slice_acl)
+
+
 def split(d, split_size, dim=0):
     r'''
     Splits the tensor into chunks. Each chunk is a view of the original tensor.
@@ -1233,7 +1277,8 @@ def split(d, split_size, dim=0):
     ans = []
     last = 0
     s_last = len(split_size)-1
-    gopt_disable = jt.flags.gopt_disable or jt.flags.use_acl
+    gopt_disable = jt.flags.gopt_disable
+    slice_kernel = select_kernel("misc.split_slice", d)
     for j, i in enumerate(split_size):
         if i==0:
             shape = list(d.shape)
@@ -1243,10 +1288,7 @@ def split(d, split_size, dim=0):
             continue
 
         ss = (slice(None),)*dim+(slice(last,last+i),)
-        if gopt_disable:
-            new_d = d.getitem(ss)
-        else:
-            new_d, d = d.getitem(ss, int(j==s_last))
+        new_d, d = slice_kernel(d, ss, j == s_last, gopt_disable)
 
         last +=i
         ans.append(new_d)
@@ -1352,6 +1394,14 @@ jt.Var.topk = topk
 _kthvalue_native_argsort = jt.argsort
 
 
+def _kthvalue_argsort(input, dim):
+    return jt.argsort(input, dim=dim)
+
+
+register_kernel("misc.kthvalue_argsort", "*", _kthvalue_argsort)
+register_kernel("misc.kthvalue_argsort", "acl_legacy", _kthvalue_native_argsort)
+
+
 def kthvalue(input, k, dim=None, keepdim=False, keepdims=False):
     keepdim = keepdim or keepdims
     if dim is None:
@@ -1360,7 +1410,7 @@ def kthvalue(input, k, dim=None, keepdim=False, keepdims=False):
         dim+=input.ndim
     # native jt.argsort returns (index, values); the torch_compat layer overrides
     # the module-level argsort to torch's indices-only. Handle both.
-    sorter = _kthvalue_native_argsort if jt.flags.use_acl else jt.argsort
+    sorter = select_kernel("misc.kthvalue_argsort", input)
     _srt = sorter(input, dim=dim)
     if isinstance(_srt, tuple):
         index, values = _srt
@@ -1419,7 +1469,7 @@ def cub_cumsum(x, dim=None):
         x = x.permute(order)
     if (len(shape) > 2):
         x = x.reshape([-1, shape[-1]])
-    x = jt.compile_extern.cub_ops.cub_cumsum(x)
+    x = _scan_2d_cuda(x, False)
     if (len(shape) > 2):
         x = x.reshape(shape)
     if (dim != -1 and dim != len(shape) - 1):
@@ -1453,8 +1503,20 @@ def _scan_2d(x, reverse):
     graph, ran a Python function per execution, and carried its own separate
     backward.
     '''
-    if jt.flags.use_cuda:
-        return jt.compile_extern.cub_ops.cub_cumsum(x, reverse)
+    kernel = select_kernel("misc.scan_2d", x, reverse)
+    if kernel is None:
+        raise NotImplementedError("cumsum has no scan kernel for this device")
+    return kernel(x, reverse)
+
+
+def _scan_2d_cuda(x, reverse):
+    operations = get_library_ops("cub", load=True)
+    if operations is None:
+        raise RuntimeError("CUB is unavailable for CUDA cumsum")
+    return operations.cub_cumsum(x, reverse)
+
+
+def _scan_2d_cpu(x, reverse):
     index = "n - 1 - k" if reverse else "k"
     return jt.code(x.shape, x.dtype, [x], cpu_src=f'''
         @alias(x, in0)
@@ -1469,6 +1531,12 @@ def _scan_2d(x, reverse):
             }}
         }}
     ''')
+
+
+register_kernel("misc.scan_2d", "cpu", _scan_2d_cpu)
+for _backend in _CUDA_CODE_BACKENDS:
+    register_kernel("misc.scan_2d", _backend, _scan_2d_cuda)
+del _backend
 
 
 class _Cumsum(jt.Function):
@@ -2067,6 +2135,27 @@ def _seed_jittor_at_import():
 
 _seed_jittor_at_import()
 
+@optional_kernel("misc.searchsorted", "acl_legacy")
+def _searchsorted_acl(sorted, values, right, out_dtype, out):
+    if sorted.ndim == 1:
+        sorted_view = sorted.reshape(
+            (1,) * values.ndim + (sorted.shape[-1],)
+        )
+    else:
+        if sorted.ndim != values.ndim:
+            raise ValueError(
+                "batched sorted and values must have the same rank"
+            )
+        sorted_view = sorted.unsqueeze(-2)
+    values_view = values.unsqueeze(-1)
+    before = sorted_view <= values_view if right else sorted_view < values_view
+    ret = before.int32().sum(dim=-1).cast(out_dtype)
+    if out is not None:
+        out.assign(ret)
+        return out
+    return ret
+
+
 def searchsorted(sorted, values, right=False, out_int32=False, side=None, sorter=None, out=None):
     """
     Find the indices from the innermost dimension of `sorted` for each `values`.
@@ -2100,24 +2189,9 @@ Example::
     if scalar_value or values.ndim == 0:
         values = values.reshape((1,))
     out_dtype = "int32" if out_int32 else "int64"
-    if jt.flags.use_acl:
-        if sorted.ndim == 1:
-            sorted_view = sorted.reshape(
-                (1,) * values.ndim + (sorted.shape[-1],)
-            )
-        else:
-            if sorted.ndim != values.ndim:
-                raise ValueError(
-                    "batched sorted and values must have the same rank"
-                )
-            sorted_view = sorted.unsqueeze(-2)
-        values_view = values.unsqueeze(-1)
-        before = sorted_view <= values_view if right else sorted_view < values_view
-        ret = before.int32().sum(dim=-1).cast(out_dtype)
-        if out is not None:
-            out.assign(ret)
-            return out
-        return ret
+    result = _searchsorted_acl(sorted, values, right, out_dtype, out)
+    if result is not None:
+        return result
     out_ctype = "int32" if out_int32 else "int64"
     _searchsorted_header = f"""
 namespace jittor {{
@@ -2818,9 +2892,19 @@ def _classify(x, expr, acl_body, integral):
     x = x if isinstance(x, jt.Var) else jt.array(x)
     if not x.dtype.is_float():
         return (jt.ones if integral else jt.zeros)(x.shape, "bool")
-    if jt.flags.use_acl:
-        return acl_body(x)
+    return select_kernel("misc.classify", x)(x, expr, acl_body)
+
+
+def _classify_acl(x, expr, acl_body):
+    return acl_body(x)
+
+
+def _classify_code(x, expr, acl_body):
     return jt.misc._simple_for(x, expr(jt.misc._classify_value(str(x.dtype))))
+
+
+register_kernel("misc.classify", "*", _classify_code)
+register_kernel("misc.classify", "acl_legacy", _classify_acl)
 
 
 def isnan(x):
@@ -2916,7 +3000,7 @@ def _parse_to(args, kwargs):
             if location == "cpu":
                 target_device = "cpu"
             elif location == "device":
-                backend = "npu" if getattr(jt.flags, "use_acl", 0) else "cuda"
+                backend = "npu" if dispatch_context(first).backend == "acl_legacy" else "cuda"
                 target_device = "%s:%d" % (backend, first.device_id)
             device_given = target_device is not None
         else:
@@ -3043,6 +3127,17 @@ def _to_float(x: jt.Var) -> jt.Var:
     return x
 jt.Var._to_float = _to_float
 
+@optional_kernel("misc.index_select", "acl_legacy")
+def _index_select_acl(input, dim, indices):
+    ndim = input.ndim
+    output_shape = list(input.shape)
+    output_shape[dim] = indices.shape[0]
+    index_shape = [1] * ndim
+    index_shape[dim] = indices.shape[0]
+    index = indices.reshape(index_shape).broadcast(output_shape)
+    return jt.gather(input, dim, index)
+
+
 def index_select(input: jt.Var, dim: int, indices: jt.Var) -> jt.Var:
     '''Returns a new var which indexes the x var along dimension dim using the entries in index.
 
@@ -3072,13 +3167,9 @@ The returned var has the same number of dimensions as the original var (x). The 
             f"Dimension out of range (expected to be in range of "
             f"[{-ndim}, {ndim - 1}], but got {original_dim})"
         )
-    if jt.flags.use_acl:
-        output_shape = list(input.shape)
-        output_shape[dim] = indices.shape[0]
-        index_shape = [1] * ndim
-        index_shape[dim] = indices.shape[0]
-        index = indices.reshape(index_shape).broadcast(output_shape)
-        return jt.gather(input, dim, index)
+    result = _index_select_acl(input, dim, indices)
+    if result is not None:
+        return result
     return input[(slice(None),) * dim + (indices,)]
 jt.index_select = index_select
 jt.Var.index_select = index_select

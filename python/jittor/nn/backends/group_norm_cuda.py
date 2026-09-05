@@ -4,6 +4,8 @@ from functools import lru_cache
 import math
 
 import jittor as jt
+from jittor._runtime.backend_libraries import library_resource
+from jittor._runtime.dispatch import optional_kernel
 
 
 @lru_cache(maxsize=128)
@@ -16,7 +18,7 @@ def _group_norm_cuda_cls(shape, num_groups, eps):
     threads = 32
     while threads < min(group_size, 256):
         threads *= 2
-    header = f"#include <{jt.compile_extern.cub_home}cub/cub.cuh>"
+    header = f"#include <{library_resource('cub', 'home')}cub/cub.cuh>"
 
     class GroupNormCUDA(jt.Function):
         def execute(self, x, weight, bias):
@@ -178,19 +180,15 @@ def _group_norm_cuda_cls(shape, num_groups, eps):
     return GroupNormCUDA
 
 
-def _group_norm_cuda(x, num_groups, weight, bias, eps):
+def _supports_group_norm(x, num_groups, weight, bias, eps):
     if not (
-        jt.flags.use_cuda
-        and not getattr(jt.compiler, "has_acl", 0)
-        and isinstance(weight, jt.Var)
+        isinstance(weight, jt.Var)
         and isinstance(bias, jt.Var)
     ):
-        return None
-    if str(x.dtype) != "float32" or str(weight.dtype) != "float32" or str(bias.dtype) != "float32":
-        return None
+        return False
     shape = tuple(int(size) for size in x.shape)
     if len(shape) != 4 or any(size <= 0 for size in shape):
-        return None
+        return False
     channels = shape[1]
     num_groups = int(num_groups)
     if (
@@ -201,7 +199,16 @@ def _group_norm_cuda(x, num_groups, weight, bias, eps):
         or not math.isfinite(float(eps))
         or float(eps) <= 0.0
     ):
-        return None
+        return False
+    return True
+
+
+@optional_kernel("nn.group_norm", ("cuda", "rocm_legacy", "corex_legacy"),
+                 dtypes=("float32",),
+                 supports=_supports_group_norm)
+def _group_norm_cuda(x, num_groups, weight, bias, eps):
+    shape = tuple(int(size) for size in x.shape)
+    num_groups = int(num_groups)
     cls = _group_norm_cuda_cls(shape, num_groups, float(eps))
     return cls.apply(x, weight, bias)
 

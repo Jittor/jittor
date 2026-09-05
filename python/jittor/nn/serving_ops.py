@@ -14,6 +14,7 @@ result from ordinary ops, so the same call works on CPU and under autograd.
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
+from jittor._runtime.dispatch import dispatch_context, optional_kernel
 
 from .backends import hooks as _backend_hooks
 from .rms_norm_cuda import _fused_add_rms_norm_cuda, _rms_norm_cuda
@@ -50,9 +51,7 @@ def rms_norm(x, weight, eps=1e-6):
     backend = _backend_hooks.rms_norm_cuda or _rms_norm_cuda
     backend_weight = weight
     if (
-        getattr(jt.compiler, "has_acl", 0)
-        and getattr(jt.flags, "use_acl", 0)
-        and jt.flags.use_cuda
+        dispatch_context(x, weight).backend == "acl_legacy"
         and not _output_requires_grad(x, weight)
         and str(x.dtype) == "float32"
         and str(weight.dtype) in ("float16", "bfloat16")
@@ -200,14 +199,11 @@ def rotary_embedding(positions, query, key, cos_sin_cache, head_size=None,
     return rotate(query), rotate(key)
 
 
-def _rotary_embedding_acl(
+def _supports_rotary_embedding_acl(
         positions, query, key, cos_sin_cache,
         head_size, is_neox, rotary_dim):
     if not (
-        getattr(jt.compiler, "has_acl", 0)
-        and getattr(jt.flags, "use_acl", 0)
-        and jt.flags.use_cuda
-        and not _output_requires_grad(positions, query, key, cos_sin_cache)
+        not _output_requires_grad(positions, query, key, cos_sin_cache)
         and key is not None
         and is_neox
         and rotary_dim == head_size
@@ -218,7 +214,15 @@ def _rotary_embedding_acl(
         and str(query.dtype) == str(key.dtype) == str(cos_sin_cache.dtype)
         and str(query.dtype) in ("float16", "bfloat16", "float32")
     ):
-        return None
+        return False
+    return True
+
+
+@optional_kernel("nn.rotary_embedding.packed_acl", "acl_legacy",
+                 supports=_supports_rotary_embedding_acl)
+def _rotary_embedding_acl(
+        positions, query, key, cos_sin_cache,
+        head_size, is_neox, rotary_dim):
 
     token_count = int(positions.numel())
     flat_positions = positions.reshape((token_count,))

@@ -2,28 +2,25 @@
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
+from jittor._runtime.dispatch import optional_kernel
 
-from ._cuda_inference import cached_source, device_index, on_acl
+from ._cuda_inference import cached_source
 
 
+@optional_kernel("nn.reshape_and_cache_cuda", ("cuda", "rocm_legacy", "corex_legacy"),
+                 dtypes={"float16", "bfloat16", "float32", "int32", "int64"})
 def _reshape_and_cache_cuda(key, value, kv_cache, slot_mapping):
     """Scatter ``key`` and ``value`` into a V1 paged KV cache in place."""
     tensors = (key, value, kv_cache, slot_mapping)
     if not all(isinstance(tensor, jt.Var) for tensor in tensors):
         return None
-    if not (jt.flags.use_cuda and not _output_requires_grad(
-            key, value, kv_cache, slot_mapping)):
-        return None
-    if on_acl():
+    if _output_requires_grad(key, value, kv_cache, slot_mapping):
         return None
     try:
         key_shape = tuple(int(size) for size in key.shape)
         value_shape = tuple(int(size) for size in value.shape)
         cache_shape = tuple(int(size) for size in kv_cache.shape)
-        devices = tuple(device_index(tensor) for tensor in tensors)
     except Exception:
-        return None
-    if any(device < 0 for device in devices) or len(set(devices)) != 1:
         return None
     if len(key_shape) != 3 or value_shape != key_shape or len(cache_shape) != 5:
         return None
@@ -77,6 +74,8 @@ def _reshape_and_cache_cuda(key, value, kv_cache, slot_mapping):
     return _stop_grad_outputs(kv_cache)
 
 
+@optional_kernel("nn.paged_attention_decode_cuda", ("cuda", "rocm_legacy", "corex_legacy"),
+                 dtypes={"float16", "bfloat16", "float32", "int32", "int64"})
 def _paged_attention_decode_cuda(
     query,
     kv_cache,
@@ -88,19 +87,14 @@ def _paged_attention_decode_cuda(
     tensors = (query, kv_cache, seq_lens, block_table)
     if not all(isinstance(tensor, jt.Var) for tensor in tensors):
         return None
-    if not (jt.flags.use_cuda and not _output_requires_grad(tensors)):
-        return None
-    if on_acl():
+    if _output_requires_grad(tensors):
         return None
     try:
         query_shape = tuple(int(size) for size in query.shape)
         cache_shape = tuple(int(size) for size in kv_cache.shape)
         table_shape = tuple(int(size) for size in block_table.shape)
-        devices = tuple(device_index(tensor) for tensor in tensors)
         scale = float(softmax_scale)
     except Exception:
-        return None
-    if any(device < 0 for device in devices) or len(set(devices)) != 1:
         return None
     if len(query_shape) != 3 or len(cache_shape) != 5 or len(table_shape) != 2:
         return None

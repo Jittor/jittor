@@ -11,6 +11,7 @@ from collections import OrderedDict
 
 import jittor as jt
 from jittor import _arg_policy
+from jittor._runtime.dispatch import dispatch_context
 
 
 _ComplexNumber = jt.nn.ComplexNumber
@@ -18,8 +19,9 @@ _dft_mat_cache = OrderedDict()
 _dft_mat_cache_limit = 16
 
 
-def _dft_mats(size, inverse):
-    key = (int(size), bool(inverse), int(jt.flags.use_acl), int(jt.flags.use_cuda))
+def _dft_mats(size, inverse, like):
+    context = dispatch_context(like)
+    key = (int(size), bool(inverse), context.backend, context.device_id)
     cached = _dft_mat_cache.get(key)
     if cached is not None:
         _dft_mat_cache.move_to_end(key)
@@ -32,6 +34,8 @@ def _dft_mats(size, inverse):
         jt.array(np.cos(angle).astype("float32")),
         jt.array(np.sin(angle).astype("float32")),
     )
+    if context.device_id >= 0:
+        matrices = tuple(matrix.to_device(context.device_id) for matrix in matrices)
     _dft_mat_cache[key] = matrices
     if len(_dft_mat_cache) > _dft_mat_cache_limit:
         _dft_mat_cache.popitem(last=False)
@@ -80,7 +84,7 @@ def _fft_core(value, size, dim, inverse, norm=None):
     real = _resize_last(real0, size)
     imag = _resize_last(imag0, size) if imag0 is not None else None
     length = real.shape[-1]
-    cosine, sine = _dft_mats(length, inverse)
+    cosine, sine = _dft_mats(length, inverse, real)
 
     out_real = jt.matmul(real, cosine.transpose(1, 0))
     out_imag = jt.matmul(real, sine.transpose(1, 0))

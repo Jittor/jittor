@@ -31,6 +31,7 @@ import unittest
 import numpy as np
 
 import jittor as jt
+from jittor._runtime.dispatch import override_kernel
 from jittor.nn.functional import matrix
 
 
@@ -92,31 +93,26 @@ class _Dispatch:
         This is the assertion that would catch a fifth spelling appearing: a
         call site with its own guard would keep taking the relay here.
         """
-        saved = matrix._cublas_can_take
-        matrix._cublas_can_take = lambda a, b: False
-        try:
-            for dtype in ("float32", "float64"):
-                with self.subTest(dtype=dtype):
-                    raw_a, raw_b = _pair(self.rng, dtype)
-                    with jt.flag_scope(use_cuda=self.use_cuda):
-                        a, b = (jt.array(raw_a, dtype=dtype),
-                                jt.array(raw_b, dtype=dtype))
-                        generic = (jt.nn.bmm_transpose(a, b).numpy(),
-                                   jt.nn.matmul(a, b.transpose((0, 2, 1))).numpy(),
-                                   jt.nn.matmul_transpose(a[0], b[0]).numpy())
-                    matrix._cublas_can_take = saved
-                    with jt.flag_scope(use_cuda=self.use_cuda):
-                        a, b = (jt.array(raw_a, dtype=dtype),
-                                jt.array(raw_b, dtype=dtype))
-                        relayed = (jt.nn.bmm_transpose(a, b).numpy(),
-                                   jt.nn.matmul(a, b.transpose((0, 2, 1))).numpy(),
-                                   jt.nn.matmul_transpose(a[0], b[0]).numpy())
-                    matrix._cublas_can_take = lambda a, b: False
-                    for one, two in zip(generic, relayed):
-                        np.testing.assert_allclose(one, two, rtol=1e-4,
-                                                   atol=1e-4)
-        finally:
-            matrix._cublas_can_take = saved
+        for dtype in ("float32", "float64"):
+            with self.subTest(dtype=dtype):
+                raw_a, raw_b = _pair(self.rng, dtype)
+                with jt.flag_scope(use_cuda=self.use_cuda), \
+                        override_kernel("matmul", "cuda", matrix._cublas_matmul,
+                                        supports=lambda *args: False), \
+                        override_kernel("batched_matmul", "cuda", matrix._cublas_batched_matmul,
+                                        supports=lambda *args: False):
+                    a, b = (jt.array(raw_a, dtype=dtype), jt.array(raw_b, dtype=dtype))
+                    self.assertFalse(matrix._cublas_can_take(a, b))
+                    generic = (jt.nn.bmm_transpose(a, b).numpy(),
+                               jt.nn.matmul(a, b.transpose((0, 2, 1))).numpy(),
+                               jt.nn.matmul_transpose(a[0], b[0]).numpy())
+                with jt.flag_scope(use_cuda=self.use_cuda):
+                    a, b = (jt.array(raw_a, dtype=dtype), jt.array(raw_b, dtype=dtype))
+                    relayed = (jt.nn.bmm_transpose(a, b).numpy(),
+                               jt.nn.matmul(a, b.transpose((0, 2, 1))).numpy(),
+                               jt.nn.matmul_transpose(a[0], b[0]).numpy())
+                for one, two in zip(generic, relayed):
+                    np.testing.assert_allclose(one, two, rtol=1e-4, atol=1e-4)
 
 
 class TestDispatchCPU(_Dispatch, unittest.TestCase):

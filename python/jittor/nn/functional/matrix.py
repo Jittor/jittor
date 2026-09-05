@@ -1,6 +1,8 @@
 """Matrix multiplication and bilinear neural-network operations."""
 
 import jittor as jt
+from jittor._runtime.dispatch import register_kernel, select_kernel
+from jittor._runtime.backend_libraries import get_library_ops
 
 
 def _broadcast_batch_dims(a, b):
@@ -69,11 +71,32 @@ def _cublas_can_take(a, b):
     same product written as ``matmul(a, b.transpose(...))`` computed fine on the
     generic path. Same mathematics, two spellings, one of them a crash.
     """
-    return bool(
-        jt.flags.use_cuda
-        and jt.compile_extern.cublas_ops
-        and _same_floating_dtype(a, b)
-    )
+    return select_kernel("matmul", a, b, False, False) is _cublas_matmul
+
+
+def _supports_cublas(a, b, trans_a=False, trans_b=False):
+    return _same_floating_dtype(a, b) and get_library_ops("cublas") is not None
+
+
+def _cublas_matmul(a, b, trans_a=False, trans_b=False):
+    return get_library_ops("cublas").cublas_matmul(a, b, trans_a, trans_b)
+
+
+def _cublas_batched_matmul(a, b, trans_a=False, trans_b=False):
+    a, b = _broadcast_batch_dims(a, b)
+    return get_library_ops("cublas").cublas_batched_matmul(a, b, trans_a, trans_b)
+
+
+def _supports_mkl_batched(a, b, trans_a=False, trans_b=False):
+    if a.dtype != b.dtype or str(a.dtype) != "float32":
+        return False
+    ops = get_library_ops("mkl", load=True)
+    return ops is not None and hasattr(ops, "mkl_batched_matmul")
+
+
+def _mkl_batched_matmul(a, b, trans_a=False, trans_b=False):
+    a, b = _broadcast_batch_dims(a, b)
+    return get_library_ops("mkl").mkl_batched_matmul(a, b, trans_a, trans_b)
 
 
 def matmul_transpose(a, b):
@@ -86,8 +109,9 @@ def matmul_transpose(a, b):
         cc = jt.nn.matmul_transpose(aa, b)
         return cc.reshape(a.shape[:-1] + (-1,))
     assert len(a.shape) == 2 and len(b.shape) == 2
-    if _cublas_can_take(a, b):
-        return jt.compile_extern.cublas_ops.cublas_matmul(a, b, 0, 1)
+    fast = _matmul_2d_cublas(a, b, 0, 1)
+    if fast is not None:
+        return fast
 
     shape = list(a.shape)[:-1] + list(b.shape)
     with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce
@@ -107,9 +131,9 @@ def bmm_transpose(a, b):
     # on which of the two names the caller reached for.
     with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce
                       | jt.amp_flags.reduce16_no_fp32_acc):
-        if _cublas_can_take(a, b):
-            a, b = _broadcast_batch_dims(a, b)
-            return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 1)
+        kernel = select_kernel("batched_matmul", a, b, 0, 1)
+        if kernel is not None:
+            return kernel(a, b, 0, 1)
         t = list(range(b.ndim))
         t[-1], t[-2] = t[-2], t[-1]
         return jt.nn.bmm(a, b.transpose(t))
@@ -146,8 +170,9 @@ def baddbmm(input, batch1, batch2, beta=1, alpha=1):
 
 
 def _matmul_2d_cublas(a, b, trans_a=0, trans_b=0):
-    if _cublas_can_take(a, b):
-        return jt.compile_extern.cublas_ops.cublas_matmul(a, b, trans_a, trans_b)
+    kernel = select_kernel("matmul", a, b, trans_a, trans_b)
+    if kernel is not None:
+        return kernel(a, b, trans_a, trans_b)
     return None
 
 
@@ -167,19 +192,7 @@ def _mkl_batched_matmul_is_available(a, b):
     Anything else -- float64, float16, and the complex dtypes the native
     reindex kernels do support -- keeps the generic path.
     """
-    if jt.flags.use_cuda:
-        return False
-    if a.dtype != b.dtype or a.dtype != jt.float32:
-        return False
-    if not getattr(jt.compile_extern, "use_mkl", True):
-        return False
-    ops = getattr(jt.compile_extern, "mkl_ops", None)
-    if ops is None:
-        jt.compile_extern.setup_mkl()
-        ops = getattr(jt.compile_extern, "mkl_ops", None)
-    if ops is None or not hasattr(ops, "mkl_batched_matmul"):
-        return False
-    return True
+    return select_kernel("batched_matmul", a, b, False, False) is _mkl_batched_matmul
 
 
 def matmul(a, b):
@@ -244,37 +257,14 @@ def matmul(a, b):
         if len_a >= 3 and len_a == len_b:
             # bmm
             # a: [..., n, m], b: [..., m, k], c:[..., n, k]
-            # cublas_batched_matmul only supports float dtypes; complex64 falls through to
-            # the reindex path below (broadcast * multiply + sum-reduce), which the native
-            # complex kernels support on both CPU and CUDA.
-            if _cublas_can_take(a, b):
-                a_base = _transpose_base_last2(a)
-                b_base = _transpose_base_last2(b)
-                if a_base is not None:
-                    a = a_base
-                if b_base is not None:
-                    b = b_base
-                a, b = _broadcast_batch_dims(a, b)
-                return jt.compile_extern.cublas_ops.cublas_batched_matmul(
-                    a, b, 1 if a_base is not None else 0, 1 if b_base is not None else 0
-                )
-            # The reindex path below expresses a batched matmul as
-            # broadcast * multiply + sum-reduce over one index space with an
-            # extra dimension. The matmul tuner only relays the two-dimensional
-            # form, so on CPU every batched matmul -- both attention products in
-            # every transformer -- ran as that generic kernel at roughly a
-            # fortieth of oneDNN's throughput.
-            if _mkl_batched_matmul_is_available(a, b):
-                a_base = _transpose_base_last2(a)
-                b_base = _transpose_base_last2(b)
-                if a_base is not None:
-                    a = a_base
-                if b_base is not None:
-                    b = b_base
-                a, b = _broadcast_batch_dims(a, b)
-                return jt.compile_extern.mkl_ops.mkl_batched_matmul(
-                    a, b, 1 if a_base is not None else 0, 1 if b_base is not None else 0
-                )
+            a_base = _transpose_base_last2(a)
+            b_base = _transpose_base_last2(b)
+            aa = a_base if a_base is not None else a
+            bb = b_base if b_base is not None else b
+            trans_a, trans_b = a_base is not None, b_base is not None
+            kernel = select_kernel("batched_matmul", aa, bb, trans_a, trans_b)
+            if kernel is not None:
+                return kernel(aa, bb, trans_a, trans_b)
         shape = []
         len_c = max(len_a, len_b)
         (n, m), (m_, k) = a.shape[-2:], b.shape[-2:]
@@ -323,6 +313,17 @@ def bilinear(in1, in2, weight, bias):
     if bias is not None:
         z += bias
     return z
+
+
+_FLOAT_DTYPES = {"float16", "bfloat16", "float32", "float64"}
+for _backend in ("cuda", "rocm_legacy", "corex_legacy"):
+    register_kernel("matmul", _backend, _cublas_matmul,
+                    dtypes=_FLOAT_DTYPES, supports=_supports_cublas)
+    register_kernel("batched_matmul", _backend, _cublas_batched_matmul,
+                    dtypes=_FLOAT_DTYPES, supports=_supports_cublas)
+register_kernel("batched_matmul", "cpu", _mkl_batched_matmul,
+                dtypes={"float32"}, supports=_supports_mkl_batched)
+del _backend
 
 
 __all__ = [

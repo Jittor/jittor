@@ -2,9 +2,7 @@
 
 import jittor as jt
 from jittor.misc import _pair, _triple
-
-from ..backends import cudnn as _cudnn
-
+from jittor._runtime.dispatch import select_kernel
 
 def _check_conv2d_output_size(x, oh, ow, kernel_size, stride, padding, dilation):
     """Reject a geometry whose output has no elements, with the numbers in it."""
@@ -84,21 +82,11 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
     # so validating inside the reindex branches only would leave CUDA silent.
     _check_conv2d_output_size(x, out_height, out_width, (Kh, Kw), stride,
                               padding, dilation)
-    # Depthwise CUDA kernel; on CPU DepthwiseConv itself calls back into the
-    # grouped path below, so it is only worth taking when it is really CUDA.
-    if (_depthwise_fast_path
-            and groups == out_channels == x.shape[1]
-            and jt.flags.use_cuda and jt.compiler.is_cuda):
-        y = jt.nn.DepthwiseConv(stride, padding, dilation)(x, weight)
-        if bias is not None:
-            y = y + bias.broadcast(y.shape, [0, 2, 3])
-        return y
-    # cuDNN path (memory-efficient fwd+bwd); falls back to reindex below on
-    # CPU / no-cuDNN / non-float32. See nn/backends/cudnn.py.
-    _y = _cudnn._try_cudnn_conv2d(
-        x, weight, bias, stride, padding, dilation, groups)
-    if _y is not None:
-        return _y
+    kernel = select_kernel("conv2d", x, weight, bias, stride, padding, dilation, groups,
+                           _depthwise_fast_path=_depthwise_fast_path)
+    if kernel is not None:
+        return kernel(x, weight, bias, stride, padding, dilation, groups,
+                      _depthwise_fast_path=_depthwise_fast_path)
     if groups == 1:
         N,C,H,W = x.shape
         oh, ow = out_height, out_width
@@ -189,10 +177,9 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     out_channels = weight.shape[0]
     if groups <= 0:
         raise ValueError("groups must be a positive integer")
-    if jt.flags.use_cuda and jt.cudnn:
-        y = _cudnn._cudnn_conv3d_fp16_safe(
-            jt.cudnn.ops.cudnn_conv3d, x, weight,
-            *stride, *padding, *dilation, groups)
+    kernel = select_kernel("conv3d", x, weight, stride, padding, dilation, groups)
+    if kernel is not None:
+        y = kernel(x, weight, stride, padding, dilation, groups)
     elif groups == 1:
         N,C,D,H,W = x.shape
         Kd, Kh, Kw = weight.shape[-3:]

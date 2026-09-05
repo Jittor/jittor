@@ -4,37 +4,27 @@ import math
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
+from jittor._runtime.dispatch import optional_kernel
 
-from .._cuda_inference import device_index
 
-
-def _modulated_layer_norm_no_grad_cuda(x, scale, shift, eps):
-    """Fuse inference BF16 LayerNorm with per-channel scale and shift."""
+def _supports_modulated_layer_norm(x, scale, shift, eps):
     if not all(isinstance(value, jt.Var) for value in (x, scale, shift)):
-        return None
-    if not (
-        jt.flags.use_cuda
-        and not getattr(jt.compiler, "has_acl", 0)
-        and not _output_requires_grad(x, scale, shift)
-    ):
-        return None
+        return False
+    if _output_requires_grad(x, scale, shift):
+        return False
     autocast_probe = getattr(jt, "is_autocast_enabled", None)
     if callable(autocast_probe):
-        try:
-            if bool(autocast_probe()):
-                return None
-        except Exception:
-            return None
+        if bool(autocast_probe()):
+            return False
     try:
         shape = tuple(int(size) for size in x.shape)
         scale_shape = tuple(int(size) for size in scale.shape)
         shift_shape = tuple(int(size) for size in shift.shape)
-        devices = tuple(device_index(value) for value in (x, scale, shift))
         eps_value = float(eps)
-    except Exception:
-        return None
+    except (TypeError, ValueError, OverflowError):
+        return False
     if len(shape) not in (2, 3) or any(size <= 0 for size in shape):
-        return None
+        return False
     hidden = shape[-1]
     if (
         hidden > 4096
@@ -42,14 +32,20 @@ def _modulated_layer_norm_no_grad_cuda(x, scale, shift, eps):
         or shift_shape != scale_shape
         or int(scale.numel()) != hidden
         or int(shift.numel()) != hidden
-        or any(device < 0 for device in devices)
-        or len(set(devices)) != 1
         or not math.isfinite(eps_value)
         or eps_value <= 0
     ):
-        return None
-    if any(str(value.dtype) != "bfloat16" for value in (x, scale, shift)):
-        return None
+        return False
+    return True
+
+
+@optional_kernel("nn.layer_norm.modulated", ("cuda", "rocm_legacy", "corex_legacy"),
+                 dtypes=("bfloat16",),
+                 supports=_supports_modulated_layer_norm)
+def _modulated_layer_norm_no_grad_cuda(x, scale, shift, eps):
+    """Fuse inference BF16 LayerNorm with per-channel scale and shift."""
+    hidden = int(x.shape[-1])
+    eps_value = float(eps)
 
     return _stop_grad_outputs(jt.code(
         x.shape,

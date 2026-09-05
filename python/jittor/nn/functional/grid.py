@@ -4,6 +4,7 @@ import jittor as jt
 import numpy as np
 
 from .interpolation import _interpolate
+from ..._runtime.dispatch import register_kernel, select_kernel
 
 
 def grid_sample_v0(input, grid, mode="bilinear", padding_mode="zeros"):
@@ -61,14 +62,16 @@ def linspace_from_neg_one(grid, num_steps, align_corners):
     return jt.array(ra, dtype=grid.dtype)
 
 
-def make_base_grid_4D(theta, N, C, H, W, align_corners):
-    if jt.flags.use_acl:
-        x = jt.nn.linspace_from_neg_one(theta, W, align_corners)
-        x = x.reshape(1, 1, W, 1).broadcast((N, H, W, 1))
-        y = jt.nn.linspace_from_neg_one(theta, H, align_corners)
-        y = y.reshape(1, H, 1, 1).broadcast((N, H, W, 1))
-        one = jt.ones((N, H, W, 1), dtype=theta.dtype)
-        return jt.concat((x, y, one), dim=-1)
+def _make_base_grid_4d_acl(theta, N, C, H, W, align_corners):
+    x = jt.nn.linspace_from_neg_one(theta, W, align_corners)
+    x = x.reshape(1, 1, W, 1).broadcast((N, H, W, 1))
+    y = jt.nn.linspace_from_neg_one(theta, H, align_corners)
+    y = y.reshape(1, H, 1, 1).broadcast((N, H, W, 1))
+    one = jt.ones((N, H, W, 1), dtype=theta.dtype)
+    return jt.concat((x, y, one), dim=-1)
+
+
+def _make_base_grid_4d(theta, N, C, H, W, align_corners):
     base_grid = jt.zeros((N, H, W, 3), dtype=theta.dtype)
     base_grid[..., 0] = jt.nn.linspace_from_neg_one(theta, W, align_corners)
     base_grid[..., 1] = jt.unsqueeze(jt.nn.linspace_from_neg_one(theta, H, align_corners), -1)
@@ -76,16 +79,18 @@ def make_base_grid_4D(theta, N, C, H, W, align_corners):
     return base_grid
 
 
-def make_base_grid_5D(theta, N, C, D, H, W, align_corners):
-    if jt.flags.use_acl:
-        x = jt.nn.linspace_from_neg_one(theta, W, align_corners)
-        x = x.reshape(1, 1, 1, W, 1).broadcast((N, D, H, W, 1))
-        y = jt.nn.linspace_from_neg_one(theta, H, align_corners)
-        y = y.reshape(1, 1, H, 1, 1).broadcast((N, D, H, W, 1))
-        z = jt.nn.linspace_from_neg_one(theta, D, align_corners)
-        z = z.reshape(1, D, 1, 1, 1).broadcast((N, D, H, W, 1))
-        one = jt.ones((N, D, H, W, 1), dtype=theta.dtype)
-        return jt.concat((x, y, z, one), dim=-1)
+def _make_base_grid_5d_acl(theta, N, C, D, H, W, align_corners):
+    x = jt.nn.linspace_from_neg_one(theta, W, align_corners)
+    x = x.reshape(1, 1, 1, W, 1).broadcast((N, D, H, W, 1))
+    y = jt.nn.linspace_from_neg_one(theta, H, align_corners)
+    y = y.reshape(1, 1, H, 1, 1).broadcast((N, D, H, W, 1))
+    z = jt.nn.linspace_from_neg_one(theta, D, align_corners)
+    z = z.reshape(1, D, 1, 1, 1).broadcast((N, D, H, W, 1))
+    one = jt.ones((N, D, H, W, 1), dtype=theta.dtype)
+    return jt.concat((x, y, z, one), dim=-1)
+
+
+def _make_base_grid_5d(theta, N, C, D, H, W, align_corners):
     base_grid = jt.zeros((N, D, H, W, 4), dtype=theta.dtype)
     base_grid[..., 0] = jt.nn.linspace_from_neg_one(theta, W, align_corners)
     base_grid[..., 1] = jt.unsqueeze(jt.nn.linspace_from_neg_one(theta, H, align_corners), -1)
@@ -94,6 +99,20 @@ def make_base_grid_5D(theta, N, C, D, H, W, align_corners):
     )
     base_grid[..., -1] = 1
     return base_grid
+
+
+register_kernel("nn.base_grid_4d", "*", _make_base_grid_4d)
+register_kernel("nn.base_grid_4d", "acl_legacy", _make_base_grid_4d_acl)
+register_kernel("nn.base_grid_5d", "*", _make_base_grid_5d)
+register_kernel("nn.base_grid_5d", "acl_legacy", _make_base_grid_5d_acl)
+
+
+def make_base_grid_4D(theta, N, C, H, W, align_corners):
+    return select_kernel("nn.base_grid_4d", theta)(theta, N, C, H, W, align_corners)
+
+
+def make_base_grid_5D(theta, N, C, D, H, W, align_corners):
+    return select_kernel("nn.base_grid_5d", theta)(theta, N, C, D, H, W, align_corners)
 
 
 def affine_grid_generator_4D(theta, N, C, H, W, align_corners):

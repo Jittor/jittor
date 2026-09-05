@@ -2,7 +2,19 @@
 
 import jittor as jt
 
-from ..backends import hooks as _backend_hooks
+from ..._runtime.dispatch import register_kernel, select_kernel, try_dispatch
+
+
+def _embedding_renorm_indices(input):
+    return input.reshape((-1,)).unique()
+
+
+def _embedding_renorm_indices_acl(input):
+    return input.reshape((-1,))
+
+
+register_kernel("nn.embedding_renorm_indices", "*", _embedding_renorm_indices)
+register_kernel("nn.embedding_renorm_indices", "acl_legacy", _embedding_renorm_indices_acl)
 
 
 def embedding(
@@ -14,23 +26,20 @@ def embedding(
     scale_grad_by_freq=False,
     sparse=False,
 ):
-    acl_embedding = _backend_hooks.acl_embedding
-    if acl_embedding is not None:
-        result = acl_embedding(
-            input,
-            weight,
-            padding_idx,
-            max_norm,
-            norm_type,
-            scale_grad_by_freq,
-            sparse,
-        )
-        if result is not None:
-            return result
+    result = try_dispatch(
+        "nn.embedding",
+        input,
+        weight,
+        padding_idx,
+        max_norm,
+        norm_type,
+        scale_grad_by_freq,
+        sparse,
+    )
+    if result is not None:
+        return result
     if max_norm is not None:
-        indices = input.reshape((-1,))
-        if not jt.flags.use_acl:
-            indices = indices.unique()
+        indices = select_kernel("nn.embedding_renorm_indices", input)(input)
         rows = weight[indices]
         norm = (rows.abs() ** norm_type).sum(dim=-1, keepdims=True) ** (1.0 / norm_type)
         scale = jt.ternary(

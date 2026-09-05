@@ -18,16 +18,14 @@ import numpy as np
 import jittor as jt
 from jittor import nn
 import jittor.nn.functional.matrix as matrix
+from jittor._runtime.dispatch import override_kernel
 
 
 def _generic(function):
     """Run ``function`` with the relay disabled, i.e. on the reindex path."""
-    saved = matrix._mkl_batched_matmul_is_available
-    matrix._mkl_batched_matmul_is_available = lambda a, b: False
-    try:
+    with override_kernel("batched_matmul", "cpu", matrix._mkl_batched_matmul,
+                         supports=lambda *args: False):
         return function()
-    finally:
-        matrix._mkl_batched_matmul_is_available = saved
 
 
 def _matmul_with_grads(a_array, b_array):

@@ -33,8 +33,8 @@ import unittest
 import numpy as np
 import jittor as torch          # the whole point: jittor IS torch here
 import jittor as jt
+from jittor._runtime.dispatch import override_kernel
 from jittor import nn
-from jittor.nn.backends import hooks as backend_hooks
 from jittor.nn.backends.layer_norm_cuda import _layer_norm_no_grad_cuda
 
 F = nn.functional
@@ -433,14 +433,12 @@ class TestRMSNormDispatch(Base):
                 return hidden_states * (1.0 + self.weight)
 
         calls = []
-        original = backend_hooks.rms_norm_training_cuda
 
         def fake_fast(value, weight, epsilon):
             calls.append((tuple(value.shape), tuple(weight.shape), epsilon))
             return value * 3.0
 
-        try:
-            backend_hooks.rms_norm_training_cuda = fake_fast
+        with override_kernel("nn.rms_norm.training", "cuda", fake_fast):
             with jt.flag_scope(use_cuda=1):
                 value = jt.ones((2, 4, 8))
                 standard = FixtureRMSNorm()(value)
@@ -451,8 +449,6 @@ class TestRMSNormDispatch(Base):
                 standard_np, offset_np, overridden_np = jt.fetch_sync(
                     [standard, offset, overridden]
                 )
-        finally:
-            backend_hooks.rms_norm_training_cuda = original
 
         self.assertEqual(calls, [((2, 4, 8), (8,), 1e-6)])
         np.testing.assert_array_equal(standard_np, np.full((2, 4, 8), 3.0))

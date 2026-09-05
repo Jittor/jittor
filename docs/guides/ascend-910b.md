@@ -683,6 +683,36 @@ unknown identifiers, and a workspace query passed where a launcher belongs. It
 cannot check the arguments of an `aclnnXxxGetWorkspaceSize` call, because those
 signatures are not knowable without the SDK. It is not hardware validation.
 
+## Python dispatch migration on another machine
+
+The `2.0-refactor` Python dispatcher now takes its target from
+`jt.core.dispatch_context(inputs)`. On a configured Ascend runtime this must
+report `("acl_legacy", device_id)` while accelerator mode is enabled. A pending
+or host-staged tensor is not evidence of a CPU execution target. This migration
+has CPU and CUDA evidence only; the ACL registrations still need a real CANN
+build and execution on the target machine.
+
+After the CANN and device preflight above, run the existing RMSNorm, rotary,
+SiLU and attention nodes with NPU selection, for example:
+
+```bash
+PYTHONPATH=python JITTOR_TORCH_SHIM=1 JITTOR_TEST_DEVICES=npu sync_run=1 \
+python -m pytest -q -s tests/backends/npu/test_acl_torch_compat.py \
+  -k 'rms_norm or rotary or silu or sdpa'
+```
+
+Record actual executed node ids, numerical/gradient comparisons, physical NPU
+residency and zero CPU fallback using the checks above. A collected or skipped
+node is not validation. Do not replace missing hardware evidence with the
+host-only registry tests. Rebuild extensions against the current core.
+
+Legacy `nn.backends.hooks.*`, `jt.cudnn` and `compile_extern.*` library attributes
+are now read-only views. Backend integrations publish through
+`_runtime.dispatch.register_kernel` and `_runtime.backend_libraries`; temporary
+test overrides use `override_kernel`, which also restores absent registrations.
+The existing ACL source conversion and the remaining `change_function` logic
+are not removed by this Python migration.
+
 ## ACL attribute data-channel owner
 
 The host-only attribute channel is defined by

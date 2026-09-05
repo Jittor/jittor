@@ -2,26 +2,30 @@
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
+from jittor._runtime.dispatch import optional_kernel
 
-from ._cuda_inference import cached_source, device_index, on_acl
+from ._cuda_inference import cached_source
 
 
-def _silu_and_mul_cuda(x):
-    """Return fused ``silu(x[..., :d]) * x[..., d:]`` for CUDA inference."""
+def _silu_and_mul_supported(x):
     if not isinstance(x, jt.Var):
-        return None
-    if not (jt.flags.use_cuda and not _output_requires_grad(x)):
-        return None
-    if on_acl() or device_index(x) < 0:
-        return None
+        return False
+    if _output_requires_grad(x):
+        return False
     if str(x.dtype) not in ("float16", "bfloat16", "float32"):
-        return None
+        return False
     try:
         shape = tuple(int(size) for size in x.shape)
     except Exception:
-        return None
-    if not shape or any(size <= 0 for size in shape) or shape[-1] % 2:
-        return None
+        return False
+    return bool(shape) and all(size > 0 for size in shape) and shape[-1] % 2 == 0
+
+
+@optional_kernel("nn.silu_and_mul", ("cuda", "rocm_legacy", "corex_legacy"),
+                 supports=_silu_and_mul_supported)
+def _silu_and_mul_cuda(x):
+    """Return fused ``silu(x[..., :d]) * x[..., d:]`` for CUDA inference."""
+    shape = tuple(int(size) for size in x.shape)
     gated_size = shape[-1] // 2
     output_shape = shape[:-1] + (gated_size,)
     cuda_src = cached_source(r"""

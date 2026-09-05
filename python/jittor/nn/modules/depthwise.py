@@ -11,6 +11,8 @@
 import jittor as jt
 from jittor import nn
 from jittor import Function
+from jittor._runtime.dispatch import register_kernel, select_kernel
+from jittor._runtime.backend_libraries import library_resource
 
 class DepthwiseConv(Function):
     def __init__(self, stride=1, padding=0, dilation=1):
@@ -19,18 +21,12 @@ class DepthwiseConv(Function):
         self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
 
     def __call__(self, x, weight):
-        # The custom Function tape is CUDA-only. On CPU the forward already uses
-        # grouped conv2d, so bypassing the tape preserves that operation's native
-        # backward instead of dispatching into the CUDA grad implementation.
-        if not jt.flags.use_cuda or not jt.compiler.is_cuda:
-            return nn.conv2d(
-                x, weight, None, self.stride, self.padding, self.dilation, x.shape[1]
-            )
-        return super().__call__(x, weight)
+        kernel = select_kernel("depthwise_conv2d", x, weight, self)
+        return kernel(x, weight, self)
 
     def execute(self, x, weight):
-        if not jt.flags.use_cuda or not jt.compiler.is_cuda:
-            return nn.conv2d(x, weight, None, self.stride, self.padding, self.dilation, x.shape[1])
+        if select_kernel("depthwise_conv2d", x, weight, self) is not _depthwise_cuda:
+            return _depthwise_generic(x, weight, self)
         self.save_vars = x, weight
         N,C,H,W = x.shape
         o,i,Kh,Kw = weight.shape
@@ -148,7 +144,7 @@ class DepthwiseConv(Function):
         x, weight = self.save_vars
         Kh, Kw = self.Khw
         return jt.code([x.shape, weight.shape], [x.dtype, weight.dtype], [x, weight, grad],
-        cuda_header = f"#include <{jt.compile_extern.cub_home}cub/cub.cuh>"+"""
+        cuda_header = f"#include <{library_resource('cub', 'home')}cub/cub.cuh>"+"""
     template <typename T>
     __device__ __inline__ void CudaAtomicAddWithWarp(T* sum, T value) {
     typedef cub::WarpReduce<T> WarpReduce;
@@ -332,3 +328,37 @@ class DepthwiseConv(Function):
             dilate_height, dilate_width, filter_grad_p);                      
     """
     )
+
+
+def _depthwise_generic(x, weight, operator):
+    return nn.conv2d(x, weight, None, operator.stride, operator.padding,
+                     operator.dilation, x.shape[1], _depthwise_fast_path=False)
+
+
+def _depthwise_cuda(x, weight, operator):
+    return Function.__call__(operator, x, weight)
+
+
+def _supports_depthwise(x, weight, operator):
+    return x.dtype == weight.dtype
+
+
+def _supports_depthwise_conv2d(x, weight, bias, stride, padding, dilation, groups,
+                              *, _depthwise_fast_path=True):
+    return (_depthwise_fast_path and groups == weight.shape[0] == x.shape[1]
+            and x.dtype == weight.dtype)
+
+
+def _depthwise_conv2d(x, weight, bias, stride, padding, dilation, groups,
+                      *, _depthwise_fast_path=True):
+    y = DepthwiseConv(stride, padding, dilation)(x, weight)
+    if bias is not None:
+        y = y + bias.broadcast(y.shape, [0, 2, 3])
+    return y
+
+
+register_kernel("depthwise_conv2d", "cuda", _depthwise_cuda,
+                supports=_supports_depthwise)
+register_kernel("depthwise_conv2d", "*", _depthwise_generic)
+register_kernel("conv2d", "cuda", _depthwise_conv2d,
+                supports=_supports_depthwise_conv2d, priority=20)

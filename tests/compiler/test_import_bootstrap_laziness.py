@@ -120,20 +120,54 @@ class TestImportBootstrapLaziness(unittest.TestCase):
     def test_first_eligible_cpu_bmm_initializes_mkl(self):
         import jittor as jt
         from jittor.nn.functional import matrix
+        from jittor._runtime import backend_libraries
 
         fake_ops = types.SimpleNamespace(mkl_batched_matmul=object())
+        libraries = backend_libraries.BackendLibraries()
+        libraries.register_loader("mkl", lambda: jt.compile_extern.setup_mkl(),
+                                  enabled=jt.compile_extern._mkl_library_enabled)
 
         def setup():
-            jt.compile_extern.mkl_ops = fake_ops
+            backend_libraries.register_library("mkl", types.SimpleNamespace(ops=fake_ops))
 
-        operand = types.SimpleNamespace(dtype=jt.float32)
         with jt.flag_scope(use_cuda=0), \
-                mock.patch.object(jt.compile_extern, "mkl_ops", None), \
+                mock.patch.dict(os.environ, {"use_mkl": "1"}), \
+                mock.patch.object(jt.compile_extern, "use_mkl", True), \
+                mock.patch.object(backend_libraries, "_libraries", libraries), \
                 mock.patch.object(jt.compile_extern, "setup_mkl",
                                   side_effect=setup) as setup_mock:
+            operand = jt.array([[1.0]])
             self.assertTrue(
                 matrix._mkl_batched_matmul_is_available(operand, operand))
             setup_mock.assert_called_once_with()
+
+    def test_disabled_mkl_is_not_selected_even_when_already_loaded(self):
+        import jittor as jt
+        from jittor.nn.functional import matrix
+        from jittor._runtime import backend_libraries
+
+        fake_module = types.SimpleNamespace(
+            ops=types.SimpleNamespace(mkl_batched_matmul=object()))
+        for loaded in (False, True):
+            with self.subTest(loaded=loaded):
+                libraries = backend_libraries.BackendLibraries()
+                libraries.register_loader(
+                    "mkl", lambda: jt.compile_extern.setup_mkl(),
+                    enabled=jt.compile_extern._mkl_library_enabled)
+                if loaded:
+                    libraries.register("mkl", fake_module)
+                with jt.flag_scope(use_cuda=0), \
+                        mock.patch.dict(os.environ, {"use_mkl": "1"}), \
+                        mock.patch.object(jt.compile_extern, "use_mkl", False), \
+                        mock.patch.object(backend_libraries, "_libraries", libraries), \
+                        mock.patch.object(jt.compile_extern, "setup_mkl") as setup_mock:
+                    operand = jt.array([[1.0]])
+                    self.assertFalse(matrix._mkl_batched_matmul_is_available(operand, operand))
+                    setup_mock.assert_not_called()
+                    libraries.register("mkl", fake_module)
+                    with mock.patch.object(jt.compile_extern, "use_mkl", True):
+                        self.assertTrue(matrix._mkl_batched_matmul_is_available(operand, operand))
+                    setup_mock.assert_not_called()
 
 
 class TestCoreBuildStamp(unittest.TestCase):

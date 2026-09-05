@@ -298,7 +298,7 @@ print("RESULT=" + json.dumps({
 
     def test_moved_scope_state_stays_synchronized_with_the_root(self):
         import jittor
-        from jittor._runtime import core_api
+        from jittor._runtime import backend_libraries, core_api
 
         self.assertIsNone(core_api.single_log_capture)
         self.assertIsNone(jittor.single_log_capture)
@@ -321,11 +321,13 @@ print("RESULT=" + json.dumps({
             def world_rank(self):
                 return 0
 
-        old_mpi = core_api.mpi
+        old_mpi = backend_libraries.get_library("mpi")
         old_compile_in_mpi = core_api.compile_extern.in_mpi
         fake_mpi = FakeMPI()
         try:
-            core_api.mpi = fake_mpi
+            backend_libraries.register_library("mpi", fake_mpi)
+            self.assertIs(jittor.mpi, fake_mpi)
+            self.assertIs(core_api.compile_extern.mpi, fake_mpi)
             # Write the ONE owner and check every reader follows. Setting all
             # three by hand (as this used to) passes just as happily when the
             # three are independent snapshots, so it could not catch the bug it
@@ -348,7 +350,7 @@ print("RESULT=" + json.dumps({
             self.assertTrue(core_api.compile_extern.in_mpi)
             self.assertTrue(fake_mpi.state)
         finally:
-            core_api.mpi = old_mpi
+            backend_libraries.register_library("mpi", old_mpi)
             core_api.compile_extern.in_mpi = old_compile_in_mpi
 
     def test_core_api_is_the_only_large_python_api_implementation(self):
