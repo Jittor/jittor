@@ -98,6 +98,16 @@ class TestJittorHome(unittest.TestCase):
             home, _config = _run(fake_home)
             self.assertEqual(home, os.path.abspath(fake_home))
 
+    def test_read_only_home_uses_temporary_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fake_home = os.path.join(directory, "home")
+            os.makedirs(fake_home)
+            os.chmod(fake_home, 0o555)
+
+            home, _config = _run(fake_home)
+            self.assertNotEqual(home, os.path.abspath(fake_home))
+            self.assertTrue(home.startswith(os.path.abspath(tempfile.gettempdir())))
+
     def test_set_home_persists_an_explicit_choice(self):
         with tempfile.TemporaryDirectory() as directory:
             fake_home = os.path.join(directory, "home")

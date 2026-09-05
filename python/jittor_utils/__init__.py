@@ -18,6 +18,7 @@ import threading
 import time
 from ctypes import cdll
 import shutil
+import tempfile
 import urllib.request
 import ctypes
 
@@ -83,6 +84,31 @@ def set_home(path):
 
 
 _jittor_home = None
+
+
+def _writable_home(path):
+    """Return whether *path* can hold Jittor's generated cache files."""
+    try:
+        os.makedirs(path, exist_ok=True)
+        probe = os.path.join(path, ".jittor-write-%d" % os.getpid())
+        with open(probe, "w"):
+            pass
+        os.remove(probe)
+        return True
+    except OSError:
+        try:
+            os.remove(probe)
+        except (OSError, UnboundLocalError):
+            pass
+        return False
+
+
+def _fallback_home():
+    """Choose a writable per-user temporary home for read-only environments."""
+    uid = getattr(os, "getuid", lambda: 0)()
+    return os.path.join(tempfile.gettempdir(), "jittor-%s" % uid)
+
+
 def home():
     global _jittor_home
     if _jittor_home is not None:
@@ -95,10 +121,17 @@ def home():
     # deliberately not written back to the shared configuration: doing so made
     # one isolated run silently become every later run's default. Use
     # ``set_home`` to change the persistent default on purpose.
-    _home_path = os.environ.get("JITTOR_HOME", default_path)
+    explicit = os.environ.get("JITTOR_HOME")
+    _home_path = explicit or default_path
 
-    if not os.path.exists(_home_path):
-        os.makedirs(_home_path, exist_ok=True)
+    if not _writable_home(_home_path):
+        if explicit:
+            raise OSError("JITTOR_HOME is not writable: %s" % _home_path)
+        fallback = _fallback_home()
+        if not _writable_home(fallback):
+            raise OSError("neither Jittor home nor temporary fallback is writable: "
+                          "%s, %s" % (_home_path, fallback))
+        _home_path = fallback
     _home_path = os.path.abspath(_home_path)
 
     _jittor_home = _home_path
