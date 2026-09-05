@@ -316,6 +316,12 @@ inline bool NativeProviderLifecycleAbiContract::accepts(
  */
 struct NativeProviderLifecycleObserver {
     virtual ~NativeProviderLifecycleObserver() = default;
+    // Unified value-only notification for providers that consume the host/JIT
+    // lifecycle contract directly.  The default keeps existing observers
+    // source-compatible while allowing newer providers to validate one
+    // self-contained event descriptor.
+    virtual void on_provider_lifecycle_event(
+        const NativeProviderLifecycleEvent&) {}
     virtual void on_provider_registered(
         const NativeProviderRegistration& registration, uint32 provider_id) = 0;
     virtual void on_provider_unregistered(

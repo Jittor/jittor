@@ -260,6 +260,13 @@ JIT_TEST(native_provider_lifecycle_event_is_value_only_and_fail_closed) {
 struct NativeProviderLifecycleProbe : NativeProviderLifecycleObserver {
     vector<string> events;
     vector<NativeOpDispatchKey> keys;
+    vector<NativeProviderLifecycleEventKind> lifecycle_kinds;
+
+    void on_provider_lifecycle_event(
+            const NativeProviderLifecycleEvent& event) override {
+        ASSERT(event.valid());
+        lifecycle_kinds.push_back(event.kind);
+    }
 
     void on_provider_registered(const NativeProviderRegistration& registration,
                                 uint32 provider_id) override {
@@ -296,18 +303,28 @@ JIT_TEST(native_op_registry_lifecycle_consumer_boundary) {
     ASSERT(probe.events.size() == 2);
     ASSERT(probe.events[0] == "registered:cuda");
     ASSERT(probe.events[1] == "bound:cuda");
+    ASSERT(probe.lifecycle_kinds.size() == 2);
+    ASSERT(probe.lifecycle_kinds[0] == NATIVE_PROVIDER_EVENT_REGISTERED);
+    ASSERT(probe.lifecycle_kinds[1] == NATIVE_PROVIDER_EVENT_OP_BOUND);
 
     registry.register_provider("cuda", true);
     ASSERT(probe.events.size() == 5);
     ASSERT(probe.events[2] == "unbound:cuda");
     ASSERT(probe.events[3] == "unregistered:cuda");
     ASSERT(probe.events[4] == "registered:cuda");
+    ASSERT(probe.lifecycle_kinds.size() == 5);
+    ASSERT(probe.lifecycle_kinds[2] == NATIVE_PROVIDER_EVENT_OP_UNBOUND);
+    ASSERT(probe.lifecycle_kinds[3] == NATIVE_PROVIDER_EVENT_UNREGISTERED);
+    ASSERT(probe.lifecycle_kinds[4] == NATIVE_PROVIDER_EVENT_REGISTERED);
 
     registry.bind_provider("jit_test_provider_consumer", "cuda");
     ASSERT(registry.unregister("jit_test_provider_consumer"));
     ASSERT(probe.events.size() == 7);
     ASSERT(probe.events[5] == "bound:cuda");
     ASSERT(probe.events[6] == "unbound:cuda");
+    ASSERT(probe.lifecycle_kinds.size() == 7);
+    ASSERT(probe.lifecycle_kinds[5] == NATIVE_PROVIDER_EVENT_OP_BOUND);
+    ASSERT(probe.lifecycle_kinds[6] == NATIVE_PROVIDER_EVENT_OP_UNBOUND);
 
     // Single-op teardown is generation checked: an old provider key cannot
     // remove a binding created by a replacement instance.
@@ -327,6 +344,8 @@ JIT_TEST(native_op_registry_lifecycle_consumer_boundary) {
     ASSERT(registry.unregister_provider("cuda"));
     ASSERT(probe.events.size() == 8);
     ASSERT(probe.events[7] == "unregistered:cuda");
+    ASSERT(probe.lifecycle_kinds.size() == 8);
+    ASSERT(probe.lifecycle_kinds[7] == NATIVE_PROVIDER_EVENT_UNREGISTERED);
     ASSERT(registry.clear_lifecycle_observer(&probe));
     ASSERT(!registry.clear_lifecycle_observer(&probe));
 }

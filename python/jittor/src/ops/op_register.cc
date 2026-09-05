@@ -85,6 +85,7 @@ vector<string> NativeOpRegistry::names() const {
 
 bool NativeOpRegistry::unregister(const string& name) {
     vector<NativeOpDispatchKey> unbound;
+    vector<NativeProviderLifecycleEvent> lifecycle_events;
     NativeProviderLifecycleObserver* observer = nullptr;
     bool removed = false;
     {
@@ -100,8 +101,12 @@ bool NativeOpRegistry::unregister(const string& name) {
         auto registration_iter = provider_registrations.find(item.first);
         ASSERT(id_iter != provider_ids.end());
         ASSERT(registration_iter != provider_registrations.end());
-        unbound.push_back({op_iter->second.id, item.first, id_iter->second,
-                           registration_iter->second.abi_version});
+        NativeOpDispatchKey dispatch_key = {op_iter->second.id, item.first,
+            id_iter->second, registration_iter->second.abi_version};
+        unbound.push_back(dispatch_key);
+        lifecycle_events.push_back(NativeProviderLifecycleEvent::op_unbound(
+            NativeProviderMetadata(registration_iter->second, id_iter->second),
+            dispatch_key));
     }
     op_keys_by_id.erase(op_iter->second.id);
     entries.erase(op_iter);
@@ -109,8 +114,11 @@ bool NativeOpRegistry::unregister(const string& name) {
     removed = true;
     }
     if (observer)
-        for (const auto& key : unbound)
+        for (size_t i = 0; i < unbound.size(); ++i) {
+            const auto& key = unbound[i];
             observer->on_provider_op_unbound(key);
+            observer->on_provider_lifecycle_event(lifecycle_events[i]);
+        }
     return removed;
 }
 
@@ -126,6 +134,7 @@ void NativeOpRegistry::register_provider(
     uint32 old_provider_instance = 0;
     NativeProviderRegistration old_registration;
     vector<NativeOpDispatchKey> unbound;
+    vector<NativeProviderLifecycleEvent> lifecycle_events;
     bool replaced = false;
     {
     std::lock_guard<std::recursive_mutex> guard(mutex);
@@ -140,8 +149,11 @@ void NativeOpRegistry::register_provider(
             auto op_iter = entries.find(op_name);
             if (op_iter == entries.end())
                 continue;
-            unbound.push_back({op_iter->second.id, provider, old_id,
-                               old_registration.abi_version});
+            NativeOpDispatchKey dispatch_key = {op_iter->second.id, provider,
+                old_id, old_registration.abi_version};
+            unbound.push_back(dispatch_key);
+            lifecycle_events.push_back(NativeProviderLifecycleEvent::op_unbound(
+                NativeProviderMetadata(old_registration, old_id), dispatch_key));
         }
         iter->second.clear();
         // A replacement is a new provider instance.  Never let a cached
@@ -158,12 +170,21 @@ void NativeOpRegistry::register_provider(
     observer = lifecycle_observer;
     }
     if (observer) {
-        for (const auto& key : unbound)
+        for (size_t i = 0; i < unbound.size(); ++i) {
+            const auto& key = unbound[i];
             observer->on_provider_op_unbound(key);
+            observer->on_provider_lifecycle_event(lifecycle_events[i]);
+        }
         if (replaced)
             observer->on_provider_unregistered(old_registration,
                                                old_provider_instance);
+            observer->on_provider_lifecycle_event(
+                NativeProviderLifecycleEvent::provider_unregistered(
+                    old_registration, old_provider_instance));
         observer->on_provider_registered(registration, provider_instance);
+        observer->on_provider_lifecycle_event(
+            NativeProviderLifecycleEvent::provider_registered(
+                registration, provider_instance));
     }
 }
 
@@ -303,6 +324,7 @@ bool NativeOpRegistry::clear_lifecycle_observer(
 
 void NativeOpRegistry::bind_provider(const string& name, const string& provider) {
     NativeOpDispatchKey dispatch_key;
+    NativeProviderMetadata metadata;
     NativeProviderLifecycleObserver* observer = nullptr;
     {
     std::lock_guard<std::recursive_mutex> guard(mutex);
@@ -321,15 +343,21 @@ void NativeOpRegistry::bind_provider(const string& name, const string& provider)
     ASSERT(registration_iter != provider_registrations.end());
     dispatch_key = {op_iter->second.id, provider, provider_iter->second,
                     registration_iter->second.abi_version};
+    metadata = NativeProviderMetadata(registration_iter->second,
+                                      provider_iter->second);
     observer = lifecycle_observer;
     }
-    if (observer)
+    if (observer) {
         observer->on_provider_op_bound(dispatch_key);
+        observer->on_provider_lifecycle_event(
+            NativeProviderLifecycleEvent::op_bound(metadata, dispatch_key));
+    }
 }
 
 bool NativeOpRegistry::unbind_provider_if_current(
         const NativeOpDispatchKey& dispatch_key) {
     NativeProviderLifecycleObserver* observer = nullptr;
+    NativeProviderMetadata metadata;
     bool removed = false;
     {
     std::lock_guard<std::recursive_mutex> guard(mutex);
@@ -357,11 +385,16 @@ bool NativeOpRegistry::unbind_provider_if_current(
     if (binding == provider_iter->second.end())
         return false;
     provider_iter->second.erase(binding);
+    metadata = NativeProviderMetadata(registration_iter->second,
+                                      id_iter->second);
     observer = lifecycle_observer;
     removed = true;
     }
-    if (removed && observer)
+    if (removed && observer) {
         observer->on_provider_op_unbound(dispatch_key);
+        observer->on_provider_lifecycle_event(
+            NativeProviderLifecycleEvent::op_unbound(metadata, dispatch_key));
+    }
     return removed;
 }
 
