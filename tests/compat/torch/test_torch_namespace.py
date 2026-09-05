@@ -364,6 +364,21 @@ def test_distribution_publication_validator_rejects_unbound_or_malformed_nodes()
         raise AssertionError("malformed package node was accepted")
 
 
+def test_distribution_publication_validator_rejects_unmanifested_nodes():
+    from jittor.compat.torch.distribution import validate_distribution_publication
+
+    published, manifest = _small_distribution_fixture()
+    published["torch.distributed.internal"] = __import__("types").ModuleType(
+        "torch.distributed.internal"
+    )
+    try:
+        validate_distribution_publication(published, manifest)
+    except ValueError as error:
+        assert "unpublished modules" in str(error)
+    else:
+        raise AssertionError("unmanifested publication node was accepted")
+
+
 def test_distribution_boundary_rejects_alias_object_collapse():
     from jittor.compat.torch.distribution import validate_distribution_boundary
 

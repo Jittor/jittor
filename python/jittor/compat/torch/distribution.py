@@ -314,6 +314,9 @@ def validate_distribution_graph(
     missing = tuple(sorted(expected - present))
     if missing:
         raise ValueError("distribution graph is missing: %s" % ", ".join(missing))
+    extra = tuple(sorted(present - expected))
+    if extra:
+        raise ValueError("distribution graph contains unpublished modules: %s" % ", ".join(extra))
     validate_distribution_aliases(present, aliases)
     for name in expected:
         if name == "torch":
