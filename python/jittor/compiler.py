@@ -267,8 +267,10 @@ def gen_jit_flags():
                 alias = ["use_device", "use_acl", "use_rocm", "use_corex"]
             elif name == "auto_mixed_precision_level":
                 alias = ["amp_level"]
-            get_names = ",".join(["__get__"+a for a in [name]+alias])
-            set_names = ",".join(["__set__"+a for a in [name]+alias])
+            deprecated_aliases = alias if name == "use_cuda" else []
+            binding_names = [name] if deprecated_aliases else [name] + alias
+            get_names = ",".join(["__get__"+a for a in binding_names])
+            set_names = ",".join(["__set__"+a for a in binding_names])
             guard = f'check_startup_config_write("{name}"); ' if category == "startup" else ""
             setter = f"{guard}set_{name}(v);"
             if category == "counter":
@@ -283,10 +285,26 @@ def gen_jit_flags():
                 void _set_{name}(bool v) {{ {setter} }}
                 ''' if type=="int" else ""}
             """)
+            for alias_name in deprecated_aliases:
+                warning = (
+                    f'if (PyErr_WarnEx(PyExc_DeprecationWarning, "jt.flags.{alias_name} '
+                    'is a deprecated accelerator-mode alias; use jt.runtime.use_cuda '
+                    'or explicit backend queries", 1) < 0) '
+                    'throw std::runtime_error("deprecated backend alias");'
+                )
+                flags_defs.append(f'''
+                    // @pyjt(__get__{alias_name})
+                    {type} _get_{alias_name}() {{ {warning} return {getter}; }}
+                    // @pyjt(__set__{alias_name})
+                    void _set_{alias_name}({type} v) {{ {warning} set_{name}(v); }}
+                    // @pyjt(__set__{alias_name})
+                    void _set_{alias_name}(bool v) {{ {warning} set_{name}(v); }}
+                ''')
     
     jit_declares = "\n    ".join(jit_declares)
     jit_src = f"""
     #include "utils/flags.h"
+    #include <Python.h>
     #include "runtime/configuration.h"
     #include <stdexcept>
 

@@ -3,10 +3,14 @@
 
 namespace jittor {
 
+struct Allocator;
+
 using device_switch_hook_t = void (*)(int);
 
 // Device policy and bookkeeping share the native runtime's lifetime.
 struct RuntimeDeviceState {
+    RuntimeDeviceState();
+    ~RuntimeDeviceState();
     int use_cuda = 0;
     int device_id = -1;
     int sync_run = 1;
@@ -14,6 +18,8 @@ struct RuntimeDeviceState {
     int current_device = -1;
     vector<device_switch_hook_t> switch_hooks;
     vector<char> peer_enabled;
+    vector<unique_ptr<Allocator>> device_pools;
+    vector<unique_ptr<Allocator>> managed_pools;
 };
 
 EXTERN_LIB RuntimeDeviceState& runtime_device_state();

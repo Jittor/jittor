@@ -12,6 +12,7 @@
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
 #include "runtime/device.h"
+#include "runtime/backend.h"
 #include "var.h"
 #include "mem/allocator.h"
 #include "mem/allocator/sfrl_allocator.h"
@@ -42,6 +43,7 @@ struct CudaDualAllocator : Allocator {
     }
 
     uint64 flags() const override { return _cuda; }
+    int device() const override { return cuda_dual_device_allocator.device(); }
     const char* name() const override { return "dual"; };
     void* alloc(size_t size, size_t& allocation) override {
         ASSERT(n_free_ids) << "id pool empty";
@@ -87,6 +89,7 @@ void to_free_allocation(CUDA_HOST_FUNC_ARGS);
 
 struct DelayFree final : Allocator {
     inline uint64 flags() const override { return _cuda; };
+    int device() const override { return cuda_dual_device_allocator.device(); }
     const char* name() const override { return "delay_free"; };
     void* alloc(size_t size, size_t& allocation) override { 
         LOGf << "Should not call this";
@@ -110,8 +113,9 @@ struct DelayFree final : Allocator {
 
         mem_ptr = allocator->alloc(size, allocation);
 
-        checkCudaErrors(cudaMemcpy(mem_ptr, 
-            (void*)((int64)da.device_ptr+offset), size, cudaMemcpyDeviceToHost));
+        backend_copy(mem_ptr, allocation_device(allocator),
+            (void*)((int64)da.device_ptr+offset),
+            {accelerator_backend_id(), device()}, size);
         // std::memcpy(mem_ptr, (void*)((int64)da.host_ptr+offset), size);
         free(da.device_ptr, size, pre_allocation);
     }

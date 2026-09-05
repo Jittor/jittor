@@ -5,6 +5,7 @@
 #include "runtime/device_state.h"
 #include "runtime/jit_policy.h"
 #include "runtime/configuration.h"
+#include "runtime/backend.h"
 
 namespace jittor {
 
@@ -22,6 +23,7 @@ public:
     RuntimeDeviceState& devices() { return devices_; }
     RuntimeJitPolicy& jit_policy() { return jit_policy_; }
     StartupConfigState& startup_config() { return startup_config_; }
+    BackendRegistry& backends() { return backends_; }
 
 private:
     Executor executor_;
@@ -30,6 +32,7 @@ private:
     RuntimeDeviceState devices_;
     RuntimeJitPolicy jit_policy_;
     StartupConfigState startup_config_;
+    BackendRegistry backends_;
 };
 
 EXTERN_LIB NativeRuntime& native_runtime();

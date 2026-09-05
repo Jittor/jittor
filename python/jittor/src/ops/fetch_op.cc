@@ -19,6 +19,7 @@
 #include "ops/fetch_op.h"
 #include "mem/allocator.h"
 #include "executor.h"
+#include "runtime/backend.h"
 
 namespace jittor {
 
@@ -129,7 +130,8 @@ void FetchOp::run() {
             // produced v has to be recorded on v's *own* device: stream 0 is
             // whichever device is current, and an event of another device
             // cannot be recorded on it at all.
-            int src = v->allocator->device();
+            auto source = allocation_device(v->allocator);
+            int src = source.index;
             if (src >= 0) {
                 if (src != current_device()) set_current_device(src);
                 if (src < 64) src_devices |= 1ull << src;
@@ -141,16 +143,10 @@ void FetchOp::run() {
             // This staging copy is the only read of the source var's own
             // memory; the device-to-host leg reads the staging block instead,
             // which is why the two legs are separate loops now.
-            #if IS_CUDA
-            checkCudaErrors(cudaMemcpyAsync(
-                allocation.ptr, v->mem_ptr, v->size, cudaMemcpyDefault, copy_stream));
-            // checkCudaErrors(cudaMemcpyAsync(
-            //     allocation.ptr, v->size, v->mem_ptr, v->size, cudaMemcpyDefault, aclstream));
-            // checkCudaErrors(aclrtSynchronizeStream(aclstream));
-            #else
-            checkCudaErrors(cudaMemcpyAsync(
-                allocation.ptr, v->mem_ptr, v->size, cudaMemcpyDeviceToDevice, copy_stream));
-            #endif
+            Device target{accelerator_backend_id(), cuda_dual_device_allocator.device()};
+            backend_copy_async(allocation.ptr, target, v->mem_ptr, source, v->size,
+                BackendStream{{accelerator_backend_id(), copy_device},
+                              reinterpret_cast<void*>(copy_stream)});
             // The copy is queued, not done. Keep the source block reserved
             // until this fetch task is destroyed, which happens after the host
             // callback and so after the copy. Holding memory is much cheaper
@@ -167,7 +163,7 @@ void FetchOp::run() {
         #endif
         {
             new (&allocation) Allocation(cpu_allocator, v->size);
-            std::memcpy(allocation.ptr, v->mem_ptr, v->size);
+            backend_copy(allocation.ptr, {}, v->mem_ptr, {}, v->size);
         }
         arrays[i].ptr = allocation.ptr;
         arrays[i].shape = v->shape;
@@ -197,11 +193,10 @@ void FetchOp::run() {
             auto host_ptr = cuda_dual_allocator.get_dual_allocation(
                 allocation.allocation).host_ptr;
             // device to host
-            checkCudaErrors(cudaMemcpyAsync(host_ptr, allocation.ptr,
-                allocation.size, cudaMemcpyDeviceToHost, copy_stream));
-            // checkCudaErrors(aclrtMemcpyAsync(
-            //     host_ptr, v->size, allocation.ptr, v->size, cudaMemcpyDeviceToHost, aclstream));
-            // checkCudaErrors(aclrtSynchronizeStream(aclstream));
+            Device source{accelerator_backend_id(), cuda_dual_device_allocator.device()};
+            backend_copy_async(host_ptr, {}, allocation.ptr, source, allocation.size,
+                BackendStream{{accelerator_backend_id(), copy_device},
+                              reinterpret_cast<void*>(copy_stream)});
             allocation.ptr = host_ptr;
             arrays[j].ptr = host_ptr;
         }
@@ -209,6 +204,7 @@ void FetchOp::run() {
         for (auto& p : pinned)
             allocations.emplace_back(move(p));
         fetch_tasks.push_back({move(func), move(allocations), move(arrays)});
+        if (current_device() != copy_device) set_current_device(copy_device);
         checkCudaErrors(_cudaLaunchHostFunc(copy_stream, &to_fetch, 0));
         if (entry_device >= 0 && entry_device != current_device())
             set_current_device(entry_device);

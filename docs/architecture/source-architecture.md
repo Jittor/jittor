@@ -194,6 +194,31 @@ require an ownership review and a corresponding structure-gate update.
 
 ### Native Support Layout
 
+The native `BackendRegistry` in `runtime/backend*` is owned by `NativeRuntime`.
+It publishes version-checked callback tables with owned names and stable
+process-lifetime callbacks. Registering CPU and CUDA descriptors does not
+initialize a driver; a CPU-only build still knows CUDA but reports zero devices.
+`runtime/backends/` implements raw pool selection, device operations, copies,
+synchronization and streams. Public allocator code retains the SFRL/NFEF/Temp/
+Stat composition and obtains raw pools from the registry, never the reverse.
+
+Array creation, host/device migration, device-copy operators, fetch and swap
+transfers call this interface. `allocation_device()` derives the physical
+device from the allocator; it does not mistake a Var's retained device affinity
+for its current residency. Dual staging and delayed-free storage report their
+actual pool device. Ordered peer copies preserve both source and destination
+stream dependencies, and fetch retains blocks through its callback.
+The old CUDA stream functions remain adapters into the registered stream hook;
+their implementation now lives in `runtime/backends/cuda_streams.cc`.
+
+`core.registered_backends()` and `core.backend_device_count(name)` query the
+native registry. The four legacy accelerator-mode aliases in `jt.flags` emit
+`DeprecationWarning` but retain their setter behavior. Converted ACL/ROCm/Corex
+builds are explicitly named `*_legacy`; this is not a claim that their source
+transformation has been removed. Operator dispatch still uses the existing
+Op/JIT pipeline. The Python operator-registry prototype is not the owner of
+native allocations and remains to be consolidated with that pipeline.
+
 The C++ `src/misc/` directory no longer exists. Support code is grouped by its
 actual role; this is a source-layout change, not a change to helper algorithms
 or a claim that the backend registry migration is complete.

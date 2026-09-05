@@ -30,10 +30,10 @@
 | 分支 | `2.0-refactor`；本批迁移起点 `2328ce4f`，后续提交见 Git 历史 |
 | 相对 `2.0` 的提交 | 迁移起点共 1853 个；提交数不代表任务完成量 |
 | 提交里出现过的任务号 | 329 个 |
-| 看板 | 已合并 **214** / 进行中 **0** / 待领 **58** / 并入其它任务 **13** |
+| 看板 | 已合并 **215** / 进行中 **0** / 待领 **57** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
 
-**交接清理完成不等于整改完成。** 看板仍有 58 条待领；当前只是把中断留下的易失状态全部转成了主线提交、
+**交接清理完成不等于整改完成。** 看板仍有 57 条待领；当前只是把中断留下的易失状态全部转成了主线提交、
 明确待领项或已验证的不采用结论。这个分支不是终态。
 
 看板的「已合并」是权威。提交里的任务号更多，是因为一个任务常有补充提交、改判提交与「更正前一个提交」
@@ -554,12 +554,19 @@ CPU/CUDA/双卡定向 41 passed；CPU-only 4 passed/1 个 CUDA 节点跳过；
 ACL 两 TU 主机语法和负向对照通过，ROCm 两 ABI blob/Corex 目录特判复核通过。
 这不代表 2.23 已完成：init/profiler/lock 与 pyjt/pybind 的布局仍未迁移。
 
-下一块直接做 4.03 的原生 Backend 执行链：CPU/CUDA 版本化函数表与真实 allocator、
-device、copy、stream、synchronize 接线。现有 NativeProviderRegistration 只有元数据，
-其调用者仍主要是测试；Python CPU allocator 的 bytearray 也不参与 Var 分配。
-不要继续为这两套原型堆校验器。公共 allocator 保留 SFRL/NFEF/Temp/Stat 组合，
-provider 返回原始池，避免递归调用 get_allocator；跨卡拷贝的双向流依赖必须保留。
-之后 4.04 整块连接 OpDef/Kernel/Codegen，而非套一次查询后仍盲调旧 run()。
+4.03 已接通：NativeRuntime 里的版本化 BackendRegistry 是实际 CPU/CUDA 设备与内存操作入口，
+provider 位于 `src/runtime/backends/`；公共层保留 SFRL/NFEF/Temp/Stat 组合，原始池由 provider 返回。
+数组构造、共享迁移、DeviceCopy、fetch 和 swap 复制走回调，流/同步也已接线；
+dual/delay-free 修正真实设备信息，跨卡双向定序、fetch block 持有和 callback 所属设备保留。
+通过临时替换真实 callback 表观察张量执行，证明不是元数据旁路；测试 finally 恢复原表。
+最终 CPU/CUDA/结构 40 passed，双卡/五库/梯度/共享 39 passed，无 GPU 可见 26 passed，
+CPU-only 31 passed/1 个 CUDA 配置字段跳过。未跑完整模型门禁或 NPU/ROCm 实机；
+legacy 源转换仍保留，BackendId 枚举已避开旧转换器的 CUDA→ACL 重名问题。
+
+下一块 4.04 整体接 OpDef/Kernel/Codegen 与 `(OpId, backend)` 真实分派；
+旧 NativeProviderRegistration 及 Python `_runtime.registry` 仍是算子元数据/少量 CPU 包装原型，
+其 bytearray 不是 Var 的 allocator。不要继续堆校验器，也不要套一次查询后仍盲调旧 run()。
+随后 4.05 收拢 Python 分派表，4.11/4.12 才移除 legacy 源转换；不要把这些算进 4.03 的完成范围。
 独立 torch 包和后端架构仍是未完成的大需求，不要为追低价值计数改变优先级。
 异机 CUDA 先跑 `tests/core/test_startup_config.py`、`tests/backends/cuda/test_cuda_kernel_math_policy.py`
 及 `tests/backends/cuda/test_multi_device.py`；NPU 依 `docs/guides/ascend-910b.md` 做真实构建/执行验收。

@@ -2,6 +2,9 @@
 
 namespace jittor {
 
+RuntimeDeviceState::RuntimeDeviceState() = default;
+RuntimeDeviceState::~RuntimeDeviceState() = default;
+
 RuntimeDeviceState& runtime_device_state() {
     return native_runtime().devices();
 }

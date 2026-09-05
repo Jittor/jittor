@@ -6,12 +6,9 @@
 // ***************************************************************
 #include <typeinfo>
 #include "runtime/device.h"
+#include "runtime/backend.h"
 
-#include "mem/allocator/aligned_allocator.h"
 #ifdef HAS_CUDA
-#include "mem/allocator/cuda_managed_allocator.h"
-#include "mem/allocator/cuda_device_allocator.h"
-#include "mem/allocator/cuda_host_allocator.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #endif
 #include "mem/allocator/stat_allocator.h"
@@ -50,7 +47,10 @@ Allocator* setup_allocator(Allocator* underlying) {
     return p;
 }
 
-Allocator* cpu_allocator = setup_allocator<SFRLAllocator>(&aligned_allocator);
+Allocator* cpu_allocator = setup_allocator<SFRLAllocator>(
+    backend_raw_allocator({BackendId::Cpu, 0}, BackendMemoryKind::Device));
+
+DECLARE_FLAG(int, use_cuda_managed_allocator);
 
 DEFINE_FLAG_WITH_SETTER(int, use_cuda_host_allocator, 1, "use cuda host allocator for cpu memory globally");
 
@@ -67,34 +67,6 @@ void setter_use_cuda_host_allocator(const int& old_value, const int& value) {
 }
 
 extern int64 sfrl_large_block_size_device;
-
-#ifdef HAS_CUDA
-// One raw device pool per CUDA device. The global `cuda_device_allocator` /
-// `cuda_managed_allocator` stay device 0's, so every name that already
-// referred to them keeps meaning the same thing.
-//
-// setup_allocator<T> keys its cache on (wrapper type, underlying), so each of
-// these gets its own SFRL cache, stat wrapper and temp pool for free -- which
-// is the point: a cached block from device 1's pool must never be handed to a
-// kernel on device 0.
-static vector<unique_ptr<CudaDeviceAllocator>> device_allocators;
-static vector<unique_ptr<CudaManagedAllocator>> managed_allocators;
-
-static Allocator* cuda_base_allocator(int device) {
-    if (use_cuda_managed_allocator) {
-        if (device == 0) return &cuda_managed_allocator;
-        if ((int)managed_allocators.size() <= device) managed_allocators.resize(device+1);
-        auto& a = managed_allocators[device];
-        if (!a) { a = std::make_unique<CudaManagedAllocator>(); a->device_id = device; }
-        return a.get();
-    }
-    if (device == 0) return &cuda_device_allocator;
-    if ((int)device_allocators.size() <= device) device_allocators.resize(device+1);
-    auto& a = device_allocators[device];
-    if (!a) { a = std::make_unique<CudaDeviceAllocator>(); a->device_id = device; }
-    return a.get();
-}
-#endif
 
 Allocator* get_allocator(bool temp_allocator) {
     int device = -1;
@@ -114,25 +86,13 @@ Allocator* get_allocator(int device, bool temp_allocator) {
 #ifdef HAS_CUDA
     if (runtime_use_cuda() && device >= 0 && !allocator) {
         LOGvv << "Using cuda allocator of device" << device;
-        allocator = cuda_base_allocator(device);
+        allocator = backend_raw_allocator({accelerator_backend_id(), device},
+            use_cuda_managed_allocator ? BackendMemoryKind::Managed : BackendMemoryKind::Device);
     } else
-    if (use_cuda_host_allocator) {
-        // The cuda host allocator (pinned memory via cudaMallocHost) requires a
-        // real CUDA device; with none visible (e.g. CUDA_VISIBLE_DEVICES="" in a
-        // CPU-only Ray actor) it aborts with cudaErrorNoDevice. The flag defaults
-        // to 1 even in a .so built with HAS_CUDA, and the import-time reset isn't
-        // always reliable, so gate on the actual device count here and fall back
-        // to the plain aligned CPU allocator when there is no device -- keeping
-        // jittor usable as a pure-CPU runtime. Cached: device visibility is fixed
-        // for a process's lifetime.
-        static int _cuda_dev_cnt = get_device_count();
-        if (_cuda_dev_cnt > 0)
-            allocator = &cuda_host_allocator;
-    }
 #endif
-    if (!allocator) {
-        LOGvv << "Using aligned_allocator";
-        allocator = &aligned_allocator;
+    {
+        allocator = backend_raw_allocator({BackendId::Cpu, 0},
+            use_cuda_host_allocator ? BackendMemoryKind::Pinned : BackendMemoryKind::Device);
     }
     if (use_stat_allocator==1) {
         LOGvv << "Using stat_allocator";
@@ -243,16 +203,8 @@ static bool migrate_group(Var* var, Allocator* allocator, bool to_gpu) {
     for (size_t i=0; i<members.size(); i++)
         offsets[i] = (char*)members[i]->mem_ptr - base;
     Allocation a(allocator, total);
-    {
-        // Same rule as the single-var paths: the copy runs with the device
-        // that owns the bytes current.
-        int dev = to_gpu ? allocator->device() : old_allocator->device();
-        int prev = current_device();
-        if (dev >= 0 && dev != prev) set_current_device(dev);
-        checkCudaErrors(cudaMemcpy(a.ptr, base, total,
-            to_gpu ? cudaMemcpyHostToDevice : cudaMemcpyDeviceToHost));
-        if (dev >= 0 && dev != prev) set_current_device(prev);
-    }
+    backend_copy(a.ptr, allocation_device(allocator), base,
+                 allocation_device(old_allocator), total);
     // Take one reference per extra member before touching any var, so a target
     // that cannot express sharing fails with the group still intact.
     for (size_t i=1; i<members.size(); i++)
@@ -314,10 +266,8 @@ void migrate_to_cpu(Var* var, Allocator* allocator) {
         // device current, so it is ordered after the kernels that produced it
         // rather than after whatever the current device happens to be running.
         Allocation a(allocator, var->size);
-        int dev = var->allocator->device(), prev = current_device();
-        if (dev >= 0 && dev != prev) set_current_device(dev);
-        checkCudaErrors(cudaMemcpy(a.ptr, var->mem_ptr, var->size, cudaMemcpyDeviceToHost));
-        if (dev >= 0 && dev != prev) set_current_device(prev);
+        backend_copy(a.ptr, allocation_device(allocator), var->mem_ptr,
+                     allocation_device(var->allocator), var->size);
         var->allocator->free(var->mem_ptr, var->size, var->allocation);
         var->mem_ptr = a.ptr;
         var->allocation = a.allocation;
@@ -353,10 +303,8 @@ void migrate_to_gpu(Var* var, Allocator* allocator) {
     Allocation a(allocator, var->size);
     // Upload onto the pool's own device: a cache hit inside the pool skips
     // cudaMalloc, so the current device is not guaranteed to be right here.
-    int dev = allocator->device(), prev = current_device();
-    if (dev >= 0 && dev != prev) set_current_device(dev);
-    checkCudaErrors(cudaMemcpy(a.ptr, var->mem_ptr, var->size, cudaMemcpyHostToDevice));
-    if (dev >= 0 && dev != prev) set_current_device(prev);
+    backend_copy(a.ptr, allocation_device(allocator), var->mem_ptr,
+                 allocation_device(var->allocator), var->size);
     var->allocator->free(var->mem_ptr, var->size, var->allocation);
     var->mem_ptr = a.ptr;
     var->allocation = a.allocation;

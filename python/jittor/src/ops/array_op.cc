@@ -17,6 +17,7 @@
 #include "ops/array_op.h"
 #include "runtime/device.h"
 #include "runtime/cuda_streams.h"
+#include "runtime/backend.h"
 #include "mem/allocator.h"
 #include "mem/swap.h"
 
@@ -98,14 +99,14 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
             auto size = output->size;
             new (&allocation) Allocation(&cuda_dual_allocator, size);
             auto host_ptr = cuda_dual_allocator.get_dual_allocation(allocation.allocation).host_ptr;
-            std::memcpy(host_ptr, args.ptr, output->size);
+            backend_copy(host_ptr, {}, args.ptr, {}, output->size);
             return;
         }
     }
     #endif
     // TODO: args.buffer too many copy
     new (&allocation) Allocation(cpu_allocator, output->size);
-    std::memcpy(allocation.ptr, args.ptr, output->size);
+    backend_copy(allocation.ptr, {}, args.ptr, {}, output->size);
 }
 
 void ArrayOp::jit_prepare(JK& jk) {
@@ -131,13 +132,16 @@ void ArrayOp::run() {
         #ifdef IS_CUDA
         int device = output->device_id;
         auto copy_stream = cuda_side_stream(CUDA_COPY_STREAM, device);
-        checkCudaErrors(cudaMemcpyAsync(
-            allocation.ptr, host_ptr, allocation.size, cudaMemcpyHostToDevice,
-            copy_stream));
+        Device target{accelerator_backend_id(), cuda_dual_device_allocator.device()};
+        backend_copy_async(allocation.ptr, target, host_ptr, {}, allocation.size,
+                           BackendStream{{accelerator_backend_id(), device},
+                                         reinterpret_cast<void*>(copy_stream)});
         cuda_default_stream_wait_side(CUDA_COPY_STREAM, device, device);
         #else
-        checkCudaErrors(cudaMemcpyAsync(
-            allocation.ptr, host_ptr, allocation.size, cudaMemcpyHostToDevice, stream));
+        Device target{accelerator_backend_id(), cuda_dual_device_allocator.device()};
+        backend_copy_async(allocation.ptr, target, host_ptr, {}, allocation.size,
+                           BackendStream{{accelerator_backend_id(), current_device()},
+                                         reinterpret_cast<void*>(stream)});
         checkCudaErrors(cudaEventRecord(event, stream));
         // ACL kernels run on aclstream rather than CUDA's default stream.
         checkCudaErrors(cudaStreamWaitEvent(aclstream, event, 0));

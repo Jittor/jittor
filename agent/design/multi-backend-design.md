@@ -2,7 +2,16 @@
 
 Jittor runs on CUDA, Ascend ACL, ROCm and Corex. This document describes how
 that works today, why the mechanism does not scale, and what to replace it
-with. It is a proposal: nothing here is implemented.
+with. Sections 1-2 record the original baseline; section 3 is the target design.
+
+2026-09-06 implementation status: CPU/CUDA device and memory operations now use
+the native versioned registry in `src/runtime/backend*`, with implementations in
+`src/runtime/backends/`. This includes raw allocator selection, copies, streams
+and synchronization, not just capability metadata. Legacy mode flags delegate
+device operations to it; ambiguous device aliases are deprecated. `Device` is
+used at the storage/transfer boundary, while Var retains its existing logical
+device index. Op dispatch, the Python dispatch table, and native ACL/ROCm/Corex
+ports remain pending. Converted backends are explicitly labelled `*_legacy`.
 
 ## 1. How a backend is selected today
 

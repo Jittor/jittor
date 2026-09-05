@@ -4,6 +4,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include "runtime/cuda_streams.h"
+#include "runtime/backends/cuda_streams.h"
 
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
@@ -92,13 +93,28 @@ void validate_kind(int kind) {
 
 cudaStream_t cuda_side_stream(CudaSideStreamKind kind, int device) {
     validate_kind(kind);
-    return get_resources(device).streams[kind];
+    auto stream_kind = kind == CUDA_COPY_STREAM
+        ? BackendStreamKind::Copy : BackendStreamKind::Communication;
+    return reinterpret_cast<cudaStream_t>(
+        backend_ops(accelerator_backend_id()).stream(device, stream_kind));
 }
 
 cudaStream_t cuda_compute_stream(int device) {
-    CHECK(device >= 0 && device < get_device_count())
-        << "Invalid CUDA compute-stream device" << device;
-    return 0;
+    return reinterpret_cast<cudaStream_t>(backend_ops(accelerator_backend_id()).stream(
+        device, BackendStreamKind::Compute));
+}
+
+void* accelerator_backend_stream(int device, BackendStreamKind kind) {
+    if (kind == BackendStreamKind::Compute) {
+        CHECK(device >= 0 && device < get_device_count())
+            << "Invalid CUDA compute-stream device" << device;
+        return nullptr;
+    }
+    CHECK(kind == BackendStreamKind::Copy || kind == BackendStreamKind::Communication)
+        << "Invalid accelerator stream kind";
+    int side = kind == BackendStreamKind::Copy
+        ? CUDA_COPY_STREAM : CUDA_COMMUNICATION_STREAM;
+    return reinterpret_cast<void*>(get_resources(device).streams[side]);
 }
 
 uint64 cuda_stream_handle(int kind, int device) {

@@ -3,18 +3,13 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include <cstring>
 #include "var.h"
 #include "mem/allocator.h"
 #include "ops/device_copy_op.h"
 #include "ops/op_register.h"
 #include "runtime/device.h"
-#include "runtime/cuda_streams.h"
+#include "runtime/backend.h"
 #include "mem/swap.h"
-#ifdef HAS_CUDA
-#include <cuda_runtime.h>
-#include "helper_cuda.h"
-#endif
 
 namespace jittor {
 
@@ -56,19 +51,14 @@ void DeviceCopyOp::jit_prepare(JK& jk) {
 }
 
 void DeviceCopyOp::run() {
+    auto source = allocation_device(x->allocator);
     if (device < 0) {
         if (!y->allocator->is_cuda()) {
-            std::memcpy(y->mem_ptr, x->mem_ptr, x->size);
+            backend_copy(y->mem_ptr, {}, x->mem_ptr, source, x->size);
             return;
         }
         Allocation host(cpu_allocator, y->size);
-        #ifdef HAS_CUDA
-        if (x->allocator->is_cuda())
-            checkCudaErrors(cudaMemcpy(host.ptr, x->mem_ptr, x->size,
-                                       cudaMemcpyDeviceToHost));
-        else
-        #endif
-            std::memcpy(host.ptr, x->mem_ptr, x->size);
+        backend_copy(host.ptr, {}, x->mem_ptr, source, x->size);
 
         // The executor allocates outputs on the op's device before run(). A
         // host copy is the exception: replace that temporary device block
@@ -84,39 +74,10 @@ void DeviceCopyOp::run() {
         if (save_mem) registe_swap(y);
         return;
     }
-    #ifdef HAS_CUDA
-    if (runtime_use_cuda()) {
-        int src = x->allocator ? x->allocator->device() : -1;
-        int dst = y->allocator ? y->allocator->device() : device;
-        if (src < 0) {
-            // Host-resident source: a plain upload onto the target device,
-            // which the executor has already made current.
-            checkCudaErrors(cudaMemcpy(y->mem_ptr, x->mem_ptr, x->size, cudaMemcpyHostToDevice));
-            return;
-        }
-        if (src == dst) {
-            auto stream = cuda_side_stream(CUDA_COPY_STREAM, dst);
-            cuda_side_stream_wait_default(CUDA_COPY_STREAM, dst, src);
-            checkCudaErrors(cudaMemcpyAsync(y->mem_ptr, x->mem_ptr, x->size,
-                                           cudaMemcpyDeviceToDevice, stream));
-            cuda_default_stream_wait_side(CUDA_COPY_STREAM, dst, dst);
-            return;
-        }
-        enable_peer_access(src, dst);
-        // The destination copy stream waits for the source's computation;
-        // both default streams then wait for the copy before either side can
-        // consume the result or reuse the source block.
-        auto stream = cuda_side_stream(CUDA_COPY_STREAM, dst);
-        cuda_side_stream_wait_default(CUDA_COPY_STREAM, dst, src);
-        set_current_device(dst);
-        checkCudaErrors(cudaMemcpyAsync(y->mem_ptr, x->mem_ptr, x->size,
-                                       cudaMemcpyDefault, stream));
-        cuda_default_stream_wait_side(CUDA_COPY_STREAM, dst, dst);
-        cuda_default_stream_wait_side(CUDA_COPY_STREAM, dst, src);
-        return;
-    }
-    #endif
-    std::memcpy(y->mem_ptr, x->mem_ptr, x->size);
+    auto target = allocation_device(y->allocator);
+    // Ordered backend copies retain the source until the transfer completes
+    // and make the destination compute stream wait before consuming it.
+    backend_copy(y->mem_ptr, target, x->mem_ptr, source, x->size, true);
 }
 
 VarPtr device_copy(Var* x, int device) {

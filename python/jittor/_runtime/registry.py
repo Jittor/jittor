@@ -1,10 +1,8 @@
-"""Small, dependency-free backend and operator registries.
+"""Dependency-free prototypes for Python-level operator registration.
 
-This module is the first migration seam for the multi-backend design.  It is
-deliberately independent from the native runtime: importing it does not load
-``jittor`` or probe a device.  Existing ``flags.use_cuda`` and C++ operator
-registration therefore keep their current ownership until a later migration
-stage can hand them over atomically.
+Native device and memory dispatch is owned by ``src/runtime/backend*``, not
+this module. These Python registries remain while operator dispatch is being
+consolidated; importing them neither loads Jittor nor probes a device.
 """
 
 from dataclasses import dataclass, field, replace
@@ -21,9 +19,8 @@ def _cpu_device_count() -> int:
 def _cpu_allocator(size: int) -> bytearray:
     """Allocate zeroed host storage for the registry's CPU provider.
 
-    This deliberately returns a Python-owned buffer: the registry remains
-    importable without loading the native runtime while still exposing a real
-    allocator hook that callers can exercise.
+    This Python-owned buffer is for the standalone prototype. It is not the
+    allocator used by native Vars or the native backend registry.
     """
     if isinstance(size, bool) or not isinstance(size, int):
         raise TypeError("CPU allocation size must be an integer")
@@ -186,10 +183,9 @@ class RegistrySnapshot:
 class BackendRegistry:
     """Thread-safe registry keyed by backend name.
 
-    ``default()`` is lazy and returns CPU/CUDA entries with stable capability
-    metadata.  CUDA's device count remains zero until a native provider fills
-    it in; registering the entry still makes availability queryable rather
-    than conflating "known backend" with "hardware present".
+    ``default()`` describes Python operator-dispatch prototypes, not native
+    hardware availability. Query ``core.registered_backends`` and
+    ``core.backend_device_count`` for the native execution providers.
     """
 
     _default: Optional["BackendRegistry"] = None

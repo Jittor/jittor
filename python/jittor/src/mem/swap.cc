@@ -20,6 +20,7 @@
 #include "var.h"
 #include "mem/swap.h"
 #include "mem/mem_info.h"
+#include "runtime/backend.h"
 
 namespace jittor {
 
@@ -82,7 +83,7 @@ void swap_to_disk(Var* x, Swap& swap) {
             int64 cp_size = std::min(x->size-i, SWAP_BUF_SIZE);
             // the return value used to be dropped: a failed D2H copy wrote the
             // staging buffer's previous contents to disk as if it were the var
-            checkCudaErrors(cudaMemcpy(buffer, memptr+i, cp_size, cudaMemcpyDeviceToHost));
+            backend_copy(buffer, {}, memptr+i, allocation_device(x->allocator), cp_size);
             auto res = fwrite(buffer, cp_size, 1, fd);
             if (res!=1) {
                 fclose(fd);
@@ -229,7 +230,7 @@ bool move_with_swap(Var* x, Allocator* allocator, bool force) {
                     fclose(fd);
                     LOGf << "swap file read failed" << path << x;
                 }
-                checkCudaErrors(cudaMemcpy(memptr+i, buffer, cp_size, cudaMemcpyHostToDevice));
+                backend_copy(memptr+i, allocation_device(x->allocator), buffer, {}, cp_size);
             }
             fclose(fd); 
         } else
@@ -246,20 +247,8 @@ bool move_with_swap(Var* x, Allocator* allocator, bool force) {
             LOGe << "failed to remove swap file" << path << x->shape << x->dtype();
         x->set_flag(VarFlags::_is_swapped, 0);
     } else {
-        #ifdef HAS_CUDA
-        if (x->allocator->is_cuda()) {
-            if (allocation.allocator->is_cuda())
-                checkCudaErrors(cudaMemcpy(x->mem_ptr, allocation.ptr, x->size, cudaMemcpyDeviceToDevice));
-            else
-                checkCudaErrors(cudaMemcpy(x->mem_ptr, allocation.ptr, x->size, cudaMemcpyHostToDevice));
-        } else
-        if (allocation.allocator->is_cuda()) {
-            checkCudaErrors(cudaMemcpy(x->mem_ptr, allocation.ptr, x->size, cudaMemcpyDeviceToHost));
-        } else
-        #endif
-        {
-            std::memcpy(x->mem_ptr, allocation.ptr, x->size);
-        }
+        backend_copy(x->mem_ptr, allocation_device(x->allocator), allocation.ptr,
+                     allocation_device(allocation.allocator), x->size);
     }
     if (allocation.ptr) {
         auto& swap = swaps[allocation.allocator];

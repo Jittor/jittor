@@ -1,7 +1,7 @@
 # 整改看板
 
-当前进度以任务表为准。2026-09-06：2.13 已完成原生状态归属与 config/runtime 分层，2.14 已清空原生 misc 目录；
-下一步优先推进实际 Backend 执行链。下方旧波次中的 Python 字段视图不等于原生存储迁移。
+当前进度以任务表为准。2026-09-06：2.13 完成原生状态与配置分层，2.14 清空原生 misc，4.03 接通 CPU/CUDA 设备与内存执行链；
+下一步是 4.04 的算子注册分派。下方旧波次中的 Python 字段视图不等于原生存储迁移。
 
 > 第217波：`98c8ee94` 迁移 cuda_allow_tf32 Runtime owner（结构 43 passed）；`b8398291` 修正 Native provider teardown 统一 lifecycle events（结构 12 passed）；`9d49c70c` ACL device_size Python/C++ 对齐（ACL 14 passed）；`d44782d4` Torch bootstrap 非字符串/非法 __all__ fail-closed。未声称 CUDA/NPU 实机。
 
@@ -561,7 +561,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 3.24 | 布局收尾 | 待领 | | |
 | 4.01 | 分配器 id 空间随分配器实例走，不再是进程静态 2M 单例 | 已合并 | device | 4e407447 |
 | 4.02 | 合并多卡 | 已合并 | device | `ad9aab3a`（Var 带设备、算子在自己设备上跑、逐设备分配器与库句柄）、`c97b707a`（跨卡拷贝算子）、`93b48a8e`（torch facade）。选了什么、为什么，改写进 `device-placement.md` §5。**一处未达成**：跨卡拷贝的定序在本机不是回归网——8 张卡两两 `cudaDeviceCanAccessPeer` 全 0，驱动把跨卡拷贝经主机中转并自行与源卡串行，把 event 对整对删掉测试仍全过（实测）。测试写好了并会打印当前处于哪种情形，换到能 peer 的机器上才成为守卫。方法沉淀在 `agent/skills/multi-device-verification` |
-| 4.03 | `BackendRegistry` | 待领 | device | `fcce48e3`、`baff79f8`、`6e5c2d5c`、`db0f2a27`、`f37da269`、`32e8517b`、`86b9c1cd`、`ba2c88e5`、`b83e6889`、`6ac1fe8c`、`a1f5e649`、`df1743ff`、`6f1a9f35`、`18ddbd72`、`537968fa`、`6db5a349` 已完成注册/CPU provider/CPU clamp+outer+flatten 接线、生命周期注销、CUDA location fail-closed、原子 teardown、provider replacement、capability dispatch、原子 capability 注册/撤销、深冻结 snapshot、生命周期一致性快照、所有权不变量、ownership 输入校验与 provider 查询隔离与参数校验 29 项合同；CUDA/ACL provider 和完整后端生命周期仍待领 |
+| 4.03 | `BackendRegistry` | 已合并 | device | 原生 NativeRuntime 持有版本化 BackendOps 表，CPU/CUDA 实现位于 runtime/backends；device/count/set/allocator/copy/sync/stream 实际接入 Var 分配、数组构造、共享迁移、DeviceCopy、fetch 与 swap 复制。注册不探测设备，原始池与 SFRL/Temp/Stat 包装分离；dual/delay-free 报真实设备；跨卡双向流依赖和 fetch 持有保留。旧设备别名发弃用警告。真实回调探针及最终 CPU/CUDA/结构 40 passed，双卡/五库/梯度/共享定向 39 passed，无 GPU 可见 26 passed，CPU-only 31 passed/1 个 CUDA 配置字段跳过。枚举避开 ACL 的 CUDA→ACL token 替换并有主机编译合同。按轻量验收执行，未跑完整模型门禁或 NPU/ROCm 实机；legacy 转换保留，Op/JIT 分派与 Python 原型合并仍归 4.04/4.05，不伪称已完成。 |
 | 4.04 | `OpRegistry` | 待领 | device | `f37da269` 将 CPU flatten 纳入真实 dispatch，registry 合同 8 passed；C++ OpInfo/native 全量接线仍待领 |
 | 4.05 | Python 分派表 | 待领 | | |
 | 4.06 | `jt.flags.backend_fallback ∈ {error, warn, allow… | 待领 | device | `8fb44816`：`BackendFallbackPolicy` 独立核心切片，校验 `error/warn/allow`、默认 `warn`、结构化决策与 fail-closed 异常；与 registry 合同合计 7 passed。尚未接入 native flags/BackendRegistry/OpRegistry，整卡继续待领 |

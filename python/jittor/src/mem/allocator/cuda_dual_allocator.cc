@@ -7,14 +7,15 @@
 #ifdef HAS_CUDA
 #include "runtime/device.h"
 #include "mem/allocator/cuda_dual_allocator.h"
-#include "mem/allocator/cuda_host_allocator.h"
-#include "mem/allocator/cuda_device_allocator.h"
 #include "event_queue.h"
 
 namespace jittor {
 
-SFRLAllocator cuda_dual_host_allocator(&cuda_host_allocator, 0.3, 1<<28);
-SFRLAllocator cuda_dual_device_allocator(&cuda_device_allocator, 0.3, 1<<28);
+// Select raw pools without probing a driver during static initialization.
+SFRLAllocator cuda_dual_host_allocator(
+    backend_ops(accelerator_backend_id()).allocator(0, BackendMemoryKind::Pinned), 0.3, 1<<28);
+SFRLAllocator cuda_dual_device_allocator(
+    backend_ops(accelerator_backend_id()).allocator(0, BackendMemoryKind::Device), 0.3, 1<<28);
 CudaDualAllocator cuda_dual_allocator;
 DelayFree delay_free;
 

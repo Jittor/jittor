@@ -21,6 +21,7 @@
 #include "ops/op_register.h"
 #include "var_holder.h"
 #include "mem/swap.h"
+#include "runtime/backend.h"
 
 namespace jittor {
 
@@ -210,7 +211,7 @@ ArrayOp::ArrayOp(PyObject* obj) {
                 });
             Py_INCREF(obj);
         } else {
-            std::memcpy(host_ptr, args.ptr, size);
+            backend_copy(host_ptr, {}, args.ptr, {}, size);
         }
     } else {
         // this is non-continue numpy array

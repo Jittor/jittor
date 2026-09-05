@@ -17,6 +17,7 @@
 #include "event_queue.h"
 #endif
 #include "runtime/device.h"
+#include "runtime/backend.h"
 #include "executor.h"
 #include "var.h"
 #include "op.h"
@@ -772,7 +773,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             trace_data.record_execution(op, is_fused_op, jkl);
             #ifdef HAS_CUDA
             if (runtime_use_cuda())
-                checkCudaErrors(cudaDeviceSynchronize());
+                backend_synchronize({accelerator_backend_id(), current_device()});
             #endif
         }
         #ifdef JT_CHECK_NAN
@@ -781,8 +782,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         #endif
         #ifdef JT_SYNC
         #ifdef HAS_CUDA
-        checkCudaErrors(cudaGetLastError());
-        checkCudaErrors(cudaDeviceSynchronize());
+        backend_synchronize({accelerator_backend_id(), current_device()});
         #endif
         #endif
         LOGvvv << "Finished Op(" >> op->name() << rid >> 
@@ -838,6 +838,8 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     for (Var* v : vars) ASSERT(v->mem_ptr || v->size == 0 || v->flag(VarFlags::_is_swapped) || !v->liveness.backward.active()) << v;
     // clean fetcher free buffer
     fetcher_to_free.clear();
+    if (device_sync && !runtime_use_cuda())
+        backend_ops(BackendId::Cpu).synchronize(0);
     #ifdef HAS_CUDA
     if (device_sync && runtime_use_cuda()) {
         last_is_cuda = false;

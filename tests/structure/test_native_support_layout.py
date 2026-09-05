@@ -8,9 +8,10 @@ ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "python/jittor/src"
 OWNERS = {
     "debug": ("nan_checker.h", "nan_checker.cc", "nan_checker.cu"),
-    "runtime": ("cuda_streams.h", "cuda_streams.cc", "float32_precision.h",
+    "runtime": ("cuda_streams.h", "float32_precision.h",
                 "node_index.h", "ring_buffer.h", "ring_buffer.cc",
                 "collective_dtype.h", "file_rendezvous.h"),
+    "runtime/backends": ("cuda_streams.cc",),
     "type": ("cpu_atomic.h", "cpu_atomic.cc", "cpu_math.h", "cpu_math.cc",
              "intrin.h", "cuda_atomic.h", "cuda_limits.h", "nano_string.h",
              "nano_string.cc", "nano_vector.h"),
