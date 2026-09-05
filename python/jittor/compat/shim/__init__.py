@@ -58,6 +58,9 @@ _PUBLIC = {
     "validate_distribution_boundary": (
         "jittor.compat.torch.distribution", "validate_distribution_boundary"
     ),
+    "validate_distribution_bootstrap": (
+        "jittor.compat.torch.distribution", "validate_distribution_bootstrap"
+    ),
 }
 
 __all__ = sorted(_PUBLIC)

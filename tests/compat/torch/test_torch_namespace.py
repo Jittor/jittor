@@ -225,11 +225,55 @@ def test_distribution_manifest_has_no_backend_import_dependency():
 
 def test_bootstrap_and_lazy_shim_expose_the_same_distribution_boundary():
     from jittor.compat.shim import bootstrap, distribution_manifest
+    from jittor.compat.torch.distribution import validate_distribution_bootstrap
 
     assert bootstrap.distribution_manifest is distribution_manifest
     manifest = distribution_manifest()
     assert manifest["root"] == "torch.distributed"
     assert "torch.distributed.fsdp" in manifest["modules"]
+    assert bootstrap.validate_distribution_bootstrap is validate_distribution_bootstrap
+    assert validate_distribution_bootstrap(bootstrap)
+
+
+def test_distribution_bootstrap_rejects_copied_or_wrapped_exports():
+    from jittor.compat.shim import bootstrap
+    from jittor.compat.torch.distribution import validate_distribution_bootstrap
+
+    class Wrapper:
+        pass
+
+    wrapper = Wrapper()
+    for name in (
+        "DISTRIBUTION_ROOT",
+        "DISTRIBUTION_MODULES",
+        "DISTRIBUTION_PACKAGE_ALIASES",
+        "distribution_manifest",
+        "distribution_module_names",
+        "distribution_package_names",
+        "validate_distribution_aliases",
+        "validate_distribution_manifest",
+        "validate_distribution_graph",
+        "validate_distribution_publication",
+        "validate_distribution_boundary",
+        "validate_distribution_bootstrap",
+    ):
+        setattr(wrapper, name, getattr(bootstrap, name))
+    wrapper.distribution_manifest = lambda: bootstrap.distribution_manifest()
+    try:
+        validate_distribution_bootstrap(wrapper)
+    except ValueError as error:
+        assert "canonical object" in str(error)
+    else:
+        raise AssertionError("wrapped bootstrap export was accepted")
+
+    del wrapper.validate_distribution_bootstrap
+    wrapper.distribution_manifest = bootstrap.distribution_manifest
+    try:
+        validate_distribution_bootstrap(wrapper)
+    except ValueError as error:
+        assert "missing" in str(error)
+    else:
+        raise AssertionError("incomplete bootstrap surface was accepted")
 
 
 def test_namespace_has_importable_package_spec():

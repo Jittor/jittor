@@ -288,6 +288,48 @@ def validate_distribution_boundary(published=None, manifest=None):
     return True
 
 
+def validate_distribution_bootstrap(bootstrap):
+    """Validate the stable bootstrap facade for standalone distribution use.
+
+    The bootstrap module is deliberately a thin export surface.  A wrapper or
+    copied constant there would make a wheel builder validate one contract
+    while runtime activation consumes another.  Check object identity for the
+    manifest constants and validators so the facade cannot drift silently.
+    This function only inspects the supplied module-like object and never
+    imports a backend or mutates process state.
+    """
+
+    if bootstrap is None:
+        raise TypeError("distribution bootstrap must be a module-like object")
+    constants = (
+        "DISTRIBUTION_ROOT",
+        "DISTRIBUTION_MODULES",
+        "DISTRIBUTION_PACKAGE_ALIASES",
+    )
+    functions = (
+        "distribution_manifest",
+        "distribution_module_names",
+        "distribution_package_names",
+        "validate_distribution_aliases",
+        "validate_distribution_manifest",
+        "validate_distribution_graph",
+        "validate_distribution_publication",
+        "validate_distribution_boundary",
+        "validate_distribution_bootstrap",
+    )
+    for name in constants + functions:
+        try:
+            exported = getattr(bootstrap, name)
+        except AttributeError as exc:
+            raise ValueError("distribution bootstrap is missing %r" % name) from exc
+        if exported is not globals()[name]:
+            raise ValueError(
+                "distribution bootstrap export %r is not the canonical object" % name
+            )
+    validate_distribution_boundary()
+    return True
+
+
 __all__ = [
     "DISTRIBUTION_ROOT",
     "DISTRIBUTION_MODULES",
@@ -300,4 +342,5 @@ __all__ = [
     "validate_distribution_graph",
     "validate_distribution_publication",
     "validate_distribution_boundary",
+    "validate_distribution_bootstrap",
 ]
