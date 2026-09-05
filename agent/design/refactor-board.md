@@ -383,12 +383,6 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 0.18 | 门禁每条目断言至少执行 1 个非 skip 用例 | 已合并 | gates | ee29bee3、2f3f1aaf。恒 skip 的判据**从路径清单改成规则**：读测试自己写的 skip 理由，全都在说「这台机器缺某样东西」才算解释得通。清单版在这台机器上会是 73 条、换台机器又是另外 73 条，而且每加一个设备测试都要记得报到。规则一上线就抓出四个说不清自己缺什么的文件（`Not use cub, Skip`、`skip_this_test`），都改成说明缺什么，而不是给它们开豁免 |
 | 0.19 | 结构测试从「精确清单」改成「规则」 | 已合并 | gates | c3bcd277 |
 | 0.20 | 布局收尾 | 待领 | | ef31a0d6 已合入 1/N：删除 `tools/services/legacy` 的 converter launcher 与说明，清除 tools 活跃导航和 compat converter 对旧部署脚本的引用；converter 模块保留，HTTP 服务部署由应用负责。不存在结构节点 1 passed，仓库布局通过。`agent/design`/`agent/results` 权威树迁移、`tests/system` 删除及 AWESOME/ASV 归位均未做，保持待领 |
-
-### 第101波增量证据（2026-09-04）
-
-- `2.19`：`ba2f4077` 将 cuBLAS matmul 内维不匹配从 `ASSERTop` 改为可捕获的 `USER_CHECKop`，补负向结构合同；定向 3 passed。2.19 仍是聚合任务，未改为已合并。
-- `7.03`：`94df46f7` 将 `complex`、`view_as_complex`、`view_as_real` 提升为 numerical 模块级稳定对象，登记 approximate fidelity；CPU identity/metadata/value 定向 2 passed。其余 tensor/nn/module family 仍待领。
-- `0.15`：RingBuffer 修复后，独立 Dataset worker 监管两个 nodeid 在临时缓存下 2 passed/65.68 s；完整 smoke 仍约 390 s，任务保持待领。
 | 0.21 | 测试起的子进程不带 PYTHONPATH，门禁机器上是假绿 | 已合并 | gates | 46dbe946、a5ce7310 |
 | 0.22 | 压缩设备对拍时长（保留与单进程相同的 nodeid 集合） | 待领 | gates | `dcc335d6`、`f9c26111`、本次提交。**判据已落地并通过，但原验收（压到可接受时长）没达到，所以保持待领。** 方向 (a) 缓存 CPU 侧参考结果做完了：同一批 26 个 nodeid、两轮都是冷算子缓存，**848.5s → 711.1s（−16.2%）**，`tools/gate_conclusion_diff.py compare` 报 `IDENTICAL: every collected nodeid concluded the same way`（26/26 收集、26/26 有结论，逐条比对，不是数个数）。按 253/26 外推：约 2h18m → 1h55m。**计划里「它是最直接的一半」不成立——实测 CPU 那半只占冷缓存墙钟 18%、热缓存 26%。** 更要紧的是 **0.16 的归因反了**：它记「热缓存 1405s ≈ 冷 1444s，所以不是编译瓶颈」，复测（同一批 nodeid、同一 `JITTOR_HOME`、背靠背）**冷 848.5s、热 23.6s，36 倍**——它就是编译瓶颈。所以下一步不该走 (b) 减样本 或 (c) 多卡多进程，而是 **0.23**：CUDA workflow 没有像 `cpu.yml` 那样 restore/save JIT 缓存，每次都从冷开始 |
 | 0.23 | CUDA workflow 持久化 JIT 缓存 | 已合并 | gates | `e4682406`：`cuda` 与 `benchmark-cuda` restore/save JIT cache；key 包含 runner、CUDA 版本、`cuda_archs`、NVCC flags hash 和源码 hash。PyYAML + workflow 结构合同 4 passed。 |
@@ -571,26 +565,11 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 7.06 | 依赖单向化 core→tensor→nn/optim→distributed→fsdp→适配器 | 已合并 | 兼容层分区 | 27c4bdeb |
 | 7.07 | 第三方库补丁搬出 compat/ | 待领 | | |
 | 7.08 | `torch.dtype` 改真正的对象而非 str 子类 | 待领 | | 9aaedba9 已合入 `torch.backends` 映射；dtype 真对象、完整 C++ dtype 边界迁移和占位 dtype 的计算/分配拦截仍需整体完成 |
-
-**7.08 只做了三分之一，另两项仍待领**（兼容层分区，2026-09-03）：
-
-- 已做：**`torch.backends.*` 映射表格化并单测** — `9aaedba9`。六种拼写合成两条状态。`fp32_precision` 原本是四个 backend 对象上的字面量 `"ieee"`（`_PrecisionBackend` 的**类属性**），读不反映 tf32 已打开、写它什么都不做；`get_float32_matmul_precision()` 读的则是一个`matmul.allow_tf32` 从不更新的独立字符串。四条缺陷都用探针在旧实现上逐条实测复现过，不是推断。
-- 未做：**`torch.dtype` 改真正的对象** — **未动，且不建议顺手做**。`types.py` 的 `class dtype(str)` 里 str 继承是**承重**的，文件自己写明了理由：jittor 的 C++ 类型分发构造器要求 str/NanoString；而且 jittor **自己的 Python 代码**（`contrib.concat`、`linalg`、`nn`）会`str(var.dtype)` 再把结果直接喂回 C++ 分发。所以「入口处一次转换」要求先把**每一个** dtype 跨进 C++ 的边界找全再改；改一半会让错误的 dtype 静默流进算子。这是本任务里唯一一条「做一半比不做更糟」的，应整块领、单独排期。
-- 未做：**占位 dtype 参与计算时抛 `NotImplementedError`**。占位清单在 `types.py:_make_dtypes` 的 specs 里已有注释标出。难点不在识别而在拦截点：这些 dtype 对象**必须**继续存在且可作字典键（transformers/safetensors/torchao 在 import 期就按它们建表），所以只能在「真的参与计算或分配」那一步抛，不能在被引用时抛。
-
 | 7.09 | `torch.library` | 已合并 | compat | 99901e6c、d0a782a0。按张量真实驻留选择 CPU/CUDA 并排除 Meta，`register_autograd` 真正接入且模型特判移出通用注册层；线程局部 autocast dtype policy 进一步选择 AutocastCPU/CUDA，嵌套禁用与退出恢复普通路由。独立 PyTorch oracle 一致，CPU dispatch 8 passed、1 个未分配 CUDA 节点 skipped |
 | 7.10 | `torch.compile`/`jit.trace`/`jit.script` 保留 pass… | 已合并 | 兼容层分区 | 3d898ece。语义参数拒绝、permissive allowlist/audit 与 ShapeProp ImportError 验收均有测试 |
 | 7.11 | autograd 语义 | 已合并 | compat | `2ec34693`：`Var.is_leaf` 转发内核 `is_backward_leaf`，`Var.grad_fn` 对叶子返回 None、对非叶子返回 node/op/name 代理；shim autograd 语义 20 passed，core backward-leaf 查询 20 passed。requires_grad 策略差异仍归 7.12。 |
 | 7.12 | 独立 torch 包 | 待领 | | **内核前置 `2.25` 已就位（提交 `c6e62ba1`、`781d4188`）**：「反向叶子由 requires_grad 加图连通性决定，不再是三个进程级 id 键字典」所需的连通性那一半由 `backward_grad_fn(Var*)` 提供，实现里没有任何进程级 id 键字典、没有图遍历、没有缓存。剩下的是 requires_grad 那一半：对拍量到 Jittor 与 torch 只在 requires_grad 上分歧三处（float var 默认可导、`detach()` 停算子不停 var、native 策略下 stop_grad 输入的输出仍可导），而在 2.09 的 `EXPLICIT_REQUIRES_GRAD` 策略下这些图与 torch 三元组全等 |
 | 7.13 | FSDP2 | 待领 | | 已合入 37c0aed4、c0e6e1ae、48da7360、873dd5cf；仍缺峰值显存达标、复用原生 optimizer 更新逻辑与 DeviceMesh 真实分组 |
-
-**7.13 已合入四部分，其余待领**（兼容层分区，2026-09-03）：
-
-- 已做：`37c0aed4` 按实现身份识别优化器；`c0e6e1ae` 修复 Torch 模式下 NCCL preflight；`48da7360` 拒绝未遵守的 mesh 并跨 rank 归约梯度范数；`873dd5cf` 在分片后释放聚合的 `full_param`。
-- 未做：释放后峰值仍未低于未分片，每步仍增长 16 个分片大小的 Var；需继续沿已证实的引用环线索定位。
-- 未做：`optimizer.py` 仍自行实现 SGD/Adam/AdamW 数学，没有做到“复用 Jittor optimizer、只替换梯度来源”。
-- 未做：DeviceMesh 真实分组与多维切片依赖 8.08，当前仍明确拒绝。
-
 | 7.14 | vLLM 边界检查把 `torch` 视作 jittor 别名 | 已合并 | 兼容层分区 | 178be65a |
 | 7.15 | `_rebuild_tensor_v2` 按 stride 还原或报错 | 已合并 | | 7e7877c8 |
 | 7.16 | compat/ 内 129 个 `except: pass` 与 258 个宽泛 except … | 已合并 | 兼容层分区 | 72dbc22d（+ 一次修复：`93b48a8e` [4.02 3/3] rebase 时把 cuda.py/types.py 整段解回 7.16 之前，`swallowed()` 24→0、16→0，全树违规回到 47 条；已用三方合并恢复，见提交说明） |
@@ -669,6 +648,29 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 11.02 | 已提前为 0.20 | 并入 0.20 | | |
 | 11.03 | 单文件异常拆分 | 待领 | | |
 | 11.04 | 关键接口写成显式契约 | 待领 | | |
+
+## 增量证据（按波次）
+
+### 第101波增量证据（2026-09-04）
+
+- `2.19`：`ba2f4077` 将 cuBLAS matmul 内维不匹配从 `ASSERTop` 改为可捕获的 `USER_CHECKop`，补负向结构合同；定向 3 passed。2.19 仍是聚合任务，未改为已合并。
+- `7.03`：`94df46f7` 将 `complex`、`view_as_complex`、`view_as_real` 提升为 numerical 模块级稳定对象，登记 approximate fidelity；CPU identity/metadata/value 定向 2 passed。其余 tensor/nn/module family 仍待领。
+- `0.15`：RingBuffer 修复后，独立 Dataset worker 监管两个 nodeid 在临时缓存下 2 passed/65.68 s；完整 smoke 仍约 390 s，任务保持待领。
+
+**7.08 只做了三分之一，另两项仍待领**（兼容层分区，2026-09-03）：
+
+- 已做：**`torch.backends.*` 映射表格化并单测** — `9aaedba9`。六种拼写合成两条状态。`fp32_precision` 原本是四个 backend 对象上的字面量 `"ieee"`（`_PrecisionBackend` 的**类属性**），读不反映 tf32 已打开、写它什么都不做；`get_float32_matmul_precision()` 读的则是一个`matmul.allow_tf32` 从不更新的独立字符串。四条缺陷都用探针在旧实现上逐条实测复现过，不是推断。
+- 未做：**`torch.dtype` 改真正的对象** — **未动，且不建议顺手做**。`types.py` 的 `class dtype(str)` 里 str 继承是**承重**的，文件自己写明了理由：jittor 的 C++ 类型分发构造器要求 str/NanoString；而且 jittor **自己的 Python 代码**（`contrib.concat`、`linalg`、`nn`）会`str(var.dtype)` 再把结果直接喂回 C++ 分发。所以「入口处一次转换」要求先把**每一个** dtype 跨进 C++ 的边界找全再改；改一半会让错误的 dtype 静默流进算子。这是本任务里唯一一条「做一半比不做更糟」的，应整块领、单独排期。
+- 未做：**占位 dtype 参与计算时抛 `NotImplementedError`**。占位清单在 `types.py:_make_dtypes` 的 specs 里已有注释标出。难点不在识别而在拦截点：这些 dtype 对象**必须**继续存在且可作字典键（transformers/safetensors/torchao 在 import 期就按它们建表），所以只能在「真的参与计算或分配」那一步抛，不能在被引用时抛。
+
+
+**7.13 已合入四部分，其余待领**（兼容层分区，2026-09-03）：
+
+- 已做：`37c0aed4` 按实现身份识别优化器；`c0e6e1ae` 修复 Torch 模式下 NCCL preflight；`48da7360` 拒绝未遵守的 mesh 并跨 rank 归约梯度范数；`873dd5cf` 在分片后释放聚合的 `full_param`。
+- 未做：释放后峰值仍未低于未分片，每步仍增长 16 个分片大小的 Var；需继续沿已证实的引用环线索定位。
+- 未做：`optimizer.py` 仍自行实现 SGD/Adam/AdamW 数学，没有做到“复用 Jittor optimizer、只替换梯度来源”。
+- 未做：DeviceMesh 真实分组与多维切片依赖 8.08，当前仍明确拒绝。
+
 
 ### 2026-09-04 第四十三波补充证据
 
