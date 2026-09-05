@@ -41,6 +41,11 @@ class TorchTensorState(dict):
             self.requires_grad.pop(key, None)
         return bool(enabled)
 
+    def clear_requires_grad(self, tensor):
+        """Forget a tensor whose native gradient flag was stopped in-place."""
+        self.requires_grad.pop(id(tensor), None)
+        return tensor
+
     def requires_grad_tensors(self):
         """Return a snapshot of tensors explicitly enabled for gradients."""
         return tuple(self.requires_grad.values())

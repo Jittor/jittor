@@ -1237,6 +1237,18 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         return self
     Var.requires_grad_ = requires_grad_
 
+    # Native ``stop_grad()`` bypasses the torch-facing requires_grad property.
+    # Keep the explicit owner in sync at this boundary so a frozen tensor is
+    # not retained indefinitely by the independent torch state registry.
+    if not getattr(Var.stop_grad, "_torch_state_wrapped", False):
+        _native_stop_grad = Var.stop_grad
+        def _stop_grad_clear_torch_state(self, *args, **kwargs):
+            out = _native_stop_grad(self, *args, **kwargs)
+            get_tensor_state(jt).clear_requires_grad(self)
+            return out
+        _stop_grad_clear_torch_state._torch_state_wrapped = True
+        Var.stop_grad = _stop_grad_clear_torch_state
+
     # ------------------------------------------------------------------
     # torch-style autograd bridge: loss.backward() / param.grad
     # ------------------------------------------------------------------
@@ -1647,7 +1659,10 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         if policy is not None:
             try:
                 if policy().stop_outputs_when_inputs_stopped:
-                    out.stop_grad()
+                    # stop_grad() returns the stopped view; retaining the
+                    # original result here leaves torch detach() reporting
+                    # requires_grad=True on runtimes where it is functional.
+                    out = out.stop_grad()
             except (AttributeError, TypeError):
                 pass
         if getattr(self, "_torch_0d", False):

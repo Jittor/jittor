@@ -342,6 +342,19 @@ class TestStopNoGrad(Base):
                                 f"detach stop_grad {dev}")
         both_devices(body)
 
+    def test_native_stop_grad_releases_torch_state_owner(self):
+        x0 = np.random.RandomState(151).randn(3).astype("float32")
+        def body(dev):
+            x = jt.array(x0)
+            x.requires_grad = True
+            state = jt._torch_tensor_state
+            self.assertIs(state.requires_grad.get(id(x)), x)
+            x.stop_grad()
+            self.assertFalse(bool(x.requires_grad), f"stop_grad flag {dev}")
+            self.assertNotIn(id(x), state.requires_grad,
+                             f"stopped tensor retained by torch state on {dev}")
+        both_devices(body)
+
     def test_is_stop_grad(self):
         x0 = np.random.RandomState(16).randn(3).astype("float32")
         def body(dev):
