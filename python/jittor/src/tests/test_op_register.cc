@@ -85,6 +85,14 @@ JIT_TEST(native_op_registry_provider_dispatch_boundary) {
     ASSERT(consumer_dispatch.dispatch_key.op_id == key.op_id);
     ASSERT(consumer_dispatch.dispatch_key.provider_id == key.provider_id);
     ASSERT(registry.is_current(consumer_dispatch.dispatch_key));
+    NativeProviderConsumerDispatch optional_dispatch;
+    ASSERT(registry.try_provider_consumer_dispatch(
+        "jit_test_provider_dispatch", "cpu", optional_dispatch));
+    ASSERT(optional_dispatch.valid());
+    ASSERT(!registry.try_provider_consumer_dispatch(
+        "missing_op", "cpu", optional_dispatch));
+    ASSERT(!registry.try_provider_consumer_dispatch(
+        "jit_test_provider_dispatch", "missing_provider", optional_dispatch));
     ASSERT(registry.providers().size() == 2);
 
     // Replacing a provider is a teardown boundary; stale bindings cannot

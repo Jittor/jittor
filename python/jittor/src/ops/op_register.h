@@ -231,6 +231,12 @@ public:
     // closes the replacement race between separate metadata/key lookups.
     NativeProviderConsumerDispatch provider_consumer_dispatch(
         const string& name, const string& provider) const;
+    // Non-throwing consumer boundary for optional/backend probing.  On
+    // failure ``dispatch`` is left untouched; successful publication writes
+    // both metadata and dispatch key as one value snapshot.
+    bool try_provider_consumer_dispatch(
+        const string& name, const string& provider,
+        NativeProviderConsumerDispatch& dispatch) const;
     // The observer is non-owning and receives future transitions only.  The
     // returned pointer is the previous observer, mirroring the node lifecycle
     // observer API and making scoped installation straightforward.

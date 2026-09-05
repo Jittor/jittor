@@ -189,7 +189,9 @@ def test_native_provider_consumer_dispatch_is_atomic_and_value_only():
         encoding="utf-8")
     assert "struct NativeProviderConsumerDispatch" in header
     assert "NativeProviderConsumerDispatch provider_consumer_dispatch(" in header
+    assert "bool try_provider_consumer_dispatch(" in header
     assert "NativeOpRegistry::provider_consumer_dispatch" in source
+    assert "NativeOpRegistry::try_provider_consumer_dispatch" in source
     contract = header[header.index("struct NativeProviderConsumerDispatch"):
                       header.index("struct NativeProviderLifecycleObserver")]
     assert "NativeProviderMetadata metadata" in contract
@@ -199,4 +201,5 @@ def test_native_provider_consumer_dispatch_is_atomic_and_value_only():
     assert "unique_ptr" not in contract
     assert "void*" not in contract
     assert "registry.provider_consumer_dispatch" in jit_test
+    assert "registry.try_provider_consumer_dispatch" in jit_test
     assert "!registry.is_current(consumer_dispatch.dispatch_key)" in jit_test

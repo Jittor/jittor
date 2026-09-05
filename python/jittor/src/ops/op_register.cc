@@ -215,27 +215,39 @@ NativeProviderMetadata NativeOpRegistry::provider_metadata(
 
 NativeProviderConsumerDispatch NativeOpRegistry::provider_consumer_dispatch(
         const string& name, const string& provider) const {
+    NativeProviderConsumerDispatch result;
+    ASSERT(try_provider_consumer_dispatch(name, provider, result))
+        << "Op" << name << "has no current provider dispatch for" << provider;
+    return result;
+}
+
+bool NativeOpRegistry::try_provider_consumer_dispatch(
+        const string& name, const string& provider,
+        NativeProviderConsumerDispatch& dispatch) const {
     std::lock_guard<std::recursive_mutex> guard(mutex);
     string op_file_name = key(name);
     auto provider_iter = provider_bindings.find(provider);
-    ASSERT(provider_iter != provider_bindings.end())
-        << "provider" << provider << "is not registered";
-    ASSERT(provider_iter->second.count(op_file_name))
-        << "Op" << name << "has no provider binding for" << provider;
+    if (provider_iter == provider_bindings.end() ||
+            !provider_iter->second.count(op_file_name))
+        return false;
     auto op_iter = entries.find(op_file_name);
-    ASSERT(op_iter != entries.end()) << "Op" << name << "not found.";
+    if (op_iter == entries.end())
+        return false;
     auto id_iter = provider_ids.find(provider);
-    ASSERT(id_iter != provider_ids.end())
-        << "provider" << provider << "has no identity";
+    if (id_iter == provider_ids.end())
+        return false;
     auto registration_iter = provider_registrations.find(provider);
-    ASSERT(registration_iter != provider_registrations.end())
-        << "provider" << provider << "has no ABI registration";
+    if (registration_iter == provider_registrations.end())
+        return false;
     NativeProviderConsumerDispatch result;
     result.metadata = NativeProviderMetadata(registration_iter->second,
                                              id_iter->second);
     result.dispatch_key = {op_iter->second.id, provider, id_iter->second,
                            registration_iter->second.abi_version};
-    return result;
+    if (!result.valid())
+        return false;
+    dispatch = move(result);
+    return true;
 }
 
 NativeProviderLifecycleObserver* NativeOpRegistry::set_lifecycle_observer(
