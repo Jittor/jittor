@@ -125,6 +125,22 @@ class BackendRegistry:
         with self._lock:
             return tuple(self._specs)
 
+    def backend_for(self, value: Any) -> str:
+        """Resolve the backend owning a runtime value.
+
+        Native ``Var`` objects expose ``location()``; accepting that narrow
+        protocol keeps this registry independent from the native module while
+        giving dispatchers one canonical device-to-backend decision.
+        """
+        location = getattr(value, "location", None)
+        if callable(location):
+            location = location()
+        if location in (None, "cpu", "host"):
+            return "cpu"
+        if isinstance(location, str) and location.startswith("cuda"):
+            return "cuda"
+        raise UnknownBackend("cannot resolve backend for location: %r" % (location,))
+
     def supported_ops(self, op_registry: "OpRegistry", backend: str) -> Tuple[str, ...]:
         self.get(backend)
         return op_registry.supported_ops(backend)
@@ -137,6 +153,17 @@ class OpRegistry:
         self.backends = backends or BackendRegistry.default()
         self._lock = threading.RLock()
         self._kernels: Dict[Tuple[str, str], Callable[..., Any]] = {}
+
+    _default: Optional["OpRegistry"] = None
+    _default_lock = threading.Lock()
+
+    @classmethod
+    def default(cls) -> "OpRegistry":
+        if cls._default is None:
+            with cls._default_lock:
+                if cls._default is None:
+                    cls._default = cls()
+        return cls._default
 
     def register(self, op: str, backend: str, kernel: Callable[..., Any], *,
                  replace: bool = False) -> Callable[..., Any]:
@@ -162,6 +189,11 @@ class OpRegistry:
 
     def dispatch(self, op: str, backend: str, *args: Any, **kwargs: Any) -> Any:
         return self.resolve(op, backend)(*args, **kwargs)
+
+    def dispatch_value(self, op: str, value: Any, *args: Any, **kwargs: Any) -> Any:
+        """Dispatch using the backend selected from the first runtime value."""
+        backend = self.backends.backend_for(value)
+        return self.dispatch(op, backend, value, *args, **kwargs)
 
     def supported_ops(self, backend: str) -> Tuple[str, ...]:
         self.backends.get(backend)

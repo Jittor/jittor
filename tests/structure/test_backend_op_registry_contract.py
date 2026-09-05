@@ -49,6 +49,23 @@ def test_operator_registry_dispatches_and_reports_supported_ops():
     assert backends.supported_ops(ops, "cpu") == ("add",)
 
 
+def test_dispatch_value_selects_backend_from_runtime_location():
+    class CpuValue:
+        def location(self):
+            return "cpu"
+
+    class CudaValue:
+        def location(self):
+            return "cuda:0"
+
+    backends = BackendRegistry((BackendSpec("cpu"), BackendSpec("cuda")))
+    ops = OpRegistry(backends)
+    ops.register("where", "cpu", lambda value, suffix: ("cpu", suffix))
+    ops.register("where", "cuda", lambda value, suffix: ("cuda", suffix))
+    assert ops.dispatch_value("where", CpuValue(), 1) == ("cpu", 1)
+    assert ops.dispatch_value("where", CudaValue(), 2) == ("cuda", 2)
+
+
 def test_registry_rejects_duplicate_and_missing_entries():
     backends = BackendRegistry((BackendSpec("cpu"),))
     try:

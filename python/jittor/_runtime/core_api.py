@@ -19,6 +19,9 @@ import hashlib
 import sys, os
 import traceback
 from .acl_clamp import dispatch_acl_clamp
+from .registry import OpRegistry
+
+_runtime_op_registry = OpRegistry.default()
 
 if "SKEY" in os.environ:
     import jittor_utils.student_queue
@@ -991,7 +994,7 @@ def squeeze(x, dim=None):
         return x.reshape(new_shape if new_shape else [1])
 Var.squeeze = squeeze
 
-def clamp(x, min_v=None, max_v=None):
+def _clamp_cpu(x, min_v=None, max_v=None):
     if x.shape[0]==0:
         return x
     # Torch allows tensor bounds and reversed scalar bounds. Applying the lower
@@ -1044,6 +1047,15 @@ def clamp(x, min_v=None, max_v=None):
     if max_v is not None:
         x = select_bound(x, max_v, False)
     return x
+
+_runtime_op_registry.register("clamp", "cpu", _clamp_cpu)
+
+def clamp(x, min_v=None, max_v=None):
+    # CPU operations now use the backend/op registry seam.  CUDA keeps the
+    # existing implementation until its native provider is migrated.
+    if _runtime_op_registry.backends.backend_for(x) == "cpu":
+        return _runtime_op_registry.dispatch_value("clamp", x, min_v, max_v)
+    return _clamp_cpu(x, min_v, max_v)
 
 Var.clamp = clamp
 
