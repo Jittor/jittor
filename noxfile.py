@@ -657,6 +657,13 @@ def _enforce_smoke_budget(session, workers):
     silently turning the pull-request tier into an over-budget run.
     """
     report = budget_report(workers, configured_workers=GATE_WORKERS)
+    session.log(
+        "smoke budget: predicted %.0fs / %.0fs (headroom %.0fs; %d actual/%d "
+        "configured workers; %d CPU quota; %d threads/worker)"
+        % (report["predicted_seconds"], report["budget_seconds"],
+           report["headroom_seconds"], report["workers"],
+           report["configured_workers"], report["effective_cpus"],
+           report["threads_per_worker"]))
     if report["headroom_seconds"] < 0:
         session.error(
             "smoke budget exceeded: predicted %.0fs / %.0fs with %d workers "

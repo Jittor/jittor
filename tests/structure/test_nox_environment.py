@@ -19,6 +19,7 @@ class _FakeSession:
         self.root = root
         self.python_config = python_config
         self.calls = []
+        self.logs = []
 
     def create_tmp(self):
         return str(self.root / "session-tmp")
@@ -29,6 +30,9 @@ class _FakeSession:
 
     def error(self, message):
         raise AssertionError(message)
+
+    def log(self, message):
+        self.logs.append(message)
 
 
 def _load_noxfile(monkeypatch, tmp_path):
@@ -180,3 +184,27 @@ def test_gate_workers_keep_the_configured_count_when_quota_is_sufficient(
     module["_runtime_gate_workers"].__globals__["effective_cpu_count"] = lambda: 8
 
     assert module["_runtime_gate_workers"]() == 4
+
+
+def test_smoke_budget_log_reports_actual_and_configured_workers(
+        monkeypatch, tmp_path):
+    module = _load_noxfile(monkeypatch, tmp_path)
+    module["_enforce_smoke_budget"].__globals__["GATE_WORKERS"] = 4
+    module["_enforce_smoke_budget"].__globals__["budget_report"] = (
+        lambda workers, configured_workers: {
+            "predicted_seconds": 120.0,
+            "budget_seconds": 480.0,
+            "headroom_seconds": 360.0,
+            "workers": workers,
+            "configured_workers": configured_workers,
+            "effective_cpus": 1,
+            "threads_per_worker": 1,
+        })
+    session = _FakeSession(tmp_path, "/usr/bin/python3-config")
+
+    module["_enforce_smoke_budget"](session, workers=1)
+
+    assert session.logs == [
+        "smoke budget: predicted 120s / 480s (headroom 360s; 1 actual/4 "
+        "configured workers; 1 CPU quota; 1 threads/worker)"
+    ]
