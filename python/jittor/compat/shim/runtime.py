@@ -24,7 +24,7 @@ from jittor.compat.torch.namespace import (
     bind_published_namespace, independent_torch_namespace,
 )
 from ..diagnostics import EXPECTED, swallowed
-from ..transaction import ActivationTransaction
+from ..transaction import ActivationTransaction, _MISSING
 
 
 class ActivationStatus(NamedTuple):
@@ -62,6 +62,19 @@ def _publish_torch_module(transaction, module, owner):
         transaction.record(sys.modules, "torch", owner, module)
         return
     transaction.publish_module(sys.modules, "torch", module)
+
+
+def _publish_registry_root(transaction, registry, module):
+    """Publish the registry's root with the same rollback contract as imports.
+
+    The installer registry is an ownership ledger separate from ``sys.modules``.
+    Updating it directly would leave a failed independent activation pointing at
+    a detached :class:`TorchNamespace`, so record the mapping mutation too.
+    """
+    published = registry._published
+    old = published.get("torch", _MISSING)
+    transaction.record(published, "torch", old, module)
+    published["torch"] = module
 
 
 def activation_status(root_module=None):
@@ -158,7 +171,11 @@ def _activate_once(
                     jt._torch_compat_install_context.registry._published,
                     transaction=transaction,
                 )
-                jt._torch_compat_install_context.registry._published["torch"] = published
+                _publish_registry_root(
+                    transaction,
+                    jt._torch_compat_install_context.registry,
+                    published,
+                )
             _publish_torch_module(transaction, published, jt)
             transaction.commit()
         except EXPECTED:
@@ -236,7 +253,14 @@ def _activate_once(
             jt._torch_compat_install_context.registry._published,
             transaction=_transaction,
         )
-        jt._torch_compat_install_context.registry._published["torch"] = published
+        if _transaction is not None:
+            _publish_registry_root(
+                _transaction,
+                jt._torch_compat_install_context.registry,
+                published,
+            )
+        else:
+            jt._torch_compat_install_context.registry._published["torch"] = published
     if _transaction is None:
         sys.modules["torch"] = published
     else:

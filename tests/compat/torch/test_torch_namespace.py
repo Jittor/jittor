@@ -81,3 +81,22 @@ def test_published_children_rollback_restores_owner_bindings():
     assert owner.nn is not None
     assert owner.nn.functional == "old"
     assert namespace.nn is owner.nn
+
+
+def test_independent_root_registry_binding_rolls_back_with_import_identity():
+    from jittor.compat.shim.runtime import _publish_registry_root
+    from jittor.compat.transaction import ActivationTransaction
+
+    owner = types.ModuleType("jittor")
+    namespace = independent_torch_namespace(owner)
+    registry = types.SimpleNamespace(_published={"torch": owner})
+    transaction = ActivationTransaction("namespace-registry-test")
+    transaction.acquire()
+    try:
+        _publish_registry_root(transaction, registry, namespace)
+        assert registry._published["torch"] is namespace
+        transaction.rollback()
+    finally:
+        transaction.release()
+
+    assert registry._published["torch"] is owner
