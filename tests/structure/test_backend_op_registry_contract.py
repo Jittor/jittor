@@ -104,6 +104,29 @@ def test_registry_snapshot_rejects_duplicate_or_dangling_ownership():
             raise AssertionError("invalid snapshot ownership was accepted")
 
 
+def test_registry_snapshot_rejects_ambiguous_kernel_iterables():
+    """Ownership snapshots must not reinterpret strings as kernel pairs."""
+    try:
+        RegistrySnapshot([BackendSpec("cpu")], ["ab"])
+    except TypeError as exc:
+        assert "(op, backend) pairs" in str(exc)
+    else:
+        raise AssertionError("string kernel ownership was accepted")
+
+
+def test_old_snapshot_survives_provider_unregister_without_aliasing():
+    backends = BackendRegistry((BackendSpec("cpu"), BackendSpec("cuda")))
+    ops = OpRegistry(backends)
+    ops.register("copy", "cuda", lambda value: value)
+    snapshot = ops.snapshot_state()
+
+    removed = ops.unregister_backend("cuda")
+    assert removed.name == "cuda"
+    assert snapshot.backend("cuda").name == "cuda"
+    assert snapshot.has_kernel("copy", "cuda")
+    assert backends.names() == ("cpu",)
+
+
 def test_cpu_provider_rejects_invalid_allocation_sizes():
     allocator = BackendRegistry.default().get("cpu").allocator
     try:

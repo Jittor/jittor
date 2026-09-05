@@ -122,7 +122,17 @@ class RegistrySnapshot:
         producer hands us a temporary list.
         """
         backends = tuple(self.backends)
-        kernels = tuple(tuple(key) for key in self.kernels)
+        # A kernel owner is a pair, not an arbitrary iterable.  In
+        # particular, accepting a string here would silently reinterpret
+        # ``"ab"`` as ``("a", "b")`` and make a diagnostic snapshot depend
+        # on an accidental caller representation.
+        kernels = []
+        for key in self.kernels:
+            if not isinstance(key, (tuple, list)) or len(key) != 2:
+                raise TypeError(
+                    "registry snapshot kernels must be (op, backend) pairs")
+            kernels.append(tuple(key))
+        kernels = tuple(kernels)
         if any(not isinstance(spec, BackendSpec) for spec in backends):
             raise TypeError("registry snapshot backends must be BackendSpec values")
         backend_names = tuple(spec.name for spec in backends)
