@@ -137,6 +137,31 @@ def test_operator_registry_kernel_lifecycle_is_explicit():
         raise AssertionError("unregister silently accepted an unknown kernel")
 
 
+def test_backend_teardown_removes_provider_and_all_registered_kernels():
+    backends = BackendRegistry((BackendSpec("cpu"), BackendSpec("cuda")))
+    ops = OpRegistry(backends)
+    ops.register("add", "cuda", lambda value: value + 1)
+    ops.register("mul", "cuda", lambda value: value * 2)
+    ops.register("identity", "cpu", lambda value: value)
+
+    removed = ops.unregister_backend("cuda")
+    assert removed.name == "cuda"
+    assert backends.names() == ("cpu",)
+    assert ops.supported_ops("cpu") == ("identity",)
+    try:
+        ops.supported_ops("cuda")
+    except UnknownBackend:
+        pass
+    else:
+        raise AssertionError("torn-down backend remained addressable")
+    try:
+        ops.unregister_backend("cuda")
+    except UnknownBackend:
+        pass
+    else:
+        raise AssertionError("backend teardown was not fail-closed")
+
+
 def test_native_cpu_registry_dispatch_matches_outer_and_clamp_values():
     # Keep the registry contract test lightweight at collection time; the
     # local import still exercises the actual CPU runtime dispatch path.

@@ -125,6 +125,19 @@ class BackendRegistry:
         with self._lock:
             return tuple(self._specs)
 
+    def unregister(self, name: str) -> BackendSpec:
+        """Remove one provider during backend teardown.
+
+        Operator entries are owned by :class:`OpRegistry`; callers that also
+        own an operator registry should use ``unregister_backend`` there so
+        kernel removal and provider removal happen as one lifecycle step.
+        """
+        with self._lock:
+            try:
+                return self._specs.pop(name)
+            except KeyError as exc:
+                raise UnknownBackend(name) from exc
+
     def backend_for(self, value: Any) -> str:
         """Resolve the backend owning a runtime value.
 
@@ -215,6 +228,23 @@ class OpRegistry:
                 return self._kernels.pop(key)
             except KeyError as exc:
                 raise MissingKernel("no kernel registered for %s/%s" % key) from exc
+
+    def unregister_backend(self, backend: str) -> BackendSpec:
+        """Tear down a backend and all kernels registered for it.
+
+        Providers must not be left addressable after teardown: removing the
+        backend first would leave stale kernels, while removing kernels only
+        would make a dead provider appear valid.  The registry lock protects
+        the kernel half and the backend registry lock protects the provider
+        half; dispatch cannot observe a partially removed kernel set because
+        all registry mutation goes through this method.
+        """
+        self.backends.get(backend)
+        with self._lock:
+            for key in tuple(self._kernels):
+                if key[1] == backend:
+                    del self._kernels[key]
+            return self.backends.unregister(backend)
 
     def dispatch(self, op: str, backend: str, *args: Any, **kwargs: Any) -> Any:
         return self.resolve(op, backend)(*args, **kwargs)
