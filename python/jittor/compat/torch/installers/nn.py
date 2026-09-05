@@ -29,7 +29,7 @@ from ..types import (
     _make_cpu_resident, _make_cuda_resident, device, dtype,
     _cuda_index_of,
 )
-from ...diagnostics import EXPECTED, swallowed
+from ...diagnostics import EXPECTED, swallowed, sdpa_flash_stats
 from ... import fsdp_hooks as _fsdp_hooks
 from ... import collectives as _collectives
 
@@ -2282,11 +2282,7 @@ def install(ctx):
             in ("1", "true", "yes", "on")
 
     def _sdpa_flash_stats():
-        stats = getattr(jt, "_torch_sdpa_flash_stats", None)
-        if stats is None:
-            stats = {"hits": 0, "misses": {}, "casts": {}, "backend": None}
-            jt._torch_sdpa_flash_stats = stats
-        return stats
+        return sdpa_flash_stats(jt)
 
     def _sdpa_flash_miss(reason):
         misses = _sdpa_flash_stats()["misses"]
