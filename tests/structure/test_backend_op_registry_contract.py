@@ -11,9 +11,33 @@ from jittor._runtime.registry import (
 def test_default_registry_exposes_cpu_and_cuda_capabilities():
     registry = BackendRegistry.default()
     assert registry.names() == ("cpu", "cuda")
-    assert registry.get("cpu").device_count() == 1
-    assert registry.get("cpu").supports("allocator")
+    cpu = registry.get("cpu")
+    assert cpu.device_count() == 1
+    assert cpu.supports("allocator")
+    assert cpu.allocator is not None
+    first = cpu.allocator(4)
+    second = cpu.allocator(4)
+    assert first == bytearray(4)
+    assert isinstance(first, bytearray)
+    first[0] = 7
+    assert second[0] == 0
     assert registry.get("cuda").supports("synchronize")
+
+
+def test_cpu_provider_rejects_invalid_allocation_sizes():
+    allocator = BackendRegistry.default().get("cpu").allocator
+    try:
+        allocator(-1)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("negative CPU allocation was accepted")
+    try:
+        allocator(1.5)
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("non-integer CPU allocation was accepted")
 
 
 def test_operator_registry_dispatches_and_reports_supported_ops():
