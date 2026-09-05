@@ -172,3 +172,24 @@ def test_missing_published_parent_fails_closed_without_partial_binding():
 
     assert not hasattr(namespace, "nn")
     assert not hasattr(owner, "nn")
+
+
+def test_missing_later_parent_fails_closed_without_transaction():
+    """Preflight all parents before binding the first valid sibling."""
+    owner = types.ModuleType("jittor")
+    namespace = independent_torch_namespace(owner)
+    nn = types.ModuleType("torch.nn")
+    orphan = types.ModuleType("torch.optim.sgd")
+
+    try:
+        bind_published_namespace(
+            namespace,
+            {"torch.nn": nn, "torch.optim.sgd": orphan},
+        )
+    except RuntimeError as error:
+        assert "parent 'torch.optim' is not published" in str(error)
+    else:
+        raise AssertionError("missing later parent was accepted")
+
+    assert not hasattr(namespace, "nn")
+    assert not hasattr(owner, "nn")

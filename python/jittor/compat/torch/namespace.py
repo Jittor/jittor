@@ -75,6 +75,21 @@ def bind_published_namespace(namespace, published, transaction=None):
         name: module for name, module in published.items()
         if name.startswith("torch.") and module is not None
     }
+    # Validate the complete parent closure before mutating the namespace.  A
+    # caller outside activation may not provide a transaction; discovering a
+    # missing parent after binding an earlier sibling would otherwise leave a
+    # partially published independent namespace behind.
+    missing = []
+    for name in modules:
+        parent_name = name.rsplit(".", 1)[0]
+        if parent_name != "torch" and parent_name not in modules:
+            missing.append((name, parent_name))
+    if missing:
+        name, parent_name = sorted(missing)[0]
+        raise RuntimeError(
+            "cannot bind published module %r: parent %r is not published"
+            % (name, parent_name)
+        )
     parents = {"torch": namespace}
     for name in sorted(modules, key=lambda item: (item.count("."), item)):
         # The registry includes its root entry as well as children.  The root
@@ -85,14 +100,9 @@ def bind_published_namespace(namespace, published, transaction=None):
         parent_name, attr = name.rsplit(".", 1)
         parent = parents.get(parent_name)
         if parent is None:
-            # A published child without its published parent cannot be
-            # represented by an independent namespace.  Silently skipping it
-            # leaves registry/sys.modules claiming success while attribute
-            # imports resolve through the old owner (or fail later).
-            raise RuntimeError(
-                "cannot bind published module %r: parent %r is not published"
-                % (name, parent_name)
-            )
+            # Kept as a defensive check for unusual mapping implementations;
+            # the complete closure was validated before any mutation.
+            raise RuntimeError("published namespace parent disappeared: %r" % parent_name)
         had_attr = hasattr(parent, attr)
         old = getattr(parent, attr, None)
         if transaction is not None:
