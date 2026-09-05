@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；当前状态基线 `bb4ad37e`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 当前 1317 个 |
+| 分支 | `2.0-refactor`；当前状态基线 `46ee28b2`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 当前 1312 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **211** / 进行中 **0** / 待领 **61** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
@@ -1725,12 +1725,6 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `fcce48e3` 建立 Python BackendRegistry/OpRegistry 的注册、查询、分派和冲突合同，6 passed；未接入现有 C++/flags 路由，4.03/4.04 继续待领。 |
 | `coreops` | 2.13 Runtime 状态仍跨多模块，单字段迁移会形成双状态；本波无代码提交。 |
 | `compat` | 7.12 TorchTensorState、9.01 冷启动和 5.24 剩余状态仍是整卡架构，未提交半成品。 |
-
-### 2026-09-05 第一百七十八波
-
-| 分区 | 结果 |
-| --- | --- |
-| `device` | 4.06 增加独立 `BackendFallbackPolicy`，统一校验 `error/warn/allow`、默认 `warn`、结构化 fallback 决策与 fail-closed 异常；定向结构测试 3 passed。尚未接入 native flags/BackendRegistry/OpRegistry，4.06 整卡保持待领。 |
 
 ## 7. 接手怎么开始
 
