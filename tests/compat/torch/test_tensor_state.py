@@ -24,3 +24,14 @@ def test_tensor_state_preserves_legacy_leaf_and_retained_aliases():
     assert state.leaf_params is state
     assert "leaf" in state
     assert module._torch_retained is state.retained
+
+
+def test_tensor_state_migrates_existing_retained_entries():
+    retained = {"retained": object()}
+    module = SimpleNamespace(_torch_leaf_params={}, _torch_retained=retained)
+
+    state = get_tensor_state(module)
+
+    assert state.retained == retained
+    assert state.retained is not retained
+    assert module._torch_retained is state.retained

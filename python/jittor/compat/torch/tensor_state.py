@@ -36,11 +36,17 @@ def get_tensor_state(jittor_module):
     observe the same state object without changing module identity.
     """
     state = getattr(jittor_module, "_torch_leaf_params", None)
+    legacy_retained = getattr(jittor_module, "_torch_retained", None)
     if not isinstance(state, TorchTensorState):
         previous = state if isinstance(state, dict) else None
         state = TorchTensorState()
         if previous:
             state.update(previous)
+        # A process can be upgraded after an older install has already
+        # registered retained tensors. Preserve those entries while moving
+        # the registry behind the state owner.
+        if isinstance(legacy_retained, dict):
+            state.retained.update(legacy_retained)
         setattr(jittor_module, "_torch_leaf_params", state)
     # Older installs published the optimizer registry independently.  Adopt it
     # once when upgrading an existing process, then keep the old name as an
