@@ -43,6 +43,7 @@ print("IMPORT_BOOTSTRAP_RESULT " + json.dumps({
         callable(getattr(jittor.compile_extern, name, None))
         for name in sorted(names)
     ],
+    "cupy_loaded": "cupy" in sys.modules,
 }))
 """
 
@@ -111,6 +112,7 @@ class TestImportBootstrapLaziness(unittest.TestCase):
         observed = _probe_result(result.stdout)
         self.assertEqual(observed["calls"], [])
         self.assertEqual(observed["setups"], [True, True, True])
+        self.assertFalse(observed["cupy_loaded"], observed)
         # This is a regression ceiling, not the plan's <1 s finish line. The
         # remaining core bootstrap is measured and kept visible on the board.
         self.assertLess(observed["elapsed"], 5.0)
