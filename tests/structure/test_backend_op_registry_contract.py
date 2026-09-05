@@ -132,6 +132,48 @@ def test_capability_gated_value_dispatch_uses_runtime_backend():
         raise AssertionError("value dispatch ignored missing capability")
 
 
+def test_provider_capability_registration_is_atomic_and_preserves_kernel_hooks():
+    backends = BackendRegistry((BackendSpec("cpu"),))
+    ops = OpRegistry(backends)
+    kernel = lambda value: ("ok", value)
+    ops.register("sync", "cpu", kernel)
+    value = object()
+    try:
+        ops.dispatch_capability("sync", "cpu", "synchronize", value)
+    except Exception as exc:
+        assert isinstance(exc, MissingCapability)
+    else:
+        raise AssertionError("unpublished capability was accepted")
+
+    updated = backends.set_capability("cpu", "synchronize")
+    assert updated.supports("synchronize")
+    assert updated.allocator is None
+    assert ops.dispatch_capability("sync", "cpu", "synchronize", value) == ("ok", value)
+
+    revoked = backends.set_capability("cpu", "synchronize", False)
+    assert not revoked.supports("synchronize")
+    assert ops.has_kernel("sync", "cpu")
+    try:
+        ops.dispatch_capability("sync", "cpu", "synchronize", value)
+    except MissingCapability:
+        pass
+    else:
+        raise AssertionError("revoked capability remained dispatchable")
+
+
+def test_provider_capability_registration_rejects_bad_updates():
+    backends = BackendRegistry((BackendSpec("cpu"),))
+    for args, error in ((('cpu', ''), ValueError),
+                        (('cpu', 'stream', 1), TypeError),
+                        (('missing', 'stream'), UnknownBackend)):
+        try:
+            backends.set_capability(*args)
+        except error:
+            pass
+        else:
+            raise AssertionError("invalid capability update was accepted")
+
+
 def test_native_cpu_location_none_resolves_to_cpu():
     class NativeCpuValue:
         def location(self):

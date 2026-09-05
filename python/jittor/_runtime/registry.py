@@ -7,7 +7,7 @@ registration therefore keep their current ownership until a later migration
 stage can hand them over atomically.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import threading
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Tuple
 
@@ -143,6 +143,27 @@ class BackendRegistry:
     def require(self, name: str, capability: str) -> BackendSpec:
         """Resolve a backend and fail closed when it lacks a capability."""
         return self.get(name).require(capability)
+
+    def set_capability(self, name: str, capability: str, supported: bool = True) -> BackendSpec:
+        """Atomically publish one provider capability.
+
+        Providers are often initialized after the registry entry is created
+        (for example, after a stream or library handle is available).  A
+        mutable capabilities mapping would let dispatch observe a half-written
+        provider.  Replacing the immutable spec under the registry lock keeps
+        the capability transition atomic while preserving all provider hooks.
+        """
+        if not isinstance(capability, str) or not capability:
+            raise ValueError("capability name must be a non-empty string")
+        if not isinstance(supported, bool):
+            raise TypeError("capability state must be a bool")
+        with self._lock:
+            current = self.get(name)
+            capabilities = dict(current.capabilities)
+            capabilities[capability] = supported
+            updated = replace(current, capabilities=capabilities)
+            self._specs[name] = updated
+            return updated
 
     def names(self) -> Tuple[str, ...]:
         with self._lock:
