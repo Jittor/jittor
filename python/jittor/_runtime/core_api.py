@@ -865,6 +865,11 @@ class RuntimeContext:
         return self._flags.gopt_disable
 
     @property
+    def enable_tuner(self):
+        """Whether the compiler's operator tuners may select candidates."""
+        return self._flags.enable_tuner
+
+    @property
     def exec_called(self):
         """Number of executor synchronizations started by the runtime."""
         return self._flags.exec_called
@@ -961,6 +966,7 @@ class RuntimeContext:
             "try_use_32bit_index": int(self.try_use_32bit_index),
             "no_fuse": int(self.no_fuse),
             "gopt_disable": int(self.gopt_disable),
+            "enable_tuner": int(self.enable_tuner),
             "exec_called": int(self.exec_called),
             "use_threading": int(self.use_threading),
             "profile_memory_enable": int(self.profile_memory_enable),
@@ -1047,6 +1053,10 @@ class RuntimeState:
     @property
     def gopt_disable(self):
         return self._context.gopt_disable
+
+    @property
+    def enable_tuner(self):
+        return self._context.enable_tuner
 
     @property
     def exec_called(self):

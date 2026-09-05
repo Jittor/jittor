@@ -40,6 +40,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "try_use_32bit_index": jt.flags.try_use_32bit_index,
         "no_fuse": jt.flags.no_fuse,
         "gopt_disable": jt.flags.gopt_disable,
+        "enable_tuner": jt.flags.enable_tuner,
         "exec_called": jt.flags.exec_called,
         "use_threading": jt.flags.use_threading,
         "profile_memory_enable": jt.flags.profile_memory_enable,
@@ -271,6 +272,27 @@ def test_runtime_gopt_disable_is_a_live_read_only_view_and_cpu_execution_survive
             jt.runtime.context.gopt_disable = 0
     finally:
         jt.flags.gopt_disable = original
+
+
+def test_runtime_enable_tuner_is_a_live_read_only_view_and_cpu_execution_survives():
+    import numpy as np
+    import jittor as jt
+
+    original = jt.flags.enable_tuner
+    try:
+        assert jt.runtime.enable_tuner == original
+        with jt.flag_scope(enable_tuner=0):
+            assert jt.runtime.enable_tuner == 0
+            assert jt.runtime.context.snapshot()["enable_tuner"] == 0
+            value = (jt.array(np.arange(4, dtype="float32")) + 1).numpy()
+            np.testing.assert_array_equal(value, np.arange(1, 5, dtype="float32"))
+        assert jt.runtime.enable_tuner == original
+        with pytest.raises(AttributeError):
+            jt.runtime.enable_tuner = 1
+        with pytest.raises(AttributeError):
+            jt.runtime.context.enable_tuner = 1
+    finally:
+        jt.flags.enable_tuner = original
 
 
 def test_runtime_no_fuse_is_a_live_read_only_view_and_cpu_execution_survives():
