@@ -126,6 +126,8 @@
 >
 > 第167波复核：远端无新增代码；重新确认 7.12 的 process-global leaf registry、9.01 的冷启动编译、8.15–8.18 的多机参数缺口仍未改变。本波无代码提交，未新增进行中。
 >
+> 第168波：`d141d8c2` 完成 9.07 独立切片，移除 import 阶段对 `os.environ["cc_path"]` 的反向写入，定向回归 1 passed；4.06 backend_fallback 三态和 10.21 import lint 仍需 BackendRegistry/分层设计，本波未伪造完成。
+>
 > 第159波增量（7.03，六个 cohort）：`16333333` amax/amin/count_nonzero 收回原生 owner；`9cba7d68` cumsum/cumprod；`50876abf` sort/argsort/topk/median；`d94c5cbd` sign/trunc/frac/exp2/log10 归一到单一 owner；`a7dcae1c` nan_to_num/logaddexp；`d1535282` outer/tensordot/repeat_interleave 改为再导出原生 owner。**这一波补上了 7.03 一直缺的 CUDA 那一层**：此前约三十个 cohort 的证据全是「CPU N passed」，本波两个 cohort 用 `instantiate_device_type_tests` 在 CPU 与 CUDA 各跑一遍（各 15 passed / 13 passed），并跑出两处真实差异——4096 元素 float32 `cumsum` 两侧相对差 1.4e-06（并行前缀和比顺序扫描更准），512 元素重复键 `argsort` 的 indices 两侧不同而 values 逐位相同；两者都判为后端固有并登记进 fidelity，测试改为钉有界不一致与整数路径逐位相等。**同时修掉两处「一个 API 两个对象」**：`torch.sign(int32)` 返回 float32 而 `Tensor.sign()` 返回 int32（真 PyTorch 2.12 两者都是 int32，属静默错 dtype，修前失败/修后通过的用例已随提交落地）；`repeat_interleave` 的转发 wrapper 让`torch.repeat_interleave is jittor.repeat_interleave` 不成立，两条结构门禁因此长期红，现已转绿（`tests/structure` 由本波开始时的 15 failed 降到 4 failed，其中 2 条是本波修的、其余为别的分区）。新增 skill `agent/skills/torch-api-cohort-promotion/`。7.03 仍按剩余范围保持「待领」。
 >
 > 第160波增量（9.01 import 耗时）：`cf3835ee` 把热缓存 `import jittor` 归因到具体一步（核心编译在无事可做时占 CPU-only 配置的 68%），`51d0439f` 把核心编译收进 `compiler.build_core()` 并加构建戳。热缓存 import CPU-only 1.332→0.413 s **达标**、CUDA 2.457→1.545 s **未达标**；冷缓存与换配置仍全量编译核心，9.01 保持待领。另核实三条**既有**阻塞（基线 `534d375d`，均非 9.01 引入、改前改后位置一致）：`tests/core/test_device_methods.py` 与 `tests/backends/cuda/test_device_methods.py` 同名，pytest 收集期报 import file mismatch 并整体中止 native 门禁，需 `--continue-on-collection-errors` 才跑得完；native 门禁在 `test_complex64_linalg::test_svdvals` 进程 abort；torch 门禁在 `test_torch_compat_autograd::test_a_second_call_does_not_steal_the_first_calls_context` 进程 abort。
@@ -602,7 +604,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 9.04 | 依赖跟踪改用编译器的 `-MD -MF` | 已合并 | 构建 | 65a2dc12（clean_cache 从一份布局定义生成）、2569fe3b（依赖跟踪、SHA-256、主机名/`-march=native`/git 分支/路径哈希位数，一个提交只让大家重编一次）。依赖跟踪走的是「扫描器认识 `#ifdef`」而不是 `-MD -MF`：`process()` 兼着 JT_XXX 宏发现（必须在编译前）与依赖跟踪（只能在编译后），拆开才可能用 depfile，已登记为 9.21 |
 | 9.05 | 下载安全 | 已合并 | 构建 | e111ebcc |
 | 9.06 | 删 cutlass 下载 | 已合并 | 构建 | 50673d69 |
-| 9.07 | import 过程不反向写环境变量 | 待领 | | |
+| 9.07 | import 过程不反向写环境变量 | 已合并 | build | `d141d8c2`：导入不再写 `os.environ["cc_path"]`，保留模块内 `jittor_utils.cc_path`；子进程回归 1 passed，完整 bootstrap 前16节点无失败。 |
 | 9.08 | 新架 GPU | 已合并 | 构建 | 2d71f792 |
 | 9.09 | `cuda_wheel` 失败时 LOG.w 出原因，strict 为默认 | 已合并 | 构建 | c63dd809 |
 | 9.10 | 2.0 版本策略 | 已合并 | | 77dcc747 |
