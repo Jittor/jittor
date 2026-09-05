@@ -169,7 +169,9 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
         op->do_prepare(jkl);
         if (jkl.empty()) continue;
 
-        const char* jit_key = jkl.to_cstring();
+        // Copy the key before consulting caches; JK is reusable scratch
+        // storage and must not escape this preparation step.
+        string jit_key = jkl.to_string();
         auto iter = jit_key_mapper.find(jit_key);
         if (iter != jit_key_mapper.end()) continue;
 
