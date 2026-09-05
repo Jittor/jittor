@@ -27,7 +27,7 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；当前状态基线 `6220f55a`，后续状态提交接在其上 |
+| 分支 | `2.0-refactor`；当前状态基线 `55aa0f5c`，后续状态提交接在其上 |
 | 相对 `2.0` 的提交 | 当前 1713 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **211** / 进行中 **0** / 待领 **61** / 并入其它任务 **13** |
@@ -1893,6 +1893,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `3add5deb` 收紧 RegistrySnapshot provider query 参数并补 teardown 合同，registry 29 passed；4.03/4.04 native 全量接线仍待领。 |
 | `compat` | `8699c440` 修复删除 TorchNamespace 元数据后的 owner 泄漏，namespace 17 passed；7.12 完整模块迁移仍待领。 |
 | `gates` | `5d79118f` 让 standalone/nox 共用线程池变量和 budget policy，结构 44 passed；0.15 完整时长仍待最终验收。 |
+
+### 2026-09-05 第 197 波整项验收审计
+
+| 分区 | 结果 |
+| --- | --- |
+| `gates` | 0.15 原计划验收仍为 PR smoke `<300s`；当前 `tiers.py` 使用的 480s 是后续预算校准值。恢复 300s 做定向合同时，预测值 445.75s 明确失败，证明真实性能尚未达标；未提交故意制造红门禁的改动，任务继续待领。 |
+| `coreops` | 2.13 仍有约 80 个 C++ flag 及 `exe`/`tflag_count`/`hold_vars`/`sync_ptr` 等全局状态未统一，现有 RuntimeContext 字段迁移不能关闭整项。 |
+| `device` | 4.03/4.04 native C++ OpInfo、按 `(op id, backend)` kernel 分派、CUDA/ACL provider 生命周期仍缺，Python registry 只能算前置。 |
+| `compat` | 7.12 仍有 `sys.modules[__name__] = _jittor`、`_torch_*` 别名和独立 distribution 缺口，TorchNamespace 阶段不能关闭整项。 |
 
 ## 7. 接手怎么开始
 
