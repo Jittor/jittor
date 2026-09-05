@@ -1182,6 +1182,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # jittor Vars are not weak-referenceable, so we hold strong refs (leaf
     # params are long-lived anyway) and prune entries that drop stop-grad.
     def _register_leaf(v):
+        get_tensor_state(jt).set_requires_grad(v, True)
         _torch_register_leaf(v)
 
     # Override requires_grad with a Python property even though jittor exposes a
@@ -1197,6 +1198,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             # The native descriptor owns the reversible-vs-permanent distinction:
             # requires_grad_(False) preserves old edges, while stop_grad() does not.
             v = bool(v)
+            tensor_state = get_tensor_state(jt)
+            tensor_state.set_requires_grad(self, v)
             fsdp_entry = getattr(self, "_jittor_fsdp2_entry", None)
             fsdp_state = getattr(self, "_jittor_fsdp2_state", None)
             if fsdp_entry is not None and fsdp_state is not None:
@@ -1207,7 +1210,10 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                         continue
                     _native_requires_grad.__set__(peer, v)
                     if v:
+                        tensor_state.set_requires_grad(peer, True)
                         _register_leaf(peer)
+                    else:
+                        tensor_state.set_requires_grad(peer, False)
                 if getattr(fsdp_state, "true_fsdp_flat", False):
                     flat = getattr(fsdp_state, "true_fsdp_flat_shard", None)
                     any_trainable = any(getattr(entry, "requires_grad", True)
@@ -1215,7 +1221,10 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                     if isinstance(flat, Var):
                         _native_requires_grad.__set__(flat, any_trainable)
                         if any_trainable:
+                            tensor_state.set_requires_grad(flat, True)
                             _register_leaf(flat)
+                        else:
+                            tensor_state.set_requires_grad(flat, False)
             _native_requires_grad.__set__(self, v)
             if v:
                 _register_leaf(self)

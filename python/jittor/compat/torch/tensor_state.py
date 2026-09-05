@@ -19,6 +19,11 @@ class TorchTensorState(dict):
     def __init__(self):
         super().__init__()
         self.retained = {}
+        # Torch's requires_grad state is owned here as well.  Jittor Vars are
+        # not weak-referenceable, so retain the object only while the
+        # torch-facing flag is enabled; the backward bridge prunes stale leaf
+        # entries as before.
+        self.requires_grad = {}
         # Weak references to every live Torch-compatible optimizer.  Keep this
         # beside leaf/retain state so installers share one ownership boundary.
         self.active_optimizers = []
@@ -26,6 +31,19 @@ class TorchTensorState(dict):
     @property
     def leaf_params(self):
         return self
+
+    def set_requires_grad(self, tensor, enabled):
+        """Record the torch-facing requires-grad bit and return ``enabled``."""
+        key = id(tensor)
+        if enabled:
+            self.requires_grad[key] = tensor
+        else:
+            self.requires_grad.pop(key, None)
+        return bool(enabled)
+
+    def requires_grad_tensors(self):
+        """Return a snapshot of tensors explicitly enabled for gradients."""
+        return tuple(self.requires_grad.values())
 
 
 def get_tensor_state(jittor_module):

@@ -50,3 +50,29 @@ def test_tensor_state_reuses_explicit_owner_over_legacy_alias():
     assert get_tensor_state(module) is state
     assert module._torch_leaf_params is state
     assert "stale" not in state
+
+
+def test_tensor_state_owns_requires_grad_lifetime():
+    module = SimpleNamespace()
+    state = get_tensor_state(module)
+    tensor = object()
+
+    assert state.set_requires_grad(tensor, True) is True
+    assert state.requires_grad_tensors() == (tensor,)
+
+    assert state.set_requires_grad(tensor, False) is False
+    assert state.requires_grad_tensors() == ()
+
+
+def test_tensor_state_requires_grad_snapshot_isolated_from_registry():
+    module = SimpleNamespace()
+    state = get_tensor_state(module)
+    first = object()
+    second = object()
+    state.set_requires_grad(first, True)
+    state.set_requires_grad(second, True)
+
+    snapshot = state.requires_grad_tensors()
+    state.set_requires_grad(first, False)
+    assert snapshot == (first, second)
+    assert state.requires_grad_tensors() == (second,)
