@@ -60,6 +60,18 @@ def test_npu_session_requires_real_acl_and_an_executed_accelerator_case():
     assert "_ACCELERATOR_EXECUTED < required_accelerator" in policy
 
 
+def test_nccl_session_rejects_an_all_skipped_communication_gate():
+    source = (REPO_ROOT / "noxfile.py").read_text(encoding="utf-8")
+    nccl_start = source.index("def nccl(session):")
+    nccl_end = len(source)
+    nccl = source[nccl_start:nccl_end]
+    assert 'env["JITTOR_TEST_REQUIRE_EXECUTION"] = "1"' in nccl
+    assert 'env["JITTOR_TEST_ACCELERATOR_MIN_EXECUTED"] = "1"' in nccl
+
+    policy = (REPO_ROOT / "tests" / "conftest.py").read_text(encoding="utf-8")
+    assert '"nccl", "hccl"' in policy
+
+
 def test_accelerator_execution_counter_uses_cuda_nodeids(monkeypatch):
     import conftest as policy
 
@@ -71,5 +83,10 @@ def test_accelerator_execution_counter_uses_cuda_nodeids(monkeypatch):
 
     assert policy._is_accelerator_case(Report())
     assert not policy._is_accelerator_case(CpuReport())
+
+    class NcclReport:
+        nodeid = "tests/distributed/test_nccl_comm_stream.py::test_all_reduce"
+
+    assert policy._is_accelerator_case(NcclReport())
     monkeypatch.setenv("JITTOR_TEST_ACCELERATOR_MIN_EXECUTED", "2")
     assert policy._required_accelerator_executions() == 2

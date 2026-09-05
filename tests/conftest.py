@@ -596,7 +596,7 @@ def _is_accelerator_case(report):
     return any(token in nodeid for token in (
         "/cuda/", "_cuda", "cuda_", "cudnn", "cublas", "cutt",
         "cusparse", "cufft", "curand", "/rocm/", "_rocm", "/npu/",
-        "_npu", "acl", "ascend", "cann"))
+        "_npu", "acl", "ascend", "cann", "nccl", "hccl"))
 
 
 def _real_torch_is_required():
