@@ -24,7 +24,7 @@
  *
  **************************************************************************/
 #include <sys/stat.h>
-#include  "misc/miniz.h"
+#include  "third_party/miniz.h"
 
 namespace jittor {
 
