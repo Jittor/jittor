@@ -37,6 +37,9 @@ _PUBLIC = {
     "validate_distribution_aliases": (
         "jittor.compat.torch.distribution", "validate_distribution_aliases"
     ),
+    "validate_distribution_manifest": (
+        "jittor.compat.torch.distribution", "validate_distribution_manifest"
+    ),
     "validate_distribution_graph": (
         "jittor.compat.torch.distribution", "validate_distribution_graph"
     ),

@@ -115,6 +115,60 @@ def validate_distribution_aliases(names=None, aliases=DISTRIBUTION_PACKAGE_ALIAS
     return True
 
 
+def validate_distribution_manifest(manifest=None):
+    """Validate the package graph contract before any module is imported.
+
+    A wheel/bootstrap manifest is an input boundary, not trusted metadata.
+    Validate its root, module names, package closure and package aliases in
+    one backend-neutral step so malformed metadata cannot reach an installer.
+    """
+
+    spec = distribution_manifest() if manifest is None else manifest
+    if not hasattr(spec, "__getitem__"):
+        raise TypeError("distribution manifest must be a mapping")
+    try:
+        root = spec["root"]
+        modules = tuple(spec["modules"])
+        packages = tuple(spec["packages"])
+        aliases = tuple(spec.get("aliases", ()))
+    except (AttributeError, KeyError, TypeError) as exc:
+        raise TypeError("distribution manifest must provide root/modules/packages") from exc
+
+    if not isinstance(root, str) or not root:
+        raise ValueError("distribution manifest root must be a non-empty string")
+    if not modules or modules[0] != root:
+        raise ValueError("distribution manifest must start with its root module")
+    if len(set(modules)) != len(modules):
+        raise ValueError("distribution manifest contains duplicate modules")
+    for name in modules:
+        if not isinstance(name, str) or not name or any(
+            not part.isidentifier() for part in name.split(".")
+        ):
+            raise ValueError("distribution manifest contains invalid module name: %r" % (name,))
+    if root not in modules:
+        raise ValueError("distribution manifest root is not published")
+
+    expected_packages = {root}
+    for name in modules:
+        parts = name.split(".")
+        for index in range(3, len(parts)):
+            expected_packages.add(".".join(parts[:index]))
+    if len(set(packages)) != len(packages):
+        raise ValueError("distribution manifest contains duplicate packages")
+    if set(packages) != expected_packages:
+        missing = sorted(expected_packages - set(packages))
+        extra = sorted(set(packages) - expected_packages)
+        raise ValueError(
+            "distribution manifest package closure mismatch (missing=%r, extra=%r)"
+            % (missing, extra)
+        )
+    if any(package not in modules for package in packages):
+        raise ValueError("distribution manifest package is not a module")
+
+    validate_distribution_graph(modules, modules=modules, aliases=aliases)
+    return True
+
+
 def distribution_module_names():
     """Return a stable tuple suitable for packaging and import checks."""
 
@@ -177,6 +231,7 @@ def validate_distribution_publication(published, manifest=None):
     if not hasattr(published, "__getitem__") or not hasattr(published, "keys"):
         raise TypeError("published distribution must be a mapping")
     spec = distribution_manifest() if manifest is None else manifest
+    validate_distribution_manifest(spec)
     try:
         modules = tuple(spec["modules"])
         aliases = tuple(spec.get("aliases", ()))
@@ -224,6 +279,7 @@ __all__ = [
     "distribution_package_names",
     "distribution_manifest",
     "validate_distribution_aliases",
+    "validate_distribution_manifest",
     "validate_distribution_graph",
     "validate_distribution_publication",
 ]

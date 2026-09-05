@@ -35,15 +35,17 @@ def test_distribution_manifest_is_importable_and_parent_complete():
         DISTRIBUTION_MODULES, DISTRIBUTION_PACKAGE_ALIASES,
         distribution_manifest, distribution_package_names,
         validate_distribution_aliases, validate_distribution_graph,
+        validate_distribution_manifest,
     )
 
     assert DISTRIBUTION_MODULES[0] == "torch.distributed"
     assert "torch.distributed.fsdp" in distribution_package_names()
     assert validate_distribution_graph(DISTRIBUTION_MODULES)
     assert validate_distribution_aliases(DISTRIBUTION_MODULES)
+    manifest = distribution_manifest()
+    assert validate_distribution_manifest(manifest)
     assert all(left in DISTRIBUTION_MODULES for left, _ in DISTRIBUTION_PACKAGE_ALIASES)
 
-    manifest = distribution_manifest()
     assert manifest["root"] == "torch.distributed"
     assert manifest["modules"] is DISTRIBUTION_MODULES
     assert manifest["aliases"] is DISTRIBUTION_PACKAGE_ALIASES
@@ -67,6 +69,44 @@ def test_distribution_alias_validation_rejects_missing_or_duplicate_endpoints():
         assert "declared more than once" in str(error)
     else:
         raise AssertionError("duplicate alias source was accepted")
+
+
+def test_distribution_manifest_validation_rejects_inconsistent_package_closure():
+    from jittor.compat.torch.distribution import validate_distribution_manifest
+
+    malformed = {
+        "root": "torch.distributed",
+        "modules": ("torch.distributed", "torch.distributed.tensor._api"),
+        "packages": ("torch.distributed",),
+        "aliases": (),
+    }
+    try:
+        validate_distribution_manifest(malformed)
+    except ValueError as error:
+        assert "package closure mismatch" in str(error)
+    else:
+        raise AssertionError("incomplete package closure was accepted")
+
+
+def test_distribution_manifest_validation_rejects_missing_alias_endpoints():
+    from jittor.compat.torch.distribution import validate_distribution_manifest
+
+    malformed = {
+        "root": "torch.distributed",
+        "modules": (
+            "torch.distributed",
+            "torch.distributed.tensor",
+            "torch.distributed.tensor._api",
+        ),
+        "packages": ("torch.distributed", "torch.distributed.tensor"),
+        "aliases": (("torch.distributed.tensor._missing", "torch.distributed.tensor"),),
+    }
+    try:
+        validate_distribution_manifest(malformed)
+    except ValueError as error:
+        assert "endpoint is missing" in str(error)
+    else:
+        raise AssertionError("missing alias endpoint was accepted")
 
 
 def _small_distribution_fixture():
