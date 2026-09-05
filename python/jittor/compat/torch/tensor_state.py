@@ -19,6 +19,9 @@ class TorchTensorState(dict):
     def __init__(self):
         super().__init__()
         self.retained = {}
+        # Weak references to every live Torch-compatible optimizer.  Keep this
+        # beside leaf/retain state so installers share one ownership boundary.
+        self.active_optimizers = []
 
     @property
     def leaf_params(self):
@@ -39,6 +42,14 @@ def get_tensor_state(jittor_module):
         if previous:
             state.update(previous)
         setattr(jittor_module, "_torch_leaf_params", state)
+    # Older installs published the optimizer registry independently.  Adopt it
+    # once when upgrading an existing process, then keep the old name as an
+    # identity-preserving compatibility alias.
+    legacy_optimizers = getattr(jittor_module, "_active_optimizers", None)
+    if isinstance(legacy_optimizers, list) and not state.active_optimizers:
+        state.active_optimizers = legacy_optimizers
+    if getattr(jittor_module, "_active_optimizers", None) is not state.active_optimizers:
+        setattr(jittor_module, "_active_optimizers", state.active_optimizers)
     if getattr(jittor_module, "_torch_retained", None) is not state.retained:
         setattr(jittor_module, "_torch_retained", state.retained)
     return state

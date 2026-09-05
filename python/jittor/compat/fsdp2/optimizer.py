@@ -7,6 +7,7 @@ import jittor as jt
 from . import common, grad_sync, shard
 from .. import optimizer_kinds
 from ..diagnostics import EXPECTED, swallowed
+from ..torch.tensor_state import get_tensor_state
 
 
 _EXPORTS = (
@@ -72,7 +73,7 @@ def refresh_optimizer_fsdp_params(opt, state_ids=None):
 def _refresh_all_optimizer_fsdp_params(states, current=None):
     state_ids = {id(state) for state in states}
     seen = set()
-    for ref in getattr(jt, "_active_optimizers", None) or ():
+    for ref in get_tensor_state(jt).active_optimizers:
         opt = ref() if callable(ref) else ref
         if opt is None or id(opt) in seen:
             continue

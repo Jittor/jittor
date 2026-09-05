@@ -1,0 +1,26 @@
+from types import SimpleNamespace
+
+from jittor.compat.torch.tensor_state import TorchTensorState, get_tensor_state
+
+
+def test_tensor_state_owns_optimizer_registry_and_keeps_alias_identity():
+    legacy = []
+    module = SimpleNamespace(_torch_leaf_params={}, _active_optimizers=legacy)
+
+    state = get_tensor_state(module)
+
+    assert isinstance(state, TorchTensorState)
+    assert state.active_optimizers is legacy
+    assert module._active_optimizers is state.active_optimizers
+    state.active_optimizers.append("optimizer")
+    assert module._active_optimizers == ["optimizer"]
+
+
+def test_tensor_state_preserves_legacy_leaf_and_retained_aliases():
+    module = SimpleNamespace(_torch_leaf_params={"leaf": object()})
+
+    state = get_tensor_state(module)
+
+    assert state.leaf_params is state
+    assert "leaf" in state
+    assert module._torch_retained is state.retained
