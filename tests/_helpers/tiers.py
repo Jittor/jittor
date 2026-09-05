@@ -285,11 +285,52 @@ def worker_thread_budget(workers, available=None):
     import os
 
     if available is None:
-        try:
-            available = len(os.sched_getaffinity(0))
-        except AttributeError:  # pragma: no cover - non-Linux
-            available = os.cpu_count() or workers
+        available = effective_cpu_count()
     return max(1, available // workers)
+
+
+def effective_cpu_count():
+    """Return CPUs the gate can actually consume, including cgroup quota.
+
+    ``sched_getaffinity`` describes the cpuset, but a container may impose a
+    smaller CFS quota on that set.  Ignoring the quota starts one OpenMP team
+    per xdist worker with too many threads and inflates the worker-work term.
+    A missing or malformed cgroup file is deliberately ignored: affinity is
+    the portable baseline and remains the behavior on ordinary hosts.
+    """
+    import math
+    import os
+
+    try:
+        affinity = len(os.sched_getaffinity(0))
+    except AttributeError:  # pragma: no cover - non-Linux
+        affinity = os.cpu_count() or 1
+    quota_paths = (
+        "/sys/fs/cgroup/cpu.max",
+        "/sys/fs/cgroup/cpu/cpu.cfs_quota_us",
+    )
+    period_paths = (
+        "/sys/fs/cgroup/cpu.max",
+        "/sys/fs/cgroup/cpu/cpu.cfs_period_us",
+    )
+    try:
+        with open(quota_paths[0], encoding="ascii") as stream:
+            fields = stream.read().split()
+        if fields and fields[0] != "max":
+            quota, period = float(fields[0]), float(fields[1])
+            if quota > 0 and period > 0:
+                return max(1, min(affinity, int(math.ceil(quota / period))))
+    except (OSError, ValueError, IndexError):
+        try:
+            with open(quota_paths[1], encoding="ascii") as quota_stream:
+                quota = float(quota_stream.read().strip())
+            with open(period_paths[1], encoding="ascii") as period_stream:
+                period = float(period_stream.read().strip())
+            if quota > 0 and period > 0:
+                return max(1, min(affinity, int(math.ceil(quota / period))))
+        except (OSError, ValueError, IndexError):
+            pass
+    return max(1, affinity)
 
 
 def session_of(path):
