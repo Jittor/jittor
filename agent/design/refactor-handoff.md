@@ -28,7 +28,7 @@
 | | |
 | --- | --- |
 | 分支 | `2.0-refactor`；当前状态基线 `1df84320`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 当前 1707 个 |
+| 相对 `2.0` 的提交 | 当前 1712 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **211** / 进行中 **0** / 待领 **61** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
@@ -1884,6 +1884,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `148ea645` 增加 RegistrySnapshot provider 查询与 teardown 隔离，registry 合同 28 passed；4.03/4.04 native 全量接线仍待领。 |
 | `compat` | `2831a09e` 对称化 TorchNamespace `__delattr__` ownership，namespace 16 passed；7.12 完整模块迁移仍待领。 |
 | `gates` | `4dc47dae` 统一 standalone runner 六类线程池 policy，结构 8 passed；0.15 完整时长仍待最终验收。 |
+
+### 2026-09-05 第一百九十六波
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `8aae611d` 将 `profiler_record_peek` 纳入 RuntimeContext owner，snapshot/只读/flag_scope 结构 18 passed；2.13 其余状态仍待领。 |
+| `device` | `3add5deb` 收紧 RegistrySnapshot provider query 参数并补 teardown 合同，registry 29 passed；4.03/4.04 native 全量接线仍待领。 |
+| `compat` | `8699c440` 修复删除 TorchNamespace 元数据后的 owner 泄漏，namespace 17 passed；7.12 完整模块迁移仍待领。 |
+| `gates` | `5d79118f` 让 standalone/nox 共用线程池变量和 budget policy，结构 44 passed；0.15 完整时长仍待最终验收。 |
 
 ## 7. 接手怎么开始
 
