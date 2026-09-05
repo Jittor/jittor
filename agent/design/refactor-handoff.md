@@ -1686,6 +1686,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `coreops` | `5248870d` 删除不可达 EventQueue `run_sync`/Worker dead设施、清理 executor 旧注释，NCCL 两处切换为直接 CUDA 检查；结构合同 2 passed，C++14 CUDA syntax check 通过。3.19 已关闭。 |
 | `gates` | CPU smoke 未执行，原因是当前环境 CUDA 核心缓存/依赖前置失败；该环境失败未计入本任务通过或失败。 |
 
+### 2026-09-05 第一百七十三波
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | 2.13 审计确认 flags/Runtime 状态跨约30个 C++ 文件和309个 Python消费者，单状态迁移会破坏 flag_scope/设备 hooks；保持待领。 |
+| `cudabk` | 8.12 六条 cuDNN legacy cache 各自使用全局 JK 字符串和 process-global map，需统一 POD key/per-device 生命周期，保持待领。 |
+| `build` | 9.01 剩余冷启动主成本仍在 compiler import/核心编译，setup_cutt 无生产调用点，无法安全窄延迟。 |
+| `device` | 4.06 缺 BackendRegistry/OpRegistry，ACL fallback 三态不能孤立增加；保持待领。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
