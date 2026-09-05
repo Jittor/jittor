@@ -298,7 +298,18 @@ def validate_distribution_graph(
     building wheels or before a native backend has been selected.
     """
 
-    present = set(names)
+    try:
+        published_names = tuple(names)
+    except TypeError as exc:
+        raise TypeError("distribution graph names must be an iterable") from exc
+    for name in published_names:
+        if not isinstance(name, str) or not name or any(
+            not part.isidentifier() for part in name.split(".")
+        ):
+            raise ValueError(
+                "distribution graph contains invalid module name: %r" % (name,)
+            )
+    present = set(published_names)
     expected = set(modules)
     missing = tuple(sorted(expected - present))
     if missing:

@@ -185,6 +185,25 @@ def test_distribution_alias_validation_rejects_malformed_entries():
         raise AssertionError("non-iterable alias metadata was accepted")
 
 
+def test_distribution_graph_rejects_non_iterable_or_invalid_names():
+    from jittor.compat.torch.distribution import validate_distribution_graph
+
+    try:
+        validate_distribution_graph(None)
+    except TypeError as error:
+        assert "names must be an iterable" in str(error)
+    else:
+        raise AssertionError("non-iterable distribution graph was accepted")
+
+    for names in (("torch.distributed", None), ("torch.distributed", "torch..bad")):
+        try:
+            validate_distribution_graph(names)
+        except ValueError as error:
+            assert "invalid module name" in str(error)
+        else:
+            raise AssertionError("invalid distribution graph node was accepted")
+
+
 def test_distribution_manifest_validation_rejects_inconsistent_package_closure():
     from jittor.compat.torch.distribution import validate_distribution_manifest
 
