@@ -32,6 +32,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "lazy_execution": jt.flags.lazy_execution,
         "auto_flush_ops": jt.flags.auto_flush_ops,
         "no_grad": jt.flags.no_grad,
+        "gopt_disable": jt.flags.gopt_disable,
     }
     assert jt.runtime.device_id == getattr(jt.flags, "device_id", -1)
     assert jt.runtime.use_cuda == jt.flags.use_cuda
@@ -129,3 +130,24 @@ def test_runtime_no_grad_is_a_live_read_only_view():
             jt.runtime.context.no_grad = 0
     finally:
         jt.flags.no_grad = original
+
+
+def test_runtime_gopt_disable_is_a_live_read_only_view_and_cpu_execution_survives():
+    import numpy as np
+    import jittor as jt
+
+    original = jt.flags.gopt_disable
+    try:
+        assert jt.runtime.gopt_disable == original
+        with jt.flag_scope(gopt_disable=1):
+            assert jt.runtime.gopt_disable == 1
+            assert jt.runtime.context.snapshot()["gopt_disable"] == 1
+            value = (jt.array(np.arange(4, dtype="float32")) + 1).numpy()
+            np.testing.assert_array_equal(value, np.arange(1, 5, dtype="float32"))
+        assert jt.runtime.gopt_disable == original
+        with pytest.raises(AttributeError):
+            jt.runtime.gopt_disable = 0
+        with pytest.raises(AttributeError):
+            jt.runtime.context.gopt_disable = 0
+    finally:
+        jt.flags.gopt_disable = original

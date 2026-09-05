@@ -824,6 +824,11 @@ class RuntimeContext:
         """Whether newly created operations are excluded from autograd."""
         return self._flags.no_grad
 
+    @property
+    def gopt_disable(self):
+        """Whether graph optimization is disabled for execution."""
+        return self._flags.gopt_disable
+
     def snapshot(self):
         """Return an immutable snapshot of the fields owned by this context."""
         return {
@@ -833,6 +838,7 @@ class RuntimeContext:
             "lazy_execution": int(self.lazy_execution),
             "auto_flush_ops": int(self.auto_flush_ops),
             "no_grad": int(self.no_grad),
+            "gopt_disable": int(self.gopt_disable),
         }
 
 
@@ -871,6 +877,10 @@ class RuntimeState:
     @property
     def no_grad(self):
         return self._context.no_grad
+
+    @property
+    def gopt_disable(self):
+        return self._context.gopt_disable
 
     @property
     def context(self):
