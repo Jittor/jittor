@@ -1,6 +1,6 @@
 # 整改看板
 
-> 第184波增量：`ac641485` 将 `lazy_execution` 纳入 RuntimeContext owner（结构 6 passed）；`86b9c1cd` 支持 `cuda`/`cuda:<id>` registry location 并对未知 backend fail-closed（结构 10 passed）；`5c6876cd` 将 cgroup CPU quota 纳入 gate worker budget（22 passed）；`330d0a4c` 让独立 TorchNamespace 可由显式 activation 发布（py_compile/diff-check 通过）。聚合任务仍保持「待领」。
+> 第184波增量：`ac641485` 将 `lazy_execution` 纳入 RuntimeContext owner（结构 6 passed）；`86b9c1cd` 支持 `cuda`/`cuda:<id>` registry location 并对未知 backend fail-closed（结构 10 passed）；`5c6876cd` 将 cgroup CPU quota 纳入 gate worker budget（22 passed）；`330d0a4c`/`9bbf87aa` 让独立 TorchNamespace 可由显式 activation 发布并接通事务替换（namespace 2 passed、bootstrap 1 passed，py_compile/diff-check 通过）。聚合任务仍保持「待领」。
 
 
 > 第183波增量：`1c57b2a0` 将 `use_cuda` 纳入 RuntimeContext owner（结构 5 passed）；`32e8517b` 增加 OpRegistry 生命周期/注销错误路径（结构 9 passed）；`41eb41c2` 建立独立 TorchNamespace seam（定向 2 passed）；`f239e2ed` 增加 smoke budget 可执行瓶颈报告（结构 13 passed，预测 445.75/480s）。聚合任务仍保持「待领」。
@@ -584,7 +584,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 7.09 | `torch.library` | 已合并 | compat | 99901e6c、d0a782a0。按张量真实驻留选择 CPU/CUDA 并排除 Meta，`register_autograd` 真正接入且模型特判移出通用注册层；线程局部 autocast dtype policy 进一步选择 AutocastCPU/CUDA，嵌套禁用与退出恢复普通路由。独立 PyTorch oracle 一致，CPU dispatch 8 passed、1 个未分配 CUDA 节点 skipped |
 | 7.10 | `torch.compile`/`jit.trace`/`jit.script` 保留 pass… | 已合并 | 兼容层分区 | 3d898ece。语义参数拒绝、permissive allowlist/audit 与 ShapeProp ImportError 验收均有测试 |
 | 7.11 | autograd 语义 | 已合并 | compat | `2ec34693`：`Var.is_leaf` 转发内核 `is_backward_leaf`，`Var.grad_fn` 对叶子返回 None、对非叶子返回 node/op/name 代理；shim autograd 语义 20 passed，core backward-leaf 查询 20 passed。requires_grad 策略差异仍归 7.12。 |
-| 7.12 | 独立 torch 包 | 待领 | | **内核前置 `2.25` 已就位（提交 `c6e62ba1`、`781d4188`）**；`b2782315`/`06eba9aa`/`219c5b44`/`b3225844`/`ad46690d`/`696e5088`/`756a0fb6`/`41eb41c2`/`330d0a4c` 已将 leaf、retained、optimizer、requires_grad 状态收进 owner，并支持显式 activation 发布独立 TorchNamespace；stop_grad 会清理 owner 强引用，状态/autograd 定向 37 passed，namespace 定向 2 passed。这仍只是状态所有权前置，独立 torch 包的完整 requires_grad/模块边界与聚合验收继续待领。 |
+| 7.12 | 独立 torch 包 | 待领 | | **内核前置 `2.25` 已就位（提交 `c6e62ba1`、`781d4188`）**；`b2782315`/`06eba9aa`/`219c5b44`/`b3225844`/`ad46690d`/`696e5088`/`756a0fb6`/`41eb41c2`/`330d0a4c`/`9bbf87aa` 已将 leaf、retained、optimizer、requires_grad 状态收进 owner，并支持显式 activation 发布独立 TorchNamespace 与事务替换；stop_grad 会清理 owner 强引用，状态/autograd 定向 37 passed，namespace 定向 2 passed。这仍只是状态所有权前置，独立 torch 包的完整 requires_grad/模块边界与聚合验收继续待领。 |
 | 7.13 | FSDP2 | 待领 | | 已合入 37c0aed4、c0e6e1ae、48da7360、873dd5cf；仍缺峰值显存达标、复用原生 optimizer 更新逻辑与 DeviceMesh 真实分组 |
 | 7.14 | vLLM 边界检查把 `torch` 视作 jittor 别名 | 已合并 | 兼容层分区 | 178be65a |
 | 7.15 | `_rebuild_tensor_v2` 按 stride 还原或报错 | 已合并 | | 7e7877c8 |
