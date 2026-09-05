@@ -1318,7 +1318,7 @@ void *mz_zip_extract_archive_file_to_heap_v2(const char *pZip_filename, const ch
 } // namespace jittor
 
 #include "common.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #include "mem/allocator.h"
 
 namespace jittor {
@@ -1389,8 +1389,8 @@ struct ZipFile {
         // static SimpleProfiler _("array");
         // SimpleProfilerGuard __(_);
         #if HAS_CUDA
-        auto use_cuda_bk = use_cuda;
-        use_cuda = 0;
+        auto use_cuda_bk = runtime_use_cuda();
+        runtime_device_state().use_cuda = 0;
         #endif
         static auto make_empty = op_constructor<VarPtr, NanoVector, NanoString>("empty");
         size_t key = mz_zip_reader_locate_file(zip_archive.get(), filename.c_str(), nullptr, 0);
@@ -1402,7 +1402,7 @@ struct ZipFile {
         mz_zip_reader_extract_to_mem(zip_archive.get(), key, memptr, stat.m_uncomp_size, 0);
         #if HAS_CUDA
         if (use_cuda_bk) {
-            use_cuda = use_cuda_bk;
+            runtime_device_state().use_cuda = use_cuda_bk;
             migrate_to_gpu(vh->var, get_allocator());
         }
         #endif

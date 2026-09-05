@@ -10,7 +10,7 @@
 
 #include "cudnn_rnn_descriptor.h"
 #include "cudnn_descriptor.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 
 namespace jittor {
 

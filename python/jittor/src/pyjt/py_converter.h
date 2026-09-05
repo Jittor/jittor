@@ -16,7 +16,7 @@
 #include "misc/fast_shared_ptr.h"
 #include "profiler/simple_profiler.h"
 #ifdef IS_CUDA
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #endif
 
 namespace jittor {
@@ -929,7 +929,7 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
             // import numpy
             string npstr="numpy";
             #ifdef IS_CUDA
-            if (use_cuda) npstr="cupy";
+            if (runtime_use_cuda()) npstr="cupy";
             #endif
 
             PyObjHolder np(PyImport_ImportModule(npstr.data()));

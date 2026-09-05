@@ -234,7 +234,7 @@ def strip_cxx_comments(src):
 def gen_jit_flags():
     all_src = glob.glob(jittor_path+"/src/**/*.cc", recursive=True)
     jit_declares = []
-    re_def = re.compile("DEFINE_FLAG(_WITH_SETTER)?\\((.*?)\\);", re.DOTALL)
+    re_def = re.compile("DEFINE_(RUNTIME_)?FLAG(_WITH_SETTER)?\\((.*?)\\);", re.DOTALL)
 
     flags_defs = []
     visit = {}
@@ -243,7 +243,7 @@ def gen_jit_flags():
         with open(src_name, 'rb') as f:
             src = f.read().decode("utf8")
         defs = re_def.findall(strip_cxx_comments(src))
-        for _, args in defs:
+        for runtime, _, args in defs:
             args = args.split(",")
             type = args[0].strip()
             name = args[1].strip()
@@ -257,7 +257,9 @@ def gen_jit_flags():
             if name in visit:
                 continue
             visit[name] = 1
-            jit_declares.append(f"DECLARE_FLAG({type}, {name});")
+            declaration = "DECLARE_RUNTIME_FLAG" if runtime else "DECLARE_FLAG"
+            getter = f"runtime_flag_{name}()" if runtime else name
+            jit_declares.append(f"{declaration}({type}, {name});")
             alias = []
             if name == "use_cuda":
                 alias = ["use_device", "use_acl", "use_rocm", "use_corex"]
@@ -268,7 +270,7 @@ def gen_jit_flags():
             flags_defs.append(f"""
                 /* {name}(type:{type}, default:{default}): {doc} */
                 // @pyjt({get_names})
-                {type} _get_{name}() {{ return {name}; }}
+                {type} _get_{name}() {{ return {getter}; }}
                 // @pyjt({set_names})
                 void _set_{name}({type} v) {{ set_{name}(v); }}
                 {f'''// @pyjt({set_names})

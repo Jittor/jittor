@@ -6,6 +6,7 @@
 // ***************************************************************
 #pragma once
 #include "common.h"
+#include "runtime/device_state.h"
 
 
 #ifdef HAS_CUDA
@@ -13,9 +14,7 @@
 
 namespace jittor {
 
-DECLARE_FLAG(int, use_cuda);
-DECLARE_FLAG(int, sync_run);
-DECLARE_FLAG(int, device_id);
+inline int runtime_use_cuda() { return runtime_device_state().use_cuda; }
 
 // @pyjt(get_device_count)
 int get_device_count();
@@ -34,7 +33,6 @@ int current_device();
 // @pyjt(set_device)
 void set_current_device(int device);
 
-typedef void (*device_switch_hook_t)(int device);
 // Registered by the cuDNN/cuBLAS/cuRAND/... wrappers so the one global handle
 // their ops read always belongs to the current device. A hook is called once
 // on registration for the device that is current then, and after every switch.
@@ -52,7 +50,8 @@ void sync_devices(uint64 devices);
 
 } // jittor
 
-#if defined(CUDART_VERSION) && CUDART_VERSION < 10000
+// ROCm's legacy converter used to select this branch by the old filename.
+#if defined(IS_ROCM) || (defined(CUDART_VERSION) && CUDART_VERSION < 10000)
     #define _cudaLaunchHostFunc(a,b,c) \
         cudaStreamAddCallback(a,b,c,0)
     #define CUDA_HOST_FUNC_ARGS cudaStream_t stream, cudaError_t status, void*
@@ -66,13 +65,11 @@ void sync_devices(uint64 devices);
 
 namespace jittor {
 
-constexpr int use_cuda = 0;
-constexpr int device_id = -1;
+constexpr int runtime_use_cuda() { return 0; }
 
 inline int get_device_count() { return 0; }
 inline int current_device() { return -1; }
 inline void set_current_device(int) {}
-typedef void (*device_switch_hook_t)(int device);
 inline void add_device_switch_hook(device_switch_hook_t) {}
 inline void enable_peer_access(int, int) {}
 inline void sync_devices(uint64) {}

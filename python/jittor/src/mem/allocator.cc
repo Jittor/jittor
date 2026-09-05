@@ -5,7 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <typeinfo>
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 
 #include "mem/allocator/aligned_allocator.h"
 #ifdef HAS_CUDA
@@ -59,10 +59,10 @@ void setter_use_cuda_host_allocator(const int& old_value, const int& value) {
     // `use_cuda_host_allocator = value;` used to be here so that the
     // get_allocator() below could see the new value. The macro assigns first
     // now, so it already does.
-    auto use_cuda_bk = use_cuda;
-    use_cuda = 0;
+    auto use_cuda_bk = runtime_use_cuda();
+    runtime_device_state().use_cuda = 0;
     cpu_allocator = get_allocator();
-    use_cuda = use_cuda_bk;
+    runtime_device_state().use_cuda = use_cuda_bk;
     #endif
 }
 
@@ -99,20 +99,20 @@ static Allocator* cuda_base_allocator(int device) {
 Allocator* get_allocator(bool temp_allocator) {
     int device = -1;
 #ifdef HAS_CUDA
-    if (use_cuda) device = current_device();
+    if (runtime_use_cuda()) device = current_device();
 #endif
     return get_allocator(device, temp_allocator);
 }
 
 Allocator* get_allocator(int device, bool temp_allocator) {
     Allocator* allocator = nullptr;
-    if (use_cuda && sfrl_large_block_size_device >= (1ll<<40)) {
+    if (runtime_use_cuda() && sfrl_large_block_size_device >= (1ll<<40)) {
         // if super large block is used, don't use
         // temp allocator
         temp_allocator = false;
     }
 #ifdef HAS_CUDA
-    if (use_cuda && device >= 0 && !allocator) {
+    if (runtime_use_cuda() && device >= 0 && !allocator) {
         LOGvv << "Using cuda allocator of device" << device;
         allocator = cuda_base_allocator(device);
     } else

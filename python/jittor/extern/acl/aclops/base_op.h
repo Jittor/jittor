@@ -1,10 +1,10 @@
 #pragma once
 #include "utils.h"
 #include "acl_jittor.h"
+#include "runtime/device_state.h"
 
 namespace jittor
 {
-    extern int sync_run;
     using AclExecuteLauncher = std::function<aclnnStatus(
         void *, uint64_t, aclOpExecutor *, aclrtStream)>;
 

@@ -341,6 +341,11 @@ EXTERN_LIB type name; \
 EXTERN_LIB std::string doc_ ## name; \
 EXTERN_LIB void set_ ## name (const type&);
 
+#define DECLARE_RUNTIME_FLAG(type, name) \
+EXTERN_LIB type& runtime_flag_ ## name (); \
+EXTERN_LIB std::string doc_ ## name; \
+EXTERN_LIB void set_ ## name (const type&);
+
 
 #ifdef JIT
 
@@ -348,6 +353,10 @@ EXTERN_LIB void set_ ## name (const type&);
     DECLARE_FLAG(type, name)
 #define DEFINE_FLAG_WITH_SETTER(type, name, default, doc) \
     DECLARE_FLAG(type, name)
+#define DEFINE_RUNTIME_FLAG(type, name, default, doc) \
+    DECLARE_RUNTIME_FLAG(type, name)
+#define DEFINE_RUNTIME_FLAG_WITH_SETTER(type, name, default, doc) \
+    DECLARE_RUNTIME_FLAG(type, name)
 
 #else
 
@@ -392,6 +401,44 @@ EXTERN_LIB void set_ ## name (const type&);
     void init_ ## name (const type& value) { \
         type old_value = name; \
         name = value; \
+        setter_ ## name (old_value, value); \
+        if (getenv(#name)) LOGi << "Load " #name":" << value; \
+    }; \
+    int caller_ ## name = (init_ ## name (jittor::get_from_env<type>(#name, default)), 0);
+
+// Runtime flags retain the same initialization/setter protocol, but the core
+// accessor supplies their storage. No namespace-scope reference is initialized.
+#define DEFINE_RUNTIME_FLAG(type, name, default, doc) \
+    DECLARE_RUNTIME_FLAG(type, name) \
+    std::string doc_ ## name = doc; \
+    void set_ ## name (const type& value) { \
+        runtime_flag_ ## name () = value; \
+    }; \
+    void init_ ## name (const type& value) { \
+        runtime_flag_ ## name () = value; \
+        if (getenv(#name)) LOGi << "Load " #name":" << value; \
+    }; \
+    int caller_ ## name = (init_ ## name (jittor::get_from_env<type>(#name, default)), 0);
+
+#define DEFINE_RUNTIME_FLAG_WITH_SETTER(type, name, default, doc) \
+    DECLARE_RUNTIME_FLAG(type, name) \
+    std::string doc_ ## name = doc; \
+    void setter_ ## name (const type& old_value, const type& new_value); \
+    void set_ ## name (const type& value) { \
+        type& storage = runtime_flag_ ## name (); \
+        type old_value = storage; \
+        storage = value; \
+        try { \
+            setter_ ## name (old_value, value); \
+        } catch (...) { \
+            storage = old_value; \
+            throw; \
+        } \
+    }; \
+    void init_ ## name (const type& value) { \
+        type& storage = runtime_flag_ ## name (); \
+        type old_value = storage; \
+        storage = value; \
         setter_ ## name (old_value, value); \
         if (getenv(#name)) LOGi << "Load " #name":" << value; \
     }; \

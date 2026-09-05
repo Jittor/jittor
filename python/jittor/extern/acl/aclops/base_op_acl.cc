@@ -19,7 +19,7 @@
 #include "ops/unary_op.h"
 #include "ops/ternary_op.h"
 #include "executor.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #include "mem/allocator.h"
 #include "op_compiler.h"
 #include "ops/op_register.h"
@@ -31,7 +31,6 @@
 
 namespace jittor
 {
-    extern int sync_run;
     // Common functionality for adding input/output variables
     void BaseOpRunner::add(Var *v, bool is_input)
     {
@@ -105,7 +104,7 @@ namespace jittor
 
     void BaseOpRunner::syncRun()
     {
-        if (!sync_run)
+        if (!runtime_device_state().sync_run)
             return;
         auto sync_ret = aclrtSynchronizeStream(aclstream);
         if (sync_ret != ACL_SUCCESS)

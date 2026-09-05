@@ -29,7 +29,7 @@
 #include "ops/unary_op.h"
 #include "ops/ternary_op.h"
 #include "executor.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #include "mem/allocator.h"
 #include "op_compiler.h"
 #include "ops/op_register.h"
@@ -173,7 +173,7 @@ namespace jittor
     void fallback_cpu(Op *op)
     {
         LOGy << "!!! fallback_cpu " << op;
-        use_cuda = 0;
+        runtime_device_state().use_cuda = 0;
         for (auto v : op->inputs())
         {
             if (v->mem_ptr && v->allocator->is_cuda())
@@ -200,7 +200,7 @@ namespace jittor
             }
         }
         op->do_run();
-        use_cuda = 1;
+        runtime_device_state().use_cuda = 1;
     }
 
     /*

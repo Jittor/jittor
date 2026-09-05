@@ -8,7 +8,7 @@
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
 #include "mem/allocator/cuda_managed_allocator.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 
 namespace jittor {
 

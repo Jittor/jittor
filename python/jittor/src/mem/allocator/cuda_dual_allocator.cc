@@ -5,7 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #ifdef HAS_CUDA
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "mem/allocator/cuda_host_allocator.h"
 #include "mem/allocator/cuda_device_allocator.h"

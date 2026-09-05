@@ -31,7 +31,7 @@ def _without_comments(source):
 def test_acl_sync_run_checks_the_stream_and_documents_the_910b3_probe():
     source = BASE_OP.read_text(encoding="utf-8")
     body = _without_comments(_function_body(source, "void BaseOpRunner::syncRun()"))
-    assert "if (!sync_run)" in body
+    assert "if (!runtime_device_state().sync_run)" in body
     assert "aclrtSynchronizeStream(aclstream)" in body
     assert "sync_ret != ACL_SUCCESS" in body
     assert "LOGf" in body

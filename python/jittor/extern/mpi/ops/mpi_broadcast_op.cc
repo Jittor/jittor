@@ -11,7 +11,7 @@
 #include "mpi_broadcast_op.h"
 #include "ops/op_register.h"
 #include "utils/str_utils.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #include <cstring>
 
 namespace jittor {
@@ -23,7 +23,7 @@ MpiBroadcastOp::MpiBroadcastOp(Var* x, int root) : x(x), root(root) {
         return;
     }
     #ifdef HAS_CUDA
-    if (use_device_mpi && use_cuda) {
+    if (use_device_mpi && runtime_use_cuda()) {
         static auto nccl_broadcast = has_op("nccl_broadcast")
             ? get_op_info("nccl_broadcast").get_constructor<VarPtr, Var*, int, int>()
             : nullptr;

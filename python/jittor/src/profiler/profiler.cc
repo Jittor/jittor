@@ -17,7 +17,7 @@
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
 #endif
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #include "profiler/profiler.h"
 #include "op.h"
 #include "fused_op.h"
@@ -158,25 +158,25 @@ static void stat_peek_bandwidth(uint64 in, uint64 out, uint64 loop, uint64& peek
     int warmup = std::max(loop/8, (uint64)1);
     for (int i=0; i<warmup; i++)
     #ifdef HAS_CUDA
-        if (use_cuda)
+        if (runtime_use_cuda())
             cudaMemcpyAsync(temp1.ptr, temp2.ptr, size, cudaMemcpyDeviceToDevice, 0);
         else
     #endif
             std::memcpy(temp1.ptr, temp2.ptr, size);
     #ifdef HAS_CUDA
-    if (use_cuda)
+    if (runtime_use_cuda())
         checkCudaErrors(cudaDeviceSynchronize());
     #endif
     auto start = std::chrono::high_resolution_clock::now();
     for (int i=0; i<loop; i++)
     #ifdef HAS_CUDA
-        if (use_cuda)
+        if (runtime_use_cuda())
             cudaMemcpyAsync(temp1.ptr, temp2.ptr, size, cudaMemcpyDeviceToDevice, 0);
         else
     #endif
             std::memcpy(temp1.ptr, temp2.ptr, size);
     #ifdef HAS_CUDA
-    if (use_cuda)
+    if (runtime_use_cuda())
         checkCudaErrors(cudaDeviceSynchronize());
     #endif
     auto finish = std::chrono::high_resolution_clock::now();
@@ -326,7 +326,7 @@ void Profiler::record_and_run(
                 jit_entry(op);
             }
             #ifdef HAS_CUDA
-            if (use_cuda)
+            if (runtime_use_cuda())
                 checkCudaErrors(cudaDeviceSynchronize());
             #endif
         }
@@ -336,7 +336,7 @@ void Profiler::record_and_run(
             jit_entry(op);
         }
         #ifdef HAS_CUDA
-        if (use_cuda)
+        if (runtime_use_cuda())
             checkCudaErrors(cudaDeviceSynchronize());
         #endif
         auto finish = std::chrono::high_resolution_clock::now();

@@ -6,7 +6,7 @@
 // ***************************************************************
 #include "var.h"
 #include "ops/where_op.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #include "ops/op_register.h"
 #ifdef JIT_cuda
 #include "executor.h"
@@ -24,7 +24,7 @@ WhereOp::WhereOp(Var* cond, NanoString dtype) : cond(cond) {
     set_flag(OpFlags::_manual_set_vnbb);
     auto ndim = cond->shape.size();
     #ifdef HAS_CUDA
-    if (use_cuda) {
+    if (runtime_use_cuda()) {
         static auto cub_where = has_op("cub_where") ? get_op_info("cub_where")
                 .get_constructor<std::vector<VarPtr>, Var*, NanoString>() : nullptr;
         if (cub_where && (ndim>1 || std::abs(cond->num)>4096)) {

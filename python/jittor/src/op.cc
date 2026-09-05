@@ -12,7 +12,7 @@
 #include "op_compiler.h"
 #include "profiler/profiler.h"
 #include "mem/allocator.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #include "pybind/py_var_tracer.h"
 #include "executor.h"
 #include "var_holder.h"
@@ -292,14 +292,14 @@ void Op::do_jit_prepare(JK& jk) {
         bool has_cuda = flag(OpFlags::_cuda);
         bool has_cpu = flag(OpFlags::_cpu);
         CHECK(has_cuda || has_cpu);
-        if (has_cuda && has_cpu && !use_cuda)
+        if (has_cuda && has_cpu && !runtime_use_cuda())
             set_flag(OpFlags::_cuda, 0);
         jk.clear();
     } else {
         bool use_int64_t = false;
         // TODO: fused op do not have inputs,
         //   check use_cuda_op from outputs may not be enough
-        bool use_cuda_op = use_cuda;
+        bool use_cuda_op = runtime_use_cuda();
         for (Var* var : inputs()) {
             if (var->num >= std::numeric_limits<int32_t>::max())
                 use_int64_t = true;
@@ -315,7 +315,7 @@ void Op::do_jit_prepare(JK& jk) {
             // TODO: 64bit index in CUDA
             // use_int64_t = false;
         } else {
-            if (use_cuda==2) {
+            if (runtime_use_cuda()==2) {
                 if (flag(OpFlags::_cuda))
                     LOGf << "Op" << name() >> "'s vars are not allocated in cuda";
                 else

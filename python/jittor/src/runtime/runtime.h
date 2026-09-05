@@ -2,6 +2,7 @@
 #include "executor.h"
 #include "runtime/holder_state.h"
 #include "runtime/traversal_state.h"
+#include "runtime/device_state.h"
 
 namespace jittor {
 
@@ -16,11 +17,13 @@ public:
     Executor& executor() { return executor_; }
     RuntimeHolderState& holders() { return holders_; }
     RuntimeTraversalState& traversals() { return traversals_; }
+    RuntimeDeviceState& devices() { return devices_; }
 
 private:
     Executor executor_;
     RuntimeHolderState holders_;
     RuntimeTraversalState traversals_;
+    RuntimeDeviceState devices_;
 };
 
 EXTERN_LIB NativeRuntime& native_runtime();

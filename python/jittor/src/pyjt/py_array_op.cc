@@ -27,7 +27,7 @@ namespace jittor {
 
 DEFINE_FLAG(int, auto_convert_64_to_32, 1, "auto convert 64bit numpy array into 32bit jittor array");
 DEFINE_FLAG(uint8, reuse_array, 0, "try reuse np.array memory into jt.array");
-DECLARE_FLAG(int, use_cuda);
+DECLARE_RUNTIME_FLAG(int, use_cuda);
 DECLARE_FLAG(int, use_cuda_host_allocator);
 
 
@@ -179,9 +179,9 @@ ArrayOp::ArrayOp(PyObject* obj) {
     void* host_ptr = nullptr;
     #ifdef HAS_CUDA
     // Fused scalar values are emitted inside generated kernels on both backends.
-    if (use_cuda && output->flag(VarFlags::_force_fuse))
+    if (runtime_flag_use_cuda() && output->flag(VarFlags::_force_fuse))
         set_flag(OpFlags::_cuda, 1);
-    if (use_cuda && !save_mem && !use_cuda_host_allocator) {
+    if (runtime_flag_use_cuda() && !save_mem && !use_cuda_host_allocator) {
         set_flag(OpFlags::_cpu, 0);
         set_flag(OpFlags::_cuda, 1);
         if (!output->flag(VarFlags::_force_fuse)) {
@@ -201,7 +201,7 @@ ArrayOp::ArrayOp(PyObject* obj) {
 
     if (args.ptr) {
         // if has ptr, copy from ptr
-        if (reuse_array && !use_cuda && args.ptr == ori_ptr) {
+        if (reuse_array && !runtime_flag_use_cuda() && args.ptr == ori_ptr) {
             allocation.~Allocation();
             make_foreign_allocation(allocation, 
                 ori_ptr, output->size, 

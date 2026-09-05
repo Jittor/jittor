@@ -131,7 +131,7 @@ This preserves the existing serialized mutation requirement, not a new
 thread-safety guarantee.
 
 `src/runtime/runtime.{h,cc}` owns the process-lifetime `NativeRuntime`, containing
-the executor, held-root state and traversal state. `runtime_executor()` and `runtime_holder_state()`
+the executor, held-root, traversal and device state. `runtime_executor()` and `runtime_holder_state()`
 resolve to that same owner from the core, JIT operators and backend libraries.
 The executor starts with null allocator pointers; construction does not select
 a device or initialize a backend. Fork initialization resets its existing device
@@ -139,8 +139,19 @@ state without recreating inherited holders. `runtime_traversal_state()` shares
 the stamp counter and active-epoch count across core and JIT libraries.
 `TraversalEpoch` lives in `src/runtime/`; nested traversal marks are restored
 before leaving the epoch, including exception unwinding. Fork preserves the
-counter to avoid colliding with inherited node stamps. Native flags remain a
-pending ownership migration.
+counter to avoid colliding with inherited node stamps.
+
+`runtime/device_state.h` stores `use_cuda`, `device_id`, `sync_run`, the cached
+device count/current device, device-switch hooks and peer-access bookkeeping.
+`runtime/device.{h,cc}` supplies device operations; the old `misc/cuda_flags.*`
+files are removed. `DEFINE_RUNTIME_FLAG` registers Python/environment access
+through exported storage accessors, not global variables or dynamically
+initialized global references. Setter correction, rollback and backend-switch
+flushing retain their previous ordering. CPU-only operator routing stays
+constant CPU, while flag bindings still read the real runtime state.
+ROCm callback selection is explicit in the header, no longer dependent on the
+legacy binary converter recognizing the old filename. Other native flags and
+the startup-config/runtime-policy split remain unfinished.
 
 The former exported `Executor exe` data symbol is removed. In-tree CUDA/ACL
 consumers and embedded CUDA templates use `runtime_executor()` from `executor.h`.
@@ -148,6 +159,9 @@ Out-of-tree C++ extensions must update that access and rebuild against the new
 headers/core library; old precompiled extensions are not binary compatible.
 The former `tflag_count` symbol and `misc/traversal_epoch.h` path are also removed;
 extensions using traversal internals must use the runtime header and rebuild.
+The `use_cuda`, `device_id` and `sync_run` data symbols are also removed.
+External native consumers must include `runtime/device.h` or
+`runtime/device_state.h` and rebuild; Python `jt.flags` names remain unchanged.
 `compiler.py`, `compile_extern.py`,
 `pyjt_compiler.py`, and `init_cupy.py` are compiler or device bootstrap
 boundaries; `distributions.py`, `init.py`, and `linalg.py` are public native

@@ -5,13 +5,13 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include "common.h"
+#include "runtime/device_state.h"
 #include "utils/str_utils.h"
 #include "ops/op_register.h"
 #include "op_compiler.h"
 
 namespace jittor {
 
-extern int use_cuda;
 
 extern unordered_map<string,string> common_op_type_cuda_map;
 
@@ -153,11 +153,11 @@ struct FP16OpType : OpByType {
         string ret;
         if (both_map.count(args.at(0)))
             ret = both_map[args.at(0)];
-        else if (use_cuda)
+        else if (runtime_flag_use_cuda())
             ret = cuda_map[args.at(0)];
         else
             ret = cpu_map[args.at(0)];
-        if (use_cuda) {
+        if (runtime_flag_use_cuda()) {
             if (args[1] == "float32" && !both_map.count(args.at(0))) {
                 ret = common_op_type_cuda_map[args.at(0)];
             }

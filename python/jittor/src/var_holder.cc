@@ -12,7 +12,7 @@
 #include "var_holder.h"
 #include "var.h"
 #include "executor.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #include "graph.h"
 #include "grad.h"
 #include "mem/allocator/cuda_dual_allocator.h"

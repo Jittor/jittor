@@ -12,7 +12,7 @@
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #endif
 
 namespace jittor {

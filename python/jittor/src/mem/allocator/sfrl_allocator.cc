@@ -10,7 +10,7 @@
 
 #include <mutex>
 #include "mem/allocator/sfrl_allocator.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 
 namespace jittor {
 

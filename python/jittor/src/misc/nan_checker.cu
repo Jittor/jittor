@@ -4,7 +4,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include "misc/nan_checker.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 

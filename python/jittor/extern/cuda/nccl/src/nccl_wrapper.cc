@@ -7,7 +7,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #include "nccl_wrapper.h"
 #include "var.h"
 #include "mem/allocator.h"

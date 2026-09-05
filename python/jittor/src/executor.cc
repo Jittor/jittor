@@ -16,7 +16,7 @@
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "event_queue.h"
 #endif
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #include "executor.h"
 #include "var.h"
 #include "op.h"
@@ -77,7 +77,7 @@ void Executor::submit_pending(Var* target, bool force) {
     }
 
 #ifdef IS_CUDA
-    if (auto_flush_ops > 0 && use_cuda
+    if (auto_flush_ops > 0 && runtime_use_cuda()
             && Op::number_of_created_ops - last_run_ops >= auto_flush_ops) {
         vector<Var*> vars;
         for (auto holder : runtime_holder_state().holders()) {
@@ -300,7 +300,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     // Each op allocates from and launches on the device its outputs live on;
     // the caller gets its own current device back when the run is over, and
     // every device the run touched is waited on rather than just one.
-    int entry_device = use_cuda ? current_device() : -1;
+    int entry_device = runtime_use_cuda() ? current_device() : -1;
     uint64 touched_devices = 0;
     #endif
     // bfs find all ops need to run
@@ -670,7 +670,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
         }
         #ifdef HAS_CUDA
-        if (use_cuda) {
+        if (runtime_use_cuda()) {
             int dev = op_target_device(op);
             if (dev >= 0) {
                 if (dev != current_device()) set_current_device(dev);
@@ -761,7 +761,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         // _JT_SEH_END2;
         #ifdef HAS_CUDA
         // migrate to gpu
-        if (PREDICT_BRANCH_NOT_TAKEN((!is_cuda && use_cuda && !use_cuda_managed_allocator))) {
+        if (PREDICT_BRANCH_NOT_TAKEN((!is_cuda && runtime_use_cuda() && !use_cuda_managed_allocator))) {
             for (Var* v : op->outputs()) {
                 migrate_to_gpu(v, var_allocator(v, allocator));
             }
@@ -771,7 +771,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var>=2)) {
             trace_data.record_execution(op, is_fused_op, jkl);
             #ifdef HAS_CUDA
-            if (use_cuda)
+            if (runtime_use_cuda())
                 checkCudaErrors(cudaDeviceSynchronize());
             #endif
         }
@@ -839,7 +839,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     // clean fetcher free buffer
     fetcher_to_free.clear();
     #ifdef HAS_CUDA
-    if (device_sync && use_cuda) {
+    if (device_sync && runtime_use_cuda()) {
         last_is_cuda = false;
         sync_times++;
         try {
@@ -851,7 +851,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         }
         event_queue.flush();
     }
-    if (use_cuda && entry_device >= 0 && entry_device != current_device())
+    if (runtime_use_cuda() && entry_device >= 0 && entry_device != current_device())
         set_current_device(entry_device);
     LOGvv << "cudaDeviceSynchronize times:" << sync_times << "/" <<queue.size() << "device_sync:" << device_sync;
     #endif

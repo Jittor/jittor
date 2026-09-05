@@ -12,7 +12,7 @@
 #include "ops/argsort_op.h"
 #include <vector>
 #include "executor.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #include "ops/op_register.h"
 namespace jittor {
 
@@ -33,7 +33,7 @@ ArgsortOp::ArgsortOp(Var* x, int dim, bool descending, NanoString dtype)
         this->dim = x->shape.size() - 1;
     dim = this->dim;
     #ifdef HAS_CUDA
-    if (use_cuda) {
+    if (runtime_use_cuda()) {
         static std::vector<VarPtr>(*cub_argsort)(Var*, Var*, Var*, bool, NanoString) = nullptr;
         if (!cub_argsort && has_op("cub_argsort")) {
             cub_argsort = get_op_info("cub_argsort")

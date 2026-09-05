@@ -10,7 +10,7 @@
 #include "mem/mem_info.h"
 #include "helper_cuda.h"
 #include "mem/allocator/cuda_device_allocator.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 
 namespace jittor {
 

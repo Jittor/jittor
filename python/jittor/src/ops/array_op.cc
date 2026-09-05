@@ -15,7 +15,7 @@
 #include <cmath>
 #include "var.h"
 #include "ops/array_op.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #include "misc/cuda_streams.h"
 #include "mem/allocator.h"
 #include "mem/swap.h"
@@ -86,9 +86,9 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
         output->set_flag(VarFlags::_is_scalar);
     #ifdef HAS_CUDA
     // Fused scalar values are emitted inside generated kernels on both backends.
-    if (use_cuda && output->flag(VarFlags::_force_fuse))
+    if (runtime_use_cuda() && output->flag(VarFlags::_force_fuse))
         set_flag(OpFlags::_cuda, 1);
-    if (use_cuda && !save_mem && !use_cuda_host_allocator) {
+    if (runtime_use_cuda() && !save_mem && !use_cuda_host_allocator) {
         set_flag(OpFlags::_cpu, 0);
         set_flag(OpFlags::_cuda, 1);
         if (!output->flag(VarFlags::_force_fuse)) {

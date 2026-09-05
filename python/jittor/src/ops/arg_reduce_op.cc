@@ -12,7 +12,7 @@
 #include "ops/arg_reduce_op.h"
 #include <vector>
 #include "executor.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #include "ops/op_register.h"
 
 namespace jittor {
@@ -35,7 +35,7 @@ ArgReduceOp::ArgReduceOp(Var* x, NanoString op, int dim, bool keepdims)
         this->dim = x->shape.size() - 1;
     dim = this->dim;
     #ifdef HAS_CUDA
-    if (use_cuda) {
+    if (runtime_use_cuda()) {
         static auto cub_arg_reduce = has_op("cub_arg_reduce") ?
             get_op_info("cub_arg_reduce").get_constructor<std::vector<VarPtr>, Var*, Var*, NanoString, bool>()
             : nullptr;

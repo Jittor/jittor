@@ -7,7 +7,7 @@
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #endif
 #include <random>
 
@@ -134,7 +134,7 @@ bool no_cuda_error_when_free = 0;
 
 void jt_init_subprocess() {
     #ifdef HAS_CUDA
-    use_cuda = 0;
+    runtime_device_state().use_cuda = 0;
     runtime_executor().last_is_cuda = false;
     no_cuda_error_when_free = 1;
     #endif

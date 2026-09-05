@@ -11,7 +11,7 @@
 #include "mpi_reduce_op.h"
 #include "ops/op_register.h"
 #include "utils/str_utils.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 
 namespace jittor {
 
@@ -34,7 +34,7 @@ MpiReduceOp::MpiReduceOp(Var* x, NanoString op, int root) : x(x), op(op), root(r
     }
     ASSERT(op == ns_add) << "Not supported MPI op" << op;
     #ifdef HAS_CUDA
-    if (use_device_mpi && use_cuda) {
+    if (use_device_mpi && runtime_use_cuda()) {
         static auto nccl_reduce = has_op("nccl_reduce")
             ? get_op_info("nccl_reduce").get_constructor<VarPtr, Var*, int, int>()
             : nullptr;

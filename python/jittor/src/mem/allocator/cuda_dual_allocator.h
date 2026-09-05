@@ -11,7 +11,7 @@
 #include <cstring>
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #include "var.h"
 #include "mem/allocator.h"
 #include "mem/allocator/sfrl_allocator.h"

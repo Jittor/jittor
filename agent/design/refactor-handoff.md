@@ -558,7 +558,20 @@ fork 不重置计数，避免撞上继承节点的 stamp；嵌套标记在异常
 CPU/结构/JIT 嵌套执行与 backward-leaf 定向 37 passed（3.54s），无 skip；
 本次未追加 CUDA/NPU 实机测试。旧 traversal 头路径和数据符号的外部消费者需改源码并重编。
 
-下一实现重点是 native flags 的实际存储所有权与 config/runtime 分层；不要再逐字段添加只读包装。
+设备模块已整体迁入 `runtime/device.{h,cc}`：`use_cuda/device_id/sync_run` 三个数据全局
+及设备计数/current-device 缓存、切换 hooks、peer 记录均由 NativeRuntime 的设备状态持有。
+flag 宏与生成器通过函数访问真实存储，保留别名、初始化、异常回滚与旧后端 flush 顺序；
+核心、CUDA、ACL、MPI 消费者已接线，旧 `misc/cuda_flags.*` 删除。ROCm 旧转换器存在
+文件名特判，已改为头内显式 IS_ROCM 条件；真实旧 blob 主机探针证明恢复原转换结果。
+设备定向 CPU/CUDA/双卡 32 passed，setter/切换追加 8 passed，新负向/别名 2 passed；
+最终主机/生成器合同 12 passed。CPU-only device.cc 语法与 ACL 三 TU/两 launcher ABI 通过，
+ACL 检查另有未定义符号反向对照。未跑完整门禁或 NPU/ROCm 实机，外部 C++ 扩展必须重编。
+异机 CUDA 可先跑 `tests/core/test_runtime_device_state.py`、
+`tests/backends/cuda/test_runtime_device_state.py` 与 `tests/backends/cuda/test_multi_device.py`；
+NPU 按 `docs/guides/ascend-910b.md` 做真实构建/执行验收，主机桩检查不替代 CANN ABI 验证。
+
+下一实现重点是其余 native flags 与 config/runtime 分层，以及依赖它的后端组织迁移；
+不要再逐字段添加只读包装。
 下文波次表保留为历史证据，不应作为当前已完成范围。
 
 第五十五波新增 3 个严格保持待领的前置：

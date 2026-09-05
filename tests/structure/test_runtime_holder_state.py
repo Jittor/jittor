@@ -32,6 +32,18 @@ int main() {
     assert(&isolated.traversals() != &runtime_traversal_state());
     assert(isolated.traversals().stamp_count() == 0);
     assert(isolated.traversals().active_epochs() == 0);
+    assert(&runtime_device_state() == &native_runtime().devices());
+    assert(&isolated.devices() != &runtime_device_state());
+    assert(isolated.devices().use_cuda == 0);
+    assert(isolated.devices().device_id == -1);
+    assert(isolated.devices().sync_run == 1);
+    assert(isolated.devices().device_count == -1);
+    assert(isolated.devices().current_device == -1);
+    assert(isolated.devices().switch_hooks.empty());
+    assert(isolated.devices().peer_enabled.empty());
+    assert(&runtime_flag_use_cuda() == &runtime_device_state().use_cuda);
+    assert(&runtime_flag_device_id() == &runtime_device_state().device_id);
+    assert(&runtime_flag_sync_run() == &runtime_device_state().sync_run);
     static_assert(!std::is_copy_constructible<RuntimeHolderState>::value, "owner");
     static_assert(!std::is_move_constructible<RuntimeHolderState>::value, "cursor");
     RuntimeHolderState roots;
@@ -102,3 +114,20 @@ def test_traversal_storage_and_implementation_belong_to_runtime():
     assert "EXTERN_LIB int64 tflag_count" not in node
     assert "TraversalEpoch::live_count" not in epoch
     assert "runtime_traversal_state()" in epoch
+
+
+def test_device_header_selects_rocm_callback_without_filename_rewriting(tmp_path):
+    (tmp_path / "cuda_runtime.h").write_text("#define CUDART_VERSION 12000\n")
+    for defines, expected in (([], "cudaLaunchHostFunc"),
+                              (["-DIS_ROCM"], "cudaStreamAddCallback")):
+        result = subprocess.run(
+            [os.environ.get("CXX", "g++"), "-std=c++14", "-DHAS_CUDA",
+             *defines, "-I", str(tmp_path), "-I", str(SRC),
+             "-dM", "-E", "-x", "c++", "-"],
+            input='#include "runtime/device.h"\n',
+            capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        macro = next(line for line in result.stdout.splitlines()
+                     if line.startswith("#define _cudaLaunchHostFunc("))
+        assert expected in macro

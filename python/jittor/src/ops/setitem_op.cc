@@ -17,7 +17,7 @@
 #else
 #include "ops/op_register.h"
 #ifdef HAS_CUDA
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #endif
 #endif
 
@@ -245,7 +245,7 @@ void SetitemOp::jit_prepare(JK& jk) {
         }
     }
     #ifdef HAS_CUDA
-    if (use_cuda) {
+    if (runtime_use_cuda()) {
         int no = o_shape.size();
         STACK_ALLOC(int, masks, no);
         int tdims[6];

@@ -9,7 +9,7 @@
 #include "op_compiler.h"
 #include "profiler/profiler.h"
 #include "misc/fast_shared_ptr.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 
 namespace jittor {
 
@@ -156,7 +156,7 @@ void FusedOp::do_jit_prepare(JK& jk) {
         op->jit_prepare(jk);
     }
     jk << "«JIT:1";
-    if (!use_cuda) {
+    if (!runtime_use_cuda()) {
         // only cpu
         jk << "«JIT_cpu:1";
         this->set_flag(OpFlags::_cuda, 0);

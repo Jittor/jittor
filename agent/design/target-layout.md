@@ -76,7 +76,7 @@ AWESOME 列表、asv 配置在根目录。
 | `src/` 根下 39 个文件 | `src/core/` | 最重要的代码应当有名字 | 1.01（还原的五个文件一起放进去） |
 | `src/misc/nano_*`、`src/type/` | `src/type/` | 类型系统只有一处 | 2.15 |
 | `src/misc/miniz*` | `src/third_party/` | vendored 代码不与核心混排 | — |
-| `src/misc/cuda_flags.cc`、`init.cc`、`profiler/` | `src/runtime/` | 全局状态归 Runtime 对象所在目录 | 2.13 |
+| `src/misc/cuda_flags.cc`、`init.cc`、`profiler/` | `src/runtime/` | cuda_flags 已迁为 runtime/device，设备状态由 NativeRuntime 持有；init/profiler 其余状态仍待迁移 | 2.13 |
 | `src/opt/`、`op_compiler.*`、`jit_key.*`、`jit_compiler.*` | `src/codegen/` | 代码生成是一个子系统 | 3.08 |
 | `src/ops/` 里非元算子（getitem/setitem/argsort/candidate/where/fused_adamw…） | `src/ops/composite/` | 「元算子」成为代码里的边界而非宣传语 | 4.04 |
 | `src/pyjt/`、`src/pybind/` | `src/bindings/` | 绑定是一层 | 2.08 |

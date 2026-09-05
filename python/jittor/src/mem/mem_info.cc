@@ -24,7 +24,7 @@
 #include "op.h"
 #include "var_holder.h"
 #include "graph.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #include "mem/allocator/sfrl_allocator.h"
 #include "mem/allocator/stat_allocator.h"
 #include "mem/allocator/temp_allocator.h"

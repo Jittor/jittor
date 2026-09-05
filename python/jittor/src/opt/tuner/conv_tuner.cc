@@ -25,7 +25,7 @@
 namespace jittor {
 
 using namespace expr;
-extern int use_cuda;
+DECLARE_RUNTIME_FLAG(int, use_cuda);
 
 struct OpInspector {
     // binary mask for
@@ -232,7 +232,7 @@ void ConvTuner::forwardTune(FusedOp* fop) {
         if (!(bop->x->input()->type()==OpType::broadcast && bop->y->input()->type()==OpType::broadcast)) return;
 
         // only support float32,float16 currently
-        if (use_cuda) {
+        if (runtime_flag_use_cuda()) {
             if (!bop->z->dtype().is_float())
                 continue;
         } else {

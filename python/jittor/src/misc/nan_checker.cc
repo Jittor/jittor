@@ -9,7 +9,7 @@
 #include "misc/nan_checker.h"
 #include "ops/op_register.h"
 #ifdef IS_CUDA
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #ifndef IS_ROCM

@@ -8,7 +8,7 @@
 #include "mem/allocator.h"
 #include "ops/device_copy_op.h"
 #include "ops/op_register.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #include "misc/cuda_streams.h"
 #include "mem/swap.h"
 #ifdef HAS_CUDA
@@ -85,7 +85,7 @@ void DeviceCopyOp::run() {
         return;
     }
     #ifdef HAS_CUDA
-    if (use_cuda) {
+    if (runtime_use_cuda()) {
         int src = x->allocator ? x->allocator->device() : -1;
         int dst = y->allocator ? y->allocator->device() : device;
         if (src < 0) {

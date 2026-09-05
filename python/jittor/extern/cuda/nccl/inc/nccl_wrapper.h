@@ -33,7 +33,7 @@ namespace jittor {
 // nccl_dtype() below takes a NanoString; in the JT_NCCL_NO_MPI build we do not
 // pull in mpi_wrapper.h, so include it here rather than rely on that path.
 #include "type/nano_string.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #include "misc/cuda_streams.h"
 
 // helper_cuda.h guards this overload behind `#ifdef NCCL_H_`, so it only appears

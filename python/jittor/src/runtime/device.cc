@@ -6,36 +6,33 @@
 // ***************************************************************
 
 #include "common.h"
+#include "runtime/device.h"
 #ifdef HAS_CUDA
-// Only under HAS_CUDA: without it the header declares `use_cuda`/`device_id`
-// as constants for the rest of the tree, which would clash with the real
-// flag definitions below.
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
-#include "misc/cuda_flags.h"
 #endif
 
 namespace jittor {
 
-DEFINE_FLAG_WITH_SETTER(int, use_cuda, 0,
+DEFINE_RUNTIME_FLAG_WITH_SETTER(int, use_cuda, 0,
     "Use cuda or not. 1 for trying to use cuda, 2 for forcing to use cuda.");
 // NB: compiler.gen_jit_flags extracts this doc with the regex
 // DEFINE_FLAG...\((.*?)\); and then eval()s it as one Python expression, so
 // the text must be a single literal on a single line and must not contain the
 // two characters ");" -- a doc ending a parenthetical would truncate the match
 // there and leave an unterminated string.
-DEFINE_FLAG_WITH_SETTER(int, device_id, -1,
+DEFINE_RUNTIME_FLAG_WITH_SETTER(int, device_id, -1,
     "The CUDA device new Vars are placed on, torch's current device. Setting it switches the device in place -- cudaSetDevice plus a handle swap in every library wrapper -- and never restarts the process; the other devices stay usable. Reads -1 only when no CUDA device exists.");
 // This had a setter whose entire body was `if (sync_run == value) return;
 // sync_run = value;` -- the assignment the macro was about to do anyway.
-DEFINE_FLAG(int, sync_run, 1,
+DEFINE_RUNTIME_FLAG(int, sync_run, 1,
     "Enable per-op-sync or not");
 
 EXTERN_LIB void sync_all(bool device_sync);
 
 #ifdef HAS_CUDA
 int get_device_count() {
-    static int count=-1;
+    auto& count = runtime_device_state().device_count;
     if (count==-1) {
         // cudaGetDeviceCount returns cudaErrorNoDevice (and may leave `count`
         // untouched at -1) when no GPU is visible (e.g. CUDA_VISIBLE_DEVICES="").
@@ -94,7 +91,7 @@ void setter_use_cuda(const int& old_value, const int& requested) {
         // assignment first (so a setter can see, and correct, the new value)
         // and silently took that away: `sync_all` is the one thing in here
         // that must run under the old setting. Restore it around the flush.
-        use_cuda = old_value;
+        runtime_device_state().use_cuda = old_value;
         sync_all(0);
         // If sync_all throws, `use_cuda` stays at old_value and the macro's
         // rollback writes the same thing -- flag and side effect still agree.
@@ -102,7 +99,7 @@ void setter_use_cuda(const int& old_value, const int& requested) {
     // Not a write-back: the macro already assigned the requested value. This
     // publishes the *correction* made above when CUDA was asked for and no
     // device answered, and re-publishes it after the flush above.
-    use_cuda = value;
+    runtime_device_state().use_cuda = value;
 }
 
 #ifdef HAS_CUDA
@@ -110,16 +107,14 @@ void setter_use_cuda(const int& old_value, const int& requested) {
 // The device the CUDA runtime is on, cached so that placing a Var (which asks
 // on every construction) is a load rather than a driver call. -1 means "not
 // asked yet"; get_device_count()==0 keeps it there forever.
-static int cur_device = -1;
-// Function-local so that a hook registered from another translation unit's
-// static initializer (array_op.cc has one) cannot run before this vector is
-// constructed -- the order between two namespace-scope statics is undefined.
+// The runtime accessor constructs the vector before static initializers in
+// backend translation units can register their hooks.
 static vector<device_switch_hook_t>& device_switch_hooks() {
-    static vector<device_switch_hook_t> hooks;
-    return hooks;
+    return runtime_device_state().switch_hooks;
 }
 
 int current_device() {
+    auto& cur_device = runtime_device_state().current_device;
     if (cur_device < 0) {
         if (get_device_count() <= 0) return -1;
         int d = 0;
@@ -132,7 +127,7 @@ int current_device() {
         // on. flag_scope saves whatever it reads on entry and writes it back
         // on exit, so a flag that still said -1 would restore to "unset" and
         // silently leave the scope's device current.
-        device_id = d;
+        runtime_device_state().device_id = d;
     }
     return cur_device;
 }
@@ -143,10 +138,10 @@ void set_current_device(int device) {
         << "Invalid CUDA device index" << device >> ", visible device count is" << count;
     int cur = current_device();
     // The flag names the current device even when nothing has to move.
-    device_id = device;
+    runtime_device_state().device_id = device;
     if (device == cur) return;
     checkCudaErrors(cudaSetDevice(device));
-    cur_device = device;
+    runtime_device_state().current_device = device;
     for (auto hook : device_switch_hooks()) hook(device);
 }
 
@@ -167,7 +162,7 @@ void enable_peer_access(int from, int to) {
     if (from >= n || to >= n) return;
     // One entry per ordered pair; cudaDeviceEnablePeerAccess is per (context,
     // peer) and asking twice is an error rather than a no-op.
-    static vector<char> enabled;
+    auto& enabled = runtime_device_state().peer_enabled;
     if ((int)enabled.size() < n*n) enabled.resize(n*n, 0);
     auto& done = enabled[from*n+to];
     if (done) return;

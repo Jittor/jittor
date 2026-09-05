@@ -12,7 +12,7 @@
 #include "mem/allocator.h"
 #include "pybind/py_var_tracer.h"
 #include "mem/swap.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 
 namespace jittor {
 

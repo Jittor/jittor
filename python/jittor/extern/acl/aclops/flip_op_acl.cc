@@ -20,7 +20,7 @@
 #include "ops/unary_op.h"
 #include "ops/ternary_op.h"
 #include "executor.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #include "mem/allocator.h"
 #include "op_compiler.h"
 #include "ops/op_register.h"

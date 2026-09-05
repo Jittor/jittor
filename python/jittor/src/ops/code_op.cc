@@ -8,7 +8,7 @@
 #include "var.h"
 #include "ops/code_op.h"
 #include "ops/op_register.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #include <mutex>
 #include <unordered_map>
 

@@ -9,7 +9,7 @@
 #include "var.h"
 #include "init.h"
 #include "ops/random_op.h"
-#include "misc/cuda_flags.h"
+#include "runtime/device.h"
 #include "ops/op_register.h"
 
 namespace jittor {
@@ -20,7 +20,7 @@ RandomOp::RandomOp(NanoVector shape, NanoString dtype, NanoString type) {
     // .get_constructor<NanoVector, NanoString>();
     // output = curand_random(shape, dtype);
     #ifdef HAS_CUDA
-    if (use_cuda) {
+    if (runtime_use_cuda()) {
         static VarPtr(*curand_random)(NanoVector, NanoString, NanoString) = nullptr;
         if (!curand_random && has_op("curand_random")) {
             curand_random = get_op_info("curand_random")
