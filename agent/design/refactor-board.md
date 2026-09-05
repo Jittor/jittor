@@ -1,5 +1,8 @@
 # 整改看板
 
+> 第210波：`1b2ec5a9` 迁移 rewrite_op Runtime owner（结构 36 passed）；`1c042033` 统一 NativeProvider ABI admission（结构 10/JIT 1 passed）；`01374b45` 完成 5.25 tracer/NVTX/MANIFEST 脱离 utils drawer（打包/结构 17 passed，尾项已闭环）；`afc58e5f` 收紧 Torch distribution manifest canonical order/type（namespace 34 passed）。未声称 CUDA/NPU 实机。
+
+
 > 第209波：Runtime `use_parallel_op_compiler` owner（结构 35 passed）；Native registration scope + 5.25 dumpdef/build 布局迁移组合提交 `38862b20`（provider 合同 9、布局 11 passed）；Torch synthetic module import metadata `a27e95e4`（namespace 33 passed）。组合提交已记录，后续恢复单任务单提交；未声称 CUDA/NPU 实机。
 
 

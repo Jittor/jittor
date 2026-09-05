@@ -2021,6 +2021,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device/build` | `38862b20` 同时完成 NativeProviderRegistrationScope 与 5.25 dumpdef→build 布局迁移，provider 合同 9、布局 11 passed；该提交为并发组合提交，后续恢复单任务提交。 |
 | `compat` | `a27e95e4` 为 synthetic torch modules 补 `__package__`/ModuleSpec import metadata，namespace 33 passed；独立 distribution 完整发布仍待。 |
 
+### 2026-09-05 第二百一十波：布局尾项/Runtime/ABI 前置
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `1b2ec5a9` 将 `rewrite_op` 纳入 RuntimeContext owner，结构 36 passed；全局状态仍待迁移。 |
+| `device` | `1c042033` 统一 NativeProvider Registration/Metadata/DispatchKey 版本与 struct-size admission，结构 10/JIT 1 passed。 |
+| `build/layout` | `01374b45` 完成 tracer/NVTX/MANIFEST 脱离 utils drawer，打包/结构 17 passed；5.25 该尾项已闭环。 |
+| `compat` | `afc58e5f` 收紧 Torch distribution manifest canonical order/type，namespace 34 passed；独立 distribution 完整发布仍待。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
