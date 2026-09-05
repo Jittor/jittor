@@ -32,6 +32,8 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "lazy_execution": jt.flags.lazy_execution,
         "auto_flush_ops": jt.flags.auto_flush_ops,
         "no_grad": jt.flags.no_grad,
+        "amp_reg": jt.flags.amp_reg,
+        "auto_mixed_precision_level": jt.flags.auto_mixed_precision_level,
         "no_fuse": jt.flags.no_fuse,
         "gopt_disable": jt.flags.gopt_disable,
         "exec_called": jt.flags.exec_called,
@@ -141,6 +143,26 @@ def test_runtime_no_grad_is_a_live_read_only_view():
             jt.runtime.context.no_grad = 0
     finally:
         jt.flags.no_grad = original
+
+
+@pytest.mark.parametrize("flag_name", ["amp_reg", "auto_mixed_precision_level"])
+def test_runtime_amp_flags_are_live_read_only_views(flag_name):
+    import jittor as jt
+
+    original = getattr(jt.flags, flag_name)
+    scoped_value = 2 if flag_name == "amp_reg" else 4
+    try:
+        assert getattr(jt.runtime, flag_name) == original
+        with jt.flag_scope(**{flag_name: scoped_value}):
+            assert getattr(jt.runtime, flag_name) == scoped_value
+            assert jt.runtime.context.snapshot()[flag_name] == scoped_value
+        assert getattr(jt.runtime, flag_name) == original
+        with pytest.raises(AttributeError):
+            setattr(jt.runtime, flag_name, 0)
+        with pytest.raises(AttributeError):
+            setattr(jt.runtime.context, flag_name, 0)
+    finally:
+        setattr(jt.flags, flag_name, original)
 
 
 def test_runtime_gopt_disable_is_a_live_read_only_view_and_cpu_execution_survives():
