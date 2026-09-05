@@ -10,6 +10,7 @@ native Jittor module.
 
 from __future__ import annotations
 
+import importlib.machinery
 import types
 
 
@@ -28,6 +29,14 @@ class TorchNamespace(types.ModuleType):
         super().__init__("torch")
         object.__setattr__(self, "_torch_owner", owner)
         self.__package__ = "torch"
+        # A detached module is not created by the import machinery, so it
+        # otherwise has ``__spec__ = None``.  That makes importlib treat the
+        # published root as a broken module even though its children are
+        # already registered in sys.modules.
+        self.__loader__ = None
+        self.__spec__ = importlib.machinery.ModuleSpec(
+            "torch", loader=None, is_package=True
+        )
         self.__path__ = []
 
     @property

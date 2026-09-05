@@ -1,5 +1,6 @@
 """Identity and ownership contract for the independent Torch namespace seam."""
 
+import sys
 import types
 
 from jittor.compat.torch.namespace import (
@@ -18,6 +19,26 @@ def test_namespace_has_independent_module_identity_and_delegates_public_api():
     assert namespace is not owner
     assert namespace.__name__ == "torch"
     assert namespace.answer is owner.answer
+
+
+def test_namespace_has_importable_package_spec():
+    """A published detached root must remain a valid importlib package."""
+    import importlib.util
+
+    namespace = independent_torch_namespace(types.ModuleType("jittor"))
+    previous = sys.modules.get("torch")
+    sys.modules["torch"] = namespace
+    try:
+        spec = importlib.util.find_spec("torch")
+    finally:
+        if previous is None:
+            sys.modules.pop("torch", None)
+        else:
+            sys.modules["torch"] = previous
+
+    assert spec is namespace.__spec__
+    assert spec.name == "torch"
+    assert spec.submodule_search_locations == []
 
 
 def test_namespace_writes_public_values_to_explicit_owner_only():
