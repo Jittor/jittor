@@ -437,6 +437,9 @@ public:
     size_t erase_device(const std::string& device) {
         if (device.empty())
             internal_error("ACL descriptor device must be non-empty");
+        // Advance even when no entry exists so external owners can reject a
+        // handle created before this teardown.
+        ++device_generations_[device];
         size_t removed = 0;
         for (auto it = devices_.begin(); it != devices_.end();) {
             if (it->second != device) {
@@ -450,7 +453,17 @@ public:
         return removed;
     }
 
+    uint64_t device_generation(const std::string& device) const {
+        if (device.empty())
+            internal_error("ACL descriptor device must be non-empty");
+        auto found = device_generations_.find(device);
+        return found == device_generations_.end() ? 0 : found->second;
+    }
+
     void clear() {
+        // Treat a global cache clear as teardown for every observed device.
+        for (auto& item : device_generations_)
+            ++item.second;
         entries_.clear();
         devices_.clear();
     }
@@ -458,6 +471,7 @@ public:
 private:
     std::map<std::string, Descriptor> entries_;
     std::map<std::string, std::string> devices_;
+    std::map<std::string, uint64_t> device_generations_;
 };
 
 // Shared host-side decoder contract.  It is intentionally not wired into an

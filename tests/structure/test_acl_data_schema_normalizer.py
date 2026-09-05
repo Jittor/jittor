@@ -106,6 +106,9 @@ def test_descriptor_cache_builds_once_and_keeps_device_entries_separate():
     )
     cache = ACL_DATA.DescriptorCache()
     builds = []
+    assert cache.device_generation("npu:0") == 0
+    assert cache.erase_device("npu:0") == 0
+    assert cache.device_generation("npu:0") == 1
     assert cache.get_or_create(key0, lambda key: builds.append(key) or "descriptor-0") == "descriptor-0"
     assert cache.get_or_create(key0, lambda key: builds.append(key) or "wrong") == "descriptor-0"
     assert cache.get_or_create(key1, lambda key: builds.append(key) or "descriptor-1") == "descriptor-1"
@@ -115,12 +118,18 @@ def test_descriptor_cache_builds_once_and_keeps_device_entries_separate():
     assert cache.erase(key0) is False
     assert len(cache) == 1
     assert cache.erase_device("npu:1") == 1
+    assert cache.device_generation("npu:1") == 1
     assert len(cache) == 0
     assert cache.erase_device("npu:1") == 0
+    assert cache.device_generation("npu:1") == 2
     with pytest.raises(ACL_DATA.AclDataInternalError):
         cache.erase_device(1)
+    with pytest.raises(ACL_DATA.AclDataInternalError):
+        cache.device_generation(1)
     cache.clear()
     assert len(cache) == 0
+    assert cache.device_generation("npu:0") == 2
+    assert cache.device_generation("npu:1") == 3
 
 
 @pytest.mark.parametrize("kwargs", [

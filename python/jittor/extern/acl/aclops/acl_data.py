@@ -11,7 +11,7 @@ path over.
 from __future__ import annotations
 
 import math
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 
 
 SCHEMA_VERSION = 1
@@ -207,6 +207,10 @@ class DescriptorCache:
 
     def __init__(self):
         self._entries = OrderedDict()
+        # Device teardown advances this generation even when no cache entry
+        # exists. A future CANN owner can reject stale handles without
+        # exposing runtime pointers through the cache key.
+        self._device_generations = defaultdict(int)
 
     def get_or_create(self, key, builder):
         if key in self._entries:
@@ -234,6 +238,7 @@ class DescriptorCache:
         """
         if not isinstance(device, str) or not device:
             raise AclDataInternalError("ACL descriptor device must be a non-empty string")
+        self._device_generations[device] += 1
         removed = 0
         for key in list(self._entries):
             if isinstance(key, tuple) and len(key) == 6 and key[-1] == device:
@@ -241,5 +246,14 @@ class DescriptorCache:
                 removed += 1
         return removed
 
+    def device_generation(self, device):
+        """Return the host-side invalidation generation for ``device``."""
+        if not isinstance(device, str) or not device:
+            raise AclDataInternalError("ACL descriptor device must be a non-empty string")
+        return self._device_generations[device]
+
     def clear(self):
+        # A global teardown invalidates descriptors on every known device.
+        for device in list(self._device_generations):
+            self._device_generations[device] += 1
         self._entries.clear()

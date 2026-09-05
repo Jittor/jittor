@@ -151,29 +151,31 @@ int main() {
         return std::string("wrong");
     });
     if (&a != &b || a != "descriptor-0" || builds != 1 || cache.size() != 1) return 4;
+    if (cache.device_generation("npu:0") != 0) return 5;
     cache.get_or_create(other_shape, [&](const AclDescriptorKey&) {
         ++builds;
         return std::string("descriptor-1");
     });
-    if (builds != 2 || !cache.contains(other_shape)) return 5;
-    if (!cache.erase(first) || cache.erase(first) || cache.size() != 1) return 6;
-    if (!cache.contains(other_shape)) return 7;
+    if (builds != 2 || !cache.contains(other_shape)) return 6;
+    if (!cache.erase(first) || cache.erase(first) || cache.size() != 1) return 7;
+    if (!cache.contains(other_shape)) return 8;
     auto device_one = make_descriptor_key(decoded, {2, 4}, "float32", "contiguous", "npu:1");
     cache.get_or_create(device_one, [&](const AclDescriptorKey&) {
         ++builds;
         return std::string("descriptor-2");
     });
-    if (cache.size() != 2 || cache.erase_device("npu:1") != 1) return 8;
-    if (cache.contains(device_one) || !cache.contains(other_shape)) return 9;
-    if (cache.erase_device("npu:1") != 0) return 10;
+    if (cache.size() != 2 || cache.erase_device("npu:1") != 1) return 9;
+    if (cache.device_generation("npu:1") != 1) return 10;
+    if (cache.contains(device_one) || !cache.contains(other_shape)) return 11;
+    if (cache.erase_device("npu:1") != 0 || cache.device_generation("npu:1") != 2) return 12;
     try {
         make_descriptor_key(decoded, {-1}, "float32", "contiguous", "npu:0");
-        return 11;
+        return 13;
     } catch (const jittor::UserError&) {
     }
     try {
         cache.erase_device("");
-        return 12;
+        return 14;
     } catch (const jittor::InternalInvariantError&) {
         return 0;
     }
