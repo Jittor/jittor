@@ -799,9 +799,14 @@ class RuntimeContext:
         """Whether backend operators should synchronize after each launch."""
         return self._flags.sync_run
 
+    @property
+    def device_id(self):
+        """Current device selected by the native runtime, or ``-1`` on CPU."""
+        return getattr(self._flags, "device_id", -1)
+
     def snapshot(self):
         """Return an immutable snapshot of the fields owned by this context."""
-        return {"sync_run": int(self.sync_run)}
+        return {"sync_run": int(self.sync_run), "device_id": int(self.device_id)}
 
 
 class RuntimeState:
@@ -819,6 +824,10 @@ class RuntimeState:
     @property
     def sync_run(self):
         return self._context.sync_run
+
+    @property
+    def device_id(self):
+        return self._context.device_id
 
     @property
     def context(self):
@@ -974,7 +983,7 @@ def transpose(x, *dim):
 transpose.__doc__ = origin_transpose.__doc__
 Var.transpose = Var.permute = permute = transpose
 
-def flatten(input, start_dim=0, end_dim=-1):
+def _flatten_cpu(input, start_dim=0, end_dim=-1):
     '''flatten dimentions by reshape'''
     in_shape = input.shape
     start_dim = len(in_shape) + start_dim if start_dim < 0 else start_dim
@@ -989,6 +998,17 @@ def flatten(input, start_dim=0, end_dim=-1):
     out_shape.append(dims)
     for i in range(end_dim+1,len(in_shape),1): out_shape.append(in_shape[i])
     return input.reshape(out_shape)
+
+_runtime_op_registry.register("flatten", "cpu", _flatten_cpu)
+
+def flatten(input, start_dim=0, end_dim=-1):
+    # CPU operations use the registry seam; CUDA keeps the pre-migration
+    # implementation until its native provider is registered.
+    if _runtime_op_registry.backends.backend_for(input) == "cpu":
+        return _runtime_op_registry.dispatch_value(
+            "flatten", input, start_dim, end_dim)
+    return _flatten_cpu(input, start_dim, end_dim)
+
 Var.flatten = flatten
 
 Var.detach_inplace = Var.start_grad

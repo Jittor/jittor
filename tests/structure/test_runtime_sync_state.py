@@ -25,9 +25,12 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
     assert tuple(jt.runtime.__slots__) == ("_context",)
     assert jt.runtime.context.__class__.__name__ == "RuntimeContext"
     assert jt.runtime.context._flags is jt.flags
-    assert jt.runtime.context.snapshot() == {"sync_run": jt.flags.sync_run}
+    assert jt.runtime.context.snapshot() == {
+        "sync_run": jt.flags.sync_run,
+        "device_id": getattr(jt.flags, "device_id", -1),
+    }
     assert not hasattr(jt.runtime, "use_cuda")
-    assert not hasattr(jt.runtime, "device_id")
+    assert jt.runtime.device_id == getattr(jt.flags, "device_id", -1)
 
 
 def test_runtime_context_is_the_single_sync_run_owner():
@@ -45,3 +48,11 @@ def test_runtime_context_is_the_single_sync_run_owner():
             jt.runtime.context = context
     finally:
         jt.flags.sync_run = original
+
+
+def test_runtime_device_id_is_a_live_read_only_view():
+    import jittor as jt
+
+    assert jt.runtime.device_id == getattr(jt.flags, "device_id", -1)
+    with pytest.raises(AttributeError):
+        jt.runtime.device_id = 0

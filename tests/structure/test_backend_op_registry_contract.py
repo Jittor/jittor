@@ -115,3 +115,16 @@ def test_native_cpu_registry_dispatch_matches_outer_and_clamp_values():
         jt.clamp(jt.array([-2.0, 0.5, 3.0]), 0.0, 1.0).numpy(),
         [0.0, 0.5, 1.0],
     )
+
+
+def test_native_cpu_registry_dispatches_flatten_and_reports_it():
+    import numpy as np
+    import jittor as jt
+    from jittor._runtime.core_api import _runtime_op_registry
+
+    assert "flatten" in _runtime_op_registry.supported_ops("cpu")
+    value = jt.array([[1, 2], [3, 4]])
+    np.testing.assert_array_equal(
+        jt.flatten(value).numpy(), np.array([1, 2, 3, 4]))
+    np.testing.assert_array_equal(
+        jt.flatten(value, 0, 1).numpy(), np.array([1, 2, 3, 4]))
