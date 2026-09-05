@@ -1639,7 +1639,8 @@ files = []
 
 #: Stamp version. Bump it when the meaning of a recorded field changes, so an
 #: older stamp is treated as "no stamp" instead of being misread as current.
-CORE_BUILD_STAMP_VERSION = 1
+CORE_BUILD_STAMP_VERSION = 2
+CORE_GENERATOR_SIGNATURE_VERSION = 1
 
 
 def core_build_stamp_path():
@@ -1676,6 +1677,47 @@ def core_source_signature():
     return signature
 
 
+def core_generator_signature():
+    """Describe Python code that generates the core translation units.
+
+    These files live outside ``src/`` and ``extern/``, so the source walk used
+    by the core stamp cannot see edits to them.  Keep both a cheap stat record
+    and a content digest: an editor or checkout normally changes mtime, while
+    the digest also catches an in-place same-size/same-mtime replacement.
+    Missing files are represented explicitly so a partial installation cannot
+    accidentally reuse a stamp made by a complete one.
+    """
+    paths = [
+        os.path.abspath(__file__),
+        os.path.abspath(pyjt_compiler.__file__),
+    ]
+    records = {}
+    for path in paths:
+        relative = os.path.relpath(path, jittor_path)
+        try:
+            info = os.stat(path)
+        except OSError:
+            records[relative] = None
+            continue
+        digest = hashlib.sha256()
+        try:
+            with open(path, "rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        except OSError:
+            records[relative] = None
+            continue
+        records[relative] = {
+            "mtime_ns": info.st_mtime_ns,
+            "size": info.st_size,
+            "sha256": digest.hexdigest(),
+        }
+    return {
+        "version": CORE_GENERATOR_SIGNATURE_VERSION,
+        "files": records,
+    }
+
+
 def core_build_ingredients():
     """Everything besides the sources that the core's compile commands use.
 
@@ -1700,6 +1742,7 @@ def core_build_ingredients():
         "extra_core_files": list(extra_core_files),
         "jit_utils_core_files": list(jit_utils_core_files),
         "os_name": os.name,
+        "generators": core_generator_signature(),
     }
 
 

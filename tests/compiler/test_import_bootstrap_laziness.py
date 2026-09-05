@@ -199,6 +199,21 @@ class TestCoreBuildStamp(unittest.TestCase):
                  + " -DJITTOR_CORE_STAMP_PROBE"}):
             self.assertFalse(self.compiler.core_build_is_current())
 
+    def test_a_changed_generator_makes_the_stamp_stale(self):
+        """The stamp must cover Python code that writes generated C++ files."""
+        self.assertTrue(self.compiler.core_build_is_current())
+        current = self.compiler.core_generator_signature()
+        changed = dict(current)
+        changed["files"] = dict(current["files"])
+        compiler_name = os.path.relpath(self.compiler.__file__,
+                                        self.compiler.jittor_path)
+        changed["files"][compiler_name] = dict(
+            changed["files"][compiler_name])
+        changed["files"][compiler_name]["sha256"] = "0" * 64
+        with mock.patch.object(self.compiler, "core_generator_signature",
+                               return_value=changed):
+            self.assertFalse(self.compiler.core_build_is_current())
+
     def test_a_replaced_core_library_makes_the_stamp_stale(self):
         self.assertTrue(self.compiler.core_build_is_current())
         with mock.patch.object(self.compiler, "_core_output_signature",
