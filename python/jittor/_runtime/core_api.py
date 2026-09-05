@@ -804,9 +804,18 @@ class RuntimeContext:
         """Current device selected by the native runtime, or ``-1`` on CPU."""
         return getattr(self._flags, "device_id", -1)
 
+    @property
+    def use_cuda(self):
+        """Whether the native runtime is configured to use CUDA."""
+        return self._flags.use_cuda
+
     def snapshot(self):
         """Return an immutable snapshot of the fields owned by this context."""
-        return {"sync_run": int(self.sync_run), "device_id": int(self.device_id)}
+        return {
+            "sync_run": int(self.sync_run),
+            "device_id": int(self.device_id),
+            "use_cuda": int(self.use_cuda),
+        }
 
 
 class RuntimeState:
@@ -828,6 +837,10 @@ class RuntimeState:
     @property
     def device_id(self):
         return self._context.device_id
+
+    @property
+    def use_cuda(self):
+        return self._context.use_cuda
 
     @property
     def context(self):
