@@ -173,6 +173,10 @@ class RegistrySnapshot:
         consult a newer live registry for kernel ownership.  The returned
         ``BackendSpec`` is the immutable value captured by this snapshot.
         """
+        if not isinstance(op, str) or not op:
+            raise ValueError("operator id must be a non-empty string")
+        if not isinstance(backend, str) or not backend:
+            raise ValueError("backend name must be a non-empty string")
         provider = self.backend(backend)
         if (op, backend) not in self.kernels:
             raise MissingKernel("no kernel registered for %s/%s" % (op, backend))

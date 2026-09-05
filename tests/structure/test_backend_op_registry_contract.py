@@ -453,6 +453,25 @@ def test_snapshot_provider_query_survives_provider_teardown():
         raise AssertionError("live dispatch remained available after teardown")
 
 
+def test_provider_query_contract_is_closed_over_provider_only_snapshots():
+    """A provider-only snapshot must never invent operator ownership."""
+    snapshot = BackendRegistry((BackendSpec("cpu"),)).snapshot_state()
+    assert snapshot.backend("cpu").name == "cpu"
+    try:
+        snapshot.provider_for("copy", "cpu")
+    except MissingKernel:
+        pass
+    else:
+        raise AssertionError("provider-only snapshot invented a kernel")
+    for op, backend in (("", "cpu"), ("copy", ""), (None, "cpu")):
+        try:
+            snapshot.provider_for(op, backend)
+        except (TypeError, ValueError):
+            pass
+        else:
+            raise AssertionError("invalid snapshot provider query was accepted")
+
+
 def test_provider_registration_is_fail_closed_without_replacement():
     backends = BackendRegistry((BackendSpec("cpu"),))
     ops = OpRegistry(backends)
