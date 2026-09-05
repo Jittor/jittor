@@ -97,11 +97,27 @@ def distribution_manifest():
 
 
 def validate_distribution_aliases(names=None, aliases=DISTRIBUTION_PACKAGE_ALIASES):
-    """Validate alias endpoints and reject ambiguous package aliases."""
+    """Validate alias schema/endpoints and reject ambiguous package aliases.
+
+    Alias declarations are packaging input.  Validate their shape before
+    unpacking so malformed wheel metadata fails with a stable contract error
+    instead of leaking an implementation-level ``ValueError``/``TypeError``.
+    """
 
     present = set(DISTRIBUTION_MODULES if names is None else names)
     seen = set()
-    for source, target in aliases:
+    try:
+        alias_entries = tuple(aliases)
+    except TypeError as exc:
+        raise ValueError("distribution aliases must be an iterable of pairs") from exc
+    for entry in alias_entries:
+        if not isinstance(entry, (tuple, list)) or len(entry) != 2:
+            raise ValueError("distribution alias must be a pair: %r" % (entry,))
+        source, target = entry
+        if not isinstance(source, str) or not isinstance(target, str):
+            raise ValueError(
+                "distribution alias endpoints must be strings: %r" % (entry,)
+            )
         if source == target:
             raise ValueError("distribution alias cannot target itself: %r" % source)
         if source not in present or target not in present:

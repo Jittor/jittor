@@ -97,6 +97,42 @@ def test_distribution_alias_validation_rejects_missing_or_duplicate_endpoints():
         raise AssertionError("duplicate alias source was accepted")
 
 
+def test_distribution_alias_validation_rejects_malformed_entries():
+    from jittor.compat.torch.distribution import validate_distribution_aliases
+
+    for aliases in (
+        (("torch.distributed",),),
+        (("torch.distributed", "torch.distributed.tensor", "extra"),),
+    ):
+        try:
+            validate_distribution_aliases(
+                ("torch.distributed", "torch.distributed.tensor"), aliases
+            )
+        except ValueError as error:
+            assert "must be a pair" in str(error)
+        else:
+            raise AssertionError("malformed alias entry was accepted")
+
+    try:
+        validate_distribution_aliases(
+            ("torch.distributed", "torch.distributed.tensor"),
+            (("torch.distributed", 7),),
+        )
+    except ValueError as error:
+        assert "endpoints must be strings" in str(error)
+    else:
+        raise AssertionError("non-string alias endpoint was accepted")
+
+    try:
+        validate_distribution_aliases(
+            ("torch.distributed",), aliases=None
+        )
+    except ValueError as error:
+        assert "iterable of pairs" in str(error)
+    else:
+        raise AssertionError("non-iterable alias metadata was accepted")
+
+
 def test_distribution_manifest_validation_rejects_inconsistent_package_closure():
     from jittor.compat.torch.distribution import validate_distribution_manifest
 
