@@ -1,5 +1,8 @@
 # 整改看板
 
+> 第201波：异机分发/ABI 前置继续：`b3034f92` 迁移 reuse_array Runtime owner（结构 25 passed）；`27ab42a0` 增加 NativeProviderLifecycleObserver lifecycle sink（C++/JIT contract 通过）；`34ab1d99` 增加 ACL AclAttrRunnerContract host-only binding/consume（ACL 13 passed）；`046d20c4` 完善 standalone torch distribution boundary（namespace 22 + structure 27 passed）。未声称 CUDA/NPU 硬件。
+
+
 > 第200波：跨硬件组织前置继续：`9d8e2a5a` 迁移 auto_convert_64_to_32 Runtime owner（结构 24 + CPU 1 passed）；`46b1fca7` 增加 NativeProviderRegistration ABI/struct-size/generation contract（相关合同 93 passed/2 skipped）；`62ac7f59` 增加 ACL AclDataView/consume host-only consumer seam（ACL 18 passed）；`94637aa5` 建立 standalone torch distribution import manifest（manifest/bootstrap/alias 合同通过）。未声称 CUDA/NPU 实机。
 
 

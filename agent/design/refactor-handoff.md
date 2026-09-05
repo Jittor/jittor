@@ -1940,6 +1940,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `62ac7f59` 增加 ACL AclDataView/consume host-only consumer seam，ACL 合同 18 passed；CANN/NPU runner 接线与实机仍待。 |
 | `compat` | `94637aa5` 建立 standalone torch distribution import manifest，固定模块图/alias/parent closure 合同；独立 distribution 完整发布仍待。 |
 
+### 2026-09-05 第二百零一波：跨硬件 ABI/consumer 前置
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `b3034f92` 将 `reuse_array` 纳入 RuntimeContext owner，结构 25 passed；全局状态仍待迁移。 |
+| `device` | `27ab42a0` 增加非 owning NativeProviderLifecycleObserver，覆盖 provider/op bind/unbind/teardown，C++/JIT 合同通过。 |
+| `device` | `34ab1d99` 增加 ACL AclAttrRunnerContract，host-only ACL 合同 13 passed；CANN/NPU runner 接线与实机仍待。 |
+| `compat` | `046d20c4` 完善 standalone torch distribution manifest/alias/structure boundary，namespace 22、组合结构 27 passed；完整 distribution 仍待。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
