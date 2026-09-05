@@ -13,7 +13,7 @@ MIGRATED_SHAPE_CARDINALITY_BOUNDARIES = {
     "python/jittor/src/ops/code_op.cc": 5,
     "python/jittor/src/ops/numpy_code_op.cc": 4,
     "python/jittor/src/ops/reindex_op.cc": 2,
-    "python/jittor/src/ops/reindex_reduce_op.cc": 2,
+    "python/jittor/src/ops/reindex_reduce_op.cc": 3,
 }
 
 MIGRATED_VIEW_SHAPE_BOUNDARIES = {
@@ -295,7 +295,7 @@ def test_public_shape_cardinality_migration_is_explicit_and_bounded():
         actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
         counts[relative] = actual
         assert actual == expected, (relative, actual, expected)
-    assert sum(counts.values()) == 13
+    assert sum(counts.values()) == 14
 
 
 def test_public_view_shape_migration_is_explicit_and_bounded():
