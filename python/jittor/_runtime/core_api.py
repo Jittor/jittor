@@ -945,6 +945,11 @@ class RuntimeContext:
         return self._flags.trace_var_data
 
     @property
+    def rewrite_op(self):
+        """Whether generated JIT operator sources may be rewritten."""
+        return self._flags.rewrite_op
+
+    @property
     def log_silent(self):
         """Whether informational and warning logs are suppressed."""
         return self._flags.log_silent
@@ -991,6 +996,7 @@ class RuntimeContext:
             "check_graph": int(self.check_graph),
             "missing_grad_error": int(self.missing_grad_error),
             "disable_lock": int(self.disable_lock),
+            "rewrite_op": int(self.rewrite_op),
             "trace_var_data": int(self.trace_var_data),
             "log_silent": int(self.log_silent),
             "log_sync": int(self.log_sync),
@@ -1129,6 +1135,10 @@ class RuntimeState:
     @property
     def trace_var_data(self):
         return self._context.trace_var_data
+
+    @property
+    def rewrite_op(self):
+        return self._context.rewrite_op
 
     @property
     def log_silent(self):

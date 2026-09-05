@@ -55,6 +55,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "check_graph": jt.flags.check_graph,
         "missing_grad_error": jt.flags.missing_grad_error,
         "disable_lock": jt.flags.disable_lock,
+        "rewrite_op": jt.flags.rewrite_op,
         "trace_var_data": jt.flags.trace_var_data,
         "log_silent": jt.flags.log_silent,
         "log_sync": jt.flags.log_sync,
@@ -601,3 +602,21 @@ def test_runtime_trace_var_data_is_a_live_read_only_view():
             jt.runtime.context.trace_var_data = 0
     finally:
         jt.flags.trace_var_data = original
+
+
+def test_runtime_rewrite_op_is_a_live_read_only_view():
+    import jittor as jt
+
+    original = jt.flags.rewrite_op
+    try:
+        assert jt.runtime.rewrite_op == original
+        with jt.flag_scope(rewrite_op=0):
+            assert jt.runtime.rewrite_op == 0
+            assert jt.runtime.context.snapshot()["rewrite_op"] == 0
+        assert jt.runtime.rewrite_op == original
+        with pytest.raises(AttributeError):
+            jt.runtime.rewrite_op = 0
+        with pytest.raises(AttributeError):
+            jt.runtime.context.rewrite_op = 0
+    finally:
+        jt.flags.rewrite_op = original
