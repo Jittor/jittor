@@ -196,3 +196,20 @@ def test_descriptor_cache_rejects_noncanonical_keys_before_insertion():
         with pytest.raises(ACL_DATA.AclDataInternalError):
             cache.get_or_create(key, lambda _: "must-not-build")
         assert len(cache) == 0
+
+
+def test_descriptor_cache_release_does_not_delete_rebuilt_entry():
+    cache = ACL_DATA.DescriptorCache()
+    record = {"schema_version": 1, "op": "Scale", "fields": {}}
+    key = ACL_DATA.descriptor_cache_key(
+        record, shape=(2,), dtype="float32", layout="contiguous", device="npu:0"
+    )
+    cache.get_or_create(key, lambda _: "first")
+    old = cache.acquire(key)
+    assert cache.release(old)
+    cache.get_or_create(key, lambda _: "replacement")
+    assert not cache.release(old)
+    fresh = cache.acquire(key)
+    assert cache.get(fresh) == "replacement"
+    assert cache.release(fresh)
+    assert len(cache) == 0

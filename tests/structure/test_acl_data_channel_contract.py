@@ -43,6 +43,39 @@ def test_acl_data_channel_header_is_cann_free_and_compilable():
     _compile('#include "python/jittor/extern/acl/aclops/acl_data_channel.h"\n')
 
 
+def test_acl_descriptor_release_does_not_delete_rebuilt_entry():
+    source = r'''
+#include "python/jittor/extern/acl/aclops/acl_data_channel.h"
+int main() {
+    using namespace jittor::acl_data;
+    AclAttrSchema schema;
+    AclAttrField dim;
+    dim.type = AclDataType::int64;
+    schema.emplace("dim", dim);
+    AclDataRecord record;
+    record.op = "Scale";
+    record.fields.emplace("dim", AclDataValue::int64_value(1));
+    std::string key;
+    auto decoded = decode_acl_data(record, "Scale", schema, key);
+    auto descriptor_key = make_descriptor_key(decoded, {2}, "float32", "contiguous", "npu:0");
+    AclDescriptorCache<std::string> cache;
+    cache.get_or_create(descriptor_key, [](const AclDescriptorKey&) { return std::string("first"); });
+    auto old = cache.acquire(descriptor_key);
+    if (!cache.release(old) || cache.size() != 0) return 1;
+    cache.get_or_create(descriptor_key, [](const AclDescriptorKey&) { return std::string("replacement"); });
+    if (cache.release(old)) return 2;
+    auto fresh = cache.acquire(descriptor_key);
+    if (cache.get(fresh) != "replacement") return 3;
+    if (!cache.release(fresh) || cache.size() != 0) return 4;
+    return 0;
+}
+'''
+    with tempfile.TemporaryDirectory(prefix="jittor-acl-release-run-") as directory:
+        binary = Path(directory) / "probe"
+        _compile(source, binary)
+        subprocess.run([str(binary)], check=True)
+
+
 def test_acl_data_view_is_borrowed_and_noncopyable():
     source = r'''
 #include "python/jittor/extern/acl/aclops/acl_data_channel.h"

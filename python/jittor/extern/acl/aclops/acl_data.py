@@ -321,6 +321,12 @@ class DescriptorCache:
             raise AclDataInternalError("stale ACL descriptor handle")
         return self._entries[handle.key]
 
+    def release(self, handle):
+        """Release a current lease without deleting a rebuilt entry."""
+        if not self.is_current(handle):
+            return False
+        return self.erase(handle.key)
+
     def erase(self, key):
         """Invalidate one descriptor identity without touching other devices."""
         _validate_descriptor_key(key)

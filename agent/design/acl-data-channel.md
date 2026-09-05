@@ -58,6 +58,13 @@ the canonical descriptor key, so recreating an equivalent descriptor after
 teardown yields the same identity while an external owner can still detect a
 stale handle.
 
+Consumers should call `release(handle)` after the backend call completes. The
+C++ and Python shells treat a stale handle as a no-op (`false`), rather than
+erasing an equivalent descriptor rebuilt after `erase` or `erase_device`.
+This makes delayed callbacks safe: only a lease whose device and entry
+generation are still current can release the live entry. Device teardown
+remains the owner's responsibility and invalidates outstanding leases first.
+
 ## Consumer view lifetime
 
 `AclDataOwner::consume()` and `AclAttrRunnerContract::consume()` decode into

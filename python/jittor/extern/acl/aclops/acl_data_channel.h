@@ -485,6 +485,16 @@ public:
         return entries_.at(handle.canonical);
     }
 
+    // A delayed stale lease must not erase a replacement descriptor.
+    bool release(const AclDescriptorHandle& handle) {
+        if (!is_current(handle))
+            return false;
+        const bool removed = entries_.erase(handle.canonical) != 0;
+        devices_.erase(handle.canonical);
+        ++entry_generations_[handle.canonical];
+        return removed;
+    }
+
     size_t size() const {
         return entries_.size();
     }
