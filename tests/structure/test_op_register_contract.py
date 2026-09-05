@@ -142,3 +142,22 @@ def test_native_provider_metadata_is_a_value_only_host_consumer_contract():
     assert "provider_id" in metadata
     assert "abi_version" in metadata
     assert "struct_size" in metadata
+
+
+def test_native_provider_consumer_contract_is_value_only_and_fail_closed():
+    header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
+        encoding="utf-8")
+    jit_test = (REPO_ROOT / "python/jittor/src/tests/test_op_register.cc").read_text(
+        encoding="utf-8")
+    contract = header[header.index("struct NativeProviderConsumerContract"):
+                      header.index("struct NativeProviderLifecycleObserver")]
+    assert "struct NativeProviderConsumerContract" in header
+    assert "static bool accepts(const NativeProviderMetadata& metadata)" in contract
+    assert "static bool accepts(const NativeProviderMetadata& metadata," in contract
+    assert "metadata.provider_id == dispatch_key.provider_id" in contract
+    assert "metadata.abi_version == dispatch_key.abi_version" in contract
+    assert "shared_ptr" not in contract
+    assert "unique_ptr" not in contract
+    assert "void*" not in contract
+    assert "NativeProviderConsumerContract::accepts(metadata, key)" in jit_test
+    assert "!NativeProviderConsumerContract::accepts(metadata, replacement_key)" in jit_test

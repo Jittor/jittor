@@ -76,6 +76,8 @@ JIT_TEST(native_op_registry_provider_dispatch_boundary) {
     ASSERT(metadata.provider_id == key.provider_id);
     ASSERT(metadata.abi_version == key.abi_version);
     ASSERT(metadata.struct_size == sizeof(NativeProviderRegistration));
+    ASSERT(NativeProviderConsumerContract::accepts(metadata));
+    ASSERT(NativeProviderConsumerContract::accepts(metadata, key));
     ASSERT(registry.providers().size() == 2);
 
     // Replacing a provider is a teardown boundary; stale bindings cannot
@@ -96,6 +98,13 @@ JIT_TEST(native_op_registry_provider_dispatch_boundary) {
     auto replacement_key = registry.resolve_provider(
         "jit_test_provider_dispatch", "cpu");
     ASSERT(registry.is_current(replacement_key));
+    // Each value remains individually well-formed, but a consumer must not
+    // combine snapshots across provider instances.
+    ASSERT(NativeProviderConsumerContract::accepts(replacement_metadata));
+    ASSERT(!NativeProviderConsumerContract::accepts(metadata, replacement_key));
+    ASSERT(!NativeProviderConsumerContract::accepts(replacement_metadata, key));
+    ASSERT(NativeProviderConsumerContract::accepts(replacement_metadata,
+                                                   replacement_key));
     ASSERT(!registry.unregister_provider("missing"));
     ASSERT(registry.unregister_provider("cpu"));
     ASSERT(!registry.has_provider("cpu"));

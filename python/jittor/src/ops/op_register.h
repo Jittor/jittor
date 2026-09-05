@@ -135,6 +135,28 @@ struct NativeOpDispatchKey {
 };
 
 /**
+ * Value-only checks a backend consumer performs before using a published
+ * provider handle.  ``valid()`` on each value is necessary but insufficient:
+ * a cached metadata snapshot and dispatch key can each be valid while
+ * belonging to different provider instances after replacement.  Keeping this
+ * check in the ABI header gives CUDA/ACL consumers one identical fail-closed
+ * boundary without exposing registry storage or backend handle types.
+ */
+struct NativeProviderConsumerContract {
+    static bool accepts(const NativeProviderMetadata& metadata) {
+        return metadata.valid();
+    }
+
+    static bool accepts(const NativeProviderMetadata& metadata,
+                        const NativeOpDispatchKey& dispatch_key) {
+        return accepts(metadata) && dispatch_key.valid() &&
+            metadata.name == dispatch_key.provider &&
+            metadata.provider_id == dispatch_key.provider_id &&
+            metadata.abi_version == dispatch_key.abi_version;
+    }
+};
+
+/**
  * Non-owning lifecycle sink for a native provider.
  *
  * Providers keep their device handles and kernel callables on their side of
