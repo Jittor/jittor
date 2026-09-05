@@ -190,6 +190,12 @@ int main() {
     keep.has_default = true;
     keep.default_value = AclDataValue::bool_value_of(false);
     schema.emplace("keepdim", keep);
+    AclAttrField implementation_only;
+    implementation_only.type = AclDataType::int64;
+    implementation_only.required = false;
+    implementation_only.has_default = true;
+    implementation_only.default_value = AclDataValue::int64_value(7);
+    schema.emplace("implementation_only", implementation_only);
     AclAttrRunnerContract contract("Softmax", schema, {
         {"dim", AclDataType::int64},
         {"keepdim", AclDataType::boolean},
@@ -202,8 +208,16 @@ int main() {
     contract.consume(record, key, [&](const AclDataView& attrs) {
         if (attrs.int64("dim") == -1 && !attrs.boolean("keepdim"))
             ++calls;
+        if (attrs.has("implementation_only"))
+            ++calls;
+        try {
+            attrs.int64("implementation_only");
+            ++calls;
+        } catch (const jittor::InternalInvariantError&) {
+            ++calls;
+        }
     });
-    if (calls != 1)
+    if (calls != 2)
         return 1;
     try {
         AclAttrRunnerContract duplicate("Softmax", schema, {

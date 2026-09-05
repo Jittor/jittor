@@ -115,11 +115,12 @@ executed anything.
 entry gives it an operator schema plus a fixed `AclAttrBinding` list; construction
 rejects duplicate, undeclared, or type-incompatible bindings as an
 `InternalInvariantError`. Its `consume()` decodes once, verifies every bound
-field, and then invokes the generated/static consumer with the same bounded
-`AclDataView`. This freezes attribute names and types before a future
-`BaseOpRunner` adapter constructs `AclOpAttr`; it does not include `base_op.h`,
-allocate an ACL object, or make a CANN call. The CPU-only contract probe covers
-the valid path and all three registration failures.
+field, and invokes the generated/static consumer with a bounded `AclDataView`
+whose `has()`/typed accessors reject fields outside that binding list. This
+freezes attribute names and types before a future `BaseOpRunner` adapter
+constructs `AclOpAttr`; it does not include `base_op.h`, allocate an ACL object,
+or make a CANN call. The CPU-only contract probe covers the valid path, the
+binding whitelist, and all three registration failures.
 
 Malformed integration schemas are rejected at owner construction, including
 an invalid type tag on a field without a default. This keeps a bad registry

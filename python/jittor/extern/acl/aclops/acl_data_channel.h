@@ -147,10 +147,14 @@ public:
     }
 
     bool has(const std::string& name) const {
+        if (allowed_fields_ && allowed_fields_->find(name) == allowed_fields_->end())
+            return false;
         return decoded_->fields.find(name) != decoded_->fields.end();
     }
 
     const AclDataValue& value(const std::string& name) const {
+        if (allowed_fields_ && allowed_fields_->find(name) == allowed_fields_->end())
+            internal_error("ACL attribute consumer requested unbound field: " + name);
         auto field = decoded_->fields.find(name);
         if (field == decoded_->fields.end())
             internal_error("ACL attribute consumer requested absent field: " + name);
@@ -200,9 +204,11 @@ public:
 
 private:
     friend class AclDataOwner;
+    friend class AclAttrRunnerContract;
 
-    AclDataView(const AclDecodedData& decoded, const AclAttrSchema& schema)
-        : decoded_(&decoded), schema_(&schema) {}
+    AclDataView(const AclDecodedData& decoded, const AclAttrSchema& schema,
+                const std::set<std::string>* allowed_fields = nullptr)
+        : decoded_(&decoded), schema_(&schema), allowed_fields_(allowed_fields) {}
 
     static void require_type(const std::string& name,
                              const AclDataValue& value,
@@ -215,6 +221,7 @@ private:
 
     const AclDecodedData* decoded_;
     const AclAttrSchema* schema_;
+    const std::set<std::string>* allowed_fields_;
 };
 
 inline void user_error(const std::string& message) {
@@ -451,21 +458,23 @@ public:
     void consume(const AclDataRecord& record,
                  std::string& canonical_key,
                  Consumer&& consumer) const {
-        owner_.consume(record, canonical_key,
-            [&](const AclDataView& attrs) {
-                for (const auto& binding : bindings_) {
-                    if (!attrs.has(binding.name))
-                        internal_error("ACL runner binding has no decoded field: " +
-                                      binding.name);
-                    // value() rechecks the schema/type pair immediately
-                    // before the generated consumer sees the view.
-                    const auto& decoded = attrs.value(binding.name);
-                    if (decoded.type != binding.type)
-                        internal_error("ACL runner binding type disagrees with decoded field: " +
-                                      binding.name);
-                }
-                consumer(attrs);
-            });
+        // Decode once, then expose only the fields registered by this runner.
+        // This keeps a generated consumer from accidentally depending on a
+        // schema field that is not part of its binding contract.
+        AclDecodedData decoded = owner_.decode(record, canonical_key);
+        AclDataView attrs(decoded, owner_.schema(), &bound_names_);
+        for (const auto& binding : bindings_) {
+            if (!attrs.has(binding.name))
+                internal_error("ACL runner binding has no decoded field: " +
+                              binding.name);
+            // value() rechecks the schema/type pair immediately before the
+            // generated consumer sees the view.
+            const auto& decoded_field = attrs.value(binding.name);
+            if (decoded_field.type != binding.type)
+                internal_error("ACL runner binding type disagrees with decoded field: " +
+                              binding.name);
+        }
+        consumer(attrs);
     }
 
 private:
@@ -477,6 +486,7 @@ private:
                 internal_error("ACL runner binding names must be non-empty");
             if (!names.insert(binding.name).second)
                 internal_error("duplicate ACL runner binding: " + binding.name);
+            bound_names_.insert(binding.name);
             const auto field = schema.find(binding.name);
             if (field == schema.end())
                 internal_error("ACL runner binding is not declared in schema: " +
@@ -489,6 +499,7 @@ private:
 
     AclDataOwner owner_;
     AclAttrBindings bindings_;
+    mutable std::set<std::string> bound_names_;
 };
 
 } // namespace acl_data
