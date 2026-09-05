@@ -25,6 +25,25 @@ def test_default_registry_exposes_cpu_and_cuda_capabilities():
     assert registry.get("cuda").supports("synchronize")
 
 
+def test_backend_snapshot_freezes_nested_capabilities_and_preserves_order():
+    capabilities = {"stream": True}
+    registry = BackendRegistry((BackendSpec("cpu", capabilities=capabilities),
+                                BackendSpec("cuda")))
+    snapshot = registry.snapshot()
+    assert tuple(spec.name for spec in snapshot) == ("cpu", "cuda")
+    assert snapshot[0] is registry.get("cpu")
+    capabilities["allocator"] = True
+    assert "allocator" not in registry.get("cpu").capabilities
+    try:
+        snapshot[0].capabilities["allocator"] = True
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("backend capability snapshot remained mutable")
+    assert registry.get("cpu").supports("stream")
+    assert not registry.get("cpu").supports("allocator")
+
+
 def test_cpu_provider_rejects_invalid_allocation_sizes():
     allocator = BackendRegistry.default().get("cpu").allocator
     try:
@@ -48,6 +67,7 @@ def test_operator_registry_dispatches_and_reports_supported_ops():
     assert ops.dispatch("add", "cpu", 2, 3) == 5
     assert ops.supported_ops("cpu") == ("add",)
     assert backends.supported_ops(ops, "cpu") == ("add",)
+    assert ops.snapshot() == (("add", "cpu"),)
 
 
 def test_dispatch_value_selects_backend_from_runtime_location():
@@ -172,6 +192,15 @@ def test_provider_capability_registration_rejects_bad_updates():
             pass
         else:
             raise AssertionError("invalid capability update was accepted")
+
+
+def test_capability_snapshot_updates_only_through_atomic_registry_transition():
+    registry = BackendRegistry((BackendSpec("cpu", capabilities={"stream": True}),))
+    before = registry.snapshot()[0]
+    after = registry.remove_capability("cpu", "stream")
+    assert before.supports("stream")
+    assert not after.supports("stream")
+    assert registry.snapshot()[0] is after
 
 
 def test_provider_capability_removal_is_atomic_and_preserves_other_contracts():

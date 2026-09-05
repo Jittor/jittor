@@ -9,6 +9,7 @@ stage can hand them over atomically.
 
 from dataclasses import dataclass, field, replace
 import threading
+from types import MappingProxyType
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Tuple
 
 
@@ -67,6 +68,19 @@ class BackendSpec:
     synchronize: Optional[Callable[[], None]] = None
     stream: Optional[Callable[[], Any]] = None
     capabilities: Mapping[str, bool] = field(default_factory=dict)
+
+    def __post_init__(self):
+        # ``frozen=True`` only protects the attribute itself.  Freeze the
+        # nested capability map as well so callers cannot bypass registry
+        # locking by retaining and mutating the input dictionary.
+        if not isinstance(self.name, str) or not self.name:
+            raise ValueError("backend name must be a non-empty string")
+        capabilities = dict(self.capabilities)
+        if any(not isinstance(key, str) or not key for key in capabilities):
+            raise ValueError("capability names must be non-empty strings")
+        if any(not isinstance(value, bool) for value in capabilities.values()):
+            raise TypeError("capability state must be a bool")
+        object.__setattr__(self, "capabilities", MappingProxyType(capabilities))
 
     def supports(self, capability: str) -> bool:
         return bool(self.capabilities.get(capability, False))
@@ -189,6 +203,11 @@ class BackendRegistry:
     def names(self) -> Tuple[str, ...]:
         with self._lock:
             return tuple(self._specs)
+
+    def snapshot(self) -> Tuple[BackendSpec, ...]:
+        """Return an immutable point-in-time view of provider contracts."""
+        with self._lock:
+            return tuple(self._specs.values())
 
     def unregister(self, name: str) -> BackendSpec:
         """Remove one provider during backend teardown.
@@ -357,3 +376,8 @@ class OpRegistry:
         self.backends.get(backend)
         with self._lock:
             return tuple(sorted(op for op, bk in self._kernels if bk == backend))
+
+    def snapshot(self) -> Tuple[Tuple[str, str], ...]:
+        """Return the registered operator/backend ownership pairs."""
+        with self._lock:
+            return tuple(sorted(self._kernels))
