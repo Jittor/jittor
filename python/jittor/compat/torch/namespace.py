@@ -60,6 +60,18 @@ class TorchNamespace(types.ModuleType):
             return super().__setattr__(name, value)
         setattr(self.owner, name, value)
 
+    def __delattr__(self, name):
+        """Keep public mutation symmetry with :meth:`__setattr__`.
+
+        Installer code occasionally removes an optional public binding.  A
+        detached namespace must remove that binding from its explicit owner;
+        deleting it only from the view would leave the owner unexpectedly
+        populated and make a later install observe stale state.
+        """
+        if name.startswith("_") or name in self._LOCAL_METADATA:
+            return super().__delattr__(name)
+        delattr(self.owner, name)
+
     def __dir__(self):
         return sorted(set(super().__dir__()) | set(dir(self.owner)))
 

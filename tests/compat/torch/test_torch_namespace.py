@@ -71,6 +71,28 @@ def test_namespace_writes_public_values_to_explicit_owner_only():
     assert namespace.owner is owner
 
 
+def test_namespace_deletes_public_values_from_explicit_owner_only():
+    owner = types.ModuleType("jittor")
+    owner.optional_api = object()
+    namespace = TorchNamespace(owner)
+
+    del namespace.optional_api
+
+    assert not hasattr(owner, "optional_api")
+    assert not hasattr(namespace, "optional_api")
+
+
+def test_namespace_deletes_metadata_locally_without_touching_owner():
+    owner = types.ModuleType("jittor")
+    namespace = TorchNamespace(owner)
+    namespace.__file__ = "detached-torch"
+
+    del namespace.__file__
+
+    assert not hasattr(namespace, "__file__")
+    assert not hasattr(owner, "__file__")
+
+
 def test_namespace_owner_is_explicit_and_does_not_misidentify_plain_modules():
     owner = types.ModuleType("jittor")
     namespace = independent_torch_namespace(owner)
