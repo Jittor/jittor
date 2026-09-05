@@ -1649,6 +1649,14 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `build` | 复核 9.01：冷启动 import 仍把核心编译放在 import 路径，热缓存优化已落地但冷启动目标未满足。 |
 | `dist` | 复核 8.15–8.18：当前 launcher 仍缺多机参数，单机 Store 聚焦仍有 1 个既有失败；本机无两机/HCCL 环境。 |
 
+### 2026-09-05 第一百六十八波
+
+| 分区 | 结果 |
+| --- | --- |
+| `build` | `d141d8c2` 完成 9.07 一处 import 环境反向写入修复：`cc_path` 保留在模块状态，不污染宿主环境；定向回归 1 passed。 |
+| `device` | 4.06 审计确认 backend_fallback 三态不存在，需与 BackendRegistry/OpRegistry 联动；静态 ACL 失败合同 7 passed，不代表三态完成。 |
+| `gates` | 10.21 审计确认三条 import/include 真环尚未有 allowlist，直接加 lint 会误报；本波无安全 lint 提交。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
