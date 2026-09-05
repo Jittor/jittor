@@ -2,7 +2,9 @@
 
 import types
 
-from jittor.compat.torch.namespace import TorchNamespace, independent_torch_namespace
+from jittor.compat.torch.namespace import (
+    TorchNamespace, independent_torch_namespace, namespace_owner,
+)
 
 
 def test_namespace_has_independent_module_identity_and_delegates_public_api():
@@ -28,3 +30,11 @@ def test_namespace_writes_public_values_to_explicit_owner_only():
     assert not hasattr(owner, "_install_marker")
     assert namespace._install_marker == "torch-only"
     assert namespace.owner is owner
+
+
+def test_namespace_owner_is_explicit_and_does_not_misidentify_plain_modules():
+    owner = types.ModuleType("jittor")
+    namespace = independent_torch_namespace(owner)
+
+    assert namespace_owner(namespace) is owner
+    assert namespace_owner(owner) is None

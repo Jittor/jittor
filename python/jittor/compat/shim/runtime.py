@@ -20,6 +20,7 @@ from .preflight import (
     jittor_python_root, prepare_import_environment, prepend_sys_path,
 )
 from jittor.compat._aliases import torch_namespace_claimable, torch_namespace_owned
+from jittor.compat.torch.namespace import independent_torch_namespace
 from ..diagnostics import EXPECTED, swallowed
 from ..transaction import ActivationTransaction
 
@@ -81,6 +82,7 @@ def _activate_once(
     _preflight_result=None,
     _composition=False,
     _transaction=None,
+    independent_namespace=False,
 ):
     """Enable Jittor-backed ``import torch`` for the current Python process.
 
@@ -132,7 +134,10 @@ def _activate_once(
         transaction.acquire()
         try:
             torch_compat.install(jt, strict=strict_bootstrap)
-            transaction.publish_module(sys.modules, "torch", jt)
+            published = independent_torch_namespace(jt) if independent_namespace else jt
+            if independent_namespace:
+                jt._torch_compat_install_context.registry._published["torch"] = published
+            transaction.publish_module(sys.modules, "torch", published)
             transaction.commit()
         except EXPECTED:
             transaction.rollback()
@@ -140,7 +145,7 @@ def _activate_once(
         finally:
             transaction.release()
         return {
-            "torch": jt,
+            "torch": published,
             "runtime_root": getattr(_preflight_result, "runtime_root", ""),
             "shim_site": "",
             "extensions": [],
@@ -202,10 +207,13 @@ def _activate_once(
             _transaction.mutate_flag(jt.flags, "no_grad", 1)
     from jittor.compat import torch as torch_compat
     torch_compat.install(jt, strict=strict_bootstrap)
+    published = independent_torch_namespace(jt) if independent_namespace else jt
+    if independent_namespace:
+        jt._torch_compat_install_context.registry._published["torch"] = published
     if _transaction is None:
-        sys.modules["torch"] = jt
+        sys.modules["torch"] = published
     else:
-        _transaction.publish_module(sys.modules, "torch", jt)
+        _transaction.publish_module(sys.modules, "torch", published)
     try:
         from jittor.compat.shim.cpp_extension.torch_utils import install_cpp_extension
         install_cpp_extension(
@@ -271,7 +279,7 @@ def _activate_once(
     )
 
     return {
-        "torch": jt,
+        "torch": published,
         "runtime_root": os.fspath(runtime),
         "shim_site": os.fspath(shim_site),
         "extensions": scanned,
@@ -299,6 +307,7 @@ def activate(
     _root_module: Any = None,
     _preflight_result: Any = None,
     _composition: bool = False,
+    independent_namespace: bool = False,
 ):
     """Activate Torch compatibility exactly once for this process.
 
@@ -343,6 +352,7 @@ def activate(
             _preflight_result=_preflight_result,
             _composition=_composition,
             _transaction=transaction,
+            independent_namespace=independent_namespace,
         )
     except EXPECTED as exc:
         transaction.rollback()

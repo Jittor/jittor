@@ -518,6 +518,33 @@ class TestTorchBootstrap(unittest.TestCase):
             )
         autograd.set_policy.assert_called_once_with(policy)
 
+    def test_composition_can_publish_an_independent_torch_namespace(self):
+        from jittor.compat.shim import runtime
+        from jittor.compat.torch.namespace import TorchNamespace
+
+        root = types.ModuleType("_stage7_independent_namespace")
+        root.autograd = types.SimpleNamespace(
+            EXPLICIT_REQUIRES_GRAD=object(), set_policy=mock.Mock()
+        )
+        root._torch_compat_install_context = types.SimpleNamespace(
+            registry=types.SimpleNamespace(_published={})
+        )
+        with mock.patch.object(runtime, "torch_namespace_claimable", return_value=True), \
+                mock.patch.object(runtime, "configure_torch_math_flags"), \
+                mock.patch("jittor.compat.torch.install") as install, \
+                mock.patch.dict(sys.modules, {"jittor": root, "torch": root}, clear=False):
+            result = runtime._activate_once(
+                _root_module=root,
+                _preflight_result=types.SimpleNamespace(active=True, runtime_root="/runtime"),
+                _composition=True,
+                independent_namespace=True,
+            )
+
+        assert isinstance(result["torch"], TorchNamespace)
+        assert result["torch"] is sys.modules["torch"]
+        assert result["torch"].owner is root
+        install.assert_called_once()
+
     def test_activation_failure_rolls_back_outer_path_and_module_mutations(self):
         from jittor.compat.shim import runtime
         from jittor.compat.transaction import ActivationTransaction

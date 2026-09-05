@@ -52,4 +52,12 @@ def independent_torch_namespace(owner):
     return TorchNamespace(owner)
 
 
-__all__ = ["TorchNamespace", "independent_torch_namespace"]
+def namespace_owner(module):
+    """Return the Jittor owner for an independent namespace, if any."""
+
+    if isinstance(module, TorchNamespace):
+        return module.owner
+    return None
+
+
+__all__ = ["TorchNamespace", "independent_torch_namespace", "namespace_owner"]
