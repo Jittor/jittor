@@ -123,6 +123,23 @@ def test_native_provider_lifecycle_consumer_is_value_only_and_non_owning():
                                   header.index("class NativeOpRegistry")]
 
 
+def test_native_provider_observer_scope_is_identity_checked_and_non_owning():
+    header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
+        encoding="utf-8")
+    jit_test = (REPO_ROOT / "python/jittor/src/tests/test_op_register.cc").read_text(
+        encoding="utf-8")
+    scope = header[header.index("class NativeProviderLifecycleObserverScope"):
+                   header.index("// Intentionally process-lived")]
+    assert "class NativeProviderLifecycleObserverScope" in header
+    assert "registry->clear_lifecycle_observer(observer)" in scope
+    assert "registry->set_lifecycle_observer(previous)" in scope
+    assert "shared_ptr" not in scope
+    assert "unique_ptr" not in scope
+    assert "void*" not in scope
+    assert "NativeProviderLifecycleObserverScope scope" in jit_test
+    assert "set_lifecycle_observer(&replacement)" in jit_test
+
+
 def test_native_provider_metadata_is_a_value_only_host_consumer_contract():
     header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
         encoding="utf-8")

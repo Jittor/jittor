@@ -213,6 +213,28 @@ JIT_TEST(native_op_registry_observer_teardown_is_identity_checked) {
     ASSERT(registry.set_lifecycle_observer(nullptr) == nullptr);
 }
 
+JIT_TEST(native_op_registry_observer_scope_restores_identity) {
+    NativeOpRegistry registry;
+    NativeProviderLifecycleProbe first;
+    NativeProviderLifecycleProbe replacement;
+    registry.set_lifecycle_observer(&replacement);
+    {
+        NativeProviderLifecycleObserverScope scope(registry, &first);
+        ASSERT(registry.set_lifecycle_observer(&first) == &first);
+        // A scope must restore the observer that was active before it was
+        // created, even when the consumer exits through normal teardown.
+    }
+    ASSERT(registry.set_lifecycle_observer(nullptr) == &replacement);
+
+    // If another consumer takes ownership before scope teardown, the stale
+    // scope must not detach that replacement observer.
+    {
+        NativeProviderLifecycleObserverScope scope(registry, &first);
+        ASSERT(registry.set_lifecycle_observer(&replacement) == &first);
+    }
+    ASSERT(registry.set_lifecycle_observer(nullptr) == &replacement);
+}
+
 // A constructor resolved on first call, not at load time. The point is what
 // does NOT happen at construction: no registry lookup, so no dependency on
 // this translation unit's static initialiser running after the registry's.

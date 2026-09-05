@@ -261,6 +261,41 @@ private:
     uint32 next_provider_id = 1;
 };
 
+/**
+ * Scoped, non-owning installation of a provider lifecycle observer.
+ *
+ * Provider consumers commonly install their observer while constructing a
+ * backend and must restore the previous observer on every exit path.  The
+ * scope deliberately uses the identity-checked clear operation: if another
+ * consumer replaced the observer before this scope is destroyed, teardown
+ * leaves that replacement untouched instead of detaching it accidentally.
+ */
+class NativeProviderLifecycleObserverScope {
+public:
+    NativeProviderLifecycleObserverScope(
+            NativeOpRegistry& registry,
+            NativeProviderLifecycleObserver* observer)
+        : registry(&registry), observer(observer), previous(nullptr) {
+        ASSERT(observer) << "a lifecycle observer scope requires an observer";
+        previous = registry.set_lifecycle_observer(observer);
+    }
+
+    ~NativeProviderLifecycleObserverScope() {
+        if (registry && registry->clear_lifecycle_observer(observer))
+            registry->set_lifecycle_observer(previous);
+    }
+
+    NativeProviderLifecycleObserverScope(
+            const NativeProviderLifecycleObserverScope&) = delete;
+    NativeProviderLifecycleObserverScope& operator=(
+            const NativeProviderLifecycleObserverScope&) = delete;
+
+private:
+    NativeOpRegistry* registry;
+    NativeProviderLifecycleObserver* observer;
+    NativeProviderLifecycleObserver* previous;
+};
+
 // Intentionally process-lived: registration may happen from static
 // initializers in many translation units, while destruction order is not
 // specified across those units.
