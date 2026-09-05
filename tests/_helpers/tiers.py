@@ -289,6 +289,27 @@ def worker_thread_budget(workers, available=None):
     return max(1, available // workers)
 
 
+def runtime_workers(configured_workers=None, available=None):
+    """Return the xdist workers a gate can actually start.
+
+    Keep this policy in the shared tier module so the nox session and the
+    standalone budget report cannot disagree about the prediction.  ``None``
+    uses the checked-in gate size; ``available`` is injectable for tests.
+    """
+    if configured_workers is None:
+        configured_workers = SMOKE_WORKERS
+    if (isinstance(configured_workers, bool)
+            or not isinstance(configured_workers, int)
+            or configured_workers < 1):
+        raise ValueError("configured_workers must be a positive integer")
+    if available is None:
+        available = effective_cpu_count()
+    if (isinstance(available, bool) or not isinstance(available, int)
+            or available < 1):
+        raise ValueError("available must be a positive integer")
+    return max(1, min(configured_workers, available))
+
+
 def effective_cpu_count():
     """Return CPUs the gate can actually consume, including cgroup quota.
 
@@ -374,7 +395,7 @@ def budget_report(workers=None, configured_workers=None):
     actual`` rather than silently relabelling the run as a one-worker gate.
     """
     if workers is None:
-        workers = SMOKE_WORKERS
+        workers = runtime_workers(configured_workers)
     if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
         raise ValueError("workers must be a positive integer")
     if configured_workers is not None and (

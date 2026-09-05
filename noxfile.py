@@ -27,7 +27,8 @@ try:
         torch_arguments as gate_torch_arguments,
     )
     from _helpers.tiers import (  # noqa: E402
-        budget_report, effective_cpu_count, worker_thread_budget)
+        budget_report, effective_cpu_count, runtime_workers,
+        worker_thread_budget)
     from _helpers.process_modes import TORCH_MODE_PATHS  # noqa: E402
 finally:
     sys.path.remove(str(REPO_ROOT / "tests"))
@@ -609,7 +610,7 @@ def _runtime_gate_workers():
     one-core container it runs one worker instead of four workers competing
     for the same quota.
     """
-    return max(1, min(GATE_WORKERS, effective_cpu_count()))
+    return runtime_workers(GATE_WORKERS)
 
 
 def _xdist(workers, distribution="loadfile"):

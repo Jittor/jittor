@@ -186,7 +186,7 @@ class TestBudget(unittest.TestCase):
     def test_budget_report_exposes_each_non_divisible_cost(self):
         report = tiers.budget_report()
         self.assertEqual(set(report["sessions"]), {"native", "torch"})
-        self.assertEqual(report["workers"], tiers.SMOKE_WORKERS)
+        self.assertEqual(report["workers"], tiers.runtime_workers())
         self.assertEqual(report["configured_workers"], tiers.SMOKE_WORKERS)
         self.assertGreaterEqual(report["effective_cpus"], 1)
         self.assertGreaterEqual(report["threads_per_worker"], 1)
@@ -208,6 +208,24 @@ class TestBudget(unittest.TestCase):
         report = tiers.budget_report(workers=1, configured_workers=4)
         self.assertEqual(report["workers"], 1)
         self.assertEqual(report["configured_workers"], 4)
+
+    def test_budget_report_default_uses_runtime_worker_cap(self):
+        original = tiers.effective_cpu_count
+        try:
+            tiers.effective_cpu_count = lambda: 1
+            report = tiers.budget_report(configured_workers=4)
+        finally:
+            tiers.effective_cpu_count = original
+        self.assertEqual(report["configured_workers"], 4)
+        self.assertEqual(report["workers"], 1)
+
+    def test_runtime_workers_validates_and_caps_configuration(self):
+        self.assertEqual(tiers.runtime_workers(4, available=2), 2)
+        self.assertEqual(tiers.runtime_workers(1, available=8), 1)
+        for configured, available in ((0, 4), (-1, 4), (4, 0)):
+            with self.subTest(configured=configured, available=available):
+                with self.assertRaises(ValueError):
+                    tiers.runtime_workers(configured, available)
 
     def test_budget_report_rejects_non_positive_worker_counts(self):
         for kwargs in ({"workers": 0}, {"workers": -1},

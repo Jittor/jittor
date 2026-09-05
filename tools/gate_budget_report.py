@@ -15,7 +15,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--workers", type=int, default=None,
-        help="xdist workers actually started after runtime cgroup capping")
+        help="xdist workers actually started; omitted means runtime cgroup cap")
     parser.add_argument(
         "--configured-workers", type=int, default=None,
         help="workers requested by the gate before runtime cgroup capping")
