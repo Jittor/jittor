@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；当前状态基线 `34939576`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 当前 1647 个 |
+| 分支 | `2.0-refactor`；当前状态基线 `b84498c4`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 当前 1652 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **211** / 进行中 **0** / 待领 **61** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
@@ -1794,6 +1794,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `ba2c88e5` 增加 `unregister_backend` 的 kernel 原子 teardown，重复/未知注销 fail-closed；结构/行为 11 passed。4.03/4.04 native 全量接线仍待领。 |
 | `compat` | `d52f02ac` 锁定 activation 后的 native/independent namespace 模式，冲突切换硬失败；bootstrap/namespace 11 passed。7.12 完整模块迁移仍待领。 |
 | `gates` | `cab14f53` 将实际 cgroup v1/v2 quota 纳入 xdist worker 上限，结构/环境 24 passed；0.15 完整时长仍待最终验收。 |
+
+### 2026-09-05 第一百八十六波
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `78fec631` 将 `no_grad` 纳入 RuntimeContext owner，snapshot/只读/flag_scope 结构 8 passed；2.13 其余状态仍待领。 |
+| `device` | `b83e6889` 支持 provider replacement 并在替换时原子清理旧 kernels，结构/行为 13 passed；4.03/4.04 native 全量接线仍待领。 |
+| `compat` | `b84498c4` 将独立 TorchNamespace 子模块绑定纳入事务与失败回滚，定向 9 passed；7.12 完整模块迁移仍待领。 |
+| `gates` | `c7bfe24b` 在 pytest 前按 worker/cgroup 预算 fail-closed，结构/环境 24 passed；0.15 完整时长仍待最终验收。 |
 
 ## 7. 接手怎么开始
 
