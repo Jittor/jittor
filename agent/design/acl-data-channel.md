@@ -53,6 +53,10 @@ from before `erase(key)` remains stale even if the same canonical key is built
 again immediately; checking only the device generation would incorrectly make
 that old handle appear live.
 
+The Python host-only cache exposes the same `device_size(device)` diagnostic as
+the C++ cache. It counts live value entries for one device and is intended for
+teardown assertions only; it never exposes or owns a CANN descriptor handle.
+
 The generation is lifecycle bookkeeping only. It is deliberately absent from
 the canonical descriptor key, so recreating an equivalent descriptor after
 teardown yields the same identity while an external owner can still detect a

@@ -352,6 +352,20 @@ class DescriptorCache:
                 removed += 1
         return removed
 
+    def device_size(self, device):
+        """Return live descriptor count for one device.
+
+        This value-only diagnostic mirrors the C++ host-only cache and lets a
+        backend teardown verify its device-local entries were drained without
+        exposing a CANN handle.
+        """
+        if not isinstance(device, str) or not device:
+            raise AclDataInternalError("ACL descriptor device must be a non-empty string")
+        return sum(
+            1 for key in self._entries
+            if isinstance(key, tuple) and len(key) == 6 and key[-1] == device
+        )
+
     def device_generation(self, device):
         """Return the host-side invalidation generation for ``device``."""
         if not isinstance(device, str) or not device:

@@ -115,14 +115,18 @@ def test_descriptor_cache_builds_once_and_keeps_device_entries_separate():
     assert cache.get_or_create(key0, lambda key: builds.append(key) or "wrong") == "descriptor-0"
     assert cache.get_or_create(key1, lambda key: builds.append(key) or "descriptor-1") == "descriptor-1"
     assert len(cache) == 2
+    assert cache.device_size("npu:0") == 1
+    assert cache.device_size("npu:1") == 1
     assert len(builds) == 2
     assert cache.erase(key0) is True
+    assert cache.device_size("npu:0") == 0
     assert cache.erase(key0) is False
     assert len(cache) == 1
     # A global clear must invalidate a device that was only observed through
     # insertion, without requiring a prior per-device erase.
     assert cache.device_generation("npu:1") == 0
     assert cache.erase_device("npu:1") == 1
+    assert cache.device_size("npu:1") == 0
     assert cache.device_generation("npu:1") == 1
     assert len(cache) == 0
     assert cache.erase_device("npu:1") == 0
@@ -131,6 +135,8 @@ def test_descriptor_cache_builds_once_and_keeps_device_entries_separate():
         cache.erase_device(1)
     with pytest.raises(ACL_DATA.AclDataInternalError):
         cache.device_generation(1)
+    with pytest.raises(ACL_DATA.AclDataInternalError):
+        cache.device_size(1)
     cache.clear()
     assert len(cache) == 0
     assert cache.device_generation("npu:0") == 2
