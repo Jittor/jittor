@@ -135,7 +135,9 @@ class BackendRegistry:
         location = getattr(value, "location", None)
         if callable(location):
             location = location()
-        if location in (None, "cpu", "host"):
+        # Native CPU Vars report ``location() == "none"`` (the device is
+        # implicit), while lightweight callers commonly use ``cpu``/``host``.
+        if location in (None, "none", "cpu", "host"):
             return "cpu"
         if isinstance(location, str) and location.startswith("cuda"):
             return "cuda"

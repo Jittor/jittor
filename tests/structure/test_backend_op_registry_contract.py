@@ -66,6 +66,17 @@ def test_dispatch_value_selects_backend_from_runtime_location():
     assert ops.dispatch_value("where", CudaValue(), 2) == ("cuda", 2)
 
 
+def test_native_cpu_location_none_resolves_to_cpu():
+    class NativeCpuValue:
+        def location(self):
+            return "none"
+
+    backends = BackendRegistry((BackendSpec("cpu"),))
+    ops = OpRegistry(backends)
+    ops.register("outer", "cpu", lambda value, suffix: ("cpu", suffix))
+    assert ops.dispatch_value("outer", NativeCpuValue(), 3) == ("cpu", 3)
+
+
 def test_registry_rejects_duplicate_and_missing_entries():
     backends = BackendRegistry((BackendSpec("cpu"),))
     try:
@@ -87,3 +98,20 @@ def test_registry_rejects_duplicate_and_missing_entries():
         pass
     else:
         raise AssertionError("missing kernel was silently accepted")
+
+
+def test_native_cpu_registry_dispatch_matches_outer_and_clamp_values():
+    # Keep the registry contract test lightweight at collection time; the
+    # local import still exercises the actual CPU runtime dispatch path.
+    import numpy as np
+    import jittor as jt
+
+    x = jt.array([1, 2, 3])
+    y = jt.array([4, 5])
+    np.testing.assert_array_equal(
+        jt.outer(x, y).numpy(), np.outer([1, 2, 3], [4, 5])
+    )
+    np.testing.assert_allclose(
+        jt.clamp(jt.array([-2.0, 0.5, 3.0]), 0.0, 1.0).numpy(),
+        [0.0, 0.5, 1.0],
+    )
