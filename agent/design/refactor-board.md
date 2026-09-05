@@ -144,6 +144,8 @@
 >
 > 第176波 8.12 整卡审计：六路 cuDNN legacy cache 仍分别使用字符串 JK key、共享 process-global map，缺 dtype/layout/strides/workspace/device 维度；完整迁移需要共享 POD header、六处 EXTERN_LIB ABI、per-device 生命周期和真实 CUDA 回归。本波无代码提交。
 >
+> 用户范围调整：ACL/HCCL/NPU 与多机实机任务已按用户授权标为「并入 硬件验收」，不计作当前代码待领；8.06/10.19 等混合代码任务仍保留待领。
+>
 > 第159波增量（7.03，六个 cohort）：`16333333` amax/amin/count_nonzero 收回原生 owner；`9cba7d68` cumsum/cumprod；`50876abf` sort/argsort/topk/median；`d94c5cbd` sign/trunc/frac/exp2/log10 归一到单一 owner；`a7dcae1c` nan_to_num/logaddexp；`d1535282` outer/tensordot/repeat_interleave 改为再导出原生 owner。**这一波补上了 7.03 一直缺的 CUDA 那一层**：此前约三十个 cohort 的证据全是「CPU N passed」，本波两个 cohort 用 `instantiate_device_type_tests` 在 CPU 与 CUDA 各跑一遍（各 15 passed / 13 passed），并跑出两处真实差异——4096 元素 float32 `cumsum` 两侧相对差 1.4e-06（并行前缀和比顺序扫描更准），512 元素重复键 `argsort` 的 indices 两侧不同而 values 逐位相同；两者都判为后端固有并登记进 fidelity，测试改为钉有界不一致与整数路径逐位相等。**同时修掉两处「一个 API 两个对象」**：`torch.sign(int32)` 返回 float32 而 `Tensor.sign()` 返回 int32（真 PyTorch 2.12 两者都是 int32，属静默错 dtype，修前失败/修后通过的用例已随提交落地）；`repeat_interleave` 的转发 wrapper 让`torch.repeat_interleave is jittor.repeat_interleave` 不成立，两条结构门禁因此长期红，现已转绿（`tests/structure` 由本波开始时的 15 failed 降到 4 failed，其中 2 条是本波修的、其余为别的分区）。新增 skill `agent/skills/torch-api-cohort-promotion/`。7.03 仍按剩余范围保持「待领」。
 >
 > 第160波增量（9.01 import 耗时）：`cf3835ee` 把热缓存 `import jittor` 归因到具体一步（核心编译在无事可做时占 CPU-only 配置的 68%），`51d0439f` 把核心编译收进 `compiler.build_core()` 并加构建戳。热缓存 import CPU-only 1.332→0.413 s **达标**、CUDA 2.457→1.545 s **未达标**；冷缓存与换配置仍全量编译核心，9.01 保持待领。另核实三条**既有**阻塞（基线 `534d375d`，均非 9.01 引入、改前改后位置一致）：`tests/core/test_device_methods.py` 与 `tests/backends/cuda/test_device_methods.py` 同名，pytest 收集期报 import file mismatch 并整体中止 native 门禁，需 `--continue-on-collection-errors` 才跑得完；native 门禁在 `test_complex64_linalg::test_svdvals` 进程 abort；torch 门禁在 `test_torch_compat_autograd::test_a_second_call_does_not_steal_the_first_calls_context` 进程 abort。
@@ -543,7 +545,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 6.P25 | Adan 偏差修正仍用全局 n_step；连带第一步 grad_diff 语义 | 已合并 | pyother | 2d5804a4 |
 | 6.P26 | MaxPool3d 的 ceil_mode 输出尺寸比 torch 多一个平面 | 已合并 | pyops | f982a6b8。修前输出 `(4,4,4)` 对 Torch `(4,4,3)`；修后 CPU 18 passed/15 skipped，真实 CUDA GPU4 尺寸、索引往返和前后向 4 passed |
 | 6.B01 | MPI 的 int64 改 `MPI_INT64_T` | 已合并 | dist | 03518707 |
-| 6.B02 | ACL | 待领 | | 03daccfb 完成 tensor/workspace 前置：CreateAclTensor 返回真实状态；workspace 由 `exe.temp_allocator` 成对保存 owner/handle，失败前清空并抛。5388864c 完成第二代码切片：65 处 executeOp 共用的 `checkRet` 硬失败并带算子/CANN 状态，group/非 group 均检查注册表，fused 调度用 `current_op` 检查当前输入而不再被外层形参遮蔽。两组静态合同均修前 3 failed、修后各 3 passed；910B3 文档覆盖正常无 CPU fallback、三类故障归因和 workspace 进程退出释放。本机无 CANN/NPU；代码阶段完成，仍需 910B3 实机编译并验证正常路径、失败传播和释放后才能完成 |
+| 6.B02 | ACL | 并入 硬件验收 | | `03daccfb`/`5388864c` 已完成 tensor/workspace/checkRet 代码前置与静态合同；按用户授权将 910B3+CANN 正常、失败传播、释放验证并入硬件验收，不计作代码缺口。 |
 | 6.B03 | HCCL 宏错误时抛而非 return | 已合并 | dist | c657ab01 |
 | 6.B04 | 分布式一旦被请求，初始化失败硬失败 | 已合并 | dist | 8ae65e24 |
 | 6.B05 | cuBLAS `use_tensorcore` 三目判断写反 | 已合并 | cudabk | 9f5c3e90 |
@@ -557,7 +559,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 6.B13 | cuFFT `cufftCreate` 后被 `cufftPlanMany` 覆盖的句柄泄漏 | 已合并 | cudabk | 11697758 |
 | 6.B14 | conv3d 三算子迁到 backend plan 缓存 | 已合并 | cudabk | 8432a181 |
 | 6.B15 | MPI 同时识别 PMI_/SLURM_ 环境变量或要求显式声明 | 已合并 | dist | 956c4b23 |
-| 6.B16 | `sync_run` 在 ACL 上实现或删 flag | 待领 | | 15bccb92 已合入 1/N 代码组织阶段：`BaseOpRunner::syncRun` 在 `sync_run=1` 时同步 `aclstream`，检查返回码并以算子名、数值码和 ACL 文本报错；静态合同修前 1 failed、修后 1 passed。Ascend 910B3 文档已给出 CANN/`npu-smi` 前置、`sync_run=1/0` 精确节点与禁止 CPU fallback 检查。本机无 NPU，仍需 910B3 实机验证同步/异步两条路径和失败归因后才能完成 |
+| 6.B16 | `sync_run` 在 ACL 上实现或删 flag | 并入 硬件验收 | | `15bccb92` 已完成 BaseOpRunner 同步尾部和静态合同；按用户授权将 `sync_run=0/1` 在 910B3/CANN 上的真实同步、失败归因并入硬件验收。 |
 | 6.B17 | 析构不得抛 | 已合并 | cudabk | 272f00ba |
 | 7.01 | 「看起来支持其实空操作」一律改为实现或抛 `NotImplementedError`，需显式 `… | 已合并 | 兼容层分区 | ff395ecc b7c12ddc 0446217e 47012a27 46bc9ea7 49d41acf 9053a7c0 |
 | 7.02 | DDP 真实梯度同步 | 已合并 | 兼容层分区 | 4f08f1da |
@@ -596,7 +598,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 7.19 | 精度策略接线：Jittor 一档、torch 两档，底层 matmul/conv 分字段 | 待领 | | 依赖 8.03、7.08；需保持 shim 的卷积与 matmul 语义分离 |
 | 7.20 | fp32 RNN 默认精度与 torch `cudnn.allow_tf32` 映射 | 待领 | | 依赖 8.03、7.19；需 CPU 递推与真实 CUDA 对拍 |
 | 8.01 | 描述符与 workspace 一律 RAII | 已合并 | cudabk | afb08e88 |
-| 8.02 | 集合通信走通信流加事件依赖，支持 `GroupStart/End` 桶化 | 待领 | dist | NCCL 部分已合并：`bd737c65`（改流本身是 4.08 的 `0dfcb3dd`，本波补两卡实测五个集合通信、事件依赖和 200 轮竞态循环）；`c8901f1c`（NCCL GroupStart/End 桶化与延迟 join，两卡实测通过并有 nsys timeline 重叠证据）。HCCL 集合通信同步仍待 Ascend 910B3 + CANN 实机，删除 4 次同步前不能关闭；上机清单见 `agent/manuals/hccl-on-device-verification.md`。 |
+| 8.02 | 集合通信走通信流加事件依赖，支持 `GroupStart/End` 桶化 | 并入 硬件验收 | dist | NCCL 部分已合并并有两卡证据；HCCL 同步优化按用户授权并入 Ascend 910B3/CANN 硬件验收，保留上机清单 `agent/manuals/hccl-on-device-verification.md`。 |
 | 8.03 | 精度策略收敛 | 已合并 | cudabk | dab0690c |
 | 8.04 | cuDNN 9 | 已合并 | cudabk | 7580b6e7（RNN v8 API）+ 9f2e7b80（版本闸门与 wheel 栈） |
 | 8.05 | MKL | 待领 | | |
@@ -609,10 +611,10 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 8.12 | 算子内不再复用全局 jit key 缓冲做缓存键 | 待领 | | |
 | 8.13 | cuTT 计划未命中时的 `cudaDeviceSynchronize` 删除或降流同步 | 已合并 | cudabk | c0d2cc5c |
 | 8.14 | Corex | 待领 | | 32cb3f8f 已合入独立前置：`discover()` 通过 `COREX_HOME` 解析 `bin/clang++`，返回只读结构化结果；新增离线 fake compiler 探测 2 passed 与 Corex 上机指南。正式依赖 4.12 未满足，不删 `process_acl`；本机无 Corex/Iluvatar 硬件，仍需真实设备验证 |
-| 8.15 | 多机 rendezvous | 待领 | dist（2/N） | 6d3b2ae3：TCPStore/FileStore 与 `env://`/`tcp://`；120174a6：NCCL WORLD unique id 经 Store 交换、错误 endpoint 有界超时。仍缺 HCCL、NCCL 子组 unique id、真实两机 collective 与跨机失败验收 |
-| 8.16 | 多机启动器 | 待领 | | |
-| 8.17 | 跨机网络与诊断 | 待领 | | |
-| 8.18 | 多机 checkpoint | 待领 | | |
+| 8.15 | 多机 rendezvous | 并入 多机硬件验收 | dist（2/N） | 已有 TCP/File/NCCL 单机前置；两机/HCCL/NCCL 子组与跨机失败验收按用户授权并入多机硬件验收。 |
+| 8.16 | 多机启动器 | 并入 多机硬件验收 | | `torchrun --nnodes` 等真实两机启动参数和 runner 验收并入多机硬件范围。 |
+| 8.17 | 跨机网络与诊断 | 并入 多机硬件验收 | | 跨机网络、掉线和 watchdog 需要两台机器，按用户授权并入多机硬件范围。 |
+| 8.18 | 多机 checkpoint | 并入 多机硬件验收 | | 两机保存/四机加载和分片 checkpoint 真实验收并入多机硬件范围。 |
 | 8.19 | 布局收尾 | 待领 | | |
 | 9.01 | `import jittor` 不编译不下载 | 待领 | | 361d59b2、c4b21762、cf3835ee、51d0439f 已合入 4/N。1/N+2/N：native import 不再探测 Torch 或无条件调用 NCCL/cuTT/MKL setup；显式分布式请求仍 fail-closed，CPU float32 batched matmul 首次按需 MKL，只读 HOME 配合可写 JITTOR_HOME 可离线导入。3/N（cf3835ee）归因：看板此前的 1.332 s 是 `nvcc_path=""` 的 CPU-only 配置（复现 1.325/1.335 s），CUDA 配置同树是 2.457 s；「40.015 s 冷编译」复现 39.96 s/176 TU，但触发条件是**在 CUDA 配置已热的同一 JITTOR_HOME 里切到 CPU-only**（cfg 指纹不同），不是空缓存。1.325 s 里最大的一项是核心编译在无事可做时的固定开销 0.906 s（68%）：run_cmds 把 176 条命令发进 16 进程 Pool 做空转缓存校验 0.542 s、gen_jit_flags 纯 Python 剥注释扫 176 个 .cc 后写出逐字节相同的头 0.212 s、pyjt 0.104 s。4/N（51d0439f）：核心编译收进 `compiler.build_core()`，加构建戳（src/+extern/ 每文件 mtime_ns+size、编译要素、产物 stat、编译顺序，原子写），戳一致整步跳过、不一致走原完整校验。**热缓存 import CPU-only 1.332→0.413 s（达标），CUDA 2.457→1.545 s（未达标）**；剩余已归因为 extern 自定义算子 49 条命令空转校验 0.351 s 与无条件 import cupy 0.369 s。**冷缓存（空 JITTOR_HOME 68.3 s）与换配置两种情形不变，import 仍编译整个核心**，「移到显式 bootstrap 或首次算子调用」只完成前一半。离线只读 HOME+可写 JITTOR_HOME 两配置均可 import 且算对。门禁（基线 534d375d，三套均逐条 A/B）：tests/compiler 定向 8 passed；native 452→459 passed / 21→20 failed（多出的 7 passed 是新增测试，无新增失败）、torch shim 155 passed/10 failed 完全相同、structure 15 failed/491 passed 相同；CUDA `dtype_coverage` 6 passed、`test_torch_compat_cuda_tf32` 2 passed、`network_training_parity` 8 skipped（既有基线），`tests/backends/cuda` 64 passed/21 failed、`tests/ops/test_ops.py`（shim）172 passed/35 failed，改前改后逐条相同。四处进程 abort 全为**既有**且改前改后中止在同一 nodeid：native `test_complex64_linalg::test_svdvals`、torch `test_torch_compat_autograd::test_a_second_call_does_not_steal_the_first_calls_context`、CUDA `test_cudnn_rnn_dropout::TestCudnnRnnReserveSpace::test_reserve_space_is_queried_once_per_configuration`（即 156/157 波的 cuDNN RNN）、shim CUDA `test_ops.py` 在 `test_reference_getitem_step_float64` 之后。**未达 <1 s（CUDA 配置）且核心编译未惰性化，保持待领** |
 | 9.02 | `install_cuda.py:113-122` 的 `os.execl` 自重启删除，用 d… | 已合并 | 构建 | 6b45c078 |
@@ -658,7 +660,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 10.19 | 每个带 `grad()` 的后端算子有对 CPU 参考的梯度单测 | 待领 | | 26f314fd 已建立并保留 26 项 extern `::grad()` inventory，且补齐 cuDNN 3D 小形状 forward/dx/dw CPU generic 对拍（manifest 结构 2 passed，node 收集 1 条，GPU5 定向 1 passed）；复核后撤回完成标记：HCCL 四项仍无 CPU 参考，多卡实机尚未验收，其中 `HcclAllGatherOp::grad()` 仍直接 `LOGf << "not implemented"`，`HcclAllReduceOp`/`HcclBroadcastOp`/`HcclReduceOp` 也需在 Ascend 910B3 多卡上补真实梯度与 CPU 对照。 |
 | 10.20 | 给测试提供受支持的内省 API，替代 283 处 `jt.flags.*`、137 处 `com… | 待领 | | |
 | 10.21 | import 方向做成 lint 规则 | 待领 | | |
-| 10.22 | 多机门禁 | 待领 | | |
+| 10.22 | 多机门禁 | 并入 多机硬件验收 | | 两节点 DDP/FSDP 和掉线门禁按用户授权并入多机硬件范围。 |
 | 10.23 | 布局收尾 | 待领 | | |
 | 10.24 | fixture 契约按真实来源解析 | 已合并 | gatecheck | `c8ce8760`。原判据拿函数参数与一份只含 pytest 内置 fixture 的冻结清单比较，7 处使用自有 fixture 的合法测试全被误判成「命名成 test 的 helper」；改为按真实来源解析（内置 + 本模块声明 + 沿树 conftest + 该函数的 parametrize argname）。修前 27 passed 1 failed、修后 28 passed；另造反例（参数无人提供的 `test_*` helper）确认判据未被放宽 |
 | 11.01 | 删已被取代的绕过与死路径 | 待领 | | |
