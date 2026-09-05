@@ -409,6 +409,7 @@ public:
             return found->second;
         auto inserted = entries_.emplace(
             canonical, builder(key));
+        devices_.emplace(canonical, key.device);
         return inserted.first->second;
     }
 
@@ -424,15 +425,39 @@ public:
     // descriptor owner is released.  This keeps a shape-equivalent entry
     // from retaining a stale runtime address while preserving other devices.
     bool erase(const AclDescriptorKey& key) {
-        return entries_.erase(canonical_descriptor_key(key)) != 0;
+        const std::string canonical = canonical_descriptor_key(key);
+        const bool removed = entries_.erase(canonical) != 0;
+        devices_.erase(canonical);
+        return removed;
+    }
+
+    // Device teardown can invalidate several descriptors at once. The cache
+    // records only the value-object device identity; it never inspects or
+    // owns an ACL handle, so this remains safe on a host without CANN.
+    size_t erase_device(const std::string& device) {
+        if (device.empty())
+            internal_error("ACL descriptor device must be non-empty");
+        size_t removed = 0;
+        for (auto it = devices_.begin(); it != devices_.end();) {
+            if (it->second != device) {
+                ++it;
+                continue;
+            }
+            entries_.erase(it->first);
+            it = devices_.erase(it);
+            ++removed;
+        }
+        return removed;
     }
 
     void clear() {
         entries_.clear();
+        devices_.clear();
     }
 
 private:
     std::map<std::string, Descriptor> entries_;
+    std::map<std::string, std::string> devices_;
 };
 
 // Shared host-side decoder contract.  It is intentionally not wired into an

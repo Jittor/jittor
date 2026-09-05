@@ -225,5 +225,21 @@ class DescriptorCache:
         """Invalidate one descriptor identity without touching other devices."""
         return self._entries.pop(key, None) is not None
 
+    def erase_device(self, device):
+        """Invalidate every descriptor identity belonging to ``device``.
+
+        Device teardown can invalidate several descriptors at once. Keys are
+        produced by :func:`descriptor_cache_key`, whose device identity is
+        the final tuple component; unrelated caller keys are left untouched.
+        """
+        if not isinstance(device, str) or not device:
+            raise AclDataInternalError("ACL descriptor device must be a non-empty string")
+        removed = 0
+        for key in list(self._entries):
+            if isinstance(key, tuple) and len(key) == 6 and key[-1] == device:
+                del self._entries[key]
+                removed += 1
+        return removed
+
     def clear(self):
         self._entries.clear()

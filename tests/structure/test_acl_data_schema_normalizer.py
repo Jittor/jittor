@@ -114,6 +114,11 @@ def test_descriptor_cache_builds_once_and_keeps_device_entries_separate():
     assert cache.erase(key0) is True
     assert cache.erase(key0) is False
     assert len(cache) == 1
+    assert cache.erase_device("npu:1") == 1
+    assert len(cache) == 0
+    assert cache.erase_device("npu:1") == 0
+    with pytest.raises(ACL_DATA.AclDataInternalError):
+        cache.erase_device(1)
     cache.clear()
     assert len(cache) == 0
 

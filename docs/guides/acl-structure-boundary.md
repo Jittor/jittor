@@ -161,7 +161,10 @@ retains a raw `aclTensor` pointer.  A repeated key invokes the builder once,
 while a shape/layout/device change creates an independent entry.  The owner
 must call `erase(key)` before releasing or replacing a device allocation; this
 invalidates only that identity and prevents a shape-equivalent descriptor from
-retaining a stale address.  `clear()` remains the teardown escape hatch.  This
+retaining a stale address.  `erase_device(device)` invalidates every entry for
+one device during allocator/context teardown, while `clear()` remains the full
+teardown escape hatch.  Neither operation inspects or owns an ACL handle; the
+eventual CANN runner must release its value before invalidating the key.  This
 is a host-only prerequisite, not evidence that ACL descriptors are already
 cached or that addresses are correctly rebound on device.
 
