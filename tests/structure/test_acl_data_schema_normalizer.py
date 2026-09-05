@@ -107,6 +107,8 @@ def test_descriptor_cache_builds_once_and_keeps_device_entries_separate():
     cache = ACL_DATA.DescriptorCache()
     builds = []
     assert cache.device_generation("npu:0") == 0
+    cache.clear()
+    assert cache.device_generation("npu:0") == 0
     assert cache.erase_device("npu:0") == 0
     assert cache.device_generation("npu:0") == 1
     assert cache.get_or_create(key0, lambda key: builds.append(key) or "descriptor-0") == "descriptor-0"

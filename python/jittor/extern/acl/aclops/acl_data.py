@@ -252,7 +252,7 @@ class DescriptorCache:
         """Return the host-side invalidation generation for ``device``."""
         if not isinstance(device, str) or not device:
             raise AclDataInternalError("ACL descriptor device must be a non-empty string")
-        return self._device_generations[device]
+        return self._device_generations.get(device, 0)
 
     def clear(self):
         # A global teardown invalidates descriptors on every known device.
