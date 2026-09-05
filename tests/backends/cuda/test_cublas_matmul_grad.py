@@ -51,6 +51,36 @@ class TestCublasMatmulGrad(unittest.TestCase):
                 match="same dtype",
             )
 
+    def test_batched_and_acc_error_then_compute(self):
+        """A caught cuBLAS user error must not poison the next CUDA launch."""
+        with jt.flag_scope(use_cuda=1):
+            batched_a = jt.array([[[1, 2]]], dtype="int32")
+            batched_b = jt.array([[[1], [2]]], dtype="int32")
+            expect_error(
+                lambda: jt.compile_extern.cublas_ops.cublas_batched_matmul(
+                    batched_a, batched_b, False, False),
+                exc_type=RuntimeError,
+                match="floating-point inputs",
+            )
+
+            acc_a = jt.array([[1, 2]], dtype="int32")
+            acc_b = jt.array([[1], [2]], dtype="int32")
+            expect_error(
+                lambda: jt.compile_extern.cublas_ops.cublas_acc_matmul(
+                    acc_a, acc_b, 0, 0, -1, -1, 0, 0),
+                exc_type=RuntimeError,
+                match="floating-point inputs",
+            )
+
+            out = jt.compile_extern.cublas_ops.cublas_batched_matmul(
+                jt.array([[[1.0, 2.0]]], dtype="float32"),
+                jt.array([[[3.0], [4.0]]], dtype="float32"),
+                False, False,
+            )
+            got, = jt.fetch_sync([out])
+            np.testing.assert_array_equal(
+                got, np.array([[[11.0]]], dtype=np.float32))
+
     def test_non_float_inputs_are_rejected_clearly(self):
         with jt.flag_scope(use_cuda=1):
             a = jt.array([[1, 2]], dtype="int32")
