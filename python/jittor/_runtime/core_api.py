@@ -781,25 +781,53 @@ _core_flags = core.Flags()
 flags = _core_flags
 
 
-class RuntimeState:
-    """Read-only view of execution state owned by the native runtime.
+class RuntimeContext:
+    """Owner for execution state that is still backed by the native runtime.
 
-    This is intentionally a view rather than a second storage location.  In
-    particular, ``flag_scope(sync_run=...)`` continues to update the native
-    flag and this property observes the current value immediately.  Runtime
-    state migration can add fields here without exposing the native ``Flags``
-    object as the long-term public contract.
+    The context deliberately holds the native ``Flags`` object instead of
+    copying individual values.  This gives the runtime a single migration
+    seam while preserving the existing flag_scope and native setter semantics.
     """
 
-    __slots__ = ()
+    __slots__ = ("_flags",)
+
+    def __init__(self, native_flags):
+        self._flags = native_flags
 
     @property
     def sync_run(self):
         """Whether backend operators should synchronize after each launch."""
-        return flags.sync_run
+        return self._flags.sync_run
+
+    def snapshot(self):
+        """Return an immutable snapshot of the fields owned by this context."""
+        return {"sync_run": int(self.sync_run)}
 
 
-runtime = RuntimeState()
+class RuntimeState:
+    """Read-only Python view of the native :class:`RuntimeContext`.
+
+    The view stores no state of its own.  In particular, ``flag_scope`` and
+    direct native flag writes remain immediately visible through this object.
+    """
+
+    __slots__ = ("_context",)
+
+    def __init__(self, context):
+        self._context = context
+
+    @property
+    def sync_run(self):
+        return self._context.sync_run
+
+    @property
+    def context(self):
+        """The state owner, exposed for diagnostics but not replacement."""
+        return self._context
+
+
+_runtime_context = RuntimeContext(flags)
+runtime = RuntimeState(_runtime_context)
 
 
 def var(x, dim=None, dims=None, unbiased=False, keepdims=False):
@@ -1076,7 +1104,7 @@ def clamp_(x, min_v=None, max_v=None):
 Var.clamp_ = clamp_
 
 
-def outer(x, y):
+def _outer_cpu(x, y):
     ''' Returns the outer product of two 1-D vectors.
 
     :param x: the input Var.
@@ -1099,6 +1127,19 @@ def outer(x, y):
             [0 2 4 6]], dtype=int32)
     '''
     return jt.multiply(x.unsqueeze(1), y.unsqueeze(0))
+
+
+_runtime_op_registry.register("outer", "cpu", _outer_cpu)
+
+
+def outer(x, y):
+    # CPU operations use the registry seam; CUDA keeps the pre-migration
+    # implementation until its native provider is registered.
+    if _runtime_op_registry.backends.backend_for(x) == "cpu":
+        return _runtime_op_registry.dispatch_value("outer", x, y)
+    return _outer_cpu(x, y)
+
+
 Var.outer = outer
 
 def erfinv_(x):

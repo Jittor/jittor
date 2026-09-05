@@ -8599,9 +8599,16 @@ class Flags:
 flags: Flags
 '''Jittor running time flags instance'''
 
+class RuntimeContext:
+	@property
+	def sync_run(self) -> int: ...
+	def snapshot(self) -> dict[str, int]: ...
+
 class RuntimeState:
 	@property
 	def sync_run(self) -> int: ...
+	@property
+	def context(self) -> RuntimeContext: ...
 
 runtime: RuntimeState
 '''Read-only view of execution state owned by the native runtime.'''
