@@ -3,6 +3,9 @@
 from .build import build_extension_dirs
 from .discovery import NativeExtension, scan_extension_dirs
 from .runtime import activate, activation_status
+from jittor.compat.torch.namespace import (
+    TorchNamespace, independent_torch_namespace,
+)
 
 enable = activate
 
@@ -13,4 +16,6 @@ __all__ = [
     "build_extension_dirs",
     "enable",
     "scan_extension_dirs",
+    "TorchNamespace",
+    "independent_torch_namespace",
 ]
