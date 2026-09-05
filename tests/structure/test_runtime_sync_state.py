@@ -52,6 +52,9 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "missing_grad_error": jt.flags.missing_grad_error,
         "disable_lock": jt.flags.disable_lock,
         "trace_var_data": jt.flags.trace_var_data,
+        "log_silent": jt.flags.log_silent,
+        "log_sync": jt.flags.log_sync,
+        "log_v": jt.flags.log_v,
     }
     assert jt.runtime.device_id == getattr(jt.flags, "device_id", -1)
     assert jt.runtime.use_cuda == jt.flags.use_cuda
@@ -459,6 +462,25 @@ def test_runtime_missing_grad_error_is_a_live_read_only_view():
             jt.runtime.context.missing_grad_error = 0
     finally:
         jt.flags.missing_grad_error = original
+
+
+@pytest.mark.parametrize("flag_name,value", [("log_silent", 1), ("log_sync", 0), ("log_v", 2)])
+def test_runtime_logging_flags_are_live_read_only_views(flag_name, value):
+    import jittor as jt
+
+    original = getattr(jt.flags, flag_name)
+    try:
+        assert getattr(jt.runtime, flag_name) == original
+        with jt.flag_scope(**{flag_name: value}):
+            assert getattr(jt.runtime, flag_name) == value
+            assert jt.runtime.context.snapshot()[flag_name] == value
+        assert getattr(jt.runtime, flag_name) == original
+        with pytest.raises(AttributeError):
+            setattr(jt.runtime, flag_name, value)
+        with pytest.raises(AttributeError):
+            setattr(jt.runtime.context, flag_name, value)
+    finally:
+        setattr(jt.flags, flag_name, original)
 
 
 def test_runtime_disable_lock_is_a_live_read_only_view():

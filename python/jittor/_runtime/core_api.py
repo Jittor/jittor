@@ -924,6 +924,21 @@ class RuntimeContext:
         """Whether variable data tracing is enabled for Python debugging."""
         return self._flags.trace_var_data
 
+    @property
+    def log_silent(self):
+        """Whether informational and warning logs are suppressed."""
+        return self._flags.log_silent
+
+    @property
+    def log_sync(self):
+        """Whether log records are emitted synchronously."""
+        return self._flags.log_sync
+
+    @property
+    def log_v(self):
+        """Current verbose logging level."""
+        return self._flags.log_v
+
     def snapshot(self):
         """Return an immutable snapshot of the fields owned by this context."""
         return {
@@ -953,6 +968,9 @@ class RuntimeContext:
             "missing_grad_error": int(self.missing_grad_error),
             "disable_lock": int(self.disable_lock),
             "trace_var_data": int(self.trace_var_data),
+            "log_silent": int(self.log_silent),
+            "log_sync": int(self.log_sync),
+            "log_v": int(self.log_v),
         }
 
 
@@ -1071,6 +1089,18 @@ class RuntimeState:
     @property
     def trace_var_data(self):
         return self._context.trace_var_data
+
+    @property
+    def log_silent(self):
+        return self._context.log_silent
+
+    @property
+    def log_sync(self):
+        return self._context.log_sync
+
+    @property
+    def log_v(self):
+        return self._context.log_v
 
     @property
     def context(self):
