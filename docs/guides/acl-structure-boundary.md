@@ -25,6 +25,27 @@ serializes an `OpAttr` assignment in generated C++ while the corresponding
 Python call also determines the JIT key. Move them only after the data-channel
 schema and cache-key contract are defined for every owner.
 
+## Atomic attribute migration gate
+
+An attribute owner may enter the implementation queue only when all of the
+following fields are migrated in the same change. A partial change is not a
+valid intermediate state and must remain a design-only patch:
+
+| Field | Required invariant | Static evidence before device work |
+| --- | --- | --- |
+| `schema_version`/`op` | version and registered owner are validated before decode | decoder contract rejects an unknown version or owner |
+| scalar/vector value | type tag, required/default rule, and canonical vector order are preserved | schema contract covers valid and malformed records |
+| generated `OpAttr` | C++ receives decoded values without parsing generated source text | source check finds no attribute string interpolation for the owner |
+| JIT/cache key | key is made from sorted typed values and schema version | key contract excludes pointer/object identity and address values |
+| failure path | malformed data raises `UserError`; internal schema mismatch raises `InternalInvariantError` | negative cases are asserted before any ACL call |
+
+The first implementation slice must complete this table for one owner (and its
+Python caller, C++ decoder, generated call, and cache key) in one commit. Do
+not migrate only `softmax.dim`, only `triu.diagonal`, or only `_code.py`.
+Descriptor caching and `AclOpFunctions` type erasure remain separate atomic
+changes; combining them with an attribute slice makes rollback and review
+ambiguous.
+
 ## Schema draft
 
 The proposed wire schema is a versioned, operator-scoped map:
@@ -80,3 +101,16 @@ JITTOR_TEST_DEVICES=npu sync_run=1 \
 
 The run is accepted only when the intended ACL operator executes, the log has
 no `fallback cpu`/`cpu fallback`, and `npu-smi info` confirms the target card.
+
+For an attribute owner, the device gate must additionally use its exact test
+node (replace the example with the owner-specific node after the slice lands):
+
+```bash
+source "$ASCEND_HOME/set_env.sh"
+npu-smi info
+JITTOR_TEST_DEVICES=npu sync_run=1 \
+  python -m pytest -q -s tests/backends/npu/test_acl_torch_compat.py -k 'softmax or triu'
+```
+
+Record the card model, CANN version, selected node, and the absence of CPU
+fallback in the handoff. A host-only/static pass never closes the ACL task.
