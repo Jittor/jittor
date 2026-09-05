@@ -2003,6 +2003,16 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `9c7a457a`/`2c2339a5`/`cecfc4f3` 增加 ACL descriptor per-device generation 与 stale-handle guard，host-only 19 passed；CANN/NPU runner仍待。 |
 | `compat` | `3079d012` 收紧 standalone torch alias schema，namespace 35 passed；独立 distribution 完整发布仍待。 |
 
+### 2026-09-05 第二百零八波：运行时/布局/分发前置
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `b70afbce` 将 `float32_matmul_precision` 纳入 RuntimeContext owner，结构 34 passed；全局状态仍待迁移。 |
+| `device` | `c04941d9` 增加 Native fail-closed consumer dispatch probe，结构 8 passed；真实 provider 仍待。 |
+| `device` | ACL descriptor generation/erase 链路已在本波前置提交中完成，未构造 CANN 对象。 |
+| `compat` | `7eb5ea90` 拒绝 Torch distribution alias 链/环，namespace 33 passed；独立 distribution 完整发布仍待。 |
+| `build/layout` | `b70afbce`/`416a7fe4` 将 dlink compiler 迁入 build 包并修路径/结构合同，utils 仅剩资源迁移尾项。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。

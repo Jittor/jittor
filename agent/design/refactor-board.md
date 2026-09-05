@@ -1,5 +1,8 @@
 # 整改看板
 
+> 第208波：跨硬件/布局前置继续：`b70afbce` 迁移 float32_matmul_precision Runtime owner（结构 34 passed）；`c04941d9` 增加 Native fail-closed consumer dispatch probe（结构 8 passed）；`b37ec5c1`/`ad41509a`/`9c7a457a` descriptor 前置已在本波完成链；`7eb5ea90` 收紧 Torch distribution alias canonical endpoint（namespace 33 passed）；`416a7fe4` 完成 dlink compiler 进入 build 包并修路径合同（layout 11+1 passed）。未声称 CUDA/NPU 实机。
+
+
 > 第207波：异机前置继续：`bb0e9897` 迁移 enable_tuner Runtime owner（runtime/root结构合同通过）；`280762dd` 增加 Native observer scope RAII identity restore（结构 8/JIT 2 passed）；`9c7a457a`/`2c2339a5` 增加 ACL descriptor per-device generation/stale-handle guard（host-only 19 passed）；`3079d012` 收紧 standalone torch alias schema validator（namespace 35 passed）。未声称 CUDA/NPU 实机。
 
 
@@ -565,7 +568,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 5.22 | `nn` facade 不导出 39 个下划线名，内部用模块局部名不经 `jt.nn.*` 晚绑… | 已合并 | pyops | 5d67f36b。源码 `jt.nn._*` 使用与 `dir(jt.nn)` 私有导出均为 0，后端私有覆盖迁入 `nn.backends.hooks`；结构 17 passed，CPU 25 passed/8 skipped |
 | 5.23 | 根命名空间显式 `__all__` | 已合并 | pyops | d80d0b99。根星号来源归零，414 名运行时 `__all__` 与生成 pyi 顶层声明一致；namespace 13 passed，结构聚焦 4 passed |
 | 5.24 | 10 个 `jt._*` 跨模块契约 | 待领 | | |
-| 5.25 | `python/jittor/utils/` 拆散 | 待领 | | be2935f0、fdf3b759（部分：translator/server 已迁入 compat，jtune/nvtx 已迁入 jittor.tools，三个仓库脚本已迁入顶层 tools；utils 只剩四个由 C++/编译器硬编码引用的资源，待 3.18 落地后归 compiler 包） |
+| 5.25 | `python/jittor/utils/` 拆散 | 待领 | | be2935f0、fdf3b759（部分：translator/server 已迁入 compat，jtune/nvtx 已迁入 jittor.tools，三个仓库脚本已迁入顶层 tools；utils 只剩四个由 C++/编译器硬编码引用的资源，待 3.18 落地后归 compiler 包） | `b70afbce`/`416a7fe4` 已将 dlink compiler 迁入 build，utils 仅剩 dumpdef/tracer 资源，layout 合同通过；其余资源迁移仍待。
 | 5.26 | 布局收尾 | 待领 | | |
 | 6.C01 | `.item()` 对无符号 dtype | 已合并 | | 9b3023b1 |
 | 6.C02 | `PySlice_Unpack` 返回值检查，三个变量初始化 | 已合并 | bindings | 78d08344 |
