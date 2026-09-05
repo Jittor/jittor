@@ -317,6 +317,33 @@ JIT_TEST(native_op_registry_registration_scope_is_identity_checked) {
     ASSERT(!registry.has_provider("jit_test_scoped_provider"));
 }
 
+static NativeProviderRegistrationScope make_scoped_provider(
+        NativeOpRegistry& registry) {
+    return NativeProviderRegistrationScope(
+        registry, NativeProviderRegistration("jit_test_movable_provider"));
+}
+
+JIT_TEST(native_op_registry_scopes_transfer_teardown_ownership) {
+    NativeOpRegistry registry;
+    NativeProviderLifecycleProbe replacement;
+    registry.set_lifecycle_observer(&replacement);
+    {
+        auto registration = make_scoped_provider(registry);
+        ASSERT(registration.id() != 0);
+        ASSERT(registry.has_provider("jit_test_movable_provider"));
+
+        NativeProviderLifecycleProbe observer;
+        {
+            NativeProviderLifecycleObserverScope first(registry, &observer);
+            NativeProviderLifecycleObserverScope second(move(first));
+            // The moved-from scope must not clear the active observer when it
+            // leaves its inner lifetime; the destination owns restoration.
+        }
+        ASSERT(registry.set_lifecycle_observer(nullptr) == &replacement);
+    }
+    ASSERT(!registry.has_provider("jit_test_movable_provider"));
+}
+
 // A constructor resolved on first call, not at load time. The point is what
 // does NOT happen at construction: no registry lookup, so no dependency on
 // this translation unit's static initialiser running after the registry's.

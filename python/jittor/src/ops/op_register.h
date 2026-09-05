@@ -339,6 +339,20 @@ public:
     NativeProviderLifecycleObserverScope& operator=(
             const NativeProviderLifecycleObserverScope&) = delete;
 
+    // A backend factory may return its observer scope by value. Transfer
+    // ownership explicitly so the moved-from scope cannot restore or clear
+    // the observer a second time.
+    NativeProviderLifecycleObserverScope(
+            NativeProviderLifecycleObserverScope&& other) noexcept
+        : registry(other.registry), observer(other.observer),
+          previous(other.previous) {
+        other.registry = nullptr;
+        other.observer = nullptr;
+        other.previous = nullptr;
+    }
+    NativeProviderLifecycleObserverScope& operator=(
+            NativeProviderLifecycleObserverScope&&) = delete;
+
 private:
     NativeOpRegistry* registry;
     NativeProviderLifecycleObserver* observer;
@@ -373,6 +387,18 @@ public:
             const NativeProviderRegistrationScope&) = delete;
     NativeProviderRegistrationScope& operator=(
             const NativeProviderRegistrationScope&) = delete;
+
+    // Registration scopes are returned by backend factories. Moving the
+    // token transfers teardown ownership and leaves the source inert.
+    NativeProviderRegistrationScope(
+            NativeProviderRegistrationScope&& other) noexcept
+        : registry(other.registry), provider(move(other.provider)),
+          provider_id(other.provider_id) {
+        other.registry = nullptr;
+        other.provider_id = 0;
+    }
+    NativeProviderRegistrationScope& operator=(
+            NativeProviderRegistrationScope&&) = delete;
 
     uint32 id() const { return provider_id; }
 
