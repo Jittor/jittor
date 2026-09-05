@@ -184,6 +184,13 @@ def validate_distribution_manifest(manifest=None):
         parts = name.split(".")
         for index in range(3, len(parts)):
             expected_packages.add(".".join(parts[:index]))
+    for package in packages:
+        if not isinstance(package, str) or not package or any(
+            not part.isidentifier() for part in package.split(".")
+        ):
+            raise ValueError(
+                "distribution manifest contains invalid package name: %r" % (package,)
+            )
     if len(set(packages)) != len(packages):
         raise ValueError("distribution manifest contains duplicate packages")
     if set(packages) != expected_packages:
@@ -195,6 +202,13 @@ def validate_distribution_manifest(manifest=None):
         )
     if any(package not in modules for package in packages):
         raise ValueError("distribution manifest package is not a module")
+    canonical_packages = tuple(
+        sorted(expected_packages, key=lambda item: (item.count("."), item))
+    )
+    if packages != canonical_packages:
+        raise ValueError(
+            "distribution manifest packages must use canonical order"
+        )
 
     validate_distribution_graph(modules, modules=modules, aliases=aliases)
     return True

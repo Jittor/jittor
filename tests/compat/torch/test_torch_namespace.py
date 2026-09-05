@@ -189,6 +189,39 @@ def test_distribution_manifest_validation_rejects_missing_alias_endpoints():
         raise AssertionError("missing alias endpoint was accepted")
 
 
+def test_distribution_manifest_validation_rejects_invalid_or_unordered_packages():
+    from jittor.compat.torch.distribution import validate_distribution_manifest
+
+    base = {
+        "root": "torch.distributed",
+        "modules": (
+            "torch.distributed",
+            "torch.distributed.tensor",
+            "torch.distributed.tensor._api",
+        ),
+        "packages": ("torch.distributed", "torch.distributed.tensor"),
+        "aliases": (),
+    }
+    malformed = dict(base, packages=("torch.distributed", 7))
+    try:
+        validate_distribution_manifest(malformed)
+    except ValueError as error:
+        assert "invalid package name" in str(error)
+    else:
+        raise AssertionError("non-string package name was accepted")
+
+    malformed = dict(
+        base,
+        packages=("torch.distributed.tensor", "torch.distributed"),
+    )
+    try:
+        validate_distribution_manifest(malformed)
+    except ValueError as error:
+        assert "canonical order" in str(error)
+    else:
+        raise AssertionError("unordered package metadata was accepted")
+
+
 def _small_distribution_fixture():
     """Build a backend-free live publication graph for validator tests."""
     import types
