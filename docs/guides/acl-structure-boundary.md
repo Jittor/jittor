@@ -46,7 +46,7 @@ Descriptor caching and `AclOpFunctions` type erasure remain separate atomic
 changes; combining them with an attribute slice makes rollback and review
 ambiguous.
 
-## Schema draft
+## Schema and host-only decoder boundary
 
 The proposed wire schema is a versioned, operator-scoped map:
 
@@ -59,37 +59,47 @@ The proposed wire schema is a versioned, operator-scoped map:
 - `cache_key`: sorted `(field_name, type_tag, value)` tuples plus schema version;
   pointer addresses and Python object ids are forbidden.
 
-The C++ decode entry should be one `BaseOpRunner` helper that validates the
-operator name, schema version, type tag, and required fields before constructing
-an `OpAttr`. This is a design target only; no such shared decoder exists yet.
+The host-only C++ decoder boundary is now defined in
+`python/jittor/extern/acl/aclops/acl_data_channel.h`. It is one shared decoder
+boundary. The `BaseOpRunner` helper is the future consumer; the decoder
+validates the
+operator name, schema version, type tag, and required fields before an owner
+constructs an `OpAttr`. The header has no
+ACL/CANN include and can be compiled on a CPU-only host; it is deliberately not
+wired into an ACL runner until the first owner migrates its schema, generated
+attribute construction, and JIT key atomically.
 
-The host-side half of this contract now lives in
+The Python host-side half of this contract lives in
 `python/jittor/extern/acl/aclops/acl_data.py`. `validate_acl_data()` applies
 schema defaults, rejects unknown or wrongly typed fields, and emits an
 address-independent `canonical_cache_key`. It has no CANN dependency and does
 not change the existing generated `OpAttr` path; the module is therefore safe
-to exercise on a CPU-only host while the C++ decoder and the first attribute
-owner remain separate migrations. The negative contract is covered by
+to exercise on a CPU-only host. The negative contract is covered by
 `tests/structure/test_acl_data_schema_normalizer.py`.
 
-The proposed interface is:
+The C++ interface is:
 
 ```cpp
 AclDecodedData decode_acl_data(
-    const DataMap& data, string_view expected_op,
-    const AttrSchema& schema, string& canonical_cache_key);
+    const AclDataRecord& record, const std::string& expected_op,
+    const AclAttrSchema& schema, std::string& canonical_cache_key);
 ```
 
-Malformed user data (unknown field, wrong type, missing required value, or
-non-canonical vector) must raise `UserError`; a violated internal schema must
-raise `InternalInvariantError`. The helper must produce the canonical cache key
-from sorted typed values before the owner constructs its `OpAttr`. It must not
-read pointer addresses, process-global state, or Python object identity.
+Malformed user data (unknown field, wrong type, missing required value, a
+non-canonical vector representation, or an unsupported schema version) raises
+`UserError`; a violated internal schema
+raises `InternalInvariantError`. The helper produces the canonical cache key
+from sorted typed values before the owner constructs its `OpAttr`. Vectors keep
+their semantic order while the map and field encoding are deterministic. It
+must not read pointer addresses, process-global state, or Python object identity.
+The host-only compile and runtime contract is covered by
+`tests/structure/test_acl_data_channel_contract.py`.
 
 ## Migration order
 
-1. Define the data-channel schema and its cache-key representation for one
-   non-pooled owner, with a static generated-code contract.
+1. **Done on the host:** define the data-channel schema and its cache-key
+   representation, with a C++14 static/generated-code contract. This does not
+   claim that an ACL operator consumes the channel yet.
 2. Migrate `softmax.dim` or `triu.diagonal` as the first attribute owner; keep
    `pool_op.py` out of this step because pooled descriptors have a separate
    lifetime/cache contract.

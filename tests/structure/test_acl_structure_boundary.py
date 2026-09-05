@@ -30,7 +30,7 @@ def test_acl_structure_boundary_names_atomic_migrations_and_hardware_gate():
         "type_tag",
         "BaseOpRunner` helper",
         "AclDecodedData decode_acl_data",
-        "DataMap& data",
+        "AclDataRecord& record",
         "UserError",
         "InternalInvariantError",
         "canonical_cache_key",
@@ -46,4 +46,4 @@ def test_acl_data_schema_contract_for_future_decoder():
     assert "typed homogeneous `int64[]`/`float64[]`/`bool[]`" in text
     assert "pointer addresses and Python object ids are forbidden" in text
     assert "validates the\noperator name, schema version, type tag, and required fields" in text
-    assert "no such shared decoder exists yet" in text
+    assert "host-only C++ decoder boundary" in text

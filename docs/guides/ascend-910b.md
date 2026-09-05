@@ -682,3 +682,41 @@ see `agent/skills/acl-host-syntax-check`. That check catches parse errors,
 unknown identifiers, and a workspace query passed where a launcher belongs. It
 cannot check the arguments of an `aclnnXxxGetWorkspaceSize` call, because those
 signatures are not knowable without the SDK. It is not hardware validation.
+
+## ACL attribute data-channel owner
+
+The host-only attribute channel is defined by
+`python/jittor/extern/acl/aclops/acl_data_channel.h`. It is intentionally
+compiled before any CANN probe: the header owns the versioned record, typed
+scalar/vector values, schema defaults, and deterministic cache key, but it does
+not call ACL or construct an `aclTensor`. The corresponding source contract is
+`tests/structure/test_acl_data_channel_contract.py` and can be run on a CPU
+host:
+
+```bash
+python -m pytest -q \
+  tests/structure/test_acl_data_channel_contract.py \
+  tests/structure/test_acl_data_schema_normalizer.py
+```
+
+On an Ascend 910B3, the first attribute owner must be validated only after its
+Python caller, generated `OpAttr` construction, and JIT key are migrated in the
+same change. Source the CANN environment, select the allocated card, and run
+the owner-specific node (the example below uses the current softmax/triu
+cohort):
+
+```bash
+source "$CANN_SET_ENV"
+npu-smi info
+export ASCEND_RT_VISIBLE_DEVICES=<allocated-device>
+JITTOR_TEST_DEVICES=npu sync_run=1 python -m pytest -q -s \
+  tests/backends/npu/test_acl_torch_compat.py -k 'softmax or triu' \
+  2>&1 | tee "$TMPDIR/acl-attribute-data.log"
+if rg -i "fallback cpu|cpu fallback" "$TMPDIR/acl-attribute-data.log"; then
+  echo "CPU fallback detected: this is NOT an attribute-channel validation"; exit 1
+fi
+```
+
+Record the 910B3 model, CANN version, selected device, exact node ids, and the
+absence of CPU fallback in the handoff. A host-only decoder pass does not close
+8.06 and must not be reported as NPU hardware validation.

@@ -1,0 +1,270 @@
+#pragma once
+
+// Host-side ACL attribute channel.  Keep this header independent of ACL/CANN
+// so schema and decoder changes can be compiled and tested on a CPU host.
+#include <cmath>
+#include <cstdint>
+#include <iomanip>
+#include <map>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "utils/log.h"
+
+namespace jittor {
+namespace acl_data {
+
+constexpr uint32_t kSchemaVersion = 1;
+
+enum class AclDataType : uint8_t {
+    int64,
+    float64,
+    boolean,
+    int64_vector,
+    float64_vector,
+    bool_vector,
+};
+
+inline const char* type_name(AclDataType type) {
+    switch (type) {
+        case AclDataType::int64: return "int64";
+        case AclDataType::float64: return "float64";
+        case AclDataType::boolean: return "bool";
+        case AclDataType::int64_vector: return "int64[]";
+        case AclDataType::float64_vector: return "float64[]";
+        case AclDataType::bool_vector: return "bool[]";
+    }
+    return "<invalid>";
+}
+
+inline bool is_vector(AclDataType type) {
+    return type == AclDataType::int64_vector ||
+           type == AclDataType::float64_vector ||
+           type == AclDataType::bool_vector;
+}
+
+inline bool is_valid_type(AclDataType type) {
+    const auto value = static_cast<unsigned>(type);
+    return value <= static_cast<unsigned>(AclDataType::bool_vector);
+}
+
+// A value owns its storage.  In particular, no pointer or Python object id
+// can leak into a generated JIT key or survive across the decoder boundary.
+struct AclDataValue {
+    AclDataType type = AclDataType::int64;
+    int64_t int_value = 0;
+    double float_value = 0;
+    bool bool_value = false;
+    std::vector<int64_t> int_values;
+    std::vector<double> float_values;
+    std::vector<bool> bool_values;
+
+    static AclDataValue int64_value(int64_t value) {
+        AclDataValue result;
+        result.type = AclDataType::int64;
+        result.int_value = value;
+        return result;
+    }
+    static AclDataValue float64_value(double value) {
+        AclDataValue result;
+        result.type = AclDataType::float64;
+        result.float_value = value;
+        return result;
+    }
+    static AclDataValue bool_value_of(bool value) {
+        AclDataValue result;
+        result.type = AclDataType::boolean;
+        result.bool_value = value;
+        return result;
+    }
+    static AclDataValue int64_vector(std::vector<int64_t> value) {
+        AclDataValue result;
+        result.type = AclDataType::int64_vector;
+        result.int_values = std::move(value);
+        return result;
+    }
+    static AclDataValue float64_vector(std::vector<double> value) {
+        AclDataValue result;
+        result.type = AclDataType::float64_vector;
+        result.float_values = std::move(value);
+        return result;
+    }
+    static AclDataValue bool_vector(std::vector<bool> value) {
+        AclDataValue result;
+        result.type = AclDataType::bool_vector;
+        result.bool_values = std::move(value);
+        return result;
+    }
+};
+
+using AclDataMap = std::map<std::string, AclDataValue>;
+
+struct AclAttrField {
+    AclDataType type = AclDataType::int64;
+    bool required = true;
+    bool has_default = false;
+    AclDataValue default_value;
+};
+
+using AclAttrSchema = std::map<std::string, AclAttrField>;
+
+struct AclDataRecord {
+    uint32_t schema_version = kSchemaVersion;
+    std::string op;
+    AclDataMap fields;
+};
+
+struct AclDecodedData {
+    uint32_t schema_version = kSchemaVersion;
+    std::string op;
+    AclDataMap fields;
+    std::string cache_key;
+};
+
+inline void user_error(const std::string& message) {
+    throw UserError(message);
+}
+
+inline void internal_error(const std::string& message) {
+    throw InternalInvariantError(message);
+}
+
+inline void validate_value(const std::string& name,
+                           AclDataType expected,
+    const AclDataValue& value,
+                           bool schema_default = false) {
+    if (!is_valid_type(expected))
+        internal_error("ACL schema contains an invalid type tag for " + name);
+    if (value.type != expected) {
+        const std::string message = "ACL data field " + name + " has type " +
+            type_name(value.type) + ", expected " + type_name(expected);
+        if (schema_default)
+            internal_error(message);
+        user_error(message);
+    }
+    if (expected == AclDataType::float64) {
+        if (!std::isfinite(value.float_value)) {
+            if (schema_default)
+                internal_error("ACL schema default " + name + " must be finite");
+            user_error("ACL data field " + name + " must be finite");
+        }
+    } else if (expected == AclDataType::float64_vector) {
+        for (double item : value.float_values) {
+            if (!std::isfinite(item)) {
+                if (schema_default)
+                    internal_error("ACL schema default " + name + " contains a non-finite value");
+                user_error("ACL data field " + name + " contains a non-finite value");
+            }
+        }
+    }
+}
+
+inline void validate_schema(const AclAttrSchema& schema) {
+    for (const auto& item : schema) {
+        const std::string& name = item.first;
+        const AclAttrField& field = item.second;
+        if (name.empty())
+            internal_error("ACL schema field names must be non-empty");
+        if (field.has_default)
+            validate_value(name, field.type, field.default_value, true);
+        if (field.required && field.has_default)
+            internal_error("ACL schema field cannot be both required and defaulted: " + name);
+    }
+}
+
+inline void append_length_prefixed(std::ostringstream& key, const std::string& value) {
+    key << value.size() << ':' << value;
+}
+
+inline void append_value(std::ostringstream& key, const AclDataValue& value) {
+    key << type_name(value.type) << '=';
+    switch (value.type) {
+        case AclDataType::int64:
+            key << value.int_value;
+            break;
+        case AclDataType::float64:
+            key << std::setprecision(17) << value.float_value;
+            break;
+        case AclDataType::boolean:
+            key << (value.bool_value ? "true" : "false");
+            break;
+        case AclDataType::int64_vector:
+            key << '[';
+            for (size_t i = 0; i < value.int_values.size(); ++i)
+                key << (i ? "," : "") << value.int_values[i];
+            key << ']';
+            break;
+        case AclDataType::float64_vector:
+            key << '[' << std::setprecision(17);
+            for (size_t i = 0; i < value.float_values.size(); ++i)
+                key << (i ? "," : "") << value.float_values[i];
+            key << ']';
+            break;
+        case AclDataType::bool_vector:
+            key << '[';
+            for (size_t i = 0; i < value.bool_values.size(); ++i)
+                key << (i ? "," : "") << (value.bool_values[i] ? "true" : "false");
+            key << ']';
+            break;
+    }
+}
+
+inline std::string canonical_cache_key(uint32_t schema_version,
+                                       const std::string& op,
+                                       const AclDataMap& fields) {
+    std::ostringstream key;
+    key << schema_version << "|op=";
+    append_length_prefixed(key, op);
+    for (const auto& item : fields) {
+        key << "|field=";
+        append_length_prefixed(key, item.first);
+        key << ':';
+        append_value(key, item.second);
+    }
+    return key.str();
+}
+
+// Shared host-side decoder contract.  It is intentionally not wired into an
+// ACL runner yet: the first attribute owner must migrate schema, generated
+// OpAttr construction, and JIT/cache key in one atomic change.
+inline AclDecodedData decode_acl_data(const AclDataRecord& record,
+                                      const std::string& expected_op,
+                                      const AclAttrSchema& schema,
+                                      std::string& canonical_key) {
+    if (record.schema_version != kSchemaVersion)
+        user_error("unsupported ACL data schema version");
+    if (record.op.empty() || record.op != expected_op)
+        user_error("ACL data operator does not match registered owner");
+    validate_schema(schema);
+
+    for (const auto& item : record.fields) {
+        if (schema.find(item.first) == schema.end())
+            user_error("unknown ACL data field: " + item.first);
+    }
+
+    AclDecodedData result;
+    result.schema_version = record.schema_version;
+    result.op = record.op;
+    for (const auto& item : schema) {
+        const auto value = record.fields.find(item.first);
+        if (value == record.fields.end()) {
+            if (item.second.has_default) {
+                result.fields.emplace(item.first, item.second.default_value);
+            } else if (item.second.required) {
+                user_error("missing required ACL data field: " + item.first);
+            }
+            continue;
+        }
+        validate_value(item.first, item.second.type, value->second);
+        result.fields.emplace(value->first, value->second);
+    }
+    result.cache_key = canonical_cache_key(result.schema_version, result.op, result.fields);
+    canonical_key = result.cache_key;
+    return result;
+}
+
+} // namespace acl_data
+} // namespace jittor
