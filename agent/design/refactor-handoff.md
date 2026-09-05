@@ -1617,6 +1617,14 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `8c5ef55b` 补 ACL 属性 data-channel 原子迁移门禁、cache-key/失败路径约束与 910B3/CANN 命令，相关静态合同 6 passed；无 NPU 硬件验证。 |
 | `compat` | 审计确认简单 numerical owner 已基本完成；剩余 vmap 是复杂 runtime 闭包，sum/mean/std/var/prod 的 owner 在 tensor installer，未做重复迁移。 |
 
+### 2026-09-05 第一百六十四波
+
+| 分区 | 结果 |
+| --- | --- |
+| `bindings` | cuDNN conv3d rank/group 负向已有覆盖；独立 CUDA 单卡冷缓存运行 `test_input_rank` 1 passed，异常后计算继续通过，无新代码。 |
+| `device` | ACL 剩余 data-channel C++ decoder、胖 `AclOpFunctions` 类型擦除、属性通道、descriptor cache 必须按依赖顺序整体迁移；现有 schema/边界/workspace 静态合同 9 passed，本机无 CANN/NPU。 |
+| `gates` | 0.22 仍需约两小时级 CUDA 全量性能验收；9.01 热 CPU 达标但 CUDA/冷启动未达标，且只读 HOME import 复现 `PermissionError`，不适合轻量半改。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
