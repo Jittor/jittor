@@ -152,6 +152,17 @@ SLOW_FILES = (
      "PEFT 适配器逐类型建图"),
 )
 
+# Every xdist worker inherits these pools. Keep the complete list beside the
+# budget policy so nox and the standalone runner cannot silently diverge.
+THREAD_POOL_ENV_NAMES = (
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+    "BLIS_NUM_THREADS",
+)
+
 
 #: Wall-clock budget for the fast tier, in seconds.
 #:
@@ -287,6 +298,23 @@ def worker_thread_budget(workers, available=None):
     if available is None:
         available = effective_cpu_count()
     return max(1, available // workers)
+
+
+def apply_worker_thread_budget(environment, workers, available=None):
+    """Apply the shared worker budget to every supported thread pool.
+
+    Both the nox sessions and ``tools/run_test_suite.py`` call this helper so
+    an added pool cannot be constrained in one entry point and leaked in the
+    other.  The mapping is updated in place and returned for nox's copy-on-
+    write environment convention.
+    """
+    budget = (worker_thread_budget(workers) if available is None
+              else worker_thread_budget(workers, available=available))
+    if budget is None:
+        return environment
+    for name in THREAD_POOL_ENV_NAMES:
+        environment[name] = str(budget)
+    return environment
 
 
 def runtime_workers(configured_workers=None, available=None):

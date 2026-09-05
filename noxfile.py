@@ -27,8 +27,8 @@ try:
         torch_arguments as gate_torch_arguments,
     )
     from _helpers.tiers import (  # noqa: E402
-        budget_report, effective_cpu_count, runtime_workers,
-        worker_thread_budget)
+        apply_worker_thread_budget, budget_report, effective_cpu_count,
+        runtime_workers, worker_thread_budget, THREAD_POOL_ENV_NAMES)
     from _helpers.process_modes import TORCH_MODE_PATHS  # noqa: E402
 finally:
     sys.path.remove(str(REPO_ROOT / "tests"))
@@ -375,14 +375,9 @@ _SESSION_ENV_PASSTHROUGH = (
     "SYSTEMROOT",
 )
 
-_THREAD_ENV_NAMES = (
-    "OMP_NUM_THREADS",
-    "MKL_NUM_THREADS",
-    "OPENBLAS_NUM_THREADS",
-    "NUMEXPR_NUM_THREADS",
-    "VECLIB_MAXIMUM_THREADS",
-    "BLIS_NUM_THREADS",
-)
+# Kept as a local alias for structure tests and callers inspecting the nox
+# module; the source of truth lives with the shared gate policy.
+_THREAD_ENV_NAMES = THREAD_POOL_ENV_NAMES
 
 
 def _available_cpu_ids():
@@ -643,13 +638,10 @@ def _split_threads(env, workers):
     all of them -- so N workers oversubscribe the machine N-fold. See
     ``tests/_helpers/tiers.worker_thread_budget``.
     """
-    budget = worker_thread_budget(workers)
-    if budget is None:
+    if not workers or workers <= 1:
         return env
     env = env.copy()
-    for name in _THREAD_ENV_NAMES:
-        env[name] = str(budget)
-    return env
+    return apply_worker_thread_budget(env, workers)
 
 
 def _enforce_smoke_budget(session, workers):
