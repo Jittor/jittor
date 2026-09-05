@@ -2043,6 +2043,13 @@ def install(ctx):
     _alias("aminmax", aminmax); Var.aminmax = _aminmax_impl
     _alias("quantile", quantile)
     _alias("nanquantile", nanquantile)
+    # Keep the Tensor methods on the same numerical owners as the top-level
+    # functions.  The owners intentionally use the documented CPU NumPy
+    # fallback, so method and function forms share the same fidelity limits.
+    Var.quantile = lambda self, q, dim=None, keepdim=False, interpolation="linear", **kwargs: quantile(
+        self, q, dim=dim, keepdim=keepdim, interpolation=interpolation, **kwargs)
+    Var.nanquantile = lambda self, q, dim=None, keepdim=False, interpolation="linear", **kwargs: nanquantile(
+        self, q, dim=dim, keepdim=keepdim, interpolation=interpolation, **kwargs)
     _alias("square", square)
     _alias("addmm", addmm)
 
