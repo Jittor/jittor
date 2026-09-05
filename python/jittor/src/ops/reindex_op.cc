@@ -85,7 +85,7 @@ void ReindexOp::infer_shape() {
         ASSERT(extras.size());
         y->set_shape(extras[0]->shape);
     }
-    CHECK(y->shape.size()) << "Number of shape should greater than 0.";
+    USER_CHECK(y->shape.size()) << "Number of shape should greater than 0.";
 }
 
 void ReindexOp::jit_prepare(JK& jk) {
