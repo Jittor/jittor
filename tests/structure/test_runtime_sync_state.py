@@ -32,6 +32,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "lazy_execution": jt.flags.lazy_execution,
         "auto_flush_ops": jt.flags.auto_flush_ops,
         "auto_convert_64_to_32": jt.flags.auto_convert_64_to_32,
+        "reuse_array": jt.flags.reuse_array,
         "no_grad": jt.flags.no_grad,
         "amp_reg": jt.flags.amp_reg,
         "auto_mixed_precision_level": jt.flags.auto_mixed_precision_level,
@@ -150,6 +151,24 @@ def test_runtime_auto_convert_64_to_32_is_a_live_view_and_controls_cpu_array_dty
             jt.runtime.context.auto_convert_64_to_32 = 0
     finally:
         jt.flags.auto_convert_64_to_32 = original
+
+
+def test_runtime_reuse_array_is_a_live_read_only_view():
+    import jittor as jt
+
+    original = jt.flags.reuse_array
+    try:
+        assert jt.runtime.reuse_array == original
+        with jt.flag_scope(reuse_array=1):
+            assert jt.runtime.reuse_array == 1
+            assert jt.runtime.context.snapshot()["reuse_array"] == 1
+        assert jt.runtime.reuse_array == original
+        with pytest.raises(AttributeError):
+            jt.runtime.reuse_array = 0
+        with pytest.raises(AttributeError):
+            jt.runtime.context.reuse_array = 0
+    finally:
+        jt.flags.reuse_array = original
 
 
 def test_runtime_no_grad_is_a_live_read_only_view():

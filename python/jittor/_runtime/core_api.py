@@ -825,6 +825,11 @@ class RuntimeContext:
         return self._flags.auto_convert_64_to_32
 
     @property
+    def reuse_array(self):
+        """Whether CPU NumPy array storage may be reused by ``jt.array``."""
+        return self._flags.reuse_array
+
+    @property
     def no_grad(self):
         """Whether newly created operations are excluded from autograd."""
         return self._flags.no_grad
@@ -913,6 +918,7 @@ class RuntimeContext:
             "lazy_execution": int(self.lazy_execution),
             "auto_flush_ops": int(self.auto_flush_ops),
             "auto_convert_64_to_32": int(self.auto_convert_64_to_32),
+            "reuse_array": int(self.reuse_array),
             "no_grad": int(self.no_grad),
             "amp_reg": int(self.amp_reg),
             "auto_mixed_precision_level": int(self.auto_mixed_precision_level),
@@ -967,6 +973,10 @@ class RuntimeState:
     @property
     def auto_convert_64_to_32(self):
         return self._context.auto_convert_64_to_32
+
+    @property
+    def reuse_array(self):
+        return self._context.reuse_array
 
     @property
     def no_grad(self):
