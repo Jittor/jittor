@@ -860,6 +860,11 @@ class RuntimeContext:
         return self._flags.profiler_enable
 
     @property
+    def profiler_rerun(self):
+        """Number of additional profiler reruns configured for execution."""
+        return self._flags.profiler_rerun
+
+    @property
     def check_graph(self):
         """Whether graph liveness checks are enabled for execution."""
         return self._flags.check_graph
@@ -880,6 +885,7 @@ class RuntimeContext:
             "profile_memory_enable": int(self.profile_memory_enable),
             "profiler_warmup": int(self.profiler_warmup),
             "profiler_enable": int(self.profiler_enable),
+            "profiler_rerun": int(self.profiler_rerun),
             "check_graph": int(self.check_graph),
         }
 
@@ -947,6 +953,10 @@ class RuntimeState:
     @property
     def profiler_enable(self):
         return self._context.profiler_enable
+
+    @property
+    def profiler_rerun(self):
+        return self._context.profiler_rerun
 
     @property
     def check_graph(self):
