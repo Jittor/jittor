@@ -40,6 +40,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "amp_reg": jt.flags.amp_reg,
         "float32_matmul_precision": jt.flags.float32_matmul_precision,
         "use_tensorcore": jt.flags.use_tensorcore,
+        "cuda_allow_tf32": jt.flags.cuda_allow_tf32,
         "auto_mixed_precision_level": jt.flags.auto_mixed_precision_level,
         "try_use_32bit_index": jt.flags.try_use_32bit_index,
         "no_fuse": jt.flags.no_fuse,
@@ -113,6 +114,25 @@ def test_runtime_use_cuda_is_a_live_read_only_view():
             jt.runtime.use_cuda = 0
     finally:
         jt.flags.use_cuda = original
+
+
+def test_runtime_cuda_allow_tf32_is_a_live_read_only_view_on_cpu():
+    import jittor as jt
+
+    original = jt.flags.cuda_allow_tf32
+    try:
+        assert jt.runtime.cuda_allow_tf32 == original
+        wanted = 0 if original else 1
+        with jt.flag_scope(cuda_allow_tf32=wanted):
+            assert jt.runtime.cuda_allow_tf32 == wanted
+            assert jt.runtime.context.snapshot()["cuda_allow_tf32"] == wanted
+        assert jt.runtime.cuda_allow_tf32 == original
+        with pytest.raises(AttributeError):
+            jt.runtime.cuda_allow_tf32 = wanted
+        with pytest.raises(AttributeError):
+            jt.runtime.context.cuda_allow_tf32 = wanted
+    finally:
+        jt.flags.cuda_allow_tf32 = original
 
 
 def test_runtime_trace_py_var_is_a_live_read_only_view():

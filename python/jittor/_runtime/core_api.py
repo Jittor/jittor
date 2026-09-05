@@ -865,6 +865,11 @@ class RuntimeContext:
         return self._flags.use_tensorcore
 
     @property
+    def cuda_allow_tf32(self):
+        """Whether CUDA matmul may use TF32 accumulation."""
+        return self._flags.cuda_allow_tf32
+
+    @property
     def auto_mixed_precision_level(self):
         """Convenience AMP policy level reflected by the native flag."""
         return self._flags.auto_mixed_precision_level
@@ -1031,6 +1036,7 @@ class RuntimeContext:
             "amp_reg": int(self.amp_reg),
             "float32_matmul_precision": self.float32_matmul_precision,
             "use_tensorcore": int(self.use_tensorcore),
+            "cuda_allow_tf32": int(self.cuda_allow_tf32),
             "auto_mixed_precision_level": int(self.auto_mixed_precision_level),
             "try_use_32bit_index": int(self.try_use_32bit_index),
             "no_fuse": int(self.no_fuse),
@@ -1131,6 +1137,10 @@ class RuntimeState:
     @property
     def use_tensorcore(self):
         return self._context.use_tensorcore
+
+    @property
+    def cuda_allow_tf32(self):
+        return self._context.cuda_allow_tf32
 
     @property
     def auto_mixed_precision_level(self):
