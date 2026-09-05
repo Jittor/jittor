@@ -147,3 +147,28 @@ def test_independent_root_and_children_restore_import_identity_on_rollback():
     assert modules == {"torch": old_root, "torch.nn": old_nn}
     assert registry._published == {"torch": owner, "torch.nn": new_nn}
     assert old_root.nn is old_nn
+
+
+def test_missing_published_parent_fails_closed_without_partial_binding():
+    owner = types.ModuleType("jittor")
+    namespace = independent_torch_namespace(owner)
+    child = types.ModuleType("torch.nn.functional")
+    from jittor.compat.transaction import ActivationTransaction
+
+    transaction = ActivationTransaction("namespace-missing-parent")
+    transaction.acquire()
+    try:
+        try:
+            bind_published_namespace(
+                namespace, {"torch.nn.functional": child}, transaction=transaction
+            )
+        except RuntimeError as error:
+            assert "parent 'torch.nn' is not published" in str(error)
+        else:
+            raise AssertionError("missing namespace parent was accepted")
+        transaction.rollback()
+    finally:
+        transaction.release()
+
+    assert not hasattr(namespace, "nn")
+    assert not hasattr(owner, "nn")

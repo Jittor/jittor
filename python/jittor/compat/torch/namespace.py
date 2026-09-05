@@ -85,7 +85,14 @@ def bind_published_namespace(namespace, published, transaction=None):
         parent_name, attr = name.rsplit(".", 1)
         parent = parents.get(parent_name)
         if parent is None:
-            continue
+            # A published child without its published parent cannot be
+            # represented by an independent namespace.  Silently skipping it
+            # leaves registry/sys.modules claiming success while attribute
+            # imports resolve through the old owner (or fail later).
+            raise RuntimeError(
+                "cannot bind published module %r: parent %r is not published"
+                % (name, parent_name)
+            )
         had_attr = hasattr(parent, attr)
         old = getattr(parent, attr, None)
         if transaction is not None:
