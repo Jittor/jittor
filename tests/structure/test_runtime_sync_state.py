@@ -36,6 +36,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "no_grad": jt.flags.no_grad,
         "amp_reg": jt.flags.amp_reg,
         "auto_mixed_precision_level": jt.flags.auto_mixed_precision_level,
+        "try_use_32bit_index": jt.flags.try_use_32bit_index,
         "no_fuse": jt.flags.no_fuse,
         "gopt_disable": jt.flags.gopt_disable,
         "exec_called": jt.flags.exec_called,
@@ -208,6 +209,24 @@ def test_runtime_amp_flags_are_live_read_only_views(flag_name):
             setattr(jt.runtime.context, flag_name, 0)
     finally:
         setattr(jt.flags, flag_name, original)
+
+
+def test_runtime_try_use_32bit_index_is_a_live_read_only_view():
+    import jittor as jt
+
+    original = jt.flags.try_use_32bit_index
+    try:
+        assert jt.runtime.try_use_32bit_index == original
+        with jt.flag_scope(try_use_32bit_index=1):
+            assert jt.runtime.try_use_32bit_index == 1
+            assert jt.runtime.context.snapshot()["try_use_32bit_index"] == 1
+        assert jt.runtime.try_use_32bit_index == original
+        with pytest.raises(AttributeError):
+            jt.runtime.try_use_32bit_index = 0
+        with pytest.raises(AttributeError):
+            jt.runtime.context.try_use_32bit_index = 0
+    finally:
+        jt.flags.try_use_32bit_index = original
 
 
 def test_runtime_gopt_disable_is_a_live_read_only_view_and_cpu_execution_survives():

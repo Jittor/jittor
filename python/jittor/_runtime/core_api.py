@@ -845,6 +845,11 @@ class RuntimeContext:
         return self._flags.auto_mixed_precision_level
 
     @property
+    def try_use_32bit_index(self):
+        """Whether operators may use 32-bit indices when shapes fit."""
+        return self._flags.try_use_32bit_index
+
+    @property
     def no_fuse(self):
         """Whether fusion optimization is disabled for new operations."""
         return self._flags.no_fuse
@@ -927,6 +932,7 @@ class RuntimeContext:
             "no_grad": int(self.no_grad),
             "amp_reg": int(self.amp_reg),
             "auto_mixed_precision_level": int(self.auto_mixed_precision_level),
+            "try_use_32bit_index": int(self.try_use_32bit_index),
             "no_fuse": int(self.no_fuse),
             "gopt_disable": int(self.gopt_disable),
             "exec_called": int(self.exec_called),
@@ -995,6 +1001,10 @@ class RuntimeState:
     @property
     def auto_mixed_precision_level(self):
         return self._context.auto_mixed_precision_level
+
+    @property
+    def try_use_32bit_index(self):
+        return self._context.try_use_32bit_index
 
     @property
     def no_fuse(self):
