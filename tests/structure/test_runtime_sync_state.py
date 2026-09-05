@@ -34,6 +34,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "no_grad": jt.flags.no_grad,
         "gopt_disable": jt.flags.gopt_disable,
         "exec_called": jt.flags.exec_called,
+        "use_threading": jt.flags.use_threading,
     }
     assert jt.runtime.device_id == getattr(jt.flags, "device_id", -1)
     assert jt.runtime.use_cuda == jt.flags.use_cuda
@@ -169,3 +170,21 @@ def test_runtime_exec_called_is_a_live_read_only_execution_counter():
         jt.runtime.exec_called = before
     with pytest.raises(AttributeError):
         jt.runtime.context.exec_called = before
+
+
+def test_runtime_use_threading_is_a_live_read_only_view():
+    import jittor as jt
+
+    original = jt.flags.use_threading
+    try:
+        assert jt.runtime.use_threading == original
+        with jt.flag_scope(use_threading=1):
+            assert jt.runtime.use_threading == 1
+            assert jt.runtime.context.snapshot()["use_threading"] == 1
+        assert jt.runtime.use_threading == original
+        with pytest.raises(AttributeError):
+            jt.runtime.use_threading = 0
+        with pytest.raises(AttributeError):
+            jt.runtime.context.use_threading = 0
+    finally:
+        jt.flags.use_threading = original

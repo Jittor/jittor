@@ -834,6 +834,11 @@ class RuntimeContext:
         """Number of executor synchronizations started by the runtime."""
         return self._flags.exec_called
 
+    @property
+    def use_threading(self):
+        """Whether executor synchronization may use Python threading."""
+        return self._flags.use_threading
+
     def snapshot(self):
         """Return an immutable snapshot of the fields owned by this context."""
         return {
@@ -845,6 +850,7 @@ class RuntimeContext:
             "no_grad": int(self.no_grad),
             "gopt_disable": int(self.gopt_disable),
             "exec_called": int(self.exec_called),
+            "use_threading": int(self.use_threading),
         }
 
 
@@ -891,6 +897,10 @@ class RuntimeState:
     @property
     def exec_called(self):
         return self._context.exec_called
+
+    @property
+    def use_threading(self):
+        return self._context.use_threading
 
     @property
     def context(self):
