@@ -446,7 +446,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 4.03 | `BackendRegistry` | 待领 | | |
 | 4.04 | `OpRegistry` | 待领 | | |
 | 4.05 | Python 分派表 | 待领 | | |
-| 4.06 | `jt.flags.backend_fallback ∈ {error, warn, allow… | 待领 | device | `BackendFallbackPolicy` 独立核心切片：校验 `error/warn/allow`、默认 `warn`、结构化决策与 fail-closed 异常；`tests/structure/test_backend_fallback_policy.py` 3 passed。尚未接入 native flags/BackendRegistry/OpRegistry，整卡继续待领 |
+| 4.06 | `jt.flags.backend_fallback ∈ {error, warn, allow… | 待领 | device | `8fb44816`：`BackendFallbackPolicy` 独立核心切片，校验 `error/warn/allow`、默认 `warn`、结构化决策与 fail-closed 异常；与 registry 合同合计 7 passed。尚未接入 native flags/BackendRegistry/OpRegistry，整卡继续待领 |
 | 4.07 | 后端配置改为返回 `BuildConfig` 值 | 待领 | | |
 | 4.08 | 流与事件模型 | 已合并 | device | `0dfcb3dd` 每设备 copy/communication stream 与 ready/done event，接入 array H2D、fetch D2H、device_copy、NCCL collective；`78235157` 双 rank NCCL 用 rank 相关输入验证数值且 communication 双向依赖计数精确 +2。GPU 0/2：两 rank 各 1 passed，mixed-device H2D/fetch 2 passed，6.C16 下毒 1 passed，device_copy/multi-device 6 passed，既有 overlap 正确性 1 passed；未用负载敏感绝对墙钟阈值 |
 | 4.09 | per-device 库句柄 | 已合并 | device | `13c28084`；4.02 已有五库 per-device 资源，本提交补齐每次执行前 SetStream。GPU 0/2 新增测试实际执行 cuBLAS/cuDNN/cuSPARSE/cuRAND/cuFFT 各两次并断言两卡逐库 bind 计数均 +2，1 passed；各库现有 wrapper 聚焦 5 passed；CPU 聚焦 1 passed |
@@ -568,7 +568,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 7.09 | `torch.library` | 已合并 | compat | 99901e6c、d0a782a0。按张量真实驻留选择 CPU/CUDA 并排除 Meta，`register_autograd` 真正接入且模型特判移出通用注册层；线程局部 autocast dtype policy 进一步选择 AutocastCPU/CUDA，嵌套禁用与退出恢复普通路由。独立 PyTorch oracle 一致，CPU dispatch 8 passed、1 个未分配 CUDA 节点 skipped |
 | 7.10 | `torch.compile`/`jit.trace`/`jit.script` 保留 pass… | 已合并 | 兼容层分区 | 3d898ece。语义参数拒绝、permissive allowlist/audit 与 ShapeProp ImportError 验收均有测试 |
 | 7.11 | autograd 语义 | 已合并 | compat | `2ec34693`：`Var.is_leaf` 转发内核 `is_backward_leaf`，`Var.grad_fn` 对叶子返回 None、对非叶子返回 node/op/name 代理；shim autograd 语义 20 passed，core backward-leaf 查询 20 passed。requires_grad 策略差异仍归 7.12。 |
-| 7.12 | 独立 torch 包 | 待领 | | **内核前置 `2.25` 已就位（提交 `c6e62ba1`、`781d4188`）**：「反向叶子由 requires_grad 加图连通性决定，不再是三个进程级 id 键字典」所需的连通性那一半由 `backward_grad_fn(Var*)` 提供，实现里没有任何进程级 id 键字典、没有图遍历、没有缓存。剩下的是 requires_grad 那一半：对拍量到 Jittor 与 torch 只在 requires_grad 上分歧三处（float var 默认可导、`detach()` 停算子不停 var、native 策略下 stop_grad 输入的输出仍可导），而在 2.09 的 `EXPLICIT_REQUIRES_GRAD` 策略下这些图与 torch 三元组全等 |
+| 7.12 | 独立 torch 包 | 待领 | | **内核前置 `2.25` 已就位（提交 `c6e62ba1`、`781d4188`）**；`b2782315`/`06eba9aa`/`219c5b44`/`b3225844` 已将 leaf、retained、optimizer 注册表收进 `TorchTensorState`，保留旧别名并修复旧进程 retained 条目迁移（`tests/compat/torch/test_tensor_state.py` 3 passed）。这仍只是状态所有权前置，独立 torch 包的完整 requires_grad/模块边界与聚合验收继续待领。 |
 | 7.13 | FSDP2 | 待领 | | 已合入 37c0aed4、c0e6e1ae、48da7360、873dd5cf；仍缺峰值显存达标、复用原生 optimizer 更新逻辑与 DeviceMesh 真实分组 |
 | 7.14 | vLLM 边界检查把 `torch` 视作 jittor 别名 | 已合并 | 兼容层分区 | 178be65a |
 | 7.15 | `_rebuild_tensor_v2` 按 stride 还原或报错 | 已合并 | | 7e7877c8 |
