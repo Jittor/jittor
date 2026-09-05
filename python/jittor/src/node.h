@@ -370,29 +370,6 @@ struct Node {
         return batch_index;
     }
 
-    // FUSED-OP ONLY. `(var index << 2) | visited << 1`, built by
-    // FusedOp::update_ops() and read by load_fused_op() and the JIT pipeline
-    // behind it. **No traversal may borrow this field.**
-    //
-    // It used to be a general-purpose scratch int that five unrelated
-    // algorithms wrote to -- the executor's batch numbering, grad()'s gradient
-    // var indices, dump_all_graphs()' node numbering, and the two topological
-    // sorts -- with nothing recording whose turn it was. All five keep their
-    // own storage now (misc/node_index.h, and batch_index above), so the
-    // "any two traversals interleaving corrupt each other" defect is gone even
-    // though the field is not.
-    //
-    // This one is different in kind and is why the field survives: it is not a
-    // traversal marker but a mapping that has to stay valid across the whole
-    // JIT pipeline (do_jit_prepare, get_loop_options, the relay manager), so
-    // removing it means giving FusedOp an explicit var->index map and changing
-    // three readers, one of which is tied to the generated code's struct
-    // offsets. That is task 2.24, sequenced after 3.11 because it lands in the
-    // same code.
-    //
-    // tests/structure/test_node_scratch_state.py holds this to one owner; a
-    // comment on its own is what let the previous five in.
-    int custom_data;
     int64 tflag = 0;
     int64 id; 
     SmallVector<input_t, 2> _inputs;

@@ -114,9 +114,9 @@ JIT_TEST(fused_op_relay_matmul) {
     auto& oprc = context.vrm.relay_groups[0].oprcs[0];
     CHECKop(oprc.op,==,rvar->input());
     // matmul op.x --> a, op.y --> b, op.z --> d
-    CHECK(oprc.relayed_members[0]==(a->custom_data>>2));
-    CHECK(oprc.relayed_members[1]==(b->custom_data>>2));
-    CHECK(oprc.relayed_members[2]==(d->custom_data>>2));
+    CHECK(oprc.relayed_members[0]==fop.var_index.at(a.ptr));
+    CHECK(oprc.relayed_members[1]==fop.var_index.at(b.ptr));
+    CHECK(oprc.relayed_members[2]==fop.var_index.at(d.ptr));
     auto src = context.vrm.get_relay_src(0,0);
 
     auto& loop_options = fop.get_loop_options_tuned();
