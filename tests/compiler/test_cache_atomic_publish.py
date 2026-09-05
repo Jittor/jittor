@@ -142,7 +142,7 @@ def test_dlink_preserves_a_private_shared_library_output(
     dependency = tmp_path / "kernel.d.tmp.123"
     result = run_python_child(
         [
-            JITTOR / "utils" / "dlink_compiler.py",
+            JITTOR / "build" / "dlink_compiler.py",
             fake_compiler,
             source,
             "-dc",

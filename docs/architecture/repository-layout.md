@@ -76,7 +76,7 @@ changed and independently validated:
   selected by compiler ordering rules;
 - `python/jittor/extern/**`, including the `<backend>/{inc,ops,src}` layout and
   ACL filename dispatch conventions;
-- `python/jittor/utils/{dlink_compiler.py,dumpdef.py}`;
+- `python/jittor/build/dlink_compiler.py` and `python/jittor/utils/{dumpdef.py,tracer.py}`;
 - `python/jittor/math_util/src/*.h`;
 - `python/jittor/compat/shim/cpp_extension/{include,src}/**` as the canonical
   installed ABI resource boundary for extension builds;

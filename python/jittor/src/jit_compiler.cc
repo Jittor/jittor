@@ -243,7 +243,7 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
             + fix_cl_flags(nvcc_flags + extra_flags, is_cuda_op)
             + " -o \"" + jit_lib_path + "\"";
         if (cmd.find("-dc") != string::npos) {
-            cmd = python_path+" "+jittor_path+"/utils/dlink_compiler.py " + cmd;
+            cmd = python_path+" "+jittor_path+"/build/dlink_compiler.py " + cmd;
         }
     } else {
         cmd = "\"" + cc_path + "\""

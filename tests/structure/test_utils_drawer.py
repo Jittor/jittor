@@ -166,11 +166,6 @@ class TestWhatStaysAndTheReferenceThatPinsIt(unittest.TestCase):
                     "(task 3.18), and this rule needs rewriting"
                     % (relative, needle, name))
 
-    def test_dlink_compiler_is_pinned_by_the_jit_compiler_command_line(self):
-        self._pinned_by(
-            "dlink_compiler.py",
-            ("src/jit_compiler.cc", 'jittor_path+"/utils/dlink_compiler.py'))
-
     def test_dumpdef_is_reached_from_the_installed_package_not_the_checkout(self):
         # `agent/design/target-layout.md` lists dumpdef.py under the repository
         # `tools/`. It cannot go there: compiler.py builds the .def file during
@@ -195,7 +190,7 @@ class TestWhatStaysAndTheReferenceThatPinsIt(unittest.TestCase):
         # home belongs in a package that states one.
         self.assertEqual(
             sorted(path.name for path in DRAWER.glob("*.py")),
-            ["dlink_compiler.py", "dumpdef.py", "tracer.py"],
+            ["dumpdef.py", "tracer.py"],
             "python/jittor/utils holds only files something outside Python "
             "reaches by hard-coded path (task 5.25). Put new code in a package "
             "whose name says what it is for.")
@@ -203,10 +198,17 @@ class TestWhatStaysAndTheReferenceThatPinsIt(unittest.TestCase):
     def test_the_layout_document_still_pins_the_compiler_resources(self):
         doc = _text(REPO_ROOT / "docs" / "architecture" / "repository-layout.md")
         self.assertIn(
-            "python/jittor/utils/{dlink_compiler.py,dumpdef.py}",
+            "python/jittor/utils/{dumpdef.py,tracer.py}",
             doc,
             "if the contract moved, this test and 5.25's remaining half both "
             "need rewriting")
+
+    def test_dlink_compiler_lives_with_build_resources(self):
+        path = REPO_ROOT / "python" / "jittor" / "build" / "dlink_compiler.py"
+        self.assertTrue(path.is_file())
+        self.assertIn(
+            'jittor_path+"/build/dlink_compiler.py',
+            _text(REPO_ROOT / "python" / "jittor" / "src" / "jit_compiler.cc"))
 
 
 if __name__ == "__main__":
