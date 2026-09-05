@@ -1726,6 +1726,12 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `coreops` | 2.13 Runtime 状态仍跨多模块，单字段迁移会形成双状态；本波无代码提交。 |
 | `compat` | 7.12 TorchTensorState、9.01 冷启动和 5.24 剩余状态仍是整卡架构，未提交半成品。 |
 
+### 2026-09-05 第一百七十八波
+
+| 分区 | 结果 |
+| --- | --- |
+| `device` | 4.06 增加独立 `BackendFallbackPolicy`，统一校验 `error/warn/allow`、默认 `warn`、结构化 fallback 决策与 fail-closed 异常；定向结构测试 3 passed。尚未接入 native flags/BackendRegistry/OpRegistry，4.06 整卡保持待领。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
