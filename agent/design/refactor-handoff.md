@@ -2000,7 +2000,7 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | --- | --- |
 | `coreops` | `bb0e9897` 将 `enable_tuner` 纳入 RuntimeContext owner，root/runtime 结构合同通过；全局状态仍待迁移。 |
 | `device` | `280762dd` 增加 Native observer scope RAII identity restore，结构 8、JIT 2 passed；真实 provider 仍待。 |
-| `device` | `9c7a457a`/`2c2339a5` 增加 ACL descriptor per-device generation 与 stale-handle guard，host-only 19 passed；CANN/NPU runner仍待。 |
+| `device` | `9c7a457a`/`2c2339a5`/`cecfc4f3` 增加 ACL descriptor per-device generation 与 stale-handle guard，host-only 19 passed；CANN/NPU runner仍待。 |
 | `compat` | `3079d012` 收紧 standalone torch alias schema，namespace 35 passed；独立 distribution 完整发布仍待。 |
 
 ## 7. 接手怎么开始
