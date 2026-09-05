@@ -885,6 +885,11 @@ class RuntimeContext:
         return self._flags.use_threading
 
     @property
+    def use_parallel_op_compiler(self):
+        """Number of workers used by the parallel operator compiler."""
+        return self._flags.use_parallel_op_compiler
+
+    @property
     def profile_memory_enable(self):
         """Whether execution records memory-profiler state."""
         return self._flags.profile_memory_enable
@@ -975,6 +980,7 @@ class RuntimeContext:
             "enable_tuner": int(self.enable_tuner),
             "exec_called": int(self.exec_called),
             "use_threading": int(self.use_threading),
+            "use_parallel_op_compiler": int(self.use_parallel_op_compiler),
             "profile_memory_enable": int(self.profile_memory_enable),
             "profiler_warmup": int(self.profiler_warmup),
             "profiler_enable": int(self.profiler_enable),
@@ -1075,6 +1081,10 @@ class RuntimeState:
     @property
     def use_threading(self):
         return self._context.use_threading
+
+    @property
+    def use_parallel_op_compiler(self):
+        return self._context.use_parallel_op_compiler
 
     @property
     def profile_memory_enable(self):

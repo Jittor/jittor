@@ -44,6 +44,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "enable_tuner": jt.flags.enable_tuner,
         "exec_called": jt.flags.exec_called,
         "use_threading": jt.flags.use_threading,
+        "use_parallel_op_compiler": jt.flags.use_parallel_op_compiler,
         "profile_memory_enable": jt.flags.profile_memory_enable,
         "profiler_warmup": jt.flags.profiler_warmup,
         "profiler_enable": jt.flags.profiler_enable,
@@ -101,6 +102,24 @@ def test_runtime_use_cuda_is_a_live_read_only_view():
             jt.runtime.use_cuda = 0
     finally:
         jt.flags.use_cuda = original
+
+
+def test_runtime_parallel_op_compiler_workers_are_a_live_read_only_view():
+    import jittor as jt
+
+    original = jt.flags.use_parallel_op_compiler
+    try:
+        assert jt.runtime.use_parallel_op_compiler == original
+        with jt.flag_scope(use_parallel_op_compiler=2):
+            assert jt.runtime.use_parallel_op_compiler == 2
+            assert jt.runtime.context.snapshot()["use_parallel_op_compiler"] == 2
+        assert jt.runtime.use_parallel_op_compiler == original
+        with pytest.raises(AttributeError):
+            jt.runtime.use_parallel_op_compiler = 0
+        with pytest.raises(AttributeError):
+            jt.runtime.context.use_parallel_op_compiler = 0
+    finally:
+        jt.flags.use_parallel_op_compiler = original
 
 
 def test_runtime_node_order_is_a_live_read_only_view():
