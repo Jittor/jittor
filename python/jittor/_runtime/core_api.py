@@ -1004,6 +1004,11 @@ class RuntimeContext:
         """Whether the SFRL allocator is enabled."""
         return self._flags.use_sfrl_allocator
 
+    @property
+    def use_cuda_host_allocator(self):
+        """Whether CUDA host allocations use the pinned host allocator."""
+        return self._flags.use_cuda_host_allocator
+
     def snapshot(self):
         """Return an immutable snapshot of the fields owned by this context."""
         return {
@@ -1049,6 +1054,7 @@ class RuntimeContext:
             "use_nfef_allocator": int(self.use_nfef_allocator),
             "use_temp_allocator": int(self.use_temp_allocator),
             "use_sfrl_allocator": int(self.use_sfrl_allocator),
+            "use_cuda_host_allocator": int(self.use_cuda_host_allocator),
         }
 
 
@@ -1231,6 +1237,10 @@ class RuntimeState:
     @property
     def use_sfrl_allocator(self):
         return self._context.use_sfrl_allocator
+
+    @property
+    def use_cuda_host_allocator(self):
+        return self._context.use_cuda_host_allocator
 
     @property
     def context(self):

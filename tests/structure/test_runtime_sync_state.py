@@ -68,6 +68,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "use_nfef_allocator": jt.flags.use_nfef_allocator,
         "use_temp_allocator": jt.flags.use_temp_allocator,
         "use_sfrl_allocator": jt.flags.use_sfrl_allocator,
+        "use_cuda_host_allocator": jt.flags.use_cuda_host_allocator,
     }
     assert jt.runtime.device_id == getattr(jt.flags, "device_id", -1)
     assert jt.runtime.use_cuda == jt.flags.use_cuda
@@ -156,6 +157,28 @@ def test_runtime_allocator_policies_are_live_read_only_views_and_cpu_safe():
     finally:
         for name, value in originals.items():
             setattr(jt.flags, name, value)
+
+
+def test_runtime_cuda_host_allocator_is_a_live_read_only_view():
+    import numpy as np
+    import jittor as jt
+
+    original = jt.flags.use_cuda_host_allocator
+    try:
+        assert jt.runtime.use_cuda_host_allocator == original
+        wanted = 0 if original else 1
+        with jt.flag_scope(use_cuda_host_allocator=wanted):
+            assert jt.runtime.use_cuda_host_allocator == wanted
+            assert jt.runtime.context.snapshot()["use_cuda_host_allocator"] == wanted
+            value = jt.array(np.arange(2, dtype="float32")) + 1
+            np.testing.assert_array_equal(value.numpy(), np.array([1, 2], dtype="float32"))
+        assert jt.runtime.use_cuda_host_allocator == original
+        with pytest.raises(AttributeError):
+            jt.runtime.use_cuda_host_allocator = wanted
+        with pytest.raises(AttributeError):
+            jt.runtime.context.use_cuda_host_allocator = wanted
+    finally:
+        jt.flags.use_cuda_host_allocator = original
 
 
 def test_runtime_memory_limits_are_live_read_only_views_and_cpu_execution_survives():
