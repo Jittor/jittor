@@ -20,7 +20,7 @@ from .preflight import (
     jittor_python_root, prepare_import_environment, prepend_sys_path,
 )
 from jittor.compat._aliases import torch_namespace_claimable, torch_namespace_owned
-from jittor.compat.torch.namespace import (
+from jittor.compat.torch.publication import (
     bind_published_namespace, independent_torch_namespace,
 )
 from ..diagnostics import EXPECTED, swallowed

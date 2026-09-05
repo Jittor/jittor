@@ -149,7 +149,7 @@ def torch_namespace_owned(root_module):
     namespace = {name: module for name, module in _torch_namespace().items()}
     torch_root = namespace.get("torch")
     if torch_root is not root_module:
-        from .torch.namespace import namespace_owner
+        from .torch.publication import namespace_owner
         if namespace_owner(torch_root) is not root_module:
             return False
     context = getattr(root_module, "_torch_compat_install_context", None)
@@ -183,7 +183,7 @@ def torch_namespace_claimable(root_module):
     children = tuple(name for name in namespace if name.startswith("torch."))
     if current is None:
         return not children
-    from .torch.namespace import namespace_owner
+    from .torch.publication import namespace_owner
     if current is root_module or namespace_owner(current) is root_module:
         context = getattr(root_module, "_torch_compat_install_context", None)
         registry = getattr(context, "registry", None)

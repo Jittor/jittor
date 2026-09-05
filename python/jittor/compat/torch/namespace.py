@@ -43,6 +43,9 @@ class TorchNamespace(types.ModuleType):
         # published root as a broken module even though its children are
         # already registered in sys.modules.
         object.__setattr__(self, "__loader__", None)
+        # The view owns a valid package spec without importing activation or
+        # registry machinery.  This keeps the standalone package boundary
+        # usable on a machine that has not loaded the compatibility installer.
         object.__setattr__(self, "__spec__", importlib.machinery.ModuleSpec(
             "torch", loader=None, is_package=True
         ))
@@ -82,91 +85,24 @@ class TorchNamespace(types.ModuleType):
 
 
 def independent_torch_namespace(owner):
-    """Return a distinct, module-shaped Torch namespace for ``owner``."""
+    """Compatibility import for the standalone publication helper."""
 
-    return TorchNamespace(owner)
+    from .publication import independent_torch_namespace as publish
+    return publish(owner)
 
 
 def namespace_owner(module):
-    """Return the Jittor owner for an independent namespace, if any."""
+    """Compatibility import for the standalone publication helper."""
 
-    if isinstance(module, TorchNamespace):
-        return module.owner
-    return None
+    from .publication import namespace_owner as owner_of
+    return owner_of(module)
 
 
 def bind_published_namespace(namespace, published, transaction=None):
-    """Bind published ``torch.*`` children to an independent root.
+    """Compatibility import for the standalone publication helper."""
 
-    Installers publish children while the compatibility owner is still the
-    ``torch`` root.  Once that root is replaced by :class:`TorchNamespace`,
-    parent attributes must be rebound to the independent module tree as well.
-    ``transaction`` records every attribute mutation so a failed activation
-    restores the owner's original bindings.
-    """
-    if not isinstance(namespace, TorchNamespace):
-        raise TypeError("namespace must be a TorchNamespace")
-    modules = {
-        name: module for name, module in published.items()
-        if name.startswith("torch.") and module is not None
-    }
-    # ``core.install`` publishes ``torch.torch`` as an alias of the native
-    # owner.  Once the independent root is published, retaining that alias
-    # would let callers escape the independent module identity.  Normalize
-    # only this explicit root alias; other published modules may legitimately
-    # be shared implementation objects.
-    owner_alias = "torch.torch"
-    # Validate the complete parent closure before mutating the namespace.  A
-    # caller outside activation may not provide a transaction; discovering a
-    # missing parent after binding an earlier sibling would otherwise leave a
-    # partially published independent namespace behind.
-    missing = []
-    for name in modules:
-        parent_name = name.rsplit(".", 1)[0]
-        if parent_name != "torch" and parent_name not in modules:
-            missing.append((name, parent_name))
-    if missing:
-        name, parent_name = sorted(missing)[0]
-        raise RuntimeError(
-            "cannot bind published module %r: parent %r is not published"
-            % (name, parent_name)
-        )
-    # Apply the root alias only after the complete closure has passed.  This
-    # keeps the no-transaction failure path side-effect free as well.
-    if modules.get(owner_alias) is namespace.owner:
-        modules[owner_alias] = namespace
-        old = published.get(owner_alias)
-        published[owner_alias] = namespace
-        if transaction is not None:
-            transaction.record(published, owner_alias, old, namespace)
-    parents = {"torch": namespace}
-    for name in sorted(modules, key=lambda item: (item.count("."), item)):
-        # The registry includes its root entry as well as children.  The root
-        # is published by the activation transaction; only dotted entries
-        # need a parent attribute binding here.
-        if name == "torch":
-            continue
-        parent_name, attr = name.rsplit(".", 1)
-        parent = parents.get(parent_name)
-        if parent is None:
-            # Kept as a defensive check for unusual mapping implementations;
-            # the complete closure was validated before any mutation.
-            raise RuntimeError("published namespace parent disappeared: %r" % parent_name)
-        had_attr = hasattr(parent, attr)
-        old = getattr(parent, attr, None)
-        if transaction is not None:
-            def undo(parent=parent, attr=attr, had_attr=had_attr, old=old):
-                if had_attr:
-                    object.__setattr__(parent, attr, old)
-                else:
-                    try:
-                        object.__delattr__(parent, attr)
-                    except AttributeError:
-                        pass
-            transaction.record_undo(undo)
-        object.__setattr__(parent, attr, modules[name])
-        parents[name] = modules[name]
-    return namespace
+    from .publication import bind_published_namespace as bind
+    return bind(namespace, published, transaction=transaction)
 
 
 __all__ = [
