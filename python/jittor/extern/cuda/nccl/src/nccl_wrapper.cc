@@ -9,7 +9,6 @@
 // ***************************************************************
 #include "misc/cuda_flags.h"
 #include "nccl_wrapper.h"
-#include "event_queue.h"
 #include "var.h"
 #include "mem/allocator.h"
 #include "misc/collective_dtype.h"
@@ -594,9 +593,7 @@ void nccl_init() {
         // the memory pools and the library handles agree with it about which
         // device this rank is on.
         set_current_device(nccl_device_id);
-        event_queue.run_sync([]() {
-            checkCudaErrors(cudaSetDevice(nccl_device_id));
-        });
+        checkCudaErrors(cudaSetDevice(nccl_device_id));
         // Rendezvous through the shared helper (misc/file_rendezvous.h), which
         // fails loudly on timeout. What this replaces did not: non-zero ranks
         // polled for a hardcoded 121 s and then fell through WITHOUT CHECKING
@@ -657,9 +654,7 @@ void nccl_init() {
     }
     LOGv << "NCCL init in device" << nccl_device_id << "local_rank" << mpi_local_rank;
     set_current_device(nccl_device_id);
-    event_queue.run_sync([]() {
-        checkCudaErrors(cudaSetDevice(nccl_device_id));
-    });
+    checkCudaErrors(cudaSetDevice(nccl_device_id));
     if (mpi_local_size > device_count) {
         // NCCL not support multiple process on one GPU,
         // failback use MPI

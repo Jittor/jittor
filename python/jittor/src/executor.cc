@@ -844,10 +844,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         last_is_cuda = false;
         sync_times++;
         try {
-        // CHECK(EventQueue::OK == event_queue.run_sync([]() {
             sync_devices(touched_devices);
-        // }));
-        // TODO: run_sync cause hang, tmp fix it
         } catch (const std::exception& e) {
             // log memory info
             display_memory_info(__FILELINE__, false, true);

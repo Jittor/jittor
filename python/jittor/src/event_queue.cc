@@ -17,7 +17,6 @@ void EventQueue::Worker::start() {
         Func todo;
         {
             std::unique_lock<std::mutex> l(self->mtx);
-            event_queue.cv.notify_one();
             self->cv.wait(l);
             todo = self->todo;
         }
@@ -66,20 +65,6 @@ EventQueue::Worker::~Worker() {
     // exception", SIGABRT, and (through the SIGCHLD handler in log.cc) a
     // parent process that saw nothing at all.
     stop();
-}
-
-void EventQueue::worker_caller() {
-    int status = OK;
-    try {
-        event_queue.func();
-    } catch (const std::exception& e) {
-        LOGe << "Catch error:\n" >> e.what();
-        status = ERROR;
-    }
-    {
-        std::lock_guard<std::mutex> l(event_queue.mtx);
-        event_queue.run_sync_done = status;
-    }
 }
 
 #endif
