@@ -446,7 +446,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 4.03 | `BackendRegistry` | 待领 | | |
 | 4.04 | `OpRegistry` | 待领 | | |
 | 4.05 | Python 分派表 | 待领 | | |
-| 4.06 | `jt.flags.backend_fallback ∈ {error, warn, allow… | 待领 | | |
+| 4.06 | `jt.flags.backend_fallback ∈ {error, warn, allow… | 待领 | device | `BackendFallbackPolicy` 独立核心切片：校验 `error/warn/allow`、默认 `warn`、结构化决策与 fail-closed 异常；`tests/structure/test_backend_fallback_policy.py` 3 passed。尚未接入 native flags/BackendRegistry/OpRegistry，整卡继续待领 |
 | 4.07 | 后端配置改为返回 `BuildConfig` 值 | 待领 | | |
 | 4.08 | 流与事件模型 | 已合并 | device | `0dfcb3dd` 每设备 copy/communication stream 与 ready/done event，接入 array H2D、fetch D2H、device_copy、NCCL collective；`78235157` 双 rank NCCL 用 rank 相关输入验证数值且 communication 双向依赖计数精确 +2。GPU 0/2：两 rank 各 1 passed，mixed-device H2D/fetch 2 passed，6.C16 下毒 1 passed，device_copy/multi-device 6 passed，既有 overlap 正确性 1 passed；未用负载敏感绝对墙钟阈值 |
 | 4.09 | per-device 库句柄 | 已合并 | device | `13c28084`；4.02 已有五库 per-device 资源，本提交补齐每次执行前 SetStream。GPU 0/2 新增测试实际执行 cuBLAS/cuDNN/cuSPARSE/cuRAND/cuFFT 各两次并断言两卡逐库 bind 计数均 +2，1 passed；各库现有 wrapper 聚焦 5 passed；CPU 聚焦 1 passed |

@@ -9,8 +9,10 @@ from .registry import (
     RegistryError,
     UnknownBackend,
 )
+from .fallback import BackendFallbackPolicy, FallbackDecision, FallbackError, FallbackMode
 
 __all__ = [
     "BackendRegistry", "BackendSpec", "DuplicateRegistration",
     "MissingKernel", "OpRegistry", "RegistryError", "UnknownBackend",
+    "BackendFallbackPolicy", "FallbackDecision", "FallbackError", "FallbackMode",
 ]
