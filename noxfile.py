@@ -2053,6 +2053,11 @@ def nccl(session):
     env["use_cutt"] = "0"
     env["use_cutlass"] = "0"
     env["use_parallel_op_compiler"] = "0"
+    # A successful NCCL gate must execute a communication case.  Without
+    # these two requirements a missing NCCL build can turn every stream test
+    # into ``@skip("nccl not found")`` and still exit green.
+    env["JITTOR_TEST_REQUIRE_EXECUTION"] = "1"
+    env["JITTOR_TEST_ACCELERATOR_MIN_EXECUTED"] = "1"
 
     raw_devices = env.get("CUDA_VISIBLE_DEVICES", "").strip()
     devices = [item.strip() for item in raw_devices.split(",") if item.strip()]
