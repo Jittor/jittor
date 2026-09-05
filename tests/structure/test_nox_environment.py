@@ -162,3 +162,21 @@ def test_worker_split_updates_every_thread_pool(monkeypatch, tmp_path):
 
     expected = str(module["worker_thread_budget"](4))
     assert {split[name] for name in module["_THREAD_ENV_NAMES"]} == {expected}
+
+
+def test_gate_workers_respect_a_smaller_cgroup_quota(monkeypatch, tmp_path):
+    """xdist must not create idle workers beyond the CPU quota."""
+    module = _load_noxfile(monkeypatch, tmp_path)
+    module["_runtime_gate_workers"].__globals__["GATE_WORKERS"] = 4
+    module["_runtime_gate_workers"].__globals__["effective_cpu_count"] = lambda: 1
+
+    assert module["_runtime_gate_workers"]() == 1
+
+
+def test_gate_workers_keep_the_configured_count_when_quota_is_sufficient(
+        monkeypatch, tmp_path):
+    module = _load_noxfile(monkeypatch, tmp_path)
+    module["_runtime_gate_workers"].__globals__["GATE_WORKERS"] = 4
+    module["_runtime_gate_workers"].__globals__["effective_cpu_count"] = lambda: 8
+
+    assert module["_runtime_gate_workers"]() == 4

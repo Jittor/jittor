@@ -26,7 +26,8 @@ try:
         native_arguments as gate_native_arguments,
         torch_arguments as gate_torch_arguments,
     )
-    from _helpers.tiers import worker_thread_budget  # noqa: E402
+    from _helpers.tiers import (  # noqa: E402
+        effective_cpu_count, worker_thread_budget)
     from _helpers.process_modes import TORCH_MODE_PATHS  # noqa: E402
 finally:
     sys.path.remove(str(REPO_ROOT / "tests"))
@@ -596,6 +597,19 @@ CPU_GATE_REQUIREMENTS = (
 #: machine anyone has: ``tests/_helpers/tiers.SMOKE_WORKERS`` is the same number
 #: and the fast tier's budget is checked against it, so the two have to agree.
 GATE_WORKERS = int(os.environ.get("JITTOR_GATE_WORKERS", "4"))
+
+
+def _runtime_gate_workers():
+    """Cap xdist workers at the CPUs the process can actually consume.
+
+    ``_split_threads`` already prevents OpenMP oversubscription, but leaving
+    extra xdist workers alive still pays interpreter/import and scheduler cost
+    when a cgroup quota is smaller than the configured CI runner.  On the
+    normal four-core runner this returns ``GATE_WORKERS`` unchanged; in a
+    one-core container it runs one worker instead of four workers competing
+    for the same quota.
+    """
+    return max(1, min(GATE_WORKERS, effective_cpu_count()))
 
 
 def _xdist(workers, distribution="loadfile"):
@@ -1636,8 +1650,9 @@ def smoke(session):
     # ``loadgroup``: the four tests that intentionally share module state are
     # marked as one xdist group, while independent tests in the same file can
     # run on other workers.  Full keeps loadfile's surveyed ordering.
-    fast = ("-m", "not slow") + _xdist(GATE_WORKERS, distribution="loadgroup")
-    env = _split_threads(env, GATE_WORKERS)
+    workers = _runtime_gate_workers()
+    fast = ("-m", "not slow") + _xdist(workers, distribution="loadgroup")
+    env = _split_threads(env, workers)
     _run_pytest_once(session, gate_native_arguments() + fast, env)
     torch_env = env.copy()
     torch_env["JITTOR_TORCH_SHIM"] = "1"
@@ -1667,8 +1682,9 @@ def cpu(session):
     # changes lazy execution, reduction defaults and gradient semantics -- so a
     # single `pytest tests` run cannot assert both. Each session still selects
     # by exclusion, so a new test file is gated the moment it is written.
-    parallel = _xdist(GATE_WORKERS)
-    full_env = _require_execution(_split_threads(env, GATE_WORKERS))
+    workers = _runtime_gate_workers()
+    parallel = _xdist(workers)
+    full_env = _require_execution(_split_threads(env, workers))
     _run_pytest_once(session, gate_native_arguments() + parallel, full_env)
     torch_env = full_env.copy()
     torch_env["JITTOR_TORCH_SHIM"] = "1"
