@@ -51,6 +51,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "check_graph": jt.flags.check_graph,
         "missing_grad_error": jt.flags.missing_grad_error,
         "disable_lock": jt.flags.disable_lock,
+        "trace_var_data": jt.flags.trace_var_data,
     }
     assert jt.runtime.device_id == getattr(jt.flags, "device_id", -1)
     assert jt.runtime.use_cuda == jt.flags.use_cuda
@@ -477,3 +478,21 @@ def test_runtime_disable_lock_is_a_live_read_only_view():
             jt.runtime.context.disable_lock = 0
     finally:
         jt.flags.disable_lock = original
+
+
+def test_runtime_trace_var_data_is_a_live_read_only_view():
+    import jittor as jt
+
+    original = jt.flags.trace_var_data
+    try:
+        assert jt.runtime.trace_var_data == original
+        with jt.flag_scope(trace_var_data=1):
+            assert jt.runtime.trace_var_data == 1
+            assert jt.runtime.context.snapshot()["trace_var_data"] == 1
+        assert jt.runtime.trace_var_data == original
+        with pytest.raises(AttributeError):
+            jt.runtime.trace_var_data = 0
+        with pytest.raises(AttributeError):
+            jt.runtime.context.trace_var_data = 0
+    finally:
+        jt.flags.trace_var_data = original

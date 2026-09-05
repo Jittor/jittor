@@ -919,6 +919,11 @@ class RuntimeContext:
         """Whether the build cache file lock is disabled."""
         return self._flags.disable_lock
 
+    @property
+    def trace_var_data(self):
+        """Whether variable data tracing is enabled for Python debugging."""
+        return self._flags.trace_var_data
+
     def snapshot(self):
         """Return an immutable snapshot of the fields owned by this context."""
         return {
@@ -947,6 +952,7 @@ class RuntimeContext:
             "check_graph": int(self.check_graph),
             "missing_grad_error": int(self.missing_grad_error),
             "disable_lock": int(self.disable_lock),
+            "trace_var_data": int(self.trace_var_data),
         }
 
 
@@ -1061,6 +1067,10 @@ class RuntimeState:
     @property
     def disable_lock(self):
         return self._context.disable_lock
+
+    @property
+    def trace_var_data(self):
+        return self._context.trace_var_data
 
     @property
     def context(self):
