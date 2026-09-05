@@ -28,7 +28,7 @@
 | | |
 | --- | --- |
 | 分支 | `2.0-refactor`；当前状态基线 `b90602d6`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 当前 1834 个 |
+| 相对 `2.0` 的提交 | 当前 1839 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **211** / 进行中 **0** / 待领 **61** / 并入其它任务 **13** |
 | 沉淀的 skill | `agent/skills/` 下 **34** 个目录 |
@@ -2065,6 +2065,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `fbbc69d7` 增加 Native generation-checked consumer lease，结构 11/JIT 2 passed。 |
 | `device` | `faca96ac` 将 ACL AclDataView 限定为 callback 内借用、不可复制/移动，ACL 20 passed；CANN/NPU runner仍待。 |
 | `compat` | `c7393df6` 对 Torch distribution graph 输入 fail-closed，namespace 39 passed；独立 distribution 完整发布仍待。 |
+
+### 2026-09-05 第二百一十五波：Runtime/provider/descriptor/bootstrap 前置
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `2999cce2` 将 `use_cuda_host_allocator` 纳入 RuntimeContext owner，结构 41 passed；全局状态仍待迁移。 |
+| `device` | `97224dbb` 增加 Native provider lifecycle event ABI contract，结构 12/JIT 通过。 |
+| `device` | `e4393dc3` 增加 ACL descriptor device_size lifecycle count，ACL 10 passed；CANN/NPU runner仍待。 |
+| `compat` | `db84f2d0` 强制 Torch bootstrap `__all__` canonical contract，namespace 40 passed；独立 distribution 完整发布仍待。 |
 
 ## 7. 接手怎么开始
 
