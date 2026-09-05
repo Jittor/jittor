@@ -1985,6 +1985,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `b37ec5c1` 增加 ACL descriptor 单键失效，ACL 合同 26 passed；CANN/NPU runner仍待。 |
 | `compat` | `3e2e9633` 统一 standalone torch distribution facade，namespace 30 passed；独立 distribution 完整发布仍待。 |
 
+### 2026-09-05 第二百零六波：异机生命周期/Bootstrap 前置
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `5b2c7d08` 将 `node_order` 纳入 RuntimeContext owner，结构 32 passed；全局状态仍待迁移。 |
+| `device` | `8ab9591f` 原子发布 Native consumer metadata+dispatch snapshot，结构 7 passed；真实 provider 仍待。 |
+| `device` | `ad41509a` 增加 ACL DescriptorCache `erase_device` 批量失效，C++/Python 19 passed；CANN/NPU runner仍待。 |
+| `compat` | `23d2f648` 增加 standalone torch bootstrap surface validator，namespace/structure 37 passed；独立 distribution 完整发布仍待。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。

@@ -1,5 +1,8 @@
 # 整改看板
 
+> 第206波：异机前置继续：`5b2c7d08` 迁移 node_order Runtime owner（结构 32 passed）；`8ab9591f` 原子发布 Native consumer metadata+dispatch snapshot（结构 7 passed）；`ad41509a` ACL DescriptorCache 增加 erase_device 生命周期失效（C++/Python 19 passed）；`23d2f648` 增加 standalone torch bootstrap surface validator（namespace/structure 37 passed）。未声称 CUDA/NPU 实机。
+
+
 > 第205波：异机前置继续：`e4399f28` 迁移 log_silent/log_sync/log_v Runtime owner（结构 31 passed）；`838ad234` 增加 NativeProviderConsumerContract ABI/provider一致性（结构 6 passed）；`b37ec5c1` ACL descriptor cache 单键失效（ACL 26 passed）；`3e2e9633` 统一 standalone torch distribution facade（namespace 30 passed）。未声称 CUDA/NPU 实机。
 
 
