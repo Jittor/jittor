@@ -51,7 +51,8 @@ import sys
 import traceback
 
 __all__ = ["swallowed", "records", "counts", "clear", "debug_enabled",
-           "set_debug", "Record", "EXPECTED", "ENV_VAR", "LIMIT"]
+           "set_debug", "sdpa_flash_stats", "set_sdpa_flash_stats",
+           "Record", "EXPECTED", "ENV_VAR", "LIMIT"]
 
 #: What a compatibility probe is allowed to absorb when the guarded block is
 #: heterogeneous enough that a tighter tuple would be a guess.
@@ -89,6 +90,45 @@ LIMIT = 2048
 _records = collections.deque(maxlen=LIMIT)
 _counts = collections.Counter()
 _debug = None
+_sdpa_flash_stats = None
+
+
+def _new_sdpa_flash_stats():
+    return {"hits": 0, "misses": {}, "casts": {}, "backend": None}
+
+
+def sdpa_flash_stats(owner=None):
+    """Return the canonical SDPA FlashAttention statistics mapping.
+
+    ``owner`` is the legacy ``jittor`` module.  The mapping is owned by this
+    diagnostics facade; the historical ``owner._torch_sdpa_flash_stats``
+    attribute remains a live alias for callers that inspect or replace it.
+    If that alias is removed (as the compatibility tests do between runs), a
+    fresh mapping is published on the next access.
+    """
+    global _sdpa_flash_stats
+    if owner is not None:
+        legacy = getattr(owner, "_torch_sdpa_flash_stats", None)
+        if isinstance(legacy, dict):
+            if legacy is not _sdpa_flash_stats:
+                _sdpa_flash_stats = legacy
+        else:
+            _sdpa_flash_stats = _new_sdpa_flash_stats()
+            setattr(owner, "_torch_sdpa_flash_stats", _sdpa_flash_stats)
+    elif _sdpa_flash_stats is None:
+        _sdpa_flash_stats = _new_sdpa_flash_stats()
+    return _sdpa_flash_stats
+
+
+def set_sdpa_flash_stats(stats, owner=None):
+    """Replace SDPA statistics and optionally publish the legacy root alias."""
+    global _sdpa_flash_stats
+    if not isinstance(stats, dict):
+        raise TypeError("SDPA flash statistics must be a dict")
+    _sdpa_flash_stats = stats
+    if owner is not None:
+        setattr(owner, "_torch_sdpa_flash_stats", stats)
+    return stats
 
 
 def debug_enabled():

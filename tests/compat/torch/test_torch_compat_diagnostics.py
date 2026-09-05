@@ -83,6 +83,24 @@ class TestItIsReachableFromTheTorchSurface(Base):
             with self.subTest(api=name):
                 self.assertTrue(callable(getattr(torch, name, None)))
 
+    def test_sdpa_stats_facade_keeps_legacy_root_alias(self):
+        stats = diagnostics.sdpa_flash_stats(torch)
+        stats["hits"] = 3
+        self.assertIs(stats, torch._torch_sdpa_flash_stats)
+        self.assertEqual(diagnostics.sdpa_flash_stats(torch)["hits"], 3)
+
+        replacement = {"hits": 7, "misses": {}, "casts": {}, "backend": "mock"}
+        diagnostics.set_sdpa_flash_stats(replacement, torch)
+        self.assertIs(torch._torch_sdpa_flash_stats, replacement)
+        self.assertIs(diagnostics.sdpa_flash_stats(torch), replacement)
+
+    def test_sdpa_stats_alias_removal_starts_a_fresh_run(self):
+        diagnostics.sdpa_flash_stats(torch)["hits"] = 9
+        del torch._torch_sdpa_flash_stats
+        stats = diagnostics.sdpa_flash_stats(torch)
+        self.assertEqual(stats["hits"], 0)
+        self.assertIs(stats, torch._torch_sdpa_flash_stats)
+
     def test_what_the_layer_swallows_shows_up_there(self):
         self._record("probe: something the layer continued past")
         self.assertIn("probe: something the layer continued past",
