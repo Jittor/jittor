@@ -132,6 +132,8 @@
 >
 > 第170波：`6c86fb20` 将 CuPy 从 import jittor 热路径懒加载，导入/CPU回归 2 passed；`7eedcbd8` 统一 SDPA flash stats diagnostics facade，定向 2 passed；`b6de9642` 增加 3.18 单 kernel 冷编译分段 profiling skill，clang 全流程实测通过。聚合任务仍待完整验收。
 >
+> 第171波：`83c26d42` 完成 2.24 FusedOp 显式 `op_index/var_index` 映射，移除 `Node::custom_data` 最后用户；结构合同 4 passed，fused 聚焦 2 passed。2.24 正式关闭。
+>
 > 第159波增量（7.03，六个 cohort）：`16333333` amax/amin/count_nonzero 收回原生 owner；`9cba7d68` cumsum/cumprod；`50876abf` sort/argsort/topk/median；`d94c5cbd` sign/trunc/frac/exp2/log10 归一到单一 owner；`a7dcae1c` nan_to_num/logaddexp；`d1535282` outer/tensordot/repeat_interleave 改为再导出原生 owner。**这一波补上了 7.03 一直缺的 CUDA 那一层**：此前约三十个 cohort 的证据全是「CPU N passed」，本波两个 cohort 用 `instantiate_device_type_tests` 在 CPU 与 CUDA 各跑一遍（各 15 passed / 13 passed），并跑出两处真实差异——4096 元素 float32 `cumsum` 两侧相对差 1.4e-06（并行前缀和比顺序扫描更准），512 元素重复键 `argsort` 的 indices 两侧不同而 values 逐位相同；两者都判为后端固有并登记进 fidelity，测试改为钉有界不一致与整数路径逐位相等。**同时修掉两处「一个 API 两个对象」**：`torch.sign(int32)` 返回 float32 而 `Tensor.sign()` 返回 int32（真 PyTorch 2.12 两者都是 int32，属静默错 dtype，修前失败/修后通过的用例已随提交落地）；`repeat_interleave` 的转发 wrapper 让`torch.repeat_interleave is jittor.repeat_interleave` 不成立，两条结构门禁因此长期红，现已转绿（`tests/structure` 由本波开始时的 15 failed 降到 4 failed，其中 2 条是本波修的、其余为别的分区）。新增 skill `agent/skills/torch-api-cohort-promotion/`。7.03 仍按剩余范围保持「待领」。
 >
 > 第160波增量（9.01 import 耗时）：`cf3835ee` 把热缓存 `import jittor` 归因到具体一步（核心编译在无事可做时占 CPU-only 配置的 68%），`51d0439f` 把核心编译收进 `compiler.build_core()` 并加构建戳。热缓存 import CPU-only 1.332→0.413 s **达标**、CUDA 2.457→1.545 s **未达标**；冷缓存与换配置仍全量编译核心，9.01 保持待领。另核实三条**既有**阻塞（基线 `534d375d`，均非 9.01 引入、改前改后位置一致）：`tests/core/test_device_methods.py` 与 `tests/backends/cuda/test_device_methods.py` 同名，pytest 收集期报 import file mismatch 并整体中止 native 门禁，需 `--continue-on-collection-errors` 才跑得完；native 门禁在 `test_complex64_linalg::test_svdvals` 进程 abort；torch 门禁在 `test_torch_compat_autograd::test_a_second_call_does_not_steal_the_first_calls_context` 进程 abort。
@@ -405,7 +407,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 2.21 | `DEFINE_FLAG_WITH_SETTER` 先赋值再调 setter，签名收新旧两值 | 已合并 | coreops | 14336afd |
 | 2.22 | 环境变量统一 `JT_` 前缀 | 待领 | | |
 | 2.23 | 布局收尾 | 待领 | | |
-| 2.24 | `custom_data` 的最后一个用户：FusedOp 跨阶段 var 索引 | 待领 | | 依赖 3.11，需显式 `var→index` 映射并保持 relay/融合生成代码不变 |
+| 2.24 | `custom_data` 的最后一个用户：FusedOp 跨阶段 var 索引 | 已合并 | coreops | `83c26d42`：FusedOp 建立显式 `Op*`/`Var*` index map，update/load/relay 共用映射；移除 Node::custom_data。结构 4 passed，fused 聚焦 2 passed。 |
 | 2.25 | 反向可达叶子查询（`is_leaf`/`grad_fn` 的内核答案） | 已合并 | coreops | `c6e62ba1`（查询与内核用例）、`781d4188`（与真 PyTorch 的逐例对拍）。2026-09-04 由 `7.11`／`7.12` 的共同前置派生。一条查询 `backward_grad_fn(Var*)`（`grad.h`）四种拼写（`Var.is_backward_leaf`、`grad_fn_node_id`、`grad_fn_op_id` 用 2.17 的注册期 id、`grad_fn_name` 仅诊断）；语义是 requires_grad 与「生产者有一条能带梯度的入边」的合取，四条过滤器与 `grad()` 的 `bfs_backward` 同源（两个 requires_grad 标志、生产者自身 stop_grad、控制依赖边、`Op::init` 冻结的 disabled 边）。**O(生产者入度)，不遍历、不缓存、不引入进程级 id 键字典**；查询前后 `tflag_count` 不变的用例把「没有遍历」钉住，另一条在未结束的 `TraversalEpoch` 里查询证明 2.03 的机制没被动。修前 20 failed → 修后 20 passed；定向 CPU 208 passed 对基线 188 passed（同 4 条既有失败，零回归），CUDA 73 passed；与真 PyTorch 2.12.1 的 19 个用例 16 个三元组全等、2 个只差 `requires_grad`、1 个的形状差异由 `requires_grad` 传导（在 `EXPLICIT_REQUIRES_GRAD` 策略下同样全等）。**`7.11` 的接线未做**，`compat/**` 属兼容层分区 |
 | 3.01 | `Executor::run_sync` | 待领 | | |
 | 3.02 | jit key 结构化 | 待领 | | |
