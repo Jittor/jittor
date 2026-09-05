@@ -261,6 +261,11 @@ inline void validate_schema(const AclAttrSchema& schema) {
         const AclAttrField& field = item.second;
         if (name.empty())
             internal_error("ACL schema field names must be non-empty");
+        // Validate the declaration even when it has no default.  Otherwise an
+        // invalid enum value can sit in a required field and only surface as
+        // a misleading missing-value/user-data error during decode.
+        if (!is_valid_type(field.type))
+            internal_error("ACL schema contains an invalid type tag for " + name);
         if (field.has_default)
             validate_value(name, field.type, field.default_value, true);
         if (field.required && field.has_default)

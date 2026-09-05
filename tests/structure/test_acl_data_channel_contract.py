@@ -233,3 +233,27 @@ int main() {
         binary = Path(directory) / "probe"
         _compile(source, binary)
         subprocess.run([str(binary)], check=True)
+
+
+def test_acl_schema_rejects_invalid_type_without_default():
+    source = r'''
+#include "python/jittor/extern/acl/aclops/acl_data_channel.h"
+int main() {
+    using namespace jittor::acl_data;
+    AclAttrSchema schema;
+    AclAttrField invalid;
+    invalid.type = static_cast<AclDataType>(99);
+    invalid.required = true;
+    schema.emplace("dim", invalid);
+    try {
+        AclDataOwner owner("Softmax", schema);
+        return 1;
+    } catch (const jittor::InternalInvariantError&) {
+        return 0;
+    }
+}
+'''
+    with tempfile.TemporaryDirectory(prefix="jittor-acl-schema-invalid-") as directory:
+        binary = Path(directory) / "probe"
+        _compile(source, binary)
+        subprocess.run([str(binary)], check=True)

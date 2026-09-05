@@ -121,7 +121,10 @@ field, and then invokes the generated/static consumer with the same bounded
 allocate an ACL object, or make a CANN call. The CPU-only contract probe covers
 the valid path and all three registration failures.
 
-Malformed user data (unknown field, wrong type, missing required value, a
+Malformed integration schemas are rejected at owner construction, including
+an invalid type tag on a field without a default. This keeps a bad registry
+declaration from being misclassified later as caller data. Malformed user data
+(unknown field, wrong type, missing required value, a
 non-canonical vector representation, or an unsupported schema version) raises
 `UserError`; a violated internal schema
 raises `InternalInvariantError`. The helper produces the canonical cache key
