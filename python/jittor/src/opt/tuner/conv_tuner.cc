@@ -18,6 +18,7 @@
 #include "opt/pass_manager.h"
 #include "opt/expr.h"
 #include "ops/op_register.h"
+#include "ops/op_capability.h"
 
 #include <algorithm>
 #include <cstring>
@@ -25,7 +26,6 @@
 namespace jittor {
 
 using namespace expr;
-DECLARE_RUNTIME_FLAG(int, use_cuda);
 
 struct OpInspector {
     // binary mask for
@@ -231,14 +231,6 @@ void ConvTuner::forwardTune(FusedOp* fop) {
         if (!(bop->y->input() && bop->x->input() && fop->has(bop->x->input()) && fop->has(bop->y->input()))) continue;
         if (!(bop->x->input()->type()==OpType::broadcast && bop->y->input()->type()==OpType::broadcast)) return;
 
-        // only support float32,float16 currently
-        if (runtime_flag_use_cuda()) {
-            if (!bop->z->dtype().is_float())
-                continue;
-        } else {
-            if (bop->z->dtype() != ns_float32)
-                continue;
-        }
         Op* ops[3] = {op, bop->x->input(), bop->y->input()};
         int ok = 0;
         LOGvvvv << "conv like op" << fop << fop->get_jit_key(get_jk());
@@ -305,17 +297,6 @@ void ConvTuner::forwardTune(FusedOp* fop) {
             auto yformat = xoi.format("abcd", {yn, yc, yh, yw});
             LOGvvvv << "yformat =" << yformat;
 
-            // mkl doesn't support "cdab" format
-            if (yformat == "cdab") continue;
-            // cudnnSetFilterNdDescriptor accepts only NCHW ("oihw") and NHWC
-            // ("ohwi") filter layouts, and the relayed kernel names the layout
-            // directly as filterFormat_@WFORMAT. Relaying any other
-            // permutation -- "hwio", which an NHWC/HWIO convolution produces --
-            // emits a kernel that references an undefined identifier. The
-            // compile failure then surfaces at run time as a call through a
-            // null relay pointer, i.e. a segfault rather than a diagnosis.
-            if (fop->flag(OpFlags::_cuda) && wformat != "oihw" && wformat != "ohwi")
-                continue;
             if (xoi.failed) continue;
             std::stringstream ss;
             // i@zh*stride+i@zwh+padding
@@ -346,10 +327,6 @@ void ConvTuner::forwardTune(FusedOp* fop) {
             int dilation_w = rw[2]->as_int();
             if (dilation_h < 1 || dilation_w < 1) continue;
             LOGvvvv <<  "get stride padding and dilation" << stride_h << padding_h << dilation_h;
-            if (xformat == "bacd") {
-                LOGvvvv << "mkl not support bacd, continue";
-                continue;
-            }
             Var* x = x_id == 0 ? xoi.op->output(0) : xoi.op->input(0);
             Var* w = w_id == 0 ? woi.op->output(0) : woi.op->input(0);
             Var* y = y_id == 0 ? yoi.op->output(0) : yoi.op->input(0);
@@ -363,48 +340,40 @@ void ConvTuner::forwardTune(FusedOp* fop) {
             }
             int groups = zg==-1 ? 1 : x->shape[xc] / w->shape[wci];
             LOGvvvv << "groups: " << groups;
-            if (groups>1 && wformat != "oihw")
-                continue;
-
             VarPtr rvar;
             int rid;
-            string relay_conv_name;
+            auto backend = fop->flag(OpFlags::_cpu) ? BackendId::Cpu : accelerator_backend_id();
+            OpCapability capability;
 
             if (y_id == 0) {
-                relay_conv_name = fop->flag(OpFlags::_cpu) ?
-                    "mkl_conv" : "cudnn_conv";
-                if (!has_op(relay_conv_name))
-                    continue;
-                auto make_conv = get_op_info(relay_conv_name)
-                        .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, string, string, string>();
+                capability = OpCapability::Conv2d;
+                auto make_conv = find_op_capability<VarPtr, Var*, Var*, int, int, int, int, int, int, int, string, string, string>(
+                    backend, capability, x, w, stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w, groups, xformat, wformat, yformat);
+                if (!make_conv) continue;
                 LOGvvvv << x << w << stride_h << stride_w << padding_h << padding_w << dilation_h << dilation_w << groups << xformat << wformat << yformat;
                 rvar = make_conv(x, w, stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w, groups, xformat, wformat, yformat);
             } else
             if (x_id == 0) {
-                relay_conv_name = fop->flag(OpFlags::_cpu) ?
-                        "mkl_conv_backward_x" : "cudnn_conv_backward_x";
-                if (!has_op(relay_conv_name))
-                    continue;
+                capability = OpCapability::Conv2dBackwardInput;
                 auto height = x->shape[xformat.find("c")];
                 auto width = x->shape[xformat.find("d")];
-                auto make_conv_x = get_op_info(relay_conv_name)
-                        .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>();
+                auto make_conv_x = find_op_capability<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>(
+                    backend, capability, w, y, height, width, stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w, groups, xformat, wformat, yformat);
+                if (!make_conv_x) continue;
                 LOGvvvv << w << y << height << width << stride_h << stride_w << padding_h << padding_w << dilation_h << dilation_w << groups << xformat << wformat << yformat;
                 rvar = make_conv_x(w, y, height, width, stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w, groups, xformat, wformat, yformat);
             } else {
-                relay_conv_name = fop->flag(OpFlags::_cpu) ?
-                        "mkl_conv_backward_w" : "cudnn_conv_backward_w";
-                if (!has_op(relay_conv_name))
-                    continue;
+                capability = OpCapability::Conv2dBackwardWeight;
                 auto kh = w->shape[wformat.find("h")];
                 auto kw = w->shape[wformat.find("w")];
                 LOGvvvv << x << y << kh << stride_h << stride_w << padding_h << padding_w << dilation_h << dilation_w << groups << xformat << wformat << yformat;
-                auto make_conv_w = get_op_info(relay_conv_name)
-                        .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>();
+                auto make_conv_w = find_op_capability<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>(
+                    backend, capability, x, y, kh, kw, stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w, groups, xformat, wformat, yformat);
+                if (!make_conv_w) continue;
                 rvar = make_conv_w(x, y, kh, kw, stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w, groups, xformat, wformat, yformat);
             }
 
-            LOGvvvv << relay_conv_name << "output:" << rvar;
+            LOGvvvv << op_capability_name(capability) << "output:" << rvar;
             rid = fop->context->vrm.add_relay_group({{rvar, op->output(0)}});
             if (rid>=0) {
                 auto srid = "relay"+S(rid);

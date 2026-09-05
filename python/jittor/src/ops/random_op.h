@@ -10,6 +10,7 @@
 namespace jittor {
 
 struct RandomOp : Op {
+    static constexpr uint32 backend_mask = OpBackendCpu;
     Var* output;
     NanoString type;
     RandomOp(NanoVector shape, NanoString dtype=ns_float32, NanoString type=ns_uniform);

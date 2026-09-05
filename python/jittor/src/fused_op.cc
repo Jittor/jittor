@@ -11,6 +11,7 @@
 #include "utils/fast_shared_ptr.h"
 #include "runtime/device.h"
 #include "runtime/jit_policy.h"
+#include "ops/op_register.h"
 
 namespace jittor {
 
@@ -106,10 +107,16 @@ void FusedOp::update_ops() {
 
 FusedOp::FusedOp() {
     Op::number_of_lived_ops--;
+    set_flag(OpFlags::_cpu, !runtime_use_cuda());
+    set_flag(OpFlags::_cuda, !!runtime_use_cuda());
 }
 
 FusedOp::FusedOp(const FusedOp& other) {
     Op::number_of_lived_ops--;
+    set_flag(OpFlags::_cpu, other.flag(OpFlags::_cpu));
+    set_flag(OpFlags::_cuda, other.flag(OpFlags::_cuda));
+    registered_definition = other.registered_definition;
+    registered_op_id = other.registered_op_id;
     ops = other.ops;
     op_index = other.op_index;
     var_index = other.var_index;
@@ -148,13 +155,15 @@ void FusedOp::statistics(uint64_t& in, uint64_t& out, uint64_t& compute) {
     }
 }
 
-void FusedOp::do_jit_prepare(JK& jk) {
+void FusedOp::prepare_fused_key(JK& jk) {
     jk.clear();
     for (uint i=0; i<ops.size(); i++) {
         Op* op = ops[i];
         jk << "«opkey" << i << JK::val;
         jk << op->name();
-        op->jit_prepare(jk);
+        op->prepare_fragment(jk);
+        const auto& identity = op->definition().compile_identity;
+        if (!identity.empty()) add_jit_define(jk, "op_definition", i, identity);
     }
     jk << "«JIT:1";
     if (!runtime_use_cuda()) {
@@ -224,11 +233,7 @@ void FusedOp::do_jit_prepare(JK& jk) {
     jk.finilize();
 }
 
-void FusedOp::do_prepare(JK& jk) {
-    do_jit_prepare(jk);
-}
-
-void FusedOp::do_run_after_prepare(JK& jk) {
+void FusedOp::execute_fused_prepared(JK& jk) {
     // Keep the cache lookup independent from JK's reusable thread-local
     // buffer; preparation of the next op may overwrite it immediately.
     string jit_key = jk.to_string();
@@ -272,17 +277,11 @@ int FusedOp::has(Node* node) {
     return context->node_id.count(node);
 }
 
-void FusedOp::do_run() {
-    JK& jk = get_jk();
-    do_prepare(jk);
-    do_run_after_prepare(jk);
-}
-
 #else // JIT
 void FusedOp::jit_run() {
     for (uint i=0; i<ops.size(); i++) {
         LOGvvvv << "fuse run:" << ops[i] << ops[i]->inputs() << ops[i]->outputs();
-        ops[i]->do_run();
+        ops[i]->run_registered();
     }
 }
 #endif // JIT

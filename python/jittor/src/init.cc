@@ -14,6 +14,9 @@
 #include <csignal>
 #include "init.h"
 #include "ops/op_register.h"
+#include "ops/op_registration.h"
+#include "ops/tape_op.h"
+#include "fused_op.h"
 #include "var.h"
 #include "op.h"
 #include "executor.h"
@@ -102,7 +105,22 @@ void init() {
     // init default_random_engine
     set_seed(time(0));
     // init fused op
-    op_registe({"fused","",""});
+    OpDef fused("fused", "", "");
+    Codegen fused_codegen;
+    fused_codegen.fragment = [](Op* op, JK& key) {
+        static_cast<FusedOp*>(op)->prepare_fused_key(key);
+    };
+    fused_codegen.prepare = fused_codegen.fragment;
+    fused_codegen.optimize = [](Op*, string&) {};
+    Kernel fused_kernel;
+    fused_kernel.jit = [](Op* op, JK& key) {
+        static_cast<FusedOp*>(op)->execute_fused_prepared(key);
+    };
+    fused.codegen = fused_codegen;
+    fused.implementations.emplace(BackendId::Cpu, OpImplementation{fused_kernel, fused_codegen});
+    fused.implementations.emplace(accelerator_backend_id(), OpImplementation{fused_kernel, fused_codegen});
+    op_registe(fused);
+    register_op_definition<Tapes>({"tapes", "", ""});
     init_cuda_devices();
     LOGv << "sizeof(Node)" << sizeof(Node);
     LOGv << "sizeof(Var)" << sizeof(Var);

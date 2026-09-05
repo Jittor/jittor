@@ -14,6 +14,7 @@
 namespace jittor {
 
 struct ArgsortOp : Op {
+    static constexpr uint32 backend_mask = OpBackendCpu;
     Var* x, * y, * y_key;
     string cmp;
     int dim;

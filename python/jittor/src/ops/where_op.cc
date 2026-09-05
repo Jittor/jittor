@@ -8,6 +8,7 @@
 #include "ops/where_op.h"
 #include "runtime/device.h"
 #include "ops/op_register.h"
+#include "ops/op_capability.h"
 #ifdef JIT_cuda
 #include "executor.h"
 #include <assert.h>
@@ -25,10 +26,10 @@ WhereOp::WhereOp(Var* cond, NanoString dtype) : cond(cond) {
     auto ndim = cond->shape.size();
     #ifdef HAS_CUDA
     if (runtime_use_cuda()) {
-        static auto cub_where = has_op("cub_where") ? get_op_info("cub_where")
-                .get_constructor<std::vector<VarPtr>, Var*, NanoString>() : nullptr;
-        if (cub_where && (ndim>1 || std::abs(cond->num)>4096)) {
-            auto var = cub_where(cond, dtype);
+        auto accelerated_where = find_op_capability<std::vector<VarPtr>, Var*, NanoString>(
+            accelerator_backend_id(), OpCapability::Where, cond, dtype);
+        if (accelerated_where) {
+            auto var = accelerated_where(cond, dtype);
             for(uint i=0;i<ndim;i++)
                 forward(var[i]);
             return;

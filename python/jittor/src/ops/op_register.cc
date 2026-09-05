@@ -6,6 +6,14 @@
 // ***************************************************************
 #include "op.h"
 #include "ops/op_register.h"
+#include <algorithm>
+#include <atomic>
+#include <random>
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace jittor {
 
@@ -29,33 +37,55 @@ NativeOpRegistry& op_registry() {
     return *registry;
 }
 
+static string replacement_compile_identity() {
+    // Do not use a generation counter alone: shared disk caches outlive a
+    // process, and forked children inherit counters and existing definitions.
+    static std::atomic<uint64> sequence{0};
+    std::random_device entropy;
+    std::stringstream identity;
+#ifdef _WIN32
+    const auto pid = _getpid();
+#else
+    const auto pid = getpid();
+#endif
+    identity << 'r' << pid << '_' << sequence.fetch_add(1, std::memory_order_relaxed);
+    for (int i = 0; i < 4; ++i) identity << '_' << std::hex << entropy();
+    return identity.str();
+}
+
 void NativeOpRegistry::register_op(const OpInfo& op_info) {
     std::lock_guard<std::recursive_mutex> guard(mutex);
     string op_file_name = key(op_info.name);
     auto iter = entries.find(op_file_name);
     if (iter != entries.end()) {
-        if (iter->second.source_path == op_info.source_path) {
+        if (iter->second->codegen.source_path == op_info.codegen.source_path) {
             LOGvv << "replace duplicated op registration" << op_info.name
-                << "\nsource_path:" << op_info.source_path
-                << "\nextra_flags:" << op_info.extra_flags
-                << "\nold_extra_flags:" << iter->second.extra_flags;
+                << "\nsource_path:" << op_info.codegen.source_path
+                << "\nextra_flags:" << op_info.codegen.extra_flags
+                << "\nold_extra_flags:" << iter->second->codegen.extra_flags;
             OpInfo replacement = op_info;
-            replacement.id = iter->second.id;
-            iter->second = move(replacement);
+            replacement.id = iter->second->id;
+            replacement.compile_identity = replacement_compile_identity();
+            iter->second = std::make_shared<const OpDef>(move(replacement));
             return;
         }
         ASSERT(false) << "Op" << op_info.name << "is already registed, "
-            << "source_path:" << op_info.source_path << "extra_flags" << op_info.extra_flags;
+            << "source_path:" << op_info.codegen.source_path << "extra_flags" << op_info.codegen.extra_flags;
     }
     LOGvv << "registe op" << op_info.name
-        << "\nsource_path:" << op_info.source_path
-        << "\nextra_flags:" << op_info.extra_flags
+        << "\nsource_path:" << op_info.codegen.source_path
+        << "\nextra_flags:" << op_info.codegen.extra_flags
         << "\nconstructors:" << op_info.constructors.size()
-        << "\nvar_members:" << op_info.var_members;
+        << "\nvar_members:" << op_info.codegen.var_members;
     OpInfo registered = op_info;
     registered.id = next_id++;
+    if (registered_names.count(op_file_name))
+        registered.compile_identity = replacement_compile_identity();
+    else
+        registered.compile_identity.clear();
     const auto registered_id = registered.id;
-    entries[op_file_name] = move(registered);
+    entries[op_file_name] = std::make_shared<const OpDef>(move(registered));
+    registered_names.emplace(op_file_name);
     op_keys_by_id.emplace(registered_id, op_file_name);
 }
 
@@ -65,10 +95,30 @@ bool NativeOpRegistry::has(const string& name) const {
 }
 
 OpInfo NativeOpRegistry::get(const string& name) const {
+    return *definition(name);
+}
+
+shared_ptr<const OpDef> NativeOpRegistry::definition(const string& name, bool required) const {
     std::lock_guard<std::recursive_mutex> guard(mutex);
     auto iter = entries.find(key(name));
-    ASSERT(iter != entries.end()) << "Op" << name << "not found.";
+    if (iter == entries.end()) {
+        USER_CHECK(!required) << "Op definition not registered:" << name;
+        return nullptr;
+    }
     return iter->second;
+}
+
+vector<string> NativeOpRegistry::supported_ops(BackendId backend) const {
+    std::lock_guard<std::recursive_mutex> guard(mutex);
+    vector<string> names;
+    for (const auto& entry : entries)
+        if (entry.second->implementations.count(backend)) names.push_back(entry.first);
+    std::sort(names.begin(), names.end());
+    return names;
+}
+
+shared_ptr<const OpDef> get_op_definition(const string& name, bool required) {
+    return op_registry().definition(name, required);
 }
 
 OpId NativeOpRegistry::id(const string& name) const {
@@ -101,14 +151,14 @@ bool NativeOpRegistry::unregister(const string& name) {
         auto registration_iter = provider_registrations.find(item.first);
         ASSERT(id_iter != provider_ids.end());
         ASSERT(registration_iter != provider_registrations.end());
-        NativeOpDispatchKey dispatch_key = {op_iter->second.id, item.first,
+        NativeOpDispatchKey dispatch_key = {op_iter->second->id, item.first,
             id_iter->second, registration_iter->second.abi_version};
         unbound.push_back(dispatch_key);
         lifecycle_events.push_back(NativeProviderLifecycleEvent::op_unbound(
             NativeProviderMetadata(registration_iter->second, id_iter->second),
             dispatch_key));
     }
-    op_keys_by_id.erase(op_iter->second.id);
+    op_keys_by_id.erase(op_iter->second->id);
     entries.erase(op_iter);
     observer = lifecycle_observer;
     removed = true;
@@ -149,7 +199,7 @@ void NativeOpRegistry::register_provider(
             auto op_iter = entries.find(op_name);
             if (op_iter == entries.end())
                 continue;
-            NativeOpDispatchKey dispatch_key = {op_iter->second.id, provider,
+            NativeOpDispatchKey dispatch_key = {op_iter->second->id, provider,
                 old_id, old_registration.abi_version};
             unbound.push_back(dispatch_key);
             lifecycle_events.push_back(NativeProviderLifecycleEvent::op_unbound(
@@ -263,7 +313,7 @@ bool NativeOpRegistry::try_provider_consumer_dispatch(
     if (op_iter == entries.end())
         return false;
     return try_provider_consumer_dispatch_locked(
-        op_iter->second.id, provider, dispatch);
+        op_iter->second->id, provider, dispatch);
 }
 
 bool NativeOpRegistry::try_provider_consumer_dispatch(
@@ -341,7 +391,7 @@ void NativeOpRegistry::bind_provider(const string& name, const string& provider)
     auto registration_iter = provider_registrations.find(provider);
     ASSERT(provider_iter != provider_ids.end());
     ASSERT(registration_iter != provider_registrations.end());
-    dispatch_key = {op_iter->second.id, provider, provider_iter->second,
+    dispatch_key = {op_iter->second->id, provider, provider_iter->second,
                     registration_iter->second.abi_version};
     metadata = NativeProviderMetadata(registration_iter->second,
                                       provider_iter->second);
@@ -374,7 +424,7 @@ bool NativeOpRegistry::unbind_provider_if_current(
         return false;
     string op_file_name;
     for (const auto& item : entries) {
-        if (item.second.id == dispatch_key.op_id) {
+        if (item.second->id == dispatch_key.op_id) {
             op_file_name = item.first;
             break;
         }
@@ -415,7 +465,7 @@ NativeOpDispatchKey NativeOpRegistry::resolve_provider(
     auto registration_iter = provider_registrations.find(provider);
     ASSERT(registration_iter != provider_registrations.end())
         << "provider" << provider << "has no ABI registration";
-    return {op_iter->second.id, provider, id_iter->second,
+    return {op_iter->second->id, provider, id_iter->second,
             registration_iter->second.abi_version};
 }
 
@@ -436,7 +486,7 @@ bool NativeOpRegistry::is_current(
         return false;
     for (const auto& op_name : provider_iter->second) {
         auto op_iter = entries.find(op_name);
-        if (op_iter != entries.end() && op_iter->second.id == dispatch_key.op_id)
+        if (op_iter != entries.end() && op_iter->second->id == dispatch_key.op_id)
             return true;
     }
     return false;
@@ -472,7 +522,7 @@ bool NativeOpRegistry::unregister_provider_if_current(
         if (op_iter != entries.end())
             {
             NativeOpDispatchKey dispatch_key = {
-                op_iter->second.id, provider, provider_instance,
+                op_iter->second->id, provider, provider_instance,
                 registration.abi_version};
             unbound.push_back(dispatch_key);
             lifecycle_events.push_back(NativeProviderLifecycleEvent::op_unbound(
@@ -518,6 +568,10 @@ OpId get_op_id(const string& name) {
 
 vector<string> registered_op_names() {
     return op_registry().names();
+}
+
+vector<string> backend_supported_ops(const string& backend) {
+    return op_registry().supported_ops(backend_registry().get(backend).id);
 }
 
 bool unregister_op(const string& name) {

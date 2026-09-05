@@ -1,7 +1,7 @@
 # 整改看板
 
-当前进度以任务表为准。2026-09-06：2.13 完成原生状态与配置分层，2.14 清空原生 misc，4.03 接通 CPU/CUDA 设备与内存执行链；
-下一步是 4.04 的算子注册分派。下方旧波次中的 Python 字段视图不等于原生存储迁移。
+当前进度以任务表为准。2026-09-06：2.13 完成原生状态与配置分层，2.14 清空原生 misc，4.03 接通 CPU/CUDA 设备与内存执行链，4.04 接通原生算子注册分派；
+下一步是 4.05 的 Python 真实调用分派迁移。下方旧波次中的 Python 字段视图不等于原生存储迁移。
 
 > 第217波：`98c8ee94` 迁移 cuda_allow_tf32 Runtime owner（结构 43 passed）；`b8398291` 修正 Native provider teardown 统一 lifecycle events（结构 12 passed）；`9d49c70c` ACL device_size Python/C++ 对齐（ACL 14 passed）；`d44782d4` Torch bootstrap 非字符串/非法 __all__ fail-closed。未声称 CUDA/NPU 实机。
 
@@ -562,7 +562,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 4.01 | 分配器 id 空间随分配器实例走，不再是进程静态 2M 单例 | 已合并 | device | 4e407447 |
 | 4.02 | 合并多卡 | 已合并 | device | `ad9aab3a`（Var 带设备、算子在自己设备上跑、逐设备分配器与库句柄）、`c97b707a`（跨卡拷贝算子）、`93b48a8e`（torch facade）。选了什么、为什么，改写进 `device-placement.md` §5。**一处未达成**：跨卡拷贝的定序在本机不是回归网——8 张卡两两 `cudaDeviceCanAccessPeer` 全 0，驱动把跨卡拷贝经主机中转并自行与源卡串行，把 event 对整对删掉测试仍全过（实测）。测试写好了并会打印当前处于哪种情形，换到能 peer 的机器上才成为守卫。方法沉淀在 `agent/skills/multi-device-verification` |
 | 4.03 | `BackendRegistry` | 已合并 | device | 原生 NativeRuntime 持有版本化 BackendOps 表，CPU/CUDA 实现位于 runtime/backends；device/count/set/allocator/copy/sync/stream 实际接入 Var 分配、数组构造、共享迁移、DeviceCopy、fetch 与 swap 复制。注册不探测设备，原始池与 SFRL/Temp/Stat 包装分离；dual/delay-free 报真实设备；跨卡双向流依赖和 fetch 持有保留。旧设备别名发弃用警告。真实回调探针及最终 CPU/CUDA/结构 40 passed，双卡/五库/梯度/共享定向 39 passed，无 GPU 可见 26 passed，CPU-only 31 passed/1 个 CUDA 配置字段跳过。枚举避开 ACL 的 CUDA→ACL token 替换并有主机编译合同。按轻量验收执行，未跑完整模型门禁或 NPU/ROCm 实机；legacy 转换保留，Op/JIT 分派与 Python 原型合并仍归 4.04/4.05，不伪称已完成。 |
-| 4.04 | `OpRegistry` | 待领 | device | `f37da269` 将 CPU flatten 纳入真实 dispatch，registry 合同 8 passed；C++ OpInfo/native 全量接线仍待领 |
+| 4.04 | `OpRegistry` | 已合并 | device | 原生 OpDef 按 backend 组合具体 Kernel/Codegen，执行器、并行编译器、tracer 与 fused relay 走注册入口；旧图固定定义，替换和注销重注册隔离 JIT 身份。CUDA 库登记 accelerator 实现，MKL 登记 CPU 实现；核心五处替换及 matmul/conv tuner 改 typed capability，库名移入库自有 TU。真实 CUDA 检查 cuRAND/CUB 执行与 NumPy 对照、cuBLAS/cuDNN 元算子图 relay；CPU-only 自定义扩展通过。修复双源码 CodeOp 缓存错用、fused 首次后端选择及 replacement 缓存身份问题。相关 CPU/CUDA 回归通过，ACL 改动 TU 主机语法通过；按轻量验收未跑完整模型与 NPU/ROCm 实机。Python 分派与 legacy 源转换仍归 4.05/4.11/4.12。 |
 | 4.05 | Python 分派表 | 待领 | | |
 | 4.06 | `jt.flags.backend_fallback ∈ {error, warn, allow… | 待领 | device | `8fb44816`：`BackendFallbackPolicy` 独立核心切片，校验 `error/warn/allow`、默认 `warn`、结构化决策与 fail-closed 异常；与 registry 合同合计 7 passed。尚未接入 native flags/BackendRegistry/OpRegistry，整卡继续待领 |
 | 4.07 | 后端配置改为返回 `BuildConfig` 值 | 待领 | | |

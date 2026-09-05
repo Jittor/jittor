@@ -708,7 +708,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         if (PREDICT_BRANCH_NOT_TAKEN(profile_memory_enable))
             memory_profiler.check();
         LOGvvv << "Run" << op << "inputs:" << op->inputs() << "outputs:" << op->outputs();
-        op->do_prepare(jkl);
+        op->prepare_execution(jkl);
         prepared_jit_key = jkl.to_string();
         bool is_cuda = op->flag(OpFlags::_cuda);
         #ifdef HAS_CUDA
@@ -758,7 +758,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         #endif
         last_is_cuda = is_cuda;
         // _JT_SEH_START2;
-        op->do_run_after_prepare(jkl);
+        op->execute_prepared(jkl);
         // _JT_SEH_END2;
         #ifdef HAS_CUDA
         // migrate to gpu

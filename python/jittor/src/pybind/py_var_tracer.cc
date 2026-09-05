@@ -439,7 +439,7 @@ void TraceData::record_execution(Op* op, bool is_fused_op, JK& jk) {
         record_op(op);
         einfo.fused_ops.push_back(get_node_id(op));
     }
-    op->do_prepare(jk);
+    op->prepare_execution(jk);
     if (jk.empty()) return;
     const char* jit_key = jk.to_cstring();
     auto iter = jit_key_mapper.find(jit_key);

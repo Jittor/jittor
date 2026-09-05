@@ -14,6 +14,7 @@
 #include "executor.h"
 #include "runtime/device.h"
 #include "ops/op_register.h"
+#include "ops/op_capability.h"
 namespace jittor {
 
 #ifndef JIT
@@ -34,12 +35,7 @@ ArgsortOp::ArgsortOp(Var* x, int dim, bool descending, NanoString dtype)
     dim = this->dim;
     #ifdef HAS_CUDA
     if (runtime_use_cuda()) {
-        static std::vector<VarPtr>(*cub_argsort)(Var*, Var*, Var*, bool, NanoString) = nullptr;
-        if (!cub_argsort && has_op("cub_argsort")) {
-            cub_argsort = get_op_info("cub_argsort")
-                .get_constructor<std::vector<VarPtr>, Var*, Var*, Var*, bool, NanoString>();
-        }
-        if (cub_argsort) {
+        if (has_op_capability(accelerator_backend_id(), OpCapability::SegmentedArgsort)) {
             int dims = x->shape.size();
             vector<int64> axes;
             axes.reserve(dims);
@@ -58,18 +54,22 @@ ArgsortOp::ArgsortOp(Var* x, int dim, bool descending, NanoString dtype)
             auto one = make_array(&n, {}, ns_int32);
             auto offsets1 = make_index({m+1}, 0, ns_int32);
             auto offsets = make_binary(one, offsets1, ns_multiply);
-            auto var = cub_argsort(tranpose1, indexes, offsets, descending, dtype);
-            vector<int64> axes2;
-            axes2.reserve(dims);
-            for (int i = 0; i < dims; ++i) {
-                if (i == dim) axes2.push_back(dims - 1);
-                if (i < dims - 1) axes2.push_back(i);
+            auto segmented_sort = find_op_capability<std::vector<VarPtr>, Var*, Var*, Var*, bool, NanoString>(
+                accelerator_backend_id(), OpCapability::SegmentedArgsort, tranpose1, indexes, offsets, descending, dtype);
+            if (segmented_sort) {
+                auto var = segmented_sort(tranpose1, indexes, offsets, descending, dtype);
+                vector<int64> axes2;
+                axes2.reserve(dims);
+                for (int i = 0; i < dims; ++i) {
+                    if (i == dim) axes2.push_back(dims - 1);
+                    if (i < dims - 1) axes2.push_back(i);
+                }
+                auto tranpose2_0 = make_transpose(var[0], axes2);
+                auto tranpose2_1 = make_transpose(var[1], axes2);
+                forward(tranpose2_0);
+                forward(tranpose2_1);
+                return;
             }
-            auto tranpose2_0 = make_transpose(var[0], axes2);
-            auto tranpose2_1 = make_transpose(var[1], axes2);
-            forward(tranpose2_0);
-            forward(tranpose2_1);
-            return;
         }
     }
     #endif

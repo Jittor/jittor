@@ -14,6 +14,11 @@
 namespace jittor {
 
 struct ArgReduceOp : Op {
+#ifdef IS_ACL
+    static constexpr uint32 backend_mask = OpBackendAny;
+#else
+    static constexpr uint32 backend_mask = OpBackendCpu;
+#endif
     Var* x, * y, * y_key;
     NanoString op;
     int dim;

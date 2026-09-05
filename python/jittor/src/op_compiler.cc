@@ -812,8 +812,7 @@ string OpCompiler::get_jit_src(Op* op) {
         ASSERT(src.size());
         return src;
     }
-    auto op_info = get_op_info(name);
-    auto& src_path = op_info.source_path;
+    const auto& src_path = op->codegen().source_path;
     
     string begin_src = "", end_src = "";
     // source that need to be added after the last #include statement
@@ -1065,7 +1064,7 @@ string OpCompiler::__get_fused_src(
         std::regex_match(src, cm, e);
         ASSERT(cm.size()>=2) << src;
         string name3 = cm[1];
-        const string& source_path = get_op_info(ops[oi]->name()).source_path;
+        const string& source_path = ops[oi]->codegen().source_path;
         // macros this op defines, and the last identifier we renamed, both used
         // by check_rename_conflict below
         unordered_set<string> op_defines;
@@ -1282,8 +1281,7 @@ OpCompiler::OpCompiler(Op* op) {
 jit_op_entry_t OpCompiler::compile(const string& jit_key, const string& src) {
     // add extra flags for custom ops
     bool is_cuda = _op->flag(OpFlags::_cuda);
-    auto op_info = get_op_info(_op->name());
-    string extra_flags = op_info.extra_flags;
+    string extra_flags = _op->codegen().extra_flags;
     auto add_compile_flags = [&](const loop_options_t& options) {
         for (auto& kv : options) {
             if (kv.second && startswith(kv.first, "FLAGS:"))
@@ -1314,7 +1312,7 @@ jit_op_entry_t do_compile_inner(Op* op) {
         src_after_passes = tm.tune();
         src = &src_after_passes;
     }
-    op->compile_optimize(*src);
+    op->optimize_generated_source(*src);
     auto ret = oc.compile(op->get_jit_key(get_jk()), *src);
     return ret;
 }

@@ -15,6 +15,7 @@
 #include "opt/tuner/matmul_tuner.h"
 #include "opt/pass_manager.h"
 #include "ops/op_register.h"
+#include "ops/op_capability.h"
 
 namespace jittor {
 
@@ -82,10 +83,6 @@ void MatmulTuner::run(PassManager* pm, TunerManager* tm) {
             std::swap(xx, yy);
         }
         if (!is_matmul) continue;
-        // TODO: support int8 * int8
-        if (!(xx->dtype().is_float() && yy->dtype().is_float())) continue;
-        if (fop->flag(OpFlags::_cpu))
-            if (xx->dtype().dsize() != 4) continue;
         // Both relay ops create their output with the first operand's dtype, so
         // they can only stand in for a reduce whose output already has it. Auto
         // mixed precision breaks exactly this: at level 4 it retypes the reduce
@@ -99,12 +96,10 @@ void MatmulTuner::run(PassManager* pm, TunerManager* tm) {
         if (xx->dtype().dsize() != yy->dtype().dsize()) continue;
         if (rop->y->dtype() != xx->dtype()) continue;
 
-        string relay_matmul_name = fop->flag(OpFlags::_cpu) ?
-            "mkl_matmul" : "cublas_matmul";
-        if (!has_op(relay_matmul_name))
-            return;
-        auto make_matmul = get_op_info(relay_matmul_name)
-            .get_constructor<VarPtr, Var*, Var*, bool, bool>();
+        auto backend = fop->flag(OpFlags::_cpu) ? BackendId::Cpu : accelerator_backend_id();
+        auto make_matmul = find_op_capability<VarPtr, Var*, Var*, bool, bool>(
+            backend, OpCapability::Matmul, xx, yy, t1, t2);
+        if (!make_matmul) continue;
         auto rvar = make_matmul(xx, yy, t1, t2);
         auto rid = fop->context->vrm.add_relay_group({{rvar, rop->y}});
         auto srid = "relay"+S(rid);

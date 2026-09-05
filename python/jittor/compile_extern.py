@@ -244,7 +244,7 @@ def setup_mkl():
 
     mkl_op_dir = os.path.join(jittor_path, "extern", "mkl", "ops")
     mkl_op_files = [os.path.join(mkl_op_dir, name) for name in os.listdir(mkl_op_dir)]
-    mkl_ops = compile_custom_ops(mkl_op_files, extra_flags=extra_flags)
+    mkl_ops = compile_custom_ops(mkl_op_files, extra_flags=extra_flags, backend="cpu")
     root_module = sys.modules.get("jittor")
     if root_module is not None:
         root_module.mkl_ops = mkl_ops
@@ -435,7 +435,7 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
         return
 
     # compile and get operators
-    culib = compile_custom_ops(culib_src_files, return_module=True,
+    culib = compile_custom_ops(culib_src_files, return_module=True, backend="accelerator",
         extra_flags=f" -I\"{jt_cuda_include}\" -I\"{jt_culib_include}\" {link_flags} {extra_flags} ")
     culib_ops = culib.ops
     globals()[lib_name+"_ops"] = culib_ops
@@ -470,7 +470,7 @@ def _setup_fake_cuda_lib(lib_name=None, link=True, extra_flags=""):
         return
 
     # compile and get operators
-    culib = compile_custom_ops(culib_src_files, return_module=True,
+    culib = compile_custom_ops(culib_src_files, return_module=True, backend="accelerator",
         extra_flags=f" -I\"{jt_cuda_include}\" -I\"{jt_culib_include}\" {extra_flags} ")
     culib_ops = culib.ops
     globals()[lib_name+"_ops"] = culib_ops
@@ -566,7 +566,7 @@ def setup_cutt():
     cutt_op_files = [os.path.join(cutt_op_dir, name) for name in os.listdir(cutt_op_dir)]
     # Keep the module, not just its .ops: the plan-cache accessors are free
     # functions on the module, and every other backend is exposed this way.
-    cutt = compile_custom_ops(cutt_op_files, return_module=True,
+    cutt = compile_custom_ops(cutt_op_files, return_module=True, backend="accelerator",
         extra_flags=f" -I\"{cutt_include_path}\" -L\"{cutt_lib_path}\" -llibcutt ")
     cutt_ops = cutt.ops
     LOG.vv("Get cutt_ops: "+str(dir(cutt_ops)))
@@ -810,7 +810,7 @@ def setup_nccl(store=None):
         _mpi_flags = f' -DJT_NCCL_NO_MPI -I"{_mpi_inc}" -I"{_stub_inc}" '
     else:
         _mpi_flags = mpi_compile_flags
-    nccl = compile_custom_ops(nccl_src_files,
+    nccl = compile_custom_ops(nccl_src_files, backend="accelerator",
         extra_flags=(
             f" -I\"{nccl_include_path}\" {_mpi_flags} "
             + cuda_library_link_flags("nccl", nccl_lib_name)
@@ -906,7 +906,7 @@ def setup_hccl(no_mpi=False):
         gen_name = "jittor_hccl_core"
         LOG.i("setup_hccl: compiling hccl ops (MPI)...")
     extra += getattr(compiler, "cc_flags", "")
-    hccl = compile_custom_ops(hccl_src_files,
+    hccl = compile_custom_ops(hccl_src_files, backend="accelerator",
         extra_flags=extra,
         return_module=True, dlopen_flags=os.RTLD_GLOBAL | os.RTLD_NOW,
         gen_name_=gen_name)

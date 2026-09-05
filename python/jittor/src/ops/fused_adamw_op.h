@@ -5,6 +5,7 @@
 namespace jittor {
 
 struct FusedAdamwOp : Op {
+    static constexpr uint32 backend_mask = OpBackendAccelerator;
     vector<Var*> parameters, moments, variances, gradients;
     vector<Var*> new_parameters, new_moments, new_variances;
     Var* step;

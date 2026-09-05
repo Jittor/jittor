@@ -9,17 +9,20 @@
 #include "node.h"
 #include "jit_key.h"
 #include "utils/string_view_map.h"
+#include "ops/op_dispatch.h"
 
 namespace jittor {
 
 enum OpType {other=0, element=1, broadcast=2, reduce=3};
 struct Op : Node {
+    static constexpr uint32 backend_mask = OpBackendAny;
     vector<VarPtr> outputs_holder;
     static int64 number_of_lived_ops;
     // Monotone count of every operator ever constructed; the auto-flush
     // pipeline measures how much graph was built since it last launched.
     static int64 number_of_created_ops;
     mutable OpId registered_op_id = 0;
+    mutable shared_ptr<const OpDef> registered_definition;
     
     inline Caster<Var*, Node::input_t> inputs() { CHECK_EXIST; return &_inputs; }
     inline Caster<Var*, Node::output_t> outputs() { CHECK_EXIST; return &_outputs; }
@@ -33,6 +36,17 @@ struct Op : Node {
     inline uint type() const { CHECK_EXIST; return flag(OpFlags::_op_type, OpFlags::_op_type_nbits); }
     inline void set_type(OpType t) { CHECK_EXIST; set_flag(OpFlags::_op_type, t, OpFlags::_op_type_nbits); }
     OpId type_id() const;
+    void bind_definition(bool required = true) const;
+    const OpDef& definition() const;
+    BackendId execution_backend() const;
+    const OpImplementation& implementation() const;
+    const Codegen& codegen() const;
+    void prepare_fragment(JK& key);
+    void optimize_generated_source(string& source);
+    void prepare_codegen_key(JK& key);
+    void prepare_execution(JK& key);
+    void execute_prepared(JK& key);
+    void run_registered();
     inline bool is_op(OpId id) const { return type_id() == id; }
     
     Var* create_output(NanoVector shape, NanoString dtype);

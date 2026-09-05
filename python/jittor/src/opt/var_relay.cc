@@ -69,7 +69,7 @@ int VarRelayManager::add_relay_group(const vector<pair<Var*, Var*>>& group) {
         if (node->is_var())
             continue;
         Op* op = node->op();
-        op->do_jit_prepare(get_jk());
+        op->prepare_execution(get_jk());
         list<Node*> new_inputs;
         int removed = 0;
         for (Var* v : op->inputs())
@@ -90,7 +90,7 @@ int VarRelayManager::add_relay_group(const vector<pair<Var*, Var*>>& group) {
         auto& oprc = relay_group.oprcs[i];
         auto& p = relay_group.relayed_pairs[i];
         oprc.op = p.first->input();
-        auto op_info = get_op_info(oprc.op->name());
+        const auto& op_info = oprc.op->codegen();
         oprc.var_members = op_info.var_members;
         oprc.relayed_members.resize(op_info.var_members.size());
         for (uint i=0; i<op_info.var_members.size(); i++) {
@@ -179,7 +179,7 @@ string VarRelayManager::get_relay_src(int group_id, int op_id) {
     auto& oprc = relay_groups[group_id].oprcs[op_id];
     Op* op = oprc.op;
     string name = op->name();
-    auto op_info = get_op_info(name);
+    const auto& op_info = op->codegen();
     string name2 = Op::op_name_to_file_name(name);
     string name3 = Op::file_name_to_class_name(name2);
     std::stringstream ss;
@@ -199,7 +199,7 @@ string VarRelayManager::get_relay_src(int group_id, int op_id) {
         ss << "    rctx_"<<S(group_id)<<"_"<<S(op_id)<<".set_var_member(\""<<
             op_info.var_members[i].first<<"\", vars["<<j<<"].var);\n";
     }
-    ss << "    "<<relay_op_name<<"->do_run();\n";
+    ss << "    "<<relay_op_name<<"->run_registered();\n";
     LOGvvv << "get_relay_src\n" << ss.str();
     return ss.str();
 }

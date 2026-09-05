@@ -72,9 +72,55 @@ Op::~Op() {
 }
 
 OpId Op::type_id() const {
-    if (!registered_op_id)
-        registered_op_id = get_op_id(name());
+    bind_definition();
     return registered_op_id;
+}
+
+void Op::bind_definition(bool required) const {
+    if (!registered_definition) {
+        registered_definition = get_op_definition(name(), required);
+        if (registered_definition) registered_op_id = registered_definition->id;
+    }
+}
+
+const OpDef& Op::definition() const {
+    bind_definition();
+    return *registered_definition;
+}
+
+BackendId Op::execution_backend() const {
+    return flag(OpFlags::_cuda) && (!flag(OpFlags::_cpu) || runtime_use_cuda())
+        ? accelerator_backend_id() : BackendId::Cpu;
+}
+
+const OpImplementation& Op::implementation() const {
+    const auto& owner = definition();
+    const auto backend = execution_backend();
+    auto found = owner.implementations.find(backend);
+    USER_CHECK(found != owner.implementations.end())
+        << "No kernel registered for" << owner.name << "on" << backend_ops(backend).name;
+    return found->second;
+}
+
+const Codegen& Op::codegen() const { return implementation().codegen; }
+
+void Op::prepare_fragment(JK& key) {
+    // A dual-source operator must select its source before hashing it, not
+    // only when appending the backend suffix after fragment generation.
+    if (flag(OpFlags::_cpu) && flag(OpFlags::_cuda)) {
+        if (execution_backend() == BackendId::Cpu)
+            set_flag(OpFlags::_cuda, 0);
+        else
+            set_flag(OpFlags::_cpu, 0);
+    }
+    auto callback = codegen().fragment;
+    USER_CHECK(callback) << "Missing codegen fragment for" << name();
+    callback(this, key);
+}
+
+void Op::optimize_generated_source(string& source) {
+    auto callback = codegen().optimize;
+    if (callback) callback(this, source);
 }
 
 void Op::forward(Var* input) {
@@ -188,6 +234,10 @@ void Op::propagate_device() {
 }
 
 void Op::init() {
+    // Graph-only diagnostic Ops may deliberately be unregistered. Execution
+    // still requires a definition; registered instances pin one coherent
+    // constructor/codegen/kernel generation for their entire lifetime.
+    bind_definition(false);
     bool first_init = !flag(OpFlags::_requires_grad_snapshot);
     bool has_disabled_input = false;
     bool has_first_order_only_input = false;
@@ -283,11 +333,11 @@ string Op::get_hash_name() {
     return hash_name;
 }
 
-void Op::do_jit_prepare(JK& jk) {
+void Op::prepare_codegen_key(JK& jk) {
     memcheck_all_exist();
     jk << name();
     auto pre_size = jk.size;
-    jit_prepare(jk);
+    prepare_fragment(jk);
     if (jk.size == pre_size) {
         // not a jit op
         bool has_cuda = flag(OpFlags::_cuda);
@@ -337,23 +387,43 @@ void Op::do_jit_prepare(JK& jk) {
     jk.finilize();
 }
 
-void Op::do_prepare(JK& jk){
+void Op::prepare_execution(JK& jk) {
     jk.clear();
-    do_jit_prepare(jk);
+    auto callback = codegen().prepare;
+    USER_CHECK(callback) << "Missing codegen preparation for" << name();
+    callback(this, jk);
+    const auto& identity = definition().compile_identity;
+    if (!jk.empty() && !identity.empty()) {
+        add_jit_define(jk, "op_definition", identity);
+        jk.finilize();
+    }
 }
 
-void Op::do_run_after_prepare(JK& jk) {
-    if (!jk.empty())
-        jit_run(jk);
-    else
-        run();
+void Op::execute_prepared(JK& jk) {
+    const auto& kernel = implementation().kernel;
+    if (!jk.empty()) {
+        USER_CHECK(kernel.jit) << "Missing JIT kernel for" << name();
+        kernel.jit(this, jk);
+    } else {
+        USER_CHECK(kernel.native) << "Missing native kernel for" << name();
+        kernel.native(this);
+    }
 }
 
-void Op::do_run() {
+void Op::do_jit_prepare(JK& jk) { prepare_execution(jk); }
+void Op::do_prepare(JK& jk) { prepare_execution(jk); }
+void Op::do_run_after_prepare(JK& jk) { execute_prepared(jk); }
+
+void prepare_registered_codegen(Op* op, JK& key) { op->prepare_codegen_key(key); }
+void execute_registered_jit(Op* op, JK& key) { op->jit_run(key); }
+
+void Op::run_registered() {
     JK& jk = get_jk();
-    do_prepare(jk);
-    do_run_after_prepare(jk);
+    prepare_execution(jk);
+    execute_prepared(jk);
 }
+
+void Op::do_run() { run_registered(); }
 
 string Op::get_filename_from_jit_key(const string& jit_key, const string& suffix) {
     auto iter = jit_key_mapper.find(jit_key);

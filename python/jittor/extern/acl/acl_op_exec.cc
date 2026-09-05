@@ -579,7 +579,7 @@ namespace jittor
             src_after_passes = tm.tune();
             src = &src_after_passes;
         }
-        op->compile_optimize(*src);
+        op->optimize_generated_source(*src);
         if (!op->flag(OpFlags::_cuda))
         {
             LOGv << "compile cpu";

@@ -14,6 +14,7 @@
 #include "executor.h"
 #include "runtime/device.h"
 #include "ops/op_register.h"
+#include "ops/op_capability.h"
 
 namespace jittor {
 
@@ -36,10 +37,7 @@ ArgReduceOp::ArgReduceOp(Var* x, NanoString op, int dim, bool keepdims)
     dim = this->dim;
     #ifdef HAS_CUDA
     if (runtime_use_cuda()) {
-        static auto cub_arg_reduce = has_op("cub_arg_reduce") ?
-            get_op_info("cub_arg_reduce").get_constructor<std::vector<VarPtr>, Var*, Var*, NanoString, bool>()
-            : nullptr;
-        if (cub_arg_reduce) {
+        if (has_op_capability(accelerator_backend_id(), OpCapability::SegmentedArgReduce)) {
             int dims = x->shape.size();
             vector<int64> axes;
             axes.reserve(dims);
@@ -57,25 +55,29 @@ ArgReduceOp::ArgReduceOp(Var* x, NanoString op, int dim, bool keepdims)
             auto one = make_array(&n, {}, ns_int32);
             auto offsets1 = make_index({m+1}, 0, ns_int32);
             auto offsets = make_binary(one, offsets1, ns_multiply);
-            auto var = cub_arg_reduce(tranpose1, offsets, op, keepdims);
-            if (keepdims) {
-                vector<int64> axes2;
-                axes2.reserve(dims);
-                for (int i = 0; i < dims; ++i) {
-                    if (i == dim) axes2.push_back(dims - 1);
-                    if (i < dims - 1) axes2.push_back(i);
+            auto segmented_reduce = find_op_capability<std::vector<VarPtr>, Var*, Var*, NanoString, bool>(
+                accelerator_backend_id(), OpCapability::SegmentedArgReduce, tranpose1, offsets, op, keepdims);
+            if (segmented_reduce) {
+                auto var = segmented_reduce(tranpose1, offsets, op, keepdims);
+                if (keepdims) {
+                    vector<int64> axes2;
+                    axes2.reserve(dims);
+                    for (int i = 0; i < dims; ++i) {
+                        if (i == dim) axes2.push_back(dims - 1);
+                        if (i < dims - 1) axes2.push_back(i);
+                    }
+                    auto tranpose2_0 = make_transpose(var[0], axes2);
+                    auto tranpose2_1 = make_transpose(var[1], axes2);
+                    forward(tranpose2_0);
+                    forward(tranpose2_1);
+                } else {
+                    auto tranpose2_0 = var[0];
+                    auto tranpose2_1 = var[1];
+                    forward(tranpose2_0);
+                    forward(tranpose2_1);
                 }
-                auto tranpose2_0 = make_transpose(var[0], axes2);
-                auto tranpose2_1 = make_transpose(var[1], axes2);
-                forward(tranpose2_0);
-                forward(tranpose2_1);
-            } else {
-                auto tranpose2_0 = var[0];
-                auto tranpose2_1 = var[1];
-                forward(tranpose2_0);
-                forward(tranpose2_1);
+                return;
             }
-            return;
         }
     }
     #endif

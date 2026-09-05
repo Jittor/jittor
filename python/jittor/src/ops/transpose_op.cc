@@ -7,6 +7,7 @@
 #include "ops/transpose_op.h"
 #include "var.h"
 #include "ops/op_register.h"
+#include "ops/op_capability.h"
 #include "runtime/device.h"
 #ifdef JIT_cuda
 #include <cuda_runtime.h>
@@ -38,13 +39,10 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     }
     #ifdef HAS_CUDA
     if (runtime_use_cuda()) {
-        static VarPtr(*cutt_transpose)(Var*, NanoVector) = nullptr;
-        if (!cutt_transpose && has_op("cutt_transpose")) {
-            cutt_transpose = get_op_info("cutt_transpose")
-                .get_constructor<VarPtr, Var*, NanoVector>();
-        }
-        if (cutt_transpose) {
-            auto var = cutt_transpose(x, axes);
+        auto accelerated_transpose = find_op_capability<VarPtr, Var*, NanoVector>(
+            accelerator_backend_id(), OpCapability::Transpose, x, axes);
+        if (accelerated_transpose) {
+            auto var = accelerated_transpose(x, axes);
             forward(var);
             return;
         }

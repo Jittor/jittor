@@ -9,6 +9,7 @@
 #include <type_traits>
 #include <utility>
 #include "common.h"
+#include "ops/op_dispatch.h"
 
 namespace jittor {
 
@@ -31,14 +32,28 @@ shared_ptr<OpConstructorEntry> op_constructor_entry(Func function) {
     return std::make_shared<TypedOpConstructorEntry<Func>>(function);
 }
 
-struct OpInfo {
-    string name, source_path, extra_flags;
+struct OpDef {
+    string name;
     vector<shared_ptr<OpConstructorEntry>> constructors;
     // string: var member name, uint64: var member offset
-    vector<pair<string, uint64>> var_members;
+    Codegen codegen;
+    std::map<BackendId, OpImplementation> implementations;
+    // Initial registrations keep stable disk keys. Replacements receive an
+    // identity shared with their pinned graphs, never with another generation.
+    string compile_identity;
     // Zero is reserved for an Op instance that has not resolved its
     // registration yet. Every registered base op receives one process-local id.
     OpId id = 0;
+
+    OpDef() = default;
+    OpDef(string name, string source_path, string extra_flags,
+          vector<shared_ptr<OpConstructorEntry>> constructors = {},
+          vector<pair<string, uint64>> var_members = {})
+        : name(move(name)), constructors(move(constructors)) {
+        codegen.source_path = move(source_path);
+        codegen.extra_flags = move(extra_flags);
+        codegen.var_members = move(var_members);
+    }
 
     template<class To, class ...Ts> auto get_constructor() {
         typedef To (*func_t)(Ts...);
@@ -50,6 +65,8 @@ struct OpInfo {
         return func_t(nullptr);
     }
 };
+
+using OpInfo = OpDef;
 
 // Versioned, backend-neutral registration record. Backend libraries may be
 // built independently of the core, so registration carries an explicit ABI
@@ -345,6 +362,8 @@ public:
     void register_op(const OpInfo& op_info);
     bool has(const string& name) const;
     OpInfo get(const string& name) const;
+    shared_ptr<const OpDef> definition(const string& name, bool required = true) const;
+    vector<string> supported_ops(BackendId backend) const;
     OpId id(const string& name) const;
     vector<string> names() const;
     bool unregister(const string& name);
@@ -413,7 +432,8 @@ private:
         NativeProviderConsumerDispatch& dispatch) const;
 
     mutable std::recursive_mutex mutex;
-    unordered_map<string, OpInfo> entries;
+    unordered_map<string, shared_ptr<const OpDef>> entries;
+    unordered_set<string> registered_names;
     // JIT/native consumers resolve the stable OpId directly; retaining the
     // canonical key here avoids a string scan on the provider dispatch path.
     unordered_map<OpId, string> op_keys_by_id;
@@ -583,6 +603,8 @@ bool has_op(const string& name);
 OpInfo get_op_info(const string& name);
 OpId get_op_id(const string& name);
 vector<string> registered_op_names();
+// @pyjt(backend_supported_ops)
+vector<string> backend_supported_ops(const string& backend);
 bool unregister_op(const string& name);
 
 // Canonical ids used by core correctness and optimization decisions. Each

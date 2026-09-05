@@ -30,7 +30,7 @@ void ConstVarPass::run() {
             continue;
         auto array_op = (ArrayOp*)opi;
         jk.clear();
-        array_op->jit_prepare(jk);
+        array_op->prepare_fragment(jk);
         if (jk.to_string().find("[o:") == string::npos)
             continue;
         if (v->dtype() == ns_int32) {

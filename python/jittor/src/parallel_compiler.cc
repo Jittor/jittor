@@ -166,7 +166,7 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
             load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
         }
         LOGvvv << "Check op needs compile:" << op;
-        op->do_prepare(jkl);
+        op->prepare_execution(jkl);
         if (jkl.empty()) continue;
 
         // Copy the key before consulting caches; JK is reusable scratch
@@ -238,7 +238,7 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                 int root = queue[rid];
                 op = ops[root];
                 LOGvv << "Compile Op:" << op;
-                op->do_prepare(jkl);
+                op->prepare_execution(jkl);
                 auto op_entry = OpCompiler::do_compile(op);
                 CompileResult result;
                 result.previous_jit_key = task.previous_jit_key;
@@ -261,7 +261,7 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                 // compile relay operators
                 for (auto& vrg : context->vrm.relay_groups) {
                     for (auto& orc : vrg.oprcs) {
-                        orc.op->do_prepare(jkl);
+                        orc.op->prepare_execution(jkl);
                         string relay_jit_key = jkl.to_string();
                         bool needs_compile;
                         {

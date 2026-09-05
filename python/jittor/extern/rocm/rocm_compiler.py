@@ -116,7 +116,8 @@ def install_rocm_library(lib_name, cuda_name, link=True):
             jittor_utils.LOG.i(f"Found {os.path.join(rocmlib_lib_path, 'lib' + lib_name + '.so')}")
         extra_flags += f" -L{rocmlib_lib_path} -l{lib_name} "
 
-    rocmlib = compiler.compile_custom_ops(culib_src_files, return_module=True, extra_flags=extra_flags)
+    rocmlib = compiler.compile_custom_ops(culib_src_files, return_module=True,
+                                         extra_flags=extra_flags, backend="accelerator")
     setattr(compile_extern, cuda_name, rocmlib)
     setattr(compile_extern, cuda_name + "_ops", rocmlib.ops)
 

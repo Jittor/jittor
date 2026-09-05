@@ -1245,6 +1245,9 @@ static void init_module(PyModuleDef* mdef, PyObject* m) {{
     jittor::pyjt_def_{hash}(m);
 }}
 PYJT_MODULE_INIT({hash});
+// Keep one translation unit: a shared -MF file for two compiler inputs
+// otherwise contains only the last input's headers.
+#include "pyjt/py_arg_printer.cc"
     '''
     with open(source_name, "r", encoding="utf8") as f:
         src = f.read()
@@ -1253,7 +1256,7 @@ PYJT_MODULE_INIT({hash});
     jittor_path = os.path.join(os.path.dirname(__file__), "..", "jittor")
     jittor_path = os.path.abspath(jittor_path)
     from jittor.compiler import fix_cl_flags
-    do_compile([fix_cl_flags(f"\"{cc_path}\" \"{source_name}\" \"{jittor_path}/src/pyjt/py_arg_printer.cc\" {flags} -o \"{cache_path+'/'+lib_name}\" "),
+    do_compile([fix_cl_flags(f"\"{cc_path}\" \"{source_name}\" {flags} -o \"{cache_path+'/'+lib_name}\" "),
         cache_path, jittor_path])
     # use __import__ (returns the module object) rather than
     # `exec("import X"); locals()["X"]`: since Python 3.13 (PEP 667) exec() no

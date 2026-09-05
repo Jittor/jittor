@@ -215,9 +215,52 @@ their implementation now lives in `runtime/backends/cuda_streams.cc`.
 native registry. The four legacy accelerator-mode aliases in `jt.flags` emit
 `DeprecationWarning` but retain their setter behavior. Converted ACL/ROCm/Corex
 builds are explicitly named `*_legacy`; this is not a claim that their source
-transformation has been removed. Operator dispatch still uses the existing
-Op/JIT pipeline. The Python operator-registry prototype is not the owner of
-native allocations and remains to be consolidated with that pipeline.
+transformation has been removed. The Python operator-registry prototype is not
+the owner of native allocations and remains to be consolidated with native
+operator dispatch in task 4.05.
+
+### Native Operator Dispatch
+
+`ops/op_register` publishes immutable `OpDef` objects with stable process-local
+`OpId` values. An instantiated graph pins its definition; replacing a registry
+entry affects new graphs, not live graphs. Each definition combines backend-keyed
+`Kernel` callbacks with a `Codegen` interface for source fragments, preparation,
+optimization and source metadata. Shape and gradient semantics remain on graph
+operators. Replacement and unregister/re-register receive unique compilation
+identities; ordinary and fused keys include the identities of their definitions
+and fused children. Initial registrations retain stable disk-cache keys.
+The executor, parallel compiler, tracer and relay use these registered
+interfaces, including a dedicated fused implementation that retains its context
+and relay cache. The old virtual execution methods are source adapters, not the
+executor's dispatch path.
+
+Generated core and extension registrations bind concrete operator implementations
+with `register_op_definition<T>`. CUDA libraries register accelerator-only kernels;
+MKL registers CPU kernels. Core CPU-only operators declare their backend mask.
+`core.backend_supported_ops(name)` enumerates these registered implementations;
+individual shape/dtype restrictions still apply. Missing implementations raise
+instead of falling through to an empty virtual `run()`.
+
+Optional libraries publish typed semantic capabilities in their own translation
+units. Core replacement sites and matmul/conv tuners query those capabilities,
+without naming CUB, cuRAND, cuTT, cuBLAS, cuDNN or MKL implementations. Capability
+lookup resolves constructors at use time, so a lookup before a library loads does
+not permanently cache a miss. `core.backend_supported_capabilities(name)` exposes
+the available semantic families. Backend selection precedes source-fragment
+generation, including dual-source CodeOp cache lookup.
+
+Native extensions must rebuild: `Op` layout changed, `OpInfo` is now the compatibility
+alias for `OpDef`, and source metadata lives under `definition.codegen`. Converted
+ACL/ROCm/Corex backends retain their legacy build path. Host-only syntax checks are
+not CANN ABI or device verification; those machines must build and execute the
+changed backend before hardware support is claimed.
+
+`jittor_utils.compile_module` compiles its generated wrapper and argument-printer
+definitions as one translation unit. Two compiler inputs previously overwrote a
+single depfile, omitting extension headers and silently reusing obsolete ABI
+layouts. The changed command invalidates those old cache entries automatically;
+subsequent header changes are tracked without renaming the extension or deleting
+the cache. Already loaded extension modules still require a fresh process.
 
 The C++ `src/misc/` directory no longer exists. Support code is grouped by its
 actual role; this is a source-layout change, not a change to helper algorithms

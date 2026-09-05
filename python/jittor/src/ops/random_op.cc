@@ -11,23 +11,18 @@
 #include "ops/random_op.h"
 #include "runtime/device.h"
 #include "ops/op_register.h"
+#include "ops/op_capability.h"
 
 namespace jittor {
 
 #ifndef JIT
 RandomOp::RandomOp(NanoVector shape, NanoString dtype, NanoString type) {
-    // auto curand_random = get_op_info("curand_random")
-    // .get_constructor<NanoVector, NanoString>();
-    // output = curand_random(shape, dtype);
     #ifdef HAS_CUDA
     if (runtime_use_cuda()) {
-        static VarPtr(*curand_random)(NanoVector, NanoString, NanoString) = nullptr;
-        if (!curand_random && has_op("curand_random")) {
-            curand_random = get_op_info("curand_random")
-                .get_constructor<VarPtr, NanoVector, NanoString, NanoString>();
-        }
-        if (curand_random) {
-            auto var = curand_random(shape, dtype, type);
+        auto accelerated_random = find_op_capability<VarPtr, NanoVector, NanoString, NanoString>(
+            accelerator_backend_id(), OpCapability::Random, shape, dtype, type);
+        if (accelerated_random) {
+            auto var = accelerated_random(shape, dtype, type);
             forward(var);
             return;
         }

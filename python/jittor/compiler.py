@@ -365,7 +365,16 @@ def parse_var_members(src, header="<src>"):
     return names
 
 
-def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
+def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
+    backend_masks = {
+        None: None,
+        "cpu": "OpBackendCpu",
+        "accelerator": "OpBackendAccelerator",
+        "both": "OpBackendAny",
+    }
+    if backend not in backend_masks:
+        raise ValueError("backend must be None, 'cpu', 'accelerator', or 'both'")
+    backend_mask = backend_masks[backend]
     def add_src(
         cc_func_name,
         cc_args, 
@@ -540,7 +549,8 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
         LOG.vv("var_member "+str(var_member))
         var_member_src = [ f"VAR_MEMBER_NAME_AND_OFFSET({name}, {name2})" for name in var_member ]
         var_member_src = ",".join(var_member_src)
-        initer.append(f'\n        op_registe({{ "{func_name}", R"({cc_name})", extra_flags, {{{constructors}}}, {{{var_member_src}}} }});')
+        mask_arg = f", {backend_mask}" if backend_mask is not None else ""
+        initer.append(f'\n        register_op_definition<{name2}>({{ "{func_name}", R"({cc_name})", extra_flags, {{{constructors}}}, {{{var_member_src}}} }}{mask_arg});')
         for hid, h_def in enumerate(res):
             h_def = list(h_def)
             # // @attrs(...)
@@ -674,7 +684,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
     #include "pyjt/py_obj_holder.h"
     #include "var.h"
     #include "var_holder.h"
-    #include "ops/op_register.h"
+    #include "ops/op_registration.h"
     {jit_headers}
     
     namespace jittor {{
@@ -752,13 +762,16 @@ def compile_custom_ops(
     extra_flags="", 
     return_module=False,
     dlopen_flags=None,
-    gen_name_ = ""):
+    gen_name_ = "",
+    backend=None):
     """Compile custom ops
     filenames: path of op source files, filenames must be
         pairs of xxx_xxx_op.cc and xxx_xxx_op.h, and the 
         type name of op must be XxxXxxOp.
     extra_flags: extra compile flags
     return_module: return module rather than ops(default: False)
+    backend: None uses the op class declaration; cpu, accelerator, or both
+        explicitly selects the registered backend family for this library.
     return: compiled ops
     """
     if dlopen_flags is None:
@@ -814,7 +827,8 @@ def compile_custom_ops(
     libname = gen_name + lib_suffix
     op_extra_flags += f" -L\"{lib_path}\" -l\"{libname}\" "
 
-    gen_src = gen_jit_op_maker(headers.values(), export=gen_name, extra_flags=op_extra_flags)
+    gen_src = gen_jit_op_maker(headers.values(), export=gen_name,
+                             extra_flags=op_extra_flags, backend=backend)
     pyjt_compiler.compile_single(gen_head_fname, gen_src_fname, src=gen_src)
     # gen src initialize first
     builds.insert(0, gen_src_fname)
