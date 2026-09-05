@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <initializer_list>
+#include <locale>
 #include <map>
 #include <set>
 #include <sstream>
@@ -321,6 +322,9 @@ inline std::string canonical_cache_key(uint32_t schema_version,
                                        const std::string& op,
                                        const AclDataMap& fields) {
     std::ostringstream key;
+    // Cache keys cross process/device boundaries; never inherit a caller's
+    // locale, whose decimal separator would otherwise change float keys.
+    key.imbue(std::locale::classic());
     key << schema_version << "|op=";
     append_length_prefixed(key, op);
     for (const auto& item : fields) {

@@ -82,6 +82,42 @@ int main() {
         subprocess.run([str(binary)], check=True)
 
 
+def test_acl_data_channel_cache_key_ignores_process_numeric_locale():
+    source = r'''
+#include "python/jittor/extern/acl/aclops/acl_data_channel.h"
+#include <locale>
+#include <string>
+
+class comma_punct : public std::numpunct<char> {
+protected:
+    char do_decimal_point() const override { return ','; }
+};
+
+int main() {
+    using namespace jittor::acl_data;
+    AclAttrSchema schema;
+    AclAttrField scale;
+    scale.type = AclDataType::float64;
+    schema.emplace("scale", scale);
+    AclDataRecord record;
+    record.op = "Scale";
+    record.fields.emplace("scale", AclDataValue::float64_value(1.5));
+    std::locale previous = std::locale::global(
+        std::locale(std::locale::classic(), new comma_punct()));
+    std::string key;
+    decode_acl_data(record, "Scale", schema, key);
+    std::locale::global(previous);
+    if (key.find("1.5") == std::string::npos) return 1;
+    if (key.find("1,5") != std::string::npos) return 2;
+    return 0;
+}
+'''
+    with tempfile.TemporaryDirectory(prefix="jittor-acl-locale-run-") as directory:
+        binary = Path(directory) / "probe"
+        _compile(source, binary)
+        subprocess.run([str(binary)], check=True)
+
+
 def test_acl_data_owner_binds_identity_and_schema_for_future_registry():
     source = r'''
 #include "python/jittor/extern/acl/aclops/acl_data_channel.h"

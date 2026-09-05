@@ -59,6 +59,12 @@ The proposed wire schema is a versioned, operator-scoped map:
 - `cache_key`: sorted `(field_name, type_tag, value)` tuples plus schema version;
   pointer addresses and Python object ids are forbidden.
 
+The C++ cache-key serializer always uses `std::locale::classic()`.  It must not
+inherit the process locale: a host configured with a comma decimal separator
+must still serialize the same float value as a host configured with a period.
+This keeps generated/cache keys stable when a graph is prepared on one host and
+executed or restored on another.
+
 The host-only C++ decoder boundary is now defined in
 `python/jittor/extern/acl/aclops/acl_data_channel.h`. It is one shared decoder
 boundary. The `BaseOpRunner` helper is the future consumer; the decoder
