@@ -3,7 +3,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-"""``Node::custom_data`` has exactly one owner, and the rule is a test.
+"""``Node::custom_data`` is removed; fusion numbering has explicit ownership.
 
 It used to have six.  ``Executor::run_sync`` kept each op's and var's index in
 it, ``count_fuse`` read those, ``grad()`` kept gradient-var indices there, the
@@ -27,14 +27,8 @@ with the batch that wrote it and read through ``batch_index_at(stamp)`` so a
 reader that names the wrong batch gets an assertion instead of somebody else's
 number.
 
-The sixth stays, and is why this file exists rather than a simple "the field is
-gone" assertion.  ``FusedOp``'s packing is not a traversal marker: it is a
-mapping that has to stay valid across the whole JIT pipeline, so removing it
-means giving ``FusedOp`` an explicit map and changing three readers, one of them
-tied to the generated code's struct offsets -- task ``2.24``, sequenced after
-``3.11`` because it lands in the same code.  Until then the field is owned, and
-*owned* has to mean something a person cannot quietly undo.  A comment is what
-let the previous five in.
+The final owner was ``FusedOp``'s cross-stage var mapping. Task ``2.24`` gives
+the fusion an explicit ``Var* -> index`` table and removes the shared field.
 
 Run::  JITTOR_TORCH_SHIM=1 python -m pytest tests/structure/test_node_scratch_state.py
 """
@@ -45,19 +39,6 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC = REPO_ROOT / "python" / "jittor" / "src"
-
-#: The only places allowed to name ``custom_data``, and why.
-#:
-#: All three are the one owner: ``FusedOp::update_ops`` builds the packing,
-#: ``load_fused_op`` reads it back while turning a fusion group into a FusedOp,
-#: and the op-relay unit test drives both directly.
-CUSTOM_DATA_OWNERS = {
-    "python/jittor/src/node.h": "declares it, and names its owner",
-    "python/jittor/src/fused_op.cc": "FusedOp::update_ops builds the packing",
-    "python/jittor/src/executor.cc": "load_fused_op reads the packing back",
-    "python/jittor/src/tests/test_op_relay.cc": "drives FusedOp directly",
-}
-
 
 def _sources():
     for path in sorted(SRC.rglob("*")):
@@ -98,33 +79,19 @@ def _code_lines(path):
         yield number, re.sub(r'"(?:[^"\\]|\\.)*"', '""', code)
 
 
-def test_custom_data_is_named_as_belonging_to_one_owner():
+def test_custom_data_is_removed_from_node():
     node_h = (SRC / "node.h").read_text(encoding="utf-8")
-    struct = node_h[node_h.index("struct Node {"):]
-    declaration = struct[:struct.index("int custom_data;")]
-    tail = declaration[declaration.rindex("\n\n"):]
-    assert "FUSED-OP ONLY" in tail, (
-        "the declaration of Node::custom_data no longer says who owns it. It "
-        "is one int with one owner and five former ones; a reader who cannot "
-        "see that from the declaration is the way the other five got in.")
-    assert "2.24" in tail, (
-        "the declaration should point at the task that removes it, so the "
-        "field's continued existence stays a decision rather than an oversight.")
+    assert "int custom_data;" not in node_h
 
 
 def test_only_the_fused_op_pipeline_touches_custom_data():
     offenders = []
     for path in _sources():
         relative = path.relative_to(REPO_ROOT).as_posix()
-        if relative in CUSTOM_DATA_OWNERS:
-            continue
         for number, code in _code_lines(path):
             if "custom_data" in code:
-                offenders.append(
-                    "%s:%d uses Node::custom_data. It belongs to FusedOp's "
-                    "cross-stage var index; a traversal that borrows it will "
-                    "corrupt a fusion decision, and the failure will surface "
-                    "somewhere else entirely." % (relative, number))
+                offenders.append("%s:%d still names removed Node::custom_data" %
+                                 (relative, number))
     assert offenders == [], "\n".join(offenders)
 
 

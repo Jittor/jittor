@@ -28,6 +28,10 @@ EXTERN_LIB string_view_map<FusedOpContext*> jit_fused_ops;
 
 struct FusedOp final : Op {
     vector<Op*> ops;
+    // Stable numbering owned by this fusion across load/update, relay and
+    // code-generation stages. This replaces Node::custom_data bit-packing.
+    unordered_map<Op*, uint> op_index;
+    unordered_map<Var*, uint> var_index;
     // edges: [[i,j,k,l], ...] represents opi.output(j) == opk.input(l)
     vector<std::tuple<uint,uint,uint,uint>> edges;
     vector<VarInfo> vars;

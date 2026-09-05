@@ -46,6 +46,10 @@ void FusedOp::update_ops() {
     _inputs.clear();
     _outputs.clear();
     vars.clear();
+    op_index.clear();
+    var_index.clear();
+    for (uint i=0; i<ops.size(); i++)
+        op_index[ops[i]] = i;
     for (Op* op : ops) {
         for (Var* o : op->outputs()) {
             if (o->loop_options) {
@@ -79,44 +83,17 @@ void FusedOp::update_ops() {
     ASSERT(outputs().size());
     LOGvvvv << "set fused output" << outputs();
     
-    // var.custom_data
-    // meaning of custom_data&2: visited or not
-    // meaning of custom_data>>2: index of vars
-    // op.custom_data: opid
-    //
-    // Bit 0 used to be the caller's "cannot fuse" verdict, which is why the
-    // reset below was `&= 1` rather than `= 0`: it had to clear this op's two
-    // bits while preserving a third meaning that belonged to somebody else.
-    // The verdict arrives as batch_var_fused now, so this field carries one
-    // thing again -- FusedOp's own numbering, which unlike the traversal
-    // markers that used to share it has to stay valid across the whole JIT
-    // pipeline. Removing it too is task 2.24 (after 3.11: one of its readers
-    // is tied to the generated code's struct offsets).
-    for (uint i=0; i<ops.size(); i++) {
-        auto opi = ops[i];
-        opi->custom_data = i;
-        for (Var* i : opi->inputs()) {
-            i->custom_data = 0;
-        }
-        for (Var* o : opi->outputs()) {
-            o->custom_data = 0;
-        }
-    }
     for (Op* opi : ops) {
         for (Var* i : opi->inputs()) {
-            auto &c = i->custom_data;
-            // if not visited
-            if (!(c&2)) {
-                c += 2 + vars.size()*4;
+            if (!var_index.count(i)) {
+                var_index[i] = vars.size();
                 vars.push_back({i, 0});
                 _inputs.emplace_back((Node*)i);
             }
         }
         for (Var* o : opi->outputs()) {
-            auto &c = o->custom_data;
-            // if not visited
-            if (!(c&2)) {
-                c += 2 + vars.size()*4;
+            if (!var_index.count(o)) {
+                var_index[o] = vars.size();
                 // intermediate(can fuse) or output
                 vars.push_back({o, var_stays_in_memory((Node*)o) ? 2 : 1});
             }
@@ -133,6 +110,8 @@ FusedOp::FusedOp() {
 FusedOp::FusedOp(const FusedOp& other) {
     Op::number_of_lived_ops--;
     ops = other.ops;
+    op_index = other.op_index;
+    var_index = other.var_index;
     edges = other.edges;
     vars = other.vars;
     loop_options_merged = other.loop_options_merged;
