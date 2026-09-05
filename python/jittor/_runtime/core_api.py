@@ -865,6 +865,11 @@ class RuntimeContext:
         return self._flags.profiler_rerun
 
     @property
+    def profiler_record_peek(self):
+        """Whether the profiler records memory-bandwidth peek data."""
+        return self._flags.profiler_record_peek
+
+    @property
     def check_graph(self):
         """Whether graph liveness checks are enabled for execution."""
         return self._flags.check_graph
@@ -886,6 +891,7 @@ class RuntimeContext:
             "profiler_warmup": int(self.profiler_warmup),
             "profiler_enable": int(self.profiler_enable),
             "profiler_rerun": int(self.profiler_rerun),
+            "profiler_record_peek": int(self.profiler_record_peek),
             "check_graph": int(self.check_graph),
         }
 
@@ -957,6 +963,10 @@ class RuntimeState:
     @property
     def profiler_rerun(self):
         return self._context.profiler_rerun
+
+    @property
+    def profiler_record_peek(self):
+        return self._context.profiler_record_peek
 
     @property
     def check_graph(self):

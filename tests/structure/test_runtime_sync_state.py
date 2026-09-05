@@ -40,6 +40,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "profiler_warmup": jt.flags.profiler_warmup,
         "profiler_enable": jt.flags.profiler_enable,
         "profiler_rerun": jt.flags.profiler_rerun,
+        "profiler_record_peek": jt.flags.profiler_record_peek,
         "check_graph": jt.flags.check_graph,
     }
     assert jt.runtime.device_id == getattr(jt.flags, "device_id", -1)
@@ -293,6 +294,24 @@ def test_runtime_profiler_rerun_is_a_live_read_only_view():
             jt.runtime.context.profiler_rerun = 0
     finally:
         jt.flags.profiler_rerun = original
+
+
+def test_runtime_profiler_record_peek_is_a_live_read_only_view():
+    import jittor as jt
+
+    original = jt.flags.profiler_record_peek
+    try:
+        assert jt.runtime.profiler_record_peek == original
+        with jt.flag_scope(profiler_record_peek=1):
+            assert jt.runtime.profiler_record_peek == 1
+            assert jt.runtime.context.snapshot()["profiler_record_peek"] == 1
+        assert jt.runtime.profiler_record_peek == original
+        with pytest.raises(AttributeError):
+            jt.runtime.profiler_record_peek = 0
+        with pytest.raises(AttributeError):
+            jt.runtime.context.profiler_record_peek = 0
+    finally:
+        jt.flags.profiler_record_peek = original
 
 
 def test_runtime_check_graph_is_a_live_read_only_view_and_cpu_execution_survives():
