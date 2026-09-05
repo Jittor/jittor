@@ -96,6 +96,14 @@ class TestTorchShimAliases(unittest.TestCase):
         pairs = (
             ("jittor.compat.shim", "jittor.torch_shim"),
             ("jittor.compat.shim.bootstrap", "jittor.torch_shim.bootstrap"),
+            (
+                "jittor.compat.torch.publication",
+                "jittor.torch_compat.publication",
+            ),
+            (
+                "jittor.compat.torch.publication",
+                "jittor.torch_shim.publication",
+            ),
             ("jittor.compat.shim.deploy", "jittor.torch_shim.deploy"),
             ("jittor.compat.shim.cpp_extension", "jittor.torch_shim.cpp_extension"),
             (

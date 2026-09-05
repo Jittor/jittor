@@ -3,7 +3,7 @@
 from .build import build_extension_dirs
 from .discovery import NativeExtension, scan_extension_dirs
 from .runtime import activate, activation_status
-from jittor.compat.torch.namespace import (
+from jittor.compat.torch.publication import (
     TorchNamespace, independent_torch_namespace, namespace_owner,
 )
 

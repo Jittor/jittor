@@ -21,6 +21,14 @@ def test_namespace_has_independent_module_identity_and_delegates_public_api():
     assert namespace.answer is owner.answer
 
 
+def test_publication_boundary_is_importable_without_runtime_or_installer():
+    """The standalone distribution boundary must stay CUDA/NPU agnostic."""
+    import importlib
+
+    publication = importlib.import_module("jittor.compat.torch.publication")
+    assert publication.__name__ == "jittor.compat.torch.publication"
+
+
 def test_namespace_has_importable_package_spec():
     """A published detached root must remain a valid importlib package."""
     import importlib.util

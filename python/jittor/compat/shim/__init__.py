@@ -12,9 +12,9 @@ _PUBLIC = {
     "activate": ("jittor.compat.shim.runtime", "activate"),
     "activation_status": ("jittor.compat.shim.runtime", "activation_status"),
     "enable": ("jittor.compat.shim.runtime", "activate"),
-    "TorchNamespace": ("jittor.compat.torch.namespace", "TorchNamespace"),
+    "TorchNamespace": ("jittor.compat.torch.publication", "TorchNamespace"),
     "independent_torch_namespace": (
-        "jittor.compat.torch.namespace", "independent_torch_namespace"
+        "jittor.compat.torch.publication", "independent_torch_namespace"
     ),
 }
 
