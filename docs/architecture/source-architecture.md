@@ -37,7 +37,8 @@ python/
 │   ├── __init__.py              # root composition and runtime initialization
 │   ├── __init__.pyi             # public root typing surface
 │   ├── _runtime/
-│   │   └── core_api.py          # native Python API after core bootstrap
+│   │   ├── core_api.py          # native Python API after core bootstrap
+│   │   └── state.py             # injected native Flags views, no bootstrap imports
 │   ├── nn/                      # neural-network public API
 │   │   ├── modules/             # stateful Module implementations
 │   │   ├── functional/          # stateless tensor functions
@@ -112,6 +113,11 @@ The entries directly under `python/jittor/` are an exact reviewed set.
 large native Python API implementation loaded after the compiled core. Public
 root exports retain object identity with that implementation, and legacy root
 pickle paths remain loadable. `__init__.pyi` owns the public root typing surface.
+`_runtime.state` owns `RuntimeContext` and `RuntimeState`; `core_api` re-exports
+the same classes and constructs the live `jt.runtime` view after native bootstrap.
+The classes read the injected native `Flags` object without copying live state.
+Their snapshot returns detached Python values, not tensors. This is a Python
+module boundary, not a migration of C++ global-state ownership.
 `compiler.py`, `compile_extern.py`,
 `pyjt_compiler.py`, and `init_cupy.py` are compiler or device bootstrap
 boundaries; `distributions.py`, `init.py`, and `linalg.py` are public native
