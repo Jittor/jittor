@@ -702,18 +702,22 @@ def _required_accelerator_executions():
 
 def _require_real_accelerator():
     """Fail a declared accelerator gate before skipped tests can look green."""
-    if os.environ.get("JITTOR_TEST_REQUIRE_CUDA", "").strip().lower() not in (
-            "1", "true", "yes", "on"):
+    truthy = ("1", "true", "yes", "on")
+    require_cuda = os.environ.get("JITTOR_TEST_REQUIRE_CUDA", "").strip().lower()
+    require_acl = os.environ.get("JITTOR_TEST_REQUIRE_ACL", "").strip().lower()
+    if require_cuda not in truthy and require_acl not in truthy:
         return
     try:
         import jittor as jt
-        available = bool(jt.compiler.has_cuda)
     except Exception as error:
         raise pytest.UsageError(
-            "CUDA gate could not initialize Jittor: {}".format(error))
-    if not available:
+            "accelerator gate could not initialize Jittor: {}".format(error))
+    if require_cuda in truthy and not bool(jt.compiler.has_cuda):
         raise pytest.UsageError(
             "CUDA gate declared JITTOR_TEST_REQUIRE_CUDA but has_cuda is false")
+    if require_acl in truthy and not bool(getattr(jt.compiler, "has_acl", 0)):
+        raise pytest.UsageError(
+            "NPU gate declared JITTOR_TEST_REQUIRE_ACL but has_acl is false")
 
 
 def pytest_sessionstart(session):
