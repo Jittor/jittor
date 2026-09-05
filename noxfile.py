@@ -27,7 +27,7 @@ try:
         torch_arguments as gate_torch_arguments,
     )
     from _helpers.tiers import (  # noqa: E402
-        effective_cpu_count, worker_thread_budget)
+        budget_report, effective_cpu_count, worker_thread_budget)
     from _helpers.process_modes import TORCH_MODE_PATHS  # noqa: E402
 finally:
     sys.path.remove(str(REPO_ROOT / "tests"))
@@ -646,6 +646,23 @@ def _split_threads(env, workers):
     for name in _THREAD_ENV_NAMES:
         env[name] = str(budget)
     return env
+
+
+def _enforce_smoke_budget(session, workers):
+    """Refuse a smoke invocation whose measured budget no longer fits.
+
+    The structure gate checks the checked-in measurement, but runtime worker
+    capping can change the makespan (for example inside a one-core cgroup).
+    Failing before pytest starts keeps that condition visible instead of
+    silently turning the pull-request tier into an over-budget run.
+    """
+    report = budget_report(workers)
+    if report["headroom_seconds"] < 0:
+        session.error(
+            "smoke budget exceeded: predicted %.0fs / %.0fs with %d workers; "
+            "run the full tier or provide a runner with more CPU quota"
+            % (report["predicted_seconds"], report["budget_seconds"], workers))
+    return report
 
 
 def _run_pytest(session, defaults, env, runner=None):
@@ -1651,6 +1668,7 @@ def smoke(session):
     # marked as one xdist group, while independent tests in the same file can
     # run on other workers.  Full keeps loadfile's surveyed ordering.
     workers = _runtime_gate_workers()
+    _enforce_smoke_budget(session, workers)
     fast = ("-m", "not slow") + _xdist(workers, distribution="loadgroup")
     env = _split_threads(env, workers)
     _run_pytest_once(session, gate_native_arguments() + fast, env)
