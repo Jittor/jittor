@@ -9,6 +9,7 @@ importing CUDA/NCCL, FSDP, or the native Jittor runtime.
 from __future__ import annotations
 
 
+
 DISTRIBUTION_ROOT = "torch.distributed"
 
 # This is the public import graph assembled by the FSDP2 installer.  It is a
@@ -65,6 +66,55 @@ DISTRIBUTION_PACKAGE_ALIASES = (
 )
 
 
+class _DistributionManifest(dict):
+    """Small import-free read-only mapping for package metadata."""
+
+    @staticmethod
+    def _readonly(*args, **kwargs):
+        raise TypeError("distribution manifest is read-only")
+
+    __setitem__ = __delitem__ = clear = pop = popitem = setdefault = update = _readonly
+
+    def __ior__(self, other):
+        self._readonly(other)
+        return self
+
+
+def distribution_manifest():
+    """Return the immutable package boundary consumed by packagers.
+
+    Keeping this snapshot import-neutral gives a wheel builder (or a host
+    bootstrap) one object to inspect without importing the native runtime.
+    Tuples are returned directly so callers cannot mutate the canonical graph.
+    """
+
+    return _DistributionManifest({
+        "root": DISTRIBUTION_ROOT,
+        "modules": DISTRIBUTION_MODULES,
+        "packages": distribution_package_names(),
+        "aliases": DISTRIBUTION_PACKAGE_ALIASES,
+    })
+
+
+def validate_distribution_aliases(names=None, aliases=DISTRIBUTION_PACKAGE_ALIASES):
+    """Validate alias endpoints and reject ambiguous package aliases."""
+
+    present = set(DISTRIBUTION_MODULES if names is None else names)
+    seen = set()
+    for source, target in aliases:
+        if source == target:
+            raise ValueError("distribution alias cannot target itself: %r" % source)
+        if source not in present or target not in present:
+            raise ValueError(
+                "distribution alias endpoint is missing: %r -> %r"
+                % (source, target)
+            )
+        if source in seen:
+            raise ValueError("distribution alias is declared more than once: %r" % source)
+        seen.add(source)
+    return True
+
+
 def distribution_module_names():
     """Return a stable tuple suitable for packaging and import checks."""
 
@@ -94,6 +144,7 @@ def validate_distribution_graph(names):
     missing = tuple(sorted(expected - present))
     if missing:
         raise ValueError("distribution graph is missing: %s" % ", ".join(missing))
+    validate_distribution_aliases(present)
     for name in expected:
         if name == "torch":
             continue
@@ -115,5 +166,7 @@ __all__ = [
     "DISTRIBUTION_PACKAGE_ALIASES",
     "distribution_module_names",
     "distribution_package_names",
+    "distribution_manifest",
+    "validate_distribution_aliases",
     "validate_distribution_graph",
 ]

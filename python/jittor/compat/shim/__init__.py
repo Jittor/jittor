@@ -25,8 +25,14 @@ _PUBLIC = {
     "distribution_module_names": (
         "jittor.compat.torch.distribution", "distribution_module_names"
     ),
+    "distribution_manifest": (
+        "jittor.compat.torch.distribution", "distribution_manifest"
+    ),
     "distribution_package_names": (
         "jittor.compat.torch.distribution", "distribution_package_names"
+    ),
+    "validate_distribution_aliases": (
+        "jittor.compat.torch.distribution", "validate_distribution_aliases"
     ),
     "validate_distribution_graph": (
         "jittor.compat.torch.distribution", "validate_distribution_graph"

@@ -8,8 +8,8 @@ from jittor.compat.torch.publication import (
 )
 from jittor.compat.torch.distribution import (
     DISTRIBUTION_MODULES, DISTRIBUTION_PACKAGE_ALIASES,
-    distribution_module_names, distribution_package_names,
-    validate_distribution_graph,
+    distribution_manifest, distribution_module_names, distribution_package_names,
+    validate_distribution_aliases, validate_distribution_graph,
 )
 
 enable = activate
@@ -26,7 +26,9 @@ __all__ = [
     "namespace_owner",
     "DISTRIBUTION_MODULES",
     "DISTRIBUTION_PACKAGE_ALIASES",
+    "distribution_manifest",
     "distribution_module_names",
     "distribution_package_names",
+    "validate_distribution_aliases",
     "validate_distribution_graph",
 ]

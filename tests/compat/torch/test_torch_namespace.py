@@ -33,13 +33,40 @@ def test_distribution_manifest_is_importable_and_parent_complete():
     """Standalone package metadata must not depend on a selected backend."""
     from jittor.compat.torch.distribution import (
         DISTRIBUTION_MODULES, DISTRIBUTION_PACKAGE_ALIASES,
-        distribution_package_names, validate_distribution_graph,
+        distribution_manifest, distribution_package_names,
+        validate_distribution_aliases, validate_distribution_graph,
     )
 
     assert DISTRIBUTION_MODULES[0] == "torch.distributed"
     assert "torch.distributed.fsdp" in distribution_package_names()
     assert validate_distribution_graph(DISTRIBUTION_MODULES)
+    assert validate_distribution_aliases(DISTRIBUTION_MODULES)
     assert all(left in DISTRIBUTION_MODULES for left, _ in DISTRIBUTION_PACKAGE_ALIASES)
+
+    manifest = distribution_manifest()
+    assert manifest["root"] == "torch.distributed"
+    assert manifest["modules"] is DISTRIBUTION_MODULES
+    assert manifest["aliases"] is DISTRIBUTION_PACKAGE_ALIASES
+
+
+def test_distribution_alias_validation_rejects_missing_or_duplicate_endpoints():
+    from jittor.compat.torch.distribution import validate_distribution_aliases
+
+    try:
+        validate_distribution_aliases(("torch.distributed",),
+                                      (("torch.distributed", "torch.missing"),))
+    except ValueError as error:
+        assert "endpoint is missing" in str(error)
+    else:
+        raise AssertionError("missing alias endpoint was accepted")
+
+    try:
+        validate_distribution_aliases(
+            ("a", "b"), (("a", "b"), ("a", "b")))
+    except ValueError as error:
+        assert "declared more than once" in str(error)
+    else:
+        raise AssertionError("duplicate alias source was accepted")
 
 
 def test_distribution_manifest_has_no_backend_import_dependency():
@@ -54,6 +81,15 @@ def test_distribution_manifest_has_no_backend_import_dependency():
         or (isinstance(node, ast.ImportFrom) and node.module != "__future__")
     ]
     assert not imports
+
+
+def test_bootstrap_and_lazy_shim_expose_the_same_distribution_boundary():
+    from jittor.compat.shim import bootstrap, distribution_manifest
+
+    assert bootstrap.distribution_manifest is distribution_manifest
+    manifest = distribution_manifest()
+    assert manifest["root"] == "torch.distributed"
+    assert "torch.distributed.fsdp" in manifest["modules"]
 
 
 def test_namespace_has_importable_package_spec():
