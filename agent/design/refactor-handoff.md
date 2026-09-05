@@ -27,8 +27,8 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；当前状态基线 `6d3e80cd`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 当前 1254 个 |
+| 分支 | `2.0-refactor`；当前状态基线 `0100a475`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 当前 1257 个 |
 | 提交里出现过的任务号 | 329 个 |
 | 看板 | 已合并 **208** / 进行中 **0** / 待领 **72** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
@@ -1624,6 +1624,14 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `bindings` | cuDNN conv3d rank/group 负向已有覆盖；独立 CUDA 单卡冷缓存运行 `test_input_rank` 1 passed，异常后计算继续通过，无新代码。 |
 | `device` | ACL 剩余 data-channel C++ decoder、胖 `AclOpFunctions` 类型擦除、属性通道、descriptor cache 必须按依赖顺序整体迁移；现有 schema/边界/workspace 静态合同 9 passed，本机无 CANN/NPU。 |
 | `gates` | 0.22 仍需约两小时级 CUDA 全量性能验收；9.01 热 CPU 达标但 CUDA/冷启动未达标，且只读 HOME import 复现 `PermissionError`，不适合轻量半改。 |
+
+### 2026-09-05 第一百六十五波
+
+| 分区 | 结果 |
+| --- | --- |
+| `build` | `01090519` 修复默认 HOME 只读时的缓存 fallback，显式 `JITTOR_HOME` 仍保持错误可见；`test_jittor_home.py` + 只读 import 回归 6 passed。9.01 整卡仍受冷启动/惰性导入验收约束。 |
+| `compat` | `0100a475` 在 `EXPLICIT_REQUIRES_GRAD` 下让 torch-facing detach 清除返回 Var 的 requires_grad；定向 2 passed、核心策略/对拍 10 passed。NATIVE 策略保持 Jittor 原语义。 |
+| `dist` | HCCL 8.02/10.19 只读审计确认无安全静态关闭项；现有合同通过但仍待 910B3 多卡实机。 |
 
 ## 7. 接手怎么开始
 
