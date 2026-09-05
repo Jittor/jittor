@@ -75,6 +75,18 @@ def bind_published_namespace(namespace, published, transaction=None):
         name: module for name, module in published.items()
         if name.startswith("torch.") and module is not None
     }
+    # ``core.install`` publishes ``torch.torch`` as an alias of the native
+    # owner.  Once the independent root is published, retaining that alias
+    # would let callers escape the independent module identity.  Normalize
+    # only this explicit root alias; other published modules may legitimately
+    # be shared implementation objects.
+    owner_alias = "torch.torch"
+    if modules.get(owner_alias) is namespace.owner:
+        modules[owner_alias] = namespace
+        old = published.get(owner_alias)
+        published[owner_alias] = namespace
+        if transaction is not None:
+            transaction.record(published, owner_alias, old, namespace)
     # Validate the complete parent closure before mutating the namespace.  A
     # caller outside activation may not provide a transaction; discovering a
     # missing parent after binding an earlier sibling would otherwise leave a

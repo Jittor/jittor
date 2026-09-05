@@ -71,6 +71,19 @@ def test_published_root_entry_is_ignored_when_binding_children():
     assert namespace is not owner
 
 
+def test_owner_root_alias_is_rebound_to_independent_namespace():
+    """The core installer's ``torch.torch`` alias must not leak the owner."""
+    owner = types.ModuleType("jittor")
+    namespace = independent_torch_namespace(owner)
+    published = {"torch": owner, "torch.torch": owner}
+
+    bind_published_namespace(namespace, published)
+
+    assert published["torch.torch"] is namespace
+    assert namespace.torch is namespace
+    assert namespace.torch is not owner
+
+
 def test_published_children_rollback_restores_owner_bindings():
     owner = types.ModuleType("jittor")
     owner.nn = types.SimpleNamespace(functional="old")
