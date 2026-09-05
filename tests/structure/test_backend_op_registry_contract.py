@@ -162,6 +162,33 @@ def test_backend_teardown_removes_provider_and_all_registered_kernels():
         raise AssertionError("backend teardown was not fail-closed")
 
 
+def test_provider_replacement_clears_old_kernel_ownership():
+    backends = BackendRegistry((BackendSpec("cpu"),))
+    ops = OpRegistry(backends)
+    ops.register("add", "cpu", lambda value: ("old", value))
+    replaced = ops.register_backend(
+        BackendSpec("cpu", capabilities={"replacement": True}), replace=True)
+    assert replaced.capabilities["replacement"]
+    assert ops.supported_ops("cpu") == ()
+    try:
+        ops.dispatch("add", "cpu", 1)
+    except MissingKernel:
+        pass
+    else:
+        raise AssertionError("provider replacement retained an old kernel")
+
+
+def test_provider_registration_is_fail_closed_without_replacement():
+    backends = BackendRegistry((BackendSpec("cpu"),))
+    ops = OpRegistry(backends)
+    try:
+        ops.register_backend(BackendSpec("cpu"))
+    except DuplicateRegistration:
+        pass
+    else:
+        raise AssertionError("provider replacement happened without explicit opt-in")
+
+
 def test_native_cpu_registry_dispatch_matches_outer_and_clamp_values():
     # Keep the registry contract test lightweight at collection time; the
     # local import still exercises the actual CPU runtime dispatch path.

@@ -200,6 +200,27 @@ class OpRegistry:
             self._kernels[key] = kernel
         return kernel
 
+    def register_backend(self, spec: BackendSpec, *, replace: bool = False) -> BackendSpec:
+        """Register a provider together with its kernel ownership boundary.
+
+        A provider replacement is a teardown event for the old provider.  Its
+        kernels must not survive the replacement, otherwise dispatch could
+        call code owned by a provider that is no longer installed.  Keeping
+        this operation on ``OpRegistry`` makes that ownership rule explicit;
+        callers do not need to coordinate two independent registries.
+        """
+        if not isinstance(spec, BackendSpec):
+            raise TypeError("backend spec must be a BackendSpec")
+        with self._lock:
+            present = spec.name in self.backends.names()
+            if present and not replace:
+                raise DuplicateRegistration("backend already registered: %s" % spec.name)
+            if present:
+                for key in tuple(self._kernels):
+                    if key[1] == spec.name:
+                        del self._kernels[key]
+            return self.backends.register(spec, replace=replace)
+
     def resolve(self, op: str, backend: str) -> Callable[..., Any]:
         self.backends.get(backend)
         with self._lock:
