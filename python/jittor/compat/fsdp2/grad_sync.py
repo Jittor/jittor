@@ -259,11 +259,27 @@ def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
         return False
     entry_grad = {}
     for state in states:
+        # ``_release_full_params`` drops the gathered Var after the first
+        # reduce-scatter.  Keep only its identity-to-entry association so a
+        # repeated call with the same grad map can still recognize a shared
+        # parameter without retaining the full-size parameter itself.
+        full_param_entries = getattr(
+            state, "_jittor_fsdp_full_param_entries", None)
+        if full_param_entries is None:
+            full_param_entries = {}
+            object.__setattr__(
+                state, "_jittor_fsdp_full_param_entries", full_param_entries)
         full_grads = []
         local_used = []
         for entry in state.true_fsdp_params:
             full = getattr(entry, "full_param", None)
-            grad = grad_by_id.get(id(full)) if full is not None else None
+            if full is not None:
+                full_id = id(full)
+                full_param_entries[full_id] = entry
+                object.__setattr__(entry, "_jittor_fsdp_full_param_id", full_id)
+            else:
+                full_id = getattr(entry, "_jittor_fsdp_full_param_id", None)
+            grad = grad_by_id.get(full_id) if full_id is not None else None
             local_used.append(grad is not None)
             if grad is None:
                 grad = jt.zeros(entry.shape, dtype=entry.dtype)
