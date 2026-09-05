@@ -63,6 +63,15 @@ The C++ decode entry should be one `BaseOpRunner` helper that validates the
 operator name, schema version, type tag, and required fields before constructing
 an `OpAttr`. This is a design target only; no such shared decoder exists yet.
 
+The host-side half of this contract now lives in
+`python/jittor/extern/acl/aclops/acl_data.py`. `validate_acl_data()` applies
+schema defaults, rejects unknown or wrongly typed fields, and emits an
+address-independent `canonical_cache_key`. It has no CANN dependency and does
+not change the existing generated `OpAttr` path; the module is therefore safe
+to exercise on a CPU-only host while the C++ decoder and the first attribute
+owner remain separate migrations. The negative contract is covered by
+`tests/structure/test_acl_data_schema_normalizer.py`.
+
 The proposed interface is:
 
 ```cpp

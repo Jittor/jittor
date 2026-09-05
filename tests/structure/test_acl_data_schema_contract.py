@@ -1,6 +1,11 @@
 import re
+from pathlib import Path
 
 import pytest
+
+
+ROOT = Path(__file__).resolve().parents[2]
+HOST_SCHEMA = ROOT / "python/jittor/extern/acl/aclops/acl_data.py"
 
 
 def validate_acl_data_schema(record):
@@ -34,6 +39,16 @@ def test_valid_acl_data_schema_is_decoder_ready():
         "fields": {"dim": {"type": "int64", "value": 1}},
         "cache_key": [("dim", "int64", 1)],
     })
+
+
+def test_host_normalizer_is_cann_free_and_does_not_claim_cpp_decoder():
+    text = HOST_SCHEMA.read_text(encoding="utf-8")
+    assert "def validate_acl_data(" in text
+    assert "def canonical_cache_key(" in text
+    assert "AclDataUserError" in text
+    assert "AclDataInternalError" in text
+    assert "import jittor" not in text
+    assert "from acl" not in text
 
 
 @pytest.mark.parametrize("record", [
