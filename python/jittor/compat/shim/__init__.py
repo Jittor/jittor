@@ -28,6 +28,15 @@ _PUBLIC = {
     "DISTRIBUTION_ROOT": (
         "jittor.compat.torch.distribution", "DISTRIBUTION_ROOT"
     ),
+    "DISTRIBUTION_PROJECT": (
+        "jittor.compat.torch.distribution", "DISTRIBUTION_PROJECT"
+    ),
+    "DISTRIBUTION_SCHEMA_VERSION": (
+        "jittor.compat.torch.distribution", "DISTRIBUTION_SCHEMA_VERSION"
+    ),
+    "DISTRIBUTION_IMPORT_ROOT": (
+        "jittor.compat.torch.distribution", "DISTRIBUTION_IMPORT_ROOT"
+    ),
     "DISTRIBUTION_MODULES": (
         "jittor.compat.torch.distribution", "DISTRIBUTION_MODULES"
     ),
@@ -40,6 +49,9 @@ _PUBLIC = {
     "distribution_manifest": (
         "jittor.compat.torch.distribution", "distribution_manifest"
     ),
+    "distribution_metadata": (
+        "jittor.compat.torch.distribution", "distribution_metadata"
+    ),
     "distribution_package_names": (
         "jittor.compat.torch.distribution", "distribution_package_names"
     ),
@@ -48,6 +60,9 @@ _PUBLIC = {
     ),
     "validate_distribution_manifest": (
         "jittor.compat.torch.distribution", "validate_distribution_manifest"
+    ),
+    "validate_distribution_metadata": (
+        "jittor.compat.torch.distribution", "validate_distribution_metadata"
     ),
     "validate_distribution_graph": (
         "jittor.compat.torch.distribution", "validate_distribution_graph"

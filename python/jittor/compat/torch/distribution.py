@@ -11,6 +11,13 @@ from __future__ import annotations
 
 
 DISTRIBUTION_ROOT = "torch.distributed"
+# Packaging identity is deliberately separate from the import root.  The
+# future wheel is named ``jittor-torch`` but publishes a ``torch`` namespace;
+# keeping both values here prevents a builder from deriving one from the
+# other (and accidentally naming the wheel ``torch``).
+DISTRIBUTION_PROJECT = "jittor-torch"
+DISTRIBUTION_SCHEMA_VERSION = 1
+DISTRIBUTION_IMPORT_ROOT = "torch"
 
 # This is the public import graph assembled by the FSDP2 installer.  It is a
 # manifest rather than an installer dependency so packaging/bootstrap checks
@@ -94,6 +101,55 @@ def distribution_manifest():
         "packages": distribution_package_names(),
         "aliases": DISTRIBUTION_PACKAGE_ALIASES,
     })
+
+
+def distribution_metadata():
+    """Return the backend-neutral project metadata consumed by packagers.
+
+    This is intentionally flat and immutable at the top level: a standalone
+    wheel builder can inspect the project/import identities and the exact
+    module graph without importing ``jittor``, CUDA, NCCL, or ACL.
+    """
+
+    return _DistributionManifest({
+        "project": DISTRIBUTION_PROJECT,
+        "schema_version": DISTRIBUTION_SCHEMA_VERSION,
+        "import_root": DISTRIBUTION_IMPORT_ROOT,
+        "root": DISTRIBUTION_ROOT,
+        "modules": DISTRIBUTION_MODULES,
+        "packages": distribution_package_names(),
+        "aliases": DISTRIBUTION_PACKAGE_ALIASES,
+    })
+
+
+def validate_distribution_metadata(metadata=None):
+    """Validate project identity and its exact import-graph manifest."""
+
+    spec = distribution_metadata() if metadata is None else metadata
+    if not hasattr(spec, "__getitem__"):
+        raise TypeError("distribution metadata must be a mapping")
+    try:
+        project = spec["project"]
+        schema_version = spec["schema_version"]
+        import_root = spec["import_root"]
+        manifest = {
+            "root": spec["root"],
+            "modules": spec["modules"],
+            "packages": spec["packages"],
+            "aliases": spec.get("aliases", ()),
+        }
+    except (AttributeError, KeyError, TypeError) as exc:
+        raise TypeError(
+            "distribution metadata must provide project/schema_version/import_root/manifest"
+        ) from exc
+    if project != DISTRIBUTION_PROJECT:
+        raise ValueError("distribution project must be %r" % DISTRIBUTION_PROJECT)
+    if schema_version != DISTRIBUTION_SCHEMA_VERSION:
+        raise ValueError("unsupported distribution metadata schema version: %r" % schema_version)
+    if import_root != DISTRIBUTION_IMPORT_ROOT:
+        raise ValueError("distribution import root must be %r" % DISTRIBUTION_IMPORT_ROOT)
+    validate_distribution_manifest(manifest)
+    return True
 
 
 def validate_distribution_aliases(names=None, aliases=DISTRIBUTION_PACKAGE_ALIASES):
@@ -376,12 +432,17 @@ def validate_distribution_bootstrap(bootstrap):
 
 
 __all__ = [
+    "DISTRIBUTION_PROJECT",
+    "DISTRIBUTION_SCHEMA_VERSION",
+    "DISTRIBUTION_IMPORT_ROOT",
     "DISTRIBUTION_ROOT",
     "DISTRIBUTION_MODULES",
     "DISTRIBUTION_PACKAGE_ALIASES",
     "distribution_module_names",
     "distribution_package_names",
     "distribution_manifest",
+    "distribution_metadata",
+    "validate_distribution_metadata",
     "validate_distribution_aliases",
     "validate_distribution_manifest",
     "validate_distribution_graph",

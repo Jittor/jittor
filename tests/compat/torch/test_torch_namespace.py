@@ -51,6 +51,37 @@ def test_distribution_manifest_is_importable_and_parent_complete():
     assert manifest["aliases"] is DISTRIBUTION_PACKAGE_ALIASES
 
 
+def test_distribution_metadata_has_explicit_project_and_import_identity():
+    from jittor.compat.torch.distribution import (
+        DISTRIBUTION_IMPORT_ROOT, DISTRIBUTION_PROJECT,
+        DISTRIBUTION_SCHEMA_VERSION, distribution_metadata,
+        validate_distribution_metadata,
+    )
+
+    metadata = distribution_metadata()
+    assert DISTRIBUTION_PROJECT == "jittor-torch"
+    assert DISTRIBUTION_IMPORT_ROOT == "torch"
+    assert DISTRIBUTION_SCHEMA_VERSION == 1
+    assert metadata["project"] == DISTRIBUTION_PROJECT
+    assert metadata["import_root"] == DISTRIBUTION_IMPORT_ROOT
+    assert metadata["schema_version"] == DISTRIBUTION_SCHEMA_VERSION
+    assert validate_distribution_metadata(metadata)
+
+
+def test_distribution_metadata_rejects_identity_drift():
+    from jittor.compat.torch.distribution import (
+        distribution_metadata, validate_distribution_metadata,
+    )
+
+    metadata = dict(distribution_metadata(), project="torch")
+    try:
+        validate_distribution_metadata(metadata)
+    except ValueError as error:
+        assert "distribution project" in str(error)
+    else:
+        raise AssertionError("distribution project identity drift was accepted")
+
+
 def test_distribution_boundary_facade_validates_manifest_and_publication():
     from jittor.compat.shim import bootstrap
     from jittor.compat.torch.distribution import validate_distribution_boundary
@@ -61,6 +92,9 @@ def test_distribution_boundary_facade_validates_manifest_and_publication():
 
     published, manifest = _small_distribution_fixture()
     assert bootstrap.validate_distribution_boundary(published, manifest)
+    assert bootstrap.DISTRIBUTION_PROJECT == "jittor-torch"
+    assert bootstrap.DISTRIBUTION_IMPORT_ROOT == "torch"
+    assert bootstrap.validate_distribution_metadata()
 
 
 def test_shim_facade_exports_publication_owner_and_binding_boundaries():
