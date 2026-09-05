@@ -51,6 +51,32 @@ def test_distribution_manifest_is_importable_and_parent_complete():
     assert manifest["aliases"] is DISTRIBUTION_PACKAGE_ALIASES
 
 
+def test_distribution_boundary_facade_validates_manifest_and_publication():
+    from jittor.compat.shim import bootstrap
+    from jittor.compat.torch.distribution import validate_distribution_boundary
+
+    assert bootstrap.DISTRIBUTION_ROOT == "torch.distributed"
+    assert bootstrap.validate_distribution_boundary is validate_distribution_boundary
+    assert bootstrap.validate_distribution_boundary()
+
+    published, manifest = _small_distribution_fixture()
+    assert bootstrap.validate_distribution_boundary(published, manifest)
+
+
+def test_shim_facade_exports_publication_owner_and_binding_boundaries():
+    from jittor.compat.shim import bootstrap
+    from jittor.compat.shim import bind_published_namespace, namespace_owner
+    from jittor.compat.torch.publication import (
+        bind_published_namespace as direct_bind,
+        namespace_owner as direct_owner,
+    )
+
+    assert bootstrap.bind_published_namespace is direct_bind
+    assert bootstrap.namespace_owner is direct_owner
+    assert bind_published_namespace is direct_bind
+    assert namespace_owner is direct_owner
+
+
 def test_distribution_alias_validation_rejects_missing_or_duplicate_endpoints():
     from jittor.compat.torch.distribution import validate_distribution_aliases
 
@@ -165,6 +191,22 @@ def test_distribution_publication_validator_rejects_unbound_or_malformed_nodes()
         assert "has no __path__" in str(error)
     else:
         raise AssertionError("malformed package node was accepted")
+
+
+def test_distribution_boundary_rejects_alias_object_collapse():
+    from jittor.compat.torch.distribution import validate_distribution_boundary
+
+    published, manifest = _small_distribution_fixture()
+    published["torch.distributed._tensor"] = published["torch.distributed.tensor"]
+    try:
+        validate_distribution_boundary(published, manifest)
+    except ValueError as error:
+        # Identity collapse is rejected at the module identity check before
+        # the alias-specific guard because a ModuleType can expose only one
+        # ``__name__`` value.
+        assert "wrong __name__" in str(error)
+    else:
+        raise AssertionError("distribution alias object collapse was accepted")
 
 
 def test_distribution_manifest_has_no_backend_import_dependency():

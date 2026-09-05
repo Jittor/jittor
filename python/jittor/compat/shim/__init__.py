@@ -19,6 +19,15 @@ _PUBLIC = {
     "publish_independent_namespace": (
         "jittor.compat.torch.publication", "publish_independent_namespace"
     ),
+    "namespace_owner": (
+        "jittor.compat.torch.publication", "namespace_owner"
+    ),
+    "bind_published_namespace": (
+        "jittor.compat.torch.publication", "bind_published_namespace"
+    ),
+    "DISTRIBUTION_ROOT": (
+        "jittor.compat.torch.distribution", "DISTRIBUTION_ROOT"
+    ),
     "DISTRIBUTION_MODULES": (
         "jittor.compat.torch.distribution", "DISTRIBUTION_MODULES"
     ),
@@ -45,6 +54,9 @@ _PUBLIC = {
     ),
     "validate_distribution_publication": (
         "jittor.compat.torch.distribution", "validate_distribution_publication"
+    ),
+    "validate_distribution_boundary": (
+        "jittor.compat.torch.distribution", "validate_distribution_boundary"
     ),
 }
 

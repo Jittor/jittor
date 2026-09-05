@@ -271,6 +271,23 @@ def validate_distribution_publication(published, manifest=None):
     return True
 
 
+def validate_distribution_boundary(published=None, manifest=None):
+    """Validate a standalone distribution before bootstrap mutates state.
+
+    Wheel builders only have a manifest, while a live shim bootstrap also has
+    the registry mapping that will be published.  Keep both checks behind one
+    backend-neutral entry point so callers cannot accidentally validate only
+    names or only live bindings.  ``published`` is optional for the packaging
+    path and, when supplied, is validated against the exact manifest object.
+    """
+
+    spec = distribution_manifest() if manifest is None else manifest
+    validate_distribution_manifest(spec)
+    if published is not None:
+        validate_distribution_publication(published, spec)
+    return True
+
+
 __all__ = [
     "DISTRIBUTION_ROOT",
     "DISTRIBUTION_MODULES",
@@ -282,4 +299,5 @@ __all__ = [
     "validate_distribution_manifest",
     "validate_distribution_graph",
     "validate_distribution_publication",
+    "validate_distribution_boundary",
 ]

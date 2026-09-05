@@ -5,14 +5,14 @@ from .discovery import NativeExtension, scan_extension_dirs
 from .runtime import activate, activation_status
 from jittor.compat.torch.publication import (
     TorchNamespace, independent_torch_namespace, namespace_owner,
-    publish_independent_namespace,
+    bind_published_namespace, publish_independent_namespace,
 )
 from jittor.compat.torch.distribution import (
-    DISTRIBUTION_MODULES, DISTRIBUTION_PACKAGE_ALIASES,
+    DISTRIBUTION_ROOT, DISTRIBUTION_MODULES, DISTRIBUTION_PACKAGE_ALIASES,
     distribution_manifest, distribution_module_names, distribution_package_names,
     validate_distribution_aliases, validate_distribution_graph,
     validate_distribution_manifest,
-    validate_distribution_publication,
+    validate_distribution_publication, validate_distribution_boundary,
 )
 
 enable = activate
@@ -27,7 +27,9 @@ __all__ = [
     "TorchNamespace",
     "independent_torch_namespace",
     "namespace_owner",
+    "bind_published_namespace",
     "publish_independent_namespace",
+    "DISTRIBUTION_ROOT",
     "DISTRIBUTION_MODULES",
     "DISTRIBUTION_PACKAGE_ALIASES",
     "distribution_manifest",
@@ -37,4 +39,5 @@ __all__ = [
     "validate_distribution_manifest",
     "validate_distribution_graph",
     "validate_distribution_publication",
+    "validate_distribution_boundary",
 ]
