@@ -845,6 +845,11 @@ class RuntimeContext:
         return self._flags.amp_reg
 
     @property
+    def float32_matmul_precision(self):
+        """Accumulation policy shared by float32 matmul and convolution."""
+        return self._flags.float32_matmul_precision
+
+    @property
     def auto_mixed_precision_level(self):
         """Convenience AMP policy level reflected by the native flag."""
         return self._flags.auto_mixed_precision_level
@@ -962,6 +967,7 @@ class RuntimeContext:
             "reuse_array": int(self.reuse_array),
             "no_grad": int(self.no_grad),
             "amp_reg": int(self.amp_reg),
+            "float32_matmul_precision": self.float32_matmul_precision,
             "auto_mixed_precision_level": int(self.auto_mixed_precision_level),
             "try_use_32bit_index": int(self.try_use_32bit_index),
             "no_fuse": int(self.no_fuse),
@@ -1037,6 +1043,10 @@ class RuntimeState:
     @property
     def amp_reg(self):
         return self._context.amp_reg
+
+    @property
+    def float32_matmul_precision(self):
+        return self._context.float32_matmul_precision
 
     @property
     def auto_mixed_precision_level(self):

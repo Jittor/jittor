@@ -36,6 +36,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "reuse_array": jt.flags.reuse_array,
         "no_grad": jt.flags.no_grad,
         "amp_reg": jt.flags.amp_reg,
+        "float32_matmul_precision": jt.flags.float32_matmul_precision,
         "auto_mixed_precision_level": jt.flags.auto_mixed_precision_level,
         "try_use_32bit_index": jt.flags.try_use_32bit_index,
         "no_fuse": jt.flags.no_fuse,
@@ -233,6 +234,28 @@ def test_runtime_amp_flags_are_live_read_only_views(flag_name):
             setattr(jt.runtime.context, flag_name, 0)
     finally:
         setattr(jt.flags, flag_name, original)
+
+
+def test_runtime_float32_matmul_precision_is_a_live_read_only_view_and_cpu_matmul_survives():
+    import numpy as np
+    import jittor as jt
+
+    original = jt.flags.float32_matmul_precision
+    try:
+        assert jt.runtime.float32_matmul_precision == original
+        with jt.flag_scope(float32_matmul_precision="high"):
+            assert jt.runtime.float32_matmul_precision == "high"
+            assert jt.runtime.context.snapshot()["float32_matmul_precision"] == "high"
+            lhs = jt.array(np.eye(2, dtype="float32"))
+            rhs = jt.array(np.ones((2, 2), dtype="float32"))
+            np.testing.assert_allclose((lhs @ rhs).numpy(), np.ones((2, 2), dtype="float32"))
+        assert jt.runtime.float32_matmul_precision == original
+        with pytest.raises(AttributeError):
+            jt.runtime.float32_matmul_precision = "medium"
+        with pytest.raises(AttributeError):
+            jt.runtime.context.float32_matmul_precision = "medium"
+    finally:
+        jt.flags.float32_matmul_precision = original
 
 
 def test_runtime_try_use_32bit_index_is_a_live_read_only_view():
