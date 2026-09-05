@@ -32,6 +32,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "lazy_execution": jt.flags.lazy_execution,
         "auto_flush_ops": jt.flags.auto_flush_ops,
         "no_grad": jt.flags.no_grad,
+        "no_fuse": jt.flags.no_fuse,
         "gopt_disable": jt.flags.gopt_disable,
         "exec_called": jt.flags.exec_called,
         "use_threading": jt.flags.use_threading,
@@ -155,6 +156,27 @@ def test_runtime_gopt_disable_is_a_live_read_only_view_and_cpu_execution_survive
             jt.runtime.context.gopt_disable = 0
     finally:
         jt.flags.gopt_disable = original
+
+
+def test_runtime_no_fuse_is_a_live_read_only_view_and_cpu_execution_survives():
+    import numpy as np
+    import jittor as jt
+
+    original = jt.flags.no_fuse
+    try:
+        assert jt.runtime.no_fuse == original
+        with jt.flag_scope(no_fuse=1):
+            assert jt.runtime.no_fuse == 1
+            assert jt.runtime.context.snapshot()["no_fuse"] == 1
+            value = (jt.array(np.arange(4, dtype="float32")) + 1).numpy()
+            np.testing.assert_array_equal(value, np.arange(1, 5, dtype="float32"))
+        assert jt.runtime.no_fuse == original
+        with pytest.raises(AttributeError):
+            jt.runtime.no_fuse = 0
+        with pytest.raises(AttributeError):
+            jt.runtime.context.no_fuse = 0
+    finally:
+        jt.flags.no_fuse = original
 
 
 def test_runtime_exec_called_is_a_live_read_only_execution_counter():

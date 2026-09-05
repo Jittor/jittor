@@ -825,6 +825,11 @@ class RuntimeContext:
         return self._flags.no_grad
 
     @property
+    def no_fuse(self):
+        """Whether fusion optimization is disabled for new operations."""
+        return self._flags.no_fuse
+
+    @property
     def gopt_disable(self):
         """Whether graph optimization is disabled for execution."""
         return self._flags.gopt_disable
@@ -858,6 +863,7 @@ class RuntimeContext:
             "lazy_execution": int(self.lazy_execution),
             "auto_flush_ops": int(self.auto_flush_ops),
             "no_grad": int(self.no_grad),
+            "no_fuse": int(self.no_fuse),
             "gopt_disable": int(self.gopt_disable),
             "exec_called": int(self.exec_called),
             "use_threading": int(self.use_threading),
@@ -901,6 +907,10 @@ class RuntimeState:
     @property
     def no_grad(self):
         return self._context.no_grad
+
+    @property
+    def no_fuse(self):
+        return self._context.no_fuse
 
     @property
     def gopt_disable(self):
