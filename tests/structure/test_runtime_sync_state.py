@@ -30,6 +30,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "device_id": getattr(jt.flags, "device_id", -1),
         "use_cuda": jt.flags.use_cuda,
         "lazy_execution": jt.flags.lazy_execution,
+        "auto_flush_ops": jt.flags.auto_flush_ops,
     }
     assert jt.runtime.device_id == getattr(jt.flags, "device_id", -1)
     assert jt.runtime.use_cuda == jt.flags.use_cuda
@@ -91,3 +92,21 @@ def test_runtime_lazy_execution_is_a_live_read_only_view():
             jt.runtime.context.lazy_execution = 0
     finally:
         jt.flags.lazy_execution = original
+
+
+def test_runtime_auto_flush_ops_is_a_live_read_only_view():
+    import jittor as jt
+
+    original = jt.flags.auto_flush_ops
+    try:
+        assert jt.runtime.auto_flush_ops == original
+        with jt.flag_scope(auto_flush_ops=7):
+            assert jt.runtime.auto_flush_ops == 7
+            assert jt.runtime.context.snapshot()["auto_flush_ops"] == 7
+        assert jt.runtime.auto_flush_ops == original
+        with pytest.raises(AttributeError):
+            jt.runtime.auto_flush_ops = 0
+        with pytest.raises(AttributeError):
+            jt.runtime.context.auto_flush_ops = 0
+    finally:
+        jt.flags.auto_flush_ops = original

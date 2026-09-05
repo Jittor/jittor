@@ -814,6 +814,11 @@ class RuntimeContext:
         """Whether graph execution is deferred until an explicit flush."""
         return self._flags.lazy_execution
 
+    @property
+    def auto_flush_ops(self):
+        """CUDA pipeline threshold for automatically submitting pending ops."""
+        return self._flags.auto_flush_ops
+
     def snapshot(self):
         """Return an immutable snapshot of the fields owned by this context."""
         return {
@@ -821,6 +826,7 @@ class RuntimeContext:
             "device_id": int(self.device_id),
             "use_cuda": int(self.use_cuda),
             "lazy_execution": int(self.lazy_execution),
+            "auto_flush_ops": int(self.auto_flush_ops),
         }
 
 
@@ -851,6 +857,10 @@ class RuntimeState:
     @property
     def lazy_execution(self):
         return self._context.lazy_execution
+
+    @property
+    def auto_flush_ops(self):
+        return self._context.auto_flush_ops
 
     @property
     def context(self):
