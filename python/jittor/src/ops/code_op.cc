@@ -23,9 +23,9 @@ static auto make_code = op_constructor<VarPtr, NanoVector, NanoString, vector<Va
 static auto make_code_multi = op_constructor<vector<VarPtr>, vector<NanoVector>&&, vector<NanoString>&&, vector<Var*>&&, string&&, vector<string>&&, string&&, string&&, vector<string>&&, string&&, DataMap&&>("code");
     
 static inline void check_vary_shape(NanoVector v) {
-    ASSERT(v.size()) << "Vary shape should not be zero dimension";
+    USER_CHECK(v.size()) << "Vary shape should not be zero dimension";
     for (int i=0; i<v.size(); i++)
-        ASSERT((i == 0) ^ (v[i] >= 0))
+        USER_CHECK((i == 0) ^ (v[i] >= 0))
             << "Vary shape should only occur in the first dimension:" << v;
 }
 
