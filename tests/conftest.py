@@ -508,6 +508,7 @@ def pytest_sessionfinish(session, exitstatus):
 _FILE_OUTCOMES = {}
 _FILES_WITH_ITEMS = set()
 _SKIP_REASON_BUCKETS = Counter()
+_ACCELERATOR_EXECUTED = 0
 _SKIP_BUCKET_ORDER = (
     "accelerator", "backend", "mpi", "torch", "network", "manual", "other")
 _SKIP_BUCKET_PATTERNS = {
@@ -556,6 +557,9 @@ def pytest_runtest_logreport(report):
     if report.when == "call" and (not report.skipped
                                   or hasattr(report, "wasxfail")):
         record["executed"] += 1
+        if _is_accelerator_case(report):
+            global _ACCELERATOR_EXECUTED
+            _ACCELERATOR_EXECUTED += 1
     elif report.skipped and report.when in ("setup", "call"):
         record["skipped"] += 1
         reason = _skip_reason(report)
@@ -584,6 +588,15 @@ def _skip_reason(report):
     if isinstance(longrepr, tuple) and len(longrepr) == 3:
         return str(longrepr[2]).lower()
     return str(longrepr or "").lower()
+
+
+def _is_accelerator_case(report):
+    """Recognize a test whose nodeid names an accelerator path or backend."""
+    nodeid = str(getattr(report, "nodeid", "")).lower()
+    return any(token in nodeid for token in (
+        "/cuda/", "_cuda", "cuda_", "cudnn", "cublas", "cutt",
+        "cusparse", "cufft", "curand", "/rocm/", "_rocm", "/npu/",
+        "_npu", "acl", "ascend", "cann"))
 
 
 def _real_torch_is_required():
@@ -676,6 +689,36 @@ def _execution_exemptions():
 def _requires_execution():
     value = os.environ.get("JITTOR_TEST_REQUIRE_EXECUTION", "").strip().lower()
     return value in ("1", "true", "yes", "on")
+
+
+def _required_accelerator_executions():
+    value = os.environ.get("JITTOR_TEST_ACCELERATOR_MIN_EXECUTED", "0").strip()
+    try:
+        return max(0, int(value))
+    except ValueError:
+        raise pytest.UsageError(
+            "JITTOR_TEST_ACCELERATOR_MIN_EXECUTED must be an integer")
+
+
+def _require_real_accelerator():
+    """Fail a declared accelerator gate before skipped tests can look green."""
+    if os.environ.get("JITTOR_TEST_REQUIRE_CUDA", "").strip().lower() not in (
+            "1", "true", "yes", "on"):
+        return
+    try:
+        import jittor as jt
+        available = bool(jt.compiler.has_cuda)
+    except Exception as error:
+        raise pytest.UsageError(
+            "CUDA gate could not initialize Jittor: {}".format(error))
+    if not available:
+        raise pytest.UsageError(
+            "CUDA gate declared JITTOR_TEST_REQUIRE_CUDA but has_cuda is false")
+
+
+def pytest_sessionstart(session):
+    """Reject a CUDA-labelled run before its device tests can all skip."""
+    _require_real_accelerator()
 
 
 def _report_files_that_executed_nothing(terminalreporter, config):
@@ -774,6 +817,16 @@ def pytest_sessionfinish(session, exitstatus):
     gates. Under ``JITTOR_TEST_REQUIRE_EXECUTION=1`` an entry has to either run
     something or be listed in ``gate_scope.EXECUTES_NOTHING`` with a reason.
     """
+    required_accelerator = _required_accelerator_executions()
+    if required_accelerator and _ACCELERATOR_EXECUTED < required_accelerator:
+        session.exitstatus = 1
+        terminalreporter = getattr(session.config, "pluginmanager", None)
+        reporter = (terminalreporter.getplugin("terminalreporter")
+                    if terminalreporter is not None else None)
+        if reporter is not None:
+            reporter.write_line(
+                "CUDA gate executed %d accelerator cases; requires at least %d"
+                % (_ACCELERATOR_EXECUTED, required_accelerator))
     if _MISSING_REAL_TORCH:
         # Not gated on JITTOR_TEST_REQUIRE_EXECUTION: a session that declared it
         # has real PyTorch and then skipped for want of it is misconfigured
