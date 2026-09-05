@@ -189,6 +189,27 @@ class OpRegistry:
             except KeyError as exc:
                 raise MissingKernel("no kernel registered for %s/%s" % (op, backend)) from exc
 
+    def has_kernel(self, op: str, backend: str) -> bool:
+        """Return whether a backend currently owns an implementation.
+
+        Providers use this probe during teardown instead of catching a lookup
+        exception.  Backend validation is retained so a misspelled backend is
+        still reported as an ``UnknownBackend`` rather than looking absent.
+        """
+        self.backends.get(backend)
+        with self._lock:
+            return (op, backend) in self._kernels
+
+    def unregister(self, op: str, backend: str) -> Callable[..., Any]:
+        """Remove and return one kernel during backend/provider teardown."""
+        self.backends.get(backend)
+        key = (op, backend)
+        with self._lock:
+            try:
+                return self._kernels.pop(key)
+            except KeyError as exc:
+                raise MissingKernel("no kernel registered for %s/%s" % key) from exc
+
     def dispatch(self, op: str, backend: str, *args: Any, **kwargs: Any) -> Any:
         return self.resolve(op, backend)(*args, **kwargs)
 

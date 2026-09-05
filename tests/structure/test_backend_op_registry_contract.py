@@ -100,6 +100,22 @@ def test_registry_rejects_duplicate_and_missing_entries():
         raise AssertionError("missing kernel was silently accepted")
 
 
+def test_operator_registry_kernel_lifecycle_is_explicit():
+    backends = BackendRegistry((BackendSpec("cpu"),))
+    ops = OpRegistry(backends)
+    kernel = lambda value: value + 1
+    ops.register("add1", "cpu", kernel)
+    assert ops.has_kernel("add1", "cpu")
+    assert ops.unregister("add1", "cpu") is kernel
+    assert not ops.has_kernel("add1", "cpu")
+    try:
+        ops.unregister("add1", "cpu")
+    except MissingKernel:
+        pass
+    else:
+        raise AssertionError("unregister silently accepted an unknown kernel")
+
+
 def test_native_cpu_registry_dispatch_matches_outer_and_clamp_values():
     # Keep the registry contract test lightweight at collection time; the
     # local import still exercises the actual CPU runtime dispatch path.
