@@ -102,6 +102,9 @@ def validate_distribution_aliases(names=None, aliases=DISTRIBUTION_PACKAGE_ALIAS
     Alias declarations are packaging input.  Validate their shape before
     unpacking so malformed wheel metadata fails with a stable contract error
     instead of leaking an implementation-level ``ValueError``/``TypeError``.
+    Each alias must point directly at a canonical endpoint; allowing an alias
+    target to be another alias source would make publication order observable
+    and can create cycles when two independently generated manifests merge.
     """
 
     present = set(DISTRIBUTION_MODULES if names is None else names)
@@ -128,6 +131,18 @@ def validate_distribution_aliases(names=None, aliases=DISTRIBUTION_PACKAGE_ALIAS
         if source in seen:
             raise ValueError("distribution alias is declared more than once: %r" % source)
         seen.add(source)
+    alias_sources = {source for source, _ in alias_entries}
+    chained = sorted(
+        (source, target)
+        for source, target in alias_entries
+        if target in alias_sources
+    )
+    if chained:
+        source, target = chained[0]
+        raise ValueError(
+            "distribution alias target must be canonical, not another alias source: "
+            "%r -> %r" % (source, target)
+        )
     return True
 
 

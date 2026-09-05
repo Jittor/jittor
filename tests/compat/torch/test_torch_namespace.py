@@ -97,6 +97,24 @@ def test_distribution_alias_validation_rejects_missing_or_duplicate_endpoints():
         raise AssertionError("duplicate alias source was accepted")
 
 
+def test_distribution_alias_validation_rejects_alias_chains():
+    from jittor.compat.torch.distribution import validate_distribution_aliases
+
+    names = ("torch.distributed", "torch.distributed.tensor", "torch.distributed._tensor")
+    try:
+        validate_distribution_aliases(
+            names,
+            (
+                ("torch.distributed._tensor", "torch.distributed.tensor"),
+                ("torch.distributed.tensor", "torch.distributed"),
+            ),
+        )
+    except ValueError as error:
+        assert "target must be canonical" in str(error)
+    else:
+        raise AssertionError("alias chain was accepted")
+
+
 def test_distribution_alias_validation_rejects_malformed_entries():
     from jittor.compat.torch.distribution import validate_distribution_aliases
 
