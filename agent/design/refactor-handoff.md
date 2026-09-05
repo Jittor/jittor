@@ -27,10 +27,10 @@
 
 | | |
 | --- | --- |
-| 分支 | `2.0-refactor`；当前状态基线 `f5234d87`，后续状态提交接在其上 |
-| 相对 `2.0` 的提交 | 当前 1238 个 |
+| 分支 | `2.0-refactor`；当前状态基线 `2ec34693`，后续状态提交接在其上 |
+| 相对 `2.0` 的提交 | 当前 1242 个 |
 | 提交里出现过的任务号 | 329 个 |
-| 看板 | 已合并 **205** / 进行中 **0** / 待领 **75** / 并入其它任务 **5** |
+| 看板 | 已合并 **208** / 进行中 **0** / 待领 **72** / 并入其它任务 **5** |
 | 沉淀的 skill | `agent/skills/` 下 **29** 个 |
 
 **交接清理完成不等于整改完成。** 看板仍有 73 条待领；当前只是把中断留下的易失状态全部转成了主线提交、
@@ -1592,6 +1592,14 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `dist` | **重叠证据是 nsys timeline，不是墙钟**：同进程同负载 A/B，延迟 join 时集合通信 12.2 ms 窗口内 5 个 matmul kernel 并发、覆盖 57%–63%；立刻 join 时并发数 0。**本机墙钟无收益**——`nvidia-smi topo -p2p r` 全 CNS，NCCL 走共享内存传输、kernel 自旋抢 SM，窗口内 matmul 从 0.31 ms 被拖到 0.83–4.28 ms。取证脚本与判据在 `agent/skills/jittor-distributed-verification/SKILL.md` 加 `nccl_overlap_report.py` |
 | `dist` | 开发中自己踩到并修掉一个真 bug：group 打开期间 NCCL 调用尚未提交到流上，此时记 done 事件是空的，于是 `defer_join=False` 也「重叠」了 61%——**那是竞态不是优化**。group 语义下 join 必须放在 `ncclGroupEnd()` 之后。测试里 `test_bucket_submits_once_and_joins_once` 的 `join_pending()` 断言专门挡这个 |
 | `dist` | 8.02 的 HCCL 截（「每次集合通信 4 次全设备/流同步」，严重度关键）**没有删除**，只做代码组织：四个算子里重复四遍的同步收进 `hccl_collective_begin/end`，行为由 `JT_HCCL_COLLECTIVE_SYNC` 控制，**默认 `full` 与改动前逐字等价**。本机无 NPU，删除无法跑一次验证，硬删等于把未验证改动送到别人集群上静默算错梯度。上机清单见 `agent/manuals/hccl-on-device-verification.md`（Ascend 910B3、≥2 卡、CANN、env/file rendezvous、禁止 CPU fallback 的四条判据）。清单在真机全绿后才可把默认改成 `stream-order` |
+
+### 2026-09-05 第一百六十一波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | `2ec34693` 完成 7.11 最后接线：`is_leaf`/`grad_fn` 使用内核真实查询；shim autograd 20 passed，core query 20 passed。 |
+| `gates` | `e4682406` 为 CUDA 与 benchmark-CUDA workflow 增加按 CUDA 配置隔离的 JIT cache restore/save；`13d314ec` 让 CUDA 门禁对真实 `has_cuda` 和 accelerator 非 skip 执行数量 fail-closed；相关结构合同 4 passed。 |
+| `gates` | 本波没有宣称全 CUDA 门禁已全绿；0.22、9.01 和现有 CUDA abort/跨卡缺口继续保持待领。 |
 
 ## 7. 接手怎么开始
 
