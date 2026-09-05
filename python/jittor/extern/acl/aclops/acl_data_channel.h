@@ -410,6 +410,7 @@ public:
         auto inserted = entries_.emplace(
             canonical, builder(key));
         devices_.emplace(canonical, key.device);
+        device_generations_.emplace(key.device, 0);
         return inserted.first->second;
     }
 

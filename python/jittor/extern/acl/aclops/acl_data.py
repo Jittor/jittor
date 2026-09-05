@@ -217,6 +217,8 @@ class DescriptorCache:
             return self._entries[key]
         value = builder(key)
         self._entries[key] = value
+        if isinstance(key, tuple) and len(key) == 6 and isinstance(key[-1], str):
+            self._device_generations.setdefault(key[-1], 0)
         return value
 
     def __contains__(self, key):
