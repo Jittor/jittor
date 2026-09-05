@@ -2013,6 +2013,14 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `compat` | `7eb5ea90` 拒绝 Torch distribution alias 链/环，namespace 33 passed；独立 distribution 完整发布仍待。 |
 | `build/layout` | `b70afbce`/`416a7fe4`/`02a6b5ee` 将 dlink compiler 迁入 build 包并修路径/结构合同，utils 仅剩资源迁移尾项。 |
 
+### 2026-09-05 第二百零九波：布局/Runtime/导入前置
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `d3c50bdf` 将 `use_parallel_op_compiler` 纳入 RuntimeContext owner，结构 35 passed；全局状态仍待迁移。 |
+| `device/build` | `38862b20` 同时完成 NativeProviderRegistrationScope 与 5.25 dumpdef→build 布局迁移，provider 合同 9、布局 11 passed；该提交为并发组合提交，后续恢复单任务提交。 |
+| `compat` | `a27e95e4` 为 synthetic torch modules 补 `__package__`/ModuleSpec import metadata，namespace 33 passed；独立 distribution 完整发布仍待。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
