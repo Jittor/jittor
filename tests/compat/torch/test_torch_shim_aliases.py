@@ -12,6 +12,7 @@ import tempfile
 import unittest
 
 import jittor as jt
+import pytest
 
 from _helpers.child_process import run_python_child
 
@@ -144,6 +145,7 @@ print('RESULT=' + json.dumps({'bound': True}))
 """
         self.assertEqual(self._run_order(source), {"bound": True})
 
+    @pytest.mark.xdist_group("torch_shim_module_graph")
     def test_plain_jittor_registers_deployed_only_baseline_keys(self):
         self.assertTrue(DEPLOYED_ONLY_BASELINE_KEYS.issubset(sys.modules))
 
@@ -197,6 +199,7 @@ print('RESULT=' + json.dumps({'preserved': True}))
 """)
         self.assertEqual(result, {"preserved": True})
 
+    @pytest.mark.xdist_group("torch_shim_module_graph")
     def test_compat_installer_remains_idempotent(self):
         from jittor.compat import torch as compat
 
@@ -223,6 +226,7 @@ print('RESULT=' + json.dumps({'preserved': True}))
         for name, value in before_objects.items():
             self.assertIs(after_objects[name], value)
 
+    @pytest.mark.xdist_group("torch_shim_module_graph")
     def test_canonical_and_legacy_first_orders_keep_module_graph(self):
         expected = sorted(
             name for name in sys.modules
@@ -256,6 +260,7 @@ print('RESULT=' + json.dumps(sorted(k for k in sys.modules if k == 'torch' or k.
             with self.subTest(order=source.splitlines()[2].strip()):
                 self.assertEqual(self._run_order(source), expected)
 
+    @pytest.mark.xdist_group("torch_shim_module_graph")
     def test_deployed_first_is_same_module_and_same_module_graph(self):
         from jittor.compat.shim.deploy import deploy
 

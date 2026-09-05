@@ -1631,7 +1631,12 @@ def smoke(session):
     if session.posargs:
         _run_pytest(session, (), env)
         return
-    fast = ("-m", "not slow") + _xdist(GATE_WORKERS)
+    # ``loadfile`` keeps every test in a file together, which leaves the
+    # Torch-shim alias contract as a single-worker 174 s floor.  Smoke uses
+    # ``loadgroup``: the four tests that intentionally share module state are
+    # marked as one xdist group, while independent tests in the same file can
+    # run on other workers.  Full keeps loadfile's surveyed ordering.
+    fast = ("-m", "not slow") + _xdist(GATE_WORKERS, distribution="loadgroup")
     env = _split_threads(env, GATE_WORKERS)
     _run_pytest_once(session, gate_native_arguments() + fast, env)
     torch_env = env.copy()

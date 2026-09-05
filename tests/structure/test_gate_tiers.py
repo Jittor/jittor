@@ -155,6 +155,31 @@ class TestFastTierIsStillWorthRunning(unittest.TestCase):
                     for node in ast.walk(call)),
                 "native and torch smoke runs must receive required env")
 
+    def test_smoke_uses_grouped_distribution_for_shared_module_files(self):
+        """Smoke may split independent tests but must keep marked groups intact."""
+        import ast
+
+        source = (REPO_ROOT / "noxfile.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        smoke = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "smoke")
+        calls = [
+            node for node in ast.walk(smoke)
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "id", None) == "_xdist"
+        ]
+        self.assertEqual(len(calls), 1)
+        distribution = next(
+            keyword for keyword in calls[0].keywords
+            if keyword.arg == "distribution")
+        self.assertIsInstance(distribution.value, ast.Constant)
+        self.assertEqual(distribution.value.value, "loadgroup")
+
+        alias = (REPO_ROOT / "tests/compat/torch/test_torch_shim_aliases.py")
+        alias_source = alias.read_text(encoding="utf-8")
+        self.assertGreaterEqual(alias_source.count("xdist_group"), 4)
+
 
 class TestBudget(unittest.TestCase):
 
