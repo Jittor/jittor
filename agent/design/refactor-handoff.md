@@ -1633,6 +1633,14 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `compat` | `0100a475` 在 `EXPLICIT_REQUIRES_GRAD` 下让 torch-facing detach 清除返回 Var 的 requires_grad；定向 2 passed、核心策略/对拍 10 passed。NATIVE 策略保持 Jittor 原语义。 |
 | `dist` | HCCL 8.02/10.19 只读审计确认无安全静态关闭项；现有合同通过但仍待 910B3 多卡实机。 |
 
+### 2026-09-05 第一百六十六波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | 7.12 审计确认 torch identity/module graph、`_torch_leaf_params` 19 处引用和 TorchTensorState 缺失构成整卡迁移；无安全窄切片。 |
+| `build` | 9.01 冷 CPU import 约 37.6s，其中 compiler 约 35.6s；热缓存约 0.43s。build_core stamp 已解决热缓存，冷启动仍需显式 bootstrap/惰性架构。 |
+| `dist` | 8.15–8.18 缺 `--nnodes/--node_rank/--master_addr/--master_port` 等多机 launcher 参数；Store/launch 聚焦 5 passed、1 failed，不能关闭多机任务。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
