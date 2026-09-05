@@ -58,16 +58,41 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - name: Describe CUDA build configuration
+        id: cuda-config
+        shell: bash
+        env:
+          JITTOR_CI_NVCC_FLAGS: ${{ vars.JITTOR_CI_NVCC_FLAGS || '' }}
+        run: |
+          set -euo pipefail
+          cuda_archs="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | tr -d '.' | sort -u | paste -sd, -)"
+          test -n "${cuda_archs}"
+          nvcc_flags_hash="$(printf '%s' "${JITTOR_CI_NVCC_FLAGS}" | sha256sum | cut -c1-16)"
+          echo "cuda_archs=${cuda_archs}" >> "${GITHUB_OUTPUT}"
+          echo "nvcc_flags_hash=${nvcc_flags_hash}" >> "${GITHUB_OUTPUT}"
       - name: Install pinned development tools
         shell: bash
         run: |
           set -euo pipefail
           "${JITTOR_CI_PYTHON}" -m pip install -r requirements/dev-tools.txt
+      - name: Restore the CUDA Jittor build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
+          key: jittor-build-cuda-${{ runner.os }}-${{ needs.baseline.outputs.cuda_version }}-cuda_archs-${{ steps.cuda-config.outputs.cuda_archs }}-nvcc_flags-${{ steps.cuda-config.outputs.nvcc_flags_hash }}-${{ hashFiles('python/jittor/src/**', 'python/jittor/extern/**', 'python/jittor/compiler.py', 'requirements/dev-tools.txt') }}
+          restore-keys: |
+            jittor-build-cuda-${{ runner.os }}-${{ needs.baseline.outputs.cuda_version }}-cuda_archs-${{ steps.cuda-config.outputs.cuda_archs }}-nvcc_flags-${{ steps.cuda-config.outputs.nvcc_flags_hash }}-
       - name: Run CUDA pytest gates
         shell: bash
         run: |
           set -euo pipefail
           "${JITTOR_CI_PYTHON}" -m nox -s cuda
+      - name: Save the CUDA Jittor build cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
+          key: jittor-build-cuda-${{ runner.os }}-${{ needs.baseline.outputs.cuda_version }}-cuda_archs-${{ steps.cuda-config.outputs.cuda_archs }}-nvcc_flags-${{ steps.cuda-config.outputs.nvcc_flags_hash }}-${{ hashFiles('python/jittor/src/**', 'python/jittor/extern/**', 'python/jittor/compiler.py', 'requirements/dev-tools.txt') }}
 
   benchmark-cuda:
     needs: [baseline, cuda]
@@ -86,6 +111,18 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Describe CUDA build configuration
+        id: cuda-config
+        shell: bash
+        env:
+          JITTOR_CI_NVCC_FLAGS: ${{ vars.JITTOR_CI_NVCC_FLAGS || '' }}
+        run: |
+          set -euo pipefail
+          cuda_archs="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | tr -d '.' | sort -u | paste -sd, -)"
+          test -n "${cuda_archs}"
+          nvcc_flags_hash="$(printf '%s' "${JITTOR_CI_NVCC_FLAGS}" | sha256sum | cut -c1-16)"
+          echo "cuda_archs=${cuda_archs}" >> "${GITHUB_OUTPUT}"
+          echo "nvcc_flags_hash=${nvcc_flags_hash}" >> "${GITHUB_OUTPUT}"
       - name: Install pinned benchmark dependencies
         shell: bash
         run: |
@@ -97,6 +134,13 @@ jobs:
             pillow==11.0.0 \
             tqdm==4.67.1 \
             transformers==4.56.2
+      - name: Restore the CUDA Jittor build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
+          key: jittor-build-cuda-${{ runner.os }}-${{ needs.baseline.outputs.cuda_version }}-cuda_archs-${{ steps.cuda-config.outputs.cuda_archs }}-nvcc_flags-${{ steps.cuda-config.outputs.nvcc_flags_hash }}-${{ hashFiles('python/jittor/src/**', 'python/jittor/extern/**', 'python/jittor/compiler.py', 'requirements/dev-tools.txt') }}
+          restore-keys: |
+            jittor-build-cuda-${{ runner.os }}-${{ needs.baseline.outputs.cuda_version }}-cuda_archs-${{ steps.cuda-config.outputs.cuda_archs }}-nvcc_flags-${{ steps.cuda-config.outputs.nvcc_flags_hash }}-
       - name: Restore prior CUDA ASV results
         uses: actions/cache/restore@v4
         with:
@@ -109,6 +153,12 @@ jobs:
         run: >-
           "${JITTOR_CI_PYTHON}" -m nox -s benchmark_cuda --
           --bench '^(tiny_llama|optimizer_step)\.'
+      - name: Save the CUDA Jittor build cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
+          key: jittor-build-cuda-${{ runner.os }}-${{ needs.baseline.outputs.cuda_version }}-cuda_archs-${{ steps.cuda-config.outputs.cuda_archs }}-nvcc_flags-${{ steps.cuda-config.outputs.nvcc_flags_hash }}-${{ hashFiles('python/jittor/src/**', 'python/jittor/extern/**', 'python/jittor/compiler.py', 'requirements/dev-tools.txt') }}
       - name: Save CUDA ASV results for the next commit
         if: success()
         uses: actions/cache/save@v4
