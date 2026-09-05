@@ -144,6 +144,8 @@
 >
 > 第176波 8.12 整卡审计：六路 cuDNN legacy cache 仍分别使用字符串 JK key、共享 process-global map，缺 dtype/layout/strides/workspace/device 维度；完整迁移需要共享 POD header、六处 EXTERN_LIB ABI、per-device 生命周期和真实 CUDA 回归。本波无代码提交。
 >
+> 第177波架构前置：`fcce48e3` 建立 Python BackendRegistry/OpRegistry 最小合同（6 passed），但尚未接入现有 C++/flags 路由，4.03/4.04 整卡继续待领；2.13/7.12/8.12/9.01 仍无安全窄切片。本波无整卡关闭。
+>
 > 用户范围调整：ACL/HCCL/NPU 与多机实机任务已按用户授权标为「并入 硬件验收」，不计作当前代码待领；8.06/10.19 等混合代码任务仍保留待领。
 >
 > 第159波增量（7.03，六个 cohort）：`16333333` amax/amin/count_nonzero 收回原生 owner；`9cba7d68` cumsum/cumprod；`50876abf` sort/argsort/topk/median；`d94c5cbd` sign/trunc/frac/exp2/log10 归一到单一 owner；`a7dcae1c` nan_to_num/logaddexp；`d1535282` outer/tensordot/repeat_interleave 改为再导出原生 owner。**这一波补上了 7.03 一直缺的 CUDA 那一层**：此前约三十个 cohort 的证据全是「CPU N passed」，本波两个 cohort 用 `instantiate_device_type_tests` 在 CPU 与 CUDA 各跑一遍（各 15 passed / 13 passed），并跑出两处真实差异——4096 元素 float32 `cumsum` 两侧相对差 1.4e-06（并行前缀和比顺序扫描更准），512 元素重复键 `argsort` 的 indices 两侧不同而 values 逐位相同；两者都判为后端固有并登记进 fidelity，测试改为钉有界不一致与整数路径逐位相等。**同时修掉两处「一个 API 两个对象」**：`torch.sign(int32)` 返回 float32 而 `Tensor.sign()` 返回 int32（真 PyTorch 2.12 两者都是 int32，属静默错 dtype，修前失败/修后通过的用例已随提交落地）；`repeat_interleave` 的转发 wrapper 让`torch.repeat_interleave is jittor.repeat_interleave` 不成立，两条结构门禁因此长期红，现已转绿（`tests/structure` 由本波开始时的 15 failed 降到 4 failed，其中 2 条是本波修的、其余为别的分区）。新增 skill `agent/skills/torch-api-cohort-promotion/`。7.03 仍按剩余范围保持「待领」。

@@ -1718,6 +1718,14 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `cudabk` | 8.12 六路 legacy cache（2D/3D forward、backward-x、backward-w）均为字符串 JK key + process-global map；统一迁移需新 POD key、六处 EXTERN_LIB ABI、per-device storage/device-switch cleanup 和 CUDA 回归，不能安全半改。 |
 | `gates` | 本波无代码提交；8.12 保持待领，未把静态审计当作完成。 |
 
+### 2026-09-05 第一百七十七波
+
+| 分区 | 结果 |
+| --- | --- |
+| `device` | `fcce48e3` 建立 Python BackendRegistry/OpRegistry 的注册、查询、分派和冲突合同，6 passed；未接入现有 C++/flags 路由，4.03/4.04 继续待领。 |
+| `coreops` | 2.13 Runtime 状态仍跨多模块，单字段迁移会形成双状态；本波无代码提交。 |
+| `compat` | 7.12 TorchTensorState、9.01 冷启动和 5.24 剩余状态仍是整卡架构，未提交半成品。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
