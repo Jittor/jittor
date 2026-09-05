@@ -1625,7 +1625,7 @@ def smoke(session):
     interpreter or a Jupyter kernel, and neither is what a pull request is
     waiting to hear.
     """
-    env = _cpu_gate_env(session)
+    env = _require_execution(_cpu_gate_env(session))
     session.install(*CPU_GATE_REQUIREMENTS)
     session.run("python", "-c", _CPU_PROBE, env=env)
     if session.posargs:
