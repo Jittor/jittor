@@ -38,6 +38,7 @@ def test_runtime_state_does_not_duplicate_device_or_backend_flags():
         "use_threading": jt.flags.use_threading,
         "profile_memory_enable": jt.flags.profile_memory_enable,
         "profiler_warmup": jt.flags.profiler_warmup,
+        "check_graph": jt.flags.check_graph,
     }
     assert jt.runtime.device_id == getattr(jt.flags, "device_id", -1)
     assert jt.runtime.use_cuda == jt.flags.use_cuda
@@ -254,3 +255,24 @@ def test_runtime_profiler_warmup_is_a_live_read_only_view_and_cpu_execution_surv
             jt.runtime.context.profiler_warmup = 0
     finally:
         jt.flags.profiler_warmup = original
+
+
+def test_runtime_check_graph_is_a_live_read_only_view_and_cpu_execution_survives():
+    import numpy as np
+    import jittor as jt
+
+    original = jt.flags.check_graph
+    try:
+        assert jt.runtime.check_graph == original
+        with jt.flag_scope(check_graph=1):
+            assert jt.runtime.check_graph == 1
+            assert jt.runtime.context.snapshot()["check_graph"] == 1
+            value = (jt.array(np.arange(4, dtype="float32")) + 4).numpy()
+            np.testing.assert_array_equal(value, np.arange(4, 8, dtype="float32"))
+        assert jt.runtime.check_graph == original
+        with pytest.raises(AttributeError):
+            jt.runtime.check_graph = 0
+        with pytest.raises(AttributeError):
+            jt.runtime.context.check_graph = 0
+    finally:
+        jt.flags.check_graph = original

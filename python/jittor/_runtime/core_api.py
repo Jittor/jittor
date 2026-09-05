@@ -854,6 +854,11 @@ class RuntimeContext:
         """Number of profiler warmup rounds configured for execution."""
         return self._flags.profiler_warmup
 
+    @property
+    def check_graph(self):
+        """Whether graph liveness checks are enabled for execution."""
+        return self._flags.check_graph
+
     def snapshot(self):
         """Return an immutable snapshot of the fields owned by this context."""
         return {
@@ -869,6 +874,7 @@ class RuntimeContext:
             "use_threading": int(self.use_threading),
             "profile_memory_enable": int(self.profile_memory_enable),
             "profiler_warmup": int(self.profiler_warmup),
+            "check_graph": int(self.check_graph),
         }
 
 
@@ -931,6 +937,10 @@ class RuntimeState:
     @property
     def profiler_warmup(self):
         return self._context.profiler_warmup
+
+    @property
+    def check_graph(self):
+        return self._context.check_graph
 
     @property
     def context(self):
