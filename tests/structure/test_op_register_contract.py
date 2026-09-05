@@ -220,3 +220,19 @@ def test_native_provider_consumer_dispatch_is_atomic_and_value_only():
     assert "registry.provider_consumer_dispatch" in jit_test
     assert "registry.try_provider_consumer_dispatch" in jit_test
     assert "!registry.is_current(consumer_dispatch.dispatch_key)" in jit_test
+
+
+def test_native_provider_abi_admission_has_one_host_contract():
+    header = (REPO_ROOT / "python/jittor/src/ops/op_register.h").read_text(
+        encoding="utf-8")
+    jit_test = (REPO_ROOT / "python/jittor/src/tests/test_op_register.cc").read_text(
+        encoding="utf-8")
+    contract = header[header.index("struct NativeProviderAbiContract"):
+                      header.index("struct NativeProviderRegistration")]
+    assert "struct NativeProviderAbiContract" in contract
+    assert "static bool version_matches(uint32 abi_version)" in contract
+    assert "static bool size_supported(uint32 struct_size, uint32 minimum_size)" in contract
+    assert "static bool accepts(uint32 abi_version, uint32 struct_size" in contract
+    assert "NativeProviderAbiContract::accepts" in header
+    assert "NativeProviderAbiContract::version_matches" in header
+    assert "NativeProviderAbiContract::accepts" in jit_test

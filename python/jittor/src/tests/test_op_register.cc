@@ -132,6 +132,23 @@ JIT_TEST(native_op_registry_provider_dispatch_boundary) {
 }
 
 JIT_TEST(native_op_registry_rejects_incompatible_provider_abi) {
+    ASSERT(NativeProviderAbiContract::version_matches(
+        NATIVE_PROVIDER_ABI_VERSION));
+    ASSERT(!NativeProviderAbiContract::version_matches(
+        NATIVE_PROVIDER_ABI_VERSION + 1));
+    ASSERT(NativeProviderAbiContract::size_supported(
+        sizeof(NativeProviderRegistration), sizeof(NativeProviderRegistration)));
+    ASSERT(NativeProviderAbiContract::size_supported(
+        sizeof(NativeProviderRegistration) + 8,
+        sizeof(NativeProviderRegistration)));
+    ASSERT(!NativeProviderAbiContract::size_supported(
+        sizeof(NativeProviderRegistration) - 1,
+        sizeof(NativeProviderRegistration)));
+    ASSERT(NativeProviderAbiContract::accepts(
+        NATIVE_PROVIDER_ABI_VERSION,
+        sizeof(NativeProviderRegistration),
+        sizeof(NativeProviderRegistration)));
+
     NativeOpRegistry registry;
     expect_error([&]() {
         registry.register_provider(NativeProviderRegistration(

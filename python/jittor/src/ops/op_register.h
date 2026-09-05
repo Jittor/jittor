@@ -56,6 +56,26 @@ struct OpInfo {
 // contract instead of relying on a backend-specific object layout.
 static const uint32 NATIVE_PROVIDER_ABI_VERSION = 1;
 
+// Keep ABI admission in one value-only contract.  Native providers are
+// compiled independently from the core, so every boundary must apply the
+// same version and minimum-size rules before consuming a record.  The
+// contract intentionally has no registry or backend ownership.
+struct NativeProviderAbiContract {
+    static bool version_matches(uint32 abi_version) {
+        return abi_version == NATIVE_PROVIDER_ABI_VERSION;
+    }
+
+    static bool size_supported(uint32 struct_size, uint32 minimum_size) {
+        return struct_size >= minimum_size;
+    }
+
+    static bool accepts(uint32 abi_version, uint32 struct_size,
+                        uint32 minimum_size) {
+        return version_matches(abi_version) &&
+            size_supported(struct_size, minimum_size);
+    }
+};
+
 struct NativeProviderRegistration {
     string name;
     uint32 abi_version;
@@ -73,8 +93,8 @@ struct NativeProviderRegistration {
 
     bool valid() const {
         return !name.empty() &&
-            abi_version == NATIVE_PROVIDER_ABI_VERSION &&
-            struct_size >= sizeof(NativeProviderRegistration);
+            NativeProviderAbiContract::accepts(
+                abi_version, struct_size, sizeof(NativeProviderRegistration));
     }
 };
 
@@ -104,8 +124,8 @@ struct NativeProviderMetadata {
 
     bool valid() const {
         return !name.empty() && provider_id != 0 &&
-            abi_version == NATIVE_PROVIDER_ABI_VERSION &&
-            struct_size >= sizeof(NativeProviderRegistration);
+            NativeProviderAbiContract::accepts(
+                abi_version, struct_size, sizeof(NativeProviderRegistration));
     }
 };
 
@@ -130,7 +150,7 @@ struct NativeOpDispatchKey {
 
     bool valid() const {
         return op_id != 0 && provider_id != 0 && !provider.empty() &&
-            abi_version == NATIVE_PROVIDER_ABI_VERSION;
+            NativeProviderAbiContract::version_matches(abi_version);
     }
 };
 
