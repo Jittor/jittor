@@ -1641,6 +1641,14 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `build` | 9.01 冷 CPU import 约 37.6s，其中 compiler 约 35.6s；热缓存约 0.43s。build_core stamp 已解决热缓存，冷启动仍需显式 bootstrap/惰性架构。 |
 | `dist` | 8.15–8.18 缺 `--nnodes/--node_rank/--master_addr/--master_port` 等多机 launcher 参数；Store/launch 聚焦 5 passed、1 failed，不能关闭多机任务。 |
 
+### 2026-09-05 第一百六十七波
+
+| 分区 | 结果 |
+| --- | --- |
+| `compat` | 复核 7.12：`torch_init`/runtime 仍共同承担 torch identity，`_torch_leaf_params` 跨 nested/tensor/nn 19 处引用，没有独立安全切片。 |
+| `build` | 复核 9.01：冷启动 import 仍把核心编译放在 import 路径，热缓存优化已落地但冷启动目标未满足。 |
+| `dist` | 复核 8.15–8.18：当前 launcher 仍缺多机参数，单机 Store 聚焦仍有 1 个既有失败；本机无两机/HCCL 环境。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
