@@ -656,7 +656,7 @@ def _enforce_smoke_budget(session, workers):
     Failing before pytest starts keeps that condition visible instead of
     silently turning the pull-request tier into an over-budget run.
     """
-    report = budget_report(workers)
+    report = budget_report(workers, configured_workers=GATE_WORKERS)
     if report["headroom_seconds"] < 0:
         session.error(
             "smoke budget exceeded: predicted %.0fs / %.0fs with %d workers "

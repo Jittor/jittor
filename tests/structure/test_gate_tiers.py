@@ -203,6 +203,12 @@ class TestBudget(unittest.TestCase):
         self.assertEqual(report["threads_per_worker"],
                          max(1, report["effective_cpus"] // report["workers"]))
 
+    def test_budget_report_keeps_configured_and_runtime_workers_distinct(self):
+        """A cgroup-capped run must report both values, not relabel it."""
+        report = tiers.budget_report(workers=1, configured_workers=4)
+        self.assertEqual(report["workers"], 1)
+        self.assertEqual(report["configured_workers"], 4)
+
     def test_the_predicted_fast_tier_fits_the_budget(self):
         predicted = tiers.predicted_smoke_seconds()
         self.assertLessEqual(

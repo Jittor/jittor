@@ -365,11 +365,18 @@ def predicted_smoke_seconds(workers=None):
     return sum(predicted_session_seconds(session, workers) for session in MEASURED)
 
 
-def budget_report(workers=None):
-    """Return an actionable, serialisable breakdown of the smoke budget."""
+def budget_report(workers=None, configured_workers=None):
+    """Return an actionable, serialisable breakdown of the smoke budget.
+
+    ``workers`` is the count xdist will actually start after runtime cgroup
+    capping.  ``configured_workers`` is kept separately for diagnostics: a
+    one-CPU container running a four-worker gate must say ``4 configured, 1
+    actual`` rather than silently relabelling the run as a one-worker gate.
+    """
     workers = workers or SMOKE_WORKERS
+    configured_workers = (workers if configured_workers is None
+                          else configured_workers)
     effective_cpus = effective_cpu_count()
-    configured_workers = workers
     threads_per_worker = worker_thread_budget(workers, effective_cpus)
     sessions = {}
     for name, measured in sorted(MEASURED.items()):
