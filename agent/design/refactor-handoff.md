@@ -1673,6 +1673,12 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `compat` | `7eedcbd8` 将 SDPA flash stats 统一到 diagnostics facade，保留根属性兼容别名，定向 2 passed。 |
 | `codegen` | `b6de9642` 新增单 kernel 冷编译分段 profiling skill，区分源码生成、cache_compile、编译、链接、加载；clang 全流程实测通过，未宣称 3.18 性能目标完成。 |
 
+### 2026-09-05 第一百七十一波
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `83c26d42` 完成 2.24：FusedOp 用显式 `Op*`/`Var*` index map 替代 `Node::custom_data`，update/load/relay 顺序保持不变；结构合同 4 passed，fused 聚焦 2 passed。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
