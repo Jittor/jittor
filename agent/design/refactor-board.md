@@ -1,5 +1,8 @@
 # 整改看板
 
+> 第200波：跨硬件组织前置继续：`9d8e2a5a` 迁移 auto_convert_64_to_32 Runtime owner（结构 24 + CPU 1 passed）；`46b1fca7` 增加 NativeProviderRegistration ABI/struct-size/generation contract（相关合同 93 passed/2 skipped）；`62ac7f59` 增加 ACL AclDataView/consume host-only consumer seam（ACL 18 passed）；`94637aa5` 建立 standalone torch distribution import manifest（manifest/bootstrap/alias 合同通过）。未声称 CUDA/NPU 实机。
+
+
 > 第199波：跨硬件组织前置继续：`2276d09f` 迁移 missing_grad_error Runtime owner（结构 23 passed）；`d8edc265` 为 native provider dispatch 增加 generation/provider_id（registry 29 + C++ 3 + JIT 2 passed）；`e00054b0` 增加 ACL AclDataOwner host-only seam（5 passed）；`195544aa` 将 Torch publication aliases 统一走 publication boundary（namespace 18、alias 1、bootstrap 1 passed）。均未声称硬件实测或聚合任务完成。
 
 

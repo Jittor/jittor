@@ -1931,6 +1931,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `e00054b0` 增加 ACL `AclDataOwner` host-only C++ seam，5 passed；CANN decoder接线与 910B3 实机仍待。 |
 | `compat` | `195544aa` 将 Torch publication aliases 统一走 publication boundary，namespace/alias/bootstrap 合同通过；独立 distribution 仍待。 |
 
+### 2026-09-05 第二百波：异机分发/ABI 前置
+
+| 分区 | 结果 |
+| --- | --- |
+| `coreops` | `9d8e2a5a` 迁移 `auto_convert_64_to_32` Runtime owner，结构 24 passed + CPU dtype 回归；全局 flags 仍待迁移。 |
+| `device` | `46b1fca7` 增加 NativeProviderRegistration ABI/struct-size/generation contract，相关结构/JIT 合同通过；真实 provider 接线仍待硬件机。 |
+| `device` | `62ac7f59` 增加 ACL AclDataView/consume host-only consumer seam，ACL 合同 18 passed；CANN/NPU runner 接线与实机仍待。 |
+| `compat` | `94637aa5` 建立 standalone torch distribution import manifest，固定模块图/alias/parent closure 合同；独立 distribution 完整发布仍待。 |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
