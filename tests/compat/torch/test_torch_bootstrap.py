@@ -1,4 +1,5 @@
 import importlib.machinery
+import json
 import os
 import shutil
 import pathlib
@@ -28,6 +29,34 @@ def setUpModule():
 
 
 class TestTorchBootstrap(unittest.TestCase):
+    def test_jittor_utils_import_does_not_publish_detected_compiler(self):
+        """Compiler discovery is local configuration, not an env mutation."""
+        with tempfile.TemporaryDirectory(dir=_TEST_STATE_ROOT) as directory:
+            script = textwrap.dedent(
+                """
+                import json
+                import os
+                import jittor_utils
+                print(json.dumps({
+                    "before": os.environ.get("cc_path"),
+                    "after": os.environ.get("cc_path"),
+                    "resolved": jittor_utils.cc_path,
+                }))
+                """
+            )
+            result = run_python_child(
+                ["-c", script],
+                env={
+                    "HOME": directory,
+                    "JITTOR_HOME": directory,
+                    "cc_path": "g++",
+                },
+            )
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["before"], "g++")
+        self.assertEqual(payload["after"], "g++")
+        self.assertTrue(payload["resolved"])
+
     def test_preflight_nvcc_flags_keep_command_separators(self):
         from jittor.compat.shim import preflight
 
