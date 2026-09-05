@@ -35,6 +35,8 @@ def test_acl_data_channel_header_is_cann_free_and_compilable():
     assert "AclDecodedData decode_acl_data" in text
     assert "class AclDataOwner" in text
     assert "class AclDataView" in text
+    assert "class AclAttrRunnerContract" in text
+    assert "AclAttrBinding" in text
     assert "void consume(const AclDataRecord& record" in text
     assert "const AclAttrSchema& schema() const" in text
     assert "ACL data owner name must be non-empty" in text
@@ -168,6 +170,66 @@ int main() {
 }
 '''
     with tempfile.TemporaryDirectory(prefix="jittor-acl-consumer-run-") as directory:
+        binary = Path(directory) / "probe"
+        _compile(source, binary)
+        subprocess.run([str(binary)], check=True)
+
+
+def test_acl_attr_runner_contract_freezes_bindings_before_consumer():
+    source = r'''
+#include "python/jittor/extern/acl/aclops/acl_data_channel.h"
+int main() {
+    using namespace jittor::acl_data;
+    AclAttrSchema schema;
+    AclAttrField dim;
+    dim.type = AclDataType::int64;
+    schema.emplace("dim", dim);
+    AclAttrField keep;
+    keep.type = AclDataType::boolean;
+    keep.required = false;
+    keep.has_default = true;
+    keep.default_value = AclDataValue::bool_value_of(false);
+    schema.emplace("keepdim", keep);
+    AclAttrRunnerContract contract("Softmax", schema, {
+        {"dim", AclDataType::int64},
+        {"keepdim", AclDataType::boolean},
+    });
+    AclDataRecord record;
+    record.op = "Softmax";
+    record.fields.emplace("dim", AclDataValue::int64_value(-1));
+    std::string key;
+    int calls = 0;
+    contract.consume(record, key, [&](const AclDataView& attrs) {
+        if (attrs.int64("dim") == -1 && !attrs.boolean("keepdim"))
+            ++calls;
+    });
+    if (calls != 1)
+        return 1;
+    try {
+        AclAttrRunnerContract duplicate("Softmax", schema, {
+            {"dim", AclDataType::int64}, {"dim", AclDataType::int64},
+        });
+        return 2;
+    } catch (const jittor::InternalInvariantError&) {
+    }
+    try {
+        AclAttrRunnerContract wrong_type("Softmax", schema, {
+            {"dim", AclDataType::boolean},
+        });
+        return 3;
+    } catch (const jittor::InternalInvariantError&) {
+    }
+    try {
+        AclAttrRunnerContract missing("Softmax", schema, {
+            {"axis", AclDataType::int64},
+        });
+        return 4;
+    } catch (const jittor::InternalInvariantError&) {
+        return 0;
+    }
+}
+'''
+    with tempfile.TemporaryDirectory(prefix="jittor-acl-runner-contract-") as directory:
         binary = Path(directory) / "probe"
         _compile(source, binary)
         subprocess.run([str(binary)], check=True)

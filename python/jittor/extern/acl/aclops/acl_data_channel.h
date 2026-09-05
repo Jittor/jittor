@@ -5,7 +5,9 @@
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
+#include <initializer_list>
 #include <map>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -399,6 +401,89 @@ public:
 private:
     std::string op_;
     AclAttrSchema schema_;
+};
+
+// A registry entry can describe the attributes its launcher consumes without
+// depending on ACL/CANN.  The binding list is deliberately owned by the
+// contract: a launcher cannot accidentally read a field that was omitted from
+// its registered schema, and a schema edit cannot silently change the type a
+// generated consumer expects.
+struct AclAttrBinding {
+    std::string name;
+    AclDataType type = AclDataType::int64;
+};
+
+using AclAttrBindings = std::vector<AclAttrBinding>;
+
+class AclAttrRunnerContract {
+public:
+    AclAttrRunnerContract(std::string op,
+                          AclAttrSchema schema,
+                          AclAttrBindings bindings)
+        : owner_(std::move(op), std::move(schema)),
+          bindings_(std::move(bindings)) {
+        validate_bindings();
+    }
+
+    AclAttrRunnerContract(std::string op,
+                          AclAttrSchema schema,
+                          std::initializer_list<AclAttrBinding> bindings)
+        : AclAttrRunnerContract(std::move(op), std::move(schema),
+                                AclAttrBindings(bindings)) {}
+
+    const AclDataOwner& owner() const {
+        return owner_;
+    }
+
+    const AclAttrBindings& bindings() const {
+        return bindings_;
+    }
+
+    // Decode exactly once, then invoke the generated/static consumer with a
+    // bounded read-only view.  No ACL object is allocated on this boundary;
+    // the eventual launcher must copy values while the callback is active.
+    template <typename Consumer>
+    void consume(const AclDataRecord& record,
+                 std::string& canonical_key,
+                 Consumer&& consumer) const {
+        owner_.consume(record, canonical_key,
+            [&](const AclDataView& attrs) {
+                for (const auto& binding : bindings_) {
+                    if (!attrs.has(binding.name))
+                        internal_error("ACL runner binding has no decoded field: " +
+                                      binding.name);
+                    // value() rechecks the schema/type pair immediately
+                    // before the generated consumer sees the view.
+                    const auto& decoded = attrs.value(binding.name);
+                    if (decoded.type != binding.type)
+                        internal_error("ACL runner binding type disagrees with decoded field: " +
+                                      binding.name);
+                }
+                consumer(attrs);
+            });
+    }
+
+private:
+    void validate_bindings() const {
+        std::set<std::string> names;
+        const auto& schema = owner_.schema();
+        for (const auto& binding : bindings_) {
+            if (binding.name.empty())
+                internal_error("ACL runner binding names must be non-empty");
+            if (!names.insert(binding.name).second)
+                internal_error("duplicate ACL runner binding: " + binding.name);
+            const auto field = schema.find(binding.name);
+            if (field == schema.end())
+                internal_error("ACL runner binding is not declared in schema: " +
+                              binding.name);
+            if (field->second.type != binding.type)
+                internal_error("ACL runner binding type disagrees with schema: " +
+                              binding.name);
+        }
+    }
+
+    AclDataOwner owner_;
+    AclAttrBindings bindings_;
 };
 
 } // namespace acl_data

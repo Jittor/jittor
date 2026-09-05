@@ -707,6 +707,15 @@ that callback and its wrong-type failure path; it does not construct an
 `aclTensor`, invoke `aclnn`, or imply that the attribute channel is wired into
 an existing NPU operator.
 
+`AclAttrRunnerContract` freezes the next migration boundary: each registry
+entry supplies a fixed list of `AclAttrBinding` names and types. Duplicate,
+undeclared, or type-incompatible bindings fail as internal integration errors
+before any record is decoded. Its host-only `consume()` callback is the shape
+that a future `BaseOpRunner` adapter will use to copy values into `AclOpAttr`;
+it does not include CANN headers or allocate device descriptors. The CPU
+contract test therefore proves only registration and decoder behavior, not
+NPU execution.
+
 On an Ascend 910B3, the first attribute owner must be validated only after its
 Python caller, generated `OpAttr` construction, and JIT key are migrated in the
 same change. Source the CANN environment, select the allocated card, and run

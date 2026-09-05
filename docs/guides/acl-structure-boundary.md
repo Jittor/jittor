@@ -111,6 +111,16 @@ cache-key identity, and the wrong-type failure path. Passing this contract is
 not evidence that an ACL operator has been migrated or that an Ascend device
 executed anything.
 
+`AclAttrRunnerContract` is the next host-only seam above that view. A registry
+entry gives it an operator schema plus a fixed `AclAttrBinding` list; construction
+rejects duplicate, undeclared, or type-incompatible bindings as an
+`InternalInvariantError`. Its `consume()` decodes once, verifies every bound
+field, and then invokes the generated/static consumer with the same bounded
+`AclDataView`. This freezes attribute names and types before a future
+`BaseOpRunner` adapter constructs `AclOpAttr`; it does not include `base_op.h`,
+allocate an ACL object, or make a CANN call. The CPU-only contract probe covers
+the valid path and all three registration failures.
+
 Malformed user data (unknown field, wrong type, missing required value, a
 non-canonical vector representation, or an unsupported schema version) raises
 `UserError`; a violated internal schema
