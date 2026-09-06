@@ -12,6 +12,7 @@ from jittor_utils import LOG
 from jittor_utils.misc import download_url_to_local
 from jittor_utils import cuda_wheel
 from jittor_utils import manifest
+from jittor_utils.env_config import build_env
 import pathlib
 from typing import Any, Dict
 
@@ -211,7 +212,7 @@ _install_cuda_requested = False
 
 
 def install_cuda():
-    if "nvcc_path" in os.environ and os.environ["nvcc_path"] == "":
+    if build_env("nvcc_path", None) == "":
         return None
     cuda_driver_version = get_cuda_driver()
     if not cuda_driver_version:

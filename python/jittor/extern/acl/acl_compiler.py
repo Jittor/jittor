@@ -7,9 +7,10 @@
 import os
 import glob
 import shutil
+from jittor_utils.env_config import build_env
 # export LD_LIBRARY_PATH=/usr/local/Ascend/ascend-toolkit/latest/tools/aoe/lib64:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64/plugin/opskernel:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64/plugin/nnengine:/usr/local/Ascend/ascend-toolkit/latest/runtime/lib64:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64/stub:/usr/local/Ascend/ascend-toolkit/latest/tools/tikicpulib/lib/Ascend910A:/usr/local/Ascend/ascend-toolkit/latest/toolkit/tools/simulator/Ascend910A/lib:/opt/AXESMI/lib64:/usr/local/Ascend/driver/lib64/driver/
 # export PYTHONPATH=/home/cjld/new_jittor/jittor/python
-# export tikcc_path=g++
+# export JT_BUILD_TIKCC_PATH=g++
 
 # conda activate cann
 # source /usr/local/Ascend/ascend-toolkit/set_env.sh
@@ -33,7 +34,7 @@ import shutil
 def configure(context):
     """Return ACL build inputs without mutating the compiler or environment."""
     config = context.config
-    requested_compiler = os.environ.get("tikcc_path", "ccec")
+    requested_compiler = build_env("tikcc_path", "ccec")
     tikcc_path = shutil.which(requested_compiler) if requested_compiler else None
     if not tikcc_path:
         raise RuntimeError(

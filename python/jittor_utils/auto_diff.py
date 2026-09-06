@@ -5,6 +5,7 @@ import numpy as np
 import jittor_utils
 import jittor_utils as jit_utils
 from jittor_utils import LOG
+from jittor_utils.env_config import build_flag
 import sys
 from typing import Any
 
@@ -94,7 +95,7 @@ def hook_rand():
 
 class Hook:
     def __init__(self, base_name, rtol=5e-2, atol=1e-3):
-        if os.environ.get("use_auto_diff", '1') == '0':
+        if not build_flag("use_auto_diff", True):
             return
         hook_rand()
         self.rid = 0
@@ -196,7 +197,7 @@ class Hook:
                 LOG.e(f"Type: {type(pre_data).__name__} Name <{name}> not match {pre_data} != {data}")
 
     def record(self, name, data, ex_name=""):
-        if os.environ.get("use_auto_diff", '1') == '0':
+        if not build_flag("use_auto_diff", True):
             return
         self.record_status[name] += 1
         fpath = os.path.join(self.base_path, f"{name}-{self.record_status[name]}.pkl")
@@ -220,7 +221,7 @@ class Hook:
             LOG.i(f"save {self.rid}:<{name}> ok")
 
     def record_params(self, parameters_dict, mod_name=""):
-        if os.environ.get("use_auto_diff", '1') == '0':
+        if not build_flag("use_auto_diff", True):
             return
         global has_error
         pps = {}
@@ -288,7 +289,7 @@ class Hook:
         return new_func
 
     def hook_module(self, mod, mod_name=""):
-        if os.environ.get("use_auto_diff", '1') == '0':
+        if not build_flag("use_auto_diff", True):
             return
         if mod_name != "":
             mod_name = "<" + mod_name + ">"
@@ -331,7 +332,7 @@ class Hook:
             opt = optim.SGD(net.parameters(), 0.1)
             hook.hook_optimizer(opt)
         '''
-        if os.environ.get("use_auto_diff", '1') == '0':
+        if not build_flag("use_auto_diff", True):
             return
         origin_step = opt.step
         ex_name = '['+opt.__class__.__name__+']'

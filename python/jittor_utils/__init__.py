@@ -29,6 +29,8 @@ from pathlib import Path
 import json
 from typing import Any, Optional, Set
 
+from . import env_config
+from .env_config import build_env, build_flag, runtime_env
 from . import probe
 
 
@@ -234,8 +236,8 @@ def limit_openmp_to_physical_cores(environ):
 
 class Logwrapper:
     def __init__(self):
-        self.log_silent = int(os.environ.get("log_silent", "0"))
-        self.log_v = int(os.environ.get("log_v", "0"))
+        self.log_silent = int(runtime_env("log_silent", "0"))
+        self.log_v = int(runtime_env("log_v", "0"))
 
     def log_capture_start(self):
         cc.log_capture_start()
@@ -325,12 +327,18 @@ def import_scope(flags):
 def try_import_jit_utils_core(silent=None):
     global cc
     if cc: return
+    # These write the canonical name the core reads, not the deprecated
+    # unprefixed one: jit_utils_core's static initializers run on the import
+    # below, and a framework that configures itself through a deprecated name
+    # makes every process report a deprecation the user did not ask for.
+    silent_var = env_config.prefixed_name("log_silent", "runtime")
     if not (silent is None):
-        prev = os.environ.get("log_silent", "0")
-        os.environ["log_silent"] = str(int(silent))
+        prev = os.environ.get(silent_var)
+        os.environ[silent_var] = str(int(silent))
     try:
         # if is in notebook, must log sync, and we redirect the log
-        if is_in_ipynb: os.environ["log_sync"] = "1"
+        if is_in_ipynb:
+            os.environ[env_config.prefixed_name("log_sync", "runtime")] = "1"
         import jit_utils_core as cc
         if is_in_ipynb:
             if os.name != 'nt':
@@ -339,11 +347,16 @@ def try_import_jit_utils_core(silent=None):
                 # TODO: find a better way
                 cc.ostream_redirect(True, True)
     except Exception as _:
-        if int(os.environ.get("log_v", "0")) > 0:
+        if int(runtime_env("log_v", "0")) > 0:
             print(_)
         pass
     if not (silent is None):
-        os.environ["log_silent"] = prev
+        # Restoring "" rather than removing it would leave a variable the caller
+        # never set, and int("") raises out of Logwrapper.
+        if prev is None:
+            os.environ.pop(silent_var, None)
+        else:
+            os.environ[silent_var] = prev
 
 def run_cmd(cmd, cwd=None, err_msg=None, print_error=True):
     LOG.v(f"Run cmd: {cmd}")
@@ -388,8 +401,8 @@ def pool_cleanup():
 
 def pool_initializer():
     if os.name == 'nt':
-        os.environ['log_silent'] = '1'
-        os.environ['gdb_path'] = ""
+        os.environ[env_config.prefixed_name('log_silent', 'runtime')] = '1'
+        os.environ[env_config.prefixed_name('gdb_path', 'runtime')] = ""
     if cc is None:
         try_import_jit_utils_core()
     if cc:
@@ -450,10 +463,10 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
 if os.name=='nt' and getattr(mp.current_process(), '_inheriting', False):
     # when windows spawn multiprocess, disable sub-subprocess
     os.environ["DISABLE_MULTIPROCESSING"] = '1'
-    os.environ["log_silent"] = '1'
-        
+    os.environ[env_config.prefixed_name("log_silent", "runtime")] = '1'
+
 if os.environ.get("DISABLE_MULTIPROCESSING", '0') == '1':
-    os.environ["use_parallel_op_compiler"] = '0'
+    os.environ[env_config.prefixed_name("use_parallel_op_compiler", "runtime")] = '0'
     def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
         cmds = [ [cmd, cache_path, jittor_path] for cmd in cmds ]
         n = len(cmds)
@@ -589,18 +602,25 @@ def get_build_config():
 
     A variable that is not set records as None, which is a different
     configuration from one set to the empty string.
+
+    The lookups go through ``env_config`` so that a setting given under its
+    canonical ``JT_BUILD_`` name reaches the fingerprint. Reading only the
+    unprefixed name here would have made ``JT_BUILD_CC_FLAGS=-O1`` compile
+    different object code into the directory an ordinary build already owns.
     """
-    config = {name: os.environ.get(name) for name in BUILD_CONFIG_VARS}
+    config = {name: build_env(name) for name in BUILD_CONFIG_VARS}
     # Optional SDK selection is part of the produced binary, but absent
     # settings must not invalidate ordinary CPU/CUDA cache directories.
-    for name in ("JT_BACKEND", "ASCEND_TOOLKIT_HOME", "ASCEND_HOME_PATH", "tikcc_path",
+    for name in ("JT_BACKEND", "ASCEND_TOOLKIT_HOME", "ASCEND_HOME_PATH",
                  "ROCM_HOME", "ROCM_PATH", "HIP_PATH", "hipcc_path", "COREX_HOME"):
         if os.environ.get(name):
             config[name] = os.environ[name]
+    if build_env("tikcc_path"):
+        config["tikcc_path"] = build_env("tikcc_path")
     # Keep the normal cache name stable, but isolate the explicitly unsafe
     # opt-in: an unlocked writer must not leave partial state in the cache used
     # by ordinary locked processes.
-    if os.environ.get("disable_lock", "0") == "1":
+    if build_flag("disable_lock"):
         config["disable_lock"] = "1"
     # A build that swaps shares no object code with one that does not, so it
     # needs its own directory. Recorded only when it is switched on: "off" is
@@ -887,9 +907,9 @@ def find_cache_path():
     # repository's branch name. Nothing is lost by dropping it: two checkouts
     # are already kept apart by jittor_path_key above, and two branches in one
     # checkout *should* share a cache and rebuild incrementally.
-    cache_name = os.environ.get("cache_name", "default")
+    cache_name = build_env("cache_name", "default")
     for c in " (){}": cache_name = cache_name.replace(c, "_")
-    if os.environ.get("debug")=="1":
+    if build_flag("debug"):
         dirs[-1] += "_debug"
     for name in os.path.normpath(cache_name).split(os.path.sep):
         dirs.append(name)
@@ -966,9 +986,15 @@ def find_exe(name, check_version=True, silent=False):
         LOG.i(f"Found {name}{version} at {output}.")
     return output
 
+#: "Not configured" for a build variable whose empty value is meaningful.
+#: ``nvcc_path=""`` is the documented way to force a CPU-only build, so it must
+#: not read as "go and look for nvcc".
+_UNSET = object()
+
+
 def env_or_find(name, bname, silent=False):
-    if name in os.environ:
-        path = os.environ[name]
+    path = build_env(name, _UNSET)
+    if path is not _UNSET:
         if path != "":
             version = get_version(path)
             if not silent:
@@ -977,8 +1003,8 @@ def env_or_find(name, bname, silent=False):
     return find_exe(bname, silent=silent)
 
 def env_or_try_find(name, bname):
-    if name in os.environ:
-        path = os.environ[name]
+    path = build_env(name, _UNSET)
+    if path is not _UNSET:
         if path != "":
             version = get_version(path)
             LOG.i(f"Found {bname}{version} at {path}")
@@ -1049,8 +1075,9 @@ def get_py3_config_path():
                                         f'Versions/3.{sys.version_info.minor}/lib/python3.{sys.version_info.minor}/'\
                                         f'config-3.{sys.version_info.minor}-darwin/python-config.py')
 
-        if "python_config_path" in os.environ:
-            py3_config_paths.insert(0, os.environ["python_config_path"])
+        configured = build_env("python_config_path")
+        if configured is not None:
+            py3_config_paths.insert(0, configured)
 
         for py3_config_path in py3_config_paths:
             if os.path.isfile(py3_config_path):
@@ -1058,7 +1085,7 @@ def get_py3_config_path():
         else:
             raise RuntimeError(f"python3.{sys.version_info.minor}-config "
                 f"not found in {py3_config_paths}, please specify "
-                f"enviroment variable 'python_config_path',"
+                f"enviroment variable 'JT_BUILD_PYTHON_CONFIG_PATH',"
                 f" or install python3.{sys.version_info.minor}-dev")
         _py3_config_path = py3_config_path
         return py3_config_path
@@ -1164,7 +1191,7 @@ LOG = Logwrapper()
 
 check_msvc_install = False
 msvc_path = ""
-if os.name == 'nt' and os.environ.get("cc_path", "")=="":
+if os.name == 'nt' and build_env("cc_path", "") == "":
     msvc_path = os.path.join(home(), ".cache", "jittor", "msvc")
     cc_path = os.path.join(msvc_path, "VC", r"_\_\_\_\_\bin", "cl.exe")
     check_msvc_install = True

@@ -32,6 +32,7 @@ from jittor_utils import LOG
 import jittor as jt
 import time
 import jittor_utils as jit_utils
+from jittor_utils.env_config import runtime_env
 from jittor import _arg_policy
 
 #: Distinguishes "the caller did not mention persistent_workers" from an
@@ -41,7 +42,7 @@ _PERSISTENT_WORKERS_UNSET = object()
 dataset_root = os.path.join(jit_utils.home(), ".cache", "jittor", "dataset")
 # int() like the CHECK_MEMORY line below: os.environ.get returns a *string*,
 # and "0" is truthy, so mp_log_v=0 used to switch the worker chatter ON.
-mp_log_v = int(os.environ.get("mp_log_v", "0"))
+mp_log_v = int(runtime_env("mp_log_v", "0"))
 mpi = jt.mpi
 if _has_pil:
     #: Times ``PIL.Image.open``, and is NOT installed here. Importing this

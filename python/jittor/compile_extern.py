@@ -10,6 +10,7 @@ from .compiler import *
 from jittor_utils import run_cmd, get_version, get_int_version
 from jittor_utils.misc import download_url_to_local, safe_tar_extractall
 from jittor_utils import manifest
+from jittor_utils.env_config import build_env, build_flag
 import jittor_utils as jit_utils
 from jittor_utils.backend_resources import backend_root
 from ._runtime.backend_libraries import (
@@ -25,9 +26,15 @@ register_library_resources("cub", home="")
 # Optional runtimes are initialized by an explicit setup_* call, or by the
 # first operation that needs them.  Keep their public state queryable without
 # doing downloads, compilation, or dynamic loading during a plain import.
-use_mkl = os.environ.get("use_mkl", "1") == "1"
-use_cutt = os.environ.get("use_cutt", "1") == "1"
-use_nccl = os.environ.get("use_nccl", "1") == "1"
+# ``os.environ`` is passed explicitly rather than left to ``env_config``'s own
+# import of ``os``. Several structure tests lift one of the functions below out
+# of this file with ``ast`` and run it against an injected ``os`` whose
+# ``environ`` they control; a lookup that reached around that injection would
+# read the real environment instead, and the test would then pass or fail on
+# whatever the session before it happened to export.
+use_mkl = build_flag("use_mkl", True, os.environ)
+use_cutt = build_flag("use_cutt", True, os.environ)
+use_nccl = build_flag("use_nccl", True, os.environ)
 
 def search_file(dirs, name, prefer_version=()):
     if os.name == 'nt':
@@ -221,7 +228,7 @@ def check_mkl_usable(dirname):
     LOG.v(f"mkl usable: {lib_path}")
 
 def _mkl_library_enabled():
-    return bool(use_mkl) and os.environ.get("use_mkl", "1") == "1"
+    return bool(use_mkl) and build_flag("use_mkl", True, os.environ)
 
 
 def setup_mkl():
@@ -238,8 +245,8 @@ def setup_mkl():
     # except:
     #     torch = None
 
-    mkl_include_path = os.environ.get("mkl_include_path")
-    mkl_lib_path = os.environ.get("mkl_lib_path")
+    mkl_include_path = build_env("mkl_include_path", environ=os.environ)
+    mkl_lib_path = build_env("mkl_lib_path", environ=os.environ)
     
     if mkl_lib_path is None or mkl_include_path is None:
         LOG.v("setup mkl...")
@@ -376,7 +383,7 @@ def setup_cuda_extern():
     # default context: 259 MB
     # cublas: 340 MB
     # cudnn: 340 MB
-    if int(os.environ.get("conv_opt", "0")):
+    if build_flag("conv_opt", False, os.environ):
         libs = ["cublas", "curand"]
     for lib_name in libs:
         try:
@@ -593,10 +600,10 @@ def setup_cutt():
     if not has_cuda or not (is_cuda or has_corex):
         use_cutt = False
         return
-    use_cutt = os.environ.get("use_cutt", "1")=="1"
+    use_cutt = build_flag("use_cutt", True, os.environ)
     if not use_cutt: return
-    cutt_include_path = os.environ.get("cutt_include_path")
-    cutt_lib_path = os.environ.get("cutt_lib_path")
+    cutt_include_path = build_env("cutt_include_path", environ=os.environ)
+    cutt_lib_path = build_env("cutt_lib_path", environ=os.environ)
     
     if cutt_lib_path is None or cutt_include_path is None:
         LOG.v("setup cutt...")
@@ -811,7 +818,7 @@ def _init_nccl_from_store(nccl_module, store=None):
 
 def setup_nccl(store=None):
     global use_nccl
-    use_nccl = os.environ.get("use_nccl", "1")=="1"
+    use_nccl = build_flag("use_nccl", True, os.environ)
     # NCCL is normally only built under MPI; also build it for the MPI-free
     # env/file rendezvous (JT_NCCL_WORLD_SIZE set by the torchrun-style launcher),
     # so NVIDIA multi-card DDP works without mpirun (mirrors the Ascend HCCL path).
@@ -820,8 +827,8 @@ def setup_nccl(store=None):
         use_nccl = False
         return
     if not use_nccl: return
-    nccl_include_path = os.environ.get("nccl_include_path")
-    nccl_lib_path = os.environ.get("nccl_lib_path")
+    nccl_include_path = build_env("nccl_include_path", environ=os.environ)
+    nccl_lib_path = build_env("nccl_lib_path", environ=os.environ)
     nccl_lib_name = None
     
     if nccl_lib_path is None or nccl_include_path is None:
@@ -1042,7 +1049,7 @@ def inside_mpi():
 def setup_mpi():
     global use_mpi
     global mpicc_path, has_mpi
-    use_mpi = os.environ.get("use_mpi", "1")=="1"
+    use_mpi = build_flag("use_mpi", True, os.environ)
     has_mpi = False
     if not use_mpi: return
     mpicc_path = env_or_try_find('mpicc_path', 'mpicc')
@@ -1128,7 +1135,10 @@ _jt_hccl_no_mpi = _jt_hccl_ws is not None
 _jt_nccl_ws = os.environ.get("JT_NCCL_WORLD_SIZE")
 _jt_nccl_no_mpi = _jt_nccl_ws is not None
 if _jt_hccl_no_mpi or _jt_nccl_no_mpi:
-    os.environ["use_mpi"] = "0"   # make setup_mpi() a no-op (no libmpi load)
+    # The canonical name, not the deprecated unprefixed one: writing `use_mpi`
+    # here would make every HCCL/NCCL rank report a deprecated variable that the
+    # framework, not the user, had set.
+    os.environ["JT_BUILD_USE_MPI"] = "0"   # make setup_mpi() a no-op (no libmpi load)
 
 setup_mpi()
 

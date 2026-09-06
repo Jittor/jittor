@@ -178,6 +178,17 @@ def _set_env_dir(environ, name, path, override=False):
     _ensure_dir(environ[name], "the directory $%s points at" % name)
 
 
+#: The pre-2.22 unprefixed names, which still configure the build.
+#:
+#: This module runs before ``jittor_utils`` is importable -- it is what decides
+#: whether the import can proceed at all -- so it cannot go through
+#: ``env_config`` like every other reader, and
+#: ``tests/structure/test_env_var_manifest.py`` names it as the one exception.
+#: Keeping the two names in constants keeps the exception to one place.
+_DEPRECATED_TIKCC_PATH = "tikcc_path"
+_DEPRECATED_NVCC_FLAGS = "nvcc_flags"
+
+
 def _remove_strict_math_nvcc_flags(value):
     strict_tokens = {"--fmad=false", "--prec-div=true", "--prec-sqrt=true"}
     tokens = [token for token in str(value or "").split()
@@ -189,29 +200,38 @@ def _acl_environment(environ):
     return bool(
         environ.get("ASCEND_TOOLKIT_HOME")
         or environ.get("ASCEND_HOME_PATH")
-        or environ.get("tikcc_path")
+        # 2.22 gave build settings the JT_BUILD_ namespace; the old unprefixed
+        # name still configures the toolchain, so both have to be read here.
+        or environ.get("JT_BUILD_TIKCC_PATH")
+        or environ.get(_DEPRECATED_TIKCC_PATH)
     )
 
 
 def _prepare_kernel_math(environ):
+    # The canonical names (see ``jittor_utils/env_config.py``). Spelled out
+    # rather than imported because this module is loaded by the shim bootstrap
+    # before ``jittor_utils`` is importable, and read back by the structure gate
+    # without importing anything.
     if _acl_environment(environ):
-        environ["nvcc_flags"] = _remove_strict_math_nvcc_flags(
-            environ.get("nvcc_flags", "")
+        environ["JT_BUILD_NVCC_FLAGS"] = _remove_strict_math_nvcc_flags(
+            environ.get("JT_BUILD_NVCC_FLAGS",
+                        environ.get(_DEPRECATED_NVCC_FLAGS, ""))
         )
-        environ["cuda_kernel_math"] = "backend"
+        environ["JT_CUDA_KERNEL_MATH"] = "backend"
         return
     if is_truthy(environ.get("JITTOR_TORCH_KEEP_FAST_MATH")):
         return
     # Kernel policy belongs in operator keys, not in the core build fingerprint.
-    environ["cuda_kernel_math"] = "strict"
+    environ["JT_CUDA_KERNEL_MATH"] = "strict"
 
 
 def configure_torch_math_flags(jittor_module):
     compiler = getattr(jittor_module, "compiler", None)
     flags = jittor_module.flags
     if getattr(compiler, "has_acl", False):
-        os.environ["nvcc_flags"] = _remove_strict_math_nvcc_flags(
-            os.environ.get("nvcc_flags", "")
+        os.environ["JT_BUILD_NVCC_FLAGS"] = _remove_strict_math_nvcc_flags(
+            os.environ.get("JT_BUILD_NVCC_FLAGS",
+                           os.environ.get(_DEPRECATED_NVCC_FLAGS, ""))
         )
         flags.cuda_kernel_math = "backend"
         return

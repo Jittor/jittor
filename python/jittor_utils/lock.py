@@ -49,12 +49,12 @@ If conda is used, please install with command:
 import jittor_utils
 from jittor_utils import cache_path, LOG
 
-disable_lock = os.environ.get("disable_lock", "0") == "1"
+disable_lock = jittor_utils.build_flag("disable_lock")
 if disable_lock:
     LOG.w(
-        "disable_lock=1: Jittor build locking is disabled; concurrent writers "
-        "can corrupt this cache. Use an isolated JITTOR_HOME and never share "
-        "this cache with another process."
+        "JT_BUILD_DISABLE_LOCK=1: Jittor build locking is disabled; concurrent "
+        "writers can corrupt this cache. Use an isolated JITTOR_HOME and never "
+        "share this cache with another process."
     )
 
 
@@ -161,7 +161,7 @@ def _acquire(fd, path):
         except OSError as e:
             if e.errno not in (errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK):
                 raise RuntimeError(
-                    f"could not lock {path}: {e}. Set disable_lock=1 to run "
+                    f"could not lock {path}: {e}. Set JT_BUILD_DISABLE_LOCK=1 to run "
                     f"without the build lock (unsafe if anything else is "
                     f"building into the same cache).") from e
         waited = time.monotonic() - start

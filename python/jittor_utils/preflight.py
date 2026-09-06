@@ -52,10 +52,21 @@ def _warn(name, detail, remedy, fixable=False):
     return Result(name, "warn", detail, remedy, fixable)
 
 
+def build_env(name, default=None):
+    """A build setting, from ``JT_BUILD_<NAME>`` or its deprecated old name.
+
+    Imported lazily, like everything else this module borrows from
+    ``jittor_utils``: it has to keep running on a machine where importing the
+    package fails, which is the case it exists for.
+    """
+    from jittor_utils.env_config import build_env as lookup
+    return lookup(name, default)
+
+
 def check_compiler(cc_path=None):
     """A C++ compiler Jittor can drive."""
     if cc_path is None:
-        cc_path = os.environ.get("cc_path") or ""
+        cc_path = build_env("cc_path") or ""
     if not cc_path:
         for candidate in ("g++", "clang++", "clang", "icc"):
             found = shutil.which(candidate)
@@ -104,7 +115,7 @@ def check_openmp(cc_type=None):
     if platform.system() != "Linux":
         return _ok("openmp", "not required on " + platform.system())
     if cc_type is None:
-        cc_path = os.environ.get("cc_path") or shutil.which("g++") or ""
+        cc_path = build_env("cc_path") or shutil.which("g++") or ""
         cc_type = "clang" if "clang" in os.path.basename(cc_path) else "g++"
     library = {"clang": "omp", "icc": "iomp5", "g++": "gomp"}.get(cc_type, "gomp")
     found = ctypes.util.find_library(library)
@@ -234,7 +245,7 @@ def check_network(needed=True, host=None, timeout=5.0):
 def check_cuda(nvcc_path=None):
     """nvcc and, if the pip CUDA stack is installed, whether it is coherent."""
     if nvcc_path is None:
-        nvcc_path = os.environ.get("nvcc_path")
+        nvcc_path = build_env("nvcc_path")
     if nvcc_path == "":
         return _ok("cuda", "nvcc_path is empty, this is a CPU-only build")
     resolved = nvcc_path or shutil.which("nvcc")
@@ -277,7 +288,7 @@ def check_cache_isolation():
     reporting is which explicitly named slot is in effect, because two runs
     that must not share a cache have to differ here or in JITTOR_HOME.
     """
-    slot = os.environ.get("cache_name")
+    slot = build_env("cache_name")
     if slot:
         return _ok("cache isolation", "cache_name=%s" % slot)
     return _ok("cache isolation",

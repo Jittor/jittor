@@ -31,6 +31,8 @@ from jittor_utils import (
     cc_type,
     cache_path,
 )
+from jittor_utils import env_config
+from jittor_utils.env_config import build_env, build_flag
 from jittor_utils.compiler_flags import remove_flags, shsplit
 from . import pyjt_compiler
 from ._runtime.flag_policy import flag_category
@@ -1232,7 +1234,7 @@ def _read_cuda_archs():
         child = sp.run(
             [sys.executable, "-m", "jittor_utils.query_cuda_cc"],
             stdout=sp.PIPE, stderr=sp.PIPE,
-            env=dict(os.environ, log_v="0", log_silent="1"))
+            env=env_config.child_env(log_v=0, log_silent=1))
     except OSError as error:
         LOG.v(f"could not query cuda archs: {error}")
         return None
@@ -1362,7 +1364,7 @@ def check_pybt(gdb_path, python_path):
 def check_debug_flags():
     global is_debug
     is_debug = 0
-    if os.environ.get("debug")=="1":
+    if build_flag("debug"):
         is_debug = 1
         global cc_flags
         cc_flags += " -g -DNODE_MEMCHECK "
@@ -1436,7 +1438,7 @@ def _discover_cuda_compiler(requested_backend):
         nvcc = install_cuda.install_cuda()
         if nvcc:
             nvcc = try_find_exe(nvcc)
-    return os.environ.get("nvcc_path", nvcc or "")
+    return build_env("nvcc_path", nvcc or "")
 
 
 _requested_backend = _backend_discovery.requested_backend()
@@ -1561,8 +1563,17 @@ if platform.system() == 'Darwin':
             cc_flags += f" -I{openmp_path}/include -L{openmp_path}/lib"
 
 # 3. User specified flags
-if "cc_flags" in os.environ:
-    cc_flags += os.environ["cc_flags"] + ' '
+#
+# These are *appended*. That is now the only meaning the setting has: the native
+# `cc_flags` flag used to be replaced wholesale by the same variable in
+# `log.h`'s static initializer, and then overwritten again by the
+# `flags.cc_flags = ...` assignment at the end of this file, so one name had two
+# documented behaviours of which only this one ever survived. The core no longer
+# reads any compiler-owned build flag from the environment (see
+# `compiler_owned_flag_names` in `src/utils/log.cc`).
+_user_cc_flags = build_env("cc_flags")
+if _user_cc_flags is not None:
+    cc_flags += _user_cc_flags + ' '
 
 cc_flags += " -lstdc++ -ldl -shared "
 
@@ -1576,7 +1587,7 @@ LOG.v(f"extension_suffix: {extension_suffix}")
 so = ".so" if os.name != 'nt' else ".dll"
 
 
-kernel_opt_flags = os.environ.get("kernel_flags", "") + opt_flags
+kernel_opt_flags = build_env("kernel_flags", "") + opt_flags
 if platform.system() == 'Darwin':
     # TODO: if not using apple clang, cannot add -Xpreprocessor
     kernel_opt_flags += " -Xpreprocessor -fopenmp "
@@ -1675,13 +1686,13 @@ if os.name == 'nt':
             return cmd
 
 if ' -O' not in cc_flags:
-    if os.environ.get("debug", "0") == "1":
+    if build_flag("debug"):
         opt_flags += " -O0 "
     else:
         opt_flags += " -O2 "
     kernel_opt_flags += " -Ofast "
 lto_flags = ""
-if os.environ.get("enable_lto") == "1":
+if build_flag("enable_lto"):
     if cc_type == "icc":
         lto_flags = " -flto -ipo -ipo-c "
     elif cc_type == "g++":
@@ -1712,8 +1723,9 @@ is_cuda = has_cuda = has_acl = has_rocm = has_corex = 0
 cuda_sdk_flags = cuda_link_flags = ""
 check_cuda()
 if _requested_backend == "cuda" and not has_cuda:
-    raise RuntimeError("JT_BACKEND=cuda requires a usable CUDA compiler; set nvcc_path")
-nvcc_flags = os.environ.get("nvcc_flags", "")
+    raise RuntimeError("JT_BACKEND=cuda requires a usable CUDA compiler; "
+                       "set JT_BUILD_NVCC_PATH")
+nvcc_flags = build_env("nvcc_flags", "")
 def convert_nvcc_flags(value):
     return value
 if has_cuda:
@@ -1755,7 +1767,7 @@ if has_cuda:
         # nvcc warning is noise
         nvcc_flags += " -w "
         nvcc_flags += f" -I\"{os.path.join(backend_root(jittor_path, 'cuda'), 'include')}\" "
-        if os.environ.get("cuda_debug", "0") == "1":
+        if build_flag("cuda_debug"):
             nvcc_flags += " -G "
         return nvcc_flags
     nvcc_flags = convert_nvcc_flags(nvcc_flags)
@@ -1940,7 +1952,7 @@ def core_build_ingredients():
         "opt_flags": opt_flags,
         "lto_flags": lto_flags,
         "nvcc_path": nvcc_path,
-        "nvcc_flags": os.environ.get("nvcc_flags", ""),
+        "nvcc_flags": build_env("nvcc_flags", ""),
         "extension_suffix": extension_suffix,
         "lib_suffix": lib_suffix,
         "has_cuda": int(bool(has_cuda)),
@@ -2471,7 +2483,7 @@ if has_cuda and is_cuda and not hasattr(flags, "cuda_archs"):
     )
 
 if has_cuda and is_cuda:
-    nvcc_flags = " " + os.environ.get("nvcc_flags", "") + " "
+    nvcc_flags = " " + build_env("nvcc_flags", "") + " "
     nvcc_flags += convert_nvcc_flags(cc_flags)
     nvcc_version = list(jit_utils.get_int_version(nvcc_path))
     supported_archs = query_nvcc_archs(nvcc_path)
