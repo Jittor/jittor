@@ -277,7 +277,7 @@ ROCm 的**实机正确性**未验证——本机无 ROCm 卡，`nox -s rocm` 与
 | --- | --- | --- | --- | --- |
 | 后端 `grad()` 的覆盖清单只认两个目录、只认 C++，实际漏掉 34/60 条 | `tests/structure/test_backend_grad_contract.py` 原版只扫 `backends/cuda/kernels` 与 `python/jittor/extern`，且只匹配 `.cc` 里的 `::grad(`；`backends/rocm/libraries` 的 `HipblasMatmulOp`/`RocprimCumsumOp` 两条落在扫描根之外，`backends/acl/kernels/ops` 的 23 条与 `backends/cuda/kernels/nn` 的 9 条 `jt.Function.grad` 落在语言之外 | 断言写成「总数 == 26」，而 26 正是那两个目录的全部，于是**漏掉的部分同时不在分子也不在分母**，清单看着齐全。这正是「扫描根失配后在空集合上通过」：后端搬进 `backends/` 之后 ROCm 一条都没扫到，总数却毫无变化 | 扫描根按后端拆开并**逐个断言非空**；应为空的根（corex）另立一类，同时断言目录真实存在且有源文件；Python 侧用 AST 找带 `grad` 方法的类 | 主要 |
 
-**已修：`15dd50518`。** 现枚举 60 条（C++ 28 + Python 32）并与源码树逐条相等；24 条本机真跑，
+**已修：`e5eaacfc2`。** 现枚举 60 条（C++ 28 + Python 32）并与源码树逐条相等；24 条本机真跑，
 36 条硬件延迟，`kind` 字段区分七种路线并全部登记进
 [`agent/manuals/deferred-hardware.md`](../../manuals/deferred-hardware.md)。
 
