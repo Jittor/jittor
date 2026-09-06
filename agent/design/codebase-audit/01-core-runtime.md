@@ -241,3 +241,40 @@ profiler 两法互校，整步 Jittor 23.02 / 22.03 ms、同机 PyTorch 2.12.1 �
 量法、屋顶线口径与两个会让数字差两倍的坑，都在
 `agent/skills/cuda-elementwise-bandwidth-roofline/`。
 
+**已修：`9ab5ea42`（量法与用例）加本条所在的收口提交。上表「归约」那一行的口径不成立，
+已对齐重算（2026-09-06）。**
+原条目与上面那张表都保留，但**「归约 0.57 / 0.59 ms 对 1.20 ms、Jittor 快一倍以上」
+这句不要再引用**：两个桶装的东西几乎没有交集。
+
+- Jittor 的 0.57 ms 只是**代码生成器**的 `reduce` 角色（0.49 ms 通用求和 + 0.08 ms 六个
+  注意力 GroupNorm 的回退）。手写的 GroupNorm（1.72 ms）、手写的卷积偏置梯度
+  `channel_bias_backward`（0.26 ms）、手写 softmax（1.59 ms）都在「手写 CUDA」那一行里。
+- PyTorch 的 1.20 ms 是 `reduce/norm` 这个按符号名分的桶：0.65 ms 真归约，**加上**
+  0.47 ms 的 GroupNorm **逐元素仿射写回**（三个 `GroupNorm*KernelImplInternal` 的
+  `elementwise_kernel`，只因符号名含 `Norm` 就被归进来）；而 PyTorch 真正的 GroupNorm
+  统计量归约（`RowwiseMomentsCUDAKernel` 等四种，0.74 ms）全落在 `other` 里。
+
+按语义配对、并用 `profile_step_torch.py --attribute` 的 aten 归属核对每步调用次数之后
+（三行次数分别 51:51、67:67、41:41，全部对上）：
+
+| 类别 | Jittor（profiler / nsys） | PyTorch 2.12.1 |
+| --- | ---: | ---: |
+| 通用求和（卷积/线性偏置梯度、广播梯度、loss 全和） | 749.4 us | 652.6 us |
+| GroupNorm 全部（统计量 + 仿射写回，41 个） | 1794.8 us | 1275.5 us |
+| **归约类合计** | **2544.2 us** | **1928.1 us** |
+
+**Jittor 慢 616 us（32%）**，同一次测量整步 21.38 / 23.09 ms 对 21.11 ms（差 1.3%）。
+所以 3.22 的验收「UNet 归约类 kernel 合计不慢于 PyTorch 的 1.13 ms」在对齐口径下
+**未达成**，PyTorch 的实测对应值也不是 1.13/1.20 ms 而是 1.93 ms。
+
+**差距的 84% 在 GroupNorm，且其中 1715 us 跑在
+`backends/cuda/kernels/nn/group_norm_cuda.py` 的手写 CUDA 里，不在代码生成器里**；
+通用求和那一栏只差 97 us（15%）。本节上文「需要一条可读的块内归约实现」的方向由此
+再次收敛：块内实现已经有了（`shared_reduce_pass.cc`，`para_opt_level>=4`），在真实
+UNet 形状上实测比 warp 默认快 7.1–7.6%（reduce 角色 527.9 对 568.3/566.7/571.5 us），
+但那只有 40 us，够不到 616 us 的差距，所以默认仍是 `WarpReducePass`。
+Jittor 手写的 attention softmax（1.59 ms）在 PyTorch 侧没有对应的独立 kernel
+（融进 `fmha_cutlassF/B`，与 QK^T、PV 同 kernel），单列不进合计。
+配对表、脚本与「为什么整网梯度 diff 判不出归约改动」在
+`agent/skills/cuda-reduction-strategy-comparison/`。
+

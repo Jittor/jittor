@@ -1717,6 +1717,57 @@ ratio 0.84——**整体已经贴着屋顶**，超出部分由 72 MB L2 承担�
 量法与四个脚本在 `agent/skills/cuda-elementwise-bandwidth-roofline/`；**先读它的第 3 节**
 （profiler 的 rerun 因子按 `-2` 推会让每一个每步数字正好差两倍，而报告内部自洽）。
 
+### 3.22 归约口径已对齐：两边原来比的是两批几乎不相交的 kernel（量法 `9ab5ea42`）
+
+上一条留下的「归约类 Jittor 0.57 ms 对 PyTorch 1.20 ms、快一倍以上，3.22 看起来已达到」
+**不成立**。把两个桶拆开看，它们装的东西几乎没有交集：
+
+- Jittor 的 0.57 ms 只有**代码生成器**的 `reduce` 角色（0.49 ms 通用求和 + 0.08 ms 六个
+  注意力 GroupNorm 的回退）。手写 GroupNorm 1.72 ms、手写卷积偏置梯度 0.26 ms、
+  手写 softmax 1.59 ms 全都不在里面。
+- PyTorch 的 1.20 ms 是按符号名分的 `reduce/norm` 桶：0.65 ms 真归约，**加上** 0.47 ms
+  的 GroupNorm **逐元素仿射写回**（三个 `GroupNorm*KernelImplInternal` 的
+  `elementwise_kernel`，只因符号名含 `Norm`）；而 PyTorch 真正的 GroupNorm 统计量归约
+  0.74 ms（`RowwiseMomentsCUDAKernel` 等四种）落在 `other`，一个都没进去。
+
+对齐做法：`profile_step_torch.py --attribute`（新增）记 CPU 活动，用 `correlation` 把每个
+CUDA kernel 接回发起它的 aten 算子栈，再按语义配对，**并用每步调用次数当配对成立的判据**。
+三行全部对上：卷积偏置梯度 51:51、其余通用求和 67:67、GroupNorm 41:41。
+
+| 类别 | Jittor（profiler / nsys） | PyTorch 2.12.1 |
+| --- | ---: | ---: |
+| 通用求和（卷积/线性偏置梯度、广播梯度、loss 全和） | 749.4 us | 652.6 us |
+| GroupNorm 全部（统计量 + 仿射写回，41 个） | 1794.8 us | 1275.5 us |
+| **归约类合计** | **2544.2 us** | **1928.1 us** |
+| 同一次测量的整步 | 21.38 / 23.09 ms | 21.11 ms |
+
+**Jittor 慢 616 us（32%），3.22 的验收未达成**；PyTorch 的实测对应值也不是 1.13/1.20 ms
+而是 1.93 ms。**差距的 84% 在 GroupNorm**（519 us），其中 1715 us 在
+`backends/cuda/kernels/nn/group_norm_cuda.py` 的手写 CUDA 里，**不在代码生成里**；
+通用求和那一栏只差 97 us。已在看板单列一行给手写 kernel 的 owner。
+Jittor 手写的 attention softmax（1.59 ms）在 PyTorch 侧没有对应的独立 kernel
+（融进 `fmha_cutlassF/B`，与 QK^T、PV 同一个 kernel），单列不进合计。
+
+**`edf70f52` 的处置：保留为 opt-in，不改默认，但它「慢 1.64%」的判据被推翻了。**
+那四个「代表形状」不是 UNet 用的形状。在真实 UNet 上直接量（`--flag para_opt_level=4
+--compile-option reduce_lvl4=1`）：`reduce` 角色 **527.9 us**，对默认 warp 的三次独立运行
+568.3 / 566.7 / 571.5 us，**快 7.1–7.6%**；逐形状 best-of-30 的 `reduce_ab.py --shapes unet`
+是 0.968，同向。不改默认的理由换成：40 us 只有整步的 0.19%、616 us 差距的 6.5%，
+够不到验收；而在输出少每输出长的形状上（`--shapes representative` 那四个）它仍慢到
+1.39 倍；`para_opt_level=4` 又是个同时改 AtomicTunerPass 的粗开关。
+
+顺带三条方法上的坑，都已写进 skill：
+
+1. **`para_opt_level` 不进 jit key**（key 里的 `«choices:` 段只收 `loop_options`），
+   只改它的第二轮量到的是第一轮的 kernel，且毫无提示。`profile_step.py` 新增
+   `--compile-option name=int` 专治这个。
+2. **整网梯度 diff 判不出归约改动**：默认 warp 路径结尾每 warp 一次 `atomicAdd`，
+   同一条策略跑两遍，270 个梯度里最坏 `max|Δ|/max|g|` 是 1.8，而两条策略之间是 1.6。
+   能判的只有逐形状对更高精度参考（`reduce_ab.py`，十一种形状两条策略都 ≤ 6.9e-7）。
+3. **跨进程比 `loss`/`grad_checksum` 也不行**：`profile_step.py` 的 `build()` 原来根本
+   没播种（已补 `jt.set_global_seed`），补了也不是位精确——卷积算法选择随负载变，
+   而这个 loss 抵消掉约 16 倍量级，输出上 3e-4 就是 loss 上 0.5%。
+
 ### 第 159 波（`compat`，7.03 六个 cohort）
 
 | 项 | 结果 |
@@ -2332,6 +2383,14 @@ host 编译器编、却不走那条新管线的后端源码。** 逐层实测到
 没跑**——13 个提交连续推送、没有一次 CUDA 导入。**建议给 4.12／4.15 这类跨目录搬动加一条最低
 门槛：推之前带 CUDA 跑一次 `import jittor` 加一个 matmul（热缓存约 1 分钟）。** 冒烟脚本口径见
 `agent/results/2026-09-04-cuda-availability-verification.md` 的命令口径一节。
+
+### 本波结果（`codegen`，3.22 收口）
+
+| 项 | 结果 |
+| --- | --- |
+| `9ab5ea42` + 本提交 | **3.22 归约口径对齐，验收判定未达成，保持待领。** 对齐后 Jittor 归约类 **2544 us** 对 PyTorch **1928 us**（慢 32%），而不是 3.23 记的「0.57 对 1.20 ms、快一倍以上」——那两个桶几乎不相交，配对与拆解见上文同名小节。差距 84% 在手写 GroupNorm（1715 us 在 `backends/cuda/kernels/nn/group_norm_cuda.py`），**不在代码生成里**，已在看板单列一行待派。`edf70f52` 定为 opt-in 不改默认，但其「四形状慢 1.64%」被推翻：真实 UNet 上 level 4 的 `reduce` 角色 527.9 us 对 warp 三次 568.3/566.7/571.5 us，**快 7.1–7.6%**。顺带修 `test_shared_reduce_helper_is_two_stage`（`fd4d8820d` 移走了 `shared_reduce` 的头文件，断言留在旧路径）：修前 1 failed → 修后 7 passed。无产品代码改动 |
+| 测量环境 | RTX 4090 sm_89，卡号从环境读，**非独占**（同卡另有一个 15 天前起的推理服务常驻，占 12 GB、GPU 利用率 0），八个分区并行，`uptime` 一分钟负载在 **7.7–22** 之间。关键数字都取了两到三次独立运行：warp 的 `reduce` 角色 568.3 / 566.7 / 571.5 us（离散 0.85%），整步 21.38 / 21.28 / 21.19 ms |
+| 新增可复用件 | `cuda-reduction-strategy-comparison/reduce_ab.py`（同进程内两条策略的时间 + 对 float64 的误差，两套形状集）；`profile_step_torch.py --attribute`（kernel → aten 算子栈归属）；`profile_step.py --compile-option`（`para_opt_level` 这类不进 jit key 的 flag 必须配它）与 `build()` 的 `set_global_seed` |
 
 ## 7. 接手怎么开始
 
