@@ -131,6 +131,18 @@ REAL_TORCH_PYTHON -m ... python profile_step_torch.py --out torch.json
 python classify.py torch torch.json
 ```
 
+**按 kernel 符号名分桶只够用来看逐元素。** 一个模板化的符号会同时服务好几个不相干的
+算子（`reduce_kernel<...sum_functor...>` 既是卷积偏置梯度也是普通 `sum`），
+而符号名里出现 `Norm` 的可能是纯逐元素的写回。要按语义配对就加 `--attribute`：
+
+```bash
+REAL_TORCH_PYTHON ... profile_step_torch.py --out torch_attr.json --attribute --steps 3
+```
+
+它额外记 CPU 活动，用 `correlation` 把每个 kernel 接回发起它的 aten 算子栈
+（外到内，例如 `aten::convolution_backward>aten::sum`）。**这一次只用来定身份，
+时间仍用不带 `--attribute` 的那次**——记 CPU 活动会让整步多出 1 ms 以上。
+
 PyTorch 的 `other` 一类（GroupNorm 的 `ComputeInternalGradientsCUDAKernel` 之流）
 **要计入逐元素类**——计划里「PyTorch 的 3.07 ms」正是 `elementwise + other`
 （本机实测 2.20 + 0.84 = 3.04 ms）。把它漏掉会让 PyTorch 看起来快 27%。
@@ -157,9 +169,15 @@ reduce/norm 1.20、other 0.84。
 1. **逐元素类整体已经贴着屋顶线**（1086 GB/s，ratio 0.84）。「只有峰值一半」
    这个说法在今天的树上不成立。想让这一类更快，唯一的方向是**少搬字节**
    （更好的融合、不物化中间量），不是「把 kernel 写得更快」。
-2. **归约类今天已经比 PyTorch 快一倍以上**（0.57 对 1.20 ms）——`WarpReducePass`
-   之后的事。3.22 的验收目标「不慢于 PyTorch 的 1.13 ms」看起来已经达到，
-   但它的口径把 GroupNorm 的归约算在 `handwritten:code` 里，引用前先看第 5 节。
+2. ~~**归约类今天已经比 PyTorch 快一倍以上**（0.57 对 1.20 ms）。~~
+   **这条已被推翻，不要再引用**（2026-09-06 对齐口径后复核）。两个桶装的东西几乎
+   没有交集：Jittor 的 0.57 ms 只有代码生成器的归约，PyTorch 的 1.20 ms 是 0.65 ms
+   真归约加 0.47 ms 被误归类的 GroupNorm 逐元素写回，而 PyTorch 的 GroupNorm 统计量
+   归约 0.74 ms 落在 `other` 里。按语义配对并核对调用次数之后是 **Jittor 2.54 ms 对
+   PyTorch 1.93 ms，慢 32%**。全套口径与配对表在
+   `cuda-reduction-strategy-comparison` 的「口径」一节。
+   **`classify_torch` 的 `reduce/norm` 与 `other` 两桶只对逐元素分析够用**，
+   要谈归约必须换那套口径。
 
 ## 7. 逐 kernel 归因：按「超出下界的量」排序，不要按耗时排序
 
@@ -202,11 +220,18 @@ reduce/norm 1.20、other 0.84。
 before/after 必须是**同一个脚本、同一台卡、同一个 `--tag` 之外全同**的两次
 `profile_step.py --mode profiler`，并且：
 
-- `grad_checksum` 与 `loss` 两个值都会打印出来。**数值先看这两个**，
-  改生成代码最容易的失败模式是「快了但算错了」，只看时间的对比毫无意义。
-- 每一轮换一个只进 jit key、不进生成文本的标记（`--flag` 加一个整数 flag），
-  否则第二轮直接命中缓存里第一轮的 `.cc`，diff 全绿而你什么都没测到
-  （见 `jittor-core-cpp-edit-loop` §7）。
+- `grad_checksum` 与 `loss` 两个值都会打印出来，**但它们只是量级哨兵，不是数值判据**。
+  `build()` 现在会 `jt.set_global_seed`（不加的话每个进程权重都不同，两次根本没法比），
+  即便如此**跨进程仍不是位精确的**：卷积算法选择随负载变化，而
+  `(output*weights).sum()` 这种 loss 抵消掉约 16 倍量级，输出上 3e-4 的差异在 loss 上
+  就是 0.5%。实测同一配置两次 13.718 / 13.653。真数值判据要么是逐算子对更高精度参考
+  （归约见 `cuda-reduction-strategy-comparison/reduce_ab.py`），要么是同进程内 A/B。
+- 每一轮换一个只进 jit key、不进生成文本的标记，否则第二轮直接命中缓存里第一轮的
+  `.cc`，diff 全绿而你什么都没测到（见 `jittor-core-cpp-edit-loop` §7）。
+  **注意 `--flag` 未必够**：`jt.flags` 里只有一部分进 jit key，`para_opt_level`
+  就不进（key 里的 `«choices:` 段只收 `loop_options`，见 `fused_op.cc` 的
+  `do_jit_prepare`）。改这类 flag 要同时给 `--compile-option name=int`，
+  否则第二轮量到的是第一轮的 kernel，而且完全没有提示。
 - 生成源码的逐字节 diff 与 profiler 数字一起放进提交说明。
 
 ## 10. 已知会挡路的东西

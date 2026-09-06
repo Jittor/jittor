@@ -1,6 +1,6 @@
 ---
 name: cuda-reduction-strategy-comparison
-description: 比较 Jittor CUDA 归约的三条策略（每线程原子、warp shuffle 归约、块内共享内存树形归约）该用哪条，以及怎么把它们量准。用于改 WarpReducePass / SharedReducePass / ReduceTuner、调 para_opt_level、或怀疑某个归约 kernel 慢的场合。含四种配置的实测数、切换开关的准确写法、以及为什么手写的 wall-clock 微基准在这里必然测错。
+description: 比较 Jittor CUDA 归约的三条策略（每线程原子、warp shuffle 归约、块内共享内存树形归约）该用哪条，以及怎么把它们量准。用于改 WarpReducePass / SharedReducePass / ReduceTuner、调 para_opt_level、或怀疑某个归约 kernel 慢的场合。含四种配置的实测数、切换开关的准确写法、为什么手写的 wall-clock 微基准在这里必然测错、以及「Jittor 的归约比 PyTorch 快/慢多少」这句话该怎么对齐口径才成立。
 ---
 
 # CUDA 归约：三条策略，怎么选，怎么量
@@ -53,6 +53,55 @@ jt.flags.compile_options = {"no_warp_reduce": 1}   # 关 WarpReducePass
    实测每 kernel 多花 1.3–1.9us。判据：lvl 4 的源码里同时出现 `shared_reduce<`
    与 `_wr_mask` 就是踩上了。
 
+## 拿哪些形状去量：合成的四个形状和真实网络的七个形状答案相反
+
+`reduce_ab.py` 把两条策略在同一个进程里对同一批张量跑一遍，同时给设备时间和相对
+float64 的误差（归约改的是求和顺序，只有时间的表毫无意义）：
+
+```bash
+python reduce_ab.py --shapes unet             # UNet 一步真正用到的七种归约
+python reduce_ab.py --shapes representative   # 上一节那四个合成形状
+```
+
+RTX 4090、best-of-30、同一次运行内（2026-09-06 实测）：
+
+| 形状集 | warp 合计 | 块内混合合计 | 混合 / warp |
+| --- | ---: | ---: | ---: |
+| `representative`（8×384×32×32 一类，归约 (0,2,3)） | 64.50us | 73.91us | **1.146** |
+| `unet`（下表七种） | 91.08us | 88.21us | **0.968** |
+
+**两者方向相反，而且相反得有道理。** 合成那四个形状只有 64–384 个输出、每个输出上百
+万个元素；块内路径给一个输出一个 block，于是整卡只跑 64–384 个 block，SM 喂不饱。
+真实 UNet 的归约输出多、每个输出短，正好是块内路径合适的形状。
+
+**推论：拿"代表形状"下结论之前，先用 `profiler_record_shape=1` 把目标负载真正用到的
+形状读出来。**（怎么读：`cuda-elementwise-bandwidth-roofline` §8。）
+
+`large_diffusers_unet2d` 一步里代码生成器发出的全部归约，就是 `--shapes unet` 那张表：
+
+| 形状 | 归约维 | 每步次数 | 是什么 |
+| --- | --- | ---: | --- |
+| `[4,256,384]` | 0,1 | 24 | 注意力块里线性层的偏置梯度 |
+| `[4,128,64,64]` / `[4,384,16,16]` / `[4,256,32,32]` | 2,3 | 17 | ResnetBlock 里 `hidden + temb[:,:,None,None]` 的广播梯度 |
+| `[4,C]` | 0 | 19 | 时间嵌入线性层的偏置梯度 |
+| `[4,384,256]` | 0,2 | 6 | 注意力输出投影的偏置梯度 |
+| `[4,32,12,256]`（`mean`） | 2,3 | 18 | **六个注意力 GroupNorm 的回退**，见下面的口径一节 |
+
+## 不要用整网梯度 diff 当归约改动的数值判据
+
+默认的 warp 路径结尾是每 warp 一次 `atomicAdd`，求和顺序本来就每次不同。实测在
+`large_diffusers_unet2d` 一步上：**同一条策略跑两遍**，270 个梯度里最坏的
+`max|Δ|/max|g|` 是 **1.8**；warp 与块内两条策略之间是 **1.6**。自噪声比信号还大，
+这个对比什么都判不出来。
+
+同理，跨进程比 `loss` / `grad_checksum` 也不行：即便 `jt.set_global_seed` 之后模型
+权重一致，卷积算法选择随负载变化，而 `(output*weights).sum()` 这种 loss 会抵消掉约
+16 倍量级，于是输出上 3e-4 的差异在 loss 上就是 0.5%。实测同一配置两次 loss
+13.718 与 13.653。
+
+**能判的只有一种：逐形状对更高精度的参考。**`reduce_ab.py` 用 float64 的 numpy 做
+参考，上面十一种形状两条策略的相对误差都 ≤ 6.9e-7。
+
 ## 3.22 两级混合路径复测（2026-09-03）
 
 把旧的 1024 项共享树改成“两级 warp shuffle，中间只交换每 warp 一个值”后，level 4
@@ -67,9 +116,90 @@ jt.flags.compile_options = {"no_warp_reduce": 1}   # 关 WarpReducePass
 | 合计 | **74.23us** | 75.45us | **1.016** |
 
 两边相对 NumPy 误差均不超过 `3.7e-7`，生成源码分别命中 `_wr_mask` 与
-`shared_reduce<`/`if (threadIdx.x == 0)`。混合路径前三形状略快，但第四形状退化
-16.6%，合计慢 1.64%，所以**不得改成默认**；它保留在 `para_opt_level >= 4` 供继续实验。
-3.22 只有在代表形状不退化并满足完整 UNet 归约性能终点后才能关闭。
+`shared_reduce<`/`if (threadIdx.x == 0)`。
+
+**这张表的结论在 2026-09-06 被真实负载推翻了一半。** 上面那四个形状不是
+`large_diffusers_unet2d` 用的形状（见「拿哪些形状去量」一节）。在整网上直接量
+——`profile_step.py --flag para_opt_level=4 --compile-option reduce_lvl4=1`，
+`classify.py` 的 `reduce` 角色：
+
+| 配置 | reduce 角色 | 整步 |
+| --- | ---: | ---: |
+| warp 默认（三次独立运行） | 568.3 / 566.7 / **571.5**us | 21378 / 21279 / 21187us |
+| 块内混合 level 4 | **527.9**us | 21345us |
+
+即混合路径在真实 UNet 上**快 7.1–7.6%**，与 `reduce_ab.py --shapes unet` 的 0.968
+同向。
+
+**即便如此也没改默认**，理由换了一条：省下的 40us 是整步的 0.19%，也只占对齐口径下
+与 PyTorch 归约差距（616us）的 6.5%，够不到 3.22 的验收；而在输出少、每输出长的形状
+上它仍慢到 1.39 倍，翻默认会伤到别的负载；`para_opt_level=4` 又是个粗开关，同时改了
+AtomicTunerPass 的行为，本来就不是"只开 SharedReducePass"的干净方式。它保留在
+`para_opt_level >= 4` 作为 opt-in。
+
+## 口径：说「Jittor 的归约比 PyTorch 快/慢」之前必须先对齐
+
+这是 3.22 收口时踩到的坑，值得单独记：**两个框架把"归约"切成 kernel 的方式完全不同，
+按 kernel 名字分桶得到的两个数可以几乎没有交集。**
+
+3.23 留下的一句结论是「归约类 Jittor 0.57ms 对 PyTorch 1.20ms，快一倍以上」。
+2026-09-06 把两个桶各自拆开看，它们装的是：
+
+- **Jittor 的 0.57ms** = 代码生成器的 `reduce` 角色，仅此而已。其中 0.49ms 是通用求和，
+  0.08ms 是六个注意力 GroupNorm 的回退。**不含**手写的 GroupNorm（1.72ms）、
+  不含手写的卷积偏置梯度 `channel_bias_backward`（0.26ms）、不含手写 softmax（1.59ms）。
+- **PyTorch 的 1.12–1.20ms** = `classify_torch` 的 `reduce/norm` 桶 = 0.65ms 真归约
+  （两族 `reduce_kernel<...sum_functor...>`）**加上** 0.47ms 的 GroupNorm **逐元素仿射
+  写回**——三个 `GroupNorm*KernelImplInternal` 的 `elementwise_kernel`，只因为符号名里
+  有 "Norm" 就被归进了归约。而 PyTorch 真正的 GroupNorm **统计量归约**
+  （`RowwiseMomentsCUDAKernel`、`ComputeInternalGradientsCUDAKernel`、
+  `GammaBetaBackwardCUDAKernel1`、`ComputeBackwardFusedParamsCUDAKernel`，合 0.74ms）
+  一个都不在这个桶里，它们落在 `other`。
+
+### 对齐的做法：按语义配对，并核对次数
+
+用 `profile_step_torch.py --attribute` 拿到每个 CUDA kernel 是哪个 aten 算子发的
+（一个 `reduce_kernel` 符号同时服务卷积偏置梯度和普通 `sum`，只看符号名分不开），
+再和 Jittor 侧按语义配对。**配对成立的判据是每步调用次数对得上**：
+
+| 语义 | Jittor | PyTorch | 次数 |
+| --- | --- | --- | --- |
+| 卷积偏置梯度 | 手写 `channel_bias_backward` | `aten::convolution_backward>aten::sum` | **51 : 51** |
+| 其余通用求和 | 代码生成 `reduce` 的 66 次 + `full_reduce_*` | 裸 `aten::sum` 61 次 + 注意力反向的 sum 6 次 | **67 : 67** |
+| GroupNorm（统计量 + 仿射写回） | 手写 `group_norm_{forward,backward_x,backward_affine}` 35 个 + 代码生成回退 6 个 | `aten::native_group_norm(_backward)` 的八种 kernel | **41 : 41** |
+
+三行的次数全部对上，这个划分才可以引用。
+
+融合与不融合的一侧要整体对整体：Jittor 的 `group_norm_forward` 一个 kernel 里做完两次
+块归约再写回，PyTorch 拆成 `RowwiseMoments` + `ComputeFusedParams` + 一个 apply，
+所以只能三个一起算，不能只挑「统计量」那部分比。
+
+### 对齐后的实测（RTX 4090、TF32、UNet 一步、2026-09-06）
+
+| 类别 | Jittor（profiler / nsys） | PyTorch 2.12.1（CUPTI） |
+| --- | ---: | ---: |
+| 卷积偏置梯度 | 257.9 / 363.6us | ┐ |
+| 其余通用求和 | 491.5 / — us | ┘ 合计 652.6us |
+| 通用求和小计 | **749.4us** | **652.6us** |
+| GroupNorm 全部 | **1794.8us** | **1275.5us** |
+| **归约类合计** | **2544.2us** | **1928.1us** |
+
+**Jittor 慢 616us（32%）**，不是「快一倍以上」。整步 21.38 / 23.09ms 对 21.11ms，
+两边总量在 1.3% 以内，所以桶之间的差是可比的。
+
+**差距的 84% 在 GroupNorm**（519us），其中 1715us 跑在
+`backends/cuda/kernels/nn/group_norm_cuda.py` 的手写 CUDA 里，**不在代码生成器里**；
+通用求和那一栏只差 97us（15%）。所以「给代码生成的归约加块内树形归约」这条路
+最多够到 616us 里的 40us。
+
+### 不可对齐的一项要单列，不要塞进合计
+
+Jittor 手写的 attention softmax（`softmax_cuda.py`，前后向 1586 / 1411us）在
+PyTorch 侧**没有对应的独立 kernel**：PyTorch 走 memory-efficient attention，softmax
+在 `fmha_cutlassF/B` 内部，和 QK^T、PV 两个矩阵乘同在一个 kernel（合 3081us）。
+把它计进任何一边都会让对比失真，只能单列并说明原因。
+
+## 3.22 两级混合路径复测（2026-09-03）
 
 ## 怎么量：不要写 wall-clock 微基准
 

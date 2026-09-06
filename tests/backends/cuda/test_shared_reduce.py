@@ -25,6 +25,7 @@ import unittest
 import numpy as np
 
 import jittor as jt
+from jittor_utils.backend_resources import backend_root
 
 
 @unittest.skipIf(not jt.has_cuda, "No cuda found")
@@ -73,8 +74,15 @@ class TestSharedReduce(unittest.TestCase):
         self.assertNotIn("_wr_mask", source)
 
     def test_shared_reduce_helper_is_two_stage(self):
-        path = os.path.join(jt.compiler.jittor_path, "src", "type", "cuda_atomic.h")
+        # The helper lives with the CUDA backend's kernel sources, not under
+        # python/jittor/src: `fd4d8820d` moved it there and left this assertion
+        # pointing at a src/type/cuda_atomic.h that still exists but no longer
+        # defines shared_reduce. Ask the build for the directory it compiles
+        # rather than spelling a path, so the next move fails loudly instead.
+        path = os.path.join(backend_root(jt.compiler.jittor_path, "cuda"),
+                            "kernels", "core", "cuda_atomic.h")
         source = open(path).read()
+        self.assertIn("inline static T shared_reduce(T u)", source)
         body = source.split("inline static T shared_reduce(T u)", 1)[1]
         body = body.split("\n}\n", 1)[0]
         cuda_body = body.split("#else", 1)[1].split("#endif", 1)[0]
@@ -103,6 +111,29 @@ class TestSharedReduce(unittest.TestCase):
         )):
             with self.subTest(shape=shape, dims=dims):
                 source, error = self._reduce(shape, dims, 10 + index)
+                self.assertLess(error, 1e-5)
+
+    def test_values_match_on_the_unet_reduction_shapes(self):
+        # Every reduction the code generator emits for one step of
+        # large_diffusers_unet2d, read off the profiler with
+        # profiler_record_shape=1 (see the caliber section of
+        # cuda-reduction-strategy-comparison). These are the shapes 3.22's
+        # acceptance is measured on, so the block path has to be right on them
+        # and not only on round synthetic ones.
+        jt.flags.para_opt_level = 4
+        for index, (shape, dims) in enumerate((
+            ((4, 256, 384), (0, 1)),      # linear bias gradients, 24 per step
+            ((4, 128, 64, 64), (2, 3)),   # time-embedding broadcast gradients
+            ((4, 384, 16, 16), (2, 3)),
+            ((4, 256, 32, 32), (2, 3)),
+            ((4, 384), (0,)),             # time-embedding linear bias gradient
+            ((4, 384, 256), (0, 2)),
+            ((4, 32, 12, 256), (2, 3)),   # the six attention GroupNorms that
+                                          # fall back to the code generator
+        )):
+            with self.subTest(shape=shape, dims=dims):
+                source, error = self._reduce(shape, dims, 30 + index)
+                self.assertIn("shared_reduce<", source)
                 self.assertLess(error, 1e-5)
 
     def test_gradient_through_the_block_reduction(self):

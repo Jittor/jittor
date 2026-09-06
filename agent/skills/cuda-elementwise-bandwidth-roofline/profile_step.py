@@ -49,6 +49,11 @@ def primary(result):
 
 
 def build(case, seed):
+    # The speed-gate builders do not seed, so without this every process gets
+    # different weights and the loss / grad_checksum printed below cannot be
+    # compared between a before run and an after run -- which is the only
+    # numerical guard this script has.
+    jt.set_global_seed(seed)
     builder, _ = _ecosystem_speed.CASES[case]
     model, spec = builder(torch)
     model.eval()
@@ -78,6 +83,11 @@ def main():
     parser.add_argument("--tag", default="")
     parser.add_argument("--flag", action="append", default=[],
                         help="name=int jt.flags override applied before the step")
+    parser.add_argument("--compile-option", action="append", default=[],
+                        help="name=int entry for jt.flags.compile_options. Flags such "
+                             "as para_opt_level do NOT enter the jit key, so changing "
+                             "one alone reuses the previous run's cached kernels; pass "
+                             "a distinct compile option alongside it")
     options = parser.parse_args()
 
     jt.flags.use_cuda = 1
@@ -88,6 +98,12 @@ def main():
     for entry in options.flag:
         name, _, value = entry.partition("=")
         setattr(jt.flags, name, int(value))
+    if options.compile_option:
+        choices = dict(jt.flags.compile_options)
+        for entry in options.compile_option:
+            name, _, value = entry.partition("=")
+            choices[name] = int(value)
+        jt.flags.compile_options = choices
 
     model, inputs = build(options.case, 11)
     parameters = list(model.parameters())
@@ -143,6 +159,7 @@ def main():
         "case": options.case,
         "tag": options.tag,
         "flags": options.flag,
+        "compile_options": options.compile_option,
         "loss": reference,
         "grad_checksum": checksum,
         "rerun": options.rerun,
