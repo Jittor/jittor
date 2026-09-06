@@ -101,7 +101,7 @@ void MatmulTuner::run(PassManager* pm, TunerManager* tm) {
             backend, OpCapability::Matmul, xx, yy, t1, t2);
         if (!make_matmul) continue;
         auto rvar = make_matmul(xx, yy, t1, t2);
-        auto rid = fop->context->vrm.add_relay_group({{rvar, rop->y}});
+        auto rid = fop->context->vrm.add_relay_group(fop, {{rvar, rop->y}});
         auto srid = "relay"+S(rid);
         add_candidate(srid, 1);
         add_candidate(srid, 0);

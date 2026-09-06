@@ -16,7 +16,7 @@ OWNERS = {
              "intrin.h", "cuda_atomic.h", "cuda_limits.h", "nano_string.h",
              "nano_string.cc", "nano_vector.h"),
     "utils": ("cstr.h", "deleter.h", "fast_shared_ptr.h", "hash.h",
-              "stack_vector.h", "string_view_map.h"),
+              "stack_vector.h", "jit_cache_map.h"),
     "third_party": ("miniz.h", "miniz.cc"),
 }
 

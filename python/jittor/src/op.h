@@ -8,7 +8,7 @@
 #include "common.h"
 #include "node.h"
 #include "jit_key.h"
-#include "utils/string_view_map.h"
+#include "utils/jit_cache_map.h"
 #include "ops/op_dispatch.h"
 
 namespace jittor {
@@ -88,9 +88,14 @@ struct Op : Node {
 
 std::ostream& operator<<(std::ostream& os, const Op* var);
 
-EXTERN_LIB string_view_map<jit_op_entry_t> jit_ops;
-// jit_key_mapper: map origin jit_key -> tuned jit_key
-EXTERN_LIB string_view_map<string> jit_key_mapper;
+// The two process-wide kernel caches for non-fused ops: the compiled entry
+// point by jit key, and the map from the key an op prepares to the key its
+// tuned kernel was actually compiled under.
+//
+// Bounded, and keyed by owned strings. They used to be `string_view_map`s,
+// which had neither property: see utils/jit_cache_map.h.
+EXTERN_LIB jit_cache_map<jit_op_entry_t> jit_ops;
+EXTERN_LIB jit_cache_map<string> jit_key_mapper;
 
 #ifdef JIT
     #define DECLARE_jit_run void jit_run();

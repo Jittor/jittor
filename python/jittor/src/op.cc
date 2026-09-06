@@ -29,8 +29,16 @@ DECLARE_FLAG(string, cache_path);
 DEFINE_FLAG(int, try_use_32bit_index, 0,
     "If not overflow, try to use 32 bit type as index type.");
 
-string_view_map<jit_op_entry_t> jit_ops;
-string_view_map<string> jit_key_mapper;
+DEFINE_FLAG(int, jit_cache_size, 4096,
+    "Entries each of the three kernel caches keeps (jit_ops, jit_key_mapper, "
+    "jit_fused_ops). Reaching it drops the least recently used entry, which "
+    "costs one disk-cache lookup the next time that key comes back, not a "
+    "recompile from source. These tables had no bound at all before 3.03, so a "
+    "workload whose shapes keep changing grew them -- and one never-freed "
+    "FusedOpContext per fused entry -- for the life of the process.");
+
+jit_cache_map<jit_op_entry_t> jit_ops;
+jit_cache_map<string> jit_key_mapper;
 
 int64 Op::number_of_lived_ops = 0;
 int64 Op::number_of_created_ops = 0;
@@ -426,8 +434,8 @@ void Op::run_registered() {
 void Op::do_run() { run_registered(); }
 
 string Op::get_filename_from_jit_key(const string& jit_key, const string& suffix) {
-    auto iter = jit_key_mapper.find(jit_key);
-    string s = iter==jit_key_mapper.end() ? jit_key : iter->second;
+    auto* tuned = jit_key_mapper.find(jit_key);
+    string s = tuned ? *tuned : jit_key;
     std::stringstream ss;
     if (s.size() > 100) {
         ss << s.substr(0, 90) << "...hash_"
@@ -478,10 +486,9 @@ void Op::jit_run(JK& jk) {
     // Own the lookup key before any subsequent preparation can reuse JK's
     // thread-local scratch buffer.  Cache keys must not borrow that storage.
     string jit_key = jk.to_string();
-    auto iter = jit_ops.find(string_view(jit_key.data(), jit_key.size()));
-    if (iter != jit_ops.end()) {
-        LOGvvv <<  "Jit op key found:" << jit_key << "jit op entry:" << (void*)iter->second;
-        Profiler::record_and_run(iter->second, this, jit_key.c_str());
+    if (auto* cached = jit_ops.find(jit_key)) {
+        LOGvvv <<  "Jit op key found:" << jit_key << "jit op entry:" << (void*)*cached;
+        Profiler::record_and_run(*cached, this, jit_key.c_str());
         return;
     }
     LOGvv << "Jit op key not found:" << jit_key;
@@ -489,7 +496,12 @@ void Op::jit_run(JK& jk) {
     string prev_jit_key = jit_key;
     auto op_entry = OpCompiler::do_compile(this);
     string new_jit_key = get_jit_key(jk);
-    jit_ops[new_jit_key] = jit_ops[prev_jit_key] = op_entry;
+    // Two statements, not `jit_ops[a] = jit_ops[b] = entry`. The tables are
+    // bounded now, so an insertion can evict -- and since C++17 the right
+    // operand of an assignment is sequenced first, the reference the inner
+    // subscript returned would be read after the outer one had erased it.
+    jit_ops[prev_jit_key] = op_entry;
+    jit_ops[new_jit_key] = op_entry;
     jit_key_mapper[prev_jit_key] = new_jit_key;
     LOGvv << "Get jit op entry:" << (void*)op_entry;
     Profiler::record_and_run(op_entry, this, new_jit_key.c_str());

@@ -441,14 +441,11 @@ void TraceData::record_execution(Op* op, bool is_fused_op, JK& jk) {
     }
     op->prepare_execution(jk);
     if (jk.empty()) return;
-    const char* jit_key = jk.to_cstring();
-    auto iter = jit_key_mapper.find(jit_key);
-    if (iter == jit_key_mapper.end())
-        einfo.jit_key = jit_key;
-    else
-        einfo.jit_key = iter->second;
+    string jit_key = jk.to_string();
+    auto* tuned = jit_key_mapper.find(jit_key);
+    einfo.jit_key = tuned ? *tuned : jit_key;
     jit_key_map[einfo.jit_key].push_back(execute_op_info_cnt-1);
-    einfo.file_path = Op::get_filename_from_jit_key(jk.to_cstring(), ".cc");
+    einfo.file_path = Op::get_filename_from_jit_key(jit_key, ".cc");
 }
 
 template<class T>

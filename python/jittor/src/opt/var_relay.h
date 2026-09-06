@@ -42,21 +42,31 @@ struct VarRelayGroup {
     ~VarRelayGroup();
 };
 
+// Lives inside a `FusedOpContext`, which the kernel cache keeps for the life
+// of the process and hands to every later fusion with the same jit key.
+//
+// So it does not hold a `FusedOp*`. It used to: `FusedOpContext::setup` stored
+// one, and it pointed either at `run_sync`'s stack `FusedOp` -- gone as soon as
+// that batch finished -- or, on the parallel-compile path, at a heap copy that
+// `parallel_compile_all_ops` destroyed when it returned. What hid this was
+// `FusedOp::execute_fused_prepared` overwriting the field with `this` on every
+// cache hit, so the dangling pointer was replaced just before anything read
+// it. The two methods that need a FusedOp both run at compile time and both
+// have one to hand, so they take it as an argument.
 struct VarRelayManager {
-    FusedOp* fop = nullptr;
     vector<VarRelayGroup> relay_groups;
-    
-    void set_fused_op(FusedOp* fop) {this->fop=fop;}
-    /* add_relay_group: add relay group into current fused_op
+
+    /* add_relay_group: add relay group into `fop`
         group: list of pair of source and target vars
         return: relay group id
      */
-    int add_relay_group(const vector<pair<Var*, Var*>>& group);
+    int add_relay_group(FusedOp* fop, const vector<pair<Var*, Var*>>& group);
     /* get_op_relay_info
         relay_switches: switches control the on or off of each relay
         return: relay group id and op id
      */
-    vector<pair<int,int>> get_op_relay_info(const vector<bool>& relay_switches);
+    vector<pair<int,int>> get_op_relay_info(
+        FusedOp* fop, const vector<bool>& relay_switches);
 
     string get_relay_src(int group_id, int op_id);
 };

@@ -237,9 +237,13 @@ void Profiler::record_and_run(
     if (!profiler_enable)
         jit_entry(op);
     else {
-        auto ikey=jit_key_mapper.find(jit_key);
-        const char* key = ikey==jit_key_mapper.end() ?
-            jit_key : ikey->second.c_str();
+        // A copy, not a pointer into the table: `jit_entry` below runs the
+        // kernel, which can compile relay ops and insert -- and an insertion
+        // into a bounded cache can evict the entry this pointed into.
+        string tuned_key = jit_key;
+        if (auto* tuned = jit_key_mapper.find(tuned_key))
+            tuned_key = *tuned;
+        const char* key = tuned_key.c_str();
         bool is_fused = op->is_op(op_ids::fused());
         string marks = get_marks(op, is_fused);
         string new_key;

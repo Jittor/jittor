@@ -26,7 +26,7 @@ RUNTIME_FLAGS = frozenset((
     "log_op_hash", "para_opt_level", "l1_cache_size", "rewrite_op",
     "jit_search_kernel", "jit_search_warmup", "jit_search_rerun",
     "jit_search_timeout", "jit_search_max_candidates", "jit_key_max_size",
-    "gdb_path", "addr2line_path",
+    "jit_cache_size", "gdb_path", "addr2line_path",
     "extra_gdb_cmd", "has_pybt", "trace_depth", "gdb_trace_timeout", "gdb_attach",
     "trace_py_var", "trace_var_data", "log_sync", "log_silent", "log_v",
     "log_vprefix", "log_file",

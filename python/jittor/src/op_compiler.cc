@@ -895,7 +895,7 @@ string OpCompiler::get_fused_src(FusedOp* op) {
             op->loop_options->at(relay_key) == 1)
             relay_switch[i] = 1;
     }
-    auto relay_source = op->context->vrm.get_op_relay_info(relay_switch);
+    auto relay_source = op->context->vrm.get_op_relay_info(op, relay_switch);
     std::set<pair<int,int>> relayed;
     for (uint oi=0; oi<op->ops.size(); oi++) {
         // relay group id, pair id

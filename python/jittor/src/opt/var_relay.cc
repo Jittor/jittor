@@ -32,7 +32,7 @@ VarRelayGroup::~VarRelayGroup() {
             Op::number_of_lived_ops++;
 }
 
-int VarRelayManager::add_relay_group(const vector<pair<Var*, Var*>>& group) {
+int VarRelayManager::add_relay_group(FusedOp* fop, const vector<pair<Var*, Var*>>& group) {
     for (auto& g : relay_groups)
         for (auto& p : g.relayed_pairs)
             for (auto& p2 : group)
@@ -112,7 +112,8 @@ int VarRelayManager::add_relay_group(const vector<pair<Var*, Var*>>& group) {
     return (int)relay_groups.size()-1;
 }
 
-vector<pair<int,int>> VarRelayManager::get_op_relay_info(const vector<bool>& relay_switches) {
+vector<pair<int,int>> VarRelayManager::get_op_relay_info(
+        FusedOp* fop, const vector<bool>& relay_switches) {
     ASSERT(relay_switches.size()==relay_groups.size());
     auto num = fop->ops.size()+fop->vars.size();
     auto node_id = [&](Node* node) -> int {

@@ -81,9 +81,10 @@ JIT_TEST(fused_op_relay_matmul) {
     CHECKop(ops.size(),==,4);
     for (auto op : ops) op->do_jit_prepare(jk);
     FusedOp fop;
+    // A stack context, so `fop.context_owner` stays null: the cache is not
+    // involved here.
     FusedOpContext context;
     fop.context = &context;
-    context.vrm.set_fused_op(&fop);
     for (uint i=0; i<ops.size(); i++)
         fop.ops.push_back(ops.at(ops.size()-i-1));
     fop.batch_var_fused = &var_fused;
@@ -96,9 +97,9 @@ JIT_TEST(fused_op_relay_matmul) {
         .get_constructor<VarPtr, Var*, Var*, bool, bool>();
     auto rvar = make_matmul(a, b, 0, 0);
 
-    fop.context->vrm.add_relay_group({{rvar, d}});
+    fop.context->vrm.add_relay_group(&fop, {{rvar, d}});
     CHECKop(context.vrm.relay_groups[0].removed_input_vars.size(),==,2);
-    auto is_op_relayed = context.vrm.get_op_relay_info({1});
+    auto is_op_relayed = context.vrm.get_op_relay_info(&fop, {1});
     for (auto v : is_op_relayed) CHECK(v.first==0 && v.second==0);
 
     // test2
@@ -108,7 +109,7 @@ JIT_TEST(fused_op_relay_matmul) {
     fop_cannot_fuse(var_fused, batch_stamp, {fop.vars[1].var});
     fop.update_ops();
     context.setup(&fop);
-    is_op_relayed = context.vrm.get_op_relay_info({1});
+    is_op_relayed = context.vrm.get_op_relay_info(&fop, {1});
     vector<pair<int,int>> ans{{-1,-1},{0,0},{0,0},{0,0}};
     CHECKop(is_op_relayed,==,ans);
     auto& oprc = context.vrm.relay_groups[0].oprcs[0];

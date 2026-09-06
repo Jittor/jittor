@@ -1,6 +1,6 @@
 ---
 name: jittor-core-cpp-edit-loop
-description: 改 python/jittor/src 下 C++ 核心时的编辑—重编—验证循环。包含隔离缓存与解释器选树的自检、把重编从 ~10 分钟压到 ~30 秒的 CPU-only 循环、每次 C++ 改动后第一次 pytest 必然失败的"jit_utils updated"陷阱、"读到未初始化字节"这类静默错值的复现判据、怎么给 UB 类改动找到可达后果、把守护页/崩溃换成可捕获错误的四个必查项，并在禁止 git stash 的前提下跑出「修前失败」那一轮。
+description: 改 python/jittor/src 下 C++ 核心时的编辑—重编—验证循环。包含隔离缓存与解释器选树的自检、把重编从 ~10 分钟压到 ~30 秒的 CPU-only 循环、每次 C++ 改动后第一次 pytest 必然失败的"jit_utils updated"陷阱、"读到未初始化字节"这类静默错值的复现判据、怎么给 UB 类改动找到可达后果（以及缺陷在几乎无依赖的头文件里时直接单编它跑 ASan 这条捷径）、把守护页/崩溃换成可捕获错误的四个必查项、给只长不消的缓存表加容量上限时会变成 UB 的三处调用写法，并在禁止 git stash 的前提下跑出「修前失败」那一轮。
 ---
 
 # 改 Jittor C++ 核心的验证循环
@@ -302,6 +302,70 @@ done
    意义的粒度。
 
 收益写进提交说明的方式：这条用例从「子进程 + 断言退出码」变成了本进程里一条普通用例。
+
+## 7quater. 缺陷在一个几乎没有依赖的头文件里：别找可达后果，单独编它跑 ASan
+
+§7 整节都在教「怎么绕开 UB 没有稳定表现这件事」。有一类缺陷不用绕：**当出错的代码是一个
+除了 `common.h` 几乎什么都不 include 的头文件时，你可以把它单独编出来，用
+`-fsanitize=address` 直接看**。不需要建 jittor，不需要 cfg 目录，一次编译加运行不到一秒，
+而它给出的是「heap-use-after-free，栈顶是 `find`，释放点是
+`vector<string>::_M_realloc_insert`」这种没法争辩的东西。
+
+这棵树上能用的编译命令（抄自 `tests/structure/test_shared_backend_consumers.py`，
+`-I` 两个就够，**不需要生成的 cfg 目录**）：
+
+```bash
+PYINC=$(python -c 'import sysconfig;print(sysconfig.get_path("include"))')
+g++ -std=c++14 -g -O0 -fsanitize=address case.cc -o case \
+    -I python/jittor/src -I "$PYINC"
+ASAN_OPTIONS=detect_leaks=0 ./case
+```
+
+四件必须做的事：
+
+1. **把它变成常驻用例，不要跑一次就扔。** 3.03 落成
+   `tests/compiler/test_jit_cache_map_asan.py`：编译 `utils/jit_cache_map.h`、跑场景、
+   断言输出里没有 `AddressSanitizer`。
+2. **给这个用例装牙齿：同一个文件里再编一份「修之前那个写法」，断言 ASan 抓得到它。**
+   否则 libasan 缺失、场景根本没触发缺陷、`-fsanitize=address` 被忽略——三种情况下第一条
+   都会漂亮地通过。牙齿那一条把「检查器是活的」也变成断言的一部分。
+3. **`detect_leaks=0`**。旧写法按构造就漏（那张表从来没有 erase），LeakSanitizer 的报告
+   会把真正要看的 use-after-free 埋掉；ASan 默认在第一条报告处就停，所以旧写法那一份
+   跑不到自检的计数循环，判据只能用「有 ASan 报告 + 退出码非零」。
+4. **头文件的「几乎无依赖」是可测性的前提，要写进头文件里。** 不写的话下一个人顺手加一个
+   include，这个用例就再也编不出来，而且不会有任何提示。真的需要一个 flag 时，
+   用 `DECLARE_FLAG` 让它只是一个 extern 符号，由单编的那个 case 自己给一行定义
+   （`namespace jittor { int jit_cache_size = 4096; }`）——比把 flag 的读取搬到别处干净。
+
+**顺手看一眼不带 sanitizer 时错不错。** `string_view_map` 在 `-O2`、没有 ASan 的情况下
+4096 个短键里有 **2017 个查不回来**。这说明缺陷不止 sanitizer 看得见，`src/tests/` 里一条
+普通 C++ 用例就能独立扛住这条回归，ASan 是解释而不是唯一证据。反过来，如果不带 sanitizer
+一切正常，那就只能靠 ASan，这一点要在提交说明里说清。
+
+## 7quinquies. 给一张只长不消的表加上限：三个会咬人的地方
+
+`jit_ops` / `jit_key_mapper` / `jit_fused_ops` 三张表从来没有 `erase`。加上容量与 LRU
+之后，**「插入可能删掉别的条目」这件事让原来正确的调用点变成 UB**：
+
+1. **`m[a] = m[b] = v` 全部要拆成两句。** C++17 起赋值的右操作数先求值，所以内层
+   `operator[]` 返回的引用是在外层 `operator[]` **可能已经 erase 过之后**才被读的。
+   这棵树上三张表的每个写入点原本都是这个写法（`op.cc`、`fused_op.cc`、
+   `parallel_compiler.cc` 各一处）。
+2. **两个键指向同一个堆对象时，值必须是 `shared_ptr`。**
+   `jit_fused_ops[new] = jit_fused_ops[prev] = ctx` 让一个 `FusedOpContext` 挂在两个键上；
+   淘汰其中任何一个都不能 `delete` 它，两个都没了才能。裸指针加淘汰＝必然悬垂。正在执行的
+   那个 `FusedOp` 也要自己持一份引用，否则它跑的 kernel 里 `context->...` 会被淘汰掉。
+3. **会记录「最近使用」的 `find` 是个写操作——先 grep 谁不加锁调它。**
+   `parallel_compiler.cc` 的错误路径经 `Op::get_filename_from_jit_key` 在工作线程里查
+   `jit_key_mapper`，没有任何锁。所以不要用侵入式 LRU 链表（重链是多字段写）：每个条目
+   一个 relaxed atomic 时间戳、淘汰时 O(n) 扫一遍找最小，既无竞争，而扫描只发生在表满
+   的那一次插入上，紧邻一次编译，代价可以忽略。
+
+还有一条不是 UB 而是「测不到」：**容量做成 flag，端到端的淘汰路径才跑得起来**。
+默认 4096 条的表，要在真实负载里逼出淘汰得有四千多个不同 kernel；把
+`jit_cache_size` 调成 4 再跑几十个不同形状，一秒之内就把「淘汰后重查」走了几百遍
+（`tests/compiler/test_jit_cache_bound.py`）。上面三条里的前两条只有在淘汰真的发生时
+才是 bug，所以没有这个 flag 就只有单元测试覆盖模板、没有任何东西覆盖那三张真表。
 
 ## 8. 怎么跑出「修前失败」这一轮（禁止 `git stash`）
 

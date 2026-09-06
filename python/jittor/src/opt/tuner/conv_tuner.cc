@@ -374,7 +374,7 @@ void ConvTuner::forwardTune(FusedOp* fop) {
             }
 
             LOGvvvv << op_capability_name(capability) << "output:" << rvar;
-            rid = fop->context->vrm.add_relay_group({{rvar, op->output(0)}});
+            rid = fop->context->vrm.add_relay_group(fop, {{rvar, op->output(0)}});
             if (rid>=0) {
                 auto srid = "relay"+S(rid);
                 add_candidate(srid, 1);

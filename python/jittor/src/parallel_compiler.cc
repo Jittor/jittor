@@ -127,7 +127,7 @@ struct CompileTask {
 struct CompileResult {
     string previous_jit_key;
     jit_op_entry_t op_entry = nullptr;
-    unique_ptr<FusedOpContext> fused_context;
+    shared_ptr<FusedOpContext> fused_context;
     string new_jit_key;
 };
 
@@ -175,8 +175,7 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
         // Copy the key before consulting caches; JK is reusable scratch
         // storage and must not escape this preparation step.
         string jit_key = jkl.to_string();
-        auto iter = jit_key_mapper.find(jit_key);
-        if (iter != jit_key_mapper.end()) continue;
+        if (jit_key_mapper.find(jit_key)) continue;
 
         if (!seen_jit_keys.emplace(jit_key).second) continue;
 
@@ -253,9 +252,10 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                 op = &fused_op;
                 LOGvv << "Compile FusedOp:" << op;
                 LOGV(11) << "FusedOps:" << fused_op.ops;
-                unique_ptr<FusedOpContext> context(new FusedOpContext());
+                auto context = std::make_shared<FusedOpContext>();
                 context->setup(&fused_op);
                 fused_op.context = context.get();
+                fused_op.context_owner = context;
                 fused_op.do_prepare(jkl);
                 auto op_entry = OpCompiler::do_compile(op);
                 context->entry = op_entry;
@@ -269,7 +269,7 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                         bool needs_compile;
                         {
                             std::lock_guard<std::mutex> lock(entry_lock);
-                            needs_compile = jit_ops.find(relay_jit_key) == jit_ops.end()
+                            needs_compile = !jit_ops.find(relay_jit_key)
                                 && relay_keys_compiling.emplace(relay_jit_key).second;
                         }
                         if (!needs_compile) continue;
@@ -341,13 +341,16 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
     // fill all op entry
     for (auto& entries : worker_results) {
         for (auto& result : entries) {
-            if (result.fused_context)
-                jit_fused_ops[result.new_jit_key] =
-                    jit_fused_ops[result.previous_jit_key] =
-                        result.fused_context.release();
-            else
-                jit_ops[result.new_jit_key] = jit_ops[result.previous_jit_key] =
-                    result.op_entry;
+            // One assignment per key. The tables are bounded, so an
+            // insertion can evict the entry the previous subscript returned a
+            // reference to -- which `t[a] = t[b] = v` would then read.
+            if (result.fused_context) {
+                jit_fused_ops[result.previous_jit_key] = result.fused_context;
+                jit_fused_ops[result.new_jit_key] = result.fused_context;
+            } else {
+                jit_ops[result.previous_jit_key] = result.op_entry;
+                jit_ops[result.new_jit_key] = result.op_entry;
+            }
             jit_key_mapper[result.previous_jit_key] = result.new_jit_key;
         }
     }

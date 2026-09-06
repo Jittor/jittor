@@ -17,14 +17,29 @@ struct VarInfo {
 };
 std::ostream& operator<<(std::ostream& os, const VarInfo& vi);
 
+// Everything a compiled fused kernel needs that outlives the FusedOp it was
+// compiled from. It is kept in the cache below and reused by every later batch
+// whose fusion produces the same jit key, so it must not refer to the FusedOp
+// that happened to be current when it was built: `setup` copies the numbering
+// out, and `VarRelayManager` no longer keeps a `FusedOp*` at all (it used to,
+// pointing at a `run_sync` stack frame or at a compile-worker temporary that
+// was already gone -- see opt/var_relay.h).
 struct FusedOpContext {
     VarRelayManager vrm;
     jit_op_entry_t entry;
+    // Node -> index within the fusion this context was compiled from. Read
+    // during code generation only; the pointers are not dereferenced and mean
+    // nothing after that fusion is gone.
     unordered_map<Node*, int> node_id;
     void setup(FusedOp* fop);
 };
 
-EXTERN_LIB string_view_map<FusedOpContext*> jit_fused_ops;
+// The compiled fused kernels, by jit key. Bounded (utils/jit_cache_map.h) and
+// owning: two keys map to one context -- the key the fusion prepares and the
+// key its tuned kernel was compiled under -- so dropping either of them must
+// not free it, and dropping both must. It was a raw `FusedOpContext*` that
+// nothing ever freed.
+EXTERN_LIB jit_cache_map<shared_ptr<FusedOpContext>> jit_fused_ops;
 
 struct FusedOp final : Op {
     vector<Op*> ops;
@@ -38,7 +53,13 @@ struct FusedOp final : Op {
     loop_options_t loop_options_merged, loop_options_tuned;
     loop_options_t* loop_options, * loop_options_origin;
     loop_options_t& get_loop_options_tuned();
+    // The generated kernel reads `context->vrm...` by that name, so this stays
+    // a raw pointer. `context_owner` holds the cache's reference for as long
+    // as this op exists, so an eviction cannot free the context underneath a
+    // running kernel; it is null when the context is not the cache's --
+    // src/tests/test_op_relay.cc puts one on the stack.
     FusedOpContext* context;
+    shared_ptr<FusedOpContext> context_owner;
 
     // The batch's fusion verdict, borrowed from the run_sync frame that built
     // this group: 1 the var has to stay in memory, 0 it may be fused away,

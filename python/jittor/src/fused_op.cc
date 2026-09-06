@@ -17,7 +17,7 @@ namespace jittor {
 
 #ifndef JIT
 
-string_view_map<FusedOpContext*> jit_fused_ops;
+jit_cache_map<shared_ptr<FusedOpContext>> jit_fused_ops;
 
 std::ostream& operator<<(std::ostream& os, const VarInfo& vi) {
     return os << vi.var << " type:" << vi.type;
@@ -127,6 +127,7 @@ FusedOp::FusedOp(const FusedOp& other) {
     loop_options = other.loop_options;
     loop_options_origin = other.loop_options_origin;
     context = other.context;
+    context_owner = other.context_owner;
     // Deliberately not copied: it borrows a vector owned by the run_sync frame
     // that made `other`, and the copy is only kept for the compiler threads.
     // Anything that needed the verdict read it in update_ops(), before this.
@@ -248,30 +249,39 @@ void FusedOp::execute_fused_prepared(JK& jk) {
     // Keep the cache lookup independent from JK's reusable thread-local
     // buffer; preparation of the next op may overwrite it immediately.
     string jit_key = jk.to_string();
-    auto iter = jit_fused_ops.find(string_view(jit_key.data(), jit_key.size()));
-    if (iter != jit_fused_ops.end()) {
-        LOGvvv <<  "Jit fused op key found:" << jit_key << "jit op entry:" << (void*)iter->second;
-        context = iter->second;
-        iter->second->vrm.fop = this;
-        Profiler::record_and_run(iter->second->entry, this, jit_key.c_str());
+    if (auto* cached = jit_fused_ops.find(jit_key)) {
+        // Take a reference, not a bare pointer: the cache is bounded, and the
+        // kernel about to run may itself compile (relay ops) and evict.
+        context_owner = *cached;
+        context = context_owner.get();
+        LOGvvv <<  "Jit fused op key found:" << jit_key << "jit op entry:" << (void*)context;
+        // This used to also do `context->vrm.fop = this`, repointing the
+        // cached context at the current stack FusedOp on every hit. That was
+        // the only thing keeping that field from being read stale, and it
+        // dangled again the moment run_sync returned. Nothing needs it: the
+        // relay manager takes the FusedOp as an argument now.
+        Profiler::record_and_run(context->entry, this, jit_key.c_str());
         return;
     }
     LOGvv << "Jit op key not found:" << jit_key;
     // compile JIT op
-    context = new FusedOpContext();
+    context_owner = std::make_shared<FusedOpContext>();
+    context = context_owner.get();
     context->setup(this);
     string prev_jit_key = jit_key;
     context->entry = OpCompiler::do_compile(this);
     string new_jit_key = get_jit_key(jk);
-    jit_fused_ops[new_jit_key] = jit_fused_ops[prev_jit_key] = context;
+    // Two statements, not `t[a] = t[b] = ctx`: see the same spot in op.cc.
+    jit_fused_ops[prev_jit_key] = context_owner;
+    jit_fused_ops[new_jit_key] = context_owner;
     jit_key_mapper[prev_jit_key] = new_jit_key;
     LOGvv << "Get jit op entry:" << (void*)(context->entry);
     Profiler::record_and_run(context->entry, this, new_jit_key.c_str());
 }
 
 void FusedOpContext::setup(FusedOp* fop) {
+    // Copies the numbering out of `fop`; keeps no reference to it.
     node_id.clear();
-    vrm.fop = fop;
     for (int i=0; i<fop->ops.size(); i++)
         node_id[fop->ops[i]] = i;
     for (int i=0; i<fop->vars.size(); i++)
