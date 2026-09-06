@@ -320,15 +320,64 @@ parse_env_value(const string& s, T& out) {
     return is.eof();
 }
 
+// Where a flag's value is configured from, and under which name.
+//
+// A flag used to be settable by an environment variable of exactly its own
+// name, in lower case, with no namespace at all: `export name=x` or
+// `export debug=1` in a shell -- neither of which has anything to do with
+// jittor -- changed how the framework behaved, and the only trace was one
+// `LOGi` line that `log_v=0` (the default) and `log_silent` both hide.
+//
+// Two prefixes now, because build configuration and runtime policy have two
+// different lifetimes and used to have two contradictory meanings under one
+// name (`cc_flags` in the environment was *appended* to by compiler.py and
+// *replaced* wholesale here, then overwritten again later):
+//
+//   JT_BUILD_<NAME>   decides what gets compiled; part of the cache key
+//   JT_<NAME>         decides what the compiled core does
+//
+// The lower-case name still works so that existing scripts and gates keep
+// running, but using it is recorded and reported once at startup
+// (`env_config_report`) instead of being invisible.
+//
+// One exception is not a deprecation but a refusal: a name with no `_` in it
+// is a plain English word, and a plain English word in a shell environment is
+// far more likely to be someone else's variable than a jittor setting. Those
+// are never read from the bare name, only from the prefixed one.
+struct EnvFlagSource {
+    string flag;       // the flag's name
+    string env_name;   // the variable it was actually read from
+    string value;      // the raw value, before parsing
+    bool legacy;       // true when read from the unprefixed lower-case name
+};
+
+// Every flag whose value came from the environment, in initialization order.
+EXTERN_LIB vector<EnvFlagSource>& env_flag_sources();
+
+// The raw environment value for a flag, or NULL when nothing set it. Records
+// the lookup in `env_flag_sources()` and, when `env_name` is given, reports the
+// variable it actually read so a diagnostic can name it rather than the flag.
+EXTERN_LIB const char* lookup_flag_env(const char* flag_name, string* env_name);
+
+// Whether `flag_name` is build configuration (`JT_BUILD_`) rather than runtime
+// policy (`JT_`). Mirrors `_runtime/flag_policy.py`'s STARTUP_FLAGS; the
+// structure gate fails if the two lists drift apart.
+EXTERN_LIB bool is_startup_flag(const string& flag_name);
+
+// The environment variable `flag_name` is configured through.
+EXTERN_LIB string flag_env_name(const string& flag_name);
+
 template<class T> T get_from_env(const char* name,const T& _default) {
-    auto ss = getenv(name);
+    string env_name;
+    auto ss = lookup_flag_env(name, &env_name);
     if (ss == NULL) return _default;
     string s = ss;
     T env = _default;
     if (parse_env_value(s, env))
         return env;
-    LOGf << "Cannot parse environment variable" << name >> "=\"" >> s >> "\":"
-        << "not a valid value for this flag. Fix it or unset it."
+    LOGf << "Cannot parse environment variable" << env_name >> "=\"" >> s >> "\":"
+        << "not a valid value for flag" << name >> "."
+        << "Fix it or unset it."
         << "(This used to be ignored, silently leaving the default"
         << _default >> ".)";
     return _default;
@@ -369,7 +418,6 @@ EXTERN_LIB void set_ ## name (const type&);
     }; \
     void init_ ## name (const type& value) { \
         name = value; \
-        if (getenv(#name)) LOGi << "Load " #name":" << value; \
     }; \
     int caller_ ## name = (init_ ## name (jittor::get_from_env<type>(#name, default)), 0);
 
@@ -402,7 +450,6 @@ EXTERN_LIB void set_ ## name (const type&);
         type old_value = name; \
         name = value; \
         setter_ ## name (old_value, value); \
-        if (getenv(#name)) LOGi << "Load " #name":" << value; \
     }; \
     int caller_ ## name = (init_ ## name (jittor::get_from_env<type>(#name, default)), 0);
 
@@ -416,7 +463,6 @@ EXTERN_LIB void set_ ## name (const type&);
     }; \
     void init_ ## name (const type& value) { \
         runtime_flag_ ## name () = value; \
-        if (getenv(#name)) LOGi << "Load " #name":" << value; \
     }; \
     int caller_ ## name = (init_ ## name (jittor::get_from_env<type>(#name, default)), 0);
 
@@ -440,7 +486,6 @@ EXTERN_LIB void set_ ## name (const type&);
         type old_value = storage; \
         storage = value; \
         setter_ ## name (old_value, value); \
-        if (getenv(#name)) LOGi << "Load " #name":" << value; \
     }; \
     int caller_ ## name = (init_ ## name (jittor::get_from_env<type>(#name, default)), 0);
 

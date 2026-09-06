@@ -57,8 +57,87 @@ using stringstream = std::stringstream;
 using std::move;
 template <class Ta, class Tb> using unordered_map = std::unordered_map<Ta,Tb>;
 
+// Build configuration: the flags whose value decides what gets compiled, and
+// which therefore belong to the `JT_BUILD_` namespace rather than `JT_`.
+//
+// This list is the C++ half of the one partition; `_runtime/flag_policy.py`'s
+// STARTUP_FLAGS is the Python half, and it is the one the bindings, `jt.config`
+// and the cache fingerprint use. Two copies drift, so
+// `tests/structure/test_env_var_manifest.py` reads both and fails the gate
+// when they stop being the same set.
+static const char* startup_flag_names[] = {
+    "cache_path", "cc_flags", "cc_path", "cc_type", "cuda_archs", "disable_lock",
+    "jittor_path", "nvcc_flags", "nvcc_path", "python_path",
+};
+
+// The build flags whose value `compiler.py` computes and then assigns (see the
+// `flags.cc_path = ...` block at the end of that file). The core must not read
+// these from the environment at all, and this is the one contradiction 2.22 is
+// named after: `cc_flags` in the environment was *appended* to the compiler's
+// flags by `compiler.py` and *replaced* wholesale by the static initializer
+// here -- then overwritten again by that same assignment, so the replace was
+// silently dead while the two documented meanings both looked live. There is
+// exactly one reader of `JT_BUILD_CC_FLAGS` now, `compiler.py`, and it appends.
+//
+// `disable_lock` is deliberately not in this list: `src/lock.cc` reads it and
+// Python never pushes a value in, so it stays configurable as
+// `JT_BUILD_DISABLE_LOCK`.
+static const char* compiler_owned_flag_names[] = {
+    "cache_path", "cc_flags", "cc_path", "cc_type", "cuda_archs",
+    "jittor_path", "nvcc_flags", "nvcc_path", "python_path",
+};
+
+bool is_startup_flag(const string& flag_name) {
+    for (auto name : startup_flag_names)
+        if (flag_name == name) return true;
+    return false;
+}
+
+static bool is_compiler_owned_flag(const string& flag_name) {
+    for (auto name : compiler_owned_flag_names)
+        if (flag_name == name) return true;
+    return false;
+}
+
+// Not a static object: flags are initialized by static initializers in other
+// translation units, whose order relative to this one is unspecified. A
+// function-local static is constructed on first use, which is the first lookup.
+vector<EnvFlagSource>& env_flag_sources() {
+    static vector<EnvFlagSource>* sources = new vector<EnvFlagSource>();
+    return *sources;
+}
+
+string flag_env_name(const string& flag_name) {
+    string name = is_startup_flag(flag_name) ? "JT_BUILD_" : "JT_";
+    for (char c : flag_name)
+        name += (char)std::toupper((unsigned char)c);
+    return name;
+}
+
+const char* lookup_flag_env(const char* flag_name, string* env_name) {
+    string flag = flag_name;
+    string prefixed = flag_env_name(flag);
+    if (env_name) *env_name = prefixed;
+    if (is_compiler_owned_flag(flag)) return NULL;
+    if (auto value = getenv(prefixed.c_str())) {
+        env_flag_sources().push_back({flag, prefixed, value, false});
+        return value;
+    }
+    // A flag name with no `_` is an ordinary English word. `export debug=1` or
+    // `export name=x` in a shell is overwhelmingly likely to be about something
+    // other than jittor, so the unprefixed form of such a name is never read --
+    // there is no deprecation path for it, only the prefixed name.
+    if (flag.find('_') == string::npos) return NULL;
+    if (auto value = getenv(flag.c_str())) {
+        if (env_name) *env_name = flag;
+        env_flag_sources().push_back({flag, flag, value, true});
+        return value;
+    }
+    return NULL;
+}
+
 template<> string get_from_env(const char* name, const string& _default) {
-    auto s = getenv(name);
+    auto s = lookup_flag_env(name, nullptr);
     if (s == NULL) return _default;
     return string(s);
 }

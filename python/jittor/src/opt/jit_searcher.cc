@@ -16,8 +16,13 @@
 namespace jittor {
 
 DEFINE_FLAG(int, jit_search_kernel, 0, "Jit search for the fastest kernel.");
-DEFINE_FLAG(int, jit_search_warmup, 2, "");
-DEFINE_FLAG(int, jit_search_rerun, 10, "");
+DEFINE_FLAG(int, jit_search_warmup, 2,
+    "Untimed runs of a candidate kernel before the jit kernel search starts "
+    "timing it, so the measurement is not paying for cold caches.");
+DEFINE_FLAG(int, jit_search_rerun, 10,
+    "Timed runs of a candidate kernel per measurement. The search keeps the "
+    "minimum, so a higher value costs proportionally more search time and is "
+    "less sensitive to other load on the machine.");
 DEFINE_FLAG(int, jit_search_timeout, 0,
     "Wall-clock budget in seconds for the jit kernel search, 0 means no limit. "
     "The search compiles and times one kernel per combination of the tuner's "

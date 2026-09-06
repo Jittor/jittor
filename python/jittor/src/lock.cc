@@ -138,7 +138,7 @@ void lock() {
         if (flock(lock_fd, LOCK_EX | LOCK_NB) == 0) break;
         if (errno != EWOULDBLOCK && errno != EINTR)
             LOGf << "could not lock the build lock:" << strerror(errno)
-                 << ". Set disable_lock=1 to build without it (unsafe if"
+                 << ". Set JT_BUILD_DISABLE_LOCK=1 to build without it (unsafe if"
                  << "anything else builds into the same cache).";
         double waited = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - start).count();
