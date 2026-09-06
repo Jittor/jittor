@@ -86,7 +86,32 @@ BackendEvent backend_event(Device device, bool timing) {
     return {device, backend_ops(device.backend).event_create(device.index, timing)};
 }
 
+const char* backend_name(BackendId id) {
+    switch (id) {
+    case BackendId::Cpu: return "cpu";
+    case BackendId::Cuda: return "cuda";
+    case BackendId::Acl: return "acl";
+    case BackendId::Rocm: return "rocm";
+    case BackendId::Corex: return "corex";
+    }
+    USER_CHECK(false) << "Unknown backend id" << uint32(id);
+    return "unknown";
+}
+
 vector<string> registered_backends() { return backend_registry().names(); }
+
+vector<string> known_backends() {
+    // Listed rather than iterated: a new BackendId must be added here to be
+    // covered, and backend_name() rejects an id it does not spell, so a
+    // backend cannot join the enum and stay out of the contract matrix.
+    static const BackendId ids[] = {BackendId::Cpu, BackendId::Cuda,
+                                    BackendId::Acl, BackendId::Rocm,
+                                    BackendId::Corex};
+    vector<string> result;
+    result.reserve(sizeof(ids) / sizeof(ids[0]));
+    for (auto id : ids) result.emplace_back(backend_name(id));
+    return result;
+}
 
 int backend_device_count(const string& name) {
     return backend_registry().get(name).device_count();

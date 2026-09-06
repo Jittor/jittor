@@ -143,6 +143,53 @@ env/file rendezvous、以及四条「不许静默回落到 CPU / 不许把 skip 
 | Corex 的源码改写函数沿用 ACL 的名字 | `corex/corex_compiler.py:31` `string process_acl(...)` | 两个后端的文本改写实现互相拷贝，命名都没改 | 随后端注册表一起删除 | 次要 |
 | ROCm 只有 374 行，算子全部来自被改写的 CUDA 源码 | `rocm/rocm_wrapper.h`（150 行，只补了 rocprim 的 argmax/argmin）、`rocm_compiler.py`（154 行） | ROCm 正确性完全取决于文本替换是否覆盖每一个 CUDA 调用；`#ifndef IS_ROCM` 散布在 `cublas_wrapper.h:28`、`cudnn_wrapper.h:42`、`cudnn_conv_op.cc:189,224` 等处是唯一契约 | ROCm 自己实现并注册，不再吃改写产物 | 主要 |
 
+已修：4.13「现有 ACL/CUDA/external capability 接口彼此独立，没有统一
+`(op, backend, dtype, layout)` 矩阵 owner 或跨后端 runner」这一条，见本次提交。
+矩阵不再手写，**两个轴都从 4.03/4.04 的注册表生成**：后端轴取
+`jt.core.known_backends()`（核心声明的全集）与 `registered_backends()`（这个 build
+注册了的子集），算子轴取 `backend_supported_ops(后端)`。实现是
+`tests/backends/parity/backend_contract_matrix.py`（纯逻辑与探针）加
+`test_backend_contract_matrix.py`（门禁），接进 `noxfile` 的 `cuda` session；
+`cpu` session 因为跑整棵 `tests/` 自动包含它。
+
+与既有的 `test_device_parity.py` 的差别是这条任务的价值所在：那份对拍的两个轴都在
+注册表之外（算子来自手维护的 `op_db`，后端是探测出来的一个 `_ACCEL` 字符串），
+所以**注册表里多出一个没人测的实现时它不会红**。新矩阵会：声明了却既无探针又无
+书面理由的实现直接让门禁失败。实测覆盖 47 个算子名 × 5 个后端行；本机
+cpu 35 个格子、cuda 38 个格子通过（共 73 个已验证格子）。
+
+**缺硬件的后端标为「未验证」而不是被跳过**（0.24 的规矩）。格子状态分五档：
+`passed`/`failed`/`not-declared`（该后端没声明，没什么要验的）/
+`unverified:not-built`（核心声明了但这个 build 没编，本机的 acl/rocm/corex）/
+`unverified:no-device`（编了但驱动报 0 个设备，本机 CPU-only 配置下的 cuda 列）/
+`unverified:no-probe`（25 个格子，每个都有书面理由：需要通信子、库链接自检、
+或加速器独有而 CPU 侧无可比实现）。判定顺序是先「后端能不能跑」再「有没有探针」，
+所以没有硬件的后端不可能因为探针在别处跑通而被记成通过；
+`no-device` 这一档本机走不到，用合成行加「一旦被调用就 assert 失败」的探针测。
+
+顺带修的两条（都是本条门禁发现的）：
+
+1. **cuTT wrapper 编译不过，症状伪装成「本机没有 cuTT」**。
+   `setup_cutt()` 是唯一不走 `setup_cuda_lib()` 的库加载路径，后端搬到顶层
+   `backends/` 之后它既没拿到 `-I backends/cuda/include`（`stream_compat.h` 在那里）
+   也没拿到 `cuda_sdk_flags`（`stream_compat.h` 自己 include 的 `cuda_runtime.h`），
+   于是 `803e37853` 给六个 wrapper 补的 include 对它无效。后果是
+   `tests/backends/cuda/test_cutt*.py` 共 6 条恒 skip、读起来是绿的——
+   与看板上记的「`setup_cutt()` 无调用点」是同一后果的**第二个原因**
+   （调用点今天有了，是 `compile_extern.py:1305` 的 `register_library_loader`）。
+   修在 `compile_extern.py` 的 `setup_cutt()`，修后 cuTT 加载成功、
+   `cutt_transpose` 成为矩阵里一个真正跑起来的格子。
+2. **惰性库加载会让注册表快照缩水**。可选库在第一次用到时才注册算子，
+   所以导入后立刻读注册表得到的是**比 build 真实契约更小**的一张表：
+   实测 `backend_supported_ops("cpu")` 强制加载前 35 个、加载后 41 个，
+   少掉的正是 `mkl_matmul`/`mkl_conv*`/`mkl_test`。矩阵因此先
+   `load_optional_libraries()` 再快照，并把没加载的库**连原因一起**打印
+   （只打库名时，编译错误与硬件缺失是同一行字）。
+
+**现状记录，未改**：ACL 的后端描述符注册名是 `acl_legacy`（`backends/acl/src/backend.cc:645`），
+与 `BackendId::Acl` 的规范拼写 `acl` 不一致。矩阵按规范名建行，并把只出现在
+`registered_backends()` 里的拼写另建一行，不静默丢弃。层次归属属 4.12/4.15 的范围。
+
 ## 优先级
 - **先修会静默出错的**：MPI 的 MPI_DOUBLE_INT、ACL 的 checkRet 空实现与 find() 未检查、
   mallocWorkSpace 失败后的悬垂指针、分布式初始化失败退化单卡。四条都属于"不报错但结果错"。

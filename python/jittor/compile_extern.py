@@ -577,12 +577,23 @@ def setup_cutt():
     ctypes.CDLL(cutt_lib_name, dlopen_flags)
 
     cutt_op_files = _cuda_library_sources("cutt")
-    cutt_wrapper_include = os.path.join(backend_root(jittor_path, "cuda"),
+    cuda_backend_root = backend_root(jittor_path, "cuda")
+    cutt_wrapper_include = os.path.join(cuda_backend_root,
                                        "libraries", "cutt", "include")
+    # The two include sets setup_cuda_lib passes and this path did not:
+    # `backends/cuda/include` holds stream_compat.h, which every library
+    # wrapper includes, and cuda_sdk_flags holds the CUDA SDK headers that
+    # stream_compat.h itself includes. cuTT is the one library that builds
+    # outside setup_cuda_lib, so it kept failing to compile with
+    # "stream_compat.h: No such file or directory" and then
+    # "cuda_runtime.h: No such file or directory" -- and a wrapper that does
+    # not compile registers as "cutt is unavailable", not as a build error, so
+    # tests/backends/cuda/test_cutt*.py skipped on a machine that has cuTT.
+    cutt_shared_include = os.path.join(cuda_backend_root, "include")
     # Keep the module, not just its .ops: the plan-cache accessors are free
     # functions on the module, and every other backend is exposed this way.
     cutt = compile_custom_ops(cutt_op_files, return_module=True, backend="accelerator",
-        extra_flags=f" -I\"{cutt_include_path}\" -I\"{cutt_wrapper_include}\" -L\"{cutt_lib_path}\" -llibcutt ")
+        extra_flags=f" -I\"{cutt_include_path}\" -I\"{cutt_wrapper_include}\" -I\"{cutt_shared_include}\" {cuda_sdk_flags} -L\"{cutt_lib_path}\" -llibcutt ")
     cutt_ops = cutt.ops
     register_library("cutt", cutt)
     LOG.vv("Get cutt_ops: "+str(dir(cutt_ops)))

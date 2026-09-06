@@ -110,8 +110,20 @@ EXTERN_LIB void backend_synchronize(Device device);
 EXTERN_LIB BackendStream backend_stream(Device device, BackendStreamKind kind);
 EXTERN_LIB BackendEvent backend_event(Device device, bool timing = false);
 
+// Canonical spelling of a backend id, independent of registration.
+// A descriptor may publish a different `BackendOps::name` (the ACL descriptor
+// registers as "acl_legacy"), so this is the enum's own name, not a lookup.
+EXTERN_LIB const char* backend_name(BackendId id);
+
 // @pyjt(registered_backends)
 vector<string> registered_backends();
+// Every backend this core declares, whether or not this build registered one.
+// `registered_backends()` answers "what can run here"; a cross-backend
+// contract matrix needs "what is this core supposed to cover", so that a
+// backend absent from the build is reported as unverified instead of being
+// silently missing from the rows.
+// @pyjt(known_backends)
+vector<string> known_backends();
 // @pyjt(backend_device_count)
 int backend_device_count(const string& name);
 // @pyjt(initialize_backend_operators)

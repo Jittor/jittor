@@ -314,3 +314,113 @@ mv "$CACHE/jit" "$CACHE/jit.aside" && mkdir -p "$CACHE/jit"   # 只丢算子 ker
 还有一条不写在代码里的：`0` 维数组会被 `np.ascontiguousarray` 悄悄变成形状 `(1,)`。
 全归约的 oracle 就是 0 维，于是它会被存成一元向量、读回来形状是错的，而与 0 维结果
 比较时**广播掉了**——照样通过。存之前按 `ndim == 0` 分支处理。
+
+## 十、门禁的**轴**也要从代码里生成，不只是文件清单
+
+第六节讲的是「跑哪些文件」的清单会腐化。同一个病在**一个文件内部**还有一次：
+一份参数化门禁的两个轴（测哪些算子 × 在哪些后端上测）如果写死在测试里，它一样
+不会报错、一样只会缩水。
+
+实测的对照，两个都在 `tests/backends/parity/`：
+
+| | 算子轴 | 后端轴 | 能不能发现「注册表里多了一个没人测的东西」 |
+| --- | --- | --- | --- |
+| `test_device_parity.py` | 手维护的 `opinfo.database.op_db` | 探测出来的一个 `_ACCEL` 字符串 | **不能** |
+| `test_backend_contract_matrix.py` | `jt.core.backend_supported_ops(后端)` | `jt.core.known_backends()` + `registered_backends()` | 能，缺探针就红 |
+
+做法：
+
+```python
+known      = jt.core.known_backends()          # 核心声明的全集（BackendId 枚举）
+registered = jt.core.registered_backends()     # 这个 build 真的注册了的子集
+devices    = jt.core.backend_device_count(名)  # 0 表示没硬件
+ops        = jt.core.backend_supported_ops(名) # 该后端声明的实现名
+caps       = jt.core.backend_supported_capabilities(名)
+```
+
+四条经验：
+
+1. **格子的状态要分到五档，不能只有过/跳过。** `passed` / `failed` /
+   `not-declared`（该后端没声明这个算子，没什么要验的）/
+   `unverified:not-built`（核心声明了但这个 build 没编）/
+   `unverified:no-device`（编了但驱动报 0 个设备）/ `unverified:no-probe`。
+   **判定顺序就是诚实性本身**：先判「这个后端能不能跑」，再判「有没有探针」。
+   顺序反了，一个没有硬件的后端会因为「探针跑通了（在别的后端上）」被记成通过。
+2. **`unverified:no-probe` 必须配一张写明理由的表**，并断言
+   「声明了的算子 ∉ 探针表 ∪ 理由表」为空。这就是棘轮：注册表里新增一个实现，
+   门禁立刻红，直到有人写探针或者写下为什么不能写。本仓库这张理由表里合法的条目
+   长这样——需要通信子（MPI 类）、库链接自检（`*_test`，不是数值契约）、
+   只有加速器声明而 CPU 侧没有可比实现（`cudnn_rnn`、`cusparse_*`、`cufft_fft`）。
+3. **两个后端给同一个契约起了不同的实现名，要映射到同一个探针。** CPU 声明
+   `argsort`/`arg_reduce`/`random`，CUDA 声明 `cub_argsort`/`cub_arg_reduce`/
+   `curand_random`。按名字直接比会得出「两边没有共同算子」的假结论。
+   `backend_supported_capabilities()` 是这层的正确键。
+4. **探针要走 `jt.ops.*`，不要走模块级包装。** Torch 兼容模式会重新绑定
+   `jt.argsort`（返回的元数都不一样），写在包装上的探针量的是 shim 不是后端。
+   实测：`jt.argsort` 在 `JITTOR_TORCH_SHIM=1` 下让探针以
+   `ValueError: too many values to unpack` 失败，`jt.ops.argsort` 两种进程模式一致。
+
+**没有硬件的那几档要在这台机器上主动测。** 本机 ACL/ROCm/Corex 走的是
+`not-built`，`no-device` 这一档一个格子都不会走到——也就是「标为未验证」的代码
+本身是未验证的。把 `BackendRow`/`cell_status` 写成纯函数，用合成的行去驱动
+`no-device`，并且传一个「一旦被调用就 assert 失败」的探针进去，证明它确实没跑探针：
+
+```python
+def never(row, op):
+    raise AssertionError("没有设备的后端不该被探测")
+matrix = contract.build_matrix([no_device_row], ["binary"], never)
+assert matrix[("ascend", "binary")][0] == contract.NO_DEVICE
+assert contract.PASSED not in {s for s, _ in matrix.values()}
+```
+
+### 证明这层门禁有牙（两次变异，各自的实测数字）
+
+1. **数值对拍有没有牙**：临时让加速器侧的返回值乘 1.01，
+   **40 个格子红**（原本 54 passed → 40 failed / 13 passed）。
+2. **棘轮有没有牙**：从探针表里删掉 `"binary"`，
+   `test_every_declared_operator_is_probed_or_excused` 单条红。
+
+两个变异都不要留在提交里（尤其第一个：一个能改结果的环境变量钩子是个陷阱），
+把数字写进提交说明。
+
+## 十一、编译失败会伪装成「这台机器没有这个库」
+
+这是第六节 `JITTOR_TEST_REQUIRE_EXECUTION` 那条的加强版，而且更难看出来：
+**可选后端库的加载失败与硬件缺失，在测试摘要里是同一行字。**
+
+Jittor 的可选库是惰性加载的（`jittor/_runtime/backend_libraries.py` 的
+`register_library_loader`）。加载器在第一次用到时才跑，失败时上层只看到
+「这个库不可用」，于是依赖它的用例 `skip`，理由写「没有 cuTT」——而机器上有 cuTT，
+真正的原因是 wrapper 编译不过。
+
+实测的一次（本波发现）：`backends/cuda/libraries/cutt/src/cutt_wrapper.cc` 编译报
+`stream_compat.h: No such file or directory`，修掉之后紧接着报
+`cuda_runtime.h: No such file or directory`。原因是后端搬到顶层 `backends/` 之后，
+`setup_cuda_lib()` 拿到了 `-I backends/cuda/include` 与 `cuda_sdk_flags`，而
+**cuTT 是唯一不走 `setup_cuda_lib` 的库**，它自己的 `setup_cutt()` 两样都没拿到。
+后果：`tests/backends/cuda/test_cutt*.py` 共 6 条恒 skip，读起来是绿的。
+
+两条做法：
+
+1. **快照注册表之前，先强制加载全部可选库**，否则你的矩阵会比 build 的真实契约小。
+   实测：不强制加载时 `backend_supported_ops("cpu")` 是 35 个；强制加载后是 41 个——
+   少掉的正是 `mkl_matmul`/`mkl_conv*`/`mkl_test`，也就是 8.05 要验的那几个。
+
+   ```python
+   from jittor._runtime.backend_libraries import LIBRARY_NAMES, get_library
+   for name in LIBRARY_NAMES:
+       try:
+           module = get_library(name, load=True)
+           reason = None if module is not None else "loader produced no module"
+       except BaseException as error:          # 记下来，不要向上抛
+           reason = "%s: %s" % (type(error).__name__, str(error)[:200])
+   ```
+
+   加载器抛异常时**记录而不是传播**：CPU 盒子上缺 cuDNN 不该让 CPU 那一列不被检查。
+
+2. **报告里要打印失败的原因，不只是库名。** 「cutt 未加载」读起来像机器的属性，
+   而原因那一行写的是 wrapper 编译错误——只有把原因打出来，这两件事才分得开。
+   然后对「这个 build 应该有的库」做断言：CUDA build 上
+   `{cub, cublas, cudnn, cufft, curand, cusparse, cutt} ⊆ 已加载`。
+   截断原因串到 200 字符会把 g++ 的报错切掉，定位时单独跑一次
+   `get_library(名, load=True)` 拿完整输出。
