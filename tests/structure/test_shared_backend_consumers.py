@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "python/jittor/src"
 CONSUMERS = (
     "executor.cc", "init.cc", "event_queue.cc", "profiler/profiler.cc",
-    "debug/nan_checker.cc", "utils/log.cc",
+    "debug/nan_checker.cc", "utils/log.cc", "pyjt/py_converter.h",
 )
 
 
@@ -20,6 +20,9 @@ def test_shared_device_consumers_have_no_vendor_sdk_dependency():
         source = (SRC / relative).read_text(encoding="utf-8")
         assert not re.search(r"#\s*include\s*[<\"](?:cuda|hip|acl/|helper_cuda)", source), relative
         assert not re.search(r"\b(?:cuda|hip)[A-Z]\w*\s*\(", source), relative
+        if relative == "pyjt/py_converter.h":
+            assert "#ifdef IS_CUDA" not in source
+            assert "accelerator_backend_id() == BackendId::Cuda" in source
     command = [os.environ.get("CXX", "g++"), "-std=c++14", "-fsyntax-only",
                "-DHAS_ACCELERATOR", "-I" + str(SRC),
                "-I" + sysconfig.get_path("include")]

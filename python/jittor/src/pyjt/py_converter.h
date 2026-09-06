@@ -16,8 +16,9 @@
 #include "utils/fast_shared_ptr.h"
 #include "profiler/simple_profiler.h"
 #include "runtime/dispatch_context.h"
-#ifdef IS_CUDA
+#ifdef HAS_ACCELERATOR
 #include "runtime/device.h"
+#include "runtime/backend.h"
 #endif
 
 namespace jittor {
@@ -933,8 +934,11 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
         [obj](typename T::R* result) {
             // import numpy
             string npstr="numpy";
-            #ifdef IS_CUDA
-            if (runtime_use_cuda()) npstr="cupy";
+            #ifdef HAS_ACCELERATOR
+            // CuPy is a CUDA interop detail, not a property of every
+            // accelerator backend (ACL and ROCm use their own array bridges).
+            if (runtime_use_cuda() && accelerator_backend_id() == BackendId::Cuda)
+                npstr="cupy";
             #endif
 
             PyObjHolder np(PyImport_ImportModule(npstr.data()));
@@ -950,7 +954,7 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
             PyTuple_SET_ITEM(args.obj, 0, np.release());
             PyTuple_SET_ITEM(args.obj, 1, data.release());
 
-            #ifdef IS_CUDA
+            #ifdef HAS_ACCELERATOR
             if (npstr=="cupy") {
                 PyObjHolder jt(PyImport_ImportModule("jittor"));
                 PyObjHolder pFunc(PyObject_GetAttrString(jt.obj,"numpy2cupy"));
