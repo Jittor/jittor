@@ -193,10 +193,7 @@ def setitem(x, slices, value):
     if isinstance(slices, jt.Var) and slices.dtype == "uint8":
         slices = slices != 0
     slices = _dispatch_slices(slices)
-    # A recorded view needs no ancestry walk: `assign` below writes through it,
-    # at any depth and for any basic index, where `check_cascade_setitem` could
-    # only rewrite chains of at most ten single integers.
-    needs_cascade = not x._is_view() and x._needs_cascade_setitem()
+    needs_cascade = x._needs_cascade_setitem()
     if not needs_cascade:
         result = try_dispatch("tensor.setitem", x, slices, value, None)
         if result is not None:
@@ -221,6 +218,13 @@ def setitem(x, slices, value):
                 normalized.append(item)
         slices = tuple(normalized)
     result = x.setitem(slices, value)
+    if x._is_view():
+        # A recorded view needs no ancestry walk: `assign` writes through it, at
+        # any depth and for any basic index, where `check_cascade_setitem` could
+        # only rewrite chains of at most ten single integers. The dispatch
+        # decision above is deliberately left on `_needs_cascade_setitem` alone,
+        # so which results a backend is allowed to produce does not change here.
+        return x.assign(result)
     return x.check_cascade_setitem(result) if needs_cascade else x.assign(result)
 
 

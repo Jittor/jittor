@@ -36,6 +36,7 @@ class IndexingRouting(unittest.TestCase):
                 self.assignments = []
                 self.casts = []
                 self.where_calls = 0
+                self.view = None
 
             def cast(self, dtype):
                 self.casts.append(dtype)
@@ -56,6 +57,15 @@ class IndexingRouting(unittest.TestCase):
 
             def _needs_cascade_setitem(self):
                 return self.parent is not None
+
+            # 5.02: the tensor-level index records the view it created, and a
+            # recorded view is what makes the ancestry walk unnecessary.
+            def _set_view_of(self, base, slices):
+                self.view = (base, slices)
+                return self
+
+            def _is_view(self):
+                return self.view is not None
 
             def check_cascade_setitem(self, result):
                 if result.source != "native_setitem":
@@ -113,8 +123,18 @@ class IndexingRouting(unittest.TestCase):
             view = getter()
             self.assertEqual(view.source, "native_getitem")
             view[:, :] = 3
+        # No getter may let the optional provider produce the result a writeback
+        # consumes; that guard is still `_needs_cascade_setitem` alone, so which
+        # results a backend is allowed to produce did not change with 5.02.
         self.assertEqual(self.calls, [])
-        self.assertEqual(len(self.cascades), 3)
+        # The first two are the raw op, which deliberately does not create a
+        # view -- a gather is a computation, not a claim about two names -- so
+        # they still go through the ancestry walk. `x[0]` is the tensor-level
+        # index, which records the view, and a recorded view writes back through
+        # `assign` instead.
+        self.assertEqual(len(self.cascades), 2)
+        self.assertIsNone(self.jt.getitem(x, 0).view)
+        self.assertEqual(x[0].view, (x, 0))
 
     def test_return_x_and_reduction_overloads_bypass_optional_provider(self):
         self.provider_result = self.Var("acl_result")
