@@ -23,6 +23,8 @@ inert, so a stray ``-p`` cannot silently overwrite an earlier record.
 import json
 import os
 
+import pytest
+
 
 #: Where to write the record. Unset -> the plugin does nothing.
 OUT_VARIABLE = "GATE_CONCLUSION_OUT"
@@ -39,6 +41,30 @@ class _Recorder:
     def pytest_collection_modifyitems(self, items):
         # After deselection: what this session intends to run.
         self.collected = [item.nodeid for item in items]
+
+    # ``optionalhook``: the spec only exists when pytest-xdist is installed, and
+    # this plugin still has to load for the serial runs that do not need it.
+    @pytest.hookimpl(optionalhook=True)
+    def pytest_xdist_node_collection_finished(self, ids):
+        """The same fact, for the run that actually needs it.
+
+        Under xdist the controller never collects: the workers do, and
+        ``pytest_collection_modifyitems`` runs only there. The hook above
+        therefore leaves ``collected`` empty in exactly the configuration this
+        record exists to police, and an empty set disables *both* of the checks
+        in ``gate_conclusion_diff.compare`` that report a lost conclusion --
+        ``collected - conclusions`` is empty, and the "conclusion lost" branch
+        skips every nodeid because none of them is in the candidate's
+        (empty) collected set. The comparison then prints ``IDENTICAL`` no
+        matter how many answers went missing, which is the failure this whole
+        tool was written to catch and the one xdist is most likely to cause.
+
+        Each node reports the ids it collected after its own deselection, and
+        xdist has already checked the nodes agree, so the union is the session's
+        intent. Union rather than assignment because the hook fires once per
+        node.
+        """
+        self.collected = sorted(set(self.collected) | set(ids))
 
     # -- outcomes --------------------------------------------------------
     def pytest_runtest_logreport(self, report):
