@@ -288,7 +288,37 @@ static inline int op_target_device(Op* op) {
 }
 #endif
 
+// One batch, in seven phases. The phase boundaries are marked below with
+// `// == phase n ==`; the split between planning and running is between
+// phases 5 and 6 (see the contract in executor.h).
+//
+//   1 setup     pick the batch's allocators, remember the entry device, and
+//               (weak sync) widen `vars` with older pending holder Vars.
+//   2 collect   BFS from `vars` over unfinished inputs -- plus outputs, so a
+//               fetch already queued on a collected Var joins this batch --
+//               then run graph optimizers and redo the BFS until no op still
+//               asks for one. Splits the result into `ops` and `all_vars` and
+//               numbers both under the batch stamp `tt`.
+//   3 fuse      `count_fuse` partitions `ops` into fused segments (union-find
+//               in `father`) and marks, per var, whether it may stay inside a
+//               kernel (`var_fused`).
+//   4 order     topological sort over the segments -> `queue`, the order the
+//               segments will be executed in. Ties break on `Op::order`.
+//   5 order     topological sort inside each segment -> `fuse_ops`, all
+//               segments' ops concatenated, with `range` holding the split
+//               points. Ops shared by several segments are duplicated into
+//               each (`sharegraph`) rather than being cut out.
+//   ~ compile   `parallel_compile_all_ops` compiles every segment before any
+//               of them runs, so no compilation happens mid-execution. This
+//               is the last reader of the batch numbering; the batch stamp is
+//               released right after it.
+//   6 execute   per segment: load it into `fused_op`, select the device,
+//               allocate outputs, migrate across the host/device boundary,
+//               launch, then release the liveness the batch held.
+//   7 finish    assert the requested Vars are backed, wait for every device
+//               the batch launched on if asked, restore the entry device.
 void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
+    // == phase 1: setup ==
     exec_called ++;
     last_run_ops = Op::number_of_created_ops;
     if (weak_sync && !use_threading)
@@ -304,6 +334,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     int entry_device = runtime_use_cuda() ? current_device() : -1;
     uint64 touched_devices = 0;
     #endif
+    // == phase 2: collect the batch ==
     // bfs find all ops need to run
     int op_num = 0;
     vector<Node*> bfs_q;
@@ -419,6 +450,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         }
     }
 
+    // == phase 3: partition into fused segments ==
     count_fuse(tt, start_var_num, ops, all_vars, father, var_fused);
     // var_fused represents:
     // 0: can fused
@@ -440,6 +472,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     vector<int> queue;
     queue.reserve(roots.size());
 
+    // == phase 4: order the segments ==
     // ** toplogical_sort external **
     // output:
     //     queue: toplogical order of fused op
@@ -507,6 +540,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         ASSERTop(queue.size(),==,roots.size());
     }
 
+    // == phase 5: order the ops inside each segment ==
     // ** toplogical_sort internal **
     // output:
     //     fuse_ops: fused op id [000|1111|22|3333]
@@ -650,6 +684,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     // traversal before SetupFreeBuffer can destroy nodes from this batch.
     batch_epoch.reset();
 
+    // == phase 6: execute the plan ==
     // running
     SetupFreeBuffer setup_free_buffer;
     vector<Var*> outputs_bk;
@@ -840,6 +875,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             check_op_async_error(op, is_fused_op, e, logf);
         }
     }
+    // == phase 7: finish the batch ==
     LOGvv << "All" << op_num << "ops finished, return vars:" << vars;
     // a zero-sized var has no memory to point at (see the size==0 branch in
     // the raw allocators), which is not the same as an unallocated var
