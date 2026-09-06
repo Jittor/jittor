@@ -140,6 +140,42 @@ def _jittor():
     return sys.modules.get("jittor")
 
 
+def _startup_config():
+    """The frozen startup configuration, as ``jittor.compiler`` presents it.
+
+    Watched for the same reason as the flags above, except the consequence is
+    worse: these name directories. ``jittor_path`` left pointing at a deleted
+    temporary directory does not fail the file that changed it -- it fails
+    whichever later file walks the source tree, with a missing-file error that
+    names nothing connected to the cause.
+
+    The module refuses these writes (``_runtime/state.py``), so a difference
+    here means a refusal did not hold: either something bypassed it through
+    ``ModuleType.__setattr__``, or a restore path wrote the wrong value back.
+    Refusing is not the same as staying correct, and only this notices the gap.
+    """
+    compiler = sys.modules.get("jittor.compiler")
+    if compiler is None:
+        return {}
+    policy = sys.modules.get("jittor._runtime.flag_policy")
+    if policy is None:
+        return {}
+    values = {}
+    for name in sorted(getattr(policy, "STARTUP_FLAGS", ())):
+        try:
+            value = getattr(compiler, name)
+        except Exception:
+            continue
+        # Only record values a later comparison can trust. `cuda_archs` is a
+        # list, and recording the object rather than a copy would compare it
+        # against itself and report nothing however it changed.
+        if isinstance(value, (str, bool, int, float)) or value is None:
+            values[name] = value
+        elif isinstance(value, (list, tuple)):
+            values[name] = tuple(value)
+    return values
+
+
 def snapshot(collect=True):
     jittor = _jittor()
     if jittor is None:
@@ -165,6 +201,7 @@ def snapshot(collect=True):
     return {
         "counters": counters,
         "flags": flags,
+        "startup": _startup_config(),
         "autograd_policy": _autograd_policy(jittor),
         "caches": _bounded_cache_sizes(),
         "modules": {name: id(module) for name, module in list(sys.modules.items())},
@@ -194,6 +231,13 @@ def differences(before, after):
         previous = before["flags"].get(name)
         if previous is not None and previous != value:
             report.append("flags.%s %r -> %r (use jt.flag_scope)" % (name, previous, value))
+    for name, value in sorted(after.get("startup", {}).items()):
+        previous = before.get("startup", {}).get(name)
+        if previous is not None and previous != value:
+            report.append(
+                "compiler.%s %r -> %r (startup config is frozen; a refused "
+                "write did not leave the old value in place)"
+                % (name, previous, value))
     if before.get("autograd_policy") != after.get("autograd_policy"):
         report.append(
             "autograd policy %r -> %r (use jt.autograd.policy_scope)"

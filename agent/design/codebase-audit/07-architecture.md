@@ -117,7 +117,24 @@ phase 6 那 1.94 ms 的 per-op 发射常数与 phase 7 那 9.78 ms 背后「CPU 
 | jt.compile_extern.* 是运行时 globals() 注入却被当公共分派依据 | `compile_extern.py:269-270,380-381,394-395,415-416`；`nn/functional/matrix.py` 6 处据此分派；测试引用 137 次 | 静态分析、.pyi、IDE 全部失效 | 后端能力查询接口 | 主要 |
 | 影子对象模型：205 个 `_torch_*` 属性名 | 全树 205 个不同名字（python/jittor 内约 100）：_torch_grad(34 处)、_torch_index_parent、_torch_data_owner、_torch_leaf_params(16 处)、_torch_force_cpu(17 处) 等 | 无类型无清理点无所有权；静默丢权重与叶子被裁剪两类 bug 都是这个模型的必然产物 | 一个显式的 TorchTensorState 对象 | 关键 |
 | 10 个 `jt._*` 名字是跨模块契约 | _torch_leaf_params、_active_optimizers、_current_optimizer、_torch_retained、_torch_sdpa_flash_stats、_transform_getitem_to_index_depth、_acl_clamp、_C、_torch_compat_install_context/complete | 单进程单线程假设固化；模块间通过根命名空间通信 | 收进显式 Runtime 对象 | 主要 |
-| 测试大量依赖内部细节 | 283 处 jt.flags.*、137 处 compile_extern/jt.compiler.*、127 个测试文件触碰下划线名或 __dict__ | 内部重构必然触发大面积测试改动，实际冻结了内部实现 | 给测试提供受支持的内省 API | 主要 |
+| 测试大量依赖内部细节（**2026-09-06 就其中一类给出实测结论，见下**） | 283 处 jt.flags.*、137 处 compile_extern/jt.compiler.*、127 个测试文件触碰下划线名或 __dict__ | 内部重构必然触发大面积测试改动，实际冻结了内部实现 | 给测试提供受支持的内省 API | 主要 |
+
+**已就「测试 patch `jt.compiler` 的 startup flag」这一类走完可达性（2.19 一带）。** 结论是这一类
+**今天全树 0 处**：以 `compiler` 模块为 target 的 patch 共 7 处，全部指向函数或 `has_acl`，
+没有一处是 `STARTUP_FLAGS` 里的值；唯一点名冻结 flag 的地方在 `pytest.raises` 里断言拒绝。
+2.13 的冻结把这条路堵死之后，唯一还需要它的用例（`core_source_signature` 要证明自己能看见
+新增文件与同尺寸编辑）改成了走**受支持的入口**——函数上的 `root=` 参数（`d23f9bba6`），
+也就是这一行「给测试提供受支持的内省 API」的修改方向在这一处已经落地。
+
+留下来的缺口不是可达性而是**没人钉住**：冻结只保证「写会抛」，不保证「抛完值还是对的」，
+而原有那条门禁写的是 `setattr(obj, name, getattr(obj, name))`——**永远写已经在那儿的值**，
+所以对「先赋值再抛」的实现照样通过。实测：打洞之后经 `mock.patch.object` 的断言
+28 passed 一条不红（mock 的 `__enter__` 失败后会调自己的 `__exit__` 回滚，回滚那一句
+恰好把值写回去了），改成直接写一个**不同**的值才 10 failed。两道门禁已补：
+`tests/core/test_startup_config.py` 的 refuse-before-mutate，与
+`tests/_helpers/state_leaks.py` 把冻结 startup config 纳入每文件快照（后者与机制无关，
+能点名「哪个文件改了 `compiler.jittor_path`」）。判据与四格顺序对照写在
+`agent/skills/verifying-a-gate-actually-ran` 第十二节。
 | torch 与 jittor 是同一个模块对象 | `compat/runtime.py:73`；`compat/torch/__init__.py:187` install(torch) 的实参就是 jittor 根模块 | Torch 模式进程里原生 Jittor 语义被就地改写；repository-layout.md 声称的"不改变无关进程的原生 API"只在进程间成立 | 独立的 torch 模块对象只做委托 | 主要 |
 
 ## 代码规模与分布

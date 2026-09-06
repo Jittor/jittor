@@ -419,13 +419,22 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | `jt.bfloat16(math.inf)` 让 `code` 算子的代码生成死循环 | `tests/backends/cuda/test_bf16.py::test_safe_clip` 与 `test_fp16.py::test_safe_clip`：0 维输入使 `@for(j, in@i@@_dim-2, -1, -1, ...)` 展开成 `@for(j, -2, -1, -1, ...)`，`op_compiler.cc:589` 的 `Check failed: total_step < 1000  Too much step` 触发。**真正贵的是级联**：这一条失败之后同一进程里 `test_bf16.py` 剩下的 18 条、`test_fp16.py` 的 1 条全部报同一个编译错误，单独跑却全绿——所以 CUDA 目录 23 条红里有 21 条是这一个根因。修的时候两件事：0 维的 `@for` 边界，以及一次编译失败为什么会毒化后续无关算子 | 代码生成分区 |
 | ~~`setup_cutt()` 全树没有调用点，cuTT 后端不可达~~ **已修 `4bdc7e797`（bindings/2.19 代 9.01 补）** | `compile_extern.py` 里 `setup_mkl` 由 `nn/functional/matrix.py:178` 惰性调用、`setup_nccl` 由 `compat/collectives.py` 调用，**只有 `setup_cutt` 没有任何调用点**（9.01 把三个 setup 改成惰性时漏了它）。后果：`cutt_ops` 恒为 `None`，`tests/backends/cuda/test_cutt.py` 与 `test_cutt_transpose_op.py` 共 6 条用例（含 3 条 `expect_error` 负向）**从来没跑过一次**，2.19 的 `6375a852`（cutt transpose axes 用户边界）没有任何运行时证据。恒 skip 的条目等于没有条目。**修法**：调用点补在 `core_api.transpose` 的首次调用（与 MKL 同形，import 期仍不装载）；测试改 `setUpClass` 里 `load=True`（模块作用域读惰性库属性恒为 `None`，这正是那条假 skip 理由的来源）。**打开后一次暴露三层坏账**：编译命令缺 `cuda_sdk_flags` 与 `backends/cuda/include`（4.13 已并行修掉，见该行）；`transpose`/`fuse_transpose`/`cutt_transpose` 三处构造函数把「axes 从 0 递增」当恒等置换而不比较秩，`axes=[0]` 作用在二维输入上**静默返回未转置的原张量**，`infer_shape` 的 `USER_CHECK` 不可达；`test_matmul_grad` 定义两次、后者盖掉前者。cuTT 六条现为整文件 9 passed | 构建 build，9.01 接手人 |
 | CUDA 异步故障不 sync 就永远不报 | 一个越界写的 kernel 之后 `Var.sync()` 干净返回、进程一路正常跑到退出，`cudaDeviceSynchronize()` 此时返回 700，但 jittor 从头到尾没说过一个字；只有显式 `jt.sync_all(True)` 才会在 `cuda_flags.cc:194` 报出 `cudaErrorIllegalAddress`。也就是说**一次真实的非法访存可以完全无声地走完整个训练**，而进程退出时唯一的输出是库句柄销毁失败的 teardown 噪音。`test_backend_teardown.py` 原来的探针就是踩在这上面（它 `except: pass` 了一个根本没抛的异常，于是「真错误盖过清理噪音」这条断言在真机上一直是假的，2.19 已改用 `sync_all(True)`） | 后端 cudabk |
+| ~~`test_source_signature_sees_same_size_edits_and_new_files` 在 HEAD 上就红，且会污染后面的用例~~ **经实测不成立，两个命题都不成立** | 交接里这条写的是「它 mock 掉 `compiler.jittor_path`，mock 退出时的还原被拒绝，于是该属性停在已删除的临时目录上；随机顺序下有时把 `test_plain_import_does_not_call_external_setups` 一起带红」。**逐条实测（`-p no:randomly`，nodeid 顺序钉死）**：(1) 那条用例**不在 `tests/structure` 而在 `tests/compiler`**，且在 HEAD 上**已绿**——`d23f9bba6`（9.01）已把它从 patch `jittor_path` 改成传 `core_source_signature(root=)`，该提交的说明里也写了「顺带修了 2.13 冻结 jittor_path 之后一直红的」这一句；单跑 `TestCoreBuildStamp` 7 passed，整文件 31 passed。(2) **描述的污染机制不可达**：把旧的 mock 写法原样复现出来，`mock.patch.object` 在 **`__enter__`** 就被冻结拒绝，属性从未被改过；受害者随后仍绿。真正发生的是 mock 的 `__enter__` 在 setattr 抛出后调自己的 `__exit__` 回滚，而回滚写的是**原值**、也被拒——**报出来的异常来自清理路径且消息里带原值**，读起来像「还原被禁止」。所以它响亮（用例红）且不留残留，不是静默污染。(3) **本环境根本没装随机顺序插件**：pytest 7.4.4 只有 `pytest-xdist` 与 `pytest-timeout`，`-p randomly` 直接 ImportError（`-p no:randomly` 不报错是因为 `no:` 不需要 import，不能用它判断插件在不在），所以「随机顺序下才复现」在本机只能来自 `-n`。(4) **同形态全树扫过：0 处**——`tests/` 里以 `compiler` 模块为 target 的 patch 共 7 处，全是函数或 `has_acl`，无一是 startup flag；唯一点名冻结 flag 的 `test_runtime_sync_state.py:670` 在 `pytest.raises` 里断言拒绝；`test_preflight.py:24` 改的是 `os.environ` 不是模块。**留下的真缺陷是「没人钉住」**：原有 `test_all_native_flag_instances_reject_late_startup_writes` 只写**已经在那儿的值**，因此对「先赋值再抛」的实现照样通过——打洞实测经 `patch.object` 断言 28 passed 一条不红，改成直接 `setattr` 一个**不同**值后 10 failed。已补两道门禁：`tests/core/test_startup_config.py` 的 refuse-before-mutate，与 `tests/_helpers/state_leaks.py` 把冻结 startup config 纳入每文件快照（后者按 owner 报出「哪个文件改了 `compiler.jittor_path`」，与机制无关，实测能点名） | bindings，2.19 一带 |
 | `test_cudnn_op.py::TestCudnnConvOp::test_backward_nhwc` 在本机 cuDNN 上 `Unexpected success` | 标着 `expectedFailure` 但在 cuDNN 8.x + sm_89 上真的通过了。要么这条限制已经不存在（那就去掉标记并说明从哪个版本起成立），要么标记的条件写得太宽 | 后端 cudabk |
 | `test_shared_reduce.py::test_shared_reduce_helper_is_two_stage` 按 locale 编码读生成源码 | 整目录跑时 `UnicodeDecodeError: 'ascii' codec can't decode byte 0xe2`，单独跑通过。jittor 生成的 JIT 源码里有非 ASCII（op key 用 U+00AB 分隔），读文件时没给 `encoding="utf-8"`，是否报错取决于当轮生成了哪个算子——**这类按环境编码解码的读法全树要扫一遍** | 代码生成分区 |
 
 ## 跨用例状态泄漏清单（0.15 的前置，2026-09-03 全树实测）
 
 `tests/conftest.py` 在**每个测试文件**前后拍一次快照（三个存活计数、六个关键 flag、
-`sys.modules` 里换了对象的条目），只报告不失败。全树原生一遍的结论比预期干净得多：
+**冻结的 startup config**、`sys.modules` 里换了对象的条目），只报告不失败。全树原生一遍的
+结论比预期干净得多：
+
+> startup config 这一档是 2.19 后来补的（见上表「`test_source_signature_...` 经实测不成立」那行）。
+> 它监视的是 `jittor.compiler` 上 `STARTUP_FLAGS` 的当前值，理由与 flag 那档同形但后果更重：
+> 这些值是**目录名**，`jittor_path` 停在一个已删除的临时目录不会让改它的那个文件失败，
+> 而是让后面某个走源码树的文件报一个与起因毫无关系的缺文件错误。冻结模块会拒绝这类写入，
+> 所以这里一旦有差异就说明「拒绝了」不等于「值还是对的」。清单是从 `STARTUP_FLAGS` 求出来
+> 而不是手写的，新增一个冻结 flag 不需要有人回来补。实测能点名到文件（`tests/structure/test_state_leak_helper.py` 钉住）。
 
 | 文件 | 留下什么 | 处置 |
 | --- | --- | --- |

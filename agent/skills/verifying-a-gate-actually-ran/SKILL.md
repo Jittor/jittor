@@ -467,3 +467,78 @@ def requires_onednn():
    3 failed，剩下的 3 条是先于改动存在的独立缺陷；其中 `test_backward_once` 断言 relay
    日志恰 1 条，库没加载时是 0 条、加载后是 6 条——**两种情况都失败，说明这条断言本身
    从来没对过**。把这种「换了失败原因」的条目逐条写清楚，不要混进「我修好了」里。
+
+## 十二、「A 在污染 B」是一句要证明的话，不是一句要相信的话
+
+上一节最后一行（结论随命令行顺序变）是症状。这一节是**怎么定位到那句话，以及怎么证明它**。
+
+交接里读到「某条用例会连累后面跑的用例」时，注意它其实是三个独立命题，而修错一个不解决问题：
+
+1. 污染源自己红；
+2. 污染源留下了坏的进程状态；
+3. 受害者是**因为**那份状态才红的。
+
+**只让污染源变绿，第 2、3 条原样留着。** 反过来，第 3 条要成立必须先排除「受害者自己就是坏的」。
+
+### 判据：四个格子，缺一个都不算证明
+
+|  | 单独跑受害者 | 先污染源、再受害者 |
+| --- | --- | --- |
+| **修前** | **必须绿**（否则你在看另一个缺陷） | **必须红**（这才是污染） |
+| **修后** | 绿 | 绿 |
+
+左上角那格是最常被跳过、也最容易让整个结论作废的一格。
+
+### 怎么钉住顺序：本仓库**没有装**随机顺序插件
+
+先查，别照抄命令：
+
+```bash
+python -m pytest --version && pip list | grep -iE "pytest|random|order"
+```
+
+2026-09-06 实测：pytest 7.4.4，插件只有 `pytest-xdist` 与 `pytest-timeout`，
+**`pytest-randomly` 根本没装**——`-p randomly --randomly-seed=N` 直接
+`ImportError: No module named 'randomly'`。（`-p no:randomly` 不报错，因为 `no:` 不需要 import，
+所以它**不能**用来判断插件在不在。）
+
+于是这台机器上的顺序来源只有 `-n`（xdist 的分发）。这有两个后果：
+
+- 交接里「随机顺序下才复现」这句话，在本环境里要么来自 `-n`，要么来自别的机器。**先查再信。**
+- 钉顺序不用种子，**直接把 nodeid 按想要的顺序写在命令行上**——pytest 按给定顺序跑，
+  比种子更短、可复现、且不依赖任何插件：
+
+```bash
+run(){ JITTOR_HOME=... TMPDIR=... JITTOR_TEST_DEVICES=cpu nvcc_path="" \
+       python -m pytest "$@" -q -p no:randomly --tb=line -rN 2>&1 | grep -E "passed|failed"; }
+
+run "$VICTIM"              # 左上／左下
+run "$POLLUTER" "$VICTIM"  # 右上／右下
+```
+
+「修前」那两格若缺陷已经被别人修掉，就**临时把洞打回去**再跑（改产品文件、跑、
+`git checkout --` 还原，顺序与注意事项见 `structure-rule-has-teeth`）。本波实测的四格：
+洞在时「单独受害者」1 passed、「污染源+受害者」2 failed；HEAD 上两格分别 1 passed / 2 passed。
+
+### 陷阱：用 `mock.patch.object` 当探针，探不出「先改后拒」
+
+想给「拒绝写入的属性不该被改坏」写门禁时，最自然的写法是拿 `patch.object` 去试。**它是空的。**
+
+`unittest.mock` 的 `__enter__` 先 `setattr(target, attr, new)`，**这一句抛异常时它会调用自己的
+`__exit__` 回滚**，而回滚的动作是 `setattr(target, attr, 原值)`。于是：
+
+- 被测代码若是「先赋值、再抛异常」，回滚那一句**正好把它修好了**，探针看到的属性是干净的
+  → 门禁绿，洞还在。本波实测：打洞之后经 `patch.object` 的断言 **28 passed / 3 skipped**，
+  一条没红；把同一条断言改成直接 `setattr` 一个**不同的值**，立刻 **10 failed**。
+- 冻结属性还有一个附带现象值得记住：回滚那一句也会被拒，所以**报出来的异常来自回滚、
+  且消息里带的是「原值」**，读起来像「还原被禁止」而不是「打补丁被禁止」。
+  别顺着这条 traceback 去找还原路径的 bug。
+
+由此得到一条写不变量门禁的通则：
+
+> **断言「不可写」时，永远不要写那个已经在那儿的值。**
+> `setattr(obj, name, getattr(obj, name))` 对「先赋值再抛」的实现照样通过——
+> 它测的是「抛没抛」，不是「改没改」。要写一个**不同**的值，再断言旧值还在。
+
+本仓库原有的 `test_all_native_flag_instances_reject_late_startup_writes` 正是前者，
+它在 2.19 这一波补上了后者（`tests/core/test_startup_config.py`）。

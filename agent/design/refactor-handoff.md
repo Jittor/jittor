@@ -2978,6 +2978,60 @@ warmup 之后、三次采样：
 
 `7.18` 卡在 `7.12`（独立 torch 包）上，`7.12` 还是待领，所以 `7.18`/`10.23` 是这一串里最后的。
 
+### 2026-09-06 `bindings`：上一条「顺带发现，未修」经实测**两个命题都不成立**
+
+上一节最后那条（`test_source_signature_sees_same_size_edits_and_new_files` 在 HEAD 上就红且污染后续用例）
+是**误报**，逐条实测如下。留在这里而不是删掉，因为它的三个坑值得下一个人知道。
+
+| 项 | 结果 |
+| --- | --- |
+| 文件位置写错 | 那条用例在 **`tests/compiler/`** 不在 `tests/structure/`。 |
+| 「在 HEAD 上就红」不成立 | HEAD（`4d79ca57d`）上**已绿**：`d23f9bba6`（9.01）早已把它从 patch `jittor_path` 改成传 `core_source_signature(root=)`，该提交说明里就写着「顺带修了 2.13 冻结 jittor_path 之后一直红的」。实测 `TestCoreBuildStamp` 7 passed、整文件 31 passed。上一波大概是在 rebase 到 `d23f9bba6` 之前观察的。 |
+| 「污染机制」不成立，且方向相反 | 把旧 mock 写法原样复现出来：`mock.patch.object` 在 **`__enter__`** 就被拒，属性**从未被改过**，受害者随后仍绿。真实情况是 mock 的 `__enter__` 在 setattr 抛出后调自己的 `__exit__` 回滚，而回滚写的是**原值**、也被冻结拒绝——**报出来的异常来自清理路径、消息里带的是原值**，读起来像「还原被禁止」而不是「打补丁被禁止」。所以它**响亮**（用例红）且**不留残留**，不是静默污染。 |
+| 四格顺序对照（`-p no:randomly`，nodeid 顺序钉死） | HEAD：单跑受害者 1 passed，先污染源再受害者 2 passed。**打洞之后**（临时让冻结先赋值再抛）：单跑受害者 1 passed（证明受害者不是自己坏的），先污染源再受害者 **2 failed**。即「污染确实会长这样，但今天不发生」。 |
+| 本环境没有随机顺序插件 | pytest 7.4.4，插件只有 `pytest-xdist` 与 `pytest-timeout`；`-p randomly --randomly-seed=N` 直接 `ImportError: No module named 'randomly'`。**`-p no:randomly` 不报错不能用来判断插件在不在**（`no:` 不需要 import）。所以「随机顺序下才复现」在本机只能来自 `-n` 的分发。 |
+| 同形态全树扫过：**0 处** | 以 `compiler` 模块为 target 的 patch 共 7 处，全是函数或 `has_acl`；唯一点名冻结 flag 的 `tests/structure/test_runtime_sync_state.py:670` 在 `pytest.raises` 里断言拒绝；`tests/compiler/test_preflight.py:24` 改的是 `os.environ` 不是模块。上一波「同一形态很可能不止一处」的猜测不成立。 |
+| **真缺口是「没人钉住」，已补两道门禁** | 冻结只保证「写会抛」，不保证「抛完值还是对的」。原有 `test_all_native_flag_instances_reject_late_startup_writes` 写的是 `setattr(obj, name, getattr(obj, name))`——**永远写已经在那儿的值**，对「先赋值再抛」的实现照样通过。变异实测：打洞后经 `mock.patch.object` 的断言 **28 passed 一条不红**（mock 的回滚恰好把值写回去了，把洞盖住），改成直接写一个**不同**的值后 **10 failed**。补的两道：`tests/core/test_startup_config.py` 的 refuse-before-mutate（含 `delattr`），与 `tests/_helpers/state_leaks.py` 把冻结 startup config 纳入每文件快照——后者与机制无关，实测能点名「哪个文件把 `compiler.jittor_path` 改成了什么」，即使那个文件自己是绿的。 |
+| 三套门禁 | 原生 CPU `JITTOR_TEST_DEVICES=cpu nvcc_path="" tests/core`：**21 failed / 665 passed / 117 skipped / 1 xfailed**，失败集合与同树 HEAD 的 21 条逐条相同，`+18 passed` 就是本波新增的用例。CPU torch 模式 `JITTOR_TORCH_SHIM=1 tests/structure`：**15 failed / 888 passed / 2 skipped / 2 xfailed**；比上一波记的 14 failed 多的那一条是 `test_runtime_sync_state.py::test_runtime_cuda_allow_tf32_is_a_live_writable_view_on_cpu`，**单独跑也红**（`nvcc_path=""` 的 CPU-only build 上必红，与顺序和本波改动都无关），上一波那次 structure 跑显然带着 CUDA。CUDA 一套本波**未跑完**，原因见下。 |
+| 未完成，交下一位 | (1) **CUDA 门禁未跑**：机器 load 13+、另有分区在跑 16 worker 的 pytest，本波末期 shell 反复无响应（连 `echo` 都不返回），不敢在共享 `JITTOR_HOME` 上再起 session。本波改动全是测试与 helper，不含 C++，CUDA 侧风险低但**没有证据，不要当成跑过**。(2) **2.19 的 `op_compiler.cc`(56)/`cache_compile.cc`(40) 切片只完成了静态可达性分析，一行未改**，分析结论见下节，它有一个会让整片迁移变成空操作的前提，必须先解决。 |
+
+### 2.19 下一位必读：`op_compiler.cc` 的 `USER_CHECK` 迁移**当前是空操作**
+
+本波对这两个文件做完了静态可达性分析（未落地任何改动，因为发现了下面这个前提）。
+
+**先更正两个数字。** 看板 2.19 行记 `op_compiler.cc` 51、`cache_compile.cc` 38；本树实测
+（含 `USER_CHECK`/`LOGf`）分别是 **56** 与 **40**。更重要的是 `cache_compile.cc` 这 40 处里
+**约 28 处在 `#ifdef TEST` 块内**（该文件自带的 `test_main` 单测，由 `gen_jit_tests` 编成独立
+可执行文件），天然属内部档、与用户输入无关；真正在产品路径上的只有 **12 处左右**，其中 2 处
+还是 `_MSC_VER` only。**按文件总数派工会把这类自测计入工作量**，下一位应先按 `#ifdef TEST` 切分。
+
+**阻塞前提：`precompile()` 整个循环体被一个 `catch (std::exception& e)` 包着
+（`op_compiler.cc:808-814`），处理方式是 `LOGf << e.what() << "\nJit compiler error:\n" << this_line`。**
+`UserError` 继承自 `JittorError : std::runtime_error`，所以它**会被这个 catch 接住并以 `LOGf`
+重新抛出**——而 `LOGf` 抛的是裸 `std::runtime_error`。也就是说：**把 `precompile` 里任何一处
+`CHECK`/`ASSERT` 改成 `USER_CHECK`，类型都会在离开这个函数时被抹平**，`catch (const UserError&)`
+接不到，`tests/structure/test_error_categories.py` 那种源码计数门禁却照样变绿。
+**这正是「让门禁在绿着的时候说谎」的形状，所以必须先改 catch 再谈迁移**：
+在 `catch (std::exception&)` 之前加一个 `catch (const UserError&)`，用 `USER_ERROR` 重新抛出
+并保留那段「指出源码行」的上下文（那段上下文是这个 catch 真正的价值，不要连它一起删）。
+
+**可达性结论（静态，未实测）。** `precompile` 处理的是**用户自己写的算子源码**——
+`jt.code(cpu_src=...)`／`compile_custom_ops` 的内容，所以 `@` 系语法的报错基本全是用户错误：
+`@for` 参数不足（`:587`）、`@if`/`@is_def`/`@define` 参数个数（`:617/:628/:678`）、
+`@strcmp`/`@alias` 参数个数（`:708/:729`）、`@alias` 指向不存在的量（`:733`）、
+`@expand_macro` 找不到宏（`:655`）、`@xxx` 维度不匹配（`:780/:781`）、`@x` 未定义（`:796`）、
+花括号不匹配（`:507/:523/:555/:574`）、`@` 后语法非法（`:805`）。已经是用户档措辞的有
+`:321`（`expand_op` 找不到 kernel，消息里点名算子与 dtype）。`:607` 的 `total_step < 1000`
+**已知用户可达**——看板那条 `jt.bfloat16(math.inf)` 让 `@for` 展开成死循环走的就是它，
+所以它也不该带「Could you please report this issue?」。
+反过来，`get_name_by_op_var`／`try_get_op_var_by_name`（`:132,:154-160`）、
+`fix_op_member`（`:926`）、`__get_fused_src` 里的 `defs` 一致性（`:1144`）、
+`:1265` 的 CPU/GPU 不可融合，都是融合器自身的不变量，应留内部档。
+
+**每一条判成 user 档都要有一条负向测试真的走到它**——本波没有跑这些负向测试
+（需要编译 C++ 核心，而机器当时已不可用），所以上面这份清单是**待实测的假设，不是结论**。
+`jt.code(cpu_src=...)` 加一段坏 `@` 语法就是现成的探针，`tests/compiler/` 是它的落点。
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
