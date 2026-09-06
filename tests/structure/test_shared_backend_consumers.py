@@ -10,13 +10,15 @@ import sysconfig
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "python/jittor/src"
 CONSUMERS = (
-    "executor.cc", "init.cc", "event_queue.cc", "profiler/profiler.cc",
+    "executor.cc", "exec_plan.cc", "exec_runner.cc",
+    "init.cc", "event_queue.cc", "profiler/profiler.cc",
     "debug/nan_checker.cc", "utils/log.cc", "pyjt/py_converter.h",
 )
 
 
 def test_shared_device_consumers_have_no_vendor_sdk_dependency():
-    for relative in CONSUMERS + ("executor.h", "event_queue.h", "debug/nan_checker.h"):
+    for relative in CONSUMERS + ("executor.h", "exec_plan.h", "exec_runner.h",
+                                 "event_queue.h", "debug/nan_checker.h"):
         source = (SRC / relative).read_text(encoding="utf-8")
         assert not re.search(r"#\s*include\s*[<\"](?:cuda|hip|acl/|helper_cuda)", source), relative
         assert not re.search(r"\b(?:cuda|hip)[A-Z]\w*\s*\(", source), relative

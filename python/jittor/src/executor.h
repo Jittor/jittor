@@ -26,7 +26,7 @@ namespace jittor {
 //   Runner   execution plan -> executed kernels. Per segment: pick the device,
 //            allocate outputs, migrate inputs across the host/device boundary,
 //            launch, then release the liveness the batch was holding. This is
-//            the half that mutates memory and device state.
+//            the half that mutates memory and device state. See exec_runner.h.
 //
 // Between the two halves the batch is compiled (`parallel_compile_all_ops`),
 // so that no compilation happens once execution has started.
