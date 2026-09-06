@@ -56,7 +56,7 @@ inline 了一份「现在有没有事务在记账」的查找（`factories.py`�
 `allow_tf32` 两处 `use_cuda`/精度写入**有意留在 ledger 之外**：它们表达的是安装
 结束之后调用方的运行期请求，跟着安装回滚会撤掉用户自己要的东西。
 
-已修：提交 `PLACEHOLDER`（vLLM arming finder 的并发外部替换）。
+已修：提交 `ad2b0614`（vLLM arming finder 的并发外部替换）。
 `compat/vllm/__init__.py:register()` 把 `_ArmOnFirstImport` 插进 `sys.meta_path`
 后登记的 undo 是 `remove(f) if f in sys.meta_path else None`——别人已经把这一项
 换掉或删掉时，回滚**报成功**并把别人装的东西留在原位。也就是说这本账唯一存在
