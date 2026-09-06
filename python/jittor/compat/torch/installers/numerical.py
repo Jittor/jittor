@@ -494,12 +494,22 @@ register_fidelity(
 
 _SOFTMAX_FIDELITY_DETAIL = (
     "matches Torch softmax values along an explicit dimension through Jittor's "
-    "native nn owner but omits dtype, device, and layout keyword semantics"
+    "native nn owner and honours the dtype keyword by casting the input first, "
+    "which is what Torch's dtype does; device and layout keyword semantics are "
+    "not implemented"
 )
 
 
-def softmax(input, dim=None, **kwargs):
-    """Compute softmax values through Jittor's native nn owner."""
+def softmax(input, dim=None, dtype=None, **kwargs):
+    """Compute softmax values through Jittor's native nn owner.
+
+    ``dtype=`` casts the input before the op, as Torch's does. It used to be
+    swallowed here while ``Tensor.softmax`` (a second, separate closure) applied
+    it, so ``torch.softmax(logits, -1, dtype=torch.float32)`` -- vLLM's sampler
+    written in functional form -- silently computed in the input's narrow dtype.
+    """
+    if dtype is not None:
+        input = input.cast(_dtype_to_str(dtype))
     return jt.nn.softmax(input, dim=dim)
 
 
@@ -512,13 +522,21 @@ register_fidelity(
 
 
 _LOG_SOFTMAX_FIDELITY_DETAIL = (
-    "matches Torch log-softmax values along an explicit dimension through Jittor's "
-    "native nn owner but omits dtype, device, and layout keyword semantics"
+    "matches Torch log-softmax values along an explicit dimension through "
+    "Jittor's native nn owner and honours the dtype keyword by casting the "
+    "input first, which is what Torch's dtype does; device and layout keyword "
+    "semantics are not implemented"
 )
 
 
-def log_softmax(input, dim=None, **kwargs):
-    """Compute log-softmax values through Jittor's native nn owner."""
+def log_softmax(input, dim=None, dtype=None, **kwargs):
+    """Compute log-softmax values through Jittor's native nn owner.
+
+    ``dtype=`` casts the input before the op; see ``softmax`` for why the
+    functional spelling used to drop it.
+    """
+    if dtype is not None:
+        input = input.cast(_dtype_to_str(dtype))
     return jt.nn.log_softmax(input, dim=dim)
 
 
@@ -1374,7 +1392,9 @@ register_fidelity(
 
 _MASKED_SELECT_FIDELITY_DETAIL = (
     "matches Torch boolean selection values and flattened shape for supported "
-    "real tensors but omits out, device, layout, and dtype keyword semantics"
+    "real tensors but omits out, device, layout, and dtype keyword semantics; "
+    "the same object is bound as the Tensor method, which therefore also "
+    "accepts the out keyword that Torch's method rejects"
 )
 
 

@@ -4,6 +4,7 @@ This module contains source moved from the former monolithic installer without
 changing the compatibility semantics.
 """
 
+import builtins as _builtins
 import jittor as jt
 from jittor import nn
 import numbers
@@ -23,6 +24,14 @@ from ..nested import (
 )
 from ..tensor_state import get_tensor_state
 from .factories import _install_random_and_linspace, _set_use_cuda, _wrap_constructors
+# masked_select/softmax/log_softmax have their final owner in the numerical
+# family; install binds those objects rather than a second copy here. The edge
+# is one-way -- numerical.py does not import this module.
+from .numerical import (
+    log_softmax as _numerical_log_softmax,
+    masked_select as _numerical_masked_select,
+    softmax as _numerical_softmax,
+)
 from ..types import (
     _DEVICE_CTX_STACK, _device_is_cpu, _device_is_cuda, _dtype_to_str,
     _make_cpu_resident, _make_cuda_resident, _mark_cpu_like,
@@ -337,235 +346,392 @@ def _ddp_all_reduce_grads(leaves):
 
 _MinMax = _collections.namedtuple("torch_return_types", ["values", "indices"])
 
+# Jittor's own reductions, captured at import time. ``install`` rebinds the very
+# module attributes these wrap, so looking them up late would recurse forever;
+# nothing in the install order replaces them before this module is imported, and
+# ``test_the_captured_natives_are_still_the_natives`` pins that rather than
+# leaving it to be assumed.
+_NATIVE_ARGMAX = jt.argmax
+_NATIVE_ARGMIN = jt.argmin
+_NATIVE_MAXIMUM = jt.maximum
+_NATIVE_MINIMUM = jt.minimum
+_NATIVE_MAX = jt.max                  # values-only module reductions
+_NATIVE_MIN = jt.min
+_NATIVE_MAX_METHOD = jt.Var.max       # values-only methods; 0-dim full reduction
+_NATIVE_MIN_METHOD = jt.Var.min
+_NATIVE_VAR_METHOD = jt.Var.var
+
+_ARG_REDUCTION_FIDELITY_DETAIL = (
+    "matches Torch index values, the int64 index dtype, the axis alias, and "
+    "the keepdim shape for supported real tensors, and CPU and CUDA agree bit "
+    "for bit even on rows with duplicate keys (measured on 8x512 float32 with "
+    "about five duplicates per key); Jittor's native argmax returns an "
+    "(index, value) pair whose value half is dropped here, while out, device, "
+    "layout, and named-dimension semantics are not implemented"
+)
+
+
+def _reduce_index(result):
+    """Return only the index half of a Jittor arg-reduction, as int64."""
+    if isinstance(result, (tuple, list)):
+        result = result[0]
+    return result.int64()
+
+
+def argmax(input, dim=None, keepdim=False, keepdims=None, axis=None):
+    """Return the indices of the maxima, as Torch's ``argmax`` does."""
+    if axis is not None:
+        dim = axis
+    if keepdims is not None:
+        keepdim = keepdims
+    if dim is None:
+        return _reduce_index(_NATIVE_ARGMAX(input.reshape(-1), 0))
+    try:
+        result = _NATIVE_ARGMAX(input, dim, keepdims=keepdim)
+    except TypeError:
+        result = _NATIVE_ARGMAX(input, dim, keepdim=keepdim)
+    return _reduce_index(result)
+
+
+def argmin(input, dim=None, keepdim=False, keepdims=None, axis=None):
+    """Return the indices of the minima, as Torch's ``argmin`` does."""
+    if axis is not None:
+        dim = axis
+    if keepdims is not None:
+        keepdim = keepdims
+    if dim is None:
+        return _reduce_index(_NATIVE_ARGMIN(input.reshape(-1), 0))
+    try:
+        result = _NATIVE_ARGMIN(input, dim, keepdims=keepdim)
+    except TypeError:
+        result = _NATIVE_ARGMIN(input, dim, keepdim=keepdim)
+    return _reduce_index(result)
+
+_MINMAX_FIDELITY_DETAIL = (
+    "matches Torch's values-only full reduction, the (values, indices) pair "
+    "for a dim, the elementwise two-tensor form, the int64 index dtype, and "
+    "the axis alias for supported real tensors, and CPU and CUDA agree bit for "
+    "bit on both halves; the keepdims spelling is reserved for Jittor's own "
+    "values-only callers, while out, device, layout, and named-dimension "
+    "semantics are not implemented"
+)
+
+
+def _maxmin(which, x, *args, **kwargs):
+    """Shared body of Torch's ``max``/``min``, which have three shapes."""
+    # jittor-internal callers use the `keepdims` kwarg (with an 's') and
+    # expect values-only semantics; delegate straight to the native op so
+    # we don't break jittor's own softmax/layernorm/etc.
+    if "keepdims" in kwargs:
+        native = _NATIVE_MAX if which == "max" else _NATIVE_MIN
+        return native(x, *args, **kwargs)
+    if "axis" in kwargs and "dim" not in kwargs:
+        kwargs["dim"] = kwargs.pop("axis")
+    dim = kwargs.get("dim", None)
+    keepdim = kwargs.get("keepdim", False)
+    other = kwargs.get("other", None)
+    pos = list(args)
+    if pos:
+        if isinstance(pos[0], jt.Var):
+            other = pos[0]
+        else:
+            dim = pos[0]
+            if len(pos) > 1:
+                keepdim = pos[1]
+    if other is not None:
+        if which == "max":
+            return _NATIVE_MAXIMUM(x, other)
+        return _NATIVE_MINIMUM(x, other)
+    if dim is None:
+        # native scalar reduction via the captured METHOD (0-dim scalar);
+        # NOT x.max(), which now routes back into this wrapper (recursion).
+        if which == "max":
+            return _NATIVE_MAX_METHOD(x)
+        return _NATIVE_MIN_METHOD(x)
+    index_of = argmax if which == "max" else argmin
+    idx = index_of(x, dim=dim, keepdim=keepdim)
+    if getattr(jt.compiler, "has_acl", 0):
+        native = _NATIVE_MAX if which == "max" else _NATIVE_MIN
+        val = native(x, dim, keepdims=keepdim)
+    elif keepdim:
+        val = _NATIVE_GATHER(x, dim, idx)
+    elif x.ndim == 1:
+        val = x[idx]
+    else:
+        val = _NATIVE_GATHER(x, dim, idx.unsqueeze(dim)).squeeze(dim)
+    return _MinMax(val, idx.int64())
+
+
+# torch's max/min return the (values, indices) namedtuple for a dim --
+# mmdetection relies on this pervasively (`v, i = overlaps.max(dim=0)`). jittor's
+# native method returns values-only and is used by core/linalg/einops with the
+# `keepdims=` spelling (handled natively inside _maxmin) or a bare dim. Route
+# everything through _maxmin: keepdims= -> native values; a bare/torch dim ->
+# namedtuple; no dim -> native scalar. The few jittor-internal callers that pass
+# a BARE dim and want values-only extract `.values` at their call site.
+#
+# ``max`` and ``min`` shadow the builtins for the rest of this module, so the
+# one place that wanted the builtin spells it ``_builtins.min``.
+def max(input, *args, **kwargs):
+    """Return Torch's ``max``: a scalar, a ``(values, indices)`` pair, or a
+    pairwise maximum, depending on how it was called."""
+    return _maxmin("max", input, *args, **kwargs)
+
+
+def min(input, *args, **kwargs):
+    """Return Torch's ``min``, in the same three shapes as ``max``."""
+    return _maxmin("min", input, *args, **kwargs)
+
+_VARIANCE_FIDELITY_DETAIL = (
+    "matches Torch's unbiased default (correction=1), the correction, "
+    "unbiased, keepdim and axis keywords, and a tuple of dims for supported "
+    "real tensors, with std derived from var so it carries none of Jittor's "
+    "1e-6 floor; the summation order is the backend's, so CPU and CUDA agree "
+    "only to float32 rounding (about 1.3e-07 relative over 512 elements, with "
+    "the parallel reduction the more accurate of the two), while out, device, "
+    "layout, and named-dimension semantics are not implemented"
+)
+
+
+def _correction_to_unbiased(unbiased, correction):
+    """Collapse Torch's legacy ``unbiased=`` and modern ``correction=``."""
+    if correction is not None:
+        return correction != 0
+    if unbiased is not None:
+        return bool(unbiased)
+    return True                       # torch default
+
+
+def _multidim_var(input, dims, unbiased, keepdim):
+    """Variance over a LIST/TUPLE of axes, which the native op cannot do.
+
+    jittor's native ``var()`` ``dim=`` slot is scalar-only (a list crashes with
+    ``is_type<int64>(oi)``), and its separate ``dims=`` path returns a
+    wrong-shaped/valued result for partial multi-axis reductions. Compute
+    directly from mean/sum (which DO accept a tuple) so every axis subset
+    matches torch exactly, preserving unbiased (Bessel) + keepdim semantics.
+    """
+    dims = [int(d) % input.ndim for d in dims]
+    mean = jt.mean(input, dims, keepdims=True)
+    out = jt.sum((input - mean) ** 2, dims=dims, keepdims=keepdim)
+    count = 1
+    for d in dims:
+        count *= input.shape[d]
+    if unbiased:
+        count = count - 1
+    return out / count
+
+
+# torch's var/std default to UNBIASED (Bessel, correction=1); jittor's native var
+# defaults to biased (numpy-aligned) -- a silent-wrong divergence for torch code.
+# Fix in the torch layer only (native jt.var stays numpy-aligned).
+def var(input, dim=None, unbiased=None, keepdim=False, keepdims=None,
+        correction=None, axis=None, **kwargs):
+    """Return Torch's variance, unbiased unless told otherwise."""
+    if axis is not None:
+        dim = axis
+    biased = _correction_to_unbiased(unbiased, correction)
+    kept = bool(keepdim) or bool(keepdims)
+    if isinstance(dim, (list, tuple)):
+        return _multidim_var(input, dim, biased, kept)
+    return _NATIVE_VAR_METHOD(input, dim=dim, unbiased=biased, keepdims=kept)
+
+
+def std(input, dim=None, unbiased=None, keepdim=False, keepdims=None,
+        correction=None, axis=None, **kwargs):
+    """Return Torch's standard deviation, derived from ``var``.
+
+    jittor's native std is hardcoded unbiased AND floors at
+    ``maximum(1e-6)``, which torch does not, so take the square root here.
+    """
+    return var(input, dim=dim, unbiased=unbiased, keepdim=keepdim,
+               keepdims=keepdims, correction=correction, axis=axis).sqrt()
+
+
+_MASKED_SCATTER_FIDELITY_DETAIL = (
+    "matches Torch's row-major consumption of the source, mask broadcasting, "
+    "the destination's dtype, and the in-place spelling's return identity for "
+    "supported real tensors, stays differentiable through both operands, and "
+    "CPU and CUDA agree bit for bit; out, device, and layout semantics are not "
+    "implemented"
+)
+_UNFOLD_FIDELITY_DETAIL = (
+    "matches Torch's sliding-window shape and values for a positive size and "
+    "step on supported real tensors, and CPU and CUDA agree bit for bit; the "
+    "result is a materialized reindex rather than a stride view, so writes to "
+    "it do not reach the source, and device, layout, and dtype keyword "
+    "semantics are not implemented"
+)
+_ADDC_FIDELITY_DETAIL = (
+    "matches Torch's input + value * (tensor1 op tensor2) values for supported "
+    "broadcastable real tensors but omits out, device, layout, and dtype "
+    "keyword semantics"
+)
+_BROADCAST_TO_FIDELITY_DETAIL = (
+    "matches Torch's expansion shape and values through Jittor's native "
+    "broadcast for supported tensors but omits out, device, layout, and dtype "
+    "keyword semantics"
+)
+
+
+def masked_scatter(input, mask, source):
+    """Copy ``source`` into the True positions of ``mask``, out of place.
+
+    ``source`` is consumed in row-major order and ``mask`` broadcasts to
+    ``input.shape``. Differentiable w.r.t. both operands -- the Qwen-VL path
+    scatters vision-tower image_embeds into the text inputs_embeds, and grads
+    must reach the ViT. Implemented as gather(source, running-count-of-True)
+    then where(mask), avoiding any sliced in-place write (a jittor no-view
+    no-op).
+    """
+    broadcast_mask = mask
+    if tuple(broadcast_mask.shape) != tuple(input.shape):
+        broadcast_mask = broadcast_mask.broadcast(input.shape)
+    broadcast_mask = broadcast_mask.bool()
+    flat_mask = broadcast_mask.reshape(-1)
+    # index into source.flatten() for each position = (#True strictly before it)
+    picked = flat_mask.int32().cumsum(0) - 1
+    # clamp: the out-of-range entries sit where the mask is False and are dropped
+    picked = picked.maximum(0).minimum(source.numel() - 1)
+    gathered = source.reshape(-1)[picked].reshape(input.shape)
+    if str(gathered.dtype) != str(input.dtype):
+        gathered = gathered.cast(str(input.dtype))
+    return jt.ternary(broadcast_mask, gathered, input)
+
+
+def masked_scatter_(input, mask, source):
+    """In-place ``masked_scatter``, keeping ``input``'s object identity.
+
+    Writes back through ``assign()`` so the same Var -- and any module
+    attribute holding it -- reflects the update.
+    """
+    input.assign(masked_scatter(input, mask, source))
+    return input
+
+
+def unfold(input, dimension, size, step):
+    """Return sliding windows along ``dimension`` as a new trailing dim.
+
+    ``out[..., i, ..., j] == input[..., i * step + j, ...]``. This is a
+    materialized reindex, not the stride view Torch returns.
+    """
+    rank = input.ndim
+    axis = dimension if dimension >= 0 else dimension + rank
+    count = (input.shape[axis] - size) // step + 1
+    out_shape = list(input.shape)
+    out_shape[axis] = count
+    out_shape.append(size)
+    source = [f"i{k}" for k in range(rank)]
+    source[axis] = f"i{axis}*{step}+i{rank}"   # window pos + within-window
+    return input.reindex(out_shape, source)
+
+
+def addcmul(input, tensor1, tensor2, value=1):
+    """Return ``input + value * (tensor1 * tensor2)``."""
+    return input + value * (tensor1 * tensor2)
+
+
+def addcdiv(input, tensor1, tensor2, value=1):
+    """Return ``input + value * (tensor1 / tensor2)``."""
+    return input + value * (tensor1 / tensor2)
+
+
+def broadcast_to(input, shape):
+    """Expand ``input`` to ``shape`` without copying, as Torch does."""
+    return input.broadcast(shape)
+
+
+#: ``jittor.misc.tensor_ops`` already implements Torch's ``diagonal`` contract,
+#: negative ``offset``/``dim1``/``dim2`` and the empty result of an
+#: out-of-range offset included, and ``torch.diagonal`` was already resolving to
+#: it. The compat layer used to carry a second reindex implementation and hang
+#: it off ``Var`` only, so the two spellings were different objects; re-export
+#: the one owner instead. Verified equal to ``np.diagonal`` on
+#: ``(offset, dim1, dim2)`` of (0,0,2), (1,0,2), (-1,0,2), (0,-2,-1), (2,1,2)
+#: and (-5,0,1), on CPU and CUDA.
+diagonal = jt.diagonal
+
+_NATIVE_DIAGONAL_FIDELITY_DETAIL = (
+    "re-exports Jittor's native diagonal owner, whose signature and values "
+    "already match Torch for supported real tensors, negative offset and "
+    "negative dim1/dim2 included, and CPU and CUDA agree bit for bit; the "
+    "result is materialized rather than the stride view Torch returns, and "
+    "out, device, layout, and dtype keyword semantics are not implemented"
+)
+
+
+for _reduction_impl, _reduction_api, _reduction_detail in (
+        (argmax, "torch.argmax", _ARG_REDUCTION_FIDELITY_DETAIL),
+        (argmin, "torch.argmin", _ARG_REDUCTION_FIDELITY_DETAIL),
+        (max, "torch.max", _MINMAX_FIDELITY_DETAIL),
+        (min, "torch.min", _MINMAX_FIDELITY_DETAIL),
+        (var, "torch.var", _VARIANCE_FIDELITY_DETAIL),
+        (std, "torch.std", _VARIANCE_FIDELITY_DETAIL),
+        (masked_scatter, "torch.Tensor.masked_scatter",
+         _MASKED_SCATTER_FIDELITY_DETAIL),
+        (masked_scatter_, "torch.Tensor.masked_scatter_",
+         _MASKED_SCATTER_FIDELITY_DETAIL),
+        (unfold, "torch.Tensor.unfold", _UNFOLD_FIDELITY_DETAIL),
+        (addcmul, "torch.Tensor.addcmul", _ADDC_FIDELITY_DETAIL),
+        (addcdiv, "torch.Tensor.addcdiv", _ADDC_FIDELITY_DETAIL),
+        (broadcast_to, "torch.broadcast_to", _BROADCAST_TO_FIDELITY_DETAIL),
+        (diagonal, "torch.diagonal", _NATIVE_DIAGONAL_FIDELITY_DETAIL)):
+    register_fidelity(
+        _reduction_api, _reduction_impl, Fidelity.APPROXIMATE,
+        _reduction_detail)
+# ``install_methods`` re-wraps these six Var methods to translate torch's
+# ``axis`` alias; they accept it themselves, so the adapter must skip them or
+# ``torch.foo is Tensor.foo`` stops holding (see the cohort-promotion skill).
+for _reduction_impl in (argmax, argmin, max, min, var, std):
+    _reduction_impl._torch_accepts_axis = True
+del _reduction_impl, _reduction_api, _reduction_detail
+
 
 def _install_reductions(g):
-    """torch-correct argmax/argmin/max/min/sort/topk (jittor's differ:
-    jittor argmax->(idx,val), jittor max(dim)->values only).
-    NB: g IS the jittor module, so capture the ORIGINAL jittor ops before
-    overwriting (else infinite recursion)."""
-    import jittor as _jt
-    _argmax = _jt.argmax
-    _argmin = _jt.argmin
-    _maximum = _jt.maximum
-    _minimum = _jt.minimum
-    _jt_max = _jt.max          # jittor-native reductions (values only)
-    _jt_min = _jt.min
-    _jt_var_max = _jt.Var.max  # native METHODS (0-dim scalar for full reduction)
-    _jt_var_min = _jt.Var.min
+    """Bind the reduction/mask/view family; every object here is module level.
 
-    def _reduce_index(result):
-        if isinstance(result, (tuple, list)):
-            result = result[0]
-        return result.int64()
+    ``g`` IS the jittor module, so each name below is one stable object bound to
+    both the module and the ``Var`` spelling. Binding the *same* object to both
+    is the point: the two used to be built from separate closures and had
+    measurably different behaviour (``torch.var(x, axis=0)`` reduced over
+    everything while ``x.var(axis=0)`` reduced over axis 0).
+    """
+    Var = jt.Var
 
-    def argmax(x, dim=None, keepdim=False, keepdims=None):
-        if keepdims is not None:
-            keepdim = keepdims
-        if dim is None:
-            return _reduce_index(_argmax(x.reshape(-1), 0))
-        try:
-            res = _argmax(x, dim, keepdims=keepdim)
-        except TypeError:
-            res = _argmax(x, dim, keepdim=keepdim)
-        return _reduce_index(res)
-    def argmin(x, dim=None, keepdim=False, keepdims=None):
-        if keepdims is not None:
-            keepdim = keepdims
-        if dim is None:
-            return _reduce_index(_argmin(x.reshape(-1), 0))
-        try:
-            res = _argmin(x, dim, keepdims=keepdim)
-        except TypeError:
-            res = _argmin(x, dim, keepdim=keepdim)
-        return _reduce_index(res)
-    g.argmax = argmax
-    g.argmin = argmin
+    # jittor's own argmax returns (index, value) and its max(dim) returns
+    # values only, so torch's contract needs the compat objects on both sides.
+    g.argmax = Var.argmax = argmax
+    g.argmin = Var.argmin = argmin
+    g.max = Var.max = max
+    g.min = Var.min = min
+    g.var = Var.var = var
+    g.std = Var.std = std
 
-    def _maxmin(which, x, *args, **kwargs):
-        # jittor-internal callers use the `keepdims` kwarg (with an 's') and
-        # expect values-only semantics; delegate straight to the native op so
-        # we don't break jittor's own softmax/layernorm/etc.
-        if "keepdims" in kwargs:
-            native = _jt_max if which == "max" else _jt_min
-            return native(x, *args, **kwargs)
-        dim = kwargs.get("dim", None)
-        keepdim = kwargs.get("keepdim", False)
-        other = kwargs.get("other", None)
-        pos = list(args)
-        if pos:
-            if isinstance(pos[0], _jt.Var):
-                other = pos[0]
-            else:
-                dim = pos[0]
-                if len(pos) > 1:
-                    keepdim = pos[1]
-        if other is not None:
-            return _maximum(x, other) if which == "max" else _minimum(x, other)
-        if dim is None:
-            # native scalar reduction via the captured METHOD (0-dim scalar);
-            # NOT x.max(), which now routes back into this wrapper (recursion).
-            return _jt_var_max(x) if which == "max" else _jt_var_min(x)
-        af = argmax if which == "max" else argmin
-        idx = af(x, dim=dim, keepdim=keepdim)
-        if getattr(_jt.compiler, "has_acl", 0):
-            native = _jt_max if which == "max" else _jt_min
-            val = native(x, dim, keepdims=keepdim)
-        elif keepdim:
-            val = _jt.gather(x, dim, idx)
-        elif x.ndim == 1:
-            val = x[idx]
-        else:
-            val = _jt.gather(x, dim, idx.unsqueeze(dim)).squeeze(dim)
-        return _MinMax(val, idx.int64())
-    g.max = lambda x, *a, **k: _maxmin("max", x, *a, **k)
-    g.min = lambda x, *a, **k: _maxmin("min", x, *a, **k)
+    # The ordering and cumulative families live at module level too; install
+    # only binds them. jittor-core uses none of these as Var methods (only the
+    # python list.sort builtin), so torch semantics here are safe; .max/.min ARE
+    # used internally, which is why _maxmin keeps the native keepdims path.
+    g.topk = Var.topk = topk
+    g.sort = Var.sort = sort
+    g.argsort = Var.argsort = argsort
+    g.median = Var.median = median
 
-    # The ordering family lives at module level (stable objects with registered
-    # fidelity); install only binds it.
-    g.topk = topk
-    g.sort = sort
-    g.argsort = argsort
-    g.median = median
+    # Owned elsewhere: bind the one existing owner rather than a second copy.
+    # ``softmax``/``log_softmax`` accept torch's ``dtype=`` (cast before the op),
+    # which jittor's native method rejects -- vLLM's sampler spells it
+    # ``logits.softmax(dim=-1, dtype=torch.float32)``.
+    g.diagonal = Var.diagonal = diagonal
+    g.masked_select = Var.masked_select = _numerical_masked_select
+    g.softmax = Var.softmax = _numerical_softmax
+    g.log_softmax = Var.log_softmax = _numerical_log_softmax
 
-    # --- Tensor METHOD forms. jittor-core uses none of these as Var methods (only
-    # the python list.sort builtin), so installing torch semantics here is safe;
-    # it was verified that .max/.min methods ARE used internally, so those stay
-    # native (values-only) and are intentionally NOT overridden. ---
-    Var = _jt.Var
-    Var.sort = sort
-    Var.argsort = argsort
-    Var.topk = topk
-    Var.median = median
-    # Tensor.softmax/log_softmax accept a `dtype=` (cast before the op) which
-    # jittor's native method rejects (vLLM's sampler: logits.softmax(dim=-1,
-    # dtype=torch.float32)).
-    def _var_softmax(self, dim=-1, dtype=None, **kw):
-        x = self.cast(_dtype_to_str(dtype)) if dtype is not None else self
-        return _jt.nn.softmax(x, dim=dim)
-    Var.softmax = _var_softmax
-    def _var_log_softmax(self, dim=-1, dtype=None, **kw):
-        x = self.cast(_dtype_to_str(dtype)) if dtype is not None else self
-        return _jt.nn.log_softmax(x, dim=dim)
-    Var.log_softmax = _var_log_softmax
-    # torch's Tensor.max(dim)/min(dim) returns the (values, indices) namedtuple --
-    # mmdetection relies on this pervasively (`v, i = overlaps.max(dim=0)`). jittor's
-    # native method returns values-only and is used by core/linalg/einops with the
-    # `keepdims=` spelling (handled natively inside _maxmin) or a bare dim. Route
-    # everything through _maxmin: keepdims= -> native values; a bare/torch dim ->
-    # namedtuple; no dim -> native scalar. The few jittor-internal callers that pass
-    # a BARE dim and want values-only extract `.values` at their call site.
-    Var.max = lambda self, *a, **k: _maxmin("max", self, *a, **k)
-    Var.min = lambda self, *a, **k: _maxmin("min", self, *a, **k)
-
-    # torch's var/std default to UNBIASED (Bessel, correction=1); jittor's native var
-    # defaults to biased (numpy-aligned) -- a silent-wrong divergence for torch code.
-    # Fix in the torch layer only (native jt.var stays numpy-aligned). Support both
-    # the legacy `unbiased=` and modern `correction=` kwargs.
-    _jt_var = Var.var
-    def _correction_to_unbiased(unbiased, correction):
-        if correction is not None:
-            return correction != 0
-        if unbiased is not None:
-            return bool(unbiased)
-        return True                       # torch default
-    def _multidim_var(self, dims, unbiased, keepdim):
-        # torch-compat: var over a LIST/TUPLE of axes. jittor's native var() `dim=`
-        # slot is scalar-only (a list crashes with `is_type<int64>(oi)`), and its
-        # separate `dims=` path returns a WRONG-shaped/value result for partial
-        # multi-axis reductions. Compute directly from mean/sum (which DO accept a
-        # tuple) so every axis subset matches torch exactly, preserving unbiased
-        # (Bessel) + keepdim semantics.
-        dims = [int(d) % self.ndim for d in dims]
-        mean = _jt.mean(self, dims, keepdims=True)
-        sqr = (self - mean) ** 2
-        out = _jt.sum(sqr, dims=dims, keepdims=keepdim)
-        n = 1
-        for d in dims:
-            n *= self.shape[d]
-        if unbiased:
-            n = n - 1
-        return out / n
-    def _torch_var(self, dim=None, unbiased=None, keepdim=False, keepdims=None,
-                   correction=None, **kw):
-        ub = _correction_to_unbiased(unbiased, correction)
-        kd = bool(keepdim) or bool(keepdims)
-        if isinstance(dim, (list, tuple)):
-            return _multidim_var(self, dim, ub, kd)
-        return _jt_var(self, dim=dim, unbiased=ub, keepdims=kd)
-    def _torch_std(self, dim=None, unbiased=None, keepdim=False, keepdims=None,
-                   correction=None, **kw):
-        # std == sqrt(var) with the correct bias. jittor's native std is hardcoded
-        # unbiased AND floors at maximum(1e-6) (torch doesn't), so derive from var.
-        return _torch_var(self, dim=dim, unbiased=unbiased, keepdim=keepdim,
-                          keepdims=keepdims, correction=correction).sqrt()
-    Var.var = _torch_var
-    Var.std = _torch_std
-    g.var = lambda x, *a, **k: _torch_var(x, *a, **k)
-    g.std = lambda x, *a, **k: _torch_std(x, *a, **k)
-
-    # missing methods (truly absent on Var -> pure additive)
-    Var.masked_select = lambda self, mask: self[mask]      # torch: 1-D of selected
-
-    def _masked_scatter(self, mask, source):
-        # torch.Tensor.masked_scatter(mask, source): copy elements of `source`
-        # (consumed in row-major order) into the positions of `self` where `mask`
-        # is True; `mask` broadcasts to self.shape. Out-of-place, and DIFFERENTIABLE
-        # w.r.t. both self and source -- the Qwen-VL path scatters vision-tower
-        # image_embeds into the text inputs_embeds, and grads must reach the ViT.
-        # Implemented as gather(source, running-count-of-True) then where(mask),
-        # avoiding any sliced in-place write (a jittor no-view no-op).
-        m = mask
-        if tuple(m.shape) != tuple(self.shape):
-            m = m.broadcast(self.shape)
-        mb = m.bool()
-        flat_mask = mb.reshape(-1)
-        # index into source.flatten() for each position = (#True strictly before it)
-        sel_idx = flat_mask.int32().cumsum(0) - 1
-        sel_idx = sel_idx.maximum(0).minimum(source.numel() - 1)  # clamp (unused where mask False)
-        src_flat = source.reshape(-1)
-        gathered = src_flat[sel_idx].reshape(self.shape)
-        if str(gathered.dtype) != str(self.dtype):
-            gathered = gathered.cast(str(self.dtype))
-        return jt.ternary(mb, gathered, self)
-    Var.masked_scatter = _masked_scatter
-
-    def _masked_scatter_(self, mask, source):
-        # in-place variant: write the result back through assign() so the same Var
-        # (and any module attribute holding it) reflects the update.
-        out = _masked_scatter(self, mask, source)
-        self.assign(out)
-        return self
-    Var.masked_scatter_ = _masked_scatter_
-
-    def _unfold(self, dimension, size, step):
-        # torch's Tensor.unfold(dim, size, step): sliding windows along `dim`,
-        # appending a new last dim of length `size`. out[...,i,...,j]=x[...,i*step+j,...]
-        nd = self.ndim
-        d = dimension if dimension >= 0 else dimension + nd
-        n = (self.shape[d] - size) // step + 1
-        out_shape = list(self.shape); out_shape[d] = n; out_shape.append(size)
-        src = [f"i{k}" for k in range(nd)]
-        src[d] = f"i{d}*{step}+i{nd}"                       # window pos + within-window
-        return self.reindex(out_shape, src)
-    Var.unfold = _unfold
-
-    def _diagonal(self, offset=0, dim1=0, dim2=1):
-        # torch's Tensor.diagonal: drop dim1,dim2 and append a diagonal dim.
-        nd = self.ndim
-        d1 = dim1 if dim1 >= 0 else dim1 + nd
-        d2 = dim2 if dim2 >= 0 else dim2 + nd
-        s1, s2 = self.shape[d1], self.shape[d2]
-        dl = max(0, min(s1, s2 - offset)) if offset >= 0 else max(0, min(s1 + offset, s2))
-        keep = [k for k in range(nd) if k != d1 and k != d2]
-        out_shape = [self.shape[k] for k in keep] + [dl]
-        last = len(keep)
-        src = [None] * nd
-        for outpos, k in enumerate(keep):
-            src[k] = f"i{outpos}"
-        src[d1] = f"i{last}+{max(0, -offset)}"
-        src[d2] = f"i{last}+{max(0, offset)}"
-        return self.reindex(out_shape, src)
-    Var.diagonal = _diagonal
+    # Methods with no module-level torch spelling to widen.
+    Var.masked_scatter = masked_scatter
+    Var.masked_scatter_ = masked_scatter_
+    Var.unfold = unfold
+    Var.addcmul = addcmul
+    Var.addcdiv = addcdiv
+    g.broadcast_to = Var.broadcast_to = broadcast_to
 
     # --- elementwise / reduction ops missing as torch methods (all additive) ---
     # sign/trunc/frac used to be installed here too, guarded by hasattr, while
@@ -589,20 +755,6 @@ def _install_reductions(g):
     if not hasattr(g, "logaddexp"):
         g.logaddexp = logaddexp
         Var.logaddexp = logaddexp
-
-    # argmax/argmin METHOD forms: torch returns just the indices; jittor's native
-    # Var.argmax returns (idx, val). Core uses these only in docstrings, so override.
-    Var.argmax = lambda self, dim=None, keepdim=False: argmax(self, dim, keepdim)
-    Var.argmin = lambda self, dim=None, keepdim=False: argmin(self, dim, keepdim)
-    # addcmul/addcdiv: self + value * (t1 (*|/) t2)
-    Var.addcmul = lambda self, t1, t2, value=1: self + value * (t1 * t2)
-    Var.addcdiv = lambda self, t1, t2, value=1: self + value * (t1 / t2)
-    if not hasattr(Var, "broadcast_to"):
-        Var.broadcast_to = lambda self, shape: self.broadcast(shape)
-    # torch-compat: module-level torch.broadcast_to(input, shape) (some code calls
-    # the functional form, not the method). Expands `input` to `shape` without copy.
-    if not hasattr(g, "broadcast_to"):
-        g.broadcast_to = lambda input, shape: input.broadcast(shape)
 
 
 def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
@@ -2447,7 +2599,8 @@ def install(ctx):
         # the spurious LEADING size-1 dims off any over-ranked entry so the ndims
         # line up the way torch sees them. Only size-1 leading dims are removed;
         # a genuine ndim/shape mismatch is left for jittor's concat to reject.
-        min_nd = min(t.ndim for t in nonempty)
+        # ``min`` is this module's torch reduction, so reach for the builtin.
+        min_nd = _builtins.min(t.ndim for t in nonempty)
         fixed = []
         for t in nonempty:
             while t.ndim > min_nd and t.shape[0] == 1:
