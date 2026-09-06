@@ -106,6 +106,7 @@ def test_corex_configuration_is_detached_and_openmp_removed_before_publication(p
     context.compile_module.assert_not_called()
     context.transform_sources.assert_not_called()
     assert "-x cu" in result.nvcc_flags and "-DNO_ATOMIC64" in result.nvcc_flags
+    assert "-DHAS_CUDA" in result.nvcc_flags and "-DIS_CUDA" in result.nvcc_flags
     assert result.environment == {"retained": "1", "use_cutt": "0"}
     assert dict(os.environ) == before_environment
     assert "-fopenmp" in context.config.cc_flags
@@ -115,6 +116,9 @@ def test_corex_configuration_is_detached_and_openmp_removed_before_publication(p
     assert "corex_converter" not in result.resources
     assert result.kernel_compiler == str(home / "bin/clang++")
     assert result.kernel_language == "cuda" and result.kernel_source_suffix == ".cc"
+    assert result.kernel_source_roots == (
+        str((ROOT / "backends/cuda/kernels/core").resolve()),
+    )
     assert result.kernel_flag_filter == ("--extended-lambda", "--expt-relaxed-constexpr")
     assert result.kernel_device_link is False
     assert len(result.backend_sources) == 4

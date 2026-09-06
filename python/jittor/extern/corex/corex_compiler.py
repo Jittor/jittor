@@ -49,7 +49,12 @@ def configure(context, corex_home=None):
     common_flags += " -DHAS_ACCELERATOR -DIS_COREX -DJT_DEFAULT_PARA_OPT_LEVEL=4 "
     link_flags = (" -L" + shlex.quote(sdk_lib)
                   + " -Wl,-rpath," + shlex.quote(sdk_lib) + " -lcudart ")
-    device_flags = sdk_flags + " -x cu -Ofast -DNO_ATOMIC64 -Wno-c++11-narrowing "
+    # Corex uses the CUDA-compatible source dialect for generated kernels.  Keep
+    # the CUDA ABI markers on the device compile only; the host translation
+    # units intentionally remain Corex-only (the two flag domains are not
+    # interchangeable).
+    device_flags = (sdk_flags + " -x cu -Ofast -DHAS_CUDA -DIS_CUDA "
+                    "-DNO_ATOMIC64 -Wno-c++11-narrowing ")
     driver = os.path.join(cuda_root, "runtime", "driver.cc")
     abi_flags = sdk_flags + " -DHAS_CUDA -DIS_CUDA "
     sources = (
@@ -76,6 +81,10 @@ def configure(context, corex_home=None):
         kernel_compile_flags=device_flags,
         kernel_flag_filter=("--extended-lambda", "--expt-relaxed-constexpr"),
         kernel_source_suffix=".cc", kernel_device_link=False,
+        # Reuse the reviewed CUDA kernel providers.  An empty source-root
+        # tuple would make Corex silently lose builtin accelerator overrides
+        # and compile every op through the generic path.
+        kernel_source_roots=(os.path.join(cuda_root, "kernels", "core"),),
         convert_nvcc_flags=convert_nvcc_flags,
         environment=dict(config.environment, use_cutt="0"),
         resources=dict(
