@@ -693,7 +693,14 @@ CodeOp 的 double DataMap，8.06 仍需真正 typed 属性消费和描述符缓�
   不能登记为支持；Corex 的 converter 删除和真实 provider 仍在进行。
 - 编译侧新增值型 `BuildSource/BuildConfig` backend source/link/language 字段和 native
   JIT compiler 配置入口；目标是选中后端直接编译自己的 TU，不再复制和文本改写核心源码。
-  `process_jittor_source`、`process_acl` 尚未删除，ROCm/Corex 的所有旧调用也尚未清零。
+`process_jittor_source`、`process_acl` 尚未删除，ROCm/Corex 的所有旧调用也尚未清零。
+
+当前源码扫描的剩余转换入口是：`jittor_utils.process_jittor_source` 定义 1 处，
+ACL `acl_compiler.py` 仍调用 `transform_sources` 1 处，ROCm `rocm_compiler.py`
+仍调用 `transform_sources` 1 处，ACL `acl_jittor.cc` 仍保留 `process_acl` 及
+约 30 处 `token_replace(_all)`，Corex 编译器仍有同类转换服务。这个扫描结果是
+4.12 的收口基线；完成判据是这些调用归零，而不是仅把函数改名或把替换逻辑搬到
+另一个 Python 文件。
 
 本 WIP 未执行 Git 提交前的首次 JIT，也未声称 ACL/ROCm/Corex 硬件验证。下一位接手时先检查
 `git status` 中上述文件，按 ABI3 合同统一 provider 工厂和 canonical backend 名称
