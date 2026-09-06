@@ -97,7 +97,8 @@ def _mark_fsdp_param_var(var, state, entry, role):
         object.__setattr__(var, "_spec", types.SimpleNamespace(
             mesh=getattr(var, "_dtensor_device_mesh"),
             placements=getattr(var, "_dtensor_placements")))
-        object.__setattr__(var, "_local_tensor", entry.shard if entry is not None else var)
+        local = var if role == "grad_shard" else entry.shard if entry is not None else var
+        object.__setattr__(var, "_local_tensor", local)
     except Exception:
         pass
     return var
@@ -122,6 +123,8 @@ def _fsdp_var_to_local(self, *args, **kwargs):
     state, entry = _fsdp_param_entry(self)
     if state is None or entry is None:
         return self
+    if getattr(self, "_jittor_fsdp2_role", None) == "grad_shard":
+        return self
     return entry.shard
 
 
@@ -131,6 +134,8 @@ def _fsdp_var_full_tensor(self, *args, **kwargs):
         if getattr(self, "_jittor_fsdp2_role", None) == "flat_shard":
             return common._all_gather_shards(self)
         return self
+    if getattr(self, "_jittor_fsdp2_role", None) == "grad_shard":
+        return common._full_gradient_from_shard(self, state, entry)
     if getattr(state, "true_fsdp_unsharded", False) and getattr(entry, "full_param", None) is not None:
         return entry.full_param
     if getattr(state, "true_fsdp_flat", False):

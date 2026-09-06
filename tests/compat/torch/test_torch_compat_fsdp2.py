@@ -427,6 +427,8 @@ class TestFSDP2Compat(unittest.TestCase):
             self.assertEqual(len(sharded), len(entries))
             for entry, grad in zip(entries, sharded):
                 self.assertEqual(tuple(grad.shape), tuple(entry.shard.shape))
+                self.assertIs(grad.to_local(), grad)
+                self.assertEqual(tuple(grad.full_tensor().shape), entry.shape)
                 np.testing.assert_array_equal(
                     grad.numpy(), np.ones(entry.shard.shape, dtype="float32"))
 

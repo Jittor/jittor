@@ -161,6 +161,39 @@ def _all_gather_shards(local_shard):
     raise RuntimeError("Jittor NCCL all_gather is not available; launch with jittor.distributed.launch and use_nccl=1")
 
 
+def _full_gradient_from_shard(gradient, state, entry):
+    """Reconstruct one public DTensor gradient from its rank-local shard."""
+    if getattr(state, "true_fsdp_flat", False):
+        stored = [
+            getattr(current.shard, "_torch_grad", None)
+            for current in state.true_fsdp_params
+        ]
+        if any(isinstance(value, jt.Var) for value in stored):
+            parts = []
+            real_numel = 0
+            for current, value in zip(state.true_fsdp_params, stored):
+                if current is entry:
+                    value = gradient
+                if not isinstance(value, jt.Var):
+                    value = jt.zeros_like(current.shard)
+                part_numel = _param_numel(value)
+                if part_numel:
+                    parts.append(_flatten_var(value))
+                    real_numel += part_numel
+            if real_numel < int(state.true_fsdp_flat_shard_numel):
+                parts.append(jt.zeros(
+                    (int(state.true_fsdp_flat_shard_numel) - real_numel,),
+                    dtype=state.true_fsdp_flat_shard.dtype))
+            local_flat = parts[0] if len(parts) == 1 else jt.concat(parts, dim=0)
+        else:
+            local_flat = state.true_fsdp_last_flat_grad
+        full_flat = _all_gather_shards(local_flat)
+        return _slice_flat(full_flat, entry.flat_offset, entry.numel).reshape(
+            entry.shape)
+    gathered = _all_gather_shards(_flatten_var(gradient))
+    return _slice_flat(gathered, 0, entry.numel).reshape(entry.shape)
+
+
 def _reduce_scatter_padded(full_grad):
     # Likewise the identity on one rank: nothing to reduce against, and rank 0's
     # shard is the whole padded gradient.
