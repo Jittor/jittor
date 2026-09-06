@@ -693,7 +693,16 @@ CodeOp 的 double DataMap，8.06 仍需真正 typed 属性消费和描述符缓�
   不能登记为支持；Corex 的 converter 删除和真实 provider 仍在进行。
 - 编译侧新增值型 `BuildSource/BuildConfig` backend source/link/language 字段和 native
   JIT compiler 配置入口；目标是选中后端直接编译自己的 TU，不再复制和文本改写核心源码。
-`process_jittor_source`、`process_acl` 尚未删除，ROCm/Corex 的所有旧调用也尚未清零。
+  `process_jittor_source`、`process_acl` 尚未删除，ROCm/Corex 的所有旧调用也尚未清零。
+
+本波随后已合入的独立前置：`d861351f0` 为 ACL 绑定自有 Device/Pinned allocator，拒绝
+Managed memory（合同 5 passed）；`a672c1997` 为 Corex 保留 CUDA-compatible kernel ABI
+标记和已审计 CUDA core kernel source roots（Corex/build 合同 16 passed）；`06190e2b3`
+为 ROCm 建立独立 HIP provider、HIP runtime/allocator/stream/event/peer/meminfo，入口不再
+解 `rocm_cache.tar.gz` 或调用源码转换，并只登记已有 hipBLAS/rocPRIM 实现；`8d06e85e6`
+让共享 pyjt 数组桥接只在真实 CUDA backend 选择 CuPy，ACL/ROCm 不再误走 CUDA 互操作
+（共享 build 合同 16 passed）。ROCm 本机无 HIP SDK，未做真实 hipcc/设备验证；MIOpen、RCCL
+和其余库族仍明确未实现，不能视为后端完成。
 
 当前源码扫描的剩余转换入口是：`jittor_utils.process_jittor_source` 定义 1 处，
 ACL `acl_compiler.py` 仍调用 `transform_sources` 1 处，ROCm `rocm_compiler.py`
