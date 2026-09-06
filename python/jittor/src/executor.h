@@ -60,18 +60,11 @@ struct Executor {
     // was launched by an earlier batch. `init.cc` resets it when the runtime
     // restarts; a nested batch overwrites it for its parent.
     bool last_is_cuda = false;
-    // Op::number_of_created_ops as of the most recent run_sync. The
-    // auto-flush pipeline counts newly built operators from here, so its
-    // flush points are anchored to executions and repeat identically across
-    // steps -- drifting points would cut the graph differently every step
-    // and compile a new fused-kernel variant each time.
-    int64 last_run_ops = 0;
-    // Python callbacks may return Vars while a submitted graph is executing;
-    // submission must not nest through that conversion boundary.
-    bool flush_active = false;
     void run_sync(vector<Var*> vars, bool device_sync, bool weak_sync=true);
     // Submit from a Python return boundary. `force` is the explicit API;
     // otherwise lazy/eager/auto-flush flags retain their scheduling policy.
+    // *When* to submit is the pipeline's decision and its state lives there
+    // (`runtime/submission_pipeline.h`), not on the executor.
     void submit_pending(Var* target, bool force=false);
 
     inline Allocation alloc_temp(size_t size) {

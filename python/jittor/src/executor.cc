@@ -14,6 +14,7 @@
 #include "event_queue.h"
 #endif
 #include "runtime/device.h"
+#include "runtime/submission_pipeline.h"
 #include "runtime/backend.h"
 #include "runtime/backend_fallback.h"
 #include "ops/op_register.h"
@@ -50,18 +51,20 @@ DEFINE_FLAG(int, use_threading, 0, "Allow to use python threading with jittor.")
 DEFINE_FLAG(int, exec_called, 0, "exec sync called");
 
 struct PendingSubmissionScope {
-    Executor* executor;
-    explicit PendingSubmissionScope(Executor* executor) : executor(executor) {
-        executor->flush_active = true;
+    SubmissionPipeline& pipeline;
+    explicit PendingSubmissionScope(SubmissionPipeline& pipeline)
+        : pipeline(pipeline) {
+        pipeline.flush_active = true;
     }
-    ~PendingSubmissionScope() { executor->flush_active = false; }
+    ~PendingSubmissionScope() { pipeline.flush_active = false; }
 };
 
 void Executor::submit_pending(Var* target, bool force) {
-    if (!target || flush_active || target->is_finished()) return;
+    auto& pipeline = runtime_submission_pipeline();
+    if (!target || pipeline.flush_active || target->is_finished()) return;
 
     if (force) {
-        PendingSubmissionScope scope(this);
+        PendingSubmissionScope scope(pipeline);
         run_sync({target}, false, false);
         return;
     }
@@ -69,7 +72,7 @@ void Executor::submit_pending(Var* target, bool force) {
 #ifdef HAS_ACCELERATOR
     if (auto_flush_ops > 0 && runtime_use_cuda()
             && backend_ops(accelerator_backend_id()).execution.supports_auto_flush
-            && Op::number_of_created_ops - last_run_ops >= auto_flush_ops) {
+            && Op::number_of_created_ops - pipeline.last_run_ops >= auto_flush_ops) {
         vector<Var*> vars;
         for (auto holder : runtime_holder_state().holders()) {
             auto var = holder->var;
@@ -79,10 +82,10 @@ void Executor::submit_pending(Var* target, bool force) {
             vars.push_back(var);
         }
         if (vars.size()) {
-            PendingSubmissionScope scope(this);
+            PendingSubmissionScope scope(pipeline);
             run_sync(vars, false, false);
         } else {
-            last_run_ops = Op::number_of_created_ops;
+            pipeline.last_run_ops = Op::number_of_created_ops;
         }
     }
 #endif
@@ -100,7 +103,7 @@ void Executor::submit_pending(Var* target, bool force) {
         if (op->type() == OpType::broadcast) return;
         eager_target = op->inputs().front();
     }
-    PendingSubmissionScope scope(this);
+    PendingSubmissionScope scope(pipeline);
     run_sync({target}, true);
 }
 
@@ -213,7 +216,8 @@ static void top_weak_sync(vector<Var*>& vars) {
 void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     // == phase 1: setup ==
     exec_called ++;
-    last_run_ops = Op::number_of_created_ops;
+    auto& pipeline = runtime_submission_pipeline();
+    pipeline.last_run_ops = Op::number_of_created_ops;
     if (weak_sync && !use_threading)
         top_weak_sync(vars);
     this->allocator = get_allocator();
@@ -247,7 +251,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     // == phases 6-7: execution plan -> executed kernels ==
     run_exec_plan(*this, plan, fused_op, vars, device_sync, entry_device);
 
-    last_run_ops = Op::number_of_created_ops;
+    pipeline.last_run_ops = Op::number_of_created_ops;
 }
 
 // Allocations handed to foreign libraries (cupy, cutt) through the hooks

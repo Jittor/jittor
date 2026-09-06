@@ -1,6 +1,7 @@
 #pragma once
 #include "executor.h"
 #include "runtime/holder_state.h"
+#include "runtime/submission_pipeline.h"
 #include "runtime/traversal_state.h"
 #include "runtime/device_state.h"
 #include "runtime/jit_policy.h"
@@ -19,6 +20,7 @@ public:
     NativeRuntime& operator=(const NativeRuntime&) = delete;
 
     Executor& executor() { return executor_; }
+    SubmissionPipeline& submissions() { return submissions_; }
     RuntimeHolderState& holders() { return holders_; }
     RuntimeTraversalState& traversals() { return traversals_; }
     RuntimeDeviceState& devices() { return devices_; }
@@ -29,6 +31,7 @@ public:
 
 private:
     Executor executor_;
+    SubmissionPipeline submissions_;
     RuntimeHolderState holders_;
     RuntimeTraversalState traversals_;
     RuntimeDeviceState devices_;

@@ -32,6 +32,10 @@ Executor& runtime_executor() {
     return native_runtime().executor();
 }
 
+SubmissionPipeline& runtime_submission_pipeline() {
+    return native_runtime().submissions();
+}
+
 RuntimeTraversalState& runtime_traversal_state() {
     return native_runtime().traversals();
 }

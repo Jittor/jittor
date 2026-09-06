@@ -21,9 +21,12 @@ int main() {
     NativeRuntime isolated;
     assert(isolated.executor().allocator == nullptr);
     assert(isolated.executor().temp_allocator == nullptr);
-    assert(!isolated.executor().flush_active);
     assert(!isolated.executor().last_is_cuda);
-    assert(isolated.executor().last_run_ops == 0);
+    // Submission scheduling is not executor state: it has its own owner.
+    assert(!isolated.submissions().flush_active);
+    assert(isolated.submissions().last_run_ops == 0);
+    assert(&runtime_submission_pipeline() == &native_runtime().submissions());
+    assert(&isolated.submissions() != &runtime_submission_pipeline());
     assert(&runtime_executor() == &native_runtime().executor());
     assert(&runtime_holder_state() == &native_runtime().holders());
     assert(&isolated.executor() != &runtime_executor());
@@ -104,6 +107,23 @@ def test_executor_instance_is_owned_by_native_runtime():
     assert "EXTERN_LIB Executor exe;" not in executor_header
     assert "Executor exe;" not in executor_source
     assert "EXTERN_LIB Executor& runtime_executor();" in executor_header
+
+
+def test_executor_header_carries_no_submission_pipeline_state():
+    """Scheduling bookkeeping belongs to the pipeline, not to the executor.
+
+    `last_run_ops` and `flush_active` are inputs to *when* a graph is
+    submitted, never to *how* it runs.  While they sat on `Executor` a reader
+    of `executor.h` could not tell them apart from the allocators `run_sync`
+    actually uses, and each new scheduling heuristic added another such field.
+    """
+    executor_header = (SRC / "executor.h").read_text(encoding="utf-8")
+    pipeline_header = (SRC / "runtime/submission_pipeline.h").read_text(encoding="utf-8")
+    for field in ("last_run_ops", "flush_active"):
+        assert field not in executor_header, field
+        assert field in pipeline_header, field
+    assert "SubmissionPipeline submissions_;" in \
+        (SRC / "runtime/runtime.h").read_text(encoding="utf-8")
 
 
 def test_traversal_storage_and_implementation_belong_to_runtime():
