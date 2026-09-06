@@ -137,6 +137,39 @@ HCCL 多卡看 [`hccl-on-device-verification.md`](hccl-on-device-verification.md
 训练、两机 loss 轨迹一致）、**`8.17`**（跨机带宽微基准、掉线在超时内退出）、**`8.18`**（2 机保存、
 4 机加载的续训）、**`10.22`**（两节点 smoke 进 nightly）。
 
+### 后端 `grad()` 的 CPU 参考对拍
+
+全树共 **60 个后端梯度实现**（C++ `::grad()` 28 个，Python `jt.Function.grad` 32 个），清单在
+`tests/structure/test_backend_grad_contract.py` 的 `BACKEND_GRAD_COVERAGE`，与源码树逐条相等，
+新增或删除任何一条都会报红。其中 **24 条在本机能真跑**（CUDA 22 条 + oneDNN 1 条 + …），
+**36 条要等硬件**。清单里的 `kind` 字段就是下面这张表：
+
+| kind | 含义 | 硬件到手那天跑什么 | 通过判据 |
+| --- | --- | --- | --- |
+| `mpi_hardware` | MPI collective 的反向，要 `mpirun` 起多进程 | `tests/distributed/test_mpi_op.py` | 各 rank 的梯度与单进程 CPU 参考一致 |
+| `nccl_hardware` | NCCL collective 的反向，要多卡 launcher | `tests/distributed/test_nccl_ops.py`、`tests/distributed/test_fsdp2_nccl.py` | 同上；`all_gather` 的反向要真的走 reduce-scatter |
+| `npu_hardware` | ACL/CANN 的反向，已有梯度用例，缺卡 | `nox -s npu` | 用例内已带 CPU 对照，全绿即判定 |
+| `npu_hardware_no_grad_test` | **有 `grad()` 但只有前向用例**——即使有卡也测不到反向 | 见下面逐条 | 要先补用例，不是跑一遍就行 |
+| `rocm_hardware` | ROCm 的反向，已有 CPU 对拍用例，缺卡 | `nox -s rocm` | `TestBMM::test_bmm_rocm` 自带 `calc(0)`/`calc(1)` 双跑对拍 |
+| `rocm_hardware_no_grad_test` | 同 `npu_hardware_no_grad_test`，ROCm 侧 | 见下面逐条 | 同上 |
+| `unsupported_hardware` | 反向根本没实现，当前直接报错 | — | 先实现，再谈验收 |
+
+**缺卡不等于缺用例。** 上表后四行是真正的窟窿，逐条列在这里，硬件日之前就可以先把用例写出来：
+
+| 符号 | 源码 | 现状 |
+| --- | --- | --- |
+| `HcclAllGatherOp` | `python/jittor/extern/acl/hccl/ops/hccl_all_gather_op.cc` | `grad()` 直接 `LOGf << "not implemented"`；要在 Ascend 910B3 多卡上补实现与 CPU 对照 |
+| `RocprimCumsumOp` | `backends/rocm/libraries/rocprim/rocprim_cumsum_op.cc` | 全树**没有任何用例**碰过它，前向反向都没有；`tests/backends/rocm/test_rocm.py` 里要补一条照 `TestBMM` 形状的 CPU 对拍 |
+| `FloorIntACL` | `backends/acl/kernels/ops/floor_op.py` | 只有 `test_aclop.py::TestACL::test_floor_int` 前向 |
+| `IndexACL` | `backends/acl/kernels/ops/index_op.py` | 只有 `test_aclop.py::TestACL::test_index` 前向 |
+| `NonzeroACL` | `backends/acl/kernels/ops/where_op.py` | 只有 `test_aclop.py::TestACL::test_nonzero_1` 前向 |
+| `StackACL` | `backends/acl/kernels/ops/stack_op.py` | 只有 `test_aclop.py::TestACL::test_stack` 前向 |
+| `TriuACL` | `backends/acl/kernels/ops/triu_op.py` | 只有 `test_aclop.py::TestACL::test_triu` 前向 |
+
+这七条**不得用 skip 冒充通过**。`test_backend_grad_contract.py` 里
+`test_every_gradient_without_a_gradient_test_is_listed_in_the_manual` 会强制它们逐个出现在本节：
+补上用例并改掉 `kind` 之前，谁都删不掉这段文字。
+
 ## 硬件日之前还要补的三件事
 
 上面三处「尚无 nox session」是这一页最该被人接手的部分。它们不是文档问题：**没有 session 就意味着
