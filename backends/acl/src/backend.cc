@@ -3,6 +3,7 @@
 #include "runtime/backend.h"
 #include "runtime/backend_streams.h"
 #include "runtime/device_state.h"
+#include "mem/allocator.h"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -435,6 +436,50 @@ void free_memory(int device, BackendMemoryKind kind, void* pointer) {
     finalize_if_unused();
 }
 
+// ACL must not borrow the CUDA allocator stack.  Apart from selecting the
+// wrong driver API, doing so loses the ACL device id used by allocation
+// placement and shutdown accounting.  Keep this thin adapter here so the
+// public BackendOps allocator contract and the native ACL allocation ledger
+// have one owner.
+class AclAllocator final : public Allocator {
+    int device_;
+    BackendMemoryKind kind_;
+public:
+    AclAllocator(int device, BackendMemoryKind kind) : device_(device), kind_(kind) {}
+    uint64 flags() const override {
+        return kind_ == BackendMemoryKind::Pinned ? 0 : Allocator::_cuda;
+    }
+    int device() const override {
+        return kind_ == BackendMemoryKind::Pinned ? -1 : device_;
+    }
+    const char* name() const override {
+        return kind_ == BackendMemoryKind::Pinned ? "acl_pinned" : "acl_device";
+    }
+    void* alloc(size_t size, size_t& allocation) override {
+        allocation = size;
+        return allocate_memory(device_, kind_, size);
+    }
+    void free(void* pointer, size_t size, const size_t&) override {
+        free_memory(device_, kind_, pointer);
+        (void)size;
+    }
+    bool can_share() const override { return false; }
+};
+
+Allocator* acl_allocator(int device, BackendMemoryKind kind) {
+    USER_CHECK(kind == BackendMemoryKind::Device || kind == BackendMemoryKind::Pinned)
+        << "ACL allocator does not support managed memory";
+    validate_device(device);
+    static std::mutex mutex;
+    static std::map<std::pair<int, BackendMemoryKind>, std::unique_ptr<AclAllocator>> allocators;
+    std::lock_guard<std::mutex> guard(mutex);
+    auto key = std::make_pair(device, kind);
+    auto found = allocators.find(key);
+    if (found == allocators.end())
+        found = allocators.emplace(key, std::make_unique<AclAllocator>(device, kind)).first;
+    return found->second.get();
+}
+
 void memory_info(int device, size_t& free, size_t& total) {
     on_device(device, [&] { check_acl(aclrtGetMemInfo(ACL_DDR_MEM, &free, &total), "aclrtGetMemInfo"); });
 }
@@ -601,7 +646,7 @@ BackendOps make_acl_backend() {
     ops.device_count = device_count;
     ops.current_device = acl_runtime_current_device;
     ops.set_device = set_device;
-    ops.allocator = accelerator_allocator_for;
+    ops.allocator = acl_allocator;
     ops.copy = copy;
     ops.copy_async = copy_async;
     ops.synchronize = synchronize;
