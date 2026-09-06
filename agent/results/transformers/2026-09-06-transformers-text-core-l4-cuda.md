@@ -128,7 +128,7 @@ CPU structure 门禁。排版等价后的最终源码再次合并运行五个定
 structure 首轮指出 `installers/nn.py` 为 2622 行，超过既有 2600 行预算。最终没有放宽
 门槛，只压缩本轮新增代码的空行、注释和多行表达式；修改前后完整 Python AST 摘要均为
 `25018eb18203cf856c6269c73f02140bac70dbd6d55b847a5eb7d38290c9ead7`，其余八个冻结文件
-哈希不变。模型运行的原始清单和证据继续保留，交付清单固定排版等价后的最终源码；等价
+哈希不变。模型运行的固定 revision 清单和数值证据继续保留，交付清单固定排版等价后的最终源码；等价
 证明位于 `$JITTOR_LAB_ROOT/transformers_compat/source_layout_equivalence_20260906.md`。
 
 可复现的维护者报告与机器结果位于：
@@ -138,5 +138,10 @@ structure 首轮指出 `installers/nn.py` 为 2622 行，超过既有 2600 行�
 - `$JITTOR_LAB_ROOT/transformers_compat/seq2seq_l4_20260906/frozen_source/SEQ2SEQ_L4_FROZEN_SOURCE_RESULT.md`
 - `$JITTOR_LAB_ROOT/transformers_compat/decoder_l4_20260906/final_evidence_audit.json`
 
-固定 checkpoint、tokenizer、NPZ/JSON、comparison、日志和导出模型在维护者评测前保留；
-只清理可再生且独立归属本轮的 JIT、CUDA kernel 和临时缓存。
+验证完成时曾保留固定 checkpoint、tokenizer 和导出模型。维护者随后授权清理可重建的大
+权重：10 个 decoder Hub cache root 和 33 个公开 checkpoint/export/runtime 权重文件已删除，
+实际回收 `34,009,661,440` bytes（`31.674 GiB`）。固定 model ID/revision 清单、tokenizer/
+config 元数据、NPZ/JSON、comparison、日志、报告和 tiny round-trip 权重继续保留；完整 L4
+复跑前需按清单重新下载公开 checkpoint 并重新生成导出权重。清理明细位于
+`$JITTOR_LAB_ROOT/transformers_compat/weight_cleanup_20260906.md`。状态更新后的布局门禁通过，
+隔离 CPU structure 为 `232 passed, 2 skipped in 68.61s`。
