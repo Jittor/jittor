@@ -31,6 +31,7 @@ import sys
 import types
 
 from jittor.compat.module_patcher import register_module_patch
+from jittor.compat.transaction import TransactionConflict
 
 from . import backend, custom_ops, flash_attn, layers
 
@@ -125,11 +126,22 @@ def register(transaction=None):
 
     if not any(isinstance(finder, _ArmOnFirstImport) for finder in sys.meta_path):
         finder = _ArmOnFirstImport()
-        sys.meta_path.insert(0, finder)
+        index = 0
+        sys.meta_path.insert(index, finder)
         if transaction is not None:
-            transaction.record_undo(
-                lambda f=finder: sys.meta_path.remove(f)
-                if f in sys.meta_path else None)
+            def restore_finder(f=finder, i=index):
+                # Owner-aware, like the permissive and module-patch finders.
+                # This used to be ``remove(f) if f in sys.meta_path else None``:
+                # when another actor had already dropped or replaced the entry,
+                # rollback reported success and left whatever they installed in
+                # place, so the one failure mode the ledger exists to surface --
+                # a concurrent external replacement -- was the one it hid.
+                if i >= len(sys.meta_path) or sys.meta_path[i] is not f:
+                    raise TransactionConflict(
+                        "vLLM arming finder moved or replaced externally"
+                    )
+                sys.meta_path.pop(i)
+            transaction.record_undo(restore_finder)
     for patches in (backend.PATCHES, layers.PATCHES, flash_attn.PATCHES):
         for path, patch in patches.items():
             register_module_patch(path, patch)

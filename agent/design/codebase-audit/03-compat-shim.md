@@ -56,6 +56,14 @@ inline 了一份「现在有没有事务在记账」的查找（`factories.py`�
 `allow_tf32` 两处 `use_cuda`/精度写入**有意留在 ledger 之外**：它们表达的是安装
 结束之后调用方的运行期请求，跟着安装回滚会撤掉用户自己要的东西。
 
+已修：提交 `PLACEHOLDER`（vLLM arming finder 的并发外部替换）。
+`compat/vllm/__init__.py:register()` 把 `_ArmOnFirstImport` 插进 `sys.meta_path`
+后登记的 undo 是 `remove(f) if f in sys.meta_path else None`——别人已经把这一项
+换掉或删掉时，回滚**报成功**并把别人装的东西留在原位。也就是说这本账唯一存在
+理由（暴露并发外部替换）恰好是它静默掉的那种情况。现在与 `permissive.py` 和
+`module_patcher.py` 的 finder undo 统一：按下标核对身份，不是自己那一项就抛
+`TransactionConflict`。
+
 ## 张量语义：视图/存储/叶子/0 维
 至少四条独立的手工标记链在维持本应由类型系统保证的语义。
 
