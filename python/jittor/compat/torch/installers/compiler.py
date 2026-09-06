@@ -9,6 +9,7 @@ import sys as _sys
 import jittor as jt
 
 from ...permissive import install_permissive_package
+from ...transaction import active_transaction
 from ..fidelity import Fidelity, register_fidelity
 from ..library import install_torch_library
 from ..context import TransformGetItemToIndex as _TransformGetItemToIndex
@@ -64,7 +65,7 @@ def trace(func=None, example_inputs=None, *args, **kwargs):
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
-    transaction = ctx.state.get("_install_transaction")
+    transaction = active_transaction(ctx)
     Var = ctx.state["Var"]
     _DTYPE_OBJS = ctx.state["dtypes"]
     # ---- elementwise / reduction helpers that may be missing ----

@@ -26,7 +26,7 @@
 | 可选步骤失败被永久记为 failed 且无人看见 | `context.py:run_optional` 吞掉所有异常；`InstallReport` 只进 `context.reports`，`compat/runtime.py:52` 收集后无输出 | 可选面失败后报错出现在离病因很远的地方 | 失败必须 warn 一次并可通过 API 查询 | 主要 |
 | install 全程无锁无重入保护 | `context.py` 无锁（对比 `module_patcher.py` 有 `_LOCK`）；flag setter 可从任意线程触发 | 多线程下竞争产生半装配状态 | 一次性锁加幂等哨兵 | 次要 |
 
-已修：提交 `a2b1b49d`（失败路径的 ledger 生命周期）。三处此前无人覆盖的漏洞：
+已修：提交 `4ecfb14f`（失败路径的 ledger 生命周期）。三处此前无人覆盖的漏洞：
 (1) `install()` 的失败分支按顺序调 `rollback()` → `release()` → 弹出
 `context.state["_install_transaction"]`，中间没有 `finally`；一旦 `rollback()`
 因外部改写抛 `TransactionConflict`，后两步都不执行——类级 RLock 永久被占，
@@ -38,6 +38,23 @@
 并把事务状态置为 `failed`（不是留在 `open`），这样 `commit()` 会拒绝、`retry()`
 可以接受。判据是跨线程探测锁——同线程 `RLock.acquire(blocking=False)` 永远成功，
 因此原有那条「不泄漏全局锁」的测试其实什么也没证明。
+
+已修：提交 `<7.05-commit-2>`（写入口收归单一 owner）。此前六个 installer 各自
+inline 了一份「现在有没有事务在记账」的查找（`factories.py`、`tensor.py`、
+`core.py`、`distributed.py`、`utilities.py`、`integrations.py`），六份已经漂移：
+**只有 `core.py` 那份检查了事务状态**。`record()` 会拒绝已 commit / 已 rollback
+的事务，所以一次失败安装留下的 ledger 会让此后每一次经这些 helper 的写入抛
+`RuntimeError: transaction is rolled_back`——而它们并不只在安装期跑：
+`_set_use_cuda` 由 `torch.zeros(device="cuda")` 调到，`_mutate_import` 由可选
+集成步骤调到。现在统一走 `transaction.py` 的 `active_transaction()` /
+`set_flag()` / `set_env()` / `set_attr()`，`active_transaction()` 要求
+`state == "open"`，否则退回直接写。`set_env()` 两条路径都 `str()`，此前直接写
+那条对部分调用者存原始对象，导致整数值的 rank 变量在回滚时对不上自己写的值。
+`factories.py` 与 `tensor.py` 里两份逐字节相同的 `_set_use_cuda` 由此消去，
+`test_cleanup_structure` 的跨文件重复实现红转绿。
+`installers/nn.py` 的 `Module.to(device=...)` 与 `installers/cuda.py` 的
+`allow_tf32` 两处 `use_cuda`/精度写入**有意留在 ledger 之外**：它们表达的是安装
+结束之后调用方的运行期请求，跟着安装回滚会撤掉用户自己要的东西。
 
 ## 张量语义：视图/存储/叶子/0 维
 至少四条独立的手工标记链在维持本应由类型系统保证的语义。

@@ -22,7 +22,7 @@ from ..nested import (
     _torch_register_leaf,
 )
 from ..tensor_state import get_tensor_state
-from .factories import _install_random_and_linspace, _wrap_constructors
+from .factories import _install_random_and_linspace, _set_use_cuda, _wrap_constructors
 from ..types import (
     _DEVICE_CTX_STACK, _device_is_cpu, _device_is_cuda, _dtype_to_str,
     _make_cpu_resident, _make_cuda_resident, _mark_cpu_like,
@@ -35,15 +35,6 @@ import collections as _collections
 from ...diagnostics import EXPECTED, swallowed
 from ... import fsdp_hooks as _fsdp_hooks
 from ... import collectives as _collectives
-
-
-def _set_use_cuda():
-    context = getattr(jt, "_torch_compat_install_context", None)
-    transaction = getattr(context, "state", {}).get("_install_transaction")
-    if transaction is None:
-        jt.flags.use_cuda = 1
-    else:
-        transaction.mutate_flag(jt.flags, "use_cuda", 1)
 
 
 def corrcoef(x, *args, **kwargs):

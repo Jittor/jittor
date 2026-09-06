@@ -3,9 +3,24 @@ import types
 
 import pytest
 
-from jittor.compat.transaction import ActivationTransaction, InstallTransaction, TransactionConflict
+from jittor.compat.transaction import (
+    ActivationTransaction,
+    InstallTransaction,
+    TransactionConflict,
+    set_attr,
+    set_env,
+    set_flag,
+)
 from jittor.compat.torch.installers.core import _set_install_flag
 from jittor.compat.torch.installers.utilities import _mutate_import
+
+from _helpers.install_lock import install_lock_is_free
+
+
+def _context(transaction=None):
+    """An install context stand-in carrying only the ledger handle."""
+    state = {} if transaction is None else {"_install_transaction": transaction}
+    return types.SimpleNamespace(state=state)
 
 
 def test_transaction_rolls_back_module_env_flags_and_meta_path_in_reverse_order():
@@ -132,6 +147,121 @@ def test_utilities_import_hook_rolls_back_and_detects_external_replacement():
             delattr(jittor, "_torch_compat_install_context")
         else:
             jittor._torch_compat_install_context = previous_context
+
+
+def test_shared_write_helpers_record_flag_env_and_attribute_mutations():
+    """One owner for every install-time write, so one rollback path covers them."""
+    flags = types.SimpleNamespace(use_cuda=0)
+    env = {}
+    target = types.SimpleNamespace()
+    tx = InstallTransaction("owner")
+    context = _context(tx)
+
+    set_flag(flags, "use_cuda", 1, context=context)
+    set_env("JT_NCCL_RANK", 3, context=context, environ=env)
+    set_attr(target, "__import__", "ours", context=context)
+    assert (flags.use_cuda, env["JT_NCCL_RANK"], target.__import__) == (1, "3", "ours")
+
+    tx.rollback()
+    assert flags.use_cuda == 0
+    assert "JT_NCCL_RANK" not in env
+    assert not hasattr(target, "__import__")
+
+
+@pytest.mark.parametrize("closed", ("committed", "rolled_back"))
+def test_installer_writes_ignore_a_ledger_that_has_already_closed(closed):
+    """A closed ledger must not turn a later write into a RuntimeError.
+
+    These helpers do not run only at install time: ``_set_use_cuda`` is reached
+    from ``torch.zeros(device="cuda")`` and ``_mutate_import`` from the optional
+    integration steps. Five of the six inlined lookups they replaced took
+    whatever transaction sat in ``context.state`` without checking its state, and
+    ``record()`` refuses one that is no longer open -- so a ledger left behind by
+    a failed install turned every later such write into
+    ``RuntimeError: transaction is rolled_back`` instead of a write.
+    """
+    import builtins
+    import jittor
+
+    tx = InstallTransaction("closed")
+    if closed == "committed":
+        tx.commit()
+    else:
+        tx.rollback()
+
+    previous = getattr(jittor, "_torch_compat_install_context", None)
+    original_import = builtins.__import__
+
+    def replacement(*args, **kwargs):
+        return original_import(*args, **kwargs)
+
+    try:
+        jittor._torch_compat_install_context = _context(tx)
+        _mutate_import(replacement, builtins)
+        assert builtins.__import__ is replacement
+    finally:
+        builtins.__import__ = original_import
+        if previous is None:
+            delattr(jittor, "_torch_compat_install_context")
+        else:
+            jittor._torch_compat_install_context = previous
+
+
+def test_shared_write_helpers_ignore_a_closed_ledger_for_flags_too():
+    flags = types.SimpleNamespace(use_cuda=0)
+    tx = InstallTransaction("closed")
+    tx.commit()
+    set_flag(flags, "use_cuda", 1, context=_context(tx))
+    assert flags.use_cuda == 1
+
+
+def test_direct_environment_write_normalizes_like_the_recorded_one():
+    """The two paths have to agree on the text, or rollback finds a conflict.
+
+    ``mutate_env`` stores ``str(value)``; the direct write it falls back to used
+    to store the raw object for some callers, and the integer-valued rank
+    variables then failed their own owner check.
+    """
+    env = {}
+    set_env("JT_NCCL_RANK", 3, context=_context(), environ=env)
+    assert env["JT_NCCL_RANK"] == "3"
+
+
+def test_concurrent_external_replacement_is_reported_not_overwritten():
+    """The process lock only orders the actors that ask for it.
+
+    A thread that writes ``builtins.__import__`` or a flag without taking the
+    install lock still races an open ledger. Serialising installs cannot prevent
+    that, so the owner check at rollback is the whole defence: report the foreign
+    value, never restore over it.
+    """
+    module = types.SimpleNamespace(hook="original")
+    tx = InstallTransaction("install")
+    tx.acquire()
+    try:
+        set_attr(module, "hook", "ours", context=_context(tx))
+        assert not install_lock_is_free(timeout=0.5), (
+            "an open install transaction has to exclude other threads"
+        )
+
+        replaced = threading.Event()
+
+        def foreign_writer():
+            module.hook = "another library"
+            replaced.set()
+
+        thread = threading.Thread(target=foreign_writer)
+        thread.start()
+        thread.join(5.0)
+        assert replaced.is_set()
+
+        with pytest.raises(TransactionConflict, match="owner lost 'hook'"):
+            tx.rollback()
+        assert module.hook == "another library"
+        assert tx.state == "failed"
+    finally:
+        tx.release()
+    assert install_lock_is_free()
 
 
 def test_environment_mutation_records_the_normalized_string_value():

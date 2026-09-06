@@ -23,6 +23,7 @@ from ..types import (
 )
 from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed
+from ...transaction import set_flag
 
 
 _LN2 = 0.6931471805599453
@@ -81,11 +82,7 @@ del _unary_api, _unary_impl
 
 def _set_install_flag(ctx, name, value):
     """Record install-time flag mutations when a transaction is active."""
-    transaction = getattr(ctx, "state", {}).get("_install_transaction")
-    if transaction is not None and getattr(transaction, "state", None) == "open":
-        transaction.mutate_flag(jt.flags, name, value)
-    else:
-        setattr(jt.flags, name, value)
+    set_flag(jt.flags, name, value, context=ctx)
 
 
 def install(ctx):

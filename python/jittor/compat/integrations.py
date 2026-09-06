@@ -2,6 +2,7 @@
 
 from __future__ import absolute_import
 from .diagnostics import EXPECTED, swallowed
+from .transaction import active_transaction
 
 
 def _warning(logger, message):
@@ -11,7 +12,6 @@ def _warning(logger, message):
 
 def apply_external_runtime_patches(logger=None, transaction=None):
     report = {}
-    import jittor as jt
 
     try:
         from jittor.compat import triton as _triton_compat  # noqa: F401
@@ -40,9 +40,7 @@ def apply_external_runtime_patches(logger=None, transaction=None):
     try:
         from jittor.compat.module_patcher import install_module_patches
 
-        transaction = transaction or getattr(
-            getattr(jt, "_torch_compat_install_context", None),
-            "state", {}).get("_install_transaction")
+        transaction = transaction or active_transaction()
         patch_report = install_module_patches(transaction=transaction)
         results = [
             {
@@ -72,9 +70,7 @@ def apply_external_runtime_patches(logger=None, transaction=None):
     try:
         from jittor.compat.external_backend import load_external_backend_entry_points
 
-        transaction = transaction or getattr(
-            getattr(jt, "_torch_compat_install_context", None),
-            "state", {}).get("_install_transaction")
+        transaction = transaction or active_transaction()
         backend_results = load_external_backend_entry_points(transaction=transaction)
         results = [
             {

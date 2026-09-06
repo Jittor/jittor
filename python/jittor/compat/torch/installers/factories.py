@@ -20,15 +20,12 @@ from ..types import (
 from ..nested import _torch_register_leaf
 from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed
+from ...transaction import set_flag
 
 
 def _set_use_cuda():
-    context = getattr(jt, "_torch_compat_install_context", None)
-    transaction = getattr(context, "state", {}).get("_install_transaction")
-    if transaction is None:
-        jt.flags.use_cuda = 1
-    else:
-        transaction.mutate_flag(jt.flags, "use_cuda", 1)
+    """Turn CUDA on for a torch-requested device, reversibly during install."""
+    set_flag(jt.flags, "use_cuda", 1)
 
 
 _FACTORY_NAMES = (

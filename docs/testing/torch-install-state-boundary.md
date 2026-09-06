@@ -32,3 +32,31 @@ The environment mutation inventory currently includes `JT_NCCL_WORLD_SIZE`,
 `use_mpi` in `installers/distributed.py`. The ledger must also account for the
 `jt.flags.use_cuda` writes in `installers/core.py`, `tensor.py`, `nn.py`, and
 `distributed.py`, restoring flags before environment-dependent teardown.
+
+## One owner for the write helpers
+
+`jittor/compat/transaction.py` owns the lookup and the three writes:
+`active_transaction()`, `set_flag()`, `set_env()`, and `set_attr()`. Installers
+call those; none of them may re-derive the active transaction from
+`jt._torch_compat_install_context` themselves.
+
+Six installers used to inline that lookup, and the copies had drifted. Five of
+them tested only whether a transaction *existed*, not whether it was still open.
+`InstallTransaction.record()` refuses a transaction that has been committed or
+rolled back, so a ledger left behind by an earlier failure turned the next write
+into `RuntimeError: transaction is rolled_back`. That is reachable outside
+install: `_set_use_cuda` is called from `torch.zeros(device="cuda")`, and
+`_mutate_import` from the optional integration steps, long after any ledger has
+closed. `active_transaction()` therefore requires `state == "open"` and returns
+`None` otherwise, so the write falls back to a direct one.
+
+`set_env()` applies `str()` on both paths. The direct path used to store the raw
+object for some callers while `mutate_env` recorded the normalised text, which
+made the integer-valued rank variables fail their own owner check at rollback.
+
+Two `use_cuda` writes are deliberately *outside* the install ledger, because
+they express a user request at runtime rather than an installation step: the
+`Module.to(device=...)` path in `installers/nn.py` and the reduced-precision
+switches in `installers/cuda.py` (`torch.backends.cuda.matmul.allow_tf32`).
+Rolling those back with an install would undo something the caller asked for
+after the install finished.

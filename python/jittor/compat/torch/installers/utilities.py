@@ -18,15 +18,12 @@ from ..nested import (
     _torch_make_parameter,
 )
 from ...diagnostics import EXPECTED, swallowed
+from ...transaction import set_attr
 
 
 def _mutate_import(new_import, builtins_module):
-    context = getattr(jt, "_torch_compat_install_context", None)
-    transaction = getattr(context, "state", {}).get("_install_transaction")
-    if transaction is None:
-        builtins_module.__import__ = new_import
-    else:
-        transaction.mutate_attr(builtins_module, "__import__", new_import)
+    """Install an import hook, reversibly while an install is recording."""
+    set_attr(builtins_module, "__import__", new_import)
 
 
 def _patch_transformers_npu_probe(module, modules):

@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -42,9 +43,15 @@ def test_distributed_env_writes_are_explicit_and_child_helper_is_pure():
     installer = DIST_INSTALLER.read_text(encoding="utf-8")
     assert "def child_env(" in helper
     assert "env = dict(os.environ) if inherit else {}" in helper
-    assert "def set_env(name, value):" in installer
-    assert "tx.mutate_env(name, value)" in installer
-    assert "tx.mutate_flag(jt.flags, \"use_cuda\", 1)" in installer
+    # The rendezvous variables and use_cuda go through the one shared ledger
+    # owner in jittor/compat/transaction.py. This installer used to carry its own
+    # copy of the "is a transaction recording?" lookup, and asserting on the
+    # spelling of that copy is what made the contract read as satisfied while
+    # five such copies disagreed about whether a closed ledger still counts.
+    assert "from ...transaction import set_env, set_flag" in installer
+    assert 'set_flag(jt.flags, "use_cuda", 1)' in installer
+    assert not re.search(r"os\.environ\[[^]]+\] *=[^=]", installer)
+    assert not re.search(r"jt\.flags\.[A-Za-z_]+ *=[^=]", installer)
     for name in (
         "JT_NCCL_WORLD_SIZE", "JT_NCCL_RANK", "JT_NCCL_LOCAL_RANK",
         "JT_NCCL_ROOTINFO_FILE", "use_nccl", "use_mpi",

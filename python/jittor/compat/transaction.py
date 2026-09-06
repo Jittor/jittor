@@ -135,6 +135,63 @@ class InstallTransaction:
         return InstallTransaction(self.owner)
 
 
+ACTIVE_TRANSACTION_KEY = "_install_transaction"
+
+
+def active_transaction(context=None):
+    """The transaction currently recording for ``context``, or None.
+
+    Six installers used to inline their own copy of this lookup and five of them
+    omitted the state check, so a transaction left in ``context.state`` after it
+    had been committed or rolled back turned the next write into
+    ``RuntimeError: transaction is <state>`` rather than a write. That matters
+    beyond install: the factory and tensor owners call the same helpers from
+    ``torch.zeros(device="cuda")`` at runtime, long after any ledger is closed.
+    """
+    if context is None:
+        import jittor
+        context = getattr(jittor, "_torch_compat_install_context", None)
+    state = getattr(context, "state", None)
+    if not isinstance(state, dict):
+        return None
+    transaction = state.get(ACTIVE_TRANSACTION_KEY)
+    if getattr(transaction, "state", None) != "open":
+        return None
+    return transaction
+
+
+def set_flag(flags, name, value, context=None):
+    """Write a Jittor flag, reversibly while an install is recording."""
+    transaction = active_transaction(context)
+    if transaction is None:
+        setattr(flags, name, value)
+    else:
+        transaction.mutate_flag(flags, name, value)
+
+
+def set_env(key, value, context=None, environ=None):
+    """Write an environment variable, reversibly while an install is recording."""
+    transaction = active_transaction(context)
+    if transaction is not None:
+        transaction.mutate_env(key, value, environ=environ)
+        return
+    import os
+    env = os.environ if environ is None else environ
+    # str() unconditionally, matching mutate_env: the recorded owner value and
+    # the direct write have to be the same text or rollback reports a conflict
+    # against a value it wrote itself (the integer-valued rank variables).
+    env[key] = str(value)
+
+
+def set_attr(target, name, value, context=None):
+    """Write an object attribute, reversibly while an install is recording."""
+    transaction = active_transaction(context)
+    if transaction is None:
+        setattr(target, name, value)
+    else:
+        transaction.mutate_attr(target, name, value)
+
+
 class _Missing:
     pass
 
@@ -180,4 +237,13 @@ def _matches(current, expected):
         return False
 
 
-__all__ = ["InstallTransaction", "ActivationTransaction", "TransactionConflict"]
+__all__ = [
+    "ACTIVE_TRANSACTION_KEY",
+    "ActivationTransaction",
+    "InstallTransaction",
+    "TransactionConflict",
+    "active_transaction",
+    "set_attr",
+    "set_env",
+    "set_flag",
+]
