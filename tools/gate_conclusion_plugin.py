@@ -38,9 +38,34 @@ class _Recorder:
         self.durations = {}
 
     # -- collection ------------------------------------------------------
-    def pytest_collection_modifyitems(self, items):
-        # After deselection: what this session intends to run.
-        self.collected = [item.nodeid for item in items]
+    def pytest_collection_finish(self, session):
+        """What this session will actually run, after deselection.
+
+        ``pytest_collection_modifyitems`` was used here and is *not* after
+        deselection. This plugin is registered from ``pytest_configure``, so it
+        runs before pytest's own implementation of that hook -- and that
+        implementation is where ``--deselect``, ``-k`` and ``-m`` drop items. So
+        every deselected nodeid was recorded as collected while, correctly,
+        never concluding, and ``compare`` reported each one as
+        "COLLECTED BUT NO CONCLUSION".
+
+        That is the tool's central signal firing for a benign reason, which is
+        worse than it sounds: the signal exists to catch a *lost* answer, and
+        one that cries wolf on every ``--deselect`` teaches its reader to skip
+        it. Measured on the 10.18 A/B (serial, 14 ``--deselect``ed nodeids):
+        ``collected=1245 concluded=1231``, and all 14 differences were the
+        deselected tests. It also made serial and xdist records disagree about
+        what "collected" means -- the xdist hook below always reported post
+        deselection ids -- so the two could not be compared at all.
+
+        ``pytest_collection_finish`` runs once, after the whole
+        ``modifyitems`` chain, and ``session.items`` is the final selection.
+        """
+        # Under xdist the controller does not collect and arrives here with an
+        # empty list; the hook below is what fills this in for that run, and it
+        # must not be overwritten with nothing.
+        if session.items:
+            self.collected = [item.nodeid for item in session.items]
 
     # ``optionalhook``: the spec only exists when pytest-xdist is installed, and
     # this plugin still has to load for the serial runs that do not need it.
@@ -48,9 +73,9 @@ class _Recorder:
     def pytest_xdist_node_collection_finished(self, ids):
         """The same fact, for the run that actually needs it.
 
-        Under xdist the controller never collects: the workers do, and
-        ``pytest_collection_modifyitems`` runs only there. The hook above
-        therefore leaves ``collected`` empty in exactly the configuration this
+        Under xdist the controller never collects: the workers do, and every
+        collection hook runs only there. The hook above therefore leaves
+        ``collected`` empty in exactly the configuration this
         record exists to police, and an empty set disables *both* of the checks
         in ``gate_conclusion_diff.compare`` that report a lost conclusion --
         ``collected - conclusions`` is empty, and the "conclusion lost" branch

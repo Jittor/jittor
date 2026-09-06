@@ -169,10 +169,49 @@ fixture，串行 `collected=4`，`-n 2` 时 `collected=0` 而 `conclusions=4`。
 `tests/structure/test_gate_conclusion_record.py`（修前 2 failed，修后 3 passed，与修复同一提交），
 其中一条是反向用例：拿「已知丢了一条结论」的两轮喂给 `compare`，要求它必须非零退出。
 
+**同一节再补一个缺口（10.18）：这个工具对「加了测试的那一轮」不给可用判据。** `compare` 把
+新增 nodeid 也算进差异并因此非零退出，于是**任何加测试的改动都只能用眼睛扫差异列表来判断
+「我的新测试有没有挤掉旧结论」**——而「用眼睛比摘要」正是 0.16 那次漏掉丢结论的原因，本节
+上面刚记过「数量看着也合理」。新增 `--expect-new NODEID`（可重复）：被点名的 nodeid 允许新出现，
+关于它们之外的一切照旧检查；**没点名就出现的仍然红**，**点了名却没出现的也红**——陈旧的
+`--expect-new` 会静默放宽比较，和空 `collected` 是同一类失效。修前证据：`compare --expect-new x::y`
+在修前版本上是 `unrecognized arguments`、退出 2。回归在
+`tests/structure/test_gate_conclusion_record.py::TestExpectNew` 4 条（连既有 3 条共 7 passed / 5.69 s），
+其中一条是反向用例：**一轮里既加了测试又丢了旧结论，即使把新增点了名也必须非零退出**。
+用法上还有一条：baseline 要取成「同一次构建、同一条命令、只 `--ignore` 掉自己的新文件」，
+不要取上一个提交——后者会把冷缓存的差混进来。10.18 自己先踩了一次：预热用的是
+`nvcc_path=/usr/local/cuda/bin/nvcc` 而门禁口径是 `nvcc_path=""`，那是**另一个 cfg 缓存目录**，
+于是基线冷、改后热，`79 failed → 51 failed` 里 28 条「差异」全是「热缓存下不该重编」类断言。
+量法与两个机械检查见 `agent/skills/gate-tier-budget` 第 1.2bis 节。
+
+**用它做上面这件事时又量出同一个工具的第三个缺口，并已修：`collected` 把被 deselect 的
+nodeid 也算进去了。** 插件用 `pytest_collection_modifyitems` 回答「这一轮要跑什么」，但它是
+`pytest_configure` 里注册的，**因此先于 pytest 自己对该钩子的实现跑**，而 `--deselect`／`-k`／`-m`
+正是在那个实现里剔项的。于是每个被 deselect 的 nodeid 都被记成 collected、又（正确地）永不结论，
+`compare` 就把它们逐条报成 `COLLECTED BUT NO CONCLUSION`。**这是这个工具的核心信号为一件无害的
+事在报警**，比单纯记错数更糟：那个信号存在的目的是抓「答案丢了」，而一个每次 `--deselect` 都
+叫一遍的信号，会被它的读者学会跳过——和「永远说 IDENTICAL」是同一类失效，只是方向相反。
+它还让两种记录彼此不可比：xdist 那条钩子一直报的是 deselect **之后**的 ids。
+实测（10.18 的 A/B，串行，14 个 `--deselect`）：`collected=1245 concluded=1231`，
+14 条差异全是被 deselect 的那些。修法是改用 `pytest_collection_finish` 读 `session.items`
+（跑在整条 `modifyitems` 链之后，且 xdist 下 controller 到这里 `items` 为空，所以不能覆盖成空）。
+回归 `tests/structure/test_gate_conclusion_record.py::TestDeselectionIsNotCollection` 3 条，
+**修前 3 failed、修后连全文件 10 passed / 7.71 s**，其中一条是「deselect 与真丢结论必须仍然可区分」
+（把丢结论注入记录，而不是杀 worker——第一版真杀了一个 worker，xdist 等它，**花了 300 s 才超时**）。
+
 ## 完全没有测试保护的关键契约
 | 问题 | 证据 | 后果 | 修改方向 | 严重度 |
 | --- | --- | --- | --- | --- |
 | C++ 单元测试全部不在门禁 | `src/test/` 9 个文件 1033 行（expr/kernel_ir/op_compiler/op_relay/sfrl_allocator/setitem_op/jit_key/nano_vector/fast_shared_ptr），桥接文件 `tests/compiler/test_jit_tests.py` 不在任何 *_TESTS 里 | 表达式求解、kernel IR、op 编译器、SFRL 分配器的单元级证据零执行 | 加进 CPU 门禁（成本极低） | 关键 |
+**已修（10.18 用它承载核心属性测试，并实测「成本极低」这句是对的）：** 桥接现已在原生 CPU 门禁里
+（`tests/compiler` 随 0.04 的全树可达进入），`src/tests/` 现为 25 文件；本波新增
+`test_exec_plan_properties.cc`（9 条）与 `test_node_liveness_properties.cc`（5 条），
+`jt.tests` 由 72 涨到 **86** 条。**实测层内成本：整文件 15 条 2.49 s，`--durations=0` 下
+每条都在 5 ms 以下，边际成本约 0.05 s**——没有设备、没有分配、没有 kernel。
+这条路径的价值不只是便宜：执行器的顺序性质在 Python 侧只能靠「跑一个 kernel 看数对不对」间接问，
+于是**排序 bug 和算术 bug 长得一样**；`ExecPlan` 是值类型之后可以直接断言，而 `JIT_TEST` 自动
+变成 pytest 节点，不需要改任何门禁配置。方法与坑（合成图怎么绕开 JIT 编译器、为什么不能录快照）
+见 skill `core-invariant-property-tests` 第 1 节。
 | 该桥接自身会静默产生 0 个用例 | `test_jit_tests.py:31-36` 遍历 dir(jt.tests)，为空时无任何方法，pytest 报 0 项通过 | wheel 裁掉 src 或扫描失败时测试通过但什么也没跑 | 断言 len(names) > 0 | 主要 |
 | 安装后 wheel 的验证只有一次乘法 | `selftest.py` 共 60 行只验证 `[1,2,3]**2` 的前向与梯度 | 打包遗漏任何模块都不会被发现 | 扩成 conv+bn+optimizer 三步训练加关键子包 import 清单 | 主要 |
 | CPU 卷积后端（oneDNN/MKL）无门禁 | `tests/backends/cpu/` 2 文件 236 行不在任何 session | 默认 CPU 卷积路径没有自动验证 | 加入 CPU 门禁 | 主要 |

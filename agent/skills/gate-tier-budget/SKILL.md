@@ -53,6 +53,34 @@ rebase**：只要带进来的提交碰了 `python/jittor/src/**`，配置指纹�
 kernel，native 半边从热的 406 s 变成 1697 s（4.2 倍）。**先跑完两轮再 rebase**；
 非要 rebase 就把 before 也在新 HEAD 上重跑一遍，并且两轮都要先跑一次把缓存捂热。
 
+### 1.2bis 同族的坑：两轮之间也不要换 `nvcc_path`（它换的是缓存目录）
+
+上一条讲的是「改了源码所以缓存冷」。**同族但更隐蔽的一种是源码没动、环境变量动了**：
+缓存路径里那一段 `cfg<hash>` 是**按配置**分的，`nvcc_path`、`JITTOR_TEST_DEVICES` 这些
+都在这个哈希里。所以「我刚才明明预热过了」经常是假的——**你预热的是另一个目录**。
+
+实测（10.18，2026-09-06）：用 `nvcc_path=/usr/local/cuda/bin/nvcc` 跑过一次 `import jittor`
+（落在 `cfg08ac6be4`），然后按门禁口径 `nvcc_path=""` 留基线（落在 `cfg1d275ac1`）——
+基线那轮是**冷**的。改动后那轮因为中间已经在同一配置下跑过多次，是**热**的。结果：
+
+    基线 79 failed / 979 passed  →  改后 51 failed / 1031 passed
+
+**失败少了 28、通过多了 52，看起来像修好了 28 个东西，实际上一个都不是。** 逐条差分后
+28 条里 27 条集中在 `test_import_bootstrap_laziness.py`（15 条）、
+`test_parallel_compile_attribution.py`（6 条）、`test_probe_cache.py`、`test_lock.py`、
+`test_openmp_threads.py`、`test_tracer.py`、`test_signal_handlers.py`，**全是「热缓存下不该重编」
+这一类断言**——它们是最灵敏的冷缓存指示器，一旦成片变绿或成片变红，先怀疑缓存温度而不是改动。
+
+**两个机械检查，比推理可靠：**
+
+1. 日志里 `grep -c "Compiling jittor_core"`。上例基线 **1**、改后 **0**。
+2. 两轮的 `cache_path:` 那行必须逐字相同（它把 `cfg<hash>` 打出来了）。
+
+**留基线的正确姿势**：用**和门禁一模一样的那条命令**（同样的 `nvcc_path`、
+`JITTOR_TEST_DEVICES`、`JITTOR_TORCH_SHIM`）先跑一轮把缓存捂热，**再**跑一轮当基线。
+或者干脆别用「上一个提交」当基线——同一次构建、同一条命令、只 `--ignore` 掉自己的新文件，
+配 `gate_conclusion_diff.py --expect-new`，冷热confound 从根上没有了（见第 5 节末尾）。
+
 ## 2. 选：默认包含，推迟的要写出代价和理由
 
 清单放一个地方（`tests/_helpers/tiers.py`），一行一个
@@ -180,6 +208,27 @@ xdist 已校验各 node 一致，取并集），并且用 `optionalhook`，否�
 推广一条：**判据工具也要有判据。** 一个「永远说 IDENTICAL」的差分器和一个不存在的
 差分器等价，而前者更贵——它会让你相信一个没验过的结论。给它写一个「已知不同的两轮」
 当反向用例，比给它写十个「相同的两轮」有用。
+
+**同一个工具的第二个缺口（10.18 补）：它对「加了测试的那一轮」不给可用判据。**
+`compare` 把新增 nodeid 也算差异并因此非零退出，于是加测试的人只能用眼睛扫差异列表——
+而「用眼睛比摘要」正是本节开头那条教训。用 `--expect-new NODEID`（可重复）把它变回退出码：
+
+```bash
+# baseline 与 candidate 用同一次构建、同一条命令，只 --ignore 掉自己的新文件
+python tools/gate_conclusion_diff.py record --out base.json -- \
+    tests/core tests/compiler --ignore=tests/core/test_my_new_file.py -q
+python tools/gate_conclusion_diff.py record --out cand.json -- \
+    tests/core tests/compiler -q
+python tools/gate_conclusion_diff.py compare base.json cand.json \
+    --expect-new 'tests/core/test_my_new_file.py::TestX::test_y'
+```
+
+被点名的允许新出现，其它一切照旧检查；**没点名就出现的仍然红，点了名却没出现的也红**
+（陈旧的 `--expect-new` 会静默放宽比较，和空 `collected` 是同一类失效）。
+C++ 侧新增的 `JIT_TEST` 没法用 `--ignore`（它们和既有用例同在 `test_jit_tests.py`），
+用 `--deselect` 逐条点名。反向用例在
+`tests/structure/test_gate_conclusion_record.py::TestExpectNew`：一轮里既加了测试又丢了旧结论，
+即使把新增点了名也必须非零退出。
 
 ## 6. xfail 会被算成 skip
 

@@ -58,6 +58,16 @@ def test_core_property_tests_are_owned_by_the_cpu_gate():
         "tests/core/test_traversal_state_isolation.py",
         "tests/core/test_pyjt_binding_protocol.py",
         "tests/core/test_autograd_engine.py",
+        # The graph/liveness property sweep. It is the only thing standing
+        # between the known backward-liveness over-release (2.10) and a silent
+        # return of it, and one of its cases is a strict xfail that has to run
+        # to report the day the defect is fixed.
+        "tests/core/test_core_invariant_properties.py",
+        # The bridge that turns every src/tests/*.cc JIT_TEST into a pytest
+        # node, which is where the executor-plan properties live. Losing it
+        # would take 86 C++ unit tests out of the gate at once, and the file
+        # itself is the only thing that would notice.
+        "tests/compiler/test_jit_tests.py",
     }
     native = gate_scope.selected_files(REPO_ROOT, gate_scope.native_arguments())
     torch = gate_scope.selected_files(REPO_ROOT, gate_scope.torch_arguments())

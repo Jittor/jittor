@@ -2642,6 +2642,132 @@ NOT COLLECTED / NEWLY COLLECTED。比结论之前要先把组名归一化掉。
 **其中一个单点值得你知道**：`tests/core/test_setitem.py` 一个文件占 smoke 的 **15%（238.4 s）**，
 比整个结构套件的层内成本还高 5 倍。而它在「三个属于别人、任何时候不要提交」的清单里，所以
 两位执行者都只报不碰。**要动它需要那个 owner 点头**，这是目前 smoke 预算上最大的一块无主成本。
+（第三位执行者复核后同意，同样只报不碰；10.18 的方案不需要动它。）
+
+### 2026-09-06 第二百一十九波：10.18 核心属性测试进门禁，并抓到 2.10 的真缺陷
+
+**`tests/core` 的覆盖构成实测（`tools/measure_core_test_balance.py`，新增）。** 审计那句
+「核心 37.5k 行对 tests/core 7355 行」已经漂移，但**更正比值不是重点，更正构成才是**：
+核心 C++（去掉 vendored `third_party` 9215 与 `src/tests` 2617）**329 文件 44934 行**，
+`tests/core` **81 文件 14374 行**，比值 0.20 → **0.32**。听起来在变好。按文件实际点名的 API 归类：
+dtype/数值 **69 文件 12918 行 684 用例**、autograd 41/8933/480、进程与构建 40/7214/375、
+绑定 21/5207/284，而这条审计说的那一层——**图与 liveness 只有 10 文件 2328 行 141 用例、
+执行器只有 7 文件 1397 行 68 用例**。**翻倍长出来的七千行几乎全在数值面上。**
+所以「多写 tests/core 的行」不是解。脚本还报一个下界：179 个核心头文件里 **14 个**在整个
+`tests/` 加 `src/tests` 里没被任何文件点到名（反过来读不成立：点名不等于有断言）。
+
+**写了三类属性测试，全部在原生 CPU 门禁里。** 位置选择是本波最该传下去的一条：
+**`src/tests/*.cc` 里的 `JIT_TEST` 会被 `compiler.py` 的 `gen_jit_tests()` 自动变成
+`jt.tests.*`，再被 `tests/compiler/test_jit_tests.py` 自动变成 pytest 节点**，而 `tests/compiler`
+0.04 之后已在门禁里——**不用改任何门禁配置**。新增 `test_exec_plan_properties.cc`（9 条）
+与 `test_node_liveness_properties.cc`（5 条），`jt.tests` 由 72 涨到 **86**。
+执行器那 9 条断的是「计划自身一致且按它自己声明的顺序可执行」：下标全在范围内、
+`range`/`fuse_ops`/`queue` 三者自洽且无空段、每个算子**至少**排进一个段（喂多段的算子会被复制）、
+段间与段内都是拓扑序、每个批内 var 恰好一个批内生产者、**建计划不执行任何东西**、
+同图两次给出相同计划。**没有录快照**——`count_fuse` 有权改主意什么该融合，录快照会把启发式冻住。
+图与 liveness 在 `tests/core/test_core_invariant_properties.py`（11 条），含
+`dump_all_graphs` 的边对称/下标范围/无环，以及 `graph_check` 必须**区分「校验通过」与「跳过了」**
+（6.C21 的那个坑）：标志打开前返回 **0**、打开后新建节点返回 **> 0**，并钉住
+「`swept` 不是进程存活节点数」这条既有限度（实测 10 扫过对 17 存活）。
+
+**抓到了真的不变量违反，就是交接已知问题表里那条 liveness 账不平。** 机制、触发条件与八行
+差分对照写在看板 `2.10` 行；一句话：经 `Function` 建的**多输出**算子（`Tapes`）在**有一些但不是
+全部**输出被 `stop_grad()` 且整批真的执行时，`LivenessCounter<backward>::release()` 多调一次，
+报 `backward liveness release without a matching owner`，异常被 `var_holder.cc` teardown 吞掉，
+**每次泄漏恰好 2 个 Var**，各自 `f=0 b=1`（`need_free()==true` 却还活着）。这 2 个就是
+`test_zmem_leak{,2,3}` 报的 `2 != 0`。**属性测试比那三条点用例多给了三样东西**：触发条件
+（三条必要因素，且**与 `lazy_execution` 无关**——原先「只在 eager」的印象是被 `jt.grad` 变体掩盖的）、
+一个对照组（原生多输出 `jt.code` 算子干净，所以问题在 taped 路径而不是多输出本身）、
+以及缺陷所在文件正好落在上面那 14 个「没被任何测试点名」的头文件里（`src/ops/tape_op.h`）。
+**缺陷本身没修**（属 2.10，且 `var_holder.cc` 正被 `build` 的 5.02 占用）。
+落地用**两条测试**而不是一条：`..._leaks_nothing_new` 绿（多一个形状就红，所以没人需要学会忽略它），
+`..._leaks_nothing_at_all` 是 **`xfail(strict=True)`**——修好那天 XPASS 变红，强制连那三条点用例
+一起更新。再加一条钉住「每次恰好 2 个」，这个数一动说明机制不是原来那个。
+
+**层内成本与分层判定：两个都进 smoke，不进 nightly。** C++ 侧 15 条整文件 **2.49 s**，
+`--durations=0` 下每条都 < 5 ms，**边际约 0.05 s**（无设备、无分配、无 kernel）；Python 侧
+11 条 **1.88 s**，其中 1.38 s 是那一个子进程。合计约 **1.9 s**，对 native 半边 1592.9 s 的层内
+工作量是 **+0.12%**。按 `gate-tier-budget` §2「默认包含，推迟的要写出代价和理由」，
+这个量级没有理由去 nightly；**本波没有新增任何推迟项**。
+（**扫描必须在一个子进程里跑**，理由有两条：绝对存活计数在并发下不是稳定量，所以断言全部改成
+增量；更重要的是泄漏形状会留残留，在本进程跑会让这个文件自己变成下一个跨文件抖动源——
+正是它要测的那件事。一个子进程跑完整个矩阵，父进程先断言「矩阵真的跑了」再断言内容。）
+
+**三套门禁。** 原生 CPU（`tests/core`+`tests/compiler`，串行，门禁口径）**51 failed / 1031 passed /
+172 skipped / 2 xfailed**（1201 s）；CPU torch（`tests/structure`+`test_type_system`）
+**15 failed / 918 passed / 2 skipped / 2 xfailed**（477 s）；CUDA（`tests/backends/cuda`）
+**42 failed / 231 passed / 35 skipped / 1 xfailed**（1973 s），42 failed 与 3.01 记录的基线逐数相同、
+passed 220 → 231。CUDA 推前烟测通过（`import jittor` + `use_cuda=1` 的 matmul 与 NumPy 对拍，
+`jt.tests` 86 条）。torch 与 CUDA 两半的失败清单里**没有一条点到本波三个新文件**；
+`tests/structure` 那 5 个扫描类失败逐条查过，点的是
+`backends/cuda/test_cuda_backend_registry.py`、`compiler/test_flag_scanner.py`、
+`runtime/backends/cuda_streams.cc`（4.12 WIP）等既有项。
+
+**「新增测试没把旧结论挤掉」是机械判定的，不是看摘要行。** 用 `gate_conclusion_diff.py`
+在**同一次构建、同一条命令**上做 A/B（baseline 只 `--ignore` 掉新的 py 文件、`--deselect` 掉 14 个
+新的 C++ 用例），两轮各 1045.9 / 1038.7 s（1.01x，都是热的）：
+
+    collected 1231 -> 1256    concluded 1231 -> 1256
+    failed 51 -> 51    passed 1007 -> 1031    skipped 172 -> 172    xfailed 1 -> 2
+    IDENTICAL: every collected nodeid concluded the same way in both runs.
+    note: 25 newly collected nodeid(s) accounted for by --expect-new     exit 0
+
+不带 `--expect-new` 时报 25 条差异并非零退出（默认保持严格），那 25 条正好是 14 个 C++ 加
+11 个 Python 的新用例。**`failed` 与 `skipped` 逐数不变、没有一条 `STATUS x -> y`、
+没有一条 `CONCLUSION LOST`**——这才是「没挤掉」的判据。
+
+**⚠ 一条方法上的自我更正，比上面的数都重要：我第一次取的原生基线是冷缓存的，差点把它当回归读。**
+改动前留的基线是 **79 failed / 979 passed**，改动后是 **51 failed / 1031 passed**——
+失败少了 28、通过多了 52。**看起来像我修好了 28 个东西，实际上一个都不是。** 逐条差分后
+28 条里 27 条集中在 `tests/compiler/test_import_bootstrap_laziness.py`（15 条）、
+`test_parallel_compile_attribution.py`（6 条）、`test_probe_cache.py`、`test_lock.py`、
+`test_openmp_threads.py`、`test_tracer.py`、`test_signal_handlers.py`——**全是「热缓存下不该重编」
+这一类断言**。原因是我在跑基线前只用 `nvcc_path=/usr/local/cuda/bin/nvcc` 预热过，而门禁口径是
+`nvcc_path=""`，那是**另一个 cfg 缓存目录**，于是基线那轮是冷的、改动后那轮是热的。
+机械证据：基线日志里有一行 `Compiling jittor_core`，改动后那轮 **0 行**。
+剩下的唯一同 nodeid 差异是 `tests/core/test_core.py::TestCore::test_relu_memopt`，
+两轮都红、只是数字从 75 变成 43——就是 3.01 警告过的那类「存活 Var 数绝对断言会飘」。
+**`gate-tier-budget` §1.2 记的是「两轮之间不要 rebase」，这一条要补的是它的同族：
+两轮之间也不要换 `nvcc_path`/`JITTOR_TEST_DEVICES`，因为它们换的是 cfg 目录，等于换了缓存。
+留基线之前先用门禁那条一模一样的命令把缓存捂热跑一轮。** 已写进
+`core-invariant-property-tests` 第 5 节。
+
+**判据工具补了两个缺口，两个都有反向用例。** 第一个：`compare` 默认把新增 nodeid 也当差异报，
+于是**加测试的人只能用眼睛扫差异列表**——正是这个工具要替掉的习惯（0.16 那次「数量看着也合理」）。
+新增 `--expect-new NODEID`（可重复）：被点名的允许新出现，其它一切照旧检查，
+**没点名就出现的仍然红，点了名却没出现的也红**（陈旧的 `--expect-new` 会静默放宽比较）。
+修前证据：`compare --expect-new x::y` 在 HEAD 版本上是 `unrecognized arguments`、退出 2。
+
+**第二个是用第一个的时候量出来的，而且它比第一个严重：`collected` 把被 deselect 的 nodeid
+也算进去了。** 插件用 `pytest_collection_modifyitems` 回答「这一轮要跑什么」，注释还写着
+"After deselection"——**但它不是**。插件在 `pytest_configure` 里注册，因此**先于** pytest 自己对
+该钩子的实现跑，而 `--deselect`／`-k`／`-m` 正是在那个实现里剔项的。于是被 deselect 的用例
+被记成 collected、又（正确地）永不结论，`compare` 把它们逐条报成
+`COLLECTED BUT NO CONCLUSION`。实测（本波 A/B，串行，14 个 `--deselect`）：
+`collected=1245 concluded=1231`，14 条差异全是被 deselect 的那些。
+**这是这个工具的核心信号在为一件无害的事报警**，比记错数更糟——那个信号的目的是抓「答案丢了」，
+而一个每次 `--deselect` 都叫一遍的信号会被它的读者学会跳过，和「永远说 IDENTICAL」是同一类
+失效、只是方向相反。它还让两种记录彼此不可比：xdist 那条钩子一直报的是 deselect **之后**的 ids，
+所以串行记录和并行记录对「collected」根本不是同一个意思。修法是改用
+`pytest_collection_finish` 读 `session.items`（跑在整条 `modifyitems` 链之后；xdist 下 controller
+到这里 `items` 为空，所以不能无条件覆盖）。
+
+回归都在 `tests/structure/test_gate_conclusion_record.py`：`TestExpectNew` 4 条 +
+`TestDeselectionIsNotCollection` 3 条，**后者修前 3 failed、修后全文件 10 passed / 7.71 s**。
+其中一条是「deselect 与真丢结论必须仍然可区分」——**它的第一版把丢结论做成真杀一个 xdist
+worker（`os._exit`），xdist 会等那个死掉的 node，花了 300 s 才超时**，对门禁太贵而且测的是
+pytest 的崩溃处理而不是这个插件的记账；改成把丢结论注入记录，0.40 s 且确定。
+
+**沉淀 skill `core-invariant-property-tests`**：先量再加测试（行数不是覆盖，是 §2.1「行数不是耗时」的
+第二种形态）、`JIT_TEST` 这条最便宜且门禁自动可达的位置、合成图怎么绕开 JIT 编译器
+（含 `count_fuse` 会 deref `var->input()` 所以批内每个 var 都要有批内生产者这个坑）、
+为什么断性质不录快照、增量扫描与一个子进程、差分形状定位法、以及属性测试抓到真缺陷之后
+「两条测试而不是一条」的落地方式。
+
+**剩余**：2.10 那个 backward 多释放没修（属他人范围，且 `var_holder.cc` 被 5.02 占用），
+`test_zmem_leak{,2,3}` 三条点用例仍红、修好 2.10 时应连同 strict xfail 一起收口；
+本波只加了核心侧的属性测试，**没有削减 `tests/structure`**——前一波已实测那不是 smoke 的杠杆
+（9.4%），而 0.19 的「< 2000 行」是另一个目标、由 0.25 承接改判。
 
 ### 2026-09-06 `bindings`：2.19 收口（cuTT 可达、LOGf 验收达成、绑定层边界归类）
 

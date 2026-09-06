@@ -25,6 +25,12 @@ Usage::
     # 2. the criterion: exits non-zero on any per-nodeid difference
     python tools/gate_conclusion_diff.py compare /run/base.json /run/cand.json
 
+    # 2b. when the change under test *adds* tests, name them. Everything else
+    #     is still compared, so "my new tests displaced nothing" stays an exit
+    #     code rather than a difference list to read by eye.
+    python tools/gate_conclusion_diff.py compare /run/base.json /run/cand.json \
+        --expect-new 'tests/core/test_new.py::TestNew::test_one'
+
 ``record`` never fails on a red run: a suite whose conclusion is "these six
 failed" is a legitimate baseline, and demanding green first would make the
 criterion unusable exactly when it matters. Only ``compare`` decides.
@@ -148,8 +154,27 @@ def compare(options):
     cand_collected = set(candidate["collected"])
     for nodeid in sorted(base_collected - cand_collected):
         differences.append("NOT COLLECTED any more: %s" % nodeid)
-    for nodeid in sorted(cand_collected - base_collected):
+
+    # Adding tests is the other reason two records differ, and it is not the
+    # failure this tool exists to catch. Without a way to say so, anyone who
+    # adds a test has to compare the difference list by eye -- which is the
+    # habit that let 0.16's lost conclusions through a plausible-looking
+    # summary. `--expect-new` keeps the judgement an exit code: the named
+    # nodeids may appear, everything else about them is still checked, and a
+    # nodeid that appears *without* being named still fails.
+    expected_new = set(options.expect_new or ())
+    unexpected_new = sorted(cand_collected - base_collected - expected_new)
+    for nodeid in unexpected_new:
         differences.append("NEWLY COLLECTED: %s" % nodeid)
+    # An --expect-new that matches nothing is a stale argument, and a stale
+    # argument here silently widens what the comparison tolerates.
+    for nodeid in sorted(expected_new - cand_collected):
+        differences.append(
+            "EXPECTED NEW but not collected: %s" % nodeid)
+    accounted_new = sorted(expected_new & cand_collected)
+    if accounted_new:
+        notes.append("%d newly collected nodeid(s) accounted for by "
+                     "--expect-new" % len(accounted_new))
 
     # Collected but never concluded: the shape 0.16's lost conclusions had.
     unconcluded = set()
@@ -255,6 +280,13 @@ def main(argv=None):
         "compare", help="exit non-zero unless both records concluded identically")
     comparer.add_argument("baseline")
     comparer.add_argument("candidate")
+    comparer.add_argument(
+        "--expect-new", action="append", default=[], metavar="NODEID",
+        help="a nodeid the candidate is allowed to have added (repeatable). "
+             "Use when the change under test adds tests: it keeps 'no "
+             "pre-existing conclusion moved' a machine-checked exit code "
+             "instead of a list to read by eye. Naming a nodeid the candidate "
+             "did not collect is itself an error.")
 
     options = parser.parse_args(argv)
     if options.command == "record":
