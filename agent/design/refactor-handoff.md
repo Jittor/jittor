@@ -2297,6 +2297,33 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `9d49c70c` 对齐 ACL device_size Python/C++ teardown 语义，ACL 14 passed；CANN/NPU runner仍待。 |
 | `compat` | `d44782d4` 拒绝 Torch bootstrap 非字符串/非法 `__all__`，负向合同通过；独立 distribution 完整发布仍待。 |
 
+### 🔴 `2.0-refactor` 现在无法带 CUDA 导入（`e3ad5be9c`）
+
+`import jittor` 在 CUDA 配置下失败；CPU-only 正常（实测 `4.0`）。**bisect 到 `848b98dc0`**——就是
+标题以 `WIP：` 开头、今天 12:04 推到共享分支的那个提交。它之后又叠了 13 个提交，期间没有任何
+东西带 CUDA 导入过一次。前一个提交 `fd4d8820d^` 上实测正常（`has_cuda=True`、CUDA matmul 8.0）。
+
+`848b98dc0` 做的事本身是对的（4.07 要的「后端不再改写 `compiler` 全局」）：把 CUDA/ACL 的 flag 从
+全局 `cc_flags` 抽成按源文件传的 `cuda_sdk_flags`，并接进新的 `BuildSource`。**漏掉的是所有仍由
+host 编译器编、却不走那条新管线的后端源码。** 逐层实测到四处，前三处我在本地补过并验证有效
+（补完能到 `has_cuda=True`、`registered_backends()==['cpu','cuda']`），**未推送**——它们必然与
+4.12／4.15 正在飞的改动重叠，由该 owner 一并落更合适：
+
+| 层 | 症状 | 位置与修法 |
+| --- | --- | --- |
+| 1 | `fatal error: driver_types.h: No such file` | `compile_extern.py:319` 的 `setup_cuda_extern` 用裸 `cc_flags` 编 `backends/cuda/src/{fp16_emu,helper_cuda}.cc`。加 `cuda_sdk_flags` |
+| 2 | `fatal error: cuda_runtime.h: No such file` | `setup_cuda_lib` 的 `compile_custom_ops(extra_flags=...)` 同样缺 SDK include，影响 `backends/cuda/libraries/*/src/*_wrapper.cc` 六个。加 `cuda_sdk_flags` |
+| 3 | `'cuda_compute_stream' was not declared` | 声明从 `src/runtime/cuda_streams.h:35` 挪进了**新建的** `backends/cuda/include/stream_compat.h`，而**全树没有任何文件 include 它**。六个 wrapper 都用到它。注意归宿有歧义：它们已经 include 了 `runtime/cuda_streams.h`，所以「把声明放回旧家」和「给六处加新 include」两种修法请由 owner 按新层次决定 |
+| 4 | `jit_compiler.cc:88 User check failed: accelerator_compiler.configured  Accelerator compiler is not configured` | 前三层补完后暴露。新 provider 管线里的加速器编译器未被配置，任何 accelerator JIT 算子都编不出来。**这一层属 4.12 本身**，我没有动 |
+
+第 4 层顺带说明 2.19 起了作用：它是一条可捕获的 `USER_CHECK` 而不是 abort。
+
+**这件事同时是 `0.24` 的一次实证。** `0.24` 刚以 `13d314ec` 标为已合并（CUDA session 设
+`JITTOR_TEST_REQUIRE_CUDA=1`），但它挡的是「门禁跑了却没真用 CUDA」；这里的形态是**门禁根本
+没跑**——13 个提交连续推送、没有一次 CUDA 导入。**建议给 4.12／4.15 这类跨目录搬动加一条最低
+门槛：推之前带 CUDA 跑一次 `import jittor` 加一个 matmul（热缓存约 1 分钟）。** 冒烟脚本口径见
+`agent/results/2026-09-04-cuda-availability-verification.md` 的命令口径一节。
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
