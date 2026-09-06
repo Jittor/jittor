@@ -702,12 +702,17 @@ Managed memory（合同 5 passed）；`a672c1997` 为 Corex 保留 CUDA-compatib
 解 `rocm_cache.tar.gz` 或调用源码转换，并只登记已有 hipBLAS/rocPRIM 实现；`8d06e85e6`
 让共享 pyjt 数组桥接只在真实 CUDA backend 选择 CuPy，ACL/ROCm 不再误走 CUDA 互操作
 （共享 build 合同 16 passed）。ROCm 本机无 HIP SDK，未做真实 hipcc/设备验证；MIOpen、RCCL
-和其余库族仍明确未实现，不能视为后端完成。
+和其余库族仍明确未实现，不能视为后端完成。随后 `3b081d582` 已移除 ACL
+`transform_sources/process_acl/token_replace` 的生产调用链，ACL host syntax
+通过 43 个 TU 和 68 个 launcher ABI 检查；`79c6d716` 将 ROCm 旧入口改为原生
+provider 转发，删除历史 blob/转换逻辑，ROCm 合同 23 项通过；`8752f15dd`
+删除依赖旧 ACL converter 的测试。转换边界合同目前为 27 passed、2 xfailed，
+两个 xfail 是 ACL/Corex entrypoint 尚未切到顶层 native provider。
 
-当前源码扫描的剩余转换入口是：`jittor_utils.process_jittor_source` 定义 1 处，
-ACL `acl_compiler.py` 仍调用 `transform_sources` 1 处，ROCm `rocm_compiler.py`
-仍调用 `transform_sources` 1 处，ACL `acl_jittor.cc` 仍保留 `process_acl` 及
-约 30 处 `token_replace(_all)`，Corex 编译器仍有同类转换服务。这个扫描结果是
+当前源码扫描的剩余转换入口是：`jittor_utils.process_jittor_source` 定义及
+`compiler.py` 服务字段各 1 处；ACL/ROCm/Corex provider 已不再调用转换。
+顶层 ACL/Corex entrypoint 尚未切换到 `jittor.backends.*`，因此边界合同仍保留
+两个 xfail。这个扫描结果是
 4.12 的收口基线；完成判据是这些调用归零，而不是仅把函数改名或把替换逻辑搬到
 另一个 Python 文件。
 
