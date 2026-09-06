@@ -102,6 +102,47 @@ def test_reinstall_keeps_identity():
         assert nn.Module.__dict__.get(attr) is expected, attr
 
 
+# The seven natives the wrappers delegate to. Promotion moved their capture from
+# install time to import time, which is only safe while no earlier installer has
+# already replaced them: capturing a wrapper here would make the wrapper delegate
+# to itself. That recurses on the very first call, so it is loud rather than
+# silent -- but it would be loud at import of a user's model, not here.
+_CAPTURED_NATIVES = (
+    ("_ORIG_MODULE_EXECUTE", "execute"),
+    ("_ORIG_MODULE_DISPATCH_CALL", "_dispatch_call"),
+    ("_ORIG_MODULE_NAMED_PARAMETERS", "named_parameters"),
+    ("_ORIG_MODULE_NAMED_BUFFERS", "named_buffers"),
+    ("_ORIG_MODULE_NAMED_MODULES", "named_modules"),
+    ("_ORIG_MODULE_LOAD_STATE_DICT", "load_state_dict"),
+    ("_ORIG_MODULE_PARAMETERS", "parameters"),
+)
+
+
+@pytest.mark.parametrize("handle_name,attr", _CAPTURED_NATIVES)
+def test_the_captured_module_methods_are_still_native(handle_name, attr):
+    """An ``_ORIG_MODULE_*`` handle holds Jittor's method, not a compat wrapper.
+
+    Pins the assumption the import-time capture rests on. Without this, the
+    capture order is merely asserted in a comment: the file's own promoted
+    wrappers are the objects that would be captured if some earlier installer
+    had already patched ``nn.Module``, and a wrapper delegating to itself
+    recurses instead of reaching Jittor.
+    """
+    captured = getattr(nn_installer, handle_name)
+    promoted = {
+        id(value) for name, value in vars(nn_installer).items()
+        if name.startswith("_") and callable(value) and inspect.isfunction(value)
+        and value.__module__ == nn_installer.__name__
+    }
+    assert id(captured) not in promoted, (
+        "%s captured this file's own %s instead of Jittor's native %s"
+        % (handle_name, getattr(captured, "__name__", captured), attr))
+    assert not getattr(captured, "__module__", "").startswith(
+        "jittor.compat.torch"), (
+        "%s must hold a native Jittor method, got one owned by %s"
+        % (handle_name, captured.__module__))
+
+
 # --------------------------------------------------------------------------
 # fidelity metadata
 # --------------------------------------------------------------------------
