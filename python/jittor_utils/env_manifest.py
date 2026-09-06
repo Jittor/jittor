@@ -30,6 +30,7 @@ under an unprefixed name anywhere outside :mod:`jittor_utils.env_config`.
 import argparse
 import json
 import os
+from typing import Dict, Tuple
 import re
 import runpy
 
@@ -104,7 +105,7 @@ def _strip_cxx_comments(src):
 
 def native_flags(source_root):
     """``{flag: (type, default, doc)}`` for every flag the core defines."""
-    found = {}
+    found: Dict[str, Tuple[str, str, str]] = {}
     for base, _dirs, names in os.walk(source_root):
         for name in sorted(names):
             if not name.endswith((".cc", ".h", ".cu")):

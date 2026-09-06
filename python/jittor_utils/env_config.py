@@ -61,6 +61,7 @@ parameter for a flag. ``nthread`` is real but lives inside ``#ifdef TEST_LOG``.
 """
 
 import os
+from typing import Dict, Tuple
 
 #: Build configuration: read before or during the core build.
 BUILD_PREFIX = "JT_BUILD_"
@@ -124,7 +125,7 @@ def prefixed_name(name, namespace):
 #:
 #: Only lookups against the real process environment are recorded -- a caller
 #: that passes its own ``environ`` is asking a question, not being configured.
-_resolved = {}
+_resolved: Dict[str, Tuple[str, str, str]] = {}
 
 
 def resolved():
