@@ -2390,6 +2390,31 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `cudabk` | **4.13 顺带修两条**（都是该门禁发现的、都属于「测试从来没跑过」）：① `setup_cutt()` 是唯一不走 `setup_cuda_lib()` 的库路径，后端搬顶层后既缺 `-I backends/cuda/include`（`stream_compat.h` 在那）也缺 `cuda_sdk_flags`（它 include 的 `cuda_runtime.h`），wrapper 编译不过而**症状伪装成「本机没有 cuTT」**，6 条 cuTT 用例恒 skip 读着是绿的——与看板上「`setup_cutt()` 无调用点」是同一后果的第二个原因（调用点今天在 `compile_extern.py:1305`）。② 惰性库加载让注册表快照缩水：`backend_supported_ops("cpu")` 强制加载前 35 个、后 41 个，少的正是 `mkl_*`。 |
 | `cudabk` | **8.05 仍「待领」——部分交付，两条验收只达成「能力表可查」**。① **13 条 MKL 用例原来全是死的**：`jt.compile_extern.mkl_ops` 是「加载了没有」的查询而非取值器，`tests/backends/cpu` 5 条全部 `AttributeError` on None、`test_mkl_batched_matmul` 8 条全部 skip、`test_matmul.py` 结论随命令行顺序变（单独 5 failed/2 passed，先加载过再跑 3 failed）。新增 `tests/_helpers/onednn.py`；改后 `backends/cpu` **13 passed**、`test_mkl_batched_matmul` **7 passed/1 skip**、`test_matmul.py` **3 failed/4 passed** 且不再随顺序变。② **能力表 dtype 声明可查**：`OpCapabilityRegistration.dtypes` ＋ `@pyjt(backend_capability_dtypes)`，`("cpu","matmul")==["float32"]` vs `("cuda","matmul")` 四种 float 宽度；配防漂移测试（逐 dtype 跑 CPU matmul 看实际执行的实现，断言声明集合==真跑起来的集合），把声明改空则三条红。③ 前向 `forward_inference`+`convolution_auto` 与反向 hint 的 `forward`+`convolution_direct` **两处都不一致**，统一为 `forward_training`+`convolution_auto`。④ 库名不再钉死版本：`mkl_library_layout()` 一处探测，v3 只有 `libdnnl.so` 也认，链接名取实际存在的那个。**剩余**：迁 v3 API 未做（**oneDNN 从 v3 起不再发布预编译二进制，已核实 v3.12/v3.13 各版 release assets 为空**，代码改动必须与 v3 库同时到位，要验证得先决定「从源码编 oneDNN 怎么进安装路径」，是设计决定）；**按形状缓存 pd/primitive/reorder 未做，故「CPU 卷积每调用开销下降」未达成**；matmul 仍只 fp32（`dnnl_sgemm` 是 float-only，要宽需换 `dnnl::matmul` primitive）；按 is_train 选 prop_kind 需要核心先有 train flag，今天没有。 |
 | `cudabk` | **基线校正**：交接文档此前记「`tests/structure` 2 条失败」，本机实测是 **16 failed / 876 passed / 2 xfailed**（本波开始时 17 条，上游修掉一条）。16 条逐条核对过全部先于本波改动存在，没有一条指向本波新增或修改的文件；其中 `test_native_backend_contract` 的两条把本波的 `backend.h`/`backend.cc` 还原后仍以同样的 subprocess 超时失败。方法沉淀在 `agent/skills/verifying-a-gate-actually-ran` 新增的三节（第十节「门禁的轴也要从代码里生成」、第十一节「编译失败会伪装成这台机器没有这个库」及其子节「`jt.<库>_ops` 是查询不是取值器」）。 |
+### 2026-09-06 第二百一十八波：0.15 smoke 时间构成，与判据工具在 xdist 下失效
+
+| 分区 | 结果 |
+| --- | --- |
+| `gates` | `c31439067` 修 `tools/gate_conclusion_plugin.py`：xdist 下 controller 不做收集，`collected` 恒为空，于是 `compare` 报「丢结论」的两个分支全被禁用——修前实测四条用例、候选 deselect 掉一条，`compare` 同时打印 `passed 4 -> 3` 与 `IDENTICAL` 且退出码 0。改用 `pytest_xdist_node_collection_finished` 取各 node 并集。回归 `tests/structure/test_gate_conclusion_record.py` 修前 2 failed、修后 3 passed。**0.22 之后所有用这个工具背书的分层结论，只在串行下成立。** |
+| `gates` | 0.15 量出 smoke 时间构成（热缓存、门禁口径、`-n 4`、16 核、load 13-18）：native 406.3 s + torch 91.8 s = **498.1 s**。两个半边都是 work-bound。`tests/structure` 只占 **9.4%**（约 47 s），且整个在 torch 半边；占 81.6% 墙钟的 native 半边一条结构测试也没有。**「结构套件吃掉整个 smoke 预算」不成立**，全部推迟也只到约 451 s。 |
+| `gates` | 同波核实：**行数不是耗时**。ACL 静态合同 3292 行（占 `tests/structure` 16.6% 的行）实测 13.2 s；序贯最贵的三个文件是 116/68/127 行。0.19 的「< 2000 行」与 0.15 的「< 5 分钟」互不相干，已拆出 `0.25` 单独判，`0.19` 看板行标注「验收一项未达」。 |
+| `gates` | 方法教训两条，已写进 `agent/skills/gate-tier-budget`：(1) 不按门禁口径量，排名会错 50 倍——同一条用例序贯开 CUDA 是 269.4 s、门禁口径下 4.8 s；(2) 两轮之间 rebase 会让缓存变冷，一次只带进 37 行 `backend.cc/.h` 的 rebase 就重编约 900 个 kernel，native 半边 406 s → 1697 s。 |
+| `gates` | **未做**：没有落地任何新的分层推迟项。量完之后 0.15 的 5 分钟验收被判为**分层达不到**——要 300 s 需要 native 半边工作量从 1592.9 s 降到约 550 s（砍 65%），那是「更少或更便宜的比较」（10.18）或更多机器的事，不是排序的事。0.15 保持**待领**。 |
+
+#### ⚠ 结论集合不是逐轮稳定的：实测约 27 个 nodeid 会翻转
+
+用修好的工具在**同一棵树、同一条命令**上比两轮，`collected` 两边都是 2741 / 2201（修前会是
+0），但结论有差：native 22 条、torch 5 条状态翻转，两个方向都有。其中
+`tests/compiler/test_lock.py::TestBuildLockIsShared`、`tests/core/test_function.py::test_zmem_leak{,2}`、
+`tests/distributed/test_process_store.py` 是并行/顺序敏感的既存红（`gate-tier-budget` 第 3.6 节
+已编目其中两条）；另有一批 `failed -> passed` 是**冷缓存那一轮才失败**（`test_group_conv_tuner`、
+`test_profiler`、`test_conv_parity`、`test_argsort_op`）。
+
+**后果**：「两轮结论集合逐条相同」目前**不能**直接当分层验收用——它有一个非零的抖动地板，
+而 `compare` 会把抖动和真正的丢结论一起报成 DIFFERENT。做 before/after 时要先跑两轮同配置
+取得抖动名单，再看候选是否引入了名单之外的差异。这条也说明冷缓存那一轮的红有一部分不是真红。
+
+`tests/structure` 的基线与本波 `cudabk` 那条一致：本机实测 **16 failed**（交接文档旧记的
+「2 条」不成立）。
 
 ### 🔴 `2.0-refactor` 现在无法带 CUDA 导入（`e3ad5be9c`）
 

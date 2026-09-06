@@ -125,9 +125,49 @@ setUp/tearDown。检查（`tests/structure/test_flag_scope_contract.py`）接受
 | 问题 | 证据 | 后果 | 修改方向 | 严重度 |
 | --- | --- | --- | --- | --- |
 | 结构门禁规模超过数值门禁两倍 | structure 22 文件 8071 行 234 用例全部在 PR 门禁；CPU 数值门禁 16+9 文件 142 个静态用例 | 每次重构 nn 的物理布局都要改 1912 行测试；而改错一个 kernel 的算术不会被任何 PR 门禁挡住 | 压缩成公开 API 快照、循环依赖检查、打包内容三类 | 主要 |
+**已修（改判）：`c31439067` 一波的测量（0.15）。本行按行数说的话仍然成立且更严重，按耗时说的话不成立。**
+行数：22 文件 8071 行 → **107 文件 19774 行**。耗时：2026-09-06 用门禁自己的选择集、热缓存、
+`-n 4` 实测，smoke 两个模式合计 **498.1 s**（native 406.3 + torch 91.8），其中 `tests/structure`
+**只占约 47 s，9.4%**。它整个落在 torch 那一半（`_helpers/process_modes.py` 的 `TORCH_MODE_PATHS`
+含 `tests/structure`），而 torch 半边墙钟只有 91.8 s；占 81.6% 墙钟的 native 半边里一条结构测试也没有。
+所以「结构门禁比数值门禁大」现在是一句关于**行数**的话，不再是一句关于**门禁时长**的话。
+
+**行数与耗时在这个目录里几乎不相关——这是本波最该留下的事实。** 16 个 ACL 静态合同共 **3292 行**
+（占本目录 16.6% 的行），实测合计 **13.2 s**；而序贯量出来最贵的三个文件分别只有 **116、68、127 行**
+（`test_process_mode_contract.py`、`test_nn_functional_split.py`、`test_pool_legacy.py`）。原因是静态
+合同只是读文件加子串断言，几毫秒一条；贵的是起子进程和编 kernel，与文件多长无关。**推论：0.19 的
+「`tests/structure` < 2000 行」与 0.15 的「smoke < 5 分钟」是两个互不相干的目标**，把行数压到 2000
+不会让门禁快出可测量的一点，缺硬件的后端用静态合同顶替运行时验证这笔账记在行数上、没有记在时长上。
+两者的取舍要各自论证，不能拿一个当另一个的理由。
+
+**还有一条方法上的教训：不在门禁口径下量，排名会错 50 倍。** 序贯、开着 CUDA 量本目录，
+`test_process_mode_contract.py::test_naming_a_torch_path_alongside_a_native_one_does_not_change_its_meaning`
+是 **269.4 s**（占该目录 44.9%）；同一条在门禁口径（`nvcc_path=""`、`JITTOR_TEST_DEVICES=cpu`、层内
+4 worker）下是 **4.8 s**。那份序贯数据（全目录 635.7 s）把三个「其实是数值测试而不是结构测试」的文件
+排到前三，据它分层会三个都选错。已写进 `agent/skills/gate-tier-budget` 第 1.1、2.1 节。
 | 用文件行数当架构契约 | `test_nn_structure.py:1812-1821` facade ≤300 行、实现模块 ≤350 行 | 加一段必要注释就会让门禁变红，鼓励把逻辑拆到别处而不是写清楚 | 改软告警或按公开符号数 | 次要 |
 | 一次性迁移守卫被永久固化 | `test_cleanup_structure.py:24-47` 列举 21 个已删除路径断言不存在 | 迁移完成后永远为真，纯粹门禁负重；这类测试在 22 个文件里成规模存在（62 处 subprocess 进一步拉高耗时） | 迁移守卫设过期时间 | 次要 |
 | marker 体系基本是死代码 | pyproject 注册 9 个 marker；`conftest.py:113-150` 给每个用例打设备 marker，但 `noxfile.py:410` 从不传 -m；slow 只打给一个文件且无人按它筛选 | pyproject 里描述的"快速 PR 门禁"层根本不存在 | 真正建立 -m "not slow" 的快门禁，或删掉 marker | 主要 |
+**已修：`c31439067`（0.15）。审计名单外新发现一条，而且是这一节最严重的形态：判据工具自己在门禁的
+配置下不给判据。** `tools/gate_conclusion_diff.py`（0.22 的产出）是「证明分层没丢结论」的唯一机械手段，
+它靠 `collected` 与 `conclusions` 的差集工作。但 `tools/gate_conclusion_plugin.py` 只用
+`pytest_collection_modifyitems` 记 `collected`，而 xdist 下 controller 不做收集——收集在 worker 上，
+这个钩子也只在 worker 上跑（本仓库在 `agent/skills/gate-tier-budget` 第 5 节已经编目过这个性质，
+只是没有回头检查这个工具）。于是**每一次带 `-n` 的会话 `collected` 都是空的**：实测同一个四条用例的
+fixture，串行 `collected=4`，`-n 2` 时 `collected=0` 而 `conclusions=4`。
+
+空集合不会让 `compare` 变吵，会让它变哑：报「少给了一个结论」的两个分支都以 `collected` 为准，
+`collected - conclusions` 恒为空，「CONCLUSION LOST」那一支对每个 nodeid 都命中
+`nodeid not in cand_collected` 而 `continue`。**修前实测**（四条用例、候选 `--deselect` 掉一条）：
+`compare` 在同一段输出里先打 `passed 4 -> 3`、再打
+`IDENTICAL: every collected nodeid concluded the same way in both runs.`，退出码 0。
+
+也就是说，这个专门为「一个有时不给结论的验证器比一个慢的更糟」写的工具，**在最会丢结论的配置
+（worker 死掉）下抓不到任何东西**，而 smoke 层恒定用 `-n 4` 跑——0.22 之后所有用它背书的分层结论
+都只在串行下成立。修法是在 controller 上实现 `pytest_xdist_node_collection_finished(ids)` 取各 node
+的并集，用 `optionalhook` 以免没装 xdist 时插件加载不了。回归见
+`tests/structure/test_gate_conclusion_record.py`（修前 2 failed，修后 3 passed，与修复同一提交），
+其中一条是反向用例：拿「已知丢了一条结论」的两轮喂给 `compare`，要求它必须非零退出。
 
 ## 完全没有测试保护的关键契约
 | 问题 | 证据 | 后果 | 修改方向 | 严重度 |
@@ -156,4 +196,21 @@ setUp/tearDown。检查（`tests/structure/test_flag_scope_contract.py`）接受
 构建缓存并在注释里记了 47 分钟冷 / 24 分钟热）——见看板 `0.23`。
 
 | 全量 CPU 套件 4 小时且不分层 | native 1:45:28、torch 2:21:51、structure 2:31 | 没有人会在改一行代码后跑它，退化成每月一次的人工快照 | 建 smoke（<5 分钟进 PR）与 full（nightly）两层 | 主要 |
+**已修（部分）：`c31439067` 一波的测量（0.15）。两层在了，5 分钟没到，而且差距不在结构测试。**
+两层已经真的在筛选（`nox -s smoke` / `nox -s full`，`-m "not slow"` 生效，见下一节 marker 那一行）。
+2026-09-06 热缓存、门禁口径、16 核 4 worker、当时 load average 13-18 实测：
+
+| 半边 | 墙钟 | 层内工作量合计 | 最长单文件 | 瓶颈 |
+| --- | --- | --- | --- | --- |
+| native | 406.3 s | 1592.9 s | `tests/core/test_setitem.py` 238.4 s | work-bound（1592.9/4 = 398.2 ≈ 墙钟） |
+| torch | 91.8 s | 328.2 s | `test_native_backend_contract.py` 22.4 s | work-bound（328.2/4 = 82.1 ≈ 墙钟） |
+| 合计 | **498.1 s** | | | |
+
+native 半边的构成：`tests/ops` 31.8%、`tests/core` 27.3%（其中 `test_setitem.py` 一个文件 15.0%）、
+`tests/distributed` 16.2%、`tests/compiler` 12.1%、`tests/nn` 9.5%。**两个半边都是 work-bound 而不是
+被某一个长文件卡住**，所以「找几个慢文件推迟掉」在这里买不到多少：要把 498 s 压到 300 s，native 的
+层内工作量得从 1592.9 s 降到约 550 s，即砍掉 65%。分层只能改变谁先跑，改变不了总量，**所以 0.15 的
+5 分钟验收不是靠分层能达到的**——需要的是更少或更便宜的比较（10.18 的方向），或者更多机器。
+`tests/structure` 只占 9.4%，全部推迟也只到约 451 s。冷缓存另记：同一条命令冷跑 native 1697.3 s
+（4.2 倍），所以任何时长结论都要写明冷热。
 | 门禁每个条目起一个独立 pytest 进程 | `noxfile.py:404-423`，CPU 门禁因此起 28 个进程 | 每个进程重付 import 成本；进程隔离的收益本应由测试自身的 flag_scope 纪律提供 | 修好 flag 泄漏后合并 | 次要 |

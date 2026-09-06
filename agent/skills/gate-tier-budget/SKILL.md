@@ -23,6 +23,36 @@ pytest <门禁选择集> -q --durations=0 -p no:randomly > run.log
   改过 `python/jittor/src/**` 或 rebase 过之后，第一轮一定是冷的。
 - `use_parallel_op_compiler` 的值。它决定编译时间除以几。
 
+### 1.1 用门禁自己的口径量，否则排名会整个错掉
+
+**这一条比上面三条更容易漏，而且错得更狠。** 一个目录「跑一遍多久」和「它在门禁里
+多久」可以差 50 倍，因为门禁的环境不是你手跑的环境：
+
+|  | 手跑 `pytest tests/structure -q` | 门禁口径 |
+| --- | --- | --- |
+| 设备 | 这台机器有 CUDA，就用 CUDA | `nvcc_path=""`、`JITTOR_TEST_DEVICES=cpu`，CUDA 用例全 skip |
+| 并行 | 串行，独占全部核 | `-n 4`，每 worker 分到 1/4 的核与线程 |
+| 进程模式 | 你手上那个 | 由 `TORCH_MODE_PATHS` 决定，两条命令各管一半 |
+
+实测（2026-09-06，`tests/structure`）：串行且开着 CUDA，
+`test_process_mode_contract.py::test_naming_a_torch_path_alongside_a_native_one_does_not_change_its_meaning`
+是 **269.4 s**、占该目录 44.9%；同一条在门禁口径下是 **4.8 s**。那份序贯数据把三个文件
+排到前三，而它们在门禁里分别是第 20 名开外。**照它做分层会三个都选错。**
+
+所以：量的那条命令要和门禁跑的那条命令一样。最省事的做法是直接用门禁的选择集函数
+（`_helpers.gate_scope.native_arguments()` / `torch_arguments()`）加上层的筛选参数，
+而不是自己写一个路径。
+
+### 1.2 两轮之间不要 rebase：它会把缓存变冷
+
+已经知道「不要在验证跑着的时候 rebase」。相邻的那个坑是**在 before 和 after 之间
+rebase**：只要带进来的提交碰了 `python/jittor/src/**`，配置指纹就变了，after 那轮
+从冷缓存开始，于是你量到的是编译时间的差，不是改动的差。
+
+实测：一次 rebase 只带进 `backend.cc`/`backend.h` 共 +37 行，下一轮就重编了 900 多个
+kernel，native 半边从热的 406 s 变成 1697 s（4.2 倍）。**先跑完两轮再 rebase**；
+非要 rebase 就把 before 也在新 HEAD 上重跑一遍，并且两轮都要先跑一次把缓存捂热。
+
 ## 2. 选：默认包含，推迟的要写出代价和理由
 
 清单放一个地方（`tests/_helpers/tiers.py`），一行一个
@@ -32,6 +62,21 @@ pytest <门禁选择集> -q --durations=0 -p no:randomly > run.log
 
 理由不能写「慢」。「因为要编两百个 kernel 而慢」和「因为 sleep 而慢」是两个不同的
 决定，只有后者是 bug。
+
+### 2.1 行数不是耗时，别拿行数当选择依据
+
+「哪个目录最大」和「哪个目录最贵」经常不是同一个答案，而**行数是免费就能看到的那个**，
+所以它会被当成耗时的代理用。实测反例（`tests/structure`，19774 行 107 文件）：
+
+- 16 个 ACL 静态合同共 **3292 行**（占该目录 16.6% 的行），实测合计 **13.2 s**；
+- 序贯量出来最贵的三个文件是 **116、68、127 行**。
+
+原因是静态合同就是读文件加子串断言，几毫秒一条；贵的是**起子进程**和**编 kernel**，
+而这两件事和文件多长没关系。
+
+推论有两条。一，**按行数删测试不会让门禁变快**——「把这个目录压到 N 行」和
+「把这一层压到 N 分钟」是两个独立目标，不要拿一个去论证另一个。二，**先量再选**：
+`--durations=0` 一轮的成本远小于按行数猜错之后重做一次分层。
 
 ## 3. 校验：算术，不是墙钟
 
@@ -117,6 +162,24 @@ terminated`），一条用例被报成 FAILED 而原因不在它自己，会话�
 修法：worker 侧用 `pytest_sessionfinish` 自己落盘（文件名带 `config.workerinput["workerid"]`），
 controller 侧从 `pytest_runtest_logreport` 重建它需要的集合。**改完要跑一次带 `-n` 的
 回归，确认汇总段落还在打印。**
+
+**这条坑咬过判据工具本身。** `tools/gate_conclusion_plugin.py` 用
+`pytest_collection_modifyitems` 记 `collected`，于是每一次带 `-n` 的会话记下来的
+`collected` 都是空的（串行 4、`-n 2` 是 0）。而 `compare` 里报「少给了一个结论」的
+**两个分支都以 `collected` 为准**：`collected - conclusions` 恒为空，
+「CONCLUSION LOST」那一支对每个 nodeid 都命中 `nodeid not in cand_collected` 而
+`continue`。结果是丢多少结论都判成等价——实测四条用例、候选 deselect 掉一条，
+`compare` 在同一段输出里先打 `passed 4 -> 3`、再打 `IDENTICAL`，退出码 0。
+
+也就是说：**这个专门用来抓「丢结论」的工具，在最会丢结论的配置下抓不到任何东西**，
+而 smoke 层恒定用 `-n 4` 跑。修法是在 controller 上实现 xdist 的
+`pytest_xdist_node_collection_finished(ids)`（各 node 报的是自己 deselect 之后的 ids，
+xdist 已校验各 node 一致，取并集），并且用 `optionalhook`，否则没装 xdist 时插件加载不了。
+回归在 `tests/structure/test_gate_conclusion_record.py`。
+
+推广一条：**判据工具也要有判据。** 一个「永远说 IDENTICAL」的差分器和一个不存在的
+差分器等价，而前者更贵——它会让你相信一个没验过的结论。给它写一个「已知不同的两轮」
+当反向用例，比给它写十个「相同的两轮」有用。
 
 ## 6. xfail 会被算成 skip
 

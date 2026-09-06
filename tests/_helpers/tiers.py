@@ -258,6 +258,57 @@ MEASURED = {
 MEASURED_FROM = ("whole-tree serial runs of 2026-09-03 for the ranking; "
                  "the 4-worker fast-tier runs of the same day for the budget")
 
+#: A 2026-09-06 re-measurement, recorded rather than substituted. Read this
+#: before changing anything above.
+#:
+#: Same command the gate runs (``gate_scope`` selection, ``-m "not slow"``,
+#: ``-n 4 --dist loadgroup``, thread pools split), warm cache, but on a
+#: **sixteen**-core partition where each of four workers gets four threads --
+#: not the eight-core shape the numbers above describe. Measured:
+#:
+#:   native  wall 406.3 s   fast_work 1592.9 s   longest 238.4 s (test_setitem.py)
+#:   torch   wall  91.8 s   fast_work  328.2 s   longest  22.4 s
+#:   total   wall 498.1 s
+#:
+#: Both halves are work-bound (1592.9/4 = 398.2 against a 406.3 s wall;
+#: 328.2/4 = 82.1 against 91.8 s), so the makespan model above is the right
+#: shape and only its magnitudes have moved. Feeding these numbers to
+#: ``budget_report`` predicts 560 s, over ``SMOKE_BUDGET_SECONDS``, which would
+#: make ``_enforce_smoke_budget`` refuse to start the tier.
+#:
+#: **They are deliberately not pasted in, for the reason the comment above
+#: gives about serial figures**: a file's cost depends on how many cores its
+#: process was given, and replacing eight-core numbers with sixteen-core ones
+#: is the same category error in a new direction. The constants have to
+#: describe the runner the promise is made about. What this measurement does
+#: establish, independent of the machine, is the *composition*:
+#:
+#: * The native half is 81.6% of the tier's wall clock. Its work is
+#:   ``tests/ops`` 31.8%, ``tests/core`` 27.3% (``test_setitem.py`` alone
+#:   15.0%), ``tests/distributed`` 16.2%, ``tests/compiler`` 12.1%,
+#:   ``tests/nn`` 9.5%.
+#: * ``tests/structure`` is **9.4%** of the tier -- about 47 s of 498 s. It
+#:   runs entirely in the torch half (``process_modes.TORCH_MODE_PATHS``), and
+#:   there is not one structure test in the native half. Deferring the whole
+#:   directory would buy roughly 47 s and reach about 451 s, so "the structure
+#:   suite eats the smoke budget" is not true and tiering it is not the lever.
+#: * Neither half is held up by one long file, so deferring individual slow
+#:   files buys little: reaching 300 s needs the native half's work to fall
+#:   from 1592.9 s to about 550 s, a 65% cut. Ordering cannot do that.
+#:
+#: Cold, the same command costs native 1697.3 s / 1535.2 s in two runs against
+#: 406.3 s warm -- 2.4x to 4.2x. Any figure here without "warm" beside it is
+#: unusable, and a rebase that touches ``python/jittor/src/**`` makes the next
+#: run cold (measured: a 37-line change to ``backend.cc``/``.h`` recompiled
+#: about 900 kernels).
+MEASURED_2026_09_06 = {
+    "native": {"wall": 406.3, "fast_work": 1592.9, "longest_fast_file": 238.4},
+    "torch": {"wall": 91.8, "fast_work": 328.2, "longest_fast_file": 22.4},
+    "conditions": ("warm cache; 16-core partition, 4 workers x 4 threads; "
+                   "load average 13-18; gate_scope selection; "
+                   "_home/gates/runs/w0155/smoke_before_{native,torch}.log"),
+}
+
 
 def slow_paths():
     return tuple(path for path, _seconds, _reason in SLOW_FILES)
