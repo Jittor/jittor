@@ -2297,6 +2297,15 @@ matching owner`（会带走整个 pytest 进程，7.03 的 fidelity 测试文件
 | `device` | `9d49c70c` 对齐 ACL device_size Python/C++ teardown 语义，ACL 14 passed；CANN/NPU runner仍待。 |
 | `compat` | `d44782d4` 拒绝 Torch bootstrap 非字符串/非法 `__all__`，负向合同通过；独立 distribution 完整发布仍待。 |
 
+### 2026-09-06 `cudabk`：4.13 跨后端契约矩阵、8.05 MKL 部分交付
+
+| 分区 | 结果 |
+| --- | --- |
+| `cudabk` | **4.13 已合并**。矩阵两个轴都从 4.03/4.04 的注册表生成：后端轴新增 `@pyjt(known_backends)`（核心声明的全集）∪`registered_backends()`，算子轴 `backend_supported_ops(后端)`。`tests/backends/parity/backend_contract_matrix.py`＋`test_backend_contract_matrix.py`，接进 `noxfile` 的 `cuda` session（`cpu` session 跑整棵 `tests/` 自动包含）。覆盖 47 个算子名×5 个后端行；CUDA 54 passed（cpu 35＋cuda 38＝73 个已验证格子），CPU-only 原生与 torch 模式各 42 passed/12 skipped。缺硬件的后端标 `unverified:not-built`/`unverified:no-device` 而**不是 skip**，25 个 `no-probe` 格子逐格书面理由；判定顺序先「后端能不能跑」再「有没有探针」。两次变异证明有牙：加速器返回值×1.01→40 格红，删一个探针→棘轮单条红。**未覆盖**：只有 (op, backend) 两轴，dtype/layout 不在其中；ACL/ROCm/Corex 无硬件，只有 `not-built` 行，未声称实机验证。 |
+| `cudabk` | **4.13 顺带修两条**（都是该门禁发现的、都属于「测试从来没跑过」）：① `setup_cutt()` 是唯一不走 `setup_cuda_lib()` 的库路径，后端搬顶层后既缺 `-I backends/cuda/include`（`stream_compat.h` 在那）也缺 `cuda_sdk_flags`（它 include 的 `cuda_runtime.h`），wrapper 编译不过而**症状伪装成「本机没有 cuTT」**，6 条 cuTT 用例恒 skip 读着是绿的——与看板上「`setup_cutt()` 无调用点」是同一后果的第二个原因（调用点今天在 `compile_extern.py:1305`）。② 惰性库加载让注册表快照缩水：`backend_supported_ops("cpu")` 强制加载前 35 个、后 41 个，少的正是 `mkl_*`。 |
+| `cudabk` | **8.05 仍「待领」——部分交付，两条验收只达成「能力表可查」**。① **13 条 MKL 用例原来全是死的**：`jt.compile_extern.mkl_ops` 是「加载了没有」的查询而非取值器，`tests/backends/cpu` 5 条全部 `AttributeError` on None、`test_mkl_batched_matmul` 8 条全部 skip、`test_matmul.py` 结论随命令行顺序变（单独 5 failed/2 passed，先加载过再跑 3 failed）。新增 `tests/_helpers/onednn.py`；改后 `backends/cpu` **13 passed**、`test_mkl_batched_matmul` **7 passed/1 skip**、`test_matmul.py` **3 failed/4 passed** 且不再随顺序变。② **能力表 dtype 声明可查**：`OpCapabilityRegistration.dtypes` ＋ `@pyjt(backend_capability_dtypes)`，`("cpu","matmul")==["float32"]` vs `("cuda","matmul")` 四种 float 宽度；配防漂移测试（逐 dtype 跑 CPU matmul 看实际执行的实现，断言声明集合==真跑起来的集合），把声明改空则三条红。③ 前向 `forward_inference`+`convolution_auto` 与反向 hint 的 `forward`+`convolution_direct` **两处都不一致**，统一为 `forward_training`+`convolution_auto`。④ 库名不再钉死版本：`mkl_library_layout()` 一处探测，v3 只有 `libdnnl.so` 也认，链接名取实际存在的那个。**剩余**：迁 v3 API 未做（**oneDNN 从 v3 起不再发布预编译二进制，已核实 v3.12/v3.13 各版 release assets 为空**，代码改动必须与 v3 库同时到位，要验证得先决定「从源码编 oneDNN 怎么进安装路径」，是设计决定）；**按形状缓存 pd/primitive/reorder 未做，故「CPU 卷积每调用开销下降」未达成**；matmul 仍只 fp32（`dnnl_sgemm` 是 float-only，要宽需换 `dnnl::matmul` primitive）；按 is_train 选 prop_kind 需要核心先有 train flag，今天没有。 |
+| `cudabk` | **基线校正**：交接文档此前记「`tests/structure` 2 条失败」，本机实测是 **16 failed / 876 passed / 2 xfailed**（本波开始时 17 条，上游修掉一条）。16 条逐条核对过全部先于本波改动存在，没有一条指向本波新增或修改的文件；其中 `test_native_backend_contract` 的两条把本波的 `backend.h`/`backend.cc` 还原后仍以同样的 subprocess 超时失败。方法沉淀在 `agent/skills/verifying-a-gate-actually-ran` 新增的三节（第十节「门禁的轴也要从代码里生成」、第十一节「编译失败会伪装成这台机器没有这个库」及其子节「`jt.<库>_ops` 是查询不是取值器」）。 |
+
 ### 🔴 `2.0-refactor` 现在无法带 CUDA 导入（`e3ad5be9c`）
 
 `import jittor` 在 CUDA 配置下失败；CPU-only 正常（实测 `4.0`）。**bisect 到 `848b98dc0`**——就是

@@ -13,6 +13,7 @@ import numpy as np
 import timeit
 import os
 from _helpers.logs import find_log_with_re
+from _helpers.onednn import requires_onednn
 from _helpers.tuner_parser import simple_parser
 
 def conv(x, w, padding, stride = 1):
@@ -50,7 +51,6 @@ def conv_nhwc_hwio(x, w, stride=1, padding=0):
     y = (x*w).sum([3,4,5]) # Kh, Kw, C
     return y
 
-@unittest.skipIf(not jt.compile_extern.use_mkl, "Not use mkl, Skip")
 class TestMklConvOp(unittest.TestCase):
     """oneDNN is the CPU convolution backend, so these all pin CUDA off.
 
@@ -60,6 +60,24 @@ class TestMklConvOp(unittest.TestCase):
     """
 
     def setUp(self):
+        # `jt.mkl_ops` is a query, not an accessor: it stays None until the
+        # lazy loader fires, so all four cases below used to fail with
+        # `AttributeError: 'NoneType' object has no attribute 'mkl_conv'`
+        # rather than run. The class-level `use_mkl` guard did not catch that
+        # -- the flag is True by default and says nothing about whether the
+        # library was loaded. See tests/_helpers/onednn.py.
+        self.mkl_ops = requires_onednn()
+        # Every case here asserts a `Run tuner conv` relay log, which is a
+        # native-semantics claim: in Torch-compatibility mode convolution does
+        # not go through the reindex meta-operator form the conv tuner
+        # recognises, so no relay happens and the assertion finds zero logs.
+        # This directory is not in `process_modes.TORCH_MODE_PATHS`, so no gate
+        # runs it in that mode -- the guard is here so that someone who does
+        # gets a stated reason instead of a red run. (Only visible at all now
+        # that these cases run; before, they failed on a None `mkl_ops`.)
+        if "_torch_compat_install_context" in jt.__dict__:
+            self.skipTest("the conv tuner relay is native-only; this process "
+                          "is in torch compatibility mode")
         self._use_cuda = jt.flags.use_cuda
         jt.flags.use_cuda = 0
 
@@ -69,7 +87,7 @@ class TestMklConvOp(unittest.TestCase):
     def test_forward(self):
         a = np.random.rand(1,3,224,224).astype(np.float32)
         b = np.random.rand(64,3,7,7).astype(np.float32)
-        c = jt.mkl_ops.mkl_conv(a,b,2,2,3,3).data
+        c = self.mkl_ops.mkl_conv(a,b,2,2,3,3).data
 
         a_jt = jt.array(a)
         b_jt = jt.array(b)
@@ -94,7 +112,7 @@ class TestMklConvOp(unittest.TestCase):
         def check(xshape, wshape, stride, pad):
             a = np.random.rand(*xshape).astype(np.float32)
             b = np.random.rand(*wshape).astype(np.float32)
-            c = jt.mkl_ops.mkl_conv(a,b,stride,stride,pad,pad,1,1,xformat="acdb",wformat="hwio").data
+            c = self.mkl_ops.mkl_conv(a,b,stride,stride,pad,pad,1,1,xformat="acdb",wformat="hwio").data
 
             a_jt = jt.array(a)
             b_jt = jt.array(b)
@@ -127,8 +145,8 @@ class TestMklConvOp(unittest.TestCase):
         a = np.random.rand(n,c,H,W).astype(np.float32)
         b = np.random.rand(o,i,h,w).astype(np.float32)
         da = np.random.rand(n,o,H,W).astype(np.float32)
-        dx = jt.mkl_ops.mkl_conv_backward_x(b,da,H,W,1,1,1,1,1,1).data
-        dw = jt.mkl_ops.mkl_conv_backward_w(a,da,h,w,1,1,1,1,1,1).data
+        dx = self.mkl_ops.mkl_conv_backward_x(b,da,H,W,1,1,1,1,1,1).data
+        dw = self.mkl_ops.mkl_conv_backward_w(a,da,h,w,1,1,1,1,1,1).data
         a_jt = jt.array(a)
         b_jt = jt.array(b)
 
@@ -173,9 +191,9 @@ class TestMklConvOp(unittest.TestCase):
         a = np.random.rand(n,H,W,c).astype(np.float32)
         b = np.random.rand(h,w,i,o).astype(np.float32)
         da = np.random.rand(n,H,W,o).astype(np.float32)
-        jt.mkl_ops.mkl_conv_backward_x(b,da,H,W,1,1,1,1,1,1,xformat="acdb",wformat="hwio",yformat="acdb")
-        dx = jt.mkl_ops.mkl_conv_backward_x(b,da,H,W,1,1,1,1,1,1,xformat="acdb",wformat="hwio",yformat="acdb").data
-        dw = jt.mkl_ops.mkl_conv_backward_w(a,da,h,w,1,1,1,1,1,1,xformat="acdb",wformat="hwio",yformat="acdb").data
+        self.mkl_ops.mkl_conv_backward_x(b,da,H,W,1,1,1,1,1,1,xformat="acdb",wformat="hwio",yformat="acdb")
+        dx = self.mkl_ops.mkl_conv_backward_x(b,da,H,W,1,1,1,1,1,1,xformat="acdb",wformat="hwio",yformat="acdb").data
+        dw = self.mkl_ops.mkl_conv_backward_w(a,da,h,w,1,1,1,1,1,1,xformat="acdb",wformat="hwio",yformat="acdb").data
         a_jt = jt.array(a)
         b_jt = jt.array(b)
 

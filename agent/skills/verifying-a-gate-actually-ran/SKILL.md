@@ -424,3 +424,46 @@ Jittor 的可选库是惰性加载的（`jittor/_runtime/backend_libraries.py` �
    `{cub, cublas, cudnn, cufft, curand, cusparse, cutt} ⊆ 已加载`。
    截断原因串到 200 字符会把 g++ 的报错切掉，定位时单独跑一次
    `get_library(名, load=True)` 拿完整输出。
+
+### `jt.<库>_ops` 是查询，不是取值器——读它的测试是死的
+
+上一小节讲的是加载失败被当成硬件缺失。还有一层更早：**测试根本没触发加载。**
+
+`jt.mkl_ops` / `jt.cudnn` 这些属性走 `backend_libraries.library_attribute`，它调的是
+`get_library_ops(名)`，**不带 `load=True`**。所以它回答的是「这个库在本进程里加载过没有」，
+而惰性加载器要到有人用它才触发（MKL 是 `nn/functional/matrix.py`）。导入期读它一律得 `None`。
+
+实测（本波在 8.05 上量的，改前）：
+
+| 位置 | 用例数 | 表现 |
+| --- | --- | --- |
+| `tests/backends/cpu` | 5 | **全部失败**，`AttributeError: 'NoneType' object has no attribute 'mkl_conv'` |
+| `tests/ops/test_mkl_batched_matmul.py` | 8 | **全部 skip**（`skipIf(jt.compile_extern.mkl_ops is None)` 在导入期求值），理由里没有任何缺硬件字样 |
+| `tests/ops/test_matmul.py` | 7 | **结论随命令行顺序变**：单独跑 5 failed/2 passed；先跑一个会加载 oneDNN 的文件再跑它 3 failed |
+
+也就是说整个 MKL 的 13 条覆盖没有一条跑过，而审计里「MKL matmul 只支持 fp32」这条
+**从来没有运行期证据**。第三行更值得记：它既不红得稳定也不绿得稳定，
+**一个结论取决于同进程里谁先跑的门禁不是门禁**。
+
+做法：
+
+```python
+# tests/_helpers/onednn.py 的形状，可照搬给任何可选库
+def requires_onednn():
+    ops = get_library_ops("mkl", load=True)   # load=True 就是全部的修法
+    if ops is None:
+        pytest.skip("oneDNN 不可用 —— " + 真实原因)
+    return ops
+```
+
+三条注意：
+
+1. **不要写成导入期的 `skipIf`**。`tests/structure/test_pytest_contract.py` 禁止
+   collection 期的后端副作用，而且导入期求值的条件正是上表第二行的成因。放进
+   `setUp`/fixture。
+2. **`use_mkl` 之类的 flag 拦不住这个**。它默认为 True，说的是「允许用」，
+   与「加载了没有」无关——上表第一行的 class 上就挂着 `skipIf(not use_mkl)`。
+3. **改活之后新暴露的失败要分清是谁的**。本波实测：`test_matmul.py` 从 5 failed 降到
+   3 failed，剩下的 3 条是先于改动存在的独立缺陷；其中 `test_backward_once` 断言 relay
+   日志恰 1 条，库没加载时是 0 条、加载后是 6 条——**两种情况都失败，说明这条断言本身
+   从来没对过**。把这种「换了失败原因」的条目逐条写清楚，不要混进「我修好了」里。

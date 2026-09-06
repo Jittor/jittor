@@ -53,6 +53,30 @@ def test_cuda_library_capabilities_are_queryable(cuda_runtime):
     } <= implementations
 
 
+def test_cuda_capability_dtypes_are_declared_and_wider_than_the_cpu_backend(cuda_runtime):
+    """The accelerator half of the declaration the audit asked for (8.05).
+
+    The audit's complaint was not only that oneDNN's CPU matmul is fp32-only
+    but that the *difference* between the backends had nowhere to be stated.
+    So the difference itself is the assertion: both backends declare, and the
+    accelerator declares strictly more. ``tests/backends/cpu/
+    test_onednn_contract.py`` owns the CPU half and checks its declaration
+    against which implementation actually runs per dtype.
+    """
+    jt = cuda_runtime
+    wide = {"float32", "float64", "float16", "bfloat16"}
+    for capability in ("matmul", "conv2d", "conv2d_backward_input",
+                       "conv2d_backward_weight"):
+        accelerator = set(jt.core.backend_capability_dtypes("cuda", capability))
+        cpu = set(jt.core.backend_capability_dtypes("cpu", capability))
+        assert accelerator == wide, (capability, sorted(accelerator))
+        # The CPU row is empty only when oneDNN has not loaded in this
+        # process; when it has, it must be a strict subset rather than equal,
+        # because that gap is the thing being declared.
+        if cpu:
+            assert cpu < accelerator, (capability, sorted(cpu), sorted(accelerator))
+
+
 def test_cuda_random_capability_runs_generator(cuda_runtime):
     jt = cuda_runtime
     jt.set_seed(417)

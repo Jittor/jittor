@@ -130,8 +130,16 @@ void MklConvBackwardXOp::jit_run() {
     auto conv_weights_md = memory::desc({conv_weights_tz}, dt::@Tw, tag::any);
     auto conv_dst_md = memory::desc({conv_dst_tz}, dt::@Ty, tag::any);
 
-    auto conv_desc = convolution_forward::desc(prop_kind::forward,
-            algorithm::convolution_direct, conv_src_md, conv_weights_md,
+    // `convolution_auto` to match what the forward operator actually uses
+    // (`mkl_conv_op.cc`). This pd exists only as the backward pd's hint, so it
+    // has to describe the same primitive the forward pass ran: with
+    // `convolution_direct` here and `convolution_auto` there, oneDNN could
+    // choose a different implementation -- and therefore different src and
+    // weights layouts -- for the hint than for the forward, so the layouts the
+    // backward assumed were not the ones it was handed. `prop_kind::forward`
+    // is already forward_training, which the forward operator now matches.
+    auto conv_desc = convolution_forward::desc(prop_kind::forward_training,
+            algorithm::convolution_auto, conv_src_md, conv_weights_md,
             conv_dst_md, conv_strides, conv_dilation, conv_padding,
             conv_padding);
     auto conv_pd = convolution_forward::primitive_desc(conv_desc, eng);

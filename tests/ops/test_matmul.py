@@ -11,6 +11,7 @@ import unittest
 import jittor as jt
 import numpy as np
 from _helpers.logs import find_log_with_re
+from _helpers.onednn import requires_onednn
 f32 = jt.float32
 from jittor import nn, Module
     
@@ -105,6 +106,16 @@ def check_matmul2(s1, s2, t1, t2, dtype = 'float32'):
             assert(len(logs)==1)
 
 class TestMatmul(unittest.TestCase):
+    def setUp(self):
+        # ``check_matmul`` asserts that a ``mkl_matmul``/``cublas_matmul`` jit
+        # op key appeared, i.e. that the tuner relayed to a library kernel. On
+        # CPU that needs oneDNN *loaded*, and its loader is lazy -- so this
+        # class' outcome depended on whether some earlier file in the same
+        # process happened to load it. Measured: 5 failures when this file runs
+        # alone, 3 when a file that loads oneDNN ran first. An order-dependent
+        # gate is not a gate; see tests/_helpers/onednn.py.
+        requires_onednn()
+
     def test_matmul_type(self):
         check_matmul2([2,5],[5,8], False, False, 'float32')
         check_matmul2([5,2],[5,8], True, False, 'float32')

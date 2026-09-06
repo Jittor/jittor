@@ -72,4 +72,19 @@ vector<string> backend_supported_capabilities(const string& backend) {
             result.emplace_back(op_capability_name(registration.capability));
     return result;
 }
+
+vector<string> backend_capability_dtypes(const string& backend,
+                                         const string& capability) {
+    auto id = backend_registry().get(backend).id;
+    for (const auto& registration : op_capability_registrations(id)) {
+        if (capability != op_capability_name(registration.capability))
+            continue;
+        // Same admission rule as backend_supported_capabilities: an entry whose
+        // implementation is absent or fallback-only is not a live capability,
+        // so reporting its declared dtypes would overstate the backend.
+        if (!op_capability_definition(registration)) break;
+        return registration.dtypes;
+    }
+    return {};
+}
 } // namespace jittor

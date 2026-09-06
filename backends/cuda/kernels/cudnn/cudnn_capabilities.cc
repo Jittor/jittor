@@ -22,12 +22,17 @@ bool supports_conv_backward(Var* a, Var* b, int, int, int, int, int, int, int, i
     return supports_conv_layout(a, b, groups, wformat);
 }
 
+// Matches `supports_conv_layout`'s `is_float()` test. oneDNN's CPU
+// convolution declares f32 only, so this is the other side of the same
+// per-backend gap the matmul declaration records.
+const vector<string> float_widths = {"float32", "float64", "float16", "bfloat16"};
+
 RegisterOpCapability<VarPtr, Var*, Var*, int, int, int, int, int, int, int, string, string, string> conv(
-    accelerator_backend_id(), OpCapability::Conv2d, "cudnn_conv", supports_conv);
+    accelerator_backend_id(), OpCapability::Conv2d, "cudnn_conv", supports_conv, float_widths);
 RegisterOpCapability<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string> conv_x(
-    accelerator_backend_id(), OpCapability::Conv2dBackwardInput, "cudnn_conv_backward_x", supports_conv_backward);
+    accelerator_backend_id(), OpCapability::Conv2dBackwardInput, "cudnn_conv_backward_x", supports_conv_backward, float_widths);
 RegisterOpCapability<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string> conv_w(
-    accelerator_backend_id(), OpCapability::Conv2dBackwardWeight, "cudnn_conv_backward_w", supports_conv_backward);
+    accelerator_backend_id(), OpCapability::Conv2dBackwardWeight, "cudnn_conv_backward_w", supports_conv_backward, float_widths);
 }
 } // namespace jittor
 #endif

@@ -20,6 +20,8 @@ from jittor import nn
 import jittor.nn.functional.matrix as matrix
 from jittor._runtime.dispatch import override_kernel
 
+from _helpers.onednn import requires_onednn
+
 
 def _generic(function):
     """Run ``function`` with the relay disabled, i.e. on the reindex path."""
@@ -36,11 +38,17 @@ def _matmul_with_grads(a_array, b_array):
     return out.numpy(), grad_a.numpy(), grad_b.numpy()
 
 
-@unittest.skipIf(jt.compile_extern.mkl_ops is None, "Jittor was built without oneDNN")
 class TestMklBatchedMatmul(unittest.TestCase):
     """oneDNN is a CPU backend, so every test here pins ``use_cuda`` off."""
 
     def setUp(self):
+        # This class used to be guarded by
+        # `skipIf(jt.compile_extern.mkl_ops is None, ...)`, evaluated at
+        # import. That attribute is a query and not an accessor -- None until
+        # the lazy loader fires -- so the condition was true at collection and
+        # all 8 cases skipped, in every run, for a reason that names no
+        # missing hardware. See tests/_helpers/onednn.py.
+        requires_onednn()
         self.random = np.random.RandomState(0)
 
     def _pair(self, a_shape, b_shape):

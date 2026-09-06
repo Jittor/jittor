@@ -138,6 +138,71 @@ env/file rendezvous、以及四条「不许静默回落到 CPU / 不许把 skip 
 | --- | --- | --- | --- | --- |
 | MKL 用 oneDNN 2.2.0（2021）且用 v3 已移除的 API | 版本 `compile_extern.py:51,62,66,69`；API `mkl_conv_op.cc:153-156` 的 `convolution_forward::desc` | 与拒绝 cuDNN 9 同类：CPU 后端钉死在 4 年前的库上 | 迁到 v3 API 后放开版本 | 主要 |
 | MKL matmul 只支持 fp32 | `mkl_matmul_op.cc:28` `ASSERT(a->dtype().dsize()==4)` | CPU 的 fp64/fp16/bf16 矩阵乘掉回通用元算子，而 CUDA 侧全支持，且无处声明这种能力差异 | 补齐或在能力表里声明 | 主要 |
+| **MKL 的 13 条测试全是死的** | `jt.compile_extern.mkl_ops` 走 `backend_libraries.library_attribute`，它调 `get_library_ops("mkl")` **不带 `load=True`**，即「MKL 是否已加载」而不是「取 MKL」。惰性加载器直到有人调 `nn.functional.matrix` 才触发 | `tests/backends/cpu` 5 条**全部**以 `AttributeError: 'NoneType' object has no attribute 'mkl_conv'` 失败（`use_mkl` 那个 skipIf 拦不住：该 flag 默认 True，与「加载了没有」无关）；`tests/ops/test_mkl_batched_matmul.py` 8 条**全部** skip，且 skip 理由不含任何缺硬件字样。这就是 8.05 的全部前置证据基础，一条都没跑过；审计说的「matmul 只支持 fp32」也因此从来没有运行期证据 | 测试显式 `load=True` 取库，取不到才 skip 且理由是真实原因 | 主要 |
+| MKL 相关测试的结果取决于同进程里谁先跑 | `tests/ops/test_matmul.py` 的 `check_matmul` 断言出现过 `mkl_matmul` 的 jit op key（即 tuner relay 发生过）。CPU 上这要求 oneDNN **已加载** | 实测：单独跑这个文件 **5 failed / 2 passed**，先跑一个会加载 oneDNN 的文件再跑它则 **3 failed**。同一份代码同一台机器，结论随命令行顺序变 | 同上，测试自己保证库已加载 | 主要 |
+
+已修：上面两条「测试是死的 / 结果随顺序变」，以及「MKL matmul 只支持 fp32 …无处声明这种能力差异」的**声明那一半**，见本次提交（8.05 的部分交付，任务未完，剩余见看板）。
+
+**测试先修，因为原来撑不住任何一次换库**。新增 `tests/_helpers/onednn.py`：一个
+`requires_onednn()`，`get_library_ops("mkl", load=True)` 取库，取不到才 skip 且 skip 理由
+是真实原因（编译错误会说是编译错误，不会说成「本机没有 oneDNN」——这正是 4.13 在 cuTT
+上看到的伪装）。改后实测：`tests/backends/cpu` 5 failed → **13 passed**（含新增 8 条），
+`tests/ops/test_mkl_batched_matmul.py` 8 skipped → **7 passed / 1 skip**（那 1 条要 CUDA），
+`tests/ops/test_matmul.py` 5 failed / 2 passed → **3 failed / 4 passed**，且不再随顺序变。
+`tests/ops/test_matmul.py` 剩的 3 条是先于本改动存在的独立缺陷，逐条记在看板。
+`tests/backends/cpu/test_mkl_conv_op.py` 的 4 条断言的是 native 语义的 conv tuner relay，
+Torch 兼容模式下卷积不走 conv tuner 认得的 reindex 元算子形式、relay 日志为 0 条，
+所以在该模式下按写明理由 skip（这个目录不在 `TORCH_MODE_PATHS` 里，没有门禁会以该模式跑它）。
+
+**能力表的 dtype 声明现在可查**。`OpCapabilityRegistration` 加 `dtypes` 字段，
+`@pyjt(backend_capability_dtypes)` 暴露查询。实测：
+`backend_capability_dtypes("cpu", "matmul") == ["float32"]`，
+`("cuda", "matmul") == ["float32","float64","float16","bfloat16"]`——审计说的那个
+CPU/加速器能力差异，从「只写在一个函数指针里」变成可以问出来的事实。
+四个后端都补了声明：MKL（CPU）四条能力全 f32（`dnnl_sgemm` 签名就是 float-only，
+不是 oneDNN 的能力上限）、cuDNN/cuBLAS 四种 float 宽度、hipBLAS 只有 f32/f64。
+**声明不参与选择**（能力签名不统一，Random 收 shape 加两个 dtype 字符串，Conv2d 收两个
+Var 加十一个标量，没有通用的 dtype 提取），仍由 `supports` 谓词决定，
+所以配了一条防漂移测试：逐 dtype 跑 CPU matmul 并看实际执行的实现，断言
+「声明的 dtype 集合 == oneDNN matmul 真的跑起来的 dtype 集合」。实测
+f32 → `mkl_matmul`，f64/f16/bf16 → 通用 kernel，与声明一致。
+**这条测试有牙**：把 MKL 的声明改空，三条红（含防漂移那条）。
+写这条测试时的一个坑：`auto_convert_64_to_32` 默认为 1，`jt.array(float64 数组)` 得到的是
+**float32** Var，所以「float64 用例」如果不显式关掉这个 flag，量的其实是 float32，
+会与任何声明都一致。
+
+**前向 prop_kind 与反向 hint 不一致**（计划里「训练用 forward_training」那条的落点，
+也是看板上记的那条计划外发现）。前向 `mkl_conv_op.cc` 用
+`prop_kind::forward_inference` + `algorithm::convolution_auto`，两个反向算子构造 backward pd
+所需的 hint 却用 `prop_kind::forward`（即 forward_training）+ `algorithm::convolution_direct`。
+oneDNN 要求 backward pd 的 hint 来自 forward_training 的 forward pd，而 prop_kind 与
+algorithm **两处都不一样**，oneDNN 给 hint 挑的 src/weights layout 就可能与真实前向的不同，
+每处不一致在边界上换成一次额外 reorder。三个文件统一成
+`forward_training` + `convolution_auto`。核心里没有 train/eval flag，算子无法按调用选择；
+两者之中 forward_training 是能让前向与反向配套的那一个（无反向的卷积只付 layout 选择的代价，
+配不上的一对每步都付一次 reorder）。**按 is_train 选择需要核心先有 train flag，今天没有**，
+这半留作剩余。
+
+**版本钉死不只是 manifest 那一行**。2.2.0 的包同时装了 `libdnnl.so` 与
+`libmkldnn.so` 兼容别名，oneDNN v3 去掉了别名只剩 `libdnnl.so`；而判断「装上了没有」
+（`install_mkl`）、「可用吗」（`check_mkl_usable`）、「链什么」（`setup_mkl` 的 `-lmkldnn`）
+三处全写的是别名，所以一棵正确的 v3 树会被报成「下载了但认为没装上」，链接也解析不到。
+改成 `mkl_library_layout()` 一处按 `(子目录, 文件名, 链接名)` 表探测，链接名取实际存在的那个。
+**v3 布局在本机测得到而不用装 v3**：用合成目录驱动探测（`test_onednn_contract.py`
+的 `TestOnednnLibraryLayout`）——必须这么测，因为 **oneDNN 从 v3 起不再发布预编译二进制**
+（v3.12/v3.13 各版 release 的 assets 为空，已核实），v3 装不到这台机器上，而不测就是这条
+钉死一直在的原因。
+
+**未做，不伪报**：(a) **迁 v3 API 没做**。v3 删了 `convolution_forward::desc`，
+primitive_desc 直接从参数构造，所以代码改动必须与 v3 库同时到位（或写成
+`DNNL_VERSION_MAJOR` 条件分支）。上游不再发布预编译 v3，本机与 `/dev/shm` 各处只有 2.2.0，
+要验证得先决定「从源码编 oneDNN」这件事怎么进安装路径——这是一个设计决定，不该顺手做。
+写一个编译不到的 v3 分支等于写一段没人编过的代码。(b) **primitive/pd/reorder 按形状缓存没做**，
+所以「CPU 卷积每调用开销下降」这条验收未达成。`mkl_conv_op.cc:119-120` 仍每次
+`jit_run` 重建 engine/stream/memory desc/primitive desc/reorder 目标 memory。
+看板上前一位核实者的建议是「缓存写在 v2 API 上会被 v3 迁移全部重写」，成立；
+但 v3 既然阻塞，先在 v2 上做缓存是有实际收益的，只是本波没有余量做完并验证，
+留给下一位——`prop_kind`/`algorithm` 已统一，pd 构造集中在每个文件一处，缓存改动面比之前小。
 | MKL 卷积一律用 forward_inference | `mkl_conv_op.cc:153` | 训练路径用推理 prop_kind，不保证与 backward 配套 | 按 is_train 选择 | 次要 |
 | Corex 的探测函数带副作用且路径写死 | `corex/corex_compiler.py:86` isdir("/usr/local/corex")、`:68` 硬编码 home、`:88` 在 check() 里调 install() 改全局编译器配置 | 检查是否可用会改全局状态；非标准安装路径不被支持 | check() 只读，路径可配置 | 次要 |
 | Corex 的源码改写函数沿用 ACL 的名字 | `corex/corex_compiler.py:31` `string process_acl(...)` | 两个后端的文本改写实现互相拷贝，命名都没改 | 随后端注册表一起删除 | 次要 |

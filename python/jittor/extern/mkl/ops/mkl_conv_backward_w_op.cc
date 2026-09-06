@@ -132,8 +132,12 @@ void MklConvBackwardWOp::jit_run() {
     auto conv_weights_md = memory::desc({conv_weights_tz}, dt::@Tw, tag::any);
     auto conv_dst_md = memory::desc({conv_dst_tz}, dt::@Ty, tag::any);
 
-    auto conv_desc = convolution_forward::desc(prop_kind::forward,
-            algorithm::convolution_direct, conv_src_md, conv_weights_md,
+    // As in mkl_conv_backward_x_op.cc: this forward pd is only the backward
+    // pd's hint, so its prop_kind and algorithm have to be the ones the
+    // forward operator actually used, or the layouts the backward assumes are
+    // not the layouts it receives.
+    auto conv_desc = convolution_forward::desc(prop_kind::forward_training,
+            algorithm::convolution_auto, conv_src_md, conv_weights_md,
             conv_dst_md, conv_strides, conv_dilation, conv_padding,
             conv_padding);
     auto conv_pd = convolution_forward::primitive_desc(conv_desc, eng);

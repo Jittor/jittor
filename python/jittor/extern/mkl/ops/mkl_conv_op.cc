@@ -150,7 +150,21 @@ void MklConvOp::jit_run() {
             = memory::desc({ conv1_weights_tz }, dt::@Tw, tag::any);
     auto conv1_dst_md = memory::desc({ conv1_dst_tz }, dt::@Ty, tag::any);
     
-    auto conv1_desc = convolution_forward::desc(prop_kind::forward_inference,
+    // forward_training, not forward_inference.
+    //
+    // oneDNN requires a backward primitive descriptor to be created against a
+    // *forward_training* forward pd, and both backward operators duly build
+    // their hint that way (`mkl_conv_backward_x_op.cc`,
+    // `mkl_conv_backward_w_op.cc`). The real forward ran as
+    // forward_inference, so the pd the backward pass was told to assume was
+    // not the pd the forward pass used: oneDNN is free to choose different
+    // src/weights layouts for the two prop_kinds, and every disagreement
+    // becomes an extra reorder at the boundary. Jittor has no train/eval flag
+    // in the core, so the operator cannot pick per call -- and of the two,
+    // forward_training is the one that keeps the pair consistent, since a
+    // convolution with no backward pays only for layout choice while a
+    // mismatched pair pays a reorder on every step.
+    auto conv1_desc = convolution_forward::desc(prop_kind::forward_training,
             algorithm::convolution_auto, conv1_src_md, conv1_weights_md, conv1_dst_md, conv1_strides, conv1_dilation, conv1_padding, conv1_padding);
             
     auto conv1_prim_desc = convolution_forward::primitive_desc(conv1_desc, eng);

@@ -8,10 +8,16 @@ import unittest
 import jittor as jt
 import os
 
-@unittest.skipIf(not jt.compile_extern.use_mkl, "Not use mkl, Skip")
+from _helpers.onednn import requires_onednn
+
+
 class TestMklTestOp(unittest.TestCase):
     def test(self):
-        assert jt.mkl_ops.mkl_test().data==123
+        # `jt.mkl_ops` is a query, not an accessor: it is None until the lazy
+        # loader has fired, so this read used to raise AttributeError rather
+        # than run. See tests/_helpers/onednn.py.
+        mkl_ops = requires_onednn()
+        assert mkl_ops.mkl_test().data==123
 
 if __name__ == "__main__":
     unittest.main()

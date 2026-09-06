@@ -125,6 +125,39 @@ def cudnn_split_libraries(cudnn_major):
     return CUDNN_SPLIT_LIBRARIES.get(
         cudnn_major, CUDNN_SPLIT_LIBRARIES[max(CUDNN_SPLIT_LIBRARIES)])
 
+#: oneDNN's shared library, newest spelling first, as (subdirectory, filename,
+#: linker name) triples.
+#:
+#: The 2021 v2.2 archive that ``manifest.MKL`` pins ships *both*
+#: ``libdnnl.so`` and a ``libmkldnn.so`` compatibility alias. oneDNN v3 dropped
+#: the alias and ships ``libdnnl.so`` only -- so code that looks for
+#: ``libmkldnn.so`` to decide whether the archive unpacked reports a correct v3
+#: install as "downloaded but not installed", and a ``-lmkldnn`` link line
+#: fails against it. Both spellings are accepted here so that the library
+#: version stops being pinned by the *file name*; ``mkl_include_path`` /
+#: ``mkl_lib_path`` already let a caller point at their own build.
+MKL_LIBRARY_NAMES = (
+    ("lib", "libdnnl.so", "dnnl"),
+    ("lib", "libmkldnn.so", "mkldnn"),
+    ("bin", "dnnl.dll", "dnnl"),
+    ("lib", "libdnnl.dylib", "dnnl"),
+    ("lib", "libmkldnn.dylib", "mkldnn"),
+)
+
+
+def mkl_library_layout(dirname):
+    """``(library path, linker name)`` for the oneDNN under ``dirname``.
+
+    ``None`` when no recognised library is there, which is the "not unpacked
+    yet" answer as well as the "this is not a oneDNN tree" answer.
+    """
+    for subdirectory, filename, linker_name in MKL_LIBRARY_NAMES:
+        candidate = os.path.join(dirname, subdirectory, filename)
+        if os.path.isfile(candidate):
+            return candidate, linker_name
+    return None
+
+
 def install_mkl(root_folder):
     # origin url is
     # https://github.com/oneapi-src/oneDNN/releases/download/v2.2/
@@ -135,9 +168,7 @@ def install_mkl(root_folder):
     fullname = os.path.join(root_folder, filename)
     dirname = os.path.join(root_folder, filename.rsplit(".",1)[0])
 
-    if not (os.path.isfile(os.path.join(dirname, "lib", "libmkldnn.so")) or
-        os.path.isfile(os.path.join(dirname, "bin", "dnnl.dll")) or 
-        os.path.isfile(os.path.join(dirname, "lib", "libmkldnn.dylib"))):
+    if mkl_library_layout(dirname) is None:
         LOG.i("Downloading mkl...")
         download_url_to_local(url, filename, root_folder, md5)
         if fullname.endswith(".zip"):
@@ -167,19 +198,15 @@ def check_mkl_usable(dirname):
     ``dnnl_sgemm`` (the entry point jittor's own MKL operators call) answers
     the same question: is this archive usable from this process.
     """
-    candidates = [
-        os.path.join(dirname, "lib", "libmkldnn.so"),
-        os.path.join(dirname, "lib", "libmkldnn.dylib"),
-        os.path.join(dirname, "bin", "dnnl.dll"),
-    ]
-    for lib_path in candidates:
-        if os.path.isfile(lib_path):
-            break
-    else:
+    layout = mkl_library_layout(dirname)
+    if layout is None:
+        candidates = [os.path.join(dirname, subdirectory, filename)
+                      for subdirectory, filename, _ in MKL_LIBRARY_NAMES]
         raise RuntimeError(
             f"the MKL/oneDNN archive unpacked into {dirname} but none of "
             f"{candidates} exists; delete that directory and its archive to "
             f"download it again.")
+    lib_path = layout[0]
     try:
         lib = ctypes.CDLL(lib_path, dlopen_flags)
     except OSError as error:
@@ -231,14 +258,19 @@ def setup_mkl():
     mkl_include_path = os.path.join(mkl_home, "include")
     mkl_lib_path = os.path.join(mkl_home, "lib")
 
-    mkl_lib_name = os.path.join(mkl_lib_path, "libmkldnn.so")
-    extra_flags = f" -I\"{mkl_include_path}\" -L\"{mkl_lib_path}\" -lmkldnn "
+    # The linker name comes from whichever library is actually there rather
+    # than from a hard-coded `-lmkldnn`: v2 ships libdnnl.so plus a
+    # libmkldnn.so alias, v3 ships libdnnl.so alone. Hard-coding the alias is
+    # what made the library version un-upgradable without touching this line.
+    layout = mkl_library_layout(mkl_home)
+    assert layout is not None, (
+        f"no oneDNN shared library under {mkl_home}; looked for "
+        + ", ".join(name for _, name, _ in MKL_LIBRARY_NAMES))
+    mkl_lib_name, mkl_linker_name = layout
+    extra_flags = f" -I\"{mkl_include_path}\" -L\"{mkl_lib_path}\" -l{mkl_linker_name} "
     if os.name == 'nt':
-        mkl_lib_name = os.path.join(mkl_home, 'bin', 'dnnl.dll')
         mkl_bin_path = os.path.join(mkl_home, 'bin')
-        extra_flags = f" -I\"{mkl_include_path}\"  -L\"{mkl_lib_path}\" -L\"{mkl_bin_path}\" -ldnnl "
-    elif platform.system() == "Darwin":
-        mkl_lib_name = os.path.join(mkl_lib_path, "libmkldnn.dylib")
+        extra_flags = f" -I\"{mkl_include_path}\"  -L\"{mkl_lib_path}\" -L\"{mkl_bin_path}\" -l{mkl_linker_name} "
 
     assert os.path.isdir(mkl_include_path)
     assert os.path.isdir(mkl_lib_path)
