@@ -79,11 +79,11 @@ def test_configure_returns_complete_value_without_global_writes(acl, setup):
     assert not config.has_rocm and not config.has_corex
     assert config.nvcc_path == config.tikcc_path == "/cann/bin/selected-ccec"
     assert config.setup_fake_cuda_lib
-    assert "-I/converted/src" in config.cc_flags
+    assert "-I/source/src" in config.cc_flags
     assert "-DIS_ACL" in config.cc_flags
     assert config.nvcc_flags == config.cc_flags.replace("-std=c++14", "")
     assert config.environment == {"existing_env": "yes", "use_mkl": "0"}
-    assert config.resources["acl_converter"] is setup.converter
+    assert config.resources["acl_initializer"] is setup.converter
     assert config.resources["acl_library"] is setup.library
     assert config.resources["existing_resource"] == 3
     assert config.extra_core_files[0] == "existing.cc"
@@ -98,7 +98,7 @@ def test_configure_returns_complete_value_without_global_writes(acl, setup):
         else:
             converter_sources.append(name)
     assert config.extra_core_files == ("existing.cc", *expected_extra)
-    assert [call[0] for call in setup.calls] == ["load", "compile", "transform"]
+    assert [call[0] for call in setup.calls] == ["load", "compile"]
     assert setup.calls[0][1:] == ("libascendcl.so", os.RTLD_NOW | os.RTLD_GLOBAL)
     converter_flags = setup.calls[1][2]
     assert "-I/source/src" in converter_flags
@@ -148,7 +148,7 @@ def test_missing_toolkit_fails_before_work(acl, setup, monkeypatch, toolkit):
     assert not setup.calls
 
 
-@pytest.mark.parametrize("service", ["load_library", "compile_module", "transform_sources"])
+@pytest.mark.parametrize("service", ["load_library", "compile_module"])
 def test_configuration_failures_propagate(acl, setup, service):
     from dataclasses import replace
     def failure(*args, **kwargs):

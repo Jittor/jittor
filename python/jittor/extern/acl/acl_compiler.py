@@ -77,16 +77,18 @@ def configure(context):
     cc_flags += " -llibopapi "
 
     library = context.load_library("libascendcl.so", os.RTLD_NOW | os.RTLD_GLOBAL)
+    # Compile the registration entry point as a normal backend module.  ACL
+    # kernels are native provider sources; no whole-tree source rewriting is
+    # performed here.  In particular, do not expose a converter resource:
+    # generated CUDA source is either handled by a registered ACL operation or
+    # rejected explicitly by the provider.
     mod = context.compile_module(
         '''
 #include "common.h"
 namespace jittor {
-// @pyjt(process)
-string process_acl(const string& src, const string& name, const map<string,string>& kargs);
 // @pyjt(init_acl_ops)
 void init_acl_ops();
 }''', config.cc_flags + " " + " ".join(cc_files) + cc_flags)
-    config = context.transform_sources(config, "acl", mod.process)
     final_flags = config.cc_flags + cc_flags
     return config.evolve(
         backend="acl", has_acl=True, has_cuda=True, is_cuda=False,
@@ -95,7 +97,7 @@ void init_acl_ops();
         cc_flags=final_flags, nvcc_flags=final_flags.replace("-std=c++14", ""),
         setup_fake_cuda_lib=True, extra_core_files=tuple(extra_core_files),
         environment={**config.environment, "use_mkl": "0"},
-        resources={**config.resources, "acl_converter": mod, "acl_library": library},
+        resources={**config.resources, "acl_initializer": mod, "acl_library": library},
     )
 
 
@@ -109,4 +111,4 @@ def install_extern(context):
 
 def post_process(context):
     if context.config.has_acl:
-        context.config.resources["acl_converter"].init_acl_ops()
+        context.config.resources["acl_initializer"].init_acl_ops()

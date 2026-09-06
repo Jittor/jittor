@@ -27,8 +27,6 @@ namespace jittor
         return status;
     }
 
-    void acl_jittor_op_compiler(string &filename, string &src, bool is_acl, string &extra_flags);
-
     struct AclOpFunctions
     {
         // for Unary and Nonzero
