@@ -5,6 +5,7 @@ import os
 import numpy as np
 
 import jittor as jt
+from jittor import nn
 
 
 def _prod(xs):
@@ -109,6 +110,56 @@ def _reduce_scatter_padded(full_grad):
 
 def _param_numel(v):
     return int(np.prod(tuple(int(x) for x in v.shape)))
+
+
+def _named_parameters_with_owner(module, recurse=True):
+    out = []
+    seen = set()
+
+    def child_items(mod):
+        try:
+            items = mod.named_children()
+            if items is not None:
+                return list(items)
+        except Exception:
+            pass
+        try:
+            modules = getattr(mod, "_modules", None)
+            if callable(modules):
+                modules = modules()
+            if isinstance(modules, dict):
+                return list(modules.items())
+        except Exception:
+            pass
+        return []
+
+    def visit(mod, prefix=""):
+        dc = getattr(mod, "__dict__", {})
+        try:
+            if isinstance(mod, nn.ParameterList):
+                dc = mod.params
+        except Exception:
+            pass
+        bufnames = getattr(mod, "__dict__", {}).get("_buffer_names", ())
+        for name, value in list(dc.items()):
+            if isinstance(name, str) and name.startswith("_"):
+                continue
+            if isinstance(value, jt.Var):
+                if id(value) in seen:
+                    continue
+                if getattr(value, "is_buffer", False) or not getattr(value, "persistent", True) or name in bufnames:
+                    continue
+                seen.add(id(value))
+                pname = f"{prefix}.{name}" if prefix else str(name)
+                out.append((pname, mod, name, value))
+        if recurse:
+            for name, value in child_items(mod):
+                if isinstance(value, nn.Module):
+                    child_prefix = f"{prefix}.{name}" if prefix else str(name)
+                    visit(value, child_prefix)
+
+    visit(module)
+    return out
 
 
 def _fsdp2_flat_enabled(world_size, total_numel):

@@ -4,6 +4,10 @@ Run:
     python -m pytest tests/compat/torch/test_torch_compat_fsdp2.py
 """
 import abc
+import os
+import subprocess
+import sys
+import textwrap
 import unittest
 import types
 from unittest import mock
@@ -20,6 +24,146 @@ from jittor.compat.torch.installers.distributed import (
 
 
 class TestFSDP2Compat(unittest.TestCase):
+    def test_parameter_trainability_uses_torch_requires_grad(self):
+        parameter = torch.nn.Parameter(torch.ones(4))
+        parameter.requires_grad_(False)
+
+        self.assertFalse(parameter.requires_grad)
+        self.assertFalse(parameter.is_stop_grad())
+        self.assertFalse(fsdp_shard._parameter_requires_grad(parameter))
+
+    def test_initial_shard_materialization_releases_full_parent(self):
+        # Switching allocators while earlier tests still own Vars can corrupt
+        # their storage during jt.gc(). A fresh process is part of this memory
+        # test's contract, not merely test-order isolation.
+        code = textwrap.dedent(
+            """
+            import gc
+            import numpy as np
+            import jittor as jt
+            from jittor.compat.fsdp2 import shard as fsdp_shard
+
+            with jt.flag_scope(
+                    use_cuda=0, use_stat_allocator=1, use_sfrl_allocator=0):
+                jt.sync_all(True)
+                gc.collect()
+                baseline = (
+                    jt.flags.stat_allocator_total_alloc_byte
+                    - jt.flags.stat_allocator_total_free_byte)
+                full = jt.ones((4 * 1024 * 1024,), dtype="float32")
+                full.sync()
+                shard = fsdp_shard._materialize_initial_shard(
+                    full[: full.shape[0] // 4])
+                del full
+                gc.collect()
+                jt.gc()
+                jt.sync_all(True)
+                live_delta = (
+                    jt.flags.stat_allocator_total_alloc_byte
+                    - jt.flags.stat_allocator_total_free_byte
+                    - baseline)
+                assert tuple(shard.shape) == (1024 * 1024,)
+                np.testing.assert_array_equal(
+                    shard.numpy(), np.ones((1024 * 1024,), dtype="float32"))
+                assert live_delta < 8 * 1024 * 1024, live_delta
+                print("MATERIALIZATION_OK", live_delta)
+            """
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", code],
+            env=os.environ.copy(),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout)
+        self.assertIn("MATERIALIZATION_OK", completed.stdout)
+
+    def test_reshard_releases_only_frozen_full_parameters(self):
+        _, state, entries, full = self._fake_fsdp_state(
+            ([1.0, 2.0], [3.0, 4.0]))
+        state.true_fsdp_unsharded = True
+        entries[0].requires_grad = False
+        entries[0].full_param = full[0]
+        entries[1].requires_grad = True
+        entries[1].full_param = full[1]
+        for entry in entries:
+            setattr(entry.owner, entry.attr, entry.full_param)
+
+        fsdp_shard._reshard_module_params(
+            types.SimpleNamespace(_fsdp_state=state))
+
+        self.assertIs(getattr(entries[0].owner, entries[0].attr), entries[0].shard)
+        self.assertIs(getattr(entries[1].owner, entries[1].attr), entries[1].shard)
+        self.assertIsNone(entries[0].full_param)
+        self.assertIs(entries[1].full_param, full[1])
+
+    def test_flat_reshard_releases_frozen_full_buffer(self):
+        _, state, entries, full = self._fake_flat_fsdp_state(
+            ([1.0, 2.0], [3.0, 4.0]))
+        state.true_fsdp_unsharded = True
+        state.true_fsdp_flat_full_param = jt.concat(full)
+        for entry, value in zip(entries, full):
+            entry.requires_grad = False
+            entry.full_param = value
+            setattr(entry.owner, entry.attr, value)
+
+        fsdp_shard._reshard_module_params(
+            types.SimpleNamespace(_fsdp_state=state))
+
+        self.assertTrue(all(entry.full_param is None for entry in entries))
+        self.assertIsNone(state.true_fsdp_flat_full_param)
+
+    def test_frozen_execute_syncs_before_reshard_and_gc(self):
+        events = []
+        state = types.SimpleNamespace(
+            true_fsdp_initialized=True,
+            true_fsdp_params=(types.SimpleNamespace(requires_grad=False),),
+            reshard_after_forward=True,
+        )
+        module = types.SimpleNamespace(_fsdp_state=state)
+
+        with mock.patch.object(
+                fsdp_shard, "_unshard_module_params",
+                side_effect=lambda value: events.append("unshard")), mock.patch.object(
+                    fsdp_shard, "_reshard_module_params",
+                    side_effect=lambda value: events.append("reshard")), mock.patch.object(
+                        fsdp_shard.jt, "sync_all",
+                        side_effect=lambda value: events.append("sync")), mock.patch.object(
+                            fsdp_shard.jt, "gc",
+                            side_effect=lambda: events.append("gc")):
+            result = fsdp_shard._execute_with_true_fsdp(
+                module, lambda: events.append("execute") or "output")
+
+        self.assertEqual(result, "output")
+        self.assertEqual(
+            events, ["unshard", "execute", "sync", "reshard", "gc"])
+
+    def test_trainable_execute_does_not_force_forward_sync(self):
+        events = []
+        state = types.SimpleNamespace(
+            true_fsdp_initialized=True,
+            true_fsdp_params=(types.SimpleNamespace(requires_grad=True),),
+            reshard_after_forward=True,
+        )
+        module = types.SimpleNamespace(_fsdp_state=state)
+
+        with mock.patch.object(
+                fsdp_shard, "_unshard_module_params",
+                side_effect=lambda value: events.append("unshard")), mock.patch.object(
+                    fsdp_shard, "_reshard_module_params",
+                    side_effect=lambda value: events.append("reshard")), mock.patch.object(
+                        fsdp_shard.jt, "sync_all") as sync, mock.patch.object(
+                            fsdp_shard.jt, "gc") as collect:
+            result = fsdp_shard._execute_with_true_fsdp(
+                module, lambda: events.append("execute") or "output")
+
+        self.assertEqual(result, "output")
+        self.assertEqual(events, ["unshard", "execute", "reshard"])
+        sync.assert_not_called()
+        collect.assert_not_called()
+
     def test_nccl_var_methods_bind_for_launcher_runtime(self):
         class FakeNcclOps:
             @staticmethod

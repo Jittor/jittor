@@ -3,7 +3,6 @@
 import types
 
 import jittor as jt
-from jittor import nn
 
 from . import common, dtensor
 
@@ -62,6 +61,27 @@ def _refresh_flat_entry_shards(state):
                 shard.start_grad()
         elif not shard.is_stop_grad():
             shard.stop_grad()
+
+
+def _materialize_initial_shard(shard):
+    """Detach an initial shard from the full parameter's device storage.
+
+    Jittor's slice result keeps its producer graph alive after ``sync()``.  A
+    long-lived slice would therefore retain the full checkpoint tensor that it
+    came from.  Materialize through a device-side elementwise op and stop the
+    graph before publishing the shard as a parameter leaf.
+    """
+    shard = (shard + jt.zeros_like(shard)).stop_grad()
+    shard.sync()
+    return shard
+
+
+def _parameter_requires_grad(param):
+    """Read torch-facing trainability without conflating it with graph stop."""
+    try:
+        return bool(param.requires_grad)
+    except (AttributeError, TypeError):
+        return not param.is_stop_grad()
 
 
 def _mark_fsdp_param_var(var, state, entry, role):
@@ -145,53 +165,7 @@ def _fsdp_var_redistribute(self, device_mesh=None, placements=None, **kwargs):
 
 
 def _named_parameters_with_owner(module, recurse=True):
-    out = []
-    seen = set()
-
-    def child_items(mod):
-        try:
-            items = mod.named_children()
-            if items is not None:
-                return list(items)
-        except Exception:
-            pass
-        try:
-            modules = getattr(mod, "_modules", None)
-            if callable(modules):
-                modules = modules()
-            if isinstance(modules, dict):
-                return list(modules.items())
-        except Exception:
-            pass
-        return []
-
-    def visit(mod, prefix=""):
-        dc = getattr(mod, "__dict__", {})
-        try:
-            if isinstance(mod, nn.ParameterList):
-                dc = mod.params
-        except Exception:
-            pass
-        bufnames = getattr(mod, "__dict__", {}).get("_buffer_names", ())
-        for name, value in list(dc.items()):
-            if isinstance(name, str) and name.startswith("_"):
-                continue
-            if isinstance(value, jt.Var):
-                if id(value) in seen:
-                    continue
-                if getattr(value, "is_buffer", False) or not getattr(value, "persistent", True) or name in bufnames:
-                    continue
-                seen.add(id(value))
-                pname = f"{prefix}.{name}" if prefix else str(name)
-                out.append((pname, mod, name, value))
-        if recurse:
-            for name, value in child_items(mod):
-                if isinstance(value, nn.Module):
-                    child_prefix = f"{prefix}.{name}" if prefix else str(name)
-                    visit(value, child_prefix)
-
-    visit(module)
-    return out
+    return common._named_parameters_with_owner(module, recurse)
 
 
 def _iter_modules(module, recurse=True):
@@ -239,8 +213,9 @@ def _init_true_fsdp_state(module, state):
         flat_padded_numel = flat_shard_numel * ws
         flat_full = common._pad_flat(jt.concat([common._flatten_var(param) for _, _, _, param in params], dim=0),
                                      flat_padded_numel)
-        flat_shard = common._slice_flat(flat_full, rank * flat_shard_numel, flat_shard_numel)
-        flat_shard.sync()
+        flat_shard = _materialize_initial_shard(
+            common._slice_flat(
+                flat_full, rank * flat_shard_numel, flat_shard_numel))
         offset = 0
         for name, owner, attr, param in params:
             numel = common._param_numel(param)
@@ -256,7 +231,7 @@ def _init_true_fsdp_state(module, state):
                 shard=None,
                 full_param=None,
                 flat_offset=offset,
-                requires_grad=not param.is_stop_grad(),
+                requires_grad=_parameter_requires_grad(param),
             ))
             offset += numel
         state.true_fsdp_initialized = True
@@ -286,8 +261,8 @@ def _init_true_fsdp_state(module, state):
         shard_numel = common._ceil_div(numel, ws)
         padded_numel = shard_numel * ws
         flat_full = common._pad_flat(common._flatten_var(param), padded_numel)
-        local = common._slice_flat(flat_full, rank * shard_numel, shard_numel)
-        local.sync()
+        local = _materialize_initial_shard(
+            common._slice_flat(flat_full, rank * shard_numel, shard_numel))
         entries.append(types.SimpleNamespace(
             name=name,
             owner=owner,
@@ -299,7 +274,7 @@ def _init_true_fsdp_state(module, state):
             shard_numel=shard_numel,
             shard=local,
             full_param=None,
-            requires_grad=not param.is_stop_grad(),
+            requires_grad=_parameter_requires_grad(param),
         ))
         _mark_fsdp_param_var(local, state, entries[-1], "shard")
         if entries[-1].requires_grad:
@@ -360,9 +335,19 @@ def _reshard_module_params(module):
         return module
     for entry in state.true_fsdp_params:
         object.__setattr__(entry.owner, entry.attr, entry.shard)
-        # Keep the full Var from the just-finished forward alive for
-        # sync_sharded_grads(loss): Jittor's autograd needs the exact Var object
-        # that participated in the forward graph.
+        if not getattr(entry, "requires_grad", True):
+            # A frozen parameter is not a sync_sharded_grads() target. Drop the
+            # state's explicit full reference after forward so an entirely
+            # frozen prefix can release each all-gather before the next layer.
+            # If an upstream trainable input needs this weight for its gradient,
+            # Jittor's forward graph retains the Var independently.
+            entry.full_param = None
+    if (getattr(state, "true_fsdp_flat", False)
+            and not any(getattr(entry, "requires_grad", True)
+                        for entry in state.true_fsdp_params)):
+        state.true_fsdp_flat_full_param = None
+    # Trainable full Vars stay alive for sync_sharded_grads(loss): Jittor's
+    # autograd needs the exact objects that participated in the forward graph.
     state.true_fsdp_unsharded = False
     return module
 
@@ -372,12 +357,26 @@ def _execute_with_true_fsdp(module, orig_execute, *args, **kwargs):
     if state is None or not getattr(state, "true_fsdp_initialized", False):
         return orig_execute(*args, **kwargs)
     _unshard_module_params(module)
+    frozen_forward_synced = False
     try:
         out = orig_execute(*args, **kwargs)
+        entries = getattr(state, "true_fsdp_params", ())
+        if (entries
+                and not any(getattr(entry, "requires_grad", True)
+                            for entry in entries)
+                and getattr(state, "reshard_after_forward", True)):
+            # Jittor executes lazily, so dropping Python references alone cannot
+            # release an all-gather that the pending forward graph still uses.
+            # Finish a fully frozen unit before resharding; jt.gc() below can
+            # then reclaim its full weights before the next unit all-gathers.
+            jt.sync_all(True)
+            frozen_forward_synced = True
+        return out
     finally:
         if getattr(state, "reshard_after_forward", True):
             _reshard_module_params(module)
-    return out
+            if frozen_forward_synced:
+                jt.gc()
 
 
 def _install_true_fsdp_execute(module):
