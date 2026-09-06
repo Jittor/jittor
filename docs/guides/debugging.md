@@ -73,10 +73,19 @@ graph or a global variable that still participates in differentiation.
 Build with debug information and attach GDB automatically:
 
 ```bash
-export debug=1
-export gdb_attach=1
+export JT_BUILD_DEBUG=1
+export JT_GDB_ATTACH=1
 python reproduce.py
 ```
+
+Every setting Jittor reads from the environment lives in one of two namespaces:
+`JT_BUILD_*` decides what gets compiled, `JT_*` decides what the compiled core
+does. `python -m jittor_utils.env_manifest` lists all of them.
+
+Most settings also answer to their historical unprefixed lower-case name
+(`gdb_attach=1` still works, and says so once at startup). `debug` does not: a
+name that is an ordinary English word is far more likely to be some other tool's
+variable than a Jittor setting, so it is only read as `JT_BUILD_DEBUG`.
 
 Include a minimal reproducer, the complete log, compiler version, and device
 information when reporting a native crash.

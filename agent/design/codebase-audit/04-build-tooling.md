@@ -116,6 +116,18 @@ import。`test_editing_an_unnamed_header_changes_the_answer` 用两个子进程�
 | 一个坏掉且无人读的环境变量 | `compiler.py:1057-1058` `os.environ["cuda_arch"] = " ".join(cu)`，cu 是字符串，结果是 `'c u 1 2 . 2 _ s m _ 8 0'`；全仓无读取方 | 死代码且往每个子进程注入垃圾 | 删除 | 次要 |
 | flag 拼装顺序是巧合 | `compiler.py:1131` `kernel_opt_flags = env("kernel_flags") + opt_flags`，此时 opt_flags 还是空串（`:1121` 定义，`:1229-1233` 才填充） | kernel flags 拿不到 -O2，靠 `:1234` 单独追加的 -Ofast 兜底；用户设了含 -O 的 cc_flags 时两者都不加 | flag 组装收进一个函数一次性求值 | 次要 |
 
+**已修（2.22）。** 两个命名空间落地：`JT_BUILD_<NAME>` 是构建期（决定编译产物、进缓存指纹），`JT_<NAME>` 是运行期原生 flag，分界线直接用 `2.13` 已经定好的 `flag_policy.STARTUP_FLAGS`。旧的无前缀小写名**全部仍然生效**（`nvcc_path=`、`use_mpi=`、`log_v=` 等 gate 与文档在用的写法不受影响），但会被记录，并在启动时打成一行摘要加一次 `DeprecationWarning`；替代掉原来"每个 flag 一行 `LOGi`、而默认 `log_v=0` 与 `log_silent` 都把它吞掉"的报告方式。
+
+三处实测修正，与原条目的描述不同，按实测记录：
+
+- **`name` 从来不是 flag。** 原条目的名单来自把 `log.h` 的 `DEFINE_FLAG(type, name, default, doc)` 宏形参本身当成了 flag 定义（同一个正则也把 `nthread` 算了进来，而它在 `#ifdef TEST_LOG` 里，正式构建不存在）。实测 `dir(jt.flags)` 82 项，无 `name` 无 `nthread`。`tests/core/test_env_var_namespaces.py::test_name_was_never_a_flag` 把这条钉住。
+- **真正可被普通英文单词命中的只有 `debug`**（`compiler.py` 读，选 `-g -O0` 的调试构建）。规则因此定为：**名字里没有 `_` 的设置一律只从带前缀的名字读**，无前缀形式不是"弃用"而是"忽略并告知"。这条规则同时挡住以后再加单词名设置。
+- **`cc_flags` 追加对替换的矛盾**：原条目说的两个读者现在只剩一个。`compiler.py:2185-2192` 本来就会把这 9 个构建 flag 整体覆写，所以核心那次"替换"是死代码却看着像活的；核心现在对这 9 个（`compiler_owned_flag_names`，`src/utils/log.cc`）完全不读环境，`JT_BUILD_CC_FLAGS` 只有一个读者、语义只有"追加"。`tests/structure/test_env_var_manifest.py` 断言这 9 个名字等于 `compiler.py` 里 `flags.X =` 赋的那一组。
+
+`python -m jittor_utils.env_manifest` 是自动生成的变量清单（102 项：82 个原生 flag 从 `DEFINE_FLAG` 现场扫出来，20 项 Python 侧设置来自 `env_config` 的表），结构门禁断言除 `env_config` 与 shim preflight（它跑在 `jittor_utils` 可导入之前，例外被限定为两个名字）之外，没有任何模块直接按无前缀名读设置——否则值到不了启动摘要，也到不了缓存指纹。
+
+仍未做（不属本项验收）：大写无前缀的一组（`CUTT_PATH`、`DISABLE_MULTIPROCESSING`、`FIX_TORCH_ERROR`、`SKEY`、`JTCUDA*`）与 `JITTOR_*` 前缀的约 40 项只进了清单，没有改名；`import` 期反写环境变量与 `cuda_arch` 死代码属 `9.07`。
+
 ## 安装、打包与版本兼容
 | 问题 | 证据 | 后果 | 修改方向 | 严重度 |
 | --- | --- | --- | --- | --- |

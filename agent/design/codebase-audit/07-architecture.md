@@ -137,6 +137,23 @@ phase 6 那 1.94 ms 的 per-op 发射常数与 phase 7 那 9.78 ms 背后「CPU 
 `agent/skills/verifying-a-gate-actually-ran` 第十二节。
 | torch 与 jittor 是同一个模块对象 | `compat/runtime.py:73`；`compat/torch/__init__.py:187` install(torch) 的实参就是 jittor 根模块 | Torch 模式进程里原生 Jittor 语义被就地改写；repository-layout.md 声称的"不改变无关进程的原生 API"只在进程间成立 | 独立的 torch 模块对象只做委托 | 主要 |
 
+### 10.20 的三个数字，2026-09-06 实测复核
+
+审计的 283/137/127 已经漂了，两个向上一个向下——测试树本身从 357 个文件长到 631 个：
+
+| 口径 | 审计 | 实测 | 备注 |
+| --- | --- | --- | --- |
+| `jt.flags.*` 出现次数 | 283 | **653**（134 个文件） | 其中 **266 处是写**（`jt.flags.x = ...`），387 处是读；单是 `use_cuda` 就 **233 处** |
+| `compile_extern.*` / `jt.compiler.*` | 137 | **201**（92 个文件） | |
+| 触碰下划线名或 `__dict__` 的测试文件 | 127 | **64**（共 631 个测试文件） | 唯一变好的一项，`_torch_*` 影子属性清理的结果 |
+
+复核同时改变了这条任务的形状。原条目把三者当同一个问题，实测它们是三个：
+
+1. **`use_cuda` 的 233 处里绝大多数问的不是"当前运行目标"而是"这台机器能不能跑加速器"**（`if not jt.flags.use_cuda: skip`）。这是**能力查询**，`2.13` 的 `jt.config`/`jt.runtime` 都答不了它——两者报告的是策略，不是能力。这是 10.20 真正缺的东西。
+2. **266 处写不在内省 API 的范围内**。内省按定义是只读的；这些写要的是 `jt.flag_scope` 那样可恢复的作用域，属 `2.13` 已经交付的 `jt.runtime.scope`，10.20 不该给它们再开一组可写入口。
+3. **201 处 `compile_extern.*` 全是"这个库在不在"**（`compile_extern.cudnn_ops is not None` 这种），也是能力查询，而 `compile_extern` 的属性是 `globals()` 注入的，静态分析、`.pyi`、IDE 全部看不见。
+
+所以内省 API 的形状应当是：建在 `jt.config`/`jt.runtime` 之上的**只读**三层——能力（后端/库/设备可用性，替代第 1、3 类）、有效策略（转发 `jt.runtime.context` 与 `jt.config`，替代 387 处读）、计数（`exec_called`、`stat_allocator_total_*`、存活 Var/Op）；写一律不进这个命名空间，走 `jt.runtime.scope`。**本波未实现**：`2.22` 占满了本波预算，10.20 保持「待领」，剩余工作见看板该行。
 ## 代码规模与分布
 | 层 | 文件 | 行数 | 说明 |
 | --- | --- | --- | --- |

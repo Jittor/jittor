@@ -249,9 +249,17 @@ use. To select CUDA explicitly:
 `python/jittor/src/` 下的 C++、CUDA 源码会在下次使用时自动重编译。显式选择 CUDA：
 
 ```bash
-export nvcc_path=/usr/local/cuda/bin/nvcc
-use_cuda=1 python -m jittor.selftest
+export JT_BUILD_NVCC_PATH=/usr/local/cuda/bin/nvcc
+JT_USE_CUDA=1 python -m jittor.selftest
 ```
+
+`JT_BUILD_*` variables decide what gets compiled, `JT_*` variables decide what
+the compiled core does; `python -m jittor_utils.env_manifest` lists every one of
+them. The older unprefixed names (`nvcc_path`, `use_cuda`, ...) still work and
+report themselves once at startup.
+
+`JT_BUILD_*` 决定编译产物，`JT_*` 决定运行行为；`python -m jittor_utils.env_manifest`
+列出全部变量。旧的无前缀名（`nvcc_path`、`use_cuda` 等）仍然生效，启动时会提示一次。
 
 Inside Python, enable CUDA with `jt.flags.use_cuda = 1` after importing Jittor.
 
