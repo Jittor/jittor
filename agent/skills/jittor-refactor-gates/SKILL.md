@@ -243,10 +243,18 @@ AtomicTunerPass **之后**，原子调优早已打完日志才轮到它改写。
 （`pytest tests`，conftest 的 `pytest_ignore_collect` 会整片丢掉这些路径）不收它；而它又不在
 `noxfile.py` 任何一个 session 的清单里。**它现在一套门禁都不跑。**
 
-顺带一条：`opt/pass/` 下 `atomic_tuner_pass.cc`、`parallel_pass.cc`、`shared_reduce_pass.cc`
-**git 里根本没有**（2020 年 `8f316a2e` 删的），实现藏在 `python/jittor/utils/data.gz` 解压出的
-`data.cc` 里，编译时 `-include vdp`。所以这三个 pass 的日志 `__FILE__` 是 `data.cc`——
-`log_vprefix` 要写 `data=100` 才抓得到，写 `atomic=100` 抓不到。这就是任务 1.01 要还原的东西。
+顺带一条（**1.01 之后已失效，留作背景**）：`opt/pass/` 下 `atomic_tuner_pass.cc`、
+`parallel_pass.cc`、`shared_reduce_pass.cc` 曾经**在 git 里根本没有**（2020 年 `8f316a2e`
+删的），实现藏在 `python/jittor/utils/data.gz` 解压出的 `data.cc` 里，编译时 `-include vdp`；
+那时这三个 pass 的日志 `__FILE__` 是 `data.cc`，`log_vprefix` 得写 `data=100` 才抓得到。
+`ecb6a1128`（任务 1.01）已把五个翻译单元还原进源码树、删掉整条混淆分发路径，
+**现在 `__FILE__` 就是真实文件名：写 `atomic=100` 是对的，写 `data=100` 什么都抓不到。**
+
+同一段里另一条容易踩的：`SharedReducePass::run()` 第二行是
+`if (para_opt_level < 4) return;`，而 `para_opt_level` 默认 3
+（`loop_var_analyze_pass.cc:17`）。**三套门禁对这个 pass 的覆盖是零**，
+不要拿「门禁不变」给涉及它的改动背书；要覆盖就得显式
+`jt.flags.para_opt_level = 4`。
 
 ## 「不报错，只是变慢」——卡住的进程怎么找
 
