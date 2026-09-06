@@ -57,8 +57,6 @@ def _context(providers, tmp_path, **changes):
     converter = SimpleNamespace(process=lambda source, name, args: source)
     return providers.config.BuildContext(
         config=config, compile_module=Mock(return_value=converter),
-        transform_sources=Mock(side_effect=lambda config, name, callback:
-            config.evolve(cc_flags=config.cc_flags + " -DTRANSFORMED")),
         compile=Mock(), compile_custom_ops=Mock(side_effect=lambda *args, **kw: object()),
         publish_library=Mock(), make_cache_dir=Mock(), load_library=Mock(),
         mpi_compile_flags=" -DMPI_ENABLED", so=".test.so",
@@ -100,9 +98,7 @@ def test_corex_configuration_is_detached_and_openmp_removed_before_publication(p
     assert "-fopenmp" not in result.kernel_flags
     assert "-O2" in result.kernel_flags
     assert "-fopenmp" in context.config.kernel_flags
-    assert "-DTRANSFORMED" not in result.cc_flags
     context.compile_module.assert_not_called()
-    context.transform_sources.assert_not_called()
     assert "-x cu" in result.nvcc_flags and "-DNO_ATOMIC64" in result.nvcc_flags
     assert "-DHAS_CUDA" in result.nvcc_flags and "-DIS_CUDA" in result.nvcc_flags
     assert result.environment == {"retained": "1", "use_cutt": "0"}

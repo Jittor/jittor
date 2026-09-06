@@ -1211,7 +1211,6 @@ def configure_module_build(services):
     _module_build_services = services
 
 from . import lock
-from .backend_resources import backend_root
 @lock.lock_scope()
 def compile_module(source, flags, *, services=None):
     """
@@ -1285,74 +1284,6 @@ PYJT_MODULE_INIT({hash});
                 mod = __import__(hash)
 
     return mod
-
-def process_jittor_source(config, device_type, callback):
-    import shutil
-    import tempfile
-    from types import MappingProxyType
-    djittor = device_type + "_jittor"
-    djittor_path = os.path.join(config.cache_path, djittor)
-    os.makedirs(djittor_path, exist_ok=True)
-
-    roots = [(config.jittor_path, djittor_path)]
-    backend_paths = {}
-    for backend in ("cuda", "acl"):
-        try:
-            source = backend_root(config.jittor_path, backend)
-        except FileNotFoundError:
-            continue
-        target = os.path.join(djittor_path, "backends", backend)
-        backend_paths[backend] = target
-        if os.path.commonpath((source, config.jittor_path)) != config.jittor_path:
-            roots.append((source, target))
-    native_sources = set()
-    for source_root, target_root in roots:
-        for root, _, files in os.walk(source_root):
-            root2 = os.path.join(target_root, os.path.relpath(root, source_root))
-            os.makedirs(root2, exist_ok=True)
-            for name in files:
-                fname = os.path.join(root, name)
-                fname2 = os.path.join(root2, name)
-                if fname.endswith((".h", ".cc", ".cu", ".cuh")):
-                    native_sources.add(os.path.relpath(fname2, djittor_path))
-                    with open(fname, 'r', encoding="utf8") as f:
-                        src = f.read()
-                    src = callback(src, name, {"fname":fname, "fname2":fname2})
-                    with open(fname2, 'w', encoding="utf8") as f:
-                        f.write(src)
-                else:
-                    shutil.copy(fname, fname2)
-    # The compiler recursively discovers native sources. A renamed source
-    # must not coexist with its old converted copy in a reused backend cache.
-    archive = None
-    for domain in ("src", "extern", "backends"):
-        native_root = os.path.join(djittor_path, domain)
-        for directory, _, names in os.walk(native_root, topdown=False):
-            for name in names:
-                if not name.endswith((".h", ".cc", ".cu", ".cuh")):
-                    continue
-                generated = os.path.join(directory, name)
-                relative = os.path.relpath(generated, djittor_path)
-                if relative in native_sources:
-                    continue
-                if archive is None:
-                    archive = tempfile.mkdtemp(
-                        prefix=device_type + "_source_stale_", dir=config.cache_path)
-                archived = os.path.join(archive, relative)
-                os.makedirs(os.path.dirname(archived), exist_ok=True)
-                shutil.move(generated, archived)
-            if directory != native_root and not os.listdir(directory):
-                os.rmdir(directory)
-    if archive is not None:
-        LOG.i("Archived obsolete backend-generated native sources in " + archive)
-    cc_flags = config.cc_flags
-    for source, target in sorted(roots, key=lambda pair: len(pair[0]), reverse=True):
-        cc_flags = cc_flags.replace(source, target)
-    if "cuda" in backend_paths:
-        cc_flags += f" -I\"{backend_paths['cuda']}/include\" "
-    resources = dict(getattr(config, "resources", {}))
-    resources["backend_roots"] = MappingProxyType(backend_paths)
-    return config.evolve(cc_flags=cc_flags, jittor_path=djittor_path, resources=resources)
 
 import time
 class time_scope:

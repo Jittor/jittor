@@ -140,3 +140,19 @@ phase 6 那 1.94 ms 的 per-op 发射常数与 phase 7 那 9.78 ms 背后「CPU 
 | "后端"这个抽象不成立（规模差 18 倍） | ACL 13646 行 133 文件 39 算子；ROCm 748 行 0 算子（靠文本改写复用 CUDA 源码，含把 `run_pass<FloatAtomicFixPass>();` 替换成字面量 WTF 让该 pass 编译失败） | 两个后端没有共同形状，无法有共同契约与矩阵测试 | 注册表加分派表，删除文本改写 | 关键 |
 | 测试分布与风险倒挂 | 核心 C++ 37.5k 行对 tests/core 7355 行（0.20）；compat 28198 对 20542（0.73）；结构测试 8071 行超过 tests/core | 最难改最容易出隐性 bug 的一层测得最少 | 结构测试预算转向核心执行器与图不变量的属性测试 | 主要 |
 | 工具链覆盖极窄 | `pyproject.toml:70` ruff 仅 E4,E7,E9,F,UP006,UP007；`:80-91` mypy 只覆盖 **7 个文件**（占 820 个 Python 文件的 0.9%），其中 2 个在 agent/、2 个是结构测试 | 静态工具无法承担任何边界约束，全部压给结构测试 | 先把 import 方向做成 lint 规则 | 主要 |
+
+已修（4.12，见本次提交）：上表「『后端』这个抽象不成立」一行里「靠文本改写复用 CUDA 源码，
+含把 `run_pass<FloatAtomicFixPass>();` 替换成字面量 `WTF`」所描述的整树文本替换通道已删除。
+前半由今天的 `3b081d582`（ACL 配置改用原生注册初始化）、`79c6d7162`（ROCm 编译入口移除源码
+转换与历史 blob）、`06190e2b3`（ROCm 改用独立 HIP 后端 provider）、`d861351f0`（ACL 自有设备
+与 pinned 分配器）完成；本次提交删掉最后的死代码三处——`jittor_utils.process_jittor_source`
+的定义、`BuildContext.transform_sources` 字段、`compiler.py` 的赋值。**`process_acl` 与
+`WTF` 补丁全树已 0 处。**
+
+原条目不删，因为它记的是规模失衡而不只是改写通道：ROCm 现在是 `backends/rocm/`
+下自有的 HIP provider（`driver.cc` 一个 BuildSource），不再吃改写产物，但**行数仍远小于
+ACL，两个后端形状不同这件事没有变**，且 ROCm 无硬件、未实机验证。
+
+「核心源码不再是移植的输入」这条验收由 `tests/structure/test_core_source_is_not_ported.py`
+钉住形状而非名字（provider 契约不得再提供改写服务；不得有函数「遍历树＋原样拷贝＋写文件＋
+挑 `.cc/.cu/.cuh/.h`」四件齐全；bootstrap 之外不得重新绑定 `jittor_path`）。

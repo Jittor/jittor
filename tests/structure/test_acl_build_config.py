@@ -56,17 +56,10 @@ def setup(acl, monkeypatch, tmp_path):
     def compile_module(source, flags):
         calls.append(("compile", source, flags))
         return converter
-    def transform_sources(config, backend, callback):
-        assert config is base
-        assert callback is converter.process
-        calls.append(("transform", backend))
-        return config.evolve(jittor_path="/converted",
-                             cc_flags=config.cc_flags.replace("/source", "/converted"))
     def load_library(name, mode):
         calls.append(("load", name, mode))
         return library
-    context = api.BuildContext(base, compile_module, transform_sources,
-                               load_library=load_library)
+    context = api.BuildContext(base, compile_module, load_library=load_library)
     return SimpleNamespace(api=api, context=context, base=base, calls=calls,
                            library=library, converter=converter)
 
@@ -117,8 +110,7 @@ def test_configure_returns_complete_value_without_global_writes(acl, setup):
 def test_configuration_declares_accelerator_independently_of_nvcc(acl, setup, initial_cuda):
     from dataclasses import replace
     base = setup.base.evolve(has_cuda=initial_cuda)
-    context = replace(setup.context, config=base,
-                      transform_sources=lambda config, backend, callback: config)
+    context = replace(setup.context, config=base)
     assert acl.configure(context).has_cuda
     assert acl.install_extern(context) is False
 

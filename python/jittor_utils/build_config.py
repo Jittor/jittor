@@ -74,7 +74,6 @@ class BuildContext:
 
     config: BuildConfig
     compile_module: Callable
-    transform_sources: Callable
     compile: Optional[Callable] = None
     compile_custom_ops: Optional[Callable] = None
     publish_library: Optional[Callable] = None

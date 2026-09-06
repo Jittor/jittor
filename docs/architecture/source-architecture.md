@@ -400,8 +400,8 @@ ACL post-processing only publishes its native implementations. Its pinned-host,
 compiler-concurrency and reduction requirements belong to the backend descriptor
 and are consumed by the allocator, compiler and reduction owners; public flags
 are not overwritten. BackendOps ABI 2 rejects older descriptors and extensions
-must rebuild. This registration migration does not remove `process_acl`, the
-legacy SDK translation or the need for real CANN/NPU verification.
+must rebuild. The legacy whole-tree SDK translation (`process_acl`,
+`process_jittor_source`) is gone; real CANN/NPU verification is still required.
 
 ### Backend Fallback Policy
 

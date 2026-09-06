@@ -58,7 +58,6 @@ def make_backend_context(config=None, *, publish_library=None, mpi_compile_flags
     return BuildContext(
         config=config,
         compile_module=partial(jit_utils.compile_module, services=_module_build_services(config)),
-        transform_sources=jit_utils.process_jittor_source,
         compile=compile, compile_custom_ops=compile_custom_ops,
         publish_library=publish_library, make_cache_dir=make_cache_dir,
         load_library=ctypes.CDLL, mpi_compile_flags=mpi_compile_flags, so=so,

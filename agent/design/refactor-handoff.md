@@ -709,6 +709,9 @@ provider 转发，删除历史 blob/转换逻辑，ROCm 合同 23 项通过；`8
 删除依赖旧 ACL converter 的测试。转换边界合同目前为 27 passed、2 xfailed，
 两个 xfail 是 ACL/Corex entrypoint 尚未切到顶层 native provider。
 
+**已失效（4.12 本波已收口）**：下面这段记的是收口前的扫描基线，三处已全部删除，
+`test_core_source_is_not_ported.py` 接手钉住。两个 xfail 仍在，它们等的是 4.15/8.14。
+
 当前源码扫描的剩余转换入口是：`jittor_utils.process_jittor_source` 定义及
 `compiler.py` 服务字段各 1 处；ACL/ROCm/Corex provider 已不再调用转换。
 顶层 ACL/Corex entrypoint 尚未切换到 `jittor.backends.*`，因此边界合同仍保留
@@ -2660,6 +2663,20 @@ warning；`tests/_helpers/cutt.py` 又把加载失败一律转成 `SkipTest`。�
 `cutt`/`mpi` 在相应算子首次使用后都会真装载；`nccl`/`hccl` 只在分布式请求时装。注册表
 （`register_library_loader`）是全的，洞从来不在注册，而在**有没有东西去请求它**——`get_library` 的 grep 计数
 不可信，因为请求走的是 `protect_library_attributes` 的模块属性访问。
+### 本波（cudabk 分区）：4.12 代码半已闭合
+
+`process_jittor_source` 的定义、`BuildContext.transform_sources` 字段、`compiler.py` 的赋值三处已删除，`process_acl` 与 `WTF` 补丁此前已 0 处。删除前确认过没有第四个消费者（含 `getattr`/字符串反射/`dataclasses.replace` 关键字/位置构造）。`BuildContext` 属 provider 公开契约，`docs/architecture/backend-build-configuration.md` 原文承诺过 source transformation，已连同 `source-architecture.md` 一并改写。验收原话「核心源码不再是移植的输入」由`tests/structure/test_core_source_is_not_ported.py` 按**形状**钉住（不是按名字），造 4 个反例全部报红。
+
+**本节开头那条「推之前带 CUDA 跑一次 `import jittor` 加一个 matmul」照做了**：`has_cuda=True`、`registered_backends()==['cpu','cuda']`、64×64 matmul 与 numpy 最大差 7.2e-06。
+
+三套门禁与改前逐条同集合（结构 15 failed/880 passed；原生 CPU 两侧同为 88 failed/1731 passed/1200 skipped；CPU torch 两侧日志逐字节相同；CUDA 改后 42 failed 对改前 43 failed，无新增）。**本波没有 CPU 门禁的改前基线可引用，所以是钉在 `HEAD~1` 的只读 worktree 同时刻对跑的**——下一位做删除类改动时建议照办，比事后引用文档里的旧数字可靠。
+
+顺带记两条**分支现状，都不是本波引入、也都不属 4.12**，两棵树表现一致：
+
+1. **原生 CPU 门禁现在收集期直接 error**：`14e5920e5 [4.14]` 同时加了 `tests/core/test_device_methods.py` 与 `tests/backends/cuda/test_device_methods.py`，basename 相同而两个目录都没有 `__init__.py`，pytest 默认 prepend 模式下第二个必然报 `import file mismatch`。整套门禁因此拿不到汇总行（`Interrupted: 1 error during collection`）。修法二选一：给其中一个改名，或给 `tests/` 配 `--import-mode=importlib`。**在修掉之前，原生门禁事实上一条用例都没跑**——这正是第 10 节说的「不在门禁里的测试不是覆盖，是装饰」的又一例，只不过这次整套都没跑。
+2. **CPU torch 门禁在 55% 处硬崩**，没有汇总行，两棵树同一位置。
+
+ROCm 那半（计划原文的「需 ROCm 硬件」）本机无卡，四条按序确认项写进 [`../manuals/deferred-hardware.md`](../manuals/deferred-hardware.md) 的 ROCm 一节，**未声称 ROCm 硬件验证完成**。ACL 描述符注册名 `acl_legacy` 与 `BackendId::Acl` 不一致这条改动面跨 4.12，已归 4.15。
 
 ## 7. 接手怎么开始
 

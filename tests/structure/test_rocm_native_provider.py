@@ -40,9 +40,7 @@ def test_native_provider_returns_build_config_without_transform(tmp_path, monkey
     spec.loader.exec_module(provider)
 
     config = BuildConfig(cc_flags=" -std=c++14 ", jittor_path=str(ROOT / "python/jittor"))
-    transform = lambda *args: pytest.fail("ROCm provider must not transform sources")
-    context = BuildContext(config=config, compile_module=lambda *args: None,
-                           transform_sources=transform)
+    context = BuildContext(config=config, compile_module=lambda *args: None)
     result = provider.configure(context)
     assert result.backend == "rocm"
     assert result.has_rocm and result.has_accelerator

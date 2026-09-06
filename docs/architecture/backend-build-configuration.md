@@ -16,20 +16,26 @@ Opaque loaded modules and driver handles are resources, not copies of compiler
 state. `evolve(...)` returns another configuration without modifying its input.
 
 A backend provider implements `configure(context) -> BuildConfig`.
-`BuildContext` supplies explicit compilation, source transformation, dynamic
-loading, and library-publication services. Providers must not import
+`BuildContext` supplies explicit compilation, dynamic loading, and
+library-publication services. It offers no source-rewriting service: a backend
+that needs different code registers its own implementation and contributes its
+own translation units, and no provider receives the shared tree to rewrite.
+`config.jittor_path` names the checkout being compiled; bootstrap establishes it
+once and nothing re-points it at a derived copy. Providers must not import
 `jittor.compiler`, assign compiler attributes, append to its source list, or
 modify the process environment. Bootstrap applies returned environment changes
 and publishes the compatibility compiler attributes once. `compiler.build_config`
 contains the final published value; `compiler.make_backend_context()` provides
 the same configuration to `install_extern(context)` and `post_process(context)`.
 
-ACL's converter and extra source files are returned in the value. Corex removes
-OpenMP from both common and kernel flags before publication. ROCm selects its
-existing ABI-specific conversion object into `cache_path/rocm`, keeps the driver
-and converter alive as resources, and publishes its libraries through the
-injected registry callback. These changes do not replace the legacy backend
-source conversions or improve their kernel algorithms.
+ACL returns its extra source files in the value and keeps the compiled
+registration initializer and the loaded runtime library as resources. Corex
+removes OpenMP from both common and kernel flags before publication. ROCm
+declares its own HIP runtime translation unit as a backend source, keeps the SDK
+root as a resource, and publishes its libraries through the injected registry
+callback. None of the three rewrites shared sources any more. This does not
+improve their kernel algorithms, and the ACL/ROCm/Corex paths remain unverified
+on their target hardware.
 
 ACL post-processing only initializes its operator registrations. It does not
 rewrite pooling selection, the user's host-allocation/parallel-compilation
@@ -91,8 +97,8 @@ callback, command formatter, compiler path, and cache/source roots. Compiler
 bootstrap installs its default services; standalone users can pass services
 explicitly. Without either, the function raises before writing build artifacts
 and directs the caller to import Jittor first. It never imports Jittor to find
-its own services. Source conversion similarly accepts a configuration and
-returns a new value, preserving obsolete transformed sources in a cache archive.
+its own services. The whole-tree source converter this package used to export
+is gone; nothing copies the checkout into a per-backend cache to rewrite it.
 
 Tensor serialization implementations live in `jittor.serialization`, not in the
 build utility package. Historical `jittor_utils.load_pytorch`,
@@ -125,28 +131,28 @@ checkout prefers its top-level backend. Installed candidates require a real
 package marker, so a leftover directory containing only `__pycache__` cannot
 redirect compilation away from the actual resources.
 
-Legacy source conversion copies and transforms moved native files into
-`<converted-jittor>/backends/` with the same callback used for core sources.
-The returned configuration records these roots in `resources['backend_roots']`
-and rewrites include paths to the converted copies. Installed trees are not
-transformed twice. Obsolete converted native paths are archived rather than
-compiled alongside their replacement. Runtime library discovery includes both
-kernel and library-support sources, including cuTT's separate wrapper.
+Backends compile the checkout's own resources; there is no converted mirror of
+the tree to resolve against, and no `resources['backend_roots']` remapping.
+`backend_root` still recognises a converted layout so an already-installed tree
+keeps resolving, but nothing produces one. Runtime library discovery includes
+both kernel and library-support sources, including cuTT's separate wrapper.
 
 The backend's pure host indexing scheduler remains part of CPU builds; the
 accelerator code-generation translation units and NaN-checking CUDA source are
 included only in accelerator builds. The core `src/` tree is not otherwise
 relocated. NCCL retains its distributed resource location, and the remaining
-ACL/ROCm/Corex sources and legacy conversion machinery are not claimed migrated
-by this resource-layout change. It does not complete the larger layout or lazy
-initialization tasks.
+ACL/ROCm/Corex sources are not claimed migrated by this resource-layout change.
+It does not complete the larger layout or lazy initialization tasks.
 
 ## Validation
 
 Offline tests cover immutable inputs, entry-point selection, unselected-provider
-isolation, source-cache migration, injected compilation services, and fake
-ACL/ROCm/Corex configuration. They do not establish CANN/ROCm/Corex ABI or device
-correctness. On the target machine, configure the SDK and select `JT_BACKEND`,
+isolation, injected compilation services, and fake ACL/ROCm/Corex configuration.
+`tests/structure/test_core_source_is_not_ported.py` keeps the removed port from
+returning under another name: it rejects a rewriting service on `BuildContext`,
+any production function that mirrors a tree while rewriting native sources in
+it, and any rebinding of `jittor_path` outside bootstrap. They do not establish
+CANN/ROCm/Corex ABI or device correctness. On the target machine, configure the SDK and select `JT_BACKEND`,
 then run its maintained backend suite with CPU fallback disallowed where the
 suite supports that assertion. Test ordinary computation, extension loading,
 and failure propagation before claiming hardware support.

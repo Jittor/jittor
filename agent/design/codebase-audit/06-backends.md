@@ -255,6 +255,22 @@ cpu 35 个格子、cuda 38 个格子通过（共 73 个已验证格子）。
 与 `BackendId::Acl` 的规范拼写 `acl` 不一致。矩阵按规范名建行，并把只出现在
 `registered_backends()` 里的拼写另建一行，不静默丢弃。层次归属属 4.12/4.15 的范围。
 
+已修（4.12，见本次提交）：上表「Corex 的源码改写函数沿用 ACL 的名字」（`corex_compiler.py:31`
+`process_acl`）与「ROCm 只有 374 行，算子全部来自被改写的 CUDA 源码」两条的**改写通道**部分。
+`process_acl` 全树 0 处；ROCm 换成 `backends/rocm/` 下自有的 HIP provider（`configure()` 只声明
+`runtime/driver.cc` 一个 `BuildSource`，`resources` 里不再有 `rocm_converter`），入口点
+`rocm = "jittor.backends.rocm"` 已是原生。前半由 `06190e2b3`、`79c6d7162`、`3b081d582`、
+`d861351f0` 完成，本次提交删最后三处死代码并加 `tests/structure/test_core_source_is_not_ported.py`。
+
+两条原条目都不删，各自剩一半：Corex 的 `check()` 副作用与硬编码路径是 **8.14**（前置 4.12 现已满足）；
+ROCm 的**实机正确性**未验证——本机无 ROCm 卡，`nox -s rocm` 与确认项记在
+[`agent/manuals/deferred-hardware.md`](../../manuals/deferred-hardware.md) 的 ROCm 一节。
+**未声称 ROCm 硬件验证完成。**
+
+`acl_legacy` 这条本波仍未改：改名要动 `backends/acl/src/backend.cc:645` 的描述符（C++ 核心重编）
+外加约 30 处 `register_kernel(..., "acl_legacy")`/`dispatch_context().backend == "acl_legacy"`
+调用点与测试，跨 4.12 的改动面，且无 Ascend 硬件复验。归 4.15（布局收尾）一并做，已记在看板 4.15 行。
+
 ## 优先级
 - **先修会静默出错的**：MPI 的 MPI_DOUBLE_INT、ACL 的 checkRet 空实现与 find() 未检查、
   mallocWorkSpace 失败后的悬垂指针、分布式初始化失败退化单卡。四条都属于"不报错但结果错"。

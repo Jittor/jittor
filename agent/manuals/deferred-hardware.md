@@ -65,9 +65,33 @@ HCCL 多卡看 [`hccl-on-device-verification.md`](hccl-on-device-verification.md
 | --- | --- |
 | 命令 | `nox -s rocm` |
 | 覆盖 | `tests/backends/rocm/test_rocm.py` 与 `tests/distributed/` 的 MPI 组 |
-| 静态侧 | `test_rocm_blob_provenance.py`、`test_rocm_library_provider.py`、`test_rocm_native_provider.py` |
+| 静态侧 | `tests/structure/test_rocm_blob_provenance.py`、`tests/structure/test_rocm_library_provider.py`、`tests/structure/test_rocm_native_provider.py` |
 
-等它的看板项：**`4.12`** 的 ROCm 那半（源码转换已移除，改成独立 HIP 后端 provider，要在真卡上确认）。
+等它的看板项：**`4.12`** 的 ROCm 那半。**代码半已闭合并标已合并**，这里只剩真卡确认。
+
+4.12 把 ROCm 从「吃 CUDA 源码文本替换的产物」换成了 `backends/rocm/` 下自有的 HIP provider。
+主机侧能证明的只有形状：`configure()` 返回的 `BuildConfig` 只带 `runtime/driver.cc` 一个
+`BuildSource`（`language="hip"`）、`resources` 里没有 `rocm_converter`、入口点是
+`rocm = "jittor.backends.rocm"`。**这些都没碰过 hipcc，更没跑过 kernel。**
+按本页开头的分档，ROCm 现在只有第 2、3 档（静态合同＋桩发现），**没有第 1 档**——
+`agent/skills/acl-host-syntax-check` 那样的桩 SDK 语法检查 ROCm 还没有等价物，
+`runtime/driver.cc` 至今没有被任何编译器读过。真卡日的第一件事应当是先补它。
+
+真卡到手那天按顺序确认四条，前一条不过不要往下走：
+
+1. **能编。** `runtime/driver.cc` 过 hipcc。这是唯一完全没被验证过的一层。
+2. **能装能选。** `JT_BACKEND=rocm` 走 entry point 选到原生 provider，`import jittor` 通过，
+   `jt.core.registered_backends()` 含 `rocm`。失败要显式报错而不是静默回落 CPU。
+3. **算得对。** `nox -s rocm`（`tests/backends/rocm/test_rocm.py`：`TestROCm`、
+   `TestROCmUnaryOp`/`BinaryOp`/`ReduceOp`/`ReindexOp`/`WhereOp`/`CodeOp`、`TestBMM`、
+   `TestExample`）。**照 `npu` session 的形状加 fail-closed**：`JITTOR_TEST_REQUIRE_ROCM=1`
+   加 `JITTOR_TEST_ACCELERATOR_MIN_EXECUTED=1`，否则缺卡时整组自我 skip 读着是绿的。
+4. **库族的边界是真的。** `backends/rocm/build.py` 目前对 MIOpen 与 rccl 抛
+   `NotImplementedError("no native ROCm library provider")`——这是**有意的未实现**，不是 bug。
+   真卡上确认依赖它们的用例是明确失败而不是算出错误结果；要补实现的话是新任务，不在 4.12 内。
+
+绿了之后可以判定的：4.12 的 ROCm 那半。**在此之前不得声称 ROCm 硬件验证完成**；
+本机是 8 张 RTX 4090，无 ROCm 设备，上述四条一条都没跑过。
 
 ### Corex / 天数
 
