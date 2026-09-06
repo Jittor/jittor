@@ -105,6 +105,11 @@ def load_jittor(path, achievable):
         entries.append({
             "hash": hashed.group(1) if hashed else "",
             "ops": names,
+            # The full jit key carries the CODE text of a jt.code op, which is
+            # the only place a hand-written kernel's symbol name appears; roles
+            # alone cannot separate GroupNorm from softmax inside
+            # handwritten:code. --match greps this.
+            "key": key,
             "role": classify(key, names),
             "calls": calls,
             "avg_us": avg_ns / 1e3,
@@ -173,6 +178,36 @@ def _torch_library(name):
     return "other"
 
 
+def report_match(entries, pattern):
+    """Sum one named sub-bucket, e.g. a single hand-written kernel family.
+
+    Roles are too coarse to accept or reject a change to one kernel:
+    ``handwritten:code`` holds GroupNorm, attention softmax and the
+    convolution bias gradient at once. Matching the jit key (Jittor) or the
+    symbol name (nsys) picks out exactly one family, and prints the per-step
+    call count next to it -- the call count is what proves the sub-bucket is
+    the same set of work across two runtimes or two revisions.
+    """
+    regex = re.compile(pattern, re.I)
+    picked = [e for e in entries
+              if regex.search(e.get("key", "")) or
+              any(regex.search(name) for name in e["ops"])]
+    print()
+    print("== --match %r" % pattern)
+    print("%-42s %7s %10s" % ("kernel", "calls", "step_us"))
+    for entry in sorted(picked, key=lambda e: -e["step_us"]):
+        label = ",".join(entry["ops"][:3])
+        symbols = sorted(set(re.findall(r"[A-Za-z_][A-Za-z_0-9]*_(?:forward|backward"
+                                        r"|backward_x|backward_affine)",
+                                        entry.get("key", ""))))
+        if symbols:
+            label = ",".join(symbols[:3])
+        print("%-42s %7.0f %10.1f" % (label[:42], entry["calls"], entry["step_us"]))
+    print("%-42s %7.0f %10.1f"
+          % ("MATCHED TOTAL", sum(e["calls"] for e in picked),
+             sum(e["step_us"] for e in picked)))
+
+
 def report(entries, top, header):
     roles = {}
     for entry in entries:
@@ -221,6 +256,9 @@ def main():
     parser.add_argument("--steps", type=int, default=1, help="nsys mode")
     parser.add_argument("--achievable-gbps", type=float, default=0.0)
     parser.add_argument("--top", type=int, default=20)
+    parser.add_argument("--match", default="",
+                        help="also sum the sub-bucket whose jit key or symbol "
+                             "name matches this regex, with its call count")
     options = parser.parse_args()
 
     if options.kind == "torch":
@@ -232,6 +270,8 @@ def main():
                     "ratio": 0.0}
                    for r in payload["records"]]
         report(entries, 0, "== torch %s case %s" % (payload["torch"], payload["case"]))
+        if options.match:
+            report_match(entries, options.match)
         return
 
     assert options.achievable_gbps > 0, "--achievable-gbps is required"
@@ -245,6 +285,8 @@ def main():
                                options.achievable_gbps)
         label = "== nsys (real pipelined step, %d steps)" % options.steps
     report(entries, options.top, label)
+    if options.match:
+        report_match(entries, options.match)
 
 
 if __name__ == "__main__":
