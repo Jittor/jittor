@@ -1631,6 +1631,32 @@ fixture 的冻结清单比较，于是 7 处使用自有 fixture 的合法测试
 不要靠放宽断言了事**——0.19 的要求是「从精确清单改成规则」，改成规则才算修；`10.24` 是一个示范：
 它同时验证了修正后的判据仍能抓住原本要抓的东西（临时反例仍被报出），而不是把门禁改松。
 
+> ### ⛔ 上面那个「2 条」已经过期，不要照它判断（2026-09-06 15:40 实测）
+>
+> 在 `4b9c8b5a2` 上实测是 **`15 failed, 878 passed, 2 skipped, 2 xfailed in 399s`**。套件在两小时内
+> 从 512 个用例涨到 895 个（本波八个分区各自加了合同），**而多数失败是本波新引入的**。
+>
+> **所以判据变了**：不能再用「我的失败是否在下面那张旧表之外」。**每个分区都要检查失败清单里有没有
+> 自己刚建的文件**。已经点名的两类新违规，请各自 owner 收掉：
+>
+> - `test_child_process_contract::test_every_child_launch_pins_this_tree` ←
+>   `tests/structure/test_legacy_backend_build_config.py:215` 裸起解释器未钉 `PYTHONPATH`（违反 0.21，
+>   改走 `_helpers.child_process`）
+> - `test_flag_scope_contract::test_no_test_leaves_a_jittor_flag_changed` ← **七处**裸赋值 `jt.flags.*`
+>   且无还原（违反 0.12，改用 `jt.flag_scope`）：`tests/backends/cuda/test_cuda_runtime_device_state.py`
+>   的 `:15`、`:32`、`:36`；`tests/compiler/test_jit_math_policy.py` 的 `:12`、`:58`；
+>   `tests/core/test_native_backend_registry.py:134`；`tests/structure/test_runtime_sync_state.py:672`
+>
+> 其余 13 条：`test_backend_execution_policy_contract`（ACL descriptor 未声明 execution 要求）、
+> `test_compat_exception_policy::..._no_handler_body_is_only_pass`、`test_native_backend_contract` ×2
+> （4.13 的执行者核实过：把本波的 `backend.h`/`backend.cc` 还原后仍以同样的 subprocess 超时失败）、
+> `test_native_support_layout`、`test_process_mode_contract`、`test_pytest_contract` ×3、
+> `test_runtime_holder_state`、`test_runtime_sync_state`、`test_src_third_party_layout`、
+> `test_torch_compat_structure::..._exact_owner_whitelist`（这条是旧表里的）。
+>
+> **这次失误的责任在我（协调者）**：把一个两小时前的数字写成基线，等于让八个分区都以为自己是干净的。
+> 基线只在同一棵树上有效——**改动前自己跑一次留基线**，比引用文档里的数字可靠。
+
 **本波收尾实测：`2 failed, 510 passed, 2 skipped in 327s`。** 剩下的两条就是下表里归属别人的那两条
 （`test_cleanup_structure` 的 `_set_use_cuda` 双份、`test_torch_compat_structure` 的 `sys.modules`
 白名单缺 2 项）。**清单归零之前，判据仍然是「你的失败是否在下表之外」。** 顺带一条：
