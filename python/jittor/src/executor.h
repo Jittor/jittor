@@ -45,7 +45,12 @@ namespace jittor {
 //     instead of leaving it to accumulate.
 //   * Not reentrant. An op that runs `run_sync` from inside a batch (dynamic
 //     shape inference still does) starts a nested batch that shares this
-//     object's cross-run state; see `last_is_cuda` below.
+//     object's cross-run state; see `last_is_cuda` below. Nesting is legal
+//     only on the same thread: across threads the contract is enforced by the
+//     lock in `runtime/executor_entry.h`, which every batch takes on entry.
+//     That lock used to be the GIL by accident -- the executor held it from
+//     entry to return -- and became necessary in name once the device waits
+//     started handing the GIL over (`DeviceWaitScope`).
 struct Executor {
     // The pool the *current* batch allocates op outputs from, and the pool it
     // takes scratch from. Not owned. Re-pointed per segment on multi-device

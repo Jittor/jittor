@@ -18,6 +18,7 @@
 #include "ops/setitem_op.h"
 #include "type/fp16_compute.h"
 #include "mem/swap.h"
+#include "runtime/executor_entry.h"
 #include "pyjt/py_converter.h"
 
 namespace jittor {
@@ -64,7 +65,14 @@ void submit_pending(VarHolder* holder) {
     runtime_executor().submit_pending(holder->var, true);
 }
 
+// Everything below that pairs `sync()` with `migrate_to_cpu()` takes the
+// executor lock across the pair rather than letting `sync()` take it and drop
+// it again. The migration allocates from and frees into the same pools a batch
+// uses, and it is where the device-to-host transfer releases the GIL
+// (`DeviceWaitScope` in mem/allocator.cc) -- which it only does while this lock
+// is held, so holding it here is what makes that release reachable at all.
 VarHolder* VarHolder::migrate_to_cpu_() {
+    ExecutorEntryScope entry;
     sync(true, false);
 #ifdef HAS_ACCELERATOR
     migrate_to_cpu(var, runtime_executor().allocator);
@@ -74,6 +82,7 @@ VarHolder* VarHolder::migrate_to_cpu_() {
 
 DataView VarHolder::data() {
     if (!(var->mem_ptr && !var->allocator->is_cuda())) {
+        ExecutorEntryScope entry;
         sync(true, false);
 #ifdef HAS_ACCELERATOR
         migrate_to_cpu(var, runtime_executor().allocator);
@@ -83,6 +92,7 @@ DataView VarHolder::data() {
 }
 
 uint64 VarHolder::raw_ptr() {
+    ExecutorEntryScope entry;
     sync(true, false);
 #ifdef HAS_ACCELERATOR
     migrate_to_cpu(var, runtime_executor().allocator);
@@ -91,6 +101,7 @@ uint64 VarHolder::raw_ptr() {
 }
 
 void VarHolder::set_data(ArrayArgs&& array) {
+    ExecutorEntryScope entry;
     sync(true);
     USER_CHECK(array.dtype.dsize() == var->dtype().dsize()
         && array.dtype.is_int() == var->dtype().is_int());
@@ -298,6 +309,7 @@ VarHolder* VarHolder::sync(bool device_sync, bool weak_sync) {
 
 ArrayArgs VarHolder::fetch_sync() {
     if (!(var->mem_ptr && !var->allocator->is_cuda())) {
+        ExecutorEntryScope entry;
         sync(true);
         if (save_mem || _HAS_ACCELERATOR)
             migrate_to_cpu(var, runtime_executor().allocator);
@@ -343,6 +355,7 @@ ItemData VarHolder::item() {
     auto dsize = data.dtype.dsize();
     if (!(var->mem_ptr && !var->allocator->is_cuda())) {
         // A blocking backend host copy waits for its producer stream.
+        ExecutorEntryScope entry;
         sync();
         if (save_mem || _HAS_ACCELERATOR)
             migrate_to_cpu(var, runtime_executor().allocator);
@@ -389,6 +402,7 @@ void sync(const vector<VarHolder*>& vh, bool device_sync, bool weak_sync) {
 
 vector<ArrayArgs> fetch_sync(const vector<VarHolder*>& vh) {
     vector<ArrayArgs> ret(vh.size());
+    ExecutorEntryScope entry;
     sync(vh, true);
     for (uint i=0; i<vh.size(); i++) {
         if (save_mem || _HAS_ACCELERATOR)

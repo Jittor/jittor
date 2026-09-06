@@ -8,6 +8,7 @@
 #include "event_queue.h"
 #endif
 #include "runtime/device.h"
+#include "runtime/executor_entry.h"
 #include "runtime/backend.h"
 #include "runtime/backend_fallback.h"
 #include "ops/op_register.h"
@@ -222,7 +223,10 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                 // if prev op in gpu and this op in cpu
                 //  cuda sync -- on every device that has been launched on,
                 //  not only the one that happens to be current
-                sync_devices(touched_devices);
+                {
+                    DeviceWaitScope wait;
+                    sync_devices(touched_devices);
+                }
                 sync_times++;
             }
             for (Var* v : op->inputs()) {
@@ -351,12 +355,21 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         exe.last_is_cuda = false;
         sync_times++;
         try {
+            // The batch's whole device wait, and the single largest block of a
+            // step: 9.78 ms of a 14.21 ms diffusion-UNet step, all of it spent
+            // with the CPU idle. Nothing on this thread needs the GIL while it
+            // waits, so hand it to whoever else wants it -- safe because the
+            // entry lock (see run_sync) keeps every other thread out of the
+            // executor for the duration.
+            DeviceWaitScope wait;
             sync_devices(touched_devices);
         } catch (const std::exception& e) {
             // log memory info
             display_memory_info(__FILELINE__, false, true);
             throw;
         }
+        // Outside the wait on purpose: these are fetch callbacks, and they
+        // touch Python objects.
         event_queue.flush();
     }
     if (runtime_use_cuda() && entry_device >= 0 && entry_device != current_device())

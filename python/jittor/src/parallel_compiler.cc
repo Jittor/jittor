@@ -20,6 +20,7 @@
 #include <unistd.h>
 #endif
 #include "parallel_compiler.h"
+#include "pyjt/gil.h"
 #include "op_compiler.h"
 #include "executor.h"
 #include "lock.h"
@@ -34,30 +35,6 @@ DEFINE_FLAG(int, use_parallel_op_compiler, 16, "Number of threads that parallel 
 
 // from log.cc
 EXTERN_LIB volatile sig_atomic_t segfault_happen;
-
-// RAII: release the Python GIL on the main thread while the parallel op
-// compiler runs, and reacquire it on scope exit (incl. exception unwind).
-//
-// The main thread reaches parallel_compile_all_ops from a pybind call and
-// therefore holds the GIL. It then waits on the compile worker futures.
-// Those workers may call py_caller() (the `@python`
-// JIT pass), which now takes the GIL via PyGILState_Ensure. If the main
-// thread kept the GIL during its spin-wait, the workers could never
-// acquire it -> deadlock. Dropping the GIL here lets the workers take it
-// one at a time (serialized), which is exactly what fixes the original
-// concurrent-CPython corruption. Guarded by Py_IsInitialized() so a pure
-// C++ embedding (no interpreter) is unaffected.
-struct GILReleaseScope {
-    PyThreadState* save = nullptr;
-    inline GILReleaseScope() {
-        if (Py_IsInitialized())
-            save = PyEval_SaveThread();
-    }
-    inline ~GILReleaseScope() {
-        if (save)
-            PyEval_RestoreThread(save);
-    }
-};
 
 int parse_parallel_compile_cpu_max(const string& value) {
     std::istringstream stream(value);

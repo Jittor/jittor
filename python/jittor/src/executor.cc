@@ -14,6 +14,7 @@
 #include "event_queue.h"
 #endif
 #include "runtime/device.h"
+#include "runtime/executor_entry.h"
 #include "runtime/submission_pipeline.h"
 #include "runtime/backend.h"
 #include "runtime/backend_fallback.h"
@@ -215,6 +216,12 @@ static void top_weak_sync(vector<Var*>& vars) {
 //               the batch launched on if asked, restore the entry device.
 void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     // == phase 1: setup ==
+    // One batch at a time. Until the device waits inside started releasing the
+    // GIL, the GIL *was* this exclusion for Python threads; now that another
+    // Python thread can run during phase 7, the "not reentrant" contract above
+    // has to be a lock. Nested batches (dynamic shape inference, building
+    // backward ops) are on this thread and pass straight through.
+    ExecutorEntryScope entry;
     exec_called ++;
     auto& pipeline = runtime_submission_pipeline();
     pipeline.last_run_ops = Op::number_of_created_ops;
