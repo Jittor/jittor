@@ -18,9 +18,18 @@ def _configure():
         "is_truthy", "_remove_strict_math_nvcc_flags",
         "_acl_environment", "_prepare_kernel_math", "configure_torch_math_flags",
     }
-    selected = ast.Module(body=[node for node in tree.body
-                               if isinstance(node, ast.FunctionDef)
-                               and node.name in names], type_ignores=[])
+    def wanted(node):
+        if isinstance(node, ast.FunctionDef):
+            return node.name in names
+        # The pre-2.22 unprefixed variable names the module still reads. Taken
+        # from the module rather than restated here, so this test cannot pass
+        # against a module that has quietly started reading a third one.
+        return (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id.startswith("_DEPRECATED_"))
+
+    selected = ast.Module(body=[node for node in tree.body if wanted(node)],
+                          type_ignores=[])
     namespace = {"os": os, "_TRUTHY": frozenset(("1", "true", "yes", "on"))}
     exec(compile(selected, str(path), "exec"), namespace)
     return namespace["configure_torch_math_flags"]
@@ -33,8 +42,9 @@ def test_math_selection_does_not_mutate_startup_flags(monkeypatch, acl, keep, po
     monkeypatch.delenv("ASCEND_TOOLKIT_HOME", raising=False)
     monkeypatch.delenv("ASCEND_HOME_PATH", raising=False)
     monkeypatch.delenv("tikcc_path", raising=False)
+    monkeypatch.delenv("JT_BUILD_TIKCC_PATH", raising=False)
     monkeypatch.setenv("JITTOR_TORCH_KEEP_FAST_MATH", "1" if keep else "0")
-    monkeypatch.setenv("nvcc_flags", " -lineinfo --use_fast_math ")
+    monkeypatch.setenv("JT_BUILD_NVCC_FLAGS", " -lineinfo --use_fast_math ")
 
     class Flags:
         cuda_kernel_math = "default"

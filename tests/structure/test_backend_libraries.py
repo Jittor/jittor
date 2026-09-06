@@ -8,6 +8,8 @@ import types
 
 import pytest
 
+from jittor_utils.env_config import build_flag
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "python/jittor/_runtime/backend_libraries.py"
@@ -112,7 +114,10 @@ def _mkl_bootstrap(api):
                         and isinstance(node.value.func, ast.Name)
                         and node.value.func.id == "register_library_loader"
                         and ast.literal_eval(node.value.args[0]) == "mkl")
-    namespace = {"os": os, "use_mkl": True,
+    # The real resolver, not a stub: `use_mkl` in the environment is what this
+    # test varies, and since 2.22 that lookup is `env_config`'s job (it also
+    # accepts JT_BUILD_USE_MKL). Substituting a fake here would test the fake.
+    namespace = {"os": os, "use_mkl": True, "build_flag": build_flag,
                  "register_library_loader": api.register_library_loader}
     exec(compile(ast.Module(body=functions + [registration], type_ignores=[]),
                  str(EXTERN), "exec"), namespace)

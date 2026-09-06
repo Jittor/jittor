@@ -28,6 +28,10 @@ string Op::op_name_to_file_name(const string& name) { return name.substr(0, name
 BackendRegistry& backend_registry() { static BackendRegistry value; return value; }
 const BackendOps& BackendRegistry::get(const string&) const { static BackendOps cpu; return cpu; }
 StartupConfigState& runtime_startup_config() { static StartupConfigState state; return state; }
+// configuration.cc reports which flags the environment set (2.22); the table
+// itself lives in log.cc, which this translation unit deliberately does not
+// link. Same reason as the log symbols above.
+vector<EnvFlagSource>& env_flag_sources() { static vector<EnvFlagSource> value; return value; }
 }
 namespace {
 int result = 0;

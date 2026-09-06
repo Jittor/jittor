@@ -12,6 +12,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from jittor_utils.env_config import build_env, build_flag
+
 
 ROOT = Path(__file__).resolve().parents[2]
 UTILS = ROOT / "python/jittor_utils"
@@ -154,7 +156,10 @@ def test_default_cache_config_stays_unchanged_and_explicit_backend_isolated(monk
     selected = [node for node in tree.body if isinstance(node, ast.FunctionDef)
                 and node.name in ("get_build_config", "save_mem_build_flags")]
     names = ("cc_flags", "nvcc_flags", "kernel_flags", "cuda_archs", "enable_lto", "nvcc_path")
-    namespace = {"os": os, "BUILD_CONFIG_VARS": names}
+    # The real resolver: since 2.22 every build variable is read through it,
+    # so a stub here would test the stub rather than the fingerprint.
+    namespace = {"os": os, "BUILD_CONFIG_VARS": names, "build_env": build_env,
+                 "build_flag": build_flag}
     exec(compile(ast.Module(body=selected, type_ignores=[]), str(path), "exec"), namespace)
     for name in names + ("disable_lock", "JT_SAVE_MEM", "JT_BACKEND", "ASCEND_TOOLKIT_HOME",
                          "ASCEND_HOME_PATH", "tikcc_path", "ROCM_HOME", "ROCM_PATH", "HIP_PATH",
@@ -195,7 +200,7 @@ def test_compatible_library_loaders_keep_corex_but_not_acl_or_rocm(name):
         raise EnteredLoader()
     namespace = {
         "has_cuda": True, "is_cuda": False, "has_corex": False,
-        "cuda_wheel_stack": None,
+        "cuda_wheel_stack": None, "build_env": build_env, "build_flag": build_flag,
         "setup_fake_cuda_lib": False, "os": SimpleNamespace(environ={}, path=os.path),
         "platform": SimpleNamespace(machine=lambda: "x86_64"),
         "LOG": SimpleNamespace(v=entered, vv=entered),
@@ -214,7 +219,8 @@ def test_nccl_loader_does_not_probe_nvidia_for_non_nvidia_build():
     function = next(node for node in ast.parse(path.read_text()).body
                     if isinstance(node, ast.FunctionDef) and node.name == "setup_nccl")
     namespace = {"os": SimpleNamespace(environ={"JT_NCCL_WORLD_SIZE": "2"}),
-                 "has_cuda": True, "is_cuda": False, "has_mpi": True}
+                 "has_cuda": True, "is_cuda": False, "has_mpi": True,
+                 "build_env": build_env, "build_flag": build_flag}
     exec(compile(ast.Module(body=[function], type_ignores=[]), str(path), "exec"), namespace)
     assert namespace["setup_nccl"]() is None
     assert namespace["use_nccl"] is False

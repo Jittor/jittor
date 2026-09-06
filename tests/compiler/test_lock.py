@@ -20,12 +20,26 @@ class TestDisableLockOptIn(unittest.TestCase):
     def test_disabling_the_lock_warns_in_a_fresh_process(self):
         result = run_python_child(
             ["-c", "import jittor_utils.lock"],
+            env={"JT_BUILD_DISABLE_LOCK": "1"},
+            text=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertIn(
+            "JT_BUILD_DISABLE_LOCK=1: Jittor build locking is disabled",
+            result.stdout.decode(),
+        )
+
+    def test_the_deprecated_unprefixed_name_still_disables_the_lock(self):
+        # 2.22 gave every setting a namespace; the old name has to keep working
+        # or every existing script and gate that uses it breaks at once.
+        result = run_python_child(
+            ["-c", "import jittor_utils.lock"],
             env={"disable_lock": "1"},
             text=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertIn(
-            "disable_lock=1: Jittor build locking is disabled",
+            "JT_BUILD_DISABLE_LOCK=1: Jittor build locking is disabled",
             result.stdout.decode(),
         )
 
