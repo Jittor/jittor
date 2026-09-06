@@ -2426,6 +2426,19 @@ host 编译器编、却不走那条新管线的后端源码。** 逐层实测到
 | 测量环境与复测 | RTX 4090 sm_89，卡号从环境读，**非独占**（同卡另有一个 15 天前起的推理服务常驻，占 12 GB、GPU 利用率 0），八个分区并行，`uptime` 一分钟负载在 **7.7–22** 之间。**这一波最该记住的一条：`--mode profiler` 的逐算子数字对负载敏感，第一次发出去的那组来自负载 22 的单次运行，手写 GroupNorm 高估 12%（1715 对复测三次的 1533/1535/1544 us），归约类合计因此从 2545 修正到 2279–2297。**多 kernel 组成的 `reduce` 角色离散约 2%（五次 568.3/566.7/571.5/560.3/562.4），单个大手写 kernel 能到 12%；nsys 两次运行同族 kernel 在 0.5% 以内。凡要写进报告的数字，跑三次列范围 |
 | 新增可复用件 | `cuda-reduction-strategy-comparison/reduce_ab.py`（同进程内两条策略的时间 + 对 float64 的误差，两套形状集）；`profile_step_torch.py --attribute`（kernel → aten 算子栈归属）；`profile_step.py --compile-option`（`para_opt_level` 这类不进 jit key 的 flag 必须配它）与 `build()` 的 `set_global_seed` |
 
+### 本波结果（`compat`，7.05 install 事务化）
+
+| 项 | 结果 |
+| --- | --- |
+| 四个 family 已合入 | `4ecfb14f` 失败路径的 ledger 生命周期；`dcbbedf3` 安装期写入口收归单一 owner；`0e336b58` vLLM arming finder 的 undo 改 owner-aware；`c2fa74d8` 剩余写入口钉成分类闭集。**7.05 仍保持待领**，剩余四处写在 `test_compat_write_entry_points.py` 的 `PENDING` 里（external_backend 整表快照、vllm 两处 post-install `install()`、cpp_extension 构建发布） |
+| 最值得记住的一条 | **`install()` 的失败路径没有 `finally`，而 `rollback()` 正是那里最可能抛的一步**（外部改写就抛 `TransactionConflict`）。于是类级 RLock 永久被占、死掉的 ledger 留在 `context.state` 里。既有的 `test_completed_install_conflict_does_not_leak_global_lock` 本来就是为这个写的，**但它从同一个线程 `acquire(blocking=False)`——RLock 对持有者可重入，所以它永远绿，什么也没证明**。新的 `tests/_helpers/install_lock.py` 从另一个线程探，并在获取它的线程里释放 |
+| 第二条 | 写入口 helper 不只在安装期跑。`_set_use_cuda` 由 `torch.zeros(device="cuda")` 调到，六份 inline 的事务查找里只有一份检查了 `state == "open"`，所以一次失败安装留下的 ledger 会让此后每一次 CUDA 工厂调用抱 `RuntimeError: transaction is rolled_back` |
+| 看板两处描述与实测不符（已改看板，未改计划） | (1) 「`tests/structure` 2 条既存失败」过时：`803e3785` 实测 **15 failed / 872 passed**，多数属 ACL/miniz/rocm/pytest 合同。(2) 第135–139波记的「permissive finder 因 allowlist/身份耦合暂缓」已经在第136/139波做完了，本波复核它已是 owner-aware；真正同形且未做的是 **vLLM 的 arming finder**，已在 `0e336b58` 修掉 |
+| 三套门禁 | 原生 CPU：`tests/structure` 需 `JITTOR_TORCH_SHIM=1`（它在 `TORCH_MODE_PATHS` 里，不带就 collect 0 个），**15 failed / 881 passed 与改前逐条同集合**。CPU torch 模式（`JITTOR_TEST_DEVICES=cpu nvcc_path=""`）`tests/compat/torch` 33 failed / 1265 passed / 168 skipped，同集合。CUDA torch 模式定向归因：把本波 10 个源文件 `git checkout 803e37853 --` 回满后跑同一组六个文件，**before 与 after 的 FAILED 集合逐行完全相同（16 failed / 109 passed）** |
+| 一个真实的假红源 | 第一次带 CUDA 跑 `tests/compat/torch` 时同时跑着 `tests/structure`，得到 64 failed；**串行重跑后 `test_torch_shim_aliases.py` 全绥**。同一个 `$JITTOR_HOME` 并发两个会编译的 session 还把缓存搞到 `import jittor` 在 `setup_cub` → `compile_custom_ops` 里 `Fatal Python error: Aborted`——删掉整个 `$JITTOR_HOME` 重建后正常（重建约 6.5 分钟）。**同一分区内不要并发两个 pytest session** |
+| 新增可复用件 | `tests/_helpers/install_lock.py`（跳线程探锁）；`agent/skills/process-global-state-and-optin` 新增 §6.5（可回滚 ledger 的四条判据）；`agent/skills/structure-rule-has-teeth` 新增「分类闭集」一节（什么时候豁免清单反而是对的） |
+| 一个工具坑 | 本波有一次编辑器改写把 `03-compat-shim.md` 的中文全部变成 `?`（UTF-8 → ASCII），提交看起来只是「rewrite (98%)」。已 `git reset` 重做，未推出。**改 CJK 文档后 `file <路径>` 应仍是 UTF-8，且看 `git diff --stat` 的行数是不是与改动量相称** |
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。

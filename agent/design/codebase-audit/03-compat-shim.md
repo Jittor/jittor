@@ -56,7 +56,7 @@ inline 了一份「现在有没有事务在记账」的查找（`factories.py`�
 `allow_tf32` 两处 `use_cuda`/精度写入**有意留在 ledger 之外**：它们表达的是安装
 结束之后调用方的运行期请求，跟着安装回滚会撤掉用户自己要的东西。
 
-已修：提交 `ad2b0614`（vLLM arming finder 的并发外部替换）。
+已修：提交 `0e336b58`（vLLM arming finder 的并发外部替换）。
 `compat/vllm/__init__.py:register()` 把 `_ArmOnFirstImport` 插进 `sys.meta_path`
 后登记的 undo 是 `remove(f) if f in sys.meta_path else None`——别人已经把这一项
 换掉或删掉时，回滚**报成功**并把别人装的东西留在原位。也就是说这本账唯一存在
@@ -64,7 +64,7 @@ inline 了一份「现在有没有事务在记账」的查找（`factories.py`�
 `module_patcher.py` 的 finder undo 统一：按下标核对身份，不是自己那一项就抛
 `TransactionConflict`。
 
-已修：提交 `4c96409f`（剩余写入口钉成分类闭集）。看板连着十一波记着
+已修：提交 `c2fa74d8`（剩余写入口钉成分类闭集）。看板连着十一波记着
 「其余 installer 的写入口仍待」，每一波都是一次新的 grep、结论都不一样——因为
 grep 说的是「什么匹配上了」，不是「还剩什么」。现在
 `tests/structure/test_compat_write_entry_points.py` 用 AST 扫出
