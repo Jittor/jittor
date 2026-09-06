@@ -20,7 +20,9 @@ Run:  python -m pytest tests/compat/torch/test_torch_compat_serialize.py
       python -m pytest tests/compat/torch/test_torch_compat_serialize.py
 """
 import os
+import json
 import shutil
+import struct
 import tempfile
 import unittest
 import numpy as np
@@ -62,6 +64,66 @@ class Base(unittest.TestCase):
 # torch.save / torch.load
 # ---------------------------------------------------------------------------
 class TestSaveLoad(Base):
+    def _write_bfloat16_safetensor(self, name="weight"):
+        values = np.asarray(
+            [1.0, -2.5, 3.125, 0.0078125, 128.0, -0.25], dtype=np.float32)
+        payload = (values.view(np.uint32) >> 16).astype(np.uint16).tobytes()
+        header = json.dumps({
+            name: {
+                "dtype": "BF16",
+                "shape": [2, 3],
+                "data_offsets": [0, len(payload)],
+            }
+        }, separators=(",", ":")).encode("utf-8")
+        header += b" " * (-len(header) % 8)
+        path = self.path("bf16.safetensors")
+        with open(path, "wb") as handle:
+            handle.write(struct.pack("<Q", len(header)))
+            handle.write(header)
+            handle.write(payload)
+        return path, values.reshape(2, 3)
+
+    def test_safetensors_bfloat16_load_honors_device(self):
+        from safetensors import safe_open
+
+        path, expected = self._write_bfloat16_safetensor()
+        # The loader's default CPU contract must override a globally active CUDA
+        # mode. This is the real-checkpoint path used by Transformers before a
+        # module is explicitly moved to its execution device.
+        with jt.flag_scope(use_cuda=1 if jt.has_cuda else 0):
+            with safe_open(path, framework="pt", device="cpu") as handle:
+                value = handle.get_tensor("weight")
+                sliced = handle.get_slice("weight")[:]
+            self.assertEqual(str(value.dtype), "bfloat16")
+            self.assertEqual(str(sliced.dtype), "bfloat16")
+            self.assertEqual(str(value.device), "cpu")
+            self.assertEqual(str(sliced.device), "cpu")
+            self.ac(value.float32().numpy(), expected, atol=0, rtol=0)
+            self.ac(sliced.float32().numpy(), expected, atol=0, rtol=0)
+
+        if jt.has_cuda:
+            with safe_open(path, framework="pt", device="cuda") as handle:
+                value = handle.get_tensor("weight")
+            self.assertEqual(str(value.dtype), "bfloat16")
+            self.assertTrue(value.is_cuda)
+            self.ac(value.float32().numpy(), expected, atol=0, rtol=0)
+
+    def test_safetensors_bfloat16_save_preserves_dtype(self):
+        from safetensors import safe_open
+        from safetensors.torch import save_file
+
+        expected = np.asarray(
+            [[1.0, -2.5, 3.125], [0.0078125, 128.0, -0.25]], dtype=np.float32)
+        value = torch.tensor(expected, dtype=torch.bfloat16, device="cpu")
+        path = self.path("bf16-save.safetensors")
+        save_file({"weight": value}, path)
+        with safe_open(path, framework="pt", device="cpu") as handle:
+            self.assertEqual(handle.get_dtype("weight"), "BF16")
+            loaded = handle.get_tensor("weight")
+        self.assertEqual(str(loaded.dtype), "bfloat16")
+        self.assertEqual(str(loaded.device), "cpu")
+        self.ac(loaded.float32().numpy(), expected, atol=0, rtol=0)
+
     def test_save_load_tensor_zero_error(self):
         x = np.random.RandomState(0).randn(3, 4, 5).astype("float32")
         def body(dev):

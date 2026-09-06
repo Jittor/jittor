@@ -92,6 +92,40 @@ def _backend_matches_active(requested_backend, active_backend):
     return active_device is not None and device_backends.get(active_device) == active
 
 
+def _bind_nccl_var_methods(rank, world_size):
+    """Publish NCCL collectives for both launcher and dynamic bootstrap paths."""
+    ops = getattr(jt.compile_extern, "nccl_ops", None)
+    if ops is None:
+        os.environ["use_nccl"] = "1"
+        jt.compile_extern.setup_nccl()
+        ops = getattr(jt.compile_extern, "nccl_ops", None)
+    if ops is None:
+        raise RuntimeError("Jittor NCCL setup did not publish collective ops")
+
+    rank = int(rank)
+    world_size = int(world_size)
+    jt.compile_extern.rank = rank
+    jt.compile_extern.world_size = world_size
+    jt.compile_extern.in_mpi = True
+    jt.rank = rank
+    jt.world_size = world_size
+    jt.in_mpi = True
+
+    def _all_reduce(self, op="mean"):
+        if op not in ("sum", "mean"):
+            raise NotImplementedError(
+                "Jittor NCCL Var.mpi_all_reduce supports sum and mean only")
+        result = ops.nccl_all_reduce(self)
+        return result / world_size if op == "mean" else result
+
+    def _broadcast(self, root=0):
+        return ops.nccl_broadcast(self, int(root))
+
+    jt.core.Var.mpi_all_reduce = _all_reduce
+    jt.core.Var.mpi_broadcast = _broadcast
+    return True
+
+
 def _bootstrap_native_distributed(rank, world_size, backend=None):
     if not _is_truthy(os.environ.get("JITTOR_TORCH_DISTRIBUTED_AUTO_INIT")):
         return False
@@ -137,31 +171,7 @@ def _bootstrap_native_distributed(rank, world_size, backend=None):
     os.environ["use_mpi"] = "0"
 
     jt.flags.use_cuda = 1
-    jt.compile_extern.setup_nccl()
-    ops = getattr(jt.compile_extern, "nccl_ops", None)
-    if ops is None:
-        raise RuntimeError("Jittor NCCL setup did not publish collective ops")
-
-    jt.compile_extern.rank = rank
-    jt.compile_extern.world_size = world_size
-    jt.compile_extern.in_mpi = True
-    jt.rank = rank
-    jt.world_size = world_size
-    jt.in_mpi = True
-
-    def _all_reduce(self, op="mean"):
-        if op not in ("sum", "mean"):
-            raise NotImplementedError(
-                "Jittor NCCL Var.mpi_all_reduce supports sum and mean only")
-        result = ops.nccl_all_reduce(self)
-        return result / world_size if op == "mean" else result
-
-    def _broadcast(self, root=0):
-        return ops.nccl_broadcast(self, int(root))
-
-    jt.core.Var.mpi_all_reduce = _all_reduce
-    jt.core.Var.mpi_broadcast = _broadcast
-    return True
+    return _bind_nccl_var_methods(rank, world_size)
 
 
 def _distributed_rank():
@@ -265,6 +275,10 @@ def _install_distributed(g, registry=None):
     torch shim keeps identity semantics by default. When Jittor was started by
     its distributed launcher, WORLD maps to the active NCCL/MPI communicator.
     """
+    if (_native_distributed_active()
+            and os.environ.get("JT_NCCL_WORLD_SIZE") is not None):
+        _bind_nccl_var_methods(jt.rank, jt.world_size)
+
     _modules = registry_for(g, registry).module_map
     import types as _types
 

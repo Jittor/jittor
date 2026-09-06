@@ -36,11 +36,37 @@ def _install_safetensors_shim(registry=None):
             return np.frombuffer(raw, dtype=np.uint8).astype(np.float32).reshape(shape)
         return np.frombuffer(raw, dtype=npd).reshape(shape)
 
+    def _device_kind(device):
+        if isinstance(device, (int, np.integer)):
+            return "cuda"
+        raw = str(device if device is not None else "cpu").lower()
+        if raw == "cpu" or raw.startswith("cpu:"):
+            return "cpu"
+        if raw == "cuda" or raw.startswith("cuda:"):
+            return "cuda"
+        raise NotImplementedError(
+            "safetensors Torch shim supports CPU and CUDA devices, got {!r}".format(
+                device))
+
+    def _tensor_from_np(arr, st_dtype, device="cpu"):
+        # ``jt.array`` follows the process-global CUDA flag. Checkpoint loaders,
+        # however, must obey their explicit device even in the opposite global
+        # mode. Construct on the target directly: routing a CPU BF16 Var through
+        # the generic NumPy migration fallback would upcast it to float32.
+        target_is_cuda = _device_kind(device) == "cuda"
+        with jt.flag_scope(use_cuda=int(target_is_cuda)):
+            value = jt.array(np.ascontiguousarray(arr))
+            if st_dtype == "BF16":
+                value = value.bfloat16()
+            value.sync()
+        return value
+
     class _PySafeSlice:
-        def __init__(self, raw, st_dtype, shape):
+        def __init__(self, raw, st_dtype, shape, device):
             self._raw = raw
             self._dtype = st_dtype
             self._shape = shape
+            self._device = device
 
         def get_shape(self):
             return list(self._shape)
@@ -52,15 +78,16 @@ def _install_safetensors_shim(registry=None):
             arr = _bytes_to_np(self._raw, self._dtype, self._shape)
             if idx is not Ellipsis and idx != slice(None):
                 arr = arr[idx]
-            return jt.array(np.ascontiguousarray(arr))
+            return _tensor_from_np(arr, self._dtype, self._device)
 
     class _PySafeOpen:
         def __init__(self, filename, framework="pt", device="cpu", backend="mmap"):
+            self._filename = filename
             self._device = device
             with open(filename, "rb") as fh:
                 n = struct.unpack("<Q", fh.read(8))[0]
                 self._header = json.loads(fh.read(n).decode("utf-8"))
-                self._data = fh.read()
+                self._data_offset = 8 + n
             self._meta = self._header.pop("__metadata__", {})
 
         def keys(self):
@@ -72,15 +99,23 @@ def _install_safetensors_shim(registry=None):
         def _entry(self, key):
             entry = self._header[key]
             start, end = entry["data_offsets"]
-            return entry["dtype"], entry["shape"], self._data[start:end]
+            with open(self._filename, "rb") as fh:
+                fh.seek(self._data_offset + start)
+                raw = fh.read(end - start)
+            if len(raw) != end - start:
+                raise EOFError(
+                    "short safetensors payload for {!r}: expected {}, got {}".format(
+                        key, end - start, len(raw)))
+            return entry["dtype"], entry["shape"], raw
 
         def get_slice(self, key):
             st_dtype, shape, raw = self._entry(key)
-            return _PySafeSlice(raw, st_dtype, shape)
+            return _PySafeSlice(raw, st_dtype, shape, self._device)
 
         def get_tensor(self, key):
             st_dtype, shape, raw = self._entry(key)
-            return jt.array(np.ascontiguousarray(_bytes_to_np(raw, st_dtype, shape)))
+            return _tensor_from_np(
+                _bytes_to_np(raw, st_dtype, shape), st_dtype, self._device)
 
         def get_dtype(self, key):
             return self._header[key]["dtype"]
@@ -100,7 +135,7 @@ def _install_safetensors_shim(registry=None):
         for key, entry in header.items():
             start, end = entry["data_offsets"]
             arr = _bytes_to_np(data[base + start:base + end], entry["dtype"], entry["shape"])
-            out[key] = jt.array(np.ascontiguousarray(arr))
+            out[key] = _tensor_from_np(arr, entry["dtype"], "cpu")
         return out
 
     def _load_file(filename, device="cpu"):
@@ -120,10 +155,15 @@ def _install_safetensors_shim(registry=None):
         for key, value in tensors.items():
             arr = value.numpy() if hasattr(value, "numpy") else np.asarray(value)
             arr = np.ascontiguousarray(arr)
-            st_dtype = _NP_TO_ST.get(str(arr.dtype), "F32")
+            value_dtype = str(getattr(value, "dtype", arr.dtype))
+            st_dtype = _NP_TO_ST.get(value_dtype, _NP_TO_ST.get(str(arr.dtype), "F32"))
+            if st_dtype == "BF16":
+                fp32 = np.ascontiguousarray(arr, dtype=np.float32)
+                arr = (fp32.view(np.uint32) >> 16).astype(np.uint16)
             if st_dtype not in _ST or _ST[st_dtype][0] is None:
-                arr = arr.astype(np.float32)
-                st_dtype = "F32"
+                if st_dtype != "BF16":
+                    arr = arr.astype(np.float32)
+                    st_dtype = "F32"
             blob = arr.tobytes()
             header[key] = {
                 "dtype": st_dtype,

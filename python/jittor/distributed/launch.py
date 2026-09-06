@@ -23,6 +23,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 
 
 def _visible_devices_for_rank(rank):
@@ -45,6 +46,35 @@ def _detect_backend():
     return "nccl"
 
 
+def _wait_processes(procs, poll_interval=0.05):
+    """Wait for all ranks and terminate siblings after the first failure."""
+    pending = {rank: item for rank, item in enumerate(procs)}
+    return_code = 0
+    terminating = False
+    while pending:
+        progressed = False
+        for rank, (process, log_file) in list(pending.items()):
+            code = process.poll()
+            if code is None:
+                continue
+            progressed = True
+            log_file.close()
+            del pending[rank]
+            if code != 0 and not terminating:
+                return_code = code
+                terminating = True
+                print(
+                    f"[jt.launch] rank {rank} exited with code {code}",
+                    file=sys.stderr,
+                )
+                for sibling, _ in pending.values():
+                    if sibling.poll() is None:
+                        sibling.terminate()
+        if pending and not progressed:
+            time.sleep(poll_interval)
+    return return_code
+
+
 def main():
     ap = argparse.ArgumentParser(prog="jittor.distributed.launch")
     ap.add_argument("-n", "--nproc", type=int, required=True, help="ranks (one per device)")
@@ -59,6 +89,12 @@ def main():
 
     backend = a.backend if a.backend != "auto" else _detect_backend()
     prefix = "JT_HCCL" if backend == "hccl" else "JT_NCCL"
+    if backend == "nccl":
+        # Torch-shim preflight keeps optional distributed externs disabled for
+        # ordinary single-process imports. An explicit NCCL launch must override
+        # that default before importing Jittor here and in every child rank.
+        os.environ["use_nccl"] = "1"
+        os.environ["use_mpi"] = "0"
     os.makedirs(a.logdir, exist_ok=True)
     rootinfo = os.path.abspath(os.path.join(a.logdir, f"{backend}_rootinfo_{os.getpid()}.bin"))
     if os.path.exists(rootinfo):
@@ -99,16 +135,13 @@ def main():
 
     rc = 0
     try:
-        for rank, (p, logf) in enumerate(procs):
-            r = p.wait()
-            logf.close()
-            if r != 0:
-                rc = rc or r
-                print(f"[jt.launch] rank {rank} exited with code {r}", file=sys.stderr)
+        rc = _wait_processes(procs)
     finally:
-        for p, _ in procs:
+        for p, logf in procs:
             if p.poll() is None:
                 p.kill()
+            if not logf.closed:
+                logf.close()
         if os.path.exists(rootinfo):
             try:
                 os.remove(rootinfo)

@@ -13,10 +13,63 @@ import jittor as jt
 from jittor.compat import fsdp2 as canonical_fsdp
 from jittor.compat.fsdp2 import grad_sync as fsdp_grad_sync
 from jittor.compat.fsdp2 import shard as fsdp_shard
-from jittor.compat.torch.installers.distributed import _backend_matches_active
+from jittor.compat.torch.installers.distributed import (
+    _backend_matches_active,
+    _bind_nccl_var_methods,
+)
 
 
 class TestFSDP2Compat(unittest.TestCase):
+    def test_nccl_var_methods_bind_for_launcher_runtime(self):
+        class FakeNcclOps:
+            @staticmethod
+            def nccl_all_reduce(value):
+                return value * 4
+
+            @staticmethod
+            def nccl_broadcast(value, root):
+                return value + root
+
+        runtime_attrs = ("rank", "world_size", "in_mpi")
+        runtime_before = {
+            (owner, name): getattr(owner, name, None)
+            for owner in (jt, jt.compile_extern)
+            for name in runtime_attrs
+        }
+        method_before = {
+            name: getattr(jt.core.Var, name, None)
+            for name in ("mpi_all_reduce", "mpi_broadcast")
+        }
+        try:
+            with mock.patch.object(
+                    jt.compile_extern, "nccl_ops", FakeNcclOps()):
+                self.assertTrue(_bind_nccl_var_methods(rank=2, world_size=4))
+                value = jt.array(np.asarray([2.0], dtype="float32"))
+                np.testing.assert_array_equal(
+                    value.mpi_all_reduce("sum").numpy(),
+                    np.asarray([8.0], dtype="float32"),
+                )
+                np.testing.assert_array_equal(
+                    value.mpi_all_reduce("mean").numpy(),
+                    np.asarray([2.0], dtype="float32"),
+                )
+                np.testing.assert_array_equal(
+                    value.mpi_broadcast(3).numpy(),
+                    np.asarray([5.0], dtype="float32"),
+                )
+                self.assertEqual((jt.rank, jt.world_size), (2, 4))
+        finally:
+            for (owner, name), value in runtime_before.items():
+                setattr(owner, name, value)
+            for name, value in method_before.items():
+                if value is None:
+                    try:
+                        delattr(jt.core.Var, name)
+                    except AttributeError:
+                        pass
+                else:
+                    setattr(jt.core.Var, name, value)
+
     def _fake_fsdp_state(self, values):
         fsdp = canonical_fsdp
 
