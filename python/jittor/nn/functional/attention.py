@@ -3,7 +3,7 @@
 import math
 
 import jittor as jt
-from jittor._runtime.dispatch import try_dispatch
+from jittor._runtime.dispatch import select_kernel, try_dispatch
 
 
 def scaled_dot_product_attention(
@@ -40,13 +40,10 @@ def scaled_dot_product_attention(
     source_length = int(key.shape[-2])
     scale_factor = 1.0 / math.sqrt(int(query.shape[-1])) if scale is None else scale
     scores = jt.nn.matmul(query, key.transpose(-2, -1)) * scale_factor
-    from jittor.backends.cuda.kernels.nn import softmax_cuda
-
-    cuda_mask_softmax = (
-        softmax_cuda.can_softmax_v1(scores, -1)
-    )
-    zero_fully_masked = cuda_mask_softmax and attn_mask is not None
-    skip_row_valid = cuda_mask_softmax and (
+    softmax_options = dict(log=False, zero_all_neg_inf=attn_mask is not None, dim=-1)
+    fast_softmax = select_kernel("nn.softmax", scores, **softmax_options)
+    zero_fully_masked = fast_softmax is not None and attn_mask is not None
+    skip_row_valid = fast_softmax is not None and (
         is_causal or attn_mask is not None
     )
     negative = jt.array(float("-inf") if zero_fully_masked else -1e30).cast(
@@ -99,8 +96,8 @@ def scaled_dot_product_attention(
     if row_valid is not None:
         scores = jt.ternary(row_valid, scores, jt.zeros_like(scores))
     weights = (
-        softmax_cuda.softmax_v1(scores, zero_all_neg_inf=True)
-        if zero_fully_masked
+        fast_softmax(scores, **softmax_options)
+        if fast_softmax is not None
         else jt.nn.softmax(scores, dim=-1)
     )
     if row_valid is not None:
