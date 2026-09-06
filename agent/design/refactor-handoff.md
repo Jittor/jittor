@@ -2627,6 +2627,40 @@ NOT COLLECTED / NEWLY COLLECTED。比结论之前要先把组名归一化掉。
 （它用 `std::cerr` + `abort()`，不是本条验收的对象，但**不是 async-signal-safe**，已写进
 `docs/testing/error-categories.md` 单独记账）。
 
+### 「扫描根搬家后变瞎」这个形态，我复核了推广面（`b16773533`）
+
+上面第 1 点值得单独追一次，因为它是「门禁总数看着健康而实际什么都没扫」。**结论：这个形态在别处不成立**，
+但顺带撞出一条真的 bug。实测口径与数字：
+
+- `tests/structure` 里有写死扫描根的 **20** 个文件。ACL/ROCm 那五条指的具体文件（`aclops/base_op_acl.cc`、
+  `acl_op_exec.cc` 等）**都还在老路径**，实跑 **23 passed**、非 skip，没瞎。
+- 后端搬迁是**半途**的：`python/jittor/extern/acl`（104 文件/8606 行）与 `backends/acl`（54/6692）**同时存在**，
+  只有 `__init__.py` 同名。裸根 `src`、`extern`（仓库根）不存在，引用它们的测试都是拼在 `python/jittor/` 下面的。
+- 「路径不存在就 skip」的模式：`tests/structure` 里 **0 处**。
+- 真正危险的是**聚合下界断言**（`assert total >= N`），扫描面变窄时它保持绿。全仓只有 **5 处**，且余量都紧
+  （`pass/` 下 `.h` 实测 31 对下界 25）。**新加门禁请写「每个根非空」而不是「总数 > N」**，这正是本波的失效形态。
+
+### cuTT 的构建一直是坏的，而它坏得像「没装」（`b16773533`）
+
+`4bdc7e797` 给 `setup_cutt()` 补上调用点之后我实测了一遍惰性库到底会不会装载，撞见：`install_cutt()` 用宿主
+编译器编 `cutt-1.2/src/*.cpp`，那些源码 `include <cuda.h>/<cuda_runtime.h>`，而编译命令里没有 `cuda_sdk_flags`
+——`cuda_runtime.h` 找不着、`libcutt` 构建失败。**这是同一 family 的第三例**（`fp16_emu.cc` 与六个 cuda 库
+wrapper 在 `803e37853`），都是「宿主编译的 CUDA 源丢了 SDK 头路径」。
+
+坏得看不见有两层：`setup_cutt()` 把构建失败记成「cutt is unavailable」，transpose 回退内建 kernel 只留一条
+warning；`tests/_helpers/cutt.py` 又把加载失败一律转成 `SkipTest`。所以有 CUDA 的机器上构建失败 = 全套 skip。
+已收紧成「只在 `use_cutt=0` 时 skip，有 CUDA 且启用时加载失败一律 `AssertionError`」。
+
+实测：修前 `libcutt.so` 不存在、`cutt_ops` 为 None、日志 `core_api.py:913 'cuTT is unavailable'`；修后
+`cutt_ops` 是真模块、`use_cutt=True`、`transpose(2,0,1)` maxerr 0.0，该组 **11 passed / 0 skipped**（原 9 条）。
+门禁有牙的证明：helper 改回 skip 行为后新测试**报红**（1 failed / 1 passed）。测试里捕获 `BaseException`
+再显式断言不是 `SkipTest`，就是因为 `SkipTest` 从 `assertRaises` 里逃出去会把这条记成 skipped。
+
+顺带一条实测的惰性库现状（`import` 后全未装载，惰性成立）：`cublas`/`cudnn`/`curand`/`cufft`/`cusparse`/`cub`/
+`cutt`/`mpi` 在相应算子首次使用后都会真装载；`nccl`/`hccl` 只在分布式请求时装。注册表
+（`register_library_loader`）是全的，洞从来不在注册，而在**有没有东西去请求它**——`get_library` 的 grep 计数
+不可信，因为请求走的是 `protect_library_attributes` 的模块属性访问。
+
 ## 7. 接手怎么开始
 
 0. 派活的话术、验收该问什么、哪些说法会让它跑偏，在 [怎么派活](refactor-dispatch.md)。
