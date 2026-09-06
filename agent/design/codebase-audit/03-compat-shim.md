@@ -39,7 +39,7 @@
 可以接受。判据是跨线程探测锁——同线程 `RLock.acquire(blocking=False)` 永远成功，
 因此原有那条「不泄漏全局锁」的测试其实什么也没证明。
 
-已修：提交 `<7.05-commit-2>`（写入口收归单一 owner）。此前六个 installer 各自
+已修：提交 `b37e713d`（写入口收归单一 owner）。此前六个 installer 各自
 inline 了一份「现在有没有事务在记账」的查找（`factories.py`、`tensor.py`、
 `core.py`、`distributed.py`、`utilities.py`、`integrations.py`），六份已经漂移：
 **只有 `core.py` 那份检查了事务状态**。`record()` 会拒绝已 commit / 已 rollback
