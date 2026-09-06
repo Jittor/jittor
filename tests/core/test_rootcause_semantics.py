@@ -12,6 +12,21 @@ from jittor.compat import external_backend, integrations, module_patcher
 
 
 class TestRequiresGradSemantics(unittest.TestCase):
+    def test_freeze_prunes_torch_leaf_registry_immediately(self):
+        module = jt.Module()
+        parameter = nn.Parameter(jt.array([1.0, 2.0]))
+        module.weight = parameter
+
+        self.assertIs(module.parameters()[0], parameter)
+        self.assertIs(jt._torch_leaf_params.get(id(parameter)), parameter)
+
+        parameter.requires_grad_(False)
+        self.assertNotIn(id(parameter), jt._torch_leaf_params)
+
+        parameter.requires_grad_(True)
+        self.assertIs(jt._torch_leaf_params.get(id(parameter)), parameter)
+        parameter.requires_grad_(False)
+
     def test_temporary_freeze_preserves_preexisting_policy_graph(self):
         weight = nn.Parameter(jt.array([1.0, -2.0, 3.0]))
         inputs = jt.array([2.0, 4.0, -1.0]).stop_grad()

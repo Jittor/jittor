@@ -1000,6 +1000,10 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         jt._torch_leaf_params = {}
     def _register_leaf(v):
         _torch_register_leaf(v)
+    def _unregister_leaf(v):
+        registry = getattr(jt, "_torch_leaf_params", None)
+        if isinstance(registry, dict):
+            registry.pop(id(v), None)
 
     # Override requires_grad with a Python property even though jittor exposes a
     # native getset descriptor: the native setter maps directly to start_grad/
@@ -1025,6 +1029,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                     _native_requires_grad.__set__(peer, v)
                     if v:
                         _register_leaf(peer)
+                    else:
+                        _unregister_leaf(peer)
                 if getattr(fsdp_state, "true_fsdp_flat", False):
                     flat = getattr(fsdp_state, "true_fsdp_flat_shard", None)
                     any_trainable = any(getattr(entry, "requires_grad", True)
@@ -1033,9 +1039,13 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                         _native_requires_grad.__set__(flat, any_trainable)
                         if any_trainable:
                             _register_leaf(flat)
+                        else:
+                            _unregister_leaf(flat)
             _native_requires_grad.__set__(self, v)
             if v:
                 _register_leaf(self)
+            else:
+                _unregister_leaf(self)
         Var.requires_grad = property(_rg_get, _rg_set)
 
     def requires_grad_(self, v=True):

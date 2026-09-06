@@ -599,6 +599,39 @@ class TestFSDP2Compat(unittest.TestCase):
         self.assertFalse(state.true_fsdp_flat_shard.is_stop_grad())
         jt.sync_all(True)
 
+    def test_fsdp_freeze_prunes_full_shard_and_flat_leaf_registry(self):
+        fsdp, state, entries, full = self._fake_flat_fsdp_state(
+            ([1.0, 2.0], [3.0, 4.0]))
+        state.true_fsdp_unsharded = True
+        for entry, param in zip(entries, full):
+            entry.full_param = param
+            fsdp._mark_fsdp_param_var(param, state, entry, "full")
+            setattr(entry.owner, entry.attr, param)
+            param.requires_grad_(True)
+
+        registry = jt._torch_leaf_params
+        self.assertIn(id(state.true_fsdp_flat_shard), registry)
+        for entry, param in zip(entries, full):
+            self.assertIn(id(entry.shard), registry)
+            self.assertIn(id(param), registry)
+
+        full[0].requires_grad_(False)
+        self.assertNotIn(id(full[0]), registry)
+        self.assertNotIn(id(entries[0].shard), registry)
+        self.assertIn(id(state.true_fsdp_flat_shard), registry)
+
+        full[1].requires_grad_(False)
+        self.assertNotIn(id(full[1]), registry)
+        self.assertNotIn(id(entries[1].shard), registry)
+        self.assertNotIn(id(state.true_fsdp_flat_shard), registry)
+
+        full[1].requires_grad_(True)
+        self.assertIn(id(full[1]), registry)
+        self.assertIn(id(entries[1].shard), registry)
+        self.assertIn(id(state.true_fsdp_flat_shard), registry)
+        full[1].requires_grad_(False)
+        jt.sync_all(True)
+
     def test_shared_flat_fsdp_refreshes_every_optimizer_parameter(self):
         fsdp, state, entries, full = self._fake_flat_fsdp_state(([1.0, 2.0],))
         first = torch.optim.AdamW([entries[0].shard], lr=0.01)
