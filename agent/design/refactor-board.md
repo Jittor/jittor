@@ -597,7 +597,7 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 | 5.21 | 六个 monkeypatch 安装器写成显式有序清单并加断言 | 已合并 | pyother | `3cd1a614`：新增 `_install_order.SEQUENCE` 显式声明十步安装顺序与 `record/verify` 运行时校验；`jt.sum`/`Var.sum` 共用 full-reduce 路径。`tests/core/test_install_order.py` 17 项、`tests/structure/test_install_order.py` 6 项在提交中通过 |
 | 5.22 | `nn` facade 不导出 39 个下划线名，内部用模块局部名不经 `jt.nn.*` 晚绑… | 已合并 | pyops | 5d67f36b。源码 `jt.nn._*` 使用与 `dir(jt.nn)` 私有导出均为 0，后端私有覆盖迁入 `nn.backends.hooks`；结构 17 passed，CPU 25 passed/8 skipped |
 | 5.23 | 根命名空间显式 `__all__` | 已合并 | pyops | d80d0b99。根星号来源归零，414 名运行时 `__all__` 与生成 pyi 顶层声明一致；namespace 13 passed，结构聚焦 4 passed |
-| 5.24 | 10 个 `jt._*` 跨模块契约 | 待领 | | |
+| 5.24 | 10 个 `jt._*` 跨模块契约 | 待领 | | 核查（2026-09-06）：`2.13` 已落地，`jt.runtime` 与 `jt.config` 都在。根命名空间剩下的下划线名基本是 import 机制残留（`_publish`、`_limit_openmp`、`_NATIVE_*_EXPORTS`、`_compat_*` 等），**不是本条要收的跨模块运行时契约**。四个真契约（`_torch_leaf_params`、`_active_optimizers`、`_current_optimizer`、`_torch_retained`）现在都由 `compat/torch/tensor_state.py` 拥有，它把历史名作为兼容别名 `setattr` 回 jittor 根模块——**即本条的剩余面全在 `compat/` 内，与 `7.12`（205 个 `_torch_*` 并入一个 `TorchTensorState`、验收 `grep _torch_` 于 compat 外为 0）是同一批改动**。建议与 7.12 一并做，或在 7.12 落地后复核本条即可关闭 |
 | 5.25 | `python/jittor/utils/` 拆散 | 已合并 | compat | `be2935f0`、`fdf3b759`（translator/server 迁入 compat，jtune/nvtx 迁入 jittor.tools，仓库脚本迁入顶层 tools）；`b70afbce`/`416a7fe4`/`02a6b5ee` 将 dlink compiler/dumpdef 迁入 build；本提交将 C++ tracer 迁入 `jittor.tools.tracer` 并改掉兼容层旧 nvtx 引用，utils 抽屉清空。结构/打包合同通过。 |
 | 5.26 | 布局收尾 | 待领 | | |
 | 6.C01 | `.item()` 对无符号 dtype | 已合并 | | 9b3023b1 |
