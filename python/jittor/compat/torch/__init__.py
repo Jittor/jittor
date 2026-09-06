@@ -189,6 +189,19 @@ def _restore_namespace(snapshot):
     sys.modules.update(snapshot)
 
 
+def _abandon(transaction, context):
+    """Give up the process lock and the ledger handle, however install ended.
+
+    Both have to go on every exit, including the one where ``rollback()`` itself
+    raises ``TransactionConflict`` because another actor took over a value. That
+    path used to run neither: the class-level RLock stayed acquired, so the next
+    install from any other thread blocked forever, and the dead transaction
+    stayed in ``context.state`` where the runtime write helpers still found it.
+    """
+    context.state.pop("_install_transaction", None)
+    transaction.release()
+
+
 def install(torch, strict=True):
     """Install the Torch surface once and return the canonical Jittor module."""
 
@@ -217,7 +230,7 @@ def install(torch, strict=True):
         current = _torch_namespace_snapshot()
         if not _same_namespace(current, pending["before"]):
             context.state[_NAMESPACE_TRANSACTION] = pending
-            transaction.release()
+            _abandon(transaction, context)
             raise RuntimeError(
                 "torch namespace changed after a failed compatibility install"
             )
@@ -253,14 +266,16 @@ def install(torch, strict=True):
             "staged": staged,
         }
         setattr(torch, InstallContext.COMPLETE_ATTR, False)
-        transaction.rollback()
-        transaction.release()
-        context.state.pop("_install_transaction", None)
+        try:
+            transaction.rollback()
+        finally:
+            _abandon(transaction, context)
         raise
     context.state.pop(_NAMESPACE_TRANSACTION, None)
-    transaction.commit()
-    transaction.release()
-    context.state.pop("_install_transaction", None)
+    try:
+        transaction.commit()
+    finally:
+        _abandon(transaction, context)
     # A module tree can now contain torch-authored classes, which register
     # parameters by nn.Parameter rather than by assignment. Nothing has to be
     # switched on for that: the marker that tells the two apart is attached by

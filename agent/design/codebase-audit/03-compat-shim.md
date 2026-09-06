@@ -26,6 +26,19 @@
 | 可选步骤失败被永久记为 failed 且无人看见 | `context.py:run_optional` 吞掉所有异常；`InstallReport` 只进 `context.reports`，`compat/runtime.py:52` 收集后无输出 | 可选面失败后报错出现在离病因很远的地方 | 失败必须 warn 一次并可通过 API 查询 | 主要 |
 | install 全程无锁无重入保护 | `context.py` 无锁（对比 `module_patcher.py` 有 `_LOCK`）；flag setter 可从任意线程触发 | 多线程下竞争产生半装配状态 | 一次性锁加幂等哨兵 | 次要 |
 
+已修：提交 `<7.05-commit-1>`（失败路径的 ledger 生命周期）。三处此前无人覆盖的漏洞：
+(1) `install()` 的失败分支按顺序调 `rollback()` → `release()` → 弹出
+`context.state["_install_transaction"]`，中间没有 `finally`；一旦 `rollback()`
+因外部改写抛 `TransactionConflict`，后两步都不执行——类级 RLock 永久被占，
+此后任何**其他线程**的 install 无限阻塞，而死掉的 ledger 仍留在 `context.state`
+里被运行期写入口找到。(2) 同一个泄漏也存在于「上一次失败后命名空间又被改过」
+的提前返回分支，它 `release()` 但不弹 `context.state`。(3) `rollback()` 在第一个
+冲突处直接返回，把**更早**的全部改写留在生效状态（回滚是逆序走的），正是这条
+任务要消除的半改写状态；现在改为继续回滚其余条目、把无法恢复的条目一次列全，
+并把事务状态置为 `failed`（不是留在 `open`），这样 `commit()` 会拒绝、`retry()`
+可以接受。判据是跨线程探测锁——同线程 `RLock.acquire(blocking=False)` 永远成功，
+因此原有那条「不泄漏全局锁」的测试其实什么也没证明。
+
 ## 张量语义：视图/存储/叶子/0 维
 至少四条独立的手工标记链在维持本应由类型系统保证的语义。
 

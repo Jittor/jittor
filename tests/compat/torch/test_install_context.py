@@ -14,10 +14,11 @@ from jittor.compat.torch.context import (
     InstallStepError,
     ModuleRegistry,
 )
-from jittor.compat.transaction import InstallTransaction
+from jittor.compat.transaction import TransactionConflict
 from jittor.compat.torch.installers import utilities
 
 from _helpers.child_process import run_python_child
+from _helpers.install_lock import install_lock_is_free
 
 
 class TestInstallContext(unittest.TestCase):
@@ -80,10 +81,46 @@ class TestInstallContext(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "changed after install"):
                 compat.install(root)
-        acquired = InstallTransaction._lock.acquire(blocking=False)
-        self.assertTrue(acquired)
-        if acquired:
-            InstallTransaction._lock.release()
+        self.assertTrue(install_lock_is_free())
+
+    def test_conflicting_rollback_leaves_a_known_state_and_frees_the_lock(self):
+        """A foreign write during rollback is a hard failure, not a stuck process.
+
+        ``install()``'s failure path called ``rollback()``, ``release()`` and the
+        ``context.state`` pop in sequence with no ``finally``. When rollback
+        raised TransactionConflict -- another actor had taken over one of the
+        values -- neither of the last two ran: the class-level RLock stayed
+        acquired so any later install from another thread blocked forever, and
+        the dead transaction stayed reachable through ``context.state``, where
+        the runtime flag helpers still look for it.
+        """
+        root = types.ModuleType("_stage7_rollback_conflict_root")
+        seen = {}
+
+        def steal(context):
+            transaction = context.state["_install_transaction"]
+            seen["transaction"] = transaction
+            transaction.mutate_attr(root, "_stage7_owned", "ours")
+            root._stage7_owned = "someone else"
+            raise RuntimeError("injected midway failure")
+
+        with mock.patch.object(
+            compat, "_REQUIRED_STEPS", (("synthetic.steal", steal),)
+        ), mock.patch.object(compat, "_OPTIONAL_STEPS", ()):
+            with self.assertRaisesRegex(TransactionConflict, "owner lost"):
+                compat.install(root)
+
+        context = root._torch_compat_install_context
+        # Assert against the key list, not the mapping: a failed install parks a
+        # whole torch namespace snapshot in here, and the mapping's repr in the
+        # failure message buries the one name under test.
+        self.assertNotIn("_install_transaction", sorted(context.state))
+        self.assertEqual(seen["transaction"].state, "failed")
+        self.assertFalse(getattr(root, "_torch_compat_install_complete", False))
+        self.assertTrue(
+            install_lock_is_free(),
+            "the conflicting rollback never released the process install lock",
+        )
 
     def test_transformers_npu_probe_rejects_real_pytorch_extension(self):
         def original(check_device=False):

@@ -142,6 +142,83 @@ return bool(d.get("_forward_hooks"))     # RuntimeError: Wrong inputs arguments,
 文件里已经有注释警告过 `bool`，但只在一处；改这个文件之前先
 `grep -n "ori_int\|rebinds the name" python/jittor/_runtime/core_api.py`。
 
+## 6.5 全进程状态改成「可回滚 ledger」之后怎么验
+
+当撤销面不止一个属性（模块属性 + `os.environ` + flags + `sys.meta_path` + `sys.modules`
++ `sys.path`），把它们记进一本账再逆序回放是唯一可审计的做法。这类改动**有三个判据是
+「跑绿」覆盖不到的**：
+
+**（1）中途失败必须逐项复原，不是「回滚到第一个冲突就算了」。**
+回滚是逆序走的，所以在第一个冲突处 `return`/`raise` 会把**更早**的全部改写留在生效状态——
+恰好是这本账想消除的半改写状态。正确做法是继续撤销其余条目，把撤不掉的一次列全：
+
+```python
+conflicts = []
+for entry in reversed(self._entries):
+    try:
+        self._undo(entry)
+    except TransactionConflict as conflict:
+        conflicts.append(str(conflict))
+if conflicts:
+    self.state = "failed"          # 不能留在 "open"
+    raise TransactionConflict("; ".join(conflicts))
+```
+
+测法是记三条（属性、env、属性），只让**最后**记的那条被外人改写，然后断言前两条已复原、
+第三条保持外人的值、`commit()` 拒绝、`retry()` 接受。
+
+**（2）「没泄漏全局锁」必须从别的线程探。**
+`threading.RLock` 对**持有它的那个线程**是可重入的：
+
+```python
+lock.acquire()                          # 泄漏的那一下
+assert lock.acquire(blocking=False)     # 仍然 True，什么都没证明
+```
+
+真检测器要起线程，并且**在获取它的那个线程里释放**（RLock 拒绝跨线程 release）：
+
+```python
+def install_lock_is_free(timeout=2.0):
+    outcome = []
+    def probe():
+        acquired = Transaction._lock.acquire(timeout=timeout)
+        outcome.append(acquired)
+        if acquired:
+            Transaction._lock.release()
+    t = threading.Thread(target=probe); t.start(); t.join(timeout + 5.0)
+    return bool(outcome) and outcome[0]
+```
+
+见 `tests/_helpers/install_lock.py`。同一个 helper 反着用一次：事务开着的时候断言
+`not install_lock_is_free()`，否则「加了锁」这句话也没被证明。
+
+**（3）失败路径要用 `finally`，并且要构造「回滚本身抛异常」。**
+`rollback(); release(); state.pop(...)` 顺序写下来看着没问题，但回滚是**最可能抛**的那一步
+（外部改写就抛）。注入方式：让一个安装步骤先经 ledger 写一个值、再把它改成别人的值、然后抛：
+
+```python
+def steal(context):
+    context.state["_install_transaction"].mutate_attr(root, "_owned", "ours")
+    root._owned = "someone else"
+    raise RuntimeError("injected midway failure")
+```
+
+断言三件事：抛的是 `TransactionConflict`、事务状态是已知的（`failed`）、
+`context.state` 里不再有 ledger 句柄、锁在别的线程看来是空的。
+
+**（4）写入口的 helper 会在 install 之外被调到。**
+`_set_use_cuda` 之类的 helper 同时服务安装期和 `torch.zeros(device="cuda")` 运行期。
+所以 helper 里**必须查事务状态**，不能只查「有没有事务」——已 commit / 已 rollback 的账
+再 `record()` 会抛 `RuntimeError: transaction is committed`，于是一次失败的安装能让此后
+每一次 CUDA 工厂调用都报错。定向测法是把已关闭的事务塞进 context 再调 helper，
+断言值写进去了：
+
+```python
+@pytest.mark.parametrize("closed", ("committed", "rolled_back"))
+def test_writes_ignore_a_ledger_that_has_already_closed(closed):
+    ...
+```
+
 ## 7. 判据
 
 - 子进程里 import 之前设的第三方随机种子，import 之后仍然复现。

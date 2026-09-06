@@ -79,31 +79,50 @@ class InstallTransaction:
         if self.state == "committed":
             raise RuntimeError("committed transaction cannot rollback")
         with self._lock:
-            for target, name, old, new, undo, owner in reversed(self._entries):
-                if undo is not None:
-                    undo()
-                else:
-                    current = _read(target, name)
-                    if not _matches(current, new):
-                        raise TransactionConflict(
-                            "transaction owner lost %r during rollback" % name
-                        )
-                    if isinstance(target, (dict, list)):
-                        if old is _MISSING:
-                            if isinstance(target, dict):
-                                target.pop(name, None)
-                            else:
-                                raise TransactionConflict(
-                                    "list entry %r cannot be removed safely" % name
-                                )
-                        else:
-                            target[name] = old
-                    else:
-                        if old is _MISSING:
-                            delattr(target, name)
-                        else:
-                            setattr(target, name, old)
+            conflicts = []
+            for entry in reversed(self._entries):
+                try:
+                    self._undo(entry)
+                except TransactionConflict as conflict:
+                    # Keep undoing the remaining entries. Returning at the first
+                    # foreign write left every *earlier* mutation of this
+                    # transaction applied -- exactly the unknown mid-install
+                    # state the ledger exists to prevent. The entries another
+                    # actor took over are named together below instead, so the
+                    # hard failure still says what was not restored.
+                    conflicts.append(str(conflict))
+            if conflicts:
+                # "failed" rather than "open": a half-reverted ledger is still a
+                # *known* state, and saying so is what lets retry() build a
+                # fresh transaction and commit() refuse this one.
+                self.state = "failed"
+                raise TransactionConflict("; ".join(conflicts))
             self.state = "rolled_back"
+
+    def _undo(self, entry):
+        target, name, old, new, undo, owner = entry
+        if undo is not None:
+            undo()
+            return
+        current = _read(target, name)
+        if not _matches(current, new):
+            raise TransactionConflict(
+                "transaction owner lost %r during rollback" % name
+            )
+        if isinstance(target, (dict, list)):
+            if old is _MISSING:
+                if isinstance(target, dict):
+                    target.pop(name, None)
+                else:
+                    raise TransactionConflict(
+                        "list entry %r cannot be removed safely" % name
+                    )
+            else:
+                target[name] = old
+        elif old is _MISSING:
+            delattr(target, name)
+        else:
+            setattr(target, name, old)
 
     def commit(self):
         if self.state != "open":

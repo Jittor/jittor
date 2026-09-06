@@ -41,6 +41,49 @@ def test_transaction_refuses_to_overwrite_an_external_attribute_change():
     assert module.value == "external"
 
 
+def test_conflicting_rollback_still_reverts_everything_it_still_owns():
+    """One foreign write must not strand the transaction's other mutations.
+
+    Rollback walks newest first, so returning at the first conflict left every
+    *earlier* mutation applied -- a process half-way through an install, which
+    is the state the ledger exists to rule out. Only the entries another actor
+    took over stay, and the hard failure names them.
+    """
+    module = types.SimpleNamespace(first="old-first", second="old-second")
+    env = {"MODE": "old"}
+    tx = InstallTransaction("owner")
+    tx.mutate_attr(module, "first", "ours-first")
+    tx.mutate_env("MODE", "ours", environ=env)
+    tx.mutate_attr(module, "second", "ours-second")
+    module.second = "someone else"
+
+    with pytest.raises(TransactionConflict, match="owner lost 'second'"):
+        tx.rollback()
+
+    assert module.first == "old-first"
+    assert env["MODE"] == "old"
+    assert module.second == "someone else"
+    # A half-reverted ledger is a known state, not an open one: commit() has to
+    # refuse it and retry() has to accept it.
+    assert tx.state == "failed"
+    with pytest.raises(RuntimeError, match="transaction is failed"):
+        tx.commit()
+    assert tx.retry().state == "open"
+
+
+def test_conflicting_rollback_names_every_entry_it_could_not_restore():
+    module = types.SimpleNamespace(first="old-first", second="old-second")
+    tx = InstallTransaction("owner")
+    tx.mutate_attr(module, "first", "ours-first")
+    tx.mutate_attr(module, "second", "ours-second")
+    module.first = "stolen-first"
+    module.second = "stolen-second"
+
+    with pytest.raises(TransactionConflict) as raised:
+        tx.rollback()
+    assert "'first'" in str(raised.value) and "'second'" in str(raised.value)
+
+
 def test_core_install_flag_mutation_rolls_back_on_failure():
     flags = types.SimpleNamespace(use_cuda=0)
     tx = InstallTransaction("core.install")
