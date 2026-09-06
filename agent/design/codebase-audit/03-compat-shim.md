@@ -74,6 +74,24 @@ grep 说的是「什么匹配上了」，不是「还剩什么」。现在
 的理由**：`ledger`（17 项）、`runtime`（11 项，调用方在安装之后自己要的）、
 `pre-ledger`（12 项，事务还不存在，preflight 在 core import 之前跑）、
 `deployed-payload`（5 项，另一个进程）、`pending`（8 项）。
+
+已修：提交 `d5740ee7d`（`Module.zero_grad(set_to_none=False)` 静默丢梯度）。
+此前无论 `set_to_none` 取什么值都把 `.grad` 置 `None`。真 PyTorch 2.12.1 实测
+`set_to_none=False` 留下的是**同 shape 同 dtype 的全零张量**。这条之所以是静默而
+非报错：梯度裁剪与梯度累积都写成 `if p.grad is not None`，于是每个参数被静静跳过，
+既不报错也不改数，只是训练不再收敛。同一提交里另有一处顺序问题：bridged optimizer
+的 `zero_grad()` 会顺带清掉 torch 可见的 `.grad`，原先它在参数循环**之后**执行，会把
+刚写好的零张量又抹掉，现已移到前面。修前失败/修后通过的用例随提交落地。
+
+待派（不属于 7.03，跨域）：**只要进程里还活着任何一个 optimizer 对象，`backward()`
+就把梯度路由进该 optimizer，`p.grad` 保持 `None`**；释放掉那个 optimizer 之后
+`.grad` 立刻恢复。真 PyTorch 2.12.1 无论有没有 optimizer 都会填 `.grad`。开关是
+`jt._active_optimizers`（不是 `jt._current_optimizer`，清空后者无效）。后果是任何
+「先 backward 再读 `.grad`」的用例都会因为**另一个文件**建过 optimizer 而失败，且
+失败位置与原因毫无关系——`tests/compat/torch` 全量跑里就是这样命中的。它属于
+optimizer/autograd 桥而不是 Module installer，已写进
+`tests/compat/torch/test_torch_module_method_owner_fidelity.py` 的 `unbridged_grad()`
+文档串与 `agent/skills/torch-api-cohort-promotion` §8。
 提交 `c2fa74d8` 的说明里记的是 50 项与 ledger 14 / runtime 12，那是改完之前
 一次扫描的数，真值以 `CLASSIFIED` 自己数为准。
 `pending` 另有一份按文件记障碍的清单，做完一项在同一个 diff 里变短。
@@ -194,6 +212,7 @@ grep 说的是「什么匹配上了」，不是「还剩什么」。现在
 | 问题 | 证据 | 后果 | 修改方向 | 严重度 |
 | --- | --- | --- | --- | --- |
 | 整个 API 表面是几个巨型函数里的闭包 | `_install_tensor_methods` 1386 行 79 个内嵌 def/class；`_install_nn_extras` 1003 行 126 个；`_install_module_methods` 667/40；`_install_cuda` 623/67；data 的 install 267/55 | 没有任何一个 torch API 是可单独 import、单独测试、单独查阅的对象；无法自动生成实现程度覆盖表，上面那张空操作清单只能靠人肉阅读得到 | 每个 API 一个模块级函数加注册表，install 只做绑定 | 关键 |
+| 已部分修：两个 installer 已彻底清空 | `796b8e43c` 清空 `_install_reductions`（内嵌 def/class 14→0、lambda 13→0）；`d5740ee7d` 清空 `_install_module_methods`（40→0、lambda 6→0）。计数口径与本条同为「内嵌 def/class」，可复跑 `python agent/skills/torch-api-cohort-promotion/count_installer_closures.py`（CLEARED 标记＝nested 与 lambda 同时为 0），并各自有一条 AST 测试防回填 | 这两个 installer 的 API 现在可单独 import、单独测试，且已登记 fidelity，能被 `fidelity_report()` 按前缀枚举成覆盖表 | 剩余面按同一口径实测（`d5740ee7d`）：`_install_nn_extras` 135、`_install_tensor_methods` 83、`utilities.install` 81、`_install_cuda` 80、`_install_lr_scheduler` 68、data 的 `install` 64、`_install_distributed` 64、`_install_optimizers` 45、`core.install_misc` 34 | 关键 |
 | 文件拆分是机械搬运，没有引入接口 | 三个 installers 文件首行文档字符串都是 "source moved from the former monolithic installer without changing the compatibility semantics" | 已模块化是表象，单体的所有耦合原样保留 | 拆分应以可独立测试的实现单元为粒度 | 主要 |
 | 错误处理以静默吞咽为主 | 全 compat/ 统计：356 个 try，258 个宽泛 except，其中 **129 个是 `except: pass`** | 一次失败的标记传播、一次失败的 dtype 还原都不留痕迹 | 吞咽必须限定异常类型并至少 debug 打点 | 主要 |
 | 结构测试钉死实现细节而非契约 | `tests/structure/` 8071 行 23 文件；`test_torch_compat_structure.py:37-100` 用 AST 校验 sys.modules 赋值写法；`test_vllm_compat_structure.py:66-68` 断言每文件不超过 300 行、`:57-62` 断言文件名集合 | 改文件名、拆超过 300 行的文件都会红；同时那 14 条静默空操作无一被覆盖 | 保留边界类断言，删除行数与文件名断言，预算移到与真 PyTorch 的行为对拍 | 主要 |

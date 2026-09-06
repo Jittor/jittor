@@ -2848,6 +2848,59 @@ warning；`tests/_helpers/cutt.py` 又把加载失败一律转成 `SkipTest`。�
 
 ROCm 那半（计划原文的「需 ROCm 硬件」）本机无卡，四条按序确认项写进 [`../manuals/deferred-hardware.md`](../manuals/deferred-hardware.md) 的 ROCm 一节，**未声称 ROCm 硬件验证完成**。ACL 描述符注册名 `acl_legacy` 与 `BackendId::Acl` 不一致这条改动面跨 4.12，已归 4.15。
 
+**2026-09-06（compat，7.03）：把任务形状从「再挑几个 cohort」换成「清空整个 installer」，两个 installer 归零。**
+`796b8e43c` 清空 `_install_reductions`（内嵌 def/class **14→0**、lambda **13→0**），
+`d5740ee7d` 清空 `_install_module_methods`（**40→0**、lambda **6→0**）。7.03 此前约 66 波、
+每波推进几个 cohort 从没闭合过——这是任务形状的问题：「再挑一个 cohort」没有终点，而
+「某个 installer 内嵌 def/class 归零」有，而且随手可测。计数脚本
+`agent/skills/torch-api-cohort-promotion/count_installer_closures.py` 随提交落地（`CLEARED`
+标记＝nested 与 lambda 同时为 0），两个 installer 各加一条 AST 测试防止下一波往空 installer
+里塞新闭包。**下一位如果继续 7.03，建议照这个形状派，不要派开放式的 cohort。**
+剩余面同口径实测于 `d5740ee7d`：`_install_nn_extras` 135、`_install_tensor_methods` 83、
+`utilities.install` 81、`_install_cuda` 80、`_install_lr_scheduler` 68、data 的 `install` 64、
+`_install_distributed` 64、`_install_optimizers` 45、`core.install_misc` 34。
+（此前文档记的 `_install_tensor_methods` 76、`_install_cuda` 67 都已漂移，按实测记。）
+
+搬迁手法两类值得记：**install 会覆盖掉的原始方法**（`Module.execute`、`parameters`、
+`named_*`、`load_state_dict`）必须在 **import 时**捕获成 `_ORIG_MODULE_*`，晚查会自指递归；
+**捕获 `self` 的嵌套 dispatch** 提到模块级显式收 `self`、外层用 `functools.partial` 绑定，
+而不是留一层 `def`。清空后 install 里带原生 owner 的 `if not hasattr(...)` 守卫要照抄，
+否则会覆盖掉 jittor 原生的 `Module.half` 之类。
+
+**修掉一处静默错**：`zero_grad(set_to_none=False)` 此前一律把 `.grad` 置 None，真 PyTorch
+2.12.1 留下的是同 shape 同 dtype 的**全零张量**。之所以静默：梯度裁剪与梯度累积都写成
+`if p.grad is not None`，于是每个参数被静静跳过，不报错也不改数，只是训练不再收敛。
+修前 1 failed / 修后 7 passed，随同一提交。同提交还把 bridged optimizer 的 `zero_grad()`
+移到参数循环**之前**——它会顺带清掉 torch 可见的 `.grad`，放在后面会把刚写好的零张量抹掉。
+
+**一条留给下一位的跨域差异（按「先核最终 owner、不跨域抢改」没有自行改）**：只要进程里
+还活着**任何一个** optimizer 对象，`backward()` 就把梯度路由进那个 optimizer，`p.grad`
+保持 `None`；把那个 optimizer 释放掉 `.grad` 立刻恢复。真 PyTorch 2.12.1 无论有没有
+optimizer 都填 `.grad`。开关是 `jt._active_optimizers`（**清 `jt._current_optimizer` 无效**，
+我先试错过一轮）。后果很像第 6bis 节那类问题：任何「先 backward 再读 `.grad`」的用例，会
+因为**另一个文件**建过 optimizer 而红，而红的位置和原因毫无关系——`tests/compat/torch`
+全量跑里就是这样命中我自己的新用例的（单文件跑 85 passed、全量跑却红一条）。它属
+optimizer/autograd 桥，不属 Module installer。
+
+**CUDA 那一层照做了**：`_install_module_methods` 没有归约，但 `to`/`cuda`/`cpu` 就是 residency
+迁移面，用 `instantiate_device_type_tests` 在 CPU 与 CUDA 各跑一遍，真实 CUDA
+（`CUDA_VISIBLE_DEVICES=2`、nvcc 12.2.140、sm_89）**105 passed**，覆盖跨设备 `state_dict`
+往返与 `zero_grad` 两种 `set_to_none` 在两侧的行为。踩到一个坑写进 skill §8：
+`instantiate_device_type_tests` 生成的是 unittest 类，**pytest fixture 注入不进去**，多写一个
+参数得到的是 `device_types.py` 内部的 `TypeError` 而不是 skip——所以那段状态隔离要写成
+contextmanager，普通函数再用 fixture 包一层同一个 contextmanager。
+推之前的 CUDA 冒烟照做：`has_cuda=True`、256×256 matmul 与 numpy 最大差 6.9e-05、
+`Module.cuda()` 后 forward 形状 dtype 正确。
+
+**三套门禁逐条同集合、零回归**，基线都是本次自己跑的（没有引用文档里的数字，`tests/structure`
+文档记的 14 实测已是 15）：结构 15 failed / 887 passed，同一棵树把 `nn.py` 退回 HEAD 再跑同为
+15 failed 且**失败集合逐条相同**；CPU torch 模式 `tests/compat/torch` 33 failed / 1390 passed
+对 HEAD 基线 33 failed / 1295 passed，失败集合 `diff` 为空、+95 passed 全部来自本波新增文件；
+原生 CPU `tests/nn` 3 failed / 204 passed 与基线逐条相同（compat 安装器不参与原生路径），
+原生 `tests/core` 21 failed / 647 passed。拿改前基线用的是禁 `git stash` 前提下的
+`cp` → `git checkout --` → 跑 → `cp` 回来，并把还原放在 `trap ... EXIT` 里，中途失败也不会把
+工作丢在退回状态。
+
 ## 6bis. 这一轮的主要失效模式：门禁绿着，但不是因为它通过了
 
 2026-09-06 一天之内，在七个互不相干的分区各撞到一次同一形状的问题：**验证手段自己坏了，而且
