@@ -7,6 +7,7 @@
 #pragma once
 #include "common.h"
 #include "var.h"
+#include "var_slices.h"
 #include "ops/array_op.h"
 #include "mem/allocator.h"
 #include "mem/allocator/cuda_dual_allocator.h"
@@ -17,6 +18,49 @@ namespace jittor {
 struct VarHolder;
 VarPtr detach(Var* x);
 VarPtr device_copy(Var* x, int device);
+
+/** What ``v = y[expr]`` records, so that a later write through ``v`` can reach
+ * ``y``.
+ *
+ * A ``Var`` is a graph node and a ``VarHolder`` is the name bound to one, so
+ * "write in place" cannot mean "store into a buffer" here the way it does in
+ * an eager framework: the base's *name* is rebound to a ``setitem`` over this
+ * slice expression. What a caller can observe is the same either way, and the
+ * storage underneath genuinely is shared whenever the slice is contiguous (see
+ * getitem_contiguous_inplace).
+ *
+ * This used to be inferred instead of recorded. ``cascade_setitem_root`` walked
+ * the producing op graph backwards looking for getitem ops, which could only
+ * ever answer for the cases it could recognise: at most ten levels, and every
+ * level a single integer. ``y[1:4].assign(...)`` fell outside that and was
+ * silently dropped. A record costs one allocation per basic index and answers
+ * for every depth and every basic-index expression.
+ *
+ * ``base`` is weak on purpose. Owning it would make ``y`` outlive every slice
+ * ever taken of it, which changes every lived-Var count in the tree and buys
+ * nothing observable: a base no one names can only be read back through this
+ * view. ``~VarHolder`` clears the pointer in each of its views instead, and a
+ * view whose base is gone assigns locally.
+ *
+ * That is only affordable because a view of a view is *flattened* when it is
+ * recorded: ``steps`` runs from a root holder all the way down, so the
+ * intermediates in ``y[1][2]`` need not survive the expression that produced
+ * them -- and the one holder the record does depend on is the one the caller
+ * named. Write-through rebuilds each intermediate from the root with a
+ * ``getitem``, which is exactly the value it had.
+ *
+ * Only basic indexing is recorded, which is torch's rule too. An advanced index
+ * is a gather, its result is a copy, and its ``VarSlice``s hold ``Var*``s that
+ * this record would outlive.
+ */
+struct VarView {
+    VarHolder* base;
+    // Index expressions from `base` down to this view, outermost first.
+    vector<VarSlices> steps;
+    // Siblings in `base->views`, so that base's destructor can find us.
+    VarView* prev = nullptr;
+    VarView* next = nullptr;
+};
 
 struct DataView {
     VarHolder* vh;
@@ -56,6 +100,11 @@ typedef struct _object PyObject;
 struct VarHolder {
     Var* var;
     list<VarHolder*>::iterator iter;
+    // Set when this holder is a view of another one; see VarView.
+    VarView* view = nullptr;
+    // Head of the list of views onto this holder, so that destruction can tell
+    // them their base is gone.
+    VarView* views = nullptr;
     VarHolder(Var* v);
     VarHolder(VarPtr&& v);
     // will move and delete v
@@ -480,6 +529,42 @@ struct VarHolder {
     // @pyjt(check_cascade_setitem)
     // @attrs(return_self)
     VarHolder* check_cascade_setitem(VarHolder* out);
+
+    /**
+     * Record that this holder is the view ``base[slices]`` produced by basic
+     * indexing, so that assigning to it writes through to ``base``.
+     *
+     * Called by ``Var.__getitem__`` -- the tensor-level index -- and not by the
+     * ``getitem`` op binding, because the op is the gather and the view is a
+     * claim about the two *names*. Recording nothing is always a valid outcome:
+     * an advanced index (any ``Var`` among the slices) is a copy in torch too,
+     * and a self-view is meaningless.
+     */
+    // @pyjt(_set_view_of)
+    // @attrs(return_self)
+    VarHolder* set_view_of(VarHolder* base, VarSlices&& slices);
+
+    /**
+     * Whether an assignment to this holder writes through to some base.
+     */
+    // @pyjt(_is_view)
+    inline bool is_view() { return view && view->base; }
+
+    /**
+     * ``id`` of the Var this view currently writes through to, or -1. For
+     * tests and introspection; identity decisions belong upstream of this.
+     */
+    // @pyjt(_view_base_id)
+    inline int64 view_base_id() { return is_view() ? view->base->var->id : -1; }
+
+    // Rebind the root this view was taken from to itself with `value` written
+    // into the recorded slice. Returns false when there is nothing to write
+    // through -- not a view, or a base that has since been destroyed.
+    bool write_through_view(Var* value);
+    // Stop being a view; stop being a base. Both are needed at destruction, and
+    // the first one alone when a holder is re-pointed.
+    void drop_view();
+    void orphan_views();
 };
 
 // @pyjt(sync)

@@ -133,6 +133,15 @@ VarHolder::VarHolder(VarHolder* v) : var(v->var) {
     own_holder();
     iter = v->iter;
     *iter = this;
+    // `v` is discarded without running ~VarHolder, so what ~VarHolder would
+    // have relinked has to be relinked here: `v`'s own view record and the
+    // records of every view that named `v` as its base. The records themselves
+    // do not move, so only the back-pointers on the other side change.
+    view = v->view;
+    views = v->views;
+    for (auto* w = views; w; w = w->next) w->base = this;
+    v->view = nullptr;
+    v->views = nullptr;
     // free memory without calling deconstructor
     operator delete(v);
 }
@@ -153,6 +162,8 @@ void VarHolder::release_from_holders() {
 
 static auto make_array_from_pyobj = op_constructor<VarPtr, PyObject*>("array");
 static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
+static auto make_setitem = op_constructor<VarPtr, Var*, VarSlices&&, Var*, NanoString>("setitem");
+static auto make_getitem = op_constructor<VarPtr, Var*, VarSlices&&>("getitem");
 
 VarHolder::VarHolder(PyObject* obj, NanoString dtype) {
     auto vp = make_array_from_pyobj(obj);
@@ -165,7 +176,81 @@ VarHolder::VarHolder(PyObject* obj, NanoString dtype) {
 }
 
 
+void VarHolder::drop_view() {
+    if (!view) return;
+    if (auto* base = view->base) {
+        if (view->prev) view->prev->next = view->next;
+        else base->views = view->next;
+        if (view->next) view->next->prev = view->prev;
+    }
+    delete view;
+    view = nullptr;
+}
+
+void VarHolder::orphan_views() {
+    for (auto* w = views; w; ) {
+        auto* next = w->next;
+        // The record belongs to the holder that is the view, not to us; all we
+        // may do is tell it that its base is gone.
+        w->base = nullptr;
+        w->prev = w->next = nullptr;
+        w = next;
+    }
+    views = nullptr;
+}
+
+VarHolder* VarHolder::set_view_of(VarHolder* base, VarSlices&& slices) {
+    drop_view();
+    if (!base) return this;
+    for (int i=0; i<slices.n; i++)
+        // An advanced index gathers, so its result is a copy -- and the Var*
+        // it indexes with would outlive nothing in particular.
+        if (slices.slices[i].is_var()) return this;
+    // Flatten: a view of a view is recorded against the root, so that the
+    // intermediates of `y[1][2]` are free to die with the expression.
+    VarHolder* root = base;
+    vector<VarSlices> steps;
+    if (base->view && base->view->base) {
+        root = base->view->base;
+        steps.reserve(base->view->steps.size() + 1);
+        for (auto& step : base->view->steps) steps.push_back(step);
+    }
+    if (root == this) return this;
+    steps.push_back(move(slices));
+    view = new VarView{root, move(steps), nullptr, root->views};
+    if (root->views) root->views->prev = view;
+    root->views = view;
+    return this;
+}
+
+bool VarHolder::write_through_view(Var* value) {
+    if (!view || !view->base) return false;
+    auto* base = view->base;
+    auto& steps = view->steps;
+    const int n = steps.size();
+    // What each step is applied to. The first is the base itself; the rest are
+    // the intermediates, rebuilt rather than remembered.
+    vector<VarPtr> targets(n);
+    Var* cur = base->var;
+    for (int i=0; i<n-1; i++) {
+        targets[i] = make_getitem(cur, VarSlices(steps[i]));
+        cur = targets[i].ptr;
+    }
+    // Fold the write back outwards: the innermost slice takes `value`, and each
+    // level's result is what the level above writes into its own slice.
+    VarPtr updated;
+    for (int i=n-1; i>=0; i--) {
+        Var* target = i ? targets[i-1].ptr : base->var;
+        updated = make_setitem(target, VarSlices(steps[i]), value, ns_void);
+        value = updated.ptr;
+    }
+    *base = move(updated);
+    return true;
+}
+
 VarHolder::~VarHolder() {
+    drop_view();
+    orphan_views();
     if (PREDICT_BRANCH_NOT_TAKEN(!var)) return;
     unlink_from_hold_vars(iter);
     release_holder();
@@ -277,6 +362,10 @@ VarHolder* VarHolder::assign(VarHolder* v) {
     if (autograd_policy.preserve_requires_grad_on_assignment) {
         v->set_requires_grad(get_requires_grad());
     }
+    // `assign` is the in-place primitive every `x.foo_()` funnels through, so
+    // this is the one place that has to know that an in-place write to a view
+    // is a write to the thing it is a view of.
+    write_through_view(v->var);
     assign_var(v->var, var);
     release_holder();
     v->var->own_both_liveness();
@@ -460,8 +549,6 @@ void migrate_all_to_cpu() {
                 migrate_to_cpu(v, cpu_allocator);
         }
 }
-
-static auto make_setitem = op_constructor<VarPtr, Var*, VarSlices&&, Var*, NanoString>("setitem");
 
 static Var* cascade_setitem_root(Var* v, int64* slices, int& n) {
     while (n<10) {

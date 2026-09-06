@@ -13,7 +13,29 @@ _native_var_setitem = jt.Var.setitem
 def _is_cascade_index(slices):
     if isinstance(slices, tuple) and len(slices) == 1:
         slices = slices[0]
-    return isinstance(slices, (int, np.integer)) and not isinstance(slices, (bool, np.bool_))
+    return _is_plain_int(slices)
+
+
+def _is_plain_int(value):
+    return isinstance(value, (int, np.integer)) and not isinstance(value, (bool, np.bool_))
+
+
+def _is_basic_index(index):
+    """Whether ``x[index]`` is a view of ``x`` rather than a gather from it.
+
+    Torch's rule, and the same one the storage model needs: basic indexing
+    selects a sub-range that keeps naming the same elements, so a write through
+    the result belongs to ``x``; advanced indexing collects elements into a new
+    tensor, so a write to it does not.
+    """
+    if isinstance(index, tuple):
+        return all(_is_basic_index(item) for item in index)
+    if index is None or index is Ellipsis:
+        return True
+    if isinstance(index, slice):
+        return all(part is None or _is_plain_int(part)
+                   for part in (index.start, index.stop, index.step))
+    return _is_plain_int(index)
 
 
 def _native_bool_coordinates(slices):
@@ -108,6 +130,15 @@ def _maybe_constant_index_gather(x, slices):
 
 
 def getitem(x, slices):
+    """Apply Jittor indexing, recording a view when the index is a basic one."""
+
+    out = _getitem_result(x, slices)
+    if isinstance(out, jt.Var) and _is_basic_index(slices):
+        out._set_view_of(x, slices)
+    return out
+
+
+def _getitem_result(x, slices):
     """Apply Jittor indexing with the established Torch-compatible extensions."""
 
     if isinstance(slices, jt.Var) and slices.dtype == "uint8":
@@ -162,7 +193,10 @@ def setitem(x, slices, value):
     if isinstance(slices, jt.Var) and slices.dtype == "uint8":
         slices = slices != 0
     slices = _dispatch_slices(slices)
-    needs_cascade = x._needs_cascade_setitem()
+    # A recorded view needs no ancestry walk: `assign` below writes through it,
+    # at any depth and for any basic index, where `check_cascade_setitem` could
+    # only rewrite chains of at most ten single integers.
+    needs_cascade = not x._is_view() and x._needs_cascade_setitem()
     if not needs_cascade:
         result = try_dispatch("tensor.setitem", x, slices, value, None)
         if result is not None:
