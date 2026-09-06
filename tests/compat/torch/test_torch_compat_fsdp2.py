@@ -8,12 +8,34 @@ import unittest
 import types
 from unittest import mock
 import numpy as np
+import pytest
 import jittor as torch
 import jittor as jt
 from jittor.compat import fsdp2 as canonical_fsdp
 from jittor.compat.fsdp2 import grad_sync as fsdp_grad_sync
 from jittor.compat.fsdp2 import shard as fsdp_shard
 from jittor.compat.torch.installers.distributed import _backend_matches_active
+
+#: Keep this module on one xdist worker.
+#:
+#: These cases patch and read module-scope FSDP2 state and depend on running in
+#: file order, which is the property ``--dist loadfile`` was chosen to preserve
+#: (see agent/skills/gate-tier-budget §4). The smoke tier runs ``loadgroup``
+#: instead, to stop one long file pinning a worker, and loadgroup distributes
+#: *ungrouped* tests one by one -- so this class was being split across four
+#: workers, each seeing a different subset in a different order.
+#:
+#: Measured: run on its own the file is deterministic (5 failed, 21 passed, in
+#: both of two runs). Inside the smoke tier, two warm back-to-back runs of the
+#: identical selection disagreed about three of its nodeids, in both
+#: directions, and those three were the *only* conclusion differences in the
+#: whole torch half. A tier that answers differently each time cannot satisfy
+#: 0.15's "one round reports every failure", and it makes
+#: ``tools/gate_conclusion_diff.py`` unusable as a criterion, because real lost
+#: conclusions arrive mixed with this noise.
+#:
+#: The group costs nothing: the file is 2.7 s, far below the tier's makespan.
+pytestmark = pytest.mark.xdist_group("fsdp2_compat_module_state")
 
 
 class TestFSDP2Compat(unittest.TestCase):
